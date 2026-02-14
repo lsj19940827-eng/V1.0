@@ -1286,34 +1286,6 @@ class WaterProfileCalculator:
                     'node_count': 1,
                 })
         
-        # 第1.5步：合并被隧洞/渡槽内部分水闸拆分的段落
-        # 规则：同名隧洞/渡槽 run 之间仅隔一个分水闸 run 时，
-        #       合并为一个连续段落（隧洞进~隧洞出）
-        merged_runs = []
-        i = 0
-        while i < len(building_runs):
-            run = building_runs[i].copy()
-            # 仅对隧洞/渡槽类型执行合并
-            if self._is_tunnel_or_aqueduct_str(run['structure_type']):
-                contained_gates = []
-                while i + 2 <= len(building_runs) - 1:
-                    gate_run = building_runs[i + 1]
-                    next_same = building_runs[i + 2]
-                    # 中间是分水闸/分水口 且 后面与当前同名
-                    if (StructureType.is_diversion_gate_str(gate_run['structure_type'])
-                            and next_same['name'] == run['name']):
-                        contained_gates.append(gate_run['name'])
-                        run['last_idx'] = next_same['last_idx']
-                        run['node_count'] += gate_run['node_count'] + next_same['node_count']
-                        i += 2  # 跳过分水闸 run 和下一个同名 run
-                    else:
-                        break
-                if contained_gates:
-                    run['note'] = f"含分水闸: {', '.join(contained_gates)}"
-            merged_runs.append(run)
-            i += 1
-        building_runs = merged_runs
-        
         # 无命名建筑物时，将整个渠道作为一个未命名段
         if not building_runs:
             total_len = nodes[-1].station_MC - nodes[0].station_MC
@@ -1558,7 +1530,7 @@ class WaterProfileCalculator:
                 'total_length': 累计长度(m)
             }
         """
-        type_map = {}  # {structure_type: {'count': int, 'total_length': float}}
+        type_map = {}  # {structure_type: {'names': set, 'total_length': float}}
         for item in building_lengths:
             name = item.get('name', '')
             st = item.get('structure_type', '')
@@ -1567,14 +1539,14 @@ class WaterProfileCalculator:
                 continue
             length = item.get('length', 0.0)
             if st not in type_map:
-                type_map[st] = {'count': 0, 'total_length': 0.0}
-            type_map[st]['count'] += 1
+                type_map[st] = {'names': set(), 'total_length': 0.0}
+            type_map[st]['names'].add(name)
             type_map[st]['total_length'] += length
         
         return [
             {
                 'structure_type': k,
-                'count': v['count'],
+                'count': len(v['names']),
                 'total_length': v['total_length'],
             }
             for k, v in sorted(type_map.items())

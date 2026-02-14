@@ -364,9 +364,12 @@ class ExcelIO:
             cell_j = ws.cell(row=row_idx, column=10, value=round(_safe_float(node.arc_length), 3))
             cell_j.number_format = '0.000'
             
-            # K列：底高程（3位小数）
-            cell_k = ws.cell(row=row_idx, column=11, value=round(_safe_float(node.bottom_elevation), 3))
-            cell_k.number_format = '0.000'
+            # K列：底高程（3位小数），0值显示为"-"
+            _be_val = _safe_float(node.bottom_elevation)
+            cell_k = ws.cell(row=row_idx, column=11,
+                             value=round(_be_val, 3) if _be_val != 0 else "-")
+            if _be_val != 0:
+                cell_k.number_format = '0.000'
             
             # 设置数据行样式
             for col in range(1, 12):

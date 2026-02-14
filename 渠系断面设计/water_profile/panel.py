@@ -1139,11 +1139,18 @@ class WaterProfilePanel(QWidget):
         cad_tb.addWidget(cad_lbl)
         cad_tb.addStretch()
         btn_profile = PushButton("生成纵断面表格"); btn_profile.clicked.connect(self._cad_longitudinal_profile)
+        btn_profile.setToolTip("导出上纵断面表格 DXF/TXT\n含线框、渠底/渠顶/水面折线、高程文字、桩号、建筑物名称、坡降、IP点名称")
         btn_summary = PushButton("生成断面汇总表"); btn_summary.clicked.connect(self._cad_section_summary)
-        btn_bzzh2 = PushButton("生成bzzh2命令内容"); btn_bzzh2.clicked.connect(self._cad_bzzh2)
-        btn_plan = PushButton("建筑物名称上平面图"); btn_plan.clicked.connect(self._cad_building_plan)
+        btn_summary.setToolTip("导出各类断面尺寸及水力要素汇总表 DXF\n含明渠/隧洞/渡槽/暗涵/倒虹吸等断面参数")
         btn_ip = PushButton("IP坐标及弯道参数表"); btn_ip.clicked.connect(self._cad_ip_table)
-        for w in [btn_profile, btn_summary, btn_bzzh2, btn_plan, btn_ip]:
+        btn_ip.setToolTip("导出IP坐标及弯道参数表 DXF/Excel\n含IP点坐标、桩号、转角、半径、切线长、弧长、底高程")
+        btn_combined = PrimaryPushButton("导出全部DXF"); btn_combined.clicked.connect(self._cad_combined_dxf)
+        btn_combined.setToolTip("一键合并导出：纵断面表格 + 断面汇总表 + IP坐标表\n三个表格输出到同一个DXF文件，分图层管理")
+        btn_bzzh2 = PushButton("生成bzzh2命令内容"); btn_bzzh2.clicked.connect(self._cad_bzzh2)
+        btn_bzzh2.setToolTip("生成ZDM用的bzzh2命令 TXT\n提取建筑物进出口数据")
+        btn_plan = PushButton("建筑物名称上平面图"); btn_plan.clicked.connect(self._cad_building_plan)
+        btn_plan.setToolTip("生成AutoCAD -TEXT命令并复制到剪贴板\n将建筑物名称平行于轴线放置在平面图上")
+        for w in [btn_profile, btn_summary, btn_ip, btn_combined, btn_bzzh2, btn_plan]:
             cad_tb.addWidget(w)
         lay.addLayout(cad_tb)
 
@@ -3791,6 +3798,16 @@ class WaterProfilePanel(QWidget):
     # ================================================================
     # CAD 工具
     # ================================================================
+    def _cad_combined_dxf(self):
+        """导出全部DXF（纵断面+断面汇总+IP表合并）"""
+        try:
+            from 渠系断面设计.water_profile.cad_tools import export_combined_dxf
+            export_combined_dxf(self)
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            from 渠系断面设计.styles import fluent_error
+            fluent_error(self.window(), "操作失败", f"合并DXF导出时发生错误:\n{e}")
+
     def _cad_longitudinal_profile(self):
         """生成纵断面表格（DXF 文件，也支持 TXT）"""
         try:

@@ -370,7 +370,7 @@ class BuildingLengthDialog(QDialog):
         self.summary_table.horizontalHeader().setStretchLastSection(True)
 
     def _calc_type_summary(self):
-        """按结构类型汇总累计长度"""
+        """按结构类型汇总累计长度（用唯一名称计数，被分水闸拆分的同名隧洞只算1个）"""
         type_map = {}
         for item in self.building_lengths:
             st = item.get('structure_type', '')
@@ -379,11 +379,11 @@ class BuildingLengthDialog(QDialog):
                 continue
             length = item.get('length', 0.0)
             if st not in type_map:
-                type_map[st] = {'count': 0, 'total_length': 0.0}
-            type_map[st]['count'] += 1
+                type_map[st] = {'names': set(), 'total_length': 0.0}
+            type_map[st]['names'].add(name)
             type_map[st]['total_length'] += length
         return [
-            {'structure_type': k, 'count': v['count'], 'total_length': v['total_length']}
+            {'structure_type': k, 'count': len(v['names']), 'total_length': v['total_length']}
             for k, v in sorted(type_map.items())
         ]
 

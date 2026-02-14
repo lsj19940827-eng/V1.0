@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_modified": "2026-02-14 21:08:13",
+  "last_modified": "2026-02-14 22:33:31",
   "siphons": {
     "沪蓉": {
       "Q": 4.0,
@@ -270,8 +270,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 0.5711740348959381,
+      "diameter": 1.6,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -516,8 +516,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 0.5016261257118763,
+      "diameter": 1.6,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -537,7 +537,7 @@
       "v_channel_in": 0.974,
       "v_pipe_in": 1.9894,
       "v_channel_out": 0.0,
-      "v_pipe_out": 1.087,
+      "v_pipe_out": 1.088,
       "segments": [
         {
           "direction": "通用",
@@ -858,8 +858,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 0.8950678753156902,
+      "diameter": 1.6,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",

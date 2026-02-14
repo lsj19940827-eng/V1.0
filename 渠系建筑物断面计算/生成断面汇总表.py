@@ -290,7 +290,7 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
         _assign_if_valid(target, "V", v_val)
 
         h_total = _to_float(getattr(node, "structure_height", 0.0), 0.0)
-        _assign_if_valid(target, "H", h_total)
+        _assign_if_valid(target, "H", math.ceil(h_total * 100) / 100)
 
         # 矩形渡槽倒角参数
         if struct_key == "aqueduct_rect":
@@ -909,7 +909,7 @@ def compute_rect_culvert(segments: List[Dict]) -> List[Dict]:
             "slope_inv": slope_inv,
             "n":         n,
             "B":         round(res["B"], 2),
-            "H":         round(res["H"], 2),
+            "H":         math.ceil(res["H"] * 100) / 100,
             "t0":        t0,
             "t1":        t1,
             "t2":        t2,
@@ -1126,7 +1126,7 @@ def _write_rect_channel(ws, data, styles, gcl, col_offset=0):
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
         vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
                 d["n"], d.get("B", ""), d.get("H", ""), d.get("t", ""),
                 d.get("tie_rod", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", "")]
         for ci, v in enumerate(vals):
@@ -1171,7 +1171,7 @@ def _write_trapezoid_channel(ws, data, styles, gcl, col_offset=0):
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
         vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
                 d["n"], d.get("m", ""),
                 d.get("B", ""), d.get("H", ""), d.get("t", ""),
                 d.get("tie_rod", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", "")]
@@ -1232,7 +1232,7 @@ def _write_tunnel(ws, data, styles, gcl, col_offset=0):
             r = r_start + j
             vals = [
                 d["rock_class"],
-                f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
                 d["n"],
                 d.get("B", ""), d.get("H_straight", ""), d.get("R_arch", ""),
                 d["t0"], d["t"],
@@ -1294,7 +1294,7 @@ def _write_tunnel_circular(ws, data, styles, gcl, col_offset=0):
             r = r_start + j
             vals = [
                 d["rock_class"],
-                f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
                 d["n"],
                 d.get("D", ""),
                 d["t0"], d["t"],
@@ -1353,7 +1353,7 @@ def _write_tunnel_horseshoe(ws, data, styles, gcl, col_offset=0):
             r = r_start + j
             vals = [
                 d["rock_class"],
-                f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
                 d["n"],
                 d.get("R", ""),
                 d["t0"], d["t"],
@@ -1399,7 +1399,7 @@ def _write_aqueduct(ws, data, styles, gcl, col_offset=0):
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
         vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
                 d["n"], d.get("R", ""), d.get("H", ""), d.get("t", ""),
                 d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
                 d.get("HB_ratio", "")]
@@ -1467,7 +1467,7 @@ def _write_aqueduct_rect(ws, data, styles, gcl, col_offset=0):
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
         vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
                 d["n"], d.get("B", ""), d.get("H", ""), d.get("t", "")]
         if has_chamfer:
             vals += [d.get("chamfer_angle", ""), d.get("chamfer_length", "")]
@@ -1513,7 +1513,7 @@ def _write_rect_culvert(ws, data, styles, gcl, col_offset=0):
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
         vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
                 d["n"], d.get("B", ""), d.get("H", ""),
                 d.get("t0", ""), d.get("t1", ""), d.get("t2", ""),
                 d.get("H1", ""), d.get("H2", ""), d.get("V", "")]
@@ -1555,7 +1555,7 @@ def _write_circular_pipe(ws, data, styles, gcl, col_offset=0):
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
         vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
                 d["n"], d.get("D", ""), d.get("pipe_material", ""),
                 d.get("H1", ""), d.get("H2", ""), d.get("V", "")]
         for ci, v in enumerate(vals):
@@ -2094,7 +2094,7 @@ def _dxf_build_rect_channel(data):
     for d in data:
         rows.append([
             d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"], d.get("B", ""), d.get("H", ""), d.get("t", ""),
             d.get("tie_rod", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
         ])
@@ -2114,7 +2114,7 @@ def _dxf_build_trapezoid_channel(data):
     for d in data:
         rows.append([
             d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"], d.get("m", ""),
             d.get("B", ""), d.get("H", ""), d.get("t", ""),
             d.get("tie_rod", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
@@ -2137,7 +2137,7 @@ def _dxf_build_tunnel(data):
         rows.append([
             d["name"], d["Q"], d.get("Q_inc", ""),
             d["rock_class"],
-            f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"],
             d.get("B", ""), d.get("H_straight", ""), d.get("R_arch", ""),
             d["t0"], d["t"],
@@ -2162,7 +2162,7 @@ def _dxf_build_tunnel_circular(data):
         rows.append([
             d["name"], d["Q"], d.get("Q_inc", ""),
             d["rock_class"],
-            f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"],
             d.get("D", ""), d["t0"], d["t"],
             d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
@@ -2185,7 +2185,7 @@ def _dxf_build_tunnel_horseshoe(data):
         rows.append([
             d["name"], d["Q"], d.get("Q_inc", ""),
             d["rock_class"],
-            f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"],
             d.get("R", ""), d["t0"], d["t"],
             d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
@@ -2208,7 +2208,7 @@ def _dxf_build_aqueduct_u(data):
     for d in data:
         rows.append([
             d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"], d.get("R", ""), d.get("H", ""), d.get("t", ""),
             d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
             d.get("HB_ratio", ""),
@@ -2229,7 +2229,7 @@ def _dxf_build_aqueduct_rect(data):
     for d in data:
         rows.append([
             d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"], d.get("B", ""), d.get("H", ""), d.get("t", ""),
             d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
         ])
@@ -2249,7 +2249,7 @@ def _dxf_build_rect_culvert(data):
     for d in data:
         rows.append([
             d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"], d.get("B", ""), d.get("H", ""),
             d.get("t0", ""), d.get("t1", ""), d.get("t2", ""),
             d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
@@ -2270,7 +2270,7 @@ def _dxf_build_circular_pipe(data):
     for d in data:
         rows.append([
             d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]}' if d.get("slope_inv") else "",
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"], d.get("D", ""), d.get("pipe_material", ""),
             d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
         ])

@@ -367,7 +367,9 @@ class CulvertPanel(QWidget):
             o.append("【输入参数】")
             o.append(f"  设计流量 Q = {Q:.3f} m³/s")
             o.append(f"  糙率 n = {n}")
-            o.append(f"  水力坡降 1/{int(slope_inv)}")
+            o.append(f"  水力坡降 = 1/{int(slope_inv)}")
+            o.append(f"  不淤流速 = {v_min} m/s")
+            o.append(f"  不冲流速 = {v_max} m/s")
             o.append("")
 
             o.append("【断面尺寸】")
@@ -405,7 +407,9 @@ class CulvertPanel(QWidget):
             o.append("【一、输入参数】")
             o.append(f"  设计流量 Q = {Q:.3f} m³/s")
             o.append(f"  糙率 n = {n}")
-            o.append(f"  水力坡降 1/{int(slope_inv)}")
+            o.append(f"  水力坡降 = 1/{int(slope_inv)}")
+            o.append(f"  不淤流速 = {v_min} m/s")
+            o.append(f"  不冲流速 = {v_max} m/s")
             o.append("")
 
             o.append("【二、断面尺寸】")
@@ -585,9 +589,9 @@ class CulvertPanel(QWidget):
 
         o.append("=" * 70)
         if is_optimal:
-            o.append(f"  计算完成: {'成功 ✓' if result['success'] else '失败 ✗'} (水力最佳断面)")
+            o.append(f"  综合验证结果: {'全部通过 ✓' if result['success'] else '未通过 ✗'} (水力最佳断面)")
         else:
-            o.append(f"  计算完成: {'成功 ✓' if result['success'] else '失败 ✗'}")
+            o.append(f"  综合验证结果: {'全部通过 ✓' if result['success'] else '未通过 ✗'}")
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt
