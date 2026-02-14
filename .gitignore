@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+
+# IDE
+.cursor/
+.qoder/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 构建产物
+build/
+dist/
+*.spec
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store
+nul
+
+# 输出文件
+output/
+
+# 归档/测试数据
+_archive/test_data/
+
+# 临时文件
+*.tmp
+*.bak
+~$*

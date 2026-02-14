@@ -1,0 +1,872 @@
+{
+  "version": "1.0",
+  "last_modified": "2026-02-14 21:08:13",
+  "siphons": {
+    "沪蓉": {
+      "Q": 4.0,
+      "v_guess": 2.0,
+      "roughness_n": 0.014,
+      "inlet_type": "反弯扭曲面",
+      "outlet_type": "反弯扭曲面",
+      "xi_inlet": 0.1,
+      "xi_outlet": 0.2,
+      "v_channel_in": 1.044,
+      "v_pipe_in": 1.9894,
+      "v_channel_out": 0.0,
+      "v_pipe_out": 0.974,
+      "segments": [
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": 0.225,
+          "locked": true,
+          "inlet_shape": "进口稍微修圆",
+          "segment_type": "进水口"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "拦污栅"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "闸门槽"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": 0.1,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "旁通管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 5.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "折管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 50.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 10.0,
+          "radius": 5.0,
+          "angle": 45.0,
+          "xi_user": null,
+          "xi_calc": 0.24640201558187244,
+          "locked": false,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 100.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 10.0,
+          "radius": 5.0,
+          "angle": 45.0,
+          "xi_user": null,
+          "xi_calc": 0.24640201558187244,
+          "locked": false,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 50.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": 0.1,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "其他"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": 0.2633,
+          "locked": true,
+          "segment_type": "出水口"
+        }
+      ],
+      "plan_segments": [
+        {
+          "direction": "平面",
+          "length": 16.377,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 10,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "平面",
+          "length": 2.211,
+          "radius": 4.8,
+          "angle": 26.392,
+          "xi_user": null,
+          "xi_calc": 0.17828014832467054,
+          "locked": true,
+          "source_ip_index": 10,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "平面",
+          "length": 17.033,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 11,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "平面",
+          "length": 3.506,
+          "radius": 4.8,
+          "angle": 41.851,
+          "xi_user": null,
+          "xi_calc": 0.24034456311310298,
+          "locked": true,
+          "source_ip_index": 11,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "平面",
+          "length": 22.338,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 12,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "平面",
+          "length": 4.282,
+          "radius": 4.8,
+          "angle": 51.114,
+          "xi_user": null,
+          "xi_calc": 0.27284614004471314,
+          "locked": true,
+          "source_ip_index": 12,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "平面",
+          "length": 41.637,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 13,
+          "segment_type": "直管"
+        }
+      ],
+      "plan_total_length": 132.42699999999996,
+      "plan_feature_points": [
+        {
+          "chainage": 464.796,
+          "x": 649264.563,
+          "y": 3377548.913,
+          "azimuth": 0.0,
+          "turn_radius": 0.0,
+          "turn_angle": 0.0,
+          "turn_type": "无",
+          "ip_index": 9
+        },
+        {
+          "chainage": 484.925,
+          "x": 649244.413,
+          "y": 3377550.257,
+          "azimuth": 0.0,
+          "turn_radius": 4.8,
+          "turn_angle": 26.3922,
+          "turn_type": "圆弧",
+          "ip_index": 10
+        },
+        {
+          "chainage": 511.828,
+          "x": 649220.868,
+          "y": 3377563.965,
+          "azimuth": 0.0,
+          "turn_radius": 4.8,
+          "turn_angle": 41.8513,
+          "turn_type": "圆弧",
+          "ip_index": 11
+        },
+        {
+          "chainage": 547.935,
+          "x": 649184.732,
+          "y": 3377556.519,
+          "azimuth": 0.0,
+          "turn_radius": 4.8,
+          "turn_angle": 51.1142,
+          "turn_type": "圆弧",
+          "ip_index": 12
+        },
+        {
+          "chainage": 597.223,
+          "x": 649146.287,
+          "y": 3377588.178,
+          "azimuth": 0.0,
+          "turn_radius": 0.0,
+          "turn_angle": 0.0,
+          "turn_type": "无",
+          "ip_index": 13
+        }
+      ],
+      "longitudinal_nodes": [],
+      "total_head_loss": null,
+      "diameter": null,
+      "calculated_at": "",
+      "turn_n": 3.0,
+      "threshold": "",
+      "D_override": "",
+      "v2_strategy": "自动（=管道流速）",
+      "show_detail": true,
+      "longitudinal_is_example": true
+    },
+    "广岳": {
+      "Q": 4.0,
+      "v_guess": 2.0,
+      "roughness_n": 0.014,
+      "inlet_type": "反弯扭曲面",
+      "outlet_type": "反弯扭曲面",
+      "xi_inlet": 0.1,
+      "xi_outlet": 0.2,
+      "v_channel_in": 0.974,
+      "v_pipe_in": 1.9894,
+      "v_channel_out": 0.0,
+      "v_pipe_out": 0.974,
+      "segments": [
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": 0.225,
+          "locked": true,
+          "inlet_shape": "进口稍微修圆",
+          "segment_type": "进水口"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "拦污栅"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "闸门槽"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": 0.1,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "旁通管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 5.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "折管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 50.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 10.0,
+          "radius": 5.0,
+          "angle": 45.0,
+          "xi_user": null,
+          "xi_calc": 0.24640201558187244,
+          "locked": false,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 100.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 10.0,
+          "radius": 5.0,
+          "angle": 45.0,
+          "xi_user": null,
+          "xi_calc": 0.24640201558187244,
+          "locked": false,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 50.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": 0.1,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "其他"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": 0.2633,
+          "locked": true,
+          "segment_type": "出水口"
+        }
+      ],
+      "plan_segments": [
+        {
+          "direction": "平面",
+          "length": 13.672,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 17,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "平面",
+          "length": 3.511,
+          "radius": 4.8,
+          "angle": 41.911,
+          "xi_user": null,
+          "xi_calc": 0.2405602767716389,
+          "locked": true,
+          "source_ip_index": 17,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "平面",
+          "length": 46.253,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 18,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "平面",
+          "length": 1.669,
+          "radius": 4.8,
+          "angle": 19.925,
+          "xi_user": null,
+          "xi_calc": 0.14335071416623832,
+          "locked": true,
+          "source_ip_index": 18,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "平面",
+          "length": 49.899,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 19,
+          "segment_type": "直管"
+        }
+      ],
+      "plan_total_length": 127.69999999999993,
+      "plan_feature_points": [
+        {
+          "chainage": 684.315,
+          "x": 649086.007,
+          "y": 3377582.009,
+          "azimuth": 0.0,
+          "turn_radius": 0.0,
+          "turn_angle": 0.0,
+          "turn_type": "无",
+          "ip_index": 16
+        },
+        {
+          "chainage": 704.115,
+          "x": 649066.369,
+          "y": 3377577.838,
+          "azimuth": 0.0,
+          "turn_radius": 4.8,
+          "turn_angle": 41.9111,
+          "turn_type": "圆弧",
+          "ip_index": 17
+        },
+        {
+          "chainage": 759.306,
+          "x": 649033.673,
+          "y": 3377532.997,
+          "azimuth": 0.0,
+          "turn_radius": 4.8,
+          "turn_angle": 19.9251,
+          "turn_type": "圆弧",
+          "ip_index": 18
+        },
+        {
+          "chainage": 812.015,
+          "x": 649018.984,
+          "y": 3377482.347,
+          "azimuth": 0.0,
+          "turn_radius": 0.0,
+          "turn_angle": 0.0,
+          "turn_type": "无",
+          "ip_index": 19
+        }
+      ],
+      "longitudinal_nodes": [],
+      "total_head_loss": null,
+      "diameter": null,
+      "calculated_at": "",
+      "turn_n": 3.0,
+      "threshold": "",
+      "D_override": "",
+      "v2_strategy": "自动（=管道流速）",
+      "show_detail": true,
+      "longitudinal_is_example": true
+    },
+    "广高路": {
+      "Q": 4.0,
+      "v_guess": 2.0,
+      "roughness_n": 0.014,
+      "inlet_type": "反弯扭曲面",
+      "outlet_type": "反弯扭曲面",
+      "xi_inlet": 0.1,
+      "xi_outlet": 0.2,
+      "v_channel_in": 0.974,
+      "v_pipe_in": 1.9894,
+      "v_channel_out": 0.0,
+      "v_pipe_out": 1.087,
+      "segments": [
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": 0.225,
+          "locked": true,
+          "inlet_shape": "进口稍微修圆",
+          "segment_type": "进水口"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "拦污栅"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "闸门槽"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": 0.1,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "旁通管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 5.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "折管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 50.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 10.0,
+          "radius": 5.0,
+          "angle": 45.0,
+          "xi_user": null,
+          "xi_calc": 0.24640201558187244,
+          "locked": false,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 100.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 10.0,
+          "radius": 5.0,
+          "angle": 45.0,
+          "xi_user": null,
+          "xi_calc": 0.24640201558187244,
+          "locked": false,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "纵断面",
+          "length": 50.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": 0.1,
+          "xi_calc": null,
+          "locked": false,
+          "segment_type": "其他"
+        },
+        {
+          "direction": "通用",
+          "length": 0.0,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": 0.2082,
+          "locked": true,
+          "segment_type": "出水口"
+        }
+      ],
+      "plan_segments": [
+        {
+          "direction": "平面",
+          "length": 18.621,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 26,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "平面",
+          "length": 5.02,
+          "radius": 4.8,
+          "angle": 59.922,
+          "xi_user": null,
+          "xi_calc": 0.298179552103174,
+          "locked": true,
+          "source_ip_index": 26,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "平面",
+          "length": 21.51,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 27,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "平面",
+          "length": 2.639,
+          "radius": 4.8,
+          "angle": 31.506,
+          "xi_user": null,
+          "xi_calc": 0.2031519331538645,
+          "locked": true,
+          "source_ip_index": 27,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "平面",
+          "length": 44.088,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 28,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "平面",
+          "length": 0.827,
+          "radius": 4.8,
+          "angle": 9.873,
+          "xi_user": null,
+          "xi_calc": 0.08173138855991838,
+          "locked": true,
+          "source_ip_index": 28,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "平面",
+          "length": 36.158,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 29,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "平面",
+          "length": 3.848,
+          "radius": 4.8,
+          "angle": 45.932,
+          "xi_user": null,
+          "xi_calc": 0.25501668712118924,
+          "locked": true,
+          "source_ip_index": 29,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "平面",
+          "length": 15.302,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 30,
+          "segment_type": "直管"
+        },
+        {
+          "direction": "平面",
+          "length": 6.196,
+          "radius": 4.8,
+          "angle": 73.963,
+          "xi_user": null,
+          "xi_calc": 0.326353553521789,
+          "locked": true,
+          "source_ip_index": 30,
+          "segment_type": "弯管"
+        },
+        {
+          "direction": "平面",
+          "length": 23.376,
+          "radius": 0.0,
+          "angle": 0.0,
+          "xi_user": null,
+          "xi_calc": null,
+          "locked": true,
+          "source_ip_index": 31,
+          "segment_type": "直管"
+        }
+      ],
+      "plan_total_length": 208.1199999999999,
+      "plan_feature_points": [
+        {
+          "chainage": 1047.574,
+          "x": 648875.832,
+          "y": 3377349.479,
+          "azimuth": 0.0,
+          "turn_radius": 0.0,
+          "turn_angle": 0.0,
+          "turn_type": "无",
+          "ip_index": 25
+        },
+        {
+          "chainage": 1075.4180000000001,
+          "x": 648859.515,
+          "y": 3377325.868,
+          "azimuth": 0.0,
+          "turn_radius": 4.8,
+          "turn_angle": 59.9215,
+          "turn_type": "圆弧",
+          "ip_index": 26
+        },
+        {
+          "chainage": 1110.664,
+          "x": 648823.413,
+          "y": 3377328.753,
+          "azimuth": 0.0,
+          "turn_radius": 4.8,
+          "turn_angle": 31.5058,
+          "turn_type": "圆弧",
+          "ip_index": 27
+        },
+        {
+          "chainage": 1160.647,
+          "x": 648778.748,
+          "y": 3377306.057,
+          "azimuth": 0.0,
+          "turn_radius": 4.8,
+          "turn_angle": 9.8735,
+          "turn_type": "圆弧",
+          "ip_index": 28
+        },
+        {
+          "chainage": 1204.967,
+          "x": 648742.968,
+          "y": 3377279.28,
+          "azimuth": 0.0,
+          "turn_radius": 4.8,
+          "turn_angle": 45.9318,
+          "turn_type": "圆弧",
+          "ip_index": 29
+        },
+        {
+          "chainage": 1220.269,
+          "x": 648740.771,
+          "y": 3377262.029,
+          "azimuth": 0.0,
+          "turn_radius": 4.8,
+          "turn_angle": 73.9625,
+          "turn_type": "圆弧",
+          "ip_index": 30
+        },
+        {
+          "chainage": 1255.694,
+          "x": 648704.059,
+          "y": 3377256.359,
+          "azimuth": 0.0,
+          "turn_radius": 0.0,
+          "turn_angle": 0.0,
+          "turn_type": "无",
+          "ip_index": 31
+        }
+      ],
+      "longitudinal_nodes": [],
+      "total_head_loss": null,
+      "diameter": null,
+      "calculated_at": "",
+      "turn_n": 3.0,
+      "threshold": "",
+      "D_override": "",
+      "v2_strategy": "自动（=管道流速）",
+      "show_detail": true,
+      "longitudinal_is_example": true
+    }
+  }
+}

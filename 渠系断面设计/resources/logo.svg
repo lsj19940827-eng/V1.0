@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#1d4ed8" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <!-- 圆角方形底板 -->
+  <rect x="6" y="6" width="108" height="108" rx="26" fill="url(#bg)" filter="url(#shadow)"/>
+  <!-- 微妙光泽 -->
+  <rect x="6" y="6" width="108" height="108" rx="26" fill="white" opacity="0.04"/>
+  <!-- 渠道断面（粗线条） -->
+  <path d="M30 82 L44 46 L76 46 L90 82" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" opacity="0.95"/>
+  <!-- 三条水流线（粗细变化） -->
+  <path d="M36 58 Q46 52, 56 58 Q66 64, 76 58" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" opacity="0.9"/>
+  <path d="M40 68 Q50 62, 60 68 Q70 74, 80 68" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/>
+  <path d="M43 76 Q53 71, 63 76 Q73 81, 83 76" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.35"/>
+  <!-- 水滴点缀 -->
+  <circle cx="60" cy="34" r="6" fill="white" opacity="0.85"/>
+  <circle cx="60" cy="34" r="3" fill="url(#bg)" opacity="0.5"/>
+</svg>
