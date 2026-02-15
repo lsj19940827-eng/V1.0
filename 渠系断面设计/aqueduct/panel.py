@@ -731,7 +731,7 @@ class AqueductPanel(QWidget):
 
         all_pass = fb_inc_ok and fb_design_ok
         o.append("=" * 70)
-        o.append(f"  计算完成: {'成功 ✓' if all_pass else '未通过 ✗'}")
+        o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt

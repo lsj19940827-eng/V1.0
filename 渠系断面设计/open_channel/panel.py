@@ -794,7 +794,7 @@ class OpenChannelPanel(QWidget):
         o.append("")
         all_ok = vel_ok and vel_i_ok
         o.append("=" * 70)
-        o.append(f"  综合验证结果: {'通过 ✓' if all_ok else '未通过 ✗'}")
+        o.append(f"  综合验证结果: {'全部通过 ✓' if all_ok else '未通过 ✗'}")
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt

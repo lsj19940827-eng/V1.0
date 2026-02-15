@@ -143,23 +143,18 @@ def render_latex_svg(latex_str, fontsize=14):
             canvas = FigureCanvas(fig)
             fig.patch.set_alpha(0.0)
 
-            t = fig.text(0, 0.5, f'${latex_str}$',
-                         fontsize=fontsize, va='center', ha='left',
-                         color='#1a1a1a')
-
-            canvas.draw()
-            renderer = canvas.get_renderer()
-            bb = t.get_window_extent(renderer)
-
-            dpi = fig.dpi
-            w = max((bb.width + 20) / dpi, 0.5)
-            h = max((bb.height + 10) / dpi, 0.3)
-            fig.set_size_inches(w, h)
-            t.set_position((10 / (w * dpi), 0.5))
+            # 文本居中放置在默认大图(6.4×4.8 inch)中，
+            # 完全依赖 bbox_inches='tight' 裁剪到实际内容。
+            # 旧方案手动测量 get_window_extent 再缩小 figure，
+            # 但对复杂 LaTeX（\times, \sum 等）测量偏小，
+            # 导致 figure 太窄、SVG 内容被裁切。
+            fig.text(0.5, 0.5, '$' + latex_str + '$',
+                     fontsize=fontsize, va='center', ha='center',
+                     color='#1a1a1a')
 
             buf = io.BytesIO()
             fig.savefig(buf, format='svg', transparent=True,
-                        bbox_inches='tight', pad_inches=0.02)
+                        bbox_inches='tight', pad_inches=0.05)
 
             import matplotlib.pyplot as plt
             plt.close(fig)

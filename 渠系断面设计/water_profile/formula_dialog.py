@@ -20,8 +20,14 @@ try:
     from qfluentwidgets import PushButton
 except ImportError:
     from PySide6.QtWidgets import QPushButton as PushButton
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, QTimer, QByteArray, QRectF, QSize, QPoint
+from PySide6.QtGui import QFont, QPainter, QPainterPath, QLinearGradient, QColor, QPixmap, QPen
+
+try:
+    from PySide6.QtSvg import QSvgRenderer
+    HAS_SVG = True
+except ImportError:
+    HAS_SVG = False
 
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -44,180 +50,210 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
         "title": "转角计算",
         "description": "使用余弦定理计算三点形成的偏角",
         "formula": r"α = 180° - arccos((a² + c² - b²) / 2ac)",
+        "latex": r"\alpha = 180^{\circ} - \arccos\left(\frac{a^2 + c^2 - b^2}{2ac}\right)",
         "note": "其中: a=当前点到下一点距离, b=前一点到下一点距离, c=前一点到当前点距离",
     },
     "切线长": {
         "title": "切线长计算",
         "description": "根据转角和转弯半径计算切线长度",
         "formula": r"T = R × tan(α/2)",
+        "latex": r"T = R \times \tan\left(\frac{\alpha}{2}\right)",
         "note": "其中: R=转弯半径, α=转角(弧度)",
     },
     "弧长": {
         "title": "弧长计算",
         "description": "根据转角和转弯半径计算弧长",
         "formula": r"L = R × α",
+        "latex": r"L = R \times \alpha",
         "note": "其中: R=转弯半径, α=转角(弧度)",
     },
     "弯道长度": {
         "title": "弯道长度",
         "description": "弯道长度等于弧长",
         "formula": r"L_curve = S_EC - S_BC = L_arc",
+        "latex": r"L_{curve} = S_{EC} - S_{BC} = L_{arc}",
         "note": "即EC桩号与BC桩号之差",
     },
     "IP直线间距": {
         "title": "IP直线间距",
         "description": "相邻两个IP点之间的直线距离",
         "formula": r"D = √((Xi - Xi-1)² + (Yi - Yi-1)²)",
+        "latex": r"D = \sqrt{(X_i - X_{i-1})^2 + (Y_i - Y_{i-1})^2}",
         "note": "使用两点间距离公式计算",
     },
     "IP点桩号": {
         "title": "IP点桩号",
         "description": "IP点的累计桩号",
         "formula": r"S_IP(i) = S₀ + Σ Dⱼ",
+        "latex": r"S_{IP}^{(i)} = S_0 + \sum D_j",
         "note": "其中: S₀=起始桩号, Dⱼ=第j段的IP直线间距",
     },
     "弯前BC": {
         "title": "弯前BC桩号",
         "description": "弯道起点(曲线起点)的桩号",
         "formula": r"S_BC = S_MC - L/2",
+        "latex": r"S_{BC} = S_{MC} - \frac{L}{2}",
         "note": "其中: S_MC=里程MC, L=弧长",
     },
     "里程MC": {
         "title": "里程MC桩号",
         "description": "弯道中点的桩号，使用递推公式计算",
         "formula": r"S_MC(i) = S_MC(i-1) + Di - Ti-1 - Ti + Li-1/2 + Li/2",
+        "latex": r"S_{MC}^{(i)} = S_{MC}^{(i-1)} + D_i - T_{i-1} - T_i + \frac{L_{i-1}}{2} + \frac{L_i}{2}",
         "note": "其中: D=IP间距, T=切线长, L=弧长",
     },
     "弯末EC": {
         "title": "弯末EC桩号",
         "description": "弯道终点(曲线终点)的桩号",
         "formula": r"S_EC = S_BC + L",
+        "latex": r"S_{EC} = S_{BC} + L",
         "note": "其中: S_BC=弯前BC桩号, L=弧长",
     },
     "转弯半径": {
         "title": "转弯半径",
         "description": "弯道的圆曲线半径",
         "formula": r"R",
+        "latex": r"R",
         "note": "用户输入值，影响切线长和弧长的计算",
     },
     "复核弯前长度": {
         "title": "复核弯前长度",
         "description": "检查当前弯道的起弯点(BC)是否超过了上一个IP点",
         "formula": r"L_pre = Li - Ti",
+        "latex": r"L_{pre} = L_i - T_i",
         "note": "若为负数说明起弯点跑到了上一IP点前面，设计不合理",
     },
     "复核弯后长度": {
         "title": "复核弯后长度",
         "description": "检查当前弯道的出弯点(EC)是否超过了下一个IP点",
         "formula": r"L_post = Li+1 - Ti",
+        "latex": r"L_{post} = L_{i+1} - T_i",
         "note": "若为负数说明出弯点跑到了下一IP点后面，设计不合理",
     },
     "复核总长度": {
         "title": "复核总长度（夹直线长度）",
         "description": "检查两个弯道之间是否有足够的直线缓冲段",
         "formula": r"L_total = Li - Ti-1 - Ti",
+        "latex": r"L_{total} = L_i - T_{i-1} - T_i",
         "note": "若为负数说明两弯道曲线重叠，无法施工",
     },
     "弯道水头损失": {
         "title": "弯道水头损失计算",
         "description": "弯道处水流产生二次流（螺旋流），导致动能损耗增加",
         "formula": r"hw = n²·L·v² / R^(4/3) × (3/4)√(B/Rc)",
+        "latex": r"h_w = \frac{n^2 \cdot L \cdot v^2}{R^{4/3}} \times \frac{3}{4}\sqrt{\frac{B}{R_c}}",
         "note": "n=糙率, L=弯道长度, v=流速, R=水力半径, B=水面宽度, Rc=转弯半径\n双击单元格可查看详细计算过程",
     },
     "渐变段水头损失": {
         "title": "渐变段水头损失计算",
         "description": "渐变段水头损失包括局部损失和沿程损失（平均值法）",
         "formula": r"h_tr = ξ₁·|v₂²-v₁²|/(2g) + i·L",
+        "latex": r"h_{tr} = \zeta_1 \cdot \frac{|v_2^2 - v_1^2|}{2g} + i \cdot L",
         "note": "ξ₁=局部损失系数(表K.1.2), v₁=起始流速, v₂=末端流速\n双击单元格可查看详细计算过程",
     },
     "沿程水头损失": {
         "title": "沿程水头损失计算",
         "description": "使用底坡和有效长度计算沿程水头损失",
         "formula": r"hf = i × L_eff",
+        "latex": r"h_f = i \times L_{eff}",
         "note": "有效长度 = (里程MC差) - 渐变段长度 - 上行弧长/2 - 本行弧长/2\n双击单元格可查看详细计算过程",
     },
     "预留水头损失": {
         "title": "预留水头损失",
         "description": "用于补充工程中程序未覆盖的损失，工程师可按经验自行输入",
         "formula": r"h_res",
+        "latex": r"h_{res}",
         "note": "该值不参与公式计算，直接计入总水头损失",
     },
     "过闸水头损失": {
         "title": "过闸水头损失",
         "description": "分水闸/分水口等结构通过闸孔产生的水头损失",
         "formula": r"h_gate",
+        "latex": r"h_{gate}",
         "note": "该值可手动输入；分水闸/分水口若为空则自动填充默认值",
     },
     "倒虹吸水头损失": {
         "title": "倒虹吸水头损失",
         "description": "倒虹吸管道中的总水头损失",
         "formula": r"h_sip",
+        "latex": r"h_{sip}",
         "note": "由倒虹吸水力计算模块计算后回写",
     },
     "总水头损失": {
         "title": "总水头损失",
         "description": "该节点的总水头损失（包含弯道、渐变段、沿程及其他损失）",
         "formula": r"hΣ = hw + h_tr + hf + h_res + h_gate + h_sip",
+        "latex": r"h_{\Sigma} = h_w + h_{tr} + h_f + h_{res} + h_{gate} + h_{sip}",
         "note": "双击单元格可查看详细计算过程",
     },
     "累计总水头损失": {
         "title": "累计总水头损失",
         "description": "从第一行开始逐行累加的水头损失",
         "formula": r"h_cum,i = Σ hk",
+        "latex": r"h_{cum,i} = \sum h_k",
         "note": "普通行取总水头损失，渐变段行取渐变段水头损失\n双击单元格可查看详细计算过程",
     },
     "水位": {
         "title": "水位计算",
         "description": "根据上一节点水位与各项损失推求当前水位",
         "formula": r"Zi = Zi-1 - hf - hj - hw - h_tr",
+        "latex": r"Z_i = Z_{i-1} - \Delta h_i",
         "note": "首节点水位取起始水位；分水闸按过闸损失扣减\n双击单元格可查看详细计算过程",
     },
     "渠底高程": {
         "title": "渠底高程计算",
         "description": "由水位与水深计算渠底高程",
         "formula": r"Zb = Z - h",
+        "latex": r"Z_b = Z - h",
         "note": "Z=水位, h=水深\n双击单元格可查看详细计算过程",
     },
     "渠顶高程": {
         "title": "渠顶高程计算",
         "description": "由渠底高程与结构高度计算渠顶高程",
         "formula": r"Zt = Zb + H",
+        "latex": r"Z_t = Z_b + H",
         "note": "Zb=渠底高程, H=结构高度\n双击单元格可查看详细计算过程",
     },
     "水深h设计": {
         "title": "水深",
         "description": "利用曼宁公式试算法求解正常水深",
         "formula": r"Q = A·R^(2/3)·i^(1/2) / n",
+        "latex": r"Q = \frac{1}{n} \cdot A \cdot R^{2/3} \cdot i^{1/2}",
         "note": "Q=流量, A=过水断面面积, R=水力半径, i=底坡, n=糙率",
     },
     "过水断面面积A": {
         "title": "过水断面面积",
         "description": "根据断面类型计算",
         "formula": r"梯形: A = (B + m·h)·h  |  圆形: A = f(D,h)",
+        "latex": r"A = (B + m \cdot h) \cdot h",
         "note": "B=底宽, m=边坡系数, h=水深, D=直径",
     },
     "湿周X": {
         "title": "湿周",
         "description": "水流与渠道壁面接触的长度",
         "formula": r"梯形: χ = B + 2h√(1+m²)  |  圆形: χ = f(D,h)",
+        "latex": r"\chi = B + 2h\sqrt{1+m^2}",
         "note": "B=底宽, m=边坡系数, h=水深",
     },
     "水力半径R": {
         "title": "水力半径",
         "description": "过水断面面积与湿周之比",
         "formula": r"R = A / χ",
+        "latex": r"R = \frac{A}{\chi}",
         "note": "A=过水断面面积, χ=湿周",
     },
     "流速v设计": {
         "title": "流速",
         "description": "由连续性方程计算",
         "formula": r"v = Q / A",
+        "latex": r"v = \frac{Q}{A}",
         "note": "Q=流量, A=过水断面面积",
     },
     "渐变段长度L": {
         "title": "渐变段长度",
         "description": "根据水面宽度差和渐变段角度计算",
         "formula": r"L = |B₁ - B₂| × 系数",
+        "latex": r"L = k \times |B_1 - B_2|",
         "note": "已按规范约束取大值",
     },
 }
@@ -748,3 +784,308 @@ def show_cumulative_loss_dialog(parent, node_name: str, details: Dict[str, Any])
         {"title": "3. 计算结果", "formula": f"$h_{{cum,i}} = {cumulative:.4f} \\ m$"},
     ]
     FormulaDialog(parent, f"{node_name} - 累计总水头损失计算详情", sections)
+
+
+# ================================================================
+# FormulaTooltipWidget — Fluent Design 悬浮公式卡片
+# ================================================================
+
+class FormulaTooltipWidget(QWidget):
+    """Fluent Design 风格的公式悬浮提示卡片。
+
+    鼠标悬停表头列时弹出，显示：
+      - 蓝色渐变标题栏（标题 + 说明）
+      - LaTeX 公式（matplotlib SVG 矢量渲染）
+      - 灰色注释区（含左侧蓝色边线）
+
+    公式使用 render_latex_svg 渲染为 SVG，再通过 QSvgRenderer 转为 QPixmap 显示。
+    """
+
+    _SHADOW_MARGIN = 10
+    _CARD_RADIUS = 12
+    _MIN_CARD_WIDTH = 360
+    _MAX_CARD_WIDTH = 650
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(
+            Qt.Tool | Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+
+        self._current_col = None
+        self._pixmap_cache: Dict[str, QPixmap] = {}
+
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(200)
+        self._hide_timer.timeout.connect(self._do_hide)
+
+        self._setup_ui()
+
+    # ---- UI 构建 ----
+
+    def _setup_ui(self):
+        m = self._SHADOW_MARGIN
+        root = QVBoxLayout(self)
+        root.setContentsMargins(m, m, m, m)
+        root.setSpacing(0)
+
+        self._card = QWidget()
+        self._card.setMinimumWidth(self._MIN_CARD_WIDTH)
+        self._card.setMaximumWidth(self._MAX_CARD_WIDTH)
+        card_lay = QVBoxLayout(self._card)
+        card_lay.setContentsMargins(0, 0, 0, 0)
+        card_lay.setSpacing(0)
+
+        # --- 标题区 ---
+        self._header_widget = QWidget()
+        h_lay = QVBoxLayout(self._header_widget)
+        h_lay.setContentsMargins(18, 14, 18, 14)
+        h_lay.setSpacing(4)
+
+        self._title_label = QLabel()
+        self._title_label.setStyleSheet(
+            "color:#fff; font-size:15px; font-weight:bold; background:transparent;")
+        self._desc_label = QLabel()
+        self._desc_label.setWordWrap(True)
+        self._desc_label.setStyleSheet(
+            "color:rgba(255,255,255,0.85); font-size:12px; background:transparent;")
+        h_lay.addWidget(self._title_label)
+        h_lay.addWidget(self._desc_label)
+        card_lay.addWidget(self._header_widget)
+
+        # --- 公式 + 注释 ---
+        body = QWidget()
+        b_lay = QVBoxLayout(body)
+        b_lay.setContentsMargins(18, 14, 18, 14)
+        b_lay.setSpacing(12)
+
+        # 公式区域
+        self._formula_frame = QFrame()
+        self._formula_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 #F8F9FE, stop:1 #F0F4FF);
+                border: 1px solid #E3ECF9;
+                border-radius: 8px;
+            }
+        """)
+        f_lay = QVBoxLayout(self._formula_frame)
+        f_lay.setContentsMargins(14, 14, 14, 14)
+        f_lay.setAlignment(Qt.AlignCenter)
+
+        self._formula_label = QLabel()
+        self._formula_label.setAlignment(Qt.AlignCenter)
+        self._formula_label.setStyleSheet("background:transparent; border:none;")
+        f_lay.addWidget(self._formula_label)
+        b_lay.addWidget(self._formula_frame)
+
+        # 注释区域
+        self._note_label = QLabel()
+        self._note_label.setWordWrap(True)
+        self._note_label.setStyleSheet("""
+            QLabel {
+                font-size: 12px; color: #757575;
+                background: #FAFAFA; border-radius: 6px;
+                border-left: 3px solid #1976D2;
+                padding: 8px 12px;
+            }
+        """)
+        b_lay.addWidget(self._note_label)
+
+        card_lay.addWidget(body)
+        root.addWidget(self._card)
+
+    # ---- 自定义绘制（圆角卡片 + 蓝色标题 + 阴影） ----
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        m = self._SHADOW_MARGIN
+        r = self._CARD_RADIUS
+        card_rect = QRectF(m, m, self.width() - 2 * m, self.height() - 2 * m)
+
+        # 阴影（从外到内逐层绘制半透明圆角矩形）
+        for i in range(m, 0, -1):
+            alpha = int(25 * ((1 - i / m) ** 2))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(0, 0, 0, alpha))
+            expand = m - i
+            p.drawRoundedRect(
+                card_rect.adjusted(-expand, -expand + 2, expand, expand + 2),
+                r + expand, r + expand)
+
+        # 剪裁为卡片圆角区域
+        clip = QPainterPath()
+        clip.addRoundedRect(card_rect, r, r)
+        p.setClipPath(clip)
+
+        # 白色背景
+        p.fillRect(card_rect, QColor("#FFFFFF"))
+
+        # 蓝色渐变标题栏
+        header_h = self._header_widget.height()
+        header_rect = QRectF(card_rect.x(), card_rect.y(),
+                             card_rect.width(), header_h)
+        grad = QLinearGradient(header_rect.topLeft(), header_rect.topRight())
+        grad.setColorAt(0, QColor("#1565C0"))
+        grad.setColorAt(1, QColor("#1E88E5"))
+        p.fillRect(header_rect, grad)
+
+        # 1px 卡片边框
+        p.setClipping(False)
+        p.setPen(QPen(QColor("#E0E0E0"), 1))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(card_rect, r, r)
+
+        p.end()
+
+    # ---- 公式 SVG → QPixmap ----
+
+    @staticmethod
+    def _fix_svg_pt_units(svg_str: str) -> str:
+        """将 SVG 的 width/height 从 pt 转换为 px（×4/3）。
+
+        matplotlib 输出 SVG 使用 pt 单位，但 QSvgRenderer 把 pt 数值
+        当 px 解释，导致 defaultSize() 偏小约 25%、公式右侧被截断。
+        """
+        def _pt_to_px(m):
+            attr = m.group(1)          # 'width' or 'height'
+            val = float(m.group(2))    # 数值
+            px = val * 4.0 / 3.0       # 1pt = 4/3 px @96dpi
+            return f'{attr}="{px:.2f}"'
+        return re.sub(r'(width|height)="([\d.]+)pt"', _pt_to_px, svg_str, count=2)
+
+    def _render_formula_pixmap(self, latex_str: str):
+        """将 LaTeX 渲染为 QPixmap（缓存结果）。
+
+        使用 matplotlib Agg 后端直接渲染 PNG，再加载为 QPixmap。
+        完全绕过 SVG → QSvgRenderer 路径中无法修复的 pt/px 单位混淆
+        （QSvgRenderer.render() 始终按 SVG width/height 的 pt 数值当 px
+        确定渲染区域，导致公式右侧被截断约 25%）。
+        """
+        if latex_str in self._pixmap_cache:
+            return self._pixmap_cache[latex_str]
+
+        try:
+            import io as _io
+            import matplotlib
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_agg import FigureCanvasAgg as _FC
+        except ImportError:
+            self._pixmap_cache[latex_str] = None
+            return None
+
+        try:
+            dpr = self.devicePixelRatioF()
+            render_scale = max(dpr, 2.0)          # 至少 2× 确保清晰
+            render_dpi = int(100 * render_scale)
+
+            # 不使用 _MATH_RC（CJK 字体配置）！
+            # Microsoft YaHei 缺少正确的数学符号度量，导致
+            # get_window_extent() 返回极小的 bbox（如 14px），
+            # bbox_inches='tight' 据此裁剪后公式被严重截断。
+            # 悬浮公式均为纯 ASCII 数学，使用默认 CM 字体即可。
+            with matplotlib.rc_context({'svg.fonttype': 'path'}):
+                fig = Figure(dpi=100)
+                _FC(fig)                           # 绑定 Agg canvas
+                fig.patch.set_alpha(0.0)
+
+                fig.text(0.5, 0.5, '$' + latex_str + '$',
+                         fontsize=16, va='center', ha='center',
+                         color='#1a1a1a')
+
+                buf = _io.BytesIO()
+                fig.savefig(buf, format='png', transparent=True,
+                            bbox_inches='tight', pad_inches=0.05,
+                            dpi=render_dpi)
+
+                import matplotlib.pyplot as plt
+                plt.close(fig)
+
+            pixmap = QPixmap()
+            pixmap.loadFromData(buf.getvalue())
+            pixmap.setDevicePixelRatio(render_scale)
+
+            # 超过最大卡片内容宽度时等比缩放
+            max_w = self._MAX_CARD_WIDTH - 80
+            logical_w = pixmap.width() / render_scale
+            if logical_w > max_w:
+                new_w = int(max_w * render_scale)
+                pixmap = pixmap.scaledToWidth(new_w, Qt.SmoothTransformation)
+                pixmap.setDevicePixelRatio(render_scale)
+
+            self._pixmap_cache[latex_str] = pixmap
+            return pixmap
+        except Exception:
+            self._pixmap_cache[latex_str] = None
+            return None
+
+    # ---- 显示 / 隐藏 ----
+
+    def show_for_column(self, col_name: str, global_pos: QPoint):
+        """为指定列显示悬浮公式卡片。"""
+        if col_name == self._current_col and self.isVisible():
+            self._hide_timer.stop()
+            return
+
+        info = COLUMN_FORMULAS.get(col_name)
+        if not info:
+            return
+
+        self._current_col = col_name
+        self._hide_timer.stop()
+
+        # 更新内容
+        self._title_label.setText(info['title'])
+        self._desc_label.setText(info['description'])
+
+        latex = info.get('latex', '')
+        pixmap = self._render_formula_pixmap(latex) if latex else None
+        if pixmap:
+            self._formula_label.setPixmap(pixmap)
+            self._formula_label.setText('')
+        else:
+            self._formula_label.setPixmap(QPixmap())
+            self._formula_label.setText(info.get('formula', ''))
+            self._formula_label.setFont(QFont("Cambria Math", 14))
+
+        note_text = info.get('note', '').replace('\n', '\n')
+        self._note_label.setText(note_text)
+        self._note_label.setVisible(bool(note_text))
+
+        # 调整尺寸 & 定位
+        self.adjustSize()
+        x = global_pos.x() - self.width() // 2
+        y = global_pos.y() + 4
+
+        screen = self.screen()
+        if screen:
+            sr = screen.availableGeometry()
+            if x + self.width() > sr.right():
+                x = sr.right() - self.width()
+            if x < sr.left():
+                x = sr.left()
+            if y + self.height() > sr.bottom():
+                y = global_pos.y() - self.height() - 4
+
+        self.move(x, y)
+        self.show()
+
+    def schedule_hide(self):
+        """延迟隐藏（给用户移入 tooltip 的时间）。"""
+        self._hide_timer.start()
+
+    def _do_hide(self):
+        self._current_col = None
+        self.hide()
+
+    def enterEvent(self, event):
+        self._hide_timer.stop()
+
+    def leaveEvent(self, event):
+        self.schedule_hide()

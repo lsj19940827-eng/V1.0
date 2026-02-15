@@ -854,17 +854,20 @@ class WaterProfilePanel(QWidget):
         self._splitter.setSizes([top_h, bottom_h])
 
     def _setup_header_tooltips(self):
-        """为表头设置悬浮提示（计算公式和原理），与原版Tkinter latex_tooltip完全对齐"""
-        from 渠系断面设计.water_profile.formula_dialog import COLUMN_FORMULAS
-        header = self.node_table.horizontalHeader()
+        """为表头设置悬浮提示（LaTeX公式渲染），使用自定义Fluent悬浮卡片"""
+        from 渠系断面设计.water_profile.formula_dialog import COLUMN_FORMULAS, FormulaTooltipWidget
+
+        self._formula_tooltip = FormulaTooltipWidget()
+        self._formula_columns = set()
         for col_idx, col_name in enumerate(NODE_ALL_HEADERS):
-            info = COLUMN_FORMULAS.get(col_name)
-            if info:
-                tip = f"<b>{info['title']}</b><br>{info['description']}<br><br>"
-                tip += f"<code>{info['formula']}</code><br><br>"
-                tip += f"<i>{info['note'].replace(chr(10), '<br>')}</i>"
-                model = self.node_table.model()
-                model.setHeaderData(col_idx, Qt.Horizontal, tip, Qt.ToolTipRole)
+            if col_name in COLUMN_FORMULAS:
+                self._formula_columns.add(col_idx)
+
+        header = self.node_table.horizontalHeader()
+        header.setMouseTracking(True)
+        self._node_header = header
+        header.viewport().setMouseTracking(True)
+        header.viewport().installEventFilter(self)
 
     def _on_node_cell_double_clicked(self, row, col):
         """双击单元格：结构形式列弹出选择面板；水头损失/高程列显示详细计算过程"""
@@ -2928,13 +2931,31 @@ class WaterProfilePanel(QWidget):
     # 辅助
     # ================================================================
     def eventFilter(self, obj, event):
-        """事件过滤器：起始桩号输入框获得焦点时转为纯数字便于编辑"""
-        from PySide6.QtCore import QEvent
+        """事件过滤器：起始桩号焦点 + 表头悬浮公式提示"""
+        from PySide6.QtCore import QEvent, QPoint
         if obj is self.start_station_edit:
             if event.type() == QEvent.FocusIn:
                 current = self.start_station_edit.text()
                 value = parse_station_input(current)
                 self.start_station_edit.setText(str(value))
+        elif hasattr(self, '_node_header') and obj is self._node_header.viewport():
+            header = self._node_header
+            if event.type() == QEvent.Type.MouseMove:
+                try:
+                    pos = event.position().toPoint()
+                except AttributeError:
+                    pos = event.pos()
+                logical_idx = header.logicalIndexAt(pos)
+                if logical_idx >= 0 and logical_idx in self._formula_columns:
+                    col_name = NODE_ALL_HEADERS[logical_idx]
+                    vp_x = header.sectionViewportPosition(logical_idx)
+                    sec_w = header.sectionSize(logical_idx)
+                    gp = header.mapToGlobal(QPoint(vp_x + sec_w // 2, header.height()))
+                    self._formula_tooltip.show_for_column(col_name, gp)
+                else:
+                    self._formula_tooltip.schedule_hide()
+            elif event.type() == QEvent.Type.Leave:
+                self._formula_tooltip.schedule_hide()
         return super().eventFilter(obj, event)
 
     def _format_start_station(self):
