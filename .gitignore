@@ -32,9 +32,12 @@ nul
 
 # 输出文件
 output/
+*.dwl
+*.dwl2
 
-# 归档/测试数据
-_archive/test_data/
+# 归档/备份
+_archive/
+V1.00207的备份/
 
 # 临时文件
 *.tmp
