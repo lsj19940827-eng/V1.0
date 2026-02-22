@@ -77,7 +77,7 @@ class ChannelNode:
     # ========== 特殊标记 ==========
     is_inverted_siphon: bool = False            # 是否为倒虹吸（水损需外部导入）
     external_head_loss: Optional[float] = None  # 外部导入的水头损失（倒虹吸用）
-    is_diversion_gate: bool = False             # 是否为分水闸/分水口（仅过闸水头损失）
+    is_diversion_gate: bool = False             # 是否为闸类结构（分水闸/分水口/节制闸/泄水闸等，仅过闸水头损失）
     is_auto_inserted_channel: bool = False      # 是否为自动插入的明渠段（渐变段间连接段，不分配IP编号）
     stat_length: float = 0.0                    # 统计用长度（结构类型汇总用，不参与导出）
     

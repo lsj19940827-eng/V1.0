@@ -8,10 +8,10 @@
 表格类型（按结果出现情况生成）:
   1. 矩形明渠断面尺寸及水力要素表
   2. 梯形明渠断面尺寸及水力要素表
-  3. 隧洞断面尺寸及水力要素表（圆拱直墙型，含 III/IV/V 类围岩）
-  4. 渡槽断面尺寸及水力要素表（U 形）
+  3. 圆拱直墙型隧洞断面尺寸及水力要素表（含 III/IV/V 类围岩）
+  4. U形渡槽断面尺寸及水力要素表
   5. 矩形暗涵断面尺寸及水力要素表
-  6. 圆形明渠断面尺寸及水力要素表（圆管涵对应明渠-圆形）
+  6. 圆管涵断面尺寸及水力要素表
   7. 倒虹吸断面尺寸及水力要素表（管道材质可选）
 """
 
@@ -411,7 +411,6 @@ def compute_rect_channel(segments: List[Dict]) -> List[Dict]:
 
         res = quick_calculate_rectangular(
             Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
-            manual_b=seg.get("B"),
         )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
@@ -440,8 +439,7 @@ def compute_rect_channel(segments: List[Dict]) -> List[Dict]:
             "V":         round(res["V_design"], 3),
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
-            "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
+            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
             "t": "t", "tie_rod": "tie_rod",
         })
         rows.append(row)
@@ -464,7 +462,6 @@ def compute_trapezoid_channel(segments: List[Dict]) -> List[Dict]:
 
         res = quick_calculate_trapezoidal(
             Q=Q, m=m, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
-            manual_b=seg.get("B"),
         )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
@@ -495,9 +492,8 @@ def compute_trapezoid_channel(segments: List[Dict]) -> List[Dict]:
             "beta":      round(res.get("Beta_design", 0) or 0, 3) if res.get("Beta_design", 0) else "",
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
-            "m": "m", "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
-            "t": "t", "tie_rod": "tie_rod", "beta": "beta",
+            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+            "m": "m", "t": "t", "tie_rod": "tie_rod",
         })
         rows.append(row)
     return rows
@@ -508,54 +504,24 @@ def compute_trapezoid_channel(segments: List[Dict]) -> List[Dict]:
 # ============================================================
 
 def compute_tunnel(segments: List[Dict],
-                   rock_lining: Dict = None) -> Tuple[List[Dict], Dict]:
+                   rock_lining: Dict = None,
+                   unified: bool = False) -> Tuple[List[Dict], Dict]:
     """
     返回 (rows, tunnel_info)
       rows: 每个 segment × 3 行
       tunnel_info: {"B", "H_total", "H_straight", "R_arch", "theta_deg"}
+    unified=True:  按最大流量段设计统一断面，各段分别求水深
+    unified=False: 各流量段独立设计断面尺寸
     """
     if rock_lining is None:
         rock_lining = ROCK_LINING_DEFAULT
 
-    # --- 用最大 Q 设计隧洞断面 ---
-    max_seg = max(segments, key=lambda s: s["Q"])
-    res_max = _calc_horseshoe(
-        Q=max_seg["Q"], n=max_seg.get("n", 0.014),
-        slope_inv=max_seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
-    )
-    if not res_max.get("success"):
-        empty_info = {"B": 0, "H_total": 0, "H_straight": 0, "R_arch": 0, "theta_deg": 180}
-        rows = []
-        for seg in segments:
-            for rc in ROCK_CLASSES:
-                row = {"name": seg["name"], "Q": seg["Q"], "Q_inc": "",
-                       "rock_class": rc, "slope_inv": seg["slope_inv"],
-                       "n": seg.get("n", 0.014),
-                       "B": "", "H_straight": "", "R_arch": "",
-                       "t0": rock_lining[rc]["t0"], "t": rock_lining[rc]["t"],
-                       "H1": "", "H2": "", "V": ""}
-                _apply_overrides(row, seg, {
-                    "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
-                    "B": "B", "H_straight": "H_straight", "R_arch": "R_arch",
-                    "H1": "H1", "H2": "H2", "V": "V",
-                })
-                rows.append(row)
-        return rows, empty_info
+    override_map = {
+        "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+    }
 
-    B = res_max["B"]
-    H_total = res_max["H_total"]
-    H_straight = res_max["H_straight"]
-    theta_deg = res_max.get("theta_deg", 180.0)
-    theta_rad = math.radians(theta_deg)
-    sin_half = math.sin(theta_rad / 2)
-    R_arch = (B / 2) / sin_half if abs(sin_half) > 1e-9 else B / 2
-
-    tunnel_info = {"B": B, "H_total": H_total, "H_straight": H_straight,
-                   "R_arch": R_arch, "theta_deg": theta_deg}
-
-    # --- 每个流量段求水深 ---
-    rows = []
-    for seg in segments:
+    def _design_one_seg(seg, B, H_total, H_straight, R_arch, theta_rad):
+        """用给定断面尺寸为单个流量段求水深，返回 rows 列表。"""
         Q = seg["Q"]
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
@@ -571,6 +537,7 @@ def compute_tunnel(segments: List[Dict],
             out_d = calculate_horseshoe_outputs(B, H_total, theta_rad, h_d, n, slope)
             V_d = out_d["V"]
 
+        seg_rows = []
         for rc in ROCK_CLASSES:
             row = {
                 "name":       seg["name"],
@@ -588,13 +555,82 @@ def compute_tunnel(segments: List[Dict],
                 "H2":         round(h_i, 2) if ok_i else "",
                 "V":          round(V_d, 2) if V_d > 0 else "",
             }
-            _apply_overrides(row, seg, {
-                "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
-                "B": "B", "H_straight": "H_straight", "R_arch": "R_arch",
-                "H1": "H1", "H2": "H2", "V": "V",
-            })
-            rows.append(row)
-    return rows, tunnel_info
+            _apply_overrides(row, seg, override_map)
+            seg_rows.append(row)
+        return seg_rows
+
+    def _empty_rows_for_seg(seg):
+        seg_rows = []
+        for rc in ROCK_CLASSES:
+            row = {"name": seg["name"], "Q": seg["Q"], "Q_inc": "",
+                   "rock_class": rc, "slope_inv": seg["slope_inv"],
+                   "n": seg.get("n", 0.014),
+                   "B": "", "H_straight": "", "R_arch": "",
+                   "t0": rock_lining[rc]["t0"], "t": rock_lining[rc]["t"],
+                   "H1": "", "H2": "", "V": ""}
+            _apply_overrides(row, seg, override_map)
+            seg_rows.append(row)
+        return seg_rows
+
+    if unified:
+        # --- 统一断面：用最大 Q 设计 ---
+        max_seg = max(segments, key=lambda s: s["Q"])
+        res_max = _calc_horseshoe(
+            Q=max_seg["Q"], n=max_seg.get("n", 0.014),
+            slope_inv=max_seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
+        )
+        if not res_max.get("success"):
+            empty_info = {"B": 0, "H_total": 0, "H_straight": 0, "R_arch": 0, "theta_deg": 180}
+            rows = []
+            for seg in segments:
+                rows.extend(_empty_rows_for_seg(seg))
+            return rows, empty_info
+
+        B = res_max["B"]
+        H_total = res_max["H_total"]
+        H_straight = res_max["H_straight"]
+        theta_deg = res_max.get("theta_deg", 180.0)
+        theta_rad = math.radians(theta_deg)
+        sin_half = math.sin(theta_rad / 2)
+        R_arch = (B / 2) / sin_half if abs(sin_half) > 1e-9 else B / 2
+
+        tunnel_info = {"B": B, "H_total": H_total, "H_straight": H_straight,
+                       "R_arch": R_arch, "theta_deg": theta_deg}
+
+        rows = []
+        for seg in segments:
+            rows.extend(_design_one_seg(seg, B, H_total, H_straight, R_arch, theta_rad))
+        return rows, tunnel_info
+    else:
+        # --- 独立断面：各流量段分别设计 ---
+        rows = []
+        first_info = None
+        for seg in segments:
+            res = _calc_horseshoe(
+                Q=seg["Q"], n=seg.get("n", 0.014),
+                slope_inv=seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
+            )
+            if not res.get("success"):
+                rows.extend(_empty_rows_for_seg(seg))
+                continue
+
+            B = res["B"]
+            H_total = res["H_total"]
+            H_straight = res["H_straight"]
+            theta_deg = res.get("theta_deg", 180.0)
+            theta_rad = math.radians(theta_deg)
+            sin_half = math.sin(theta_rad / 2)
+            R_arch = (B / 2) / sin_half if abs(sin_half) > 1e-9 else B / 2
+
+            if first_info is None:
+                first_info = {"B": B, "H_total": H_total, "H_straight": H_straight,
+                              "R_arch": R_arch, "theta_deg": theta_deg}
+
+            rows.extend(_design_one_seg(seg, B, H_total, H_straight, R_arch, theta_rad))
+
+        if first_info is None:
+            first_info = {"B": 0, "H_total": 0, "H_straight": 0, "R_arch": 0, "theta_deg": 180}
+        return rows, first_info
 
 # 向后兼容别名
 compute_tunnel_arch = compute_tunnel
@@ -605,42 +641,26 @@ compute_tunnel_arch = compute_tunnel
 # ============================================================
 
 def compute_tunnel_circular(segments: List[Dict],
-                            rock_lining: Dict = None) -> Tuple[List[Dict], Dict]:
+                            rock_lining: Dict = None,
+                            unified: bool = False) -> Tuple[List[Dict], Dict]:
     """
     圆形隧洞计算。
     返回 (rows, tunnel_info)
       rows: 每个 segment × 3 行（III/IV/V类围岩）
       tunnel_info: {"D"}
+    unified=True:  按最大流量段设计统一断面，各段分别求水深
+    unified=False: 各流量段独立设计断面尺寸
     """
     if rock_lining is None:
         rock_lining = ROCK_LINING_DEFAULT
 
-    max_seg = max(segments, key=lambda s: s["Q"])
-    res_max = _calc_tunnel_circular(
-        Q=max_seg["Q"], n=max_seg.get("n", 0.014),
-        slope_inv=max_seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
-        manual_D=max_seg.get("D"),
-    )
-    if not res_max.get("success"):
-        empty_info = {"D": 0}
-        rows = []
-        for seg in segments:
-            for rc in ROCK_CLASSES:
-                row = {"name": seg["name"], "Q": seg["Q"], "Q_inc": "",
-                       "rock_class": rc, "slope_inv": seg["slope_inv"],
-                       "n": seg.get("n", 0.014),
-                       "D": "", "t0": rock_lining[rc]["t0"], "t": rock_lining[rc]["t"],
-                       "H1": "", "H2": "", "V": ""}
-                rows.append(row)
-        return rows, empty_info
-
-    D = res_max["D"]
-    tunnel_info = {"D": D}
-
     from 隧洞设计 import solve_water_depth_circular, calculate_circular_outputs
 
-    rows = []
-    for seg in segments:
+    override_map = {
+        "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+    }
+
+    def _design_one_seg(seg, D):
         Q = seg["Q"]
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
@@ -656,6 +676,7 @@ def compute_tunnel_circular(segments: List[Dict],
             out_d = calculate_circular_outputs(D, h_d, n, slope)
             V_d = out_d["V"]
 
+        seg_rows = []
         for rc in ROCK_CLASSES:
             row = {
                 "name":       seg["name"],
@@ -671,12 +692,66 @@ def compute_tunnel_circular(segments: List[Dict],
                 "H2":         round(h_i, 2) if ok_i else "",
                 "V":          round(V_d, 2) if V_d > 0 else "",
             }
-            _apply_overrides(row, seg, {
-                "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
-                "D": "D", "H1": "H1", "H2": "H2", "V": "V",
-            })
-            rows.append(row)
-    return rows, tunnel_info
+            _apply_overrides(row, seg, override_map)
+            seg_rows.append(row)
+        return seg_rows
+
+    def _empty_rows_for_seg(seg):
+        seg_rows = []
+        for rc in ROCK_CLASSES:
+            row = {"name": seg["name"], "Q": seg["Q"], "Q_inc": "",
+                   "rock_class": rc, "slope_inv": seg["slope_inv"],
+                   "n": seg.get("n", 0.014),
+                   "D": "", "t0": rock_lining[rc]["t0"], "t": rock_lining[rc]["t"],
+                   "H1": "", "H2": "", "V": ""}
+            _apply_overrides(row, seg, override_map)
+            seg_rows.append(row)
+        return seg_rows
+
+    if unified:
+        # --- 统一断面：用最大 Q 设计 ---
+        max_seg = max(segments, key=lambda s: s["Q"])
+        res_max = _calc_tunnel_circular(
+            Q=max_seg["Q"], n=max_seg.get("n", 0.014),
+            slope_inv=max_seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
+            manual_D=max_seg.get("D"),
+        )
+        if not res_max.get("success"):
+            empty_info = {"D": 0}
+            rows = []
+            for seg in segments:
+                rows.extend(_empty_rows_for_seg(seg))
+            return rows, empty_info
+
+        D = res_max["D"]
+        tunnel_info = {"D": D}
+
+        rows = []
+        for seg in segments:
+            rows.extend(_design_one_seg(seg, D))
+        return rows, tunnel_info
+    else:
+        # --- 独立断面：各流量段分别设计 ---
+        rows = []
+        first_info = None
+        for seg in segments:
+            res = _calc_tunnel_circular(
+                Q=seg["Q"], n=seg.get("n", 0.014),
+                slope_inv=seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
+            )
+            if not res.get("success"):
+                rows.extend(_empty_rows_for_seg(seg))
+                continue
+
+            D = res["D"]
+            if first_info is None:
+                first_info = {"D": D}
+
+            rows.extend(_design_one_seg(seg, D))
+
+        if first_info is None:
+            first_info = {"D": 0}
+        return rows, first_info
 
 
 # ============================================================
@@ -685,13 +760,16 @@ def compute_tunnel_circular(segments: List[Dict],
 
 def compute_tunnel_horseshoe(segments: List[Dict],
                              section_type: int = 1,
-                             rock_lining: Dict = None) -> Tuple[List[Dict], Dict]:
+                             rock_lining: Dict = None,
+                             unified: bool = False) -> Tuple[List[Dict], Dict]:
     """
     马蹄形隧洞计算。
     返回 (rows, tunnel_info)
       rows: 每个 segment × 3 行（III/IV/V类围岩）
       tunnel_info: {"R", "section_type_name"}
     section_type: 1=标准Ⅰ型, 2=标准Ⅱ型
+    unified=True:  按最大流量段设计统一断面，各段分别求水深
+    unified=False: 各流量段独立设计断面尺寸
     """
     if rock_lining is None:
         rock_lining = ROCK_LINING_DEFAULT
@@ -704,31 +782,11 @@ def compute_tunnel_horseshoe(segments: List[Dict],
 
     type_name = "马蹄形标准Ⅰ型" if section_type == 1 else "马蹄形标准Ⅱ型"
 
-    max_seg = max(segments, key=lambda s: s["Q"])
-    res_max = quick_calculate_horseshoe_std(
-        Q=max_seg["Q"], n=max_seg.get("n", 0.014),
-        slope_inv=max_seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
-        section_type=section_type,
-        manual_r=max_seg.get("R"),
-    )
-    if not res_max.get("success"):
-        empty_info = {"R": 0, "section_type_name": type_name}
-        rows = []
-        for seg in segments:
-            for rc in ROCK_CLASSES:
-                row = {"name": seg["name"], "Q": seg["Q"], "Q_inc": "",
-                       "rock_class": rc, "slope_inv": seg["slope_inv"],
-                       "n": seg.get("n", 0.014),
-                       "R": "", "t0": rock_lining[rc]["t0"], "t": rock_lining[rc]["t"],
-                       "H1": "", "H2": "", "V": ""}
-                rows.append(row)
-        return rows, empty_info
+    override_map = {
+        "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+    }
 
-    R = res_max["r"]
-    tunnel_info = {"R": R, "section_type_name": type_name}
-
-    rows = []
-    for seg in segments:
+    def _design_one_seg(seg, R):
         Q = seg["Q"]
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
@@ -744,6 +802,7 @@ def compute_tunnel_horseshoe(segments: List[Dict],
             out_d = calculate_horseshoe_std_outputs(section_type, R, h_d, n, slope)
             V_d = out_d["V"]
 
+        seg_rows = []
         for rc in ROCK_CLASSES:
             row = {
                 "name":       seg["name"],
@@ -759,12 +818,68 @@ def compute_tunnel_horseshoe(segments: List[Dict],
                 "H2":         round(h_i, 2) if ok_i else "",
                 "V":          round(V_d, 2) if V_d > 0 else "",
             }
-            _apply_overrides(row, seg, {
-                "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
-                "R": "R", "H1": "H1", "H2": "H2", "V": "V",
-            })
-            rows.append(row)
-    return rows, tunnel_info
+            _apply_overrides(row, seg, override_map)
+            seg_rows.append(row)
+        return seg_rows
+
+    def _empty_rows_for_seg(seg):
+        seg_rows = []
+        for rc in ROCK_CLASSES:
+            row = {"name": seg["name"], "Q": seg["Q"], "Q_inc": "",
+                   "rock_class": rc, "slope_inv": seg["slope_inv"],
+                   "n": seg.get("n", 0.014),
+                   "R": "", "t0": rock_lining[rc]["t0"], "t": rock_lining[rc]["t"],
+                   "H1": "", "H2": "", "V": ""}
+            _apply_overrides(row, seg, override_map)
+            seg_rows.append(row)
+        return seg_rows
+
+    if unified:
+        # --- 统一断面：用最大 Q 设计 ---
+        max_seg = max(segments, key=lambda s: s["Q"])
+        res_max = quick_calculate_horseshoe_std(
+            Q=max_seg["Q"], n=max_seg.get("n", 0.014),
+            slope_inv=max_seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
+            section_type=section_type,
+            manual_r=max_seg.get("R"),
+        )
+        if not res_max.get("success"):
+            empty_info = {"R": 0, "section_type_name": type_name}
+            rows = []
+            for seg in segments:
+                rows.extend(_empty_rows_for_seg(seg))
+            return rows, empty_info
+
+        R = res_max["r"]
+        tunnel_info = {"R": R, "section_type_name": type_name}
+
+        rows = []
+        for seg in segments:
+            rows.extend(_design_one_seg(seg, R))
+        return rows, tunnel_info
+    else:
+        # --- 独立断面：各流量段分别设计 ---
+        rows = []
+        first_info = None
+        for seg in segments:
+            res = quick_calculate_horseshoe_std(
+                Q=seg["Q"], n=seg.get("n", 0.014),
+                slope_inv=seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
+                section_type=section_type,
+            )
+            if not res.get("success"):
+                rows.extend(_empty_rows_for_seg(seg))
+                continue
+
+            R = res["r"]
+            if first_info is None:
+                first_info = {"R": R, "section_type_name": type_name}
+
+            rows.extend(_design_one_seg(seg, R))
+
+        if first_info is None:
+            first_info = {"R": 0, "section_type_name": type_name}
+        return rows, first_info
 
 
 # ============================================================
@@ -811,8 +926,7 @@ def compute_aqueduct_u(segments: List[Dict]) -> List[Dict]:
             "HB_ratio":  round(hb_ratio, 3),
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
-            "R": "R", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
+            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
             "t": "t",
         })
         rows.append(row)
@@ -835,8 +949,7 @@ def compute_aqueduct_rect(segments: List[Dict]) -> List[Dict]:
         chamfer_length = seg.get("chamfer_length", 0)
 
         res = _calc_aqueduct_rect(Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
-                                  chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
-                                  manual_B=seg.get("B"))
+                                  chamfer_angle=chamfer_angle, chamfer_length=chamfer_length)
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "B": "", "H": "", "t": wall_t,
@@ -867,8 +980,7 @@ def compute_aqueduct_rect(segments: List[Dict]) -> List[Dict]:
             "V":              round(res["V_design"], 3),
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
-            "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
+            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
             "t": "t", "chamfer_angle": "chamfer_angle", "chamfer_length": "chamfer_length",
         })
         rows.append(row)
@@ -918,8 +1030,7 @@ def compute_rect_culvert(segments: List[Dict]) -> List[Dict]:
             "V":         round(res["V_design"], 2),
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
-            "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
+            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
             "t0": "t0", "t1": "t1", "t2": "t2",
         })
         rows.append(row)
@@ -939,8 +1050,7 @@ def compute_circular_pipe(segments: List[Dict]) -> List[Dict]:
         n = seg.get("n", 0.014)
         pipe_mat = seg.get("pipe_material", "钢筋混凝土")
 
-        res = _calc_circular_pipe(Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
-                                  manual_D=seg.get("D"))
+        res = _calc_circular_pipe(Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX)
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "D": "", "pipe_material": pipe_mat,
@@ -972,9 +1082,8 @@ def compute_circular_pipe(segments: List[Dict]) -> List[Dict]:
             "V":             round(V_d, 3) if V_d else "",
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
-            "D": "D", "pipe_material": "pipe_material",
-            "H1": "H1", "H2": "H2", "V": "V",
+            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+            "pipe_material": "pipe_material",
         })
         rows.append(row)
     return rows
@@ -1008,8 +1117,8 @@ def compute_siphon(segments: List[Dict],
             "V":             round(V, 2),
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "Q_inc": "Q_inc",
-            "n": "n", "DN_mm": "DN_mm", "pipe_material": "pipe_material", "V": "V",
+            "Q": "Q",
+            "n": "n", "DN_mm": "DN_mm", "pipe_material": "pipe_material",
         })
         rows.append(row)
     return rows
@@ -1208,7 +1317,7 @@ def _write_tunnel(ws, data, styles, gcl, col_offset=0):
     ]
     col_widths = [14, 12, 12, 12, 12, 10, 10, 10, 12, 11, 13, 13, 13, 12]
 
-    _write_title(ws, R1, C + 1, C + NCOLS, "隧洞断面尺寸及水力要素表", styles)
+    _write_title(ws, R1, C + 1, C + NCOLS, "圆拱直墙型隧洞断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
         _write_header_2row(ws, R1 + 1, R1 + 2, C + 1 + i, name, unit, styles)
     for i, w in enumerate(col_widths):
@@ -1390,7 +1499,7 @@ def _write_aqueduct(ws, data, styles, gcl, col_offset=0):
     ]
     col_widths = [14, 12, 12, 12, 10, 10, 10, 10, 13, 13, 12, 10]
 
-    _write_title(ws, R1, C + 1, C + NCOLS, "渡槽断面尺寸及水力要素表", styles)
+    _write_title(ws, R1, C + 1, C + NCOLS, "U形渡槽断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
         _write_header_2row(ws, R1 + 1, R1 + 2, C + 1 + i, name, unit, styles)
     for i, w in enumerate(col_widths):
@@ -1546,7 +1655,7 @@ def _write_circular_pipe(ws, data, styles, gcl, col_offset=0):
     ]
     col_widths = [14, 12, 12, 12, 10, 10, 15, 13, 13, 12]
 
-    _write_title(ws, R1, C + 1, C + NCOLS, "圆形明渠(圆管涵)断面尺寸及水力要素表", styles)
+    _write_title(ws, R1, C + 1, C + NCOLS, "圆管涵断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
         _write_header_2row(ws, R1 + 1, R1 + 2, C + 1 + i, name, unit, styles)
     for i, w in enumerate(col_widths):
@@ -1634,6 +1743,9 @@ def generate_excel(
     siphon_material: str = "球墨铸铁管",
     rock_lining: Dict = None,
     table_order: List[str] = None,
+    tunnel_unified_arch: bool = False,
+    tunnel_unified_circular: bool = False,
+    tunnel_unified_horseshoe: bool = False,
 ) -> str:
     """
     生成包含多种断面汇总表的 Excel 文件（按实际类型动态生成）。
@@ -1645,6 +1757,9 @@ def generate_excel(
         aqueduct_segs: 旧参数（向后兼容，等同于 aqueduct_u_segs）
         siphon_material: 倒虹吸管道材质
         rock_lining: 隧洞围岩衬砌厚度
+        tunnel_unified_arch: 圆拱直墙型隧洞是否统一断面
+        tunnel_unified_circular: 圆形隧洞是否统一断面
+        tunnel_unified_horseshoe: 马蹄形隧洞是否统一断面
 
     返回:
         保存的文件路径
@@ -1684,9 +1799,9 @@ def generate_excel(
     # ---- 计算 ----
     d1 = compute_rect_channel(rect_channel_segs) if rect_channel_segs else []
     d1b = compute_trapezoid_channel(trap_channel_segs) if trap_channel_segs else []
-    d2_arch, _ = compute_tunnel(tunnel_arch_segs, rock_lining) if tunnel_arch_segs else ([], {})
-    d2_circ, _ = compute_tunnel_circular(tunnel_circular_segs, rock_lining) if tunnel_circular_segs else ([], {})
-    d2_horse, d2_horse_info = compute_tunnel_horseshoe(tunnel_horseshoe_segs, rock_lining=rock_lining) if tunnel_horseshoe_segs else ([], {})
+    d2_arch, _ = compute_tunnel(tunnel_arch_segs, rock_lining, unified=tunnel_unified_arch) if tunnel_arch_segs else ([], {})
+    d2_circ, _ = compute_tunnel_circular(tunnel_circular_segs, rock_lining, unified=tunnel_unified_circular) if tunnel_circular_segs else ([], {})
+    d2_horse, d2_horse_info = compute_tunnel_horseshoe(tunnel_horseshoe_segs, rock_lining=rock_lining, unified=tunnel_unified_horseshoe) if tunnel_horseshoe_segs else ([], {})
     d3_u = compute_aqueduct_u(aqueduct_u_segs) if aqueduct_u_segs else []
     d3_rect = compute_aqueduct_rect(aqueduct_rect_segs) if aqueduct_rect_segs else []
     d4 = compute_rect_culvert(rect_culvert_segs) if rect_culvert_segs else []
@@ -2123,7 +2238,7 @@ def _dxf_build_trapezoid_channel(data):
 
 
 def _dxf_build_tunnel(data):
-    title = "隧洞断面尺寸及水力要素表"
+    title = "圆拱直墙型隧洞断面尺寸及水力要素表"
     headers = [
         ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("围岩类型", None), ("1/底坡", None), ("糙率", None),
@@ -2195,7 +2310,7 @@ def _dxf_build_tunnel_horseshoe(data):
 
 
 def _dxf_build_aqueduct_u(data):
-    title = "渡槽断面尺寸及水力要素表"
+    title = "U形渡槽断面尺寸及水力要素表"
     headers = [
         ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("1/底坡", None), ("糙率", None), ("半径R", None),
@@ -2258,7 +2373,7 @@ def _dxf_build_rect_culvert(data):
 
 
 def _dxf_build_circular_pipe(data):
-    title = "圆形明渠(圆管涵)断面尺寸及水力要素表"
+    title = "圆管涵断面尺寸及水力要素表"
     headers = [
         ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("1/底坡", None), ("糙率", None), ("直径D", "m"),
@@ -2330,6 +2445,9 @@ def generate_dxf(
     siphon_material: str = "球墨铸铁管",
     rock_lining: Dict = None,
     table_order: List[str] = None,
+    tunnel_unified_arch: bool = False,
+    tunnel_unified_circular: bool = False,
+    tunnel_unified_horseshoe: bool = False,
 ) -> str:
     """
     生成包含多种断面汇总表的 DXF 文件。
@@ -2370,9 +2488,9 @@ def generate_dxf(
     # ---- 计算 ----
     d1 = compute_rect_channel(rect_channel_segs) if rect_channel_segs else []
     d1b = compute_trapezoid_channel(trap_channel_segs) if trap_channel_segs else []
-    d2_arch, _ = compute_tunnel(tunnel_arch_segs, rock_lining) if tunnel_arch_segs else ([], {})
-    d2_circ, _ = compute_tunnel_circular(tunnel_circular_segs, rock_lining) if tunnel_circular_segs else ([], {})
-    d2_horse, d2_horse_info_dxf = compute_tunnel_horseshoe(tunnel_horseshoe_segs, rock_lining=rock_lining) if tunnel_horseshoe_segs else ([], {})
+    d2_arch, _ = compute_tunnel(tunnel_arch_segs, rock_lining, unified=tunnel_unified_arch) if tunnel_arch_segs else ([], {})
+    d2_circ, _ = compute_tunnel_circular(tunnel_circular_segs, rock_lining, unified=tunnel_unified_circular) if tunnel_circular_segs else ([], {})
+    d2_horse, d2_horse_info_dxf = compute_tunnel_horseshoe(tunnel_horseshoe_segs, rock_lining=rock_lining, unified=tunnel_unified_horseshoe) if tunnel_horseshoe_segs else ([], {})
     d3_u = compute_aqueduct_u(aqueduct_u_segs) if aqueduct_u_segs else []
     d3_rect = compute_aqueduct_rect(aqueduct_rect_segs) if aqueduct_rect_segs else []
     d4 = compute_rect_culvert(rect_culvert_segs) if rect_culvert_segs else []

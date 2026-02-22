@@ -247,6 +247,11 @@ class BuildingLengthDialog(QDialog):
         btn_lay.addWidget(btn_close)
         lay.addLayout(btn_lay)
 
+    @staticmethod
+    def _is_building_type(structure_type: str) -> bool:
+        """判断结构类型是否为建筑物（渡槽/隧洞/倒虹吸）"""
+        return any(kw in structure_type for kw in ('渡槽', '隧洞', '倒虹吸'))
+
     def _load_data(self):
         """加载明细和汇总数据到表格"""
         total_length = 0.0
@@ -256,10 +261,14 @@ class BuildingLengthDialog(QDialog):
         for i, item in enumerate(self.building_lengths):
             length = item.get('length', 0.0)
             total_length += length
+            # 非建筑物类型（渡槽/隧洞/倒虹吸以外）名称显示为"-"
+            name = item.get('name', '')
+            st = item.get('structure_type', '')
+            display_name = name if self._is_building_type(st) else '-'
             vals = [
                 str(i + 1),
-                item.get('name', ''),
-                item.get('structure_type', ''),
+                display_name,
+                st,
                 f"{length:.3f}",
                 f"{item.get('start_station', 0.0):.3f}",
                 f"{item.get('end_station', 0.0):.3f}",

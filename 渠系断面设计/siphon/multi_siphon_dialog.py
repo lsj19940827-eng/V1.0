@@ -100,6 +100,17 @@ class MultiSiphonDialog(QDialog):
         self.resize(1400, 900)
         # 非模态，允许用户同时操作主窗口
         self.setWindowFlags(self.windowFlags() | Qt.Window)
+        # 居中显示，确保窗口不超出屏幕
+        from PySide6.QtGui import QGuiApplication
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            screen_geo = screen.availableGeometry()
+            w = min(self.width(), screen_geo.width())
+            h = min(self.height(), screen_geo.height())
+            self.resize(w, h)
+            x = screen_geo.x() + (screen_geo.width() - w) // 2
+            y = screen_geo.y() + (screen_geo.height() - h) // 2
+            self.move(x, y)
 
     def _create_ui(self):
         """创建用户界面"""

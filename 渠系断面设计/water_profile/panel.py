@@ -392,26 +392,42 @@ class SiphonRoughnessChipContainer(QWidget):
         lay.addStretch()
 
     def _show_popover(self):
-        """点击按钮弹出糙率详情卡片"""
+        """点击按钮弹出糙率详情卡片（方案A：鼠标离开弹窗即关闭）"""
         if not self._pairs:
             return
-        popup = QDialog(self._btn, Qt.Popup | Qt.FramelessWindowHint)
+
+        # 若已有弹窗则关闭（toggle）
+        if hasattr(self, '_popup_win') and self._popup_win is not None:
+            try:
+                self._popup_win.close()
+            except RuntimeError:
+                pass
+            self._popup_win = None
+            return
+
+        primary = self._PRIMARY
+
+        class _PopupCard(QFrame):
+            def leaveEvent(self, event):
+                self.close()
+                super().leaveEvent(event)
+
+        popup = _PopupCard(None)
+        popup.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         popup.setAttribute(Qt.WA_DeleteOnClose)
         popup.setAttribute(Qt.WA_TranslucentBackground)
-
-        # 外层布局（留最小 margin 给圆角裁剪）
-        outer = QVBoxLayout(popup)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        # 内容卡片容器（真正的圆角载体）
-        card = QFrame()
-        card.setStyleSheet(
-            "QFrame#popoverCard { background: white; border: 1px solid #D0D0D0;"
+        popup.setStyleSheet(
+            "QFrame { background: white; border: 1px solid #D0D0D0;"
             "  border-radius: 10px; }"
         )
-        card.setObjectName("popoverCard")
-        card_lay = QVBoxLayout(card)
+
+        def _on_destroyed():
+            self._popup_win = None
+
+        popup.destroyed.connect(_on_destroyed)
+        self._popup_win = popup
+
+        card_lay = QVBoxLayout(popup)
         card_lay.setContentsMargins(0, 0, 0, 0)
         card_lay.setSpacing(0)
 
@@ -427,7 +443,7 @@ class SiphonRoughnessChipContainer(QWidget):
         header_lay.setContentsMargins(14, 10, 14, 8)
         header_lay.setSpacing(6)
         icon_lbl = QLabel("●")
-        icon_lbl.setStyleSheet(f"color: {self._PRIMARY}; font-size: 10px;"
+        icon_lbl.setStyleSheet(f"color: {primary}; font-size: 10px;"
                                " background: transparent;")
         header_lay.addWidget(icon_lbl)
         title = QLabel("倒虹吸糙率详情")
@@ -455,15 +471,14 @@ class SiphonRoughnessChipContainer(QWidget):
             lbl_name = QLabel(name)
             lbl_name.setStyleSheet("font-size: 12px; color: #334155;")
             lbl_val = QLabel(f"n = {n_val}")
-            lbl_val.setStyleSheet(f"font-size: 12px; color: {self._PRIMARY};"
+            lbl_val.setStyleSheet(f"font-size: 12px; color: {primary};"
                                   " font-weight: 600;")
             row_lay.addWidget(lbl_name)
             row_lay.addStretch()
             row_lay.addWidget(lbl_val)
             card_lay.addWidget(row_w)
 
-        outer.addWidget(card)
-        card.setMinimumWidth(240)
+        popup.setMinimumWidth(240)
         popup.adjustSize()
         # 定位：在按钮正下方
         btn_pos = self._btn.mapToGlobal(self._btn.rect().bottomLeft())
@@ -2317,7 +2332,7 @@ class WaterProfilePanel(QWidget):
                 if struct_str == "渐变段" or (node.structure_type and node.structure_type == StructureType.TRANSITION):
                     node.is_transition = True
 
-            # 标记分水闸/分水口（与原版get_nodes对齐）
+            # 标记闸类结构（分水闸/分水口/节制闸/泄水闸等）
             if node.structure_type and StructureType.is_diversion_gate(node.structure_type):
                 node.is_diversion_gate = True
             # 标记倒虹吸
@@ -2806,7 +2821,7 @@ class WaterProfilePanel(QWidget):
             elif getattr(node, 'is_inverted_siphon', False):
                 tag = " [倒虹吸]"
             elif getattr(node, 'is_diversion_gate', False):
-                tag = " [分水闸]"
+                tag = f" [{node.get_structure_type_str()}]"
             lines.append(f"--- 节点 {i+1}: {node.name} ({node.get_structure_type_str()}){tag} ---")
             lines.append(f"  IP编号: {node.get_ip_str()}")
             lines.append(f"  进出口: {node.get_in_out_str()}")

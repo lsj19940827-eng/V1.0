@@ -408,7 +408,7 @@ class WaterProfileCalculator:
         return "隧洞" in sv or "渡槽" in sv
     
     def _is_diversion_gate_type(self, structure_type) -> bool:
-        """判断是否为分水闸/分水口类型（使用 .value 字符串比较）"""
+        """判断是否为闸类结构（分水闸/分水口/节制闸/泄水闸等）（使用 .value 字符串比较）"""
         if structure_type is None:
             return False
         sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
@@ -427,7 +427,7 @@ class WaterProfileCalculator:
         return any(kw in sv for kw in special_keywords)
     
     def _is_diversion_gate_sv(self, structure_type) -> bool:
-        """判断是否为分水闸/分水口（使用 .value 字符串比较）"""
+        """判断是否为闸类结构（使用 .value 字符串比较）"""
         return self._is_diversion_gate_type(structure_type)
     
     @staticmethod
@@ -1286,6 +1286,40 @@ class WaterProfileCalculator:
                     'node_count': 1,
                 })
         
+        # 第一步补充：处理点状结构（分水闸/分水口/闸类）
+        # 情况1：点状结构打断同名建筑物 → 合并（如 台儿沟(进) → 半团沟(分水闸) → 台儿沟(出)）
+        # 情况2：点状结构独立出现在间隙中 → 标记为嵌入，不打断间隙连续性
+        if len(building_runs) >= 2:
+            merged_runs = []
+            i_run = 0
+            while i_run < len(building_runs):
+                curr = building_runs[i_run]
+                curr_is_point = StructureType.is_diversion_gate_str(curr['structure_type'])
+                if curr_is_point:
+                    # 情况1：检查是否打断了同名建筑物（prev → point → next，prev.name == next.name）
+                    if merged_runs and i_run + 1 < len(building_runs):
+                        prev = merged_runs[-1]
+                        next_run = building_runs[i_run + 1]
+                        if next_run['name'] == prev['name'] and not prev.get('_embedded_in', ''):
+                            # 合并：扩展 prev 的范围到 next_run
+                            prev['last_idx'] = next_run['last_idx']
+                            prev['node_count'] += next_run['node_count']
+                            note = prev.get('note', '')
+                            embed_str = f"含{curr['structure_type']}: {curr['name']}"
+                            prev['note'] = f"{note}; {embed_str}" if note else embed_str
+                            curr['_embedded_in'] = prev['name']
+                            merged_runs.append(curr)
+                            i_run += 2  # 跳过 next_run（已合并入 prev）
+                            continue
+                    # 情况2：独立点状结构，标记为嵌入（不打断间隙）
+                    curr['_embedded_in'] = '__gap__'
+                    merged_runs.append(curr)
+                    i_run += 1
+                    continue
+                merged_runs.append(curr)
+                i_run += 1
+            building_runs = merged_runs
+        
         # 无命名建筑物时，将整个渠道作为一个未命名段
         if not building_runs:
             total_len = nodes[-1].station_MC - nodes[0].station_MC
@@ -1339,6 +1373,9 @@ class WaterProfileCalculator:
             runs = []  # [{'type': str, 'nodes': [node, ...]}]
             for k in range(idx_start, idx_end):
                 n = nodes[k]
+                # 跳过点状结构节点（分水闸/分水口/闸类），它们作为独立条目单独列出
+                if n.structure_type and StructureType.is_diversion_gate(n.structure_type):
+                    continue
                 if getattr(n, 'is_transition', False):
                     t = '渐变段'
                 elif n.structure_type:
@@ -1423,7 +1460,12 @@ class WaterProfileCalculator:
         results = []
         
         # ===== 渠首连接段：渠道起点 → 第一个命名建筑物 =====
+        # 使用第一个非嵌入的建筑物（跳过嵌入的点状结构）
         first_run = building_runs[0]
+        for _r in building_runs:
+            if not _r.get('_embedded_in', ''):
+                first_run = _r
+                break
         first_building_start = nodes[first_run['first_idx']].station_MC
         head_gap = first_building_start - channel_start_mc
         if head_gap > 0.001:
@@ -1432,6 +1474,11 @@ class WaterProfileCalculator:
                 channel_start_mc, first_building_start,
                 '渠首连接段'
             )
+            # 渐变段子条目改用「连接段(渠首-首个建筑物)」命名
+            transition_name = f"连接段(渠首-{first_run['name']})"
+            for sub in head_subs:
+                if sub['structure_type'] == '渐变段':
+                    sub['name'] = transition_name
             results.extend(head_subs)
         
         # ===== 逐个建筑物 + 间隙 =====
@@ -1471,22 +1518,38 @@ class WaterProfileCalculator:
             
             # 检查与下一个建筑物之间是否存在间隙
             if j < len(building_runs) - 1:
-                next_run = building_runs[j + 1]
-                gap_start = end_mc
-                gap_end = nodes[next_run['first_idx']].station_MC
-                gap_length = gap_end - gap_start
-                
-                if gap_length > 0.001:
-                    gap_name = f"连接段({run['name']}-{next_run['name']})"
-                    gap_subs = _decompose_gap(
-                        run['last_idx'] + 1, next_run['first_idx'],
-                        gap_start, gap_end,
-                        gap_name
-                    )
-                    results.extend(gap_subs)
+                curr_embedded = run.get('_embedded_in', '')
+                if curr_embedded:
+                    # 嵌入的点状结构在父建筑物内部，不生成间隙
+                    pass
+                else:
+                    # 向后查找下一个非嵌入的建筑物（跳过被嵌入的点状结构）
+                    next_j = j + 1
+                    while next_j < len(building_runs) and building_runs[next_j].get('_embedded_in', ''):
+                        next_j += 1
+                    
+                    if next_j < len(building_runs):
+                        next_run = building_runs[next_j]
+                        gap_start = end_mc
+                        gap_end = nodes[next_run['first_idx']].station_MC
+                        gap_length = gap_end - gap_start
+                        
+                        if gap_length > 0.001:
+                            gap_name = f"连接段({run['name']}-{next_run['name']})"
+                            gap_subs = _decompose_gap(
+                                run['last_idx'] + 1, next_run['first_idx'],
+                                gap_start, gap_end,
+                                gap_name
+                            )
+                            results.extend(gap_subs)
         
         # ===== 渠尾连接段：最后一个命名建筑物 → 渠道终点 =====
+        # 使用最后一个非嵌入的建筑物（跳过嵌入的点状结构）
         last_run = building_runs[-1]
+        for _r in reversed(building_runs):
+            if not _r.get('_embedded_in', ''):
+                last_run = _r
+                break
         last_building_end = nodes[last_run['last_idx']].station_MC
         tail_gap = channel_end_mc - last_building_end
         if tail_gap > 0.001:
@@ -1495,6 +1558,11 @@ class WaterProfileCalculator:
                 last_building_end, channel_end_mc,
                 '渠尾连接段'
             )
+            # 渐变段子条目改用「连接段(末个建筑物-渠尾)」命名
+            transition_name = f"连接段({last_run['name']}-渠尾)"
+            for sub in tail_subs:
+                if sub['structure_type'] == '渐变段':
+                    sub['name'] = transition_name
             results.extend(tail_subs)
         
         # ===== 校正：确保段落总长度精确等于桩号总长 =====

@@ -272,11 +272,12 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
         'fb_check_details': '',
     }
     
-    slope = 1.0 / slope_inv
-    
     if Q <= 0 or n <= 0 or slope_inv <= 0:
         result['error_message'] = '输入参数无效'
         return result
+
+    # 验证通过后再计算坡度，避免除零崩溃
+    slope = 1.0 / slope_inv
     
     # 加大流量
     if manual_increase_percent is not None and manual_increase_percent >= 0:
@@ -320,13 +321,14 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
             # 但实际h由曼宁公式决定，所以需要调整H来满足净空要求
             
             # 多个H试算，找到合适的H使actual_beta接近2
-            for H_mult in [1.3, 1.4, 1.5, 1.6, 1.8, 2.0, 2.5, 3.0]:
+            # 有效H_mult范围: H/B=H_mult/2∈[1/1.2,1.2]=[0.833,1.2] → H_mult∈[1.667,2.4]
+            for H_mult in [1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0, 2.1, 2.2, 2.3, 2.4]:
                 h_expected = B / OPTIMAL_BH_RATIO  # 期望水深 B/2
                 H_trial = max(MIN_HEIGHT_RECT, h_expected * H_mult)
                 
-                # 检查高宽比限值
+                # 检查高宽比限值: max(H/B, B/H) 均不超过 1.2
                 HB_ratio_trial = H_trial / B if B > 0 else 0
-                if HB_ratio_trial > HB_RATIO_LIMIT and (B / H_trial) > HB_RATIO_LIMIT:
+                if HB_ratio_trial > HB_RATIO_LIMIT or (B / H_trial) > HB_RATIO_LIMIT:
                     continue
                 
                 # 求解设计水深
@@ -415,7 +417,7 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
                 
                 HB_ratio_trial = H_trial / B if B > 0 else 0
                 BH_ratio_trial = B / H_trial if H_trial > 0 else 0
-                if HB_ratio_trial > HB_RATIO_LIMIT and BH_ratio_trial > HB_RATIO_LIMIT:
+                if HB_ratio_trial > HB_RATIO_LIMIT or BH_ratio_trial > HB_RATIO_LIMIT:
                     bh_ratio += bh_ratio_step
                     continue
                 

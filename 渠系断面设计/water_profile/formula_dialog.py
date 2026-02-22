@@ -167,10 +167,10 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
     },
     "过闸水头损失": {
         "title": "过闸水头损失",
-        "description": "分水闸/分水口等结构通过闸孔产生的水头损失",
+        "description": "分水闸/分水口/节制闸/泄水闸等闸类结构通过闸孔产生的水头损失",
         "formula": r"h_gate",
         "latex": r"h_{gate}",
-        "note": "该值可手动输入；分水闸/分水口若为空则自动填充默认值",
+        "note": "该值可手动输入；闸类结构若为空则自动填充默认值",
     },
     "倒虹吸水头损失": {
         "title": "倒虹吸水头损失",
@@ -601,7 +601,7 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
         prev = details.get('prev_level', 0.0)
         h_gate = details.get('head_loss_gate', 0.0)
         sections = [
-            {"title": "1. 过闸水位推求公式", "formula": r"$Z_i = Z_{i-1} - h_{gate}$", "content": "分水闸/分水口仅考虑过闸水头损失。"},
+            {"title": "1. 过闸水位推求公式", "formula": r"$Z_i = Z_{i-1} - h_{gate}$", "content": "闸类结构（分水闸/分水口/节制闸/泄水闸等）仅考虑过闸水头损失。"},
             {"title": "2. 计算参数", "values": f"上一节点水位  $Z_{{i-1}} = {prev:.4f}$ m\n过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m"},
             {"title": "3. 代入公式计算", "values": f"$Z_i = {prev:.4f} - {h_gate:.4f} = {wl:.4f}$ m"},
             {"title": "4. 校验", "values": f"起始水位  $Z_{{start}} = {start_level:.4f}$ m\n累计总水头损失 $= {cumulative:.4f}$ m\n"
@@ -804,7 +804,7 @@ class FormulaTooltipWidget(QWidget):
     _SHADOW_MARGIN = 10
     _CARD_RADIUS = 12
     _MIN_CARD_WIDTH = 360
-    _MAX_CARD_WIDTH = 650
+    _MAX_CARD_WIDTH = 800
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -816,12 +816,19 @@ class FormulaTooltipWidget(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating)
 
         self._current_col = None
+        self._pending_col = None
+        self._pending_pos = None
         self._pixmap_cache: Dict[str, QPixmap] = {}
 
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.setInterval(200)
         self._hide_timer.timeout.connect(self._do_hide)
+
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.setInterval(300)
+        self._show_timer.timeout.connect(self._do_show)
 
         self._setup_ui()
 
@@ -1028,7 +1035,7 @@ class FormulaTooltipWidget(QWidget):
     # ---- 显示 / 隐藏 ----
 
     def show_for_column(self, col_name: str, global_pos: QPoint):
-        """为指定列显示悬浮公式卡片。"""
+        """为指定列显示悬浮公式卡片（带 500ms 延迟）。"""
         if col_name == self._current_col and self.isVisible():
             self._hide_timer.stop()
             return
@@ -1037,8 +1044,31 @@ class FormulaTooltipWidget(QWidget):
         if not info:
             return
 
-        self._current_col = col_name
         self._hide_timer.stop()
+
+        # 如果目标列未变且定时器已在运行，仅更新坐标
+        if col_name == self._pending_col and self._show_timer.isActive():
+            self._pending_pos = global_pos
+            return
+
+        # 记录待显示信息，启动延迟定时器
+        self._pending_col = col_name
+        self._pending_pos = global_pos
+        self._show_timer.start()
+        return
+
+    def _do_show(self):
+        """延迟到期后真正显示悬浮卡片。"""
+        col_name = self._pending_col
+        global_pos = self._pending_pos
+        if not col_name or not global_pos:
+            return
+
+        info = COLUMN_FORMULAS.get(col_name)
+        if not info:
+            return
+
+        self._current_col = col_name
 
         # 更新内容
         self._title_label.setText(info['title'])
@@ -1049,10 +1079,21 @@ class FormulaTooltipWidget(QWidget):
         if pixmap:
             self._formula_label.setPixmap(pixmap)
             self._formula_label.setText('')
+            # 显式设置 label 最小宽度，确保 adjustSize 能正确扩展卡片
+            dpr = pixmap.devicePixelRatio() or 1.0
+            fw = int(pixmap.width() / dpr)
+            self._formula_label.setMinimumWidth(fw)
+            # 卡片宽度 = 公式宽度 + body 边距(18×2) + frame 边距(14×2) + border(2)
+            needed = fw + 66
+            needed = max(needed, self._MIN_CARD_WIDTH)
+            needed = min(needed, self._MAX_CARD_WIDTH)
+            self._card.setMinimumWidth(needed)
         else:
             self._formula_label.setPixmap(QPixmap())
             self._formula_label.setText(info.get('formula', ''))
             self._formula_label.setFont(QFont("Cambria Math", 14))
+            self._formula_label.setMinimumWidth(0)
+            self._card.setMinimumWidth(self._MIN_CARD_WIDTH)
 
         note_text = info.get('note', '').replace('\n', '\n')
         self._note_label.setText(note_text)
@@ -1078,6 +1119,9 @@ class FormulaTooltipWidget(QWidget):
 
     def schedule_hide(self):
         """延迟隐藏（给用户移入 tooltip 的时间）。"""
+        self._show_timer.stop()
+        self._pending_col = None
+        self._pending_pos = None
         self._hide_timer.start()
 
     def _do_hide(self):

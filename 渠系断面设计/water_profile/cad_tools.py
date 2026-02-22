@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QGroupBox, QTextEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QFileDialog, QApplication, QScrollArea, QWidget, QComboBox,
+    QFileDialog, QApplication, QScrollArea, QWidget, QComboBox, QFrame,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QShortcut, QKeySequence
@@ -2356,12 +2356,50 @@ def export_combined_dxf(panel):
             sp = _make_segs(_default_segments_siphon,
                             node_defaults.get("siphon"))
 
+            # 读取用户自定义的构造参数（如果之前在断面汇总表对话框中设置过）
+            _struct_t = getattr(panel, '_custom_struct_thickness', None)
+            _rock_lining = getattr(panel, '_custom_rock_lining', None)
+
+            # 将壁厚/衬砌参数注入各类型 segments
+            if _struct_t:
+                _st_rc = _struct_t.get('rect_channel', {})
+                for seg in rc:
+                    if 'wall_t' in _st_rc:
+                        seg['wall_t'] = _st_rc['wall_t']
+                    if 'tie_rod' in _st_rc:
+                        seg['tie_rod'] = _st_rc['tie_rod']
+                _st_tr = _struct_t.get('trap_channel', {})
+                for seg in tr:
+                    if 'wall_t' in _st_tr:
+                        seg['wall_t'] = _st_tr['wall_t']
+                    if 'tie_rod' in _st_tr:
+                        seg['tie_rod'] = _st_tr['tie_rod']
+                _st_au = _struct_t.get('aqueduct_u', {})
+                for seg in au:
+                    if 'wall_t' in _st_au:
+                        seg['wall_t'] = _st_au['wall_t']
+                _st_ar = _struct_t.get('aqueduct_rect', {})
+                for seg in ar:
+                    if 'wall_t' in _st_ar:
+                        seg['wall_t'] = _st_ar['wall_t']
+                _st_rv = _struct_t.get('rect_culvert', {})
+                for seg in rv:
+                    for k in ('t0', 't1', 't2'):
+                        if k in _st_rv:
+                            seg[k] = _st_rv[k]
+
+            # 读取隧洞断面设计方式（复用断面汇总表对话框中的设置）
+            _tu = getattr(panel, '_custom_tunnel_unified', {})
+            _tu_arch = _tu.get('tunnel_arch', False)
+            _tu_circ = _tu.get('tunnel_circular', False)
+            _tu_horse = _tu.get('tunnel_horseshoe', False)
+
             # 计算
             d_rc = compute_rect_channel(rc) if rc else []
             d_tr = compute_trapezoid_channel(tr) if tr else []
-            d_ta, _ = compute_tunnel(ta) if ta else ([], {})
-            d_tc, _ = compute_tunnel_circular(tc) if tc else ([], {})
-            d_th, d_th_info = compute_tunnel_horseshoe(th) if th else ([], {})
+            d_ta, _ = compute_tunnel(ta, _rock_lining, unified=_tu_arch) if ta else ([], {})
+            d_tc, _ = compute_tunnel_circular(tc, _rock_lining, unified=_tu_circ) if tc else ([], {})
+            d_th, d_th_info = compute_tunnel_horseshoe(th, rock_lining=_rock_lining, unified=_tu_horse) if th else ([], {})
             d_au = compute_aqueduct_u(au) if au else []
             d_ar = compute_aqueduct_rect(ar) if ar else []
             d_rv = compute_rect_culvert(rv) if rv else []
@@ -2456,22 +2494,25 @@ def export_combined_dxf(panel):
 class SectionSummaryDialog(QDialog):
     """断面尺寸及水力要素汇总表生成对话框（纯 PySide6 版）"""
 
-    def __init__(self, parent, nodes, proj_settings, auto_name=""):
+    def __init__(self, parent, nodes, proj_settings, auto_name="", panel=None):
         super().__init__(parent)
         self.setWindowTitle("断面尺寸及水力要素汇总表 — 生成器")
         self.setMinimumSize(520, 560)
-        self.resize(620, 650)
+        self.resize(640, 780)
         self.setStyleSheet(DIALOG_STYLE)
 
         self._nodes = nodes
         self._proj_settings = proj_settings
         self._auto_name = auto_name
+        self._panel = panel
 
         # 导入计算模块
         from 渠系建筑物断面计算.生成断面汇总表 import (
             _extract_segment_defaults_from_nodes,
             _segment_name,
             SIPHON_MATERIALS,
+            ROCK_CLASSES,
+            ROCK_LINING_DEFAULT,
             generate_excel,
             generate_dxf,
             _default_segments_rect_channel,
@@ -2484,6 +2525,8 @@ class SectionSummaryDialog(QDialog):
             _default_segments_rect_culvert,
             _default_segments_circular_pipe,
         )
+        self._ROCK_CLASSES = ROCK_CLASSES
+        self._ROCK_LINING_DEFAULT = ROCK_LINING_DEFAULT
         self._generate_excel = generate_excel
         self._generate_dxf = generate_dxf
         self._segment_name = _segment_name
@@ -2599,9 +2642,42 @@ class SectionSummaryDialog(QDialog):
 
         return [(name, groups[name]) for name in order]
 
+    def showEvent(self, event):
+        """确保对话框不超出屏幕可见区域"""
+        super().showEvent(event)
+        from PySide6.QtGui import QGuiApplication
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            geo = self.frameGeometry()
+            # 如果窗口高度超出屏幕，缩小到屏幕高度
+            if geo.height() > avail.height():
+                self.resize(self.width(), avail.height() - 20)
+                geo = self.frameGeometry()
+            # 如果顶部超出屏幕，向下移动
+            if geo.top() < avail.top():
+                geo.moveTop(avail.top())
+            # 如果底部超出屏幕，向上移动
+            if geo.bottom() > avail.bottom():
+                geo.moveBottom(avail.bottom())
+            # 如果左侧超出屏幕
+            if geo.left() < avail.left():
+                geo.moveLeft(avail.left())
+            self.move(geo.topLeft())
+
     # ---- UI 构建 ----
     def _build_ui(self, default_qs):
-        lay = QVBoxLayout(self)
+        outer_lay = QVBoxLayout(self)
+        outer_lay.setContentsMargins(0, 0, 0, 0)
+        outer_lay.setSpacing(0)
+
+        # 用 QScrollArea 包裹全部内容，防止内容超高时顶部被截断
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        lay = QVBoxLayout(content)
         lay.setSpacing(10)
 
         # 提示文字
@@ -2689,15 +2765,235 @@ class SectionSummaryDialog(QDialog):
         siphon_lay.addWidget(dn_note)
         lay.addWidget(siphon_group)
 
+        # ---- 构造参数设置（Tab页签） ----
+        from PySide6.QtWidgets import QTabWidget
+        struct_group = QGroupBox("构造参数设置（壁厚/衬砌厚度）")
+        struct_group.setStyleSheet("QGroupBox{font-weight:bold;font-size:12px;}")
+        struct_lay = QVBoxLayout(struct_group)
+
+        struct_tabs = QTabWidget()
+        struct_tabs.setStyleSheet("QTabWidget{font-size:11px;} QTabBar::tab{min-width:70px;}")
+
+        # ---- Tab 1: 明渠类 ----
+        tab_channel = QWidget()
+        tc_lay = QVBoxLayout(tab_channel)
+        tc_lay.setSpacing(6)
+
+        tc_grid = QGridLayout()
+        tc_grid.setSpacing(4)
+        tc_grid.addWidget(QLabel(""), 0, 0)  # 空占位
+        for ci, txt in enumerate(['壁厚 t (m)', '拉杆尺寸 (m)']):
+            lbl = QLabel(txt)
+            lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
+            tc_grid.addWidget(lbl, 0, ci + 1)
+
+        def _tie_rod_pair(default_w=0.2, default_h=0.2):
+            """创建拉杆尺寸 [宽] × [高] 组合控件，返回 (container, w_edit, h_edit)。"""
+            container = QWidget()
+            h_lay = QHBoxLayout(container)
+            h_lay.setContentsMargins(0, 0, 0, 0)
+            h_lay.setSpacing(3)
+            w_lbl = QLabel("宽"); w_lbl.setStyleSheet("font-size:10px; color:#888;")
+            w_edit = LineEdit(); w_edit.setFixedWidth(55)
+            w_edit.setText(str(default_w)); w_edit.setPlaceholderText(str(default_w))
+            x_lbl = QLabel("×"); x_lbl.setFixedWidth(12)
+            x_lbl.setStyleSheet("font-size:12px;")
+            h_lbl = QLabel("高"); h_lbl.setStyleSheet("font-size:10px; color:#888;")
+            h_edit = LineEdit(); h_edit.setFixedWidth(55)
+            h_edit.setText(str(default_h)); h_edit.setPlaceholderText(str(default_h))
+            h_lay.addWidget(w_lbl)
+            h_lay.addWidget(w_edit)
+            h_lay.addWidget(x_lbl)
+            h_lay.addWidget(h_lbl)
+            h_lay.addWidget(h_edit)
+            h_lay.addStretch()
+            return container, w_edit, h_edit
+
+        # 矩形明渠
+        tc_grid.addWidget(QLabel("矩形明渠"), 1, 0)
+        self._rect_ch_wall_t = LineEdit(); self._rect_ch_wall_t.setFixedWidth(90)
+        self._rect_ch_wall_t.setText("0.3"); self._rect_ch_wall_t.setPlaceholderText("0.3")
+        tc_grid.addWidget(self._rect_ch_wall_t, 1, 1)
+        rc_tr_container, self._rect_ch_tie_w, self._rect_ch_tie_h = _tie_rod_pair()
+        tc_grid.addWidget(rc_tr_container, 1, 2)
+
+        # 梯形明渠
+        tc_grid.addWidget(QLabel("梯形明渠"), 2, 0)
+        self._trap_ch_wall_t = LineEdit(); self._trap_ch_wall_t.setFixedWidth(90)
+        self._trap_ch_wall_t.setText("0.3"); self._trap_ch_wall_t.setPlaceholderText("0.3")
+        tc_grid.addWidget(self._trap_ch_wall_t, 2, 1)
+        tp_tr_container, self._trap_ch_tie_w, self._trap_ch_tie_h = _tie_rod_pair()
+        tc_grid.addWidget(tp_tr_container, 2, 2)
+
+        tc_grid.setColumnStretch(0, 1)
+        tc_grid.setColumnStretch(1, 2)
+        tc_grid.setColumnStretch(2, 3)
+        tc_lay.addLayout(tc_grid)
+        tc_lay.addStretch()
+        struct_tabs.addTab(tab_channel, "明渠类")
+
+        # ---- Tab 2: 渡槽类 ----
+        tab_aqueduct = QWidget()
+        ta_lay = QVBoxLayout(tab_aqueduct)
+        ta_lay.setSpacing(6)
+
+        ta_grid = QGridLayout()
+        ta_grid.setSpacing(4)
+        ta_grid.addWidget(QLabel(""), 0, 0)
+        lbl_t = QLabel("壁厚 t (m)")
+        lbl_t.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
+        ta_grid.addWidget(lbl_t, 0, 1)
+
+        # U形渡槽
+        ta_grid.addWidget(QLabel("U形渡槽"), 1, 0)
+        self._aq_u_wall_t = LineEdit(); self._aq_u_wall_t.setFixedWidth(90)
+        self._aq_u_wall_t.setText("0.35"); self._aq_u_wall_t.setPlaceholderText("0.35")
+        ta_grid.addWidget(self._aq_u_wall_t, 1, 1)
+
+        # 矩形渡槽
+        ta_grid.addWidget(QLabel("矩形渡槽"), 2, 0)
+        self._aq_rect_wall_t = LineEdit(); self._aq_rect_wall_t.setFixedWidth(90)
+        self._aq_rect_wall_t.setText("0.35"); self._aq_rect_wall_t.setPlaceholderText("0.35")
+        ta_grid.addWidget(self._aq_rect_wall_t, 2, 1)
+
+        ta_grid.setColumnStretch(0, 1)
+        ta_grid.setColumnStretch(1, 2)
+        ta_lay.addLayout(ta_grid)
+        ta_lay.addStretch()
+        struct_tabs.addTab(tab_aqueduct, "渡槽类")
+
+        # ---- Tab 3: 暗涵 ----
+        tab_culvert = QWidget()
+        tv_lay = QVBoxLayout(tab_culvert)
+        tv_lay.setSpacing(6)
+
+        tv_grid = QGridLayout()
+        tv_grid.setSpacing(4)
+        tv_grid.addWidget(QLabel(""), 0, 0)
+        for ci, txt in enumerate(['底板厚 t\u2080 (m)', '边墙厚 t\u2081 (m)', '顶板厚 t\u2082 (m)']):
+            lbl = QLabel(txt)
+            lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
+            tv_grid.addWidget(lbl, 0, ci + 1)
+
+        tv_grid.addWidget(QLabel("矩形暗涵"), 1, 0)
+        self._culvert_t0 = LineEdit(); self._culvert_t0.setFixedWidth(90)
+        self._culvert_t0.setText("0.4"); self._culvert_t0.setPlaceholderText("0.4")
+        tv_grid.addWidget(self._culvert_t0, 1, 1)
+        self._culvert_t1 = LineEdit(); self._culvert_t1.setFixedWidth(90)
+        self._culvert_t1.setText("0.4"); self._culvert_t1.setPlaceholderText("0.4")
+        tv_grid.addWidget(self._culvert_t1, 1, 2)
+        self._culvert_t2 = LineEdit(); self._culvert_t2.setFixedWidth(90)
+        self._culvert_t2.setText("0.4"); self._culvert_t2.setPlaceholderText("0.4")
+        tv_grid.addWidget(self._culvert_t2, 1, 3)
+
+        tv_grid.setColumnStretch(0, 1)
+        tv_grid.setColumnStretch(1, 2)
+        tv_grid.setColumnStretch(2, 2)
+        tv_grid.setColumnStretch(3, 2)
+        tv_lay.addLayout(tv_grid)
+        tv_lay.addStretch()
+        struct_tabs.addTab(tab_culvert, "暗涵")
+
+        # ---- Tab 4: 隧洞 ----
+        tab_tunnel = QWidget()
+        tt_lay = QVBoxLayout(tab_tunnel)
+        tt_lay.setSpacing(6)
+
+        tt_desc = QLabel("4种隧洞类型共用此设置（圆拱直墙型/圆形/马蹄形Ⅰ型/Ⅱ型）")
+        tt_desc.setStyleSheet("font-size:11px; color:#666;")
+        tt_lay.addWidget(tt_desc)
+
+        tt_grid = QGridLayout()
+        tt_grid.setSpacing(4)
+        tt_grid.addWidget(QLabel(""), 0, 0)
+        for ci, txt in enumerate(['底板厚 t\u2080 (m)', '边墙/顶拱/衬砌厚 t (m)']):
+            lbl = QLabel(txt)
+            lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
+            tt_grid.addWidget(lbl, 0, ci + 1)
+
+        self._lining_edits = {}  # {rock_class: (t0_edit, t_edit)}
+        for ri, rc in enumerate(self._ROCK_CLASSES):
+            tt_grid.addWidget(QLabel(rc), ri + 1, 0)
+            defaults = self._ROCK_LINING_DEFAULT[rc]
+            t0_edit = LineEdit(); t0_edit.setFixedWidth(90)
+            t0_edit.setText(str(defaults['t0'])); t0_edit.setPlaceholderText(str(defaults['t0']))
+            tt_grid.addWidget(t0_edit, ri + 1, 1)
+            t_edit = LineEdit(); t_edit.setFixedWidth(90)
+            t_edit.setText(str(defaults['t'])); t_edit.setPlaceholderText(str(defaults['t']))
+            tt_grid.addWidget(t_edit, ri + 1, 2)
+            self._lining_edits[rc] = (t0_edit, t_edit)
+
+        tt_grid.setColumnStretch(0, 1)
+        tt_grid.setColumnStretch(1, 3)
+        tt_grid.setColumnStretch(2, 3)
+        tt_lay.addLayout(tt_grid)
+
+        # ---- 隧洞断面设计方式 ----
+        from PySide6.QtWidgets import QRadioButton, QButtonGroup, QHBoxLayout as _QHBox
+        _tt_mode_row = QWidget()
+        _tt_mode_hlay = _QHBox(_tt_mode_row)
+        _tt_mode_hlay.setContentsMargins(0, 0, 0, 0)
+        _tt_mode_hlay.setSpacing(4)
+        tt_mode_lbl = QLabel("断面设计方式:")
+        tt_mode_lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold; margin-top:6px;")
+        _tt_mode_hlay.addWidget(tt_mode_lbl)
+        _info_icon = QLabel("ⓘ")
+        _info_icon.setStyleSheet(
+            "font-size:13px; color:#1a73e8; font-weight:bold; margin-top:6px; cursor:pointer;"
+        )
+        _info_icon.setToolTip(
+            "<b>统一断面</b>：按最大流量段设计统一断面尺寸，其余各流量段仅推求水深；<br>"
+            "<b>独立断面</b>：每个流量段独立计算各自的断面尺寸。"
+        )
+        _tt_mode_hlay.addWidget(_info_icon)
+        _tt_mode_hlay.addStretch()
+        tt_lay.addWidget(_tt_mode_row)
+
+        self._tunnel_mode_groups = {}  # {key: QButtonGroup}
+        _tunnel_types = [
+            ("tunnel_arch",      "圆拱直墙型"),
+            ("tunnel_circular",  "圆形"),
+            ("tunnel_horseshoe", "马蹄形（Ⅰ/Ⅱ型）"),
+        ]
+        tm_grid = QGridLayout()
+        tm_grid.setSpacing(2)
+        for ri, (tkey, tname) in enumerate(_tunnel_types):
+            name_lbl = QLabel(tname)
+            name_lbl.setStyleSheet("font-size:11px;")
+            name_lbl.setFixedWidth(110)
+            tm_grid.addWidget(name_lbl, ri, 0)
+            rb_unified = QRadioButton("统一断面")
+            rb_indep  = QRadioButton("独立断面")
+            rb_unified.setStyleSheet("font-size:11px;")
+            rb_indep.setStyleSheet("font-size:11px;")
+            rb_indep.setChecked(True)
+            bg = QButtonGroup(self)
+            bg.addButton(rb_unified, 0)
+            bg.addButton(rb_indep, 1)
+            tm_grid.addWidget(rb_unified, ri, 1)
+            tm_grid.addWidget(rb_indep, ri, 2)
+            self._tunnel_mode_groups[tkey] = bg
+        tt_lay.addLayout(tm_grid)
+
+        tt_lay.addStretch()
+        struct_tabs.addTab(tab_tunnel, "隧洞")
+
+        struct_tabs.setFixedHeight(260)
+        struct_lay.addWidget(struct_tabs)
+
+        struct_note = QLabel('（不输入则使用默认值，修改后同时影响"生成断面汇总表"和"导出全部DXF"）')
+        struct_note.setStyleSheet("font-size:11px; color:#666;")
+        struct_lay.addWidget(struct_note)
+        lay.addWidget(struct_group)
+
         # ---- 说明 ----
         note_group = QGroupBox("其他参数说明")
         note_group.setStyleSheet("QGroupBox{font-weight:bold;font-size:12px;}")
         note_lay = QVBoxLayout(note_group)
         note_lbl = QLabel(
-            "• 底坡、糙率等参数使用内置默认值（可在生成后调整）\n"
-            "• 隧洞表按最大流量段设计统一断面，各流量段分别求水深\n"
-            "• 隧洞含 III/IV/V 类围岩衬砌厚度\n"
-            "• 圆管涵默认材质为钢筋混凝土")
+            "• 各类构造参数可在上方按类型自定义\n"
+            '• 隧洞断面设计方式可在"隧洞"选项卡中按类型分别设置\n'
+            "• 圆管涵、倒虹吸无需设置壁厚")
         note_lbl.setWordWrap(True)
         note_lbl.setStyleSheet("font-size:11px; color:#555;")
         note_lay.addWidget(note_lbl)
@@ -2721,8 +3017,12 @@ class SectionSummaryDialog(QDialog):
         fmt_lay.addStretch()
         lay.addWidget(fmt_group)
 
-        # ---- 按钮栏 ----
+        scroll.setWidget(content)
+        outer_lay.addWidget(scroll, 1)
+
+        # ---- 按钮栏（固定在底部，不随滚动） ----
         btn_lay = QHBoxLayout()
+        btn_lay.setContentsMargins(10, 6, 10, 6)
         btn_lay.addStretch()
         btn_cancel = PushButton("取消")
         btn_cancel.clicked.connect(self.reject)
@@ -2730,7 +3030,61 @@ class SectionSummaryDialog(QDialog):
         btn_generate.clicked.connect(self._on_generate)
         btn_lay.addWidget(btn_cancel)
         btn_lay.addWidget(btn_generate)
-        lay.addLayout(btn_lay)
+        outer_lay.addLayout(btn_lay)
+
+    # ---- 读取构造参数 ----
+    def _read_float(self, edit, default):
+        """安全读取 LineEdit 的浮点值，空或非法返回默认值。"""
+        t = edit.text().strip()
+        if not t:
+            return default
+        try:
+            return float(t)
+        except ValueError:
+            return default
+
+    def _read_rock_lining(self):
+        """从输入框读取用户自定义的围岩衬砌厚度。"""
+        rock_lining = {}
+        for rc in self._ROCK_CLASSES:
+            t0_edit, t_edit = self._lining_edits[rc]
+            defaults = self._ROCK_LINING_DEFAULT[rc]
+            rock_lining[rc] = {
+                't0': self._read_float(t0_edit, defaults['t0']),
+                't':  self._read_float(t_edit,  defaults['t']),
+            }
+        return rock_lining
+
+    def _read_tie_rod(self, w_edit, h_edit):
+        """从拉杆宽/高输入框读取并组合为 'd1×d2' 字符串。"""
+        w = self._read_float(w_edit, 0.2)
+        h = self._read_float(h_edit, 0.2)
+        return f"{w}×{h}"
+
+    def _read_struct_thickness(self):
+        """读取所有结构类型的用户自定义厚度参数，返回 dict。"""
+        return {
+            'rect_channel': {
+                'wall_t':  self._read_float(self._rect_ch_wall_t, 0.3),
+                'tie_rod': self._read_tie_rod(self._rect_ch_tie_w, self._rect_ch_tie_h),
+            },
+            'trap_channel': {
+                'wall_t':  self._read_float(self._trap_ch_wall_t, 0.3),
+                'tie_rod': self._read_tie_rod(self._trap_ch_tie_w, self._trap_ch_tie_h),
+            },
+            'aqueduct_u': {
+                'wall_t': self._read_float(self._aq_u_wall_t, 0.35),
+            },
+            'aqueduct_rect': {
+                'wall_t': self._read_float(self._aq_rect_wall_t, 0.35),
+            },
+            'rect_culvert': {
+                't0': self._read_float(self._culvert_t0, 0.4),
+                't1': self._read_float(self._culvert_t1, 0.4),
+                't2': self._read_float(self._culvert_t2, 0.4),
+            },
+            'rock_lining': self._read_rock_lining(),
+        }
 
     # ---- 生成 ----
     def _on_generate(self):
@@ -2882,6 +3236,37 @@ class SectionSummaryDialog(QDialog):
             if not _table_order:
                 _table_order = None
 
+        # 读取所有用户自定义的构造参数（壁厚/衬砌厚度）
+        struct_t = self._read_struct_thickness()
+        rock_lining = struct_t['rock_lining']
+
+        # 将壁厚/衬砌参数注入各类型 segments
+        for seg in rc_segs:
+            seg['wall_t'] = struct_t['rect_channel']['wall_t']
+            seg['tie_rod'] = struct_t['rect_channel']['tie_rod']
+        for seg in tr_segs:
+            seg['wall_t'] = struct_t['trap_channel']['wall_t']
+            seg['tie_rod'] = struct_t['trap_channel']['tie_rod']
+        for seg in aq_u_segs:
+            seg['wall_t'] = struct_t['aqueduct_u']['wall_t']
+        for seg in aq_rect_segs:
+            seg['wall_t'] = struct_t['aqueduct_rect']['wall_t']
+        for seg in rv_segs:
+            seg['t0'] = struct_t['rect_culvert']['t0']
+            seg['t1'] = struct_t['rect_culvert']['t1']
+            seg['t2'] = struct_t['rect_culvert']['t2']
+
+        # 读取隧洞断面设计方式
+        tunnel_unified = {}
+        for tkey, bg in self._tunnel_mode_groups.items():
+            tunnel_unified[tkey] = (bg.checkedId() == 0)  # 0=统一, 1=独立
+
+        # 存储到 panel，供"导出全部DXF"复用
+        if self._panel is not None:
+            self._panel._custom_rock_lining = rock_lining
+            self._panel._custom_struct_thickness = struct_t
+            self._panel._custom_tunnel_unified = tunnel_unified
+
         gen_kwargs = dict(
             filepath=fp,
             rect_channel_segs=rc_segs,
@@ -2895,7 +3280,11 @@ class SectionSummaryDialog(QDialog):
             circular_pipe_segs=cp_segs,
             siphon_segs=sp_segs,
             siphon_material=siphon_params[0][1] if siphon_params else "球墨铸铁管",
+            rock_lining=rock_lining,
             table_order=_table_order,
+            tunnel_unified_arch=tunnel_unified.get("tunnel_arch", False),
+            tunnel_unified_circular=tunnel_unified.get("tunnel_circular", False),
+            tunnel_unified_horseshoe=tunnel_unified.get("tunnel_horseshoe", False),
         )
 
         try:
@@ -2950,7 +3339,7 @@ def open_section_summary_table(panel):
         except Exception:
             auto_name = "断面汇总表.xlsx"
 
-        dlg = SectionSummaryDialog(panel.window(), nodes, proj_settings, auto_name)
+        dlg = SectionSummaryDialog(panel.window(), nodes, proj_settings, auto_name, panel=panel)
         dlg.exec()
     except ImportError as e:
         fluent_error(

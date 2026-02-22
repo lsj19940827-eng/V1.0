@@ -584,11 +584,11 @@ def quick_calculate_horseshoe_std(Q: float, n: float, slope_inv: float,
         'A_total': 0,
     }
     
-    slope = 1.0 / slope_inv
-    
     if Q <= 0 or n <= 0 or slope_inv <= 0:
         result['error_message'] = '输入参数无效'
         return result
+    
+    slope = 1.0 / slope_inv
     
     if section_type not in [1, 2]:
         result['error_message'] = '断面类型无效，必须为1(标准Ⅰ型)或2(标准Ⅱ型)'
@@ -738,11 +738,11 @@ def quick_calculate_circular(Q: float, n: float, slope_inv: float,
         'A_total': 0,
     }
     
-    slope = 1.0 / slope_inv
-    
     if Q <= 0 or n <= 0 or slope_inv <= 0:
         result['error_message'] = '输入参数无效'
         return result
+    
+    slope = 1.0 / slope_inv
     
     # 加大流量
     if manual_increase_percent is not None and manual_increase_percent >= 0:
@@ -890,12 +890,12 @@ def quick_calculate_horseshoe(Q: float, n: float, slope_inv: float,
         'A_total': 0,
     }
     
-    slope = 1.0 / slope_inv
-    theta_rad = math.radians(theta_deg)
-    
     if Q <= 0 or n <= 0 or slope_inv <= 0:
         result['error_message'] = '输入参数无效'
         return result
+    
+    slope = 1.0 / slope_inv
+    theta_rad = math.radians(theta_deg)
     
     if theta_deg < 90 or theta_deg > 180:
         result['error_message'] = '圆心角必须在90~180度之间'

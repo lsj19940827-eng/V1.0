@@ -228,20 +228,23 @@ def calculate_rect_hydro_elements_with_chamfer(h: float, width: float,
     if h <= 0 or width <= 0 or chamfer_angle <= 0 or chamfer_length <= 0:
         return 0.0, 0.0
     
-    # 基础矩形
-    A = width * h
-    P = width + 2 * h
-    
-    # 计算倒角高度
+    # 计算倒角几何参数
     chamfer_height = chamfer_length * math.tan(math.radians(chamfer_angle))
+    chamfer_hypotenuse = chamfer_length / math.cos(math.radians(chamfer_angle))
     
-    # 如果水深超过倒角高度，修正面积和湿周
     if h >= chamfer_height:
-        chamfer_area = 0.5 * chamfer_length * chamfer_height
-        A = A - 2 * chamfer_area  # 底部两个角
-        
-        chamfer_hypotenuse = chamfer_length / math.cos(math.radians(chamfer_angle))
-        P = P - 2 * (chamfer_length + chamfer_height) + 2 * chamfer_hypotenuse
+        # 水深超过倒角高度：矩形部分 + 倒角已全部淹没
+        # A = B*h - 2*(0.5*cl*ch)  = B*h - cl*ch
+        # P = (B+2h) - 2*(cl+ch) + 2*hyp
+        A = width * h - chamfer_length * chamfer_height
+        P = (width + 2 * h) - 2 * (chamfer_length + chamfer_height) + 2 * chamfer_hypotenuse
+    else:
+        # 水深在倒角区域内（h < chamfer_height）
+        # 在高度 y 处有效宽度 w(y) = B - 2*cl*(1 - y/ch)
+        # A = ∫₀ʰ w(y) dy = B*h - 2*cl*h + cl*h²/ch
+        # P = (B-2*cl) + 2*(h/ch)*hyp  （底部有效宽 + 两侧倒角面长度）
+        A = width * h - 2 * chamfer_length * h + chamfer_length * h**2 / chamfer_height
+        P = (width - 2 * chamfer_length) + 2 * (h / chamfer_height) * chamfer_hypotenuse
     
     return A, P
 
@@ -403,8 +406,6 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
         'A_total': 0,       # 槽身总面积
     }
     
-    i = 1.0 / slope_inv
-    
     # 输入验证
     if Q <= 0:
         result['error_message'] = '流量必须大于0'
@@ -418,6 +419,8 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     if v_min >= v_max:
         result['error_message'] = '不淤流速必须小于不冲流速'
         return result
+    
+    i = 1.0 / slope_inv
     
     # 加大流量
     if manual_increase_percent is not None and manual_increase_percent >= 0:
@@ -824,7 +827,6 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
         'A_total': 0,
     }
     
-    i = 1.0 / slope_inv
     has_chamfer = chamfer_angle > 0 and chamfer_length > 0
     result['has_chamfer'] = has_chamfer
     
@@ -838,6 +840,8 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
     if slope_inv <= 0:
         result['error_message'] = '坡度倒数必须大于0'
         return result
+    
+    i = 1.0 / slope_inv
     
     # 处理深宽比和槽宽B的逻辑
     # 若都留空，则使用默认深宽比0.8

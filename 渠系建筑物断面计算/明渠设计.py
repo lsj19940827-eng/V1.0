@@ -154,11 +154,11 @@ def calculate_optimal_hydraulic_section(Q: float, n: float, i: float, m: float) 
         return -1.0, -1.0, -1.0, -1.0
     
     # 步骤1.2: 计算水力最佳水深 h0
-    # h0 = 1.189 × (nQ / (K × √i))^0.375
-    # 注: 1.189 ≈ (1/K^(2/3))^(3/8) 的简化系数，实际按原公式计算更精确
-    # 原公式: h0 = [ nQ / (√i × K^(2/3)) ]^(3/8)
-    denominator = K ** (2.0 / 3.0)
-    h0 = (n * Q / (math.sqrt(i) * denominator)) ** (3.0 / 8.0)
+    # 水力最佳断面: A=K·h², P=2K·h, R=h/2
+    # 代入曼宁公式: Q = (1/n)·K·h²·(h/2)^(2/3)·√i
+    # 解出: h0 = [nQ·2^(2/3) / (K·√i)]^(3/8) = 2^(1/4) × [nQ/(K·√i)]^(3/8)
+    # 其中 2^(1/4) ≈ 1.18920711
+    h0 = (n * Q * (2.0 ** (2.0 / 3.0)) / (K * math.sqrt(i))) ** (3.0 / 8.0)
     
     # 步骤1.3: 计算水力最佳断面的其他参数
     # 最佳底宽: b0 = [2√(1+m²) - 2m] × h0 = 2(√(1+m²) - m) × h0
@@ -735,9 +735,6 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
         'appendix_e_schemes': [],
     }
 
-    # 计算坡度
-    i = 1.0 / slope_inv
-
     # ========== 输入参数验证 ==========
     if Q <= ZERO_TOLERANCE:
         result['error_message'] = 'Q (流量) 必须大于0'
@@ -751,6 +748,9 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
     if slope_inv <= ZERO_TOLERANCE:
         result['error_message'] = '坡度倒数必须大于0'
         return result
+
+    # 计算坡度（验证通过后再除法，避免除零）
+    i = 1.0 / slope_inv
     if v_min >= v_max:
         result['error_message'] = '不淤流速必须小于不冲流速'
         return result
