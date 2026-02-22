@@ -1977,7 +1977,7 @@ class SiphonPanel(QWidget):
                          duration=5000, position=InfoBarPosition.TOP)
 
     def _build_longitudinal_nodes(self):
-        """从纵断面节点表构建LongitudinalNode列表"""
+        """从纵断面节点表构建LongitudinalNode列表（并补全坡角信息）"""
         if not SIPHON_AVAILABLE:
             return []
         nodes = []
@@ -1994,6 +1994,23 @@ class SiphonPanel(QWidget):
             nodes.append(LongitudinalNode(
                 chainage=chainage, elevation=elevation,
                 vertical_curve_radius=vcr, turn_type=tt, turn_angle=angle))
+        # 补全坡角：从相邻节点的高程差推算 slope_before / slope_after
+        n = len(nodes)
+        for i in range(n):
+            if i > 0:
+                ds = nodes[i].chainage - nodes[i - 1].chainage
+                dz = nodes[i].elevation - nodes[i - 1].elevation
+                if abs(ds) > 1e-6:
+                    nodes[i].slope_before = math.atan2(dz, abs(ds))
+                    nodes[i - 1].slope_after = nodes[i].slope_before
+            if i == 0 and n > 1:
+                ds = nodes[1].chainage - nodes[0].chainage
+                dz = nodes[1].elevation - nodes[0].elevation
+                if abs(ds) > 1e-6:
+                    nodes[0].slope_after = math.atan2(dz, abs(ds))
+                    nodes[0].slope_before = nodes[0].slope_after
+        if n >= 2:
+            nodes[-1].slope_after = nodes[-1].slope_before
         return nodes
 
     # ================================================================

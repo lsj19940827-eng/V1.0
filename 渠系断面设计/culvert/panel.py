@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "渠系建筑物断面计算"))
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea
+    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea, QInputDialog
 )
 from PySide6.QtCore import Qt
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -54,6 +54,7 @@ from 渠系断面设计.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_formula, doc_render_calc_text, doc_add_figure,
 )
+from 渠系断面设计.culvert.dxf_export import export_culvert_dxf
 from 渠系断面设计.formula_renderer import (
     plain_text_to_formula_html, load_formula_page, make_plain_html,
     HelpPageBuilder
@@ -149,7 +150,7 @@ class CulvertPanel(QWidget):
         br.addWidget(cb); br.addWidget(clb); fl.addLayout(br)
 
         er = QHBoxLayout()
-        ec = PushButton("导出图表"); ec.clicked.connect(self._export_charts)
+        ec = PushButton("导出DXF"); ec.clicked.connect(self._export_dxf)
         ew = PushButton("导出Word"); ew.clicked.connect(self._export_word)
         er.addWidget(ec); er.addWidget(ew)
         fl.addLayout(er)
@@ -658,18 +659,30 @@ class CulvertPanel(QWidget):
         self.current_result = None
         self._export_plain_text = ""
 
-    def _export_charts(self):
+    def _export_dxf(self):
         if not self.current_result or not self.current_result.get('success'):
             InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP); return
-        folder = QFileDialog.getExistingDirectory(self, "选择保存目录")
-        if not folder: return
+        res = self.current_result; p = self.input_params
+        B = res.get('B', 0.0); H = res.get('H', 0.0)
+        default_name = f'暗渠断面_矩形_B{B:.2f}xH{H:.2f}.dxf'
+        scales = ['1:20', '1:50', '1:100', '1:200', '1:500']
+        scale_str, ok = QInputDialog.getItem(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2, False)
+        if not ok: return
+        scale_denom = int(scale_str.split(':')[1])
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "保存DXF文件", default_name, "DXF文件 (*.dxf);;所有文件 (*.*)"
+        )
+        if not filepath: return
         try:
-            self.section_fig.savefig(os.path.join(folder, '矩形暗涵断面图.png'), dpi=150, bbox_inches='tight')
-            InfoBar.success("导出成功", f"图表已保存到: {folder}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            export_culvert_dxf(filepath, res, p, scale_denom)
+            InfoBar.success("导出成功", f"DXF已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            ask_open_file(filepath, self._info_parent())
+        except ImportError as e:
+            InfoBar.error("缺少依赖", str(e), parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
         except PermissionError:
-            InfoBar.error("文件被占用", "无法写入文件，请先关闭已打开的同名图片文件，然后重新操作。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
+            InfoBar.error("文件被占用", "无法写入文件，请关闭已打开的同名DXF文件。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
         except Exception as e:
-            InfoBar.error("导出失败", str(e), parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            InfoBar.error("导出失败", f"DXF导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
     def _export_report(self):
         if not self.current_result or not self.current_result.get('success'):

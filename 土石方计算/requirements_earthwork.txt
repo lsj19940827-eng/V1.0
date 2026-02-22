@@ -1,0 +1,19 @@
+# 土石方计算模块新增依赖
+# ================================================
+# 在现有 requirements.txt 基础上追加以下包：
+# pip install triangle startinpy shapely rtree
+
+# 三角剖分（约束 Delaunay，CDT 核心引擎）
+triangle>=20230923
+
+# 高精度 2.5D TIN 插值（Rust 高性能：自然邻域/Laplace/IDW）
+startinpy>=0.12
+
+# 几何运算（多边形面积/交集/缓冲区）
+shapely>=2.0
+
+# R-tree 空间索引（可选，大规模数据 >10 万点时启用）
+rtree>=1.0
+
+# 以下依赖已在现有 requirements.txt 中：
+# numpy, scipy, ezdxf, openpyxl, matplotlib, PySide6

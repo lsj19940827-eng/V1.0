@@ -49,8 +49,11 @@ class HydraulicCore:
         else:
             step = 0.2
         
-        # 向上取整
-        return math.ceil(d_theory / step) * step
+        # 向上取整（用 round 消除浮点误差，避免 1.0/0.05=20.000...004 导致 ceil 多进一位）
+        ratio = d_theory / step
+        if abs(ratio - round(ratio)) < 1e-9:
+            return round(ratio) * step
+        return math.ceil(ratio) * step
     
     @staticmethod
     def execute_calculation(global_params: GlobalParameters,
@@ -123,6 +126,9 @@ class HydraulicCore:
         # 管径取整或使用用户指定值
         if diameter_override is not None:
             D = diameter_override
+            if D < D_theory:
+                steps.append(f"⚠ 警告: 用户指定管径 D={D:.4f}m 小于理论最小值 D_theory={D_theory:.4f}m，"
+                             f"管内流速将超过拟定流速，结果仅供参考！")
             steps.append(f"使用用户指定的自定义设计管径: D = {D:.4f} m")
         else:
             D = HydraulicCore.round_diameter(D_theory)

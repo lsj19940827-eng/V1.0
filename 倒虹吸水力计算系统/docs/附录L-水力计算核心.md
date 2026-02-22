@@ -53,7 +53,7 @@ $$C = \frac{1}{n} R_h^{1/6}$$
 
 依据规范 L.1.6，倒虹吸管的总水面落差 $\Delta Z$ 由三部分组成：
 
-$$\Delta Z = \Delta Z_1 + \Delta Z_2 + \Delta Z_3$$
+$$\Delta Z = \Delta Z_1 + \Delta Z_2 - \Delta Z_3$$
 
 ### 1. 进口渐变段水面落差 ($\Delta Z_1$)
 
@@ -89,13 +89,13 @@ $$\Delta Z_2 = h_f + h_j$$
 
 $$\Delta Z_3 = (1 - \xi_2) \frac{v^2 - v_3^2}{2g}$$
 
-*注：$v$ 为出口渐变段始端流速，$v_3$ 为出口渐变段末端流速。根据规范公式，该项通常为正值，需计入总落差中。*
+*注：$v$ 为出口渐变段始端流速，$v_3$ 为出口渐变段末端流速。$\Delta Z_3$ 为出口淨回升水头，在总落差中应减去（出口动能回收）。*
 
 ### 4. 总水面落差 ($\Delta Z$)
 
 依据公式 L.1.6：
 
-$$\Delta Z = \Delta Z_1 + \Delta Z_2 + \Delta Z_3$$
+$$\Delta Z = \Delta Z_1 + \Delta Z_2 - \Delta Z_3$$
 
 ---
 

@@ -252,7 +252,7 @@ class DxfParser:
                 if angle_deg > 1.0:  # 大于1度认为是折管
                     # 将前一段的末端改为折管
                     if result and result[-1].segment_type == SegmentType.STRAIGHT:
-                        # 合并为折管
+                        # 合并为折管（直管 + 当前段）
                         prev_seg = result[-1]
                         fold_seg = StructureSegment(
                             segment_type=SegmentType.FOLD,
@@ -264,8 +264,24 @@ class DxfParser:
                             end_elevation=seg['p2'][1]
                         )
                         result[-1] = fold_seg
+                    elif result and result[-1].segment_type == SegmentType.FOLD:
+                        # 上一段已是折管（连续折点）：新折管以上一折管右端段的长度作为左半段
+                        # 取上一折管末端两坐标作为本折管的起始直线长度
+                        prev_fold = result[-1]
+                        prev_end_coords = prev_fold.coordinates
+                        prev_half_len = straight_segments[i - 1]['length']
+                        fold_seg = StructureSegment(
+                            segment_type=SegmentType.FOLD,
+                            length=prev_half_len + seg['length'],
+                            angle=angle_deg,
+                            coordinates=[seg['p1'], seg['p2']],
+                            locked=True,
+                            start_elevation=seg['p1'][1],
+                            end_elevation=seg['p2'][1]
+                        )
+                        result.append(fold_seg)
                     else:
-                        # 单独创建折管
+                        # 单独创建折管（首段就是折管）
                         result.append(StructureSegment(
                             segment_type=SegmentType.FOLD,
                             length=seg['length'],
@@ -364,171 +380,173 @@ class DxfParser:
         return nodes, msg
     
     @staticmethod
+    def _compute_arc_center(p1: Tuple[float, float], p2: Tuple[float, float],
+                            bulge: float) -> Tuple[float, float]:
+        """DXF 圆弧弧心坐标 (Sc, Zc)。bulge>0 CCW，弧心在弦左侧；<0 CW 在右侧。"""
+        S1, Z1 = p1; S2, Z2 = p2
+        dS, dZ = S2 - S1, Z2 - Z1
+        chord = math.sqrt(dS**2 + dZ**2)
+        if chord < 1e-9:
+            return (S1 + S2) / 2, (Z1 + Z2) / 2
+        angle_rad = 4 * math.atan(abs(bulge))
+        sin_half = math.sin(angle_rad / 2)
+        if sin_half < 1e-9:
+            return (S1 + S2) / 2, (Z1 + Z2) / 2
+        radius = chord / (2 * sin_half)
+        Sm, Zm = (S1 + S2) / 2, (Z1 + Z2) / 2
+        perp_S, perp_Z = -dZ / chord, dS / chord
+        d = math.sqrt(max(0.0, radius**2 - (chord / 2)**2))
+        sign = 1.0 if bulge > 0 else -1.0
+        return Sm + sign * d * perp_S, Zm + sign * d * perp_Z
+
+    @staticmethod
+    def _arc_tangent_slope(S: float, Z: float, Sc: float, Zc: float) -> float:
+        """
+        弧上点 (S,Z) 处切线坡角 β（弧度）。
+        dZ/ds = -(S-Sc)/(Z-Zc) = tanβ，必须经 math.atan 转换为 β 弧度。
+        注：不能用 atan2(-(S-Sc), Z-Zc)：当 Z<Zc（谷底弧）时 x分量<0，atan2会加±π错误。
+        """
+        denom = Z - Zc
+        return 0.0 if abs(denom) < 1e-9 else math.atan(-(S - Sc) / denom)
+
+    @staticmethod
     def _build_longitudinal_nodes(vertices: List[Tuple[float, float]],
                                    bulges: List[float],
                                    chainage_offset: float
                                    ) -> List[LongitudinalNode]:
         """
         从多段线顶点和凸度构建变坡点节点表
-        
-        处理流程：
-        1. 遍历所有顶点，区分直线段和圆弧段
-        2. 对直线段：计算坡角 β = arctan(ΔY/ΔX)
-        3. 对圆弧段：从 bulge 推算竖曲线半径 R_v 和圆弧角
-        4. 在每个变坡点处，记录前后坡角和转弯信息
+
+        v2.1 更新：
+        - 圆弧段用弧心公式计算弧端切线坡角，不再仅依赖相邻直线段
+        - 处理 arc→arc、arc→line、line→arc 全部过渡情形
+        - ARC 节点存储弧心坐标 (arc_center_s, arc_center_z) 供 Z 轴精确插值
         """
         n = len(vertices)
         
-        # 第1步：为每个段计算属性（直线或圆弧）
+        # 第1步：为每个段计算属性（直线或圆弧），圆弧段额外计算弧心和弧端切线坡角
         segments_info = []
         for i in range(n - 1):
             p1 = vertices[i]
             p2 = vertices[i + 1]
             bulge = bulges[i] if i < len(bulges) else 0.0
-            
             dx = p2[0] - p1[0]
             dy = p2[1] - p1[1]
             chord = math.sqrt(dx**2 + dy**2)
             
             if abs(bulge) > 1e-8 and chord > 1e-6:
-                # 圆弧段（竖曲线，由fillet产生）
                 angle_rad = 4 * math.atan(abs(bulge))
                 sin_half = math.sin(angle_rad / 2)
                 radius = chord / (2 * sin_half) if sin_half > 1e-8 else chord / 2
-                arc_len = radius * angle_rad
-                
-                # 圆弧的起点切线方向和终点切线方向
-                # 对于纵断面圆弧，起点坡角和终点坡角通过相邻直线段确定
+                Sc, Zc = DxfParser._compute_arc_center(p1, p2, bulge)
+                slope_start = DxfParser._arc_tangent_slope(p1[0], p1[1], Sc, Zc)
+                slope_end   = DxfParser._arc_tangent_slope(p2[0], p2[1], Sc, Zc)
                 segments_info.append({
-                    'type': 'arc',
-                    'p1': p1, 'p2': p2,
-                    'chord': chord,
-                    'radius': radius,
-                    'arc_angle_deg': math.degrees(angle_rad),
-                    'arc_len': arc_len,
-                    'bulge': bulge,
+                    'type': 'arc', 'p1': p1, 'p2': p2,
+                    'radius': radius, 'arc_angle_deg': math.degrees(angle_rad),
+                    'arc_len': radius * angle_rad, 'bulge': bulge,
+                    'Sc': Sc, 'Zc': Zc,
+                    'slope_start': slope_start, 'slope_end': slope_end,
                 })
             else:
-                # 直线段（等坡段）
                 slope_angle = math.atan2(dy, dx) if abs(dx) > 1e-8 else (
                     math.pi / 2 if dy > 0 else -math.pi / 2)
-                horiz_len = abs(dx)  # 水平投影长度（桩号增量）
-                
                 segments_info.append({
-                    'type': 'line',
-                    'p1': p1, 'p2': p2,
-                    'chord': chord,
-                    'slope_angle': slope_angle,  # 坡角 β (弧度)
-                    'horiz_len': horiz_len,
+                    'type': 'line', 'p1': p1, 'p2': p2,
+                    'slope_angle': slope_angle,
                 })
         
         # 第2步：提取关键变坡点
-        # 策略：只在直线段→圆弧段、圆弧段→直线段的交界处以及首末端创建节点
+        # 通用规则：只要曲率突变（1/R 从 0 变为非 0，或切线不连续）就生成节点
         nodes = []
         
         # 起点节点
         x0, y0 = vertices[0]
-        first_slope = segments_info[0].get('slope_angle', 0.0) if segments_info[0]['type'] == 'line' else 0.0
+        seg0 = segments_info[0]
+        first_slope = seg0['slope_angle'] if seg0['type'] == 'line' else seg0['slope_start']
         nodes.append(LongitudinalNode(
-            chainage=x0 + chainage_offset,
-            elevation=y0,
-            turn_type=TurnType.NONE,
-            slope_after=first_slope,
+            chainage=x0 + chainage_offset, elevation=y0,
+            turn_type=TurnType.NONE, slope_after=first_slope,
         ))
         
-        # 遍历每一段
         i = 0
         while i < len(segments_info):
             seg = segments_info[i]
             
             if seg['type'] == 'line':
-                # 直线段：检查下一段是否也是直线段（折线型转弯）
-                if i + 1 < len(segments_info):
-                    next_seg = segments_info[i + 1]
-                    if next_seg['type'] == 'line':
-                        # 两段直线段相邻 → 折线型转弯
-                        slope1 = seg['slope_angle']
-                        slope2 = next_seg['slope_angle']
-                        angle_diff = abs(math.degrees(slope2 - slope1))
-                        
-                        if angle_diff > 0.5:  # 大于0.5度视为有转角
-                            px, py = seg['p2']
-                            nodes.append(LongitudinalNode(
-                                chainage=px + chainage_offset,
-                                elevation=py,
-                                turn_type=TurnType.FOLD,
-                                turn_angle=angle_diff,
-                                slope_before=slope1,
-                                slope_after=slope2,
-                            ))
+                # 线→线：坡角差 > 0.5° → 折点
+                if i + 1 < len(segments_info) and segments_info[i + 1]['type'] == 'line':
+                    slope1 = seg['slope_angle']
+                    slope2 = segments_info[i + 1]['slope_angle']
+                    angle_diff = abs(math.degrees(slope2 - slope1))
+                    if angle_diff > 0.5:
+                        px, py = seg['p2']
+                        nodes.append(LongitudinalNode(
+                            chainage=px + chainage_offset, elevation=py,
+                            turn_type=TurnType.FOLD, turn_angle=angle_diff,
+                            slope_before=slope1, slope_after=slope2,
+                        ))
+                # 线→弧：弧起点切线 = 弧的 slope_start（已由弧心公式精确计算）
+                # 不需要额外节点，由弧段开头的 ARC 节点处理
                 i += 1
                 
             elif seg['type'] == 'arc':
-                # 圆弧段（竖曲线）：确定前后坡角
-                slope_before = 0.0
-                slope_after = 0.0
-                
-                # 前方坡角：取前一个直线段的坡角
-                if i > 0 and segments_info[i - 1]['type'] == 'line':
-                    slope_before = segments_info[i - 1]['slope_angle']
-                
-                # 后方坡角：取后一个直线段的坡角
-                if i + 1 < len(segments_info) and segments_info[i + 1]['type'] == 'line':
-                    slope_after = segments_info[i + 1]['slope_angle']
+                # 确定进入弧段前的坡角
+                if i > 0:
+                    prev = segments_info[i - 1]
+                    slope_before = prev['slope_angle'] if prev['type'] == 'line' else prev['slope_end']
+                else:
+                    slope_before = seg['slope_start']
+                # 确定离开弧段后的坡角
+                if i + 1 < len(segments_info):
+                    nxt = segments_info[i + 1]
+                    slope_after = nxt['slope_angle'] if nxt['type'] == 'line' else nxt['slope_start']
+                else:
+                    slope_after = seg['slope_end']
                 
                 turn_angle = abs(math.degrees(slope_after - slope_before))
                 
-                # 圆弧起点作为变坡点节点
+                # 弧起点节点（ARC 类型）
                 px, py = seg['p1']
                 nodes.append(LongitudinalNode(
-                    chainage=px + chainage_offset,
-                    elevation=py,
+                    chainage=px + chainage_offset, elevation=py,
                     turn_type=TurnType.ARC,
                     vertical_curve_radius=seg['radius'],
                     turn_angle=turn_angle if turn_angle > 0.1 else seg['arc_angle_deg'],
-                    slope_before=slope_before,
-                    slope_after=slope_after,
+                    slope_before=slope_before, slope_after=slope_after,
+                    arc_center_s=seg['Sc'] + chainage_offset,
+                    arc_center_z=seg['Zc'],
                 ))
                 
-                # 圆弧终点也记录（作为下一段的起点参考）
+                # 弧终点节点（NONE 参考点，供区间端点插值用）
                 ex, ey = seg['p2']
                 nodes.append(LongitudinalNode(
-                    chainage=ex + chainage_offset,
-                    elevation=ey,
-                    turn_type=TurnType.NONE,  # 终点不是转弯点
-                    slope_before=slope_after,
-                    slope_after=slope_after,
+                    chainage=ex + chainage_offset, elevation=ey,
+                    turn_type=TurnType.NONE,
+                    slope_before=seg['slope_end'], slope_after=seg['slope_end'],
                 ))
-                
                 i += 1
         
-        # 终点节点（如果最后一个还没被添加）
+        # 终点节点
         xn, yn = vertices[-1]
         last_chainage = xn + chainage_offset
         if not nodes or abs(nodes[-1].chainage - last_chainage) > 0.01:
-            last_slope = 0.0
-            if segments_info and segments_info[-1]['type'] == 'line':
-                last_slope = segments_info[-1]['slope_angle']
+            last = segments_info[-1]
+            last_slope = last['slope_angle'] if last['type'] == 'line' else last['slope_end']
             nodes.append(LongitudinalNode(
-                chainage=last_chainage,
-                elevation=yn,
-                turn_type=TurnType.NONE,
-                slope_before=last_slope,
+                chainage=last_chainage, elevation=yn,
+                turn_type=TurnType.NONE, slope_before=last_slope,
             ))
         
-        # 第3步：确保节点按桩号排序且无重复
+        # 第3步：排序并去重（保留转弯信息更丰富的节点）
         nodes.sort(key=lambda nd: nd.chainage)
-        
-        # 合并过于接近的节点（桩号差 < 0.01m）
         merged = [nodes[0]] if nodes else []
         for nd in nodes[1:]:
             if abs(nd.chainage - merged[-1].chainage) < 0.01:
-                # 保留转弯信息较多的那个
                 if nd.turn_type != TurnType.NONE and merged[-1].turn_type == TurnType.NONE:
                     merged[-1] = nd
             else:
                 merged.append(nd)
-        
         return merged
     
     @staticmethod

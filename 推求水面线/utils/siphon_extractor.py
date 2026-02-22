@@ -470,7 +470,7 @@ class SiphonDataExtractor:
                 "chainage": node.station_MC,
                 "x": node.x,
                 "y": node.y,
-                "azimuth": node.azimuth,
+                "azimuth": node.azimuth,  # 测量方位角(度)，PlanFeaturePoint.from_dict 映射到 azimuth_meas_deg
                 "turn_radius": node.turn_radius if (0 < i < len(rows) - 1) else 0.0,
                 "turn_angle": node.turn_angle if (0 < i < len(rows) - 1) else 0.0,
                 "turn_type": turn_type,

@@ -201,7 +201,7 @@ class CalculationResult:
     loss_friction: float = 0.0          # 沿程水头损失 hf (m)
     loss_local: float = 0.0             # 管身局部水头损失 hj (m)
     loss_outlet: float = 0.0            # 出口渐变段水面落差 ΔZ3 (m)
-    total_head_loss: float = 0.0        # 总水面落差 ΔZ = ΔZ1 + ΔZ2 + ΔZ3 (m)
+    total_head_loss: float = 0.0        # 总水面落差 ΔZ = ΔZ1 + ΔZ2 - ΔZ3 (m)
     
     total_length: float = 0.0           # 管道总长度 (m)
     xi_sum_middle: float = 0.0          # 中间段局部阻力系数和
@@ -258,6 +258,8 @@ class LongitudinalNode:
     turn_angle: float = 0.0             # 竖向转角 (度), 由相邻坡段坡角差计算
     slope_before: float = 0.0           # 进入该点的坡角 β (弧度)
     slope_after: float = 0.0            # 离开该点的坡角 β (弧度)
+    arc_center_s: Optional[float] = None  # 竖曲线弧心桩号坐标 Sc（仅 ARC 型有效）
+    arc_center_z: Optional[float] = None  # 竖曲线弧心高程坐标 Zc（仅 ARC 型有效）
     
     def to_dict(self) -> dict:
         return {
@@ -268,6 +270,8 @@ class LongitudinalNode:
             "turn_angle": self.turn_angle,
             "slope_before": self.slope_before,
             "slope_after": self.slope_after,
+            "arc_center_s": self.arc_center_s,
+            "arc_center_z": self.arc_center_z,
         }
     
     @staticmethod
@@ -285,6 +289,8 @@ class LongitudinalNode:
             turn_angle=d.get("turn_angle", 0.0),
             slope_before=d.get("slope_before", 0.0),
             slope_after=d.get("slope_after", 0.0),
+            arc_center_s=d.get("arc_center_s", None),
+            arc_center_z=d.get("arc_center_z", None),
         )
 
 
@@ -296,21 +302,37 @@ class PlanFeaturePoint:
     从推求水面线表格的ChannelNode数据提取。
     每个特征点对应一个IP点。
     """
-    chainage: float = 0.0               # MC桩号 (m)
-    x: float = 0.0                      # X坐标
-    y: float = 0.0                      # Y坐标
-    azimuth: float = 0.0                # 方位角 (度)
+    chainage: float = 0.0               # MC桩号 (m)，平面轴线弧长参数
+    x: float = 0.0                      # X坐标（工程坐标，X=东）
+    y: float = 0.0                      # Y坐标（工程坐标，Y=北）
+    azimuth_meas_deg: float = 0.0       # 测量方位角 (度)，正北=0°顺时针，0~360°，仅用于UI显示
     turn_radius: float = 0.0            # 水平转弯半径 R_h (m)
     turn_angle: float = 0.0             # 水平转角 α (度)
     turn_type: TurnType = TurnType.NONE # 转弯类型
     ip_index: int = 0                   # IP编号
+    
+    @property
+    def azimuth_math_rad(self) -> float:
+        """数学方位角 (弧度)，正东=0°逆时针。T向量公式必须使用此字段。"""
+        alpha = math.pi / 2 - math.radians(self.azimuth_meas_deg)
+        # 归一化到 (-π, π]
+        while alpha > math.pi:
+            alpha -= 2 * math.pi
+        while alpha <= -math.pi:
+            alpha += 2 * math.pi
+        return alpha
+    
+    @property
+    def azimuth(self) -> float:
+        """向后兼容：返回测量方位角 (度)。新代码应使用 azimuth_meas_deg 或 azimuth_math_rad。"""
+        return self.azimuth_meas_deg
     
     def to_dict(self) -> dict:
         return {
             "chainage": self.chainage,
             "x": self.x,
             "y": self.y,
-            "azimuth": self.azimuth,
+            "azimuth": self.azimuth_meas_deg,
             "turn_radius": self.turn_radius,
             "turn_angle": self.turn_angle,
             "turn_type": self.turn_type.value,
@@ -328,7 +350,7 @@ class PlanFeaturePoint:
             chainage=d.get("chainage", 0.0),
             x=d.get("x", 0.0),
             y=d.get("y", 0.0),
-            azimuth=d.get("azimuth", 0.0),
+            azimuth_meas_deg=d.get("azimuth", 0.0),
             turn_radius=d.get("turn_radius", 0.0),
             turn_angle=d.get("turn_angle", 0.0),
             turn_type=tt,
