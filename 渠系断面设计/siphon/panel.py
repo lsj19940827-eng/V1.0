@@ -203,7 +203,7 @@ class SiphonPanel(QWidget):
         tb.addWidget(self.lbl_zoom)
 
         for text, slot in [("＋", "_zoom_in"), ("－", "_zoom_out"),
-                           ("重置", "_zoom_reset"), ("适应", "_zoom_fit")]:
+                           ("重置", "_zoom_reset")]:
             btn = PushButton(text)
             btn.setFixedHeight(26)
             btn.clicked.connect(getattr(self, slot))
@@ -216,6 +216,7 @@ class SiphonPanel(QWidget):
             self.canvas = PipelineCanvas()
             self.canvas.setMinimumHeight(140)
             self.canvas.setMaximumHeight(200)
+            self.canvas.zoom_changed.connect(self._update_zoom_label)
             cl.addWidget(self.canvas)
         else:
             self.canvas = None
@@ -246,10 +247,7 @@ class SiphonPanel(QWidget):
     def _zoom_reset(self):
         if self.canvas: self.canvas.zoom_reset(); self._update_zoom_label()
 
-    def _zoom_fit(self):
-        if self.canvas: self.canvas.zoom_fit(); self._update_zoom_label()
-
-    def _update_zoom_label(self):
+    def _update_zoom_label(self, _zoom=None):
         if self.canvas:
             self.lbl_zoom.setText(f"{int(self.canvas._zoom * 100)}%")
 
@@ -499,8 +497,14 @@ class SiphonPanel(QWidget):
         # 结构段表格
         self.seg_table = QTableWidget(0, len(SEG_HEADERS))
         self.seg_table.setHorizontalHeaderLabels(SEG_HEADERS)
-        self.seg_table.horizontalHeader().setStretchLastSection(True)
-        self.seg_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        _hdr = self.seg_table.horizontalHeader()
+        _hdr.setSectionResizeMode(QHeaderView.Stretch)   # 其余列均分剩余空间
+        _hdr.setStretchLastSection(False)
+        # 类型列固定140px（完整显示"进水口(进口稍微修圆)"），锁定列固定50px
+        _hdr.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.seg_table.setColumnWidth(2, 140)
+        _hdr.setSectionResizeMode(11, QHeaderView.Fixed)
+        self.seg_table.setColumnWidth(11, 50)
         self.seg_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.seg_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.seg_table.setAlternatingRowColors(True)
@@ -1881,23 +1885,25 @@ class SiphonPanel(QWidget):
         if not filepath:
             return
         try:
-            # 计算桩号偏移量：使多段线起点X对齐到进口MC桩号
+            # 计算桩号偏移量：使多段线起点X对齐到进口MC桩号（有平面数据）或归零（无平面数据）
             chainage_offset = 0.0
-            if self.plan_feature_points:
-                try:
-                    import ezdxf
-                    doc = ezdxf.readfile(filepath)
-                    msp = doc.modelspace()
-                    polys = list(msp.query('LWPOLYLINE'))
-                    if not polys:
-                        polys = list(msp.query('POLYLINE'))
-                    if polys:
-                        first_point = list(polys[0].get_points(format='xyseb'))[0]
-                        x_start = first_point[0]
+            try:
+                import ezdxf as _ezdxf
+                _doc = _ezdxf.readfile(filepath)
+                _msp = _doc.modelspace()
+                _polys = list(_msp.query('LWPOLYLINE'))
+                if not _polys:
+                    _polys = list(_msp.query('POLYLINE'))
+                if _polys:
+                    _first_point = list(_polys[0].get_points(format='xyseb'))[0]
+                    x_start = _first_point[0]
+                    if self.plan_feature_points:
                         mc_inlet = self.plan_feature_points[0].chainage
                         chainage_offset = mc_inlet - x_start
-                except Exception:
-                    pass
+                    else:
+                        chainage_offset = -x_start
+            except Exception:
+                pass
 
             # 解析纵断面为变坡点节点表
             long_nodes, message = DxfParser.parse_longitudinal_profile(

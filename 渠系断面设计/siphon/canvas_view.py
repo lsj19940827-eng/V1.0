@@ -35,7 +35,8 @@ except ImportError:
 class PipelineCanvas(QWidget):
     """管道可视化画布 —— 支持纵断面/平面视图切换、缩放、平移"""
 
-    view_changed = Signal(str)  # 视图切换信号
+    view_changed = Signal(str)   # 视图切换信号
+    zoom_changed = Signal(float)   # 缩放变化信号
 
     # 颜色常量
     C_BG = QColor(20, 20, 30)
@@ -85,6 +86,7 @@ class PipelineCanvas(QWidget):
             self._pan_y = 0.0
             self.update()
             self.view_changed.emit(mode)
+            self.zoom_changed.emit(self._zoom)
 
     def get_view_mode(self):
         return self._view_mode
@@ -117,6 +119,7 @@ class PipelineCanvas(QWidget):
         self._pan_x = 0.0
         self._pan_y = 0.0
         self.update()
+        self.zoom_changed.emit(self._zoom)
 
     def zoom_fit(self):
         self.zoom_reset()
@@ -196,6 +199,7 @@ class PipelineCanvas(QWidget):
             self._pan_y = (cy - h2) * (1 - actual) + self._pan_y * actual
             self._zoom = new_zoom
             self.update()
+            self.zoom_changed.emit(self._zoom)
 
     # ---- 坐标变换 ----
 

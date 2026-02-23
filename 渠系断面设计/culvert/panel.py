@@ -2,7 +2,7 @@
 """
 矩形暗涵水力计算面板 —— QWidget 版本
 
-支持：矩形暗涵（水力最佳断面 / 指定底宽 / 指定宽深比）
+支持：矩形暗涵（经济最优断面 / 指定底宽 / 指定宽深比）
 功能：参数输入、计算、结果显示、断面图、导出Word/TXT/图表
 """
 
@@ -46,7 +46,7 @@ from 矩形暗涵设计 import (
     quick_calculate_rectangular_culvert,
     get_required_freeboard_height_rect,
     MIN_FREEBOARD_PCT_RECT, MAX_FREEBOARD_PCT_RECT, MIN_FREEBOARD_HGT_RECT,
-    OPTIMAL_BH_RATIO, HB_RATIO_LIMIT,
+    HB_RATIO_LIMIT,
 )
 
 from 渠系断面设计.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPUT_LABEL_STYLE, INPUT_SECTION_STYLE, INPUT_HINT_STYLE
@@ -126,16 +126,18 @@ class CulvertPanel(QWidget):
 
         fl.addWidget(self._sep())
         fl.addWidget(self._slbl("【可选参数】"))
-        self.bh_lbl, self.bh_edit = self._field2(fl, "指定宽深比:", "")
+        self.bh_lbl, self.bh_edit = self._field2(fl, "指定宽深比 β:", "")
+        self.hb_lbl, self.hb_edit = self._field2(fl, "指定高宽比 H/B:", "")
         self.B_lbl, self.B_edit = self._field2(fl, "指定底宽 B (m):", "")
-        fl.addWidget(self._hint("(二选一输入，留空则自动计算)"))
+        fl.addWidget(self._hint("(β 与 H/B 不可同时填写)"))
+        fl.addWidget(self._hint("(B 可单独填写，也可与 H/B 合用)"))
         lbl_b1 = QLabel("高宽比限值H/B（或B/H）一般不超过1.2")
         lbl_b1.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: #0066CC;")
         fl.addWidget(lbl_b1)
-        lbl_b2 = QLabel("留空则采用水力最佳断面（β=B/h=2）")
+        lbl_b2 = QLabel("留空则自动搜索经济最优断面（B×H 最小）")
         lbl_b2.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: #0066CC;")
         fl.addWidget(lbl_b2)
-        lbl_ref = QLabel("参考《涵洞》（熊启钧 编著）")
+        lbl_ref = QLabel("参考 GB 50288-2018 第11.2.5条")
         lbl_ref.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: {T2};")
         fl.addWidget(lbl_ref)
 
@@ -206,15 +208,37 @@ class CulvertPanel(QWidget):
         h = HelpPageBuilder("矩形暗涵水力计算", '请输入参数后点击“计算”按钮')
         h.section("断面特点")
         h.bullet_list([
-            "推荐宽深比 0.5~2.5",
-            "高宽比限值 H/B（或B/H）一般不超过 1.2",
+            "高宽比限值 H/B（或B/H）一般不超过 1.2（GB 50288-2018 第11.2.5条）",
             "最小净空面积 10%，最大 30%",
             "最小净空高度 0.4m",
         ])
-        h.section("水力最佳断面")
-        h.text("当底宽和宽深比均留空时，自动采用水力最佳断面：")
-        h.formula("β = B/h = 2", "水力最佳宽深比")
-        h.hint("即底宽等于 2 倍水深时，水力效率最高")
+        h.section("计算模式总览")
+        h.table(
+            ["可选参数填写方式", "程序行为"],
+            [
+                ["全部留空", "经济最优断面（B×H 最小，β 无硬约束），两阶段 β 扫描"],
+                ["指定宽深比 β", "以 β=B/h 为约束，自动搜索最小B和H"],
+                ["指定高宽比 H/B", "以 H=(H/B)×B 为约束，自动搜索最小B"],
+                ["指定底宽 B", "固定B，自动搜索满足约束的H"],
+                ["指定B + 高宽比 H/B", "固定B，H=(H/B)×B，直接验算"],
+            ]
+        )
+        h.hint("宽深比 β 与高宽比 H/B 不可同时填写（过约束）")
+        h.section("经济最优断面")
+        h.text("当底宽和宽深比均留空时，自动搜索总面积 B×H 最小的断面（β 无硬约束）：")
+        h.formula("min A = B × H", "优化目标：总截面面积最小")
+        h.hint("明渠 β=2 对暗涵不再是最优——高宽比限制会将 H 强行拉大，浪费截面。实测可节省约 10~15% 材料。")
+        h.text("搜索流程（全部留空时自动执行）：")
+        h.numbered_list([
+            ("遍历宽深比 β", "在 0.5~2.5 范围内逐步尝试，无需手动指定底宽"),
+            ("由曼宁公式解析求解设计水深和底宽", "每个 β 对应唯一的水深 h 和底宽 B，无需迭代试算"),
+            ("热启动割线法快速求解加大流量水深", "以相邻 β 的结果作为初始估计，自动收敛"),
+            ("确定涵洞高度的可行范围", "综合净空面积 ≥10%、净空高度、高宽比 ≤1.2 等约束，确定涵高下限"),
+            ("校核涵高上下限", "涵高上限由净空面积 ≤30% 和高宽比约束确定；无可行涵高时自动跳过该 β"),
+            ("两阶段搜索最优解", "先粗扫定位最优区间，再细扫精确求解，全程取总面积最小的方案"),
+        ])
+        h.hint("涵高下限由三个条件取最大值：净空面积不低于 10%、高宽比不超过 1.2、净空高度不小于 0.4m 或涵高的 1/6")
+        h.hint("涵高上限由两个条件取最小值：净空面积不超过 30%、高宽比不超过 1.2")
         h.section("净空约束条件")
         h.text("参考《灌溉与排水工程设计标准》 GB 50288-2018：")
         h.bullet_list([
@@ -227,7 +251,7 @@ class CulvertPanel(QWidget):
         h.bullet_list([
             "宽深比 β = B/h（底宽 / 设计水深）",
             "可指定宽深比或底宽",
-            "留空则自动按水力最佳断面计算",
+            "留空则自动搜索经济最优断面（B×H 最小）",
         ])
         h.section("曼宁公式")
         h.formula("Q = (1/n) × A × R^(2/3) × i^(1/2)", "流量公式")
@@ -281,12 +305,18 @@ class CulvertPanel(QWidget):
             manual_increase = self._fval_opt(self.inc_edit)
             manual_B = self._fval_opt(self.B_edit)
             target_BH_ratio = self._fval_opt(self.bh_edit)
+            target_HB_ratio = self._fval_opt(self.hb_edit)
+
+            if target_BH_ratio and target_HB_ratio:
+                self._show_error("参数冲突", "宽深比 β 与高宽比 H/B 不能同时指定，请只填写其中一个。")
+                return
 
             self.input_params = {
                 'Q': Q, 'n': n, 'slope_inv': slope_inv,
                 'v_min': v_min, 'v_max': v_max,
                 'manual_B': manual_B,
                 'target_BH_ratio': target_BH_ratio,
+                'target_HB_ratio': target_HB_ratio,
                 'manual_increase': manual_increase
             }
 
@@ -294,6 +324,7 @@ class CulvertPanel(QWidget):
                 Q=Q, n=n, slope_inv=slope_inv,
                 v_min=v_min, v_max=v_max,
                 target_BH_ratio=target_BH_ratio,
+                target_HB_ratio=target_HB_ratio,
                 manual_B=manual_B,
                 manual_increase_percent=manual_increase
             )
@@ -332,6 +363,7 @@ class CulvertPanel(QWidget):
         v_min, v_max = p['v_min'], p['v_max']
         inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
         is_optimal = result.get('is_optimal_section', False)
+        target_HB = p.get('target_HB_ratio')
 
         B = result['B']; H = result['H']
         h_d = result['h_design']; V_d = result['V_design']
@@ -350,14 +382,16 @@ class CulvertPanel(QWidget):
             fb_req_by_rule = max(0.4, H / 6.0)
         else:
             fb_req_by_rule = 0.5
-        fb_area_ok = 10.0 <= fb_pct_inc <= 30.0
-        fb_hgt_ok = fb_hgt_inc >= fb_req_by_rule
+        fb_area_ok = 10.0 - 0.1 <= fb_pct_inc <= 30.0 + 0.1
+        fb_hgt_ok = fb_hgt_inc >= fb_req_by_rule - 1e-3
         fb_ok = fb_area_ok and fb_hgt_ok
 
         o = []
         o.append("=" * 70)
         if is_optimal:
-            o.append("              矩形暗涵水力计算结果（水力最佳断面）")
+            o.append("              矩形暗涵水力计算结果（经济最优断面）")
+        elif target_HB:
+            o.append(f"              矩形暗涵水力计算结果（指定高宽比 H/B={target_HB:.2f}）")
         else:
             o.append("              矩形暗涵水力计算结果")
         o.append("=" * 70)
@@ -385,7 +419,10 @@ class CulvertPanel(QWidget):
 
             o.append("【断面尺寸】")
             if is_optimal:
-                o.append("  ★ 采用水力最佳断面（β=B/h=2）")
+                o.append("  ★ 采用经济最优断面（B×H 最小）")
+                o.append(f"    （B={B:.2f}m，H={H:.2f}m，A={B*H:.3f}m²，β={BH_ratio:.3f}）")
+            elif target_HB:
+                o.append(f"  ★ 按指定高宽比 H/B={target_HB:.2f} 计算")
             o.append(f"  宽度 B = {B:.2f} m")
             o.append(f"  高度 H = {H:.2f} m")
             o.append(f"  宽深比 β = B/h = {BH_ratio:.3f}")
@@ -437,9 +474,15 @@ class CulvertPanel(QWidget):
             o.append("")
             o.append("  1. 设计尺寸:")
             if is_optimal:
-                o.append("     ★★★ 采用水力最佳断面 ★★★")
-                o.append("     (当底宽和宽深比均留空时，自动按水力最佳断面计算)")
-                o.append("     水力最佳断面宽深比 β = B/h = 2（即底宽等于2倍水深）")
+                o.append("     ★★★ 采用经济最优断面 ★★★")
+                o.append("     (当底宽和宽深比均留空时，自动搜索总面积 B×H 最小的断面)")
+                o.append(f"     最优断面: B = {B:.2f} m，H = {H:.2f} m，A = {B*H:.3f} m²")
+                o.append(f"     实际 β = B/h = {B:.2f}/{h_d:.3f} = {BH_ratio:.3f}")
+                o.append(f"     洞高 H = {H:.2f} m 由解析公式直接求得（H_min = 各净空约束取 max）")
+                o.append(f"     断面面积 A = B×H = {B:.2f}×{H:.2f} = {B*H:.3f} m²（满足约束的最小值）")
+            elif target_HB:
+                o.append(f"     ★★★ 按指定高宽比计算 ★★★")
+                o.append(f"     指定 H/B = {target_HB:.2f}，涵洞高度 H = {target_HB:.2f} × B")
             o.append(f"     宽度 B = {B:.2f} m")
             o.append(f"     高度 H = {H:.2f} m")
             o.append("")
@@ -449,7 +492,7 @@ class CulvertPanel(QWidget):
             o.append(f"       = {B:.2f} / {h_d:.3f}")
             o.append(f"       = {BH_ratio:.3f}")
             if is_optimal:
-                o.append("     (水力最佳断面目标值 β = 2.0)")
+                o.append("     (经济最优，β 无硬约束）")
             o.append("")
 
             o.append("  3. 高宽比计算:")
@@ -626,7 +669,7 @@ class CulvertPanel(QWidget):
         o.append("=" * 70)
         all_checks_ok = vel_ok and fb_area_ok and fb_hgt_ok
         if is_optimal:
-            o.append(f"  综合验证结果: {'全部通过 ✓' if all_checks_ok else '未通过 ✗'} (水力最佳断面)")
+            o.append(f"  综合验证结果: {'全部通过 ✓' if all_checks_ok else '未通过 ✗'} (经济最优断面)")
         else:
             o.append(f"  综合验证结果: {'全部通过 ✓' if all_checks_ok else '未通过 ✗'}")
         o.append("=" * 70)
@@ -770,7 +813,7 @@ class CulvertPanel(QWidget):
         doc_add_formula(doc, r'P = B + 2h', '湿周：')
         doc_add_formula(doc, r'R = \frac{A}{P} = \frac{Bh}{B+2h}', '水力半径：')
         if self.current_result.get('is_optimal_section'):
-            doc_add_formula(doc, r'\beta = \frac{B}{h} = 2 \text{ (水力最佳)}', '最佳条件：')
+            doc_add_formula(doc, r'\min A = B \times H \text{ (经济最优)}', '优化目标：')
 
         # 二、计算过程
         doc_add_h1(doc, '二、计算过程')

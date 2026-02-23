@@ -89,7 +89,7 @@ def _draw_rect_culvert(msp, result, p, sf=1.0, scale_denom=100):
     lines = [
         '【矩形暗渠水力计算】',
         f'比例: 1:{scale_denom}',
-        '★ 水力最佳断面' if is_opt else None,
+        '★ 经济最优断面' if is_opt else None,
         '',
         '[输入参数]',
         f'Q={Q:.3f} m³/s',

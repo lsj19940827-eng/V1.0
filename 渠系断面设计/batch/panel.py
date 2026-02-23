@@ -2417,6 +2417,12 @@ class BatchPanel(QWidget):
                 h7_val = str(ws.cell(row=header_row, column=7).value or "")
                 has_xy_cols = "Q" in h7_val.upper() or "流量" in h7_val
 
+            if self.input_table.rowCount() > 0 and not self._is_sample_data:
+                if not fluent_question(self, "确认覆盖",
+                        f"当前表格已有 {self.input_table.rowCount()} 行数据，\n"
+                        f"导入将覆盖全部现有数据。\n\n确定继续吗？",
+                        yes_text="覆盖导入", no_text="取消"):
+                    return
             self._clear_input(force=True)
             for rd in data_rows:
                 rd = rd + [""] * 20
