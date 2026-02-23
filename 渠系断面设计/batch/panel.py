@@ -27,7 +27,7 @@ from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
 
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, CheckBox, InfoBar, InfoBarPosition,
-    LineEdit, ComboBox
+    LineEdit, ComboBox,
 )
 
 from 渠系断面设计.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, DIALOG_STYLE, fluent_info, fluent_error, fluent_question
@@ -275,12 +275,15 @@ class BatchPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._main_window = None
         self.batch_results = []
         self._detail_text_cache = ""
         self._last_calc_snapshot = None
         self._last_calc_detail = None
         self._last_import_dir = None
         self._has_opened_template = False
+        self._is_sample_data = False
+        self._loading_sample = False
         self._load_user_prefs()
         self._init_ui()
 
@@ -303,7 +306,7 @@ class BatchPanel(QWidget):
         self._build_result_area(bottom_w)
         splitter.addWidget(bottom_w)
 
-        splitter.setSizes([420, 420])
+        splitter.setSizes([540, 300])
 
         # 添加示例数据
         self._add_sample_data()
@@ -350,39 +353,46 @@ class BatchPanel(QWidget):
         fg.addStretch()
         lay.addWidget(flow_grp)
 
-        # 工具栏
-        tb = QHBoxLayout()
-        tb.setSpacing(6)
+        # 工具栏 —— 第一行：标题 + 核心按钮 + 复选框
+        tb1 = QHBoxLayout()
+        tb1.setSpacing(6)
         lbl = QLabel("输入参数表")
         lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
-        tb.addWidget(lbl)
-        tb.addStretch()
+        tb1.addWidget(lbl)
 
+        btn_full = PrimaryPushButton("一键全流程计算"); btn_full.clicked.connect(self._one_click_full_flow)
+        btn_full.setToolTip("批量计算 → 导入 → 渐变段 → (倒虹吸) → 推求水面线")
+        btn_calc = PrimaryPushButton("开始批量计算"); btn_calc.clicked.connect(self._batch_calculate)
         btn_sample = PushButton("示例数据"); btn_sample.clicked.connect(self._add_sample_data)
         btn_template = PushButton("打开Excel模板"); btn_template.clicked.connect(self._open_excel_template)
-        btn_import = PushButton("导入Excel"); btn_import.clicked.connect(self._import_from_excel)
+        btn_import = PrimaryPushButton("导入Excel"); btn_import.clicked.connect(self._import_from_excel)
+        self.detail_cb = CheckBox("启用详细计算过程输出")
+        self.detail_cb.setChecked(False)
+
+        for w in [btn_import, btn_calc, btn_sample, btn_template, btn_full]:
+            tb1.addWidget(w)
+        tb1.addStretch()
+        tb1.addWidget(self.detail_cb)
+        lay.addLayout(tb1)
+
+        # 工具栏 —— 第二行：表格操作（左对齐）+ 提示（右对齐）
+        tb2 = QHBoxLayout()
+        tb2.setSpacing(6)
+
         btn_add = PushButton("新增行"); btn_add.clicked.connect(self._add_row)
         btn_insert = PushButton("插入行"); btn_insert.clicked.connect(self._insert_row)
         btn_del = PushButton("删除行"); btn_del.clicked.connect(self._del_row)
         btn_copy = PushButton("复制行"); btn_copy.clicked.connect(self._copy_row)
         btn_clear = PushButton("清空输入"); btn_clear.clicked.connect(self._clear_input)
         btn_param = PushButton("参数设置"); btn_param.clicked.connect(self._open_parameter_dialog)
-        self.detail_cb = CheckBox("启用详细计算过程输出")
-        self.detail_cb.setChecked(False)
-        btn_calc = PrimaryPushButton("开始批量计算"); btn_calc.clicked.connect(self._batch_calculate)
-        btn_calc.setFixedWidth(120)
 
-        for w in [btn_calc, btn_sample, btn_template, btn_import, btn_add, btn_insert, btn_del, btn_copy, btn_clear, btn_param, self.detail_cb]:
-            tb.addWidget(w)
-        lay.addLayout(tb)
-
-        # 操作提示
-        hint_tb = QHBoxLayout()
-        hint_tb.addStretch()
+        for w in [btn_add, btn_insert, btn_del, btn_copy, btn_clear, btn_param]:
+            tb2.addWidget(w)
+        tb2.addStretch()
         hint_label = QLabel("提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型")
         hint_label.setStyleSheet("font-size:12px;font-weight:600;color:#0B5CAD;")
-        hint_tb.addWidget(hint_label)
-        lay.addLayout(hint_tb)
+        tb2.addWidget(hint_label)
+        lay.addLayout(tb2)
 
         # 输入表格
         self.input_table = FrozenColumnTableWidget(0, len(INPUT_HEADERS), frozen_count=4)
@@ -429,6 +439,8 @@ class BatchPanel(QWidget):
 
     def _on_cell_changed(self, row, col):
         """单元格编辑完成后的回调（与原版_on_input_end_edit_cell一致）"""
+        if not self._loading_sample:
+            self._is_sample_data = False
         if col == 1:
             # 流量段列被编辑，自动同步Q值
             seg_item = self.input_table.item(row, 1)
@@ -654,6 +666,8 @@ class BatchPanel(QWidget):
         self.input_table.setRowCount(0)
         self._last_calc_snapshot = None
         self._last_calc_detail = None
+        if not self._loading_sample:
+            self._is_sample_data = False
 
     def _copy_to_clipboard(self):
         """复制选中单元格到剪贴板（制表符分隔，可直接粘贴到Excel）"""
@@ -814,6 +828,7 @@ class BatchPanel(QWidget):
 
     def _add_sample_data(self):
         """加载示例数据 - 来自多流量段表格填写示例.xlsx的完整数据（与原版一致，44行）"""
+        self._loading_sample = True
         # 列: 序号,流量段,建筑物名称,结构形式,X,Y,Q,n,比降,m,B,宽深比,R,D,渡槽深宽比,倒角角度,倒角底边,圆心角,不淤,不冲
         samples = [
             ["1",  "1", "-",      "明渠-矩形",       "649606.177086", "3377745.982674", "5", "0.014", "3000", "0",   "2",   "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
@@ -869,6 +884,8 @@ class BatchPanel(QWidget):
         self.flow_segments_edit.setText("5.0, 4.0, 3.0")
         self._auto_detect_flow_segments()
         auto_resize_table(self.input_table)
+        self._loading_sample = False
+        self._is_sample_data = True
         InfoBar.success("示例数据", f"已加载 {len(samples)} 行示例数据（含明渠/隧洞/渡槽/暗涵/倒虹吸/分水闸）",
                        parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
 
@@ -923,6 +940,85 @@ class BatchPanel(QWidget):
         self.detail_text.setFont(QFont("Consolas", 10))
         t2l.addWidget(self.detail_text)
         self.result_notebook.addTab(t2, "详细计算过程")
+
+    # ================================================================
+    # 跨面板引用
+    # ================================================================
+    def set_main_window(self, main_window):
+        """由 MainWindow 在初始化后调用，保存引用以支持跨面板操作"""
+        self._main_window = main_window
+
+    def _one_click_full_flow(self):
+        """一键全流程：批量计算 → 切换到推求水面线 → 导入 → 渐变段 → (倒虹吸) → 执行计算"""
+        if not fluent_question(
+            self, "一键全流程计算",
+            "本功能将自动依次执行以下步骤：\n\n"
+            "① 批量计算 —— 对表格中所有渠段进行水力计算\n"
+            "② 导入水面线 —— 将计算结果自动导入「推求水面线」模块\n"
+            "③ 渐变段计算 —— 自动计算各渠段间的渐变段水头损失\n"
+            "④ 倒虹吸计算 —— 若存在倒虹吸，自动纳入计算\n"
+            "⑤ 推求水面线 —— 执行全线水面线推算\n\n"
+            "是否继续？",
+            yes_text="开始执行", no_text="取消",
+        ):
+            return
+
+        # 检查数据来源
+        if self.input_table.rowCount() == 0:
+            InfoBar.warning(
+                "无输入数据",
+                "请先准备输入数据再执行全流程：\n"
+                "① 点击【导入Excel】导入您的数据文件\n"
+                "② 或手动【新增行】逐行填写参数\n"
+                "③ 或点击【示例数据】加载演示数据",
+                parent=self._info_parent(), duration=6000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        if self._is_sample_data:
+            if not fluent_question(
+                self, "数据确认",
+                "当前表格中的数据为【示例数据】，并非您的工程数据。\n\n"
+                "如需使用自己的数据，请先点击【导入Excel】导入，\n"
+                "或手动修改表格中的参数。\n\n"
+                "是否仍要使用示例数据继续执行全流程？",
+                yes_text="继续使用示例数据", no_text="取消",
+            ):
+                return
+
+        # ① 批量计算
+        self._batch_calculate()
+        if not self.batch_results:
+            return
+
+        mw = self._main_window
+        if mw is None:
+            InfoBar.warning("提示", "未获取到主窗口引用，无法自动跳转",
+                            parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+            return
+
+        # ② 切换到推求水面线面板（index 6）
+        mw._switch_to(6)
+        wp = mw.water_profile_panel
+
+        # ③ 从批量计算导入
+        wp._import_from_batch()
+
+        # ④ 插入渐变段（自动确认，跳过批量明渠段对话框）
+        wp._insert_transitions(auto_confirm=True)
+
+        # ⑤ 若有倒虹吸则弹出对话框（模态，关闭后自动继续）
+        nodes = wp._build_nodes_from_table()
+        has_siphon = any(
+            getattr(n, 'structure_type', None) and "倒虹吸" in n.structure_type.value
+            for n in nodes if getattr(n, 'structure_type', None)
+        )
+        if has_siphon:
+            wp._open_siphon_calculator(auto_run=True)
+
+        # ⑥ 执行计算
+        wp._calculate()
 
     # ================================================================
     # 批量计算
@@ -1138,6 +1234,8 @@ class BatchPanel(QWidget):
                         r['n'] = self._sf(v[7], 0.014)
                     if 'slope_inv' not in r:
                         r['slope_inv'] = self._sf(v[8])
+                    if 'm' not in r:
+                        r['m'] = self._sf(v[9])
                     results_for_register.append(r)
                 count = shared_data.register_batch_results(results_for_register)
                 if count > 0:
@@ -2340,6 +2438,7 @@ class BatchPanel(QWidget):
             info_msg = f"已成功导入 {len(data_rows)} 行数据"
             if info_parts:
                 info_msg += " | " + ", ".join(info_parts)
+            self._is_sample_data = False
             InfoBar.success("导入成功", info_msg, parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
             # 导入后检查建筑物重名（仅警告，不阻止）
             self._validate_duplicate_buildings_warn()
@@ -2654,7 +2753,7 @@ class SectionParameterDialog(QDialog):
         self._entries['v_max'] = LineEdit(); self._entries['v_max'].setPlaceholderText("不冲流速")
         vel_form.addRow("不冲流速 (m/s):", self._entries['v_max'])
         hint = QLabel("(一般情况下保持默认数值即可)")
-        hint.setStyleSheet("font-size:10px; color:#888;")
+        hint.setStyleSheet("font-size:10px; color:#424242;")
         vel_form.addRow(hint)
         vel_grp.setLayout(vel_form)
         layout.addWidget(vel_grp)
@@ -2681,7 +2780,7 @@ class SectionParameterDialog(QDialog):
         form.addRow(label, self._entries[key])
         if hint_text:
             h = QLabel(hint_text)
-            h.setStyleSheet("font-size:10px; color:#888;")
+            h.setStyleSheet("font-size:10px; color:#424242;")
             form.addRow(h)
 
     def _build_optional_inputs(self, form):
@@ -2727,7 +2826,7 @@ class SectionParameterDialog(QDialog):
                                 "(二选一输入，留空则自动计算)")
         else:
             no_param = QLabel("(无额外参数)")
-            no_param.setStyleSheet("color:#888;")
+            no_param.setStyleSheet("color:#424242;")
             form.addRow(no_param)
 
     def _load_current_values(self):

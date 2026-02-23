@@ -252,6 +252,8 @@ class MainWindow(QMainWindow):
             self.earthwork_panel = EarthworkPanel()
             self.stack.addWidget(self.earthwork_panel)
 
+        self.batch_panel.set_main_window(self)
+
     def _switch_to(self, index: int):
         """切换到指定模块"""
         if index >= self.stack.count():

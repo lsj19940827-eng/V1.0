@@ -96,6 +96,10 @@ class SectionResult:
                 'A': self.A,
                 'X': self.X,
                 'R': self.R_hydraulic,
+                'H_total': self.H_total if self.H_total and self.H_total > 0 else None,
+                'theta_deg': self.raw_result.get('theta_deg', None) if self.raw_result else None,
+                'chamfer_angle': self.raw_result.get('chamfer_angle', None) if self.raw_result else None,
+                'chamfer_length': self.raw_result.get('chamfer_length', None) if self.raw_result else None,
             }
         }
         # 计算比降

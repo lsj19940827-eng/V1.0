@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_modified": "2026-02-22 11:57:02",
+  "last_modified": "2026-02-23 13:00:57",
   "siphons": {
     "沪蓉": {
       "Q": 4.0,
@@ -13,7 +13,7 @@
       "v_channel_in": 1.044,
       "v_pipe_in": 1.9894,
       "v_channel_out": 0.0,
-      "v_pipe_out": 0.974,
+      "v_pipe_out": 1.044,
       "segments": [
         {
           "direction": "通用",
@@ -132,7 +132,7 @@
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
-          "xi_calc": 0.2633,
+          "xi_calc": 0.2283,
           "locked": true,
           "segment_type": "出水口"
         }
@@ -140,7 +140,7 @@
       "plan_segments": [
         {
           "direction": "平面",
-          "length": 16.377,
+          "length": 14.468,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -162,7 +162,7 @@
         },
         {
           "direction": "平面",
-          "length": 17.033,
+          "length": 11.929,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -184,7 +184,7 @@
         },
         {
           "direction": "平面",
-          "length": 22.338,
+          "length": 15.058,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -206,7 +206,7 @@
         },
         {
           "direction": "平面",
-          "length": 41.637,
+          "length": 37.554,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -216,10 +216,10 @@
           "segment_type": "直管"
         }
       ],
-      "plan_total_length": 132.42699999999996,
+      "plan_total_length": 131.57100000000003,
       "plan_feature_points": [
         {
-          "chainage": 464.796,
+          "chainage": 461.874,
           "x": 649264.563,
           "y": 3377548.913,
           "azimuth": 0.0,
@@ -229,7 +229,7 @@
           "ip_index": 9
         },
         {
-          "chainage": 484.925,
+          "chainage": 481.969,
           "x": 649244.413,
           "y": 3377550.257,
           "azimuth": 0.0,
@@ -239,7 +239,7 @@
           "ip_index": 10
         },
         {
-          "chainage": 511.828,
+          "chainage": 508.702,
           "x": 649220.868,
           "y": 3377563.965,
           "azimuth": 0.0,
@@ -249,7 +249,7 @@
           "ip_index": 11
         },
         {
-          "chainage": 547.935,
+          "chainage": 544.414,
           "x": 649184.732,
           "y": 3377556.519,
           "azimuth": 0.0,
@@ -259,7 +259,7 @@
           "ip_index": 12
         },
         {
-          "chainage": 597.223,
+          "chainage": 593.445,
           "x": 649146.287,
           "y": 3377588.178,
           "azimuth": 0.0,
@@ -270,7 +270,7 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": 0.5711740348959381,
+      "total_head_loss": 0.5701788346166289,
       "diameter": 1.6,
       "calculated_at": "",
       "turn_n": 3.0,
@@ -288,10 +288,10 @@
       "outlet_type": "反弯扭曲面",
       "xi_inlet": 0.1,
       "xi_outlet": 0.2,
-      "v_channel_in": 0.974,
+      "v_channel_in": 1.044,
       "v_pipe_in": 1.9894,
       "v_channel_out": 0.0,
-      "v_pipe_out": 0.974,
+      "v_pipe_out": 1.044,
       "segments": [
         {
           "direction": "通用",
@@ -410,7 +410,7 @@
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
-          "xi_calc": 0.2633,
+          "xi_calc": 0.2283,
           "locked": true,
           "segment_type": "出水口"
         }
@@ -418,7 +418,7 @@
       "plan_segments": [
         {
           "direction": "平面",
-          "length": 13.672,
+          "length": 10.471,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -440,7 +440,7 @@
         },
         {
           "direction": "平面",
-          "length": 46.253,
+          "length": 41.633,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -462,7 +462,7 @@
         },
         {
           "direction": "平面",
-          "length": 49.899,
+          "length": 48.478,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -472,10 +472,10 @@
           "segment_type": "直管"
         }
       ],
-      "plan_total_length": 127.69999999999993,
+      "plan_total_length": 127.39599999999996,
       "plan_feature_points": [
         {
-          "chainage": 684.315,
+          "chainage": 680.537,
           "x": 649086.007,
           "y": 3377582.009,
           "azimuth": 0.0,
@@ -485,7 +485,7 @@
           "ip_index": 16
         },
         {
-          "chainage": 704.115,
+          "chainage": 700.199,
           "x": 649066.369,
           "y": 3377577.838,
           "azimuth": 0.0,
@@ -495,7 +495,7 @@
           "ip_index": 17
         },
         {
-          "chainage": 759.306,
+          "chainage": 755.239,
           "x": 649033.673,
           "y": 3377532.997,
           "azimuth": 0.0,
@@ -505,7 +505,7 @@
           "ip_index": 18
         },
         {
-          "chainage": 812.015,
+          "chainage": 807.933,
           "x": 649018.984,
           "y": 3377482.347,
           "azimuth": 0.0,
@@ -516,7 +516,7 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": 0.5016261257118763,
+      "total_head_loss": 0.4970644379583093,
       "diameter": 1.6,
       "calculated_at": "",
       "turn_n": 3.0,
@@ -534,7 +534,7 @@
       "outlet_type": "反弯扭曲面",
       "xi_inlet": 0.1,
       "xi_outlet": 0.2,
-      "v_channel_in": 0.974,
+      "v_channel_in": 1.044,
       "v_pipe_in": 1.9894,
       "v_channel_out": 0.0,
       "v_pipe_out": 1.088,
@@ -664,7 +664,7 @@
       "plan_segments": [
         {
           "direction": "平面",
-          "length": 18.621,
+          "length": 13.582,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -686,7 +686,7 @@
         },
         {
           "direction": "平面",
-          "length": 21.51,
+          "length": 14.157,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -708,7 +708,7 @@
         },
         {
           "direction": "平面",
-          "length": 44.088,
+          "length": 41.081,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -730,7 +730,7 @@
         },
         {
           "direction": "平面",
-          "length": 36.158,
+          "length": 31.891,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -752,7 +752,7 @@
         },
         {
           "direction": "平面",
-          "length": 15.302,
+          "length": 14.257,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -774,7 +774,7 @@
         },
         {
           "direction": "平面",
-          "length": 23.376,
+          "length": 16.492,
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
@@ -784,10 +784,10 @@
           "segment_type": "直管"
         }
       ],
-      "plan_total_length": 208.1199999999999,
+      "plan_total_length": 205.058,
       "plan_feature_points": [
         {
-          "chainage": 1047.574,
+          "chainage": 1043.434,
           "x": 648875.832,
           "y": 3377349.479,
           "azimuth": 0.0,
@@ -797,7 +797,7 @@
           "ip_index": 25
         },
         {
-          "chainage": 1075.4180000000001,
+          "chainage": 1070.85,
           "x": 648859.515,
           "y": 3377325.868,
           "azimuth": 0.0,
@@ -807,7 +807,7 @@
           "ip_index": 26
         },
         {
-          "chainage": 1110.664,
+          "chainage": 1105.611,
           "x": 648823.413,
           "y": 3377328.753,
           "azimuth": 0.0,
@@ -817,7 +817,7 @@
           "ip_index": 27
         },
         {
-          "chainage": 1160.647,
+          "chainage": 1155.535,
           "x": 648778.748,
           "y": 3377306.057,
           "azimuth": 0.0,
@@ -827,7 +827,7 @@
           "ip_index": 28
         },
         {
-          "chainage": 1204.967,
+          "chainage": 1199.67,
           "x": 648742.968,
           "y": 3377279.28,
           "azimuth": 0.0,
@@ -837,7 +837,7 @@
           "ip_index": 29
         },
         {
-          "chainage": 1220.269,
+          "chainage": 1213.927,
           "x": 648740.771,
           "y": 3377262.029,
           "azimuth": 0.0,
@@ -847,7 +847,7 @@
           "ip_index": 30
         },
         {
-          "chainage": 1255.694,
+          "chainage": 1248.492,
           "x": 648704.059,
           "y": 3377256.359,
           "azimuth": 0.0,
@@ -858,7 +858,7 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": 0.8950678753156902,
+      "total_head_loss": 0.8629640187392056,
       "diameter": 1.6,
       "calculated_at": "",
       "turn_n": 3.0,

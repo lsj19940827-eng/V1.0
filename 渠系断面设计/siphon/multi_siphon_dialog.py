@@ -68,7 +68,8 @@ class MultiSiphonDialog(QDialog):
     def __init__(self, parent, siphon_groups: List,
                  manager=None,
                  on_import_losses: Callable = None,
-                 siphon_turn_radius_n: float = 0.0):
+                 siphon_turn_radius_n: float = 0.0,
+                 auto_run: bool = False):
         """
         初始化窗口
 
@@ -84,6 +85,7 @@ class MultiSiphonDialog(QDialog):
         self.manager = manager
         self.on_import_losses = on_import_losses
         self._siphon_turn_radius_n = siphon_turn_radius_n
+        self.auto_run = auto_run
 
         # 面板字典 {倒虹吸名称: SiphonPanel}
         self.panels: Dict[str, SiphonPanel] = {}
@@ -91,6 +93,9 @@ class MultiSiphonDialog(QDialog):
         self._configure_window()
         self._create_ui()
         self._load_saved_data()
+
+        if auto_run:
+            QTimer.singleShot(0, self._calculate_all)
 
     def _configure_window(self):
         """配置窗口属性"""
@@ -734,7 +739,7 @@ class MultiSiphonDialog(QDialog):
             btn_none.clicked.connect(lambda: [cb.setChecked(False) for cb in check_vars])
             btn_lay.addWidget(btn_none)
 
-            btn_view = PrimaryPushButton("查看选中")
+            btn_view = PushButton("查看选中")
 
             def _view_selected():
                 selected = [
@@ -785,7 +790,10 @@ class MultiSiphonDialog(QDialog):
         btn_lay.addWidget(btn_close_return)
 
         lay.addLayout(btn_lay)
-        dlg.exec()
+        if self.auto_run:
+            self._on_close()
+        else:
+            dlg.exec()
 
     # ================================================================
     # 状态更新

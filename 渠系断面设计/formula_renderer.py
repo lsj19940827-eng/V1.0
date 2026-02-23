@@ -790,7 +790,7 @@ body {
 }
 .help-header { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #F0F0F0; }
 .help-title { font-size: 22px; font-weight: 700; color: #1976D2; margin-bottom: 6px; }
-.help-subtitle { font-size: 13px; color: #9E9E9E; }
+.help-subtitle { font-size: 13px; color: #555555; }
 .section-head {
     font-size: 15px; font-weight: 600; color: #1976D2;
     margin: 24px 0 10px 0; padding-left: 14px; position: relative;
@@ -825,7 +825,7 @@ body {
 }
 .num-content { flex: 1; }
 .num-main { color: #242424; }
-.num-sub { font-size: 13px; color: #757575; margin-top: 3px; }
+.num-sub { font-size: 13px; color: #424242; margin-top: 3px; }
 .bullet-list { margin: 6px 0 6px 4px; padding-left: 20px; }
 .bullet-list li {
     padding: 3px 0; color: #424242;

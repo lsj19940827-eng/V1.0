@@ -199,7 +199,7 @@ class SiphonPanel(QWidget):
         tb.addStretch()
 
         self.lbl_zoom = QLabel("100%")
-        self.lbl_zoom.setStyleSheet("color:#aaa;font-size:11px;background:transparent;border:none;")
+        self.lbl_zoom.setStyleSheet("color:#555555;font-size:11px;background:transparent;border:none;")
         tb.addWidget(self.lbl_zoom)
 
         for text, slot in [("＋", "_zoom_in"), ("－", "_zoom_out"),
@@ -221,13 +221,13 @@ class SiphonPanel(QWidget):
             self.canvas = None
             lbl = QLabel("管道可视化组件未加载")
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("color:#888;font-size:12px;background:transparent;border:none;")
+            lbl.setStyleSheet("color:#424242;font-size:12px;background:transparent;border:none;")
             lbl.setMinimumHeight(100)
             cl.addWidget(lbl)
 
         # 状态提示
         self.lbl_data_status = QLabel("")
-        self.lbl_data_status.setStyleSheet("color:#aaa;font-size:12px;background:transparent;border:none;")
+        self.lbl_data_status.setStyleSheet("color:#555555;font-size:12px;background:transparent;border:none;")
         cl.addWidget(self.lbl_data_status)
 
         parent_lay.addWidget(canvas_frame)
@@ -303,7 +303,7 @@ class SiphonPanel(QWidget):
         self.edit_v.textChanged.connect(self._on_Qv_changed)
         row1.addWidget(self.edit_v)
         self.lbl_v_hint = QLabel("(需输入)")
-        self.lbl_v_hint.setStyleSheet("color:#888888;font-size:12px;")
+        self.lbl_v_hint.setStyleSheet("color:#424242;font-size:12px;")
         row1.addWidget(self.lbl_v_hint)
         row1.addWidget(QLabel("糙率 n:"))
         self.edit_n = LineEdit(); self.edit_n.setText("0.014"); self.edit_n.setFixedWidth(60)
@@ -413,7 +413,7 @@ class SiphonPanel(QWidget):
         self.edit_v2.editingFinished.connect(self._validate_inlet_velocity)
         inlet_r2.addWidget(self.edit_v2)
         self.lbl_v2_hint = QLabel("(计算后自动填充: 管道流速)")
-        self.lbl_v2_hint.setStyleSheet("color:#888888;font-size:12px;")
+        self.lbl_v2_hint.setStyleSheet("color:#424242;font-size:12px;")
         inlet_r2.addWidget(self.lbl_v2_hint)
         inlet_r2.addStretch()
         lay.addLayout(inlet_r2)
@@ -451,7 +451,7 @@ class SiphonPanel(QWidget):
         self.edit_v_out = LineEdit(); self.edit_v_out.setPlaceholderText("计算后自动填充"); self.edit_v_out.setFixedWidth(70)
         outlet_r1.addWidget(self.edit_v_out)
         self.lbl_vout_hint = QLabel("(=管道流速，无需填写)")
-        self.lbl_vout_hint.setStyleSheet("color:#888888;font-size:12px;")
+        self.lbl_vout_hint.setStyleSheet("color:#424242;font-size:12px;")
         outlet_r1.addWidget(self.lbl_vout_hint)
         outlet_r1.addStretch()
         lay.addLayout(outlet_r1)
@@ -874,7 +874,7 @@ class SiphonPanel(QWidget):
                 chainage=item.get("chainage", 0.0),
                 x=item.get("x", 0.0),
                 y=item.get("y", 0.0),
-                azimuth=item.get("azimuth", 0.0),
+                azimuth_meas_deg=item.get("azimuth", 0.0),
                 turn_radius=item.get("turn_radius", 0.0),
                 turn_angle=item.get("turn_angle", 0.0),
                 turn_type=tt,
@@ -1383,7 +1383,7 @@ class SiphonPanel(QWidget):
             self.edit_v2.clear()
             self.edit_v2.setPlaceholderText("留空=管道流速")
             self.lbl_v2_hint.setText("(计算后自动填充: 管道流速)")
-            self.lbl_v2_hint.setStyleSheet("color:#888888;font-size:12px;")
+            self.lbl_v2_hint.setStyleSheet("color:#424242;font-size:12px;")
             self.lbl_v2_strategy_hint.setText("(推荐)")
             self.lbl_v2_strategy_hint.setStyleSheet("color:#00AA00;font-size:12px;")
         elif "v₁ + 0.2" in text:
@@ -1411,7 +1411,7 @@ class SiphonPanel(QWidget):
             if not self.edit_v2.text().strip():
                 self.edit_v2.setText("1.2")
             self.lbl_v2_hint.setText("(需输入)")
-            self.lbl_v2_hint.setStyleSheet("color:#888888;font-size:12px;")
+            self.lbl_v2_hint.setStyleSheet("color:#424242;font-size:12px;")
             self.lbl_v2_strategy_hint.setText("")
 
     def _open_v2_section_dialog(self, event=None):

@@ -128,9 +128,9 @@ HYDRAULIC_RESULT_COLUMNS = [
     {"id": "velocity_design", "text": "流速\nv设计", "width": 75},
 ]
 
-# 水头损失列（只读）
+# 水头损失列（只读，与 panel.py NODE_ALL_HEADERS 保持一致）
 HEAD_LOSS_COLUMNS = [
-    {"id": "transition_length", "text": "渐变段长度\nL", "width": 90},
+    {"id": "transition_length", "text": "渐变段长度L", "width": 90},
     {"id": "head_loss_transition", "text": "渐变段水头损失", "width": 110},
     {"id": "head_loss_bend", "text": "弯道水头损失", "width": 100},
     {"id": "head_loss_friction", "text": "沿程水头损失", "width": 100},
@@ -166,6 +166,7 @@ ANGLE_PRECISION = 9             # 角度小数位数
 LENGTH_PRECISION = 9            # 长度小数位数（内部计算精度）
 STATION_DISPLAY_PRECISION = 3   # 桩号显示小数位数
 ELEVATION_PRECISION = 3         # 高程小数位数
+HEAD_LOSS_PRECISION = 6         # 水头损失小数位数
 VELOCITY_PRECISION = 3          # 流速小数位数
 SLOPE_PRECISION = 6             # 坡度小数位数
 

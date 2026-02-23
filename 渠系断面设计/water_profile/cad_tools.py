@@ -425,7 +425,7 @@ class TextExportSettingsDialog(QDialog):
         scale_form.addWidget(QLabel("Y 方向 (1:N)，N ="), 1, 0)
         e = LineEdit(); e.setText(str(self._defaults['scale_y'])); e.setFixedWidth(100)
         scale_form.addWidget(e, 1, 1)
-        scale_form.addWidget(QLabel("如 1:100 则输入 100"), 1, 2)
+        scale_form.addWidget(QLabel("如 1:1000 则输入 1000"), 1, 2)
         self._entries['scale_y'] = e
         lay.addWidget(scale_grp)
 
@@ -2793,12 +2793,12 @@ class SectionSummaryDialog(QDialog):
             h_lay = QHBoxLayout(container)
             h_lay.setContentsMargins(0, 0, 0, 0)
             h_lay.setSpacing(3)
-            w_lbl = QLabel("宽"); w_lbl.setStyleSheet("font-size:10px; color:#888;")
+            w_lbl = QLabel("宽"); w_lbl.setStyleSheet("font-size:10px; color:#424242;")
             w_edit = LineEdit(); w_edit.setFixedWidth(55)
             w_edit.setText(str(default_w)); w_edit.setPlaceholderText(str(default_w))
             x_lbl = QLabel("×"); x_lbl.setFixedWidth(12)
             x_lbl.setStyleSheet("font-size:12px;")
-            h_lbl = QLabel("高"); h_lbl.setStyleSheet("font-size:10px; color:#888;")
+            h_lbl = QLabel("高"); h_lbl.setStyleSheet("font-size:10px; color:#424242;")
             h_edit = LineEdit(); h_edit.setFixedWidth(55)
             h_edit.setText(str(default_h)); h_edit.setPlaceholderText(str(default_h))
             h_lay.addWidget(w_lbl)

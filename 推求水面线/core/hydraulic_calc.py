@@ -18,7 +18,7 @@ from models.data_models import ChannelNode, ProjectSettings
 from models.enums import StructureType, InOutType
 from config.constants import (
     GRAVITY, ZERO_TOLERANCE, VELOCITY_PRECISION, 
-    ELEVATION_PRECISION, LOCAL_LOSS_COEFFICIENTS,
+    ELEVATION_PRECISION, HEAD_LOSS_PRECISION, LOCAL_LOSS_COEFFICIENTS,
     TRANSITION_ZETA_COEFFICIENTS, TRANSITION_TWISTED_ZETA_RANGE,
     TRANSITION_LENGTH_COEFFICIENTS, TRANSITION_LENGTH_CONSTRAINTS
 )
@@ -127,7 +127,204 @@ class HydraulicCalculator:
         cos_arg = max(-1.0, min(1.0, (r - h) / r))
         theta = 2 * math.acos(cos_arg)
         return r * theta
-    
+
+    # 马蹄形标准参数（与隧洞设计.py保持一致）
+    _HORSESHOE_PARAMS = {
+        1: (3.0, 0.294515, 0.201996),   # Ⅰ型: t, theta, c
+        2: (2.0, 0.424031, 0.436624),   # Ⅱ型: t, theta, c
+    }
+
+    def _horseshoe_std_area(self, section_type: int, r: float, h: float) -> float:
+        """马蹄形标准断面过水面积（真实公式，非圆形近似）"""
+        try:
+            t, theta, c = self._HORSESHOE_PARAMS[section_type]
+        except KeyError:
+            return self._circular_area(2 * r, h)
+        R_arch = t * r
+        e = R_arch * (1 - math.cos(theta))
+        h = min(max(h, 0.0), 2 * r)
+        if h <= 0:
+            return 0.0
+        if h <= e:
+            cos_val = max(-1.0, min(1.0, 1 - h / R_arch))
+            beta = math.acos(cos_val)
+            return R_arch ** 2 * (beta - 0.5 * math.sin(2 * beta))
+        elif h <= r:
+            sin_val = max(-1.0, min(1.0, (1 - h / r) / t))
+            alpha = math.asin(sin_val)
+            return R_arch ** 2 * (c - alpha - 0.5 * math.sin(2 * alpha)
+                                  + ((2 * t - 2) / t) * math.sin(alpha))
+        else:
+            cos_val = max(-1.0, min(1.0, h / r - 1))
+            phi_half = math.acos(cos_val)
+            phi = 2 * phi_half
+            return r ** 2 * (t ** 2 * c + 0.5 * (math.pi - phi + math.sin(phi)))
+
+    def _horseshoe_std_perimeter(self, section_type: int, r: float, h: float) -> float:
+        """马蹄形标准断面湿周（真实公式，非圆形近似）"""
+        try:
+            t, theta, c = self._HORSESHOE_PARAMS[section_type]
+        except KeyError:
+            return self._circular_perimeter(2 * r, h)
+        R_arch = t * r
+        e = R_arch * (1 - math.cos(theta))
+        h = min(max(h, 0.0), 2 * r)
+        if h <= 0:
+            return 0.0
+        if h <= e:
+            cos_val = max(-1.0, min(1.0, 1 - h / R_arch))
+            beta = math.acos(cos_val)
+            return 2 * R_arch * beta
+        elif h <= r:
+            sin_val = max(-1.0, min(1.0, (1 - h / r) / t))
+            alpha = math.asin(sin_val)
+            return 2 * t * r * (2 * theta - alpha)
+        else:
+            cos_val = max(-1.0, min(1.0, h / r - 1))
+            phi_half = math.acos(cos_val)
+            phi = 2 * phi_half
+            return 4 * t * r * theta + r * (math.pi - phi)
+
+    def _horseshoe_std_surface_width(self, section_type: int, r: float, h: float) -> float:
+        """马蹄形标准断面水面宽度（精确几何公式）"""
+        try:
+            t, theta, c = self._HORSESHOE_PARAMS[section_type]
+        except KeyError:
+            rr = r
+            if h <= 0 or h > 2 * rr:
+                return 0.0
+            return 2 * math.sqrt(max(0.0, rr * rr - (rr - h) ** 2))
+        R_arch = t * r
+        e = R_arch * (1 - math.cos(theta))
+        h = min(max(h, 0.0), 2 * r)
+        if h <= 0:
+            return 0.0
+        if h <= e:
+            cos_val = max(-1.0, min(1.0, 1 - h / R_arch))
+            beta = math.acos(cos_val)
+            return 2 * R_arch * math.sin(beta)
+        elif h <= r:
+            sin_val = max(-1.0, min(1.0, (1 - h / r) / t))
+            alpha = math.asin(sin_val)
+            return 2 * r * (t * math.cos(alpha) - t + 1)
+        else:
+            cos_val = max(-1.0, min(1.0, h / r - 1))
+            phi_half = math.acos(cos_val)
+            return 2 * r * math.sin(phi_half)
+
+    def _horseshoe_section_type(self, sv: str) -> int:
+        """从结构类型字符串解析马蹄形型号（1=Ⅰ型，2=Ⅱ型）"""
+        if 'Ⅱ' in sv or 'II' in sv or '2' in sv:
+            return 2
+        return 1
+
+    def _arch_tunnel_area(self, B: float, H_total: float, theta_rad: float, h: float) -> float:
+        """圆拱直墙型过水面积（真实公式，与隧洞设计.py一致）"""
+        if B <= 0 or H_total <= 0 or h <= 0 or theta_rad <= 0:
+            return 0.0
+        sin_half = math.sin(theta_rad / 2)
+        if abs(sin_half) < 1e-9:
+            return 0.0
+        R_arch = (B / 2) / sin_half
+        H_arch = R_arch * (1 - math.cos(theta_rad / 2))
+        H_straight = max(0.0, H_total - H_arch)
+        calc_depth = min(h, H_total)
+        if calc_depth <= H_straight:
+            return B * calc_depth
+        Area_rect = B * H_straight
+        h_in_arch = calc_depth - H_straight
+        if h_in_arch >= H_arch - 1e-9:
+            return Area_rect + (R_arch ** 2 / 2) * (theta_rad - math.sin(theta_rad))
+        Area_arch_total = (R_arch ** 2 / 2) * (theta_rad - math.sin(theta_rad))
+        h_dry = H_arch - h_in_arch
+        d_temp = R_arch - h_dry
+        acos_arg = max(-1.0, min(1.0, d_temp / R_arch))
+        alpha_temp = math.acos(acos_arg)
+        Area_dry = R_arch ** 2 * alpha_temp - d_temp * math.sqrt(max(0.0, R_arch ** 2 - d_temp ** 2))
+        return Area_rect + Area_arch_total - Area_dry
+
+    def _arch_tunnel_perimeter(self, B: float, H_total: float, theta_rad: float, h: float) -> float:
+        """圆拱直墙型湿周（真实公式，与隧洞设计.py一致）"""
+        if B <= 0 or H_total <= 0 or h <= 0 or theta_rad <= 0:
+            return 0.0
+        sin_half = math.sin(theta_rad / 2)
+        if abs(sin_half) < 1e-9:
+            return 0.0
+        R_arch = (B / 2) / sin_half
+        H_arch = R_arch * (1 - math.cos(theta_rad / 2))
+        H_straight = max(0.0, H_total - H_arch)
+        calc_depth = min(h, H_total)
+        if calc_depth <= H_straight:
+            return B + 2 * calc_depth
+        h_in_arch = calc_depth - H_straight
+        if h_in_arch >= H_arch - 1e-9:
+            return B + 2 * H_straight + R_arch * theta_rad
+        Total_Arc = R_arch * theta_rad
+        h_dry = H_arch - h_in_arch
+        d_temp = R_arch - h_dry
+        acos_arg = max(-1.0, min(1.0, d_temp / R_arch))
+        alpha_temp = math.acos(acos_arg)
+        L_dry = 2 * R_arch * alpha_temp
+        return B + 2 * H_straight + Total_Arc - L_dry
+
+    def _arch_tunnel_surface_width(self, B: float, H_total: float, theta_rad: float, h: float) -> float:
+        """圆拱直墙型水面宽度
+        - h <= H_straight: 矩形段，B = 底宽（常数）
+        - h > H_straight: 拱部，宽度随水深增加而收窄
+        """
+        if B <= 0 or H_total <= 0 or theta_rad <= 0:
+            return B
+        sin_half = math.sin(theta_rad / 2)
+        if abs(sin_half) < 1e-9:
+            return B
+        R_arch = (B / 2) / sin_half
+        H_arch = R_arch * (1 - math.cos(theta_rad / 2))
+        H_straight = max(0.0, H_total - H_arch)
+        h = min(h, H_total)
+        if h <= H_straight:
+            return B
+        delta_h = h - H_straight
+        cos_half = math.cos(theta_rad / 2)
+        val = R_arch ** 2 - (delta_h + R_arch * cos_half) ** 2
+        return 2 * math.sqrt(max(0.0, val))
+
+    def _rect_chamfer_area(self, b: float, h: float, chamfer_angle_deg: float, chamfer_length: float) -> float:
+        """带倒角矩形断面过水面积（与渡槽设计.py公式完全一致）"""
+        if chamfer_angle_deg <= 0 or chamfer_length <= 0:
+            return b * h
+        chamfer_height = chamfer_length * math.tan(math.radians(chamfer_angle_deg))
+        if chamfer_height <= 0:
+            return b * h
+        if h >= chamfer_height:
+            return b * h - chamfer_length * chamfer_height
+        else:
+            return b * h - 2 * chamfer_length * h + chamfer_length * h ** 2 / chamfer_height
+
+    def _rect_chamfer_perimeter(self, b: float, h: float, chamfer_angle_deg: float, chamfer_length: float) -> float:
+        """带倒角矩形断面湿周（与渡槽设计.py公式完全一致）"""
+        if chamfer_angle_deg <= 0 or chamfer_length <= 0:
+            return b + 2 * h
+        chamfer_height = chamfer_length * math.tan(math.radians(chamfer_angle_deg))
+        chamfer_hypotenuse = chamfer_length / math.cos(math.radians(chamfer_angle_deg))
+        if chamfer_height <= 0:
+            return b + 2 * h
+        if h >= chamfer_height:
+            return (b + 2 * h) - 2 * (chamfer_length + chamfer_height) + 2 * chamfer_hypotenuse
+        else:
+            return (b - 2 * chamfer_length) + 2 * (h / chamfer_height) * chamfer_hypotenuse
+
+    def _rect_chamfer_surface_width(self, b: float, h: float, chamfer_angle_deg: float, chamfer_length: float) -> float:
+        """带倒角矩形断面水面宽度
+        - h >= chamfer_height: 水面在矩形区，宽度 = b
+        - h < chamfer_height:  水面在倒角区，宽度 = b - 2*cl*(1 - h/ch)
+        """
+        if chamfer_angle_deg <= 0 or chamfer_length <= 0:
+            return b
+        chamfer_height = chamfer_length * math.tan(math.radians(chamfer_angle_deg))
+        if chamfer_height <= 0 or h >= chamfer_height:
+            return b
+        return b - 2 * chamfer_length * (1 - h / chamfer_height)
+
     def get_cross_section_area(self, node: ChannelNode) -> float:
         """
         计算过水断面面积
@@ -137,7 +334,7 @@ class HydraulicCalculator:
         - 梯形：明渠-梯形
         - 圆形类：明渠-圆形、隧洞-圆形、倒虹吸
         - U形渡槽：半圆底 + 矩形上部
-        - 马蹄形隧洞：近似圆形（D = 2R）
+        - 马蹄形隧洞：标准Ⅰ/Ⅱ型真实公式
         
         注意：使用 .value 字符串比较而非 enum 对象比较，
         避免双路径导入(models.enums vs 推求水面线.models.enums)导致的类不匹配。
@@ -160,11 +357,25 @@ class HydraulicCalculator:
         if h <= 0:
             return 0.0
         
-        # 矩形类：明渠-矩形、渡槽-矩形、矩形暗涵、隧洞-圆拱直墙型
-        if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵", "隧洞-圆拱直墙型"):
+        # 矩形类：明渠-矩形、渡槽-矩形、矩形暗涵
+        if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵"):
             b = self._get_bottom_width(params)
+            if sv == "渡槽-矩形":
+                ca = params.get('chamfer_angle', 0) or 0
+                cl = params.get('chamfer_length', 0) or 0
+                if ca > 0 and cl > 0:
+                    return self._rect_chamfer_area(b, h, ca, cl)
             return b * h
-        
+
+        # 隧洞-圆拱直墙型：使用真实圆弧公式（需 H_total 和 theta_deg 参数）
+        elif sv == "隧洞-圆拱直墙型":
+            b = self._get_bottom_width(params)
+            H_total = params.get('H_total', 0) or 0
+            theta_deg = params.get('theta_deg', 0) or 0
+            if b > 0 and H_total > 0 and theta_deg > 0:
+                return self._arch_tunnel_area(b, H_total, math.radians(theta_deg), h)
+            return b * h  # 退化为矩形近似（参数不足时）
+
         # 梯形：明渠-梯形
         elif sv == "明渠-梯形":
             b = self._get_bottom_width(params)
@@ -190,11 +401,12 @@ class HydraulicCalculator:
                     return A_semi + A_rect
             return params.get('A', params.get('面积', 0))
         
-        # 马蹄形隧洞：近似圆形（D = 2R）
+        # 马蹄形隧洞：使用真实马蹄形公式
         elif "马蹄形" in sv:
             R = self._get_radius(params)
             if R > 0:
-                return self._circular_area(2 * R, h)
+                stype = self._horseshoe_section_type(sv)
+                return self._horseshoe_std_area(stype, R, h)
             return params.get('A', params.get('面积', 0))
         
         else:
@@ -225,11 +437,25 @@ class HydraulicCalculator:
         if h <= 0:
             return 0.0
         
-        # 矩形类：明渠-矩形、渡槽-矩形、矩形暗涵、隧洞-圆拱直墙型
-        if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵", "隧洞-圆拱直墙型"):
+        # 矩形类：明渠-矩形、渡槽-矩形、矩形暗涵
+        if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵"):
             b = self._get_bottom_width(params)
+            if sv == "渡槽-矩形":
+                ca = params.get('chamfer_angle', 0) or 0
+                cl = params.get('chamfer_length', 0) or 0
+                if ca > 0 and cl > 0:
+                    return self._rect_chamfer_perimeter(b, h, ca, cl)
             return b + 2 * h
-        
+
+        # 隧洞-圆拱直墙型：使用真实圆弧公式
+        elif sv == "隧洞-圆拱直墙型":
+            b = self._get_bottom_width(params)
+            H_total = params.get('H_total', 0) or 0
+            theta_deg = params.get('theta_deg', 0) or 0
+            if b > 0 and H_total > 0 and theta_deg > 0:
+                return self._arch_tunnel_perimeter(b, H_total, math.radians(theta_deg), h)
+            return b + 2 * h  # 退化为矩形近似（参数不足时）
+
         # 梯形：明渠-梯形
         elif sv == "明渠-梯形":
             b = self._get_bottom_width(params)
@@ -255,11 +481,12 @@ class HydraulicCalculator:
                     return P_semi + P_rect
             return params.get('X', params.get('湿周', params.get('P', 0)))
         
-        # 马蹄形隧洞：近似圆形（D = 2R）
+        # 马蹄形隧洞：使用真实马蹄形公式
         elif "马蹄形" in sv:
             R = self._get_radius(params)
             if R > 0:
-                return self._circular_perimeter(2 * R, h)
+                stype = self._horseshoe_section_type(sv)
+                return self._horseshoe_std_perimeter(stype, R, h)
             return params.get('X', params.get('湿周', params.get('P', 0)))
         
         else:
@@ -553,10 +780,10 @@ class HydraulicCalculator:
                 'method': 'slope',
                 'slope_i': slope_i,
                 'L_effective': effective_length,
-                'hf': round(hf, ELEVATION_PRECISION)
+                'hf': round(hf, HEAD_LOSS_PRECISION)
             }
             
-            return round(hf, ELEVATION_PRECISION)
+            return round(hf, HEAD_LOSS_PRECISION)
         else:
             # 底坡缺失时，回退到曼宁公式
             return self._calculate_friction_loss_manning(node1, node2, effective_length)
@@ -600,10 +827,10 @@ class HydraulicCalculator:
             'J2': J2,
             'J_avg': J_avg,
             'L': length,
-            'hf': round(hf, ELEVATION_PRECISION)
+            'hf': round(hf, HEAD_LOSS_PRECISION)
         }
         
-        return round(hf, ELEVATION_PRECISION)
+        return round(hf, HEAD_LOSS_PRECISION)
     
     def calculate_local_loss(self, node: ChannelNode) -> float:
         """
@@ -637,7 +864,10 @@ class HydraulicCalculator:
         
         if structure_name in LOCAL_LOSS_COEFFICIENTS:
             coeffs = LOCAL_LOSS_COEFFICIENTS[structure_name]
-            
+        else:
+            coeffs = None
+        
+        if coeffs is not None:
             io_val = node.in_out.value if node.in_out else ""
             if io_val == "进":
                 zeta = coeffs.get("进口", 0.0)
@@ -648,7 +878,7 @@ class HydraulicCalculator:
             
             v = node.velocity
             hj = zeta * v * v / (2 * GRAVITY)
-            return round(hj, ELEVATION_PRECISION)
+            return round(hj, HEAD_LOSS_PRECISION)
         
         return 0.0
     
@@ -714,32 +944,56 @@ class HydraulicCalculator:
                 B = D  # 满流时水面宽度为直径
         else:
             # 检查是否只有半径参数（马蹄形隧洞、U形渡槽等）
-            # 这些断面类型存储的是"半径"而非"底宽"或"直径"
             R_circle = node.section_params.get('R_circle', node.section_params.get('半径', node.section_params.get('内半径', node.section_params.get('r', 0))))
+            sv_bend = node.structure_type.value if node.structure_type else ""
             if R_circle > ZERO_TOLERANCE:
-                # 对于马蹄形等断面，底宽 = 2 × 半径
-                b = 2 * R_circle
+                if "马蹄形" in sv_bend:
+                    stype = self._horseshoe_section_type(sv_bend)
+                    B = self._horseshoe_std_surface_width(stype, R_circle, h)
+                elif "渡槽-U形" in sv_bend:
+                    if h <= R_circle:
+                        B = 2 * math.sqrt(max(0.0, R_circle * R_circle - (R_circle - h) ** 2))
+                    else:
+                        B = 2 * R_circle
+                else:
+                    b = 2 * R_circle
+                    m = node.section_params.get('m', node.section_params.get('边坡系数', node.section_params.get('边坡', 0)))
+                    B = b + 2 * m * h
             else:
                 b = node.section_params.get('B', node.section_params.get('底宽', node.section_params.get('b', 0)))
-            
-            m = node.section_params.get('m', node.section_params.get('边坡系数', node.section_params.get('边坡', 0)))
-            # 梯形/矩形断面: B = b + 2mh
-            B = b + 2 * m * h
-            
+                if "圆拱直墙" in sv_bend and b > 0:
+                    H_total = node.section_params.get('H_total', 0) or 0
+                    theta_deg = node.section_params.get('theta_deg', 0) or 0
+                    if H_total > 0 and theta_deg > 0:
+                        B = self._arch_tunnel_surface_width(b, H_total, math.radians(theta_deg), h)
+                    else:
+                        B = b
+                elif sv_bend == "渡槽-矩形" and b > 0:
+                    ca = node.section_params.get('chamfer_angle', 0) or 0
+                    cl = node.section_params.get('chamfer_length', 0) or 0
+                    if ca > 0 and cl > 0:
+                        B = self._rect_chamfer_surface_width(b, h, ca, cl)
+                    else:
+                        B = b
+                else:
+                    m = node.section_params.get('m', node.section_params.get('边坡系数', node.section_params.get('边坡', 0)))
+                    B = b + 2 * m * h
+
             # 兜底：当底宽缺失导致B为0时，尝试从过水断面面积A反算
             # 公式推导：A = (b+mh)*h → b+mh = A/h → B = b+2mh = A/h + mh
             if B <= ZERO_TOLERANCE:
+                m = node.section_params.get('m', node.section_params.get('边坡系数', node.section_params.get('边坡', 0)))
                 A = node.section_params.get('A', node.section_params.get('面积', 0))
                 if A > ZERO_TOLERANCE and h > ZERO_TOLERANCE:
                     B = A / h + m * h
-        
+
         if B <= ZERO_TOLERANCE:
             return 0.0
-        
+
         # 计算弯道水头损失
         # h_w = (n² × L × v²) / R^(4/3) × (3/4) × √(B / R_c)
         hw = (n ** 2 * L * v ** 2) / (R ** (4.0 / 3.0)) * 0.75 * math.sqrt(B / Rc)
-        
+
         # 保存计算详情（用于双击展示）
         node.bend_calc_details = {
             'n': n,
@@ -748,10 +1002,10 @@ class HydraulicCalculator:
             'R': R,
             'Rc': Rc,
             'B': B,
-            'hw': round(hw, ELEVATION_PRECISION)
+            'hw': round(hw, HEAD_LOSS_PRECISION)
         }
-        
-        return round(hw, ELEVATION_PRECISION)
+
+        return round(hw, HEAD_LOSS_PRECISION)
     
     def calculate_water_profile(self, nodes: List[ChannelNode], 
                                 method: str = "backward") -> None:
@@ -1127,7 +1381,7 @@ class HydraulicCalculator:
         Returns:
             渐变段损失估算值（m）
         """
-        from config.constants import TRANSITION_ZETA_COEFFICIENTS, TRANSITION_LENGTH_COEFFICIENTS, ZERO_TOLERANCE, GRAVITY, ELEVATION_PRECISION
+        from config.constants import TRANSITION_ZETA_COEFFICIENTS, TRANSITION_LENGTH_COEFFICIENTS, ZERO_TOLERANCE, GRAVITY, HEAD_LOSS_PRECISION
         
         # 获取流速
         v1 = prev_node.velocity if prev_node.velocity > 0 else 0
@@ -1181,7 +1435,7 @@ class HydraulicCalculator:
         else:
             h_f = 0.0
         
-        return round(h_j1 + h_f, ELEVATION_PRECISION)
+        return round(h_j1 + h_f, HEAD_LOSS_PRECISION)
     
     def _calculate_backward(self, nodes: List[ChannelNode]) -> None:
         """
@@ -1233,19 +1487,36 @@ class HydraulicCalculator:
                 B = D
             return B
         
+        sv = node.structure_type.value if node.structure_type else ""
+
         # 检查是否只有半径参数（马蹄形隧洞、U形渡槽等）
-        # 这些断面类型存储的是"半径"而非"底宽"或"直径"
-        # 需要将半径换算为底宽：底宽 = 2 × 半径
         R_circle = params.get('R_circle', params.get('半径', params.get('内半径', params.get('r', 0))))
         if R_circle > ZERO_TOLERANCE:
-            # 对于马蹄形等断面，底宽 = 2 × 半径
+            if "马蹄形" in sv:
+                stype = self._horseshoe_section_type(sv)
+                return self._horseshoe_std_surface_width(stype, R_circle, h)
+            elif "渡槽-U形" in sv:
+                if h <= R_circle:
+                    return 2 * math.sqrt(max(0.0, R_circle * R_circle - (R_circle - h) ** 2))
+                else:
+                    return 2 * R_circle
+            # 其他只有半径参数的断面：底宽 = 2 × 半径
             b = 2 * R_circle
         else:
-            # 梯形/矩形断面，直接获取底宽
             b = params.get('B', params.get('底宽', params.get('b', 0)))
-        
+            if "圆拱直墙" in sv and b > 0:
+                H_total = params.get('H_total', 0) or 0
+                theta_deg = params.get('theta_deg', 0) or 0
+                if H_total > 0 and theta_deg > 0:
+                    return self._arch_tunnel_surface_width(b, H_total, math.radians(theta_deg), h)
+            if sv == "渡槽-矩形" and b > 0:
+                ca = params.get('chamfer_angle', 0) or 0
+                cl = params.get('chamfer_length', 0) or 0
+                if ca > 0 and cl > 0:
+                    return self._rect_chamfer_surface_width(b, h, ca, cl)
+
         m = params.get('m', params.get('边坡系数', params.get('边坡', 0)))
-        
+
         B = b + 2 * m * h
         return B
     
@@ -1551,7 +1822,7 @@ class HydraulicCalculator:
         # 沿程损失
         h_f = i * length
         
-        return round(h_f, ELEVATION_PRECISION)
+        return round(h_f, HEAD_LOSS_PRECISION)
     
     def calculate_transition_loss(self, transition_node: ChannelNode,
                                   prev_node: ChannelNode,
@@ -1591,7 +1862,7 @@ class HydraulicCalculator:
         
         # 4. 计算局部水头损失: h_j1 = ξ × |v₂² - v₁²| / (2g)
         h_j1 = zeta * abs(v2 * v2 - v1 * v1) / (2 * GRAVITY)
-        h_j1 = round(h_j1, ELEVATION_PRECISION)
+        h_j1 = round(h_j1, HEAD_LOSS_PRECISION)
         transition_node.transition_head_loss_local = h_j1
         
         # 5. 计算沿程水头损失（使用平均值法）
@@ -1602,7 +1873,7 @@ class HydraulicCalculator:
         
         # 6. 总损失
         total_loss = h_j1 + h_f
-        transition_node.head_loss_transition = round(total_loss, ELEVATION_PRECISION)
+        transition_node.head_loss_transition = round(total_loss, HEAD_LOSS_PRECISION)
         
         # 7. 记录计算详细过程（用于LaTeX显示）
         transition_node.transition_calc_details = {
@@ -1708,7 +1979,7 @@ class HydraulicCalculator:
         
         # 6. 计算局部水头损失: h_j1 = ξ × |v₂² - v₁²| / (2g)
         h_j1 = zeta * abs(v2 * v2 - v1 * v1) / (2 * GRAVITY)
-        h_j1 = round(h_j1, ELEVATION_PRECISION)
+        h_j1 = round(h_j1, HEAD_LOSS_PRECISION)
         
         # 7. 计算沿程水头损失（平均值法）
         # 获取水力半径
@@ -1733,10 +2004,10 @@ class HydraulicCalculator:
             i = 0.0
         
         h_f = i * length
-        h_f = round(h_f, ELEVATION_PRECISION)
+        h_f = round(h_f, HEAD_LOSS_PRECISION)
         
         # 8. 总损失
-        total_loss = round(h_j1 + h_f, ELEVATION_PRECISION)
+        total_loss = round(h_j1 + h_f, HEAD_LOSS_PRECISION)
         
         # 9. 构建详细计算信息
         details = {

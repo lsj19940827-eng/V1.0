@@ -949,7 +949,7 @@ class PipelineCanvas(QWidget):
         cx, cy = 0.0, 0.0
         az = 0.0
         idx = 0
-        coords.append(PlanFeaturePoint(x=cx, y=cy, azimuth=math.degrees(az),
+        coords.append(PlanFeaturePoint(x=cx, y=cy, azimuth_meas_deg=math.degrees(az),
                                         ip_index=idx, chainage=0.0))
         cum_len = 0.0
         for seg in self._plan_segments:
@@ -959,7 +959,7 @@ class PipelineCanvas(QWidget):
                 cy += length * math.sin(az)
                 cum_len += length
                 idx += 1
-                coords.append(PlanFeaturePoint(x=cx, y=cy, azimuth=math.degrees(az),
+                coords.append(PlanFeaturePoint(x=cx, y=cy, azimuth_meas_deg=math.degrees(az),
                                                 ip_index=idx, chainage=cum_len))
             elif seg.segment_type == SegmentType.BEND:
                 angle_rad = math.radians(seg.angle) if seg.angle else 0
@@ -969,7 +969,7 @@ class PipelineCanvas(QWidget):
                 cum_len += length
                 idx += 1
                 coords.append(PlanFeaturePoint(
-                    x=cx, y=cy, azimuth=math.degrees(az),
+                    x=cx, y=cy, azimuth_meas_deg=math.degrees(az),
                     turn_angle=seg.angle, turn_radius=seg.radius,
                     turn_type=TurnType.ARC if seg.radius > 0 else TurnType.FOLD,
                     ip_index=idx, chainage=cum_len))

@@ -848,6 +848,7 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
         Beta_designed = round(Beta_designed, 3)  # 宽深比保留3位小数
 
         result['success'] = True
+        result['m'] = m
         result['b_design'] = b_designed
         result['h_design'] = h_designed
         result['V_design'] = V_designed

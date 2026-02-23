@@ -208,7 +208,7 @@ class BuildingLengthDialog(QDialog):
         )
         detail_lay.addWidget(self.lbl_total)
         lbl_basis = QLabel("统计口径：按桩号差统计；渐变段单列；自动插入明渠计入对应类型")
-        lbl_basis.setStyleSheet("color: #94A3B8; font-size: 9pt; padding-left: 2px;")
+        lbl_basis.setStyleSheet("color: #4A5568; font-size: 9pt; padding-left: 2px;")
         detail_lay.addWidget(lbl_basis)
         self.tab_widget.addTab(tab_detail, "建筑物长度明细")
 
@@ -1242,7 +1242,7 @@ class TurnRadiusCalcDialog(QDialog):
         )
         result_box.addWidget(val_lbl)
         sub_lbl = QLabel("推荐转弯半径（向上取整）")
-        sub_lbl.setStyleSheet("font-size: 12px; color: #757575;")
+        sub_lbl.setStyleSheet("font-size: 12px; color: #424242;")
         result_box.addWidget(sub_lbl)
         top.addLayout(result_box)
         top.addStretch()
@@ -1329,7 +1329,7 @@ class TurnRadiusCalcDialog(QDialog):
             lay.addWidget(tbl, 1)
         else:
             no_data = QLabel("未找到有效建筑物节点，使用默认转弯半径。")
-            no_data.setStyleSheet("font-size: 13px; color: #757575; padding: 20px;")
+            no_data.setStyleSheet("font-size: 13px; color: #424242; padding: 20px;")
             no_data.setAlignment(Qt.AlignCenter)
             lay.addWidget(no_data)
 
@@ -1365,7 +1365,7 @@ class TurnRadiusCalcDialog(QDialog):
         )
         ref_lay.addWidget(note)
         src = QLabel("——《灌溉与排水工程设计标准》(GB 50288)")
-        src.setStyleSheet("font-size: 11px; color: #9E9E9E; font-weight: normal;")
+        src.setStyleSheet("font-size: 11px; color: #555555; font-weight: normal;")
         src.setAlignment(Qt.AlignRight)
         ref_lay.addWidget(src)
         lay.addWidget(ref_grp)

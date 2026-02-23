@@ -355,7 +355,7 @@ class SiphonRoughnessChipContainer(QWidget):
 
         # 占位文字（无数据时显示）
         self._placeholder = QLabel("导入后自动显示")
-        self._placeholder.setStyleSheet("color: #999; font-size: 12px;")
+        self._placeholder.setStyleSheet("color: #555555; font-size: 12px;")
         lay.addWidget(self._placeholder)
 
         # 按钮（有数据时显示）
@@ -375,6 +375,7 @@ class SiphonRoughnessChipContainer(QWidget):
             "}"
         )
         self._btn.clicked.connect(self._show_popover)
+        self._btn.enterEvent = lambda e: self._show_popover()
         self._btn.setVisible(False)
         lay.addWidget(self._btn)
 
@@ -396,13 +397,8 @@ class SiphonRoughnessChipContainer(QWidget):
         if not self._pairs:
             return
 
-        # 若已有弹窗则关闭（toggle）
+        # 已有弹窗时不重复创建
         if hasattr(self, '_popup_win') and self._popup_win is not None:
-            try:
-                self._popup_win.close()
-            except RuntimeError:
-                pass
-            self._popup_win = None
             return
 
         primary = self._PRIMARY
@@ -415,10 +411,12 @@ class SiphonRoughnessChipContainer(QWidget):
         popup = _PopupCard(None)
         popup.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         popup.setAttribute(Qt.WA_DeleteOnClose)
-        popup.setAttribute(Qt.WA_TranslucentBackground)
         popup.setStyleSheet(
-            "QFrame { background: white; border: 1px solid #D0D0D0;"
-            "  border-radius: 10px; }"
+            "QFrame {"
+            "  background: white;"
+            "  border: 1px solid #E8ECF0;"
+            "  border-radius: 12px;"
+            "}"
         )
 
         def _on_destroyed():
@@ -435,20 +433,22 @@ class SiphonRoughnessChipContainer(QWidget):
         header = QFrame()
         header.setObjectName("popoverHeader")
         header.setStyleSheet(
-            "QFrame#popoverHeader { background: #F8FAFC;"
-            "  border-top-left-radius: 10px; border-top-right-radius: 10px;"
-            "  border-bottom: 1px solid #E2E8F0; }"
+            "QFrame#popoverHeader {"
+            "  background: white;"
+            "  border-top-left-radius: 12px; border-top-right-radius: 12px;"
+            "  border-bottom: 1px solid #F0F4F8;"
+            "}"
         )
         header_lay = QHBoxLayout(header)
-        header_lay.setContentsMargins(14, 10, 14, 8)
-        header_lay.setSpacing(6)
-        icon_lbl = QLabel("●")
-        icon_lbl.setStyleSheet(f"color: {primary}; font-size: 10px;"
-                               " background: transparent;")
-        header_lay.addWidget(icon_lbl)
+        header_lay.setContentsMargins(14, 11, 14, 9)
+        header_lay.setSpacing(7)
+        dot_lbl = QLabel("●")
+        dot_lbl.setStyleSheet(f"color: {primary}; font-size: 8px; background: transparent;")
+        header_lay.addWidget(dot_lbl)
         title = QLabel("倒虹吸糙率详情")
-        title.setStyleSheet("font-size: 13px; font-weight: bold; color: #1A1A2E;"
-                            " background: transparent;")
+        title.setStyleSheet(
+            "font-size: 13px; font-weight: 600; color: #2D3748; background: transparent;"
+        )
         header_lay.addWidget(title)
         header_lay.addStretch()
         card_lay.addWidget(header)
@@ -457,32 +457,46 @@ class SiphonRoughnessChipContainer(QWidget):
         for i, (name, n_val) in enumerate(self._pairs):
             row_w = QWidget()
             is_last = (i == len(self._pairs) - 1)
-            if is_last:
-                row_w.setStyleSheet(
-                    "QWidget { border-bottom-left-radius: 10px;"
-                    "  border-bottom-right-radius: 10px; }"
-                    "QWidget:hover { background: #F8FAFC; }"
-                )
-            else:
-                row_w.setStyleSheet("QWidget:hover { background: #F8FAFC; }")
+            radius_style = (
+                "  border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;"
+                if is_last else ""
+            )
+            row_w.setStyleSheet(
+                f"QWidget {{ background: white;{radius_style} }}"
+                "QWidget:hover { background: #F7FAFC; }"
+            )
             row_lay = QHBoxLayout(row_w)
-            row_lay.setContentsMargins(14, 7, 14, 7)
-            row_lay.setSpacing(12)
+            row_lay.setContentsMargins(14, 8, 14, 8)
+            row_lay.setSpacing(16)
+
             lbl_name = QLabel(name)
-            lbl_name.setStyleSheet("font-size: 12px; color: #334155;")
-            lbl_val = QLabel(f"n = {n_val}")
-            lbl_val.setStyleSheet(f"font-size: 12px; color: {primary};"
-                                  " font-weight: 600;")
+            lbl_name.setStyleSheet("font-size: 12px; color: #4A5568; background: transparent;")
+
+            val_lbl = QLabel(f"n = {n_val}")
+            val_lbl.setStyleSheet(
+                f"font-size: 12px; font-weight: 700; color: {primary};"
+                f" background: #EBF4FF; padding: 2px 8px;"
+                f" border-radius: 10px;"
+            )
+
             row_lay.addWidget(lbl_name)
             row_lay.addStretch()
-            row_lay.addWidget(lbl_val)
-            card_lay.addWidget(row_w)
+            row_lay.addWidget(val_lbl)
 
-        popup.setMinimumWidth(240)
+            if not is_last:
+                sep = QFrame()
+                sep.setFrameShape(QFrame.HLine)
+                sep.setStyleSheet("QFrame { background: #F7FAFC; border: none; max-height: 1px; }")
+                card_lay.addWidget(row_w)
+                card_lay.addWidget(sep)
+            else:
+                card_lay.addWidget(row_w)
+
+        popup.setMinimumWidth(220)
         popup.adjustSize()
         # 定位：在按钮正下方
         btn_pos = self._btn.mapToGlobal(self._btn.rect().bottomLeft())
-        popup.move(btn_pos.x(), btn_pos.y() + 2)
+        popup.move(btn_pos.x(), btn_pos.y() + 4)
         popup.show()
 
     def set_siphon_data(self, pairs):
@@ -501,9 +515,6 @@ class SiphonRoughnessChipContainer(QWidget):
             else:
                 self._btn.setText("查看详情")
             self._btn.adjustSize()
-            # ToolTip 摘要
-            tip_lines = [f"{name}: n={val}" for name, val in self._pairs]
-            self._btn.setToolTip("\n".join(tip_lines))
 
     def clear(self):
         self._pairs.clear()
@@ -539,6 +550,7 @@ class WaterProfilePanel(QWidget):
         # 该属性不显示在表格列中，但用于计算渠顶高程 = 渠底高程 + 结构高度
         # 在 _import_from_batch / _update_table_from_nodes_full 时存入，在 _build_nodes_from_table 时恢复
         self._node_structure_heights: dict = {}
+        self._node_chamfer_params: dict = {}   # {row_idx: {'chamfer_angle': float, 'chamfer_length': float}}
         # 建筑物名称上平面图设置（记住上次使用的参数）
         self._plan_text_settings = {
             'offset': 10,
@@ -1303,10 +1315,10 @@ class WaterProfilePanel(QWidget):
             return
         self._updating_cells = True
         try:
-            # ── 保存撤销快照（recalc 前，cols 36-43 的当前值） ──
+            # ── 保存撤销快照（recalc 前，cols 36-45 的当前值） ──
             snapshot = {}
             for r in range(self.node_table.rowCount()):
-                for c in range(36, 44):
+                for c in range(35, 44):
                     item = self.node_table.item(r, c)
                     snapshot[(r, c)] = item.text() if item else ""
             # 编辑单元格已经是新值，用 _pre_edit_cell_value 还原旧值
@@ -1420,12 +1432,7 @@ class WaterProfilePanel(QWidget):
             h_reserve = _rf(edited_row, 36)
             h_gate = _rf(edited_row, 37)
             h_siphon = _rf(edited_row, 38)
-            # head_loss_local 不在表格列中，从 calculated_nodes 获取
-            h_local = 0.0
-            if hasattr(self, 'calculated_nodes') and self.calculated_nodes:
-                if edited_row < len(self.calculated_nodes):
-                    h_local = getattr(self.calculated_nodes[edited_row], 'head_loss_local', 0.0) or 0.0
-            new_total = h_bend + h_friction + h_local + h_reserve + h_gate + h_siphon
+            new_total = h_bend + h_friction + h_reserve + h_gate + h_siphon
             _set(edited_row, 39, new_total)
 
         # ── 2. 重算全部行的累计总水头损失 (col 40) ──
@@ -1460,7 +1467,7 @@ class WaterProfilePanel(QWidget):
                 for j in range(prev_regular_row + 1, r):
                     if _is_transition_row(j):
                         transition_loss += _rf(j, 33)
-                total_drop = _rf(r, 39) + transition_loss
+                total_drop = _rf(r, 40) + transition_loss
                 wl = prev_wl - total_drop
 
             _set(r, 41, wl, ".3f")
@@ -1556,6 +1563,12 @@ class WaterProfilePanel(QWidget):
             for k, v in self._node_structure_heights.items():
                 updated[k - 1 if k > r else k] = v
             self._node_structure_heights = updated
+            # 同步更新倒角参数缓存索引
+            self._node_chamfer_params.pop(r, None)
+            updated_cp = {}
+            for k, v in self._node_chamfer_params.items():
+                updated_cp[k - 1 if k > r else k] = v
+            self._node_chamfer_params = updated_cp
         # 删除后确保新的第一行水头损失列被锁定
         self._ensure_first_row_loss_locked()
 
@@ -1589,6 +1602,7 @@ class WaterProfilePanel(QWidget):
     def _clear_nodes(self):
         self.node_table.setRowCount(0)
         self._node_structure_heights.clear()
+        self._node_chamfer_params.clear()
 
     def _get_node_row_data(self, row):
         data = []
@@ -1742,6 +1756,13 @@ class WaterProfilePanel(QWidget):
             # 缓存结构高度（与Tkinter版 data_table._node_structure_heights 对齐）
             if H_total and float(H_total) > 0:
                 self._node_structure_heights[cur_row] = float(H_total)
+            # 缓存倒角参数（渡槽-矩形专用，不占用表格列）
+            if "渡槽-矩形" in section_type:
+                _raw = getattr(sr, 'raw_result', {}) or {}
+                _ca = _raw.get('chamfer_angle', 0) or 0
+                _cl = _raw.get('chamfer_length', 0) or 0
+                if _ca > 0 and _cl > 0:
+                    self._node_chamfer_params[cur_row] = {'chamfer_angle': float(_ca), 'chamfer_length': float(_cl)}
 
             imported += 1
 
@@ -2509,6 +2530,12 @@ class WaterProfilePanel(QWidget):
             if r in self._node_structure_heights:
                 node.structure_height = self._node_structure_heights[r]
 
+            # 恢复倒角参数（渡槽-矩形精确水力计算用）
+            if r in self._node_chamfer_params:
+                cp = self._node_chamfer_params[r]
+                node.section_params['chamfer_angle'] = cp.get('chamfer_angle', 0)
+                node.section_params['chamfer_length'] = cp.get('chamfer_length', 0)
+
             nodes.append(node)
         return nodes
 
@@ -2640,6 +2667,14 @@ class WaterProfilePanel(QWidget):
         for i, node in enumerate(nodes):
             if getattr(node, 'structure_height', 0) and node.structure_height > 0:
                 self._node_structure_heights[i] = node.structure_height
+        # 重建倒角参数缓存（节点计算往返后从 section_params 中恢复）
+        self._node_chamfer_params.clear()
+        for i, node in enumerate(nodes):
+            sp = getattr(node, 'section_params', {}) or {}
+            _ca = sp.get('chamfer_angle', 0) or 0
+            _cl = sp.get('chamfer_length', 0) or 0
+            if _ca > 0 and _cl > 0:
+                self._node_chamfer_params[i] = {'chamfer_angle': float(_ca), 'chamfer_length': float(_cl)}
         self.node_table.setRowCount(0)
         for node in nodes:
             r = self.node_table.rowCount()
@@ -3298,7 +3333,7 @@ class WaterProfilePanel(QWidget):
             strs.append(formatted)
         self.max_flow_edit.setText(", ".join(strs))
 
-    def _insert_transitions(self):
+    def _insert_transitions(self, auto_confirm: bool = False):
         """插入渐变段"""
         if not CALCULATOR_AVAILABLE:
             InfoBar.error("不可用", "核心计算引擎未加载",
@@ -3376,9 +3411,12 @@ class WaterProfilePanel(QWidget):
             from 渠系断面设计.water_profile.water_profile_dialogs import (
                 BatchChannelConfirmDialog, OpenChannelDialog, OpenChannelParams
             )
-            if len(gaps) >= 2:
+            if (auto_confirm and len(gaps) >= 1) or len(gaps) >= 2:
                 batch_dlg = BatchChannelConfirmDialog(self, len(gaps), gaps)
-                batch_dlg.exec()
+                if auto_confirm:
+                    batch_dlg._on_ok()
+                else:
+                    batch_dlg.exec()
                 batch_result = batch_dlg.get_result()
 
                 if batch_result['mode'] == BatchChannelConfirmDialog.RESULT_CANCELLED:
@@ -3539,7 +3577,7 @@ class WaterProfilePanel(QWidget):
                 self.node_table.setItem(r, c, item)
         auto_resize_table(self.node_table)
 
-    def _open_siphon_calculator(self):
+    def _open_siphon_calculator(self, auto_run: bool = False):
         """打开倒虹吸水力计算（PySide6 多标签页窗口）"""
         if not CALCULATOR_AVAILABLE:
             InfoBar.error("不可用", "核心计算引擎未加载",
@@ -3639,7 +3677,8 @@ class WaterProfilePanel(QWidget):
                 siphon_groups,
                 manager=manager,
                 on_import_losses=import_losses_callback,
-                siphon_turn_radius_n=siphon_n
+                siphon_turn_radius_n=siphon_n,
+                auto_run=auto_run
             )
             dlg.exec()
 

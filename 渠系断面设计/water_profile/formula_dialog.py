@@ -895,7 +895,7 @@ class FormulaTooltipWidget(QWidget):
         self._note_label.setWordWrap(True)
         self._note_label.setStyleSheet("""
             QLabel {
-                font-size: 12px; color: #757575;
+                font-size: 12px; color: #424242;
                 background: #FAFAFA; border-radius: 6px;
                 border-left: 3px solid #1976D2;
                 padding: 8px 12px;
