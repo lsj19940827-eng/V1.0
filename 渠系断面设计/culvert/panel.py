@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "渠系建筑物断面计算"))
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea, QInputDialog
+    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea
 )
 from PySide6.QtCore import Qt
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -126,8 +126,8 @@ class CulvertPanel(QWidget):
 
         fl.addWidget(self._sep())
         fl.addWidget(self._slbl("【可选参数】"))
-        self.bh_lbl, self.bh_edit = self._field2(fl, "手动宽深比:", "")
-        self.B_lbl, self.B_edit = self._field2(fl, "手动底宽 B (m):", "")
+        self.bh_lbl, self.bh_edit = self._field2(fl, "指定宽深比:", "")
+        self.B_lbl, self.B_edit = self._field2(fl, "指定底宽 B (m):", "")
         fl.addWidget(self._hint("(二选一输入，留空则自动计算)"))
         lbl_b1 = QLabel("高宽比限值H/B（或B/H）一般不超过1.2")
         lbl_b1.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: #0066CC;")
@@ -226,7 +226,7 @@ class CulvertPanel(QWidget):
         h.section("宽深比说明")
         h.bullet_list([
             "宽深比 β = B/h（底宽 / 设计水深）",
-            "可手动指定宽深比或底宽",
+            "可指定宽深比或底宽",
             "留空则自动按水力最佳断面计算",
         ])
         h.section("曼宁公式")
@@ -302,7 +302,7 @@ class CulvertPanel(QWidget):
 
             if result.get('success') and 'increase_percent' in result:
                 ap = result['increase_percent']
-                src = "手动指定" if self.inc_edit.text().strip() else "自动计算"
+                src = "指定" if self.inc_edit.text().strip() else "自动计算"
                 self.inc_hint.setText(f"({src}: {ap:.1f}%)")
 
             self._update_result_display(result)
@@ -330,7 +330,7 @@ class CulvertPanel(QWidget):
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']; i = 1.0 / slope_inv
         v_min, v_max = p['v_min'], p['v_max']
-        inc_src = "(手动指定)" if p.get('manual_increase') else "(自动计算)"
+        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
         is_optimal = result.get('is_optimal_section', False)
 
         B = result['B']; H = result['H']
@@ -366,11 +366,21 @@ class CulvertPanel(QWidget):
         if not detail:
             # ── 简要输出 ──
             o.append("【输入参数】")
-            o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-            o.append(f"  糙率 n = {n}")
-            o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-            o.append(f"  不淤流速 = {v_min} m/s")
-            o.append(f"  不冲流速 = {v_max} m/s")
+            o.append("")
+            o.append(f"  1. 设计流量:")
+            o.append(f"     Q = {Q:.3f} m³/s")
+            o.append("")
+            o.append(f"  2. 糙率:")
+            o.append(f"     n = {n}")
+            o.append("")
+            o.append(f"  3. 水力坡降:")
+            o.append(f"     = 1/{int(slope_inv)}")
+            o.append("")
+            o.append(f"  4. 不淤流速:")
+            o.append(f"     = {v_min} m/s")
+            o.append("")
+            o.append(f"  5. 不冲流速:")
+            o.append(f"     = {v_max} m/s")
             o.append("")
 
             o.append("【断面尺寸】")
@@ -406,24 +416,35 @@ class CulvertPanel(QWidget):
         else:
             # ── 详细输出 ──
             o.append("【一、输入参数】")
-            o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-            o.append(f"  糙率 n = {n}")
-            o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-            o.append(f"  不淤流速 = {v_min} m/s")
-            o.append(f"  不冲流速 = {v_max} m/s")
+            o.append("")
+            o.append(f"  1. 设计流量:")
+            o.append(f"     Q = {Q:.3f} m³/s")
+            o.append("")
+            o.append(f"  2. 糙率:")
+            o.append(f"     n = {n}")
+            o.append("")
+            o.append(f"  3. 水力坡降:")
+            o.append(f"     = 1/{int(slope_inv)}")
+            o.append("")
+            o.append(f"  4. 不淤流速:")
+            o.append(f"     = {v_min} m/s")
+            o.append("")
+            o.append(f"  5. 不冲流速:")
+            o.append(f"     = {v_max} m/s")
             o.append("")
 
             o.append("【二、断面尺寸】")
+            o.append("")
+            o.append("  1. 设计尺寸:")
             if is_optimal:
-                o.append("  ★★★ 采用水力最佳断面 ★★★")
-                o.append("  (当底宽和宽深比均留空时，自动按水力最佳断面计算)")
-                o.append("  水力最佳断面宽深比 β = B/h = 2（即底宽等于2倍水深）")
-                o.append("")
-            o.append(f"  宽度 B = {B:.2f} m")
-            o.append(f"  高度 H = {H:.2f} m")
+                o.append("     ★★★ 采用水力最佳断面 ★★★")
+                o.append("     (当底宽和宽深比均留空时，自动按水力最佳断面计算)")
+                o.append("     水力最佳断面宽深比 β = B/h = 2（即底宽等于2倍水深）")
+            o.append(f"     宽度 B = {B:.2f} m")
+            o.append(f"     高度 H = {H:.2f} m")
             o.append("")
 
-            o.append("  1. 宽深比计算:")
+            o.append("  2. 宽深比计算:")
             o.append(f"     β = B / h")
             o.append(f"       = {B:.2f} / {h_d:.3f}")
             o.append(f"       = {BH_ratio:.3f}")
@@ -431,43 +452,44 @@ class CulvertPanel(QWidget):
                 o.append("     (水力最佳断面目标值 β = 2.0)")
             o.append("")
 
-            o.append("  2. 高宽比计算:")
+            o.append("  3. 高宽比计算:")
             o.append(f"     H/B = {H:.2f} / {B:.2f} = {HB_ratio:.3f}")
             o.append("     (限值要求: H/B 或 B/H 一般不超过1.2)")
             o.append("")
 
-            o.append("  3. 总断面积计算:")
+            o.append("  4. 总断面积计算:")
             o.append(f"     A总 = B × H")
             o.append(f"        = {B:.2f} × {H:.2f}")
             o.append(f"        = {A_total:.3f} m²")
             o.append("")
 
             o.append("【三、设计流量工况】")
-            o.append("  设计水深计算:")
+            o.append("")
+            o.append("  1. 设计水深计算:")
             o.append(f"     根据设计流量 Q = {Q:.3f} m³/s 和底宽 B = {B:.2f} m，利用曼宁公式反算水深:")
             o.append(f"     h = {h_d:.3f} m")
             o.append("")
 
-            o.append("  4. 过水面积计算:")
+            o.append("  2. 过水面积计算:")
             o.append(f"     A = B × h")
             o.append(f"       = {B:.2f} × {h_d:.3f}")
             o.append(f"       = {A_d:.3f} m²")
             o.append("")
 
-            o.append("  5. 湿周计算:")
+            o.append("  3. 湿周计算:")
             o.append(f"     χ = B + 2×h")
             o.append(f"       = {B:.2f} + 2×{h_d:.3f}")
             o.append(f"       = {B:.2f} + {2*h_d:.3f}")
             o.append(f"       = {P_d:.3f} m")
             o.append("")
 
-            o.append("  6. 水力半径计算:")
+            o.append("  4. 水力半径计算:")
             o.append(f"     R = A / χ")
             o.append(f"       = {A_d:.3f} / {P_d:.3f}")
             o.append(f"       = {R_hyd_d:.3f} m")
             o.append("")
 
-            o.append("  7. 设计流速计算 (曼宁公式):")
+            o.append("  5. 设计流速计算 (曼宁公式):")
             o.append(f"     V = (1/n) × R^(2/3) × i^(1/2)")
             o.append(f"       = (1/{n}) × {R_hyd_d:.3f}^(2/3) × {i:.6f}^(1/2)")
             if R_hyd_d > 0:
@@ -476,7 +498,7 @@ class CulvertPanel(QWidget):
             o.append("")
 
             Q_chk = A_d * V_d
-            o.append("  8. 计算流量验证:")
+            o.append("  6. 计算流量验证:")
             o.append(f"     Q计算 = A × V")
             o.append(f"          = {A_d:.3f} × {V_d:.3f}")
             o.append(f"          = {Q_chk:.3f} m³/s")
@@ -484,29 +506,30 @@ class CulvertPanel(QWidget):
                 o.append(f"     误差 = {abs(Q_chk - Q) / Q * 100:.2f}%")
             o.append("")
 
-            o.append("  9. 净空高度计算:")
+            o.append("  7. 净空高度计算:")
             o.append(f"      Fb = H - h")
             o.append(f"         = {H:.2f} - {h_d:.3f}")
             o.append(f"         = {fb_hgt_d:.3f} m")
             o.append("")
 
-            o.append("  10. 净空面积比计算:")
+            o.append("  8. 净空面积比计算:")
             o.append(f"      PA = (H - h) / H × 100%")
             o.append(f"         = ({H:.2f} - {h_d:.3f}) / {H:.2f} × 100%")
             o.append(f"         = {fb_pct_d:.1f}%")
             o.append("")
 
             o.append("【四、加大流量工况】")
-            o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
             o.append("")
-
-            o.append("  11. 加大流量计算:")
+            o.append("  1. 加大流量比例:")
+            o.append(f"      = {inc_pct:.1f}% {inc_src}")
+            o.append("")
+            o.append("  2. 加大流量计算:")
             o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
             o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
             o.append(f"           = {Q_inc:.3f} m³/s")
             o.append("")
 
-            o.append("  12. 加大水深计算:")
+            o.append("  3. 加大水深计算:")
             o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s 和底宽 B = {B:.2f} m，利用曼宁公式反算水深:")
             o.append(f"      h加大 = {h_inc:.3f} m")
             o.append("")
@@ -515,26 +538,26 @@ class CulvertPanel(QWidget):
             chi_inc = B + 2 * h_inc
             R_inc = A_inc / chi_inc if chi_inc > 0 else 0
 
-            o.append("  13. 加大流量工况过水面积:")
+            o.append("  4. 加大流量工况过水面积:")
             o.append(f"      A加大 = B × h加大")
             o.append(f"           = {B:.2f} × {h_inc:.3f}")
             o.append(f"           = {A_inc:.3f} m²")
             o.append("")
 
-            o.append("  14. 加大流量工况湿周:")
+            o.append("  5. 加大流量工况湿周:")
             o.append(f"      χ加大 = B + 2×h加大")
             o.append(f"           = {B:.2f} + 2×{h_inc:.3f}")
             o.append(f"           = {B:.2f} + {2 * h_inc:.3f}")
             o.append(f"           = {chi_inc:.3f} m")
             o.append("")
 
-            o.append("  15. 加大流量工况水力半径:")
+            o.append("  6. 加大流量工况水力半径:")
             o.append(f"      R加大 = A加大 / χ加大")
             o.append(f"           = {A_inc:.3f} / {chi_inc:.3f}")
             o.append(f"           = {R_inc:.3f} m")
             o.append("")
 
-            o.append("  16. 加大流量工况流速 (曼宁公式):")
+            o.append("  7. 加大流量工况流速 (曼宁公式):")
             o.append(f"      V加大 = (1/n) × R^(2/3) × i^(1/2)")
             o.append(f"           = (1/{n}) × {R_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
             if R_inc > 0:
@@ -543,7 +566,7 @@ class CulvertPanel(QWidget):
             o.append("")
 
             Q_chk_inc = V_inc * A_inc
-            o.append("  17. 流量校核:")
+            o.append("  8. 流量校核:")
             o.append(f"      Q计算 = A加大 × V加大")
             o.append(f"           = {A_inc:.3f} × {V_inc:.3f}")
             o.append(f"           = {Q_chk_inc:.3f} m³/s")
@@ -551,7 +574,7 @@ class CulvertPanel(QWidget):
                 o.append(f"      误差 = {abs(Q_chk_inc - Q_inc) / Q_inc * 100:.2f}%")
             o.append("")
 
-            o.append("  18. 加大流量工况净空:")
+            o.append("  9. 加大流量工况净空:")
             o.append(f"      净空高度 Fb加大 = H - h加大 = {H:.2f} - {h_inc:.3f} = {fb_hgt_inc:.3f} m")
             o.append(f"      净空面积 PA加大 = (H - h加大) / H × 100% = {fb_pct_inc:.1f}%")
             o.append("")
@@ -583,16 +606,29 @@ class CulvertPanel(QWidget):
 
             # 综合验证
             o.append("【六、综合验证】")
-            o.append(f"  1. 流速验证: {v_min} ≤ {V_d:.3f} ≤ {v_max} → {'通过 ✓' if vel_ok else '未通过 ✗'}")
-            o.append(f"  2. 净空面积验证: → {'通过 ✓' if fb_area_ok else '未通过 ✗'}")
-            o.append(f"  3. 净空高度验证: → {'通过 ✓' if fb_hgt_ok else '未通过 ✗'}")
+            o.append("")
+            o.append(f"  1. 流速验证:")
+            o.append(f"     范围要求: {v_min} ≤ V ≤ {v_max} m/s")
+            o.append(f"     设计流速: V = {V_d:.3f} m/s")
+            o.append(f"     结果: {'通过 ✓' if vel_ok else '未通过 ✗'}")
+            o.append("")
+            o.append(f"  2. 净空面积验证:")
+            o.append(f"     规范要求: 10% ≤ PA ≤ 30%")
+            o.append(f"     计算结果: PA = {fb_pct_inc:.1f}%")
+            o.append(f"     结果: {'通过 ✓' if fb_area_ok else '未通过 ✗'}")
+            o.append("")
+            o.append(f"  3. 净空高度验证:")
+            o.append(f"     规范要求: Fb ≥ {fb_req_by_rule:.3f} m")
+            o.append(f"     计算结果: Fb = {fb_hgt_inc:.3f} m")
+            o.append(f"     结果: {'通过 ✓' if fb_hgt_ok else '未通过 ✗'}")
             o.append("")
 
         o.append("=" * 70)
+        all_checks_ok = vel_ok and fb_area_ok and fb_hgt_ok
         if is_optimal:
-            o.append(f"  综合验证结果: {'全部通过 ✓' if result['success'] else '未通过 ✗'} (水力最佳断面)")
+            o.append(f"  综合验证结果: {'全部通过 ✓' if all_checks_ok else '未通过 ✗'} (水力最佳断面)")
         else:
-            o.append(f"  综合验证结果: {'全部通过 ✓' if result['success'] else '未通过 ✗'}")
+            o.append(f"  综合验证结果: {'全部通过 ✓' if all_checks_ok else '未通过 ✗'}")
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt
@@ -666,7 +702,8 @@ class CulvertPanel(QWidget):
         B = res.get('B', 0.0); H = res.get('H', 0.0)
         default_name = f'暗渠断面_矩形_B{B:.2f}xH{H:.2f}.dxf'
         scales = ['1:20', '1:50', '1:100', '1:200', '1:500']
-        scale_str, ok = QInputDialog.getItem(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2, False)
+        from 渠系断面设计.styles import fluent_select
+        scale_str, ok = fluent_select(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2)
         if not ok: return
         scale_denom = int(scale_str.split(':')[1])
         filepath, _ = QFileDialog.getSaveFileName(

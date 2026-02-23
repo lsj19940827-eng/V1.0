@@ -120,8 +120,8 @@ class InputData:
     slope_inv: float = 0.0          # 坡度倒数 (1/i)
     v_min_allowable: float = 0.0    # 最小允许流速 (m/s)
     v_max_allowable: float = 0.0    # 最大允许流速 (m/s)
-    increase_percent_manual: Optional[float] = None  # 手动输入加大比例 (%)
-    D_manual: Optional[float] = None  # 手动输入直径 (m，仅圆形使用)
+    increase_percent_manual: Optional[float] = None  # 指定加大比例 (%)
+    D_manual: Optional[float] = None  # 指定直径 (m，仅圆形使用)
 
 
 # ============================================================
@@ -695,9 +695,9 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
         slope_inv: 坡度倒数 (1/i)
         v_min: 不淤流速 (m/s)
         v_max: 不冲流速 (m/s)
-        manual_beta: 手动指定宽深比 (可选)
-        manual_b: 手动指定底宽 (可选)
-        manual_increase_percent: 手动加大百分比 (可选)
+        manual_beta: 指定宽深比 (可选)
+        manual_b: 指定底宽 (可选)
+        manual_increase_percent: 指定加大百分比 (可选)
 
     返回:
         包含所有计算结果的字典
@@ -731,7 +731,7 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
         'used_manual_beta': False,
         'used_manual_b': False,
         
-        # 附录E备选方案列表（仅当未指定手动参数时填充）
+        # 附录E备选方案列表（仅当未指定参数时填充）
         'appendix_e_schemes': [],
     }
 
@@ -762,7 +762,7 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
     design_successful = False
     design_method = ''
 
-    # ========== 手动底宽优先 ==========
+    # ========== 指定底宽优先 ==========
     if manual_b is not None and manual_b > ZERO_TOLERANCE:
         success, h_out = calculate_depth_for_flow_and_bottom_width(Q, i, n, m, manual_b)
         if success:
@@ -775,17 +775,17 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
                 h_designed = h_out
                 V_designed = V_out
                 design_successful = True
-                design_method = '手动底宽'
+                design_method = '指定底宽'
                 result['used_manual_b'] = True
             else:
                 if V_out <= v_min or V_out >= v_max:
-                    design_method = '手动底宽(流速不符)'
+                    design_method = '指定底宽(流速不符)'
                 else:
-                    design_method = '手动底宽(宽深比不符)'
+                    design_method = '指定底宽(宽深比不符)'
         else:
-            design_method = '手动底宽(计算失败)'
+            design_method = '指定底宽(计算失败)'
 
-    # ========== 手动宽深比次之 (如果底宽未指定) ==========
+    # ========== 指定宽深比次之 (如果底宽未指定) ==========
     if not design_successful and manual_beta is not None and manual_beta > ZERO_TOLERANCE:
         success, h_out, b_out = calculate_dimensions_for_flow_and_beta(Q, i, n, m, manual_beta)
         if success:
@@ -797,12 +797,12 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
                 h_designed = h_out
                 V_designed = V_out
                 design_successful = True
-                design_method = '手动宽深比'
+                design_method = '指定宽深比'
                 result['used_manual_beta'] = True
             else:
-                design_method = '手动宽深比(流速不符)'
+                design_method = '指定宽深比(流速不符)'
         else:
-            design_method = '手动宽深比(计算失败)'
+            design_method = '指定宽深比(计算失败)'
 
     # ========== 附录E算法计算（如果两者都未成功）==========
     if not design_successful:
@@ -933,9 +933,9 @@ def quick_calculate_rectangular(Q: float, n: float, slope_inv: float,
         slope_inv: 坡度倒数 (1/i)
         v_min: 不淤流速 (m/s)
         v_max: 不冲流速 (m/s)
-        manual_beta: 手动指定宽深比 (可选)
-        manual_b: 手动指定底宽 (可选)
-        manual_increase_percent: 手动加大百分比 (可选)
+        manual_beta: 指定宽深比 (可选)
+        manual_b: 指定底宽 (可选)
+        manual_increase_percent: 指定加大百分比 (可选)
 
     返回:
         包含所有计算结果的字典
@@ -1248,7 +1248,7 @@ def process_circular_single_row(input_data: InputData) -> DesignResult:
     slope = 1 / slope_inv
     if increase_percent_manual is not None and increase_percent_manual >= 0:
         increase_percent_val = increase_percent_manual / 100.0
-        result.increase_percent_source = "(手动)"
+        result.increase_percent_source = "(指定)"
     else:
         increase_percent_val = get_circular_flow_increase_percent(Q_design) / 100.0
         result.increase_percent_source = "(自动)"
@@ -1270,13 +1270,13 @@ def process_circular_single_row(input_data: InputData) -> DesignResult:
         # 检查计算是否成功
         if not result.design.success:
             result.success = False
-            result.error_message = f"计算失败：手动指定的直径 D={D_manual} m 过小，无法满足设计流量工况的要求。"
+            result.error_message = f"计算失败：指定的直径 D={D_manual} m 过小，无法满足设计流量工况的要求。"
             return result
 
         if not result.increased.success:
             result.success = False
             result.error_message = (
-                f"计算失败：手动指定的直径 D={D_manual} m 过小，无法满足加大流量工况的要求。\n\n"
+                f"计算失败：指定的直径 D={D_manual} m 过小，无法满足加大流量工况的要求。\n\n"
                 "建议解决方案：\n"
                 "1. 增大直径\n"
                 "2. 或者留空直径输入框，由系统自动计算最优直径"
@@ -1340,6 +1340,9 @@ def circular_result_to_dict(result: DesignResult) -> Dict[str, Any]:
         "Q_min": round(result.Q_min, 3) if result.Q_min > 0 else None,
         "y_m": round(result.minimum.y, 3) if result.minimum.y >= 0 else None,
         "V_m": round(result.minimum.V, 3) if result.minimum.V >= 0 else None,
+        "A_m": round(result.minimum.A, 3) if result.minimum.A > 0 else None,
+        "P_m": round(result.minimum.P, 3) if result.minimum.P > 0 else None,
+        "R_m": round(result.minimum.R, 3) if result.minimum.R > 0 else None,
         "success": result.success,
         "check_passed": result.check_passed,
         "error_message": result.error_message if result.error_message else None,
@@ -1360,8 +1363,8 @@ def quick_calculate_circular(Q: float, n: float, slope_inv: float,
         slope_inv: 坡度倒数 (1/i)
         v_min: 最小允许流速 (m/s)
         v_max: 最大允许流速 (m/s)
-        increase_percent: 手动加大百分比 (可选)
-        manual_D: 手动指定直径 (m，可选)
+        increase_percent: 指定加大百分比 (可选)
+        manual_D: 指定直径 (m，可选)
 
     返回:
         包含所有计算结果的字典

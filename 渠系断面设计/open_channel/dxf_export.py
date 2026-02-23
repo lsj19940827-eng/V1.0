@@ -26,16 +26,17 @@ def export_open_channel_dxf(filepath, result, input_params, scale_denom=100):
     doc.header['$LTSCALE'] = sf * 0.5
 
     # 图层定义  ACI: 1=红 2=黄 3=绿 4=青 5=蓝 7=白/黑
-    _add_layer(doc, 'OUTLINE',          color=7,  lw=50)
-    _add_layer(doc, 'WATER_DESIGN',     color=5,  lw=25)
-    _add_layer(doc, 'WATER_INCREASED',  color=4,  lw=25)
-    _add_layer(doc, 'DIMENSION',        color=2,  lw=18)
-    _add_layer(doc, 'TEXT_PARAMS',      color=3,  lw=18)
+    _add_layer(doc, '轮廓线',          color=7,  lw=50)
+    _add_layer(doc, '设计水位',     color=5,  lw=25)
+    _add_layer(doc, '加大水位',  color=4,  lw=25)
+    _add_layer(doc, '尺寸标注',        color=2,  lw=18)
+    _add_layer(doc, '参数文字',      color=3,  lw=18)
 
     # 虚线线型
     if 'DASHED' not in doc.linetypes:
         doc.linetypes.add('DASHED', pattern='A,.5,-.25')
 
+    _setup_font_style(doc)
     msp = doc.modelspace()
 
     if stype == '圆形':
@@ -50,79 +51,77 @@ def export_open_channel_dxf(filepath, result, input_params, scale_denom=100):
 # 内部工具
 # ============================================================
 
+def _setup_font_style(doc):
+    """注册仿宋字体样式和 AutoCAD 原生标注样式（字号规格：3.5/5/7/10mm）"""
+    if 'FANGSONG' not in doc.styles:
+        doc.styles.add('FANGSONG', font='仿宋_GB2312')
+    if 'CAD_DIM' not in doc.dimstyles:
+        ds = doc.dimstyles.new('CAD_DIM')
+        ds.dxf.dimtxsty = 'FANGSONG'
+        ds.dxf.dimtxt   = 3.5    # 文字高度 mm
+        ds.dxf.dimasz   = 2.5    # 箭头大小 mm
+        ds.dxf.dimexo   = 2.0    # 延伸线起始偏移
+        ds.dxf.dimexe   = 2.0    # 延伸线超出量
+        ds.dxf.dimgap   = 1.0    # 文字与尺寸线间距
+        ds.dxf.dimlunit = 2      # 十进制
+        ds.dxf.dimdec   = 3      # 小数位数
+
+
 def _add_layer(doc, name, color, lw):
     layer = doc.layers.add(name)
     layer.color = color
     layer.lineweight = lw
 
 
-def _add_arrow_tip(msp, tip, direction_vec, size, layer):
-    """在 tip 处绘制方向为 direction_vec 的箭头尖"""
-    dx, dy = direction_vec
-    length = math.hypot(dx, dy)
-    if length == 0:
-        return
-    ux, uy = dx / length, dy / length
-    px, py = -uy, ux  # 垂直方向
-    p1 = (tip[0] - ux * size + px * size * 0.3,
-          tip[1] - uy * size + py * size * 0.3)
-    p2 = (tip[0] - ux * size - px * size * 0.3,
-          tip[1] - uy * size - py * size * 0.3)
-    msp.add_solid([tip, p1, p2, tip], dxfattribs={'layer': layer})
-
-
 def _add_dim_h(msp, x1, x2, y_line, y_orig, label, txt_h, arr, layer):
-    """水平尺寸标注"""
-    ext_ext = arr * 0.5
-    # 延伸线
-    for x, y0 in [(x1, y_orig), (x2, y_orig)]:
-        sign = -1 if y_line < y_orig else 1
-        msp.add_line((x, y0), (x, y_line + sign * ext_ext),
-                     dxfattribs={'layer': layer})
-    # 尺寸线
-    msp.add_line((x1, y_line), (x2, y_line), dxfattribs={'layer': layer})
-    # 箭头
-    _add_arrow_tip(msp, (x1, y_line), (x1 - x2, 0), arr, layer)
-    _add_arrow_tip(msp, (x2, y_line), (x2 - x1, 0), arr, layer)
-    # 文字
-    msp.add_text(label, dxfattribs={
-        'layer': layer, 'height': txt_h,
-        'insert': ((x1 + x2) / 2, y_line - txt_h * 1.4),
-    })
+    """水平尺寸标注（AutoCAD 原生 DIMENSION 实体）"""
+    dim = msp.add_linear_dim(
+        base=((x1 + x2) / 2, y_line),
+        p1=(x1, y_orig),
+        p2=(x2, y_orig),
+        text=label,
+        dimstyle='CAD_DIM',
+        dxfattribs={'layer': layer},
+    )
+    dim.render()
 
 
 def _add_dim_v(msp, y1, y2, x_line, x_orig, label, txt_h, arr, layer):
-    """垂直尺寸标注"""
-    ext_ext = arr * 0.5
-    for y, x0 in [(y1, x_orig), (y2, x_orig)]:
-        sign = -1 if x_line < x_orig else 1
-        msp.add_line((x0, y), (x_line + sign * ext_ext, y),
-                     dxfattribs={'layer': layer})
-    msp.add_line((x_line, y1), (x_line, y2), dxfattribs={'layer': layer})
-    _add_arrow_tip(msp, (x_line, y1), (0, y1 - y2), arr, layer)
-    _add_arrow_tip(msp, (x_line, y2), (0, y2 - y1), arr, layer)
-    mid_y = (y1 + y2) / 2
-    msp.add_text(label, dxfattribs={
-        'layer': layer, 'height': txt_h,
-        'insert': (x_line - txt_h * 1.5, mid_y),
-        'rotation': 90,
-    })
+    """垂直尺寸标注（AutoCAD 原生 DIMENSION 实体）"""
+    dim = msp.add_linear_dim(
+        base=(x_line, (y1 + y2) / 2),
+        p1=(x_orig, y1),
+        p2=(x_orig, y2),
+        angle=90,
+        text=label,
+        dimstyle='CAD_DIM',
+        dxfattribs={'layer': layer},
+    )
+    dim.render()
 
 
 def _add_text_block(msp, x, y_start, lines, txt_h, layer):
-    """逐行输出参数文字块"""
+    """逐行输出参数文字块（仿宋，正文3.5/节标题5/主标题7mm）"""
+    H_TITLE = txt_h * 2.0          # 7mm：【...】主标题
+    H_SECT  = round(txt_h / 0.7, 1)  # 5mm：[...] 小节标题
+    H_BODY  = txt_h                 # 3.5mm：正文
     for line in lines:
         if not line:
-            y_start -= txt_h * 0.8
+            y_start -= H_BODY * 0.8
             continue
-        is_header = line.startswith('[') or line.startswith('【')
-        h = txt_h if is_header else txt_h * 0.85
-        indent = 0 if is_header else txt_h * 0.5
+        is_main = line.startswith('【')
+        is_sect = line.startswith('[')
+        if is_main:
+            h = H_TITLE; indent = 0
+        elif is_sect:
+            h = H_SECT; indent = 0
+        else:
+            h = H_BODY; indent = txt_h * 0.5
         msp.add_text(line, dxfattribs={
-            'layer': layer, 'height': h,
+            'layer': layer, 'height': h, 'style': 'FANGSONG',
             'insert': (x + indent, y_start),
         })
-        y_start -= h * 1.6
+        y_start -= h * 1.5
 
 
 # ============================================================
@@ -153,7 +152,7 @@ def _draw_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
         H = (h_inc + 0.3) if h_inc > 0 else h * 1.35
 
     char  = max(b, H, 1.0) * sf
-    txt_h = round(char * 0.055, 3)
+    txt_h = 3.5
     arr   = txt_h * 0.85
     gap   = char * 0.18
 
@@ -167,25 +166,25 @@ def _draw_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
 
     for i in range(len(outline)):
         msp.add_line(outline[i], outline[(i+1) % len(outline)],
-                     dxfattribs={'layer': 'OUTLINE'})
+                     dxfattribs={'layer': '轮廓线'})
 
-    # ------ 2. 设计水面线 ------
+    # ------ 2&3. 水面线 + 居中标注（重叠时上下错开）------
     hw_d = b + 2 * m * h
-    msp.add_line((-hw_d/2*sf, h*sf), (hw_d/2*sf, h*sf),
-                 dxfattribs={'layer': 'WATER_DESIGN'})
+    msp.add_line((-hw_d/2*sf, h*sf), (hw_d/2*sf, h*sf), dxfattribs={'layer': '设计水位'})
+    _olap = h_inc > 0 and (h_inc - h) * sf < txt_h * 2.0
+    _yd = h*sf - txt_h * 1.5 if _olap else h*sf + txt_h * 0.5
     msp.add_text(f'▽ 设计水位  h={h:.3f}m', dxfattribs={
-        'layer': 'WATER_DESIGN', 'height': txt_h * 0.85,
-        'insert': (hw_d/2*sf + txt_h * 0.3, h*sf),
+        'layer': '设计水位', 'height': txt_h, 'style': 'FANGSONG',
+        'insert': (0, _yd), 'align_point': (0, _yd), 'halign': 1,
     })
-
-    # ------ 3. 加大水面线（虚线）------
     if h_inc > 0:
         hw_i = b + 2 * m * h_inc
         msp.add_line((-hw_i/2*sf, h_inc*sf), (hw_i/2*sf, h_inc*sf),
-                     dxfattribs={'layer': 'WATER_INCREASED', 'linetype': 'DASHED'})
+                     dxfattribs={'layer': '加大水位', 'linetype': 'DASHED'})
+        _yi = h_inc*sf + txt_h * 0.5
         msp.add_text(f'▽ 加大水位  h={h_inc:.3f}m', dxfattribs={
-            'layer': 'WATER_INCREASED', 'height': txt_h * 0.85,
-            'insert': (hw_i/2*sf + txt_h * 0.3, h_inc*sf + txt_h * 0.5),
+            'layer': '加大水位', 'height': txt_h, 'style': 'FANGSONG',
+            'insert': (0, _yi), 'align_point': (0, _yi), 'halign': 1,
         })
 
     # ------ 4. 尺寸标注 ------
@@ -193,29 +192,33 @@ def _draw_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
                x1=-b/2*sf, x2=b/2*sf,
                y_line=-(gap * 1.1), y_orig=0,
                label=f'B={b:.3f} m',
-               txt_h=txt_h, arr=arr, layer='DIMENSION')
+               txt_h=txt_h, arr=arr, layer='尺寸标注')
 
     x_left = -(top_w/2*sf + gap * 1.4)
     _add_dim_v(msp,
                y1=0, y2=h*sf,
                x_line=x_left, x_orig=-(b/2 + m*h)*sf,
                label=f'h={h:.3f} m',
-               txt_h=txt_h, arr=arr, layer='DIMENSION')
+               txt_h=txt_h, arr=arr, layer='尺寸标注')
 
     x_right = top_w/2*sf + gap * 1.4
     _add_dim_v(msp,
                y1=0, y2=H*sf,
                x_line=x_right, x_orig=top_w/2*sf,
                label=f'H={H:.3f} m',
-               txt_h=txt_h, arr=arr, layer='DIMENSION')
+               txt_h=txt_h, arr=arr, layer='尺寸标注')
 
     if m > 0:
         mid_y = H / 2
         mid_x = b/2 + m * mid_y
         slope_angle = math.degrees(math.atan2(H, m * H))
+        # 垂直于坡面向外偏移，避免文字压线
+        norm = math.sqrt(1 + m * m)
+        off_x = txt_h * 2.0 / norm
+        off_y = m * txt_h * 2.0 / norm
         msp.add_text(f'1:{m:.1f}', dxfattribs={
-            'layer': 'DIMENSION', 'height': txt_h * 0.9,
-            'insert': (mid_x*sf + txt_h * 0.5, mid_y*sf),
+            'layer': '尺寸标注', 'height': txt_h, 'style': 'FANGSONG',
+            'insert': (mid_x*sf + off_x, mid_y*sf + off_y),
             'rotation': slope_angle,
         })
 
@@ -260,7 +263,7 @@ def _draw_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
         ]
 
     lines.insert(1, f'比例: 1:{scale_denom}')
-    _add_text_block(msp, text_x, H*sf + txt_h, lines, txt_h, 'TEXT_PARAMS')
+    _add_text_block(msp, text_x, H*sf + txt_h, lines, txt_h, '参数文字')
 
 
 # ============================================================
@@ -288,35 +291,35 @@ def _draw_circular(msp, result, p, sf=1.0, scale_denom=100):
 
     R = D / 2
     char  = max(D, 1.0) * sf
-    txt_h = round(char * 0.06, 3)
+    txt_h = 3.5
     arr   = txt_h * 0.85
     gap   = char * 0.20
 
     cx, cy = 0.0, R * sf
 
     # ------ 1. 轮廓圆 ------
-    msp.add_circle((cx, cy), R*sf, dxfattribs={'layer': 'OUTLINE'})
+    msp.add_circle((cx, cy), R*sf, dxfattribs={'layer': '轮廓线'})
     msp.add_line((-R*1.5*sf, 0), (R*1.5*sf, 0),
-                 dxfattribs={'layer': 'OUTLINE', 'linetype': 'DASHED'})
+                 dxfattribs={'layer': '轮廓线', 'linetype': 'DASHED'})
 
-    # ------ 2. 设计水面线 ------
+    # ------ 2&3. 水面线 + 居中标注（重叠时上下错开）------
+    _ci_olap = (y_i and 0 < y_i < D and 0 < y_d < D and (y_i - y_d) * sf < txt_h * 2.0)
     if 0 < y_d < D:
         half_w = math.sqrt(max(0, R**2 - (R - y_d)**2)) * sf
-        msp.add_line((-half_w, y_d*sf), (half_w, y_d*sf),
-                     dxfattribs={'layer': 'WATER_DESIGN'})
+        msp.add_line((-half_w, y_d*sf), (half_w, y_d*sf), dxfattribs={'layer': '设计水位'})
+        _yd_lbl = y_d*sf - txt_h * 1.5 if _ci_olap else y_d*sf + txt_h * 0.5
         msp.add_text(f'▽ 设计水位  y={y_d:.3f}m', dxfattribs={
-            'layer': 'WATER_DESIGN', 'height': txt_h * 0.85,
-            'insert': (half_w + txt_h * 0.3, y_d*sf),
+            'layer': '设计水位', 'height': txt_h, 'style': 'FANGSONG',
+            'insert': (0, _yd_lbl), 'align_point': (0, _yd_lbl), 'halign': 1,
         })
-
-    # ------ 3. 加大水面线（虚线）------
     if y_i and 0 < y_i < D:
         half_w_i = math.sqrt(max(0, R**2 - (R - y_i)**2)) * sf
         msp.add_line((-half_w_i, y_i*sf), (half_w_i, y_i*sf),
-                     dxfattribs={'layer': 'WATER_INCREASED', 'linetype': 'DASHED'})
+                     dxfattribs={'layer': '加大水位', 'linetype': 'DASHED'})
+        _yi_lbl = y_i*sf + txt_h * 0.5
         msp.add_text(f'▽ 加大水位  y={y_i:.3f}m', dxfattribs={
-            'layer': 'WATER_INCREASED', 'height': txt_h * 0.85,
-            'insert': (half_w_i + txt_h * 0.3, y_i*sf + txt_h * 0.5),
+            'layer': '加大水位', 'height': txt_h, 'style': 'FANGSONG',
+            'insert': (0, _yi_lbl), 'align_point': (0, _yi_lbl), 'halign': 1,
         })
 
     # ------ 4. 尺寸标注 ------
@@ -324,26 +327,26 @@ def _draw_circular(msp, result, p, sf=1.0, scale_denom=100):
                x1=-R*sf, x2=R*sf,
                y_line=-(gap * 1.1), y_orig=0,
                label=f'D={D:.2f} m',
-               txt_h=txt_h, arr=arr, layer='DIMENSION')
+               txt_h=txt_h, arr=arr, layer='尺寸标注')
 
     if y_d > 0:
         _add_dim_v(msp,
                    y1=0, y2=y_d*sf,
                    x_line=-(R*sf + gap * 1.4), x_orig=-R*sf,
                    label=f'y={y_d:.3f} m',
-                   txt_h=txt_h, arr=arr, layer='DIMENSION')
+                   txt_h=txt_h, arr=arr, layer='尺寸标注')
 
     if y_d > 0 and FB_d > 0:
         _add_dim_v(msp,
                    y1=y_d*sf, y2=D*sf,
                    x_line=(R*sf + gap * 1.4), x_orig=R*sf,
                    label=f'Fb={FB_d:.3f} m',
-                   txt_h=txt_h, arr=arr, layer='DIMENSION')
+                   txt_h=txt_h, arr=arr, layer='尺寸标注')
 
     msp.add_line((cx, cy), (cx + R*sf * 0.707, cy + R*sf * 0.707),
-                 dxfattribs={'layer': 'DIMENSION'})
+                 dxfattribs={'layer': '尺寸标注'})
     msp.add_text(f'R={R:.3f} m', dxfattribs={
-        'layer': 'DIMENSION', 'height': txt_h * 0.9,
+        'layer': '尺寸标注', 'height': txt_h, 'style': 'FANGSONG',
         'insert': (cx + R*sf * 0.72, cy + R*sf * 0.72),
     })
 
@@ -384,4 +387,4 @@ def _draw_circular(msp, result, p, sf=1.0, scale_denom=100):
         ]
 
     lines.insert(1, f'比例: 1:{scale_denom}')
-    _add_text_block(msp, text_x, D*sf + txt_h, lines, txt_h, 'TEXT_PARAMS')
+    _add_text_block(msp, text_x, D*sf + txt_h, lines, txt_h, '参数文字')

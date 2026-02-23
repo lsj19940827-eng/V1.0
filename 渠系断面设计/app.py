@@ -38,12 +38,7 @@ from 渠系断面设计.culvert.panel import CulvertPanel
 from 渠系断面设计.batch.panel import BatchPanel
 from 渠系断面设计.siphon.panel import SiphonPanel
 from 渠系断面设计.water_profile.panel import WaterProfilePanel
-try:
-    from 土石方计算.ui.panel import EarthworkPanel
-    _EARTHWORK_AVAILABLE = True
-except ImportError as _e:
-    print(f"[土石方计算] 模块加载失败: {_e}")
-    _EARTHWORK_AVAILABLE = False
+_EARTHWORK_AVAILABLE = False
 
 
 # ============================================================
@@ -216,7 +211,6 @@ class MainWindow(QMainWindow):
             ("倒虹吸设计", "倒虹吸管水力计算"),
             ("批量计算", "多流量段批量水力计算"),
             ("推求水面线", "水面线推求与纵剖面"),
-            ("土石方计算", "地形建模与土石方工程量"),
         ]
         for idx, (name, desc) in enumerate(modules):
             btn = NavButton(name)
@@ -265,7 +259,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self._nav_buttons):
             btn.set_selected(i == index)
-        names = ["明渠设计", "渡槽设计", "隧洞设计", "矩形暗涵设计", "倒虹吸设计", "批量计算", "推求水面线", "土石方计算"]
+        names = ["明渠设计", "渡槽设计", "隧洞设计", "矩形暗涵设计", "倒虹吸设计", "批量计算", "推求水面线"]
         if index < len(names):
             self.statusBar().showMessage(f"当前模块: {names[index]}", 5000)
 

@@ -37,6 +37,29 @@ MAIN_SCRIPT = os.path.join(PROJECT_ROOT, "main.py")
 ICON_FILE = os.path.join(PROJECT_ROOT, "icon.ico")
 
 
+
+def _clean_py_sources(dist_folder):
+    """删除 dist 目录中项目相关的 .py 源码文件（双保险防止源码泄露）"""
+    project_dirs = [
+        "渠系断面设计", "渠系建筑物断面计算", "推求水面线",
+        "倒虹吸水力计算系统", "土石方计算",
+    ]
+    removed = 0
+    for pdir in project_dirs:
+        # PyInstaller 6.x 将依赖放在 _internal/ 下
+        for base in [dist_folder, os.path.join(dist_folder, "_internal")]:
+            target = os.path.join(base, pdir)
+            if not os.path.isdir(target):
+                continue
+            for root, _dirs, files in os.walk(target):
+                for f in files:
+                    if f.endswith('.py'):
+                        os.remove(os.path.join(root, f))
+                        removed += 1
+    if removed:
+        print(f"  [安全] 已清理 {removed} 个残留 .py 源码文件")
+
+
 # ============================================================
 # 构建流程
 # ============================================================
@@ -67,9 +90,26 @@ def build():
     if os.path.exists(ICON_FILE):
         args.append(f"--icon={ICON_FILE}")
 
-    # ---- 需要隐式导入的包（PyInstaller 可能扫描不到的） ----
+    # ---- 模块搜索路径 ----
+    # 项目根目录：让 PyInstaller 发现 渠系断面设计、土石方计算 等正式包
+    # 子目录：渠系建筑物断面计算、倒虹吸水力计算系统、推求水面线 没有 __init__.py，
+    #         代码通过 sys.path.insert() 后以顶层模块名导入（如 from 明渠设计 import ...）
+    search_paths = [
+        PROJECT_ROOT,
+        os.path.join(PROJECT_ROOT, "渠系建筑物断面计算"),
+        os.path.join(PROJECT_ROOT, "倒虹吸水力计算系统"),
+        os.path.join(PROJECT_ROOT, "推求水面线"),
+    ]
+    for p in search_paths:
+        args.append(f"--paths={p}")
+
+    # ---- 需要隐式导入的包（PyInstaller 静态分析可能扫描不到的） ----
     hidden_imports = [
+        # 第三方库
         "PySide6",
+        "PySide6.QtWebEngineWidgets",
+        "PySide6.QtWebEngineCore",
+        "PySide6.QtSvg",
         "qfluentwidgets",
         "pandas",
         "openpyxl",
@@ -77,23 +117,67 @@ def build():
         "matplotlib.backends.backend_qtagg",
         "ezdxf",
         "PIL",
+        "shapely", "shapely.geometry",
+        "triangle",
+        "startinpy",
+        "scipy", "scipy.spatial",
+        "docx", "latex2mathml", "lxml",
+        # ---- 渠系建筑物断面计算（无 __init__.py，sys.path hack 导入） ----
+        "明渠设计",
+        "渡槽设计",
+        "隧洞设计",
+        "矩形暗涵设计",
+        # ---- 倒虹吸水力计算系统（无 __init__.py，sys.path hack 导入） ----
+        "siphon_models",
+        "siphon_hydraulics",
+        "siphon_coefficients",
+        "dxf_parser",
+        "spatial_merger",
+        # ---- 推求水面线子包（无根 __init__.py，sys.path hack 导入） ----
+        "models", "models.data_models", "models.enums",
+        "core", "core.calculator", "core.geometry_calc", "core.hydraulic_calc",
+        "shared", "shared.shared_data_manager", "shared.k12_images_data",
+        "config", "config.constants", "config.default_data",
+        "utils", "utils.excel_io", "utils.siphon_extractor",
+        "managers", "managers.siphon_manager",
+        # ---- 推求水面线命名空间包式导入（部分代码用 from 推求水面线.xxx import） ----
+        "推求水面线.models", "推求水面线.models.data_models", "推求水面线.models.enums",
+        "推求水面线.shared", "推求水面线.shared.k12_images_data",
     ]
     for mod in hidden_imports:
         args.append(f"--hidden-import={mod}")
 
-    # ---- 添加数据文件 ----
+    # ---- 收集正式 Python 包的子模块（有 __init__.py，编译为字节码） ----
+    collect_submodules = [
+        "渠系断面设计",
+        "土石方计算",
+    ]
+    for mod in collect_submodules:
+        args.append(f"--collect-submodules={mod}")
+
+    # ---- 收集第三方包的数据文件（字体/图标/模板等） ----
+    # ezdxf 内置字体和 DXF 模板； qfluentwidgets 内置图标和 QSS 样式表
+    args.append("--collect-data=ezdxf")
+    args.append("--collect-all=qfluentwidgets")
+
+    # ---- 添加资源文件（仅图片/图标/JSON/Excel 等，不包含 .py 源码） ----
     sep = ";"  # Windows 用分号分隔 src;dest
 
-    # 项目子目录（源码 + 资源）
-    data_dirs = [
-        (os.path.join(PROJECT_ROOT, "渠系断面设计"), "渠系断面设计"),
-        (os.path.join(PROJECT_ROOT, "推求水面线"), "推求水面线"),
-        (os.path.join(PROJECT_ROOT, "渠系建筑物断面计算"), "渠系建筑物断面计算"),
-        (os.path.join(PROJECT_ROOT, "倒虹吸水力计算系统"), "倒虹吸水力计算系统"),
+    data_entries = [
+        # 项目数据文件（模板等）
         (os.path.join(PROJECT_ROOT, "data"), "data"),
-        (os.path.join(PROJECT_ROOT, "docs"), "docs"),
+        # UI 图标与 Logo
+        (os.path.join(PROJECT_ROOT, "渠系断面设计", "resources"),
+         os.path.join("渠系断面设计", "resources")),
+        (os.path.join(PROJECT_ROOT, "倒虹吸水力计算系统", "resources"),
+         os.path.join("倒虹吸水力计算系统", "resources")),
+        (os.path.join(PROJECT_ROOT, "推求水面线", "resources"),
+         os.path.join("推求水面线", "resources")),
+        # JSON 配置文件
+        (os.path.join(PROJECT_ROOT, "渠系断面设计", "default_project.siphon.json"),
+         "渠系断面设计"),
     ]
-    for src, dest in data_dirs:
+    for src, dest in data_entries:
         if os.path.exists(src):
             args.append(f"--add-data={src}{sep}{dest}")
 
@@ -106,6 +190,9 @@ def build():
     if result.returncode != 0:
         print(f"\n[错误] 打包失败（退出码: {result.returncode}）")
         sys.exit(1)
+
+    # ---- 清理残留的 .py 源码文件（双保险） ----
+    _clean_py_sources(os.path.join(DIST_DIR, APP_NAME_EN))
 
     # ---- 打包为 zip ----
     print(f"\n[2/2] 打包完成，正在压缩为 zip...\n")

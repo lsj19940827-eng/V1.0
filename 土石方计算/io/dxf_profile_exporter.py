@@ -202,16 +202,25 @@ class CrossSectionDXFExporter:
         if sec.geology_profile:
             self._draw_geology_lines(msp, sec, to_mm, geology_layers)
 
-        # --- 开挖区域填充 ---
+        # --- 施工便道线（虚线，坡顶平台）---
+        if getattr(sec, 'has_platform', False) and sec.excavation_boundary:
+            self._draw_platform_line(msp, sec, to_mm)
+
+        # --- 开挖区域填充（按地质层分色） ---
         if sec.area_result and sec.area_result.excavation_total > 0:
-            self._draw_hatch_excavation(msp, sec, to_mm)
+            self._draw_hatch_excavation(msp, sec, to_mm, geology_layers)
+
+        # --- 回填区域填充 ---
+        if sec.area_result and sec.area_result.fill_area > 0:
+            self._draw_hatch_backfill(msp, sec, to_mm)
 
         # --- 尺寸标注 ---
         if sec.area_result:
             self._draw_dimensions(msp, sec, to_mm, ox, oy, width_mm)
 
         # --- 文字标注 ---
-        self._draw_text_labels(msp, sec, to_mm, ox, oy, width_mm, height_mm)
+        self._draw_text_labels(msp, sec, to_mm, ox, oy, width_mm, height_mm,
+                               geology_layers)
 
         # --- 下方表格栏 ---
         self._draw_table(msp, sec, ox, oy - cfg.table_height, width_mm)
@@ -232,15 +241,111 @@ class CrossSectionDXFExporter:
             self._add_text(msp, name, (mid_x, mid_y),
                            self._cfg.text_height, LAYER_TEXT[0])
 
-    def _draw_hatch_excavation(self, msp, sec, to_mm_fn):
-        """绘制开挖区域填充（ANSI31 土方斜线）"""
+    def _draw_platform_line(self, msp, sec, to_mm_fn):
+        """
+        绘制施工便道线（虚线）。
+        施工便道是坡顶最外侧的水平段，从开挖边界端点向外延伸 platform_width。
+        """
+        eb = sec.excavation_boundary
+        if len(eb) < 4:
+            return
+        pw = getattr(sec, 'platform_width', 2.0) or 2.0
+
+        # 左侧施工便道：开挖边界最左端水平段
+        left_pt = min(eb, key=lambda p: p[0])      # 最左点
+        p0_mm = to_mm_fn(left_pt[0] - pw, left_pt[1])
+        p1_mm = to_mm_fn(left_pt[0], left_pt[1])
+        self._add_line(msp, p0_mm, p1_mm, LAYER_EXCAV[0], linetype="DASHED")
+
+        # 右侧施工便道：开挖边界最右端水平段
+        right_pt = max(eb, key=lambda p: p[0])     # 最右点
+        p2_mm = to_mm_fn(right_pt[0], right_pt[1])
+        p3_mm = to_mm_fn(right_pt[0] + pw, right_pt[1])
+        self._add_line(msp, p2_mm, p3_mm, LAYER_EXCAV[0], linetype="DASHED")
+
+    def _draw_hatch_excavation(
+        self, msp, sec, to_mm_fn, geology_layers: list[GeologyLayer]
+    ):
+        """
+        绘制开挖区域填充。
+        若有地质分层 → 按各层使用不同填充图案；否则统一 ANSI31。
+        """
         if not sec.ground_points or not sec.design_points:
             return
-        boundary = (list(sec.ground_points)
-                    + list(reversed(sec.design_points)))
+
+        geo = sec.geology_profile
+        if geo and geology_layers and len(geology_layers) >= 1:
+            # 按地质层分别绘制填充
+            layer_map = {gl.name: gl for gl in geology_layers}
+            try:
+                from shapely.geometry import Polygon
+                excav_poly_pts = list(sec.ground_points) + list(reversed(sec.design_points))
+                excav_poly = Polygon(excav_poly_pts)
+                if not excav_poly.is_valid:
+                    excav_poly = excav_poly.buffer(0)
+                x_min = min(p[0] for p in sec.ground_points + sec.design_points) - 1.0
+                x_max = max(p[0] for p in sec.ground_points + sec.design_points) + 1.0
+                prev_z = min(p[1] for p in sec.design_points)
+                for i, name in enumerate(geo.layer_names):
+                    top_z = geo.top_elevations[i]
+                    band = Polygon([(x_min, prev_z), (x_max, prev_z),
+                                    (x_max, top_z), (x_min, top_z)])
+                    intersection = excav_poly.intersection(band)
+                    if intersection.area > 0.001:
+                        coords = list(intersection.exterior.coords)
+                        pts_mm = [to_mm_fn(p[0], p[1]) for p in coords]
+                        gl = layer_map.get(name)
+                        pattern = gl.hatch_pattern if gl else "ANSI31"
+                        scale = gl.hatch_scale if gl else 1.0
+                        self._add_hatch(msp, pts_mm, pattern,
+                                        LAYER_HATCH[0], scale=scale)
+                    prev_z = top_z
+                # 最顶层
+                if geo.layer_names:
+                    top_band = Polygon([
+                        (x_min, prev_z), (x_max, prev_z),
+                        (x_max, max(p[1] for p in sec.ground_points) + 1),
+                        (x_min, max(p[1] for p in sec.ground_points) + 1),
+                    ])
+                    intersection = excav_poly.intersection(top_band)
+                    if intersection.area > 0.001:
+                        coords = list(intersection.exterior.coords)
+                        pts_mm = [to_mm_fn(p[0], p[1]) for p in coords]
+                        gl = layer_map.get(geo.layer_names[-1])
+                        pattern = gl.hatch_pattern if gl else "ANSI31"
+                        scale = gl.hatch_scale if gl else 1.0
+                        self._add_hatch(msp, pts_mm, pattern,
+                                        LAYER_HATCH[0], scale=scale)
+                return
+            except Exception:
+                pass  # 回退到整体填充
+        # 无地质分层 → 整体 ANSI31
+        boundary = list(sec.ground_points) + list(reversed(sec.design_points))
         pts_mm = [to_mm_fn(p[0], p[1]) for p in boundary]
         if len(pts_mm) >= 3:
             self._add_hatch(msp, pts_mm, "ANSI31", LAYER_HATCH[0], scale=1.0)
+
+    def _draw_hatch_backfill(self, msp, sec, to_mm_fn):
+        """绘制回填区域填充（DOTS 图案，回填指设计线高于地面的区域）"""
+        if not sec.ground_points or not sec.design_points:
+            return
+        try:
+            from shapely.geometry import Polygon
+            # 回填区域：设计线在地面线以上
+            fill_poly_pts = list(sec.design_points) + list(reversed(sec.ground_points))
+            poly = Polygon(fill_poly_pts)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if poly.area > 0.001:
+                coords = list(poly.exterior.coords)
+                pts_mm = [to_mm_fn(p[0], p[1]) for p in coords]
+                self._add_hatch(msp, pts_mm, "DOTS", LAYER_HATCH[0], scale=0.5)
+        except Exception:
+            # 回退：用简单闭合多边形
+            boundary = list(sec.design_points) + list(reversed(sec.ground_points))
+            pts_mm = [to_mm_fn(p[0], p[1]) for p in boundary]
+            if len(pts_mm) >= 3:
+                self._add_hatch(msp, pts_mm, "DOTS", LAYER_HATCH[0], scale=0.5)
 
     def _draw_dimensions(self, msp, sec, to_mm_fn, ox, oy, width_mm):
         """绘制尺寸标注（渠底宽/渠深/口宽/开挖深度/边坡比/各级坡高/马道宽/断面总宽）"""
@@ -285,6 +390,17 @@ class CrossSectionDXFExporter:
             self._add_text(msp, f"B={tw:.2f}",
                            (mid_t_x, lt_mm[1] + dh * 1.5), dh, LAYER_DIM[0])
 
+        # --- 贴坡厚度（衬砌厚度）---
+        lt = getattr(sec, 'lining_thickness', 0.0)
+        if lt and lt > 0 and dp and len(dp) >= 4:
+            # 在左内坡面标注贴坡厚度
+            p_lt, p_lb = dp[0], dp[1]
+            mid_slope = ((p_lt[0] + p_lb[0]) / 2, (p_lt[1] + p_lb[1]) / 2)
+            mid_mm = to_mm_fn(*mid_slope)
+            self._add_text(msp, f"δ={lt*100:.0f}cm",
+                           (mid_mm[0] - dh * 6, mid_mm[1]),
+                           dh * 0.9, LAYER_DIM[0])
+
         # --- 开挖深度 ---
         if ar.cut_depth > 0:
             self._add_text(msp, f"挖深={ar.cut_depth:.2f}",
@@ -297,40 +413,63 @@ class CrossSectionDXFExporter:
             self._add_text(msp, f"开挖宽={exc_width:.2f}",
                            (ox + width_mm - dh * 12, oy + dh * 5), dh, LAYER_DIM[0])
 
-        # --- 边坡比标注（在边坡线中段） ---
-        if eb and len(eb) >= 6:
-            # 左坡（前几个点）和右坡（后几个点）各标注一次
-            for side_pts, sign in [(eb[:3], -1), (eb[-3:], +1)]:
+        # --- 边坡比标注 + 各级坡高 + 马道宽 ---
+        if eb and len(eb) >= 4:
+            # 分析开挖边界折点：识别坡面段、水平马道段
+            # 左侧：从 design_pts[0] 往左到地面交点（eb前段）
+            # 右侧：从 design_pts[-1] 往右到地面交点（eb后段）
+            half = len(eb) // 2
+            for side_pts, sign in [(eb[:half], -1), (eb[half:], +1)]:
                 for k in range(len(side_pts) - 1):
                     p0, p1 = side_pts[k], side_pts[k + 1]
                     dz = abs(p1[1] - p0[1])
                     dx = abs(p1[0] - p0[0])
-                    if dz > 0.1:
-                        ratio = dx / dz
-                        mid_mm = to_mm_fn((p0[0] + p1[0]) / 2.0,
-                                          (p0[1] + p1[1]) / 2.0)
-                        self._add_text(msp, f"1:{ratio:.2f}",
-                                       (mid_mm[0] + sign * dh * 2.5,
-                                        mid_mm[1] + dh * 0.5),
-                                       dh * 0.9, LAYER_DIM[0])
+                    if dz > 0.3:
+                        # 坡面段：标注坡比 1:m
+                        ratio = dx / dz if dz > 1e-6 else 0
+                        if ratio > 0.01:
+                            mid_mm = to_mm_fn((p0[0] + p1[0]) / 2.0,
+                                              (p0[1] + p1[1]) / 2.0)
+                            self._add_text(msp, f"1:{ratio:.2f}",
+                                           (mid_mm[0] + sign * dh * 2.5,
+                                            mid_mm[1] + dh * 0.5),
+                                           dh * 0.9, LAYER_DIM[0])
+                        # 各级坡高竖向标注
+                        p0_mm = to_mm_fn(p0[0], p0[1])
+                        p1_mm = to_mm_fn(p1[0], p1[1])
+                        self._add_text(msp, f"H={dz:.2f}m",
+                                       (p0_mm[0] + sign * dh * 6,
+                                        (p0_mm[1] + p1_mm[1]) / 2),
+                                       dh * 0.8, LAYER_DIM[0])
+                    elif dz < 0.1 and dx > 0.5:
+                        # 水平马道：标注马道宽
+                        p0_mm = to_mm_fn(p0[0], p0[1])
+                        p1_mm = to_mm_fn(p1[0], p1[1])
+                        mid_mm = ((p0_mm[0] + p1_mm[0]) / 2,
+                                   p0_mm[1] + dh * 1.5)
+                        self._add_text(msp, f"马道={dx:.2f}m",
+                                       mid_mm, dh * 0.8, LAYER_DIM[0])
 
-    def _draw_text_labels(self, msp, sec, to_mm_fn, ox, oy, width_mm, height_mm):
-        """绘制文字标注（桩号/高程/挖深/面积等）"""
+    def _draw_text_labels(self, msp, sec, to_mm_fn, ox, oy, width_mm, height_mm,
+                           geology_layers: "list[GeologyLayer] | None" = None):
+        """绘制文字标注（桩号/高程/挖深/面积/断面类型）"""
         ar = sec.area_result
         cfg = self._cfg
         th = cfg.text_height
 
-        # 断面标题（桩号）
+        # 断面标题（桩号 + 断面类型）
         station_str = _format_station(sec.station)
+        section_type = _guess_section_type(sec)
+        title = f"{station_str}  {section_type}" if section_type else station_str
         title_x = ox + width_mm / 2.0
         title_y = oy + height_mm + th * 2
-        self._add_text(msp, station_str, (title_x, title_y),
+        self._add_text(msp, title, (title_x, title_y),
                        th * 1.5, LAYER_TEXT[0], align="CENTER")
 
         if ar is None:
             return
 
-        # 地面高程 / 设计底高程 / 挖深
+        # 地面高程 / 设计底高程 / 挖深 / 面积
         info_lines = [
             f"地面高程: {ar.ground_elevation_center:.3f} m",
             f"设计底高程: {ar.design_invert_elevation:.3f} m",
@@ -647,6 +786,26 @@ class LongitudinalDXFExporter:
 # ------------------------------------------------------------------
 # 工具函数
 # ------------------------------------------------------------------
+
+def _guess_section_type(sec: "CrossSectionData") -> str:
+    """
+    从横断面数据猜测断面类型名称（用于图纸标题）。
+    """
+    if not sec.design_points:
+        return ""
+    dp = sec.design_points
+    # 梯形判断：4个顶点且左右上点不等宽
+    if len(dp) == 4:
+        top_w = abs(dp[3][0] - dp[0][0])
+        bot_w = abs(dp[2][0] - dp[1][0])
+        if abs(top_w - bot_w) > 0.01:
+            return "梯形明渠"
+        else:
+            return "矩形明渠"
+    elif len(dp) > 4:
+        return "复合断面"
+    return ""
+
 
 def _format_station(station: float) -> str:
     """格式化桩号为 K0+000.000 格式"""

@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QLabel, QGroupBox, QTabWidget, QScrollArea,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QFileDialog, QProgressBar, QTextEdit, QComboBox,
-    QDoubleSpinBox, QSizePolicy,
+    QDoubleSpinBox, QSizePolicy, QCheckBox, QSpinBox,
 )
 from PySide6.QtCore import Qt
 from qfluentwidgets import PushButton, PrimaryPushButton, LineEdit as FLineEdit, InfoBar, InfoBarPosition
@@ -25,16 +25,22 @@ if _ROOT not in sys.path:
 from 土石方计算.ui.panel_handlers import _EarthworkPanelHandlers, _TINBuildThread
 
 
-# ── 嵌入式 Matplotlib 画布 ────────────────────────────────────
+# ── 嵌入式 Matplotlib 画布（含导航工具栏）────────────────────
 class _MplCanvas(QWidget):
-    def __init__(self, parent=None, w=6, h=4, dpi=96):
+    def __init__(self, parent=None, w=6, h=4, dpi=96, toolbar=True):
         super().__init__(parent)
-        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
         from matplotlib.figure import Figure
         self.fig = Figure(figsize=(w, h), dpi=dpi, tight_layout=True)
         self.axes = self.fig.add_subplot(111)
         self._cv = FigureCanvasQTAgg(self.fig)
-        lay = QVBoxLayout(self); lay.setContentsMargins(0,0,0,0); lay.addWidget(self._cv)
+        lay = QVBoxLayout(self); lay.setContentsMargins(0,0,0,0); lay.setSpacing(0)
+        if toolbar:
+            self._tb = NavigationToolbar2QT(self._cv, self)
+            self._tb.setFixedHeight(28)
+            self._tb.setStyleSheet("QToolBar{border:none;background:transparent;spacing:2px;}")
+            lay.addWidget(self._tb)
+        lay.addWidget(self._cv)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def redraw(self): self._cv.draw_idle()
@@ -61,6 +67,7 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         self._volume_result = None
         self._sec_idx = 0
         self._build_thread = None
+        self._geology_depth_data: dict = {}  # {layer_name: [(station, thickness), ...]}
         self._build_ui()
 
     # ── 顶层骨架 ─────────────────────────────────────────────
@@ -109,23 +116,54 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         ox_r.addWidget(self._ox); ox_r.addWidget(self._oy)
         f.addRow("坐标偏移（减去）:", ox_r)
         load_r = QHBoxLayout()
-        btn_load = PrimaryPushButton("载入地形数据"); btn_load.clicked.connect(self._on_load_terrain)
+        btn_load = PrimaryPushButton("载入地形数据")
+        btn_load.clicked.connect(self._on_load_terrain)
+        btn_append = PushButton("➕ 追加到现有")
+        btn_append.setToolTip("将此文件的地形点追加到已载入的点集（多源合并）")
+        btn_append.clicked.connect(self._on_append_terrain)
+        btn_clear = PushButton("❌ 清空")
+        btn_clear.setToolTip("清空全部地形点")
+        btn_clear.clicked.connect(self._on_clear_terrain)
         self._terrain_lbl = QLabel("— 未载入 —"); self._terrain_lbl.setStyleSheet(f"color:{T2};font-size:12px;")
-        load_r.addWidget(btn_load); load_r.addWidget(self._terrain_lbl); load_r.addStretch()
+        load_r.addWidget(btn_load); load_r.addWidget(btn_append)
+        load_r.addWidget(btn_clear); load_r.addWidget(self._terrain_lbl); load_r.addStretch()
         f.addRow("", load_r)
         lay.addWidget(g)
 
         # 中心线
         g2 = QGroupBox("渠道中心线"); f2 = QFormLayout(g2); f2.setSpacing(8)
-        self._al_src = QComboBox(); self._al_src.addItems(["DXF 多段线", "手动输入（起止点直线）"])
+        self._al_src = QComboBox()
+        self._al_src.addItems(["DXF 多段线", "桩号坐标表 (Excel/CSV)", "手动输入（起止点直线）"])
         self._al_src.currentIndexChanged.connect(self._on_al_src_changed)
         f2.addRow("来源:", self._al_src)
+        # --- DXF 选项 ---
         al_r = QHBoxLayout()
         self._al_path = FLineEdit(); self._al_path.setPlaceholderText("中心线 DXF 文件路径…")
         btn_al = PushButton("浏览"); btn_al.setFixedWidth(64); btn_al.clicked.connect(self._browse_alignment)
         al_r.addWidget(self._al_path, 1); al_r.addWidget(btn_al)
         self._al_file_w = QWidget(); self._al_file_w.setLayout(al_r)
         f2.addRow("DXF 文件:", self._al_file_w)
+        self._al_layer = FLineEdit(); self._al_layer.setPlaceholderText("中心线图层名（默认: 中心线）")
+        self._al_layer_row_lbl = QLabel("图层名:")
+        f2.addRow(self._al_layer_row_lbl, self._al_layer)
+        # --- 桩号坐标表选项 ---
+        self._al_table_w = QWidget(); tf = QFormLayout(self._al_table_w); tf.setContentsMargins(0,0,0,0)
+        sta_r = QHBoxLayout()
+        self._al_sta_path = FLineEdit(); self._al_sta_path.setPlaceholderText("中心线 Excel/CSV 文件路径…")
+        btn_sta = PushButton("浏览"); btn_sta.setFixedWidth(64); btn_sta.clicked.connect(self._browse_alignment_table)
+        sta_r.addWidget(self._al_sta_path, 1); sta_r.addWidget(btn_sta)
+        tf.addRow("坐标表文件:", sta_r)
+        self._al_sheet = FLineEdit(); self._al_sheet.setPlaceholderText("Sheet1（Excel时填写）")
+        self._al_col_sta = FLineEdit(); self._al_col_sta.setPlaceholderText("桩号")
+        self._al_col_x2 = FLineEdit(); self._al_col_x2.setPlaceholderText("X")
+        self._al_col_y2 = FLineEdit(); self._al_col_y2.setPlaceholderText("Y")
+        col_r = QHBoxLayout(); col_r.addWidget(QLabel("桩号列:")); col_r.addWidget(self._al_col_sta)
+        col_r.addWidget(QLabel(" X列:")); col_r.addWidget(self._al_col_x2)
+        col_r.addWidget(QLabel(" Y列:")); col_r.addWidget(self._al_col_y2)
+        tf.addRow("工作表:", self._al_sheet)
+        tf.addRow("列映射:", col_r)
+        f2.addRow(self._al_table_w); self._al_table_w.setVisible(False)
+        # --- 手动直线选项 ---
         self._al_manual_w = QWidget(); mf = QFormLayout(self._al_manual_w); mf.setContentsMargins(0,0,0,0)
         self._al_x0 = QDoubleSpinBox(); self._al_x0.setRange(-1e8,1e8); self._al_x0.setDecimals(3)
         self._al_y0 = QDoubleSpinBox(); self._al_y0.setRange(-1e8,1e8); self._al_y0.setDecimals(3)
@@ -135,8 +173,6 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         r1 = QHBoxLayout(); r1.addWidget(QLabel("X₁:")); r1.addWidget(self._al_x1); r1.addWidget(QLabel("Y₁:")); r1.addWidget(self._al_y1)
         mf.addRow("起点:", r0); mf.addRow("终点:", r1)
         f2.addRow("坐标:", self._al_manual_w); self._al_manual_w.setVisible(False)
-        self._al_layer = FLineEdit(); self._al_layer.setPlaceholderText("中心线图层名（默认: 中心线）")
-        f2.addRow("图层名:", self._al_layer)
         lay.addWidget(g2)
 
         # 设计断面
@@ -147,16 +183,45 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         self._ds_mr = QDoubleSpinBox(); self._ds_mr.setRange(0,5);     self._ds_mr.setValue(1.5); self._ds_mr.setSingleStep(0.25)
         f3.addRow("渠底宽 b:", self._ds_b); f3.addRow("渠深 h:", self._ds_h)
         f3.addRow("左内坡比 m:", self._ds_ml); f3.addRow("右内坡比 m:", self._ds_mr)
+        btn_import_ds = PushButton("↑ 从明渠设计模块读取当前参数")
+        btn_import_ds.setToolTip("读取「明渠设计」标签页中当前输入的断面参数（渠底宽/渠深/内坡比）")
+        btn_import_ds.clicked.connect(self._on_import_from_channel_design)
+        f3.addRow("", btn_import_ds)
         lay.addWidget(g3)
 
-        # 纵坡设计
-        g4 = QGroupBox("纵坡设计（渠底高程）"); f4 = QFormLayout(g4); f4.setSpacing(8)
-        self._dp_s0 = QDoubleSpinBox(); self._dp_s0.setRange(0,1e6); self._dp_s0.setSuffix(" m")
-        self._dp_e0 = QDoubleSpinBox(); self._dp_e0.setRange(-200,5000); self._dp_e0.setDecimals(3); self._dp_e0.setValue(97.0); self._dp_e0.setSuffix(" m")
-        self._dp_i  = QDoubleSpinBox(); self._dp_i.setRange(-0.1,0.1); self._dp_i.setDecimals(6); self._dp_i.setValue(-0.0003); self._dp_i.setSingleStep(0.0001)
-        self._dp_s1 = QDoubleSpinBox(); self._dp_s1.setRange(0,1e6); self._dp_s1.setValue(1000.0); self._dp_s1.setSuffix(" m")
-        f4.addRow("起始桩号:", self._dp_s0); f4.addRow("起始渠底高程:", self._dp_e0)
-        f4.addRow("纵坡 i（负=顺坡）:", self._dp_i); f4.addRow("终止桩号:", self._dp_s1)
+        # 纵坡设计（多段支持）
+        g4 = QGroupBox("纵坡设计（渠底高程，支持多段）"); sl4 = QVBoxLayout(g4); sl4.setSpacing(6)
+        sl4.addWidget(QLabel("每行定义一段纵坡（起始桩号/起始渠底高程/纵坡i/终止桩号）："))
+        self._dp_table = QTableWidget(1, 4)
+        self._dp_table.setHorizontalHeaderLabels(["起始桩号(m)", "起始底高程(m)", "纵坡 i", "终止桩号(m)"])
+        self._dp_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._dp_table.verticalHeader().setVisible(False)
+        self._dp_table.setMaximumHeight(110)
+        for c_, v_ in enumerate(["0", "97.000", "-0.000300", "1000"]):
+            self._dp_table.setItem(0, c_, QTableWidgetItem(v_))
+        dp_btn_r = QHBoxLayout()
+        btn_dp_add = PushButton("＋ 添加段"); btn_dp_del = PushButton("－ 删除最后")
+        btn_dp_xl  = PushButton("📂 从Excel导入")
+        btn_dp_xl.setToolTip("从Excel文件读取纵断面设计底高程（桩号,设计底高程 两列）")
+        btn_dp_wpl = PushButton("↑ 从水面线模块读取")
+        btn_dp_wpl.setToolTip("读取推求水面线模块中已计算的纵断面设计底高程")
+        def _dp_add():
+            r = self._dp_table.rowCount(); self._dp_table.insertRow(r)
+            for c_, v_ in enumerate(["0", "97.000", "-0.000300", "1000"]):
+                self._dp_table.setItem(r, c_, QTableWidgetItem(v_))
+        def _dp_del():
+            if self._dp_table.rowCount() > 1: self._dp_table.removeRow(self._dp_table.rowCount()-1)
+        btn_dp_add.clicked.connect(_dp_add); btn_dp_del.clicked.connect(_dp_del)
+        btn_dp_xl.clicked.connect(self._on_import_design_profile_excel)
+        btn_dp_wpl.clicked.connect(self._on_import_from_water_profile)
+        dp_btn_r.addWidget(btn_dp_add); dp_btn_r.addWidget(btn_dp_del)
+        dp_btn_r.addWidget(btn_dp_xl); dp_btn_r.addWidget(btn_dp_wpl); dp_btn_r.addStretch()
+        sl4.addWidget(self._dp_table); sl4.addLayout(dp_btn_r)
+        # 向下兼容：保留单段属性（供已有代码访问）
+        self._dp_s0 = QDoubleSpinBox(); self._dp_s0.setVisible(False)
+        self._dp_e0 = QDoubleSpinBox(); self._dp_e0.setVisible(False); self._dp_e0.setValue(97.0)
+        self._dp_i  = QDoubleSpinBox(); self._dp_i.setVisible(False);  self._dp_i.setValue(-0.0003)
+        self._dp_s1 = QDoubleSpinBox(); self._dp_s1.setVisible(False); self._dp_s1.setValue(1000.0)
         lay.addWidget(g4)
 
         # 开挖边坡（多级）
@@ -185,13 +250,63 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         self._long_step   = QDoubleSpinBox(); self._long_step.setRange(0.5,50);  self._long_step.setValue(2.0);  self._long_step.setSuffix(" m")
         self._cs_interval = QDoubleSpinBox(); self._cs_interval.setRange(5,500); self._cs_interval.setValue(20.0); self._cs_interval.setSuffix(" m")
         self._cs_hw       = QDoubleSpinBox(); self._cs_hw.setRange(5,300);      self._cs_hw.setValue(30.0);      self._cs_hw.setSuffix(" m")
+        btn_auto_hw = PushButton("自动估算")
+        btn_auto_hw.setToolTip("根据设计断面口宽×2@边坡延伸自动估算横断面半宽")
+        btn_auto_hw.clicked.connect(self._on_auto_estimate_width)
         self._cs_sample   = QDoubleSpinBox(); self._cs_sample.setRange(0.1,5);  self._cs_sample.setValue(0.5);   self._cs_sample.setSuffix(" m")
         self._extra_sta_edit = FLineEdit()
         self._extra_sta_edit.setPlaceholderText("关键桩号（逗号分隔，如 100,250.5,500）")
+        # 非对称宽度
+        self._cs_asym_chk = QCheckBox("左右非对称宽度")
+        self._cs_asym_chk.toggled.connect(self._on_asym_width_toggled)
+        self._cs_lw_w = QWidget(); lw_f = QHBoxLayout(self._cs_lw_w); lw_f.setContentsMargins(0,0,0,0)
+        self._cs_lw = QDoubleSpinBox(); self._cs_lw.setRange(5,300); self._cs_lw.setValue(30.0); self._cs_lw.setSuffix(" m")
+        self._cs_rw = QDoubleSpinBox(); self._cs_rw.setRange(5,300); self._cs_rw.setValue(30.0); self._cs_rw.setSuffix(" m")
+        lw_f.addWidget(QLabel("左宽:")); lw_f.addWidget(self._cs_lw)
+        lw_f.addWidget(QLabel(" 右宽:")); lw_f.addWidget(self._cs_rw)
+        self._cs_lw_w.setVisible(False)
+        hw_row = QWidget(); hw_lay = QHBoxLayout(hw_row); hw_lay.setContentsMargins(0,0,0,0)
+        hw_lay.addWidget(self._cs_hw); hw_lay.addWidget(btn_auto_hw)
         f6.addRow("纵断面采样步长:", self._long_step); f6.addRow("横断面间距:", self._cs_interval)
-        f6.addRow("横断面半宽:", self._cs_hw);         f6.addRow("横断面采样步长:", self._cs_sample)
+        f6.addRow("横断面半宽:", hw_row);              f6.addRow("横断面采样步长:", self._cs_sample)
+        f6.addRow("", self._cs_asym_chk);               f6.addRow("非对称宽度:", self._cs_lw_w)
         f6.addRow("关键桩号（额外）:", self._extra_sta_edit)
         lay.addWidget(g6)
+
+        # 地质分层管理
+        g7 = QGroupBox("地质分层（可选）"); sl7 = QVBoxLayout(g7); sl7.setSpacing(6)
+        sl7.addWidget(QLabel("从上到下依次添加地质层（留空则不使用地质分层）："))
+        self._geo_table = QTableWidget(0, 4)
+        self._geo_table.setHorizontalHeaderLabels(["层名称", "填充图案", "ACI颜色", "统一深度(m)\n空=从文件导入"])
+        self._geo_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._geo_table.verticalHeader().setVisible(False)
+        self._geo_table.setMaximumHeight(130)
+        geo_btn_r = QHBoxLayout()
+        btn_geo_add = PushButton("＋ 添加层")
+        btn_geo_del = PushButton("－ 删除最后")
+        btn_geo_xl  = PushButton("📂 从Excel导入深度表")
+        btn_geo_dxf = PushButton("🗺 从DXF导入分层线")
+        def _geo_add():
+            r = self._geo_table.rowCount(); self._geo_table.insertRow(r)
+            defaults = [f"地质层{r+1}", "ANSI31", "8", ""]
+            for c_, v_ in enumerate(defaults):
+                self._geo_table.setItem(r, c_, QTableWidgetItem(v_))
+        def _geo_del():
+            if self._geo_table.rowCount() > 0:
+                self._geo_table.removeRow(self._geo_table.rowCount()-1)
+        btn_geo_add.clicked.connect(_geo_add)
+        btn_geo_del.clicked.connect(_geo_del)
+        btn_geo_xl.clicked.connect(self._on_import_geology_excel)
+        btn_geo_dxf.clicked.connect(self._on_import_geology_dxf)
+        geo_btn_r.addWidget(btn_geo_add); geo_btn_r.addWidget(btn_geo_del)
+        geo_btn_r.addWidget(btn_geo_xl); geo_btn_r.addWidget(btn_geo_dxf); geo_btn_r.addStretch()
+        # 深度表状态标签
+        self._geo_depth_lbl = QLabel("未导入深度表（若无地质分层数据可跳过）")
+        self._geo_depth_lbl.setStyleSheet(f"color:{T2};font-size:12px;")
+        sl7.addWidget(self._geo_table); sl7.addLayout(geo_btn_r)
+        sl7.addWidget(self._geo_depth_lbl)
+        lay.addWidget(g7)
+
         lay.addStretch()
         return scroll
 
@@ -207,7 +322,10 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         self._btn_tin.setEnabled(False); self._btn_tin.clicked.connect(self._on_build_tin)
         self._tin_info = QLabel(""); self._tin_info.setWordWrap(True)
         self._tin_info.setStyleSheet(f"font-size:12px;color:{T1};line-height:1.6;")
+        self._tin_filter_chk = QCheckBox("构建前过滤异常高程点（IQR法）")
+        self._tin_filter_chk.setToolTip("适用于地形数据中存在Z=0或极端异常高程的情况")
         vl.addWidget(QLabel("状态:")); vl.addWidget(self._tin_stat)
+        vl.addWidget(self._tin_filter_chk)
         vl.addWidget(self._btn_tin); vl.addWidget(self._tin_prog)
         vl.addWidget(self._tin_prog_lbl); vl.addWidget(self._tin_info); vl.addStretch()
         cl.addWidget(g); cl.addStretch()
@@ -284,7 +402,11 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
 
     # ── Tab 5  成果导出 ──────────────────────────────────────
     def _tab_export(self) -> QWidget:
-        w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(8,8,8,8); lay.setSpacing(10)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{border:none;}")
+        w = QWidget(); scroll.setWidget(w)
+        lay = QVBoxLayout(w); lay.setContentsMargins(8,8,8,8); lay.setSpacing(10)
+
         g = QGroupBox("输出设置"); f = QFormLayout(g); f.setSpacing(8)
         od_r = QHBoxLayout()
         self._out_dir = FLineEdit(); self._out_dir.setPlaceholderText("输出目录（默认当前目录）")
@@ -293,6 +415,29 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         self._proj_name = FLineEdit(); self._proj_name.setPlaceholderText("项目名称（用于文件名前缀）")
         f.addRow("输出目录:", od_r); f.addRow("项目名称:", self._proj_name)
         lay.addWidget(g)
+
+        # 横断面DXF排版配置
+        g_dxf = QGroupBox("横断面 DXF 排版配置（PRD: 全部可配置）")
+        f_dxf = QFormLayout(g_dxf); f_dxf.setSpacing(8)
+        self._dxf_spp  = QSpinBox(); self._dxf_spp.setRange(1, 12); self._dxf_spp.setValue(4)
+        self._dxf_pw   = QDoubleSpinBox(); self._dxf_pw.setRange(200, 2000); self._dxf_pw.setValue(594.0); self._dxf_pw.setSuffix(" mm")
+        self._dxf_ph   = QDoubleSpinBox(); self._dxf_ph.setRange(200, 2000); self._dxf_ph.setValue(420.0); self._dxf_ph.setSuffix(" mm")
+        self._dxf_sh   = QDoubleSpinBox(); self._dxf_sh.setRange(50, 5000); self._dxf_sh.setValue(200.0); self._dxf_sh.setPrefix("1:"); self._dxf_sh.setSuffix(" 水平")
+        self._dxf_sv   = QDoubleSpinBox(); self._dxf_sv.setRange(50, 5000); self._dxf_sv.setValue(200.0); self._dxf_sv.setPrefix("1:"); self._dxf_sv.setSuffix(" 竖向")
+        f_dxf.addRow("每页断面数:", self._dxf_spp)
+        f_dxf.addRow("图幅宽×高:", self._make_hw_row(self._dxf_pw, self._dxf_ph))
+        f_dxf.addRow("水平/竖向比例尺:", self._make_hw_row(self._dxf_sh, self._dxf_sv))
+        lay.addWidget(g_dxf)
+
+        # 纵断面DXF配置
+        g_ldxf = QGroupBox("纵断面 DXF 排版配置")
+        f_ldxf = QFormLayout(g_ldxf); f_ldxf.setSpacing(8)
+        self._ldxf_sh = QDoubleSpinBox(); self._ldxf_sh.setRange(100, 50000); self._ldxf_sh.setValue(2000.0); self._ldxf_sh.setPrefix("1:")
+        self._ldxf_sv = QDoubleSpinBox(); self._ldxf_sv.setRange(20, 1000);  self._ldxf_sv.setValue(200.0);  self._ldxf_sv.setPrefix("1:")
+        f_ldxf.addRow("水平比例尺:", self._ldxf_sh)
+        f_ldxf.addRow("竖向比例尺:", self._ldxf_sv)
+        lay.addWidget(g_ldxf)
+
         g2 = QGroupBox("导出成果"); bl = QHBoxLayout(g2)
         self._btn_xlsx    = PrimaryPushButton("导出 Excel 汇总表")
         self._btn_long_dxf = PushButton("导出纵断面 DXF")
@@ -308,8 +453,16 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         self._log = QTextEdit(); self._log.setReadOnly(True); self._log.setMaximumHeight(200)
         self._log.setStyleSheet("font-size:12px;font-family:Consolas,'Courier New';")
         ll.addWidget(self._log)
-        lay.addWidget(g3, 1)
-        return w
+        lay.addWidget(g3)
+        lay.addStretch()
+        return scroll
+
+    @staticmethod
+    def _make_hw_row(w1, w2):
+        """创建两个控件并排的 QWidget"""
+        row = QWidget(); lay = QHBoxLayout(row); lay.setContentsMargins(0,0,0,0)
+        lay.addWidget(w1); lay.addWidget(w2)
+        return row
 
     # ── 浏览按钮 ─────────────────────────────────────────────
     def _browse_terrain(self):
@@ -320,13 +473,25 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         p, _ = QFileDialog.getOpenFileName(self, "选择中心线 DXF", "", "DXF 文件 (*.dxf);;所有文件 (*)")
         if p: self._al_path.setText(p)
 
+    def _browse_alignment_table(self):
+        p, _ = QFileDialog.getOpenFileName(self, "选择中心线坐标表", "",
+            "坐标文件 (*.xlsx *.csv *.txt);;所有文件 (*)")
+        if p: self._al_sta_path.setText(p)
+
     def _browse_outdir(self):
         d = QFileDialog.getExistingDirectory(self, "选择输出目录")
         if d: self._out_dir.setText(d)
 
+    def _on_asym_width_toggled(self, checked: bool):
+        self._cs_hw.setVisible(not checked)
+        self._cs_lw_w.setVisible(checked)
+
     def _on_al_src_changed(self, idx: int):
         self._al_file_w.setVisible(idx == 0)
-        self._al_manual_w.setVisible(idx == 1)
+        self._al_layer_row_lbl.setVisible(idx == 0)
+        self._al_layer.setVisible(idx == 0)
+        self._al_table_w.setVisible(idx == 1)
+        self._al_manual_w.setVisible(idx == 2)
 
     # ── 日志 + InfoBar ───────────────────────────────────────
     def _log_msg(self, msg: str, level: str = "INFO"):

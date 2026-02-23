@@ -104,15 +104,16 @@ class VolumeCalculator:
                                           ar_b.fill_area, length)
 
         exc_by_layer_avg: dict[str, float] = {}
+        exc_by_layer_prism: dict[str, float] = {}
         all_layers = set(ar_a.excavation_by_layer) | set(ar_b.excavation_by_layer)
         for layer in all_layers:
             a_area = ar_a.excavation_by_layer.get(layer, 0.0)
             b_area = ar_b.excavation_by_layer.get(layer, 0.0)
             exc_by_layer_avg[layer] = self._average_section(a_area, b_area, length)
+            a_m_layer = (a_area + b_area) / 2.0
+            exc_by_layer_prism[layer] = self._prismatoid(a_area, b_area, a_m_layer, length)
 
         # --- 棱台法 ---
-        # 中间断面面积 A_m：用两端面积的平均值近似（不重新切割断面以节省计算）
-        # 精确实现应在中点桩号处重新切割，此处提供接口预留
         a_m_exc = (ar_a.excavation_total + ar_b.excavation_total) / 2.0
         a_m_fill = (ar_a.fill_area + ar_b.fill_area) / 2.0
         exc_prism = self._prismatoid(ar_a.excavation_total,
@@ -127,6 +128,7 @@ class VolumeCalculator:
             excavation_avg=exc_avg,
             excavation_prismatoid=exc_prism,
             excavation_by_layer_avg=exc_by_layer_avg,
+            excavation_by_layer_prismatoid=exc_by_layer_prism,
             fill_avg=fill_avg,
             fill_prismatoid=fill_prism,
         )

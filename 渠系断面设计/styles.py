@@ -224,6 +224,22 @@ def fluent_question(parent, title, content, yes_text="是", no_text="否"):
     return bool(w.exec())
 
 
+def fluent_select(parent, title, content, items, default_index=0):
+    """下拉选择对话框，替代 QInputDialog.getItem
+    返回 (selected_text, ok) 元组"""
+    from qfluentwidgets import MessageBox, ComboBox
+    w = MessageBox(title, content, parent)
+    combo = ComboBox()
+    combo.addItems(items)
+    combo.setCurrentIndex(default_index)
+    combo.setFixedWidth(200)
+    w.textLayout.addWidget(combo)
+    w.yesButton.setText("确定")
+    w.cancelButton.setText("取消")
+    ok = bool(w.exec())
+    return combo.currentText(), ok
+
+
 # QDialog 统一样式（让弹窗中的 QGroupBox / QLabel 等组件风格一致）
 DIALOG_STYLE = f"""
 QDialog {{

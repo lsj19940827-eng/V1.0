@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "渠系建筑物断面计算"))
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea, QInputDialog
+    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea
 )
 from PySide6.QtCore import Qt
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -143,7 +143,7 @@ class TunnelPanel(QWidget):
         self.circ_grp = QWidget()
         circ_lay = QVBoxLayout(self.circ_grp); circ_lay.setContentsMargins(0,0,0,0); circ_lay.setSpacing(5)
         circ_lay.addWidget(self._slbl("【圆形断面参数】"))
-        self.D_lbl, self.D_edit = self._field2(circ_lay, "手动直径 D (m):", "")
+        self.D_lbl, self.D_edit = self._field2(circ_lay, "指定直径 D (m):", "")
         circ_lay.addWidget(self._hint("(留空则自动计算)"))
         fl.addWidget(self.circ_grp)
 
@@ -153,8 +153,8 @@ class TunnelPanel(QWidget):
         hs_lay.addWidget(self._slbl("【圆拱直墙型参数】"))
         self.theta_lbl, self.theta_edit = self._field2(hs_lay, "拱顶圆心角 (度):", "")
         hs_lay.addWidget(self._hint("(留空则采用180°)"))
-        self.B_hs_lbl, self.B_hs_edit = self._field2(hs_lay, "手动底宽 B (m):", "")
-        hs_lay.addWidget(self._hint("(手动底宽留空则自动计算)"))
+        self.B_hs_lbl, self.B_hs_edit = self._field2(hs_lay, "指定底宽 B (m):", "")
+        hs_lay.addWidget(self._hint("(指定底宽留空则自动计算)"))
         fl.addWidget(self.hs_grp)
         self.hs_grp.hide()
 
@@ -162,7 +162,7 @@ class TunnelPanel(QWidget):
         self.shoe_grp = QWidget()
         shoe_lay = QVBoxLayout(self.shoe_grp); shoe_lay.setContentsMargins(0,0,0,0); shoe_lay.setSpacing(5)
         shoe_lay.addWidget(self._slbl("【马蹄形断面参数】"))
-        self.r_lbl, self.r_edit = self._field2(shoe_lay, "手动半径 r (m):", "")
+        self.r_lbl, self.r_edit = self._field2(shoe_lay, "指定半径 r (m):", "")
         shoe_lay.addWidget(self._hint("(留空则自动计算)"))
         fl.addWidget(self.shoe_grp)
         self.shoe_grp.hide()
@@ -351,7 +351,7 @@ class TunnelPanel(QWidget):
 
             if result.get('success') and 'increase_percent' in result:
                 ap = result['increase_percent']
-                src = "手动指定" if self.inc_edit.text().strip() else "自动计算"
+                src = "指定" if self.inc_edit.text().strip() else "自动计算"
                 self.inc_hint.setText(f"({src}: {ap:.1f}%)")
 
             self._update_result_display(result)
@@ -391,7 +391,7 @@ class TunnelPanel(QWidget):
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']; i = 1.0 / slope_inv
         v_min, v_max = p['v_min'], p['v_max']
-        inc_src = "(手动指定)" if p.get('manual_increase') else "(自动计算)"
+        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
         stype = self.input_params.get('section_type', '圆形')
 
         A_total = result.get('A_total', 0)
@@ -414,12 +414,24 @@ class TunnelPanel(QWidget):
         if not detail:
             # ============ 简要输出（对齐原版格式） ============
             o.append("【输入参数】")
-            o.append(f"  断面类型 = {stype}")
-            o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-            o.append(f"  糙率 n = {n}")
-            o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-            o.append(f"  不淤流速 = {v_min} m/s")
-            o.append(f"  不冲流速 = {v_max} m/s")
+            o.append("")
+            o.append(f"  1. 断面类型:")
+            o.append(f"     {stype}")
+            o.append("")
+            o.append(f"  2. 设计流量:")
+            o.append(f"     Q = {Q:.3f} m³/s")
+            o.append("")
+            o.append(f"  3. 糙率:")
+            o.append(f"     n = {n}")
+            o.append("")
+            o.append(f"  4. 水力坡降:")
+            o.append(f"     = 1/{int(slope_inv)}")
+            o.append("")
+            o.append(f"  5. 不淤流速:")
+            o.append(f"     = {v_min} m/s")
+            o.append("")
+            o.append(f"  6. 不冲流速:")
+            o.append(f"     = {v_max} m/s")
             o.append("")
 
             o.append("【断面尺寸】")
@@ -458,12 +470,24 @@ class TunnelPanel(QWidget):
         else:
             # ============ 详细输出（对齐原版格式） ============
             o.append("【一、输入参数】")
-            o.append(f"  断面类型 = {stype}")
-            o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-            o.append(f"  糙率 n = {n}")
-            o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-            o.append(f"  不淤流速 = {v_min} m/s")
-            o.append(f"  不冲流速 = {v_max} m/s")
+            o.append("")
+            o.append(f"  1. 断面类型:")
+            o.append(f"     {stype}")
+            o.append("")
+            o.append(f"  2. 设计流量:")
+            o.append(f"     Q = {Q:.3f} m³/s")
+            o.append("")
+            o.append(f"  3. 糙率:")
+            o.append(f"     n = {n}")
+            o.append("")
+            o.append(f"  4. 水力坡降:")
+            o.append(f"     = 1/{int(slope_inv)}")
+            o.append("")
+            o.append(f"  5. 不淤流速:")
+            o.append(f"     = {v_min} m/s")
+            o.append("")
+            o.append(f"  6. 不冲流速:")
+            o.append(f"     = {v_max} m/s")
             o.append("")
 
             # 断面尺寸
@@ -495,15 +519,14 @@ class TunnelPanel(QWidget):
                 o.append("【二、断面尺寸】")
                 o.append("")
                 st_name = '标准Ⅰ型' if 'Ⅰ' in type_label else '标准Ⅱ型'
-                o.append(f"  断面类型: {st_name}")
-                o.append(f"  1. 设计半径: r = {r_val:.2f} m")
-                o.append(f"  2. 等效直径: 2r = {D_equiv:.2f} m")
-                o.append(f"  3. 断面总面积: A总 = {A_total:.3f} m²")
+                o.append(f"  1. 断面类型: {st_name}")
+                o.append(f"  2. 设计半径: r = {r_val:.2f} m")
+                o.append(f"  3. 等效直径: 2r = {D_equiv:.2f} m")
+                o.append(f"  4. 断面总面积: A总 = {A_total:.3f} m²")
                 o.append("")
 
             # 设计流量工况
             o.append("【三、设计流量工况计算】")
-            o.append(f"  Q = {Q:.3f} m³/s")
             o.append("")
             o.append("  1. 设计水深计算:")
             o.append(f"     根据设计流量 Q = {Q:.3f} m³/s，利用曼宁公式反算水深:")
@@ -632,14 +655,14 @@ class TunnelPanel(QWidget):
             # 加大流量工况
             o.append("【四、加大流量工况计算】")
             o.append("")
-            o.append(f"  9. 加大流量计算:")
+            o.append(f"  1. 加大流量计算:")
             o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
             o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
             o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
             o.append(f"           = {Q_inc:.3f} m³/s")
             o.append("")
 
-            o.append("  10. 加大水深计算:")
+            o.append("  2. 加大水深计算:")
             o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
             o.append(f"      h加大 = {h_inc:.3f} m")
             o.append("")
@@ -649,28 +672,28 @@ class TunnelPanel(QWidget):
                 D = result['D']; R_radius = D / 2
                 if h_inc > 0 and D > 0 and h_inc < D:
                     theta_inc = 2 * math.acos((R_radius - h_inc) / R_radius)
-                    o.append("  11. 圆心角计算:")
+                    o.append("  3. 圆心角计算:")
                     o.append(f"      θ加大 = 2 × arccos((R - h加大) / R)")
                     o.append(f"           = 2 × arccos(({R_radius:.3f} - {h_inc:.3f}) / {R_radius:.3f})")
                     o.append(f"           = 2 × arccos({(R_radius - h_inc)/R_radius:.4f})")
                     o.append(f"           = {math.degrees(theta_inc):.2f}° ({theta_inc:.4f} rad)")
                     o.append("")
-                    o.append("  12. 过水面积计算:")
+                    o.append("  4. 过水面积计算:")
                     o.append(f"      A加大 = (D²/8) × (θ加大 - sinθ加大)")
                     o.append(f"           = ({D:.3f}²/8) × ({theta_inc:.4f} - sin{theta_inc:.4f})")
                     o.append(f"           = {D**2/8:.4f} × {theta_inc - math.sin(theta_inc):.4f}")
                     o.append(f"           = {A_inc:.3f} m²")
                     o.append("")
-                    o.append("  13. 湿周计算:")
+                    o.append("  5. 湿周计算:")
                     o.append(f"      χ加大 = (D/2) × θ加大")
                     o.append(f"           = ({D:.3f}/2) × {theta_inc:.4f}")
                     o.append(f"           = {R_radius:.3f} × {theta_inc:.4f}")
                     o.append(f"           = {P_inc:.3f} m")
                     o.append("")
                 else:
-                    o.append(f"  11. 过水面积: A加大 = {A_inc:.3f} m²")
+                    o.append(f"  3. 过水面积: A加大 = {A_inc:.3f} m²")
                     o.append("")
-                    o.append(f"  12. 湿周: χ加大 = {P_inc:.3f} m")
+                    o.append(f"  4. 湿周: χ加大 = {P_inc:.3f} m")
                     o.append("")
             elif stype == "圆拱直墙型":
                 B_hs = result['B']; H_hs = result['H_total']
@@ -680,7 +703,7 @@ class TunnelPanel(QWidget):
                     R_arch = (B_hs / 2) / math.sin(theta_rad_hs / 2)
                     H_arch = R_arch * (1 - math.cos(theta_rad_hs / 2))
                     H_straight = max(0, H_hs - H_arch)
-                    o.append("  11. 过水面积计算 (圆拱直墙型):")
+                    o.append("  3. 过水面积计算 (圆拱直墙型):")
                     if h_inc <= H_straight:
                         o.append(f"      水深 h加大 = {h_inc:.3f} m ≤ 直墙高度 {H_straight:.3f} m")
                         o.append(f"      A加大 = B × h加大 = {B_hs:.2f} × {h_inc:.3f} = {A_inc:.3f} m²")
@@ -689,7 +712,7 @@ class TunnelPanel(QWidget):
                         o.append(f"      A加大 = 直墙部分 + 拱部过水面积")
                         o.append(f"           = {A_inc:.3f} m²")
                     o.append("")
-                    o.append("  12. 湿周计算 (圆拱直墙型):")
+                    o.append("  4. 湿周计算 (圆拱直墙型):")
                     if h_inc <= H_straight:
                         o.append(f"      χ加大 = B + 2×h加大 = {B_hs:.2f} + 2×{h_inc:.3f}")
                         o.append(f"           = {P_inc:.3f} m")
@@ -698,9 +721,9 @@ class TunnelPanel(QWidget):
                         o.append(f"           = {P_inc:.3f} m")
                     o.append("")
                 else:
-                    o.append(f"  11. 过水面积: A加大 = {A_inc:.3f} m²")
+                    o.append(f"  3. 过水面积: A加大 = {A_inc:.3f} m²")
                     o.append("")
-                    o.append(f"  12. 湿周: χ加大 = {P_inc:.3f} m")
+                    o.append(f"  4. 湿周: χ加大 = {P_inc:.3f} m")
                     o.append("")
             else:
                 r_val = result['r']
@@ -709,7 +732,7 @@ class TunnelPanel(QWidget):
                 R_arch_hs = t_val * r_val
                 e_val = R_arch_hs * (1 - math.cos(0.294515 if horseshoe_type_id == 1 else 0.424031))
                 st_name = '标准Ⅰ型' if horseshoe_type_id == 1 else '标准Ⅱ型'
-                o.append(f"  11. 过水面积计算 ({st_name}):")
+                o.append(f"  3. 过水面积计算 ({st_name}):")
                 if h_inc <= e_val:
                     o.append(f"      水深 h加大 = {h_inc:.3f} m ≤ 底拱段高度 e = {e_val:.3f} m")
                     o.append(f"      处于底拱段，按底拱段公式计算:")
@@ -721,17 +744,17 @@ class TunnelPanel(QWidget):
                     o.append(f"      处于顶拱段，按顶拱段公式计算:")
                 o.append(f"      A加大 = {A_inc:.3f} m²")
                 o.append("")
-                o.append(f"  12. 湿周计算 ({st_name}):")
+                o.append(f"  4. 湿周计算 ({st_name}):")
                 o.append(f"      χ加大 = {P_inc:.3f} m")
                 o.append("")
 
-            o.append("  13. 水力半径计算:")
+            o.append("  5. 水力半径计算:")
             o.append(f"      R加大 = A加大 / P加大")
             o.append(f"           = {A_inc:.3f} / {P_inc:.3f}")
             o.append(f"           = {R_hyd_inc:.3f} m")
             o.append("")
 
-            o.append("  14. 加大流速计算 (曼宁公式):")
+            o.append("  6. 加大流速计算 (曼宁公式):")
             o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
             o.append(f"           = (1/{n}) × {R_hyd_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
             if R_hyd_inc > 0:
@@ -740,7 +763,7 @@ class TunnelPanel(QWidget):
             o.append("")
 
             Q_chk_inc = V_inc * A_inc
-            o.append("  15. 流量校核:")
+            o.append("  7. 流量校核:")
             o.append(f"      Q计算 = A加大 × V加大")
             o.append(f"           = {A_inc:.3f} × {V_inc:.3f}")
             o.append(f"           = {Q_chk_inc:.3f} m³/s")
@@ -748,12 +771,12 @@ class TunnelPanel(QWidget):
                 o.append(f"      误差 = {abs(Q_chk_inc - Q_inc) / Q_inc * 100:.2f}%")
             o.append("")
 
-            o.append("  16. 净空面积计算:")
+            o.append("  8. 净空面积计算:")
             o.append(f"      PA加大 = (A总 - A加大) / A总 × 100%")
             o.append(f"           = ({A_total:.3f} - {A_inc:.3f}) / {A_total:.3f} × 100%")
             o.append(f"           = {fb_pct_inc:.1f}%")
             o.append("")
-            o.append("  17. 净空高度计算:")
+            o.append("  9. 净空高度计算:")
             if stype == "圆形":
                 D = result['D']
                 o.append(f"      Fb加大 = D - h加大 = {D:.3f} - {h_inc:.3f} = {fb_hgt_inc:.3f} m")
@@ -772,24 +795,28 @@ class TunnelPanel(QWidget):
             fb_pct_ok = fb_pct_inc >= 15
             fb_hgt_ok = fb_hgt_inc >= 0.4
 
-            o.append(f"  18. 流速验证:")
+            o.append(f"  1. 流速验证:")
             o.append(f"      范围要求: {v_min} ≤ V ≤ {v_max} m/s")
             o.append(f"      设计流速: V = {V_d:.3f} m/s")
             o.append(f"      结果: {'通过 ✓' if vel_ok else '未通过 ✗'}")
             o.append("")
-            o.append(f"  19. 净空面积验证:")
-            o.append(f"      规范要求: 净空面积 ≥ 15%")
-            o.append(f"      计算结果: {fb_pct_inc:.1f}%")
+            o.append(f"  2. 净空面积验证:")
+            o.append(f"      规范要求: PA ≥ 15%")
+            o.append(f"      计算结果: PA = {fb_pct_inc:.1f}%")
             o.append(f"      结果: {'通过 ✓' if fb_pct_ok else '需注意 ✗'}")
             o.append("")
-            o.append(f"  20. 净空高度验证:")
-            o.append(f"      规范要求: 净空高度 ≥ 0.4m")
+            o.append(f"  3. 净空高度验证:")
+            o.append(f"      规范要求: Fb ≥ 0.4 m")
             o.append(f"      计算结果: Fb = {fb_hgt_inc:.3f} m")
             o.append(f"      结果: {'通过 ✓' if fb_hgt_ok else '需注意 ✗'}")
             o.append("")
 
         o.append("=" * 70)
-        o.append(f"  综合验证结果: {'全部通过 ✓' if result['success'] else '未通过 ✗'}")
+        vel_ok = v_min <= V_d <= v_max
+        fb_pct_ok = fb_pct_inc >= 15
+        fb_hgt_ok = fb_hgt_inc >= 0.4
+        all_checks_ok = vel_ok and fb_pct_ok and fb_hgt_ok
+        o.append(f"  综合验证结果: {'全部通过 ✓' if all_checks_ok else '未通过 ✗'}")
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt
@@ -985,7 +1012,8 @@ class TunnelPanel(QWidget):
             r = res.get('r', 0.0)
             default_name = f'隧洞断面_马蹄形_r{r:.2f}.dxf'
         scales = ['1:20', '1:50', '1:100', '1:200', '1:500']
-        scale_str, ok = QInputDialog.getItem(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2, False)
+        from 渠系断面设计.styles import fluent_select
+        scale_str, ok = fluent_select(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2)
         if not ok: return
         scale_denom = int(scale_str.split(':')[1])
         filepath, _ = QFileDialog.getSaveFileName(

@@ -70,6 +70,13 @@ class CrossSectionCalculator:
             design_pts, ground_pts, slope_config, invert_elevation
         )
         section.excavation_boundary = excav_pts
+        section.has_platform = slope_config.platform_enabled
+        section.platform_width = slope_config.platform_width
+        # 衬砌厚度：优先取设计断面的lining_thickness，其次取backfill固定厚度
+        if design_sec.lining_thickness > 0:
+            section.lining_thickness = design_sec.lining_thickness
+        elif backfill_cfg and backfill_cfg.mode.value == "fixed_thickness":
+            section.lining_thickness = backfill_cfg.thickness
 
         # 3. 计算面积
         area_result = self._compute_areas(

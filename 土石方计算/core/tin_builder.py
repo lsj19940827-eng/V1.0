@@ -72,10 +72,81 @@ class TINBuilder:
     # 构建
     # ------------------------------------------------------------------
 
+    def filter_outliers(
+        self,
+        iqr_factor: float = 3.0,
+        z_score_threshold: float = 4.0,
+    ) -> int:
+        """
+        过滤异常高程点（IQR + Z-score 双重校验）。
+
+        Strategy
+        --------
+        1. 计算所有点 Z 的 IQR（四分位距）
+        2. 超出 [Q1 - k*IQR, Q3 + k*IQR] 范围的点视为异常值
+        3. 同时排除 Z-score > z_score_threshold 的点
+        4. 约束边引用的点不被删除（避免破坏等高线约束）
+
+        Returns
+        -------
+        删除的点数量
+        """
+        if len(self._terrain_points) < 8:
+            return 0
+
+        zs = np.array([p.z for p in self._terrain_points])
+        q1, q3 = float(np.percentile(zs, 25)), float(np.percentile(zs, 75))
+        iqr = q3 - q1
+        if iqr < 1e-6:
+            return 0  # 所有点高程相同，无法过滤
+
+        lo = q1 - iqr_factor * iqr
+        hi = q3 + iqr_factor * iqr
+        z_mean = float(np.mean(zs))
+        z_std = float(np.std(zs))
+
+        # 约束边引用的原始索引（不能删除）
+        protected = set()
+        for e in self._constraint_edges:
+            protected.add(e.i)
+            protected.add(e.j)
+
+        kept: list = []
+        removed_count = 0
+        old_to_new: list[int] = []
+        new_idx = 0
+        for i, p in enumerate(self._terrain_points):
+            is_outlier = p.z < lo or p.z > hi
+            if z_std > 1e-6:
+                z_score = abs(p.z - z_mean) / z_std
+                is_outlier = is_outlier or z_score > z_score_threshold
+            if is_outlier and i not in protected:
+                old_to_new.append(-1)  # 被删除
+                removed_count += 1
+            else:
+                kept.append(p)
+                old_to_new.append(new_idx)
+                new_idx += 1
+
+        if removed_count > 0:
+            # 更新约束边索引
+            new_edges = []
+            for e in self._constraint_edges:
+                ni = old_to_new[e.i]
+                nj = old_to_new[e.j]
+                if ni >= 0 and nj >= 0 and ni != nj:
+                    new_edges.append(ConstraintEdge(i=ni, j=nj))
+            self._terrain_points = kept
+            self._constraint_edges = new_edges
+
+        return removed_count
+
     def build(
         self,
         cache_path: Optional[str] = None,
-        source_files: Optional[list[str]] = None
+        source_files: Optional[list[str]] = None,
+        filter_outliers: bool = False,
+        outlier_iqr_factor: float = 3.0,
     ) -> TINModel:
         """
         执行约束 Delaunay 三角剖分，返回 TINModel。
@@ -84,6 +155,8 @@ class TINBuilder:
         ----------
         cache_path : 缓存文件路径（.npz），若指定则先检查缓存是否有效
         source_files : 源数据文件路径列表（用于缓存失效检测）
+        filter_outliers : 构建前是否过滤异常高程点（IQR法）
+        outlier_iqr_factor : IQR 倍数阈值（默认 3.0，越大越宽松）
 
         Returns
         -------
@@ -91,6 +164,9 @@ class TINBuilder:
         """
         if cache_path and self._cache_is_valid(cache_path, source_files or []):
             return self._load_cache(cache_path)
+
+        if filter_outliers:
+            self.filter_outliers(iqr_factor=outlier_iqr_factor)
 
         tin = self._run_cdt()
         self._build_spatial_index(tin)

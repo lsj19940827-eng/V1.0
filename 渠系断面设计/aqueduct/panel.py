@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "渠系建筑物断面计算"))
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea, QInputDialog
+    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -153,7 +153,7 @@ class AqueductPanel(QWidget):
         u_lay = QVBoxLayout(self.u_section_grp)
         u_lay.setContentsMargins(0, 0, 0, 0)
         u_lay.setSpacing(5)
-        self.R_lbl, self.R_edit = self._field2(u_lay, "手动内半径 R (m):", "")
+        self.R_lbl, self.R_edit = self._field2(u_lay, "指定内半径 R (m):", "")
         u_lay.addWidget(self._hint("(留空则自动搜索最优半径)"))
         fl.addWidget(self.u_section_grp)
 
@@ -164,7 +164,7 @@ class AqueductPanel(QWidget):
         rect_lay.setSpacing(5)
         self.ratio_lbl, self.ratio_edit = self._field2(rect_lay, "深宽比 (H/B):", "")
         rect_lay.addWidget(self._hint("(留空默认0.8)"))
-        self.B_lbl, self.B_edit = self._field2(rect_lay, "手动槽宽 B (m):", "")
+        self.B_lbl, self.B_edit = self._field2(rect_lay, "指定槽宽 B (m):", "")
         rect_lay.addWidget(self._hint("(二选一，都留空按深宽比0.8计算)"))
         rect_lay.addWidget(self._sep())
         rect_lay.addWidget(self._slbl("【倒角参数（可选）】"))
@@ -411,7 +411,7 @@ class AqueductPanel(QWidget):
             # 更新加大比例提示
             if result.get('success') and 'increase_percent' in result:
                 ap = result['increase_percent']
-                src = "手动指定" if self.inc_edit.text().strip() else "自动计算"
+                src = "指定" if self.inc_edit.text().strip() else "自动计算"
                 self.inc_hint.setText(f"({src}: {ap:.1f}%)")
 
             self._update_result_display(result)
@@ -463,15 +463,31 @@ class AqueductPanel(QWidget):
         o.append("=" * 70)
         o.append("")
         o.append("【输入参数】")
-        o.append(f"  断面类型 = U形")
-        o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-        o.append(f"  糙率 n = {n}")
-        o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-        o.append(f"  不淤流速 = {p['v_min']} m/s")
-        o.append(f"  不冲流速 = {p['v_max']} m/s")
+        o.append("")
+        o.append(f"  1. 断面类型:")
+        o.append(f"     U形")
+        o.append("")
+        o.append(f"  2. 设计流量:")
+        o.append(f"     Q = {Q:.3f} m³/s")
+        o.append("")
+        o.append(f"  3. 糙率:")
+        o.append(f"     n = {n}")
+        o.append("")
+        o.append(f"  4. 水力坡降:")
+        o.append(f"     = 1/{int(slope_inv)}")
+        o.append("")
+        o.append(f"  5. 不淤流速:")
+        o.append(f"     = {p['v_min']} m/s")
+        o.append("")
+        o.append(f"  6. 不冲流速:")
+        o.append(f"     = {p['v_max']} m/s")
+        o.append("")
+        o.append("【设计方法】")
+        o.append("")
+        o.append(f"  1. 采用方法:")
+        o.append(f"     {result['design_method']}")
         o.append("")
         o.append("【断面尺寸】")
-        o.append(f"  设计方法: {result['design_method']}")
         o.append(f"  内半径 R = {result['R']:.3f} m")
         o.append(f"  直段高度 f = {result['f']:.3f} m")
         o.append(f"  槽宽 B = 2R = {result['B']:.3f} m")
@@ -486,7 +502,7 @@ class AqueductPanel(QWidget):
         o.append(f"  水力半径 R水 = {result['R_hyd_design']:.3f} m")
         o.append("")
         o.append("【加大流量工况】")
-        inc_src = "(手动指定)" if p.get('manual_increase') else "(自动计算)"
+        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
         o.append(f"  流量加大比例 = {result['increase_percent']:.1f}% {inc_src}")
         o.append(f"  加大流量 Q加大 = {result['Q_increased']:.3f} m³/s")
         o.append(f"  加大水深 h加大 = {result['h_increased']:.3f} m")
@@ -538,7 +554,7 @@ class AqueductPanel(QWidget):
         A_inc = result.get('A_increased', 0); P_inc = result.get('P_increased', 0)
         R_hyd_inc = result.get('R_hyd_increased', 0)
         Fb = result['Fb']
-        inc_src = "(手动指定)" if p.get('manual_increase') else "(自动计算)"
+        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
 
         o = []
         o.append("=" * 70)
@@ -546,34 +562,62 @@ class AqueductPanel(QWidget):
         o.append("=" * 70)
         o.append("")
         o.append("【一、输入参数】")
-        o.append(f"  断面类型 = U形")
-        o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-        o.append(f"  糙率 n = {n}")
-        o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-        o.append(f"  不淤流速 = {v_min} m/s")
-        o.append(f"  不冲流速 = {v_max} m/s")
-        if p.get('manual_R'): o.append(f"  [手动] 内半径 R = {p['manual_R']} m")
-        if p.get('manual_increase'): o.append(f"  [手动] 加大比例 = {p['manual_increase']}%")
         o.append("")
+        _n = 1
+        o.append(f"  {_n}. 断面类型:")
+        o.append(f"     U形")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 设计流量:")
+        o.append(f"     Q = {Q:.3f} m³/s")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 糙率:")
+        o.append(f"     n = {n}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 水力坡降:")
+        o.append(f"     = 1/{int(slope_inv)}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 不淤流速:")
+        o.append(f"     = {v_min} m/s")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 不冲流速:")
+        o.append(f"     = {v_max} m/s")
+        o.append("")
+        if p.get('manual_R'):
+            _n += 1
+            o.append(f"  {_n}. 指定内半径:")
+            o.append(f"     R = {p['manual_R']} m")
+            o.append("")
+        if p.get('manual_increase'):
+            _n += 1
+            o.append(f"  {_n}. 指定加大比例:")
+            o.append(f"     = {p['manual_increase']}%")
+            o.append("")
 
         o.append("【二、断面尺寸】")
-        o.append(f"  内半径 R = {R_val:.2f} m")
         o.append("")
-        o.append("  1. 槽宽计算:")
+        o.append("  1. 内半径:")
+        o.append(f"     R = {R_val:.2f} m")
+        o.append("")
+        o.append("  2. 槽宽计算:")
         o.append(f"     B = 2 × R")
         o.append(f"       = 2 × {R_val:.2f}")
         o.append(f"       = {B:.2f} m")
         o.append("")
-        o.append("  2. 直段高度:")
+        o.append("  3. 直段高度:")
         o.append(f"     f = {f_val:.2f} m")
         o.append(f"     f/R = {f_val:.2f} / {R_val:.2f} = {result['f_R']:.3f}")
         o.append("")
-        o.append("  3. 槽身总高计算:")
+        o.append("  4. 槽身总高计算:")
         o.append(f"     H = R + f")
         o.append(f"       = {R_val:.2f} + {f_val:.2f}")
         o.append(f"       = {H_total:.2f} m")
         o.append("")
-        o.append("  4. H/B比值计算:")
+        o.append("  5. H/B比值计算:")
         H_B_ratio = H_total / B if B > 0 else 0
         o.append(f"     H/B = 槽身总高 ÷ 槽宽")
         o.append(f"         = {H_total:.2f} ÷ {B:.2f}")
@@ -640,19 +684,18 @@ class AqueductPanel(QWidget):
 
         o.append("【四、加大流量工况】")
         o.append("")
-        o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
-        o.append("")
-        o.append("  7. 加大流量计算:")
+        o.append("  1. 加大流量计算:")
+        o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
         o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
         o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
         o.append(f"           = {Q_inc:.3f} m³/s")
         o.append("")
-        o.append("  8. 加大水深计算:")
+        o.append("  2. 加大水深计算:")
         o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
         o.append(f"      h加大 = {h_inc:.3f} m")
         o.append("")
 
-        o.append("  9. 过水面积计算 (U形断面):")
+        o.append("  3. 过水面积计算 (U形断面):")
         if h_inc <= R_val:
             theta_inc = math.acos((R_val - h_inc) / R_val) if R_val > 0 else 0
             o.append(f"      当 h加大 ≤ R 时:")
@@ -669,7 +712,7 @@ class AqueductPanel(QWidget):
             o.append(f"           = {A_inc:.3f} m²")
         o.append("")
 
-        o.append("  10. 湿周计算 (U形断面):")
+        o.append("  4. 湿周计算 (U形断面):")
         if h_inc <= R_val:
             o.append(f"      当 h加大 ≤ R 时:")
             o.append(f"      P加大 = 2Rθ = 2×{R_val:.2f}×{theta_inc:.4f}")
@@ -682,13 +725,13 @@ class AqueductPanel(QWidget):
             o.append(f"           = {P_inc:.3f} m")
         o.append("")
 
-        o.append("  11. 水力半径计算:")
+        o.append("  5. 水力半径计算:")
         o.append(f"      R加大 = A加大 / P加大")
         o.append(f"           = {A_inc:.3f} / {P_inc:.3f}")
         o.append(f"           = {R_hyd_inc:.3f} m")
         o.append("")
 
-        o.append("  12. 加大流速计算 (曼宁公式):")
+        o.append("  6. 加大流速计算 (曼宁公式):")
         o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
         o.append(f"           = (1/{n}) × {R_hyd_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
         if R_hyd_inc > 0:
@@ -696,7 +739,7 @@ class AqueductPanel(QWidget):
         o.append(f"           = {V_inc:.3f} m/s")
         o.append("")
 
-        o.append("  13. 流量校核:")
+        o.append("  7. 流量校核:")
         o.append(f"      Q计算 = A加大 × V加大")
         o.append(f"           = {A_inc:.3f} × {V_inc:.3f}")
         o.append(f"           = {A_inc * V_inc:.3f} m³/s")
@@ -704,7 +747,7 @@ class AqueductPanel(QWidget):
             o.append(f"      误差 = {abs(A_inc * V_inc - Q_inc) / Q_inc * 100:.2f}%")
         o.append("")
 
-        o.append("  14. 超高计算:")
+        o.append("  8. 超高计算:")
         o.append(f"      Fb = H - h加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
         o.append("")
 
@@ -721,16 +764,16 @@ class AqueductPanel(QWidget):
         v_recommended_max = 2.5
         vel_ok = v_recommended_min <= V_d <= v_recommended_max
         o.append(f"  1. 流速验证（规范 9.4.1-1）")
-        o.append(f"     规范要求: 槽内设计流速宜为 1.0～2.5 m/s")
+        o.append(f"     规范要求: 1.0 ≤ V ≤ 2.5 m/s")
         o.append(f"     计算结果: V = {V_d:.3f} m/s")
         if vel_ok:
-            o.append(f"     验证结果: {v_recommended_min} ≤ {V_d:.3f} ≤ {v_recommended_max} → 通过 ✓")
+            o.append(f"     结果: 通过 ✓")
         else:
             if V_d < v_recommended_min:
-                o.append(f"     验证结果: {V_d:.3f} < {v_recommended_min} → 超出推荐范围 ⚠")
+                o.append(f"     结果: 超出推荐范围 ⚠")
                 o.append(f"     提示: 流速过小，可能造成淤积，建议调整断面尺寸")
             else:
-                o.append(f"     验证结果: {V_d:.3f} > {v_recommended_max} → 超出推荐范围 ⚠")
+                o.append(f"     结果: 超出推荐范围 ⚠")
                 o.append(f"     提示: 流速过大，可能造成冲刷，建议调整断面尺寸")
         o.append("")
 
@@ -769,7 +812,7 @@ class AqueductPanel(QWidget):
         p = self.input_params
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']
-        inc_src = "(手动指定)" if p.get('manual_increase') else "(自动计算)"
+        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
 
         o = []
         o.append("=" * 70)
@@ -777,15 +820,31 @@ class AqueductPanel(QWidget):
         o.append("=" * 70)
         o.append("")
         o.append("【输入参数】")
-        o.append(f"  断面类型 = 矩形")
-        o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-        o.append(f"  糙率 n = {n}")
-        o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-        o.append(f"  不淤流速 = {p['v_min']} m/s")
-        o.append(f"  不冲流速 = {p['v_max']} m/s")
+        o.append("")
+        o.append(f"  1. 断面类型:")
+        o.append(f"     矩形")
+        o.append("")
+        o.append(f"  2. 设计流量:")
+        o.append(f"     Q = {Q:.3f} m³/s")
+        o.append("")
+        o.append(f"  3. 糙率:")
+        o.append(f"     n = {n}")
+        o.append("")
+        o.append(f"  4. 水力坡降:")
+        o.append(f"     = 1/{int(slope_inv)}")
+        o.append("")
+        o.append(f"  5. 不淤流速:")
+        o.append(f"     = {p['v_min']} m/s")
+        o.append("")
+        o.append(f"  6. 不冲流速:")
+        o.append(f"     = {p['v_max']} m/s")
+        o.append("")
+        o.append("【设计方法】")
+        o.append("")
+        o.append(f"  1. 采用方法:")
+        o.append(f"     {result['design_method']}")
         o.append("")
         o.append("【断面尺寸】")
-        o.append(f"  设计方法: {result['design_method']}")
         o.append(f"  槽宽 B = {result['B']:.3f} m")
         o.append(f"  槽身总高 H = {result['H_total']:.3f} m")
         B_val = result['B']; H_val = result['H_total']
@@ -853,7 +912,7 @@ class AqueductPanel(QWidget):
         A_inc = result.get('A_increased', 0); P_inc = result.get('P_increased', 0)
         R_hyd_inc = result.get('R_hyd_increased', 0)
         Fb = result['Fb']
-        inc_src = "(手动指定)" if p.get('manual_increase') else "(自动计算)"
+        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
         has_chamfer = result.get('has_chamfer', False)
         ratio = result.get('depth_width_ratio', 0)
 
@@ -863,23 +922,61 @@ class AqueductPanel(QWidget):
         o.append("=" * 70)
         o.append("")
         o.append("【一、输入参数】")
-        o.append(f"  断面类型 = 矩形")
-        o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-        o.append(f"  糙率 n = {n}")
-        o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-        o.append(f"  不淤流速 = {v_min} m/s")
-        o.append(f"  不冲流速 = {v_max} m/s")
-        if p.get('manual_B'): o.append(f"  [手动] 槽宽 B = {p['manual_B']} m")
-        if p.get('depth_width_ratio'): o.append(f"  [手动] 深宽比 = {p['depth_width_ratio']}")
-        if has_chamfer:
-            o.append(f"  倒角角度 = {result['chamfer_angle']}°")
-            o.append(f"  倒角底边长 = {result['chamfer_length']} m")
-        if p.get('manual_increase'): o.append(f"  [手动] 加大比例 = {p['manual_increase']}%")
         o.append("")
+        _n = 1
+        o.append(f"  {_n}. 断面类型:")
+        o.append(f"     矩形")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 设计流量:")
+        o.append(f"     Q = {Q:.3f} m³/s")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 糙率:")
+        o.append(f"     n = {n}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 水力坡降:")
+        o.append(f"     = 1/{int(slope_inv)}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 不淤流速:")
+        o.append(f"     = {v_min} m/s")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 不冲流速:")
+        o.append(f"     = {v_max} m/s")
+        o.append("")
+        if p.get('manual_B'):
+            _n += 1
+            o.append(f"  {_n}. 指定槽宽:")
+            o.append(f"     B = {p['manual_B']} m")
+            o.append("")
+        if p.get('depth_width_ratio'):
+            _n += 1
+            o.append(f"  {_n}. 指定深宽比:")
+            o.append(f"     = {p['depth_width_ratio']}")
+            o.append("")
+        if has_chamfer:
+            _n += 1
+            o.append(f"  {_n}. 倒角角度:")
+            o.append(f"     = {result['chamfer_angle']}°")
+            o.append("")
+            _n += 1
+            o.append(f"  {_n}. 倒角底边长:")
+            o.append(f"     = {result['chamfer_length']} m")
+            o.append("")
+        if p.get('manual_increase'):
+            _n += 1
+            o.append(f"  {_n}. 指定加大比例:")
+            o.append(f"     = {p['manual_increase']}%")
+            o.append("")
 
         o.append("【二、断面尺寸】")
-        o.append(f"  槽宽 B = {B:.2f} m")
-        o.append(f"  深宽比 = {ratio:.3f}")
+        o.append("")
+        o.append("  1. 断面尺寸:")
+        o.append(f"     槽宽 B = {B:.2f} m")
+        o.append(f"     深宽比 = {ratio:.3f}")
         o.append("")
 
         # 计算两个工况的超高需求
@@ -887,7 +984,7 @@ class AqueductPanel(QWidget):
         H_design_required = h_d + Fb_design_min
         H_inc_required = h_inc + 0.10
 
-        o.append("  1. 槽高计算（规范 9.4.1-2）:")
+        o.append("  2. 槽高计算（规范 9.4.1-2）:")
         o.append(f"     设计流量: H1 = h设计 + (h设计/12 + 0.05)")
         o.append(f"              = {h_d:.3f} + ({h_d:.3f}/12 + 0.05)")
         o.append(f"              = {h_d:.3f} + {Fb_design_min:.3f}")
@@ -900,7 +997,7 @@ class AqueductPanel(QWidget):
         o.append(f"     向上取整: H = {H_total:.2f} m")
         o.append("")
 
-        o.append("  2. H/B比值计算:")
+        o.append("  3. H/B比值计算:")
         H_B_ratio = H_total / B if B > 0 else 0
         o.append(f"     H/B = 槽身总高 ÷ 槽宽")
         o.append(f"         = {H_total:.2f} ÷ {B:.2f}")
@@ -993,20 +1090,19 @@ class AqueductPanel(QWidget):
 
         o.append("【四、加大流量工况】")
         o.append("")
-        o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
-        o.append("")
-        o.append("  7. 加大流量计算:")
+        o.append("  1. 加大流量计算:")
+        o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
         o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
         o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
         o.append(f"           = {Q_inc:.3f} m³/s")
         o.append("")
-        o.append("  8. 加大水深计算:")
+        o.append("  2. 加大水深计算:")
         o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
         o.append(f"      h加大 = {h_inc:.3f} m")
         o.append("")
 
         if has_chamfer:
-            o.append("  9. 过水面积计算 (矩形断面-带倒角):")
+            o.append("  3. 过水面积计算 (矩形断面-带倒角):")
             if h_inc >= chamfer_height_val:
                 chamfer_area_val_inc = 0.5 * chamfer_length_val * chamfer_height_val
                 A_rect_inc = B * h_inc
@@ -1022,7 +1118,7 @@ class AqueductPanel(QWidget):
                 o.append(f"           = {A_inc:.3f} m²")
             o.append("")
 
-            o.append("  10. 湿周计算 (矩形断面-带倒角):")
+            o.append("  4. 湿周计算 (矩形断面-带倒角):")
             if h_inc >= chamfer_height_val:
                 hyp_val_inc = chamfer_length_val / math.cos(math.radians(chamfer_angle_val)) if chamfer_angle_val > 0 else chamfer_length_val
                 wall_above_inc = h_inc - chamfer_height_val
@@ -1038,26 +1134,26 @@ class AqueductPanel(QWidget):
                 o.append(f"           = {P_inc:.3f} m")
             o.append("")
         else:
-            o.append("  9. 过水面积计算 (矩形断面):")
+            o.append("  3. 过水面积计算 (矩形断面):")
             o.append(f"      A加大 = B × h加大")
             o.append(f"           = {B:.2f} × {h_inc:.3f}")
             o.append(f"           = {A_inc:.3f} m²")
             o.append("")
 
-            o.append("  10. 湿周计算 (矩形断面):")
+            o.append("  4. 湿周计算 (矩形断面):")
             o.append(f"      P加大 = B + 2×h加大")
             o.append(f"           = {B:.2f} + 2×{h_inc:.3f}")
             o.append(f"           = {B:.2f} + {2*h_inc:.3f}")
             o.append(f"           = {P_inc:.3f} m")
             o.append("")
 
-        o.append("  11. 水力半径计算:")
+        o.append("  5. 水力半径计算:")
         o.append(f"      R加大 = A加大 / P加大")
         o.append(f"           = {A_inc:.3f} / {P_inc:.3f}")
         o.append(f"           = {R_hyd_inc:.3f} m")
         o.append("")
 
-        o.append("  12. 加大流速计算 (曼宁公式):")
+        o.append("  6. 加大流速计算 (曼宁公式):")
         o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
         o.append(f"           = (1/{n}) × {R_hyd_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
         if R_hyd_inc > 0:
@@ -1065,7 +1161,7 @@ class AqueductPanel(QWidget):
         o.append(f"           = {V_inc:.3f} m/s")
         o.append("")
 
-        o.append("  13. 流量校核:")
+        o.append("  7. 流量校核:")
         o.append(f"      Q计算 = A加大 × V加大")
         o.append(f"           = {A_inc:.3f} × {V_inc:.3f}")
         o.append(f"           = {A_inc * V_inc:.3f} m³/s")
@@ -1073,7 +1169,7 @@ class AqueductPanel(QWidget):
             o.append(f"      误差 = {abs(A_inc * V_inc - Q_inc) / Q_inc * 100:.2f}%")
         o.append("")
 
-        o.append("  14. 超高计算:")
+        o.append("  8. 超高计算:")
         o.append(f"      Fb = H - h加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
         o.append("")
 
@@ -1089,16 +1185,16 @@ class AqueductPanel(QWidget):
         v_recommended_max = 2.5
         vel_ok = v_recommended_min <= V_d <= v_recommended_max
         o.append(f"  1. 流速验证（规范 9.4.1-1）")
-        o.append(f"     规范要求: 槽内设计流速宜为 1.0～2.5 m/s")
+        o.append(f"     规范要求: 1.0 ≤ V ≤ 2.5 m/s")
         o.append(f"     计算结果: V = {V_d:.3f} m/s")
         if vel_ok:
-            o.append(f"     验证结果: {v_recommended_min} ≤ {V_d:.3f} ≤ {v_recommended_max} → 通过 ✓")
+            o.append(f"     结果: 通过 ✓")
         else:
             if V_d < v_recommended_min:
-                o.append(f"     验证结果: {V_d:.3f} < {v_recommended_min} → 超出推荐范围 ⚠")
+                o.append(f"     结果: 超出推荐范围 ⚠")
                 o.append(f"     提示: 流速过小，可能造成淤积，建议调整断面尺寸")
             else:
-                o.append(f"     验证结果: {V_d:.3f} > {v_recommended_max} → 超出推荐范围 ⚠")
+                o.append(f"     结果: 超出推荐范围 ⚠")
                 o.append(f"     提示: 流速过大，可能造成冲刷，建议调整断面尺寸")
         o.append("")
 
@@ -1333,7 +1429,8 @@ class AqueductPanel(QWidget):
             B = res.get('B', 0.0); H = res.get('H_total', 0.0)
             default_name = f'渡槽断面_矩形_B{B:.2f}xH{H:.2f}.dxf'
         scales = ['1:20', '1:50', '1:100', '1:200', '1:500']
-        scale_str, ok = QInputDialog.getItem(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2, False)
+        from 渠系断面设计.styles import fluent_select
+        scale_str, ok = fluent_select(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2)
         if not ok: return
         scale_denom = int(scale_str.split(':')[1])
         filepath, _ = QFileDialog.getSaveFileName(

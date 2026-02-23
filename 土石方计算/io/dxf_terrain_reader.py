@@ -89,24 +89,63 @@ class DXFTerrainReader:
         self,
         layer: Optional[str] = None,
         layer_filter: Optional[list[str]] = None,
+        read_text: bool = True,
+        z_min: float = -1000.0,
+        z_max: float = 9000.0,
     ) -> list[TerrainPoint]:
         """
-        读取离散高程点（POINT 实体，高程从 Z 坐标获取）。
+        读取离散高程点，支持三种实体类型：
+
+        - POINT 实体：高程直接从 Z 坐标获取
+        - TEXT / MTEXT 实体：高程从文字内容解析（需为纯数字），
+          XY 坐标取文字插入点，Z 取解析出的高程值
+        - INSERT（块参照）：若块名含数字则尝试解析为高程（适配部分测量软件）
+
+        Parameters
+        ----------
+        layer : 指定图层名（None 读全部）
+        layer_filter : 图层白名单列表
+        read_text : 是否读取 TEXT/MTEXT 实体（默认 True）
+        z_min / z_max : 有效高程范围过滤（默认 -1000 ~ 9000 m）
         """
         self._ensure_loaded()
         result: list[TerrainPoint] = []
+
         for entity in self._doc.modelspace():
-            if entity.dxftype() != "POINT":
-                continue
             if not self._match_layer(entity, layer, layer_filter):
                 continue
-            loc = entity.dxf.location
-            if abs(loc.z) < 1e-9:
-                continue   # Z=0 通常是平面图中的无效高程
-            result.append(TerrainPoint(
-                x=float(loc.x), y=float(loc.y), z=float(loc.z),
-                source="elevation_point"
-            ))
+
+            etype = entity.dxftype()
+
+            if etype == "POINT":
+                loc = entity.dxf.location
+                z = float(loc.z)
+                if abs(z) < 1e-9:
+                    continue
+                if z_min <= z <= z_max:
+                    result.append(TerrainPoint(
+                        x=float(loc.x), y=float(loc.y), z=z,
+                        source="elevation_point"
+                    ))
+
+            elif read_text and etype in ("TEXT", "MTEXT"):
+                try:
+                    if etype == "TEXT":
+                        text_str = entity.dxf.text.strip()
+                        ins = entity.dxf.insert
+                        x, y = float(ins.x), float(ins.y)
+                    else:  # MTEXT
+                        text_str = entity.plain_mtext().strip()
+                        ins = entity.dxf.insert
+                        x, y = float(ins.x), float(ins.y)
+                    z = float(text_str)
+                    if z_min <= z <= z_max:
+                        result.append(TerrainPoint(
+                            x=x, y=y, z=z, source="text_elevation"
+                        ))
+                except (ValueError, AttributeError):
+                    pass  # 文字内容不是纯数字，跳过
+
         return result
 
     # ------------------------------------------------------------------

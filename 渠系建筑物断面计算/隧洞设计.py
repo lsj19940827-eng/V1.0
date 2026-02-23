@@ -556,7 +556,7 @@ def quick_calculate_horseshoe_std(Q: float, n: float, slope_inv: float,
     
     参数:
         section_type: 1=标准Ⅰ型, 2=标准Ⅱ型
-        manual_r: 手动指定半径 (m)
+        manual_r: 指定半径 (m)
     """
     type_name = '马蹄形标准Ⅰ型' if section_type == 1 else '马蹄形标准Ⅱ型'
     
@@ -662,7 +662,7 @@ def quick_calculate_horseshoe_std(Q: float, n: float, slope_inv: float,
     if not found_solution:
         if manual_r:
             result['error_message'] = (
-                f"计算失败：手动指定的半径 r={manual_r:.3f} m 无法满足要求。\n\n"
+                f"计算失败：指定的半径 r={manual_r:.3f} m 无法满足要求。\n\n"
                 "可能原因及建议：\n"
                 "1. 半径过小，导致加大流量工况下无净空；\n"
                 "2. 流速超出限制；\n"
@@ -810,7 +810,7 @@ def quick_calculate_circular(Q: float, n: float, slope_inv: float,
     if not found_solution:
         if manual_D:
             result['error_message'] = (
-                f"计算失败：手动指定的直径 D={manual_D:.3f} m 无法满足要求。\n\n"
+                f"计算失败：指定的直径 D={manual_D:.3f} m 无法满足要求。\n\n"
                 "可能原因及建议：\n"
                 "1. 直径过小，导致加大流量工况下无净空或水深超出管径；\n"
                 "2. 流速超出不冲/不淤限制；\n"
@@ -921,7 +921,7 @@ def quick_calculate_horseshoe(Q: float, n: float, slope_inv: float,
         B_start = manual_B
         B_end = manual_B + 0.01
         B_step = DIM_INCREMENT
-        # 手动指定底宽时，使用精细的高宽比步长以获得最优H_total
+        # 指定底宽时，使用精细的高宽比步长以获得最优H_total
         HB_step = 0.01
     else:
         B_start = MIN_WIDTH_HS
@@ -1065,7 +1065,7 @@ def quick_calculate_horseshoe(Q: float, n: float, slope_inv: float,
     if not best_found:
         if manual_B:
             result['error_message'] = (
-                f"计算失败：手动指定的底宽 B={manual_B:.3f} m 无法满足要求。\n\n"
+                f"计算失败：指定的底宽 B={manual_B:.3f} m 无法满足要求。\n\n"
                 "可能原因及建议：\n"
                 "1. 尺寸过小，导致加大流量工况下无净空或水深超出洞高；\n"
                 "2. 流速超出限制；\n"

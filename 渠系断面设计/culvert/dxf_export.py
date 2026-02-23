@@ -2,7 +2,7 @@
 """矩形暗涵断面 DXF 导出（封闭矩形）"""
 import math
 from 渠系断面设计.open_channel.dxf_export import (
-    _add_layer, _add_dim_h, _add_dim_v, _add_text_block
+    _setup_font_style, _add_layer, _add_dim_h, _add_dim_v, _add_text_block
 )
 
 
@@ -17,14 +17,14 @@ def export_culvert_dxf(filepath, result, input_params, scale_denom=100):
     doc.header['$INSUNITS'] = 4
     doc.header['$MEASUREMENT'] = 1
     doc.header['$LTSCALE'] = sf * 0.5
-    _add_layer(doc, 'OUTLINE',         color=7, lw=50)
-    _add_layer(doc, 'WATER_DESIGN',    color=5, lw=25)
-    _add_layer(doc, 'WATER_INCREASED', color=4, lw=25)
-    _add_layer(doc, 'DIMENSION',       color=2, lw=18)
-    _add_layer(doc, 'TEXT_PARAMS',     color=3, lw=18)
+    _add_layer(doc, '轮廓线',         color=7, lw=50)
+    _add_layer(doc, '设计水位',    color=5, lw=25)
+    _add_layer(doc, '加大水位', color=4, lw=25)
+    _add_layer(doc, '尺寸标注',       color=2, lw=18)
+    _add_layer(doc, '参数文字',     color=3, lw=18)
     if 'DASHED' not in doc.linetypes:
         doc.linetypes.add('DASHED', pattern='A,.5,-.25')
-
+    _setup_font_style(doc)
     msp = doc.modelspace()
     _draw_rect_culvert(msp, result, input_params, sf, scale_denom)
     doc.saveas(filepath)
@@ -43,7 +43,7 @@ def _draw_rect_culvert(msp, result, p, sf=1.0, scale_denom=100):
     BH    = result.get('BH_ratio', B/h_d if h_d else 0)
     is_opt = result.get('is_optimal_section', False)
 
-    char = max(B, H, 1.0)*sf; th = round(char*0.055, 3); ar = th*0.85; gap = char*0.18
+    char = max(B, H, 1.0)*sf; th = 3.5; ar = th*0.85; gap = char*0.18
 
     # 1. 封闭矩形轮廓（暗涵有顶板，实线）
     segs = [
@@ -53,35 +53,36 @@ def _draw_rect_culvert(msp, result, p, sf=1.0, scale_denom=100):
         ((-B/2*sf, H*sf), (B/2*sf,  H*sf)),
     ]
     for s, e in segs:
-        msp.add_line(s, e, dxfattribs={'layer': 'OUTLINE'})
+        msp.add_line(s, e, dxfattribs={'layer': '轮廓线'})
 
     # 顶板填充标记（两条斜线表示实体顶板）
     for dx in [-B/4*sf, B/4*sf]:
         msp.add_line((dx, H*sf), (dx + th*0.5, H*sf + th*0.8),
-                     dxfattribs={'layer': 'OUTLINE'})
+                     dxfattribs={'layer': '轮廓线'})
 
-    # 2. 设计水面线
-    msp.add_line((-B/2*sf, h_d*sf), (B/2*sf, h_d*sf), dxfattribs={'layer': 'WATER_DESIGN'})
+    # 2&3. 水面线 + 居中标注（重叠时上下错开）
+    msp.add_line((-B/2*sf, h_d*sf), (B/2*sf, h_d*sf), dxfattribs={'layer': '设计水位'})
+    _olap = h_inc > 0 and (h_inc - h_d) * sf < th * 2.0
+    _yd = h_d*sf - th * 1.5 if _olap else h_d*sf + th * 0.5
     msp.add_text(f'▽ 设计水位 h={h_d:.3f}m', dxfattribs={
-        'layer': 'WATER_DESIGN', 'height': th*0.85,
-        'insert': (B/2*sf + th*0.3, h_d*sf)})
-
-    # 3. 加大水面线（虚线）
+        'layer': '设计水位', 'height': th, 'style': 'FANGSONG',
+        'insert': (0, _yd), 'align_point': (0, _yd), 'halign': 1})
     if h_inc > 0:
         msp.add_line((-B/2*sf, h_inc*sf), (B/2*sf, h_inc*sf),
-                     dxfattribs={'layer': 'WATER_INCREASED', 'linetype': 'DASHED'})
+                     dxfattribs={'layer': '加大水位', 'linetype': 'DASHED'})
+        _yi = h_inc*sf + th * 0.5
         msp.add_text(f'▽ 加大水位 h={h_inc:.3f}m', dxfattribs={
-            'layer': 'WATER_INCREASED', 'height': th*0.85,
-            'insert': (B/2*sf + th*0.3, h_inc*sf + th*0.5)})
+            'layer': '加大水位', 'height': th, 'style': 'FANGSONG',
+            'insert': (0, _yi), 'align_point': (0, _yi), 'halign': 1})
 
     # 4. 标注
-    _add_dim_h(msp, -B/2*sf, B/2*sf, -(gap*1.1), 0, f'B={B:.3f} m', th, ar, 'DIMENSION')
-    _add_dim_v(msp, 0, h_d*sf, -(B/2*sf+gap*1.4), -B/2*sf, f'h={h_d:.3f} m', th, ar, 'DIMENSION')
-    _add_dim_v(msp, 0, H*sf,   B/2*sf+gap*1.4, B/2*sf, f'H={H:.3f} m', th, ar, 'DIMENSION')
+    _add_dim_h(msp, -B/2*sf, B/2*sf, -(gap*1.1), 0, f'B={B:.3f} m', th, ar, '尺寸标注')
+    _add_dim_v(msp, 0, h_d*sf, -(B/2*sf+gap*1.4), -B/2*sf, f'h={h_d:.3f} m', th, ar, '尺寸标注')
+    _add_dim_v(msp, 0, H*sf,   B/2*sf+gap*1.4, B/2*sf, f'H={H:.3f} m', th, ar, '尺寸标注')
     # 净空高度标注（右侧，h_d 到 H）
     if fb_d > 0 and h_d > 0:
         _add_dim_v(msp, h_d*sf, H*sf, B/2*sf+gap*2.8, B/2*sf,
-                   f'Fb={fb_d:.3f} m', th, ar, 'DIMENSION')
+                   f'Fb={fb_d:.3f} m', th, ar, '尺寸标注')
 
     # 5. 参数文字
     inc_s = f'{inc:.1f}%' if isinstance(inc, (int,float)) else str(inc)
@@ -114,4 +115,4 @@ def _draw_rect_culvert(msp, result, p, sf=1.0, scale_denom=100):
         f'Fb增={fb_inc:.3f} m',
     ]
     lines = [l for l in lines if l is not None]
-    _add_text_block(msp, B/2*sf+gap*3.5, H*sf+th, lines, th, 'TEXT_PARAMS')
+    _add_text_block(msp, B/2*sf+gap*3.5, H*sf+th, lines, th, '参数文字')

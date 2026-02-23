@@ -59,7 +59,7 @@ svg { vertical-align: middle; }
     display: flex; align-items: flex-start;
     background: #fff; border: 1px solid #F0F0F0;
     border-radius: 8px; margin: 6px 0;
-    padding: 14px 18px;
+    padding: 8px 14px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.04), 0 0 2px rgba(0,0,0,0.06);
 }
 .step-card.verify-pass { border-left: 4px solid #43A047; }
@@ -76,13 +76,17 @@ svg { vertical-align: middle; }
 .step-body { flex: 1; min-width: 0; }
 .step-title {
     font-weight: 600; font-size: 14px; color: #242424;
-    margin-bottom: 8px; border-bottom: 1px solid #F5F5F5; padding-bottom: 6px;
+    margin-bottom: 4px; border-bottom: 1px solid #F5F5F5; padding-bottom: 4px;
 }
 .formula-line {
     margin: 4px 0; padding: 6px 12px;
     background: #F8F9FE; border-radius: 6px;
 }
 .content-line { margin: 3px 0; font-size: 13px; color: #424242; }
+.step-body .content-line {
+    margin: 4px 0; padding: 6px 12px;
+    background: #F8F9FE; border-radius: 6px;
+}
 .result-pass {
     margin: 6px 0; padding: 8px 14px; border-radius: 6px;
     background: #E8F5E9; color: #2E7D32; border-left: 3px solid #43A047;
@@ -92,6 +96,16 @@ svg { vertical-align: middle; }
     margin: 6px 0; padding: 8px 14px; border-radius: 6px;
     background: #FFEBEE; color: #C62828; border-left: 3px solid #E53935;
     font-size: 13px;
+}
+.param-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 6px; margin: 6px 0;
+}
+.param-cell {
+    background: #fff; border: 1px solid #F0F0F0;
+    border-radius: 8px; padding: 8px 12px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.04), 0 0 2px rgba(0,0,0,0.06);
+    display: flex; align-items: flex-start;
 }
 .info-panel {
     background: #fff; border: 1px solid #F0F0F0;
@@ -224,8 +238,11 @@ def text_to_latex(line):
     if not s:
         return None
 
-    # 必须含 = 号
-    if '=' not in s:
+    # 必须含 = 号或比较运算符
+    _CMP_OPS = ('<', '>', '≤', '≥')
+    has_eq = '=' in s
+    has_cmp = any(op in s for op in _CMP_OPS)
+    if not has_eq and not has_cmp:
         return None
 
     # 跳过分隔线
@@ -243,19 +260,30 @@ def text_to_latex(line):
     # ------ 判断是否为公式行 ------
     # Case 1: 以拉丁字母/希腊符号开头（可能跟中文下标）
     latin_start = bool(re.match(r'^[A-Za-zα-ωΑ-Ωβχθπ]', s))
-    # Case 2: 续行，以 = 开头
-    continuation = s.startswith('=')
+    # Case 2: 续行，以 = 或比较运算符开头
+    continuation = s[0] in ('=', '<', '>', '≤', '≥') if s else False
     # Case 3: 短中文变量名（1-2字，如"误差"）
     cn_var = bool(re.match(r'^[\u4e00-\u9fff]{1,2}\s*=', s))
+    # Case 4: 数字开头的比较表达式（如 0.1 < V < 100）
+    num_cmp = bool(re.match(r'^\d', s)) and has_cmp
+    # Case 5: 短中文变量名 + 比较运算符（如 净空面积 ≥ 15%）
+    cn_cmp = bool(re.match(r'^[\u4e00-\u9fff]{1,4}\s*[<>≤≥]', s)) and has_cmp
 
-    if not (latin_start or continuation or cn_var):
+    if not (latin_start or continuation or cn_var or num_cmp or cn_cmp):
         return None
 
-    # = 号前中文字符太多 → 描述文本而非公式
-    eq_idx = s.index('=')
+    # 运算符前中文字符太多 → 描述文本而非公式
+    if '=' in s:
+        eq_idx = s.index('=')
+    else:
+        eq_idx = len(s)
+        for _op in _CMP_OPS:
+            _oi = s.find(_op)
+            if _oi >= 0 and _oi < eq_idx:
+                eq_idx = _oi
     pre = s[:eq_idx]
     cn_before = sum(1 for c in pre if '\u4e00' <= c <= '\u9fff')
-    if cn_before > 3:
+    if cn_before > 4:
         return None
 
     # 全行中文字符太多也跳过
@@ -294,6 +322,13 @@ def text_to_latex(line):
     latex = re.sub(
         r'^([\u4e00-\u9fff]{1,2})\s*=',
         lambda m: '\\text{' + m.group(1) + '} =',
+        latex
+    )
+
+    # 3b. 独立中文变量名 + 比较运算符（行首，如 净空面积 ≥）
+    latex = re.sub(
+        r'^([\u4e00-\u9fff]{1,4})\s*([<>≤≥])',
+        lambda m: '\\text{' + m.group(1) + '} ' + m.group(2),
         latex
     )
 
@@ -441,8 +476,10 @@ def _try_extract_formula(stripped, margin_style):
       - 「不淤流速 = 0.1 m/s」                          → 中文变量 = 数值
       - 「水力坡降 1/3000」                              → 中文标签 + 数值（无等号）
     """
+    _CMP_OPS_SET = ('<', '>', '≤', '≥')
     has_eq = '=' in stripped
-    if not has_eq and not re.search(r'[\u4e00-\u9fff]{2,}\s+\d', stripped):
+    has_cmp = any(op in stripped for op in _CMP_OPS_SET)
+    if not has_eq and not has_cmp and not re.search(r'[\u4e00-\u9fff]{2,}\s+\d', stripped):
         return None
 
     clean = stripped
@@ -454,32 +491,36 @@ def _try_extract_formula(stripped, margin_style):
         bullet = '• '
         clean = clean[bm.end():]
 
-    if has_eq:
+    if has_eq or has_cmp:
         # 模式1: 「标签: 公式」（冒号分隔）
         for sep in (': ', '：'):
             idx = clean.find(sep)
             if idx >= 0:
                 label = clean[:idx]
                 formula = clean[idx + len(sep):].strip()
-                if formula and '=' in formula:
+                if formula and ('=' in formula or any(op in formula for op in _CMP_OPS_SET)):
                     latex = text_to_latex(formula)
                     if latex:
-                        svg = render_latex_svg(latex, fontsize=14)
+                        # 将标签也纳入 SVG 渲染，避免 HTML 文字与 SVG 字号不一致
+                        full_latex = '\\text{' + label + sep[0] + '} \\; ' + latex
+                        svg = render_latex_svg(full_latex, fontsize=14)
                         if svg:
                             return (f'<div class="formula-line" style="{margin_style}">'
-                                    f'{_e(bullet + label + sep[0])} {svg}</div>')
+                                    f'{_e(bullet)}{svg}</div>')
 
-        # 模式2: 「中文前缀 拉丁变量 = ...」（空格分隔）
-        m = re.match(r'^([\u4e00-\u9fff]+\s+)([A-Za-z].+)', clean)
+        # 模式2: 「中文前缀 拉丁/希腊变量 = ...」（空格分隔）
+        m = re.match(r'^([\u4e00-\u9fff]+\s+)([A-Za-z\u0391-\u03c9].+)', clean)
         if m:
-            prefix = m.group(1)
+            prefix = m.group(1).strip()
             formula = m.group(2)
             latex = text_to_latex(formula)
             if latex:
-                svg = render_latex_svg(latex, fontsize=14)
+                # 将中文前缀纳入 SVG 渲染，保持字号一致
+                full_latex = '\\text{' + prefix + '} \\; ' + latex
+                svg = render_latex_svg(full_latex, fontsize=14)
                 if svg:
                     return (f'<div class="formula-line" style="{margin_style}">'
-                            f'{_e(bullet + prefix)}{svg}</div>')
+                            f'{_e(bullet)}{svg}</div>')
 
         # 模式3: 「中文变量名 = 数值 [单位]」（无拉丁变量名，值以数字开头）
         m3 = re.match(r'^([\u4e00-\u9fff]{2,6})\s*(=\s*[\d\-.].+)', clean)
@@ -493,6 +534,20 @@ def _try_extract_formula(stripped, margin_style):
                 if svg:
                     return (f'<div class="formula-line" style="{margin_style}">'
                             f'{_e(bullet)}{svg}</div>')
+
+        # 模式3b: 「中文变量名 ≥/≤/>/< 数值」（比较表达式）
+        if has_cmp:
+            m3b = re.match(r'^([\u4e00-\u9fff]{2,6})\s*([<>≤≥].+)', clean)
+            if m3b:
+                cn_name = m3b.group(1)
+                value_part = m3b.group(2)
+                latex = text_to_latex(value_part)
+                if latex:
+                    full_latex = '\\text{' + cn_name + '} ' + latex
+                    svg = render_latex_svg(full_latex, fontsize=14)
+                    if svg:
+                        return (f'<div class="formula-line" style="{margin_style}">'
+                                f'{_e(bullet)}{svg}</div>')
 
     # 模式4: 「中文标签 数值/分数」（无等号，如 水力坡降 1/3000）
     m4 = re.match(r'^([\u4e00-\u9fff]{2,6})\s+(\d.+)', clean)
@@ -535,6 +590,41 @@ def _render_content_line(stripped, margin_style, enable_formula=True):
 
     # 普通文本
     return f'<div class="content-line" style="{margin_style}">{_e(stripped)}</div>'
+
+
+def _render_param_grid(step_blocks):
+    """将输入参数步骤块渲染为两列紧凑网格。"""
+    cells = []
+    for block in step_blocks:
+        num = block['number']
+        title = block['title']
+        lines = block['lines']
+        value_parts = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            latex = text_to_latex(stripped)
+            if latex:
+                svg = render_latex_svg(latex, fontsize=13)
+                if svg:
+                    value_parts.append(f'<div style="margin:2px 0;">{svg}</div>')
+                    continue
+            value_parts.append(
+                f'<div style="margin:2px 0;font-size:13px;color:#424242;">{_e(stripped)}</div>'
+            )
+        value_html = '\n'.join(value_parts)
+        cells.append(
+            f'<div class="param-cell">'
+            f'<div class="step-badge" style="min-width:24px;height:24px;'
+            f'border-radius:12px;font-size:11px;margin-right:10px;margin-top:2px;">'
+            f'{_e(num)}</div>'
+            f'<div class="step-body">'
+            f'<div class="step-title">{_e(title)}</div>'
+            f'{value_html}'
+            f'</div></div>'
+        )
+    return '<div class="param-grid">\n' + '\n'.join(cells) + '\n</div>'
 
 
 def _render_step_card(block):
@@ -589,7 +679,7 @@ def _render_text_block(lines):
         stripped = line.strip()
         rel = max(0, len(line) - len(line.lstrip()) - base_indent)
         ms = f'margin-left:{rel * 7}px;' if rel > 0 else ''
-        parts.append(_render_content_line(stripped, ms, enable_formula=False))
+        parts.append(_render_content_line(stripped, ms, enable_formula=True))
     return '<div class="info-panel">\n' + '\n'.join(parts) + '\n</div>'
 
 
@@ -614,7 +704,23 @@ def plain_text_to_formula_body(plain_text):
     """将纯文本计算结果转换为 HTML body 内容（不含 <html>/<head> 标签）。"""
     lines = plain_text.split('\n')
     blocks = _group_lines_into_blocks(lines)
-    return '\n'.join(_render_block(b) for b in blocks)
+    html_parts = []
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        if b['type'] == 'section' and '输入参数' in b['text']:
+            html_parts.append(_render_block(b))
+            i += 1
+            param_steps = []
+            while i < len(blocks) and blocks[i]['type'] == 'step':
+                param_steps.append(blocks[i])
+                i += 1
+            if param_steps:
+                html_parts.append(_render_param_grid(param_steps))
+            continue
+        html_parts.append(_render_block(b))
+        i += 1
+    return '\n'.join(html_parts)
 
 
 def wrap_with_katex(body_html, extra_css="", extra_head=""):

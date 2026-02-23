@@ -1747,11 +1747,16 @@ class BatchPanel(QWidget):
         velocity_ok = v_min <= V_design <= v_max
         o.append(f"  1. 流速验证: {v_min} ≤ {V_design:.3f} ≤ {v_max} → {'通过 ✓' if velocity_ok else '未通过 ✗'}")
         min_fb_hgt = 0.4
-        min_fb_pct = 15.0 if "矩形暗涵" not in section_type else 10.0
+        is_culvert = "矩形暗涵" in section_type
+        min_fb_pct = 10.0 if is_culvert else 15.0
+        max_fb_pct = 30.0 if is_culvert else None
         fb_hgt_ok = fb_hgt_inc >= min_fb_hgt
-        fb_pct_ok = fb_pct_inc >= min_fb_pct
+        fb_pct_ok = fb_pct_inc >= min_fb_pct and (max_fb_pct is None or fb_pct_inc <= max_fb_pct)
         o.append(f"  2. 净空高度验证: Fb加大 = {fb_hgt_inc:.3f}m ≥ {min_fb_hgt}m → {'通过 ✓' if fb_hgt_ok else '需注意'}")
-        o.append(f"  3. 净空比例验证: {fb_pct_inc:.1f}% ≥ {min_fb_pct}% → {'通过 ✓' if fb_pct_ok else '需注意'}")
+        if is_culvert:
+            o.append(f"  3. 净空比例验证: {min_fb_pct}% ≤ {fb_pct_inc:.1f}% ≤ {max_fb_pct}% → {'通过 ✓' if fb_pct_ok else '需注意'}")
+        else:
+            o.append(f"  3. 净空比例验证: {fb_pct_inc:.1f}% ≥ {min_fb_pct}% → {'通过 ✓' if fb_pct_ok else '需注意'}")
         return "\n".join(o)
 
     # ================================================================
@@ -2683,21 +2688,21 @@ class SectionParameterDialog(QDialog):
         st = self.section_type
         if "明渠-梯形" in st:
             self._add_opt_entry(form, "边坡系数 m:", "m", "必填")
-            self._add_opt_entry(form, "手动底宽 B (m):", "b", "留空自动计算")
+            self._add_opt_entry(form, "指定底宽 B (m):", "b", "留空自动计算")
             self._add_opt_entry(form, "宽深比 B/h:", "b_h_ratio", "留空自动计算",
                                 "(梯形断面边坡系数必填; 底宽B和宽深比可选)")
         elif "明渠-矩形" in st:
             hint_label = QLabel("边坡系数 m = 0 (矩形断面)")
             hint_label.setStyleSheet("color:#555;")
             form.addRow(hint_label)
-            self._add_opt_entry(form, "手动底宽 B (m):", "b", "留空自动计算")
+            self._add_opt_entry(form, "指定底宽 B (m):", "b", "留空自动计算")
             self._add_opt_entry(form, "宽深比 B/h:", "b_h_ratio", "留空自动计算",
                                 "(底宽B和宽深比可选，留空则自动计算)")
         elif "明渠-圆形" in st:
-            self._add_opt_entry(form, "手动直径 D (m):", "D", "留空自动计算",
+            self._add_opt_entry(form, "指定直径 D (m):", "D", "留空自动计算",
                                 "(留空则自动计算)")
         elif "渡槽-U形" in st:
-            self._add_opt_entry(form, "手动内半径 R (m):", "R", "留空自动计算",
+            self._add_opt_entry(form, "指定内半径 R (m):", "R", "留空自动计算",
                                 "(留空则自动计算)")
         elif "渡槽-矩形" in st:
             self._add_opt_entry(form, "深宽比 H/B:", "h_b_ratio", "推荐0.6~0.8",
@@ -2706,19 +2711,19 @@ class SectionParameterDialog(QDialog):
             self._add_opt_entry(form, "倒角底边 (m):", "chamfer_length", "",
                                 "(倒角两者需同时填写或同时留空)")
         elif "隧洞-圆形" in st:
-            self._add_opt_entry(form, "手动直径 D (m):", "D", "留空自动计算",
+            self._add_opt_entry(form, "指定直径 D (m):", "D", "留空自动计算",
                                 "(留空则自动计算)")
         elif "隧洞-圆拱直墙型" in st:
             self._add_opt_entry(form, "拱顶圆心角 (度):", "theta", "留空则采用180°",
                                 "(留空则采用180°)")
-            self._add_opt_entry(form, "手动底宽 B (m):", "B", "留空自动计算",
-                                "(手动底宽B留空则自动计算)")
+            self._add_opt_entry(form, "指定底宽 B (m):", "B", "留空自动计算",
+                                "(指定底宽B留空则自动计算)")
         elif "隧洞-马蹄形" in st:
-            self._add_opt_entry(form, "手动半径 R (m):", "r", "留空自动计算",
+            self._add_opt_entry(form, "指定半径 R (m):", "r", "留空自动计算",
                                 "(留空则自动计算)")
         elif st == "矩形暗涵":
-            self._add_opt_entry(form, "手动宽深比:", "BH_ratio_rect", "留空自动计算")
-            self._add_opt_entry(form, "手动底宽 B (m):", "B_rect", "留空自动计算",
+            self._add_opt_entry(form, "指定宽深比:", "BH_ratio_rect", "留空自动计算")
+            self._add_opt_entry(form, "指定底宽 B (m):", "B_rect", "留空自动计算",
                                 "(二选一输入，留空则自动计算)")
         else:
             no_param = QLabel("(无额外参数)")

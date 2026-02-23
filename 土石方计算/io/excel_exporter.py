@@ -187,21 +187,24 @@ class EarthworkExcelExporter:
 
         all_layers = _collect_layer_names(sections)
         n_layers = len(all_layers)
-        total_cols = 5 + n_layers * 2 + 2
+        # 列布局：桩号段(3) + 总量平均/棱台(2) + 各层平均(n) + 各层棱台(n) + 回填平均/棱台(2) + 累计(1)
+        total_cols = 3 + 2 + n_layers * 2 + 2 + 1
 
         self._write_title(ws, project_name + " — 土石方工程量计算表",
                           col_span=total_cols)
 
-        layer_exc_headers = [f"{n}\n开挖(m³)" for n in all_layers]
+        layer_avg_headers   = [f"{n}\n平均断面(m³)" for n in all_layers]
+        layer_prism_headers = [f"{n}\n棱台法(m³)"   for n in all_layers]
         headers = (["起始桩号", "终止桩号", "段长(m)",
-                    "平均断面\n开挖(m³)", "棱台法\n开挖(m³)"]
-                   + layer_exc_headers
-                   + [f"{n}\n开挖棱台(m³)" for n in all_layers]
-                   + ["平均断面\n回填(m³)", "棱台法\n回填(m³)"])
+                    "平均断面\n开挖总(m³)", "棱台法\n开挖总(m³)"]
+                   + layer_avg_headers
+                   + layer_prism_headers
+                   + ["平均断面\n回填(m³)", "棱台法\n回填(m³)",
+                      "开挖累计\n(平均断面,m³)"])
         self._write_headers(ws, headers, row=2)
 
-        col_widths = [self.COL_W_STATION, self.COL_W_STATION,
-                      10] + [self.COL_W_VOL] * (total_cols - 3)
+        col_widths = [self.COL_W_STATION, self.COL_W_STATION, 10
+                      ] + [self.COL_W_VOL] * (total_cols - 3)
         self._set_col_widths(ws, col_widths)
 
         cum_avg = 0.0
@@ -212,12 +215,19 @@ class EarthworkExcelExporter:
             ws.cell(row, 3, round(seg.length, 1))
             ws.cell(row, 4, round(seg.excavation_avg, 1))
             ws.cell(row, 5, round(seg.excavation_prismatoid, 1))
+            # 各层平均断面法
             for j, ln in enumerate(all_layers):
                 ws.cell(row, 6 + j,
                         round(seg.excavation_by_layer_avg.get(ln, 0.0), 1))
+            # 各层棱台法
+            for j, ln in enumerate(all_layers):
+                ws.cell(row, 6 + n_layers + j,
+                        round(seg.excavation_by_layer_prismatoid.get(ln, 0.0), 1))
+            # 回填 + 累计
             ws.cell(row, 6 + n_layers * 2, round(seg.fill_avg, 1))
             ws.cell(row, 7 + n_layers * 2, round(seg.fill_prismatoid, 1))
             cum_avg += seg.excavation_avg
+            ws.cell(row, 8 + n_layers * 2, round(cum_avg, 1))
 
         self._apply_basic_style(ws, start_row=2,
                                 end_row=len(result.segments) + 2,

@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "渠系建筑物断面计算"))
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-    QSplitter, QFrame, QTabWidget, QFileDialog, QScrollArea, QInputDialog
+    QSplitter, QFrame, QTabWidget, QFileDialog, QScrollArea
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -153,12 +153,12 @@ class OpenChannelPanel(QWidget):
 
         fl.addWidget(self._sep())
         fl.addWidget(self._slbl("【可选参数】"))
-        self.beta_lbl, self.beta_edit = self._field2(fl, "手动宽深比 β:", "")
-        self.b_lbl, self.b_edit = self._field2(fl, "手动底宽 B (m):", "")
+        self.beta_lbl, self.beta_edit = self._field2(fl, "指定宽深比 β:", "")
+        self.b_lbl, self.b_edit = self._field2(fl, "指定底宽 B (m):", "")
         self.bb_hint = self._hint("(二选一输入，留空则自动计算)")
         fl.addWidget(self.bb_hint)
 
-        self.D_lbl, self.D_edit = self._field2(fl, "手动直径 D (m):", "")
+        self.D_lbl, self.D_edit = self._field2(fl, "指定直径 D (m):", "")
         self.D_hint_lbl = self._hint("(留空则自动计算)")
         fl.addWidget(self.D_hint_lbl)
         for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.hide()
@@ -257,9 +257,9 @@ class OpenChannelPanel(QWidget):
         h = HelpPageBuilder("明渠水力计算", '请选择断面类型并输入参数后点击“计算”按钮')
         h.section("支持断面类型")
         h.numbered_list([
-            ("矩形断面", "边坡系数 m = 0"),
-            ("梯形断面", "用户自定义边坡系数 m"),
-            ("圆形明渠", "自动搜索最优直径"),
+            ("矩形断面", "m = 0，附录E自动寻优底宽；可指定宽深比或底宽"),
+            ("梯形断面", "用户设定边坡系数 m，附录E自动寻优底宽；可指定宽深比或底宽"),
+            ("圆形明渠", "自动搜索最优直径；可指定直径 D"),
         ])
         h.section("曼宁公式")
         h.text("本程序基于曼宁公式进行计算：")
@@ -271,7 +271,7 @@ class OpenChannelPanel(QWidget):
         h.section("宽深比说明")
         h.bullet_list([
             "定义：β = B/h（底宽 / 设计水深）",
-            "可选参数中可手动指定宽深比或底宽",
+            "可选参数中可指定宽深比或底宽",
             "二选一输入，留空则自动寻优计算",
         ])
         h.section("约束条件")
@@ -373,7 +373,7 @@ class OpenChannelPanel(QWidget):
             # 更新加大比例提示
             if result.get('success') and 'increase_percent' in result:
                 ap = result['increase_percent']
-                src = "手动指定" if self.inc_edit.text().strip() else "自动计算"
+                src = "指定" if self.inc_edit.text().strip() else "自动计算"
                 if isinstance(ap, str):
                     self.inc_hint.setText(f"({src}: {ap})")
                 else:
@@ -431,7 +431,7 @@ class OpenChannelPanel(QWidget):
         Q_inc = result['Q_increased']
         h_inc = result['h_increased']; V_inc = result['V_increased']
         Fb = result['Fb']; H = result['h_prime']
-        inc_source = "(手动指定)" if p.get('manual_increase') else "(自动计算)"
+        inc_source = "(指定)" if p.get('manual_increase') else "(自动计算)"
 
         o = []
         o.append("=" * 70)
@@ -439,16 +439,42 @@ class OpenChannelPanel(QWidget):
         o.append("=" * 70)
         o.append("")
         o.append("【输入参数】")
-        o.append(f"  断面类型 = {stype}")
-        o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-        if stype == "梯形": o.append(f"  边坡系数 m = {m}")
-        o.append(f"  糙率 n = {n}")
-        o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-        o.append(f"  不淤流速 = {v_min} m/s")
-        o.append(f"  不冲流速 = {v_max} m/s")
+        o.append("")
+        _n = 1
+        o.append(f"  {_n}. 断面类型:")
+        o.append(f"     {stype}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 设计流量:")
+        o.append(f"     Q = {Q:.3f} m³/s")
+        o.append("")
+        if stype == "梯形":
+            _n += 1
+            o.append(f"  {_n}. 边坡系数:")
+            o.append(f"     m = {m}")
+            o.append("")
+        _n += 1
+        o.append(f"  {_n}. 糙率:")
+        o.append(f"     n = {n}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 水力坡降:")
+        o.append(f"     = 1/{int(slope_inv)}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 不淤流速:")
+        o.append(f"     = {v_min} m/s")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 不冲流速:")
+        o.append(f"     = {v_max} m/s")
+        o.append("")
+        o.append("【设计方法】")
+        o.append("")
+        o.append(f"  1. 采用方法:")
+        o.append(f"     {result['design_method']}")
         o.append("")
         o.append("【设计结果】")
-        o.append(f"  设计方法: {result['design_method']}")
         o.append(f"  底宽 B = {b:.3f} m")
         o.append(f"  水深 h = {h:.3f} m")
         o.append(f"  宽深比 β = {beta:.3f}")
@@ -544,7 +570,7 @@ class OpenChannelPanel(QWidget):
         X_inc = result.get('X_increased', -1)
         R_inc = result.get('R_increased', -1)
         Fb = result['Fb']; H = result['h_prime']
-        inc_source = "(手动指定)" if p.get('manual_increase') else "(自动计算)"
+        inc_source = "(指定)" if p.get('manual_increase') else "(自动计算)"
 
         o = []
         o.append("=" * 70)
@@ -552,20 +578,56 @@ class OpenChannelPanel(QWidget):
         o.append("=" * 70)
         o.append("")
         o.append("【一、输入参数】")
-        o.append(f"  断面类型 = {stype}")
-        o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-        if stype == "梯形": o.append(f"  边坡系数 m = {m}")
-        o.append(f"  糙率 n = {n}")
-        o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-        o.append(f"  不淤流速 = {v_min} m/s")
-        o.append(f"  不冲流速 = {v_max} m/s")
-        if p.get('manual_beta'): o.append(f"  [手动] 宽深比 β = {p['manual_beta']}")
-        if p.get('manual_b'): o.append(f"  [手动] 底宽 B = {p['manual_b']} m")
-        if p.get('manual_increase'): o.append(f"  [手动] 加大比例 = {p['manual_increase']}%")
         o.append("")
+        _n = 1
+        o.append(f"  {_n}. 断面类型:")
+        o.append(f"     {stype}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 设计流量:")
+        o.append(f"     Q = {Q:.3f} m³/s")
+        o.append("")
+        if stype == "梯形":
+            _n += 1
+            o.append(f"  {_n}. 边坡系数:")
+            o.append(f"     m = {m}")
+            o.append("")
+        _n += 1
+        o.append(f"  {_n}. 糙率:")
+        o.append(f"     n = {n}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 水力坡降:")
+        o.append(f"     = 1/{int(slope_inv)}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 不淤流速:")
+        o.append(f"     = {v_min} m/s")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 不冲流速:")
+        o.append(f"     = {v_max} m/s")
+        o.append("")
+        if p.get('manual_beta'):
+            _n += 1
+            o.append(f"  {_n}. 指定宽深比:")
+            o.append(f"     β = {p['manual_beta']}")
+            o.append("")
+        if p.get('manual_b'):
+            _n += 1
+            o.append(f"  {_n}. 指定底宽:")
+            o.append(f"     B = {p['manual_b']} m")
+            o.append("")
+        if p.get('manual_increase'):
+            _n += 1
+            o.append(f"  {_n}. 指定加大比例:")
+            o.append(f"     = {p['manual_increase']}%")
+            o.append("")
 
         o.append("【二、设计方法】")
-        o.append(f"  采用方法: {result['design_method']}")
+        o.append("")
+        o.append(f"  1. 采用方法:")
+        o.append(f"     {result['design_method']}")
         o.append("")
 
         schemes = result.get('appendix_e_schemes', [])
@@ -626,7 +688,7 @@ class OpenChannelPanel(QWidget):
 
         o.append("【四、加大流量工况计算】")
         o.append("")
-        o.append("  9. 加大流量计算:")
+        o.append("  1. 加大流量计算:")
         o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_source}")
         o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
         o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
@@ -638,12 +700,12 @@ class OpenChannelPanel(QWidget):
             if X_inc <= 0: X_inc = b + 2 * h_inc * math.sqrt(1 + m * m)
             if R_inc <= 0 and X_inc > 0: R_inc = A_inc / X_inc
 
-            o.append("  10. 加大水深计算:")
+            o.append("  2. 加大水深计算:")
             o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s 和设计底宽 B = {b:.3f} m，")
             o.append(f"      利用曼宁公式反算水深:")
             o.append(f"      h加大 = {h_inc:.3f} m")
             o.append("")
-            o.append("  11. 加大过水面积计算:")
+            o.append("  3. 加大过水面积计算:")
             if stype == "梯形":
                 o.append(f"      A加大 = (B + m×h加大) × h加大")
                 o.append(f"           = ({b:.3f} + {m}×{h_inc:.3f}) × {h_inc:.3f}")
@@ -653,7 +715,7 @@ class OpenChannelPanel(QWidget):
                 o.append(f"           = {b:.3f} × {h_inc:.3f}")
             o.append(f"           = {A_inc:.3f} m²")
             o.append("")
-            o.append("  12. 加大湿周计算:")
+            o.append("  4. 加大湿周计算:")
             sq2 = math.sqrt(1 + m * m)
             if stype == "梯形":
                 o.append(f"      χ加大 = B + 2×h加大×√(1+m²)")
@@ -666,28 +728,28 @@ class OpenChannelPanel(QWidget):
                 o.append(f"           = {b:.3f} + {2 * h_inc:.3f}")
             o.append(f"           = {X_inc:.3f} m")
             o.append("")
-            o.append("  13. 加大水力半径计算:")
+            o.append("  5. 加大水力半径计算:")
             o.append(f"      R加大 = A加大 / χ加大")
             o.append(f"           = {A_inc:.3f} / {X_inc:.3f}")
             o.append(f"           = {R_inc:.3f} m")
             o.append("")
-            o.append("  14. 加大流速计算 (曼宁公式):")
+            o.append("  6. 加大流速计算 (曼宁公式):")
             o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
             o.append(f"           = (1/{n}) × {R_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
             o.append(f"           = {1/n:.2f} × {R_inc**(2/3):.4f} × {math.sqrt(i):.6f}")
             o.append(f"           = {V_inc:.3f} m/s")
             o.append("")
             Q_chk = V_inc * A_inc
-            o.append("  15. 流量校核:")
+            o.append("  7. 流量校核:")
             o.append(f"      Q校核 = V加大 × A加大 = {V_inc:.3f} × {A_inc:.3f} = {Q_chk:.3f} m³/s")
             o.append(f"      误差 = {abs(Q_chk - Q_inc) / Q_inc * 100:.2f}%")
             o.append("")
-            o.append("  16. 渠道岸顶超高计算（规范 6.4.8-2）:")
+            o.append("  8. 渠道岸顶超高计算（规范 6.4.8-2）:")
             o.append(f"      Fb = (1/4) × h加大 + 0.2")
             o.append(f"         = (1/4) × {h_inc:.3f} + 0.2")
             o.append(f"         = {Fb:.3f} m")
             o.append("")
-            o.append("  17. 渠道高度计算:")
+            o.append("  9. 渠道高度计算:")
             o.append(f"      H = h加大 + Fb")
             o.append(f"        = {h_inc:.3f} + {Fb:.3f}")
             o.append(f"        = {H:.3f} m")
@@ -698,14 +760,14 @@ class OpenChannelPanel(QWidget):
         o.append("【五、设计验证】")
         o.append("")
         vel_ok = v_min < V < v_max
-        o.append(f"  18. 流速验证:")
+        o.append(f"  1. 流速验证:")
         o.append(f"      范围要求: {v_min} < V < {v_max} m/s")
         o.append(f"      设计流速: V = {V:.3f} m/s")
         o.append(f"      结果: {'通过 ✓' if vel_ok else '未通过 ✗'}")
         o.append("")
         fb_req = 0.25 * h_inc + 0.2 if h_inc > 0 else 0
         fb_ok = Fb >= (fb_req - 0.001) if h_inc > 0 else False
-        o.append(f"  19. 超高复核（规范 6.4.8-2）:")
+        o.append(f"  2. 超高复核（规范 6.4.8-2）:")
         o.append(f"      规范要求: Fb ≥ (1/4)×h加大 + 0.2 = {fb_req:.3f} m")
         o.append(f"      计算结果: Fb = {Fb:.3f} m")
         o.append(f"      结果: {'通过 ✓' if fb_ok else '未通过 ✗'}")
@@ -752,15 +814,29 @@ class OpenChannelPanel(QWidget):
         o.append("=" * 70)
         o.append("")
         o.append("【输入参数】")
-        o.append(f"  断面类型 = 圆形")
-        o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-        o.append(f"  糙率 n = {n}")
-        o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-        o.append(f"  不淤流速 = {v_min} m/s")
-        o.append(f"  不冲流速 = {v_max} m/s")
+        o.append("")
+        o.append(f"  1. 断面类型:")
+        o.append(f"     圆形")
+        o.append("")
+        o.append(f"  2. 设计流量:")
+        o.append(f"     Q = {Q:.3f} m³/s")
+        o.append("")
+        o.append(f"  3. 糙率:")
+        o.append(f"     n = {n}")
+        o.append("")
+        o.append(f"  4. 水力坡降:")
+        o.append(f"     = 1/{int(slope_inv)}")
+        o.append("")
+        o.append(f"  5. 不淤流速:")
+        o.append(f"     = {v_min} m/s")
+        o.append("")
+        o.append(f"  6. 不冲流速:")
+        o.append(f"     = {v_max} m/s")
         o.append("")
         o.append("【断面尺寸】")
-        o.append(f"  设计直径 D = {D:.2f} m")
+        o.append("")
+        o.append(f"  1. 设计直径:")
+        o.append(f"     D = {D:.2f} m")
         o.append("")
         o.append("【设计流量工况】")
         o.append(f"  设计水深 h = {h:.3f} m")
@@ -831,6 +907,8 @@ class OpenChannelPanel(QWidget):
 
         Q_min = result.get('Q_min', 0)
         h_m = result.get('y_m', 0); V_m = result.get('V_m', 0)
+        A_m = result.get('A_m', 0); P_m = result.get('P_m', 0)
+        R_m = result.get('R_m', 0)
 
         o = []
         o.append("=" * 70)
@@ -838,15 +916,36 @@ class OpenChannelPanel(QWidget):
         o.append("=" * 70)
         o.append("")
         o.append("【一、输入参数】")
-        o.append(f"  断面类型 = 圆形")
-        o.append(f"  设计流量 Q = {Q:.3f} m³/s")
-        o.append(f"  糙率 n = {n}")
-        o.append(f"  水力坡降 = 1/{int(slope_inv)}")
-        o.append(f"  不淤流速 = {v_min} m/s")
-        o.append(f"  不冲流速 = {v_max} m/s")
-        if p.get('manual_b'):
-            o.append(f"  [手动] 直径 D = {p['manual_b']} m")
         o.append("")
+        _n = 1
+        o.append(f"  {_n}. 断面类型:")
+        o.append(f"     圆形")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 设计流量:")
+        o.append(f"     Q = {Q:.3f} m³/s")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 糙率:")
+        o.append(f"     n = {n}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 水力坡降:")
+        o.append(f"     = 1/{int(slope_inv)}")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 不淤流速:")
+        o.append(f"     = {v_min} m/s")
+        o.append("")
+        _n += 1
+        o.append(f"  {_n}. 不冲流速:")
+        o.append(f"     = {v_max} m/s")
+        o.append("")
+        if p.get('manual_b'):
+            _n += 1
+            o.append(f"  {_n}. 指定直径:")
+            o.append(f"     D = {p['manual_b']} m")
+            o.append("")
 
         o.append("【二、直径确定】")
         o.append("")
@@ -862,9 +961,8 @@ class OpenChannelPanel(QWidget):
         o.append("")
 
         o.append("【三、设计流量工况计算】")
-        o.append(f"  Q = {Q:.3f} m³/s")
         o.append("")
-        o.append("  4. 设计水深计算:")
+        o.append("  1. 设计水深计算:")
         o.append(f"     根据设计流量 Q = {Q:.3f} m³/s，利用曼宁公式反算水深:")
         o.append(f"     h = {h_d:.3f} m")
         o.append("")
@@ -872,53 +970,53 @@ class OpenChannelPanel(QWidget):
         if h_d > 0 and D > 0 and h_d <= D:
             Rr = D / 2
             theta = 2 * math.acos(max(-1, min(1, (Rr - h_d) / Rr)))
-            o.append(f"  5. 圆心角计算:")
+            o.append(f"  2. 圆心角计算:")
             o.append(f"     θ = 2 × arccos((R - h) / R)")
             o.append(f"       = 2 × arccos(({Rr:.3f} - {h_d:.3f}) / {Rr:.3f})")
             o.append(f"       = 2 × arccos({(Rr - h_d)/Rr:.4f})")
             o.append(f"       = {math.degrees(theta):.2f}° ({theta:.4f} rad)")
             o.append("")
-            o.append(f"  6. 过水面积计算:")
+            o.append(f"  3. 过水面积计算:")
             o.append(f"     A = (D²/8) × (θ - sinθ)")
             o.append(f"       = ({D:.3f}²/8) × ({theta:.4f} - sin{theta:.4f})")
             o.append(f"       = {D**2/8:.4f} × {theta - math.sin(theta):.4f}")
             o.append(f"       = {A_d:.3f} m²")
             o.append("")
-            o.append(f"  7. 湿周计算:")
+            o.append(f"  4. 湿周计算:")
             o.append(f"      χ = (D/2) × θ")
             o.append(f"        = ({D:.3f}/2) × {theta:.4f}")
             o.append(f"        = {Rr:.3f} × {theta:.4f}")
             o.append(f"        = {P_d:.3f} m")
             o.append("")
         else:
-            o.append(f"  6. 过水面积: A = {A_d:.3f} m²")
+            o.append(f"  3. 过水面积: A = {A_d:.3f} m²")
             o.append("")
-            o.append(f"  7. 湿周: χ = {P_d:.3f} m")
+            o.append(f"  4. 湿周: χ = {P_d:.3f} m")
             o.append("")
 
-        o.append(f"  8. 水力半径计算:")
+        o.append(f"  5. 水力半径计算:")
         o.append(f"      R = A / χ")
         o.append(f"        = {A_d:.3f} / {P_d:.3f}")
         o.append(f"        = {R_d:.3f} m")
         o.append("")
-        o.append(f"  9. 设计流速计算 (曼宁公式):")
+        o.append(f"  6. 设计流速计算 (曼宁公式):")
         o.append(f"      V = (1/n) × R^(2/3) × i^(1/2)")
         o.append(f"        = (1/{n}) × {R_d:.3f}^(2/3) × {i:.6f}^(1/2)")
         if R_d > 0:
             o.append(f"        = {1/n:.2f} × {R_d**(2/3):.4f} × {math.sqrt(i):.6f}")
         o.append(f"        = {V_d:.3f} m/s")
         o.append("")
-        o.append(f"  10. 流量校核:")
+        o.append(f"  7. 流量校核:")
         o.append(f"      Q计算 = V × A")
         o.append(f"           = {V_d:.3f} × {A_d:.3f}")
         o.append(f"           = {V_d * A_d:.3f} m³/s")
         if V_d * A_d > 0:
             o.append(f"      误差 = {abs(V_d * A_d - Q)/Q*100:.2f}%")
         o.append("")
-        o.append(f"  11. 净空高度:")
+        o.append(f"  8. 净空高度:")
         o.append(f"      Fb = D - h = {D:.3f} - {h_d:.3f} = {FB_d:.3f} m")
         o.append("")
-        o.append(f"  12. 净空面积:")
+        o.append(f"  9. 净空面积:")
         o.append(f"      PA = (A总 - A) / A总 × 100%")
         o.append(f"         = ({pipe_area:.3f} - {A_d:.3f}) / {pipe_area:.3f} × 100%")
         o.append(f"         = {PA_d:.1f}%")
@@ -926,7 +1024,7 @@ class OpenChannelPanel(QWidget):
 
         o.append("【四、加大流量工况计算】")
         o.append("")
-        o.append(f"  13. 加大流量计算:")
+        o.append(f"  1. 加大流量计算:")
         o.append(f"      流量加大比例 = {inc_info}")
         o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
         o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
@@ -934,48 +1032,48 @@ class OpenChannelPanel(QWidget):
         o.append("")
 
         if h_i is not None and h_i > 0 and D > 0:
-            o.append("  14. 加大水深计算:")
+            o.append("  2. 加大水深计算:")
             o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
             o.append(f"      h加大 = {h_i:.3f} m")
             o.append("")
             Rr_i = D / 2
             theta_i = 2 * math.acos(max(-1, min(1, (Rr_i - h_i) / Rr_i)))
-            o.append(f"  15. 圆心角计算:")
+            o.append(f"  3. 圆心角计算:")
             o.append(f"      θ加大 = 2 × arccos((R - h加大) / R)")
             o.append(f"           = 2 × arccos(({Rr_i:.3f} - {h_i:.3f}) / {Rr_i:.3f})")
             o.append(f"           = 2 × arccos({(Rr_i - h_i)/Rr_i:.4f})")
             o.append(f"           = {math.degrees(theta_i):.2f}° ({theta_i:.4f} rad)")
             o.append("")
-            o.append(f"  16. 过水面积计算:")
+            o.append(f"  4. 过水面积计算:")
             o.append(f"      A加大 = (D²/8) × (θ加大 - sinθ加大)")
             o.append(f"           = ({D:.3f}²/8) × ({theta_i:.4f} - sin{theta_i:.4f})")
             o.append(f"           = {D**2/8:.4f} × {theta_i - math.sin(theta_i):.4f}")
             o.append(f"           = {A_i:.3f} m²")
             o.append("")
-            o.append(f"  17. 湿周计算:")
+            o.append(f"  5. 湿周计算:")
             o.append(f"      χ加大 = (D/2) × θ加大")
             o.append(f"           = ({D:.3f}/2) × {theta_i:.4f}")
             o.append(f"           = {Rr_i:.3f} × {theta_i:.4f}")
             o.append(f"           = {P_i:.3f} m")
             o.append("")
         else:
-            o.append(f"  14. 加大水深: h加大 = N/A")
+            o.append(f"  2. 加大水深: h加大 = N/A")
             o.append("")
 
-        o.append(f"  18. 水力半径计算:")
+        o.append(f"  6. 水力半径计算:")
         o.append(f"      R加大 = A加大 / χ加大")
         if A_i and P_i:
             o.append(f"           = {A_i:.3f} / {P_i:.3f}")
             o.append(f"           = {R_i:.3f} m")
         o.append("")
-        o.append(f"  19. 加大流速计算 (曼宁公式):")
+        o.append(f"  7. 加大流速计算 (曼宁公式):")
         o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
         if R_i and R_i > 0:
             o.append(f"           = (1/{n}) × {R_i:.3f}^(2/3) × {i:.6f}^(1/2)")
             o.append(f"           = {1/n:.2f} × {R_i**(2/3):.4f} × {math.sqrt(i):.6f}")
         o.append(f"           = {V_i:.3f} m/s")
         o.append("")
-        o.append(f"  20. 流量校核:")
+        o.append(f"  8. 流量校核:")
         if V_i and A_i:
             o.append(f"      Q计算 = V加大 × A加大")
             o.append(f"           = {V_i:.3f} × {A_i:.3f}")
@@ -983,13 +1081,13 @@ class OpenChannelPanel(QWidget):
             if Q_inc > 0:
                 o.append(f"      误差 = {abs(V_i * A_i - Q_inc) / Q_inc * 100:.2f}%")
         o.append("")
-        o.append(f"  21. 净空高度计算:")
+        o.append(f"  9. 净空高度计算:")
         o.append(f"      Fb加大 = D - h加大")
         if h_i:
             o.append(f"           = {D:.3f} - {h_i:.3f}")
             o.append(f"           = {FB_i:.3f} m")
         o.append("")
-        o.append(f"  22. 净空面积计算:")
+        o.append(f"  10. 净空面积计算:")
         if A_i:
             o.append(f"      PA加大 = (A总 - A加大) / A总 × 100%")
             o.append(f"           = ({pipe_area:.3f} - {A_i:.3f}) / {pipe_area:.3f} × 100%")
@@ -997,10 +1095,79 @@ class OpenChannelPanel(QWidget):
         o.append("")
 
         o.append("【五、最小流量工况计算】")
-        o.append(f"  Q最小 = {Q_min:.3f} m³/s" if Q_min is not None else "  Q最小 = N/A")
-        o.append(f"  水深 h最小 = {h_m:.3f} m" if h_m is not None else "  水深 h最小 = N/A")
-        o.append(f"  流速 V最小 = {V_m:.3f} m/s" if V_m is not None else "  流速 V最小 = N/A")
         o.append("")
+        o.append("  1. 最小流量计算:")
+        o.append(f"      Q最小 = Q × 最小流量系数")
+        o.append(f"           = {Q:.3f} × 0.4")
+        if Q_min is not None and Q_min > 0:
+            o.append(f"           = {Q_min:.3f} m³/s")
+        else:
+            o.append(f"           = N/A")
+        o.append("")
+
+        if Q_min is not None and Q_min > 0 and h_m is not None and h_m > 0 and D > 0:
+            o.append("  2. 最小水深计算:")
+            o.append(f"      根据最小流量 Q最小 = {Q_min:.3f} m³/s，利用曼宁公式反算水深:")
+            o.append(f"      h最小 = {h_m:.3f} m")
+            o.append("")
+
+            Rr_m = D / 2
+            if h_m <= D:
+                theta_m = 2 * math.acos(max(-1, min(1, (Rr_m - h_m) / Rr_m)))
+                o.append(f"  3. 圆心角计算:")
+                o.append(f"      θ最小 = 2 × arccos((R - h最小) / R)")
+                o.append(f"           = 2 × arccos(({Rr_m:.3f} - {h_m:.3f}) / {Rr_m:.3f})")
+                o.append(f"           = 2 × arccos({(Rr_m - h_m)/Rr_m:.4f})")
+                o.append(f"           = {math.degrees(theta_m):.2f}° ({theta_m:.4f} rad)")
+                o.append("")
+                o.append(f"  4. 过水面积计算:")
+                o.append(f"      A最小 = (D²/8) × (θ最小 - sinθ最小)")
+                o.append(f"           = ({D:.3f}²/8) × ({theta_m:.4f} - sin{theta_m:.4f})")
+                o.append(f"           = {D**2/8:.4f} × {theta_m - math.sin(theta_m):.4f}")
+                if A_m:
+                    o.append(f"           = {A_m:.3f} m²")
+                o.append("")
+                o.append(f"  5. 湿周计算:")
+                o.append(f"      χ最小 = (D/2) × θ最小")
+                o.append(f"           = ({D:.3f}/2) × {theta_m:.4f}")
+                o.append(f"           = {Rr_m:.3f} × {theta_m:.4f}")
+                if P_m:
+                    o.append(f"           = {P_m:.3f} m")
+                o.append("")
+            else:
+                o.append(f"  3. 过水面积: A最小 = {A_m:.3f} m²" if A_m else "  3. 过水面积: A最小 = N/A")
+                o.append("")
+                o.append(f"  4. 湿周: χ最小 = {P_m:.3f} m" if P_m else "  4. 湿周: χ最小 = N/A")
+                o.append("")
+
+            o.append(f"  6. 水力半径计算:")
+            o.append(f"      R最小 = A最小 / χ最小")
+            if A_m and P_m:
+                o.append(f"           = {A_m:.3f} / {P_m:.3f}")
+                o.append(f"           = {R_m:.3f} m")
+            o.append("")
+
+            o.append(f"  7. 最小流速计算 (曼宁公式):")
+            o.append(f"      V最小 = (1/n) × R最小^(2/3) × i^(1/2)")
+            if R_m and R_m > 0:
+                o.append(f"           = (1/{n}) × {R_m:.3f}^(2/3) × {i:.6f}^(1/2)")
+                o.append(f"           = {1/n:.2f} × {R_m**(2/3):.4f} × {math.sqrt(i):.6f}")
+            if V_m is not None:
+                o.append(f"           = {V_m:.3f} m/s")
+            o.append("")
+
+            o.append(f"  8. 流量校核:")
+            if V_m and A_m:
+                o.append(f"      Q计算 = V最小 × A最小")
+                o.append(f"           = {V_m:.3f} × {A_m:.3f}")
+                o.append(f"           = {V_m * A_m:.3f} m³/s")
+                if Q_min > 0:
+                    o.append(f"      误差 = {abs(V_m * A_m - Q_min) / Q_min * 100:.2f}%")
+            o.append("")
+        else:
+            o.append("  2. 最小水深: h最小 = N/A")
+            o.append("  3. 最小流速: V最小 = N/A")
+            o.append("")
 
         o.append("【六、设计验证】")
         o.append("")
@@ -1009,34 +1176,34 @@ class OpenChannelPanel(QWidget):
         pa_ok = PA_i is not None and PA_i >= MIN_FREE_AREA_PERCENT
         mv_ok = V_m is not None and V_m >= v_min
 
-        o.append(f"  23. 流速验证:")
-        o.append(f"      不淤流速 ≤ V ≤ 不冲流速")
+        o.append(f"  1. 流速验证:")
+        o.append(f"      范围要求: {v_min} ≤ V ≤ {v_max} m/s")
         if V_d is not None:
-            o.append(f"      {v_min} ≤ {V_d:.3f} ≤ {v_max}")
+            o.append(f"      设计流速: V = {V_d:.3f} m/s")
             o.append(f"      结果: {'通过 ✓' if vel_ok else '未通过 ✗'}")
         else:
             o.append(f"      计算失败")
         o.append("")
-        o.append(f"  24. 净空高度验证:")
-        o.append(f"      Fb加大 ≥ {MIN_FREEBOARD}")
+        o.append(f"  2. 净空高度验证:")
+        o.append(f"      规范要求: Fb ≥ {MIN_FREEBOARD} m")
         if FB_i is not None:
-            o.append(f"      {FB_i:.3f} ≥ {MIN_FREEBOARD}")
+            o.append(f"      计算结果: Fb = {FB_i:.3f} m")
             o.append(f"      结果: {'通过 ✓' if fb_ok else '未通过 ✗'}")
         else:
             o.append(f"      计算失败")
         o.append("")
-        o.append(f"  25. 净空面积验证:")
-        o.append(f"      PA加大 ≥ {MIN_FREE_AREA_PERCENT}%")
+        o.append(f"  3. 净空面积验证:")
+        o.append(f"      规范要求: PA ≥ {MIN_FREE_AREA_PERCENT}%")
         if PA_i is not None:
-            o.append(f"      {PA_i:.1f}% ≥ {MIN_FREE_AREA_PERCENT}%")
+            o.append(f"      计算结果: PA = {PA_i:.1f}%")
             o.append(f"      结果: {'通过 ✓' if pa_ok else '未通过 ✗'}")
         else:
             o.append(f"      计算失败")
         o.append("")
-        o.append(f"  26. 最小流速验证:")
-        o.append(f"      V最小 ≥ 不淤流速")
+        o.append(f"  4. 最小流速验证:")
+        o.append(f"      规范要求: V ≥ {v_min} m/s")
         if V_m is not None:
-            o.append(f"      {V_m:.3f} ≥ {v_min}")
+            o.append(f"      计算结果: V = {V_m:.3f} m/s")
             o.append(f"      结果: {'通过 ✓' if mv_ok else '未通过 ✗'}")
         else:
             o.append(f"      计算失败")
@@ -1214,7 +1381,8 @@ class OpenChannelPanel(QWidget):
                 H = (h_inc + res.get('Fb', 0.3)) if h_inc > 0 else res.get('h_design', 0.0) * 1.35
             default_name = f'明渠断面_{stype}_B{b:.2f}xH{H:.2f}.dxf'
         scales = ['1:20', '1:50', '1:100', '1:200', '1:500']
-        scale_str, ok = QInputDialog.getItem(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2, False)
+        from 渠系断面设计.styles import fluent_select
+        scale_str, ok = fluent_select(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2)
         if not ok: return
         scale_denom = int(scale_str.split(':')[1])
         filepath, _ = QFileDialog.getSaveFileName(

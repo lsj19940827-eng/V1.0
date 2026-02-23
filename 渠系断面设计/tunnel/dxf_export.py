@@ -2,7 +2,7 @@
 """隧洞断面 DXF 导出（圆形 / 圆拱直墙型 / 马蹄形）"""
 import math
 from 渠系断面设计.open_channel.dxf_export import (
-    _add_layer, _add_dim_h, _add_dim_v, _add_text_block
+    _setup_font_style, _add_layer, _add_dim_h, _add_dim_v, _add_text_block
 )
 
 
@@ -18,13 +18,14 @@ def export_tunnel_dxf(filepath, result, input_params, scale_denom=100):
     doc.header['$INSUNITS'] = 4
     doc.header['$MEASUREMENT'] = 1
     doc.header['$LTSCALE'] = sf * 0.5
-    _add_layer(doc, 'OUTLINE',         color=7, lw=50)
-    _add_layer(doc, 'WATER_DESIGN',    color=5, lw=25)
-    _add_layer(doc, 'WATER_INCREASED', color=4, lw=25)
-    _add_layer(doc, 'DIMENSION',       color=2, lw=18)
-    _add_layer(doc, 'TEXT_PARAMS',     color=3, lw=18)
+    _add_layer(doc, '轮廓线',         color=7, lw=50)
+    _add_layer(doc, '设计水位',    color=5, lw=25)
+    _add_layer(doc, '加大水位', color=4, lw=25)
+    _add_layer(doc, '尺寸标注',       color=2, lw=18)
+    _add_layer(doc, '参数文字',     color=3, lw=18)
     if 'DASHED' not in doc.linetypes:
         doc.linetypes.add('DASHED', pattern='A,.5,-.25')
+    _setup_font_style(doc)
     msp = doc.modelspace()
 
     if stype == '圆形':
@@ -49,30 +50,32 @@ def _draw_circ(msp, result, p, sf=1.0, scale_denom=100):
     V_inc = result.get('V_increased', 0.0); fb_inc = result.get('freeboard_hgt_inc', D - h_inc)
     inc = result.get('increase_percent', 0.0)
 
-    char = max(D, 1.0)*sf; th = round(char*0.06, 3); ar = th*0.85; gap = char*0.20
+    char = max(D, 1.0)*sf; th = 3.5; ar = th*0.85; gap = char*0.20
 
-    msp.add_circle((0, R*sf), R*sf, dxfattribs={'layer': 'OUTLINE'})
-    msp.add_line((-R*1.5*sf, 0), (R*1.5*sf, 0), dxfattribs={'layer': 'OUTLINE', 'linetype': 'DASHED'})
+    msp.add_circle((0, R*sf), R*sf, dxfattribs={'layer': '轮廓线'})
+    msp.add_line((-R*1.5*sf, 0), (R*1.5*sf, 0), dxfattribs={'layer': '轮廓线', 'linetype': 'DASHED'})
 
+    _olap_c = h_d > 0 and h_inc > 0 and 0 < h_inc < D and (h_inc - h_d) * sf < th * 2.0
     for h_w, layer, lt, lbl in [
-        (h_d,  'WATER_DESIGN',    None,     f'▽ 设计水位 h={h_d:.3f}m'),
-        (h_inc,'WATER_INCREASED', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
+        (h_d,  '设计水位',    None,     f'▽ 设计水位 h={h_d:.3f}m'),
+        (h_inc,'加大水位', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
     ]:
         if h_w and 0 < h_w < D:
             hw = math.sqrt(max(0, R**2 - (R - h_w)**2)) * sf
             att = {'layer': layer}
             if lt: att['linetype'] = lt
             msp.add_line((-hw, h_w*sf), (hw, h_w*sf), dxfattribs=att)
-            msp.add_text(lbl, dxfattribs={'layer': layer, 'height': th*0.85,
-                'insert': (hw+th*0.3, h_w*sf+(th*0.5 if lt else 0))})
+            _ly = h_w*sf + th*0.5 if lt else (h_w*sf - th*1.5 if _olap_c else h_w*sf + th*0.5)
+            msp.add_text(lbl, dxfattribs={'layer': layer, 'height': th, 'style': 'FANGSONG',
+                'insert': (0, _ly), 'align_point': (0, _ly), 'halign': 1})
 
-    _add_dim_h(msp, -R*sf, R*sf, -(gap*1.1), 0, f'D={D:.2f} m', th, ar, 'DIMENSION')
+    _add_dim_h(msp, -R*sf, R*sf, -(gap*1.1), 0, f'D={D:.2f} m', th, ar, '尺寸标注')
     if h_d > 0:
-        _add_dim_v(msp, 0, h_d*sf, -(R*sf+gap*1.4), -R*sf, f'h={h_d:.3f} m', th, ar, 'DIMENSION')
+        _add_dim_v(msp, 0, h_d*sf, -(R*sf+gap*1.4), -R*sf, f'h={h_d:.3f} m', th, ar, '尺寸标注')
     if fb_d > 0 and h_d > 0:
-        _add_dim_v(msp, h_d*sf, D*sf, R*sf+gap*1.4, R*sf, f'Fb={fb_d:.3f} m', th, ar, 'DIMENSION')
-    msp.add_line((0, R*sf), (R*sf*0.707, R*sf+R*sf*0.707), dxfattribs={'layer': 'DIMENSION'})
-    msp.add_text(f'R={R:.3f} m', dxfattribs={'layer': 'DIMENSION', 'height': th*0.9,
+        _add_dim_v(msp, h_d*sf, D*sf, R*sf+gap*1.4, R*sf, f'Fb={fb_d:.3f} m', th, ar, '尺寸标注')
+    msp.add_line((0, R*sf), (R*sf*0.707, R*sf+R*sf*0.707), dxfattribs={'layer': '尺寸标注'})
+    msp.add_text(f'R={R:.3f} m', dxfattribs={'layer': '尺寸标注', 'height': th, 'style': 'FANGSONG',
         'insert': (R*sf*0.72, R*sf+R*sf*0.72)})
 
     inc_s = f'{inc:.1f}%' if isinstance(inc, (int,float)) else str(inc)
@@ -83,7 +86,7 @@ def _draw_circ(msp, result, p, sf=1.0, scale_denom=100):
              f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m','',
              '[加大流量]', f'比例={inc_s}', f'Q增={Q_inc:.3f}',
              f'h增={h_inc:.3f} m', f'V增={V_inc:.3f} m/s', f'Fb增={fb_inc:.3f} m']
-    _add_text_block(msp, R*sf+gap*3.5, D*sf+th, lines, th, 'TEXT_PARAMS')
+    _add_text_block(msp, R*sf+gap*3.5, D*sf+th, lines, th, '参数文字')
 
 
 def _draw_arch(msp, result, p, sf=1.0, scale_denom=100):
@@ -101,37 +104,39 @@ def _draw_arch(msp, result, p, sf=1.0, scale_denom=100):
     Ha = Ra*(1 - math.cos(tr/2)); Hs = max(0.0, H - Ha)
     cy = Hs + Ra*math.cos(tr/2)
 
-    char = max(B, H, 1.0)*sf; th = round(char*0.055, 3); ar = th*0.85; gap = char*0.18
+    char = max(B, H, 1.0)*sf; th = 3.5; ar = th*0.85; gap = char*0.18
 
     # 底 + 直墙 + 拱
-    msp.add_line((-B/2*sf, 0), (B/2*sf, 0),      dxfattribs={'layer': 'OUTLINE'})
-    msp.add_line((-B/2*sf, 0), (-B/2*sf, Hs*sf),  dxfattribs={'layer': 'OUTLINE'})
-    msp.add_line((B/2*sf,  0), (B/2*sf,  Hs*sf),  dxfattribs={'layer': 'OUTLINE'})
+    msp.add_line((-B/2*sf, 0), (B/2*sf, 0),      dxfattribs={'layer': '轮廓线'})
+    msp.add_line((-B/2*sf, 0), (-B/2*sf, Hs*sf),  dxfattribs={'layer': '轮廓线'})
+    msp.add_line((B/2*sf,  0), (B/2*sf,  Hs*sf),  dxfattribs={'layer': '轮廓线'})
     N = 40; sa = math.pi/2 - tr/2; ea = math.pi/2 + tr/2
     for i in range(N):
         a1 = sa + i*(ea-sa)/N; a2 = sa + (i+1)*(ea-sa)/N
         msp.add_line((Ra*math.cos(a1)*sf, (cy+Ra*math.sin(a1))*sf),
-                     (Ra*math.cos(a2)*sf, (cy+Ra*math.sin(a2))*sf), dxfattribs={'layer': 'OUTLINE'})
+                     (Ra*math.cos(a2)*sf, (cy+Ra*math.sin(a2))*sf), dxfattribs={'layer': '轮廓线'})
 
-    # 水面线
+    # 水面线 + 居中标注（重叠时上下错开）
+    _olap_a = h_d > 0 and h_inc > 0 and (h_inc - h_d) * sf < th * 2.0
     for h_w, layer, lt, lbl in [
-        (h_d,  'WATER_DESIGN',    None,     f'▽ 设计水位 h={h_d:.3f}m'),
-        (h_inc,'WATER_INCREASED', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
+        (h_d,  '设计水位',    None,     f'▽ 设计水位 h={h_d:.3f}m'),
+        (h_inc,'加大水位', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
     ]:
         if h_w and h_w > 0:
             hw = B/2*sf
             att = {'layer': layer}
             if lt: att['linetype'] = lt
             msp.add_line((-hw, h_w*sf), (hw, h_w*sf), dxfattribs=att)
-            msp.add_text(lbl, dxfattribs={'layer': layer, 'height': th*0.85,
-                'insert': (hw+th*0.3, h_w*sf+(th*0.5 if lt else 0))})
+            _ly = h_w*sf + th*0.5 if lt else (h_w*sf - th*1.5 if _olap_a else h_w*sf + th*0.5)
+            msp.add_text(lbl, dxfattribs={'layer': layer, 'height': th, 'style': 'FANGSONG',
+                'insert': (0, _ly), 'align_point': (0, _ly), 'halign': 1})
 
-    _add_dim_h(msp, -B/2*sf, B/2*sf, -(gap*1.1), 0, f'B={B:.3f} m', th, ar, 'DIMENSION')
-    _add_dim_v(msp, 0, h_d*sf, -(B/2*sf+gap*1.4), -B/2*sf, f'h={h_d:.3f} m', th, ar, 'DIMENSION')
-    _add_dim_v(msp, 0, H*sf,   B/2*sf+gap*1.4, B/2*sf, f'H={H:.3f} m', th, ar, 'DIMENSION')
+    _add_dim_h(msp, -B/2*sf, B/2*sf, -(gap*1.1), 0, f'B={B:.3f} m', th, ar, '尺寸标注')
+    _add_dim_v(msp, 0, h_d*sf, -(B/2*sf+gap*1.4), -B/2*sf, f'h={h_d:.3f} m', th, ar, '尺寸标注')
+    _add_dim_v(msp, 0, H*sf,   B/2*sf+gap*1.4, B/2*sf, f'H={H:.3f} m', th, ar, '尺寸标注')
     if Hs > 0:
-        msp.add_text(f'θ={theta_deg:.0f}°', dxfattribs={'layer': 'DIMENSION',
-            'height': th*0.9, 'insert': (th*0.5, H*sf)})
+        msp.add_text(f'θ={theta_deg:.0f}°', dxfattribs={'layer': '尺寸标注',
+            'height': th, 'style': 'FANGSONG', 'insert': (th*0.5, H*sf)})
 
     inc_s = f'{inc:.1f}%' if isinstance(inc, (int,float)) else str(inc)
     lines = ['【隧洞 - 圆拱直墙型】', f'比例: 1:{scale_denom}', '',
@@ -141,7 +146,7 @@ def _draw_arch(msp, result, p, sf=1.0, scale_denom=100):
              f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m','',
              '[加大流量]', f'比例={inc_s}', f'Q增={Q_inc:.3f}',
              f'h增={h_inc:.3f} m', f'V增={V_inc:.3f} m/s', f'Fb增={fb_inc:.3f} m']
-    _add_text_block(msp, B/2*sf+gap*3.5, H*sf+th, lines, th, 'TEXT_PARAMS')
+    _add_text_block(msp, B/2*sf+gap*3.5, H*sf+th, lines, th, '参数文字')
 
 
 def _draw_shoe(msp, result, p, sec_type, sf=1.0, scale_denom=100):
@@ -168,34 +173,36 @@ def _draw_shoe(msp, result, p, sec_type, sf=1.0, scale_denom=100):
             return r * math.sin(math.acos(max(-1, min(1, h/r - 1))))
         return 0.0
 
-    char = max(2*r, 1.0)*sf; th = round(char*0.06, 3); ar = th*0.85; gap = char*0.20
+    char = max(2*r, 1.0)*sf; th = 3.5; ar = th*0.85; gap = char*0.20
 
     N = 80
     heights = [i * 2*r / N for i in range(N+1)]
     for i in range(len(heights)-1):
         msp.add_line((-half_w(heights[i])*sf,   heights[i]*sf),
-                     (-half_w(heights[i+1])*sf, heights[i+1]*sf), dxfattribs={'layer': 'OUTLINE'})
+                     (-half_w(heights[i+1])*sf, heights[i+1]*sf), dxfattribs={'layer': '轮廓线'})
         msp.add_line((half_w(heights[i])*sf,    heights[i]*sf),
-                     (half_w(heights[i+1])*sf,  heights[i+1]*sf), dxfattribs={'layer': 'OUTLINE'})
+                     (half_w(heights[i+1])*sf,  heights[i+1]*sf), dxfattribs={'layer': '轮廓线'})
 
+    _olap_s = h_d > 0 and h_inc > 0 and 0 < h_inc < 2*r and (h_inc - h_d) * sf < th * 2.0
     for h_w, layer, lt, lbl in [
-        (h_d,  'WATER_DESIGN',    None,     f'▽ 设计水位 h={h_d:.3f}m'),
-        (h_inc,'WATER_INCREASED', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
+        (h_d,  '设计水位',    None,     f'▽ 设计水位 h={h_d:.3f}m'),
+        (h_inc,'加大水位', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
     ]:
         if h_w and 0 < h_w < 2*r:
             hw = half_w(h_w) * sf
             att = {'layer': layer}
             if lt: att['linetype'] = lt
             msp.add_line((-hw, h_w*sf), (hw, h_w*sf), dxfattribs=att)
-            msp.add_text(lbl, dxfattribs={'layer': layer, 'height': th*0.85,
-                'insert': (hw+th*0.3, h_w*sf+(th*0.5 if lt else 0))})
+            _ly = h_w*sf + th*0.5 if lt else (h_w*sf - th*1.5 if _olap_s else h_w*sf + th*0.5)
+            msp.add_text(lbl, dxfattribs={'layer': layer, 'height': th, 'style': 'FANGSONG',
+                'insert': (0, _ly), 'align_point': (0, _ly), 'halign': 1})
 
-    _add_dim_h(msp, -r*sf, r*sf, -(gap*1.1), 0, f'2r={2*r:.3f} m', th, ar, 'DIMENSION')
-    _add_dim_v(msp, 0, h_d*sf,  -(r*sf+gap*1.4), -r*sf, f'h={h_d:.3f} m', th, ar, 'DIMENSION')
-    _add_dim_v(msp, 0, 2*r*sf,  r*sf+gap*1.4, r*sf, f'H=2r={2*r:.3f} m', th, ar, 'DIMENSION')
-    msp.add_line((0, r*sf), (r*sf*0.7, r*sf), dxfattribs={'layer': 'DIMENSION'})
-    msp.add_text(f'r={r:.3f} m', dxfattribs={'layer': 'DIMENSION',
-        'height': th*0.9, 'insert': (r*sf*0.72, r*sf+th*0.3)})
+    _add_dim_h(msp, -r*sf, r*sf, -(gap*1.1), 0, f'2r={2*r:.3f} m', th, ar, '尺寸标注')
+    _add_dim_v(msp, 0, h_d*sf,  -(r*sf+gap*1.4), -r*sf, f'h={h_d:.3f} m', th, ar, '尺寸标注')
+    _add_dim_v(msp, 0, 2*r*sf,  r*sf+gap*1.4, r*sf, f'H=2r={2*r:.3f} m', th, ar, '尺寸标注')
+    msp.add_line((0, r*sf), (r*sf*0.7, r*sf), dxfattribs={'layer': '尺寸标注'})
+    msp.add_text(f'r={r:.3f} m', dxfattribs={'layer': '尺寸标注',
+        'height': th, 'style': 'FANGSONG', 'insert': (r*sf*0.72, r*sf+th*0.3)})
 
     inc_s = f'{inc:.1f}%' if isinstance(inc, (int,float)) else str(inc)
     lines = [f'【隧洞 - 马蹄形{name}】', f'比例: 1:{scale_denom}', '',
@@ -205,4 +212,4 @@ def _draw_shoe(msp, result, p, sec_type, sf=1.0, scale_denom=100):
              f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m','',
              '[加大流量]', f'比例={inc_s}', f'Q\u589e={Q_inc:.3f}',
              f'h\u589e={h_inc:.3f} m', f'V\u589e={V_inc:.3f} m/s', f'Fb\u589e={fb_inc:.3f} m']
-    _add_text_block(msp, r*sf+gap*3.5, 2*r*sf+th, lines, th, 'TEXT_PARAMS')
+    _add_text_block(msp, r*sf+gap*3.5, 2*r*sf+th, lines, th, '参数文字')

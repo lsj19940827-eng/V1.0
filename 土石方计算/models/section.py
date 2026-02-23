@@ -246,6 +246,9 @@ class CrossSectionData:
     area_result: Optional[SectionAreaResult] = None
     left_width: float = 0.0   # 断面左半宽
     right_width: float = 0.0  # 断面右半宽
+    has_platform: bool = False      # 坡顶是否有施工便道（用于DXF中以虚线单独标注）
+    platform_width: float = 0.0    # 施工便道宽度（m）
+    lining_thickness: float = 0.0  # 衬砌/贴坡厚度（m），用于DXF标注
 
 
 # ============================================================
@@ -287,6 +290,7 @@ class SegmentVolume:
     excavation_avg: float = 0.0                       # 平均断面法开挖量（m³）
     excavation_prismatoid: float = 0.0                # 棱台法开挖量（m³）
     excavation_by_layer_avg: dict[str, float] = field(default_factory=dict)
+    excavation_by_layer_prismatoid: dict[str, float] = field(default_factory=dict)
     fill_avg: float = 0.0
     fill_prismatoid: float = 0.0
 
@@ -316,3 +320,14 @@ class VolumeResult:
             for layer, vol in seg.excavation_by_layer_avg.items():
                 totals[layer] = totals.get(layer, 0.0) + vol
         return totals
+
+    def total_by_layer_prismatoid(self) -> dict[str, float]:
+        totals: dict[str, float] = {}
+        for seg in self.segments:
+            for layer, vol in seg.excavation_by_layer_prismatoid.items():
+                totals[layer] = totals.get(layer, 0.0) + vol
+        return totals
+
+    @property
+    def total_fill_prismatoid(self) -> float:
+        return sum(s.fill_prismatoid for s in self.segments)

@@ -28,7 +28,7 @@ U形断面超高不应小于槽身直径的1/10。通过加大流量时槽中水
 槽身横断面主要尺寸是净宽(水面宽)B和净深(满槽水深)H。
 深宽比定义：H/B = 槽身总高度 / 槽宽
 矩形渡槽常用深宽比推荐值：0.6 ~ 0.8
-【实现方式】：用户可手动指定深宽比，若留空则默认使用0.8。
+【实现方式】：用户可指定深宽比，若留空则默认使用0.8。
 --------------------------------------------------
 
 版本: V1.0
@@ -366,8 +366,8 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
         slope_inv: 坡度倒数 (1/i)
         v_min: 不淤流速 (m/s)
         v_max: 不冲流速 (m/s)
-        manual_R: 手动指定内半径 (m)，可选
-        manual_increase_percent: 手动加大百分比 (%)，可选
+        manual_R: 指定内半径 (m)，可选
+        manual_increase_percent: 指定加大百分比 (%)，可选
     
     返回:
         计算结果字典
@@ -441,7 +441,7 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     design_method = ''
     
     if manual_R is not None and manual_R > 0:
-        # 手动指定R
+        # 指定R
         R = manual_R
         design_method = f'给定R={R:.2f}m'
         
@@ -515,7 +515,7 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
                     Fb_check = total_height - h_inc
                     if Fb_check < Fb_min_required:
                         result['error_message'] = (
-                            f"计算失败：手动指定的半径 R={manual_R:.3f} m 过小，无法同时满足 f/R 比值约束和超高要求。\n\n"
+                            f"计算失败：指定的半径 R={manual_R:.3f} m 过小，无法同时满足 f/R 比值约束和超高要求。\n\n"
                             f"加大流量工况下超高 Fb = {Fb_check:.3f} m < 最小需求 {Fb_min_required:.2f} m\n\n"
                             f"建议解决方案：\n"
                             f"1. 增大半径\n"
@@ -660,7 +660,7 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     if not found_solution:
         if manual_R:
             result['error_message'] = (
-                f"计算失败：手动指定的半径 R={manual_R:.3f} m 过小，无法满足加大流量工况的要求。\n\n"
+                f"计算失败：指定的半径 R={manual_R:.3f} m 过小，无法满足加大流量工况的要求。\n\n"
                 "建议解决方案：\n"
                 "1. 增大半径\n"
                 "2. 或者留空半径输入框，由系统自动计算最优半径"
@@ -787,8 +787,8 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
         depth_width_ratio: 深宽比 (高度/宽度)，可选，若留空且未指定manual_B则默认0.8
         chamfer_angle: 倒角角度 (度)，0表示无倒角
         chamfer_length: 倒角底边长 (m)
-        manual_increase_percent: 手动加大百分比 (%)，可选
-        manual_B: 手动指定槽宽 (m)，可选
+        manual_increase_percent: 指定加大百分比 (%)，可选
+        manual_B: 指定槽宽 (m)，可选
     
     返回:
         计算结果字典
@@ -901,7 +901,7 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
             found_solution = True
             result['depth_width_ratio'] = total_height / width if width > 0 else 0
         else:
-            result['error_message'] = f'手动指定槽宽 B={manual_B:.2f} m 无法计算水深'
+            result['error_message'] = f'指定槽宽 B={manual_B:.2f} m 无法计算水深'
             return result
     else:
         # 未指定槽宽B，使用深宽比搜索

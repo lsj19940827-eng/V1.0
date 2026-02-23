@@ -106,14 +106,14 @@ if SIPHON_AVAILABLE:
     GRADIENT_TYPE_MAP_REV = {v: k for k, v in GRADIENT_TYPE_MAP.items()}
 
 # v₂策略
-V2_STRATEGY_OPTIONS = ["自动（=管道流速）", "v₁ + 0.2", "断面参数计算", "手动输入"]
+V2_STRATEGY_OPTIONS = ["自动（=管道流速）", "v₁ + 0.2", "断面参数计算", "指定输入"]
 V2_STRATEGY_MAP = {}
 if SIPHON_AVAILABLE:
     V2_STRATEGY_MAP = {
         "自动（=管道流速）": V2Strategy.AUTO_PIPE,
         "v₁ + 0.2": V2Strategy.V1_PLUS_02,
         "断面参数计算": V2Strategy.SECTION_CALC,
-        "手动输入": V2Strategy.MANUAL,
+        "指定输入": V2Strategy.MANUAL,
     }
 
 # 结构段表头
@@ -302,7 +302,7 @@ class SiphonPanel(QWidget):
         self.edit_v = LineEdit(); self.edit_v.setText("2.0"); self.edit_v.setFixedWidth(70)
         self.edit_v.textChanged.connect(self._on_Qv_changed)
         row1.addWidget(self.edit_v)
-        self.lbl_v_hint = QLabel("(需手动输入)")
+        self.lbl_v_hint = QLabel("(需输入)")
         self.lbl_v_hint.setStyleSheet("color:#888888;font-size:12px;")
         row1.addWidget(self.lbl_v_hint)
         row1.addWidget(QLabel("糙率 n:"))
@@ -316,7 +316,7 @@ class SiphonPanel(QWidget):
         self.lbl_D_theory.setStyleSheet(f"color:{P};font-size:12px;font-weight:bold;")
         self.lbl_D_theory.setMinimumWidth(200)
         row1.addWidget(self.lbl_D_theory)
-        self.cb_D_override = CheckBox("手动指定")
+        self.cb_D_override = CheckBox("指定管径")
         self.cb_D_override.setChecked(False)
         self.cb_D_override.stateChanged.connect(self._on_D_override_toggled)
         row1.addWidget(self.cb_D_override)
@@ -1241,7 +1241,7 @@ class SiphonPanel(QWidget):
             self.lbl_D_theory.setText("D = --")
 
     def _on_D_override_toggled(self, state):
-        """手动指定管径 CheckBox 切换"""
+        """指定管径 CheckBox 切换"""
         checked = bool(state)
         self.edit_D_override.setVisible(checked)
         if not checked:
@@ -1405,12 +1405,12 @@ class SiphonPanel(QWidget):
             self.lbl_v2_hint.setCursor(Qt.PointingHandCursor)
             self.lbl_v2_hint.mousePressEvent = self._open_v2_section_dialog
             self.lbl_v2_strategy_hint.setText("")
-        elif "手动" in text:
+        elif "指定" in text:
             self.edit_v2.setReadOnly(False)
             self.edit_v2.setPlaceholderText("请输入")
             if not self.edit_v2.text().strip():
                 self.edit_v2.setText("1.2")
-            self.lbl_v2_hint.setText("(需手动输入)")
+            self.lbl_v2_hint.setText("(需输入)")
             self.lbl_v2_hint.setStyleSheet("color:#888888;font-size:12px;")
             self.lbl_v2_strategy_hint.setText("")
 
@@ -2189,7 +2189,7 @@ class SiphonPanel(QWidget):
         elif "断面" in strategy:
             self.lbl_v2_hint.setText("(已计算: 断面反算)")
         else:
-            self.lbl_v2_hint.setText("(已计算: 手动输入)")
+            self.lbl_v2_hint.setText("(已计算: 指定输入)")
         self.lbl_v2_hint.setStyleSheet(f"color:{S};font-size:12px;")
 
         # v_out — 出口渐变段始端流速（= 实际管道流速）

@@ -467,8 +467,14 @@ class EarthworkProject:
             "version": "1.0",
             "terrain_sources": self._terrain_source_files,
             "design_section": self._serialize_design_section(),
+            "design_profile": self._serialize_design_profile(),
             "excavation_slopes": [self._serialize_slope(s)
                                    for s in self._excavation_slopes],
+            "backfill": {
+                "mode": self._backfill_config.mode.value,
+                "thickness": self._backfill_config.thickness,
+                "include_slope_backfill": self._backfill_config.include_slope_backfill,
+            },
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -476,7 +482,8 @@ class EarthworkProject:
 
     @classmethod
     def load(cls, path: str) -> "EarthworkProject":
-        """从 JSON 文件加载项目（仅恢复参数，不自动重建 TIN）"""
+        """从 JSON 文件加载项目（恢复所有参数，不自动重建 TIN）"""
+        from 土石方计算.models.section import BackfillMode
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         proj = cls(
@@ -484,6 +491,26 @@ class EarthworkProject:
             project_dir=os.path.dirname(os.path.abspath(path)),
         )
         proj._terrain_source_files = data.get("terrain_sources", [])
+        proj._design_section = cls._deserialize_design_section(
+            data.get("design_section", {}))
+        proj._design_profile = cls._deserialize_design_profile(
+            data.get("design_profile", {}))
+        proj._excavation_slopes = [
+            cls._deserialize_slope(s)
+            for s in data.get("excavation_slopes", [])
+            if s.get("left_grades")  # 跳过不完整的旧格式记录
+        ]
+        bf_data = data.get("backfill", {})
+        if bf_data:
+            from 土石方计算.models.section import BackfillConfig
+            try:
+                proj._backfill_config = BackfillConfig(
+                    mode=BackfillMode(bf_data.get("mode", "fixed_thickness")),
+                    thickness=bf_data.get("thickness", 0.3),
+                    include_slope_backfill=bf_data.get("include_slope_backfill", True),
+                )
+            except (ValueError, KeyError):
+                pass
         return proj
 
     # ==================================================================
@@ -542,16 +569,120 @@ class EarthworkProject:
                 self._backfill_config,
             )
 
-    @staticmethod
-    def _serialize_design_section() -> dict:
-        return {}  # TODO: 完整序列化在 Phase 1 P1.8 实现
+    def _serialize_design_section(self) -> dict:
+        ds = self._design_section
+        if ds is None:
+            return {}
+        return {
+            "channel_type": ds.channel_type.value,
+            "bottom_width": ds.bottom_width,
+            "depth": ds.depth,
+            "inner_slope_left": ds.inner_slope_left,
+            "inner_slope_right": ds.inner_slope_right,
+            "freeboard": ds.freeboard,
+            "lining_thickness": ds.lining_thickness,
+            "name": ds.name,
+        }
 
     @staticmethod
     def _serialize_slope(slope: ExcavationSlope) -> dict:
+        def _grade(g: SlopeGrade) -> dict:
+            return {
+                "ratio": g.ratio,
+                "height": g.height if g.height != math.inf else "inf",
+                "berm_width": g.berm_width,
+            }
         return {
             "start_station": slope.start_station,
             "end_station": slope.end_station,
-        }  # TODO: 完整序列化在 Phase 1 P1.8 实现
+            "left_grades": [_grade(g) for g in slope.left_grades],
+            "right_grades": [_grade(g) for g in slope.right_grades],
+            "platform_enabled": slope.platform_enabled,
+            "platform_width": slope.platform_width,
+        }
+
+    def _serialize_design_profile(self) -> dict:
+        dp = self._design_profile
+        if dp is None:
+            return {}
+        if dp.station_elevation_table:
+            return {
+                "source": dp.source,
+                "station_elevation_table": {
+                    str(k): v for k, v in dp.station_elevation_table.items()
+                },
+            }
+        return {
+            "source": dp.source,
+            "segments": [
+                {
+                    "start_station": seg.start_station,
+                    "end_station": seg.end_station,
+                    "start_invert_elevation": seg.start_invert_elevation,
+                    "slope": seg.slope,
+                }
+                for seg in dp.segments
+            ],
+        }
+
+    @staticmethod
+    def _deserialize_design_section(data: dict):
+        from 土石方计算.models.section import DesignSection, ChannelType
+        if not data:
+            return None
+        return DesignSection(
+            channel_type=ChannelType(data.get("channel_type", "trapezoidal")),
+            bottom_width=data.get("bottom_width", 0.0),
+            depth=data.get("depth", 0.0),
+            inner_slope_left=data.get("inner_slope_left", 1.0),
+            inner_slope_right=data.get("inner_slope_right", 1.0),
+            freeboard=data.get("freeboard", 0.0),
+            lining_thickness=data.get("lining_thickness", 0.0),
+            name=data.get("name", ""),
+        )
+
+    @staticmethod
+    def _deserialize_slope(data: dict) -> "ExcavationSlope":
+        def _grade(d: dict) -> "SlopeGrade":
+            h = d.get("height", math.inf)
+            if h == "inf":
+                h = math.inf
+            return SlopeGrade(
+                ratio=d.get("ratio", 1.0),
+                height=float(h),
+                berm_width=d.get("berm_width", 0.0),
+            )
+        return ExcavationSlope(
+            start_station=data["start_station"],
+            end_station=data["end_station"],
+            left_grades=[_grade(g) for g in data.get("left_grades", [])],
+            right_grades=[_grade(g) for g in data.get("right_grades", [])],
+            platform_enabled=data.get("platform_enabled", False),
+            platform_width=data.get("platform_width", 2.0),
+        )
+
+    @staticmethod
+    def _deserialize_design_profile(data: dict):
+        from 土石方计算.models.section import DesignProfile, DesignProfileSegment
+        if not data:
+            return None
+        if "station_elevation_table" in data:
+            table = {float(k): v
+                     for k, v in data["station_elevation_table"].items()}
+            return DesignProfile(
+                station_elevation_table=table,
+                source=data.get("source", "excel"),
+            )
+        segments = [
+            DesignProfileSegment(
+                start_station=s["start_station"],
+                end_station=s["end_station"],
+                start_invert_elevation=s["start_invert_elevation"],
+                slope=s["slope"],
+            )
+            for s in data.get("segments", [])
+        ]
+        return DesignProfile(segments=segments, source=data.get("source", "manual"))
 
 
 # 公共导出（方便 from 土石方计算 import ...）

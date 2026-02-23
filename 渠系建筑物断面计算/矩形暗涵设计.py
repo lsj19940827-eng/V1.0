@@ -230,8 +230,8 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
         v_max: 最大流速 (m/s)
         target_HB_ratio: 目标高宽比 H/B (可选，已废弃，保留向后兼容)
         target_BH_ratio: 目标宽深比 B/h (可选，优先使用)
-        manual_B: 手动指定底宽 (m) (可选)
-        manual_increase_percent: 手动指定加大流量百分比 (可选)
+        manual_B: 指定底宽 (m) (可选)
+        manual_increase_percent: 指定加大流量百分比 (可选)
     
     说明:
         - 当同时留空底宽（manual_B）和宽深比（target_BH_ratio）时，
@@ -376,6 +376,8 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
                     continue
                 if outputs_inc['freeboard_pct'] < MIN_FREEBOARD_PCT_RECT * 100:
                     continue
+                if outputs_inc['freeboard_pct'] > MAX_FREEBOARD_PCT_RECT * 100:
+                    continue
                 
                 # 找到满足条件的解，选择β最接近2的
                 A_total = outputs_design['A_total']
@@ -465,7 +467,8 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
                 
                 # 加大流量工况净空验证（这是关键约束）
                 if (outputs_inc['freeboard_hgt'] >= req_fb_hgt and
-                    outputs_inc['freeboard_pct'] >= MIN_FREEBOARD_PCT_RECT * 100):
+                    outputs_inc['freeboard_pct'] >= MIN_FREEBOARD_PCT_RECT * 100 and
+                    outputs_inc['freeboard_pct'] <= MAX_FREEBOARD_PCT_RECT * 100):
                     
                     A_total = outputs_design['A_total']
                     
@@ -491,7 +494,7 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
     if not best_found:
         if manual_B:
             result['error_message'] = (
-                f"计算失败：手动指定的底宽 B={manual_B:.3f} m 无法满足要求。\n\n"
+                f"计算失败：指定的底宽 B={manual_B:.3f} m 无法满足要求。\n\n"
                 "可能原因及建议：\n"
                 "1. 底宽过小，导致加大流量工况下无净空或水深超出洞高；\n"
                 "2. 流速超出限制；\n"
@@ -503,7 +506,7 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
                 '可能原因：\n'
                 '1. 流速约束过严；\n'
                 '2. 净空约束无法满足；\n'
-                '建议：手动指定宽深比或底宽。'
+                '建议：指定宽深比或底宽。'
             )
         else:
             result['error_message'] = '计算失败：未找到满足流速及净空要求的矩形断面尺寸。'
@@ -538,7 +541,7 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
     fb_details.append(f"净空面积应为总面积的10%~30%")
     
     fb_check_passed = (fb_hgt_inc >= req_fb_hgt and 
-                       fb_pct_inc >= MIN_FREEBOARD_PCT_RECT * 100)
+                       MIN_FREEBOARD_PCT_RECT * 100 <= fb_pct_inc <= MAX_FREEBOARD_PCT_RECT * 100)
     
     result['success'] = True
     
