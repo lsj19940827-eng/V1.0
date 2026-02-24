@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>计算公式 — 设计风格预览</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<style>
+  /* ========== 全局 ========== */
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    background: #f3f3f3;
+    color: #1a1a1a;
+  }
+  /* 顶部 Tab 切换 */
+  .tab-bar {
+    display: flex;
+    gap: 0;
+    background: #e8e8e8;
+    position: sticky; top: 0; z-index: 100;
+    border-bottom: 1px solid #d0d0d0;
+  }
+  .tab-bar button {
+    flex: 1;
+    padding: 14px 0;
+    border: none;
+    background: transparent;
+    font-size: 15px;
+    font-weight: 600;
+    color: #555;
+    cursor: pointer;
+    transition: all .2s;
+    font-family: inherit;
+    position: relative;
+  }
+  .tab-bar button:hover { background: rgba(0,0,0,.04); }
+  .tab-bar button.active {
+    color: #0067c0;
+    background: #fff;
+  }
+  .tab-bar button.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 20%; width: 60%; height: 3px;
+    background: #0067c0;
+    border-radius: 2px 2px 0 0;
+  }
+  .panel { display: none; padding: 28px 24px; min-height: calc(100vh - 50px); }
+  .panel.active { display: block; }
+  h2.section-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    margin-bottom: 16px;
+    padding-left: 4px;
+  }
+
+  /* ============================================================
+     方案 A：WinUI 3 / Fluent Acrylic 亚克力毛玻璃卡片
+     ============================================================ */
+  #panelA { background: linear-gradient(135deg, #e3f0ff 0%, #f0e6ff 100%); }
+  #panelA .section-title { color: #0067c0; }
+
+  .card-a {
+    background: rgba(255,255,255,.72);
+    backdrop-filter: blur(40px) saturate(1.6);
+    -webkit-backdrop-filter: blur(40px) saturate(1.6);
+    border: 1px solid rgba(255,255,255,.85);
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin-bottom: 14px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.06), 0 0 1px rgba(0,0,0,.08);
+    transition: box-shadow .2s, transform .15s;
+  }
+  .card-a:hover {
+    box-shadow: 0 4px 16px rgba(0,0,0,.10), 0 0 1px rgba(0,0,0,.12);
+    transform: translateY(-1px);
+  }
+  .card-a .card-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #0067c0;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .card-a .card-label .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #0067c0;
+  }
+  .card-a .katex-display { margin: 6px 0 0 0 !important; }
+  .card-a .katex { font-size: 1.15em; color: #1a1a1a; }
+  .card-a .note {
+    font-size: 11.5px;
+    color: #666;
+    margin-top: 6px;
+    padding-left: 12px;
+    border-left: 2px solid #0067c0;
+  }
+
+  .group-a {
+    margin-bottom: 22px;
+  }
+  .group-a .group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 10px 16px;
+    background: linear-gradient(90deg, #0067c0 0%, #005ba1 100%);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .group-a .group-header svg { width: 18px; height: 18px; fill: #fff; }
+
+  /* ============================================================
+     方案 B：WinUI 3 极简白卡片 + 左侧色条
+     ============================================================ */
+  #panelB { background: #f5f5f5; }
+  #panelB .section-title { color: #333; }
+
+  .card-b {
+    background: #fff;
+    border-radius: 6px;
+    padding: 16px 20px 16px 20px;
+    margin-bottom: 10px;
+    border-left: 3px solid #0078d4;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    transition: box-shadow .2s;
+    position: relative;
+  }
+  .card-b:hover { box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+  .card-b.accent-green  { border-left-color: #107c10; }
+  .card-b.accent-purple { border-left-color: #7b2ff7; }
+  .card-b.accent-orange { border-left-color: #ca5010; }
+
+  .card-b .card-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #0078d4;
+    margin-bottom: 6px;
+  }
+  .card-b.accent-green  .card-label { color: #107c10; }
+  .card-b.accent-purple .card-label { color: #7b2ff7; }
+  .card-b.accent-orange .card-label { color: #ca5010; }
+
+  .card-b .katex-display { margin: 4px 0 0 0 !important; }
+  .card-b .katex { font-size: 1.1em; color: #222; }
+  .card-b .note {
+    font-size: 11.5px;
+    color: #777;
+    margin-top: 4px;
+  }
+
+  .divider-b {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 20px 0 14px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #555;
+  }
+  .divider-b::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #e0e0e0;
+  }
+
+  /* ============================================================
+     方案 C：深色模式 + 发光高亮
+     ============================================================ */
+  #panelC { background: #1c1c1c; }
+  #panelC .section-title { color: #60cdff; }
+
+  .card-c {
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin-bottom: 12px;
+    transition: background .2s, border-color .2s;
+  }
+  .card-c:hover {
+    background: rgba(255,255,255,.09);
+    border-color: rgba(96,205,255,.3);
+  }
+  .card-c .card-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #60cdff;
+    margin-bottom: 8px;
+  }
+  .card-c .katex-display { margin: 4px 0 0 0 !important; }
+  .card-c .katex { font-size: 1.15em; color: #e8e8e8; }
+  .card-c .note {
+    font-size: 11.5px;
+    color: #888;
+    margin-top: 6px;
+  }
+
+  .group-c {
+    margin-bottom: 20px;
+  }
+  .group-c .group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 8px 14px;
+    border-left: 3px solid #60cdff;
+    font-size: 14px;
+    font-weight: 600;
+    color: #60cdff;
+  }
+
+  /* 发光效果 */
+  .card-c.glow {
+    border-color: rgba(96,205,255,.25);
+    box-shadow: 0 0 20px rgba(96,205,255,.08);
+  }
+  .card-c.glow:hover {
+    box-shadow: 0 0 28px rgba(96,205,255,.14);
+  }
+  .card-c.glow .katex { color: #fff; }
+</style>
+</head>
+<body>
+
+<!-- Tab Bar -->
+<div class="tab-bar">
+  <button class="active" onclick="switchTab('A')">方案 A · 亚克力毛玻璃</button>
+  <button onclick="switchTab('B')">方案 B · 极简白卡片</button>
+  <button onclick="switchTab('C')">方案 C · 深色发光</button>
+</div>
+
+<!-- ============================================================
+     方案 A
+     ============================================================ -->
+<div id="panelA" class="panel active">
+
+  <div class="group-a">
+    <div class="group-header">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.94-.49-7-3.85-7-7.93 0-.62.08-1.22.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93z"/></svg>
+      水力计算基本公式
+    </div>
+
+    <div class="card-a">
+      <div class="card-label"><span class="dot"></span>谢才公式（Chézy）</div>
+      $$C = \frac{1}{n} R^{\,1/6}$$
+    </div>
+
+    <div class="card-a">
+      <div class="card-label"><span class="dot"></span>沿程水头损失</div>
+      $$h_f = \frac{L \, v^2}{C^2 \, R}$$
+    </div>
+
+    <div class="card-a">
+      <div class="card-label"><span class="dot"></span>局部水头损失</div>
+      $$h_j = \sum \xi_i \, \frac{v^2}{2g}$$
+    </div>
+
+    <div class="card-a">
+      <div class="card-label"><span class="dot"></span>总水头损失</div>
+      $$\Delta Z = \Delta Z_1 + \Delta Z_2 - \Delta Z_3$$
+      <div class="note">ΔZ₁ = 上下游水位差；ΔZ₂ = 沿程 + 局部损失；ΔZ₃ = 流速水头差</div>
+    </div>
+  </div>
+
+  <div class="group-a">
+    <div class="group-header">
+      <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+      空间轴线合并算法（平面 + 纵断面 → 三维空间曲线）
+    </div>
+
+    <div class="card-a">
+      <div class="card-label"><span class="dot"></span>三维单位切向量</div>
+      $$\mathbf{T} = \begin{pmatrix} \cos\beta\,\cos\alpha \\[4pt] \cos\beta\,\sin\alpha \\[4pt] \sin\beta \end{pmatrix}$$
+      <div class="note">α = 数学方位角（正东=0°，逆时针）；β = 纵断面坡角</div>
+    </div>
+
+    <div class="card-a">
+      <div class="card-label"><span class="dot"></span>空间转角</div>
+      $$\theta_{3D} = \arccos\!\Big(\mathbf{T}_{\text{before}} \cdot \mathbf{T}_{\text{after}}\Big)$$
+    </div>
+
+    <div class="card-a">
+      <div class="card-label"><span class="dot"></span>空间长度</div>
+      $$L_{\text{spatial}} = \sum_{i} \sqrt{\Delta s_i^{\,2} + \Delta Z_i^{\,2}}$$
+      <div class="note">Δs = 桩号差（平面弧长参数增量），非 XY 弦长</div>
+    </div>
+
+    <div class="card-a">
+      <div class="card-label"><span class="dot"></span>坡角计算</div>
+      $$\beta = \arctan\!\left(\frac{\Delta Z}{\Delta s}\right)$$
+      <div class="note">用桩号差 Δs（弧长参数）替代 XY 弦长，消除圆弧段系统性偏差</div>
+    </div>
+
+    <div class="card-a">
+      <div class="card-label"><span class="dot"></span>曲率合成（重叠弯道 · 微分几何）</div>
+      $$\kappa^2 = \frac{1}{R_v^2} + \frac{\cos^4\!\beta}{R_h^2}$$
+      $$R_{3D} = \frac{R_h \, R_v}{\sqrt{R_h^2 + R_v^2 \cos^4\!\beta}}$$
+      <div class="note">极限校核：R_v → ∞ 时 R₃D = R_h / cos²β；R_h → ∞ 时 R₃D = R_v</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     方案 B
+     ============================================================ -->
+<div id="panelB" class="panel">
+
+  <div class="divider-b">水力计算基本公式</div>
+
+  <div class="card-b">
+    <div class="card-label">谢才公式（Chézy）</div>
+    $$C = \frac{1}{n} R^{\,1/6}$$
+  </div>
+
+  <div class="card-b">
+    <div class="card-label">沿程水头损失</div>
+    $$h_f = \frac{L \, v^2}{C^2 \, R}$$
+  </div>
+
+  <div class="card-b">
+    <div class="card-label">局部水头损失</div>
+    $$h_j = \sum \xi_i \, \frac{v^2}{2g}$$
+  </div>
+
+  <div class="card-b">
+    <div class="card-label">总水头损失</div>
+    $$\Delta Z = \Delta Z_1 + \Delta Z_2 - \Delta Z_3$$
+  </div>
+
+  <div class="divider-b">空间轴线合并算法</div>
+
+  <div class="card-b accent-purple">
+    <div class="card-label">三维单位切向量</div>
+    $$\mathbf{T} = \big(\cos\beta\cos\alpha,\;\cos\beta\sin\alpha,\;\sin\beta\big)$$
+    <div class="note">α = 数学方位角（正东=0°，逆时针）；β = 纵断面坡角</div>
+  </div>
+
+  <div class="card-b accent-purple">
+    <div class="card-label">空间转角</div>
+    $$\theta_{3D} = \arccos\!\big(\mathbf{T}_{\text{before}} \cdot \mathbf{T}_{\text{after}}\big)$$
+  </div>
+
+  <div class="card-b accent-green">
+    <div class="card-label">空间长度</div>
+    $$L_{\text{spatial}} = \sum_i \sqrt{\Delta s_i^{\,2} + \Delta Z_i^{\,2}}$$
+    <div class="note">Δs = 桩号差（平面弧长参数），非 XY 弦长</div>
+  </div>
+
+  <div class="card-b accent-green">
+    <div class="card-label">坡角</div>
+    $$\beta = \arctan\!\left(\frac{\Delta Z}{\Delta s}\right)$$
+    <div class="note">用桩号差 Δs 替代 XY 弦长 dH，消除圆弧段系统性偏差</div>
+  </div>
+
+  <div class="card-b accent-orange">
+    <div class="card-label">曲率合成（重叠弯道 · 微分几何推导）</div>
+    $$\kappa^2 = \frac{1}{R_v^2} + \frac{\cos^4\!\beta}{R_h^2} \qquad R_{3D} = \frac{R_h \, R_v}{\sqrt{R_h^2 + R_v^2 \cos^4\!\beta}}$$
+    <div class="note">极限：R_v → ∞ ⇒ R₃D = R_h/cos²β ；R_h → ∞ ⇒ R₃D = R_v</div>
+  </div>
+</div>
+
+<!-- ============================================================
+     方案 C
+     ============================================================ -->
+<div id="panelC" class="panel">
+
+  <div class="group-c">
+    <div class="group-header">水力计算基本公式</div>
+
+    <div class="card-c">
+      <div class="card-label">谢才公式</div>
+      $$C = \frac{1}{n} R^{\,1/6}$$
+    </div>
+    <div class="card-c">
+      <div class="card-label">沿程水头损失</div>
+      $$h_f = \frac{L \, v^2}{C^2 \, R}$$
+    </div>
+    <div class="card-c">
+      <div class="card-label">局部水头损失</div>
+      $$h_j = \sum \xi_i \, \frac{v^2}{2g}$$
+    </div>
+    <div class="card-c">
+      <div class="card-label">总水头损失</div>
+      $$\Delta Z = \Delta Z_1 + \Delta Z_2 - \Delta Z_3$$
+    </div>
+  </div>
+
+  <div class="group-c">
+    <div class="group-header">空间轴线合并算法</div>
+
+    <div class="card-c glow">
+      <div class="card-label">三维单位切向量</div>
+      $$\mathbf{T} = \begin{pmatrix} \cos\beta\,\cos\alpha \\[4pt] \cos\beta\,\sin\alpha \\[4pt] \sin\beta \end{pmatrix}$$
+      <div class="note">α = 数学方位角（正东 = 0°，逆时针） ｜ β = 纵断面坡角</div>
+    </div>
+
+    <div class="card-c glow">
+      <div class="card-label">空间转角</div>
+      $$\theta_{3D} = \arccos\!\Big(\mathbf{T}_{\text{before}} \cdot \mathbf{T}_{\text{after}}\Big)$$
+    </div>
+
+    <div class="card-c">
+      <div class="card-label">空间长度</div>
+      $$L_{\text{spatial}} = \sum_{i} \sqrt{\Delta s_i^{\,2} + \Delta Z_i^{\,2}}$$
+      <div class="note">Δs = 桩号差（平面弧长参数增量），非 XY 弦长</div>
+    </div>
+
+    <div class="card-c">
+      <div class="card-label">坡角</div>
+      $$\beta = \arctan\!\left(\frac{\Delta Z}{\Delta s}\right)$$
+      <div class="note">用桩号差代替 XY 弦长，消除圆弧段系统性偏差</div>
+    </div>
+
+    <div class="card-c glow">
+      <div class="card-label">曲率合成（重叠弯道 · 微分几何）</div>
+      $$\kappa^2 = \frac{1}{R_v^2} + \frac{\cos^4\!\beta}{R_h^2}$$
+      $$\boxed{\;R_{3D} = \frac{R_h \, R_v}{\sqrt{R_h^2 + R_v^2 \cos^4\!\beta}}\;}$$
+      <div class="note">极限校核 ─ R_v → ∞ : R₃D = R_h / cos²β ；R_h → ∞ : R₃D = R_v</div>
+    </div>
+  </div>
+</div>
+
+<script>
+function switchTab(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-bar button').forEach(b => b.classList.remove('active'));
+  document.getElementById('panel' + id).classList.add('active');
+  document.querySelectorAll('.tab-bar button').forEach((b, i) => {
+    if (b.textContent.includes(id)) b.classList.add('active');
+  });
+}
+document.addEventListener("DOMContentLoaded", function() {
+  renderMathInElement(document.body, {
+    delimiters: [
+      {left: "$$", right: "$$", display: true},
+      {left: "$", right: "$", display: false}
+    ],
+    throwOnError: false
+  });
+});
+</script>
+</body>
+</html>

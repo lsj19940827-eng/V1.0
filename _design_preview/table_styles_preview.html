@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>表11.2.5 四种表格风格预览</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    font-size: 14px; color: #242424; line-height: 1.6;
+    background: #F5F5F5; padding: 32px;
+}
+h1 {
+    text-align: center; font-size: 22px; font-weight: 700;
+    color: #1976D2; margin-bottom: 32px;
+}
+.preview-section {
+    background: #fff; border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 0 2px rgba(0,0,0,0.04);
+    padding: 28px 32px; margin-bottom: 28px;
+}
+.preview-label {
+    font-size: 16px; font-weight: 700; color: #1976D2;
+    margin-bottom: 16px; padding-bottom: 10px;
+    border-bottom: 2px solid #E3ECF9;
+}
+.preview-label span {
+    font-size: 13px; color: #888; font-weight: 400; margin-left: 12px;
+}
+
+/* ===== 方案A: Fluent渐变表格 ===== */
+.fluent-table-a {
+    width: 100%; border-collapse: separate; border-spacing: 0;
+    margin: 10px 0; border-radius: 8px; overflow: hidden;
+    border: 1px solid #E3ECF9;
+}
+.fluent-table-a th {
+    background: linear-gradient(135deg, #1976D2, #1E88E5);
+    color: #fff; font-weight: 600; font-size: 13px;
+    padding: 10px 16px; text-align: center;
+}
+.fluent-table-a td {
+    padding: 9px 16px; font-size: 13px; color: #424242;
+    text-align: center; border-top: 1px solid #F0F0F0;
+}
+.fluent-table-a tr:nth-child(even) td { background: #F8F9FE; }
+.fluent-table-a tr:nth-child(odd) td { background: #FFFFFF; }
+.fluent-table-a tr:hover td { background: #E3F2FD; }
+
+/* ===== 方案B: 轻量卡片表格 ===== */
+.fluent-table-b {
+    width: 100%; border-collapse: separate; border-spacing: 0;
+    margin: 10px 0; border-radius: 8px; overflow: hidden;
+    border: 1px solid #E8E8E8;
+}
+.fluent-table-b th {
+    background: #F5F5F5;
+    color: #424242; font-weight: 600; font-size: 13px;
+    padding: 10px 16px; text-align: center;
+    border-bottom: 1px solid #E0E0E0;
+}
+.fluent-table-b td {
+    padding: 9px 16px; font-size: 13px; color: #424242;
+    text-align: center; background: #fff;
+    border-top: 1px solid #F0F0F0;
+}
+.fluent-table-b tr:hover td { background: #FAFAFA; }
+
+/* ===== 方案C: 规范引用风格 ===== */
+.norm-table-title {
+    font-size: 13px; color: #333; text-align: center;
+    margin-bottom: 8px; font-weight: 600;
+}
+.fluent-table-c {
+    width: 100%; border-collapse: collapse;
+    margin: 10px 0;
+}
+.fluent-table-c th, .fluent-table-c td {
+    border: 1px solid #333;
+    padding: 8px 14px; font-size: 13px; color: #333;
+    text-align: center;
+}
+.fluent-table-c th {
+    font-weight: 600; background: none;
+}
+.fluent-table-c .note {
+    font-size: 12px; color: #555; text-align: left;
+    margin-top: 6px;
+}
+
+/* ===== 方案D: 信息卡片式 ===== */
+.info-cards { display: flex; gap: 16px; margin: 10px 0; }
+.info-card {
+    flex: 1; background: #fff; border: 1px solid #E3ECF9;
+    border-left: 4px solid #1976D2; border-radius: 8px;
+    padding: 16px 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.04), 0 0 2px rgba(0,0,0,0.06);
+}
+.info-card .card-title {
+    font-size: 14px; font-weight: 700; color: #1976D2;
+    margin-bottom: 12px; padding-bottom: 8px;
+    border-bottom: 1px solid #F0F0F0;
+}
+.info-card .card-row {
+    display: flex; justify-content: space-between;
+    padding: 6px 0; font-size: 13px; color: #424242;
+    border-bottom: 1px solid #FAFAFA;
+}
+.info-card .card-row:last-child { border-bottom: none; }
+.info-card .card-row .label { color: #757575; }
+.info-card .card-row .value { font-weight: 600; color: #242424; }
+.info-card .card-row .highlight { font-weight: 700; color: #1976D2; }
+
+/* ===== 模拟结果页上下文 ===== */
+.context-text {
+    font-size: 13px; color: #424242; margin: 8px 0; line-height: 1.8;
+}
+.section-banner {
+    background: linear-gradient(135deg, #1565C0, #1E88E5);
+    color: #fff; font-weight: 600; font-size: 15px;
+    padding: 10px 20px; margin: 0 0 16px 0;
+    border-radius: 8px; letter-spacing: 0.5px;
+}
+</style>
+</head>
+<body>
+
+<h1>表11.2.5 — 四种表格视觉风格对比</h1>
+
+<!-- ==================== 方案A ==================== -->
+<div class="preview-section">
+    <div class="preview-label">方案A：Fluent渐变表格 <span>与帮助页面风格一致，渐变蓝表头 + 斑马纹 + hover效果</span></div>
+    <div class="section-banner">【五、净空验证】</div>
+    <div class="context-text">
+        根据《灌溉与排水工程设计标准》GB 50288-2018 第11.2.5条：<br>
+        涵洞横断面形式应符合下列规定：<br>
+        &emsp;1 小流量涵洞宜采用预制圆管涵；<br>
+        &emsp;2 无压涵洞当洞顶填土高度较小时宜选用盖板涵洞或箱涵，涵顶填土高度较大时宜采用城门洞型、蛋型（高升拱）或管涵；<br>
+        &emsp;3 有压涵洞应选用管涵或箱涵；<br>
+        &emsp;4 拱涵或四铰涵不应使用于沉陷量大的地基上；<br>
+        &emsp;5 无压涵洞内设计水面以上的净空面积宜取涵洞断面面积的10%~30%，且涵洞内顶点至最高水面之间的净空高度应符合表11.2.5的规定，并不应小于0.4m。
+    </div>
+    <table class="fluent-table-a">
+        <tr>
+            <th rowspan="2">进口净高</th>
+            <th colspan="3">净空高度</th>
+        </tr>
+        <tr>
+            <th>圆涵</th>
+            <th>拱涵</th>
+            <th>矩形涵洞</th>
+        </tr>
+        <tr><td>≤3</td><td>≥D/4</td><td>≥D/4</td><td>≥D/6</td></tr>
+        <tr><td>&gt;3</td><td>≥0.75</td><td>≥0.75</td><td>≥0.5</td></tr>
+    </table>
+    <div class="context-text" style="font-size:12px;color:#757575;">注：表中D为涵洞内侧高度或者圆涵内径(m)。</div>
+</div>
+
+<!-- ==================== 方案B ==================== -->
+<div class="preview-section">
+    <div class="preview-label">方案B：轻量卡片表格 <span>低调内敛，浅灰表头 + 白色行，不抢公式视觉重心</span></div>
+    <div class="section-banner">【五、净空验证】</div>
+    <div class="context-text">
+        根据《灌溉与排水工程设计标准》GB 50288-2018 第11.2.5条：<br>
+        涵洞横断面形式应符合下列规定：<br>
+        &emsp;1 小流量涵洞宜采用预制圆管涵；<br>
+        &emsp;2 无压涵洞当洞顶填土高度较小时宜选用盖板涵洞或箱涵，涵顶填土高度较大时宜采用城门洞型、蛋型（高升拱）或管涵；<br>
+        &emsp;3 有压涵洞应选用管涵或箱涵；<br>
+        &emsp;4 拱涵或四铰涵不应使用于沉陷量大的地基上；<br>
+        &emsp;5 无压涵洞内设计水面以上的净空面积宜取涵洞断面面积的10%~30%，且涵洞内顶点至最高水面之间的净空高度应符合表11.2.5的规定，并不应小于0.4m。
+    </div>
+    <table class="fluent-table-b">
+        <tr>
+            <th rowspan="2">进口净高</th>
+            <th colspan="3">净空高度</th>
+        </tr>
+        <tr>
+            <th>圆涵</th>
+            <th>拱涵</th>
+            <th>矩形涵洞</th>
+        </tr>
+        <tr><td>≤3</td><td>≥D/4</td><td>≥D/4</td><td>≥D/6</td></tr>
+        <tr><td>&gt;3</td><td>≥0.75</td><td>≥0.75</td><td>≥0.5</td></tr>
+    </table>
+    <div class="context-text" style="font-size:12px;color:#757575;">注：表中D为涵洞内侧高度或者圆涵内径(m)。</div>
+</div>
+
+<!-- ==================== 方案C ==================== -->
+<div class="preview-section">
+    <div class="preview-label">方案C：规范引用风格 <span>模拟规范文件排版，细实线边框，专业简洁</span></div>
+    <div class="section-banner">【五、净空验证】</div>
+    <div class="context-text">
+        根据《灌溉与排水工程设计标准》GB 50288-2018 第11.2.5条：<br>
+        涵洞横断面形式应符合下列规定：<br>
+        &emsp;1 小流量涵洞宜采用预制圆管涵；<br>
+        &emsp;2 无压涵洞当洞顶填土高度较小时宜选用盖板涵洞或箱涵，涵顶填土高度较大时宜采用城门洞型、蛋型（高升拱）或管涵；<br>
+        &emsp;3 有压涵洞应选用管涵或箱涵；<br>
+        &emsp;4 拱涵或四铰涵不应使用于沉陷量大的地基上；<br>
+        &emsp;5 无压涵洞内设计水面以上的净空面积宜取涵洞断面面积的10%~30%，且涵洞内顶点至最高水面之间的净空高度应符合表11.2.5的规定，并不应小于0.4m。
+    </div>
+    <div class="norm-table-title">表 11.2.5&emsp;无压涵洞的净空高度(m)</div>
+    <table class="fluent-table-c">
+        <tr>
+            <th rowspan="2">进口净高</th>
+            <th colspan="3">净空高度</th>
+        </tr>
+        <tr>
+            <th>圆涵</th>
+            <th>拱涵</th>
+            <th>矩形涵洞</th>
+        </tr>
+        <tr><td>≤3</td><td>≥D/4</td><td>≥D/4</td><td>≥D/6</td></tr>
+        <tr><td>&gt;3</td><td>≥0.75</td><td>≥0.75</td><td>≥0.5</td></tr>
+    </table>
+    <div class="fluent-table-c note">注：表中D为涵洞内侧高度或者圆涵内径(m)。</div>
+</div>
+
+<!-- ==================== 方案D ==================== -->
+<div class="preview-section">
+    <div class="preview-label">方案D：信息卡片式 <span>两张独立卡片，突出矩形涵洞数据，蓝色左边条 + 阴影</span></div>
+    <div class="section-banner">【五、净空验证】</div>
+    <div class="context-text">
+        根据《灌溉与排水工程设计标准》GB 50288-2018 第11.2.5条：<br>
+        涵洞横断面形式应符合下列规定：<br>
+        &emsp;1 小流量涵洞宜采用预制圆管涵；<br>
+        &emsp;2 无压涵洞当洞顶填土高度较小时宜选用盖板涵洞或箱涵，涵顶填土高度较大时宜采用城门洞型、蛋型（高升拱）或管涵；<br>
+        &emsp;3 有压涵洞应选用管涵或箱涵；<br>
+        &emsp;4 拱涵或四铰涵不应使用于沉陷量大的地基上；<br>
+        &emsp;5 无压涵洞内设计水面以上的净空面积宜取涵洞断面面积的10%~30%，且涵洞内顶点至最高水面之间的净空高度应符合表11.2.5的规定，并不应小于0.4m。
+    </div>
+    <div style="font-size:13px;color:#424242;margin:12px 0 8px 0;font-weight:600;">表11.2.5&emsp;无压涵洞的净空高度(m)：</div>
+    <div class="info-cards">
+        <div class="info-card">
+            <div class="card-title">进口净高 ≤ 3m</div>
+            <div class="card-row"><span class="label">圆涵</span><span class="value">≥ D/4</span></div>
+            <div class="card-row"><span class="label">拱涵</span><span class="value">≥ D/4</span></div>
+            <div class="card-row"><span class="label">矩形涵洞</span><span class="highlight">≥ D/6</span></div>
+        </div>
+        <div class="info-card">
+            <div class="card-title">进口净高 &gt; 3m</div>
+            <div class="card-row"><span class="label">圆涵</span><span class="value">≥ 0.75</span></div>
+            <div class="card-row"><span class="label">拱涵</span><span class="value">≥ 0.75</span></div>
+            <div class="card-row"><span class="label">矩形涵洞</span><span class="highlight">≥ 0.5</span></div>
+        </div>
+    </div>
+    <div class="context-text" style="font-size:12px;color:#757575;">注：表中D为涵洞内侧高度或者圆涵内径(m)。</div>
+</div>
+
+</body>
+</html>

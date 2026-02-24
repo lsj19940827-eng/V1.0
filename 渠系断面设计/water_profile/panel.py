@@ -217,7 +217,9 @@ class TransitionReferenceDialog(QDialog):
         for r in range(len(_K12_ROWS)):
             self.k12_table.setRowHeight(r, 60 if r in thumb_map else 32)
 
-        self.k12_table.setMaximumHeight(360)
+        self.k12_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        k12_h = sum(60 if r in thumb_map else 32 for r in range(len(_K12_ROWS))) + self.k12_table.horizontalHeader().height() + 4
+        self.k12_table.setFixedHeight(k12_h)
         layout.addWidget(self.k12_table)
 
         # K.1.2 注释
@@ -245,7 +247,9 @@ class TransitionReferenceDialog(QDialog):
                 item.setTextAlignment(Qt.AlignCenter)
                 self.l12_table.setItem(r, c, item)
 
-        self.l12_table.setMaximumHeight(180)
+        self.l12_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        l12_h = sum(self.l12_table.rowHeight(r) for r in range(len(_L12_ROWS))) + self.l12_table.horizontalHeader().height() + 4
+        self.l12_table.setFixedHeight(l12_h)
         layout.addWidget(self.l12_table)
 
         # L.1.2 注释
@@ -1603,6 +1607,8 @@ class WaterProfilePanel(QWidget):
         self.node_table.setRowCount(0)
         self._node_structure_heights.clear()
         self._node_chamfer_params.clear()
+        self.calculated_nodes = []
+        self.nodes = []
 
     def _get_node_row_data(self, row):
         data = []
@@ -3375,7 +3381,7 @@ class WaterProfilePanel(QWidget):
             has_transitions = any(getattr(n, 'is_transition', False) for n in nodes)
             has_auto_channels = any(getattr(n, 'is_auto_inserted_channel', False) for n in nodes)
             if has_transitions or has_auto_channels:
-                if not fluent_question(self, "提示",
+                if not auto_confirm and not fluent_question(self, "提示",
                         "表格中已存在渐变段行。\n\n"
                         "是否清除已有渐变段并重新插入？\n"
                         "（选「否」则保留现有渐变段不做任何操作）"):

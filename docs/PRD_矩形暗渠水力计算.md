@@ -521,3 +521,5 @@ QHBoxLayout (主布局)
 | 2026-02-23 | v1.1 | 新增「指定高宽比 H/B」输入功能：启用 target_HB_ratio 搜索分支（H=(H/B)×B）；新增 hb_edit 输入框；冲突校验（β和H/B不可并存）；帮助页插入计算模式总览表格 |
 | 2026-02-23 | v1.2 | 经济最优断面算法重写：默认模式徃 β 小＝ B/h 为搜索变量，解析式得到 h_design和B，热启动割线法快速求 h_inc，全局取面积最小解；移除 β≈2 硬约束；新增 _h_design_from_beta 和 _solve_h_inc_fast 辅助函数；同步更新帮助页、结果输出文字和测试用例 |
 | 2026-02-23 | v1.3 | 修正规范引用：净空高度和高宽比限值的规范来源从《涵洞》（熊启钧）统一修正为 GB 50288-2018 第11.2.5条 表11.2.5；涉及文件：矩形暗涵设计.py、panel.py、PRD文档 |
+| 2026-02-23 | v1.4 | UI优化：①经济最优断面洞高说明改为精简表述；②净空验证部分完整引用GB 50288-2018第11.2.5条全部5款原文及表11.2.5文本表格；涉及文件：panel.py |
+| 2026-02-23 | v1.5 | 表11.2.5展示升级：①UI端Unicode字符画表格改为HTML规范引用风格表格（细实线边框，QWebEngineView渲染）；②formula_renderer.py新增`{{HTML}}...{{/HTML}}`原始HTML块注入机制+`.norm-table`CSS样式；③Word导出新增表11.2.5规范表格（`doc_add_styled_table`，高亮矩形涵洞列）；④TXT导出占位标记替换为纯文本对齐表格；⑤`doc_render_calc_text`新增`{{...}}`占位标记跳过逻辑；涉及文件：panel.py、formula_renderer.py、export_utils.py |

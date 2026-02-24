@@ -668,6 +668,8 @@ class BatchPanel(QWidget):
         self._last_calc_detail = None
         if not self._loading_sample:
             self._is_sample_data = False
+        # 同步清空结果（防止清空输入后仍能导出/查看旧结果）
+        self._clear_results()
 
     def _copy_to_clipboard(self):
         """复制选中单元格到剪贴板（制表符分隔，可直接粘贴到Excel）"""

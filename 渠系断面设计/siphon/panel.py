@@ -33,10 +33,11 @@ from PySide6.QtWidgets import (
     QFrame, QTabWidget, QTextEdit, QFileDialog,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
     QAbstractItemView, QGridLayout, QScrollArea, QSizePolicy,
-    QDialog
+    QDialog, QDialogButtonBox
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QColor, QBrush
+from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox,
@@ -116,6 +117,63 @@ if SIPHON_AVAILABLE:
         "指定输入": V2Strategy.MANUAL,
     }
 
+# ================================================================
+# 表L.1.2 渐变段局部损失系数参考对话框（倒虹吸专用）
+# ================================================================
+_L12_HEADERS = ["渐变段形式", "ξ₁", "ξ₂", "适用条件"]
+_L12_ROWS = [
+    ["反弯扭曲面", "0.10", "0.20", "θ₁,θ₂均≤12.5°"],
+    ["1/4圆弧",   "0.15", "0.25", "θ₁,θ₂均≤12.5°"],
+    ["方头型",    "0.30", "0.75", "θ₁,θ₂均≤12.5°"],
+    ["直线扭曲面", "0.05~0.30", "0.30~0.50", "θ₁=15°~37°，θ₂=10°~17°"],
+]
+
+
+class L12CoeffRefDialog(QDialog):
+    """表L.1.2 倒虹吸渐变段局部损失系数参考表"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("渐变段局部损失系数参考表")
+        self.setMinimumSize(680, 260)
+        self.resize(720, 280)
+        self._build_ui()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+
+        title = QLabel("表L.1.2  渐变段局部损失系数表（倒虹吸渐变段）")
+        title.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
+        lay.addWidget(title)
+
+        tbl = QTableWidget(len(_L12_ROWS), len(_L12_HEADERS))
+        tbl.setHorizontalHeaderLabels(_L12_HEADERS)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.setSelectionMode(QAbstractItemView.SingleSelection)
+        tbl.horizontalHeader().setStretchLastSection(False)
+        tbl.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        for r, row_data in enumerate(_L12_ROWS):
+            for c, val in enumerate(row_data):
+                item = QTableWidgetItem(val)
+                item.setTextAlignment(Qt.AlignCenter)
+                tbl.setItem(r, c, item)
+        tbl.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        row_h = sum(tbl.rowHeight(r) for r in range(len(_L12_ROWS)))
+        tbl.setFixedHeight(row_h + tbl.horizontalHeader().height() + 4)
+        lay.addWidget(tbl)
+
+        note = QLabel("注：θ₁ 为水面收敛角，θ₂ 为水面扩散角（灌排规范附录表L.1.2）")
+        note.setStyleSheet("color:#555;font-size:12px;")
+        lay.addWidget(note)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok)
+        btn_box.button(QDialogButtonBox.Ok).setText("关闭")
+        btn_box.accepted.connect(self.accept)
+        lay.addWidget(btn_box)
+
+
 # 结构段表头
 SEG_HEADERS = ["序号", "分类", "类型", "方向", "长度(m)", "半径R(m)", "角度θ(°)",
                "起点高程", "终点高程", "空间长度", "局部系数", "锁定"]
@@ -136,11 +194,17 @@ class SiphonPanel(QWidget):
         self.plan_total_length = 0.0
         self.longitudinal_nodes = [] # 纵断面变坡点
         self._longitudinal_is_example = True
+        self._syncing = False
         self.calculation_result = None
         self._detail_text_cache = ""
         self._suppress_result_display = False
         self.on_result_callback = None
         self.show_detailed_process = True
+
+        # 拟定流速确认标志（方案D：用户是否已手动输入或确认过流速）
+        self._v_user_confirmed = False
+        # 弯管半径倍数确认标志（方案B：温和提醒）
+        self._turn_n_user_confirmed = False
 
         # 断面参数缓存（v₂策略=断面参数计算用）
         self._section_B = None
@@ -280,91 +344,116 @@ class SiphonPanel(QWidget):
     def _build_basic_params_tab(self, parent):
         lay = QVBoxLayout(parent)
         lay.setContentsMargins(4, 2, 4, 2)
-        lay.setSpacing(2)
+        lay.setSpacing(6)
 
-        # === 全局水力参数 ===
-        lbl_sec1 = QLabel("全局水力参数")
-        lbl_sec1.setStyleSheet(f"font-weight:bold;color:{T1};font-size:12px;")
-        lay.addWidget(lbl_sec1)
+        # ========== Card 1: 全局水力参数 (QGroupBox, QGridLayout) ==========
+        card1 = QGroupBox("全局水力参数")
+        g1 = QGridLayout(card1)
+        g1.setContentsMargins(10, 4, 10, 4)
+        g1.setHorizontalSpacing(6)
+        g1.setVerticalSpacing(2)
 
-        # Row 1: Q + v + n + D
-        row1 = QHBoxLayout(); row1.setSpacing(6)
-        row1.addWidget(QLabel("设计流量 Q (m³/s):"))
+        # Row 0: Q + v + n
+        g1.addWidget(QLabel("设计流量 Q (m³/s):"), 0, 0)
         self.edit_Q = LineEdit(); self.edit_Q.setText("10.0"); self.edit_Q.setFixedWidth(80)
         self.edit_Q.textChanged.connect(self._on_Qv_changed)
-        row1.addWidget(self.edit_Q)
+        g1.addWidget(self.edit_Q, 0, 1)
         self.lbl_Q_hint = QLabel("")
         self.lbl_Q_hint.setStyleSheet("color:#0066CC;font-size:12px;")
-        row1.addWidget(self.lbl_Q_hint)
-        row1.addWidget(QLabel("拟定流速 v (m/s):"))
+        g1.addWidget(self.lbl_Q_hint, 0, 2)
+        lbl_v_label = QLabel("拟定流速 v (m/s):")
+        lbl_v_star = QLabel("<span style='color:#E53935;font-weight:bold;font-size:14px;'>*</span>")
+        lbl_v_star.setTextFormat(Qt.RichText)
+        v_label_lay = QHBoxLayout(); v_label_lay.setSpacing(1); v_label_lay.setContentsMargins(0,0,0,0)
+        v_label_lay.addWidget(lbl_v_label); v_label_lay.addWidget(lbl_v_star)
+        v_label_w = QWidget(); v_label_w.setLayout(v_label_lay)
+        g1.addWidget(v_label_w, 0, 3)
         self.edit_v = LineEdit(); self.edit_v.setText("2.0"); self.edit_v.setFixedWidth(70)
+        self.edit_v.setStyleSheet(
+            "LineEdit { border: 2px dashed #E65100; background: #FFF8E1; }"
+        )
         self.edit_v.textChanged.connect(self._on_Qv_changed)
-        row1.addWidget(self.edit_v)
-        self.lbl_v_hint = QLabel("(需输入)")
-        self.lbl_v_hint.setStyleSheet("color:#424242;font-size:12px;")
-        row1.addWidget(self.lbl_v_hint)
-        row1.addWidget(QLabel("糙率 n:"))
+        self.edit_v.textChanged.connect(self._on_v_edited_by_user)
+        g1.addWidget(self.edit_v, 0, 4)
+        self.lbl_v_hint = QLabel("← 请输入拟定流速")
+        self.lbl_v_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
+        g1.addWidget(self.lbl_v_hint, 0, 5)
+        g1.addWidget(QLabel("糙率 n:"), 0, 6)
         self.edit_n = LineEdit(); self.edit_n.setText("0.014"); self.edit_n.setFixedWidth(60)
-        row1.addWidget(self.edit_n)
+        g1.addWidget(self.edit_n, 0, 7)
         self.lbl_n_hint = QLabel("")
         self.lbl_n_hint.setStyleSheet("color:#0066CC;font-size:12px;")
-        row1.addWidget(self.lbl_n_hint)
-        row1.addWidget(QLabel("管径D:"))
+        g1.addWidget(self.lbl_n_hint, 0, 8)
+
+        # Row 1: D + 指定管径
+        g1.addWidget(QLabel("管径D:"), 1, 0)
         self.lbl_D_theory = QLabel("D = --")
         self.lbl_D_theory.setStyleSheet(f"color:{P};font-size:12px;font-weight:bold;")
-        self.lbl_D_theory.setMinimumWidth(200)
-        row1.addWidget(self.lbl_D_theory)
+        g1.addWidget(self.lbl_D_theory, 1, 1, 1, 2)
         self.cb_D_override = CheckBox("指定管径")
         self.cb_D_override.setChecked(False)
         self.cb_D_override.stateChanged.connect(self._on_D_override_toggled)
-        row1.addWidget(self.cb_D_override)
+        g1.addWidget(self.cb_D_override, 1, 3)
         self.edit_D_override = LineEdit()
         self.edit_D_override.setPlaceholderText("输入管径(m)")
         self.edit_D_override.setFixedWidth(120)
         self.edit_D_override.setVisible(False)
-        row1.addWidget(self.edit_D_override)
-        row1.addStretch()
-        lay.addLayout(row1)
+        g1.addWidget(self.edit_D_override, 1, 4, 1, 2)
 
         # Row 2: 计算目标 + 弯管半径倍数 + 水损阈值
-        row2 = QHBoxLayout(); row2.setSpacing(6)
-        row2.addWidget(QLabel("计算目标:"))
-        self.combo_calc_target = ComboBox()
-        self.combo_calc_target.addItems(["设计截面"])
-        self.combo_calc_target.setFixedWidth(100)
-        row2.addWidget(self.combo_calc_target)
-        row2.addWidget(QLabel("弯管半径倍数 (R=nD):"))
+        g1.addWidget(QLabel("计算目标:"), 2, 0)
+        self.lbl_calc_target = QLabel("计算总水头损失")
+        self.lbl_calc_target.setStyleSheet("color:#00796B;font-weight:bold;")
+        g1.addWidget(self.lbl_calc_target, 2, 1)
+        lbl_tn_label = QLabel("弯管半径倍数 (R=nD):")
+        lbl_tn_star = QLabel("<span style='color:#1565C0;font-weight:bold;font-size:14px;'>*</span>")
+        lbl_tn_star.setTextFormat(Qt.RichText)
+        tn_label_lay = QHBoxLayout(); tn_label_lay.setSpacing(1); tn_label_lay.setContentsMargins(0,0,0,0)
+        tn_label_lay.addWidget(lbl_tn_label); tn_label_lay.addWidget(lbl_tn_star)
+        tn_label_w = QWidget(); tn_label_w.setLayout(tn_label_lay)
+        g1.addWidget(tn_label_w, 2, 3)
         self.edit_turn_n = LineEdit(); self.edit_turn_n.setText("3.0"); self.edit_turn_n.setFixedWidth(50)
+        self.edit_turn_n.setStyleSheet(
+            "LineEdit { border: 1.5px dashed #1565C0; background: #E3F2FD; }"
+        )
+        self.edit_turn_n.textChanged.connect(self._on_turn_n_edited_by_user)
         self.edit_turn_n.textChanged.connect(self._on_turn_n_changed)
-        row2.addWidget(self.edit_turn_n)
-        self.lbl_turn_R = QLabel("R = --")
-        self.lbl_turn_R.setStyleSheet(f"color:{T2};font-size:12px;")
-        self.lbl_turn_R.setMinimumWidth(160)
-        row2.addWidget(self.lbl_turn_R)
-        row2.addWidget(QLabel("水损阈值 (m):"))
+        g1.addWidget(self.edit_turn_n, 2, 4)
+        self.lbl_turn_R = QLabel("R = --  (请确认倍数)")
+        self.lbl_turn_R.setStyleSheet("color:#1565C0;font-size:12px;")
+        g1.addWidget(self.lbl_turn_R, 2, 5)
+        g1.addWidget(QLabel("水损阈值 (m):"), 2, 6)
         self.edit_threshold = LineEdit(); self.edit_threshold.setPlaceholderText("如: 2.0"); self.edit_threshold.setFixedWidth(75)
-        row2.addWidget(self.edit_threshold)
+        g1.addWidget(self.edit_threshold, 2, 7)
         lbl_threshold_hint = QLabel("(ΔZ超此值将提醒调整参数)")
         lbl_threshold_hint.setStyleSheet("color:#FF6600;font-size:12px;")
-        row2.addWidget(lbl_threshold_hint)
-        row2.addStretch()
-        lay.addLayout(row2)
+        g1.addWidget(lbl_threshold_hint, 2, 8)
 
-        # ---- 分隔线 ----
-        sep0 = QFrame()
-        sep0.setFrameShape(QFrame.HLine)
-        sep0.setStyleSheet(f"color:{BD};")
-        lay.addWidget(sep0)
+        # 让最后一列吸收多余空间
+        g1.setColumnStretch(8, 1)
 
-        # === 渐变段与流速参数 ===
-        lbl_sec2 = QLabel("渐变段与流速参数")
-        lbl_sec2.setStyleSheet(f"font-weight:bold;color:{T1};font-size:12px;")
-        lay.addWidget(lbl_sec2)
+        lay.addWidget(card1)
 
-        # ---- 进口 ----
+        # ========== Card 2: 渐变段与流速参数 (QGroupBox) ==========
+        card2 = QGroupBox("渐变段与流速参数")
+        b2 = QVBoxLayout(card2)
+        b2.setContentsMargins(10, 6, 10, 6)
+        b2.setSpacing(4)
+
+        # ---- 进口 浅色底色框 ----
+        inlet_box = QFrame()
+        inlet_box.setObjectName("siphonInletBox")
+        inlet_box.setStyleSheet(
+            "QFrame#siphonInletBox { background:#F9FAFB;"
+            " border:1px solid #ECEEF2; border-radius:4px; }"
+        )
+        ibl = QVBoxLayout(inlet_box)
+        ibl.setContentsMargins(10, 6, 10, 6)
+        ibl.setSpacing(2)
+
         lbl_inlet_sec = QLabel("  ▸ 进口")
         lbl_inlet_sec.setStyleSheet(f"font-weight:bold;color:{T1};font-size:11px;")
-        lay.addWidget(lbl_inlet_sec)
+        ibl.addWidget(lbl_inlet_sec)
 
         # 进口 Row 1: 渐变段型式 + ξ₁ + 始端流速v₁
         inlet_r1 = QHBoxLayout(); inlet_r1.setSpacing(6)
@@ -372,41 +461,46 @@ class SiphonPanel(QWidget):
         self.combo_inlet_type = ComboBox()
         self.combo_inlet_type.addItems(GRADIENT_TYPE_OPTIONS)
         self.combo_inlet_type.setCurrentText("无")
-        self.combo_inlet_type.setFixedWidth(120)
+        self.combo_inlet_type.setFixedWidth(140)
         self.combo_inlet_type.currentTextChanged.connect(self._on_inlet_type_changed)
         inlet_r1.addWidget(self.combo_inlet_type)
         self.lbl_inlet_type_hint = QLabel("")
         self.lbl_inlet_type_hint.setStyleSheet("color:#0066CC;font-size:12px;")
         inlet_r1.addWidget(self.lbl_inlet_type_hint)
+        btn_inlet_coeff_ref = PushButton("参考系数表")
+        btn_inlet_coeff_ref.setMinimumWidth(110)
+        btn_inlet_coeff_ref.setToolTip("查看表L.1.2 倒虹吸渐变段局部损失系数")
+        btn_inlet_coeff_ref.clicked.connect(lambda: L12CoeffRefDialog(self).exec())
+        inlet_r1.addWidget(btn_inlet_coeff_ref)
         inlet_r1.addWidget(QLabel("ξ₁:"))
-        self.edit_xi_inlet = LineEdit(); self.edit_xi_inlet.setText("0.0"); self.edit_xi_inlet.setFixedWidth(55)
+        self.edit_xi_inlet = LineEdit(); self.edit_xi_inlet.setText("0.0"); self.edit_xi_inlet.setFixedWidth(80)
         inlet_r1.addWidget(self.edit_xi_inlet)
         self.lbl_xi_inlet_hint = QLabel("")
         self.lbl_xi_inlet_hint.setStyleSheet("color:#0066CC;font-size:12px;")
         inlet_r1.addWidget(self.lbl_xi_inlet_hint)
         inlet_r1.addWidget(QLabel("始端流速v₁(m/s):"))
-        self.edit_v1 = LineEdit(); self.edit_v1.setPlaceholderText("留空=0"); self.edit_v1.setFixedWidth(70)
+        self.edit_v1 = LineEdit(); self.edit_v1.setPlaceholderText("留空=0"); self.edit_v1.setFixedWidth(80)
         self.edit_v1.textChanged.connect(self._on_v_channel_in_changed)
         inlet_r1.addWidget(self.edit_v1)
         self.lbl_v1_hint = QLabel("(上游渠道流速)")
         self.lbl_v1_hint.setStyleSheet("color:#FF6600;font-size:12px;")
         inlet_r1.addWidget(self.lbl_v1_hint)
         inlet_r1.addStretch()
-        lay.addLayout(inlet_r1)
+        ibl.addLayout(inlet_r1)
 
         # 进口 Row 2: v₂策略 + 末端流速v₂
         inlet_r2 = QHBoxLayout(); inlet_r2.setSpacing(6)
         inlet_r2.addWidget(QLabel("v₂策略:"))
         self.combo_v2_strategy = ComboBox()
         self.combo_v2_strategy.addItems(V2_STRATEGY_OPTIONS)
-        self.combo_v2_strategy.setFixedWidth(165)
+        self.combo_v2_strategy.setFixedWidth(180)
         self.combo_v2_strategy.currentTextChanged.connect(self._on_v2_strategy_changed)
         inlet_r2.addWidget(self.combo_v2_strategy)
         self.lbl_v2_strategy_hint = QLabel("(推荐)")
         self.lbl_v2_strategy_hint.setStyleSheet("color:#00AA00;font-size:12px;")
         inlet_r2.addWidget(self.lbl_v2_strategy_hint)
         inlet_r2.addWidget(QLabel("末端流速v₂(m/s):"))
-        self.edit_v2 = LineEdit(); self.edit_v2.setPlaceholderText("留空=管道流速"); self.edit_v2.setFixedWidth(70)
+        self.edit_v2 = LineEdit(); self.edit_v2.setPlaceholderText("留空=管道流速"); self.edit_v2.setFixedWidth(120)
         self.edit_v2.setReadOnly(True)  # 自动策略下初始为readonly
         self.edit_v2.editingFinished.connect(self._validate_inlet_velocity)
         inlet_r2.addWidget(self.edit_v2)
@@ -414,18 +508,24 @@ class SiphonPanel(QWidget):
         self.lbl_v2_hint.setStyleSheet("color:#424242;font-size:12px;")
         inlet_r2.addWidget(self.lbl_v2_hint)
         inlet_r2.addStretch()
-        lay.addLayout(inlet_r2)
+        ibl.addLayout(inlet_r2)
 
-        # ---- 分隔线 ----
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet(f"color:{BD};")
-        lay.addWidget(sep)
+        b2.addWidget(inlet_box)
 
-        # ---- 出口 ----
+        # ---- 出口 浅色底色框 ----
+        outlet_box = QFrame()
+        outlet_box.setObjectName("siphonOutletBox")
+        outlet_box.setStyleSheet(
+            "QFrame#siphonOutletBox { background:#F9FAFB;"
+            " border:1px solid #ECEEF2; border-radius:4px; }"
+        )
+        obl = QVBoxLayout(outlet_box)
+        obl.setContentsMargins(10, 6, 10, 6)
+        obl.setSpacing(2)
+
         lbl_outlet_sec = QLabel("  ▸ 出口")
         lbl_outlet_sec.setStyleSheet(f"font-weight:bold;color:{T1};font-size:11px;")
-        lay.addWidget(lbl_outlet_sec)
+        obl.addWidget(lbl_outlet_sec)
 
         # 出口 Row 1: 渐变段型式 + ξ₂ + 始端流速v
         outlet_r1 = QHBoxLayout(); outlet_r1.setSpacing(6)
@@ -433,37 +533,47 @@ class SiphonPanel(QWidget):
         self.combo_outlet_type = ComboBox()
         self.combo_outlet_type.addItems(GRADIENT_TYPE_OPTIONS)
         self.combo_outlet_type.setCurrentText("无")
-        self.combo_outlet_type.setFixedWidth(120)
+        self.combo_outlet_type.setFixedWidth(140)
         self.combo_outlet_type.currentTextChanged.connect(self._on_outlet_type_changed)
         outlet_r1.addWidget(self.combo_outlet_type)
         self.lbl_outlet_type_hint = QLabel("")
         self.lbl_outlet_type_hint.setStyleSheet("color:#0066CC;font-size:12px;")
         outlet_r1.addWidget(self.lbl_outlet_type_hint)
+        btn_outlet_coeff_ref = PushButton("参考系数表")
+        btn_outlet_coeff_ref.setMinimumWidth(110)
+        btn_outlet_coeff_ref.setToolTip("查看表L.1.2 倒虹吸渐变段局部损失系数")
+        btn_outlet_coeff_ref.clicked.connect(lambda: L12CoeffRefDialog(self).exec())
+        outlet_r1.addWidget(btn_outlet_coeff_ref)
         outlet_r1.addWidget(QLabel("ξ₂:"))
-        self.edit_xi_outlet = LineEdit(); self.edit_xi_outlet.setText("0.0"); self.edit_xi_outlet.setFixedWidth(55)
+        self.edit_xi_outlet = LineEdit(); self.edit_xi_outlet.setText("0.0"); self.edit_xi_outlet.setFixedWidth(80)
         outlet_r1.addWidget(self.edit_xi_outlet)
         self.lbl_xi_outlet_hint = QLabel("")
         self.lbl_xi_outlet_hint.setStyleSheet("color:#0066CC;font-size:12px;")
         outlet_r1.addWidget(self.lbl_xi_outlet_hint)
         outlet_r1.addWidget(QLabel("始端流速v(m/s):"))
-        self.edit_v_out = LineEdit(); self.edit_v_out.setPlaceholderText("计算后自动填充"); self.edit_v_out.setFixedWidth(70)
+        self.edit_v_out = LineEdit(); self.edit_v_out.setPlaceholderText("计算后自动填充"); self.edit_v_out.setFixedWidth(120)
         outlet_r1.addWidget(self.edit_v_out)
         self.lbl_vout_hint = QLabel("(=管道流速，无需填写)")
         self.lbl_vout_hint.setStyleSheet("color:#424242;font-size:12px;")
         outlet_r1.addWidget(self.lbl_vout_hint)
         outlet_r1.addStretch()
-        lay.addLayout(outlet_r1)
+        obl.addLayout(outlet_r1)
 
         # 出口 Row 2: 末端流速v₃
         outlet_r2 = QHBoxLayout(); outlet_r2.setSpacing(6)
         outlet_r2.addWidget(QLabel("末端流速v₃(m/s):"))
-        self.edit_v3 = LineEdit(); self.edit_v3.setPlaceholderText("留空=0"); self.edit_v3.setFixedWidth(70)
+        self.edit_v3 = LineEdit(); self.edit_v3.setPlaceholderText("留空=0"); self.edit_v3.setFixedWidth(80)
         outlet_r2.addWidget(self.edit_v3)
         self.lbl_v3_hint = QLabel("(下游渠道流速)")
         self.lbl_v3_hint.setStyleSheet("color:#FF6600;font-size:12px;")
         outlet_r2.addWidget(self.lbl_v3_hint)
         outlet_r2.addStretch()
-        lay.addLayout(outlet_r2)
+        obl.addLayout(outlet_r2)
+
+        b2.addWidget(outlet_box)
+
+        lay.addWidget(card2)
+        lay.addStretch(1)
 
     def _build_segments_tab(self, parent):
         lay = QVBoxLayout(parent)
@@ -572,6 +682,7 @@ class SiphonPanel(QWidget):
         self.long_table.setAlternatingRowColors(True)
         self.long_table.setFont(QFont("Microsoft YaHei", 10))
         self.long_table.verticalHeader().setDefaultSectionSize(26)
+        self.long_table.cellChanged.connect(self._on_long_table_edited)
         lay.addWidget(self.long_table)
 
     # ---- C: 操作栏 ----
@@ -633,34 +744,134 @@ class SiphonPanel(QWidget):
         t2l.addWidget(self.detail_text)
         self.result_notebook.addTab(t2, "详细计算过程")
 
-        # Sub-Tab3: 计算公式
-        t3 = QWidget()
-        t3l = QVBoxLayout(t3); t3l.setContentsMargins(8, 8, 8, 8); t3l.setSpacing(6)
-
-        self.lbl_formula_chezy = QLabel("谢才: C = (1/n)·R^(1/6)")
-        self.lbl_formula_chezy.setWordWrap(True)
-        self.lbl_formula_chezy.setStyleSheet(f"color:{T2};font-size:13px;")
-        t3l.addWidget(self.lbl_formula_chezy)
-
-        self.lbl_formula_friction = QLabel("沿程: hf = L·v²/(C²·R)")
-        self.lbl_formula_friction.setWordWrap(True)
-        self.lbl_formula_friction.setStyleSheet(f"color:{T2};font-size:13px;")
-        t3l.addWidget(self.lbl_formula_friction)
-
-        self.lbl_formula_local = QLabel("局部: hj = Σξ·v²/(2g)")
-        self.lbl_formula_local.setWordWrap(True)
-        self.lbl_formula_local.setStyleSheet(f"color:{T2};font-size:13px;")
-        t3l.addWidget(self.lbl_formula_local)
-
-        self.lbl_formula_total = QLabel("总损失: ΔZ = ΔZ₁ + ΔZ₂ - ΔZ₃")
-        self.lbl_formula_total.setWordWrap(True)
-        self.lbl_formula_total.setStyleSheet(f"color:{P};font-size:13px;font-weight:bold;")
-        t3l.addWidget(self.lbl_formula_total)
-
-        t3l.addStretch()
-        self.result_notebook.addTab(t3, "计算公式")
+        # Sub-Tab3: 计算公式（QWebEngineView + KaTeX 渲染）
+        self.formula_view = QWebEngineView()
+        self.formula_view.setHtml(self._build_formula_html())
+        self.result_notebook.addTab(self.formula_view, "计算公式")
 
         self._show_help()
+
+    @staticmethod
+    def _build_formula_html():
+        """生成计算公式页面HTML（方案A：WinUI3亚克力毛玻璃 + KaTeX渲染）"""
+        return r'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{
+  font-family:"Segoe UI Variable","Segoe UI","Microsoft YaHei UI",sans-serif;
+  background:linear-gradient(135deg,#e3f0ff 0%,#f0e6ff 100%);
+  color:#1a1a1a; padding:20px 18px; min-height:100vh;
+}
+.group-header{
+  display:flex;align-items:center;gap:8px;
+  padding:10px 16px;margin-bottom:12px;
+  background:linear-gradient(90deg,#0067c0,#005ba1);
+  border-radius:6px;color:#fff;font-size:14px;font-weight:600;
+}
+.group-header svg{width:18px;height:18px;fill:#fff;}
+.card{
+  background:rgba(255,255,255,.72);
+  backdrop-filter:blur(40px) saturate(1.6);
+  -webkit-backdrop-filter:blur(40px) saturate(1.6);
+  border:1px solid rgba(255,255,255,.85);
+  border-radius:8px;padding:16px 20px;margin-bottom:10px;
+  box-shadow:0 2px 8px rgba(0,0,0,.06),0 0 1px rgba(0,0,0,.08);
+  transition:box-shadow .2s,transform .15s;
+}
+.card:hover{
+  box-shadow:0 4px 16px rgba(0,0,0,.10),0 0 1px rgba(0,0,0,.12);
+  transform:translateY(-1px);
+}
+.card-label{
+  font-size:12px;font-weight:600;color:#0067c0;
+  margin-bottom:6px;display:flex;align-items:center;gap:6px;
+}
+.card-label .dot{
+  width:6px;height:6px;border-radius:50%;background:#0067c0;
+}
+.card .katex-display{margin:6px 0 0 0!important;}
+.card .katex{font-size:1.15em;color:#1a1a1a;}
+.card .note{
+  font-size:13px;color:#333;margin-top:6px;
+  padding-left:12px;border-left:2px solid #0067c0;
+}
+.group{margin-bottom:20px;}
+</style>
+</head>
+<body>
+
+<div class="group">
+  <div class="group-header">
+    <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.94-.49-7-3.85-7-7.93 0-.62.08-1.22.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93z"/></svg>
+    水力计算基本公式
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>谢才公式（Chézy）</div>
+    $$C = \frac{1}{n} R^{\,1/6}$$
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>沿程水头损失</div>
+    $$h_f = \frac{L \, v^2}{C^2 \, R}$$
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>局部水头损失</div>
+    $$h_j = \sum \xi_i \, \frac{v^2}{2g}$$
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>总水头损失</div>
+    $$\Delta Z = \Delta Z_1 + \Delta Z_2 - \Delta Z_3$$
+    <div class="note">ΔZ₁ = 进口渐变段水面落差（进口局部损失 + 流速水头增加）；ΔZ₂ = 管身段总损失（沿程 + 管内局部）；ΔZ₃ = 出口渐变段净回升水头（动能回收，取减号）</div>
+  </div>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+    空间轴线合并算法（平面 + 纵断面 → 三维空间曲线）
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>三维单位切向量</div>
+    $$\mathbf{T} = \begin{pmatrix} \cos\beta\,\cos\alpha \\[4pt] \cos\beta\,\sin\alpha \\[4pt] \sin\beta \end{pmatrix}$$
+    <div class="note">α = 数学方位角（正东=0°，逆时针）；β = 纵断面坡角</div>
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>空间转角</div>
+    $$\theta_{3D} = \arccos\!\Big(\mathbf{T}_{\text{before}} \cdot \mathbf{T}_{\text{after}}\Big)$$
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>空间长度</div>
+    $$L_{\text{spatial}} = \sum_{i} \sqrt{\Delta s_i^{\,2} + \Delta Z_i^{\,2}}$$
+    <div class="note">Δs = 桩号差（平面弧长参数增量），非 XY 弦长</div>
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>坡角计算</div>
+    $$\beta = \arctan\!\left(\frac{\Delta Z}{\Delta s}\right)$$
+    <div class="note">用桩号差 Δs（弧长参数）替代 XY 弦长，消除圆弧段系统性偏差</div>
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>曲率合成（重叠弯道 · 微分几何）</div>
+    $$\kappa^2 = \frac{1}{R_v^2} + \frac{\cos^4\!\beta}{R_h^2}$$
+    $$R_{3D} = \frac{R_h \, R_v}{\sqrt{R_h^2 + R_v^2 \cos^4\!\beta}}$$
+    <div class="note">极限校核：$R_v \to \infty$ 时 $R_{3D} = R_h/\cos^2\!\beta$；$R_h \to \infty$ 时 $R_{3D} = R_v$</div>
+  </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function(){
+  renderMathInElement(document.body, {
+    delimiters:[{left:"$$",right:"$$",display:true},{left:"$",right:"$",display:false}],
+    throwOnError:false
+  });
+});
+</script>
+</body>
+</html>'''
 
     def _show_help(self):
         lines = [
@@ -711,10 +922,12 @@ class SiphonPanel(QWidget):
                 self.edit_n.setStyleSheet("color:#0066CC;")
                 self.lbl_n_hint.setText("(已从主表导入)")
         if 'v_guess' in kwargs:
+            self._syncing = True
             self.edit_v.setText(f"{kwargs['v_guess']:.4f}")
-            self.edit_v.setStyleSheet("color:#0066CC;")
-            self.lbl_v_hint.setText("(已从主表导入)")
-            self.lbl_v_hint.setStyleSheet("color:#0066CC;font-size:12px;")
+            self._syncing = False
+            self.edit_v.setStyleSheet(f"LineEdit {{ border: 1.5px solid orange; }}")
+            self.lbl_v_hint.setText("(已从主表导入, 请确认)")
+            self.lbl_v_hint.setStyleSheet(f"color:#CC6600;font-size:12px;")
 
         # 渐变段型式（需在设置系数之前，因为型式变化会触发系数更新）
         if 'inlet_type' in kwargs and SIPHON_AVAILABLE:
@@ -776,7 +989,11 @@ class SiphonPanel(QWidget):
         if 'siphon_turn_radius_n' in kwargs and kwargs['siphon_turn_radius_n']:
             n_val = float(kwargs['siphon_turn_radius_n'])
             self._siphon_turn_radius_n = n_val
+            self._syncing = True
             self.edit_turn_n.setText(str(n_val))
+            self._syncing = False
+            self._update_turn_n_style()
+            self._update_turn_R()
 
         # 下游断面参数（出水口系数计算用）
         for key in ('outlet_downstream_type', 'outlet_downstream_B',
@@ -1037,12 +1254,21 @@ class SiphonPanel(QWidget):
     def from_dict(self, d):
         """从字典恢复状态（项目加载用）"""
         if 'Q' in d: self.edit_Q.setText(str(d['Q']))
-        if 'v_guess' in d: self.edit_v.setText(str(d['v_guess']))
+        if 'v_guess' in d:
+            self._syncing = True
+            self.edit_v.setText(str(d['v_guess']))
+            self._syncing = False
+            self._update_v_style()
         # 兼容Tkinter版key: roughness_n → n
         n_val = d.get('n') or d.get('roughness_n')
         if n_val is not None: self.edit_n.setText(str(n_val))
         turn_n_val = d.get('turn_n') or d.get('siphon_turn_radius_n')
-        if turn_n_val is not None: self.edit_turn_n.setText(str(turn_n_val))
+        if turn_n_val is not None:
+            self._syncing = True
+            self.edit_turn_n.setText(str(turn_n_val))
+            self._syncing = False
+            self._update_turn_n_style()
+            self._update_turn_R()
         threshold_val = d.get('threshold') or d.get('head_loss_threshold')
         if threshold_val is not None: self.edit_threshold.setText(str(threshold_val))
         if 'D_override' in d:
@@ -1208,6 +1434,125 @@ class SiphonPanel(QWidget):
         )
 
     # ================================================================
+    # 拟定流速确认交互（方案D）
+    # ================================================================
+    def _on_v_edited_by_user(self):
+        """用户手动编辑流速输入框时触发"""
+        if self._syncing:
+            return
+        self._v_user_confirmed = True
+        self._update_v_style()
+
+    def _update_v_style(self):
+        """根据确认状态动态更新流速输入框样式"""
+        if self._v_user_confirmed:
+            self.edit_v.setStyleSheet(
+                f"LineEdit {{ border: 1.5px solid {S}; background: #F1F8E9; }}"
+            )
+            cur = self.lbl_v_hint.text()
+            if '已从主表导入' in cur or '已导入' in cur:
+                self.lbl_v_hint.setText("(已导入, ✓已确认)")
+            elif '已参与计算' in cur:
+                pass
+            else:
+                self.lbl_v_hint.setText("(✓已确认)")
+            self.lbl_v_hint.setStyleSheet(f"color:{S};font-size:12px;font-weight:bold;")
+        else:
+            if self.edit_v.text().strip():
+                self.edit_v.setStyleSheet(
+                    "LineEdit { border: 1.5px solid orange; }"
+                )
+                self.lbl_v_hint.setText("(请确认流速)")
+                self.lbl_v_hint.setStyleSheet("color:#CC6600;font-size:12px;font-weight:bold;")
+            else:
+                self.edit_v.setStyleSheet(
+                    "LineEdit { border: 2px dashed #E65100; background: #FFF8E1; }"
+                )
+                self.lbl_v_hint.setText("← 请输入拟定流速")
+                self.lbl_v_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
+
+    def _flash_v_field(self):
+        """流速输入框边框闪烁3次红色警告"""
+        # 停止已有的闪烁定时器，防止重复调用时多个定时器并行
+        if hasattr(self, '_flash_timer') and self._flash_timer.isActive():
+            self._flash_timer.stop()
+            self._flash_timer.deleteLater()
+        self._flash_count = 0
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setInterval(250)
+
+        def _do_flash():
+            self._flash_count += 1
+            if self._flash_count > 6:
+                self._flash_timer.stop()
+                self._update_v_style()
+                return
+            if self._flash_count % 2 == 1:
+                self.edit_v.setStyleSheet(
+                    "LineEdit { border: 3px solid #D50000; background: #FFCDD2; }"
+                )
+            else:
+                self.edit_v.setStyleSheet(
+                    "LineEdit { border: 2px dashed #E65100; background: #FFF8E1; }"
+                )
+
+        self._flash_timer.timeout.connect(_do_flash)
+        self._flash_timer.start()
+
+    def _validate_v_before_calc(self) -> bool:
+        """计算前检查拟定流速是否已确认。返回True=通过，False=拦截"""
+        if self._v_user_confirmed:
+            return True
+        # 自动跳转到基本参数Tab
+        self.params_notebook.setCurrentIndex(0)
+        # 聚焦输入框
+        self.edit_v.setFocus()
+        self.edit_v.selectAll()
+        # 闪烁警告
+        self._flash_v_field()
+        # InfoBar提示
+        InfoBar.error(
+            "请先输入拟定流速",
+            "“拟定流速 v”是必填参数，请根据工程实际输入流速值后再执行计算。",
+            parent=self._info_parent(), duration=6000,
+            position=InfoBarPosition.TOP
+        )
+        return False
+
+    # ================================================================
+    # 弯管半径倍数确认交互（方案B：温和提醒）
+    # ================================================================
+    def _on_turn_n_edited_by_user(self):
+        """用户手动编辑弯管半径倍数时触发"""
+        if self._syncing:
+            return
+        self._turn_n_user_confirmed = True
+        self._update_turn_n_style()
+
+    def _update_turn_n_style(self):
+        """根据确认状态动态更新弯管半径倍数输入框样式"""
+        if self._turn_n_user_confirmed:
+            self.edit_turn_n.setStyleSheet(
+                f"LineEdit {{ border: 1.5px solid {S}; background: #F1F8E9; }}"
+            )
+        else:
+            self.edit_turn_n.setStyleSheet(
+                "LineEdit { border: 1.5px dashed #1565C0; background: #E3F2FD; }"
+            )
+
+    def _warn_turn_n_if_needed(self):
+        """计算时若弯管半径倍数未手动确认，弹出黄色警告（不拦截）"""
+        if self._turn_n_user_confirmed or self._suppress_result_display:
+            return
+        n_val = self._fval(self.edit_turn_n, 3.0)
+        InfoBar.warning(
+            "请确认弯管半径倍数",
+            f"弯管半径倍数当前为默认值 {n_val:.1f}，请确认是否符合工程实际。",
+            parent=self._info_parent(), duration=5000,
+            position=InfoBarPosition.TOP
+        )
+
+    # ================================================================
     # 参数联动
     # ================================================================
     def _on_Qv_changed(self):
@@ -1347,9 +1692,12 @@ class SiphonPanel(QWidget):
         if confirmed:
             self.lbl_turn_R.setText(f"D设计={D_design:.2f}m → R={R:.2f}m ✓已参与计算")
             self.lbl_turn_R.setStyleSheet(f"color:#008800;font-size:12px;")
+        elif self._turn_n_user_confirmed:
+            self.lbl_turn_R.setText(f"D设计={D_design:.2f}m → R={n_mult}×{D_design:.2f}={R:.2f}m{sync_hint} ✓已确认")
+            self.lbl_turn_R.setStyleSheet(f"color:{S};font-size:12px;")
         else:
-            self.lbl_turn_R.setText(f"D设计={D_design:.2f}m → R={n_mult}×{D_design:.2f}={R:.2f}m{sync_hint}")
-            self.lbl_turn_R.setStyleSheet("color:#0066CC;font-size:12px;")
+            self.lbl_turn_R.setText(f"D设计={D_design:.2f}m → R={n_mult}×{D_design:.2f}={R:.2f}m{sync_hint}  (请确认倍数)")
+            self.lbl_turn_R.setStyleSheet("color:#1565C0;font-size:12px;")
 
     def _on_inlet_type_changed(self, text):
         """渐变段型式→进口系数自动联动"""
@@ -1457,6 +1805,10 @@ class SiphonPanel(QWidget):
         if not SIPHON_AVAILABLE:
             return
         self._longitudinal_is_example = True
+        # 同步清空纵断面节点（防止残留旧数据）
+        self.longitudinal_nodes.clear()
+        if hasattr(self, 'long_table'):
+            self.long_table.setRowCount(0)
         # 进水口默认使用"进口稍微修圆"，系数取中值
         inlet_shape = InletOutletShape.SLIGHTLY_ROUNDED
         inlet_xi = sum(INLET_SHAPE_COEFFICIENTS[inlet_shape]) / 2  # 取范围中值
@@ -1567,8 +1919,8 @@ class SiphonPanel(QWidget):
 
             vals = [str(i + 1), cat, type_display, dir_str,
                     f"{seg.length:.3f}" if seg.length > 0 else "",
-                    f"{seg.radius:.2f}" if seg.radius > 0 else "",
-                    f"{seg.angle:.1f}" if seg.angle > 0 else "",
+                    f"{seg.radius:.3f}" if seg.radius > 0 else "",
+                    f"{seg.angle:.3f}" if seg.angle > 0 else "",
                     start_elev, end_elev, spatial_display, xi_str,
                     "是" if seg.locked else "否"]
 
@@ -1619,6 +1971,7 @@ class SiphonPanel(QWidget):
                 self.segments.insert(insert_idx, dlg.result)
                 self._refresh_seg_table()
                 self._update_canvas()
+                # 手动添加的管身段无高程数据，不做反向同步（避免污染节点表）
         else:
             InfoBar.warning("不可用", "对话框组件未加载", parent=self._info_parent(),
                            duration=3000, position=InfoBarPosition.TOP)
@@ -1650,6 +2003,7 @@ class SiphonPanel(QWidget):
             return
         # 收集要删除的实际索引（在self.segments中）
         to_remove = []
+        has_long_del = False
         for r in rows:
             if r < 0 or r >= len(display_segments):
                 continue
@@ -1657,11 +2011,15 @@ class SiphonPanel(QWidget):
             if source in ('common', 'longitudinal'):
                 idx = self.segments.index(seg)
                 to_remove.append(idx)
+                if source == 'longitudinal':
+                    has_long_del = True
         for idx in sorted(to_remove, reverse=True):
             if 0 <= idx < len(self.segments):
                 self.segments.pop(idx)
         self._refresh_seg_table()
         self._update_canvas()
+        if has_long_del and len(self.longitudinal_nodes) >= 2:
+            self._sync_segments_to_nodes()
 
     def _add_common_segment_dialog(self):
         """通过专用对话框添加通用构件"""
@@ -1714,6 +2072,10 @@ class SiphonPanel(QWidget):
         self._refresh_seg_table()
         for r in rows:
             self.seg_table.selectRow(r - 1)
+        if (len(self.longitudinal_nodes) >= 2
+                and any(display_segments[r][1] == 'longitudinal' for r in rows
+                        if 0 <= r < len(display_segments))):
+            self._sync_segments_to_nodes()
 
     def _move_seg_down(self):
         """下移选中的结构段（保护进出水口和平面段）"""
@@ -1742,18 +2104,27 @@ class SiphonPanel(QWidget):
         self._refresh_seg_table()
         for r in rows:
             self.seg_table.selectRow(r + 1)
+        if (len(self.longitudinal_nodes) >= 2
+                and any(display_segments[r][1] == 'longitudinal' for r in rows
+                        if 0 <= r < len(display_segments))):
+            self._sync_segments_to_nodes()
 
     def _clear_longitudinal(self):
-        """清空纵断面管身段数据（保留通用构件）"""
+        """清空纵断面管身段数据（保留通用构件），同步清空纵断面节点"""
         if not fluent_question(self, "确认", "确定要清空所有纵断面管身段吗？"):
             return
         self.segments = [seg for seg in self.segments if seg.direction == SegmentDirection.COMMON]
         self._longitudinal_is_example = False
+        self.longitudinal_nodes.clear()
+        self.long_table.setRowCount(0)
         self._refresh_seg_table()
         self._update_canvas()
 
     def _clear_segments(self):
         self.segments.clear()
+        self.longitudinal_nodes.clear()
+        self.long_table.setRowCount(0)
+        self._longitudinal_is_example = False
         self._refresh_seg_table()
         self._update_canvas()
 
@@ -1815,6 +2186,9 @@ class SiphonPanel(QWidget):
                 pass
             self._refresh_seg_table()
             self._update_canvas()
+            # 反向同步：纵断面管身段编辑后更新节点表（仅当有有效节点数据时）
+            if seg.direction != SegmentDirection.COMMON and len(self.longitudinal_nodes) >= 2:
+                self._sync_segments_to_nodes()
 
     # ================================================================
     # 纵断面节点管理
@@ -1823,6 +2197,7 @@ class SiphonPanel(QWidget):
         combo = QComboBox()
         combo.addItems(["无", "圆弧", "折线"])
         combo.setFont(QFont("Microsoft YaHei", 10))
+        combo.currentTextChanged.connect(self._on_long_table_edited)
         return combo
 
     def _add_long_node(self, data=None):
@@ -1846,6 +2221,7 @@ class SiphonPanel(QWidget):
             return
         for r in rows:
             self.long_table.removeRow(r)
+        self._sync_nodes_to_segments()
 
     def _clear_long_nodes(self):
         if self.long_table.rowCount() > 0 or self.longitudinal_nodes:
@@ -1853,23 +2229,32 @@ class SiphonPanel(QWidget):
                 return
         self.long_table.setRowCount(0)
         self.longitudinal_nodes.clear()
+        self.segments = [seg for seg in self.segments if seg.direction == SegmentDirection.COMMON]
+        self._longitudinal_is_example = False
+        self._refresh_seg_table()
+        self._update_canvas()
 
     def _refresh_long_table(self):
         """从 self.longitudinal_nodes 刷新表格"""
-        self.long_table.setRowCount(0)
-        for nd in self.longitudinal_nodes:
-            tt_str = "无"
-            if nd.turn_type == TurnType.ARC: tt_str = "圆弧"
-            elif nd.turn_type == TurnType.FOLD: tt_str = "折线"
-            data = [
-                f"{nd.chainage:.3f}",
-                f"{nd.elevation:.3f}",
-                f"{nd.vertical_curve_radius:.3f}" if nd.vertical_curve_radius > 0 else "",
-                tt_str,
-                f"{nd.turn_angle:.2f}" if nd.turn_angle > 0 else "",
-            ]
-            self._add_long_node(data)
-        auto_resize_table(self.long_table)
+        old_syncing = self._syncing
+        self._syncing = True
+        try:
+            self.long_table.setRowCount(0)
+            for nd in self.longitudinal_nodes:
+                tt_str = "无"
+                if nd.turn_type == TurnType.ARC: tt_str = "圆弧"
+                elif nd.turn_type == TurnType.FOLD: tt_str = "折线"
+                data = [
+                    f"{nd.chainage:.3f}",
+                    f"{nd.elevation:.3f}",
+                    f"{nd.vertical_curve_radius:.3f}" if nd.vertical_curve_radius > 0 else "",
+                    tt_str,
+                    f"{nd.turn_angle:.3f}" if nd.turn_angle > 0 else "",
+                ]
+                self._add_long_node(data)
+            auto_resize_table(self.long_table)
+        finally:
+            self._syncing = old_syncing
 
     def _import_dxf(self):
         if not DXF_AVAILABLE:
@@ -2020,6 +2405,231 @@ class SiphonPanel(QWidget):
         return nodes
 
     # ================================================================
+    # 双向同步：纵断面节点 ↔ 结构段
+    # ================================================================
+    def _on_long_table_edited(self, *_args):
+        """节点表编辑（单元格值变更 / 转弯类型下拉框切换）后触发正向同步"""
+        if self._syncing:
+            return
+        self._sync_nodes_to_segments()
+
+    def _sync_nodes_to_segments(self):
+        """正向同步：从纵断面节点表重建管身段（保留通用构件）"""
+        if not SIPHON_AVAILABLE or self._syncing:
+            return
+        # 统计已填写桩号的有效行
+        valid_rows = 0
+        for r in range(self.long_table.rowCount()):
+            item = self.long_table.item(r, 0)
+            if item and item.text().strip():
+                valid_rows += 1
+        self._syncing = True
+        try:
+            nodes = self._build_longitudinal_nodes()
+            common = [s for s in self.segments if s.direction == SegmentDirection.COMMON]
+            if valid_rows < 2 or len(nodes) < 2:
+                # 节点不足：清空纵断面管身段，保留通用构件
+                self.segments = common
+                self.longitudinal_nodes = nodes
+                self._refresh_seg_table()
+                self._update_canvas()
+                return
+            new_long_segs = self._nodes_to_segments(nodes)
+            self.segments = common + new_long_segs
+            self.longitudinal_nodes = nodes
+            self._longitudinal_is_example = False
+            self._update_segment_coefficients()
+            self._refresh_seg_table()
+            self._update_canvas()
+        finally:
+            self._syncing = False
+
+    def _sync_segments_to_nodes(self):
+        """反向同步：从纵断面管身段重建节点表"""
+        if not SIPHON_AVAILABLE or self._syncing:
+            return
+        self._syncing = True
+        try:
+            long_segs = [s for s in self.segments
+                         if s.direction != SegmentDirection.COMMON]
+            if not long_segs:
+                self.longitudinal_nodes.clear()
+                self._refresh_long_table()
+                return
+            nodes = self._segments_to_nodes(long_segs)
+            self.longitudinal_nodes = nodes
+            self._refresh_long_table()
+        finally:
+            self._syncing = False
+
+    def _nodes_to_segments(self, nodes):
+        """将变坡点节点列表转换为纵断面管身段列表
+
+        映射规则（与 DxfParser 产出一致）：
+        - ARC 节点 → BEND 段（弧段从该节点到下一节点）
+        - FOLD 节点 → FOLD 段（合并折点前后两段）
+        - 其余相邻节点 → STRAIGHT 段
+        """
+        if len(nodes) < 2:
+            return []
+        segments = []
+        i = 0
+        while i < len(nodes) - 1:
+            curr = nodes[i]
+            nxt = nodes[i + 1]
+            ds = nxt.chainage - curr.chainage
+            dz = nxt.elevation - curr.elevation
+            length = math.sqrt(ds ** 2 + dz ** 2) if (abs(ds) > 1e-9 or abs(dz) > 1e-9) else 0.0
+
+            if curr.turn_type == TurnType.ARC and curr.vertical_curve_radius > 0:
+                # 弧段：从 ARC 节点到下一节点
+                segments.append(StructureSegment(
+                    segment_type=SegmentType.BEND,
+                    length=round(length, 4),
+                    radius=curr.vertical_curve_radius,
+                    angle=curr.turn_angle if curr.turn_angle > 0 else 0,
+                    start_elevation=curr.elevation,
+                    end_elevation=nxt.elevation,
+                    direction=SegmentDirection.LONGITUDINAL,
+                ))
+                i += 1
+
+            elif curr.turn_type == TurnType.FOLD and curr.turn_angle > 0:
+                # 残余折点（上一轮 look-ahead 未消费）
+                segments.append(StructureSegment(
+                    segment_type=SegmentType.FOLD,
+                    length=round(length, 4),
+                    angle=curr.turn_angle,
+                    start_elevation=curr.elevation,
+                    end_elevation=nxt.elevation,
+                    direction=SegmentDirection.LONGITUDINAL,
+                ))
+                i += 1
+
+            elif nxt.turn_type == TurnType.FOLD:
+                # 折点在 nxt：合并前后两段为一个 FOLD 段
+                if i + 2 < len(nodes):
+                    nxt2 = nodes[i + 2]
+                    ds2 = nxt2.chainage - nxt.chainage
+                    dz2 = nxt2.elevation - nxt.elevation
+                    length2 = math.sqrt(ds2 ** 2 + dz2 ** 2) if (abs(ds2) > 1e-9 or abs(dz2) > 1e-9) else 0.0
+                    segments.append(StructureSegment(
+                        segment_type=SegmentType.FOLD,
+                        length=round(length + length2, 4),
+                        angle=nxt.turn_angle,
+                        start_elevation=curr.elevation,
+                        end_elevation=nxt2.elevation,
+                        direction=SegmentDirection.LONGITUDINAL,
+                    ))
+                    i += 2
+                else:
+                    # 折点在末端，无后续段
+                    segments.append(StructureSegment(
+                        segment_type=SegmentType.FOLD,
+                        length=round(length, 4),
+                        angle=nxt.turn_angle,
+                        start_elevation=curr.elevation,
+                        end_elevation=nxt.elevation,
+                        direction=SegmentDirection.LONGITUDINAL,
+                    ))
+                    i += 1
+
+            else:
+                # 直管段
+                segments.append(StructureSegment(
+                    segment_type=SegmentType.STRAIGHT,
+                    length=round(length, 4),
+                    start_elevation=curr.elevation,
+                    end_elevation=nxt.elevation,
+                    direction=SegmentDirection.LONGITUDINAL,
+                ))
+                i += 1
+        return segments
+
+    def _segments_to_nodes(self, long_segs):
+        """将纵断面管身段列表转换为变坡点节点列表
+
+        反向映射规则：
+        - STRAIGHT → 起终点各一个 NONE 节点
+        - BEND    → 起点 ARC 节点 + 终点 NONE 节点
+        - FOLD    → 起点 NONE + 折点 FOLD（长度中点近似）+ 终点 NONE
+        """
+        if not long_segs:
+            return []
+        # 保留起始桩号（避免丢失 DXF 导入的偏移量）
+        chainage = self.longitudinal_nodes[0].chainage if self.longitudinal_nodes else 0.0
+        nodes = []
+
+        for seg in long_segs:
+            s_elev = seg.start_elevation if seg.start_elevation is not None else 0.0
+            e_elev = seg.end_elevation if seg.end_elevation is not None else 0.0
+            dh = e_elev - s_elev
+            ds = math.sqrt(max(0.0, seg.length ** 2 - dh ** 2)) if seg.length > 0 else 0.0
+
+            # 起点节点（与上一段终点合并）
+            if not nodes or abs(nodes[-1].chainage - chainage) > 0.001:
+                nodes.append(LongitudinalNode(
+                    chainage=round(chainage, 3),
+                    elevation=round(s_elev, 3),
+                    turn_type=TurnType.NONE,
+                ))
+
+            if seg.segment_type == SegmentType.BEND:
+                # 将起点升级为 ARC 节点
+                nodes[-1].turn_type = TurnType.ARC
+                nodes[-1].vertical_curve_radius = seg.radius
+                nodes[-1].turn_angle = seg.angle
+                chainage += ds
+                nodes.append(LongitudinalNode(
+                    chainage=round(chainage, 3),
+                    elevation=round(e_elev, 3),
+                    turn_type=TurnType.NONE,
+                ))
+
+            elif seg.segment_type == SegmentType.FOLD:
+                # 折点按长度等分近似放在中点
+                half_ds = ds / 2.0
+                fold_elev = (s_elev + e_elev) / 2.0
+                chainage += half_ds
+                nodes.append(LongitudinalNode(
+                    chainage=round(chainage, 3),
+                    elevation=round(fold_elev, 3),
+                    turn_type=TurnType.FOLD,
+                    turn_angle=seg.angle,
+                ))
+                chainage += half_ds
+                nodes.append(LongitudinalNode(
+                    chainage=round(chainage, 3),
+                    elevation=round(e_elev, 3),
+                    turn_type=TurnType.NONE,
+                ))
+
+            else:
+                # 直管段
+                chainage += ds
+                nodes.append(LongitudinalNode(
+                    chainage=round(chainage, 3),
+                    elevation=round(e_elev, 3),
+                    turn_type=TurnType.NONE,
+                ))
+
+        # 补全坡角
+        n = len(nodes)
+        for i in range(n):
+            if i > 0:
+                d_s = nodes[i].chainage - nodes[i - 1].chainage
+                d_z = nodes[i].elevation - nodes[i - 1].elevation
+                if abs(d_s) > 1e-6:
+                    slope = math.atan2(d_z, abs(d_s))
+                    nodes[i].slope_before = slope
+                    nodes[i - 1].slope_after = slope
+        if n >= 1:
+            nodes[0].slope_before = nodes[0].slope_after
+        if n >= 2:
+            nodes[-1].slope_after = nodes[-1].slope_before
+        return nodes
+
+    # ================================================================
     # 计算
     # ================================================================
     def _get_global_params(self):
@@ -2067,6 +2677,9 @@ class SiphonPanel(QWidget):
             InfoBar.error("不可用", "计算引擎未加载", parent=self._info_parent(),
                          duration=5000, position=InfoBarPosition.TOP)
             return
+        # 方案D：计算前验证拟定流速是否已确认
+        if not self._validate_v_before_calc():
+            return
         try:
             params = self._get_global_params()
             if params is None:
@@ -2079,6 +2692,9 @@ class SiphonPanel(QWidget):
                 InfoBar.error("输入错误", "拟定流速必须大于0", parent=self._info_parent(),
                              duration=3000, position=InfoBarPosition.TOP)
                 return
+
+            # 方案B：弯管半径倍数未确认时弹出黄色警告（不阻断）
+            self._warn_turn_n_if_needed()
 
             # v₂验证（非阻断，仅警告）
             self._validate_inlet_velocity()
@@ -2162,14 +2778,16 @@ class SiphonPanel(QWidget):
         """计算完成后回填实际使用的流速值（保留来源标注）"""
         green = f"color:{S};"
 
-        # v（拟定流速）— 标记已参与计算
-        self.edit_v.setStyleSheet(green)
+        # v（拟定流速）— 标记已参与计算（保持方案D的绿色边框样式）
+        self.edit_v.setStyleSheet(
+            f"LineEdit {{ border: 1.5px solid {S}; background: #F1F8E9; }}"
+        )
         cur_v = self.lbl_v_hint.text()
         if '已从主表导入' in cur_v or '已导入' in cur_v:
             self.lbl_v_hint.setText("(已导入, ✓已参与计算)")
         else:
             self.lbl_v_hint.setText("(✓已参与计算)")
-        self.lbl_v_hint.setStyleSheet(f"color:{S};font-size:12px;")
+        self.lbl_v_hint.setStyleSheet(f"color:{S};font-size:12px;font-weight:bold;")
 
         # v₁ — 保留来源信息
         self.edit_v1.setText(f"{result.velocity_channel_in:.4f}")
@@ -2215,17 +2833,8 @@ class SiphonPanel(QWidget):
         self.lbl_v3_hint.setStyleSheet(f"color:{S};font-size:12px;")
 
     def _update_formula_display(self, result):
-        """计算完成后更新公式展示区"""
-        r = result
-        n = self._fval(self.edit_n, 0.014)
-        self.lbl_formula_chezy.setText(
-            f"谢才: C = (1/n)·R^(1/6) = (1/{n:.4f})·{r.hydraulic_radius:.4f}^(1/6) = {r.chezy_c:.4f}")
-        self.lbl_formula_friction.setText(
-            f"沿程: hf = L·v²/(C²·R) = {r.total_length:.2f}×{r.velocity:.4f}²/({r.chezy_c:.4f}²×{r.hydraulic_radius:.4f}) = {r.loss_friction:.4f} m")
-        self.lbl_formula_local.setText(
-            f"局部: hj = Σξ·v²/(2g) = {r.xi_sum_middle:.4f}×{r.velocity:.4f}²/(2×9.81) = {r.loss_local:.4f} m")
-        self.lbl_formula_total.setText(
-            f"总损失: ΔZ = ΔZ₁ + ΔZ₂ - ΔZ₃ = {r.loss_inlet:.4f} + {r.loss_pipe:.4f} - {r.loss_outlet:.4f} = {r.total_head_loss:.4f} m")
+        """计算完成后更新公式展示区（已迁移至 QWebEngineView + KaTeX 静态渲染，无需动态更新）"""
+        pass
 
     # ================================================================
     # 画布更新

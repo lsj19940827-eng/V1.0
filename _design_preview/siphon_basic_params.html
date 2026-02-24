@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>倒虹吸基本参数 — 界面优化方案（保守版）</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  background: #E8ECF2;
+  color: #212121;
+  padding: 20px;
+}
+
+/* ===== 方案切换 ===== */
+.scheme-switcher {
+  position: sticky; top: 0; z-index: 100;
+  display: flex; gap: 0; justify-content: center;
+  background: #fff; border-radius: 10px;
+  box-shadow: 0 2px 12px rgba(0,0,0,.1);
+  margin-bottom: 24px; overflow: hidden;
+  border: 1px solid #E0E0E0;
+}
+.scheme-switcher button {
+  flex: 1; padding: 14px 24px;
+  font-size: 15px; font-weight: 600;
+  border: none; cursor: pointer;
+  background: #fff; color: #424242;
+  transition: all .2s;
+  font-family: inherit;
+}
+.scheme-switcher button:hover { background: #F0F4FF; }
+.scheme-switcher button.active {
+  background: #1976D2; color: #fff;
+}
+.scheme-switcher button + button { border-left: 1px solid #E0E0E0; }
+
+.scheme { display: none; }
+.scheme.active { display: block; }
+.scheme-title { font-size: 16px; font-weight: 700; color: #1976D2; margin-bottom: 4px; }
+.scheme-desc { font-size: 13px; color: #666; margin-bottom: 14px; line-height: 1.5; }
+
+/* 模拟面板背景 */
+.panel-bg {
+  background: #FFFFFF;
+  border: 1px solid #E0E0E0;
+  border-radius: 6px;
+  padding: 4px 4px 2px;
+}
+
+/* 输入框/下拉/复选 模拟 */
+.sim-input {
+  height: 30px; border: 1px solid #d0d0d0; border-radius: 4px;
+  padding: 0 8px; font-size: 13px; color: #333;
+  background: #fff; display: inline-flex; align-items: center;
+}
+.sim-input.readonly { background: #f5f5f5; color: #888; }
+.sim-input.placeholder { color: #aaa; }
+.sim-combo {
+  height: 30px; border: 1px solid #d0d0d0; border-radius: 4px;
+  padding: 0 24px 0 8px; font-size: 13px; color: #333;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23999'/%3E%3C/svg%3E") no-repeat right 8px center;
+  display: inline-flex; align-items: center; cursor: pointer;
+}
+.sim-check {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 13px; cursor: pointer;
+}
+.sim-check .box {
+  width: 15px; height: 15px; border: 1.5px solid #999;
+  border-radius: 3px; background: #fff;
+}
+.lbl13 { font-size: 13px; color: #212121; white-space: nowrap; }
+.hint-orange { color: #FF6600; font-size: 12px; }
+.hint-blue { color: #0066CC; font-size: 12px; }
+.hint-green { color: #00AA00; font-size: 12px; }
+.hint-grey { color: #424242; font-size: 12px; }
+.d-bold { font-weight: bold; color: #1976D2; font-size: 12px; }
+.sec-title { font-weight: bold; color: #212121; font-size: 12px; }
+.sub-title { font-weight: bold; color: #212121; font-size: 11px; }
+
+/* 水平行（和原始一样的HBox） */
+.hrow {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 0; flex-wrap: wrap;
+}
+/* 分隔线 */
+.sep { border: none; border-top: 1px solid #E0E0E0; margin: 6px 0; }
+
+/* ===== 方案A专用：卡片边框 ===== */
+.a-card {
+  border: 1px solid #E0E0E0;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background: #FFFFFF;
+  overflow: hidden;
+}
+.a-card-header {
+  padding: 6px 12px;
+  background: #F0F4FA;
+  border-bottom: 1px solid #E8ECF0;
+}
+.a-card-body { padding: 6px 10px; }
+.a-io-box {
+  background: #F9FAFB;
+  border: 1px solid #ECEEF2;
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+}
+
+/* ===== 方案B专用：进出口并排 ===== */
+.b-side-by-side {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.b-io-box {
+  background: #F9FAFB;
+  border: 1px solid #ECEEF2;
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+
+/* ===== 方案C专用：QGroupBox风格 ===== */
+.c-groupbox {
+  border: 1px solid #E0E0E0;
+  border-radius: 6px;
+  margin-top: 12px;
+  padding: 14px 10px 10px 10px;
+  background: #FFFFFF;
+  position: relative;
+}
+.c-groupbox-title {
+  position: absolute;
+  top: -9px; left: 12px;
+  background: #FFFFFF;
+  padding: 0 6px;
+  font-size: 14px; font-weight: bold; color: #1976D2;
+}
+
+</style>
+</head>
+<body>
+
+<div class="scheme-switcher">
+  <button class="active" onclick="switchScheme('a')">方案A · 卡片边框分组</button>
+  <button onclick="switchScheme('b')">方案B · 进出口左右并排</button>
+  <button onclick="switchScheme('c')">方案C · QGroupBox风格</button>
+</div>
+
+
+<!-- ===================================================
+     当前效果（对照）
+     =================================================== -->
+
+
+<!-- ===================================================
+     方案A: 给两大区块加卡片边框 + 进出口加浅色底色
+     内容/文字/行排列完全不变
+     =================================================== -->
+<div id="scheme-a" class="scheme active">
+  <div class="scheme-title">方案A · 卡片边框分组</div>
+  <div class="scheme-desc">
+    仅给"全局水力参数"和"渐变段与流速参数"加上圆角卡片边框+浅色标题栏；进口/出口各加一个浅色底色框。<br>
+    行内排列、所有标签和提示文字完全保留不变。
+  </div>
+
+  <div class="panel-bg">
+
+    <!-- 全局水力参数 —— 加卡片边框 -->
+    <div class="a-card">
+      <div class="a-card-header">
+        <span class="sec-title" style="color:#212121;">全局水力参数</span>
+      </div>
+      <div class="a-card-body">
+        <!-- Row 1: Q + v + n + D（和原始完全一样的一行） -->
+        <div class="hrow">
+          <span class="lbl13">设计流量 Q (m³/s):</span>
+          <div class="sim-input" style="width:80px;">10.0</div>
+          <span class="hint-blue"></span>
+          <span class="lbl13">拟定流速 v (m/s):</span>
+          <div class="sim-input" style="width:70px;">2.0</div>
+          <span class="hint-grey">(需输入)</span>
+          <span class="lbl13">糙率 n:</span>
+          <div class="sim-input" style="width:60px;">0.014</div>
+          <span class="hint-blue"></span>
+          <span class="lbl13">管径D:</span>
+          <span class="d-bold" style="min-width:200px;">D = --</span>
+          <div class="sim-check"><span class="box"></span> 指定管径</div>
+        </div>
+        <!-- Row 2: 计算目标 + 弯管半径倍数 + 水损阈值 -->
+        <div class="hrow">
+          <span class="lbl13">计算目标:</span>
+          <div class="sim-combo" style="width:100px;">设计截面</div>
+          <span class="lbl13">弯管半径倍数 (R=nD):</span>
+          <div class="sim-input" style="width:50px;">3.0</div>
+          <span class="hint-blue" style="min-width:160px;">R = --</span>
+          <span class="lbl13">水损阈值 (m):</span>
+          <div class="sim-input placeholder" style="width:75px;">如: 2.0</div>
+          <span class="hint-orange">(ΔZ超此值将提醒调整参数)</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 渐变段与流速参数 —— 加卡片边框 -->
+    <div class="a-card">
+      <div class="a-card-header">
+        <span class="sec-title" style="color:#212121;">渐变段与流速参数</span>
+      </div>
+      <div class="a-card-body">
+
+        <!-- ▸ 进口 —— 加浅色底色框 -->
+        <div class="a-io-box">
+          <div class="sub-title" style="margin-bottom:4px;">  ▸ 进口</div>
+          <!-- 进口 Row 1 -->
+          <div class="hrow">
+            <span class="lbl13">渐变段型式:</span>
+            <div class="sim-combo" style="width:120px;">无</div>
+            <span class="hint-blue"></span>
+            <span class="lbl13">ξ₁:</span>
+            <div class="sim-input" style="width:55px;">0.0</div>
+            <span class="hint-blue"></span>
+            <span class="lbl13">始端流速v₁(m/s):</span>
+            <div class="sim-input placeholder" style="width:70px;">留空=0</div>
+            <span class="hint-orange">(上游渠道流速)</span>
+          </div>
+          <!-- 进口 Row 2 -->
+          <div class="hrow">
+            <span class="lbl13">v₂策略:</span>
+            <div class="sim-combo" style="width:165px;">自动（=管道流速）</div>
+            <span class="hint-green">(推荐)</span>
+            <span class="lbl13">末端流速v₂(m/s):</span>
+            <div class="sim-input readonly placeholder" style="width:70px;">留空=管道流速</div>
+            <span class="hint-grey">(计算后自动填充: 管道流速)</span>
+          </div>
+        </div>
+
+        <!-- ▸ 出口 —— 加浅色底色框 -->
+        <div class="a-io-box">
+          <div class="sub-title" style="margin-bottom:4px;">  ▸ 出口</div>
+          <!-- 出口 Row 1 -->
+          <div class="hrow">
+            <span class="lbl13">渐变段型式:</span>
+            <div class="sim-combo" style="width:120px;">无</div>
+            <span class="hint-blue"></span>
+            <span class="lbl13">ξ₂:</span>
+            <div class="sim-input" style="width:55px;">0.0</div>
+            <span class="hint-blue"></span>
+            <span class="lbl13">始端流速v(m/s):</span>
+            <div class="sim-input placeholder" style="width:70px;">计算后自动填充</div>
+            <span class="hint-grey">(=管道流速，无需填写)</span>
+          </div>
+          <!-- 出口 Row 2 -->
+          <div class="hrow">
+            <span class="lbl13">末端流速v₃(m/s):</span>
+            <div class="sim-input placeholder" style="width:70px;">留空=0</div>
+            <span class="hint-orange">(下游渠道流速)</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ===================================================
+     方案B: 全局参数不变，进口出口改为左右并排
+     =================================================== -->
+<div id="scheme-b" class="scheme">
+  <div class="scheme-title">方案B · 进出口左右并排</div>
+  <div class="scheme-desc">
+    全局水力参数部分完全不变（和当前一样的两行横排）。<br>
+    进口和出口从上下堆叠改为左右并排，各占一半宽度，减少纵向空间。所有文字完全保留。
+  </div>
+
+  <div class="panel-bg">
+
+    <!-- 全局水力参数 —— 完全保持原样 -->
+    <div style="padding:4px 6px;">
+      <div class="sec-title" style="margin-bottom:4px;">全局水力参数</div>
+      <!-- Row 1 -->
+      <div class="hrow">
+        <span class="lbl13">设计流量 Q (m³/s):</span>
+        <div class="sim-input" style="width:80px;">10.0</div>
+        <span class="hint-blue"></span>
+        <span class="lbl13">拟定流速 v (m/s):</span>
+        <div class="sim-input" style="width:70px;">2.0</div>
+        <span class="hint-grey">(需输入)</span>
+        <span class="lbl13">糙率 n:</span>
+        <div class="sim-input" style="width:60px;">0.014</div>
+        <span class="hint-blue"></span>
+        <span class="lbl13">管径D:</span>
+        <span class="d-bold" style="min-width:200px;">D = --</span>
+        <div class="sim-check"><span class="box"></span> 指定管径</div>
+      </div>
+      <!-- Row 2 -->
+      <div class="hrow">
+        <span class="lbl13">计算目标:</span>
+        <div class="sim-combo" style="width:100px;">设计截面</div>
+        <span class="lbl13">弯管半径倍数 (R=nD):</span>
+        <div class="sim-input" style="width:50px;">3.0</div>
+        <span class="hint-blue" style="min-width:160px;">R = --</span>
+        <span class="lbl13">水损阈值 (m):</span>
+        <div class="sim-input placeholder" style="width:75px;">如: 2.0</div>
+        <span class="hint-orange">(ΔZ超此值将提醒调整参数)</span>
+      </div>
+    </div>
+
+    <hr class="sep">
+
+    <!-- 渐变段与流速参数 -->
+    <div style="padding:0 6px 4px;">
+      <div class="sec-title" style="margin-bottom:6px;">渐变段与流速参数</div>
+
+      <div class="b-side-by-side">
+        <!-- 进口 -->
+        <div class="b-io-box">
+          <div class="sub-title" style="margin-bottom:4px;">  ▸ 进口</div>
+          <div class="hrow">
+            <span class="lbl13">渐变段型式:</span>
+            <div class="sim-combo" style="width:120px;">无</div>
+            <span class="hint-blue"></span>
+            <span class="lbl13">ξ₁:</span>
+            <div class="sim-input" style="width:55px;">0.0</div>
+            <span class="hint-blue"></span>
+          </div>
+          <div class="hrow">
+            <span class="lbl13">始端流速v₁(m/s):</span>
+            <div class="sim-input placeholder" style="width:70px;">留空=0</div>
+            <span class="hint-orange">(上游渠道流速)</span>
+          </div>
+          <div class="hrow">
+            <span class="lbl13">v₂策略:</span>
+            <div class="sim-combo" style="width:165px;">自动（=管道流速）</div>
+            <span class="hint-green">(推荐)</span>
+          </div>
+          <div class="hrow">
+            <span class="lbl13">末端流速v₂(m/s):</span>
+            <div class="sim-input readonly placeholder" style="width:70px;">留空=管道流速</div>
+            <span class="hint-grey">(计算后自动填充: 管道流速)</span>
+          </div>
+        </div>
+
+        <!-- 出口 -->
+        <div class="b-io-box">
+          <div class="sub-title" style="margin-bottom:4px;">  ▸ 出口</div>
+          <div class="hrow">
+            <span class="lbl13">渐变段型式:</span>
+            <div class="sim-combo" style="width:120px;">无</div>
+            <span class="hint-blue"></span>
+            <span class="lbl13">ξ₂:</span>
+            <div class="sim-input" style="width:55px;">0.0</div>
+            <span class="hint-blue"></span>
+          </div>
+          <div class="hrow">
+            <span class="lbl13">始端流速v(m/s):</span>
+            <div class="sim-input placeholder" style="width:70px;">计算后自动填充</div>
+            <span class="hint-grey">(=管道流速，无需填写)</span>
+          </div>
+          <div class="hrow">
+            <span class="lbl13">末端流速v₃(m/s):</span>
+            <div class="sim-input placeholder" style="width:70px;">留空=0</div>
+            <span class="hint-orange">(下游渠道流速)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ===================================================
+     方案C: QGroupBox 风格分组（保持原始行排列）
+     =================================================== -->
+<div id="scheme-c" class="scheme">
+  <div class="scheme-title">方案C · QGroupBox 边框分组</div>
+  <div class="scheme-desc">
+    使用 QGroupBox 风格（带标题的圆角边框）把两大区块包裹起来，进出口各一个子 GroupBox。<br>
+    内部行排列和所有文字完全不变，只是视觉上有了更清晰的分组边界。和现有 QSS 风格统一。
+  </div>
+
+  <div class="panel-bg">
+
+    <!-- 全局水力参数 GroupBox -->
+    <div class="c-groupbox">
+      <div class="c-groupbox-title">全局水力参数</div>
+      <!-- Row 1 -->
+      <div class="hrow">
+        <span class="lbl13">设计流量 Q (m³/s):</span>
+        <div class="sim-input" style="width:80px;">10.0</div>
+        <span class="hint-blue"></span>
+        <span class="lbl13">拟定流速 v (m/s):</span>
+        <div class="sim-input" style="width:70px;">2.0</div>
+        <span class="hint-grey">(需输入)</span>
+        <span class="lbl13">糙率 n:</span>
+        <div class="sim-input" style="width:60px;">0.014</div>
+        <span class="hint-blue"></span>
+        <span class="lbl13">管径D:</span>
+        <span class="d-bold" style="min-width:200px;">D = --</span>
+        <div class="sim-check"><span class="box"></span> 指定管径</div>
+      </div>
+      <!-- Row 2 -->
+      <div class="hrow">
+        <span class="lbl13">计算目标:</span>
+        <div class="sim-combo" style="width:100px;">设计截面</div>
+        <span class="lbl13">弯管半径倍数 (R=nD):</span>
+        <div class="sim-input" style="width:50px;">3.0</div>
+        <span class="hint-blue" style="min-width:160px;">R = --</span>
+        <span class="lbl13">水损阈值 (m):</span>
+        <div class="sim-input placeholder" style="width:75px;">如: 2.0</div>
+        <span class="hint-orange">(ΔZ超此值将提醒调整参数)</span>
+      </div>
+    </div>
+
+    <!-- 渐变段与流速参数 GroupBox -->
+    <div class="c-groupbox">
+      <div class="c-groupbox-title">渐变段与流速参数</div>
+
+      <!-- 进口 子GroupBox -->
+      <div class="c-groupbox" style="margin-top:16px;">
+        <div class="c-groupbox-title" style="font-size:13px; color:#212121;">▸ 进口</div>
+        <!-- 进口 Row 1 -->
+        <div class="hrow">
+          <span class="lbl13">渐变段型式:</span>
+          <div class="sim-combo" style="width:120px;">无</div>
+          <span class="hint-blue"></span>
+          <span class="lbl13">ξ₁:</span>
+          <div class="sim-input" style="width:55px;">0.0</div>
+          <span class="hint-blue"></span>
+          <span class="lbl13">始端流速v₁(m/s):</span>
+          <div class="sim-input placeholder" style="width:70px;">留空=0</div>
+          <span class="hint-orange">(上游渠道流速)</span>
+        </div>
+        <!-- 进口 Row 2 -->
+        <div class="hrow">
+          <span class="lbl13">v₂策略:</span>
+          <div class="sim-combo" style="width:165px;">自动（=管道流速）</div>
+          <span class="hint-green">(推荐)</span>
+          <span class="lbl13">末端流速v₂(m/s):</span>
+          <div class="sim-input readonly placeholder" style="width:70px;">留空=管道流速</div>
+          <span class="hint-grey">(计算后自动填充: 管道流速)</span>
+        </div>
+      </div>
+
+      <!-- 出口 子GroupBox -->
+      <div class="c-groupbox" style="margin-top:16px;">
+        <div class="c-groupbox-title" style="font-size:13px; color:#212121;">▸ 出口</div>
+        <!-- 出口 Row 1 -->
+        <div class="hrow">
+          <span class="lbl13">渐变段型式:</span>
+          <div class="sim-combo" style="width:120px;">无</div>
+          <span class="hint-blue"></span>
+          <span class="lbl13">ξ₂:</span>
+          <div class="sim-input" style="width:55px;">0.0</div>
+          <span class="hint-blue"></span>
+          <span class="lbl13">始端流速v(m/s):</span>
+          <div class="sim-input placeholder" style="width:70px;">计算后自动填充</div>
+          <span class="hint-grey">(=管道流速，无需填写)</span>
+        </div>
+        <!-- 出口 Row 2 -->
+        <div class="hrow">
+          <span class="lbl13">末端流速v₃(m/s):</span>
+          <div class="sim-input placeholder" style="width:70px;">留空=0</div>
+          <span class="hint-orange">(下游渠道流速)</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+<script>
+function switchScheme(id) {
+  document.querySelectorAll('.scheme').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.scheme-switcher button').forEach(b => b.classList.remove('active'));
+  document.getElementById('scheme-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+
+</body>
+</html>

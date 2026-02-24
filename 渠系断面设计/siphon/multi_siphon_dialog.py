@@ -95,7 +95,7 @@ class MultiSiphonDialog(QDialog):
         self._load_saved_data()
 
         if auto_run:
-            QTimer.singleShot(0, self._calculate_all)
+            QTimer.singleShot(0, self._show_pre_confirm_dialog)
 
     def _configure_window(self):
         """配置窗口属性"""
@@ -556,8 +556,139 @@ class MultiSiphonDialog(QDialog):
         if panel:
             panel._export_word()
 
+    def _show_pre_confirm_dialog(self):
+        """auto_run模式：弹出参数汇总确认表，用户一次性确认所有倒虹吸的流速和弯管倍数"""
+        from PySide6.QtWidgets import QLineEdit
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("倒虹吸参数确认")
+        dlg.setMinimumWidth(600)
+        dlg.resize(650, min(350 + len(self.panels) * 35, 600))
+        dlg.setStyleSheet(DIALOG_STYLE)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(20, 15, 20, 15)
+        lay.setSpacing(10)
+
+        lbl_title = QLabel(f"一键全流程计算 — 请确认 {len(self.panels)} 个倒虹吸的关键参数")
+        lbl_title.setStyleSheet(f"font-size:14px;font-weight:bold;color:{T1};")
+        lbl_title.setWordWrap(True)
+        lay.addWidget(lbl_title)
+
+        lbl_hint = QLabel("以下参数将直接用于水力计算，请核对后点击「确认并计算」：")
+        lbl_hint.setStyleSheet("font-size:11px;color:#666;")
+        lay.addWidget(lbl_hint)
+
+        # 表格：名称 | 流量Q | 拟定流速v | 弯管倍数n
+        table = QTableWidget(len(self.panels), 4)
+        table.setHorizontalHeaderLabels(["倒虹吸名称", "流量 Q (m³/s)", "拟定流速 v (m/s)", "弯管倍数 n"])
+        table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for ci in range(1, 4):
+            table.horizontalHeader().setSectionResizeMode(ci, QHeaderView.ResizeToContents)
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setFont(QFont("Microsoft YaHei", 10))
+
+        v_edits = []  # 保存流速编辑框引用
+        n_edits = []  # 保存倍数编辑框引用
+
+        for i, (name, panel) in enumerate(self.panels.items()):
+            # 名称（只读）
+            item_name = QTableWidgetItem(name)
+            item_name.setFlags(item_name.flags() & ~Qt.ItemIsEditable)
+            item_name.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            table.setItem(i, 0, item_name)
+
+            # 流量（只读）
+            q_val = panel._fval(panel.edit_Q, 0)
+            item_q = QTableWidgetItem(f"{q_val:.4f}")
+            item_q.setFlags(item_q.flags() & ~Qt.ItemIsEditable)
+            item_q.setTextAlignment(Qt.AlignCenter)
+            table.setItem(i, 1, item_q)
+
+            # 拟定流速（可编辑）
+            v_edit = QLineEdit(panel.edit_v.text() or "2.0")
+            v_edit.setAlignment(Qt.AlignCenter)
+            v_edit.setStyleSheet("border:1px solid #1565C0; background:#E3F2FD; padding:2px;")
+            table.setCellWidget(i, 2, v_edit)
+            v_edits.append(v_edit)
+
+            # 弯管倍数（可编辑）
+            n_edit = QLineEdit(panel.edit_turn_n.text() or "3.0")
+            n_edit.setAlignment(Qt.AlignCenter)
+            n_edit.setStyleSheet("border:1px solid #1565C0; background:#E3F2FD; padding:2px;")
+            table.setCellWidget(i, 3, n_edit)
+            n_edits.append(n_edit)
+
+        lay.addWidget(table, 1)
+
+        # 按钮
+        btn_lay = QHBoxLayout()
+        btn_lay.addStretch()
+
+        btn_cancel = PushButton("取消")
+        def _on_cancel():
+            dlg.reject()
+            self._on_close()
+        btn_cancel.clicked.connect(_on_cancel)
+        btn_lay.addWidget(btn_cancel)
+
+        btn_confirm = PrimaryPushButton("确认并计算")
+        def _on_confirm():
+            # 将用户确认的值写回各面板，并标记为已确认
+            for idx, (nm, pnl) in enumerate(self.panels.items()):
+                v_text = v_edits[idx].text().strip()
+                n_text = n_edits[idx].text().strip()
+                if v_text:
+                    pnl._syncing = True
+                    pnl.edit_v.setText(v_text)
+                    pnl._syncing = False
+                    pnl._v_user_confirmed = True
+                    pnl._update_v_style()
+                if n_text:
+                    pnl._syncing = True
+                    pnl.edit_turn_n.setText(n_text)
+                    pnl._syncing = False
+                    pnl._turn_n_user_confirmed = True
+                    pnl._update_turn_n_style()
+                    pnl._update_turn_R()
+            dlg.accept()
+            self._calculate_all()
+        btn_confirm.clicked.connect(_on_confirm)
+        btn_lay.addWidget(btn_confirm)
+
+        lay.addLayout(btn_lay)
+        dlg.exec()
+
     def _calculate_all(self):
         """计算所有倒虹吸并自动导出水头损失到主表格"""
+        # 方案D预检查：批量计算前确认所有面板流速已输入
+        unconfirmed = []
+        for name, panel in self.panels.items():
+            if not panel._v_user_confirmed:
+                unconfirmed.append(name)
+        if unconfirmed:
+            # 切换到第一个未确认流速的面板
+            first_name = unconfirmed[0]
+            for i in range(self.notebook.count()):
+                if self.notebook.tabText(i) == first_name:
+                    self.notebook.setCurrentIndex(i)
+                    break
+            first_panel = self.panels[first_name]
+            first_panel.params_notebook.setCurrentIndex(0)
+            first_panel.edit_v.setFocus()
+            first_panel.edit_v.selectAll()
+            first_panel._flash_v_field()
+            names_str = "、".join(unconfirmed)
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error(
+                "请先输入拟定流速",
+                f'以下倒虹吸的"拟定流速 v"尚未确认: {names_str}\n请逐个输入流速值后再执行批量计算。',
+                parent=self, duration=8000,
+                position=InfoBarPosition.TOP
+            )
+            return
+
         total = len(self.panels)
         success_count = 0
         fail_count = 0

@@ -123,6 +123,21 @@ svg { vertical-align: middle; }
 }
 .result-banner.pass { background: linear-gradient(135deg, #43A047, #66BB6A); }
 .result-banner.fail { background: linear-gradient(135deg, #E53935, #EF5350); }
+.norm-table-title {
+    font-size: 13px; color: #333; text-align: center;
+    margin: 12px 0 8px 0; font-weight: 600;
+}
+.norm-table {
+    width: 100%; border-collapse: collapse; margin: 0 0 6px 0;
+}
+.norm-table th, .norm-table td {
+    border: 1px solid #333;
+    padding: 8px 14px; font-size: 13px; color: #333; text-align: center;
+}
+.norm-table th { font-weight: 600; }
+.norm-table-note {
+    font-size: 12px; color: #555; margin: 4px 0 8px 0;
+}
 """
 
 # SVG 渲染缓存
@@ -381,6 +396,7 @@ def _group_lines_into_blocks(lines):
     blocks = []
     current_step = None
     text_buffer = []
+    html_buffer = None          # 收集 {{HTML}}...{{/HTML}} 之间的原始 HTML
 
     def _flush_text():
         nonlocal text_buffer
@@ -399,8 +415,19 @@ def _group_lines_into_blocks(lines):
     for line in lines:
         stripped = line.strip()
         if not stripped:
+            if html_buffer is not None:
+                continue
             if current_step is not None:
                 current_step['lines'].append(line)
+            continue
+
+        # 原始 HTML 块结束标记
+        if html_buffer is not None:
+            if stripped == '{{/HTML}}':
+                blocks.append({'type': 'raw_html', 'html': '\n'.join(html_buffer)})
+                html_buffer = None
+            else:
+                html_buffer.append(stripped)
             continue
 
         # 分隔线 (=== / ---)
@@ -413,6 +440,13 @@ def _group_lines_into_blocks(lines):
         if '计算结果' in stripped and ':' not in stripped and '：' not in stripped:
             _flush_text(); _flush_step()
             blocks.append({'type': 'title', 'text': stripped})
+            continue
+
+        # 原始 HTML 块开始标记（{{HTML}}）
+        if stripped.startswith('{{HTML}}'):
+            _flush_text(); _flush_step()
+            first = stripped[8:].strip()
+            html_buffer = [first] if first else []
             continue
 
         # 章节横幅 【...】
@@ -695,6 +729,8 @@ def _render_block(block):
         return f'<div class="section-banner">{_e(block["text"])}</div>'
     if t == 'step':
         return _render_step_card(block)
+    if t == 'raw_html':
+        return block['html']
     if t == 'text':
         return _render_text_block(block['lines'])
     return ''

@@ -663,6 +663,8 @@ def doc_render_calc_text(doc, text, skip_title_keyword=""):
             continue
         if skip_title_keyword and skip_title_keyword in stripped:
             continue
+        if stripped.startswith('{{') and stripped.endswith('}}'):
+            continue
         if stripped.startswith('【') and '】' in stripped:
             doc_add_h2(doc, stripped.lstrip('【').rstrip('】'))
             continue

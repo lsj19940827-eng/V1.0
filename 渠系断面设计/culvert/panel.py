@@ -53,6 +53,7 @@ from 渠系断面设计.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPUT_LA
 from 渠系断面设计.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_formula, doc_render_calc_text, doc_add_figure,
+    doc_add_styled_table, doc_add_table_caption, doc_add_body,
 )
 from 渠系断面设计.culvert.dxf_export import export_culvert_dxf
 from 渠系断面设计.formula_renderer import (
@@ -478,7 +479,7 @@ class CulvertPanel(QWidget):
                 o.append("     (当底宽和宽深比均留空时，自动搜索总面积 B×H 最小的断面)")
                 o.append(f"     最优断面: B = {B:.2f} m，H = {H:.2f} m，A = {B*H:.3f} m²")
                 o.append(f"     实际 β = B/h = {B:.2f}/{h_d:.3f} = {BH_ratio:.3f}")
-                o.append(f"     洞高 H = {H:.2f} m 由解析公式直接求得（H_min = 各净空约束取 max）")
+                o.append(f"     洞高 H = {H:.2f} m（满足所有净空约束的最小洞高）")
                 o.append(f"     断面面积 A = B×H = {B:.2f}×{H:.2f} = {B*H:.3f} m²（满足约束的最小值）")
             elif target_HB:
                 o.append(f"     ★★★ 按指定高宽比计算 ★★★")
@@ -625,19 +626,37 @@ class CulvertPanel(QWidget):
             # 净空验证
             o.append("【五、净空验证】")
             o.append("")
-            o.append("  根据《灌溉与排水工程设计标准》 GB 50288-2018要求：")
-            o.append("  1. 净空面积要求：应为涵洞断面总面积的10%~30%")
-            o.append("  2. 净空高度要求：")
-            o.append("     - 在任何情况下，净空高度均不得小于0.4m")
+            o.append("  根据《灌溉与排水工程设计标准》GB 50288-2018 第11.2.5条：")
+            o.append("  涵洞横断面形式应符合下列规定：")
+            o.append("    1 小流量涵洞宜采用预制圆管涵；")
+            o.append("    2 无压涵洞当洞顶填土高度较小时宜选用盖板涵洞或箱涵，")
+            o.append("      涵顶填土高度较大时宜采用城门洞型、蛋型（高升拱）或管涵；")
+            o.append("    3 有压涵洞应选用管涵或箱涵；")
+            o.append("    4 拱涵或四铰涵不应使用于沉陷量大的地基上；")
+            o.append("    5 无压涵洞内设计水面以上的净空面积宜取涵洞断面面积的10%~30%，")
+            o.append("      且涵洞内顶点至最高水面之间的净空高度应符合表11.2.5的规定，")
+            o.append("      并不应小于0.4m。")
+            o.append("")
+            o.append('{{HTML}}<div class="norm-table-title">表 11.2.5&emsp;无压涵洞的净空高度(m)</div>')
+            o.append('<table class="norm-table">')
+            o.append('<tr><th rowspan="2">进口净高</th><th colspan="3">净空高度</th></tr>')
+            o.append('<tr><th>圆涵</th><th>拱涵</th><th>矩形涵洞</th></tr>')
+            o.append('<tr><td>≤3</td><td>≥D/4</td><td>≥D/4</td><td>≥D/6</td></tr>')
+            o.append('<tr><td>&gt;3</td><td>≥0.75</td><td>≥0.75</td><td>≥0.5</td></tr>')
+            o.append('</table>')
+            o.append('<div class="norm-table-note">注：表中D为涵洞内侧高度或者圆涵内径(m)。</div>')
+            o.append('{{/HTML}}')
+            o.append("")
+            o.append("  本涵洞净空验证（矩形涵洞）：")
             if H <= 3.0:
-                o.append(f"     - 当涵洞内侧高度H≤3m时，净空高度应≥H/6")
-                o.append(f"       H = {H:.2f}m ≤ 3m")
-                o.append(f"       H/6 = {H/6:.3f}m")
-                o.append(f"       要求净空高度≥max(0.4, {H/6:.3f}) = {fb_req_by_rule:.3f}m")
+                o.append(f"    进口净高 H = {H:.2f}m ≤ 3m")
+                o.append(f"    查表：净空高度应 ≥ D/6 = {H:.2f}/6 = {H/6:.3f}m")
+                o.append(f"    同时不应小于0.4m")
+                o.append(f"    → 要求净空高度 ≥ max(0.4, {H/6:.3f}) = {fb_req_by_rule:.3f}m")
             else:
-                o.append(f"     - 当涵洞内侧高度H>3m时，净空高度应≥0.5m")
-                o.append(f"       H = {H:.2f}m > 3m")
-                o.append(f"       要求净空高度≥0.5m")
+                o.append(f"    进口净高 H = {H:.2f}m > 3m")
+                o.append(f"    查表：净空高度应 ≥ 0.5m")
+                o.append(f"    → 要求净空高度 ≥ 0.5m")
             o.append("")
 
             o.append("  净空验证结果（加大流量工况）：")
@@ -674,7 +693,13 @@ class CulvertPanel(QWidget):
             o.append(f"  综合验证结果: {'全部通过 ✓' if all_checks_ok else '未通过 ✗'}")
         o.append("=" * 70)
         txt = "\n".join(o)
-        self._export_plain_text = txt
+        # 导出纯文本/Word时，将 {{HTML}}...{{/HTML}} 替换为占位标记
+        import re as _re
+        self._export_plain_text = _re.sub(
+            r'\{\{HTML\}\}.*?\{\{/HTML\}\}',
+            '{{NORM_TABLE_11_2_5}}',
+            txt, flags=_re.DOTALL
+        )
         load_formula_page(self.result_text, plain_text_to_formula_html(txt))
 
     # ================================================================
@@ -771,6 +796,15 @@ class CulvertPanel(QWidget):
         if not filepath: return
         try:
             content = self._export_plain_text if self._export_plain_text else ''
+            # 纯文本导出时将占位标记替换为文本表格
+            _txt_table = (
+                "  表 11.2.5  无压涵洞的净空高度(m)\n"
+                "  进口净高    圆涵      拱涵      矩形涵洞\n"
+                "    ≤3       ≥D/4      ≥D/4       ≥D/6\n"
+                "    >3       ≥0.75     ≥0.75      ≥0.5\n"
+                "  注：表中D为涵洞内侧高度或者圆涵内径(m)。"
+            )
+            content = content.replace('{{NORM_TABLE_11_2_5}}', _txt_table)
             with open(filepath, 'w', encoding='utf-8') as f: f.write(content)
             InfoBar.success("导出成功", f"报告已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
             ask_open_file(filepath, self._info_parent())
@@ -815,9 +849,30 @@ class CulvertPanel(QWidget):
         if self.current_result.get('is_optimal_section'):
             doc_add_formula(doc, r'\min A = B \times H \text{ (经济最优)}', '优化目标：')
 
-        # 二、计算过程
+        # 二、计算过程 —— 在占位标记处插入Word表格
         doc_add_h1(doc, '二、计算过程')
-        doc_render_calc_text(doc, self._export_plain_text or '', skip_title_keyword='矩形暗涵水力计算结果')
+        calc_text = self._export_plain_text or ''
+        _marker = '{{NORM_TABLE_11_2_5}}'
+        if _marker in calc_text:
+            _parts = calc_text.split(_marker, 1)
+            doc_render_calc_text(doc, _parts[0], skip_title_keyword='矩形暗涵水力计算结果')
+            # 插入表11.2.5（规范风格Word表格）
+            doc_add_table_caption(doc, '表 11.2.5  无压涵洞的净空高度(m)')
+            _H = self.current_result.get('H', 0)
+            doc_add_styled_table(doc,
+                headers=['进口净高', '圆涵', '拱涵', '矩形涵洞'],
+                data=[
+                    ['≤3', '≥D/4', '≥D/4', '≥D/6'],
+                    ['>3', '≥0.75', '≥0.75', '≥0.5'],
+                ],
+                highlight_col=3,
+                highlight_val='≥D/6' if _H <= 3.0 else '≥0.5',
+                with_full_border=True,
+            )
+            doc_add_body(doc, '注：表中D为涵洞内侧高度或者圆涵内径(m)。')
+            doc_render_calc_text(doc, _parts[1])
+        else:
+            doc_render_calc_text(doc, calc_text, skip_title_keyword='矩形暗涵水力计算结果')
 
         # 三、断面图
         try:

@@ -1,17 +1,17 @@
 {
   "version": "1.0",
-  "last_modified": "2026-02-23 13:00:57",
+  "last_modified": "2026-02-24 09:34:01",
   "siphons": {
     "沪蓉": {
       "Q": 4.0,
-      "v_guess": 2.0,
+      "v_guess": 1.0,
       "roughness_n": 0.014,
       "inlet_type": "反弯扭曲面",
       "outlet_type": "反弯扭曲面",
       "xi_inlet": 0.1,
       "xi_outlet": 0.2,
       "v_channel_in": 1.044,
-      "v_pipe_in": 1.9894,
+      "v_pipe_in": 0.8842,
       "v_channel_out": 0.0,
       "v_pipe_out": 1.044,
       "segments": [
@@ -82,7 +82,7 @@
           "radius": 5.0,
           "angle": 45.0,
           "xi_user": null,
-          "xi_calc": 0.24640201558187244,
+          "xi_calc": 0.31789234565492075,
           "locked": false,
           "segment_type": "弯管"
         },
@@ -102,7 +102,7 @@
           "radius": 5.0,
           "angle": 45.0,
           "xi_user": null,
-          "xi_calc": 0.24640201558187244,
+          "xi_calc": 0.31789234565492075,
           "locked": false,
           "segment_type": "弯管"
         },
@@ -132,7 +132,7 @@
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
-          "xi_calc": 0.2283,
+          "xi_calc": 0.002,
           "locked": true,
           "segment_type": "出水口"
         }
@@ -151,11 +151,11 @@
         },
         {
           "direction": "平面",
-          "length": 2.211,
-          "radius": 4.8,
+          "length": 3.317,
+          "radius": 7.2,
           "angle": 26.392,
           "xi_user": null,
-          "xi_calc": 0.17828014832467054,
+          "xi_calc": 0.17285136311660104,
           "locked": true,
           "source_ip_index": 10,
           "segment_type": "弯管"
@@ -173,11 +173,11 @@
         },
         {
           "direction": "平面",
-          "length": 3.506,
-          "radius": 4.8,
+          "length": 5.259,
+          "radius": 7.2,
           "angle": 41.851,
           "xi_user": null,
-          "xi_calc": 0.24034456311310298,
+          "xi_calc": 0.23302586262216457,
           "locked": true,
           "source_ip_index": 11,
           "segment_type": "弯管"
@@ -195,11 +195,11 @@
         },
         {
           "direction": "平面",
-          "length": 4.282,
-          "radius": 4.8,
+          "length": 6.423,
+          "radius": 7.2,
           "angle": 51.114,
           "xi_user": null,
-          "xi_calc": 0.27284614004471314,
+          "xi_calc": 0.26453773833497196,
           "locked": true,
           "source_ip_index": 12,
           "segment_type": "弯管"
@@ -233,7 +233,7 @@
           "x": 649244.413,
           "y": 3377550.257,
           "azimuth": 0.0,
-          "turn_radius": 4.8,
+          "turn_radius": 7.2,
           "turn_angle": 26.3922,
           "turn_type": "圆弧",
           "ip_index": 10
@@ -243,7 +243,7 @@
           "x": 649220.868,
           "y": 3377563.965,
           "azimuth": 0.0,
-          "turn_radius": 4.8,
+          "turn_radius": 7.2,
           "turn_angle": 41.8513,
           "turn_type": "圆弧",
           "ip_index": 11
@@ -253,7 +253,7 @@
           "x": 649184.732,
           "y": 3377556.519,
           "azimuth": 0.0,
-          "turn_radius": 4.8,
+          "turn_radius": 7.2,
           "turn_angle": 51.1142,
           "turn_type": "圆弧",
           "ip_index": 12
@@ -270,8 +270,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": 0.5701788346166289,
-      "diameter": 1.6,
+      "total_head_loss": 0.07068671921617303,
+      "diameter": 2.4000000000000004,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -282,14 +282,14 @@
     },
     "广岳": {
       "Q": 4.0,
-      "v_guess": 2.0,
+      "v_guess": 1.0,
       "roughness_n": 0.014,
       "inlet_type": "反弯扭曲面",
       "outlet_type": "反弯扭曲面",
       "xi_inlet": 0.1,
       "xi_outlet": 0.2,
       "v_channel_in": 1.044,
-      "v_pipe_in": 1.9894,
+      "v_pipe_in": 0.8842,
       "v_channel_out": 0.0,
       "v_pipe_out": 1.044,
       "segments": [
@@ -360,7 +360,7 @@
           "radius": 5.0,
           "angle": 45.0,
           "xi_user": null,
-          "xi_calc": 0.24640201558187244,
+          "xi_calc": 0.31789234565492075,
           "locked": false,
           "segment_type": "弯管"
         },
@@ -380,7 +380,7 @@
           "radius": 5.0,
           "angle": 45.0,
           "xi_user": null,
-          "xi_calc": 0.24640201558187244,
+          "xi_calc": 0.31789234565492075,
           "locked": false,
           "segment_type": "弯管"
         },
@@ -410,7 +410,7 @@
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
-          "xi_calc": 0.2283,
+          "xi_calc": 0.002,
           "locked": true,
           "segment_type": "出水口"
         }
@@ -429,11 +429,11 @@
         },
         {
           "direction": "平面",
-          "length": 3.511,
-          "radius": 4.8,
+          "length": 5.267,
+          "radius": 7.2,
           "angle": 41.911,
           "xi_user": null,
-          "xi_calc": 0.2405602767716389,
+          "xi_calc": 0.23323500761262586,
           "locked": true,
           "source_ip_index": 17,
           "segment_type": "弯管"
@@ -451,11 +451,11 @@
         },
         {
           "direction": "平面",
-          "length": 1.669,
-          "radius": 4.8,
+          "length": 2.504,
+          "radius": 7.2,
           "angle": 19.925,
           "xi_user": null,
-          "xi_calc": 0.14335071416623832,
+          "xi_calc": 0.13898556053615138,
           "locked": true,
           "source_ip_index": 18,
           "segment_type": "弯管"
@@ -489,7 +489,7 @@
           "x": 649066.369,
           "y": 3377577.838,
           "azimuth": 0.0,
-          "turn_radius": 4.8,
+          "turn_radius": 7.2,
           "turn_angle": 41.9111,
           "turn_type": "圆弧",
           "ip_index": 17
@@ -499,7 +499,7 @@
           "x": 649033.673,
           "y": 3377532.997,
           "azimuth": 0.0,
-          "turn_radius": 4.8,
+          "turn_radius": 7.2,
           "turn_angle": 19.9251,
           "turn_type": "圆弧",
           "ip_index": 18
@@ -516,8 +516,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": 0.4970644379583093,
-      "diameter": 1.6,
+      "total_head_loss": 0.0571508707367515,
+      "diameter": 2.4000000000000004,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -528,14 +528,14 @@
     },
     "广高路": {
       "Q": 4.0,
-      "v_guess": 2.0,
+      "v_guess": 1.0,
       "roughness_n": 0.014,
       "inlet_type": "反弯扭曲面",
       "outlet_type": "反弯扭曲面",
       "xi_inlet": 0.1,
       "xi_outlet": 0.2,
       "v_channel_in": 1.044,
-      "v_pipe_in": 1.9894,
+      "v_pipe_in": 0.8842,
       "v_channel_out": 0.0,
       "v_pipe_out": 1.088,
       "segments": [
@@ -606,7 +606,7 @@
           "radius": 5.0,
           "angle": 45.0,
           "xi_user": null,
-          "xi_calc": 0.24640201558187244,
+          "xi_calc": 0.31789234565492075,
           "locked": false,
           "segment_type": "弯管"
         },
@@ -626,7 +626,7 @@
           "radius": 5.0,
           "angle": 45.0,
           "xi_user": null,
-          "xi_calc": 0.24640201558187244,
+          "xi_calc": 0.31789234565492075,
           "locked": false,
           "segment_type": "弯管"
         },
@@ -656,7 +656,7 @@
           "radius": 0.0,
           "angle": 0.0,
           "xi_user": null,
-          "xi_calc": 0.2082,
+          "xi_calc": 0.0076,
           "locked": true,
           "segment_type": "出水口"
         }
@@ -675,11 +675,11 @@
         },
         {
           "direction": "平面",
-          "length": 5.02,
-          "radius": 4.8,
+          "length": 7.53,
+          "radius": 7.2,
           "angle": 59.922,
           "xi_user": null,
-          "xi_calc": 0.298179552103174,
+          "xi_calc": 0.2890997260147497,
           "locked": true,
           "source_ip_index": 26,
           "segment_type": "弯管"
@@ -697,11 +697,11 @@
         },
         {
           "direction": "平面",
-          "length": 2.639,
-          "radius": 4.8,
+          "length": 3.959,
+          "radius": 7.2,
           "angle": 31.506,
           "xi_user": null,
-          "xi_calc": 0.2031519331538645,
+          "xi_calc": 0.19696578051679153,
           "locked": true,
           "source_ip_index": 27,
           "segment_type": "弯管"
@@ -719,11 +719,11 @@
         },
         {
           "direction": "平面",
-          "length": 0.827,
-          "radius": 4.8,
+          "length": 1.241,
+          "radius": 7.2,
           "angle": 9.873,
           "xi_user": null,
-          "xi_calc": 0.08173138855991838,
+          "xi_calc": 0.07924259686090639,
           "locked": true,
           "source_ip_index": 28,
           "segment_type": "弯管"
@@ -741,11 +741,11 @@
         },
         {
           "direction": "平面",
-          "length": 3.848,
-          "radius": 4.8,
+          "length": 5.772,
+          "radius": 7.2,
           "angle": 45.932,
           "xi_user": null,
-          "xi_calc": 0.25501668712118924,
+          "xi_calc": 0.24725120772337553,
           "locked": true,
           "source_ip_index": 29,
           "segment_type": "弯管"
@@ -763,11 +763,11 @@
         },
         {
           "direction": "平面",
-          "length": 6.196,
-          "radius": 4.8,
+          "length": 9.294,
+          "radius": 7.2,
           "angle": 73.963,
           "xi_user": null,
-          "xi_calc": 0.326353553521789,
+          "xi_calc": 0.31641580464391894,
           "locked": true,
           "source_ip_index": 30,
           "segment_type": "弯管"
@@ -801,7 +801,7 @@
           "x": 648859.515,
           "y": 3377325.868,
           "azimuth": 0.0,
-          "turn_radius": 4.8,
+          "turn_radius": 7.2,
           "turn_angle": 59.9215,
           "turn_type": "圆弧",
           "ip_index": 26
@@ -811,7 +811,7 @@
           "x": 648823.413,
           "y": 3377328.753,
           "azimuth": 0.0,
-          "turn_radius": 4.8,
+          "turn_radius": 7.2,
           "turn_angle": 31.5058,
           "turn_type": "圆弧",
           "ip_index": 27
@@ -821,7 +821,7 @@
           "x": 648778.748,
           "y": 3377306.057,
           "azimuth": 0.0,
-          "turn_radius": 4.8,
+          "turn_radius": 7.2,
           "turn_angle": 9.8735,
           "turn_type": "圆弧",
           "ip_index": 28
@@ -831,7 +831,7 @@
           "x": 648742.968,
           "y": 3377279.28,
           "azimuth": 0.0,
-          "turn_radius": 4.8,
+          "turn_radius": 7.2,
           "turn_angle": 45.9318,
           "turn_type": "圆弧",
           "ip_index": 29
@@ -841,7 +841,7 @@
           "x": 648740.771,
           "y": 3377262.029,
           "azimuth": 0.0,
-          "turn_radius": 4.8,
+          "turn_radius": 7.2,
           "turn_angle": 73.9625,
           "turn_type": "圆弧",
           "ip_index": 30
@@ -858,8 +858,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": 0.8629640187392056,
-      "diameter": 1.6,
+      "total_head_loss": 0.1156343241229281,
+      "diameter": 2.4000000000000004,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
