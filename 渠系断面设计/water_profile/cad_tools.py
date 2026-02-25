@@ -113,12 +113,11 @@ def _in_out_val(in_out):
 
 
 def _is_special_structure_sv(struct_type):
-    """判断是否为特殊建筑物（隧洞/倒虹吸/渡槽），使用字符串值比较
+    """判断是否为特殊建筑物（隧洞/倒虹吸/渡槽/矩形暗涵），使用字符串值比较
 
-    注意：矩形暗涵不需要进出口标识，不属于特殊建筑物。
     避免双路径导入导致 enum 实例比较失败"""
     sv = _struct_val(struct_type)
-    return any(k in sv for k in ("隧洞", "倒虹吸", "渡槽"))
+    return any(k in sv for k in ("隧洞", "倒虹吸", "渡槽", "暗涵"))
 
 
 def _is_gate_name(name):

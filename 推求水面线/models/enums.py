@@ -68,15 +68,14 @@ class StructureType(Enum):
         """
         获取需要进出口标识的特殊建筑物类型
         
-        隧洞、倒虹吸、渡槽需要标识进口和出口
-        注意：矩形暗涵不需要进出口标识
+        隧洞、倒虹吸、渡槽、矩形暗涵需要标识进口和出口
         """
         return [
             cls.TUNNEL_CIRCULAR, cls.TUNNEL_ARCH, 
             cls.TUNNEL_HORSESHOE_1, cls.TUNNEL_HORSESHOE_2,
             cls.INVERTED_SIPHON,
             cls.AQUEDUCT_U, cls.AQUEDUCT_RECT,
-            # 矩形暗涵不需要进出口标识，已移除
+            cls.RECT_CULVERT,
             # 兼容旧版本
             cls.TUNNEL, cls.AQUEDUCT
         ]

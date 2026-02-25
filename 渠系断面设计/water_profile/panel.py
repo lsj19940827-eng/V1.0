@@ -3251,11 +3251,11 @@ class WaterProfilePanel(QWidget):
                         h0_u_a = rc * (1.0 - _math_ua.cos(_math_ua.radians(theta_u_a / 2.0)))
                         if wd <= h0_u_a:
                             wsw_ua = 2 * _math_ua.sqrt(max(0.0, rc ** 2 - (rc - wd) ** 2))
-                            basis_detail = f"水位在弧区 h={wd:.3f}m ≤ h₀={h0_u_a:.3f}m，B=2√(R²-(R-h)²)"
+                            basis_detail = f"水位在弧区 h={wd:.3f}m ≤ h_0={h0_u_a:.3f}m，B=2√(R²-(R-h)²)"
                         else:
                             b_arc_u_a = 2 * rc * _math_ua.sin(_math_ua.radians(theta_u_a / 2.0))
                             wsw_ua = b_arc_u_a + 2 * m_s * (wd - h0_u_a)
-                            basis_detail = f"水位在直线段 h={wd:.3f}m > h₀={h0_u_a:.3f}m，B=b_arc+2m(h-h₀)"
+                            basis_detail = f"水位在直线段 h={wd:.3f}m > h_0={h0_u_a:.3f}m，B=b_arc+2m(h-h_0)"
                         min_r = wsw_ua * 5
                         dim_str = f"R={rc:.2f}m, θ={theta_u_a}°, m={m_s:.3f}, h={wd:.2f}m, 水面宽={wsw_ua:.3f}m"
                         basis = f"R ≥ 水面宽×5 = {wsw_ua:.3f}×5 = {min_r:.1f}m（{basis_detail}）"
@@ -3482,6 +3482,7 @@ class WaterProfilePanel(QWidget):
             if (auto_confirm and len(gaps) >= 1) or len(gaps) >= 2:
                 batch_dlg = BatchChannelConfirmDialog(self, len(gaps), gaps)
                 if auto_confirm:
+                    batch_dlg._fill_with_fallback_if_empty()
                     batch_dlg._on_ok()
                 else:
                     batch_dlg.exec()

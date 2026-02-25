@@ -1450,7 +1450,7 @@ class HydraulicCalculator:
         # 根据前后节点结构类型判定渐变段类型（进口/出口相对于特殊建筑物而言）
         sv_next = next_node.structure_type.value if next_node.structure_type else ""
         sv_prev = prev_node.structure_type.value if prev_node.structure_type else ""
-        _special_kw = ("隧洞", "渡槽", "倒虹吸")
+        _special_kw = ("隧洞", "渡槽", "倒虹吸", "暗涵")
         if any(kw in sv_next for kw in _special_kw):
             transition_type = "进口"
         else:
@@ -1795,6 +1795,9 @@ class HydraulicCalculator:
             L_min = depth_multiplier * channel_depth
             L_result = max(L_result, L_min)
         
+        # 矩形暗涵：无额外约束，纯用基础公式 L=k×|B₁-B₂|
+        # elif "暗涵" in struct_name: pass  # L_result = L_basic已足够
+        
         # 记录渐变段长度计算详情（用于双击展示）
         transition_node.transition_length_calc_details = {
             "transition_type": transition_type,
@@ -1837,6 +1840,8 @@ class HydraulicCalculator:
             transition_node.transition_length_calc_details["depth_multiplier"] = _dm
             transition_node.transition_length_calc_details["L_depth"] = _dm * channel_depth
             transition_node.transition_length_calc_details["constraint_desc"] = f"{_dm}倍渠道设计水深"
+        elif "暗涵" in struct_name:
+            transition_node.transition_length_calc_details["constraint_desc"] = "仅基础公式"
         
         return L_result
     
@@ -1983,7 +1988,7 @@ class HydraulicCalculator:
         """
         # 1. 确定渐变段类型和形式（进口/出口相对于特殊建筑物而言）
         sv_next = next_node.structure_type.value if next_node.structure_type else ""
-        _special_kw = ("隧洞", "渡槽", "倒虹吸")
+        _special_kw = ("隧洞", "渡槽", "倒虹吸", "暗涵")
         if any(kw in sv_next for kw in _special_kw):
             transition_type = "进口"
             transition_form = getattr(settings, 'transition_inlet_form', "曲线形反弯扭曲面") or "曲线形反弯扭曲面"

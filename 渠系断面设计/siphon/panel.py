@@ -384,6 +384,7 @@ class SiphonPanel(QWidget):
         )
         self.edit_v.textChanged.connect(self._on_Qv_changed)
         self.edit_v.textChanged.connect(self._on_v_edited_by_user)
+        self.edit_v.editingFinished.connect(self._on_v_confirmed)
         g1.addWidget(self.edit_v, 0, 4)
         self.lbl_v_hint = QLabel("← 请输入拟定流速")
         self.lbl_v_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
@@ -1543,7 +1544,14 @@ document.addEventListener("DOMContentLoaded", function(){
     # 拟定流速确认交互（方案D）
     # ================================================================
     def _on_v_edited_by_user(self):
-        """用户手动编辑流速输入框时触发"""
+        """用户手动编辑流速输入框时触发（重置确认状态）"""
+        if self._syncing:
+            return
+        self._v_user_confirmed = False
+        self._update_v_style()
+
+    def _on_v_confirmed(self):
+        """LineEdit editingFinished（Enter/失焦）时触发，视为用户已确认"""
         if self._syncing:
             return
         self._v_user_confirmed = True

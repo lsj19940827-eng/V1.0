@@ -124,10 +124,14 @@ class ChannelNode:
         
         # 只有当进出口为"进"或"出"时才添加扩展信息
         if self.name and self.in_out in (InOutType.INLET, InOutType.OUTLET):
+            # 矩形暗涵的IP点不显示进/出后缀
+            struct_str = self.structure_type.value if self.structure_type else ""
+            if "暗涵" in struct_str:
+                return base
+            
             # 获取结构形式缩写
             struct_abbr = ""
             if self.structure_type:
-                struct_str = self.structure_type.value
                 if "隧洞" in struct_str or struct_str == "隧洞":
                     struct_abbr = "隧"
                 elif "倒虹吸" in struct_str or struct_str == "倒虹吸":

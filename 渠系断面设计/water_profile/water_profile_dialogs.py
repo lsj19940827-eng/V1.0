@@ -688,7 +688,7 @@ class BatchChannelConfirmDialog(QDialog):
     RESULT_MANUAL_EACH = "manual_each"
     RESULT_CANCELLED = "cancelled"
 
-    STRUCTURE_TYPES = ["明渠-梯形", "明渠-矩形", "明渠-圆形"]
+    STRUCTURE_TYPES = ["明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形"]
 
     def __init__(self, parent, total_count: int, gaps_info: list):
         super().__init__(parent)
@@ -715,10 +715,10 @@ class BatchChannelConfirmDialog(QDialog):
         lay.addWidget(lbl_title)
 
         if has_upstream == self.total_count:
-            lbl_sub = QLabel(f"全部 {self.total_count} 处均可复制上游明渠参数")
+            lbl_sub = QLabel(f"全部 {self.total_count} 处均可自动匹配同流量段明渠参数")
             lbl_sub.setStyleSheet("color: green;")
         else:
-            lbl_sub = QLabel(f"其中 {has_upstream} 处可复制上游参数，{no_upstream} 处需手动输入")
+            lbl_sub = QLabel(f"其中 {has_upstream} 处可自动匹配参数，{no_upstream} 处需手动输入")
             lbl_sub.setStyleSheet("color: #CC6600;")
         lay.addWidget(lbl_sub)
 
@@ -827,6 +827,26 @@ class BatchChannelConfirmDialog(QDialog):
 
             self._row_widgets.append(row_widgets)
 
+            # 若有经济断面预算选项，切换类型时自动填充
+            computed_opts = gap.get('computed_channel_options')
+            if computed_opts:
+                row_ref = row_widgets  # capture reference
+                def _make_type_handler(rw, opts):
+                    def _on_type_changed(index):
+                        selected = rw['type_combo'].currentText()
+                        p = opts.get(selected)
+                        if p:
+                            rw['gap']['upstream_channel'] = dict(p)
+                            rw['gap']['upstream_channel'].update({
+                                'flow': gap['flow'],
+                                'flow_section': gap.get('flow_section', ''),
+                                'structure_height': 0.0,
+                                'name': '-',
+                            })
+                            self._fill_recommended(self._row_widgets.index(rw))
+                    return _on_type_changed
+                type_cb.currentIndexChanged.connect(_make_type_handler(row_ref, computed_opts))
+
         lay.addWidget(self.param_table, stretch=1)
 
         # 底部按钮
@@ -869,8 +889,19 @@ class BatchChannelConfirmDialog(QDialog):
 
     def _fill_all_recommended(self):
         for i, row in enumerate(self._row_widgets):
-            if row['gap'].get('has_upstream'):
+            if row['gap'].get('upstream_channel'):
                 self._fill_recommended(i)
+
+    def _fill_with_fallback_if_empty(self):
+        """auto_confirm模式专用：对未填充的行使用 fallback 参数（原始上游明渠）兜底填充"""
+        for i, row in enumerate(self._row_widgets):
+            if not row['gap'].get('has_upstream'):
+                fallback = row['gap'].get('upstream_channel_fallback')
+                if fallback:
+                    orig = row['gap'].get('upstream_channel')
+                    row['gap']['upstream_channel'] = fallback
+                    self._fill_recommended(i)
+                    row['gap']['upstream_channel'] = orig
 
     def _clear_all(self):
         for row in self._row_widgets:
@@ -991,7 +1022,7 @@ class OpenChannelDialog(QDialog):
     用于在建筑物之间插入明渠段时，让用户选择参数来源。
     """
 
-    STRUCTURE_TYPES = ["明渠-梯形", "明渠-矩形", "明渠-圆形"]
+    STRUCTURE_TYPES = ["明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形"]
 
     def __init__(self, parent,
                  upstream_channel: Optional[Dict] = None,
@@ -1039,7 +1070,7 @@ class OpenChannelDialog(QDialog):
         src_grp = QGroupBox("参数来源")
         src_lay = QVBoxLayout(src_grp)
         self.src_group = QButtonGroup(self)
-        self.rb_copy = QRadioButton("复制上游明渠参数（推荐）")
+        self.rb_copy = QRadioButton("复制同流量段明渠参数（推荐）")
         self.rb_manual = QRadioButton("手动输入参数")
         self.src_group.addButton(self.rb_copy)
         self.src_group.addButton(self.rb_manual)

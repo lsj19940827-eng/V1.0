@@ -424,7 +424,7 @@ def _draw_u_section(msp, result, p, sf=1.0, scale_denom=100):
     theta_rad  = _m.radians(theta_deg)
     half_theta = theta_rad / 2.0
     x_arc_r    = b_arc / 2.0
-    x_top_r    = x_arc_r + m_slope * H
+    x_top_r    = x_arc_r + m_slope * (H - h0)
 
     char  = max(2 * x_top_r, H, 1.0) * sf
     txt_h = 3.5

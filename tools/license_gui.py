@@ -4,7 +4,7 @@ import base64, calendar, csv, hashlib, hmac, json, os, sys, urllib.request
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFormLayout, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QMainWindow,
@@ -200,6 +200,9 @@ class LicenseManager(QMainWindow):
         super().__init__()
         setTheme(Theme.AUTO)
         self.setWindowTitle("授权管理工具")
+        _icon_path = os.path.join(_HERE, "license_icon.ico")
+        if os.path.exists(_icon_path):
+            self.setWindowIcon(QIcon(_icon_path))
         self.setMinimumSize(720, 580)
         self.resize(720, 620)
         self._workers = []

@@ -881,8 +881,8 @@ class BatchPanel(QWidget):
             ["42", "3", "油房垭", "隧洞-圆拱直墙型", "647597.709292", "3376537.187663", "3", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100"],
             ["43", "3", "-",      "矩形暗涵",         "647506.778347", "3376513.531331", "3", "0.014", "3000", "0",   "2.4", "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
             ["44", "3", "-",      "矩形暗涵",         "647387.9806",   "3376403.8971",   "3", "0.014", "3000", "",    "2.4", "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["45", "3", "-",      "明渠-U形",        "647350.0",      "3376350.0",      "2.0", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100"],
-            ["46", "3", "-",      "明渠-U形",        "647280.0",      "3376280.0",      "2.0", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100"],
+            ["45", "3", "-",      "明渠-U形",        "647350.0",      "3376350.0",      "3", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100"],
+            ["46", "3", "-",      "明渠-U形",        "647280.0",      "3376280.0",      "3", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100"],
         ]
         self._clear_input(force=True)
         for row_data in samples:
@@ -1039,6 +1039,7 @@ class BatchPanel(QWidget):
 
         # 检查输入数据是否与上次计算时一致，若一致则无需重复计算
         current_snapshot = [[str(cell).strip() if cell is not None else "" for cell in row] for row in input_rows]
+        current_snapshot.append(["__inc_cb__", str(self.inc_cb.isChecked())])
         if self._last_calc_snapshot is not None and current_snapshot == self._last_calc_snapshot:
             if self.detail_cb.isChecked() and not self._last_calc_detail and self.batch_results:
                 # 从未勾选变为已勾选，且有缓存结果，补充生成详细输出
@@ -1604,7 +1605,7 @@ class BatchPanel(QWidget):
             o.append(f"  不淤流速 = {v_min} m/s,  不冲流速 = {v_max} m/s")
             o.append("")
             o.append("【二、断面几何参数】")
-            o.append(f"  m = tan(α) = {m_u:.4f},  h₀ = {h0_u:.3f} m,  b_arc = {b_arc_u:.3f} m")
+            o.append(f"  m = tan(α) = {m_u:.4f},  h_0 = {h0_u:.3f} m,  b_{{arc}} = {b_arc_u:.3f} m")
             o.append("")
             o.append("【三、设计水深工况】")
             o.append(f"  h = {h_d:.3f} m,  A = {A_d:.3f} m²,  χ = {chi_d:.3f} m")

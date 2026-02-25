@@ -270,7 +270,21 @@ class WaterProfileCalculator:
                     current_node, next_node, nodes
                 )
                 if check_result['need_open_channel']:
-                    upstream_channel = self._find_nearest_upstream_channel(nodes, i)
+                    upstream_channel, computed_options = self._find_reference_channel_same_section(nodes, i)
+                    # 同段无明渠：用经济断面公式计算回退
+                    if upstream_channel is None:
+                        ref = self._find_global_nearest_channel(nodes, i)
+                        if ref:
+                            flow_q = current_node.flow if current_node.flow and current_node.flow > 0 else 1.0
+                            computed_options = self._compute_economic_section(
+                                flow_q, ref['slope_i'], ref['roughness'], ref['side_slope']
+                            )
+                            upstream_channel = computed_options.get('明渠-矩形')
+                            if upstream_channel:
+                                upstream_channel = dict(upstream_channel)
+                                upstream_channel.update({'flow': flow_q, 'flow_section': current_node.flow_section,
+                                                         'structure_height': 0.0, 'name': '-'})
+                    upstream_channel_fallback = upstream_channel or self._find_nearest_upstream_channel(nodes, i)
                     prev_struct = (current_node.structure_type.value 
                                    if current_node.structure_type else "")
                     next_struct = (next_node.structure_type.value 
@@ -280,6 +294,8 @@ class WaterProfileCalculator:
                     gaps.append({
                         'index': i,
                         'upstream_channel': upstream_channel,
+                        'upstream_channel_fallback': upstream_channel_fallback,
+                        'computed_channel_options': computed_options,
                         'available_length': check_result['available_length'],
                         'prev_struct': prev_struct,
                         'next_struct': next_struct,
@@ -387,6 +403,20 @@ class WaterProfileCalculator:
             # 倒虹吸 ↔ 明渠: 总是需要渐变段，直接返回True
             return True
         
+        # 规则7(新增): 矩形暗涵与明渠之间需要渐变段
+        # 特例：矩形明渠↔矩形暗涵且底宽相同时不需要渐变段
+        is_node1_culvert = self._is_culvert_type(node1.structure_type)
+        is_node2_culvert = self._is_culvert_type(node2.structure_type)
+        
+        if (is_node1_culvert and is_node2_mingqu) or \
+           (is_node1_mingqu and is_node2_culvert):
+            # 矩形明渠↔矩形暗涵：检查底宽是否相同
+            mingqu_node = node1 if is_node1_mingqu else node2
+            if mingqu_node.structure_type and mingqu_node.structure_type.value == "明渠-矩形":
+                if self._has_same_section_size(node1, node2):
+                    return False
+            return True
+        
         # 规则4: 如果前后两个建筑物的特征尺寸相同，则不需要渐变段
         if self._has_same_section_size(node1, node2):
             return False
@@ -418,17 +448,24 @@ class WaterProfileCalculator:
         """判断是否为特殊建筑物（需要进出口标识）（使用 .value 字符串比较）
         
         与原版 StructureType.get_special_structures 保持一致：
-        隧洞、渡槽、倒虹吸需要进出口标识；矩形暗涵不需要。
+        隧洞、渡槽、倒虹吸、矩形暗涵需要进出口标识。
         """
         if structure_type is None:
             return False
         sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
-        special_keywords = ("隧洞", "渡槽", "倒虹吸")
+        special_keywords = ("隧洞", "渡槽", "倒虹吸", "暗涵")
         return any(kw in sv for kw in special_keywords)
     
     def _is_diversion_gate_sv(self, structure_type) -> bool:
         """判断是否为闸类结构（使用 .value 字符串比较）"""
         return self._is_diversion_gate_type(structure_type)
+    
+    def _is_culvert_type(self, structure_type) -> bool:
+        """判断是否为矩形暗涵（使用 .value 字符串比较）"""
+        if structure_type is None:
+            return False
+        sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
+        return sv == "矩形暗涵"
     
     @staticmethod
     def _is_tunnel_or_aqueduct_str(structure_type_str: str) -> bool:
@@ -579,8 +616,11 @@ class WaterProfileCalculator:
         is_node1_siphon = (sv1 == "倒虹吸")
         is_node2_siphon = (sv2 == "倒虹吸")
         
-        result['need_transition_1'] = is_node1_tunnel_aqueduct or is_node1_siphon
-        result['need_transition_2'] = is_node2_tunnel_aqueduct or is_node2_siphon
+        is_node1_culvert = self._is_culvert_type(node1.structure_type)
+        is_node2_culvert = self._is_culvert_type(node2.structure_type)
+        
+        result['need_transition_1'] = is_node1_tunnel_aqueduct or is_node1_siphon or is_node1_culvert
+        result['need_transition_2'] = is_node2_tunnel_aqueduct or is_node2_siphon or is_node2_culvert
         
         # 倒虹吸侧的渐变段为占位行，水头损失已包含在倒虹吸水力计算中
         result['skip_loss_transition_1'] = is_node1_siphon
@@ -647,8 +687,155 @@ class WaterProfileCalculator:
             L_min = 5 * h_design if transition_type == "进口" else 6 * h_design
             return max(L_basic, L_min)
         
-        return max(L_basic, 10.0)  # 至少10m
+        return L_basic
     
+    def _find_global_nearest_channel(self, nodes: List[ChannelNode],
+                                     gap_index: int) -> Optional[Dict]:
+        """跨流量段查找距离空隙最近的明渠节点（用于取 i/n/m 参考值）"""
+        best = None
+        best_dist = float('inf')
+        for idx, node in enumerate(nodes):
+            if not self._is_any_channel_type(node.structure_type):
+                continue
+            dist = abs(idx - gap_index)
+            if dist < best_dist:
+                best_dist = dist
+                best = node
+        if best is None:
+            return None
+        sp = best.section_params or {}
+        return {
+            'slope_i': best.slope_i if best.slope_i and best.slope_i > 0 else 1.0 / 3000,
+            'roughness': best.roughness if best.roughness > 0 else 0.014,
+            'side_slope': sp.get('m', 1.0),
+        }
+
+    @staticmethod
+    def _compute_economic_section(Q: float, slope_i: float, roughness: float,
+                                   m_trapez: float = 1.0) -> Dict:
+        """
+        用实用经济断面公式计算4种明渠类型的断面参数。
+
+        经济断面约束：
+          矩形：B = 2h
+          梯形：B = 2h(√(1+m²) - m)
+          圆形：满流设计（h=D×0.75作为设计水深）
+          U形： R = 等效圆直径/2（h=R+B/2 时接近经济断面）
+
+        Returns:
+            dict，键为结构类型名，值为参数字典
+        """
+        import math
+
+        n = roughness
+        i = slope_i
+        results = {}
+
+        def bisect(f_q, target, lo=0.001, hi=30.0, tol=1e-6, max_iter=200):
+            """二分法求 f_q(x)=target 中的 x"""
+            for _ in range(max_iter):
+                mid = (lo + hi) / 2
+                val = f_q(mid)
+                if abs(val - target) / max(target, 1e-10) < tol:
+                    return mid
+                if val < target:
+                    lo = mid
+                else:
+                    hi = mid
+            return (lo + hi) / 2
+
+        slope_inv = round(1.0 / i) if i > 0 else 3000
+
+        # ── 矩形 (m=0, B=2h) ──────────────────────────────────────────
+        def q_rect(h):
+            B = 2 * h
+            A = B * h
+            P = B + 2 * h
+            R = A / P
+            return (1 / n) * A * R ** (2 / 3) * math.sqrt(i)
+
+        h_r = bisect(q_rect, Q)
+        B_r = 2 * h_r
+        results['明渠-矩形'] = {
+            'structure_type': '明渠-矩形',
+            'bottom_width': round(B_r, 3),
+            'water_depth': round(h_r, 3),
+            'side_slope': 0.0,
+            'roughness': roughness,
+            'slope_inv': slope_inv,
+            'arc_radius': 0.0,
+            'theta_deg': 0.0,
+        }
+
+        # ── 梯形 (B = 2h(√(1+m²)-m)) ──────────────────────────────────
+        m = m_trapez
+        alpha = 2 * (math.sqrt(1 + m * m) - m)
+
+        def q_trap(h):
+            B = alpha * h
+            A = (B + m * h) * h
+            P = B + 2 * h * math.sqrt(1 + m * m)
+            R = A / P if P > 0 else 0
+            return (1 / n) * A * R ** (2 / 3) * math.sqrt(i)
+
+        h_t = bisect(q_trap, Q)
+        B_t = alpha * h_t
+        results['明渠-梯形'] = {
+            'structure_type': '明渠-梯形',
+            'bottom_width': round(B_t, 3),
+            'water_depth': round(h_t, 3),
+            'side_slope': m_trapez,
+            'roughness': roughness,
+            'slope_inv': slope_inv,
+            'arc_radius': 0.0,
+            'theta_deg': 0.0,
+        }
+
+        # ── 圆形（调用 明渠设计.quick_calculate_circular 自动搜索最优D）──
+        D_c = 0.0
+        h_c = 0.0
+        try:
+            from 明渠设计 import quick_calculate_circular as _circ_calc
+            circ_res = _circ_calc(Q=Q, n=n, slope_inv=slope_inv, v_min=0.1, v_max=100.0)
+            if circ_res.get('success'):
+                D_c = circ_res.get('D_design') or circ_res.get('D', 0.0)
+                h_c = circ_res.get('y_d') or circ_res.get('h_design', 0.0)
+        except Exception:
+            pass
+        if D_c <= 0:
+            # 回退到简单满流公式
+            def q_circ_full(D):
+                r = D / 2
+                A = math.pi * r * r
+                R_hyd = D / 4
+                return (1 / n) * A * R_hyd ** (2 / 3) * math.sqrt(i)
+            D_c = bisect(q_circ_full, Q, 0.01, 30.0)
+            h_c = D_c
+        results['明渠-圆形'] = {
+            'structure_type': '明渠-圆形',
+            'bottom_width': round(D_c, 3),   # 直径 D
+            'water_depth': round(h_c, 3),
+            'side_slope': 0.0,
+            'roughness': roughness,
+            'slope_inv': slope_inv,
+            'arc_radius': 0.0,
+            'theta_deg': 0.0,
+        }
+
+        # ── U形（只预填 n/slope，R 和 h 由用户手动输入）─────────────────
+        results['明渠-U形'] = {
+            'structure_type': '明渠-U形',
+            'bottom_width': 0.0,    # 用户填写
+            'water_depth': 0.0,     # 用户填写
+            'side_slope': 0.0,
+            'roughness': roughness,
+            'slope_inv': slope_inv,
+            'arc_radius': 0.0,      # 用户填写
+            'theta_deg': 0.0,
+        }
+
+        return results
+
     def _find_nearest_upstream_channel(self, nodes: List[ChannelNode], 
                                        current_index: int) -> Optional[Dict]:
         """
@@ -688,6 +875,88 @@ class WaterProfileCalculator:
                     'theta_deg': node.section_params.get('theta_deg', 0) if node.section_params else 0,
                 }
         return None
+
+    def _is_any_channel_type(self, structure_type) -> bool:
+        """判断是否为任意明渠类型（含旧版'矩形'兼容值）"""
+        if structure_type is None:
+            return False
+        sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
+        return sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", "矩形")
+
+    def _find_reference_channel_same_section(self, nodes: List[ChannelNode],
+                                              gap_index: int) -> Optional[Dict]:
+        """
+        在同一流量段内查找参考明渠，按优先级选取最佳类型，返回最近节点的参数。
+
+        优先级：矩形/明渠-矩形 > 明渠-梯形 > 明渠-圆形 > 明渠-U形
+
+        Args:
+            nodes: 节点列表
+            gap_index: 空隙所在位置（取 nodes[gap_index].flow_section 确定流量段）
+
+        Returns:
+            参数字典或None（同流量段内没有任何明渠时返回None）
+        """
+        flow_section = nodes[gap_index].flow_section if gap_index < len(nodes) else None
+
+        # 优先级分组（同组内任意一种都算同等优先）
+        PRIORITY_GROUPS = [
+            {"明渠-矩形", "矩形"},
+            {"明渠-梯形"},
+            {"明渠-圆形"},
+            {"明渠-U形"},
+        ]
+
+        # 收集同流量段内所有明渠节点，按优先级分组
+        groups: List[List] = [[] for _ in PRIORITY_GROUPS]
+        for idx, node in enumerate(nodes):
+            if node.flow_section != flow_section:
+                continue
+            if not self._is_any_channel_type(node.structure_type):
+                continue
+            sv = node.structure_type.value if node.structure_type else ""
+            for g_idx, group in enumerate(PRIORITY_GROUPS):
+                if sv in group:
+                    groups[g_idx].append((idx, node))
+                    break
+
+        # 取最高优先级且非空的分组
+        target_nodes = []
+        target_type_canonical = None
+        for g_idx, grp in enumerate(groups):
+            if grp:
+                target_nodes = grp
+                # canonical type（统一旧版'矩形'→'明渠-矩形'）
+                sv0 = grp[0][1].structure_type.value if grp[0][1].structure_type else ""
+                target_type_canonical = "明渠-矩形" if sv0 == "矩形" else sv0
+                break
+
+        if not target_nodes:
+            return None, None   # 同段无明渠，触发经济断面回退
+
+        # 取距离 gap_index 最近的节点
+        closest_idx, closest_node = min(target_nodes, key=lambda t: abs(t[0] - gap_index))
+
+        sp = closest_node.section_params or {}
+        bw = sp.get("B", 0)
+        if bw == 0:
+            bw = sp.get("D", 0)
+
+        channel = {
+            'name': closest_node.name,
+            'structure_type': target_type_canonical,
+            'bottom_width': bw,
+            'water_depth': closest_node.water_depth,
+            'side_slope': sp.get("m", 0),
+            'roughness': closest_node.roughness,
+            'slope_inv': 1.0 / closest_node.slope_i if closest_node.slope_i and closest_node.slope_i > 0 else 3000,
+            'flow': closest_node.flow,
+            'flow_section': closest_node.flow_section,
+            'structure_height': closest_node.structure_height,
+            'arc_radius': sp.get('R_circle', 0),
+            'theta_deg': sp.get('theta_deg', 0),
+        }
+        return channel, None   # 无需经济断面选项
     
     def _create_open_channel_node(self, params, prev_node: ChannelNode, 
                                   next_node: ChannelNode) -> ChannelNode:
@@ -956,8 +1225,18 @@ class WaterProfileCalculator:
                     # 需要插入明渠段（里程差 > 渐变段之和）
                     # 尝试插入3行：出口渐变段 → 明渠段 → 进口渐变段
                     
-                    # 先尝试获取明渠段参数
-                    upstream_channel = self._find_nearest_upstream_channel(nodes, i)
+                    # 先尝试获取明渠段参数（同流量段优先级匹配）
+                    upstream_channel, _computed = self._find_reference_channel_same_section(nodes, i)
+                    if upstream_channel is None:
+                        ref = self._find_global_nearest_channel(nodes, i)
+                        if ref:
+                            flow_q = current_node.flow if current_node.flow and current_node.flow > 0 else 1.0
+                            opts = self._compute_economic_section(flow_q, ref['slope_i'], ref['roughness'], ref['side_slope'])
+                            upstream_channel = opts.get('明渠-矩形')
+                            if upstream_channel:
+                                upstream_channel = dict(upstream_channel)
+                                upstream_channel.update({'flow': flow_q, 'flow_section': current_node.flow_section,
+                                                         'structure_height': 0.0, 'name': '-'})
                     flow_section = current_node.flow_section
                     flow = current_node.flow
                     open_channel_params = None

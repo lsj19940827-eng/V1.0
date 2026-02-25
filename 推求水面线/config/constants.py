@@ -286,6 +286,10 @@ TRANSITION_LENGTH_CONSTRAINTS = {
         "进口": {"depth_multiplier": 5, "description": "上游渠道设计水深的3~5倍（取大值5倍）"},
         "出口": {"depth_multiplier": 6, "description": "下游渠道设计水深的4~6倍（取大值6倍）"},
     },
+    "矩形暗涵": {
+        "进口": {"description": "仅基础公式 L=k×|B₁-B₂|"},
+        "出口": {"description": "仅基础公式 L=k×|B₁-B₂|"},
+    },
 }
 
 # ============================================================

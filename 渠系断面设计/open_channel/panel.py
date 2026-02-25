@@ -307,11 +307,11 @@ class OpenChannelPanel(QWidget):
             ]
         )
         h.section("U形断面几何公式")
-        h.formula("h₀ = R·(1 − cos(θ/2))", "弧区高度")
-        h.formula("当 h ≤ h₀: A = R²·arccos((R−h)/R) − (R−h)·√(2Rh−h²)", "纯弧区面积")
-        h.formula("当 h ≤ h₀: χ = 2R·arccos((R−h)/R)", "纯弧区湿周")
-        h.formula("当 h > h₀: A = A_arc + (b_arc + m·h_s)·h_s", "直线段区面积")
-        h.formula("当 h > h₀: χ = θ/180·π·R + 2·h_s·√(1+m²)", "直线段区湿周")
+        h.formula("h_0 = R·(1 − cos(θ/2))", "弧区高度")
+        h.formula("当 h ≤ h_0: A = R²·arccos((R−h)/R) − (R−h)·√(2Rh−h²)", "纯弧区面积")
+        h.formula("当 h ≤ h_0: χ = 2R·arccos((R−h)/R)", "纯弧区湿周")
+        h.formula("当 h > h_0: A = A_{arc} + (b_{arc} + m·h_s)·h_s", "直线段区面积")
+        h.formula("当 h > h_0: χ = θ/180·π·R + 2·h_s·√(1+m²)", "直线段区湿周")
         h.hint("矩形/梯形：宽深比 β 与底宽 B 不可同时填写（二选一）")
         h.section("曼宁公式")
         h.text("本程序基于曼宁公式进行计算：")
@@ -1372,7 +1372,7 @@ class OpenChannelPanel(QWidget):
         o.append(f"  Q = {Q:.3f} m³/s,  n = {n},  i = 1/{int(slope_inv)}")
         o.append("")
         o.append("【断面几何参数】")
-        o.append(f"  m = tan(α) = {m:.4f},  h₀ = {h0:.3f} m,  b_arc = {b_arc:.3f} m")
+        o.append(f"  m = tan(α) = {m:.4f},  h_0 = {h0:.3f} m,  b_{{arc}} = {b_arc:.3f} m")
         o.append("")
         o.append("【设计流量工况】")
         o.append(f"  设计水深 h = {h:.3f} m")
@@ -1442,12 +1442,12 @@ class OpenChannelPanel(QWidget):
         o.append("")
         o.append("【二、断面几何参数】")
         o.append(f"  m = tan(α) = tan({alpha_deg}°) = {m:.6f}")
-        o.append(f"  h₀ = R·(1-cos(θ/2)) = {R:.3f}×(1-cos({theta_deg/2:.1f}°)) = {h0:.3f} m")
-        o.append(f"  b_arc = 2·R·sin(θ/2) = 2×{R:.3f}×sin({theta_deg/2:.1f}°) = {b_arc:.3f} m")
+        o.append(f"  h_0 = R·(1-cos(θ/2)) = {R:.3f}×(1-cos({theta_deg/2:.1f}°)) = {h0:.3f} m")
+        o.append(f"  b_{{arc}} = 2·R·sin(θ/2) = 2×{R:.3f}×sin({theta_deg/2:.1f}°) = {b_arc:.3f} m")
         o.append("")
         o.append("【三、设计水深计算】")
         o.append(f"  根据Q={Q:.3f} m³/s，曼宁公式二分法反算水深: h = {h:.3f} m")
-        o.append(f"  水深区间: h {'≤' if h <= h0 else '>'} h₀={h0:.3f} m → {'纯弧区' if h <= h0 else '直线段区'}")
+        o.append(f"  水深区间: h {'≤' if h <= h0 else '>'} h_0={h0:.3f} m → {'纯弧区' if h <= h0 else '直线段区'}")
         o.append("")
         if h <= h0:
             cos_arg = max(-1.0, min(1.0, (R - h) / R))
@@ -1462,9 +1462,9 @@ class OpenChannelPanel(QWidget):
             h_s = h - h0
             A_arc = R * R * (theta_rad / 2.0 - math.sin(theta_rad / 2.0) * math.cos(theta_rad / 2.0))
             o.append("  【直线段区公式】")
-            o.append(f"  弧面积 A_arc = R²·(θ/2-sin(θ/2)·cos(θ/2)) = {A_arc:.4f} m²")
-            o.append(f"  h_s = h - h₀ = {h:.3f} - {h0:.3f} = {h_s:.3f} m")
-            o.append(f"  过水面积 A = A_arc + (b_arc + m·h_s)·h_s")
+            o.append(f"  弧面积 A_{{arc}} = R²·(θ/2-sin(θ/2)·cos(θ/2)) = {A_arc:.4f} m²")
+            o.append(f"  h_s = h - h_0 = {h:.3f} - {h0:.3f} = {h_s:.3f} m")
+            o.append("  过水面积 A = A_{arc} + (b_{arc} + m·h_s)·h_s")
             o.append(f"           = {A_arc:.4f} + ({b_arc:.3f}+{m:.4f}×{h_s:.3f})×{h_s:.3f}")
             o.append(f"           = {A:.3f} m²")
             chi_arc = theta_rad * R
@@ -1645,7 +1645,7 @@ class OpenChannelPanel(QWidget):
         arc_y = R + R * np.sin(arc_angles)  # 圆心在 (0, R)
 
         # 直线段上端
-        x_top_r = b_arc / 2.0 + m * H_ch
+        x_top_r = b_arc / 2.0 + m * (H_ch - h0)
         x_top_l = -x_top_r
         x_arc_r = b_arc / 2.0
         x_arc_l = -x_arc_r
