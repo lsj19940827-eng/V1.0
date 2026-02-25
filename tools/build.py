@@ -25,7 +25,7 @@ import zipfile
 # ============================================================
 APP_NAME = "渠系水力计算综合系统"
 APP_NAME_EN = "CanalHydraulicCalc"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 # ============================================================
 # 路径（build.py 位于 tools/ 下，项目根目录在上一级）
@@ -105,6 +105,8 @@ def build():
 
     # ---- 需要隐式导入的包（PyInstaller 静态分析可能扫描不到的） ----
     hidden_imports = [
+        # 授权校验
+        "license_checker",
         # 第三方库
         "PySide6",
         "PySide6.QtWebEngineWidgets",

@@ -41,6 +41,8 @@ def export_open_channel_dxf(filepath, result, input_params, scale_denom=100):
 
     if stype == '圆形':
         _draw_circular(msp, result, input_params, sf, scale_denom)
+    elif stype == 'U形':
+        _draw_u_section(msp, result, input_params, sf, scale_denom)
     else:
         _draw_trapezoid(msp, result, input_params, sf, scale_denom)
 
@@ -388,3 +390,147 @@ def _draw_circular(msp, result, p, sf=1.0, scale_denom=100):
 
     lines.insert(1, f'比例: 1:{scale_denom}')
     _add_text_block(msp, text_x, D*sf + txt_h, lines, txt_h, '参数文字')
+
+
+# ============================================================
+# U形明渠
+# ============================================================
+
+def _draw_u_section(msp, result, p, sf=1.0, scale_denom=100):
+    import math as _m
+    Q         = p.get('Q', 0.0)
+    n         = p.get('n', 0.014)
+    slope_inv = p.get('slope_inv', 3000.0)
+
+    R         = result.get('R', 0.0)
+    alpha_deg = result.get('alpha_deg', 0.0)
+    theta_deg = result.get('theta_deg', 180.0)
+    m_slope   = result.get('m', 0.0)
+    h0        = result.get('h0', 0.0)
+    b_arc     = result.get('b_arc', 0.0)
+
+    h_d   = result.get('h_design', 0.0)
+    H     = result.get('h_prime', 0.0)
+    h_inc = result.get('h_increased', 0.0)
+    V_d   = result.get('V_design', 0.0)
+    Q_inc = result.get('Q_increased', 0.0)
+    V_inc = result.get('V_increased', 0.0)
+    inc_pct = result.get('increase_percent', 0.0)
+    Fb    = result.get('Fb', 0.0)
+
+    if H <= 0:
+        H = (h_inc + 0.3) if h_inc > 0 else h_d * 1.4
+
+    theta_rad  = _m.radians(theta_deg)
+    half_theta = theta_rad / 2.0
+    x_arc_r    = b_arc / 2.0
+    x_top_r    = x_arc_r + m_slope * H
+
+    char  = max(2 * x_top_r, H, 1.0) * sf
+    txt_h = 3.5
+    arr   = txt_h * 0.85
+    gap   = char * 0.18
+
+    # 弧底点集（模型空间，SF缩放）
+    steps = 48
+    arc_pts = []
+    for k in range(steps + 1):
+        ang = _m.pi * 1.5 - half_theta + k * theta_rad / steps
+        arc_pts.append((_m.cos(ang) * R * sf, (R + _m.sin(ang) * R) * sf))
+
+    # 绘制弧底
+    for k in range(len(arc_pts) - 1):
+        msp.add_line(arc_pts[k], arc_pts[k + 1], dxfattribs={'layer': '轮廓线'})
+
+    # 绘制两侧斜壁
+    msp.add_line((x_arc_r * sf, h0 * sf), (x_top_r * sf, H * sf), dxfattribs={'layer': '轮廓线'})
+    msp.add_line((-x_arc_r * sf, h0 * sf), (-x_top_r * sf, H * sf), dxfattribs={'layer': '轮廓线'})
+
+    # 顶口虚线
+    msp.add_line((-x_top_r * sf, H * sf), (x_top_r * sf, H * sf),
+                 dxfattribs={'layer': '轮廓线', 'linetype': 'DASHED'})
+
+    # 设计水面线
+    def _water_half_width(h):
+        if h <= h0:
+            return _m.sqrt(max(0.0, R * R - (R - h) ** 2))
+        else:
+            return b_arc / 2.0 + m_slope * (h - h0)
+
+    hw_d = _water_half_width(h_d)
+    msp.add_line((-hw_d * sf, h_d * sf), (hw_d * sf, h_d * sf),
+                 dxfattribs={'layer': '设计水位'})
+    _olap = h_inc > 0 and (h_inc - h_d) * sf < txt_h * 2.0
+    _yd = h_d * sf - txt_h * 1.5 if _olap else h_d * sf + txt_h * 0.5
+    msp.add_text(f'▽ 设计水位  h={h_d:.3f}m', dxfattribs={
+        'layer': '设计水位', 'height': txt_h, 'style': 'FANGSONG',
+        'insert': (0, _yd), 'align_point': (0, _yd), 'halign': 1,
+    })
+
+    if h_inc > 0:
+        hw_i = _water_half_width(h_inc)
+        msp.add_line((-hw_i * sf, h_inc * sf), (hw_i * sf, h_inc * sf),
+                     dxfattribs={'layer': '加大水位', 'linetype': 'DASHED'})
+        _yi = h_inc * sf + txt_h * 0.5
+        msp.add_text(f'▽ 加大水位  h={h_inc:.3f}m', dxfattribs={
+            'layer': '加大水位', 'height': txt_h, 'style': 'FANGSONG',
+            'insert': (0, _yi), 'align_point': (0, _yi), 'halign': 1,
+        })
+
+    # 尺寸标注
+    _add_dim_h(msp, x1=-x_arc_r * sf, x2=x_arc_r * sf,
+               y_line=-(gap * 1.1), y_orig=0,
+               label=f'b={b_arc:.3f} m', txt_h=txt_h, arr=arr, layer='尺寸标注')
+
+    x_left = -(x_top_r * sf + gap * 1.4)
+    _add_dim_v(msp, y1=0, y2=h_d * sf, x_line=x_left, x_orig=-x_arc_r * sf,
+               label=f'h={h_d:.3f} m', txt_h=txt_h, arr=arr, layer='尺寸标注')
+
+    x_right = x_top_r * sf + gap * 1.4
+    _add_dim_v(msp, y1=0, y2=H * sf, x_line=x_right, x_orig=x_top_r * sf,
+               label=f'H={H:.3f} m', txt_h=txt_h, arr=arr, layer='尺寸标注')
+
+    # R 标注
+    msp.add_line((0, R * sf), (R * sf * 0.707, R * sf + R * sf * 0.707),
+                 dxfattribs={'layer': '尺寸标注'})
+    msp.add_text(f'R={R:.3f} m', dxfattribs={
+        'layer': '尺寸标注', 'height': txt_h, 'style': 'FANGSONG',
+        'insert': (R * sf * 0.72, R * sf + R * sf * 0.72),
+    })
+
+    # 参数文字块
+    text_x = x_top_r * sf + gap * 3.5
+    inc_pct_str = f'{inc_pct:.1f}%' if isinstance(inc_pct, (int, float)) else str(inc_pct)
+    lines = [
+        '【明渠水力计算】',
+        f'断面类型: U形',
+        '',
+        '[输入参数]',
+        f'Q = {Q:.3f} m\u00b3/s',
+        f'n = {n}',
+        f'i = 1/{int(slope_inv)}',
+        '',
+        '[断面几何]',
+        f'R = {R:.3f} m',
+        f'\u03b1 = {alpha_deg}\u00b0,  \u03b8 = {theta_deg}\u00b0',
+        f'm = {m_slope:.4f}',
+        f'h\u2080 = {h0:.3f} m',
+        f'b_arc = {b_arc:.3f} m',
+        '',
+        '[设计工况]',
+        f'h = {h_d:.3f} m',
+        f'V = {V_d:.3f} m/s',
+        f'H = {H:.3f} m',
+    ]
+    if h_inc > 0:
+        lines += [
+            '',
+            '[加大工况]',
+            f'加大比例 = {inc_pct_str}',
+            f'Q\u589e = {Q_inc:.3f} m\u00b3/s',
+            f'h\u589e = {h_inc:.3f} m',
+            f'V\u589e = {V_inc:.3f} m/s',
+            f'Fb = {Fb:.3f} m',
+        ]
+    lines.insert(1, f'比例: 1:{scale_denom}')
+    _add_text_block(msp, text_x, H * sf + txt_h, lines, txt_h, '参数文字')

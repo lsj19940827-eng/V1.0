@@ -1,15 +1,15 @@
 # 明渠水力计算模块 — 产品需求文档 (PRD)
 
-> **版本**: v1.0  
+> **版本**: v1.1  
 > **创建日期**: 2026-02-22  
-> **最后更新**: 2026-02-22  
-> **状态**: 已实现（完成度 100%）
+> **最后更新**: 2026-02-25  
+> **状态**: 已实现（完成度 100%，含 U形）
 
 ---
 
 ## 一、模块概述
 
-明渠水力计算模块是「渠系建筑物水力计算系统」的核心子模块之一，提供 **梯形、矩形、圆形** 三种明渠断面类型的水力设计计算功能。
+明渠水力计算模块是「渠系建筑物水力计算系统」的核心子模块之一，提供 **梯形、矩形、圆形、U形** 四种明渠断面类型的水力设计计算功能。
 
 所有断面类型在架构上处于并列地位，具有统一的调用逻辑和统一的设计接口 `design_channel()`。
 
@@ -66,6 +66,7 @@ class SectionType(Enum):
     TRAPEZOIDAL = "trapezoidal"   # 梯形明渠
     RECTANGULAR = "rectangular"   # 矩形明渠
     CIRCULAR    = "circular"      # 圆形明渠
+    U_SECTION   = "u_section"     # U形明渠（圆弧底+斜直线壁）
 ```
 
 ### 3.2 输入数据类 `InputData`
@@ -302,7 +303,42 @@ class SectionType(Enum):
 | `calculate_circular_hydraulic_params(D, y)` | 根据D和y计算水力参数 |
 | `calculate_circular_flow_capacity(D, n, slope_inv, y)` | 根据D/n/i/y计算流量 |
 
-### 4.4 统一接口
+### 4.4 U形明渠计算
+
+#### 4.4.1 几何模型
+
+圆弧底 + 斜直线壁，三参数：R（圆弧半径）、α（直线段外倾角°）、θ（圆弧段圆心角°）
+
+**临界水深** h₀ = R·(1 − cos(θ/2))
+
+#### 4.4.2 分段面积/湿周公式
+
+| 情形 | 条件 | 面积 A | 湿周 χ |
+|------|------|--------|--------|
+| 纯弧区 | h ≤ h₀ | `arccos((R-h)/R)·R² − (R-h)·√(2Rh−h²)` | `2R·arccos((R-h)/R)` |
+| 直线段 | h > h₀ | `A_arc + (b + m·h_s)·h_s` | `θ·R + 2·h_s·√(1+m²)` |
+
+其中 m=tan(α)，b=2R·sin(θ/2)，h_s=h−h₀，A_arc=R²·(θ/2−sin(θ/2)·cos(θ/2))
+
+#### 4.4.3 水面宽精确公式（转弯半径/弯道损失用）
+
+| 情形 | 水面宽 B |
+|------|----------|
+| h ≤ h₀ | `2·√[R²−(R−h)²]` |
+| h > h₀ | `2R·sin(θ/2) + 2·m·(h−h₀)` |
+
+#### 4.4.4 主计算函数 `quick_calculate_u_section`
+
+**参数**：`Q, R, alpha_deg, theta_deg, n, slope_inv, v_min, v_max, manual_increase_percent=None`
+
+**返回字典 key**：
+- 几何参数：`R, alpha_deg, theta_deg, m, h0, b_arc`
+- 设计工况：`h_design, A_design, X_design, R_design, V_design, Q_calc`
+- 加大工况：`increase_percent, Q_increased, h_increased, V_increased, A_increased, X_increased, R_increased`
+- 渠道尺寸：`Fb, h_prime`
+- 状态：`success, error_message`
+
+### 4.5 统一接口
 
 ```python
 def design_channel(section_type: SectionType, **kwargs) -> Dict[str, Any]:
@@ -310,7 +346,7 @@ def design_channel(section_type: SectionType, **kwargs) -> Dict[str, Any]:
 
 根据 `section_type` 分发到对应的 `quick_calculate_*` 函数。支持通用参数名映射（如 `Q`/`Q_design`, `n`/`n_roughness`）。
 
-### 4.5 向后兼容
+### 4.6 向后兼容
 
 ```python
 def quick_calculate(Q, m, n, slope_inv, v_min, v_max, ...) -> Dict[str, Any]:
@@ -328,10 +364,13 @@ def quick_calculate(Q, m, n, slope_inv, v_min, v_max, ...) -> Dict[str, Any]:
 QHBoxLayout
 ├── 左侧：QScrollArea（输入面板，宽280~420px）
 │   └── QGroupBox "输入参数"
-│       ├── 断面类型下拉框 (ComboBox: 梯形/矩形/圆形)
+│       ├── 断面类型下拉框 (ComboBox: 梯形/矩形/圆形/U形)
 │       ├── 基础参数区
 │       │   ├── 设计流量 Q (m³/s)
 │       │   ├── 边坡系数 m（梯形可见）
+│       │   ├── 圆弧半径 R（U形可见，默认0.8m）
+│       │   ├── 外倾角 α°（U形可见，默认14°）
+│       │   ├── 圆心角 θ°（U形可见，默认152°）
 │       │   ├── 糙率 n
 │       │   └── 水力坡降 1/
 │       ├── 流速参数区
@@ -623,6 +662,11 @@ quick_calculate_rectangular(Q, n, slope_inv, v_min, v_max, ...) → Dict
 quick_calculate_circular(Q, n, slope_inv, v_min, v_max,
                          increase_percent=None, manual_D=None) → Dict
 
+# U形明渠
+quick_calculate_u_section(Q, R, alpha_deg, theta_deg, n, slope_inv,
+                          v_min, v_max,
+                          manual_increase_percent=None) → Dict
+
 # 统一接口
 design_channel(section_type: SectionType, **kwargs) → Dict
 
@@ -661,8 +705,23 @@ quick_calculate_rectangular(Q=2.0, n=0.014, slope_inv=2000, v_min=0.4, v_max=2.5
 # 圆形明渠
 quick_calculate_circular(Q=5.0, n=0.014, slope_inv=1000, v_min=0.6, v_max=3.0)
 
+# U形明渠
+quick_calculate_u_section(Q=2.0, R=0.8, alpha_deg=14, theta_deg=152,
+                          n=0.014, slope_inv=3000, v_min=0.1, v_max=100)
+
 # 统一接口测试
 design_channel(SectionType.TRAPEZOIDAL, Q=10.0, n=0.016, slope_inv=5000, v_min=0.6, v_max=2.5, m=1.5)
 design_channel(SectionType.RECTANGULAR, Q=10.0, n=0.016, slope_inv=5000, v_min=0.6, v_max=2.5)
 design_channel(SectionType.CIRCULAR,    Q=10.0, n=0.016, slope_inv=5000, v_min=0.6, v_max=2.5)
+design_channel(SectionType.U_SECTION,   Q=2.0,  n=0.014, slope_inv=3000, v_min=0.1, v_max=100,
+               arc_radius=0.8, alpha_deg=14, theta_deg=152)
 ```
+
+---
+
+## 附录B：变更日志
+
+| 版本 | 日期 | 变更内容 |
+|------|------|----------|
+| v1.0 | 2026-02-22 | 创建。担梯形/矩形/圆形三种断面类型，完整计算引擎 + UI + DXF导出 + 批量计算集成 |
+| v1.1 | 2026-02-25 | 新增U形明渠断面类型。改动点：(1)明渠设计.py新增SectionType.U_SECTION、_u_arc_geometry、calculate_u_depth_for_flow、quick_calculate_u_section；(2)open_channel/panel.py UI/计算/结果显示/DXF/Word全链路；(3)open_channel/dxf_export.py _draw_u_section；(4)batch/panel.py批量计算+示例数据增至46行；(5)structure_type_selector.py明渠分类新增U形；(6)推求水面线全链路支持（enums/data_models/calculator/hydraulic_calc/shared_data_manager/water_profile面板）；(7)新增test21/22/23 U形测试 |

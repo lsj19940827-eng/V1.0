@@ -54,6 +54,11 @@ from 渠系断面设计.export_utils import (
     create_styled_doc, doc_add_h1, doc_add_h2, doc_add_body,
     doc_render_calc_text, doc_add_param_table, doc_add_result_table,
     doc_add_styled_table, doc_add_table_caption,
+    create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
+    doc_render_calc_text_eng, update_doc_toc_via_com,
+)
+from 渠系断面设计.report_meta import (
+    ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
 from 渠系断面设计.structure_type_selector import StructureTypeSelector
 from 渠系断面设计.batch.panel import format_station_display, parse_station_input
@@ -85,9 +90,9 @@ try:
     )
 except ImportError:
     STRUCTURE_TYPE_OPTIONS = [
-        "明渠-梯形", "明渠-矩形", "明渠-圆形",
+        "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
         "渡槽-U形", "渡槽-矩形",
-        "隧洞-圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
+        "隧洞-圆形", "隧洞-圆弧直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
         "矩形暗涵", "倒虹吸", "分水闸", "分水口", "节制闸", "泄水闸",
     ]
     CHANNEL_LEVEL_OPTIONS = ["总干渠", "总干管", "分干渠", "分干管", "干渠", "干管", "支渠", "支管", "分支渠", "分支管"]
@@ -555,6 +560,7 @@ class WaterProfilePanel(QWidget):
         # 在 _import_from_batch / _update_table_from_nodes_full 时存入，在 _build_nodes_from_table 时恢复
         self._node_structure_heights: dict = {}
         self._node_chamfer_params: dict = {}   # {row_idx: {'chamfer_angle': float, 'chamfer_length': float}}
+        self._node_u_params: dict = {}         # {row_idx: {'theta_deg': float}}，明渠-U形的圆心角缓存
         # 建筑物名称上平面图设置（记住上次使用的参数）
         self._plan_text_settings = {
             'offset': 10,
@@ -1573,6 +1579,11 @@ class WaterProfilePanel(QWidget):
             for k, v in self._node_chamfer_params.items():
                 updated_cp[k - 1 if k > r else k] = v
             self._node_chamfer_params = updated_cp
+            self._node_u_params.pop(r, None)
+            updated_up = {}
+            for k, v in self._node_u_params.items():
+                updated_up[k - 1 if k > r else k] = v
+            self._node_u_params = updated_up
         # 删除后确保新的第一行水头损失列被锁定
         self._ensure_first_row_loss_locked()
 
@@ -1607,6 +1618,7 @@ class WaterProfilePanel(QWidget):
         self.node_table.setRowCount(0)
         self._node_structure_heights.clear()
         self._node_chamfer_params.clear()
+        self._node_u_params.clear()
         self.calculated_nodes = []
         self.nodes = []
 
@@ -1769,6 +1781,13 @@ class WaterProfilePanel(QWidget):
                 _cl = _raw.get('chamfer_length', 0) or 0
                 if _ca > 0 and _cl > 0:
                     self._node_chamfer_params[cur_row] = {'chamfer_angle': float(_ca), 'chamfer_length': float(_cl)}
+
+            # 缓存明渠-U形的圆心角
+            if "明渠-U形" in section_type:
+                _raw_u = getattr(sr, 'raw_result', {}) or {}
+                _theta = _raw_u.get('theta_deg', 0) or 0
+                if _theta > 0:
+                    self._node_u_params[cur_row] = {'theta_deg': float(_theta)}
 
             imported += 1
 
@@ -2542,6 +2561,10 @@ class WaterProfilePanel(QWidget):
                 node.section_params['chamfer_angle'] = cp.get('chamfer_angle', 0)
                 node.section_params['chamfer_length'] = cp.get('chamfer_length', 0)
 
+            # 恢复明渠-U形圆心角
+            if r in self._node_u_params:
+                node.section_params['theta_deg'] = self._node_u_params[r].get('theta_deg', 0)
+
             nodes.append(node)
         return nodes
 
@@ -2681,6 +2704,13 @@ class WaterProfilePanel(QWidget):
             _cl = sp.get('chamfer_length', 0) or 0
             if _ca > 0 and _cl > 0:
                 self._node_chamfer_params[i] = {'chamfer_angle': float(_ca), 'chamfer_length': float(_cl)}
+        # 重建明渠-U形圆心角缓存
+        self._node_u_params.clear()
+        for i, node in enumerate(nodes):
+            sp = getattr(node, 'section_params', {}) or {}
+            _th = sp.get('theta_deg', 0) or 0
+            if _th > 0 and node.structure_type and 'U形' in node.structure_type.value and '明渠' in node.structure_type.value:
+                self._node_u_params[i] = {'theta_deg': float(_th)}
         self.node_table.setRowCount(0)
         for node in nodes:
             r = self.node_table.rowCount()
@@ -3111,7 +3141,20 @@ class WaterProfilePanel(QWidget):
                 elif b > 0:
                     min_r = b * 5
             elif "明渠" in sv or sv == "矩形":
-                if b > 0:
+                if "U形" in sv and rc > 0:
+                    theta_u_r = node.section_params.get('theta_deg', 0) or 0
+                    if theta_u_r > 0 and wd > 0:
+                        import math as _math_u
+                        h0_u_r = rc * (1.0 - _math_u.cos(_math_u.radians(theta_u_r / 2.0)))
+                        if wd <= h0_u_r:
+                            wsw_u = 2 * _math_u.sqrt(max(0.0, rc ** 2 - (rc - wd) ** 2))
+                        else:
+                            b_arc_u_r = 2 * rc * _math_u.sin(_math_u.radians(theta_u_r / 2.0))
+                            wsw_u = b_arc_u_r + 2 * m_s * (wd - h0_u_r)
+                        min_r = wsw_u * 5
+                    else:
+                        min_r = rc * 2 * 5
+                elif b > 0:
                     wsw = b + 2 * m_s * wd if m_s > 0 and wd > 0 else b
                     min_r = wsw * 5
             elif "渡槽" in sv:
@@ -3201,7 +3244,26 @@ class WaterProfilePanel(QWidget):
                     dim_str = f"洞宽B={b:.2f}m"
                     basis = f"R ≥ B×5 = {b:.2f}×5 = {min_r:.1f}m"
             elif "明渠" in sv or sv == "矩形":
-                if b > 0:
+                if "U形" in sv and rc > 0:
+                    theta_u_a = node.section_params.get('theta_deg', 0) or 0
+                    if theta_u_a > 0 and wd > 0:
+                        import math as _math_ua
+                        h0_u_a = rc * (1.0 - _math_ua.cos(_math_ua.radians(theta_u_a / 2.0)))
+                        if wd <= h0_u_a:
+                            wsw_ua = 2 * _math_ua.sqrt(max(0.0, rc ** 2 - (rc - wd) ** 2))
+                            basis_detail = f"水位在弧区 h={wd:.3f}m ≤ h₀={h0_u_a:.3f}m，B=2√(R²-(R-h)²)"
+                        else:
+                            b_arc_u_a = 2 * rc * _math_ua.sin(_math_ua.radians(theta_u_a / 2.0))
+                            wsw_ua = b_arc_u_a + 2 * m_s * (wd - h0_u_a)
+                            basis_detail = f"水位在直线段 h={wd:.3f}m > h₀={h0_u_a:.3f}m，B=b_arc+2m(h-h₀)"
+                        min_r = wsw_ua * 5
+                        dim_str = f"R={rc:.2f}m, θ={theta_u_a}°, m={m_s:.3f}, h={wd:.2f}m, 水面宽={wsw_ua:.3f}m"
+                        basis = f"R ≥ 水面宽×5 = {wsw_ua:.3f}×5 = {min_r:.1f}m（{basis_detail}）"
+                    else:
+                        min_r = rc * 2 * 5
+                        dim_str = f"R={rc:.2f}m（θ缺失，用D=2R近似）"
+                        basis = f"R ≥ D×5 = {rc*2:.2f}×5 = {min_r:.1f}m"
+                elif b > 0:
                     wsw = b + 2 * m_s * wd if m_s > 0 and wd > 0 else b
                     min_r = wsw * 5
                     if m_s > 0 and wd > 0:
@@ -3466,6 +3528,8 @@ class WaterProfilePanel(QWidget):
                         flow=upstream_channel.get("flow", flow),
                         flow_section=upstream_channel.get("flow_section", flow_section),
                         structure_height=upstream_channel.get("structure_height", 0.0),
+                        arc_radius=upstream_channel.get("arc_radius", 0.0),
+                        theta_deg=upstream_channel.get("theta_deg", 0.0),
                     )
                     _track(p, '推荐')
                     return p
@@ -3769,11 +3833,20 @@ class WaterProfilePanel(QWidget):
                 parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
             return
         if not self.calculated_nodes:
-            InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+            InfoBar.warning("提示", "请先进行计算。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
         ch_name = self.channel_name_edit.text().strip()
+        meta = load_meta()
+        auto_purpose = build_calc_purpose('water_profile', project=meta.project_name, name=ch_name, section_type='')
+        dlg = ExportConfirmDialog('water_profile', '推求水面线计算书', auto_purpose, parent=self._info_parent())
+        from PySide6.QtWidgets import QDialog
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self._word_export_meta = dlg.get_meta()
+        self._word_export_purpose = dlg.get_calc_purpose()
+        self._word_export_refs = dlg.get_references()
         ch_level = self.channel_level_combo.currentText()
-        auto_name = f"{ch_name}{ch_level}_水面线计算书.docx" if ch_name else "水面线计算书.docx"
+        auto_name = f"{ch_name}_水面线计算书.docx" if ch_name else "水面线计算书.docx"
         filepath, _ = QFileDialog.getSaveFileName(self, "保存Word报告", auto_name, "Word文档 (*.docx);;所有文件 (*.*)")
         if not filepath: return
         try:
@@ -3786,44 +3859,34 @@ class WaterProfilePanel(QWidget):
             InfoBar.error("导出失败", f"Word导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
     def _build_word_report(self, filepath):
-        """构建水面线计算Word报告（方案3高端咨询报告风格，与其它模块对齐）"""
+        """构建水面线计算Word报告（工程产品运行卡格式）"""
         settings = self._settings
         nodes = self.calculated_nodes
         ch_name = settings.channel_name if settings else ""
         ch_level = settings.channel_level if settings else ""
         prefix = settings.get_station_prefix() if settings else ""
+        meta = getattr(self, '_word_export_meta', load_meta())
+        purpose = getattr(self, '_word_export_purpose', '')
+        refs = getattr(self, '_word_export_refs', REFERENCES_BASE.get('water_profile', []))
 
-        # 起止桩号
-        start_st = ""
-        end_st = ""
-        if nodes:
-            first_st = getattr(nodes[0], 'station_ip', 0) or getattr(nodes[0], 'station_MC', 0) or 0
-            last_st = getattr(nodes[-1], 'station_ip', 0) or getattr(nodes[-1], 'station_MC', 0) or 0
-            if first_st:
-                start_st = ProjectSettings.format_station(first_st, prefix)
-            if last_st:
-                end_st = ProjectSettings.format_station(last_st, prefix)
-
-        doc = create_styled_doc(
-            title='推求水面线计算书',
-            subtitle=f'{ch_name}{ch_level}' if ch_name else '',
-            header_text=f'{ch_name} 推求水面线计算书',
-            channel_name=ch_name,
-            channel_level=ch_level,
-            start_station=start_st,
-            end_station=end_st,
+        doc = create_engineering_report_doc(
+            meta=meta,
+            calc_title='推求水面线计算书',
+            calc_content_desc=f'{ch_name}水面线推求计算' if ch_name else '水面线推求计算',
+            calc_purpose=purpose,
+            references=refs,
+            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n推求水面线',
         )
         doc.add_page_break()
 
-        # 一、基本参数
-        doc_add_h1(doc, '一、基本参数')
+        # 5. 基本计算参数
+        doc_add_eng_h(doc, '5、基本计算参数')
         params = []
         params.append(("渠道名称", ch_name or "-"))
         params.append(("渠道级别", ch_level or "-"))
         if settings:
             params.append(("起始水位", f"{settings.start_water_level} m"))
             params.append(("起始桩号", ProjectSettings.format_station(settings.start_station, prefix) if settings.start_station else "-"))
-            # 多流量段
             if getattr(settings, 'design_flows', None):
                 params.append(("设计流量", ", ".join(f"{q:.3f}" for q in settings.design_flows) + " m³/s"))
             else:
@@ -3836,26 +3899,21 @@ class WaterProfilePanel(QWidget):
             if getattr(settings, 'siphon_roughness', None) is not None:
                 params.append(("倒虹吸糙率", str(settings.siphon_roughness)))
             params.append(("转弯半径", f"{settings.turn_radius} m"))
-            if getattr(settings, 'siphon_turn_radius_n', None):
-                params.append(("倒虹吸R=n×D", f"n={settings.siphon_turn_radius_n}"))
-            # 渐变段设置
             params.append(("渡槽/隧洞渐变段(进口)", f"{settings.transition_inlet_form}(ζ={settings.transition_inlet_zeta:.2f})"))
             params.append(("渡槽/隧洞渐变段(出口)", f"{settings.transition_outlet_form}(ζ={settings.transition_outlet_zeta:.2f})"))
-            if getattr(settings, 'open_channel_transition_form', None):
-                params.append(("明渠渐变段", f"{settings.open_channel_transition_form}(ζ={settings.open_channel_transition_zeta:.2f})"))
             params.append(("倒虹吸渐变段(进口)", f"{settings.siphon_transition_inlet_form}(ζ={settings.siphon_transition_inlet_zeta:.2f})"))
             params.append(("倒虹吸渐变段(出口)", f"{settings.siphon_transition_outlet_form}(ζ={settings.siphon_transition_outlet_zeta:.2f})"))
         params.append(("总节点数", str(len(nodes))))
         doc_add_param_table(doc, params)
 
-        # 二、详细计算过程
-        doc_add_h1(doc, '二、详细计算过程')
+        # 6. 详细计算过程
+        doc_add_eng_h(doc, '6、详细计算过程')
         calc_text = self.detail_text.toPlainText()
-        doc_render_calc_text(doc, calc_text, skip_title_keyword='详细计算结果')
+        doc_render_calc_text_eng(doc, calc_text, skip_title_keyword='详细计算结果')
 
-        # 三、计算结果汇总
+        # 7. 建筑物长度汇总
         if hasattr(self, '_last_building_lengths') and self._last_building_lengths:
-            doc_add_h1(doc, '三、建筑物长度汇总')
+            doc_add_eng_h(doc, '7、建筑物长度汇总')
             headers = ['序号', '名称', '结构形式', '长度(m)', '起始桩号', '终止桩号']
             data = []
             for i, bl in enumerate(self._last_building_lengths, 1):

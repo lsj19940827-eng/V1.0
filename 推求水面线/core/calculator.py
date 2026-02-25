@@ -343,7 +343,7 @@ class WaterProfileCalculator:
             "隧洞-圆形", "隧洞-圆拱直墙型",
             "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
             "渡槽-U形", "渡槽-矩形",
-            "明渠-梯形", "明渠-矩形", "明渠-圆形",
+            "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
             "矩形暗涵", "倒虹吸",
         }
         
@@ -398,7 +398,7 @@ class WaterProfileCalculator:
         if structure_type is None:
             return False
         sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
-        return sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形")
+        return sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形")
     
     def _is_tunnel_or_aqueduct(self, structure_type) -> bool:
         """判断是否为隧洞或渡槽类型（使用 .value 字符串比较）"""
@@ -684,6 +684,8 @@ class WaterProfileCalculator:
                     'flow': node.flow,
                     'flow_section': node.flow_section,
                     'structure_height': node.structure_height,
+                    'arc_radius': node.section_params.get('R_circle', 0) if node.section_params else 0,
+                    'theta_deg': node.section_params.get('theta_deg', 0) if node.section_params else 0,
                 }
         return None
     
@@ -706,13 +708,22 @@ class WaterProfileCalculator:
         open_channel.structure_type = StructureType.from_string(params.structure_type)
         open_channel.flow_section = params.flow_section if params.flow_section else prev_node.flow_section
         
-        # 设置断面参数（区分圆形和非圆形）
-        is_circular = "圆形" in params.structure_type
+        # 设置断面参数（区分圆形、U形和非圆形）
+        is_circular = "圆形" in params.structure_type and "U形" not in params.structure_type
+        is_u_section = "U形" in params.structure_type and "明渠" in params.structure_type
         if is_circular:
             # 圆形明渠：bottom_width 实际存储的是直径 D
             open_channel.section_params = {
                 "D": params.bottom_width,
                 "m": 0
+            }
+        elif is_u_section:
+            # U形明渠：R_circle存圆弧半径，theta_deg存圆心角
+            open_channel.section_params = {
+                "R_circle": params.arc_radius,
+                "m": params.side_slope,
+                "theta_deg": params.theta_deg,
+                "B": 0, "D": 0,
             }
         else:
             open_channel.section_params = {
@@ -734,6 +745,9 @@ class WaterProfileCalculator:
                 D = params.bottom_width
                 if D > 0:
                     self.hyd_calc._fill_circular_section_params(open_channel, D, h)
+            elif is_u_section:
+                # U形断面：复用 hydraulic_calc 的面积/湿周计算
+                self.hyd_calc.fill_section_params(open_channel)
             else:
                 # 梯形/矩形断面
                 b = params.bottom_width
@@ -972,6 +986,8 @@ class WaterProfileCalculator:
                             flow=upstream_channel.get('flow', flow),
                             flow_section=upstream_channel.get('flow_section', flow_section),
                             structure_height=upstream_channel.get('structure_height', 0.0),
+                            arc_radius=upstream_channel.get('arc_radius', 0),
+                            theta_deg=upstream_channel.get('theta_deg', 0),
                         )
                     
                     if open_channel_params:

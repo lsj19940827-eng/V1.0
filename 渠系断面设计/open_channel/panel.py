@@ -48,6 +48,8 @@ plt.rcParams['axes.unicode_minus'] = False
 from 明渠设计 import (
     quick_calculate as mingqu_calculate,
     quick_calculate_circular as circular_calculate,
+    quick_calculate_u_section as mingqu_u_calculate,
+    _u_arc_geometry,
     calculate_area, calculate_wetted_perimeter, calculate_hydraulic_radius,
     get_flow_increase_percent, MAX_BETA,
     PI, MIN_FREEBOARD, MIN_FREE_AREA_PERCENT, MIN_FLOW_FACTOR
@@ -60,6 +62,11 @@ from 渠系断面设计.export_utils import (
     create_styled_doc, doc_add_h1, doc_add_h2,
     doc_add_formula, doc_add_styled_table, doc_add_table_caption,
     doc_render_calc_text, doc_add_figure,
+    create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
+    doc_render_calc_text_eng, update_doc_toc_via_com, doc_add_table_caption,
+)
+from 渠系断面设计.report_meta import (
+    ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
 from 渠系断面设计.open_channel.dxf_export import export_open_channel_dxf
 from 渠系断面设计.formula_renderer import (
@@ -131,7 +138,7 @@ class OpenChannelPanel(QWidget):
         # 断面类型
         r = QHBoxLayout(); r.addWidget(QLabel("断面类型:"))
         self.section_combo = ComboBox()
-        self.section_combo.addItems(["梯形", "矩形", "圆形"])
+        self.section_combo.addItems(["梯形", "矩形", "圆形", "U形"])
         self.section_combo.currentTextChanged.connect(self._on_section_type_changed)
         r.addWidget(self.section_combo, 1); fl.addLayout(r)
 
@@ -145,7 +152,10 @@ class OpenChannelPanel(QWidget):
         self.vmax_edit = self._field(fl, "不冲流速 (m/s):", "100.0")
         fl.addWidget(self._hint("(一般情况下保持默认数值即可)"))
 
-        fl.addWidget(self._slbl("【流量加大】"))
+        self.inc_cb = CheckBox("考虑加大流量比例系数")
+        self.inc_cb.setChecked(True)
+        self.inc_cb.stateChanged.connect(self._on_inc_toggle)
+        fl.addWidget(self.inc_cb)
         self.inc_edit = self._field(fl, "流量加大比例 (%):", "")
         self.inc_hint = QLabel("(留空则自动计算)")
         self.inc_hint.setStyleSheet(INPUT_HINT_STYLE)
@@ -162,6 +172,13 @@ class OpenChannelPanel(QWidget):
         self.D_hint_lbl = self._hint("(留空则自动计算)")
         fl.addWidget(self.D_hint_lbl)
         for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.hide()
+
+        # U形专有字段
+        self.R_lbl, self.R_edit = self._field2(fl, "圆弧半径 R (m):", "0.8")
+        self.alpha_lbl, self.alpha_edit = self._field2(fl, "外倾角 α (°):", "14")
+        self.theta_lbl, self.theta_edit = self._field2(fl, "圆心角 θ (°):", "152")
+        for w in (self.R_lbl, self.R_edit, self.alpha_lbl, self.alpha_edit,
+                  self.theta_lbl, self.theta_edit): w.hide()
 
         fl.addWidget(self._sep())
         self.detail_cb = CheckBox("输出详细计算过程")
@@ -203,6 +220,11 @@ class OpenChannelPanel(QWidget):
     def _sep(self):
         f = QFrame(); f.setFrameShape(QFrame.HLine); f.setStyleSheet(f"color:{BD};"); return f
 
+    def _on_inc_toggle(self, _state):
+        enabled = self.inc_cb.isChecked()
+        self.inc_edit.setVisible(enabled)
+        self.inc_hint.setVisible(enabled)
+
     # ----------------------------------------------------------------
     # 输出面板
     # ----------------------------------------------------------------
@@ -235,20 +257,30 @@ class OpenChannelPanel(QWidget):
     # 断面类型切换
     # ----------------------------------------------------------------
     def _on_section_type_changed(self, stype):
+        _u_widgets = (self.R_lbl, self.R_edit, self.alpha_lbl, self.alpha_edit,
+                      self.theta_lbl, self.theta_edit)
         if stype == "矩形":
             self.m_lbl.hide(); self.m_edit.hide()
             self.m_edit.setText("0.0")
             for w in (self.beta_lbl, self.beta_edit, self.b_lbl, self.b_edit, self.bb_hint): w.show()
             for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.hide()
+            for w in _u_widgets: w.hide()
         elif stype == "梯形":
             self.m_lbl.show(); self.m_edit.show()
             self.m_edit.setText("1.0")
             for w in (self.beta_lbl, self.beta_edit, self.b_lbl, self.b_edit, self.bb_hint): w.show()
             for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.hide()
+            for w in _u_widgets: w.hide()
         elif stype == "圆形":
             self.m_lbl.hide(); self.m_edit.hide()
             for w in (self.beta_lbl, self.beta_edit, self.b_lbl, self.b_edit, self.bb_hint): w.hide()
             for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.show()
+            for w in _u_widgets: w.hide()
+        elif stype == "U形":
+            self.m_lbl.hide(); self.m_edit.hide()
+            for w in (self.beta_lbl, self.beta_edit, self.b_lbl, self.b_edit, self.bb_hint): w.hide()
+            for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.hide()
+            for w in _u_widgets: w.show()
 
     # ----------------------------------------------------------------
     # 初始帮助
@@ -260,6 +292,7 @@ class OpenChannelPanel(QWidget):
             ("矩形断面", "m = 0，附录E自动寻优底宽；可指定宽深比或底宽"),
             ("梯形断面", "用户设定边坡系数 m，附录E自动寻优底宽；可指定宽深比或底宽"),
             ("圆形明渠", "自动搜索最优直径；可指定直径 D"),
+            ("U形明渠", "圆弧底+斜直线壁；输入R、外倾角α、圆心角θ；自动反算水深"),
         ])
         h.section("计算模式总览")
         h.table(
@@ -270,8 +303,15 @@ class OpenChannelPanel(QWidget):
                 ["矩形/梯形 — 指定底宽 B", "固定 B，反算水深并验算流速"],
                 ["圆形 — 留空直径 D", "自动搜索满足约束的最小 D"],
                 ["圆形 — 指定直径 D", "固定 D，反算水深并验算流速"],
+                ["U形 — 输入R/α/θ", "固定几何，反算水深并验算流速"],
             ]
         )
+        h.section("U形断面几何公式")
+        h.formula("h₀ = R·(1 − cos(θ/2))", "弧区高度")
+        h.formula("当 h ≤ h₀: A = R²·arccos((R−h)/R) − (R−h)·√(2Rh−h²)", "纯弧区面积")
+        h.formula("当 h ≤ h₀: χ = 2R·arccos((R−h)/R)", "纯弧区湿周")
+        h.formula("当 h > h₀: A = A_arc + (b_arc + m·h_s)·h_s", "直线段区面积")
+        h.formula("当 h > h₀: χ = θ/180·π·R + 2·h_s·√(1+m²)", "直线段区湿周")
         h.hint("矩形/梯形：宽深比 β 与底宽 B 不可同时填写（二选一）")
         h.section("曼宁公式")
         h.text("本程序基于曼宁公式进行计算：")
@@ -343,7 +383,8 @@ class OpenChannelPanel(QWidget):
             if v_min >= v_max:
                 self._show_error("参数错误", "不淤流速必须小于不冲流速。"); return
 
-            manual_increase = self._fval_opt(self.inc_edit)
+            use_increase = self.inc_cb.isChecked()
+            manual_increase = self._fval_opt(self.inc_edit) if use_increase else 0
 
             if stype == "圆形":
                 manual_D = self._fval_opt(self.D_edit)
@@ -351,13 +392,36 @@ class OpenChannelPanel(QWidget):
                     'Q': Q, 'n': n, 'slope_inv': slope_inv,
                     'v_min': v_min, 'v_max': v_max,
                     'section_type': stype, 'manual_b': manual_D,
-                    'manual_increase': manual_increase
+                    'manual_increase': manual_increase,
+                    'use_increase': use_increase
                 }
                 result = circular_calculate(
                     Q=Q, n=n, slope_inv=slope_inv,
                     v_min=v_min, v_max=v_max,
                     manual_D=manual_D,
                     increase_percent=manual_increase
+                )
+            elif stype == "U形":
+                R_val = self._fval(self.R_edit)
+                alpha_val = self._fval(self.alpha_edit)
+                theta_val = self._fval(self.theta_edit)
+                if R_val <= 0:
+                    self._show_error("参数错误", "请输入有效的圆弧半径 R（必须大于0）。"); return
+                if theta_val <= 0 or theta_val > 360:
+                    self._show_error("参数错误", "请输入有效的圆心角 θ（0°~360°）。"); return
+                self.input_params = {
+                    'Q': Q, 'n': n, 'slope_inv': slope_inv,
+                    'v_min': v_min, 'v_max': v_max,
+                    'section_type': stype,
+                    'R': R_val, 'alpha_deg': alpha_val, 'theta_deg': theta_val,
+                    'manual_increase': manual_increase,
+                    'use_increase': use_increase
+                }
+                result = mingqu_u_calculate(
+                    Q=Q, R=R_val, alpha_deg=alpha_val, theta_deg=theta_val,
+                    n=n, slope_inv=slope_inv,
+                    v_min=v_min, v_max=v_max,
+                    manual_increase_percent=manual_increase
                 )
             else:
                 m = self._fval(self.m_edit) if stype == "梯形" else 0.0
@@ -370,7 +434,8 @@ class OpenChannelPanel(QWidget):
                     'v_min': v_min, 'v_max': v_max,
                     'section_type': stype,
                     'manual_beta': manual_beta, 'manual_b': manual_b,
-                    'manual_increase': manual_increase
+                    'manual_increase': manual_increase,
+                    'use_increase': use_increase
                 }
                 result = mingqu_calculate(
                     Q=Q, m=m, n=n, slope_inv=slope_inv,
@@ -383,7 +448,7 @@ class OpenChannelPanel(QWidget):
             self.current_result = result
 
             # 更新加大比例提示
-            if result.get('success') and 'increase_percent' in result:
+            if use_increase and result.get('success') and 'increase_percent' in result:
                 ap = result['increase_percent']
                 src = "指定" if self.inc_edit.text().strip() else "自动计算"
                 if isinstance(ap, str):
@@ -422,6 +487,9 @@ class OpenChannelPanel(QWidget):
         if stype == '圆形':
             if detail: self._show_circular_detail(result)
             else: self._show_circular_brief(result)
+        elif stype == 'U形':
+            if detail: self._show_u_detail(result)
+            else: self._show_u_brief(result)
         else:
             if detail: self._show_trapezoid_detail(result)
             else: self._show_trapezoid_brief(result)
@@ -503,23 +571,36 @@ class OpenChannelPanel(QWidget):
             self._appendix_e_export_text = self._build_ae_text(schemes, b, h, v_min, v_max)
 
             o2 = []
-            o2.append("【加大流量工况】")
-            o2.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_source}")
-            o2.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
-            if h_inc > 0:
-                o2.append(f"  加大水深 h加大 = {h_inc:.3f} m")
-                o2.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
-                o2.append(f"  岸顶超高 Fb = {Fb:.3f} m")
-                o2.append(f"  渠道高度 H = {H:.3f} m")
+            use_increase = p.get('use_increase', True)
+            if use_increase:
+                o2.append("【加大流量工况】")
+                o2.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_source}")
+                o2.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+                if h_inc > 0:
+                    o2.append(f"  加大水深 h加大 = {h_inc:.3f} m")
+                    o2.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
+                    o2.append(f"  岕顶超高 Fb = {Fb:.3f} m")  # 岕顶超高
+                    o2.append(f"  渠道高度 H = {H:.3f} m")
+            else:
+                Fb_d = round(0.25 * h + 0.2, 3)
+                H_d = round(h + Fb_d, 3)
+                o2.append("【渠道尺寸计算】")
+                o2.append(f"  (不考虑加大流量，以设计水深计算渠道高度)")
+                o2.append(f"  超高 Fb = 0.25 × h + 0.2 = 0.25 × {h:.3f} + 0.2 = {Fb_d:.3f} m")
+                o2.append(f"  渠道高度 H = h + Fb = {h:.3f} + {Fb_d:.3f} = {H_d:.3f} m")
             o2.append("")
             o2.append("【验证结果】")
             vel_ok = v_min < V < v_max
-            fb_req = 0.25 * h_inc + 0.2 if h_inc > 0 else 0
-            fb_ok = Fb >= (fb_req - 0.001) if h_inc > 0 else False
-            o2.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
-            o2.append(f"  超高复核: {'✓ 通过' if fb_ok else '✗ 未通过'} (Fb={Fb:.3f}m, 规范要求≥{fb_req:.3f}m)")
+            if use_increase:
+                fb_req = 0.25 * h_inc + 0.2 if h_inc > 0 else 0
+                fb_ok = Fb >= (fb_req - 0.001) if h_inc > 0 else False
+                o2.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
+                o2.append(f"  超高复核: {'✓ 通过' if fb_ok else '✗ 未通过'} (Fb={Fb:.3f}m, 规范要求≥{fb_req:.3f}m)")
+                all_pass = vel_ok and fb_ok
+            else:
+                o2.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
+                all_pass = vel_ok
             o2.append("")
-            all_pass = vel_ok and fb_ok
             o2.append("=" * 70)
             o2.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
             o2.append("=" * 70)
@@ -536,23 +617,35 @@ class OpenChannelPanel(QWidget):
             load_formula_page(self.result_text, full_html)
             return
 
-        o.append("【加大流量工况】")
-        o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_source}")
-        o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
-        if h_inc > 0:
-            o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
-            o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
-            o.append(f"  岸顶超高 Fb = {Fb:.3f} m")
-            o.append(f"  渠道高度 H = {H:.3f} m")
+        use_increase = p.get('use_increase', True)
+        if use_increase:
+            o.append("【加大流量工况】")
+            o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_source}")
+            o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+            if h_inc > 0:
+                o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
+                o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
+                o.append(f"  岕顶超高 Fb = {Fb:.3f} m")
+                o.append(f"  渠道高度 H = {H:.3f} m")
+        else:
+            Fb_d = round(0.25 * h + 0.2, 3)
+            H_d = round(h + Fb_d, 3)
+            o.append("【渠道尺寸计算】")
+            o.append(f"  (不考虑加大流量，以设计水深计算渠道高度)")
+            o.append(f"  超高 Fb = 0.25 × h + 0.2 = 0.25 × {h:.3f} + 0.2 = {Fb_d:.3f} m")
+            o.append(f"  渠道高度 H = h + Fb = {h:.3f} + {Fb_d:.3f} = {H_d:.3f} m")
         o.append("")
         o.append("【验证结果】")
         vel_ok = v_min < V < v_max
-        fb_req = 0.25 * h_inc + 0.2 if h_inc > 0 else 0
-        fb_ok = Fb >= (fb_req - 0.001) if h_inc > 0 else False
-        o.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
-        o.append(f"  超高复核: {'✓ 通过' if fb_ok else '✗ 未通过'} (Fb={Fb:.3f}m, 规范要求≥{fb_req:.3f}m)")
-        o.append("")
-        all_pass = vel_ok and fb_ok
+        if use_increase:
+            fb_req = 0.25 * h_inc + 0.2 if h_inc > 0 else 0
+            fb_ok = Fb >= (fb_req - 0.001) if h_inc > 0 else False
+            o.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
+            o.append(f"  超高复核: {'✓ 通过' if fb_ok else '✗ 未通过'} (Fb={Fb:.3f}m, 规范要求≥{fb_req:.3f}m)")
+            all_pass = vel_ok and fb_ok
+        else:
+            o.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
+            all_pass = vel_ok
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
         o.append("=" * 70)
@@ -698,16 +791,18 @@ class OpenChannelPanel(QWidget):
         o.append(f"      误差 = {abs(V * A - Q)/Q*100:.2f}%")
         o.append("")
 
-        o.append("【四、加大流量工况计算】")
-        o.append("")
-        o.append("  1. 加大流量计算:")
-        o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_source}")
-        o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
-        o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
-        o.append(f"           = {Q_inc:.3f} m³/s")
-        o.append("")
+        use_increase = p.get('use_increase', True)
+        if use_increase:
+          o.append("【四、加大流量工况计算】")
+          o.append("")
+          o.append("  1. 加大流量计算:")
+          o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_source}")
+          o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
+          o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
+          o.append(f"           = {Q_inc:.3f} m³/s")
+          o.append("")
 
-        if h_inc > 0:
+        if use_increase and h_inc > 0:
             if A_inc <= 0: A_inc = (b + m * h_inc) * h_inc
             if X_inc <= 0: X_inc = b + 2 * h_inc * math.sqrt(1 + m * m)
             if R_inc <= 0 and X_inc > 0: R_inc = A_inc / X_inc
@@ -765,9 +860,21 @@ class OpenChannelPanel(QWidget):
             o.append(f"      H = h加大 + Fb")
             o.append(f"        = {h_inc:.3f} + {Fb:.3f}")
             o.append(f"        = {H:.3f} m")
-        else:
+        elif use_increase:
             o.append("  加大水深计算失败")
         o.append("")
+
+        if not use_increase:
+            Fb_d = round(0.25 * h + 0.2, 3)
+            H_d = round(h + Fb_d, 3)
+            o.append("【四、渠道尺寸计算】")
+            o.append("")
+            o.append(f"  (不考虑加大流量，以设计水深计算渠道高度)")
+            o.append(f"  1. 超高计算（规范 6.4.8-2）:")
+            o.append(f"      Fb = (1/4) × h + 0.2 = (1/4) × {h:.3f} + 0.2 = {Fb_d:.3f} m")
+            o.append(f"  2. 渠道高度计算:")
+            o.append(f"      H = h + Fb = {h:.3f} + {Fb_d:.3f} = {H_d:.3f} m")
+            o.append("")
 
         o.append("【五、设计验证】")
         o.append("")
@@ -777,14 +884,17 @@ class OpenChannelPanel(QWidget):
         o.append(f"      设计流速: V = {V:.3f} m/s")
         o.append(f"      结果: {'通过 ✓' if vel_ok else '未通过 ✗'}")
         o.append("")
-        fb_req = 0.25 * h_inc + 0.2 if h_inc > 0 else 0
-        fb_ok = Fb >= (fb_req - 0.001) if h_inc > 0 else False
-        o.append(f"  2. 超高复核（规范 6.4.8-2）:")
-        o.append(f"      规范要求: Fb ≥ (1/4)×h加大 + 0.2 = {fb_req:.3f} m")
-        o.append(f"      计算结果: Fb = {Fb:.3f} m")
-        o.append(f"      结果: {'通过 ✓' if fb_ok else '未通过 ✗'}")
-        o.append("")
-        all_pass = vel_ok and fb_ok
+        if use_increase:
+            fb_req = 0.25 * h_inc + 0.2 if h_inc > 0 else 0
+            fb_ok = Fb >= (fb_req - 0.001) if h_inc > 0 else False
+            o.append(f"  2. 超高复核（规范 6.4.8-2）:")
+            o.append(f"      规范要求: Fb ≥ (1/4)×h加大 + 0.2 = {fb_req:.3f} m")
+            o.append(f"      计算结果: Fb = {Fb:.3f} m")
+            o.append(f"      结果: {'通过 ✓' if fb_ok else '未通过 ✗'}")
+            o.append("")
+            all_pass = vel_ok and fb_ok
+        else:
+            all_pass = vel_ok
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
         o.append("=" * 70)
@@ -857,31 +967,36 @@ class OpenChannelPanel(QWidget):
         o.append(f"  净空高度 Fb = {FB_d:.3f} m")
         o.append(f"  净空比例 = {PA_d:.1f}%")
         o.append("")
-        o.append("【加大流量工况】")
-        o.append(f"  流量加大比例 = {inc_info}")
-        o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
-        o.append(f"  加大水深 h加大 = {h_i:.3f} m")
-        o.append(f"  加大流速 V加大 = {V_i:.3f} m/s")
-        o.append(f"  净空高度 Fb加大 = {FB_i:.3f} m")
-        o.append(f"  净空比例 = {PA_i:.1f}%")
-        o.append("")
+        use_increase = p.get('use_increase', True)
+        if use_increase:
+            o.append("【加大流量工况】")
+            o.append(f"  流量加大比例 = {inc_info}")
+            o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+            o.append(f"  加大水深 h加大 = {h_i:.3f} m")
+            o.append(f"  加大流速 V加大 = {V_i:.3f} m/s")
+            o.append(f"  净空高度 Fb加大 = {FB_i:.3f} m")
+            o.append(f"  净空比例 = {PA_i:.1f}%")
+            o.append("")
         o.append("【验证结果】")
         vel_ok = V is not None and v_min <= V <= v_max
-        vel_i_ok = V_i is not None and v_min <= V_i <= v_max if V_i else True
         o.append(f"  1. 设计流速验证")
         o.append(f"     范围要求: {v_min} ≤ V ≤ {v_max} m/s")
         o.append(f"     计算结果: V = {V:.3f} m/s")
         o.append(f"     验证结果: {'通过 ✓' if vel_ok else '未通过 ✗'}")
         o.append("")
-        o.append(f"  2. 加大流速验证")
-        o.append(f"     范围要求: {v_min} ≤ V ≤ {v_max} m/s")
-        if V_i:
-            o.append(f"     计算结果: V加大 = {V_i:.3f} m/s")
-            o.append(f"     验证结果: {'通过 ✓' if vel_i_ok else '未通过 ✗'}")
+        if use_increase:
+            vel_i_ok = V_i is not None and v_min <= V_i <= v_max if V_i else True
+            o.append(f"  2. 加大流速验证")
+            o.append(f"     范围要求: {v_min} ≤ V ≤ {v_max} m/s")
+            if V_i:
+                o.append(f"     计算结果: V加大 = {V_i:.3f} m/s")
+                o.append(f"     验证结果: {'通过 ✓' if vel_i_ok else '未通过 ✗'}")
+            else:
+                o.append(f"     计算结果: 无数据")
+            o.append("")
+            all_ok = vel_ok and vel_i_ok
         else:
-            o.append(f"     计算结果: 无数据")
-        o.append("")
-        all_ok = vel_ok and vel_i_ok
+            all_ok = vel_ok
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_ok else '未通过 ✗'}")
         o.append("=" * 70)
@@ -1034,77 +1149,77 @@ class OpenChannelPanel(QWidget):
         o.append(f"         = {PA_d:.1f}%")
         o.append("")
 
-        o.append("【四、加大流量工况计算】")
-        o.append("")
-        o.append(f"  1. 加大流量计算:")
-        o.append(f"      流量加大比例 = {inc_info}")
-        o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
-        o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
-        o.append(f"           = {Q_inc:.3f} m³/s")
-        o.append("")
-
-        if h_i is not None and h_i > 0 and D > 0:
-            o.append("  2. 加大水深计算:")
-            o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
-            o.append(f"      h加大 = {h_i:.3f} m")
+        use_increase_circ = p.get('use_increase', True)
+        if use_increase_circ:
+            o.append("【四、加大流量工况计算】")
             o.append("")
-            Rr_i = D / 2
-            theta_i = 2 * math.acos(max(-1, min(1, (Rr_i - h_i) / Rr_i)))
-            o.append(f"  3. 圆心角计算:")
-            o.append(f"      θ加大 = 2 × arccos((R - h加大) / R)")
-            o.append(f"           = 2 × arccos(({Rr_i:.3f} - {h_i:.3f}) / {Rr_i:.3f})")
-            o.append(f"           = 2 × arccos({(Rr_i - h_i)/Rr_i:.4f})")
-            o.append(f"           = {math.degrees(theta_i):.2f}° ({theta_i:.4f} rad)")
+            o.append("  1. 加大流量计算:")
+            o.append(f"      流量加大比例 = {inc_info}")
+            o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
+            o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
+            o.append(f"           = {Q_inc:.3f} m³/s")
             o.append("")
-            o.append(f"  4. 过水面积计算:")
-            o.append(f"      A加大 = (D²/8) × (θ加大 - sinθ加大)")
-            o.append(f"           = ({D:.3f}²/8) × ({theta_i:.4f} - sin{theta_i:.4f})")
-            o.append(f"           = {D**2/8:.4f} × {theta_i - math.sin(theta_i):.4f}")
-            o.append(f"           = {A_i:.3f} m²")
-            o.append("")
-            o.append(f"  5. 湿周计算:")
-            o.append(f"      χ加大 = (D/2) × θ加大")
-            o.append(f"           = ({D:.3f}/2) × {theta_i:.4f}")
-            o.append(f"           = {Rr_i:.3f} × {theta_i:.4f}")
-            o.append(f"           = {P_i:.3f} m")
-            o.append("")
-        else:
-            o.append(f"  2. 加大水深: h加大 = N/A")
-            o.append("")
-
-        o.append(f"  6. 水力半径计算:")
-        o.append(f"      R加大 = A加大 / χ加大")
-        if A_i and P_i:
-            o.append(f"           = {A_i:.3f} / {P_i:.3f}")
-            o.append(f"           = {R_i:.3f} m")
-        o.append("")
-        o.append(f"  7. 加大流速计算 (曼宁公式):")
-        o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
-        if R_i and R_i > 0:
-            o.append(f"           = (1/{n}) × {R_i:.3f}^(2/3) × {i:.6f}^(1/2)")
-            o.append(f"           = {1/n:.2f} × {R_i**(2/3):.4f} × {math.sqrt(i):.6f}")
-        o.append(f"           = {V_i:.3f} m/s")
-        o.append("")
-        o.append(f"  8. 流量校核:")
-        if V_i and A_i:
-            o.append(f"      Q计算 = V加大 × A加大")
-            o.append(f"           = {V_i:.3f} × {A_i:.3f}")
-            o.append(f"           = {V_i * A_i:.3f} m³/s")
-            if Q_inc > 0:
-                o.append(f"      误差 = {abs(V_i * A_i - Q_inc) / Q_inc * 100:.2f}%")
-        o.append("")
-        o.append(f"  9. 净空高度计算:")
-        o.append(f"      Fb加大 = D - h加大")
-        if h_i:
-            o.append(f"           = {D:.3f} - {h_i:.3f}")
-            o.append(f"           = {FB_i:.3f} m")
-        o.append("")
-        o.append(f"  10. 净空面积计算:")
-        if A_i:
-            o.append(f"      PA加大 = (A总 - A加大) / A总 × 100%")
-            o.append(f"           = ({pipe_area:.3f} - {A_i:.3f}) / {pipe_area:.3f} × 100%")
-            o.append(f"           = {PA_i:.1f}%")
-        o.append("")
+            if h_i is not None and h_i > 0 and D > 0:
+                o.append("  2. 加大水深计算:")
+                o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
+                o.append(f"      h加大 = {h_i:.3f} m")
+                o.append("")
+                Rr_i = D / 2
+                theta_i = 2 * math.acos(max(-1, min(1, (Rr_i - h_i) / Rr_i)))
+                o.append(f"  3. 圆心角计算:")
+                o.append(f"      θ加大 = 2 × arccos((R - h加大) / R)")
+                o.append(f"           = 2 × arccos(({Rr_i:.3f} - {h_i:.3f}) / {Rr_i:.3f})")
+                o.append(f"           = 2 × arccos({(Rr_i - h_i)/Rr_i:.4f})")
+                o.append(f"           = {math.degrees(theta_i):.2f}° ({theta_i:.4f} rad)")
+                o.append("")
+                o.append(f"  4. 过水面积计算:")
+                o.append(f"      A加大 = (D²/8) × (θ加大 - sinθ加大)")
+                o.append(f"           = ({D:.3f}²/8) × ({theta_i:.4f} - sin{theta_i:.4f})")
+                o.append(f"           = {D**2/8:.4f} × {theta_i - math.sin(theta_i):.4f}")
+                o.append(f"           = {A_i:.3f} m²")
+                o.append("")
+                o.append(f"  5. 湿周计算:")
+                o.append(f"      χ加大 = (D/2) × θ加大")
+                o.append(f"           = ({D:.3f}/2) × {theta_i:.4f}")
+                o.append(f"           = {Rr_i:.3f} × {theta_i:.4f}")
+                o.append(f"           = {P_i:.3f} m")
+                o.append("")
+                o.append(f"  6. 水力半径计算:")
+                o.append(f"      R加大 = A加大 / χ加大")
+                if A_i and P_i:
+                    o.append(f"           = {A_i:.3f} / {P_i:.3f}")
+                    o.append(f"           = {R_i:.3f} m")
+                o.append("")
+                o.append(f"  7. 加大流速计算 (曼宁公式):")
+                o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
+                if R_i and R_i > 0:
+                    o.append(f"           = (1/{n}) × {R_i:.3f}^(2/3) × {i:.6f}^(1/2)")
+                    o.append(f"           = {1/n:.2f} × {R_i**(2/3):.4f} × {math.sqrt(i):.6f}")
+                o.append(f"           = {V_i:.3f} m/s")
+                o.append("")
+                o.append(f"  8. 流量校核:")
+                if V_i and A_i:
+                    o.append(f"      Q计算 = V加大 × A加大")
+                    o.append(f"           = {V_i:.3f} × {A_i:.3f}")
+                    o.append(f"           = {V_i * A_i:.3f} m³/s")
+                    if Q_inc > 0:
+                        o.append(f"      误差 = {abs(V_i * A_i - Q_inc) / Q_inc * 100:.2f}%")
+                o.append("")
+                o.append(f"  9. 净空高度计算:")
+                o.append(f"      Fb加大 = D - h加大")
+                if h_i:
+                    o.append(f"           = {D:.3f} - {h_i:.3f}")
+                    o.append(f"           = {FB_i:.3f} m")
+                o.append("")
+                o.append(f"  10. 净空面积计算:")
+                if A_i:
+                    o.append(f"      PA加大 = (A总 - A加大) / A总 × 100%")
+                    o.append(f"           = ({pipe_area:.3f} - {A_i:.3f}) / {pipe_area:.3f} × 100%")
+                    o.append(f"           = {PA_i:.1f}%")
+                o.append("")
+            else:
+                o.append(f"  2. 加大水深: h加大 = N/A")
+                o.append("")
 
         o.append("【五、最小流量工况计算】")
         o.append("")
@@ -1184,10 +1299,7 @@ class OpenChannelPanel(QWidget):
         o.append("【六、设计验证】")
         o.append("")
         vel_ok = V_d is not None and v_min <= V_d <= v_max
-        fb_ok = FB_i is not None and FB_i >= MIN_FREEBOARD
-        pa_ok = PA_i is not None and PA_i >= MIN_FREE_AREA_PERCENT
         mv_ok = V_m is not None and V_m >= v_min
-
         o.append(f"  1. 流速验证:")
         o.append(f"      范围要求: {v_min} ≤ V ≤ {v_max} m/s")
         if V_d is not None:
@@ -1196,23 +1308,30 @@ class OpenChannelPanel(QWidget):
         else:
             o.append(f"      计算失败")
         o.append("")
-        o.append(f"  2. 净空高度验证:")
-        o.append(f"      规范要求: Fb ≥ {MIN_FREEBOARD} m")
-        if FB_i is not None:
-            o.append(f"      计算结果: Fb = {FB_i:.3f} m")
-            o.append(f"      结果: {'通过 ✓' if fb_ok else '未通过 ✗'}")
+        if use_increase_circ:
+            fb_ok = FB_i is not None and FB_i >= MIN_FREEBOARD
+            pa_ok = PA_i is not None and PA_i >= MIN_FREE_AREA_PERCENT
+            o.append(f"  2. 净空高度验证:")
+            o.append(f"      规范要求: Fb ≥ {MIN_FREEBOARD} m")
+            if FB_i is not None:
+                o.append(f"      计算结果: Fb = {FB_i:.3f} m")
+                o.append(f"      结果: {'通过 ✓' if fb_ok else '未通过 ✗'}")
+            else:
+                o.append(f"      计算失败")
+            o.append("")
+            o.append(f"  3. 净空面积验证:")
+            o.append(f"      规范要求: PA ≥ {MIN_FREE_AREA_PERCENT}%")
+            if PA_i is not None:
+                o.append(f"      计算结果: PA = {PA_i:.1f}%")
+                o.append(f"      结果: {'通过 ✓' if pa_ok else '未通过 ✗'}")
+            else:
+                o.append(f"      计算失败")
+            o.append("")
+            next_idx = 4
         else:
-            o.append(f"      计算失败")
-        o.append("")
-        o.append(f"  3. 净空面积验证:")
-        o.append(f"      规范要求: PA ≥ {MIN_FREE_AREA_PERCENT}%")
-        if PA_i is not None:
-            o.append(f"      计算结果: PA = {PA_i:.1f}%")
-            o.append(f"      结果: {'通过 ✓' if pa_ok else '未通过 ✗'}")
-        else:
-            o.append(f"      计算失败")
-        o.append("")
-        o.append(f"  4. 最小流速验证:")
+            fb_ok = pa_ok = True
+            next_idx = 2
+        o.append(f"  {next_idx}. 最小流速验证:")
         o.append(f"      规范要求: V ≥ {v_min} m/s")
         if V_m is not None:
             o.append(f"      计算结果: V = {V_m:.3f} m/s")
@@ -1223,6 +1342,167 @@ class OpenChannelPanel(QWidget):
         all_pass = vel_ok and fb_ok and pa_ok and mv_ok
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
+        o.append("=" * 70)
+        txt = "\n".join(o)
+        self._export_plain_text = txt
+        load_formula_page(self.result_text, plain_text_to_formula_html(txt))
+
+    # ================================================================
+    # U形 - 简要结果
+    # ================================================================
+    def _show_u_brief(self, result):
+        p = self.input_params
+        Q, n, slope_inv = p['Q'], p['n'], p['slope_inv']
+        v_min, v_max = p['v_min'], p['v_max']
+        R = result['R']; alpha_deg = result['alpha_deg']; theta_deg = result['theta_deg']
+        m = result['m']; h0 = result['h0']; b_arc = result['b_arc']
+        h = result['h_design']; V = result['V_design']; A = result['A_design']
+        X = result['X_design']; Rh = result['R_design']
+        inc_pct = result['increase_percent']; Q_inc = result['Q_increased']
+        h_inc = result['h_increased']; V_inc = result['V_increased']
+        Fb = result['Fb']; H = result['h_prime']
+        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
+        o = []
+        o.append("=" * 70)
+        o.append("              明渠水力计算结果（U形断面）")
+        o.append("=" * 70)
+        o.append("")
+        o.append("【输入参数】")
+        o.append(f"  断面类型: U形    R = {R:.3f} m, α = {alpha_deg}°, θ = {theta_deg}°")
+        o.append(f"  Q = {Q:.3f} m³/s,  n = {n},  i = 1/{int(slope_inv)}")
+        o.append("")
+        o.append("【断面几何参数】")
+        o.append(f"  m = tan(α) = {m:.4f},  h₀ = {h0:.3f} m,  b_arc = {b_arc:.3f} m")
+        o.append("")
+        o.append("【设计流量工况】")
+        o.append(f"  设计水深 h = {h:.3f} m")
+        o.append(f"  过水面积 A = {A:.3f} m²")
+        o.append(f"  湿周 χ = {X:.3f} m")
+        o.append(f"  水力半径 R_h = {Rh:.3f} m")
+        o.append(f"  设计流速 V = {V:.3f} m/s")
+        o.append("")
+        use_inc = p.get('use_increase', True)
+        if use_inc:
+            o.append("【加大流量工况】")
+            o.append(f"  加大比例 = {inc_pct:.1f}% {inc_src},  Q加大 = {Q_inc:.3f} m³/s")
+            if h_inc > 0:
+                o.append(f"  h加大 = {h_inc:.3f} m,  V加大 = {V_inc:.3f} m/s")
+                o.append(f"  超高 Fb = {Fb:.3f} m,  渠道高度 H = {H:.3f} m")
+        o.append("")
+        o.append("【验证结果】")
+        vel_ok = v_min < V < v_max
+        o.append(f"  流速: {v_min} < V={V:.3f} < {v_max} → {'✓ 通过' if vel_ok else '✗ 未通过'}")
+        if use_inc and h_inc > 0:
+            fb_req = 0.25 * h_inc + 0.2
+            fb_ok = Fb >= (fb_req - 0.001)
+            o.append(f"  超高: Fb={Fb:.3f}m ≥ {fb_req:.3f}m → {'✓ 通过' if fb_ok else '✗ 未通过'}")
+            all_pass = vel_ok and fb_ok
+        else:
+            all_pass = vel_ok
+        o.append("=" * 70)
+        o.append(f"  综合验证: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
+        o.append("=" * 70)
+        txt = "\n".join(o)
+        self._export_plain_text = txt
+        load_formula_page(self.result_text, plain_text_to_formula_html(txt))
+
+    # ================================================================
+    # U形 - 详细结果
+    # ================================================================
+    def _show_u_detail(self, result):
+        p = self.input_params
+        Q, n, slope_inv = p['Q'], p['n'], p['slope_inv']
+        i = 1.0 / slope_inv
+        v_min, v_max = p['v_min'], p['v_max']
+        R = result['R']; alpha_deg = result['alpha_deg']; theta_deg = result['theta_deg']
+        m = result['m']; h0 = result['h0']; b_arc = result['b_arc']
+        h = result['h_design']; V = result['V_design']; A = result['A_design']
+        X = result['X_design']; Rh = result['R_design']; Q_calc = result['Q_calc']
+        inc_pct = result['increase_percent']; Q_inc = result['Q_increased']
+        h_inc = result['h_increased']; V_inc = result['V_increased']
+        A_inc = result.get('A_increased', -1); X_inc = result.get('X_increased', -1)
+        R_inc = result.get('R_increased', -1)
+        Fb = result['Fb']; H = result['h_prime']
+        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
+        theta_rad = math.radians(theta_deg)
+        o = []
+        o.append("=" * 70)
+        o.append("              明渠水力计算结果（U形断面）")
+        o.append("=" * 70)
+        o.append("")
+        o.append("【一、输入参数】")
+        o.append(f"  断面类型: U形明渠")
+        o.append(f"  设计流量 Q = {Q:.3f} m³/s")
+        o.append(f"  圆弧半径 R = {R:.3f} m")
+        o.append(f"  直线段外倾角 α = {alpha_deg}°")
+        o.append(f"  圆弧段圆心角 θ = {theta_deg}°")
+        o.append(f"  糙率 n = {n}")
+        o.append(f"  水力坡降 i = 1/{int(slope_inv)} = {i:.6f}")
+        o.append(f"  不淤流速 = {v_min} m/s,  不冲流速 = {v_max} m/s")
+        o.append("")
+        o.append("【二、断面几何参数】")
+        o.append(f"  m = tan(α) = tan({alpha_deg}°) = {m:.6f}")
+        o.append(f"  h₀ = R·(1-cos(θ/2)) = {R:.3f}×(1-cos({theta_deg/2:.1f}°)) = {h0:.3f} m")
+        o.append(f"  b_arc = 2·R·sin(θ/2) = 2×{R:.3f}×sin({theta_deg/2:.1f}°) = {b_arc:.3f} m")
+        o.append("")
+        o.append("【三、设计水深计算】")
+        o.append(f"  根据Q={Q:.3f} m³/s，曼宁公式二分法反算水深: h = {h:.3f} m")
+        o.append(f"  水深区间: h {'≤' if h <= h0 else '>'} h₀={h0:.3f} m → {'纯弧区' if h <= h0 else '直线段区'}")
+        o.append("")
+        if h <= h0:
+            cos_arg = max(-1.0, min(1.0, (R - h) / R))
+            acos_val = math.acos(cos_arg)
+            sqrt_val = math.sqrt(max(0.0, R * R - (R - h) ** 2))
+            o.append("  【纯弧区公式】")
+            o.append(f"  过水面积 A = R²·arccos((R-h)/R) - (R-h)·√(R²-(R-h)²)")
+            o.append(f"           = {R:.3f}²×{acos_val:.4f} - {R-h:.3f}×{sqrt_val:.4f}")
+            o.append(f"           = {A:.3f} m²")
+            o.append(f"  湿周 χ = 2·R·arccos((R-h)/R) = 2×{R:.3f}×{acos_val:.4f} = {X:.3f} m")
+        else:
+            h_s = h - h0
+            A_arc = R * R * (theta_rad / 2.0 - math.sin(theta_rad / 2.0) * math.cos(theta_rad / 2.0))
+            o.append("  【直线段区公式】")
+            o.append(f"  弧面积 A_arc = R²·(θ/2-sin(θ/2)·cos(θ/2)) = {A_arc:.4f} m²")
+            o.append(f"  h_s = h - h₀ = {h:.3f} - {h0:.3f} = {h_s:.3f} m")
+            o.append(f"  过水面积 A = A_arc + (b_arc + m·h_s)·h_s")
+            o.append(f"           = {A_arc:.4f} + ({b_arc:.3f}+{m:.4f}×{h_s:.3f})×{h_s:.3f}")
+            o.append(f"           = {A:.3f} m²")
+            chi_arc = theta_rad * R
+            o.append(f"  湿周 χ = θ·R + 2·h_s·√(1+m²)")
+            o.append(f"       = {theta_rad:.4f}×{R:.3f} + 2×{h_s:.3f}×√(1+{m:.4f}²)")
+            o.append(f"       = {X:.3f} m")
+        o.append(f"  水力半径 R_h = A/χ = {A:.3f}/{X:.3f} = {Rh:.3f} m")
+        o.append(f"  设计流速 V = (1/n)·R_h^(2/3)·i^(1/2)")
+        o.append(f"           = (1/{n})×{Rh:.3f}^(2/3)×{i:.6f}^(1/2) = {V:.3f} m/s")
+        o.append(f"  流量校核 Q计算 = {V:.3f}×{A:.3f} = {Q_calc:.3f} m³/s (误差{abs(Q_calc-Q)/Q*100:.2f}%)")
+        o.append("")
+        use_inc = p.get('use_increase', True)
+        if use_inc:
+            o.append("【四、加大流量工况】")
+            o.append(f"  加大比例 = {inc_pct:.1f}% {inc_src}")
+            o.append(f"  Q加大 = {Q:.3f}×(1+{inc_pct/100:.2f}) = {Q_inc:.3f} m³/s")
+            if h_inc > 0:
+                o.append(f"  h加大 = {h_inc:.3f} m")
+                if A_inc > 0 and X_inc > 0:
+                    o.append(f"  A加大 = {A_inc:.3f} m²,  χ加大 = {X_inc:.3f} m,  R加大 = {R_inc:.3f} m")
+                o.append(f"  V加大 = {V_inc:.3f} m/s")
+                o.append(f"  超高 Fb = 0.25×{h_inc:.3f}+0.2 = {Fb:.3f} m")
+                o.append(f"  渠道高度 H = {h_inc:.3f}+{Fb:.3f} = {H:.3f} m")
+            else:
+                o.append("  加大水深计算失败")
+        o.append("")
+        o.append("【五、设计验证】")
+        vel_ok = v_min < V < v_max
+        o.append(f"  流速: {v_min} < V={V:.3f} < {v_max} → {'通过 ✓' if vel_ok else '未通过 ✗'}")
+        if use_inc and h_inc > 0:
+            fb_req = 0.25 * h_inc + 0.2
+            fb_ok = Fb >= (fb_req - 0.001)
+            o.append(f"  超高: Fb={Fb:.3f}m ≥ {fb_req:.3f}m → {'通过 ✓' if fb_ok else '未通过 ✗'}")
+            all_pass = vel_ok and fb_ok
+        else:
+            all_pass = vel_ok
+        o.append("=" * 70)
+        o.append(f"  综合验证: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt
@@ -1285,18 +1565,40 @@ class OpenChannelPanel(QWidget):
             Q = self.input_params['Q']
             ax = self.section_fig.add_subplot(111)
             self._draw_circular(ax, D, y_d, V_d, Q, '设计流量')
+        elif stype == 'U形':
+            R = result['R']; alpha_deg = result['alpha_deg']; theta_deg = result['theta_deg']
+            h_w = result['h_design']
+            H_ch = result['h_prime'] if result['h_prime'] > 0 else h_w * 1.35
+            V = result['V_design']; Q = self.input_params['Q']
+            h_inc = result['h_increased']; Q_inc = result['Q_increased']; V_inc = result['V_increased']
+            use_inc = self.input_params.get('use_increase', True)
+            if use_inc and h_inc > 0:
+                axes = self.section_fig.subplots(1, 2)
+                self._draw_u_section(axes[0], R, alpha_deg, theta_deg, h_w, H_ch, V, Q, '设计流量')
+                H_ch2 = result['h_prime'] if result['h_prime'] > 0 else h_inc * 1.35
+                self._draw_u_section(axes[1], R, alpha_deg, theta_deg, h_inc, H_ch2, V_inc, Q_inc, '加大流量')
+            else:
+                ax = self.section_fig.add_subplot(111)
+                self._draw_u_section(ax, R, alpha_deg, theta_deg, h_w, H_ch, V, Q, '设计流量')
         else:
             b = result['b_design']; h = result['h_design']
             m = self.input_params.get('m', 0); Q = self.input_params['Q']
             V = result['V_design']; h_inc = result['h_increased']
             Q_inc = result['Q_increased']; V_inc = result['V_increased']
             h_prime = result['h_prime']
-            axes = self.section_fig.subplots(1, 2)
-            self._draw_trapezoid(axes[0], b, h, m, V, Q, h, "设计流量")
-            if h_inc > 0:
-                self._draw_trapezoid(axes[1], b, h_prime, m, V_inc, Q_inc, h_inc, "加大流量")
+            use_inc = self.input_params.get('use_increase', True)
+            if use_inc:
+                axes = self.section_fig.subplots(1, 2)
+                self._draw_trapezoid(axes[0], b, h, m, V, Q, h, "设计流量")
+                if h_inc > 0:
+                    self._draw_trapezoid(axes[1], b, h_prime, m, V_inc, Q_inc, h_inc, "加大流量")
+                else:
+                    axes[1].set_title("加大流量\n数据不可用")
             else:
-                axes[1].set_title("加大流量\n数据不可用")
+                Fb_d = 0.25 * h + 0.2
+                H_d = h + Fb_d
+                ax = self.section_fig.add_subplot(111)
+                self._draw_trapezoid(ax, b, H_d, m, V, Q, h, "设计流量")
         self.section_fig.tight_layout()
         self.section_canvas.draw()
 
@@ -1328,6 +1630,79 @@ class OpenChannelPanel(QWidget):
         ax.set_title(f'{title}\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.axhline(y=0, color='brown', lw=3)
+
+    def _draw_u_section(self, ax, R, alpha_deg, theta_deg, h_w, H_ch, V, Q, title):
+        """U形断面维图：圆弧底 + 斜壁 + 水面填充"""
+        theta_rad = math.radians(theta_deg)
+        m = math.tan(math.radians(alpha_deg))
+        h0 = R * (1.0 - math.cos(theta_rad / 2.0))
+        b_arc = 2.0 * R * math.sin(theta_rad / 2.0)
+
+        # 弧底轮廓
+        half_theta = theta_rad / 2.0
+        arc_angles = np.linspace(math.pi * 3 / 2 - half_theta, math.pi * 3 / 2 + half_theta, 60)
+        arc_x = R * np.cos(arc_angles)
+        arc_y = R + R * np.sin(arc_angles)  # 圆心在 (0, R)
+
+        # 直线段上端
+        x_top_r = b_arc / 2.0 + m * H_ch
+        x_top_l = -x_top_r
+        x_arc_r = b_arc / 2.0
+        x_arc_l = -x_arc_r
+
+        outline_x = list(arc_x) + [x_arc_r, x_top_r, x_top_l, x_arc_l] + list(arc_x[:1])
+        outline_y = list(arc_y) + [h0, H_ch, H_ch, h0] + list(arc_y[:1])
+        ax.plot(outline_x[:len(arc_x)], outline_y[:len(arc_y)], 'k-', lw=2)
+        ax.plot([x_arc_r, x_top_r], [h0, H_ch], 'k-', lw=2)
+        ax.plot([x_arc_l, x_top_l], [h0, H_ch], 'k-', lw=2)
+        ax.plot([x_top_l, x_top_r], [H_ch, H_ch], 'k--', lw=1)
+
+        # 水面填充
+        if h_w > 0:
+            from matplotlib.patches import Polygon
+            from matplotlib.collections import PatchCollection
+            if h_w <= h0:
+                # 纯弧区
+                ang_h = math.acos(max(-1.0, min(1.0, (R - h_w) / R)))
+                water_angles = np.linspace(math.pi * 3 / 2 - ang_h, math.pi * 3 / 2 + ang_h, 40)
+                wx = list(R * np.cos(water_angles))
+                wy = list(R + R * np.sin(water_angles))
+                water_pts = list(zip(wx, wy))
+                half_bw = math.sqrt(max(0.0, R * R - (R - h_w) ** 2))
+                water_pts = [(-half_bw, h_w)] + water_pts + [(half_bw, h_w)]
+            else:
+                h_s = h_w - h0
+                bw = b_arc + 2 * m * h_s
+                water_pts = (
+                    list(zip(arc_x, arc_y)) +
+                    [(x_arc_r, h0), (bw / 2, h_w), (-bw / 2, h_w), (x_arc_l, h0)]
+                )
+            poly = Polygon(water_pts, closed=True)
+            pc = PatchCollection([poly], facecolor='lightblue', alpha=0.7, edgecolor='none')
+            ax.add_collection(pc)
+            # 水面线
+            if h_w <= h0:
+                half_bw = math.sqrt(max(0.0, R * R - (R - h_w) ** 2))
+                ax.plot([-half_bw, half_bw], [h_w, h_w], 'b-', lw=1.5)
+            else:
+                h_s = h_w - h0
+                bw = b_arc + 2 * m * h_s
+                ax.plot([-bw / 2, bw / 2], [h_w, h_w], 'b-', lw=1.5)
+
+        max_x = max(abs(x_top_r), R) * 1.3
+        ax.set_xlim(-max_x, max_x)
+        ax.set_ylim(-H_ch * 0.3, H_ch * 1.3)
+        ax.set_aspect('equal')
+        ax.set_title(f'{title}\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.axhline(y=0, color='brown', lw=3)
+        # 标注
+        ax.text(0, -H_ch * 0.15, f'R={R:.2f}m, θ={theta_deg:.0f}°', ha='center', fontsize=8, color='gray')
+        if h_w > 0:
+            ax.annotate('', xy=(-x_top_r - 0.08 * x_top_r, h_w), xytext=(-x_top_r - 0.08 * x_top_r, 0),
+                        arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
+            ax.text(-x_top_r - 0.15 * x_top_r, h_w / 2, f'h={h_w:.2f}m',
+                    ha='right', fontsize=8, color='blue', rotation=90, va='center')
 
     def _draw_circular(self, ax, D, y, V, Q, title):
         R = D / 2
@@ -1385,6 +1760,9 @@ class OpenChannelPanel(QWidget):
         if stype == '圆形':
             D = res.get('D_design', 0.0)
             default_name = f'明渠断面_圆形_D{D:.2f}.dxf'
+        elif stype == 'U形':
+            R_val = res.get('R', 0.0)
+            default_name = f'明渠断面_U形_R{R_val:.2f}.dxf'
         else:
             b = res.get('b_design', 0.0)
             H = res.get('h_prime', 0.0)
@@ -1439,6 +1817,19 @@ class OpenChannelPanel(QWidget):
         if not self.current_result or not self.current_result.get('success'):
             InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
+        p = self.input_params
+        stype = p.get('section_type', '梯形')
+        channel_name = p.get('channel_name', '') or getattr(self, '_channel_name_text', '')
+        meta = load_meta()
+        auto_purpose = build_calc_purpose('open_channel',
+            project=meta.project_name, name=channel_name, section_type=stype)
+        dlg = ExportConfirmDialog('open_channel', '明渠水力计算书', auto_purpose, parent=self._info_parent())
+        from PySide6.QtWidgets import QDialog
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self._word_export_meta = dlg.get_meta()
+        self._word_export_purpose = dlg.get_calc_purpose()
+        self._word_export_refs = dlg.get_references()
         filepath, _ = QFileDialog.getSaveFileName(self, "保存Word报告", "", "Word文档 (*.docx);;所有文件 (*.*)")
         if not filepath: return
         try:
@@ -1451,26 +1842,37 @@ class OpenChannelPanel(QWidget):
             InfoBar.error("导出失败", f"Word导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
     def _build_word_report(self, filepath):
-        """构建Word报告文档（方案3高端咨询报告风格）"""
+        """构建Word报告文档（工程产品运行卡格式）"""
         res = self.current_result
         p = self.input_params
         stype = p.get('section_type', '梯形')
-        method = res.get("design_method", "")
+        method = res.get('design_method', '')
+        meta = getattr(self, '_word_export_meta', load_meta())
+        purpose = getattr(self, '_word_export_purpose', '')
+        refs = getattr(self, '_word_export_refs', REFERENCES_BASE.get('open_channel', []))
+        content_desc = f'明渠水力断面设计计算（{stype}断面）'
 
-        doc = create_styled_doc(
-            title='明渠水力计算书',
-            subtitle=f'{stype}断面  ·  {method}',
-            header_text=f'明渠水力计算书（{stype}断面）'
+        doc = create_engineering_report_doc(
+            meta=meta,
+            calc_title='明渠水力计算书',
+            calc_content_desc=content_desc,
+            calc_purpose=purpose,
+            references=refs,
+            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n明渠水力计算（{stype}断面 · {method}）',
         )
         doc.add_page_break()
 
-        # 一、基础公式
-        doc_add_h1(doc, '一、基础公式')
+        # 5. 基础公式
+        doc_add_eng_h(doc, '5、基础公式')
         doc_add_formula(doc, r'Q = \frac{1}{n} \cdot A \cdot R^{2/3} \cdot i^{1/2}', '曼宁公式：')
         if stype == '圆形':
             doc_add_formula(doc, r'A = \frac{D^2}{8}(\theta - \sin\theta)', '过水面积：')
             doc_add_formula(doc, r'\chi = \frac{D}{2} \cdot \theta', '湿周：')
             doc_add_formula(doc, r'\theta = 2\arccos\frac{R-h}{R}', '圆心角：')
+        elif stype == 'U形':
+            doc_add_formula(doc, r'h_0 = R(1-\cos(\theta/2))', '弧区临界水深：')
+            doc_add_formula(doc, r'A = R^2\arccos\frac{R-h}{R}-(R-h)\sqrt{2Rh-h^2}', '纯弧区面积(h\leq h_0)：')
+            doc_add_formula(doc, r'A = A_{arc}+(b_{arc}+m\cdot h_s)\cdot h_s', '直线段区面积(h>h_0)：')
         elif stype == '梯形':
             doc_add_formula(doc, r'A = (B + m \cdot h) \cdot h', '过水面积：')
             doc_add_formula(doc, r'\chi = B + 2h\sqrt{1+m^2}', '湿周：')
@@ -1480,14 +1882,14 @@ class OpenChannelPanel(QWidget):
         doc_add_formula(doc, r'R = \frac{A}{\chi}', '水力半径：')
         doc_add_formula(doc, r'V = \frac{1}{n} \cdot R^{2/3} \cdot i^{1/2}', '流速公式：')
 
-        # 二、计算过程
-        doc_add_h1(doc, '二、计算过程')
-        doc_render_calc_text(doc, self._export_plain_text or '', skip_title_keyword='明渠水力计算结果')
+        # 6. 计算过程
+        doc_add_eng_h(doc, '6、计算过程')
+        doc_render_calc_text_eng(doc, self._export_plain_text or '', skip_title_keyword='明渠水力计算结果')
 
-        # 三、断面方案对比（附录E）
+        # 7. 断面方案对比（附录E）
         schemes = res.get('appendix_e_schemes', [])
         if schemes and stype != '圆形':
-            doc_add_h1(doc, '三、断面方案对比')
+            doc_add_eng_h(doc, '7、断面方案对比（附录E）')
             doc_add_table_caption(doc, '表 1  附录E断面方案对比表')
             b_sel = res['b_design']; h_sel = res['h_design']
             v_min, v_max = p['v_min'], p['v_max']
@@ -1496,13 +1898,13 @@ class OpenChannelPanel(QWidget):
             for s in schemes:
                 is_sel = abs(s['b'] - b_sel) < 0.01 and abs(s['h'] - h_sel) < 0.01
                 v_ok = v_min < s['V'] < v_max
-                status = "★选中" if is_sel else ("流速不符" if not v_ok else "")
+                status = '★选中' if is_sel else ('流速不符' if not v_ok else '')
                 data.append([
                     f"{s['alpha']:.2f}", s['scheme_type'],
                     f"{s['b']:.3f}", f"{s['h']:.3f}", f"{s['beta']:.3f}",
                     f"{s['V']:.3f}", f"+{s['area_increase']:.0f}%", status
                 ])
-            doc_add_styled_table(doc, headers, data, highlight_col=7, highlight_val="★选中",
+            doc_add_styled_table(doc, headers, data, highlight_col=7, highlight_val='★选中',
                                  with_full_border=True)
 
         # 断面图
@@ -1510,8 +1912,8 @@ class OpenChannelPanel(QWidget):
             import tempfile
             tmp = os.path.join(tempfile.gettempdir(), '_mingqu_section.png')
             self.section_fig.savefig(tmp, dpi=150, bbox_inches='tight')
-            section_title = '四、断面图' if schemes and stype != '圆形' else '三、断面图'
-            doc_add_h1(doc, section_title)
+            section_no = '8' if schemes and stype != '圆形' else '7'
+            doc_add_eng_h(doc, f'{section_no}、断面图')
             doc_add_figure(doc, tmp, width_cm=14)
             os.remove(tmp)
         except Exception:

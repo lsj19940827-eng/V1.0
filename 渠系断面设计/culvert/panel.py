@@ -54,6 +54,11 @@ from 渠系断面设计.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_formula, doc_render_calc_text, doc_add_figure,
     doc_add_styled_table, doc_add_table_caption, doc_add_body,
+    create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
+    doc_render_calc_text_eng, update_doc_toc_via_com,
+)
+from 渠系断面设计.report_meta import (
+    ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
 from 渠系断面设计.culvert.dxf_export import export_culvert_dxf
 from 渠系断面设计.formula_renderer import (
@@ -119,7 +124,10 @@ class CulvertPanel(QWidget):
         self.vmax_edit = self._field(fl, "不冲流速 (m/s):", "100.0")
         fl.addWidget(self._hint("(一般情况下保持默认数值即可)"))
 
-        fl.addWidget(self._slbl("【流量加大】"))
+        self.inc_cb = CheckBox("考虑加大流量比例系数")
+        self.inc_cb.setChecked(True)
+        self.inc_cb.stateChanged.connect(self._on_inc_toggle)
+        fl.addWidget(self.inc_cb)
         self.inc_edit = self._field(fl, "流量加大比例 (%):", "")
         self.inc_hint = QLabel("(留空则自动计算)")
         self.inc_hint.setStyleSheet(INPUT_HINT_STYLE)
@@ -181,6 +189,11 @@ class CulvertPanel(QWidget):
 
     def _sep(self):
         f = QFrame(); f.setFrameShape(QFrame.HLine); f.setStyleSheet(f"color:{BD};"); return f
+
+    def _on_inc_toggle(self, _state):
+        enabled = self.inc_cb.isChecked()
+        self.inc_edit.setVisible(enabled)
+        self.inc_hint.setVisible(enabled)
 
     def _build_output(self, parent):
         lay = QVBoxLayout(parent)
@@ -303,7 +316,8 @@ class CulvertPanel(QWidget):
             if slope_inv <= 0: self._show_error("参数错误", "请输入有效的水力坡降倒数（必须大于0）。"); return
             if v_min >= v_max: self._show_error("参数错误", "不淤流速必须小于不冲流速。"); return
 
-            manual_increase = self._fval_opt(self.inc_edit)
+            use_increase = self.inc_cb.isChecked()
+            manual_increase = self._fval_opt(self.inc_edit) if use_increase else 0
             manual_B = self._fval_opt(self.B_edit)
             target_BH_ratio = self._fval_opt(self.bh_edit)
             target_HB_ratio = self._fval_opt(self.hb_edit)
@@ -318,7 +332,8 @@ class CulvertPanel(QWidget):
                 'manual_B': manual_B,
                 'target_BH_ratio': target_BH_ratio,
                 'target_HB_ratio': target_HB_ratio,
-                'manual_increase': manual_increase
+                'manual_increase': manual_increase,
+                'use_increase': use_increase
             }
 
             result = quick_calculate_rectangular_culvert(
@@ -332,7 +347,7 @@ class CulvertPanel(QWidget):
 
             self.current_result = result
 
-            if result.get('success') and 'increase_percent' in result:
+            if use_increase and result.get('success') and 'increase_percent' in result:
                 ap = result['increase_percent']
                 src = "指定" if self.inc_edit.text().strip() else "自动计算"
                 self.inc_hint.setText(f"({src}: {ap:.1f}%)")
@@ -378,13 +393,18 @@ class CulvertPanel(QWidget):
         fb_min_req = result['fb_min_required']
         A_total = result.get('A_total', B * H)
 
+        use_increase_val = p.get('use_increase', True)
         vel_ok = v_min <= V_d <= v_max
         if H <= 3.0:
             fb_req_by_rule = max(0.4, H / 6.0)
         else:
             fb_req_by_rule = 0.5
-        fb_area_ok = 10.0 - 0.1 <= fb_pct_inc <= 30.0 + 0.1
-        fb_hgt_ok = fb_hgt_inc >= fb_req_by_rule - 1e-3
+        if use_increase_val:
+            fb_area_ok = 10.0 - 0.1 <= fb_pct_inc <= 30.0 + 0.1
+            fb_hgt_ok = fb_hgt_inc >= fb_req_by_rule - 1e-3
+        else:
+            fb_area_ok = 10.0 - 0.1 <= fb_pct_d <= 30.0 + 0.1
+            fb_hgt_ok = fb_hgt_d >= fb_req_by_rule - 1e-3
         fb_ok = fb_area_ok and fb_hgt_ok
 
         o = []
@@ -437,13 +457,15 @@ class CulvertPanel(QWidget):
             o.append(f"  净空比例 = {fb_pct_d:.1f}%")
             o.append("")
 
-            o.append("【加大流量工况】")
-            o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
-            o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
-            o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
-            o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
-            o.append(f"  净空高度 Fb加大 = {fb_hgt_inc:.3f} m")
-            o.append(f"  净空比例 = {fb_pct_inc:.1f}%")
+            use_increase = p.get('use_increase', True)
+            if use_increase:
+                o.append("【加大流量工况】")
+                o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
+                o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+                o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
+                o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
+                o.append(f"  净空高度 Fb加大 = {fb_hgt_inc:.3f} m")
+                o.append(f"  净空比例 = {fb_pct_inc:.1f}%")
             o.append("")
 
             o.append("【验证结果】")
@@ -562,9 +584,10 @@ class CulvertPanel(QWidget):
             o.append(f"         = {fb_pct_d:.1f}%")
             o.append("")
 
-            o.append("【四、加大流量工况】")
-            o.append("")
-            o.append("  1. 加大流量比例:")
+            if use_increase_val:
+              o.append("【四、加大流量工况】")
+              o.append("")
+              o.append("  1. 加大流量比例:")
             o.append(f"      = {inc_pct:.1f}% {inc_src}")
             o.append("")
             o.append("  2. 加大流量计算:")
@@ -817,7 +840,17 @@ class CulvertPanel(QWidget):
         if not WORD_EXPORT_AVAILABLE:
             InfoBar.warning("缺少依赖", "需要: pip install python-docx latex2mathml lxml", parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP); return
         if not self.current_result or not self.current_result.get('success'):
-            InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP); return
+            InfoBar.warning("提示", "请先计算。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP); return
+        meta = load_meta()
+        channel_name = getattr(self, 'input_params', {}).get('channel_name', '')
+        auto_purpose = build_calc_purpose('culvert', project=meta.project_name, name=channel_name, section_type='矩形')
+        dlg = ExportConfirmDialog('culvert', '矩形暗涵水力计算书', auto_purpose, parent=self._info_parent())
+        from PySide6.QtWidgets import QDialog
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self._word_export_meta = dlg.get_meta()
+        self._word_export_purpose = dlg.get_calc_purpose()
+        self._word_export_refs = dlg.get_references()
         filepath, _ = QFileDialog.getSaveFileName(self, "保存Word报告", "", "Word文档 (*.docx);;所有文件 (*.*)") 
         if not filepath: return
         try:
@@ -825,23 +858,29 @@ class CulvertPanel(QWidget):
             InfoBar.success("导出成功", f"Word报告已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
             ask_open_file(filepath, self._info_parent())
         except PermissionError:
-            InfoBar.error("文件被占用", "无法写入文件，请先关闭已打开的同名Word文档，然后重新操作。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
+            InfoBar.error("文件被占用", "请关闭同名Word文档后重试。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
         except Exception as e:
             InfoBar.error("导出失败", str(e), parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
     def _build_word_report(self, filepath):
-        """构建Word报告文档（方案3高端咨询报告风格）"""
-        method = self.current_result.get("design_method", "")
+        """构建Word报告文档（工程产品运行卡格式）"""
+        method = self.current_result.get('design_method', '')
+        meta = getattr(self, '_word_export_meta', load_meta())
+        purpose = getattr(self, '_word_export_purpose', '')
+        refs = getattr(self, '_word_export_refs', REFERENCES_BASE.get('culvert', []))
 
-        doc = create_styled_doc(
-            title='矩形暗涵水力计算书',
-            subtitle=method,
-            header_text='矩形暗涵水力计算书'
+        doc = create_engineering_report_doc(
+            meta=meta,
+            calc_title='矩形暗涵水力计算书',
+            calc_content_desc=f'矩形暗涵水力断面设计计算（{method}）',
+            calc_purpose=purpose,
+            references=refs,
+            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n矩形暗涵水力计算（{method}）',
         )
         doc.add_page_break()
 
-        # 一、基础公式
-        doc_add_h1(doc, '一、基础公式')
+        # 5. 基础公式
+        doc_add_eng_h(doc, '5、基础公式')
         doc_add_formula(doc, r'Q = \frac{1}{n} \cdot A \cdot R^{2/3} \cdot i^{1/2}', '曼宁公式：')
         doc_add_formula(doc, r'A = B \cdot h', '过水面积：')
         doc_add_formula(doc, r'P = B + 2h', '湿周：')
@@ -849,37 +888,33 @@ class CulvertPanel(QWidget):
         if self.current_result.get('is_optimal_section'):
             doc_add_formula(doc, r'\min A = B \times H \text{ (经济最优)}', '优化目标：')
 
-        # 二、计算过程 —— 在占位标记处插入Word表格
-        doc_add_h1(doc, '二、计算过程')
+        # 6. 计算过程
+        doc_add_eng_h(doc, '6、计算过程')
         calc_text = self._export_plain_text or ''
         _marker = '{{NORM_TABLE_11_2_5}}'
         if _marker in calc_text:
             _parts = calc_text.split(_marker, 1)
-            doc_render_calc_text(doc, _parts[0], skip_title_keyword='矩形暗涵水力计算结果')
-            # 插入表11.2.5（规范风格Word表格）
+            doc_render_calc_text_eng(doc, _parts[0], skip_title_keyword='矩形暗涵水力计算结果')
             doc_add_table_caption(doc, '表 11.2.5  无压涵洞的净空高度(m)')
             _H = self.current_result.get('H', 0)
             doc_add_styled_table(doc,
                 headers=['进口净高', '圆涵', '拱涵', '矩形涵洞'],
-                data=[
-                    ['≤3', '≥D/4', '≥D/4', '≥D/6'],
-                    ['>3', '≥0.75', '≥0.75', '≥0.5'],
-                ],
+                data=[['≤3', '≥D/4', '≥D/4', '≥D/6'], ['>3', '≥0.75', '≥0.75', '≥0.5']],
                 highlight_col=3,
                 highlight_val='≥D/6' if _H <= 3.0 else '≥0.5',
                 with_full_border=True,
             )
-            doc_add_body(doc, '注：表中D为涵洞内侧高度或者圆涵内径(m)。')
-            doc_render_calc_text(doc, _parts[1])
+            doc_add_eng_body(doc, '注：表中D为涵洞内侧高度或者圆涵内径(m)。')
+            doc_render_calc_text_eng(doc, _parts[1])
         else:
-            doc_render_calc_text(doc, calc_text, skip_title_keyword='矩形暗涵水力计算结果')
+            doc_render_calc_text_eng(doc, calc_text, skip_title_keyword='矩形暗涵水力计算结果')
 
-        # 三、断面图
+        # 7. 断面图
         try:
             import tempfile
             tmp = os.path.join(tempfile.gettempdir(), '_culvert_section.png')
             self.section_fig.savefig(tmp, dpi=150, bbox_inches='tight')
-            doc_add_h1(doc, '三、断面图')
+            doc_add_eng_h(doc, '7、断面图')
             doc_add_figure(doc, tmp, width_cm=14)
             os.remove(tmp)
         except Exception:

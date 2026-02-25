@@ -43,3 +43,9 @@ V1.00207的备份/
 *.tmp
 *.bak
 ~$*
+
+# 授权系统（密钥和台账不进版本库）
+tools/_secret_key.py
+tools/授权台账.csv
+*.lic
+.lc

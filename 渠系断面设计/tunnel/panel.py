@@ -53,6 +53,11 @@ from 渠系断面设计.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPUT_LA
 from 渠系断面设计.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_formula, doc_render_calc_text, doc_add_figure,
+    create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
+    doc_render_calc_text_eng, update_doc_toc_via_com,
+)
+from 渠系断面设计.report_meta import (
+    ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
 from 渠系断面设计.tunnel.dxf_export import export_tunnel_dxf
 from 渠系断面设计.formula_renderer import (
@@ -130,7 +135,10 @@ class TunnelPanel(QWidget):
         self.vmax_edit = self._field(fl, "不冲流速 (m/s):", "100.0")
         fl.addWidget(self._hint("(一般情况下保持默认数值即可)"))
 
-        fl.addWidget(self._slbl("【流量加大】"))
+        self.inc_cb = CheckBox("考虑加大流量比例系数")
+        self.inc_cb.setChecked(True)
+        self.inc_cb.stateChanged.connect(self._on_inc_toggle)
+        fl.addWidget(self.inc_cb)
         self.inc_edit = self._field(fl, "流量加大比例 (%):", "")
         self.inc_hint = QLabel("(留空则自动计算)")
         self.inc_hint.setStyleSheet(INPUT_HINT_STYLE)
@@ -206,6 +214,11 @@ class TunnelPanel(QWidget):
 
     def _sep(self):
         f = QFrame(); f.setFrameShape(QFrame.HLine); f.setStyleSheet(f"color:{BD};"); return f
+
+    def _on_inc_toggle(self, _state):
+        enabled = self.inc_cb.isChecked()
+        self.inc_edit.setVisible(enabled)
+        self.inc_hint.setVisible(enabled)
 
     # ----------------------------------------------------------------
     def _build_output(self, parent):
@@ -319,11 +332,13 @@ class TunnelPanel(QWidget):
             if slope_inv <= 0: self._show_error("参数错误", "请输入有效的水力坡降倒数（必须大于0）。"); return
             if v_min >= v_max: self._show_error("参数错误", "不淤流速必须小于不冲流速。"); return
 
-            manual_increase = self._fval_opt(self.inc_edit)
+            use_increase = self.inc_cb.isChecked()
+            manual_increase = self._fval_opt(self.inc_edit) if use_increase else 0
             self.input_params = {
                 'Q': Q, 'n': n, 'slope_inv': slope_inv,
                 'v_min': v_min, 'v_max': v_max,
-                'section_type': stype, 'manual_increase': manual_increase
+                'section_type': stype, 'manual_increase': manual_increase,
+                'use_increase': use_increase
             }
 
             if stype == "圆形":
@@ -362,7 +377,7 @@ class TunnelPanel(QWidget):
 
             self.current_result = result
 
-            if result.get('success') and 'increase_percent' in result:
+            if use_increase and result.get('success') and 'increase_percent' in result:
                 ap = result['increase_percent']
                 src = "指定" if self.inc_edit.text().strip() else "自动计算"
                 self.inc_hint.setText(f"({src}: {ap:.1f}%)")
@@ -465,20 +480,26 @@ class TunnelPanel(QWidget):
             o.append(f"  净空比例 = {fb_pct_d:.1f}%")
             o.append("")
 
-            o.append("【加大流量工况】")
-            o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
-            o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
-            o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
-            o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
-            o.append(f"  净空高度 Fb加大 = {fb_hgt_inc:.3f} m")
-            o.append(f"  净空比例 = {fb_pct_inc:.1f}%")
-            o.append("")
+            use_increase = p.get('use_increase', True)
+            if use_increase:
+                o.append("【加大流量工况】")
+                o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
+                o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+                o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
+                o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
+                o.append(f"  净空高度 Fb加大 = {fb_hgt_inc:.3f} m")
+                o.append(f"  净空比例 = {fb_pct_inc:.1f}%")
+                o.append("")
 
             o.append("【验证结果】")
             vel_ok = v_min <= V_d <= v_max
-            fb_ok = fb_pct_inc >= 15 and fb_hgt_inc >= 0.4
             o.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
-            o.append(f"  净空验证: {'✓ 通过' if fb_ok else '需注意'}")
+            if use_increase:
+                fb_ok = fb_pct_inc >= 15 and fb_hgt_inc >= 0.4
+                o.append(f"  净空验证: {'✓ 通过' if fb_ok else '需注意'}")
+            else:
+                fb_ok = fb_pct_d >= 15 and fb_hgt_d >= 0.4
+                o.append(f"  净空验证(设计): {'✓ 通过' if fb_ok else '需注意'}")
             o.append("")
         else:
             # ============ 详细输出（对齐原版格式） ============
@@ -666,10 +687,12 @@ class TunnelPanel(QWidget):
             o.append("")
 
             # 加大流量工况
-            o.append("【四、加大流量工况计算】")
-            o.append("")
-            o.append(f"  1. 加大流量计算:")
-            o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
+            use_increase = p.get('use_increase', True)
+            if use_increase:
+              o.append("【四、加大流量工况计算】")
+              o.append("")
+              o.append(f"  1. 加大流量计算:")
+              o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
             o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
             o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
             o.append(f"           = {Q_inc:.3f} m³/s")
@@ -805,8 +828,12 @@ class TunnelPanel(QWidget):
             o.append("【五、设计验证】")
             o.append("")
             vel_ok = v_min <= V_d <= v_max
-            fb_pct_ok = fb_pct_inc >= 15
-            fb_hgt_ok = fb_hgt_inc >= 0.4
+            if use_increase:
+                fb_pct_ok = fb_pct_inc >= 15
+                fb_hgt_ok = fb_hgt_inc >= 0.4
+            else:
+                fb_pct_ok = fb_pct_d >= 15
+                fb_hgt_ok = fb_hgt_d >= 0.4
 
             o.append(f"  1. 流速验证:")
             o.append(f"      范围要求: {v_min} ≤ V ≤ {v_max} m/s")
@@ -1063,7 +1090,18 @@ class TunnelPanel(QWidget):
         if not WORD_EXPORT_AVAILABLE:
             InfoBar.warning("缺少依赖", "需要: pip install python-docx latex2mathml lxml", parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP); return
         if not self.current_result or not self.current_result.get('success'):
-            InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP); return
+            InfoBar.warning("提示", "请先计算。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP); return
+        stype = self.input_params.get('section_type', '圆形')
+        channel_name = getattr(self, '_channel_name', '')
+        meta = load_meta()
+        auto_purpose = build_calc_purpose('tunnel', project=meta.project_name, name=channel_name, section_type=stype)
+        dlg = ExportConfirmDialog('tunnel', '隧洞水力计算书', auto_purpose, parent=self._info_parent())
+        from PySide6.QtWidgets import QDialog
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self._word_export_meta = dlg.get_meta()
+        self._word_export_purpose = dlg.get_calc_purpose()
+        self._word_export_refs = dlg.get_references()
         filepath, _ = QFileDialog.getSaveFileName(self, "保存Word报告", "", "Word文档 (*.docx);;所有文件 (*.*)")
         if not filepath: return
         try:
@@ -1071,37 +1109,43 @@ class TunnelPanel(QWidget):
             InfoBar.success("导出成功", f"Word报告已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
             ask_open_file(filepath, self._info_parent())
         except PermissionError:
-            InfoBar.error("文件被占用", "无法写入文件，请先关闭已打开的同名Word文档，然后重新操作。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
+            InfoBar.error("文件被占用", "请关闭同名Word文档后重试。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
         except Exception as e:
             InfoBar.error("导出失败", str(e), parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
     def _build_word_report(self, filepath):
-        """构建Word报告文档（方案3高端咨询报告风格）"""
+        """构建Word报告文档（工程产品运行卡格式）"""
         stype = self.input_params.get('section_type', '圆形')
-        method = self.current_result.get("design_method", "")
+        method = self.current_result.get('design_method', '')
+        meta = getattr(self, '_word_export_meta', load_meta())
+        purpose = getattr(self, '_word_export_purpose', '')
+        refs = getattr(self, '_word_export_refs', REFERENCES_BASE.get('tunnel', []))
 
-        doc = create_styled_doc(
-            title='隧洞水力计算书',
-            subtitle=f'{stype}断面  ·  {method}',
-            header_text=f'隧洞水力计算书（{stype}断面）'
+        doc = create_engineering_report_doc(
+            meta=meta,
+            calc_title='隧洞水力计算书',
+            calc_content_desc=f'隧洞水力断面设计计算（{stype}断面）',
+            calc_purpose=purpose,
+            references=refs,
+            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n隧洞水力计算（{stype}断面 · {method}）',
         )
         doc.add_page_break()
 
-        # 一、基础公式
-        doc_add_h1(doc, '一、基础公式')
+        # 5. 基础公式
+        doc_add_eng_h(doc, '5、基础公式')
         doc_add_formula(doc, r'Q = \frac{1}{n} \cdot A \cdot R^{2/3} \cdot i^{1/2}', '曼宁公式：')
         doc_add_formula(doc, r'R = \frac{A}{P}', '水力半径：')
 
-        # 二、计算过程
-        doc_add_h1(doc, '二、计算过程')
-        doc_render_calc_text(doc, self._export_plain_text or '', skip_title_keyword='隧洞水力计算结果')
+        # 6. 计算过程
+        doc_add_eng_h(doc, '6、计算过程')
+        doc_render_calc_text_eng(doc, self._export_plain_text or '', skip_title_keyword='隧洞水力计算结果')
 
-        # 三、断面图
+        # 7. 断面图
         try:
             import tempfile
             tmp = os.path.join(tempfile.gettempdir(), '_tunnel_section.png')
             self.section_fig.savefig(tmp, dpi=150, bbox_inches='tight')
-            doc_add_h1(doc, '三、断面图')
+            doc_add_eng_h(doc, '7、断面图')
             doc_add_figure(doc, tmp, width_cm=14)
             os.remove(tmp)
         except Exception:

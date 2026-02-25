@@ -235,10 +235,13 @@ class SharedDataManager:
                 section_result.D = result.get('D', result.get('D_design', None))
                 section_result.h = result.get('h_design', result.get('water_depth', result.get('y_d', None)))
             
-            # U形断面（渡槽-U形）
+            # U形断面（渡槽-U形 或 明渠-U形）
             if section_type == 'U形' or 'U形' in section_type or ('R' in result and 'U' in str(result.get('section_type', ''))):
                 section_result.R = result.get('R', result.get('R_design', None))
                 section_result.h = result.get('h_design', result.get('water_depth', result.get('y_d', None)))
+                # 明渠-U形角层边坡系数 m = tan(α)
+                if '明渠-U形' in section_type:
+                    section_result.m = result.get('m', 0)
             
             # 马蹄形隧洞（半径用小写 'r' 存储）
             if "马蹄形" in section_type or 'r' in result:
@@ -271,15 +274,18 @@ class SharedDataManager:
             if section_type in ('梯形', '矩形') and 'h_prime' in result:
                 # 明渠梯形/矩形：渠道高度 H = h加大 + Fb
                 section_result.H_total = result.get('h_prime', 0)
+            elif '明渠-' in section_type and 'h_prime' in result:
+                # 明渠其他子类型（含明渠-U形、明渠-梯形 等）：h_prime
+                section_result.H_total = result.get('h_prime', 0)
             elif section_type == '圆形' or '圆形' in section_type:
-                # 明渠圆形/隧洞圆形：设计直径 D
+                # 明渠圆形/隔洞圆形：设计直径 D
                 section_result.H_total = result.get('D', result.get('D_design', 0))
             elif '马蹄形' in section_type:
-                # 马蹄形隧洞：2R
+                # 马蹄形隔洞：2R
                 r_val = result.get('r', result.get('R_design', 0))
                 section_result.H_total = 2 * r_val if r_val else 0
             else:
-                # 渡槽(U形/矩形)、隧洞-圆拱直墙型、矩形暗涵等：H_total
+                # 渡槽(U形/矩形)、隔洞-圆弧直墙型、矩形暗涵等：H_total
                 section_result.H_total = result.get('H_total', result.get('H', result.get('h_prime', 0)))
             
             return section_result

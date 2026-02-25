@@ -18,6 +18,7 @@
 import sys
 import os
 import math
+import copy
 import datetime
 import traceback
 
@@ -33,7 +34,7 @@ from PySide6.QtWidgets import (
     QFrame, QTabWidget, QTextEdit, QFileDialog,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
     QAbstractItemView, QGridLayout, QScrollArea, QSizePolicy,
-    QDialog, QDialogButtonBox
+    QDialog, QDialogButtonBox, QSpinBox
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QColor, QBrush
@@ -50,6 +51,11 @@ from 渠系断面设计.export_utils import (
     create_styled_doc, doc_add_h1, doc_add_h2,
     doc_add_formula, doc_add_body, doc_render_calc_text,
     doc_add_result_table, doc_add_param_table,
+    create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
+    doc_render_calc_text_eng, update_doc_toc_via_com,
+)
+from 渠系断面设计.report_meta import (
+    ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
 
 # 计算引擎导入
@@ -59,7 +65,7 @@ try:
         SegmentType, SegmentDirection, GradientType, V2Strategy,
         LongitudinalNode, TurnType, InletOutletShape,
         COMMON_SEGMENT_TYPES, is_common_type,
-        INLET_SHAPE_COEFFICIENTS, PlanFeaturePoint
+        INLET_SHAPE_COEFFICIENTS, PlanFeaturePoint, TrashRackParams
     )
     from siphon_hydraulics import HydraulicCore
     from siphon_coefficients import CoefficientService
@@ -205,6 +211,8 @@ class SiphonPanel(QWidget):
         self._v_user_confirmed = False
         # 弯管半径倍数确认标志（方案B：温和提醒）
         self._turn_n_user_confirmed = False
+        # 管道根数确认标志（用户必须按Enter或失焦确认）
+        self._num_pipes_user_confirmed = False
 
         # 断面参数缓存（v₂策略=断面参数计算用）
         self._section_B = None
@@ -216,6 +224,8 @@ class SiphonPanel(QWidget):
 
         # 下游断面参数（出口系数计算用）
         self._downstream_params = {}
+        self.calculation_result_increased = None
+        self._inc_pct_used = 0.0
 
         self._init_ui()
         self._init_default_segments()
@@ -400,6 +410,29 @@ class SiphonPanel(QWidget):
         self.edit_D_override.setVisible(False)
         g1.addWidget(self.edit_D_override, 1, 4, 1, 2)
 
+        # Row 1 cols 6-8: 管道根数 N
+        lbl_np_label = QLabel("管道根数 N (根):")
+        lbl_np_star = QLabel("<span style='color:#E53935;font-weight:bold;font-size:14px;'>*</span>")
+        lbl_np_star.setTextFormat(Qt.RichText)
+        np_label_lay = QHBoxLayout(); np_label_lay.setSpacing(1); np_label_lay.setContentsMargins(0,0,0,0)
+        np_label_lay.addWidget(lbl_np_label); np_label_lay.addWidget(lbl_np_star)
+        np_label_w = QWidget(); np_label_w.setLayout(np_label_lay)
+        g1.addWidget(np_label_w, 1, 6)
+        self.spin_num_pipes = QSpinBox()
+        self.spin_num_pipes.setMinimum(1)
+        self.spin_num_pipes.setMaximum(99)
+        self.spin_num_pipes.setValue(1)
+        self.spin_num_pipes.setFixedWidth(65)
+        self.spin_num_pipes.setStyleSheet(
+            "QSpinBox { border: 2px dashed #E65100; background: #FFF8E1; }"
+        )
+        self.spin_num_pipes.valueChanged.connect(self._on_num_pipes_value_changed)
+        self.spin_num_pipes.editingFinished.connect(self._on_num_pipes_confirmed)
+        g1.addWidget(self.spin_num_pipes, 1, 7)
+        self.lbl_num_pipes_hint = QLabel("← 请确认管道数")
+        self.lbl_num_pipes_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
+        g1.addWidget(self.lbl_num_pipes_hint, 1, 8)
+
         # Row 2: 计算目标 + 弯管半径倍数 + 水损阈值
         g1.addWidget(QLabel("计算目标:"), 2, 0)
         self.lbl_calc_target = QLabel("计算总水头损失")
@@ -428,6 +461,20 @@ class SiphonPanel(QWidget):
         lbl_threshold_hint = QLabel("(ΔZ超此值将提醒调整参数)")
         lbl_threshold_hint.setStyleSheet("color:#FF6600;font-size:12px;")
         g1.addWidget(lbl_threshold_hint, 2, 8)
+
+        # Row 3: 加大流量
+        self.inc_cb = CheckBox("考虑加大流量比例系数")
+        self.inc_cb.setChecked(True)
+        self.inc_cb.stateChanged.connect(self._on_inc_toggle)
+        g1.addWidget(self.inc_cb, 3, 0, 1, 2)
+        g1.addWidget(QLabel("加大比例(%):"), 3, 3)
+        self.edit_inc = LineEdit()
+        self.edit_inc.setPlaceholderText("留空自动计算")
+        self.edit_inc.setFixedWidth(100)
+        g1.addWidget(self.edit_inc, 3, 4)
+        self.lbl_inc_hint = QLabel("(留空则按设计流量自动查表)")
+        self.lbl_inc_hint.setStyleSheet("color:#0066CC;font-size:12px;")
+        g1.addWidget(self.lbl_inc_hint, 3, 5, 1, 4)
 
         # 让最后一列吸收多余空间
         g1.setColumnStretch(8, 1)
@@ -487,6 +534,23 @@ class SiphonPanel(QWidget):
         inlet_r1.addWidget(self.lbl_v1_hint)
         inlet_r1.addStretch()
         ibl.addLayout(inlet_r1)
+
+        # 进口 Row 1.5: 直线扭曲面扭转角（仅选中直线扭曲面时显示）
+        self._twist_in_row = QWidget()
+        _ti_lay = QHBoxLayout(self._twist_in_row)
+        _ti_lay.setContentsMargins(0, 0, 0, 0); _ti_lay.setSpacing(6)
+        _ti_lay.addWidget(QLabel("扭转角θ₁(°):"))
+        self.edit_twist_angle_inlet = LineEdit()
+        self.edit_twist_angle_inlet.setFixedWidth(72)
+        self.edit_twist_angle_inlet.setPlaceholderText("留空取均值")
+        self.edit_twist_angle_inlet.textChanged.connect(self._update_inlet_twist_xi)
+        _ti_lay.addWidget(self.edit_twist_angle_inlet)
+        _ti_lbl = QLabel("(15°~37°，留空则取均值 0.20)")
+        _ti_lbl.setStyleSheet("color:#0066CC;font-size:11px;")
+        _ti_lay.addWidget(_ti_lbl)
+        _ti_lay.addStretch()
+        self._twist_in_row.setVisible(False)
+        ibl.addWidget(self._twist_in_row)
 
         # 进口 Row 2: v₂策略 + 末端流速v₂
         inlet_r2 = QHBoxLayout(); inlet_r2.setSpacing(6)
@@ -559,6 +623,23 @@ class SiphonPanel(QWidget):
         outlet_r1.addStretch()
         obl.addLayout(outlet_r1)
 
+        # 出口 Row 1.5: 直线扭曲面扭转角（仅选中直线扭曲面时显示）
+        self._twist_out_row = QWidget()
+        _to_lay = QHBoxLayout(self._twist_out_row)
+        _to_lay.setContentsMargins(0, 0, 0, 0); _to_lay.setSpacing(6)
+        _to_lay.addWidget(QLabel("扭转角θ₂(°):"))
+        self.edit_twist_angle_outlet = LineEdit()
+        self.edit_twist_angle_outlet.setFixedWidth(72)
+        self.edit_twist_angle_outlet.setPlaceholderText("留空取均值")
+        self.edit_twist_angle_outlet.textChanged.connect(self._update_outlet_twist_xi)
+        _to_lay.addWidget(self.edit_twist_angle_outlet)
+        _to_lbl = QLabel("(10°~17°，留空则取均值 0.40)")
+        _to_lbl.setStyleSheet("color:#0066CC;font-size:11px;")
+        _to_lay.addWidget(_to_lbl)
+        _to_lay.addStretch()
+        self._twist_out_row.setVisible(False)
+        obl.addWidget(self._twist_out_row)
+
         # 出口 Row 2: 末端流速v₃
         outlet_r2 = QHBoxLayout(); outlet_r2.setSpacing(6)
         outlet_r2.addWidget(QLabel("末端流速v₃(m/s):"))
@@ -595,12 +676,14 @@ class SiphonPanel(QWidget):
         btn_dxf2 = PushButton("导入DXF"); btn_dxf2.clicked.connect(self._import_dxf)
         btn_add_pipe = PushButton("添加管身段"); btn_add_pipe.clicked.connect(self._add_segment_dialog)
         btn_add_common = PushButton("添加通用构件"); btn_add_common.clicked.connect(self._add_common_segment_dialog)
+        btn_add_ptrans = PushButton("管道渐变段"); btn_add_ptrans.clicked.connect(self._add_pipe_transition)
+        btn_add_ptrans.setToolTip("插入压力管道渐变段 ξjb（收缩0.05/扩散0.10），双击可切换类型")
         btn_del = PushButton("删除"); btn_del.clicked.connect(self._del_segment)
         btn_up = PushButton("↑"); btn_up.setFixedWidth(30); btn_up.clicked.connect(self._move_seg_up)
         btn_dn = PushButton("↓"); btn_dn.setFixedWidth(30); btn_dn.clicked.connect(self._move_seg_down)
         btn_clr_long = PushButton("清空纵断面"); btn_clr_long.clicked.connect(self._clear_longitudinal)
         btn_default = PushButton("默认构件"); btn_default.clicked.connect(self._init_default_segments)
-        for w in [btn_dxf2, btn_add_pipe, btn_add_common, btn_del, btn_up, btn_dn, btn_clr_long, btn_default]:
+        for w in [btn_dxf2, btn_add_pipe, btn_add_common, btn_add_ptrans, btn_del, btn_up, btn_dn, btn_clr_long, btn_default]:
             tb.addWidget(w)
         lay.addLayout(tb)
 
@@ -1114,7 +1197,9 @@ document.addEventListener("DOMContentLoaded", function(){
         v = self._fval(self.edit_v, 0)
         if Q <= 0 or v <= 0:
             return
-        D_theory = math.sqrt(4 * Q / (math.pi * v))
+        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
+        Q_single = Q / N
+        D_theory = math.sqrt(4 * Q_single / (math.pi * v))
         if D_theory <= 0:
             return
         D_design = HydraulicCore.round_diameter(D_theory)
@@ -1150,7 +1235,9 @@ document.addEventListener("DOMContentLoaded", function(){
         v = self._fval(self.edit_v, 0)
         if Q <= 0 or v <= 0:
             return
-        omega_g = Q / v  # 管道断面积近似
+        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
+        Q_single = Q / N
+        omega_g = Q_single / v  # 单管断面积近似
         omega_q = 0.0
 
         # 根据下游类型计算断面积
@@ -1230,6 +1317,7 @@ document.addEventListener("DOMContentLoaded", function(){
             'name': self.edit_name.text().strip(),
             'show_detail': self.detail_cb.isChecked(),
             'D_override': self.edit_D_override.text().strip(),
+            'num_pipes': self.spin_num_pipes.value() if hasattr(self, 'spin_num_pipes') else 1,
         }
         if SIPHON_AVAILABLE:
             d['segments'] = [self._seg_to_dict(s) for s in self.segments]
@@ -1276,6 +1364,12 @@ document.addEventListener("DOMContentLoaded", function(){
             if d_val:
                 self.cb_D_override.setChecked(True)
                 self.edit_D_override.setText(d_val)
+        if 'num_pipes' in d and hasattr(self, 'spin_num_pipes'):
+            self._syncing = True
+            self.spin_num_pipes.setValue(int(d['num_pipes']))
+            self._syncing = False
+            self._num_pipes_user_confirmed = True
+            self._update_num_pipes_style()
         if 'inlet_type' in d: self.combo_inlet_type.setCurrentText(d['inlet_type'])
         if 'outlet_type' in d: self.combo_outlet_type.setCurrentText(d['outlet_type'])
         if 'xi_inlet' in d: self.edit_xi_inlet.setText(str(d['xi_inlet']))
@@ -1377,6 +1471,8 @@ document.addEventListener("DOMContentLoaded", function(){
             d['end_elev'] = seg.end_elevation
         if hasattr(seg, 'source_ip_index') and seg.source_ip_index is not None:
             d['source_ip_index'] = seg.source_ip_index
+        if hasattr(seg, 'trash_rack_params') and seg.trash_rack_params is not None:
+            d['trash_rack_params'] = seg.trash_rack_params.to_dict()
         return d
 
     def _dict_to_seg(self, d):
@@ -1418,8 +1514,17 @@ document.addEventListener("DOMContentLoaded", function(){
         # 旧数据迁移：通用构件不需要长度，自动清零
         length = d.get('length', 0)
         if st in (SegmentType.TRASH_RACK, SegmentType.GATE_SLOT,
-                  SegmentType.BYPASS_PIPE, SegmentType.OTHER) and length > 0:
+                  SegmentType.BYPASS_PIPE, SegmentType.PIPE_TRANSITION,
+                  SegmentType.OTHER) and length > 0:
             length = 0.0
+        trash_rack_params = None
+        if st == SegmentType.TRASH_RACK and 'trash_rack_params' in d:
+            try:
+                trash_rack_params = TrashRackParams.from_dict(d['trash_rack_params'])
+                if xi_calc is None and not trash_rack_params.manual_mode:
+                    xi_calc = round(CoefficientService.calculate_trash_rack_xi(trash_rack_params), 4)
+            except Exception:
+                pass
         return StructureSegment(
             segment_type=st, direction=direction,
             length=length, radius=d.get('radius', 0), angle=d.get('angle', 0),
@@ -1431,6 +1536,7 @@ document.addEventListener("DOMContentLoaded", function(){
             start_elevation=d.get('start_elev'),
             end_elevation=d.get('end_elev'),
             source_ip_index=d.get('source_ip_index'),
+            trash_rack_params=trash_rack_params,
         )
 
     # ================================================================
@@ -1520,6 +1626,87 @@ document.addEventListener("DOMContentLoaded", function(){
         return False
 
     # ================================================================
+    # 管道根数确认交互
+    # ================================================================
+    def _on_num_pipes_value_changed(self, value):
+        """SpinBox 值变化时触发（重置确认状态，实时联动D理论值等）"""
+        if self._syncing:
+            return
+        self._num_pipes_user_confirmed = False
+        self._update_num_pipes_style()
+        self._on_Qv_changed()
+
+    def _on_num_pipes_confirmed(self):
+        """SpinBox editingFinished（Enter/失焦）时触发，视为用户已确认"""
+        if self._syncing:
+            return
+        self._num_pipes_user_confirmed = True
+        self._update_num_pipes_style()
+        self._on_Qv_changed()
+
+    def _update_num_pipes_style(self):
+        """根据确认状态动态更新管道根数 SpinBox 样式"""
+        N = self.spin_num_pipes.value()
+        if self._num_pipes_user_confirmed:
+            self.spin_num_pipes.setStyleSheet(
+                f"QSpinBox {{ border: 1.5px solid {S}; background: #F1F8E9; }}"
+            )
+            if N > 1:
+                self.lbl_num_pipes_hint.setText(f"(✓已确认，{N}管并联)")
+            else:
+                self.lbl_num_pipes_hint.setText("(✓已确认，单管)")
+            self.lbl_num_pipes_hint.setStyleSheet(f"color:{S};font-size:12px;font-weight:bold;")
+        else:
+            self.spin_num_pipes.setStyleSheet(
+                "QSpinBox { border: 2px dashed #E65100; background: #FFF8E1; }"
+            )
+            self.lbl_num_pipes_hint.setText("← 请确认管道数")
+            self.lbl_num_pipes_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
+
+    def _flash_num_pipes_field(self):
+        """管道根数 SpinBox 边框闪烁3次红色警告"""
+        if hasattr(self, '_flash_np_timer') and self._flash_np_timer.isActive():
+            self._flash_np_timer.stop()
+            self._flash_np_timer.deleteLater()
+        self._flash_np_count = 0
+        self._flash_np_timer = QTimer(self)
+        self._flash_np_timer.setInterval(250)
+
+        def _do_flash():
+            self._flash_np_count += 1
+            if self._flash_np_count > 6:
+                self._flash_np_timer.stop()
+                self._update_num_pipes_style()
+                return
+            if self._flash_np_count % 2 == 1:
+                self.spin_num_pipes.setStyleSheet(
+                    "QSpinBox { border: 3px solid #D50000; background: #FFCDD2; }"
+                )
+            else:
+                self.spin_num_pipes.setStyleSheet(
+                    "QSpinBox { border: 2px dashed #E65100; background: #FFF8E1; }"
+                )
+
+        self._flash_np_timer.timeout.connect(_do_flash)
+        self._flash_np_timer.start()
+
+    def _validate_num_pipes_before_calc(self) -> bool:
+        """计算前检查管道根数是否已确认。返回True=通过，False=拦截"""
+        if self._num_pipes_user_confirmed:
+            return True
+        self.params_notebook.setCurrentIndex(0)
+        self.spin_num_pipes.setFocus()
+        self.spin_num_pipes.selectAll()
+        self._flash_num_pipes_field()
+        InfoBar.error(
+            "请先确认管道根数",
+            "「管道根数 N」是必填参数，请确认后再执行计算（单管请按Enter确认）。",
+            parent=self._info_parent(), duration=6000,
+            position=InfoBarPosition.TOP
+        )
+        return False
+
+    # ================================================================
     # 弯管半径倍数确认交互（方案B：温和提醒）
     # ================================================================
     def _on_turn_n_edited_by_user(self):
@@ -1579,15 +1766,27 @@ document.addEventListener("DOMContentLoaded", function(){
     def _update_D_theory(self):
         Q = self._fval(self.edit_Q, 0)
         v = self._fval(self.edit_v, 0)
+        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
         if Q > 0 and v > 0:
-            D = math.sqrt(4 * Q / (math.pi * v))
+            Q_single = Q / N
+            D = math.sqrt(4 * Q_single / (math.pi * v))
             if SIPHON_AVAILABLE:
                 D_design = HydraulicCore.round_diameter(D)
-                self.lbl_D_theory.setText(f"D设计 = {D_design:.4f} m（D理论 = {D:.4f} m）")
+                if N > 1:
+                    self.lbl_D_theory.setText(
+                        f"D设计 = {D_design:.4f} m（{N}管并联，每管 Q = {Q_single:.3f} m³/s）")
+                else:
+                    self.lbl_D_theory.setText(f"D设计 = {D_design:.4f} m（D理论 = {D:.4f} m）")
             else:
                 self.lbl_D_theory.setText(f"D = {D:.4f} m")
         else:
             self.lbl_D_theory.setText("D = --")
+
+    def _on_inc_toggle(self, _state):
+        """考虑加大流量 CheckBox 切换"""
+        enabled = self.inc_cb.isChecked()
+        self.edit_inc.setVisible(enabled)
+        self.lbl_inc_hint.setVisible(enabled)
 
     def _on_D_override_toggled(self, state):
         """指定管径 CheckBox 切换"""
@@ -1604,7 +1803,9 @@ document.addEventListener("DOMContentLoaded", function(){
         v = self._fval(self.edit_v, 0)
         if Q <= 0 or v <= 0:
             return
-        D = math.sqrt(4 * Q / (math.pi * v))
+        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
+        Q_single = Q / N
+        D = math.sqrt(4 * Q_single / (math.pi * v))
         if D <= 0:
             return
         updated = False
@@ -1634,10 +1835,12 @@ document.addEventListener("DOMContentLoaded", function(){
         if self._section_B is None or self._section_h is None:
             return
         Q = self._fval(self.edit_Q, 0)
+        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
+        Q_single = Q / N
         B = self._section_B
         h = self._section_h
         m = self._section_m if self._section_m is not None else 0.0
-        if Q <= 0 or B <= 0 or h <= 0:
+        if Q_single <= 0 or B <= 0 or h <= 0:
             return
 
         # 圆形断面判断（与原版_calculate_trapezoidal_velocity一致）
@@ -1659,7 +1862,7 @@ document.addEventListener("DOMContentLoaded", function(){
         if area <= 0:
             return
 
-        v2 = Q / area
+        v2 = Q_single / area
         was_ro = self.edit_v2.isReadOnly()
         self.edit_v2.setReadOnly(False)
         self.edit_v2.setText(f"{v2:.4f}")
@@ -1684,7 +1887,9 @@ document.addEventListener("DOMContentLoaded", function(){
         if n_mult <= 0:
             self.lbl_turn_R.setText("R = n × D（请输入n值）")
             return
-        D_theory = math.sqrt(4 * Q / (math.pi * v))
+        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
+        Q_single = Q / N
+        D_theory = math.sqrt(4 * Q_single / (math.pi * v))
         D_design = HydraulicCore.round_diameter(D_theory)
         R = round(n_mult * D_design, 2)
         has_bends = any(seg.segment_type == SegmentType.BEND for seg in self.plan_segments)
@@ -1703,14 +1908,54 @@ document.addEventListener("DOMContentLoaded", function(){
         """渐变段型式→进口系数自动联动"""
         if SIPHON_AVAILABLE:
             gt = GRADIENT_TYPE_MAP.get(text, GradientType.NONE)
-            xi = CoefficientService.get_gradient_coeff(gt, True)
-            self.edit_xi_inlet.setText(f"{xi:.4f}")
+            is_twist = (gt == GradientType.LINEAR_TWIST)
+            self._twist_in_row.setVisible(is_twist)
+            if is_twist:
+                self._update_inlet_twist_xi()
+            else:
+                xi = CoefficientService.get_gradient_coeff(gt, True)
+                self.edit_xi_inlet.setText(f"{xi:.4f}")
 
     def _on_outlet_type_changed(self, text):
         """渐变段型式→出口系数自动联动"""
         if SIPHON_AVAILABLE:
             gt = GRADIENT_TYPE_MAP.get(text, GradientType.NONE)
-            xi = CoefficientService.get_gradient_coeff(gt, False)
+            is_twist = (gt == GradientType.LINEAR_TWIST)
+            self._twist_out_row.setVisible(is_twist)
+            if is_twist:
+                self._update_outlet_twist_xi()
+            else:
+                xi = CoefficientService.get_gradient_coeff(gt, False)
+                self.edit_xi_outlet.setText(f"{xi:.4f}")
+
+    def _update_inlet_twist_xi(self):
+        """直线扭曲面进口：有角度则插值，无角度则取均值"""
+        if not SIPHON_AVAILABLE:
+            return
+        txt = self.edit_twist_angle_inlet.text().strip()
+        if txt:
+            try:
+                xi = CoefficientService.calculate_linear_twist_coeff(float(txt), True)
+                self.edit_xi_inlet.setText(f"{xi:.4f}")
+            except ValueError:
+                pass
+        else:
+            xi = CoefficientService.get_gradient_coeff(GradientType.LINEAR_TWIST, True)
+            self.edit_xi_inlet.setText(f"{xi:.4f}")
+
+    def _update_outlet_twist_xi(self):
+        """直线扭曲面出口：有角度则插值，无角度则取均值"""
+        if not SIPHON_AVAILABLE:
+            return
+        txt = self.edit_twist_angle_outlet.text().strip()
+        if txt:
+            try:
+                xi = CoefficientService.calculate_linear_twist_coeff(float(txt), False)
+                self.edit_xi_outlet.setText(f"{xi:.4f}")
+            except ValueError:
+                pass
+        else:
+            xi = CoefficientService.get_gradient_coeff(GradientType.LINEAR_TWIST, False)
             self.edit_xi_outlet.setText(f"{xi:.4f}")
 
     def _on_v_channel_in_changed(self):
@@ -1902,6 +2147,11 @@ document.addEventListener("DOMContentLoaded", function(){
                 type_display = f"进水口({seg.inlet_shape.value})"
             elif seg.segment_type == SegmentType.OUTLET:
                 type_display = "出水口"
+            elif seg.segment_type == SegmentType.TRASH_RACK:
+                type_display = "拦污栅(已配置)" if getattr(seg, 'trash_rack_params', None) else "拦污栅(未配置)"
+            elif seg.segment_type == SegmentType.PIPE_TRANSITION:
+                lbl = getattr(seg, 'custom_label', '')
+                type_display = f"管道渐变段({'扩散' if lbl == '扩散' else '收缩'})"
             elif seg.segment_type == SegmentType.OTHER and getattr(seg, 'custom_label', ''):
                 type_display = seg.custom_label
 
@@ -2042,6 +2292,24 @@ document.addEventListener("DOMContentLoaded", function(){
             self._refresh_seg_table()
             self._update_canvas()
 
+    def _add_pipe_transition(self):
+        """快速插入管道渐变段（默认收缩 ξjb=0.05），双击可修改"""
+        if not SIPHON_AVAILABLE:
+            return
+        seg = StructureSegment(
+            segment_type=SegmentType.PIPE_TRANSITION,
+            direction=SegmentDirection.COMMON,
+            custom_label='收缩',
+            xi_user=CoefficientService.PIPE_TRANSITION_CONTRACT)
+        insert_idx = len(self.segments)
+        for i, s in enumerate(self.segments):
+            if s.segment_type == SegmentType.OUTLET:
+                insert_idx = i
+                break
+        self.segments.insert(insert_idx, seg)
+        self._refresh_seg_table()
+        self._update_canvas()
+
     def _move_seg_up(self):
         """上移选中的结构段（保护进出水口和平面段）"""
         rows = sorted(set(idx.row() for idx in self.seg_table.selectedIndexes()))
@@ -2170,7 +2438,21 @@ document.addEventListener("DOMContentLoaded", function(){
             }
             dlg = OutletShapeDialog(self, seg, Q=Q, v=v,
                                      downstream_params=dp_short)
-        elif seg.segment_type in (SegmentType.TRASH_RACK, SegmentType.GATE_SLOT, SegmentType.BYPASS_PIPE):
+        elif seg.segment_type == SegmentType.TRASH_RACK:
+            dlg = TrashRackConfigDialog(self, seg.trash_rack_params)
+            if dlg.exec() == QDialog.Accepted and dlg.result:
+                try:
+                    real_idx = self.segments.index(seg)
+                    self.segments[real_idx].trash_rack_params = dlg.result
+                    self.segments[real_idx].xi_calc = CoefficientService.calculate_trash_rack_xi(dlg.result)
+                    self.segments[real_idx].xi_user = None
+                except ValueError:
+                    pass
+                self._refresh_seg_table()
+                self._update_canvas()
+            return
+        elif seg.segment_type in (SegmentType.GATE_SLOT, SegmentType.BYPASS_PIPE,
+                                     SegmentType.PIPE_TRANSITION):
             dlg = SimpleCommonEditDialog(self, seg)
         elif seg.segment_type == SegmentType.OTHER and seg.direction == SegmentDirection.COMMON:
             dlg = CommonSegmentEditDialog(self, seg)
@@ -2663,13 +2945,16 @@ document.addEventListener("DOMContentLoaded", function(){
         inlet_type = GRADIENT_TYPE_MAP.get(self.combo_inlet_type.currentText(), GradientType.NONE)
         outlet_type = GRADIENT_TYPE_MAP.get(self.combo_outlet_type.currentText(), GradientType.NONE)
 
+        num_pipes = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
+
         return GlobalParameters(
             Q=Q, v_guess=v_guess, roughness_n=n,
             inlet_type=inlet_type, outlet_type=outlet_type,
             v_channel_in=v1, v_pipe_in=v2,
             v_channel_out=v_out, v_pipe_out=v3,
             xi_inlet=xi_inlet, xi_outlet=xi_outlet,
-            v2_strategy=v2_strategy
+            v2_strategy=v2_strategy,
+            num_pipes=num_pipes
         )
 
     def _execute_calculation(self):
@@ -2679,6 +2964,9 @@ document.addEventListener("DOMContentLoaded", function(){
             return
         # 方案D：计算前验证拟定流速是否已确认
         if not self._validate_v_before_calc():
+            return
+        # 计算前验证管道根数是否已确认
+        if not self._validate_num_pipes_before_calc():
             return
         try:
             params = self._get_global_params()
@@ -2707,6 +2995,26 @@ document.addEventListener("DOMContentLoaded", function(){
             D_override = float(D_override_text) if D_override_text else None
 
             verbose = self.detail_cb.isChecked()
+
+            # 确定加大比例（与其他4个面板保持一致：单次传入引擎）
+            inc_pct_for_engine = None
+            if self.inc_cb.isChecked():
+                inc_text = self.edit_inc.text().strip()
+                if inc_text:
+                    try:
+                        inc_pct_for_engine = float(inc_text)
+                    except ValueError:
+                        inc_pct_for_engine = None
+                if inc_pct_for_engine is None:
+                    try:
+                        _calc_dir = os.path.join(_pkg_root, '渠系建筑物断面计算')
+                        if _calc_dir not in sys.path:
+                            sys.path.insert(0, _calc_dir)
+                        from 明渠设计 import get_flow_increase_percent
+                        inc_pct_for_engine = get_flow_increase_percent(params.Q)
+                    except Exception:
+                        inc_pct_for_engine = 20.0
+
             result = HydraulicCore.execute_calculation(
                 params, self.segments,
                 diameter_override=D_override,
@@ -2715,8 +3023,11 @@ document.addEventListener("DOMContentLoaded", function(){
                 plan_total_length=self.plan_total_length,
                 plan_feature_points=self.plan_feature_points,
                 longitudinal_nodes=self.longitudinal_nodes,
+                increase_percent=inc_pct_for_engine,
             )
             self.calculation_result = result
+            self.calculation_result_increased = None  # 单次计算，结果在 result 本身
+            self._inc_pct_used = inc_pct_for_engine or 0.0
             self._refresh_seg_table()
 
             # 回填流速
@@ -2739,7 +3050,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 except ValueError:
                     pass
 
-            # 显示结果
+            # 显示结果（format_result 已内置加大工况展示）
             if not self._suppress_result_display:
                 summary = HydraulicCore.format_result(result, show_steps=False)
                 self.summary_text.setPlainText(summary)
@@ -2937,7 +3248,7 @@ document.addEventListener("DOMContentLoaded", function(){
     # 导出
     # ================================================================
     def _export_word(self):
-        """导出Word计算书（与明渠/渡槽/隧洞/暗涵统一风格）"""
+        """导出Word计算书（工程产品运行卡格式）"""
         if not WORD_EXPORT_AVAILABLE:
             InfoBar.warning("缺少依赖",
                 "Word导出需要安装 python-docx、latex2mathml、lxml。\n请执行: pip install python-docx latex2mathml lxml",
@@ -2968,6 +3279,15 @@ document.addEventListener("DOMContentLoaded", function(){
             except Exception:
                 pass
         name = self.edit_name.text().strip() or "倒虹吸"
+        meta = load_meta()
+        auto_purpose = build_calc_purpose('siphon', project=meta.project_name, name=name, section_type='')
+        dlg = ExportConfirmDialog('siphon', '倒虹吸水力计算书', auto_purpose, parent=self._info_parent())
+        from PySide6.QtWidgets import QDialog
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self._word_export_meta = dlg.get_meta()
+        self._word_export_purpose = dlg.get_calc_purpose()
+        self._word_export_refs = dlg.get_references()
         default_fn = f"{name}水力计算书.docx"
         filepath, _ = QFileDialog.getSaveFileName(self, "保存Word报告",
             default_fn, "Word文档 (*.docx);;所有文件 (*.*)")
@@ -2986,19 +3306,25 @@ document.addEventListener("DOMContentLoaded", function(){
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
     def _build_word_report(self, filepath):
-        """构建Word报告文档（方案3高端咨询报告风格，与其他模块统一）"""
+        """构建Word报告文档（工程产品运行卡格式）"""
         r = self.calculation_result
         name = self.edit_name.text().strip() or "倒虹吸"
+        meta = getattr(self, '_word_export_meta', load_meta())
+        purpose = getattr(self, '_word_export_purpose', '')
+        refs = getattr(self, '_word_export_refs', REFERENCES_BASE.get('siphon', []))
 
-        doc = create_styled_doc(
-            title='倒虹吸水力计算书',
-            subtitle=name,
-            header_text=f'倒虹吸水力计算书（{name}）'
+        doc = create_engineering_report_doc(
+            meta=meta,
+            calc_title='倒虹吸水力计算书',
+            calc_content_desc=f'{name}倒虹吸水力计算',
+            calc_purpose=purpose,
+            references=refs,
+            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n倒虹吸水力计算',
         )
         doc.add_page_break()
 
-        # 一、基础公式
-        doc_add_h1(doc, '一、基础公式')
+        # 5. 基础公式
+        doc_add_eng_h(doc, '5、基础公式')
         doc_add_formula(doc, r'D = \sqrt{\frac{4Q}{\pi v}}', '理论管径：')
         doc_add_formula(doc, r'A = \frac{\pi D^2}{4}', '断面积：')
         doc_add_formula(doc, r'R = \frac{D}{4}', '水力半径：')
@@ -3007,12 +3333,16 @@ document.addEventListener("DOMContentLoaded", function(){
         doc_add_formula(doc, r'h_j = \sum \xi \cdot \frac{v^2}{2g}', '局部水头损失：')
         doc_add_formula(doc, r'\Delta Z = \Delta Z_1 + \Delta Z_2 - \Delta Z_3', '总水面落差：')
 
-        # 二、设计参数
-        doc_add_h1(doc, '二、设计参数')
+        # 6. 设计参数
+        doc_add_eng_h(doc, '6、设计参数')
+        _np_word = self.spin_num_pipes.value() if hasattr(self, 'spin_num_pipes') else 1
+        _Q_word = self._fval(self.edit_Q)
         params = [
             ("名称", name),
-            ("设计流量 Q", f"{self._fval(self.edit_Q):.4f} m³/s"),
+            ("设计流量 Q", f"{_Q_word:.4f} m³/s"),
             ("拟定流速 v", f"{self._fval(self.edit_v):.4f} m/s"),
+            ("管道根数 N", f"{_np_word} 根"),
+        ] + ([(f"单管流量 Q/N", f"{_Q_word/_np_word:.4f} m³/s")] if _np_word > 1 else []) + [
             ("糙率 n", f"{self._fval(self.edit_n):.4f}"),
             ("弯管半径倍数 n", f"{self._fval(self.edit_turn_n):.1f}"),
             ("进口渐变段型式", self.combo_inlet_type.currentText()),
@@ -3038,8 +3368,8 @@ document.addEventListener("DOMContentLoaded", function(){
             params.append(("出口末端流速 v₃", f"{v3:.4f} m/s"))
         doc_add_param_table(doc, params)
 
-        # 三、计算结果
-        doc_add_h1(doc, '三、计算结果')
+        # 7. 计算结果
+        doc_add_eng_h(doc, '7、计算结果')
         results = [
             ("理论管径 D理论", f"{r.diameter_theory:.4f} m"),
             ("设计管径 D", f"{r.diameter:.4f} m"),
@@ -3057,17 +3387,16 @@ document.addEventListener("DOMContentLoaded", function(){
         ]
         doc_add_result_table(doc, results)
 
-        # 四、详细计算过程（直接从计算引擎结果获取，不依赖UI缓存）
+        # 8. 详细计算过程
         if r.calculation_steps:
             steps_text = "\n".join(r.calculation_steps)
-            doc_add_h1(doc, '四、详细计算过程')
-            doc_render_calc_text(doc, steps_text)
+            doc_add_eng_h(doc, '8、详细计算过程')
+            doc_render_calc_text_eng(doc, steps_text)
         else:
-            # 兜底：无详细步骤时用汇总文本
             summary = self.summary_text.toPlainText()
             if summary:
-                doc_add_h1(doc, '四、计算过程')
-                doc_render_calc_text(doc, summary, skip_title_keyword='计算结果汇总')
+                doc_add_eng_h(doc, '8、计算过程')
+                doc_render_calc_text_eng(doc, summary, skip_title_keyword='计算结果汇总')
 
         doc.save(filepath)
 
@@ -3096,9 +3425,14 @@ document.addEventListener("DOMContentLoaded", function(){
             ws['A1'].font = Font(size=14, bold=True)
             ws.merge_cells('A1:D1')
             ws['A1'].alignment = Alignment(horizontal='center')
+            _np_xl = self.spin_num_pipes.value() if hasattr(self, 'spin_num_pipes') else 1
+            _Q_xl = self._fval(self.edit_Q)
+            _np_xl_rows = ([("单管流量 Q/N", f"{_Q_xl/_np_xl:.3f} m³/s")] if _np_xl > 1 else [])
             data_rows = [
-                ("设计流量 Q", f"{self._fval(self.edit_Q):.3f} m³/s"),
+                ("设计流量 Q", f"{_Q_xl:.3f} m³/s"),
                 ("拟定流速 v", f"{self._fval(self.edit_v):.3f} m/s"),
+                ("管道根数 N", f"{_np_xl} 根"),
+            ] + _np_xl_rows + [
                 ("糙率 n", f"{self._fval(self.edit_n):.4f}"),
                 ("", ""),
                 ("理论管径", f"{r.diameter_theory:.4f} m"),

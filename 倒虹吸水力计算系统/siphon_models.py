@@ -33,6 +33,7 @@ class SegmentType(Enum):
     TRASH_RACK = "拦污栅"
     GATE_SLOT = "闸门槽"
     BYPASS_PIPE = "旁通管"  # 冲沙、放空、进人孔等
+    PIPE_TRANSITION = "管道渐变段"  # 压力管道渐变段 ξjb（收缩0.05/扩散0.10）
     OTHER = "其他"
     OUTLET = "出水口"
 
@@ -44,6 +45,7 @@ COMMON_SEGMENT_TYPES = {
     SegmentType.TRASH_RACK,
     SegmentType.GATE_SLOT,
     SegmentType.BYPASS_PIPE,
+    SegmentType.PIPE_TRANSITION,
     SegmentType.OTHER,
 }
 
@@ -111,6 +113,7 @@ class GlobalParameters:
     xi_inlet: float = 0.0               # 进口局部阻力系数
     xi_outlet: float = 0.0              # 出口局部阻力系数
     v2_strategy: V2Strategy = V2Strategy.AUTO_PIPE  # v₂ 计算策略（默认自动=管道流速）
+    num_pipes: int = 1                  # 管道根数（并联管道数量，默认单管）
 
 
 @dataclass
@@ -212,6 +215,18 @@ class CalculationResult:
     data_mode: str = ""                 # 计算模式/数据来源
     data_note: str = ""                 # 模式说明或提示
     
+    # 加大流量工况（内部一次计算完成，与其他模块保持一致）
+    increase_percent: float = 0.0           # 加大比例 (%)，0 表示不计算
+    Q_increased: float = 0.0               # 加大流量 (m³/s)
+    velocity_increased: float = 0.0        # 加大流速 (m/s)
+    loss_inlet_inc: float = 0.0            # 加大工况进口落差 ΔZ1加大 (m)
+    loss_pipe_inc: float = 0.0             # 加大工况管身损失 ΔZ2加大 (m)
+    loss_outlet_inc: float = 0.0           # 加大工况出口落差 ΔZ3加大 (m)
+    total_head_loss_inc: float = 0.0       # 加大工况总落差 ΔZ加大 (m)
+
+    # 并联管道根数
+    num_pipes: int = 1                     # 管道根数（并联数量，默认单管）
+
     # 详细计算过程（可选输出）
     calculation_steps: List[str] = field(default_factory=list)
 
@@ -231,12 +246,50 @@ class TrashRackParams:
     # 支墩参数（仅当 has_support=True 时有效）
     support_shape: TrashRackBarShape = TrashRackBarShape.RECTANGULAR  # 支墩形状
     beta2: float = 2.42                 # 支墩形状系数
-    s2: float = 100.0                   # 支墩厚度 (mm)
-    b2: float = 1000.0                  # 支墩净距 (mm)
+    s2: float = 10.0                    # 支墩厚度 (mm)
+    b2: float = 50.0                    # 支墩净距 (mm)
     
     # 手动输入模式
     manual_mode: bool = False           # 是否强制手动输入
     manual_xi: float = 0.0              # 手动输入的局部阻力系数
+
+    def to_dict(self) -> dict:
+        return {
+            'alpha': self.alpha,
+            'has_support': self.has_support,
+            'bar_shape': self.bar_shape.value,
+            'beta1': self.beta1,
+            's1': self.s1,
+            'b1': self.b1,
+            'support_shape': self.support_shape.value,
+            'beta2': self.beta2,
+            's2': self.s2,
+            'b2': self.b2,
+            'manual_mode': self.manual_mode,
+            'manual_xi': self.manual_xi,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> 'TrashRackParams':
+        def _shape(val):
+            for s in TrashRackBarShape:
+                if s.value == val:
+                    return s
+            return TrashRackBarShape.RECTANGULAR
+        return TrashRackParams(
+            alpha=d.get('alpha', 90.0),
+            has_support=d.get('has_support', False),
+            bar_shape=_shape(d.get('bar_shape', '矩形')),
+            beta1=d.get('beta1', 2.42),
+            s1=d.get('s1', 10.0),
+            b1=d.get('b1', 50.0),
+            support_shape=_shape(d.get('support_shape', '矩形')),
+            beta2=d.get('beta2', 2.42),
+            s2=d.get('s2', 10.0),
+            b2=d.get('b2', 50.0),
+            manual_mode=d.get('manual_mode', False),
+            manual_xi=d.get('manual_xi', 0.0),
+        )
 
 
 # ==============================================================================

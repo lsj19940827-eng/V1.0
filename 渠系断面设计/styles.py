@@ -199,9 +199,20 @@ NAV_STYLE = f"""
 def fluent_info(parent, title, content):
     """信息/警告提示（仅确定按钮），替代 QMessageBox.warning / information"""
     from qfluentwidgets import MessageBox
+    from PySide6.QtWidgets import QTextEdit
     w = MessageBox(title, content, parent)
     w.yesButton.setText("确定")
     w.cancelButton.hide()
+    if len(content) > 500 or content.count('\n') > 15:
+        w.contentLabel.hide()
+        te = QTextEdit()
+        te.setPlainText(content)
+        te.setReadOnly(True)
+        te.setMinimumHeight(200)
+        te.setMaximumHeight(400)
+        te.setStyleSheet("QTextEdit { border: none; background: transparent; }")
+        w.textLayout.addWidget(te)
+        w.widget.setMinimumWidth(520)
     w.exec()
 
 

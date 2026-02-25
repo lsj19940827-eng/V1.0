@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QColor, QPixmap, QImage
+from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox,
@@ -29,6 +30,7 @@ from qfluentwidgets import (
 )
 
 from 渠系断面设计.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table
+from 渠系断面设计.formula_renderer import render_latex_svg, wrap_with_katex, get_svg_height_px
 
 # 计算引擎
 try:
@@ -43,6 +45,17 @@ try:
     SIPHON_AVAILABLE = True
 except ImportError:
     SIPHON_AVAILABLE = False
+
+
+_RACK_BAR_COLORS = [
+    QColor(231, 76,  60),
+    QColor(230, 126, 34),
+    QColor(241, 196, 15),
+    QColor( 46, 204, 113),
+    QColor( 26, 188, 156),
+    QColor( 52, 152, 219),
+    QColor(155,  89, 182),
+]
 
 
 def _msg(parent, title, text, level="warning"):
@@ -65,15 +78,16 @@ class InletShapeDialog(QDialog):
     def __init__(self, parent, segment):
         super().__init__(parent)
         self.setWindowTitle("进水口形状设置")
-        self.setMinimumSize(480, 400)
-        self.resize(520, 440)
         self.result = None
         self.segment = segment
         self._build_ui()
+        self.adjustSize()
+        self.setMinimumSize(self.sizeHint())
 
     def _build_ui(self):
         lay = QVBoxLayout(self)
-        lay.setSpacing(10)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(8)
 
         # 标题
         title = QLabel("根据表L.1.4-2选择进水口形状")
@@ -454,8 +468,8 @@ class TrashRackConfigDialog(QDialog):
     def __init__(self, parent, params=None):
         super().__init__(parent)
         self.setWindowTitle("拦污栅详细参数配置")
-        self.setMinimumSize(780, 620)
-        self.resize(820, 660)
+        self.setMinimumSize(820, 660)
+        self.resize(900, 750)
         self.result = None
         if SIPHON_AVAILABLE:
             self.params = params if params else TrashRackParams()
@@ -463,6 +477,7 @@ class TrashRackConfigDialog(QDialog):
         else:
             self.params = None
             self.shape_list = []
+        self._active_target = 'bar'
         self._build_ui()
 
     def _build_ui(self):
@@ -489,22 +504,37 @@ class TrashRackConfigDialog(QDialog):
         g1l.addWidget(self.ed_alpha, 0, 1)
         g1l.addWidget(QLabel("0~180, 默认90"), 0, 2)
 
-        self.cb_support = CheckBox("有独立支墩 (公式L.1.4-3)")
-        self.cb_support.setChecked(self.params.has_support)
-        self.cb_support.stateChanged.connect(self._on_mode)
-        g1l.addWidget(self.cb_support, 1, 0, 1, 3)
+        g1l.addWidget(QLabel("计算模式:"), 1, 0)
+        mode_w = QWidget()
+        mode_lay = QVBoxLayout(mode_w)
+        mode_lay.setContentsMargins(0, 2, 0, 2)
+        mode_lay.setSpacing(3)
+        self._mode_group = QButtonGroup(self)
+        self.rb_no_support = QRadioButton("无独立支墩 (公式L.1.4-2)")
+        self.rb_has_support = QRadioButton("有独立支墩 (公式L.1.4-3)")
+        self._mode_group.addButton(self.rb_no_support, 0)
+        self._mode_group.addButton(self.rb_has_support, 1)
+        if self.params.has_support:
+            self.rb_has_support.setChecked(True)
+        else:
+            self.rb_no_support.setChecked(True)
+        self._mode_group.buttonClicked.connect(self._on_mode)
+        mode_lay.addWidget(self.rb_no_support)
+        mode_lay.addWidget(self.rb_has_support)
+        g1l.addWidget(mode_w, 1, 1, 1, 2)
         ll.addWidget(g1)
 
         # 栅条参数
-        g2 = QGroupBox("栅条参数")
-        g2l = QGridLayout(g2)
+        self.g2 = QGroupBox("\u25cf \u6805\u6761\u53c2\u6570")
+        self.g2.setStyleSheet("QGroupBox::title { color: #1d4ed8; }")
+        g2l = QGridLayout(self.g2)
         g2l.addWidget(QLabel("栅条形状:"), 0, 0)
         self.combo_bar = ComboBox()
         self.combo_bar.addItems([f"{s.value} (β={CoefficientService.get_trash_rack_bar_beta(s):.2f})"
                                   for s in self.shape_list])
         idx = self.shape_list.index(self.params.bar_shape) if self.params.bar_shape in self.shape_list else 0
         self.combo_bar.setCurrentIndex(idx)
-        self.combo_bar.currentIndexChanged.connect(self._on_changed)
+        self.combo_bar.currentIndexChanged.connect(self._on_bar_changed)
         g2l.addWidget(self.combo_bar, 0, 1, 1, 2)
 
         g2l.addWidget(QLabel("栅条厚度 s₁(mm):"), 1, 0)
@@ -521,10 +551,11 @@ class TrashRackConfigDialog(QDialog):
 
         self.lbl_ratio1 = QLabel("s₁/b₁: --")
         g2l.addWidget(self.lbl_ratio1, 3, 0, 1, 2)
-        ll.addWidget(g2)
+        ll.addWidget(self.g2)
 
         # 支墩参数
-        self.g3 = QGroupBox("支墩参数")
+        self.g3 = QGroupBox("\u25cf \u652f\u58a9\u53c2\u6570")
+        self.g3.setStyleSheet("QGroupBox::title { color: #b45309; }")
         g3l = QGridLayout(self.g3)
         g3l.addWidget(QLabel("支墩形状:"), 0, 0)
         self.combo_sup = ComboBox()
@@ -532,7 +563,7 @@ class TrashRackConfigDialog(QDialog):
                                   for s in self.shape_list])
         sidx = self.shape_list.index(self.params.support_shape) if self.params.support_shape in self.shape_list else 0
         self.combo_sup.setCurrentIndex(sidx)
-        self.combo_sup.currentIndexChanged.connect(self._on_changed)
+        self.combo_sup.currentIndexChanged.connect(self._on_sup_changed)
         g3l.addWidget(self.combo_sup, 0, 1, 1, 2)
 
         g3l.addWidget(QLabel("支墩厚度 s₂(mm):"), 1, 0)
@@ -554,6 +585,7 @@ class TrashRackConfigDialog(QDialog):
         # 结果
         rg = QGroupBox("计算结果")
         rl = QVBoxLayout(rg)
+        rl.setSpacing(8)
         self.cb_manual = CheckBox("强制手动输入")
         self.cb_manual.setChecked(self.params.manual_mode)
         self.cb_manual.stateChanged.connect(self._on_manual)
@@ -568,16 +600,25 @@ class TrashRackConfigDialog(QDialog):
         mrow.addWidget(self.ed_manual)
         mrow.addStretch()
         rl.addLayout(mrow)
+        # 结果值（大字突出）
         self.lbl_result = QLabel("--")
-        self.lbl_result.setStyleSheet(f"font-size:16px;font-weight:bold;color:{P};")
+        self.lbl_result.setStyleSheet(f"font-size:20px;font-weight:bold;color:{P};padding:4px 0;")
         rl.addWidget(self.lbl_result)
+        # 公式卡片（独立容器，固定尺寸防止布局抖动）
+        self.formula_view = QWebEngineView()
+        self.formula_view.setMinimumHeight(40)
+        self.formula_view.setStyleSheet(
+            "border:1px solid #E3ECF9; border-radius:8px; background:#F8F9FE;"
+        )
+        rl.addWidget(self.formula_view)
+        ll.addWidget(rg)
 
+        # 按钮行（放在 GroupBox 外部，避免重叠）
         brow = QHBoxLayout()
         btn_ok = PrimaryPushButton("确定"); btn_ok.clicked.connect(self._on_ok)
         btn_cancel = PushButton("取消"); btn_cancel.clicked.connect(self.reject)
         brow.addWidget(btn_ok); brow.addWidget(btn_cancel); brow.addStretch()
-        rl.addLayout(brow)
-        ll.addWidget(rg)
+        ll.addLayout(brow)
 
         lay.addWidget(left, stretch=1)
 
@@ -590,56 +631,284 @@ class TrashRackConfigDialog(QDialog):
         fig_lay = QVBoxLayout(fig_grp)
         self.img_label = QLabel("(双击可查看大图)")
         self.img_label.setAlignment(Qt.AlignCenter)
-        self.img_label.setMinimumHeight(160)
+        self.img_label.setFixedHeight(240)
         self.img_label.setStyleSheet("background:white;border:1px solid #ddd;")
+        self.img_label.mouseDoubleClickEvent = self._on_image_double_click
         fig_lay.addWidget(self.img_label)
+        hint_label = QLabel("💡 双击图片可放大查看")
+        hint_label.setAlignment(Qt.AlignCenter)
+        hint_label.setStyleSheet("color: #555; font-size: 12px; padding: 2px 0;")
+        fig_lay.addWidget(hint_label)
         rlayout.addWidget(fig_grp)
+        self._img_path = os.path.join(self.SCRIPT_DIR, "resources", "图L.1.4-1.png")
         self._load_image()
 
-        tbl_grp = QGroupBox("形状系数表 (表L.1.4-1)")
-        tl2 = QVBoxLayout(tbl_grp)
-        self.ref_table = QTableWidget(len(self.shape_list), 2)
-        self.ref_table.setHorizontalHeaderLabels(["形状名称", "系数 β"])
-        self.ref_table.horizontalHeader().setStretchLastSection(False)
-        self.ref_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.tbl_grp = QGroupBox("形状系数表 (表L.1.4-1)  → 栅条形状")
+        tl2 = QVBoxLayout(self.tbl_grp)
+        self.ref_table = QTableWidget(len(self.shape_list), 3)
+        self.ref_table.setHorizontalHeaderLabels(["", "形状名称", "系数 β"])
+        _hh = self.ref_table.horizontalHeader()
+        _hh.setSectionResizeMode(0, QHeaderView.Fixed)
+        _hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        _hh.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.ref_table.setColumnWidth(0, 6)
+        self.ref_table.setColumnWidth(2, 66)
+        self.ref_table.verticalHeader().setVisible(False)
+        self.ref_table.verticalHeader().setDefaultSectionSize(30)
+        self.ref_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.ref_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.ref_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.ref_table.setCursor(Qt.PointingHandCursor)
         self.ref_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.ref_table.setStyleSheet("""
+            QTableWidget {
+                border: 1px solid #c8d6e5;
+                border-radius: 6px;
+                gridline-color: #edf1f5;
+                background: white;
+            }
+            QHeaderView::section {
+                background: #1e3a5f;
+                color: white;
+                font-weight: bold;
+                padding: 5px 8px;
+                border: none;
+            }
+            QTableWidget::item {
+                padding: 2px 8px;
+            }
+            QTableWidget::item:selected { background: transparent; color: black; }
+        """)
+        _betas = [CoefficientService.get_trash_rack_bar_beta(s) for s in self.shape_list]
+        _bmax, _bmin = max(_betas), min(_betas)
+        _brange = _bmax - _bmin if _bmax != _bmin else 1.0
+        self._name_items = []
+        self._beta_containers = []
+        self._beta_badges = []
+        self._beta_heatmap = []
+        _ODD = QColor(248, 250, 252)
+        _WHT = QColor(255, 255, 255)
         for i, s in enumerate(self.shape_list):
-            self.ref_table.setItem(i, 0, QTableWidgetItem(s.value))
-            beta = CoefficientService.get_trash_rack_bar_beta(s)
-            self.ref_table.setItem(i, 1, QTableWidgetItem(f"{beta:.2f}"))
-        auto_resize_table(self.ref_table)
+            # Col 0: 6px thin color strip
+            _it0 = QTableWidgetItem()
+            _it0.setFlags(Qt.ItemIsEnabled)
+            self.ref_table.setItem(i, 0, _it0)
+            _strip = QWidget()
+            if i < len(_RACK_BAR_COLORS):
+                _strip.setStyleSheet(f"background:{_RACK_BAR_COLORS[i].name()};")
+            _strip.setAttribute(Qt.WA_TransparentForMouseEvents)
+            self.ref_table.setCellWidget(i, 0, _strip)
+
+            # Col 1: shape name with alternating background
+            _ni = QTableWidgetItem(s.value)
+            _ni.setBackground(_ODD if i % 2 == 0 else _WHT)
+            self.ref_table.setItem(i, 1, _ni)
+            self._name_items.append(_ni)
+
+            # Col 2: beta rounded badge with heatmap color
+            _it2 = QTableWidgetItem()
+            _it2.setFlags(Qt.ItemIsEnabled)
+            self.ref_table.setItem(i, 2, _it2)
+            _t = (_betas[i] - _bmin) / _brange
+            _cr, _cg, _cb = int(70*_t+185), int(-50*_t+230), int(-45*_t+185)
+            _hm = f"rgb({_cr},{_cg},{_cb})"
+            self._beta_heatmap.append(_hm)
+            _ctn = QWidget()
+            _ctn.setStyleSheet(f"background:{(_ODD if i % 2 == 0 else _WHT).name()};")
+            _ctn.setAttribute(Qt.WA_TransparentForMouseEvents)
+            _cl = QHBoxLayout(_ctn)
+            _cl.setContentsMargins(4, 2, 4, 2)
+            _cl.setAlignment(Qt.AlignCenter)
+            _bdg = QLabel(f"{_betas[i]:.2f}")
+            _bdg.setAlignment(Qt.AlignCenter)
+            _bdg.setAttribute(Qt.WA_TransparentForMouseEvents)
+            _bdg.setStyleSheet(
+                f"background:{_hm}; border-radius:4px;"
+                f"padding:2px 10px; font-weight:bold; font-size:12px;"
+            )
+            _cl.addWidget(_bdg)
+            self.ref_table.setCellWidget(i, 2, _ctn)
+            self._beta_containers.append(_ctn)
+            self._beta_badges.append(_bdg)
+        self.ref_table.setColumnWidth(0, 6)
+        self.ref_table.setColumnWidth(2, 72)
+        self.ref_table.cellClicked.connect(self._on_table_clicked)
         tl2.addWidget(self.ref_table)
-        rlayout.addWidget(tbl_grp)
+        legend_row = QHBoxLayout()
+        bar_dot = QLabel("● 栅条选中")
+        bar_dot.setStyleSheet("color:#1d4ed8; font-size:11px;")
+        sup_dot = QLabel("● 支墩选中")
+        sup_dot.setStyleSheet("color:#b45309; font-size:11px;")
+        both_dot = QLabel("● 同时选中")
+        both_dot.setStyleSheet("color:#7c3aed; font-size:11px;")
+        legend_row.addWidget(bar_dot)
+        legend_row.addSpacing(12)
+        legend_row.addWidget(sup_dot)
+        legend_row.addSpacing(12)
+        legend_row.addWidget(both_dot)
+        legend_row.addStretch()
+        tl2.addLayout(legend_row)
+        rlayout.addWidget(self.tbl_grp)
 
         lay.addWidget(right, stretch=1)
 
         self._on_mode()
+        self._on_manual()
         self._update_preview()
+        self._sync_table_highlight()
 
     def _load_image(self):
-        img_path = os.path.join(self.SCRIPT_DIR, "resources", "图L.1.4-1.png")
-        if os.path.exists(img_path):
-            pm = QPixmap(img_path)
+        if os.path.exists(self._img_path):
+            pm = QPixmap(self._img_path)
             if not pm.isNull():
+                lw = max(self.img_label.width() - 10, 200)
+                lh = max(self.img_label.height() - 10, 160)
                 self.img_label.setPixmap(pm.scaled(
-                    self.img_label.width() - 10, 200,
+                    lw, lh,
                     Qt.KeepAspectRatio, Qt.SmoothTransformation))
                 return
         self.img_label.setText("图片未找到")
 
-    def _on_mode(self):
-        en = self.cb_support.isChecked()
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, '_img_path'):
+            self._load_image()
+
+    def _on_image_double_click(self, event):
+        """双击图片弹出大图窗口"""
+        if not os.path.exists(self._img_path):
+            _msg(self, "提示", "图片文件未找到", "warning")
+            return
+        pm = QPixmap(self._img_path)
+        if pm.isNull():
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("栅条形状示意图 (图 L.1.4-1)")
+        screen = self.screen().availableGeometry()
+        max_w, max_h = int(screen.width() * 0.8), int(screen.height() * 0.8)
+        scaled = pm.scaled(max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        dlg.resize(scaled.width() + 40, scaled.height() + 60)
+        vl = QVBoxLayout(dlg)
+        lbl = QLabel()
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setPixmap(scaled)
+        vl.addWidget(lbl)
+        btn = PushButton("关闭")
+        btn.clicked.connect(dlg.accept)
+        vl.addWidget(btn, alignment=Qt.AlignCenter)
+        dlg.exec()
+
+    def _on_table_clicked(self, row, _col):
+        """右侧表格点击 → 根据活跃目标同步对应ComboBox"""
+        if 0 <= row < len(self.shape_list):
+            if self._active_target == 'sup' and self.rb_has_support.isChecked():
+                self.combo_sup.setCurrentIndex(row)
+            else:
+                self.combo_bar.setCurrentIndex(row)
+
+    def _on_bar_changed(self, *_):
+        """栅条ComboBox变化 → 记录活跃目标 + 双色高亮 + 更新计算"""
+        self._active_target = 'bar'
+        self._sync_table_highlight()
+        self._update_tbl_title()
+        self._on_changed()
+
+    def _on_sup_changed(self, *_):
+        """支墩ComboBox变化 → 记录活跃目标 + 双色高亮 + 更新计算"""
+        self._active_target = 'sup'
+        self._sync_table_highlight()
+        self._update_tbl_title()
+        self._on_changed()
+
+    def _sync_table_highlight(self):
+        """双色高亮：蓝=栅条当前选择，琥珀=支墩当前选择（col0永久保持渐变色条）"""
+        if not hasattr(self, '_name_items'):
+            return
+        manual = self.cb_manual.isChecked()
+        bar_idx = self.combo_bar.currentIndex() if not manual else -1
+        sup_idx = (self.combo_sup.currentIndex() if self.rb_has_support.isChecked() and not manual else -1)
+        BAR_COLOR  = QColor(219, 234, 254)
+        SUP_COLOR  = QColor(254, 243, 199)
+        BOTH_COLOR = QColor(233, 213, 255)
+        WHITE      = QColor(255, 255, 255)
+        ODD_BG     = QColor(248, 250, 252)
+        for i in range(self.ref_table.rowCount()):
+            is_bar = (i == bar_idx)
+            is_sup = (i == sup_idx)
+            if is_bar and is_sup:
+                bg = BOTH_COLOR
+            elif is_bar:
+                bg = BAR_COLOR
+            elif is_sup:
+                bg = SUP_COLOR
+            else:
+                bg = ODD_BG if i % 2 == 0 else WHITE
+            # Col 1: name item background
+            if i < len(self._name_items):
+                self._name_items[i].setBackground(bg)
+            # Col 2: container background (badge keeps its heatmap color)
+            if i < len(self._beta_containers):
+                self._beta_containers[i].setStyleSheet(f"background:{bg.name()};")
+
+    def _update_tbl_title(self):
+        """根据活跃目标动态更新表格标题"""
+        if not hasattr(self, 'tbl_grp'):
+            return
+        if self._active_target == 'sup' and self.rb_has_support.isChecked():
+            self.tbl_grp.setTitle("形状系数表 (表L.1.4-1)  → 支墩形状")
+        else:
+            self.tbl_grp.setTitle("形状系数表 (表L.1.4-1)  → 栅条形状")
+
+    def _on_mode(self, *_):
+        manual = self.cb_manual.isChecked()
+        en = self.rb_has_support.isChecked() and not manual  # B4: _on_mode 不在手动模式下重新启用 g3
         self.g3.setEnabled(en)
+        if not en and self._active_target == 'sup':
+            self._active_target = 'bar'
+        self._sync_table_highlight()
+        self._update_tbl_title()
         self._on_changed()
 
     def _on_manual(self):
-        self.ed_manual.setEnabled(self.cb_manual.isChecked())
+        manual = self.cb_manual.isChecked()
+        if manual:
+            xi_auto = self._calc_xi_auto()
+            if xi_auto is not None and xi_auto > 0:
+                self.ed_manual.setText(f"{xi_auto:.4f}")
+        self.ed_manual.setEnabled(manual)
+        self.g2.setEnabled(not manual)
+        self.g3.setEnabled(not manual and self.rb_has_support.isChecked())
+        if manual:
+            self._active_target = 'bar'
+            self._sync_table_highlight()
+            self._update_tbl_title()
         self._on_changed()
 
     def _on_changed(self, *_):
         self._update_ratios()
         self._update_preview()
+
+    def _calc_xi_auto(self):
+        """计算自动模式ξs（忽略手动开关），用于切换手动模式时预填"""
+        try:
+            alpha = float(self.ed_alpha.text() or 90)
+            bi = self.combo_bar.currentIndex()
+            bar_shape = self.shape_list[bi] if 0 <= bi < len(self.shape_list) else TrashRackBarShape.RECTANGULAR
+            si = self.combo_sup.currentIndex()
+            sup_shape = self.shape_list[si] if 0 <= si < len(self.shape_list) else TrashRackBarShape.RECTANGULAR
+            temp = TrashRackParams(
+                alpha=alpha, has_support=self.rb_has_support.isChecked(),
+                bar_shape=bar_shape,
+                beta1=CoefficientService.get_trash_rack_bar_beta(bar_shape),
+                s1=float(self.ed_s1.text() or 0), b1=float(self.ed_b1.text() or 0),
+                support_shape=sup_shape,
+                beta2=CoefficientService.get_trash_rack_bar_beta(sup_shape),
+                s2=float(self.ed_s2.text() or 0), b2=float(self.ed_b2.text() or 0),
+                manual_mode=False,
+            )
+            return CoefficientService.calculate_trash_rack_xi(temp)
+        except Exception:
+            return None
 
     def _update_ratios(self):
         try:
@@ -661,7 +930,7 @@ class TrashRackConfigDialog(QDialog):
             si = self.combo_sup.currentIndex()
             sup_shape = self.shape_list[si] if 0 <= si < len(self.shape_list) else TrashRackBarShape.RECTANGULAR
             return TrashRackParams(
-                alpha=alpha, has_support=self.cb_support.isChecked(),
+                alpha=alpha, has_support=self.rb_has_support.isChecked(),
                 bar_shape=bar_shape,
                 beta1=CoefficientService.get_trash_rack_bar_beta(bar_shape),
                 s1=float(self.ed_s1.text() or 0), b1=float(self.ed_b1.text() or 0),
@@ -679,20 +948,54 @@ class TrashRackConfigDialog(QDialog):
         if params is None:
             self.lbl_result.setText("请输入参数")
             return
-        if params.b1 <= 0 or params.s1 <= 0:
-            self.lbl_result.setText("请输入栅条参数")
-            return
-        if params.has_support and (params.b2 <= 0 or params.s2 <= 0):
-            self.lbl_result.setText("请输入支墩参数")
-            return
+        if not params.manual_mode:
+            if params.b1 <= 0 or params.s1 <= 0:
+                self.lbl_result.setText("请输入栅条参数")
+                return
+            if params.has_support and (params.b2 <= 0 or params.s2 <= 0):
+                self.lbl_result.setText("请输入支墩参数")
+                return
         xi = CoefficientService.calculate_trash_rack_xi(params)
-        self.lbl_result.setText(f"ξs = {xi:.4f}")
+        self.lbl_result.setText(f"\u03bcs = {xi:.4f}")
+        if not params.manual_mode and params.b1 > 0 and params.s1 > 0:
+            latex = (f"= {params.beta1:.2f} \\times "
+                     f"\\left(\\frac{{{params.s1:.0f}}}{{{params.b1:.0f}}}\\right)"
+                     f"^{{\\frac{{4}}{{3}}}} \\times "
+                     f"\\sin({params.alpha:.0f}^{{\\circ}})")
+            if params.has_support and params.b2 > 0 and params.s2 > 0:
+                latex += (f" + {params.beta2:.2f} \\times "
+                          f"\\left(\\frac{{{params.s2:.0f}}}{{{params.b2:.0f}}}\\right)"
+                          f"^{{\\frac{{4}}{{3}}}}")
+            latex += f" = {xi:.4f}"
+            svg = render_latex_svg(latex, fontsize=14)
+            if svg:
+                h = get_svg_height_px(svg, padding=16)
+                self.formula_view.setFixedHeight(h)
+                body = (f'<div style="display:flex;align-items:center;'
+                        f'justify-content:center;height:100%;">{svg}</div>')
+                html = wrap_with_katex(body, extra_css=(
+                    "html,body{margin:0;padding:0;height:100%;"
+                    "background:transparent;}"))
+                self.formula_view.setHtml(html)
+            else:
+                self.formula_view.setFixedHeight(0)
+                self.formula_view.setHtml("")
+        else:
+            self.formula_view.setFixedHeight(0)
+            self.formula_view.setHtml("")
 
     def _on_ok(self):
         params = self._collect()
         if params is None:
             _msg(self, "输入错误", "请检查参数格式", "error")
             return
+        if not params.manual_mode:
+            if params.b1 <= 0 or params.s1 <= 0:
+                _msg(self, "输入错误", "栅条厚度和间距必须大于 0", "error")
+                return
+            if params.has_support and params.b2 <= 0:
+                _msg(self, "输入错误", "支墩净距 b₂ 必须大于 0", "error")
+                return
         self.result = params
         self.accept()
 
@@ -1148,24 +1451,25 @@ class CommonSegmentAddDialog(QDialog):
 # 7. 简洁编辑对话框（拦污栅/闸门槽/旁通管）
 # ============================================================
 class SimpleCommonEditDialog(QDialog):
-    """拦污栅/闸门槽/旁通管 简洁编辑"""
+    """拦污栅/闸门槽/旁通管/管道渐变段 简洁编辑"""
 
     def __init__(self, parent, segment):
         super().__init__(parent)
         self.setWindowTitle("编辑通用构件")
-        self.setMinimumSize(440, 200)
-        self.resize(460, 230)
         self.segment = segment
         self.result = None
         self.trash_rack_params = segment.trash_rack_params if SIPHON_AVAILABLE else None
         self._build_ui()
+        self.adjustSize()
+        self.setMinimumSize(self.sizeHint())
 
     def _build_ui(self):
         if not SIPHON_AVAILABLE:
             QVBoxLayout(self).addWidget(QLabel("计算引擎未加载"))
             return
         lay = QVBoxLayout(self)
-        lay.setSpacing(10)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(8)
 
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("构件名称:"))
@@ -1175,11 +1479,44 @@ class SimpleCommonEditDialog(QDialog):
         r1.addStretch()
         lay.addLayout(r1)
 
+        # ---- 管道渐变段专属：收缩/扩散单选 ----
+        self._pipe_trans_group = None
+        if self.segment.segment_type == SegmentType.PIPE_TRANSITION:
+            self._pipe_trans_group = QButtonGroup(self)
+            self._rb_contract = QRadioButton(
+                f"收缩（方变圆 / 圆管收缩）  ξjb = {CoefficientService.PIPE_TRANSITION_CONTRACT}")
+            self._rb_expand = QRadioButton(
+                f"扩散（圆变方 / 圆管扩大）  ξjb = {CoefficientService.PIPE_TRANSITION_EXPAND}")
+            self._pipe_trans_group.addButton(self._rb_contract, 0)
+            self._pipe_trans_group.addButton(self._rb_expand,   1)
+            # 根据已保存的 custom_label 恢复选中状态
+            cur_label = getattr(self.segment, 'custom_label', '')
+            if cur_label == '扩散':
+                self._rb_expand.setChecked(True)
+            else:
+                self._rb_contract.setChecked(True)  # 默认收缩
+            self._rb_contract.toggled.connect(self._on_pipe_trans_changed)
+            self._rb_expand.toggled.connect(self._on_pipe_trans_changed)
+            lay.addWidget(self._rb_contract)
+            lay.addWidget(self._rb_expand)
+            lbl_norm = QLabel("注：扩散角不宜大于 10°（GB 50288-2018 附录L.1.4-4）")
+            lbl_norm.setStyleSheet("color:#0066CC;font-size:11px;")
+            lay.addWidget(lbl_norm)
+
         r2 = QHBoxLayout()
         r2.addWidget(QLabel("局部阻力系数 ξ:"))
         self.ed_xi = LineEdit(); self.ed_xi.setFixedWidth(90)
-        xi_val = self.segment.xi_user if self.segment.xi_user is not None else (self.segment.xi_calc or 0.1)
-        self.ed_xi.setText(f"{xi_val:.4f}")
+        if self.segment.segment_type == SegmentType.PIPE_TRANSITION:
+            # 系数由单选决定，初始值按已保存 label 或默认收缩
+            cur_label = getattr(self.segment, 'custom_label', '')
+            xi_val = (CoefficientService.PIPE_TRANSITION_EXPAND
+                      if cur_label == '扩散'
+                      else CoefficientService.PIPE_TRANSITION_CONTRACT)
+            self.ed_xi.setText(f"{xi_val:.4f}")
+            self.ed_xi.setReadOnly(True)
+        else:
+            xi_val = self.segment.xi_user if self.segment.xi_user is not None else (self.segment.xi_calc or 0.1)
+            self.ed_xi.setText(f"{xi_val:.4f}")
         r2.addWidget(self.ed_xi)
 
         if self.segment.segment_type == SegmentType.TRASH_RACK:
@@ -1193,12 +1530,27 @@ class SimpleCommonEditDialog(QDialog):
         r2.addStretch()
         lay.addLayout(r2)
 
+        if self.segment.segment_type == SegmentType.GATE_SLOT:
+            lbl_hint = QLabel("规范推荐: 0.05 ~ 0.15（平板门门槽，GB 50288-2018 附录L）")
+            lbl_hint.setStyleSheet("color:#0066CC;font-size:11px;")
+            lay.addWidget(lbl_hint)
+
         brow = QHBoxLayout()
         brow.addStretch()
         btn_ok = PrimaryPushButton("确定"); btn_ok.clicked.connect(self._on_ok)
         btn_cancel = PushButton("取消"); btn_cancel.clicked.connect(self.reject)
         brow.addWidget(btn_ok); brow.addWidget(btn_cancel)
         lay.addLayout(brow)
+
+    def _on_pipe_trans_changed(self):
+        """收缩/扩散单选切换 → 自动更新 ξ 显示值"""
+        if self._rb_expand.isChecked():
+            xi = CoefficientService.PIPE_TRANSITION_EXPAND
+        else:
+            xi = CoefficientService.PIPE_TRANSITION_CONTRACT
+        self.ed_xi.setReadOnly(False)
+        self.ed_xi.setText(f"{xi:.4f}")
+        self.ed_xi.setReadOnly(True)
 
     def _open_trash_rack(self):
         dlg = TrashRackConfigDialog(self, self.trash_rack_params)
@@ -1219,13 +1571,18 @@ class SimpleCommonEditDialog(QDialog):
             xi_user, xi_calc = None, xi
         else:
             xi_user, xi_calc = xi, self.segment.xi_calc
+        # 管道渐变段：从单选按钮读取 custom_label
+        if self.segment.segment_type == SegmentType.PIPE_TRANSITION:
+            custom_label = '扩散' if (self._pipe_trans_group and self._rb_expand.isChecked()) else '收缩'
+        else:
+            custom_label = getattr(self.segment, 'custom_label', '')
         self.result = StructureSegment(
             segment_type=self.segment.segment_type,
             direction=SegmentDirection.COMMON,
             xi_user=xi_user, xi_calc=xi_calc,
             locked=self.segment.locked,
             coordinates=self.segment.coordinates,
-            custom_label=getattr(self.segment, 'custom_label', ''),
+            custom_label=custom_label,
             trash_rack_params=self.trash_rack_params if self.segment.segment_type == SegmentType.TRASH_RACK else None,
             source_ip_index=self.segment.source_ip_index,
         )
@@ -1243,11 +1600,11 @@ class CommonSegmentEditDialog(QDialog):
     def __init__(self, parent, segment):
         super().__init__(parent)
         self.setWindowTitle("编辑通用构件")
-        self.setMinimumSize(420, 200)
-        self.resize(440, 220)
         self.segment = segment
         self.result = None
         self._build_ui()
+        self.adjustSize()
+        self.setMinimumSize(self.sizeHint())
 
     def _build_ui(self):
         if not SIPHON_AVAILABLE:
@@ -1255,6 +1612,9 @@ class CommonSegmentEditDialog(QDialog):
             return
 
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(8)
+
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("构件名称:"))
         self.combo_name = QComboBox()

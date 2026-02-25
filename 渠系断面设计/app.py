@@ -19,7 +19,7 @@ os.environ.setdefault('QT_ENABLE_HIGHDPI_SCALING', '1')
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QFrame, QStackedWidget, QSizePolicy
+    QLabel, QFrame, QStackedWidget, QSizePolicy, QDialog
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter
@@ -31,6 +31,7 @@ from qfluentwidgets import (
 from 渠系断面设计.styles import (
     P, S, W, E, BG, CARD, BD, T1, T2, GLOBAL_STYLE, NAV_STYLE
 )
+from 渠系断面设计.report_meta import ProjectSettingsDialog
 from 渠系断面设计.open_channel.panel import OpenChannelPanel
 from 渠系断面设计.aqueduct.panel import AqueductPanel
 from 渠系断面设计.tunnel.panel import TunnelPanel
@@ -221,6 +222,28 @@ class MainWindow(QMainWindow):
 
         nav_lay.addStretch()
 
+        # 项目设置按钮
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.HLine)
+        sep2.setStyleSheet(f"color:{BD};")
+        nav_lay.addWidget(sep2)
+        nav_lay.addSpacing(4)
+        btn_proj_settings = PushButton("⚙ 项目设置")
+        btn_proj_settings.setToolTip("设置工程名称、人员、基本资料等计算书信息")
+        btn_proj_settings.setFixedHeight(36)
+        btn_proj_settings.clicked.connect(self._open_project_settings)
+        btn_proj_settings.setStyleSheet(f"""
+            QPushButton {{
+                background: #E8F4FD; color: {P};
+                border: 1px solid #B3D7F0; border-radius: 6px;
+                font-size: 12px; font-weight: bold;
+                text-align: center; padding: 0 8px;
+            }}
+            QPushButton:hover {{ background: #CCE8FA; }}
+        """)
+        nav_lay.addWidget(btn_proj_settings)
+        nav_lay.addSpacing(4)
+
         # 版权信息
         author_lbl = QLabel("四川水发设计公司\n工程设计院\n© All Rights Reserved")
         author_lbl.setStyleSheet(f"font-size:11px;color:{T2};padding:6px 4px;")
@@ -253,6 +276,10 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(self.earthwork_panel)
 
         self.batch_panel.set_main_window(self)
+
+    def _open_project_settings(self):
+        dlg = ProjectSettingsDialog(self)
+        dlg.exec()
 
     def _switch_to(self, index: int):
         """切换到指定模块"""

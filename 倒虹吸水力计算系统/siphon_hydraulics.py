@@ -64,6 +64,7 @@ class HydraulicCore:
                            plan_total_length: float = 0.0,
                            plan_feature_points: List[PlanFeaturePoint] = None,
                            longitudinal_nodes: List[LongitudinalNode] = None,
+                           increase_percent: Optional[float] = None,
                            ) -> CalculationResult:
         """
         执行核心计算（依据附录L规范）
@@ -97,6 +98,8 @@ class HydraulicCore:
         steps = []
         
         Q = global_params.Q
+        num_pipes = getattr(global_params, 'num_pipes', 1) or 1
+        Q_single = Q / num_pipes  # 单管流量（并联时每管分摊）
         v_guess = global_params.v_guess
         n = global_params.roughness_n
         g = HydraulicCore.GRAVITY
@@ -115,9 +118,17 @@ class HydraulicCore:
         steps.append("步骤1：几何设计与流速计算 (Geometry & Velocity)")
         steps.append("=" * 50)
         
-        # 管道断面积 ω = Q / v_guess
-        omega = Q / v_guess
-        steps.append(f"管道断面积 ω = Q / v_guess = {Q:.4f} / {v_guess:.4f} = {omega:.4f} m²")
+        if num_pipes > 1:
+            steps.append(f"管道根数 N = {num_pipes}，总流量 Q = {Q:.4f} m³/s")
+            steps.append(f"单管流量 Q_单 = Q / N = {Q:.4f} / {num_pipes} = {Q_single:.4f} m³/s")
+            steps.append("")
+        
+        # 管道断面积 ω = Q_single / v_guess
+        omega = Q_single / v_guess
+        if num_pipes > 1:
+            steps.append(f"单管断面积 ω = Q_单 / v_guess = {Q_single:.4f} / {v_guess:.4f} = {omega:.4f} m²")
+        else:
+            steps.append(f"管道断面积 ω = Q / v_guess = {Q:.4f} / {v_guess:.4f} = {omega:.4f} m²")
         
         # 理论直径 D = sqrt(4ω / π)
         D_theory = math.sqrt(4 * omega / math.pi)
@@ -142,10 +153,13 @@ class HydraulicCore:
         result.area = A_actual
         steps.append(f"实际断面积 A = πD²/4 = π×{D:.4f}²/4 = {A_actual:.4f} m²")
         
-        # 实际流速 v = Q/A = 4Q/(πD²)
-        v = Q / A_actual
+        # 实际流速 v = Q_single/A = 4Q_single/(πD²)
+        v = Q_single / A_actual
         result.velocity = v
-        steps.append(f"实际流速 v = Q/A = {Q:.4f}/{A_actual:.4f} = {v:.4f} m/s")
+        if num_pipes > 1:
+            steps.append(f"单管实际流速 v = Q_单/A = {Q_single:.4f}/{A_actual:.4f} = {v:.4f} m/s")
+        else:
+            steps.append(f"实际流速 v = Q/A = {Q:.4f}/{A_actual:.4f} = {v:.4f} m/s")
         
         # 水力半径 R_h = D / 4 (圆管满流)
         R_h = D / 4
@@ -403,7 +417,35 @@ class HydraulicCore:
         
         if verbose:
             result.calculation_steps = steps
-        
+
+        result.num_pipes = num_pipes
+
+        # ========== 加大流量工况（一次完成，与其他模块保持一致）==========
+        if increase_percent is not None and increase_percent > 0:
+            result.increase_percent = increase_percent
+            Q_inc_total = global_params.Q * (1 + increase_percent / 100.0)
+            result.Q_increased = Q_inc_total
+            Q_single_inc = Q_inc_total / num_pipes
+            v_inc = Q_single_inc / A_actual
+            result.velocity_increased = v_inc
+            # v_2_inc: 根据策略确定进口渐变段末端流速
+            if v2_strategy == V2Strategy.AUTO_PIPE:
+                v_2_inc = v_inc
+            elif v2_strategy == V2Strategy.V1_PLUS_02:
+                v_2_inc = v_1 + 0.2
+            else:
+                v_2_inc = v_2  # SECTION_CALC / MANUAL 保持设计值
+            v_out_inc = v_inc  # 出口渐变段始端 = 管道流速
+            dZ1_inc = (1 + xi_1) * (v_2_inc ** 2 - v_1 ** 2) / (2 * g)
+            h_f_inc = (v_inc ** 2 * L_friction) / (C ** 2 * R_h)
+            h_j_inc = xi_sum_middle * v_inc ** 2 / (2 * g)
+            dZ2_inc = h_f_inc + h_j_inc
+            dZ3_inc = (1 - xi_2) * (v_out_inc ** 2 - v_3 ** 2) / (2 * g)
+            result.loss_inlet_inc = dZ1_inc
+            result.loss_pipe_inc = dZ2_inc
+            result.loss_outlet_inc = dZ3_inc
+            result.total_head_loss_inc = dZ1_inc + dZ2_inc - dZ3_inc
+
         return result
     
     @staticmethod
@@ -424,8 +466,15 @@ class HydraulicCore:
         lines.append("=" * 60)
         lines.append(f"理论管径: {result.diameter_theory:.4f} m")
         lines.append(f"设计管径: {result.diameter:.4f} m")
+        if result.num_pipes > 1:
+            lines.append(f"管道根数 (并联): {result.num_pipes} 根")
+            Q_total = result.velocity * result.area * result.num_pipes
+            lines.append(f"总设计流量 Q: {Q_total:.4f} m³/s")
         lines.append(f"断面积: {result.area:.4f} m²")
-        lines.append(f"管内流速 v: {result.velocity:.4f} m/s")
+        if result.num_pipes > 1:
+            lines.append(f"单管流速 v: {result.velocity:.4f} m/s")
+        else:
+            lines.append(f"管内流速 v: {result.velocity:.4f} m/s")
         lines.append(f"进口渐变段始端流速 v₁: {result.velocity_channel_in:.4f} m/s")
         lines.append(f"出口渐变段末端流速 v₃: {result.velocity_channel_out:.4f} m/s")
         lines.append(f"水力半径: {result.hydraulic_radius:.4f} m")
@@ -445,6 +494,16 @@ class HydraulicCore:
         lines.append("-" * 60)
         lines.append(f"管道总长: {result.total_length:.4f} m")
         lines.append("=" * 60)
+        if result.increase_percent > 0:
+            lines.append("")
+            lines.append(f"【加大流量工况（加大比例 {result.increase_percent:.1f}%）】")
+            lines.append(f"  加大流量 Q加大 = {result.Q_increased:.4f} m³/s")
+            lines.append(f"  加大流速 v加大 = {result.velocity_increased:.4f} m/s")
+            lines.append(f"  进口落差 ΔZ1加大 = {result.loss_inlet_inc:.4f} m")
+            lines.append(f"  管身损失 ΔZ2加大 = {result.loss_pipe_inc:.4f} m")
+            lines.append(f"  出口落差 ΔZ3加大 = {result.loss_outlet_inc:.4f} m")
+            lines.append(f"  总水面落差 ΔZ加大 = {result.total_head_loss_inc:.4f} m")
+            lines.append("=" * 60)
         
         if show_steps and result.calculation_steps:
             lines.append("")

@@ -84,7 +84,14 @@ class HydraulicCalculator:
         struct_name = node.structure_type.value if node.structure_type else ""
         params = node.section_params or {}
         
-        # 明渠-圆形 / 隧洞-圆形: 结构高度 = 直径 D（精确）
+        # 明渠-U形: 结构高度从 h_prime 获取
+        if "明渠-U形" in struct_name:
+            h_prime_u = params.get('h_prime', 0)
+            if h_prime_u and h_prime_u > 0:
+                node.structure_height = h_prime_u
+            return
+
+        # 明渠-圆形 / 隔洞-圆形: 结构高度 = 直径 D（精确）
         if "圆形" in struct_name:
             D = params.get('D', 0)
             if D and D > 0:
@@ -409,6 +416,25 @@ class HydraulicCalculator:
                 return self._horseshoe_std_area(stype, R, h)
             return params.get('A', params.get('面积', 0))
         
+        # 明渠-U形：圆弧底+斜直线壁
+        elif sv == "明渠-U形":
+            R_u = self._get_radius(params)
+            theta_u = params.get('theta_deg', 0) or 0
+            m_u = params.get('m', params.get('边坡', 0)) or 0
+            if R_u > 0 and theta_u > 0:
+                theta_rad_u = math.radians(theta_u)
+                h0_u = R_u * (1.0 - math.cos(theta_rad_u / 2.0))
+                if h <= h0_u:
+                    cos_arg = max(-1.0, min(1.0, (R_u - h) / R_u))
+                    acos_val = math.acos(cos_arg)
+                    return R_u * R_u * acos_val - (R_u - h) * math.sqrt(max(0.0, R_u * R_u - (R_u - h) ** 2))
+                else:
+                    h_s = h - h0_u
+                    b_arc_u = 2.0 * R_u * math.sin(theta_rad_u / 2.0)
+                    A_arc = R_u * R_u * (theta_rad_u / 2.0 - math.sin(theta_rad_u / 2.0) * math.cos(theta_rad_u / 2.0))
+                    return A_arc + (b_arc_u + m_u * h_s) * h_s
+            return params.get('A', params.get('面积', 0))
+        
         else:
             return params.get('A', params.get('面积', 0))
     
@@ -455,6 +481,24 @@ class HydraulicCalculator:
             if b > 0 and H_total > 0 and theta_deg > 0:
                 return self._arch_tunnel_perimeter(b, H_total, math.radians(theta_deg), h)
             return b + 2 * h  # 退化为矩形近似（参数不足时）
+
+        # 明渠-U形：圆弧底+斜直线壁
+        elif sv == "明渠-U形":
+            R_u = self._get_radius(params)
+            theta_u = params.get('theta_deg', 0) or 0
+            m_u = params.get('m', params.get('边坡', 0)) or 0
+            if R_u > 0 and theta_u > 0:
+                theta_rad_u = math.radians(theta_u)
+                h0_u = R_u * (1.0 - math.cos(theta_rad_u / 2.0))
+                if h <= h0_u:
+                    cos_arg = max(-1.0, min(1.0, (R_u - h) / R_u))
+                    acos_val = math.acos(cos_arg)
+                    return 2.0 * R_u * acos_val
+                else:
+                    h_s = h - h0_u
+                    chi_arc = theta_rad_u * R_u
+                    return chi_arc + 2.0 * h_s * math.sqrt(1.0 + m_u * m_u)
+            return params.get('X', params.get('湿周', params.get('P', 0)))
 
         # 梯形：明渠-梯形
         elif sv == "明渠-梯形":
@@ -955,6 +999,19 @@ class HydraulicCalculator:
                         B = 2 * math.sqrt(max(0.0, R_circle * R_circle - (R_circle - h) ** 2))
                     else:
                         B = 2 * R_circle
+                elif "明渠-U形" in sv_bend:
+                    theta_u_b = node.section_params.get('theta_deg', 0) or 0
+                    m_u_b = node.section_params.get('m', node.section_params.get('边坡', 0))
+                    if theta_u_b > 0 and R_circle > 0:
+                        h0_u_b = R_circle * (1.0 - math.cos(math.radians(theta_u_b / 2.0)))
+                        if h <= h0_u_b:
+                            B = 2 * math.sqrt(max(0.0, R_circle ** 2 - (R_circle - h) ** 2))
+                        else:
+                            b_arc_u_b = 2 * R_circle * math.sin(math.radians(theta_u_b / 2.0))
+                            B = b_arc_u_b + 2 * m_u_b * (h - h0_u_b)
+                    else:
+                        B = 2 * math.sqrt(max(0.0, R_circle ** 2 - (R_circle - min(h, R_circle)) ** 2)) \
+                            if h <= R_circle else 2 * R_circle
                 else:
                     b = 2 * R_circle
                     m = node.section_params.get('m', node.section_params.get('边坡系数', node.section_params.get('边坡', 0)))
@@ -1500,6 +1557,18 @@ class HydraulicCalculator:
                     return 2 * math.sqrt(max(0.0, R_circle * R_circle - (R_circle - h) ** 2))
                 else:
                     return 2 * R_circle
+            elif "明渠-U形" in sv:
+                theta_u_w = params.get('theta_deg', 0) or 0
+                m_u_w = params.get('m', params.get('边坡', 0)) or 0
+                if theta_u_w > 0 and R_circle > 0:
+                    h0_u_w = R_circle * (1.0 - math.cos(math.radians(theta_u_w / 2.0)))
+                    if h <= h0_u_w:
+                        return 2 * math.sqrt(max(0.0, R_circle ** 2 - (R_circle - h) ** 2))
+                    else:
+                        b_arc_u_w = 2 * R_circle * math.sin(math.radians(theta_u_w / 2.0))
+                        return b_arc_u_w + 2 * m_u_w * (h - h0_u_w)
+                return 2 * math.sqrt(max(0.0, R_circle ** 2 - (R_circle - min(h, R_circle)) ** 2)) \
+                    if h <= R_circle else 2 * R_circle
             # 其他只有半径参数的断面：底宽 = 2 × 半径
             b = 2 * R_circle
         else:

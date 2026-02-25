@@ -55,6 +55,11 @@ from 渠系断面设计.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPUT_LA
 from 渠系断面设计.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_formula, doc_render_calc_text, doc_add_figure,
+    create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
+    doc_render_calc_text_eng, update_doc_toc_via_com,
+)
+from 渠系断面设计.report_meta import (
+    ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
 from 渠系断面设计.aqueduct.dxf_export import export_aqueduct_dxf
 from 渠系断面设计.formula_renderer import (
@@ -139,7 +144,10 @@ class AqueductPanel(QWidget):
         self.vmax_edit = self._field(fl, "不冲流速 (m/s):", "100.0")
         fl.addWidget(self._hint("(一般情况下保持默认数值即可)"))
 
-        fl.addWidget(self._slbl("【流量加大】"))
+        self.inc_cb = CheckBox("考虑加大流量比例系数")
+        self.inc_cb.setChecked(True)
+        self.inc_cb.stateChanged.connect(self._on_inc_toggle)
+        fl.addWidget(self.inc_cb)
         self.inc_edit = self._field(fl, "流量加大比例 (%):", "")
         self.inc_hint = QLabel("(留空则自动计算)")
         self.inc_hint.setStyleSheet(INPUT_HINT_STYLE)
@@ -213,6 +221,11 @@ class AqueductPanel(QWidget):
 
     def _sep(self):
         f = QFrame(); f.setFrameShape(QFrame.HLine); f.setStyleSheet(f"color:{BD};"); return f
+
+    def _on_inc_toggle(self, _state):
+        enabled = self.inc_cb.isChecked()
+        self.inc_edit.setVisible(enabled)
+        self.inc_hint.setVisible(enabled)
 
     # ----------------------------------------------------------------
     # 输出面板
@@ -352,7 +365,8 @@ class AqueductPanel(QWidget):
             if v_min >= v_max:
                 self._show_error("参数错误", "不淤流速必须小于不冲流速。"); return
 
-            manual_increase = self._fval_opt(self.inc_edit)
+            use_increase = self.inc_cb.isChecked()
+            manual_increase = self._fval_opt(self.inc_edit) if use_increase else 0
 
             if stype == "U形":
                 manual_R = self._fval_opt(self.R_edit)
@@ -361,7 +375,8 @@ class AqueductPanel(QWidget):
                     'v_min': v_min, 'v_max': v_max,
                     'section_type': stype,
                     'manual_R': manual_R,
-                    'manual_increase': manual_increase
+                    'manual_increase': manual_increase,
+                    'use_increase': use_increase
                 }
                 result = quick_calculate_u(
                     Q=Q, n=n, slope_inv=slope_inv,
@@ -406,7 +421,8 @@ class AqueductPanel(QWidget):
                     'depth_width_ratio': depth_width_ratio,
                     'chamfer_angle': chamfer_angle,
                     'chamfer_length': chamfer_length,
-                    'manual_increase': manual_increase
+                    'manual_increase': manual_increase,
+                    'use_increase': use_increase
                 }
                 result = quick_calculate_rect(
                     Q=Q, n=n, slope_inv=slope_inv,
@@ -421,7 +437,7 @@ class AqueductPanel(QWidget):
             self.current_result = result
 
             # 更新加大比例提示
-            if result.get('success') and 'increase_percent' in result:
+            if use_increase and result.get('success') and 'increase_percent' in result:
                 ap = result['increase_percent']
                 src = "指定" if self.inc_edit.text().strip() else "自动计算"
                 self.inc_hint.setText(f"({src}: {ap:.1f}%)")
@@ -513,14 +529,16 @@ class AqueductPanel(QWidget):
         o.append(f"  过水面积 A = {result['A_design']:.3f} m²")
         o.append(f"  水力半径 R水 = {result['R_hyd_design']:.3f} m")
         o.append("")
-        o.append("【加大流量工况】")
+        use_increase = p.get('use_increase', True)
         inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
-        o.append(f"  流量加大比例 = {result['increase_percent']:.1f}% {inc_src}")
-        o.append(f"  加大流量 Q加大 = {result['Q_increased']:.3f} m³/s")
-        o.append(f"  加大水深 h加大 = {result['h_increased']:.3f} m")
-        o.append(f"  加大流速 V加大 = {result['V_increased']:.3f} m/s")
-        o.append(f"  超高 Fb = {result['Fb']:.3f} m")
-        o.append("")
+        if use_increase:
+            o.append("【加大流量工况】")
+            o.append(f"  流量加大比例 = {result['increase_percent']:.1f}% {inc_src}")
+            o.append(f"  加大流量 Q加大 = {result['Q_increased']:.3f} m³/s")
+            o.append(f"  加大水深 h加大 = {result['h_increased']:.3f} m")
+            o.append(f"  加大流速 V加大 = {result['V_increased']:.3f} m/s")
+            o.append(f"  超高 Fb = {result['Fb']:.3f} m")
+            o.append("")
 
         # 警告信息
         if result.get('warning_message'):
@@ -532,13 +550,17 @@ class AqueductPanel(QWidget):
         V_d = result['V_design']
         vel_ok = 1.0 <= V_d <= 2.5
         o.append(f"  流速验证: V={V_d:.3f}m/s (推荐1.0~2.5) → {'✓ 通过' if vel_ok else '⚠ 超出推荐范围'}")
-        Fb = result['Fb']
         R_val = result['R']
-        Fb_ok = Fb >= 0.10
         Fb_design_ok = (result['H_total'] - result['h_design']) >= R_val / 5
-        o.append(f"  超高验证(加大): Fb={Fb:.3f}m ≥ 0.10m → {'✓ 通过' if Fb_ok else '✗ 未通过'}")
-        o.append(f"  超高验证(设计): ≥ R/5={R_val/5:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
-        all_pass = Fb_ok and Fb_design_ok
+        if use_increase:
+            Fb = result['Fb']
+            Fb_ok = Fb >= 0.10
+            o.append(f"  超高验证(加大): Fb={Fb:.3f}m ≥ 0.10m → {'✓ 通过' if Fb_ok else '✗ 未通过'}")
+            o.append(f"  超高验证(设计): ≥ R/5={R_val/5:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
+            all_pass = Fb_ok and Fb_design_ok
+        else:
+            o.append(f"  超高验证(设计): ≥ R/5={R_val/5:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
+            all_pass = vel_ok and Fb_design_ok
         o.append("")
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
@@ -694,20 +716,22 @@ class AqueductPanel(QWidget):
         o.append(f"     误差 = {abs(A_d * V_d - Q) / Q * 100:.2f}%")
         o.append("")
 
-        o.append("【四、加大流量工况】")
-        o.append("")
-        o.append("  1. 加大流量计算:")
-        o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
-        o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
-        o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
-        o.append(f"           = {Q_inc:.3f} m³/s")
-        o.append("")
-        o.append("  2. 加大水深计算:")
-        o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
-        o.append(f"      h加大 = {h_inc:.3f} m")
-        o.append("")
+        use_increase = p.get('use_increase', True)
+        if use_increase:
+          o.append("【四、加大流量工况】")
+          o.append("")
+          o.append("  1. 加大流量计算:")
+          o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
+          o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
+          o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
+          o.append(f"           = {Q_inc:.3f} m³/s")
+          o.append("")
+          o.append("  2. 加大水深计算:")
+          o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
+          o.append(f"      h加大 = {h_inc:.3f} m")
+          o.append("")
 
-        o.append("  3. 过水面积计算 (U形断面):")
+          o.append("  3. 过水面积计算 (U形断面):")
         if h_inc <= R_val:
             theta_inc = math.acos((R_val - h_inc) / R_val) if R_val > 0 else 0
             o.append(f"      当 h加大 ≤ R 时:")
@@ -788,28 +812,34 @@ class AqueductPanel(QWidget):
                 o.append(f"     结果: 超出推荐范围 ⚠")
                 o.append(f"     提示: 流速过大，可能造成冲刷，建议调整断面尺寸")
         o.append("")
-
         o.append(f"  2. 超高验证（规范 9.4.1-2）")
         Fb_design_min = R_val / 5
         Fb_design = H_total - h_d
-        Fb_inc_min = 0.10
         fb_design_ok = Fb_design >= Fb_design_min
-        fb_inc_ok = Fb >= Fb_inc_min
         o.append(f"     断面类型: U形")
         o.append(f"     规范要求:")
         o.append(f"       - 设计流量: 超高不应小于槽身直径的1/10 (即2R/10 = R/5 = {Fb_design_min:.3f} m)")
-        o.append(f"       - 加大流量: 超高不应小于 0.10 m")
+        if use_increase:
+            o.append(f"       - 加大流量: 超高不应小于 0.10 m")
         o.append(f"")
         o.append(f"     计算结果:")
         o.append(f"       - 设计流量超高: Fb_设计 = H - h_设计 = {H_total:.2f} - {h_d:.3f} = {Fb_design:.3f} m")
-        o.append(f"       - 加大流量超高: Fb_加大 = H - h_加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
-        o.append(f"")
-        o.append(f"     验证结果:")
-        o.append(f"       - 设计流量: {Fb_design:.3f} {'≥' if fb_design_ok else '<'} {Fb_design_min:.3f} → {'通过 ✓' if fb_design_ok else '未通过 ✗'}")
-        o.append(f"       - 加大流量: {Fb:.3f} {'≥' if fb_inc_ok else '<'} {Fb_inc_min:.2f} → {'通过 ✓' if fb_inc_ok else '未通过 ✗'}")
+        if use_increase:
+            Fb_inc_min = 0.10
+            fb_inc_ok = Fb >= Fb_inc_min
+            o.append(f"       - 加大流量超高: Fb_加大 = H - h_加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
+            o.append(f"")
+            o.append(f"     验证结果:")
+            o.append(f"       - 设计流量: {Fb_design:.3f} {'≥' if fb_design_ok else '<'} {Fb_design_min:.3f} → {'通过 ✓' if fb_design_ok else '未通过 ✗'}")
+            o.append(f"       - 加大流量: {Fb:.3f} {'≥' if fb_inc_ok else '<'} {Fb_inc_min:.2f} → {'通过 ✓' if fb_inc_ok else '未通过 ✗'}")
+            all_pass = fb_inc_ok and fb_design_ok
+        else:
+            fb_inc_ok = True
+            o.append(f"")
+            o.append(f"     验证结果:")
+            o.append(f"       - 设计流量: {Fb_design:.3f} {'≥' if fb_design_ok else '<'} {Fb_design_min:.3f} → {'通过 ✓' if fb_design_ok else '未通过 ✗'}")
+            all_pass = fb_design_ok
         o.append("")
-
-        all_pass = fb_inc_ok and fb_design_ok
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
         o.append("=" * 70)
@@ -1486,6 +1516,17 @@ class AqueductPanel(QWidget):
         if not self.current_result or not self.current_result.get('success'):
             InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
+        stype = self.current_result.get('section_type', 'U形')
+        channel_name = getattr(self, '_channel_name', '')
+        meta = load_meta()
+        auto_purpose = build_calc_purpose('aqueduct', project=meta.project_name, name=channel_name, section_type=stype)
+        dlg = ExportConfirmDialog('aqueduct', '渡槽水力计算书', auto_purpose, parent=self._info_parent())
+        from PySide6.QtWidgets import QDialog
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self._word_export_meta = dlg.get_meta()
+        self._word_export_purpose = dlg.get_calc_purpose()
+        self._word_export_refs = dlg.get_references()
         filepath, _ = QFileDialog.getSaveFileName(self, "保存Word报告", "", "Word文档 (*.docx);;所有文件 (*.*)")
         if not filepath: return
         try:
@@ -1493,25 +1534,31 @@ class AqueductPanel(QWidget):
             InfoBar.success("导出成功", f"Word报告已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
             ask_open_file(filepath, self._info_parent())
         except PermissionError:
-            InfoBar.error("文件被占用", "无法写入文件，请先关闭已打开的同名Word文档，然后重新操作。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
+            InfoBar.error("文件被占用", "请关闭同名Word文档后重试。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
         except Exception as e:
-            InfoBar.error("导出失败", f"Word导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            InfoBar.error("导出失败", str(e), parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
     def _build_word_report(self, filepath):
-        """构建Word报告文档（方案3高端咨询报告风格）"""
+        """构建Word报告文档（工程产品运行卡格式）"""
         res = self.current_result
         stype = res.get('section_type', 'U形')
-        method = res.get("design_method", "")
+        method = res.get('design_method', '')
+        meta = getattr(self, '_word_export_meta', load_meta())
+        purpose = getattr(self, '_word_export_purpose', '')
+        refs = getattr(self, '_word_export_refs', REFERENCES_BASE.get('aqueduct', []))
 
-        doc = create_styled_doc(
-            title='渡槽水力计算书',
-            subtitle=f'{stype}断面  ·  {method}',
-            header_text=f'渡槽水力计算书（{stype}断面）'
+        doc = create_engineering_report_doc(
+            meta=meta,
+            calc_title='渡槽水力计算书',
+            calc_content_desc=f'渡槽水力断面设计计算（{stype}断面）',
+            calc_purpose=purpose,
+            references=refs,
+            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n渡槽水力计算（{stype}断面 · {method}）',
         )
         doc.add_page_break()
 
-        # 一、基础公式
-        doc_add_h1(doc, '一、基础公式')
+        # 5. 基础公式
+        doc_add_eng_h(doc, '5、基础公式')
         doc_add_formula(doc, r'Q = \frac{1}{n} \cdot A \cdot R^{2/3} \cdot i^{1/2}', '曼宁公式：')
         if stype == 'U形':
             doc_add_formula(doc, r'B = 2R', '槽宽：')
@@ -1521,16 +1568,16 @@ class AqueductPanel(QWidget):
             doc_add_formula(doc, r'P = B + 2h', '湿周：')
         doc_add_formula(doc, r'R_{hyd} = \frac{A}{P}', '水力半径：')
 
-        # 二、计算过程
-        doc_add_h1(doc, '二、计算过程')
-        doc_render_calc_text(doc, self._export_plain_text or '', skip_title_keyword='渡槽水力计算结果')
+        # 6. 计算过程
+        doc_add_eng_h(doc, '6、计算过程')
+        doc_render_calc_text_eng(doc, self._export_plain_text or '', skip_title_keyword='渡槽水力计算结果')
 
-        # 三、断面图
+        # 7. 断面图
         try:
             import tempfile
             tmp = os.path.join(tempfile.gettempdir(), '_aqueduct_section.png')
             self.section_fig.savefig(tmp, dpi=150, bbox_inches='tight')
-            doc_add_h1(doc, '三、断面图')
+            doc_add_eng_h(doc, '7、断面图')
             doc_add_figure(doc, tmp, width_cm=14)
             os.remove(tmp)
         except Exception:

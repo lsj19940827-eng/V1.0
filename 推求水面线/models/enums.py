@@ -19,6 +19,7 @@ class StructureType(Enum):
     MINGQU_TRAPEZOIDAL = "明渠-梯形"
     MINGQU_RECTANGULAR = "明渠-矩形"
     MINGQU_CIRCULAR = "明渠-圆形"
+    MINGQU_U = "明渠-U形"
     
     # 渡槽类型
     AQUEDUCT_U = "渡槽-U形"

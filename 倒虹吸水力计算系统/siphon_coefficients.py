@@ -297,6 +297,40 @@ class CoefficientService:
             return xi, "\n".join(steps)
         return xi
     
+    # 压力管道渐变段系数 ξjb (GB 50288-2018 附录L 第4条)
+    PIPE_TRANSITION_CONTRACT = 0.05   # 收缩（方变圆 / 圆管收缩）
+    PIPE_TRANSITION_EXPAND   = 0.10   # 扩散（圆变方 / 圆管扩大，扩散角≤10°）
+
+    # 直线扭曲面角度插值参数 (表L.1.2)
+    # 进口: θ₁ = 15°~37° → ξ₁ = 0.05~0.30  (角度越大，过渡越陡，损失越大)
+    # 出口: θ₂ = 10°~17° → ξ₂ = 0.30~0.50
+    LINEAR_TWIST_INLET  = (15.0, 37.0, 0.05, 0.30)   # (θ_min, θ_max, ξ_min, ξ_max)
+    LINEAR_TWIST_OUTLET = (10.0, 17.0, 0.30, 0.50)
+
+    @classmethod
+    def calculate_linear_twist_coeff(cls, angle: float, is_inlet: bool) -> float:
+        """
+        直线扭曲面渐变段系数按角度线性插值 (表L.1.2)
+
+        进口: θ₁ = 15°~37° → ξ₁ = 0.05~0.30
+        出口: θ₂ = 10°~17° → ξ₂ = 0.30~0.50
+        超出范围时按端点值返回（不外推）。
+
+        Args:
+            angle: 扭转角 θ (度)
+            is_inlet: True=进口，False=出口
+
+        Returns:
+            插值得到的局部阻力系数 ξ
+        """
+        params = cls.LINEAR_TWIST_INLET if is_inlet else cls.LINEAR_TWIST_OUTLET
+        theta_min, theta_max, xi_min, xi_max = params
+        if angle <= theta_min:
+            return xi_min
+        if angle >= theta_max:
+            return xi_max
+        return xi_min + (xi_max - xi_min) * (angle - theta_min) / (theta_max - theta_min)
+
     @classmethod
     def calculate_fold_coeff(cls, angle: float, verbose: bool = False) -> tuple:
         """

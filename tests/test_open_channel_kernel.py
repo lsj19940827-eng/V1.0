@@ -35,6 +35,9 @@ from 明渠设计 import (
     calculate_dimensions_for_flow_and_beta,
     # 主计算函数
     quick_calculate_trapezoidal, quick_calculate_rectangular, quick_calculate_circular,
+    quick_calculate_u_section,
+    # U形辅助
+    _u_arc_geometry,
     # 加大比例
     get_flow_increase_percent,
     # 圆形
@@ -1050,6 +1053,131 @@ def test_increased_flow_continuity():
 
 
 # ============================================================
+# 测试21-23: U形明渠
+# ============================================================
+
+def _independent_u_geometry(R, alpha_deg, theta_deg, h):
+    """独立计算U形断面面积和湿周（不依赖被测模块，用于验证）"""
+    theta_rad = math.radians(theta_deg)
+    h0 = R * (1.0 - math.cos(theta_rad / 2.0))
+    m = math.tan(math.radians(alpha_deg))
+    b_arc = 2.0 * R * math.sin(theta_rad / 2.0)
+    if h <= 0:
+        return 0.0, 0.0
+    if h <= h0:
+        cos_arg = max(-1.0, min(1.0, (R - h) / R))
+        acos_val = math.acos(cos_arg)
+        A = R * R * acos_val - (R - h) * math.sqrt(max(0.0, R * R - (R - h) ** 2))
+        chi = 2.0 * R * acos_val
+    else:
+        h_s = h - h0
+        A_arc = R * R * (theta_rad / 2.0 - math.sin(theta_rad / 2.0) * math.cos(theta_rad / 2.0))
+        A = A_arc + (b_arc + m * h_s) * h_s
+        chi = theta_rad * R + 2.0 * h_s * math.sqrt(1.0 + m * m)
+    return A, chi
+
+
+def test_u_section_geometry():
+    """测试21：U形断面几何计算正确性"""
+    print_header("测试21: U形断面几何计算")
+    cases = [
+        (0.8, 14.0, 152.0, 0.3),   # 纯弧区
+        (0.8, 14.0, 152.0, 0.6),   # 直线段区
+        (1.0, 0.0,  180.0, 0.5),   # 半圆底直壁
+        (0.5, 20.0, 120.0, 0.2),   # θ<180 纯弧区
+        (0.5, 20.0, 120.0, 0.45),  # θ<180 直线段
+    ]
+    for R, alpha_deg, theta_deg, h in cases:
+        A_mod, chi_mod, _ = _u_arc_geometry(R, alpha_deg, theta_deg, h)
+        A_ref, chi_ref = _independent_u_geometry(R, alpha_deg, theta_deg, h)
+        check(f"U形面积 R={R},α={alpha_deg},θ={theta_deg},h={h}",
+              abs(A_mod - A_ref) < 1e-6,
+              f"模块={A_mod:.6f}, 独立={A_ref:.6f}")
+        check(f"U形湿周 R={R},α={alpha_deg},θ={theta_deg},h={h}",
+              abs(chi_mod - chi_ref) < 1e-6,
+              f"模块={chi_mod:.6f}, 独立={chi_ref:.6f}")
+
+    # 边界：h=0
+    A0, chi0, _ = _u_arc_geometry(0.8, 14.0, 152.0, 0.0)
+    check("U形 h=0 面积=0", A0 == 0.0, f"A={A0}")
+
+    # 连续性：h->h0 两公式连续
+    R, alpha_deg, theta_deg = 0.8, 14.0, 152.0
+    theta_rad = math.radians(theta_deg)
+    h0 = R * (1.0 - math.cos(theta_rad / 2.0))
+    A_below, chi_below, _ = _u_arc_geometry(R, alpha_deg, theta_deg, h0 - 1e-7)
+    A_above, chi_above, _ = _u_arc_geometry(R, alpha_deg, theta_deg, h0 + 1e-7)
+    check("U形 h0处面积连续性", abs(A_below - A_above) < 0.001,
+          f"A(h0-)={A_below:.6f}, A(h0+)={A_above:.6f}")
+    check("U形 h0处湿周连续性", abs(chi_below - chi_above) < 0.001,
+          f"χ(h0-)={chi_below:.6f}, χ(h0+)={chi_above:.6f}")
+
+
+def test_u_section_full_design():
+    """测试22：U形断面完整设计计算"""
+    print_header("测试22: U形断面完整设计计算")
+    cases = [
+        (2.0,  0.8, 14.0, 152.0, 0.014, 3000, 0.1, 100.0),
+        (1.0,  0.5, 0.0,  180.0, 0.014, 2000, 0.1, 100.0),
+        (5.0,  1.2, 20.0, 140.0, 0.013, 1500, 0.1, 100.0),
+        (0.5,  0.4, 10.0, 160.0, 0.015, 5000, 0.1, 100.0),
+    ]
+    for Q, R, alpha_deg, theta_deg, n, slope_inv, vmin, vmax in cases:
+        result = quick_calculate_u_section(Q, R, alpha_deg, theta_deg, n, slope_inv, vmin, vmax)
+        tag = f"Q={Q},R={R},α={alpha_deg},θ={theta_deg}"
+        check(f"U形设计成功 {tag}", result['success'],
+              result.get('error_message', ''))
+        if result['success']:
+            h = result['h_design']
+            A = result['A_design']
+            i = 1.0 / slope_inv
+            Q_calc = (1.0 / n) * A * (result['R_design'] ** (2.0 / 3.0)) * math.sqrt(i)
+            err_pct = abs(Q_calc - Q) / Q * 100
+            check(f"U形流量误差<2% {tag}", err_pct < 2.0, f"误差={err_pct:.2f}%")
+
+            # 加大水深 > 设计水深
+            h_inc = result['h_increased']
+            if h_inc > 0:
+                check(f"U形加大水深>设计水深 {tag}", h_inc > h,
+                      f"h_inc={h_inc:.3f}, h={h:.3f}")
+                # 超高
+                Fb = result['Fb']
+                h_prime = result['h_prime']
+                Fb_req = 0.25 * h_inc + 0.2
+                check(f"U形超高公式 {tag}", abs(Fb - Fb_req) < 0.001,
+                      f"Fb={Fb:.3f}, 要求={Fb_req:.3f}")
+                check(f"U形渠道高度=h_inc+Fb {tag}",
+                      abs(h_prime - (h_inc + Fb)) < 0.001,
+                      f"H={h_prime:.3f}, h_inc+Fb={h_inc+Fb:.3f}")
+
+
+def test_u_section_boundary():
+    """测试23：U形断面边界条件"""
+    print_header("测试23: U形断面边界条件")
+    # Q=0
+    r = quick_calculate_u_section(0.0, 0.8, 14, 152, 0.014, 3000, 0.1, 100)
+    check("U形 Q=0 失败", not r['success'], "应返回失败")
+    # R=0
+    r = quick_calculate_u_section(2.0, 0.0, 14, 152, 0.014, 3000, 0.1, 100)
+    check("U形 R=0 失败", not r['success'], "应返回失败")
+    # n=0
+    r = quick_calculate_u_section(2.0, 0.8, 14, 152, 0.0, 3000, 0.1, 100)
+    check("U形 n=0 失败", not r['success'], "应返回失败")
+    # slope_inv=0
+    r = quick_calculate_u_section(2.0, 0.8, 14, 152, 0.014, 0, 0.1, 100)
+    check("U形 slope_inv=0 失败", not r['success'], "应返回失败")
+    # θ=0
+    r = quick_calculate_u_section(2.0, 0.8, 14, 0, 0.014, 3000, 0.1, 100)
+    check("U形 θ=0 失败", not r['success'], "应返回失败")
+    # α=0 直壁（合法）
+    r = quick_calculate_u_section(2.0, 0.8, 0.0, 180.0, 0.014, 3000, 0.1, 100)
+    check("U形 α=0 成功", r['success'], r.get('error_message', ''))
+    # θ=180 半圆底（合法）
+    r = quick_calculate_u_section(2.0, 0.8, 14.0, 180.0, 0.014, 3000, 0.1, 100)
+    check("U形 θ=180 成功", r['success'], r.get('error_message', ''))
+
+
+# ============================================================
 # 主测试入口
 # ============================================================
 if __name__ == '__main__':
@@ -1077,6 +1205,9 @@ if __name__ == '__main__':
     test_appendix_e_area_ratio()
     test_rounding_consistency()
     test_increased_flow_continuity()
+    test_u_section_geometry()
+    test_u_section_full_design()
+    test_u_section_boundary()
 
     # 总结
     print("\n")

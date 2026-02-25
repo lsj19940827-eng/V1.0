@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QShortcut, QKeySequence
 
-from qfluentwidgets import PushButton, PrimaryPushButton, LineEdit
+from qfluentwidgets import PushButton, PrimaryPushButton, LineEdit, PopupTeachingTip, TeachingTipTailPosition, InfoBarIcon
 
 from 渠系断面设计.styles import (
     auto_resize_table, DIALOG_STYLE,
@@ -2941,9 +2941,18 @@ class SectionSummaryDialog(QDialog):
         _info_icon.setStyleSheet(
             "font-size:13px; color:#1a73e8; font-weight:bold; margin-top:6px; cursor:pointer;"
         )
-        _info_icon.setToolTip(
-            "<b>统一断面</b>：按最大流量段设计统一断面尺寸，其余各流量段仅推求水深；<br>"
-            "<b>独立断面</b>：每个流量段独立计算各自的断面尺寸。"
+        _info_icon.setCursor(Qt.PointingHandCursor)
+        _dialog_self = self
+        _info_icon.mousePressEvent = lambda e: PopupTeachingTip.create(
+            target=_info_icon,
+            icon=InfoBarIcon.INFORMATION,
+            title='断面设计方式',
+            content='统一断面：按最大流量段设计统一断面尺寸，其余各流量段仅推求水深；\n'
+                    '独立断面：每个流量段独立计算各自的断面尺寸。',
+            isClosable=False,
+            tailPosition=TeachingTipTailPosition.BOTTOM,
+            duration=-1,
+            parent=_dialog_self,
         )
         _tt_mode_hlay.addWidget(_info_icon)
         _tt_mode_hlay.addStretch()

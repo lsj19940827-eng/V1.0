@@ -677,3 +677,632 @@ def doc_render_calc_text(doc, text, skip_title_keyword=""):
             doc_add_formula(doc, fl, '    ')
             continue
         doc_add_body(doc, stripped)
+
+
+# ============================================================
+# 工程产品运行卡格式 —— 辅助函数
+# ============================================================
+
+def _set_section_margins(section, top=2.5, bottom=2.5, left=3.2, right=3.2):
+    section.top_margin = Cm(top)
+    section.bottom_margin = Cm(bottom)
+    section.left_margin = Cm(left)
+    section.right_margin = Cm(right)
+    section.page_width = Cm(21)
+    section.page_height = Cm(29.7)
+
+
+def _run_song(para, text, size_pt=12, bold=False, color=None):
+    """向段落添加宋体 run"""
+    r = para.add_run(text)
+    r.font.name = '宋体'
+    r._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+    r._element.rPr.rFonts.set(qn('w:hAnsi'), 'Times New Roman')
+    r.font.size = Pt(size_pt)
+    if bold:
+        r.bold = True
+    if color:
+        r.font.color.rgb = color
+    return r
+
+
+def _cell_text_song(cell, text, size_pt=10, bold=False,
+                    align=None, v_align=None):
+    """清空单元格并写入宋体文字"""
+    cell.text = ''
+    p = cell.paragraphs[0]
+    p.alignment = align if align is not None else WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    _run_song(p, text, size_pt, bold)
+    if v_align is not None:
+        cell.vertical_alignment = v_align
+
+
+def _add_page1_running_card(doc, meta, calc_title, calc_content_desc):
+    """Page 1: 工程阶段产品运行卡（表023格式，L=R=1.9cm）"""
+    section = doc.sections[0]
+    _set_section_margins(section, top=2.5, bottom=2.5, left=1.9, right=1.9)
+
+    proj = meta.project_name.strip() or "工程名称"
+
+    p0 = doc.add_paragraph()
+    p0.paragraph_format.space_before = Pt(0)
+    p0.paragraph_format.space_after = Pt(2)
+    _run_song(p0, '表023  工程阶段产品运行卡', 10)
+
+    p1 = doc.add_paragraph()
+    p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p1.paragraph_format.space_before = Pt(6)
+    p1.paragraph_format.space_after = Pt(6)
+    _run_song(p1, f'{proj}  {meta.design_stage}  阶段  计算  产品运行卡', 14)
+
+    p2 = doc.add_paragraph()
+    p2.paragraph_format.space_before = Pt(0)
+    p2.paragraph_format.space_after = Pt(2)
+    _run_song(p2, f'产品级别：  {meta.product_level}                                              记录编号：{meta.record_number}', 10)
+
+    p3 = doc.add_paragraph()
+    p3.paragraph_format.space_before = Pt(0)
+    p3.paragraph_format.space_after = Pt(2)
+    _run_song(p3, ('注：1．产品质量评定结论以校审最高一级的评定结果为准；质量评定等级分优良、合格、'
+                   '不合格（评定标准详见《不合格品控制程序》附录：产品质量合格评定准则）。'
+                   '2．一个产品由多人计算时，应分别填写在同一张运行卡上。'), 9)
+
+    vol_cur = meta.volume_current.strip() or ' '
+    vol_tot = meta.volume_total.strip() or ' '
+    p_vol = doc.add_paragraph()
+    p_vol.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p_vol.paragraph_format.space_before = Pt(2)
+    p_vol.paragraph_format.space_after = Pt(4)
+    _run_song(p_vol, f'第  {vol_cur}  册    共  {vol_tot}  册', 13)
+
+    # 14行×5列大表
+    tbl = doc.add_table(rows=14, cols=5)
+    tbl.style = 'Table Grid'
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    col_widths = [Cm(2.0), Cm(7.5), Cm(2.0), Cm(3.2), Cm(2.5)]
+    for row in tbl.rows:
+        for ci, w in enumerate(col_widths):
+            row.cells[ci].width = w
+
+    # 垂直合并（列0）
+    tbl.cell(0, 0).merge(tbl.cell(1, 0))
+    tbl.cell(2, 0).merge(tbl.cell(3, 0))
+    tbl.cell(4, 0).merge(tbl.cell(6, 0))
+    tbl.cell(7, 0).merge(tbl.cell(9, 0))
+    tbl.cell(10, 0).merge(tbl.cell(12, 0))
+    # 列1 行0-1 垂直合并
+    tbl.cell(0, 1).merge(tbl.cell(1, 1))
+    # 各行 列1-4 水平合并
+    for ri in [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]:
+        tbl.cell(ri, 1).merge(tbl.cell(ri, 4))
+
+    designer = meta.calculator or ' '
+    _cell_text_song(tbl.cell(0, 0), '产品\n名称', 10, bold=True, v_align=WD_ALIGN_VERTICAL.CENTER)
+    _cell_text_song(tbl.cell(0, 1), calc_title, 10, align=WD_ALIGN_PARAGRAPH.LEFT, v_align=WD_ALIGN_VERTICAL.CENTER)
+    _cell_text_song(tbl.cell(0, 2), '图号或\n页数', 9, v_align=WD_ALIGN_VERTICAL.CENTER)
+    _cell_text_song(tbl.cell(0, 3), '电子文件档案号', 9, v_align=WD_ALIGN_VERTICAL.CENTER)
+    _cell_text_song(tbl.cell(0, 4), '设计（作业）人', 9, v_align=WD_ALIGN_VERTICAL.CENTER)
+    _cell_text_song(tbl.cell(1, 2), ' ', 10)
+    _cell_text_song(tbl.cell(1, 3), ' ', 10)
+    _cell_text_song(tbl.cell(1, 4), designer, 10, v_align=WD_ALIGN_VERTICAL.CENTER)
+    _cell_text_song(tbl.cell(2, 0), '产品\n内容', 10, bold=True, v_align=WD_ALIGN_VERTICAL.CENTER)
+    _cell_text_song(tbl.cell(2, 1), calc_content_desc, 10, align=WD_ALIGN_PARAGRAPH.LEFT, v_align=WD_ALIGN_VERTICAL.CENTER)
+    clause = meta.mandatory_clause.strip() or '无'
+    _cell_text_song(tbl.cell(3, 1), f'产品采用的强标条款：{clause}', 10, align=WD_ALIGN_PARAGRAPH.LEFT)
+
+    def _fill_opinion(r0, label):
+        _cell_text_song(tbl.cell(r0, 0), label, 10, bold=True, v_align=WD_ALIGN_VERTICAL.CENTER)
+        short = label.replace('\n', '')
+        _cell_text_song(tbl.cell(r0, 1),
+                        f'已{short}：□所有数据和公式；□图、表与计算一致；□产品格式符合院要求。\n其它较大意见：',
+                        9, align=WD_ALIGN_PARAGRAPH.LEFT)
+        _cell_text_song(tbl.cell(r0 + 1, 1), f'产品强标{short}意见：', 9, align=WD_ALIGN_PARAGRAPH.LEFT)
+        _cell_text_song(tbl.cell(r0 + 2, 1),
+                        '收件时间：            产品质量等级：            签名：            出手日期：',
+                        9, align=WD_ALIGN_PARAGRAPH.LEFT)
+
+    _fill_opinion(4, '校\n核\n意\n见')
+    _fill_opinion(7, '审\n查\n意\n见')
+    _fill_opinion(10, '审\n定\n意\n见')
+    _cell_text_song(tbl.cell(13, 0), '批准\n意见', 10, bold=True, v_align=WD_ALIGN_VERTICAL.CENTER)
+    _cell_text_song(tbl.cell(13, 1), '\n签名：                                    出手日期：', 10, align=WD_ALIGN_PARAGRAPH.LEFT)
+
+    # 行高设置
+    rh_list = [Cm(0.9), Cm(0.9), Cm(0.8), Cm(0.8),
+               Cm(1.1), Cm(0.6), Cm(0.7),
+               Cm(1.1), Cm(0.6), Cm(0.7),
+               Cm(1.1), Cm(0.6), Cm(0.7),
+               Cm(1.2)]
+    for ri, rh in enumerate(rh_list):
+        if ri < len(tbl.rows):
+            tr = tbl.rows[ri]._tr
+            trPr = tr.get_or_add_trPr()
+            trHeight = parse_xml(
+                f'<w:trHeight {nsdecls("w")} w:val="{int(rh.emu / 12700)}" w:hRule="atLeast"/>'
+            )
+            trPr.append(trHeight)
+
+
+def _add_page2_cover(doc, meta, calc_title):
+    """Page 2: 封面（新 section，L=R=3.2cm）"""
+    import datetime
+    new_sec = doc.add_section()
+    _set_section_margins(new_sec, top=2.5, bottom=2.5, left=3.2, right=3.2)
+
+    proj = meta.project_name.strip() or "工程名称"
+    for _ in range(2):
+        doc.add_paragraph('')
+
+    p_proj = doc.add_paragraph()
+    p_proj.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_proj.paragraph_format.space_after = Pt(8)
+    _run_song(p_proj, f'{proj}  {meta.design_stage}  设计阶段', 18)
+
+    doc.add_paragraph('')
+    p_title = doc.add_paragraph()
+    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_title.paragraph_format.space_before = Pt(6)
+    p_title.paragraph_format.space_after = Pt(4)
+    _run_song(p_title, calc_title, 22, bold=True)
+
+    p_sub = doc.add_paragraph()
+    p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_sub.paragraph_format.space_before = Pt(2)
+    p_sub.paragraph_format.space_after = Pt(2)
+    _run_song(p_sub, '计  算  稿', 16)
+
+    for _ in range(4):
+        doc.add_paragraph('')
+
+    def _person_row(label, name):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after = Pt(2)
+        _run_song(p, f'           {label:<10}  {name}', 14)
+
+    _person_row('专业名称', f'    {meta.specialty or "水工"}')
+    _person_row('审    定', f'    {meta.approver}')
+    _person_row('审    查', f'    {meta.reviewer}')
+    _person_row('校    核', f'    {meta.checker}')
+    _person_row('计    算', f'    {meta.calculator}')
+
+    for _ in range(4):
+        doc.add_paragraph('')
+
+    from 渠系断面设计.report_meta import DESIGN_UNIT
+    p_unit = doc.add_paragraph()
+    p_unit.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_unit.paragraph_format.space_before = Pt(4)
+    _run_song(p_unit, DESIGN_UNIT, 16, bold=True)
+
+    p_date = doc.add_paragraph()
+    p_date.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _run_song(p_date, datetime.datetime.now().strftime('%Y年%m月'), 14)
+
+
+def _add_page3_mandatory_standards(doc, meta, calc_title, calc_content_desc):
+    """Page 3: 强制性标准条文执行情况校审检查表"""
+    doc.add_page_break()
+    p_ttl = doc.add_paragraph()
+    p_ttl.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_ttl.paragraph_format.space_before = Pt(0)
+    p_ttl.paragraph_format.space_after = Pt(6)
+    _run_song(p_ttl, '强制性标准条文执行情况校审检查表', 14, bold=True)
+
+    tbl = doc.add_table(rows=6, cols=6)
+    tbl.style = 'Table Grid'
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    col_w3 = [Cm(2.0), Cm(5.0), Cm(1.5), Cm(2.5), Cm(1.5), Cm(1.5)]
+    for row in tbl.rows:
+        for ci, w in enumerate(col_w3):
+            row.cells[ci].width = w
+
+    tbl.cell(0, 0).merge(tbl.cell(0, 5))
+    _cell_text_song(tbl.cell(0, 0), '强制性标准条文执行情况校审检查表', 12, bold=True)
+
+    proj = meta.project_name.strip() or ' '
+    _cell_text_song(tbl.cell(1, 0), '工程名称', 10, bold=True)
+    _cell_text_song(tbl.cell(1, 1), proj, 10, align=WD_ALIGN_PARAGRAPH.LEFT)
+    _cell_text_song(tbl.cell(1, 2), '设计阶段', 10, bold=True)
+    tbl.cell(1, 3).merge(tbl.cell(1, 5))
+    _cell_text_song(tbl.cell(1, 3), meta.design_stage, 10)
+
+    _cell_text_song(tbl.cell(2, 0), '产品名称', 10, bold=True)
+    _cell_text_song(tbl.cell(2, 1), calc_title, 10, align=WD_ALIGN_PARAGRAPH.LEFT)
+    _cell_text_song(tbl.cell(2, 2), '产品内容', 10, bold=True)
+    tbl.cell(2, 3).merge(tbl.cell(2, 5))
+    _cell_text_song(tbl.cell(2, 3), calc_content_desc, 10, align=WD_ALIGN_PARAGRAPH.LEFT)
+
+    _cell_text_song(tbl.cell(3, 0), '标准名称\n及编号', 9, bold=True)
+    tbl.cell(3, 1).merge(tbl.cell(4, 1))
+    _cell_text_song(tbl.cell(3, 1), '强制性标准条款号、条文内容及执行情况', 9, bold=True)
+    tbl.cell(3, 2).merge(tbl.cell(3, 5))
+    _cell_text_song(tbl.cell(3, 2), '校审意见（符合的画"√"、不符合的画"×"）', 9, bold=True)
+
+    _cell_text_song(tbl.cell(4, 0), '标准名称\n及编号', 9, bold=True)
+    _cell_text_song(tbl.cell(4, 2), '校核', 9, bold=True)
+    _cell_text_song(tbl.cell(4, 3), '审查', 9, bold=True)
+    tbl.cell(4, 4).merge(tbl.cell(4, 5))
+    _cell_text_song(tbl.cell(4, 4), '审定', 9, bold=True)
+
+    clause = meta.mandatory_clause.strip() or '无'
+    _cell_text_song(tbl.cell(5, 0), clause, 10, align=WD_ALIGN_PARAGRAPH.LEFT)
+    _cell_text_song(tbl.cell(5, 1), clause, 10, align=WD_ALIGN_PARAGRAPH.LEFT)
+    _cell_text_song(tbl.cell(5, 2), '', 10)
+    _cell_text_song(tbl.cell(5, 3), '', 10)
+    tbl.cell(5, 4).merge(tbl.cell(5, 5))
+    _cell_text_song(tbl.cell(5, 4), '', 10)
+
+
+def _add_page4_toc(doc):
+    """Page 4: 目录"""
+    doc.add_page_break()
+    p_ttl = doc.add_paragraph()
+    p_ttl.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_ttl.paragraph_format.space_before = Pt(12)
+    p_ttl.paragraph_format.space_after = Pt(20)
+    _run_song(p_ttl, '目  录', 18, bold=True)
+    for item in ['1、计算目的', '2、计算依据', '3、基本资料', '4、计算程序', '5、计算内容']:
+        p = doc.add_paragraph()
+        p.paragraph_format.left_indent = Cm(2)
+        p.paragraph_format.space_before = Pt(6)
+        p.paragraph_format.space_after = Pt(6)
+        _run_song(p, item, 14)
+
+
+def _add_page5_calc_intro(doc, meta, calc_purpose, references, calc_program_text):
+    """Page 5: 计算目的/依据/基本资料/计算程序"""
+    doc.add_page_break()
+
+    def _h4(text):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(10)
+        p.paragraph_format.space_after = Pt(4)
+        _run_song(p, text, 14, bold=True)
+
+    def _body(text):
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.first_line_indent = Cm(0.74)
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after = Pt(2)
+        p.paragraph_format.line_spacing = Pt(20)
+        _run_song(p, text, 12)
+
+    _h4('1、计算目的')
+    _body(calc_purpose or '（计算目的未填写）')
+
+    _h4('2、计算依据')
+    for i, ref in enumerate(references, 1):
+        p = doc.add_paragraph()
+        p.paragraph_format.left_indent = Cm(0.74)
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after = Pt(2)
+        p.paragraph_format.line_spacing = Pt(20)
+        _run_song(p, f'{i}、{ref}', 12)
+
+    _h4('3、基本资料')
+    basic = meta.basic_info.strip() if meta.basic_info.strip() else '（基本资料未填写，请在"项目设置"中补充）'
+    for seg in basic.split('\n'):
+        seg = seg.strip()
+        if seg:
+            _body(seg)
+
+    _h4('4、计算程序')
+    _body(calc_program_text or '渠系建筑物水力计算系统 V1.0')
+
+
+def _add_eng_header_footer(doc, meta, calc_title):
+    """为 Section 1（封面及之后）添加简洁页眉页脚"""
+    # 找到 Section 1（index 1）
+    if len(doc.sections) < 2:
+        return
+    sec1 = doc.sections[1]
+    sec1.header.is_linked_to_previous = False
+    hp = sec1.header.paragraphs[0]
+    hp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    proj = meta.project_name.strip() if meta.project_name.strip() else ""
+    header_str = f'{proj}  {calc_title}' if proj else calc_title
+    _run_song(hp, header_str, 9)
+    _set_paragraph_border_bottom(hp, color="000000", size=3)
+    _add_page_number(sec1, font_name='宋体', font_size=9)
+
+
+_TEMPLATE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', 'data', 'xxxxx计算稿（计算产品运行卡）.docx')
+)
+
+
+def _fill_template_cell(cell, text, size_pt=10, left=False):
+    """在模板单元格中清空内容并写入新文本，保留单元格原有格式结构。"""
+    p = cell.paragraphs[0]
+    for r in p.runs:
+        r.text = ''
+    if p.runs:
+        p.runs[0].text = text
+        p.runs[0].font.size = Pt(size_pt)
+    else:
+        r = p.add_run(text)
+        r.font.size = Pt(size_pt)
+    if left:
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+
+def create_engineering_report_doc_from_template(meta, calc_title, calc_content_desc,
+                                                calc_purpose, references,
+                                                calc_program_text=None):
+    """直接使用 xxxxx计算稿 模板，替换占位文本后追加计算内容，原汁原味保留排版。"""
+    import io
+    import datetime
+
+    if not os.path.isfile(_TEMPLATE_PATH):
+        return None  # 模板不存在，调用方回退到手工生成
+
+    buf = io.BytesIO()
+    with open(_TEMPLATE_PATH, 'rb') as f:
+        buf.write(f.read())
+    buf.seek(0)
+    doc = DocxDocument(buf)
+
+    proj  = meta.project_name.strip() or '工程名称'
+    stage = meta.design_stage.strip()  or '施工详图设计'
+    now   = datetime.datetime.now()
+    paras = doc.paragraphs  # 总共37段（0-36）
+
+    # ------------------------------------------------------------------
+    # Para[1] — 标题行  "工程   阶段 计算 产品运行卡"
+    # run[3]='工程'  run[4,5,6]=空格  run[7]='阶段'
+    # ------------------------------------------------------------------
+    p1 = paras[1]
+    p1.runs[3].text = proj          # 工程名称（无下划线）
+    p1.runs[4].text = ' '           # 带下划线的间距
+    p1.runs[5].text = stage         # 阶段文字放入带下划线的 run，呈现下划线效果
+    p1.runs[6].text = ' '           # 带下划线的间距
+    p1.runs[7].text = '  阶段'      # 静态标签"阶段"（无下划线）
+
+    # ------------------------------------------------------------------
+    # Para[2] — "产品级别：   级  ...  记录编号："
+    # run[1,2,3]=产品级别前空格(带下划线)  run[4]='级 '(静态文字)
+    # 只写"三"/"二"/"一"，run[4]的"级"保留不动
+    # ------------------------------------------------------------------
+    p2 = paras[2]
+    level_prefix = meta.product_level.rstrip('级') or meta.product_level
+    p2.runs[1].text = f' {level_prefix}'
+    p2.runs[2].text = ''
+    p2.runs[3].text = ''
+    p2.runs[7].text = f' 记录编号：{meta.record_number or ""}'
+
+    # Para[6] / Para[7] — 第/共册
+    paras[6].runs[0].text = f'第  {meta.volume_current or ""}  册   '
+    paras[7].runs[0].text = f'共  {meta.volume_total  or ""}  册   '
+
+    # ------------------------------------------------------------------
+    # Para[10] — 封面项目名称 + 设计阶段
+    # run[2]='工程 '(bold)  run[6]='设计阶段'(bold)
+    # ------------------------------------------------------------------
+    paras[10].runs[2].text = f'{proj}  '
+    paras[10].runs[6].text = f'{stage}  设计阶段'
+
+    # ------------------------------------------------------------------
+    # Para[12] — 计算书标题（红框占位文字），覆盖全部 runs
+    # ------------------------------------------------------------------
+    for r in paras[12].runs:
+        r.text = ''
+    paras[12].runs[0].text = calc_title
+
+    # Para[17-20] — 专业/审查/校核/计算人员
+    # 用 ljust 补足原始长度，保持下划线宽度与模板一致
+    paras[17].runs[1].text = f' {meta.specialty or "水工"} '.ljust(18)
+    paras[18].runs[1].text = f'  {meta.reviewer   or ""}'.ljust(20)
+    paras[19].runs[1].text = f'  {meta.checker    or ""}'.ljust(20)
+    paras[20].runs[1].text = f'  {meta.calculator or ""}'.ljust(20)
+    for i in [2, 3, 4]:
+        if i < len(paras[20].runs):
+            paras[20].runs[i].text = ''
+
+    # Para[29] — 日期  "20  年  月  日"
+    # run[0]='20'  run[2]='年'  run[4]='月'  run[5]='  '  run[6]='日'
+    paras[29].runs[0].text = str(now.year)
+    paras[29].runs[4].text = f'{now.month:02d}月'
+    if len(paras[29].runs) > 5: paras[29].runs[5].text = ''
+    if len(paras[29].runs) > 6: paras[29].runs[6].text = ''
+
+    # ------------------------------------------------------------------
+    # Table[0] — 14行×5列 运行卡大表
+    # ------------------------------------------------------------------
+    tbl0 = doc.tables[0]
+    _fill_template_cell(tbl0.cell(0, 1), calc_title,        10, left=True)
+    _fill_template_cell(tbl0.cell(1, 4), meta.calculator or '', 9)
+    _fill_template_cell(tbl0.cell(2, 1), calc_content_desc, 10, left=True)
+    clause = meta.mandatory_clause.strip() or '无'
+    if clause != '无':
+        _fill_template_cell(tbl0.cell(3, 1), f'产品采用的强标条款：{clause}', 10, left=True)
+
+    # ------------------------------------------------------------------
+    # Table[1] — 强标检查表（6行×6列）
+    # ------------------------------------------------------------------
+    tbl1 = doc.tables[1]
+    _fill_template_cell(tbl1.cell(1, 1), proj,             10, left=True)
+    _fill_template_cell(tbl1.cell(1, 3), stage,            10)
+    _fill_template_cell(tbl1.cell(2, 1), calc_title,       10, left=True)
+    _fill_template_cell(tbl1.cell(2, 3), calc_content_desc,10, left=True)
+
+    # Para[31]: 空 Heading 1 + 分节符
+    # 分节符必须保留：Section 1(封面/目录页)无页脚页码，Section 2(正文)页码从1开始
+    p31 = doc.paragraphs[31]
+    p31.style = doc.styles['Normal']
+    # 删除 Para[31] 之后的多余空段（模板末尾可能残留）
+    for p in list(doc.paragraphs[32:]):
+        p._element.getparent().remove(p._element)
+
+    program_text = calc_program_text or '渠系建筑物水力计算系统 V1.0'
+
+    def _h4(text):
+        """章节标题（Heading 1 样式，WPS 手动生成目录时可识别）"""
+        p = doc.add_paragraph(style='Heading 1')
+        p.paragraph_format.space_before = Pt(10)
+        p.paragraph_format.space_after  = Pt(4)
+        _run_song(p, text, 14, bold=True)
+
+    def _body_p(text):
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.first_line_indent = Cm(0.74)
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after  = Pt(2)
+        p.paragraph_format.line_spacing  = Pt(20)
+        _run_song(p, text, 12)
+
+    _h4('1、计算目的')
+    if calc_purpose:
+        _body_p(calc_purpose)
+
+    _h4('2、计算依据')
+    all_refs = list(references or [])
+    extra = list(meta.extra_references or [])
+    all_refs = all_refs + [r for r in extra if r not in all_refs]
+    for i, ref in enumerate(all_refs, 1):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after  = Pt(2)
+        _run_song(p, f'{i}、{ref}', 12)
+
+    _h4('3、基本资料')
+    basic = meta.basic_info.strip() or '（基本资料未填写，请在"项目设置"中补充）'
+    for seg in basic.split('\n'):
+        seg = seg.strip()
+        if seg:
+            _body_p(seg)
+
+    _h4('4、计算程序')
+    _body_p(program_text)
+
+    return doc
+
+
+def create_engineering_report_doc(meta, calc_title, calc_content_desc,
+                                   calc_purpose, references,
+                                   calc_program_text=None):
+    """创建工程产品运行卡格式 Word 文档（前5页）。
+    优先使用模板文件；模板不存在时回退到手工生成。
+    Returns:
+        doc: Document 对象（已含前5页），调用方 page_break 后追加计算内容
+    """
+    # ---- 优先：模板替换方式 ----
+    doc = create_engineering_report_doc_from_template(
+        meta, calc_title, calc_content_desc,
+        calc_purpose, references, calc_program_text
+    )
+    if doc is not None:
+        return doc
+
+    # ---- 回退：手工生成方式（模板文件缺失时） ----
+    doc = DocxDocument()
+
+    style_normal = doc.styles['Normal']
+    style_normal.font.name = '宋体'
+    style_normal._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+    style_normal._element.rPr.rFonts.set(qn('w:hAnsi'), 'Times New Roman')
+    style_normal.font.size = Pt(12)
+    style_normal.paragraph_format.line_spacing = Pt(20)
+
+    program_text = calc_program_text or '渠系建筑物水力计算系统 V1.0'
+
+    _add_page1_running_card(doc, meta, calc_title, calc_content_desc)
+    _add_page2_cover(doc, meta, calc_title)
+    _add_eng_header_footer(doc, meta, calc_title)
+    _add_page3_mandatory_standards(doc, meta, calc_title, calc_content_desc)
+    _add_page4_toc(doc)
+    _add_page5_calc_intro(doc, meta, calc_purpose, references, program_text)
+
+    return doc
+
+
+def update_doc_toc_via_com(filepath):
+    """保存后通过 COM 自动刷新目录（支持 Microsoft Word 和 WPS）。
+    返回 True 表示刷新成功，返回 False 表示 COM 不可用（无副作用）。"""
+    try:
+        import win32com.client
+    except ImportError:
+        return False
+    abs_path = os.path.abspath(filepath)
+    for app_name in ['Word.Application', 'KWPS.Application', 'WPS.Application']:
+        app = None
+        try:
+            app = win32com.client.DispatchEx(app_name)
+            app.Visible = False
+            doc = app.Documents.Open(abs_path)
+            doc.Fields.Update()
+            for i in range(1, doc.TablesOfContents.Count + 1):
+                doc.TablesOfContents(i).Update()
+            doc.Save()
+            doc.Close()
+            app.Quit()
+            return True
+        except Exception:
+            try:
+                if app is not None:
+                    app.Quit()
+            except Exception:
+                pass
+            continue
+    return False
+
+
+def doc_add_eng_h(doc, text):
+    """工程报告风格正文标题（Heading 4 等效，宋体加粗14pt）"""
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(10)
+    p.paragraph_format.space_after = Pt(4)
+    _run_song(p, text, 14, bold=True)
+    return p
+
+
+def doc_add_eng_body(doc, text):
+    """工程报告风格正文段落（宋体12pt，首行缩进2字，1.5倍行距）"""
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    p.paragraph_format.first_line_indent = Cm(0.74)
+    p.paragraph_format.space_before = Pt(2)
+    p.paragraph_format.space_after = Pt(2)
+    p.paragraph_format.line_spacing = Pt(20)
+    _run_song(p, text, 12)
+    return p
+
+
+def doc_render_calc_text_eng(doc, text, skip_title_keyword=""):
+    """将纯文本计算过程渲染为工程报告风格 Word 内容（宋体，紧凑排版）"""
+    if not text:
+        return
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if set(stripped) <= {'=', '-', ' '} and len(stripped) > 5:
+            continue
+        if skip_title_keyword and skip_title_keyword in stripped:
+            continue
+        if stripped.startswith('{{') and stripped.endswith('}}'):
+            continue
+        if stripped.startswith('【') and '】' in stripped:
+            doc_add_eng_h(doc, stripped.lstrip('【').rstrip('】'))
+            continue
+        step_m = re.match(r'^(\d+)\.\s+(.+)', stripped)
+        if step_m:
+            doc_add_eng_h(doc, f'{step_m.group(1)}. {step_m.group(2)}')
+            continue
+        fl = try_convert_formula_line(stripped)
+        if fl:
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Cm(1.2)
+            p.paragraph_format.space_before = Pt(3)
+            p.paragraph_format.space_after = Pt(3)
+            omml = latex_to_omml(fl)
+            if omml is not None:
+                p._element.append(omml)
+            else:
+                _run_song(p, f' {stripped}', 11)
+            continue
+        doc_add_eng_body(doc, stripped)

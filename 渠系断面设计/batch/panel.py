@@ -36,7 +36,7 @@ from 渠系断面设计.export_utils import (
     WORD_EXPORT_AVAILABLE, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_h2,
     doc_add_body, doc_add_styled_table, doc_add_table_caption,
-    doc_add_param_table, doc_render_calc_text,
+    doc_add_param_table, doc_render_calc_text, update_doc_toc_via_com,
 )
 
 
@@ -84,7 +84,8 @@ except ImportError:
 try:
     from 明渠设计 import (
         quick_calculate as mingqu_calculate,
-        quick_calculate_circular as circular_calculate
+        quick_calculate_circular as circular_calculate,
+        quick_calculate_u_section as mingqu_u_calculate
     )
     MINGQU_AVAILABLE = True
 except ImportError:
@@ -119,7 +120,7 @@ except ImportError:
 
 # 断面类型列表
 SECTION_TYPES = [
-    "明渠-梯形", "明渠-矩形", "明渠-圆形",
+    "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
     "渡槽-U形", "渡槽-矩形",
     "隧洞-圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
     "矩形暗涵", "倒虹吸",
@@ -200,7 +201,7 @@ _HEADER_TOOLTIPS = {
     ),
     "倒角角度(°)": (
         "【倒角角度（单位：度）】\n\n"
-        "定义：矩形渡槽底部两侧倒角的斜面与水平面的夹角\n\n"
+        "定义：矩形渡槽底部两侧倒角的斜面与水平面的夹角；也用于明渠-U形的直线段外倾角α（°）\n\n"
         "▶ 怎么填？\n"
         "  • 留空或填 0 → 不设倒角，按纯矩形断面计算\n"
         "  • 填一个角度值 → 在底部两角切出斜面\n"
@@ -368,10 +369,13 @@ class BatchPanel(QWidget):
         btn_import = PrimaryPushButton("导入Excel"); btn_import.clicked.connect(self._import_from_excel)
         self.detail_cb = CheckBox("启用详细计算过程输出")
         self.detail_cb.setChecked(False)
+        self.inc_cb = CheckBox("考虑加大流量比例系数")
+        self.inc_cb.setChecked(True)
 
         for w in [btn_import, btn_calc, btn_sample, btn_template, btn_full]:
             tb1.addWidget(w)
         tb1.addStretch()
+        tb1.addWidget(self.inc_cb)
         tb1.addWidget(self.detail_cb)
         lay.addLayout(tb1)
 
@@ -877,6 +881,8 @@ class BatchPanel(QWidget):
             ["42", "3", "油房垭", "隧洞-圆拱直墙型", "647597.709292", "3376537.187663", "3", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100"],
             ["43", "3", "-",      "矩形暗涵",         "647506.778347", "3376513.531331", "3", "0.014", "3000", "0",   "2.4", "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
             ["44", "3", "-",      "矩形暗涵",         "647387.9806",   "3376403.8971",   "3", "0.014", "3000", "",    "2.4", "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
+            ["45", "3", "-",      "明渠-U形",        "647350.0",      "3376350.0",      "2.0", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100"],
+            ["46", "3", "-",      "明渠-U形",        "647280.0",      "3376280.0",      "2.0", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100"],
         ]
         self._clear_input(force=True)
         for row_data in samples:
@@ -888,7 +894,7 @@ class BatchPanel(QWidget):
         auto_resize_table(self.input_table)
         self._loading_sample = False
         self._is_sample_data = True
-        InfoBar.success("示例数据", f"已加载 {len(samples)} 行示例数据（含明渠/隧洞/渡槽/暗涵/倒虹吸/分水闸）",
+        InfoBar.success("示例数据", f"已加载 {len(samples)} 行示例数据（含明渠/明渠-U形/隧洞/渡槽/暗涵/倒虹吸/分水闸）",
                        parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
 
     # ================================================================
@@ -1134,16 +1140,21 @@ class BatchPanel(QWidget):
                 if slope_inv <= 0: raise ValueError("比降必须大于0")
 
                 # 计算分发
+                use_inc = self.inc_cb.isChecked()
                 result = self._calculate_single(
                     section_type, Q, n, slope_inv, v_min, v_max,
                     m=m, b=b, beta=beta, R=R, D=D,
                     ducao_depth_ratio=ducao_depth_ratio,
                     chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
-                    theta_deg=theta_deg
+                    theta_deg=theta_deg,
+                    manual_increase_percent=0 if not use_inc else None
                 )
+                if result:
+                    result['_use_increase'] = use_inc
 
                 if result and result.get('success'):
-                    row_out = self._extract_result_row(seq, segment, building_name, section_type, result)
+                    row_out = self._extract_result_row(seq, segment, building_name, section_type, result,
+                                                       use_increase=result.get('_use_increase', True))
                     result_rows.append(row_out)
                     self.batch_results.append({'input': values, 'result': result})
                     success_count += 1
@@ -1251,68 +1262,87 @@ class BatchPanel(QWidget):
     # ================================================================
     def _calculate_single(self, section_type, Q, n, slope_inv, v_min, v_max, *,
                           m=0, b=0, beta=0, R=0, D=0,
-                          ducao_depth_ratio=0, chamfer_angle=0, chamfer_length=0, theta_deg=0):
+                          ducao_depth_ratio=0, chamfer_angle=0, chamfer_length=0, theta_deg=0,
+                          manual_increase_percent=None):
         """根据断面类型调用对应计算引擎"""
+        _inc = manual_increase_percent
         if "明渠-梯形" in section_type:
             if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
             return mingqu_calculate(Q=Q, m=m, n=n, slope_inv=slope_inv,
                                     v_min=v_min, v_max=v_max,
                                     manual_b=b if b > 0 else None,
-                                    manual_beta=beta if beta > 0 else None)
+                                    manual_beta=beta if beta > 0 else None,
+                                    manual_increase_percent=_inc)
         elif "明渠-矩形" in section_type:
             if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
             return mingqu_calculate(Q=Q, m=0, n=n, slope_inv=slope_inv,
                                     v_min=v_min, v_max=v_max,
                                     manual_b=b if b > 0 else None,
-                                    manual_beta=beta if beta > 0 else None)
+                                    manual_beta=beta if beta > 0 else None,
+                                    manual_increase_percent=_inc)
         elif "明渠-圆形" in section_type:
             if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
             return circular_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                       v_min=v_min, v_max=v_max,
-                                      manual_D=D if D > 0 else None)
+                                      manual_D=D if D > 0 else None,
+                                      increase_percent=_inc)
+        elif "明渠-U形" in section_type:
+            if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
+            if R <= 0:
+                return {'success': False, 'error_message': '明渠-U形需要填写半径R（列索徕12）'}
+            return mingqu_u_calculate(Q=Q, R=R, alpha_deg=chamfer_angle, theta_deg=theta_deg,
+                                      n=n, slope_inv=slope_inv,
+                                      v_min=v_min, v_max=v_max,
+                                      manual_increase_percent=_inc)
         elif "渡槽-U形" in section_type:
             if not DUCAO_AVAILABLE: return {'success': False, 'error_message': '渡槽计算模块未加载'}
             return ducao_u_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                      v_min=v_min, v_max=v_max,
-                                     manual_R=R if R > 0 else None)
+                                     manual_R=R if R > 0 else None,
+                                     manual_increase_percent=_inc)
         elif "渡槽-矩形" in section_type:
             if not DUCAO_AVAILABLE: return {'success': False, 'error_message': '渡槽计算模块未加载'}
             dr = ducao_depth_ratio if ducao_depth_ratio > 0 else 0.8
             return ducao_rect_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                         v_min=v_min, v_max=v_max,
                                         depth_width_ratio=dr,
-                                        chamfer_angle=chamfer_angle, chamfer_length=chamfer_length)
+                                        chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
+                                        manual_increase_percent=_inc)
         elif "隧洞-圆形" in section_type:
-            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隧洞计算模块未加载'}
+            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
             return suidong_circular_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                               v_min=v_min, v_max=v_max,
-                                              manual_D=D if D > 0 else None)
+                                              manual_D=D if D > 0 else None,
+                                              manual_increase_percent=_inc)
         elif "隧洞-圆拱直墙型" in section_type:
-            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隧洞计算模块未加载'}
+            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
             return suidong_horseshoe_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                                v_min=v_min, v_max=v_max,
                                                manual_B=b if b > 0 else None,
-                                               theta_deg=theta_deg if theta_deg > 0 else None)
+                                               theta_deg=theta_deg if theta_deg > 0 else None,
+                                               manual_increase_percent=_inc)
         elif "隧洞-马蹄形" in section_type:
-            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隧洞计算模块未加载'}
+            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
             st = 2 if "Ⅱ型" in section_type else 1
             return suidong_horseshoe_std_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                                     v_min=v_min, v_max=v_max,
                                                     manual_r=R if R > 0 else None,
-                                                    section_type=st)
+                                                    section_type=st,
+                                                    manual_increase_percent=_inc)
         elif "矩形暗涵" in section_type:
             if not RECT_CULVERT_AVAILABLE: return {'success': False, 'error_message': '矩形暗涵模块未加载'}
             return rect_culvert_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                           v_min=v_min, v_max=v_max,
                                           manual_B=b if b > 0 else None,
-                                          target_BH_ratio=beta if beta > 0 else None)
+                                          target_BH_ratio=beta if beta > 0 else None,
+                                          manual_increase_percent=_inc)
         else:
             return {'success': False, 'error_message': f'不支持的断面类型: {section_type}'}
 
     # ================================================================
     # 结果提取
     # ================================================================
-    def _extract_result_row(self, seq, segment, building_name, section_type, result):
+    def _extract_result_row(self, seq, segment, building_name, section_type, result, use_increase=True):
         """从计算结果中提取关键数据为一行"""
         def fmt(val, default="-"):
             if val is None or val == 0: return default
@@ -1332,6 +1362,8 @@ class BatchPanel(QWidget):
         if "明渠" in section_type:
             if "圆形" in section_type:
                 D_val = result.get('D_design', result.get('D', 0))
+            elif "U形" in section_type:
+                R_val = result.get('R', 0)
             else:
                 B_val = result.get('b_design', result.get('B', 0))
             h_design = result.get('h_design', result.get('y_d', 0))
@@ -1412,13 +1444,21 @@ class BatchPanel(QWidget):
             Fb_pct_d = result.get('freeboard_pct_design', 0)
             Fb_pct_i = result.get('freeboard_pct_inc', 0)
 
+        if not use_increase:
+            Q_inc = h_inc = V_inc = "—"
+            Fb_cl_i = Fb_pct_i = "—"
+
         return [seq, segment, building_name, section_type,
                 fmt(B_val), fmt(D_val), fmt(R_val),
                 fmt(h_design), fmt(V_design), fmt(A_design), fmt(R_hyd), fmt(chi),
-                fmt(Q_inc), fmt(h_inc), fmt(V_inc),
+                Q_inc if Q_inc == "—" else fmt(Q_inc),
+                h_inc if h_inc == "—" else fmt(h_inc),
+                V_inc if V_inc == "—" else fmt(V_inc),
                 fmt(Fb_surcharge), fmt(H_total_val),
-                fmt(Fb_cl_d), fmt(Fb_cl_i),
-                fmt_pct(Fb_pct_d), fmt_pct(Fb_pct_i),
+                fmt(Fb_cl_d),
+                Fb_cl_i if Fb_cl_i == "—" else fmt(Fb_cl_i),
+                fmt_pct(Fb_pct_d),
+                Fb_pct_i if Fb_pct_i == "—" else fmt_pct(Fb_pct_i),
                 "✓ 成功"]
 
     # ================================================================
@@ -1537,7 +1577,50 @@ class BatchPanel(QWidget):
         i = 1.0 / slope_inv if slope_inv > 0 else 0
         o = []
 
-        if "圆形" in section_type:
+        if "U形" in section_type and "明渠" in section_type:
+            R_u = result.get('R', 0)
+            alpha_u = result.get('alpha_deg', 0)
+            theta_u = result.get('theta_deg', 0)
+            m_u = result.get('m', 0)
+            h0_u = result.get('h0', 0)
+            b_arc_u = result.get('b_arc', 0)
+            h_d = result.get('h_design', 0)
+            V_d = result.get('V_design', 0)
+            A_d = result.get('A_design', 0)
+            chi_d = result.get('X_design', 0)
+            Rh_d = result.get('R_design', 0)
+            Q_inc = result.get('Q_increased', 0)
+            h_i = result.get('h_increased', 0)
+            V_i = result.get('V_increased', 0)
+            A_i = result.get('A_increased', 0)
+            Fb = result.get('Fb', 0)
+            H = result.get('h_prime', 0)
+            inc_pct = result.get('increase_percent', 0)
+            o.append("【一、输入参数】")
+            o.extend(self._channel_info_lines(input_vals))
+            o.append(f"  断面类型 = 明渠-U形")
+            o.append(f"  Q = {Q:.3f} m³/s,  n = {n},  坡度倒数 = {int(slope_inv)}")
+            o.append(f"  R = {R_u:.3f} m,  α = {alpha_u}°,  θ = {theta_u}°")
+            o.append(f"  不淤流速 = {v_min} m/s,  不冲流速 = {v_max} m/s")
+            o.append("")
+            o.append("【二、断面几何参数】")
+            o.append(f"  m = tan(α) = {m_u:.4f},  h₀ = {h0_u:.3f} m,  b_arc = {b_arc_u:.3f} m")
+            o.append("")
+            o.append("【三、设计水深工况】")
+            o.append(f"  h = {h_d:.3f} m,  A = {A_d:.3f} m²,  χ = {chi_d:.3f} m")
+            o.append(f"  R_h = {Rh_d:.3f} m,  V = {V_d:.3f} m/s")
+            o.append("")
+            o.append("【四、加大流量工况】")
+            o.append(f"  加大比例 = {inc_pct:.1f}%,  Q加大 = {Q_inc:.3f} m³/s")
+            o.append(f"  h加大 = {h_i:.3f} m,  V加大 = {V_i:.3f} m/s")
+            o.append(f"  Fb = {Fb:.3f} m,  H = {H:.3f} m")
+            o.append("")
+            o.append("【五、验证】")
+            velocity_ok = v_min <= V_d <= v_max
+            fb_ok = Fb >= (0.25 * h_i + 0.2 - 0.001) if h_i > 0 else True
+            o.append(f"  1. 流速验证: {v_min} ≤ V={V_d:.3f} ≤ {v_max} m/s → {'通过 ✓' if velocity_ok else '未通过 ✗'}")
+            o.append(f"  2. 超高验证: Fb={Fb:.3f}m → {'通过 ✓' if fb_ok else '未通过 ✗'}")
+        elif "圆形" in section_type:
             D_design = result.get('D_design', result.get('D', 0))
             h_d = result.get('y_d', result.get('h_design', 0))
             V_d = result.get('V_d', result.get('V_design', 0))
@@ -1964,6 +2047,7 @@ class BatchPanel(QWidget):
         """将粘贴的断面类型简写映射为有效类型（与原版一致）"""
         mapping = {
             "梯形": "明渠-梯形", "矩形": "明渠-矩形", "圆形": "明渠-圆形",
+            "明渠U形": "明渠-U形", "U形明渠": "明渠-U形",
             "U形": "渡槽-U形", "U形渡槽": "渡槽-U形", "矩形渡槽": "渡槽-矩形",
             "圆形隧洞": "隧洞-圆形", "圆拱直墙": "隧洞-圆拱直墙型", "圆拱直墙型": "隧洞-圆拱直墙型",
             "马蹄形Ⅰ型": "隧洞-马蹄形Ⅰ型", "马蹄形Ⅱ型": "隧洞-马蹄形Ⅱ型",
@@ -1989,6 +2073,10 @@ class BatchPanel(QWidget):
 
         if "明渠" in new_type or new_type == "矩形暗涵":
             self.input_table.setItem(row, 2, QTableWidgetItem("-"))
+            # 明渠-U形额外填充默认值 R=0.8, α=14°, θ=152°
+            if new_type == "明渠-U形":
+                for col, val in [(12, "0.8"), (15, "14"), (17, "152")]:
+                    self.input_table.setItem(row, col, QTableWidgetItem(val))
         elif "分水" in new_type:
             if current_name == "-" or not current_name:
                 self.input_table.setItem(row, 2, QTableWidgetItem(f"分水闸{seq}"))
@@ -2577,7 +2665,7 @@ class BatchPanel(QWidget):
             InfoBar.success("导出成功", f"Word报告已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
             ask_open_file(filepath, self._info_parent())
         except PermissionError:
-            InfoBar.error("文件被占用", "无法写入文件，请先关闭已打开的同名Word文档，然后重新操作。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
+            InfoBar.error("文件被占用", "无法写入文件，请关闭已打开的同名Word文档，然后重新操作。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
         except Exception as e:
             InfoBar.error("导出失败", f"Word导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 

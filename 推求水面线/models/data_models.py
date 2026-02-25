@@ -375,3 +375,5 @@ class OpenChannelParams:
     flow: float = 0.0
     flow_section: str = ""
     structure_height: float = 0.0
+    arc_radius: float = 0.0    # 圆弧半径（明渠-U形用）
+    theta_deg: float = 0.0     # 圆弧圆心角（明渠-U形用）

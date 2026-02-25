@@ -206,6 +206,31 @@ def render_latex_svg(latex_str, fontsize=14):
 # 加载 HTML 到 QWebEngineView
 # ============================================================
 
+def get_svg_height_px(svg_str, padding=16):
+    """从 SVG 字符串中提取实际高度（pt → px），加上 padding。
+
+    Parameters
+    ----------
+    svg_str : str
+        render_latex_svg 返回的 SVG 字符串
+    padding : int
+        额外留白像素（上下各 padding/2）
+
+    Returns
+    -------
+    int
+        适合 QWebEngineView 使用的像素高度，最小 40px
+    """
+    if not svg_str:
+        return 40
+    m = re.search(r'height="([\d.]+)pt"', svg_str)
+    if m:
+        height_pt = float(m.group(1))
+        height_px = height_pt * 1.3333  # 1pt = 4/3 px
+        return max(40, int(height_px + padding))
+    return 40
+
+
 def load_formula_page(web_view, html_content):
     """将含 SVG 公式的 HTML 加载到 QWebEngineView。
 

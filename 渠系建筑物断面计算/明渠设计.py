@@ -32,6 +32,7 @@ class SectionType(Enum):
     TRAPEZOIDAL = "trapezoidal"   # 梯形明渠
     RECTANGULAR = "rectangular"     # 矩形明渠
     CIRCULAR = "circular"           # 圆形明渠
+    U_SECTION = "u_section"         # U形明渠（圆弧底+斜直壁）
 
 
 # ============================================================
@@ -946,7 +947,247 @@ def quick_calculate_rectangular(Q: float, n: float, slope_inv: float,
 
 
 # ============================================================
-# 6. 圆形明渠水力计算
+# 6. U形明渠水力计算
+# ============================================================
+
+def _u_arc_geometry(R: float, alpha_deg: float, theta_deg: float, h: float) -> Tuple[float, float, float]:
+    """
+    计算U形明渠过水面积、湿周和水面宽
+
+    参数:
+        R: 圆弧半径 (m)
+        alpha_deg: 直线段外倾角 (°)
+        theta_deg: 圆弧段圆心角 (°)
+        h: 水深 (m)
+
+    返回:
+        (A, chi, b_water_surface) - 过水面积(m²)、湿周(m)、水面宽(m)
+    """
+    if h <= 0:
+        return 0.0, 0.0, 0.0
+
+    theta_rad = math.radians(theta_deg)
+    h0 = R * (1.0 - math.cos(theta_rad / 2.0))  # 弧区高度（弧顶对应水深）
+    m = math.tan(math.radians(alpha_deg))          # 直线段边坡系数
+    b_arc = 2.0 * R * math.sin(theta_rad / 2.0)   # 弧顶宽度（直线段底宽）
+
+    if h <= h0:
+        # 纯弧区（h ≤ h₀）
+        cos_arg = max(-1.0, min(1.0, (R - h) / R))
+        acos_val = math.acos(cos_arg)
+        sqrt_val = math.sqrt(max(0.0, R * R - (R - h) ** 2))
+        A = R * R * acos_val - (R - h) * sqrt_val
+        chi = 2.0 * R * acos_val
+        b_water = 2.0 * sqrt_val
+    else:
+        # 直线段区（h > h₀）
+        h_s = h - h0
+        # 完整弧段面积
+        A_arc = R * R * (theta_rad / 2.0 - math.sin(theta_rad / 2.0) * math.cos(theta_rad / 2.0))
+        # 直线段面积（梯形）
+        A_linear = (b_arc + m * h_s) * h_s
+        A = A_arc + A_linear
+        # 弧弧长 + 两侧斜壁
+        chi_arc = theta_rad * R
+        chi_linear = 2.0 * h_s * math.sqrt(1.0 + m * m)
+        chi = chi_arc + chi_linear
+        b_water = b_arc + 2.0 * m * h_s
+
+    return A, chi, b_water
+
+
+def calculate_u_depth_for_flow(Q: float, R: float, alpha_deg: float, theta_deg: float,
+                                n: float, i: float) -> float:
+    """
+    根据给定流量反算U形明渠水深（二分法）
+
+    参数:
+        Q: 目标流量 (m³/s)
+        R: 圆弧半径 (m)
+        alpha_deg: 直线段外倾角 (°)
+        theta_deg: 圆弧段圆心角 (°)
+        n: 糙率
+        i: 渠道底坡
+
+    返回:
+        水深 (m)，失败返回 -1
+    """
+    if Q <= ZERO_TOLERANCE or R <= ZERO_TOLERANCE or n <= ZERO_TOLERANCE or i <= ZERO_TOLERANCE:
+        return -1.0
+
+    def q_func(h):
+        A, chi, _ = _u_arc_geometry(R, alpha_deg, theta_deg, h)
+        if chi <= ZERO_TOLERANCE or A <= ZERO_TOLERANCE:
+            return 0.0
+        Rh = A / chi
+        return (1.0 / n) * A * (Rh ** (2.0 / 3.0)) * math.sqrt(i)
+
+    h_max = max(20.0, 10.0 * R)
+    if q_func(h_max) < Q:
+        h_max *= 5.0
+        if q_func(h_max) < Q:
+            return -1.0
+
+    h_lo = 1e-6
+    h_hi = h_max
+    MAX_ITER = 500
+    TOLERANCE = 0.0001
+    h_mid = h_lo
+    for _ in range(MAX_ITER):
+        h_mid = (h_lo + h_hi) / 2.0
+        q_mid = q_func(h_mid)
+        if abs(q_mid - Q) <= TOLERANCE * Q:
+            return h_mid
+        if q_mid < Q:
+            h_lo = h_mid
+        else:
+            h_hi = h_mid
+        if (h_hi - h_lo) < 1e-8:
+            break
+    return h_mid
+
+
+def quick_calculate_u_section(Q: float, R: float, alpha_deg: float, theta_deg: float,
+                               n: float, slope_inv: float,
+                               v_min: float, v_max: float,
+                               manual_increase_percent: Optional[float] = None) -> Dict[str, Any]:
+    """
+    U形明渠快速计算主函数
+
+    参数:
+        Q: 设计流量 (m³/s)
+        R: 圆弧半径 (m)
+        alpha_deg: 直线段外倾角 (°)
+        theta_deg: 圆弧段圆心角 (°)
+        n: 糙率
+        slope_inv: 坡度倒数 (1/i)
+        v_min: 不淤流速 (m/s)
+        v_max: 不冲流速 (m/s)
+        manual_increase_percent: 指定加大百分比 (可选)
+
+    返回:
+        包含所有计算结果的字典
+    """
+    result: Dict[str, Any] = {
+        'success': False,
+        'error_message': '',
+        # 输入参数回显
+        'R': R,
+        'alpha_deg': alpha_deg,
+        'theta_deg': theta_deg,
+        'm': 0.0,
+        'h0': 0.0,
+        'b_arc': 0.0,
+        # 设计工况
+        'h_design': 0.0,
+        'A_design': 0.0,
+        'X_design': 0.0,
+        'R_design': 0.0,
+        'V_design': 0.0,
+        'Q_calc': 0.0,
+        # 加大工况
+        'Fb': 0.0,
+        'h_prime': 0.0,
+        'increase_percent': 0.0,
+        'Q_increased': 0.0,
+        'h_increased': 0.0,
+        'V_increased': 0.0,
+        'A_increased': 0.0,
+        'X_increased': 0.0,
+        'R_increased': 0.0,
+    }
+
+    # 输入参数验证
+    if Q <= ZERO_TOLERANCE:
+        result['error_message'] = 'Q (流量) 必须大于0'
+        return result
+    if R <= ZERO_TOLERANCE:
+        result['error_message'] = 'R (圆弧半径) 必须大于0'
+        return result
+    if n <= ZERO_TOLERANCE:
+        result['error_message'] = 'n (糙率) 必须大于0'
+        return result
+    if slope_inv <= ZERO_TOLERANCE:
+        result['error_message'] = '坡度倒数必须大于0'
+        return result
+    if theta_deg <= 0 or theta_deg > 360:
+        result['error_message'] = 'θ (圆心角) 必须在 (0°, 360°] 范围内'
+        return result
+    if v_min >= v_max:
+        result['error_message'] = '不淤流速必须小于不冲流速'
+        return result
+
+    i = 1.0 / slope_inv
+    theta_rad = math.radians(theta_deg)
+    m = math.tan(math.radians(alpha_deg))
+    h0 = R * (1.0 - math.cos(theta_rad / 2.0))
+    b_arc = 2.0 * R * math.sin(theta_rad / 2.0)
+
+    result['m'] = round(m, 6)
+    result['h0'] = round(h0, 6)
+    result['b_arc'] = round(b_arc, 6)
+
+    # 反算设计水深
+    h_design = calculate_u_depth_for_flow(Q, R, alpha_deg, theta_deg, n, i)
+    if h_design < 0:
+        result['error_message'] = '水深反算失败（请检查输入参数）'
+        return result
+
+    h_design = round(h_design, 3)
+    A_design, X_design, _ = _u_arc_geometry(R, alpha_deg, theta_deg, h_design)
+    A_design = round(A_design, 3)
+    X_design = round(X_design, 3)
+    R_design = round(A_design / X_design, 3) if X_design > ZERO_TOLERANCE else 0.0
+    V_design = round(Q / A_design, 3) if A_design > ZERO_TOLERANCE else 0.0
+    Q_calc = round((1.0 / n) * A_design * (R_design ** (2.0 / 3.0)) * math.sqrt(i), 3)
+
+    result['h_design'] = h_design
+    result['A_design'] = A_design
+    result['X_design'] = X_design
+    result['R_design'] = R_design
+    result['V_design'] = V_design
+    result['Q_calc'] = Q_calc
+    result['success'] = True
+
+    # 加大流量工况
+    if manual_increase_percent is not None and manual_increase_percent >= 0:
+        increase_percent = manual_increase_percent
+    else:
+        increase_percent = get_flow_increase_percent(Q)
+
+    Q_increased = round(Q * (1.0 + increase_percent / 100.0), 3)
+    h_increased = calculate_u_depth_for_flow(Q_increased, R, alpha_deg, theta_deg, n, i)
+
+    result['increase_percent'] = increase_percent
+    result['Q_increased'] = Q_increased
+
+    if h_increased > 0:
+        h_increased = round(h_increased, 3)
+        A_increased, X_increased, _ = _u_arc_geometry(R, alpha_deg, theta_deg, h_increased)
+        A_increased = round(A_increased, 3)
+        X_increased = round(X_increased, 3)
+        R_increased = round(A_increased / X_increased, 3) if X_increased > ZERO_TOLERANCE else 0.0
+        V_increased = round(Q_increased / A_increased, 3) if A_increased > ZERO_TOLERANCE else 0.0
+
+        Fb = round(0.25 * h_increased + 0.2, 3)
+        h_prime = round(h_increased + Fb, 3)
+
+        result['h_increased'] = h_increased
+        result['A_increased'] = A_increased
+        result['X_increased'] = X_increased
+        result['R_increased'] = R_increased
+        result['V_increased'] = V_increased
+        result['Fb'] = Fb
+        result['h_prime'] = h_prime
+    else:
+        for k in ('h_increased', 'V_increased', 'A_increased', 'X_increased', 'R_increased', 'Fb', 'h_prime'):
+            result[k] = -1
+
+    return result
+
+
+# ============================================================
+# 7. 圆形明渠水力计算
 # ============================================================
 
 def round_up_to_step(value: float, step_val: float) -> float:
@@ -1414,7 +1655,19 @@ def design_channel(section_type: SectionType, **kwargs) -> Dict[str, Any]:
     返回:
         计算结果字典
     """
-    if section_type == SectionType.CIRCULAR:
+    if section_type == SectionType.U_SECTION:
+        Q = kwargs.get('Q') or kwargs.get('Q_design')
+        n = kwargs.get('n') or kwargs.get('n_roughness')
+        slope_inv = kwargs.get('slope_inv')
+        R = kwargs.get('R')
+        alpha_deg = kwargs.get('alpha_deg', 0.0)
+        theta_deg = kwargs.get('theta_deg', 180.0)
+        v_min = kwargs.get('v_min') or kwargs.get('v_min_allowable', 0.5)
+        v_max = kwargs.get('v_max') or kwargs.get('v_max_allowable', 3.0)
+        inc = kwargs.get('manual_increase_percent') or kwargs.get('increase_percent')
+        return quick_calculate_u_section(Q, R, alpha_deg, theta_deg, n, slope_inv, v_min, v_max, inc)
+
+    elif section_type == SectionType.CIRCULAR:
         # 映射通用参数到圆形明渠参数
         Q = kwargs.get('Q') or kwargs.get('Q_design')
         n = kwargs.get('n') or kwargs.get('n_roughness')
@@ -1444,7 +1697,7 @@ def design_channel(section_type: SectionType, **kwargs) -> Dict[str, Any]:
 
 
 # ============================================================
-# 8. 向后兼容接口（保持原有函数名）
+# 9. 向后兼容接口（保持原有函数名）
 # ============================================================
 
 def quick_calculate(Q: float, m: float, n: float, slope_inv: float,
@@ -1460,7 +1713,7 @@ def quick_calculate(Q: float, m: float, n: float, slope_inv: float,
 
 
 # ============================================================
-# 9. 测试代码
+# 10. 测试代码
 # ============================================================
 
 if __name__ == '__main__':
@@ -1485,6 +1738,17 @@ if __name__ == '__main__':
     print("\n[圆形明渠案例]")
     res_c = quick_calculate_circular(Q=5.0, n=0.014, slope_inv=1000, v_min=0.6, v_max=3.0)
     print(f"  设计结果: D={res_c['D_design']:.2f}m, y={res_c['y_d']:.2f}m, V={res_c['V_d']:.2f}m/s")
+
+    # U形明渠
+    print("\n[U形明渠案例]")
+    res_u = quick_calculate_u_section(Q=2.0, R=0.8, alpha_deg=14.0, theta_deg=152.0,
+                                      n=0.014, slope_inv=3000, v_min=0.1, v_max=100.0)
+    if res_u['success']:
+        print(f"  设计结果: R={res_u['R']:.2f}m, θ={res_u['theta_deg']}°, h={res_u['h_design']:.3f}m, V={res_u['V_design']:.3f}m/s")
+        print(f"  断面参数: m={res_u['m']:.4f}, h0={res_u['h0']:.3f}m, b_arc={res_u['b_arc']:.3f}m")
+        print(f"  加大工况: Q+={res_u['Q_increased']:.3f}m³/s, h+={res_u['h_increased']:.3f}m, H={res_u['h_prime']:.3f}m")
+    else:
+        print(f"  失败: {res_u['error_message']}")
 
     # ---------------------------------------------------------
     # 2. 统一接口 (design_channel) 测试
