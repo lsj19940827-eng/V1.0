@@ -1887,9 +1887,15 @@ class BatchPanel(QWidget):
             B = result.get('B', 0)
             H = result.get('H', 0)
             BH_ratio = result.get('BH_ratio', 0)
+            HB_ratio_r = result.get('HB_ratio', H / B if B > 0 else 0)
+            BH_box_r = B / H if H > 0 else 0
+            hb_ok = result.get('hb_ratio_ok', True)
+            bh_ok = result.get('bh_box_ratio_ok', True)
             o.append(f"  设计宽度: B = {B:.2f} m")
             o.append(f"  设计高度: H = {H:.2f} m")
             o.append(f"  宽深比 β = B/h_设计 = {BH_ratio:.3f}" if BH_ratio else "")
+            o.append(f"  高宽比 H/B = {HB_ratio_r:.3f}" + ("" if hb_ok else "  ⚠ 超出建议值1.2"))
+            o.append(f"  宽高比 B/H = {BH_box_r:.3f}" + ("" if bh_ok else "  ⚠ 超出建议值1.2"))
             o.append(f"  总断面积: A总 = B×H = {A_total:.3f} m²")
 
         o.append("")
@@ -1903,8 +1909,7 @@ class BatchPanel(QWidget):
         o.append(f"  净空高度 Fb = {fb_hgt_design:.3f} m")
         o.append(f"  净空面积比例 = {fb_pct_design:.1f}%")
 
-        o.append("")
-        o.append("【四、加大流量工况】")
+        use_increase = result.get('_use_increase', True)
         inc_pct = result.get('increase_percent', 0)
         Q_inc = result.get('Q_increased', 0)
         h_inc = result.get('h_increased', 0)
@@ -1915,32 +1920,42 @@ class BatchPanel(QWidget):
         fb_pct_inc = result.get('freeboard_pct_inc', 0)
         fb_hgt_inc = result.get('freeboard_hgt_inc', 0)
         H_total_val = result.get('H_total', result.get('H', result.get('D', result.get('r', 0) * 2)))
-        o.append(f"  加大比例 = {inc_pct:.1f}%")
-        o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
-        o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
-        o.append(f"  加大过水面积 A加大 = {A_inc:.3f} m²")
-        o.append(f"  加大湿周 P加大 = {P_inc:.3f} m")
-        o.append(f"  加大水力半径 R加大 = {R_inc:.3f} m")
-        o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
-        o.append(f"  流量校核 Q计算 = {A_inc*V_inc:.3f} m³/s")
-        o.append(f"  净空高度 Fb加大 = H - h加大 = {H_total_val:.2f} - {h_inc:.3f} = {fb_hgt_inc:.3f} m")
-        o.append(f"  净空面积比例 = {fb_pct_inc:.1f}%")
+
+        if use_increase:
+            o.append("")
+            o.append("【四、加大流量工况】")
+            o.append(f"  加大比例 = {inc_pct:.1f}%")
+            o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+            o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
+            o.append(f"  加大过水面积 A加大 = {A_inc:.3f} m²")
+            o.append(f"  加大湿周 P加大 = {P_inc:.3f} m")
+            o.append(f"  加大水力半径 R加大 = {R_inc:.3f} m")
+            o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
+            o.append(f"  流量校核 Q计算 = {A_inc*V_inc:.3f} m³/s")
+            o.append(f"  净空高度 Fb加大 = H - h加大 = {H_total_val:.2f} - {h_inc:.3f} = {fb_hgt_inc:.3f} m")
+            o.append(f"  净空面积比例 = {fb_pct_inc:.1f}%")
+
+        # 验证结论：不勾选加大流量时用设计工况数据
+        fb_hgt_check = fb_hgt_inc if use_increase else fb_hgt_design
+        fb_pct_check = fb_pct_inc if use_increase else fb_pct_design
+        fb_label = "Fb加大" if use_increase else "Fb设计"
 
         o.append("")
-        o.append("【五、验证结论】")
+        section_num = "五" if use_increase else "四"
+        o.append(f"【{section_num}、验证结论】")
         velocity_ok = v_min <= V_design <= v_max
         o.append(f"  1. 流速验证: {v_min} ≤ {V_design:.3f} ≤ {v_max} → {'通过 ✓' if velocity_ok else '未通过 ✗'}")
         min_fb_hgt = 0.4
         is_culvert = "矩形暗涵" in section_type
         min_fb_pct = 10.0 if is_culvert else 15.0
         max_fb_pct = 30.0 if is_culvert else None
-        fb_hgt_ok = fb_hgt_inc >= min_fb_hgt
-        fb_pct_ok = fb_pct_inc >= min_fb_pct and (max_fb_pct is None or fb_pct_inc <= max_fb_pct)
-        o.append(f"  2. 净空高度验证: Fb加大 = {fb_hgt_inc:.3f}m ≥ {min_fb_hgt}m → {'通过 ✓' if fb_hgt_ok else '需注意'}")
+        fb_hgt_ok = fb_hgt_check >= min_fb_hgt
+        fb_pct_ok = fb_pct_check >= min_fb_pct and (max_fb_pct is None or fb_pct_check <= max_fb_pct)
+        o.append(f"  2. 净空高度验证: {fb_label} = {fb_hgt_check:.3f}m ≥ {min_fb_hgt}m → {'通过 ✓' if fb_hgt_ok else '需注意'}")
         if is_culvert:
-            o.append(f"  3. 净空比例验证: {min_fb_pct}% ≤ {fb_pct_inc:.1f}% ≤ {max_fb_pct}% → {'通过 ✓' if fb_pct_ok else '需注意'}")
+            o.append(f"  3. 净空比例验证: {min_fb_pct}% ≤ {fb_pct_check:.1f}% ≤ {max_fb_pct}% → {'通过 ✓' if fb_pct_ok else '需注意'}")
         else:
-            o.append(f"  3. 净空比例验证: {fb_pct_inc:.1f}% ≥ {min_fb_pct}% → {'通过 ✓' if fb_pct_ok else '需注意'}")
+            o.append(f"  3. 净空比例验证: {fb_pct_check:.1f}% ≥ {min_fb_pct}% → {'通过 ✓' if fb_pct_ok else '需注意'}")
         return "\n".join(o)
 
     # ================================================================
@@ -2431,14 +2446,32 @@ class BatchPanel(QWidget):
                 initial_dir = template_dir
             else:
                 initial_dir = os.path.expanduser("~/Desktop")
-        filepath, _ = QFileDialog.getOpenFileName(self, "选择Excel文件", initial_dir, "Excel文件 (*.xlsx);;所有文件 (*.*)")
+        filepath, _ = QFileDialog.getOpenFileName(self, "选择Excel文件", initial_dir, "Excel文件 (*.xlsx *.xls);;所有文件 (*.*)")
         if not filepath: return
         # 记录本次导入的目录（与原版一致）
         self._last_import_dir = os.path.dirname(filepath)
         self._save_user_prefs()
         try:
-            wb = openpyxl.load_workbook(filepath, data_only=True)
-            ws = wb.active
+            if filepath.lower().endswith('.xls') and not filepath.lower().endswith('.xlsx'):
+                import xlrd
+                _xls_book = xlrd.open_workbook(filepath)
+                _xls_sheet = _xls_book.sheet_by_index(0)
+                class _XlsCell:
+                    def __init__(self, v):
+                        self.value = v if v != '' else None
+                class _XlsWs:
+                    def __init__(self, sh):
+                        self._sh = sh
+                        self.max_row = sh.nrows
+                    def cell(self, row, column):
+                        try:
+                            return _XlsCell(self._sh.cell_value(row - 1, column - 1))
+                        except IndexError:
+                            return _XlsCell(None)
+                ws = _XlsWs(_xls_sheet)
+            else:
+                wb = openpyxl.load_workbook(filepath, data_only=True)
+                ws = wb.active
             info_parts = []
 
             # 自动判断Excel格式：

@@ -140,7 +140,7 @@ class CulvertPanel(QWidget):
         self.B_lbl, self.B_edit = self._field2(fl, "指定底宽 B (m):", "")
         fl.addWidget(self._hint("(β 与 H/B 不可同时填写)"))
         fl.addWidget(self._hint("(B 可单独填写，也可与 H/B 合用)"))
-        lbl_b1 = QLabel("高宽比限值H/B（或B/H）一般不超过1.2")
+        lbl_b1 = QLabel("高宽比H/B、宽高比B/H 建议不超过1.2（超出时提醒，不作强制）")
         lbl_b1.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: #0066CC;")
         fl.addWidget(lbl_b1)
         lbl_b2 = QLabel("留空则自动搜索经济最优断面（B×H 最小）")
@@ -222,7 +222,7 @@ class CulvertPanel(QWidget):
         h = HelpPageBuilder("矩形暗涵水力计算", '请输入参数后点击“计算”按钮')
         h.section("断面特点")
         h.bullet_list([
-            "高宽比限值 H/B（或B/H）一般不超过 1.2（GB 50288-2018 第11.2.5条）",
+            "高宽比H/B、宽高比B/H 建议不超过1.2（GB 50288-2018 第11.2.5条，超出时计算仍执行，仅给出提醒）",
             "最小净空面积 10%，最大 30%",
             "最小净空高度 0.4m",
         ])
@@ -247,12 +247,12 @@ class CulvertPanel(QWidget):
             ("遍历宽深比 β", "在 0.5~2.5 范围内逐步尝试，无需手动指定底宽"),
             ("由曼宁公式解析求解设计水深和底宽", "每个 β 对应唯一的水深 h 和底宽 B，无需迭代试算"),
             ("热启动割线法快速求解加大流量水深", "以相邻 β 的结果作为初始估计，自动收敛"),
-            ("确定涵洞高度的可行范围", "综合净空面积 ≥10%、净空高度、高宽比 ≤1.2 等约束，确定涵高下限"),
-            ("校核涵高上下限", "涵高上限由净空面积 ≤30% 和高宽比约束确定；无可行涵高时自动跳过该 β"),
+            ("确定涵洞高度的可行范围", "综合净空面积 ≥10%、净空高度等约束，确定涵高下限；H/B≤1.2 为建议值不参与硬约束"),
+            ("校核涵高上下限", "涵高上限由净空面积 ≤30% 决定；无可行涵高时自动跳过该 β"),
             ("两阶段搜索最优解", "先粗扫定位最优区间，再细扫精确求解，全程取总面积最小的方案"),
         ])
-        h.hint("涵高下限由三个条件取最大值：净空面积不低于 10%、高宽比不超过 1.2、净空高度不小于 0.4m 或涵高的 1/6")
-        h.hint("涵高上限由两个条件取最小值：净空面积不超过 30%、高宽比不超过 1.2")
+        h.hint("涵高下限由两个条件取最大值：净空面积不低于 10%、净空高度不小于 0.4m 或涵高的 1/6")
+        h.hint("涵高上限由净空面积不超过 30% 决定；H/B≤1.2 为建议值，超出时结果中给出 ⚠ 提醒")
         h.section("净空约束条件")
         h.text("参考《灌溉与排水工程设计标准》 GB 50288-2018：")
         h.bullet_list([
@@ -446,8 +446,18 @@ class CulvertPanel(QWidget):
                 o.append(f"  ★ 按指定高宽比 H/B={target_HB:.2f} 计算")
             o.append(f"  宽度 B = {B:.2f} m")
             o.append(f"  高度 H = {H:.2f} m")
+            hb_ratio_ok = result.get('hb_ratio_ok', True)
+            bh_box_ratio_ok = result.get('bh_box_ratio_ok', True)
+            BH_box = B / H if H > 0 else 0
             o.append(f"  宽深比 β = B/h = {BH_ratio:.3f}")
-            o.append(f"  高宽比 H/B = {HB_ratio:.3f}")
+            o.append(f"  高宽比 H/B = {HB_ratio:.3f}" + ("" if hb_ratio_ok else "  ⚠ 超出建议值1.2"))
+            o.append(f"  宽高比 B/H = {BH_box:.3f}" + ("" if bh_box_ratio_ok else "  ⚠ 超出建议值1.2"))
+            if not hb_ratio_ok:
+                o.append('{{HTML}}<div style="margin:2px 0 2px 16px;padding:3px 10px;background:#FFF3E0;border-left:3px solid #FF8C00;border-radius:3px;font-size:13px;color:#E65100;"><b>⚠</b> 高宽比偏大：H/B = ' + f'{HB_ratio:.3f}' + '，建议 H/B ≤ 1.2（GB 50288-2018 第11.2.5条建议值）</div>')
+                o.append('{{/HTML}}')
+            if not bh_box_ratio_ok:
+                o.append('{{HTML}}<div style="margin:2px 0 2px 16px;padding:3px 10px;background:#FFF3E0;border-left:3px solid #FF8C00;border-radius:3px;font-size:13px;color:#E65100;"><b>⚠</b> 宽高比偏大：B/H = ' + f'{BH_box:.3f}' + '，建议 B/H ≤ 1.2（断面宽浅，请确认结构合理性）</div>')
+                o.append('{{/HTML}}')
             o.append("")
 
             o.append("【设计流量工况】")
@@ -518,9 +528,19 @@ class CulvertPanel(QWidget):
                 o.append("     (经济最优，β 无硬约束）")
             o.append("")
 
+            hb_ratio_ok_d = result.get('hb_ratio_ok', True)
+            bh_box_ratio_ok_d = result.get('bh_box_ratio_ok', True)
+            BH_box_d = B / H if H > 0 else 0
             o.append("  3. 高宽比计算:")
-            o.append(f"     H/B = {H:.2f} / {B:.2f} = {HB_ratio:.3f}")
-            o.append("     (限值要求: H/B 或 B/H 一般不超过1.2)")
+            o.append(f"     H/B = {H:.2f} / {B:.2f} = {HB_ratio:.3f}" + ("" if hb_ratio_ok_d else "  ⚠"))
+            o.append(f"     B/H = {B:.2f} / {H:.2f} = {BH_box_d:.3f}" + ("" if bh_box_ratio_ok_d else "  ⚠"))
+            o.append("     (建议值: H/B 及 B/H 宜不超过1.2，GB 50288-2018 第11.2.5条)")
+            if not hb_ratio_ok_d:
+                o.append('{{HTML}}<div style="margin:2px 0 2px 24px;padding:3px 10px;background:#FFF3E0;border-left:3px solid #FF8C00;border-radius:3px;font-size:13px;color:#E65100;"><b>⚠</b> 高宽比 H/B = ' + f'{HB_ratio:.3f}' + ' 超出建议值1.2</div>')
+                o.append('{{/HTML}}')
+            if not bh_box_ratio_ok_d:
+                o.append('{{HTML}}<div style="margin:2px 0 2px 24px;padding:3px 10px;background:#FFF3E0;border-left:3px solid #FF8C00;border-radius:3px;font-size:13px;color:#E65100;"><b>⚠</b> 宽高比 B/H = ' + f'{BH_box_d:.3f}' + ' 超出建议值1.2</div>')
+                o.append('{{/HTML}}')
             o.append("")
 
             o.append("  4. 总断面积计算:")
@@ -585,69 +605,70 @@ class CulvertPanel(QWidget):
             o.append("")
 
             if use_increase_val:
-              o.append("【四、加大流量工况】")
-              o.append("")
-              o.append("  1. 加大流量比例:")
-            o.append(f"      = {inc_pct:.1f}% {inc_src}")
-            o.append("")
-            o.append("  2. 加大流量计算:")
-            o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
-            o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
-            o.append(f"           = {Q_inc:.3f} m³/s")
-            o.append("")
+                o.append("【四、加大流量工况】")
+                o.append("")
+                o.append("  1. 加大流量比例:")
+                o.append(f"      = {inc_pct:.1f}% {inc_src}")
+                o.append("")
+                o.append("  2. 加大流量计算:")
+                o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
+                o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
+                o.append(f"           = {Q_inc:.3f} m³/s")
+                o.append("")
 
-            o.append("  3. 加大水深计算:")
-            o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s 和底宽 B = {B:.2f} m，利用曼宁公式反算水深:")
-            o.append(f"      h加大 = {h_inc:.3f} m")
-            o.append("")
+                o.append("  3. 加大水深计算:")
+                o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s 和底宽 B = {B:.2f} m，利用曼宁公式反算水深:")
+                o.append(f"      h加大 = {h_inc:.3f} m")
+                o.append("")
 
-            A_inc = B * h_inc
-            chi_inc = B + 2 * h_inc
-            R_inc = A_inc / chi_inc if chi_inc > 0 else 0
+                A_inc = B * h_inc
+                chi_inc = B + 2 * h_inc
+                R_inc = A_inc / chi_inc if chi_inc > 0 else 0
 
-            o.append("  4. 加大流量工况过水面积:")
-            o.append(f"      A加大 = B × h加大")
-            o.append(f"           = {B:.2f} × {h_inc:.3f}")
-            o.append(f"           = {A_inc:.3f} m²")
-            o.append("")
+                o.append("  4. 加大流量工况过水面积:")
+                o.append(f"      A加大 = B × h加大")
+                o.append(f"           = {B:.2f} × {h_inc:.3f}")
+                o.append(f"           = {A_inc:.3f} m²")
+                o.append("")
 
-            o.append("  5. 加大流量工况湿周:")
-            o.append(f"      χ加大 = B + 2×h加大")
-            o.append(f"           = {B:.2f} + 2×{h_inc:.3f}")
-            o.append(f"           = {B:.2f} + {2 * h_inc:.3f}")
-            o.append(f"           = {chi_inc:.3f} m")
-            o.append("")
+                o.append("  5. 加大流量工况湿周:")
+                o.append(f"      χ加大 = B + 2×h加大")
+                o.append(f"           = {B:.2f} + 2×{h_inc:.3f}")
+                o.append(f"           = {B:.2f} + {2 * h_inc:.3f}")
+                o.append(f"           = {chi_inc:.3f} m")
+                o.append("")
 
-            o.append("  6. 加大流量工况水力半径:")
-            o.append(f"      R加大 = A加大 / χ加大")
-            o.append(f"           = {A_inc:.3f} / {chi_inc:.3f}")
-            o.append(f"           = {R_inc:.3f} m")
-            o.append("")
+                o.append("  6. 加大流量工况水力半径:")
+                o.append(f"      R加大 = A加大 / χ加大")
+                o.append(f"           = {A_inc:.3f} / {chi_inc:.3f}")
+                o.append(f"           = {R_inc:.3f} m")
+                o.append("")
 
-            o.append("  7. 加大流量工况流速 (曼宁公式):")
-            o.append(f"      V加大 = (1/n) × R^(2/3) × i^(1/2)")
-            o.append(f"           = (1/{n}) × {R_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
-            if R_inc > 0:
-                o.append(f"           = {1/n:.2f} × {R_inc**(2/3):.4f} × {math.sqrt(i):.6f}")
-            o.append(f"           = {V_inc:.3f} m/s")
-            o.append("")
+                o.append("  7. 加大流量工况流速 (曼宁公式):")
+                o.append(f"      V加大 = (1/n) × R^(2/3) × i^(1/2)")
+                o.append(f"           = (1/{n}) × {R_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
+                if R_inc > 0:
+                    o.append(f"           = {1/n:.2f} × {R_inc**(2/3):.4f} × {math.sqrt(i):.6f}")
+                o.append(f"           = {V_inc:.3f} m/s")
+                o.append("")
 
-            Q_chk_inc = V_inc * A_inc
-            o.append("  8. 流量校核:")
-            o.append(f"      Q计算 = A加大 × V加大")
-            o.append(f"           = {A_inc:.3f} × {V_inc:.3f}")
-            o.append(f"           = {Q_chk_inc:.3f} m³/s")
-            if Q_inc > 0:
-                o.append(f"      误差 = {abs(Q_chk_inc - Q_inc) / Q_inc * 100:.2f}%")
-            o.append("")
+                Q_chk_inc = V_inc * A_inc
+                o.append("  8. 流量校核:")
+                o.append(f"      Q计算 = A加大 × V加大")
+                o.append(f"           = {A_inc:.3f} × {V_inc:.3f}")
+                o.append(f"           = {Q_chk_inc:.3f} m³/s")
+                if Q_inc > 0:
+                    o.append(f"      误差 = {abs(Q_chk_inc - Q_inc) / Q_inc * 100:.2f}%")
+                o.append("")
 
-            o.append("  9. 加大流量工况净空:")
-            o.append(f"      净空高度 Fb加大 = H - h加大 = {H:.2f} - {h_inc:.3f} = {fb_hgt_inc:.3f} m")
-            o.append(f"      净空面积 PA加大 = (H - h加大) / H × 100% = {fb_pct_inc:.1f}%")
-            o.append("")
+                o.append("  9. 加大流量工况净空:")
+                o.append(f"      净空高度 Fb加大 = H - h加大 = {H:.2f} - {h_inc:.3f} = {fb_hgt_inc:.3f} m")
+                o.append(f"      净空面积 PA加大 = (H - h加大) / H × 100% = {fb_pct_inc:.1f}%")
+                o.append("")
 
             # 净空验证
-            o.append("【五、净空验证】")
+            section_num_fb = "五" if use_increase_val else "四"
+            o.append(f"【{section_num_fb}、净空验证】")
             o.append("")
             o.append("  根据《灌溉与排水工程设计标准》GB 50288-2018 第11.2.5条：")
             o.append("  涵洞横断面形式应符合下列规定：")
@@ -682,15 +703,19 @@ class CulvertPanel(QWidget):
                 o.append(f"    → 要求净空高度 ≥ 0.5m")
             o.append("")
 
-            o.append("  净空验证结果（加大流量工况）：")
-            o.append(f"  a) 净空面积验证: 10% ≤ {fb_pct_inc:.1f}% ≤ 30%")
+            fb_pct_verify = fb_pct_inc if use_increase_val else fb_pct_d
+            fb_hgt_verify = fb_hgt_inc if use_increase_val else fb_hgt_d
+            fb_cond_label = "加大流量工况" if use_increase_val else "设计流量工况"
+            o.append(f"  净空验证结果（{fb_cond_label}）：")
+            o.append(f"  a) 净空面积验证: 10% ≤ {fb_pct_verify:.1f}% ≤ 30%")
             o.append(f"     → {'通过 ✓' if fb_area_ok else '未通过 ✗'}")
-            o.append(f"  b) 净空高度验证: {fb_hgt_inc:.3f}m ≥ {fb_req_by_rule:.3f}m")
+            o.append(f"  b) 净空高度验证: {fb_hgt_verify:.3f}m ≥ {fb_req_by_rule:.3f}m")
             o.append(f"     → {'通过 ✓' if fb_hgt_ok else '未通过 ✗'}")
             o.append("")
 
             # 综合验证
-            o.append("【六、综合验证】")
+            section_num_sum = "六" if use_increase_val else "五"
+            o.append(f"【{section_num_sum}、综合验证】")
             o.append("")
             o.append(f"  1. 流速验证:")
             o.append(f"     范围要求: {v_min} ≤ V ≤ {v_max} m/s")
@@ -699,12 +724,12 @@ class CulvertPanel(QWidget):
             o.append("")
             o.append(f"  2. 净空面积验证:")
             o.append(f"     规范要求: 10% ≤ PA ≤ 30%")
-            o.append(f"     计算结果: PA = {fb_pct_inc:.1f}%")
+            o.append(f"     计算结果: PA = {fb_pct_verify:.1f}%")
             o.append(f"     结果: {'通过 ✓' if fb_area_ok else '未通过 ✗'}")
             o.append("")
             o.append(f"  3. 净空高度验证:")
             o.append(f"     规范要求: Fb ≥ {fb_req_by_rule:.3f} m")
-            o.append(f"     计算结果: Fb = {fb_hgt_inc:.3f} m")
+            o.append(f"     计算结果: Fb = {fb_hgt_verify:.3f} m")
             o.append(f"     结果: {'通过 ✓' if fb_hgt_ok else '未通过 ✗'}")
             o.append("")
 

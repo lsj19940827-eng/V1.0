@@ -480,11 +480,21 @@ def check_license() -> bool:
     # 4. 机器码验证
     current_id = get_machine_id()
     if data.get("machine_id") != current_id:
-        _show_error(
-            "此授权文件不适用于当前计算机。\n\n"
-            "请联系管理员重新申请本机授权。"
-        )
-        return False
+        activated = _show_activation_dialog(current_id, lic_path)
+        if not activated:
+            return False
+        # 激活成功，重新读取新 license.lic 继续验证
+        try:
+            with open(lic_path, "r", encoding="utf-8") as f:
+                lic = json.load(f)
+            data = lic["data"]
+            sig = lic["sig"]
+        except Exception:
+            _show_error("授权文件已损坏，请重新向管理员申请。")
+            return False
+        if not _verify_hmac(data, sig):
+            _show_error("授权文件无效（签名校验失败），\n请联系管理员重新获取。")
+            return False
 
     # 5. 过期验证
     expire = data.get("expire", "")

@@ -281,6 +281,16 @@ class MainWindow(QMainWindow):
         dlg = ProjectSettingsDialog(self)
         dlg.exec()
 
+    def closeEvent(self, event):
+        """关闭窗口前先隐藏，避免 Matplotlib 画布销毁时反复重绘导致闪烁"""
+        self.hide()
+        try:
+            import matplotlib.pyplot as plt
+            plt.close('all')
+        except Exception:
+            pass
+        super().closeEvent(event)
+
     def _switch_to(self, index: int):
         """切换到指定模块"""
         if index >= self.stack.count():
@@ -326,14 +336,16 @@ def _setup_matplotlib_dpi():
 
 
 def main():
-    # ---- 高DPI舍入策略（必须在 QApplication 创建之前设置）----
+    # ---- 高DPI舍入策略（main.py 已提前调用；此处为直接运行 app.py 时的兜底）----
     # PassThrough: 保留精确缩放比（如1.25/1.5），Qt 6 默认值，
     # 支持非整数缩放比，确保 2K(125%)/4K(150%/200%) 正确渲染
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
+    # 注意：若 QApplication 已存在（如首次激活弹窗后），此调用将被 Qt 静默忽略
+    if not QApplication.instance():
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
 
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")
 
     # 基础字体：使用磅值（pt），天然 DPI 自适应

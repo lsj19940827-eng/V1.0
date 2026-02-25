@@ -752,7 +752,7 @@ class _EarthworkPanelHandlers:
         """从 Excel 导入地质分层深度表"""
         from PySide6.QtWidgets import QFileDialog, QInputDialog
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择地质分层深度表", "", "Excel 文件 (*.xlsx);;所有文件 (*)")
+            self, "选择地质分层深度表", "", "Excel 文件 (*.xlsx *.xls);;所有文件 (*)")
         if not path:
             return
         try:

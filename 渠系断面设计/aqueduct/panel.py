@@ -732,60 +732,60 @@ class AqueductPanel(QWidget):
           o.append("")
 
           o.append("  3. 过水面积计算 (U形断面):")
-        if h_inc <= R_val:
-            theta_inc = math.acos((R_val - h_inc) / R_val) if R_val > 0 else 0
-            o.append(f"      当 h加大 ≤ R 时:")
-            o.append(f"      θ = arccos((R-h加大)/R) = arccos(({R_val:.2f}-{h_inc:.3f})/{R_val:.2f})")
-            o.append(f"        = {math.degrees(theta_inc):.2f}° = {theta_inc:.4f} rad")
-            o.append(f"      A加大 = R² × (θ - sinθ×cosθ)")
-            o.append(f"           = {R_val:.2f}² × ({theta_inc:.4f} - {math.sin(theta_inc):.4f}×{math.cos(theta_inc):.4f})")
-            o.append(f"           = {A_inc:.3f} m²")
-        else:
-            o.append(f"      当 h加大 > R 时:")
-            o.append(f"      A加大 = πR²/2 + 2R×(h加大-R)")
-            o.append(f"           = π×{R_val:.2f}²/2 + 2×{R_val:.2f}×({h_inc:.3f}-{R_val:.2f})")
-            o.append(f"           = {math.pi*R_val**2/2:.3f} + {2*R_val*(h_inc-R_val):.3f}")
-            o.append(f"           = {A_inc:.3f} m²")
-        o.append("")
+          if h_inc <= R_val:
+              theta_inc = math.acos((R_val - h_inc) / R_val) if R_val > 0 else 0
+              o.append(f"      当 h加大 ≤ R 时:")
+              o.append(f"      θ = arccos((R-h加大)/R) = arccos(({R_val:.2f}-{h_inc:.3f})/{R_val:.2f})")
+              o.append(f"        = {math.degrees(theta_inc):.2f}° = {theta_inc:.4f} rad")
+              o.append(f"      A加大 = R² × (θ - sinθ×cosθ)")
+              o.append(f"           = {R_val:.2f}² × ({theta_inc:.4f} - {math.sin(theta_inc):.4f}×{math.cos(theta_inc):.4f})")
+              o.append(f"           = {A_inc:.3f} m²")
+          else:
+              o.append(f"      当 h加大 > R 时:")
+              o.append(f"      A加大 = πR²/2 + 2R×(h加大-R)")
+              o.append(f"           = π×{R_val:.2f}²/2 + 2×{R_val:.2f}×({h_inc:.3f}-{R_val:.2f})")
+              o.append(f"           = {math.pi*R_val**2/2:.3f} + {2*R_val*(h_inc-R_val):.3f}")
+              o.append(f"           = {A_inc:.3f} m²")
+          o.append("")
 
-        o.append("  4. 湿周计算 (U形断面):")
-        if h_inc <= R_val:
-            o.append(f"      当 h加大 ≤ R 时:")
-            o.append(f"      P加大 = 2Rθ = 2×{R_val:.2f}×{theta_inc:.4f}")
-            o.append(f"           = {P_inc:.3f} m")
-        else:
-            o.append(f"      当 h加大 > R 时:")
-            o.append(f"      P加大 = πR + 2×(h加大-R)")
-            o.append(f"           = π×{R_val:.2f} + 2×({h_inc:.3f}-{R_val:.2f})")
-            o.append(f"           = {math.pi*R_val:.3f} + {2*(h_inc-R_val):.3f}")
-            o.append(f"           = {P_inc:.3f} m")
-        o.append("")
+          o.append("  4. 湿周计算 (U形断面):")
+          if h_inc <= R_val:
+              o.append(f"      当 h加大 ≤ R 时:")
+              o.append(f"      P加大 = 2Rθ = 2×{R_val:.2f}×{theta_inc:.4f}")
+              o.append(f"           = {P_inc:.3f} m")
+          else:
+              o.append(f"      当 h加大 > R 时:")
+              o.append(f"      P加大 = πR + 2×(h加大-R)")
+              o.append(f"           = π×{R_val:.2f} + 2×({h_inc:.3f}-{R_val:.2f})")
+              o.append(f"           = {math.pi*R_val:.3f} + {2*(h_inc-R_val):.3f}")
+              o.append(f"           = {P_inc:.3f} m")
+          o.append("")
 
-        o.append("  5. 水力半径计算:")
-        o.append(f"      R加大 = A加大 / P加大")
-        o.append(f"           = {A_inc:.3f} / {P_inc:.3f}")
-        o.append(f"           = {R_hyd_inc:.3f} m")
-        o.append("")
+          o.append("  5. 水力半径计算:")
+          o.append(f"      R加大 = A加大 / P加大")
+          o.append(f"           = {A_inc:.3f} / {P_inc:.3f}")
+          o.append(f"           = {R_hyd_inc:.3f} m")
+          o.append("")
 
-        o.append("  6. 加大流速计算 (曼宁公式):")
-        o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
-        o.append(f"           = (1/{n}) × {R_hyd_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
-        if R_hyd_inc > 0:
-            o.append(f"           = {1/n:.2f} × {R_hyd_inc**(2/3):.4f} × {math.sqrt(i):.6f}")
-        o.append(f"           = {V_inc:.3f} m/s")
-        o.append("")
+          o.append("  6. 加大流速计算 (曼宁公式):")
+          o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
+          o.append(f"           = (1/{n}) × {R_hyd_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
+          if R_hyd_inc > 0:
+              o.append(f"           = {1/n:.2f} × {R_hyd_inc**(2/3):.4f} × {math.sqrt(i):.6f}")
+          o.append(f"           = {V_inc:.3f} m/s")
+          o.append("")
 
-        o.append("  7. 流量校核:")
-        o.append(f"      Q计算 = A加大 × V加大")
-        o.append(f"           = {A_inc:.3f} × {V_inc:.3f}")
-        o.append(f"           = {A_inc * V_inc:.3f} m³/s")
-        if Q_inc > 0:
-            o.append(f"      误差 = {abs(A_inc * V_inc - Q_inc) / Q_inc * 100:.2f}%")
-        o.append("")
+          o.append("  7. 流量校核:")
+          o.append(f"      Q计算 = A加大 × V加大")
+          o.append(f"           = {A_inc:.3f} × {V_inc:.3f}")
+          o.append(f"           = {A_inc * V_inc:.3f} m³/s")
+          if Q_inc > 0:
+              o.append(f"      误差 = {abs(A_inc * V_inc - Q_inc) / Q_inc * 100:.2f}%")
+          o.append("")
 
-        o.append("  8. 超高计算:")
-        o.append(f"      Fb = H - h加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
-        o.append("")
+          o.append("  8. 超高计算:")
+          o.append(f"      Fb = H - h加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
+          o.append("")
 
         # 警告信息
         if result.get('warning_message'):
@@ -902,13 +902,15 @@ class AqueductPanel(QWidget):
         o.append(f"  过水面积 A = {result['A_design']:.3f} m²")
         o.append(f"  水力半径 R = {result['R_hyd_design']:.3f} m")
         o.append("")
-        o.append("【加大流量工况】")
-        o.append(f"  流量加大比例 = {result['increase_percent']:.1f}% {inc_src}")
-        o.append(f"  加大流量 Q加大 = {result['Q_increased']:.3f} m³/s")
-        o.append(f"  加大水深 h加大 = {result['h_increased']:.3f} m")
-        o.append(f"  加大流速 V加大 = {result['V_increased']:.3f} m/s")
-        o.append(f"  超高 Fb = {result['Fb']:.3f} m")
-        o.append("")
+        use_increase = p.get('use_increase', True)
+        if use_increase:
+            o.append("【加大流量工况】")
+            o.append(f"  流量加大比例 = {result['increase_percent']:.1f}% {inc_src}")
+            o.append(f"  加大流量 Q加大 = {result['Q_increased']:.3f} m³/s")
+            o.append(f"  加大水深 h加大 = {result['h_increased']:.3f} m")
+            o.append(f"  加大流速 V加大 = {result['V_increased']:.3f} m/s")
+            o.append(f"  超高 Fb = {result['Fb']:.3f} m")
+            o.append("")
 
         if result.get('warning_message'):
             o.append("【流速提示】")
@@ -921,13 +923,17 @@ class AqueductPanel(QWidget):
         o.append(f"  流速验证: V={V_d:.3f}m/s (推荐1.0~2.5) → {'✓ 通过' if vel_ok else '⚠ 超出推荐范围'}")
         Fb = result['Fb']
         h_d = result['h_design']
-        Fb_inc_ok = Fb >= 0.10
         Fb_design_min = h_d / 12 + 0.05
         Fb_design = result['H_total'] - h_d
         Fb_design_ok = Fb_design >= Fb_design_min
-        o.append(f"  超高验证(加大): Fb={Fb:.3f}m ≥ 0.10m → {'✓ 通过' if Fb_inc_ok else '✗ 未通过'}")
-        o.append(f"  超高验证(设计): Fb={Fb_design:.3f}m ≥ h/12+0.05={Fb_design_min:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
-        all_pass = Fb_inc_ok and Fb_design_ok
+        if use_increase:
+            Fb_inc_ok = Fb >= 0.10
+            o.append(f"  超高验证(加大): Fb={Fb:.3f}m ≥ 0.10m → {'✓ 通过' if Fb_inc_ok else '✗ 未通过'}")
+            o.append(f"  超高验证(设计): Fb={Fb_design:.3f}m ≥ h/12+0.05={Fb_design_min:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
+            all_pass = Fb_inc_ok and Fb_design_ok
+        else:
+            o.append(f"  超高验证(设计): Fb={Fb_design:.3f}m ≥ h/12+0.05={Fb_design_min:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
+            all_pass = Fb_design_ok
         o.append("")
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
@@ -1022,6 +1028,7 @@ class AqueductPanel(QWidget):
         o.append("")
 
         # 计算两个工况的超高需求
+        use_increase = p.get('use_increase', True)
         Fb_design_min = h_d / 12 + 0.05
         H_design_required = h_d + Fb_design_min
         H_inc_required = h_inc + 0.10
@@ -1031,11 +1038,12 @@ class AqueductPanel(QWidget):
         o.append(f"              = {h_d:.3f} + ({h_d:.3f}/12 + 0.05)")
         o.append(f"              = {h_d:.3f} + {Fb_design_min:.3f}")
         o.append(f"              = {H_design_required:.3f} m")
-        o.append(f"     加大流量: H2 = h加大 + 0.10")
-        o.append(f"              = {h_inc:.3f} + 0.10")
-        o.append(f"              = {H_inc_required:.3f} m")
-        o.append(f"     取最大值: H = max({H_design_required:.3f}, {H_inc_required:.3f})")
-        o.append(f"              = {max(H_design_required, H_inc_required):.3f} m")
+        if use_increase:
+            o.append(f"     加大流量: H2 = h加大 + 0.10")
+            o.append(f"              = {h_inc:.3f} + 0.10")
+            o.append(f"              = {H_inc_required:.3f} m")
+            o.append(f"     取最大值: H = max({H_design_required:.3f}, {H_inc_required:.3f})")
+            o.append(f"              = {max(H_design_required, H_inc_required):.3f} m")
         o.append(f"     向上取整: H = {H_total:.2f} m")
         o.append("")
 
@@ -1130,90 +1138,91 @@ class AqueductPanel(QWidget):
         o.append(f"     误差 = {abs(A_d * V_d - Q) / Q * 100:.2f}%")
         o.append("")
 
-        o.append("【四、加大流量工况】")
-        o.append("")
-        o.append("  1. 加大流量计算:")
-        o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
-        o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
-        o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
-        o.append(f"           = {Q_inc:.3f} m³/s")
-        o.append("")
-        o.append("  2. 加大水深计算:")
-        o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
-        o.append(f"      h加大 = {h_inc:.3f} m")
-        o.append("")
+        if use_increase:
+            o.append("【四、加大流量工况】")
+            o.append("")
+            o.append("  1. 加大流量计算:")
+            o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
+            o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
+            o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
+            o.append(f"           = {Q_inc:.3f} m³/s")
+            o.append("")
+            o.append("  2. 加大水深计算:")
+            o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
+            o.append(f"      h加大 = {h_inc:.3f} m")
+            o.append("")
 
-        if has_chamfer:
-            o.append("  3. 过水面积计算 (矩形断面-带倒角):")
-            if h_inc >= chamfer_height_val:
-                chamfer_area_val_inc = 0.5 * chamfer_length_val * chamfer_height_val
-                A_rect_inc = B * h_inc
-                o.append(f"      倒角高度 = {chamfer_length_val:.2f} × tan({chamfer_angle_val:.1f}°) = {chamfer_height_val:.3f} m")
-                o.append(f"      A加大 = B×h加大 - 2×(½×倒角底边×倒角高度)")
-                o.append(f"           = {B:.2f}×{h_inc:.3f} - 2×(½×{chamfer_length_val:.2f}×{chamfer_height_val:.3f})")
-                o.append(f"           = {A_rect_inc:.3f} - {2*chamfer_area_val_inc:.3f}")
-                o.append(f"           = {A_inc:.3f} m²")
+            if has_chamfer:
+                o.append("  3. 过水面积计算 (矩形断面-带倒角):")
+                if h_inc >= chamfer_height_val:
+                    chamfer_area_val_inc = 0.5 * chamfer_length_val * chamfer_height_val
+                    A_rect_inc = B * h_inc
+                    o.append(f"      倒角高度 = {chamfer_length_val:.2f} × tan({chamfer_angle_val:.1f}°) = {chamfer_height_val:.3f} m")
+                    o.append(f"      A加大 = B×h加大 - 2×(½×倒角底边×倒角高度)")
+                    o.append(f"           = {B:.2f}×{h_inc:.3f} - 2×(½×{chamfer_length_val:.2f}×{chamfer_height_val:.3f})")
+                    o.append(f"           = {A_rect_inc:.3f} - {2*chamfer_area_val_inc:.3f}")
+                    o.append(f"           = {A_inc:.3f} m²")
+                else:
+                    o.append(f"      倒角高度 = {chamfer_height_val:.3f} m > 水深 h加大 = {h_inc:.3f} m")
+                    o.append(f"      A加大 = B×h加大 - (倒角底边/倒角高度)×h加大²")
+                    o.append(f"           = {B:.2f}×{h_inc:.3f} - ({chamfer_length_val:.2f}/{chamfer_height_val:.3f})×{h_inc:.3f}²")
+                    o.append(f"           = {A_inc:.3f} m²")
+                o.append("")
+
+                o.append("  4. 湿周计算 (矩形断面-带倒角):")
+                if h_inc >= chamfer_height_val:
+                    hyp_val_inc = chamfer_length_val / math.cos(math.radians(chamfer_angle_val)) if chamfer_angle_val > 0 else chamfer_length_val
+                    wall_above_inc = h_inc - chamfer_height_val
+                    bottom_width_inc = B - 2 * chamfer_length_val
+                    o.append(f"      倒角斜边 = {chamfer_length_val:.2f}/cos({chamfer_angle_val:.1f}°) = {hyp_val_inc:.3f} m")
+                    o.append(f"      P加大 = (B-2×倒角底边) + 2×倒角斜边 + 2×(h加大-倒角高度)")
+                    o.append(f"           = ({B:.2f}-2×{chamfer_length_val:.2f}) + 2×{hyp_val_inc:.3f} + 2×({h_inc:.3f}-{chamfer_height_val:.3f})")
+                    o.append(f"           = {bottom_width_inc:.2f} + {2*hyp_val_inc:.3f} + {2*wall_above_inc:.3f}")
+                    o.append(f"           = {P_inc:.3f} m")
+                else:
+                    o.append(f"      P加大 = (B-2×倒角底边) + 2×h加大/sin(倒角角度)")
+                    o.append(f"           = ({B:.2f}-2×{chamfer_length_val:.2f}) + 2×{h_inc:.3f}/sin({chamfer_angle_val:.1f}°)")
+                    o.append(f"           = {P_inc:.3f} m")
+                o.append("")
             else:
-                o.append(f"      倒角高度 = {chamfer_height_val:.3f} m > 水深 h加大 = {h_inc:.3f} m")
-                o.append(f"      A加大 = B×h加大 - (倒角底边/倒角高度)×h加大²")
-                o.append(f"           = {B:.2f}×{h_inc:.3f} - ({chamfer_length_val:.2f}/{chamfer_height_val:.3f})×{h_inc:.3f}²")
+                o.append("  3. 过水面积计算 (矩形断面):")
+                o.append(f"      A加大 = B × h加大")
+                o.append(f"           = {B:.2f} × {h_inc:.3f}")
                 o.append(f"           = {A_inc:.3f} m²")
-            o.append("")
+                o.append("")
 
-            o.append("  4. 湿周计算 (矩形断面-带倒角):")
-            if h_inc >= chamfer_height_val:
-                hyp_val_inc = chamfer_length_val / math.cos(math.radians(chamfer_angle_val)) if chamfer_angle_val > 0 else chamfer_length_val
-                wall_above_inc = h_inc - chamfer_height_val
-                bottom_width_inc = B - 2 * chamfer_length_val
-                o.append(f"      倒角斜边 = {chamfer_length_val:.2f}/cos({chamfer_angle_val:.1f}°) = {hyp_val_inc:.3f} m")
-                o.append(f"      P加大 = (B-2×倒角底边) + 2×倒角斜边 + 2×(h加大-倒角高度)")
-                o.append(f"           = ({B:.2f}-2×{chamfer_length_val:.2f}) + 2×{hyp_val_inc:.3f} + 2×({h_inc:.3f}-{chamfer_height_val:.3f})")
-                o.append(f"           = {bottom_width_inc:.2f} + {2*hyp_val_inc:.3f} + {2*wall_above_inc:.3f}")
+                o.append("  4. 湿周计算 (矩形断面):")
+                o.append(f"      P加大 = B + 2×h加大")
+                o.append(f"           = {B:.2f} + 2×{h_inc:.3f}")
+                o.append(f"           = {B:.2f} + {2*h_inc:.3f}")
                 o.append(f"           = {P_inc:.3f} m")
-            else:
-                o.append(f"      P加大 = (B-2×倒角底边) + 2×h加大/sin(倒角角度)")
-                o.append(f"           = ({B:.2f}-2×{chamfer_length_val:.2f}) + 2×{h_inc:.3f}/sin({chamfer_angle_val:.1f}°)")
-                o.append(f"           = {P_inc:.3f} m")
-            o.append("")
-        else:
-            o.append("  3. 过水面积计算 (矩形断面):")
-            o.append(f"      A加大 = B × h加大")
-            o.append(f"           = {B:.2f} × {h_inc:.3f}")
-            o.append(f"           = {A_inc:.3f} m²")
+                o.append("")
+
+            o.append("  5. 水力半径计算:")
+            o.append(f"      R加大 = A加大 / P加大")
+            o.append(f"           = {A_inc:.3f} / {P_inc:.3f}")
+            o.append(f"           = {R_hyd_inc:.3f} m")
             o.append("")
 
-            o.append("  4. 湿周计算 (矩形断面):")
-            o.append(f"      P加大 = B + 2×h加大")
-            o.append(f"           = {B:.2f} + 2×{h_inc:.3f}")
-            o.append(f"           = {B:.2f} + {2*h_inc:.3f}")
-            o.append(f"           = {P_inc:.3f} m")
+            o.append("  6. 加大流速计算 (曼宁公式):")
+            o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
+            o.append(f"           = (1/{n}) × {R_hyd_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
+            if R_hyd_inc > 0:
+                o.append(f"           = {1/n:.2f} × {R_hyd_inc**(2/3):.4f} × {math.sqrt(i):.6f}")
+            o.append(f"           = {V_inc:.3f} m/s")
             o.append("")
 
-        o.append("  5. 水力半径计算:")
-        o.append(f"      R加大 = A加大 / P加大")
-        o.append(f"           = {A_inc:.3f} / {P_inc:.3f}")
-        o.append(f"           = {R_hyd_inc:.3f} m")
-        o.append("")
+            o.append("  7. 流量校核:")
+            o.append(f"      Q计算 = A加大 × V加大")
+            o.append(f"           = {A_inc:.3f} × {V_inc:.3f}")
+            o.append(f"           = {A_inc * V_inc:.3f} m³/s")
+            if Q_inc > 0:
+                o.append(f"      误差 = {abs(A_inc * V_inc - Q_inc) / Q_inc * 100:.2f}%")
+            o.append("")
 
-        o.append("  6. 加大流速计算 (曼宁公式):")
-        o.append(f"      V加大 = (1/n) × R加大^(2/3) × i^(1/2)")
-        o.append(f"           = (1/{n}) × {R_hyd_inc:.3f}^(2/3) × {i:.6f}^(1/2)")
-        if R_hyd_inc > 0:
-            o.append(f"           = {1/n:.2f} × {R_hyd_inc**(2/3):.4f} × {math.sqrt(i):.6f}")
-        o.append(f"           = {V_inc:.3f} m/s")
-        o.append("")
-
-        o.append("  7. 流量校核:")
-        o.append(f"      Q计算 = A加大 × V加大")
-        o.append(f"           = {A_inc:.3f} × {V_inc:.3f}")
-        o.append(f"           = {A_inc * V_inc:.3f} m³/s")
-        if Q_inc > 0:
-            o.append(f"      误差 = {abs(A_inc * V_inc - Q_inc) / Q_inc * 100:.2f}%")
-        o.append("")
-
-        o.append("  8. 超高计算:")
-        o.append(f"      Fb = H - h加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
-        o.append("")
+            o.append("  8. 超高计算:")
+            o.append(f"      Fb = H - h加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
+            o.append("")
 
         if result.get('warning_message'):
             o.append("【流速提示】")
@@ -1243,24 +1252,30 @@ class AqueductPanel(QWidget):
         o.append(f"  2. 超高验证（规范 9.4.1-2）")
         Fb_design_min2 = h_d / 12 + 0.05
         Fb_design = H_total - h_d
-        Fb_inc_min = 0.10
         fb_design_ok = Fb_design >= Fb_design_min2
-        fb_inc_ok = Fb >= Fb_inc_min
         o.append(f"     断面类型: 矩形")
         o.append(f"     规范要求:")
         o.append(f"       - 设计流量: 超高不应小于 h/12 + 0.05 = {h_d:.3f}/12 + 0.05 = {Fb_design_min2:.3f} m")
-        o.append(f"       - 加大流量: 超高不应小于 0.10 m")
+        if use_increase:
+            o.append(f"       - 加大流量: 超高不应小于 0.10 m")
         o.append(f"")
         o.append(f"     计算结果:")
         o.append(f"       - 设计流量超高: Fb_设计 = H - h_设计 = {H_total:.2f} - {h_d:.3f} = {Fb_design:.3f} m")
-        o.append(f"       - 加大流量超高: Fb_加大 = H - h_加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
+        if use_increase:
+            o.append(f"       - 加大流量超高: Fb_加大 = H - h_加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
         o.append(f"")
         o.append(f"     验证结果:")
         o.append(f"       - 设计流量: {Fb_design:.3f} {'≥' if fb_design_ok else '<'} {Fb_design_min2:.3f} → {'通过 ✓' if fb_design_ok else '未通过 ✗'}")
-        o.append(f"       - 加大流量: {Fb:.3f} {'≥' if fb_inc_ok else '<'} {Fb_inc_min:.3f} → {'通过 ✓' if fb_inc_ok else '未通过 ✗'}")
+        if use_increase:
+            Fb_inc_min = 0.10
+            fb_inc_ok = Fb >= Fb_inc_min
+            o.append(f"       - 加大流量: {Fb:.3f} {'≥' if fb_inc_ok else '<'} {Fb_inc_min:.3f} → {'通过 ✓' if fb_inc_ok else '未通过 ✗'}")
         o.append("")
 
-        all_pass = fb_inc_ok and fb_design_ok
+        if use_increase:
+            all_pass = fb_inc_ok and fb_design_ok
+        else:
+            all_pass = fb_design_ok
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
         o.append("=" * 70)

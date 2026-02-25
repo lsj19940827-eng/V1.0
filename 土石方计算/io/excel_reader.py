@@ -37,6 +37,7 @@ class ExcelTerrainReader:
             raise FileNotFoundError(f"Excel 文件不存在: {path}")
         self._path = path
         self._wb = None  # 懒加载
+        self._is_xls = path.lower().endswith('.xls') and not path.lower().endswith('.xlsx')
 
     # ------------------------------------------------------------------
     # 地形点
@@ -209,15 +210,24 @@ class ExcelTerrainReader:
 
     def _ensure_loaded(self):
         if self._wb is None:
-            try:
-                import openpyxl
-            except ImportError as exc:
-                raise ImportError(
-                    "未安装 openpyxl 库，请执行: pip install openpyxl"
-                ) from exc
-            self._wb = openpyxl.load_workbook(
-                self._path, read_only=True, data_only=True
-            )
+            if self._is_xls:
+                try:
+                    import xlrd
+                except ImportError as exc:
+                    raise ImportError(
+                        "未安装 xlrd 库，请执行: pip install xlrd"
+                    ) from exc
+                self._wb = xlrd.open_workbook(self._path)
+            else:
+                try:
+                    import openpyxl
+                except ImportError as exc:
+                    raise ImportError(
+                        "未安装 openpyxl 库，请执行: pip install openpyxl"
+                    ) from exc
+                self._wb = openpyxl.load_workbook(
+                    self._path, read_only=True, data_only=True
+                )
 
     def _read_sheet(
         self, sheet_name: str, header_row: int
@@ -228,13 +238,22 @@ class ExcelTerrainReader:
         数据行从 header_row + 1 开始，每行是 cell.value 的列表。
         """
         self._ensure_loaded()
-        if sheet_name not in self._wb.sheetnames:
-            # 尝试第一个工作表
-            ws = self._wb.active
+        if self._is_xls:
+            names = self._wb.sheet_names()
+            if sheet_name not in names:
+                ws = self._wb.sheet_by_index(0)
+            else:
+                ws = self._wb.sheet_by_name(sheet_name)
+            all_rows = [
+                tuple(ws.cell_value(r, c) for c in range(ws.ncols))
+                for r in range(ws.nrows)
+            ]
         else:
-            ws = self._wb[sheet_name]
-
-        all_rows = list(ws.iter_rows(values_only=True))
+            if sheet_name not in self._wb.sheetnames:
+                ws = self._wb.active
+            else:
+                ws = self._wb[sheet_name]
+            all_rows = list(ws.iter_rows(values_only=True))
         if not all_rows:
             return [], []
 

@@ -1996,7 +1996,7 @@ class WaterProfilePanel(QWidget):
 
         filepath, _ = QFileDialog.getOpenFileName(
             self, "选择【多流量段批量计算】导出的Excel文件", "",
-            "Excel文件 (*.xlsx);;所有文件 (*.*)")
+            "Excel文件 (*.xlsx *.xls);;所有文件 (*.*)")
         if not filepath:
             return
 

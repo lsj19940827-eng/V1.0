@@ -286,6 +286,72 @@ def test_mass_scan():
     print(f"  批量扫描: {total}组参数, {fail}项不一致")
 
 
+def test_no_increase():
+    print("\n" + "="*70 + "\n测试13: manual_increase_percent=0 (不勾选加大流量)\n" + "="*70)
+    cases = [
+        (5.0, 0.014, 3000, 0.5, 3.0, None, None, "经济最优"),
+        (1.0, 0.014, 2000, 0.3, 2.5, None, None, "小流量经济最优"),
+        (5.0, 0.014, 3000, 0.5, 3.0, 2.4, None, "指定底宽"),
+        (5.0, 0.014, 3000, 0.5, 3.0, None, 1.5, "指定宽深比"),
+    ]
+    for Q, n_val, si, vl, vh, mB, mBH, desc in cases:
+        slope = 1.0 / si
+        r = quick_calculate_rectangular_culvert(
+            Q, n_val, si, vl, vh,
+            manual_B=mB, target_BH_ratio=mBH,
+            manual_increase_percent=0)
+        check(f"[{desc}] inc=0 应成功", r['success'],
+              r.get('error_message', '')[:60] if not r['success'] else '')
+        if not r['success']:
+            continue
+        # increase_percent 应为 0
+        check(f"[{desc}] inc_pct=0", close(r['increase_percent'], 0, 0.01))
+        # Q_increased == Q
+        check(f"[{desc}] Q_inc==Q", close(r['Q_increased'], Q, 0.001))
+        # h_increased ≈ h_design
+        check(f"[{desc}] h_inc≈h_des", close(r['h_increased'], r['h_design'], 0.01),
+              f"h_inc={r['h_increased']:.4f}, h_des={r['h_design']:.4f}")
+        # 净空应在 10%-30%
+        check(f"[{desc}] 设计净空10-30%",
+              MIN_FREEBOARD_PCT_RECT*100 - 0.5 <= r['freeboard_pct_design'] <= MAX_FREEBOARD_PCT_RECT*100 + 0.5,
+              f"fb_pct={r['freeboard_pct_design']:.1f}%")
+        # 曼宁反算流量一致
+        B, h = r['B'], r['h_design']
+        check(f"[{desc}] 曼宁反算Q", approx(ref_Q(B, h, n_val, slope), Q, 0.03),
+              f"Q_back={ref_Q(B, h, n_val, slope):.4f}, Q={Q}")
+
+
+def test_hb_ratio_warning():
+    print("\n" + "="*70 + "\n测试14: H/B 和 B/H 双向软警告（不强制拒绝）\n" + "="*70)
+    # Case 1: 指定高宽比 H/B=1.5（>1.2），应成功且 hb_ratio_ok=False
+    r = quick_calculate_rectangular_culvert(Q=5.0, n=0.014, slope_inv=3000,
+                                             v_min=0.5, v_max=3.0,
+                                             target_HB_ratio=1.5)
+    check("H/B=1.5 应成功计算", r['success'], r.get('error_message','')[:60])
+    if r['success']:
+        check("H/B=1.5 hb_ratio_ok=False", not r.get('hb_ratio_ok', True),
+              f"H/B={r['HB_ratio']:.3f}")
+        check("H/B=1.5 结果字段存在", 'hb_ratio_ok' in r and 'bh_box_ratio_ok' in r)
+
+    # Case 2: 宽浅断面 B=2.4, Q=3（B/H>1.2自动），应成功且 bh_box_ratio_ok=False
+    r2 = quick_calculate_rectangular_culvert(Q=3.0, n=0.014, slope_inv=3000,
+                                              v_min=0.1, v_max=100,
+                                              manual_B=2.4, manual_increase_percent=0)
+    check("B=2.4,Q=3 应成功", r2['success'], r2.get('error_message','')[:60])
+    if r2['success']:
+        BH_box = r2['B'] / r2['H'] if r2['H'] > 0 else 0
+        check("B=2.4,Q=3 bh_box_ratio_ok=False(B/H>1.2)", not r2.get('bh_box_ratio_ok', True),
+              f"B/H={BH_box:.3f}")
+
+    # Case 3: 正常断面 H/B≈0.8~1.0，两个 ok 标志均应为 True
+    r3 = quick_calculate_rectangular_culvert(Q=5.0, n=0.014, slope_inv=3000,
+                                              v_min=0.5, v_max=3.0)
+    check("经济最优 hb_ratio_ok 字段存在", 'hb_ratio_ok' in r3)
+    check("经济最优 bh_box_ratio_ok 字段存在", 'bh_box_ratio_ok' in r3)
+    if r3['success']:
+        check("经济最优 净空通过", r3['fb_check_passed'])
+
+
 if __name__ == '__main__':
     print("╔"+"═"*68+"╗")
     print("║       矩形暗涵计算内核 - 全面测试                              ║")
@@ -303,6 +369,8 @@ if __name__ == '__main__':
     test_boundary()
     test_freeboard_geometry()
     test_mass_scan()
+    test_no_increase()
+    test_hb_ratio_warning()
 
     total = PASS_COUNT + FAIL_COUNT
     print("\n" + "╔"+"═"*68+"╗")

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>「指定管径」交互设计方案对比</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:"Microsoft YaHei",sans-serif; background:#f0f2f5; padding:32px; color:#333; }
+h1 { font-size:20px; margin-bottom:8px; }
+.subtitle { color:#888; font-size:13px; margin-bottom:28px; }
+
+/* Card */
+.card { background:#fff; border-radius:10px; padding:24px 28px 20px;
+        box-shadow:0 2px 12px rgba(0,0,0,.08); margin-bottom:28px; }
+.card-title { font-size:15px; font-weight:bold; color:#1565C0; margin-bottom:4px; }
+.card-desc  { font-size:12px; color:#888; margin-bottom:18px; border-bottom:1px dashed #e8e8e8; padding-bottom:10px; }
+.tag { display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:bold; margin-left:6px; vertical-align:middle; }
+.tag-rec  { background:#E8F5E9; color:#2E7D32; }
+.tag-min  { background:#E3F2FD; color:#1565C0; }
+.tag-new  { background:#FFF3E0; color:#E65100; }
+
+/* 模拟PyQt参数行 */
+.params-box { background:#FAFAFA; border:1px solid #EBEBEB; border-radius:6px; padding:14px 18px; }
+.param-row { display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:14px; }
+.param-row:last-child { margin-bottom:0; }
+.plabel { color:#333; white-space:nowrap; min-width:100px; }
+.pval   { color:#1565C0; font-weight:bold; font-size:13px; }
+.pinput { border:1px solid #ccc; border-radius:4px; padding:3px 8px; font-size:14px;
+          background:#fff; width:120px; font-family:inherit; }
+.pinput:focus { outline:none; border-color:#1565C0; }
+
+/* 方案1: Tooltip */
+.tooltip-wrap { position:relative; display:inline-flex; align-items:center; cursor:pointer; }
+.tooltip-box { position:absolute; left:0; top:calc(100% + 6px); background:#333; color:#fff;
+               font-size:12px; padding:7px 10px; border-radius:5px; white-space:nowrap; z-index:10;
+               display:none; line-height:1.5; }
+.tooltip-box::before { content:''; position:absolute; top:-5px; left:14px;
+                        border:5px solid transparent; border-bottom-color:#333; border-top:none; }
+.tooltip-wrap:hover .tooltip-box { display:block; }
+
+/* 方案2: 改名+常亮提示 */
+.hint-always { font-size:11px; color:#888; margin-top:2px; }
+
+/* 方案3: 点击标签展开 */
+.d-link { color:#1565C0; font-weight:bold; font-size:13px; cursor:pointer;
+          border-bottom:1px dashed #1565C0; text-decoration:none; }
+.d-link:hover { color:#0D47A1; }
+.d-expand { display:none; align-items:center; gap:6px; margin-top:6px; padding:8px 10px;
+            background:#E3F2FD; border-radius:5px; border-left:3px solid #1565C0; }
+.d-expand.open { display:flex; }
+.d-expand-hint { font-size:12px; color:#1565C0; }
+
+/* 方案4: 图标按钮 */
+.btn-icon { display:inline-flex; align-items:center; gap:5px; border:1.5px dashed #9E9E9E;
+            border-radius:5px; padding:3px 10px; cursor:pointer; font-size:13px; color:#555;
+            background:#fff; transition:all .15s; }
+.btn-icon:hover { border-color:#1565C0; color:#1565C0; background:#E3F2FD; }
+.btn-icon.active { border:1.5px solid #1565C0; color:#1565C0; background:#E3F2FD; }
+.icon-edit { font-style:normal; font-size:14px; }
+.override-row { display:none; align-items:center; gap:6px; padding:6px 8px;
+                background:#E3F2FD; border-radius:5px; font-size:13px; color:#1565C0; margin-top:6px; }
+.override-row.show { display:flex; }
+
+/* 方案5: 内联切换 */
+.d-mode-switch { display:inline-flex; border:1px solid #ccc; border-radius:20px; overflow:hidden; font-size:12px; }
+.d-mode-opt { padding:3px 12px; cursor:pointer; background:#fff; color:#555; transition:all .15s; }
+.d-mode-opt.sel { background:#1565C0; color:#fff; }
+.auto-result { font-size:13px; color:#1565C0; font-weight:bold; }
+.manual-input-row { display:none; align-items:center; gap:6px; margin-top:6px; font-size:13px; }
+.manual-input-row.show { display:flex; }
+
+/* 方案6: 帮助图标 */
+.help-icon { display:inline-flex; align-items:center; justify-content:center;
+             width:16px; height:16px; border-radius:50%; border:1.5px solid #aaa;
+             color:#aaa; font-size:10px; font-weight:bold; cursor:pointer; flex-shrink:0; }
+.help-icon:hover { border-color:#1565C0; color:#1565C0; }
+.help-panel { display:none; background:#FFF8E1; border:1px solid #FFB74D; border-radius:5px;
+              padding:8px 12px; font-size:12px; color:#E65100; margin-top:6px; line-height:1.6; }
+.help-panel.show { display:block; }
+
+/* checkbox style */
+.checkbox-wrap { display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none; }
+.checkbox-wrap input[type=checkbox] { width:15px; height:15px; cursor:pointer; accent-color:#1565C0; }
+
+/* reset btn */
+.reset-btn { font-size:11px; color:#aaa; cursor:pointer; margin-left:12px; }
+.reset-btn:hover { color:#E53935; }
+
+.sep { height:1px; background:#F0F0F0; margin:10px 0; }
+.notice { font-size:12px; color:#888; margin-top:8px; background:#F9FAFB; 
+          border-radius:4px; padding:6px 10px; border-left:3px solid #ccc; }
+</style>
+</head>
+<body>
+
+<h1>「指定管径」交互设计方案对比</h1>
+<p class="subtitle">点击各方案中的控件可体验交互效果。当前设计目标：让用户一眼明白"指定管径"是什么、什么时候用。</p>
+
+<!-- ====================== 方案A ====================== -->
+<div class="card">
+  <div class="card-title">方案A：悬停 Tooltip <span class="tag tag-min">最小改动</span></div>
+  <div class="card-desc">保持「指定管径」文字不变，鼠标悬停时弹出说明气泡。代码：setToolTip()</div>
+  <div class="params-box">
+    <div class="param-row">
+      <span class="plabel">管径 D:</span>
+      <span class="pval">D设计 = 2.6000 m &nbsp;（D理论 = 2.5231 m）</span>
+    </div>
+    <div class="param-row">
+      <div class="tooltip-wrap">
+        <label class="checkbox-wrap"><input type="checkbox" id="cbA"> 指定管径</label>
+        <div class="tooltip-box">覆盖自动计算的D设计，<br>手动输入工程实际采用的管径。<br>适用于管径已由业主或规范确定的场景。</div>
+      </div>
+      <input class="pinput" id="inA" placeholder="输入管径 (m)" style="display:none">
+    </div>
+  </div>
+  <div class="notice">⚠️ 缺点：用户不悬停就不知道，首次使用仍困惑。</div>
+</div>
+
+<!-- ====================== 方案B ====================== -->
+<div class="card">
+  <div class="card-title">方案B：改名 + 常亮灰色小字说明 <span class="tag tag-rec">推荐</span></div>
+  <div class="card-desc">复选框文字更准确，右侧/下方常显一行12px灰色提示，无需悬停即可理解。</div>
+  <div class="params-box">
+    <div class="param-row">
+      <span class="plabel">管径 D:</span>
+      <span class="pval">D设计 = 2.6000 m &nbsp;（D理论 = 2.5231 m）</span>
+    </div>
+    <div class="param-row" style="flex-direction:column; align-items:flex-start; gap:3px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <label class="checkbox-wrap"><input type="checkbox" id="cbB"> 自定义管径（覆盖自动计算）</label>
+        <input class="pinput" id="inB" placeholder="输入管径 (m)" style="display:none">
+      </div>
+      <div class="hint-always">← 默认使用 D设计=2.60m，勾选后可手动指定工程实际管径</div>
+    </div>
+  </div>
+  <div class="notice">✅ 优点：零操作即可理解；文字清晰表达"覆盖"语义。</div>
+</div>
+
+<!-- ====================== 方案C ====================== -->
+<div class="card">
+  <div class="card-title">方案C：管径行内嵌「点此自定义」链接 <span class="tag tag-new">重设计</span></div>
+  <div class="card-desc">去掉独立复选框，把"自动/手动"切换直接融入管径D的显示行，点击蓝色链接展开输入。</div>
+  <div class="params-box">
+    <div class="param-row" style="flex-wrap:wrap; gap:6px;">
+      <span class="plabel">管径 D:</span>
+      <span id="dAutoC" class="pval">D设计 = 2.6000 m &nbsp;（D理论 = 2.5231 m）</span>
+      <a class="d-link" id="linkC" onclick="toggleC()">✏ 自定义</a>
+      <span class="reset-btn" id="resetC" onclick="resetC()" style="display:none">↩ 恢复自动</span>
+    </div>
+    <div class="d-expand" id="expandC">
+      <span class="d-expand-hint">自定义管径：</span>
+      <input class="pinput" placeholder="输入管径 (m)" style="width:110px">
+      <span class="d-expand-hint" style="color:#555">（将覆盖D设计=2.60m参与后续计算）</span>
+    </div>
+  </div>
+  <div class="notice">✅ 优点：管径D与自定义操作在同一行，空间省、语义链路清晰。需要改代码结构。</div>
+</div>
+
+<!-- ====================== 方案D ====================== -->
+<div class="card">
+  <div class="card-title">方案D：图标按钮（编辑图标）+ 展开栏 <span class="tag tag-new">重设计</span></div>
+  <div class="card-desc">用「✏ 覆盖管径」图标按钮替代复选框，激活态高亮，展开输入栏有说明文字。</div>
+  <div class="params-box">
+    <div class="param-row">
+      <span class="plabel">管径 D:</span>
+      <span class="pval" id="dValD">D设计 = 2.6000 m &nbsp;（D理论 = 2.5231 m）</span>
+      <div class="btn-icon" id="btnD" onclick="toggleD()"><span class="icon-edit">✏</span> 覆盖管径</div>
+    </div>
+    <div class="override-row" id="overrideD">
+      <span>指定管径:</span>
+      <input class="pinput" placeholder="输入管径 (m)" style="width:110px">
+      <span style="font-size:12px; color:#555;">覆盖后D设计将被替换，影响弯管半径R计算</span>
+    </div>
+  </div>
+  <div class="notice">✅ 优点：按钮更显眼，激活/未激活状态清晰；可配合管径行紧凑排列。</div>
+</div>
+
+<!-- ====================== 方案E ====================== -->
+<div class="card">
+  <div class="card-title">方案E：自动 / 手动 模式切换器 <span class="tag tag-new">重设计</span></div>
+  <div class="card-desc">用左右切换标签（Auto / 自定义）表达两种模式，比复选框更直观表达"两选一"语义。</div>
+  <div class="params-box">
+    <div class="param-row" style="gap:12px; flex-wrap:wrap;">
+      <span class="plabel">管径 D:</span>
+      <div class="d-mode-switch" id="switchE">
+        <div class="d-mode-opt sel" onclick="setModeE('auto',this)">自动</div>
+        <div class="d-mode-opt" onclick="setModeE('manual',this)">自定义</div>
+      </div>
+      <span class="auto-result" id="autoResultE">D设计 = 2.6000 m &nbsp;（D理论 = 2.5231 m）</span>
+    </div>
+    <div class="manual-input-row" id="manualE">
+      <span style="font-size:13px; color:#555;">指定管径:</span>
+      <input class="pinput" placeholder="输入管径 (m)" style="width:110px">
+      <span style="font-size:12px; color:#888;">（D理论 = 2.5231 m 仅供参考）</span>
+    </div>
+  </div>
+  <div class="notice">✅ 优点：最符合"二选一"语义；切换体验类似现代UI。需要较大代码重构。</div>
+</div>
+
+<!-- ====================== 方案F ====================== -->
+<div class="card">
+  <div class="card-title">方案F：问号帮助按钮 + 展开说明卡 <span class="tag tag-min">最小改动</span></div>
+  <div class="card-desc">保持复选框+「指定管径」文字，旁边加一个 ⓘ 按钮，点击展开/收起一行说明。</div>
+  <div class="params-box">
+    <div class="param-row">
+      <span class="plabel">管径 D:</span>
+      <span class="pval">D设计 = 2.6000 m &nbsp;（D理论 = 2.5231 m）</span>
+    </div>
+    <div class="param-row" style="flex-wrap:wrap; gap:6px;">
+      <label class="checkbox-wrap"><input type="checkbox" id="cbF" onchange="toggleInF()"> 指定管径</label>
+      <input class="pinput" id="inF" placeholder="输入管径 (m)" style="display:none">
+      <div class="help-icon" onclick="toggleHelpF()" title="点击查看说明">?</div>
+    </div>
+    <div class="help-panel" id="helpF">
+      <b>什么是「指定管径」？</b><br>
+      系统默认根据 Q 和 v 自动计算理论管径，并取标准规格（D设计）。<br>
+      当工程实际管径已由业主或规范确定时，勾选此项并输入实际管径，覆盖自动计算结果。<br>
+      <span style="color:#888;">注：覆盖后弯管半径 R=nD 将使用指定值重新计算。</span>
+    </div>
+  </div>
+  <div class="notice">✅ 优点：完整解释，不占常驻空间；缺点是用户需主动点击才能看到。</div>
+</div>
+
+<script>
+// 方案A
+document.getElementById('cbA').onchange = function(){
+  document.getElementById('inA').style.display = this.checked ? 'inline-block' : 'none';
+};
+// 方案B
+document.getElementById('cbB').onchange = function(){
+  document.getElementById('inB').style.display = this.checked ? 'inline-block' : 'none';
+};
+// 方案C
+function toggleC(){
+  var e = document.getElementById('expandC');
+  var r = document.getElementById('resetC');
+  var l = document.getElementById('linkC');
+  var open = e.classList.toggle('open');
+  r.style.display = open ? 'inline' : 'none';
+  l.textContent = open ? '▲ 收起' : '✏ 自定义';
+}
+function resetC(){
+  document.getElementById('expandC').classList.remove('open');
+  document.getElementById('resetC').style.display = 'none';
+  document.getElementById('linkC').textContent = '✏ 自定义';
+}
+// 方案D
+function toggleD(){
+  var btn = document.getElementById('btnD');
+  var row = document.getElementById('overrideD');
+  var active = btn.classList.toggle('active');
+  row.classList.toggle('show', active);
+  btn.innerHTML = active ? '<span>✓</span> 已覆盖管径' : '<span class="icon-edit">✏</span> 覆盖管径';
+}
+// 方案E
+function setModeE(mode, el){
+  document.querySelectorAll('#switchE .d-mode-opt').forEach(e=>e.classList.remove('sel'));
+  el.classList.add('sel');
+  document.getElementById('autoResultE').style.display = mode==='auto' ? '' : 'none';
+  document.getElementById('manualE').classList.toggle('show', mode==='manual');
+}
+// 方案F
+function toggleInF(){
+  var cb = document.getElementById('cbF');
+  document.getElementById('inF').style.display = cb.checked ? 'inline-block' : 'none';
+}
+function toggleHelpF(){
+  document.getElementById('helpF').classList.toggle('show');
+}
+</script>
+</body>
+</html>

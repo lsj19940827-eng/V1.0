@@ -433,12 +433,17 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     result['increase_percent'] = increase_percent
     result['Q_increased'] = Q_increased
     
+    check_increase = (increase_percent > 0)
+    Fb_inc_min = 0.10 if check_increase else 0.0
+    
     # 设计变量
     best_R = 0
     best_f = 0
     best_total_area = 1e99
     found_solution = False
     design_method = ''
+    
+    _design_fb_warning = ''
     
     if manual_R is not None and manual_R > 0:
         # 指定R
@@ -452,14 +457,19 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
         
         # 计算加大水深
         h_inc = calculate_u_water_depth(Q_increased, R, n, i, f)
+        if h_inc <= 0 and FR_MAX * R > f:
+            # 初始f/R=0.4不足以通过流量，尝试最大f/R
+            f = FR_MAX * R
+            total_height = f + R
+            h_inc = calculate_u_water_depth(Q_increased, R, n, i, f)
         
         if h_inc > 0:
             # 计算安全超高: max(R/5, 0.1m)
-            safety_height = max(R / 5, 0.1)
+            safety_height = max(R / 5, Fb_inc_min)
             required_height = h_inc + safety_height
             
             # 【规范 9.4.1-2】验证超高：U形断面加大流量时超高不应小于 0.10m
-            Fb_min_required = 0.10
+            Fb_min_required = Fb_inc_min
             
             if required_height <= total_height:
                 # f/R=0.4满足要求
@@ -486,15 +496,9 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
                     Fb_design_check = total_height - h_design_check
                     Fb_design_min = R / 5
                     if Fb_design_check < Fb_design_min:
-                        result['error_message'] = (
-                            f"计算失败：不符合规范 9.4.1-2 设计流量工况下的超高要求。\n\n"
-                            f"设计流量工况下超高 Fb = {Fb_design_check:.3f} m < 最小需求 {Fb_design_min:.3f} m\n"
-                            f"根据规范 9.4.1-2，U形断面设计流量时超高不应小于槽身直径的1/10（即2R/10 = R/5 = {Fb_design_min:.3f} m）。\n\n"
-                            f"建议解决方案：\n"
-                            f"1. 增大半径 R\n"
-                            f"2. 或者留空半径输入框，由系统自动计算最优半径"
+                        _design_fb_warning = (
+                            f"【超高警告】设计流量工况下超高 Fb={Fb_design_check:.3f}m < 规范要求 {Fb_design_min:.3f}m（槽径/10），建议增大半径 R 或留空由系统自动计算"
                         )
-                        return result
                 
                 design_method += f'; 初拟f/R=0.4, 实际f/R={final_fR:.2f}'
             else:
@@ -529,44 +533,48 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
                         Fb_design_check = total_height - h_design_check
                         Fb_design_min = R / 5
                         if Fb_design_check < Fb_design_min:
-                            result['error_message'] = (
-                                f"计算失败：不符合规范 9.4.1-2 设计流量工况下的超高要求。\n\n"
-                                f"设计流量工况下超高 Fb = {Fb_design_check:.3f} m < 最小需求 {Fb_design_min:.3f} m\n"
-                                f"根据规范 9.4.1-2，U形断面设计流量时超高不应小于槽身直径的1/10（即2R/10 = R/5 = {Fb_design_min:.3f} m）。\n\n"
-                                f"建议解决方案：增大半径 R"
+                            _design_fb_warning = (
+                                f"【超高警告】设计流量工况下超高 Fb={Fb_design_check:.3f}m < 规范要求 {Fb_design_min:.3f}m（槽径/10），建议增大半径 R"
                             )
-                            return result
                 elif final_fR > FR_MAX:
-                    final_fR = FR_MAX
-                    f = final_fR * R
-                    total_height = f + R
-                    total_height = round_up_to_2_decimals(total_height)
+                    # 先尝试钳位到推荐最大值
+                    clamped_f = FR_MAX * R
+                    clamped_total = round_up_to_2_decimals(clamped_f + R)
                     
-                    # 再次验证超高（加大流量工况）
-                    Fb_check = total_height - h_inc
-                    if Fb_check < Fb_min_required:
-                        result['error_message'] = (
-                            f"计算失败：不符合规范 9.4.1-2 超高要求。\n\n"
-                            f"加大流量工况下超高 Fb = {Fb_check:.3f} m < 最小需求 {Fb_min_required:.2f} m\n\n"
-                            f"建议解决方案：增大半径 R"
+                    # 检查钳位后是否仍满足全部超高要求
+                    h_design_tmp = calculate_u_water_depth(Q, R, n, i, clamped_f)
+                    Fb_inc_ok = (clamped_total - h_inc) >= Fb_min_required
+                    Fb_design_ok = (h_design_tmp <= 0) or ((clamped_total - h_design_tmp) >= R / 5)
+                    
+                    if Fb_inc_ok and Fb_design_ok:
+                        # 钳位后仍满足超高，采用推荐最大值
+                        final_fR = FR_MAX
+                        f = clamped_f
+                        total_height = clamped_total
+                    else:
+                        # 钳位到FR_MAX会导致超高不足，保留计算f/R以满足规范强制超高
+                        f = total_height - R
+                        _design_fb_warning = (
+                            f"【提示】f/R = {final_fR:.2f} 略超推荐范围 [{FR_MIN:.1f}, {FR_MAX:.1f}]，"
+                            f"为满足规范 9.4.1-2 超高要求而采用。如需降低 f/R，请增大半径 R。"
                         )
-                        return result
-                    
-                    # 【规范 9.4.1-2】验证设计流量工况下的超高
-                    h_design_check = calculate_u_water_depth(Q, R, n, i, f)
-                    if h_design_check > 0:
-                        Fb_design_check = total_height - h_design_check
-                        Fb_design_min = R / 5
-                        if Fb_design_check < Fb_design_min:
-                            result['error_message'] = (
-                                f"计算失败：不符合规范 9.4.1-2 设计流量工况下的超高要求。\n\n"
-                                f"设计流量工况下超高 Fb = {Fb_design_check:.3f} m < 最小需求 {Fb_design_min:.3f} m\n"
-                                f"根据规范 9.4.1-2，U形断面设计流量时超高不应小于槽身直径的1/10（即2R/10 = R/5 = {Fb_design_min:.3f} m）。\n\n"
-                                f"建议解决方案：增大半径 R"
-                            )
-                            return result
                 else:
                     f = final_fR * R
+                
+                # --- 用最终f重新校核设计超高（初始h_inc可能受限于较小f而偏低） ---
+                h_recheck = calculate_u_water_depth(Q, R, n, i, f)
+                if h_recheck > 0:
+                    Fb_recheck = total_height - h_recheck
+                    Fb_design_min = R / 5
+                    if Fb_recheck < Fb_design_min:
+                        total_height = round_up_to_2_decimals(h_recheck + Fb_design_min)
+                        final_fR = (total_height - R) / R
+                        f = total_height - R
+                        if final_fR > FR_MAX:
+                            _design_fb_warning = (
+                                f"【提示】f/R = {final_fR:.2f} 略超推荐范围 [{FR_MIN:.1f}, {FR_MAX:.1f}]，"
+                                f"为满足规范 9.4.1-2 超高要求而采用。如需降低 f/R，请增大半径 R。"
+                            )
                 
                 design_method += f'; 反算f/R={final_fR:.2f}'
             
@@ -578,7 +586,7 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
         design_method = '搜索R(求最小槽身面积)'
         
         # 超高最小需求
-        Fb_min_required = 0.10
+        Fb_min_required = Fb_inc_min
         
         R_current = R_SEARCH_MIN
         while R_current <= R_SEARCH_MAX:
@@ -589,10 +597,15 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
             
             # 计算加大水深
             h_inc = calculate_u_water_depth(Q_increased, R_current, n, i, f_current)
+            if h_inc <= 0 and FR_MAX * R_current > f_current:
+                # 初始f/R不足，尝试最大f/R
+                f_current = FR_MAX * R_current
+                total_height_current = f_current + R_current
+                h_inc = calculate_u_water_depth(Q_increased, R_current, n, i, f_current)
             
             if h_inc > 0:
                 # 计算安全超高
-                safety_height = max(R_current / 5, 0.1)
+                safety_height = max(R_current / 5, Fb_inc_min)
                 required_height = h_inc + safety_height
                 
                 # 【规范 9.4.1-2】考虑超高需求
@@ -659,8 +672,9 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     
     if not found_solution:
         if manual_R:
+            fail_reason = "加大流量工况" if check_increase else "设计流量"
             result['error_message'] = (
-                f"计算失败：指定的半径 R={manual_R:.3f} m 过小，无法满足加大流量工况的要求。\n\n"
+                f"计算失败：指定的半径 R={manual_R:.3f} m 过小，无法满足{fail_reason}的要求。\n\n"
                 "建议解决方案：\n"
                 "1. 增大半径\n"
                 "2. 或者留空半径输入框，由系统自动计算最优半径"
@@ -708,13 +722,18 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     Fb_design_min_required = R / 5  # 设计流量时的最小超高要求
     
     if Fb_design < Fb_design_min_required:
-        result['error_message'] = (
-            f"计算失败：不符合规范 9.4.1-2 设计流量工况下的超高要求。\n\n"
-            f"设计流量工况下超高 Fb = {Fb_design:.3f} m < 最小需求 {Fb_design_min_required:.3f} m\n"
-            f"根据规范 9.4.1-2，U形断面设计流量时超高不应小于槽身直径的1/10（即2R/10 = R/5 = {Fb_design_min_required:.3f} m）。\n\n"
-            f"建议解决方案：增大R或调整f/R比值"
-        )
-        return result
+        if manual_R is not None and manual_R > 0:
+            _design_fb_warning = (
+                f"【超高警告】设计流量工况下超高 Fb={Fb_design:.3f}m < 规范要求 {Fb_design_min_required:.3f}m（槽径/10），建议增大半径 R"
+            )
+        else:
+            result['error_message'] = (
+                f"计算失败：不符合规范 9.4.1-2 设计流量工况下的超高要求。\n\n"
+                f"设计流量工况下超高 Fb = {Fb_design:.3f} m < 最小需求 {Fb_design_min_required:.3f} m\n"
+                f"根据规范 9.4.1-2，U形断面设计流量时超高不应小于槽身直径的1/10（即2R/10 = R/5 = {Fb_design_min_required:.3f} m）。\n\n"
+                f"建议解决方案：增大R或调整f/R比值"
+            )
+            return result
     
     # 总面积
     A_total = calculate_u_total_area(total_height, R)
@@ -722,16 +741,19 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     # 【规范 9.4.1-1】检查设计流速是否在推荐范围内
     v_recommended_min = 1.0  # m/s
     v_recommended_max = 2.5  # m/s
-    warning_msg = ''
+    warning_msg = _design_fb_warning
+    _sep = '\n' if _design_fb_warning else ''
     
     if V_design < v_recommended_min:
         warning_msg = (
+            _design_fb_warning + _sep +
             f"【流速提示】设计流速 V = {V_design:.3f} m/s < 推荐范围 [{v_recommended_min:.1f}, {v_recommended_max:.1f}] m/s\n"
             f"根据规范 9.4.1-1，槽内设计流速宜为 1.0～2.5 m/s。\n"
             f"当前流速过小，可能造成淤积，建议考虑调整断面尺寸。"
         )
     elif V_design > v_recommended_max:
         warning_msg = (
+            _design_fb_warning + _sep +
             f"【流速提示】设计流速 V = {V_design:.3f} m/s > 推荐范围 [{v_recommended_min:.1f}, {v_recommended_max:.1f}] m/s\n"
             f"根据规范 9.4.1-1，槽内设计流速宜为 1.0～2.5 m/s。\n"
             f"当前流速过大，可能造成冲刷，建议考虑调整断面尺寸。"
@@ -866,6 +888,8 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
     result['increase_percent'] = increase_percent
     result['Q_increased'] = Q_increased
     
+    check_increase = (increase_percent > 0)
+    
     # 搜索合适的矩形尺寸
     found_solution = False
     best_width = 0
@@ -874,7 +898,7 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
     # 【规范 9.4.1-2】矩形断面超高要求：
     # - 设计流量：超高不应小于 h/12 + 0.05m
     # - 加大流量：超高不应小于 0.10m
-    Fb_inc_min = 0.10  # 加大流量超高最小值
+    Fb_inc_min = 0.10 if check_increase else 0.0  # 加大流量超高最小值（不勾选时不约束）
     
     if manual_B is not None and manual_B > 0:
         # 用户指定了槽宽B，直接使用该值

@@ -28,6 +28,47 @@ APP_NAME_EN = "CanalHydraulicCalc"
 APP_VERSION = "1.0.1"
 
 # ============================================================
+# 不需要的 Qt 模块（删除可显著减小包体积）
+# 保留：QtCore/Gui/Widgets/WebEngine/Network/Svg/PrintSupport/OpenGL/Qml/Quick（WebEngine依赖）
+# ============================================================
+QT_UNUSED_PREFIXES = [
+    "Qt63DAnim", "Qt63DCore", "Qt63DExtras",
+    "Qt63DInput", "Qt63DLogic", "Qt63DRender",
+    "Qt6Bluetooth",
+    "Qt6Charts",
+    "Qt6DataVisualization",
+    "Qt6Location",
+    "Qt6Nfc",
+    "Qt6RemoteObjects",
+    "Qt6Sensors",
+    "Qt6SerialBus", "Qt6SerialPort",
+    "Qt6Test",
+    "Qt6VirtualKeyboard",
+    "Qt6Designer",
+    "Qt6Help",
+    "Qt6SpatialAudio",
+    "Qt6TextToSpeech",
+    "Qt6Quick3D",
+    "Qt6LabsAnimation",
+    "Qt6LabsFolderListModel",
+    "Qt6LabsQmlModels",
+    "Qt6LabsSettings",
+    "Qt6LabsSharedImage",
+    "Qt6LabsWavefrontMesh",
+]
+
+PYSIDE6_UNUSED_MODULES = [
+    "PySide6.Qt3DAnimation", "PySide6.Qt3DCore", "PySide6.Qt3DExtras",
+    "PySide6.Qt3DInput", "PySide6.Qt3DLogic", "PySide6.Qt3DRender",
+    "PySide6.QtBluetooth", "PySide6.QtCharts", "PySide6.QtDataVisualization",
+    "PySide6.QtLocation", "PySide6.QtNfc", "PySide6.QtRemoteObjects",
+    "PySide6.QtSensors", "PySide6.QtSerialBus", "PySide6.QtSerialPort",
+    "PySide6.QtTest", "PySide6.QtVirtualKeyboard", "PySide6.QtDesigner",
+    "PySide6.QtHelp", "PySide6.QtSpatialAudio", "PySide6.QtTextToSpeech",
+    "PySide6.QtQuick3D",
+]
+
+# ============================================================
 # 路径（build.py 位于 tools/ 下，项目根目录在上一级）
 # ============================================================
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +77,32 @@ BUILD_DIR = os.path.join(PROJECT_ROOT, "build")
 MAIN_SCRIPT = os.path.join(PROJECT_ROOT, "main.py")
 ICON_FILE = os.path.join(PROJECT_ROOT, "icon.ico")
 
+
+
+def _clean_unused_qt_dlls(dist_folder):
+    """删除 _internal/PySide6/ 中不需要的 Qt DLL，显著减小包体积。"""
+    pyside6_dir = os.path.join(dist_folder, "_internal", "PySide6")
+    if not os.path.isdir(pyside6_dir):
+        # PyInstaller 5.x 以下没有 _internal
+        pyside6_dir = os.path.join(dist_folder, "PySide6")
+    if not os.path.isdir(pyside6_dir):
+        return
+
+    removed_count = 0
+    removed_bytes = 0
+    for fname in os.listdir(pyside6_dir):
+        if not fname.endswith(".dll"):
+            continue
+        for prefix in QT_UNUSED_PREFIXES:
+            if fname.startswith(prefix):
+                fpath = os.path.join(pyside6_dir, fname)
+                removed_bytes += os.path.getsize(fpath)
+                os.remove(fpath)
+                removed_count += 1
+                break
+    if removed_count:
+        print(f"  [瘦身] 已删除 {removed_count} 个无用 Qt DLL，"
+              f"释放 {removed_bytes / 1024 / 1024:.1f} MB")
 
 
 def _clean_py_sources(dist_folder):
@@ -149,6 +216,10 @@ def build():
     for mod in hidden_imports:
         args.append(f"--hidden-import={mod}")
 
+    # ---- 排除明确不需要的 PySide6 子模块（减少分析范围） ----
+    for mod in PYSIDE6_UNUSED_MODULES:
+        args.append(f"--exclude-module={mod}")
+
     # ---- 收集正式 Python 包的子模块（有 __init__.py，编译为字节码） ----
     collect_submodules = [
         "渠系断面设计",
@@ -195,6 +266,9 @@ def build():
 
     # ---- 清理残留的 .py 源码文件（双保险） ----
     _clean_py_sources(os.path.join(DIST_DIR, APP_NAME_EN))
+
+    # ---- 删除用不到的 Qt 模块 DLL ----
+    _clean_unused_qt_dlls(os.path.join(DIST_DIR, APP_NAME_EN))
 
     # ---- 打包为 zip ----
     print(f"\n[2/2] 打包完成，正在压缩为 zip...\n")

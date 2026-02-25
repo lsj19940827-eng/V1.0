@@ -466,7 +466,7 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
 
     # ── 浏览按钮 ─────────────────────────────────────────────
     def _browse_terrain(self):
-        p, _ = QFileDialog.getOpenFileName(self, "选择地形文件", "", "地形文件 (*.dxf *.csv *.txt *.xlsx);;所有文件 (*)")
+        p, _ = QFileDialog.getOpenFileName(self, "选择地形文件", "", "地形文件 (*.dxf *.csv *.txt *.xlsx *.xls);;所有文件 (*)")
         if p: self._terrain_path.setText(p)
 
     def _browse_alignment(self):
@@ -475,7 +475,7 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
 
     def _browse_alignment_table(self):
         p, _ = QFileDialog.getOpenFileName(self, "选择中心线坐标表", "",
-            "坐标文件 (*.xlsx *.csv *.txt);;所有文件 (*)")
+            "坐标文件 (*.xlsx *.xls *.csv *.txt);;所有文件 (*)")
         if p: self._al_sta_path.setText(p)
 
     def _browse_outdir(self):

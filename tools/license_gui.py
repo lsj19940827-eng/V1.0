@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFormLayout, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QMainWindow,
-    QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
+    QStackedWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 from qfluentwidgets import (
     BodyLabel, CaptionLabel, CardWidget, ComboBox, ElevatedCardWidget,
@@ -256,51 +256,98 @@ class LicenseManager(QMainWindow):
 
 class _ListTab(QWidget):
     def __init__(self, win): super().__init__(); self._win = win; self._build()
+
+    # ── 构建 UI ──────────────────────────────────────────────
     def _build(self):
-        lay = QVBoxLayout(self); lay.setContentsMargins(24, 16, 24, 12); lay.setSpacing(10)
-        self.table = TableWidget(self); self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["姓名", "机器码", "授权时间", "过期时间", "状态"])
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.setColumnWidth(0, 90); self.table.setColumnWidth(2, 90)
-        self.table.setColumnWidth(3, 100); self.table.setColumnWidth(4, 70)
-        self.table.setEditTriggers(TableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(TableWidget.SelectRows)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setBorderVisible(True); self.table.setBorderRadius(8)
-        lay.addWidget(self.table)
-        br = QHBoxLayout()
+        lay = QVBoxLayout(self); lay.setContentsMargins(24, 12, 24, 12); lay.setSpacing(6)
+
+        self._sub_pivot = Pivot()
+        lay.addWidget(self._sub_pivot)
+
+        self._sub_stack = QStackedWidget()
+        lay.addWidget(self._sub_stack)
+
+        # ---- 子页签 1: 有效授权 ----
+        active_w = QWidget(); al = QVBoxLayout(active_w)
+        al.setContentsMargins(0, 6, 0, 0); al.setSpacing(10)
+        self._active_table = self._make_table(); al.addWidget(self._active_table)
+        br1 = QHBoxLayout()
         for text, slot in [("刷新", self.refresh), ("重新生成授权码", self._regen),
                             ("吊销授权", self._revoke), ("从云端同步", self._pull)]:
-            btn = PushButton(text); btn.setFixedHeight(34); btn.clicked.connect(slot); br.addWidget(btn)
-        lay.addLayout(br); self.refresh()
+            btn = PushButton(text); btn.setFixedHeight(34); btn.clicked.connect(slot); br1.addWidget(btn)
+        al.addLayout(br1); self._sub_stack.addWidget(active_w)
+
+        # ---- 子页签 2: 已吊销 ----
+        revoked_w = QWidget(); rl = QVBoxLayout(revoked_w)
+        rl.setContentsMargins(0, 6, 0, 0); rl.setSpacing(10)
+        self._revoked_table = self._make_table(); rl.addWidget(self._revoked_table)
+        br2 = QHBoxLayout()
+        for text, slot in [("刷新", self.refresh), ("恢复授权", self._restore), ("从云端同步", self._pull)]:
+            btn = PushButton(text); btn.setFixedHeight(34); btn.clicked.connect(slot); br2.addWidget(btn)
+        rl.addLayout(br2); self._sub_stack.addWidget(revoked_w)
+
+        self._sub_pivot.addItem("active",  "有效授权", lambda: self._sub_stack.setCurrentIndex(0))
+        self._sub_pivot.addItem("revoked", "已吊销",   lambda: self._sub_stack.setCurrentIndex(1))
+        self._sub_pivot.setCurrentItem("active")
+        self.refresh()
+
+    def _make_table(self):
+        t = TableWidget(self); t.setColumnCount(4)
+        t.setHorizontalHeaderLabels(["姓名", "机器码", "授权时间", "过期时间"])
+        t.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        t.setColumnWidth(0, 90); t.setColumnWidth(2, 100); t.setColumnWidth(3, 100)
+        t.setEditTriggers(TableWidget.NoEditTriggers)
+        t.setSelectionBehavior(TableWidget.SelectRows)
+        t.verticalHeader().setVisible(False)
+        t.setBorderVisible(True); t.setBorderRadius(8)
+        return t
+
+    # ── 刷新 ─────────────────────────────────────────────────
     def refresh(self):
-        rows = _load_ledger(); self.table.setRowCount(len(rows))
+        rows = _load_ledger()
+        active, revoked = [], []
+        for r in rows:
+            (revoked if r["状态"] == "已吊销" else active).append(r)
+        self._fill(self._active_table, active)
+        self._fill(self._revoked_table, revoked, gray=True)
+
+    @staticmethod
+    def _fill(table, rows, gray=False):
+        table.setRowCount(len(rows))
         for i, r in enumerate(rows):
-            vals = [r["姓名"], r["机器码"][:24]+"...", r["授权时间"], r.get("过期时间") or "(永久)", r["状态"]]
+            vals = [r["姓名"], r["机器码"][:24]+"...", r["授权时间"], r.get("过期时间") or "(永久)"]
             for j, v in enumerate(vals):
                 item = QTableWidgetItem(v); item.setTextAlignment(Qt.AlignCenter)
-                if r["状态"] == "已吊销": item.setForeground(QColor("#aaa"))
-                self.table.setItem(i, j, item)
+                if gray: item.setForeground(QColor("#aaa"))
+                table.setItem(i, j, item)
+
+    # ── 辅助 ─────────────────────────────────────────────────
     def _ib(self, level, title, msg, dur=3000):
         fn = {"s": InfoBar.success, "w": InfoBar.warning, "e": InfoBar.error, "i": InfoBar.info}[level]
         fn(title, msg, duration=dur, parent=self._win, position=InfoBarPosition.TOP)
-    def _get_sel(self):
-        idx = self.table.currentRow()
+
+    def _get_sel(self, from_revoked=False):
+        table = self._revoked_table if from_revoked else self._active_table
+        idx = table.currentRow()
         if idx < 0: self._ib("w", "提示", "请先在表格中选中一行"); return None, None
         rows = _load_ledger()
-        return (None, None) if idx >= len(rows) else (rows, idx)
+        mapping = [i for i, r in enumerate(rows)
+                   if (r["状态"] == "已吊销") == from_revoked]
+        if idx >= len(mapping): return None, None
+        return rows, mapping[idx]
+
+    # ── 操作 ─────────────────────────────────────────────────
     def _regen(self):
         rows, idx = self._get_sel()
         if rows is None: return
         row = rows[idx]
-        if row["状态"] == "已吊销": self._ib("e", "无法操作", f"{row['姓名']} 已被吊销"); return
         self._ib("s", "成功", f"已生成 {row['姓名']} 的授权码")
         _CodeDialog(self._win, row["姓名"], _lic_to_code(_generate_lic(row))).exec()
+
     def _revoke(self):
         rows, idx = self._get_sel()
         if rows is None: return
         row = rows[idx]
-        if row["状态"] == "已吊销": self._ib("w", "提示", f"{row['姓名']} 已处于吊销状态"); return
         dlg = MessageBox("确认吊销",
             f"确定吊销 {row['姓名']} 的授权？\n\n吊销后将同步在线黑名单，该用户任意版本下次启动即失效。",
             self._win)
@@ -312,6 +359,23 @@ class _ListTab(QWidget):
                      "已吊销" if ok else "同步失败",
                      f"{row['姓名']} 授权已吊销，云端黑名单已同步" if ok
                      else "吊销成功，但云端同步失败，请检查网络后点【从云端同步】", 4000)
+        w.done.connect(_done); w.start(); self._win._workers.append(w)
+
+    def _restore(self):
+        rows, idx = self._get_sel(from_revoked=True)
+        if rows is None: return
+        row = rows[idx]
+        dlg = MessageBox("确认恢复",
+            f"确定恢复 {row['姓名']} 的授权？\n\n恢复后将从在线黑名单中移除。",
+            self._win)
+        if not dlg.exec(): return
+        rows[idx]["状态"] = "有效"; _save_ledger(rows); self.refresh()
+        w = _GistWorker("sync", rows)
+        def _done(ok):
+            self._ib("s" if ok else "e",
+                     "已恢复" if ok else "同步失败",
+                     f"{row['姓名']} 授权已恢复，云端黑名单已同步" if ok
+                     else "恢复成功，但云端同步失败，请检查网络后点【从云端同步】", 4000)
         w.done.connect(_done); w.start(); self._win._workers.append(w)
 
     def _pull(self):

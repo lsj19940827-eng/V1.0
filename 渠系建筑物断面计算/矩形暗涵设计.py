@@ -11,7 +11,7 @@
 
 设计说明：
 - 当底宽（B）和宽深比（B/h）同时为空时，自动搜索全局经济最优断面（B×H最小）
-- 高宽比限值H/B（或B/H）一般不超过1.2，参考 GB 50288-2018 第11.2.5条
+- 高宽比H/B（或B/H）建议不超过1.2（提醒，不作为强制约束），参考 GB 50288-2018 第11.2.5条
 
 版本: V1.0
 """
@@ -118,13 +118,12 @@ def compute_H_min_optimal(h_inc: float, B: float) -> float:
 
     约束来源：
       1. PA_inc ≥ 10%  → H ≥ h_inc / 0.9
-      2. B/H ≤ 1.2     → H ≥ B / 1.2
-      3. 净空高度要求（分段，消除 H/6 的循环依赖）
-      4. 最小洞高常量   → H ≥ MIN_HEIGHT_RECT
+      2. 净空高度要求（分段，消除 H/6 的循环依赖）
+      3. 最小洞高常量   → H ≥ MIN_HEIGHT_RECT
+    注：H/B 和 B/H 为建议值（≤1.2），不作为 H_min 的强制约束
     """
     # 各约束下限
     H_pa   = h_inc / 0.9                        # PA_inc ≥ 10%
-    H_bh   = B / HB_RATIO_LIMIT                  # B/H ≤ 1.2
     H_abs  = MIN_HEIGHT_RECT                      # 绝对最小值
 
     # 净空高度约束（分段处理 H/6 的循环依赖）
@@ -138,7 +137,7 @@ def compute_H_min_optimal(h_inc: float, B: float) -> float:
     if H_clear > 3.0:
         H_clear = max(H_clear, h_inc + 0.5)
 
-    return max(H_pa, H_bh, H_clear, H_abs)
+    return max(H_pa, H_clear, H_abs)
 
 
 def compute_H_max_optimal(h_inc: float, B: float) -> float:
@@ -147,11 +146,10 @@ def compute_H_max_optimal(h_inc: float, B: float) -> float:
 
     约束来源：
       1. PA_inc ≤ 30%  → H ≤ h_inc / 0.7
-      2. H/B ≤ 1.2     → H ≤ 1.2 × B
+    注：H/B ≤ 1.2 为建议值，不作为 H_max 的强制约束
     """
     H_pa_max = h_inc / 0.7        # PA_inc ≤ 30%
-    H_hb_max = HB_RATIO_LIMIT * B # H/B ≤ 1.2
-    return min(H_pa_max, H_hb_max)
+    return H_pa_max
 
 
 # ============================================================
@@ -485,10 +483,13 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
                     beta += b_step; continue
 
                 # 3. 加大工况水深（热启动快速求解）
-                h_inc_t, ok_i = _solve_h_inc_fast(Q_increased, B_t, n, slope, prev_h_inc)
-                if not ok_i or h_inc_t <= h_des:
-                    beta += b_step; continue
-                prev_h_inc = h_inc_t
+                if increase_percent > 0:
+                    h_inc_t, ok_i = _solve_h_inc_fast(Q_increased, B_t, n, slope, prev_h_inc)
+                    if not ok_i or h_inc_t <= h_des:
+                        beta += b_step; continue
+                    prev_h_inc = h_inc_t
+                else:
+                    h_inc_t = h_des  # 无加大流量时，加大水深 = 设计水深
 
                 # 4. 解析求 H_min / H_max
                 H_mn = compute_H_min_optimal(h_inc_t, B_t)
@@ -501,21 +502,24 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
                 if h_des >= H_t or h_inc_t >= H_t:
                     beta += b_step; continue
 
-                # 6. 全量净空验证（加大工况严格，设计工况上限适当放宽）
-                out_inc = calculate_rectangular_outputs(B_t, H_t, h_inc_t, n, slope)
+                # 6. 净空验证
                 req_fb = get_required_freeboard_height_rect(H_t)
-                if out_inc['freeboard_hgt'] < req_fb:
-                    beta += b_step; continue
-                if not (MIN_FREEBOARD_PCT_RECT * 100
-                        <= out_inc['freeboard_pct']
-                        <= MAX_FREEBOARD_PCT_RECT * 100):
-                    beta += b_step; continue
+                if increase_percent > 0:
+                    out_inc = calculate_rectangular_outputs(B_t, H_t, h_inc_t, n, slope)
+                    if out_inc['freeboard_hgt'] < req_fb:
+                        beta += b_step; continue
+                    if not (MIN_FREEBOARD_PCT_RECT * 100
+                            <= out_inc['freeboard_pct']
+                            <= MAX_FREEBOARD_PCT_RECT * 100):
+                        beta += b_step; continue
+                    if out_inc['V'] > v_max:
+                        beta += b_step; continue
                 out_des = calculate_rectangular_outputs(B_t, H_t, h_des, n, slope)
-                if not (MIN_FREEBOARD_PCT_RECT * 100
-                        <= out_des['freeboard_pct']
-                        <= MAX_FREEBOARD_PCT_RECT * 100 + 20):
+                if out_des['freeboard_pct'] < MIN_FREEBOARD_PCT_RECT * 100:
                     beta += b_step; continue
-                if out_inc['V'] > v_max:
+                if increase_percent == 0 and out_des['freeboard_pct'] > MAX_FREEBOARD_PCT_RECT * 100:
+                    beta += b_step; continue
+                if out_des['freeboard_hgt'] < req_fb:
                     beta += b_step; continue
 
                 # 7. 全局最小面积记录（不提前 break）
@@ -584,31 +588,35 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
                 if outputs_design['freeboard_pct'] < MIN_FREEBOARD_PCT_RECT * 100:
                     B += DIM_INCREMENT
                     continue
-                if outputs_design['freeboard_pct'] > MAX_FREEBOARD_PCT_RECT * 100 + 20:
+                if increase_percent == 0 and outputs_design['freeboard_pct'] > MAX_FREEBOARD_PCT_RECT * 100:
                     B += DIM_INCREMENT
                     continue
 
-                h_inc, success_inc = solve_water_depth_rectangular(B, H_trial, n, slope, Q_increased)
-                if not success_inc or h_inc >= H_trial:
-                    B += DIM_INCREMENT
-                    continue
+                if increase_percent > 0:
+                    h_inc, success_inc = solve_water_depth_rectangular(B, H_trial, n, slope, Q_increased)
+                    if not success_inc or h_inc >= H_trial:
+                        B += DIM_INCREMENT
+                        continue
 
-                outputs_inc = calculate_rectangular_outputs(B, H_trial, h_inc, n, slope)
+                    outputs_inc = calculate_rectangular_outputs(B, H_trial, h_inc, n, slope)
 
-                if outputs_inc['V'] > v_max:
-                    B += DIM_INCREMENT
-                    continue
+                    if outputs_inc['V'] > v_max:
+                        B += DIM_INCREMENT
+                        continue
 
-                # 加大流量工况净空验证（关键约束）
-                if (outputs_inc['freeboard_hgt'] >= req_fb_hgt and
-                        outputs_inc['freeboard_pct'] >= MIN_FREEBOARD_PCT_RECT * 100 and
-                        outputs_inc['freeboard_pct'] <= MAX_FREEBOARD_PCT_RECT * 100):
-                    A_total = outputs_design['A_total']
-                    if A_total < best_A_total:
-                        best_A_total = A_total
-                        best_B = B
-                        best_H = H_trial
-                        best_found = True
+                    # 加大流量工况净空验证（关键约束）
+                    if not (outputs_inc['freeboard_hgt'] >= req_fb_hgt and
+                            outputs_inc['freeboard_pct'] >= MIN_FREEBOARD_PCT_RECT * 100 and
+                            outputs_inc['freeboard_pct'] <= MAX_FREEBOARD_PCT_RECT * 100):
+                        B += DIM_INCREMENT
+                        continue
+
+                A_total = outputs_design['A_total']
+                if A_total < best_A_total:
+                    best_A_total = A_total
+                    best_B = B
+                    best_H = H_trial
+                    best_found = True
 
                 B += DIM_INCREMENT
         else:
@@ -629,12 +637,6 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
 
                     req_fb_hgt = get_required_freeboard_height_rect(h_target * 1.5)
                     H_trial = max(MIN_HEIGHT_RECT, h_target + req_fb_hgt + 0.1)
-
-                    HB_ratio_trial = H_trial / B if B > 0 else 0
-                    BH_ratio_trial = B / H_trial if H_trial > 0 else 0
-                    if HB_ratio_trial > HB_RATIO_LIMIT or BH_ratio_trial > HB_RATIO_LIMIT:
-                        bh_ratio += bh_ratio_step
-                        continue
 
                     h_design, success_design = solve_water_depth_rectangular(B, H_trial, n, slope, Q)
 
@@ -661,44 +663,46 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
                     if outputs_design['freeboard_pct'] < MIN_FREEBOARD_PCT_RECT * 100:
                         bh_ratio += bh_ratio_step
                         continue
-                    # 设计流量工况净空面积上限可适当放宽（关键约束在加大流量工况）
-                    if outputs_design['freeboard_pct'] > MAX_FREEBOARD_PCT_RECT * 100 + 20:
+                    if increase_percent == 0 and outputs_design['freeboard_pct'] > MAX_FREEBOARD_PCT_RECT * 100:
                         bh_ratio += bh_ratio_step
                         continue
 
-                    h_inc, success_inc = solve_water_depth_rectangular(B, H_trial, n, slope, Q_increased)
+                    if increase_percent > 0:
+                        h_inc, success_inc = solve_water_depth_rectangular(B, H_trial, n, slope, Q_increased)
 
-                    if not success_inc or h_inc >= H_trial:
-                        bh_ratio += bh_ratio_step
-                        continue
+                        if not success_inc or h_inc >= H_trial:
+                            bh_ratio += bh_ratio_step
+                            continue
 
-                    outputs_inc = calculate_rectangular_outputs(B, H_trial, h_inc, n, slope)
+                        outputs_inc = calculate_rectangular_outputs(B, H_trial, h_inc, n, slope)
 
-                    if outputs_inc['V'] > v_max:
-                        bh_ratio += bh_ratio_step
-                        continue
+                        if outputs_inc['V'] > v_max:
+                            bh_ratio += bh_ratio_step
+                            continue
 
-                    # 加大流量工况净空验证（这是关键约束）
-                    if (outputs_inc['freeboard_hgt'] >= req_fb_hgt and
-                            outputs_inc['freeboard_pct'] >= MIN_FREEBOARD_PCT_RECT * 100 and
-                            outputs_inc['freeboard_pct'] <= MAX_FREEBOARD_PCT_RECT * 100):
+                        # 加大流量工况净空验证（关键约束）
+                        if not (outputs_inc['freeboard_hgt'] >= req_fb_hgt and
+                                outputs_inc['freeboard_pct'] >= MIN_FREEBOARD_PCT_RECT * 100 and
+                                outputs_inc['freeboard_pct'] <= MAX_FREEBOARD_PCT_RECT * 100):
+                            bh_ratio += bh_ratio_step
+                            continue
 
-                        A_total = outputs_design['A_total']
+                    A_total = outputs_design['A_total']
 
-                        if use_target_BH_ratio:
-                            BH_diff = abs(actual_BH_ratio - target_BH_ratio)
-                            if BH_diff < best_BH_diff or (abs(BH_diff - best_BH_diff) < 0.01 and A_total < best_A_total):
-                                best_BH_diff = BH_diff
-                                best_A_total = A_total
-                                best_B = B
-                                best_H = H_trial
-                                best_found = True
-                        else:
-                            if A_total < best_A_total:
-                                best_A_total = A_total
-                                best_B = B
-                                best_H = H_trial
-                                best_found = True
+                    if use_target_BH_ratio:
+                        BH_diff = abs(actual_BH_ratio - target_BH_ratio)
+                        if BH_diff < best_BH_diff or (abs(BH_diff - best_BH_diff) < 0.01 and A_total < best_A_total):
+                            best_BH_diff = BH_diff
+                            best_A_total = A_total
+                            best_B = B
+                            best_H = H_trial
+                            best_found = True
+                    else:
+                        if A_total < best_A_total:
+                            best_A_total = A_total
+                            best_B = B
+                            best_H = H_trial
+                            best_found = True
 
                     bh_ratio += bh_ratio_step
 
@@ -706,13 +710,22 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
     
     if not best_found:
         if manual_B:
-            result['error_message'] = (
-                f"计算失败：指定的底宽 B={manual_B:.3f} m 无法满足要求。\n\n"
-                "可能原因及建议：\n"
-                "1. 底宽过小，导致加大流量工况下无净空或水深超出洞高；\n"
-                "2. 流速超出限制；\n"
-                "建议：增大底宽，或者留空底宽由系统自动计算。"
-            )
+            if increase_percent > 0:
+                result['error_message'] = (
+                    f"计算失败：指定的底宽 B={manual_B:.3f} m 无法满足要求。\n\n"
+                    "可能原因及建议：\n"
+                    "1. 底宽过小，导致加大流量工况下无净空或水深超出洞高；\n"
+                    "2. 流速超出限制；\n"
+                    "建议：增大底宽，或者留空底宽由系统自动计算。"
+                )
+            else:
+                result['error_message'] = (
+                    f"计算失败：指定的底宽 B={manual_B:.3f} m 无法满足要求。\n\n"
+                    "可能原因及建议：\n"
+                    "1. 底宽过小，导致设计流量工况下净空或水深不满足要求；\n"
+                    "2. 流速超出限制；\n"
+                    "建议：增大底宽，或者留空底宽由系统自动计算。"
+                )
         elif use_target_HB_ratio:
             result['error_message'] = (
                 f"计算失败：指定的高宽比 H/B={target_HB_ratio:.2f} 无法找到满足要求的断面尺寸。\n\n"
@@ -779,8 +792,12 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
     
     result['B'] = B
     result['H'] = H
-    result['HB_ratio'] = H / B if B > 0 else 0
+    HB_ratio_val = H / B if B > 0 else 0
+    BH_box_ratio_val = B / H if H > 0 else 0
+    result['HB_ratio'] = HB_ratio_val
     result['BH_ratio'] = B / h_design if h_design > 0 else 0
+    result['hb_ratio_ok'] = (HB_ratio_val <= HB_RATIO_LIMIT)         # H/B ≤ 1.2 建议值
+    result['bh_box_ratio_ok'] = (BH_box_ratio_val <= HB_RATIO_LIMIT) # B/H ≤ 1.2 建议值
     result['h_design'] = h_design
     result['V_design'] = outputs_design['V']
     result['A_design'] = outputs_design['A']
