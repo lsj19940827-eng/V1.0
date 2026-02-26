@@ -1,6 +1,6 @@
 # 明渠水力计算模块 — 产品需求文档 (PRD)
 
-> **版本**: v1.1  
+> **版本**: v1.2  
 > **创建日期**: 2026-02-22  
 > **最后更新**: 2026-02-25  
 > **状态**: 已实现（完成度 100%，含 U形）
@@ -376,8 +376,10 @@ QHBoxLayout
 │       ├── 流速参数区
 │       │   ├── 不淤流速 (m/s) — 默认0.1
 │       │   └── 不冲流速 (m/s) — 默认100.0
-│       ├── 流量加大区
-│       │   └── 流量加大比例 (%) — 留空自动计算
+│       ├── 考虑加大流量比例系数（CheckBox，默认勾选）
+│       ├── 流量加大区（仅勾选时可见）
+│       │   ├── 流量加大比例 (%) — 留空自动计算
+│       │   └── 动态提示标签（显示“自动计算”或“指定”及具体值）
 │       ├── 可选参数区
 │       │   ├── 指定宽深比 β（梯形/矩形可见）
 │       │   ├── 指定底宽 B (m)（梯形/矩形可见）
@@ -395,16 +397,19 @@ QHBoxLayout
 
 | 断面类型 | 显示控件 | 隐藏控件 | m值 |
 |---------|---------|---------|-----|
-| 梯形 | m, β, B | D | 用户输入（默认1.0） |
-| 矩形 | β, B | m, D | 强制设为0.0 |
-| 圆形 | D | m, β, B | — |
+| 梯形 | m, β, B | D, R/α/θ | 用户输入（默认1.0） |
+| 矩形 | β, B | m, D, R/α/θ | 强制设为0.0 |
+| 圆形 | D | m, β, B, R/α/θ | — |
+| U形 | R, α, θ | m, β, B, D | — |
 
 ### 5.3 计算结果显示
 
 #### 5.3.1 显示模式
 
-- **简要模式**（`detail_cb` 未选中）：输入参数 → 设计结果 → 加大工况 → 验证结果
+- **简要模式**（`detail_cb` 未选中）：输入参数 → 设计结果 → 加大工况（仅勾选时） → 验证结果
 - **详细模式**（`detail_cb` 选中）：增加逐步计算公式推导过程
+
+**加大流量条件化显示**：当 `use_increase=False`（不勾选“考虑加大流量比例系数”）时，简要模式和详细模式均跳过加大流量工况段落，验证结果仅使用设计流量工况数据。不勾选时 `manual_increase_percent=0` 传入计算内核。
 
 #### 5.3.2 梯形/矩形结果内容
 
@@ -714,7 +719,7 @@ design_channel(SectionType.TRAPEZOIDAL, Q=10.0, n=0.016, slope_inv=5000, v_min=0
 design_channel(SectionType.RECTANGULAR, Q=10.0, n=0.016, slope_inv=5000, v_min=0.6, v_max=2.5)
 design_channel(SectionType.CIRCULAR,    Q=10.0, n=0.016, slope_inv=5000, v_min=0.6, v_max=2.5)
 design_channel(SectionType.U_SECTION,   Q=2.0,  n=0.014, slope_inv=3000, v_min=0.1, v_max=100,
-               arc_radius=0.8, alpha_deg=14, theta_deg=152)
+               R=0.8, alpha_deg=14, theta_deg=152)
 ```
 
 ---
@@ -725,3 +730,4 @@ design_channel(SectionType.U_SECTION,   Q=2.0,  n=0.014, slope_inv=3000, v_min=0
 |------|------|----------|
 | v1.0 | 2026-02-22 | 创建。担梯形/矩形/圆形三种断面类型，完整计算引擎 + UI + DXF导出 + 批量计算集成 |
 | v1.1 | 2026-02-25 | 新增U形明渠断面类型。改动点：(1)明渠设计.py新增SectionType.U_SECTION、_u_arc_geometry、calculate_u_depth_for_flow、quick_calculate_u_section；(2)open_channel/panel.py UI/计算/结果显示/DXF/Word全链路；(3)open_channel/dxf_export.py _draw_u_section；(4)batch/panel.py批量计算+示例数据增至46行；(5)structure_type_selector.py明渠分类新增U形；(6)推求水面线全链路支持（enums/data_models/calculator/hydraulic_calc/shared_data_manager/water_profile面板）；(7)新增test21/22/23 U形测试 |
+| v1.2 | 2026-02-25 | 新增“考虑加大流量比例系数”CheckBox控件（`inc_cb`，默认勾选）：不勾选时`manual_increase_percent=0`传入计算内核，简要/详细模式均跳过加大流量工况段落，验证结果仅使用设计流量数据。Bug修复：`quick_calculate_trapezoidal`结果字典新增`result['m'] = m`，修复水面线计算中梯形断面边坡系数丢失问题。涉及文件：明渠设计.py、open_channel/panel.py、batch/panel.py |

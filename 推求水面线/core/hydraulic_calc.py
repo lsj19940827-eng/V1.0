@@ -1475,8 +1475,16 @@ class HydraulicCalculator:
         B2 = self.get_water_surface_width(next_node)
         
         # 计算渐变段长度
-        coefficient = TRANSITION_LENGTH_COEFFICIENTS.get(transition_type, 3.5)
-        length = coefficient * abs(B1 - B2)
+        # 倒虹吸直接按水深倍数确定（GB 50288-2018 §10.2.4），其他结构用基础公式
+        _siphon_adjacent = ("倒虹吸" in sv_prev) or ("倒虹吸" in sv_next)
+        if _siphon_adjacent:
+            _h_ch = prev_node.water_depth if transition_type == "进口" else next_node.water_depth
+            if _h_ch <= 0:
+                _h_ch = max(prev_node.water_depth, next_node.water_depth) if max(prev_node.water_depth, next_node.water_depth) > 0 else 2.0
+            length = (5 if transition_type == "进口" else 6) * _h_ch
+        else:
+            coefficient = TRANSITION_LENGTH_COEFFICIENTS.get(transition_type, 3.5)
+            length = coefficient * abs(B1 - B2)
         
         # 计算沿程损失（平均值法）
         R1 = prev_node.section_params.get('R', 0) if prev_node.section_params else 0
@@ -1694,6 +1702,8 @@ class HydraulicCalculator:
         - 渡槽进口: max(计算值, 6倍渠道设计水深)
         - 渡槽出口: max(计算值, 8倍渠道设计水深)
         - 隧洞进出口: max(计算值, 5倍渠道水深, 3倍洞径或洞宽)
+        - 倒虹吸进口: 直接取 5倍上游渠道设计水深（GB 50288-2018 §10.2.4，3~5倍取大值）
+        - 倒虹吸出口: 直接取 6倍下游渠道设计水深（GB 50288-2018 §10.2.4，4~6倍取大值）
         
         Args:
             transition_node: 渐变段节点
@@ -1784,16 +1794,15 @@ class HydraulicCalculator:
             
             L_result = max(L_result, L_depth, L_tunnel)
         
-        # 倒虹吸约束（规范10.2.4）
+        # 倒虹吸（GB 50288-2018 §10.2.4）
         # 进口渐变段长度宜取上游渠道设计水深的3~5倍（取大值5倍）
         # 出口渐变段长度宜取下游渠道设计水深的4~6倍（取大值6倍）
-        # 注意：与隧洞不同，倒虹吸不使用洞径约束，仅用水深倍数
+        # 注意：倒虹吸直接按水深倍数确定，不使用基础公式 L=k×|B₁-B₂|
         elif "倒虹吸" in struct_name:
             constraints = TRANSITION_LENGTH_CONSTRAINTS.get("倒虹吸", {})
             type_constraint = constraints.get(transition_type, {})
             depth_multiplier = type_constraint.get("depth_multiplier", 5 if transition_type == "进口" else 6)
-            L_min = depth_multiplier * channel_depth
-            L_result = max(L_result, L_min)
+            L_result = depth_multiplier * channel_depth
         
         # 矩形暗涵：无额外约束，纯用基础公式 L=k×|B₁-B₂|
         # elif "暗涵" in struct_name: pass  # L_result = L_basic已足够
@@ -1808,7 +1817,7 @@ class HydraulicCalculator:
             "L_basic": L_basic,
             "channel_depth": channel_depth,
             "L_result": L_result,
-            "constraint_applied": struct_name if L_result > L_basic else "",
+            "constraint_applied": struct_name if ("倒虹吸" in struct_name or L_result > L_basic) else "",
             "prev_name": prev_node.name or "",
             "next_name": next_node.name or "",
         }

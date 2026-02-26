@@ -26,11 +26,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
 
 from qfluentwidgets import (
-    PushButton, PrimaryPushButton, CheckBox, InfoBar, InfoBarPosition,
-    LineEdit, ComboBox,
+    PushButton, PrimaryPushButton, DropDownPushButton, CheckBox, InfoBar, InfoBarPosition,
+    LineEdit, ComboBox, RoundMenu, Action,
 )
 
-from 渠系断面设计.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, DIALOG_STYLE, fluent_info, fluent_error, fluent_question
+from 渠系断面设计.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, DIALOG_STYLE, fluent_info, fluent_error, fluent_question, fluent_batch_result
 from 渠系断面设计.frozen_table import FrozenColumnTableWidget
 from 渠系断面设计.export_utils import (
     WORD_EXPORT_AVAILABLE, ask_open_file,
@@ -127,17 +127,18 @@ SECTION_TYPES = [
     "分水闸", "分水口", "节制闸", "泄水闸",
 ]
 
-# 输入表列定义（与原版一致，含X/Y坐标列）
+# 输入表列定义（含X/Y坐标列）
 # 列索引: 0序号, 1流量段, 2建筑物名称, 3结构形式, 4X, 5Y, 6Q, 7糙率n, 8比降,
 #          9边坡系数m, 10底宽B, 11明渠宽深比, 12半径R, 13直径D,
-#          14矩形渡槽深宽比, 15倒角角度, 16倒角底边, 17圆心角, 18不淤流速, 19不冲流速
+#          14矩形渡槽深宽比, 15倒角角度, 16倒角底边, 17圆心角, 18不淤流速, 19不冲流速,
+#          20转弯半径（平面弯道，不参与水力计算，透传到推求水面线）
 INPUT_HEADERS = [
     "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
     "Q(m³/s)", "糙率n", "比降(1/)",
     "边坡系数m", "底宽B(m)", "明渠宽深比",
     "半径R(m)", "直径D(m)",
     "矩形渡槽深宽比", "倒角角度(°)", "倒角底边(m)", "圆心角(°)",
-    "不淤流速", "不冲流速",
+    "不淤流速", "不冲流速", "转弯半径(m)",
 ]
 
 # 输入表头悬浮提示（与原版一致）
@@ -239,6 +240,20 @@ _HEADER_TOOLTIPS = {
         "  仅对「隧洞-圆拱直墙型」类型生效，\n"
         "  其他隧洞类型（圆形、马蹄形）无需填写"
     ),
+    "转弯半径(m)": (
+        "【转弯半径（单位：米）】\n\n"
+        "定义：渠道平面弯道的圆曲线半径\n\n"
+        "▶ 怎么填？\n"
+        "  • 留空或填 0 → 导入推求水面线后使用全局自动计算半径\n"
+        "  • 填一个数值 → 该行使用此半径，优先于全局设置\n\n"
+        "▶ 说明\n"
+        "  本列不参与断面水力计算，\n"
+        "  仅在导入至【推求水面线】模块后用于平面几何计算\n\n"
+        "▶ 规范参考\n"
+        "  • 隧洞：弯曲半径 ≥ 洞径 × 5\n"
+        "  • 明渠：弯曲半径 ≥ 水面宽度 × 5\n"
+        "  • 渡槽：弯道半径 ≥ 连接明渠渠底宽度 × 5"
+    ),
     "矩形渡槽深宽比": (
         "【矩形渡槽深宽比  α = H ÷ B】\n\n"
         "定义：渡槽槽身总高度 H 与槽宽 B 的比值\n"
@@ -285,6 +300,7 @@ class BatchPanel(QWidget):
         self._has_opened_template = False
         self._is_sample_data = False
         self._loading_sample = False
+        self._has_calc_errors = False
         self._load_user_prefs()
         self._init_ui()
 
@@ -363,9 +379,18 @@ class BatchPanel(QWidget):
 
         btn_full = PrimaryPushButton("一键全流程计算"); btn_full.clicked.connect(self._one_click_full_flow)
         btn_full.setToolTip("批量计算 → 导入 → 渐变段 → (倒虹吸) → 推求水面线")
+        self._btn_full = btn_full
         btn_calc = PrimaryPushButton("开始批量计算"); btn_calc.clicked.connect(self._batch_calculate)
-        btn_sample = PushButton("示例数据"); btn_sample.clicked.connect(self._add_sample_data)
-        btn_template = PushButton("打开Excel模板"); btn_template.clicked.connect(self._open_excel_template)
+        _sample_menu = RoundMenu(parent=self)
+        _sample_menu.addAction(Action("示例一（综合演示）", triggered=self._add_sample_data))
+        _sample_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=self._add_sample_data_2))
+        btn_sample = DropDownPushButton("示例数据")
+        btn_sample.setMenu(_sample_menu)
+        _template_menu = RoundMenu(parent=self)
+        _template_menu.addAction(Action("示例一（综合演示）", triggered=lambda: self._open_excel_template_file("blank")))
+        _template_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=lambda: self._open_excel_template_file("longtang")))
+        btn_template = DropDownPushButton("打开Excel模板")
+        btn_template.setMenu(_template_menu)
         btn_import = PrimaryPushButton("导入Excel"); btn_import.clicked.connect(self._import_from_excel)
         self.detail_cb = CheckBox("启用详细计算过程输出")
         self.detail_cb.setChecked(False)
@@ -602,30 +627,43 @@ class BatchPanel(QWidget):
         self._insert_row_at(min(selected))
 
     def _open_excel_template(self):
-        """使用默认程序打开Excel模板文件（与原版一致）"""
-        if not fluent_question(self, "打开Excel模板",
-            "打开Excel导入模板\n\n"
-            "即将使用默认程序打开模板文件。\n\n"
+        """兼容性包装：调用标准导入模板"""
+        self._open_excel_template_file("blank")
+
+    def _open_excel_template_file(self, template_key: str):
+        """使用默认程序打开指定Excel模板文件"""
+        if template_key == "longtang":
+            title = "示例二（龙塘马坝河分干渠）"
+            desc = "龙塘马坝河分干渠示例数据文件"
+        else:
+            title = "示例一（综合演示）"
+            desc = "综合演示模板（多流量段批量计算）"
+        if not fluent_question(self, f"打开{title}",
+            f"打开{desc}\n\n"
+            "即将使用默认程序打开该文件。\n\n"
             "使用说明：\n"
             "1. 打开后请【另存为】到您的目录\n"
-            "2. 在副本中按模板格式填写数据\n"
+            "2. 在副本中按格式填写数据\n"
             "3. 回到本界面点击【导入Excel】导入",
             yes_text="继续", no_text="取消"):
             return
-        template_path = self._get_template_path()
+        template_path = self._get_template_path(template_key)
         if not os.path.exists(template_path):
-            fluent_info(self, "错误", f"未找到模板文件：\n{template_path}")
+            fluent_info(self, "错误", f"未找到文件：\n{template_path}")
             return
         try:
             os.startfile(template_path)
             self._has_opened_template = True
             self._save_user_prefs()
         except Exception as e:
-            fluent_error(self, "错误", f"打开模板文件失败：{str(e)}")
+            fluent_error(self, "错误", f"打开文件失败：{str(e)}")
 
-    def _get_template_path(self):
-        """获取Excel模板文件路径（兼容开发环境和打包环境）"""
-        template_name = "多流量段批量计算_导入Excel（模板）.xlsx"
+    def _get_template_path(self, template_key: str = "blank"):
+        """获取Excel模板/示例文件路径（兼容开发环境和打包环境）"""
+        if template_key == "longtang":
+            template_name = "龙塘马坝河分干渠10+862.622-test.xlsx"
+        else:
+            template_name = "多流量段批量计算_导入Excel（模板）.xlsx"
         if getattr(sys, 'frozen', False):
             base = sys._MEIPASS
         else:
@@ -835,54 +873,54 @@ class BatchPanel(QWidget):
     def _add_sample_data(self):
         """加载示例数据 - 来自多流量段表格填写示例.xlsx的完整数据（与原版一致，44行）"""
         self._loading_sample = True
-        # 列: 序号,流量段,建筑物名称,结构形式,X,Y,Q,n,比降,m,B,宽深比,R,D,渡槽深宽比,倒角角度,倒角底边,圆心角,不淤,不冲
+        # 列: 序号,流量段,建筑物名称,结构形式,X,Y,Q,n,比降,m,B,宽深比,R,D,渡槽深宽比,倒角角度,倒角底边,圆心角,不淤,不冲,转弯半径
         samples = [
-            ["1",  "1", "-",      "明渠-矩形",       "649606.177086", "3377745.982674", "5", "0.014", "3000", "0",   "2",   "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["2",  "1", "-",      "明渠-矩形",       "649534.180449", "3377664.854614", "5", "0.014", "3000", "0",   "2",   "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["3",  "1", "-",      "明渠-矩形",       "649480.482814", "3377634.277101", "5", "0.014", "3000", "0",   "2",   "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["4",  "1", "土地垭", "隧洞-马蹄形Ⅰ型", "649478.323235", "3377610.807806", "5", "0.014", "2000", "",    "",    "", "1.5", "",    "",    "",    "",    "",    "0.1", "100"],
-            ["5",  "1", "土地垭", "隧洞-马蹄形Ⅰ型", "649441.884821", "3377556.331275", "5", "0.014", "2000", "",    "",    "", "1.5", "",    "",    "",    "",    "",    "0.1", "100"],
-            ["6",  "1", "-",      "明渠-梯形",       "649440.214195", "3377528.976904", "5", "0.014", "3000", "1",   "1.8", "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["7",  "1", "-",      "明渠-梯形",       "649419.568825", "3377522.66441",  "5", "0.014", "3000", "1",   "1.8", "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["8",  "1", "磨尔滩", "分水闸",           "649402.139216", "3377539.733849", "5", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["9",  "2", "-",      "明渠-梯形",       "649310.705602", "3377545.834305", "4", "0.014", "3000", "1",   "1.8", "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["10", "2", "沪蓉",   "倒虹吸",           "649264.563059", "3377548.912938", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["11", "2", "沪蓉",   "倒虹吸",           "649244.41293",  "3377550.257356", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["12", "2", "沪蓉",   "倒虹吸",           "649220.867829", "3377563.964679", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["13", "2", "沪蓉",   "倒虹吸",           "649184.732272", "3377556.518614", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["14", "2", "沪蓉",   "倒虹吸",           "649146.2872",   "3377588.1779",   "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["15", "2", "宋家沟", "隧洞-圆拱直墙型", "649104.399377", "3377613.995873", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100"],
-            ["16", "2", "宋家沟", "隧洞-圆拱直墙型", "649098.598741", "3377595.290122", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100"],
-            ["17", "2", "广岳",   "倒虹吸",           "649086.007282", "3377582.009467", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["18", "2", "广岳",   "倒虹吸",           "649066.369061", "3377577.838164", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["19", "2", "广岳",   "倒虹吸",           "649033.673293", "3377532.99707",  "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["20", "2", "广岳",   "倒虹吸",           "649018.983612", "3377482.347484", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["21", "2", "伍家沟", "隧洞-圆拱直墙型", "648991.829093", "3377453.363461", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100"],
-            ["22", "2", "伍家沟", "隧洞-圆拱直墙型", "648969.028473", "3377444.44637",  "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100"],
-            ["23", "2", "伍家沟", "隧洞-圆拱直墙型", "648918.161636", "3377447.833438", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100"],
-            ["24", "2", "刘家沟", "渡槽-矩形",       "648879.873566", "3377424.400731", "4", "0.014", "2000", "",    "",    "", "",    "",    "0.8", "30",  "0.3", "120", "0.1", "100"],
-            ["25", "2", "刘家沟", "渡槽-矩形",       "648873.319207", "3377389.201113", "4", "0.014", "2000", "",    "",    "", "",    "",    "0.8", "30",  "0.3", "120", "0.1", "100"],
-            ["26", "2", "广高路", "倒虹吸",           "648875.83158",  "3377349.478728", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["27", "2", "广高路", "倒虹吸",           "648859.515404", "3377325.867714", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["28", "2", "广高路", "倒虹吸",           "648823.413217", "3377328.752934", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["29", "2", "广高路", "倒虹吸",           "648778.747964", "3377306.056947", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["30", "2", "广高路", "倒虹吸",           "648742.967801", "3377279.279514", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["31", "2", "广高路", "倒虹吸",           "648740.770589", "3377262.028944", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["32", "2", "广高路", "倒虹吸",           "648704.058844", "3377256.358551", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["33", "2", "-",      "明渠-圆形",       "648687.241348", "3377234.03888",  "4", "0.014", "3000", "0",   "",    "", "",    "2.8", "",    "",    "",    "",    "0.1", "100"],
-            ["34", "2", "-",      "明渠-圆形",       "648677.298141", "3377230.295614", "4", "0.014", "3000", "0",   "",    "", "",    "2.8", "",    "",    "",    "",    "0.1", "100"],
-            ["35", "2", "台儿沟", "隧洞-圆形",       "648610.458063", "3377205.132683", "4", "0.014", "2000", "",    "",    "", "",    "2.6", "",    "",    "",    "",    "0.1", "100"],
-            ["36", "2", "美团沟", "分水闸",           "648588.193106", "3377182.717782", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["37", "3", "台儿沟", "隧洞-圆形",       "648359.767433", "3377105.690753", "3", "0.014", "2000", "",    "",    "", "",    "2.6", "",    "",    "",    "",    "0.1", "100"],
-            ["38", "3", "台儿沟", "隧洞-圆形",       "648259.932461", "3376966.162254", "3", "0.014", "2000", "",    "",    "", "",    "2.6", "",    "",    "",    "",    "0.1", "100"],
-            ["39", "3", "梨子园", "渡槽-U形",         "647962.330045", "3376909.650621", "3", "0.014", "1500", "",    "",    "", "1.6", "",    "",    "",    "",    "",    "0.1", "100"],
-            ["40", "3", "梨子园", "渡槽-U形",         "647644.538898", "3376595.606329", "3", "0.014", "1500", "",    "",    "", "1.6", "",    "",    "",    "",    "",    "0.1", "100"],
-            ["41", "3", "油房垭", "隧洞-圆拱直墙型", "647641.215709", "3376559.422576", "3", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100"],
-            ["42", "3", "油房垭", "隧洞-圆拱直墙型", "647597.709292", "3376537.187663", "3", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100"],
-            ["43", "3", "-",      "矩形暗涵",         "647506.778347", "3376513.531331", "3", "0.014", "3000", "0",   "2.4", "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["44", "3", "-",      "矩形暗涵",         "647387.9806",   "3376403.8971",   "3", "0.014", "3000", "",    "2.4", "", "",    "",    "",    "",    "",    "",    "0.1", "100"],
-            ["45", "3", "-",      "明渠-U形",        "647350.0",      "3376350.0",      "3", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100"],
-            ["46", "3", "-",      "明渠-U形",        "647280.0",      "3376280.0",      "3", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100"],
+            ["1",  "1", "-",      "明渠-矩形",       "649606.177086", "3377745.982674", "5", "0.014", "3000", "0",   "2",   "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["2",  "1", "-",      "明渠-矩形",       "649534.180449", "3377664.854614", "5", "0.014", "3000", "0",   "2",   "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["3",  "1", "-",      "明渠-矩形",       "649480.482814", "3377634.277101", "5", "0.014", "3000", "0",   "2",   "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["4",  "1", "土地垭", "隧洞-马蹄形Ⅰ型", "649478.323235", "3377610.807806", "5", "0.014", "2000", "",    "",    "", "1.5", "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["5",  "1", "土地垭", "隧洞-马蹄形Ⅰ型", "649441.884821", "3377556.331275", "5", "0.014", "2000", "",    "",    "", "1.5", "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["6",  "1", "-",      "明渠-梯形",       "649440.214195", "3377528.976904", "5", "0.014", "3000", "1",   "1.8", "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["7",  "1", "-",      "明渠-梯形",       "649419.568825", "3377522.66441",  "5", "0.014", "3000", "1",   "1.8", "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["8",  "1", "磨尔滩", "分水闸",           "649402.139216", "3377539.733849", "5", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["9",  "2", "-",      "明渠-梯形",       "649310.705602", "3377545.834305", "4", "0.014", "3000", "1",   "1.8", "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["10", "2", "沪蓉",   "倒虹吸",           "649264.563059", "3377548.912938", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["11", "2", "沪蓉",   "倒虹吸",           "649244.41293",  "3377550.257356", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["12", "2", "沪蓉",   "倒虹吸",           "649220.867829", "3377563.964679", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["13", "2", "沪蓉",   "倒虹吸",           "649184.732272", "3377556.518614", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["14", "2", "沪蓉",   "倒虹吸",           "649146.2872",   "3377588.1779",   "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["15", "2", "宋家沟", "隧洞-圆拱直墙型", "649104.399377", "3377613.995873", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
+            ["16", "2", "宋家沟", "隧洞-圆拱直墙型", "649098.598741", "3377595.290122", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
+            ["17", "2", "广岳",   "倒虹吸",           "649086.007282", "3377582.009467", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["18", "2", "广岳",   "倒虹吸",           "649066.369061", "3377577.838164", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["19", "2", "广岳",   "倒虹吸",           "649033.673293", "3377532.99707",  "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["20", "2", "广岳",   "倒虹吸",           "649018.983612", "3377482.347484", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["21", "2", "伍家沟", "隧洞-圆拱直墙型", "648991.829093", "3377453.363461", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
+            ["22", "2", "伍家沟", "隧洞-圆拱直墙型", "648969.028473", "3377444.44637",  "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
+            ["23", "2", "伍家沟", "隧洞-圆拱直墙型", "648918.161636", "3377447.833438", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
+            ["24", "2", "刘家沟", "渡槽-矩形",       "648879.873566", "3377424.400731", "4", "0.014", "2000", "",    "",    "", "",    "",    "0.8", "30",  "0.3", "120", "0.1", "100", ""],
+            ["25", "2", "刘家沟", "渡槽-矩形",       "648873.319207", "3377389.201113", "4", "0.014", "2000", "",    "",    "", "",    "",    "0.8", "30",  "0.3", "120", "0.1", "100", ""],
+            ["26", "2", "广高路", "倒虹吸",           "648875.83158",  "3377349.478728", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["27", "2", "广高路", "倒虹吸",           "648859.515404", "3377325.867714", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["28", "2", "广高路", "倒虹吸",           "648823.413217", "3377328.752934", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["29", "2", "广高路", "倒虹吸",           "648778.747964", "3377306.056947", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["30", "2", "广高路", "倒虹吸",           "648742.967801", "3377279.279514", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["31", "2", "广高路", "倒虹吸",           "648740.770589", "3377262.028944", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["32", "2", "广高路", "倒虹吸",           "648704.058844", "3377256.358551", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["33", "2", "-",      "明渠-圆形",       "648687.241348", "3377234.03888",  "4", "0.014", "3000", "0",   "",    "", "",    "2.8", "",    "",    "",    "",    "0.1", "100", ""],
+            ["34", "2", "-",      "明渠-圆形",       "648677.298141", "3377230.295614", "4", "0.014", "3000", "0",   "",    "", "",    "2.8", "",    "",    "",    "",    "0.1", "100", ""],
+            ["35", "2", "台儿沟", "隧洞-圆形",       "648610.458063", "3377205.132683", "4", "0.014", "2000", "",    "",    "", "",    "2.6", "",    "",    "",    "",    "0.1", "100", ""],
+            ["36", "2", "美团沟", "分水闸",           "648588.193106", "3377182.717782", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["37", "3", "台儿沟", "隧洞-圆形",       "648359.767433", "3377105.690753", "3", "0.014", "2000", "",    "",    "", "",    "2.6", "",    "",    "",    "",    "0.1", "100", ""],
+            ["38", "3", "台儿沟", "隧洞-圆形",       "648259.932461", "3376966.162254", "3", "0.014", "2000", "",    "",    "", "",    "2.6", "",    "",    "",    "",    "0.1", "100", ""],
+            ["39", "3", "梨子园", "渡槽-U形",         "647962.330045", "3376909.650621", "3", "0.014", "1500", "",    "",    "", "1.6", "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["40", "3", "梨子园", "渡槽-U形",         "647644.538898", "3376595.606329", "3", "0.014", "1500", "",    "",    "", "1.6", "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["41", "3", "油房垭", "隧洞-圆拱直墙型", "647641.215709", "3376559.422576", "3", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
+            ["42", "3", "油房垭", "隧洞-圆拱直墙型", "647597.709292", "3376537.187663", "3", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
+            ["43", "3", "-",      "矩形暗涵",         "647506.778347", "3376513.531331", "3", "0.014", "3000", "0",   "2.4", "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["44", "3", "-",      "矩形暗涵",         "647387.9806",   "3376403.8971",   "3", "0.014", "3000", "",    "2.4", "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
+            ["45", "3", "-",      "明渠-U形",        "647350.0",      "3376350.0",      "3", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100", ""],
+            ["46", "3", "-",      "明渠-U形",        "647280.0",      "3376280.0",      "3", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100", ""],
         ]
         self._clear_input(force=True)
         for row_data in samples:
@@ -896,6 +934,24 @@ class BatchPanel(QWidget):
         self._is_sample_data = True
         InfoBar.success("示例数据", f"已加载 {len(samples)} 行示例数据（含明渠/明渠-U形/隧洞/渡槽/暗涵/倒虹吸/分水闸）",
                        parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+
+    def _add_sample_data_2(self):
+        """加载示例二：龙塘马坝河分干渠数据（从data目录读取xlsx文件）"""
+        path = self._get_sample2_path()
+        if not os.path.exists(path):
+            fluent_info(self, "错误", f"未找到示例二文件：\n{path}")
+            return
+        self._do_load_from_filepath(path, is_sample=True,
+                                    sample_title="示例二",
+                                    sample_desc="龙塘马坝河分干渠示例数据")
+
+    def _get_sample2_path(self):
+        """获取示例二xlsx文件路径（兼容开发环境和打包环境）"""
+        if getattr(sys, 'frozen', False):
+            base = sys._MEIPASS
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return os.path.join(base, "data", "龙塘马坝河分干渠10+862.622-test.xlsx")
 
     # ================================================================
     # 结果区
@@ -914,9 +970,22 @@ class BatchPanel(QWidget):
         btn_excel = PushButton("导出Excel报告"); btn_excel.clicked.connect(self._export_excel)
         btn_word = PushButton("导出详细过程(Word)"); btn_word.clicked.connect(self._export_word)
         btn_clr = PushButton("清空结果"); btn_clr.clicked.connect(self._clear_results)
+        self._btn_export_excel = btn_excel
+        self._btn_export_word = btn_word
         for w in [btn_excel, btn_word, btn_clr]:
             tb.addWidget(w)
         lay.addLayout(tb)
+
+        # 失败锁定警告条（初始隐藏）
+        from PySide6.QtWidgets import QLabel as _QL
+        self._error_lock_label = _QL()
+        self._error_lock_label.setWordWrap(True)
+        self._error_lock_label.setStyleSheet(
+            "QLabel { background:#FFF3CD; border:1px solid #FFCA28; border-radius:4px;"
+            " padding:6px 12px; font-family:'Microsoft YaHei'; font-size:12px; color:#7B4F00; }"
+        )
+        self._error_lock_label.hide()
+        lay.addWidget(self._error_lock_label)
 
         # 选项卡
         self.result_notebook = QTabWidget()
@@ -1091,6 +1160,7 @@ class BatchPanel(QWidget):
                         'flow_section': segment, 'building_name': building_name,
                         'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
                         'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.014), 'slope_inv': 0,
+                        'turn_radius': self._sf(values[20], 0.0) if len(values) > 20 else 0.0,
                     }
                     self.batch_results.append({'input': values, 'result': siphon_result})
                     skip_count += 1
@@ -1111,6 +1181,7 @@ class BatchPanel(QWidget):
                         'flow_section': segment, 'building_name': building_name,
                         'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
                         'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.014), 'slope_inv': 0,
+                        'turn_radius': self._sf(values[20], 0.0) if len(values) > 20 else 0.0,
                     }
                     self.batch_results.append({'input': values, 'result': gate_result})
                     skip_count += 1
@@ -1211,19 +1282,20 @@ class BatchPanel(QWidget):
         if skip_count > 0:
             msg += f"\n跳过: {skip_count}条 (倒虹吸/闸类占位行不参与断面计算)"
         if error_details:
-            detailed_errors = "\n\n" + "=" * 30 + "\n详细失败原因及建议：\n" + "\n\n".join(error_details)
-            fluent_info(self, "批量计算完成 (存在异常)", msg + detailed_errors)
+            fluent_batch_result(self, "批量计算完成 (存在异常)", msg, "\n\n".join(error_details))
         elif fail_count == 0:
             InfoBar.success("批量计算完成", msg.replace('\n', ' | '), parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
         else:
             fluent_info(self, "批量计算完成", msg)
 
+        self._update_lock_state(fail_count > 0)
+
         # 保存当前输入数据快照，用于下次判断是否需要重新计算
         self._last_calc_snapshot = current_snapshot
         self._last_calc_detail = self.detail_cb.isChecked()
 
-        # 注册批量计算结果到共享数据管理器，供推求水面线模块导入
-        if SHARED_DATA_AVAILABLE and self.batch_results:
+        # 注册批量计算结果到共享数据管理器，供推求水面线模块导入（仅全部成功时注册）
+        if SHARED_DATA_AVAILABLE and self.batch_results and fail_count == 0:
             try:
                 shared_data = get_shared_data_manager()
                 results_for_register = []
@@ -1250,6 +1322,7 @@ class BatchPanel(QWidget):
                         r['slope_inv'] = self._sf(v[8])
                     if 'm' not in r:
                         r['m'] = self._sf(v[9])
+                    r['turn_radius'] = self._sf(v[20], 0.0) if len(v) > 20 else 0.0
                     results_for_register.append(r)
                 count = shared_data.register_batch_results(results_for_register)
                 if count > 0:
@@ -2377,6 +2450,26 @@ class BatchPanel(QWidget):
         w = self.window()
         return w if w else self
 
+    def _update_lock_state(self, has_errors: bool):
+        """根据计算是否存在失败条目，锁定或解锁导出/下游操作按钮。"""
+        self._has_calc_errors = has_errors
+        _FULL_TIP = "批量计算 → 导入 → 渐变段 → (倒虹吸) → 推求水面线"
+        _LOCK_TIP = "计算存在失败条目，请修复后重新执行「开始批量计算」，此按钮暂时锁定"
+        for btn in [self._btn_export_excel, self._btn_export_word]:
+            btn.setEnabled(not has_errors)
+            btn.setToolTip("" if not has_errors else _LOCK_TIP)
+        self._btn_full.setEnabled(not has_errors)
+        self._btn_full.setToolTip(_FULL_TIP if not has_errors else _LOCK_TIP)
+        if has_errors:
+            self._error_lock_label.setText(
+                "⚠  当前批量计算存在失败条目——导出报告与下游模块数据共享已暂停，"
+                "「一键全流程计算」已禁用。请修复输入参数后重新执行「开始批量计算」，"
+                "全部成功后自动解锁所有功能。"
+            )
+            self._error_lock_label.show()
+        else:
+            self._error_lock_label.hide()
+
     def _regenerate_detail_report(self):
         """根据已有的 batch_results 重新生成详细计算过程报告"""
         if not self.batch_results:
@@ -2418,11 +2511,6 @@ class BatchPanel(QWidget):
     # ================================================================
     def _import_from_excel(self):
         """从Excel文件导入数据（自动兼容模板格式和导出格式，与原版一致）"""
-        try:
-            import openpyxl
-        except ImportError:
-            InfoBar.warning("缺少依赖", "需要安装 openpyxl: pip install openpyxl", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
-            return
         # 首次导入且未查看过模板时，提示用户是否先查看模板（与原版一致）
         if not self._has_opened_template and self._last_import_dir is None:
             ret = fluent_question(self, "导入Excel",
@@ -2451,6 +2539,16 @@ class BatchPanel(QWidget):
         # 记录本次导入的目录（与原版一致）
         self._last_import_dir = os.path.dirname(filepath)
         self._save_user_prefs()
+        self._do_load_from_filepath(filepath)
+
+    def _do_load_from_filepath(self, filepath, is_sample=False,
+                                sample_title="示例数据", sample_desc=""):
+        """内部方法：从指定路径加载xlsx/xls数据到表格（支持普通导入和示例加载）"""
+        try:
+            import openpyxl
+        except ImportError:
+            InfoBar.warning("缺少依赖", "需要安装 openpyxl: pip install openpyxl", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            return
         try:
             if filepath.lower().endswith('.xls') and not filepath.lower().endswith('.xlsx'):
                 import xlrd
@@ -2516,11 +2614,11 @@ class BatchPanel(QWidget):
                 self.start_station_edit.setText(formatted_station)
                 info_parts.append(f"起始桩号: {formatted_station}")
 
-            # 读取数据行（前20列）
+            # 读取数据行（前21列，含转弯半径）
             data_rows = []
             for row_idx in range(data_start_row, ws.max_row + 1):
                 row_data = []
-                for col_idx in range(1, 21):
+                for col_idx in range(1, 22):
                     cv = ws.cell(row=row_idx, column=col_idx).value
                     row_data.append(str(cv) if cv is not None else "")
                 if any(v.strip() for v in row_data):
@@ -2530,8 +2628,8 @@ class BatchPanel(QWidget):
                 return
 
             # 自动检测列映射：检查表头行第5列是否含"X"来判断是否有X/Y坐标列
-            # 含X/Y列映射（20列）：0序号,1流量段,2名称,3结构形式,4X,5Y,6Q,7n,8比降,9m,10B,11宽深比,12R,13D,14渡槽深宽比,15倒角角度,16倒角底边,17圆心角,18不淤,19不冲
-            # 无X/Y列映射（18列）：0序号,1流量段,2名称,3结构形式,4Q,5n,6比降,7m,8B,9宽深比,10R,11D,12渡槽深宽比,13倒角角度,14倒角底边,15圆心角,16不淤,17不冲
+            # 含X/Y列映射（21列）：0序号,1流量段,2名称,3结构形式,4X,5Y,6Q,7n,8比降,9m,10B,11宽深比,12R,13D,14渡槽深宽比,15倒角角度,16倒角底边,17圆心角,18不淤,19不冲,20转弯半径
+            # 无X/Y列映射（18列）：0序号,1流量段,2名称,3结构形式,4Q,5n,6比降,7m,8B,9宽深比,10R,11D,12渡槽深宽比,13倒角角度,14倒角底边,15圆心角,16不淤,17不冲（转弯半径置空）
             header_row = data_start_row - 1
             h4_val = str(ws.cell(row=header_row, column=5).value or "")
             has_xy_cols = "X" in h4_val.upper() or "Q" not in h4_val.upper()
@@ -2549,9 +2647,9 @@ class BatchPanel(QWidget):
                     return
             self._clear_input(force=True)
             for rd in data_rows:
-                rd = rd + [""] * 20
+                rd = rd + [""] * 21
                 if has_xy_cols:
-                    mapped = rd[:20]
+                    mapped = rd[:21]
                 else:
                     mapped = [
                         rd[0], rd[1], rd[2], rd[3],
@@ -2561,15 +2659,20 @@ class BatchPanel(QWidget):
                         rd[10], rd[11],
                         rd[12], rd[13], rd[14], rd[15],
                         rd[16], rd[17],
+                        "",
                     ]
                 self._add_row(mapped)
             self._auto_detect_flow_segments()
             auto_resize_table(self.input_table)
-            info_msg = f"已成功导入 {len(data_rows)} 行数据"
-            if info_parts:
-                info_msg += " | " + ", ".join(info_parts)
-            self._is_sample_data = False
-            InfoBar.success("导入成功", info_msg, parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            self._is_sample_data = is_sample
+            if is_sample:
+                InfoBar.success(sample_title, f"已加载{sample_desc}（{len(data_rows)} 行）",
+                               parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            else:
+                info_msg = f"已成功导入 {len(data_rows)} 行数据"
+                if info_parts:
+                    info_msg += " | " + ", ".join(info_parts)
+                InfoBar.success("导入成功", info_msg, parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
             # 导入后检查建筑物重名（仅警告，不阻止）
             self._validate_duplicate_buildings_warn()
         except Exception as e:
@@ -2624,13 +2727,14 @@ class BatchPanel(QWidget):
                 n_val = self.input_table.item(r, 7).text() if self.input_table.item(r, 7) else ""
                 slope_val = self.input_table.item(r, 8).text() if self.input_table.item(r, 8) else ""
                 m_val = self.input_table.item(r, 9).text() if self.input_table.item(r, 9) else ""
-                input_params_map[seq_key] = (x_val, y_val, q_val, n_val, slope_val, m_val)
+                tr_val = self.input_table.item(r, 20).text() if self.input_table.item(r, 20) else ""
+                input_params_map[seq_key] = (x_val, y_val, q_val, n_val, slope_val, m_val, tr_val)
 
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "批量计算结果"
-            # 导出表头：在结果表头的结构形式后插入X/Y/Q/n/比降/边坡系数列（与原版一致）
-            export_headers = list(RESULT_HEADERS[:4]) + ["X", "Y", "Q(m³/s)", "糙率n", "比降(1/)", "边坡系数m"] + list(RESULT_HEADERS[4:])
+            # 导出表头：在结果表头的结构形式后插入X/Y/Q/n/比降/边坡系数/转弯半径列
+            export_headers = list(RESULT_HEADERS[:4]) + ["X", "Y", "Q(m³/s)", "糙率n", "比降(1/)", "边坡系数m", "转弯半径(m)"] + list(RESULT_HEADERS[4:])
             # 第1行：标题
             ws['A1'] = "渠系建筑物多流量段批量水力计算系统结果报告"
             ws['A1'].font = Font(size=14, bold=True)
@@ -2660,9 +2764,9 @@ class BatchPanel(QWidget):
                     item = self.result_table.item(r, c)
                     result_vals.append(item.text() if item else "")
                 seq_key = result_vals[0].strip() if result_vals else ""
-                x_val, y_val, q_val, n_val, slope_val, m_val = input_params_map.get(seq_key, ("", "", "", "", "", ""))
-                # 构建导出行：前4列 + X/Y/Q/n/比降/边坡系数 + 后续结果列
-                export_row = result_vals[:4] + [x_val, y_val, q_val, n_val, slope_val, m_val] + result_vals[4:]
+                x_val, y_val, q_val, n_val, slope_val, m_val, tr_val = input_params_map.get(seq_key, ("", "", "", "", "", "", ""))
+                # 构建导出行：前4列 + X/Y/Q/n/比降/边坡系数/转弯半径 + 后续结果列
+                export_row = result_vals[:4] + [x_val, y_val, q_val, n_val, slope_val, m_val, tr_val] + result_vals[4:]
                 for c, val in enumerate(export_row, 1):
                     ws.cell(row=r+4, column=c, value=val)
             # 自动列宽

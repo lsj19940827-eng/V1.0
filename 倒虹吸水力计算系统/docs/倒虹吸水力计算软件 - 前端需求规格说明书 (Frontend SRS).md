@@ -1,217 +1,376 @@
 # 倒虹吸水力计算软件 - 前端需求规格说明书 (Frontend SRS)
 
-# 倒虹吸水力计算软件 - 前端需求规格说明书 (Frontend SRS)
+**版本**: v2.0
+**最后更新**: 2026-02-25
+**状态**: 已实现
+**技术栈**: PySide6 + qfluentwidgets (Fluent Design) + QPainter + QWebEngineView (KaTeX)
 
-## 1. 界面架构设计 (UI Architecture)
+---
 
-**采用 MVVM (Model-View-ViewModel) 或 MVC 模式，将视图逻辑与业务逻辑分离。**
+## 1. 界面架构设计
 
-**View (视图层): Windows Forms 或 WPF 窗体。**
+### 1.1 技术栈
+
+| 层 | 技术 | 说明 |
+|----|------|------|
+| UI框架 | PySide6 (Qt6) | QWidget 体系 |
+| 设计风格 | qfluentwidgets | Fluent Design 控件（PushButton, LineEdit, ComboBox, InfoBar） |
+| 可视化画布 | QPainter | 自绘管道纵断面/平面视图，支持缩放/平移 |
+| 公式渲染 | QWebEngineView + KaTeX | 亚克力毛玻璃风格 + LaTeX 公式静态渲染 |
+| 样式 | 统一样式系统 | `渠系断面设计/styles.py` 提供 P/S/W/E/BG/CARD/BD/T1/T2 等颜色常量 |
 
-**ViewModel (逻辑层): 负责界面数据的绑定、命令的响应以及对后端服务的调用。**
+### 1.2 文件结构
 
-## 2. 主窗口布局 (Main Window)
+| 文件 | 职责 |
+|------|------|
+| `渠系断面设计/siphon/panel.py` | 主面板 `SiphonPanel`，含全部UI构建、参数联动、计算调用、导出 |
+| `渠系断面设计/siphon/canvas_view.py` | 可视化画布 `PipelineCanvas`，纵断面/平面视图切换 |
+| `渠系断面设计/siphon/dialogs.py` | 专业对话框（进水口形状/出水口系数/拦污栅配置/结构段编辑/断面参数/通用构件） |
+| `渠系断面设计/siphon/multi_siphon_dialog.py` | 多标签页倒虹吸计算窗口 `MultiSiphonDialog` |
+
+---
+
+## 2. 主面板布局 (SiphonPanel)
+
+SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面。
+
+### 2.1 区域 A：可视化画布
+
+**控件**：`PipelineCanvas`（自绘 QWidget）  
+**背景色**：深色 (#14141E)
+
+**功能**：
+- 绘制管道纵断面视图（绿色管线，弯管/折管高亮橙色）
+- 绘制平面视图（IP点、转弯半径、方位角箭头）
+- 自动视图切换（有纵断面数据则纵断面，有平面数据则平面）
+- 鼠标滚轮缩放 + 拖拽平移
+- 高程标注、节点编号、示例数据灰显
+
+**工具栏**：
+- 视图切换按钮（纵断面/平面）
+- 缩放百分比标签
+- 重置视图按钮
+
+**信号**：`view_changed(str)`、`zoom_changed(float)`
+
+### 2.2 区域 B：参数设置区域（QTabWidget，4个Tab）
+
+#### Tab 1: 基本参数
+
+采用左右分栏布局（QGridLayout），分为4个参数卡片（QGroupBox）。
+
+**卡片1：设计参数**
+
+| 控件 | 类型 | 说明 |
+|------|------|------|
+| 名称 | LineEdit | 作业名称，默认"倒虹吸" |
+| 设计流量 Q | LineEdit | 必填 (m³/s) |
+| 拟定流速 v | LineEdit | 必填 (m/s)，方案D确认交互 |
+| 糙率 n | LineEdit | 默认 0.014 |
+| 管道根数 N | _NumPipesWidget | 自定义 [-] 数字 [+] 控件，1~10 |
+| 弯管半径倍数 n | LineEdit | R = n * D |
+| 弯管半径 R | LineEdit | 计算值或手动输入，双向联动 |
+| D理论 | Label（只读） | D = sqrt(4Q/(N*pi*v))，实时更新 |
+| 指定管径 | CheckBox + LineEdit | 可选覆盖 |
+
+**确认交互机制**：
+- **方案D（拟定流速）**：用户手动编辑触发"未确认"状态（黄色边框），Enter/失焦确认后变绿色边框，计算前强制验证
+- **方案B（弯管半径倍数）**：温和提醒，计算时弹出黄色InfoBar警告（不阻断）
+- **管道根数**：值变化时重置确认状态，[+]/[-]点击视为确认
+
+**卡片2：渐变段配置**
+
+| 控件 | 说明 |
+|------|------|
+| 进口渐变段型式 | ComboBox（无/反弯扭曲面/1/4圆弧/方头型/直线扭曲面） |
+| 进口系数 xi1 | LineEdit，型式变更自动联动 |
+| 出口渐变段型式 | ComboBox |
+| 出口系数 xi2 | LineEdit，型式变更自动联动 |
+| 参考表按钮 | 弹出 L12CoeffRefDialog（表L.1.2参考表） |
+
+**卡片3：流速参数**
+
+| 控件 | 说明 |
+|------|------|
+| 进口始端流速 v1 | LineEdit (m/s) |
+| v2策略 | ComboBox（自动/v1+0.2/断面参数计算/指定输入） |
+| 进口末端流速 v2 | LineEdit，根据策略可读/只读 |
+| 出口始端流速 v_out | LineEdit (= 管道流速) |
+| 出口末端流速 v3 | LineEdit (m/s) |
+
+**v2策略联动**：
+- **自动**：v2只读，计算后回填管道流速
+- **v1+0.2**：v1变化时自动联动v2
+- **断面参数**：双击提示标签打开 `InletSectionDialog`
+- **指定输入**：v2可编辑
+
+**卡片4：高级选项**
+
+| 控件 | 说明 |
+|------|------|
+| 水损阈值 | LineEdit，计算完成后对比告警 |
+| 考虑加大流量 | CheckBox + 百分比输入 |
+| 显示详细过程 | CheckBox |
+
+#### Tab 2: 结构段信息
+
+**三区表格**（QTableWidget，12列）：
+
+| 列 | 标题 | 说明 |
+|----|------|------|
+| 0 | 序号 | 自动编号 |
+| 1 | 分类 | 通用/平面/纵断面(示例) |
+| 2 | 类型 | 段类型（附加状态如"拦污栅(已配置)"） |
+| 3 | 方向 | SegmentDirection |
+| 4 | 长度(m) | -- |
+| 5 | 半径R(m) | 弯管有效 |
+| 6 | 角度theta(deg) | 弯管/折管角度 |
+| 7 | 起点高程 | 纵断面段有效 |
+| 8 | 终点高程 | 纵断面段有效 |
+| 9 | 空间长度 | sqrt(L^2+dH^2) |
+| 10 | 局部系数 | xi值 |
+| 11 | 锁定 | 是/否 |
+
+**三色分区**：
+- 浅黄色 (#FFF8E1)：通用构件
+- 浅蓝色 (#E8F0FE)：平面段
+- 浅绿色 (#E8F5E9)：纵断面段
+- 灰绿色 (#F0F4F0)：纵断面示例数据
+
+**工具栏按钮**：
+- 添加管身段 -> `SegmentEditDialog`
+- 添加通用构件 -> `CommonSegmentAddDialog`
+- 添加管道渐变段 -> 快速插入
+- 删除、上移、下移
+- 清空纵断面、全部清空
+
+**交互规则**：
+- 双击行打开对应编辑对话框
+- 进水口 -> `InletShapeDialog`
+- 出水口 -> `OutletShapeDialog'
+- 拦污栅 -> `TrashRackConfigDialog'
+- 闸门槽/旁通管/管道渐变段 -> `SimpleCommonEditDialog'
+- 其他(通用) -> `CommonSegmentEditDialog'
+- 管身段 -> `SegmentEditDialog'
+- 平面段为只读，不可编辑/删除
+- 进出水口不可删除
 
-窗口标题：“倒虹吸水力计算”。需包含以下三个主要区域：
+#### Tab 3: 纵断面节点
 
-### 2.1 顶部可视化区域 (Visual Area)
+**表格**（QTableWidget，5列）：
 
-**控件类型: PictureBox (WinForms) 或 Canvas (WPF)。**
+| 列 | 标题 | 说明 |
+|----|------|------|
+| 0 | 桩号(m) | -- |
+| 1 | 高程(m) | -- |
+| 2 | 竖曲线半径(m) | 0=折线 |
+| 3 | 转弯类型 | QComboBox（无/圆弧/折线） |
+| 4 | 转角(deg) | -- |
 
-**背景色: 黑色 (#000000)。**
+**工具栏**：添加/删除节点、导入DXF、清空
 
-**功能:**
+**双向同步**：
+- 正向：节点表编辑 -> `_sync_nodes_to_segments()` -> 重建管身段
+- 反向：管身段编辑 -> `_sync_segments_to_nodes()` -> 重建节点表
+- 防递归：`_syncing` 标志
+
+**DXF导入流程**：
+1. 选择纵断面DXF文件
+2. 计算桩号偏移量（对齐平面IP点起始桩号或归零）
+3. 调用 `DxfParser.parse_longitudinal_profile()`
+4. 同时用 `parse_dxf()` 生成结构段表格
+5. 保留已有通用构件（进出水口形状/系数设置不丢失）
+6. 切换画布为纵断面视图
+7. 显示模式提示（三维空间合并 / 纵断面独立）
 
-接收绘图数据（坐标点列表、管径、水位高程）。
+#### Tab 4: 计算结果
 
-绘制倒虹吸管剖面图（绿色线条）。
+**子TabWidget**（结果汇总 + 详细过程 + 公式展示）：
+- 结果汇总：QTextEdit（只读），显示 `format_result(show_steps=False)`
+- 详细过程：QTextEdit（只读），显示 `format_result(show_steps=True)`
+- 公式展示：QWebEngineView，KaTeX渲染（亚克力毛玻璃风格）
+
+### 2.3 区域 C：底部操作栏
 
-绘制水位线（绿色水平线 + 倒三角符号）。
+| 按钮 | 说明 |
+|------|------|
+| 计算 | PrimaryPushButton，触发核心计算 |
+| 导出Word | PushButton，工程产品运行卡格式 |
+| 导出Excel | PushButton，openpyxl |
+| 导出TXT | PushButton，纯文本 |
+
+### 2.4 数据状态栏
+
+位于画布下方，实时显示当前计算模式：
+- "平面+纵断面（空间合并）" -- 绿色
+- "仅平面估算" -- 橙色
+- "仅纵断面" -- 橙色
+- "传统模式（仅平面总长度）" -- 橙色
+- "无平面/纵断面数据" -- 红色
+
+附加数据计数：结构段数、节点数、IP点数、平面长度
+
+---
+
+## 3. 对话框体系 (dialogs.py)
+
+### 3.1 InletShapeDialog（进水口形状设置）
+
+- 显示表L.1.4-2三种形状及对应xi范围
+- 用户选择形状后自动设置xi值（取范围中值或用户指定）
+
+### 3.2 OutletShapeDialog（出水口系数设置）
+
+- 根据下游渠道参数（类型/B/h/m/D/R）计算出口系数
+- 支持手动输入
+
+### 3.3 TrashRackConfigDialog（拦污栅详细配置）
+
+- 左侧：参数录入区（栅面倾角/是否有支墩/栅条形状/厚度间距等）
+- 右侧：规范参考区（图L.1.4-1形状示意图 + 表L.1.4-1系数表）
+- 实时预览xi计算结果
+- 支持手动输入模式
+- 详见 `PRD_拦污栅配置.md`
+
+### 3.4 SegmentEditDialog（管身段编辑）
+
+- 编辑/新增直管、弯管、折管
+- 弯管自动查表计算xi
 
-绘制标尺或辅助网格（可选）。
+### 3.5 InletSectionDialog（进口断面参数设置）
 
-支持简单的缩放或平移（高级需求，可选）。
-
-### 2.2 中部参数设置区域 (Parameter Area)
-
-包含两个 TabControl 页面。
-
-#### Tab 1: 基本参数 (Basic Parameters)
-
-采用左右分栏布局或分组框 (GroupBox)。
-
-**左侧：全局水力参数**
-
-**ComboBox 计算目标: 锁定显示 “设计截面”。**
-
-**TextBox 设计流量 Q: 必填，浮点数校验。**
-
-**TextBox 拟定流速 v: 必填，浮点数校验。**
-
-**TextBox 上/下游水位: 浮点数。**
-
-**TextBox 上游渠底高程: 用于绘图定位。**
-
-**TextBox 糙率 n: 默认 0.014。**
-
-**右侧：渐变段配置**
-
-**ComboBox 进口型式: 绑定 Enum (无, 方头, 圆弧等)。触发 SelectionChanged 事件。**
-
-**TextBox 进口系数: 绑定到后端推荐值，允许用户覆盖。**
-
-**TextBox 进口渠道流速: 用户输入。**
-
-**Label 进口管内流速: 只读，绑定计算结果。**
-
-(出口配置同理)
-
-#### Tab 2: 结构段信息 (Structure Segments)
-
-**顶部工具栏:**
-
-**Button [导入 DXF]: 点击调用 OpenFileDialog。**
-
-**Button [清空]: 清空表格。**
-
-**TextBox 结构段数: 只读或手动输入（导入DXF后自动更新）。**
-
-**核心控件: DataGridView (WinForms) 或 DataGrid (WPF)。**
-
-**列定义:**
-
-序号: 自动生成。
-
-类型: ComboBoxColumn (直管, 弯管, 折管…)。
-
-参数1 (长度/半径): 动态标题。
-
-参数2 (角度): 动态标题。
-
-局部系数: TextBoxColumn (支持手动修改)。
-
-解锁: CheckBoxColumn (控制该行是否只读)。
-
-**交互逻辑:**
-
-点击行时，根据类型动态改变单元格的可编辑状态。
-
-第1行强制为“进水口”，最后一行强制为“出水口”。
-
-**右侧说明面板: Label 或 TextBlock，显示硬编码的操作指南。**
-
-### 2.3 底部操作区域 (Operation Area)
-
-**左侧: Panel 显示公式图片或文字说明（谢才公式等）。**
-
-**中间: TextBox 作业名称。**
-
-**右侧:**
-
-**Button [计算]: 触发核心计算流程。**
-
-**Button [返回/关闭]: 关闭窗口。**
-
-## 3. 前端交互逻辑 (Frontend Logic)
-
-### 3.1 事件处理 (Event Handling)
-
-#### A. 渐变段联动
-
-**事件: 用户在 Tab 1 更改“进口型式”。**
-
-**动作:**
-
-调用后端 GetRecommendedGradientCoeff 获取系数。
-
-更新 Tab 1 的“进口系数”文本框。
-
-同步更新 Tab 2 第 1 行（进水口）的“局部系数”单元格。
-
-#### B. DXF 导入
-
-**事件: 点击 [导入 DXF]。**
-
-**动作:**
-
-打开文件选择器，滤镜 *.dxf。
-
-调用后端 ParseDxf(filePath)。
-
-获取返回的 List<StructureSegment>。
-
-**数据绑定: 将列表绑定到 DataGridView。**
-
-**锁定状态: 将所有导入生成的行设为“只读”（Lock Checkbox = True）。**
-
-**反馈: 弹窗提示“导入成功，共解析 X 段…”。**
-
-#### C. 计算执行
-
-**事件: 点击 [计算]。**
-
-**动作:**
-
-**表单校验: 检查 Q, v, 水位等是否为空或非法格式。**
-
-**构建数据: 从 UI 控件收集 GlobalParameters 对象和 List<StructureSegment>。**
-
-**调用后端: Backend.ExecuteCalculation(...)。**
-
-**处理结果:**
-
-**成功:**
-
-弹窗显示：管径 D、总损失 、校验结果。
-
-刷新绘图区 (调用绘图方法)。
-
-更新 Tab 1 中只读的流速字段。
-
-**失败/警告:**
-
-弹窗显示错误信息（如“水位差不足”）。
-
-### 3.2 绘图实现 (Rendering)
-
-需封装一个 DrawPipeline 方法。
-
-**坐标转换:**
-
-定义 WorldToScreen 转换矩阵。
-
-世界坐标原点  映射到画布左侧适当位置。
-
-Y轴翻转（屏幕坐标向下为正，物理坐标向上为正）。
-
-**绘制流程:**
-
-Graphics.Clear(Color.Black)。
-
-**画管线:**
-
-遍历结构段。
-
-根据计算出的管径 ，计算中心线上下偏移量。
-
-使用 DrawLine (直管/折管) 和 DrawArc (弯管) 绘制绿色线条。
-
-注：对于DXF导入的数据，直接使用解析出的坐标点绘制中心线，再算法生成管壁线。
-
-**画水位:**
-
-使用 DrawLine 绘制上游 () 和下游 () 水位线。
-
-绘制倒三角图标 DrawPolygon。
-
-**画标尺/文字:**
-
-在关键节点（进出口、变坡点）绘制文本 DrawString 显示高程或桩号。
-
-## 4. 异常提示与用户体验
-
-**输入错误: 使用 ErrorProvider (WinForms) 或红色边框 (WPF) 提示非法输入。**
-
-**耗时操作: 若计算或解析耗时 > 500ms，鼠标指针变为 WaitCursor。**
-
-**数据同步: 确保 Tab 1 的系数修改能实时反映到 Tab 2，反之亦然。**
+- 输入 B(底宽)、h(水深)、m(坡比)
+- 计算 v2 = Q / [(B + m*h) * h]
+
+### 3.6 CommonSegmentAddDialog / CommonSegmentEditDialog / SimpleCommonEditDialog
+
+- 添加/编辑通用构件（名称 + xi值）
+
+### 3.7 L12CoeffRefDialog（渐变段系数参考表）
+
+- 只读表格，显示表L.1.2数据
+
+---
+
+## 4. 多标签页窗口 (MultiSiphonDialog)
+
+### 4.1 功能
+
+- 从推求水面线表格自动提取倒虹吸分组数据（`SiphonDataExtractor`)
+- 每个倒虹吸独立标签页（`SiphonPanel` 实例）
+- 参数自动导入（Q/n/v/渐变段/断面参数/平面段等）
+- 全部计算并导出水头损失到主表格
+- `SiphonManager` 持久化（保存/加载历史配置）
+
+### 4.2 接口
+
+```python
+MultiSiphonDialog(
+    parent,
+    siphon_groups: List[SiphonGroup],
+    manager: SiphonManager = None,
+    on_import_losses: Callable = None,  # 回调：results -> 写入主表
+    siphon_turn_radius_n: float = 0.0,
+    auto_run: bool = False
+)
+```
+
+---
+
+## 5. 交互逻辑
+
+### 5.1 参数联动
+
+| 触发 | 联动动作 |
+|------|----------|
+| Q 或 v 变更 | 200ms防抖 -> 更新D理论值、弯管半径R |
+| 渐变段型式变更 | 自动查表填充 xi1/xi2 |
+| v1 变更 | v2策略为"v1+0.2"时联动v2 |
+| 弯管半径倍数 n 变更 | 联动R值显示、更新平面弯管半径 |
+| 弯管半径 R 变更 | 反推 n = R / D设计 |
+| 管道根数变更 | 联动Q/v理论值 |
+| 指定管径勾选 | 显示/隐藏管径输入框 |
+
+### 5.2 计算流程
+
+1. 验证拟定流速已确认（方案D）
+2. 验证管道根数已确认
+3. 收集 GlobalParameters
+4. 同步纵断面节点
+5. 弯管半径倍数未确认警告（方案B，不阻断）
+6. v2校验（非阻断警告）
+7. 调用 `HydraulicCore.execute_calculation()`
+8. 回填流速值（v1/v2/v_out/v3），标注来源
+9. 水损阈值检查
+10. 显示结果（自动切换到结果Tab）
+11. 更新画布和数据状态
+12. 触发回调（如有）
+
+### 5.3 导出功能
+
+| 格式 | 依赖 | 内容 |
+|------|------|------|
+| Word (.docx) | python-docx, latex2mathml, lxml | 工程产品运行卡格式：基础公式+设计参数+计算结果+详细过程 |
+| Excel (.xlsx) | openpyxl | 参数+结果表格 |
+| TXT | 无 | 纯文本计算报告 |
+
+Word导出特性：
+- 若当前结果无详细步骤，自动以verbose模式重新计算
+- 使用 `ExportConfirmDialog` 确认报告元数据
+- 公式使用 LaTeX->MathML 渲染
+- 支持自动更新目录（via COM）
+
+### 5.4 序列化接口
+
+```python
+to_dict() -> dict   # 保存：Q/v/n/v1/v3/渐变段/管径/根数/结构段/节点/平面数据
+from_dict(d)        # 恢复：UI状态完全还原
+```
+
+---
+
+## 6. 可视化画布 (canvas_view.py)
+
+### 6.1 PipelineCanvas
+
+继承 QWidget，自绘引擎。
+
+**颜色体系**：
+
+| 常量 | 颜色 | 用途 |
+|------|------|------|
+| C_BG | #14141E | 背景 |
+| C_PIPE | #00FF00 | 管线 |
+| C_BEND | #FFAA00 | 弯管/折管 |
+| C_INLET | #00FFFF | 进出口 |
+| C_NODE | #00FF00 | 节点 |
+| C_ELEV | #AAAAAA | 高程标注 |
+
+**视图模式**：
+- profile（纵断面）：绘制管线轮廓+高程标注+弯管角度
+- plan（平面）：绘制IP点连线+转弯半径+方位角箭头
+
+**交互**：
+- 鼠标滚轮：缩放（centered on cursor）
+- 鼠标拖拽：平移
+- auto_select_view()：根据数据自动切换视图
+
+---
+
+## 7. 异常处理与用户体验
+
+- **输入错误**：qfluentwidgets InfoBar（红色ERROR/黄色WARNING/绿色SUCCESS），定位到窗口顶部
+- **防抖机制**：Q/v参数联动200ms防抖、画布更新100ms防抖
+- **确认交互**：拟定流速/管道根数/弯管半径倍数分别有独立确认机制，避免误操作
+- **示例数据提示**：纵断面示例数据灰色显示，首次手动添加自动清除
+- **空表格引导**：无数据时显示"点击导入DXF或手动添加"提示
+- **文件占用处理**：Word/Excel导出捕获PermissionError，提示关闭已打开的文件
+
+---
+
+## 8. 变更日志
+
+| 版本 | 日期 | 变更内容 |
+|------|------|----------|
+| v1.0 | 2026-02-15 | 初始版本（WinForms/WPF架构描述） |
+| v2.0 | 2026-02-25 | 全面重写：PySide6+Fluent UI实现；新增4Tab布局、三区表格、纵断面节点双向同步、多标签页窗口、确认交互机制、v2策略联动、导出体系、可视化画布、对话框体系 |

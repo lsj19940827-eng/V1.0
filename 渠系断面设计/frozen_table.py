@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableView, QHeaderView, QAbstractItemView,
 )
 from PySide6.QtCore import Qt, QEvent
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QPalette, QKeySequence
 
 
 class FrozenColumnTableWidget(QTableWidget):
@@ -274,3 +274,59 @@ class FrozenColumnTableWidget(QTableWidget):
             if col < col_count:
                 self._frozen_view.setColumnWidth(col, self.columnWidth(col))
         self._update_frozen_geometry()
+
+    # ────────────────────────────────────────────
+    # Excel 风格复制粘贴（Ctrl+C / Ctrl+V）
+    # ────────────────────────────────────────────
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self._copy_selection_to_clipboard()
+            return
+        if event.matches(QKeySequence.StandardKey.Paste):
+            self._paste_from_clipboard()
+            return
+        super().keyPressEvent(event)
+
+    def _copy_selection_to_clipboard(self):
+        """将选中单元格以 Tab 分隔、换行分行的格式复制到剪贴板（与 Excel 兼容）。"""
+        from PySide6.QtWidgets import QApplication
+        indexes = self.selectedIndexes()
+        if not indexes:
+            return
+        rows = sorted(set(idx.row() for idx in indexes))
+        cols = sorted(set(idx.column() for idx in indexes))
+        lines = []
+        for r in rows:
+            row_data = []
+            for c in cols:
+                item = self.item(r, c)
+                row_data.append(item.text() if item else "")
+            lines.append("\t".join(row_data))
+        QApplication.clipboard().setText("\n".join(lines))
+
+    def _paste_from_clipboard(self):
+        """从剪贴板粘贴内容到表格，从当前单元格开始，跳过不可编辑单元格。"""
+        from PySide6.QtWidgets import QApplication, QTableWidgetItem
+        text = QApplication.clipboard().text()
+        if not text:
+            return
+        current = self.currentIndex()
+        if not current.isValid():
+            return
+        start_row = current.row()
+        start_col = current.column()
+        lines = text.rstrip('\n\r').split('\n')
+        for r_offset, line in enumerate(lines):
+            cells = line.split('\t')
+            for c_offset, value in enumerate(cells):
+                tr = start_row + r_offset
+                tc = start_col + c_offset
+                if tr >= self.rowCount() or tc >= self.columnCount():
+                    continue
+                item = self.item(tr, tc)
+                if item is None:
+                    item = QTableWidgetItem()
+                    self.setItem(tr, tc, item)
+                if not (item.flags() & Qt.ItemIsEditable):
+                    continue
+                item.setText(value.strip())

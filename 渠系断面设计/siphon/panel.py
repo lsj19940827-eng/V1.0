@@ -4,7 +4,7 @@
 
 功能：
 1. 管道可视化画布（纵断面/平面视图，缩放/平移）
-2. 全局参数输入（流量、拟定流速、糙率、弯管半径倍数、水损阈值、渐变段型式/系数、v₁v₂v₃策略）
+2. 全局参数输入（流量、拟定流速、糙率、平面转弯半径倍数、水损阈值、渐变段型式/系数、v₁v₂v₃策略）
 3. 结构段三区表格（通用构件/平面段/纵断面段，三色分区、双击编辑）
 4. DXF导入纵断面
 5. HydraulicCore 水力计算 + 计算回填
@@ -282,7 +282,7 @@ class SiphonPanel(QWidget):
 
         # 拟定流速确认标志（方案D：用户是否已手动输入或确认过流速）
         self._v_user_confirmed = False
-        # 弯管半径倍数确认标志（方案B：温和提醒）
+        # 平面转弯半径倍数确认标志（方案B：温和提醒）
         self._turn_n_user_confirmed = False
         # 管道根数确认标志（用户需Enter/失焦/按钮确认）
         self._num_pipes_user_confirmed = False
@@ -429,97 +429,64 @@ class SiphonPanel(QWidget):
         lay.setContentsMargins(4, 2, 4, 2)
         lay.setSpacing(6)
 
-        # ========== Card 1: 全局水力参数 (QGroupBox, QGridLayout 6列×6行) ==========
-        # 布局：左半(col 0-2) / 右半(col 3-5)，col2/col5 弹性伸展
+        # ========== Card 1: 全局水力参数 — 三栏布局（新方案，标签上方） ==========
+        # 左栏(管道基础参数) | 中栏(管道运行参数) | 右栏(转弯控制参数)
         card1 = QGroupBox("全局水力参数")
-        g1 = QGridLayout(card1)
-        g1.setContentsMargins(10, 6, 10, 6)
-        g1.setHorizontalSpacing(8)
-        g1.setVerticalSpacing(5)
+        _c1_lay = QHBoxLayout(card1)
+        _c1_lay.setContentsMargins(10, 8, 10, 8)
+        _c1_lay.setSpacing(0)
 
-        # Row 0: 设计流量Q (左) | 拟定流速v (右)
-        g1.addWidget(QLabel("设计流量 Q (m³/s):"), 0, 0)
+        def _vsep():
+            _s = QFrame(); _s.setFrameShape(QFrame.Shape.VLine); _s.setFrameShadow(QFrame.Shadow.Sunken)
+            _s.setStyleSheet("color:#D0D5E0;"); return _s
+
+        def _hrow(*widgets):
+            _w = QWidget(); _l = QHBoxLayout(_w)
+            _l.setContentsMargins(0, 0, 0, 0); _l.setSpacing(6)
+            for ww in widgets: _l.addWidget(ww)
+            _l.addStretch(); return _w
+
+        def _star(color):
+            _s = QLabel(f"<span style='color:{color};font-weight:bold;font-size:14px;'>*</span>")
+            _s.setTextFormat(Qt.RichText); return _s
+
+        def _lbl_with_star(text, color):
+            _w = QWidget(); _l = QHBoxLayout(_w)
+            _l.setContentsMargins(0, 0, 0, 0); _l.setSpacing(1)
+            _l.addWidget(QLabel(text)); _l.addWidget(_star(color)); _l.addStretch(); return _w
+
+        # ── 左栏：管道基础参数 ──
+        col_l = QWidget()
+        _ll = QVBoxLayout(col_l)
+        _ll.setContentsMargins(0, 0, 12, 0)
+        _ll.setSpacing(3)
+
+        _ll.addWidget(QLabel("设计流量 Q (m³/s):"))
         self.edit_Q = LineEdit(); self.edit_Q.setText("10.0"); self.edit_Q.setFixedWidth(80)
         self.edit_Q.textChanged.connect(self._on_Qv_changed)
-        g1.addWidget(self.edit_Q, 0, 1)
         self.lbl_Q_hint = QLabel("")
         self.lbl_Q_hint.setStyleSheet("color:#0066CC;font-size:12px;")
-        g1.addWidget(self.lbl_Q_hint, 0, 2)
-        lbl_v_label = QLabel("拟定流速 v (m/s):")
-        lbl_v_star = QLabel("<span style='color:#E53935;font-weight:bold;font-size:14px;'>*</span>")
-        lbl_v_star.setTextFormat(Qt.RichText)
-        v_label_lay = QHBoxLayout(); v_label_lay.setSpacing(1); v_label_lay.setContentsMargins(0,0,0,0)
-        v_label_lay.addWidget(lbl_v_label); v_label_lay.addWidget(lbl_v_star)
-        v_label_w = QWidget(); v_label_w.setLayout(v_label_lay)
-        g1.addWidget(v_label_w, 0, 3)
-        self.edit_v = LineEdit(); self.edit_v.setText("2.0"); self.edit_v.setFixedWidth(70)
-        self.edit_v.setStyleSheet(
-            "LineEdit { border: 2px dashed #E65100; background: #FFF8E1; }"
-        )
-        self.edit_v.textChanged.connect(self._on_Qv_changed)
-        self.edit_v.textChanged.connect(self._on_v_edited_by_user)
-        self.edit_v.editingFinished.connect(self._on_v_confirmed)
-        self.lbl_v_hint = QLabel("← 请输入拟定流速")
-        self.lbl_v_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
-        _v_w = QWidget(); _v_lay = QHBoxLayout(_v_w)
-        _v_lay.setContentsMargins(0, 0, 0, 0); _v_lay.setSpacing(4)
-        _v_lay.addWidget(self.edit_v); _v_lay.addWidget(self.lbl_v_hint); _v_lay.addStretch()
-        g1.addWidget(_v_w, 0, 4, 1, 2)
+        _ll.addWidget(_hrow(self.edit_Q, self.lbl_Q_hint))
+        _ll.addSpacing(4)
 
-        # Row 1: 糙率n (左) | 管道根数N (右)
-        g1.addWidget(QLabel("糙率 n:"), 1, 0)
+        _ll.addWidget(QLabel("糙率 n:"))
         self.edit_n = LineEdit(); self.edit_n.setText("0.014"); self.edit_n.setFixedWidth(60)
-        g1.addWidget(self.edit_n, 1, 1)
         self.lbl_n_hint = QLabel("")
         self.lbl_n_hint.setStyleSheet("color:#0066CC;font-size:12px;")
-        g1.addWidget(self.lbl_n_hint, 1, 2)
-        lbl_np_label = QLabel("管道根数 N (根):")
-        lbl_np_star = QLabel("<span style='color:#E53935;font-weight:bold;font-size:14px;'>*</span>")
-        lbl_np_star.setTextFormat(Qt.RichText)
-        np_label_lay = QHBoxLayout(); np_label_lay.setSpacing(1); np_label_lay.setContentsMargins(0,0,0,0)
-        np_label_lay.addWidget(lbl_np_label); np_label_lay.addWidget(lbl_np_star)
-        np_label_w = QWidget(); np_label_w.setLayout(np_label_lay)
-        g1.addWidget(np_label_w, 1, 3)
-        self.spin_num_pipes = _NumPipesWidget()
-        self._apply_np_unconfirmed_style()
-        self.spin_num_pipes.valueChanged.connect(self._on_num_pipes_value_changed)
-        self.spin_num_pipes.btn_minus.clicked.connect(self._on_num_pipes_confirmed)
-        self.spin_num_pipes.btn_plus.clicked.connect(self._on_num_pipes_confirmed)
-        self.spin_num_pipes.editingFinished.connect(self._on_num_pipes_confirmed)
-        g1.addWidget(self.spin_num_pipes, 1, 4)
-        self.lbl_num_pipes_hint = QLabel("← 请输入管道根数")
-        self.lbl_num_pipes_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
-        g1.addWidget(self.lbl_num_pipes_hint, 1, 5)
+        _ll.addWidget(_hrow(self.edit_n, self.lbl_n_hint))
+        _ll.addSpacing(4)
 
-        # Row 2: 管径D (左) | 弯管半径倍数输入 (右)
-        g1.addWidget(QLabel("管径 D:"), 2, 0)
+        _ll.addWidget(QLabel("管径 D:"))
         self.lbl_D_theory = QLabel("D = --")
         self.lbl_D_theory.setStyleSheet(f"color:{P};font-size:12px;font-weight:bold;")
-        g1.addWidget(self.lbl_D_theory, 2, 1, 1, 2)
-        lbl_tn_label = QLabel("弯管半径倍数 (R=nD):")
-        lbl_tn_star = QLabel("<span style='color:#1565C0;font-weight:bold;font-size:14px;'>*</span>")
-        lbl_tn_star.setTextFormat(Qt.RichText)
-        tn_label_lay = QHBoxLayout(); tn_label_lay.setSpacing(1); tn_label_lay.setContentsMargins(0,0,0,0)
-        tn_label_lay.addWidget(lbl_tn_label); tn_label_lay.addWidget(lbl_tn_star)
-        tn_label_w = QWidget(); tn_label_w.setLayout(tn_label_lay)
-        g1.addWidget(tn_label_w, 2, 3)
-        self.edit_turn_n = LineEdit(); self.edit_turn_n.setText("3.0"); self.edit_turn_n.setFixedWidth(50)
-        self.edit_turn_n.setStyleSheet(
-            "LineEdit { border: 1.5px dashed #1565C0; background: #E3F2FD; }"
-        )
-        self.edit_turn_n.textChanged.connect(self._on_turn_n_edited_by_user)
-        self.edit_turn_n.textChanged.connect(self._on_turn_n_changed)
-        g1.addWidget(self.edit_turn_n, 2, 4, 1, 2)
+        _ll.addWidget(self.lbl_D_theory)
+        _ll.addSpacing(4)
 
-        # Row 3: 指定管径+帮助按钮(左，容器) | R计算结果全文(右，跨3列)
         _d_container = QWidget()
         _d_vlay = QVBoxLayout(_d_container)
-        _d_vlay.setContentsMargins(0, 0, 0, 0)
-        _d_vlay.setSpacing(3)
-        _d_cb_row = QWidget()
-        _d_cb_lay = QHBoxLayout(_d_cb_row)
-        _d_cb_lay.setContentsMargins(0, 0, 0, 0)
-        _d_cb_lay.setSpacing(6)
+        _d_vlay.setContentsMargins(0, 0, 0, 0); _d_vlay.setSpacing(3)
+        _d_cb_row = QWidget(); _d_cb_lay = QHBoxLayout(_d_cb_row)
+        _d_cb_lay.setContentsMargins(0, 0, 0, 0); _d_cb_lay.setSpacing(6)
         self.cb_D_override = CheckBox("指定管径")
         self.cb_D_override.setChecked(False)
         self.cb_D_override.stateChanged.connect(self._on_D_override_toggled)
@@ -543,7 +510,7 @@ class SiphonPanel(QWidget):
         _d_vlay.addWidget(_d_cb_row)
         self.lbl_D_help = QLabel(
             "当工程实际管径已由工程师自行确定时，勾选此项并输入实际管径，覆盖自动计算结果。\n"
-            "注：覆盖后弯管半径 R=nD 将使用指定值重新计算。"
+            "注：覆盖后平面转弯半径 R=nD 将使用指定值重新计算。"
         )
         self.lbl_D_help.setWordWrap(True)
         self.lbl_D_help.setStyleSheet(
@@ -555,59 +522,110 @@ class SiphonPanel(QWidget):
         _btn_D_help.clicked.connect(
             lambda: self.lbl_D_help.setVisible(not self.lbl_D_help.isVisible())
         )
-        g1.addWidget(_d_container, 3, 0, 1, 3)
-        _R_container = QWidget()
-        _R_vlay = QVBoxLayout(_R_container)
-        _R_vlay.setContentsMargins(0, 0, 0, 0)
-        _R_vlay.setSpacing(3)
-        _R_row = QWidget(); _R_row_lay = QHBoxLayout(_R_row)
-        _R_row_lay.setContentsMargins(0, 0, 0, 0); _R_row_lay.setSpacing(6)
-        _R_row_lay.addWidget(QLabel("弯管半径 R (m):"))
+        _ll.addWidget(_d_container)
+        _ll.addStretch()
+
+        _c1_lay.addWidget(col_l, 3)
+        _c1_lay.addWidget(_vsep())
+
+        # ── 中栏：管道运行参数 ──
+        col_m = QWidget()
+        _ml = QVBoxLayout(col_m)
+        _ml.setContentsMargins(12, 0, 12, 0)
+        _ml.setSpacing(3)
+
+        _ml.addWidget(_lbl_with_star("拟定流速 v (m/s):", "#E53935"))
+        self.edit_v = LineEdit(); self.edit_v.setText("2.0"); self.edit_v.setFixedWidth(70)
+        self.edit_v.setStyleSheet("LineEdit { border: 2px dashed #E65100; background: #FFF8E1; }")
+        self.edit_v.textChanged.connect(self._on_Qv_changed)
+        self.edit_v.textChanged.connect(self._on_v_edited_by_user)
+        self.edit_v.editingFinished.connect(self._on_v_confirmed)
+        self.lbl_v_hint = QLabel("← 请输入拟定流速")
+        self.lbl_v_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
+        _ml.addWidget(_hrow(self.edit_v, self.lbl_v_hint))
+        _ml.addSpacing(4)
+
+        _ml.addWidget(_lbl_with_star("管道根数 N (根):", "#E53935"))
+        self.spin_num_pipes = _NumPipesWidget()
+        self._apply_np_unconfirmed_style()
+        self.spin_num_pipes.valueChanged.connect(self._on_num_pipes_value_changed)
+        self.spin_num_pipes.btn_minus.clicked.connect(self._on_num_pipes_confirmed)
+        self.spin_num_pipes.btn_plus.clicked.connect(self._on_num_pipes_confirmed)
+        self.spin_num_pipes.editingFinished.connect(self._on_num_pipes_confirmed)
+        self.lbl_num_pipes_hint = QLabel("← 请输入管道根数")
+        self.lbl_num_pipes_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
+        _ml.addWidget(_hrow(self.spin_num_pipes, self.lbl_num_pipes_hint))
+        _ml.addSpacing(4)
+
+        _ml.addWidget(QLabel("计算目标:"))
+        self.lbl_calc_target = QLabel("计算总水头损失")
+        self.lbl_calc_target.setStyleSheet("color:#00796B;font-weight:bold;")
+        _ml.addWidget(self.lbl_calc_target)
+        _ml.addSpacing(4)
+
+        self.inc_cb = CheckBox("考虑加大流量比例系数")
+        self.inc_cb.setChecked(True)
+        self.inc_cb.stateChanged.connect(self._on_inc_toggle)
+        _ml.addWidget(self.inc_cb)
+        _inc_r = QWidget(); _inc_r_lay = QHBoxLayout(_inc_r)
+        _inc_r_lay.setContentsMargins(0, 0, 0, 0); _inc_r_lay.setSpacing(6)
+        _inc_r_lay.addWidget(QLabel("加大比例(%):"))
+        self.edit_inc = LineEdit()
+        self.edit_inc.setPlaceholderText("留空自动计算")
+        self.edit_inc.setFixedWidth(90)
+        _inc_r_lay.addWidget(self.edit_inc)
+        self.lbl_inc_hint = QLabel("(留空则按设计流量自动查表)")
+        self.lbl_inc_hint.setStyleSheet("color:#0066CC;font-size:12px;")
+        _inc_r_lay.addWidget(self.lbl_inc_hint)
+        _inc_r_lay.addStretch()
+        _ml.addWidget(_inc_r)
+        _ml.addStretch()
+
+        _c1_lay.addWidget(col_m, 4)
+        _c1_lay.addWidget(_vsep())
+
+        # ── 右栏：转弯控制参数 ──
+        col_r = QWidget()
+        _rl = QVBoxLayout(col_r)
+        _rl.setContentsMargins(12, 0, 0, 0)
+        _rl.setSpacing(3)
+
+        _rl.addWidget(_lbl_with_star("平面转弯半径倍数 (R=nD):", "#1565C0"))
+        self.edit_turn_n = LineEdit(); self.edit_turn_n.setText("3.0"); self.edit_turn_n.setFixedWidth(50)
+        self.edit_turn_n.setStyleSheet("LineEdit { border: 1.5px dashed #1565C0; background: #E3F2FD; }")
+        self.edit_turn_n.textChanged.connect(self._on_turn_n_edited_by_user)
+        self.edit_turn_n.textChanged.connect(self._on_turn_n_changed)
+        _lbl_tn_hint = QLabel("(请确认倍数)")
+        _lbl_tn_hint.setStyleSheet("color:#FF6600;font-size:12px;")
+        _rl.addWidget(_hrow(self.edit_turn_n, _lbl_tn_hint))
+        _rl.addSpacing(4)
+
+        _rl.addWidget(QLabel("平面转弯半径 R (m):"))
         self.edit_turn_R = LineEdit()
         self.edit_turn_R.setPlaceholderText("自动计算")
         self.edit_turn_R.setFixedWidth(70)
         self.edit_turn_R.setStyleSheet("LineEdit { border: 1px solid #90CAF9; background: #E3F2FD; }")
         self.edit_turn_R.textChanged.connect(self._on_turn_R_changed)
-        _R_row_lay.addWidget(self.edit_turn_R)
         self.lbl_turn_R_status = QLabel("← 可直接输入覆盖（修改R将反推n）")
         self.lbl_turn_R_status.setStyleSheet("color:#888;font-size:12px;")
-        _R_row_lay.addWidget(self.lbl_turn_R_status)
-        _R_row_lay.addStretch()
-        _R_vlay.addWidget(_R_row)
+        _rl.addWidget(_hrow(self.edit_turn_R, self.lbl_turn_R_status))
+
         self.lbl_turn_R = QLabel("R = --  (请确认倍数)")
         self.lbl_turn_R.setStyleSheet("color:#1565C0;font-size:12px;")
-        _R_vlay.addWidget(self.lbl_turn_R)
-        g1.addWidget(_R_container, 3, 3, 1, 3)
+        self.lbl_turn_R.setWordWrap(True)
+        _rl.addWidget(self.lbl_turn_R)
+        _rl.addSpacing(4)
 
-        # Row 4: 计算目标(左) | 水损阈值(右)
-        g1.addWidget(QLabel("计算目标:"), 4, 0)
-        self.lbl_calc_target = QLabel("计算总水头损失")
-        self.lbl_calc_target.setStyleSheet("color:#00796B;font-weight:bold;")
-        g1.addWidget(self.lbl_calc_target, 4, 1, 1, 2)
-        g1.addWidget(QLabel("水损阈值 (m):"), 4, 3)
-        self.edit_threshold = LineEdit(); self.edit_threshold.setPlaceholderText("如: 2.0"); self.edit_threshold.setFixedWidth(75)
-        g1.addWidget(self.edit_threshold, 4, 4)
-        lbl_threshold_hint = QLabel("(ΔZ超此值将提醒调整参数)")
-        lbl_threshold_hint.setStyleSheet("color:#FF6600;font-size:12px;")
-        g1.addWidget(lbl_threshold_hint, 4, 5)
+        _rl.addWidget(QLabel("水损阈值 (m):"))
+        self.edit_threshold = LineEdit()
+        self.edit_threshold.setPlaceholderText("如: 2.0")
+        self.edit_threshold.setFixedWidth(75)
+        _lbl_threshold_hint = QLabel("(ΔZ超此值将提醒调整参数)")
+        _lbl_threshold_hint.setStyleSheet("color:#FF6600;font-size:12px;")
+        _rl.addWidget(_hrow(self.edit_threshold, _lbl_threshold_hint))
+        _rl.addStretch()
 
-        # Row 5: 加大流量(左) | 加大比例(右)
-        self.inc_cb = CheckBox("考虑加大流量比例系数")
-        self.inc_cb.setChecked(True)
-        self.inc_cb.stateChanged.connect(self._on_inc_toggle)
-        g1.addWidget(self.inc_cb, 5, 0, 1, 3)
-        g1.addWidget(QLabel("加大比例(%):"), 5, 3)
-        self.edit_inc = LineEdit()
-        self.edit_inc.setPlaceholderText("留空自动计算")
-        self.edit_inc.setFixedWidth(100)
-        g1.addWidget(self.edit_inc, 5, 4)
-        self.lbl_inc_hint = QLabel("(留空则按设计流量自动查表)")
-        self.lbl_inc_hint.setStyleSheet("color:#0066CC;font-size:12px;")
-        g1.addWidget(self.lbl_inc_hint, 5, 5)
-
-        # 左侧hint列(2)和右侧hint列(5)弹性伸展，吸收多余空间
-        g1.setColumnStretch(2, 1)
-        g1.setColumnStretch(5, 1)
+        _c1_lay.addWidget(col_r, 3)
 
         lay.addWidget(card1)
 
@@ -1198,7 +1216,7 @@ document.addEventListener("DOMContentLoaded", function(){
             self.lbl_vout_hint.setText("(已从主表导入)")
             self.lbl_vout_hint.setStyleSheet(f"color:#0066CC;font-size:12px;")
 
-        # 弯管半径倍数（同步内部变量，与原版一致）
+        # 平面转弯半径倍数（同步内部变量，与原版一致）
         if 'siphon_turn_radius_n' in kwargs and kwargs['siphon_turn_radius_n']:
             n_val = float(kwargs['siphon_turn_radius_n'])
             self._siphon_turn_radius_n = n_val
@@ -1247,7 +1265,7 @@ document.addEventListener("DOMContentLoaded", function(){
         if 'siphon_name' in kwargs:
             self.edit_name.setText(kwargs['siphon_name'])
 
-        # 更新弯管半径
+        # 更新平面转弯半径
         self._update_plan_bend_radius()
         # 自动计算出水口系数
         self._auto_compute_outlet_xi()
@@ -1259,6 +1277,18 @@ document.addEventListener("DOMContentLoaded", function(){
 
     def get_result(self):
         return self.calculation_result
+
+    def get_plan_bend_radius(self) -> float:
+        """获取平面转弯半径，用于写回水面线表格。
+        优先取 plan_feature_points 中最大非零转弯半径；
+        无有效 IP 点数据则取 edit_turn_R 输入框的值。
+        """
+        if self.plan_feature_points:
+            radii = [fp.turn_radius for fp in self.plan_feature_points
+                     if getattr(fp, 'turn_radius', 0) and fp.turn_radius > 0]
+            if radii:
+                return max(radii)
+        return self._fval(self.edit_turn_R, 0.0)
 
     def get_total_head_loss(self):
         """获取总水头损失（便捷方法）"""
@@ -1856,17 +1886,17 @@ document.addEventListener("DOMContentLoaded", function(){
         return False
 
     # ================================================================
-    # 弯管半径倍数确认交互（方案B：温和提醒）
+    # 平面转弯半径倍数确认交互（方案B：温和提醒）
     # ================================================================
     def _on_turn_n_edited_by_user(self):
-        """用户手动编辑弯管半径倍数时触发"""
+        """用户手动编辑平面转弯半径倍数时触发"""
         if self._syncing:
             return
         self._turn_n_user_confirmed = True
         self._update_turn_n_style()
 
     def _update_turn_n_style(self):
-        """根据确认状态动态更新弯管半径倍数输入框样式"""
+        """根据确认状态动态更新平面转弯半径倍数输入框样式"""
         if self._turn_n_user_confirmed:
             self.edit_turn_n.setStyleSheet(
                 f"LineEdit {{ border: 1.5px solid {S}; background: #F1F8E9; }}"
@@ -1877,13 +1907,13 @@ document.addEventListener("DOMContentLoaded", function(){
             )
 
     def _warn_turn_n_if_needed(self):
-        """计算时若弯管半径倍数未手动确认，弹出黄色警告（不拦截）"""
+        """计算时若平面转弯半径倍数未手动确认，弹出黄色警告（不拦截）"""
         if self._turn_n_user_confirmed or self._suppress_result_display:
             return
         n_val = self._fval(self.edit_turn_n, 3.0)
         InfoBar.warning(
-            "请确认弯管半径倍数",
-            f"弯管半径倍数当前为默认值 {n_val:.1f}，请确认是否符合工程实际。",
+            "请确认平面转弯半径倍数",
+            f"平面转弯半径倍数当前为默认值 {n_val:.1f}，请确认是否符合工程实际。",
             parent=self._info_parent(), duration=5000,
             position=InfoBarPosition.TOP
         )
@@ -3173,7 +3203,7 @@ document.addEventListener("DOMContentLoaded", function(){
                              duration=3000, position=InfoBarPosition.TOP)
                 return
 
-            # 方案B：弯管半径倍数未确认时弹出黄色警告（不阻断）
+            # 方案B：平面转弯半径倍数未确认时弹出黄色警告（不阻断）
             self._warn_turn_n_if_needed()
 
             # v₂验证（非阻断，仅警告）
@@ -3536,7 +3566,7 @@ document.addEventListener("DOMContentLoaded", function(){
             ("管道根数 N", f"{_np_word} 根"),
         ] + ([(f"单管流量 Q/N", f"{_Q_word/_np_word:.4f} m³/s")] if _np_word > 1 else []) + [
             ("糙率 n", f"{self._fval(self.edit_n):.4f}"),
-            ("弯管半径倍数 n", f"{self._fval(self.edit_turn_n):.1f}"),
+            ("平面转弯半径倍数 n", f"{self._fval(self.edit_turn_n):.1f}"),
             ("进口渐变段型式", self.combo_inlet_type.currentText()),
             ("进口渐变段系数 ξ₁", f"{self._fval(self.edit_xi_inlet):.4f}"),
             ("出口渐变段型式", self.combo_outlet_type.currentText()),

@@ -61,6 +61,7 @@ class SectionResult:
     start_station: float = 0.0    # 起始桩号
     flow_section: str = ""        # 流量段编号
     building_name: str = ""       # 建筑物名称
+    turn_radius: float = 0.0      # 平面转弯半径 (m)，0表示未指定
     
     # 原始结果字典（用于导出完整数据）
     raw_result: Dict = field(default_factory=dict)
@@ -178,6 +179,7 @@ class SharedDataManager:
                     coord_Y=result.get('coord_Y', 0.0),
                     flow_section=str(result.get('flow_section', '')),
                     building_name=str(result.get('building_name', '')),
+                    turn_radius=float(result.get('turn_radius', 0.0) or 0.0),
                     raw_result=result
                 )
             
@@ -195,6 +197,7 @@ class SharedDataManager:
                     coord_Y=result.get('coord_Y', 0.0),
                     flow_section=str(result.get('flow_section', '')),
                     building_name=str(result.get('building_name', '')),
+                    turn_radius=float(result.get('turn_radius', 0.0) or 0.0),
                     raw_result=result
                 )
             
@@ -216,6 +219,7 @@ class SharedDataManager:
                 section_result.coord_Y = result.get('coord_Y', 0.0)
                 section_result.flow_section = str(result.get('flow_section', ''))
                 section_result.building_name = str(result.get('building_name', ''))
+                section_result.turn_radius = float(result.get('turn_radius', 0.0) or 0.0)
                 section_result.channel_name = str(result.get('channel_name', ''))
                 section_result.channel_level = str(result.get('channel_level', ''))
                 section_result.start_water_level = result.get('start_water_level', 0.0)

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>弯管半径栏目显示修复方案对比</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:"Microsoft YaHei",sans-serif; background:#f0f2f5; padding:28px; color:#333; }
+h1 { font-size:19px; margin-bottom:4px; }
+.subtitle { color:#888; font-size:12px; margin-bottom:24px; }
+
+/* 外层卡片 */
+.card { background:#fff; border-radius:10px; padding:20px 24px 16px;
+        box-shadow:0 2px 12px rgba(0,0,0,.08); margin-bottom:22px; }
+.card-title { font-size:15px; font-weight:bold; color:#1565C0; margin-bottom:3px; }
+.card-desc  { font-size:12px; color:#888; margin-bottom:12px; border-bottom:1px dashed #e8e8e8; padding-bottom:8px; }
+.tag { display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:bold; margin-left:6px; }
+.tag-min { background:#E3F2FD; color:#1565C0; }
+.tag-rec { background:#E8F5E9; color:#2E7D32; }
+.tag-clean { background:#FFF3E0; color:#E65100; }
+
+/* 模拟面板容器（参照当前界面比例） */
+.panel-sim {
+  background:#FAFAFA; border:1px solid #E0E0E0; border-radius:6px;
+  padding:12px 14px; font-size:13px;
+}
+
+/* 通用行样式 */
+.row { display:flex; align-items:center; gap:6px; margin-bottom:7px; flex-wrap:wrap; }
+.row:last-child { margin-bottom:0; }
+.lbl { color:#555; white-space:nowrap; font-size:13px; }
+.lbl-star { color:#1565C0; font-weight:bold; font-size:13px; }
+.inp { border:1.5px solid #90CAF9; border-radius:4px; padding:3px 7px;
+       background:#E3F2FD; width:64px; font-family:inherit; font-size:13px;
+       outline:none; text-align:center; }
+.inp-n { border:1.5px solid #FF9800; border-radius:4px; padding:3px 7px;
+         background:#FFF8E1; width:60px; font-family:inherit; font-size:13px;
+         outline:none; text-align:center; }
+
+/* 状态/提示文字 */
+.hint-gray  { color:#888; font-size:12px; }
+.hint-blue  { color:#1565C0; font-size:12px; font-weight:bold; }
+.hint-green { color:#2E7D32; font-size:12px; font-weight:bold; }
+.hint-orange { color:#E65100; font-size:12px; }
+
+/* 现有方案（Bug复现） */
+.bug-box { background:#FFF3E0; border:1px solid #FFCC80; border-radius:5px; padding:10px 14px; }
+
+/* 注意框 */
+.notice { font-size:12px; margin-top:10px; border-radius:4px; padding:7px 10px;
+          border-left:3px solid #ccc; background:#F9FAFB; color:#666; }
+.notice.good  { border-left-color:#2E7D32; background:#F1F8E9; color:#2E7D32; }
+.notice.warn  { border-left-color:#E65100; background:#FFF3E0; color:#E65100; }
+.notice.info  { border-left-color:#1565C0; background:#E3F2FD; color:#1565C0; }
+
+/* 截断模拟 */
+.overflow-sim {
+  display:flex; align-items:center; gap:6px; overflow:hidden;
+  white-space:nowrap; max-width:420px;
+}
+.clipped { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:220px; }
+
+/* 方案B 辅助行 */
+.sub-row { padding-left:2px; }
+
+/* 方案D 合并标签 */
+.merged-lbl {
+  font-size:12px; color:#1565C0;
+  word-wrap:break-word; white-space:normal; line-height:1.55;
+  max-width:420px;
+}
+</style>
+</head>
+<body>
+
+<h1>弯管半径栏目 — 显示修复方案对比</h1>
+<p class="subtitle">当前问题：状态提示和计算结果标签在列宽有限时被截断，无法完整显示。</p>
+
+<!-- =================== 当前状态（Bug） =================== -->
+<div class="card" style="border-left:3px solid #E53935;">
+  <div class="card-title" style="color:#C62828;">⚠ 当前状态（复现截断问题）</div>
+  <div class="card-desc">lbl_turn_R_status 和 lbl_turn_R 均无 wordWrap，且挤在有限列宽内，长文本被剪切。</div>
+  <div class="panel-sim bug-box">
+    <div class="row">
+      <span class="lbl">弯管半径倍数 (R=nD):</span>
+      <span class="lbl-star">*</span>
+      <input class="inp-n" value="3.0" disabled>
+      <span class="hint-orange" style="font-size:11px;">一请确认倍数</span>
+    </div>
+    <div class="row overflow-sim">
+      <span class="lbl">弯管半径 R (m):</span>
+      <span class="lbl-star">*</span>
+      <input class="inp" value="5.40" disabled>
+      <span class="clipped hint-gray">← 可直接输入覆盖（修改R将反推n）</span>
+    </div>
+    <div class="row overflow-sim" style="padding-left:0;">
+      <span class="clipped hint-blue">D设计=1.80m → R=3.0×1.80=5.40m，请同步至弯管节（请确认倍数）</span>
+    </div>
+  </div>
+  <div class="notice warn">❌ 两行文字均被截断，用户看不完整的提示内容。</div>
+</div>
+
+<!-- =================== 方案A =================== -->
+<div class="card">
+  <div class="card-title">方案A：启用自动换行（最小改动）<span class="tag tag-min">2行代码</span></div>
+  <div class="card-desc">
+    给 <code>lbl_turn_R_status</code> 和 <code>lbl_turn_R</code> 各加一行 <code>setWordWrap(True)</code>，
+    文字自动折行，不截断，布局完全不变。
+  </div>
+  <div class="panel-sim">
+    <div class="row">
+      <span class="lbl">弯管半径倍数 (R=nD):</span>
+      <span class="lbl-star">*</span>
+      <input class="inp-n" value="3.0" disabled>
+      <span class="hint-orange" style="font-size:11px;">一请确认倍数</span>
+    </div>
+    <div class="row" style="flex-wrap:wrap; align-items:flex-start;">
+      <span class="lbl" style="white-space:nowrap;">弯管半径 R (m):</span>
+      <span class="lbl-star">*</span>
+      <input class="inp" value="5.40" disabled style="flex-shrink:0;">
+      <!-- wordWrap后自动折 -->
+      <span class="hint-gray" style="word-wrap:break-word; white-space:normal; line-height:1.5; max-width:260px;">
+        ← 可直接输入覆盖（修改R将反推n）
+      </span>
+    </div>
+    <div style="padding-left:2px;">
+      <span class="hint-blue" style="word-wrap:break-word; white-space:normal; line-height:1.5; display:block; max-width:420px;">
+        D设计=1.80m → R=3.0×1.80=5.40m，请同步至弯管节（请确认倍数）
+      </span>
+    </div>
+  </div>
+  <div class="notice info">改动：仅 2 行。现有布局不动，文字折行后行高自动撑开。</div>
+</div>
+
+<!-- =================== 方案B =================== -->
+<div class="card">
+  <div class="card-title">方案B：状态提示独占第二行（布局重排）<span class="tag tag-clean">结构清晰</span></div>
+  <div class="card-desc">
+    将 <code>lbl_turn_R_status</code> 从 HBox 移出，放在 R 输入框下方单独一行；
+    <code>lbl_turn_R</code> 作为第三行；三行垂直排列，各自独占宽度。
+  </div>
+  <div class="panel-sim">
+    <div class="row">
+      <span class="lbl">弯管半径倍数 (R=nD):</span>
+      <span class="lbl-star">*</span>
+      <input class="inp-n" value="3.0" disabled>
+      <span class="hint-orange" style="font-size:11px;">一请确认倍数</span>
+    </div>
+    <!-- 第一行：标签 + 输入框 -->
+    <div class="row" style="margin-bottom:3px;">
+      <span class="lbl">弯管半径 R (m):</span>
+      <span class="lbl-star">*</span>
+      <input class="inp" value="5.40" disabled>
+    </div>
+    <!-- 第二行：独占的状态提示 -->
+    <div class="sub-row" style="margin-bottom:4px;">
+      <span class="hint-gray">← 可直接输入覆盖（修改R将反推n）</span>
+    </div>
+    <!-- 第三行：计算结果 -->
+    <div class="sub-row">
+      <span class="hint-blue">D设计=1.80m → R=3.0×1.80=5.40m，请同步至弯管节（请确认倍数）</span>
+    </div>
+  </div>
+  <div class="notice good">✅ 三行对齐，每行都能完整显示，视觉层次清晰。改动量适中。</div>
+</div>
+
+<!-- =================== 方案C =================== -->
+<div class="card">
+  <div class="card-title">方案C：缩短提示文字 + 换行<span class="tag tag-min">文字精简</span></div>
+  <div class="card-desc">
+    将 <code>lbl_turn_R_status</code> 文字缩短为「← 可直接输入（改R反推n）」，
+    同时两个标签都加 wordWrap，文字短且不溢出。
+  </div>
+  <div class="panel-sim">
+    <div class="row">
+      <span class="lbl">弯管半径倍数 (R=nD):</span>
+      <span class="lbl-star">*</span>
+      <input class="inp-n" value="3.0" disabled>
+      <span class="hint-orange" style="font-size:11px;">一请确认倍数</span>
+    </div>
+    <div class="row" style="flex-wrap:wrap;">
+      <span class="lbl">弯管半径 R (m):</span>
+      <span class="lbl-star">*</span>
+      <input class="inp" value="5.40" disabled>
+      <!-- 缩短后的状态提示 -->
+      <span class="hint-gray">← 可直接输入（改R反推n）</span>
+    </div>
+    <div style="padding-left:2px;">
+      <!-- lbl_turn_R 仍然完整 -->
+      <span class="hint-blue" style="word-wrap:break-word; white-space:normal; display:block; max-width:420px; line-height:1.5;">
+        D设计=1.80m → R=3.0×1.80=5.40m，请同步至弯管节（请确认倍数）
+      </span>
+    </div>
+  </div>
+  <div class="notice info">改动：2 行 wordWrap + 1 处文字缩短。上面一行基本够放，下面一行 wordWrap 兜底。</div>
+</div>
+
+<!-- =================== 方案D =================== -->
+<div class="card">
+  <div class="card-title">方案D：合并为一个多行标签<span class="tag tag-rec">最整洁</span></div>
+  <div class="card-desc">
+    删除 <code>lbl_turn_R_status</code>，将其内容合并进 <code>lbl_turn_R</code> 一起显示（换行分隔），
+    开启 wordWrap，只剩一个标签自适应。
+  </div>
+  <div class="panel-sim">
+    <div class="row">
+      <span class="lbl">弯管半径倍数 (R=nD):</span>
+      <span class="lbl-star">*</span>
+      <input class="inp-n" value="3.0" disabled>
+      <span class="hint-orange" style="font-size:11px;">一请确认倍数</span>
+    </div>
+    <!-- 第一行：只有 标签 + 输入框 -->
+    <div class="row" style="margin-bottom:4px;">
+      <span class="lbl">弯管半径 R (m):</span>
+      <span class="lbl-star">*</span>
+      <input class="inp" value="5.40" disabled>
+    </div>
+    <!-- 合并后的单一标签（两行内容在同一 QLabel） -->
+    <div class="sub-row">
+      <span class="merged-lbl">
+        ← 可直接输入覆盖（修改R将反推n）<br>
+        D设计=1.80m → R=3.0×1.80=5.40m，请同步至弯管节（请确认倍数）
+      </span>
+    </div>
+  </div>
+  <div class="notice good">✅ 控件数量最少，wordWrap 一次搞定，代码最简洁。运行时内容动态更新只需改一个 label。</div>
+</div>
+
+<!-- =================== 总结 =================== -->
+<div style="background:#fff; border-radius:10px; padding:16px 20px; box-shadow:0 2px 8px rgba(0,0,0,.07);">
+  <div style="font-size:14px; font-weight:bold; margin-bottom:10px; color:#333;">方案对比总结</div>
+  <table style="width:100%; border-collapse:collapse; font-size:13px;">
+    <thead>
+      <tr style="background:#F5F5F5;">
+        <th style="padding:7px 10px; text-align:left; border:1px solid #E0E0E0;">方案</th>
+        <th style="padding:7px 10px; text-align:center; border:1px solid #E0E0E0;">改动量</th>
+        <th style="padding:7px 10px; text-align:center; border:1px solid #E0E0E0;">视觉整洁度</th>
+        <th style="padding:7px 10px; text-align:center; border:1px solid #E0E0E0;">运行时更新复杂度</th>
+        <th style="padding:7px 10px; text-align:left; border:1px solid #E0E0E0;">适合场景</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0;"><b>A</b> 自动换行</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center; color:#2E7D32;">★★★★★ 最小</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center;">中</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center; color:#2E7D32;">无变化</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0;">快速修复，不改布局</td>
+      </tr>
+      <tr style="background:#F9FAFB;">
+        <td style="padding:7px 10px; border:1px solid #E0E0E0;"><b>B</b> 独占第二行</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center; color:#FF8C00;">★★★☆☆ 中</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center; color:#2E7D32;">高</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center;">两个 label 分别更新</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0;">层次分明，阅读舒适</td>
+      </tr>
+      <tr>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0;"><b>C</b> 缩短+换行</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center; color:#2E7D32;">★★★★☆ 较小</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center;">中高</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center; color:#2E7D32;">无变化</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0;">同行能放下，最紧凑</td>
+      </tr>
+      <tr style="background:#F9FAFB;">
+        <td style="padding:7px 10px; border:1px solid #E0E0E0;"><b>D</b> 合并标签</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center; color:#FF8C00;">★★★☆☆ 中</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center; color:#2E7D32;">最高</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0; text-align:center; color:#2E7D32;">只更新一个 label</td>
+        <td style="padding:7px 10px; border:1px solid #E0E0E0;">代码最简洁，维护方便</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>

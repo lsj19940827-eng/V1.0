@@ -120,8 +120,9 @@ class GeometryCalculator:
         a = math.sqrt(a_sq)
         c = math.sqrt(c_sq)
         
-        # 防止除零
-        if a < ZERO_TOLERANCE or c < ZERO_TOLERANCE:
+        # 防止除零，且边长极小（坐标缺失或节点共点）时跳过转角计算
+        _MIN_SEGMENT = 0.01  # 最小有效线段长度（m），小于此值视为坐标无效
+        if a < _MIN_SEGMENT or c < _MIN_SEGMENT:
             return 0.0
         
         # 计算余弦值
@@ -251,18 +252,24 @@ class GeometryCalculator:
         if len(nodes) < 2:
             return
         
-        # 辅助函数：向前查找最近的非渐变段节点
+        # 辅助函数：向前查找最近的真实IP节点（跳过渐变段和自动插入的明渠段）
+        # 注意：自动插入明渠的坐标是两端建筑物的中点，若用其坐标计算距离会得到 chord/2，
+        # 导致后续 INLET 节点的 straight_distance 仅为正确值的一半，引起桩号统计差值。
         def find_prev_real(idx):
             for j in range(idx - 1, -1, -1):
-                if not getattr(nodes[j], 'is_transition', False):
-                    return nodes[j]
+                n = nodes[j]
+                if (not getattr(n, 'is_transition', False)
+                        and not getattr(n, 'is_auto_inserted_channel', False)):
+                    return n
             return nodes[idx - 1]  # 兜底
         
-        # 辅助函数：向后查找最近的非渐变段节点
+        # 辅助函数：向后查找最近的真实IP节点（跳过渐变段和自动插入的明渠段）
         def find_next_real(idx):
             for j in range(idx + 1, len(nodes)):
-                if not getattr(nodes[j], 'is_transition', False):
-                    return nodes[j]
+                n = nodes[j]
+                if (not getattr(n, 'is_transition', False)
+                        and not getattr(n, 'is_auto_inserted_channel', False)):
+                    return n
             return nodes[idx + 1]  # 兜底
         
         # 第一步：计算各段直线距离（IP间距）
@@ -275,6 +282,12 @@ class GeometryCalculator:
                 curr_node.straight_distance = 0.0
                 continue
             
+            # 没有坐标的普通节点（如批量导入的中间明渠段）：直线距离置0，避免产生巨大误差
+            if (abs(curr_node.x) < ZERO_TOLERANCE and abs(curr_node.y) < ZERO_TOLERANCE
+                    and curr_node.in_out == InOutType.NORMAL):
+                curr_node.straight_distance = 0.0
+                continue
+
             # 非渐变段节点：跳过渐变段，找到真实前驱节点计算距离
             prev_node = find_prev_real(i)
             
@@ -296,6 +309,20 @@ class GeometryCalculator:
             
             # 如果是进出口节点，转角、切线长、弧长保持为0
             if node.in_out in (InOutType.INLET, InOutType.OUTLET):
+                node.turn_angle = 0.0
+                node.tangent_length = 0.0
+                node.arc_length = 0.0
+                continue
+
+            # 自动插入的明渠段（is_auto_inserted_channel）：直线通道，不是IP转折点，转角置0
+            if getattr(node, 'is_auto_inserted_channel', False):
+                node.turn_angle = 0.0
+                node.tangent_length = 0.0
+                node.arc_length = 0.0
+                continue
+
+            # 没有坐标的普通节点（如批量导入的中间明渠段）：几何要素全部置0
+            if abs(node.x) < ZERO_TOLERANCE and abs(node.y) < ZERO_TOLERANCE:
                 node.turn_angle = 0.0
                 node.tangent_length = 0.0
                 node.arc_length = 0.0
@@ -374,16 +401,24 @@ class GeometryCalculator:
             # 里程MC递推公式:
             # S_MC(i) = S_MC(i-1) + D(i-1,i) - T(i-1) - T(i) + L_arc(i-1)/2 + L_arc(i)/2
             # D(i-1,i) = curr_node.straight_distance (从前一点到当前点的距离)
-            # 注意：如果前一节点是渐变段（T=0, L=0），公式仍正确传播
-            prev_T = prev_node.tangent_length
+            # 注意：prev_node可能是渐变段（T=0, L=0），需向前查找真实前驱IP节点的T和L
+            _actual_prev = prev_node
+            for _j in range(i - 1, -1, -1):
+                if not getattr(nodes[_j], 'is_transition', False):
+                    _actual_prev = nodes[_j]
+                    break
+            prev_T = _actual_prev.tangent_length
             curr_T = curr_node.tangent_length
-            prev_L = prev_node.arc_length
+            prev_L = _actual_prev.arc_length
             curr_L = curr_node.arc_length
             
             station_MC = (prev_node.station_MC + 
                           curr_node.straight_distance - 
                           prev_T - curr_T + 
                           prev_L / 2 + curr_L / 2)
+            # 兜底保护：切线长过大（坐标无效）时station_MC可能为负，用累计IP距离兜底
+            if station_MC < 0:
+                station_MC = max(0.0, prev_node.station_MC + curr_node.straight_distance)
             curr_node.station_MC = station_MC
             
             # 弯前BC: S_BC = S_MC - L_arc/2

@@ -770,6 +770,7 @@ class MultiSiphonDialog(QDialog):
                 results[name] = {
                     "head_loss": result.total_head_loss,
                     "diameter": result.diameter,
+                    "turn_radius": panel.get_plan_bend_radius(),
                 }
         return results
 

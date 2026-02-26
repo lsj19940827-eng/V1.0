@@ -208,12 +208,116 @@ def fluent_info(parent, title, content):
         te = QTextEdit()
         te.setPlainText(content)
         te.setReadOnly(True)
-        te.setMinimumHeight(200)
-        te.setMaximumHeight(400)
-        te.setStyleSheet("QTextEdit { border: none; background: transparent; }")
+        te.setMinimumHeight(280)
+        te.setMaximumHeight(420)
+        te.setStyleSheet(
+            "QTextEdit { border: 1px solid #e0e0e0; border-radius: 6px;"
+            " background: #fafafa; padding: 8px;"
+            " font-family: 'Microsoft YaHei', 'Consolas', monospace;"
+            " font-size: 13px; line-height: 1.5; }"
+        )
         w.textLayout.addWidget(te)
-        w.widget.setMinimumWidth(520)
+        w.widget.setFixedWidth(880)
     w.exec()
+
+
+def fluent_batch_result(parent, title, summary, details):
+    """批量计算结果弹窗：左右分栏 + 可调整大小。
+    summary: 汇总文本（总计/成功/失败/跳过）
+    details: 详细失败原因文本
+    """
+    from PySide6.QtWidgets import (
+        QDialog, QHBoxLayout, QVBoxLayout, QTextEdit,
+        QLabel, QSplitter, QFrame,
+    )
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFont
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(title)
+    dlg.setMinimumSize(900, 480)
+    dlg.resize(1200, 620)
+    dlg.setSizeGripEnabled(True)
+
+    main_lay = QVBoxLayout(dlg)
+    main_lay.setContentsMargins(20, 16, 20, 16)
+    main_lay.setSpacing(12)
+
+    title_lbl = QLabel(title)
+    title_lbl.setFont(QFont("Microsoft YaHei", 13, QFont.Weight.Bold))
+    title_lbl.setStyleSheet("color: #1a1a2e; padding-bottom: 4px;")
+    main_lay.addWidget(title_lbl)
+
+    splitter = QSplitter(Qt.Orientation.Horizontal)
+    splitter.setHandleWidth(6)
+    splitter.setStyleSheet("QSplitter::handle { background: #dde1e7; border-radius: 3px; }")
+
+    # ---- 左侧：汇总 ----
+    left_w = QFrame()
+    left_w.setStyleSheet(
+        "QFrame { background: #f5f7fa; border: 1px solid #dde1e7; border-radius: 8px; }"
+    )
+    left_lay = QVBoxLayout(left_w)
+    left_lay.setContentsMargins(12, 10, 12, 10)
+    left_lay.setSpacing(6)
+
+    lbl_sum = QLabel("计算汇总")
+    lbl_sum.setFont(QFont("Microsoft YaHei", 11, QFont.Weight.Bold))
+    lbl_sum.setStyleSheet("color: #333; background: transparent; border: none;")
+    left_lay.addWidget(lbl_sum)
+
+    te_sum = QTextEdit()
+    te_sum.setReadOnly(True)
+    te_sum.setPlainText(summary)
+    te_sum.setStyleSheet(
+        "QTextEdit { border: none; background: transparent; padding: 4px;"
+        " font-family: 'Microsoft YaHei'; font-size: 14px; line-height: 1.8; }"
+    )
+    left_lay.addWidget(te_sum)
+    splitter.addWidget(left_w)
+
+    # ---- 右侧：详细错误 ----
+    right_w = QFrame()
+    right_w.setStyleSheet(
+        "QFrame { background: #fffbf0; border: 1px solid #ffe0a0; border-radius: 8px; }"
+    )
+    right_lay = QVBoxLayout(right_w)
+    right_lay.setContentsMargins(12, 10, 12, 10)
+    right_lay.setSpacing(6)
+
+    lbl_det = QLabel("详细失败原因及建议")
+    lbl_det.setFont(QFont("Microsoft YaHei", 11, QFont.Weight.Bold))
+    lbl_det.setStyleSheet("color: #8b4000; background: transparent; border: none;")
+    right_lay.addWidget(lbl_det)
+
+    te_det = QTextEdit()
+    te_det.setReadOnly(True)
+    te_det.setPlainText(details)
+    te_det.setStyleSheet(
+        "QTextEdit { border: none; background: transparent; padding: 4px;"
+        " font-family: 'Microsoft YaHei', 'Consolas', monospace; font-size: 13px; }"
+    )
+    right_lay.addWidget(te_det)
+    splitter.addWidget(right_w)
+
+    splitter.setSizes([320, 760])
+    main_lay.addWidget(splitter, 1)
+
+    try:
+        from qfluentwidgets import PrimaryPushButton
+        ok_btn = PrimaryPushButton("确定")
+    except Exception:
+        from PySide6.QtWidgets import QPushButton
+        ok_btn = QPushButton("确定")
+    ok_btn.setFixedWidth(120)
+    ok_btn.clicked.connect(dlg.accept)
+
+    btn_lay = QHBoxLayout()
+    btn_lay.addStretch()
+    btn_lay.addWidget(ok_btn)
+    main_lay.addLayout(btn_lay)
+
+    dlg.exec()
 
 
 def fluent_error(parent, title, content):

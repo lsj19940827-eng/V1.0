@@ -688,14 +688,8 @@ class WaterProfilePanel(QWidget):
         turn_r_box.addStretch()
         sg.addLayout(turn_r_box, r, 7)
 
-        sg.addWidget(QLabel("倒虹吸 R=n×D, n="), r, 8, Qt.AlignRight)
-        self.siphon_n_edit = LineEdit()
-        self.siphon_n_edit.setText(str(DEFAULT_SIPHON_TURN_RADIUS_N))
-        self.siphon_n_edit.setFixedWidth(45)
-        sg.addWidget(self.siphon_n_edit, r, 9)
-
         # 列弹性
-        for c in [1, 3, 5, 7, 9]:
+        for c in [1, 3, 5, 7]:
             sg.setColumnStretch(c, 1)
         settings_grp.toggled.connect(self._on_settings_toggled)
         lay.addWidget(settings_grp)
@@ -860,7 +854,8 @@ class WaterProfilePanel(QWidget):
         self.node_table.horizontalHeader().setStretchLastSection(False)
         self.node_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.node_table.horizontalHeader().setMinimumSectionSize(50)
-        self.node_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.node_table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.node_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.node_table.setAlternatingRowColors(True)
         self.node_table.setFont(QFont("Microsoft YaHei", 10))
         self.node_table.verticalHeader().setDefaultSectionSize(26)
@@ -1729,12 +1724,14 @@ class WaterProfilePanel(QWidget):
             R_hyd_val = getattr(sr, 'R_hydraulic', 0) or 0.0
             H_total = getattr(sr, 'H_total', 0) or 0.0
 
+            tr_r = getattr(sr, 'turn_radius', 0.0) or 0.0
             row_data = [""] * len(NODE_ALL_HEADERS)
             row_data[0] = flow_section
             row_data[1] = building_name
             row_data[2] = section_type
             row_data[5] = fmt(x)
             row_data[6] = fmt(y)
+            row_data[7] = fmt(tr_r) if tr_r > 0 else ""
             row_data[20] = fmt(B) if B else ""
             row_data[21] = fmt(D) if D else ""
             row_data[22] = fmt(R) if R else ""
@@ -1838,7 +1835,7 @@ class WaterProfilePanel(QWidget):
         next_steps += "【执行计算】"
 
         InfoBar.success("导入成功",
-                       f"已导入 {imported} 个节点，已自动填充流量和转弯半径。{next_steps}",
+                       f"已导入 {imported} 个节点，已自动填充流量和推荐转弯半径（全局）。{next_steps}",
                        parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
 
     def _recalculate_geometry(self):
@@ -1846,9 +1843,12 @@ class WaterProfilePanel(QWidget):
         导入数据后触发几何计算（与原版Tkinter recalculate对齐）
 
         流程：
-        1. 填充转弯半径列（全局值 + 倒虹吸 R=n×D）
+        1. 填充转弯半径列：普通行用全局半径；倒虹吸行临时写 n×D（供几何算法用）；
+           首行/闸类/分水口行不写（保持空白）
         2. 构建节点 → calculate_geometry → preprocess_nodes
-        3. 回写几何结果列(8-19) + 进出口(3) + IP(4) + 转弯半径(7)
+        3. 回写几何结果列(8-19) + 进出口(3) + IP(4)；
+           倒虹吸行清空临时 n×D（倒虹吸计算后由 import_losses_callback 写入真实值）；
+           首行/闸类不写 col 7
         """
         self._updating_cells = True
         try:
@@ -1861,22 +1861,45 @@ class WaterProfilePanel(QWidget):
             return
 
         # ---- 1. 填充转弯半径列 (col 7) ----
+        # 优先级：col 7 已有非零值(导入/手动填写) → 保留；否则按规则填充
+        # 规则：首行/闸类/分水口 → 不填（不参与弯道几何计算）
+        #       倒虹吸行 → 临时写 n×D 供几何计算用，Step3 中清空（写回值除外）
+        #       普通行  → 使用全局转弯半径
         turn_radius = self._fval(self.turn_radius_edit, 0)
-        siphon_n = self._fval(self.siphon_n_edit, 3.0)
+        siphon_n = DEFAULT_SIPHON_TURN_RADIUS_N
+        # 记录倒虹吸行中已有明确写回值的行（Step3 中保留，不清空）
+        siphon_rows_with_existing = set()
         for r in range(self.node_table.rowCount()):
+            existing_r = 0.0
+            ei = self.node_table.item(r, 7)
+            if ei:
+                try:
+                    v = ei.text().strip()
+                    existing_r = float(v) if v else 0.0
+                except (ValueError, TypeError):
+                    pass
             struct_item = self.node_table.item(r, 2)
             struct_text = struct_item.text().strip() if struct_item else ""
-            if "倒虹吸" in struct_text:
-                # 倒虹吸行：R = n × D
+            _is_siphon = "倒虹吸" in struct_text
+            _is_gate = "闸" in struct_text or "分水" in struct_text
+            if existing_r > 0:
+                if _is_siphon:
+                    siphon_rows_with_existing.add(r)
+                continue  # 保留导入/手动输入/写回的转弯半径
+            if r == 0 or _is_gate:
+                continue  # 首行/闸类：不填转弯半径
+            if _is_siphon:
+                # 倒虹吸行：临时写 n×D 供几何计算（Step3 会清空）
                 d_item = self.node_table.item(r, 21)  # 直径D
                 d_val = 0.0
                 if d_item:
                     try: d_val = float(d_item.text())
                     except (ValueError, TypeError): pass
                 r_val = siphon_n * d_val if d_val > 0 else turn_radius
-                item = QTableWidgetItem(f"{r_val:.1f}")
-                item.setTextAlignment(Qt.AlignCenter)
-                self.node_table.setItem(r, 7, item)
+                if r_val > 0:
+                    item = QTableWidgetItem(f"{r_val:.1f}")
+                    item.setTextAlignment(Qt.AlignCenter)
+                    self.node_table.setItem(r, 7, item)
             elif turn_radius > 0:
                 # 普通行：使用全局转弯半径
                 item = QTableWidgetItem(f"{turn_radius:.1f}")
@@ -1916,8 +1939,21 @@ class WaterProfilePanel(QWidget):
             item.setTextAlignment(Qt.AlignCenter)
             self.node_table.setItem(r, 4, item)
 
-            # 转弯半径 (col 7) — 更新倒虹吸行的计算值
-            if node.turn_radius and node.turn_radius > 0:
+            # 转弯半径 (col 7) — 按规则写回
+            # 首行/闸类：不写（保持空白）
+            # 倒虹吸行：若已有写回值则保留；否则清空临时 n×D
+            # 普通行：写回计算值（与原逻辑一致）
+            _st_r3 = node.get_structure_type_str() if hasattr(node, 'get_structure_type_str') else ""
+            _is_siphon_r3 = "倒虹吸" in _st_r3
+            _is_gate_r3 = "闸" in _st_r3 or "分水" in _st_r3
+            if r == 0 or _is_gate_r3:
+                pass  # 首行/闸类：不写 col 7
+            elif _is_siphon_r3:
+                if r not in siphon_rows_with_existing:
+                    # 清空临时写入的 n×D，等待倒虹吸计算后写回真实值
+                    self.node_table.setItem(r, 7, QTableWidgetItem(""))
+                # else: siphon_rows_with_existing 中的行已有写回值，保留不动
+            elif node.turn_radius and node.turn_radius > 0:
                 item = QTableWidgetItem(f"{node.turn_radius:.1f}")
                 item.setTextAlignment(Qt.AlignCenter)
                 self.node_table.setItem(r, 7, item)
@@ -1926,10 +1962,10 @@ class WaterProfilePanel(QWidget):
             fmt_s = lambda s: ProjectSettings.format_station(s, prefix) if s is not None else ""
             geo_data = {
                 8:  f"{node.turn_angle:.4f}",
-                9:  f"{node.tangent_length:.3f}",
-                10: f"{node.arc_length:.3f}",
-                11: f"{node.curve_length:.3f}",
-                12: f"{node.straight_distance:.3f}",
+                9:  f"{node.tangent_length:.6f}",
+                10: f"{node.arc_length:.6f}",
+                11: f"{node.curve_length:.6f}",
+                12: f"{node.straight_distance:.6f}",
                 13: fmt_s(node.station_ip),
                 14: fmt_s(node.station_BC),
                 15: fmt_s(getattr(node, 'station_MC', None)),
@@ -2089,6 +2125,7 @@ class WaterProfilePanel(QWidget):
                 if cs in ("R(m)", "半径R(m)", "半径R"):
                     col_r = col
                     break
+            col_tr = find_col(["转弯半径(m)", "转弯半径"])
             # 设计流量（排除加大流量列）
             col_mf = find_col(["Q加大", "加大流量"])
             col_df_q = None
@@ -2133,6 +2170,7 @@ class WaterProfilePanel(QWidget):
                 bw = sf(row.get(col_bw, 0)) if col_bw else 0.0
                 d_val = sf(row.get(col_d, 0)) if col_d else 0.0
                 r_val = sf(row.get(col_r, 0)) if col_r else 0.0
+                tr_r_val = sf(row.get(col_tr, 0)) if col_tr else 0.0
                 m_val = sf(row.get(col_m, 0)) if col_m else 0.0
                 n_val = sf(row.get(col_n, 0)) if col_n else 0.0
                 sl_val = sf(row.get(col_slope, 0)) if col_slope else 0.0
@@ -2173,6 +2211,7 @@ class WaterProfilePanel(QWidget):
                 row_data[2] = st
                 row_data[5] = fmt(x)
                 row_data[6] = fmt(y)
+                row_data[7] = fmt(tr_r_val) if tr_r_val > 0 else ""
                 row_data[20] = fmt(bw)
                 row_data[21] = fmt(d_val)
                 row_data[22] = fmt(r_val)
@@ -2291,7 +2330,7 @@ class WaterProfilePanel(QWidget):
         settings.siphon_transition_outlet_form = self.siphon_outlet_combo.currentText()
         settings.siphon_transition_outlet_zeta = self._fval(self.siphon_outlet_zeta, 0.20)
         # 倒虹吸转弯半径倍数n
-        settings.siphon_turn_radius_n = self._fval(self.siphon_n_edit, DEFAULT_SIPHON_TURN_RADIUS_N)
+        settings.siphon_turn_radius_n = DEFAULT_SIPHON_TURN_RADIUS_N
         return settings
 
     def _build_nodes_from_table(self):
@@ -2388,7 +2427,11 @@ class WaterProfilePanel(QWidget):
             _first_item = table.item(r, 0)
             if _first_item:
                 _ur = _first_item.data(Qt.UserRole)
-                if _ur == "auto_channel":
+                if isinstance(_ur, dict) and _ur.get('_auto_channel'):
+                    node.is_auto_inserted_channel = True
+                    node.x = float(_ur.get('_x', 0.0) or 0.0)
+                    node.y = float(_ur.get('_y', 0.0) or 0.0)
+                elif _ur == "auto_channel":  # 兼容旧格式
                     node.is_auto_inserted_channel = True
                 # 恢复渐变段详细参数（#10）
                 elif isinstance(_ur, dict) and _ur.get('_transition_data'):
@@ -2407,7 +2450,16 @@ class WaterProfilePanel(QWidget):
 
             node.x = self._sf(data[5])
             node.y = self._sf(data[6])
-            node.turn_radius = self._sf(data[7], self._fval(self.turn_radius_edit, DEFAULT_TURN_RADIUS))
+            # 转弯半径 fallback 规则：
+            #   首行/闸类/倒虹吸 → 0（不用默认全局半径，避免刷表时写入错误值）
+            #   普通行           → 全局转弯半径（保持原有逻辑）
+            _struct_for_r = str(data[2]).strip()
+            _is_siphon_for_r = "倒虹吸" in _struct_for_r
+            _is_gate_for_r = "闸" in _struct_for_r or "分水" in _struct_for_r
+            if r == 0 or _is_siphon_for_r or _is_gate_for_r:
+                node.turn_radius = self._sf(data[7], 0.0)
+            else:
+                node.turn_radius = self._sf(data[7], self._fval(self.turn_radius_edit, DEFAULT_TURN_RADIUS))
 
             # ===== 几何结果列 (8-19) =====
             # 转角 (col 8)
@@ -2729,18 +2781,21 @@ class WaterProfilePanel(QWidget):
             if not _is_trans:
                 vals[3] = node.get_in_out_str()
                 vals[4] = "" if _is_auto_ch else node.get_ip_str()
-                vals[5] = f"{node.x:.6f}" if node.x else ""
-                vals[6] = f"{node.y:.6f}" if node.y else ""
-                vals[7] = f"{node.turn_radius:.1f}" if node.turn_radius else ""
+                vals[5] = f"{node.x:.6f}" if (node.x and not _is_auto_ch) else ""
+                vals[6] = f"{node.y:.6f}" if (node.y and not _is_auto_ch) else ""
+                # 转弯半径 col 7：首行始终为空（起始节点无弯道意义）；
+                # 闸类/分水口/倒虹吸 fallback=0（改动C），空 col7→0→显示"" 自然处理，
+                # 不强制清空，允许用户手动填入的值保留显示
+                vals[7] = "" if r == 0 else (f"{node.turn_radius:.1f}" if node.turn_radius else "")
 
             if not _is_trans:
                 # 几何结果列 (8-19) — 无条件格式化，0值也显示（与Tkinter一致）
                 _fmt_s = lambda s: ProjectSettings.format_station(s, prefix) if s is not None else "-"
                 vals[8] = f"{node.turn_angle:.4f}"
-                vals[9] = f"{node.tangent_length:.3f}"
-                vals[10] = f"{node.arc_length:.3f}"
-                vals[11] = f"{node.curve_length:.3f}"
-                vals[12] = f"{node.straight_distance:.3f}"
+                vals[9] = f"{node.tangent_length:.6f}"
+                vals[10] = f"{node.arc_length:.6f}"
+                vals[11] = f"{node.curve_length:.6f}"
+                vals[12] = f"{node.straight_distance:.6f}"
                 vals[13] = _fmt_s(node.station_ip)
                 vals[14] = _fmt_s(node.station_BC)
                 vals[15] = _fmt_s(getattr(node, 'station_MC', None))
@@ -2829,7 +2884,7 @@ class WaterProfilePanel(QWidget):
             first_item = self.node_table.item(r, 0)
             if first_item:
                 if _is_auto_ch:
-                    first_item.setData(Qt.UserRole, "auto_channel")
+                    first_item.setData(Qt.UserRole, {"_auto_channel": True, "_x": node.x, "_y": node.y})
                 elif _is_trans and (node.transition_type or node.transition_form):
                     # 渐变段详细参数保存到UserRole（#10）
                     first_item.setData(Qt.UserRole, {
@@ -2868,8 +2923,6 @@ class WaterProfilePanel(QWidget):
         if settings and getattr(settings, 'siphon_roughness', None) is not None:
             lines.append(f"  倒虹吸糙率: {settings.siphon_roughness}")
         lines.append(f"  转弯半径: {settings.turn_radius if settings else '-'} m")
-        if settings and getattr(settings, 'siphon_turn_radius_n', None):
-            lines.append(f"  倒虹吸R=n×D, n={settings.siphon_turn_radius_n}")
         lines.append(f"  总节点数: {len(nodes)}")
         # 渐变段设置
         if settings:
@@ -3618,15 +3671,16 @@ class WaterProfilePanel(QWidget):
             r = self.node_table.rowCount()
             self.node_table.insertRow(r)
             _is_trans = getattr(node, 'is_transition', False)
+            _is_auto_ch = getattr(node, 'is_auto_inserted_channel', False)
             vals = [""] * len(NODE_ALL_HEADERS)
             # 基础输入列 (0-7)
             vals[0] = node.flow_section
             vals[1] = node.name
             vals[2] = node.get_structure_type_str()
             if not _is_trans:
-                vals[5] = f"{node.x:.6f}" if node.x else ""
-                vals[6] = f"{node.y:.6f}" if node.y else ""
-                vals[7] = f"{node.turn_radius:.1f}" if node.turn_radius else ""
+                vals[5] = f"{node.x:.6f}" if (node.x and not _is_auto_ch) else ""
+                vals[6] = f"{node.y:.6f}" if (node.y and not _is_auto_ch) else ""
+                vals[7] = "" if r == 0 else (f"{node.turn_radius:.1f}" if node.turn_radius else "")
                 # 水力输入列 (20-26)
                 vals[20] = f"{node.section_params.get('B', '')}" if node.section_params.get('B') else ""
                 vals[21] = f"{node.section_params.get('D', '')}" if node.section_params.get('D') else ""
@@ -3708,21 +3762,24 @@ class WaterProfilePanel(QWidget):
             )
             manager = SiphonManager(project_path)
 
-            # 定义导入回调：将水头损失写回节点表格
+            # 定义导入回调：将水头损失和平面转弯半径写回节点表格
             _panel = self
             def import_losses_callback(results):
                 cur_nodes = _panel._build_nodes_from_table()
                 cur_groups = SiphonDataExtractor.extract_siphons(cur_nodes)
                 imported_count = 0
+                has_radius_update = False
                 for group in cur_groups:
                     if group.name in results and results[group.name] is not None:
                         result_data = results[group.name]
                         if isinstance(result_data, dict):
                             head_loss = result_data.get("head_loss", 0.0)
                             diameter = result_data.get("diameter", 0.0)
+                            turn_radius = result_data.get("turn_radius", 0.0)
                         else:
                             head_loss = result_data
                             diameter = 0.0
+                            turn_radius = 0.0
                         outlet_idx = group.outlet_row_index
                         if 0 <= outlet_idx < len(cur_nodes):
                             cur_nodes[outlet_idx].head_loss_siphon = head_loss
@@ -3733,14 +3790,20 @@ class WaterProfilePanel(QWidget):
                                     if not hasattr(cur_nodes[row_idx], 'section_params') or not cur_nodes[row_idx].section_params:
                                         cur_nodes[row_idx].section_params = {}
                                     cur_nodes[row_idx].section_params["D"] = diameter
-                if imported_count > 0:
+                        # 将平面转弯半径写回该倒虹吸所有行（进口+出口）
+                        if turn_radius > 0:
+                            for row_idx in group.row_indices:
+                                if 0 <= row_idx < len(cur_nodes):
+                                    cur_nodes[row_idx].turn_radius = turn_radius
+                                    has_radius_update = True
+                if imported_count > 0 or has_radius_update:
                     _s = _panel._build_settings()
                     _pfx = _s.get_station_prefix() if _s else ""
                     _panel._update_table_from_nodes_full(cur_nodes, _pfx)
                     auto_resize_table(_panel.node_table)
                 return imported_count
 
-            siphon_n = self._fval(self.siphon_n_edit, DEFAULT_SIPHON_TURN_RADIUS_N)
+            siphon_n = DEFAULT_SIPHON_TURN_RADIUS_N
 
             # 打开PySide6多标签页倒虹吸计算窗口
             dlg = MultiSiphonDialog(

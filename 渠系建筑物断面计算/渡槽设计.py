@@ -738,6 +738,28 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     # 总面积
     A_total = calculate_u_total_area(total_height, R)
     
+    # 【规范 9.3.3-4】检查深宽比 H/(2R) 是否在推荐范围内（仅手动指定R时警告）
+    actual_HB = total_height / B if B > 0 else 0
+    if manual_R is not None and manual_R > 0:
+        if actual_HB < HB_MIN or actual_HB > HB_MAX:
+            # 反算满足深宽比的近似R范围: H/(2R)=0.7~0.9 → R=H/1.8 ~ H/1.4
+            R_suggest_min = total_height / (2 * HB_MAX)  # H/(2×0.9)
+            R_suggest_max = total_height / (2 * HB_MIN)  # H/(2×0.7)
+            if actual_HB < HB_MIN:
+                direction = f"当前 H/(2R) = {actual_HB:.2f} < {HB_MIN:.1f}，槽身偏浅偏宽，R 偏大，建议减小 R"
+            else:
+                direction = f"当前 H/(2R) = {actual_HB:.2f} > {HB_MAX:.1f}，槽身偏深偏窄，R 偏小，建议增大 R"
+            _hb_warning = (
+                f"【深宽比警告】{direction}\n"
+                f"根据规范 9.3.3-4，梁式渡槽 U 形槽身深宽比 H/(2R) 宜采用 {HB_MIN:.1f}~{HB_MAX:.1f}。\n"
+                f"深宽比 = H/(2R) = (R+f)/(2R)，减小 R 使深宽比增大，增大 R 使深宽比减小。\n"
+                f"建议 R 取 {R_suggest_min:.2f}~{R_suggest_max:.2f} m（近似值，实际需验证超高）"
+            )
+            if _design_fb_warning:
+                _design_fb_warning += '\n' + _hb_warning
+            else:
+                _design_fb_warning = _hb_warning
+    
     # 【规范 9.4.1-1】检查设计流速是否在推荐范围内
     v_recommended_min = 1.0  # m/s
     v_recommended_max = 2.5  # m/s

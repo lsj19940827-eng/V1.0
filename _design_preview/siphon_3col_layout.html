@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>全局水力参数 — 三栏布局预览</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:"Microsoft YaHei",sans-serif; background:#1a1a2e; padding:24px; color:#333; }
+h2 { color:#aaa; font-size:13px; font-weight:normal; margin-bottom:12px; letter-spacing:1px; }
+
+/* ── 外层 Tab 模拟 ── */
+.tab-bar { display:flex; gap:0; margin-bottom:0; }
+.tab { padding:7px 18px; font-size:13px; background:#2a2a3e; color:#888;
+       border:1px solid #3a3a4e; border-bottom:none; border-radius:4px 4px 0 0; cursor:pointer; }
+.tab.active { background:#f5f7fa; color:#1565C0; font-weight:bold; border-color:#c5c8d0; }
+
+/* ── 面板主体 ── */
+.panel { background:#f5f7fa; border:1px solid #c5c8d0; border-radius:0 4px 4px 4px;
+         padding:12px 14px; }
+
+/* ── GroupBox 模拟 ── */
+.groupbox { border:1px solid #d0d5e0; border-radius:5px; padding:10px 12px 10px;
+            background:#fff; position:relative; margin-bottom:12px; }
+.groupbox-title { position:absolute; top:-10px; left:12px; background:#fff;
+                  padding:0 6px; font-size:12px; font-weight:bold; color:#555; }
+
+/* ── 三栏容器 ── */
+.three-cols { display:grid; grid-template-columns:1fr 1fr 1fr; gap:0; }
+.col { padding:0 10px; border-right:1px dashed #e0e4f0; }
+.col:first-child { padding-left:0; }
+.col:last-child { border-right:none; padding-right:0; }
+.col-title { font-size:11px; color:#999; font-weight:bold; letter-spacing:0.5px;
+             margin-bottom:6px; padding-bottom:4px; border-bottom:1px solid #eee; }
+
+/* ── 参数行 ── */
+.param-row { display:flex; align-items:center; gap:6px; margin-bottom:7px;
+             min-height:28px; flex-wrap:wrap; }
+.param-row:last-child { margin-bottom:0; }
+.lbl { font-size:13px; color:#444; white-space:nowrap; }
+.star-r { color:#E53935; font-weight:bold; font-size:14px; }
+.star-b { color:#1565C0; font-weight:bold; font-size:14px; }
+
+/* inputs */
+.inp { border:1.5px solid #c5c8d0; border-radius:4px; padding:3px 8px;
+       font-size:13px; font-family:inherit; outline:none;
+       background:#fff; text-align:center; }
+.inp.v-inp { border:2px dashed #E65100; background:#FFF8E1; color:#333; width:72px; }
+.inp.v-inp.confirmed { border:2px solid #2E7D32; background:#F1F8E9; }
+.inp.n-inp { border:1.5px solid #c5c8d0; background:#fff; width:60px; }
+.inp.turn-n { border:1.5px dashed #1565C0; background:#E3F2FD; width:54px; }
+.inp.turn-n.confirmed { border:1.5px solid #2E7D32; background:#F1F8E9; }
+.inp.turn-r { border:1px solid #90CAF9; background:#E3F2FD; width:68px; }
+.inp.threshold { width:68px; }
+.inp.inc { width:96px; }
+.inp.d-override { width:100px; }
+
+/* hint labels */
+.hint { font-size:12px; white-space:nowrap; }
+.hint-gray { color:#888; }
+.hint-red  { color:#E53935; font-weight:bold; }
+.hint-blue { color:#0066CC; }
+.hint-orange { color:#E65100; }
+.hint-green  { color:#2E7D32; font-weight:bold; }
+
+/* computed label */
+.lbl-computed { font-size:12px; color:#1565C0; font-weight:bold; white-space:nowrap; }
+
+/* spinbox simulation */
+.spinbox { display:inline-flex; align-items:center; border:1.5px dashed #E65100;
+           border-radius:6px; overflow:hidden; }
+.spinbox .btn { width:26px; height:26px; background:#FFF3E0; border:none;
+                font-size:16px; font-weight:bold; color:#E65100; cursor:pointer;
+                display:flex; align-items:center; justify-content:center; }
+.spinbox .val { width:36px; text-align:center; font-size:14px; font-weight:bold;
+                color:#333; background:#fff; border-left:1px solid #FFB74D;
+                border-right:1px solid #FFB74D; padding:2px 0; }
+
+/* check/label */
+.cb-row { display:flex; align-items:center; gap:5px; }
+.checkbox { width:14px; height:14px; accent-color:#1565C0; cursor:pointer; }
+.cb-lbl { font-size:13px; color:#444; }
+
+/* help btn */
+.help-btn { width:17px; height:17px; border-radius:50%; border:1.5px solid #aaa;
+            color:#aaa; background:transparent; font-size:10px; font-weight:bold;
+            cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+
+/* D computed */
+.d-computed { font-size:12px; color:#1565C0; font-weight:bold; }
+
+/* R-info row */
+.r-info { font-size:12px; color:#1565C0; line-height:1.5; margin-top:2px; }
+.r-info.confirmed { color:#2E7D32; }
+
+/* calc target */
+.target-lbl { font-size:13px; color:#00796B; font-weight:bold; }
+
+/* separator line for "考虑加大流量" row (2 items) */
+.double-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+/* divider between old/new */
+.divider { border:none; border-top:2px dashed #444; margin:20px 0; }
+.tag { display:inline-block; padding:2px 9px; border-radius:10px; font-size:11px;
+       font-weight:bold; margin-left:6px; }
+.tag-old { background:#4a0000; color:#ff8a80; }
+.tag-new { background:#003300; color:#69f0ae; }
+.tag-rec { background:#003060; color:#82b1ff; }
+h1 { color:#ddd; font-size:16px; margin-bottom:18px; }
+.note { color:#aaa; font-size:12px; margin-top:8px; line-height:1.6; }
+
+/* 当前版本的overlap模拟 */
+.two-cols-old { display:grid; grid-template-columns:1fr 1fr; gap:0; position:relative; }
+.overlap-mark { position:absolute; right:0; top:60px; width:50%; background:rgba(229,57,53,0.12);
+                border:2px dashed #E53935; border-radius:4px; padding:4px 8px;
+                font-size:11px; color:#E53935; pointer-events:none; z-index:10; }
+</style>
+</head>
+<body>
+
+<h1>全局水力参数 — 布局重设计预览</h1>
+
+<!-- ═════════════════════════════════════════ 当前状态（有重叠） ═════════════════════════════════════════ -->
+<h2>▼ 当前状态（两栏，右侧重叠）<span class="tag tag-old">Bug</span></h2>
+<div class="tab-bar">
+  <div class="tab active">基本参数</div>
+  <div class="tab">结构段信息</div>
+  <div class="tab">纵断面节点</div>
+  <div class="tab">计算结果</div>
+</div>
+<div class="panel">
+  <div class="groupbox">
+    <span class="groupbox-title">全局水力参数</span>
+    <div class="two-cols-old" style="position:relative;">
+      <!-- 左半 -->
+      <div style="padding-right:16px; border-right:1px dashed #e0e4f0;">
+        <div class="param-row"><span class="lbl">设计流量 Q (m³/s):</span>
+          <input class="inp" value="4.5000" style="width:72px;">
+          <span class="hint hint-blue">(已从主表导入)</span></div>
+        <div class="param-row"><span class="lbl">糙率 n:</span>
+          <input class="inp n-inp" value="0.0140">
+          <span class="hint hint-blue">(已从工表导入)</span></div>
+        <div class="param-row"><span class="lbl">管径 D:</span>
+          <span class="d-computed">D设计 = 1.8000 m (D理论 = 1.6926 m)</span></div>
+        <div class="param-row cb-row">
+          <input type="checkbox" class="checkbox"><span class="cb-lbl">指定管径</span>
+          <button class="help-btn">?</button></div>
+        <div class="param-row"><span class="lbl">计算目标:</span>
+          <span class="target-lbl">计算总水头损失</span></div>
+        <div class="param-row cb-row">
+          <input type="checkbox" class="checkbox" checked><span class="cb-lbl">考虑加大流量比例系数</span></div>
+      </div>
+      <!-- 右半（overlap区域） -->
+      <div style="padding-left:16px; position:relative;">
+        <div class="param-row"><span class="lbl">拟定流速 v (m/s):</span><span class="star-r">*</span>
+          <input class="inp v-inp" value="2.0"><span class="hint hint-orange">(请确认流速)</span></div>
+        <div class="param-row"><span class="lbl">管道根数 N (根):</span><span class="star-r">*</span>
+          <div class="spinbox"><div class="btn">−</div><div class="val">1</div><div class="btn">+</div></div>
+          <span class="hint hint-red">← 请输入管道根数</span></div>
+        <div class="param-row"><span class="lbl">平面转弯半径倍数 (R=nD):</span><span class="star-b">*</span>
+          <input class="inp turn-n" value="3.0"></div>
+        <!-- overlap start -->
+        <div style="background:rgba(229,57,53,0.06); border:1.5px dashed #E53935; border-radius:4px; padding:6px 8px; margin-bottom:4px;">
+          <div class="param-row" style="margin-bottom:3px;"><span class="lbl">平面转弯半径 R (m):</span>
+            <input class="inp turn-r" value="5.40">
+            <span class="hint hint-gray">← 可直接输入覆盖（修改R将反推n）</span></div>
+          <div style="font-size:12px;color:#1565C0;">D设计=1.80m → R=3.0×1.80=5.40m，已同步至弯管段（请确认倍数）</div>
+          <div style="margin-top:3px; opacity:0.7;">
+            <div class="param-row" style="margin-bottom:2px;"><span class="lbl">水损阈值 (m):</span>
+              <input class="inp threshold" placeholder="如: 2.0">
+              <span class="hint hint-orange" style="font-size:11px;">(ΔZ超此值将提醒调整参数)</span></div>
+            <div class="param-row"><span class="lbl">加大比例(%):</span>
+              <input class="inp inc" placeholder="留空自动计算">
+              <span class="hint hint-blue" style="font-size:11px;">(留空则按设计流量自动查表)</span></div>
+          </div>
+          <div style="font-size:11px;color:#E53935;margin-top:4px;">▲ 以上行与 R 容器重叠，无法正常点击</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ═════════════════════════════════════════ 新方案（三栏） ═════════════════════════════════════════ -->
+<h2>▼ 新方案：三栏布局（方案甲·按性质分组）<span class="tag tag-rec">推荐</span></h2>
+<div class="tab-bar">
+  <div class="tab active">基本参数</div>
+  <div class="tab">结构段信息</div>
+  <div class="tab">纵断面节点</div>
+  <div class="tab">计算结果</div>
+</div>
+<div class="panel">
+  <div class="groupbox">
+    <span class="groupbox-title">全局水力参数</span>
+    <div class="three-cols">
+
+      <!-- ── 左栏：管道基础参数 ── -->
+      <div class="col">
+        <div class="col-title">管道基础参数</div>
+        <div class="param-row">
+          <span class="lbl">设计流量 Q (m³/s):</span>
+        </div>
+        <div class="param-row">
+          <input class="inp" value="4.5000" style="width:76px;">
+          <span class="hint hint-blue">(已从主表导入)</span>
+        </div>
+        <div class="param-row" style="margin-top:2px;">
+          <span class="lbl">糙率 n:</span>
+        </div>
+        <div class="param-row">
+          <input class="inp n-inp" value="0.0140">
+          <span class="hint hint-blue">(已从工表导入)</span>
+        </div>
+        <div class="param-row" style="margin-top:2px;">
+          <span class="lbl">管径 D:</span>
+        </div>
+        <div class="param-row">
+          <span class="d-computed">D设计=1.8000m (D理论=1.6926m)</span>
+        </div>
+        <div class="param-row cb-row" style="margin-top:2px;">
+          <input type="checkbox" class="checkbox">
+          <span class="cb-lbl">指定管径</span>
+          <button class="help-btn">?</button>
+        </div>
+      </div>
+
+      <!-- ── 中栏：管道运行参数 ── -->
+      <div class="col">
+        <div class="col-title">管道运行参数</div>
+        <div class="param-row">
+          <span class="lbl">拟定流速 v (m/s):</span><span class="star-r">*</span>
+        </div>
+        <div class="param-row">
+          <input class="inp v-inp" value="2.0">
+          <span class="hint hint-orange">(请确认流速)</span>
+        </div>
+        <div class="param-row" style="margin-top:2px;">
+          <span class="lbl">管道根数 N (根):</span><span class="star-r">*</span>
+        </div>
+        <div class="param-row">
+          <div class="spinbox"><div class="btn">−</div><div class="val">1</div><div class="btn">+</div></div>
+          <span class="hint hint-red">← 请输入管道根数</span>
+        </div>
+        <div class="param-row" style="margin-top:2px;">
+          <span class="lbl">计算目标:</span>
+        </div>
+        <div class="param-row">
+          <span class="target-lbl">计算总水头损失</span>
+        </div>
+        <div class="param-row cb-row" style="margin-top:2px;">
+          <input type="checkbox" class="checkbox" checked>
+          <span class="cb-lbl">考虑加大流量比例系数</span>
+        </div>
+        <div class="param-row" style="margin-top:0px;">
+          <span class="lbl" style="font-size:12px;color:#666;">加大比例(%):</span>
+          <input class="inp inc" placeholder="留空自动计算" style="width:88px;">
+          <span class="hint hint-blue" style="font-size:11px;">(留空自动查表)</span>
+        </div>
+      </div>
+
+      <!-- ── 右栏：转弯控制参数 ── -->
+      <div class="col">
+        <div class="col-title">转弯控制参数</div>
+        <div class="param-row">
+          <span class="lbl" style="font-size:12px;">平面转弯半径倍数 (R=nD):</span><span class="star-b">*</span>
+        </div>
+        <div class="param-row">
+          <input class="inp turn-n" value="3.0">
+          <span class="hint hint-orange">(请确认倍数)</span>
+        </div>
+        <div class="param-row" style="margin-top:2px;">
+          <span class="lbl" style="font-size:12px;">平面转弯半径 R (m):</span>
+        </div>
+        <div class="param-row">
+          <input class="inp turn-r" value="5.40">
+          <span class="hint hint-gray" style="font-size:11px;">← 可直接输入（改R反推n）</span>
+        </div>
+        <div class="r-info" style="margin-bottom:6px;">
+          D设计=1.80m → R=3.0×1.80=5.40m，已同步 ✓
+        </div>
+        <div class="param-row" style="margin-top:2px;">
+          <span class="lbl">水损阈值 (m):</span>
+        </div>
+        <div class="param-row">
+          <input class="inp threshold" placeholder="如: 2.0">
+          <span class="hint hint-orange" style="font-size:11px;">(ΔZ超此值将提醒)</span>
+        </div>
+      </div>
+
+    </div><!-- /three-cols -->
+  </div><!-- /groupbox -->
+</div><!-- /panel -->
+
+<div class="note">
+  ✅ 三栏方案：左4行（管道基础）/ 中5行（运行参数）/ 右5行（转弯控制）— 每栏各自独立，不存在行高同步问题，R信息独占一行完整显示。<br>
+  ⚠ 注意：「D设计=...→R=...」一行现在简化为 "已同步 ✓" 形式；如需显示完整公式可展开为完整一行，不影响布局。
+</div>
+
+<div class="divider"></div>
+
+<!-- ═════════════════════════════════════════ 变体：lbl 在 input 上方 ═════════════════════════════════════════ -->
+<h2>▼ 变体：标签与输入框同行（更紧凑，适合宽屏）<span class="tag tag-new">可选</span></h2>
+<div class="tab-bar">
+  <div class="tab active">基本参数</div>
+  <div class="tab">结构段信息</div>
+  <div class="tab">纵断面节点</div>
+  <div class="tab">计算结果</div>
+</div>
+<div class="panel">
+  <div class="groupbox">
+    <span class="groupbox-title">全局水力参数</span>
+    <div class="three-cols">
+
+      <!-- 左栏 inline -->
+      <div class="col">
+        <div class="col-title">管道基础参数</div>
+        <div class="param-row"><span class="lbl" style="min-width:100px;">设计流量 Q:</span>
+          <input class="inp" value="4.5000" style="width:76px;">
+          <span class="hint hint-blue" style="font-size:11px;">(已导入)</span></div>
+        <div class="param-row"><span class="lbl" style="min-width:100px;">糙率 n:</span>
+          <input class="inp n-inp" value="0.0140">
+          <span class="hint hint-blue" style="font-size:11px;">(已导入)</span></div>
+        <div class="param-row"><span class="lbl" style="min-width:100px;">管径 D:</span>
+          <span class="d-computed" style="font-size:11px;">1.8000m (理论1.6926m)</span></div>
+        <div class="param-row cb-row"><span class="lbl" style="min-width:100px;">指定管径:</span>
+          <input type="checkbox" class="checkbox"><button class="help-btn">?</button></div>
+      </div>
+
+      <!-- 中栏 inline -->
+      <div class="col">
+        <div class="col-title">管道运行参数</div>
+        <div class="param-row"><span class="lbl" style="min-width:108px;">拟定流速 v:</span><span class="star-r">*</span>
+          <input class="inp v-inp" value="2.0" style="width:60px;">
+          <span class="hint hint-orange" style="font-size:11px;">(确认流速)</span></div>
+        <div class="param-row"><span class="lbl" style="min-width:108px;">管道根数 N:</span><span class="star-r">*</span>
+          <div class="spinbox"><div class="btn">−</div><div class="val">1</div><div class="btn">+</div></div></div>
+        <div class="param-row"><span class="lbl" style="min-width:108px;">计算目标:</span>
+          <span class="target-lbl" style="font-size:12px;">计算总水头损失</span></div>
+        <div class="param-row cb-row"><input type="checkbox" class="checkbox" checked>
+          <span class="cb-lbl" style="font-size:12px;">考虑加大流量</span>
+          <input class="inp inc" placeholder="比例%" style="width:70px; font-size:12px;"></div>
+      </div>
+
+      <!-- 右栏 inline -->
+      <div class="col">
+        <div class="col-title">转弯控制参数</div>
+        <div class="param-row"><span class="lbl" style="min-width:88px;font-size:12px;">转弯倍数 n:</span><span class="star-b">*</span>
+          <input class="inp turn-n" value="3.0">
+          <span class="hint hint-orange" style="font-size:11px;">(确认倍数)</span></div>
+        <div class="param-row"><span class="lbl" style="min-width:88px;font-size:12px;">转弯半径 R:</span>
+          <input class="inp turn-r" value="5.40">
+          <span class="hint hint-gray" style="font-size:11px;">← 改R反推n</span></div>
+        <div class="r-info" style="padding-left:2px; margin-bottom:4px;">
+          D=1.80m → R=3.0×1.80=<b>5.40m</b>，已同步 ✓
+        </div>
+        <div class="param-row"><span class="lbl" style="min-width:88px;">水损阈值:</span>
+          <input class="inp threshold" placeholder="如: 2.0">
+          <span class="hint hint-orange" style="font-size:11px;">(ΔZ超限提醒)</span></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  ✅ 变体：标签与输入框同行，每行更紧凑，适合窗口较宽时使用。<br>
+  上方"新方案"：标签单独占一行，阅读更清晰，适合窗口宽度一般时使用。
+</div>
+
+</body>
+</html>

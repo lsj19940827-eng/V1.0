@@ -29,7 +29,34 @@
 | 矩形明渠 | 底宽不同 | 插入 |
 | 梯形/圆形/U形明渠 | 任意 | **总是插入** |
 
-### 1.2 断面特征尺寸换算
+### 1.2 不触发渐变段的结构
+
+| 结构类型 | 处理方式 |
+|---------|----------|
+| 分水闸/分水口/泄水闸/节制闸 | 点状结构，不触发渐变段。算法"穿透"闸节点，基于闸两侧的真实结构判断是否需要渐变段 |
+
+#### 闸穿透规则
+
+当相邻节点是闸时，算法向后穿过所有连续闸节点，找到两侧的"真实结构节点"，用它们来判断渐变段/明渠段的插入。
+
+**示例**：`隧洞-出 → 闸1 → 闸2 → 渡槽-进`
+
+穿透后等效为 `(隧洞-出, 渡槽-进)` 对，判断结果：需要出口渐变段 + 明渠段 + 进口渐变段。闸将明渠段一分为二：
+
+```
+隧洞-出 → 出口渐变段 → 明渠1 → 闸1 → 闸2 → 明渠2 → 进口渐变段 → 渡槽-进
+```
+
+- OC1长度 = 首个闸站号 - 出口渐变段末端站号
+- OC2长度 = 进口渐变段起始站号 - 末个闸站号
+- 任一段长度 ≤ 0 则不插入该段
+- 适用于 `_should_insert_open_channel` 和 `_needs_transition` 两种判断路径
+
+#### 闸过闸水头损失去重
+
+连续同名且同坐标（XY差 < 1e-6）的闸节点，仅首行保留 `head_loss_gate`（默认0.1m），后续行清零，避免重复扣减。
+
+### 1.3 断面特征尺寸换算
 
 | 断面参数 | 特征宽度 |
 |---------|---------|
@@ -54,10 +81,12 @@ $$L = k \times |B_1 - B_2|$$
 |---------|---------|---------|
 | 渡槽 | $L \geq 6h_{设计}$ | $L \geq 8h_{设计}$ |
 | 隧洞 | $L \geq \max(5h,\ 3D)$ | $L \geq \max(5h,\ 3D)$ |
-| 倒虹吸 | $L \geq 5h_{上游}$ | $L \geq 6h_{下游}$ |
+| 倒虹吸 | $L = 5h_{上游}$（GB 50288 §10.2.4，3\~5倍取大值） | $L = 6h_{下游}$（GB 50288 §10.2.4，4\~6倍取大值） |
 | 矩形暗涵 | 仅基础公式，无额外约束 | 仅基础公式，无额外约束 |
 
-> **注**：已移除原有 10 m 硬编码下限（所有结构类型统一取消）。
+> **注**：
+> 1. 已移除原有 10 m 硬编码下限（所有结构类型统一取消）。
+> 2. **倒虹吸**渐变段长度直接按水深倍数确定，不使用 §2.1 基础公式 $L=k\times|B_1-B_2|$（依据 GB 50288-2018 §10.2.4 条1）。其他结构类型仍先算基础公式再与约束取 max。
 
 ---
 
@@ -160,7 +189,7 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
 
 | 文件 | 关键方法 |
 |------|---------|
-| `推求水面线/core/calculator.py` | `_needs_transition()`, `_find_reference_channel_same_section()`, `identify_and_insert_transitions()`, `_estimate_transition_length()` |
+| `推求水面线/core/calculator.py` | `_needs_transition()`, `_find_reference_channel_same_section()`, `identify_and_insert_transitions()`, `_estimate_transition_length()`, `_find_next_non_gate_idx()`, `pre_scan_open_channels()`, `calculate_transition_losses_inline()` |
 | `推求水面线/core/hydraulic_calc.py` | `calculate_transition_length()`, `_estimate_transition_loss()`, `calculate_transition_loss_inline()` |
 | `推求水面线/models/enums.py` | `StructureType.get_special_structures()` |
 | `推求水面线/models/data_models.py` | `ChannelNode.get_ip_str()` |
