@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_modified": "2026-02-26 22:27:19",
+  "last_modified": "2026-02-26 22:35:09",
   "siphons": {
     "沪蓉": {
       "Q": 4.0,
@@ -3730,7 +3730,7 @@
           "radius": 5.0,
           "angle": 25.5,
           "xi_user": null,
-          "xi_calc": 0.1761,
+          "xi_calc": 0.1763582033876177,
           "locked": true,
           "start_elev": 96.84,
           "end_elev": 95.64,
@@ -3940,14 +3940,14 @@
           "elevation": 72.633,
           "vcr": 0.0,
           "turn_type": "折线",
-          "turn_angle": 13.90597532893385
+          "turn_angle": 13.906
         },
         {
           "chainage": 757.465,
           "elevation": 49.631,
-          "vcr": 4.999999999999974,
+          "vcr": 5.0,
           "turn_type": "圆弧",
-          "turn_angle": 31.953887731040506
+          "turn_angle": 31.954
         },
         {
           "chainage": 760.149,
@@ -3959,9 +3959,9 @@
         {
           "chainage": 802.151,
           "elevation": 48.873,
-          "vcr": 5.0000000000000115,
+          "vcr": 5.0,
           "turn_type": "圆弧",
-          "turn_angle": 37.38434639614261
+          "turn_angle": 37.384
         },
         {
           "chainage": 805.248,
@@ -3973,9 +3973,9 @@
         {
           "chainage": 837.969,
           "elevation": 74.903,
-          "vcr": 5.000000000000295,
+          "vcr": 5.0,
           "turn_type": "圆弧",
-          "turn_angle": 10.329721660745824
+          "turn_angle": 10.33
         },
         {
           "chainage": 838.732,
@@ -3987,9 +3987,9 @@
         {
           "chainage": 868.693,
           "elevation": 90.685,
-          "vcr": 4.999999999999922,
+          "vcr": 5.0,
           "turn_type": "圆弧",
-          "turn_angle": 10.128510859907115
+          "turn_angle": 10.129
         },
         {
           "chainage": 869.512,
@@ -4006,8 +4006,8 @@
           "turn_angle": 0.0
         }
       ],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 0.7646470141035647,
+      "diameter": 1.8,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -4266,8 +4266,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 0.8467203421619564,
+      "diameter": 1.8,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -4494,8 +4494,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 0.41266209683780924,
+      "diameter": 1.8,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -4722,8 +4722,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 0.45526857123608383,
+      "diameter": 1.8,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -4950,8 +4950,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 0.3628807605974495,
+      "diameter": 1.8,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -5146,8 +5146,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 1.4842796894297237,
+      "diameter": 1.6,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -5343,8 +5343,8 @@
         }
       ],
       "longitudinal_nodes": [],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 1.8170408007067336,
+      "diameter": 1.6,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",
@@ -5749,9 +5749,9 @@
         {
           "chainage": 6826.233,
           "elevation": 96.84,
-          "vcr": 4.999999999999978,
+          "vcr": 5.0,
           "turn_type": "圆弧",
-          "turn_angle": 25.455507714521406
+          "turn_angle": 25.456
         },
         {
           "chainage": 6828.1,
@@ -5765,14 +5765,14 @@
           "elevation": 72.633,
           "vcr": 0.0,
           "turn_type": "折线",
-          "turn_angle": 13.90597532893385
+          "turn_angle": 13.906
         },
         {
           "chainage": 6881.621,
           "elevation": 49.631,
-          "vcr": 4.999999999999974,
+          "vcr": 5.0,
           "turn_type": "圆弧",
-          "turn_angle": 31.953887731040506
+          "turn_angle": 31.954
         },
         {
           "chainage": 6884.304,
@@ -5784,9 +5784,9 @@
         {
           "chainage": 6926.307,
           "elevation": 48.873,
-          "vcr": 5.0000000000000115,
+          "vcr": 5.0,
           "turn_type": "圆弧",
-          "turn_angle": 37.38434639614261
+          "turn_angle": 37.384
         },
         {
           "chainage": 6929.404,
@@ -5812,9 +5812,9 @@
         {
           "chainage": 6992.848,
           "elevation": 90.685,
-          "vcr": 4.999999999999922,
+          "vcr": 5.0,
           "turn_type": "圆弧",
-          "turn_angle": 10.128510859907115
+          "turn_angle": 10.129
         },
         {
           "chainage": 6993.668,
@@ -5831,8 +5831,8 @@
           "turn_angle": 0.0
         }
       ],
-      "total_head_loss": null,
-      "diameter": null,
+      "total_head_loss": 7.339234202541855,
+      "diameter": 1.6,
       "calculated_at": "",
       "turn_n": 3.0,
       "threshold": "",

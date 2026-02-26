@@ -138,6 +138,12 @@ class InletShapeDialog(QDialog):
         self.lbl_range = QLabel("")
         self.lbl_range.setStyleSheet(f"color:{T2};font-size:11px;")
         cgl.addWidget(self.lbl_range, 1, 0, 1, 3)
+        self._inlet_formula_view = QWebEngineView()
+        self._inlet_formula_view.setMinimumHeight(36)
+        self._inlet_formula_view.setStyleSheet(
+            "border:1px solid #E3ECF9; border-radius:8px; background:#F8F9FE;")
+        self._inlet_formula_view.setFixedHeight(0)
+        cgl.addWidget(self._inlet_formula_view, 2, 0, 1, 3)
         lay.addWidget(cgrp)
 
         # 加载当前值
@@ -147,6 +153,7 @@ class InletShapeDialog(QDialog):
         else:
             self._update_default_xi()
         self._update_range_hint()
+        self._update_inlet_formula()
 
         # 按钮
         blay = QHBoxLayout()
@@ -166,6 +173,7 @@ class InletShapeDialog(QDialog):
     def _on_shape_changed(self):
         self._update_default_xi()
         self._update_range_hint()
+        self._update_inlet_formula()
 
     def _update_default_xi(self):
         shape = self._get_selected_shape()
@@ -181,6 +189,28 @@ class InletShapeDialog(QDialog):
                 self.lbl_range.setText(f"建议值: {r[0]:.2f}")
             else:
                 self.lbl_range.setText(f"建议范围: {r[0]:.2f} ~ {r[1]:.2f}")
+
+    def _update_inlet_formula(self):
+        shape = self._get_selected_shape()
+        if not shape or shape not in INLET_SHAPE_COEFFICIENTS:
+            self._inlet_formula_view.setFixedHeight(0)
+            self._inlet_formula_view.setHtml("")
+            return
+        r = INLET_SHAPE_COEFFICIENTS[shape]
+        xi_val = sum(r) / 2
+        shape_name = shape.value if hasattr(shape, 'value') else str(shape)
+        latex = (f"\\xi_{{\\text{{进}}}} = {xi_val:.4f}"
+                 f" \\quad \\text{{(查表 L.1.4-2，{shape_name})}}")
+        svg = render_latex_svg(latex, fontsize=14)
+        if svg:
+            h = get_svg_height_px(svg, padding=16)
+            self._inlet_formula_view.setFixedHeight(h)
+            body = f'<div style="display:flex;align-items:center;justify-content:center;height:100%;">{svg}</div>'
+            self._inlet_formula_view.setHtml(wrap_with_katex(body, extra_css=(
+                "html,body{margin:0;padding:0;height:100%;background:transparent;}")))
+        else:
+            self._inlet_formula_view.setFixedHeight(0)
+            self._inlet_formula_view.setHtml("")
 
     def _on_ok(self):
         shape = self._get_selected_shape()
@@ -303,6 +333,12 @@ class OutletShapeDialog(QDialog):
         self.lbl_calc_xi = QLabel("ξc = (1 - ωg/ωq)² = --")
         self.lbl_calc_xi.setStyleSheet(f"color:{S};font-weight:bold;font-size:12px;")
         rl.addWidget(self.lbl_calc_xi)
+        self._outlet_formula_view = QWebEngineView()
+        self._outlet_formula_view.setMinimumHeight(36)
+        self._outlet_formula_view.setStyleSheet(
+            "border:1px solid #E3ECF9; border-radius:8px; background:#F8F9FE;")
+        self._outlet_formula_view.setFixedHeight(0)
+        rl.addWidget(self._outlet_formula_view)
         lay.addWidget(rgrp)
 
         # 系数
@@ -364,6 +400,8 @@ class OutletShapeDialog(QDialog):
             return default
 
     def _on_param_changed(self):
+        self._outlet_formula_view.setFixedHeight(0)
+        self._outlet_formula_view.setHtml("")
         cat = self._SECTION_CATEGORIES.get(self.combo_type.currentText(), 'trapezoidal')
         h = self._fval('h')
         if h <= 0:
@@ -436,11 +474,26 @@ class OutletShapeDialog(QDialog):
         self.lbl_omega_q.setText(f"下游断面面积 {formula}")
         if omega_q <= 0:
             self.lbl_calc_xi.setText("ξc = --")
+            self._outlet_formula_view.setFixedHeight(0)
+            self._outlet_formula_view.setHtml("")
             return
         ratio = self.omega_g / omega_q
         xi_c = (1 - ratio) ** 2
         self.lbl_calc_xi.setText(f"ξc = (1 - {self.omega_g:.4f}/{omega_q:.4f})² = {xi_c:.4f}")
         self.edit_xi.setText(f"{xi_c:.4f}")
+        latex = (f"\\xi_c = \\left(1 - \\frac{{\\omega_g}}{{\\omega_q}}\\right)^2"
+                 f" = \\left(1 - \\frac{{{self.omega_g:.4f}}}{{{omega_q:.4f}}}\\right)^2"
+                 f" = {xi_c:.4f}")
+        svg = render_latex_svg(latex, fontsize=14)
+        if svg:
+            h = get_svg_height_px(svg, padding=16)
+            self._outlet_formula_view.setFixedHeight(h)
+            body = f'<div style="display:flex;align-items:center;justify-content:center;height:100%;">{svg}</div>'
+            self._outlet_formula_view.setHtml(wrap_with_katex(body, extra_css=(
+                "html,body{margin:0;padding:0;height:100%;background:transparent;}")))
+        else:
+            self._outlet_formula_view.setFixedHeight(0)
+            self._outlet_formula_view.setHtml("")
 
     def _on_ok(self):
         try:
@@ -958,7 +1011,9 @@ class TrashRackConfigDialog(QDialog):
         xi = CoefficientService.calculate_trash_rack_xi(params)
         self.lbl_result.setText(f"\u03bcs = {xi:.4f}")
         if not params.manual_mode and params.b1 > 0 and params.s1 > 0:
-            latex = (f"= {params.beta1:.2f} \\times "
+            formula_label = ("\\text{公式 L.1.4-3：}" if params.has_support and params.b2 > 0 and params.s2 > 0
+                             else "\\text{公式 L.1.4-2：}")
+            latex = (f"{formula_label}\\xi_s = {params.beta1:.2f} \\times "
                      f"\\left(\\frac{{{params.s1:.0f}}}{{{params.b1:.0f}}}\\right)"
                      f"^{{\\frac{{4}}{{3}}}} \\times "
                      f"\\sin({params.alpha:.0f}^{{\\circ}})")
@@ -1393,24 +1448,46 @@ class SegmentEditDialog(QDialog):
                 self.lbl_sp_val.setText("--")
                 self.lbl_sp_hint.setText("")
 
+    # ---- 多行 LaTeX 渲染辅助 ----
+    @staticmethod
+    def _render_multi_latex(lines, fontsize=14):
+        """将多行 LaTeX 渲染为组合 HTML body + 总高度。
+
+        Returns (body_html, total_height)；全部失败时返回 ('', 0)。
+        """
+        parts = []
+        total_h = 0
+        for latex in lines:
+            svg = render_latex_svg(latex, fontsize=fontsize)
+            if svg:
+                h = get_svg_height_px(svg, padding=8)
+                total_h += h
+                parts.append(
+                    f'<div style="margin:2px 0;text-align:center;">{svg}</div>')
+        return '\n'.join(parts), total_h
+
     # ---- 更新公式卡片 ----
     def _update_formula(self):
         t = self.combo_type.currentText()
-        latex = None
+        latex_lines = []
         title = "计算公式"
 
         if t == SegmentType.BEND.value:
-            title = "弯管局部阻力系数"
+            title = "弯管局部阻力系数（表 L.1.4-3 / L.1.4-4 插值）"
             try:
                 r = float(self.ed_radius.text() or 0)
                 a = float(self.ed_angle.text() or 0)
-                xi_txt = self.ed_xi.text().strip()
-                xi_val = float(xi_txt) if xi_txt else 0
                 if r > 0 and a > 0 and self._D_theory > 0:
-                    d_r = self._D_theory / r
-                    latex = (f"\\xi = 0.131 + 0.163 \\left(\\frac{{D}}{{R}}\\right)"
-                             f"^{{3.5}} \\times \\frac{{\\theta}}{{90^{{\\circ}}}}"
-                             f" = {xi_val:.4f}")
+                    r_d = r / self._D_theory
+                    xi_90 = CoefficientService.get_xi_90(r_d)
+                    gamma = CoefficientService.get_gamma(a)
+                    xi = xi_90 * gamma
+                    latex_lines = [
+                        f"R/D_0 = R / D = {r:.3f} / {self._D_theory:.3f} = {r_d:.3f}",
+                        f"\\text{{查表 L.1.4-3：}}\\xi_{{90}} = {xi_90:.4f}",
+                        f"\\text{{查表 L.1.4-4：}}\\gamma = {gamma:.4f}",
+                        f"\\xi = \\xi_{{90}} \\times \\gamma = {xi_90:.4f} \\times {gamma:.4f} = {xi:.4f}",
+                    ]
             except ValueError:
                 pass
         elif t == SegmentType.FOLD.value:
@@ -1420,9 +1497,24 @@ class SegmentEditDialog(QDialog):
                 xi_txt = self.ed_xi.text().strip()
                 xi_val = float(xi_txt) if xi_txt else 0
                 if a > 0:
-                    latex = (f"\\xi = 0.946\\sin^2\\!\\left(\\frac{{\\theta}}{{2}}"
-                             f"\\right) + 2.05\\sin^4\\!\\left(\\frac{{\\theta}}"
-                             f"{{2}}\\right) = {xi_val:.4f}")
+                    latex_lines.append(
+                        f"\\xi = 0.946\\sin^2\\!\\left(\\frac{{\\theta}}{{2}}"
+                        f"\\right) + 2.05\\sin^4\\!\\left(\\frac{{\\theta}}"
+                        f"{{2}}\\right) = {xi_val:.4f}")
+            except ValueError:
+                pass
+            try:
+                L = float(self.ed_length.text() or 0)
+                se = float(self.ed_start_elev.text()) if self.ed_start_elev.text().strip() else None
+                ee = float(self.ed_end_elev.text()) if self.ed_end_elev.text().strip() else None
+                if se is not None and ee is not None and L > 0:
+                    dh = ee - se
+                    sp = math.sqrt(L ** 2 + dh ** 2)
+                    title = "折管局部阻力系数 + 空间长度"
+                    latex_lines.append(
+                        f"L_s = \\sqrt{{L^2 + \\Delta H^2}} = "
+                        f"\\sqrt{{{L:.3f}^2 + {dh:.2f}^2}} = {sp:.3f}"
+                        f"\\;\\text{{m}}")
             except ValueError:
                 pass
         elif t == SegmentType.STRAIGHT.value:
@@ -1434,30 +1526,27 @@ class SegmentEditDialog(QDialog):
                 if se is not None and ee is not None and L > 0:
                     dh = ee - se
                     sp = math.sqrt(L ** 2 + dh ** 2)
-                    latex = (f"L_s = \\sqrt{{L^2 + \\Delta H^2}} = "
-                             f"\\sqrt{{{L:.3f}^2 + {dh:.2f}^2}} = {sp:.3f}"
-                             f"\\;\\text{{m}}")
+                    latex_lines.append(
+                        f"L_s = \\sqrt{{L^2 + \\Delta H^2}} = "
+                        f"\\sqrt{{{L:.3f}^2 + {dh:.2f}^2}} = {sp:.3f}"
+                        f"\\;\\text{{m}}")
             except ValueError:
                 pass
 
         self._formula_title.setText(title)
-        if latex:
-            svg = render_latex_svg(latex, fontsize=14)
-            if svg:
-                h = get_svg_height_px(svg, padding=16)
-                self.formula_view.setFixedHeight(h)
-                body = (f'<div style="display:flex;align-items:center;'
-                        f'justify-content:center;height:100%;">{svg}</div>')
+        if latex_lines:
+            body, total_h = self._render_multi_latex(latex_lines)
+            if body:
+                self.formula_view.setFixedHeight(total_h)
                 html = wrap_with_katex(body, extra_css=(
-                    "html,body{margin:0;padding:0;height:100%;"
+                    "html,body{margin:0;padding:0;"
                     "background:transparent;}"))
                 self.formula_view.setHtml(html)
                 self._formula_frame.setVisible(True)
                 return
-        self._formula_frame.setVisible(bool(latex))
-        if not latex:
-            self.formula_view.setFixedHeight(0)
-            self.formula_view.setHtml("")
+        self._formula_frame.setVisible(False)
+        self.formula_view.setFixedHeight(0)
+        self.formula_view.setHtml("")
 
     # ---- 加载已有数据 ----
     def _load(self, seg):

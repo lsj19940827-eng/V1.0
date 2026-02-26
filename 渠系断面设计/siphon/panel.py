@@ -1093,6 +1093,43 @@ body{
   </div>
 </div>
 
+<div class="group">
+  <div class="group-header">
+    <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm3-4H7v-2h8v2zm0-4H7V7h8v2z"/></svg>
+    局部阻力系数公式（附录 L）
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>弯管局部阻力系数（表 L.1.4-3 / L.1.4-4）</div>
+    $$\xi = \xi_{90} \times \gamma$$
+    <div class="note">$\xi_{90}$：查表 L.1.4-3，按 $R/D_0$ 线性插值；$\gamma$：查表 L.1.4-4，按弯管圆心角 $\theta$ 线性插值</div>
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>折管局部阻力系数</div>
+    $$\zeta = 0.9457\sin^2\!\left(\frac{\theta}{2}\right) + 2.047\sin^4\!\left(\frac{\theta}{2}\right)$$
+    <div class="note">$\theta$ 为折管折角（度）</div>
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>拦污栅局部阻力系数 — 无独立支墩（公式 L.1.4-2）</div>
+    $$\xi_s = \beta_1 \left(\frac{s_1}{b_1}\right)^{4/3} \sin\alpha$$
+    <div class="note">$\beta_1$：栅条形状系数（表 L.1.4-1）；$s_1$：栅条厚度；$b_1$：栅条间距；$\alpha$：栅面倾角</div>
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>拦污栅局部阻力系数 — 有独立支墩（公式 L.1.4-3）</div>
+    $$\xi_s = \left[\beta_1 \left(\frac{s_1}{b_1}\right)^{4/3} + \beta_2 \left(\frac{s_2}{b_2}\right)^{4/3}\right] \sin\alpha$$
+    <div class="note">$\beta_2$：支墩形状系数；$s_2$：支墩厚度；$b_2$：支墩净距</div>
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>出水口局部阻力系数</div>
+    $$\xi_c = \left(1 - \frac{\omega_g}{\omega_q}\right)^2$$
+    <div class="note">$\omega_g$：管道断面积 $= Q/v$；$\omega_q$：下游明渠断面积</div>
+  </div>
+  <div class="card">
+    <div class="card-label"><span class="dot"></span>管道渐变段局部阻力系数</div>
+    $$\xi_{jb} = \begin{cases} 0.05 & \text{收缩（方变圆 / 圆管收缩）} \\ 0.10 & \text{扩散（圆变方 / 圆管扩大，扩散角} \leq 10^{\circ} \text{）} \end{cases}$$
+    <div class="note">GB 50288-2018 附录 L 第 4 条</div>
+  </div>
+</div>
+
 <script>
 document.addEventListener("DOMContentLoaded", function(){
   renderMathInElement(document.body, {

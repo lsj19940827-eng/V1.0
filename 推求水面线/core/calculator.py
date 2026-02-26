@@ -1853,6 +1853,9 @@ class WaterProfileCalculator:
         
         # 验证每个节点
         for i, node in enumerate(nodes):
+            # 跳过渐变段和自动插入的连接段（这些行由系统自动生成，无需用户填写结构形式）
+            if getattr(node, 'is_transition', False) or getattr(node, 'is_auto_inserted_channel', False):
+                continue
             if not node.name:
                 errors.append(f"第{i+1}行: 建筑物名称不能为空")
             if node.structure_type is None:
