@@ -434,8 +434,8 @@ class GeometryCalculator:
         for i in range(len(nodes)):
             curr_node = nodes[i]
             
-            # 渐变段节点：复核长度全部置0
-            if getattr(curr_node, 'is_transition', False):
+            # 渐变段节点 / 自动插入明渠段：复核长度全部置0
+            if getattr(curr_node, 'is_transition', False) or getattr(curr_node, 'is_auto_inserted_channel', False):
                 curr_node.check_pre_curve = 0.0
                 curr_node.check_post_curve = 0.0
                 curr_node.check_total_length = 0.0
@@ -449,17 +449,19 @@ class GeometryCalculator:
                 curr_node.check_total_length = 0.0
                 continue
             
-            # 查找前一个非渐变段节点的切线长
+            # 查找前一个真实IP节点的切线长（跳过渐变段和自动插入明渠段）
             prev_tangent = 0.0
             for j in range(i - 1, -1, -1):
-                if not getattr(nodes[j], 'is_transition', False):
+                if (not getattr(nodes[j], 'is_transition', False)
+                        and not getattr(nodes[j], 'is_auto_inserted_channel', False)):
                     prev_tangent = nodes[j].tangent_length
                     break
             
-            # 查找后一个非渐变段节点的直线距离
+            # 查找后一个真实IP节点的直线距离（跳过渐变段和自动插入明渠段）
             next_straight = 0.0
             for j in range(i + 1, len(nodes)):
-                if not getattr(nodes[j], 'is_transition', False):
+                if (not getattr(nodes[j], 'is_transition', False)
+                        and not getattr(nodes[j], 'is_auto_inserted_channel', False)):
                     next_straight = nodes[j].straight_distance
                     break
             

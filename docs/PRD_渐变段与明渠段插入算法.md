@@ -1,5 +1,7 @@
 # PRD：渐变段与明渠段插入算法
 
+> **版本**：v2.1 | **最后更新**：2026-02-26
+>
 > 描述推求水面线模块中渐变段（过渡段）和明渠段自动识别、插入及参数确定的完整逻辑。
 
 ---
@@ -13,6 +15,7 @@
 | 规则 | 触发条件 | 说明 |
 |------|---------|------|
 | 1 | 倒虹吸相邻 | 倒虹吸水损已含进出口损失，**不插入** |
+| 1b | 闸类结构 | 分水闸/分水口/泄水闸/节制闸为点状结构，**不触发渐变段** |
 | 2 | 隧洞/渡槽 ↔ 明渠 | 总是插入，不检查底宽 |
 | 3 | 隧洞/渡槽 ↔ 隧洞/渡槽（不同子类型） | 如圆形 → 圆拱直墙型，总是插入 |
 | 4 | 倒虹吸 ↔ 明渠 | 总是插入（占位行，实际损失不计） |
@@ -20,6 +23,19 @@
 | 6 | 同类型明渠但不同流量段 | 流量段变化视为不同断面 |
 | 7 | **矩形暗涵 ↔ 明渠** | 特例见下表 |
 | 8 | 断面特征尺寸不同 | 底宽/直径/换算半径不同时插入 |
+
+#### 有效结构类型（参与渐变段判断）
+
+```python
+valid_type_values = {
+    "隧洞-圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
+    "渡槽-U形", "渡槽-矩形",
+    "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
+    "矩形暗涵", "倒虹吸",
+}
+```
+
+不在此集合中的结构类型直接返回 `False`（不需要渐变段）。
 
 #### 规则 7 细化（矩形暗涵 ↔ 明渠）
 
@@ -37,7 +53,15 @@
 
 #### 闸穿透规则
 
-当相邻节点是闸时，算法向后穿过所有连续闸节点，找到两侧的"真实结构节点"，用它们来判断渐变段/明渠段的插入。
+当相邻节点是闸时，`identify_and_insert_transitions()` 使用三种判断路径：
+
+| 情况 | 方法 | 说明 |
+|------|------|------|
+| 当前节点是闸 → 下一节点是进口 | `_check_gap_gate_to_entry()` | 仅统计进口侧渐变段，结果加入延迟队列 `deferred_nodes` |
+| 当前节点是出口 → 下一节点是闸 | `_check_gap_exit_to_gate()` | 仅统计出口侧渐变段，直接插入 |
+| 普通（非闸）对 | `_should_insert_open_channel()` | 标准3行插入（出口渐变段→明渠→进口渐变段） |
+
+**延迟队列机制**：闸→进口方向的插入节点（明渠段+进口渐变段）暂存于 `deferred_nodes`，在下一个非闸节点之前统一冲洗插入，确保闸群结束后节点顺序正确。
 
 **示例**：`隧洞-出 → 闸1 → 闸2 → 渡槽-进`
 
@@ -50,7 +74,6 @@
 - OC1长度 = 首个闸站号 - 出口渐变段末端站号
 - OC2长度 = 进口渐变段起始站号 - 末个闸站号
 - 任一段长度 ≤ 0 则不插入该段
-- 适用于 `_should_insert_open_channel` 和 `_needs_transition` 两种判断路径
 
 #### 闸过闸水头损失去重
 
@@ -58,11 +81,23 @@
 
 ### 1.3 断面特征尺寸换算
 
-| 断面参数 | 特征宽度 |
-|---------|---------|
-| 直径 D | D |
-| 半径 R（U形/圆弧） | 2R |
-| 底宽 B | B |
+`_get_characteristic_width()` 按优先级 D > R > B 提取：
+
+| 断面参数 | 特征宽度 | 参数键名（兼容多种） |
+|---------|---------|-------------------|
+| 直径 D | D | `D`, `直径` |
+| 半径 R（U形/圆弧/马蹄形） | 2R | `R_circle`, `半径`, `内半径`, `r` |
+| 底宽 B | B | `B`, `底宽`, `b` |
+
+`_has_same_section_size()` 使用容差 `1e-6` 比较两节点的特征宽度。
+
+### 1.4 合并渐变段
+
+当里程差 ≤ 渐变段长度之和（无法插入明渠段）时，使用 `_create_merged_transition_node()` 创建**单行合并渐变段**：
+
+- `transition_length = distance`（使用实际里程差作为长度）
+- 倒虹吸侧合并时标记 `transition_skip_loss = True`
+- 底坡从最近上游明渠继承
 
 ---
 
@@ -72,37 +107,149 @@
 
 $$L = k \times |B_1 - B_2|$$
 
-- 进口：$k = 2.5$
-- 出口：$k = 3.5$
+- 进口：$k = 2.5$（`TRANSITION_LENGTH_COEFFICIENTS["进口"]`）
+- 出口：$k = 3.5$（`TRANSITION_LENGTH_COEFFICIENTS["出口"]`）
 
-### 2.2 各结构最小长度约束
+其中 $B_1$、$B_2$ 为水面宽度，由 `get_water_surface_width()` 计算。
 
-| 结构类型 | 进口约束 | 出口约束 |
-|---------|---------|---------|
-| 渡槽 | $L \geq 6h_{设计}$ | $L \geq 8h_{设计}$ |
-| 隧洞 | $L \geq \max(5h,\ 3D)$ | $L \geq \max(5h,\ 3D)$ |
-| 倒虹吸 | $L = 5h_{上游}$（GB 50288 §10.2.4，3\~5倍取大值） | $L = 6h_{下游}$（GB 50288 §10.2.4，4\~6倍取大值） |
-| 矩形暗涵 | 仅基础公式，无额外约束 | 仅基础公式，无额外约束 |
+### 2.2 水面宽度计算（`get_water_surface_width`）
+
+| 断面类型 | 计算方法 |
+|---------|---------|
+| 梯形/矩形 | $B = b + 2mh$ |
+| 圆形（有直径D） | $h \leq r$：$B = 2\sqrt{r^2-(r-h)^2}$；$h > r$：$B = 2\sqrt{r^2-(h-r)^2}$ |
+| 马蹄形隧洞 | `_horseshoe_std_surface_width()`（精确几何公式，Ⅰ/Ⅱ型） |
+| 渡槽-U形 | $h \leq R$：圆形公式；$h > R$：$B = 2R$ |
+| 明渠-U形 | $h \leq h_0$：圆弧段公式；$h > h_0$：$B = b_{arc} + 2m(h-h_0)$ |
+| 隧洞-圆拱直墙型 | `_arch_tunnel_surface_width()`（直墙+圆拱分段） |
+| 渡槽-矩形（带倒角） | `_rect_chamfer_surface_width()`（倒角区收窄） |
+| 仅有半径R的断面 | $B = 2R$ |
+
+### 2.3 各结构最小长度约束
+
+| 结构类型 | 进口约束 | 出口约束 | 代码常量 |
+|---------|---------|---------|---------|
+| 渡槽 | $L \geq 6h_{设计}$ | $L \geq 8h_{设计}$ | `TRANSITION_LENGTH_CONSTRAINTS["渡槽"]` |
+| 隧洞 | $L \geq \max(5h,\ 3D)$ | $L \geq \max(5h,\ 3D)$ | `TRANSITION_LENGTH_CONSTRAINTS["隧洞"]` |
+| 倒虹吸 | $L = 5h_{上游}$ | $L = 6h_{下游}$ | `TRANSITION_LENGTH_CONSTRAINTS["倒虹吸"]` |
+| 矩形暗涵 | 仅基础公式 | 仅基础公式 | `TRANSITION_LENGTH_CONSTRAINTS["矩形暗涵"]` |
 
 > **注**：
 > 1. 已移除原有 10 m 硬编码下限（所有结构类型统一取消）。
 > 2. **倒虹吸**渐变段长度直接按水深倍数确定，不使用 §2.1 基础公式 $L=k\times|B_1-B_2|$（依据 GB 50288-2018 §10.2.4 条1）。其他结构类型仍先算基础公式再与约束取 max。
 
+### 2.4 渠道水深取值规则
+
+`calculate_transition_length()` 中渠道水深的取值逻辑：
+
+1. **出口渐变段**：使用 `next_node`（下游明渠）的 `water_depth`
+2. **进口渐变段**：使用 `prev_node`（上游明渠）的 `water_depth`
+3. **回退**：若相邻节点水深无效，调用 `get_channel_design_depth()` 在同一流量段内搜索明渠节点水深（取最大值）
+
+### 2.5 渐变段长度计算详情
+
+每次计算后，详细参数保存到 `transition_node.transition_length_calc_details` 字典中，供双击展示使用：
+
+```python
+{
+    "transition_type", "struct_name", "B1", "B2", "coefficient",
+    "L_basic", "channel_depth", "L_result", "constraint_applied",
+    "prev_name", "next_name",
+    # 约束类型特有字段：
+    "depth_multiplier", "L_depth",                    # 渡槽/倒虹吸
+    "tunnel_multiplier", "tunnel_size", "L_tunnel",   # 隧洞
+    "constraint_desc",                                 # 所有类型
+}
+```
+
 ---
 
 ## 三、渐变段水头损失计算
 
-$$h_{渐} = h_{j1} + h_f = \xi_1 \frac{|v_2^2 - v_1^2|}{2g} + i \cdot L$$
+### 3.1 总损失公式
 
-#### 局部损失系数 $\xi_1$（GB 50288 表 K.1.2）
+$$h_{渐} = h_{j1} + h_f$$
 
-| 渐变段形式 | 进口 | 出口 |
-|-----------|------|------|
+### 3.2 局部水头损失
+
+$$h_{j1} = \xi_1 \frac{|v_2^2 - v_1^2|}{2g}$$
+
+### 3.3 局部损失系数 $\xi_1$
+
+#### 渡槽/隧洞/暗涵/明渠渐变段（GB 50288 表 K.1.2）
+
+`TRANSITION_ZETA_COEFFICIENTS` 定义：
+
+| 渐变段形式 | 进口 $\xi_1$ | 出口 $\xi_1$ |
+|-----------|-------------|-------------|
 | 曲线形反弯扭曲面 | 0.10 | 0.20 |
-| 直线形扭曲面 | 0.20 | 0.30 |
-| 圆弧直墙 | 0.30 | 0.50 |
-| 八字形 | 0.35 | 0.65 |
+| 圆弧直墙 | 0.20 | 0.50 |
+| 八字形 | 0.30 | 0.50 |
 | 直角形 | 0.40 | 0.75 |
+
+**直线形扭曲面**：根据θ角度线性插值（`TRANSITION_TWISTED_ZETA_RANGE`）：
+
+| 参数 | 进口 | 出口 |
+|------|------|------|
+| θ范围 | 15°~37° | 15°~37° |
+| ζ范围 | 0.0~0.10 | 0.10~0.17 |
+| 插值公式 | $\zeta = 0 + \frac{\theta-15}{37-15} \times 0.1$ | $\zeta = 0.1 + \frac{\theta-15}{37-15} \times 0.07$ |
+| θ ≤ 15° | 取最小值 | 取最小值 |
+| θ ≥ 37° | 取最大值 | 取最大值 |
+
+#### 倒虹吸渐变段（GB 50288 表 L.1.2）
+
+`SIPHON_TRANSITION_ZETA_COEFFICIENTS` 定义：
+
+| 渐变段型式 | 进口 $\xi_1$ | 出口 $\xi_1$ | 备注 |
+|-----------|-------------|-------------|------|
+| 反弯扭曲面 | 0.10 | 0.20 | |
+| 直线扭曲面 | 0.20 | 0.40 | 取均值（范围0.05~0.30 / 0.30~0.50） |
+| 1/4圆弧 | 0.15 | 0.25 | |
+| 方头型 | 0.30 | 0.75 | |
+
+型式选项列表：`SIPHON_TRANSITION_FORM_OPTIONS = ["反弯扭曲面", "直线扭曲面", "1/4圆弧", "方头型"]`
+
+倒虹吸型式→渡槽/隧洞型式映射（`SIPHON_TO_TRANSITION_FORM_MAP`）：
+- `"反弯扭曲面"` → `"曲线形反弯扭曲面"`
+- `"直线扭曲面"` → `"直线形扭曲面"`
+- `"1/4圆弧"` 和 `"方头型"` 在表K.1.2中无直接对应
+
+#### ζ系数获取优先级（`get_transition_zeta`）
+
+1. 用户手动设置 `transition_node.transition_zeta > 0` → 直接使用
+2. 从表K.1.2查表 → 固定值或直线形扭曲面插值
+3. 默认值：进口 0.1，出口 0.2
+
+### 3.4 沿程水头损失（平均值法）
+
+$$h_f = i_{avg} \times L$$
+
+其中平均水力坡降 $i_{avg}$ 由曼宁公式反算：
+
+$$i_{avg} = \left(\frac{v_{avg} \cdot n}{R_{avg}^{2/3}}\right)^2$$
+
+- $R_{avg} = (R_1 + R_2) / 2$（若任一为0则取非零值）
+- $v_{avg} = (v_1 + v_2) / 2$（若任一为0则取非零值）
+- $n$ = 渐变段节点的糙率（优先），否则用全局糙率
+
+### 3.5 计算详情记录
+
+每次计算后，详细参数保存到 `transition_node.transition_calc_details`：
+
+```python
+{
+    "transition_type", "transition_form", "zeta",
+    "v1", "v2", "B1", "B2", "length",
+    "R_avg", "v_avg", "h_j1", "h_f", "total",
+}
+```
+
+### 3.6 倒虹吸占位渐变段
+
+倒虹吸侧的渐变段标记 `transition_skip_loss = True`：
+- 只计算渐变段长度（调用 `calculate_transition_length`）
+- **不计算水头损失**（水损已含在倒虹吸水力计算中）
 
 ---
 
@@ -117,6 +264,8 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
 ```
 出口渐变段 → 明渠段 → 进口渐变段
 ```
+
+当里程差 ≤ 渐变段长度之和时，不插入明渠段，改为插入1行合并渐变段。
 
 ### 4.2 参考明渠确定算法（`_find_reference_channel_same_section`）
 
@@ -133,28 +282,42 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
    | 1（最高） | `明渠-矩形` / `矩形`（旧版） |
    | 2 | `明渠-梯形` |
    | 3 | `明渠-圆形` |
-   | 4 | `明渠-U形` |
+   | 4（最低） | `明渠-U形` |
 
 4. 从最高优先级组中，取**距离空隙最近**的节点作为参数来源
-5. 若同流量段内无任何明渠节点 → 返回 `None`（对话框需手动输入）
+5. 若同流量段内无任何明渠节点 → 返回 `(None, None)`，触发经济断面回退
+
+#### 返回参数字典
+
+```python
+{
+    'name', 'structure_type',  # 类型名（旧版"矩形"→"明渠-矩形"）
+    'bottom_width',            # B 或 D（圆形时用D代替B）
+    'water_depth', 'side_slope', 'roughness',
+    'slope_inv',               # 1/i
+    'flow', 'flow_section', 'structure_height',
+    'arc_radius',              # R_circle（明渠-U形用）
+    'theta_deg',               # 圆心角（明渠-U形用）
+}
+```
 
 #### 旧版兼容
 
-`"矩形"` 类型（`StructureType.RECTANGULAR`）等价于 `"明渠-矩形"`，在查找和显示时统一规范化为 `"明渠-矩形"`。
+`"矩形"` 类型（`StructureType.RECTANGULAR`）等价于 `"明渠-矩形"`，在查找和显示时统一规范化为 `"明渠-矩形"`。`_is_any_channel_type()` 同时匹配 `"矩形"` 旧值。
 
 ### 4.3 同流量段无明渠时的回退策略
 
 当同流量段内找不到任何明渠节点时，执行以下回退流程：
 
-1. **跨流量段**获取参考参数：全局搜索距离空隙最近的明渠节点，提取其 `i`（底坡）、`n`（糙率）、`m`（边坡）
+1. **跨流量段**获取参考参数（`_find_global_nearest_channel`）：全局搜索距离空隙最近的明渠节点，提取其 `slope_i`（底坡，默认1/3000）、`roughness`（糙率，默认0.014）、`side_slope`（边坡，默认1.0）
 2. 取当前流量段的设计流量 `Q`
-3. 使用 **实用经济断面公式** 自动计算4种明渠类型的断面参数：
+3. 使用 **实用经济断面公式**（`_compute_economic_section`）自动计算4种明渠类型的断面参数：
 
 | 类型 | 设计方法 | 预填内容 |
 |------|---------|---------|
 | 明渠-矩形 | 实用经济断面 $B = 2h$，二分法求 $h$ | B、h、m=0、n、底坡 |
 | 明渠-梯形 | 实用经济断面 $B = 2h(\sqrt{1+m^2}-m)$，二分法求 $h$ | B、h、m（来自参考节点）、n、底坡 |
-| 明渠-圆形 | 调用 `明渠设计.quick_calculate_circular`（留空自动搜索最优 D），与明渠设计模块行为一致 | D（作为 B 填入）、h=设计水深、n、底坡 |
+| 明渠-圆形 | 调用 `明渠设计.quick_calculate_circular`（留空自动搜索最优 D），失败回退到满流公式 | D（作为 B 填入）、h=设计水深、n、底坡 |
 | 明渠-U形 | 不自动计算；只预填 n 和底坡 | n、底坡（R 和 h 由用户手动输入） |
 
 4. 对话框预填最高优先级类型（**明渠-矩形**）的计算结果
@@ -166,34 +329,218 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
 |------|------|
 | 同流量段有明渠 | 自动预填参数，行全部有值 |
 | 同流量段无明渠 | 经济断面公式计算，预填明渠-矩形；切换类型自动更新参数 |
-| 一键全流程（auto_confirm） | 同上自动预填；若仍有空行则用 `upstream_channel_fallback`（向前最近明渠）兜底 |
+| 一键全流程（auto_confirm） | 同上自动预填；若仍有空行则用 `_fill_with_fallback_if_empty()`（向前最近明渠）兜底 |
+
+### 4.5 明渠段节点创建（`_create_open_channel_node`）
+
+| 属性 | 来源 |
+|------|------|
+| `structure_type` | 从 `OpenChannelParams.structure_type` 转换为枚举 |
+| `section_params` | 圆形→`{"D": ..., "m": 0}`；U形→`{"R_circle": ..., "m": ..., "theta_deg": ...}`；其他→`{"B": ..., "m": ...}` |
+| `water_depth` | `OpenChannelParams.water_depth` |
+| `roughness` | `OpenChannelParams.roughness` |
+| `slope_i` | `1/slope_inv` |
+| `flow` | params优先，否则继承 `prev_node.flow` |
+| `x`, `y` | `(prev_node + next_node) / 2`（坐标插值） |
+| `is_auto_inserted_channel` | `True`（不分配IP编号） |
+| `structure_height` | 从 params 继承 |
+| 水力参数 | 立即计算 A/X/R/v（圆形调用 `_fill_circular_section_params`，U形调用 `fill_section_params`，梯形/矩形内联计算） |
+
+### 4.6 自动插入明渠行的几何列显示规则
+
+自动插入明渠行（`is_auto_inserted_channel=True`）不是真实IP转折点，几何列在表格中全部留空，数据模型值不变（下游水力计算依赖 `station_MC`）。
+
+| 列（索引） | 显示 | 说明 |
+|-----------|------|------|
+| 结构形式(2) | `"明渠-梯形(连接段)"` | 加`(连接段)`后缀标识 |
+| IP编号(4)、X(5)、Y(6) | 留空 | 无真实坐标 |
+| 转角(8)、切线长(9)、弧长(10)、弯道长度(11) | 留空 | 非IP转折点，值为0无意义 |
+| IP直线间距(12)、IP点桩号(13)、弯前BC(14)、里程MC(15)、弯末EC(16) | 留空 | 非IP节点 |
+| 复核弯前长度(17)、复核弯后长度(18)、复核总长度(19) | 留空 | 不参与弯道重叠检查 |
+| 水力列(20-43) | 正常显示 | 水力计算有意义（沿程损失、水深、流速等） |
+
+**视觉区分**：
+- 文字颜色：绿色（`#2E7D32`）
+- 悬浮提示："自动插入的明渠连接段，用于计算两个建筑物之间的沿程及弯道水头损失。几何列留空因为该行不是真实IP转折点。"
+
+### 4.7 复核长度列（check_pre_curve / check_post_curve / check_total_length）显示规则
+
+复核长度用于检查弯道切线是否重叠，仅对有真实XY坐标的原生IP节点有意义。
+
+| 节点类型 | 计算逻辑 | 表格显示 |
+|---------|---------|----------|
+| 原生IP节点（有XY） | 正常计算 | 显示数值 |
+| 渐变段（`is_transition`） | 置0 | 留空（整行不显示几何） |
+| 自动插入明渠（`is_auto_inserted_channel`） | 置0 | 留空 |
+| 倒虹吸（`is_inverted_siphon`） | 置0（不需要检查弯道重叠） | 留空 |
+| 进/出口节点 | 正常计算 | 显示数值 |
+| 闸类节点 | 正常计算 | 显示数值 |
+
+**`geometry_calc.py` 第四步查找逻辑**：计算原生行的 `prev_tangent` / `next_straight` 时，同时跳过 `is_transition` 和 `is_auto_inserted_channel` 行，与第二步 `find_prev_real` / `find_next_real` 保持一致。
 
 ---
 
-## 五、特殊建筑物进出口标识
+## 五、渐变段节点创建
 
-以下结构类型需要标识进口/出口 IP 点：
+### 5.1 三种创建方式
+
+| 方法 | 场景 | 特点 |
+|------|------|------|
+| `_create_transition_node()` | 出口渐变段（标准3行插入） | 继承 prev_node 的坐标、流量、糙率 |
+| `_create_inlet_transition_node()` | 进口渐变段（标准3行插入） | 继承 next_node 的坐标、流量、糙率 |
+| `_create_merged_transition_node()` | 合并渐变段（里程差不足时） | `transition_length = distance`（实际里程差） |
+
+### 5.2 公共属性
+
+| 属性 | 值 |
+|------|-----|
+| `is_transition` | `True` |
+| `name` | `"-"` |
+| `structure_type` | `StructureType.TRANSITION`（值为`"渐变段"`） |
+| `transition_type` | `"进口"` 或 `"出口"` |
+| `transition_form` | 从 `ProjectSettings` 读取（默认`"曲线形反弯扭曲面"`） |
+| `transition_zeta` | 从 `ProjectSettings` 读取用户指定值（若>0） |
+| `transition_skip_loss` | 倒虹吸侧为 `True` |
+
+---
+
+## 六、特殊建筑物进出口标识
+
+以下结构类型需要标识进口/出口 IP 点（`_is_special_structure_sv()` 判断）：
 
 - 隧洞（各型）
 - 渡槽（各型）
 - 倒虹吸
-- **矩形暗涵**（新增）
+- **矩形暗涵**
 
-**IP 列显示规则**：
+关键词匹配：`("隧洞", "渡槽", "倒虹吸", "暗涵")` 中任一出现在 `structure_type.value` 中即为特殊建筑物。
+
+**IP 列显示规则**（`get_ip_str()`）：
 - 隧洞/渡槽/倒虹吸：`IP{n} {建筑物名称}{类型缩写}{进/出}`，如 `IP42 油房坨隧进`
+  - 类型缩写：隧洞→"隧"，渡槽→"渡"，倒虹吸→"倒"
 - **矩形暗涵**：仅显示 `IP{n}`，**不加进/出后缀**
 
 ---
 
-## 六、相关代码文件
+## 七、项目设置中的渐变段配置
 
-| 文件 | 关键方法 |
-|------|---------|
-| `推求水面线/core/calculator.py` | `_needs_transition()`, `_find_reference_channel_same_section()`, `identify_and_insert_transitions()`, `_estimate_transition_length()`, `_find_next_non_gate_idx()`, `pre_scan_open_channels()`, `calculate_transition_losses_inline()` |
-| `推求水面线/core/hydraulic_calc.py` | `calculate_transition_length()`, `_estimate_transition_loss()`, `calculate_transition_loss_inline()` |
-| `推求水面线/models/enums.py` | `StructureType.get_special_structures()` |
-| `推求水面线/models/data_models.py` | `ChannelNode.get_ip_str()` |
-| `推求水面线/config/constants.py` | `TRANSITION_LENGTH_CONSTRAINTS`, `TRANSITION_ZETA_COEFFICIENTS` |
-| `渠系断面设计/water_profile/panel.py` | `_insert_transitions()`, `open_channel_callback()` |
+`ProjectSettings` 数据模型中与渐变段相关的字段：
+
+### 7.1 渡槽/隧洞渐变段（表K.1.2）
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `transition_inlet_form` | `"曲线形反弯扭曲面"` | 进口渐变段形式 |
+| `transition_inlet_zeta` | `0.10` | 进口ζ系数 |
+| `transition_outlet_form` | `"曲线形反弯扭曲面"` | 出口渐变段形式 |
+| `transition_outlet_zeta` | `0.20` | 出口ζ系数 |
+
+### 7.2 明渠渐变段
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `open_channel_transition_form` | `"曲线形反弯扭曲面"` | 明渠间渐变段形式 |
+| `open_channel_transition_zeta` | `0.10` | 明渠间ζ系数 |
+
+### 7.3 倒虹吸渐变段（表L.1.2）
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `siphon_transition_inlet_form` | `"反弯扭曲面"` | 进口型式 |
+| `siphon_transition_outlet_form` | `"反弯扭曲面"` | 出口型式 |
+| `siphon_transition_inlet_zeta` | `0.10` | 进口ζ系数 |
+| `siphon_transition_outlet_zeta` | `0.20` | 出口ζ系数 |
+
+---
+
+## 八、ChannelNode 渐变段相关字段
+
+`data_models.ChannelNode` 中与渐变段相关的完整字段列表：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `is_transition` | `bool` | 是否为渐变段专用行 |
+| `transition_skip_loss` | `bool` | 占位渐变段，不计算水头损失（倒虹吸） |
+| `transition_type` | `str` | `"进口"` 或 `"出口"` |
+| `transition_form` | `str` | 渐变段形式（如`"曲线形反弯扭曲面"`） |
+| `transition_zeta` | `float` | 局部损失系数ζ |
+| `transition_theta` | `float` | 直线形扭曲面的θ角度 |
+| `transition_length` | `float` | 渐变段长度L（m） |
+| `transition_water_width_1` | `float` | 起始水面宽度B₁（m） |
+| `transition_water_width_2` | `float` | 末端水面宽度B₂（m） |
+| `transition_velocity_1` | `float` | 起始流速v₁（m/s） |
+| `transition_velocity_2` | `float` | 末端流速v₂（m/s） |
+| `transition_avg_R` | `float` | 平均水力半径R_avg（m） |
+| `transition_avg_v` | `float` | 平均流速v_avg（m/s） |
+| `transition_head_loss_local` | `float` | 局部水头损失h_j1（m） |
+| `transition_head_loss_friction` | `float` | 沿程水头损失h_f（m） |
+| `head_loss_transition` | `float` | 渐变段总水头损失（h_j1 + h_f） |
+| `transition_calc_details` | `dict` | 水损计算详情（LaTeX显示） |
+| `transition_length_calc_details` | `dict` | 长度计算详情（双击展示） |
+
+其他关联字段：
+- `is_auto_inserted_channel: bool` — 是否为自动插入的明渠段（不分配IP编号）
+- `stat_length: float` — 统计用长度（结构类型汇总用）
+
+`OpenChannelParams` 数据模型：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | `str` | 默认`"-"` |
+| `structure_type` | `str` | 如`"明渠-梯形"` |
+| `bottom_width` | `float` | 底宽或直径 |
+| `water_depth` | `float` | 水深 |
+| `side_slope` | `float` | 边坡系数m |
+| `roughness` | `float` | 糙率n（默认0.014） |
+| `slope_inv` | `float` | 底坡倒数1/i（默认3000） |
+| `flow` | `float` | 流量Q |
+| `flow_section` | `str` | 流量段 |
+| `structure_height` | `float` | 结构高度 |
+| `arc_radius` | `float` | 圆弧半径（明渠-U形用） |
+| `theta_deg` | `float` | 圆弧圆心角（明渠-U形用） |
+
+---
+
+## 九、累计水头损失
+
+### 9.1 渐变段损失的累计方式
+
+`_calculate_cumulative_head_loss()` 从第一行逐行累加：
+
+- **渐变段行**：累加 `head_loss_transition`
+- **普通行**：累加 `head_loss_total`
+- 每行的 `head_loss_cumulative` = 截至该行的累计值
+
+### 9.2 内联模式（`calculate_transition_losses_inline`）
+
+不插入专用渐变段行的备选模式：
+- 逐对扫描 `(curr_node, next_node)`，跳过闸节点
+- 调用 `_needs_transition()` 判断是否需要渐变段
+- 渐变段损失累加到 `curr_node.head_loss_total`
+- 详情保存到 `curr_node.transition_calc_details`
+
+---
+
+## 十、相关代码文件
+
+| 文件 | 关键方法/类 |
+|------|------------|
+| `推求水面线/core/calculator.py` | `_needs_transition()`, `_is_mingqu_type()`, `_is_tunnel_or_aqueduct()`, `_is_culvert_type()`, `_is_diversion_gate_type()`, `_has_same_section_size()`, `_get_characteristic_width()`, `_find_next_non_gate_idx()`, `_check_gap_exit_to_gate()`, `_check_gap_gate_to_entry()`, `_should_insert_open_channel()`, `_estimate_transition_length()`, `_find_reference_channel_same_section()`, `_find_global_nearest_channel()`, `_compute_economic_section()`, `_find_nearest_upstream_channel()`, `_create_transition_node()`, `_create_inlet_transition_node()`, `_create_merged_transition_node()`, `_create_open_channel_node()`, `identify_and_insert_transitions()`, `calculate_transition_losses()`, `calculate_transition_losses_inline()`, `pre_scan_open_channels()`, `_calculate_cumulative_head_loss()` |
+| `推求水面线/core/hydraulic_calc.py` | `get_water_surface_width()`, `get_transition_zeta()`, `calculate_transition_length()`, `calculate_transition_friction_loss()`, `calculate_transition_loss()`, `calculate_transition_loss_inline()`, `_estimate_transition_loss()`, `get_channel_design_depth()`, `recalculate_water_levels_with_transition_losses()` |
+| `推求水面线/models/enums.py` | `StructureType`（含 `TRANSITION="渐变段"`、`get_special_structures()`、`is_diversion_gate()`、`is_diversion_gate_str()`） |
+| `推求水面线/models/data_models.py` | `ChannelNode`（渐变段字段）、`OpenChannelParams`（含 `arc_radius`/`theta_deg`）、`ProjectSettings`（渐变段配置字段）、`ChannelNode.get_ip_str()` |
+| `推求水面线/config/constants.py` | `TRANSITION_LENGTH_COEFFICIENTS`, `TRANSITION_LENGTH_CONSTRAINTS`, `TRANSITION_ZETA_COEFFICIENTS`, `TRANSITION_TWISTED_ZETA_RANGE`, `TRANSITION_FORM_OPTIONS`, `SIPHON_TRANSITION_FORM_OPTIONS`, `SIPHON_TRANSITION_ZETA_COEFFICIENTS`, `SIPHON_TO_TRANSITION_FORM_MAP` |
+| `渠系断面设计/water_profile/panel.py` | `_insert_transitions()`, `open_channel_callback()`, `_show_transition_length_details()`, `_show_transition_calc_details()`, `_open_transition_reference()` |
 | `渠系断面设计/water_profile/water_profile_dialogs.py` | `BatchChannelConfirmDialog`, `_fill_all_recommended()`, `_fill_with_fallback_if_empty()` |
+| `渠系断面设计/water_profile/formula_dialog.py` | `show_transition_loss_dialog()`, `show_transition_length_dialog()` |
 | `渠系断面设计/water_profile/cad_tools.py` | `_is_special_structure_sv()` |
+
+---
+
+## 十一、变更日志
+
+| 版本 | 日期 | 变更内容 |
+|------|------|---------|
+| v1.0 | 2026-02-22 | 初版：渐变段识别规则、长度计算、水头损失、明渠段自动插入、IP标识 |
+| v2.1 | 2026-02-26 | 新增§4.6自动插入明渠行几何列显示规则（全部留空+结构形式加"(连接段)"后缀+绿色文字+悬浮提示）；新增§4.7复核长度列显示规则（自动插入明渠/倒虹吸行留空）；geometry_calc.py第四步查找prev_tangent/next_straight时跳过is_auto_inserted_channel |
+| v2.0 | 2026-02-26 | 全面对齐最新代码：新增§1.1有效结构类型集合；修正§3.3 ζ系数表（表K.1.2直线形扭曲面为θ插值非固定值，表L.1.2倒虹吸独立系数表）；新增§1.4合并渐变段逻辑；新增§2.2水面宽度计算方法（8种断面类型）；新增§2.4渠道水深取值规则；新增§2.5/§3.5计算详情记录；补充§3.4沿程损失曼宁公式平均值法；新增§3.6倒虹吸占位渐变段；新增§4.5明渠段节点创建详情；新增§5渐变段节点创建（3种方式）；新增§7项目设置中渐变段配置字段（K.1.2+L.1.2+明渠）；新增§8 ChannelNode/OpenChannelParams完整字段列表；新增§9累计水头损失与内联模式；更新§10代码文件索引（新增formula_dialog/cad_tools/check_gap方法等） |

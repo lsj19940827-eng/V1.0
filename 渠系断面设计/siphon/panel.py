@@ -1678,13 +1678,22 @@ document.addEventListener("DOMContentLoaded", function(){
                   SegmentType.OTHER) and length > 0:
             length = 0.0
         trash_rack_params = None
-        if st == SegmentType.TRASH_RACK and 'trash_rack_params' in d:
-            try:
-                trash_rack_params = TrashRackParams.from_dict(d['trash_rack_params'])
-                if xi_calc is None and not trash_rack_params.manual_mode:
-                    xi_calc = round(CoefficientService.calculate_trash_rack_xi(trash_rack_params), 4)
-            except Exception:
-                pass
+        if st == SegmentType.TRASH_RACK:
+            if 'trash_rack_params' in d:
+                try:
+                    trash_rack_params = TrashRackParams.from_dict(d['trash_rack_params'])
+                    if xi_calc is None and not trash_rack_params.manual_mode:
+                        xi_calc = round(CoefficientService.calculate_trash_rack_xi(trash_rack_params), 4)
+                except Exception:
+                    pass
+            # 旧数据迁移：无 trash_rack_params 时补上默认参数和计算值
+            if trash_rack_params is None:
+                trash_rack_params = TrashRackParams()
+            if xi_user is None and xi_calc is None:
+                xi_calc = round(CoefficientService.calculate_trash_rack_xi(trash_rack_params), 4)
+        # 旧数据迁移：闸门槽无系数时补上默认 0.10
+        if st == SegmentType.GATE_SLOT and xi_user is None and xi_calc is None:
+            xi_user = 0.10
         return StructureSegment(
             segment_type=st, direction=direction,
             length=length, radius=d.get('radius', 0), angle=d.get('angle', 0),
@@ -2286,8 +2295,10 @@ document.addEventListener("DOMContentLoaded", function(){
                              inlet_shape=inlet_shape, xi_calc=inlet_xi,
                              direction=SegmentDirection.COMMON),
             StructureSegment(segment_type=SegmentType.TRASH_RACK,
+                             trash_rack_params=TrashRackParams(),
+                             xi_calc=CoefficientService.calculate_trash_rack_xi(TrashRackParams()),
                              direction=SegmentDirection.COMMON),
-            StructureSegment(segment_type=SegmentType.GATE_SLOT,
+            StructureSegment(segment_type=SegmentType.GATE_SLOT, xi_user=0.10,
                              direction=SegmentDirection.COMMON),
             StructureSegment(segment_type=SegmentType.BYPASS_PIPE, xi_user=0.1,
                              direction=SegmentDirection.COMMON),
@@ -2631,11 +2642,21 @@ document.addEventListener("DOMContentLoaded", function(){
 
         seg, source = display_segments[row]
 
-        # 平面段为只读，不允许编辑
+        # 平面段允许编辑
         if source == 'plan':
-            InfoBar.info("提示",
-                "平面段由推求水面线表格自动提取，不可手动编辑。\n如需修改请在推求水面线表格中调整坐标数据。",
-                parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            Q = self._fval(self.edit_Q, 10)
+            v = self._fval(self.edit_v, 2)
+            dlg = SegmentEditDialog(self, segment=seg, Q=Q, v=v,
+                                    direction=SegmentDirection.PLAN)
+            if dlg.exec() == QDialog.Accepted and dlg.result:
+                try:
+                    real_idx = self.plan_segments.index(seg)
+                    self.plan_segments[real_idx] = dlg.result
+                    self.plan_segments[real_idx].direction = SegmentDirection.PLAN
+                except ValueError:
+                    pass
+                self._refresh_seg_table()
+                self._update_canvas()
             return
 
         # 锁定行编辑确认（进出水口等锁定构件除外，它们有专用对话框）

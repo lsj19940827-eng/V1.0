@@ -311,21 +311,79 @@ class WaterProfileCalculator:
             if i < len(nodes) - 1:
                 current_node = nodes[i]
                 next_node = nodes[i + 1]
-                
-                # 闸穿透：当前节点是闸 → 跳过（已由前方结构节点处理）
+
+                # --- 情况1：当前节点是闸 → 检查闸→进口方向的缺口 ---
                 if self._is_diversion_gate_type(current_node.structure_type):
+                    check_result = self._check_gap_gate_to_entry(current_node, next_node)
+                    if check_result['need_open_channel']:
+                        ref_idx = i + 1
+                        upstream_channel, computed_options = self._find_reference_channel_same_section(nodes, ref_idx)
+                        if upstream_channel is None:
+                            ref = self._find_global_nearest_channel(nodes, ref_idx)
+                            if ref:
+                                flow_q = next_node.flow if next_node.flow and next_node.flow > 0 else 1.0
+                                computed_options = self._compute_economic_section(
+                                    flow_q, ref['slope_i'], ref['roughness'], ref['side_slope']
+                                )
+                                upstream_channel = computed_options.get('明渠-矩形')
+                                if upstream_channel:
+                                    upstream_channel = dict(upstream_channel)
+                                    upstream_channel.update({'flow': flow_q, 'flow_section': next_node.flow_section,
+                                                             'structure_height': 0.0, 'name': '-'})
+                        upstream_channel_fallback = upstream_channel or self._find_nearest_upstream_channel(nodes, ref_idx)
+                        gaps.append({
+                            'index': i,
+                            'upstream_channel': upstream_channel,
+                            'upstream_channel_fallback': upstream_channel_fallback,
+                            'computed_channel_options': computed_options,
+                            'available_length': check_result['available_length'],
+                            'prev_struct': current_node.structure_type.value if current_node.structure_type else "",
+                            'next_struct': next_node.structure_type.value if next_node.structure_type else "",
+                            'prev_name': getattr(current_node, 'name', '') or '',
+                            'next_name': getattr(next_node, 'name', '') or '',
+                            'flow_section': next_node.flow_section,
+                            'flow': next_node.flow,
+                            'has_upstream': upstream_channel is not None
+                        })
                     continue
-                
-                # 闸穿透：确定有效的下一节点
-                effective_next = next_node
+
+                # --- 情况2：下一节点是闸 → 只检查出口→闸方向的缺口 ---
                 if self._is_diversion_gate_type(next_node.structure_type):
-                    real_next_idx = self._find_next_non_gate_idx(nodes, i + 1)
-                    if real_next_idx is None:
-                        continue
-                    effective_next = nodes[real_next_idx]
-                
+                    check_result = self._check_gap_exit_to_gate(current_node, next_node)
+                    if check_result['need_open_channel']:
+                        upstream_channel, computed_options = self._find_reference_channel_same_section(nodes, i)
+                        if upstream_channel is None:
+                            ref = self._find_global_nearest_channel(nodes, i)
+                            if ref:
+                                flow_q = current_node.flow if current_node.flow and current_node.flow > 0 else 1.0
+                                computed_options = self._compute_economic_section(
+                                    flow_q, ref['slope_i'], ref['roughness'], ref['side_slope']
+                                )
+                                upstream_channel = computed_options.get('明渠-矩形')
+                                if upstream_channel:
+                                    upstream_channel = dict(upstream_channel)
+                                    upstream_channel.update({'flow': flow_q, 'flow_section': current_node.flow_section,
+                                                             'structure_height': 0.0, 'name': '-'})
+                        upstream_channel_fallback = upstream_channel or self._find_nearest_upstream_channel(nodes, i)
+                        gaps.append({
+                            'index': i,
+                            'upstream_channel': upstream_channel,
+                            'upstream_channel_fallback': upstream_channel_fallback,
+                            'computed_channel_options': computed_options,
+                            'available_length': check_result['available_length'],
+                            'prev_struct': current_node.structure_type.value if current_node.structure_type else "",
+                            'next_struct': next_node.structure_type.value if next_node.structure_type else "",
+                            'prev_name': getattr(current_node, 'name', '') or '',
+                            'next_name': getattr(next_node, 'name', '') or '',
+                            'flow_section': current_node.flow_section,
+                            'flow': current_node.flow,
+                            'has_upstream': upstream_channel is not None
+                        })
+                    continue
+
+                # --- 情况3：普通 (非闸, 非闸) 对 ---
                 check_result = self._should_insert_open_channel(
-                    current_node, effective_next, nodes
+                    current_node, next_node, nodes
                 )
                 if check_result['need_open_channel']:
                     upstream_channel, computed_options = self._find_reference_channel_same_section(nodes, i)
@@ -343,12 +401,12 @@ class WaterProfileCalculator:
                                 upstream_channel.update({'flow': flow_q, 'flow_section': current_node.flow_section,
                                                          'structure_height': 0.0, 'name': '-'})
                     upstream_channel_fallback = upstream_channel or self._find_nearest_upstream_channel(nodes, i)
-                    prev_struct = (current_node.structure_type.value 
+                    prev_struct = (current_node.structure_type.value
                                    if current_node.structure_type else "")
-                    next_struct = (effective_next.structure_type.value 
-                                   if effective_next.structure_type else "")
+                    next_struct = (next_node.structure_type.value
+                                   if next_node.structure_type else "")
                     prev_name = getattr(current_node, 'name', '') or ''
-                    next_name = getattr(effective_next, 'name', '') or ''
+                    next_name = getattr(next_node, 'name', '') or ''
                     gaps.append({
                         'index': i,
                         'upstream_channel': upstream_channel,
@@ -724,6 +782,82 @@ class WaterProfileCalculator:
         
         return result
     
+    def _check_gap_exit_to_gate(self, exit_node: ChannelNode, gate_node: ChannelNode) -> Dict:
+        """
+        检查出口结构物→分水闸之间是否需要插入明渠段。
+        
+        仅统计出口侧渐变段（闸为点状结构，无进口渐变段需求）。
+        规则与 _should_insert_open_channel 一致：available_length > 0 即需要明渠。
+        """
+        result = {
+            'need_open_channel': False,
+            'need_transition_1': False,
+            'need_transition_2': False,
+            'skip_loss_transition_1': False,
+            'skip_loss_transition_2': False,
+            'transition_length_1': 0.0,
+            'transition_length_2': 0.0,
+            'distance': 0.0,
+            'available_length': 0.0
+        }
+        io1 = exit_node.in_out.value if exit_node.in_out else ""
+        if io1 != "出":
+            return result
+        result['distance'] = gate_node.station_MC - exit_node.station_MC
+        if result['distance'] <= 0:
+            return result
+        sv1 = exit_node.structure_type.value if exit_node.structure_type else ""
+        is_siphon = (sv1 == "倒虹吸")
+        result['need_transition_1'] = (
+            self._is_tunnel_or_aqueduct(exit_node.structure_type)
+            or is_siphon
+            or self._is_culvert_type(exit_node.structure_type)
+        )
+        result['skip_loss_transition_1'] = is_siphon
+        if result['need_transition_1']:
+            result['transition_length_1'] = self._estimate_transition_length(exit_node, "出口")
+        result['available_length'] = result['distance'] - result['transition_length_1']
+        result['need_open_channel'] = result['available_length'] > 0
+        return result
+
+    def _check_gap_gate_to_entry(self, gate_node: ChannelNode, entry_node: ChannelNode) -> Dict:
+        """
+        检查分水闸→进口结构物之间是否需要插入明渠段。
+        
+        仅统计进口侧渐变段（闸为点状结构，无出口渐变段需求）。
+        规则与 _should_insert_open_channel 一致：available_length > 0 即需要明渠。
+        """
+        result = {
+            'need_open_channel': False,
+            'need_transition_1': False,
+            'need_transition_2': False,
+            'skip_loss_transition_1': False,
+            'skip_loss_transition_2': False,
+            'transition_length_1': 0.0,
+            'transition_length_2': 0.0,
+            'distance': 0.0,
+            'available_length': 0.0
+        }
+        io2 = entry_node.in_out.value if entry_node.in_out else ""
+        if io2 != "进":
+            return result
+        result['distance'] = entry_node.station_MC - gate_node.station_MC
+        if result['distance'] <= 0:
+            return result
+        sv2 = entry_node.structure_type.value if entry_node.structure_type else ""
+        is_siphon = (sv2 == "倒虹吸")
+        result['need_transition_2'] = (
+            self._is_tunnel_or_aqueduct(entry_node.structure_type)
+            or is_siphon
+            or self._is_culvert_type(entry_node.structure_type)
+        )
+        result['skip_loss_transition_2'] = is_siphon
+        if result['need_transition_2']:
+            result['transition_length_2'] = self._estimate_transition_length(entry_node, "进口")
+        result['available_length'] = result['distance'] - result['transition_length_2']
+        result['need_open_channel'] = result['available_length'] > 0
+        return result
+
     def _estimate_transition_length(self, node: ChannelNode, transition_type: str) -> float:
         """
         快速估算渐变段长度（用于判断是否需要插入明渠）
@@ -1288,7 +1422,7 @@ class WaterProfileCalculator:
             插入渐变段行和明渠段后的新节点列表
         """
         new_nodes = []
-        deferred_nodes = []  # 闸穿透：暂存闸后待插入的节点（明渠2 + 进口渐变段）
+        deferred_nodes = []  # 闸→进口缺口：暂存待插入的节点（明渠段 + 进口渐变段），在下一个非闸节点前冲洗
         
         for i in range(len(nodes)):
             current_node = nodes[i]
@@ -1305,23 +1439,147 @@ class WaterProfileCalculator:
             
             next_node = nodes[i + 1]
             
-            # 闸穿透：当前节点是闸 → 跳过（已由前方结构节点处理）
+            # --- 情况1：当前节点是闸 → 检查闸→进口方向的缺口（添加到延迟队列）---
             if self._is_diversion_gate_type(current_node.structure_type):
+                gate_check = self._check_gap_gate_to_entry(current_node, next_node)
+                if gate_check['need_open_channel']:
+                    ref_idx = i + 1
+                    upstream_channel, _computed = self._find_reference_channel_same_section(nodes, ref_idx)
+                    if upstream_channel is None:
+                        ref = self._find_global_nearest_channel(nodes, ref_idx)
+                        if ref:
+                            flow_q = next_node.flow if next_node.flow and next_node.flow > 0 else 1.0
+                            opts = self._compute_economic_section(flow_q, ref['slope_i'], ref['roughness'], ref['side_slope'])
+                            upstream_channel = opts.get('明渠-矩形')
+                            if upstream_channel:
+                                upstream_channel = dict(upstream_channel)
+                                upstream_channel.update({'flow': flow_q, 'flow_section': next_node.flow_section,
+                                                         'structure_height': 0.0, 'name': '-'})
+                    open_channel_params = None
+                    if open_channel_callback:
+                        open_channel_params = open_channel_callback(
+                            upstream_channel, gate_check['available_length'],
+                            current_node.structure_type.value if current_node.structure_type else "",
+                            next_node.structure_type.value if next_node.structure_type else "",
+                            next_node.flow_section, next_node.flow
+                        )
+                    elif upstream_channel:
+                        from models.data_models import OpenChannelParams
+                        open_channel_params = OpenChannelParams(
+                            name="-", structure_type=upstream_channel.get('structure_type', '明渠-梯形'),
+                            bottom_width=upstream_channel.get('bottom_width', 0),
+                            water_depth=upstream_channel.get('water_depth', 0),
+                            side_slope=upstream_channel.get('side_slope', 0),
+                            roughness=upstream_channel.get('roughness', 0.014),
+                            slope_inv=upstream_channel.get('slope_inv', 3000),
+                            flow=upstream_channel.get('flow', next_node.flow),
+                            flow_section=upstream_channel.get('flow_section', next_node.flow_section),
+                            structure_height=upstream_channel.get('structure_height', 0.0),
+                            arc_radius=upstream_channel.get('arc_radius', 0),
+                            theta_deg=upstream_channel.get('theta_deg', 0),
+                        )
+                    if open_channel_params:
+                        oc_slope_i = 1.0 / open_channel_params.slope_inv if open_channel_params.slope_inv > 0 else 0
+                        oc = self._create_open_channel_node(open_channel_params, current_node, next_node)
+                        oc.stat_length = max(0.0, gate_check['available_length'])
+                        deferred_nodes.append(oc)
+                        if gate_check['need_transition_2']:
+                            tr_in = self._create_inlet_transition_node(next_node)
+                            tr_in.slope_i = oc_slope_i
+                            tr_in.transition_skip_loss = gate_check.get('skip_loss_transition_2', False)
+                            tr_in.stat_length = max(0.0, gate_check.get('transition_length_2', 0.0))
+                            deferred_nodes.append(tr_in)
+                    elif gate_check['need_transition_2'] and gate_check['distance'] > 0:
+                        merged = self._create_merged_transition_node(
+                            current_node, next_node, gate_check['distance'], "进口")
+                        merged.flow_section = next_node.flow_section
+                        merged.flow = next_node.flow
+                        merged.transition_skip_loss = gate_check.get('skip_loss_transition_2', False)
+                        if upstream_channel:
+                            us_sinv = upstream_channel.get('slope_inv', 0)
+                            merged.slope_i = 1.0 / us_sinv if us_sinv > 0 else 0
+                        deferred_nodes.append(merged)
+                elif gate_check['need_transition_2'] and gate_check['distance'] > 0:
+                    us_ch = self._find_nearest_upstream_channel(nodes, i + 1)
+                    merged = self._create_merged_transition_node(
+                        current_node, next_node, gate_check['distance'], "进口")
+                    merged.flow_section = next_node.flow_section
+                    merged.flow = next_node.flow
+                    merged.transition_skip_loss = gate_check.get('skip_loss_transition_2', False)
+                    if us_ch:
+                        us_sinv = us_ch.get('slope_inv', 0)
+                        merged.slope_i = 1.0 / us_sinv if us_sinv > 0 else 0
+                    deferred_nodes.append(merged)
                 continue
-            
-            # 闸穿透：确定有效的下一节点（穿透连续闸节点）
-            effective_next = next_node
-            gate_penetration = False
-            real_next_idx = None
+
+            # --- 情况2：下一节点是闸 → 只检查出口→闸方向的缺口（直接插入）---
             if self._is_diversion_gate_type(next_node.structure_type):
-                real_next_idx = self._find_next_non_gate_idx(nodes, i + 1)
-                if real_next_idx is None:
-                    continue  # 闸之后没有非闸节点
-                effective_next = nodes[real_next_idx]
-                gate_penetration = True
-            
-            # 用 (current_node, effective_next) 进行渐变段/明渠段判断
-            check_result = self._should_insert_open_channel(current_node, effective_next, nodes)
+                gate_check = self._check_gap_exit_to_gate(current_node, next_node)
+                if gate_check['need_open_channel']:
+                    upstream_channel, _computed = self._find_reference_channel_same_section(nodes, i)
+                    if upstream_channel is None:
+                        ref = self._find_global_nearest_channel(nodes, i)
+                        if ref:
+                            flow_q = current_node.flow if current_node.flow and current_node.flow > 0 else 1.0
+                            opts = self._compute_economic_section(flow_q, ref['slope_i'], ref['roughness'], ref['side_slope'])
+                            upstream_channel = opts.get('明渠-矩形')
+                            if upstream_channel:
+                                upstream_channel = dict(upstream_channel)
+                                upstream_channel.update({'flow': flow_q, 'flow_section': current_node.flow_section,
+                                                         'structure_height': 0.0, 'name': '-'})
+                    open_channel_params = None
+                    if open_channel_callback:
+                        open_channel_params = open_channel_callback(
+                            upstream_channel, gate_check['available_length'],
+                            current_node.structure_type.value if current_node.structure_type else "",
+                            next_node.structure_type.value if next_node.structure_type else "",
+                            current_node.flow_section, current_node.flow
+                        )
+                    elif upstream_channel:
+                        from models.data_models import OpenChannelParams
+                        open_channel_params = OpenChannelParams(
+                            name="-", structure_type=upstream_channel.get('structure_type', '明渠-梯形'),
+                            bottom_width=upstream_channel.get('bottom_width', 0),
+                            water_depth=upstream_channel.get('water_depth', 0),
+                            side_slope=upstream_channel.get('side_slope', 0),
+                            roughness=upstream_channel.get('roughness', 0.014),
+                            slope_inv=upstream_channel.get('slope_inv', 3000),
+                            flow=upstream_channel.get('flow', current_node.flow),
+                            flow_section=upstream_channel.get('flow_section', current_node.flow_section),
+                            structure_height=upstream_channel.get('structure_height', 0.0),
+                            arc_radius=upstream_channel.get('arc_radius', 0),
+                            theta_deg=upstream_channel.get('theta_deg', 0),
+                        )
+                    if open_channel_params:
+                        oc_slope_i = 1.0 / open_channel_params.slope_inv if open_channel_params.slope_inv > 0 else 0
+                        if gate_check['need_transition_1']:
+                            tr_out = self._create_transition_node(current_node, next_node)
+                            tr_out.slope_i = oc_slope_i
+                            tr_out.transition_skip_loss = gate_check.get('skip_loss_transition_1', False)
+                            tr_out.stat_length = max(0.0, gate_check.get('transition_length_1', 0.0))
+                            new_nodes.append(tr_out)
+                        oc = self._create_open_channel_node(open_channel_params, current_node, next_node)
+                        oc.stat_length = max(0.0, gate_check['available_length'])
+                        new_nodes.append(oc)
+                    elif gate_check['need_transition_1'] and gate_check['distance'] > 0:
+                        merged = self._create_merged_transition_node(
+                            current_node, next_node, gate_check['distance'], "出口")
+                        merged.transition_skip_loss = gate_check.get('skip_loss_transition_1', False)
+                        new_nodes.append(merged)
+                elif gate_check['need_transition_1'] and gate_check['distance'] > 0:
+                    us_ch = self._find_nearest_upstream_channel(nodes, i)
+                    merged = self._create_merged_transition_node(
+                        current_node, next_node, gate_check['distance'], "出口")
+                    merged.transition_skip_loss = gate_check.get('skip_loss_transition_1', False)
+                    if us_ch:
+                        us_sinv = us_ch.get('slope_inv', 0)
+                        merged.slope_i = 1.0 / us_sinv if us_sinv > 0 else 0
+                    new_nodes.append(merged)
+                continue
+
+            # --- 情况3：普通 (非闸, 非闸) 对 ---
+            # 用 (current_node, next_node) 进行渐变段/明渠段判断
+            check_result = self._should_insert_open_channel(current_node, next_node, nodes)
             
             if check_result['need_open_channel']:
                 # 需要插入明渠段（里程差 > 渐变段之和）
@@ -1344,7 +1602,7 @@ class WaterProfileCalculator:
                 
                 if open_channel_callback:
                     prev_struct = current_node.structure_type.value if current_node.structure_type else ""
-                    next_struct = effective_next.structure_type.value if effective_next.structure_type else ""
+                    next_struct = next_node.structure_type.value if next_node.structure_type else ""
                     open_channel_params = open_channel_callback(
                         upstream_channel, 
                         check_result['available_length'],
@@ -1373,64 +1631,29 @@ class WaterProfileCalculator:
                 if open_channel_params:
                     oc_slope_i = 1.0 / open_channel_params.slope_inv if open_channel_params.slope_inv > 0 else 0
                     
-                    if gate_penetration:
-                        # ===== 闸穿透模式：拆分明渠段到闸两侧 =====
-                        first_gate_station = next_node.station_MC
-                        last_gate_station = nodes[real_next_idx - 1].station_MC
-                        out_trans_len = check_result.get('transition_length_1', 0.0)
-                        in_trans_len = check_result.get('transition_length_2', 0.0)
-                        oc1_length = first_gate_station - current_node.station_MC - out_trans_len
-                        oc2_length = effective_next.station_MC - last_gate_station - in_trans_len
-                        
-                        # 1. 出口渐变段（闸前）
-                        if check_result['need_transition_1']:
-                            transition_out = self._create_transition_node(current_node, effective_next)
-                            transition_out.slope_i = oc_slope_i
-                            transition_out.transition_skip_loss = check_result.get('skip_loss_transition_1', False)
-                            transition_out.stat_length = max(0.0, out_trans_len)
-                            new_nodes.append(transition_out)
-                        # 2. 明渠段1（闸前）
-                        if oc1_length > 0:
-                            oc1 = self._create_open_channel_node(open_channel_params, current_node, effective_next)
-                            oc1.stat_length = max(0.0, oc1_length)
-                            new_nodes.append(oc1)
-                        # 3. 闸节点由主循环自然追加
-                        # 4. 明渠段2（闸后，延迟插入）
-                        if oc2_length > 0:
-                            oc2 = self._create_open_channel_node(open_channel_params, current_node, effective_next)
-                            oc2.stat_length = max(0.0, oc2_length)
-                            deferred_nodes.append(oc2)
-                        # 5. 进口渐变段（闸后，延迟插入）
-                        if check_result['need_transition_2']:
-                            transition_in = self._create_inlet_transition_node(effective_next)
-                            transition_in.slope_i = oc_slope_i
-                            transition_in.transition_skip_loss = check_result.get('skip_loss_transition_2', False)
-                            transition_in.stat_length = max(0.0, in_trans_len)
-                            deferred_nodes.append(transition_in)
-                    else:
-                        # ===== 普通模式：插入3行（出口渐变段 → 明渠段 → 进口渐变段） =====
-                        if check_result['need_transition_1']:
-                            transition_out = self._create_transition_node(current_node, effective_next)
-                            transition_out.slope_i = oc_slope_i
-                            transition_out.transition_skip_loss = check_result.get('skip_loss_transition_1', False)
-                            transition_out.stat_length = max(0.0, check_result.get('transition_length_1', 0.0))
-                            new_nodes.append(transition_out)
-                        open_channel = self._create_open_channel_node(open_channel_params, current_node, effective_next)
-                        open_channel.stat_length = max(0.0, check_result.get('available_length', 0.0))
-                        new_nodes.append(open_channel)
-                        if check_result['need_transition_2']:
-                            transition_in = self._create_inlet_transition_node(effective_next)
-                            transition_in.slope_i = oc_slope_i
-                            transition_in.transition_skip_loss = check_result.get('skip_loss_transition_2', False)
-                            transition_in.stat_length = max(0.0, check_result.get('transition_length_2', 0.0))
-                            new_nodes.append(transition_in)
+                    # ===== 普通模式：插入3行（出口渐变段 → 明渠段 → 进口渐变段） =====
+                    if check_result['need_transition_1']:
+                        transition_out = self._create_transition_node(current_node, next_node)
+                        transition_out.slope_i = oc_slope_i
+                        transition_out.transition_skip_loss = check_result.get('skip_loss_transition_1', False)
+                        transition_out.stat_length = max(0.0, check_result.get('transition_length_1', 0.0))
+                        new_nodes.append(transition_out)
+                    open_channel = self._create_open_channel_node(open_channel_params, current_node, next_node)
+                    open_channel.stat_length = max(0.0, check_result.get('available_length', 0.0))
+                    new_nodes.append(open_channel)
+                    if check_result['need_transition_2']:
+                        transition_in = self._create_inlet_transition_node(next_node)
+                        transition_in.slope_i = oc_slope_i
+                        transition_in.transition_skip_loss = check_result.get('skip_loss_transition_2', False)
+                        transition_in.stat_length = max(0.0, check_result.get('transition_length_2', 0.0))
+                        new_nodes.append(transition_in)
                 else:
                     # 明渠段未能插入，回退为1行合并渐变段（避免出现两个连续渐变段）
                     if check_result['need_transition_1'] or check_result['need_transition_2']:
                         if check_result['distance'] > 0:
                             _mt = "进口" if check_result['need_transition_2'] and not check_result['need_transition_1'] else "出口"
                             merged_transition = self._create_merged_transition_node(
-                                current_node, effective_next, check_result['distance'], _mt
+                                current_node, next_node, check_result['distance'], _mt
                             )
                             merged_transition.transition_skip_loss = (
                                 check_result.get('skip_loss_transition_1', False) or
@@ -1447,7 +1670,7 @@ class WaterProfileCalculator:
                 if check_result['distance'] > 0:
                     _mt = "进口" if check_result['need_transition_2'] and not check_result['need_transition_1'] else "出口"
                     merged_transition = self._create_merged_transition_node(
-                        current_node, effective_next, check_result['distance'], _mt
+                        current_node, next_node, check_result['distance'], _mt
                     )
                     # 任一侧为倒虹吸时，合并行标记为跳过损失计算
                     merged_transition.transition_skip_loss = (
@@ -1461,22 +1684,22 @@ class WaterProfileCalculator:
                         merged_transition.slope_i = 1.0 / us_sinv if us_sinv > 0 else 0
                     new_nodes.append(merged_transition)
             
-            elif self._needs_transition(current_node, effective_next):
-                # 普通渐变段（非建筑物出口→进口的情况，包括穿透后的明渠→明渠）
+            elif self._needs_transition(current_node, next_node):
+                # 普通渐变段（非建筑物出口→进口的情况，包括明渠→明渠）
                 sv_curr = current_node.structure_type.value if current_node.structure_type else ""
-                sv_next = effective_next.structure_type.value if effective_next.structure_type else ""
-                if self._is_special_structure_sv(effective_next.structure_type):
+                sv_next = next_node.structure_type.value if next_node.structure_type else ""
+                if self._is_special_structure_sv(next_node.structure_type):
                     trans_type = "进口"  # 进入特殊建筑物
                 elif self._is_special_structure_sv(current_node.structure_type):
                     trans_type = "出口"  # 离开特殊建筑物
                 else:
                     trans_type = "出口"  # 明渠↔明渠默认出口系数（更保守）
-                transition_node = self._create_transition_node(current_node, effective_next, trans_type)
+                transition_node = self._create_transition_node(current_node, next_node, trans_type)
                 # 继承上游节点的真实底坡
                 if current_node.slope_i and current_node.slope_i > 0:
                     transition_node.slope_i = current_node.slope_i
-                elif effective_next.slope_i and effective_next.slope_i > 0:
-                    transition_node.slope_i = effective_next.slope_i
+                elif next_node.slope_i and next_node.slope_i > 0:
+                    transition_node.slope_i = next_node.slope_i
                 # 倒虹吸相邻渐变段为占位行，跳过损失计算
                 if sv_curr == "倒虹吸" or sv_next == "倒虹吸":
                     transition_node.transition_skip_loss = True
@@ -1587,23 +1810,18 @@ class WaterProfileCalculator:
             curr_node = nodes[i]
             next_node = nodes[i + 1]
             
-            # 闸穿透：当前节点是闸 → 跳过
+            # 当前节点是闸 → 跳过（闸为点状结构，无需渐变段损失）
             if self._is_diversion_gate_type(curr_node.structure_type):
                 continue
-            
-            # 闸穿透：确定有效的下一节点
-            effective_next = next_node
+            # 下一节点是闸 → 跳过（闸侧渐变段损失已由 identify_and_insert_transitions 处理）
             if self._is_diversion_gate_type(next_node.structure_type):
-                real_next_idx = self._find_next_non_gate_idx(nodes, i + 1)
-                if real_next_idx is None:
-                    continue
-                effective_next = nodes[real_next_idx]
+                continue
             
             # 判断是否需要渐变段
-            if self._needs_transition(curr_node, effective_next):
+            if self._needs_transition(curr_node, next_node):
                 # 计算渐变段损失（内联方式，返回损失值和详情）
                 loss, details = self.hyd_calc.calculate_transition_loss_inline(
-                    curr_node, effective_next, self.settings
+                    curr_node, next_node, self.settings
                 )
                 
                 # 将损失累加到前一节点（出口侧）的总水头损失

@@ -629,7 +629,9 @@ class WaterProfilePanel(QWidget):
         sg.addWidget(QLabel("起始水位(m):"), r, 4, Qt.AlignRight)
         self.start_wl_edit = LineEdit()
         self.start_wl_edit.setText("100.0")
-        self.start_wl_edit.setFixedWidth(70)
+        self.start_wl_edit.setMinimumWidth(70)
+        self.start_wl_edit.setMaximumWidth(160)
+        self.start_wl_edit.textChanged.connect(lambda t, e=self.start_wl_edit: e.setFixedWidth(max(70, min(160, e.fontMetrics().horizontalAdvance(t) + 24))))
         sg.addWidget(self.start_wl_edit, r, 5)
 
         sg.addWidget(QLabel("渠道糙率:"), r, 6, Qt.AlignRight)
@@ -2777,7 +2779,8 @@ class WaterProfilePanel(QWidget):
             # 基础输入列 (0-7)
             vals[0] = node.flow_section
             vals[1] = node.name
-            vals[2] = node.get_structure_type_str()
+            _st_str = node.get_structure_type_str()
+            vals[2] = f"{_st_str}(连接段)" if _is_auto_ch else _st_str
             if not _is_trans:
                 vals[3] = node.get_in_out_str()
                 vals[4] = "" if _is_auto_ch else node.get_ip_str()
@@ -2791,18 +2794,19 @@ class WaterProfilePanel(QWidget):
             if not _is_trans:
                 # 几何结果列 (8-19) — 无条件格式化，0值也显示（与Tkinter一致）
                 _fmt_s = lambda s: ProjectSettings.format_station(s, prefix) if s is not None else "-"
-                vals[8] = f"{node.turn_angle:.4f}"
-                vals[9] = f"{node.tangent_length:.6f}"
-                vals[10] = f"{node.arc_length:.6f}"
-                vals[11] = f"{node.curve_length:.6f}"
-                vals[12] = f"{node.straight_distance:.6f}"
-                vals[13] = _fmt_s(node.station_ip)
-                vals[14] = _fmt_s(node.station_BC)
-                vals[15] = _fmt_s(getattr(node, 'station_MC', None))
-                vals[16] = _fmt_s(node.station_EC)
-                vals[17] = f"{getattr(node, 'check_pre_curve', 0):.3f}"
-                vals[18] = f"{getattr(node, 'check_post_curve', 0):.3f}"
-                vals[19] = f"{getattr(node, 'check_total_length', 0):.3f}"
+                vals[8] = "" if _is_auto_ch else f"{node.turn_angle:.4f}"
+                vals[9] = "" if _is_auto_ch else f"{node.tangent_length:.6f}"
+                vals[10] = "" if _is_auto_ch else f"{node.arc_length:.6f}"
+                vals[11] = "" if _is_auto_ch else f"{node.curve_length:.6f}"
+                vals[12] = "" if _is_auto_ch else f"{node.straight_distance:.6f}"
+                vals[13] = "" if _is_auto_ch else _fmt_s(node.station_ip)
+                vals[14] = "" if _is_auto_ch else _fmt_s(node.station_BC)
+                vals[15] = "" if _is_auto_ch else _fmt_s(getattr(node, 'station_MC', None))
+                vals[16] = "" if _is_auto_ch else _fmt_s(node.station_EC)
+                _skip_check = _is_auto_ch or getattr(node, 'is_inverted_siphon', False)
+                vals[17] = "" if _skip_check else f"{getattr(node, 'check_pre_curve', 0):.3f}"
+                vals[18] = "" if _skip_check else f"{getattr(node, 'check_post_curve', 0):.3f}"
+                vals[19] = "" if _skip_check else f"{getattr(node, 'check_total_length', 0):.3f}"
 
                 # 水力输入列 (20-26)
                 _B = node.section_params.get('B', 0)
@@ -2872,6 +2876,7 @@ class WaterProfilePanel(QWidget):
                 # 自动插入明渠段绿色
                 elif _is_auto_ch:
                     item.setForeground(QColor("#2E7D32"))
+                    item.setToolTip("自动插入的明渠连接段，用于计算两个建筑物之间的沿程及弯道水头损失。\n几何列留空因为该行不是真实IP转折点。")
                 # 倒虹吸蓝色
                 elif getattr(node, 'is_inverted_siphon', False):
                     item.setForeground(QColor("#1565C0"))
@@ -3676,7 +3681,8 @@ class WaterProfilePanel(QWidget):
             # 基础输入列 (0-7)
             vals[0] = node.flow_section
             vals[1] = node.name
-            vals[2] = node.get_structure_type_str()
+            _st_str = node.get_structure_type_str()
+            vals[2] = f"{_st_str}(连接段)" if _is_auto_ch else _st_str
             if not _is_trans:
                 vals[5] = f"{node.x:.6f}" if (node.x and not _is_auto_ch) else ""
                 vals[6] = f"{node.y:.6f}" if (node.y and not _is_auto_ch) else ""
@@ -3699,6 +3705,9 @@ class WaterProfilePanel(QWidget):
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 if _is_trans:
                     item.setForeground(QColor("#9E9E9E"))
+                elif _is_auto_ch:
+                    item.setForeground(QColor("#2E7D32"))
+                    item.setToolTip("自动插入的明渠连接段，用于计算两个建筑物之间的沿程及弯道水头损失。\n几何列留空因为该行不是真实IP转折点。")
                 self.node_table.setItem(r, c, item)
         auto_resize_table(self.node_table)
 

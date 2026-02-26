@@ -1001,18 +1001,32 @@ class TrashRackConfigDialog(QDialog):
 
 
 # ============================================================
-# 4. 结构段编辑对话框
+# 4. 结构段编辑对话框（双栏卡片式）
 # ============================================================
 class SegmentEditDialog(QDialog):
-    """管身段编辑"""
+    """管身段编辑 — 左栏输入 / 右栏实时结果 + 公式"""
 
-    def __init__(self, parent, segment=None, Q=10.0, v=2.0):
+    # 结果卡片样式
+    _CARD_SS = (
+        "QFrame { background: #FFFFFF; border: 1px solid #E8ECF0;"
+        " border-radius: 8px; }"
+    )
+    _CARD_HL_SS = (
+        "QFrame { background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+        " stop:0 #F0F7FF, stop:1 #FFFFFF);"
+        " border: 1px solid #1976D2; border-radius: 8px; }"
+    )
+    _LABEL_SS = "font-size:11px; color:#888;"
+    _VALUE_SS = "font-size:20px; font-weight:700; color:#1976D2;"
+    _HINT_SS  = "font-size:11px; color:#aaa;"
+    _HINT_BLUE_SS = "font-size:11px; color:#1976D2;"
+
+    def __init__(self, parent, segment=None, Q=10.0, v=2.0, direction=None):
         super().__init__(parent)
         self.setWindowTitle("编辑结构段")
-        self.setMinimumSize(540, 420)
-        self.resize(580, 480)
         self.result = None
         self.segment = segment
+        self._direction = direction  # 外部传入的方向（用于区分平面/纵断面）
         self._Q, self._v = Q, v
         self._D_theory = math.sqrt(4 * Q / (math.pi * v)) if Q > 0 and v > 0 else 0
         self._user_modified_xi = False
@@ -1021,93 +1035,260 @@ class SegmentEditDialog(QDialog):
         if segment:
             self._load(segment)
 
+    # ---- 构建 UI ----
     def _build_ui(self):
         if not SIPHON_AVAILABLE:
             QVBoxLayout(self).addWidget(QLabel("计算引擎未加载"))
             return
 
-        lay = QGridLayout(self)
-        lay.setSpacing(8)
-        row = 0
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ---- 顶部标题栏 ----
+        header = QFrame()
+        header.setFixedHeight(42)
+        header.setStyleSheet(
+            "QFrame { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            " stop:0 #1976D2, stop:1 #1565C0); }"
+        )
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(16, 0, 16, 0)
+        h_title = QLabel("编辑结构段")
+        h_title.setStyleSheet("font-size:14px; font-weight:600; color:#FFFFFF;")
+        hl.addWidget(h_title)
+        hl.addStretch()
+        self.lbl_dir = QLabel("纵断面")
+        self.lbl_dir.setStyleSheet(
+            "font-size:11px; color:#FFFFFF; background:rgba(255,255,255,0.2);"
+            " padding:2px 10px; border-radius:10px;"
+        )
+        hl.addWidget(self.lbl_dir)
+        root.addWidget(header)
+
+        # ---- 双栏主体 ----
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+
+        # == 左栏：输入 ==
+        left = QWidget()
+        left.setStyleSheet("QWidget { background: #FFFFFF; }")
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(18, 14, 14, 10)
+        ll.setSpacing(4)
+
+        sec_lbl = QLabel("几何参数")
+        sec_lbl.setStyleSheet(
+            f"font-size:12px; font-weight:700; color:{P}; letter-spacing:1px;"
+            " padding-left:8px; border-left:3px solid #1976D2;"
+        )
+        ll.addWidget(sec_lbl)
+        ll.addSpacing(4)
 
         # 类型
-        lay.addWidget(QLabel("类型:"), row, 0)
         self.combo_type = ComboBox()
         types = [st.value for st in SegmentType if st not in (SegmentType.INLET, SegmentType.OUTLET)]
         self.combo_type.addItems(types)
         self.combo_type.setCurrentText(SegmentType.STRAIGHT.value)
         self.combo_type.currentTextChanged.connect(self._on_type)
-        lay.addWidget(self.combo_type, row, 1)
-        self.lbl_dir = QLabel("[纵断面]")
-        self.lbl_dir.setStyleSheet(f"color:{T2};font-size:10px;")
-        lay.addWidget(self.lbl_dir, row, 2)
-        row += 1
+        ll.addLayout(self._form_row("类型", self.combo_type))
 
         # 长度
-        lay.addWidget(QLabel("长度 (m):"), row, 0)
-        self.ed_length = LineEdit(); self.ed_length.setText("0.0"); self.ed_length.setFixedWidth(120)
+        self.ed_length = LineEdit()
+        self.ed_length.setText("0.0")
+        self.ed_length.setFixedWidth(130)
         self.ed_length.textChanged.connect(self._on_geom)
-        lay.addWidget(self.ed_length, row, 1)
-        row += 1
+        self._row_length = self._form_row_with_unit("长度 L", self.ed_length, "m")
+        ll.addLayout(self._row_length)
 
         # 半径
-        lay.addWidget(QLabel("拐弯半径 R (m):"), row, 0)
-        self.ed_radius = LineEdit(); self.ed_radius.setText("0.0"); self.ed_radius.setFixedWidth(120)
+        self.ed_radius = LineEdit()
+        self.ed_radius.setText("0.0")
+        self.ed_radius.setFixedWidth(130)
         self.ed_radius.textChanged.connect(self._on_geom)
-        lay.addWidget(self.ed_radius, row, 1)
-        row += 1
+        self._row_radius = self._form_row_with_unit("拐弯半径 R", self.ed_radius, "m")
+        ll.addLayout(self._row_radius)
 
         # 角度
-        lay.addWidget(QLabel("拐角 θ (°):"), row, 0)
-        self.ed_angle = LineEdit(); self.ed_angle.setText("0.0"); self.ed_angle.setFixedWidth(120)
+        self.ed_angle = LineEdit()
+        self.ed_angle.setText("0.0")
+        self.ed_angle.setFixedWidth(130)
         self.ed_angle.textChanged.connect(self._on_geom)
-        lay.addWidget(self.ed_angle, row, 1)
-        row += 1
+        self._row_angle = self._form_row_with_unit("拐角 θ", self.ed_angle, "°")
+        ll.addLayout(self._row_angle)
 
-        # 起点高程
-        self.lbl_se = QLabel("起点高程 (m):")
-        lay.addWidget(self.lbl_se, row, 0)
-        self.ed_start_elev = LineEdit(); self.ed_start_elev.setFixedWidth(120)
-        lay.addWidget(self.ed_start_elev, row, 1)
-        row += 1
+        # 高程（水平排列）
+        self._elev_widget = QWidget()
+        elev_lay = QHBoxLayout(self._elev_widget)
+        elev_lay.setContentsMargins(0, 2, 0, 2)
+        elev_lay.setSpacing(10)
+        self.ed_start_elev = LineEdit()
+        self.ed_start_elev.setFixedWidth(90)
+        self.ed_start_elev.textChanged.connect(self._on_geom)
+        elev_lay.addLayout(self._mini_form("起点高程", self.ed_start_elev, "m"))
+        self.ed_end_elev = LineEdit()
+        self.ed_end_elev.setFixedWidth(90)
+        self.ed_end_elev.textChanged.connect(self._on_geom)
+        elev_lay.addLayout(self._mini_form("终点高程", self.ed_end_elev, "m"))
+        elev_lay.addStretch()
+        ll.addWidget(self._elev_widget)
 
-        # 终点高程
-        self.lbl_ee = QLabel("终点高程 (m):")
-        lay.addWidget(self.lbl_ee, row, 0)
-        self.ed_end_elev = LineEdit(); self.ed_end_elev.setFixedWidth(120)
-        lay.addWidget(self.ed_end_elev, row, 1)
-        row += 1
+        ll.addStretch()
+        body.addWidget(left, 1)
 
-        # 空间长度
-        self.lbl_sp = QLabel("空间长度 (m):")
-        lay.addWidget(self.lbl_sp, row, 0)
+        # == 左右分隔线 ==
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setStyleSheet("color: #EEE;")
+        body.addWidget(sep)
+
+        # == 右栏：结果 ==
+        right = QWidget()
+        right.setStyleSheet("QWidget { background: #FAFBFD; }")
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(14, 14, 18, 10)
+        rl.setSpacing(8)
+
+        res_lbl = QLabel("计算结果")
+        res_lbl.setStyleSheet(
+            f"font-size:12px; font-weight:700; color:{P}; letter-spacing:1px;"
+            " padding-left:8px; border-left:3px solid #1976D2;"
+        )
+        rl.addWidget(res_lbl)
+
+        # 空间长度卡片
+        self._card_sp = QFrame()
+        self._card_sp.setStyleSheet(self._CARD_SS)
+        csl = QVBoxLayout(self._card_sp)
+        csl.setContentsMargins(12, 10, 12, 10)
+        csl.setSpacing(2)
+        self._csl_label = QLabel("空间长度")
+        self._csl_label.setStyleSheet(self._LABEL_SS)
+        csl.addWidget(self._csl_label)
+        val_row = QHBoxLayout()
         self.lbl_sp_val = QLabel("--")
-        self.lbl_sp_val.setStyleSheet("font-weight:bold;")
-        lay.addWidget(self.lbl_sp_val, row, 1)
-        self.lbl_sp_hint = QLabel("= √(L² + ΔH²)")
-        self.lbl_sp_hint.setStyleSheet(f"color:{T2};font-size:10px;")
-        lay.addWidget(self.lbl_sp_hint, row, 2)
-        row += 1
+        self.lbl_sp_val.setStyleSheet(self._VALUE_SS)
+        val_row.addWidget(self.lbl_sp_val)
+        self._sp_unit = QLabel("m")
+        self._sp_unit.setStyleSheet("font-size:13px; color:#999; padding-top:6px;")
+        val_row.addWidget(self._sp_unit)
+        val_row.addStretch()
+        csl.addLayout(val_row)
+        self.lbl_sp_hint = QLabel("")
+        self.lbl_sp_hint.setStyleSheet(self._HINT_SS)
+        csl.addWidget(self.lbl_sp_hint)
+        rl.addWidget(self._card_sp)
 
-        # 局部系数
-        lay.addWidget(QLabel("局部系数:"), row, 0)
-        self.ed_xi = LineEdit(); self.ed_xi.setFixedWidth(100)
-        lay.addWidget(self.ed_xi, row, 1)
-        self.lbl_xi_hint = QLabel("(可手动修改)")
-        self.lbl_xi_hint.setStyleSheet(f"color:{T2};font-size:10px;")
-        lay.addWidget(self.lbl_xi_hint, row, 2)
-        row += 1
+        # 局部系数卡片
+        self._card_xi = QFrame()
+        self._card_xi.setStyleSheet(self._CARD_HL_SS)
+        cxl = QVBoxLayout(self._card_xi)
+        cxl.setContentsMargins(12, 10, 12, 10)
+        cxl.setSpacing(2)
+        cxl.addWidget(QLabel("局部系数 ξ", styleSheet=self._LABEL_SS))
+        xi_row = QHBoxLayout()
+        self.ed_xi = LineEdit()
+        self.ed_xi.setFixedWidth(110)
+        self.ed_xi.setStyleSheet("font-size:16px; font-weight:700;")
+        xi_row.addWidget(self.ed_xi)
+        xi_row.addStretch()
+        cxl.addLayout(xi_row)
+        self.lbl_xi_hint = QLabel("可手动修改")
+        self.lbl_xi_hint.setStyleSheet(self._HINT_BLUE_SS)
+        cxl.addWidget(self.lbl_xi_hint)
+        rl.addWidget(self._card_xi)
 
-        # 按钮
-        brow = QHBoxLayout()
-        brow.addStretch()
-        btn_ok = PrimaryPushButton("确定"); btn_ok.clicked.connect(self._on_ok)
-        btn_cancel = PushButton("取消"); btn_cancel.clicked.connect(self.reject)
-        brow.addWidget(btn_ok); brow.addWidget(btn_cancel)
-        lay.addLayout(brow, row, 0, 1, 3)
+        # 公式卡片
+        self._formula_frame = QFrame()
+        self._formula_frame.setStyleSheet(
+            "QFrame { background: #F8F9FE; border: 1px solid #E3ECF9;"
+            " border-radius: 8px; }"
+        )
+        ffl = QVBoxLayout(self._formula_frame)
+        ffl.setContentsMargins(12, 8, 12, 8)
+        ffl.setSpacing(4)
+        self._formula_title = QLabel("计算公式")
+        self._formula_title.setStyleSheet("font-size:11px; color:#666;")
+        self._formula_title.setAlignment(Qt.AlignCenter)
+        ffl.addWidget(self._formula_title)
+        self.formula_view = QWebEngineView()
+        self.formula_view.setMinimumHeight(36)
+        self.formula_view.setStyleSheet("border:none; background:transparent;")
+        ffl.addWidget(self.formula_view)
+        rl.addWidget(self._formula_frame)
+
+        rl.addStretch()
+        body.addWidget(right, 1)
+
+        root.addLayout(body, 1)
+
+        # ---- 底部按钮栏 ----
+        footer = QFrame()
+        footer.setStyleSheet(
+            "QFrame { background: #FAFAFA; border-top: 1px solid #EEE; }"
+        )
+        fl = QHBoxLayout(footer)
+        fl.setContentsMargins(16, 8, 16, 8)
+        fl.addStretch()
+        btn_cancel = PushButton("取消")
+        btn_cancel.clicked.connect(self.reject)
+        fl.addWidget(btn_cancel)
+        btn_ok = PrimaryPushButton("确定")
+        btn_ok.clicked.connect(self._on_ok)
+        fl.addWidget(btn_ok)
+        root.addWidget(footer)
 
         self._on_type()
 
+    # ---- 布局辅助 ----
+    @staticmethod
+    def _form_row(label_text, widget):
+        """标签 + 控件的单行布局"""
+        lay = QVBoxLayout()
+        lay.setSpacing(2)
+        lbl = QLabel(label_text)
+        lbl.setStyleSheet("font-size:12px; color:#666;")
+        lay.addWidget(lbl)
+        lay.addWidget(widget)
+        return lay
+
+    @staticmethod
+    def _form_row_with_unit(label_text, widget, unit):
+        """标签 + 输入框 + 单位"""
+        outer = QVBoxLayout()
+        outer.setSpacing(2)
+        lbl = QLabel(label_text)
+        lbl.setStyleSheet("font-size:12px; color:#666;")
+        outer.addWidget(lbl)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(widget)
+        ulbl = QLabel(unit)
+        ulbl.setStyleSheet("font-size:12px; color:#999;")
+        row.addWidget(ulbl)
+        row.addStretch()
+        outer.addLayout(row)
+        return outer
+
+    @staticmethod
+    def _mini_form(label_text, widget, unit):
+        """紧凑垂直表单（高程用）"""
+        lay = QVBoxLayout()
+        lay.setSpacing(1)
+        lbl = QLabel(label_text)
+        lbl.setStyleSheet("font-size:11px; color:#666;")
+        lay.addWidget(lbl)
+        row = QHBoxLayout()
+        row.setSpacing(4)
+        row.addWidget(widget)
+        u = QLabel(unit)
+        u.setStyleSheet("font-size:11px; color:#999;")
+        row.addWidget(u)
+        lay.addLayout(row)
+        return lay
+
+    # ---- 类型切换 ----
     def _on_type(self, *_):
         t = self.combo_type.currentText()
         st = None
@@ -1116,15 +1297,20 @@ class SegmentEditDialog(QDialog):
                 st = s
                 break
         is_common = st and is_common_type(st)
-        self.lbl_dir.setText("[通用构件]" if is_common else "[纵断面]")
+        if is_common:
+            dir_text = "通用构件"
+        elif self._direction == SegmentDirection.PLAN or (
+                self.segment and self.segment.direction == SegmentDirection.PLAN):
+            dir_text = "平面"
+        else:
+            dir_text = "纵断面"
+        self.lbl_dir.setText(dir_text)
 
         show_elev = t in (SegmentType.STRAIGHT.value, SegmentType.FOLD.value)
-        for w in (self.lbl_se, self.ed_start_elev, self.lbl_ee, self.ed_end_elev):
-            w.setVisible(show_elev)
+        self._elev_widget.setVisible(show_elev)
 
         show_sp = t in (SegmentType.STRAIGHT.value, SegmentType.FOLD.value, SegmentType.BEND.value)
-        for w in (self.lbl_sp, self.lbl_sp_val, self.lbl_sp_hint):
-            w.setVisible(show_sp)
+        self._card_sp.setVisible(show_sp)
 
         is_bend = (t == SegmentType.BEND.value)
         is_fold = (t == SegmentType.FOLD.value)
@@ -1137,12 +1323,16 @@ class SegmentEditDialog(QDialog):
 
         if not self._loading:
             self._auto_xi()
+        self._update_formula()
 
+    # ---- 几何参数变化 ----
     def _on_geom(self, *_):
         if not self._loading:
             self._auto_xi()
         self._update_spatial()
+        self._update_formula()
 
+    # ---- 自动计算 xi ----
     def _auto_xi(self):
         if self._user_modified_xi:
             return
@@ -1165,6 +1355,7 @@ class SegmentEditDialog(QDialog):
             except ValueError:
                 pass
 
+    # ---- 更新空间长度 ----
     def _update_spatial(self):
         t = self.combo_type.currentText()
         try:
@@ -1181,12 +1372,13 @@ class SegmentEditDialog(QDialog):
                 dh = ee - se
                 sp = math.sqrt(L ** 2 + dh ** 2)
                 self.lbl_sp_val.setText(f"{sp:.3f}")
-                self.lbl_sp_hint.setText(f"= √({L:.3f}² + {dh:.2f}²)")
+                self.lbl_sp_hint.setText(f"= \u221a({L:.3f}\u00b2 + {dh:.2f}\u00b2)")
             elif L > 0:
                 self.lbl_sp_val.setText(f"{L:.3f}")
-                self.lbl_sp_hint.setText("(无高程,取水平长度)")
+                self.lbl_sp_hint.setText("(\u65e0\u9ad8\u7a0b,\u53d6\u6c34\u5e73\u957f\u5ea6)")
             else:
                 self.lbl_sp_val.setText("--")
+                self.lbl_sp_hint.setText("")
         elif t == SegmentType.BEND.value:
             try:
                 r = float(self.ed_radius.text() or 0)
@@ -1196,10 +1388,78 @@ class SegmentEditDialog(QDialog):
             if r > 0 and a > 0:
                 arc = r * math.radians(a)
                 self.lbl_sp_val.setText(f"{arc:.3f}")
-                self.lbl_sp_hint.setText(f"= R×θ = {r:.2f}×{a:.1f}°")
+                self.lbl_sp_hint.setText(f"= R\u00d7\u03b8 = {r:.2f}\u00d7{a:.1f}\u00b0")
             else:
                 self.lbl_sp_val.setText("--")
+                self.lbl_sp_hint.setText("")
 
+    # ---- 更新公式卡片 ----
+    def _update_formula(self):
+        t = self.combo_type.currentText()
+        latex = None
+        title = "计算公式"
+
+        if t == SegmentType.BEND.value:
+            title = "弯管局部阻力系数"
+            try:
+                r = float(self.ed_radius.text() or 0)
+                a = float(self.ed_angle.text() or 0)
+                xi_txt = self.ed_xi.text().strip()
+                xi_val = float(xi_txt) if xi_txt else 0
+                if r > 0 and a > 0 and self._D_theory > 0:
+                    d_r = self._D_theory / r
+                    latex = (f"\\xi = 0.131 + 0.163 \\left(\\frac{{D}}{{R}}\\right)"
+                             f"^{{3.5}} \\times \\frac{{\\theta}}{{90^{{\\circ}}}}"
+                             f" = {xi_val:.4f}")
+            except ValueError:
+                pass
+        elif t == SegmentType.FOLD.value:
+            title = "折管局部阻力系数"
+            try:
+                a = float(self.ed_angle.text() or 0)
+                xi_txt = self.ed_xi.text().strip()
+                xi_val = float(xi_txt) if xi_txt else 0
+                if a > 0:
+                    latex = (f"\\xi = 0.946\\sin^2\\!\\left(\\frac{{\\theta}}{{2}}"
+                             f"\\right) + 2.05\\sin^4\\!\\left(\\frac{{\\theta}}"
+                             f"{{2}}\\right) = {xi_val:.4f}")
+            except ValueError:
+                pass
+        elif t == SegmentType.STRAIGHT.value:
+            title = "空间长度计算"
+            try:
+                L = float(self.ed_length.text() or 0)
+                se = float(self.ed_start_elev.text()) if self.ed_start_elev.text().strip() else None
+                ee = float(self.ed_end_elev.text()) if self.ed_end_elev.text().strip() else None
+                if se is not None and ee is not None and L > 0:
+                    dh = ee - se
+                    sp = math.sqrt(L ** 2 + dh ** 2)
+                    latex = (f"L_s = \\sqrt{{L^2 + \\Delta H^2}} = "
+                             f"\\sqrt{{{L:.3f}^2 + {dh:.2f}^2}} = {sp:.3f}"
+                             f"\\;\\text{{m}}")
+            except ValueError:
+                pass
+
+        self._formula_title.setText(title)
+        if latex:
+            svg = render_latex_svg(latex, fontsize=14)
+            if svg:
+                h = get_svg_height_px(svg, padding=16)
+                self.formula_view.setFixedHeight(h)
+                body = (f'<div style="display:flex;align-items:center;'
+                        f'justify-content:center;height:100%;">{svg}</div>')
+                html = wrap_with_katex(body, extra_css=(
+                    "html,body{margin:0;padding:0;height:100%;"
+                    "background:transparent;}"))
+                self.formula_view.setHtml(html)
+                self._formula_frame.setVisible(True)
+                return
+        self._formula_frame.setVisible(bool(latex))
+        if not latex:
+            self.formula_view.setFixedHeight(0)
+            self.formula_view.setHtml("")
+
+    # ---- 加载已有数据 ----
     def _load(self, seg):
         self._loading = True
         if seg.segment_type in (SegmentType.INLET, SegmentType.OUTLET):
@@ -1222,6 +1482,7 @@ class SegmentEditDialog(QDialog):
         self._update_spatial()
         self._loading = False
 
+    # ---- 确定 ----
     def _on_ok(self):
         try:
             t = self.combo_type.currentText()
