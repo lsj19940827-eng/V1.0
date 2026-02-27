@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QTabWidget
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QColor
+from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
 
 from 渠系断面设计.styles import auto_resize_table, fluent_info, fluent_error, fluent_question
 
@@ -696,6 +696,10 @@ class BatchChannelConfirmDialog(QDialog):
         self.gaps_info = gaps_info
         self.result = {'mode': self.RESULT_MANUAL_EACH, 'params': {}}
         self._row_widgets = []
+        self._param_undo_stack = []
+        self._param_redo_stack = []
+        self._param_undo_group = 0
+        self._param_pre_edit_snapshot = None
 
         self.setWindowTitle("批量插入明渠段")
         self.resize(1100, 580)
@@ -843,11 +847,24 @@ class BatchChannelConfirmDialog(QDialog):
                                 'structure_height': 0.0,
                                 'name': '-',
                             })
-                            self._fill_recommended(self._row_widgets.index(rw))
+                            self._push_param_undo()
+                            self._param_undo_group += 1
+                            try:
+                                self._fill_recommended(self._row_widgets.index(rw))
+                            finally:
+                                self._param_undo_group -= 1
                     return _on_type_changed
                 type_cb.currentIndexChanged.connect(_make_type_handler(row_ref, computed_opts))
 
         lay.addWidget(self.param_table, stretch=1)
+        self.param_table.currentCellChanged.connect(self._on_param_current_cell_changed)
+        self.param_table.cellChanged.connect(self._on_param_cell_changed)
+        undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self.param_table)
+        undo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        undo_sc.activated.connect(self._undo_param_table)
+        redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self.param_table)
+        redo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        redo_sc.activated.connect(self._redo_param_table)
 
         # 底部按钮
         btn_lay = QHBoxLayout()
@@ -859,6 +876,83 @@ class BatchChannelConfirmDialog(QDialog):
         btn_ok.setFocus()
         btn_lay.addWidget(btn_ok)
         lay.addLayout(btn_lay)
+
+    def _snapshot_param_table(self):
+        rows = []
+        for r in range(self.param_table.rowCount()):
+            row = []
+            for c in range(self.param_table.columnCount()):
+                if c == 4:
+                    combo = self.param_table.cellWidget(r, 4)
+                    row.append(combo.currentText() if combo else "明渠-梯形")
+                else:
+                    item = self.param_table.item(r, c)
+                    row.append(item.text() if item else "")
+            rows.append(row)
+        return rows
+
+    def _restore_param_table(self, snapshot):
+        self.param_table.blockSignals(True)
+        self._param_undo_group += 1
+        try:
+            for r, row_data in enumerate(snapshot):
+                for c, val in enumerate(row_data):
+                    if c == 4:
+                        combo = self.param_table.cellWidget(r, 4)
+                        if combo:
+                            combo.blockSignals(True)
+                            idx = combo.findText(val)
+                            if idx >= 0:
+                                combo.setCurrentIndex(idx)
+                            combo.blockSignals(False)
+                    elif c >= 5:
+                        item = self.param_table.item(r, c)
+                        if item:
+                            item.setText(val)
+                        else:
+                            new_item = QTableWidgetItem(val)
+                            new_item.setTextAlignment(Qt.AlignCenter)
+                            self.param_table.setItem(r, c, new_item)
+        finally:
+            self._param_undo_group -= 1
+            self.param_table.blockSignals(False)
+
+    def _push_param_undo(self):
+        if self._param_undo_group > 0:
+            return
+        self._param_undo_stack.append(self._snapshot_param_table())
+        if len(self._param_undo_stack) > 20:
+            self._param_undo_stack.pop(0)
+        self._param_redo_stack.clear()
+        self._param_pre_edit_snapshot = None
+
+    def _on_param_current_cell_changed(self, row, col, prev_row, prev_col):
+        if self._param_undo_group == 0:
+            self._param_pre_edit_snapshot = self._snapshot_param_table()
+
+    def _on_param_cell_changed(self, row, col):
+        if self._param_undo_group == 0 and self._param_pre_edit_snapshot is not None:
+            self._param_undo_stack.append(self._param_pre_edit_snapshot)
+            if len(self._param_undo_stack) > 20:
+                self._param_undo_stack.pop(0)
+            self._param_redo_stack.clear()
+            self._param_pre_edit_snapshot = None
+
+    def _undo_param_table(self):
+        if not self._param_undo_stack:
+            return
+        self._param_redo_stack.append(self._snapshot_param_table())
+        if len(self._param_redo_stack) > 20:
+            self._param_redo_stack.pop(0)
+        self._restore_param_table(self._param_undo_stack.pop())
+
+    def _redo_param_table(self):
+        if not self._param_redo_stack:
+            return
+        self._param_undo_stack.append(self._snapshot_param_table())
+        if len(self._param_undo_stack) > 20:
+            self._param_undo_stack.pop(0)
+        self._restore_param_table(self._param_redo_stack.pop())
 
     def _set_cell(self, row, col, val):
         """设置表格单元格值"""
@@ -878,7 +972,9 @@ class BatchChannelConfirmDialog(QDialog):
             return
         st = up.get('structure_type', '明渠-梯形')
         idx_in_combo = self.STRUCTURE_TYPES.index(st) if st in self.STRUCTURE_TYPES else 0
+        row['type_combo'].blockSignals(True)
         row['type_combo'].setCurrentIndex(idx_in_combo)
+        row['type_combo'].blockSignals(False)
 
         entries = row['entries']
         self._set_cell(entries['B'][0], entries['B'][1], f"{up.get('bottom_width', 0):.2f}")
@@ -888,9 +984,14 @@ class BatchChannelConfirmDialog(QDialog):
         self._set_cell(entries['Q'][0], entries['Q'][1], f"{row['gap']['flow']:.3f}")
 
     def _fill_all_recommended(self):
-        for i, row in enumerate(self._row_widgets):
-            if row['gap'].get('upstream_channel'):
-                self._fill_recommended(i)
+        self._push_param_undo()
+        self._param_undo_group += 1
+        try:
+            for i, row in enumerate(self._row_widgets):
+                if row['gap'].get('upstream_channel'):
+                    self._fill_recommended(i)
+        finally:
+            self._param_undo_group -= 1
 
     def _fill_with_fallback_if_empty(self):
         """auto_confirm模式专用：对未填充的行使用 fallback 参数（原始上游明渠）兜底填充"""
@@ -904,14 +1005,19 @@ class BatchChannelConfirmDialog(QDialog):
                     row['gap']['upstream_channel'] = orig
 
     def _clear_all(self):
+        self._push_param_undo()
+        self._param_undo_group += 1
         for row in self._row_widgets:
+            row['type_combo'].blockSignals(True)
             row['type_combo'].setCurrentIndex(0)
+            row['type_combo'].blockSignals(False)
             entries = row['entries']
             self._set_cell(entries['B'][0], entries['B'][1], "")
             self._set_cell(entries['m'][0], entries['m'][1], "")
             self._set_cell(entries['n'][0], entries['n'][1], "0.014")
             self._set_cell(entries['slope'][0], entries['slope'][1], "3000")
             self._set_cell(entries['Q'][0], entries['Q'][1], f"{row['gap']['flow']:.3f}")
+        self._param_undo_group -= 1
 
     def _on_mode_change(self):
         enabled = self.rb_table.isChecked()

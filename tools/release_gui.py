@@ -1,0 +1,732 @@
+# -*- coding: utf-8 -*-
+"""
+可视化发版工具
+
+PySide6 + qfluentwidgets 界面，一键完成：
+  bump版本号 → 打包 → git commit/tag → 创建GitHub Release → 上传zip → 更新Gist
+
+用法：
+    python tools/release_gui.py
+"""
+
+import base64
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+import urllib.error
+import urllib.parse
+from datetime import date
+
+# ---- 路径设置 ----
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, SCRIPT_DIR)
+
+os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QTextEdit, QGroupBox, QFrame, QSizePolicy,
+)
+from PySide6.QtCore import Qt, Signal, QObject, QSize
+from PySide6.QtGui import QFont, QColor, QTextCursor, QIcon
+
+from qfluentwidgets import (
+    PrimaryPushButton, PushButton, ComboBox, TextEdit,
+    InfoBar, InfoBarPosition, ProgressBar,
+)
+
+from version import APP_VERSION, APP_NAME, APP_NAME_EN
+
+# ---- 从 repo_config 读取配置 ----
+from repo_config import (
+    GITHUB_OWNER, GITHUB_REPO, GIST_ID,
+    GITEE_OWNER, GITEE_REPO, LAN_UPDATE_DIR,
+)
+
+# ---- 样式常量 ----
+P = "#1976D2"
+S = "#2E7D32"
+W = "#F57C00"
+E = "#D32F2F"
+BG = "#F5F7FA"
+CARD = "#FFFFFF"
+BD = "#E0E0E0"
+T1 = "#212121"
+T2 = "#424242"
+
+
+# ============================================================
+# 信号桥：子线程 → 主线程
+# ============================================================
+class SignalBridge(QObject):
+    log_signal = Signal(str, str)       # (message, color)
+    step_signal = Signal(int, str)      # (step_index, status: 'running'|'done'|'error')
+    finished_signal = Signal(bool, str) # (success, message)
+    progress_signal = Signal(int)       # percent 0-100
+
+
+# ============================================================
+# GitHub API（复用 release.py 的逻辑）
+# ============================================================
+def _load_env() -> dict:
+    env_file = os.path.join(PROJECT_ROOT, ".env")
+    env = {}
+    if os.path.exists(env_file):
+        with open(env_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    return env
+
+
+def _get_token() -> str:
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        token = _load_env().get("GITHUB_TOKEN", "")
+    return token
+
+
+def _github_api(method, url, token, data=None, raw_body=None,
+                content_type="application/json"):
+    body = None
+    if data is not None:
+        body = json.dumps(data).encode("utf-8")
+    elif raw_body is not None:
+        body = raw_body
+
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("Authorization", f"token {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("User-Agent", APP_NAME_EN)
+    if body is not None:
+        req.add_header("Content-Type", content_type)
+
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        resp_body = resp.read().decode("utf-8")
+        return json.loads(resp_body) if resp_body else {}
+
+
+def _upload_release_asset(upload_url, file_path, token, bridge=None):
+    filename = os.path.basename(file_path)
+    file_size = os.path.getsize(file_path)
+    base_url = upload_url.split("{")[0]
+    url = f"{base_url}?name={urllib.parse.quote(filename)}"
+
+    with open(file_path, "rb") as f:
+        body = f.read()
+
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Authorization", f"token {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("User-Agent", APP_NAME_EN)
+    req.add_header("Content-Type", "application/zip")
+    req.add_header("Content-Length", str(file_size))
+
+    with urllib.request.urlopen(req, timeout=600) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+        return result.get("browser_download_url", "")
+
+
+# ============================================================
+# 发版工作线程
+# ============================================================
+def _run_release(level: str, changelog: str, bridge: SignalBridge):
+    """在子线程中执行完整发版流程"""
+    steps = [
+        "验证 Token",
+        "递增版本号",
+        "PyInstaller 打包",
+        "Git commit & tag & push",
+        "创建 GitHub Release",
+        "上传发布包到 GitHub",
+        "更新 GitHub Gist",
+        "发布到 Gitee（国内源）",
+        "更新 Gitee version.json",
+        "同步到局域网共享",
+    ]
+
+    def log(msg, color=""):
+        bridge.log_signal.emit(msg, color)
+
+    def set_step(idx, status):
+        bridge.step_signal.emit(idx, status)
+
+    try:
+        # ---- 0. 验证 Token ----
+        set_step(0, "running")
+        token = _get_token()
+        if not token:
+            raise RuntimeError("未找到 GITHUB_TOKEN，请检查 .env 文件")
+        user = _github_api("GET", "https://api.github.com/user", token)
+        log(f"Token 有效，用户: {user['login']}", S)
+        set_step(0, "done")
+
+        # ---- 1. Bump 版本号 ----
+        set_step(1, "running")
+        from build import bump_version
+        new_ver = bump_version(level)
+        log(f"版本号已更新: {APP_VERSION} → {new_ver}", S)
+        set_step(1, "done")
+
+        # ---- 2. 打包 ----
+        set_step(2, "running")
+        log("正在打包，请耐心等待（约 3~10 分钟）...")
+        bridge.progress_signal.emit(-1)  # indeterminate
+
+        result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, "build.py")],
+            cwd=PROJECT_ROOT,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if result.returncode != 0:
+            log(f"打包输出:\n{result.stdout[-2000:]}", E)
+            if result.stderr:
+                log(f"错误:\n{result.stderr[-1000:]}", E)
+            raise RuntimeError("PyInstaller 打包失败")
+
+        # 找到产物
+        dist_dir = os.path.join(PROJECT_ROOT, "dist")
+        full_zip = os.path.join(dist_dir, f"{APP_NAME_EN}-V{new_ver}.zip")
+        patch_zip = os.path.join(dist_dir, f"{APP_NAME_EN}-V{new_ver}-patch.zip")
+
+        if not os.path.exists(full_zip):
+            raise RuntimeError(f"找不到全量包: {full_zip}")
+
+        full_mb = os.path.getsize(full_zip) / (1024 * 1024)
+        log(f"全量包: {full_mb:.1f} MB", S)
+        has_patch = os.path.exists(patch_zip)
+        if has_patch:
+            patch_mb = os.path.getsize(patch_zip) / (1024 * 1024)
+            log(f"补丁包: {patch_mb:.2f} MB", S)
+
+        bridge.progress_signal.emit(100)
+        set_step(2, "done")
+
+        # ---- 3. Git ----
+        set_step(3, "running")
+
+        def _git(cmd):
+            log(f"  $ {cmd}")
+            r = subprocess.run(
+                cmd, cwd=PROJECT_ROOT, shell=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            if r.returncode != 0:
+                log(f"  {r.stderr.strip()}", W)
+            return r
+
+        _git("git add version.py")
+        _git(f'git commit -m "release: v{new_ver}"')
+        _git(f"git tag v{new_ver}")
+        r = _git("git push origin main")
+        if r.returncode != 0:
+            log("push main 失败，尝试继续...", W)
+        r = _git(f"git push origin v{new_ver}")
+        if r.returncode != 0:
+            log("push tag 失败，尝试继续...", W)
+        set_step(3, "done")
+
+        # ---- 4. 创建 Release ----
+        set_step(4, "running")
+        rel_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
+        release_data = {
+            "tag_name": f"v{new_ver}",
+            "name": f"V{new_ver}",
+            "body": changelog or f"V{new_ver} 版本发布",
+            "draft": False,
+            "prerelease": False,
+        }
+        release_obj = _github_api("POST", rel_url, token, data=release_data)
+        log(f"Release 创建成功: {release_obj.get('html_url', '')}", S)
+        set_step(4, "done")
+
+        # ---- 5. 上传附件 ----
+        set_step(5, "running")
+        upload_url = release_obj.get("upload_url", "")
+
+        log(f"上传全量包 ({full_mb:.1f} MB)...")
+        download_url = _upload_release_asset(upload_url, full_zip, token, bridge)
+        log(f"全量包上传完成", S)
+
+        patch_url_remote = ""
+        if has_patch:
+            log(f"上传补丁包 ({patch_mb:.2f} MB)...")
+            patch_url_remote = _upload_release_asset(upload_url, patch_zip, token, bridge)
+            log(f"补丁包上传完成", S)
+
+        set_step(5, "done")
+
+        # ---- 6. 更新 Gist ----
+        set_step(6, "running")
+        version_json = {
+            "latest_version": new_ver,
+            "download_url": download_url,
+            "changelog": changelog or f"V{new_ver} 版本发布",
+            "release_date": date.today().isoformat(),
+            "min_version": "1.0.0",
+            "file_size_mb": round(full_mb, 1),
+        }
+        if patch_url_remote:
+            version_json["patch_url"] = patch_url_remote
+            version_json["patch_size_mb"] = round(patch_mb, 2)
+
+        gist_url = f"https://api.github.com/gists/{GIST_ID}"
+        gist_data = {
+            "files": {
+                "version.json": {
+                    "content": json.dumps(version_json, ensure_ascii=False, indent=4)
+                }
+            }
+        }
+        _github_api("PATCH", gist_url, token, data=gist_data)
+        log("Gist version.json 更新成功", S)
+        set_step(6, "done")
+
+        # ---- 7. 发布到 Gitee ----
+        set_step(7, "running")
+        gitee_token = os.environ.get("GITEE_TOKEN", "") or _load_env().get("GITEE_TOKEN", "")
+        gitee_urls = {}
+        if gitee_token:
+            try:
+                rel_url = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/releases"
+                rel_data = urllib.parse.urlencode({
+                    "access_token": gitee_token,
+                    "tag_name": f"v{new_ver}",
+                    "name": f"V{new_ver}",
+                    "body": changelog or f"V{new_ver} 版本发布",
+                    "target_commitish": "master",
+                }).encode("utf-8")
+                req = urllib.request.Request(rel_url, data=rel_data, method="POST")
+                req.add_header("Content-Type", "application/x-www-form-urlencoded")
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    gitee_rel = json.loads(resp.read().decode("utf-8"))
+                gitee_rel_id = gitee_rel["id"]
+                log("Gitee Release 创建成功", S)
+
+                for key in ["full_zip", "patch_zip"]:
+                    fpath = {"full_zip": full_zip, "patch_zip": patch_zip if has_patch else None}.get(key)
+                    if not fpath or not os.path.exists(fpath):
+                        continue
+                    fname = os.path.basename(fpath)
+                    log(f"上传到 Gitee: {fname}...")
+                    boundary = "----CanalBoundary"
+                    body = f"--{boundary}\r\nContent-Disposition: form-data; name=\"access_token\"\r\n\r\n{gitee_token}\r\n".encode()
+                    body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{fname}\"\r\nContent-Type: application/zip\r\n\r\n".encode()
+                    with open(fpath, "rb") as f:
+                        body += f.read()
+                    body += f"\r\n--{boundary}--\r\n".encode()
+                    up_url = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/releases/{gitee_rel_id}/attach_files"
+                    req = urllib.request.Request(up_url, data=body, method="POST")
+                    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+                    with urllib.request.urlopen(req, timeout=600) as resp:
+                        asset = json.loads(resp.read().decode("utf-8"))
+                        dl = asset.get("browser_download_url", "")
+                        if key == "full_zip":
+                            gitee_urls["download_url"] = dl
+                        else:
+                            gitee_urls["patch_url"] = dl
+                    log(f"Gitee 上传完成: {fname}", S)
+            except Exception as e:
+                log(f"Gitee 发布失败: {e}（不影响 GitHub）", W)
+        else:
+            log("未配置 GITEE_TOKEN，跳过 Gitee", W)
+        set_step(7, "done")
+
+        # ---- 8. 更新 Gitee version.json ----
+        set_step(8, "running")
+        if gitee_token and gitee_urls:
+            try:
+                gvdata = {
+                    "latest_version": new_ver,
+                    "download_url": gitee_urls.get("download_url", ""),
+                    "changelog": changelog or f"V{new_ver} 版本发布",
+                    "release_date": date.today().isoformat(),
+                    "min_version": "1.0.0",
+                    "file_size_mb": round(full_mb, 1),
+                }
+                if "patch_url" in gitee_urls and has_patch:
+                    gvdata["patch_url"] = gitee_urls["patch_url"]
+                    gvdata["patch_size_mb"] = round(patch_mb, 2)
+                content_b64 = base64.b64encode(
+                    json.dumps(gvdata, ensure_ascii=False, indent=4).encode("utf-8")
+                ).decode("ascii")
+                sha = ""
+                try:
+                    gurl = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/contents/version.json?access_token={gitee_token}"
+                    req = urllib.request.Request(gurl)
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        sha = json.loads(resp.read().decode("utf-8")).get("sha", "")
+                except Exception:
+                    pass
+                api_url = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/contents/version.json"
+                pd = {"access_token": gitee_token, "content": content_b64, "message": f"update to v{new_ver}"}
+                if sha:
+                    pd["sha"] = sha
+                bd = json.dumps(pd).encode("utf-8")
+                req = urllib.request.Request(api_url, data=bd, method="PUT" if sha else "POST")
+                req.add_header("Content-Type", "application/json")
+                urllib.request.urlopen(req, timeout=15)
+                log("Gitee version.json 更新成功", S)
+            except Exception as e:
+                log(f"Gitee version.json 更新失败: {e}", W)
+        else:
+            log("跳过 Gitee version.json", W)
+        set_step(8, "done")
+
+        # ---- 9. 同步到局域网共享 ----
+        set_step(9, "running")
+        if os.path.isdir(LAN_UPDATE_DIR):
+            for src_path in [full_zip, patch_zip if has_patch else None]:
+                if src_path and os.path.exists(src_path):
+                    dest = os.path.join(LAN_UPDATE_DIR, os.path.basename(src_path))
+                    shutil.copy2(src_path, dest)
+                    log(f"已复制: {os.path.basename(src_path)}", S)
+            vj_path = os.path.join(LAN_UPDATE_DIR, "version.json")
+            with open(vj_path, "w", encoding="utf-8") as f:
+                json.dump(version_json, f, ensure_ascii=False, indent=4)
+            log(f"局域网同步完成: {LAN_UPDATE_DIR}", S)
+        else:
+            log(f"局域网共享不可访问，跳过（同事仍可通过 GitHub 更新）", W)
+        set_step(7, "done")
+
+        bridge.finished_signal.emit(True, f"V{new_ver} 发版完成！")
+
+    except Exception as ex:
+        log(f"\n错误: {ex}", E)
+        # 标记当前运行中的步骤为失败
+        bridge.finished_signal.emit(False, str(ex))
+
+
+# ============================================================
+# 主界面
+# ============================================================
+class ReleaseWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"发版工具 — {APP_NAME}")
+        self.setMinimumSize(720, 680)
+        self.resize(780, 760)
+
+        # 窗口图标
+        _logo = os.path.join(PROJECT_ROOT, "渠系断面设计", "resources", "logo.ico")
+        if not os.path.exists(_logo):
+            _logo = os.path.join(PROJECT_ROOT, "渠系断面设计", "resources", "logo.svg")
+        if os.path.exists(_logo):
+            self.setWindowIcon(QIcon(_logo))
+        self._bridge = SignalBridge()
+        self._bridge.log_signal.connect(self._on_log)
+        self._bridge.step_signal.connect(self._on_step)
+        self._bridge.finished_signal.connect(self._on_finished)
+        self._bridge.progress_signal.connect(self._on_progress)
+        self._running = False
+        self._step_labels = []
+        self._init_ui()
+
+    def _init_ui(self):
+        self.setStyleSheet(f"""
+            QWidget {{ background: {BG}; font-family: 'Microsoft YaHei', sans-serif; }}
+            QGroupBox {{
+                font-size: 14px; font-weight: bold; color: {P};
+                border: 1px solid {BD}; border-radius: 6px;
+                margin-top: 12px; padding: 14px 10px 10px 10px; background: {CARD};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin; left: 12px;
+                padding: 0 6px; background: {CARD};
+            }}
+            QLabel {{ color: {T1}; font-size: 13px; }}
+        """)
+
+        main_lay = QVBoxLayout(self)
+        main_lay.setContentsMargins(20, 16, 20, 16)
+        main_lay.setSpacing(12)
+
+        # ---- 标题（Logo + 文字） ----
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
+
+        _logo_path = os.path.join(PROJECT_ROOT, "渠系断面设计", "resources", "logo.ico")
+        if not os.path.exists(_logo_path):
+            _logo_path = os.path.join(PROJECT_ROOT, "渠系断面设计", "resources", "logo.svg")
+        if os.path.exists(_logo_path):
+            logo_lbl = QLabel()
+            logo_lbl.setFixedSize(36, 36)
+            logo_pix = QIcon(_logo_path).pixmap(QSize(36, 36))
+            logo_lbl.setPixmap(logo_pix)
+            title_row.addWidget(logo_lbl)
+
+        title = QLabel(f"一键发版")
+        title.setFont(QFont("Microsoft YaHei", 16, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {P}; padding: 4px 0;")
+        title_row.addWidget(title)
+        title_row.addStretch()
+        main_lay.addLayout(title_row)
+
+        ver_label = QLabel(f"当前版本: V{APP_VERSION}")
+        ver_label.setStyleSheet(f"font-size: 14px; color: {T2}; padding-bottom: 4px;")
+        main_lay.addWidget(ver_label)
+        self._ver_label = ver_label
+
+        # ---- 配置区 ----
+        config_group = QGroupBox("发版配置")
+        config_lay = QVBoxLayout(config_group)
+        config_lay.setSpacing(10)
+
+        # 版本级别
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("版本级别:"))
+        self._level_combo = ComboBox()
+        self._level_combo.addItems(["patch — 补丁版本", "minor — 次版本", "major — 主版本"])
+        self._level_combo.setCurrentIndex(0)
+        self._level_combo.setFixedWidth(260)
+        row1.addWidget(self._level_combo)
+
+        # 预览新版本号
+        self._preview_label = QLabel()
+        self._preview_label.setStyleSheet(f"color: {S}; font-weight: bold; font-size: 13px;")
+        self._update_version_preview()
+        self._level_combo.currentIndexChanged.connect(self._update_version_preview)
+        row1.addWidget(self._preview_label)
+        row1.addStretch()
+        config_lay.addLayout(row1)
+
+        # 更新日志
+        config_lay.addWidget(QLabel("更新日志:"))
+        self._changelog_edit = QTextEdit()
+        self._changelog_edit.setPlaceholderText(
+            "每行一条，例如：\n- 修复水面线计算bug\n- 新增批量导出功能\n- 优化界面响应速度"
+        )
+        self._changelog_edit.setFixedHeight(100)
+        self._changelog_edit.setStyleSheet(
+            f"QTextEdit {{ border: 1px solid {BD}; border-radius: 6px;"
+            f" background: #FAFBFC; padding: 8px; font-size: 13px; }}"
+        )
+        config_lay.addWidget(self._changelog_edit)
+
+        main_lay.addWidget(config_group)
+
+        # ---- 步骤进度区 ----
+        steps_group = QGroupBox("执行进度")
+        steps_lay = QVBoxLayout(steps_group)
+        steps_lay.setSpacing(6)
+
+        step_names = [
+            "验证 GitHub Token",
+            "递增版本号",
+            "PyInstaller 打包",
+            "Git commit & tag & push",
+            "创建 GitHub Release",
+            "上传发布包",
+            "更新 Gist version.json",
+        ]
+        for i, name in enumerate(step_names):
+            lbl = QLabel(f"  ○  {name}")
+            lbl.setStyleSheet(f"color: {T2}; font-size: 13px; padding: 2px 4px;")
+            lbl.setFixedHeight(24)
+            steps_lay.addWidget(lbl)
+            self._step_labels.append(lbl)
+
+        self._progress = ProgressBar()
+        self._progress.setFixedHeight(4)
+        self._progress.setValue(0)
+        steps_lay.addWidget(self._progress)
+
+        main_lay.addWidget(steps_group)
+
+        # ---- 日志区 ----
+        log_group = QGroupBox("日志")
+        log_lay = QVBoxLayout(log_group)
+        self._log_edit = QTextEdit()
+        self._log_edit.setReadOnly(True)
+        self._log_edit.setStyleSheet(
+            f"QTextEdit {{ border: 1px solid {BD}; border-radius: 6px;"
+            f" background: #1E1E2E; padding: 10px;"
+            f" font-family: 'Consolas', 'Courier New', monospace;"
+            f" font-size: 12px; color: #E0E0E0; }}"
+        )
+        self._log_edit.setMinimumHeight(120)
+        log_lay.addWidget(self._log_edit)
+        main_lay.addWidget(log_group, 1)
+
+        # ---- 按钮 ----
+        btn_lay = QHBoxLayout()
+        btn_lay.addStretch()
+
+        self._start_btn = PrimaryPushButton("开始发版")
+        self._start_btn.setFixedSize(160, 40)
+        self._start_btn.setFont(QFont("Microsoft YaHei", 13, QFont.Weight.Bold))
+        self._start_btn.clicked.connect(self._on_start)
+        btn_lay.addWidget(self._start_btn)
+
+        btn_lay.addStretch()
+        main_lay.addLayout(btn_lay)
+
+    def _get_level(self) -> str:
+        return self._level_combo.currentText().split(" ")[0]
+
+    def _calc_new_version(self, level: str) -> str:
+        parts = [int(x) for x in APP_VERSION.split(".")]
+        if level == "major":
+            parts = [parts[0] + 1, 0, 0]
+        elif level == "minor":
+            parts = [parts[0], parts[1] + 1, 0]
+        else:
+            parts = [parts[0], parts[1], parts[2] + 1]
+        return ".".join(str(x) for x in parts)
+
+    def _update_version_preview(self):
+        level = self._get_level()
+        new_ver = self._calc_new_version(level)
+        self._preview_label.setText(f"→ V{new_ver}")
+
+    def _on_start(self):
+        if self._running:
+            return
+
+        # 检查 token
+        token = _get_token()
+        if not token:
+            InfoBar.error(
+                title="缺少 Token",
+                content="请在项目根目录 .env 文件中配置 GITHUB_TOKEN",
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
+
+        self._running = True
+        self._start_btn.setEnabled(False)
+        self._start_btn.setText("发版中...")
+        self._log_edit.clear()
+        self._progress.setValue(0)
+
+        # 重置步骤状态
+        for lbl in self._step_labels:
+            name = lbl.text().lstrip(" ○●✓✗ ")
+            lbl.setText(f"  ○  {name}")
+            lbl.setStyleSheet(f"color: {T2}; font-size: 13px; padding: 2px 4px;")
+
+        level = self._get_level()
+        changelog = self._changelog_edit.toPlainText().strip()
+
+        t = threading.Thread(
+            target=_run_release,
+            args=(level, changelog, self._bridge),
+            daemon=True,
+        )
+        t.start()
+
+    def _on_log(self, msg: str, color: str):
+        cursor = self._log_edit.textCursor()
+        cursor.movePosition(QTextCursor.End)
+
+        if color == S:
+            html_color = "#98C379"
+        elif color == E:
+            html_color = "#E06C75"
+        elif color == W:
+            html_color = "#E5C07B"
+        else:
+            html_color = "#ABB2BF"
+
+        escaped = msg.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        escaped = escaped.replace("\n", "<br>")
+        cursor.insertHtml(
+            f'<span style="color:{html_color}; font-family: Consolas, monospace; font-size: 12px;">'
+            f'{escaped}</span><br>'
+        )
+        self._log_edit.setTextCursor(cursor)
+        self._log_edit.ensureCursorVisible()
+
+    def _on_step(self, idx: int, status: str):
+        if idx >= len(self._step_labels):
+            return
+        lbl = self._step_labels[idx]
+        # 提取步骤名
+        name = lbl.text()
+        for prefix in ["  ○  ", "  ●  ", "  ✓  ", "  ✗  "]:
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+                break
+
+        if status == "running":
+            lbl.setText(f"  ●  {name}")
+            lbl.setStyleSheet(
+                f"color: {P}; font-size: 13px; font-weight: bold; padding: 2px 4px;"
+            )
+            # 进度条
+            pct = int((idx / len(self._step_labels)) * 100)
+            self._progress.setValue(pct)
+        elif status == "done":
+            lbl.setText(f"  ✓  {name}")
+            lbl.setStyleSheet(
+                f"color: {S}; font-size: 13px; font-weight: bold; padding: 2px 4px;"
+            )
+            pct = int(((idx + 1) / len(self._step_labels)) * 100)
+            self._progress.setValue(pct)
+        elif status == "error":
+            lbl.setText(f"  ✗  {name}")
+            lbl.setStyleSheet(
+                f"color: {E}; font-size: 13px; font-weight: bold; padding: 2px 4px;"
+            )
+
+    def _on_progress(self, pct: int):
+        if pct < 0:
+            # indeterminate — just pulse
+            self._progress.setValue(30)
+        else:
+            self._progress.setValue(min(pct, 100))
+
+    def _on_finished(self, success: bool, msg: str):
+        self._running = False
+        self._start_btn.setEnabled(True)
+        self._start_btn.setText("开始发版")
+
+        if success:
+            self._progress.setValue(100)
+            InfoBar.success(
+                title="发版成功",
+                content=msg,
+                parent=self, position=InfoBarPosition.TOP, duration=8000,
+            )
+            # 更新显示的版本号
+            from version import APP_VERSION as new_ver
+            self._ver_label.setText(f"当前版本: V{new_ver}")
+        else:
+            # 标记失败步骤
+            for lbl in self._step_labels:
+                if lbl.text().startswith("  ●"):
+                    name = lbl.text()[5:]
+                    lbl.setText(f"  ✗  {name}")
+                    lbl.setStyleSheet(
+                        f"color: {E}; font-size: 13px; font-weight: bold; padding: 2px 4px;"
+                    )
+            InfoBar.error(
+                title="发版失败",
+                content=msg[:200],
+                parent=self, position=InfoBarPosition.TOP, duration=8000,
+            )
+
+
+# ============================================================
+# 入口
+# ============================================================
+def main():
+    app = QApplication(sys.argv)
+    app.setFont(QFont("Microsoft YaHei", 10))
+    w = ReleaseWindow()
+    w.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

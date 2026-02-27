@@ -49,3 +49,6 @@ tools/_secret_key.py
 tools/授权台账.csv
 *.lic
 .lc
+
+# GitHub Token（发版脚本用）
+.env

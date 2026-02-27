@@ -568,11 +568,14 @@ class BatchPanel(QWidget):
             if result == QDialog.DialogCode.Accepted and dlg.selected_type:
                 new_type = dlg.selected_type
                 old_type = current
+                self._push_undo_snapshot()
+                self._undo_group += 1
                 type_item = QTableWidgetItem(new_type)
                 type_item.setTextAlignment(Qt.AlignCenter)
                 self.input_table.setItem(row, col, type_item)
                 if new_type != old_type:
                     self._apply_section_type_change(row, new_type)
+                self._undo_group -= 1
             # 无论选择还是 Esc 取消，都回到原表格单元格，保持操作连续性
             self.input_table.setCurrentCell(row, col)
             self.input_table.setFocus(Qt.OtherFocusReason)
@@ -838,6 +841,7 @@ class BatchPanel(QWidget):
             cells = line.rstrip('\r').split('\t')
             paste_data.append(cells)
         if not paste_data:
+            self._undo_group -= 1
             return
         # 确定粘贴起始位置
         selected = self.input_table.selectedIndexes()
@@ -2158,6 +2162,7 @@ class BatchPanel(QWidget):
         if dlg.exec() == QDialog.Accepted:
             result = dlg.get_result()
             if result is not None:
+                self._push_undo_snapshot()
                 self._update_table_row(row_idx, result, section_type)
 
     def _update_table_row(self, row_idx, params, section_type):
@@ -2440,6 +2445,7 @@ class BatchPanel(QWidget):
             if not flow_values:
                 InfoBar.warning("提示", "请输入有效的流量值", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
                 return
+            self._push_undo_snapshot()
             updated_count = 0
             self.input_table.blockSignals(True)
             for r in range(self.input_table.rowCount()):

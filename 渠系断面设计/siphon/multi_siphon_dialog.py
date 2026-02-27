@@ -892,7 +892,7 @@ class MultiSiphonDialog(QDialog):
                         sel_panel._suppress_result_display = False
                         # 填充结果到面板的结果区域
                         try:
-                            from 倒虹吸水力计算系统.hydraulic_core import HydraulicCore
+                            from siphon_hydraulics import HydraulicCore
                             summary = HydraulicCore.format_result(
                                 sel_panel.calculation_result, show_steps=False)
                             sel_panel.summary_text.setPlainText(summary)

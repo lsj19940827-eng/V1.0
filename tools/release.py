@@ -1,0 +1,531 @@
+# -*- coding: utf-8 -*-
+"""
+一键发版脚本
+
+将 bump版本 → 打包 → git commit/tag → 创建GitHub Release → 上传zip → 更新Gist
+全部自动化，运行一条命令即可完成发版。
+
+用法：
+    python tools/release.py patch     # 补丁版本 1.0.2 → 1.0.3
+    python tools/release.py minor     # 次版本   1.0.2 → 1.1.0
+    python tools/release.py major     # 主版本   1.0.2 → 2.0.0
+
+前置条件（仅首次需要）：
+    1. 在项目根目录创建 .env 文件，写入：
+       GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    2. Token 需要 repo + gist 权限
+       获取地址：https://github.com/settings/tokens/new
+       勾选：repo (Full control) 和 gist
+"""
+
+import argparse
+import base64
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+import urllib.error
+import urllib.parse
+from datetime import date
+
+# ============================================================
+# 路径与配置
+# ============================================================
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, PROJECT_ROOT)
+
+from version import APP_NAME_EN
+from repo_config import (
+    GITHUB_OWNER, GITHUB_REPO, GIST_ID,
+    GITEE_OWNER, GITEE_REPO, LAN_UPDATE_DIR,
+)
+
+
+def _load_env() -> dict:
+    """从 .env 文件加载环境变量"""
+    env_file = os.path.join(PROJECT_ROOT, ".env")
+    env = {}
+    if os.path.exists(env_file):
+        with open(env_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    return env
+
+
+def _get_token() -> str:
+    """获取 GitHub Token"""
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        token = _load_env().get("GITHUB_TOKEN", "")
+    if not token:
+        print("[错误] 未找到 GITHUB_TOKEN")
+        sys.exit(1)
+    return token
+
+
+def _get_gitee_token() -> str:
+    """获取 Gitee Token"""
+    token = os.environ.get("GITEE_TOKEN", "")
+    if not token:
+        token = _load_env().get("GITEE_TOKEN", "")
+    return token
+
+
+# ============================================================
+# GitHub API 封装
+# ============================================================
+def _github_api(method: str, url: str, token: str,
+                data: dict = None, raw_body: bytes = None,
+                content_type: str = "application/json") -> dict:
+    """通用 GitHub API 请求"""
+    body = None
+    if data is not None:
+        body = json.dumps(data).encode("utf-8")
+    elif raw_body is not None:
+        body = raw_body
+
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("Authorization", f"token {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("User-Agent", APP_NAME_EN)
+    if body is not None:
+        req.add_header("Content-Type", content_type)
+
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            resp_body = resp.read().decode("utf-8")
+            return json.loads(resp_body) if resp_body else {}
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        print(f"  [API 错误] {e.code}: {err_body[:500]}")
+        raise
+
+
+def _upload_release_asset(upload_url: str, file_path: str, token: str):
+    """上传 Release 附件（需要特殊处理 multipart）"""
+    filename = os.path.basename(file_path)
+    file_size = os.path.getsize(file_path)
+    size_mb = file_size / (1024 * 1024)
+
+    # upload_url 模板形如 https://uploads.github.com/repos/.../releases/123/assets{?name,label}
+    base_url = upload_url.split("{")[0]
+    url = f"{base_url}?name={urllib.parse.quote(filename)}"
+
+    print(f"  上传: {filename} ({size_mb:.1f} MB) ...", end=" ", flush=True)
+
+    with open(file_path, "rb") as f:
+        body = f.read()
+
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Authorization", f"token {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("User-Agent", APP_NAME_EN)
+    req.add_header("Content-Type", "application/zip")
+    req.add_header("Content-Length", str(file_size))
+
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            print("✓")
+            return result.get("browser_download_url", "")
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        print(f"✗\n  [上传失败] {e.code}: {err_body[:300]}")
+        raise
+
+
+# ============================================================
+# 发版步骤
+# ============================================================
+def step_bump_version(level: str) -> str:
+    """步骤1：递增版本号"""
+    from version import APP_VERSION as old_ver
+    # 调用 build.py 中的 bump 逻辑
+    from build import bump_version
+    new_ver = bump_version(level)
+    return new_ver
+
+
+def step_build() -> dict:
+    """步骤2：打包"""
+    print(f"\n{'='*60}")
+    print(f"  [步骤 2/9] 打包...")
+    print(f"{'='*60}\n")
+
+    result = subprocess.run(
+        [sys.executable, os.path.join(SCRIPT_DIR, "build.py")],
+        cwd=PROJECT_ROOT,
+    )
+    if result.returncode != 0:
+        print("[错误] 打包失败")
+        sys.exit(1)
+
+    # 找到产物文件（必须 reload，因为 bump_version 已修改 version.py，
+    # 但 Python 模块缓存仍持有旧值）
+    import importlib
+    import version as _ver_mod
+    importlib.reload(_ver_mod)
+    APP_VERSION = _ver_mod.APP_VERSION
+    dist_dir = os.path.join(PROJECT_ROOT, "dist")
+    full_zip = os.path.join(dist_dir, f"{APP_NAME_EN}-V{APP_VERSION}.zip")
+    patch_zip = os.path.join(dist_dir, f"{APP_NAME_EN}-V{APP_VERSION}-patch.zip")
+
+    if not os.path.exists(full_zip):
+        print(f"[错误] 找不到全量包: {full_zip}")
+        sys.exit(1)
+
+    assets = {"full_zip": full_zip}
+    if os.path.exists(patch_zip):
+        assets["patch_zip"] = patch_zip
+
+    return assets
+
+
+def step_git_commit_and_tag(version: str):
+    """步骤3：git commit + tag"""
+    print(f"\n{'='*60}")
+    print(f"  [步骤 3/9] Git commit + tag v{version}")
+    print(f"{'='*60}\n")
+
+    def _run(cmd):
+        print(f"  $ {cmd}")
+        subprocess.run(cmd, cwd=PROJECT_ROOT, shell=True, check=True)
+
+    _run("git add -A")
+    _run(f'git commit -m "release: v{version}"')
+    _run(f"git tag v{version}")
+    # 自动检测当前分支名（兼容 main / master）
+    branch = subprocess.run(
+        "git rev-parse --abbrev-ref HEAD",
+        cwd=PROJECT_ROOT, shell=True, capture_output=True, text=True
+    ).stdout.strip() or "master"
+    _run(f"git push origin {branch}")
+    _run(f"git push origin v{version}")
+
+
+def step_create_release(version: str, token: str, changelog: str) -> dict:
+    """步骤4：创建 GitHub Release"""
+    print(f"\n{'='*60}")
+    print(f"  [步骤 4/9] 创建 GitHub Release v{version}")
+    print(f"{'='*60}\n")
+
+    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
+    data = {
+        "tag_name": f"v{version}",
+        "name": f"V{version}",
+        "body": changelog or f"V{version} 版本发布",
+        "draft": False,
+        "prerelease": False,
+    }
+
+    release = _github_api("POST", url, token, data=data)
+    print(f"  Release 创建成功: {release.get('html_url', '')}")
+    return release
+
+
+def step_upload_assets(release: dict, assets: dict, token: str) -> dict:
+    """步骤5：上传 zip 附件"""
+    print(f"\n{'='*60}")
+    print(f"  [步骤 5/9] 上传发布包到 GitHub...")
+    print(f"{'='*60}\n")
+
+    upload_url = release.get("upload_url", "")
+    urls = {}
+
+    full_url = _upload_release_asset(upload_url, assets["full_zip"], token)
+    urls["download_url"] = full_url
+
+    if "patch_zip" in assets:
+        patch_url = _upload_release_asset(upload_url, assets["patch_zip"], token)
+        urls["patch_url"] = patch_url
+
+    return urls
+
+
+def step_update_gist(version: str, urls: dict, assets: dict,
+                     token: str, changelog: str) -> dict:
+    """步骤6：更新 GitHub Gist version.json"""
+    print(f"\n{'='*60}")
+    print(f"  [步骤 6/9] 更新 GitHub Gist version.json")
+    print(f"{'='*60}\n")
+
+    full_size = os.path.getsize(assets["full_zip"]) / (1024 * 1024)
+
+    version_data = {
+        "latest_version": version,
+        "download_url": urls.get("download_url", ""),
+        "changelog": changelog or f"V{version} 版本发布",
+        "release_date": date.today().isoformat(),
+        "min_version": "1.0.0",
+        "file_size_mb": round(full_size, 1),
+    }
+
+    if "patch_url" in urls and "patch_zip" in assets:
+        patch_size = os.path.getsize(assets["patch_zip"]) / (1024 * 1024)
+        version_data["patch_url"] = urls["patch_url"]
+        version_data["patch_size_mb"] = round(patch_size, 2)
+
+    gist_url = f"https://api.github.com/gists/{GIST_ID}"
+    data = {
+        "files": {
+            "version.json": {
+                "content": json.dumps(version_data, ensure_ascii=False, indent=4)
+            }
+        }
+    }
+
+    _github_api("PATCH", gist_url, token, data=data)
+    print(f"  Gist 更新成功!")
+    print(f"  内容: {json.dumps(version_data, ensure_ascii=False, indent=2)}")
+    return version_data
+
+
+def step_gitee_release(version: str, assets: dict, changelog: str,
+                       gitee_token: str) -> dict:
+    """步骤7：发布到 Gitee（国内源）"""
+    print(f"\n{'='*60}")
+    print(f"  [步骤 7/9] 发布到 Gitee")
+    print(f"{'='*60}\n")
+
+    if not gitee_token:
+        print(f"  [跳过] 未配置 GITEE_TOKEN")
+        return {}
+
+    gitee_urls = {}
+    try:
+        # 创建 Release
+        rel_url = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/releases"
+        rel_data = urllib.parse.urlencode({
+            "access_token": gitee_token,
+            "tag_name": f"v{version}",
+            "name": f"V{version}",
+            "body": changelog or f"V{version} 版本发布",
+            "target_commitish": "master",
+        }).encode("utf-8")
+        req = urllib.request.Request(rel_url, data=rel_data, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            release_obj = json.loads(resp.read().decode("utf-8"))
+        release_id = release_obj["id"]
+        print(f"  Gitee Release 创建成功: v{version}")
+
+        # 上传附件（multipart/form-data）
+        for key in ["full_zip", "patch_zip"]:
+            fpath = assets.get(key)
+            if not fpath or not os.path.exists(fpath):
+                continue
+            fname = os.path.basename(fpath)
+            size_mb = os.path.getsize(fpath) / (1024 * 1024)
+            print(f"  上传: {fname} ({size_mb:.1f} MB) ...", end=" ", flush=True)
+
+            boundary = "----CanalUpdateBoundary"
+            body = b""
+            body += f"--{boundary}\r\n".encode()
+            body += f"Content-Disposition: form-data; name=\"access_token\"\r\n\r\n{gitee_token}\r\n".encode()
+            body += f"--{boundary}\r\n".encode()
+            body += f"Content-Disposition: form-data; name=\"file\"; filename=\"{fname}\"\r\n".encode()
+            body += b"Content-Type: application/zip\r\n\r\n"
+            with open(fpath, "rb") as f:
+                body += f.read()
+            body += f"\r\n--{boundary}--\r\n".encode()
+
+            up_url = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/releases/{release_id}/attach_files"
+            req = urllib.request.Request(up_url, data=body, method="POST")
+            req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                asset_info = json.loads(resp.read().decode("utf-8"))
+                dl_url = asset_info.get("browser_download_url", "")
+                if key == "full_zip":
+                    gitee_urls["download_url"] = dl_url
+                else:
+                    gitee_urls["patch_url"] = dl_url
+            print("✓")
+
+    except Exception as e:
+        print(f"\n  [Gitee 发布失败] {e}（不影响 GitHub 发布）")
+
+    return gitee_urls
+
+
+def step_gitee_version_json(version: str, gitee_urls: dict, assets: dict,
+                             gitee_token: str, changelog: str):
+    """步骤8：更新 Gitee 仓库中的 version.json"""
+    print(f"\n{'='*60}")
+    print(f"  [步骤 8/9] 更新 Gitee version.json")
+    print(f"{'='*60}\n")
+
+    if not gitee_token or not gitee_urls:
+        print(f"  [跳过] Gitee 未发布成功")
+        return
+
+    try:
+        full_size = os.path.getsize(assets["full_zip"]) / (1024 * 1024)
+        vdata = {
+            "latest_version": version,
+            "download_url": gitee_urls.get("download_url", ""),
+            "changelog": changelog or f"V{version} 版本发布",
+            "release_date": date.today().isoformat(),
+            "min_version": "1.0.0",
+            "file_size_mb": round(full_size, 1),
+        }
+        if "patch_url" in gitee_urls and "patch_zip" in assets:
+            patch_size = os.path.getsize(assets["patch_zip"]) / (1024 * 1024)
+            vdata["patch_url"] = gitee_urls["patch_url"]
+            vdata["patch_size_mb"] = round(patch_size, 2)
+
+        content_b64 = base64.b64encode(
+            json.dumps(vdata, ensure_ascii=False, indent=4).encode("utf-8")
+        ).decode("ascii")
+
+        # 获取当前文件 SHA（如果已存在）
+        sha = ""
+        try:
+            get_url = (f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}"
+                       f"/contents/version.json?access_token={gitee_token}")
+            req = urllib.request.Request(get_url)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                existing = json.loads(resp.read().decode("utf-8"))
+                sha = existing.get("sha", "")
+        except Exception:
+            pass
+
+        # 创建或更新文件
+        api_url = (f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}"
+                   f"/contents/version.json")
+        put_data = {
+            "access_token": gitee_token,
+            "content": content_b64,
+            "message": f"update version.json to v{version}",
+        }
+        if sha:
+            put_data["sha"] = sha
+            method = "PUT"
+        else:
+            method = "POST"
+
+        body = json.dumps(put_data).encode("utf-8")
+        req = urllib.request.Request(api_url, data=body, method=method)
+        req.add_header("Content-Type", "application/json")
+        urllib.request.urlopen(req, timeout=15)
+        print(f"  Gitee version.json 更新成功!")
+
+    except Exception as e:
+        print(f"  [Gitee version.json 更新失败] {e}")
+
+
+def step_sync_lan(version: str, assets: dict, version_data: dict):
+    """步骤9：同步到局域网共享文件夹"""
+    print(f"\n{'='*60}")
+    print(f"  [步骤 9/9] 同步到局域网共享文件夹")
+    print(f"{'='*60}\n")
+
+    if not os.path.isdir(LAN_UPDATE_DIR):
+        print(f"  [跳过] 共享文件夹不可访问: {LAN_UPDATE_DIR}")
+        print(f"  （同事仍可通过 GitHub 获取更新）")
+        return
+
+    # 复制全量包
+    for key in ["full_zip", "patch_zip"]:
+        src = assets.get(key)
+        if src and os.path.exists(src):
+            dest = os.path.join(LAN_UPDATE_DIR, os.path.basename(src))
+            print(f"  复制: {os.path.basename(src)} ...", end=" ", flush=True)
+            shutil.copy2(src, dest)
+            print("OK")
+
+    # 写入 version.json（局域网客户端直接读取此文件）
+    vj_path = os.path.join(LAN_UPDATE_DIR, "version.json")
+    with open(vj_path, "w", encoding="utf-8") as f:
+        json.dump(version_data, f, ensure_ascii=False, indent=4)
+    print(f"  写入: version.json OK")
+    print(f"  局域网同步完成! 共享路径: {LAN_UPDATE_DIR}")
+
+
+# ============================================================
+# 主流程
+# ============================================================
+def release(level: str, changelog: str = ""):
+    token = _get_token()
+    gitee_token = _get_gitee_token()
+
+    # 测试 token 是否有效
+    print("验证 GitHub Token...", end=" ", flush=True)
+    try:
+        _github_api("GET", "https://api.github.com/user", token)
+        print("✓")
+    except Exception:
+        print("✗")
+        print("[错误] GitHub Token 无效或网络不通")
+        sys.exit(1)
+
+    if gitee_token:
+        print("Gitee Token: 已配置 ✓")
+    else:
+        print("Gitee Token: 未配置（跳过 Gitee 发布）")
+    print()
+
+    # 步骤 1：bump
+    print(f"{'='*60}")
+    print(f"  [步骤 1/9] 递增版本号 ({level})")
+    print(f"{'='*60}\n")
+    new_ver = step_bump_version(level)
+
+    # 步骤 2：打包
+    assets = step_build()
+
+    # 步骤 3：git
+    step_git_commit_and_tag(new_ver)
+
+    # 步骤 4：创建 GitHub Release
+    release_obj = step_create_release(new_ver, token, changelog)
+
+    # 步骤 5：上传附件到 GitHub
+    urls = step_upload_assets(release_obj, assets, token)
+
+    # 步骤 6：更新 GitHub Gist
+    version_data = step_update_gist(new_ver, urls, assets, token, changelog)
+
+    # 步骤 7：发布到 Gitee
+    gitee_urls = step_gitee_release(new_ver, assets, changelog, gitee_token)
+
+    # 步骤 8：更新 Gitee version.json
+    step_gitee_version_json(new_ver, gitee_urls, assets, gitee_token, changelog)
+
+    # 步骤 9：同步到局域网共享
+    step_sync_lan(new_ver, assets, version_data)
+
+    # 完成
+    print(f"\n{'='*60}")
+    print(f"  V{new_ver} 发版完成！")
+    print(f"  - GitHub: 已发布")
+    if gitee_urls:
+        print(f"  - Gitee: 已发布（国内源）")
+    if os.path.isdir(LAN_UPDATE_DIR):
+        print(f"  - 局域网: 已同步")
+    print(f"{'='*60}\n")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="一键发版：bump → build → git → release → gist",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""示例：
+  python tools/release.py patch                    # 1.0.2 → 1.0.3
+  python tools/release.py minor                    # 1.0.2 → 1.1.0
+  python tools/release.py patch -m "修复水面线bug"  # 带更新日志
+""")
+    parser.add_argument("level", choices=["patch", "minor", "major"],
+                        help="版本递增级别")
+    parser.add_argument("-m", "--message", default="",
+                        help="更新日志（用 \\n 分隔多条）")
+
+    args = parser.parse_args()
+    release(args.level, args.message)

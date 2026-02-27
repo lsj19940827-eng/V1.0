@@ -86,9 +86,13 @@ class FrozenColumnTableWidget(QTableWidget):
         fv.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         fv.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        # 不设置任何自定义 stylesheet，完全继承主表的样式
-        # 只设置 border:none 让 overlay 无边框融入主表
-        fv.setStyleSheet("QTableView { border: none; }")
+        # 用 CSS border-right 作为冻结列与滚动区的分隔线（Qt Champion 推荐方案）。
+        # border-right 由 widget 框架绘制，不依赖网格线，彻底避免双线伪影。
+        # overlay 宽度 frozen_width+1 中的 +1 被 border-right 消耗，
+        # viewport 宽度仍精确等于 frozen_width。
+        fv.setStyleSheet(
+            "QTableView { border: none; border-right: 1px solid #d4d4d4; }"
+        )
 
         # 像素级滚动
         self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
@@ -142,6 +146,8 @@ class FrozenColumnTableWidget(QTableWidget):
             self.columnWidth(c) for c in range(min(self._frozen_count, self.columnCount()))
         )
         fv = self._frozen_view
+        # CSS border-right 从冻结列最右侧像素取 1px，替代该处网格线作为分隔线。
+        # overlay 宽度 = frozen_width（精确），不侵占第一个非冻结列的空间。
         fv.setGeometry(
             self.verticalHeader().width() + self.frameWidth(),
             self.frameWidth(),

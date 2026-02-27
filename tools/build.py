@@ -21,11 +21,45 @@ import sys
 import zipfile
 
 # ============================================================
-# 配置区（每次发版时改这里的版本号）
+# 配置区（版本号从 version.py 读取，发版时只需修改 version.py）
 # ============================================================
-APP_NAME = "渠系水力计算综合系统"
-APP_NAME_EN = "CanalHydraulicCalc"
-APP_VERSION = "1.0.1"
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from version import APP_VERSION, APP_NAME, APP_NAME_EN
+
+
+def bump_version(level: str) -> str:
+    """
+    自动递增 version.py 中的版本号。
+
+    Args:
+        level: 'patch' | 'minor' | 'major'
+
+    Returns:
+        新版本号字符串
+    """
+    global APP_VERSION
+    parts = list(int(x) for x in APP_VERSION.split("."))
+    if level == "major":
+        parts = [parts[0] + 1, 0, 0]
+    elif level == "minor":
+        parts = [parts[0], parts[1] + 1, 0]
+    else:  # patch
+        parts = [parts[0], parts[1], parts[2] + 1]
+    new_ver = ".".join(str(x) for x in parts)
+
+    ver_file = os.path.join(PROJECT_ROOT, "version.py")
+    with open(ver_file, "r", encoding="utf-8") as f:
+        content = f.read()
+    content = content.replace(
+        f'APP_VERSION = "{APP_VERSION}"',
+        f'APP_VERSION = "{new_ver}"',
+    )
+    with open(ver_file, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    print(f"  [版本] {APP_VERSION} → {new_ver}")
+    APP_VERSION = new_ver
+    return new_ver
 
 # ============================================================
 # 不需要的 Qt 模块（删除可显著减小包体积）
@@ -130,11 +164,34 @@ def _clean_py_sources(dist_folder):
 # ============================================================
 # 构建流程
 # ============================================================
-def build():
+def _clean_excel_temp_files(directory):
+    """删除目录中 Excel 临时锁文件（~$开头），避免打包时 PermissionError。"""
+    if not os.path.isdir(directory):
+        return
+    removed = 0
+    for fname in os.listdir(directory):
+        if fname.startswith("~$"):
+            fpath = os.path.join(directory, fname)
+            try:
+                os.remove(fpath)
+                removed += 1
+            except OSError:
+                pass
+    if removed:
+        print(f"  [清理] 已删除 {directory} 中 {removed} 个 Excel 临时文件")
+
+
+def build(bump: str = None):
+    if bump:
+        bump_version(bump)
+
     print(f"{'=' * 60}")
     print(f"  {APP_NAME} 打包工具")
     print(f"  版本: V{APP_VERSION}")
     print(f"{'=' * 60}")
+
+    # 清理 data 目录中的 Excel 临时锁文件
+    _clean_excel_temp_files(os.path.join(PROJECT_ROOT, "data"))
 
     # 清理旧的构建
     for d in [DIST_DIR, BUILD_DIR]:
@@ -172,8 +229,10 @@ def build():
 
     # ---- 需要隐式导入的包（PyInstaller 静态分析可能扫描不到的） ----
     hidden_imports = [
-        # 授权校验
+        # 授权校验与更新
         "license_checker",
+        "version",
+        "updater",
         # 第三方库
         "PySide6",
         "PySide6.QtWebEngineWidgets",
@@ -184,6 +243,8 @@ def build():
         "openpyxl",
         "matplotlib",
         "matplotlib.backends.backend_qtagg",
+        "matplotlib.backends.backend_svg",
+        "matplotlib.backends.backend_qt5agg",
         "ezdxf",
         "PIL",
         "shapely", "shapely.geometry",
@@ -196,6 +257,7 @@ def build():
         "渡槽设计",
         "隧洞设计",
         "矩形暗涵设计",
+        "生成断面汇总表",
         # ---- 倒虹吸水力计算系统（无 __init__.py，sys.path hack 导入） ----
         "siphon_models",
         "siphon_hydraulics",
@@ -231,6 +293,7 @@ def build():
     # ---- 收集第三方包的数据文件（字体/图标/模板等） ----
     # ezdxf 内置字体和 DXF 模板； qfluentwidgets 内置图标和 QSS 样式表
     args.append("--collect-data=ezdxf")
+    args.append("--collect-data=matplotlib")
     args.append("--collect-all=qfluentwidgets")
 
     # ---- 添加资源文件（仅图片/图标/JSON/Excel 等，不包含 .py 源码） ----
@@ -258,7 +321,7 @@ def build():
     args.append(MAIN_SCRIPT)
 
     # ---- 执行 ----
-    print(f"\n[1/2] 正在打包，请耐心等待（约 3~10 分钟）...\n")
+    print(f"\n[1/3] 正在打包，请耐心等待（约 3~10 分钟）...\n")
     result = subprocess.run(args, cwd=PROJECT_ROOT)
     if result.returncode != 0:
         print(f"\n[错误] 打包失败（退出码: {result.returncode}）")
@@ -270,12 +333,44 @@ def build():
     # ---- 删除用不到的 Qt 模块 DLL ----
     _clean_unused_qt_dlls(os.path.join(DIST_DIR, APP_NAME_EN))
 
-    # ---- 打包为 zip ----
-    print(f"\n[2/2] 打包完成，正在压缩为 zip...\n")
+    # ---- 生成文件清单 manifest.json（供增量补丁对比） ----
+    print(f"\n[2/3] 生成文件清单 manifest.json...\n")
     dist_folder = os.path.join(DIST_DIR, APP_NAME_EN)
     if not os.path.exists(dist_folder):
         print("[错误] 未找到打包产物")
         sys.exit(1)
+
+    from patch_builder import generate_manifest, save_manifest, load_manifest
+    from patch_builder import diff_manifests, build_patch_zip
+
+    new_manifest = generate_manifest(dist_folder)
+    manifest_path = os.path.join(DIST_DIR, f"manifest-V{APP_VERSION}.json")
+    save_manifest(new_manifest, manifest_path)
+
+    # ---- 自动检测旧版 manifest，有则生成增量补丁包 ----
+    patch_path = None
+    old_manifests = sorted([
+        f for f in os.listdir(DIST_DIR)
+        if f.startswith("manifest-V") and f.endswith(".json")
+        and f != f"manifest-V{APP_VERSION}.json"
+    ])
+    if old_manifests:
+        old_manifest_file = os.path.join(DIST_DIR, old_manifests[-1])
+        print(f"  [patch] 发现旧版清单: {old_manifests[-1]}")
+        old_manifest = load_manifest(old_manifest_file)
+        diff = diff_manifests(old_manifest, new_manifest)
+        if diff.has_changes:
+            print(diff.summary())
+            patch_name = f"{APP_NAME_EN}-V{APP_VERSION}-patch.zip"
+            patch_path = os.path.join(DIST_DIR, patch_name)
+            build_patch_zip(dist_folder, diff, patch_path, new_manifest)
+        else:
+            print("  [patch] 没有文件变化，跳过补丁包生成。")
+    else:
+        print("  [patch] 未找到旧版 manifest，跳过补丁包（首次打包）。")
+
+    # ---- 打包为全量 zip ----
+    print(f"\n[3/3] 压缩为全量 zip...\n")
 
     zip_name = f"{APP_NAME_EN}-V{APP_VERSION}"
     zip_path = os.path.join(DIST_DIR, f"{zip_name}.zip")
@@ -299,11 +394,16 @@ def build():
 
     print(f"{'=' * 60}")
     print(f"  打包完成!")
-    print(f"  文件: {zip_path}")
-    print(f"  大小: {size_mb:.1f} MB")
+    print(f"  全量包: {zip_path} ({size_mb:.1f} MB)")
+    if patch_path and os.path.exists(patch_path):
+        patch_mb = os.path.getsize(patch_path) / (1024 * 1024)
+        print(f"  补丁包: {patch_path} ({patch_mb:.2f} MB)")
+    print(f"  清  单: {manifest_path}")
     print(f"")
-    print(f"  把这个 zip 通过微信/QQ 发给同事，")
-    print(f"  同事解压后双击 {APP_NAME_EN}.exe 即可使用。")
+    print(f"  发版步骤:")
+    print(f"  1. 上传全量 zip + 补丁 zip 到 GitHub Releases")
+    print(f"  2. 更新 Gist 中的 version.json（含 patch_url）")
+    print(f"  3. 保留 {os.path.basename(manifest_path)} 供下次增量对比")
     print(f"{'=' * 60}")
 
 
@@ -327,9 +427,11 @@ def clean():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f"{APP_NAME} 打包工具")
     parser.add_argument("--clean", action="store_true", help="清理构建产物")
+    parser.add_argument("--bump", choices=["patch", "minor", "major"],
+                        help="打包前自动递增版本号 (patch/minor/major)")
     args = parser.parse_args()
 
     if args.clean:
         clean()
     else:
-        build()
+        build(bump=args.bump)

@@ -2662,6 +2662,7 @@ document.addEventListener("DOMContentLoaded", function(){
         """清空纵断面管身段数据（保留通用构件），同步清空纵断面节点"""
         if not fluent_question(self, "确认", "确定要清空所有纵断面管身段吗？"):
             return
+        self._push_long_undo()
         self.segments = [seg for seg in self.segments if seg.direction == SegmentDirection.COMMON]
         self._longitudinal_is_example = False
         self.longitudinal_nodes.clear()
@@ -2670,6 +2671,7 @@ document.addEventListener("DOMContentLoaded", function(){
         self._update_canvas()
 
     def _clear_segments(self):
+        self._push_long_undo()
         self.segments.clear()
         self.longitudinal_nodes.clear()
         self.long_table.setRowCount(0)
@@ -2783,16 +2785,18 @@ document.addEventListener("DOMContentLoaded", function(){
     def _restore_long_table(self, snapshot):
         old_syncing = self._syncing
         self._syncing = True
+        self._long_undo_group += 1
         try:
             self.long_table.setRowCount(0)
             for row_data in snapshot:
                 self._add_long_node(row_data)
         finally:
+            self._long_undo_group -= 1
             self._syncing = old_syncing
         self._sync_nodes_to_segments()
 
     def _push_long_undo(self):
-        if self._long_undo_group > 0:
+        if self._long_undo_group > 0 or self._syncing:
             return
         self._long_undo_stack.append(self._snapshot_long_table())
         if len(self._long_undo_stack) > 20:
@@ -2832,6 +2836,7 @@ document.addEventListener("DOMContentLoaded", function(){
         return combo
 
     def _add_long_node(self, data=None):
+        self._push_long_undo()
         row = self.long_table.rowCount()
         self.long_table.insertRow(row)
         combo = self._create_turn_type_combo()
@@ -2850,14 +2855,18 @@ document.addEventListener("DOMContentLoaded", function(){
             InfoBar.warning("提示", "请先选择要删除的行", parent=self._info_parent(),
                            duration=2000, position=InfoBarPosition.TOP)
             return
+        self._push_long_undo()
+        self._long_undo_group += 1
         for r in rows:
             self.long_table.removeRow(r)
+        self._long_undo_group -= 1
         self._sync_nodes_to_segments()
 
     def _clear_long_nodes(self):
         if self.long_table.rowCount() > 0 or self.longitudinal_nodes:
             if not fluent_question(self, "确认", "确定要清空所有纵断面节点数据吗？"):
                 return
+        self._push_long_undo()
         self.long_table.setRowCount(0)
         self.longitudinal_nodes.clear()
         self.segments = [seg for seg in self.segments if seg.direction == SegmentDirection.COMMON]
@@ -2930,10 +2939,15 @@ document.addEventListener("DOMContentLoaded", function(){
                              parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
                 return
 
-            self._clear_long_nodes()
-            self.longitudinal_nodes = long_nodes
-            self._longitudinal_is_example = False
-            self._refresh_long_table()
+            self._push_long_undo()
+            self._long_undo_group += 1
+            try:
+                self._clear_long_nodes()
+                self.longitudinal_nodes = long_nodes
+                self._longitudinal_is_example = False
+                self._refresh_long_table()
+            finally:
+                self._long_undo_group -= 1
 
             # 同时用传统方式解析生成 StructureSegment（用于表格显示）
             try:
@@ -3042,6 +3056,12 @@ document.addEventListener("DOMContentLoaded", function(){
         """节点表编辑（单元格值变更 / 转弯类型下拉框切换）后触发正向同步"""
         if self._syncing:
             return
+        if self._long_undo_group == 0 and self._long_pre_edit_snapshot is not None:
+            self._long_undo_stack.append(self._long_pre_edit_snapshot)
+            if len(self._long_undo_stack) > 20:
+                self._long_undo_stack.pop(0)
+            self._long_redo_stack.clear()
+            self._long_pre_edit_snapshot = None
         self._sync_nodes_to_segments()
 
     def _sync_nodes_to_segments(self):

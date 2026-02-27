@@ -1,24 +1,70 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#3B82F6"/>
-      <stop offset="100%" stop-color="#1D4ED8"/>
+    <!-- 主背景渐变：深蓝→靛蓝，专业工程感 -->
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E88E5"/>
+      <stop offset="50%" stop-color="#1565C0"/>
+      <stop offset="100%" stop-color="#0D47A1"/>
     </linearGradient>
-    <filter id="shadow">
-      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#1d4ed8" flood-opacity="0.3"/>
+    <!-- 顶部高光渐变 -->
+    <linearGradient id="gloss" x1="256" y1="24" x2="256" y2="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="white" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+    <!-- 水面渐变 -->
+    <linearGradient id="water" x1="120" y1="240" x2="120" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="white" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.3"/>
+    </linearGradient>
+    <!-- 投影 -->
+    <filter id="shadow" x="-4%" y="-4%" width="108%" height="112%">
+      <feDropShadow dx="0" dy="6" stdDeviation="12" flood-color="#0D47A1" flood-opacity="0.35"/>
+    </filter>
+    <!-- 内部图形微投影 -->
+    <filter id="innerShadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0D47A1" flood-opacity="0.3"/>
     </filter>
   </defs>
+
   <!-- 圆角方形底板 -->
-  <rect x="6" y="6" width="108" height="108" rx="26" fill="url(#bg)" filter="url(#shadow)"/>
-  <!-- 微妙光泽 -->
-  <rect x="6" y="6" width="108" height="108" rx="26" fill="white" opacity="0.04"/>
-  <!-- 渠道断面（粗线条） -->
-  <path d="M30 82 L44 46 L76 46 L90 82" fill="none" stroke="white" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" opacity="0.95"/>
-  <!-- 三条水流线（粗细变化） -->
-  <path d="M36 58 Q46 52, 56 58 Q66 64, 76 58" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" opacity="0.9"/>
-  <path d="M40 68 Q50 62, 60 68 Q70 74, 80 68" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/>
-  <path d="M43 76 Q53 71, 63 76 Q73 81, 83 76" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.35"/>
-  <!-- 水滴点缀 -->
-  <circle cx="60" cy="34" r="6" fill="white" opacity="0.85"/>
-  <circle cx="60" cy="34" r="3" fill="url(#bg)" opacity="0.5"/>
+  <rect x="24" y="24" width="464" height="464" rx="96" fill="url(#bg)" filter="url(#shadow)"/>
+
+  <!-- 顶部玻璃高光 -->
+  <rect x="24" y="24" width="464" height="464" rx="96" fill="url(#gloss)"/>
+
+  <!-- 渠道梯形断面（主体图形） -->
+  <path d="M116 370 L190 155 L322 155 L396 370"
+        fill="none" stroke="white" stroke-width="18"
+        stroke-linejoin="round" stroke-linecap="round"
+        opacity="0.95" filter="url(#innerShadow)"/>
+
+  <!-- 渠底线 -->
+  <line x1="190" y1="155" x2="322" y2="155"
+        stroke="white" stroke-width="18"
+        stroke-linecap="round" opacity="0.95"/>
+
+  <!-- 水面线（主） -->
+  <path d="M140 248 Q180 224, 220 248 Q260 272, 300 248 Q340 224, 380 248"
+        fill="none" stroke="white" stroke-width="14"
+        stroke-linecap="round" opacity="0.9"/>
+
+  <!-- 水波纹2 -->
+  <path d="M152 290 Q192 268, 232 290 Q272 312, 312 290 Q352 268, 382 290"
+        fill="none" stroke="white" stroke-width="10"
+        stroke-linecap="round" opacity="0.55"/>
+
+  <!-- 水波纹3 -->
+  <path d="M162 328 Q198 310, 238 328 Q278 346, 318 328 Q358 310, 376 328"
+        fill="none" stroke="white" stroke-width="7"
+        stroke-linecap="round" opacity="0.3"/>
+
+  <!-- 水滴（上方点缀） -->
+  <ellipse cx="256" cy="108" rx="22" ry="24" fill="white" opacity="0.9"/>
+  <ellipse cx="256" cy="108" rx="11" ry="12" fill="#1565C0" opacity="0.45"/>
+  <!-- 水滴高光 -->
+  <ellipse cx="252" cy="100" rx="5" ry="6" fill="white" opacity="0.6"/>
+
+  <!-- 左上角微小装饰点 -->
+  <circle cx="96" cy="96" r="6" fill="white" opacity="0.15"/>
+  <circle cx="416" cy="96" r="4" fill="white" opacity="0.1"/>
 </svg>

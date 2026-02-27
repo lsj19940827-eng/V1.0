@@ -133,6 +133,27 @@ def auto_resize_table(table):
     """根据内容自适应表格列宽，剩余空间按比例分配。
     应在表格数据填充完毕后调用；窗口resize时也应调用。"""
     table.resizeColumnsToContents()
+    # 补偿 resizeColumnsToContents 在冻结列表格等场景下可能宽度不足的问题：
+    # 用字体度量逐列校验，确保每列至少能完整显示表头和数据内容。
+    fm = table.fontMetrics()
+    _pad = 26
+    _row_count = table.rowCount()
+    _step = max(1, _row_count // 60)
+    for c in range(table.columnCount()):
+        needed = 0
+        hi = table.horizontalHeaderItem(c)
+        if hi:
+            needed = fm.horizontalAdvance(hi.text()) + _pad + 4
+        for r in range(0, _row_count, _step):
+            it = table.item(r, c)
+            if it:
+                txt = it.text()
+                if txt:
+                    w = fm.horizontalAdvance(txt) + _pad
+                    if w > needed:
+                        needed = w
+        if needed > table.columnWidth(c):
+            table.setColumnWidth(c, needed)
     header = table.horizontalHeader()
     col_count = header.count()
     if col_count == 0:

@@ -28,6 +28,7 @@ from qfluentwidgets import (
     PushButton, InfoBar, InfoBarPosition, setTheme, Theme
 )
 
+from version import APP_VERSION
 from 渠系断面设计.styles import (
     P, S, W, E, BG, CARD, BD, T1, T2, GLOBAL_STYLE, NAV_STYLE
 )
@@ -106,7 +107,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("渠系建筑物水力计算系统")
+        self.setWindowTitle(f"渠系建筑物水力计算系统 V{APP_VERSION}")
 
         # ---- 根据屏幕分辨率自适应窗口尺寸 ----
         screen = QApplication.primaryScreen()
@@ -126,17 +127,20 @@ class MainWindow(QMainWindow):
         self.resize(init_w, init_h)
 
         # 图标路径
+        _res_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources")
+        self._ico_logo_path = os.path.join(_res_dir, "logo.ico")
+        self._svg_logo_path = os.path.join(_res_dir, "logo.svg")
         self._app_icon_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "推求水面线", "resources", "app_icon.ico"
         )
-        self._svg_logo_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "resources", "logo.svg"
-        )
 
-        # 设置窗口图标（SVG 优先，与导航栏 Logo 统一）
-        _icon_src = self._svg_logo_path if os.path.exists(self._svg_logo_path) else self._app_icon_path
+        # 设置窗口图标（ICO多尺寸优先 → SVG → 旧ICO）
+        _icon_src = (
+            self._ico_logo_path if os.path.exists(self._ico_logo_path)
+            else self._svg_logo_path if os.path.exists(self._svg_logo_path)
+            else self._app_icon_path
+        )
         if os.path.exists(_icon_src):
             self.setWindowIcon(QIcon(_icon_src))
 
@@ -145,7 +149,10 @@ class MainWindow(QMainWindow):
 
         # 默认选中第一个
         self._switch_to(0)
-        self.statusBar().showMessage("就绪 | 渠系建筑物水力计算系统 V1.0")
+        self.statusBar().showMessage(f"就绪 | 渠系建筑物水力计算系统 V{APP_VERSION}")
+
+        # ---- 启动时静默检查更新 ----
+        self._start_silent_update_check()
 
     def _init_ui(self):
         central = QWidget()
@@ -189,7 +196,7 @@ class MainWindow(QMainWindow):
         subtitle_lbl.setObjectName("navSubtitle")
         brand_lay.addWidget(subtitle_lbl)
 
-        ver_lbl = QLabel("V1.0")
+        ver_lbl = QLabel(f"V{APP_VERSION}")
         ver_lbl.setObjectName("navVersion")
         brand_lay.addWidget(ver_lbl, 0, Qt.AlignHCenter)
 
@@ -244,6 +251,23 @@ class MainWindow(QMainWindow):
         nav_lay.addWidget(btn_proj_settings)
         nav_lay.addSpacing(4)
 
+        # 检查更新按钮
+        btn_update = PushButton("\U0001F504 检查更新")
+        btn_update.setToolTip("检查是否有新版本可用")
+        btn_update.setFixedHeight(36)
+        btn_update.clicked.connect(self._open_update_dialog)
+        btn_update.setStyleSheet(f"""
+            QPushButton {{
+                background: #FFF3E0; color: #E65100;
+                border: 1px solid #FFE0B2; border-radius: 6px;
+                font-size: 12px; font-weight: bold;
+                text-align: center; padding: 0 8px;
+            }}
+            QPushButton:hover {{ background: #FFE0B2; }}
+        """)
+        nav_lay.addWidget(btn_update)
+        nav_lay.addSpacing(4)
+
         # 版权信息
         author_lbl = QLabel("四川水发设计公司\n工程设计院\n© All Rights Reserved")
         author_lbl.setStyleSheet(f"font-size:11px;color:{T2};padding:6px 4px;")
@@ -280,6 +304,38 @@ class MainWindow(QMainWindow):
     def _open_project_settings(self):
         dlg = ProjectSettingsDialog(self)
         dlg.exec()
+
+    # ---- 更新相关 ----
+    def _open_update_dialog(self):
+        """打开更新对话框（手动检查）"""
+        from 渠系断面设计.update_dialog import UpdateDialog
+        dlg = UpdateDialog(self, auto_check=True)
+        dlg.exec()
+
+    def _start_silent_update_check(self):
+        """启动时后台静默检查更新"""
+        from 渠系断面设计.update_dialog import SilentUpdateChecker
+        self._silent_checker = SilentUpdateChecker(self)
+        self._silent_checker.update_available.connect(self._on_update_available)
+        self._silent_checker.start()
+
+    def _on_update_available(self, info):
+        """静默检查发现新版本时，在状态栏/InfoBar 提示"""
+        try:
+            InfoBar.info(
+                title=f"发现新版本 V{info.latest_version}",
+                content="点击侧边栏「检查更新」按钮查看详情并下载。",
+                orient=Qt.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=8000,
+                parent=self,
+            )
+            self.statusBar().showMessage(
+                f"✨ 新版本 V{info.latest_version} 可用！点击「检查更新」下载。"
+            )
+        except Exception:
+            pass
 
     def closeEvent(self, event):
         """关闭窗口前先隐藏，避免 Matplotlib 画布销毁时反复重绘导致闪烁"""
