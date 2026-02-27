@@ -301,6 +301,10 @@ class BatchPanel(QWidget):
         self._is_sample_data = False
         self._loading_sample = False
         self._has_calc_errors = False
+        self._table_undo_stack = []
+        self._table_redo_stack = []
+        self._undo_group = 0
+        self._pre_edit_snapshot = None
         self._load_user_prefs()
         self._init_ui()
 
@@ -457,9 +461,16 @@ class BatchPanel(QWidget):
         QShortcut(QKeySequence("Ctrl+V"), self.input_table, self._paste_from_clipboard)
         QShortcut(QKeySequence("Ctrl+D"), self.input_table, self._fill_down_input)
         QShortcut(QKeySequence("Ctrl+A"), self.input_table, self.input_table.selectAll)
+        undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self.input_table)
+        undo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        undo_sc.activated.connect(self._undo_table)
+        redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self.input_table)
+        redo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        redo_sc.activated.connect(self._redo_table)
+        self.input_table.currentCellChanged.connect(self._on_current_cell_changed_undo)
 
         # 操作提示
-        hint = QLabel("提示: Ctrl+C 复制 | Ctrl+V 粘贴 | Ctrl+A 全选 | Ctrl+D 填充向下 | 双击断面类型列可选择 | 右键菜单插入/删除行")
+        hint = QLabel("提示: Ctrl+C 复制 | Ctrl+V 粘贴 | Ctrl+A 全选 | Ctrl+D 填充向下 | Ctrl+Z 撤销 | Ctrl+Y 重做 | 双击断面类型列可选择 | 右键菜单插入/删除行")
         hint.setStyleSheet(
             "font-size:12px;font-weight:600;color:#9A3412;"
             "background:#FFF4E5;border:1px solid #F3C88B;border-radius:4px;padding:4px 8px;"
@@ -468,6 +479,12 @@ class BatchPanel(QWidget):
 
     def _on_cell_changed(self, row, col):
         """单元格编辑完成后的回调（与原版_on_input_end_edit_cell一致）"""
+        if self._undo_group == 0 and self._pre_edit_snapshot is not None:
+            self._table_undo_stack.append(self._pre_edit_snapshot)
+            if len(self._table_undo_stack) > 20:
+                self._table_undo_stack.pop(0)
+            self._table_redo_stack.clear()
+            self._pre_edit_snapshot = None
         if not self._loading_sample:
             self._is_sample_data = False
         if col == 1:
@@ -482,6 +499,60 @@ class BatchPanel(QWidget):
                     self.input_table.blockSignals(False)
                 except (ValueError, TypeError):
                     pass
+
+    def _on_current_cell_changed_undo(self, row, col, prev_row, prev_col):
+        if self._undo_group == 0:
+            self._pre_edit_snapshot = self._snapshot_table()
+
+    def _snapshot_table(self):
+        rows = []
+        for r in range(self.input_table.rowCount()):
+            row = []
+            for c in range(self.input_table.columnCount()):
+                item = self.input_table.item(r, c)
+                row.append(item.text() if item else "")
+            rows.append(row)
+        return rows
+
+    def _restore_table(self, snapshot):
+        self.input_table.blockSignals(True)
+        self.input_table.setRowCount(len(snapshot))
+        for r, row in enumerate(snapshot):
+            for c, val in enumerate(row):
+                item = QTableWidgetItem(val)
+                if c == 3:
+                    item.setTextAlignment(Qt.AlignCenter)
+                self.input_table.setItem(r, c, item)
+        self.input_table.blockSignals(False)
+
+    def _push_undo_snapshot(self):
+        if self._undo_group > 0:
+            return
+        self._table_undo_stack.append(self._snapshot_table())
+        if len(self._table_undo_stack) > 20:
+            self._table_undo_stack.pop(0)
+        self._table_redo_stack.clear()
+        self._pre_edit_snapshot = None
+
+    def _undo_table(self):
+        if not self._table_undo_stack:
+            return
+        self._table_redo_stack.append(self._snapshot_table())
+        if len(self._table_redo_stack) > 20:
+            self._table_redo_stack.pop(0)
+        self._restore_table(self._table_undo_stack.pop())
+        InfoBar.success("已撤销", "已恢复上一步操作",
+                       parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+
+    def _redo_table(self):
+        if not self._table_redo_stack:
+            return
+        self._table_undo_stack.append(self._snapshot_table())
+        if len(self._table_undo_stack) > 20:
+            self._table_undo_stack.pop(0)
+        self._restore_table(self._table_redo_stack.pop())
+        InfoBar.success("已重做", "已恢复上一步撤销的操作",
+                       parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
 
     def _on_cell_double_clicked(self, row, col):
         """双击处理：结构形式列弹出选择面板，参数列(6-19)弹出参数设置弹窗（与原版一致）"""
@@ -556,6 +627,8 @@ class BatchPanel(QWidget):
 
     def _insert_row_at(self, insert_at):
         """在指定位置插入新行，继承上一行的流量段"""
+        self._push_undo_snapshot()
+        self._undo_group += 1
         new_segment = 1
         if insert_at > 0:
             prev_seg_item = self.input_table.item(insert_at - 1, 1)
@@ -578,11 +651,13 @@ class BatchPanel(QWidget):
         self.input_table.setItem(insert_at, 9, QTableWidgetItem("1.0"))
         self.input_table.setItem(insert_at, 18, QTableWidgetItem("0.1"))
         self.input_table.setItem(insert_at, 19, QTableWidgetItem("100"))
+        self._undo_group -= 1
         self._renumber()
         self.input_table.selectRow(insert_at)
 
     def _add_row(self, data=None):
         """添加一行（无data时填充完整默认值，与原版_create_default_row一致）"""
+        self._push_undo_snapshot()
         row = self.input_table.rowCount()
         self.input_table.insertRow(row)
         if data and isinstance(data, (list, tuple)):
@@ -685,8 +760,11 @@ class BatchPanel(QWidget):
             confirm_msg = f"确定要删除选中的 {count} 行吗?"
         if not fluent_question(self, "确认删除", confirm_msg):
             return
+        self._push_undo_snapshot()
+        self._undo_group += 1
         for r in rows:
             self.input_table.removeRow(r)
+        self._undo_group -= 1
         self._renumber()
 
     def _copy_row(self):
@@ -694,10 +772,15 @@ class BatchPanel(QWidget):
         if not rows:
             InfoBar.warning("提示", "请先选择要复制的行", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
             return
-        for r in rows:
-            data = self._get_row_data(r)
-            self._add_row(data)
-        self._renumber()
+        self._push_undo_snapshot()
+        self._undo_group += 1
+        try:
+            for r in rows:
+                data = self._get_row_data(r)
+                self._add_row(data)
+            self._renumber()
+        finally:
+            self._undo_group -= 1
 
     def _clear_input(self, force=False):
         if self.input_table.rowCount() == 0:
@@ -705,6 +788,7 @@ class BatchPanel(QWidget):
         if not force:
             if not fluent_question(self, "确认", "确定要清空所有输入数据吗?"):
                 return
+        self._push_undo_snapshot()
         self.input_table.setRowCount(0)
         self._last_calc_snapshot = None
         self._last_calc_detail = None
@@ -745,6 +829,8 @@ class BatchPanel(QWidget):
         text = clipboard.text()
         if not text or not text.strip():
             return
+        self._push_undo_snapshot()
+        self._undo_group += 1
         # 解析剪贴板文本（制表符分隔行/列）
         lines = text.strip().split('\n')
         paste_data = []
@@ -809,6 +895,7 @@ class BatchPanel(QWidget):
         # 粘贴后自动检测流量段（与原版一致）
         self._auto_detect_flow_segments()
         # 显示结果（与原版一致：如有无效类型则警告）
+        self._undo_group -= 1
         if invalid_types:
             error_msgs = ["【无效的类型】"]
             for msg in invalid_types[:5]:
@@ -829,6 +916,7 @@ class BatchPanel(QWidget):
         if not selected:
             InfoBar.warning("提示", "请先选中要填充的区域", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
             return
+        self._push_undo_snapshot()
         # 按列分组
         col_rows = {}
         for idx in selected:
@@ -872,6 +960,8 @@ class BatchPanel(QWidget):
 
     def _add_sample_data(self):
         """加载示例数据 - 来自多流量段表格填写示例.xlsx的完整数据（与原版一致，44行）"""
+        self._push_undo_snapshot()
+        self._undo_group += 1
         self._loading_sample = True
         # 列: 序号,流量段,建筑物名称,结构形式,X,Y,Q,n,比降,m,B,宽深比,R,D,渡槽深宽比,倒角角度,倒角底边,圆心角,不淤,不冲,转弯半径
         samples = [
@@ -931,6 +1021,7 @@ class BatchPanel(QWidget):
         self._auto_detect_flow_segments()
         auto_resize_table(self.input_table)
         self._loading_sample = False
+        self._undo_group -= 1
         self._is_sample_data = True
         InfoBar.success("示例数据", f"已加载 {len(samples)} 行示例数据（含明渠/明渠-U形/隧洞/渡槽/暗涵/倒虹吸/分水闸）",
                        parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
@@ -2645,24 +2736,29 @@ class BatchPanel(QWidget):
                         f"导入将覆盖全部现有数据。\n\n确定继续吗？",
                         yes_text="覆盖导入", no_text="取消"):
                     return
-            self._clear_input(force=True)
-            for rd in data_rows:
-                rd = rd + [""] * 21
-                if has_xy_cols:
-                    mapped = rd[:21]
-                else:
-                    mapped = [
-                        rd[0], rd[1], rd[2], rd[3],
-                        "", "",
-                        rd[4], rd[5], rd[6],
-                        rd[7], rd[8], rd[9],
-                        rd[10], rd[11],
-                        rd[12], rd[13], rd[14], rd[15],
-                        rd[16], rd[17],
-                        "",
-                    ]
-                self._add_row(mapped)
-            self._auto_detect_flow_segments()
+            self._push_undo_snapshot()
+            self._undo_group += 1
+            try:
+                self._clear_input(force=True)
+                for rd in data_rows:
+                    rd = rd + [""] * 21
+                    if has_xy_cols:
+                        mapped = rd[:21]
+                    else:
+                        mapped = [
+                            rd[0], rd[1], rd[2], rd[3],
+                            "", "",
+                            rd[4], rd[5], rd[6],
+                            rd[7], rd[8], rd[9],
+                            rd[10], rd[11],
+                            rd[12], rd[13], rd[14], rd[15],
+                            rd[16], rd[17],
+                            "",
+                        ]
+                    self._add_row(mapped)
+                self._auto_detect_flow_segments()
+            finally:
+                self._undo_group -= 1
             auto_resize_table(self.input_table)
             self._is_sample_data = is_sample
             if is_sample:

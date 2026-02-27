@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QPushButton, QLineEdit as _QLineEdit
 )
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QFont, QColor, QBrush, QIntValidator
+from PySide6.QtGui import QFont, QColor, QBrush, QIntValidator, QShortcut, QKeySequence
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from qfluentwidgets import (
@@ -274,6 +274,10 @@ class SiphonPanel(QWidget):
         self.longitudinal_nodes = [] # 纵断面变坡点
         self._longitudinal_is_example = True
         self._syncing = False
+        self._long_undo_stack = []
+        self._long_redo_stack = []
+        self._long_undo_group = 0
+        self._long_pre_edit_snapshot = None
         self.calculation_result = None
         self._detail_text_cache = ""
         self._suppress_result_display = False
@@ -914,6 +918,13 @@ class SiphonPanel(QWidget):
         self.long_table.setFont(QFont("Microsoft YaHei", 10))
         self.long_table.verticalHeader().setDefaultSectionSize(26)
         self.long_table.cellChanged.connect(self._on_long_table_edited)
+        self.long_table.currentCellChanged.connect(self._on_long_current_cell_changed)
+        undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self.long_table)
+        undo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        undo_sc.activated.connect(self._undo_long_table)
+        redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self.long_table)
+        redo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        redo_sc.activated.connect(self._redo_long_table)
         lay.addWidget(self.long_table)
 
     # ---- C: 操作栏 ----
@@ -2755,6 +2766,64 @@ document.addEventListener("DOMContentLoaded", function(){
     # ================================================================
     # 纵断面节点管理
     # ================================================================
+    def _snapshot_long_table(self):
+        rows = []
+        for r in range(self.long_table.rowCount()):
+            row = []
+            for c in range(self.long_table.columnCount()):
+                if c == 3:
+                    combo = self.long_table.cellWidget(r, 3)
+                    row.append(combo.currentText() if combo else "无")
+                else:
+                    item = self.long_table.item(r, c)
+                    row.append(item.text() if item else "")
+            rows.append(row)
+        return rows
+
+    def _restore_long_table(self, snapshot):
+        old_syncing = self._syncing
+        self._syncing = True
+        try:
+            self.long_table.setRowCount(0)
+            for row_data in snapshot:
+                self._add_long_node(row_data)
+        finally:
+            self._syncing = old_syncing
+        self._sync_nodes_to_segments()
+
+    def _push_long_undo(self):
+        if self._long_undo_group > 0:
+            return
+        self._long_undo_stack.append(self._snapshot_long_table())
+        if len(self._long_undo_stack) > 20:
+            self._long_undo_stack.pop(0)
+        self._long_redo_stack.clear()
+        self._long_pre_edit_snapshot = None
+
+    def _on_long_current_cell_changed(self, row, col, prev_row, prev_col):
+        if self._long_undo_group == 0 and not self._syncing:
+            self._long_pre_edit_snapshot = self._snapshot_long_table()
+
+    def _undo_long_table(self):
+        if not self._long_undo_stack:
+            return
+        self._long_redo_stack.append(self._snapshot_long_table())
+        if len(self._long_redo_stack) > 20:
+            self._long_redo_stack.pop(0)
+        self._restore_long_table(self._long_undo_stack.pop())
+        InfoBar.success("已撤销", "已恢复上一步操作",
+                       parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+
+    def _redo_long_table(self):
+        if not self._long_redo_stack:
+            return
+        self._long_undo_stack.append(self._snapshot_long_table())
+        if len(self._long_undo_stack) > 20:
+            self._long_undo_stack.pop(0)
+        self._restore_long_table(self._long_redo_stack.pop())
+        InfoBar.success("已重做", "已恢复上一步撤销的操作",
+                       parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+
     def _create_turn_type_combo(self):
         combo = QComboBox()
         combo.addItems(["无", "圆弧", "折线"])

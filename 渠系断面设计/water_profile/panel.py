@@ -570,6 +570,7 @@ class WaterProfilePanel(QWidget):
         self._updating_cells = False
         # 水头损失编辑撤销栈（最多保留20步）
         self._loss_undo_stack = []
+        self._loss_redo_stack = []
         self._pre_edit_cell_value = None  # (row, col, old_text)
         self._init_ui()
 
@@ -869,6 +870,9 @@ class WaterProfilePanel(QWidget):
         undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self.node_table)
         undo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
         undo_sc.activated.connect(self._undo_loss_edit)
+        redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self.node_table)
+        redo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        redo_sc.activated.connect(self._redo_loss_edit)
         lay.addWidget(self.node_table, stretch=1)
         self._setup_header_tooltips()
 
@@ -1334,6 +1338,7 @@ class WaterProfilePanel(QWidget):
             self._loss_undo_stack.append(snapshot)
             if len(self._loss_undo_stack) > 20:
                 self._loss_undo_stack.pop(0)
+            self._loss_redo_stack.clear()
 
             self._recalc_downstream(row)
         finally:
@@ -1349,6 +1354,14 @@ class WaterProfilePanel(QWidget):
         self._updating_cells = True
         try:
             snapshot = self._loss_undo_stack.pop()
+            # 保存当前状态到重做栈
+            current = {}
+            for (r, c) in snapshot.keys():
+                item = self.node_table.item(r, c)
+                current[(r, c)] = item.text() if item else ""
+            self._loss_redo_stack.append(current)
+            if len(self._loss_redo_stack) > 20:
+                self._loss_redo_stack.pop(0)
             table = self.node_table
             for (r, c), text in snapshot.items():
                 item = table.item(r, c)
@@ -1393,6 +1406,69 @@ class WaterProfilePanel(QWidget):
                             node.top_elevation = te
 
             InfoBar.success("已撤销", "已恢复上一次编辑前的水头损失数据",
+                           parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+        finally:
+            self._updating_cells = False
+
+    def _redo_loss_edit(self):
+        """Ctrl+Y 重做上一次被撤销的水头损失编辑"""
+        if not self._loss_redo_stack:
+            return
+        self._updating_cells = True
+        try:
+            snapshot = self._loss_redo_stack.pop()
+            # 保存当前状态到撤销栈
+            current = {}
+            for (r, c) in snapshot.keys():
+                item = self.node_table.item(r, c)
+                current[(r, c)] = item.text() if item else ""
+            self._loss_undo_stack.append(current)
+            if len(self._loss_undo_stack) > 20:
+                self._loss_undo_stack.pop(0)
+            table = self.node_table
+            for (r, c), text in snapshot.items():
+                item = table.item(r, c)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if c not in EDITABLE_COLS:
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    table.setItem(r, c, item)
+                item.setText(text)
+
+            # 同步 calculated_nodes
+            def _rf(r, c):
+                item = table.item(r, c)
+                if not item:
+                    return 0.0
+                txt = item.text().strip()
+                if not txt or txt == '-':
+                    return 0.0
+                try:
+                    return float(txt)
+                except ValueError:
+                    return 0.0
+
+            if hasattr(self, 'calculated_nodes') and self.calculated_nodes:
+                for r in range(min(table.rowCount(), len(self.calculated_nodes))):
+                    node = self.calculated_nodes[r]
+                    if node.is_transition:
+                        node.head_loss_cumulative = _rf(r, 40)
+                    else:
+                        node.head_loss_reserve = _rf(r, 36)
+                        node.head_loss_gate = _rf(r, 37)
+                        node.head_loss_siphon = _rf(r, 38)
+                        node.head_loss_total = _rf(r, 39)
+                        node.head_loss_cumulative = _rf(r, 40)
+                        node.water_level = _rf(r, 41)
+                        be = _rf(r, 42)
+                        if be:
+                            node.bottom_elevation = be
+                        te = _rf(r, 43)
+                        if te:
+                            node.top_elevation = te
+
+            InfoBar.success("已重做", "已恢复上一次撤销的水头损失数据",
                            parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
         finally:
             self._updating_cells = False
