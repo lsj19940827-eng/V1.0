@@ -218,7 +218,7 @@ def step_bump_version(level: str) -> str:
 def step_build() -> dict:
     """步骤2：打包"""
     print(f"\n{'='*60}")
-    print(f"  [步骤 2/9] 打包...")
+    print(f"  [步骤 2/7] 打包...")
     print(f"{'='*60}\n")
 
     result = subprocess.run(
@@ -263,7 +263,7 @@ def step_build() -> dict:
 def step_git_commit_and_tag(version: str):
     """步骤3：git commit + tag"""
     print(f"\n{'='*60}")
-    print(f"  [步骤 3/9] Git commit + tag v{version}")
+    print(f"  [步骤 3/7] Git commit + tag v{version}")
     print(f"{'='*60}\n")
 
     def _run(cmd):
@@ -285,7 +285,7 @@ def step_git_commit_and_tag(version: str):
 def step_create_release(version: str, token: str, changelog: str) -> dict:
     """步骤4：创建 GitHub Release"""
     print(f"\n{'='*60}")
-    print(f"  [步骤 4/9] 创建 GitHub Release v{version}")
+    print(f"  [步骤 4/7] 创建 GitHub Release v{version}")
     print(f"{'='*60}\n")
 
     url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
@@ -305,7 +305,7 @@ def step_create_release(version: str, token: str, changelog: str) -> dict:
 def step_upload_assets(release: dict, assets: dict, token: str) -> dict:
     """步骤5：上传 zip 附件"""
     print(f"\n{'='*60}")
-    print(f"  [步骤 5/9] 上传发布包到 GitHub...")
+    print(f"  [步骤 5/7] 上传发布包到 GitHub...")
     print(f"{'='*60}\n")
 
     upload_url = release.get("upload_url", "")
@@ -341,7 +341,7 @@ def step_update_gist(version: str, urls: dict, assets: dict,
                      token: str, changelog: str) -> dict:
     """步骤6：更新 GitHub Gist version.json"""
     print(f"\n{'='*60}")
-    print(f"  [步骤 6/9] 更新 GitHub Gist version.json")
+    print(f"  [步骤 6/7] 更新 GitHub Gist version.json")
     print(f"{'='*60}\n")
 
     full_size = os.path.getsize(assets["full_zip"]) / (1024 * 1024)
@@ -558,7 +558,7 @@ def step_gitee_version_json(version: str, gitee_urls: dict, assets: dict,
 def step_sync_lan(version: str, assets: dict, version_data: dict):
     """步骤9：同步到局域网共享文件夹"""
     print(f"\n{'='*60}")
-    print(f"  [步骤 9/9] 同步到局域网共享文件夹")
+    print(f"  [步骤 7/7] 同步到局域网共享文件夹")
     print(f"{'='*60}\n")
 
     if not os.path.isdir(LAN_UPDATE_DIR):
@@ -613,7 +613,6 @@ def step_sync_lan(version: str, assets: dict, version_data: dict):
 # ============================================================
 def release(level: str, changelog: str = ""):
     token = _get_token()
-    gitee_token = _get_gitee_token()
 
     # 测试 token 是否有效
     print("验证 GitHub Token...", end=" ", flush=True)
@@ -624,16 +623,11 @@ def release(level: str, changelog: str = ""):
         print("✗")
         print("[错误] GitHub Token 无效或网络不通")
         sys.exit(1)
-
-    if gitee_token:
-        print("Gitee Token: 已配置 ✓")
-    else:
-        print("Gitee Token: 未配置（跳过 Gitee 发布）")
     print()
 
     # 步骤 1：bump
     print(f"{'='*60}")
-    print(f"  [步骤 1/9] 递增版本号 ({level})")
+    print(f"  [步骤 1/7] 递增版本号 ({level})")
     print(f"{'='*60}\n")
     new_ver = step_bump_version(level)
 
@@ -652,21 +646,13 @@ def release(level: str, changelog: str = ""):
     # 步骤 6：更新 GitHub Gist
     version_data = step_update_gist(new_ver, urls, assets, token, changelog)
 
-    # 步骤 7：发布到 Gitee
-    gitee_urls = step_gitee_release(new_ver, assets, changelog, gitee_token)
-
-    # 步骤 8：更新 Gitee version.json
-    step_gitee_version_json(new_ver, gitee_urls, assets, gitee_token, changelog)
-
-    # 步骤 9：同步到局域网共享
+    # 步骤 7：同步到局域网共享
     step_sync_lan(new_ver, assets, version_data)
 
     # 完成
     print(f"\n{'='*60}")
     print(f"  V{new_ver} 发版完成！")
     print(f"  - GitHub: 已发布")
-    if gitee_urls:
-        print(f"  - Gitee: 已发布（国内源）")
     if os.path.isdir(LAN_UPDATE_DIR):
         print(f"  - 局域网: 已同步")
     print(f"{'='*60}\n")

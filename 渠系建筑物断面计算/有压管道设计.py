@@ -415,6 +415,51 @@ def build_detailed_process_text(inp: PressurePipeInput, recommendation: Recommen
 # 4. 批量扫描
 # ============================================================
 
+
+def _safe_savefig(fig, path, **kwargs):
+    """保存图片，处理 Windows 文件锁定：若被占用则追加编号另存"""
+    try:
+        fig.savefig(path, **kwargs)
+        return path
+    except PermissionError:
+        pass
+    for attempt in range(1, 100):
+        target = _numbered_path(path, attempt)
+        try:
+            fig.savefig(target, **kwargs)
+            return target
+        except PermissionError:
+            continue
+    # 最终回退：带时间戳
+    import time
+    base, ext = os.path.splitext(path)
+    fallback = f"{base}_{int(time.time())}{ext}"
+    fig.savefig(fallback, **kwargs)
+    return fallback
+
+
+def _numbered_path(path, n):
+    base, ext = os.path.splitext(path)
+    return f"{base}_{n}{ext}"
+
+
+def _setup_adaptive_xaxis(ax, d_data, fontsize=None):
+    """自适应X轴：裁剪到数据范围，在数据点D值位置标刻度"""
+    d_unique = sorted(set(d_data))
+    if not d_unique:
+        return
+    pad = max(0.05, (d_unique[-1] - d_unique[0]) * 0.03)
+    ax.set_xlim(d_unique[0] - pad, d_unique[-1] + pad)
+    ax.set_xticks(d_unique)
+    labels = [f"{d:.2f}" if abs(d - round(d, 1)) > 1e-9 else f"{d:.1f}"
+              for d in d_unique]
+    rot = 45 if len(d_unique) > 12 else 0
+    ha = 'right' if rot else 'center'
+    fs = fontsize or (8 if len(d_unique) > 15 else 9)
+    ax.set_xticklabels(labels, fontsize=fs, rotation=rot, ha=ha)
+    ax.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.5)
+
+
 def run_batch_scan(
     config: BatchScanConfig,
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
@@ -441,13 +486,27 @@ def run_batch_scan(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # ---- P95 自适应 Y 轴辅助函数 ----
+    def _percentile_ylim(values, percentile=95, margin=1.2, floor=0.6):
+        """取分位数 × margin 作为Y轴上限，不低于 floor"""
+        if len(values) == 0:
+            return floor
+        p = np.percentile(values, percentile)
+        return max(floor, p * margin)
+
     # ---- 配置绘图样式 ----
     sns.set_theme(style="whitegrid")
     plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun']
     plt.rcParams['axes.unicode_minus'] = False
 
-    slope_values = [1.0 / d for d in config.slope_denominators]
-    slope_labels = [f"1/{d}" for d in config.slope_denominators]
+    # 无压对比模式：有坡度数据时按坡度遍历；否则单次迭代仅做有压计算
+    _has_unpr = bool(config.slope_denominators)
+    if _has_unpr:
+        slope_values = [1.0 / d for d in config.slope_denominators]
+        slope_labels = [f"1/{d}" for d in config.slope_denominators]
+    else:
+        slope_values = [None]   # 单次占位，slope_i=None → 跳过无压计算
+        slope_labels = ["N/A"]
 
     # ---- 阶段1: 计算并保存 CSV ----
     results_list = []
@@ -496,9 +555,9 @@ def run_batch_scan(
                     results_list.append({
                         "管材类型": mat_name,
                         "Q_target (m\u00b3/s)": float(Q),
-                        "n_unpr": config.n_unpr,
+                        "n_unpr": config.n_unpr if _has_unpr else "",
                         "i_unpr_str": slope_labels[si],
-                        "i_unpr_val": i_val,
+                        "i_unpr_val": i_val if i_val is not None else "",
                         "D (m)": float(D),
                         "y_unpr (m)": c.y_unpr,
                         "v_unpr (m/s)": c.v_unpr,
@@ -572,8 +631,11 @@ def run_batch_scan(
 
         if not df_unpr_valid.empty or not df_press_valid.empty:
             # 准备坡度分类
-            slope_labels_sorted = sorted(df_mat["i_unpr_str"].unique(),
-                                         key=lambda s: float(s.split("/")[0]) / float(s.split("/")[1]) if "/" in s else 0)
+            slope_labels_sorted = sorted(
+                [s for s in df_mat["i_unpr_str"].unique()
+                 if "/" in s and s not in ("N/A", "n/a")],
+                key=lambda s: float(s.split("/")[0]) / float(s.split("/")[1])
+            )
             num_slopes = len(slope_labels_sorted)
             palette = sns.color_palette("tab10", n_colors=max(num_slopes, 2))
             markers_list = ['o', 's', 'D', '^', 'v', 'P', 'X', '*', 'h']
@@ -619,19 +681,14 @@ def run_batch_scan(
                                  linestyle=":", color="dimgray", linewidth=1.8, marker=".", markersize=5,
                                  label="V_press (有压)" if qi1 == 0 else "_nolegend_")
 
-                    # y轴范围
-                    y_max_ax1 = 1.0
-                    all_v_vals = []
+                    # y轴范围 (P95自适应)
+                    _all_v = []
                     q_unpr_v = df_unpr_valid[df_unpr_valid["Q_target (m\u00b3/s)"] == q_val1]["v_unpr (m/s)"].dropna()
                     if not q_unpr_v.empty:
-                        all_v_vals.append(q_unpr_v.max())
+                        _all_v.extend(q_unpr_v.tolist())
                     if not q_press_data.empty:
-                        v_press_filtered = q_press_data[q_press_data["D (m)"] >= 0.5]["V_press (m/s)"].dropna()
-                        if not v_press_filtered.empty:
-                            all_v_vals.append(v_press_filtered.max())
-                    if all_v_vals:
-                        y_max_ax1 = max(all_v_vals) + 0.2
-                    ax1.set_ylim(bottom=0, top=max(0.6, y_max_ax1))
+                        _all_v.extend(q_press_data["V_press (m/s)"].dropna().tolist())
+                    ax1.set_ylim(bottom=0, top=_percentile_ylim(_all_v, floor=0.6))
 
                     # 右轴: 有压总水损
                     ax2_1 = ax1.twinx()
@@ -640,8 +697,9 @@ def run_batch_scan(
                         ax2_1.plot(q_press_data["D (m)"], q_press_data["hf_total_press (m/km)"],
                                    linestyle="--", color=hf_color, linewidth=1.8, marker="x", markersize=4,
                                    alpha=0.8, label="总水损 (右轴)" if qi1 == 0 else "_nolegend_")
-                        hf_max = q_press_data["hf_total_press (m/km)"].max()
-                        ax2_1.set_ylim(bottom=0, top=min(max(0.5, hf_max * 1.2), 3.5))
+                        _d_med = q_press_data["D (m)"].median()
+                        _hf_upper = q_press_data.loc[q_press_data["D (m)"] >= _d_med, "hf_total_press (m/km)"].dropna().tolist()
+                        ax2_1.set_ylim(bottom=0, top=_percentile_ylim(_hf_upper, floor=0.5))
                         ax2_1.set_ylabel("总水头损失 (m/km)", color=hf_color)
                         ax2_1.tick_params(axis="y", labelcolor=hf_color)
                     else:
@@ -650,9 +708,11 @@ def run_batch_scan(
                     ax1.set_xlabel("管径 D (m)")
                     ax1.set_ylabel("流速 (m/s)")
                     ax1.set_title(f"Q = {q_val1:.1f} m$^3$/s")
-                    ax1.xaxis.set_major_locator(MultipleLocator(0.5))
-                    ax1.xaxis.set_minor_locator(MultipleLocator(0.1))
-                    ax1.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.5)
+                    # 自适应X轴
+                    _d_q1 = set(df_unpr_valid[df_unpr_valid["Q_target (m\u00b3/s)"] == q_val1]["D (m)"].tolist())
+                    if not q_press_data.empty:
+                        _d_q1.update(q_press_data["D (m)"].tolist())
+                    _setup_adaptive_xaxis(ax1, list(_d_q1))
 
                 # 隐藏多余子图
                 for qi1 in range(nq1, nrow1 * ncol1):
@@ -665,9 +725,9 @@ def run_batch_scan(
                 pdf_name1 = f"图1_流速水损对比_{q_start1}_{q_end1}_{safe_mat}.pdf"
                 pdf_path1 = os.path.join(output_dir, pdf_name1)
                 if config.output_pdf_charts:
-                    fig1.savefig(pdf_path1, dpi=150)
-                    result.generated_pdfs.append(pdf_path1)
-                    result.logs.append(f"PDF: {pdf_name1}")
+                    actual1 = _safe_savefig(fig1, pdf_path1, dpi=150)
+                    result.generated_pdfs.append(actual1)
+                    result.logs.append(f"PDF: {os.path.basename(actual1)}")
 
                 _chart_count += 1
                 if progress_cb:
@@ -686,15 +746,10 @@ def run_batch_scan(
                         fig_sub1, ax_sub1 = plt.subplots(figsize=(10, 7))
                         ax_sub1_twin = ax_sub1.twinx()
 
-                        # 设置X轴
                         ax_sub1.set_xlabel("管径 D (m)", fontsize=12)
-                        ax_sub1.xaxis.set_major_locator(MultipleLocator(0.5))
-                        ax_sub1.xaxis.set_minor_locator(MultipleLocator(0.1))
-                        ax_sub1.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.5)
-                        ax_sub1.grid(True, which="minor", linestyle="--", linewidth=0.5, alpha=0.3)
 
                         # 绘制无压流速 (按坡度分组)
-                        y_max_sub1 = 0.6
+                        _all_v_sub1 = []
                         for si_idx, slope_lbl in enumerate(slope_labels_sorted):
                             q_slope_data = df_unpr_valid[
                                 (df_unpr_valid["Q_target (m\u00b3/s)"] == q_val1) &
@@ -705,9 +760,7 @@ def run_batch_scan(
                                             color=palette[si_idx % num_slopes],
                                             marker=markers_list[si_idx % len(markers_list)],
                                             markersize=4, linewidth=1.3, label=f"i={slope_lbl} (无压)")
-                                v_max_tmp = q_slope_data["v_unpr (m/s)"].max()
-                                if pd.notna(v_max_tmp) and v_max_tmp > y_max_sub1:
-                                    y_max_sub1 = v_max_tmp
+                                _all_v_sub1.extend(q_slope_data["v_unpr (m/s)"].dropna().tolist())
 
                         # 绘制有压流速
                         q_press_data_sub1 = df_press_valid[
@@ -717,13 +770,11 @@ def run_batch_scan(
                             ax_sub1.plot(q_press_data_sub1["D (m)"], q_press_data_sub1["V_press (m/s)"],
                                         linestyle=":", color="dimgray", linewidth=1.8, marker=".", markersize=5,
                                         label="V_press (有压)")
-                            v_press_max = q_press_data_sub1["V_press (m/s)"].max()
-                            if pd.notna(v_press_max) and v_press_max > y_max_sub1:
-                                y_max_sub1 = v_press_max
+                            _all_v_sub1.extend(q_press_data_sub1["V_press (m/s)"].dropna().tolist())
 
-                        # 设置左Y轴
+                        # 设置左Y轴 (P95自适应)
                         ax_sub1.set_ylabel("流速 (m/s)", fontsize=12)
-                        ax_sub1.set_ylim(bottom=0, top=max(0.6, y_max_sub1 + 0.2))
+                        ax_sub1.set_ylim(bottom=0, top=_percentile_ylim(_all_v_sub1, floor=0.6))
 
                         # 绘制右轴: 有压总水损
                         hf_color_sub1 = "firebrick"
@@ -731,16 +782,20 @@ def run_batch_scan(
                             ax_sub1_twin.plot(q_press_data_sub1["D (m)"], q_press_data_sub1["hf_total_press (m/km)"],
                                              linestyle="--", color=hf_color_sub1, linewidth=1.8, marker="x", markersize=4,
                                              alpha=0.8, label="总水损 (有压, 右轴)")
-                            hf_max_sub1 = q_press_data_sub1["hf_total_press (m/km)"].max()
-                            ax_sub1_twin.set_ylim(bottom=0, top=min(max(0.5, hf_max_sub1 * 1.2), 3.5))
+                            _d_med_sub1 = q_press_data_sub1["D (m)"].median()
+                            _hf_upper_sub1 = q_press_data_sub1.loc[q_press_data_sub1["D (m)"] >= _d_med_sub1, "hf_total_press (m/km)"].dropna().tolist()
+                            ax_sub1_twin.set_ylim(bottom=0, top=_percentile_ylim(_hf_upper_sub1, floor=0.5))
                             ax_sub1_twin.set_ylabel("总水头损失 (m/km)", fontsize=11, color=hf_color_sub1)
                             ax_sub1_twin.tick_params(axis="y", labelcolor=hf_color_sub1)
                             ax_sub1_twin.spines["right"].set_edgecolor(hf_color_sub1)
                         else:
                             ax_sub1_twin.set_yticks([])
 
-                        # 设置X轴范围
-                        ax_sub1.set_xlim(config.diameter_values.min() - 0.05, config.diameter_values.max() + 0.05)
+                        # 自适应X轴
+                        _d_sub1 = set(df_unpr_valid[df_unpr_valid["Q_target (m\u00b3/s)"] == q_val1]["D (m)"].tolist())
+                        if not q_press_data_sub1.empty:
+                            _d_sub1.update(q_press_data_sub1["D (m)"].tolist())
+                        _setup_adaptive_xaxis(ax_sub1, list(_d_sub1), fontsize=10)
 
                         # 设置标题
                         fig_sub1.suptitle(f"图1: 无压/有压流速与总水损对比\n目标流量 Q = {q_val1:.1f} m³/s, 管材: {mat_name}",
@@ -757,8 +812,8 @@ def run_batch_scan(
                         fig_sub1.tight_layout(rect=[0, 0, 1, 0.93])
                         png_name1 = f"图1_Q{q_val1:.1f}_{safe_mat}.png"
                         png_path1 = os.path.join(png_dir1, png_name1)
-                        fig_sub1.savefig(png_path1, dpi=300, bbox_inches='tight', pad_inches=0.1)
-                        result.generated_pngs.append(png_path1)
+                        actual_png1 = _safe_savefig(fig_sub1, png_path1, dpi=300, bbox_inches='tight', pad_inches=0.1)
+                        result.generated_pngs.append(actual_png1)
                         plt.close(fig_sub1)
 
                 plt.close(fig1)
@@ -839,9 +894,7 @@ def run_batch_scan(
                     ax1.tick_params(axis="y", labelcolor=color_v)
                     ax2.tick_params(axis="y", labelcolor=color_hf)
                     ax1.set_title(f"Q = {q_val:.1f} m$^3$/s")
-                    ax1.xaxis.set_major_locator(MultipleLocator(0.5))
-                    ax1.xaxis.set_minor_locator(MultipleLocator(0.1))
-                    ax1.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.5)
+                    _setup_adaptive_xaxis(ax1, q_data["D (m)"].tolist())
 
                 # 隐藏多余子图
                 for qi in range(nq, nrow * ncol):
@@ -854,9 +907,9 @@ def run_batch_scan(
                 pdf_name = f"图2_优选设计点_{q_start}_{q_end}_{safe_mat}.pdf"
                 pdf_path = os.path.join(output_dir, pdf_name)
                 if config.output_pdf_charts:
-                    fig.savefig(pdf_path, dpi=150)
-                    result.generated_pdfs.append(pdf_path)
-                    result.logs.append(f"PDF: {pdf_name}")
+                    actual2 = _safe_savefig(fig, pdf_path, dpi=150)
+                    result.generated_pdfs.append(actual2)
+                    result.logs.append(f"PDF: {os.path.basename(actual2)}")
 
                 _chart_count += 1
                 if progress_cb:
@@ -880,12 +933,7 @@ def run_batch_scan(
                         fig_sub2, ax_sub2 = plt.subplots(figsize=(10, 7))
                         ax_sub2_twin = ax_sub2.twinx()
 
-                        # 设置X轴
                         ax_sub2.set_xlabel("管径 D (m)", fontsize=12)
-                        ax_sub2.xaxis.set_major_locator(MultipleLocator(0.5))
-                        ax_sub2.xaxis.set_minor_locator(MultipleLocator(0.1))
-                        ax_sub2.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.5)
-                        ax_sub2.grid(True, which="minor", linestyle="--", linewidth=0.5, alpha=0.3)
 
                         # 绘制散点
                         color_v_sub2 = "#1976D2"
@@ -925,8 +973,8 @@ def run_batch_scan(
                         ax_sub2_twin.spines["right"].set_edgecolor(color_hf_sub2)
                         ax_sub2_twin.spines["right"].set_linewidth(1.5)
 
-                        # 设置X轴范围
-                        ax_sub2.set_xlim(config.diameter_values.min() - 0.05, config.diameter_values.max() + 0.05)
+                        # 自适应X轴
+                        _setup_adaptive_xaxis(ax_sub2, q_data_sub["D (m)"].tolist(), fontsize=10)
 
                         # 设置标题
                         fig_sub2.suptitle(f"图2: 有压管道优选设计点\n目标流量 Q = {q_val:.1f} m³/s, 管材: {mat_name}",
@@ -954,8 +1002,8 @@ def run_batch_scan(
                         fig_sub2.tight_layout(rect=[0, 0, 1, 0.93])
                         png_name = f"图2_Q{q_val:.1f}_{safe_mat}.png"
                         png_path = os.path.join(png_dir, png_name)
-                        fig_sub2.savefig(png_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
-                        result.generated_pngs.append(png_path)
+                        actual_png2 = _safe_savefig(fig_sub2, png_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
+                        result.generated_pngs.append(actual_png2)
                         plt.close(fig_sub2)
 
                 plt.close(fig)

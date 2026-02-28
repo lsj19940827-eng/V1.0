@@ -188,9 +188,27 @@ class PressurePipePanel(QWidget):
 
         fl2.addWidget(self._hint("按默认参数范围批量扫描计算，生成 CSV / PDF"))
         self.batch_q_edit = self._field(fl2, "Q范围(起,止,步长):", "0.1,2.0,0.1")
-        self.batch_slope_edit = self._field(fl2, "坡度分母(逗号):", "500,750,1000,1500,2000,2500,3000,3500,4000")
-        self.batch_n_edit = self._field(fl2, "糙率 n:", "0.014")
         self.batch_length_edit = self._field(fl2, "管长 L (m):", "1000")
+
+        fl2.addWidget(self._sep())
+
+        # ---- 无压管道对比（折叠式） ----
+        self.batch_unpr_cb = CheckBox("启用无压管道对比")
+        self.batch_unpr_cb.setChecked(True)
+        self.batch_unpr_cb.stateChanged.connect(self._on_unpr_toggle)
+        fl2.addWidget(self.batch_unpr_cb)
+
+        self._unpr_container = QWidget()
+        _unpr_lay = QVBoxLayout(self._unpr_container)
+        _unpr_lay.setContentsMargins(16, 0, 0, 0)
+        _unpr_lay.setSpacing(4)
+        _unpr_lay.addWidget(self._hint(
+            "同时计算同管径无压（重力流）工况，\n"
+            "用于有压/无压流速与水损对比分析"
+        ))
+        self.batch_slope_edit = self._field(_unpr_lay, "坡度分母(逗号):", "500,750,1000,1500,2000,2500,3000,3500,4000")
+        self.batch_n_edit = self._field(_unpr_lay, "糙率 n:", "0.014")
+        fl2.addWidget(self._unpr_container)
 
         # 管材多选（默认全选）
         fl2.addWidget(self._slbl("【管材选择】"))
@@ -200,6 +218,27 @@ class PressurePipePanel(QWidget):
             cb_mat.setChecked(True)
             fl2.addWidget(cb_mat)
             self._mat_cbs[k] = cb_mat
+
+        fl2.addWidget(self._sep())
+
+        # 输出选项
+        fl2.addWidget(self._slbl("【输出选项】"))
+        self.out_csv_cb = CheckBox("CSV 计算结果")
+        self.out_csv_cb.setChecked(True)
+        self.out_csv_cb.setToolTip("包含所有工况的原始数据（管径/流速/水损等），可用Excel打开做后续分析")
+        fl2.addWidget(self.out_csv_cb)
+        self.out_pdf_cb = CheckBox("图表 PDF（流速水损对比 + 优选设计点）")
+        self.out_pdf_cb.setChecked(True)
+        self.out_pdf_cb.setToolTip("图1: 各管径的流速与水损对比图\n图2: 优选设计点（经济区/妥协区）分组展示\n按管材分别生成独立PDF文件")
+        fl2.addWidget(self.out_pdf_cb)
+        self.out_merged_cb = CheckBox("合并 PDF（所有图表合为一个文件）")
+        self.out_merged_cb.setChecked(True)
+        self.out_merged_cb.setToolTip("将上面所有图表PDF合并为一个完整文档，方便一次性查阅和打印")
+        fl2.addWidget(self.out_merged_cb)
+        self.out_png_cb = CheckBox("子图 PNG（每个Q值独立高清图 300DPI）")
+        self.out_png_cb.setChecked(True)
+        self.out_png_cb.setToolTip("为每个流量Q值生成独立的高清PNG图片（300DPI），适合插入Word报告或PPT")
+        fl2.addWidget(self.out_png_cb)
 
         fl2.addWidget(self._sep())
 
@@ -305,6 +344,9 @@ class PressurePipePanel(QWidget):
         enabled = self.inc_cb.isChecked()
         self.inc_edit.setVisible(enabled)
         self.inc_hint.setVisible(enabled)
+
+    def _on_unpr_toggle(self, _state):
+        self._unpr_container.setVisible(self.batch_unpr_cb.isChecked())
 
     def _show_initial_help(self):
         """初始帮助页"""
@@ -501,19 +543,21 @@ class PressurePipePanel(QWidget):
                           parent=self, position=InfoBarPosition.TOP_RIGHT, duration=4000)
             return
 
-        # 解析坡度分母
-        try:
-            slope_denoms = [int(x.strip()) for x in self.batch_slope_edit.text().strip().split(",")]
-        except Exception:
-            InfoBar.error(title="参数错误", content="坡度分母格式无效",
-                          parent=self, position=InfoBarPosition.TOP_RIGHT, duration=4000)
-            return
-
-        # 糙率
-        try:
-            n_unpr = float(self.batch_n_edit.text().strip())
-        except ValueError:
-            n_unpr = 0.014
+        # 解析无压对比参数
+        if self.batch_unpr_cb.isChecked():
+            try:
+                slope_denoms = [int(x.strip()) for x in self.batch_slope_edit.text().strip().split(",")]
+            except Exception:
+                InfoBar.error(title="参数错误", content="坡度分母格式无效",
+                              parent=self, position=InfoBarPosition.TOP_RIGHT, duration=4000)
+                return
+            try:
+                n_unpr = float(self.batch_n_edit.text().strip())
+            except ValueError:
+                n_unpr = 0.014
+        else:
+            slope_denoms = []
+            n_unpr = 0.0
 
         # 管长
         try:
@@ -536,6 +580,10 @@ class PressurePipePanel(QWidget):
             n_unpr=n_unpr,
             length_m=length_m,
             output_dir=output_dir,
+            output_csv=self.out_csv_cb.isChecked(),
+            output_pdf_charts=self.out_pdf_cb.isChecked(),
+            output_merged_pdf=self.out_merged_cb.isChecked(),
+            output_subplot_png=self.out_png_cb.isChecked(),
         )
 
         # 切换UI
