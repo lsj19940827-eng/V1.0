@@ -181,14 +181,32 @@ class _AddTab(QWidget):
         if len(mid) != 64 or not all(c in "0123456789abcdefABCDEF" for c in mid):
             self._infobar("error", "格式错误", "机器码应为 64 位十六进制字符串"); return
         rows = _load_ledger()
-        for r in rows:
-            if r["姓名"] == name and r["机器码"] == mid and r["状态"] == "有效":
-                dlg = MessageBox("已存在", f"{name} 此设备已有有效授权。\n是否重新生成授权码？", self._win)
-                if not dlg.exec(): return
+        same_mid_rows = [r for r in rows if r.get("机器码", "") == mid]
+        latest_same_mid = same_mid_rows[-1] if same_mid_rows else None
+
+        if latest_same_mid and latest_same_mid.get("状态") == "已吊销":
+            old_name = latest_same_mid.get("姓名", "（未知）")
+            dlg = MessageBox(
+                "发现吊销历史",
+                "该机器码在台账中有“已吊销”记录。\n"
+                f"最近一次记录姓名：{old_name}\n\n"
+                "这通常是同一设备机器码波动或重复登记导致。\n"
+                "建议先确认是否为同一台设备，再继续生成授权码。",
+                self._win,
+            )
+            dlg.yesButton.setText("继续生成")
+            dlg.cancelButton.setText("取消")
+            if not dlg.exec():
+                return
+        elif latest_same_mid and latest_same_mid.get("状态") == "有效":
+            old_name = latest_same_mid.get("姓名", "（未知）")
+            dlg = MessageBox("已存在", f"该设备已有有效授权（姓名：{old_name}）。\n是否重新生成授权码？", self._win)
+            if not dlg.exec(): return
         expire_str = exp if exp else "(永久)"
         row = {"姓名": name, "机器码": mid, "授权时间": datetime.today().strftime("%Y-%m-%d"),
                "过期时间": expire_str, "状态": "有效"}
-        rows = [r for r in rows if not (r["姓名"] == name and r["机器码"] == mid)]
+        # 同一机器码只保留一条最新记录，避免重复授权记录堆积
+        rows = [r for r in rows if r.get("机器码", "") != mid]
         rows.append(row); _save_ledger(rows); self._win._async_sync(rows)
         code = _lic_to_code(_generate_lic(row))
         self._infobar("success", "成功", f"已生成 {name} 的授权码，台账正在同步")

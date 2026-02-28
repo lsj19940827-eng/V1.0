@@ -264,6 +264,10 @@ def build(bump: str = None):
         "startinpy",
         "scipy", "scipy.spatial",
         "docx", "latex2mathml", "lxml",
+        # ---- 有压管道设计 ----
+        "seaborn", "pypdf",
+        "scipy", "scipy.optimize",
+        "有压管道设计",
         # ---- 渠系建筑物断面计算（无 __init__.py，sys.path hack 导入） ----
         "明渠设计",
         "渡槽设计",
@@ -306,6 +310,7 @@ def build(bump: str = None):
     # ezdxf 内置字体和 DXF 模板； qfluentwidgets 内置图标和 QSS 样式表
     args.append("--collect-data=ezdxf")
     args.append("--collect-data=matplotlib")
+    args.append("--collect-data=seaborn")
     args.append("--collect-all=qfluentwidgets")
 
     # ---- 添加资源文件（仅图片/图标/JSON/Excel 等，不包含 .py 源码） ----

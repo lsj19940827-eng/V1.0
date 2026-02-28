@@ -92,13 +92,56 @@ def _get_disk_serial():
     return ""
 
 
-def get_machine_id():
-    """生成当前机器的硬件指纹（SHA256 hex）"""
+def _get_machine_guid():
+    """读取 Windows MachineGuid（通常比网卡集合更稳定）"""
+    try:
+        result = subprocess.check_output(
+            ["reg", "query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"],
+            timeout=5, stderr=subprocess.DEVNULL
+        ).decode("gbk", errors="ignore")
+        for line in result.splitlines():
+            line = line.strip()
+            if "MachineGuid" in line:
+                parts = line.split()
+                if parts:
+                    return parts[-1].strip().upper()
+    except Exception:
+        pass
+    return ""
+
+
+def _get_machine_id_legacy():
+    """旧版机器码算法（保留兼容，避免老授权立即失效）"""
     macs = _get_physical_macs()
     disk = _get_disk_serial()
     hostname = platform.node()
     raw = "|".join(macs) + "||" + disk + "||" + hostname
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _get_machine_id_primary():
+    """新版稳定机器码：优先 MachineGuid，失败时回退旧算法"""
+    guid = _get_machine_guid()
+    if guid:
+        raw = f"MGUID||{guid}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return _get_machine_id_legacy()
+
+
+def get_machine_id_candidates():
+    """返回当前设备可接受的机器码候选（主算法 + 兼容旧算法）"""
+    ids = []
+    primary = _get_machine_id_primary()
+    legacy = _get_machine_id_legacy()
+    for mid in (primary, legacy):
+        if mid and mid not in ids:
+            ids.append(mid)
+    return ids
+
+
+def get_machine_id():
+    """生成当前机器码（优先稳定主算法）"""
+    return get_machine_id_candidates()[0]
 
 
 # ============================================================
@@ -138,12 +181,19 @@ def _migrate_license_if_needed():
 # ============================================================
 # 在线黑名单
 # ============================================================
-def _fetch_blacklist_online():
+def _fetch_blacklist_online(force_refresh: bool = False, timeout: int = None):
     """从 GitHub Gist 拉取黑名单，返回机器码 set；失败返回 None"""
     try:
         import urllib.request
-        req = urllib.request.Request(_GIST_RAW_URL)
-        with urllib.request.urlopen(req, timeout=_ONLINE_TIMEOUT) as resp:
+        url = _GIST_RAW_URL
+        if force_refresh:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}_ts={int(time.time() * 1000)}"
+        req = urllib.request.Request(url)
+        if force_refresh:
+            req.add_header("Cache-Control", "no-cache")
+            req.add_header("Pragma", "no-cache")
+        with urllib.request.urlopen(req, timeout=timeout or _ONLINE_TIMEOUT) as resp:
             content = resp.read().decode("utf-8")
         ids = set()
         for line in content.splitlines():
@@ -478,8 +528,9 @@ def check_license() -> bool:
         return False
 
     # 4. 机器码验证
+    current_ids = set(get_machine_id_candidates())
     current_id = get_machine_id()
-    if data.get("machine_id") != current_id:
+    if data.get("machine_id") not in current_ids:
         activated = _show_activation_dialog(current_id, lic_path)
         if not activated:
             return False
@@ -495,6 +546,10 @@ def check_license() -> bool:
         if not _verify_hmac(data, sig):
             _show_error("授权文件无效（签名校验失败），\n请联系管理员重新获取。")
             return False
+        current_ids = set(get_machine_id_candidates())
+        if data.get("machine_id") not in current_ids:
+            _show_error("授权机器码不匹配，请重新联系管理员生成授权。")
+            return False
 
     # 5. 过期验证
     expire = data.get("expire", "")
@@ -509,13 +564,25 @@ def check_license() -> bool:
 
     # 6. 在线黑名单（支持离线缓存回退）
     online_ids = _fetch_blacklist_online()
+    fetched_online = online_ids is not None
     if online_ids is not None:
         _save_blacklist_cache(online_ids)
         blacklist = online_ids
     else:
         blacklist = _load_cached_blacklist()
 
-    if current_id in blacklist:
+    licensed_id = str(data.get("machine_id", "")).strip()
+    if licensed_id and licensed_id in blacklist:
+        # 命中吊销时做一次强制刷新复核，避免“刚恢复授权”与 CDN 缓存导致的误拦截
+        confirm_ids = _fetch_blacklist_online(force_refresh=True, timeout=max(_ONLINE_TIMEOUT + 2, 6))
+        if confirm_ids is not None:
+            _save_blacklist_cache(confirm_ids)
+            if licensed_id not in confirm_ids:
+                return True
+        elif fetched_online:
+            # 首次在线已判定吊销，复核失败时保守按吊销处理
+            pass
+
         _show_error("此授权已被管理员吊销。\n\n如有疑问请联系管理员。")
         return False
 

@@ -3,7 +3,7 @@
 渠系建筑物水力计算系统 —— 主入口
 
 侧边导航 + 面板切换框架
-支持模块：明渠设计、渡槽设计、隧洞设计、矩形暗涵设计、倒虹吸设计、批量计算、推求水面线
+支持模块：明渠设计、渡槽设计、隧洞设计、矩形暗涵设计、倒虹吸设计、有压管道设计、批量计算、推求水面线
 """
 
 import sys
@@ -40,6 +40,7 @@ from 渠系断面设计.culvert.panel import CulvertPanel
 from 渠系断面设计.batch.panel import BatchPanel
 from 渠系断面设计.siphon.panel import SiphonPanel
 from 渠系断面设计.water_profile.panel import WaterProfilePanel
+from 渠系断面设计.pressure_pipe.panel import PressurePipePanel
 _EARTHWORK_AVAILABLE = False
 
 
@@ -217,6 +218,7 @@ class MainWindow(QMainWindow):
             ("隧洞设计", "圆形/圆拱直墙/马蹄形"),
             ("矩形暗涵设计", "经济最优断面/指定参数"),
             ("倒虹吸设计", "倒虹吸管水力计算"),
+            ("有压管道设计", "有压管道水力计算"),
             ("批量计算", "多流量段批量水力计算"),
             ("推求水面线", "水面线推求与纵剖面"),
         ]
@@ -286,6 +288,7 @@ class MainWindow(QMainWindow):
         self.tunnel_panel = TunnelPanel()
         self.culvert_panel = CulvertPanel()
         self.siphon_panel = SiphonPanel()
+        self.pressure_pipe_panel = PressurePipePanel()
         self.batch_panel = BatchPanel()
         self.water_profile_panel = WaterProfilePanel()
         self.stack.addWidget(self.open_channel_panel)
@@ -293,6 +296,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.tunnel_panel)
         self.stack.addWidget(self.culvert_panel)
         self.stack.addWidget(self.siphon_panel)
+        self.stack.addWidget(self.pressure_pipe_panel)
         self.stack.addWidget(self.batch_panel)
         self.stack.addWidget(self.water_profile_panel)
         if _EARTHWORK_AVAILABLE:
@@ -354,7 +358,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self._nav_buttons):
             btn.set_selected(i == index)
-        names = ["明渠设计", "渡槽设计", "隧洞设计", "矩形暗涵设计", "倒虹吸设计", "批量计算", "推求水面线"]
+        names = ["明渠设计", "渡槽设计", "隧洞设计", "矩形暗涵设计", "倒虹吸设计", "有压管道设计", "批量计算", "推求水面线"]
         if index < len(names):
             self.statusBar().showMessage(f"当前模块: {names[index]}", 5000)
 
