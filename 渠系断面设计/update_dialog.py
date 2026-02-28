@@ -232,7 +232,7 @@ class UpdateDialog(QDialog):
                 f"<h3>新版本 V{info.latest_version}</h3>",
                 f"<p style='color:#666;'>发布日期：{info.release_date}</p>",
             ]
-            if info.has_patch and info.patch_size_mb:
+            if info.can_use_patch and info.patch_size_mb:
                 changelog_lines.append(
                     f"<p style='color:#666;'>补丁包：{info.patch_size_mb:.1f} MB"
                     f"（全量包 {info.file_size_mb:.1f} MB）</p>"
@@ -280,7 +280,7 @@ class UpdateDialog(QDialog):
 
         # 优先下载补丁包
         info = self._update_info
-        if info.has_patch:
+        if info.can_use_patch:
             self._is_patch = True
             url = info.patch_url
             self._btn_download.setText("正在下载补丁包...")

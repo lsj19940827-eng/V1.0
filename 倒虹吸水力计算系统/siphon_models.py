@@ -313,6 +313,8 @@ class LongitudinalNode:
     slope_after: float = 0.0            # 离开该点的坡角 β (弧度)
     arc_center_s: Optional[float] = None  # 竖曲线弧心桩号坐标 Sc（仅 ARC 型有效）
     arc_center_z: Optional[float] = None  # 竖曲线弧心高程坐标 Zc（仅 ARC 型有效）
+    arc_end_chainage: Optional[float] = None  # 竖曲线弧终点桩号（仅 ARC 型有效，供区间重叠检测）
+    arc_theta_rad: Optional[float] = None    # 竖曲线圆心角 θ (弧度)（仅 ARC 型有效，供精确弧长计算）
     
     def to_dict(self) -> dict:
         return {
@@ -325,6 +327,8 @@ class LongitudinalNode:
             "slope_after": self.slope_after,
             "arc_center_s": self.arc_center_s,
             "arc_center_z": self.arc_center_z,
+            "arc_end_chainage": self.arc_end_chainage,
+            "arc_theta_rad": self.arc_theta_rad,
         }
     
     @staticmethod
@@ -344,6 +348,8 @@ class LongitudinalNode:
             slope_after=d.get("slope_after", 0.0),
             arc_center_s=d.get("arc_center_s", None),
             arc_center_z=d.get("arc_center_z", None),
+            arc_end_chainage=d.get("arc_end_chainage", None),
+            arc_theta_rad=d.get("arc_theta_rad", None),
         )
 
 
@@ -442,6 +448,19 @@ class SpatialNode:
     effective_radius: float = 0.0       # 用于查表的有效半径 (m)
     effective_turn_type: TurnType = TurnType.NONE  # 用于查表的转弯类型
     
+    # 竖曲线弧段标记（供精确弧长计算，风险点D）
+    long_arc_end_chainage: Optional[float] = None  # 该节点为竖曲线弧起点时，弧终点桩号
+    long_arc_theta_rad: Optional[float] = None     # 该节点为竖曲线弧起点时，圆心角 θ (弧度)
+
+    # v5.0 新增：解析精确的方位角/坡角/切向量（不依赖坐标差近似）
+    alpha_before_rad: float = 0.0   # 前方位角（数学角 rad，解析精确）
+    alpha_after_rad: float = 0.0    # 后方位角（数学角 rad，解析精确）
+    beta_before_rad: float = 0.0    # 前坡角（rad，解析精确）；与 slope_before 保持同步
+    beta_after_rad: float = 0.0     # 后坡角（rad，解析精确）；与 slope_after 保持同步
+    T_before: Tuple[float, float, float] = field(default_factory=lambda: (1., 0., 0.))
+    T_after:  Tuple[float, float, float] = field(default_factory=lambda: (1., 0., 0.))
+    theta_3d_node: float = 0.0      # 节点折转角（rad）
+
     @property
     def has_turn(self) -> bool:
         return self.has_plan_turn or self.has_long_turn
@@ -461,3 +480,72 @@ class SpatialMergeResult:
     computation_steps: List[str] = field(default_factory=list)
     has_plan_data: bool = False
     has_longitudinal_data: bool = False
+    # v5.0 新增
+    bend_events: List['BendEvent'] = field(default_factory=list)      # 弯道事件表（供局损查表）
+    plan_segments: List['PlanSegment'] = field(default_factory=list)  # 平面分段序列
+    profile_segments: List['ProfileSegment'] = field(default_factory=list)  # 纵断面分段序列
+
+
+# ==============================================================================
+# v5.0 新增：分段解析几何数据类
+# ==============================================================================
+
+@dataclass
+class PlanSegment:
+    """
+    平面轴线解析分段（§4 严格数学版）
+    
+    覆盖 s∈[s_start, s_end] 的平面几何，可精确求值 x(s), y(s), α(s)。
+    """
+    seg_type: str = 'LINE'          # 'LINE' / 'ARC'
+    s_start: float = 0.             # 段起桩号 (m)
+    s_end: float = 0.               # 段终桩号 (m)
+    # LINE 字段
+    p_start: Tuple[float, float] = field(default_factory=lambda: (0., 0.))
+    direction: Tuple[float, float] = field(default_factory=lambda: (1., 0.))
+    # ARC 字段
+    center: Tuple[float, float] = field(default_factory=lambda: (0., 0.))
+    R_h: float = 0.                 # 半径 (m)
+    epsilon: int = 1                # +1=左转(CCW), -1=右转(CW)
+    theta_0: float = 0.             # BC点极角 atan2(y_BC-Cy, x_BC-Cx)
+
+
+@dataclass
+class ProfileSegment:
+    """
+    纵断面轴线解析分段（§5 严格数学版）
+    
+    覆盖 s∈[s_start, s_end] 的纵断面几何，可精确求值 z(s), β(s)。
+    """
+    seg_type: str = 'LINE'          # 'LINE' / 'ARC'
+    s_start: float = 0.             # 段起桩号 (m)
+    s_end: float = 0.               # 段终桩号 (m)
+    # LINE 字段
+    z_start: float = 0.             # 起点高程 (m)
+    k: float = 0.                   # 斜率 dz/ds（无量纲）
+    # ARC 字段
+    R_v: float = 0.                 # 半径 (m)
+    Sc: float = 0.                  # 圆心桩号坐标 (m)
+    Zc: float = 0.                  # 圆心高程坐标 (m)
+    eta: int = 1                    # +1/-1，由 z(S1)=Z1 确定
+    theta_arc: float = 0.           # 圆心角 θ (rad)
+
+
+@dataclass
+class BendEvent:
+    """
+    弯道事件（§10-§11 严格数学版）
+    
+    以区间 [s_a, s_b] 定义，包含事件空间长度、转角和等效半径。
+    等效半径严格定义为 R_eff = L_event / θ_event（几何自洽）。
+    """
+    s_a: float = 0.                 # 事件起桩号 (m)
+    s_b: float = 0.                 # 事件终桩号 (m)
+    event_type: str = 'PLAN'        # 'PLAN' / 'VERTICAL' / 'COMPOSITE'
+    turn_style: TurnType = TurnType.ARC  # ARC / FOLD
+    L_event: float = 0.             # 空间长度（§9解析积分，m）
+    theta_event: float = 0.         # 空间转角（rad）
+    R_eff: float = 0.               # 等效半径 = L/θ (m)；θ=0时为 inf
+    R_h: float = 0.                 # 平面半径（可选，m）
+    R_v: float = 0.                 # 纵断半径（可选，m）
+    R_3d_mid: float = 0.            # 事件中点曲率半径（可选诊断，m）

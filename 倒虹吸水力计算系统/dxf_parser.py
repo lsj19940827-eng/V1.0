@@ -508,6 +508,8 @@ class DxfParser:
                 
                 # 弧起点节点（ARC 类型）
                 px, py = seg['p1']
+                ex_ch = seg['p2'][0] + chainage_offset
+                arc_theta = math.radians(seg['arc_angle_deg'])
                 nodes.append(LongitudinalNode(
                     chainage=px + chainage_offset, elevation=py,
                     turn_type=TurnType.ARC,
@@ -516,6 +518,8 @@ class DxfParser:
                     slope_before=slope_before, slope_after=slope_after,
                     arc_center_s=seg['Sc'] + chainage_offset,
                     arc_center_z=seg['Zc'],
+                    arc_end_chainage=ex_ch,
+                    arc_theta_rad=arc_theta,
                 ))
                 
                 # 弧终点节点（NONE 参考点，供区间端点插值用）

@@ -215,6 +215,12 @@ class FrozenColumnTableWidget(QTableWidget):
                 self._frozen_view.horizontalHeader().setFixedHeight(main_hh)
         self._update_frozen_geometry()
 
+    def updateGeometries(self):
+        """Qt 在表格内部几何变化时调用（行头宽度、滚动条等），
+        同步刷新冻结视图位置，避免行数变化导致行头宽度改变后冻结列偏移。"""
+        super().updateGeometries()
+        self._update_frozen_geometry()
+
     def moveCursor(self, cursor_action, modifiers):
         current = super().moveCursor(cursor_action, modifiers)
         frozen_width = sum(

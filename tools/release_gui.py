@@ -96,6 +96,58 @@ def _get_token() -> str:
     return token
 
 
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def _version_key(v: str) -> tuple:
+    m = _VERSION_RE.match((v or "").strip())
+    if not m:
+        return (0, 0, 0)
+    return tuple(int(x) for x in m.groups())
+
+
+def _load_patch_assets(dist_dir: str, version: str) -> list:
+    patch_info_file = os.path.join(dist_dir, "patch-info.json")
+    patches = []
+
+    if os.path.exists(patch_info_file):
+        try:
+            with open(patch_info_file, "r", encoding="utf-8") as f:
+                patch_info = json.load(f)
+            for item in patch_info.get("patches", []):
+                base_version = str(item.get("base_version", "")).strip()
+                path = item.get("file_path", "")
+                if not path:
+                    file_name = item.get("file_name", "")
+                    if file_name:
+                        path = os.path.join(dist_dir, file_name)
+                if not base_version or not path or not os.path.exists(path):
+                    continue
+                patches.append(
+                    {
+                        "base_version": base_version,
+                        "file_path": path,
+                        "size_mb": round(os.path.getsize(path) / (1024 * 1024), 2),
+                    }
+                )
+        except Exception:
+            patches = []
+
+    if not patches:
+        legacy_patch = os.path.join(dist_dir, f"{APP_NAME_EN}-V{version}-patch.zip")
+        if os.path.exists(legacy_patch):
+            patches.append(
+                {
+                    "base_version": "",
+                    "file_path": legacy_patch,
+                    "size_mb": round(os.path.getsize(legacy_patch) / (1024 * 1024), 2),
+                }
+            )
+
+    patches.sort(key=lambda x: _version_key(x.get("base_version", "")))
+    return patches
+
+
 def _github_api(method, url, token, data=None, raw_body=None,
                 content_type="application/json"):
     body = None
@@ -197,17 +249,22 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
         # 找到产物
         dist_dir = os.path.join(PROJECT_ROOT, "dist")
         full_zip = os.path.join(dist_dir, f"{APP_NAME_EN}-V{new_ver}.zip")
-        patch_zip = os.path.join(dist_dir, f"{APP_NAME_EN}-V{new_ver}-patch.zip")
 
         if not os.path.exists(full_zip):
             raise RuntimeError(f"找不到全量包: {full_zip}")
 
         full_mb = os.path.getsize(full_zip) / (1024 * 1024)
         log(f"全量包: {full_mb:.1f} MB", S)
-        has_patch = os.path.exists(patch_zip)
-        if has_patch:
-            patch_mb = os.path.getsize(patch_zip) / (1024 * 1024)
-            log(f"补丁包: {patch_mb:.2f} MB", S)
+        patch_assets = _load_patch_assets(dist_dir, new_ver)
+        if patch_assets:
+            log(f"补丁包数量: {len(patch_assets)}", S)
+            for p in patch_assets:
+                base_ver = p.get("base_version") or "unknown"
+                log(
+                    f"补丁 V{base_ver} -> V{new_ver}: "
+                    f"{os.path.basename(p['file_path'])} ({p['size_mb']:.2f} MB)",
+                    S,
+                )
 
         bridge.progress_signal.emit(100)
         set_step(2, "done")
@@ -258,11 +315,15 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
         download_url = _upload_release_asset(upload_url, full_zip, token, bridge)
         log(f"全量包上传完成", S)
 
-        patch_url_remote = ""
-        if has_patch:
-            log(f"上传补丁包 ({patch_mb:.2f} MB)...")
-            patch_url_remote = _upload_release_asset(upload_url, patch_zip, token, bridge)
-            log(f"补丁包上传完成", S)
+        patch_urls = {}
+        for patch in patch_assets:
+            base_ver = str(patch.get("base_version", "")).strip()
+            file_path = patch.get("file_path", "")
+            if not base_ver or not file_path or not os.path.exists(file_path):
+                continue
+            log(f"上传补丁 V{base_ver} -> V{new_ver} ({patch['size_mb']:.2f} MB)...")
+            patch_urls[base_ver] = _upload_release_asset(upload_url, file_path, token, bridge)
+            log(f"补丁上传完成: V{base_ver} -> V{new_ver}", S)
 
         set_step(5, "done")
 
@@ -276,9 +337,26 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
             "min_version": "1.0.0",
             "file_size_mb": round(full_mb, 1),
         }
-        if patch_url_remote:
-            version_json["patch_url"] = patch_url_remote
-            version_json["patch_size_mb"] = round(patch_mb, 2)
+
+        patch_map = {}
+        for patch in patch_assets:
+            base_ver = str(patch.get("base_version", "")).strip()
+            if not base_ver:
+                continue
+            patch_url = patch_urls.get(base_ver, "")
+            if not patch_url:
+                continue
+            patch_map[base_ver] = {
+                "url": patch_url,
+                "size_mb": patch.get("size_mb", 0),
+            }
+
+        if patch_map:
+            version_json["patches"] = patch_map
+            primary_base = sorted(patch_map.keys(), key=_version_key)[-1]
+            version_json["patch_url"] = patch_map[primary_base]["url"]
+            version_json["patch_size_mb"] = patch_map[primary_base]["size_mb"]
+            version_json["patch_base_version"] = primary_base
 
         gist_url = f"https://api.github.com/gists/{GIST_ID}"
         gist_data = {
@@ -313,16 +391,13 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
                 gitee_rel_id = gitee_rel["id"]
                 log("Gitee Release 创建成功", S)
 
-                for key in ["full_zip", "patch_zip"]:
-                    fpath = {"full_zip": full_zip, "patch_zip": patch_zip if has_patch else None}.get(key)
-                    if not fpath or not os.path.exists(fpath):
-                        continue
-                    fname = os.path.basename(fpath)
+                def _upload_to_gitee(file_path: str) -> str:
+                    fname = os.path.basename(file_path)
                     log(f"上传到 Gitee: {fname}...")
                     boundary = "----CanalBoundary"
                     body = f"--{boundary}\r\nContent-Disposition: form-data; name=\"access_token\"\r\n\r\n{gitee_token}\r\n".encode()
                     body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{fname}\"\r\nContent-Type: application/zip\r\n\r\n".encode()
-                    with open(fpath, "rb") as f:
+                    with open(file_path, "rb") as f:
                         body += f.read()
                     body += f"\r\n--{boundary}--\r\n".encode()
                     up_url = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/releases/{gitee_rel_id}/attach_files"
@@ -330,12 +405,26 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
                     req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
                     with urllib.request.urlopen(req, timeout=600) as resp:
                         asset = json.loads(resp.read().decode("utf-8"))
-                        dl = asset.get("browser_download_url", "")
-                        if key == "full_zip":
-                            gitee_urls["download_url"] = dl
-                        else:
-                            gitee_urls["patch_url"] = dl
                     log(f"Gitee 上传完成: {fname}", S)
+                    return asset.get("browser_download_url", "")
+
+                gitee_urls["download_url"] = _upload_to_gitee(full_zip)
+
+                gitee_patch_map = {}
+                for patch in patch_assets:
+                    base_ver = str(patch.get("base_version", "")).strip()
+                    file_path = patch.get("file_path", "")
+                    if not base_ver or not file_path or not os.path.exists(file_path):
+                        continue
+                    gitee_patch_map[base_ver] = {
+                        "url": _upload_to_gitee(file_path),
+                        "size_mb": patch.get("size_mb", 0),
+                    }
+                if gitee_patch_map:
+                    gitee_urls["patches"] = gitee_patch_map
+                    primary_base = sorted(gitee_patch_map.keys(), key=_version_key)[-1]
+                    gitee_urls["patch_url"] = gitee_patch_map[primary_base]["url"]
+                    gitee_urls["patch_base_version"] = primary_base
             except Exception as e:
                 log(f"Gitee 发布失败: {e}（不影响 GitHub）", W)
         else:
@@ -354,9 +443,13 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
                     "min_version": "1.0.0",
                     "file_size_mb": round(full_mb, 1),
                 }
-                if "patch_url" in gitee_urls and has_patch:
-                    gvdata["patch_url"] = gitee_urls["patch_url"]
-                    gvdata["patch_size_mb"] = round(patch_mb, 2)
+                gitee_patch_map = gitee_urls.get("patches", {})
+                if gitee_patch_map:
+                    gvdata["patches"] = gitee_patch_map
+                    primary_base = sorted(gitee_patch_map.keys(), key=_version_key)[-1]
+                    gvdata["patch_url"] = gitee_patch_map[primary_base]["url"]
+                    gvdata["patch_size_mb"] = gitee_patch_map[primary_base]["size_mb"]
+                    gvdata["patch_base_version"] = primary_base
                 content_b64 = base64.b64encode(
                     json.dumps(gvdata, ensure_ascii=False, indent=4).encode("utf-8")
                 ).decode("ascii")
@@ -386,18 +479,31 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
         # ---- 9. 同步到局域网共享 ----
         set_step(9, "running")
         if os.path.isdir(LAN_UPDATE_DIR):
-            for src_path in [full_zip, patch_zip if has_patch else None]:
+            copied = set()
+            for src_path in [full_zip]:
                 if src_path and os.path.exists(src_path):
                     dest = os.path.join(LAN_UPDATE_DIR, os.path.basename(src_path))
                     shutil.copy2(src_path, dest)
                     log(f"已复制: {os.path.basename(src_path)}", S)
+                    copied.add(os.path.abspath(src_path))
+            for patch in patch_assets:
+                src_path = patch.get("file_path", "")
+                if not src_path or not os.path.exists(src_path):
+                    continue
+                abs_path = os.path.abspath(src_path)
+                if abs_path in copied:
+                    continue
+                dest = os.path.join(LAN_UPDATE_DIR, os.path.basename(src_path))
+                shutil.copy2(src_path, dest)
+                log(f"已复制: {os.path.basename(src_path)}", S)
+                copied.add(abs_path)
             vj_path = os.path.join(LAN_UPDATE_DIR, "version.json")
             with open(vj_path, "w", encoding="utf-8") as f:
                 json.dump(version_json, f, ensure_ascii=False, indent=4)
             log(f"局域网同步完成: {LAN_UPDATE_DIR}", S)
         else:
             log(f"局域网共享不可访问，跳过（同事仍可通过 GitHub 更新）", W)
-        set_step(7, "done")
+        set_step(9, "done")
 
         bridge.finished_signal.emit(True, f"V{new_ver} 发版完成！")
 

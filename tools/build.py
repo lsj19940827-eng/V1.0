@@ -14,7 +14,9 @@
 """
 
 import argparse
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +27,15 @@ import zipfile
 # ============================================================
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from version import APP_VERSION, APP_NAME, APP_NAME_EN
+
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def _version_key(v: str) -> tuple:
+    m = _VERSION_RE.match((v or "").strip())
+    if not m:
+        return (0, 0, 0)
+    return tuple(int(x) for x in m.groups())
 
 
 def bump_version(level: str) -> str:
@@ -108,6 +119,7 @@ PYSIDE6_UNUSED_MODULES = [
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST_DIR = os.path.join(PROJECT_ROOT, "dist")
 BUILD_DIR = os.path.join(PROJECT_ROOT, "build")
+MANIFEST_STORE_DIR = os.path.join(PROJECT_ROOT, ".release-manifests")
 MAIN_SCRIPT = os.path.join(PROJECT_ROOT, "main.py")
 ICON_FILE = os.path.join(PROJECT_ROOT, "icon.ico")
 
@@ -344,28 +356,78 @@ def build(bump: str = None):
     from patch_builder import diff_manifests, build_patch_zip
 
     new_manifest = generate_manifest(dist_folder)
-    manifest_path = os.path.join(DIST_DIR, f"manifest-V{APP_VERSION}.json")
+    manifest_name = f"manifest-V{APP_VERSION}.json"
+    manifest_path = os.path.join(DIST_DIR, manifest_name)
     save_manifest(new_manifest, manifest_path)
+    os.makedirs(MANIFEST_STORE_DIR, exist_ok=True)
+    store_manifest_path = os.path.join(MANIFEST_STORE_DIR, manifest_name)
+    save_manifest(new_manifest, store_manifest_path)
 
-    # ---- 自动检测旧版 manifest，有则生成增量补丁包 ----
+    # ---- 自动检测旧版 manifest，生成多基线增量补丁包 ----
     patch_path = None
-    old_manifests = sorted([
-        f for f in os.listdir(DIST_DIR)
-        if f.startswith("manifest-V") and f.endswith(".json")
-        and f != f"manifest-V{APP_VERSION}.json"
-    ])
+    patch_assets = []
+    old_manifests = sorted(
+        [
+            f for f in os.listdir(MANIFEST_STORE_DIR)
+            if f.startswith("manifest-V") and f.endswith(".json")
+            and f != f"manifest-V{APP_VERSION}.json"
+        ],
+        key=lambda x: _version_key(x.replace("manifest-V", "").replace(".json", "")),
+    )
+
+    patch_info_path = os.path.join(DIST_DIR, "patch-info.json")
+    if os.path.exists(patch_info_path):
+        os.remove(patch_info_path)
+
     if old_manifests:
-        old_manifest_file = os.path.join(DIST_DIR, old_manifests[-1])
-        print(f"  [patch] 发现旧版清单: {old_manifests[-1]}")
-        old_manifest = load_manifest(old_manifest_file)
-        diff = diff_manifests(old_manifest, new_manifest)
-        if diff.has_changes:
+        for manifest_name in old_manifests:
+            old_manifest_file = os.path.join(MANIFEST_STORE_DIR, manifest_name)
+            base_ver = manifest_name.replace("manifest-V", "").replace(".json", "")
+            print(f"  [patch] 旧版清单: {manifest_name}")
+            old_manifest = load_manifest(old_manifest_file)
+            diff = diff_manifests(old_manifest, new_manifest)
+            if not diff.has_changes:
+                print(f"  [patch] V{base_ver} -> V{APP_VERSION} 无变化，跳过")
+                continue
+
             print(diff.summary())
-            patch_name = f"{APP_NAME_EN}-V{APP_VERSION}-patch.zip"
-            patch_path = os.path.join(DIST_DIR, patch_name)
-            build_patch_zip(dist_folder, diff, patch_path, new_manifest)
+            patch_name = f"{APP_NAME_EN}-V{APP_VERSION}-from-V{base_ver}-patch.zip"
+            patch_out = os.path.join(DIST_DIR, patch_name)
+            build_patch_zip(dist_folder, diff, patch_out, new_manifest)
+            patch_assets.append(
+                {
+                    "base_version": base_ver,
+                    "file_name": patch_name,
+                    "file_path": patch_out,
+                    "size_mb": round(os.path.getsize(patch_out) / (1024 * 1024), 2),
+                }
+            )
+
+        if patch_assets:
+            patch_assets.sort(key=lambda x: _version_key(x["base_version"]))
+            primary = patch_assets[-1]
+
+            # 兼容旧流程：继续产出单补丁文件名
+            legacy_patch_name = f"{APP_NAME_EN}-V{APP_VERSION}-patch.zip"
+            legacy_patch_path = os.path.join(DIST_DIR, legacy_patch_name)
+            if os.path.abspath(primary["file_path"]) != os.path.abspath(legacy_patch_path):
+                shutil.copy2(primary["file_path"], legacy_patch_path)
+            patch_path = legacy_patch_path
+
+            patch_info = {
+                "latest_version": APP_VERSION,
+                "generated_at": new_manifest.get("build_time", ""),
+                "base_version": primary["base_version"],
+                "patch_name": legacy_patch_name,
+                "primary_base_version": primary["base_version"],
+                "primary_file_name": primary["file_name"],
+                "patches": patch_assets,
+            }
+            with open(patch_info_path, "w", encoding="utf-8") as f:
+                json.dump(patch_info, f, ensure_ascii=False, indent=2)
+            print(f"  [patch] 已生成 {len(patch_assets)} 个增量补丁")
         else:
-            print("  [patch] 没有文件变化，跳过补丁包生成。")
+            print("  [patch] 所有旧版本对比均无变化，跳过补丁包生成。")
     else:
         print("  [patch] 未找到旧版 manifest，跳过补丁包（首次打包）。")
 
@@ -399,6 +461,7 @@ def build(bump: str = None):
         patch_mb = os.path.getsize(patch_path) / (1024 * 1024)
         print(f"  补丁包: {patch_path} ({patch_mb:.2f} MB)")
     print(f"  清  单: {manifest_path}")
+    print(f"  基线清单仓库: {MANIFEST_STORE_DIR}")
     print(f"")
     print(f"  发版步骤:")
     print(f"  1. 上传全量 zip + 补丁 zip 到 GitHub Releases")
