@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>候选管径表格布局方案对比</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; background: #f0f2f5; padding: 24px; color: #333; }
+  h1 { font-size: 20px; margin-bottom: 20px; color: #1a1a1a; }
+  .scheme { background: #fff; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); padding: 20px; margin-bottom: 28px; }
+  .scheme-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .scheme-badge { display: inline-block; padding: 3px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; color: #fff; }
+  .badge-a { background: #0078d4; }
+  .badge-b { background: #e67e22; }
+  .badge-c { background: #27ae60; }
+  .scheme-title { font-size: 16px; font-weight: 600; }
+  .scheme-desc { font-size: 13px; color: #888; margin-bottom: 12px; line-height: 1.6; }
+  .pros-cons { display: flex; gap: 24px; margin-bottom: 14px; font-size: 12px; }
+  .pros-cons div { flex: 1; padding: 8px 12px; border-radius: 6px; }
+  .pros { background: #f0faf0; color: #2e7d32; }
+  .cons { background: #fff8f0; color: #e65100; }
+  .pros-cons strong { display: block; margin-bottom: 4px; }
+
+  /* Simulate the tab container */
+  .tab-container { border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden; }
+  .tab-bar { display: flex; background: #fafafa; border-bottom: 1px solid #e0e0e0; }
+  .tab-bar span { padding: 8px 20px; font-size: 13px; color: #666; cursor: default; }
+  .tab-bar span.active { background: #fff; color: #0078d4; font-weight: 600; border-bottom: 2px solid #0078d4; }
+  .tab-content { background: #fff; padding: 8px; min-height: 220px; }
+
+  /* Tables */
+  table { border-collapse: collapse; font-size: 13px; }
+  th { background: #f8f9fa; color: #555; font-weight: 600; padding: 8px 6px; border: 1px solid #e8e8e8; white-space: nowrap; }
+  td { padding: 7px 6px; border: 1px solid #e8e8e8; text-align: center; }
+  tr:nth-child(even) { background: #fafcff; }
+  tr:hover { background: #f0f7ff; }
+
+  /* Scheme A: stretch all proportionally */
+  .table-a { width: 100%; table-layout: auto; }
+  .table-a th:first-child, .table-a td:first-child { width: 30px; }
+  .table-a th:nth-child(9), .table-a td:nth-child(9) { width: 50px; }
+
+  /* Scheme B: data fixed, 标记 stretch */
+  .table-b { width: 100%; table-layout: fixed; }
+  .table-b th:nth-child(1) { width: 30px; }
+  .table-b th:nth-child(2) { width: 60px; }
+  .table-b th:nth-child(3) { width: 60px; }
+  .table-b th:nth-child(4) { width: 70px; }
+  .table-b th:nth-child(5) { width: 80px; }
+  .table-b th:nth-child(6) { width: 80px; }
+  .table-b th:nth-child(7) { width: 90px; }
+  .table-b th:nth-child(8) { width: 70px; }
+  .table-b th:nth-child(9) { width: 50px; }
+  /* 标记列: auto fills remaining */
+
+  /* Scheme C: compact, table doesn't fill width */
+  .table-c-wrapper { overflow-x: auto; }
+  .table-c { width: auto; }
+  .table-c th, .table-c td { padding: 7px 10px; }
+
+  .tag-eco { color: #2e7d32; font-weight: 600; }
+  .tag-comp { color: #e67e22; font-weight: 600; }
+  .tag-last { color: #c62828; font-weight: 600; }
+  .flag { color: #999; font-size: 12px; }
+
+  .legend-card { display: inline-block; margin-left: 16px; padding: 10px 16px; background: #f8fafc; border: 1px solid #e8e8e8; border-radius: 8px; font-size: 12px; color: #666; vertical-align: top; }
+  .legend-card strong { color: #333; }
+  .legend-item { margin: 3px 0; }
+</style>
+</head>
+<body>
+
+<h1>候选管径表格 — 三种布局方案对比预览</h1>
+
+<!-- ============ 方案 A ============ -->
+<div class="scheme">
+  <div class="scheme-header">
+    <span class="scheme-badge badge-a">A</span>
+    <span class="scheme-title">智能比例填充 — 所有列均匀扩展填满区域</span>
+  </div>
+  <div class="scheme-desc">
+    "#" 和 "类别" 固定窄宽，其余 8 列按比例 Stretch 扩展，表格完整填满面板宽度。<br>
+    自适应窗口缩放，列间距均匀，无留白。
+  </div>
+  <div class="pros-cons">
+    <div class="pros"><strong>✓ 优点</strong>视觉饱满、自适应窗口缩放、实现简洁</div>
+    <div class="cons"><strong>✗ 缺点</strong>窗口极宽时数字列间距偏大</div>
+  </div>
+  <div class="tab-container">
+    <div class="tab-bar">
+      <span>计算结果</span><span class="active">候选管径</span><span>批量计算日志</span>
+    </div>
+    <div class="tab-content">
+      <table class="table-a">
+        <thead>
+          <tr><th>#</th><th>D(m)</th><th>D(mm)</th><th>V(m/s)</th><th>hf(m/km)</th><th>hj(m/km)</th><th>hf总(m/km)</th><th>H损(m)</th><th>类别</th><th>标记</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>0.700</td><td>700</td><td>1.2992</td><td>2.3399</td><td>0.3510</td><td>2.6909</td><td>2.6909</td><td class="tag-eco">经济</td><td></td></tr>
+          <tr><td>2</td><td>0.800</td><td>800</td><td>0.9947</td><td>1.2376</td><td>0.1856</td><td>1.4232</td><td>1.4232</td><td class="tag-eco">经济</td><td></td></tr>
+          <tr><td>3</td><td>0.900</td><td>900</td><td>0.7860</td><td>0.7056</td><td>0.1058</td><td>0.8115</td><td>0.8115</td><td class="tag-comp">妥协</td><td></td></tr>
+          <tr><td>4</td><td>1.000</td><td>1000</td><td>0.6366</td><td>0.4269</td><td>0.0640</td><td>0.4909</td><td>0.4909</td><td class="tag-comp">妥协</td><td></td></tr>
+          <tr><td>5</td><td>1.100</td><td>1100</td><td>0.5261</td><td>0.2709</td><td>0.0406</td><td>0.3116</td><td>0.3116</td><td class="tag-last">兜底</td><td class="flag">流速过低</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 方案 B ============ -->
+<div class="scheme">
+  <div class="scheme-header">
+    <span class="scheme-badge badge-b">B</span>
+    <span class="scheme-title">数据列固定 + 标记列弹性吸收</span>
+  </div>
+  <div class="scheme-desc">
+    数值列设定固定宽度（紧贴内容），仅 "标记" 列 Stretch 吸收剩余空间。<br>
+    数据区紧凑整齐，标记列自动填满右侧。
+  </div>
+  <div class="pros-cons">
+    <div class="pros"><strong>✓ 优点</strong>数据列对齐严谨、阅读性好</div>
+    <div class="cons"><strong>✗ 缺点</strong>标记列仍然偏宽（与之前类似）</div>
+  </div>
+  <div class="tab-container">
+    <div class="tab-bar">
+      <span>计算结果</span><span class="active">候选管径</span><span>批量计算日志</span>
+    </div>
+    <div class="tab-content">
+      <table class="table-b">
+        <thead>
+          <tr><th>#</th><th>D(m)</th><th>D(mm)</th><th>V(m/s)</th><th>hf(m/km)</th><th>hj(m/km)</th><th>hf总(m/km)</th><th>H损(m)</th><th>类别</th><th>标记</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>0.700</td><td>700</td><td>1.2992</td><td>2.3399</td><td>0.3510</td><td>2.6909</td><td>2.6909</td><td class="tag-eco">经济</td><td></td></tr>
+          <tr><td>2</td><td>0.800</td><td>800</td><td>0.9947</td><td>1.2376</td><td>0.1856</td><td>1.4232</td><td>1.4232</td><td class="tag-eco">经济</td><td></td></tr>
+          <tr><td>3</td><td>0.900</td><td>900</td><td>0.7860</td><td>0.7056</td><td>0.1058</td><td>0.8115</td><td>0.8115</td><td class="tag-comp">妥协</td><td></td></tr>
+          <tr><td>4</td><td>1.000</td><td>1000</td><td>0.6366</td><td>0.4269</td><td>0.0640</td><td>0.4909</td><td>0.4909</td><td class="tag-comp">妥协</td><td></td></tr>
+          <tr><td>5</td><td>1.100</td><td>1100</td><td>0.5261</td><td>0.2709</td><td>0.0406</td><td>0.3116</td><td>0.3116</td><td class="tag-last">兜底</td><td class="flag">流速过低</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 方案 C ============ -->
+<div class="scheme">
+  <div class="scheme-header">
+    <span class="scheme-badge badge-c">C</span>
+    <span class="scheme-title">内容紧凑 + 表格不拉伸（留白在外侧）</span>
+  </div>
+  <div class="scheme-desc">
+    所有列 ResizeToContents，表格仅占内容宽度，右侧留白区域可放图例/说明卡片。
+  </div>
+  <div class="pros-cons">
+    <div class="pros"><strong>✓ 优点</strong>数据最紧凑、列宽恰到好处</div>
+    <div class="cons"><strong>✗ 缺点</strong>右侧仍有留白（移到了表格外）</div>
+  </div>
+  <div class="tab-container">
+    <div class="tab-bar">
+      <span>计算结果</span><span class="active">候选管径</span><span>批量计算日志</span>
+    </div>
+    <div class="tab-content" style="display:flex; align-items:flex-start;">
+      <div class="table-c-wrapper">
+        <table class="table-c">
+          <thead>
+            <tr><th>#</th><th>D(m)</th><th>D(mm)</th><th>V(m/s)</th><th>hf(m/km)</th><th>hj(m/km)</th><th>hf总(m/km)</th><th>H损(m)</th><th>类别</th><th>标记</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>0.700</td><td>700</td><td>1.2992</td><td>2.3399</td><td>0.3510</td><td>2.6909</td><td>2.6909</td><td class="tag-eco">经济</td><td></td></tr>
+            <tr><td>2</td><td>0.800</td><td>800</td><td>0.9947</td><td>1.2376</td><td>0.1856</td><td>1.4232</td><td>1.4232</td><td class="tag-eco">经济</td><td></td></tr>
+            <tr><td>3</td><td>0.900</td><td>900</td><td>0.7860</td><td>0.7056</td><td>0.1058</td><td>0.8115</td><td>0.8115</td><td class="tag-comp">妥协</td><td></td></tr>
+            <tr><td>4</td><td>1.000</td><td>1000</td><td>0.6366</td><td>0.4269</td><td>0.0640</td><td>0.4909</td><td>0.4909</td><td class="tag-comp">妥协</td><td></td></tr>
+            <tr><td>5</td><td>1.100</td><td>1100</td><td>0.5261</td><td>0.2709</td><td>0.0406</td><td>0.3116</td><td>0.3116</td><td class="tag-last">兜底</td><td class="flag">流速过低</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="legend-card">
+        <strong>类别说明</strong>
+        <div class="legend-item"><span class="tag-eco">经济</span> — V: 0.9~1.5 m/s</div>
+        <div class="legend-item"><span class="tag-comp">妥协</span> — V: 0.6~0.9 m/s</div>
+        <div class="legend-item"><span class="tag-last">兜底</span> — 就近流速兜底</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

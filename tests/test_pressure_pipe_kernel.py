@@ -235,7 +235,7 @@ class TestRecommendation:
 
     def test_recommendation_fills_to_5(self):
         """经济区不足5个时应从其他类别补足"""
-        inp = PressurePipeInput(Q=0.5, material_key="HDPE_玻璃钢夹砂管")
+        inp = PressurePipeInput(Q=0.5, material_key="HDPE管")
         result = recommend_diameter(inp)
         if result.category in ("经济", "妥协"):
             assert len(result.top_candidates) == 5

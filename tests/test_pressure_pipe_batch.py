@@ -128,7 +128,7 @@ class TestBatchScan:
             q_values=np.array([0.5]),
             slope_denominators=[2000],
             diameter_values=np.array([0.5, 0.8]),
-            materials=["钢管", "球墨铸铁管", "HDPE_玻璃钢夹砂管"],
+            materials=["钢管", "球墨铸铁管", "HDPE管"],
             output_dir=tmp_output_dir,
         )
         result = run_batch_scan(config)

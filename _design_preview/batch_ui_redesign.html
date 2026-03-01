@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>批量计算UI重设计方案对比</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    background: #f0f2f5;
+    color: #333;
+    padding: 24px;
+  }
+  h1 {
+    text-align: center;
+    color: #0078d4;
+    margin-bottom: 8px;
+    font-size: 22px;
+  }
+  .subtitle {
+    text-align: center;
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 28px;
+  }
+  .section-title {
+    font-size: 18px;
+    color: #0078d4;
+    font-weight: 700;
+    margin: 32px 0 16px 0;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #0078d4;
+  }
+  .section-title:first-of-type { margin-top: 0; }
+  
+  .schemes {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .scheme-card {
+    flex: 1;
+    min-width: 320px;
+    max-width: 500px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    padding: 20px;
+    border: 2px solid transparent;
+    transition: all 0.2s;
+    cursor: pointer;
+    position: relative;
+  }
+  .scheme-card:hover { box-shadow: 0 4px 20px rgba(0,120,212,0.15); }
+  .scheme-card.selected { border-color: #0078d4; }
+  .scheme-card.selected::after {
+    content: '✓ 已选';
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: #0078d4;
+    color: #fff;
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .scheme-label {
+    font-size: 15px;
+    font-weight: 700;
+    color: #222;
+    margin-bottom: 4px;
+  }
+  .scheme-desc {
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 14px;
+  }
+  .demo-area {
+    background: #fafbfc;
+    border-radius: 8px;
+    padding: 16px;
+    border: 1px solid #e8e8e8;
+  }
+  
+  /* ---- 通用表单元素 ---- */
+  .form-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .form-label {
+    font-size: 13px;
+    color: #555;
+    white-space: nowrap;
+    min-width: 50px;
+  }
+  .form-input {
+    flex: 1;
+    height: 32px;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    padding: 0 10px;
+    font-size: 13px;
+    outline: none;
+    transition: border 0.2s;
+    min-width: 0;
+  }
+  .form-input:focus { border-color: #0078d4; }
+  .form-unit {
+    font-size: 12px;
+    color: #999;
+    white-space: nowrap;
+  }
+  
+  /* SpinBox */
+  .spinbox-wrap {
+    display: flex;
+    align-items: center;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    overflow: hidden;
+    height: 32px;
+    flex: 1;
+  }
+  .spinbox-wrap:focus-within { border-color: #0078d4; }
+  .spinbox-input {
+    flex: 1;
+    border: none;
+    height: 100%;
+    padding: 0 8px;
+    font-size: 13px;
+    outline: none;
+    text-align: center;
+    min-width: 50px;
+  }
+  .spinbox-btn {
+    width: 26px;
+    height: 100%;
+    border: none;
+    background: #f5f5f5;
+    cursor: pointer;
+    font-size: 14px;
+    color: #555;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+  }
+  .spinbox-btn:hover { background: #e0e0e0; }
+  .spinbox-btn:active { background: #d0d0d0; }
+  
+  /* 预览标签 */
+  .preview-label {
+    font-size: 11px;
+    color: #999;
+    margin-top: 10px;
+    margin-bottom: 4px;
+  }
+  .preview-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .preview-tag {
+    background: #e8f4fd;
+    color: #0078d4;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  
+  /* 滑块 */
+  .slider-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .slider-range {
+    flex: 1;
+    -webkit-appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: #ddd;
+    outline: none;
+  }
+  .slider-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #0078d4;
+    cursor: pointer;
+  }
+  .slider-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: #0078d4;
+    min-width: 40px;
+    text-align: right;
+  }
+  
+  /* ======= 坡度分母方案 ======= */
+  
+  /* 多选Checkbox网格 */
+  .checkbox-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .cb-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-size: 13px;
+  }
+  .cb-item:hover { background: #f0f7ff; border-color: #0078d4; }
+  .cb-item.checked { background: #e8f4fd; border-color: #0078d4; color: #0078d4; font-weight: 600; }
+  .cb-item input { display: none; }
+  .cb-check {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #ccc;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+  .cb-item.checked .cb-check {
+    background: #0078d4;
+    border-color: #0078d4;
+    color: #fff;
+  }
+  
+  /* Tag输入 */
+  .tag-input-area {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    min-height: 40px;
+    align-items: center;
+    background: #fff;
+    cursor: text;
+  }
+  .tag-input-area:focus-within { border-color: #0078d4; }
+  .tag-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: #e8f4fd;
+    color: #0078d4;
+    padding: 3px 6px 3px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .tag-chip .remove {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0,120,212,0.15);
+    color: #0078d4;
+    cursor: pointer;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .tag-chip .remove:hover { background: rgba(0,120,212,0.3); }
+  .tag-input-inline {
+    border: none;
+    outline: none;
+    font-size: 13px;
+    min-width: 80px;
+    flex: 1;
+  }
+  .tag-hint {
+    font-size: 11px;
+    color: #aaa;
+    margin-top: 4px;
+  }
+  
+  /* 预设按钮组 */
+  .preset-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .preset-btn {
+    padding: 5px 12px;
+    border: 1px solid #d0d0d0;
+    border-radius: 16px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.15s;
+    color: #555;
+  }
+  .preset-btn:hover { border-color: #0078d4; color: #0078d4; background: #f0f7ff; }
+  .preset-btn.active { background: #0078d4; color: #fff; border-color: #0078d4; }
+  
+  /* 全选/反选 */
+  .batch-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .batch-action-btn {
+    font-size: 12px;
+    color: #0078d4;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 2px 4px;
+  }
+  .batch-action-btn:hover { text-decoration: underline; }
+  
+  /* 方案对比旧版 */
+  .old-version {
+    background: #fff8f0;
+    border: 1px dashed #e8a84c;
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 20px;
+  }
+  .old-label {
+    font-size: 12px;
+    color: #c77d20;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .old-input {
+    width: 100%;
+    height: 32px;
+    border: 1px solid #e8a84c;
+    border-radius: 6px;
+    padding: 0 10px;
+    font-size: 13px;
+    color: #999;
+    background: #fefaf5;
+  }
+  
+  /* 投票按钮 */
+  .vote-area {
+    margin-top: 32px;
+    text-align: center;
+    padding: 20px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  }
+  .vote-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #333;
+    margin-bottom: 8px;
+  }
+  .vote-subtitle {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 16px;
+  }
+  .selections-summary {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: #555;
+  }
+  .selection-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .selection-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ccc;
+  }
+  .selection-dot.active { background: #0078d4; }
+</style>
+</head>
+<body>
+
+<h1>批量计算 UI 重设计方案</h1>
+<p class="subtitle">点击卡片选择你喜欢的方案，下方会汇总你的选择</p>
+
+<!-- ================ 旧版对比 ================ -->
+<div class="old-version">
+  <div class="old-label">⚠ 当前旧版（逗号分隔，体验差）</div>
+  <div class="form-row">
+    <span class="form-label">Q范围(起,止,步长):</span>
+    <input class="old-input" value="0.1,2.0,0.1" disabled>
+  </div>
+  <div class="form-row" style="margin-bottom:0;">
+    <span class="form-label">坡度分母(逗号):</span>
+    <input class="old-input" value="500,750,1000,1500,2000,2500,3000,3500,4000" disabled>
+  </div>
+</div>
+
+<!-- ================ 问题1: Q范围 ================ -->
+<div class="section-title">一、Q范围(起始/终止/步长) — 选择一种方案</div>
+
+<div class="schemes" id="q-schemes">
+
+  <!-- 方案A: 三独立输入框 -->
+  <div class="scheme-card" data-group="q" data-value="A" onclick="selectScheme(this)">
+    <div class="scheme-label">方案A：三独立输入框</div>
+    <div class="scheme-desc">简洁直观，零学习成本，三个框各管各的</div>
+    <div class="demo-area">
+      <div class="form-row">
+        <span class="form-label">起始Q</span>
+        <input class="form-input" type="number" value="0.1" step="0.1" id="qa-start">
+        <span class="form-unit">m³/s</span>
+      </div>
+      <div class="form-row">
+        <span class="form-label">终止Q</span>
+        <input class="form-input" type="number" value="2.0" step="0.1" id="qa-end">
+        <span class="form-unit">m³/s</span>
+      </div>
+      <div class="form-row">
+        <span class="form-label">步长</span>
+        <input class="form-input" type="number" value="0.1" step="0.05" id="qa-step">
+        <span class="form-unit">m³/s</span>
+      </div>
+      <div class="preview-label">将计算 <strong id="qa-count">20</strong> 个Q值：</div>
+      <div class="preview-tags" id="qa-preview"></div>
+    </div>
+  </div>
+
+  <!-- 方案B: SpinBox -->
+  <div class="scheme-card" data-group="q" data-value="B" onclick="selectScheme(this)">
+    <div class="scheme-label">方案B：SpinBox 数值微调框</div>
+    <div class="scheme-desc">精确控制，点按钮可微调，适合精密工程场景</div>
+    <div class="demo-area">
+      <div class="form-row">
+        <span class="form-label">起始Q</span>
+        <div class="spinbox-wrap">
+          <button class="spinbox-btn" onclick="event.stopPropagation();spinDec('qb-start',0.1,0)">−</button>
+          <input class="spinbox-input" type="number" value="0.1" step="0.1" id="qb-start">
+          <button class="spinbox-btn" onclick="event.stopPropagation();spinInc('qb-start',0.1)">+</button>
+        </div>
+        <span class="form-unit">m³/s</span>
+      </div>
+      <div class="form-row">
+        <span class="form-label">终止Q</span>
+        <div class="spinbox-wrap">
+          <button class="spinbox-btn" onclick="event.stopPropagation();spinDec('qb-end',0.1,0.1)">−</button>
+          <input class="spinbox-input" type="number" value="2.0" step="0.1" id="qb-end">
+          <button class="spinbox-btn" onclick="event.stopPropagation();spinInc('qb-end',0.1)">+</button>
+        </div>
+        <span class="form-unit">m³/s</span>
+      </div>
+      <div class="form-row">
+        <span class="form-label">步长</span>
+        <div class="spinbox-wrap">
+          <button class="spinbox-btn" onclick="event.stopPropagation();spinDec('qb-step',0.05,0.01)">−</button>
+          <input class="spinbox-input" type="number" value="0.1" step="0.05" id="qb-step">
+          <button class="spinbox-btn" onclick="event.stopPropagation();spinInc('qb-step',0.05)">+</button>
+        </div>
+        <span class="form-unit">m³/s</span>
+      </div>
+      <div class="preview-label">将计算 <strong id="qb-count">20</strong> 个Q值</div>
+      <div class="preview-tags" id="qb-preview"></div>
+    </div>
+  </div>
+
+  <!-- 方案C: 滑块 + 输入 -->
+  <div class="scheme-card" data-group="q" data-value="C" onclick="selectScheme(this)">
+    <div class="scheme-label">方案C：滑块 + 数值框</div>
+    <div class="scheme-desc">直观可视化区间，拖动即可调整范围</div>
+    <div class="demo-area">
+      <div style="margin-bottom:6px;font-size:12px;color:#888;">起始流量</div>
+      <div class="slider-container">
+        <input type="range" class="slider-range" min="0" max="5" step="0.1" value="0.1" id="qc-start-slider"
+               oninput="document.getElementById('qc-start-val').textContent=this.value; updateQcPreview();">
+        <span class="slider-value" id="qc-start-val">0.1</span>
+        <span class="form-unit">m³/s</span>
+      </div>
+      <div style="margin-bottom:6px;font-size:12px;color:#888;">终止流量</div>
+      <div class="slider-container">
+        <input type="range" class="slider-range" min="0.1" max="10" step="0.1" value="2.0" id="qc-end-slider"
+               oninput="document.getElementById('qc-end-val').textContent=this.value; updateQcPreview();">
+        <span class="slider-value" id="qc-end-val">2.0</span>
+        <span class="form-unit">m³/s</span>
+      </div>
+      <div class="form-row" style="margin-top:4px;">
+        <span class="form-label" style="font-size:12px;color:#888;">步长</span>
+        <input class="form-input" type="number" value="0.1" step="0.05" style="max-width:80px;" id="qc-step"
+               oninput="updateQcPreview();">
+        <span class="form-unit">m³/s</span>
+      </div>
+      <div class="preview-label">将计算 <strong id="qc-count">20</strong> 个Q值：</div>
+      <div class="preview-tags" id="qc-preview"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================ 问题2: 坡度分母 ================ -->
+<div class="section-title">二、坡度分母选择 — 选择一种方案</div>
+
+<div class="schemes" id="slope-schemes">
+
+  <!-- 方案A: Checkbox网格 -->
+  <div class="scheme-card" data-group="slope" data-value="A" onclick="selectScheme(this)">
+    <div class="scheme-label">方案A：多选卡片网格</div>
+    <div class="scheme-desc">一目了然，点击即选/取消，支持全选/反选</div>
+    <div class="demo-area">
+      <div class="batch-actions">
+        <button class="batch-action-btn" onclick="event.stopPropagation();toggleAllSlope(true)">全选</button>
+        <button class="batch-action-btn" onclick="event.stopPropagation();toggleAllSlope(false)">全不选</button>
+      </div>
+      <div class="checkbox-grid" id="slope-grid">
+        <!-- JS填充 -->
+      </div>
+      <div class="preview-label" style="margin-top:8px;">已选 <strong id="slope-a-count">9</strong> 个坡度</div>
+    </div>
+  </div>
+
+  <!-- 方案B: Tag/Chip输入 -->
+  <div class="scheme-card" data-group="slope" data-value="B" onclick="selectScheme(this)">
+    <div class="scheme-label">方案B：标签式输入</div>
+    <div class="scheme-desc">灵活输入任意值，自动生成标签芯片，可逐个删除</div>
+    <div class="demo-area">
+      <div class="preset-row">
+        <span style="font-size:12px;color:#888;line-height:28px;">快捷：</span>
+        <button class="preset-btn active" onclick="event.stopPropagation();addPresetSlopes('standard')">标准9档</button>
+        <button class="preset-btn" onclick="event.stopPropagation();addPresetSlopes('sparse')">稀疏5档</button>
+        <button class="preset-btn" onclick="event.stopPropagation();addPresetSlopes('dense')">密集13档</button>
+      </div>
+      <div class="tag-input-area" id="slope-tag-area" onclick="event.stopPropagation();document.getElementById('slope-tag-input').focus();">
+        <div class="tag-chip" data-val="500">1/500<button class="remove" onclick="event.stopPropagation();removeTag(this)">×</button></div>
+        <div class="tag-chip" data-val="750">1/750<button class="remove" onclick="event.stopPropagation();removeTag(this)">×</button></div>
+        <div class="tag-chip" data-val="1000">1/1000<button class="remove" onclick="event.stopPropagation();removeTag(this)">×</button></div>
+        <div class="tag-chip" data-val="1500">1/1500<button class="remove" onclick="event.stopPropagation();removeTag(this)">×</button></div>
+        <div class="tag-chip" data-val="2000">1/2000<button class="remove" onclick="event.stopPropagation();removeTag(this)">×</button></div>
+        <div class="tag-chip" data-val="2500">1/2500<button class="remove" onclick="event.stopPropagation();removeTag(this)">×</button></div>
+        <div class="tag-chip" data-val="3000">1/3000<button class="remove" onclick="event.stopPropagation();removeTag(this)">×</button></div>
+        <div class="tag-chip" data-val="3500">1/3500<button class="remove" onclick="event.stopPropagation();removeTag(this)">×</button></div>
+        <div class="tag-chip" data-val="4000">1/4000<button class="remove" onclick="event.stopPropagation();removeTag(this)">×</button></div>
+        <input class="tag-input-inline" id="slope-tag-input" placeholder="输入分母回车添加"
+               onkeydown="event.stopPropagation();if(event.key==='Enter'){addSlopeTag(this.value);this.value='';}"
+               onclick="event.stopPropagation();">
+      </div>
+      <div class="tag-hint">输入坡度分母（如 1200），按回车添加 | 点 × 删除</div>
+    </div>
+  </div>
+
+  <!-- 方案C: 预设组合 + 自定义 -->
+  <div class="scheme-card" data-group="slope" data-value="C" onclick="selectScheme(this)">
+    <div class="scheme-label">方案C：预设组合 + 范围生成</div>
+    <div class="scheme-desc">选择常用组合或自定义生成范围，类似Q范围的方式</div>
+    <div class="demo-area">
+      <div style="font-size:12px;color:#888;margin-bottom:6px;">选择预设组合：</div>
+      <div class="preset-row" id="slope-c-presets">
+        <button class="preset-btn active" onclick="event.stopPropagation();selectSlopePreset(this,'standard')">标准 (500~4000)</button>
+        <button class="preset-btn" onclick="event.stopPropagation();selectSlopePreset(this,'long')">长距离 (2000~6000)</button>
+        <button class="preset-btn" onclick="event.stopPropagation();selectSlopePreset(this,'steep')">陡坡 (200~1000)</button>
+        <button class="preset-btn" onclick="event.stopPropagation();selectSlopePreset(this,'custom')">自定义范围</button>
+      </div>
+      <div id="slope-c-custom" style="display:none;margin-top:8px;">
+        <div class="form-row">
+          <span class="form-label">起始</span>
+          <input class="form-input" type="number" value="500" step="100" style="max-width:100px;" id="sc-start">
+        </div>
+        <div class="form-row">
+          <span class="form-label">终止</span>
+          <input class="form-input" type="number" value="4000" step="100" style="max-width:100px;" id="sc-end">
+        </div>
+        <div class="form-row">
+          <span class="form-label">步长</span>
+          <input class="form-input" type="number" value="500" step="100" style="max-width:100px;" id="sc-step">
+        </div>
+      </div>
+      <div class="preview-label" style="margin-top:8px;">当前坡度：</div>
+      <div class="preview-tags" id="slope-c-preview"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================ 汇总 ================ -->
+<div class="vote-area" id="vote-area">
+  <div class="vote-title">你的选择</div>
+  <div class="vote-subtitle">点击上方卡片选择各组方案，选好后告诉我即可</div>
+  <div class="selections-summary" id="selections-summary">
+    <div class="selection-item">
+      <span class="selection-dot" id="dot-q"></span>
+      <span>Q范围：<strong id="sel-q">未选择</strong></span>
+    </div>
+    <div class="selection-item">
+      <span class="selection-dot" id="dot-slope"></span>
+      <span>坡度分母：<strong id="sel-slope">未选择</strong></span>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- 选择逻辑 ----
+const selections = { q: null, slope: null };
+const schemeNames = {
+  q: { A: '三独立输入框', B: 'SpinBox微调框', C: '滑块+数值框' },
+  slope: { A: '多选卡片网格', B: '标签式输入', C: '预设组合+范围' }
+};
+
+function selectScheme(card) {
+  const group = card.dataset.group;
+  const value = card.dataset.value;
+  // 取消同组其他选中
+  document.querySelectorAll(`.scheme-card[data-group="${group}"]`).forEach(c => c.classList.remove('selected'));
+  card.classList.add('selected');
+  selections[group] = value;
+  // 更新汇总
+  document.getElementById(`sel-${group}`).textContent = 
+    selections[group] ? `方案${selections[group]} — ${schemeNames[group][selections[group]]}` : '未选择';
+  document.getElementById(`dot-${group}`).classList.toggle('active', !!selections[group]);
+}
+
+// ---- Q预览 ----
+function generateQPreview(startId, endId, stepId, countId, previewId) {
+  const start = parseFloat(document.getElementById(startId)?.value || 0.1);
+  const end = parseFloat(document.getElementById(endId)?.value || 2.0);
+  const step = parseFloat(document.getElementById(stepId)?.value || 0.1);
+  if (step <= 0 || start > end) return;
+  const values = [];
+  for (let v = start; v <= end + step * 0.01; v += step) {
+    values.push(Math.round(v * 100) / 100);
+    if (values.length > 50) break;
+  }
+  document.getElementById(countId).textContent = values.length;
+  const container = document.getElementById(previewId);
+  const maxShow = 12;
+  let html = values.slice(0, maxShow).map(v => `<span class="preview-tag">${v}</span>`).join('');
+  if (values.length > maxShow) html += `<span class="preview-tag" style="background:#f0f0f0;color:#888;">+${values.length - maxShow}个</span>`;
+  container.innerHTML = html;
+}
+
+// 方案A
+['qa-start','qa-end','qa-step'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', () => generateQPreview('qa-start','qa-end','qa-step','qa-count','qa-preview'));
+});
+// 方案B
+['qb-start','qb-end','qb-step'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', () => generateQPreview('qb-start','qb-end','qb-step','qb-count','qb-preview'));
+});
+
+function updateQcPreview() {
+  const start = parseFloat(document.getElementById('qc-start-val').textContent);
+  const end = parseFloat(document.getElementById('qc-end-val').textContent);
+  const step = parseFloat(document.getElementById('qc-step').value || 0.1);
+  if (step <= 0 || start > end) return;
+  const values = [];
+  for (let v = start; v <= end + step * 0.01; v += step) {
+    values.push(Math.round(v * 100) / 100);
+    if (values.length > 50) break;
+  }
+  document.getElementById('qc-count').textContent = values.length;
+  const container = document.getElementById('qc-preview');
+  const maxShow = 10;
+  let html = values.slice(0, maxShow).map(v => `<span class="preview-tag">${v}</span>`).join('');
+  if (values.length > maxShow) html += `<span class="preview-tag" style="background:#f0f0f0;color:#888;">+${values.length - maxShow}个</span>`;
+  container.innerHTML = html;
+}
+
+// SpinBox
+function spinInc(id, step) {
+  const el = document.getElementById(id);
+  el.value = (parseFloat(el.value) + step).toFixed(2);
+  el.dispatchEvent(new Event('input'));
+}
+function spinDec(id, step, min) {
+  const el = document.getElementById(id);
+  const v = parseFloat(el.value) - step;
+  el.value = Math.max(min, v).toFixed(2);
+  el.dispatchEvent(new Event('input'));
+}
+
+// ---- 坡度分母 方案A: Checkbox网格 ----
+const defaultSlopes = [500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000];
+const slopeGrid = document.getElementById('slope-grid');
+defaultSlopes.forEach(s => {
+  const div = document.createElement('div');
+  div.className = 'cb-item checked';
+  div.dataset.val = s;
+  div.innerHTML = `<span class="cb-check">✓</span><span>1/${s}</span>`;
+  div.addEventListener('click', (e) => {
+    e.stopPropagation();
+    div.classList.toggle('checked');
+    div.querySelector('.cb-check').textContent = div.classList.contains('checked') ? '✓' : '';
+    const cnt = slopeGrid.querySelectorAll('.cb-item.checked').length;
+    document.getElementById('slope-a-count').textContent = cnt;
+  });
+  slopeGrid.appendChild(div);
+});
+
+function toggleAllSlope(selectAll) {
+  slopeGrid.querySelectorAll('.cb-item').forEach(item => {
+    if (selectAll) {
+      item.classList.add('checked');
+      item.querySelector('.cb-check').textContent = '✓';
+    } else {
+      item.classList.remove('checked');
+      item.querySelector('.cb-check').textContent = '';
+    }
+  });
+  const cnt = slopeGrid.querySelectorAll('.cb-item.checked').length;
+  document.getElementById('slope-a-count').textContent = cnt;
+}
+
+// ---- 坡度分母 方案B: Tag输入 ----
+function removeTag(btn) {
+  btn.parentElement.remove();
+}
+function addSlopeTag(val) {
+  val = parseInt(val);
+  if (isNaN(val) || val <= 0) return;
+  const area = document.getElementById('slope-tag-area');
+  const input = document.getElementById('slope-tag-input');
+  // 检查重复
+  const existing = area.querySelectorAll('.tag-chip');
+  for (const chip of existing) {
+    if (parseInt(chip.dataset.val) === val) return;
+  }
+  const chip = document.createElement('div');
+  chip.className = 'tag-chip';
+  chip.dataset.val = val;
+  chip.innerHTML = `1/${val}<button class="remove" onclick="event.stopPropagation();removeTag(this)">×</button>`;
+  area.insertBefore(chip, input);
+}
+function addPresetSlopes(preset) {
+  const area = document.getElementById('slope-tag-area');
+  const input = document.getElementById('slope-tag-input');
+  // 清除现有tag
+  area.querySelectorAll('.tag-chip').forEach(c => c.remove());
+  let values;
+  if (preset === 'standard') values = [500,750,1000,1500,2000,2500,3000,3500,4000];
+  else if (preset === 'sparse') values = [500,1000,2000,3000,4000];
+  else if (preset === 'dense') values = [250,500,750,1000,1250,1500,1750,2000,2500,3000,3500,4000,5000];
+  values.forEach(v => addSlopeTag(v));
+  // 更新预设按钮状态
+  document.querySelectorAll('#slope-tag-area').closest('.demo-area')?.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+}
+
+// ---- 坡度分母 方案C: 预设组合 ----
+const slopePresets = {
+  standard: [500,750,1000,1500,2000,2500,3000,3500,4000],
+  long: [2000,2500,3000,3500,4000,4500,5000,5500,6000],
+  steep: [200,300,400,500,600,700,800,900,1000],
+};
+function selectSlopePreset(btn, preset) {
+  document.querySelectorAll('#slope-c-presets .preset-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (preset === 'custom') {
+    document.getElementById('slope-c-custom').style.display = 'block';
+    updateSlopeCCustom();
+    return;
+  }
+  document.getElementById('slope-c-custom').style.display = 'none';
+  const values = slopePresets[preset];
+  renderSlopeCPreview(values);
+}
+function renderSlopeCPreview(values) {
+  const container = document.getElementById('slope-c-preview');
+  container.innerHTML = values.map(v => `<span class="preview-tag">1/${v}</span>`).join('');
+}
+function updateSlopeCCustom() {
+  const start = parseInt(document.getElementById('sc-start').value);
+  const end = parseInt(document.getElementById('sc-end').value);
+  const step = parseInt(document.getElementById('sc-step').value);
+  if (step <= 0 || start > end) return;
+  const values = [];
+  for (let v = start; v <= end; v += step) values.push(v);
+  renderSlopeCPreview(values);
+}
+['sc-start','sc-end','sc-step'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', updateSlopeCCustom);
+});
+
+// 初始渲染
+generateQPreview('qa-start','qa-end','qa-step','qa-count','qa-preview');
+generateQPreview('qb-start','qb-end','qb-step','qb-count','qb-preview');
+updateQcPreview();
+renderSlopeCPreview(slopePresets.standard);
+</script>
+
+</body>
+</html>

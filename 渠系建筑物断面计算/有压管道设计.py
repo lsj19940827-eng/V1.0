@@ -20,12 +20,59 @@ from scipy.optimize import fsolve
 # ============================================================
 
 PIPE_MATERIALS = {
-    "HDPE_玻璃钢夹砂管": {"f": 0.948e5, "m": 1.77, "b": 4.77, "name": "HDPE和玻璃钢夹砂管"},
+    "HDPE管":           {"f": 0.948e5, "m": 1.77, "b": 4.77, "name": "HDPE管"},
+    "玻璃钢夹砂管":     {"f": 0.948e5, "m": 1.77, "b": 4.77, "name": "玻璃钢夹砂管"},
     "球墨铸铁管":       {"f": 1.899e5, "m": 1.852, "b": 4.87, "name": "球墨铸铁管"},
     "预应力钢筒混凝土管": {"f": 1.312e6, "m": 2.0,  "b": 5.33, "name": "预应力钢筒混凝土管(n=0.013)"},
     "预应力钢筒混凝土管_n014": {"f": 1.516e6, "m": 2.0, "b": 5.33, "name": "预应力钢筒混凝土管(n=0.014)"},
     "钢管":             {"f": 6.25e5,  "m": 1.9,  "b": 5.1,  "name": "钢管"},
 }
+
+# ---- GB 50288-2018 §6.7.2 规范条文 ----
+SPEC_672_TEXT = """
+《灌溉与排水工程设计标准》 GB 50288—2018  第6.7.2条
+
+6.7.2  灌溉输水管道设计应符合下列规定：
+
+  1  管道设计流量应根据控制的灌溉面积计算确定。
+
+  2  管道沿程水头损失和局部水头损失，可按下列公式计算：
+
+     沿程水头损失公式 (6.7.2-1)：
+         hf = f × L×Q^m / d^b
+
+     局部水头损失公式 (6.7.2-2)：
+         hj = ζ × V² / (2g)
+
+     式中：
+       hf —— 管道沿程水头损失 (m)
+       f  —— 摩阻系数，按表6.7.2取值
+       L  —— 管道长度 (m)
+       Q  —— 流量 (m³/h)
+       m  —— 流量指数，按表6.7.2取值
+       d  —— 管道内径 (mm)
+       b  —— 管径指数，按表6.7.2取值
+       hj —— 管道局部水头损失 (m)
+       ζ  —— 管道局部阻力系数
+       V  —— 管道流速 (m/s)
+       g  —— 重力加速度 (m/s²)
+
+  3  管道设计流速宜控制在经济流速 0.9m/s～1.5m/s，
+     超出此范围时应经技术经济比较确定。
+
+表6.7.2  各种管材的 f、m、b 值：
+  ┌──────────────────────────┬──────────────┬───────┬───────┐
+  │ 管    材                 │      f       │   m   │   b   │
+  ├──────────────────────────┼──────────────┼───────┼───────┤
+  │ 钢筋混凝土管 (n=0.013)  │ 1.312×10⁶   │  2.00 │  5.33 │
+  │ 钢筋混凝土管 (n=0.014)  │ 1.516×10⁶   │  2.00 │  5.33 │
+  │ 钢管、铸铁管             │ 6.25×10⁵    │  1.90 │  5.10 │
+  │ 硬聚氯乙烯塑料管(PVC-U) │ 0.948×10⁵   │  1.77 │  4.77 │
+  │ 铝合金管                 │ 0.861×10⁵   │  1.74 │  4.74 │
+  │ 聚乙烯管(PE)             │ 0.948×10⁵   │  1.77 │  4.77 │
+  │ 玻璃钢管(RPMP)           │ 0.948×10⁵   │  1.77 │  4.77 │
+  └──────────────────────────┴──────────────┴───────┴───────┘
+""".strip()
 
 # V9 口径序列 (m)
 _D_small  = np.round(np.arange(0.1, 0.55, 0.05), 2)
@@ -56,6 +103,8 @@ class PressurePipeInput:
     n_unpr: float = 0.014          # 无压部分糙率
     length_m: float = 1000.0       # 管长 (m)
     manual_increase_percent: Optional[float] = None  # 手动加大比例 (%), None 则自动
+    local_loss_ratio: float = 0.15  # 局部损失占沿程损失的比例, 默认 0.15
+    manual_D: Optional[float] = None  # 用户指定管径 (m), None 则自动推荐
 
 
 @dataclass
@@ -89,9 +138,10 @@ class RecommendationResult:
     """推荐结果"""
     recommended: Optional[DiameterCandidate]
     top_candidates: List[DiameterCandidate]
-    category: str          # "经济" / "妥协" / "兜底" / "无可用"
+    category: str          # "经济" / "妥协" / "兜底" / "指定" / "无可用"
     reason: str
     calc_steps: str        # 完整计算过程文本
+    auto_recommended: Optional[DiameterCandidate] = None  # 自动推荐结果（仅指定D时有值）
 
 
 @dataclass
@@ -103,6 +153,7 @@ class BatchScanConfig:
     materials: List[str]           # 管材键名列表
     n_unpr: float = 0.014
     length_m: float = 1000.0
+    local_loss_ratio: float = 0.15  # 局部损失比例
     output_dir: str = ""
     # ===== 输出选项 (可按需开启/关闭) =====
     output_csv: bool = True           # CSV计算结果：包含所有工况的原始数据，便于后续分析
@@ -248,7 +299,7 @@ def evaluate_single_diameter(inp: PressurePipeInput, D: float) -> DiameterCandid
         V_press = Q / A_full
         Q_inc = Q * (1 + p/100)
         hf_friction_km = f * (1000 * Q_inc_m3h^m) / (d_mm^b)
-        hf_local_km = 0.15 * hf_friction_km
+        hf_local_km = local_loss_ratio * hf_friction_km
         hf_total_km = hf_friction_km + hf_local_km
         h_total_m = hf_total_km * (L / 1000)
     """
@@ -277,7 +328,7 @@ def evaluate_single_diameter(inp: PressurePipeInput, D: float) -> DiameterCandid
 
     # 沿程水头损失 (m/km)
     hf_friction_km = f_c * (1000.0 * (Q_inc_m3h ** m_c)) / (d_mm ** b_c)
-    hf_local_km = 0.15 * hf_friction_km
+    hf_local_km = inp.local_loss_ratio * hf_friction_km
     hf_total_km = hf_friction_km + hf_local_km
     h_loss_total_m = hf_total_km * (inp.length_m / 1000.0)
 
@@ -329,6 +380,23 @@ def evaluate_single_diameter(inp: PressurePipeInput, D: float) -> DiameterCandid
     )
 
 
+_CAT_ORDER = {"经济": 0, "妥协": 1, "兜底": 2}
+
+
+def _auto_recommend(candidates):
+    """从 candidates 中按经济→妥协→兜底规则选出自动推荐结果，返回 (rec, category)"""
+    eco = sorted([c for c in candidates if c.category == "经济"], key=lambda c: c.hf_total_km)
+    comp = sorted([c for c in candidates if c.category == "妥协"], key=lambda c: c.hf_total_km)
+    if eco:
+        return eco[0], "经济"
+    if comp:
+        return comp[0], "妥协"
+    fb = sorted(candidates, key=lambda c: (abs(c.V_press - 0.9), c.hf_total_km))
+    if fb:
+        return fb[0], "兜底"
+    return None, "无可用"
+
+
 def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
     """
     推荐管径算法：
@@ -336,6 +404,11 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
     2. 若无，筛选"妥协区"(0.6<=V<0.9 且 hf_total<=5)，取最小 D
     3. 若仍无，按 |V-0.9| 最小 + hf_total 最小 兜底
     返回前 5 候选（获胜类别优先，不足时从其他类别补足）。
+
+    当 inp.manual_D 不为 None 时：
+    - 仍遍历所有标准管径生成候选表
+    - 将指定D强制设为推荐结果（若非标准管径则额外加入候选表）
+    - auto_recommended 存储自动推荐结果供对比
     """
     candidates = []
     for D in DEFAULT_DIAMETER_SERIES:
@@ -344,6 +417,50 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
             candidates.append(c)
         except ValueError:
             continue
+
+    # ---- 用户指定管径模式 ----
+    if inp.manual_D is not None and inp.manual_D > 0:
+        manual_D_val = inp.manual_D
+        # 查找指定D是否已在候选中（浮点容差）
+        manual_candidate = None
+        for c in candidates:
+            if abs(c.D - manual_D_val) < 1e-6:
+                manual_candidate = c
+                break
+        # 若非标准管径，额外评价并加入候选列表
+        if manual_candidate is None:
+            try:
+                manual_candidate = evaluate_single_diameter(inp, manual_D_val)
+                manual_candidate.flags.append("非标准管径")
+                candidates.append(manual_candidate)
+            except ValueError:
+                pass
+        if manual_candidate is not None:
+            fallback_sorted = sorted(candidates, key=lambda c: (abs(c.V_press - 0.9), c.hf_total_km))
+            # 自动推荐结果（在追加"用户指定"标记之前调用，避免同对象污染）
+            auto_rec, auto_cat = _auto_recommend(candidates)
+            manual_candidate.flags.append("用户指定")
+            # top: 指定D排首位，其余按原排序补足
+            top5 = [manual_candidate]
+            seen_D = {manual_candidate.D}
+            for c in fallback_sorted:
+                if c.D not in seen_D:
+                    top5.append(c)
+                    seen_D.add(c.D)
+                    if len(top5) >= 6:
+                        break
+            top5 = sorted(top5, key=lambda c: (_CAT_ORDER.get(c.category, 9), c.hf_total_km))
+            reason = (f"用户指定: D={manual_candidate.D:.3f}m, "
+                      f"V={manual_candidate.V_press:.3f}m/s, "
+                      f"hf_total={manual_candidate.hf_total_km:.4f}m/km "
+                      f"({manual_candidate.category})")
+            calc_text = _build_process_text(inp, candidates, manual_candidate, "指定",
+                                            auto_rec=auto_rec, auto_cat=auto_cat)
+            return RecommendationResult(
+                recommended=manual_candidate, top_candidates=top5,
+                category="指定", reason=reason, calc_steps=calc_text,
+                auto_recommended=auto_rec,
+            )
 
     if not candidates:
         return RecommendationResult(
@@ -355,12 +472,12 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
         )
 
     # 各类别分组
-    eco = sorted([c for c in candidates if c.category == "经济"], key=lambda c: c.D)
-    comp = sorted([c for c in candidates if c.category == "妥协"], key=lambda c: c.D)
+    eco = sorted([c for c in candidates if c.category == "经济"], key=lambda c: c.hf_total_km)
+    comp = sorted([c for c in candidates if c.category == "妥协"], key=lambda c: c.hf_total_km)
     fallback_sorted = sorted(candidates, key=lambda c: (abs(c.V_press - 0.9), c.hf_total_km))
 
     def _fill_top5(primary, all_sorted):
-        """获胜类别优先，不足5个时从 all_sorted 补足（去重）"""
+        """获胜类别优先，不足5个时从 all_sorted 补足（去重），结果按 (类别优先级, hf_total) 排列"""
         top = list(primary[:5])
         if len(top) < 5:
             seen_D = {c.D for c in top}
@@ -370,7 +487,9 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
                     seen_D.add(c.D)
                     if len(top) >= 5:
                         break
-        return top
+        return sorted(top, key=lambda c: (_CAT_ORDER.get(c.category, 9), c.hf_total_km))
+
+    # ---- 自动推荐模式（原逻辑） ----
 
     # 第一步：经济区
     if eco:
@@ -397,7 +516,7 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
     # 第三步：兜底
     rec = fallback_sorted[0]
     rec.flags.append("未满足约束")
-    top5 = fallback_sorted[:5]
+    top5 = sorted(fallback_sorted[:5], key=lambda c: (_CAT_ORDER.get(c.category, 9), c.hf_total_km))
     reason = f"就近流速兜底: D={rec.D:.3f}m, V={rec.V_press:.3f}m/s, hf_total={rec.hf_total_km:.4f}m/km (未满足约束)"
     calc_text = _build_process_text(inp, candidates, rec, "兜底")
     return RecommendationResult(
@@ -546,6 +665,7 @@ def run_batch_scan(
                         Q=float(Q), material_key=mat_key,
                         slope_i=i_val, n_unpr=config.n_unpr,
                         length_m=config.length_m,
+                        local_loss_ratio=config.local_loss_ratio,
                     )
                     try:
                         c = evaluate_single_diameter(inp, float(D))
@@ -1046,6 +1166,9 @@ def _build_process_text(
     all_candidates: List[DiameterCandidate],
     recommended: DiameterCandidate,
     category: str,
+    *,
+    auto_rec: Optional[DiameterCandidate] = None,
+    auto_cat: Optional[str] = None,
 ) -> str:
     """生成完整计算过程文本（供公式渲染器使用）
 
@@ -1054,9 +1177,13 @@ def _build_process_text(
       - 标题行包含 "计算结果"，被渲染器识别为居中标题
       - 【...】 作为章节横幅
       - "  N. 标签:" + 缩进内容 作为编号步骤卡片
+
+    当 category=="指定" 时:
+      - auto_rec / auto_cat 为自动推荐结果，用于对比展示
     """
     mat = PIPE_MATERIALS[inp.material_key]
     mat_name = mat["name"]
+    is_manual = (category == "指定")
 
     o = []
     o.append("=" * 70)
@@ -1083,6 +1210,11 @@ def _build_process_text(
     o.append(f"  {_n}. 管长:")
     o.append(f"     L = {inp.length_m} m")
     o.append("")
+    if is_manual and inp.manual_D is not None:
+        _n += 1
+        o.append(f"  {_n}. 指定管径:")
+        o.append(f"     D = {inp.manual_D} m ({inp.manual_D * 1000:.0f} mm)")
+        o.append("")
     _n += 1
     if inp.manual_increase_percent is not None:
         o.append(f"  {_n}. 加大流量比例:")
@@ -1112,14 +1244,16 @@ def _build_process_text(
     o.append(f"        = {Q_inc_m3h:.2f} m\u00b3/h")
     o.append("")
 
-    # ---- 三、推荐管径计算 ----
+    # ---- 三、管径计算 ----
     D = recommended.D
     d_mm = D * 1000
     A_full = math.pi * D ** 2 / 4.0
 
-    o.append("【三、推荐管径计算】")
+    section3_title = "【三、指定管径计算】" if is_manual else "【三、推荐管径计算】"
+    o.append(section3_title)
     o.append("")
-    o.append("  1. 推荐管径:")
+    step3_label = "指定管径:" if is_manual else "推荐管径:"
+    o.append(f"  1. {step3_label}")
     o.append(f"     D = {D} m ({d_mm:.0f} mm)")
     o.append("")
     o.append("  2. 过水面积计算:")
@@ -1138,12 +1272,13 @@ def _build_process_text(
     o.append(f"        = {recommended.hf_friction_km:.4f} m/km")
     o.append("")
     o.append("  5. 局部水头损失计算:")
-    o.append(f"     hf局 = 0.15 × hf")
-    o.append(f"         = 0.15 × {recommended.hf_friction_km:.4f}")
+    _ratio = inp.local_loss_ratio
+    o.append(f"     hj = {_ratio} × hf")
+    o.append(f"         = {_ratio} × {recommended.hf_friction_km:.4f}")
     o.append(f"         = {recommended.hf_local_km:.4f} m/km")
     o.append("")
     o.append("  6. 总水头损失计算:")
-    o.append(f"     hf总 = hf + hf局")
+    o.append(f"     hf总 = hf + hj")
     o.append(f"         = {recommended.hf_friction_km:.4f} + {recommended.hf_local_km:.4f}")
     o.append(f"         = {recommended.hf_total_km:.4f} m/km")
     o.append("")
@@ -1170,7 +1305,12 @@ def _build_process_text(
     o.append(f"     全部 {len(all_candidates)} 种口径: 经济区 {eco_count} 个, 妥协区 {comp_count} 个, 兜底 {fallback_count} 个")
     o.append("")
     o.append(f"  4. 筛选结论:")
-    if category == "经济":
+    if is_manual:
+        o.append(f"     用户指定管径: D = {recommended.D} m ({recommended.D * 1000:.0f} mm)")
+        o.append(f"     该管径属于「{recommended.category}」区")
+        if auto_rec is not None and auto_cat:
+            o.append(f"     自动推荐({auto_cat}区): D = {auto_rec.D} m ({auto_rec.D * 1000:.0f} mm)")
+    elif category == "经济":
         o.append(f"     存在经济区口径，取最小管径: D = {recommended.D} m")
     elif category == "妥协":
         o.append(f"     无经济区口径，妥协区取最小管径: D = {recommended.D} m")
@@ -1179,35 +1319,43 @@ def _build_process_text(
         o.append(f"     注意: 未满足经济/妥协约束条件!")
     o.append("")
 
-    # ---- 五、推荐结果 ----
-    o.append("【五、推荐结果】")
-    o.append(f"  推荐管径: D = {recommended.D} m ({recommended.D * 1000:.0f} mm)")
+    # ---- 五、结果汇总 ----
+    section5_label = "指定管径" if is_manual else "推荐管径"
+    o.append(f"【五、{section5_label}结果】")
+    o.append(f"  {section5_label}: D = {recommended.D} m ({recommended.D * 1000:.0f} mm)")
     o.append(f"  有压流速: V = {recommended.V_press:.4f} m/s")
     o.append(f"  沿程水损: hf = {recommended.hf_friction_km:.4f} m/km")
-    o.append(f"  局部水损: hf局 = {recommended.hf_local_km:.4f} m/km")
+    o.append(f"  局部水损: hj = {recommended.hf_local_km:.4f} m/km")
     o.append(f"  总水损: hf总 = {recommended.hf_total_km:.4f} m/km")
     o.append(f"  按管长折算总损失: H损 = {recommended.h_loss_total_m:.4f} m (L={inp.length_m}m)")
-    o.append(f"  推荐类别: {category}")
+    o.append(f"  所属类别: {recommended.category}")
     if recommended.flags:
         o.append(f"  标记: {', '.join(recommended.flags)}")
     o.append("")
 
-    # ---- 六、前5候选管径 ----
-    o.append("【六、前5候选管径】")
-    # 获胜类别优先，不足时从其他类别补足
+    # ---- 指定模式：自动推荐对比（仅当自动推荐与指定D不同时） ----
+    if is_manual and auto_rec is not None and auto_cat and abs(auto_rec.D - recommended.D) > 1e-6:
+        o.append("【六、自动推荐对比】")
+        o.append(f"  自动推荐管径: D = {auto_rec.D} m ({auto_rec.D * 1000:.0f} mm)")
+        o.append(f"  有压流速: V = {auto_rec.V_press:.4f} m/s")
+        o.append(f"  总水损: hf总 = {auto_rec.hf_total_km:.4f} m/km")
+        o.append(f"  按管长折算总损失: H损 = {auto_rec.h_loss_total_m:.4f} m")
+        o.append(f"  推荐类别: {auto_cat}")
+        o.append("")
+
+    # ---- 候选管径 ----
+    has_auto_compare = (is_manual and auto_rec is not None and auto_cat
+                        and abs(auto_rec.D - recommended.D) > 1e-6)
+    section_num = "七" if has_auto_compare else "六"
+    o.append(f"【{section_num}、前5候选管径】")
     eco_pool = sorted([c for c in all_candidates if c.category == "经济"], key=lambda c: c.D)
     comp_pool = sorted([c for c in all_candidates if c.category == "妥协"], key=lambda c: c.D)
     fb_pool = sorted(all_candidates, key=lambda c: (abs(c.V_press - 0.9), c.hf_total_km))
 
-    if category == "经济":
-        primary = eco_pool
-    elif category == "妥协":
-        primary = comp_pool
-    else:
-        primary = fb_pool
-
-    pool = list(primary[:5])
-    if len(pool) < 5:
+    if is_manual:
+        # 指定D排首位，其余按 fallback 排序补足
+        manual_c = [c for c in all_candidates if "用户指定" in c.flags]
+        pool = list(manual_c[:1])
         seen_D = {c.D for c in pool}
         for c in fb_pool:
             if c.D not in seen_D:
@@ -1215,9 +1363,27 @@ def _build_process_text(
                 seen_D.add(c.D)
                 if len(pool) >= 5:
                     break
+    else:
+        if category == "经济":
+            primary = eco_pool
+        elif category == "妥协":
+            primary = comp_pool
+        else:
+            primary = fb_pool
+        pool = list(primary[:5])
+        if len(pool) < 5:
+            seen_D = {c.D for c in pool}
+            for c in fb_pool:
+                if c.D not in seen_D:
+                    pool.append(c)
+                    seen_D.add(c.D)
+                    if len(pool) >= 5:
+                        break
 
+    pool = sorted(pool, key=lambda c: c.D)
     for i, c in enumerate(pool[:5]):
-        o.append(f"  [{i+1}] D = {c.D} m ({c.D*1000:.0f}mm), V = {c.V_press:.4f} m/s, hf总 = {c.hf_total_km:.4f} m/km, H损 = {c.h_loss_total_m:.4f} m, 类别: {c.category}")
+        marker = " ★" if "用户指定" in c.flags else ""
+        o.append(f"  [{i+1}] D = {c.D} m ({c.D*1000:.0f}mm), V = {c.V_press:.4f} m/s, hf总 = {c.hf_total_km:.4f} m/km, H损 = {c.h_loss_total_m:.4f} m, 类别: {c.category}{marker}")
     o.append("")
 
     return "\n".join(o)

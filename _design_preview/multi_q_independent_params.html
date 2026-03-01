@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>多流量独立参数 - UI方案对比</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    background: #f0f2f5;
+    padding: 20px;
+    color: #333;
+  }
+  h1 { text-align: center; font-size: 20px; color: #1a1a2e; margin-bottom: 4px; }
+  .subtitle { text-align: center; font-size: 12px; color: #888; margin-bottom: 20px; }
+
+  /* ===== 顶部方案切换 ===== */
+  .scheme-tabs {
+    display: flex;
+    gap: 0;
+    max-width: 1200px;
+    margin: 0 auto 16px;
+    background: #fff;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.08);
+  }
+  .scheme-tab {
+    flex: 1;
+    padding: 12px 16px;
+    text-align: center;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    color: #666;
+    border-bottom: 3px solid transparent;
+    transition: all 0.2s;
+    user-select: none;
+  }
+  .scheme-tab:hover { background: #f8fbff; color: #0078d4; }
+  .scheme-tab.active {
+    color: #0078d4;
+    border-bottom-color: #0078d4;
+    background: #f0f7ff;
+    font-weight: 600;
+  }
+  .scheme-tab .badge {
+    display: inline-block;
+    background: #0078d4;
+    color: #fff;
+    padding: 1px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    margin-right: 4px;
+  }
+
+  /* ===== 方案容器 ===== */
+  .scheme-panel { display: none; max-width: 1200px; margin: 0 auto; }
+  .scheme-panel.active { display: block; }
+
+  /* ===== 通用样式 ===== */
+  .main-layout {
+    display: flex;
+    gap: 16px;
+    min-height: 600px;
+  }
+  .left-panel {
+    width: 480px;
+    min-width: 480px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .right-panel {
+    flex: 1;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    overflow: hidden;
+  }
+
+  /* 输入面板通用 */
+  .panel-title {
+    padding: 12px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #1a1a2e;
+    border-bottom: 1px solid #f0f0f0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .param-group {
+    padding: 10px 16px;
+  }
+  .param-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .param-label {
+    width: 130px;
+    min-width: 130px;
+    font-size: 13px;
+    color: #555;
+    font-weight: 500;
+  }
+  .param-input {
+    flex: 1;
+    padding: 7px 10px;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #333;
+    background: #fff;
+    outline: none;
+  }
+  .param-input:focus { border-color: #0078d4; }
+  .param-select {
+    flex: 1;
+    padding: 7px 10px;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #333;
+    background: #fff;
+  }
+  .section-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #0078d4;
+    margin: 4px 0 6px;
+  }
+  .sep { border: none; border-top: 1px solid #f0f0f0; margin: 6px 0; }
+  .hint { font-size: 11px; color: #999; margin-top: 2px; }
+
+  /* 按钮 */
+  .btn-primary {
+    padding: 8px 24px;
+    border: none;
+    border-radius: 6px;
+    background: #0078d4;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .btn-primary:hover { background: #106ebe; }
+  .btn-secondary {
+    padding: 8px 16px;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+    background: #fff;
+    color: #555;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .btn-secondary:hover { border-color: #0078d4; color: #0078d4; }
+  .btn-icon {
+    width: 28px; height: 28px;
+    border: none; border-radius: 6px;
+    background: #f5f5f5;
+    color: #555; font-size: 16px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center; justify-content: center;
+  }
+  .btn-icon:hover { background: #e0e8f0; color: #0078d4; }
+  .btn-icon.danger:hover { background: #ffeaea; color: #c62828; }
+
+  /* 标签芯片 */
+  .tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 12px;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: 2px solid transparent;
+  }
+  .tag-chip.inactive {
+    background: #f0f0f0;
+    color: #666;
+  }
+  .tag-chip.inactive:hover {
+    background: #e8f4fd;
+    color: #0078d4;
+  }
+  .tag-chip.active {
+    background: #0078d4;
+    color: #fff;
+    border-color: #0078d4;
+  }
+  .tag-chip .x {
+    font-size: 13px;
+    opacity: 0.6;
+    margin-left: 2px;
+  }
+  .tag-chip .x:hover { opacity: 1; }
+
+  /* checkbox */
+  .cb-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 4px;
+  }
+  .cb-row input[type="checkbox"] { accent-color: #0078d4; }
+
+  /* ===== 方案A特有：卡片列表 ===== */
+  .card-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px;
+  }
+  .case-card {
+    background: #fafbfc;
+    border: 1px solid #e8e8e8;
+    border-radius: 10px;
+    margin-bottom: 8px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .case-card.selected {
+    border-color: #0078d4;
+    box-shadow: 0 0 0 2px rgba(0,120,212,0.1);
+  }
+  .case-card-header {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    cursor: pointer;
+    gap: 8px;
+  }
+  .case-card-header:hover { background: #f0f7ff; }
+  .case-num {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: #0078d4;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .case-summary {
+    flex: 1;
+    font-size: 12px;
+    color: #555;
+  }
+  .case-summary b { color: #333; font-size: 13px; }
+  .case-expand {
+    color: #bbb;
+    font-size: 16px;
+    transition: transform 0.2s;
+  }
+  .case-card-body {
+    padding: 0 12px 10px 12px;
+    display: none;
+  }
+  .case-card.expanded .case-card-body { display: block; }
+  .case-card.expanded .case-expand { transform: rotate(180deg); }
+
+  /* ===== 方案B特有：Tag导航 + 参数面板 ===== */
+  .tag-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 14px;
+    border-bottom: 1px solid #f0f0f0;
+    align-items: center;
+  }
+  .tag-nav-add {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 10px;
+    border: 1px dashed #ccc;
+    border-radius: 16px;
+    font-size: 12px;
+    color: #999;
+    cursor: pointer;
+  }
+  .tag-nav-add:hover { border-color: #0078d4; color: #0078d4; background: #f0f7ff; }
+  .param-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 16px;
+  }
+
+  /* ===== 方案C特有：表格模式 ===== */
+  .config-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .config-table thead th {
+    background: #f5f7fa;
+    padding: 8px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #555;
+    text-align: center;
+    border-bottom: 2px solid #e0e0e0;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  .config-table tbody td {
+    padding: 6px 4px;
+    text-align: center;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .config-table tbody tr:hover { background: #f8fbff; }
+  .config-table tbody tr.highlight { background: #f0f7ff; }
+  .config-table input {
+    width: 100%;
+    padding: 4px 6px;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    font-size: 12px;
+    text-align: center;
+    outline: none;
+  }
+  .config-table input:focus { border-color: #0078d4; }
+  .config-table select {
+    width: 100%;
+    padding: 4px 2px;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    font-size: 11px;
+    outline: none;
+  }
+
+  /* ===== 右侧输出区 ===== */
+  .output-tabs {
+    display: flex;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .output-tab {
+    padding: 10px 16px;
+    font-size: 13px;
+    color: #666;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .output-tab.active {
+    color: #0078d4;
+    border-bottom-color: #0078d4;
+    font-weight: 600;
+  }
+  .output-body {
+    padding: 14px;
+    overflow-y: auto;
+    height: 520px;
+  }
+
+  /* 结果卡片 */
+  .result-card {
+    border: 2px solid #2e7d32;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    background: #fafbfc;
+  }
+  .result-card.warn { border-color: #e67e22; }
+  .result-card.error { border-color: #c62828; }
+  .result-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    margin-right: 8px;
+  }
+  .result-badge.eco { background: #2e7d32; }
+  .result-badge.comp { background: #e67e22; }
+  .result-badge.fb { background: #c62828; }
+  .result-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+    font-size: 12px;
+  }
+  .result-table td {
+    padding: 4px 10px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .result-table td:first-child { color: #888; width: 120px; }
+  .result-table tr:nth-child(even) { background: #f8f9fa; }
+
+  /* 方案说明 */
+  .scheme-desc {
+    max-width: 1200px;
+    margin: 12px auto 0;
+    padding: 14px 20px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.06);
+    font-size: 12px;
+    color: #666;
+    line-height: 1.8;
+  }
+  .scheme-desc b { color: #333; }
+  .scheme-desc .pros { color: #2e7d32; }
+  .scheme-desc .cons { color: #e65100; }
+</style>
+</head>
+<body>
+
+<h1>多流量独立参数 - UI方案对比</h1>
+<p class="subtitle">每个Q拥有独立的管材/管长/局部损失等参数 · 基于B方案(标签芯片)演变 · 点击顶部Tab切换方案</p>
+
+<!-- 方案切换 -->
+<div class="scheme-tabs">
+  <div class="scheme-tab active" onclick="switchScheme('a')">
+    <span class="badge">B1</span> 标签导航 + 参数面板
+  </div>
+  <div class="scheme-tab" onclick="switchScheme('b')">
+    <span class="badge">B2</span> 可折叠卡片列表
+  </div>
+  <div class="scheme-tab" onclick="switchScheme('c')">
+    <span class="badge">B3</span> 紧凑参数表格
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- 方案 B1: 标签导航 + 参数面板 -->
+<!-- ================================================================ -->
+<div class="scheme-panel active" id="panel-a">
+  <div class="main-layout">
+    <div class="left-panel">
+      <div class="panel-title">
+        <span>输入参数</span>
+        <span style="flex:1"></span>
+        <span style="font-size:11px;color:#999;">4 个计算工况</span>
+      </div>
+
+      <!-- 标签导航区 -->
+      <div class="tag-nav">
+        <span class="tag-chip active" onclick="switchQ(this, 'a')">
+          Q₁ = 0.21
+        </span>
+        <span class="tag-chip inactive" onclick="switchQ(this, 'a')">
+          Q₂ = 0.35
+        </span>
+        <span class="tag-chip inactive" onclick="switchQ(this, 'a')">
+          Q₃ = 0.50 <span class="x">×</span>
+        </span>
+        <span class="tag-chip inactive" onclick="switchQ(this, 'a')">
+          Q₄ = 0.80 <span class="x">×</span>
+        </span>
+        <span class="tag-nav-add">+ 添加</span>
+      </div>
+
+      <!-- 当前选中Q的参数面板 -->
+      <div class="param-content">
+        <div class="param-group">
+          <div class="param-row">
+            <span class="param-label">设计流量 Q (m³/s):</span>
+            <input class="param-input" value="0.21" />
+          </div>
+          <div class="param-row">
+            <span class="param-label">管材类型:</span>
+            <select class="param-select">
+              <option selected>HDPE和玻璃钢夹砂管</option>
+              <option>球墨铸铁管</option>
+              <option>预应力钢筒混凝土管</option>
+              <option>钢管</option>
+            </select>
+          </div>
+
+          <div class="section-label">【管道参数】</div>
+          <div class="param-row">
+            <span class="param-label">管长 L (m):</span>
+            <input class="param-input" value="1000" />
+          </div>
+          <div class="param-row">
+            <span class="param-label">局部损失比例:</span>
+            <input class="param-input" value="0.15" />
+          </div>
+
+          <div class="section-label">【可选参数】</div>
+          <div class="param-row">
+            <span class="param-label">指定管径 D (m):</span>
+            <input class="param-input" placeholder="留空则自动推荐经济管径" />
+          </div>
+          <hr class="sep">
+          <div class="cb-row">
+            <input type="checkbox" checked /> 考虑加大流量
+          </div>
+          <div class="param-row">
+            <span class="param-label">加大比例 (%):</span>
+            <input class="param-input" placeholder="留空则自动计算" />
+          </div>
+          <hr class="sep">
+          <div class="cb-row">
+            <input type="checkbox" checked /> 输出详细计算过程
+          </div>
+        </div>
+
+        <!-- 快捷操作 -->
+        <div style="padding:6px 16px 0;display:flex;gap:6px;">
+          <button class="btn-secondary" style="font-size:11px;padding:5px 10px;">
+            复制到所有工况
+          </button>
+          <button class="btn-secondary" style="font-size:11px;padding:5px 10px;">
+            从上一个复制
+          </button>
+        </div>
+      </div>
+
+      <!-- 底部按钮 -->
+      <div style="padding:10px 16px;border-top:1px solid #f0f0f0;display:flex;gap:8px;">
+        <button class="btn-primary" style="flex:1;">计算全部 (4个工况)</button>
+        <button class="btn-secondary">清空</button>
+        <button class="btn-secondary">导出Word</button>
+      </div>
+    </div>
+
+    <!-- 右侧结果 -->
+    <div class="right-panel">
+      <div class="output-tabs">
+        <div class="output-tab active">计算结果</div>
+        <div class="output-tab">候选管径</div>
+        <div class="output-tab">批量计算日志</div>
+      </div>
+      <div class="output-body">
+        <!-- 结果按Q分段展示 -->
+        <div class="result-card">
+          <span class="result-badge eco">经济区推荐</span>
+          <span style="font-size:12px;color:#888;">Q₁ = 0.21 m³/s · HDPE和玻璃钢夹砂管 · L=1000m</span>
+          <table class="result-table">
+            <tr><td>推荐管径</td><td><b>D = 0.300 m (300 mm)</b></td></tr>
+            <tr><td>有压流速</td><td><b>V = 0.9718 m/s</b></td></tr>
+            <tr><td>沿程水损</td><td>0.3842 m/km</td></tr>
+            <tr><td>总水损</td><td><b>0.4418 m/km</b></td></tr>
+            <tr><td>管长折算总损失</td><td><b>0.4418 m</b></td></tr>
+          </table>
+        </div>
+
+        <div class="result-card">
+          <span class="result-badge eco">经济区推荐</span>
+          <span style="font-size:12px;color:#888;">Q₂ = 0.35 m³/s · HDPE和玻璃钢夹砂管 · L=1000m</span>
+          <table class="result-table">
+            <tr><td>推荐管径</td><td><b>D = 0.350 m (350 mm)</b></td></tr>
+            <tr><td>有压流速</td><td><b>V = 1.0186 m/s</b></td></tr>
+            <tr><td>沿程水损</td><td>0.4156 m/km</td></tr>
+            <tr><td>总水损</td><td><b>0.4779 m/km</b></td></tr>
+            <tr><td>管长折算总损失</td><td><b>0.4779 m</b></td></tr>
+          </table>
+        </div>
+
+        <div class="result-card warn">
+          <span class="result-badge comp">妥协区</span>
+          <span style="font-size:12px;color:#888;">Q₃ = 0.50 m³/s · 球墨铸铁管 · L=800m</span>
+          <table class="result-table">
+            <tr><td>推荐管径</td><td><b>D = 0.500 m (500 mm)</b></td></tr>
+            <tr><td>有压流速</td><td><b>V = 0.8149 m/s</b></td></tr>
+            <tr><td>沿程水损</td><td>0.5621 m/km</td></tr>
+            <tr><td>总水损</td><td><b>0.6464 m/km</b></td></tr>
+            <tr><td>管长折算总损失</td><td><b>0.5171 m</b></td></tr>
+          </table>
+        </div>
+
+        <div class="result-card">
+          <span class="result-badge eco">经济区推荐</span>
+          <span style="font-size:12px;color:#888;">Q₄ = 0.80 m³/s · HDPE和玻璃钢夹砂管 · L=1500m</span>
+          <table class="result-table">
+            <tr><td>推荐管径</td><td><b>D = 0.500 m (500 mm)</b></td></tr>
+            <tr><td>有压流速</td><td><b>V = 1.0186 m/s</b></td></tr>
+            <tr><td>沿程水损</td><td>0.3891 m/km</td></tr>
+            <tr><td>总水损</td><td><b>0.4475 m/km</b></td></tr>
+            <tr><td>管长折算总损失</td><td><b>0.6712 m</b></td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scheme-desc">
+    <b>B1 标签导航 + 参数面板</b> —
+    顶部标签芯片切换工况，下方完整显示当前工况的所有参数。
+    <span class="pros">✔ 参数空间充足，编辑体验好；标签一目了然。</span>
+    <span class="cons">✘ 同时只能看到一个工况的参数，不便横向对比。</span>
+    <br>快捷功能："复制到所有工况"按钮可将当前参数批量应用；"从上一个复制"快速继承。
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- 方案 B2: 可折叠卡片列表 -->
+<!-- ================================================================ -->
+<div class="scheme-panel" id="panel-b">
+  <div class="main-layout">
+    <div class="left-panel">
+      <div class="panel-title">
+        <span>输入参数</span>
+        <span style="flex:1"></span>
+        <button class="btn-secondary" style="font-size:11px;padding:4px 10px;">+ 添加工况</button>
+      </div>
+
+      <div class="card-list">
+        <!-- 卡片1: 展开 -->
+        <div class="case-card expanded selected">
+          <div class="case-card-header" onclick="toggleCard(this)">
+            <span class="case-num">1</span>
+            <span class="case-summary"><b>Q = 0.21 m³/s</b> · HDPE和玻璃钢夹砂管 · L=1000m</span>
+            <span class="case-expand">▾</span>
+            <button class="btn-icon danger" style="width:22px;height:22px;font-size:13px;">×</button>
+          </div>
+          <div class="case-card-body">
+            <div class="param-row">
+              <span class="param-label" style="width:110px;">设计流量 Q:</span>
+              <input class="param-input" value="0.21" style="font-size:12px;padding:5px 8px;" />
+              <span style="font-size:11px;color:#999;margin-left:4px;">m³/s</span>
+            </div>
+            <div class="param-row">
+              <span class="param-label" style="width:110px;">管材类型:</span>
+              <select class="param-select" style="font-size:12px;padding:5px 8px;">
+                <option selected>HDPE和玻璃钢夹砂管</option>
+                <option>球墨铸铁管</option>
+              </select>
+            </div>
+            <div class="param-row">
+              <span class="param-label" style="width:110px;">管长 L:</span>
+              <input class="param-input" value="1000" style="font-size:12px;padding:5px 8px;" />
+              <span style="font-size:11px;color:#999;margin-left:4px;">m</span>
+            </div>
+            <div class="param-row">
+              <span class="param-label" style="width:110px;">局部损失比例:</span>
+              <input class="param-input" value="0.15" style="font-size:12px;padding:5px 8px;" />
+            </div>
+            <div class="param-row">
+              <span class="param-label" style="width:110px;">指定管径 D:</span>
+              <input class="param-input" placeholder="自动" style="font-size:12px;padding:5px 8px;" />
+              <span style="font-size:11px;color:#999;margin-left:4px;">m</span>
+            </div>
+            <div class="cb-row" style="margin-top:4px;">
+              <input type="checkbox" checked /> <span style="font-size:12px;">加大流量</span>
+              <input class="param-input" placeholder="自动" style="width:60px;font-size:11px;padding:4px 6px;margin-left:8px;" />
+              <span style="font-size:11px;color:#999;">%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 卡片2: 收起 -->
+        <div class="case-card">
+          <div class="case-card-header" onclick="toggleCard(this)">
+            <span class="case-num">2</span>
+            <span class="case-summary"><b>Q = 0.35 m³/s</b> · HDPE和玻璃钢夹砂管 · L=1000m</span>
+            <span class="case-expand">▾</span>
+            <button class="btn-icon danger" style="width:22px;height:22px;font-size:13px;">×</button>
+          </div>
+          <div class="case-card-body">
+            <div style="color:#999;font-size:12px;padding:4px 0;">（与工况1相同的参数布局）</div>
+          </div>
+        </div>
+
+        <!-- 卡片3: 收起 -->
+        <div class="case-card">
+          <div class="case-card-header" onclick="toggleCard(this)">
+            <span class="case-num">3</span>
+            <span class="case-summary"><b>Q = 0.50 m³/s</b> · 球墨铸铁管 · L=800m</span>
+            <span class="case-expand">▾</span>
+            <button class="btn-icon danger" style="width:22px;height:22px;font-size:13px;">×</button>
+          </div>
+          <div class="case-card-body">
+            <div style="color:#999;font-size:12px;padding:4px 0;">（不同管材和管长）</div>
+          </div>
+        </div>
+
+        <!-- 卡片4: 收起 -->
+        <div class="case-card">
+          <div class="case-card-header" onclick="toggleCard(this)">
+            <span class="case-num">4</span>
+            <span class="case-summary"><b>Q = 0.80 m³/s</b> · HDPE和玻璃钢夹砂管 · L=1500m</span>
+            <span class="case-expand">▾</span>
+            <button class="btn-icon danger" style="width:22px;height:22px;font-size:13px;">×</button>
+          </div>
+          <div class="case-card-body">
+            <div style="color:#999;font-size:12px;padding:4px 0;">（不同管长）</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 快捷操作 -->
+      <div style="padding:6px 12px;display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn-secondary" style="font-size:11px;padding:4px 8px;">全部展开</button>
+        <button class="btn-secondary" style="font-size:11px;padding:4px 8px;">全部收起</button>
+        <button class="btn-secondary" style="font-size:11px;padding:4px 8px;">统一参数到所有</button>
+      </div>
+
+      <div style="padding:10px 12px;border-top:1px solid #f0f0f0;display:flex;gap:8px;">
+        <button class="btn-primary" style="flex:1;">计算全部 (4个工况)</button>
+        <button class="btn-secondary">清空</button>
+        <button class="btn-secondary">导出Word</button>
+      </div>
+    </div>
+
+    <!-- 右侧结果 (同方案A) -->
+    <div class="right-panel">
+      <div class="output-tabs">
+        <div class="output-tab active">计算结果</div>
+        <div class="output-tab">候选管径</div>
+        <div class="output-tab">批量计算日志</div>
+      </div>
+      <div class="output-body">
+        <div class="result-card">
+          <span class="result-badge eco">经济区推荐</span>
+          <span style="font-size:12px;color:#888;">Q₁ = 0.21 m³/s · HDPE和玻璃钢夹砂管 · L=1000m</span>
+          <table class="result-table">
+            <tr><td>推荐管径</td><td><b>D = 0.300 m (300 mm)</b></td></tr>
+            <tr><td>有压流速</td><td><b>V = 0.9718 m/s</b></td></tr>
+            <tr><td>总水损</td><td><b>0.4418 m/km</b></td></tr>
+            <tr><td>管长折算总损失</td><td><b>0.4418 m</b></td></tr>
+          </table>
+        </div>
+        <div class="result-card warn">
+          <span class="result-badge comp">妥协区</span>
+          <span style="font-size:12px;color:#888;">Q₃ = 0.50 m³/s · 球墨铸铁管 · L=800m</span>
+          <table class="result-table">
+            <tr><td>推荐管径</td><td><b>D = 0.500 m (500 mm)</b></td></tr>
+            <tr><td>有压流速</td><td><b>V = 0.8149 m/s</b></td></tr>
+            <tr><td>总水损</td><td><b>0.6464 m/km</b></td></tr>
+          </table>
+        </div>
+        <div style="font-size:12px;color:#999;text-align:center;padding:20px;">... 其余工况结果 ...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scheme-desc">
+    <b>B2 可折叠卡片列表</b> —
+    每个工况一张卡片，收起时显示摘要(Q值+管材+管长)，展开编辑全部参数。
+    <span class="pros">✔ 所有工况同时可见（摘要态）；收起节省空间；直观。</span>
+    <span class="cons">✘ 展开多个时滚动长；卡片内参数空间略紧凑。</span>
+    <br>支持"统一参数到所有"快捷操作，展开的卡片自动高亮。
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- 方案 B3: 紧凑参数表格 -->
+<!-- ================================================================ -->
+<div class="scheme-panel" id="panel-c">
+  <div class="main-layout">
+    <div class="left-panel" style="width:560px;min-width:560px;">
+      <div class="panel-title">
+        <span>输入参数</span>
+        <span style="flex:1"></span>
+        <button class="btn-secondary" style="font-size:11px;padding:4px 10px;">+ 添加行</button>
+      </div>
+
+      <div style="flex:1;overflow:auto;padding:4px;">
+        <table class="config-table">
+          <thead>
+            <tr>
+              <th style="width:24px">#</th>
+              <th style="width:70px">Q (m³/s)</th>
+              <th style="min-width:120px">管材</th>
+              <th style="width:65px">管长 (m)</th>
+              <th style="width:55px">损失比</th>
+              <th style="width:60px">管径 D</th>
+              <th style="width:55px">加大%</th>
+              <th style="width:28px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="highlight">
+              <td style="color:#999;">1</td>
+              <td><input value="0.21" /></td>
+              <td>
+                <select>
+                  <option selected>HDPE和玻璃钢夹砂管</option>
+                  <option>球墨铸铁管</option>
+                </select>
+              </td>
+              <td><input value="1000" /></td>
+              <td><input value="0.15" /></td>
+              <td><input placeholder="自动" /></td>
+              <td><input placeholder="自动" /></td>
+              <td><button class="btn-icon danger" style="width:20px;height:20px;font-size:12px;">×</button></td>
+            </tr>
+            <tr>
+              <td style="color:#999;">2</td>
+              <td><input value="0.35" /></td>
+              <td>
+                <select>
+                  <option selected>HDPE和玻璃钢夹砂管</option>
+                  <option>球墨铸铁管</option>
+                </select>
+              </td>
+              <td><input value="1000" /></td>
+              <td><input value="0.15" /></td>
+              <td><input placeholder="自动" /></td>
+              <td><input placeholder="自动" /></td>
+              <td><button class="btn-icon danger" style="width:20px;height:20px;font-size:12px;">×</button></td>
+            </tr>
+            <tr>
+              <td style="color:#999;">3</td>
+              <td><input value="0.50" /></td>
+              <td>
+                <select>
+                  <option>HDPE和玻璃钢夹砂管</option>
+                  <option selected>球墨铸铁管</option>
+                </select>
+              </td>
+              <td><input value="800" /></td>
+              <td><input value="0.15" /></td>
+              <td><input placeholder="自动" /></td>
+              <td><input placeholder="自动" /></td>
+              <td><button class="btn-icon danger" style="width:20px;height:20px;font-size:12px;">×</button></td>
+            </tr>
+            <tr>
+              <td style="color:#999;">4</td>
+              <td><input value="0.80" /></td>
+              <td>
+                <select>
+                  <option selected>HDPE和玻璃钢夹砂管</option>
+                  <option>球墨铸铁管</option>
+                </select>
+              </td>
+              <td><input value="1500" /></td>
+              <td><input value="0.15" /></td>
+              <td><input value="0.5" /></td>
+              <td><input placeholder="自动" /></td>
+              <td><button class="btn-icon danger" style="width:20px;height:20px;font-size:12px;">×</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="padding:6px 12px;display:flex;gap:6px;flex-wrap:wrap;border-top:1px solid #f0f0f0;">
+        <button class="btn-secondary" style="font-size:11px;padding:4px 8px;">从Excel粘贴</button>
+        <button class="btn-secondary" style="font-size:11px;padding:4px 8px;">统一管材</button>
+        <button class="btn-secondary" style="font-size:11px;padding:4px 8px;">统一管长</button>
+      </div>
+
+      <hr class="sep">
+
+      <!-- 公共选项 -->
+      <div style="padding:6px 12px;">
+        <div class="cb-row">
+          <input type="checkbox" checked /> <span style="font-size:12px;">输出详细计算过程</span>
+        </div>
+      </div>
+
+      <div style="padding:10px 12px;border-top:1px solid #f0f0f0;display:flex;gap:8px;">
+        <button class="btn-primary" style="flex:1;">计算全部 (4个工况)</button>
+        <button class="btn-secondary">清空</button>
+        <button class="btn-secondary">导出Word</button>
+      </div>
+    </div>
+
+    <!-- 右侧结果 -->
+    <div class="right-panel">
+      <div class="output-tabs">
+        <div class="output-tab active">计算结果</div>
+        <div class="output-tab">候选管径</div>
+        <div class="output-tab">批量计算日志</div>
+      </div>
+      <div class="output-body">
+        <!-- 汇总对比表 -->
+        <div style="margin-bottom:16px;">
+          <div style="font-size:13px;font-weight:600;color:#1a1a2e;margin-bottom:8px;">汇总对比</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="background:#f5f7fa;">
+                <th style="padding:6px 8px;text-align:left;border-bottom:2px solid #e0e0e0;">#</th>
+                <th style="padding:6px 8px;text-align:left;border-bottom:2px solid #e0e0e0;">Q (m³/s)</th>
+                <th style="padding:6px 8px;text-align:left;border-bottom:2px solid #e0e0e0;">管材</th>
+                <th style="padding:6px 8px;text-align:center;border-bottom:2px solid #e0e0e0;">推荐D</th>
+                <th style="padding:6px 8px;text-align:center;border-bottom:2px solid #e0e0e0;">V (m/s)</th>
+                <th style="padding:6px 8px;text-align:center;border-bottom:2px solid #e0e0e0;">hf总</th>
+                <th style="padding:6px 8px;text-align:center;border-bottom:2px solid #e0e0e0;">类别</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding:6px 8px;">1</td>
+                <td style="padding:6px 8px;">0.21</td>
+                <td style="padding:6px 8px;">HDPE</td>
+                <td style="padding:6px 8px;text-align:center;font-weight:600;">300mm</td>
+                <td style="padding:6px 8px;text-align:center;">0.972</td>
+                <td style="padding:6px 8px;text-align:center;">0.442</td>
+                <td style="padding:6px 8px;text-align:center;color:#2e7d32;font-weight:600;">经济</td>
+              </tr>
+              <tr style="background:#f8f9fa;">
+                <td style="padding:6px 8px;">2</td>
+                <td style="padding:6px 8px;">0.35</td>
+                <td style="padding:6px 8px;">HDPE</td>
+                <td style="padding:6px 8px;text-align:center;font-weight:600;">350mm</td>
+                <td style="padding:6px 8px;text-align:center;">1.019</td>
+                <td style="padding:6px 8px;text-align:center;">0.478</td>
+                <td style="padding:6px 8px;text-align:center;color:#2e7d32;font-weight:600;">经济</td>
+              </tr>
+              <tr>
+                <td style="padding:6px 8px;">3</td>
+                <td style="padding:6px 8px;">0.50</td>
+                <td style="padding:6px 8px;">球墨铸铁</td>
+                <td style="padding:6px 8px;text-align:center;font-weight:600;">500mm</td>
+                <td style="padding:6px 8px;text-align:center;">0.815</td>
+                <td style="padding:6px 8px;text-align:center;">0.646</td>
+                <td style="padding:6px 8px;text-align:center;color:#e67e22;font-weight:600;">妥协</td>
+              </tr>
+              <tr style="background:#f8f9fa;">
+                <td style="padding:6px 8px;">4</td>
+                <td style="padding:6px 8px;">0.80</td>
+                <td style="padding:6px 8px;">HDPE</td>
+                <td style="padding:6px 8px;text-align:center;font-weight:600;">500mm</td>
+                <td style="padding:6px 8px;text-align:center;">1.019</td>
+                <td style="padding:6px 8px;text-align:center;">0.448</td>
+                <td style="padding:6px 8px;text-align:center;color:#2e7d32;font-weight:600;">经济</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <hr class="sep">
+
+        <!-- 各Q详细结果 -->
+        <div class="result-card">
+          <span class="result-badge eco">经济区推荐</span>
+          <span style="font-size:12px;color:#888;">Q₁ = 0.21 m³/s · HDPE和玻璃钢夹砂管 · L=1000m</span>
+          <table class="result-table">
+            <tr><td>推荐管径</td><td><b>D = 0.300 m (300 mm)</b></td></tr>
+            <tr><td>有压流速</td><td><b>V = 0.9718 m/s</b></td></tr>
+            <tr><td>总水损</td><td><b>0.4418 m/km</b></td></tr>
+          </table>
+        </div>
+        <div style="font-size:12px;color:#999;text-align:center;padding:10px;">... 展开查看详细过程 ...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scheme-desc">
+    <b>B3 紧凑参数表格</b> —
+    一行一个工况，所有参数平铺为列，类似Excel表格体验。
+    <span class="pros">✔ 全部工况一目了然，参数对比方便；支持从Excel粘贴。</span>
+    <span class="cons">✘ 水平空间紧张，管材下拉框较窄；参数多时列太多。</span>
+    <br>右侧结果区顶部有"汇总对比表"，下方是各Q的详细结果卡片。
+  </div>
+</div>
+
+
+<script>
+function switchScheme(key) {
+  document.querySelectorAll('.scheme-tab').forEach((t, i) => {
+    t.classList.toggle('active', ['a','b','c'][i] === key);
+  });
+  document.querySelectorAll('.scheme-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + key).classList.add('active');
+}
+
+function switchQ(el, scheme) {
+  el.closest('.tag-nav').querySelectorAll('.tag-chip').forEach(c => {
+    c.classList.remove('active');
+    c.classList.add('inactive');
+  });
+  el.classList.remove('inactive');
+  el.classList.add('active');
+}
+
+function toggleCard(header) {
+  const card = header.closest('.case-card');
+  card.classList.toggle('expanded');
+}
+</script>
+
+</body>
+</html>

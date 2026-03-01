@@ -50,6 +50,9 @@ REFERENCES_BASE = {
     "water_profile": [
         "《灌溉与排水工程设计标准》(GB 50288-2018)",
     ],
+    "pressure_pipe": [
+        "《灌溉与排水工程设计标准》(GB 50288-2018)",
+    ],
 }
 
 CALC_PURPOSE_TEMPLATE = {
@@ -76,6 +79,10 @@ CALC_PURPOSE_TEMPLATE = {
     "water_profile": (
         "为推求{project}{name}沿线水面线，确定各控制节点水位及水面比降，"
         "为工程水力设计提供依据。"
+    ),
+    "pressure_pipe": (
+        "为确定{project}{name}有压输水管道的管径及水力参数，进行有压管道水力计算，"
+        "验算管道流速及水头损失是否满足《灌溉与排水工程设计标准》(GB 50288-2018)第6.7.2条规范要求。"
     ),
 }
 

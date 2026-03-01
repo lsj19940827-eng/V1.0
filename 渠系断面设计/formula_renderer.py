@@ -249,6 +249,7 @@ _GREEK_MAP = {
     'β': '\\beta',
     'θ': '\\theta',
     'π': '\\pi',
+    'ζ': '\\zeta',
 }
 
 # 需要跳过（不转换）的关键词
@@ -340,7 +341,7 @@ def text_to_latex(line):
     # 2. 中文下角标（使用 \text{} 以支持 KaTeX CJK 渲染）
     #    (a) 希腊字母 + 中文: χ加大 → \chi_{\text{加大}}
     latex = re.sub(
-        r'([χβθπ])_?([\u4e00-\u9fff]+)',
+        r'([χβθπζ])_?([\u4e00-\u9fff]+)',
         lambda m: _GREEK_MAP.get(m.group(1), m.group(1))
                   + '_{\\text{' + m.group(2) + '}}',
         latex

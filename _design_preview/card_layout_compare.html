@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>摘要卡片布局方案对比</title>
+<style>
+  body { font-family: 'Microsoft YaHei', sans-serif; background: #f5f5f5; padding: 20px; }
+  h1 { font-size: 18px; color: #333; margin-bottom: 24px; }
+  .section { background: #fff; border-radius: 12px; padding: 20px 24px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .section h2 { font-size: 15px; color: #1565c0; margin: 0 0 6px; }
+  .section h3 { font-size: 13px; color: #888; margin: 0 0 12px; font-weight: normal; }
+  .sep { width: 1px; height: 28px; background: #e0e0e0; flex-shrink: 0; }
+  .label { font-size: 11px; color: #888; }
+  .pipe-name { font-size: 12px; color: #1a1a1a; }
+  .val-big { font-size: 15px; font-weight: 700; color: #2e7d32; }
+  .val-med { font-size: 14px; font-weight: 700; color: #1a1a1a; }
+  .val-cat { font-size: 13px; font-weight: 700; color: #2e7d32; }
+  .tag { display: inline-block; background: #e8f5e9; color: #2e7d32; font-size: 11px; padding: 1px 8px; border-radius: 6px; margin-bottom: 4px; }
+  .container-label { font-size: 12px; color: #999; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<h1>摘要卡片布局方案对比（模拟3种管材）</h1>
+
+<!-- ==================== 当前效果 ==================== -->
+<div class="section">
+  <h2>❌ 当前效果（会换行）</h2>
+  <h3>gap:16px, padding:12px 18px, 有分隔线, 7列, flex-wrap:wrap</h3>
+
+  <div class="container-label">球墨铸铁管 ✅ 一行</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">球墨铸铁管</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 800 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">0.9947 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.7603 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">管长折算</div><div class="val-med">2.7603 m</div></div>
+  </div>
+
+  <div class="container-label">玻璃钢夹砂管 ❌ 换行</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">玻璃钢夹砂管</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 700 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">1.2992 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.6909 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">管长折算</div><div class="val-med">2.6909 m</div></div>
+  </div>
+
+  <div class="container-label">预应力钢筒混凝土管 ❌ 换行</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">预应力钢筒混凝土管<br>(n=0.013)</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 800 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">0.9947 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.7771 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">管长折算</div><div class="val-med">2.7771 m</div></div>
+  </div>
+</div>
+
+<!-- ==================== 方案A（最终版） ==================== -->
+<div class="section">
+  <h2>✅ 方案A（最终版）：缩减间距 + 不减字号 + 预应力拆三行</h2>
+  <h3>gap:10px, padding:12px 12px, 字号不变, 保留分隔线, 7列, 预应力拆三行居中</h3>
+
+  <div class="container-label">球墨铸铁管 — 无变化</div>
+  <div style="display:flex;gap:10px;margin:4px 0 12px;padding:12px 12px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">球墨铸铁管</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 800 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">0.9947 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.7603 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">管长折算</div><div class="val-med">2.7603 m</div></div>
+  </div>
+
+  <div class="container-label">玻璃钢夹砂管 — 无变化</div>
+  <div style="display:flex;gap:10px;margin:4px 0 12px;padding:12px 12px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">玻璃钢夹砂管</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 700 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">1.2992 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.6909 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">管长折算</div><div class="val-med">2.6909 m</div></div>
+  </div>
+
+  <div class="container-label">预应力钢筒混凝土管 — 拆三行居中</div>
+  <div style="display:flex;gap:10px;margin:4px 0 12px;padding:12px 12px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">预应力<br>钢筒混凝土管<br>(n=0.013)</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 800 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">0.9947 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.7771 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">管长折算</div><div class="val-med">2.7771 m</div></div>
+  </div>
+</div>
+
+<!-- ==================== 方案B ==================== -->
+<div class="section">
+  <h2>方案B：去掉分隔线 + 缩减间距</h2>
+  <h3>gap:14px, padding:10px 14px, 无分隔线, 7列</h3>
+
+  <div class="container-label">球墨铸铁管</div>
+  <div style="display:flex;gap:14px;margin:4px 0 12px;padding:10px 14px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">球墨铸铁管</div></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 800 mm</div></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">0.9947 m/s</div></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.7603 m/km</div></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+    <div style="text-align:center"><div class="label">管长折算</div><div class="val-med">2.7603 m</div></div>
+  </div>
+
+  <div class="container-label">玻璃钢夹砂管</div>
+  <div style="display:flex;gap:14px;margin:4px 0 12px;padding:10px 14px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">玻璃钢夹砂管</div></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 700 mm</div></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">1.2992 m/s</div></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.6909 m/km</div></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+    <div style="text-align:center"><div class="label">管长折算</div><div class="val-med">2.6909 m</div></div>
+  </div>
+
+  <div class="container-label">预应力钢筒混凝土管</div>
+  <div style="display:flex;gap:14px;margin:4px 0 12px;padding:10px 14px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">预应力钢筒混凝土管<br>(n=0.013)</div></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 800 mm</div></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">0.9947 m/s</div></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.7771 m/km</div></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+    <div style="text-align:center"><div class="label">管长折算</div><div class="val-med">2.7771 m</div></div>
+  </div>
+</div>
+
+<!-- ==================== 方案C ==================== -->
+<div class="section">
+  <h2>方案C：去掉"管长折算"列</h2>
+  <h3>gap:16px, padding:12px 18px, 保留分隔线, 6列（去掉管长折算）</h3>
+
+  <div class="container-label">球墨铸铁管</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">球墨铸铁管</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 800 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">0.9947 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.7603 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+  </div>
+
+  <div class="container-label">玻璃钢夹砂管</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">玻璃钢夹砂管</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 700 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">1.2992 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.6909 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+  </div>
+
+  <div class="container-label">预应力钢筒混凝土管</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">预应力钢筒混凝土管<br>(n=0.013)</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 800 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">0.9947 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.7771 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+  </div>
+</div>
+
+<!-- ==================== 方案D ==================== -->
+<div class="section">
+  <h2>方案D：强制不换行 (nowrap + flex-shrink)</h2>
+  <h3>flex-wrap:nowrap, 所有项 flex-shrink:1 + min-width:0, 保留分隔线, 7列</h3>
+
+  <div class="container-label">球墨铸铁管</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:nowrap;max-width:680px;">
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">管材</div><div class="pipe-name" style="white-space:nowrap;">球墨铸铁管</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">推荐管径</div><div class="val-big" style="white-space:nowrap;">D = 800 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">有压流速</div><div class="val-big" style="white-space:nowrap;">0.9947 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">总水损</div><div class="val-med" style="white-space:nowrap;">2.7603 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">类别</div><div class="val-cat" style="white-space:nowrap;">经济区推荐</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">管长折算</div><div class="val-med" style="white-space:nowrap;">2.7603 m</div></div>
+  </div>
+
+  <div class="container-label">玻璃钢夹砂管</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:nowrap;max-width:680px;">
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">管材</div><div class="pipe-name" style="white-space:nowrap;">玻璃钢夹砂管</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">推荐管径</div><div class="val-big" style="white-space:nowrap;">D = 700 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">有压流速</div><div class="val-big" style="white-space:nowrap;">1.2992 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">总水损</div><div class="val-med" style="white-space:nowrap;">2.6909 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">类别</div><div class="val-cat" style="white-space:nowrap;">经济区推荐</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">管长折算</div><div class="val-med" style="white-space:nowrap;">2.6909 m</div></div>
+  </div>
+
+  <div class="container-label">预应力钢筒混凝土管</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:nowrap;max-width:680px;">
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">管材</div><div class="pipe-name">预应力钢筒混凝土管<br>(n=0.013)</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">推荐管径</div><div class="val-big" style="white-space:nowrap;">D = 800 mm</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">有压流速</div><div class="val-big" style="white-space:nowrap;">0.9947 m/s</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">总水损</div><div class="val-med" style="white-space:nowrap;">2.7771 m/km</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">类别</div><div class="val-cat" style="white-space:nowrap;">经济区推荐</div></div>
+    <div class="sep"></div>
+    <div style="text-align:center;flex-shrink:1;min-width:0;"><div class="label">管长折算</div><div class="val-med" style="white-space:nowrap;">2.7771 m</div></div>
+  </div>
+</div>
+
+<!-- ==================== 组合方案 B+C ==================== -->
+<div class="section">
+  <h2>🌟 组合方案 B+C：去掉分隔线 + 去掉"管长折算"</h2>
+  <h3>gap:16px, padding:12px 18px, 无分隔线, 6列 — 最宽裕</h3>
+
+  <div class="container-label">球墨铸铁管</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">球墨铸铁管</div></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 800 mm</div></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">0.9947 m/s</div></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.7603 m/km</div></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+  </div>
+
+  <div class="container-label">玻璃钢夹砂管</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">玻璃钢夹砂管</div></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 700 mm</div></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">1.2992 m/s</div></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.6909 m/km</div></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+  </div>
+
+  <div class="container-label">预应力钢筒混凝土管</div>
+  <div style="display:flex;gap:16px;margin:4px 0 12px;padding:12px 18px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;border:1px solid #2e7d3240;align-items:center;flex-wrap:wrap;max-width:680px;">
+    <div style="text-align:center"><div class="label">管材</div><div class="pipe-name">预应力钢筒混凝土管<br>(n=0.013)</div></div>
+    <div style="text-align:center"><div class="label">推荐管径</div><div class="val-big">D = 800 mm</div></div>
+    <div style="text-align:center"><div class="label">有压流速</div><div class="val-big">0.9947 m/s</div></div>
+    <div style="text-align:center"><div class="label">总水损</div><div class="val-med">2.7771 m/km</div></div>
+    <div style="text-align:center"><div class="label">类别</div><div class="val-cat">经济区推荐</div></div>
+  </div>
+</div>
+
+<p style="color:#999;font-size:12px;margin-top:20px;">注：max-width:680px 模拟实际应用中右侧面板的宽度。实际宽度取决于窗口大小。</p>
+</body>
+</html>
