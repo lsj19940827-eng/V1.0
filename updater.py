@@ -1,23 +1,25 @@
 ﻿# -*- coding: utf-8 -*-
 """
-搴旂敤鍐呰嚜鍔ㄦ洿鏂版ā鍧?
-鍔熻兘锛?1. 浼樺厛浠庡眬鍩熺綉鍏变韩鏂囦欢澶硅幏鍙栫増鏈俊鎭紙鏃犻渶澶栫綉锛?2. 灞€鍩熺綉涓嶅彲鐢ㄦ椂锛屽洖閫€鍒?GitHub Gist
-3. 浼樺厛涓嬭浇澧為噺琛ヤ竵鍖咃紙閫氬父 <10MB锛夛紝澶辫触鏃跺洖閫€鍒板叏閲忓寘
-4. 閫氳繃 .bat 鑴氭湰瀹炵幇"鍏抽棴鏃х▼搴?鈫?瑕嗙洊鏂囦欢 鈫?鍚姩鏂扮▼搴?
+应用内自动更新模块
+功能：
+1. 从 GitHub Gist 获取版本信息，Gitee 作为回退
+2. 优先下载通用增量补丁包（覆盖所有 >= min_patch_version 的旧版本）
+3. 版本不在补丁范围内或下载失败时回退到全量包
+4. 通过 .bat 脚本实现"关闭旧程序 → 覆盖文件 → 启动新程序"
 
-鏇存柊婧愪紭鍏堢骇锛氬眬鍩熺綉鍏变韩 > GitHub Gist
-涓嬭浇浼樺厛绾э細  琛ヤ竵鍖?> 鍏ㄩ噺鍖?
-杩滅▼鐗堟湰娓呭崟鏍煎紡锛坴ersion.json锛夛細
+更新源优先级：GitHub Gist > Gitee
+下载优先级：通用补丁包 > 全量包
+远程版本清单格式（version.json）：
 {
-    "latest_version": "1.0.3",
-    "download_url": "https://github.com/.../CanalHydraulicCalc-V1.0.3.zip",
-    "patch_url": "https://github.com/.../CanalHydraulicCalc-V1.0.3-patch.zip",
-    "changelog": "- 淇xxx\\n- 鏂板xxx",
+    "latest_version": "1.0.7",
+    "download_url": "https://github.com/.../CanalHydraulicCalc-V1.0.7.zip",
+    "patch_url": "https://github.com/.../CanalHydraulicCalc-V1.0.7-patch.zip",
+    "changelog": "- 修复xxx\\n- 新增xxx",
     "release_date": "2026-03-01",
     "min_version": "1.0.0",
     "file_size_mb": 286.5,
-    "patch_size_mb": 3.2,
-    "patch_base_version": "1.0.2"
+    "patch_size_mb": 5.2,
+    "min_patch_version": "1.0.4"
 }
 """
 
@@ -36,9 +38,11 @@ from version import APP_VERSION, APP_NAME_EN
 from repo_config import (
     GITHUB_VERSION_URL as _GITHUB_VERSION_URL,
     GITEE_VERSION_URL as _GITEE_VERSION_URL,
+    DOWNLOAD_PROXIES as _DOWNLOAD_PROXIES,
 )
 
 _CHECK_TIMEOUT = 8  # 妫€鏌ユ洿鏂拌秴鏃讹紙绉掞級
+_PROXY_PROBE_TIMEOUT = 5  # 代理探测超时（秒）
 
 
 # ============================================================
@@ -60,46 +64,22 @@ def is_newer(remote_ver: str, local_ver: str = APP_VERSION) -> bool:
 # ============================================================
 # 妫€鏌ユ洿鏂?# ============================================================
 class UpdateInfo:
-    """浠庤繙绋嬬増鏈竻鍗曡В鏋愬嚭鐨勬洿鏂颁俊鎭?"""
+    """从远程版本清单解析出的更新信息"""
 
     def __init__(self, data: dict):
         self.latest_version: str = data.get("latest_version", "0.0.0")
         self.download_url: str = data.get("download_url", "")
         self.patch_url: str = data.get("patch_url", "")
-        self.patches: dict = data.get("patches", {}) or {}
         self.source: str = data.get("source", "")
         self.changelog: str = data.get("changelog", "")
         self.release_date: str = data.get("release_date", "")
         self.min_version: str = data.get("min_version", "0.0.0")
         self.file_size_mb: float = data.get("file_size_mb", 0)
         self.patch_size_mb: float = data.get("patch_size_mb", 0)
-        self.patch_base_version: str = data.get("patch_base_version", "")
-        self._select_patch_for_current()
-
-    def _select_patch_for_current(self):
-        """Prefer multi-base patch metadata; fallback to legacy single patch fields."""
-        if not isinstance(self.patches, dict):
-            return
-
-        patch_item = self.patches.get(APP_VERSION)
-        if isinstance(patch_item, dict):
-            url = str(patch_item.get("url", "")).strip()
-            size_mb = patch_item.get("size_mb", 0)
-        elif isinstance(patch_item, str):
-            url = patch_item.strip()
-            size_mb = 0
-        else:
-            return
-
-        if not url:
-            return
-
-        self.patch_url = url
-        self.patch_base_version = APP_VERSION
-        try:
-            self.patch_size_mb = float(size_mb or 0)
-        except (TypeError, ValueError):
-            self.patch_size_mb = 0
+        self.min_patch_version: str = data.get("min_patch_version", "")
+        # 兼容旧版 version.json 中的 patch_base_version 字段
+        if not self.min_patch_version:
+            self.min_patch_version = data.get("patch_base_version", "")
 
     @property
     def has_update(self) -> bool:
@@ -107,22 +87,22 @@ class UpdateInfo:
 
     @property
     def is_forced(self) -> bool:
-        """褰撳墠鐗堟湰浣庝簬鏈€浣庤姹傜増鏈椂锛屽己鍒舵洿鏂?"""
+        """当前版本低于最低要求版本时，强制更新"""
         return _parse_version(APP_VERSION) < _parse_version(self.min_version)
 
     @property
     def has_patch(self) -> bool:
-        """鏄惁鎻愪緵浜嗗閲忚ˉ涓佸寘"""
+        """是否提供了增量补丁包"""
         return bool(self.patch_url)
 
     @property
     def can_use_patch(self) -> bool:
-        """褰撳墠鐗堟湰鏄惁鍙互浣跨敤澧為噺琛ヤ竵锛堥渶鍖归厤鍩虹嚎鐗堟湰锛?"""
+        """当前版本是否可以使用通用补丁包（范围判断：APP_VERSION >= min_patch_version）"""
         if not self.has_patch:
             return False
-        if not self.patch_base_version:
+        if not self.min_patch_version:
             return True
-        return _parse_version(APP_VERSION) == _parse_version(self.patch_base_version)
+        return _parse_version(APP_VERSION) >= _parse_version(self.min_patch_version)
 
 
 def _check_remote(url: str, source_name: str) -> Optional[UpdateInfo]:
@@ -158,6 +138,51 @@ def check_for_update() -> Optional[UpdateInfo]:
     return None
 
 # ============================================================
+# 代理探测：自动选择最快下载源
+# ============================================================
+def _pick_fastest_url(url: str) -> str:
+    """
+    并发探测各代理前缀，返回第一个响应成功的完整 URL。
+    探测失败或超时则跳过，全部失败时返回原始直连 URL。
+    """
+    import threading
+
+    if not url.startswith("https://github.com/"):
+        return url  # 非 GitHub URL 不走代理
+
+    candidates = []
+    for prefix in _DOWNLOAD_PROXIES:
+        candidates.append(prefix + url if prefix else url)
+
+    result_holder = [None]
+    found_event = threading.Event()
+
+    def _probe(candidate_url: str):
+        try:
+            req = urllib.request.Request(
+                candidate_url, method="HEAD",
+                headers={"User-Agent": f"{APP_NAME_EN}/{APP_VERSION}"},
+            )
+            with urllib.request.urlopen(req, timeout=_PROXY_PROBE_TIMEOUT) as resp:
+                if resp.status < 400 and not found_event.is_set():
+                    result_holder[0] = candidate_url
+                    found_event.set()
+        except Exception:
+            pass
+
+    threads = [threading.Thread(target=_probe, args=(c,), daemon=True) for c in candidates]
+    for t in threads:
+        t.start()
+    found_event.wait(timeout=_PROXY_PROBE_TIMEOUT + 1)
+
+    chosen = result_holder[0] or url
+    if chosen != url:
+        prefix_used = chosen[: len(chosen) - len(url)]
+        print(f"[updater] 使用代理加速: {prefix_used}")
+    return chosen
+
+
+# ============================================================
 # 涓嬭浇鏇存柊鍖?# ============================================================
 _NUM_WORKERS = max(1, min(16, int(os.getenv("UPDATER_DOWNLOAD_WORKERS", "8"))))
 _CHUNK_SIZE = 1024 * 1024  # 1MB per read
@@ -189,10 +214,11 @@ def _download_from_url(
     dest_dir: str,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> str:
-    """浠?HTTP URL 涓嬭浇 zip锛堟敮鎸佸绾跨▼鍒嗘骞跺彂锛?"""
+    """浠?HTTP URL 涓嬭浇 zip锛堟敮鎺佸绾跨▼鍒嗘骞跺彂锛?"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import threading
 
+    url = _pick_fastest_url(url)  # 自动选择最快代理
     filename = url.rsplit("/", 1)[-1] or f"{APP_NAME_EN}-update.zip"
     dest_path = os.path.join(dest_dir, filename)
 
