@@ -182,6 +182,14 @@ def _pick_fastest_url(url: str) -> str:
     return chosen
 
 
+def _strip_proxy_prefix(url: str) -> str:
+    """去掉代理前缀，还原为 GitHub 直连 URL（用于兜底重试）"""
+    for prefix in _DOWNLOAD_PROXIES:
+        if prefix and url.startswith(prefix):
+            return url[len(prefix):]
+    return url
+
+
 # ============================================================
 # 涓嬭浇鏇存柊鍖?# ============================================================
 _NUM_WORKERS = max(1, min(16, int(os.getenv("UPDATER_DOWNLOAD_WORKERS", "8"))))
@@ -337,12 +345,20 @@ def download_update(
     """
     Download update zip to local temp directory.
     source is kept for backward compatibility and is ignored now.
+    如果代理下载失败，自动去掉代理前缀回退到 GitHub 直连重试。
     """
     _ = source
     if dest_dir is None:
         dest_dir = tempfile.mkdtemp(prefix="canal_update_")
 
-    return _download_from_url(url, dest_dir, progress_callback)
+    try:
+        return _download_from_url(url, dest_dir, progress_callback)
+    except Exception:
+        direct_url = _strip_proxy_prefix(url)
+        if direct_url != url:
+            print(f"[updater] 代理下载失败，回退直连: {direct_url}")
+            return _download_from_url(direct_url, dest_dir, progress_callback)
+        raise
 
 # ============================================================
 # 搴旂敤鏇存柊锛堢敓鎴?.bat 鑴氭湰骞舵墽琛岋級
