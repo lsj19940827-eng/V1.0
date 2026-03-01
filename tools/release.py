@@ -43,7 +43,18 @@ from version import APP_NAME_EN
 from repo_config import (
     GITHUB_OWNER, GITHUB_REPO, GIST_ID,
     GITEE_OWNER, GITEE_REPO, LAN_UPDATE_DIR,
+    DOWNLOAD_PROXIES,
 )
+
+
+def _proxied_url(url: str) -> str:
+    """给 GitHub 下载 URL 加上第一个可用的代理前缀，加速国内下载"""
+    if not url or not url.startswith("https://github.com/"):
+        return url
+    for prefix in DOWNLOAD_PROXIES:
+        if prefix:  # 跳过空字符串（直连兜底）
+            return prefix + url
+    return url
 
 
 def _load_env() -> dict:
@@ -318,7 +329,8 @@ def step_update_gist(version: str, urls: dict, assets: dict,
 
     version_data = {
         "latest_version": version,
-        "download_url": urls.get("download_url", ""),
+        "download_url": _proxied_url(urls.get("download_url", "")),
+        "download_url_direct": urls.get("download_url", ""),
         "changelog": changelog or f"V{version} 版本发布",
         "release_date": date.today().isoformat(),
         "min_version": "1.0.0",
@@ -326,7 +338,8 @@ def step_update_gist(version: str, urls: dict, assets: dict,
     }
 
     if "patch_url" in urls:
-        version_data["patch_url"] = urls["patch_url"]
+        version_data["patch_url"] = _proxied_url(urls["patch_url"])
+        version_data["patch_url_direct"] = urls["patch_url"]
         version_data["patch_size_mb"] = assets.get("patch_size_mb", 0)
         version_data["min_patch_version"] = assets.get("patch_min_version", "")
         # 兼容旧客户端（V1.0.6-）：旧版 updater 用 patch_base_version 精确匹配
