@@ -313,33 +313,60 @@ class MainWindow(QMainWindow):
     def _open_update_dialog(self):
         """打开更新对话框（手动检查）"""
         from 渠系断面设计.update_dialog import UpdateDialog
-        dlg = UpdateDialog(self, auto_check=True)
+        cached = getattr(self, '_cached_update_info', None)
+        dlg = UpdateDialog(self, auto_check=(cached is None), info=cached)
         dlg.exec()
 
     def _start_silent_update_check(self):
         """启动时后台静默检查更新"""
+        self._cached_update_info = None
         from 渠系断面设计.update_dialog import SilentUpdateChecker
         self._silent_checker = SilentUpdateChecker(self)
         self._silent_checker.update_available.connect(self._on_update_available)
         self._silent_checker.start()
 
     def _on_update_available(self, info):
-        """静默检查发现新版本时，在状态栏/InfoBar 提示"""
+        """静默检查发现新版本时，缓存结果并在 InfoBar 提示"""
+        self._cached_update_info = info
         try:
-            InfoBar.info(
+            from PySide6.QtWidgets import QPushButton as _QPushButton
+            from qfluentwidgets import InfoBarIcon
+            bar = InfoBar.new(
+                icon=InfoBarIcon.INFORMATION,
                 title=f"发现新版本 V{info.latest_version}",
-                content="点击侧边栏「检查更新」按钮查看详情并下载。",
+                content=f"更新内容：{info.changelog[:40]}{'...' if len(info.changelog) > 40 else ''}",
                 orient=Qt.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP_RIGHT,
-                duration=8000,
+                duration=12000,
                 parent=self,
             )
+            btn = _QPushButton("立即更新")
+            btn.setFixedHeight(28)
+            btn.setStyleSheet(
+                "QPushButton{background:#1976D2;color:white;border:none;"
+                "border-radius:4px;padding:0 12px;font-size:12px;}"
+                "QPushButton:hover{background:#1565C0;}"
+            )
+            btn.clicked.connect(bar.close)
+            btn.clicked.connect(self._open_update_dialog)
+            bar.addWidget(btn)
             self.statusBar().showMessage(
-                f"✨ 新版本 V{info.latest_version} 可用！点击「检查更新」下载。"
+                f"✨ 新版本 V{info.latest_version} 可用！点击「检查更新」或通知栏「立即更新」下载。"
             )
         except Exception:
-            pass
+            try:
+                InfoBar.info(
+                    title=f"发现新版本 V{info.latest_version}",
+                    content="点击侧边栏「检查更新」按钮查看详情并下载。",
+                    orient=Qt.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP_RIGHT,
+                    duration=8000,
+                    parent=self,
+                )
+            except Exception:
+                pass
 
     def closeEvent(self, event):
         """关闭窗口前先隐藏，避免 Matplotlib 画布销毁时反复重绘导致闪烁"""

@@ -209,8 +209,9 @@ _CHUNK_SIZE = 1024 * 1024  # 1MB per read
 def _download_segment(
     url: str, start: int, end: int, dest_path: str,
     progress_arr: list, seg_idx: int,
+    cancel_event=None,
 ):
-    """涓嬭浇鏂囦欢鐨?[start, end] 瀛楄妭娈靛埌 dest_path"""
+    """涓嬭浇文件的?[start, end] 字节段基到 dest_path"""
     headers = {
         "User-Agent": f"{APP_NAME_EN}/updater",
         "Range": f"bytes={start}-{end}",
@@ -220,6 +221,8 @@ def _download_segment(
     with open(dest_path, "r+b") as f:
         f.seek(start)
         while True:
+            if cancel_event and cancel_event.is_set():
+                raise InterruptedError("download cancelled")
             chunk = resp.read(_CHUNK_SIZE)
             if not chunk:
                 break
@@ -231,6 +234,7 @@ def _download_from_url(
     url: str,
     dest_dir: str,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_event=None,
 ) -> str:
     """浠?HTTP URL 涓嬭浇 zip锛堟敮鎺佸绾跨▼鍒嗘骞跺彂锛?"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -251,7 +255,7 @@ def _download_from_url(
     resp.close()
 
     if total <= 0 or total < 10 * 1024 * 1024 or not accept_ranges:
-        return _download_single(url, dest_path, total, progress_callback)
+        return _download_single(url, dest_path, total, progress_callback, cancel_event)
 
     with open(dest_path, "wb") as f:
         f.seek(total - 1)
@@ -284,13 +288,14 @@ def _download_from_url(
     # 并发下载，收集所有失败分段（不提前中止）
     future_to_idx: dict = {}
     failed_indices: set = set()
+    cancelled = False
     try:
         with ThreadPoolExecutor(max_workers=num_workers) as pool:
             futures = []
             for i, (start, end) in enumerate(segments):
                 fut = pool.submit(
                     _download_segment, url, start, end, dest_path,
-                    progress_arr, i,
+                    progress_arr, i, cancel_event,
                 )
                 futures.append(fut)
                 future_to_idx[fut] = i
@@ -298,11 +303,21 @@ def _download_from_url(
             for fut in as_completed(futures):
                 try:
                     fut.result()
+                except InterruptedError:
+                    cancelled = True
+                    failed_indices.add(future_to_idx[fut])
                 except Exception:
                     failed_indices.add(future_to_idx[fut])
     finally:
         stop_event.set()
         monitor.join(timeout=1)
+
+    if cancelled:
+        try:
+            os.remove(dest_path)
+        except OSError:
+            pass
+        raise InterruptedError("download cancelled")
 
     if failed_indices:
         # 保留已下载的分段，抛出专用异常供上层断点续传
@@ -322,6 +337,7 @@ def _resume_segments(
     already_bytes: int,
     total: int,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_event=None,
 ) -> str:
     """
     仅重新下载失败的分段，复用已写入文件的其余分段（断点续传）。
@@ -350,7 +366,7 @@ def _resume_segments(
                 start, end = segments[i]
                 fut = pool.submit(
                     _download_segment, url, start, end, dest_path,
-                    progress_arr, j,
+                    progress_arr, j, cancel_event,
                 )
                 futures.append(fut)
             for fut in as_completed(futures):
@@ -374,8 +390,9 @@ def _resume_segments(
 def _download_single(
     url: str, dest_path: str, total: int,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_event=None,
 ) -> str:
-    """鍗曠嚎绋嬩笅杞藉洖閫€"""
+    """骜汉绾垳跩涓嬭浇涓嬭。"""
     req = urllib.request.Request(
         url, headers={"User-Agent": f"{APP_NAME_EN}/{APP_VERSION}"}
     )
@@ -388,6 +405,8 @@ def _download_single(
 
     with open(dest_path, "wb") as f:
         while True:
+            if cancel_event and cancel_event.is_set():
+                break
             chunk = resp.read(_CHUNK_SIZE)
             if not chunk:
                 break
@@ -398,6 +417,13 @@ def _download_single(
                 if now - last_cb_time >= _CB_INTERVAL:
                     progress_callback(downloaded, total)
                     last_cb_time = now
+
+    if cancel_event and cancel_event.is_set():
+        try:
+            os.remove(dest_path)
+        except OSError:
+            pass
+        raise InterruptedError("download cancelled")
 
     if progress_callback:
         progress_callback(downloaded, total)
@@ -410,18 +436,22 @@ def download_update(
     dest_dir: Optional[str] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     source: str = "",
+    cancel_event=None,
 ) -> str:
     """
     Download update zip to local temp directory.
     source is kept for backward compatibility and is ignored now.
     如果代理下载失败，自动去掉代理前缀回退到 GitHub 直连重试。
+    支持 cancel_event (threading.Event) 取消下载。
     """
     _ = source
     if dest_dir is None:
         dest_dir = tempfile.mkdtemp(prefix="canal_update_")
 
     try:
-        return _download_from_url(url, dest_dir, progress_callback)
+        return _download_from_url(url, dest_dir, progress_callback, cancel_event)
+    except InterruptedError:
+        raise  # 取消不走代理回退逻辑
     except PartialDownloadError as e:
         # 代理中途断流：已下载分段保留，仅直连补全失败分段
         direct_url = _strip_proxy_prefix(url)
@@ -437,10 +467,14 @@ def download_update(
                 f"断点续传 {already // (1024*1024)} MB 已保留，"
                 f"直连补全剩余分段"
             )
+            # 进度重置到确认已完成的字节数，避免进度条回跳
+            if progress_callback:
+                progress_callback(already, e.total)
             try:
                 return _resume_segments(
                     direct_url, e.dest_path, e.segments,
                     e.failed_indices, already, e.total, progress_callback,
+                    cancel_event,
                 )
             except Exception:
                 try:
@@ -458,7 +492,7 @@ def download_update(
         direct_url = _strip_proxy_prefix(url)
         if direct_url != url:
             print(f"[updater] 代理连接失败，回退直连: {direct_url}")
-            return _download_from_url(direct_url, dest_dir, progress_callback)
+            return _download_from_url(direct_url, dest_dir, progress_callback, cancel_event)
         raise
 
 # ============================================================
