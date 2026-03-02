@@ -28,14 +28,14 @@ import zipfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from version import APP_VERSION, APP_NAME, APP_NAME_EN
 
-_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
 
 
 def _version_key(v: str) -> tuple:
     m = _VERSION_RE.match((v or "").strip())
     if not m:
         return (0, 0, 0)
-    return tuple(int(x) for x in m.groups())
+    return tuple(int(x) for x in m.groups() if x is not None)
 
 
 def bump_version(level: str) -> str:
