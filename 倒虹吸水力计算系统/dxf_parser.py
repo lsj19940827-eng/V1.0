@@ -8,7 +8,7 @@ import math
 from typing import List, Tuple, Optional
 from siphon_models import (
     StructureSegment, SegmentType, SegmentDirection, LongitudinalNode, TurnType,
-    InletOutletShape, INLET_SHAPE_COEFFICIENTS
+    InletOutletShape, INLET_SHAPE_COEFFICIENTS, PlanFeaturePoint
 )
 
 
@@ -553,6 +553,325 @@ class DxfParser:
                 merged.append(nd)
         return merged
     
+    # ==================================================================
+    # 新增：平面多段线解析为PlanFeaturePoint + StructureSegment(PLAN)
+    # ==================================================================
+
+    @staticmethod
+    def _compute_measurement_azimuth(dx: float, dy: float) -> float:
+        """
+        计算测量方位角（正北=0°顺时针），返回0-360°
+        
+        Args:
+            dx: X方向增量（东向为正）
+            dy: Y方向增量（北向为正）
+        """
+        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+            return 0.0
+        # 数学角：正东=0°逆时针
+        math_angle_rad = math.atan2(dy, dx)
+        # 转换为测量角：正北=0°顺时针
+        meas_rad = math.pi / 2 - math_angle_rad
+        meas_deg = math.degrees(meas_rad) % 360.0
+        return meas_deg
+
+    @staticmethod
+    def parse_plan_polyline(file_path: str) -> Tuple[
+            List['PlanFeaturePoint'], List[StructureSegment], str]:
+        """
+        解析平面DXF多段线（工程坐标：X=东，Y=北）
+        
+        同时生成 PlanFeaturePoint 列表（用于三维空间合并计算）
+        和 StructureSegment 列表（direction=PLAN，用于表格显示和计算）。
+        
+        坐标约定：
+        - X = 工程X坐标（东向），单位米
+        - Y = 工程Y坐标（北向），单位米
+        - bulge ≠ 0 的段 = 圆曲线（水平转弯弧）
+        - bulge = 0 的段 = 直线段
+        - 起点桩号 = 0
+        
+        Args:
+            file_path: DXF文件路径
+            
+        Returns:
+            (PlanFeaturePoint列表, StructureSegment列表, 消息)
+        """
+        try:
+            import ezdxf
+        except ImportError:
+            return [], [], "错误：未安装ezdxf库，请运行 pip install ezdxf"
+        
+        try:
+            doc = ezdxf.readfile(file_path)
+        except Exception as e:
+            return [], [], f"错误：无法读取DXF文件 - {str(e)}"
+        
+        msp = doc.modelspace()
+        
+        # 查找多段线
+        polylines = list(msp.query('LWPOLYLINE'))
+        if not polylines:
+            polylines = list(msp.query('POLYLINE'))
+        if not polylines:
+            return [], [], "错误：DXF文件中未找到多段线(LWPOLYLINE/POLYLINE)实体"
+        
+        polyline = polylines[0]
+        
+        # 提取顶点和凸度
+        vertices = []
+        bulges = []
+        
+        if hasattr(polyline, 'get_points'):
+            for point in polyline.get_points(format='xyseb'):
+                x, y, start_width, end_width, bulge = point
+                vertices.append((x, y))
+                bulges.append(bulge)
+        elif hasattr(polyline, 'vertices'):
+            for vertex in polyline.vertices:
+                vx = vertex.dxf.location.x
+                vy = vertex.dxf.location.y
+                vb = vertex.dxf.bulge if hasattr(vertex.dxf, 'bulge') else 0.0
+                vertices.append((vx, vy))
+                bulges.append(vb)
+        else:
+            return [], [], "错误：无法解析多段线顶点"
+        
+        if len(vertices) < 2:
+            return [], [], "错误：多段线顶点数量不足（至少需要2个点）"
+        
+        # 处理闭合多段线：如果首尾坐标几乎相同，去掉最后一个点
+        if len(vertices) > 2:
+            d_close = math.sqrt((vertices[-1][0] - vertices[0][0])**2 +
+                                (vertices[-1][1] - vertices[0][1])**2)
+            if d_close < 1e-6:
+                vertices = vertices[:-1]
+                bulges = bulges[:-1]
+        
+        if len(vertices) < 2:
+            return [], [], "错误：去除闭合重复点后顶点不足"
+        
+        n = len(vertices)
+        
+        # ---- 第1步：计算每个段的几何属性 ----
+        seg_infos = []  # 每段: {type, p1, p2, length, chord, bulge, radius, angle_rad, ...}
+        for i in range(n - 1):
+            p1 = vertices[i]
+            p2 = vertices[i + 1]
+            bulge = bulges[i] if i < len(bulges) else 0.0
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            chord = math.sqrt(dx**2 + dy**2)
+            
+            if abs(bulge) > 1e-8 and chord > 1e-6:
+                # 圆弧段
+                angle_rad = 4 * math.atan(abs(bulge))
+                sin_half = math.sin(angle_rad / 2)
+                radius = chord / (2 * sin_half) if sin_half > 1e-8 else chord / 2
+                arc_length = radius * angle_rad
+                seg_infos.append({
+                    'type': 'arc', 'p1': p1, 'p2': p2,
+                    'chord': chord, 'bulge': bulge,
+                    'radius': radius, 'angle_rad': angle_rad,
+                    'length': arc_length,
+                })
+            else:
+                # 直线段
+                if chord < 1e-6:
+                    continue  # 跳过退化段
+                seg_infos.append({
+                    'type': 'line', 'p1': p1, 'p2': p2,
+                    'chord': chord, 'length': chord,
+                })
+        
+        if not seg_infos:
+            return [], [], "错误：解析后无有效段"
+        
+        # ---- 第2步：计算每个段的方向向量（用于折角检测）----
+        for si in seg_infos:
+            dx = si['p2'][0] - si['p1'][0]
+            dy = si['p2'][1] - si['p1'][1]
+            d = math.sqrt(dx**2 + dy**2)
+            if d > 1e-9:
+                si['dir'] = (dx / d, dy / d)
+            else:
+                si['dir'] = (1.0, 0.0)
+        
+        # ---- 第3步：生成 PlanFeaturePoint 列表 ----
+        plan_points = []
+        chainage = 0.0
+        
+        for i, si in enumerate(seg_infos):
+            px, py = si['p1']
+            
+            # 计算该顶点处的方位角（使用该段的方向）
+            dx_seg = si['p2'][0] - si['p1'][0]
+            dy_seg = si['p2'][1] - si['p1'][1]
+            azimuth = DxfParser._compute_measurement_azimuth(dx_seg, dy_seg)
+            
+            # 检测转弯类型
+            turn_type = TurnType.NONE
+            turn_angle = 0.0
+            turn_radius = 0.0
+            
+            if si['type'] == 'arc':
+                turn_type = TurnType.ARC
+                turn_angle = math.degrees(si['angle_rad'])
+                turn_radius = si['radius']
+            elif i > 0 and seg_infos[i - 1]['type'] == 'line' and si['type'] == 'line':
+                # 线-线过渡：检查折角
+                prev_dir = seg_infos[i - 1]['dir']
+                curr_dir = si['dir']
+                dot = prev_dir[0] * curr_dir[0] + prev_dir[1] * curr_dir[1]
+                dot = max(-1.0, min(1.0, dot))
+                fold_angle = math.degrees(math.acos(dot))
+                if fold_angle > 1.0:
+                    turn_type = TurnType.FOLD
+                    turn_angle = fold_angle
+            
+            fp = PlanFeaturePoint(
+                chainage=round(chainage, 6),
+                x=px, y=py,
+                azimuth_meas_deg=round(azimuth, 4),
+                turn_radius=round(turn_radius, 4),
+                turn_angle=round(turn_angle, 4),
+                turn_type=turn_type,
+                ip_index=i,
+            )
+            plan_points.append(fp)
+            chainage += si['length']
+        
+        # 末端点
+        last_si = seg_infos[-1]
+        last_px, last_py = last_si['p2']
+        last_dx = last_si['p2'][0] - last_si['p1'][0]
+        last_dy = last_si['p2'][1] - last_si['p1'][1]
+        last_azimuth = DxfParser._compute_measurement_azimuth(last_dx, last_dy)
+        plan_points.append(PlanFeaturePoint(
+            chainage=round(chainage, 6),
+            x=last_px, y=last_py,
+            azimuth_meas_deg=round(last_azimuth, 4),
+            turn_type=TurnType.NONE,
+            ip_index=len(seg_infos),
+        ))
+        
+        # ---- 第4步：生成 StructureSegment 列表（direction=PLAN）----
+        plan_segments = DxfParser._build_plan_segments(seg_infos)
+        
+        msg = (f"成功解析平面DXF：{n}个顶点 → "
+               f"{len(plan_points)}个特征点, {len(plan_segments)}个平面段")
+        return plan_points, plan_segments, msg
+
+    @staticmethod
+    def _build_plan_segments(seg_infos: list) -> List[StructureSegment]:
+        """
+        从平面段信息列表构建 StructureSegment 列表（direction=PLAN）
+        
+        不生成进水口/出水口（平面段不涉及）。
+        """
+        segments = []
+        temp_straight = []
+        
+        for i, si in enumerate(seg_infos):
+            if si['type'] == 'arc':
+                # 处理之前累积的直线段
+                if temp_straight:
+                    segments.extend(
+                        DxfParser._process_plan_straight_segments(temp_straight))
+                    temp_straight = []
+                
+                # 弯管段
+                segments.append(StructureSegment(
+                    segment_type=SegmentType.BEND,
+                    length=round(si['length'], 4),
+                    radius=round(si['radius'], 4),
+                    angle=round(math.degrees(si['angle_rad']), 4),
+                    coordinates=[si['p1'], si['p2']],
+                    locked=True,
+                    direction=SegmentDirection.PLAN,
+                ))
+            else:
+                # 直线段 — 累积后统一处理折管检测
+                temp_straight.append(si)
+        
+        # 处理剩余直线段
+        if temp_straight:
+            segments.extend(
+                DxfParser._process_plan_straight_segments(temp_straight))
+        
+        return segments
+
+    @staticmethod
+    def _process_plan_straight_segments(straight_infos: list) -> List[StructureSegment]:
+        """
+        处理连续平面直线段，检测折管。
+        逻辑与 _process_straight_segments 类似，但 direction=PLAN、无高程。
+        """
+        if not straight_infos:
+            return []
+        
+        result = []
+        
+        for i, si in enumerate(straight_infos):
+            if i == 0:
+                result.append(StructureSegment(
+                    segment_type=SegmentType.STRAIGHT,
+                    length=round(si['length'], 4),
+                    coordinates=[si['p1'], si['p2']],
+                    locked=True,
+                    direction=SegmentDirection.PLAN,
+                ))
+            else:
+                prev_dir = straight_infos[i - 1]['dir']
+                curr_dir = si['dir']
+                dot = prev_dir[0] * curr_dir[0] + prev_dir[1] * curr_dir[1]
+                dot = max(-1.0, min(1.0, dot))
+                angle_deg = math.degrees(math.acos(dot))
+                
+                if angle_deg > 1.0:
+                    # 折管
+                    if result and result[-1].segment_type == SegmentType.STRAIGHT:
+                        prev_seg = result[-1]
+                        fold_seg = StructureSegment(
+                            segment_type=SegmentType.FOLD,
+                            length=round(prev_seg.length + si['length'], 4),
+                            angle=round(angle_deg, 4),
+                            coordinates=prev_seg.coordinates + [si['p2']],
+                            locked=True,
+                            direction=SegmentDirection.PLAN,
+                        )
+                        result[-1] = fold_seg
+                    elif result and result[-1].segment_type == SegmentType.FOLD:
+                        prev_half_len = straight_infos[i - 1]['length']
+                        fold_seg = StructureSegment(
+                            segment_type=SegmentType.FOLD,
+                            length=round(prev_half_len + si['length'], 4),
+                            angle=round(angle_deg, 4),
+                            coordinates=[si['p1'], si['p2']],
+                            locked=True,
+                            direction=SegmentDirection.PLAN,
+                        )
+                        result.append(fold_seg)
+                    else:
+                        result.append(StructureSegment(
+                            segment_type=SegmentType.FOLD,
+                            length=round(si['length'], 4),
+                            angle=round(angle_deg, 4),
+                            coordinates=[si['p1'], si['p2']],
+                            locked=True,
+                            direction=SegmentDirection.PLAN,
+                        ))
+                else:
+                    result.append(StructureSegment(
+                        segment_type=SegmentType.STRAIGHT,
+                        length=round(si['length'], 4),
+                        coordinates=[si['p1'], si['p2']],
+                        locked=True,
+                        direction=SegmentDirection.PLAN,
+                    ))
+        
+        return result
+
     @staticmethod
     def validate_dxf(file_path: str) -> Tuple[bool, str]:
         """

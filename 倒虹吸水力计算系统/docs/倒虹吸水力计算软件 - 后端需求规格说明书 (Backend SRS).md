@@ -1,7 +1,7 @@
 # 倒虹吸水力计算软件 - 后端需求规格说明书 (Backend SRS)
 
-**版本**: v2.0  
-**最后更新**: 2026-02-25  
+**版本**: v3.0  
+**最后更新**: 2026-03-02  
 **状态**: 已实现
 
 ---
@@ -24,12 +24,12 @@
 
 ### 2.1 枚举类型
 
-#### SegmentDirection — 结构段方向
+#### SegmentDirection -- 结构段方向
 
 | 枚举值 | UI显示 | 说明 |
 |--------|--------|------|
-| COMMON | 通用 | 通用构件（进/出水口、拦污栅、闸门槽等），仅贡献ξ |
-| PLAN | 平面 | 平面段（水平转弯，从推求水面线表格自动提取） |
+| COMMON | 通用 | 通用构件（进/出水口、拦污栅、闸门槽等），仅贡献xi |
+| PLAN | 平面 | 平面段（水平转弯，从推求水面线表格自动提取或从平面DXF导入） |
 | LONGITUDINAL | 纵断面 | 纵断面段（竖向剖面，从DXF导入或手动输入） |
 
 #### TurnType — 转弯类型
@@ -248,7 +248,7 @@
 
 ## 3. DXF 解析引擎 (dxf_parser.py)
 
-### 3.1 平面管线解析 `parse_dxf()`
+### 3.1 纵断面管线解析 `parse_dxf()`
 
 **输入**：DXF 文件路径
 
@@ -259,16 +259,76 @@
 
 **解析逻辑**：
 1. **顶点提取**：读取多段线顶点列表 (x, y) 及对应凸度 (bulge)
-2. **首节点**：创建 INLET 段（默认"进口稍微修圆"，ξ取范围中值0.225）
+2. **首节点**：创建 INLET 段（默认"进口稍微修圆"，xi取范围中值0.225）
 3. **遍历线段**：
-   - bulge ≠ 0 → 弯管识别：angle = 4×atan(|bulge|)，R = chord/(2×sin(θ/2))，弧长 = R×θ
-   - bulge = 0 → 直管段暂存，检测折角（>1°为折管）
+   - bulge != 0 -> 弯管识别：angle = 4*atan(|bulge|)，R = chord/(2*sin(theta/2))，弧长 = R*theta
+   - bulge = 0 -> 直管段暂存，检测折角（>1度为折管）
 4. **折管处理**：合并折点前后两段为 FOLD 段，支持连续折点
 5. **尾节点**：创建 OUTLET 段
 
 **输出**：(List[StructureSegment], 上游渠底高程建议值, 消息字符串)
 
-### 3.2 纵断面解析 `parse_longitudinal_profile()`
+### 3.2 平面多段线解析 `parse_plan_polyline()` (v3.0 新增)
+
+**输入**：DXF 文件路径
+
+**坐标约定**：
+- X = 工程X坐标（东向），单位米
+- Y = 工程Y坐标（北向），单位米
+- bulge != 0 的段 = 圆曲线（水平转弯弧）
+- bulge = 0 的段 = 直线段
+- 起点桩号 = 0
+
+**校验**：
+- 是否安装 ezdxf 库
+- 文件是否可读
+- 是否存在 LWPOLYLINE 或 POLYLINE 实体
+- 顶点数量 >= 2
+
+**解析步骤**：
+
+1. **顶点提取与预处理**：
+   - 读取多段线顶点 (x, y) 及凸度 (bulge)
+   - 闭合多段线处理：若首尾坐标距离 < 1e-6，去掉末尾重复点
+   - 跳过退化段（弦长 < 1e-6）
+
+2. **段几何属性计算**（遍历相邻顶点对）：
+   - 圆弧段判定：|bulge| > 1e-8 且弦长 > 1e-6
+     - 圆心角 angle_rad = 4 * atan(|bulge|)
+     - 半径 R = chord / (2 * sin(angle_rad/2))
+     - 弧长 = R * angle_rad
+   - 直线段：length = chord（欧几里得距离）
+
+3. **方向向量计算**（用于折角检测）：
+   - 每段归一化方向向量 dir = (dx/d, dy/d)
+
+4. **PlanFeaturePoint 生成**（遍历各段起点 + 末端点）：
+   - 桩号（chainage）：从0开始累加各段长度
+   - 方位角：调用 `_compute_measurement_azimuth(dx, dy)` 计算测量方位角（正北=0度顺时针）
+   - 转弯类型检测：
+     - 当前段为圆弧 -> TurnType.ARC（turn_angle = degrees(angle_rad), turn_radius = R）
+     - 相邻直线段折角 > 1度 -> TurnType.FOLD（turn_angle = 折角度数）
+     - 其他 -> TurnType.NONE
+   - ip_index：顺序编号
+
+5. **StructureSegment 生成**（调用 `_build_plan_segments()`）：
+   - 所有段 direction = SegmentDirection.PLAN
+   - 所有段 locked = True（保护DXF几何数据）
+   - 圆弧段 -> SegmentType.BEND（含 radius, angle）
+   - 直线段序列 -> 调用 `_process_plan_straight_segments()` 检测折管：
+     - 相邻直线段折角 > 1度 -> SegmentType.FOLD（合并前后长度）
+     - 折角 <= 1度 -> SegmentType.STRAIGHT
+   - 不生成进水口/出水口（平面段不涉及）
+
+**测量方位角计算** `_compute_measurement_azimuth(dx, dy)`：
+```
+数学角 math_angle = atan2(dy, dx)    # 正东=0度逆时针
+测量角 meas_deg = (90 - degrees(math_angle)) mod 360   # 正北=0度顺时针
+```
+
+**输出**：(List[PlanFeaturePoint], List[StructureSegment], 消息字符串)
+
+### 3.3 纵断面解析 `parse_longitudinal_profile()`
 
 **输入**：DXF 文件路径、桩号偏移量 chainage_offset
 
@@ -291,7 +351,7 @@
 
 **输出**：(List[LongitudinalNode], 消息字符串)
 
-### 3.3 校验 `validate_dxf()`
+### 3.4 校验 `validate_dxf()`
 
 快速校验 DXF 文件是否包含有效多段线，不执行完整解析。
 
@@ -474,40 +534,43 @@ SpatialMerger.merge_and_compute(
 ### 7.1 后端向前端暴露的主要接口
 
 ```python
-# 1. 平面管线解析
+# 1. 纵断面管线解析（旧接口）
 DxfParser.parse_dxf(file_path: str) -> (List[StructureSegment], float, str)
 
-# 2. 纵断面解析
+# 2. 平面多段线解析（v3.0 新增）
+DxfParser.parse_plan_polyline(file_path: str) -> (List[PlanFeaturePoint], List[StructureSegment], str)
+
+# 3. 纵断面解析
 DxfParser.parse_longitudinal_profile(file_path: str, chainage_offset: float) -> (List[LongitudinalNode], str)
 
-# 3. DXF校验
+# 4. DXF校验
 DxfParser.validate_dxf(file_path: str) -> (bool, str)
 
-# 4. 渐变段系数查询
+# 5. 渐变段系数查询
 CoefficientService.get_gradient_coeff(gradient_type, is_inlet) -> float
 
-# 5. 直线扭曲面角度插值
+# 6. 直线扭曲面角度插值
 CoefficientService.calculate_linear_twist_coeff(angle, is_inlet) -> float
 
-# 6. 弯管系数计算
+# 7. 弯管系数计算
 CoefficientService.calculate_bend_coeff(R, D, angle, verbose) -> (float, str) | float
 
-# 7. 折管系数计算
+# 8. 折管系数计算
 CoefficientService.calculate_fold_coeff(angle, verbose) -> (float, str) | float
 
-# 8. 拦污栅系数计算
+# 9. 拦污栅系数计算
 CoefficientService.calculate_trash_rack_xi(params, verbose) -> (float, str) | float
 
-# 9. 核心计算
+# 10. 核心计算
 HydraulicCore.execute_calculation(...) -> CalculationResult
 
-# 10. 结果格式化
+# 11. 结果格式化
 HydraulicCore.format_result(result, show_steps) -> str
 
-# 11. 管径取整
+# 12. 管径取整
 HydraulicCore.round_diameter(d_theory) -> float
 
-# 12. 三维空间合并
+# 13. 三维空间合并
 SpatialMerger.merge_and_compute(...) -> SpatialMergeResult
 ```
 
@@ -515,11 +578,12 @@ SpatialMerger.merge_and_compute(...) -> SpatialMergeResult
 
 ```python
 # SiphonPanel 对外接口
-set_params(**kwargs)          # 从外部设置参数（Q, v_guess, n, v₁, v₃, 平面数据等）
+set_params(**kwargs)          # 从外部设置参数（Q, v_guess, n, v1, v3, 平面数据等）
+                              # v3.0: 新增冲突保护弹窗（平面数据已有时确认覆盖）
 get_result() -> CalculationResult
 get_total_head_loss() -> float
-to_dict() -> dict             # 序列化（项目保存）
-from_dict(d: dict)            # 反序列化（项目加载）
+to_dict() -> dict             # 序列化（项目保存），v3.0: 新增 plan_source 字段
+from_dict(d: dict)            # 反序列化（项目加载），v3.0: plan_source 兼容旧数据
 ```
 
 ---
@@ -530,4 +594,5 @@ from_dict(d: dict)            # 反序列化（项目加载）
 |------|------|----------|
 | v1.0 | 2026-02-15 | 初始版本，基础架构 |
 | v2.0 | 2026-02-25 | 全面重写：新增V2Strategy枚举、并联管道、加大流量工况、三维空间合并模式、纵断面DXF解析、折管公式、管道渐变段、直线扭曲面角度插值、进水口形状枚举、拦污栅手动模式；数据模型与代码完全对齐 |
+| v3.0 | 2026-03-02 | **平面DXF解析引擎**：新增 `parse_plan_polyline()` 方法，支持从DXF文件独立导入平面多段线；新增 `_compute_measurement_azimuth()` 辅助方法；新增 `_build_plan_segments()` 和 `_process_plan_straight_segments()` 平面段构建方法；所有DXF平面段标记 `locked=True` 保护几何数据；API接口新增 `parse_plan_polyline` 入口 |
 

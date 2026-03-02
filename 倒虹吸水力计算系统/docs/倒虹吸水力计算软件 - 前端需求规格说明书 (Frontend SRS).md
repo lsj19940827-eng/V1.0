@@ -1,7 +1,7 @@
 # 倒虹吸水力计算软件 - 前端需求规格说明书 (Frontend SRS)
 
-**版本**: v2.0
-**最后更新**: 2026-02-25
+**版本**: v3.0
+**最后更新**: 2026-03-02
 **状态**: 已实现
 **技术栈**: PySide6 + qfluentwidgets (Fluent Design) + QPainter + QWebEngineView (KaTeX)
 
@@ -138,21 +138,27 @@ SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面
 - 灰绿色 (#F0F4F0)：纵断面示例数据
 
 **工具栏按钮**：
+- 导入平面DXF -> `_import_plan_dxf()`（工程坐标多段线，X=东, Y=北）
+- 导入纵断面DXF -> `_import_dxf()`
+- 撤回平面 -> `_undo_plan_import()`（撤回上一次平面导入，栈式回退）
+- 清空平面 -> `_clear_plan_data()`（清空全部平面数据）
 - 添加管身段 -> `SegmentEditDialog`
 - 添加通用构件 -> `CommonSegmentAddDialog`
 - 添加管道渐变段 -> 快速插入
 - 删除、上移、下移
-- 清空纵断面、全部清空
+- 清空纵断面、默认构件
 
 **交互规则**：
 - 双击行打开对应编辑对话框
 - 进水口 -> `InletShapeDialog`
-- 出水口 -> `OutletShapeDialog'
-- 拦污栅 -> `TrashRackConfigDialog'
-- 闸门槽/旁通管/管道渐变段 -> `SimpleCommonEditDialog'
-- 其他(通用) -> `CommonSegmentEditDialog'
-- 管身段 -> `SegmentEditDialog'
-- 平面段为只读，不可编辑/删除
+- 出水口 -> `OutletShapeDialog`
+- 拦污栅 -> `TrashRackConfigDialog`
+- 闸门槽/旁通管/管道渐变段 -> `SimpleCommonEditDialog`
+- 其他(通用) -> `CommonSegmentEditDialog`
+- 管身段 -> `SegmentEditDialog`
+- **平面段删除策略（差异化）**：
+  - DXF导入的平面段（`_plan_source == 'dxf'`）：可删除
+  - 推求水面线提取的平面段（`_plan_source == 'water_profile'`）：不可手动删除
 - 进出水口不可删除
 
 #### Tab 3: 纵断面节点
@@ -167,14 +173,14 @@ SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面
 | 3 | 转弯类型 | QComboBox（无/圆弧/折线） |
 | 4 | 转角(deg) | -- |
 
-**工具栏**：添加/删除节点、导入DXF、清空
+**工具栏**：添加/删除节点、导入纵断面DXF、清空
 
 **双向同步**：
 - 正向：节点表编辑 -> `_sync_nodes_to_segments()` -> 重建管身段
 - 反向：管身段编辑 -> `_sync_segments_to_nodes()` -> 重建节点表
 - 防递归：`_syncing` 标志
 
-**DXF导入流程**：
+**纵断面DXF导入流程**：
 1. 选择纵断面DXF文件
 2. 计算桩号偏移量（对齐平面IP点起始桩号或归零）
 3. 调用 `DxfParser.parse_longitudinal_profile()`
@@ -208,7 +214,102 @@ SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面
 - "传统模式（仅平面总长度）" -- 橙色
 - "无平面/纵断面数据" -- 红色
 
-附加数据计数：结构段数、节点数、IP点数、平面长度
+附加数据计数：结构段数、节点数、IP点数、平面长度、**平面来源标记（DXF/水面线）**
+
+---
+
+## 2.5 平面DXF导入子系统（v3.0 新增）
+
+### 2.5.1 概述
+
+平面DXF导入功能允许用户独立于纵断面导入平面工程坐标多段线，支持三种计算模式：
+- **平面-only**：仅有平面数据，使用平面独立计算
+- **纵断面-only**：仅有纵断面数据
+- **平面+纵断面（空间合并）**：同时拥有两种数据，三维空间合并计算
+
+### 2.5.2 状态管理
+
+**新增成员变量**（`__init__` 方法）：
+
+| 变量名 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `_plan_source` | str | `'none'` | 平面数据来源追踪：`'none'`/`'dxf'`/`'water_profile'` |
+| `_plan_undo_stack` | list | `[]` | 平面数据撤回栈（深拷贝快照） |
+
+### 2.5.3 导入流程 (`_import_plan_dxf()`)
+
+```
+1. 校验DXF解析器可用性
+2. 冲突保护：
+   - 检测已有平面数据（plan_feature_points 或 plan_segments）
+   - 弹窗显示现有数据来源（"DXF导入"/"推求水面线提取"/"已有"）
+   - 用户取消则中止
+3. QFileDialog 选择 .dxf 文件（默认resources目录）
+4. 调用 DxfParser.parse_plan_polyline(filepath)
+5. 失败：InfoBar.error 显示错误消息
+6. 成功：
+   a. _push_plan_undo() 保存撤回快照
+   b. 替换 plan_feature_points, plan_segments
+   c. 计算 plan_total_length（末端特征点桩号）
+   d. 设置 _plan_source = 'dxf'
+   e. 刷新UI：_refresh_seg_table, _update_segment_coefficients, _update_canvas, _update_data_status
+   f. InfoBar.success 显示详细结果：
+      - 特征点数、平面段数、平面总长
+      - 弯管/折管数量
+      - 三维模式检测（有/无纵断面数据）
+```
+
+### 2.5.4 撤回功能
+
+**`_push_plan_undo()`**：
+- 深拷贝当前 `plan_segments`、`plan_feature_points`、`plan_total_length`、`_plan_source` 为快照
+- 压入 `_plan_undo_stack`
+- 栈深度限制：20（超出时移除最早快照 `pop(0)`）
+
+**`_undo_plan_import()`**：
+- 栈空：InfoBar.warning 提示
+- 栈非空：弹出最新快照，恢复所有平面数据字段
+- 刷新UI组件
+
+### 2.5.5 清空功能 (`_clear_plan_data()`)
+
+1. 校验是否有平面数据
+2. `fluent_question()` 确认对话框
+3. `_push_plan_undo()` 保存快照（可撤回）
+4. 清空 `plan_segments`、`plan_feature_points`
+5. 重置 `plan_total_length = 0.0`、`_plan_source = 'none'`
+6. 刷新UI
+
+### 2.5.6 半径保护 (`_update_plan_bend_radius()`)
+
+弯管半径联动时的差异化处理：
+
+| 数据来源 | 弯管段半径 | 特征点turn_radius |
+|----------|-----------|-------------------|
+| DXF (`locked=True`) | 跳过，保留DXF实际半径 | 跳过（`_plan_source=='dxf'` 且 `turn_radius>0`） |
+| 推求水面线 (`locked=False`) | 更新为 `n * D_design` | 更新为 `siphon_radius` |
+
+### 2.5.7 数据冲突保护 (`set_params()`)
+
+当推求水面线通过 `set_params()` 传入平面数据时：
+1. 检测是否有传入的平面数据（`plan_segments` 或 `plan_feature_points` in kwargs）
+2. 检测是否已有平面数据
+3. 如两者同时存在，弹出确认对话框：
+   - 显示现有数据来源（"DXF导入"/"推求水面线提取"）
+   - 用户选择是否覆盖
+4. 如用户拒绝覆盖，跳过平面数据设置（`_plan_skip = True`）
+5. 覆盖时，先 `_push_plan_undo()` 保存快照，设置 `_plan_source = 'water_profile'`
+
+### 2.5.8 删除策略 (`_del_segment()` 差异化)
+
+| 平面数据来源 | 平面段行为 |
+|-------------|-----------|
+| `_plan_source == 'water_profile'` | 拒绝删除，InfoBar提示"由推求水面线表格自动提取，不可手动删除" |
+| `_plan_source == 'dxf'` | 允许删除，与通用段/纵断面段一样执行删除流程 |
+
+删除实现：
+- 分别收集 `to_remove`（通用/纵断面段在 `self.segments` 中的索引）和 `plan_to_remove`（平面段在 `self.plan_segments` 中的索引）
+- 按索引逆序删除，避免索引偏移
 
 ---
 
@@ -323,9 +424,20 @@ Word导出特性：
 ### 5.4 序列化接口
 
 ```python
-to_dict() -> dict   # 保存：Q/v/n/v1/v3/渐变段/管径/根数/结构段/节点/平面数据
+to_dict() -> dict   # 保存：Q/v/n/v1/v3/渐变段/管径/根数/结构段/节点/平面数据/plan_source
 from_dict(d)        # 恢复：UI状态完全还原
 ```
+
+**v3.0 新增持久化字段**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `plan_source` | str | 平面数据来源（`'none'`/`'dxf'`/`'water_profile'`） |
+
+**`from_dict()` 兼容策略**：
+- 存在 `plan_source` 字段 → 直接恢复
+- 无 `plan_source` 但有平面数据 → 默认 `'water_profile'`（兼容旧数据）
+- 无 `plan_source` 且无平面数据 → `'none'`
 
 ---
 
@@ -362,6 +474,14 @@ from_dict(d)        # 恢复：UI状态完全还原
 - **输入错误**：qfluentwidgets InfoBar（红色ERROR/黄色WARNING/绿色SUCCESS），定位到窗口顶部
 - **防抖机制**：Q/v参数联动200ms防抖、画布更新100ms防抖
 - **确认交互**：拟定流速/管道根数/弯管半径倍数分别有独立确认机制，避免误操作
+- **冲突保护（v3.0 新增）**：
+  - 平面DXF导入时检测已有平面数据，弹窗确认覆盖
+  - 推求水面线传入平面数据时检测冲突，弹窗确认覆盖
+  - 弹窗显示现有数据来源（DXF导入/推求水面线提取），帮助用户决策
+- **撤回机制（v3.0 新增）**：
+  - 平面数据支持栈式撤回（深度20），每次导入/清空前自动保存快照
+  - "撤回平面"按钮可逐步回退到上一状态
+- **DXF半径保护（v3.0 新增）**：DXF导入的弯管段（`locked=True`）保留实际几何半径，不被弯管半径倍数n×D联动覆盖
 - **示例数据提示**：纵断面示例数据灰色显示，首次手动添加自动清除
 - **空表格引导**：无数据时显示"点击导入DXF或手动添加"提示
 - **文件占用处理**：Word/Excel导出捕获PermissionError，提示关闭已打开的文件
@@ -374,3 +494,4 @@ from_dict(d)        # 恢复：UI状态完全还原
 |------|------|----------|
 | v1.0 | 2026-02-15 | 初始版本（WinForms/WPF架构描述） |
 | v2.0 | 2026-02-25 | 全面重写：PySide6+Fluent UI实现；新增4Tab布局、三区表格、纵断面节点双向同步、多标签页窗口、确认交互机制、v2策略联动、导出体系、可视化画布、对话框体系 |
+| v3.0 | 2026-03-02 | **平面DXF独立导入**：新增平面DXF导入按钮及完整工作流（导入/撤回/清空）；数据来源追踪（`_plan_source`）；冲突保护弹窗（DXF vs 推求水面线）；差异化删除策略（DXF段可删/水面线段不可删）；DXF半径保护（locked段跳过n×D覆盖）；撤回栈（深度20）；`to_dict/from_dict` 新增 `plan_source` 持久化字段及旧数据兼容；数据状态栏新增平面来源标记（DXF/水面线） |

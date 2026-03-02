@@ -5,7 +5,12 @@
 功能：
 1. 扫描打包产物目录，生成 manifest.json（文件路径 → SHA256）
 2. 对比新旧 manifest，找出 新增/修改/删除 的文件
-3. 将变化文件打成一个小 zip（补丁包）
+3. 构建通用补丁包：合并所有旧版本的差异，生成一个 zip 覆盖所有旧版本
+
+通用补丁包原理（方案B）：
+  - 取所有旧版 manifest 与新版的差异的并集
+  - 一个补丁包即可将任意 >= min_version 的旧版本升级到最新
+  - 补丁包内嵌完整的目标文件哈希表（target_files），客户端可校验
 
 用法：
     # 1) 生成当前版本的 manifest（打包后自动调用）
@@ -30,12 +35,22 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import zipfile
 from datetime import datetime
 
 # 确保能导入 version.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def _version_key(v: str) -> tuple:
+    m = _VERSION_RE.match((v or "").strip())
+    if not m:
+        return (0, 0, 0)
+    return tuple(int(x) for x in m.groups())
 
 
 # ============================================================
@@ -204,6 +219,88 @@ def build_patch_zip(
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
     print(f"  [patch] 补丁包: {output_path} ({size_mb:.2f} MB)")
     return output_path
+
+
+# ============================================================
+# 通用补丁包构建（方案B：一个包覆盖所有旧版本）
+# ============================================================
+def build_universal_patch(
+    dist_folder: str,
+    old_manifests: list,
+    new_manifest: dict,
+    output_path: str,
+) -> dict:
+    """
+    构建通用补丁包，覆盖所有旧版本。
+
+    取所有旧版 manifest 与新版的差异并集，打成一个 zip。
+    zip 内含完整目标哈希表（target_files），客户端可用于校验。
+
+    Args:
+        dist_folder: 新版本打包产物目录
+        old_manifests: [(version_str, manifest_dict), ...] 所有旧版 manifest
+        new_manifest: 新版本 manifest
+        output_path: 输出 zip 路径
+
+    Returns:
+        dict with min_version, file_path, size_mb, changed_count, deleted_count
+        如果没有任何变化则返回 None
+    """
+    new_files = new_manifest.get("files", {})
+    all_changed = set()
+    all_deleted = set()
+    min_version = None
+
+    for old_ver, old_manifest in old_manifests:
+        diff = diff_manifests(old_manifest, new_manifest)
+        if not diff.has_changes:
+            print(f"  [patch] V{old_ver} -> V{new_manifest.get('version', '?')} 无变化，跳过")
+            continue
+        print(f"  [patch] V{old_ver} 差异: +{len(diff.added)} ~{len(diff.modified)} -{len(diff.deleted)}")
+        all_changed.update(diff.changed_files)
+        all_deleted.update(diff.deleted)
+        if min_version is None or _version_key(old_ver) < _version_key(min_version):
+            min_version = old_ver
+
+    if not all_changed and not all_deleted:
+        return None
+
+    # 被某些旧版标记为 deleted，但在新版中存在的文件不应删除
+    all_deleted -= set(new_files.keys())
+
+    target_version = new_manifest.get("version", "")
+    patch_meta = {
+        "type": "universal_patch",
+        "version": target_version,
+        "min_version": min_version or "",
+        "build_time": new_manifest.get("build_time", ""),
+        "target_files": new_files,
+        "deleted": sorted(all_deleted),
+        "included_files": sorted(all_changed),
+    }
+
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "patch_manifest.json",
+            json.dumps(patch_meta, ensure_ascii=False, indent=2),
+        )
+        for rel_path in sorted(all_changed):
+            abs_path = os.path.join(dist_folder, rel_path.replace("/", os.sep))
+            if os.path.exists(abs_path):
+                zf.write(abs_path, rel_path)
+
+    size_mb = os.path.getsize(output_path) / (1024 * 1024)
+    print(f"  [patch] 通用补丁包: {os.path.basename(output_path)} ({size_mb:.2f} MB)")
+    print(f"  [patch] 覆盖范围: V{min_version}+ -> V{target_version}")
+    print(f"  [patch] 包含: {len(all_changed)} 个文件, 删除: {len(all_deleted)} 个文件")
+
+    return {
+        "min_version": min_version,
+        "file_path": output_path,
+        "size_mb": round(size_mb, 2),
+        "changed_count": len(all_changed),
+        "deleted_count": len(all_deleted),
+    }
 
 
 # ============================================================

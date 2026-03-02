@@ -369,8 +369,12 @@ class MainWindow(QMainWindow):
                 pass
 
     def closeEvent(self, event):
-        """关闭窗口前先隐藏，避免 Matplotlib 画布销毁时反复重绘导致闪烁"""
+        """关闭窗口前保存倒虹吸面板状态，隐藏窗口以避免 Matplotlib 画布闪烁"""
         self.hide()
+        try:
+            self.siphon_panel._save_autosave()
+        except Exception:
+            pass
         try:
             import matplotlib.pyplot as plt
             plt.close('all')

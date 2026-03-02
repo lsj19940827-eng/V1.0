@@ -283,6 +283,8 @@ class SiphonPanel(QWidget):
         self._suppress_result_display = False
         self.on_result_callback = None
         self.show_detailed_process = True
+        self._plan_source = 'none'       # 平面数据来源: 'none' / 'dxf' / 'water_profile'
+        self._plan_undo_stack = []       # 平面数据撤回栈
 
         # 拟定流速确认标志（方案D：用户是否已手动输入或确认过流速）
         self._v_user_confirmed = False
@@ -306,6 +308,9 @@ class SiphonPanel(QWidget):
 
         self._init_ui()
         self._init_default_segments()
+
+        # 启动时尝试加载上次保存的参数
+        QTimer.singleShot(100, self._load_autosave)
 
     # ================================================================
     # UI 构建
@@ -813,31 +818,67 @@ class SiphonPanel(QWidget):
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(3)
 
-        # 工具栏
-        tb = QHBoxLayout()
-        tb.setSpacing(4)
+        # 工具栏 —— 第一行：DXF 导入 / 清空操作
+        tb1 = QHBoxLayout()
+        tb1.setSpacing(4)
         lbl = QLabel("结构段列表")
         lbl.setStyleSheet(f"font-size:12px;font-weight:bold;color:{T1};")
-        tb.addWidget(lbl)
-        tb.addStretch()
+        tb1.addWidget(lbl)
 
         self.lbl_seg_status = QLabel("")
         self.lbl_seg_status.setStyleSheet(f"color:{T2};font-size:12px;")
-        tb.addWidget(self.lbl_seg_status)
+        tb1.addWidget(self.lbl_seg_status)
+        tb1.addStretch()
 
-        btn_dxf2 = PushButton("导入DXF"); btn_dxf2.clicked.connect(self._import_dxf)
+        # 平面组
+        btn_dxf_plan = PushButton("导入平面DXF"); btn_dxf_plan.clicked.connect(self._import_plan_dxf)
+        btn_dxf_plan.setToolTip("从DXF文件导入平面多段线（工程坐标：X=东, Y=北）")
+        btn_undo_plan = PushButton("撤回平面"); btn_undo_plan.clicked.connect(self._undo_plan_import)
+        btn_undo_plan.setToolTip("撤回上一次平面DXF导入操作")
+        btn_clr_plan = PushButton("清空平面"); btn_clr_plan.clicked.connect(self._clear_plan_data)
+        btn_clr_plan.setToolTip("清空所有平面数据（DXF导入的平面段和特征点）")
+        for w in [btn_dxf_plan, btn_undo_plan, btn_clr_plan]:
+            tb1.addWidget(w)
+
+        # 分隔符
+        _sep1 = QFrame(); _sep1.setFrameShape(QFrame.Shape.VLine); _sep1.setFrameShadow(QFrame.Shadow.Sunken)
+        tb1.addWidget(_sep1)
+
+        # 纵断面组
+        btn_dxf_long = PushButton("导入纵断面DXF"); btn_dxf_long.clicked.connect(self._import_dxf)
+        btn_dxf_long.setToolTip("从DXF文件导入纵断面多段线")
+        btn_clr_long = PushButton("清空纵断面"); btn_clr_long.clicked.connect(self._clear_longitudinal)
+        for w in [btn_dxf_long, btn_clr_long]:
+            tb1.addWidget(w)
+
+        lay.addLayout(tb1)
+
+        # 工具栏 —— 第二行：构件操作 / 表格操作
+        tb2 = QHBoxLayout()
+        tb2.setSpacing(4)
+
+        # 添加构件组
         btn_add_pipe = PushButton("添加管身段"); btn_add_pipe.clicked.connect(self._add_segment_dialog)
         btn_add_common = PushButton("添加通用构件"); btn_add_common.clicked.connect(self._add_common_segment_dialog)
         btn_add_ptrans = PushButton("管道渐变段"); btn_add_ptrans.clicked.connect(self._add_pipe_transition)
         btn_add_ptrans.setToolTip("插入压力管道渐变段 ξjb（收缩0.05/扩散0.10），双击可切换类型")
+        btn_default = PushButton("默认构件"); btn_default.clicked.connect(self._init_default_segments)
+        for w in [btn_add_pipe, btn_add_common, btn_add_ptrans, btn_default]:
+            tb2.addWidget(w)
+
+        # 分隔符
+        _sep2 = QFrame(); _sep2.setFrameShape(QFrame.Shape.VLine); _sep2.setFrameShadow(QFrame.Shadow.Sunken)
+        tb2.addWidget(_sep2)
+
+        # 表格操作组
         btn_del = PushButton("删除"); btn_del.clicked.connect(self._del_segment)
         btn_up = PushButton("↑"); btn_up.setFixedWidth(30); btn_up.clicked.connect(self._move_seg_up)
         btn_dn = PushButton("↓"); btn_dn.setFixedWidth(30); btn_dn.clicked.connect(self._move_seg_down)
-        btn_clr_long = PushButton("清空纵断面"); btn_clr_long.clicked.connect(self._clear_longitudinal)
-        btn_default = PushButton("默认构件"); btn_default.clicked.connect(self._init_default_segments)
-        for w in [btn_dxf2, btn_add_pipe, btn_add_common, btn_add_ptrans, btn_del, btn_up, btn_dn, btn_clr_long, btn_default]:
-            tb.addWidget(w)
-        lay.addLayout(tb)
+        for w in [btn_del, btn_up, btn_dn]:
+            tb2.addWidget(w)
+        tb2.addStretch()
+
+        lay.addLayout(tb2)
 
         # 结构段表格
         self.seg_table = QTableWidget(0, len(SEG_HEADERS))
@@ -874,15 +915,16 @@ class SiphonPanel(QWidget):
         info_lay = QVBoxLayout(info_grp)
         info_lay.setContentsMargins(8, 4, 8, 4)
         info_text = (
-            "1. 点击\"导入DXF\"可从CAD文件导入管道几何\n"
-            "2. 点击\"添加管身段\"手动添加直管/弯管/折管\n"
-            "3. 点击\"添加通用构件\"可自定义添加构件（如镇墩、排气阀等）\n"
-            "4. 双击表格行可编辑该行数据\n"
-            "5. 使用↑↓按钮可调整顺序（首末行除外）\n"
-            "6. 表格分三区：通用构件(黄) → 平面段(蓝) → 纵断面段(绿)\n"
-            "7. 通用构件：进水口、拦污栅、闸门槽、旁通管、其他、出水口（仅贡献ξ）\n"
-            "8. 管身段：直管、弯管、折管（涉及几何线形和水头损失计算）\n"
-            "9. 初始纵断面数据为示例（灰色显示），导入DXF或手动添加后将自动替换"
+            "1. 点击\"导入平面DXF\"可从CAD文件导入平面多段线（工程坐标）\n"
+            "2. 点击\"导入纵断面DXF\"可从CAD文件导入纵断面多段线\n"
+            "3. 支持三种计算模式：仅平面 / 仅纵断面 / 平面+纵断面（三维空间合并）\n"
+            "4. 点击\"添加管身段\"手动添加直管/弯管/折管\n"
+            "5. 点击\"添加通用构件\"可自定义添加构件（如镇墩、排气阀等）\n"
+            "6. 双击表格行可编辑该行数据\n"
+            "7. 使用↑↓按钮可调整顺序（首末行除外）\n"
+            "8. 表格分三区：通用构件(黄) → 平面段(蓝) → 纵断面段(绿)\n"
+            "9. DXF导入的平面段可手动删除；推求水面线提取的平面段不可删除\n"
+            "10. 初始纵断面数据为示例（灰色显示），导入DXF或手动添加后将自动替换"
         )
         info_lbl = QLabel(info_text)
         info_lbl.setStyleSheet(f"color:{T2};font-size:12px;")
@@ -903,7 +945,7 @@ class SiphonPanel(QWidget):
         tb.addStretch()
         btn_add = PushButton("添加"); btn_add.clicked.connect(self._add_long_node)
         btn_del = PushButton("删除"); btn_del.clicked.connect(self._del_long_node)
-        btn_dxf = PushButton("导入DXF"); btn_dxf.clicked.connect(self._import_dxf)
+        btn_dxf = PushButton("导入纵断面DXF"); btn_dxf.clicked.connect(self._import_dxf)
         btn_clr = PushButton("清空"); btn_clr.clicked.connect(self._clear_long_nodes)
         for w in [btn_add, btn_del, btn_dxf, btn_clr]:
             tb.addWidget(w)
@@ -935,6 +977,14 @@ class SiphonPanel(QWidget):
         bar.addWidget(QLabel("名称:"))
         self.edit_name = LineEdit(); self.edit_name.setPlaceholderText("倒虹吸"); self.edit_name.setFixedWidth(100)
         bar.addWidget(self.edit_name)
+
+        btn_export = PushButton("导出参数"); btn_export.setFixedWidth(90)
+        btn_export.clicked.connect(self._export_params)
+        bar.addWidget(btn_export)
+
+        btn_import = PushButton("导入参数"); btn_import.setFixedWidth(90)
+        btn_import.clicked.connect(self._import_params)
+        bar.addWidget(btn_import)
 
         bar.addStretch()
 
@@ -1289,20 +1339,37 @@ document.addEventListener("DOMContentLoaded", function(){
             self._refresh_seg_table()
 
         # 平面段（字典列表 → StructureSegment）
-        if 'plan_segments' in kwargs:
-            data = kwargs['plan_segments']
-            if data and isinstance(data[0], dict):
-                self._set_plan_segments(data)
-            else:
-                self.plan_segments = data
-        if 'plan_feature_points' in kwargs:
-            data = kwargs['plan_feature_points']
-            if data and isinstance(data[0], dict):
-                self._set_plan_feature_points(data)
-            else:
-                self.plan_feature_points = data
-        if 'plan_total_length' in kwargs:
-            self.plan_total_length = kwargs['plan_total_length']
+        _plan_incoming = 'plan_segments' in kwargs or 'plan_feature_points' in kwargs
+        _plan_skip = False
+        if _plan_incoming and (self.plan_feature_points or self.plan_segments):
+            # 已有平面数据时弹窗确认
+            source_text = "DXF导入" if self._plan_source == 'dxf' else (
+                "推求水面线提取" if self._plan_source == 'water_profile' else "已有")
+            if not fluent_question(self, "平面数据冲突",
+                    f"当前已有{source_text}的平面数据（{len(self.plan_feature_points)}个特征点，"
+                    f"{len(self.plan_segments)}个平面段）。\n\n"
+                    "推求水面线正在传入新的平面数据，是否覆盖？"):
+                _plan_skip = True
+        if not _plan_skip:
+            if 'plan_segments' in kwargs:
+                self._push_plan_undo()
+                data = kwargs['plan_segments']
+                if data and isinstance(data[0], dict):
+                    self._set_plan_segments(data)
+                else:
+                    self.plan_segments = data
+                self._plan_source = 'water_profile'
+            if 'plan_feature_points' in kwargs:
+                if 'plan_segments' not in kwargs:
+                    self._push_plan_undo()
+                data = kwargs['plan_feature_points']
+                if data and isinstance(data[0], dict):
+                    self._set_plan_feature_points(data)
+                else:
+                    self.plan_feature_points = data
+                self._plan_source = 'water_profile'
+            if 'plan_total_length' in kwargs:
+                self.plan_total_length = kwargs['plan_total_length']
 
         # 纵断面节点
         if 'longitudinal_nodes' in kwargs:
@@ -1416,6 +1483,9 @@ document.addEventListener("DOMContentLoaded", function(){
         updated = False
         for seg in self.plan_segments:
             if seg.segment_type == SegmentType.BEND:
+                # DXF导入的弯管段（locked=True）保留实际半径，不被n×D覆盖
+                if seg.locked:
+                    continue
                 seg.radius = siphon_radius
                 if seg.angle > 0:
                     seg.length = round(siphon_radius * math.radians(seg.angle), 3)
@@ -1426,6 +1496,9 @@ document.addEventListener("DOMContentLoaded", function(){
 
         for fp in self.plan_feature_points:
             if fp.turn_angle > 0 and fp.turn_type != TurnType.NONE:
+                # DXF导入的特征点（有实际半径）不覆盖
+                if self._plan_source == 'dxf' and fp.turn_radius > 0:
+                    continue
                 fp.turn_radius = siphon_radius
 
         if updated:
@@ -1505,6 +1578,84 @@ document.addEventListener("DOMContentLoaded", function(){
                     seg.xi_calc = round(xi_c, 4)
             self._refresh_seg_table()
 
+    # ---- 参数持久化：自动保存/恢复/导出/导入/重置 ----
+
+    def _get_autosave_path(self) -> str:
+        """获取自动保存文件路径：{项目根}/data/siphon_autosave.json"""
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        data_dir = os.path.join(root, 'data')
+        os.makedirs(data_dir, exist_ok=True)
+        return os.path.join(data_dir, 'siphon_autosave.json')
+
+    def _save_autosave(self):
+        """保存当前面板状态到自动保存文件"""
+        try:
+            import json, datetime
+            payload = {
+                'version': '1.0',
+                'saved_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'data': self.to_dict(),
+            }
+            path = self._get_autosave_path()
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[倒虹吸自动保存] 失败: {e}")
+
+    def _load_autosave(self):
+        """启动时尝试加载自动保存的状态"""
+        try:
+            import json
+            path = self._get_autosave_path()
+            if not os.path.exists(path):
+                return
+            with open(path, 'r', encoding='utf-8') as f:
+                payload = json.load(f)
+            data = payload.get('data', payload)
+            self.from_dict(data)
+        except Exception as e:
+            print(f"[倒虹吸自动加载] 失败: {e}")
+
+    def _export_params(self):
+        """手动导出参数到用户选择的JSON文件"""
+        import json, datetime
+        name = self.edit_name.text().strip() or "倒虹吸"
+        date_str = datetime.datetime.now().strftime('%Y%m%d')
+        default_name = f"倒虹吸参数_{name}_{date_str}.json"
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "导出倒虹吸参数", default_name, "JSON文件 (*.json)")
+        if not filepath:
+            return
+        try:
+            payload = {
+                'version': '1.0',
+                'saved_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'data': self.to_dict(),
+            }
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            InfoBar.success("导出成功", f"参数已保存到：{os.path.basename(filepath)}",
+                           parent=self, duration=3000, position=InfoBarPosition.TOP_RIGHT)
+        except Exception as e:
+            fluent_error(self, "导出失败", str(e))
+
+    def _import_params(self):
+        """从用户选择的JSON文件导入参数"""
+        import json
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "导入倒虹吸参数", "", "JSON文件 (*.json)")
+        if not filepath:
+            return
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                payload = json.load(f)
+            data = payload.get('data', payload)
+            self.from_dict(data)
+            InfoBar.success("导入成功", f"已从 {os.path.basename(filepath)} 恢复参数",
+                           parent=self, duration=3000, position=InfoBarPosition.TOP_RIGHT)
+        except Exception as e:
+            fluent_error(self, "导入失败", f"文件格式错误或损坏：{e}")
+
     def to_dict(self):
         """序列化为字典（项目保存用）"""
         d = {
@@ -1526,6 +1677,10 @@ document.addEventListener("DOMContentLoaded", function(){
             'show_detail': self.detail_cb.isChecked(),
             'D_override': self.edit_D_override.text().strip(),
             'num_pipes': self.spin_num_pipes.value() if hasattr(self, 'spin_num_pipes') else 1,
+            'inc_checked': self.inc_cb.isChecked(),
+            'inc_percent': self.edit_inc.text().strip(),
+            'twist_angle_inlet': self.edit_twist_angle_inlet.text().strip(),
+            'twist_angle_outlet': self.edit_twist_angle_outlet.text().strip(),
         }
         if SIPHON_AVAILABLE:
             d['segments'] = [self._seg_to_dict(s) for s in self.segments]
@@ -1540,6 +1695,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 for nd in self.longitudinal_nodes
             ]
             d['longitudinal_is_example'] = self._longitudinal_is_example
+            d['plan_source'] = self._plan_source
         # 保存计算结果
         if self.calculation_result:
             d['total_head_loss'] = self.calculation_result.total_head_loss
@@ -1618,6 +1774,15 @@ document.addEventListener("DOMContentLoaded", function(){
                 self.edit_v3.setText(v3_str)
         if 'name' in d: self.edit_name.setText(d['name'])
         if 'show_detail' in d: self.detail_cb.setChecked(d['show_detail'])
+        if 'inc_checked' in d:
+            self.inc_cb.setChecked(d['inc_checked'])
+            self._on_inc_toggle()
+        if 'inc_percent' in d and d['inc_percent']:
+            self.edit_inc.setText(str(d['inc_percent']))
+        if 'twist_angle_inlet' in d and d['twist_angle_inlet']:
+            self.edit_twist_angle_inlet.setText(str(d['twist_angle_inlet']))
+        if 'twist_angle_outlet' in d and d['twist_angle_outlet']:
+            self.edit_twist_angle_outlet.setText(str(d['twist_angle_outlet']))
         if 'segments' in d and SIPHON_AVAILABLE:
             self.segments = [self._dict_to_seg(sd) for sd in d['segments']]
             self._refresh_seg_table()
@@ -1653,6 +1818,13 @@ document.addEventListener("DOMContentLoaded", function(){
             self._longitudinal_is_example = d['longitudinal_is_example']
         else:
             self._longitudinal_is_example = len(self.longitudinal_nodes) < 2
+        # 恢复平面数据来源
+        if 'plan_source' in d:
+            self._plan_source = d['plan_source']
+        elif self.plan_feature_points or self.plan_segments:
+            self._plan_source = 'water_profile'  # 兼容旧数据默认推求水面线
+        else:
+            self._plan_source = 'none'
         self._refresh_seg_table()
         self._update_canvas()
         self._update_data_status()
@@ -2519,11 +2691,13 @@ document.addEventListener("DOMContentLoaded", function(){
             if r < 0 or r >= len(display_segments):
                 continue
             seg, source = display_segments[r]
-            # 平面段不允许删除
+            # 平面段：DXF导入的可删除，推求水面线提取的不可删除
             if source == 'plan':
-                InfoBar.warning("提示", "平面段由推求水面线表格自动提取，不可手动删除",
-                               parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
-                return
+                if self._plan_source == 'water_profile':
+                    InfoBar.warning("提示", "平面段由推求水面线表格自动提取，不可手动删除",
+                                   parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+                    return
+                # DXF导入的平面段允许删除，后续处理
             # 进出水口不允许删除
             if seg.segment_type in (SegmentType.INLET, SegmentType.OUTLET):
                 InfoBar.warning("提示", "不能删除进水口或出水口",
@@ -2532,8 +2706,9 @@ document.addEventListener("DOMContentLoaded", function(){
         # 确认删除
         if not fluent_question(self, "确认", "确定要删除选中的结构段吗？"):
             return
-        # 收集要删除的实际索引（在self.segments中）
+        # 收集要删除的实际索引（在self.segments中）及平面段
         to_remove = []
+        plan_to_remove = []
         has_long_del = False
         for r in rows:
             if r < 0 or r >= len(display_segments):
@@ -2544,9 +2719,19 @@ document.addEventListener("DOMContentLoaded", function(){
                 to_remove.append(idx)
                 if source == 'longitudinal':
                     has_long_del = True
+            elif source == 'plan':
+                # DXF导入的平面段可删除
+                try:
+                    plan_idx = self.plan_segments.index(seg)
+                    plan_to_remove.append(plan_idx)
+                except ValueError:
+                    pass
         for idx in sorted(to_remove, reverse=True):
             if 0 <= idx < len(self.segments):
                 self.segments.pop(idx)
+        for idx in sorted(plan_to_remove, reverse=True):
+            if 0 <= idx < len(self.plan_segments):
+                self.plan_segments.pop(idx)
         self._refresh_seg_table()
         self._update_canvas()
         if has_long_del and len(self.longitudinal_nodes) >= 2:
@@ -2895,6 +3080,127 @@ document.addEventListener("DOMContentLoaded", function(){
             auto_resize_table(self.long_table)
         finally:
             self._syncing = old_syncing
+
+    # ---- 平面DXF导入 / 撤回 / 清空 ----
+    def _push_plan_undo(self):
+        """保存当前平面数据快照到撤回栈"""
+        snapshot = {
+            'plan_segments': copy.deepcopy(self.plan_segments),
+            'plan_feature_points': copy.deepcopy(self.plan_feature_points),
+            'plan_total_length': self.plan_total_length,
+            'plan_source': self._plan_source,
+        }
+        self._plan_undo_stack.append(snapshot)
+        # 限制栈深度
+        if len(self._plan_undo_stack) > 20:
+            self._plan_undo_stack.pop(0)
+
+    def _undo_plan_import(self):
+        """撤回上一次平面导入操作"""
+        if not self._plan_undo_stack:
+            InfoBar.warning("提示", "没有可撤回的平面操作",
+                           parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+            return
+        snapshot = self._plan_undo_stack.pop()
+        self.plan_segments = snapshot['plan_segments']
+        self.plan_feature_points = snapshot['plan_feature_points']
+        self.plan_total_length = snapshot['plan_total_length']
+        self._plan_source = snapshot['plan_source']
+        self._refresh_seg_table()
+        self._update_canvas()
+        self._update_data_status()
+        InfoBar.success("已撤回", "平面数据已恢复到上一次状态",
+                       parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+
+    def _clear_plan_data(self):
+        """清空所有平面数据"""
+        if not self.plan_segments and not self.plan_feature_points:
+            InfoBar.warning("提示", "当前没有平面数据",
+                           parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+            return
+        if not fluent_question(self, "确认", "确定要清空所有平面数据吗？\n（包括平面段和特征点）"):
+            return
+        self._push_plan_undo()
+        self.plan_segments.clear()
+        self.plan_feature_points.clear()
+        self.plan_total_length = 0.0
+        self._plan_source = 'none'
+        self._refresh_seg_table()
+        self._update_canvas()
+        self._update_data_status()
+        InfoBar.success("已清空", "平面数据已全部清除",
+                       parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+
+    def _import_plan_dxf(self):
+        """导入平面DXF文件（工程坐标多段线）"""
+        if not DXF_AVAILABLE:
+            InfoBar.warning("不可用", "DXF解析器未加载", parent=self._info_parent(),
+                           duration=3000, position=InfoBarPosition.TOP)
+            return
+        # 冲突保护：如果已有平面数据，弹窗确认
+        if self.plan_feature_points or self.plan_segments:
+            source_text = "DXF导入" if self._plan_source == 'dxf' else (
+                "推求水面线提取" if self._plan_source == 'water_profile' else "已有")
+            if not fluent_question(self, "平面数据冲突",
+                    f"当前已有{source_text}的平面数据（{len(self.plan_feature_points)}个特征点，"
+                    f"{len(self.plan_segments)}个平面段）。\n\n"
+                    "导入新的平面DXF将覆盖现有平面数据，是否继续？"):
+                return
+        # 选择文件
+        _res_dir = os.path.join(_siphon_dir, "resources")
+        if not os.path.isdir(_res_dir):
+            _res_dir = ""
+        filepath, _ = QFileDialog.getOpenFileName(self, "选择平面DXF文件",
+            _res_dir, "DXF文件 (*.dxf);;所有文件 (*.*)")
+        if not filepath:
+            return
+        try:
+            plan_points, plan_segs, message = DxfParser.parse_plan_polyline(filepath)
+            if not plan_points and not plan_segs:
+                InfoBar.error("导入失败", message or "DXF文件中未找到平面多段线数据",
+                             parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+                return
+            # 保存撤回快照
+            self._push_plan_undo()
+            # 替换平面数据
+            self.plan_feature_points = plan_points
+            self.plan_segments = plan_segs
+            if plan_points:
+                self.plan_total_length = plan_points[-1].chainage
+            elif plan_segs:
+                self.plan_total_length = sum(s.length for s in plan_segs)
+            else:
+                self.plan_total_length = 0.0
+            self._plan_source = 'dxf'
+            # 刷新UI
+            self._refresh_seg_table()
+            self._update_segment_coefficients()
+            self._update_canvas()
+            self._update_data_status()
+            # 提示信息
+            pt_info = f"特征点: {len(plan_points)} 个" if plan_points else ""
+            seg_info = f"平面段: {len(plan_segs)} 个" if plan_segs else ""
+            length_info = f"平面总长: {self.plan_total_length:.2f}m"
+            arcs = sum(1 for s in plan_segs if s.segment_type == SegmentType.BEND)
+            folds = sum(1 for s in plan_segs if s.segment_type == SegmentType.FOLD)
+            turn_info = ""
+            if arcs or folds:
+                parts = []
+                if arcs: parts.append(f"弯管{arcs}个")
+                if folds: parts.append(f"折管{folds}个")
+                turn_info = f"（{', '.join(parts)}）"
+            spatial_info = ""
+            if self.longitudinal_nodes and len(self.longitudinal_nodes) >= 2:
+                spatial_info = "\n已检测到纵断面数据，将使用三维空间合并计算"
+            else:
+                spatial_info = "\n未检测到纵断面数据，将使用平面独立计算模式"
+            detail_parts = [p for p in [pt_info, seg_info, length_info + turn_info] if p]
+            InfoBar.success("平面DXF导入成功",
+                f"{message}\n{', '.join(detail_parts)}{spatial_info}",
+                parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
+        except Exception as e:
+            InfoBar.error("导入失败", str(e), parent=self._info_parent(),
+                         duration=5000, position=InfoBarPosition.TOP)
 
     def _import_dxf(self):
         if not DXF_AVAILABLE:
@@ -3579,6 +3885,11 @@ document.addEventListener("DOMContentLoaded", function(){
         if n_plan: counts.append(f"IP点:{n_plan}")
         if self.plan_total_length > 0:
             counts.append(f"平面长:{self.plan_total_length:.1f}m")
+        # 平面数据来源标记
+        if self._plan_source == 'dxf':
+            counts.append("平面:DXF")
+        elif self._plan_source == 'water_profile':
+            counts.append("平面:水面线")
 
         text = mode
         if counts:
