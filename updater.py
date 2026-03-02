@@ -190,6 +190,16 @@ def _strip_proxy_prefix(url: str) -> str:
     return url
 
 
+class PartialDownloadError(Exception):
+    """多线程分段下载部分失败时抛出，保留已下载内容供断点续传"""
+    def __init__(self, dest_path: str, segments: list, failed_indices: set, total: int):
+        self.dest_path = dest_path
+        self.segments = segments          # list of (start, end)
+        self.failed_indices = failed_indices  # 失败的分段下标集合
+        self.total = total
+        super().__init__(f"{len(failed_indices)}/{len(segments)} segments failed")
+
+
 # ============================================================
 # 涓嬭浇鏇存柊鍖?# ============================================================
 _NUM_WORKERS = max(1, min(16, int(os.getenv("UPDATER_DOWNLOAD_WORKERS", "8"))))
@@ -271,7 +281,9 @@ def _download_from_url(
     monitor = threading.Thread(target=_report_progress, daemon=True)
     monitor.start()
 
-    # 骞跺彂涓嬭浇
+    # 并发下载，收集所有失败分段（不提前中止）
+    future_to_idx: dict = {}
+    failed_indices: set = set()
     try:
         with ThreadPoolExecutor(max_workers=num_workers) as pool:
             futures = []
@@ -281,11 +293,69 @@ def _download_from_url(
                     progress_arr, i,
                 )
                 futures.append(fut)
+                future_to_idx[fut] = i
 
             for fut in as_completed(futures):
-                fut.result()  # 鎶涘嚭寮傚父锛堝鏈夛級
+                try:
+                    fut.result()
+                except Exception:
+                    failed_indices.add(future_to_idx[fut])
+    finally:
+        stop_event.set()
+        monitor.join(timeout=1)
+
+    if failed_indices:
+        # 保留已下载的分段，抛出专用异常供上层断点续传
+        raise PartialDownloadError(dest_path, segments, failed_indices, total)
+
+    if progress_callback:
+        progress_callback(total, total)
+
+    return dest_path
+
+
+def _resume_segments(
+    url: str,
+    dest_path: str,
+    segments: list,
+    failed_indices: set,
+    already_bytes: int,
+    total: int,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> str:
+    """
+    仅重新下载失败的分段，复用已写入文件的其余分段（断点续传）。
+    url 应为直连 GitHub URL。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+
+    n = len(failed_indices)
+    progress_arr = [0] * n
+    stop_event = threading.Event()
+
+    def _report():
+        while not stop_event.is_set():
+            if progress_callback:
+                progress_callback(already_bytes + sum(progress_arr), total)
+            stop_event.wait(0.2)
+
+    monitor = threading.Thread(target=_report, daemon=True)
+    monitor.start()
+
+    try:
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            futures = []
+            for j, i in enumerate(sorted(failed_indices)):
+                start, end = segments[i]
+                fut = pool.submit(
+                    _download_segment, url, start, end, dest_path,
+                    progress_arr, j,
+                )
+                futures.append(fut)
+            for fut in as_completed(futures):
+                fut.result()  # 若直连也失败则直接抛出
     except Exception:
-        # 涓嬭浇澶辫触锛氭竻鐞嗘畫鐣欐枃浠讹紝閬垮厤鐣欎笅涓嶅畬鏁寸殑 zip
         try:
             os.remove(dest_path)
         except OSError:
@@ -295,7 +365,6 @@ def _download_from_url(
         stop_event.set()
         monitor.join(timeout=1)
 
-    # 纭繚鏈€鍚庝竴娆¤繘搴︿负 100%
     if progress_callback:
         progress_callback(total, total)
 
@@ -353,10 +422,42 @@ def download_update(
 
     try:
         return _download_from_url(url, dest_dir, progress_callback)
+    except PartialDownloadError as e:
+        # 代理中途断流：已下载分段保留，仅直连补全失败分段
+        direct_url = _strip_proxy_prefix(url)
+        if direct_url != url:
+            already = sum(
+                e.segments[i][1] - e.segments[i][0] + 1
+                for i in range(len(e.segments))
+                if i not in e.failed_indices
+            )
+            print(
+                f"[updater] 代理中途失败 "
+                f"({len(e.failed_indices)}/{len(e.segments)} 段)，"
+                f"断点续传 {already // (1024*1024)} MB 已保留，"
+                f"直连补全剩余分段"
+            )
+            try:
+                return _resume_segments(
+                    direct_url, e.dest_path, e.segments,
+                    e.failed_indices, already, e.total, progress_callback,
+                )
+            except Exception:
+                try:
+                    os.remove(e.dest_path)
+                except OSError:
+                    pass
+                raise
+        else:
+            try:
+                os.remove(e.dest_path)
+            except OSError:
+                pass
+            raise
     except Exception:
         direct_url = _strip_proxy_prefix(url)
         if direct_url != url:
-            print(f"[updater] 代理下载失败，回退直连: {direct_url}")
+            print(f"[updater] 代理连接失败，回退直连: {direct_url}")
             return _download_from_url(direct_url, dest_dir, progress_callback)
         raise
 
