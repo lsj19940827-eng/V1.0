@@ -568,10 +568,12 @@ class WaterProfilePanel(QWidget):
         }
         # 防止 cellChanged 递归更新的守卫标志
         self._updating_cells = False
-        # 水头损失编辑撤销栈（最多保留20步）
+        # 表格编辑撤销栈
         self._loss_undo_stack = []
         self._loss_redo_stack = []
         self._pre_edit_cell_value = None  # (row, col, old_text)
+        self._pre_edit_snapshot = None  # 编辑前的快照
+        self._undo_group = 0  # 撤销分组计数器，用于批量操作时避免重复记录快照
         self._init_ui()
 
     # ================================================================
@@ -866,13 +868,11 @@ class WaterProfilePanel(QWidget):
         self.node_table.cellDoubleClicked.connect(self._on_node_cell_double_clicked)
         self.node_table.cellChanged.connect(self._on_loss_cell_changed)
         self.node_table.currentCellChanged.connect(self._on_current_cell_changed)
-        # Ctrl+Z 撤销水头损失编辑
-        undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self.node_table)
-        undo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
-        undo_sc.activated.connect(self._undo_loss_edit)
-        redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self.node_table)
-        redo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
-        redo_sc.activated.connect(self._redo_loss_edit)
+        # Undo/Redo 通过 FrozenColumnTableWidget 的信号连接（表格 keyPressEvent 先处理按键）
+        self.node_table.undoRequested.connect(self._undo_loss_edit)
+        self.node_table.redoRequested.connect(self._redo_loss_edit)
+        # Delete 键删除时记录快照
+        self.node_table.deleteRequested.connect(self._push_undo_snapshot)
         lay.addWidget(self.node_table, stretch=1)
         self._setup_header_tooltips()
 
@@ -1305,47 +1305,75 @@ class WaterProfilePanel(QWidget):
                     node.top_elevation = te
 
     def _on_current_cell_changed(self, row, col, prev_row, prev_col):
-        """当用户切换到水头损失可编辑列时，记录编辑前的原值（供撤销使用）"""
+        """当用户切换单元格时，记录编辑前的快照（供撤销使用）"""
         if self._updating_cells:
             return
-        if row == 0:
-            return  # 第一行是水位起点，不允许编辑水头损失
-        if col in (36, 37, 38):
+        # 重置批量操作标志（Delete 删除结束）
+        self._undo_group = 0
+        # 任何单元格切换时都记录快照（与批量计算面板保持一致）
+        self._pre_edit_snapshot = self._snapshot_editable_cols()
+        if col in EDITABLE_COLS:
             item = self.node_table.item(row, col)
             self._pre_edit_cell_value = (row, col, item.text() if item else "")
 
+    def _snapshot_editable_cols(self):
+        """保存所有可编辑列的快照（用于撤销）"""
+        snapshot = {}
+        for r in range(self.node_table.rowCount()):
+            for c in EDITABLE_COLS:
+                item = self.node_table.item(r, c)
+                snapshot[(r, c)] = item.text() if item else ""
+            # 也保存联动计算列（39-43）
+            for c in range(39, 44):
+                item = self.node_table.item(r, c)
+                snapshot[(r, c)] = item.text() if item else ""
+        return snapshot
+
     def _on_loss_cell_changed(self, row, col):
-        """当用户编辑预留/过闸/倒虹吸水头损失时，联动更新总水头损失、累计、水位、高程"""
+        """当用户编辑可编辑列时，记录撤销快照；若为水头损失列则联动更新"""
         if self._updating_cells:
             return
-        # 仅对预留(36)、过闸(37)、倒虹吸(38)列触发
-        if col not in (36, 37, 38):
+        # 仅对可编辑列触发
+        if col not in EDITABLE_COLS:
             return
-        # 第一行是水位起点，不允许编辑水头损失
-        if row == 0:
-            return
+        
         self._updating_cells = True
         try:
-            # ── 保存撤销快照（recalc 前，cols 36-45 的当前值） ──
-            snapshot = {}
-            for r in range(self.node_table.rowCount()):
-                for c in range(35, 44):
-                    item = self.node_table.item(r, c)
-                    snapshot[(r, c)] = item.text() if item else ""
-            # 编辑单元格已经是新值，用 _pre_edit_cell_value 还原旧值
-            if self._pre_edit_cell_value and self._pre_edit_cell_value[:2] == (row, col):
-                snapshot[(row, col)] = self._pre_edit_cell_value[2]
-            self._loss_undo_stack.append(snapshot)
-            if len(self._loss_undo_stack) > 20:
-                self._loss_undo_stack.pop(0)
-            self._loss_redo_stack.clear()
+            # 如果在批量操作中（如 Delete 键删除），跳过快照记录
+            if self._undo_group == 0:
+                # 如果没有预先记录的快照，先生成一个
+                if self._pre_edit_snapshot is None:
+                    self._pre_edit_snapshot = self._snapshot_editable_cols()
+                
+                # 编辑单元格已经是新值，用 _pre_edit_cell_value 还原旧值
+                if self._pre_edit_cell_value and self._pre_edit_cell_value[:2] == (row, col):
+                    self._pre_edit_snapshot[(row, col)] = self._pre_edit_cell_value[2]
+                
+                self._loss_undo_stack.append(self._pre_edit_snapshot)
+                if len(self._loss_undo_stack) > 20:
+                    self._loss_undo_stack.pop(0)
+                self._loss_redo_stack.clear()
+                self._pre_edit_snapshot = None
 
-            self._recalc_downstream(row)
+            # 对于水头损失列（36, 37, 38），触发联动计算
+            if col in (36, 37, 38) and row > 0:
+                self._recalc_downstream(row)
         finally:
             self._updating_cells = False
             # 更新 pre_edit 为当前新值，以便连续编辑同一单元格时也能撤销
             item = self.node_table.item(row, col)
             self._pre_edit_cell_value = (row, col, item.text() if item else "")
+
+    def _push_undo_snapshot(self):
+        """记录当前表格状态到撤销栈（Delete 键删除前调用）"""
+        snapshot = self._snapshot_editable_cols()
+        self._loss_undo_stack.append(snapshot)
+        if len(self._loss_undo_stack) > 20:
+            self._loss_undo_stack.pop(0)
+        self._loss_redo_stack.clear()
+        self._pre_edit_snapshot = None
+        # 设置标志，跳过后续 cellChanged 触发的快照记录
+        self._undo_group += 1
 
     def _undo_loss_edit(self):
         """Ctrl+Z 撤销上一次水头损失编辑，恢复表格和 calculated_nodes"""
@@ -1405,7 +1433,7 @@ class WaterProfilePanel(QWidget):
                         if te:
                             node.top_elevation = te
 
-            InfoBar.success("已撤销", "已恢复上一次编辑前的水头损失数据",
+            InfoBar.success("已撤销", "已恢复上一步操作",
                            parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
         finally:
             self._updating_cells = False
@@ -1468,7 +1496,7 @@ class WaterProfilePanel(QWidget):
                         if te:
                             node.top_elevation = te
 
-            InfoBar.success("已重做", "已恢复上一次撤销的水头损失数据",
+            InfoBar.success("已重做", "已恢复上一步撤销的操作",
                            parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
         finally:
             self._updating_cells = False
@@ -3789,13 +3817,16 @@ class WaterProfilePanel(QWidget):
 
     def _open_siphon_calculator(self, auto_run: bool = False):
         """打开倒虹吸水力计算（PySide6 多标签页窗口）"""
+        print(f"[DEBUG] _open_siphon_calculator 被调用, auto_run={auto_run}")
         if not CALCULATOR_AVAILABLE:
+            print("[DEBUG] CALCULATOR_AVAILABLE = False，返回")
             InfoBar.error("不可用", "核心计算引擎未加载",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
 
         nodes = self._build_nodes_from_table()
         if not nodes:
+            print("[DEBUG] nodes 为空，返回")
             InfoBar.info("提示", "表格中没有数据，请先导入断面参数",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
@@ -3803,6 +3834,7 @@ class WaterProfilePanel(QWidget):
         # 检查是否已插入渐变段
         has_transitions = any(getattr(n, 'is_transition', False) for n in nodes)
         if not has_transitions:
+            print("[DEBUG] has_transitions = False，返回")
             InfoBar.warning("提示",
                            "请先点击工具栏的【插入渐变段】按钮，完成渐变段插入后再进行倒虹吸水力计算。\n"
                            "插入渐变段后，系统才能准确获取倒虹吸上下游流速、断面参数等信息。",
@@ -3814,11 +3846,14 @@ class WaterProfilePanel(QWidget):
             n.structure_type and "倒虹吸" in n.structure_type.value
             for n in nodes if n.structure_type
         )
+        print(f"[DEBUG] has_siphon = {has_siphon}")
         if not has_siphon:
+            print("[DEBUG] has_siphon = False，返回")
             InfoBar.info("提示", "表格中没有倒虹吸数据，请确保有结构形式为\"倒虹吸\"的行",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
 
+        print("[DEBUG] 开始导入模块和提取倒虹吸分组")
         try:
             from 渠系断面设计.siphon.multi_siphon_dialog import MultiSiphonDialog
 
@@ -3891,6 +3926,7 @@ class WaterProfilePanel(QWidget):
             siphon_n = DEFAULT_SIPHON_TURN_RADIUS_N
 
             # 打开PySide6多标签页倒虹吸计算窗口
+            print(f"[DEBUG] 正在创建 MultiSiphonDialog，倒虹吸组数量: {len(siphon_groups)}")
             dlg = MultiSiphonDialog(
                 self._info_parent(),
                 siphon_groups,
@@ -3899,7 +3935,9 @@ class WaterProfilePanel(QWidget):
                 siphon_turn_radius_n=siphon_n,
                 auto_run=auto_run
             )
-            dlg.exec()
+            print(f"[DEBUG] MultiSiphonDialog 创建完成，准备调用 exec()")
+            result = dlg.exec()
+            print(f"[DEBUG] dlg.exec() 返回值: {result}")
 
         except ImportError as e:
             import traceback

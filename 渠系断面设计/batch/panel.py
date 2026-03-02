@@ -461,16 +461,15 @@ class BatchPanel(QWidget):
         QShortcut(QKeySequence("Ctrl+V"), self.input_table, self._paste_from_clipboard)
         QShortcut(QKeySequence("Ctrl+D"), self.input_table, self._fill_down_input)
         QShortcut(QKeySequence("Ctrl+A"), self.input_table, self.input_table.selectAll)
-        undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self.input_table)
-        undo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
-        undo_sc.activated.connect(self._undo_table)
-        redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self.input_table)
-        redo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
-        redo_sc.activated.connect(self._redo_table)
+        # Undo/Redo 通过 FrozenColumnTableWidget 的信号连接（表格 keyPressEvent 先处理按键）
+        self.input_table.undoRequested.connect(self._undo_table)
+        self.input_table.redoRequested.connect(self._redo_table)
+        # Delete 通过 FrozenColumnTableWidget 的信号连接
+        self.input_table.deleteRequested.connect(self._push_undo_snapshot)
         self.input_table.currentCellChanged.connect(self._on_current_cell_changed_undo)
 
         # 操作提示
-        hint = QLabel("提示: Ctrl+C 复制 | Ctrl+V 粘贴 | Ctrl+A 全选 | Ctrl+D 填充向下 | Ctrl+Z 撤销 | Ctrl+Y 重做 | 双击断面类型列可选择 | 右键菜单插入/删除行")
+        hint = QLabel("提示: Ctrl+C 复制 | Ctrl+V 粘贴 | Ctrl+A 全选 | Ctrl+D 填充向下 | Ctrl+Z 撤销 | Ctrl+Y 重做 | Delete 清空 | Tab 右移 | Enter 下移 | 双击断面类型列可选择 | 右键菜单插入/删除行")
         hint.setStyleSheet(
             "font-size:12px;font-weight:600;color:#9A3412;"
             "background:#FFF4E5;border:1px solid #F3C88B;border-radius:4px;padding:4px 8px;"
@@ -552,6 +551,11 @@ class BatchPanel(QWidget):
             self._table_undo_stack.pop(0)
         self._restore_table(self._table_redo_stack.pop())
         InfoBar.success("已重做", "已恢复上一步撤销的操作",
+                       parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+
+    def _on_readonly_delete_attempted(self):
+        """用户在只读表格上尝试删除时给出提示"""
+        InfoBar.warning("无法删除", "结果汇总表为只读，不支持编辑操作",
                        parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
 
     def _on_cell_double_clicked(self, row, col):
@@ -1104,6 +1108,9 @@ class BatchPanel(QWidget):
         self.result_table.setColumnWidth(3, 110)  # 结构形式
         t1l.addWidget(self.result_table)
         self.result_notebook.addTab(t1, "结果汇总表")
+        # 结果表格是只读的，不转发撤销/重做信号（避免误操作影响输入表格）
+        # 当用户尝试在只读表格上删除时给出提示
+        self.result_table.readOnlyDeleteAttempted.connect(self._on_readonly_delete_attempted)
 
         # Tab2: 详细过程
         t2 = QWidget(); t2l = QVBoxLayout(t2); t2l.setContentsMargins(2, 2, 2, 2)

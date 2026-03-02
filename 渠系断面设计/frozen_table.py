@@ -14,12 +14,18 @@
 from PySide6.QtWidgets import (
     QTableWidget, QTableView, QHeaderView, QAbstractItemView,
 )
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtCore import Qt, QEvent, Signal
 from PySide6.QtGui import QPalette, QKeySequence
 
 
 class FrozenColumnTableWidget(QTableWidget):
     """带冻结列的 QTableWidget，API 与 QTableWidget 完全兼容。"""
+
+    # ── 自定义信号：供面板连接以实现业务级撤销/重做 ──
+    undoRequested = Signal()
+    redoRequested = Signal()
+    deleteRequested = Signal()  # Delete 键按下前发射，面板可记录快照
+    readOnlyDeleteAttempted = Signal()  # 用户在只读单元格上尝试删除时发射
 
     def __init__(self, rows=0, cols=0, frozen_count=4, parent=None):
         super().__init__(rows, cols, parent)
@@ -49,11 +55,11 @@ class FrozenColumnTableWidget(QTableWidget):
         )
 
         # ── 事件过滤器 ──
-        # 在冻结视图和主表 viewport 上安装事件过滤器，
-        # 彻底拦截冻结列区域的双击事件，只发射自定义信号，
-        # 阻止 Qt 内部启动编辑器 / 事件穿透等一切默认行为。
+        # 在冻结视图、主表 viewport 和主表自身上安装事件过滤器，
+        # 拦截冻结列区域的双击事件和键盘快捷键。
         self._frozen_view.viewport().installEventFilter(self)
         self.viewport().installEventFilter(self)
+        self.installEventFilter(self)  # 捕获键盘事件
 
     # ────────────────────────────────────────────
     # 初始化
@@ -173,11 +179,24 @@ class FrozenColumnTableWidget(QTableWidget):
             self._frozen_view.setRowHeight(row, default_h)
 
     # ────────────────────────────────────────────
-    # 事件过滤器：彻底拦截冻结列区域的双击
+    # 事件过滤器：拦截冻结列双击 + 键盘快捷键
     # ────────────────────────────────────────────
     def eventFilter(self, obj, event):
-        """拦截冻结列区域的双击事件，只发射 cellDoubleClicked 信号，
-        彻底阻止 Qt 内部启动编辑器 / 事件穿透。"""
+        """拦截冻结列区域的双击事件，以及处理键盘快捷键。"""
+        # 键盘事件处理
+        if event.type() == QEvent.ShortcutOverride:
+            # ShortcutOverride: 只检查是否要处理，不发射信号
+            if obj is self or obj is self.viewport() or obj is self._frozen_view.viewport():
+                if self._should_handle_key(event):
+                    event.accept()  # 告诉 Qt 我们要处理这个快捷键
+                    return True
+        elif event.type() == QEvent.KeyPress:
+            # KeyPress: 实际处理并发射信号
+            if obj is self or obj is self.viewport() or obj is self._frozen_view.viewport():
+                if self._handle_key_event(event):
+                    return True
+        
+        # 双击事件处理
         if event.type() == QEvent.MouseButtonDblClick:
             # 情况1：双击发生在冻结视图的 viewport 上
             if obj is self._frozen_view.viewport():
@@ -195,6 +214,61 @@ class FrozenColumnTableWidget(QTableWidget):
                     return True  # 冻结列区域由上方 overlay 处理，主表不要响应
 
         return super().eventFilter(obj, event)
+
+    def _should_handle_key(self, event):
+        """检查是否应该处理该按键（仅检查，不发射信号）。"""
+        key = event.key()
+        mods = event.modifiers()
+        has_ctrl = bool(mods & Qt.ControlModifier)
+        has_shift = bool(mods & Qt.ShiftModifier)
+        has_alt = bool(mods & Qt.AltModifier)
+        has_meta = bool(mods & Qt.MetaModifier)
+        
+        # Ctrl+Z/Y, Ctrl+Shift+Z, Delete/Backspace
+        if key == Qt.Key_Z and has_ctrl and not has_alt and not has_meta:
+            return True
+        if key == Qt.Key_Y and has_ctrl and not has_shift and not has_alt and not has_meta:
+            return True
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+            if self.state() != QAbstractItemView.State.EditingState:
+                return True
+        return False
+
+    def _handle_key_event(self, event):
+        """处理键盘快捷键，返回 True 表示事件已被处理。"""
+        key = event.key()
+        mods = event.modifiers()
+        # 使用位运算检查修饰键，忽略 KeypadModifier 等平台特定标志
+        has_ctrl = bool(mods & Qt.ControlModifier)
+        has_shift = bool(mods & Qt.ShiftModifier)
+        has_alt = bool(mods & Qt.AltModifier)
+        has_meta = bool(mods & Qt.MetaModifier)
+        
+        # 只读表格（NoEditTriggers）不响应撤销/重做/删除操作
+        is_readonly = (self.editTriggers() == QAbstractItemView.NoEditTriggers)
+        
+        # Ctrl+Z 撤销（仅 Ctrl，无 Shift/Alt/Meta）
+        if key == Qt.Key_Z and has_ctrl and not has_shift and not has_alt and not has_meta:
+            if not is_readonly:
+                self.undoRequested.emit()
+            return True  # 即使不处理也要拦截，避免事件传递
+        # Ctrl+Y 重做（仅 Ctrl）
+        if key == Qt.Key_Y and has_ctrl and not has_shift and not has_alt and not has_meta:
+            if not is_readonly:
+                self.redoRequested.emit()
+            return True
+        # Ctrl+Shift+Z 重做
+        if key == Qt.Key_Z and has_ctrl and has_shift and not has_alt and not has_meta:
+            if not is_readonly:
+                self.redoRequested.emit()
+            return True
+        # Delete / Backspace 清空选中单元格（非编辑状态）
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+            if self.state() != QAbstractItemView.State.EditingState:
+                self._delete_selected_cells()
+                return True
+        
+        return False  # 未处理的按键交给默认处理
 
     # ────────────────────────────────────────────
     # 重写事件
@@ -288,16 +362,137 @@ class FrozenColumnTableWidget(QTableWidget):
         self._update_frozen_geometry()
 
     # ────────────────────────────────────────────
-    # Excel 风格复制粘贴（Ctrl+C / Ctrl+V）
+    # Excel 风格键盘操作
     # ────────────────────────────────────────────
     def keyPressEvent(self, event):
-        if event.matches(QKeySequence.StandardKey.Copy):
+        key = event.key()
+        mods = event.modifiers()
+        # 使用位运算检查修饰键
+        has_ctrl = bool(mods & Qt.ControlModifier)
+        has_shift = bool(mods & Qt.ShiftModifier)
+        has_alt = bool(mods & Qt.AltModifier)
+        has_meta = bool(mods & Qt.MetaModifier)
+        ctrl_only = has_ctrl and not has_shift and not has_alt and not has_meta
+        ctrl_shift_only = has_ctrl and has_shift and not has_alt and not has_meta
+        
+        # 只读表格（NoEditTriggers）不响应撤销/重做操作
+        is_readonly = (self.editTriggers() == QAbstractItemView.NoEditTriggers)
+        
+        # Ctrl+C 复制
+        if key == Qt.Key_C and ctrl_only:
             self._copy_selection_to_clipboard()
             return
-        if event.matches(QKeySequence.StandardKey.Paste):
-            self._paste_from_clipboard()
+        # Ctrl+V 粘贴（只读表格不允许粘贴）
+        if key == Qt.Key_V and ctrl_only:
+            if not is_readonly:
+                self._paste_from_clipboard()
             return
+        # Ctrl+Z 撤销（只读表格不响应）
+        if key == Qt.Key_Z and ctrl_only:
+            if not is_readonly:
+                self.undoRequested.emit()
+            return
+        # Ctrl+Y 或 Ctrl+Shift+Z 重做（只读表格不响应）
+        if (key == Qt.Key_Y and ctrl_only) or (key == Qt.Key_Z and ctrl_shift_only):
+            if not is_readonly:
+                self.redoRequested.emit()
+            return
+        # Delete / Backspace 清空选中单元格
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+            if self.state() != QAbstractItemView.State.EditingState:
+                self._delete_selected_cells()
+                return
+        # Tab 向右导航到下一个可编辑单元格
+        if key == Qt.Key_Tab and not has_alt and not has_meta:
+            if self.state() != QAbstractItemView.State.EditingState:
+                forward = not has_shift
+                self._navigate_next_editable(forward)
+                return
+        # Enter 向下导航（非编辑状态时）
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            if self.state() != QAbstractItemView.State.EditingState:
+                down = not has_shift
+                self._navigate_vertical(down)
+                return
         super().keyPressEvent(event)
+
+    def _delete_selected_cells(self):
+        """清空所有选中的可编辑单元格。"""
+        # 如果表格设置了 NoEditTriggers，直接拒绝删除操作
+        if self.editTriggers() == QAbstractItemView.NoEditTriggers:
+            self.readOnlyDeleteAttempted.emit()
+            return
+        selected = self.selectedIndexes()
+        if not selected:
+            return
+        # 先检查是否有任何可编辑的单元格，如果没有则直接返回（只读表格不响应Delete）
+        editable_indexes = [
+            idx for idx in selected
+            if (item := self.item(idx.row(), idx.column())) and (item.flags() & Qt.ItemIsEditable)
+        ]
+        if not editable_indexes:
+            # 通知面板：用户在只读单元格上尝试删除
+            self.readOnlyDeleteAttempted.emit()
+            return
+        # 先通知面板记录快照（在修改前）
+        self.deleteRequested.emit()
+        self.blockSignals(True)
+        for idx in editable_indexes:
+            item = self.item(idx.row(), idx.column())
+            item.setText("")
+        self.blockSignals(False)
+        # 逐个触发 cellChanged 以便面板可处理联动（如水头损失重算）
+        for idx in editable_indexes:
+            self.cellChanged.emit(idx.row(), idx.column())
+
+    def _navigate_next_editable(self, forward=True):
+        """Tab / Shift+Tab：跳到下一个/上一个可编辑单元格，跳过不可编辑列。"""
+        current = self.currentIndex()
+        if not current.isValid():
+            return
+        row, col = current.row(), current.column()
+        total_cols = self.columnCount()
+        total_rows = self.rowCount()
+        if total_rows == 0 or total_cols == 0:
+            return
+
+        if forward:
+            # 从当前位置向右查找
+            c = col + 1
+            r = row
+            while r < total_rows:
+                while c < total_cols:
+                    item = self.item(r, c)
+                    if item is None or (item.flags() & Qt.ItemIsEditable):
+                        self.setCurrentCell(r, c)
+                        return
+                    c += 1
+                r += 1
+                c = 0
+        else:
+            # 从当前位置向左查找
+            c = col - 1
+            r = row
+            while r >= 0:
+                while c >= 0:
+                    item = self.item(r, c)
+                    if item is None or (item.flags() & Qt.ItemIsEditable):
+                        self.setCurrentCell(r, c)
+                        return
+                    c -= 1
+                r -= 1
+                c = total_cols - 1
+
+    def _navigate_vertical(self, down=True):
+        """Enter / Shift+Enter：向下/向上移动一行，保持当前列。"""
+        current = self.currentIndex()
+        if not current.isValid():
+            return
+        row, col = current.row(), current.column()
+        if down and row + 1 < self.rowCount():
+            self.setCurrentCell(row + 1, col)
+        elif not down and row > 0:
+            self.setCurrentCell(row - 1, col)
 
     def _copy_selection_to_clipboard(self):
         """将选中单元格以 Tab 分隔、换行分行的格式复制到剪贴板（与 Excel 兼容）。"""

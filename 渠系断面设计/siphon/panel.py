@@ -962,10 +962,10 @@ class SiphonPanel(QWidget):
         self.long_table.cellChanged.connect(self._on_long_table_edited)
         self.long_table.currentCellChanged.connect(self._on_long_current_cell_changed)
         undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self.long_table)
-        undo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        undo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         undo_sc.activated.connect(self._undo_long_table)
         redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self.long_table)
-        redo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        redo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         redo_sc.activated.connect(self._redo_long_table)
         lay.addWidget(self.long_table)
 
@@ -979,10 +979,12 @@ class SiphonPanel(QWidget):
         bar.addWidget(self.edit_name)
 
         btn_export = PushButton("导出参数"); btn_export.setFixedWidth(90)
+        btn_export.setToolTip("将当前所有参数保存为 JSON 文件\n默认文件名：倒虹吸参数_{名称}_{日期}.json")
         btn_export.clicked.connect(self._export_params)
         bar.addWidget(btn_export)
 
         btn_import = PushButton("导入参数"); btn_import.setFixedWidth(90)
+        btn_import.setToolTip("从 JSON 文件恢复参数（由「导出参数」生成）\n注意：会覆盖当前所有参数设置")
         btn_import.clicked.connect(self._import_params)
         bar.addWidget(btn_import)
 
@@ -1238,8 +1240,13 @@ document.addEventListener("DOMContentLoaded", function(){
     # ================================================================
     # 外部接口（与推求水面线联动）
     # ================================================================
-    def set_params(self, **kwargs):
-        """从外部（推求水面线模块）设置参数"""
+    def set_params(self, skip_confirm=False, **kwargs):
+        """从外部（推求水面线模块）设置参数
+        
+        Args:
+            skip_confirm: 跳过确认对话框（用于窗口初始化期间）
+            **kwargs: 参数字典
+        """
         if 'Q' in kwargs:
             self.edit_Q.setText(f"{kwargs['Q']:.4f}")
             self.edit_Q.setStyleSheet("color:#0066CC;")
@@ -1342,14 +1349,17 @@ document.addEventListener("DOMContentLoaded", function(){
         _plan_incoming = 'plan_segments' in kwargs or 'plan_feature_points' in kwargs
         _plan_skip = False
         if _plan_incoming and (self.plan_feature_points or self.plan_segments):
-            # 已有平面数据时弹窗确认
-            source_text = "DXF导入" if self._plan_source == 'dxf' else (
-                "推求水面线提取" if self._plan_source == 'water_profile' else "已有")
-            if not fluent_question(self, "平面数据冲突",
-                    f"当前已有{source_text}的平面数据（{len(self.plan_feature_points)}个特征点，"
-                    f"{len(self.plan_segments)}个平面段）。\n\n"
-                    "推求水面线正在传入新的平面数据，是否覆盖？"):
-                _plan_skip = True
+            # 已有平面数据时弹窗确认（窗口初始化期间跳过）
+            if skip_confirm:
+                _plan_skip = False  # 初始化期间直接覆盖
+            else:
+                source_text = "DXF导入" if self._plan_source == 'dxf' else (
+                    "推求水面线提取" if self._plan_source == 'water_profile' else "已有")
+                if not fluent_question(self, "平面数据冲突",
+                        f"当前已有{source_text}的平面数据（{len(self.plan_feature_points)}个特征点，"
+                        f"{len(self.plan_segments)}个平面段）。\n\n"
+                        "推求水面线正在传入新的平面数据，是否覆盖？"):
+                    _plan_skip = True
         if not _plan_skip:
             if 'plan_segments' in kwargs:
                 self._push_plan_undo()
@@ -1705,6 +1715,7 @@ document.addEventListener("DOMContentLoaded", function(){
 
     def from_dict(self, d):
         """从字典恢复状态（项目加载用）"""
+        print(f"[DEBUG SiphonPanel.from_dict] 开始，键: {list(d.keys())[:10]}...")
         if 'Q' in d: self.edit_Q.setText(str(d['Q']))
         if 'v_guess' in d:
             self._syncing = True
@@ -1776,7 +1787,6 @@ document.addEventListener("DOMContentLoaded", function(){
         if 'show_detail' in d: self.detail_cb.setChecked(d['show_detail'])
         if 'inc_checked' in d:
             self.inc_cb.setChecked(d['inc_checked'])
-            self._on_inc_toggle()
         if 'inc_percent' in d and d['inc_percent']:
             self.edit_inc.setText(str(d['inc_percent']))
         if 'twist_angle_inlet' in d and d['twist_angle_inlet']:
@@ -1830,6 +1840,7 @@ document.addEventListener("DOMContentLoaded", function(){
         self._update_data_status()
         self._update_D_theory()
         self._update_turn_R()
+        print("[DEBUG SiphonPanel.from_dict] 完成")
 
     def _seg_to_dict(self, seg):
         d = {
@@ -2190,7 +2201,7 @@ document.addEventListener("DOMContentLoaded", function(){
         else:
             self.lbl_D_theory.setText("D = --")
 
-    def _on_inc_toggle(self, _state):
+    def _on_inc_toggle(self, _state=None):
         """考虑加大流量 CheckBox 切换"""
         enabled = self.inc_cb.isChecked()
         self.edit_inc.setVisible(enabled)

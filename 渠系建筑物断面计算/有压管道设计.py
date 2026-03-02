@@ -591,8 +591,9 @@ def run_batch_scan(
     cancel_flag(): 返回 True 时中止
     """
     import matplotlib
-    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
     import seaborn as sns
     from matplotlib.lines import Line2D
     from matplotlib.ticker import MultipleLocator
@@ -774,7 +775,9 @@ def run_batch_scan(
                 nq1 = len(qchunk1)
                 ncol1 = min(5, nq1)
                 nrow1 = (nq1 + ncol1 - 1) // ncol1
-                fig1, axes1 = plt.subplots(nrow1, ncol1, figsize=(ncol1 * 7, nrow1 * 5.5), squeeze=False)
+                fig1 = Figure(figsize=(ncol1 * 7, nrow1 * 5.5))
+                FigureCanvasAgg(fig1)
+                axes1 = fig1.subplots(nrow1, ncol1, squeeze=False)
 
                 for qi1, q_val1 in enumerate(qchunk1):
                     r1, c1 = divmod(qi1, ncol1)
@@ -863,7 +866,9 @@ def run_batch_scan(
                     os.makedirs(png_dir1, exist_ok=True)
                     for qi1, q_val1 in enumerate(qchunk1):
                         # 创建独立figure
-                        fig_sub1, ax_sub1 = plt.subplots(figsize=(10, 7))
+                        fig_sub1 = Figure(figsize=(10, 7))
+                        FigureCanvasAgg(fig_sub1)
+                        ax_sub1 = fig_sub1.add_subplot(111)
                         ax_sub1_twin = ax_sub1.twinx()
 
                         ax_sub1.set_xlabel("管径 D (m)", fontsize=12)
@@ -977,7 +982,9 @@ def run_batch_scan(
                 nq = len(qchunk)
                 ncol = min(5, nq)
                 nrow = (nq + ncol - 1) // ncol
-                fig, axes = plt.subplots(nrow, ncol, figsize=(ncol * 7, nrow * 5.5), squeeze=False)
+                fig = Figure(figsize=(ncol * 7, nrow * 5.5))
+                FigureCanvasAgg(fig)
+                axes = fig.subplots(nrow, ncol, squeeze=False)
 
                 color_v = "#1976D2"
                 color_hf = "darkorange"
@@ -1050,7 +1057,9 @@ def run_batch_scan(
                             continue
 
                         # 创建独立figure
-                        fig_sub2, ax_sub2 = plt.subplots(figsize=(10, 7))
+                        fig_sub2 = Figure(figsize=(10, 7))
+                        FigureCanvasAgg(fig_sub2)
+                        ax_sub2 = fig_sub2.add_subplot(111)
                         ax_sub2_twin = ax_sub2.twinx()
 
                         ax_sub2.set_xlabel("管径 D (m)", fontsize=12)

@@ -860,10 +860,10 @@ class BatchChannelConfirmDialog(QDialog):
         self.param_table.currentCellChanged.connect(self._on_param_current_cell_changed)
         self.param_table.cellChanged.connect(self._on_param_cell_changed)
         undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self.param_table)
-        undo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        undo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         undo_sc.activated.connect(self._undo_param_table)
         redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self.param_table)
-        redo_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        redo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         redo_sc.activated.connect(self._redo_param_table)
 
         # 底部按钮
@@ -977,7 +977,12 @@ class BatchChannelConfirmDialog(QDialog):
         row['type_combo'].blockSignals(False)
 
         entries = row['entries']
-        self._set_cell(entries['B'][0], entries['B'][1], f"{up.get('bottom_width', 0):.2f}")
+        # U形明渠使用半径R（arc_radius），其他使用底宽B
+        if st == "明渠-U形":
+            b_val = up.get('arc_radius', 0)
+        else:
+            b_val = up.get('bottom_width', 0)
+        self._set_cell(entries['B'][0], entries['B'][1], f"{b_val:.2f}")
         self._set_cell(entries['m'][0], entries['m'][1], f"{up.get('side_slope', 0)}")
         self._set_cell(entries['n'][0], entries['n'][1], f"{up.get('roughness', 0.014)}")
         self._set_cell(entries['slope'][0], entries['slope'][1], f"{up.get('slope_inv', 3000):.0f}")
@@ -1062,15 +1067,20 @@ class BatchChannelConfirmDialog(QDialog):
                 if Q <= 0:
                     fluent_info(self, "输入错误", f"第 {idx+1} 处: 流量 Q 必须大于 0")
                     return None
-                if B <= 0 and st != "明渠-圆形":
+                # U形明渠和圆形明渠没有底宽B，验证时跳过
+                if B <= 0 and st not in ("明渠-圆形", "明渠-U形"):
                     fluent_info(self, "输入错误", f"第 {idx+1} 处: 底宽 B 必须大于 0")
+                    return None
+                # U形明渠验证半径R
+                if st == "明渠-U形" and B <= 0:
+                    fluent_info(self, "输入错误", f"第 {idx+1} 处: 半径 R 必须大于 0")
                     return None
                 if n <= 0:
                     fluent_info(self, "输入错误", f"第 {idx+1} 处: 糙率 n 必须大于 0")
                     return None
 
                 D_param = B if st == "明渠-圆形" else 0.0
-                B_param = 0.0 if st == "明渠-圆形" else B
+                B_param = 0.0 if st in ("明渠-圆形", "明渠-U形") else B
                 h = calculate_normal_depth(Q, B_param, m, n, slope_i, D=D_param)
                 if h <= 0:
                     up = row['gap'].get('upstream_channel')
@@ -1084,13 +1094,26 @@ class BatchChannelConfirmDialog(QDialog):
                 # 从上游渠道继承结构高度（用于计算渠顶高程）
                 up = row['gap'].get('upstream_channel') or {}
                 sh = up.get('structure_height', 0.0)
-                params[idx] = OpenChannelParams(
-                    name="-", structure_type=st,
-                    bottom_width=B, water_depth=h, side_slope=m,
-                    roughness=n, slope_inv=si, flow=Q,
-                    flow_section=row['gap'].get('flow_section', ''),
-                    structure_height=sh,
-                )
+                
+                # U形明渠：B字段存储的是半径R，需要设置到arc_radius
+                if st == "明渠-U形":
+                    params[idx] = OpenChannelParams(
+                        name="-", structure_type=st,
+                        bottom_width=0, water_depth=h, side_slope=m,
+                        roughness=n, slope_inv=si, flow=Q,
+                        flow_section=row['gap'].get('flow_section', ''),
+                        structure_height=sh,
+                        arc_radius=B,
+                        theta_deg=up.get('theta_deg', 0.0),
+                    )
+                else:
+                    params[idx] = OpenChannelParams(
+                        name="-", structure_type=st,
+                        bottom_width=B, water_depth=h, side_slope=m,
+                        roughness=n, slope_inv=si, flow=Q,
+                        flow_section=row['gap'].get('flow_section', ''),
+                        structure_height=sh,
+                    )
             except ValueError:
                 fluent_info(self, "输入错误", f"第 {idx+1} 处: 请输入有效数值")
                 return None
@@ -1185,7 +1208,13 @@ class OpenChannelDialog(QDialog):
         if self.upstream_channel:
             self.rb_copy.setChecked(True)
             up = self.upstream_channel
-            info = f"  → {up.get('structure_type', '')}  B={up.get('bottom_width', 0):.2f}m  m={up.get('side_slope', 0)}  n={up.get('roughness', 0.014)}  底坡1/{up.get('slope_inv', 3000):.0f}"
+            # U形明渠显示半径R，其他显示底宽B
+            st_type = up.get('structure_type', '')
+            if st_type == "明渠-U形":
+                b_label = f"R={up.get('arc_radius', 0):.2f}m"
+            else:
+                b_label = f"B={up.get('bottom_width', 0):.2f}m"
+            info = f"  → {st_type}  {b_label}  m={up.get('side_slope', 0)}  n={up.get('roughness', 0.014)}  底坡1/{up.get('slope_inv', 3000):.0f}"
             lbl_info = QLabel(info)
             lbl_info.setStyleSheet("color: green; margin-left: 20px;")
             src_lay.addWidget(lbl_info)
@@ -1273,7 +1302,12 @@ class OpenChannelDialog(QDialog):
         st = up.get('structure_type', '明渠-梯形')
         idx = self.STRUCTURE_TYPES.index(st) if st in self.STRUCTURE_TYPES else 0
         self.type_combo.setCurrentIndex(idx)
-        self.edit_B.setText(f"{up.get('bottom_width', 0):.2f}")
+        # U形明渠使用半径R（arc_radius），其他使用底宽B
+        if st == "明渠-U形":
+            b_val = up.get('arc_radius', 0)
+        else:
+            b_val = up.get('bottom_width', 0)
+        self.edit_B.setText(f"{b_val:.2f}")
         self.edit_m.setText(f"{up.get('side_slope', 0)}")
         self.edit_n.setText(f"{up.get('roughness', 0.014)}")
         self.edit_slope.setText(f"{up.get('slope_inv', 3000):.0f}")
@@ -1305,12 +1339,17 @@ class OpenChannelDialog(QDialog):
             if Q <= 0:
                 fluent_info(self, "输入错误", "流量 Q 必须大于 0")
                 return
-            if B <= 0 and st != "明渠-圆形":
+            # U形明渠和圆形明渠没有底宽B，验证时跳过
+            if B <= 0 and st not in ("明渠-圆形", "明渠-U形"):
                 fluent_info(self, "输入错误", "底宽 B 必须大于 0")
+                return
+            # U形明渠验证半径R
+            if st == "明渠-U形" and B <= 0:
+                fluent_info(self, "输入错误", "半径 R 必须大于 0")
                 return
 
             D_param = B if st == "明渠-圆形" else 0.0
-            B_param = 0.0 if st == "明渠-圆形" else B
+            B_param = 0.0 if st in ("明渠-圆形", "明渠-U形") else B
             h = calculate_normal_depth(Q, B_param, m, n, slope_i, D=D_param)
             if h <= 0 and self.upstream_channel:
                 h = self.upstream_channel.get('water_depth', 0)
@@ -1320,13 +1359,27 @@ class OpenChannelDialog(QDialog):
 
             # 从上游渠道继承结构高度（用于计算渠顶高程）
             sh = self.upstream_channel.get('structure_height', 0.0) if self.upstream_channel else 0.0
-            self._result = OpenChannelParams(
-                name="-", structure_type=st,
-                bottom_width=B, water_depth=h, side_slope=m,
-                roughness=n, slope_inv=si, flow=Q,
-                flow_section=self.flow_section,
-                structure_height=sh,
-            )
+            
+            # U形明渠：B字段存储的是半径R，需要设置到arc_radius
+            if st == "明渠-U形":
+                theta_deg = self.upstream_channel.get('theta_deg', 0.0) if self.upstream_channel else 0.0
+                self._result = OpenChannelParams(
+                    name="-", structure_type=st,
+                    bottom_width=0, water_depth=h, side_slope=m,
+                    roughness=n, slope_inv=si, flow=Q,
+                    flow_section=self.flow_section,
+                    structure_height=sh,
+                    arc_radius=B,
+                    theta_deg=theta_deg,
+                )
+            else:
+                self._result = OpenChannelParams(
+                    name="-", structure_type=st,
+                    bottom_width=B, water_depth=h, side_slope=m,
+                    roughness=n, slope_inv=si, flow=Q,
+                    flow_section=self.flow_section,
+                    structure_height=sh,
+                )
             self.accept()
         except ValueError:
             fluent_info(self, "输入错误", "请输入有效数值")

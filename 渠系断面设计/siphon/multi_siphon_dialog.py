@@ -81,6 +81,7 @@ class MultiSiphonDialog(QDialog):
             siphon_turn_radius_n: 倒虹吸转弯半径倍数n（R = n × D）
         """
         super().__init__(parent)
+        print(f"[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: {len(siphon_groups)}")
         self.siphon_groups = siphon_groups
         self.manager = manager
         self.on_import_losses = on_import_losses
@@ -90,12 +91,27 @@ class MultiSiphonDialog(QDialog):
         # 面板字典 {倒虹吸名称: SiphonPanel}
         self.panels: Dict[str, SiphonPanel] = {}
 
+        print("[DEBUG MultiSiphonDialog] 调用 _configure_window()")
         self._configure_window()
+        print("[DEBUG MultiSiphonDialog] 调用 _create_ui()")
         self._create_ui()
+        print("[DEBUG MultiSiphonDialog] 调用 _load_saved_data()")
         self._load_saved_data()
+        print("[DEBUG MultiSiphonDialog] __init__ 完成")
+
+        # 标记第一次显示，用于 showEvent 中的置顶操作
+        self._first_show = True
 
         if auto_run:
             QTimer.singleShot(0, self._show_pre_confirm_dialog)
+
+    def showEvent(self, event):
+        """窗口显示事件，确保首次显示时置顶"""
+        super().showEvent(event)
+        if self._first_show:
+            self._first_show = False
+            # 延迟置顶，确保窗口已完全显示
+            QTimer.singleShot(50, self._ensure_visible)
 
     def _configure_window(self):
         """配置窗口属性"""
@@ -116,6 +132,18 @@ class MultiSiphonDialog(QDialog):
             x = screen_geo.x() + (screen_geo.width() - w) // 2
             y = screen_geo.y() + (screen_geo.height() - h) // 2
             self.move(x, y)
+        # 确保窗口置顶显示并激活
+        self.raise_()
+        self.activateWindow()
+
+    def _ensure_visible(self):
+        """确保窗口可见并置顶"""
+        # 强制置顶并激活窗口
+        self.raise_()
+        self.activateWindow()
+        # Windows 下需要额外的置顶操作
+        self.setWindowState(self.windowState() & ~Qt.WindowMinimized | Qt.WindowActive)
+        print("[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见")
 
     def _create_ui(self):
         """创建用户界面"""
@@ -327,8 +355,10 @@ class MultiSiphonDialog(QDialog):
     # ================================================================
     def _load_saved_data(self):
         """加载已保存的数据，然后用最新表格数据覆盖关键参数"""
+        print(f"[DEBUG _load_saved_data] 开始, manager={self.manager is not None}, MANAGER_AVAILABLE={MANAGER_AVAILABLE}")
         if not self.manager or not MANAGER_AVAILABLE:
             self._update_status(f"已加载 {len(self.panels)} 个倒虹吸")
+            print("[DEBUG _load_saved_data] manager不可用，返回")
             return
 
         for name, panel in self.panels.items():
@@ -339,8 +369,11 @@ class MultiSiphonDialog(QDialog):
                 panel.from_dict(data)
 
         # 重新应用来自表格的最新数据（表格数据优先于历史保存）
+        print("[DEBUG _load_saved_data] 调用 _reapply_table_data()")
         self._reapply_table_data()
+        print("[DEBUG _load_saved_data] _reapply_table_data() 完成")
         self._update_status(f"已加载 {len(self.panels)} 个倒虹吸的配置")
+        print("[DEBUG _load_saved_data] 完成")
 
     @staticmethod
     def _normalize_segments(raw_segs: list) -> list:
@@ -435,12 +468,16 @@ class MultiSiphonDialog(QDialog):
         平面段数据等）应以当前表格数据为准，覆盖历史保存的旧值。
         保留的历史值（不被覆盖）：v_guess、segments（用户自定义的纵断面管段布置）
         """
+        print(f"[DEBUG _reapply_table_data] 开始, groups数量: {len(self.siphon_groups)}")
         for group in self.siphon_groups:
             if group.name not in self.panels:
                 continue
             panel = self.panels[group.name]
             params = self._build_params_from_group(group)
-            panel.set_params(**params)
+            print(f"[DEBUG _reapply_table_data] 调用 panel.set_params() for {group.name}")
+            # skip_confirm=True: 窗口初始化期间跳过确认对话框
+            panel.set_params(skip_confirm=True, **params)
+        print("[DEBUG _reapply_table_data] 完成")
 
     def _save_all(self):
         """

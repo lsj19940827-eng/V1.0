@@ -273,8 +273,9 @@ class _BatchWorker(QThread):
                 cancel_flag=lambda: self._cancel,
             )
             self.finished.emit(result)
-        except Exception as exc:
-            self.error.emit(str(exc))
+        except Exception:
+            import traceback
+            self.error.emit(traceback.format_exc())
 
 
 # ============================================================
@@ -1810,6 +1811,27 @@ class PressurePipePanel(QWidget):
         self.cancel_btn.setVisible(False)
         self.batch_progress.setVisible(False)
         self.batch_status_label.setText("出错")
-        self.batch_log.append(f"错误: {msg}")
-        InfoBar.error(title="批量计算失败", content=msg,
-                      parent=self, position=InfoBarPosition.TOP_RIGHT, duration=5000)
+        self.batch_log.append(f"错误:\n{msg}")
+
+        # 持久化到日志文件，方便远程排查
+        try:
+            import datetime
+            log_dir = os.path.join(os.path.expanduser("~"), "CanalHydCalc_logs")
+            os.makedirs(log_dir, exist_ok=True)
+            log_path = os.path.join(log_dir, "batch_error.log")
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"\n{'=' * 60}\n")
+                f.write(f"时间: {datetime.datetime.now()}\n")
+                f.write(msg)
+                f.write("\n")
+            self.batch_log.append(f"\n日志已保存至: {log_path}")
+        except Exception:
+            pass
+
+        # InfoBar 只显示最后一行摘要
+        lines = msg.strip().splitlines()
+        summary = lines[-1] if lines else str(msg)
+        if len(summary) > 120:
+            summary = summary[:120] + "..."
+        InfoBar.error(title="批量计算失败", content=summary,
+                      parent=self, position=InfoBarPosition.TOP_RIGHT, duration=8000)

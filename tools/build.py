@@ -257,6 +257,7 @@ def build(bump: str = None):
         "matplotlib.backends.backend_qtagg",
         "matplotlib.backends.backend_svg",
         "matplotlib.backends.backend_qt5agg",
+        "matplotlib.backends.backend_pdf",  # 有压管道批量计算 PDF 导出
         "ezdxf",
         "PIL",
         "shapely", "shapely.geometry",
