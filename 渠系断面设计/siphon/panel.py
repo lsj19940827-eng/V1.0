@@ -309,6 +309,9 @@ class SiphonPanel(QWidget):
         self._init_ui()
         self._init_default_segments()
 
+        # 初始化加大流量输入框的可见性（因为 inc_cb 默认勾选）
+        self._on_inc_toggle()
+
         # 启动时尝试加载上次保存的参数
         QTimer.singleShot(100, self._load_autosave)
 
@@ -689,6 +692,16 @@ class SiphonPanel(QWidget):
         self.lbl_v1_hint = QLabel("(上游渠道流速)")
         self.lbl_v1_hint.setStyleSheet("color:#FF6600;font-size:12px;")
         inlet_r1.addWidget(self.lbl_v1_hint)
+        # v1_inc 加大流量输入框（默认隐藏）
+        self.edit_v1_inc = LineEdit()
+        self.edit_v1_inc.setPlaceholderText("加大流量")
+        self.edit_v1_inc.setFixedWidth(80)
+        self.edit_v1_inc.setVisible(False)
+        inlet_r1.addWidget(self.edit_v1_inc)
+        self.lbl_v1_inc = QLabel("← v₁加大")
+        self.lbl_v1_inc.setStyleSheet("color:#FF6600;font-size:11px;")
+        self.lbl_v1_inc.setVisible(False)
+        inlet_r1.addWidget(self.lbl_v1_inc)
         inlet_r1.addStretch()
         ibl.addLayout(inlet_r1)
 
@@ -728,6 +741,16 @@ class SiphonPanel(QWidget):
         self.lbl_v2_hint = QLabel("(计算后自动填充: 管道流速)")
         self.lbl_v2_hint.setStyleSheet("color:#424242;font-size:12px;")
         inlet_r2.addWidget(self.lbl_v2_hint)
+        # v2_inc 加大流量输入框（默认隐藏，仅在特定策略下显示）
+        self.edit_v2_inc = LineEdit()
+        self.edit_v2_inc.setPlaceholderText("加大流量")
+        self.edit_v2_inc.setFixedWidth(80)
+        self.edit_v2_inc.setVisible(False)
+        inlet_r2.addWidget(self.edit_v2_inc)
+        self.lbl_v2_inc = QLabel("← v₂加大")
+        self.lbl_v2_inc.setStyleSheet("color:#FF6600;font-size:11px;")
+        self.lbl_v2_inc.setVisible(False)
+        inlet_r2.addWidget(self.lbl_v2_inc)
         inlet_r2.addStretch()
         ibl.addLayout(inlet_r2)
 
@@ -805,6 +828,16 @@ class SiphonPanel(QWidget):
         self.lbl_v3_hint = QLabel("(下游渠道流速)")
         self.lbl_v3_hint.setStyleSheet("color:#FF6600;font-size:12px;")
         outlet_r2.addWidget(self.lbl_v3_hint)
+        # v3_inc 加大流量输入框（默认隐藏）
+        self.edit_v3_inc = LineEdit()
+        self.edit_v3_inc.setPlaceholderText("加大流量")
+        self.edit_v3_inc.setFixedWidth(80)
+        self.edit_v3_inc.setVisible(False)
+        outlet_r2.addWidget(self.edit_v3_inc)
+        self.lbl_v3_inc = QLabel("← v₃加大")
+        self.lbl_v3_inc.setStyleSheet("color:#FF6600;font-size:11px;")
+        self.lbl_v3_inc.setVisible(False)
+        outlet_r2.addWidget(self.lbl_v3_inc)
         outlet_r2.addStretch()
         obl.addLayout(outlet_r2)
 
@@ -1689,6 +1722,9 @@ document.addEventListener("DOMContentLoaded", function(){
             'num_pipes': self.spin_num_pipes.value() if hasattr(self, 'spin_num_pipes') else 1,
             'inc_checked': self.inc_cb.isChecked(),
             'inc_percent': self.edit_inc.text().strip(),
+            'v1_inc': self.edit_v1_inc.text().strip(),
+            'v2_inc': self.edit_v2_inc.text().strip(),
+            'v3_inc': self.edit_v3_inc.text().strip(),
             'twist_angle_inlet': self.edit_twist_angle_inlet.text().strip(),
             'twist_angle_outlet': self.edit_twist_angle_outlet.text().strip(),
         }
@@ -1789,6 +1825,13 @@ document.addEventListener("DOMContentLoaded", function(){
             self.inc_cb.setChecked(d['inc_checked'])
         if 'inc_percent' in d and d['inc_percent']:
             self.edit_inc.setText(str(d['inc_percent']))
+        # 恢复加大流量工况流速参数
+        if 'v1_inc' in d and d['v1_inc']:
+            self.edit_v1_inc.setText(str(d['v1_inc']))
+        if 'v2_inc' in d and d['v2_inc']:
+            self.edit_v2_inc.setText(str(d['v2_inc']))
+        if 'v3_inc' in d and d['v3_inc']:
+            self.edit_v3_inc.setText(str(d['v3_inc']))
         if 'twist_angle_inlet' in d and d['twist_angle_inlet']:
             self.edit_twist_angle_inlet.setText(str(d['twist_angle_inlet']))
         if 'twist_angle_outlet' in d and d['twist_angle_outlet']:
@@ -2206,6 +2249,23 @@ document.addEventListener("DOMContentLoaded", function(){
         enabled = self.inc_cb.isChecked()
         self.edit_inc.setVisible(enabled)
         self.lbl_inc_hint.setVisible(enabled)
+        # 控制加大流量流速输入框的显示
+        self.edit_v1_inc.setVisible(enabled)
+        self.lbl_v1_inc.setVisible(enabled)
+        self.edit_v3_inc.setVisible(enabled)
+        self.lbl_v3_inc.setVisible(enabled)
+        # v2_inc 根据策略显示
+        self._update_v2_inc_visibility()
+
+    def _update_v2_inc_visibility(self):
+        """根据 v2 策略和加大流量勾选状态，控制 v2_inc 输入框显示"""
+        inc_checked = self.inc_cb.isChecked()
+        strategy = self.combo_v2_strategy.currentText()
+        # 仅 "断面参数计算" 或 "指定输入" 策略时需要用户输入 v2_inc
+        need_v2_inc = strategy in ["断面参数计算", "指定输入"]
+        visible = inc_checked and need_v2_inc
+        self.edit_v2_inc.setVisible(visible)
+        self.lbl_v2_inc.setVisible(visible)
 
     def _on_D_override_toggled(self, state):
         """指定管径 CheckBox 切换"""
@@ -2459,8 +2519,8 @@ document.addEventListener("DOMContentLoaded", function(){
                 self._recalc_section_v2()
             else:
                 self.edit_v2.clear()
-            self.lbl_v2_hint.setText("(双击设置断面参数)")
-            self.lbl_v2_hint.setStyleSheet("color:#FF6600;font-size:12px;")
+            self.lbl_v2_hint.setText("(点击设置断面参数)")
+            self.lbl_v2_hint.setStyleSheet("color:#FF6600;font-size:12px;text-decoration:underline;")
             self.lbl_v2_hint.setCursor(Qt.PointingHandCursor)
             self.lbl_v2_hint.mousePressEvent = self._open_v2_section_dialog
             self.lbl_v2_strategy_hint.setText("")
@@ -2472,9 +2532,11 @@ document.addEventListener("DOMContentLoaded", function(){
             self.lbl_v2_hint.setText("(需输入)")
             self.lbl_v2_hint.setStyleSheet("color:#424242;font-size:12px;")
             self.lbl_v2_strategy_hint.setText("")
+        # 更新 v2_inc 输入框的可见性
+        self._update_v2_inc_visibility()
 
     def _open_v2_section_dialog(self, event=None):
-        """双击v₂提示 → 打开断面参数设置对话框"""
+        """点击v₂提示 → 打开断面参数设置对话框"""
         if not DIALOGS_AVAILABLE or not SIPHON_AVAILABLE:
             return
         Q = self._fval(self.edit_Q, 10)
@@ -2491,7 +2553,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 self.lbl_v2_hint.setText(f"(断面: B={self._section_B}, h={self._section_h}, m={self._section_m})")
             else:
                 self.edit_v2.clear()
-                self.lbl_v2_hint.setText("(双击设置断面参数)")
+                self.lbl_v2_hint.setText("(点击设置断面参数)")
 
     def _validate_inlet_velocity(self):
         """验证进口流速（仅对非自动策略有意义）"""
@@ -3684,6 +3746,9 @@ document.addEventListener("DOMContentLoaded", function(){
 
             # 确定加大比例（与其他4个面板保持一致：单次传入引擎）
             inc_pct_for_engine = None
+            v1_inc_for_engine = None
+            v2_inc_for_engine = None
+            v3_inc_for_engine = None
             if self.inc_cb.isChecked():
                 inc_text = self.edit_inc.text().strip()
                 if inc_text:
@@ -3700,6 +3765,43 @@ document.addEventListener("DOMContentLoaded", function(){
                         inc_pct_for_engine = get_flow_increase_percent(params.Q)
                     except Exception:
                         inc_pct_for_engine = 20.0
+                
+                # 读取加大流量工况的流速参数
+                v1_inc_text = self.edit_v1_inc.text().strip()
+                v3_inc_text = self.edit_v3_inc.text().strip()
+                
+                # 校验 v1_inc 和 v3_inc 必填
+                if not v1_inc_text or not v3_inc_text:
+                    InfoBar.warning("参数不完整",
+                        "勾选加大流量时，必须输入加大工况的 v₁加大 和 v₃加大",
+                        parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+                    return
+                
+                try:
+                    v1_inc_for_engine = float(v1_inc_text)
+                    v3_inc_for_engine = float(v3_inc_text)
+                except ValueError:
+                    InfoBar.warning("参数错误",
+                        "v₁加大 和 v₃加大 必须为有效数字",
+                        parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+                    return
+                
+                # v2_inc: 根据策略决定是否需要用户输入
+                strategy = self.combo_v2_strategy.currentText()
+                if strategy in ["断面参数计算", "指定输入"]:
+                    v2_inc_text = self.edit_v2_inc.text().strip()
+                    if not v2_inc_text:
+                        InfoBar.warning("参数不完整",
+                            f"当前 v₂策略为\"{strategy}\"，必须输入加大工况的 v₂加大",
+                            parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+                        return
+                    try:
+                        v2_inc_for_engine = float(v2_inc_text)
+                    except ValueError:
+                        InfoBar.warning("参数错误",
+                            "v₂加大 必须为有效数字",
+                            parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+                        return
 
             result = HydraulicCore.execute_calculation(
                 params, self.segments,
@@ -3710,6 +3812,9 @@ document.addEventListener("DOMContentLoaded", function(){
                 plan_feature_points=self.plan_feature_points,
                 longitudinal_nodes=self.longitudinal_nodes,
                 increase_percent=inc_pct_for_engine,
+                v1_inc=v1_inc_for_engine,
+                v2_inc=v2_inc_for_engine,
+                v3_inc=v3_inc_for_engine,
             )
             self.calculation_result = result
             self.calculation_result_increased = None  # 单次计算，结果在 result 本身
@@ -3722,14 +3827,20 @@ document.addEventListener("DOMContentLoaded", function(){
             # 计算完成后刷新R值显示（追加✓确认标记）
             self._update_turn_R(confirmed=True)
 
-            # 水损阈值检查
+            # 流速上限校核（仅提示，不阻止，仅加大流量工况）
+            if result.increase_percent > 0 and result.velocity_increased > 2.5:
+                InfoBar.warning("流速提示",
+                    f"加大流量工况管道流速 {result.velocity_increased:.3f} m/s 超过建议上限 2.5 m/s",
+                    parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
+
+            # 水损阈值检查（针对加大流量工况）
             threshold_str = self.edit_threshold.text().strip()
-            if threshold_str:
+            if threshold_str and result.increase_percent > 0:
                 try:
                     threshold = float(threshold_str)
-                    if threshold > 0 and result.total_head_loss > threshold:
+                    if threshold > 0 and result.total_head_loss_inc > threshold:
                         InfoBar.warning("水损超限提醒",
-                            f"计算总水面落差 ΔZ = {result.total_head_loss:.4f} m，"
+                            f"加大流量工况总水面落差 ΔZ加大 = {result.total_head_loss_inc:.4f} m，"
                             f"已超过设定阈值 {threshold:.2f} m。"
                             f"建议调整拟定流速、管径或其他参数后重新计算。",
                             parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)

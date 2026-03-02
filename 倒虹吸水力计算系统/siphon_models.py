@@ -223,6 +223,11 @@ class CalculationResult:
     loss_pipe_inc: float = 0.0             # 加大工况管身损失 ΔZ2加大 (m)
     loss_outlet_inc: float = 0.0           # 加大工况出口落差 ΔZ3加大 (m)
     total_head_loss_inc: float = 0.0       # 加大工况总落差 ΔZ加大 (m)
+    
+    # 加大工况实际使用的流速
+    v1_inc_used: float = 0.0               # 加大工况进口始端流速 v₁加大 (m/s)
+    v2_inc_used: float = 0.0               # 加大工况进口末端流速 v₂加大 (m/s)
+    v3_inc_used: float = 0.0               # 加大工况出口末端流速 v₃加大 (m/s)
 
     # 并联管道根数
     num_pipes: int = 1                     # 管道根数（并联数量，默认单管）

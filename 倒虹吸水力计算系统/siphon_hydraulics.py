@@ -65,6 +65,9 @@ class HydraulicCore:
                            plan_feature_points: List[PlanFeaturePoint] = None,
                            longitudinal_nodes: List[LongitudinalNode] = None,
                            increase_percent: Optional[float] = None,
+                           v1_inc: Optional[float] = None,
+                           v2_inc: Optional[float] = None,
+                           v3_inc: Optional[float] = None,
                            ) -> CalculationResult:
         """
         执行核心计算（依据附录L规范）
@@ -428,19 +431,32 @@ class HydraulicCore:
             Q_single_inc = Q_inc_total / num_pipes
             v_inc = Q_single_inc / A_actual
             result.velocity_increased = v_inc
+            
+            # 使用用户输入的加大工况流速（若未提供则使用设计值）
+            v_1_inc_use = v1_inc if v1_inc is not None and v1_inc > 0 else v_1
+            v_3_inc_use = v3_inc if v3_inc is not None and v3_inc > 0 else v_3
+            
             # v_2_inc: 根据策略确定进口渐变段末端流速
             if v2_strategy == V2Strategy.AUTO_PIPE:
-                v_2_inc = v_inc
+                v_2_inc_use = v_inc  # 加大管道流速
             elif v2_strategy == V2Strategy.V1_PLUS_02:
-                v_2_inc = v_1 + 0.2
-            else:
-                v_2_inc = v_2  # SECTION_CALC / MANUAL 保持设计值
-            v_out_inc = v_inc  # 出口渐变段始端 = 管道流速
-            dZ1_inc = (1 + xi_1) * (v_2_inc ** 2 - v_1 ** 2) / (2 * g)
+                v_2_inc_use = v_1_inc_use + 0.2  # v₁加大 + 0.2
+            else:  # SECTION_CALC / MANUAL
+                v_2_inc_use = v2_inc if v2_inc is not None and v2_inc > 0 else v_2
+            
+            v_out_inc = v_inc  # 出口渐变段始端 = 加大管道流速
+            
+            # 计算水头损失（使用加大工况流速）
+            dZ1_inc = (1 + xi_1) * (v_2_inc_use ** 2 - v_1_inc_use ** 2) / (2 * g)
             h_f_inc = (v_inc ** 2 * L_friction) / (C ** 2 * R_h)
             h_j_inc = xi_sum_middle * v_inc ** 2 / (2 * g)
             dZ2_inc = h_f_inc + h_j_inc
-            dZ3_inc = (1 - xi_2) * (v_out_inc ** 2 - v_3 ** 2) / (2 * g)
+            dZ3_inc = (1 - xi_2) * (v_out_inc ** 2 - v_3_inc_use ** 2) / (2 * g)
+            
+            # 记录结果
+            result.v1_inc_used = v_1_inc_use
+            result.v2_inc_used = v_2_inc_use
+            result.v3_inc_used = v_3_inc_use
             result.loss_inlet_inc = dZ1_inc
             result.loss_pipe_inc = dZ2_inc
             result.loss_outlet_inc = dZ3_inc
@@ -499,6 +515,9 @@ class HydraulicCore:
             lines.append(f"【加大流量工况（加大比例 {result.increase_percent:.1f}%）】")
             lines.append(f"  加大流量 Q加大 = {result.Q_increased:.4f} m³/s")
             lines.append(f"  加大流速 v加大 = {result.velocity_increased:.4f} m/s")
+            lines.append(f"  进口始端流速 v₁加大 = {result.v1_inc_used:.4f} m/s")
+            lines.append(f"  进口末端流速 v₂加大 = {result.v2_inc_used:.4f} m/s")
+            lines.append(f"  出口末端流速 v₃加大 = {result.v3_inc_used:.4f} m/s")
             lines.append(f"  进口落差 ΔZ1加大 = {result.loss_inlet_inc:.4f} m")
             lines.append(f"  管身损失 ΔZ2加大 = {result.loss_pipe_inc:.4f} m")
             lines.append(f"  出口落差 ΔZ3加大 = {result.loss_outlet_inc:.4f} m")

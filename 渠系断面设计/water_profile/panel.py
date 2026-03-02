@@ -568,12 +568,15 @@ class WaterProfilePanel(QWidget):
         }
         # 防止 cellChanged 递归更新的守卫标志
         self._updating_cells = False
-        # 表格编辑撤销栈
+        # 表格编辑撤销栈（单元格编辑）
         self._loss_undo_stack = []
         self._loss_redo_stack = []
         self._pre_edit_cell_value = None  # (row, col, old_text)
         self._pre_edit_snapshot = None  # 编辑前的快照
         self._undo_group = 0  # 撤销分组计数器，用于批量操作时避免重复记录快照
+        # 节点表行操作撤销栈（添加/删除/插入/复制/清空行）
+        self._node_table_undo_stack = []
+        self._node_table_redo_stack = []
         self._init_ui()
 
     # ================================================================
@@ -843,11 +846,26 @@ class WaterProfilePanel(QWidget):
         tb.addWidget(btn_import_excel)
 
         # 节点编辑组
-        btn_add = PushButton("添加节点"); btn_add.clicked.connect(self._add_node_row)
-        btn_insert = PushButton("插入节点"); btn_insert.clicked.connect(self._insert_node_row)
-        btn_del = PushButton("删除节点"); btn_del.clicked.connect(self._del_node_row)
-        btn_copy = PushButton("复制节点"); btn_copy.clicked.connect(self._copy_node_row)
-        btn_clear = PushButton("清空"); btn_clear.clicked.connect(self._clear_nodes)
+        btn_add = PushButton("添加节点")
+        btn_add.setToolTip("在表格末尾添加一行空白节点")
+        btn_add.clicked.connect(self._add_node_row)
+        
+        btn_insert = PushButton("插入节点")
+        btn_insert.setToolTip("在选中行位置插入一行空白节点\n▶ 需先选中要插入位置的行")
+        btn_insert.clicked.connect(self._insert_node_row)
+        
+        btn_del = PushButton("删除节点")
+        btn_del.setToolTip("删除选中的节点行\n▶ 需先选中要删除的行\n▶ 支持 Ctrl+Z 撤销")
+        btn_del.clicked.connect(self._del_node_row)
+        
+        btn_copy = PushButton("复制节点")
+        btn_copy.setToolTip("复制选中行并添加到表格末尾\n▶ 需先选中要复制的行")
+        btn_copy.clicked.connect(self._copy_node_row)
+        
+        btn_clear = PushButton("清空")
+        btn_clear.setToolTip("清空表格中所有节点\n▶ 支持 Ctrl+Z 撤销")
+        btn_clear.clicked.connect(self._clear_nodes)
+        
         for w in [btn_add, btn_insert, btn_del, btn_copy, btn_clear]:
             tb.addWidget(w)
 
@@ -874,6 +892,15 @@ class WaterProfilePanel(QWidget):
         # Delete 键删除时记录快照
         self.node_table.deleteRequested.connect(self._push_undo_snapshot)
         lay.addWidget(self.node_table, stretch=1)
+        
+        # 面板级别的撤销/重做快捷键（无需选中单元格也能撤销）
+        from PySide6.QtGui import QShortcut, QKeySequence
+        undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self)
+        undo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        undo_sc.activated.connect(self._undo_loss_edit)
+        redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self)
+        redo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        redo_sc.activated.connect(self._redo_loss_edit)
         self._setup_header_tooltips()
 
     def _on_settings_toggled(self, collapsed):
@@ -1376,7 +1403,12 @@ class WaterProfilePanel(QWidget):
         self._undo_group += 1
 
     def _undo_loss_edit(self):
-        """Ctrl+Z 撤销上一次水头损失编辑，恢复表格和 calculated_nodes"""
+        """Ctrl+Z 撤销：优先撤销行操作，其次撤销单元格编辑"""
+        # 优先检查行操作撤销栈
+        if self._node_table_undo_stack:
+            self._undo_node_table()
+            return
+        # 再检查单元格编辑撤销栈
         if not self._loss_undo_stack:
             return
         self._updating_cells = True
@@ -1439,7 +1471,12 @@ class WaterProfilePanel(QWidget):
             self._updating_cells = False
 
     def _redo_loss_edit(self):
-        """Ctrl+Y 重做上一次被撤销的水头损失编辑"""
+        """Ctrl+Y 重做：优先重做行操作，其次重做单元格编辑"""
+        # 优先检查行操作重做栈
+        if self._node_table_redo_stack:
+            self._redo_node_table()
+            return
+        # 再检查单元格编辑重做栈
         if not self._loss_redo_stack:
             return
         self._updating_cells = True
@@ -1500,6 +1537,84 @@ class WaterProfilePanel(QWidget):
                            parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
         finally:
             self._updating_cells = False
+
+    # ================================================================
+    # 节点表行操作撤销（添加/删除/插入/复制/清空）
+    # ================================================================
+    def _snapshot_node_table(self):
+        """保存完整节点表状态（用于行操作撤销）"""
+        snapshot = {
+            'rows': [],
+            'structure_heights': dict(self._node_structure_heights),
+            'chamfer_params': dict(self._node_chamfer_params),
+            'u_params': dict(self._node_u_params),
+        }
+        for r in range(self.node_table.rowCount()):
+            row_data = []
+            for c in range(self.node_table.columnCount()):
+                item = self.node_table.item(r, c)
+                row_data.append(item.text() if item else "")
+            snapshot['rows'].append(row_data)
+        return snapshot
+
+    def _restore_node_table(self, snapshot):
+        """从快照恢复完整节点表状态"""
+        self._updating_cells = True
+        try:
+            # 恢复表格内容
+            self.node_table.setRowCount(0)
+            for r, row_data in enumerate(snapshot['rows']):
+                self.node_table.insertRow(r)
+                for c, text in enumerate(row_data):
+                    item = QTableWidgetItem(text)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if c not in EDITABLE_COLS:
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    # 第一行锁定水头损失列
+                    if r == 0 and c in FIRST_ROW_LOCKED_LOSS_COLS:
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    self.node_table.setItem(r, c, item)
+            # 恢复缓存字典
+            self._node_structure_heights = dict(snapshot['structure_heights'])
+            self._node_chamfer_params = dict(snapshot['chamfer_params'])
+            self._node_u_params = dict(snapshot['u_params'])
+        finally:
+            self._updating_cells = False
+
+    def _push_node_table_undo(self):
+        """在行操作前记录快照到撤销栈"""
+        self._node_table_undo_stack.append(self._snapshot_node_table())
+        if len(self._node_table_undo_stack) > 20:
+            self._node_table_undo_stack.pop(0)
+        self._node_table_redo_stack.clear()
+
+    def _undo_node_table(self):
+        """撤销行操作"""
+        if not self._node_table_undo_stack:
+            return False
+        # 保存当前状态到重做栈
+        self._node_table_redo_stack.append(self._snapshot_node_table())
+        if len(self._node_table_redo_stack) > 20:
+            self._node_table_redo_stack.pop(0)
+        # 恢复上一步状态
+        self._restore_node_table(self._node_table_undo_stack.pop())
+        InfoBar.success("已撤销", "已恢复上一步操作",
+                       parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+        return True
+
+    def _redo_node_table(self):
+        """重做行操作"""
+        if not self._node_table_redo_stack:
+            return False
+        # 保存当前状态到撤销栈
+        self._node_table_undo_stack.append(self._snapshot_node_table())
+        if len(self._node_table_undo_stack) > 20:
+            self._node_table_undo_stack.pop(0)
+        # 恢复下一步状态
+        self._restore_node_table(self._node_table_redo_stack.pop())
+        InfoBar.success("已重做", "已恢复上一步撤销的操作",
+                       parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
+        return True
 
     def _recalc_downstream(self, edited_row):
         """从 edited_row 开始，重算总水头损失 / 累计 / 水位 / 高程"""
@@ -1617,7 +1732,10 @@ class WaterProfilePanel(QWidget):
                         node.top_elevation = te
 
     # ================================================================
-    def _add_node_row(self, data=None):
+    def _add_node_row(self, data=None, _skip_undo=False):
+        """添加一行节点，_skip_undo=True 时跳过撤销快照（内部调用用）"""
+        if not _skip_undo:
+            self._push_node_table_undo()
         row = self.node_table.rowCount()
         self.node_table.insertRow(row)
         total_cols = len(NODE_ALL_HEADERS)
@@ -1642,6 +1760,7 @@ class WaterProfilePanel(QWidget):
         if not rows:
             InfoBar.warning("提示", "请先选择要插入位置的行", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
             return
+        self._push_node_table_undo()
         insert_pos = rows[0]
         self.node_table.insertRow(insert_pos)
         total_cols = len(NODE_ALL_HEADERS)
@@ -1666,6 +1785,7 @@ class WaterProfilePanel(QWidget):
         if not rows:
             InfoBar.warning("提示", "请先选择要删除的行", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
             return
+        self._push_node_table_undo()
         for r in rows:
             self.node_table.removeRow(r)
             # 更新结构高度缓存索引（删除行后，后续行索引下移）
@@ -1687,15 +1807,18 @@ class WaterProfilePanel(QWidget):
             self._node_u_params = updated_up
         # 删除后确保新的第一行水头损失列被锁定
         self._ensure_first_row_loss_locked()
+        # 将焦点设回表格，方便用户直接按 Ctrl+Z 撤销
+        self.node_table.setFocus()
 
     def _copy_node_row(self):
         rows = sorted(set(idx.row() for idx in self.node_table.selectedIndexes()))
         if not rows:
             InfoBar.warning("提示", "请先选择要复制的行", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
             return
+        self._push_node_table_undo()
         for r in rows:
             data = self._get_node_row_data(r)
-            self._add_node_row(data)
+            self._add_node_row(data, _skip_undo=True)
 
     def _ensure_first_row_loss_locked(self):
         """确保第一行（水位起点）的水头损失列不可编辑"""
@@ -1716,6 +1839,8 @@ class WaterProfilePanel(QWidget):
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
 
     def _clear_nodes(self):
+        if self.node_table.rowCount() > 0:
+            self._push_node_table_undo()
         self.node_table.setRowCount(0)
         self._node_structure_heights.clear()
         self._node_chamfer_params.clear()
@@ -1845,7 +1970,7 @@ class WaterProfilePanel(QWidget):
             row_data[24] = fmt(n_val)
             row_data[25] = fmt(slope_inv)
             row_data[26] = fmt(Q)
-            self._add_node_row(row_data)
+            self._add_node_row(row_data, _skip_undo=True)
 
             # 写入水力结果到结果列（原版通过set_nodes写入water_depth/velocity等）
             cur_row = self.node_table.rowCount() - 1
@@ -2325,7 +2450,7 @@ class WaterProfilePanel(QWidget):
                 row_data[24] = fmt(n_val)
                 row_data[25] = fmt(sl_val)
                 row_data[26] = fmt(q_val)
-                self._add_node_row(row_data)
+                self._add_node_row(row_data, _skip_undo=True)
 
                 # 写入水深和流速到结果列（与批量导入对齐）
                 _cur_row = self.node_table.rowCount() - 1
