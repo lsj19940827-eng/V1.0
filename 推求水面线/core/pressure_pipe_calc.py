@@ -28,7 +28,7 @@ except ImportError:
 PIPE_MATERIALS = {
     "HDPE管":           {"f": 0.948e5, "m": 1.77, "b": 4.77, "name": "HDPE管"},
     "玻璃钢夹砂管":     {"f": 0.948e5, "m": 1.77, "b": 4.77, "name": "玻璃钢夹砂管"},
-    "球墨铸铁管":       {"f": 1.899e5, "m": 1.852, "b": 4.87, "name": "球墨铸铁管"},
+    "球墨铸铁管":       {"f": 2.232e5, "m": 1.852, "b": 4.87, "name": "球墨铸铁管"},
     "预应力钢筒混凝土管": {"f": 1.312e6, "m": 2.0,  "b": 5.33, "name": "预应力钢筒混凝土管(n=0.013)"},
     "预应力钢筒混凝土管_n014": {"f": 1.516e6, "m": 2.0, "b": 5.33, "name": "预应力钢筒混凝土管(n=0.014)"},
     "钢管":             {"f": 6.25e5,  "m": 1.9,  "b": 5.1,  "name": "钢管"},
@@ -435,7 +435,8 @@ def calc_total_head_loss(
     steps.append(f"3. 沿程水头损失（GB 50288-2018 §6.7.2）")
     steps.append(f"   公式: hf = f × L × Q^m / d^b")
     if "error" not in friction_details:
-        steps.append(f"   f = {friction_details['f']:.2e}, m = {friction_details['m']:.2f}, b = {friction_details['b']:.2f}")
+        # Display the configured coefficients as-is to avoid rounding confusion.
+        steps.append(f"   f = {friction_details['f']}, m = {friction_details['m']}, b = {friction_details['b']}")
         steps.append(f"   Q = {friction_details['Q_m3h']:.2f} m³/h, d = {friction_details['d_mm']:.0f} mm")
         steps.append(f"   hf = {hf:.4f} m")
     steps.append("")

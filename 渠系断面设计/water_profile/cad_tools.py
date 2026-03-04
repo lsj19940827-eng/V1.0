@@ -1888,8 +1888,10 @@ def export_building_name_plan(panel):
 
             node_a = coord_nodes[mid_left]
             node_b = coord_nodes[mid_right]
-            x1, y1 = node_a.x, node_a.y
-            x2, y2 = node_b.x, node_b.y
+            # 坐标修正：node.x 存储的是北坐标N，node.y 存储的是东坐标E
+            # AutoCAD 使用 X,Y 格式，X为东坐标E，Y为北坐标N
+            x1, y1 = node_a.y, node_a.x
+            x2, y2 = node_b.y, node_b.x
 
             dx = x2 - x1
             dy = y2 - y1

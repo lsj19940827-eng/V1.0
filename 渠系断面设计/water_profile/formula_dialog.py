@@ -172,12 +172,12 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
         "latex": r"h_{gate}",
         "note": "该值可手动输入；闸类结构若为空则自动填充默认值",
     },
-    "倒虹吸水头损失": {
-        "title": "倒虹吸水头损失",
-        "description": "倒虹吸管道中的总水头损失",
+    "倒虹吸/有压管道水头损失": {
+        "title": "倒虹吸/有压管道水头损失",
+        "description": "由倒虹吸或有压管道模块回写的总水头损失",
         "formula": r"h_sip",
         "latex": r"h_{sip}",
-        "note": "由倒虹吸水力计算模块计算后回写",
+        "note": "由倒虹吸/有压管道水力计算模块计算后回写",
     },
     "总水头损失": {
         "title": "总水头损失",
@@ -257,6 +257,9 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
         "note": "已按规范约束取大值",
     },
 }
+
+# 兼容旧表头名称（历史项目/旧版界面）
+COLUMN_FORMULAS["倒虹吸水头损失"] = COLUMN_FORMULAS["倒虹吸/有压管道水头损失"]
 
 # 需要双击弹窗的列名集合（与Tkinter版_on_cell_double_click对齐）
 DOUBLE_CLICK_COLUMNS = {
@@ -575,7 +578,7 @@ def show_total_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
          "values": f"弯道水头损失  $h_w = {hw:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
                    f"渐变段水头损失  $h_{{tr}} = {h_tr:.4f}$ m\n沿程水头损失  $h_f = {hf:.4f}$ m\n"
                    f"预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n"
-                   f"倒虹吸水头损失  $h_{{sip}} = {h_sip:.4f}$ m"},
+                   f"倒虹吸/有压管道水头损失  $h_{{sip}} = {h_sip:.4f}$ m"},
         {"title": "3. 代入公式计算",
          "values": f"$h_{{\\Sigma}} = {hw:.4f} + {hj:.4f} + {h_tr:.4f} + {hf:.4f} + {h_res:.4f} + {h_gate:.4f} + {h_sip:.4f}$\n    $= {h_total:.4f}$ m"},
         {"title": "4. 计算结果", "formula": f"$h_{{\\Sigma}} = {h_total:.4f} \\ m$"},
@@ -623,7 +626,7 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
              "values": f"沿程水头损失  $h_f = {hf:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
                        f"弯道水头损失  $h_w = {hw:.4f}$ m\n渐变段损失  $h_{{tr}} = {h_tr:.4f}$ m\n"
                        f"预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n"
-                       f"倒虹吸水头损失  $h_{{sip}} = {h_sip:.4f}$ m\n"
+                       f"倒虹吸/有压管道水头损失  $h_{{sip}} = {h_sip:.4f}$ m\n"
                        f"───────────────────────\n该行水位降落  $\\Delta h_i = {delta:.4f}$ m"},
             {"title": "3. 代入公式计算", "values": f"$Z_i = {prev:.4f} - {delta:.4f} = {prev-delta:.4f}$ m"},
             {"title": "4. 校验", "values": f"起始水位  $Z_{{start}} = {start_level:.4f}$ m\n累计总水头损失 $= {cumulative:.4f}$ m\n"

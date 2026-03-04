@@ -1945,22 +1945,25 @@ class HydraulicCalculator:
                                   all_nodes: List[ChannelNode]) -> float:
         """
         计算渐变段水头损失
-        
+
         包括：
         1. 局部水头损失 h_j1 = ξ₁ × |v₂² - v₁²| / (2g)
         2. 沿程水头损失 h_f = i × L（使用平均值法）
-        
+
         对于有压流建筑物（倒虹吸、有压管道）侧的渐变段，
         其水头损失已包含在有压流建筑物的水力计算中，
         因此当 transition_skip_loss=True 时，跳过水头损失计算，
         但仍然计算渐变段长度。
-        
+
+        当渐变段长度被压缩时（transition_length < 计算长度），
+        沿程损失按压缩后的实际长度计算。
+
         Args:
             transition_node: 渐变段节点
             prev_node: 前一节点（渐变段起始端）
             next_node: 后一节点（渐变段末端）
             all_nodes: 所有节点列表（用于查找渠道水深）
-            
+
         Returns:
             总水头损失（m）
         """
@@ -1971,45 +1974,50 @@ class HydraulicCalculator:
                 transition_node, prev_node, next_node, all_nodes
             )
             transition_node.transition_length = length
-            
+
             # 设置损失为 0
             transition_node.head_loss_transition = 0.0
             transition_node.transition_head_loss_local = 0.0
             transition_node.transition_head_loss_friction = 0.0
-            
+
             return 0.0
-        
+
         # 1. 获取ζ系数
         zeta = self.get_transition_zeta(transition_node)
         transition_node.transition_zeta = zeta
-        
-        # 2. 计算渐变段长度
-        length = self.calculate_transition_length(
-            transition_node, prev_node, next_node, all_nodes
-        )
-        transition_node.transition_length = length
-        
+
+        # 2. 计算渐变段长度（如果已设置则使用已设置的值）
+        if transition_node.transition_length > 0:
+            # 已经设置了长度（可能是压缩后的长度）
+            length = transition_node.transition_length
+        else:
+            # 计算标准长度
+            length = self.calculate_transition_length(
+                transition_node, prev_node, next_node, all_nodes
+            )
+            transition_node.transition_length = length
+
         # 3. 获取起始和末端流速
         v1 = prev_node.velocity
         v2 = next_node.velocity
         transition_node.transition_velocity_1 = v1
         transition_node.transition_velocity_2 = v2
-        
+
         # 4. 计算局部水头损失: h_j1 = ξ × |v₂² - v₁²| / (2g)
         h_j1 = zeta * abs(v2 * v2 - v1 * v1) / (2 * GRAVITY)
         h_j1 = round(h_j1, HEAD_LOSS_PRECISION)
         transition_node.transition_head_loss_local = h_j1
-        
-        # 5. 计算沿程水头损失（使用平均值法）
+
+        # 5. 计算沿程水头损失（使用压缩后的实际长度）
         h_f = self.calculate_transition_friction_loss(
             transition_node, prev_node, next_node, length
         )
         transition_node.transition_head_loss_friction = h_f
-        
+
         # 6. 总损失
         total_loss = h_j1 + h_f
         transition_node.head_loss_transition = round(total_loss, HEAD_LOSS_PRECISION)
-        
+
         # 7. 记录计算详细过程（用于LaTeX显示）
         transition_node.transition_calc_details = {
             "transition_type": transition_node.transition_type,
@@ -2026,7 +2034,7 @@ class HydraulicCalculator:
             "h_f": h_f,
             "total": total_loss,
         }
-        
+
         return total_loss
 
     def calculate_transition_loss_inline(self, prev_node: ChannelNode,

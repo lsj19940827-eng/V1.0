@@ -381,8 +381,6 @@ class MainWindow(QMainWindow):
             self.earthwork_panel = EarthworkPanel()
             self.stack.addWidget(self.earthwork_panel)
 
-        self.batch_panel.set_main_window(self)
-
     # ----------------------------------------------------------------
     # 项目管理
     # ----------------------------------------------------------------

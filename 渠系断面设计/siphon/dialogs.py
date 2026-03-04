@@ -231,6 +231,13 @@ class InletShapeDialog(QDialog):
         )
         self.accept()
 
+    def keyPressEvent(self, event):
+        """阻止 ESC 键关闭窗口"""
+        if event.key() == Qt.Key_Escape:
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
 
 # ============================================================
 # 2. 出水口局部阻力系数对话框
@@ -507,6 +514,13 @@ class OutletShapeDialog(QDialog):
             xi_user=xi, direction=self.segment.direction
         )
         self.accept()
+
+    def keyPressEvent(self, event):
+        """阻止 ESC 键关闭窗口"""
+        if event.key() == Qt.Key_Escape:
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 # ============================================================
@@ -1053,6 +1067,13 @@ class TrashRackConfigDialog(QDialog):
                 return
         self.result = params
         self.accept()
+
+    def keyPressEvent(self, event):
+        """阻止 ESC 键关闭窗口"""
+        if event.key() == Qt.Key_Escape:
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 # ============================================================
@@ -1738,6 +1759,13 @@ class InletSectionDialog(QDialog):
         self.lbl_result.setText("已清除参数")
         self.result_velocity = None
 
+    def keyPressEvent(self, event):
+        """阻止 ESC 键关闭窗口"""
+        if event.key() == Qt.Key_Escape:
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
 
 # ============================================================
 # 6. 添加自定义通用构件对话框
@@ -1795,6 +1823,13 @@ class CommonSegmentAddDialog(QDialog):
             return
         self.result = (label, xi)
         self.accept()
+
+    def keyPressEvent(self, event):
+        """阻止 ESC 键关闭窗口"""
+        if event.key() == Qt.Key_Escape:
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 # ============================================================
@@ -1938,6 +1973,13 @@ class SimpleCommonEditDialog(QDialog):
         )
         self.accept()
 
+    def keyPressEvent(self, event):
+        """阻止 ESC 键关闭窗口"""
+        if event.key() == Qt.Key_Escape:
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
 
 # ============================================================
 # 通用构件编辑对话框（"其他"类型）
@@ -2007,3 +2049,10 @@ class CommonSegmentEditDialog(QDialog):
             locked=self.segment.locked, coordinates=self.segment.coordinates,
         )
         self.accept()
+
+    def keyPressEvent(self, event):
+        """阻止 ESC 键关闭窗口"""
+        if event.key() == Qt.Key_Escape:
+            event.accept()
+            return
+        super().keyPressEvent(event)

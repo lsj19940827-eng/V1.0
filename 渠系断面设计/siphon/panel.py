@@ -265,10 +265,13 @@ class SiphonPanel(QWidget):
     """倒虹吸水力计算面板（完整复刻版）"""
     data_changed = Signal()
 
-    def __init__(self, parent=None, show_case_management: bool = True):
+    def __init__(self, parent=None, show_case_management: bool = True,
+                 disable_autosave_load: bool = False):
         super().__init__(parent)
         # 兼容多倒虹吸弹窗参数，当前单面板不展示工况条，但保留入参
         self._show_case_management = bool(show_case_management)
+        # 多倒虹吸窗口模式下禁止面板自行加载 autosave（由 Dialog 统一管理数据加载）
+        self._disable_autosave_load = bool(disable_autosave_load)
         # 核心数据
         self.segments = []           # 所有结构段（通用+纵断面+平面）
         self.plan_segments = []      # 平面段
@@ -315,8 +318,9 @@ class SiphonPanel(QWidget):
         # 初始化加大流量输入框的可见性（因为 inc_cb 默认勾选）
         self._on_inc_toggle()
 
-        # 启动时尝试加载上次保存的参数
-        QTimer.singleShot(100, self._load_autosave)
+        # 启动时尝试加载上次保存的参数（多倒虹吸窗口模式下由 Dialog 统一管理，跳过）
+        if not self._disable_autosave_load:
+            QTimer.singleShot(100, self._load_autosave)
 
     # ================================================================
     # UI 构建
@@ -1357,6 +1361,18 @@ document.addEventListener("DOMContentLoaded", function(){
             self.lbl_vout_hint.setText("(已从主表导入)")
             self.lbl_vout_hint.setStyleSheet(f"color:#0066CC;font-size:12px;")
 
+        # 加大流量工况流速 v₁加大 / v₃加大（从批量计算结果透传）
+        if 'v_channel_in_inc' in kwargs and kwargs['v_channel_in_inc']:
+            self.edit_v1_inc.setText(f"{kwargs['v_channel_in_inc']:.4f}")
+            self.edit_v1_inc.setStyleSheet(f"color:#0066CC;")
+            self.lbl_v1_inc.setText("← v₁加大(已导入)")
+            self.lbl_v1_inc.setStyleSheet("color:#0066CC;font-size:11px;")
+        if 'v_pipe_out_inc' in kwargs and kwargs['v_pipe_out_inc']:
+            self.edit_v3_inc.setText(f"{kwargs['v_pipe_out_inc']:.4f}")
+            self.edit_v3_inc.setStyleSheet(f"color:#0066CC;")
+            self.lbl_v3_inc.setText("← v₃加大(已导入)")
+            self.lbl_v3_inc.setStyleSheet("color:#0066CC;font-size:11px;")
+
         # 平面转弯半径倍数（同步内部变量，与原版一致）
         if 'siphon_turn_radius_n' in kwargs and kwargs['siphon_turn_radius_n']:
             n_val = float(kwargs['siphon_turn_radius_n'])
@@ -1733,7 +1749,12 @@ document.addEventListener("DOMContentLoaded", function(){
             'twist_angle_outlet': self.edit_twist_angle_outlet.text().strip(),
         }
         if SIPHON_AVAILABLE:
-            d['segments'] = [self._seg_to_dict(s) for s in self.segments]
+            # 如果纵断面数据仍为示例数据，保存时排除纵断面示例段，只保留通用构件
+            if self._longitudinal_is_example:
+                d['segments'] = [self._seg_to_dict(s) for s in self.segments
+                                 if s.direction == SegmentDirection.COMMON]
+            else:
+                d['segments'] = [self._seg_to_dict(s) for s in self.segments]
             d['plan_segments'] = [self._seg_to_dict(s) for s in self.plan_segments]
             d['plan_total_length'] = self.plan_total_length
             d['plan_feature_points'] = [fp.to_dict() for fp in self.plan_feature_points]
@@ -1783,7 +1804,9 @@ document.addEventListener("DOMContentLoaded", function(){
             self._syncing = True
             self.spin_num_pipes.setValue(int(d['num_pipes']))
             self._syncing = False
-            self._num_pipes_user_confirmed = True
+            # 无论根数是 1 还是多管，从存档恢复时一律保持未确认状态，
+            # 要求用户主动按 Enter / [+]/[−] 重新确认
+            self._num_pipes_user_confirmed = False
             self._update_num_pipes_style()
         if 'inlet_type' in d: self.combo_inlet_type.setCurrentText(d['inlet_type'])
         if 'outlet_type' in d: self.combo_outlet_type.setCurrentText(d['outlet_type'])
@@ -2595,6 +2618,8 @@ document.addEventListener("DOMContentLoaded", function(){
         inlet_shape = InletOutletShape.SLIGHTLY_ROUNDED
         inlet_xi = sum(INLET_SHAPE_COEFFICIENTS[inlet_shape]) / 2  # 取范围中值
         # 出水口默认系数设为0（待用户设置渠道参数后计算）
+        # 注意：只创建通用构件，不创建纵断面示例段。
+        # 纵断面管身段需要用户通过"导入纵断面DXF"或手动编辑节点表来生成。
         self.segments = [
             # 通用构件（仅贡献局部阻力系数ξ）
             StructureSegment(segment_type=SegmentType.INLET, locked=True,
@@ -2608,13 +2633,6 @@ document.addEventListener("DOMContentLoaded", function(){
                              direction=SegmentDirection.COMMON),
             StructureSegment(segment_type=SegmentType.BYPASS_PIPE, xi_user=0.1,
                              direction=SegmentDirection.COMMON),
-            # 纵断面管身段（示例数据）
-            StructureSegment(segment_type=SegmentType.FOLD, length=5.0),
-            StructureSegment(segment_type=SegmentType.STRAIGHT, length=50.0),
-            StructureSegment(segment_type=SegmentType.BEND, length=10.0, radius=5.0, angle=45.0),
-            StructureSegment(segment_type=SegmentType.STRAIGHT, length=100.0),
-            StructureSegment(segment_type=SegmentType.BEND, length=10.0, radius=5.0, angle=45.0),
-            StructureSegment(segment_type=SegmentType.STRAIGHT, length=50.0),
             # 通用构件
             StructureSegment(segment_type=SegmentType.OTHER, xi_user=0.1,
                              direction=SegmentDirection.COMMON),

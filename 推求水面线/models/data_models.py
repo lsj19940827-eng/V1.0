@@ -60,6 +60,7 @@ class ChannelNode:
     water_depth: float = 0.0                    # 水深 h（m）
     water_level: float = 0.0                    # 水位 Z（m）
     velocity: float = 0.0                       # 流速 v（m/s）
+    velocity_increased: float = 0.0             # 加大流速 v_inc（m/s），批量计算的加大流量工况流速
     head_loss_friction: float = 0.0             # 沿程水头损失（m）
     head_loss_bend: float = 0.0                 # 弯道水头损失（m）
     head_loss_local: float = 0.0                # 局部水头损失（m）
@@ -236,6 +237,7 @@ class ChannelNode:
             "water_depth": self.water_depth,
             "water_level": self.water_level,
             "velocity": self.velocity,
+            "velocity_increased": self.velocity_increased,
             "head_loss_friction": self.head_loss_friction,
             "head_loss_bend": self.head_loss_bend,
             "head_loss_local": self.head_loss_local,
@@ -343,6 +345,7 @@ class ChannelNode:
         node.water_depth = d.get("water_depth", 0.0)
         node.water_level = d.get("water_level", 0.0)
         node.velocity = d.get("velocity", 0.0)
+        node.velocity_increased = d.get("velocity_increased", 0.0)
         node.head_loss_friction = d.get("head_loss_friction", 0.0)
         node.head_loss_bend = d.get("head_loss_bend", 0.0)
         node.head_loss_local = d.get("head_loss_local", 0.0)

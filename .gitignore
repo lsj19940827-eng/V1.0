@@ -16,8 +16,14 @@ ENV/
 .qoder/
 .vscode/
 .idea/
+.kiro/
+.windsurf/
 *.swp
 *.swo
+
+# 测试缓存
+.hypothesis/
+.pytest_cache/
 
 # 构建产物
 build/
@@ -43,6 +49,17 @@ V1.00207的备份/
 *.tmp
 *.bak
 ~$*
+
+# 自动保存文件（仅保留在本地，不入版本库）
+data/*_autosave.qxproj
+data/siphon_autosave.json
+
+# 用户数据文件（DXF图纸、Excel、项目文件等，仅本地保留）
+data/*.dxf
+data/*.qxproj
+data/*.xlsm
+data/*.xlsx
+data/*.docx
 
 # 授权系统（密钥和台账不进版本库）
 tools/_secret_key.py

@@ -62,6 +62,9 @@ class SectionResult:
     flow_section: str = ""        # 流量段编号
     building_name: str = ""       # 建筑物名称
     turn_radius: float = 0.0      # 平面转弯半径 (m)，0表示未指定
+    pipe_material: str = ""       # 管材（有压管道专用）
+    local_loss_ratio: float = 0.0 # 局部损失比例（有压管道专用）
+    in_out_raw: str = ""          # 进出口标识原始值（有压管道专用）
     
     # 原始结果字典（用于导出完整数据）
     raw_result: Dict = field(default_factory=dict)
@@ -101,6 +104,9 @@ class SectionResult:
                 'theta_deg': self.raw_result.get('theta_deg', None) if self.raw_result else None,
                 'chamfer_angle': self.raw_result.get('chamfer_angle', None) if self.raw_result else None,
                 'chamfer_length': self.raw_result.get('chamfer_length', None) if self.raw_result else None,
+                'pipe_material': self.pipe_material or None,
+                'local_loss_ratio': self.local_loss_ratio if self.local_loss_ratio else None,
+                'in_out_raw': self.in_out_raw or None,
             }
         }
         # 计算比降
@@ -217,6 +223,9 @@ class SharedDataManager:
                     flow_section=str(result.get('flow_section', '')),
                     building_name=str(result.get('building_name', '')),
                     turn_radius=float(result.get('turn_radius', 0.0) or 0.0),
+                    pipe_material=str(result.get('pipe_material', '') or ''),
+                    local_loss_ratio=float(result.get('local_loss_ratio', 0.0) or 0.0),
+                    in_out_raw=str(result.get('in_out_raw', '') or ''),
                     raw_result=result
                 )
             

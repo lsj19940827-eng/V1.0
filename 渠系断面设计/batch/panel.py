@@ -340,7 +340,6 @@ class BatchPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._main_window = None
         self.batch_results = []
         self._detail_text_cache = ""
         self._last_calc_snapshot = None
@@ -430,9 +429,6 @@ class BatchPanel(QWidget):
         lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
         tb1.addWidget(lbl)
 
-        btn_full = PrimaryPushButton("一键全流程计算"); btn_full.clicked.connect(self._one_click_full_flow)
-        btn_full.setToolTip("批量计算 → 导入 → 渐变段 → (倒虹吸) → (有压管道) → 推求水面线")
-        self._btn_full = btn_full
         btn_calc = PrimaryPushButton("开始批量计算"); btn_calc.clicked.connect(self._batch_calculate)
         _sample_menu = RoundMenu(parent=self)
         _sample_menu.addAction(Action("示例一（综合演示）", triggered=self._add_sample_data))
@@ -450,7 +446,7 @@ class BatchPanel(QWidget):
         self.inc_cb = CheckBox("考虑加大流量比例系数")
         self.inc_cb.setChecked(True)
 
-        for w in [btn_import, btn_calc, btn_sample, btn_template, btn_full]:
+        for w in [btn_import, btn_calc, btn_sample, btn_template]:
             tb1.addWidget(w)
         tb1.addStretch()
         tb1.addWidget(self.inc_cb)
@@ -1121,94 +1117,6 @@ class BatchPanel(QWidget):
         self.detail_text.setFont(QFont("Consolas", 10))
         t2l.addWidget(self.detail_text)
         self.result_notebook.addTab(t2, "详细计算过程")
-
-    # ================================================================
-    # 跨面板引用
-    # ================================================================
-    def set_main_window(self, main_window):
-        """由 MainWindow 在初始化后调用，保存引用以支持跨面板操作"""
-        self._main_window = main_window
-
-    def _one_click_full_flow(self):
-        """一键全流程：批量计算 → 切换到推求水面线 → 导入 → 渐变段 → (倒虹吸) → (有压管道) → 执行计算"""
-        if not fluent_question(
-            self, "一键全流程计算",
-            "本功能将自动依次执行以下步骤：\n\n"
-            "① 批量计算 —— 对表格中所有渠段进行水力计算\n"
-            "② 导入水面线 —— 将计算结果自动导入「推求水面线」模块\n"
-            "③ 渐变段计算 —— 自动计算各渠段间的渐变段水头损失\n"
-            "④ 倒虹吸计算 —— 若存在倒虹吸，自动纳入计算\n"
-            "⑤ 有压管道计算 —— 若存在有压管道，自动纳入计算\n"
-            "⑥ 推求水面线 —— 执行全线水面线推算\n\n"
-            "是否继续？",
-            yes_text="开始执行", no_text="取消",
-        ):
-            return
-
-        # 检查数据来源
-        if self.input_table.rowCount() == 0:
-            InfoBar.warning(
-                "无输入数据",
-                "请先准备输入数据再执行全流程：\n"
-                "① 点击【导入Excel】导入您的数据文件\n"
-                "② 或手动【新增行】逐行填写参数\n"
-                "③ 或点击【示例数据】加载演示数据",
-                parent=self._info_parent(), duration=6000,
-                position=InfoBarPosition.TOP,
-            )
-            return
-
-        if self._is_sample_data:
-            if not fluent_question(
-                self, "数据确认",
-                "当前表格中的数据为【示例数据】，并非您的工程数据。\n\n"
-                "如需使用自己的数据，请先点击【导入Excel】导入，\n"
-                "或手动修改表格中的参数。\n\n"
-                "是否仍要使用示例数据继续执行全流程？",
-                yes_text="继续使用示例数据", no_text="取消",
-            ):
-                return
-
-        # ① 批量计算
-        self._batch_calculate()
-        if not self.batch_results:
-            return
-
-        mw = self._main_window
-        if mw is None:
-            InfoBar.warning("提示", "未获取到主窗口引用，无法自动跳转",
-                            parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
-            return
-
-        # ② 切换到推求水面线面板（index 6）
-        mw._switch_to(6)
-        wp = mw.water_profile_panel
-
-        # ③ 从批量计算导入
-        wp._import_from_batch()
-
-        # ④ 插入渐变段（自动确认，跳过批量明渠段对话框）
-        wp._insert_transitions(auto_confirm=True)
-
-        # ⑤ 若有倒虹吸则弹出对话框（模态，关闭后自动继续）
-        nodes = wp._build_nodes_from_table()
-        has_siphon = any(
-            getattr(n, 'structure_type', None) and "倒虹吸" in n.structure_type.value
-            for n in nodes if getattr(n, 'structure_type', None)
-        )
-        if has_siphon:
-            wp._open_siphon_calculator(auto_run=True)
-
-        # ⑥ 若有有压管道则弹出对话框（模态，关闭后自动继续）
-        has_pressure_pipe = any(
-            getattr(n, 'structure_type', None) and "有压管道" in n.structure_type.value
-            for n in nodes if getattr(n, 'structure_type', None)
-        )
-        if has_pressure_pipe:
-            wp._open_pressure_pipe_calculator(auto_run=True)
-
-        # ⑦ 执行计算
-        wp._calculate()
 
     # ================================================================
     # 批量计算
@@ -2640,18 +2548,14 @@ class BatchPanel(QWidget):
     def _update_lock_state(self, has_errors: bool):
         """根据计算是否存在失败条目，锁定或解锁导出/下游操作按钮。"""
         self._has_calc_errors = has_errors
-        _FULL_TIP = "批量计算 → 导入 → 渐变段 → (倒虹吸) → (有压管道) → 推求水面线"
-        _LOCK_TIP = "计算存在失败条目，请修复后重新执行「开始批量计算」，此按钮暂时锁定"
+        _LOCK_TIP = "计算存在失败条目，请修复后重新执行「开始批量计算」，导出与下游数据共享暂时锁定"
         for btn in [self._btn_export_excel, self._btn_export_word]:
             btn.setEnabled(not has_errors)
             btn.setToolTip("" if not has_errors else _LOCK_TIP)
-        self._btn_full.setEnabled(not has_errors)
-        self._btn_full.setToolTip(_FULL_TIP if not has_errors else _LOCK_TIP)
         if has_errors:
             self._error_lock_label.setText(
                 "⚠  当前批量计算存在失败条目——导出报告与下游模块数据共享已暂停，"
-                "「一键全流程计算」已禁用。请修复输入参数后重新执行「开始批量计算」，"
-                "全部成功后自动解锁所有功能。"
+                "请修复输入参数后重新执行「开始批量计算」，全部成功后自动解锁相关功能。"
             )
             self._error_lock_label.show()
         else:
@@ -2801,11 +2705,12 @@ class BatchPanel(QWidget):
                 self.start_station_edit.setText(formatted_station)
                 info_parts.append(f"起始桩号: {formatted_station}")
 
-            # 读取数据行（前21列，含转弯半径）
+            # 读取数据行（按当前输入表列数读取，兼容新增列如“管材”）
             data_rows = []
+            import_col_count = len(INPUT_HEADERS)
             for row_idx in range(data_start_row, ws.max_row + 1):
                 row_data = []
-                for col_idx in range(1, 22):
+                for col_idx in range(1, import_col_count + 1):
                     cv = ws.cell(row=row_idx, column=col_idx).value
                     row_data.append(str(cv) if cv is not None else "")
                 if any(v.strip() for v in row_data):
@@ -2815,8 +2720,8 @@ class BatchPanel(QWidget):
                 return
 
             # 自动检测列映射：检查表头行第5列是否含"X"来判断是否有X/Y坐标列
-            # 含X/Y列映射（21列）：0序号,1流量段,2名称,3结构形式,4X,5Y,6Q,7n,8比降,9m,10B,11宽深比,12R,13D,14渡槽深宽比,15倒角角度,16倒角底边,17圆心角,18不淤,19不冲,20转弯半径
-            # 无X/Y列映射（18列）：0序号,1流量段,2名称,3结构形式,4Q,5n,6比降,7m,8B,9宽深比,10R,11D,12渡槽深宽比,13倒角角度,14倒角底边,15圆心角,16不淤,17不冲（转弯半径置空）
+            # 含X/Y列映射（当前22列）：... 20转弯半径, 21管材
+            # 无X/Y列映射（旧18/19列模板）：无X/Y时将X/Y置空，并兼容转弯半径/管材缺省
             header_row = data_start_row - 1
             h4_val = str(ws.cell(row=header_row, column=5).value or "")
             has_xy_cols = "X" in h4_val.upper() or "Q" not in h4_val.upper()
@@ -2837,10 +2742,13 @@ class BatchPanel(QWidget):
             try:
                 self._clear_input(force=True)
                 for rd in data_rows:
-                    rd = rd + [""] * 21
+                    rd = rd + [""] * len(INPUT_HEADERS)
                     if has_xy_cols:
-                        mapped = rd[:21]
+                        mapped = rd[:len(INPUT_HEADERS)]
                     else:
+                        # 旧版无X/Y模板映射到新版列：
+                        # 0序号,1流量段,2名称,3结构形式,4Q,5n,6比降,7m,8B,9宽深比,10R,11D,12渡槽深宽比,
+                        # 13倒角角度,14倒角底边,15圆心角,16不淤,17不冲,18转弯半径(可选),19管材(可选)
                         mapped = [
                             rd[0], rd[1], rd[2], rd[3],
                             "", "",
@@ -2849,7 +2757,8 @@ class BatchPanel(QWidget):
                             rd[10], rd[11],
                             rd[12], rd[13], rd[14], rd[15],
                             rd[16], rd[17],
-                            "",
+                            rd[18] if len(rd) > 18 else "",
+                            rd[19] if len(rd) > 19 else "",
                         ]
                     self._add_row(mapped)
                 self._auto_detect_flow_segments()

@@ -69,7 +69,6 @@ class MultiSiphonDialog(QDialog):
                  manager=None,
                  on_import_losses: Callable = None,
                  siphon_turn_radius_n: float = 0.0,
-                 auto_run: bool = False,
                  show_case_management: bool = False):
         """
         初始化窗口
@@ -88,7 +87,6 @@ class MultiSiphonDialog(QDialog):
         self.manager = manager
         self.on_import_losses = on_import_losses
         self._siphon_turn_radius_n = siphon_turn_radius_n
-        self.auto_run = auto_run
         self._show_case_management = bool(show_case_management)
 
         # 面板字典 {倒虹吸名称: SiphonPanel}
@@ -104,9 +102,6 @@ class MultiSiphonDialog(QDialog):
 
         # 标记第一次显示，用于 showEvent 中的置顶操作
         self._first_show = True
-
-        if auto_run:
-            QTimer.singleShot(0, self._show_pre_confirm_dialog)
 
     def showEvent(self, event):
         """窗口显示事件，确保首次显示时置顶"""
@@ -148,6 +143,19 @@ class MultiSiphonDialog(QDialog):
         self.setWindowState(self.windowState() & ~Qt.WindowMinimized | Qt.WindowActive)
         print("[DEBUG MultiSiphonDialog] _ensure_visible() 已执行，窗口应当可见")
 
+    def keyPressEvent(self, event):
+        """
+        覆盖键盘事件处理，阻止 ESC 键关闭窗口
+
+        ESC 键容易误触，不作为关闭快捷键。
+        用户必须点击"关闭"按钮来关闭窗口。
+        """
+        if event.key() == Qt.Key_Escape:
+            # 忽略 ESC 键，不执行任何操作
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def _create_ui(self):
         """创建用户界面"""
         main_lay = QVBoxLayout(self)
@@ -177,7 +185,8 @@ class MultiSiphonDialog(QDialog):
         Args:
             group: 倒虹吸分组数据 (SiphonGroup)
         """
-        panel = SiphonPanel(show_case_management=self._show_case_management)
+        panel = SiphonPanel(show_case_management=self._show_case_management,
+                            disable_autosave_load=True)
         panel.on_result_callback = self._make_result_callback(group.name)
         panel.edit_name.setText(group.name)
 
@@ -216,6 +225,14 @@ class MultiSiphonDialog(QDialog):
         # 出口渐变段末端流速 v₃（下游渠道断面平均流速）
         if group.downstream_velocity > 0:
             params['v_pipe_out'] = group.downstream_velocity
+
+        # 加大流量工况流速 v₁加大 / v₃加大（从批量计算结果透传）
+        _uv_inc = getattr(group, 'upstream_velocity_increased', 0.0)
+        if _uv_inc and _uv_inc > 0:
+            params['v_channel_in_inc'] = _uv_inc
+        _dv_inc = getattr(group, 'downstream_velocity_increased', 0.0)
+        if _dv_inc and _dv_inc > 0:
+            params['v_pipe_out_inc'] = _dv_inc
 
         # 进口上游渠道断面参数（用于自动计算 v₂）
         # 安全判断：先检查 is not None 再比较大小，避免 None > 0 的 TypeError
@@ -596,110 +613,6 @@ class MultiSiphonDialog(QDialog):
         if panel:
             panel._export_word()
 
-    def _show_pre_confirm_dialog(self):
-        """auto_run模式：弹出参数汇总确认表，用户一次性确认所有倒虹吸的流速和弯管倍数"""
-        from PySide6.QtWidgets import QLineEdit
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle("倒虹吸参数确认")
-        dlg.setMinimumWidth(600)
-        dlg.resize(650, min(350 + len(self.panels) * 35, 600))
-        dlg.setStyleSheet(DIALOG_STYLE)
-        lay = QVBoxLayout(dlg)
-        lay.setContentsMargins(20, 15, 20, 15)
-        lay.setSpacing(10)
-
-        lbl_title = QLabel(f"一键全流程计算 — 请确认 {len(self.panels)} 个倒虹吸的关键参数")
-        lbl_title.setStyleSheet(f"font-size:14px;font-weight:bold;color:{T1};")
-        lbl_title.setWordWrap(True)
-        lay.addWidget(lbl_title)
-
-        lbl_hint = QLabel("以下参数将直接用于水力计算，请核对后点击「确认并计算」：")
-        lbl_hint.setStyleSheet("font-size:11px;color:#666;")
-        lay.addWidget(lbl_hint)
-
-        # 表格：名称 | 流量Q | 拟定流速v | 弯管倍数n
-        table = QTableWidget(len(self.panels), 4)
-        table.setHorizontalHeaderLabels(["倒虹吸名称", "流量 Q (m³/s)", "拟定流速 v (m/s)", "弯管倍数 n"])
-        table.horizontalHeader().setStretchLastSection(True)
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for ci in range(1, 4):
-            table.horizontalHeader().setSectionResizeMode(ci, QHeaderView.ResizeToContents)
-        table.verticalHeader().setVisible(False)
-        table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        table.setFont(QFont("Microsoft YaHei", 10))
-
-        v_edits = []  # 保存流速编辑框引用
-        n_edits = []  # 保存倍数编辑框引用
-
-        for i, (name, panel) in enumerate(self.panels.items()):
-            # 名称（只读）
-            item_name = QTableWidgetItem(name)
-            item_name.setFlags(item_name.flags() & ~Qt.ItemIsEditable)
-            item_name.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            table.setItem(i, 0, item_name)
-
-            # 流量（只读）
-            q_val = panel._fval(panel.edit_Q, 0)
-            item_q = QTableWidgetItem(f"{q_val:.4f}")
-            item_q.setFlags(item_q.flags() & ~Qt.ItemIsEditable)
-            item_q.setTextAlignment(Qt.AlignCenter)
-            table.setItem(i, 1, item_q)
-
-            # 拟定流速（可编辑）
-            v_edit = QLineEdit(panel.edit_v.text() or "2.0")
-            v_edit.setAlignment(Qt.AlignCenter)
-            v_edit.setStyleSheet("border:1px solid #1565C0; background:#E3F2FD; padding:2px;")
-            table.setCellWidget(i, 2, v_edit)
-            v_edits.append(v_edit)
-
-            # 弯管倍数（可编辑）
-            n_edit = QLineEdit(panel.edit_turn_n.text() or "3.0")
-            n_edit.setAlignment(Qt.AlignCenter)
-            n_edit.setStyleSheet("border:1px solid #1565C0; background:#E3F2FD; padding:2px;")
-            table.setCellWidget(i, 3, n_edit)
-            n_edits.append(n_edit)
-
-        lay.addWidget(table, 1)
-
-        # 按钮
-        btn_lay = QHBoxLayout()
-        btn_lay.addStretch()
-
-        btn_cancel = PushButton("取消")
-        def _on_cancel():
-            dlg.reject()
-            self._on_close()
-        btn_cancel.clicked.connect(_on_cancel)
-        btn_lay.addWidget(btn_cancel)
-
-        btn_confirm = PrimaryPushButton("确认并计算")
-        def _on_confirm():
-            # 将用户确认的值写回各面板，并标记为已确认
-            for idx, (nm, pnl) in enumerate(self.panels.items()):
-                v_text = v_edits[idx].text().strip()
-                n_text = n_edits[idx].text().strip()
-                if v_text:
-                    pnl._syncing = True
-                    pnl.edit_v.setText(v_text)
-                    pnl._syncing = False
-                    pnl._v_user_confirmed = True
-                    pnl._update_v_style()
-                if n_text:
-                    pnl._syncing = True
-                    pnl.edit_turn_n.setText(n_text)
-                    pnl._syncing = False
-                    pnl._turn_n_user_confirmed = True
-                    pnl._update_turn_n_style()
-                    pnl._update_turn_R()
-            dlg.accept()
-            self._calculate_all()
-        btn_confirm.clicked.connect(_on_confirm)
-        btn_lay.addWidget(btn_confirm)
-
-        lay.addLayout(btn_lay)
-        dlg.exec()
-
     def _calculate_all(self):
         """计算所有倒虹吸并自动导出水头损失到主表格"""
         # 方案D预检查：批量计算前确认所有面板流速已输入
@@ -962,10 +875,7 @@ class MultiSiphonDialog(QDialog):
         btn_lay.addWidget(btn_close_return)
 
         lay.addLayout(btn_lay)
-        if self.auto_run:
-            self._on_close()
-        else:
-            dlg.exec()
+        dlg.exec()
 
     # ================================================================
     # 状态更新

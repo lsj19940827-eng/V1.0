@@ -823,31 +823,43 @@ class WaterProfileCalculator:
         result['skip_loss_transition_1'] = is_node1_pressurized
         result['skip_loss_transition_2'] = is_node2_pressurized
         
+        # 计算里程差
+        result['distance'] = node2.station_MC - node1.station_MC
+
         # 估算渐变段长度
         if result['need_transition_1']:
             result['transition_length_1'] = self._estimate_transition_length(node1, "出口")
         if result['need_transition_2']:
             result['transition_length_2'] = self._estimate_transition_length(node2, "进口")
-        
+
         total_transition_length = result['transition_length_1'] + result['transition_length_2']
-        
-        # 计算里程差
-        result['distance'] = node2.station_MC - node1.station_MC
-        
-        # 可用于明渠的长度
-        result['available_length'] = result['distance'] - total_transition_length
-        
+
+        # 渐变段长度压缩处理
+        if total_transition_length > result['distance'] and result['distance'] > 0:
+            # 当总长度超过可用里程时，合并为单个渐变段
+            result['transition_length_1'] = result['distance']
+            result['transition_length_2'] = 0.0
+            result['need_transition_2'] = False
+            result['use_merged_transition'] = True
+        else:
+            result['use_merged_transition'] = False
+
+        # 可用于明渠的长度（基于压缩后的长度）
+        result['available_length'] = result['distance'] - result['transition_length_1'] - result['transition_length_2']
+
         # 判断是否需要插入明渠段
         result['need_open_channel'] = result['available_length'] > 0
-        
+
         return result
     
     def _check_gap_exit_to_gate(self, exit_node: ChannelNode, gate_node: ChannelNode) -> Dict:
         """
         检查出口结构物→分水闸之间是否需要插入明渠段。
-        
-        仅统计出口侧渐变段（闸为点状结构，无进口渐变段需求）。
-        规则与 _should_insert_open_channel 一致：available_length > 0 即需要明渠。
+
+        规则：
+        - 所有特殊建筑物（隧洞/渡槽/矩形暗涵/有压管道/倒虹吸）出口后接闸时，都需要插入出口渐变段
+        - 所有闸前后的渐变段都标记 skip_loss=True
+        - 渐变段长度不能超过可用里程，超过时压缩到可用里程
         """
         result = {
             'need_open_channel': False,
@@ -866,16 +878,18 @@ class WaterProfileCalculator:
         result['distance'] = gate_node.station_MC - exit_node.station_MC
         if result['distance'] <= 0:
             return result
-        # 使用统一的有压流建筑物判断（倒虹吸或有压管道）
-        is_pressurized = self.is_pressurized_flow_structure(exit_node)
+        # 判断是否为特殊建筑物（隧洞/渡槽/矩形暗涵/有压管道/倒虹吸）
         result['need_transition_1'] = (
             self._is_tunnel_or_aqueduct(exit_node.structure_type)
-            or is_pressurized
+            or self.is_pressurized_flow_structure(exit_node)
             or self._is_culvert_type(exit_node.structure_type)
         )
-        result['skip_loss_transition_1'] = is_pressurized
+        # 所有闸前后的渐变段都标记 skip_loss=True
+        result['skip_loss_transition_1'] = result['need_transition_1']
         if result['need_transition_1']:
-            result['transition_length_1'] = self._estimate_transition_length(exit_node, "出口")
+            calculated_length = self._estimate_transition_length(exit_node, "出口")
+            # 渐变段长度不能超过可用里程
+            result['transition_length_1'] = min(calculated_length, result['distance'])
         result['available_length'] = result['distance'] - result['transition_length_1']
         result['need_open_channel'] = result['available_length'] > 0
         return result
@@ -883,9 +897,11 @@ class WaterProfileCalculator:
     def _check_gap_gate_to_entry(self, gate_node: ChannelNode, entry_node: ChannelNode) -> Dict:
         """
         检查分水闸→进口结构物之间是否需要插入明渠段。
-        
-        仅统计进口侧渐变段（闸为点状结构，无出口渐变段需求）。
-        规则与 _should_insert_open_channel 一致：available_length > 0 即需要明渠。
+
+        规则：
+        - 闸后接特殊建筑物（隧洞/渡槽/矩形暗涵/有压管道/倒虹吸）进口时，都需要插入进口渐变段
+        - 所有闸前后的渐变段都标记 skip_loss=True
+        - 渐变段长度不能超过可用里程，超过时压缩到可用里程
         """
         result = {
             'need_open_channel': False,
@@ -904,16 +920,18 @@ class WaterProfileCalculator:
         result['distance'] = entry_node.station_MC - gate_node.station_MC
         if result['distance'] <= 0:
             return result
-        # 使用统一的有压流建筑物判断（倒虹吸或有压管道）
-        is_pressurized = self.is_pressurized_flow_structure(entry_node)
+        # 判断是否为特殊建筑物（隧洞/渡槽/矩形暗涵/有压管道/倒虹吸）
         result['need_transition_2'] = (
             self._is_tunnel_or_aqueduct(entry_node.structure_type)
-            or is_pressurized
+            or self.is_pressurized_flow_structure(entry_node)
             or self._is_culvert_type(entry_node.structure_type)
         )
-        result['skip_loss_transition_2'] = is_pressurized
+        # 所有闸前后的渐变段都标记 skip_loss=True
+        result['skip_loss_transition_2'] = result['need_transition_2']
         if result['need_transition_2']:
-            result['transition_length_2'] = self._estimate_transition_length(entry_node, "进口")
+            calculated_length = self._estimate_transition_length(entry_node, "进口")
+            # 渐变段长度不能超过可用里程
+            result['transition_length_2'] = min(calculated_length, result['distance'])
         result['available_length'] = result['distance'] - result['transition_length_2']
         result['need_open_channel'] = result['available_length'] > 0
         return result

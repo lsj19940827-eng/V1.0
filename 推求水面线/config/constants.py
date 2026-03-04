@@ -137,7 +137,7 @@ HEAD_LOSS_COLUMNS = [
     {"id": "head_loss_friction", "text": "沿程水头损失", "width": 100},
     {"id": "head_loss_reserve", "text": "预留水头损失", "width": 100, "editable": True, "type": "float"},
     {"id": "head_loss_gate", "text": "过闸水头损失", "width": 100, "editable": True, "type": "float"},
-    {"id": "head_loss_siphon", "text": "倒虹吸水头损失", "width": 110},
+    {"id": "head_loss_siphon", "text": "倒虹吸/有压管道水头损失", "width": 140},
     {"id": "head_loss_total", "text": "总水头损失", "width": 90},
     {"id": "head_loss_cumulative", "text": "累计总水头损失", "width": 110},
 ]

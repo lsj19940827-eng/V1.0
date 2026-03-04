@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//^class SegmentEditDialog/,/**)",
+      "Read(//c/Users/大渔/Desktop/**)",
+      "Bash(python tests/test_gate_penetration_unit.py)",
+      "Bash(python -u tests/test_gate_penetration_unit.py)",
+      "Bash(iconv -f gbk -t utf-8)",
+      "Bash(python -c \":*)",
+      "Bash(python tests/test_gate_transition_extended_unit.py)",
+      "Bash(python tests/test_fixed_length_compression_unit.py)"
+    ]
+  }
+}
