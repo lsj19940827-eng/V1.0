@@ -148,6 +148,10 @@ def _classify_structure(node) -> Optional[str]:
     if getattr(node, "is_inverted_siphon", False) or "倒虹吸" in name:
         return "siphon"
 
+    # 有压管道（与倒虹吸类似，但独立表格）
+    if "有压管道" in name:
+        return "pressure_pipe"
+
     # 隧洞细分：圆拱直墙型 / 圆形 / 马蹄形
     if "隧洞" in name or "隧" in name:
         if "圆形" in name:
@@ -237,6 +241,7 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
         "aqueduct_rect": {},
         "rect_culvert": {},
         "siphon": {},
+        "pressure_pipe": {},
     }
     flow_qs: Dict[int, float] = {}
 
@@ -301,6 +306,13 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
 
         # 倒虹吸直径（优先D/结构高度）
         if struct_key == "siphon":
+            dn_src = d_val if d_val > 0 else h_total
+            if dn_src > 0:
+                dn_mm = dn_src * 1000 if dn_src < 20 else dn_src
+                _assign_if_valid(target, "DN_mm", dn_mm)
+
+        # 有压管道直径（与倒虹吸类似）
+        if struct_key == "pressure_pipe":
             dn_src = d_val if d_val > 0 else h_total
             if dn_src > 0:
                 dn_mm = dn_src * 1000 if dn_src < 20 else dn_src
@@ -392,6 +404,11 @@ def _default_segments_circular_pipe():
 
 def _default_segments_siphon():
     """倒虹吸默认参数"""
+    Qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
+    return [{"name": _segment_name(i + 1), "Q": Qs[i], "DN_mm": 1500} for i in range(7)]
+
+def _default_segments_pressure_pipe():
+    """有压管道默认参数（与倒虹吸类似）"""
     Qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
     return [{"name": _segment_name(i + 1), "Q": Qs[i], "DN_mm": 1500} for i in range(7)]
 
@@ -1125,6 +1142,42 @@ def compute_siphon(segments: List[Dict],
 
 
 # ============================================================
+# 7. 有压管道（与倒虹吸类似，用于断面汇总表独立输出）
+# ============================================================
+
+def compute_pressure_pipe(segments: List[Dict],
+                          pipe_material: str = "球墨铸铁管") -> List[Dict]:
+    """有压管道断面汇总表计算（与倒虹吸表格格式一致）"""
+    rows = []
+    for seg in segments:
+        # 支持每段独立材质：优先使用段级 pipe_material，否则用全局参数
+        seg_mat = seg.get("pipe_material", pipe_material)
+        n = SIPHON_MATERIALS.get(seg_mat, 0.012)
+
+        Q = seg["Q"]
+        DN_mm = seg.get("DN_mm", 1500)
+        D_m = DN_mm / 1000.0
+        A = PI / 4 * D_m ** 2
+        V = Q / A if A > 1e-9 else 0
+
+        row = {
+            "name":          seg["name"],
+            "Q":             Q,
+            "Q_inc":         round(Q * (1 + _tunnel_inc_pct(Q) / 100), 3),
+            "n":             n,
+            "DN_mm":         DN_mm,
+            "pipe_material": seg_mat,
+            "V":             round(V, 2),
+        }
+        _apply_overrides(row, seg, {
+            "Q": "Q",
+            "n": "n", "DN_mm": "DN_mm", "pipe_material": "pipe_material",
+        })
+        rows.append(row)
+    return rows
+
+
+# ============================================================
 # Excel 导出 — 公共辅助
 # ============================================================
 
@@ -1711,6 +1764,44 @@ def _write_siphon(ws, data, styles, gcl, col_offset=0):
 
 
 # ============================================================
+# Sheet 7: 有压管道
+# ============================================================
+
+def _write_pressure_pipe(ws, data, styles, gcl, col_offset=0):
+    """有压管道 Excel 导出（与倒虹吸格式一致）"""
+    C = col_offset
+    NCOLS = 7
+    R1 = 1
+
+    headers = [
+        ("流量段",     None),
+        ("设计流量",   "m³/s"),
+        ("加大流量",   "m³/s"),
+        ("糙率",       None),
+        ("直径DN",     "mm"),
+        ("管道材质",   None),
+        ("设计流速v",  "m/s"),
+    ]
+    col_widths = [14, 12, 12, 10, 12, 15, 12]
+
+    _write_title(ws, R1, C + 1, C + NCOLS, "有压管道断面尺寸及水力要素表", styles)
+    for i, (name, unit) in enumerate(headers):
+        _write_header_2row(ws, R1 + 1, R1 + 2, C + 1 + i, name, unit, styles)
+    for i, w in enumerate(col_widths):
+        _set_col_width(ws, C + 1 + i, w, gcl)
+
+    for ri, d in enumerate(data):
+        r = R1 + 3 + ri
+        vals = [d["name"], d["Q"], d.get("Q_inc", ""),
+                d["n"], d.get("DN_mm", ""), d.get("pipe_material", ""),
+                d.get("V", "")]
+        for ci, v in enumerate(vals):
+            _sc(ws, r, C + 1 + ci, v, styles)
+
+    return NCOLS
+
+
+# ============================================================
 # 汇总 Sheet: 所有表格水平排列
 # ============================================================
 
@@ -1741,6 +1832,8 @@ def generate_excel(
     circular_pipe_segs: List[Dict] = None,
     siphon_segs: List[Dict] = None,
     siphon_material: str = "球墨铸铁管",
+    pressure_pipe_segs: List[Dict] = None,
+    pressure_pipe_material: str = "球墨铸铁管",
     rock_lining: Dict = None,
     table_order: List[str] = None,
     tunnel_unified_arch: bool = False,
@@ -1756,7 +1849,8 @@ def generate_excel(
         tunnel_segs: 旧参数（向后兼容，等同于 tunnel_arch_segs）
         aqueduct_segs: 旧参数（向后兼容，等同于 aqueduct_u_segs）
         siphon_material: 倒虹吸管道材质
-        rock_lining: 隧洞围岩衬砌厚度
+        pressure_pipe_material: 有压管道材质
+        rock_lining: 隧洞围岩衬砸厚度
         tunnel_unified_arch: 圆拱直墙型隧洞是否统一断面
         tunnel_unified_circular: 圆形隧洞是否统一断面
         tunnel_unified_horseshoe: 马蹄形隧洞是否统一断面
@@ -1795,6 +1889,8 @@ def generate_excel(
         circular_pipe_segs = _default_segments_circular_pipe()
     if siphon_segs is None:
         siphon_segs = _default_segments_siphon()
+    if pressure_pipe_segs is None:
+        pressure_pipe_segs = []
 
     # ---- 计算 ----
     d1 = compute_rect_channel(rect_channel_segs) if rect_channel_segs else []
@@ -1807,6 +1903,7 @@ def generate_excel(
     d4 = compute_rect_culvert(rect_culvert_segs) if rect_culvert_segs else []
     d5 = compute_circular_pipe(circular_pipe_segs) if circular_pipe_segs else []
     d6 = compute_siphon(siphon_segs, siphon_material) if siphon_segs else []
+    d7 = compute_pressure_pipe(pressure_pipe_segs, pressure_pipe_material) if pressure_pipe_segs else []
 
     # 马蹄形隧洞 Sheet 名称动态显示型号
     horseshoe_sheet_name = "马蹄形隧洞"
@@ -1826,16 +1923,17 @@ def generate_excel(
         "rect_culvert":     ("矩形暗涵",          _write_rect_culvert,       d4),
         "circular_channel": ("圆形明渠(圆管涵)",   _write_circular_pipe,      d5),
         "siphon":           ("倒虹吸",            _write_siphon,             d6),
+        "pressure_pipe":    ("有压管道",          _write_pressure_pipe,      d7),
         # 向后兼容旧 key
         "tunnel":           ("圆拱直墙型隧洞",    _write_tunnel,             d2_arch),
         "aqueduct":         ("U形渡槽",           _write_aqueduct,           d3_u),
     }
-
+    
     if not table_order:
         table_order = ["rect_channel", "trap_channel",
                        "tunnel_arch", "tunnel_circular", "tunnel_horseshoe",
                        "aqueduct_u", "aqueduct_rect",
-                       "rect_culvert", "circular_channel", "siphon"]
+                       "rect_culvert", "circular_channel", "siphon", "pressure_pipe"]
 
     tables = []
     for key in table_order:
@@ -2410,6 +2508,25 @@ def _dxf_build_siphon(data):
     return title, headers, col_widths, rows, None
 
 
+def _dxf_build_pressure_pipe(data):
+    """有压管道断面汇总表（与倒虹吸格式一致）"""
+    title = "有压管道断面尺寸及水力要素表"
+    headers = [
+        ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
+        ("糙率", None), ("直径DN", "mm"), ("管道材质", None),
+        ("设计流速v", "m/s"),
+    ]
+    col_widths = _dxf_col_widths([12, 10, 10, 8, 10, 14, 10])
+    rows = []
+    for d in data:
+        rows.append([
+            d["name"], d["Q"], d.get("Q_inc", ""),
+            d["n"], d.get("DN_mm", ""), d.get("pipe_material", ""),
+            d.get("V", ""),
+        ])
+    return title, headers, col_widths, rows, None
+
+
 # DXF 构建函数映射
 _DXF_BUILDERS = {
     "rect_channel":     _dxf_build_rect_channel,
@@ -2422,6 +2539,7 @@ _DXF_BUILDERS = {
     "rect_culvert":     _dxf_build_rect_culvert,
     "circular_channel": _dxf_build_circular_pipe,
     "siphon":           _dxf_build_siphon,
+    "pressure_pipe":    _dxf_build_pressure_pipe,
     # 向后兼容
     "tunnel":           _dxf_build_tunnel,
     "aqueduct":         _dxf_build_aqueduct_u,
@@ -2443,6 +2561,8 @@ def generate_dxf(
     circular_pipe_segs: List[Dict] = None,
     siphon_segs: List[Dict] = None,
     siphon_material: str = "球墨铸铁管",
+    pressure_pipe_segs: List[Dict] = None,
+    pressure_pipe_material: str = "球墨铸铁管",
     rock_lining: Dict = None,
     table_order: List[str] = None,
     tunnel_unified_arch: bool = False,
@@ -2484,6 +2604,8 @@ def generate_dxf(
         circular_pipe_segs = _default_segments_circular_pipe()
     if siphon_segs is None:
         siphon_segs = _default_segments_siphon()
+    if pressure_pipe_segs is None:
+        pressure_pipe_segs = []
 
     # ---- 计算 ----
     d1 = compute_rect_channel(rect_channel_segs) if rect_channel_segs else []
@@ -2496,6 +2618,7 @@ def generate_dxf(
     d4 = compute_rect_culvert(rect_culvert_segs) if rect_culvert_segs else []
     d5 = compute_circular_pipe(circular_pipe_segs) if circular_pipe_segs else []
     d6 = compute_siphon(siphon_segs, siphon_material) if siphon_segs else []
+    d7 = compute_pressure_pipe(pressure_pipe_segs, pressure_pipe_material) if pressure_pipe_segs else []
 
     # 马蹄形隧洞标题动态显示型号（与 generate_excel 一致）
     horseshoe_title = "马蹄形隧洞断面尺寸及水力要素表"
@@ -2513,6 +2636,7 @@ def generate_dxf(
         "rect_culvert":     d4,
         "circular_channel": d5,
         "siphon":           d6,
+        "pressure_pipe":    d7,
         "tunnel":           d2_arch,
         "aqueduct":         d3_u,
     }
@@ -2521,7 +2645,7 @@ def generate_dxf(
         table_order = ["rect_channel", "trap_channel",
                        "tunnel_arch", "tunnel_circular", "tunnel_horseshoe",
                        "aqueduct_u", "aqueduct_rect",
-                       "rect_culvert", "circular_channel", "siphon"]
+                       "rect_culvert", "circular_channel", "siphon", "pressure_pipe"]
 
     # 收集有数据的表格
     tables = []

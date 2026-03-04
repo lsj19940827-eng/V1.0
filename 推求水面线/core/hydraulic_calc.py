@@ -50,6 +50,8 @@ class HydraulicCalculator:
         
         # 倒虹吸水头损失字典（按名称匹配）
         self.inverted_siphon_losses: Dict[str, float] = {}
+        # 有压管道水头损失字典（按名称匹配）
+        self.pressure_pipe_losses: Dict[str, float] = {}
     
     def import_inverted_siphon_losses(self, losses: Dict[str, float]) -> None:
         """
@@ -59,6 +61,15 @@ class HydraulicCalculator:
             losses: 倒虹吸名称到水头损失的映射 {"名称1": 损失值1, ...}
         """
         self.inverted_siphon_losses = losses.copy()
+    
+    def import_pressure_pipe_losses(self, losses: Dict[str, float]) -> None:
+        """
+        导入有压管道水头损失数据
+        
+        Args:
+            losses: 有压管道名称到水头损失的映射 {"名称1": 损失值1, ...}
+        """
+        self.pressure_pipe_losses = losses.copy()
     
     def _estimate_structure_height(self, node: ChannelNode) -> None:
         """
@@ -903,6 +914,14 @@ class HydraulicCalculator:
                 return node.external_head_loss
             return 0.0
         
+        # 有压管道：使用外部导入的水头损失
+        if sv == "有压管道":
+            if node.name in self.pressure_pipe_losses:
+                return self.pressure_pipe_losses[node.name]
+            if node.external_head_loss is not None:
+                return node.external_head_loss
+            return 0.0
+        
         # 其他建筑物：根据进出口标识和类型查找系数
         structure_name = node.structure_type.value if node.structure_type else ""
         
@@ -1218,9 +1237,14 @@ class HydraulicCalculator:
             head_loss_gate = getattr(curr_node, 'head_loss_gate', 0.0) or 0.0
             head_loss_siphon = getattr(curr_node, 'head_loss_siphon', 0.0) or 0.0
             
+            # 获取外部水头损失（有压管道/倒虹吸）
+            external_head_loss = getattr(curr_node, 'external_head_loss', None)
+            if external_head_loss is None:
+                external_head_loss = 0.0
+            
             # 计算总水头损失（不含渐变段损失）
             # 注：总损失包含局部水头损失（hj），以便与水位递推/累计损失一致
-            curr_node.head_loss_total = hw + hf + hj + head_loss_reserve + head_loss_gate + head_loss_siphon
+            curr_node.head_loss_total = hw + hf + hj + head_loss_reserve + head_loss_gate + head_loss_siphon + external_head_loss
             
             # 计算渠底高程
             if curr_node.water_depth > 0:
@@ -1450,15 +1474,22 @@ class HydraulicCalculator:
         # 根据前后节点结构类型判定渐变段类型（进口/出口相对于特殊建筑物而言）
         sv_next = next_node.structure_type.value if next_node.structure_type else ""
         sv_prev = prev_node.structure_type.value if prev_node.structure_type else ""
-        _special_kw = ("隧洞", "渡槽", "倒虹吸", "暗涵")
+        _special_kw = ("隧洞", "渡槽", "倒虹吸", "有压管道", "暗涵")
         if any(kw in sv_next for kw in _special_kw):
             transition_type = "进口"
         else:
             transition_type = "出口"
+        _pressurized_adjacent = ("倒虹吸" in sv_prev) or ("倒虹吸" in sv_next) or ("有压管道" in sv_prev) or ("有压管道" in sv_next)
         if transition_type == "进口":
-            transition_form = getattr(self.settings, 'transition_inlet_form', "曲线形反弯扭曲面") or "曲线形反弯扭曲面"
+            if _pressurized_adjacent:
+                transition_form = getattr(self.settings, 'siphon_transition_inlet_form', "反弯扭曲面") or "反弯扭曲面"
+            else:
+                transition_form = getattr(self.settings, 'transition_inlet_form', "曲线形反弯扭曲面") or "曲线形反弯扭曲面"
         else:
-            transition_form = getattr(self.settings, 'transition_outlet_form', "曲线形反弯扭曲面") or "曲线形反弯扭曲面"
+            if _pressurized_adjacent:
+                transition_form = getattr(self.settings, 'siphon_transition_outlet_form', "反弯扭曲面") or "反弯扭曲面"
+            else:
+                transition_form = getattr(self.settings, 'transition_outlet_form', "曲线形反弯扭曲面") or "曲线形反弯扭曲面"
         
         # 获取ζ系数
         if transition_type in TRANSITION_ZETA_COEFFICIENTS:
@@ -1475,9 +1506,10 @@ class HydraulicCalculator:
         B2 = self.get_water_surface_width(next_node)
         
         # 计算渐变段长度
-        # 倒虹吸直接按水深倍数确定（GB 50288-2018 §10.2.4），其他结构用基础公式
+        # 倒虹吸/有压管道直接按水深倍数确定（GB 50288-2018 §10.2.4），其他结构用基础公式
         _siphon_adjacent = ("倒虹吸" in sv_prev) or ("倒虹吸" in sv_next)
-        if _siphon_adjacent:
+        _ppipe_adjacent = ("有压管道" in sv_prev) or ("有压管道" in sv_next)
+        if _siphon_adjacent or _ppipe_adjacent:
             _h_ch = prev_node.water_depth if transition_type == "进口" else next_node.water_depth
             if _h_ch <= 0:
                 _h_ch = max(prev_node.water_depth, next_node.water_depth) if max(prev_node.water_depth, next_node.water_depth) > 0 else 2.0
@@ -1918,6 +1950,11 @@ class HydraulicCalculator:
         1. 局部水头损失 h_j1 = ξ₁ × |v₂² - v₁²| / (2g)
         2. 沿程水头损失 h_f = i × L（使用平均值法）
         
+        对于有压流建筑物（倒虹吸、有压管道）侧的渐变段，
+        其水头损失已包含在有压流建筑物的水力计算中，
+        因此当 transition_skip_loss=True 时，跳过水头损失计算，
+        但仍然计算渐变段长度。
+        
         Args:
             transition_node: 渐变段节点
             prev_node: 前一节点（渐变段起始端）
@@ -1927,6 +1964,21 @@ class HydraulicCalculator:
         Returns:
             总水头损失（m）
         """
+        # 0. 检查是否跳过损失计算
+        if transition_node.transition_skip_loss:
+            # 仍然计算渐变段长度
+            length = self.calculate_transition_length(
+                transition_node, prev_node, next_node, all_nodes
+            )
+            transition_node.transition_length = length
+            
+            # 设置损失为 0
+            transition_node.head_loss_transition = 0.0
+            transition_node.transition_head_loss_local = 0.0
+            transition_node.transition_head_loss_friction = 0.0
+            
+            return 0.0
+        
         # 1. 获取ζ系数
         zeta = self.get_transition_zeta(transition_node)
         transition_node.transition_zeta = zeta
@@ -1997,13 +2049,21 @@ class HydraulicCalculator:
         """
         # 1. 确定渐变段类型和形式（进口/出口相对于特殊建筑物而言）
         sv_next = next_node.structure_type.value if next_node.structure_type else ""
-        _special_kw = ("隧洞", "渡槽", "倒虹吸", "暗涵")
+        _special_kw = ("隧洞", "渡槽", "倒虹吸", "有压管道", "暗涵")
         if any(kw in sv_next for kw in _special_kw):
             transition_type = "进口"
-            transition_form = getattr(settings, 'transition_inlet_form', "曲线形反弯扭曲面") or "曲线形反弯扭曲面"
+            _pressurized_adjacent = ("倒虹吸" in sv_next) or ("倒虹吸" in (prev_node.structure_type.value if prev_node.structure_type else "")) or ("有压管道" in sv_next) or ("有压管道" in (prev_node.structure_type.value if prev_node.structure_type else ""))
+            if _pressurized_adjacent:
+                transition_form = getattr(settings, 'siphon_transition_inlet_form', "反弯扭曲面") or "反弯扭曲面"
+            else:
+                transition_form = getattr(settings, 'transition_inlet_form', "曲线形反弯扭曲面") or "曲线形反弯扭曲面"
         else:
             transition_type = "出口"
-            transition_form = getattr(settings, 'transition_outlet_form', "曲线形反弯扭曲面") or "曲线形反弯扭曲面"
+            _pressurized_adjacent = ("倒虹吸" in sv_next) or ("倒虹吸" in (prev_node.structure_type.value if prev_node.structure_type else "")) or ("有压管道" in sv_next) or ("有压管道" in (prev_node.structure_type.value if prev_node.structure_type else ""))
+            if _pressurized_adjacent:
+                transition_form = getattr(settings, 'siphon_transition_outlet_form', "反弯扭曲面") or "反弯扭曲面"
+            else:
+                transition_form = getattr(settings, 'transition_outlet_form', "曲线形反弯扭曲面") or "曲线形反弯扭曲面"
         
         # 2. 获取ζ系数
         if transition_type in TRANSITION_ZETA_COEFFICIENTS:

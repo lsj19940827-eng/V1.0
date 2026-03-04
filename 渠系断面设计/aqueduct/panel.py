@@ -10,6 +10,7 @@ import sys
 import os
 import math
 import re
+import copy
 import html as html_mod
 
 # 将计算模块目录加入搜索路径
@@ -18,15 +19,27 @@ sys.path.insert(0, os.path.join(_pkg_root, "渠系建筑物断面计算"))
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea
+    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea,
+    QPushButton,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from qfluentwidgets import (
     ComboBox, PushButton, PrimaryPushButton, LineEdit,
     CheckBox, InfoBar, InfoBarPosition
+)
+
+from 渠系断面设计.case_manager import (
+    FlowLayout as _FlowLayout,
+    CaseTagChip as _CaseTagChip,
+    DashedButton as _DashedButton,
+    MAX_CASES,
+    _SUB, _sub,
+    CASE_TAG_ACTIVE_SS as _CASE_TAG_ACTIVE_SS,
+    CASE_TAG_INACTIVE_SS as _CASE_TAG_INACTIVE_SS,
+    CASE_QUICK_SS as _CASE_QUICK_SS,
 )
 
 import matplotlib
@@ -79,13 +92,20 @@ def _e(s):
 
 class AqueductPanel(QWidget):
     """渡槽水力计算面板"""
+    data_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.input_params = {}
         self.current_result = None
         self._export_plain_text = ""
+        self._cases = [self._default_case()]
+        self._current_case_idx = 0
+        self._all_results = []
+        self._loading_case = False
+        self._suppress_result_render = False
         self._init_ui()
+        self._rebuild_case_tags()
 
     # ================================================================
     # UI 构建
@@ -127,6 +147,48 @@ class AqueductPanel(QWidget):
         fl = QVBoxLayout(grp)
         fl.setSpacing(5)
 
+        # ---- 工况标签导航 ----
+        _tag_row = QHBoxLayout()
+        _tag_row.setSpacing(4)
+        self._case_tag_container = QWidget()
+        self._case_tag_flow = _FlowLayout(self._case_tag_container, spacing=5)
+        self._case_tag_flow.setContentsMargins(0, 0, 0, 0)
+        _tag_row.addWidget(self._case_tag_container, 1)
+        self._add_case_btn = _DashedButton("+ 添加")
+        self._add_case_btn.setCursor(Qt.PointingHandCursor)
+        self._add_case_btn.setFixedHeight(28)
+        self._add_case_btn.clicked.connect(self._add_case)
+        _tag_row.addWidget(self._add_case_btn)
+        fl.addLayout(_tag_row)
+        self._case_count_label = QLabel("1 个计算工况")
+        self._case_count_label.setStyleSheet("font-size:11px;color:#999;")
+        fl.addWidget(self._case_count_label)
+
+        # 工况管理行（与工况标签挂钩）
+        _quick_row = QHBoxLayout()
+        _quick_row.setSpacing(4)
+        _copy_all_btn = QPushButton("复制参数到所有")
+        _copy_all_btn.setCursor(Qt.PointingHandCursor)
+        _copy_all_btn.setStyleSheet(_CASE_QUICK_SS)
+        _copy_all_btn.setToolTip("将当前工况的参数（不含Q）复制到其余所有工况")
+        _copy_all_btn.clicked.connect(self._apply_to_all_cases)
+        _quick_row.addWidget(_copy_all_btn)
+        _copy_prev_btn = QPushButton("从上一个复制")
+        _copy_prev_btn.setCursor(Qt.PointingHandCursor)
+        _copy_prev_btn.setStyleSheet(_CASE_QUICK_SS)
+        _copy_prev_btn.setToolTip("将上一个工况的参数（不含Q）复制到当前工况")
+        _copy_prev_btn.clicked.connect(self._copy_from_prev_case)
+        _quick_row.addWidget(_copy_prev_btn)
+        self._del_case_btn = QPushButton("删除当前")
+        self._del_case_btn.setCursor(Qt.PointingHandCursor)
+        self._del_case_btn.setStyleSheet(_CASE_QUICK_SS)
+        self._del_case_btn.setToolTip("删除当前选中的工况（至少保留一个）")
+        self._del_case_btn.clicked.connect(self._remove_current_case)
+        _quick_row.addWidget(self._del_case_btn)
+        fl.addLayout(_quick_row)
+
+        fl.addWidget(self._sep())
+
         # 槽身断面类型
         r = QHBoxLayout(); r.addWidget(QLabel("断面类型:"))
         self.section_combo = ComboBox()
@@ -136,6 +198,7 @@ class AqueductPanel(QWidget):
 
         # 通用参数
         self.Q_edit = self._field(fl, "设计流量 Q (m³/s):", "5.0")
+        self.Q_edit.textChanged.connect(self._on_q_text_changed)
         self.n_edit = self._field(fl, "糙率 n:", "0.014")
         self.slope_edit = self._field(fl, "水力坡降 1/", "3000")
 
@@ -188,9 +251,9 @@ class AqueductPanel(QWidget):
         fl.addWidget(self.detail_cb)
 
         br = QHBoxLayout()
-        cb = PrimaryPushButton("计算"); cb.setCursor(Qt.PointingHandCursor); cb.clicked.connect(self._calculate)
+        self._calc_btn = PrimaryPushButton("计算"); self._calc_btn.setCursor(Qt.PointingHandCursor); self._calc_btn.clicked.connect(self._calculate)
         clb = PushButton("清空"); clb.setCursor(Qt.PointingHandCursor); clb.clicked.connect(self._clear)
-        br.addWidget(cb); br.addWidget(clb); fl.addLayout(br)
+        br.addWidget(self._calc_btn); br.addWidget(clb); fl.addLayout(br)
 
         er = QHBoxLayout()
         ec = PushButton("导出DXF"); ec.clicked.connect(self._export_dxf)
@@ -265,6 +328,15 @@ class AqueductPanel(QWidget):
         else:
             self.u_section_grp.hide()
             self.rect_section_grp.show()
+
+        # 断面类型切换时同步当前工况，确保工况标签实时刷新
+        if self._loading_case:
+            return
+        if not hasattr(self, '_cases'):
+            return
+        if 0 <= self._current_case_idx < len(self._cases):
+            self._cases[self._current_case_idx]['section_type'] = stype
+        self._rebuild_case_tags()
 
     # ----------------------------------------------------------------
     # 初始帮助
@@ -345,108 +417,421 @@ class AqueductPanel(QWidget):
         return w if w else self
 
     # ================================================================
+    # 工况管理
+    # ================================================================
+    @staticmethod
+    def _default_case():
+        return {
+            'custom_label': None,
+            'section_type': 'U形',
+            'Q': '5.0', 'n': '0.014', 'slope_inv': '3000',
+            'v_min': '0.1', 'v_max': '100.0',
+            'inc_checked': True, 'inc_pct': '',
+            'detail_checked': True,
+            'R': '',
+            'ratio': '', 'B': '',
+            'chamfer_angle': '', 'chamfer_len': '',
+        }
+
+    def _save_current_case(self):
+        if not (0 <= self._current_case_idx < len(self._cases)):
+            return
+        c = self._cases[self._current_case_idx]
+        c['section_type'] = self.section_combo.currentText()
+        c['Q'] = self.Q_edit.text()
+        c['n'] = self.n_edit.text()
+        c['slope_inv'] = self.slope_edit.text()
+        c['v_min'] = self.vmin_edit.text()
+        c['v_max'] = self.vmax_edit.text()
+        c['inc_checked'] = self.inc_cb.isChecked()
+        c['inc_pct'] = self.inc_edit.text()
+        c['detail_checked'] = self.detail_cb.isChecked()
+        c['R'] = self.R_edit.text()
+        c['ratio'] = self.ratio_edit.text()
+        c['B'] = self.B_edit.text()
+        c['chamfer_angle'] = self.chamfer_angle_edit.text()
+        c['chamfer_len'] = self.chamfer_len_edit.text()
+
+    def _load_case(self, idx):
+        if not (0 <= idx < len(self._cases)):
+            return
+        c = self._cases[idx]
+        self._loading_case = True
+        self.section_combo.blockSignals(True)
+        self.section_combo.setCurrentText(c.get('section_type', 'U形'))
+        self.section_combo.blockSignals(False)
+        self._on_section_type_changed(c.get('section_type', 'U形'))
+        self.Q_edit.blockSignals(True)
+        self.Q_edit.setText(c.get('Q', ''))
+        self.Q_edit.blockSignals(False)
+        self.n_edit.setText(c.get('n', '0.014'))
+        self.slope_edit.setText(c.get('slope_inv', '3000'))
+        self.vmin_edit.setText(c.get('v_min', '0.1'))
+        self.vmax_edit.setText(c.get('v_max', '100.0'))
+        self.inc_cb.setChecked(c.get('inc_checked', True))
+        self.inc_edit.setText(c.get('inc_pct', ''))
+        self.detail_cb.setChecked(c.get('detail_checked', True))
+        self.R_edit.setText(c.get('R', ''))
+        self.ratio_edit.setText(c.get('ratio', ''))
+        self.B_edit.setText(c.get('B', ''))
+        self.chamfer_angle_edit.setText(c.get('chamfer_angle', ''))
+        self.chamfer_len_edit.setText(c.get('chamfer_len', ''))
+        self._on_inc_toggle(None)
+        self._loading_case = False
+
+    def _switch_case(self, idx):
+        if idx == self._current_case_idx:
+            return
+        self._save_current_case()
+        self._current_case_idx = idx
+        self._load_case(idx)
+        self._rebuild_case_tags()
+
+    def _add_case(self):
+        if len(self._cases) >= MAX_CASES:
+            InfoBar.warning(title="提示", content=f"最多支持 {MAX_CASES} 个工况",
+                            parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
+            return
+        self._save_current_case()
+        new_case = copy.deepcopy(self._cases[self._current_case_idx])
+        new_case['Q'] = ''
+        new_case['custom_label'] = None
+        self._cases.append(new_case)
+        self._current_case_idx = len(self._cases) - 1
+        self._load_case(self._current_case_idx)
+        self._rebuild_case_tags()
+        self._update_calc_btn_text()
+        self.Q_edit.setFocus()
+
+    def _remove_current_case(self):
+        if len(self._cases) <= 1:
+            InfoBar.warning(title="提示", content="至少保留一个工况",
+                            parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
+            return
+        idx = self._current_case_idx
+        self._cases.pop(idx)
+        if self._current_case_idx >= len(self._cases):
+            self._current_case_idx = len(self._cases) - 1
+        self._load_case(self._current_case_idx)
+        self._rebuild_case_tags()
+        self._update_calc_btn_text()
+        InfoBar.success(title="已删除", content=f"工况{idx + 1} 已删除，当前 {len(self._cases)} 个工况",
+                        parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
+
+    def _rebuild_case_tags(self):
+        if not hasattr(self, '_case_tag_flow'):
+            return
+        layout = self._case_tag_flow
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
+        for i, case in enumerate(self._cases):
+            label = case.get('custom_label') or self._auto_label(case, i)
+            chip = _CaseTagChip(i, label, active=(i == self._current_case_idx))
+            chip.switched.connect(self._switch_case)
+            chip.renamed.connect(self._on_case_renamed)
+            layout.addWidget(chip)
+        n = len(self._cases)
+        self._case_count_label.setText(f"{n} 个计算工况")
+        self._case_tag_container.updateGeometry()
+        self._case_tag_container.update()
+
+    def _auto_label(self, case, idx):
+        stype = case.get('section_type', 'U形')
+        q_text = (case.get('Q', '') or '').strip() or '?'
+        return f"{stype}-Q{_sub(idx + 1)}={q_text}"
+
+    def _on_case_renamed(self, idx, new_name):
+        if 0 <= idx < len(self._cases):
+            self._cases[idx]['custom_label'] = new_name
+            self._rebuild_case_tags()
+
+    def _update_calc_btn_text(self):
+        n = len(self._cases)
+        if n <= 1:
+            self._calc_btn.setText("计算")
+        else:
+            self._calc_btn.setText(f"计算全部 ({n}个工况)")
+
+    def _on_q_text_changed(self, text):
+        if self._loading_case:
+            return
+        if not hasattr(self, '_cases'):
+            return
+        if 0 <= self._current_case_idx < len(self._cases):
+            self._cases[self._current_case_idx]['Q'] = text
+        self._rebuild_case_tags()
+
+    def _apply_to_all_cases(self):
+        self._save_current_case()
+        src = self._cases[self._current_case_idx]
+        keys = ('section_type', 'n', 'slope_inv', 'v_min', 'v_max',
+                'inc_checked', 'inc_pct', 'detail_checked',
+                'R', 'ratio', 'B', 'chamfer_angle', 'chamfer_len')
+        for i, case in enumerate(self._cases):
+            if i != self._current_case_idx:
+                for k in keys:
+                    case[k] = src[k]
+        n_copied = len(self._cases) - 1
+        if n_copied == 0:
+            InfoBar.warning(title="提示", content="当前只有一个工况，无需复制",
+                            parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
+            return
+        InfoBar.success(title="已复制", content=f"参数已复制到其余 {n_copied} 个工况",
+                        parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
+
+    def _copy_from_prev_case(self):
+        if self._current_case_idx == 0:
+            InfoBar.warning(title="提示", content="当前已是第一个工况",
+                            parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
+            return
+        self._save_current_case()
+        prev = self._cases[self._current_case_idx - 1]
+        curr = self._cases[self._current_case_idx]
+        for k in ('section_type', 'n', 'slope_inv', 'v_min', 'v_max',
+                   'inc_checked', 'inc_pct', 'detail_checked',
+                   'R', 'ratio', 'B', 'chamfer_angle', 'chamfer_len'):
+            curr[k] = prev[k]
+        self._load_case(self._current_case_idx)
+        InfoBar.success(title="已复制", content=f"已从工况{self._current_case_idx}复制参数",
+                        parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
+
+    # ================================================================
     # 计算
     # ================================================================
-    def _calculate(self):
-        stype = self.section_combo.currentText()
-        try:
-            Q = self._fval(self.Q_edit)
-            n = self._fval(self.n_edit)
-            slope_inv = self._fval(self.slope_edit)
-            v_min = self._fval(self.vmin_edit)
-            v_max = self._fval(self.vmax_edit)
+    def _parse_and_calc_case(self, case, case_num):
+        """解析单个工况并执行计算，返回 (input_params, result)"""
+        def _fv(key, label, must_positive=True):
+            t = (case.get(key, '') or '').strip()
+            if not t:
+                raise ValueError(f"工况{case_num}: 请输入{label}")
+            try:
+                v = float(t)
+            except ValueError:
+                raise ValueError(f"工况{case_num}: {label}输入无效")
+            if must_positive and v <= 0:
+                raise ValueError(f"工况{case_num}: {label}必须大于0")
+            return v
 
-            if Q <= 0:
-                self._show_error("参数错误", "请输入有效的设计流量 Q（必须大于0）。"); return
-            if n <= 0:
-                self._show_error("参数错误", "请输入有效的糙率 n（必须大于0）。"); return
-            if slope_inv <= 0:
-                self._show_error("参数错误", "请输入有效的水力坡降倒数（必须大于0）。"); return
-            if v_min >= v_max:
-                self._show_error("参数错误", "不淤流速必须小于不冲流速。"); return
+        def _fv_opt(key):
+            t = (case.get(key, '') or '').strip()
+            if not t:
+                return None
+            try:
+                return float(t)
+            except ValueError:
+                return None
 
-            use_increase = self.inc_cb.isChecked()
-            manual_increase = self._fval_opt(self.inc_edit) if use_increase else 0
+        stype = case.get('section_type', 'U形')
+        Q = _fv('Q', '设计流量 Q')
+        n = _fv('n', '糙率 n')
+        slope_inv = _fv('slope_inv', '水力坡降倒数')
+        v_min = _fv('v_min', '不淤流速', must_positive=False)
+        v_max = _fv('v_max', '不冲流速', must_positive=False)
+        if v_min >= v_max:
+            raise ValueError(f"工况{case_num}: 不淤流速必须小于不冲流速")
 
-            if stype == "U形":
-                manual_R = self._fval_opt(self.R_edit)
-                self.input_params = {
-                    'Q': Q, 'n': n, 'slope_inv': slope_inv,
-                    'v_min': v_min, 'v_max': v_max,
-                    'section_type': stype,
-                    'manual_R': manual_R,
-                    'manual_increase': manual_increase,
-                    'use_increase': use_increase
-                }
-                result = quick_calculate_u(
-                    Q=Q, n=n, slope_inv=slope_inv,
-                    v_min=v_min, v_max=v_max,
-                    manual_R=manual_R,
-                    manual_increase_percent=manual_increase
-                )
+        use_increase = case.get('inc_checked', True)
+        manual_increase = _fv_opt('inc_pct') if use_increase else 0
+
+        if stype == "U形":
+            manual_R = _fv_opt('R')
+            params = {
+                'Q': Q, 'n': n, 'slope_inv': slope_inv,
+                'v_min': v_min, 'v_max': v_max,
+                'section_type': stype,
+                'manual_R': manual_R,
+                'detail_checked': case.get('detail_checked', True),
+                'manual_increase': manual_increase,
+                'use_increase': use_increase
+            }
+            result = quick_calculate_u(
+                Q=Q, n=n, slope_inv=slope_inv,
+                v_min=v_min, v_max=v_max,
+                manual_R=manual_R,
+                manual_increase_percent=manual_increase
+            )
+        else:
+            manual_B = _fv_opt('B')
+            depth_width_ratio = _fv_opt('ratio')
+            chamfer_angle_txt = (case.get('chamfer_angle', '') or '').strip()
+            chamfer_len_txt = (case.get('chamfer_len', '') or '').strip()
+            has_angle = bool(chamfer_angle_txt)
+            has_len = bool(chamfer_len_txt)
+            if has_angle != has_len:
+                chamfer_angle = 0
+                chamfer_length = 0
             else:
-                manual_B = self._fval_opt(self.B_edit)
-                depth_width_ratio = self._fval_opt(self.ratio_edit)
-
-                # 倒角参数完整性检查
-                chamfer_angle_txt = self.chamfer_angle_edit.text().strip()
-                chamfer_len_txt = self.chamfer_len_edit.text().strip()
-                has_angle = bool(chamfer_angle_txt)
-                has_len = bool(chamfer_len_txt)
-
-                if has_angle != has_len:
-                    filled = "倒角角度" if has_angle else "倒角底边长"
-                    missing = "倒角底边长" if has_angle else "倒角角度"
-                    ignore = fluent_question(
-                        self.window(),
-                        "倒角参数不完整",
-                        f"您填写了「{filled}」但未填写「{missing}」。\n\n"
-                        f"点击「忽略倒角继续」将按普通矩形断面计算；\n"
-                        f"点击「返回补全」可补全参数后重新计算。",
-                        yes_text="忽略倒角继续",
-                        no_text="返回补全"
-                    )
-                    if not ignore:
-                        return
+                try:
+                    chamfer_angle = float(chamfer_angle_txt) if chamfer_angle_txt else 0
+                    chamfer_length = float(chamfer_len_txt) if chamfer_len_txt else 0
+                except ValueError:
                     chamfer_angle = 0
                     chamfer_length = 0
-                else:
-                    chamfer_angle = self._fval(self.chamfer_angle_edit, 0)
-                    chamfer_length = self._fval(self.chamfer_len_edit, 0)
-                self.input_params = {
-                    'Q': Q, 'n': n, 'slope_inv': slope_inv,
-                    'v_min': v_min, 'v_max': v_max,
-                    'section_type': stype,
-                    'manual_B': manual_B,
-                    'depth_width_ratio': depth_width_ratio,
-                    'chamfer_angle': chamfer_angle,
-                    'chamfer_length': chamfer_length,
-                    'manual_increase': manual_increase,
-                    'use_increase': use_increase
-                }
-                result = quick_calculate_rect(
-                    Q=Q, n=n, slope_inv=slope_inv,
-                    v_min=v_min, v_max=v_max,
-                    depth_width_ratio=depth_width_ratio,
-                    chamfer_angle=chamfer_angle,
-                    chamfer_length=chamfer_length,
-                    manual_increase_percent=manual_increase,
-                    manual_B=manual_B
-                )
+            params = {
+                'Q': Q, 'n': n, 'slope_inv': slope_inv,
+                'v_min': v_min, 'v_max': v_max,
+                'section_type': stype,
+                'manual_B': manual_B,
+                'depth_width_ratio': depth_width_ratio,
+                'chamfer_angle': chamfer_angle,
+                'chamfer_length': chamfer_length,
+                'detail_checked': case.get('detail_checked', True),
+                'manual_increase': manual_increase,
+                'use_increase': use_increase
+            }
+            result = quick_calculate_rect(
+                Q=Q, n=n, slope_inv=slope_inv,
+                v_min=v_min, v_max=v_max,
+                depth_width_ratio=depth_width_ratio,
+                chamfer_angle=chamfer_angle,
+                chamfer_length=chamfer_length,
+                manual_increase_percent=manual_increase,
+                manual_B=manual_B
+            )
+        return params, result
 
-            self.current_result = result
+    def _calculate(self):
+        self._save_current_case()
+        self._all_results = []
+        errors = []
 
-            # 更新加大比例提示
-            if use_increase and result.get('success') and 'increase_percent' in result:
-                ap = result['increase_percent']
-                src = "指定" if self.inc_edit.text().strip() else "自动计算"
-                self.inc_hint.setText(f"({src}: {ap:.1f}%)")
+        for i, case in enumerate(self._cases):
+            try:
+                params, result = self._parse_and_calc_case(case, i + 1)
+                self._all_results.append((i, params, result))
+            except (ValueError, TypeError) as ex:
+                msg = str(ex)
+                errors.append(msg)
+                q_text = str(case.get('Q', '') or '').strip()
+                try:
+                    q_val = float(q_text) if q_text else 0.0
+                except Exception:
+                    q_val = 0.0
+                self._all_results.append((
+                    i,
+                    {
+                        'section_type': case.get('section_type', 'U形'),
+                        'Q': q_val,
+                    },
+                    {'success': False, 'error_message': msg}
+                ))
+            except Exception as ex:
+                msg = f"工况{i+1}: 计算出错 - {str(ex)}"
+                errors.append(msg)
+                q_text = str(case.get('Q', '') or '').strip()
+                try:
+                    q_val = float(q_text) if q_text else 0.0
+                except Exception:
+                    q_val = 0.0
+                self._all_results.append((
+                    i,
+                    {
+                        'section_type': case.get('section_type', 'U形'),
+                        'Q': q_val,
+                    },
+                    {'success': False, 'error_message': msg}
+                ))
 
-            self._update_result_display(result)
-            self._update_section_plot(result)
+        if errors:
+            InfoBar.error(title="输入错误", content="\n".join(errors),
+                          parent=self._info_parent(), position=InfoBarPosition.TOP, duration=6000)
+        if not self._all_results:
+            return
 
-        except Exception as e:
-            self._show_error("计算错误", f"计算过程出错: {str(e)}")
+        # 兼容旧属性
+        _, first_params, first_result = self._all_results[0]
+        self.input_params = first_params
+        self.current_result = first_result
+
+        # 显示结果
+        self._display_all_results()
+        self.data_changed.emit()
+
+    def _display_all_results(self):
+        _multi = len(self._all_results) > 1
+        all_plain_parts = []
+        collect_only = _multi
+        if collect_only:
+            self._suppress_result_render = True
+
+        try:
+            for case_idx, params, result in self._all_results:
+                self.input_params = params
+                self.current_result = result
+                self._update_result_display(result)
+                plain = self._export_plain_text or ''
+                if _multi:
+                    stype = params.get('section_type', 'U形')
+                    q_val = params.get('Q', 0.0)
+                    try:
+                        q_val = float(q_val)
+                    except Exception:
+                        q_val = 0.0
+                    header = f"【工况 {case_idx + 1}｜{stype}断面｜Q = {q_val:.3f} m³/s】"
+                    plain = header + "\n\n" + plain
+                all_plain_parts.append(plain)
+        finally:
+            if collect_only:
+                self._suppress_result_render = False
+
+        # 恢复到第一个结果
+        _, first_params, first_result = self._all_results[0]
+        self.input_params = first_params
+        self.current_result = first_result
+
+        combined_text = "\n\n".join(all_plain_parts)
+        self._export_plain_text = combined_text
+
+        if _multi:
+            self._render_result_html(plain_text_to_formula_html(combined_text))
+
+        self._update_section_plot_all()
+
+    def _update_section_plot_all(self):
+        success_results = [(ci, p, r) for ci, p, r in self._all_results if r.get('success')]
+        if not success_results:
+            self.section_fig.clear()
+            self.section_canvas.draw()
+            return
+        if len(success_results) == 1:
+            _, p, r = success_results[0]
+            self.input_params = p
+            self._update_section_plot(r)
+            return
+        self.section_fig.clear()
+        n = len(success_results)
+        ncols = min(n, 3)
+        nrows = (n + ncols - 1) // ncols
+        axes = self.section_fig.subplots(nrows, ncols, squeeze=False)
+        for idx_r, (ci, p, r) in enumerate(success_results):
+            row, col = divmod(idx_r, ncols)
+            ax = axes[row][col]
+            stype = p.get('section_type', 'U形')
+            Q = p['Q']
+            ax.set_title(f"工况{ci+1} {stype}\nQ={Q:.2f}", fontsize=9)
+            if stype == 'U形' and r.get('R'):
+                R = r.get('R', 1)
+                h = r.get('h_design', R)
+                theta = np.linspace(-np.pi/2, np.pi/2, 50)
+                ax.plot(R * np.cos(theta), R * np.sin(theta) + R, 'b-', lw=1.5)
+                ax.plot([-R, -R], [R, R + h - R if h > R else R], 'b-', lw=1.5)
+                ax.plot([R, R], [R, R + h - R if h > R else R], 'b-', lw=1.5)
+            elif stype == '矩形':
+                B = r.get('B', 1)
+                H = r.get('H', 1)
+                ax.plot([-B/2, -B/2, B/2, B/2], [0, H, H, 0], 'b-', lw=1.5)
+                ax.plot([-B/2, B/2], [0, 0], 'b-', lw=1.5)
+            ax.set_aspect('equal')
+            ax.grid(True, alpha=0.3)
+        for idx_r in range(n, nrows * ncols):
+            row, col = divmod(idx_r, ncols)
+            axes[row][col].set_visible(False)
+        self.section_fig.tight_layout()
+        self.section_canvas.draw()
 
     def _show_error(self, title, msg):
         out = []
@@ -459,7 +844,15 @@ class AqueductPanel(QWidget):
         out.append("-" * 70)
         out.append("请修正后重新计算。")
         out.append("=" * 70)
-        self.result_text.setHtml(make_plain_html("\n".join(out)))
+        self._export_plain_text = "\n".join(out)
+        if not self._suppress_result_render:
+            self.result_text.setHtml(make_plain_html("\n".join(out)))
+
+    def _render_result_html(self, html):
+        """统一结果页渲染入口，支持批量收集时抑制中间渲染。"""
+        if self._suppress_result_render:
+            return
+        load_formula_page(self.result_text, html)
 
     # ================================================================
     # 结果显示分发
@@ -468,8 +861,8 @@ class AqueductPanel(QWidget):
         if not result['success']:
             self._show_error("计算失败", result.get('error_message', '未知错误'))
             return
-        stype = result.get('section_type', 'U形')
-        detail = self.detail_cb.isChecked()
+        stype = self.input_params.get('section_type', result.get('section_type', 'U形'))
+        detail = self.input_params.get('detail_checked', self.detail_cb.isChecked())
         if stype == 'U形':
             if detail: self._show_u_detail(result)
             else: self._show_u_brief(result)
@@ -567,7 +960,7 @@ class AqueductPanel(QWidget):
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt
-        load_formula_page(self.result_text, plain_text_to_formula_html(txt))
+        self._render_result_html(plain_text_to_formula_html(txt))
 
     # ================================================================
     # U形 - 详细结果
@@ -845,7 +1238,7 @@ class AqueductPanel(QWidget):
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt
-        load_formula_page(self.result_text, plain_text_to_formula_html(txt))
+        self._render_result_html(plain_text_to_formula_html(txt))
 
     # ================================================================
     # 矩形 - 简要结果
@@ -940,7 +1333,7 @@ class AqueductPanel(QWidget):
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt
-        load_formula_page(self.result_text, plain_text_to_formula_html(txt))
+        self._render_result_html(plain_text_to_formula_html(txt))
 
     # ================================================================
     # 矩形 - 详细结果
@@ -1281,7 +1674,7 @@ class AqueductPanel(QWidget):
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt
-        load_formula_page(self.result_text, plain_text_to_formula_html(txt))
+        self._render_result_html(plain_text_to_formula_html(txt))
 
     # ================================================================
     # 断面图
@@ -1464,11 +1857,18 @@ class AqueductPanel(QWidget):
     # 清空
     # ================================================================
     def _clear(self):
+        self._cases = [self._default_case()]
+        self._current_case_idx = 0
+        self._all_results = []
+        self._load_case(0)
+        self._rebuild_case_tags()
+        self._update_calc_btn_text()
         self._show_initial_help()
         self.section_fig.clear()
         self.section_canvas.draw()
         self.inc_hint.setText("(留空则自动计算)")
         self.current_result = None
+        self._export_plain_text = ""
 
     # ================================================================
     # 导出
@@ -1528,20 +1928,25 @@ class AqueductPanel(QWidget):
                 "Word导出需要安装 python-docx、latex2mathml、lxml。请执行: pip install python-docx latex2mathml lxml",
                 parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
             return
-        if not self.current_result or not self.current_result.get('success'):
+        if not self._all_results:
             InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
-        stype = self.current_result.get('section_type', 'U形')
+        stype = self.input_params.get('section_type', 'U形')
         channel_name = getattr(self, '_channel_name', '')
         meta = load_meta()
         auto_purpose = build_calc_purpose('aqueduct', project=meta.project_name, name=channel_name, section_type=stype)
-        dlg = ExportConfirmDialog('aqueduct', '渡槽水力计算书', auto_purpose, parent=self._info_parent())
+        n_cases = len(self._all_results)
+        current_label = self._auto_label(self._cases[self._current_case_idx], self._current_case_idx) if self._cases else '工况1'
+        dlg = ExportConfirmDialog('aqueduct', '渡槽水力计算书', auto_purpose,
+                                  parent=self._info_parent(),
+                                  n_cases=n_cases, current_case_label=current_label)
         from PySide6.QtWidgets import QDialog
         if dlg.exec() != QDialog.Accepted:
             return
         self._word_export_meta = dlg.get_meta()
         self._word_export_purpose = dlg.get_calc_purpose()
         self._word_export_refs = dlg.get_references()
+        self._word_export_scope = dlg.get_export_scope() if n_cases > 1 else 'all'
         filepath, _ = QFileDialog.getSaveFileName(self, "保存Word报告", "", "Word文档 (*.docx);;所有文件 (*.*)")
         if not filepath: return
         try:
@@ -1554,38 +1959,67 @@ class AqueductPanel(QWidget):
             InfoBar.error("导出失败", str(e), parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
     def _build_word_report(self, filepath):
-        """构建Word报告文档（工程产品运行卡格式）"""
-        res = self.current_result
-        stype = res.get('section_type', 'U形')
-        method = res.get('design_method', '')
+        """构建Word报告文档（工程产品运行卡格式），支持多工况"""
         meta = getattr(self, '_word_export_meta', load_meta())
         purpose = getattr(self, '_word_export_purpose', '')
         refs = getattr(self, '_word_export_refs', REFERENCES_BASE.get('aqueduct', []))
+        scope = getattr(self, '_word_export_scope', 'all')
+
+        if scope == 'current':
+            export_results = [(ci, p, r) for ci, p, r in self._all_results if ci == self._current_case_idx]
+        else:
+            export_results = list(self._all_results)
+
+        n_export = len(export_results)
+        first_stype = export_results[0][1].get('section_type', 'U形') if export_results else 'U形'
+        if n_export == 1:
+            content_desc = f'渡槽水力断面设计计算（{first_stype}断面）'
+        else:
+            content_desc = f'渡槽水力断面设计计算（{n_export}个工况）'
 
         doc = create_engineering_report_doc(
             meta=meta,
             calc_title='渡槽水力计算书',
-            calc_content_desc=f'渡槽水力断面设计计算（{stype}断面）',
+            calc_content_desc=content_desc,
             calc_purpose=purpose,
             references=refs,
-            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n渡槽水力计算（{stype}断面 · {method}）',
+            calc_program_text=f'渠系建筑物水力计算系统 V1.0\n{content_desc}',
         )
         doc.add_page_break()
 
         # 5. 基础公式
         doc_add_eng_h(doc, '5、基础公式')
         doc_add_formula(doc, r'Q = \frac{1}{n} \cdot A \cdot R^{2/3} \cdot i^{1/2}', '曼宁公式：')
-        if stype == 'U形':
-            doc_add_formula(doc, r'B = 2R', '槽宽：')
-            doc_add_formula(doc, r'H = f + R', '槽高：')
-        else:
-            doc_add_formula(doc, r'A = B \cdot h', '过水面积：')
-            doc_add_formula(doc, r'P = B + 2h', '湿周：')
+        stypes_used = set(p.get('section_type', 'U形') for _, p, _ in export_results)
+        if 'U形' in stypes_used:
+            doc_add_formula(doc, r'B = 2R', 'U形槽宽：')
+            doc_add_formula(doc, r'H = f + R', 'U形槽高：')
+        if '矩形' in stypes_used:
+            doc_add_formula(doc, r'A = B \cdot h', '矩形过水面积：')
+            doc_add_formula(doc, r'P = B + 2h', '矩形湿周：')
         doc_add_formula(doc, r'R_{hyd} = \frac{A}{P}', '水力半径：')
 
         # 6. 计算过程
         doc_add_eng_h(doc, '6、计算过程')
-        doc_render_calc_text_eng(doc, self._export_plain_text or '', skip_title_keyword='渡槽水力计算结果')
+        _multi = n_export > 1
+
+        for ri, (case_idx, params, result) in enumerate(export_results):
+            if not result.get('success'):
+                doc_add_eng_body(doc, f'工况{case_idx+1}: 计算失败 - {result.get("error_message", "未知错误")}')
+                continue
+            stype = params.get('section_type', 'U形')
+            if _multi:
+                doc_add_eng_h(doc, f'6.{ri+1}、工况{case_idx+1} ({stype}断面, Q={params["Q"]:.3f} m³/s)')
+            self.input_params = params
+            self.current_result = result
+            self._update_result_display(result)
+            calc_text = self._export_plain_text or ''
+            doc_render_calc_text_eng(doc, calc_text, skip_title_keyword='渡槽水力计算结果')
+
+        # 恢复
+        _, first_p, first_r = export_results[0] if export_results else self._all_results[0]
+        self.input_params = first_p
+        self.current_result = first_r
 
         # 7. 断面图
         try:
@@ -1599,3 +2033,45 @@ class AqueductPanel(QWidget):
             pass
 
         doc.save(filepath)
+
+    # ================================================================
+    # 项目序列化
+    # ================================================================
+    def to_project_dict(self):
+        self._save_current_case()
+        return {
+            'cases': copy.deepcopy(self._cases),
+            'current_case_idx': self._current_case_idx,
+            'all_results': copy.deepcopy(self._all_results),
+            'current_result': copy.deepcopy(self.current_result),
+            'input_params': copy.deepcopy(getattr(self, 'input_params', None)),
+            'notebook_idx': self.notebook.currentIndex() if hasattr(self, 'notebook') else 0,
+        }
+
+    def from_project_dict(self, data):
+        cases = data.get('cases')
+        if not cases or not isinstance(cases, list):
+            return
+        self._cases = cases
+        self._current_case_idx = min(data.get('current_case_idx', 0), len(self._cases) - 1)
+        self._load_case(self._current_case_idx)
+        self._rebuild_case_tags()
+        self._update_calc_btn_text()
+        self._all_results = data.get('all_results', []) or []
+        self.current_result = data.get('current_result')
+        self.input_params = data.get('input_params') or {}
+        if self._all_results:
+            try:
+                self._display_all_results()
+            except Exception:
+                self._all_results = []
+                self.current_result = None
+                self._show_initial_help()
+        else:
+            self.current_result = None
+            self._show_initial_help()
+        if hasattr(self, 'notebook'):
+            idx = data.get('notebook_idx')
+            if isinstance(idx, int):
+                idx = max(0, min(idx, self.notebook.count() - 1))
+                self.notebook.setCurrentIndex(idx)

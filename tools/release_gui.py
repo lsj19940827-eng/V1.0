@@ -9,11 +9,9 @@ PySide6 + qfluentwidgets 界面，一键完成：
     python tools/release_gui.py
 """
 
-import base64
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -48,7 +46,6 @@ from version import APP_VERSION, APP_NAME, APP_NAME_EN
 # ---- 从 repo_config 读取配置 ----
 from repo_config import (
     GITHUB_OWNER, GITHUB_REPO, GIST_ID,
-    GITEE_OWNER, GITEE_REPO, LAN_UPDATE_DIR,
 )
 
 # ---- 样式常量 ----
@@ -182,19 +179,6 @@ def _upload_release_asset(upload_url, file_path, token, bridge=None):
 # ============================================================
 def _run_release(level: str, changelog: str, bridge: SignalBridge):
     """在子线程中执行完整发版流程"""
-    steps = [
-        "验证 Token",
-        "递增版本号",
-        "PyInstaller 打包",
-        "Git commit & tag & push",
-        "创建 GitHub Release",
-        "上传发布包到 GitHub",
-        "更新 GitHub Gist",
-        "发布到 Gitee（国内源）",
-        "更新 Gitee version.json",
-        "同步到局域网共享",
-    ]
-
     def log(msg, color=""):
         bridge.log_signal.emit(msg, color)
 
@@ -340,119 +324,6 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
         _github_api("PATCH", gist_url, token, data=gist_data)
         log("Gist version.json 更新成功", S)
         set_step(6, "done")
-
-        # ---- 7. 发布到 Gitee ----
-        set_step(7, "running")
-        gitee_token = os.environ.get("GITEE_TOKEN", "") or _load_env().get("GITEE_TOKEN", "")
-        gitee_urls = {}
-        if gitee_token:
-            try:
-                rel_url = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/releases"
-                rel_data = urllib.parse.urlencode({
-                    "access_token": gitee_token,
-                    "tag_name": f"v{new_ver}",
-                    "name": f"V{new_ver}",
-                    "body": changelog or f"V{new_ver} 版本发布",
-                    "target_commitish": "master",
-                }).encode("utf-8")
-                req = urllib.request.Request(rel_url, data=rel_data, method="POST")
-                req.add_header("Content-Type", "application/x-www-form-urlencoded")
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    gitee_rel = json.loads(resp.read().decode("utf-8"))
-                gitee_rel_id = gitee_rel["id"]
-                log("Gitee Release 创建成功", S)
-
-                def _upload_to_gitee(file_path: str) -> str:
-                    fname = os.path.basename(file_path)
-                    log(f"上传到 Gitee: {fname}...")
-                    boundary = "----CanalBoundary"
-                    body = f"--{boundary}\r\nContent-Disposition: form-data; name=\"access_token\"\r\n\r\n{gitee_token}\r\n".encode()
-                    body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{fname}\"\r\nContent-Type: application/zip\r\n\r\n".encode()
-                    with open(file_path, "rb") as f:
-                        body += f.read()
-                    body += f"\r\n--{boundary}--\r\n".encode()
-                    up_url = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/releases/{gitee_rel_id}/attach_files"
-                    req = urllib.request.Request(up_url, data=body, method="POST")
-                    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-                    with urllib.request.urlopen(req, timeout=600) as resp:
-                        asset = json.loads(resp.read().decode("utf-8"))
-                    log(f"Gitee 上传完成: {fname}", S)
-                    return asset.get("browser_download_url", "")
-
-                gitee_urls["download_url"] = _upload_to_gitee(full_zip)
-
-                if patch_zip and os.path.exists(patch_zip):
-                    gitee_urls["patch_url"] = _upload_to_gitee(patch_zip)
-            except Exception as e:
-                log(f"Gitee 发布失败: {e}（不影响 GitHub）", W)
-        else:
-            log("未配置 GITEE_TOKEN，跳过 Gitee", W)
-        set_step(7, "done")
-
-        # ---- 8. 更新 Gitee version.json ----
-        set_step(8, "running")
-        if gitee_token and gitee_urls:
-            try:
-                gvdata = {
-                    "latest_version": new_ver,
-                    "download_url": gitee_urls.get("download_url", ""),
-                    "changelog": changelog or f"V{new_ver} 版本发布",
-                    "release_date": date.today().isoformat(),
-                    "min_version": "1.0.0",
-                    "file_size_mb": round(full_mb, 1),
-                }
-                if "patch_url" in gitee_urls and patch_zip:
-                    gitee_patch_size = os.path.getsize(patch_zip) / (1024 * 1024)
-                    gvdata["patch_url"] = gitee_urls["patch_url"]
-                    gvdata["patch_size_mb"] = round(gitee_patch_size, 2)
-                    gvdata["min_patch_version"] = patch_min_version
-                content_b64 = base64.b64encode(
-                    json.dumps(gvdata, ensure_ascii=False, indent=4).encode("utf-8")
-                ).decode("ascii")
-                sha = ""
-                try:
-                    gurl = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/contents/version.json?access_token={gitee_token}"
-                    req = urllib.request.Request(gurl)
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        sha = json.loads(resp.read().decode("utf-8")).get("sha", "")
-                except Exception:
-                    pass
-                api_url = f"https://gitee.com/api/v5/repos/{GITEE_OWNER}/{GITEE_REPO}/contents/version.json"
-                pd = {"access_token": gitee_token, "content": content_b64, "message": f"update to v{new_ver}"}
-                if sha:
-                    pd["sha"] = sha
-                bd = json.dumps(pd).encode("utf-8")
-                req = urllib.request.Request(api_url, data=bd, method="PUT" if sha else "POST")
-                req.add_header("Content-Type", "application/json")
-                urllib.request.urlopen(req, timeout=15)
-                log("Gitee version.json 更新成功", S)
-            except Exception as e:
-                log(f"Gitee version.json 更新失败: {e}", W)
-        else:
-            log("跳过 Gitee version.json", W)
-        set_step(8, "done")
-
-        # ---- 9. 同步到局域网共享 ----
-        set_step(9, "running")
-        if os.path.isdir(LAN_UPDATE_DIR):
-            copied = set()
-            for src_path in [full_zip]:
-                if src_path and os.path.exists(src_path):
-                    dest = os.path.join(LAN_UPDATE_DIR, os.path.basename(src_path))
-                    shutil.copy2(src_path, dest)
-                    log(f"已复制: {os.path.basename(src_path)}", S)
-                    copied.add(os.path.abspath(src_path))
-            if patch_zip and os.path.exists(patch_zip):
-                dest = os.path.join(LAN_UPDATE_DIR, os.path.basename(patch_zip))
-                shutil.copy2(patch_zip, dest)
-                log(f"已复制: {os.path.basename(patch_zip)}", S)
-            vj_path = os.path.join(LAN_UPDATE_DIR, "version.json")
-            with open(vj_path, "w", encoding="utf-8") as f:
-                json.dump(version_json, f, ensure_ascii=False, indent=4)
-            log(f"局域网同步完成: {LAN_UPDATE_DIR}", S)
-        else:
-            log(f"局域网共享不可访问，跳过（同事仍可通过 GitHub 更新）", W)
-        set_step(9, "done")
 
         bridge.finished_signal.emit(True, f"V{new_ver} 发版完成！")
 

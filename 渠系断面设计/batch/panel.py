@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QMenu,
     QDialog, QDialogButtonBox, QGridLayout, QFormLayout,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
 
 from qfluentwidgets import (
@@ -123,7 +123,7 @@ SECTION_TYPES = [
     "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
     "渡槽-U形", "渡槽-矩形",
     "隧洞-圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
-    "矩形暗涵", "倒虹吸",
+    "矩形暗涵", "倒虹吸", "有压管道",
     "分水闸", "分水口", "节制闸", "泄水闸",
 ]
 
@@ -132,6 +132,7 @@ SECTION_TYPES = [
 #          9边坡系数m, 10底宽B, 11明渠宽深比, 12半径R, 13直径D,
 #          14矩形渡槽深宽比, 15倒角角度, 16倒角底边, 17圆心角, 18不淤流速, 19不冲流速,
 #          20转弯半径（平面弯道，不参与水力计算，透传到推求水面线）
+#          21管材（有压管道专用）, 22局部损失比例（有压管道专用）, 23进出口标识（有压管道专用）
 INPUT_HEADERS = [
     "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
     "Q(m³/s)", "糙率n", "比降(1/)",
@@ -139,6 +140,7 @@ INPUT_HEADERS = [
     "半径R(m)", "直径D(m)",
     "矩形渡槽深宽比", "倒角角度(°)", "倒角底边(m)", "圆心角(°)",
     "不淤流速", "不冲流速", "转弯半径(m)",
+    "管材",
 ]
 
 # 输入表头悬浮提示（与原版一致）
@@ -254,6 +256,50 @@ _HEADER_TOOLTIPS = {
         "  • 明渠：弯曲半径 ≥ 水面宽度 × 5\n"
         "  • 渡槽：弯道半径 ≥ 连接明渠渠底宽度 × 5"
     ),
+    "管材": (
+        "【管材（有压管道专用）】\n\n"
+        "定义：有压管道的管道材质，用于水头损失计算\n\n"
+        "▶ 怎么填？\n"
+        "  • 留空 → 默认使用 HDPE（高密度聚乙烯）\n"
+        "  • 填写材质名称或代号\n\n"
+        "▶ 支持的管材类型\n"
+        "  • HDPE / 高密度聚乙烯\n"
+        "  • 玻璃钢 / GRP\n"
+        "  • 球墨铸铁 / DI\n"
+        "  • 预应力混凝土 / PCCP\n"
+        "  • 钢管 / Steel\n\n"
+        "▶ 适用范围\n"
+        "  仅对「有压管道」类型生效"
+    ),
+    "局部损失比例": (
+        "【局部损失比例（有压管道专用）】\n\n"
+        "定义：采用沿程损失乘系数简化计算局部损失时的比例系数\n\n"
+        "▶ 怎么填？\n"
+        "  • 留空 → 使用详细计算方法（弯道ξ系数叠加）\n"
+        "  • 填写 0.05~0.3 → 采用简化计算 hl = k × hf\n\n"
+        "▶ 说明\n"
+        "  • 详细计算：根据各IP点转弯角度和弯道半径\n"
+        "    分别查表计算局部水头损失\n"
+        "  • 简化计算：局部损失 = 沿程损失 × 比例系数\n"
+        "    常用取值范围 5%~30%\n\n"
+        "▶ 适用范围\n"
+        "  仅对「有压管道」类型生效"
+    ),
+    "进出口标识": (
+        "【进出口标识（有压管道专用）】\n\n"
+        "定义：标识有压管道各行的位置类型\n\n"
+        "▶ 怎么填？\n"
+        "  • 进 → 管道进口行（第一行）\n"
+        "  • IP / IP1 / IP2... → 中间转折点\n"
+        "  • 出 → 管道出口行（最后一行）\n\n"
+        "▶ 多行管道结构示例\n"
+        "  行1: 管道名称, 有压管道, ..., 进\n"
+        "  行2: 管道名称, 有压管道, ..., IP1\n"
+        "  行3: 管道名称, 有压管道, ..., IP2\n"
+        "  行4: 管道名称, 有压管道, ..., 出\n\n"
+        "▶ 适用范围\n"
+        "  仅对「有压管道」类型生效"
+    ),
     "矩形渡槽深宽比": (
         "【矩形渡槽深宽比  α = H ÷ B】\n\n"
         "定义：渡槽槽身总高度 H 与槽宽 B 的比值\n"
@@ -288,6 +334,9 @@ RESULT_HEADERS = [
 
 class BatchPanel(QWidget):
     """多流量段批量水力计算面板"""
+
+    # 数据变化信号（用于项目管理器追踪脏状态）
+    data_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -382,7 +431,7 @@ class BatchPanel(QWidget):
         tb1.addWidget(lbl)
 
         btn_full = PrimaryPushButton("一键全流程计算"); btn_full.clicked.connect(self._one_click_full_flow)
-        btn_full.setToolTip("批量计算 → 导入 → 渐变段 → (倒虹吸) → 推求水面线")
+        btn_full.setToolTip("批量计算 → 导入 → 渐变段 → (倒虹吸) → (有压管道) → 推求水面线")
         self._btn_full = btn_full
         btn_calc = PrimaryPushButton("开始批量计算"); btn_calc.clicked.connect(self._batch_calculate)
         _sample_menu = RoundMenu(parent=self)
@@ -486,6 +535,9 @@ class BatchPanel(QWidget):
             self._pre_edit_snapshot = None
         if not self._loading_sample:
             self._is_sample_data = False
+        # 触发数据变化信号（除非正在加载项目）
+        if not getattr(self, '_loading_project', False):
+            self.data_changed.emit()
         if col == 1:
             # 流量段列被编辑，自动同步Q值
             seg_item = self.input_table.item(row, 1)
@@ -622,11 +674,11 @@ class BatchPanel(QWidget):
             act_del.triggered.connect(self._del_row)
             menu.addSeparator()
 
-            # 参数设置（仅非闸/倒虹吸类型可用）
+            # 参数设置（仅非闸/倒虹吸/有压管道类型可用）
             section_item = self.input_table.item(row, 3)
             section_type = section_item.text().strip() if section_item else ""
             act_param = menu.addAction("打开参数设置...")
-            if not section_type or "分水" in section_type or "闸" in section_type or "倒虹吸" in section_type:
+            if not section_type or "分水" in section_type or "闸" in section_type or "倒虹吸" in section_type or "有压管道" in section_type:
                 act_param.setEnabled(False)
             act_param.triggered.connect(lambda: self._open_parameter_dialog_for_row(row))
 
@@ -967,72 +1019,22 @@ class BatchPanel(QWidget):
         return rows
 
     def _add_sample_data(self):
-        """加载示例数据 - 来自多流量段表格填写示例.xlsx的完整数据（与原版一致，44行）"""
-        self._push_undo_snapshot()
-        self._undo_group += 1
-        self._loading_sample = True
-        # 列: 序号,流量段,建筑物名称,结构形式,X,Y,Q,n,比降,m,B,宽深比,R,D,渡槽深宽比,倒角角度,倒角底边,圆心角,不淤,不冲,转弯半径
-        samples = [
-            ["1",  "1", "-",      "明渠-矩形",       "649606.177086", "3377745.982674", "5", "0.014", "3000", "0",   "2",   "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["2",  "1", "-",      "明渠-矩形",       "649534.180449", "3377664.854614", "5", "0.014", "3000", "0",   "2",   "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["3",  "1", "-",      "明渠-矩形",       "649480.482814", "3377634.277101", "5", "0.014", "3000", "0",   "2",   "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["4",  "1", "土地垭", "隧洞-马蹄形Ⅰ型", "649478.323235", "3377610.807806", "5", "0.014", "2000", "",    "",    "", "1.5", "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["5",  "1", "土地垭", "隧洞-马蹄形Ⅰ型", "649441.884821", "3377556.331275", "5", "0.014", "2000", "",    "",    "", "1.5", "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["6",  "1", "-",      "明渠-梯形",       "649440.214195", "3377528.976904", "5", "0.014", "3000", "1",   "1.8", "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["7",  "1", "-",      "明渠-梯形",       "649419.568825", "3377522.66441",  "5", "0.014", "3000", "1",   "1.8", "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["8",  "1", "磨尔滩", "分水闸",           "649402.139216", "3377539.733849", "5", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["9",  "2", "-",      "明渠-梯形",       "649310.705602", "3377545.834305", "4", "0.014", "3000", "1",   "1.8", "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["10", "2", "沪蓉",   "倒虹吸",           "649264.563059", "3377548.912938", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["11", "2", "沪蓉",   "倒虹吸",           "649244.41293",  "3377550.257356", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["12", "2", "沪蓉",   "倒虹吸",           "649220.867829", "3377563.964679", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["13", "2", "沪蓉",   "倒虹吸",           "649184.732272", "3377556.518614", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["14", "2", "沪蓉",   "倒虹吸",           "649146.2872",   "3377588.1779",   "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["15", "2", "宋家沟", "隧洞-圆拱直墙型", "649104.399377", "3377613.995873", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
-            ["16", "2", "宋家沟", "隧洞-圆拱直墙型", "649098.598741", "3377595.290122", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
-            ["17", "2", "广岳",   "倒虹吸",           "649086.007282", "3377582.009467", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["18", "2", "广岳",   "倒虹吸",           "649066.369061", "3377577.838164", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["19", "2", "广岳",   "倒虹吸",           "649033.673293", "3377532.99707",  "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["20", "2", "广岳",   "倒虹吸",           "649018.983612", "3377482.347484", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["21", "2", "伍家沟", "隧洞-圆拱直墙型", "648991.829093", "3377453.363461", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
-            ["22", "2", "伍家沟", "隧洞-圆拱直墙型", "648969.028473", "3377444.44637",  "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
-            ["23", "2", "伍家沟", "隧洞-圆拱直墙型", "648918.161636", "3377447.833438", "4", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
-            ["24", "2", "刘家沟", "渡槽-矩形",       "648879.873566", "3377424.400731", "4", "0.014", "2000", "",    "",    "", "",    "",    "0.8", "30",  "0.3", "120", "0.1", "100", ""],
-            ["25", "2", "刘家沟", "渡槽-矩形",       "648873.319207", "3377389.201113", "4", "0.014", "2000", "",    "",    "", "",    "",    "0.8", "30",  "0.3", "120", "0.1", "100", ""],
-            ["26", "2", "广高路", "倒虹吸",           "648875.83158",  "3377349.478728", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["27", "2", "广高路", "倒虹吸",           "648859.515404", "3377325.867714", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["28", "2", "广高路", "倒虹吸",           "648823.413217", "3377328.752934", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["29", "2", "广高路", "倒虹吸",           "648778.747964", "3377306.056947", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["30", "2", "广高路", "倒虹吸",           "648742.967801", "3377279.279514", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["31", "2", "广高路", "倒虹吸",           "648740.770589", "3377262.028944", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["32", "2", "广高路", "倒虹吸",           "648704.058844", "3377256.358551", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["33", "2", "-",      "明渠-圆形",       "648687.241348", "3377234.03888",  "4", "0.014", "3000", "0",   "",    "", "",    "2.8", "",    "",    "",    "",    "0.1", "100", ""],
-            ["34", "2", "-",      "明渠-圆形",       "648677.298141", "3377230.295614", "4", "0.014", "3000", "0",   "",    "", "",    "2.8", "",    "",    "",    "",    "0.1", "100", ""],
-            ["35", "2", "台儿沟", "隧洞-圆形",       "648610.458063", "3377205.132683", "4", "0.014", "2000", "",    "",    "", "",    "2.6", "",    "",    "",    "",    "0.1", "100", ""],
-            ["36", "2", "美团沟", "分水闸",           "648588.193106", "3377182.717782", "4", "0.014", "",     "",    "",    "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["37", "3", "台儿沟", "隧洞-圆形",       "648359.767433", "3377105.690753", "3", "0.014", "2000", "",    "",    "", "",    "2.6", "",    "",    "",    "",    "0.1", "100", ""],
-            ["38", "3", "台儿沟", "隧洞-圆形",       "648259.932461", "3376966.162254", "3", "0.014", "2000", "",    "",    "", "",    "2.6", "",    "",    "",    "",    "0.1", "100", ""],
-            ["39", "3", "梨子园", "渡槽-U形",         "647962.330045", "3376909.650621", "3", "0.014", "1500", "",    "",    "", "1.6", "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["40", "3", "梨子园", "渡槽-U形",         "647644.538898", "3376595.606329", "3", "0.014", "1500", "",    "",    "", "1.6", "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["41", "3", "油房垭", "隧洞-圆拱直墙型", "647641.215709", "3376559.422576", "3", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
-            ["42", "3", "油房垭", "隧洞-圆拱直墙型", "647597.709292", "3376537.187663", "3", "0.014", "2000", "",    "2.5", "", "",    "",    "",    "",    "",    "120", "0.1", "100", ""],
-            ["43", "3", "-",      "矩形暗涵",         "647506.778347", "3376513.531331", "3", "0.014", "3000", "0",   "2.4", "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["44", "3", "-",      "矩形暗涵",         "647387.9806",   "3376403.8971",   "3", "0.014", "3000", "",    "2.4", "", "",    "",    "",    "",    "",    "",    "0.1", "100", ""],
-            ["45", "3", "-",      "明渠-U形",        "647350.0",      "3376350.0",      "3", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100", ""],
-            ["46", "3", "-",      "明渠-U形",        "647280.0",      "3376280.0",      "3", "0.014", "3000", "",    "",    "", "0.8", "",    "",    "14",  "", "152", "0.1", "100", ""],
-        ]
-        self._clear_input(force=True)
-        for row_data in samples:
-            self._add_row(row_data)
-        # 设置默认起始水位和流量段
-        self.start_wl_edit.setText("400")
-        self.flow_segments_edit.setText("5.0, 4.0, 3.0")
-        self._auto_detect_flow_segments()
-        auto_resize_table(self.input_table)
-        self._loading_sample = False
-        self._undo_group -= 1
-        self._is_sample_data = True
-        InfoBar.success("示例数据", f"已加载 {len(samples)} 行示例数据（含明渠/明渠-U形/隧洞/渡槽/暗涵/倒虹吸/分水闸）",
-                       parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+        """加载示例一：综合演示数据（从 data 目录读取 xlsx 文件）"""
+        path = self._get_sample1_path()
+        if not os.path.exists(path):
+            fluent_info(self, "错误", f"未找到示例一文件：\n{path}")
+            return
+        self._do_load_from_filepath(path, is_sample=True,
+                                    sample_title="示例一",
+                                    sample_desc="综合演示数据（含明渠/隧洞/渡槽/暗涵/倒虹吸/有压管道/分水闸）")
+
+    def _get_sample1_path(self):
+        """获取示例一xlsx文件路径（兼容开发环境和打包环境）"""
+        if getattr(sys, 'frozen', False):
+            base = sys._MEIPASS
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return os.path.join(base, "data", "多流量段批量计算_导入Excel（模板）.xlsx")
 
     def _add_sample_data_2(self):
         """加载示例二：龙塘马坝河分干渠数据（从data目录读取xlsx文件）"""
@@ -1128,7 +1130,7 @@ class BatchPanel(QWidget):
         self._main_window = main_window
 
     def _one_click_full_flow(self):
-        """一键全流程：批量计算 → 切换到推求水面线 → 导入 → 渐变段 → (倒虹吸) → 执行计算"""
+        """一键全流程：批量计算 → 切换到推求水面线 → 导入 → 渐变段 → (倒虹吸) → (有压管道) → 执行计算"""
         if not fluent_question(
             self, "一键全流程计算",
             "本功能将自动依次执行以下步骤：\n\n"
@@ -1136,7 +1138,8 @@ class BatchPanel(QWidget):
             "② 导入水面线 —— 将计算结果自动导入「推求水面线」模块\n"
             "③ 渐变段计算 —— 自动计算各渠段间的渐变段水头损失\n"
             "④ 倒虹吸计算 —— 若存在倒虹吸，自动纳入计算\n"
-            "⑤ 推求水面线 —— 执行全线水面线推算\n\n"
+            "⑤ 有压管道计算 —— 若存在有压管道，自动纳入计算\n"
+            "⑥ 推求水面线 —— 执行全线水面线推算\n\n"
             "是否继续？",
             yes_text="开始执行", no_text="取消",
         ):
@@ -1196,7 +1199,15 @@ class BatchPanel(QWidget):
         if has_siphon:
             wp._open_siphon_calculator(auto_run=True)
 
-        # ⑥ 执行计算
+        # ⑥ 若有有压管道则弹出对话框（模态，关闭后自动继续）
+        has_pressure_pipe = any(
+            getattr(n, 'structure_type', None) and "有压管道" in n.structure_type.value
+            for n in nodes if getattr(n, 'structure_type', None)
+        )
+        if has_pressure_pipe:
+            wp._open_pressure_pipe_calculator(auto_run=True)
+
+        # ⑦ 执行计算
         wp._calculate()
 
     # ================================================================
@@ -1269,6 +1280,35 @@ class BatchPanel(QWidget):
                     if self.detail_cb.isChecked():
                         detail_lines.append(f"【项目 {total_count}】")
                         detail_lines.append(self._gen_detail_report(values, siphon_result))
+                        detail_lines.append("\n" + "*" * 80 + "\n")
+                    continue
+
+                # 有压管道占位行
+                if section_type == "有压管道":
+                    row_out = ["-"] * len(RESULT_HEADERS)
+                    row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
+                    row_out[3] = "有压管道"; row_out[-1] = "⏭ 占位行(不参与计算)"
+                    result_rows.append(row_out)
+                    # 读取有压管道专用列（col 21-23）
+                    pipe_material = str(values[21]).strip() if len(values) > 21 else ""
+                    local_loss_ratio = self._sf(values[22], 0.0) if len(values) > 22 else 0.0
+                    in_out_raw = str(values[23]).strip() if len(values) > 23 else ""
+                    ppipe_result = {
+                        'success': True, 'section_type': '有压管道', 'is_pressure_pipe': True,
+                        'flow_section': segment, 'building_name': building_name,
+                        'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
+                        'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.014), 'slope_inv': 0,
+                        'D': self._sf(values[13], 0.0),  # 直径D用于有压管道
+                        'turn_radius': self._sf(values[20], 0.0) if len(values) > 20 else 0.0,
+                        'pipe_material': pipe_material,
+                        'local_loss_ratio': local_loss_ratio,
+                        'in_out_raw': in_out_raw,
+                    }
+                    self.batch_results.append({'input': values, 'result': ppipe_result})
+                    skip_count += 1
+                    if self.detail_cb.isChecked():
+                        detail_lines.append(f"【项目 {total_count}】")
+                        detail_lines.append(self._gen_detail_report(values, ppipe_result))
                         detail_lines.append("\n" + "*" * 80 + "\n")
                     continue
 
@@ -1382,7 +1422,7 @@ class BatchPanel(QWidget):
         # 汇总
         msg = f"总计: {total_count}条\n成功: {success_count}条\n失败: {fail_count}条"
         if skip_count > 0:
-            msg += f"\n跳过: {skip_count}条 (倒虹吸/闸类占位行不参与断面计算)"
+            msg += f"\n跳过: {skip_count}条 (倒虹吸/有压管道/闸类占位行不参与断面计算)"
         if error_details:
             fluent_batch_result(self, "批量计算完成 (存在异常)", msg, "\n\n".join(error_details))
         elif fail_count == 0:
@@ -1664,6 +1704,8 @@ class BatchPanel(QWidget):
         try:
             if "倒虹吸" in section_type:
                 return self._fmt_placeholder_report(input_vals, result, "倒虹吸")
+            if "有压管道" in section_type:
+                return self._fmt_pressure_pipe_report(input_vals, result)
             if "分水" in section_type or "闸" in section_type:
                 return self._fmt_diversion_gate_report(input_vals, result)
             if "明渠" in section_type:
@@ -1740,6 +1782,47 @@ class BatchPanel(QWidget):
         except ValueError:
             o.append(f"  {section_type}为流量段分界构筑物。")
         o.append("  该行不参与断面尺寸计算，在推求水面线模块中将产生过闸水头损失（默认0.2m）。")
+        return "\n".join(o)
+
+    def _fmt_pressure_pipe_report(self, input_vals, result):
+        """格式化有压管道占位行详细报告"""
+        segment = str(input_vals[1]).strip()
+        building_name = str(input_vals[2]).strip()
+        o = []
+        o.append("  ⏭ 有压管道占位行（不参与断面计算）")
+        o.append("")
+        o.append("【基本信息】")
+        channel_name = self.channel_name_edit.text().strip()
+        channel_level = self.channel_level_combo.currentText()
+        if channel_name:
+            o.append(f"  渠道: {channel_name} {channel_level}")
+        o.append(f"  管道名称: {building_name}")
+        o.append(f"  所在流量段: 第{segment}段")
+        coord_x = input_vals[4] if len(input_vals) > 4 else ""
+        coord_y = input_vals[5] if len(input_vals) > 5 else ""
+        if coord_x and coord_y and str(coord_x).strip() and str(coord_y).strip():
+            o.append(f"  坐标: X={coord_x}, Y={coord_y}")
+        # 有压管道专用参数
+        q_val = str(input_vals[6]).strip() if len(input_vals) > 6 and input_vals[6] else ""
+        d_val = str(input_vals[13]).strip() if len(input_vals) > 13 and input_vals[13] else ""
+        material = str(input_vals[21]).strip() if len(input_vals) > 21 and input_vals[21] else "未指定"
+        loss_ratio = str(input_vals[22]).strip() if len(input_vals) > 22 and input_vals[22] else ""
+        in_out = str(input_vals[23]).strip() if len(input_vals) > 23 and input_vals[23] else ""
+        o.append("")
+        o.append("【管道参数】")
+        if q_val:
+            o.append(f"  设计流量 Q = {q_val} m³/s")
+        if d_val:
+            o.append(f"  管道直径 D = {d_val} m")
+        o.append(f"  管材: {material if material else '未指定'}")
+        if loss_ratio:
+            o.append(f"  局部损失比例: {loss_ratio}")
+        if in_out:
+            o.append(f"  进出口标识: {in_out}")
+        o.append("")
+        o.append("【说明】")
+        o.append("  有压管道行作为占位行导入推求水面线模块，")
+        o.append("  需在【有压管道计算】窗口中完成水头损失计算后参与水面线推求。")
         return "\n".join(o)
 
     def _fmt_mingqu_report(self, input_vals, result):
@@ -2152,7 +2235,7 @@ class BatchPanel(QWidget):
         values = self._get_row_data(row_idx)
         values = self._normalize_row(values, len(INPUT_HEADERS))
         section_type = str(values[3]).strip()
-        if not section_type or "分水" in section_type or "闸" in section_type or "倒虹吸" in section_type:
+        if not section_type or "分水" in section_type or "闸" in section_type or "倒虹吸" in section_type or "有压管道" in section_type:
             InfoBar.info("提示", f"{section_type or '未设置类型'} 无需设置断面参数",
                         parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
             return
@@ -2557,7 +2640,7 @@ class BatchPanel(QWidget):
     def _update_lock_state(self, has_errors: bool):
         """根据计算是否存在失败条目，锁定或解锁导出/下游操作按钮。"""
         self._has_calc_errors = has_errors
-        _FULL_TIP = "批量计算 → 导入 → 渐变段 → (倒虹吸) → 推求水面线"
+        _FULL_TIP = "批量计算 → 导入 → 渐变段 → (倒虹吸) → (有压管道) → 推求水面线"
         _LOCK_TIP = "计算存在失败条目，请修复后重新执行「开始批量计算」，此按钮暂时锁定"
         for btn in [self._btn_export_excel, self._btn_export_word]:
             btn.setEnabled(not has_errors)
@@ -2973,14 +3056,17 @@ class BatchPanel(QWidget):
         total = len(self.batch_results)
         calc_count = sum(1 for it in self.batch_results
                          if it['result'].get('success') and not it['result'].get('is_siphon')
-                         and not it['result'].get('is_diversion_gate'))
+                         and not it['result'].get('is_diversion_gate') and not it['result'].get('is_pressure_pipe'))
         siphon_count = sum(1 for it in self.batch_results if it['result'].get('is_siphon'))
+        ppipe_count = sum(1 for it in self.batch_results if it['result'].get('is_pressure_pipe'))
         gate_count = sum(1 for it in self.batch_results if it['result'].get('is_diversion_gate'))
         overview_params.append(("建筑物总数", str(total)))
         if calc_count:
             overview_params.append(("参与计算", f"{calc_count} 条"))
         if siphon_count:
             overview_params.append(("倒虹吸占位", f"{siphon_count} 条"))
+        if ppipe_count:
+            overview_params.append(("有压管道占位", f"{ppipe_count} 条"))
         if gate_count:
             overview_params.append(("闸类占位", f"{gate_count} 条"))
         overview_params.append(("计算时间", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
@@ -3050,6 +3136,116 @@ class BatchPanel(QWidget):
         auto_resize_table(self.input_table)
         if hasattr(self, 'result_table'):
             auto_resize_table(self.result_table)
+
+    # ================================================================
+    # 项目文件序列化/反序列化（用于 .qxproj 项目保存功能）
+    # ================================================================
+    def to_project_dict(self) -> dict:
+        """
+        将批量计算面板数据序列化为字典
+        
+        用于 .qxproj 项目文件保存。
+        
+        Returns:
+            包含所有输入数据的字典
+        """
+        # 收集输入表格数据
+        input_rows = []
+        for row in range(self.input_table.rowCount()):
+            row_data = []
+            for col in range(self.input_table.columnCount()):
+                item = self.input_table.item(row, col)
+                row_data.append(item.text() if item else "")
+            input_rows.append(row_data)
+        
+        return {
+            "version": "1.0",
+            # 渠道基础信息
+            "channel_name": self.channel_name_edit.text().strip(),
+            "channel_level": self.channel_level_combo.currentText(),
+            "start_water_level": self.start_wl_edit.text().strip(),
+            "start_station": self.start_station_edit.text().strip(),
+            # 流量段设置
+            "flow_segments": self.flow_segments_edit.text().strip(),
+            # 计算选项
+            "inc_checked": self.inc_cb.isChecked(),
+            "detail_checked": self.detail_cb.isChecked(),
+            # 输入表格数据（21列 × N行）
+            "input_rows": input_rows,
+        }
+    
+    def from_project_dict(self, d: dict, skip_dirty_signal: bool = False):
+        """
+        从字典恢复批量计算面板数据
+        
+        用于 .qxproj 项目文件加载。
+        
+        Args:
+            d: 序列化的字典数据
+            skip_dirty_signal: 是否跳过脏状态信号（加载时应为True）
+        """
+        # 设置守卫标志，防止加载时触发脏状态
+        old_loading = getattr(self, '_loading_project', False)
+        self._loading_project = True
+        
+        try:
+            # 恢复渠道基础信息
+            channel_name = d.get("channel_name", "")
+            if channel_name:
+                self.channel_name_edit.setText(channel_name)
+            
+            channel_level = d.get("channel_level", "")
+            if channel_level:
+                idx = self.channel_level_combo.findText(channel_level)
+                if idx >= 0:
+                    self.channel_level_combo.setCurrentIndex(idx)
+            
+            start_wl = d.get("start_water_level", "")
+            if start_wl:
+                self.start_wl_edit.setText(start_wl)
+            
+            start_station = d.get("start_station", "")
+            if start_station:
+                self.start_station_edit.setText(start_station)
+            
+            # 恢复流量段设置
+            flow_segments = d.get("flow_segments", "")
+            if flow_segments:
+                self.flow_segments_edit.setText(flow_segments)
+            
+            # 恢复计算选项
+            self.inc_cb.setChecked(d.get("inc_checked", True))
+            self.detail_cb.setChecked(d.get("detail_checked", False))
+            
+            # 恢复输入表格数据
+            input_rows = d.get("input_rows", [])
+            if input_rows:
+                # 清空现有数据
+                self.input_table.setRowCount(0)
+                self.input_table.setRowCount(len(input_rows))
+                
+                for row_idx, row_data in enumerate(input_rows):
+                    for col_idx, cell_value in enumerate(row_data):
+                        if col_idx < self.input_table.columnCount():
+                            item = QTableWidgetItem(str(cell_value) if cell_value else "")
+                            # 序号列和结构形式列居中
+                            if col_idx in (0, 3):
+                                item.setTextAlignment(Qt.AlignCenter)
+                            self.input_table.setItem(row_idx, col_idx, item)
+            
+            # 清空计算结果（需要用户重新计算）
+            self.batch_results = []
+            self._detail_text_cache = ""
+            if hasattr(self, 'result_table'):
+                self.result_table.setRowCount(0)
+            if hasattr(self, 'detail_text'):
+                self.detail_text.clear()
+            
+            # 标记为非示例数据
+            self._is_sample_data = False
+            
+        finally:
+            self._loading_project = old_loading
 
 
 # ============================================================

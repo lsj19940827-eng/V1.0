@@ -111,6 +111,9 @@ class WaterProfileCalculator:
                 sv = node.structure_type.value if node.structure_type else ""
                 if sv == "倒虹吸":
                     node.is_inverted_siphon = True
+                # 标记有压管道
+                if "有压管道" in sv:
+                    node.is_pressure_pipe = True
             else:
                 # 普通明渠、分水闸等不标识进出口
                 node.in_out = InOutType.NORMAL
@@ -585,12 +588,12 @@ class WaterProfileCalculator:
         """判断是否为特殊建筑物（需要进出口标识）（使用 .value 字符串比较）
         
         与原版 StructureType.get_special_structures 保持一致：
-        隧洞、渡槽、倒虹吸、矩形暗涵需要进出口标识。
+        隧洞、渡槽、倒虹吸、有压管道、矩形暗涵需要进出口标识。
         """
         if structure_type is None:
             return False
         sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
-        special_keywords = ("隧洞", "渡槽", "倒虹吸", "暗涵")
+        special_keywords = ("隧洞", "渡槽", "倒虹吸", "有压管道", "暗涵")
         return any(kw in sv for kw in special_keywords)
     
     def _is_diversion_gate_sv(self, structure_type) -> bool:
@@ -603,6 +606,40 @@ class WaterProfileCalculator:
             return False
         sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
         return sv == "矩形暗涵"
+
+    def is_pressurized_flow_structure(self, node: ChannelNode) -> bool:
+        """
+        判断节点是否为有压流建筑物（倒虹吸或有压管道）
+
+        有压流建筑物的渐变段水头损失已包含在其自身的水力计算中，
+        因此需要在渐变段插入时标记 transition_skip_loss=True。
+
+        Args:
+            node: 渠道节点
+
+        Returns:
+            是否为有压流建筑物
+        """
+        if not node.structure_type:
+            return False
+        sv = node.structure_type.value if hasattr(node.structure_type, 'value') else str(node.structure_type)
+        return sv == "倒虹吸" or "有压管道" in sv
+
+    def is_pressure_pipe(self, node: ChannelNode) -> bool:
+        """
+        判断节点是否为有压管道
+
+        Args:
+            node: 渠道节点
+
+        Returns:
+            是否为有压管道
+        """
+        if not node.structure_type:
+            return False
+        sv = node.structure_type.value if hasattr(node.structure_type, 'value') else str(node.structure_type)
+        return "有压管道" in sv
+
     
     @staticmethod
     def _is_tunnel_or_aqueduct_str(structure_type_str: str) -> bool:
@@ -694,9 +731,11 @@ class WaterProfileCalculator:
         
         判断条件：
         1. node1必须是出口，node2必须是进口
-        2. 隧洞/渡槽/倒虹吸都需要渐变段行；倒虹吸侧的渐变段为占位行
-           （水头损失已含在倒虹吸水力计算中，通过 skip_loss 标记跳过计算）
-        3. 里程差 > 渐变段之和 时需要插入明渠段
+        2. 隧洞/渡槽/倒虹吸/有压管道都需要渐变段行；有压流建筑物侧的渐变段为占位行
+           （水头损失已含在有压流建筑物水力计算中，通过 skip_loss 标记跳过计算）
+        3. 有压管道 → 有压管道（同名同径）：不插入渐变段
+        4. 有压管道 → 有压管道（不同名）：插入渐变段，两侧都标记 skip_loss=True
+        5. 里程差 > 渐变段之和 时需要插入明渠段
         
         Args:
             node1: 前一节点（应为出口）
@@ -708,8 +747,8 @@ class WaterProfileCalculator:
                 'need_open_channel': bool,  # 是否需要明渠段
                 'need_transition_1': bool,  # 是否需要出口渐变段
                 'need_transition_2': bool,  # 是否需要进口渐变段
-                'skip_loss_transition_1': bool,  # 出口渐变段是否跳过损失计算（倒虹吸占位）
-                'skip_loss_transition_2': bool,  # 进口渐变段是否跳过损失计算（倒虹吸占位）
+                'skip_loss_transition_1': bool,  # 出口渐变段是否跳过损失计算（有压流占位）
+                'skip_loss_transition_2': bool,  # 进口渐变段是否跳过损失计算（有压流占位）
                 'transition_length_1': float,  # 出口渐变段长度估算
                 'transition_length_2': float,  # 进口渐变段长度估算
                 'distance': float,  # 里程差
@@ -745,23 +784,44 @@ class WaterProfileCalculator:
         if self._is_diversion_gate_type(node2.structure_type):
             return result
         
-        # 判断是否需要渐变段（隧洞/渡槽/倒虹吸都需要渐变段行）
+        # 特殊情况：有压管道 → 有压管道
+        # 如果两个节点都是有压管道，需要判断是否属于同一建筑物
+        is_node1_pressure_pipe = self.is_pressure_pipe(node1)
+        is_node2_pressure_pipe = self.is_pressure_pipe(node2)
+        
+        if is_node1_pressure_pipe and is_node2_pressure_pipe:
+            # 获取建筑物名称
+            name1 = node1.name if node1.name else ""
+            name2 = node2.name if node2.name else ""
+            
+            # 获取管径 D
+            diameter1 = node1.section_params.get("D", 0) if node1.section_params else 0
+            diameter2 = node2.section_params.get("D", 0) if node2.section_params else 0
+            
+            # 如果同名且同径，不插入渐变段
+            if name1 == name2 and abs(diameter1 - diameter2) < 0.001:
+                return result
+            
+            # 如果不同名，插入渐变段，两侧都标记 skip_loss=True
+            # （继续执行后续逻辑）
+        
+        # 判断是否需要渐变段（隧洞/渡槽/倒虹吸/有压管道都需要渐变段行）
         is_node1_tunnel_aqueduct = self._is_tunnel_or_aqueduct(node1.structure_type)
         is_node2_tunnel_aqueduct = self._is_tunnel_or_aqueduct(node2.structure_type)
-        sv1 = node1.structure_type.value if node1.structure_type else ""
-        sv2 = node2.structure_type.value if node2.structure_type else ""
-        is_node1_siphon = (sv1 == "倒虹吸")
-        is_node2_siphon = (sv2 == "倒虹吸")
+        
+        # 使用统一的有压流建筑物判断（倒虹吸或有压管道）
+        is_node1_pressurized = self.is_pressurized_flow_structure(node1)
+        is_node2_pressurized = self.is_pressurized_flow_structure(node2)
         
         is_node1_culvert = self._is_culvert_type(node1.structure_type)
         is_node2_culvert = self._is_culvert_type(node2.structure_type)
         
-        result['need_transition_1'] = is_node1_tunnel_aqueduct or is_node1_siphon or is_node1_culvert
-        result['need_transition_2'] = is_node2_tunnel_aqueduct or is_node2_siphon or is_node2_culvert
+        result['need_transition_1'] = is_node1_tunnel_aqueduct or is_node1_pressurized or is_node1_culvert
+        result['need_transition_2'] = is_node2_tunnel_aqueduct or is_node2_pressurized or is_node2_culvert
         
-        # 倒虹吸侧的渐变段为占位行，水头损失已包含在倒虹吸水力计算中
-        result['skip_loss_transition_1'] = is_node1_siphon
-        result['skip_loss_transition_2'] = is_node2_siphon
+        # 有压流建筑物（倒虹吸/有压管道）侧的渐变段为占位行，水头损失已包含在其水力计算中
+        result['skip_loss_transition_1'] = is_node1_pressurized
+        result['skip_loss_transition_2'] = is_node2_pressurized
         
         # 估算渐变段长度
         if result['need_transition_1']:
@@ -806,14 +866,14 @@ class WaterProfileCalculator:
         result['distance'] = gate_node.station_MC - exit_node.station_MC
         if result['distance'] <= 0:
             return result
-        sv1 = exit_node.structure_type.value if exit_node.structure_type else ""
-        is_siphon = (sv1 == "倒虹吸")
+        # 使用统一的有压流建筑物判断（倒虹吸或有压管道）
+        is_pressurized = self.is_pressurized_flow_structure(exit_node)
         result['need_transition_1'] = (
             self._is_tunnel_or_aqueduct(exit_node.structure_type)
-            or is_siphon
+            or is_pressurized
             or self._is_culvert_type(exit_node.structure_type)
         )
-        result['skip_loss_transition_1'] = is_siphon
+        result['skip_loss_transition_1'] = is_pressurized
         if result['need_transition_1']:
             result['transition_length_1'] = self._estimate_transition_length(exit_node, "出口")
         result['available_length'] = result['distance'] - result['transition_length_1']
@@ -844,14 +904,14 @@ class WaterProfileCalculator:
         result['distance'] = entry_node.station_MC - gate_node.station_MC
         if result['distance'] <= 0:
             return result
-        sv2 = entry_node.structure_type.value if entry_node.structure_type else ""
-        is_siphon = (sv2 == "倒虹吸")
+        # 使用统一的有压流建筑物判断（倒虹吸或有压管道）
+        is_pressurized = self.is_pressurized_flow_structure(entry_node)
         result['need_transition_2'] = (
             self._is_tunnel_or_aqueduct(entry_node.structure_type)
-            or is_siphon
+            or is_pressurized
             or self._is_culvert_type(entry_node.structure_type)
         )
-        result['skip_loss_transition_2'] = is_siphon
+        result['skip_loss_transition_2'] = is_pressurized
         if result['need_transition_2']:
             result['transition_length_2'] = self._estimate_transition_length(entry_node, "进口")
         result['available_length'] = result['distance'] - result['transition_length_2']
@@ -893,12 +953,12 @@ class WaterProfileCalculator:
             D = node.section_params.get("D", 3.0) if node.section_params else 3.0
             L_min = max(5 * h_design, 3 * D)
             return max(L_basic, L_min)
-        elif "倒虹吸" in struct_name:
-            # GB 50288-2018 §10.2.4：进口取上游渠道设计水深的3~5倍（取大值5倍）
-            #                        出口取下游渠道设计水深的4~6倍（取大值6倍）
-            # 倒虹吸直接按水深倍数确定，不使用基础公式 L=k×|B₁-B₂|
-            L_siphon = 5 * h_design if transition_type == "进口" else 6 * h_design
-            return L_siphon
+        elif "倒虹吸" in struct_name or "有压管道" in struct_name:
+            # GB 50288-2018 §10.2.4：有压流建筑物（倒虹吸/有压管道）使用相同公式
+            # 进口取上游渠道设计水深的3~5倍（取大值5倍）
+            # 出口取下游渠道设计水深的4~6倍（取大值6倍）
+            L_pressurized = 5 * h_design if transition_type == "进口" else 6 * h_design
+            return L_pressurized
         
         return L_basic
     
@@ -1294,11 +1354,18 @@ class WaterProfileCalculator:
         transition.flow = node1.flow
         transition.roughness = node1.roughness if node1.roughness > 0 else self.settings.roughness
         
-        # 根据渐变段类型选择对应的型式和ζ系数
+        # 有压流建筑物（倒虹吸/有压管道）侧复用倒虹吸渐变段配置
+        is_pressurized = self.is_pressurized_flow_structure(node1) or self.is_pressurized_flow_structure(node2)
         if transition_type == "进口":
-            form_attr, zeta_attr = 'transition_inlet_form', 'transition_inlet_zeta'
+            if is_pressurized:
+                form_attr, zeta_attr = 'siphon_transition_inlet_form', 'siphon_transition_inlet_zeta'
+            else:
+                form_attr, zeta_attr = 'transition_inlet_form', 'transition_inlet_zeta'
         else:
-            form_attr, zeta_attr = 'transition_outlet_form', 'transition_outlet_zeta'
+            if is_pressurized:
+                form_attr, zeta_attr = 'siphon_transition_outlet_form', 'siphon_transition_outlet_zeta'
+            else:
+                form_attr, zeta_attr = 'transition_outlet_form', 'transition_outlet_zeta'
         
         if hasattr(self.settings, form_attr) and getattr(self.settings, form_attr):
             transition.transition_form = getattr(self.settings, form_attr)
@@ -1336,15 +1403,17 @@ class WaterProfileCalculator:
         transition.flow = next_node.flow
         transition.roughness = next_node.roughness if next_node.roughness > 0 else self.settings.roughness
         
-        # 进口渐变段形式
-        if hasattr(self.settings, 'transition_inlet_form') and self.settings.transition_inlet_form:
-            transition.transition_form = self.settings.transition_inlet_form
+        # 进口渐变段形式：有压流建筑物复用倒虹吸配置
+        form_attr = 'siphon_transition_inlet_form' if self.is_pressurized_flow_structure(next_node) else 'transition_inlet_form'
+        zeta_attr = 'siphon_transition_inlet_zeta' if self.is_pressurized_flow_structure(next_node) else 'transition_inlet_zeta'
+        if hasattr(self.settings, form_attr) and getattr(self.settings, form_attr):
+            transition.transition_form = getattr(self.settings, form_attr)
         else:
             transition.transition_form = "曲线形反弯扭曲面"
         
         # 从设置中读取用户指定的ζ系数
-        if hasattr(self.settings, 'transition_inlet_zeta') and self.settings.transition_inlet_zeta > 0:
-            transition.transition_zeta = self.settings.transition_inlet_zeta
+        if hasattr(self.settings, zeta_attr) and getattr(self.settings, zeta_attr) > 0:
+            transition.transition_zeta = getattr(self.settings, zeta_attr)
         
         return transition
     
@@ -1382,11 +1451,18 @@ class WaterProfileCalculator:
         transition.flow = prev_node.flow
         transition.roughness = prev_node.roughness if prev_node.roughness > 0 else self.settings.roughness
         
-        # 根据渐变段类型选择对应的型式和ζ系数
+        # 有压流建筑物（倒虹吸/有压管道）侧复用倒虹吸渐变段配置
+        is_pressurized = self.is_pressurized_flow_structure(prev_node) or self.is_pressurized_flow_structure(next_node)
         if transition_type == "进口":
-            form_attr, zeta_attr = 'transition_inlet_form', 'transition_inlet_zeta'
+            if is_pressurized:
+                form_attr, zeta_attr = 'siphon_transition_inlet_form', 'siphon_transition_inlet_zeta'
+            else:
+                form_attr, zeta_attr = 'transition_inlet_form', 'transition_inlet_zeta'
         else:
-            form_attr, zeta_attr = 'transition_outlet_form', 'transition_outlet_zeta'
+            if is_pressurized:
+                form_attr, zeta_attr = 'siphon_transition_outlet_form', 'siphon_transition_outlet_zeta'
+            else:
+                form_attr, zeta_attr = 'transition_outlet_form', 'transition_outlet_zeta'
         
         if hasattr(self.settings, form_attr) and getattr(self.settings, form_attr):
             transition.transition_form = getattr(self.settings, form_attr)
@@ -1700,8 +1776,8 @@ class WaterProfileCalculator:
                     transition_node.slope_i = current_node.slope_i
                 elif next_node.slope_i and next_node.slope_i > 0:
                     transition_node.slope_i = next_node.slope_i
-                # 倒虹吸相邻渐变段为占位行，跳过损失计算
-                if sv_curr == "倒虹吸" or sv_next == "倒虹吸":
+                # 有压流建筑物（倒虹吸/有压管道）相邻渐变段为占位行，跳过损失计算
+                if self.is_pressurized_flow_structure(current_node) or self.is_pressurized_flow_structure(next_node):
                     transition_node.transition_skip_loss = True
                 new_nodes.append(transition_node)
         

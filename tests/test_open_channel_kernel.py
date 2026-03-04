@@ -78,6 +78,12 @@ def warn(test_name, detail=""):
     WARNINGS.append(msg)
     print(f"  ⚠ {msg}")
 
+def print_header(title):
+    """统一测试标题输出，避免重复拼接分隔线。"""
+    print("\n" + "=" * 70)
+    print(title)
+    print("=" * 70)
+
 def approx_eq(a, b, tol=0.01):
     """相对容差比较"""
     if abs(b) < 1e-9:

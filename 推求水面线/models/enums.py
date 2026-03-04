@@ -45,6 +45,9 @@ class StructureType(Enum):
     # 倒虹吸（保留用于水面线计算中的特殊处理）
     INVERTED_SIPHON = "倒虹吸"
     
+    # 有压管道（类似倒虹吸，参与批量计算和水面线推求）
+    PRESSURE_PIPE = "有压管道"
+    
     # 渐变段（用于渐变段专用行）
     TRANSITION = "渐变段"
     
@@ -74,6 +77,7 @@ class StructureType(Enum):
             cls.TUNNEL_CIRCULAR, cls.TUNNEL_ARCH, 
             cls.TUNNEL_HORSESHOE_1, cls.TUNNEL_HORSESHOE_2,
             cls.INVERTED_SIPHON,
+            cls.PRESSURE_PIPE,
             cls.AQUEDUCT_U, cls.AQUEDUCT_RECT,
             cls.RECT_CULVERT,
             # 兼容旧版本

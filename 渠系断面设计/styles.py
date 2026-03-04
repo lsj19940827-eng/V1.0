@@ -376,6 +376,110 @@ def fluent_select(parent, title, content, items, default_index=0):
     return combo.currentText(), ok
 
 
+def fluent_save_discard_cancel(parent, title, content, save_text="保存", discard_text="放弃", cancel_text="取消"):
+    """三按钮对话框（保存/放弃/取消），Win11 Fluent Design风格
+    返回值：'save', 'discard', 或 'cancel'"""
+    from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsDropShadowEffect
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor
+    from qfluentwidgets import PrimaryPushButton, PushButton
+    
+    class SaveDiscardCancelDialog(QDialog):
+        def __init__(self, parent, title, content, save_text, discard_text, cancel_text):
+            super().__init__(parent)
+            self.result_value = 'cancel'
+            self.setWindowTitle(title)
+            self.setMinimumWidth(440)
+            
+            # 设置窗口标志，使用Win11风格
+            self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint | Qt.MSWindowsFixedSizeDialogHint)
+            
+            # 设置为模态对话框
+            self.setModal(True)
+            
+            # 主布局
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(24, 20, 24, 20)
+            layout.setSpacing(16)
+            
+            # 标题
+            title_label = QLabel(title)
+            title_label.setStyleSheet(
+                "font-size: 18px; font-weight: 600; color: #1F1F1F; "
+                "font-family: 'Microsoft YaHei', 'Segoe UI Variable Display', sans-serif;"
+            )
+            layout.addWidget(title_label)
+            
+            # 内容
+            content_label = QLabel(content)
+            content_label.setWordWrap(True)
+            content_label.setStyleSheet(
+                "font-size: 14px; color: #605E5C; line-height: 20px; "
+                "font-family: 'Microsoft YaHei', 'Segoe UI Variable Text', sans-serif;"
+            )
+            layout.addWidget(content_label)
+            
+            layout.addSpacing(8)
+            
+            # 按钮行
+            button_layout = QHBoxLayout()
+            button_layout.setSpacing(10)
+            button_layout.addStretch()
+            
+            # 保存按钮（主按钮）
+            save_btn = PrimaryPushButton(save_text)
+            save_btn.setFixedHeight(32)
+            save_btn.setMinimumWidth(88)
+            save_btn.clicked.connect(lambda: self._on_button_clicked('save'))
+            button_layout.addWidget(save_btn)
+            
+            # 放弃按钮（次要按钮）
+            discard_btn = PushButton(discard_text)
+            discard_btn.setFixedHeight(32)
+            discard_btn.setMinimumWidth(88)
+            discard_btn.clicked.connect(lambda: self._on_button_clicked('discard'))
+            button_layout.addWidget(discard_btn)
+            
+            # 取消按钮（次要按钮）
+            cancel_btn = PushButton(cancel_text)
+            cancel_btn.setFixedHeight(32)
+            cancel_btn.setMinimumWidth(88)
+            cancel_btn.clicked.connect(lambda: self._on_button_clicked('cancel'))
+            button_layout.addWidget(cancel_btn)
+            
+            layout.addLayout(button_layout)
+            
+            # 设置对话框样式 - Win11 Fluent Design
+            self.setStyleSheet("""
+                QDialog {
+                    background-color: #F3F3F3;
+                    border: 1px solid #E5E5E5;
+                    border-radius: 8px;
+                }
+            """)
+            
+            # 添加阴影效果（仅在有父窗口时）
+            if parent:
+                shadow = QGraphicsDropShadowEffect()
+                shadow.setBlurRadius(20)
+                shadow.setColor(QColor(0, 0, 0, 60))
+                shadow.setOffset(0, 4)
+                self.setGraphicsEffect(shadow)
+        
+        def _on_button_clicked(self, result):
+            self.result_value = result
+            self.accept()
+        
+        def closeEvent(self, event):
+            """关闭对话框时返回cancel"""
+            self.result_value = 'cancel'
+            super().closeEvent(event)
+    
+    dialog = SaveDiscardCancelDialog(parent, title, content, save_text, discard_text, cancel_text)
+    dialog.exec()
+    return dialog.result_value
+
+
 # QDialog 统一样式（让弹窗中的 QGroupBox / QLabel 等组件风格一致）
 DIALOG_STYLE = f"""
 QDialog {{

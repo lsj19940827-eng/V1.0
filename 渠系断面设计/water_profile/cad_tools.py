@@ -45,6 +45,14 @@ try:
 except ImportError:
     MODELS_AVAILABLE = False
 
+_PRESSURIZED_PIPE_MATERIALS = [
+    "PCCP管",
+    "球墨铸铁管",
+    "钢管",
+    "钢筋混凝土管",
+    "玻璃钢夹砂管",
+]
+
 
 # ================================================================
 # 辅助工具函数
@@ -113,11 +121,11 @@ def _in_out_val(in_out):
 
 
 def _is_special_structure_sv(struct_type):
-    """判断是否为特殊建筑物（隧洞/倒虹吸/渡槽/矩形暗涵），使用字符串值比较
+    """判断是否为特殊建筑物（隧洞/倒虹吸/有压管道/渡槽/矩形暗涵），使用字符串值比较
 
     避免双路径导入导致 enum 实例比较失败"""
     sv = _struct_val(struct_type)
-    return any(k in sv for k in ("隧洞", "倒虹吸", "渡槽", "暗涵"))
+    return any(k in sv for k in ("隧洞", "倒虹吸", "有压管道", "渡槽", "暗涵"))
 
 
 def _is_gate_name(name):
@@ -293,6 +301,7 @@ def _compute_ip_preview_data(nodes, station_prefix):
                 if struct_str:
                     if "隧洞" in struct_str: struct_abbr = "隧"
                     elif "倒虹吸" in struct_str: struct_abbr = "倒"
+                    elif "有压管道" in struct_str: struct_abbr = "管"
                     elif "渡槽" in struct_str: struct_abbr = "渡"
                     elif "暗涵" in struct_str: struct_abbr = "暗"
                 in_out_str = "进" if _in_out_val(node.in_out) == "进" else "出"
@@ -329,6 +338,134 @@ def _compute_ip_preview_data(nodes, station_prefix):
                 "0.000", "0.000", "0.000", "0.000", "-",
             ])
     return preview_data, real_nodes
+
+
+def _parse_positive_dn(text):
+    """解析 DN 输入，返回正整数；非法时返回 None。"""
+    if text is None:
+        return None
+    t = str(text).strip()
+    if not t:
+        return None
+    try:
+        fv = float(t)
+    except (TypeError, ValueError):
+        return None
+    if not fv.is_integer():
+        return None
+    dn = int(fv)
+    return dn if dn > 0 else None
+
+
+def _normalize_dn_mm(dn_value, default_dn=1500):
+    """将 DN 归一化为正整数 mm。"""
+    dn = _parse_positive_dn(dn_value)
+    if dn is not None:
+        return dn
+    default = _parse_positive_dn(default_dn)
+    return default if default is not None else 1500
+
+
+def _extract_named_pressurized_groups(nodes, structure_kind):
+    """提取按名称分组的有压流建筑物，返回 [(name, dn_mm), ...]。"""
+    groups = {}
+    order = []
+    if not nodes:
+        return []
+
+    is_siphon = (structure_kind == "siphon")
+    default_name = "倒虹吸" if is_siphon else "有压管道"
+
+    for node in nodes:
+        if getattr(node, 'is_transition', False) or getattr(node, 'is_auto_inserted_channel', False):
+            continue
+
+        st_str = _struct_val(getattr(node, 'structure_type', None))
+        if is_siphon:
+            matched = bool(getattr(node, 'is_inverted_siphon', False) or ('倒虹吸' in st_str))
+        else:
+            matched = ('有压管道' in st_str)
+        if not matched:
+            continue
+
+        raw_name = getattr(node, 'name', '') or ''
+        display_name = raw_name.strip() if raw_name.strip() else default_name
+        if display_name not in groups:
+            groups[display_name] = 0
+            order.append(display_name)
+
+        params = getattr(node, 'section_params', {}) or {}
+        d_val = 0.0
+        for key in ('D', 'd'):
+            try:
+                v = float(params.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                v = 0.0
+            if v > 0:
+                d_val = v
+                break
+        if d_val <= 0:
+            try:
+                d_val = float(getattr(node, 'structure_height', 0) or 0)
+            except (TypeError, ValueError):
+                d_val = 0.0
+
+        if d_val > 0:
+            dn_mm = d_val * 1000 if d_val < 20 else d_val
+            groups[display_name] = max(groups[display_name], dn_mm)
+
+    return [(name, groups[name]) for name in order]
+
+
+def _merge_pressurized_param_defaults(group_items, cached_rows, default_material="球墨铸铁管"):
+    """按名称将历史配置与当前分组合并，返回 [(name, material, dn_mm), ...]。"""
+    cached_map = {}
+    for row in cached_rows or []:
+        if not isinstance(row, (tuple, list)) or len(row) < 3:
+            continue
+        name = str(row[0] or "").strip()
+        if not name:
+            continue
+        mat = str(row[1] or "").strip() or default_material
+        dn = _normalize_dn_mm(row[2], 1500)
+        cached_map[name] = (mat, dn)
+
+    merged = []
+    for name, dn_mm in group_items or []:
+        base_dn = _normalize_dn_mm(dn_mm, 1500)
+        mat, dn = cached_map.get(name, (default_material, base_dn))
+        merged.append((name, mat, _normalize_dn_mm(dn, base_dn)))
+    return merged
+
+
+def _build_pressurized_segments(qs, overrides_by_idx, params, has_source_data, segment_name_fn):
+    """基于分组参数构建倒虹吸/有压管道 segments。"""
+    if not params:
+        return []
+
+    overrides = overrides_by_idx or {}
+    if has_source_data and overrides:
+        indices = sorted(overrides.keys())
+    else:
+        indices = list(range(1, len(qs) + 1))
+    if not indices:
+        return []
+
+    multi = len(params) > 1
+    segs = []
+    for struct_name, pipe_material, dn_mm in params:
+        dn_norm = _normalize_dn_mm(dn_mm, 1500)
+        for idx in indices:
+            seg_name = f"{struct_name}-{segment_name_fn(idx)}" if multi else segment_name_fn(idx)
+            seg = {"name": seg_name}
+            if idx in overrides:
+                seg.update(overrides[idx])
+            if 0 < idx <= len(qs):
+                seg["Q"] = qs[idx - 1]
+            seg["DN_mm"] = dn_norm
+            seg["pipe_material"] = pipe_material
+            segs.append(seg)
+    return segs
 
 
 # ================================================================
@@ -500,6 +637,131 @@ class TextExportSettingsDialog(QDialog):
             self.accept()
         except ValueError as e:
             fluent_error(self, "输入错误", f"请输入有效的数值:\n{str(e)}")
+
+
+# ================================================================
+# 有压流参数配置对话框
+# ================================================================
+
+class PressurizedPipeConfigDialog(QDialog):
+    """倒虹吸/有压管道参数配置对话框（导出全部DXF专用）。"""
+
+    def __init__(self, parent=None, siphon_rows=None, pressure_pipe_rows=None, materials=None):
+        super().__init__(parent)
+        self.setWindowTitle("有压流建筑物参数设置")
+        self.setMinimumSize(520, 420)
+        self.setStyleSheet(DIALOG_STYLE)
+        self.result = None
+
+        self._materials = list(materials or _PRESSURIZED_PIPE_MATERIALS)
+        if not self._materials:
+            self._materials = ["球墨铸铁管"]
+        self._siphon_rows = []
+        self._pressure_pipe_rows = []
+
+        lay = QVBoxLayout(self)
+        desc = QLabel(
+            "请确认倒虹吸/有压管道导出参数。\n"
+            "规则与倒虹吸断面汇总表一致：按材质确定糙率，按 DN 计算设计流速。"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("font-size:12px; color:#333;")
+        lay.addWidget(desc)
+
+        if siphon_rows:
+            self._build_group(
+                parent_layout=lay,
+                group_title="倒虹吸参数",
+                name_header="倒虹吸名称",
+                source_rows=siphon_rows,
+                target_rows=self._siphon_rows,
+            )
+        if pressure_pipe_rows:
+            self._build_group(
+                parent_layout=lay,
+                group_title="有压管道参数",
+                name_header="有压管道名称",
+                source_rows=pressure_pipe_rows,
+                target_rows=self._pressure_pipe_rows,
+            )
+
+        btn_lay = QHBoxLayout()
+        btn_lay.addStretch()
+        btn_cancel = PushButton("取消")
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok = PrimaryPushButton("确认")
+        btn_ok.clicked.connect(self._on_confirm)
+        btn_lay.addWidget(btn_cancel)
+        btn_lay.addWidget(btn_ok)
+        lay.addLayout(btn_lay)
+
+        QShortcut(QKeySequence(Qt.Key_Escape), self, self.reject)
+        QShortcut(QKeySequence(Qt.Key_Return), self, self._on_confirm)
+
+    def _build_group(self, parent_layout, group_title, name_header, source_rows, target_rows):
+        group = QGroupBox(group_title)
+        group.setStyleSheet("QGroupBox{font-weight:bold;font-size:12px;}")
+        glay = QVBoxLayout(group)
+
+        hdr = QGridLayout()
+        hdr.setSpacing(6)
+        for ci, txt in enumerate([name_header, "管道材质", "DN (mm)"]):
+            lbl = QLabel(txt)
+            lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
+            hdr.addWidget(lbl, 0, ci)
+        hdr.setColumnStretch(0, 2)
+        hdr.setColumnStretch(1, 3)
+        hdr.setColumnStretch(2, 2)
+        glay.addLayout(hdr)
+
+        grid = QGridLayout()
+        grid.setSpacing(4)
+        for ri, (name, material, dn_mm) in enumerate(source_rows):
+            name_lbl = QLabel(name)
+            name_lbl.setStyleSheet("font-size:12px;")
+            grid.addWidget(name_lbl, ri, 0)
+
+            mat_combo = QComboBox()
+            mat_combo.addItems(self._materials)
+            mat_combo.setCurrentText(material if material in self._materials else self._materials[0])
+            mat_combo.setFixedWidth(160)
+            grid.addWidget(mat_combo, ri, 1)
+
+            dn_edit = LineEdit()
+            dn_edit.setFixedWidth(100)
+            dn_edit.setText(str(_normalize_dn_mm(dn_mm, 1500)))
+            grid.addWidget(dn_edit, ri, 2)
+
+            target_rows.append((name, mat_combo, dn_edit))
+
+        grid.setColumnStretch(0, 2)
+        grid.setColumnStretch(1, 3)
+        grid.setColumnStretch(2, 2)
+        glay.addLayout(grid)
+        parent_layout.addWidget(group)
+
+    def _read_rows(self, rows, title_prefix):
+        out = []
+        for name, mat_combo, dn_edit in rows:
+            dn = _parse_positive_dn(dn_edit.text())
+            if dn is None:
+                fluent_error(self, "输入错误", f"{title_prefix}“{name}”的 DN 必须为正整数")
+                return None
+            out.append((name, mat_combo.currentText(), dn))
+        return out
+
+    def _on_confirm(self):
+        siphon = self._read_rows(self._siphon_rows, "倒虹吸")
+        if siphon is None:
+            return
+        pressure_pipe = self._read_rows(self._pressure_pipe_rows, "有压管道")
+        if pressure_pipe is None:
+            return
+        self.result = {
+            "siphon": siphon,
+            "pressure_pipe": pressure_pipe,
+        }
+        self.accept()
 
 
 # ================================================================
@@ -804,6 +1066,9 @@ def export_longitudinal_profile_txt(panel):
             # 倒虹吸为有压流，不显示坡降
             if "倒虹吸" in bname:
                 continue
+            # 有压管道为有压流，不显示坡降（与倒虹吸规则一致）
+            if "有压管道" in bname:
+                continue
             slope_text = _get_segment_slope_text(mc_list, mc_to_node)
             if not slope_text:
                 continue
@@ -829,6 +1094,8 @@ def export_longitudinal_profile_txt(panel):
                         struct_abbr = "隧"
                     elif "倒虹吸" in st_val:
                         struct_abbr = "倒"
+                    elif "有压管道" in st_val:
+                        struct_abbr = "管"
                     elif "渡槽" in st_val:
                         struct_abbr = "渡"
                     in_out_str = "进" if _in_out_val(node.in_out) == "进" else "出"
@@ -1033,6 +1300,9 @@ def _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix,
             continue
         if "倒虹吸" in bname:
             continue
+        # 有压管道为有压流，不显示坡降（与倒虹吸规则一致）
+        if "有压管道" in bname:
+            continue
         slope_text = _get_segment_slope_text(mc_list, mc_to_node)
         if not slope_text:
             continue
@@ -1061,6 +1331,8 @@ def _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix,
                     struct_abbr = "隧"
                 elif "倒虹吸" in st_val:
                     struct_abbr = "倒"
+                elif "有压管道" in st_val:
+                    struct_abbr = "管"
                 elif "渡槽" in st_val:
                     struct_abbr = "渡"
                 in_out_str = "进" if _in_out_val(node.in_out) == "进" else "出"
@@ -1333,6 +1605,9 @@ def _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_p
         # 倒虹吸为有压流，不显示坡降
         if "倒虹吸" in bname:
             continue
+        # 有压管道为有压流，不显示坡降（与倒虹吸规则一致）
+        if "有压管道" in bname:
+            continue
         slope_text = _get_segment_slope_text(mc_list, mc_to_node)
         if not slope_text:
             continue
@@ -1357,6 +1632,8 @@ def _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_p
                     struct_abbr = "隧"
                 elif "倒虹吸" in st_val:
                     struct_abbr = "倒"
+                elif "有压管道" in st_val:
+                    struct_abbr = "管"
                 elif "渡槽" in st_val:
                     struct_abbr = "渡"
                 in_out_str = "进" if _in_out_val(node.in_out) == "进" else "出"
@@ -1432,6 +1709,8 @@ def extract_bzzh2_data(panel):
                     struct_name = "隧洞"
                 elif "倒虹吸" in struct_str:
                     struct_name = "倒虹吸"
+                elif "有压管道" in struct_str:
+                    struct_name = "有压管道"
                 elif "渡槽" in struct_str:
                     struct_name = "渡槽"
                 elif "暗涵" in struct_str:
@@ -1452,7 +1731,7 @@ def extract_bzzh2_data(panel):
         fluent_info(
             panel.window(), "无可提取数据",
             "未找到有进出口标识的建筑物节点。\n\n"
-            "bzzh2命令需要隧洞、倒虹吸、渡槽等建筑物的进/出口数据。\n"
+            "bzzh2命令需要隧洞、倒虹吸、有压管道、渡槽等建筑物的进/出口数据。\n"
             "请确保表格中已有相关数据并完成计算。")
         return
 
@@ -1587,7 +1866,7 @@ def export_building_name_plan(panel):
             fluent_info(
                 panel.window(), "无可提取数据",
                 "未找到有效的建筑物进出口数据。\n\n"
-                "需要隧洞、倒虹吸、渡槽等建筑物同时存在进口和出口，\n"
+                "需要隧洞、倒虹吸、有压管道、渡槽等建筑物同时存在进口和出口，\n"
                 "且节点具有有效的X、Y坐标。")
             return
 
@@ -1635,6 +1914,8 @@ def export_building_name_plan(panel):
                     struct_name = "隧洞"
                 elif "倒虹吸" in struct_str:
                     struct_name = "倒虹吸"
+                elif "有压管道" in struct_str:
+                    struct_name = "有压管道"
                 elif "渡槽" in struct_str:
                     struct_name = "渡槽"
                 elif "暗涵" in struct_str:
@@ -1915,6 +2196,7 @@ def export_ip_plan_table(panel):
                     if struct_str:
                         if "隧洞" in struct_str: struct_abbr = "隧"
                         elif "倒虹吸" in struct_str: struct_abbr = "倒"
+                        elif "有压管道" in struct_str: struct_abbr = "管"
                         elif "渡槽" in struct_str: struct_abbr = "渡"
                         elif "暗涵" in struct_str: struct_abbr = "暗"
                     in_out_str = "进" if _in_out_val(node.in_out) == "进" else "出"
@@ -2197,7 +2479,36 @@ def export_combined_dxf(panel):
         proj_settings = None
         station_prefix = ""
 
-    # ---- 3. 选择保存路径 ----
+    # ---- 3. 有压流参数设置（倒虹吸/有压管道）----
+    siphon_groups = _extract_named_pressurized_groups(nodes, "siphon")
+    pressure_pipe_groups = _extract_named_pressurized_groups(nodes, "pressure_pipe")
+    cached_pressurized = getattr(panel, "_custom_pressurized_pipe_params", {}) or {}
+    pressurized_params = {
+        "siphon": _merge_pressurized_param_defaults(
+            siphon_groups, cached_pressurized.get("siphon", [])
+        ),
+        "pressure_pipe": _merge_pressurized_param_defaults(
+            pressure_pipe_groups, cached_pressurized.get("pressure_pipe", [])
+        ),
+    }
+    if pressurized_params["siphon"] or pressurized_params["pressure_pipe"]:
+        pp_dlg = PressurizedPipeConfigDialog(
+            panel.window(),
+            siphon_rows=pressurized_params["siphon"],
+            pressure_pipe_rows=pressurized_params["pressure_pipe"],
+            materials=_PRESSURIZED_PIPE_MATERIALS,
+        )
+        if pp_dlg.exec() != QDialog.Accepted or pp_dlg.result is None:
+            return
+        pressurized_params = pp_dlg.result
+        panel._custom_pressurized_pipe_params = {
+            "siphon": list(pressurized_params.get("siphon", [])),
+            "pressure_pipe": list(pressurized_params.get("pressure_pipe", [])),
+        }
+    else:
+        panel._custom_pressurized_pipe_params = {"siphon": [], "pressure_pipe": []}
+
+    # ---- 4. 选择保存路径 ----
     try:
         ch_name = panel.channel_name_edit.text().strip()
         ch_level = panel.channel_level_combo.currentText()
@@ -2255,13 +2566,12 @@ def export_combined_dxf(panel):
                 compute_tunnel, compute_tunnel_circular, compute_tunnel_horseshoe,
                 compute_aqueduct_u, compute_aqueduct_rect,
                 compute_rect_culvert, compute_circular_pipe, compute_siphon,
+                compute_pressure_pipe,
                 _default_segments_rect_channel, _default_segments_trap_channel,
                 _default_segments_tunnel_arch, _default_segments_tunnel_circular,
                 _default_segments_tunnel_horseshoe,
                 _default_segments_aqueduct_u, _default_segments_aqueduct_rect,
                 _default_segments_rect_culvert, _default_segments_circular_pipe,
-                _default_segments_siphon,
-                SIPHON_MATERIALS,
             )
 
             node_defaults, flow_qs = _extract_segment_defaults_from_nodes(nodes)
@@ -2352,8 +2662,20 @@ def export_combined_dxf(panel):
                             node_defaults.get("rect_culvert"))
             cp = _make_segs(_default_segments_circular_pipe,
                             node_defaults.get("circular_channel"))
-            sp = _make_segs(_default_segments_siphon,
-                            node_defaults.get("siphon"))
+            sp = _build_pressurized_segments(
+                qs=qs,
+                overrides_by_idx=node_defaults.get("siphon", {}),
+                params=pressurized_params.get("siphon", []),
+                has_source_data=has_source,
+                segment_name_fn=_segment_name,
+            )
+            pp = _build_pressurized_segments(
+                qs=qs,
+                overrides_by_idx=node_defaults.get("pressure_pipe", {}),
+                params=pressurized_params.get("pressure_pipe", []),
+                has_source_data=has_source,
+                segment_name_fn=_segment_name,
+            )
 
             # 读取用户自定义的构造参数（如果之前在断面汇总表对话框中设置过）
             _struct_t = getattr(panel, '_custom_struct_thickness', None)
@@ -2404,6 +2726,7 @@ def export_combined_dxf(panel):
             d_rv = compute_rect_culvert(rv) if rv else []
             d_cp = compute_circular_pipe(cp) if cp else []
             d_sp = compute_siphon(sp) if sp else []
+            d_pp = compute_pressure_pipe(pp) if pp else []
 
             data_map = {
                 "rect_channel": d_rc, "trap_channel": d_tr,
@@ -2411,12 +2734,12 @@ def export_combined_dxf(panel):
                 "tunnel_horseshoe": d_th,
                 "aqueduct_u": d_au, "aqueduct_rect": d_ar,
                 "rect_culvert": d_rv, "circular_channel": d_cp,
-                "siphon": d_sp,
+                "siphon": d_sp, "pressure_pipe": d_pp,
             }
             table_order = ["rect_channel", "trap_channel",
                            "tunnel_arch", "tunnel_circular", "tunnel_horseshoe",
                            "aqueduct_u", "aqueduct_rect",
-                           "rect_culvert", "circular_channel", "siphon"]
+                           "rect_culvert", "circular_channel", "siphon", "pressure_pipe"]
 
             cur_y = below_y
             max_table_w = 0.0
@@ -2504,6 +2827,9 @@ class SectionSummaryDialog(QDialog):
         self._proj_settings = proj_settings
         self._auto_name = auto_name
         self._panel = panel
+        self._cached_pressurized = {}
+        if panel is not None:
+            self._cached_pressurized = getattr(panel, "_custom_pressurized_pipe_params", {}) or {}
 
         # 导入计算模块
         from 渠系建筑物断面计算.生成断面汇总表 import (
@@ -2590,56 +2916,10 @@ class SectionSummaryDialog(QDialog):
         return list(fallback) + [fallback[-1]] * (sc - len(fallback))
 
     def _extract_siphon_groups(self):
-        """从节点中提取不同名称的倒虹吸及其默认DN
-
-        返回: OrderedDict-like list of tuples [(siphon_display_name, dn_mm), ...]
-        """
-        groups = {}  # {display_name: dn_mm}
-        order = []   # 保持顺序
-        if not self._nodes:
-            return order
-
-        for node in self._nodes:
-            if getattr(node, 'is_transition', False) or getattr(node, 'is_auto_inserted_channel', False):
-                continue
-
-            # 判断是否为倒虹吸
-            is_siphon = getattr(node, 'is_inverted_siphon', False)
-            if not is_siphon:
-                st_str = _struct_val(getattr(node, 'structure_type', None))
-                if '倒虹吸' not in st_str:
-                    continue
-
-            # 建筑物名称
-            raw_name = getattr(node, 'name', '') or ''
-            display_name = raw_name.strip() if raw_name.strip() else '倒虹吸'
-
-            if display_name not in groups:
-                groups[display_name] = 0
-                order.append(display_name)
-
-            # 提取 DN（优先 section_params.D，其次 structure_height）
-            params = getattr(node, 'section_params', {}) or {}
-            d_val = 0.0
-            for key in ('D', 'd'):
-                try:
-                    v = float(params.get(key, 0) or 0)
-                except (TypeError, ValueError):
-                    v = 0.0
-                if v > 0:
-                    d_val = v
-                    break
-            if d_val <= 0:
-                try:
-                    d_val = float(getattr(node, 'structure_height', 0) or 0)
-                except (TypeError, ValueError):
-                    d_val = 0.0
-
-            if d_val > 0:
-                dn_mm = d_val * 1000 if d_val < 20 else d_val
-                groups[display_name] = max(groups[display_name], dn_mm)
-
-        return [(name, groups[name]) for name in order]
+        return _extract_named_pressurized_groups(self._nodes, "siphon")
+    
+    def _extract_pressure_pipe_groups(self):
+        return _extract_named_pressurized_groups(self._nodes, "pressure_pipe")
 
     def showEvent(self, event):
         """确保对话框不超出屏幕可见区域"""
@@ -2715,7 +2995,13 @@ class SectionSummaryDialog(QDialog):
         siphon_lay = QVBoxLayout(siphon_group)
 
         # 构建倒虹吸分组列表；无数据时提供一个默认行
-        siphon_items = self._siphon_groups if self._siphon_groups else [('倒虹吸', 0)]
+        if self._siphon_groups:
+            siphon_items = _merge_pressurized_param_defaults(
+                self._siphon_groups,
+                self._cached_pressurized.get("siphon", []),
+            )
+        else:
+            siphon_items = [("倒虹吸", "球墨铸铁管", 1500)]
 
         # 表头
         hdr_grid = QGridLayout()
@@ -2732,7 +3018,7 @@ class SectionSummaryDialog(QDialog):
         self._siphon_rows = []  # [(name, mat_combo, dn_edit), ...]
         sp_grid = QGridLayout()
         sp_grid.setSpacing(4)
-        for ri, (sp_name, sp_dn) in enumerate(siphon_items):
+        for ri, (sp_name, sp_material, sp_dn) in enumerate(siphon_items):
             # 名称标签
             name_lbl = QLabel(sp_name)
             name_lbl.setStyleSheet("font-size:12px;")
@@ -2741,14 +3027,16 @@ class SectionSummaryDialog(QDialog):
             # 材质下拉
             mat_combo = QComboBox()
             mat_combo.addItems(list(self._SIPHON_MATERIALS.keys()))
-            mat_combo.setCurrentText("球墨铸铁管")
+            mat_combo.setCurrentText(
+                sp_material if sp_material in self._SIPHON_MATERIALS else "球墨铸铁管"
+            )
             mat_combo.setFixedWidth(160)
             sp_grid.addWidget(mat_combo, ri, 1)
 
             # DN 输入框
             dn_edit = LineEdit()
             dn_edit.setFixedWidth(100)
-            dn_val = int(round(sp_dn)) if sp_dn > 0 else 1500
+            dn_val = _normalize_dn_mm(sp_dn, 1500)
             dn_edit.setText(str(dn_val))
             sp_grid.addWidget(dn_edit, ri, 2)
 
@@ -2763,6 +3051,70 @@ class SectionSummaryDialog(QDialog):
         dn_note.setStyleSheet("font-size:11px; color:#666;")
         siphon_lay.addWidget(dn_note)
         lay.addWidget(siphon_group)
+
+        # ---- 有压管道参数（与倒虹吸类似） ----
+        pressure_pipe_group = QGroupBox("有压管道参数")
+        pressure_pipe_group.setStyleSheet("QGroupBox{font-weight:bold;font-size:12px;}")
+        pp_lay = QVBoxLayout(pressure_pipe_group)
+
+        # 提取有压管道分组
+        self._pressure_pipe_groups = self._extract_pressure_pipe_groups()
+        if self._pressure_pipe_groups:
+            pp_items = _merge_pressurized_param_defaults(
+                self._pressure_pipe_groups,
+                self._cached_pressurized.get("pressure_pipe", []),
+            )
+        else:
+            pp_items = [("有压管道", "球墨铸铁管", 1500)]
+
+        # 表头
+        pp_hdr_grid = QGridLayout()
+        pp_hdr_grid.setSpacing(6)
+        for ci, txt in enumerate(['有压管道名称', '管道材质', 'DN (mm)']):
+            lbl = QLabel(txt)
+            lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
+            pp_hdr_grid.addWidget(lbl, 0, ci)
+        pp_hdr_grid.setColumnStretch(0, 2)
+        pp_hdr_grid.setColumnStretch(1, 3)
+        pp_hdr_grid.setColumnStretch(2, 2)
+        pp_lay.addLayout(pp_hdr_grid)
+
+        self._pressure_pipe_rows = []  # [(name, mat_combo, dn_edit), ...]
+        pp_grid = QGridLayout()
+        pp_grid.setSpacing(4)
+        for ri, (pp_name, pp_material, pp_dn) in enumerate(pp_items):
+            # 名称标签
+            name_lbl = QLabel(pp_name)
+            name_lbl.setStyleSheet("font-size:12px;")
+            pp_grid.addWidget(name_lbl, ri, 0)
+
+            # 材质下拉
+            mat_combo = QComboBox()
+            mat_combo.addItems(list(self._SIPHON_MATERIALS.keys()))
+            mat_combo.setCurrentText(
+                pp_material if pp_material in self._SIPHON_MATERIALS else "球墨铸铁管"
+            )
+            mat_combo.setFixedWidth(160)
+            pp_grid.addWidget(mat_combo, ri, 1)
+
+            # DN 输入框
+            dn_edit = LineEdit()
+            dn_edit.setFixedWidth(100)
+            dn_val = _normalize_dn_mm(pp_dn, 1500)
+            dn_edit.setText(str(dn_val))
+            pp_grid.addWidget(dn_edit, ri, 2)
+
+            self._pressure_pipe_rows.append((pp_name, mat_combo, dn_edit))
+
+        pp_grid.setColumnStretch(0, 2)
+        pp_grid.setColumnStretch(1, 3)
+        pp_grid.setColumnStretch(2, 2)
+        pp_lay.addLayout(pp_grid)
+
+        pp_note = QLabel("（DN 从有压管道计算结果自动导入，也可手动修改）")
+        pp_note.setStyleSheet("font-size:11px; color:#666;")
+        pp_lay.addWidget(pp_note)
+        lay.addWidget(pressure_pipe_group)
 
         # ---- 构造参数设置（Tab页签） ----
         from PySide6.QtWidgets import QTabWidget
@@ -3116,15 +3468,23 @@ class SectionSummaryDialog(QDialog):
             fluent_error(self, "输入错误", "流量值必须为数字")
             return
 
-        # 读取每个倒虹吸的材质和DN
+        # 读取每个倒虹吸的材质和 DN
         siphon_params = []  # [(name, material, dn), ...]
         for sp_name, mat_combo, dn_edit in self._siphon_rows:
-            try:
-                dn = int(dn_edit.text())
-            except ValueError:
-                fluent_error(self, "输入错误", f"{sp_name} 的 DN 必须为整数")
+            dn = _parse_positive_dn(dn_edit.text())
+            if dn is None:
+                fluent_error(self, "输入错误", f"{sp_name} 的 DN 必须为正整数")
                 return
             siphon_params.append((sp_name, mat_combo.currentText(), dn))
+        
+        # 读取每个有压管道的材质和 DN（与倒虹吸类似）
+        pressure_pipe_params = []  # [(name, material, dn), ...]
+        for pp_name, mat_combo, dn_edit in self._pressure_pipe_rows:
+            dn = _parse_positive_dn(dn_edit.text())
+            if dn is None:
+                fluent_error(self, "输入错误", f"{pp_name} 的 DN 必须为正整数")
+                return
+            pressure_pipe_params.append((pp_name, mat_combo.currentText(), dn))
 
         segment_count = self._segment_count
         node_defaults = self._node_defaults
@@ -3200,22 +3560,13 @@ class SectionSummaryDialog(QDialog):
                     seg["name"] = _segment_name(i + 1)
 
         sp_overrides = node_defaults.get("siphon", {})
-        sp_segs = []
-        multi_siphon = len(siphon_params) > 1
-        # 有源数据时只生成有实际数据的流量段
-        sp_indices = sorted(sp_overrides.keys()) if (has_source_data and sp_overrides) else list(range(1, len(qs) + 1))
-        for sp_name, sp_material, sp_dn in siphon_params:
-            for idx in sp_indices:
-                seg_name = (f"{sp_name}-{_segment_name(idx)}"
-                            if multi_siphon else _segment_name(idx))
-                seg = {"name": seg_name}
-                if idx in sp_overrides:
-                    seg.update(sp_overrides[idx])
-                seg["DN_mm"] = sp_dn
-                if 0 < idx <= len(qs):
-                    seg["Q"] = qs[idx - 1]
-                seg["pipe_material"] = sp_material
-                sp_segs.append(seg)
+        sp_segs = _build_pressurized_segments(
+            qs=qs,
+            overrides_by_idx=sp_overrides,
+            params=siphon_params,
+            has_source_data=has_source_data,
+            segment_name_fn=_segment_name,
+        )
 
         # 按结果决定表格类型
         _table_order = None
@@ -3241,6 +3592,8 @@ class SectionSummaryDialog(QDialog):
                 _table_order.append("circular_channel")
             if node_defaults.get("siphon"):
                 _table_order.append("siphon")
+            if node_defaults.get("pressure_pipe"):
+                _table_order.append("pressure_pipe")
             if not _table_order:
                 _table_order = None
 
@@ -3274,6 +3627,20 @@ class SectionSummaryDialog(QDialog):
             self._panel._custom_rock_lining = rock_lining
             self._panel._custom_struct_thickness = struct_t
             self._panel._custom_tunnel_unified = tunnel_unified
+            self._panel._custom_pressurized_pipe_params = {
+                "siphon": list(siphon_params),
+                "pressure_pipe": list(pressure_pipe_params),
+            }
+
+        # 构建有压管道 segments（与倒虹吸类似）
+        pp_overrides = node_defaults.get("pressure_pipe", {})
+        pp_segs = _build_pressurized_segments(
+            qs=qs,
+            overrides_by_idx=pp_overrides,
+            params=pressure_pipe_params,
+            has_source_data=has_source_data,
+            segment_name_fn=_segment_name,
+        )
 
         gen_kwargs = dict(
             filepath=fp,
@@ -3288,6 +3655,8 @@ class SectionSummaryDialog(QDialog):
             circular_pipe_segs=cp_segs,
             siphon_segs=sp_segs,
             siphon_material=siphon_params[0][1] if siphon_params else "球墨铸铁管",
+            pressure_pipe_segs=pp_segs,
+            pressure_pipe_material=pressure_pipe_params[0][1] if pressure_pipe_params else "球墨铸铁管",
             rock_lining=rock_lining,
             table_order=_table_order,
             tunnel_unified_arch=tunnel_unified.get("tunnel_arch", False),
@@ -3304,13 +3673,16 @@ class SectionSummaryDialog(QDialog):
                 self._generate_excel(**gen_kwargs)
             self.unsetCursor()
             mat_summary = '、'.join(f"{n}({m})" for n, m, _ in siphon_params)
+            pp_mat_summary = '、'.join(f"{n}({m})" for n, m, _ in pressure_pipe_params) if pressure_pipe_params else ""
             fmt_name = "DXF" if export_dxf else "Excel"
             extra = "" if export_dxf else "\n表格数量以计算结果为准，另含 1 个汇总 Sheet。"
-            if fluent_question(self, "完成",
-                        f"断面汇总表已生成（{fmt_name}）：\n{fp}\n{extra}\n"
-                        f"倒虹吸管道材质: {mat_summary}\n\n"
-                        f"是否立即打开该文件？",
-                        yes_text="打开", no_text="关闭"):
+            msg_parts = [f"断面汇总表已生成（{fmt_name}）：\n{fp}\n{extra}"]
+            if mat_summary:
+                msg_parts.append(f"倒虹吸管道材质：{mat_summary}")
+            if pp_mat_summary:
+                msg_parts.append(f"有压管道材质：{pp_mat_summary}")
+            msg_parts.append("\n是否立即打开该文件？")
+            if fluent_question(self, "完成", "\n".join(msg_parts), yes_text="打开", no_text="关闭"):
                 try:
                     os.startfile(fp)
                 except Exception:

@@ -69,7 +69,8 @@ class MultiSiphonDialog(QDialog):
                  manager=None,
                  on_import_losses: Callable = None,
                  siphon_turn_radius_n: float = 0.0,
-                 auto_run: bool = False):
+                 auto_run: bool = False,
+                 show_case_management: bool = False):
         """
         初始化窗口
 
@@ -79,6 +80,7 @@ class MultiSiphonDialog(QDialog):
             manager: SiphonManager 实例（持久化用）
             on_import_losses: 导入水损回调函数，签名: callback(results: Dict) -> int
             siphon_turn_radius_n: 倒虹吸转弯半径倍数n（R = n × D）
+            show_case_management: 是否显示单面板中的“工况管理”区
         """
         super().__init__(parent)
         print(f"[DEBUG MultiSiphonDialog] __init__ 开始, siphon_groups数量: {len(siphon_groups)}")
@@ -87,6 +89,7 @@ class MultiSiphonDialog(QDialog):
         self.on_import_losses = on_import_losses
         self._siphon_turn_radius_n = siphon_turn_radius_n
         self.auto_run = auto_run
+        self._show_case_management = bool(show_case_management)
 
         # 面板字典 {倒虹吸名称: SiphonPanel}
         self.panels: Dict[str, SiphonPanel] = {}
@@ -174,7 +177,7 @@ class MultiSiphonDialog(QDialog):
         Args:
             group: 倒虹吸分组数据 (SiphonGroup)
         """
-        panel = SiphonPanel()
+        panel = SiphonPanel(show_case_management=self._show_case_management)
         panel.on_result_callback = self._make_result_callback(group.name)
         panel.edit_name.setText(group.name)
 

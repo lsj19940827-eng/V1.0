@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 TIN 构建器
 
@@ -178,32 +178,20 @@ class TINBuilder:
 
     def _run_cdt(self) -> TINModel:
         """
-        调用 triangle 库执行约束 Delaunay 三角剖分。
-
-        triangle 库接口：
-            triangle.triangulate(vertices, segments, options)
-            - vertices: shape=(N,2) float, 顶点 XY
-            - segments: shape=(M,2) int, 约束边端点索引
-            - options: 如 'p' (PSLG模式，强制约束边)
-
-        返回 dict 包含 'vertices', 'triangles' 等键。
+        执行约束 Delaunay 三角剖分。
+        优先使用 triangle（支持约束边）；若未安装则回退到 scipy Delaunay。
         """
-        try:
-            import triangle as tr
-        except ImportError as exc:
-            raise ImportError(
-                "未安装 triangle 库，请执行: pip install triangle"
-            ) from exc
-
         if len(self._terrain_points) < 3:
             raise ValueError(f"点数不足，无法构建 TIN（当前 {len(self._terrain_points)} 点）")
 
-        pts_xy = np.array([[p.x, p.y] for p in self._terrain_points])
-        pts_z = np.array([p.z for p in self._terrain_points])
+        pts_xy = np.array([[p.x, p.y] for p in self._terrain_points], dtype=float)
+        pts_z = np.array([p.z for p in self._terrain_points], dtype=float)
 
-        # 去重（triangle 对完全重复点报错）
+        # 去重（triangle / Delaunay 对完全重复点都会报错）
         pts_xy, keep_mask, idx_mapping = self._deduplicate_points(pts_xy)
         pts_z = pts_z[keep_mask]   # 仅保留唯一点的 Z 值
+        if len(pts_xy) < 3:
+            raise ValueError(f"点数不足，无法构建 TIN（当前 {len(pts_xy)} 点）")
 
         # 约束边（映射到去重后的索引）
         n_orig = len(keep_mask)
@@ -216,35 +204,58 @@ class TINBuilder:
             if ni != nj:
                 segs.append([ni, nj])
 
-        tri_input: dict = {"vertices": pts_xy}
-        if segs:
-            tri_input["segments"] = np.array(segs, dtype=int)
-            options = "p"   # PSLG 模式（强制约束边）
-        else:
-            options = ""
+        try:
+            import triangle as tr
+        except ImportError:
+            tr = None
 
-        result = tr.triangulate(tri_input, options)
+        if tr is not None:
+            tri_input: dict = {"vertices": pts_xy}
+            if segs:
+                tri_input["segments"] = np.array(segs, dtype=int)
+                options = "p"   # PSLG 模式（强制约束边）
+            else:
+                options = ""
 
-        vertices_xy = result["vertices"]    # shape=(N', 2)
-        triangles = result["triangles"]      # shape=(M, 3)
+            result = tr.triangulate(tri_input, options)
+            if "triangles" not in result or len(result["triangles"]) == 0:
+                raise ValueError("triangle 三角剖分失败：未返回 triangles")
 
-        # 构建带 Z 的点集（Steiner 点 Z 由最近邻插值补充）
-        n_new = len(vertices_xy)
-        n_orig = len(pts_xy)
-        pts_z_full = np.zeros(n_new)
-        pts_z_full[:n_orig] = pts_z
-        if n_new > n_orig:
-            # Steiner 点：用最近原始点的 Z 值近似
-            from scipy.spatial import KDTree
-            kd = KDTree(pts_xy)
-            _, idx = kd.query(vertices_xy[n_orig:])
-            pts_z_full[n_orig:] = pts_z[idx]
+            vertices_xy = result["vertices"]    # shape=(N', 2)
+            triangles = result["triangles"]      # shape=(M, 3)
 
-        points_3d = np.column_stack([vertices_xy, pts_z_full])
+            # 构建带 Z 的点集（Steiner 点 Z 由最近邻插值补充）
+            n_new = len(vertices_xy)
+            n_base = len(pts_xy)
+            pts_z_full = np.zeros(n_new)
+            pts_z_full[:n_base] = pts_z
+            if n_new > n_base:
+                # Steiner 点：用最近原始点的 Z 值近似
+                from scipy.spatial import KDTree
+                kd = KDTree(pts_xy)
+                _, idx = kd.query(vertices_xy[n_base:])
+                pts_z_full[n_base:] = pts_z[idx]
 
+            points_3d = np.column_stack([vertices_xy, pts_z_full])
+            return TINModel(
+                points=points_3d,
+                triangles=triangles.astype(int),
+                constraint_edges=list(self._constraint_edges),
+                source_files=[],
+                source_mtimes=[],
+            )
+
+        # fallback：triangle 不可用时使用 scipy Delaunay（不强制约束边）
+        try:
+            from scipy.spatial import Delaunay
+            triangles = Delaunay(pts_xy).simplices.astype(int)
+        except Exception as exc:
+            raise ValueError("Delaunay 三角剖分失败，当前点集可能退化") from exc
+
+        points_3d = np.column_stack([pts_xy, pts_z])
         return TINModel(
             points=points_3d,
-            triangles=triangles.astype(int),
+            triangles=triangles,
             constraint_edges=list(self._constraint_edges),
             source_files=[],
             source_mtimes=[],

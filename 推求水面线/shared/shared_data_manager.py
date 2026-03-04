@@ -201,6 +201,25 @@ class SharedDataManager:
                     raw_result=result
                 )
             
+            # 有压管道特殊处理：不参与水力计算，只记录位置、管径和名称信息
+            is_pressure_pipe = result.get('is_pressure_pipe', False) or section_type == "有压管道"
+            if is_pressure_pipe:
+                return SectionResult(
+                    source=source,
+                    timestamp=time.time(),
+                    section_type="有压管道",
+                    Q=result.get('Q', 0.0),
+                    n=result.get('n', 0.014),
+                    slope_inv=0,
+                    coord_X=result.get('coord_X', 0.0),
+                    coord_Y=result.get('coord_Y', 0.0),
+                    D=result.get('D', 0.0),  # 管道直径
+                    flow_section=str(result.get('flow_section', '')),
+                    building_name=str(result.get('building_name', '')),
+                    turn_radius=float(result.get('turn_radius', 0.0) or 0.0),
+                    raw_result=result
+                )
+            
             section_result = SectionResult(
                 source=source,
                 timestamp=time.time(),

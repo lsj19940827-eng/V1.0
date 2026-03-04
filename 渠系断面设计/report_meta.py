@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QTextEdit, QComboBox, QPushButton,
     QListWidget, QListWidgetItem, QGroupBox, QTabWidget,
     QWidget, QDialogButtonBox, QFrame, QSizePolicy,
-    QAbstractItemView
+    QAbstractItemView, QRadioButton, QButtonGroup,
 )
 from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QFont
@@ -394,15 +394,21 @@ class ExportConfirmDialog(QDialog):
 
     def __init__(self, module_key: str, calc_title: str,
                  auto_purpose: str,
-                 parent=None):
+                 parent=None,
+                 n_cases: int = 1,
+                 current_case_label: str = ""):
         """
         Args:
             module_key: 模块标识，如 'open_channel'
             calc_title: 如 '明渠水力计算书'
             auto_purpose: 自动生成的计算目的文字
+            n_cases: 工况数量（>1 时显示导出范围选项）
+            current_case_label: 当前工况标签文字（用于显示）
         """
         super().__init__(parent)
         self.module_key = module_key
+        self._n_cases = n_cases
+        self._current_case_label = current_case_label
         self.setWindowTitle(f"导出计算书 — {calc_title}")
         self.setMinimumSize(560, 420)
         self.setStyleSheet(DIALOG_STYLE)
@@ -423,6 +429,29 @@ class ExportConfirmDialog(QDialog):
         root.addWidget(tip)
 
         root.addWidget(_hr())
+
+        # ---------- 导出范围（仅多工况时显示） ----------
+        self._export_scope_group = None
+        self._rb_current = None
+        self._rb_all = None
+        if self._n_cases > 1:
+            scope_grp = QGroupBox("导出范围")
+            scope_lay = QVBoxLayout(scope_grp)
+            self._rb_current = QRadioButton(
+                f"仅导出当前工况（{self._current_case_label}）"
+            )
+            self._rb_all = QRadioButton(
+                f"导出全部工况（{self._n_cases}个工况，合并文档）"
+            )
+            self._rb_all.setChecked(True)
+            btn_group = QButtonGroup(self)
+            btn_group.addButton(self._rb_current)
+            btn_group.addButton(self._rb_all)
+            scope_lay.addWidget(self._rb_current)
+            scope_lay.addWidget(self._rb_all)
+            root.addWidget(scope_grp)
+            root.addWidget(_hr())
+            self._export_scope_group = scope_grp
 
         # 计算目的
         grp1 = QGroupBox("计算目的（可直接使用或修改）")
@@ -477,3 +506,9 @@ class ExportConfirmDialog(QDialog):
 
     def get_references(self) -> List[str]:
         return REFERENCES_BASE.get(self.module_key, []) + self._meta.extra_references
+
+    def get_export_scope(self) -> str:
+        """返回导出范围: 'current' 或 'all'。单工况时始终返回 'all'。"""
+        if self._rb_current is not None and self._rb_current.isChecked():
+            return 'current'
+        return 'all'

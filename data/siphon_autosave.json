@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "saved_at": "2026-03-02 22:16:47",
+  "saved_at": "2026-03-04 12:58:01",
   "data": {
     "Q": 10.0,
     "v_guess": 2.0,
@@ -22,6 +22,9 @@
     "num_pipes": 1,
     "inc_checked": true,
     "inc_percent": "",
+    "v1_inc": "",
+    "v2_inc": "",
+    "v3_inc": "",
     "twist_angle_inlet": "",
     "twist_angle_outlet": "",
     "segments": [
@@ -330,9 +333,6 @@
       }
     ],
     "longitudinal_is_example": false,
-    "plan_source": "none",
-    "total_head_loss": 0.51169529455401,
-    "diameter": 2.6,
-    "velocity": 1.8834904507916608
+    "plan_source": "none"
   }
 }

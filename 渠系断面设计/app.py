@@ -19,10 +19,10 @@ os.environ.setdefault('QT_ENABLE_HIGHDPI_SCALING', '1')
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QFrame, QStackedWidget, QSizePolicy, QDialog
+    QLabel, QFrame, QStackedWidget, QSizePolicy, QDialog, QMenu
 )
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter
+from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QShortcut, QKeySequence, QAction
 
 from qfluentwidgets import (
     PushButton, InfoBar, InfoBarPosition, setTheme, Theme
@@ -41,6 +41,7 @@ from 渠系断面设计.batch.panel import BatchPanel
 from 渠系断面设计.siphon.panel import SiphonPanel
 from 渠系断面设计.water_profile.panel import WaterProfilePanel
 from 渠系断面设计.pressure_pipe.panel import PressurePipePanel
+from 渠系断面设计.project_manager import ProjectManager
 _EARTHWORK_AVAILABLE = False
 
 
@@ -108,7 +109,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"渠系建筑物水力计算系统 V{APP_VERSION}")
+        self._base_title = f"渠系建筑物水力计算系统 V{APP_VERSION}"
+        self.setWindowTitle(self._base_title)
 
         # ---- 根据屏幕分辨率自适应窗口尺寸 ----
         screen = QApplication.primaryScreen()
@@ -147,6 +149,13 @@ class MainWindow(QMainWindow):
 
         self._nav_buttons = []
         self._init_ui()
+
+        # ---- 项目管理器初始化 ----
+        self._init_project_manager()
+        self._update_recent_menu()
+
+        # ---- 快捷键绑定 ----
+        self._init_shortcuts()
 
         # 默认选中第一个
         self._switch_to(0)
@@ -231,6 +240,75 @@ class MainWindow(QMainWindow):
 
         nav_lay.addStretch()
 
+        # ---- 项目管理按钮（下拉菜单）----
+        sep_proj = QFrame()
+        sep_proj.setFrameShape(QFrame.HLine)
+        sep_proj.setStyleSheet(f"color:{BD};")
+        nav_lay.addWidget(sep_proj)
+        nav_lay.addSpacing(4)
+
+        self.btn_project = PushButton("📁 项目管理")
+        self.btn_project.setToolTip("新建/打开/保存项目 (Ctrl+N/O/S)")
+        self.btn_project.setFixedHeight(36)
+        self.btn_project.setStyleSheet(f"""
+            QPushButton {{
+                background: #E3F2FD; color: {P};
+                border: 1px solid #90CAF9; border-radius: 6px;
+                font-size: 12px; font-weight: bold;
+                text-align: center; padding: 0 8px;
+            }}
+            QPushButton:hover {{ background: #BBDEFB; }}
+            QPushButton::menu-indicator {{ width: 0px; }}
+        """)
+
+        # 创建下拉菜单
+        self.project_menu = QMenu(self)
+        self.project_menu.setStyleSheet(f"""
+            QMenu {{
+                background: white;
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 8px 24px;
+                border-radius: 4px;
+            }}
+            QMenu::item:selected {{
+                background: #E3F2FD;
+                color: {P};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: #E0E0E0;
+                margin: 4px 8px;
+            }}
+        """)
+
+        self.act_new = QAction("📄 新建项目", self)
+        self.act_new.setShortcut("Ctrl+N")
+        self.act_open = QAction("📂 打开项目...", self)
+        self.act_open.setShortcut("Ctrl+O")
+        self.act_save = QAction("💾 保存项目", self)
+        self.act_save.setShortcut("Ctrl+S")
+        self.act_save_as = QAction("📥 另存为...", self)
+        self.act_save_as.setShortcut("Ctrl+Shift+S")
+
+        self.project_menu.addAction(self.act_new)
+        self.project_menu.addAction(self.act_open)
+        self.project_menu.addSeparator()
+        self.project_menu.addAction(self.act_save)
+        self.project_menu.addAction(self.act_save_as)
+        self.project_menu.addSeparator()
+
+        # 最近项目子菜单
+        self.recent_menu = self.project_menu.addMenu("📋 最近项目")
+        # 注：_update_recent_menu() 延迟到 _init_project_manager() 之后调用
+
+        self.btn_project.setMenu(self.project_menu)
+        nav_lay.addWidget(self.btn_project)
+        nav_lay.addSpacing(4)
+
         # 项目设置按钮
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.HLine)
@@ -305,6 +383,97 @@ class MainWindow(QMainWindow):
 
         self.batch_panel.set_main_window(self)
 
+    # ----------------------------------------------------------------
+    # 项目管理
+    # ----------------------------------------------------------------
+    def _init_project_manager(self):
+        """初始化项目管理器"""
+        self.project_manager = ProjectManager(self)
+        self.project_manager.set_panels(
+            batch_panel=self.batch_panel,
+            water_profile_panel=self.water_profile_panel,
+            open_channel_panel=self.open_channel_panel,
+            aqueduct_panel=self.aqueduct_panel,
+            tunnel_panel=self.tunnel_panel,
+            culvert_panel=self.culvert_panel,
+            siphon_panel=self.siphon_panel,
+            pressure_pipe_panel=self.pressure_pipe_panel,
+        )
+
+        # 连接信号
+        self.project_manager.project_changed.connect(self._on_project_changed)
+        self.project_manager.dirty_changed.connect(self._on_dirty_changed)
+        self.project_manager.status_message.connect(self._on_status_message)
+
+        # 连接菜单动作
+        self.act_new.triggered.connect(self.project_manager.new_project)
+        self.act_open.triggered.connect(lambda: self.project_manager.open_project())
+        self.act_save.triggered.connect(self.project_manager.save_project)
+        self.act_save_as.triggered.connect(self.project_manager.save_as_project)
+
+        # 启动自动保存
+        self.project_manager.start_auto_save()
+
+    def _init_shortcuts(self):
+        """初始化快捷键"""
+        # Ctrl+N: 新建项目
+        shortcut_new = QShortcut(QKeySequence("Ctrl+N"), self)
+        shortcut_new.activated.connect(self.project_manager.new_project)
+
+        # Ctrl+O: 打开项目
+        shortcut_open = QShortcut(QKeySequence("Ctrl+O"), self)
+        shortcut_open.activated.connect(lambda: self.project_manager.open_project())
+
+        # Ctrl+S: 保存项目
+        shortcut_save = QShortcut(QKeySequence("Ctrl+S"), self)
+        shortcut_save.activated.connect(self.project_manager.save_project)
+
+        # Ctrl+Shift+S: 另存为
+        shortcut_save_as = QShortcut(QKeySequence("Ctrl+Shift+S"), self)
+        shortcut_save_as.activated.connect(self.project_manager.save_as_project)
+
+    def _on_project_changed(self, path: str):
+        """项目路径变化时更新窗口标题"""
+        self._update_window_title()
+        self._update_recent_menu()
+
+    def _on_dirty_changed(self, is_dirty: bool):
+        """脏状态变化时更新窗口标题"""
+        self._update_window_title()
+
+    def _on_status_message(self, message: str):
+        """显示状态栏消息"""
+        self.statusBar().showMessage(message, 5000)
+
+    def _update_window_title(self):
+        """更新窗口标题"""
+        self.setWindowTitle(self.project_manager.get_window_title(self._base_title))
+
+    def _update_recent_menu(self):
+        """更新最近项目菜单"""
+        self.recent_menu.clear()
+        recent = self.project_manager.recent_projects
+
+        if not recent:
+            act_empty = self.recent_menu.addAction("(无最近项目)")
+            act_empty.setEnabled(False)
+        else:
+            for path in recent:
+                import os
+                name = os.path.basename(path)
+                act = self.recent_menu.addAction(name)
+                act.setToolTip(path)
+                act.triggered.connect(lambda checked, p=path: self.project_manager.open_project(p))
+
+            self.recent_menu.addSeparator()
+            act_clear = self.recent_menu.addAction("清空最近项目")
+            act_clear.triggered.connect(self._clear_recent_and_update)
+
+    def _clear_recent_and_update(self):
+        """清空最近项目并更新菜单"""
+        self.project_manager.clear_recent_projects()
+        self._update_recent_menu()
+
     def _open_project_settings(self):
         dlg = ProjectSettingsDialog(self)
         dlg.exec()
@@ -369,7 +538,19 @@ class MainWindow(QMainWindow):
                 pass
 
     def closeEvent(self, event):
-        """关闭窗口前保存倒虹吸面板状态，隐藏窗口以避免 Matplotlib 画布闪烁"""
+        """关闭窗口前检查项目保存，保存倒虹吸面板状态"""
+        print("[DEBUG] MainWindow closeEvent called")
+        # 检查项目是否需要保存
+        if hasattr(self, 'project_manager'):
+            print(f"[DEBUG] project_manager exists, calling check_save_on_close")
+            if not self.project_manager.check_save_on_close():
+                print("[DEBUG] User cancelled close, ignoring event")
+                event.ignore()
+                return
+        else:
+            print("[DEBUG] No project_manager found")
+
+        print("[DEBUG] Proceeding with close")
         self.hide()
         try:
             self.siphon_panel._save_autosave()

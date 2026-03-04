@@ -263,9 +263,12 @@ class _NumPipesWidget(QWidget):
 
 class SiphonPanel(QWidget):
     """倒虹吸水力计算面板（完整复刻版）"""
+    data_changed = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, show_case_management: bool = True):
         super().__init__(parent)
+        # 兼容多倒虹吸弹窗参数，当前单面板不展示工况条，但保留入参
+        self._show_case_management = bool(show_case_management)
         # 核心数据
         self.segments = []           # 所有结构段（通用+纵断面+平面）
         self.plan_segments = []      # 平面段
@@ -1696,6 +1699,7 @@ document.addEventListener("DOMContentLoaded", function(){
             self.from_dict(data)
             InfoBar.success("导入成功", f"已从 {os.path.basename(filepath)} 恢复参数",
                            parent=self, duration=3000, position=InfoBarPosition.TOP_RIGHT)
+            self.data_changed.emit()
         except Exception as e:
             fluent_error(self, "导入失败", f"文件格式错误或损坏：{e}")
 
@@ -1884,6 +1888,15 @@ document.addEventListener("DOMContentLoaded", function(){
         self._update_D_theory()
         self._update_turn_R()
         print("[DEBUG SiphonPanel.from_dict] 完成")
+
+    def to_project_dict(self):
+        """项目保存接口：复用原有 to_dict。"""
+        return self.to_dict()
+
+    def from_project_dict(self, data):
+        """项目加载接口：复用原有 from_dict。"""
+        if isinstance(data, dict):
+            self.from_dict(data)
 
     def _seg_to_dict(self, seg):
         d = {
@@ -3874,6 +3887,7 @@ document.addEventListener("DOMContentLoaded", function(){
 
             if self.on_result_callback:
                 self.on_result_callback(result)
+            self.data_changed.emit()
 
         except Exception as e:
             InfoBar.error("计算错误", f"计算过程发生错误: {str(e)}", parent=self._info_parent(),
@@ -4045,6 +4059,7 @@ document.addEventListener("DOMContentLoaded", function(){
         self.detail_text.clear()
         self.calculation_result = None
         self._detail_text_cache = ""
+        self.data_changed.emit()
 
     # ================================================================
     # 导出

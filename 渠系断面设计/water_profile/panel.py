@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QScrollArea, QGridLayout, QFormLayout,
     QDialog, QDialogButtonBox, QToolTip
 )
-from PySide6.QtCore import Qt, QByteArray
+from PySide6.QtCore import Qt, QByteArray, Signal
 from PySide6.QtGui import QFont, QColor, QPixmap, QImage, QShortcut, QKeySequence
 
 from qfluentwidgets import (
@@ -93,7 +93,7 @@ except ImportError:
         "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
         "渡槽-U形", "渡槽-矩形",
         "隧洞-圆形", "隧洞-圆弧直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
-        "矩形暗涵", "倒虹吸", "分水闸", "分水口", "节制闸", "泄水闸",
+        "矩形暗涵", "倒虹吸", "有压管道", "分水闸", "分水口", "节制闸", "泄水闸",
     ]
     CHANNEL_LEVEL_OPTIONS = ["总干渠", "总干管", "分干渠", "分干管", "干渠", "干管", "支渠", "支管", "分支渠", "分支管"]
     DEFAULT_ROUGHNESS = 0.014
@@ -140,6 +140,10 @@ NODE_ALL_HEADERS = [
 
 # 导出Excel时使用的表头（与NODE_ALL_HEADERS一致）
 NODE_EXPORT_HEADERS = NODE_ALL_HEADERS
+
+# 节点数据表工具栏布局预设：
+# compact（紧凑）/ balanced（平衡，默认）/ comfortable（宽松）
+NODE_TOOLBAR_LAYOUT_PRESET = "balanced"
 
 
 # ================================================================
@@ -352,9 +356,11 @@ class SiphonRoughnessChipContainer(QWidget):
     _PRIMARY = "#0078D4"
     _PRIMARY_DARK = "#005A9E"
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, title_text="倒虹吸糙率详情", empty_text="导入后自动显示"):
         super().__init__(parent)
         self._pairs = []  # [(名称, 糙率), ...]
+        self._title_text = title_text
+        self._empty_text = empty_text
         self._build_ui()
 
     def _build_ui(self):
@@ -363,7 +369,7 @@ class SiphonRoughnessChipContainer(QWidget):
         lay.setSpacing(0)
 
         # 占位文字（无数据时显示）
-        self._placeholder = QLabel("导入后自动显示")
+        self._placeholder = QLabel(self._empty_text)
         self._placeholder.setStyleSheet("color: #555555; font-size: 12px;")
         lay.addWidget(self._placeholder)
 
@@ -454,7 +460,7 @@ class SiphonRoughnessChipContainer(QWidget):
         dot_lbl = QLabel("●")
         dot_lbl.setStyleSheet(f"color: {primary}; font-size: 8px; background: transparent;")
         header_lay.addWidget(dot_lbl)
-        title = QLabel("倒虹吸糙率详情")
+        title = QLabel(self._title_text)
         title.setStyleSheet(
             "font-size: 13px; font-weight: 600; color: #2D3748; background: transparent;"
         )
@@ -508,8 +514,8 @@ class SiphonRoughnessChipContainer(QWidget):
         popup.move(btn_pos.x(), btn_pos.y() + 4)
         popup.show()
 
-    def set_siphon_data(self, pairs):
-        """设置倒虹吸数据。pairs: [(名称, 糙率), ...]"""
+    def set_pairs(self, pairs):
+        """设置数据。pairs: [(名称, 糙率), ...]"""
         self._pairs = list(pairs) if pairs else []
         has_data = bool(self._pairs)
         self._placeholder.setVisible(not has_data)
@@ -525,6 +531,10 @@ class SiphonRoughnessChipContainer(QWidget):
                 self._btn.setText("查看详情")
             self._btn.adjustSize()
 
+    def set_siphon_data(self, pairs):
+        """兼容旧接口"""
+        self.set_pairs(pairs)
+
     def clear(self):
         self._pairs.clear()
         self._placeholder.setVisible(True)
@@ -539,11 +549,17 @@ class SiphonRoughnessChipContainer(QWidget):
 class WaterProfilePanel(QWidget):
     """推求水面线面板"""
 
+    # 数据变化信号（用于项目管理器追踪脏状态）
+    data_changed = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.nodes = []
         self.calculated_nodes = []
         self._settings = None
+        self.btn_pressure_pipe_calc = None
+        self._node_toolbar_layout_preset = NODE_TOOLBAR_LAYOUT_PRESET
+        self._pressure_pipe_calc_done = {}
         # 建筑物长度统计缓存
         self._last_building_lengths = []
         self._last_channel_total_length = 0.0
@@ -566,6 +582,11 @@ class WaterProfilePanel(QWidget):
             'offset': 10,
             'text_height': 10,
         }
+        # CAD导出相关缓存（供“生成断面汇总表”与“导出全部DXF”互相复用）
+        self._custom_pressurized_pipe_params = {"siphon": [], "pressure_pipe": []}
+        self._custom_struct_thickness = {}
+        self._custom_rock_lining = {}
+        self._custom_tunnel_unified = {}
         # 防止 cellChanged 递归更新的守卫标志
         self._updating_cells = False
         # 表格编辑撤销栈（单元格编辑）
@@ -650,6 +671,12 @@ class WaterProfilePanel(QWidget):
         sg.addWidget(QLabel("倒虹吸糙率:"), r, 8, Qt.AlignRight)
         self.siphon_roughness_chips = SiphonRoughnessChipContainer()
         sg.addWidget(self.siphon_roughness_chips, r, 9)
+        sg.addWidget(QLabel("有压管道糙率:"), r, 10, Qt.AlignRight)
+        self.pressure_pipe_roughness_chips = SiphonRoughnessChipContainer(
+            title_text="有压管道糙率详情",
+            empty_text="导入后自动显示"
+        )
+        sg.addWidget(self.pressure_pipe_roughness_chips, r, 11)
 
         # 第2行：流量与高级参数
         r = 1
@@ -801,73 +828,96 @@ class WaterProfilePanel(QWidget):
         self.siphon_outlet_combo.currentTextChanged.connect(self._on_siphon_outlet_form_changed)
 
         # ────────────────────────────────────────────
-        # 工具栏（逻辑分组 + 视觉分隔）
+        # 工具栏（单行分组布局，优化间距与宽度）
         # ────────────────────────────────────────────
+        toolbar_presets = {
+            "compact": {
+                "h_spacing": 6,
+                "btn_height": 34,
+                "extra_primary": 10,
+                "extra_primary_long": 12,
+                "extra_normal": 8,
+                "extra_clear": 6,
+            },
+            "balanced": {
+                "h_spacing": 8,
+                "btn_height": 36,
+                "extra_primary": 10,
+                "extra_primary_long": 12,
+                "extra_normal": 8,
+                "extra_clear": 6,
+            },
+            "comfortable": {
+                "h_spacing": 10,
+                "btn_height": 38,
+                "extra_primary": 12,
+                "extra_primary_long": 14,
+                "extra_normal": 10,
+                "extra_clear": 8,
+            },
+        }
+        self._node_toolbar_preset = toolbar_presets.get(self._node_toolbar_layout_preset, toolbar_presets["balanced"])
+
         tb = QHBoxLayout()
-        tb.setSpacing(6)
+        tb.setContentsMargins(0, 0, 0, 0)
+        tb.setSpacing(self._node_toolbar_preset["h_spacing"])
+        tb.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
         lbl = QLabel("节点数据表")
         lbl.setStyleSheet(f"font-size:13px; font-weight:bold; color:{T1};")
+        from PySide6.QtWidgets import QSizePolicy
+        lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         tb.addWidget(lbl)
+        tb.addSpacing(10)
 
-        # 分隔符辅助函数
-        def _sep():
-            s = QFrame()
-            s.setFrameShape(QFrame.VLine)
-            s.setStyleSheet(f"color:{BD};")
-            s.setFixedWidth(1)
-            s.setFixedHeight(22)
-            return s
-
-        tb.addStretch()
+        def _register_toolbar_button(btn, role):
+            btn.ensurePolished()
+            hint_w = btn.sizeHint().width()
+            min_w = btn.minimumSizeHint().width() + 2
+            if role == "primary_long":
+                extra = self._node_toolbar_preset["extra_primary_long"]
+            elif role == "primary":
+                extra = self._node_toolbar_preset["extra_primary"]
+            elif role == "clear":
+                extra = self._node_toolbar_preset["extra_clear"]
+            else:
+                extra = self._node_toolbar_preset["extra_normal"]
+            width = max(min_w, hint_w + extra)
+            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            btn.setFixedSize(width, self._node_toolbar_preset["btn_height"])
 
         # 数据导入组
         btn_import = PrimaryPushButton("从批量计算导入")
         btn_import.clicked.connect(self._import_from_batch)
+        _register_toolbar_button(btn_import, "primary_long")
         tb.addWidget(btn_import)
 
         # 计算组（醒目按钮，紧跟在导入按钮之后）
         btn_transition = PrimaryPushButton("插入渐变段")
         btn_transition.clicked.connect(self._insert_transitions)
-        btn_transition.setFixedWidth(120)
+        _register_toolbar_button(btn_transition, "primary")
+        
         btn_siphon = PrimaryPushButton("倒虹吸水力计算")
         btn_siphon.clicked.connect(self._open_siphon_calculator)
-        btn_siphon.setFixedWidth(150)
+        _register_toolbar_button(btn_siphon, "primary_long")
+        
+        self.btn_pressure_pipe_calc = PrimaryPushButton("有压管道水力计算")
+        self.btn_pressure_pipe_calc.clicked.connect(self._open_pressure_pipe_calculator)
+        _register_toolbar_button(self.btn_pressure_pipe_calc, "primary_long")
+        
         btn_calc = PrimaryPushButton("执行计算")
         btn_calc.clicked.connect(self._calculate)
-        btn_calc.setFixedWidth(120)
-        tb.addWidget(btn_transition)
-        tb.addWidget(btn_siphon)
-        tb.addWidget(btn_calc)
-        tb.addWidget(_sep())
+        _register_toolbar_button(btn_calc, "primary")
+        for w in [btn_transition, btn_siphon, self.btn_pressure_pipe_calc, btn_calc]:
+            tb.addWidget(w)
 
-        # 导入Excel
-        btn_import_excel = PushButton("导入Excel")
-        btn_import_excel.clicked.connect(self._import_excel)
-        tb.addWidget(btn_import_excel)
-
-        # 节点编辑组
-        btn_add = PushButton("添加节点")
-        btn_add.setToolTip("在表格末尾添加一行空白节点")
-        btn_add.clicked.connect(self._add_node_row)
-        
-        btn_insert = PushButton("插入节点")
-        btn_insert.setToolTip("在选中行位置插入一行空白节点\n▶ 需先选中要插入位置的行")
-        btn_insert.clicked.connect(self._insert_node_row)
-        
-        btn_del = PushButton("删除节点")
-        btn_del.setToolTip("删除选中的节点行\n▶ 需先选中要删除的行\n▶ 支持 Ctrl+Z 撤销")
-        btn_del.clicked.connect(self._del_node_row)
-        
-        btn_copy = PushButton("复制节点")
-        btn_copy.setToolTip("复制选中行并添加到表格末尾\n▶ 需先选中要复制的行")
-        btn_copy.clicked.connect(self._copy_node_row)
-        
+        # 数据清理组
         btn_clear = PushButton("清空")
         btn_clear.setToolTip("清空表格中所有节点\n▶ 支持 Ctrl+Z 撤销")
         btn_clear.clicked.connect(self._clear_nodes)
-        
-        for w in [btn_add, btn_insert, btn_del, btn_copy, btn_clear]:
-            tb.addWidget(w)
+        _register_toolbar_button(btn_clear, "clear")
+
+        tb.addWidget(btn_clear)
 
         lay.addLayout(tb)
 
@@ -902,6 +952,7 @@ class WaterProfilePanel(QWidget):
         redo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         redo_sc.activated.connect(self._redo_loss_edit)
         self._setup_header_tooltips()
+        self._refresh_pressure_pipe_controls()
 
     def _on_settings_toggled(self, collapsed):
         """折叠/展开设置区时，自动调整splitter分配，让底部图表获得释放的空间"""
@@ -1252,12 +1303,13 @@ class WaterProfilePanel(QWidget):
             "=" * 70, "",
             "操作步骤：",
             "  1. 填写基础设置（渠道名称、起始水位、流量等）",
-            "  2. 输入节点数据（从批量计算导入 或 导入Excel 或 手动添加）",
+            "  2. 输入节点数据（从批量计算导入）",
             "  3. 核对基础设置和渐变段设置",
             "  4. 点击「插入渐变段」",
             "  5.（如有倒虹吸）点击「倒虹吸水力计算」",
-            "  6. 点击「执行计算」",
-            "  7. 查看结果表格和详细过程", "",
+            "  6.（如有有压管道）点击「有压管道水力计算」",
+            "  7. 点击「执行计算」",
+            "  8. 查看结果表格和详细过程", "",
             "从批量计算导入：",
             "  - 先在「批量计算」模块完成计算",
             "  - 点击「从批量计算导入」自动填充节点表",
@@ -1364,6 +1416,10 @@ class WaterProfilePanel(QWidget):
         if col not in EDITABLE_COLS:
             return
         
+        # 触发数据变化信号（除非正在加载项目）
+        if not getattr(self, '_loading_project', False):
+            self.data_changed.emit()
+        
         self._updating_cells = True
         try:
             # 如果在批量操作中（如 Delete 键删除），跳过快照记录
@@ -1387,9 +1443,16 @@ class WaterProfilePanel(QWidget):
                 self._recalc_downstream(row)
         finally:
             self._updating_cells = False
-            # 更新 pre_edit 为当前新值，以便连续编辑同一单元格时也能撤销
-            item = self.node_table.item(row, col)
-            self._pre_edit_cell_value = (row, col, item.text() if item else "")
+        # 更新 pre_edit 为当前新值，以便连续编辑同一单元格时也能撤销
+        item = self.node_table.item(row, col)
+        self._pre_edit_cell_value = (row, col, item.text() if item else "")
+
+        self._refresh_pressure_pipe_controls()
+        if col in (2, 24):
+            nodes_for_view = self._build_nodes_from_table()
+            self._update_pressure_pipe_roughness_overview(
+                self._collect_pressure_pipe_roughness_pairs_from_nodes(nodes_for_view)
+            )
 
     def _push_undo_snapshot(self):
         """记录当前表格状态到撤销栈（Delete 键删除前调用）"""
@@ -1545,6 +1608,7 @@ class WaterProfilePanel(QWidget):
         """保存完整节点表状态（用于行操作撤销）"""
         snapshot = {
             'rows': [],
+            'row_meta': [],
             'structure_heights': dict(self._node_structure_heights),
             'chamfer_params': dict(self._node_chamfer_params),
             'u_params': dict(self._node_u_params),
@@ -1555,6 +1619,8 @@ class WaterProfilePanel(QWidget):
                 item = self.node_table.item(r, c)
                 row_data.append(item.text() if item else "")
             snapshot['rows'].append(row_data)
+            first_item = self.node_table.item(r, 0)
+            snapshot['row_meta'].append(first_item.data(Qt.UserRole) if first_item else None)
         return snapshot
 
     def _restore_node_table(self, snapshot):
@@ -1574,12 +1640,23 @@ class WaterProfilePanel(QWidget):
                     if r == 0 and c in FIRST_ROW_LOCKED_LOSS_COLS:
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     self.node_table.setItem(r, c, item)
+                row_meta = snapshot.get('row_meta', [])
+                if r < len(row_meta):
+                    first_item = self.node_table.item(r, 0)
+                    if first_item is not None:
+                        first_item.setData(Qt.UserRole, row_meta[r])
             # 恢复缓存字典
             self._node_structure_heights = dict(snapshot['structure_heights'])
             self._node_chamfer_params = dict(snapshot['chamfer_params'])
             self._node_u_params = dict(snapshot['u_params'])
         finally:
             self._updating_cells = False
+        self._refresh_pressure_pipe_controls()
+        nodes_for_view = self._build_nodes_from_table()
+        self._update_pressure_pipe_roughness_overview(
+            self._collect_pressure_pipe_roughness_pairs_from_nodes(nodes_for_view)
+        )
+        self._refresh_pressure_pipe_controls()
 
     def _push_node_table_undo(self):
         """在行操作前记录快照到撤销栈"""
@@ -1753,90 +1830,7 @@ class WaterProfilePanel(QWidget):
             if row == 0 and col in FIRST_ROW_LOCKED_LOSS_COLS:
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
             self.node_table.setItem(row, col, item)
-
-    def _insert_node_row(self):
-        """在选中行的位置插入一行空节点"""
-        rows = sorted(set(idx.row() for idx in self.node_table.selectedIndexes()))
-        if not rows:
-            InfoBar.warning("提示", "请先选择要插入位置的行", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
-            return
-        self._push_node_table_undo()
-        insert_pos = rows[0]
-        self.node_table.insertRow(insert_pos)
-        total_cols = len(NODE_ALL_HEADERS)
-        for col in range(total_cols):
-            if col == 2:
-                item = QTableWidgetItem("明渠-梯形")
-            else:
-                item = QTableWidgetItem("")
-            item.setTextAlignment(Qt.AlignCenter)
-            if col not in EDITABLE_COLS:
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-            # 第一行（水位起点）锁定水头损失列
-            if insert_pos == 0 and col in FIRST_ROW_LOCKED_LOSS_COLS:
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-            self.node_table.setItem(insert_pos, col, item)
-        # 插入后原第一行下移，需解锁其水头损失列；新第一行已在上面锁定
-        if insert_pos == 0 and self.node_table.rowCount() > 1:
-            self._unlock_row_loss_cols(1)
-
-    def _del_node_row(self):
-        rows = sorted(set(idx.row() for idx in self.node_table.selectedIndexes()), reverse=True)
-        if not rows:
-            InfoBar.warning("提示", "请先选择要删除的行", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
-            return
-        self._push_node_table_undo()
-        for r in rows:
-            self.node_table.removeRow(r)
-            # 更新结构高度缓存索引（删除行后，后续行索引下移）
-            self._node_structure_heights.pop(r, None)
-            updated = {}
-            for k, v in self._node_structure_heights.items():
-                updated[k - 1 if k > r else k] = v
-            self._node_structure_heights = updated
-            # 同步更新倒角参数缓存索引
-            self._node_chamfer_params.pop(r, None)
-            updated_cp = {}
-            for k, v in self._node_chamfer_params.items():
-                updated_cp[k - 1 if k > r else k] = v
-            self._node_chamfer_params = updated_cp
-            self._node_u_params.pop(r, None)
-            updated_up = {}
-            for k, v in self._node_u_params.items():
-                updated_up[k - 1 if k > r else k] = v
-            self._node_u_params = updated_up
-        # 删除后确保新的第一行水头损失列被锁定
-        self._ensure_first_row_loss_locked()
-        # 将焦点设回表格，方便用户直接按 Ctrl+Z 撤销
-        self.node_table.setFocus()
-
-    def _copy_node_row(self):
-        rows = sorted(set(idx.row() for idx in self.node_table.selectedIndexes()))
-        if not rows:
-            InfoBar.warning("提示", "请先选择要复制的行", parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
-            return
-        self._push_node_table_undo()
-        for r in rows:
-            data = self._get_node_row_data(r)
-            self._add_node_row(data, _skip_undo=True)
-
-    def _ensure_first_row_loss_locked(self):
-        """确保第一行（水位起点）的水头损失列不可编辑"""
-        if self.node_table.rowCount() == 0:
-            return
-        for col in FIRST_ROW_LOCKED_LOSS_COLS:
-            item = self.node_table.item(0, col)
-            if item:
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-
-    def _unlock_row_loss_cols(self, row):
-        """解锁指定行的水头损失列（原第一行下移后需要恢复可编辑）"""
-        if row < 0 or row >= self.node_table.rowCount():
-            return
-        for col in FIRST_ROW_LOCKED_LOSS_COLS:
-            item = self.node_table.item(row, col)
-            if item:
-                item.setFlags(item.flags() | Qt.ItemIsEditable)
+        self._refresh_pressure_pipe_controls()
 
     def _clear_nodes(self):
         if self.node_table.rowCount() > 0:
@@ -1847,6 +1841,11 @@ class WaterProfilePanel(QWidget):
         self._node_u_params.clear()
         self.calculated_nodes = []
         self.nodes = []
+        if hasattr(self, 'siphon_roughness_chips'):
+            self.siphon_roughness_chips.clear()
+        if hasattr(self, 'pressure_pipe_roughness_chips'):
+            self.pressure_pipe_roughness_chips.clear()
+        self._refresh_pressure_pipe_controls()
 
     def _get_node_row_data(self, row):
         data = []
@@ -1879,6 +1878,7 @@ class WaterProfilePanel(QWidget):
         flow_segment_map = {}  # {流量段编号: 设计流量}
         general_roughness_vals = []   # 收集非倒虹吸行的糙率
         siphon_roughness_pairs = []   # 收集倒虹吸行的 (名称, 糙率)
+        pressure_pipe_roughness_pairs = []  # 收集有压管道行的 (名称, 糙率)
 
         # 映射结构形式名称（兼容简化名称 → 完整名称）
         struct_map = {
@@ -1928,6 +1928,10 @@ class WaterProfilePanel(QWidget):
             if _n_float > 0:
                 if "倒虹吸" in section_type:
                     siphon_roughness_pairs.append((building_name or f"倒虹吸{len(siphon_roughness_pairs)+1}", _n_float))
+                elif "有压管道" in section_type:
+                    pressure_pipe_roughness_pairs.append(
+                        (building_name or f"有压管道{len(pressure_pipe_roughness_pairs)+1}", _n_float)
+                    )
                 else:
                     # 排除闸类占位行（闸类无糙率意义）
                     if "闸" not in section_type and "分水" not in section_type:
@@ -2027,6 +2031,7 @@ class WaterProfilePanel(QWidget):
             self.roughness_edit.setText(f"{chosen_n:.4f}".rstrip('0').rstrip('.'))
         # 倒虹吸糙率只读概览（每个倒虹吸独立显示）
         self._update_siphon_roughness_overview(siphon_roughness_pairs)
+        self._update_pressure_pipe_roughness_overview(pressure_pipe_roughness_pairs)
 
         # 自动填充多流量段设计流量和加大流量
         if flow_segment_map:
@@ -2048,10 +2053,15 @@ class WaterProfilePanel(QWidget):
 
         # 检查是否包含倒虹吸
         has_siphon = False
+        has_pressure_pipe = False
         if CALCULATOR_AVAILABLE:
             nodes = self._build_nodes_from_table()
             has_siphon = any(
                 n.structure_type and "倒虹吸" in n.structure_type.value
+                for n in nodes if n.structure_type
+            )
+            has_pressure_pipe = any(
+                n.structure_type and "有压管道" in n.structure_type.value
                 for n in nodes if n.structure_type
             )
 
@@ -2059,10 +2069,13 @@ class WaterProfilePanel(QWidget):
 
         # 触发几何计算（与原版Tkinter recalculate对齐）
         self._recalculate_geometry()
+        self.nodes = self._build_nodes_from_table()
 
         next_steps = "请依次点击【插入渐变段】→"
         if has_siphon:
             next_steps += "【倒虹吸水力计算】→"
+        if has_pressure_pipe:
+            next_steps += "【有压管道水力计算】→"
         next_steps += "【执行计算】"
 
         InfoBar.success("导入成功",
@@ -2094,12 +2107,12 @@ class WaterProfilePanel(QWidget):
         # ---- 1. 填充转弯半径列 (col 7) ----
         # 优先级：col 7 已有非零值(导入/手动填写) → 保留；否则按规则填充
         # 规则：首行/闸类/分水口 → 不填（不参与弯道几何计算）
-        #       倒虹吸行 → 临时写 n×D 供几何计算用，Step3 中清空（写回值除外）
+        #       倒虹吸/有压管道行 → 临时写 n×D 供几何计算用，Step3 中清空（写回值除外）
         #       普通行  → 使用全局转弯半径
         turn_radius = self._fval(self.turn_radius_edit, 0)
         siphon_n = DEFAULT_SIPHON_TURN_RADIUS_N
-        # 记录倒虹吸行中已有明确写回值的行（Step3 中保留，不清空）
-        siphon_rows_with_existing = set()
+        # 记录倒虹吸/有压管道行中已有明确写回值的行（Step3 中保留，不清空）
+        pressurized_rows_with_existing = set()
         for r in range(self.node_table.rowCount()):
             existing_r = 0.0
             ei = self.node_table.item(r, 7)
@@ -2112,15 +2125,16 @@ class WaterProfilePanel(QWidget):
             struct_item = self.node_table.item(r, 2)
             struct_text = struct_item.text().strip() if struct_item else ""
             _is_siphon = "倒虹吸" in struct_text
+            _is_pressure_pipe = "有压管道" in struct_text
             _is_gate = "闸" in struct_text or "分水" in struct_text
             if existing_r > 0:
-                if _is_siphon:
-                    siphon_rows_with_existing.add(r)
+                if _is_siphon or _is_pressure_pipe:
+                    pressurized_rows_with_existing.add(r)
                 continue  # 保留导入/手动输入/写回的转弯半径
             if r == 0 or _is_gate:
                 continue  # 首行/闸类：不填转弯半径
-            if _is_siphon:
-                # 倒虹吸行：临时写 n×D 供几何计算（Step3 会清空）
+            if _is_siphon or _is_pressure_pipe:
+                # 倒虹吸/有压管道行：临时写 n×D 供几何计算（Step3 会清空）
                 d_item = self.node_table.item(r, 21)  # 直径D
                 d_val = 0.0
                 if d_item:
@@ -2172,18 +2186,19 @@ class WaterProfilePanel(QWidget):
 
             # 转弯半径 (col 7) — 按规则写回
             # 首行/闸类：不写（保持空白）
-            # 倒虹吸行：若已有写回值则保留；否则清空临时 n×D
+            # 倒虹吸/有压管道行：若已有写回值则保留；否则清空临时 n×D
             # 普通行：写回计算值（与原逻辑一致）
             _st_r3 = node.get_structure_type_str() if hasattr(node, 'get_structure_type_str') else ""
             _is_siphon_r3 = "倒虹吸" in _st_r3
+            _is_pressure_pipe_r3 = "有压管道" in _st_r3
             _is_gate_r3 = "闸" in _st_r3 or "分水" in _st_r3
             if r == 0 or _is_gate_r3:
                 pass  # 首行/闸类：不写 col 7
-            elif _is_siphon_r3:
-                if r not in siphon_rows_with_existing:
-                    # 清空临时写入的 n×D，等待倒虹吸计算后写回真实值
+            elif _is_siphon_r3 or _is_pressure_pipe_r3:
+                if r not in pressurized_rows_with_existing:
+                    # 清空临时写入的 n×D，等待倒虹吸/有压管道计算后写回真实值
                     self.node_table.setItem(r, 7, QTableWidgetItem(""))
-                # else: siphon_rows_with_existing 中的行已有写回值，保留不动
+                # else: pressurized_rows_with_existing 中的行已有写回值，保留不动
             elif node.turn_radius and node.turn_radius > 0:
                 item = QTableWidgetItem(f"{node.turn_radius:.1f}")
                 item.setTextAlignment(Qt.AlignCenter)
@@ -2213,6 +2228,66 @@ class WaterProfilePanel(QWidget):
 
         auto_resize_table(self.node_table)
 
+    def fill_turn_radius_for_geometry(self, nodes, n):
+        """
+        为有压管道节点填充临时转弯半径 R = n × D
+        
+        在几何计算前调用，为有压管道节点临时填充转弯半径值供几何计算使用。
+        
+        Args:
+            nodes: ChannelNode 列表
+            n: 转弯半径倍数（R = n × D）
+            
+        Requirements: 8.1, 8.2, 8.3
+        """
+        if not nodes:
+            return
+        
+        for node in nodes:
+            # 只处理有压管道节点
+            if not node.is_pressure_pipe:
+                continue
+            
+            # 如果已有非零转弯半径值，保留不变（可能是用户导入或手动输入的值）
+            if node.turn_radius and node.turn_radius > 0:
+                continue
+            
+            # 从 section_params 中获取管径 D
+            diameter_D = node.section_params.get('D', 0.0)
+            if diameter_D <= 0:
+                continue
+            
+            # 计算临时转弯半径 R = n × D
+            node.turn_radius = n * diameter_D
+    
+    def clear_temporary_turn_radius(self, nodes):
+        """
+        清空有压管道节点的临时转弯半径
+        
+        在几何计算后调用，清空临时写入的转弯半径值。
+        但保留从水力计算回写的值（通过检查 external_head_loss 字段判断）。
+        
+        Args:
+            nodes: ChannelNode 列表
+            
+        Requirements: 8.4, 8.5
+        """
+        if not nodes:
+            return
+        
+        for node in nodes:
+            # 只处理有压管道节点
+            if not node.is_pressure_pipe:
+                continue
+            
+            # 如果有 external_head_loss 值，说明已经完成水力计算并回写了转弯半径
+            # 这种情况下保留转弯半径值不清空
+            if node.external_head_loss is not None and node.external_head_loss > 0:
+                continue
+            
+            # 清空临时转弯半径
+            node.turn_radius = 0.0
+
     def _sync_batch_settings(self):
         """从批量计算面板同步渠道基础信息"""
         try:
@@ -2235,294 +2310,6 @@ class WaterProfilePanel(QWidget):
                     if st: self.start_station_edit.setText(st)
         except Exception:
             pass
-
-    # ================================================================
-    # Excel 导入
-    # ================================================================
-    def _import_excel(self):
-        """从Excel文件导入节点数据（兼容多流量段批量计算导出的Excel格式）"""
-        try:
-            import pandas as pd
-        except ImportError:
-            InfoBar.warning("缺少依赖", "需要安装 pandas: pip install pandas openpyxl",
-                           parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
-            return
-
-        # 引导用户：说明导入文件的来源
-        if not fluent_question(
-                self, "导入Excel - 使用说明",
-                "本功能用于导入【多流量段批量计算】标签页中\n"
-                "【导出Excel报告】按钮生成的Excel文件。\n\n"
-                "操作步骤：\n"
-                "  1. 切换到【多流量段批量计算】标签页\n"
-                "  2. 完成批量计算后，点击底部的【导出Excel报告】\n"
-                "  3. 回到本页面，点击【导入Excel】选择该文件\n\n"
-                "是否继续选择文件？",
-                yes_text="继续", no_text="取消"):
-            return
-
-        filepath, _ = QFileDialog.getOpenFileName(
-            self, "选择【多流量段批量计算】导出的Excel文件", "",
-            "Excel文件 (*.xlsx *.xls);;所有文件 (*.*)")
-        if not filepath:
-            return
-
-        try:
-            # 先尝试读取基础信息（第2行）
-            channel_name_val = None
-            channel_level_val = None
-            start_wl_val = None
-            start_station_val = None
-
-            try:
-                raw_df = pd.read_excel(filepath, sheet_name='批量计算结果', header=None, nrows=3)
-                if len(raw_df) > 1 and len(raw_df.columns) >= 8:
-                    a2 = str(raw_df.iloc[1, 0]) if raw_df.iloc[1, 0] is not None else ""
-                    if "渠道名称" in a2:
-                        b2 = raw_df.iloc[1, 1]
-                        if b2 is not None and str(b2).strip():
-                            channel_name_val = str(b2).strip()
-                    c2 = str(raw_df.iloc[1, 2]) if raw_df.iloc[1, 2] is not None else ""
-                    if "渠道类型" in c2:
-                        d2 = raw_df.iloc[1, 3]
-                        if d2 is not None and str(d2).strip():
-                            channel_level_val = str(d2).strip()
-                    e2 = str(raw_df.iloc[1, 4]) if raw_df.iloc[1, 4] is not None else ""
-                    if "水位" in e2:
-                        f2 = raw_df.iloc[1, 5]
-                        if f2 is not None and str(f2).strip():
-                            start_wl_val = str(f2).strip()
-                    g2 = str(raw_df.iloc[1, 6]) if raw_df.iloc[1, 6] is not None else ""
-                    if "桩号" in g2:
-                        h2 = raw_df.iloc[1, 7]
-                        if h2 is not None and str(h2).strip():
-                            start_station_val = str(h2).strip()
-            except Exception:
-                pass
-
-            # 读取数据（第3行为表头，第4行起为数据）
-            try:
-                df = pd.read_excel(filepath, sheet_name='批量计算结果', header=2)
-            except Exception:
-                try:
-                    df = pd.read_excel(filepath, sheet_name=0, header=2)
-                except Exception:
-                    InfoBar.error("错误", "无法读取Excel文件",
-                                 parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
-                    return
-
-            if df.empty:
-                InfoBar.warning("提示", "Excel文件中没有数据",
-                               parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
-                return
-
-            # 自动填入基础信息
-            if channel_name_val:
-                self.channel_name_edit.setText(channel_name_val)
-            if channel_level_val:
-                idx = self.channel_level_combo.findText(channel_level_val)
-                if idx >= 0:
-                    self.channel_level_combo.setCurrentIndex(idx)
-            if start_wl_val:
-                self.start_wl_edit.setText(start_wl_val)
-            if start_station_val:
-                sv = parse_station_input(start_station_val)
-                self.start_station_edit.setText(format_station_display(sv))
-
-            # 自动识别列名
-            def find_col(candidates):
-                for col in df.columns:
-                    cs = str(col).strip()
-                    for c in candidates:
-                        if c in cs:
-                            return col
-                return None
-
-            col_fs = find_col(["流量段"])
-            col_name = find_col(["建筑物名称"])
-            col_struct = find_col(["断面类型", "结构形式"])
-            col_x = find_col(["X", "坐标X"])
-            col_y = find_col(["Y", "坐标Y"])
-            col_n = find_col(["糙率n", "糙率"])
-            col_slope = find_col(["比降(1/)", "比降", "底坡"])
-            col_bw = find_col(["B或D(m)", "底宽B(m)", "底宽"])
-            col_d = find_col(["直径D(m)", "直径D"])
-            col_m = find_col(["边坡系数m", "边坡系数"])
-            col_h = find_col(["水深h", "水深(m)", "设计水深"])
-            col_v = find_col(["流速V", "流速(m/s)", "设计流速"])
-            col_r = None
-            for col in df.columns:
-                cs = str(col).strip()
-                if cs in ("R(m)", "半径R(m)", "半径R"):
-                    col_r = col
-                    break
-            col_tr = find_col(["转弯半径(m)", "转弯半径"])
-            # 设计流量（排除加大流量列）
-            col_mf = find_col(["Q加大", "加大流量"])
-            col_df_q = None
-            for col in df.columns:
-                cs = str(col).strip()
-                if col_mf and col == col_mf:
-                    continue
-                for c in ["Q(m³/s)", "Q(m3/s)", "Q设计", "设计流量"]:
-                    if c in cs:
-                        col_df_q = col
-                        break
-                if col_df_q:
-                    break
-
-            self._updating_cells = True
-            self._clear_nodes()
-            flow_segment_map = {}
-            general_roughness_vals = []   # 收集非倒虹吸行的糙率
-            siphon_roughness_pairs = []   # 收集倒虹吸行的 (名称, 糙率)
-            imported = 0
-
-            for _, row in df.iterrows():
-                if col_fs:
-                    fsv = row.get(col_fs, "")
-                    if pd.isna(fsv) or str(fsv).strip() in ("", "流量段", "序号"):
-                        continue
-
-                def sf(v, d=0.0):
-                    if pd.isna(v): return d
-                    try:
-                        vs = str(v).strip()
-                        if vs in ("-", "", "N/A", "nan"): return d
-                        return float(vs)
-                    except (ValueError, TypeError):
-                        return d
-
-                fs = str(row.get(col_fs, "")) if col_fs and not pd.isna(row.get(col_fs, "")) else ""
-                nm = str(row.get(col_name, "")) if col_name and not pd.isna(row.get(col_name, "")) else ""
-                st = str(row.get(col_struct, "")) if col_struct and not pd.isna(row.get(col_struct, "")) else ""
-                x = sf(row.get(col_x, 0)) if col_x else 0.0
-                y = sf(row.get(col_y, 0)) if col_y else 0.0
-                bw = sf(row.get(col_bw, 0)) if col_bw else 0.0
-                d_val = sf(row.get(col_d, 0)) if col_d else 0.0
-                r_val = sf(row.get(col_r, 0)) if col_r else 0.0
-                tr_r_val = sf(row.get(col_tr, 0)) if col_tr else 0.0
-                m_val = sf(row.get(col_m, 0)) if col_m else 0.0
-                n_val = sf(row.get(col_n, 0)) if col_n else 0.0
-                sl_val = sf(row.get(col_slope, 0)) if col_slope else 0.0
-                q_val = sf(row.get(col_df_q, 0)) if col_df_q else 0.0
-                h_val = sf(row.get(col_h, 0)) if col_h else 0.0
-                v_val = sf(row.get(col_v, 0)) if col_v else 0.0
-
-                # 映射结构形式
-                if st:
-                    try:
-                        StructureType.from_string(st)
-                    except ValueError:
-                        smap = {"梯形": "明渠-梯形", "矩形": "明渠-矩形", "圆形": "明渠-圆形"}
-                        st = smap.get(st, st)
-
-                # 收集糙率分类（倒虹吸 vs 一般建筑物）
-                if n_val > 0:
-                    if "倒虹吸" in st:
-                        siphon_roughness_pairs.append((nm or f"倒虹吸{len(siphon_roughness_pairs)+1}", n_val))
-                    elif "闸" not in st and "分水" not in st:
-                        general_roughness_vals.append(n_val)
-
-                # 收集流量段
-                try:
-                    seg = int(fs)
-                except (ValueError, TypeError):
-                    seg = 1
-                if seg not in flow_segment_map and q_val > 0:
-                    flow_segment_map[seg] = q_val
-
-                def fmt(v):
-                    if v == 0.0 or v is None: return ""
-                    return f"{v:.4f}" if abs(v) < 1 else f"{v:.3f}"
-
-                row_data = [""] * len(NODE_ALL_HEADERS)
-                row_data[0] = fs
-                row_data[1] = nm
-                row_data[2] = st
-                row_data[5] = fmt(x)
-                row_data[6] = fmt(y)
-                row_data[7] = fmt(tr_r_val) if tr_r_val > 0 else ""
-                row_data[20] = fmt(bw)
-                row_data[21] = fmt(d_val)
-                row_data[22] = fmt(r_val)
-                row_data[23] = fmt(m_val)
-                row_data[24] = fmt(n_val)
-                row_data[25] = fmt(sl_val)
-                row_data[26] = fmt(q_val)
-                self._add_node_row(row_data, _skip_undo=True)
-
-                # 写入水深和流速到结果列（与批量导入对齐）
-                _cur_row = self.node_table.rowCount() - 1
-                if h_val > 0:
-                    _item = QTableWidgetItem(f"{h_val:.3f}")
-                    _item.setTextAlignment(Qt.AlignCenter)
-                    _item.setFlags(_item.flags() & ~Qt.ItemIsEditable)
-                    self.node_table.setItem(_cur_row, 27, _item)  # 水深h
-                if v_val > 0:
-                    _item = QTableWidgetItem(f"{v_val:.3f}")
-                    _item.setTextAlignment(Qt.AlignCenter)
-                    _item.setFlags(_item.flags() & ~Qt.ItemIsEditable)
-                    self.node_table.setItem(_cur_row, 31, _item)  # 流速v
-
-                imported += 1
-
-            auto_resize_table(self.node_table)
-
-            if imported == 0:
-                InfoBar.warning("提示", "未找到有效的数据行",
-                               parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
-                return
-
-            # 自动填充渠道糙率——值不一致时弹窗让用户选择
-            chosen_n = self._choose_roughness_value(general_roughness_vals, "渠道糙率")
-            if chosen_n is not None:
-                self.roughness_edit.setText(f"{chosen_n:.4f}".rstrip('0').rstrip('.'))
-            # 倒虹吸糙率只读概览（每个倒虹吸独立显示）
-            self._update_siphon_roughness_overview(siphon_roughness_pairs)
-
-            # 自动填充多流量段
-            if flow_segment_map:
-                sorted_segs = sorted(flow_segment_map.keys())
-                design_flows = [flow_segment_map[s] for s in sorted_segs]
-                strs = [f"{q:.3f}".rstrip('0').rstrip('.') for q in design_flows]
-                self.design_flow_edit.setText(", ".join(strs))
-                self._on_design_flow_changed()
-
-            # 自动计算转弯半径
-            if CALCULATOR_AVAILABLE:
-                nodes = self._build_nodes_from_table()
-                rec_r = self._calculate_recommended_turn_radius(nodes)
-                if rec_r > 0:
-                    self.turn_radius_edit.setText(f"{rec_r:.1f}")
-
-            self._updating_cells = False
-
-            # 触发几何计算（与原版Tkinter recalculate对齐）
-            self._recalculate_geometry()
-
-            # 检查是否包含倒虹吸，动态构建下一步提示
-            next_steps = "请核对基础设置后依次点击【插入渐变段】→"
-            if CALCULATOR_AVAILABLE:
-                nodes_check = self._build_nodes_from_table()
-                has_siphon = any(
-                    n.structure_type and "倒虹吸" in n.structure_type.value
-                    for n in nodes_check if n.structure_type
-                )
-                if has_siphon:
-                    next_steps += "【倒虹吸水力计算】→"
-            next_steps += "【执行计算】"
-
-            InfoBar.success("导入成功",
-                           f"已导入 {imported} 行数据。{next_steps}",
-                           parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
-
-        except Exception as e:
-            self._updating_cells = False
-            import traceback
-            traceback.print_exc()
-            InfoBar.error("导入失败", str(e),
-                         parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
     # ================================================================
     # 计算
@@ -2654,6 +2441,9 @@ class WaterProfilePanel(QWidget):
             # 标记倒虹吸
             if node.structure_type and node.structure_type == StructureType.INVERTED_SIPHON:
                 node.is_inverted_siphon = True
+            # 标记有压管道
+            if node.structure_type and node.structure_type == StructureType.PRESSURE_PIPE:
+                node.is_pressure_pipe = True
             # 恢复自动插入明渠段标记（通过UserRole存储）
             _first_item = table.item(r, 0)
             if _first_item:
@@ -2671,6 +2461,13 @@ class WaterProfilePanel(QWidget):
                     node.transition_form = td.get('transition_form', '')
                     node.transition_zeta = td.get('transition_zeta', 0.0)
                     node.transition_theta = td.get('transition_theta', 0.0)
+                if isinstance(_ur, dict):
+                    _ext = _ur.get('_external_head_loss', None)
+                    if _ext is not None and str(_ext).strip() != "":
+                        try:
+                            node.external_head_loss = float(_ext)
+                        except (ValueError, TypeError):
+                            node.external_head_loss = None
 
             # 进出口 (col 3)
             _io_text = _read_text(r, 3)
@@ -2893,6 +2690,27 @@ class WaterProfilePanel(QWidget):
                                parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
                 return
 
+            # 前置提醒：有压管道水力计算（允许继续，默认外部损失=0）
+            has_pressure_pipe = any(
+                n.structure_type and "有压管道" in n.structure_type.value
+                for n in nodes if n.structure_type
+            )
+            has_pressure_pipe_loss = any(
+                n.structure_type
+                and "有压管道" in n.structure_type.value
+                and getattr(n, 'in_out', None) is not None
+                and n.in_out.value == "出"
+                and getattr(n, 'external_head_loss', None) is not None
+                for n in nodes
+            )
+            if has_pressure_pipe and not has_pressure_pipe_loss:
+                InfoBar.warning(
+                    "提示",
+                    "检测到表格中包含有压管道，但尚未完成有压管道水力计算。"
+                    "本次将继续执行，未导入的有压管道外部水头损失按 0.0 m 处理。",
+                    parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP
+                )
+
             calculator = WaterProfileCalculator(settings)
 
             # 验证输入
@@ -2972,6 +2790,10 @@ class WaterProfilePanel(QWidget):
             self._update_table_from_nodes_full_impl(nodes, prefix)
         finally:
             self._updating_cells = False
+        self._update_pressure_pipe_roughness_overview(
+            self._collect_pressure_pipe_roughness_pairs_from_nodes(nodes)
+        )
+        self._refresh_pressure_pipe_controls()
 
     def _update_table_from_nodes_full_impl(self, nodes, prefix=""):
         # 更新结构高度缓存（计算完成后可能已重新计算）
@@ -3117,11 +2939,14 @@ class WaterProfilePanel(QWidget):
             # 在行首单元格中存储标记（UserRole），供_build_nodes_from_table恢复
             first_item = self.node_table.item(r, 0)
             if first_item:
+                payload = first_item.data(Qt.UserRole)
+                if not isinstance(payload, dict):
+                    payload = {}
                 if _is_auto_ch:
-                    first_item.setData(Qt.UserRole, {"_auto_channel": True, "_x": node.x, "_y": node.y})
+                    payload.update({"_auto_channel": True, "_x": node.x, "_y": node.y})
                 elif _is_trans and (node.transition_type or node.transition_form):
                     # 渐变段详细参数保存到UserRole（#10）
-                    first_item.setData(Qt.UserRole, {
+                    payload.update({
                         '_transition_data': {
                             'transition_type': getattr(node, 'transition_type', ''),
                             'transition_form': getattr(node, 'transition_form', ''),
@@ -3129,6 +2954,10 @@ class WaterProfilePanel(QWidget):
                             'transition_theta': getattr(node, 'transition_theta', 0.0),
                         }
                     })
+                if getattr(node, 'external_head_loss', None) is not None:
+                    payload['_external_head_loss'] = getattr(node, 'external_head_loss')
+                if payload:
+                    first_item.setData(Qt.UserRole, payload)
 
     def _generate_detail_report(self, nodes, settings, calculator=None):
         """生成详细计算过程文本"""
@@ -3351,6 +3180,71 @@ class WaterProfilePanel(QWidget):
             if name not in seen:
                 seen[name] = n_val
         self.siphon_roughness_chips.set_siphon_data(list(seen.items()))
+
+    def _update_pressure_pipe_roughness_overview(self, pairs):
+        """更新有压管道糙率芯片展示。pairs: [(名称, 糙率), ...]"""
+        if not hasattr(self, 'pressure_pipe_roughness_chips'):
+            return
+        if not pairs:
+            self.pressure_pipe_roughness_chips.clear()
+            return
+        seen = {}
+        default_idx = 1
+        for name, n_val in pairs:
+            display_name = str(name).strip() if name else ""
+            if not display_name:
+                display_name = f"有压管道{default_idx}"
+                default_idx += 1
+            if display_name not in seen:
+                seen[display_name] = n_val
+        self.pressure_pipe_roughness_chips.set_pairs(list(seen.items()))
+
+    def _collect_pressure_pipe_roughness_pairs_from_nodes(self, nodes):
+        """从节点列表提取有压管道糙率展示对。"""
+        pairs = []
+        if not nodes:
+            return pairs
+        default_idx = 1
+        for node in nodes:
+            st = node.structure_type.value if node.structure_type else ""
+            if "有压管道" not in st:
+                continue
+            if node.roughness and node.roughness > 0:
+                name = (node.name or "").strip()
+                if not name:
+                    name = f"有压管道{default_idx}"
+                    default_idx += 1
+                pairs.append((name, node.roughness))
+        return pairs
+
+    def _refresh_pressure_pipe_controls(self):
+        """刷新有压管道按钮启用状态。"""
+        btn = getattr(self, "btn_pressure_pipe_calc", None)
+        if btn is None:
+            return
+        table = getattr(self, "node_table", None)
+        if table is None:
+            btn.setEnabled(False)
+            return
+        has_ppipe = False
+        has_transition = False
+        for r in range(table.rowCount()):
+            st_item = table.item(r, 2)
+            st = st_item.text().strip() if st_item else ""
+            if "有压管道" in st:
+                has_ppipe = True
+            if "渐变段" in st:
+                has_transition = True
+            if has_ppipe and has_transition:
+                break
+        enabled = has_ppipe and has_transition
+        btn.setEnabled(enabled)
+        if not has_ppipe:
+            self.btn_pressure_pipe_calc.setToolTip("表格中无有压管道节点，按钮已禁用")
+        elif not has_transition:
+            self.btn_pressure_pipe_calc.setToolTip("请先插入渐变段后再执行有压管道水力计算")
+        else:
+            self.btn_pressure_pipe_calc.setToolTip("执行有压管道水力计算并回写外部水头损失")
 
     def _choose_roughness_value(self, values, label):
         """当同类建筑物糙率不一致时，弹窗让用户选择。
@@ -3709,7 +3603,7 @@ class WaterProfilePanel(QWidget):
             design_flows = self._parse_flow_values(self.design_flow_edit.text())
             max_flows = self._parse_flow_values(self.max_flow_edit.text())
             if not design_flows or not max_flows or all(q <= 0 for q in design_flows):
-                InfoBar.info("提示", "请先点击【从批量计算导入】或【导入Excel】导入数据后，再点击【插入渐变段】。",
+                InfoBar.info("提示", "请先点击【从批量计算导入】导入数据后，再点击【插入渐变段】。",
                             parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
                 return
 
@@ -3875,11 +3769,22 @@ class WaterProfilePanel(QWidget):
                 for n in prepared_nodes
                 if n.structure_type and not getattr(n, 'is_transition', False)
             )
+            has_pressure_pipe = any(
+                n.structure_type and "有压管道" in n.structure_type.value
+                for n in prepared_nodes
+                if n.structure_type and not getattr(n, 'is_transition', False)
+            )
 
             # 汇总信息（InfoBar非阻塞通知）
             summary = f"渐变段插入完成！共 {len(prepared_nodes)} 行（渐变段 {transition_count}，明渠段 {open_channel_count}）"
-            if has_siphon:
-                next_step = "下一步：请点击【倒虹吸水力计算】"
+            if has_siphon or has_pressure_pipe:
+                step_parts = []
+                if has_siphon:
+                    step_parts.append("【倒虹吸水力计算】")
+                if has_pressure_pipe:
+                    step_parts.append("【有压管道水力计算】")
+                step_parts.append("【执行计算】")
+                next_step = "下一步：请点击" + "→".join(step_parts)
             else:
                 next_step = "下一步：请点击【执行计算】"
             InfoBar.success(summary, next_step,
@@ -4058,7 +3963,8 @@ class WaterProfilePanel(QWidget):
                 manager=manager,
                 on_import_losses=import_losses_callback,
                 siphon_turn_radius_n=siphon_n,
-                auto_run=auto_run
+                auto_run=auto_run,
+                show_case_management=False
             )
             print(f"[DEBUG] MultiSiphonDialog 创建完成，准备调用 exec()")
             result = dlg.exec()
@@ -4073,6 +3979,171 @@ class WaterProfilePanel(QWidget):
             import traceback
             traceback.print_exc()
             InfoBar.error("错误", f"打开倒虹吸计算窗口失败: {str(e)}",
+                         parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+
+    def _open_pressure_pipe_calculator(self, auto_run: bool = False):
+        """打开有压管道水力计算窗口"""
+        print(f"[DEBUG] _open_pressure_pipe_calculator 被调用, auto_run={auto_run}")
+        if not CALCULATOR_AVAILABLE:
+            print("[DEBUG] CALCULATOR_AVAILABLE = False，返回")
+            InfoBar.error("不可用", "核心计算引擎未加载",
+                         parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            return
+
+        nodes = self._build_nodes_from_table()
+        if not nodes:
+            print("[DEBUG] nodes 为空，返回")
+            InfoBar.info("提示", "表格中没有数据，请先导入断面参数",
+                        parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+            return
+
+        # 检查是否已插入渐变段
+        has_transitions = any(getattr(n, 'is_transition', False) for n in nodes)
+        if not has_transitions:
+            print("[DEBUG] has_transitions = False，返回")
+            InfoBar.warning("提示",
+                           "请先点击工具栏的【插入渐变段】按钮，完成渐变段插入后再进行有压管道水力计算。\n"
+                           "插入渐变段后，系统才能准确获取有压管道上下游流速、断面参数等信息。",
+                           parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            return
+
+        # 检查是否有有压管道
+        has_ppipe = any(
+            n.structure_type and "有压管道" in n.structure_type.value
+            for n in nodes if n.structure_type
+        )
+        print(f"[DEBUG] has_ppipe = {has_ppipe}")
+        if not has_ppipe:
+            print("[DEBUG] has_ppipe = False，返回")
+            InfoBar.info("提示", "表格中没有有压管道数据，请确保有结构形式为\"有压管道\"的行",
+                        parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+            return
+
+        print("[DEBUG] 开始导入模块和提取有压管道分组")
+        try:
+            # 导入有压管道相关模块
+            _water_profile_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                '推求水面线'
+            )
+            import sys as _sys
+            if _water_profile_dir not in _sys.path:
+                _sys.path.insert(0, _water_profile_dir)
+            from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+            from managers.pressure_pipe_manager import PressurePipeManager
+            from core.pressure_pipe_calc import calc_total_head_loss, PIPE_MATERIALS
+
+            settings = self._build_settings()
+            pipe_groups = PressurePipeDataExtractor.extract_pipes(nodes, settings=settings)
+            if not pipe_groups:
+                InfoBar.info("提示", "未找到有压管道数据组",
+                            parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+                return
+
+            # 获取项目路径
+            project_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "default_project"
+            )
+            manager = PressurePipeManager(project_path)
+
+            # 逐条有压管道计算总水头损失并写回出口节点 external_head_loss
+            results = {}
+            warnings = []
+            default_material = "预应力钢筒混凝土管"
+
+            for group in pipe_groups:
+                if not group.is_valid():
+                    msg = group.get_validation_message()
+                    warnings.append(msg or f"{group.name}: 数据不完整，已跳过")
+                    continue
+
+                material_key = group.material_key if group.material_key in PIPE_MATERIALS else default_material
+                if group.material_key not in PIPE_MATERIALS:
+                    warnings.append(f"{group.name}: 未识别管材，已按“{default_material}”计算")
+
+                calc_res = calc_total_head_loss(
+                    name=group.name,
+                    Q=group.design_flow,
+                    D=group.diameter,
+                    material_key=material_key,
+                    ip_points=group.ip_points,
+                    upstream_velocity=group.upstream_velocity,
+                    downstream_velocity=group.downstream_velocity,
+                    inlet_transition_form=group.inlet_transition_form,
+                    outlet_transition_form=group.outlet_transition_form,
+                    inlet_transition_zeta=group.inlet_transition_zeta,
+                    outlet_transition_zeta=group.outlet_transition_zeta,
+                )
+
+                results[group.name] = {
+                    "head_loss": calc_res.total_head_loss,
+                    "diameter": group.diameter,
+                }
+
+                # 持久化计算结果，便于后续追溯
+                manager.set_result(
+                    group.name,
+                    total_head_loss=calc_res.total_head_loss,
+                    friction_loss=calc_res.friction_loss,
+                    total_bend_loss=calc_res.total_bend_loss,
+                    inlet_transition_loss=calc_res.inlet_transition_loss,
+                    outlet_transition_loss=calc_res.outlet_transition_loss,
+                    pipe_velocity=calc_res.pipe_velocity,
+                    plan_total_length=calc_res.total_length,
+                )
+
+            if not results:
+                warn_msg = "；".join(warnings) if warnings else "未生成可用计算结果"
+                InfoBar.warning(
+                    "有压管道计算",
+                    f"未能完成计算：{warn_msg}",
+                    parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP
+                )
+                return
+
+            cur_nodes = self._build_nodes_from_table()
+            cur_groups = PressurePipeDataExtractor.extract_pipes(cur_nodes, settings=settings)
+            imported_count = 0
+            for group in cur_groups:
+                result_data = results.get(group.name)
+                if not result_data:
+                    continue
+                head_loss = result_data.get("head_loss", 0.0)
+                outlet_idx = group.outlet_row_index
+                if 0 <= outlet_idx < len(cur_nodes):
+                    cur_nodes[outlet_idx].external_head_loss = head_loss
+                    self._pressure_pipe_calc_done[group.name] = True
+                    imported_count += 1
+
+            if imported_count > 0:
+                _s = self._build_settings()
+                _pfx = _s.get_station_prefix() if _s else ""
+                self.nodes = cur_nodes
+                self._update_table_from_nodes_full(cur_nodes, _pfx)
+                auto_resize_table(self.node_table)
+
+            warn_suffix = ""
+            if warnings:
+                warn_suffix = "\n注意：" + "；".join(warnings[:3])
+                if len(warnings) > 3:
+                    warn_suffix += f"；另有 {len(warnings) - 3} 条"
+
+            InfoBar.success(
+                "有压管道计算完成",
+                f"已完成 {imported_count} 条有压管道水头损失计算并回写到出口节点。{warn_suffix}",
+                parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP
+            )
+
+        except ImportError as e:
+            import traceback
+            traceback.print_exc()
+            InfoBar.warning("提示", f"有压管道水力计算模块加载失败: {str(e)}",
+                           parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            InfoBar.error("错误", f"打开有压管道计算窗口失败: {str(e)}",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
     # ================================================================
@@ -4312,3 +4383,273 @@ class WaterProfilePanel(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         auto_resize_table(self.node_table)
+
+    # ================================================================
+    # 项目文件序列化/反序列化（用于 .qxproj 项目保存功能）
+    # ================================================================
+    def to_project_dict(self) -> dict:
+        """
+        将水面线推求面板数据序列化为字典
+        
+        用于 .qxproj 项目文件保存，包含所有设置、节点数据和计算结果。
+        
+        Returns:
+            包含所有数据的字典
+        """
+        from 推求水面线.models.data_models import ChannelNode, ProjectSettings
+        
+        # 收集 UI 设置（控件当前值）
+        ui_settings = {
+            "channel_name": self.channel_name_edit.text().strip(),
+            "channel_level": self.channel_level_combo.currentText(),
+            "start_water_level": self.start_wl_edit.text().strip(),
+            "design_flows_text": self.design_flow_edit.text().strip(),
+            "max_flows_text": self.max_flow_edit.text().strip(),
+            "start_station_text": self.start_station_edit.text().strip(),
+            "roughness": self.roughness_edit.text().strip(),
+            "turn_radius": self.turn_radius_edit.text().strip(),
+            # 渐变段设置
+            "trans_inlet_form": self.trans_inlet_combo.currentText(),
+            "trans_inlet_zeta": self.trans_inlet_zeta.text().strip(),
+            "trans_outlet_form": self.trans_outlet_combo.currentText(),
+            "trans_outlet_zeta": self.trans_outlet_zeta.text().strip(),
+            "oc_trans_form": self.oc_trans_combo.currentText(),
+            "oc_trans_zeta": self.oc_trans_zeta.text().strip(),
+            "siphon_inlet_form": self.siphon_inlet_combo.currentText(),
+            "siphon_inlet_zeta": self.siphon_inlet_zeta.text().strip(),
+            "siphon_outlet_form": self.siphon_outlet_combo.currentText(),
+            "siphon_outlet_zeta": self.siphon_outlet_zeta.text().strip(),
+        }
+        
+        # 序列化 ProjectSettings
+        project_settings = {}
+        if self._settings:
+            project_settings = self._settings.to_dict()
+        
+        # 序列化节点列表
+        nodes_data = []
+        for node in self.nodes:
+            if hasattr(node, 'to_project_dict'):
+                nodes_data.append(node.to_project_dict())
+        
+        # 序列化计算结果节点列表
+        calculated_nodes_data = []
+        for node in self.calculated_nodes:
+            if hasattr(node, 'to_project_dict'):
+                calculated_nodes_data.append(node.to_project_dict())
+        
+        # 收集额外缓存数据（key 转为字符串，JSON 要求）
+        _pp_cache = getattr(self, "_custom_pressurized_pipe_params", {}) or {}
+        _pp_siphon = [
+            [str(row[0]), str(row[1]), row[2]]
+            for row in _pp_cache.get("siphon", [])
+            if isinstance(row, (tuple, list)) and len(row) >= 3
+        ]
+        _pp_pressure = [
+            [str(row[0]), str(row[1]), row[2]]
+            for row in _pp_cache.get("pressure_pipe", [])
+            if isinstance(row, (tuple, list)) and len(row) >= 3
+        ]
+        extra_caches = {
+            "node_structure_heights": {str(k): v for k, v in self._node_structure_heights.items()},
+            "node_chamfer_params": {str(k): v for k, v in self._node_chamfer_params.items()},
+            "node_u_params": {str(k): v for k, v in self._node_u_params.items()},
+            "text_export_settings": self._text_export_settings.copy(),
+            "plan_text_settings": self._plan_text_settings.copy(),
+            "custom_pressurized_pipe_params": {
+                "siphon": _pp_siphon,
+                "pressure_pipe": _pp_pressure,
+            },
+            "custom_struct_thickness": dict(getattr(self, "_custom_struct_thickness", {}) or {}),
+            "custom_rock_lining": dict(getattr(self, "_custom_rock_lining", {}) or {}),
+            "custom_tunnel_unified": dict(getattr(self, "_custom_tunnel_unified", {}) or {}),
+        }
+        
+        # 收集倒虹吸糙率数据
+        siphon_roughness_data = []
+        if hasattr(self.siphon_roughness_chips, '_pairs'):
+            siphon_roughness_data = list(self.siphon_roughness_chips._pairs)
+        pressure_pipe_roughness_data = []
+        if hasattr(self, 'pressure_pipe_roughness_chips') and hasattr(self.pressure_pipe_roughness_chips, '_pairs'):
+            pressure_pipe_roughness_data = list(self.pressure_pipe_roughness_chips._pairs)
+        
+        return {
+            "version": "1.0",
+            "ui_settings": ui_settings,
+            "project_settings": project_settings,
+            "nodes": nodes_data,
+            "calculated_nodes": calculated_nodes_data,
+            "extra_caches": extra_caches,
+            "siphon_roughness_data": siphon_roughness_data,
+            "pressure_pipe_roughness_data": pressure_pipe_roughness_data,
+        }
+    
+    def from_project_dict(self, d: dict, skip_dirty_signal: bool = False):
+        """
+        从字典恢复水面线推求面板数据
+        
+        用于 .qxproj 项目文件加载。
+        
+        Args:
+            d: 序列化的字典数据
+            skip_dirty_signal: 是否跳过脏状态信号（加载时应为True）
+        """
+        from 推求水面线.models.data_models import ChannelNode, ProjectSettings
+        
+        # 设置守卫标志，防止加载时触发脏状态和 cellChanged
+        old_updating = self._updating_cells
+        old_loading = getattr(self, '_loading_project', False)
+        self._updating_cells = True
+        self._loading_project = True
+        
+        try:
+            # 恢复 UI 设置
+            ui = d.get("ui_settings", {})
+            
+            if ui.get("channel_name"):
+                self.channel_name_edit.setText(ui["channel_name"])
+            
+            if ui.get("channel_level"):
+                idx = self.channel_level_combo.findText(ui["channel_level"])
+                if idx >= 0:
+                    self.channel_level_combo.setCurrentIndex(idx)
+            
+            if ui.get("start_water_level"):
+                self.start_wl_edit.setText(ui["start_water_level"])
+            
+            if ui.get("design_flows_text"):
+                self.design_flow_edit.setText(ui["design_flows_text"])
+            
+            if ui.get("max_flows_text"):
+                self.max_flow_edit.setText(ui["max_flows_text"])
+            
+            if ui.get("start_station_text"):
+                self.start_station_edit.setText(ui["start_station_text"])
+            
+            if ui.get("roughness"):
+                self.roughness_edit.setText(ui["roughness"])
+            
+            if ui.get("turn_radius"):
+                self.turn_radius_edit.setText(ui["turn_radius"])
+            
+            # 恢复渐变段设置
+            if ui.get("trans_inlet_form"):
+                idx = self.trans_inlet_combo.findText(ui["trans_inlet_form"])
+                if idx >= 0:
+                    self.trans_inlet_combo.setCurrentIndex(idx)
+            if ui.get("trans_inlet_zeta"):
+                self.trans_inlet_zeta.setText(ui["trans_inlet_zeta"])
+            
+            if ui.get("trans_outlet_form"):
+                idx = self.trans_outlet_combo.findText(ui["trans_outlet_form"])
+                if idx >= 0:
+                    self.trans_outlet_combo.setCurrentIndex(idx)
+            if ui.get("trans_outlet_zeta"):
+                self.trans_outlet_zeta.setText(ui["trans_outlet_zeta"])
+            
+            if ui.get("oc_trans_form"):
+                idx = self.oc_trans_combo.findText(ui["oc_trans_form"])
+                if idx >= 0:
+                    self.oc_trans_combo.setCurrentIndex(idx)
+            if ui.get("oc_trans_zeta"):
+                self.oc_trans_zeta.setText(ui["oc_trans_zeta"])
+            
+            if ui.get("siphon_inlet_form"):
+                idx = self.siphon_inlet_combo.findText(ui["siphon_inlet_form"])
+                if idx >= 0:
+                    self.siphon_inlet_combo.setCurrentIndex(idx)
+            if ui.get("siphon_inlet_zeta"):
+                self.siphon_inlet_zeta.setText(ui["siphon_inlet_zeta"])
+            
+            if ui.get("siphon_outlet_form"):
+                idx = self.siphon_outlet_combo.findText(ui["siphon_outlet_form"])
+                if idx >= 0:
+                    self.siphon_outlet_combo.setCurrentIndex(idx)
+            if ui.get("siphon_outlet_zeta"):
+                self.siphon_outlet_zeta.setText(ui["siphon_outlet_zeta"])
+            
+            # 恢复 ProjectSettings
+            proj_settings = d.get("project_settings", {})
+            if proj_settings:
+                self._settings = ProjectSettings.from_dict(proj_settings)
+            
+            # 恢复节点列表
+            nodes_data = d.get("nodes", [])
+            self.nodes = []
+            for nd in nodes_data:
+                self.nodes.append(ChannelNode.from_project_dict(nd))
+            
+            # 恢复计算结果节点列表
+            calc_nodes_data = d.get("calculated_nodes", [])
+            self.calculated_nodes = []
+            for nd in calc_nodes_data:
+                self.calculated_nodes.append(ChannelNode.from_project_dict(nd))
+            
+            # 恢复额外缓存数据（key 从字符串转回 int）
+            extra = d.get("extra_caches", {})
+            
+            struct_heights = extra.get("node_structure_heights", {})
+            self._node_structure_heights = {int(k): v for k, v in struct_heights.items()}
+            
+            chamfer_params = extra.get("node_chamfer_params", {})
+            self._node_chamfer_params = {int(k): v for k, v in chamfer_params.items()}
+            
+            u_params = extra.get("node_u_params", {})
+            self._node_u_params = {int(k): v for k, v in u_params.items()}
+            
+            text_settings = extra.get("text_export_settings", {})
+            if text_settings:
+                self._text_export_settings.update(text_settings)
+            
+            plan_settings = extra.get("plan_text_settings", {})
+            if plan_settings:
+                self._plan_text_settings.update(plan_settings)
+
+            # 恢复 CAD 导出复用参数缓存
+            pp_cache = extra.get("custom_pressurized_pipe_params", {})
+            if isinstance(pp_cache, dict):
+                def _restore_pressurized_rows(rows):
+                    restored = []
+                    for row in rows or []:
+                        if not isinstance(row, (tuple, list)) or len(row) < 3:
+                            continue
+                        restored.append((str(row[0]), str(row[1]), row[2]))
+                    return restored
+
+                self._custom_pressurized_pipe_params = {
+                    "siphon": _restore_pressurized_rows(pp_cache.get("siphon", [])),
+                    "pressure_pipe": _restore_pressurized_rows(pp_cache.get("pressure_pipe", [])),
+                }
+            else:
+                self._custom_pressurized_pipe_params = {"siphon": [], "pressure_pipe": []}
+
+            struct_t = extra.get("custom_struct_thickness", {})
+            self._custom_struct_thickness = dict(struct_t) if isinstance(struct_t, dict) else {}
+            rock_lining = extra.get("custom_rock_lining", {})
+            self._custom_rock_lining = dict(rock_lining) if isinstance(rock_lining, dict) else {}
+            tunnel_unified = extra.get("custom_tunnel_unified", {})
+            self._custom_tunnel_unified = dict(tunnel_unified) if isinstance(tunnel_unified, dict) else {}
+            
+            # 恢复倒虹吸糙率数据
+            siphon_data = d.get("siphon_roughness_data", [])
+            if siphon_data and hasattr(self.siphon_roughness_chips, 'set_siphon_data'):
+                self.siphon_roughness_chips.set_siphon_data(siphon_data)
+            ppipe_data = d.get("pressure_pipe_roughness_data", [])
+            if ppipe_data and hasattr(self, 'pressure_pipe_roughness_chips'):
+                self.pressure_pipe_roughness_chips.set_pairs(ppipe_data)
+            
+            # 刷新节点表格显示
+            if self.calculated_nodes:
+                # 有计算结果，显示计算后的数据
+                self._update_table_from_nodes_full(self.calculated_nodes)
+            elif self.nodes:
+                # 无计算结果，显示原始节点数据
+                self._update_table_from_nodes_full(self.nodes)
+            else:
+                # 清空表格
+                self.node_table.setRowCount(0)
+                self._refresh_pressure_pipe_controls()
+            
+        finally:
+            self._updating_cells = old_updating
+            self._loading_project = old_loading

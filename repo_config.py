@@ -18,22 +18,6 @@ GITHUB_VERSION_URL = (
 )
 
 # ============================================================
-# Gitee / 码云（国内备用更新源，不需要翻墙）
-# ============================================================
-GITEE_OWNER = "pig-farming-pays-off-as-a-dog"
-GITEE_REPO = "canal-update"
-GITEE_REPO_URL = f"https://gitee.com/{GITEE_OWNER}/{GITEE_REPO}"
-GITEE_VERSION_URL = (
-    f"https://gitee.com/{GITEE_OWNER}/{GITEE_REPO}/raw/master/version.json"
-)
-
-# ============================================================
-# 局域网共享文件夹（同事无需任何外网）
-# 注：公司WiFi有AP隔离，当前暂不可用
-# ============================================================
-LAN_UPDATE_DIR = r"\\10.20.183.63\CanalUpdate"
-
-# ============================================================
 # GitHub Release 下载代理（国内加速）
 # 按优先级排列，空字符串表示直连 GitHub（兜底）
 # 代理 URL 变换：proxy_prefix + original_github_url

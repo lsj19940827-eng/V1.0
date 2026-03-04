@@ -7,6 +7,7 @@
 
 import sys
 import os
+import copy
 import html as html_mod
 
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -215,6 +216,7 @@ class _DashedButton(QPushButton):
 # 工况标签芯片
 # ============================================================
 _SUB = '₀₁₂₃₄₅₆₇₈₉'
+MAX_CASES = 10
 def _sub(n):
     return ''.join(_SUB[int(d)] for d in str(n))
 
@@ -283,6 +285,7 @@ class _BatchWorker(QThread):
 # ============================================================
 class PressurePipePanel(QWidget):
     """有压管道设计面板"""
+    data_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -293,6 +296,7 @@ class PressurePipePanel(QWidget):
         self._cases = [self._default_case()]
         self._current_case_idx = 0
         self._all_results = []
+        self._last_errors: list[str] = []
         self._init_ui()
         self._rebuild_case_tags()
 
@@ -375,6 +379,36 @@ class PressurePipePanel(QWidget):
         self._case_count_label = QLabel("1 个计算工况")
         self._case_count_label.setStyleSheet("font-size:11px;color:#999;")
         fl.addWidget(self._case_count_label)
+
+        # 工况管理行（与工况标签挂钩）
+        _quick_row = QHBoxLayout()
+        _quick_row.setSpacing(4)
+        _copy_all_btn = QPushButton("复制参数到所有")
+        _copy_all_btn.setCursor(Qt.PointingHandCursor)
+        _copy_all_btn.setStyleSheet(_CASE_QUICK_SS)
+        _copy_all_btn.setToolTip(
+            "将当前工况的管材、管长、局部损失比例、指定管径、加大流量等参数\n"
+            "复制到其余所有工况（各工况的设计流量Q保持不变）"
+        )
+        _copy_all_btn.clicked.connect(self._apply_to_all_cases)
+        _quick_row.addWidget(_copy_all_btn)
+        _copy_prev_btn = QPushButton("从上一个复制")
+        _copy_prev_btn.setCursor(Qt.PointingHandCursor)
+        _copy_prev_btn.setStyleSheet(_CASE_QUICK_SS)
+        _copy_prev_btn.setToolTip(
+            "将上一个工况的管材、管长等参数复制到当前工况\n"
+            "（设计流量Q不变），方便快速填写相似工况"
+        )
+        _copy_prev_btn.clicked.connect(self._copy_from_prev_case)
+        _quick_row.addWidget(_copy_prev_btn)
+        self._del_case_btn = QPushButton("删除当前")
+        self._del_case_btn.setCursor(Qt.PointingHandCursor)
+        self._del_case_btn.setStyleSheet(_CASE_QUICK_SS)
+        self._del_case_btn.setToolTip("删除当前选中的工况（至少保留一个）")
+        self._del_case_btn.clicked.connect(self._remove_current_case)
+        _quick_row.addWidget(self._del_case_btn)
+        _quick_row.addStretch()
+        fl.addLayout(_quick_row)
         fl.addWidget(self._sep())
 
         # 设计流量
@@ -419,39 +453,6 @@ class PressurePipePanel(QWidget):
         self.detail_cb = CheckBox("输出详细计算过程")
         self.detail_cb.setChecked(True)
         fl.addWidget(self.detail_cb)
-
-        fl.addWidget(self._sep())
-
-        # 快捷操作行
-        _quick_row = QHBoxLayout()
-        _quick_row.setSpacing(4)
-        _copy_all_btn = QPushButton("复制参数到所有")
-        _copy_all_btn.setCursor(Qt.PointingHandCursor)
-        _copy_all_btn.setStyleSheet(_CASE_QUICK_SS)
-        _copy_all_btn.setToolTip(
-            "将当前工况的管材、管长、局部损失比例、指定管径、加大流量等参数\n"
-            "复制到其余所有工况（各工况的设计流量Q保持不变）"
-        )
-        _copy_all_btn.clicked.connect(self._apply_to_all_cases)
-        _quick_row.addWidget(_copy_all_btn)
-        _copy_prev_btn = QPushButton("从上一个复制")
-        _copy_prev_btn.setCursor(Qt.PointingHandCursor)
-        _copy_prev_btn.setStyleSheet(_CASE_QUICK_SS)
-        _copy_prev_btn.setToolTip(
-            "将上一个工况的管材、管长等参数复制到当前工况\n"
-            "（设计流量Q不变），方便快速填写相似工况"
-        )
-        _copy_prev_btn.clicked.connect(self._copy_from_prev_case)
-        _quick_row.addWidget(_copy_prev_btn)
-        self._del_case_btn = QPushButton("删除当前")
-        self._del_case_btn.setCursor(Qt.PointingHandCursor)
-        self._del_case_btn.setStyleSheet(_CASE_QUICK_SS)
-        self._del_case_btn.setToolTip("删除当前选中的工况（至少保留一个）")
-        self._del_case_btn.clicked.connect(self._remove_current_case)
-        _quick_row.addWidget(self._del_case_btn)
-        _quick_row.addStretch()
-        fl.addLayout(_quick_row)
-        fl.addWidget(self._hint("复制参数(不含Q)到所有工况 | 从上一个继承 | 删除当前工况\n鼠标悬停按钮可查看详细说明"))
 
         fl.addWidget(self._sep())
 
@@ -964,9 +965,14 @@ class PressurePipePanel(QWidget):
         self._current_case_idx = idx
         self._load_case(idx)
         self._rebuild_case_tags()
+        self.data_changed.emit()
 
     def _add_case(self):
         """添加新工况（从当前工况复制参数，清空Q）"""
+        if len(self._cases) >= MAX_CASES:
+            InfoBar.warning(title="提示", content=f"最多支持 {MAX_CASES} 个工况",
+                            parent=self, position=InfoBarPosition.TOP_RIGHT, duration=3000)
+            return
         self._save_current_case()
         new_case = dict(self._cases[self._current_case_idx])
         new_case['Q'] = ''
@@ -976,6 +982,7 @@ class PressurePipePanel(QWidget):
         self._rebuild_case_tags()
         self._update_calc_btn_text()
         self.Q_edit.setFocus()
+        self.data_changed.emit()
 
     def _remove_current_case(self):
         """删除当前工况"""
@@ -992,6 +999,7 @@ class PressurePipePanel(QWidget):
         self._update_calc_btn_text()
         InfoBar.success(title="已删除", content=f"工况{idx + 1} 已删除，当前 {len(self._cases)} 个工况",
                         parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
+        self.data_changed.emit()
 
     def _rebuild_case_tags(self):
         """重建工况标签芯片"""
@@ -1046,6 +1054,7 @@ class PressurePipePanel(QWidget):
             return
         InfoBar.success(title="已复制", content=f"参数已复制到其余 {n_copied} 个工况",
                         parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
+        self.data_changed.emit()
 
     def _copy_from_prev_case(self):
         """从上一个工况复制参数（不含Q）到当前工况"""
@@ -1061,6 +1070,7 @@ class PressurePipePanel(QWidget):
         self._load_case(self._current_case_idx)
         InfoBar.success(title="已复制", content=f"已从工况{self._current_case_idx}复制参数",
                         parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
+        self.data_changed.emit()
 
     def _show_initial_help(self):
         """初始帮助页：含 GB 50288-2018 §6.7.2 规范条文"""
@@ -1219,11 +1229,18 @@ class PressurePipePanel(QWidget):
                 continue
             result = recommend_diameter(inp)
             self._all_results.append((i, inp, result))
+        self._last_errors = list(errors)
 
         if errors:
             InfoBar.error(title="输入错误", content="\n".join(errors),
                           parent=self, position=InfoBarPosition.TOP_RIGHT, duration=6000)
         if not self._all_results:
+            if errors:
+                err_txt = "部分或全部工况计算失败：\n\n" + "\n".join(errors)
+                self._export_plain_text = err_txt
+                load_formula_page(self.result_view, plain_text_to_formula_html(err_txt))
+                self.notebook.setCurrentIndex(0)
+                self.data_changed.emit()
             return
 
         # 向后兼容
@@ -1236,6 +1253,7 @@ class PressurePipePanel(QWidget):
 
         # 显示结果
         self._display_all_results()
+        self.data_changed.emit()
 
     def _build_result_card_html(self, case_idx, inp, result):
         """为单个工况构建结果HTML（方案D：分段标题 + 迷你摘要条 + 候选表标题 + 推荐行高亮）"""
@@ -1492,6 +1510,7 @@ class PressurePipePanel(QWidget):
         self._cases = [self._default_case()]
         self._current_case_idx = 0
         self._all_results = []
+        self._last_errors = []
         self._load_case(0)
         self._rebuild_case_tags()
         self._update_calc_btn_text()
@@ -1500,6 +1519,7 @@ class PressurePipePanel(QWidget):
         self._show_initial_help()
         InfoBar.success(title="已清空", content="所有工况和计算结果已重置",
                         parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
+        self.data_changed.emit()
 
     # ================================================================
     # Word 导出
@@ -1835,3 +1855,53 @@ class PressurePipePanel(QWidget):
             summary = summary[:120] + "..."
         InfoBar.error(title="批量计算失败", content=summary,
                       parent=self, position=InfoBarPosition.TOP_RIGHT, duration=8000)
+
+    # ================================================================
+    # 项目保存/加载
+    # ================================================================
+    def to_project_dict(self):
+        """序列化当前状态用于项目保存。"""
+        self._save_current_case()
+        return {
+            'cases': copy.deepcopy(self._cases),
+            'current_case_idx': int(self._current_case_idx),
+            'last_errors': list(self._last_errors),
+            'notebook_idx': self.notebook.currentIndex() if hasattr(self, 'notebook') else 0,
+        }
+
+    def from_project_dict(self, data):
+        """从项目数据恢复面板状态。"""
+        if not isinstance(data, dict):
+            return
+        cases = data.get('cases')
+        if isinstance(cases, list) and cases:
+            self._cases = cases
+        else:
+            self._cases = [self._default_case()]
+
+        idx = data.get('current_case_idx', 0)
+        self._current_case_idx = idx if isinstance(idx, int) else 0
+        if self._current_case_idx < 0 or self._current_case_idx >= len(self._cases):
+            self._current_case_idx = 0
+
+        self._all_results = []
+        self.current_result = None
+        self._last_errors = list(data.get('last_errors', []) or [])
+        self._load_case(self._current_case_idx)
+        self._rebuild_case_tags()
+        self._update_calc_btn_text()
+
+        if self._last_errors:
+            err_txt = "部分或全部工况计算失败：\n\n" + "\n".join(self._last_errors)
+            self._export_plain_text = err_txt
+            load_formula_page(self.result_view, plain_text_to_formula_html(err_txt))
+            if hasattr(self, 'notebook'):
+                self.notebook.setCurrentIndex(0)
+        else:
+            self._export_plain_text = ""
+            self._show_initial_help()
+            if hasattr(self, 'notebook'):
+                tab_idx = data.get('notebook_idx')
+                if isinstance(tab_idx, int):
+                    tab_idx = max(0, min(tab_idx, self.notebook.count() - 1))
+                    self.notebook.setCurrentIndex(tab_idx)

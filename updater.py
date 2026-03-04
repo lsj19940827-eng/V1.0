@@ -2,12 +2,12 @@
 """
 应用内自动更新模块
 功能：
-1. 从 GitHub Gist 获取版本信息，Gitee 作为回退
+1. 从 GitHub Gist 获取版本信息
 2. 优先下载通用增量补丁包（覆盖所有 >= min_patch_version 的旧版本）
 3. 版本不在补丁范围内或下载失败时回退到全量包
 4. 通过 .bat 脚本实现"关闭旧程序 → 覆盖文件 → 启动新程序"
 
-更新源优先级：GitHub Gist > Gitee
+更新源：GitHub Gist
 下载优先级：通用补丁包 > 全量包
 远程版本清单格式（version.json）：
 {
@@ -37,7 +37,6 @@ from typing import Optional, Callable
 from version import APP_VERSION, APP_NAME_EN
 from repo_config import (
     GITHUB_VERSION_URL as _GITHUB_VERSION_URL,
-    GITEE_VERSION_URL as _GITEE_VERSION_URL,
     DOWNLOAD_PROXIES as _DOWNLOAD_PROXIES,
 )
 
@@ -123,15 +122,11 @@ def _check_remote(url: str, source_name: str) -> Optional[UpdateInfo]:
 
 def check_for_update() -> Optional[UpdateInfo]:
     """
-    Check updates with GitHub as primary source and Gitee as fallback.
+    Check updates from GitHub.
     Returns:
         UpdateInfo or None
     """
     info = _check_remote(_GITHUB_VERSION_URL, "github")
-    if info is not None:
-        return info
-
-    info = _check_remote(_GITEE_VERSION_URL, "gitee")
     if info is not None:
         return info
 
