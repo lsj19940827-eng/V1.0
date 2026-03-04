@@ -4300,14 +4300,60 @@ class WaterProfilePanel(QWidget):
         show_sensitivity = False
 
         opt_row = QHBoxLayout()
-        cb_show_sensitivity = QCheckBox("显示球墨铸铁管上下限对比列")
+
+        # 球墨铸铁管上下限对比勾选框（用于重新计算）
+        try:
+            from qfluentwidgets import CheckBox
+            cb_sensitivity_calc = CheckBox(“球墨铸铁管 f 上下限对比”)
+        except ImportError:
+            cb_sensitivity_calc = QCheckBox(“球墨铸铁管 f 上下限对比”)
+
+        cb_sensitivity_calc.setChecked(batch_sensitivity_enabled)
+        cb_sensitivity_calc.setToolTip(
+            “勾选后重新计算将包含球墨铸铁管上下限对比分析\n”
+            “主值 f=223200，下限 f=189900”
+        )
+
+        def _on_sensitivity_calc_changed(checked: bool):
+            “””当用户修改勾选框时，询问是否重新计算”””
+            if checked == batch_sensitivity_enabled:
+                return
+
+            from 渠系断面设计.styles import fluent_question
+            reply = fluent_question(
+                “重新计算确认”,
+                f”您{'开启' if checked else '关闭'}了球墨铸铁管上下限对比。\n\n”
+                “是否立即重新执行有压管道计算？\n”
+                “（重新计算将更新所有有压管道的结果）”,
+                dlg
+            )
+            if reply:
+                # 保存新的配置
+                self._set_pressure_pipe_sensitivity_enabled(checked)
+                # 关闭当前对话框
+                dlg.accept()
+                # 重新执行计算
+                self._open_pressure_pipe_calculator()
+            else:
+                # 用户取消，恢复原状态
+                cb_sensitivity_calc.blockSignals(True)
+                cb_sensitivity_calc.setChecked(batch_sensitivity_enabled)
+                cb_sensitivity_calc.blockSignals(False)
+
+        cb_sensitivity_calc.toggled.connect(_on_sensitivity_calc_changed)
+        opt_row.addWidget(cb_sensitivity_calc)
+
+        opt_row.addSpacing(20)
+
+        # 显示/隐藏对比列的勾选框
+        cb_show_sensitivity = QCheckBox(“显示球墨铸铁管上下限对比列”)
         cb_show_sensitivity.setChecked(show_sensitivity)
         cb_show_sensitivity.setEnabled(has_sensitivity_data)
         if not has_di_material:
             cb_show_sensitivity.setEnabled(False)
-            cb_show_sensitivity.setToolTip("本批次无球墨铸铁管")
+            cb_show_sensitivity.setToolTip(“本批次无球墨铸铁管”)
         elif not has_sensitivity_data:
-            cb_show_sensitivity.setToolTip("本批次未生成上下限对比结果，请开启工具栏“球墨铸铁管 f 上下限对比”后重新计算")
+            cb_show_sensitivity.setToolTip(“本批次未生成上下限对比结果”)
         opt_row.addWidget(cb_show_sensitivity)
         opt_row.addStretch()
         lay.addLayout(opt_row)
@@ -4417,6 +4463,21 @@ class WaterProfilePanel(QWidget):
             InfoBar.info("提示", "表格中没有有压管道数据，请确保有结构形式为\"有压管道\"的行",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
+
+        # 弹出配置对话框
+        from 渠系断面设计.water_profile.water_profile_dialogs import PressurePipeConfigDialog
+        config_dlg = PressurePipeConfigDialog(
+            parent=self,
+            default_sensitivity_enabled=self._is_pressure_pipe_sensitivity_enabled()
+        )
+        if config_dlg.exec() != QDialog.Accepted:
+            print("[DEBUG] 用户取消了配置对话框")
+            return
+
+        # 获取用户配置
+        sensitivity_enabled = config_dlg.get_sensitivity_enabled()
+        self._set_pressure_pipe_sensitivity_enabled(sensitivity_enabled)
+        print(f"[DEBUG] 用户配置: sensitivity_enabled={sensitivity_enabled}")
 
         print("[DEBUG] 开始导入模块和提取有压管道分组")
         try:

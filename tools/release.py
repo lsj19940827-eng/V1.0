@@ -357,9 +357,9 @@ def release(level: str, changelog: str = ""):
     print("验证 GitHub Token...", end=" ", flush=True)
     try:
         _github_api("GET", "https://api.github.com/user", token)
-        print("✓")
+        print("OK")
     except Exception:
-        print("✗")
+        print("FAIL")
         print("[错误] GitHub Token 无效或网络不通")
         sys.exit(1)
     print()

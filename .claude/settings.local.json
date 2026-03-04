@@ -8,7 +8,9 @@
       "Bash(iconv -f gbk -t utf-8)",
       "Bash(python -c \":*)",
       "Bash(python tests/test_gate_transition_extended_unit.py)",
-      "Bash(python tests/test_fixed_length_compression_unit.py)"
+      "Bash(python tests/test_fixed_length_compression_unit.py)",
+      "Bash(test -f .env)",
+      "Bash(python tools/release.py patch -m \"release: v1.0.7\")"
     ]
   }
 }
