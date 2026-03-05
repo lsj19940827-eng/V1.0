@@ -44,7 +44,7 @@ class SiphonConfig:
     longitudinal_nodes: List[Dict[str, Any]] = None
     
     # 计算结果
-    total_head_loss: Optional[float] = None  # 总水头损失
+    total_head_loss: Optional[float] = None  # 总水头损失（加大流量工况）
     diameter: Optional[float] = None          # 计算管径
     calculated_at: str = ""                   # 计算时间
     
@@ -226,14 +226,14 @@ class SiphonManager:
             "calculated_at": config.calculated_at
         }
     
-    def update_siphon_result(self, siphon_name: str, total_head_loss: float, 
+    def update_siphon_result(self, siphon_name: str, total_head_loss: float,
                             diameter: float = None):
         """
-        更新倒虹吸计算结果
-        
+        更新倒虹吸计算结果（使用加大流量工况水损）
+
         Args:
             siphon_name: 倒虹吸名称
-            total_head_loss: 总水头损失
+            total_head_loss: 总水头损失（加大流量工况）
             diameter: 计算管径
         """
         if "siphons" not in self._config:

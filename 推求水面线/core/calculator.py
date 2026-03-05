@@ -827,10 +827,22 @@ class WaterProfileCalculator:
         result['distance'] = node2.station_MC - node1.station_MC
 
         # 估算渐变段长度
+        gap_index = None
+        if all_nodes:
+            # 查找node1在all_nodes中的索引
+            for idx, n in enumerate(all_nodes):
+                if n is node1:
+                    gap_index = idx
+                    break
+
         if result['need_transition_1']:
-            result['transition_length_1'] = self._estimate_transition_length(node1, "出口")
+            result['transition_length_1'] = self._estimate_transition_length(
+                node1, "出口", all_nodes, gap_index
+            )
         if result['need_transition_2']:
-            result['transition_length_2'] = self._estimate_transition_length(node2, "进口")
+            result['transition_length_2'] = self._estimate_transition_length(
+                node2, "进口", all_nodes, gap_index
+            )
 
         total_transition_length = result['transition_length_1'] + result['transition_length_2']
 
@@ -936,28 +948,39 @@ class WaterProfileCalculator:
         result['need_open_channel'] = result['available_length'] > 0
         return result
 
-    def _estimate_transition_length(self, node: ChannelNode, transition_type: str) -> float:
+    def _estimate_transition_length(self, node: ChannelNode, transition_type: str,
+                                    nodes: List[ChannelNode] = None, gap_index: int = None) -> float:
         """
         快速估算渐变段长度（用于判断是否需要插入明渠）
-        
+
         Args:
             node: 建筑物节点
             transition_type: "进口"或"出口"
-            
+            nodes: 可选，节点列表（用于查找参考明渠）
+            gap_index: 可选，空隙位置索引
+
         Returns:
             估算的渐变段长度(m)
         """
         from config.constants import TRANSITION_LENGTH_COEFFICIENTS
-        
+
         # 获取特征宽度
         B = self._get_characteristic_width(node)
         if B <= 0:
             B = 3.0  # 默认3m
-        
-        # 使用系数估算（假设明渠底宽为建筑物宽度的1.2倍）
+
+        # 尝试查找参考明渠的底宽
+        B_channel = None
+        if nodes and gap_index is not None:
+            ref_channel, _ = self._find_reference_channel_same_section(nodes, gap_index)
+            if ref_channel:
+                B_channel = ref_channel.get('bottom_width', 0)
+
+        # 兜底：使用假设宽度
+        if not B_channel or B_channel <= 0:
+            B_channel = B * 1.2
+
         coefficient = TRANSITION_LENGTH_COEFFICIENTS.get(transition_type, 3.0)
-        B_channel = B * 1.2
-        
         L_basic = coefficient * abs(B_channel - B)
         
         # 应用约束条件

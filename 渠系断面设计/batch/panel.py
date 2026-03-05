@@ -546,10 +546,39 @@ class BatchPanel(QWidget):
                     self.input_table.blockSignals(False)
                 except (ValueError, TypeError):
                     pass
+        if col == 3:
+            # 结构形式列被编辑，更新糙率n列的可编辑状态
+            self._update_roughness_cell_state(row)
 
     def _on_current_cell_changed_undo(self, row, col, prev_row, prev_col):
         if self._undo_group == 0:
             self._pre_edit_snapshot = self._snapshot_table()
+
+    def _update_roughness_cell_state(self, row):
+        """更新指定行的糙率n列可编辑状态（有压管道行禁用）"""
+        section_item = self.input_table.item(row, 3)
+        if not section_item:
+            return
+        section_type = section_item.text().strip()
+        n_item = self.input_table.item(row, 7)
+        if not n_item:
+            n_item = QTableWidgetItem("")
+            self.input_table.setItem(row, 7, n_item)
+
+        if section_type == "有压管道":
+            # 禁用编辑
+            n_item.setFlags(n_item.flags() & ~Qt.ItemIsEditable)
+            n_item.setBackground(QColor(240, 240, 240))
+            n_item.setForeground(QColor(150, 150, 150))
+            if not n_item.text().strip():
+                n_item.setText("N/A")
+        else:
+            # 启用编辑
+            n_item.setFlags(n_item.flags() | Qt.ItemIsEditable)
+            n_item.setBackground(QColor(255, 255, 255))
+            n_item.setForeground(QColor(0, 0, 0))
+            if n_item.text().strip() == "N/A":
+                n_item.setText("")
 
     def _snapshot_table(self):
         rows = []
@@ -723,6 +752,8 @@ class BatchPanel(QWidget):
                     if col == 3:
                         item.setTextAlignment(Qt.AlignCenter)
                     self.input_table.setItem(row, col, item)
+            # 更新糙率n列状态
+            self._update_roughness_cell_state(row)
         else:
             # 无数据时填充默认值：流量段编号在上一行基础上递增（与原版一致）
             if row > 0:
@@ -2760,6 +2791,10 @@ class BatchPanel(QWidget):
                             rd[18] if len(rd) > 18 else "",
                             rd[19] if len(rd) > 19 else "",
                         ]
+                    # 有压管道行自动忽略糙率n值（索引7）
+                    section_type = str(mapped[3]).strip() if len(mapped) > 3 else ""
+                    if section_type == "有压管道":
+                        mapped[7] = ""
                     self._add_row(mapped)
                 self._auto_detect_flow_segments()
             finally:

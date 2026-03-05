@@ -363,11 +363,23 @@ class SiphonRoughnessChipContainer(QWidget):
     _PRIMARY = "#0078D4"
     _PRIMARY_DARK = "#005A9E"
 
-    def __init__(self, parent=None, title_text="倒虹吸糙率详情", empty_text="导入后自动显示"):
+    # 管材参数映射表（与有压管道设计.py保持一致）
+    PIPE_MATERIAL_PARAMS = {
+        "HDPE管": {"f": 94800, "m": 1.77, "b": 4.77},
+        "玻璃钢夹砂管": {"f": 94800, "m": 1.77, "b": 4.77},
+        "球墨铸铁管": {"f": 223200, "m": 1.852, "b": 4.87},
+        "预应力钢筒混凝土管": {"f": 1312000, "m": 2.0, "b": 5.33},  # n=0.013
+        "预应力钢筒混凝土管_n014": {"f": 1516000, "m": 2.0, "b": 5.33},  # n=0.014
+        "预应力钢筒混凝土管_n015": {"f": 1749000, "m": 2.0, "b": 5.33},  # n=0.015
+        "钢管": {"f": 625000, "m": 1.9, "b": 5.1},
+    }
+
+    def __init__(self, parent=None, title_text="倒虹吸糙率详情", empty_text="导入后自动显示", label_prefix="n="):
         super().__init__(parent)
         self._pairs = []  # [(名称, 糙率), ...]
         self._title_text = title_text
         self._empty_text = empty_text
+        self.label_prefix = label_prefix
         self._build_ui()
 
     def _build_ui(self):
@@ -500,7 +512,7 @@ class SiphonRoughnessChipContainer(QWidget):
             lbl_name = QLabel(name)
             lbl_name.setStyleSheet("font-size: 12px; color: #4A5568; background: transparent;")
 
-            val_lbl = QLabel(f"n = {n_val}")
+            val_lbl = QLabel(f"{self.label_prefix}{n_val}")
             val_lbl.setStyleSheet(
                 f"font-size: 12px; font-weight: 700; color: {primary};"
                 f" background: #EBF4FF; padding: 2px 8px;"
@@ -574,7 +586,7 @@ class SiphonRoughnessChipContainer(QWidget):
             self._badge.setText(str(n))
             if n == 1:
                 name, val = self._pairs[0]
-                btn_text = f"{name} n={val}"
+                btn_text = f"{name} {self.label_prefix}{val}"
             else:
                 btn_text = "糙率详情"
             self._btn.setText(btn_text)
@@ -644,7 +656,7 @@ class WaterProfilePanel(QWidget):
             'offset': 10,
             'text_height': 10,
         }
-        # CAD导出相关缓存（供“生成断面汇总表”与“导出全部DXF”互相复用）
+        # CAD导出相关缓存（供"生成断面汇总表"与"导出全部DXF"互相复用）
         self._custom_pressurized_pipe_params = {"siphon": [], "pressure_pipe": []}
         self._custom_struct_thickness = {}
         self._custom_rock_lining = {}
@@ -733,10 +745,11 @@ class WaterProfilePanel(QWidget):
         sg.addWidget(QLabel("倒虹吸糙率:"), r, 8, Qt.AlignRight)
         self.siphon_roughness_chips = SiphonRoughnessChipContainer()
         sg.addWidget(self.siphon_roughness_chips, r, 9)
-        sg.addWidget(QLabel("有压管道糙率:"), r, 10, Qt.AlignRight)
+        sg.addWidget(QLabel("有压管道参数:"), r, 10, Qt.AlignRight)
         self.pressure_pipe_roughness_chips = SiphonRoughnessChipContainer(
-            title_text="有压管道糙率详情",
-            empty_text="导入后自动显示"
+            title_text="有压管道参数详情",
+            empty_text="导入后自动显示",
+            label_prefix="管材: "
         )
         sg.addWidget(self.pressure_pipe_roughness_chips, r, 11)
         # 右侧糙率详情列预留更充足宽度，避免按钮文本右端被裁剪
@@ -976,14 +989,6 @@ class WaterProfilePanel(QWidget):
         _register_toolbar_button(btn_calc, "primary")
         for w in [btn_transition, btn_siphon, self.btn_pressure_pipe_calc, btn_calc]:
             tb.addWidget(w)
-
-        self.chk_pressure_pipe_sensitivity = QCheckBox("球墨铸铁管 f 上下限对比")
-        self.chk_pressure_pipe_sensitivity.setChecked(self._pressure_pipe_sensitivity_enabled)
-        self.chk_pressure_pipe_sensitivity.setToolTip(
-            "球墨铸铁管按规范给 f 上下限（非单一值）：主值 f=223200；下限对比 f=189900（仅对比，不影响回写）"
-        )
-        self.chk_pressure_pipe_sensitivity.toggled.connect(self._set_pressure_pipe_sensitivity_enabled)
-        tb.addWidget(self.chk_pressure_pipe_sensitivity)
 
         # 数据清理组
         btn_clear = PushButton("清空")
@@ -1861,7 +1866,7 @@ class WaterProfilePanel(QWidget):
                 for j in range(prev_regular_row + 1, r):
                     if _is_transition_row(j):
                         transition_loss += _rf(j, 33)
-                # 使用本行“增量总损失”(col39)，不能用累计值(col40)重复扣减
+                # 使用本行"增量总损失"(col39)，不能用累计值(col40)重复扣减
                 total_drop = _rf(r, 39) + transition_loss
                 wl = prev_wl - total_drop
 
@@ -1971,7 +1976,7 @@ class WaterProfilePanel(QWidget):
         flow_segment_map = {}  # {流量段编号: 设计流量}
         general_roughness_vals = []   # 收集非倒虹吸行的糙率
         siphon_roughness_pairs = []   # 收集倒虹吸行的 (名称, 糙率)
-        pressure_pipe_roughness_pairs = []  # 收集有压管道行的 (名称, 糙率)
+        pressure_pipe_params_pairs = []  # 收集有压管道行的 (名称, 管材名称)
 
         # 映射结构形式名称（兼容简化名称 → 完整名称）
         struct_map = {
@@ -2034,9 +2039,11 @@ class WaterProfilePanel(QWidget):
                 if "倒虹吸" in section_type:
                     siphon_roughness_pairs.append((building_name or f"倒虹吸{len(siphon_roughness_pairs)+1}", _n_float))
                 elif "有压管道" in section_type:
-                    pressure_pipe_roughness_pairs.append(
-                        (building_name or f"有压管道{len(pressure_pipe_roughness_pairs)+1}", _n_float)
-                    )
+                    # 有压管道收集管材信息而非糙率
+                    if pipe_material:
+                        pressure_pipe_params_pairs.append(
+                            (building_name or f"有压管道{len(pressure_pipe_params_pairs)+1}", pipe_material)
+                        )
                 else:
                     # 排除闸类占位行（闸类无糙率意义）
                     if "闸" not in section_type and "分水" not in section_type:
@@ -2159,7 +2166,7 @@ class WaterProfilePanel(QWidget):
             self.roughness_edit.setText(f"{chosen_n:.4f}".rstrip('0').rstrip('.'))
         # 倒虹吸糙率只读概览（每个倒虹吸独立显示）
         self._update_siphon_roughness_overview(siphon_roughness_pairs)
-        self._update_pressure_pipe_roughness_overview(pressure_pipe_roughness_pairs)
+        self._update_pressure_pipe_roughness_overview(pressure_pipe_params_pairs)
 
         # 自动填充多流量段设计流量和加大流量
         if flow_segment_map:
@@ -3399,7 +3406,7 @@ class WaterProfilePanel(QWidget):
         self.siphon_roughness_chips.set_siphon_data(list(seen.items()))
 
     def _update_pressure_pipe_roughness_overview(self, pairs):
-        """更新有压管道糙率芯片展示。pairs: [(名称, 糙率), ...]"""
+        """更新有压管道参数芯片展示。pairs: [(名称, 管材名称), ...]"""
         if not hasattr(self, 'pressure_pipe_roughness_chips'):
             return
         if not pairs:
@@ -3407,17 +3414,22 @@ class WaterProfilePanel(QWidget):
             return
         seen = {}
         default_idx = 1
-        for name, n_val in pairs:
+        for name, material in pairs:
             display_name = str(name).strip() if name else ""
             if not display_name:
                 display_name = f"有压管道{default_idx}"
                 default_idx += 1
             if display_name not in seen:
-                seen[display_name] = n_val
+                params = SiphonRoughnessChipContainer.PIPE_MATERIAL_PARAMS.get(material, {})
+                if params:
+                    param_str = f"{material} | f={params['f']}, m={params['m']}, b={params['b']}"
+                else:
+                    param_str = material if material else "未指定管材"
+                seen[display_name] = param_str
         self.pressure_pipe_roughness_chips.set_pairs(list(seen.items()))
 
     def _collect_pressure_pipe_roughness_pairs_from_nodes(self, nodes):
-        """从节点列表提取有压管道糙率展示对。"""
+        """从节点列表提取有压管道参数展示对。"""
         pairs = []
         if not nodes:
             return pairs
@@ -3426,12 +3438,12 @@ class WaterProfilePanel(QWidget):
             st = node.structure_type.value if node.structure_type else ""
             if "有压管道" not in st:
                 continue
-            if node.roughness and node.roughness > 0:
-                name = (node.name or "").strip()
-                if not name:
-                    name = f"有压管道{default_idx}"
-                    default_idx += 1
-                pairs.append((name, node.roughness))
+            name = (node.name or "").strip()
+            if not name:
+                name = f"有压管道{default_idx}"
+                default_idx += 1
+            material = node.section_params.get('pipe_material', '') if hasattr(node, 'section_params') else ''
+            pairs.append((name, material))
         return pairs
 
     def _refresh_pressure_pipe_controls(self):
@@ -3442,7 +3454,7 @@ class WaterProfilePanel(QWidget):
         table = getattr(self, "node_table", None)
         if table is None:
             btn.setEnabled(True)
-            btn.setToolTip("执行有压管道水力计算并回写到“倒虹吸/有压管道水头损失”列")
+            btn.setToolTip("执行有压管道水力计算并回写到\"倒虹吸/有压管道水头损失\"列")
             return
         has_ppipe = False
         has_transition = False
@@ -3462,7 +3474,7 @@ class WaterProfilePanel(QWidget):
         elif not has_transition:
             self.btn_pressure_pipe_calc.setToolTip("已检测到有压管道。请先插入渐变段后再执行有压管道水力计算")
         else:
-            self.btn_pressure_pipe_calc.setToolTip("执行有压管道水力计算并回写到“倒虹吸/有压管道水头损失”列")
+            self.btn_pressure_pipe_calc.setToolTip("执行有压管道水力计算并回写到\"倒虹吸/有压管道水头损失\"列")
 
     def _update_pressure_pipe_last_result_button(self):
         """刷新有压管道计算相关控件状态（计算完成后调用）。"""
@@ -4304,27 +4316,27 @@ class WaterProfilePanel(QWidget):
         # 球墨铸铁管上下限对比勾选框（用于重新计算）
         try:
             from qfluentwidgets import CheckBox
-            cb_sensitivity_calc = CheckBox(“球墨铸铁管 f 上下限对比”)
+            cb_sensitivity_calc = CheckBox("球墨铸铁管 f 上下限对比")
         except ImportError:
-            cb_sensitivity_calc = QCheckBox(“球墨铸铁管 f 上下限对比”)
+            cb_sensitivity_calc = QCheckBox("球墨铸铁管 f 上下限对比")
 
         cb_sensitivity_calc.setChecked(batch_sensitivity_enabled)
         cb_sensitivity_calc.setToolTip(
-            “勾选后重新计算将包含球墨铸铁管上下限对比分析\n”
-            “主值 f=223200，下限 f=189900”
+            "勾选后重新计算将包含球墨铸铁管上下限对比分析\n"
+            "主值 f=223200，下限 f=189900"
         )
 
         def _on_sensitivity_calc_changed(checked: bool):
-            “””当用户修改勾选框时，询问是否重新计算”””
+            """当用户修改勾选框时，询问是否重新计算"""
             if checked == batch_sensitivity_enabled:
                 return
 
             from 渠系断面设计.styles import fluent_question
             reply = fluent_question(
-                “重新计算确认”,
-                f”您{'开启' if checked else '关闭'}了球墨铸铁管上下限对比。\n\n”
-                “是否立即重新执行有压管道计算？\n”
-                “（重新计算将更新所有有压管道的结果）”,
+                "重新计算确认",
+                f"您{'开启' if checked else '关闭'}了球墨铸铁管上下限对比。\n\n"
+                "是否立即重新执行有压管道计算？\n"
+                "（重新计算将更新所有有压管道的结果）",
                 dlg
             )
             if reply:
@@ -4346,14 +4358,14 @@ class WaterProfilePanel(QWidget):
         opt_row.addSpacing(20)
 
         # 显示/隐藏对比列的勾选框
-        cb_show_sensitivity = QCheckBox(“显示球墨铸铁管上下限对比列”)
+        cb_show_sensitivity = QCheckBox("显示球墨铸铁管上下限对比列")
         cb_show_sensitivity.setChecked(show_sensitivity)
         cb_show_sensitivity.setEnabled(has_sensitivity_data)
         if not has_di_material:
             cb_show_sensitivity.setEnabled(False)
-            cb_show_sensitivity.setToolTip(“本批次无球墨铸铁管”)
+            cb_show_sensitivity.setToolTip("本批次无球墨铸铁管")
         elif not has_sensitivity_data:
-            cb_show_sensitivity.setToolTip(“本批次未生成上下限对比结果”)
+            cb_show_sensitivity.setToolTip("本批次未生成上下限对比结果")
         opt_row.addWidget(cb_show_sensitivity)
         opt_row.addStretch()
         lay.addLayout(opt_row)
@@ -4537,7 +4549,7 @@ class WaterProfilePanel(QWidget):
                 material_key = group.material_key if group.material_key in PIPE_MATERIALS else default_material
                 note = ""
                 if group.material_key not in PIPE_MATERIALS:
-                    note = f"未识别管材“{group.material_key}”，已按“{default_material}”计算"
+                    note = f"未识别管材\"{group.material_key}\"，已按\"{default_material}\"计算"
 
                 try:
                     calc_res = calc_total_head_loss(
@@ -4680,19 +4692,19 @@ class WaterProfilePanel(QWidget):
             if success_count <= 0:
                 InfoBar.warning(
                     "有压管道计算完成（全部失败）",
-                    f"共 {summary.get('total', 0)} 条，全部失败。请查看“有压管道计算结果汇总”。",
+                    f"共 {summary.get('total', 0)} 条，全部失败。请查看\"有压管道计算结果汇总\"。",
                     parent=self._info_parent(), duration=7000, position=InfoBarPosition.TOP
                 )
             elif failed_count > 0:
                 InfoBar.warning(
                     "有压管道计算完成（部分成功）",
-                    f"成功 {success_count} 条，失败 {failed_count} 条；已回写 {imported_count} 条到“倒虹吸/有压管道水头损失”列。",
+                    f"成功 {success_count} 条，失败 {failed_count} 条；已回写 {imported_count} 条到\"倒虹吸/有压管道水头损失\"列。",
                     parent=self._info_parent(), duration=7000, position=InfoBarPosition.TOP
                 )
             else:
                 InfoBar.success(
                     "有压管道计算完成",
-                    f"已完成 {success_count} 条计算并回写 {imported_count} 条到“倒虹吸/有压管道水头损失”列。",
+                    f"已完成 {success_count} 条计算并回写 {imported_count} 条到\"倒虹吸/有压管道水头损失\"列。",
                     parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP
                 )
 

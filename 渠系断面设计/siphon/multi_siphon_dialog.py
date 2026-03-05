@@ -720,8 +720,10 @@ class MultiSiphonDialog(QDialog):
         for name, panel in self.panels.items():
             result = panel.get_result()
             if result is not None:
+                # 优先使用加大流量工况水损，若无则使用设计工况
+                head_loss = result.total_head_loss_inc if result.total_head_loss_inc is not None else result.total_head_loss
                 results[name] = {
-                    "head_loss": result.total_head_loss,
+                    "head_loss": head_loss,
                     "diameter": result.diameter,
                     "turn_radius": panel.get_plan_bend_radius(),
                 }

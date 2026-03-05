@@ -1,6 +1,6 @@
 # PRD：渐变段与明渠段插入算法
 
-> **版本**：v2.3 | **最后更新**：2026-03-04
+> **版本**：v2.4 | **最后更新**：2026-03-05
 >
 > 描述推求水面线模块中渐变段（过渡段）和明渠段自动识别、插入及参数确定的完整逻辑。
 
@@ -74,15 +74,23 @@ valid_type_values = {
 
 **渐变段长度压缩规则**（v2.3新增）：
 
-1. **单个渐变段超限**：当计算出的渐变段长度超过可用里程时，压缩到可用里程。例如：隧洞出口距离闸10m，计算出15m渐变段，则取10m。
+1. **单个渐变段超限**：当计算出的渐变段长度超过可用里程时，压缩到可用里程。
+   - 实现：`result['transition_length_1'] = min(calculated_length, result['distance'])`
+   - 示例：隧洞出口距离闸10m，计算出15m渐变段，则取10m
 
-2. **出口+进口都需要时**：当出口渐变段+进口渐变段总长度超过可用里程时，合并为单个渐变段，长度=可用里程，使用出口渐变段的ζ系数。
+2. **出口+进口都需要时**：当出口渐变段+进口渐变段总长度超过可用里程时，合并为单个渐变段。
+   - 条件：`total_transition_length > distance and distance > 0`
+   - 处理：`transition_length_1 = distance`, `transition_length_2 = 0`, `need_transition_2 = False`, `use_merged_transition = True`
+   - ζ系数：使用出口渐变段的ζ系数
 
-3. **明渠段判断**：基于压缩后的渐变段长度判断是否插入明渠段（`available_length = distance - compressed_length`）。
+3. **明渠段判断**：基于压缩后的渐变段长度判断是否插入明渠段。
+   - 公式：`available_length = distance - transition_length_1 - transition_length_2`
+   - 条件：`need_open_channel = (available_length > 0)`
 
 4. **水头损失计算**：
    - 局部损失：按正常公式计算（与长度无关）
    - 沿程损失：按压缩后的实际长度计算（`h_f = i_avg × L_compressed`）
+   - 实现：`calculate_transition_loss()` 优先使用 `transition_node.transition_length` 已设置的值
 
 **延迟队列机制**：闸→进口方向的插入节点（明渠段+进口渐变段）暂存于 `deferred_nodes`，在下一个非闸节点之前统一冲洗插入，确保闸群结束后节点顺序正确。
 
@@ -154,12 +162,12 @@ $$L = k \times |B_1 - B_2|$$
 |---------|---------|---------|---------|
 | 渡槽 | $L \geq 6h_{设计}$ | $L \geq 8h_{设计}$ | `TRANSITION_LENGTH_CONSTRAINTS["渡槽"]` |
 | 隧洞 | $L \geq \max(5h,\ 3D)$ | $L \geq \max(5h,\ 3D)$ | `TRANSITION_LENGTH_CONSTRAINTS["隧洞"]` |
-| 倒虹吸 | $L = 5h_{上游}$ | $L = 6h_{下游}$ | `TRANSITION_LENGTH_CONSTRAINTS["倒虹吸"]` |
+| 倒虹吸/有压管道 | $L = 5h_{上游}$ | $L = 6h_{下游}$ | `TRANSITION_LENGTH_CONSTRAINTS["倒虹吸"]` |
 | 矩形暗涵 | 仅基础公式 | 仅基础公式 | `TRANSITION_LENGTH_CONSTRAINTS["矩形暗涵"]` |
 
 > **注**：
 > 1. 已移除原有 10 m 硬编码下限（所有结构类型统一取消）。
-> 2. **倒虹吸**渐变段长度直接按水深倍数确定，不使用 §2.1 基础公式 $L=k\times|B_1-B_2|$（依据 GB 50288-2018 §10.2.4 条1）。其他结构类型仍先算基础公式再与约束取 max。
+> 2. **有压流建筑物（倒虹吸/有压管道）**渐变段长度直接按水深倍数确定，不使用 §2.1 基础公式 $L=k\times|B_1-B_2|$（依据 GB 50288-2018 §10.2.4 条1）。其他结构类型仍先算基础公式再与约束取 max。
 
 ### 2.4 渠道水深取值规则
 
@@ -169,7 +177,34 @@ $$L = k \times |B_1 - B_2|$$
 2. **进口渐变段**：使用 `prev_node`（上游明渠）的 `water_depth`
 3. **回退**：若相邻节点水深无效，调用 `get_channel_design_depth()` 在同一流量段内搜索明渠节点水深（取最大值）
 
-### 2.5 渐变段长度计算详情
+### 2.5 快速估算渐变段长度（`_estimate_transition_length`）
+
+用于判断是否需要插入明渠段时的快速估算，无需精确计算水面宽度。
+
+**估算方法**：
+
+1. **获取特征宽度**：调用 `_get_characteristic_width(node)`，若无效则默认 3.0m
+2. **确定假设明渠宽度**：
+   - 优先：查找同流量段的参考明渠，使用其 `bottom_width`
+   - 兜底：若找不到参考明渠，使用 `B_channel = B × 1.2`
+3. **基础公式**：`L_basic = coefficient × |B_channel - B|`
+   - 进口系数：2.5
+   - 出口系数：3.5
+
+**约束条件**（与 §2.3 一致）：
+
+| 结构类型 | 进口 | 出口 |
+|---------|------|------|
+| 渡槽 | `max(L_basic, 6h)` | `max(L_basic, 8h)` |
+| 隧洞 | `max(L_basic, max(5h, 3D))` | `max(L_basic, max(5h, 3D))` |
+| 倒虹吸/有压管道 | `5h` | `6h` |
+| 矩形暗涵 | `L_basic` | `L_basic` |
+
+**水深取值**：优先使用 `node.water_depth`，若无效则默认 2.0m
+
+**注意**：此估算仅用于判断是否插入明渠段，实际渐变段长度由 `calculate_transition_length()` 精确计算。
+
+### 2.6 渐变段长度计算详情
 
 每次计算后，详细参数保存到 `transition_node.transition_length_calc_details` 字典中，供双击展示使用：
 
@@ -548,7 +583,7 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
 
 | 文件 | 关键方法/类 |
 |------|------------|
-| `推求水面线/core/calculator.py` | `_needs_transition()`, `_is_mingqu_type()`, `_is_tunnel_or_aqueduct()`, `_is_culvert_type()`, `_is_diversion_gate_type()`, `_has_same_section_size()`, `_get_characteristic_width()`, `_find_next_non_gate_idx()`, `_check_gap_exit_to_gate()`, `_check_gap_gate_to_entry()`, `_should_insert_open_channel()`, `_estimate_transition_length()`, `_find_reference_channel_same_section()`, `_find_global_nearest_channel()`, `_compute_economic_section()`, `_find_nearest_upstream_channel()`, `_create_transition_node()`, `_create_inlet_transition_node()`, `_create_merged_transition_node()`, `_create_open_channel_node()`, `identify_and_insert_transitions()`, `calculate_transition_losses()`, `calculate_transition_losses_inline()`, `pre_scan_open_channels()`, `_calculate_cumulative_head_loss()` |
+| `推求水面线/core/calculator.py` | `_needs_transition()`, `_is_mingqu_type()`, `_is_tunnel_or_aqueduct()`, `_is_culvert_type()`, `_is_diversion_gate_type()`, `is_pressurized_flow_structure()`, `_has_same_section_size()`, `_get_characteristic_width()`, `_find_next_non_gate_idx()`, `_check_gap_exit_to_gate()`, `_check_gap_gate_to_entry()`, `_should_insert_open_channel()`, `_estimate_transition_length()`, `_find_reference_channel_same_section()`, `_find_global_nearest_channel()`, `_compute_economic_section()`, `_find_nearest_upstream_channel()`, `_create_transition_node()`, `_create_inlet_transition_node()`, `_create_merged_transition_node()`, `_create_open_channel_node()`, `identify_and_insert_transitions()`, `calculate_transition_losses()`, `calculate_transition_losses_inline()`, `pre_scan_open_channels()`, `_calculate_cumulative_head_loss()` |
 | `推求水面线/core/hydraulic_calc.py` | `get_water_surface_width()`, `get_transition_zeta()`, `calculate_transition_length()`, `calculate_transition_friction_loss()`, `calculate_transition_loss()`, `calculate_transition_loss_inline()`, `_estimate_transition_loss()`, `get_channel_design_depth()`, `recalculate_water_levels_with_transition_losses()` |
 | `推求水面线/models/enums.py` | `StructureType`（含 `TRANSITION="渐变段"`、`get_special_structures()`、`is_diversion_gate()`、`is_diversion_gate_str()`） |
 | `推求水面线/models/data_models.py` | `ChannelNode`（渐变段字段）、`OpenChannelParams`（含 `arc_radius`/`theta_deg`）、`ProjectSettings`（渐变段配置字段）、`ChannelNode.get_ip_str()` |
@@ -568,4 +603,5 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
 | v2.0 | 2026-02-26 | 全面对齐最新代码：新增§1.1有效结构类型集合；修正§3.3 ζ系数表（表K.1.2直线形扭曲面为θ插值非固定值，表L.1.2倒虹吸独立系数表）；新增§1.4合并渐变段逻辑；新增§2.2水面宽度计算方法（8种断面类型）；新增§2.4渠道水深取值规则；新增§2.5/§3.5计算详情记录；补充§3.4沿程损失曼宁公式平均值法；新增§3.6倒虹吸占位渐变段；新增§4.5明渠段节点创建详情；新增§5渐变段节点创建（3种方式）；新增§7项目设置中渐变段配置字段（K.1.2+L.1.2+明渠）；新增§8 ChannelNode/OpenChannelParams完整字段列表；新增§9累计水头损失与内联模式；更新§10代码文件索引（新增formula_dialog/cad_tools/check_gap方法等） |
 | v2.1 | 2026-02-26 | 新增§4.6自动插入明渠行几何列显示规则（全部留空+结构形式加"(连接段)"后缀+绿色文字+悬浮提示）；新增§4.7复核长度列显示规则（自动插入明渠/倒虹吸行留空）；geometry_calc.py第四步查找prev_tangent/next_straight时跳过is_auto_inserted_channel |
 | v2.2 | 2026-03-04 | 扩展闸穿透规则：所有特殊建筑物（隧洞/渡槽/矩形暗涵/有压管道/倒虹吸）与闸之间都需要插入渐变段，且标记skip_loss=True；明渠与闸之间不插入渐变段；更新`_check_gap_exit_to_gate()`和`_check_gap_gate_to_entry()`实现逻辑 |
-| v2.3 | 2026-03-04 | 新增渐变段长度压缩规则：单个渐变段超限时压缩到可用里程；出口+进口总长度超限时合并为单个渐变段；明渠段判断基于压缩后长度；沿程损失按压缩后长度计算；更新`_should_insert_open_channel()`、`_check_gap_exit_to_gate()`、`_check_gap_gate_to_entry()`和`calculate_transition_loss()`实现逻辑 |
+| v2.3 | 2026-03-04 | 新增渐变段长度压缩规则：①单个渐变段超限时压缩到可用里程（`min(calculated_length, distance)`）；②出口+进口总长度超限时合并为单个渐变段（`use_merged_transition=True`）；③明渠段判断基于压缩后长度（`available_length = distance - compressed_lengths`）；④沿程损失按压缩后长度计算（`calculate_transition_loss()`优先使用已设置的`transition_length`）；⑤新增`_estimate_transition_length()`快速估算方法（有压流建筑物使用固定长度：进口5h，出口6h）；更新`_should_insert_open_channel()`、`_check_gap_exit_to_gate()`、`_check_gap_gate_to_entry()`实现逻辑；新增§2.5快速估算渐变段长度说明 |
+| v2.4 | 2026-03-05 | 改进`_estimate_transition_length()`：优先查找同流量段参考明渠的底宽，找不到时兜底使用B×1.2；更新§2.5估算方法说明 |

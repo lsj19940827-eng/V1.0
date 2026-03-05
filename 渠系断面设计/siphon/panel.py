@@ -34,7 +34,8 @@ from PySide6.QtWidgets import (
     QFrame, QTabWidget, QTextEdit, QFileDialog,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
     QAbstractItemView, QGridLayout, QScrollArea, QSizePolicy,
-    QDialog, QDialogButtonBox, QPushButton, QLineEdit as _QLineEdit
+    QDialog, QDialogButtonBox, QPushButton, QLineEdit as _QLineEdit,
+    QSplitter
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QColor, QBrush, QIntValidator, QShortcut, QKeySequence
@@ -272,6 +273,20 @@ class SiphonPanel(QWidget):
         self._show_case_management = bool(show_case_management)
         # 多倒虹吸窗口模式下禁止面板自行加载 autosave（由 Dialog 统一管理数据加载）
         self._disable_autosave_load = bool(disable_autosave_load)
+
+        # 工况管理
+        self.case_manager = None
+        self.case_sidebar = None
+        self._autosave_timer = None
+        if self._show_case_management:
+            from .case_manager import CaseManager
+            cases_dir = os.path.join(_pkg_root, 'data', 'siphon_cases')
+            self.case_manager = CaseManager(cases_dir)
+            self._autosave_timer = QTimer()
+            self._autosave_timer.setSingleShot(True)
+            self._autosave_timer.timeout.connect(self._do_autosave)
+
+        self._data_dirty = False
         # 核心数据
         self.segments = []           # 所有结构段（通用+纵断面+平面）
         self.plan_segments = []      # 平面段
@@ -318,26 +333,55 @@ class SiphonPanel(QWidget):
         # 初始化加大流量输入框的可见性（因为 inc_cb 默认勾选）
         self._on_inc_toggle()
 
+        # 工况管理：首次打开时自动创建默认工况
+        if self._show_case_management and self.case_manager:
+            if not self.case_manager.cases:
+                self.case_manager.create_case()
+                if self.case_sidebar:
+                    self.case_sidebar.refresh()
+
         # 启动时尝试加载上次保存的参数（多倒虹吸窗口模式下由 Dialog 统一管理，跳过）
         if not self._disable_autosave_load:
-            QTimer.singleShot(100, self._load_autosave)
+            if not self._show_case_management:
+                QTimer.singleShot(100, self._load_autosave)
 
     # ================================================================
     # UI 构建
     # ================================================================
     def _init_ui(self):
-        main_lay = QVBoxLayout(self)
-        main_lay.setContentsMargins(6, 4, 6, 4)
-        main_lay.setSpacing(3)
+        if self._show_case_management and self.case_manager:
+            # 使用分割器布局：左侧工况列表 + 右侧主面板
+            from .case_sidebar import CaseSidebar
+            splitter = QSplitter(Qt.Horizontal, self)
+            main_lay = QVBoxLayout(self)
+            main_lay.setContentsMargins(0, 0, 0, 0)
+            main_lay.addWidget(splitter)
 
-        # A: 可视化画布 + 工具栏
-        self._build_canvas_area(main_lay)
+            self.case_sidebar = CaseSidebar(self.case_manager, self)
+            self.case_sidebar.case_selected.connect(self._on_case_selected)
+            self.case_sidebar.case_changed.connect(self._mark_dirty)
+            splitter.addWidget(self.case_sidebar)
 
-        # B: 参数区（Notebook，含计算结果Tab）
-        self._build_params_area(main_lay)
+            main_panel = QWidget()
+            panel_lay = QVBoxLayout(main_panel)
+            panel_lay.setContentsMargins(6, 4, 6, 4)
+            panel_lay.setSpacing(3)
+            splitter.addWidget(main_panel)
+            splitter.setStretchFactor(0, 0)
+            splitter.setStretchFactor(1, 1)
+            splitter.setSizes([200, 800])
 
-        # C: 操作栏
-        self._build_operation_bar(main_lay)
+            self._build_canvas_area(panel_lay)
+            self._build_params_area(panel_lay)
+            self._build_operation_bar(panel_lay)
+        else:
+            # 原有布局
+            main_lay = QVBoxLayout(self)
+            main_lay.setContentsMargins(6, 4, 6, 4)
+            main_lay.setSpacing(3)
+            self._build_canvas_area(main_lay)
+            self._build_params_area(main_lay)
+            self._build_operation_bar(main_lay)
 
     # ---- A: 可视化画布 ----
     def _build_canvas_area(self, parent_lay):
@@ -920,6 +964,12 @@ class SiphonPanel(QWidget):
 
         lay.addLayout(tb2)
 
+        # 示例数据提示标签
+        self.seg_hint_label = QLabel("💡 当前纵断面为示例数据")
+        self.seg_hint_label.setStyleSheet("background: #FFF8E1; color: #E65100; padding: 6px; border-radius: 4px; font-size: 12px;")
+        self.seg_hint_label.setVisible(False)
+        lay.addWidget(self.seg_hint_label)
+
         # 结构段表格
         self.seg_table = QTableWidget(0, len(SEG_HEADERS))
         self.seg_table.setHorizontalHeaderLabels(SEG_HEADERS)
@@ -990,6 +1040,12 @@ class SiphonPanel(QWidget):
         for w in [btn_add, btn_del, btn_dxf, btn_clr]:
             tb.addWidget(w)
         lay.addLayout(tb)
+
+        # 示例数据提示标签
+        self.long_hint_label = QLabel("💡 当前显示示例数据，可导入DXF替换")
+        self.long_hint_label.setStyleSheet("background: #FFF8E1; color: #E65100; padding: 6px; border-radius: 4px; font-size: 12px;")
+        self.long_hint_label.setVisible(False)
+        lay.addWidget(self.long_hint_label)
 
         self.long_table = QTableWidget(0, len(LONG_NODE_HEADERS))
         self.long_table.setHorizontalHeaderLabels(LONG_NODE_HEADERS)
@@ -1384,13 +1440,19 @@ document.addEventListener("DOMContentLoaded", function(){
             self._update_turn_R()
 
         # 下游断面参数（出水口系数计算用）
+        downstream_changed = False
         for key in ('outlet_downstream_type', 'outlet_downstream_B',
                     'outlet_downstream_h', 'outlet_downstream_m',
                     'outlet_downstream_D', 'outlet_downstream_R'):
             if key in kwargs:
                 self._downstream_params[key] = kwargs[key]
+                downstream_changed = True
         if 'downstream_params' in kwargs:
             self._downstream_params.update(kwargs['downstream_params'])
+            downstream_changed = True
+        # 下游断面参数变化时立即更新出水口系数
+        if downstream_changed:
+            self._auto_compute_outlet_xi()
 
         # 已构建的结构段列表
         if 'segments' in kwargs:
@@ -1438,6 +1500,10 @@ document.addEventListener("DOMContentLoaded", function(){
             self.longitudinal_nodes = kwargs['longitudinal_nodes']
             self._longitudinal_is_example = False
             self._refresh_long_table()
+        elif not _plan_skip and _plan_incoming and not self.longitudinal_nodes:
+            # 有平面数据但没有纵断面数据，添加示例
+            if SIPHON_AVAILABLE:
+                self._add_example_longitudinal()
 
         if 'siphon_name' in kwargs:
             self.edit_name.setText(kwargs['siphon_name'])
@@ -1566,6 +1632,21 @@ document.addEventListener("DOMContentLoaded", function(){
         if updated:
             self._refresh_seg_table()
 
+    def _estimate_outlet_xi_fallback(self):
+        """备用估算出水口系数：无下游断面时用流量推算"""
+        if not SIPHON_AVAILABLE:
+            return 0.5
+        Q = self._fval(self.edit_Q, 0) if hasattr(self, 'edit_Q') else 0
+        v = self._fval(self.edit_v, 0) if hasattr(self, 'edit_v') else 0
+        if Q <= 0 or v <= 0:
+            return 0.5
+        # 假设下游为典型梯形渠道，根据流量推算断面
+        omega_g = Q / v
+        # 假设下游流速约为管道流速的0.6倍，反推渠道断面积
+        omega_q = omega_g / 0.6
+        xi_c = (1 - omega_g / omega_q) ** 2
+        return round(max(0.1, min(xi_c, 0.8)), 2)
+
     def _auto_compute_outlet_xi(self):
         """自动计算出水口局部阻力系数"""
         if not SIPHON_AVAILABLE:
@@ -1573,6 +1654,12 @@ document.addEventListener("DOMContentLoaded", function(){
         dp = self._downstream_params
         ds_type = dp.get('outlet_downstream_type', '')
         if not ds_type:
+            # 无下游断面参数时，用流量推算
+            xi_fallback = self._estimate_outlet_xi_fallback()
+            for seg in self.segments:
+                if seg.segment_type == SegmentType.OUTLET:
+                    seg.xi_calc = xi_fallback
+            self._refresh_seg_table()
             return
         Q = self._fval(self.edit_Q, 0)
         v = self._fval(self.edit_v, 0)
@@ -1749,23 +1836,22 @@ document.addEventListener("DOMContentLoaded", function(){
             'twist_angle_outlet': self.edit_twist_angle_outlet.text().strip(),
         }
         if SIPHON_AVAILABLE:
-            # 如果纵断面数据仍为示例数据，保存时排除纵断面示例段，只保留通用构件
-            if self._longitudinal_is_example:
-                d['segments'] = [self._seg_to_dict(s) for s in self.segments
-                                 if s.direction == SegmentDirection.COMMON]
-            else:
-                d['segments'] = [self._seg_to_dict(s) for s in self.segments]
+            # 保存所有段
+            d['segments'] = [self._seg_to_dict(s) for s in self.segments]
             d['plan_segments'] = [self._seg_to_dict(s) for s in self.plan_segments]
             d['plan_total_length'] = self.plan_total_length
             d['plan_feature_points'] = [fp.to_dict() for fp in self.plan_feature_points]
-            d['longitudinal_nodes'] = [
-                {'chainage': nd.chainage, 'elevation': nd.elevation,
-                 'vcr': nd.vertical_curve_radius,
-                 'turn_type': nd.turn_type.value if hasattr(nd.turn_type, 'value') else str(nd.turn_type),
-                 'turn_angle': nd.turn_angle}
-                for nd in self.longitudinal_nodes
-            ]
-            d['longitudinal_is_example'] = self._longitudinal_is_example
+
+            # 仅当不是示例数据时才保存纵断面节点
+            if not self._longitudinal_is_example:
+                d['longitudinal_nodes'] = [
+                    {'chainage': nd.chainage, 'elevation': nd.elevation,
+                     'vcr': nd.vertical_curve_radius,
+                     'turn_type': nd.turn_type.value if hasattr(nd.turn_type, 'value') else str(nd.turn_type),
+                     'turn_angle': nd.turn_angle}
+                    for nd in self.longitudinal_nodes
+                ]
+
             d['plan_source'] = self._plan_source
         # 保存计算结果
         if self.calculation_result:
@@ -1876,7 +1962,7 @@ document.addEventListener("DOMContentLoaded", function(){
             self.plan_feature_points = [
                 PlanFeaturePoint.from_dict(fp) for fp in d['plan_feature_points']
             ]
-        if 'longitudinal_nodes' in d and SIPHON_AVAILABLE:
+        if 'longitudinal_nodes' in d and d['longitudinal_nodes'] and SIPHON_AVAILABLE:
             self.longitudinal_nodes = []
             for nd in d['longitudinal_nodes']:
                 tt = TurnType.NONE
@@ -1893,11 +1979,11 @@ document.addEventListener("DOMContentLoaded", function(){
                     turn_angle=nd.get('turn_angle', 0),
                 ))
             self._refresh_long_table()
-        # 恢复纵断面示例标志（兼容旧数据）
-        if 'longitudinal_is_example' in d:
-            self._longitudinal_is_example = d['longitudinal_is_example']
+            self._longitudinal_is_example = False
         else:
-            self._longitudinal_is_example = len(self.longitudinal_nodes) < 2
+            # 没有保存的纵断面数据，添加示例
+            if SIPHON_AVAILABLE:
+                self._add_example_longitudinal()
         # 恢复平面数据来源
         if 'plan_source' in d:
             self._plan_source = d['plan_source']
@@ -2251,6 +2337,7 @@ document.addEventListener("DOMContentLoaded", function(){
     def _do_Qv_update(self):
         """Q/v变化后的实际更新逻辑"""
         self._update_turn_R()
+        self._auto_compute_outlet_xi()
         self._update_D_theory()
         self._update_plan_bend_radius()
         self._update_segment_coefficients()
@@ -2258,6 +2345,7 @@ document.addEventListener("DOMContentLoaded", function(){
         strategy_text = self.combo_v2_strategy.currentText()
         if "断面" in strategy_text and self._section_B is not None:
             self._recalc_section_v2()
+        self._mark_dirty()
         # Q/v变化后，自动更新出水口局部阻力系数
         self._auto_compute_outlet_xi()
 
@@ -2617,9 +2705,9 @@ document.addEventListener("DOMContentLoaded", function(){
         # 进水口默认使用"进口稍微修圆"，系数取中值
         inlet_shape = InletOutletShape.SLIGHTLY_ROUNDED
         inlet_xi = sum(INLET_SHAPE_COEFFICIENTS[inlet_shape]) / 2  # 取范围中值
-        # 出水口默认系数设为0（待用户设置渠道参数后计算）
-        # 注意：只创建通用构件，不创建纵断面示例段。
-        # 纵断面管身段需要用户通过"导入纵断面DXF"或手动编辑节点表来生成。
+        # 出水口默认系数：优先用下游断面参数，否则用流量自动推算
+        outlet_xi = self._estimate_outlet_xi_fallback()
+        # 创建通用构件
         self.segments = [
             # 通用构件（仅贡献局部阻力系数ξ）
             StructureSegment(segment_type=SegmentType.INLET, locked=True,
@@ -2636,9 +2724,11 @@ document.addEventListener("DOMContentLoaded", function(){
             # 通用构件
             StructureSegment(segment_type=SegmentType.OTHER, xi_user=0.1,
                              direction=SegmentDirection.COMMON),
-            StructureSegment(segment_type=SegmentType.OUTLET, locked=True, xi_calc=0.0,
+            StructureSegment(segment_type=SegmentType.OUTLET, locked=True, xi_calc=outlet_xi,
                              direction=SegmentDirection.COMMON),
         ]
+        # 添加纵断面示例数据
+        self._add_example_longitudinal()
         self._refresh_seg_table()
         self._update_canvas()
 
@@ -2736,6 +2826,9 @@ document.addEventListener("DOMContentLoaded", function(){
                 item.setBackground(QBrush(bg))
                 if is_example_row:
                     item.setForeground(QBrush(QColor(153, 153, 153)))
+                    font = item.font()
+                    font.setItalic(True)
+                    item.setFont(font)
                 self.seg_table.setItem(row, col, item)
 
         # 更新状态（包含平面段计数）
@@ -2749,6 +2842,10 @@ document.addEventListener("DOMContentLoaded", function(){
         if n_plan > 0: parts.append(f"平面:{n_plan}")
         if n_long > 0: parts.append(f"纵断面:{n_long}")
         self.lbl_seg_status.setText(f"{total} ({', '.join(parts)})" if parts else "0")
+
+        # 显示/隐藏提示标签
+        if hasattr(self, 'seg_hint_label'):
+            self.seg_hint_label.setVisible(self._longitudinal_is_example)
 
         auto_resize_table(self.seg_table)
         self._update_data_status()
@@ -3042,6 +3139,10 @@ document.addEventListener("DOMContentLoaded", function(){
             dlg = SegmentEditDialog(self, segment=seg, Q=Q, v=v)
 
         if dlg.exec() == QDialog.Accepted and dlg.result:
+            # 用户编辑纵断面段时，清除示例标志
+            if seg.direction != SegmentDirection.COMMON and self._longitudinal_is_example:
+                self._longitudinal_is_example = False
+
             # 找到seg在self.segments中的真实索引
             try:
                 real_idx = self.segments.index(seg)
@@ -3181,6 +3282,24 @@ document.addEventListener("DOMContentLoaded", function(){
                     f"{nd.turn_angle:.3f}" if nd.turn_angle > 0 else "",
                 ]
                 self._add_long_node(data)
+
+            # 示例数据样式：灰色斜体
+            if self._longitudinal_is_example:
+                for row in range(self.long_table.rowCount()):
+                    for col in range(self.long_table.columnCount()):
+                        if col == 3:  # 转弯类型列是ComboBox
+                            continue
+                        item = self.long_table.item(row, col)
+                        if item:
+                            item.setForeground(QBrush(QColor(153, 153, 153)))
+                            font = item.font()
+                            font.setItalic(True)
+                            item.setFont(font)
+
+            # 显示/隐藏提示标签
+            if hasattr(self, 'long_hint_label'):
+                self.long_hint_label.setVisible(self._longitudinal_is_example)
+
             auto_resize_table(self.long_table)
         finally:
             self._syncing = old_syncing
@@ -3311,6 +3430,13 @@ document.addEventListener("DOMContentLoaded", function(){
             InfoBar.warning("不可用", "DXF解析器未加载", parent=self._info_parent(),
                            duration=3000, position=InfoBarPosition.TOP)
             return
+
+        # 检查是否有现有数据，弹出确认对话框
+        if len(self.longitudinal_nodes) > 0:
+            if not fluent_question(self, "确认替换",
+                "当前已有纵断面数据，导入DXF将替换现有数据。\n\n是否继续？"):
+                return
+
         # 默认打开示例DXF所在的resources目录
         _res_dir = os.path.join(_siphon_dir, "resources")
         if not os.path.isdir(_res_dir):
@@ -3466,6 +3592,11 @@ document.addEventListener("DOMContentLoaded", function(){
         """节点表编辑（单元格值变更 / 转弯类型下拉框切换）后触发正向同步"""
         if self._syncing:
             return
+
+        # 用户编辑示例数据时，自动转为用户数据
+        if self._longitudinal_is_example:
+            self._longitudinal_is_example = False
+
         if self._long_undo_group == 0 and self._long_pre_edit_snapshot is not None:
             self._long_undo_stack.append(self._long_pre_edit_snapshot)
             if len(self._long_undo_stack) > 20:
@@ -3741,6 +3872,11 @@ document.addEventListener("DOMContentLoaded", function(){
             InfoBar.error("不可用", "计算引擎未加载", parent=self._info_parent(),
                          duration=5000, position=InfoBarPosition.TOP)
             return
+        # 检查示例数据
+        if self._longitudinal_is_example and len(self.longitudinal_nodes) > 0:
+            InfoBar.error("无法计算", "当前纵断面为示例数据，请先导入DXF或手动添加真实数据",
+                         parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            return
         # 方案D：计算前验证拟定流速是否已确认
         if not self._validate_v_before_calc():
             return
@@ -3898,6 +4034,9 @@ document.addEventListener("DOMContentLoaded", function(){
 
             # 更新公式展示
             self._update_formula_display(result)
+
+            # 标记数据已修改，触发自动保存
+            self._mark_dirty()
 
             # 更新画布和状态
             self._update_canvas()
@@ -4331,4 +4470,88 @@ document.addEventListener("DOMContentLoaded", function(){
     def resizeEvent(self, event):
         super().resizeEvent(event)
         auto_resize_table(self.seg_table)
+
+    # ================================================================
+    # 工况管理
+    # ================================================================
+    def _on_case_selected(self, case):
+        """切换工况"""
+        if self._data_dirty:
+            self._do_autosave()
+        try:
+            data = self.case_manager.load_case_data(case)
+            self.from_dict(data)
+
+            # 如果没有纵断面数据，自动添加示例
+            if not self.longitudinal_nodes or len(self.longitudinal_nodes) == 0:
+                self._add_example_longitudinal()
+
+            self._data_dirty = False
+        except:
+            # 新工况或加载失败，添加示例数据
+            self._add_example_longitudinal()
+            self._data_dirty = False
+
+    def _add_example_longitudinal(self):
+        """
+        添加纵断面示例数据
+
+        示例数据来源：倒虹吸水力计算系统/resources/导入纵断面dxf示例.dxf
+        解析后归零处理（起点桩号从0开始）
+        """
+        if not SIPHON_AVAILABLE:
+            return
+        from siphon_models import LongitudinalNode, TurnType
+        self._longitudinal_is_example = True
+
+        # 从DXF示例文件解析的纵断面数据（已归零处理）
+        self.longitudinal_nodes = [
+            LongitudinalNode(chainage=0.000000, elevation=113.843926, slope_before=0.000000, slope_after=-0.356123),
+            LongitudinalNode(chainage=45.712018, elevation=96.839824, turn_type=TurnType.ARC, vertical_curve_radius=5.000000, turn_angle=25.455508, slope_before=-0.356123, slope_after=-0.800406, arc_center_s=43.968801, arc_center_z=92.153546, arc_end_chainage=47.556994, arc_theta_rad=0.444282),
+            LongitudinalNode(chainage=47.556994, elevation=95.635625, slope_before=-0.800406, slope_after=-0.800406),
+            LongitudinalNode(chainage=79.544004, elevation=62.673827, turn_type=TurnType.FOLD, turn_angle=13.905975, slope_before=-0.800406, slope_after=-0.557701),
+            LongitudinalNode(chainage=100.454474, elevation=49.630903, turn_type=TurnType.ARC, vertical_curve_radius=5.000000, turn_angle=31.953888, slope_before=-0.557701, slope_after=0.000000, arc_center_s=103.100657, arc_center_z=53.873275, arc_end_chainage=103.100657, arc_theta_rad=0.557701),
+            LongitudinalNode(chainage=103.100657, elevation=48.873275, slope_before=-0.000000, slope_after=-0.000000),
+            LongitudinalNode(chainage=145.103537, elevation=48.873275, turn_type=TurnType.ARC, vertical_curve_radius=5.000000, turn_angle=37.384346, slope_before=0.000000, slope_after=0.652480, arc_center_s=145.103537, arc_center_z=53.873275, arc_end_chainage=148.139331, arc_theta_rad=0.652480),
+            LongitudinalNode(chainage=148.139331, elevation=49.900372, slope_before=0.652480, slope_after=0.652480),
+            LongitudinalNode(chainage=180.860185, elevation=74.903192, turn_type=TurnType.ARC, vertical_curve_radius=5.000000, turn_angle=10.329722, slope_before=0.652480, slope_after=0.472192, arc_center_s=183.895979, arc_center_z=70.930289, arc_end_chainage=181.621780, arc_theta_rad=0.180288),
+            LongitudinalNode(chainage=181.621780, elevation=75.383155, slope_before=0.472192, slope_after=0.472192),
+            LongitudinalNode(chainage=211.582699, elevation=90.685004, turn_type=TurnType.ARC, vertical_curve_radius=5.000000, turn_angle=10.128511, slope_before=0.472192, slope_after=0.295416, arc_center_s=213.856898, arc_center_z=86.232137, arc_end_chainage=212.401207, arc_theta_rad=0.176776),
+            LongitudinalNode(chainage=212.401207, elevation=91.015542, slope_before=0.295416, slope_after=0.295416),
+            LongitudinalNode(chainage=249.872603, elevation=102.418880, slope_before=0.295416, slope_after=0.000000),
+        ]
+
+        if hasattr(self, 'long_table'):
+            self._refresh_long_table()
+        self._sync_nodes_to_segments()
+        # 恢复示例标志（_sync_nodes_to_segments会将其设为False）
+        self._longitudinal_is_example = True
+        self._refresh_seg_table()
+        self._update_canvas()
+
+    def _mark_dirty(self):
+        """标记数据已修改"""
+        if self._show_case_management and self.case_manager:
+            self._data_dirty = True
+            if self._autosave_timer:
+                self._autosave_timer.start(2000)
+
+    def _do_autosave(self):
+        """执行自动保存"""
+        if not self._show_case_management or not self.case_manager:
+            return
+        if not self.case_sidebar or not self.case_sidebar.current_case:
+            return
+        try:
+            data = self.to_dict()
+            self.case_manager.save_case_data(self.case_sidebar.current_case, data)
+            self._data_dirty = False
+        except:
+            pass
+
+    def closeEvent(self, event):
+        """关闭时保存"""
+        if self._data_dirty:
+            self._do_autosave()
+        super().closeEvent(event)
         auto_resize_table(self.long_table)

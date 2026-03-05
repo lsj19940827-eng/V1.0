@@ -1778,13 +1778,14 @@ class CommonSegmentAddDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
         self.setWindowTitle("添加通用构件")
-        self.setMinimumSize(420, 200)
-        self.resize(440, 220)
         self.result = None
         self._build_ui()
+        self.adjustSize()
+        self.setMinimumSize(self.sizeHint())
 
     def _build_ui(self):
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 12, 16, 12)
         lay.setSpacing(10)
 
         r1 = QHBoxLayout()
@@ -1793,7 +1794,7 @@ class CommonSegmentAddDialog(QDialog):
         self.combo_name.setEditable(True)
         self.combo_name.addItems(self._PRESETS)
         self.combo_name.setCurrentText("其他")
-        r1.addWidget(self.combo_name)
+        r1.addWidget(self.combo_name, 1)
         r1.addWidget(QLabel("(可自由输入)"))
         lay.addLayout(r1)
 
