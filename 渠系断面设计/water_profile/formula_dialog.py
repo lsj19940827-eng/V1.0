@@ -569,7 +569,7 @@ def show_total_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
     h_res = details.get('head_loss_reserve', 0)
     h_gate = details.get('head_loss_gate', 0)
     h_sip = details.get('head_loss_siphon', 0)
-    h_total = details.get('head_loss_total', 0)
+    h_total = hw + hj + h_tr + hf + h_res + h_gate + h_sip
     sections = [
         {"title": "1. 总水头损失公式",
          "formula": r"$h_{\Sigma} = h_w + h_j + h_{tr} + h_f + h_{res} + h_{gate} + h_{sip}$",

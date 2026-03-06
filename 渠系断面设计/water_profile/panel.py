@@ -2940,6 +2940,39 @@ class WaterProfilePanel(QWidget):
             self.detail_text.setPlainText(f"计算错误:\n{traceback.format_exc()}")
             self.result_notebook.setCurrentIndex(1)
 
+    def _recalculate_silent(self):
+        """静默重新推求水面线（跳过前置检查和InfoBar提示）。
+
+        在倒虹吸/有压管道回写损失后自动调用，确保累计损失、
+        水位、渠底/渠顶高程等下游列与新的损失值保持一致。
+        """
+        if not CALCULATOR_AVAILABLE:
+            return
+        try:
+            settings = self._build_settings()
+            nodes = self._build_nodes_from_table()
+            if not nodes or len(nodes) < 2:
+                return
+
+            calculator = WaterProfileCalculator(settings)
+            calculated = calculator.calculate_all(nodes)
+            self.calculated_nodes = calculated
+            self._settings = settings
+
+            self._display_results(calculated, settings)
+            self._generate_detail_report(calculated, settings, calculator)
+
+            summary = calculator.get_calculation_summary(calculated)
+            total_len = summary.get('总长度', 0.0)
+            wl_drop = summary.get('水位落差', 0.0)
+            self._last_building_lengths = calculator.calculate_building_lengths(calculated)
+            self._last_channel_total_length = total_len
+            self._last_type_summary = calculator.calculate_comprehensive_type_summary(calculated)
+            self._update_summary_panel(calculated, total_len, wl_drop, summary)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
     # ================================================================
     # 结果显示
     # ================================================================
@@ -4146,7 +4179,16 @@ class WaterProfilePanel(QWidget):
                             turn_radius = 0.0
                         outlet_idx = group.outlet_row_index
                         if 0 <= outlet_idx < len(cur_nodes):
-                            cur_nodes[outlet_idx].head_loss_siphon = head_loss
+                            _nd = cur_nodes[outlet_idx]
+                            _nd.head_loss_siphon = head_loss
+                            _nd.head_loss_total = (
+                                (_nd.head_loss_bend or 0.0)
+                                + (_nd.head_loss_friction or 0.0)
+                                + (getattr(_nd, 'head_loss_local', 0.0) or 0.0)
+                                + (getattr(_nd, 'head_loss_reserve', 0.0) or 0.0)
+                                + (getattr(_nd, 'head_loss_gate', 0.0) or 0.0)
+                                + (float(head_loss) if head_loss else 0.0)
+                            )
                             imported_count += 1
                         if diameter > 0:
                             for row_idx in group.row_indices:
@@ -4166,6 +4208,7 @@ class WaterProfilePanel(QWidget):
                     _pfx = _s.get_station_prefix() if _s else ""
                     _panel._update_table_from_nodes_full(cur_nodes, _pfx)
                     auto_resize_table(_panel.node_table)
+                    _panel._recalculate_silent()
                 return imported_count
 
             siphon_n = DEFAULT_SIPHON_TURN_RADIUS_N
@@ -4229,8 +4272,17 @@ class WaterProfilePanel(QWidget):
                     continue
                 outlet_idx = group.outlet_row_index
                 if 0 <= outlet_idx < len(cur_nodes):
-                    cur_nodes[outlet_idx].head_loss_siphon = float(head_loss)
-                    cur_nodes[outlet_idx].external_head_loss = None
+                    _nd = cur_nodes[outlet_idx]
+                    _nd.head_loss_siphon = float(head_loss)
+                    _nd.external_head_loss = None
+                    _nd.head_loss_total = (
+                        (_nd.head_loss_bend or 0.0)
+                        + (_nd.head_loss_friction or 0.0)
+                        + (getattr(_nd, 'head_loss_local', 0.0) or 0.0)
+                        + (getattr(_nd, 'head_loss_reserve', 0.0) or 0.0)
+                        + (getattr(_nd, 'head_loss_gate', 0.0) or 0.0)
+                        + float(head_loss)
+                    )
                     self._pressure_pipe_calc_done[identity] = True
                     imported_count += 1
 
@@ -4241,6 +4293,7 @@ class WaterProfilePanel(QWidget):
                 self.nodes = cur_nodes
                 self._update_table_from_nodes_full(cur_nodes, _pfx)
                 auto_resize_table(self.node_table)
+                self._recalculate_silent()
 
             summary = batch_data.get("summary", {})
             success_count = int(summary.get("success", 0))
