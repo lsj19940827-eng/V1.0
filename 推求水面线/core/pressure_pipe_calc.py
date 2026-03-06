@@ -359,6 +359,9 @@ class PressurePipeCalcResult:
     inlet_transition_details: Dict = field(default_factory=dict)
     outlet_transition_details: Dict = field(default_factory=dict)
 
+    # 数据模式
+    data_mode: str = ""                 # 数据模式（平面模式 / 空间模式（平面+纵断面））
+
 
 def calc_total_head_loss(
     name: str,
@@ -398,6 +401,7 @@ def calc_total_head_loss(
         total_length=0.0,
         pipe_velocity=0.0,
     )
+    result.data_mode = "平面模式"
     
     steps = []
     steps.append(f"【有压管道水头损失计算】")
@@ -504,6 +508,384 @@ def calc_total_head_loss(
     steps.append(f"      = {hf:.4f} + {total_bend_loss:.4f} + {hj_inlet:.4f} + {hj_outlet:.4f}")
     steps.append(f"      = {total:.4f} m")
     
+    result.calc_steps = "\n".join(steps)
+    return result
+
+
+# ============================================================
+# 7. 空间模式计算（照抄倒虹吸模块）
+# ============================================================
+
+# 导入倒虹吸模块
+import sys
+import os
+_siphon_dir = os.path.join(os.path.dirname(__file__), '..', '..', '倒虹吸水力计算系统')
+if _siphon_dir not in sys.path:
+    sys.path.insert(0, _siphon_dir)
+
+try:
+    from spatial_merger import SpatialMerger
+    from siphon_models import PlanFeaturePoint, LongitudinalNode, TurnType
+    from siphon_coefficients import CoefficientService
+    SPATIAL_AVAILABLE = True
+except ImportError:
+    SPATIAL_AVAILABLE = False
+
+
+def _convert_ip_points_to_plan_features(ip_points: List[Dict]) -> List[PlanFeaturePoint]:
+    """
+    将ip_points转换为PlanFeaturePoint列表
+
+    Args:
+        ip_points: IP点列表 [{x, y, turn_radius, turn_angle}, ...]
+
+    Returns:
+        PlanFeaturePoint对象列表
+    """
+    if not ip_points:
+        return []
+
+    plan_points = []
+    cumulative_chainage = 0.0
+
+    for i, ip in enumerate(ip_points):
+        x = ip.get('x', 0.0)
+        y = ip.get('y', 0.0)
+        turn_radius = ip.get('turn_radius', 0.0)
+        turn_angle = ip.get('turn_angle', 0.0)
+
+        # 计算累计桩号（通过IP点间距离）
+        if i > 0:
+            prev_x = ip_points[i-1].get('x', 0.0)
+            prev_y = ip_points[i-1].get('y', 0.0)
+            dx = x - prev_x
+            dy = y - prev_y
+            dist = math.sqrt(dx*dx + dy*dy)
+            cumulative_chainage += dist
+
+        # 计算方位角（通过相邻IP点坐标）
+        azimuth_meas_deg = 0.0
+        if i < len(ip_points) - 1:
+            next_x = ip_points[i+1].get('x', 0.0)
+            next_y = ip_points[i+1].get('y', 0.0)
+            dx = next_x - x
+            dy = next_y - y
+            if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+                # 数学方位角（正东=0°逆时针）
+                azimuth_math = math.atan2(dy, dx) * 180.0 / math.pi
+                # 转换为测量方位角（正北=0°顺时针）
+                azimuth_meas_deg = 90.0 - azimuth_math
+                if azimuth_meas_deg < 0:
+                    azimuth_meas_deg += 360.0
+        elif i > 0:
+            # 最后一个点使用前一段的方位角
+            prev_x = ip_points[i-1].get('x', 0.0)
+            prev_y = ip_points[i-1].get('y', 0.0)
+            dx = x - prev_x
+            dy = y - prev_y
+            if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+                azimuth_math = math.atan2(dy, dx) * 180.0 / math.pi
+                azimuth_meas_deg = 90.0 - azimuth_math
+                if azimuth_meas_deg < 0:
+                    azimuth_meas_deg += 360.0
+
+        # 判断转弯类型
+        turn_type = TurnType.NONE
+        if turn_angle > 0.1 and turn_radius > 0:
+            turn_type = TurnType.ARC
+
+        plan_points.append(PlanFeaturePoint(
+            chainage=cumulative_chainage,
+            x=x,
+            y=y,
+            azimuth_meas_deg=azimuth_meas_deg,
+            turn_radius=turn_radius,
+            turn_angle=turn_angle,
+            turn_type=turn_type,
+            ip_index=i
+        ))
+
+    return plan_points
+
+
+def _convert_long_nodes_dict_to_objects(long_nodes: List[Dict]) -> List[LongitudinalNode]:
+    """
+    将字典列表转换为LongitudinalNode对象列表
+
+    Args:
+        long_nodes: 纵断面节点字典列表
+
+    Returns:
+        LongitudinalNode对象列表
+    """
+    if not long_nodes:
+        return []
+
+    result = []
+    for node_dict in long_nodes:
+        # 转换turn_type字符串为枚举
+        turn_type_str = node_dict.get('turn_type', 'NONE')
+        if isinstance(turn_type_str, str):
+            if turn_type_str == 'ARC' or turn_type_str == '圆弧':
+                turn_type = TurnType.ARC
+            elif turn_type_str == 'FOLD' or turn_type_str == '折线':
+                turn_type = TurnType.FOLD
+            else:
+                turn_type = TurnType.NONE
+        else:
+            turn_type = turn_type_str  # 已经是枚举类型
+
+        result.append(LongitudinalNode(
+            chainage=node_dict.get('chainage', 0.0),
+            elevation=node_dict.get('elevation', 0.0),
+            vertical_curve_radius=node_dict.get('vertical_curve_radius', 0.0),
+            turn_type=turn_type,
+            turn_angle=node_dict.get('turn_angle', 0.0),
+            slope_before=node_dict.get('slope_before', 0.0),
+            slope_after=node_dict.get('slope_after', 0.0),
+            arc_center_s=node_dict.get('arc_center_s'),
+            arc_center_z=node_dict.get('arc_center_z'),
+            arc_end_chainage=node_dict.get('arc_end_chainage'),
+            arc_theta_rad=node_dict.get('arc_theta_rad'),
+        ))
+
+    return result
+
+
+def calc_total_head_loss_with_spatial(
+    name: str,
+    Q: float,
+    D: float,
+    material_key: str,
+    ip_points: List[Dict],
+    longitudinal_nodes: List[Dict],
+    upstream_velocity: float,
+    downstream_velocity: float,
+    inlet_transition_form: str = "反弯扭曲面",
+    outlet_transition_form: str = "反弯扭曲面",
+    inlet_transition_zeta: Optional[float] = None,
+    outlet_transition_zeta: Optional[float] = None,
+) -> PressurePipeCalcResult:
+    """
+    计算有压管道总水头损失（支持空间模式）
+
+    照抄倒虹吸模块的空间合并计算逻辑（siphon_hydraulics.py 第227-320行）
+
+    Args:
+        name: 管道名称
+        Q: 设计流量 (m³/s)
+        D: 管径 (m)
+        material_key: 管材键名
+        ip_points: IP点列表，每个字典包含 {x, y, turn_radius, turn_angle}
+        longitudinal_nodes: 纵断面节点列表（字典格式）
+        upstream_velocity: 上游渠道流速 v₁ (m/s)
+        downstream_velocity: 下游渠道流速 v₃ (m/s)
+        inlet_transition_form: 进口渐变段型式
+        outlet_transition_form: 出口渐变段型式
+
+    Returns:
+        PressurePipeCalcResult 计算结果对象
+    """
+    result = PressurePipeCalcResult(
+        name=name,
+        Q=Q,
+        D=D,
+        material_key=material_key,
+        total_length=0.0,
+        pipe_velocity=0.0,
+    )
+
+    steps = []
+    steps.append(f"【有压管道水头损失计算】")
+    steps.append(f"管道名称: {name}")
+    steps.append(f"设计流量 Q = {Q:.4f} m³/s")
+    steps.append(f"管径 D = {D:.4f} m")
+    steps.append(f"管材: {material_key}")
+    steps.append("")
+
+    # 1. 管内流速
+    V_pipe = calc_pipe_velocity(Q, D)
+    result.pipe_velocity = V_pipe
+    steps.append(f"1. 管内流速")
+    steps.append(f"   V = Q / (π×D²/4) = {Q:.4f} / (π×{D:.4f}²/4) = {V_pipe:.4f} m/s")
+    steps.append("")
+
+    # 2. 判断是否有纵断面数据
+    has_long_nodes = bool(longitudinal_nodes) and len(longitudinal_nodes) > 0
+    has_plan_points = bool(ip_points) and len(ip_points) >= 2
+
+    if has_long_nodes and not SPATIAL_AVAILABLE:
+        # 有纵断面数据但空间模块不可用，给出警告并退化为平面模式
+        steps.append("【警告】检测到纵断面数据，但倒虹吸空间计算模块不可用")
+        steps.append("将退化为平面模式计算，仅使用平面IP点数据")
+        steps.append("")
+        has_long_nodes = False
+
+    if has_long_nodes and SPATIAL_AVAILABLE:
+        # ===== 空间模式：使用SpatialMerger计算 =====
+        steps.append("【数据模式：空间模式（平面+纵断面）】")
+        steps.append("")
+        result.data_mode = "空间模式（平面+纵断面）"
+
+        # 转换数据格式
+        plan_features = _convert_ip_points_to_plan_features(ip_points)
+        long_node_objects = _convert_long_nodes_dict_to_objects(longitudinal_nodes)
+
+        # 调用空间合并引擎
+        spatial_result = SpatialMerger.merge_and_compute(
+            plan_features, long_node_objects,
+            pipe_diameter=D, verbose=False
+        )
+
+        # 使用空间长度
+        L_friction = spatial_result.total_spatial_length
+        result.total_length = L_friction
+        steps.append(f"2. 管道总长度（空间长度）")
+        steps.append(f"   L_spatial = {L_friction:.2f} m（通过三维空间合并计算）")
+        steps.append("")
+
+        # 3. 沿程水头损失
+        hf, friction_details = calc_friction_loss(Q, D, L_friction, material_key)
+        result.friction_loss = hf
+        result.friction_details = friction_details
+        steps.append(f"3. 沿程水头损失（GB 50288-2018 §6.7.2）")
+        steps.append(f"   公式: hf = f × L × Q^m / d^b")
+        if "error" not in friction_details:
+            steps.append(f"   f = {friction_details['f']}, m = {friction_details['m']}, b = {friction_details['b']}")
+            steps.append(f"   Q = {friction_details['Q_m3h']:.2f} m³/h, d = {friction_details['d_mm']:.0f} mm")
+            steps.append(f"   hf = {hf:.4f} m")
+        steps.append("")
+
+        # 4. 空间弯道局部水头损失
+        steps.append(f"4. 空间弯道局部水头损失")
+        total_bend_loss = 0.0
+        bend_losses = []
+        bend_details = []
+
+        for nd in spatial_result.nodes:
+            if nd.has_turn and nd.spatial_turn_angle > 0.1:
+                if nd.effective_turn_type == TurnType.ARC and nd.effective_radius > 0:
+                    xi, xi_steps = CoefficientService.calculate_bend_coeff(
+                        nd.effective_radius, D, nd.spatial_turn_angle, verbose=True
+                    )
+                    hj = xi * V_pipe * V_pipe / (2 * 9.81)
+                    bend_losses.append(hj)
+                    bend_details.append({"xi": xi, "hj": hj, "radius": nd.effective_radius, "angle": nd.spatial_turn_angle})
+                    total_bend_loss += hj
+                    steps.append(f"   桩号{nd.chainage:.1f}m 空间弯管: R_eff={nd.effective_radius:.2f}m, θ_3D={nd.spatial_turn_angle:.1f}°")
+                    steps.append(f"     ξ={xi:.4f}, hj={hj:.4f}m")
+                elif nd.effective_turn_type == TurnType.FOLD:
+                    xi, xi_steps = CoefficientService.calculate_fold_coeff(
+                        nd.spatial_turn_angle, verbose=True
+                    )
+                    hj = xi * V_pipe * V_pipe / (2 * 9.81)
+                    bend_losses.append(hj)
+                    bend_details.append({"xi": xi, "hj": hj, "angle": nd.spatial_turn_angle})
+                    total_bend_loss += hj
+                    steps.append(f"   桩号{nd.chainage:.1f}m 空间折管: θ_3D={nd.spatial_turn_angle:.1f}°")
+                    steps.append(f"     ξ={xi:.4f}, hj={hj:.4f}m")
+
+        result.bend_losses = bend_losses
+        result.total_bend_loss = total_bend_loss
+        result.bend_details = bend_details
+        steps.append(f"   空间弯道损失合计: Σhj_弯 = {total_bend_loss:.4f} m")
+        steps.append("")
+
+    else:
+        # ===== 平面模式：使用现有逻辑 =====
+        steps.append("【数据模式：平面模式】")
+        steps.append("")
+        result.data_mode = "平面模式"
+
+        # 2. 计算总管长（通过IP点坐标）
+        total_length = 0.0
+        if len(ip_points) >= 2:
+            for i in range(len(ip_points) - 1):
+                p1 = (ip_points[i].get('x', 0), ip_points[i].get('y', 0))
+                p2 = (ip_points[i+1].get('x', 0), ip_points[i+1].get('y', 0))
+                seg_len = calc_segment_length(p1, p2)
+                total_length += seg_len
+
+        result.total_length = total_length
+        steps.append(f"2. 管道总长度")
+        steps.append(f"   L = {total_length:.2f} m（通过IP点坐标计算）")
+        steps.append("")
+
+        # 3. 沿程水头损失
+        hf, friction_details = calc_friction_loss(Q, D, total_length, material_key)
+        result.friction_loss = hf
+        result.friction_details = friction_details
+        steps.append(f"3. 沿程水头损失（GB 50288-2018 §6.7.2）")
+        steps.append(f"   公式: hf = f × L × Q^m / d^b")
+        if "error" not in friction_details:
+            steps.append(f"   f = {friction_details['f']}, m = {friction_details['m']}, b = {friction_details['b']}")
+            steps.append(f"   Q = {friction_details['Q_m3h']:.2f} m³/h, d = {friction_details['d_mm']:.0f} mm")
+            steps.append(f"   hf = {hf:.4f} m")
+        steps.append("")
+
+        # 4. 弯头局部水头损失
+        steps.append(f"4. 弯头局部水头损失")
+        total_bend_loss = 0.0
+        bend_losses = []
+        bend_details = []
+
+        # 中间IP点才有转角
+        for i, ip in enumerate(ip_points):
+            if i == 0 or i == len(ip_points) - 1:
+                continue  # 进出口点无转角
+
+            turn_angle = ip.get('turn_angle', 0)
+            turn_radius = ip.get('turn_radius', 0)
+
+            if turn_angle > 0 and turn_radius > 0:
+                xi, hj, details = calc_bend_local_loss(D, turn_radius, turn_angle, V_pipe)
+                bend_losses.append(hj)
+                bend_details.append(details)
+                total_bend_loss += hj
+                steps.append(f"   IP{i}: R={turn_radius:.2f}m, θ={turn_angle:.1f}°, ξ={xi:.4f}, hj={hj:.4f}m")
+
+        result.bend_losses = bend_losses
+        result.total_bend_loss = total_bend_loss
+        result.bend_details = bend_details
+        steps.append(f"   弯头局部损失合计: Σhj_弯 = {total_bend_loss:.4f} m")
+        steps.append("")
+
+    # 5. 进口渐变段损失
+    steps.append(f"5. 进口渐变段水头损失")
+    if inlet_transition_zeta is not None and inlet_transition_zeta > 0:
+        inlet_zeta = inlet_transition_zeta
+    else:
+        inlet_zeta = get_transition_zeta(inlet_transition_form, is_inlet=True)
+    hj_inlet, inlet_details = calc_transition_loss(V_pipe, upstream_velocity, inlet_zeta, is_inlet=True)
+    result.inlet_transition_loss = hj_inlet
+    result.inlet_transition_details = inlet_details
+    steps.append(f"   型式: {inlet_transition_form}, ζ₁ = {inlet_zeta:.2f}")
+    steps.append(f"   V_渠道 = {upstream_velocity:.4f} m/s, V_管道 = {V_pipe:.4f} m/s")
+    steps.append(f"   hj₁ = ζ₁ × (V²_管道 - V²_渠道) / (2g) = {hj_inlet:.4f} m")
+    steps.append("")
+
+    # 6. 出口渐变段损失
+    steps.append(f"6. 出口渐变段水头损失")
+    if outlet_transition_zeta is not None and outlet_transition_zeta > 0:
+        outlet_zeta = outlet_transition_zeta
+    else:
+        outlet_zeta = get_transition_zeta(outlet_transition_form, is_inlet=False)
+    hj_outlet, outlet_details = calc_transition_loss(V_pipe, downstream_velocity, outlet_zeta, is_inlet=False)
+    result.outlet_transition_loss = hj_outlet
+    result.outlet_transition_details = outlet_details
+    steps.append(f"   型式: {outlet_transition_form}, ζ₃ = {outlet_zeta:.2f}")
+    steps.append(f"   V_管道 = {V_pipe:.4f} m/s, V_渠道 = {downstream_velocity:.4f} m/s")
+    steps.append(f"   hj₃ = ζ₃ × (V²_渠道 - V²_管道) / (2g) = {hj_outlet:.4f} m")
+    steps.append("")
+
+    # 7. 总水头损失
+    total = hf + total_bend_loss + hj_inlet + hj_outlet
+    result.total_head_loss = total
+    steps.append(f"7. 总水头损失")
+    steps.append(f"   ΔH = hf + Σhj_弯 + hj₁ + hj₃")
+    steps.append(f"      = {hf:.4f} + {total_bend_loss:.4f} + {hj_inlet:.4f} + {hj_outlet:.4f}")
+    steps.append(f"      = {total:.4f} m")
+
     result.calc_steps = "\n".join(steps)
     return result
 

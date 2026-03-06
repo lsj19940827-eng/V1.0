@@ -1,17 +1,19 @@
 {
   "version": "1.0",
-  "last_modified": "2026-03-05 16:15:27",
+  "last_modified": "2026-03-05 22:35:59",
   "pipes": {
     "牛马道": {
       "name": "牛马道",
-      "total_head_loss": 0.519515924923766,
-      "friction_loss": 0.43405831284135504,
+      "total_head_loss": 0.6416908150474079,
+      "friction_loss": 0.5562332029649969,
       "total_bend_loss": 0.07897562156754752,
       "inlet_transition_loss": 0.00648199051486346,
       "outlet_transition_loss": 0,
       "pipe_velocity": 1.4920775914865188,
       "plan_total_length": 339.4112549695428,
-      "calculated_at": "2026-03-04 15:55:38"
+      "calculated_at": "2026-03-05 22:35:59",
+      "data_mode": "平面模式",
+      "longitudinal_nodes": []
     },
     "3::牛马道": {
       "name": "3::牛马道",
@@ -22,7 +24,7 @@
       "outlet_transition_loss": 0,
       "pipe_velocity": 1.4920775914865188,
       "plan_total_length": 339.4112549695428,
-      "calculated_at": "2026-03-05 16:15:27"
+      "calculated_at": "2026-03-05 19:57:05"
     }
   }
 }

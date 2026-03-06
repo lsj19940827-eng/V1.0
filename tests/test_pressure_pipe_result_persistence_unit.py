@@ -20,6 +20,7 @@ def test_records_roundtrip_is_stable():
                 "flow_section": "1",
                 "name": "牛马道",
                 "status": "success",
+                "data_mode": "空间模式（平面+纵断面）",
                 "Q": "3.0",
                 "D": 2,
                 "total_head_loss": "1.234567",
@@ -47,6 +48,7 @@ def test_records_roundtrip_is_stable():
     assert n2["sensitivity_enabled"] is True
     assert n2["summary"] == {"total": 2, "success": 1, "failed": 1}
     assert n2["records"][0]["total_head_loss"] == 1.234567
+    assert n2["records"][0]["data_mode"] == "空间模式（平面+纵断面）"
     assert n2["records"][0]["sensitivity_main_f"] == 223200.0
     assert n2["records"][0]["sensitivity_low_total_head_loss"] == 1.1111
 

@@ -185,8 +185,12 @@ class MultiSiphonDialog(QDialog):
         Args:
             group: 倒虹吸分组数据 (SiphonGroup)
         """
-        panel = SiphonPanel(show_case_management=self._show_case_management,
-                            disable_autosave_load=True)
+        panel = SiphonPanel(
+            show_case_management=self._show_case_management,
+            disable_autosave_load=True,
+            siphon_manager=self.manager,
+            siphon_name=group.name
+        )
         panel.on_result_callback = self._make_result_callback(group.name)
         panel.edit_name.setText(group.name)
 
@@ -461,6 +465,15 @@ class MultiSiphonDialog(QDialog):
         if config.longitudinal_nodes:
             d['longitudinal_nodes'] = config.longitudinal_nodes
 
+        # 管道根数
+        if config.num_pipes:
+            d['num_pipes'] = config.num_pipes
+        # 自动确认仅依据“进程内”确认态，避免重启后仍自动确认
+        if (self.manager and MANAGER_AVAILABLE
+                and hasattr(self.manager, 'is_runtime_confirmed')
+                and self.manager.is_runtime_confirmed(config.name)):
+            d['calculated_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         # 从配置字典中读取 PySide6 专有扩展字段（不在 SiphonConfig 数据类中）
         if self.manager and MANAGER_AVAILABLE:
             siphons = self.manager._config.get('siphons', {})
@@ -561,6 +574,8 @@ class MultiSiphonDialog(QDialog):
                     longitudinal_nodes=data.get('longitudinal_nodes', []),
                     total_head_loss=data.get('total_head_loss'),
                     diameter=data.get('diameter'),
+                    calculated_at='',  # 不保存时间戳，每次打开程序都需要重新确认
+                    num_pipes=data.get('num_pipes', 1),
                 )
                 self.manager.set_siphon_config(config)
                 # 追加 PySide6 专有扩展字段到配置字典（SiphonConfig 未定义这些字段）
@@ -806,8 +821,9 @@ class MultiSiphonDialog(QDialog):
                 item_d.setTextAlignment(Qt.AlignCenter)
                 table.setItem(i, 2, item_d)
 
-                # 水头损失
-                item_loss = QTableWidgetItem(f"{result.total_head_loss:.4f}")
+                # 水头损失（优先显示加大流量工况，与导出到水面线表格保持一致）
+                head_loss = result.total_head_loss_inc if result.total_head_loss_inc is not None else result.total_head_loss
+                item_loss = QTableWidgetItem(f"{head_loss:.4f}")
                 item_loss.setTextAlignment(Qt.AlignCenter)
                 table.setItem(i, 3, item_loss)
 

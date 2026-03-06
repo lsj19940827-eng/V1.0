@@ -43,14 +43,14 @@ from datetime import datetime
 # 确保能导入 version.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
 
 
 def _version_key(v: str) -> tuple:
     m = _VERSION_RE.match((v or "").strip())
     if not m:
-        return (0, 0, 0)
-    return tuple(int(x) for x in m.groups())
+        return (0, 0, 0, 0)
+    return tuple(int(x) if x is not None else 0 for x in m.groups())
 
 
 # ============================================================

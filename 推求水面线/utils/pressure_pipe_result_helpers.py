@@ -65,6 +65,7 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
             "flow_section": flow_section,
             "name": name,
             "status": status,
+            "data_mode": str(rec.get("data_mode", "") or ""),
             "Q": _to_float_or_none(rec.get("Q")),
             "D": _to_float_or_none(rec.get("D")),
             "material_key": str(rec.get("material_key", "") or ""),
@@ -107,7 +108,9 @@ def format_pressure_pipe_record_detail(record: Dict[str, Any], precision: int = 
     status = "成功" if record.get("status") == "success" else "失败"
     flow_section = record.get("flow_section", "") or "-"
     name = record.get("name", "") or "未命名"
-    lines = [f"[{status}] 流量段={flow_section}  名称={name}"]
+    data_mode = (record.get("data_mode", "") or "").strip()
+    mode_suffix = f"  数据模式={data_mode}" if data_mode else ""
+    lines = [f"[{status}] 流量段={flow_section}  名称={name}{mode_suffix}"]
 
     if record.get("status") == "success":
         lines.append(

@@ -47,6 +47,7 @@ class SiphonConfig:
     total_head_loss: Optional[float] = None  # 总水头损失（加大流量工况）
     diameter: Optional[float] = None          # 计算管径
     calculated_at: str = ""                   # 计算时间
+    num_pipes: int = 1                        # 管道根数
     
     def __post_init__(self):
         if self.segments is None:
@@ -65,6 +66,8 @@ class SiphonManager:
     
     管理多个倒虹吸的参数配置和计算结果的持久化存储。
     """
+    # 进程内临时确认态（仅当前程序运行有效，不落盘）
+    _runtime_confirmed: Dict[str, set] = {}
     
     def __init__(self, project_path: str = None):
         """
@@ -84,6 +87,25 @@ class SiphonManager:
         # 尝试加载现有配置
         if self._config_path and os.path.exists(self._config_path):
             self.load_config()
+
+    def _runtime_key(self) -> str:
+        """获取进程内确认态的分组键（按配置文件路径隔离）。"""
+        return self._config_path or "__default__"
+
+    def mark_runtime_confirmed(self, siphon_name: str):
+        """标记指定倒虹吸为“本次运行已计算确认”状态。"""
+        if not siphon_name:
+            return
+        key = self._runtime_key()
+        bucket = self._runtime_confirmed.setdefault(key, set())
+        bucket.add(siphon_name)
+
+    def is_runtime_confirmed(self, siphon_name: str) -> bool:
+        """判断指定倒虹吸是否处于“本次运行已计算确认”状态。"""
+        if not siphon_name:
+            return False
+        key = self._runtime_key()
+        return siphon_name in self._runtime_confirmed.get(key, set())
     
     def _get_config_path(self, project_path: str) -> str:
         """
@@ -191,7 +213,8 @@ class SiphonManager:
             longitudinal_nodes=data.get("longitudinal_nodes", []),
             total_head_loss=data.get("total_head_loss"),
             diameter=data.get("diameter"),
-            calculated_at=data.get("calculated_at", "")
+            calculated_at=data.get("calculated_at", ""),
+            num_pipes=data.get("num_pipes", 1)
         )
     
     def set_siphon_config(self, config: SiphonConfig):
@@ -223,7 +246,8 @@ class SiphonManager:
             "longitudinal_nodes": config.longitudinal_nodes,
             "total_head_loss": config.total_head_loss,
             "diameter": config.diameter,
-            "calculated_at": config.calculated_at
+            "calculated_at": config.calculated_at,
+            "num_pipes": config.num_pipes
         }
     
     def update_siphon_result(self, siphon_name: str, total_head_loss: float,
@@ -247,6 +271,7 @@ class SiphonManager:
             self._config["siphons"][siphon_name]["diameter"] = diameter
         self._config["siphons"][siphon_name]["calculated_at"] = \
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.mark_runtime_confirmed(siphon_name)
     
     def get_result(self, siphon_name: str) -> Optional[float]:
         """

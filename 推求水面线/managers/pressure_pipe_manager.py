@@ -46,6 +46,7 @@ class PressurePipeConfig:
     outlet_transition_loss: Optional[float] = None  # 出口渐变段损失 (m)
     total_head_loss: Optional[float] = None         # 总水头损失 (m)
     calculated_at: str = ""                         # 计算时间
+    data_mode: str = ""                             # 数据模式（平面模式 / 空间模式（平面+纵断面））
     
     def __post_init__(self):
         if self.ip_points is None:
@@ -188,6 +189,7 @@ class PressurePipeManager:
             outlet_transition_loss=data.get("outlet_transition_loss"),
             total_head_loss=data.get("total_head_loss"),
             calculated_at=data.get("calculated_at", ""),
+            data_mode=data.get("data_mode", ""),
         )
     
     def set_pipe_config(self, pipe_name: str, config: PressurePipeConfig):
@@ -223,6 +225,7 @@ class PressurePipeManager:
             "outlet_transition_loss": config.outlet_transition_loss,
             "total_head_loss": config.total_head_loss,
             "calculated_at": config.calculated_at,
+            "data_mode": config.data_mode,
         }
         
         self.save_config()
@@ -230,7 +233,8 @@ class PressurePipeManager:
     def set_result(self, pipe_name: str, total_head_loss: float, 
                    friction_loss: float = 0, total_bend_loss: float = 0,
                    inlet_transition_loss: float = 0, outlet_transition_loss: float = 0,
-                   pipe_velocity: float = 0, plan_total_length: float = 0):
+                   pipe_velocity: float = 0, plan_total_length: float = 0,
+                   data_mode: str = "", longitudinal_nodes: Optional[List[Dict[str, Any]]] = None):
         """
         保存计算结果
         
@@ -258,6 +262,8 @@ class PressurePipeManager:
             "outlet_transition_loss": outlet_transition_loss,
             "pipe_velocity": pipe_velocity,
             "plan_total_length": plan_total_length,
+            "data_mode": data_mode or "",
+            "longitudinal_nodes": longitudinal_nodes or [],
             "calculated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
         

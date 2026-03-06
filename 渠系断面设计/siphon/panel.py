@@ -267,12 +267,18 @@ class SiphonPanel(QWidget):
     data_changed = Signal()
 
     def __init__(self, parent=None, show_case_management: bool = True,
-                 disable_autosave_load: bool = False):
+                 disable_autosave_load: bool = False,
+                 siphon_manager=None,
+                 siphon_name: str = "单倒虹吸"):
         super().__init__(parent)
         # 兼容多倒虹吸弹窗参数，当前单面板不展示工况条，但保留入参
         self._show_case_management = bool(show_case_management)
         # 多倒虹吸窗口模式下禁止面板自行加载 autosave（由 Dialog 统一管理数据加载）
         self._disable_autosave_load = bool(disable_autosave_load)
+
+        # SiphonManager 支持（统一数据管理和自动确认）
+        self.siphon_manager = siphon_manager
+        self.siphon_name = siphon_name
 
         # 工况管理
         self.case_manager = None
@@ -340,10 +346,15 @@ class SiphonPanel(QWidget):
                 if self.case_sidebar:
                     self.case_sidebar.refresh()
 
-        # 启动时尝试加载上次保存的参数（多倒虹吸窗口模式下由 Dialog 统一管理，跳过）
+        # 启动时尝试加载上次保存的参数
         if not self._disable_autosave_load:
             if not self._show_case_management:
-                QTimer.singleShot(100, self._load_autosave)
+                # 优先使用 SiphonManager 加载（支持自动确认）
+                if self.siphon_manager:
+                    QTimer.singleShot(100, self._load_from_manager)
+                else:
+                    # 降级到旧的 autosave 机制（不支持自动确认）
+                    QTimer.singleShot(100, self._load_autosave)
 
     # ================================================================
     # UI 构建
@@ -1751,6 +1762,89 @@ document.addEventListener("DOMContentLoaded", function(){
         except Exception as e:
             print(f"[倒虹吸自动保存] 失败: {e}")
 
+    def _save_to_manager(self):
+        """保存当前面板状态到 SiphonManager"""
+        if not self.siphon_manager:
+            return
+
+        try:
+            from 推求水面线.managers.siphon_manager import SiphonConfig
+            data = self.to_dict()
+
+            # 转换为 SiphonConfig 格式（复用 MultiSiphonDialog 的转换逻辑）
+            raw_segs = data.get('segments', [])
+            saved_segs = []
+            for s in raw_segs:
+                if isinstance(s, dict):
+                    sd = dict(s)
+                    if 'type' in sd and 'segment_type' not in sd:
+                        sd['segment_type'] = sd.pop('type')
+                    saved_segs.append(sd)
+                else:
+                    saved_segs.append(s)
+
+            raw_plan = data.get('plan_segments', [])
+            saved_plan = []
+            for s in raw_plan:
+                if isinstance(s, dict):
+                    sd = dict(s)
+                    if 'type' in sd and 'segment_type' not in sd:
+                        sd['segment_type'] = sd.pop('type')
+                    saved_plan.append(sd)
+                else:
+                    saved_plan.append(s)
+
+            config = SiphonConfig(
+                name=self.siphon_name,
+                Q=self._safe_float(data.get('Q', 0.0)),
+                v_guess=self._safe_float(data.get('v_guess', 2.0)),
+                roughness_n=self._safe_float(data.get('n', 0.014)),
+                inlet_type=data.get('inlet_type', ''),
+                outlet_type=data.get('outlet_type', ''),
+                xi_inlet=self._safe_float(data.get('xi_inlet', 0.1)),
+                xi_outlet=self._safe_float(data.get('xi_outlet', 0.2)),
+                v_channel_in=self._safe_float(data.get('v1', '0')),
+                v_pipe_in=self._safe_float(data.get('v2', '0')),
+                v_channel_out=0.0,
+                v_pipe_out=self._safe_float(data.get('v3', '0')),
+                segments=saved_segs,
+                plan_segments=saved_plan,
+                plan_total_length=data.get('plan_total_length', 0.0),
+                plan_feature_points=data.get('plan_feature_points', []),
+                longitudinal_nodes=data.get('longitudinal_nodes', []),
+                total_head_loss=data.get('total_head_loss'),
+                diameter=data.get('diameter'),
+                calculated_at='',  # 不保存时间戳，每次打开程序都需要重新确认
+                num_pipes=int(data.get('num_pipes', 1)),
+            )
+            self.siphon_manager.set_siphon_config(config)
+
+            # 追加 PySide6 专有扩展字段
+            siphon_dict = self.siphon_manager._config.get('siphons', {}).get(self.siphon_name, {})
+            siphon_dict['turn_n'] = data.get('turn_n', 5)
+            siphon_dict['threshold'] = data.get('threshold', '')
+            siphon_dict['D_override'] = data.get('D_override', '')
+            siphon_dict['v2_strategy'] = data.get('v2_strategy', '')
+            siphon_dict['show_detail'] = data.get('show_detail', True)
+            siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', True)
+
+            self.siphon_manager.save_config()
+            print(f"[倒虹吸] 已保存到 SiphonManager: {self.siphon_name}")
+        except Exception as e:
+            print(f"[倒虹吸] 保存到 SiphonManager 失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    @staticmethod
+    def _safe_float(val, default=0.0):
+        if val is None:
+            return default
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return default
+
+
     def _load_autosave(self):
         """启动时尝试加载自动保存的状态"""
         try:
@@ -1764,6 +1858,187 @@ document.addEventListener("DOMContentLoaded", function(){
             self.from_dict(data)
         except Exception as e:
             print(f"[倒虹吸自动加载] 失败: {e}")
+
+    def _load_from_manager(self):
+        """从 SiphonManager 加载数据（支持自动确认）"""
+        if not self.siphon_manager:
+            print("[倒虹吸] 无 SiphonManager，跳过加载")
+            return
+
+        try:
+            # 1. 尝试从 SiphonManager 加载配置
+            config = self.siphon_manager.get_siphon_config(self.siphon_name)
+            if config:
+                # 转换为 panel 可用的字典格式（复用 MultiSiphonDialog 的转换逻辑）
+                from 渠系断面设计.siphon.multi_siphon_dialog import MultiSiphonDialog
+                data = self._config_to_panel_dict(config)
+                self.from_dict(data)
+                print(f"[倒虹吸] 从 SiphonManager 加载配置: {self.siphon_name}")
+            else:
+                # 2. 如果 SiphonManager 中没有数据，尝试迁移旧的 autosave 数据
+                self._migrate_autosave_to_manager()
+        except Exception as e:
+            print(f"[倒虹吸] 从 SiphonManager 加载失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _config_to_panel_dict(self, config: 'SiphonConfig') -> dict:
+        """将 SiphonConfig 转换为 SiphonPanel.from_dict() 可用的格式"""
+        from 渠系断面设计.siphon.multi_siphon_dialog import MultiSiphonDialog
+
+        d = {
+            'Q': config.Q,
+            'v_guess': config.v_guess,
+            'n': config.roughness_n,
+            'inlet_type': config.inlet_type,
+            'outlet_type': config.outlet_type,
+            'xi_inlet': config.xi_inlet,
+            'xi_outlet': config.xi_outlet,
+            'name': config.name,
+        }
+
+        if config.v_channel_in > 0:
+            d['v1'] = str(config.v_channel_in)
+        if config.v_pipe_out > 0:
+            d['v3'] = str(config.v_pipe_out)
+        if config.v_pipe_in > 0:
+            d['v2'] = str(config.v_pipe_in)
+
+        # 结构段（统一键名）
+        if config.segments:
+            d['segments'] = MultiSiphonDialog._normalize_segments(config.segments)
+
+        # 平面段（统一键名）
+        if config.plan_segments:
+            d['plan_segments'] = MultiSiphonDialog._normalize_segments(config.plan_segments)
+        d['plan_total_length'] = config.plan_total_length
+        if config.plan_feature_points:
+            d['plan_feature_points'] = config.plan_feature_points
+
+        # 纵断面节点
+        if config.longitudinal_nodes:
+            d['longitudinal_nodes'] = config.longitudinal_nodes
+
+        # 管道根数
+        if config.num_pipes:
+            d['num_pipes'] = config.num_pipes
+
+        # 自动确认仅依据"进程内"确认态，避免重启后仍自动确认
+        if (self.siphon_manager
+                and hasattr(self.siphon_manager, 'is_runtime_confirmed')
+                and self.siphon_manager.is_runtime_confirmed(config.name)):
+            from datetime import datetime
+            d['calculated_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 从配置字典中读取 PySide6 专有扩展字段
+        if self.siphon_manager:
+            siphons = self.siphon_manager._config.get('siphons', {})
+            raw = siphons.get(config.name, {})
+            if 'turn_n' in raw:
+                d['turn_n'] = raw['turn_n']
+            if 'threshold' in raw:
+                d['threshold'] = raw['threshold']
+            if 'D_override' in raw:
+                d['D_override'] = raw['D_override']
+            if 'v2_strategy' in raw:
+                d['v2_strategy'] = raw['v2_strategy']
+            if 'show_detail' in raw:
+                d['show_detail'] = raw['show_detail']
+            if 'longitudinal_is_example' in raw:
+                d['longitudinal_is_example'] = raw['longitudinal_is_example']
+
+        return d
+
+    def _migrate_autosave_to_manager(self):
+        """迁移旧的 autosave 数据到 SiphonManager"""
+        if not self.siphon_manager:
+            return
+
+        try:
+            import json
+            path = self._get_autosave_path()
+            if not os.path.exists(path):
+                print(f"[倒虹吸] 无旧数据需要迁移")
+                return
+
+            # 读取旧数据
+            with open(path, 'r', encoding='utf-8') as f:
+                payload = json.load(f)
+            data = payload.get('data', payload)
+
+            print(f"[DEBUG _migrate] 读取到的原始数据 Q={data.get('Q')}, v_guess={data.get('v_guess')}, num_pipes={data.get('num_pipes')}")
+
+            # 加载到面板
+            self.from_dict(data)
+
+            # 直接使用原始数据保存到 SiphonManager（避免从输入框重新读取）
+            from 推求水面线.managers.siphon_manager import SiphonConfig
+
+            # 转换结构段键名
+            raw_segs = data.get('segments', [])
+            saved_segs = []
+            for s in raw_segs:
+                if isinstance(s, dict):
+                    sd = dict(s)
+                    if 'type' in sd and 'segment_type' not in sd:
+                        sd['segment_type'] = sd.pop('type')
+                    saved_segs.append(sd)
+                else:
+                    saved_segs.append(s)
+
+            raw_plan = data.get('plan_segments', [])
+            saved_plan = []
+            for s in raw_plan:
+                if isinstance(s, dict):
+                    sd = dict(s)
+                    if 'type' in sd and 'segment_type' not in sd:
+                        sd['segment_type'] = sd.pop('type')
+                    saved_plan.append(sd)
+                else:
+                    saved_plan.append(s)
+
+            config = SiphonConfig(
+                name=self.siphon_name,
+                Q=self._safe_float(data.get('Q', 0.0)),
+                v_guess=self._safe_float(data.get('v_guess', 2.0)),
+                roughness_n=self._safe_float(data.get('n', 0.014)),
+                inlet_type=data.get('inlet_type', ''),
+                outlet_type=data.get('outlet_type', ''),
+                xi_inlet=self._safe_float(data.get('xi_inlet', 0.1)),
+                xi_outlet=self._safe_float(data.get('xi_outlet', 0.2)),
+                v_channel_in=self._safe_float(data.get('v1', '0')),
+                v_pipe_in=self._safe_float(data.get('v2', '0')),
+                v_channel_out=0.0,
+                v_pipe_out=self._safe_float(data.get('v3', '0')),
+                segments=saved_segs,
+                plan_segments=saved_plan,
+                plan_total_length=data.get('plan_total_length', 0.0),
+                plan_feature_points=data.get('plan_feature_points', []),
+                longitudinal_nodes=data.get('longitudinal_nodes', []),
+                total_head_loss=data.get('total_head_loss'),
+                diameter=data.get('diameter'),
+                calculated_at='',
+                num_pipes=int(data.get('num_pipes', 1)),
+            )
+
+            print(f"[DEBUG _migrate] 创建的 SiphonConfig Q={config.Q}, v_guess={config.v_guess}, num_pipes={config.num_pipes}")
+
+            self.siphon_manager.set_siphon_config(config)
+
+            # 追加 PySide6 专有扩展字段
+            siphon_dict = self.siphon_manager._config.get('siphons', {}).get(self.siphon_name, {})
+            siphon_dict['turn_n'] = data.get('turn_n', 5)
+            siphon_dict['threshold'] = data.get('threshold', '')
+            siphon_dict['D_override'] = data.get('D_override', '')
+            siphon_dict['v2_strategy'] = data.get('v2_strategy', '')
+            siphon_dict['show_detail'] = data.get('show_detail', True)
+            siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', True)
+
+            self.siphon_manager.save_config()
+
+            print(f"[倒虹吸] 已迁移 autosave 数据到 SiphonManager: {self.siphon_name}")
+        except Exception as e:
+            print(f"[倒虹吸] 迁移 autosave 数据失败: {e}")
 
     def _export_params(self):
         """手动导出参数到用户选择的JSON文件"""
@@ -1979,7 +2254,9 @@ document.addEventListener("DOMContentLoaded", function(){
                     turn_angle=nd.get('turn_angle', 0),
                 ))
             self._refresh_long_table()
-            self._longitudinal_is_example = False
+            # 检测是否为示例数据（与 _add_example_longitudinal 的数据完全一致）
+            if self._is_example_longitudinal_data():
+                self._longitudinal_is_example = True
         else:
             # 没有保存的纵断面数据，添加示例
             if SIPHON_AVAILABLE:
@@ -1991,6 +2268,18 @@ document.addEventListener("DOMContentLoaded", function(){
             self._plan_source = 'water_profile'  # 兼容旧数据默认推求水面线
         else:
             self._plan_source = 'none'
+
+        # 自动确认：如果存在 calculated_at（进程内已计算），跳过所有确认对话框
+        if 'calculated_at' in d and d['calculated_at']:
+            self._v_user_confirmed = True
+            self._num_pipes_user_confirmed = True
+            self._turn_n_user_confirmed = True
+            print(f"[DEBUG SiphonPanel.from_dict] 检测到 calculated_at={d['calculated_at']}，已自动确认")
+            # 更新UI样式，移除"请确认"提示
+            self._update_v_style()
+            self._update_num_pipes_style()
+            self._update_turn_n_style()
+
         self._refresh_seg_table()
         self._update_canvas()
         self._update_data_status()
@@ -2742,10 +3031,11 @@ document.addEventListener("DOMContentLoaded", function(){
         # 2. 平面段排在中间
         for seg in self.plan_segments:
             display.append((seg, 'plan'))
-        # 3. 纵断面管身段排在最后
-        for seg in self.segments:
-            if seg.direction != SegmentDirection.COMMON:
-                display.append((seg, 'longitudinal'))
+        # 3. 纵断面管身段排在最后（示例状态下不显示）
+        if not self._longitudinal_is_example:
+            for seg in self.segments:
+                if seg.direction != SegmentDirection.COMMON:
+                    display.append((seg, 'longitudinal'))
         return display
 
     def _refresh_seg_table(self):
@@ -2862,10 +3152,6 @@ document.addEventListener("DOMContentLoaded", function(){
             v = self._fval(self.edit_v, 2)
             dlg = SegmentEditDialog(self, segment=None, Q=Q, v=v)
             if dlg.exec() == QDialog.Accepted and dlg.result:
-                # 首次手动添加时，清除示例纵断面数据，仅保留通用构件
-                if self._longitudinal_is_example:
-                    self.segments = [s for s in self.segments if s.direction == SegmentDirection.COMMON]
-                    self._longitudinal_is_example = False
                 # 插入到出水口之前
                 insert_idx = len(self.segments)
                 for i, s in enumerate(self.segments):
@@ -3139,10 +3425,6 @@ document.addEventListener("DOMContentLoaded", function(){
             dlg = SegmentEditDialog(self, segment=seg, Q=Q, v=v)
 
         if dlg.exec() == QDialog.Accepted and dlg.result:
-            # 用户编辑纵断面段时，清除示例标志
-            if seg.direction != SegmentDirection.COMMON and self._longitudinal_is_example:
-                self._longitudinal_is_example = False
-
             # 找到seg在self.segments中的真实索引
             try:
                 real_idx = self.segments.index(seg)
@@ -3593,10 +3875,6 @@ document.addEventListener("DOMContentLoaded", function(){
         if self._syncing:
             return
 
-        # 用户编辑示例数据时，自动转为用户数据
-        if self._longitudinal_is_example:
-            self._longitudinal_is_example = False
-
         if self._long_undo_group == 0 and self._long_pre_edit_snapshot is not None:
             self._long_undo_stack.append(self._long_pre_edit_snapshot)
             if len(self._long_undo_stack) > 20:
@@ -3629,7 +3907,6 @@ document.addEventListener("DOMContentLoaded", function(){
             new_long_segs = self._nodes_to_segments(nodes)
             self.segments = common + new_long_segs
             self.longitudinal_nodes = nodes
-            self._longitudinal_is_example = False
             self._update_segment_coefficients()
             self._refresh_seg_table()
             self._update_canvas()
@@ -3872,8 +4149,9 @@ document.addEventListener("DOMContentLoaded", function(){
             InfoBar.error("不可用", "计算引擎未加载", parent=self._info_parent(),
                          duration=5000, position=InfoBarPosition.TOP)
             return
-        # 检查示例数据
-        if self._longitudinal_is_example and len(self.longitudinal_nodes) > 0:
+        # 检查示例数据：只有在纵断面是示例数据且没有平面数据时才阻止计算
+        has_plan_data = len(self.plan_segments) > 0 or len(self.plan_feature_points) > 0
+        if self._longitudinal_is_example and len(self.longitudinal_nodes) > 0 and not has_plan_data:
             InfoBar.error("无法计算", "当前纵断面为示例数据，请先导入DXF或手动添加真实数据",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
@@ -4041,6 +4319,12 @@ document.addEventListener("DOMContentLoaded", function(){
             # 更新画布和状态
             self._update_canvas()
             self._update_data_status()
+
+            # 标记进程内确认状态（支持自动确认）
+            if self.siphon_manager:
+                self.siphon_manager.mark_runtime_confirmed(self.siphon_name)
+                # 保存到 SiphonManager
+                self._save_to_manager()
 
             if self.on_result_callback:
                 self.on_result_callback(result)
@@ -4491,6 +4775,18 @@ document.addEventListener("DOMContentLoaded", function(){
             # 新工况或加载失败，添加示例数据
             self._add_example_longitudinal()
             self._data_dirty = False
+
+    def _is_example_longitudinal_data(self):
+        """检测当前纵断面数据是否为示例数据"""
+        if not SIPHON_AVAILABLE or len(self.longitudinal_nodes) != 13:
+            return False
+        # 检查第一个和最后一个节点的桩号和高程（示例数据的特征）
+        first = self.longitudinal_nodes[0]
+        last = self.longitudinal_nodes[-1]
+        return (abs(first.chainage - 0.0) < 0.01 and
+                abs(first.elevation - 113.843926) < 0.01 and
+                abs(last.chainage - 249.872603) < 0.01 and
+                abs(last.elevation - 102.418880) < 0.01)
 
     def _add_example_longitudinal(self):
         """

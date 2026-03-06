@@ -93,14 +93,14 @@ def _get_token() -> str:
     return token
 
 
-_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
 
 
 def _version_key(v: str) -> tuple:
     m = _VERSION_RE.match((v or "").strip())
     if not m:
-        return (0, 0, 0)
-    return tuple(int(x) for x in m.groups())
+        return (0, 0, 0, 0)
+    return tuple(int(x) if x is not None else 0 for x in m.groups())
 
 
 def _load_universal_patch(dist_dir: str, version: str) -> dict:
@@ -412,7 +412,7 @@ class ReleaseWindow(QWidget):
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("版本级别:"))
         self._level_combo = ComboBox()
-        self._level_combo.addItems(["patch — 补丁版本", "minor — 次版本", "major — 主版本"])
+        self._level_combo.addItems(["hotfix — 热修复", "patch — 补丁版本", "minor — 次版本", "major — 主版本"])
         self._level_combo.setCurrentIndex(0)
         self._level_combo.setFixedWidth(260)
         row1.addWidget(self._level_combo)
@@ -502,13 +502,19 @@ class ReleaseWindow(QWidget):
 
     def _calc_new_version(self, level: str) -> str:
         parts = [int(x) for x in APP_VERSION.split(".")]
+        if len(parts) == 3:
+            parts.append(0)
+
         if level == "major":
-            parts = [parts[0] + 1, 0, 0]
+            parts = [parts[0] + 1, 0, 0, 0]
         elif level == "minor":
-            parts = [parts[0], parts[1] + 1, 0]
-        else:
-            parts = [parts[0], parts[1], parts[2] + 1]
-        return ".".join(str(x) for x in parts)
+            parts = [parts[0], parts[1] + 1, 0, 0]
+        elif level == "patch":
+            parts = [parts[0], parts[1], parts[2] + 1, 0]
+        else:  # hotfix
+            parts = [parts[0], parts[1], parts[2], parts[3] + 1]
+
+        return ".".join(str(x) for x in parts) if parts[3] > 0 else ".".join(str(x) for x in parts[:3])
 
     def _update_version_preview(self):
         level = self._get_level()

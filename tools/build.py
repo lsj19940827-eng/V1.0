@@ -43,20 +43,26 @@ def bump_version(level: str) -> str:
     自动递增 version.py 中的版本号。
 
     Args:
-        level: 'patch' | 'minor' | 'major'
+        level: 'patch' | 'minor' | 'major' | 'hotfix'
 
     Returns:
         新版本号字符串
     """
     global APP_VERSION
-    parts = list(int(x) for x in APP_VERSION.split("."))
+    parts = [int(x) for x in APP_VERSION.split(".")]
+    if len(parts) == 3:
+        parts.append(0)
+
     if level == "major":
-        parts = [parts[0] + 1, 0, 0]
+        parts = [parts[0] + 1, 0, 0, 0]
     elif level == "minor":
-        parts = [parts[0], parts[1] + 1, 0]
-    else:  # patch
-        parts = [parts[0], parts[1], parts[2] + 1]
-    new_ver = ".".join(str(x) for x in parts)
+        parts = [parts[0], parts[1] + 1, 0, 0]
+    elif level == "patch":
+        parts = [parts[0], parts[1], parts[2] + 1, 0]
+    else:  # hotfix
+        parts = [parts[0], parts[1], parts[2], parts[3] + 1]
+
+    new_ver = ".".join(str(x) for x in parts) if parts[3] > 0 else ".".join(str(x) for x in parts[:3])
 
     ver_file = os.path.join(PROJECT_ROOT, "version.py")
     with open(ver_file, "r", encoding="utf-8") as f:

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QGroupBox, QGridLayout, QComboBox, QLineEdit,
     QRadioButton, QButtonGroup, QSplitter, QApplication,
-    QSizePolicy, QTabWidget, QCheckBox
+    QSizePolicy, QTabWidget, QCheckBox, QScrollArea, QFrame
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
@@ -102,13 +102,26 @@ from 推求水面线.models.data_models import OpenChannelParams
 class PressurePipeConfigDialog(QDialog):
     """有压管道计算配置对话框（在计算前配置参数）"""
 
-    def __init__(self, parent=None, default_sensitivity_enabled=True):
+    def __init__(self, parent=None, default_sensitivity_enabled=True, pipe_groups=None, manager=None):
         super().__init__(parent)
         self.setWindowTitle("有压管道水力计算配置")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(500)
         self.setModal(True)
 
         self._sensitivity_enabled = default_sensitivity_enabled
+        self._pipe_groups = pipe_groups or []
+        self._manager = manager
+
+        # 存储每个管道的纵断面数据 {pipe_name: [LongitudinalNode字典列表]}
+        self._longitudinal_data = {}
+
+        # 从manager加载已有的纵断面数据
+        if self._manager and self._pipe_groups:
+            for group in self._pipe_groups:
+                config = self._manager.get_pipe_config(group.name)
+                if config and config.longitudinal_nodes:
+                    self._longitudinal_data[group.name] = config.longitudinal_nodes
 
         self._init_ui()
 
@@ -119,7 +132,7 @@ class PressurePipeConfigDialog(QDialog):
         lay.setSpacing(14)
 
         # 标题说明
-        title = QLabel("有压管道水力计算")
+        title = QLabel("有压管道水力计算配置")
         title.setStyleSheet("font-size: 15px; font-weight: bold; color: #1976D2;")
         lay.addWidget(title)
 
@@ -136,6 +149,24 @@ class PressurePipeConfigDialog(QDialog):
         line.setFixedHeight(1)
         line.setStyleSheet("background-color: #E0E0E0;")
         lay.addWidget(line)
+
+        # 如果有多个管道，显示管道卡片
+        if self._pipe_groups:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+
+            scroll_widget = QWidget()
+            scroll_lay = QVBoxLayout(scroll_widget)
+            scroll_lay.setSpacing(12)
+
+            for group in self._pipe_groups:
+                card = self._create_pipe_card(group)
+                scroll_lay.addWidget(card)
+
+            scroll_lay.addStretch()
+            scroll.setWidget(scroll_widget)
+            lay.addWidget(scroll, 1)
 
         # 配置选项组
         config_grp = QGroupBox("计算选项")
@@ -210,6 +241,227 @@ class PressurePipeConfigDialog(QDialog):
     def get_sensitivity_enabled(self) -> bool:
         """获取是否启用球墨铸铁管上下限对比"""
         return self.chk_sensitivity.isChecked()
+
+    def _create_pipe_card(self, group):
+        """为单个管道创建卡片"""
+        from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget, QHeaderView
+
+        card = QGroupBox(f"管道: {group.name}")
+        card.setStyleSheet("""
+            QGroupBox {
+                font-size: 13px; font-weight: bold; color: #2C3E50;
+                border: 2px solid #3498DB; border-radius: 8px;
+                margin-top: 12px; padding: 16px 12px 12px 12px;
+                background: #FFFFFF;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin; left: 16px;
+                padding: 0 8px; background: #FFFFFF;
+            }
+        """)
+
+        card_lay = QVBoxLayout(card)
+        card_lay.setSpacing(10)
+
+        # 基本信息
+        info_label = QLabel(f"流量: {group.design_flow:.3f} m³/s  |  管径: {group.diameter:.3f} m  |  管材: {group.material_key}")
+        info_label.setStyleSheet("font-size: 12px; color: #7F8C8D; font-weight: normal;")
+        card_lay.addWidget(info_label)
+
+        # 工具栏
+        toolbar = QHBoxLayout()
+
+        try:
+            from qfluentwidgets import PushButton
+            btn_import = PushButton("导入纵断面DXF")
+            btn_clear = PushButton("清空纵断面")
+            btn_preview = PushButton("预览纵断面")
+        except ImportError:
+            btn_import = QPushButton("导入纵断面DXF")
+            btn_clear = QPushButton("清空纵断面")
+            btn_preview = QPushButton("预览纵断面")
+
+        btn_import.clicked.connect(lambda: self._import_longitudinal_dxf(group.name, group.ip_points))
+        btn_clear.clicked.connect(lambda: self._clear_longitudinal(group.name))
+        btn_preview.clicked.connect(lambda: self._preview_longitudinal(group.name))
+
+        toolbar.addWidget(btn_import)
+        toolbar.addWidget(btn_clear)
+        toolbar.addWidget(btn_preview)
+        toolbar.addStretch()
+
+        card_lay.addLayout(toolbar)
+
+        # 纵断面节点表
+        table = QTableWidget()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["桩号(m)", "高程(m)", "竖曲线半径(m)", "转弯类型", "转角(°)"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setMaximumHeight(200)
+        table.setObjectName(f"long_table_{group.name}")
+
+        # 如果已有纵断面数据，显示表格
+        if group.name in self._longitudinal_data and self._longitudinal_data[group.name]:
+            self._refresh_long_table(group.name, table)
+            table.setVisible(True)
+        else:
+            table.setVisible(False)
+
+        card_lay.addWidget(table)
+
+        return card
+
+    def _import_longitudinal_dxf(self, pipe_name, ip_points):
+        """导入纵断面DXF"""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        import os
+        import sys
+
+        # 导入DXF解析器
+        _siphon_dir = os.path.join(os.path.dirname(__file__), '..', '..', '倒虹吸水力计算系统')
+        if _siphon_dir not in sys.path:
+            sys.path.insert(0, _siphon_dir)
+
+        try:
+            from dxf_parser import DxfParser
+            import ezdxf
+        except ImportError:
+            QMessageBox.warning(self, "导入失败", "DXF解析器未加载")
+            return
+
+        # 选择DXF文件
+        _res_dir = os.path.join(_siphon_dir, "resources")
+        if not os.path.isdir(_res_dir):
+            _res_dir = ""
+
+        filepath, _ = QFileDialog.getOpenFileName(self, "选择纵断面DXF文件", _res_dir, "DXF文件 (*.dxf);;所有文件 (*.*)")
+        if not filepath:
+            return
+
+        try:
+            # 计算桩号偏移量
+            chainage_offset = 0.0
+            if ip_points and len(ip_points) > 0:
+                doc = ezdxf.readfile(filepath)
+                msp = doc.modelspace()
+                polys = list(msp.query('LWPOLYLINE'))
+                if not polys:
+                    polys = list(msp.query('POLYLINE'))
+                if polys:
+                    first_point = list(polys[0].get_points(format='xyseb'))[0]
+                    x_start = first_point[0]
+                    mc_inlet = ip_points[0].get('x', 0.0)
+                    chainage_offset = mc_inlet - x_start
+
+            # 解析纵断面
+            long_nodes, message = DxfParser.parse_longitudinal_profile(filepath, chainage_offset=chainage_offset)
+
+            if not long_nodes:
+                QMessageBox.critical(self, "导入失败", message or "DXF文件中未找到纵断面数据")
+                return
+
+            # 转换为字典格式
+            long_nodes_dict = []
+            for node in long_nodes:
+                node_dict = {
+                    'chainage': node.chainage,
+                    'elevation': node.elevation,
+                    'vertical_curve_radius': node.vertical_curve_radius,
+                    'turn_type': node.turn_type.name if hasattr(node.turn_type, 'name') else str(node.turn_type),
+                    'turn_angle': node.turn_angle,
+                    'slope_before': node.slope_before,
+                    'slope_after': node.slope_after,
+                    'arc_center_s': node.arc_center_s,
+                    'arc_center_z': node.arc_center_z,
+                    'arc_end_chainage': node.arc_end_chainage,
+                    'arc_theta_rad': node.arc_theta_rad,
+                }
+                long_nodes_dict.append(node_dict)
+
+            self._longitudinal_data[pipe_name] = long_nodes_dict
+
+            # 检查桩号范围是否匹配
+            if ip_points and len(ip_points) >= 2:
+                ip_start = ip_points[0].get('x', 0.0)
+                ip_end = ip_points[-1].get('x', 0.0)
+                long_start = long_nodes[0].chainage
+                long_end = long_nodes[-1].chainage
+
+                warning_msg = ""
+                if long_start > ip_start + 1.0:
+                    warning_msg += f"⚠ 纵断面起点桩号({long_start:.2f}m)晚于平面进口桩号({ip_start:.2f}m)\n"
+                if long_end < ip_end - 1.0:
+                    warning_msg += f"⚠ 纵断面终点桩号({long_end:.2f}m)早于平面出口桩号({ip_end:.2f}m)\n"
+
+                if warning_msg:
+                    warning_msg += "\n超出纵断面范围的部分将按平面数据处理。\n是否继续？"
+                    reply = QMessageBox.question(self, "桩号范围警告", warning_msg,
+                                                QMessageBox.Yes | QMessageBox.No)
+                    if reply == QMessageBox.No:
+                        del self._longitudinal_data[pipe_name]
+                        return
+
+            # 刷新表格
+            table = self.findChild(QTableWidget, f"long_table_{pipe_name}")
+            if table:
+                self._refresh_long_table(pipe_name, table)
+                table.setVisible(True)
+
+            QMessageBox.information(self, "导入成功", f"{message}\n变坡点节点: {len(long_nodes)} 个")
+
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", str(e))
+
+    def _clear_longitudinal(self, pipe_name):
+        """清空纵断面数据"""
+        from PySide6.QtWidgets import QMessageBox
+
+        if pipe_name in self._longitudinal_data:
+            reply = QMessageBox.question(self, "确认清空", f"确定要清空管道 '{pipe_name}' 的纵断面数据吗？",
+                                        QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                del self._longitudinal_data[pipe_name]
+                table = self.findChild(QTableWidget, f"long_table_{pipe_name}")
+                if table:
+                    table.setVisible(False)
+                    table.setRowCount(0)
+
+    def _preview_longitudinal(self, pipe_name):
+        """预览纵断面数据"""
+        from PySide6.QtWidgets import QMessageBox
+
+        if pipe_name not in self._longitudinal_data or not self._longitudinal_data[pipe_name]:
+            QMessageBox.information(self, "预览", f"管道 '{pipe_name}' 尚未导入纵断面数据")
+            return
+
+        nodes = self._longitudinal_data[pipe_name]
+        info = f"管道: {pipe_name}\n纵断面节点数: {len(nodes)}\n\n前3个节点:\n"
+        for i, node in enumerate(nodes[:3]):
+            info += f"  {i+1}. 桩号={node['chainage']:.2f}m, 高程={node['elevation']:.2f}m\n"
+
+        QMessageBox.information(self, "纵断面预览", info)
+
+    def _refresh_long_table(self, pipe_name, table):
+        """刷新纵断面节点表"""
+        if pipe_name not in self._longitudinal_data:
+            return
+
+        nodes = self._longitudinal_data[pipe_name]
+        table.setRowCount(len(nodes))
+
+        for i, node in enumerate(nodes):
+            from PySide6.QtWidgets import QTableWidgetItem
+            table.setItem(i, 0, QTableWidgetItem(f"{node['chainage']:.2f}"))
+            table.setItem(i, 1, QTableWidgetItem(f"{node['elevation']:.3f}"))
+            table.setItem(i, 2, QTableWidgetItem(f"{node['vertical_curve_radius']:.2f}"))
+            table.setItem(i, 3, QTableWidgetItem(node['turn_type']))
+            table.setItem(i, 4, QTableWidgetItem(f"{node['turn_angle']:.1f}"))
+
+    def get_longitudinal_nodes_dict(self):
+        """获取所有管道的纵断面数据字典"""
+        return self._longitudinal_data.copy()
+
+
 class BuildingLengthDialog(QDialog):
     """
     建筑物长度统计对话框（PySide6版）

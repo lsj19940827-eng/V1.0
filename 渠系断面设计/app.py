@@ -360,12 +360,19 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         main_lay.addWidget(self.stack, 1)
 
+        # 创建 SiphonManager（用于倒虹吸数据管理和自动确认）
+        from 推求水面线.managers.siphon_manager import SiphonManager
+        self.siphon_manager = SiphonManager()
+
         # 注册模块面板
         self.open_channel_panel = OpenChannelPanel()
         self.aqueduct_panel = AqueductPanel()
         self.tunnel_panel = TunnelPanel()
         self.culvert_panel = CulvertPanel()
-        self.siphon_panel = SiphonPanel()
+        self.siphon_panel = SiphonPanel(
+            siphon_manager=self.siphon_manager,
+            siphon_name="单倒虹吸"
+        )
         self.pressure_pipe_panel = PressurePipePanel()
         self.batch_panel = BatchPanel()
         self.water_profile_panel = WaterProfilePanel()
@@ -434,6 +441,11 @@ class MainWindow(QMainWindow):
         """项目路径变化时更新窗口标题"""
         self._update_window_title()
         self._update_recent_menu()
+
+        # 更新 SiphonManager 的项目路径
+        if hasattr(self, 'siphon_manager') and self.siphon_manager:
+            self.siphon_manager.set_project_path(path)
+            print(f"[SiphonManager] 项目路径已更新: {path}")
 
     def _on_dirty_changed(self, is_dirty: bool):
         """脏状态变化时更新窗口标题"""

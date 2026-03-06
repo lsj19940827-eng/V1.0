@@ -14,6 +14,7 @@ def test_batch_report_contains_summary_and_details():
                 "flow_section": "1",
                 "name": "牛马道",
                 "status": "success",
+                "data_mode": "空间模式（平面+纵断面）",
                 "Q": 3.0,
                 "D": 2.0,
                 "material_key": "预应力钢筒混凝土管",
@@ -46,6 +47,7 @@ def test_batch_report_contains_summary_and_details():
     assert "【有压管道计算详情】" in txt
     assert "共2条，成功1条，失败1条" in txt
     assert "流量段=1  名称=牛马道" in txt
+    assert "数据模式=空间模式（平面+纵断面）" in txt
     assert "总损失: ΔH=1.4938 m" in txt
     assert "沿程=0.3457 m" in txt
     assert "球墨铸铁管 f 上下限对比: 开启" in txt
