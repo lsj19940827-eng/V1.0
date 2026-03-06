@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QProgressBar, QTextEdit, QComboBox,
     QDoubleSpinBox, QSizePolicy, QCheckBox, QSpinBox,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from qfluentwidgets import PushButton, PrimaryPushButton, LineEdit as FLineEdit, InfoBar, InfoBarPosition
 
 from 渠系断面设计.styles import P, S, W, E, BG, CARD, BD, T1, T2
@@ -51,6 +51,8 @@ class _MplCanvas(QWidget):
 class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
     """土石方工程量计算主面板（PySide6 + qfluentwidgets）"""
 
+    data_changed = Signal()
+
     def __init__(self, parent=None):
         QWidget.__init__(self, parent)
         # 运行时状态（由 panel_handlers.py 中的方法读写）
@@ -69,6 +71,29 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         self._build_thread = None
         self._geology_depth_data: dict = {}  # {layer_name: [(station, thickness), ...]}
         self._build_ui()
+        self._connect_data_changed()
+
+    def _connect_data_changed(self):
+        """连接关键输入控件的变更信号到 data_changed，用于脏状态追踪"""
+        _emit = self.data_changed.emit
+        for spin in [self._ds_b, self._ds_h, self._ds_ml, self._ds_mr,
+                     self._long_step, self._cs_interval, self._cs_hw, self._cs_sample,
+                     self._cs_lw, self._cs_rw, self._contour_step, self._ox, self._oy,
+                     self._dxf_spp, self._dxf_pw, self._dxf_ph, self._dxf_sh, self._dxf_sv,
+                     self._ldxf_sh, self._ldxf_sv,
+                     self._al_x0, self._al_y0, self._al_x1, self._al_y1]:
+            spin.valueChanged.connect(_emit)
+        for le in [self._proj_name, self._terrain_path, self._out_dir,
+                   self._layer_name, self._al_path, self._al_layer,
+                   self._extra_sta_edit]:
+            le.textChanged.connect(_emit)
+        self._fmt.currentIndexChanged.connect(_emit)
+        self._al_src.currentIndexChanged.connect(_emit)
+        self._cs_asym_chk.toggled.connect(_emit)
+        self._tin_filter_chk.toggled.connect(_emit)
+        self._dp_table.cellChanged.connect(_emit)
+        self._slope_table.cellChanged.connect(_emit)
+        self._geo_table.cellChanged.connect(_emit)
 
     # ── 顶层骨架 ─────────────────────────────────────────────
     def _build_ui(self):
@@ -463,6 +488,183 @@ class EarthworkPanel(_EarthworkPanelHandlers, QWidget):
         row = QWidget(); lay = QHBoxLayout(row); lay.setContentsMargins(0,0,0,0)
         lay.addWidget(w1); lay.addWidget(w2)
         return row
+
+    # ── 项目管理接口 ────────────────────────────────────────
+    def to_project_dict(self) -> dict:
+        """将面板数据序列化为字典（用于 .qxproj 统一保存）"""
+        data = {
+            "proj_name": self._proj_name.text().strip(),
+            "project_dir": getattr(self, '_project_dir', ''),
+            "out_dir": self._out_dir.text().strip(),
+            "terrain_path": self._terrain_path.text().strip(),
+            "terrain_src_files": list(getattr(self, '_terrain_src_files', [])),
+            "terrain_format": self._fmt.currentIndex(),
+            "layer_name": self._layer_name.text().strip(),
+            "contour_step": self._contour_step.value(),
+            "offset_x": self._ox.value(),
+            "offset_y": self._oy.value(),
+        }
+        # 设计断面
+        data["design_section"] = {
+            "bottom_width": self._ds_b.value(),
+            "depth": self._ds_h.value(),
+            "inner_slope_left": self._ds_ml.value(),
+            "inner_slope_right": self._ds_mr.value(),
+        }
+        # 纵坡（多段表格）
+        dp_rows = []
+        dp_table = getattr(self, '_dp_table', None)
+        if dp_table:
+            for r in range(dp_table.rowCount()):
+                row = []
+                for c in range(dp_table.columnCount()):
+                    item = dp_table.item(r, c)
+                    row.append(item.text() if item else "")
+                dp_rows.append(row)
+        data["design_profile_rows"] = dp_rows
+        # 边坡（多级表格）
+        slope_rows = []
+        for r in range(self._slope_table.rowCount()):
+            row = []
+            for c in range(self._slope_table.columnCount()):
+                item = self._slope_table.item(r, c)
+                row.append(item.text() if item else "")
+            slope_rows.append(row)
+        data["slope_rows"] = slope_rows
+        # 切割参数
+        data["cut_params"] = {
+            "long_step": self._long_step.value(),
+            "cs_interval": self._cs_interval.value(),
+            "cs_hw": self._cs_hw.value(),
+            "cs_sample": self._cs_sample.value(),
+            "asym_width": self._cs_asym_chk.isChecked(),
+            "cs_lw": self._cs_lw.value(),
+            "cs_rw": self._cs_rw.value(),
+            "extra_stations": self._extra_sta_edit.text().strip(),
+        }
+        # 中心线
+        data["alignment"] = {
+            "source": self._al_src.currentIndex(),
+            "dxf_path": self._al_path.text().strip(),
+            "dxf_layer": self._al_layer.text().strip(),
+            "table_path": getattr(self, '_al_sta_path', None) and self._al_sta_path.text().strip() or "",
+            "table_sheet": getattr(self, '_al_sheet', None) and self._al_sheet.text().strip() or "",
+            "col_sta": getattr(self, '_al_col_sta', None) and self._al_col_sta.text().strip() or "",
+            "col_x": getattr(self, '_al_col_x2', None) and self._al_col_x2.text().strip() or "",
+            "col_y": getattr(self, '_al_col_y2', None) and self._al_col_y2.text().strip() or "",
+            "manual_x0": self._al_x0.value(), "manual_y0": self._al_y0.value(),
+            "manual_x1": self._al_x1.value(), "manual_y1": self._al_y1.value(),
+        }
+        # TIN 设置
+        data["tin_filter"] = self._tin_filter_chk.isChecked()
+        # 地质分层
+        geo_rows = []
+        for r in range(self._geo_table.rowCount()):
+            row = []
+            for c in range(self._geo_table.columnCount()):
+                item = self._geo_table.item(r, c)
+                row.append(item.text() if item else "")
+            geo_rows.append(row)
+        data["geology_rows"] = geo_rows
+        # DXF 排版
+        data["dxf_layout"] = {
+            "spp": self._dxf_spp.value(),
+            "pw": self._dxf_pw.value(), "ph": self._dxf_ph.value(),
+            "sh": self._dxf_sh.value(), "sv": self._dxf_sv.value(),
+            "ldxf_sh": self._ldxf_sh.value(), "ldxf_sv": self._ldxf_sv.value(),
+        }
+        return data
+
+    def from_project_dict(self, data: dict):
+        """从字典恢复面板数据（用于 .qxproj 统一加载）"""
+        if not data or not isinstance(data, dict):
+            return
+        from PySide6.QtWidgets import QTableWidgetItem as _TWI
+        try:
+            self._proj_name.setText(data.get("proj_name", ""))
+            self._project_dir = data.get("project_dir", "")
+            self._out_dir.setText(data.get("out_dir", ""))
+            self._terrain_path.setText(data.get("terrain_path", ""))
+            self._terrain_src_files = list(data.get("terrain_src_files", []))
+            self._fmt.setCurrentIndex(data.get("terrain_format", 0))
+            self._layer_name.setText(data.get("layer_name", ""))
+            self._contour_step.setValue(data.get("contour_step", 1.0))
+            self._ox.setValue(data.get("offset_x", 0.0))
+            self._oy.setValue(data.get("offset_y", 0.0))
+            # 设计断面
+            ds = data.get("design_section", {})
+            if ds:
+                self._ds_b.setValue(ds.get("bottom_width", 3.0))
+                self._ds_h.setValue(ds.get("depth", 2.0))
+                self._ds_ml.setValue(ds.get("inner_slope_left", 1.5))
+                self._ds_mr.setValue(ds.get("inner_slope_right", 1.5))
+            # 纵坡表格
+            dp_rows = data.get("design_profile_rows", [])
+            dp_table = getattr(self, '_dp_table', None)
+            if dp_table and dp_rows:
+                dp_table.setRowCount(len(dp_rows))
+                for r, row in enumerate(dp_rows):
+                    for c, val in enumerate(row):
+                        dp_table.setItem(r, c, _TWI(str(val)))
+            # 边坡表格
+            slope_rows = data.get("slope_rows", [])
+            if slope_rows:
+                self._slope_table.setRowCount(len(slope_rows))
+                for r, row in enumerate(slope_rows):
+                    for c, val in enumerate(row):
+                        self._slope_table.setItem(r, c, _TWI(str(val)))
+            # 切割参数
+            cp = data.get("cut_params", {})
+            if cp:
+                self._long_step.setValue(cp.get("long_step", 2.0))
+                self._cs_interval.setValue(cp.get("cs_interval", 20.0))
+                self._cs_hw.setValue(cp.get("cs_hw", 30.0))
+                self._cs_sample.setValue(cp.get("cs_sample", 0.5))
+                self._cs_asym_chk.setChecked(cp.get("asym_width", False))
+                self._cs_lw.setValue(cp.get("cs_lw", 30.0))
+                self._cs_rw.setValue(cp.get("cs_rw", 30.0))
+                self._extra_sta_edit.setText(cp.get("extra_stations", ""))
+            # 中心线
+            al = data.get("alignment", {})
+            if al:
+                self._al_src.setCurrentIndex(al.get("source", 0))
+                self._al_path.setText(al.get("dxf_path", ""))
+                self._al_layer.setText(al.get("dxf_layer", ""))
+                if hasattr(self, '_al_sta_path'):
+                    self._al_sta_path.setText(al.get("table_path", ""))
+                if hasattr(self, '_al_sheet'):
+                    self._al_sheet.setText(al.get("table_sheet", ""))
+                if hasattr(self, '_al_col_sta'):
+                    self._al_col_sta.setText(al.get("col_sta", ""))
+                if hasattr(self, '_al_col_x2'):
+                    self._al_col_x2.setText(al.get("col_x", ""))
+                if hasattr(self, '_al_col_y2'):
+                    self._al_col_y2.setText(al.get("col_y", ""))
+                self._al_x0.setValue(al.get("manual_x0", 0.0))
+                self._al_y0.setValue(al.get("manual_y0", 0.0))
+                self._al_x1.setValue(al.get("manual_x1", 0.0))
+                self._al_y1.setValue(al.get("manual_y1", 0.0))
+            # TIN 设置
+            self._tin_filter_chk.setChecked(data.get("tin_filter", False))
+            # 地质分层
+            geo_rows = data.get("geology_rows", [])
+            if geo_rows:
+                self._geo_table.setRowCount(len(geo_rows))
+                for r, row in enumerate(geo_rows):
+                    for c, val in enumerate(row):
+                        self._geo_table.setItem(r, c, _TWI(str(val)))
+            # DXF 排版
+            dl = data.get("dxf_layout", {})
+            if dl:
+                self._dxf_spp.setValue(dl.get("spp", 4))
+                self._dxf_pw.setValue(dl.get("pw", 594.0))
+                self._dxf_ph.setValue(dl.get("ph", 420.0))
+                self._dxf_sh.setValue(dl.get("sh", 200.0))
+                self._dxf_sv.setValue(dl.get("sv", 200.0))
+                self._ldxf_sh.setValue(dl.get("ldxf_sh", 2000.0))
+                self._ldxf_sv.setValue(dl.get("ldxf_sv", 200.0))
+        except Exception as e:
+            print(f"[EarthworkPanel] from_project_dict 恢复数据失败: {e}")
 
     # ── 浏览按钮 ─────────────────────────────────────────────
     def _browse_terrain(self):

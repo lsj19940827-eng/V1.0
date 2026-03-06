@@ -1,8 +1,8 @@
 # 倒虹吸水力计算软件 - 前端需求规格说明书 (Frontend SRS)
 
-**版本**: v3.0
-**最后更新**: 2026-03-02
-**状态**: 已实现
+**版本**: v4.0  
+**最后更新**: 2026-03-06  
+**状态**: 已实现  
 **技术栈**: PySide6 + qfluentwidgets (Fluent Design) + QPainter + QWebEngineView (KaTeX)
 
 ---
@@ -23,18 +23,156 @@
 
 | 文件 | 职责 |
 |------|------|
-| `渠系断面设计/siphon/panel.py` | 主面板 `SiphonPanel`，含全部UI构建、参数联动、计算调用、导出 |
+| `渠系断面设计/siphon/panel.py` | 主面板 `SiphonPanel`，含全部UI构建、参数联动、计算调用、导出、工况集成、示例数据管理 |
 | `渠系断面设计/siphon/canvas_view.py` | 可视化画布 `PipelineCanvas`，纵断面/平面视图切换 |
 | `渠系断面设计/siphon/dialogs.py` | 专业对话框（进水口形状/出水口系数/拦污栅配置/结构段编辑/断面参数/通用构件） |
 | `渠系断面设计/siphon/multi_siphon_dialog.py` | 多标签页倒虹吸计算窗口 `MultiSiphonDialog` |
+| `渠系断面设计/siphon/case_manager.py` | 工况管理器 `CaseManager`，工况 CRUD、文件持久化 (v4.0 新增) |
+| `渠系断面设计/siphon/case_sidebar.py` | 工况侧边栏 `CaseSidebar`，Fluent Design 工况列表 UI (v4.0 新增) |
+| `渠系断面设计/siphon/__init__.py` | 模块初始化 |
 
 ---
 
-## 2. 主面板布局 (SiphonPanel)
+## 2. 工况管理系统 (v4.0 新增)
 
-SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面。
+### 2.1 功能概述
 
-### 2.1 区域 A：可视化画布
+工况管理系统支持用户同时管理多个倒虹吸设计方案进行对比。SiphonPanel 左侧嵌入工况侧边栏（宽度可调，默认 200px），右侧为设计面板主体。
+
+### 2.2 工况管理器 (CaseManager)
+
+**文件**: `case_manager.py`
+
+| 类 | 说明 |
+|-----|------|
+| `CaseInfo` | 工况信息（name, file_path, created_time, order） |
+| `CaseManager` | 工况 CRUD 管理器 |
+
+**存储**：
+- 存储位置：`data/siphon_cases/` 目录
+- 文件格式：`工况名.siphon.json`（JSON，含 `case_name`、`created_time`、`order` 元数据 + SiphonPanel `to_dict()` 数据）
+- 支持导入导出：`.siphon.json` 和 `.json` 格式
+
+**方法**：
+
+| 方法 | 说明 |
+|------|------|
+| `create_case(name?)` | 创建新工况，自动命名"工况1"、"工况2"等 |
+| `rename_case(case, new_name)` | 重命名工况（同步重命名文件） |
+| `delete_case(case)` | 删除工况文件（无需确认，文件可从系统恢复） |
+| `duplicate_case(case)` | 复制工况，自动命名"原名_副本" |
+| `reorder_cases(new_order)` | 重新排序工况（持久化 order 字段） |
+| `save_case_data(case, data)` | 保存工况数据（附加元数据） |
+| `load_case_data(case)` | 加载工况数据 |
+
+### 2.3 工况侧边栏 (CaseSidebar)
+
+**文件**: `case_sidebar.py`
+
+继承 QWidget，Fluent Design 风格。
+
+**信号**：
+
+| 信号 | 说明 |
+|------|------|
+| `case_selected(object)` | 工况切换（传递 CaseInfo） |
+| `case_changed()` | 工况列表变更（增删改排序） |
+
+**UI 组件**：
+- 顶部工具栏：[新建] [导入] 两个 PushButton（FluentIcon.ADD / FOLDER）
+- 工况列表：QListWidget，支持拖拽排序（InternalMove）
+
+**列表样式**：
+- 圆角卡片式列表项（border-radius: 4px）
+- 渐变色选中效果（#0078D4 到 #106EBE）
+- 悬停半透明背景（rgba(0,0,0,0.05)）
+
+**交互行为**：
+
+| 操作 | 说明 |
+|------|------|
+| 单击 | 切换工况，发射 `case_selected` 信号 |
+| 双击 | 进入重命名编辑状态（`ItemIsEditable`） |
+| 右键菜单 | RoundMenu（MenuAnimationType.DROP_DOWN）：重命名(EDIT)、复制(COPY)、导出(SHARE)、删除(DELETE) |
+| Delete 键 | 删除当前选中工况 |
+| 拖拽 | 调整工况顺序，完成后持久化 `order` 字段 |
+
+### 2.4 工况集成（panel.py）
+
+**关键方法**：
+
+| 方法 | 说明 |
+|------|------|
+| `_on_case_selected(case)` | 切换工况：自动保存当前 -> 加载目标 -> 刷新 UI |
+| `_mark_dirty()` | 标记数据修改 |
+| `_do_autosave()` | 执行自动保存到当前工况文件 |
+
+**自动保存触发时机**：
+- 切换工况时自动保存当前工况
+- 参数修改后 2 秒自动保存
+- 计算完成后自动保存
+- 关闭面板时自动保存
+
+**首次打开**：自动创建"工况1"
+
+### 2.5 示例数据系统 (v4.0 新增)
+
+#### 概述
+
+新工况或空工况自动添加纵断面示例数据（13 个节点），帮助用户直观了解界面。示例数据通过灰色斜体样式和黄色提示标签与用户数据区分。
+
+#### 示例数据来源
+
+DXF 示例文件：`倒虹吸水力计算系统/resources/导入纵断面dxf示例.dxf`
+
+| 特征 | 数值 |
+|------|------|
+| 桩号范围 | 0.00m ~ 249.87m（已归零处理） |
+| 竖曲线 | 4 个 ARC（R=5m） |
+| 折点 | 1 个 FOLD |
+| 高程范围 | 48.87m ~ 113.84m |
+| 结构段 | 12 个（含进出水口） |
+
+#### 状态管理
+
+| 变量 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `_longitudinal_is_example` | bool | False | 是否为示例数据 |
+
+#### 行为规则
+
+| 场景 | 行为 |
+|------|------|
+| 首次打开 / 新建工况 | 自动调用 `_add_example_longitudinal()` 添加示例数据 |
+| 从推求水面线进入（有平面无纵断面） | 自动添加示例数据 |
+| 从 `from_dict()` 加载空工况 | 自动添加示例数据 |
+| 工况切换时无纵断面数据 | 自动添加示例数据 |
+| 用户编辑纵断面节点表 | 自动清除示例标志 |
+| 用户编辑纵断面结构段 | 自动清除示例标志 |
+| 保存工况（`to_dict()`） | 示例数据不保存（`_longitudinal_is_example=True` 时跳过节点） |
+| 保存时标记 | `longitudinal_is_example: true` 标记到 JSON |
+
+#### 视觉标识
+
+| 元素 | 样式 |
+|------|------|
+| 纵断面节点表行 | 灰色斜体（示例标志为 True 时） |
+| 结构段表纵断面行 | 灰绿色底色 (#F0F4F0) |
+| 纵断面节点表提示标签 | `long_hint_label`：浅黄底+橙字 "当前显示示例数据，可导入DXF替换" |
+| 结构段表提示标签 | `seg_hint_label`：浅黄底+橙字 "当前纵断面为示例数据" |
+| 提示标签控制 | 示例标志为 True 时显示，False 时隐藏 |
+
+#### DXF 导入确认
+
+导入纵断面DXF时检查是否有现有数据，如有则弹出确认对话框，用户确认后才执行导入。
+
+---
+
+## 3. 主面板布局 (SiphonPanel)
+
+SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面。左侧嵌入工况侧边栏（CaseSidebar，宽度可调，默认 200px），右侧为设计面板主体。
+
+### 3.1 区域 A：可视化画布
 
 **控件**：`PipelineCanvas`（自绘 QWidget）  
 **背景色**：深色 (#14141E)
@@ -53,7 +191,7 @@ SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面
 
 **信号**：`view_changed(str)`、`zoom_changed(float)`
 
-### 2.2 区域 B：参数设置区域（QTabWidget，4个Tab）
+### 3.2 区域 B：参数设置区域（QTabWidget，4个Tab）
 
 #### Tab 1: 基本参数
 
@@ -64,7 +202,7 @@ SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面
 | 控件 | 类型 | 说明 |
 |------|------|------|
 | 名称 | LineEdit | 作业名称，默认"倒虹吸" |
-| 设计流量 Q | LineEdit | 必填 (m³/s) |
+| 设计流量 Q | LineEdit | 必填 (m3/s) |
 | 拟定流速 v | LineEdit | 必填 (m/s)，方案D确认交互 |
 | 糙率 n | LineEdit | 默认 0.014 |
 | 管道根数 N | _NumPipesWidget | 自定义 [-] 数字 [+] 控件，1~10 |
@@ -138,15 +276,10 @@ SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面
 - 灰绿色 (#F0F4F0)：纵断面示例数据
 
 **工具栏按钮**：
-- 导入平面DXF -> `_import_plan_dxf()`（工程坐标多段线，X=东, Y=北）
-- 导入纵断面DXF -> `_import_dxf()`
-- 撤回平面 -> `_undo_plan_import()`（撤回上一次平面导入，栈式回退）
-- 清空平面 -> `_clear_plan_data()`（清空全部平面数据）
-- 添加管身段 -> `SegmentEditDialog`
-- 添加通用构件 -> `CommonSegmentAddDialog`
-- 添加管道渐变段 -> 快速插入
-- 删除、上移、下移
-- 清空纵断面、默认构件
+- 导入平面DXF / 导入纵断面DXF / 撤回平面 / 清空平面
+- 添加管身段 / 添加通用构件 / 添加管道渐变段
+- 删除 / 上移 / 下移
+- 清空纵断面 / 默认构件
 
 **交互规则**：
 - 双击行打开对应编辑对话框
@@ -196,7 +329,7 @@ SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面
 - 详细过程：QTextEdit（只读），显示 `format_result(show_steps=True)`
 - 公式展示：QWebEngineView，KaTeX渲染（亚克力毛玻璃风格）
 
-### 2.3 区域 C：底部操作栏
+### 3.3 区域 C：底部操作栏
 
 | 按钮 | 说明 |
 |------|------|
@@ -205,7 +338,7 @@ SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面
 | 导出Excel | PushButton，openpyxl |
 | 导出TXT | PushButton，纯文本 |
 
-### 2.4 数据状态栏
+### 3.4 数据状态栏
 
 位于画布下方，实时显示当前计算模式：
 - "平面+纵断面（空间合并）" -- 绿色
@@ -218,159 +351,181 @@ SiphonPanel 继承 QWidget，作为渠系断面设计Tab系统中的一个页面
 
 ---
 
-## 2.5 平面DXF导入子系统（v3.0 新增）
+## 3.5 平面DXF导入子系统（v3.0）
 
-### 2.5.1 概述
+### 3.5.1 概述
 
 平面DXF导入功能允许用户独立于纵断面导入平面工程坐标多段线，支持三种计算模式：
 - **平面-only**：仅有平面数据，使用平面独立计算
 - **纵断面-only**：仅有纵断面数据
 - **平面+纵断面（空间合并）**：同时拥有两种数据，三维空间合并计算
 
-### 2.5.2 状态管理
-
-**新增成员变量**（`__init__` 方法）：
+### 3.5.2 状态管理
 
 | 变量名 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `_plan_source` | str | `'none'` | 平面数据来源追踪：`'none'`/`'dxf'`/`'water_profile'` |
 | `_plan_undo_stack` | list | `[]` | 平面数据撤回栈（深拷贝快照） |
 
-### 2.5.3 导入流程 (`_import_plan_dxf()`)
+### 3.5.3 导入流程 (`_import_plan_dxf()`)
 
-```
 1. 校验DXF解析器可用性
-2. 冲突保护：
-   - 检测已有平面数据（plan_feature_points 或 plan_segments）
-   - 弹窗显示现有数据来源（"DXF导入"/"推求水面线提取"/"已有"）
-   - 用户取消则中止
+2. 冲突保护：检测已有平面数据，弹窗显示现有数据来源，用户取消则中止
 3. QFileDialog 选择 .dxf 文件（默认resources目录）
 4. 调用 DxfParser.parse_plan_polyline(filepath)
 5. 失败：InfoBar.error 显示错误消息
-6. 成功：
-   a. _push_plan_undo() 保存撤回快照
-   b. 替换 plan_feature_points, plan_segments
-   c. 计算 plan_total_length（末端特征点桩号）
-   d. 设置 _plan_source = 'dxf'
-   e. 刷新UI：_refresh_seg_table, _update_segment_coefficients, _update_canvas, _update_data_status
-   f. InfoBar.success 显示详细结果：
-      - 特征点数、平面段数、平面总长
-      - 弯管/折管数量
-      - 三维模式检测（有/无纵断面数据）
-```
+6. 成功：保存撤回快照 -> 替换数据 -> 设置来源 -> 刷新UI -> InfoBar.success
 
-### 2.5.4 撤回功能
+### 3.5.4 撤回功能
 
-**`_push_plan_undo()`**：
-- 深拷贝当前 `plan_segments`、`plan_feature_points`、`plan_total_length`、`_plan_source` 为快照
-- 压入 `_plan_undo_stack`
-- 栈深度限制：20（超出时移除最早快照 `pop(0)`）
+- `_push_plan_undo()`：深拷贝当前数据为快照，压入栈（深度限制20）
+- `_undo_plan_import()`：弹出最新快照恢复，刷新UI
 
-**`_undo_plan_import()`**：
-- 栈空：InfoBar.warning 提示
-- 栈非空：弹出最新快照，恢复所有平面数据字段
-- 刷新UI组件
+### 3.5.5 清空功能 (`_clear_plan_data()`)
 
-### 2.5.5 清空功能 (`_clear_plan_data()`)
+确认对话框 -> 保存快照 -> 清空数据 -> 重置来源 -> 刷新UI
 
-1. 校验是否有平面数据
-2. `fluent_question()` 确认对话框
-3. `_push_plan_undo()` 保存快照（可撤回）
-4. 清空 `plan_segments`、`plan_feature_points`
-5. 重置 `plan_total_length = 0.0`、`_plan_source = 'none'`
-6. 刷新UI
-
-### 2.5.6 半径保护 (`_update_plan_bend_radius()`)
-
-弯管半径联动时的差异化处理：
+### 3.5.6 半径保护
 
 | 数据来源 | 弯管段半径 | 特征点turn_radius |
 |----------|-----------|-------------------|
-| DXF (`locked=True`) | 跳过，保留DXF实际半径 | 跳过（`_plan_source=='dxf'` 且 `turn_radius>0`） |
+| DXF (`locked=True`) | 跳过，保留DXF实际半径 | 跳过 |
 | 推求水面线 (`locked=False`) | 更新为 `n * D_design` | 更新为 `siphon_radius` |
 
-### 2.5.7 数据冲突保护 (`set_params()`)
+### 3.5.7 数据冲突保护 (`set_params()`)
 
-当推求水面线通过 `set_params()` 传入平面数据时：
-1. 检测是否有传入的平面数据（`plan_segments` 或 `plan_feature_points` in kwargs）
-2. 检测是否已有平面数据
-3. 如两者同时存在，弹出确认对话框：
-   - 显示现有数据来源（"DXF导入"/"推求水面线提取"）
-   - 用户选择是否覆盖
-4. 如用户拒绝覆盖，跳过平面数据设置（`_plan_skip = True`）
-5. 覆盖时，先 `_push_plan_undo()` 保存快照，设置 `_plan_source = 'water_profile'`
+推求水面线传入平面数据时：检测冲突 -> 弹窗确认 -> 用户拒绝则跳过 -> 覆盖时先保存快照
 
-### 2.5.8 删除策略 (`_del_segment()` 差异化)
+### 3.5.8 删除策略
 
 | 平面数据来源 | 平面段行为 |
 |-------------|-----------|
-| `_plan_source == 'water_profile'` | 拒绝删除，InfoBar提示"由推求水面线表格自动提取，不可手动删除" |
-| `_plan_source == 'dxf'` | 允许删除，与通用段/纵断面段一样执行删除流程 |
-
-删除实现：
-- 分别收集 `to_remove`（通用/纵断面段在 `self.segments` 中的索引）和 `plan_to_remove`（平面段在 `self.plan_segments` 中的索引）
-- 按索引逆序删除，避免索引偏移
+| `_plan_source == 'water_profile'` | 拒绝删除 |
+| `_plan_source == 'dxf'` | 允许删除 |
 
 ---
 
-## 3. 对话框体系 (dialogs.py)
+## 4. 对话框体系 (dialogs.py)
 
-### 3.1 InletShapeDialog（进水口形状设置）
+### 4.1 InletShapeDialog（进水口形状设置）
 
 - 显示表L.1.4-2三种形状及对应xi范围
 - 用户选择形状后自动设置xi值（取范围中值或用户指定）
 
-### 3.2 OutletShapeDialog（出水口系数设置）
+### 4.2 OutletShapeDialog（出水口系数设置）
 
 - 根据下游渠道参数（类型/B/h/m/D/R）计算出口系数
 - 支持手动输入
 
-### 3.3 TrashRackConfigDialog（拦污栅详细配置）
+### 4.3 TrashRackConfigDialog（拦污栅详细配置）
 
-- 左侧：参数录入区（栅面倾角/是否有支墩/栅条形状/厚度间距等）
-- 右侧：规范参考区（图L.1.4-1形状示意图 + 表L.1.4-1系数表）
-- 实时预览xi计算结果
-- 支持手动输入模式
-- 详见 `PRD_拦污栅配置.md`
+**继承**: `QDialog`  
+**窗口尺寸**: 900x750（最小 820x660）  
+**规范依据**: GB 50288-2018 附录L，公式 L.1.4-2 / L.1.4-3，表 L.1.4-1
 
-### 3.4 SegmentEditDialog（管身段编辑）
+#### 总体布局
+
+左右双栏（`QHBoxLayout`，各占 stretch=1）：
+- **左侧**：参数录入区（基础参数 -> 栅条参数 -> 支墩参数 -> 计算结果）
+- **右侧**：规范参考区（栅条形状示意图 + 形状系数表）
+
+#### 左侧：参数录入区
+
+**分组一：基础参数**
+
+| 控件 | 说明 |
+|------|------|
+| 栅面倾角 (度) | `LineEdit`，默认 90，范围 0~180 |
+| 计算模式 | `QButtonGroup` + 两个 `QRadioButton` |
+| - 无独立支墩 (公式L.1.4-2) | 默认选中 |
+| - 有独立支墩 (公式L.1.4-3) | 选中后激活分组三 |
+
+**分组二：栅条参数**
+
+| 控件 | 说明 |
+|------|------|
+| 栅条形状 | `ComboBox`，选项格式 `"矩形 (beta=2.42)"` |
+| 选择形状->右侧表格高亮 | `_on_bar_changed()` -> `_sync_table_highlight()` |
+| 栅条厚度 s1 (mm) | `LineEdit` |
+| 栅条间距 b1 (mm) | `LineEdit` |
+| s1/b1 动态显示 | 实时计算阻塞比 |
+
+**分组三：支墩参数**（仅有独立支墩时激活，否则 `setEnabled(False)`）
+
+| 控件 | 说明 |
+|------|------|
+| 支墩形状 | `ComboBox`，格式同栅条形状 |
+| 支墩厚度 s2 (mm) | `LineEdit` |
+| 支墩净距 b2 (mm) | `LineEdit` |
+| s2/b2 动态显示 | 实时计算阻塞比 |
+
+**分组四：计算结果**
+
+| 控件 | 说明 |
+|------|------|
+| 强制手动输入 | `CheckBox`，勾选后禁用分组二/三全部输入框 |
+| 手动 xs 输入框 | 仅勾选时可编辑；切换时自动预填公式计算值 |
+| xs 结果显示 | 20px 粗体主色调，实时更新 |
+| 公式渲染卡片 | `QWebEngineView` + KaTeX SVG 实时展开公式；手动模式下隐藏 |
+
+#### 右侧：规范参考区
+
+**上部：栅条形状示意图 (图L.1.4-1)**
+- `QPixmap(图L.1.4-1.png)`，`KeepAspectRatio`，固定高度240px
+- `resizeEvent` 自适应缩放
+- 双击弹出独立 `QDialog` 放大查看（屏幕 80%）
+
+**下部：形状系数表 (表L.1.4-1)**
+- 两列 QTableWidget（7行）：形状名称 / 系数beta，只读
+- 列宽 `SectionResizeMode.Stretch`，无水平滚动条
+- 点击行->同步左侧栅条/支墩 ComboBox
+- 双色高亮（蓝=栅条、琥珀=支墩、紫=重叠）
+- `_active_target` 追踪当前活跃目标（'bar' / 'support'），根据焦点分发表格点击
+
+#### 主表格集成
+
+双击拦污栅行 -> 弹出 `TrashRackConfigDialog` -> 确定后写回 `trash_rack_params` + `xi_calc`。
+
+类型列显示配置状态："拦污栅(已配置)" / "拦污栅(未配置)"。序列化/反序列化保存恢复 `trash_rack_params`。
+
+### 4.4 SegmentEditDialog（管身段编辑）
 
 - 编辑/新增直管、弯管、折管
 - 弯管自动查表计算xi
 
-### 3.5 InletSectionDialog（进口断面参数设置）
+### 4.5 InletSectionDialog（进口断面参数设置）
 
 - 输入 B(底宽)、h(水深)、m(坡比)
 - 计算 v2 = Q / [(B + m*h) * h]
 
-### 3.6 CommonSegmentAddDialog / CommonSegmentEditDialog / SimpleCommonEditDialog
+### 4.6 CommonSegmentAddDialog / CommonSegmentEditDialog / SimpleCommonEditDialog
 
 - 添加/编辑通用构件（名称 + xi值）
 
-### 3.7 L12CoeffRefDialog（渐变段系数参考表）
+### 4.7 L12CoeffRefDialog（渐变段系数参考表）
 
 - 只读表格，显示表L.1.2数据
 
 ---
 
-## 4. 多标签页窗口 (MultiSiphonDialog)
+## 5. 多标签页窗口 (MultiSiphonDialog)
 
-### 4.1 功能
+### 5.1 功能
 
-- 从推求水面线表格自动提取倒虹吸分组数据（`SiphonDataExtractor`)
+- 从推求水面线表格自动提取倒虹吸分组数据（`SiphonDataExtractor`）
 - 每个倒虹吸独立标签页（`SiphonPanel` 实例）
 - 参数自动导入（Q/n/v/渐变段/断面参数/平面段等）
 - 全部计算并导出水头损失到主表格
 - `SiphonManager` 持久化（保存/加载历史配置）
 
-### 4.2 接口
+### 5.2 接口
 
 ```python
 MultiSiphonDialog(
     parent,
     siphon_groups: List[SiphonGroup],
     manager: SiphonManager = None,
-    on_import_losses: Callable = None,  # 回调：results -> 写入主表
+    on_import_losses: Callable = None,
     siphon_turn_radius_n: float = 0.0,
     auto_run: bool = False
 )
@@ -378,9 +533,9 @@ MultiSiphonDialog(
 
 ---
 
-## 5. 交互逻辑
+## 6. 交互逻辑
 
-### 5.1 参数联动
+### 6.1 参数联动
 
 | 触发 | 联动动作 |
 |------|----------|
@@ -392,7 +547,7 @@ MultiSiphonDialog(
 | 管道根数变更 | 联动Q/v理论值 |
 | 指定管径勾选 | 显示/隐藏管径输入框 |
 
-### 5.2 计算流程
+### 6.2 计算流程
 
 1. 验证拟定流速已确认（方案D）
 2. 验证管道根数已确认
@@ -406,8 +561,9 @@ MultiSiphonDialog(
 10. 显示结果（自动切换到结果Tab）
 11. 更新画布和数据状态
 12. 触发回调（如有）
+13. **自动保存当前工况（v4.0）**
 
-### 5.3 导出功能
+### 6.3 导出功能
 
 | 格式 | 依赖 | 内容 |
 |------|------|------|
@@ -421,29 +577,28 @@ Word导出特性：
 - 公式使用 LaTeX->MathML 渲染
 - 支持自动更新目录（via COM）
 
-### 5.4 序列化接口
+### 6.4 序列化接口
 
 ```python
 to_dict() -> dict   # 保存：Q/v/n/v1/v3/渐变段/管径/根数/结构段/节点/平面数据/plan_source
 from_dict(d)        # 恢复：UI状态完全还原
 ```
 
-**v3.0 新增持久化字段**：
+**v3.0 持久化字段**：`plan_source`（平面数据来源）
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `plan_source` | str | 平面数据来源（`'none'`/`'dxf'`/`'water_profile'`） |
+**v4.0 新增持久化字段**：`longitudinal_is_example`（纵断面是否为示例数据）
 
 **`from_dict()` 兼容策略**：
-- 存在 `plan_source` 字段 → 直接恢复
-- 无 `plan_source` 但有平面数据 → 默认 `'water_profile'`（兼容旧数据）
-- 无 `plan_source` 且无平面数据 → `'none'`
+- 存在 `plan_source` 字段 -> 直接恢复
+- 无 `plan_source` 但有平面数据 -> 默认 `'water_profile'`（兼容旧数据）
+- 无 `plan_source` 且无平面数据 -> `'none'`
+- 无纵断面节点数据 -> 自动添加示例数据
 
 ---
 
-## 6. 可视化画布 (canvas_view.py)
+## 7. 可视化画布 (canvas_view.py)
 
-### 6.1 PipelineCanvas
+### 7.1 PipelineCanvas
 
 继承 QWidget，自绘引擎。
 
@@ -469,29 +624,39 @@ from_dict(d)        # 恢复：UI状态完全还原
 
 ---
 
-## 7. 异常处理与用户体验
+## 8. 异常处理与用户体验
 
 - **输入错误**：qfluentwidgets InfoBar（红色ERROR/黄色WARNING/绿色SUCCESS），定位到窗口顶部
 - **防抖机制**：Q/v参数联动200ms防抖、画布更新100ms防抖
-- **确认交互**：拟定流速/管道根数/弯管半径倍数分别有独立确认机制，避免误操作
-- **冲突保护（v3.0 新增）**：
-  - 平面DXF导入时检测已有平面数据，弹窗确认覆盖
-  - 推求水面线传入平面数据时检测冲突，弹窗确认覆盖
-  - 弹窗显示现有数据来源（DXF导入/推求水面线提取），帮助用户决策
-- **撤回机制（v3.0 新增）**：
-  - 平面数据支持栈式撤回（深度20），每次导入/清空前自动保存快照
-  - "撤回平面"按钮可逐步回退到上一状态
-- **DXF半径保护（v3.0 新增）**：DXF导入的弯管段（`locked=True`）保留实际几何半径，不被弯管半径倍数n×D联动覆盖
-- **示例数据提示**：纵断面示例数据灰色显示，首次手动添加自动清除
+- **确认交互**：拟定流速/管道根数/弯管半径倍数分别有独立确认机制
+- **冲突保护（v3.0）**：平面DXF导入/推求水面线传入平面数据时检测冲突，弹窗确认覆盖
+- **撤回机制（v3.0）**：平面数据支持栈式撤回（深度20）
+- **DXF半径保护（v3.0）**：DXF导入的弯管段（`locked=True`）保留实际几何半径
+- **示例数据提示（v4.0）**：纵断面示例数据灰色斜体+黄色提示标签，首次手动编辑自动清除
+- **DXF导入确认（v4.0）**：导入纵断面DXF前检测已有数据，弹窗确认
+- **工况自动保存（v4.0）**：参数修改2秒后、计算完成后、切换/关闭工况时自动保存
 - **空表格引导**：无数据时显示"点击导入DXF或手动添加"提示
-- **文件占用处理**：Word/Excel导出捕获PermissionError，提示关闭已打开的文件
+- **文件占用处理**：Word/Excel导出捕获PermissionError
 
 ---
 
-## 8. 变更日志
+## 9. 面板外部接口（与推求水面线联动）
+
+```python
+set_params(**kwargs)          # 从外部设置参数（Q, v_guess, n, v1, v3, 平面数据等）
+get_result() -> CalculationResult
+get_total_head_loss() -> float
+to_dict() -> dict             # 序列化（项目保存）
+from_dict(d: dict)            # 反序列化（项目加载）
+```
+
+---
+
+## 10. 变更日志
 
 | 版本 | 日期 | 变更内容 |
-|------|------|----------|
+|------|------|------|
 | v1.0 | 2026-02-15 | 初始版本（WinForms/WPF架构描述） |
 | v2.0 | 2026-02-25 | 全面重写：PySide6+Fluent UI实现；新增4Tab布局、三区表格、纵断面节点双向同步、多标签页窗口、确认交互机制、v2策略联动、导出体系、可视化画布、对话框体系 |
-| v3.0 | 2026-03-02 | **平面DXF独立导入**：新增平面DXF导入按钮及完整工作流（导入/撤回/清空）；数据来源追踪（`_plan_source`）；冲突保护弹窗（DXF vs 推求水面线）；差异化删除策略（DXF段可删/水面线段不可删）；DXF半径保护（locked段跳过n×D覆盖）；撤回栈（深度20）；`to_dict/from_dict` 新增 `plan_source` 持久化字段及旧数据兼容；数据状态栏新增平面来源标记（DXF/水面线） |
+| v3.0 | 2026-03-02 | **平面DXF独立导入**：新增平面DXF导入按钮及完整工作流（导入/撤回/清空）；数据来源追踪（`_plan_source`）；冲突保护弹窗；差异化删除策略；DXF半径保护；撤回栈（深度20）；`to_dict/from_dict` 新增 `plan_source` 字段；数据状态栏新增平面来源标记 |
+| v4.0 | 2026-03-06 | **工况管理系统**：新增 `case_manager.py`（CaseManager/CaseInfo，工况CRUD、文件持久化）和 `case_sidebar.py`（CaseSidebar，Fluent Design工况列表，拖拽排序/右键菜单/导入导出）；主面板集成左侧工况侧边栏；自动保存机制。**示例数据系统**：新工况自动添加13节点纵断面示例（DXF解析）；灰色斜体+黄色提示标签视觉标识；用户编辑自动清除示例标志；示例数据不保存到工况文件；DXF导入确认机制。**拦污栅配置整合**：TrashRackConfigDialog详细规格整合入主文档（原 `PRD_拦污栅配置.md` 归档） |

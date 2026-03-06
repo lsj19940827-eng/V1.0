@@ -12,7 +12,6 @@ from 推求水面线.utils.pressure_pipe_result_helpers import (
 def test_records_roundtrip_is_stable():
     raw = {
         "last_run_at": "2026-03-04 11:22:33",
-        "sensitivity_enabled": True,
         "summary": {"total": 99, "success": 88, "failed": 11},  # 将被规范化重算
         "records": [
             {
@@ -45,7 +44,6 @@ def test_records_roundtrip_is_stable():
     n2 = normalize_pressure_pipe_calc_records(loaded)
 
     assert n1 == n2
-    assert n2["sensitivity_enabled"] is True
     assert n2["summary"] == {"total": 2, "success": 1, "failed": 1}
     assert n2["records"][0]["total_head_loss"] == 1.234567
     assert n2["records"][0]["data_mode"] == "空间模式（平面+纵断面）"

@@ -53,6 +53,7 @@ V1.00207的备份/
 # 自动保存文件（仅保留在本地，不入版本库）
 data/*_autosave.qxproj
 data/siphon_autosave.json
+data/autosave/
 
 # 用户数据文件（DXF图纸、Excel、项目文件等，仅本地保留）
 data/*.dxf

@@ -385,6 +385,8 @@ class MultiSiphonDialog(QDialog):
             print("[DEBUG _load_saved_data] manager不可用，返回")
             return
 
+        self._detect_and_migrate_renames()
+
         for name, panel in self.panels.items():
             config = self.manager.get_siphon_config(name)
             if config:
@@ -398,6 +400,38 @@ class MultiSiphonDialog(QDialog):
         print("[DEBUG _load_saved_data] _reapply_table_data() 完成")
         self._update_status(f"已加载 {len(self.panels)} 个倒虹吸的配置")
         print("[DEBUG _load_saved_data] 完成")
+
+    def _detect_and_migrate_renames(self):
+        """检测倒虹吸名称变更并自动迁移配置和确认态。
+
+        当用户在水面线表格中修改了建筑物名称后，SiphonManager 中保存的
+        旧名称数据会变成"孤儿"。此方法通过对比当前分组名称和已保存名称，
+        将无法匹配的条目按出现顺序一一配对，自动执行 rename_siphon。
+        """
+        if not self.manager or not MANAGER_AVAILABLE:
+            return
+        if not hasattr(self.manager, 'rename_siphon'):
+            return
+
+        current_names = [g.name for g in self.siphon_groups]
+        saved_names = self.manager.get_siphon_names()
+
+        current_set = set(current_names)
+        saved_set = set(saved_names)
+
+        unmatched_current = [n for n in current_names if n not in saved_set]
+        unmatched_saved = [n for n in saved_names if n not in current_set]
+
+        if not unmatched_current or not unmatched_saved:
+            return
+
+        pairs = min(len(unmatched_current), len(unmatched_saved))
+        for i in range(pairs):
+            old_name = unmatched_saved[i]
+            new_name = unmatched_current[i]
+            print(f"[倒虹吸重命名迁移] '{old_name}' → '{new_name}'")
+            self.manager.rename_siphon(old_name, new_name)
+        self.manager.save_config()
 
     @staticmethod
     def _normalize_segments(raw_segs: list) -> list:

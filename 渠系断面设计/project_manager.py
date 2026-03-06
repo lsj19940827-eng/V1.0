@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from 渠系断面设计.culvert.panel import CulvertPanel
     from 渠系断面设计.siphon.panel import SiphonPanel
     from 渠系断面设计.pressure_pipe.panel import PressurePipePanel
+    from 推求水面线.managers.siphon_manager import SiphonManager
+    from 推求水面线.managers.pressure_pipe_manager import PressurePipeManager
 
 
 # 项目文件扩展名
@@ -29,10 +31,13 @@ PROJECT_EXT = ".qxproj"
 PROJECT_FILTER = f"渠系项目文件 (*{PROJECT_EXT})"
 
 # 自动保存目录（相对于程序目录）
-AUTO_SAVE_DIR = "data"
+AUTO_SAVE_DIR = os.path.join("data", "autosave")
 
 # 自动保存间隔（毫秒）
-AUTO_SAVE_INTERVAL_MS = 60_000  # 1分钟
+AUTO_SAVE_INTERVAL_MS = 480_000  # 8分钟
+
+# 每个项目保留的最大自动保存文件数
+MAX_AUTO_SAVE_FILES = 3
 
 # 最近项目最大数量
 MAX_RECENT_PROJECTS = 5
@@ -62,6 +67,11 @@ class ProjectManager(QObject):
         self._culvert_panel: Optional["CulvertPanel"] = None
         self._siphon_panel: Optional["SiphonPanel"] = None
         self._pressure_pipe_panel: Optional["PressurePipePanel"] = None
+        self._earthwork_panel = None
+
+        # ---- Manager 引用（由 MainWindow 设置）----
+        self._siphon_manager: Optional["SiphonManager"] = None
+        self._pressure_pipe_manager: Optional["PressurePipeManager"] = None
 
         # ---- 自动保存定时器 ----
         self._auto_save_timer = QTimer(self)
@@ -100,6 +110,9 @@ class ProjectManager(QObject):
         culvert_panel: "CulvertPanel" = None,
         siphon_panel: "SiphonPanel" = None,
         pressure_pipe_panel: "PressurePipePanel" = None,
+        earthwork_panel=None,
+        siphon_manager: "SiphonManager" = None,
+        pressure_pipe_manager: "PressurePipeManager" = None,
     ):
         """设置需要管理的面板引用，并连接脏状态信号"""
         self._batch_panel = batch_panel
@@ -110,24 +123,16 @@ class ProjectManager(QObject):
         self._culvert_panel = culvert_panel
         self._siphon_panel = siphon_panel
         self._pressure_pipe_panel = pressure_pipe_panel
+        self._earthwork_panel = earthwork_panel
+        self._siphon_manager = siphon_manager
+        self._pressure_pipe_manager = pressure_pipe_manager
 
         # 连接面板的data_changed信号到mark_dirty
-        if batch_panel and hasattr(batch_panel, 'data_changed'):
-            batch_panel.data_changed.connect(self.mark_dirty)
-        if water_profile_panel and hasattr(water_profile_panel, 'data_changed'):
-            water_profile_panel.data_changed.connect(self.mark_dirty)
-        if open_channel_panel and hasattr(open_channel_panel, 'data_changed'):
-            open_channel_panel.data_changed.connect(self.mark_dirty)
-        if aqueduct_panel and hasattr(aqueduct_panel, 'data_changed'):
-            aqueduct_panel.data_changed.connect(self.mark_dirty)
-        if tunnel_panel and hasattr(tunnel_panel, 'data_changed'):
-            tunnel_panel.data_changed.connect(self.mark_dirty)
-        if culvert_panel and hasattr(culvert_panel, 'data_changed'):
-            culvert_panel.data_changed.connect(self.mark_dirty)
-        if siphon_panel and hasattr(siphon_panel, 'data_changed'):
-            siphon_panel.data_changed.connect(self.mark_dirty)
-        if pressure_pipe_panel and hasattr(pressure_pipe_panel, 'data_changed'):
-            pressure_pipe_panel.data_changed.connect(self.mark_dirty)
+        for panel in [batch_panel, water_profile_panel, open_channel_panel,
+                      aqueduct_panel, tunnel_panel, culvert_panel,
+                      siphon_panel, pressure_pipe_panel, earthwork_panel]:
+            if panel and hasattr(panel, 'data_changed'):
+                panel.data_changed.connect(self.mark_dirty)
 
     # ----------------------------------------------------------------
     # 脏状态管理
@@ -165,8 +170,33 @@ class ProjectManager(QObject):
             auto_save_path = self._get_auto_save_path()
             self._save_to_file(auto_save_path)
             self.status_message.emit(f"自动保存完成: {os.path.basename(auto_save_path)}")
+            self._cleanup_old_auto_saves(os.path.dirname(auto_save_path))
         except Exception as e:
             self.status_message.emit(f"自动保存失败: {e}")
+
+    def _cleanup_old_auto_saves(self, auto_dir: str):
+        """清理旧的自动保存文件，每个项目前缀只保留最近 MAX_AUTO_SAVE_FILES 个"""
+        try:
+            suffix = f"_autosave{PROJECT_EXT}"
+            all_files = [f for f in os.listdir(auto_dir) if f.endswith(suffix)]
+            prefix_groups: Dict[str, list] = {}
+            for f in all_files:
+                # 文件名格式: {项目名}_{级别}_{YYYYMMDD}_{HHMMSS}_autosave.qxproj
+                # 去掉后缀后按最后两个 _ 分割出时间戳，剩余部分作为项目前缀
+                stem = f[:-len(suffix)]  # 例: "南峰寺_支渠_20260304_214133"
+                parts = stem.rsplit("_", 2)
+                prefix = parts[0] if len(parts) >= 3 else stem
+                prefix_groups.setdefault(prefix, []).append(f)
+
+            for prefix, files in prefix_groups.items():
+                files.sort(reverse=True)
+                for old_file in files[MAX_AUTO_SAVE_FILES:]:
+                    try:
+                        os.remove(os.path.join(auto_dir, old_file))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
     def _get_auto_save_path(self) -> str:
         """获取自动保存文件路径"""
@@ -268,11 +298,14 @@ class ProjectManager(QObject):
 
         # 加载项目
         try:
-            self._load_from_file(path)
+            data = self._load_from_file(path)
             self._current_path = path
             self._clear_dirty()
             self._add_recent_project(path)
             self.project_changed.emit(path)
+            # project_changed 信号会触发 set_project_path，可能覆盖刚恢复的 manager 数据
+            # 对于新版 .qxproj（含 manager 数据），需要重新应用以确保 .qxproj 数据为准
+            self._reapply_manager_data(data)
             self.status_message.emit(f"已打开项目: {os.path.basename(path)}")
             return True
         except Exception as e:
@@ -319,7 +352,10 @@ class ProjectManager(QObject):
             self._current_path = path
             self._clear_dirty()
             self._add_recent_project(path)
+            # 快照 manager 数据，防止 project_changed 触发 set_project_path 时被覆盖/清空
+            manager_snapshot = self._snapshot_manager_data()
             self.project_changed.emit(path)
+            self._reapply_manager_data(manager_snapshot)
             self.status_message.emit(f"已保存: {os.path.basename(path)}")
             return True
         except Exception as e:
@@ -379,6 +415,37 @@ class ProjectManager(QObject):
         return self._check_save_before_close()
 
     # ----------------------------------------------------------------
+    # Manager 数据保护（防止 set_project_path 覆盖）
+    # ----------------------------------------------------------------
+    def _snapshot_manager_data(self) -> Dict[str, Any]:
+        """快照当前 manager 内存数据"""
+        result: Dict[str, Any] = {}
+        if self._siphon_manager:
+            try:
+                result["siphon_manager_data"] = self._siphon_manager.to_dict()
+            except Exception:
+                pass
+        if self._pressure_pipe_manager:
+            try:
+                result["pressure_pipe_manager_data"] = self._pressure_pipe_manager.to_dict()
+            except Exception:
+                pass
+        return result
+
+    def _reapply_manager_data(self, data: Dict[str, Any]):
+        """将 manager 数据重新写回（仅当数据存在时覆盖）"""
+        if self._siphon_manager and data.get("siphon_manager_data"):
+            try:
+                self._siphon_manager.from_dict(data["siphon_manager_data"])
+            except Exception as e:
+                print(f"[ProjectManager] 重新应用SiphonManager数据失败: {e}")
+        if self._pressure_pipe_manager and data.get("pressure_pipe_manager_data"):
+            try:
+                self._pressure_pipe_manager.from_dict(data["pressure_pipe_manager_data"])
+            except Exception as e:
+                print(f"[ProjectManager] 重新应用PressurePipeManager数据失败: {e}")
+
+    # ----------------------------------------------------------------
     # 文件读写
     # ----------------------------------------------------------------
     def _save_to_file(self, path: str):
@@ -391,17 +458,18 @@ class ProjectManager(QObject):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    def _load_from_file(self, path: str):
-        """从文件加载项目"""
+    def _load_from_file(self, path: str) -> Dict[str, Any]:
+        """从文件加载项目，返回原始数据字典"""
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         self._restore_project_data(data)
+        return data
 
     def _collect_project_data(self) -> Dict[str, Any]:
         """收集所有面板数据"""
         data = {
-            "version": "1.1",
+            "version": "1.2",
             "created_at": datetime.now().isoformat(),
             "batch_panel": None,
             "water_profile_panel": None,
@@ -411,107 +479,98 @@ class ProjectManager(QObject):
             "culvert_panel": None,
             "siphon_panel": None,
             "pressure_pipe_panel": None,
+            "earthwork_panel": None,
+            "siphon_manager_data": None,
+            "pressure_pipe_manager_data": None,
+            "report_meta": None,
         }
 
-        if self._batch_panel:
-            try:
-                data["batch_panel"] = self._batch_panel.to_project_dict()
-            except Exception as e:
-                print(f"[ProjectManager] 收集BatchPanel数据失败: {e}")
+        # ---- 面板数据 ----
+        _panel_keys = [
+            ("batch_panel", self._batch_panel, "BatchPanel"),
+            ("water_profile_panel", self._water_profile_panel, "WaterProfilePanel"),
+            ("open_channel_panel", self._open_channel_panel, "OpenChannelPanel"),
+            ("aqueduct_panel", self._aqueduct_panel, "AqueductPanel"),
+            ("tunnel_panel", self._tunnel_panel, "TunnelPanel"),
+            ("culvert_panel", self._culvert_panel, "CulvertPanel"),
+            ("siphon_panel", self._siphon_panel, "SiphonPanel"),
+            ("pressure_pipe_panel", self._pressure_pipe_panel, "PressurePipePanel"),
+            ("earthwork_panel", self._earthwork_panel, "EarthworkPanel"),
+        ]
+        for key, panel, label in _panel_keys:
+            if panel:
+                try:
+                    data[key] = panel.to_project_dict()
+                except Exception as e:
+                    print(f"[ProjectManager] 收集{label}数据失败: {e}")
 
-        if self._water_profile_panel:
+        # ---- Manager 数据 ----
+        if self._siphon_manager:
             try:
-                data["water_profile_panel"] = self._water_profile_panel.to_project_dict()
+                data["siphon_manager_data"] = self._siphon_manager.to_dict()
             except Exception as e:
-                print(f"[ProjectManager] 收集WaterProfilePanel数据失败: {e}")
+                print(f"[ProjectManager] 收集SiphonManager数据失败: {e}")
 
-        if self._open_channel_panel:
+        if self._pressure_pipe_manager:
             try:
-                data["open_channel_panel"] = self._open_channel_panel.to_project_dict()
+                data["pressure_pipe_manager_data"] = self._pressure_pipe_manager.to_dict()
             except Exception as e:
-                print(f"[ProjectManager] 收集OpenChannelPanel数据失败: {e}")
+                print(f"[ProjectManager] 收集PressurePipeManager数据失败: {e}")
 
-        if self._aqueduct_panel:
-            try:
-                data["aqueduct_panel"] = self._aqueduct_panel.to_project_dict()
-            except Exception as e:
-                print(f"[ProjectManager] 收集AqueductPanel数据失败: {e}")
-
-        if self._tunnel_panel:
-            try:
-                data["tunnel_panel"] = self._tunnel_panel.to_project_dict()
-            except Exception as e:
-                print(f"[ProjectManager] 收集TunnelPanel数据失败: {e}")
-
-        if self._culvert_panel:
-            try:
-                data["culvert_panel"] = self._culvert_panel.to_project_dict()
-            except Exception as e:
-                print(f"[ProjectManager] 收集CulvertPanel数据失败: {e}")
-
-        if self._siphon_panel:
-            try:
-                data["siphon_panel"] = self._siphon_panel.to_project_dict()
-            except Exception as e:
-                print(f"[ProjectManager] 收集SiphonPanel数据失败: {e}")
-
-        if self._pressure_pipe_panel:
-            try:
-                data["pressure_pipe_panel"] = self._pressure_pipe_panel.to_project_dict()
-            except Exception as e:
-                print(f"[ProjectManager] 收集PressurePipePanel数据失败: {e}")
+        # ---- 项目设置（report_meta）双写：存入 .qxproj 同时保留 QSettings ----
+        try:
+            from 渠系断面设计.report_meta import load_meta
+            meta = load_meta()
+            from dataclasses import asdict
+            data["report_meta"] = asdict(meta)
+        except Exception as e:
+            print(f"[ProjectManager] 收集report_meta数据失败: {e}")
 
         return data
 
     def _restore_project_data(self, data: Dict[str, Any]):
         """恢复所有面板数据"""
-        if self._batch_panel and data.get("batch_panel"):
-            try:
-                self._batch_panel.from_project_dict(data["batch_panel"])
-            except Exception as e:
-                print(f"[ProjectManager] 恢复BatchPanel数据失败: {e}")
+        # ---- 面板数据 ----
+        _panel_keys = [
+            ("batch_panel", self._batch_panel, "BatchPanel"),
+            ("water_profile_panel", self._water_profile_panel, "WaterProfilePanel"),
+            ("open_channel_panel", self._open_channel_panel, "OpenChannelPanel"),
+            ("aqueduct_panel", self._aqueduct_panel, "AqueductPanel"),
+            ("tunnel_panel", self._tunnel_panel, "TunnelPanel"),
+            ("culvert_panel", self._culvert_panel, "CulvertPanel"),
+            ("siphon_panel", self._siphon_panel, "SiphonPanel"),
+            ("pressure_pipe_panel", self._pressure_pipe_panel, "PressurePipePanel"),
+            ("earthwork_panel", self._earthwork_panel, "EarthworkPanel"),
+        ]
+        for key, panel, label in _panel_keys:
+            if panel and data.get(key):
+                try:
+                    panel.from_project_dict(data[key])
+                except Exception as e:
+                    print(f"[ProjectManager] 恢复{label}数据失败: {e}")
 
-        if self._water_profile_panel and data.get("water_profile_panel"):
+        # ---- Manager 数据 ----
+        if self._siphon_manager and data.get("siphon_manager_data"):
             try:
-                self._water_profile_panel.from_project_dict(data["water_profile_panel"])
+                self._siphon_manager.from_dict(data["siphon_manager_data"])
             except Exception as e:
-                print(f"[ProjectManager] 恢复WaterProfilePanel数据失败: {e}")
+                print(f"[ProjectManager] 恢复SiphonManager数据失败: {e}")
 
-        if self._open_channel_panel and data.get("open_channel_panel"):
+        if self._pressure_pipe_manager and data.get("pressure_pipe_manager_data"):
             try:
-                self._open_channel_panel.from_project_dict(data["open_channel_panel"])
+                self._pressure_pipe_manager.from_dict(data["pressure_pipe_manager_data"])
             except Exception as e:
-                print(f"[ProjectManager] 恢复OpenChannelPanel数据失败: {e}")
+                print(f"[ProjectManager] 恢复PressurePipeManager数据失败: {e}")
 
-        if self._aqueduct_panel and data.get("aqueduct_panel"):
+        # ---- 项目设置（report_meta）双写：从 .qxproj 恢复并同步到 QSettings ----
+        if data.get("report_meta"):
             try:
-                self._aqueduct_panel.from_project_dict(data["aqueduct_panel"])
+                from 渠系断面设计.report_meta import ReportMeta, save_meta
+                meta_dict = data["report_meta"]
+                meta = ReportMeta(**meta_dict)
+                save_meta(meta)
             except Exception as e:
-                print(f"[ProjectManager] 恢复AqueductPanel数据失败: {e}")
-
-        if self._tunnel_panel and data.get("tunnel_panel"):
-            try:
-                self._tunnel_panel.from_project_dict(data["tunnel_panel"])
-            except Exception as e:
-                print(f"[ProjectManager] 恢复TunnelPanel数据失败: {e}")
-
-        if self._culvert_panel and data.get("culvert_panel"):
-            try:
-                self._culvert_panel.from_project_dict(data["culvert_panel"])
-            except Exception as e:
-                print(f"[ProjectManager] 恢复CulvertPanel数据失败: {e}")
-
-        if self._siphon_panel and data.get("siphon_panel"):
-            try:
-                self._siphon_panel.from_project_dict(data["siphon_panel"])
-            except Exception as e:
-                print(f"[ProjectManager] 恢复SiphonPanel数据失败: {e}")
-
-        if self._pressure_pipe_panel and data.get("pressure_pipe_panel"):
-            try:
-                self._pressure_pipe_panel.from_project_dict(data["pressure_pipe_panel"])
-            except Exception as e:
-                print(f"[ProjectManager] 恢复PressurePipePanel数据失败: {e}")
+                print(f"[ProjectManager] 恢复report_meta数据失败: {e}")
 
     # ----------------------------------------------------------------
     # 最近项目

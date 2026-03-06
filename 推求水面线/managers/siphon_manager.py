@@ -106,7 +106,26 @@ class SiphonManager:
             return False
         key = self._runtime_key()
         return siphon_name in self._runtime_confirmed.get(key, set())
-    
+
+    def rename_runtime_confirmed(self, old_name: str, new_name: str):
+        """重命名时同步进程内确认态，使新名称继承旧名称的确认状态。"""
+        if not old_name or not new_name or old_name == new_name:
+            return
+        key = self._runtime_key()
+        bucket = self._runtime_confirmed.get(key)
+        if bucket and old_name in bucket:
+            bucket.discard(old_name)
+            bucket.add(new_name)
+
+    def rename_siphon(self, old_name: str, new_name: str):
+        """重命名倒虹吸（同时更新持久化配置和进程内确认态）。"""
+        if not old_name or not new_name or old_name == new_name:
+            return
+        siphons = self._config.get("siphons", {})
+        if old_name in siphons:
+            siphons[new_name] = siphons.pop(old_name)
+        self.rename_runtime_confirmed(old_name, new_name)
+
     def _get_config_path(self, project_path: str) -> str:
         """
         根据项目路径生成配置文件路径
@@ -318,6 +337,18 @@ class SiphonManager:
         """清空所有配置"""
         self._config["siphons"] = {}
     
+    def to_dict(self) -> Dict[str, Any]:
+        """将 manager 内部数据序列化为字典（用于存入 .qxproj）"""
+        import copy
+        return copy.deepcopy(self._config)
+
+    def from_dict(self, data: Dict[str, Any]):
+        """从字典恢复 manager 内部数据（用于从 .qxproj 加载）"""
+        if not data or not isinstance(data, dict):
+            return
+        import copy
+        self._config = copy.deepcopy(data)
+
     @property
     def config_path(self) -> str:
         """获取配置文件路径"""

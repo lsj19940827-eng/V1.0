@@ -1,6 +1,6 @@
 # PRD：推求水面线模块
 
-> 版本：v1.2 | 创建：2026-02-26 | 最后更新：2026-03-03 | 状态：已实现
+> 版本：v1.3 | 创建：2026-02-26 | 最后更新：2026-03-06 | 状态：已实现
 
 ---
 
@@ -15,6 +15,7 @@
 - 平面几何计算（转角、切线长、弧长、桩号体系）
 - 多建筑物类型的沿程/局部/弯道/渐变段水头损失计算
 - 倒虹吸水头损失外部导入（联动倒虹吸水力计算模块）
+- 有压管道水头损失外部导入（联动有压管道水力计算模块）
 - 渐变段与明渠段自动识别与插入
 - 多流量段支持（设计流量/加大流量列表）
 - 成果导出：Excel、Word、DXF（纵断面表格/断面汇总/IP坐标表/全部合并）
@@ -31,16 +32,21 @@
 ├── core/
 │   ├── calculator.py              # WaterProfileCalculator 主计算器
 │   ├── geometry_calc.py           # GeometryCalculator 几何计算
-│   └── hydraulic_calc.py          # HydraulicCalculator 水力计算
+│   ├── hydraulic_calc.py          # HydraulicCalculator 水力计算
+│   ├── pressure_pipe_calc.py      # 有压管道水头损失计算核心（沿程+弯头+渐变段，含空间模式）
+│   └── pressure_pipe_data.py      # 有压管道简版数据模型与提取器（batch面板用）
 ├── models/
 │   ├── data_models.py             # ChannelNode, ProjectSettings, OpenChannelParams
 │   └── enums.py                   # StructureType, InOutType
 ├── managers/
-│   └── siphon_manager.py          # 倒虹吸数据持久化管理
+│   ├── siphon_manager.py          # 倒虹吸数据持久化管理
+│   └── pressure_pipe_manager.py   # 有压管道数据持久化管理（.ppipe.json）
 ├── shared/
 │   └── shared_data_manager.py     # 跨模块断面参数共享（SharedDataManager）
 └── utils/
     ├── siphon_extractor.py        # 倒虹吸节点提取与平面线形解析
+    ├── pressure_pipe_extractor.py  # 有压管道节点提取（完整版，支持多行模式）
+    ├── pressure_pipe_result_helpers.py  # 有压管道结果格式化/序列化辅助
     └── excel_io.py                # Excel 导入导出工具
 
 渠系断面设计/water_profile/         # UI 层
@@ -60,7 +66,10 @@ WaterProfilePanel
   │     └── HydraulicCalculator (hydraulic_calc.py)
   ├── SharedDataManager (shared_data_manager.py)     ← 从批量计算读取
   ├── MultiSiphonDialog (siphon/multi_siphon_dialog.py) ← 倒虹吸计算
-  └── SiphonDataExtractor (utils/siphon_extractor.py)
+  ├── SiphonDataExtractor (utils/siphon_extractor.py)
+  ├── PressurePipeDataExtractor (utils/pressure_pipe_extractor.py) ← 有压管道提取
+  ├── PressurePipeCalc (core/pressure_pipe_calc.py)  ← 有压管道水头损失
+  └── PressurePipeManager (managers/pressure_pipe_manager.py) ← 有压管道持久化
 ```
 
 ### 2.2 第三方依赖
@@ -79,7 +88,7 @@ WaterProfilePanel
 
 ### 3.1 ChannelNode（节点）
 
-每行数据对应一个节点，字段分六组：
+每行数据对应一个节点，字段分八组：
 
 | 分组 | 关键字段 |
 |------|---------|
@@ -90,7 +99,7 @@ WaterProfilePanel
 | 水力结果 | `water_depth`, `water_level`, `bottom_elevation`, `top_elevation`, `velocity` |
 | 水头损失 | `head_loss_friction`, `head_loss_bend`, `head_loss_local`, `head_loss_siphon`, `head_loss_reserve`, `head_loss_gate`, `head_loss_total`, `head_loss_cumulative` |
 | 渐变段字段 | `is_transition`, `transition_type`, `transition_form`, `transition_length`, `head_loss_transition`, `transition_calc_details` |
-| 特殊标记 | `is_diversion_gate`（闸）, `is_auto_inserted_channel`（自动插入明渠）|
+| 特殊标记 | `is_inverted_siphon`（倒虹吸）, `is_pressure_pipe`（有压管道）, `external_head_loss`（外部导入水头损失）, `is_diversion_gate`（闸）, `is_auto_inserted_channel`（自动插入明渠）|
 
 ### 3.2 ProjectSettings（项目设置）
 
@@ -110,10 +119,10 @@ WaterProfilePanel
 | `transition_inlet/outlet_zeta` | 渡槽/隧洞渐变段 ζ | 0.10 / 0.20 |
 | `open_channel_transition_form` | 明渠渐变段形式 | 曲线形反弯扭曲面 |
 | `open_channel_transition_zeta` | 明渠渐变段 ζ | 0.10 |
-| `siphon_transition_inlet/outlet_form` | 倒虹吸渐变段形式（表L.1.2） | 反弯扭曲面 |
-| `siphon_transition_inlet/outlet_zeta` | 倒虹吸渐变段 ζ | 0.10 / 0.20 |
+| `siphon_transition_inlet/outlet_form` | 倒虹吸/有压管道渐变段形式（表L.1.2） | 反弯扭曲面 |
+| `siphon_transition_inlet/outlet_zeta` | 倒虹吸/有压管道渐变段 ζ | 0.10 / 0.20 |
 
-> **注**：`siphon_turn_radius_n` 固定为常量 `DEFAULT_SIPHON_TURN_RADIUS_N=3.0`，界面上无对应输入框（2026-02-26 删除冗余 UI，原因见§十二变更日志）。
+> **注**：`siphon_turn_radius_n` 固定为常量 `DEFAULT_SIPHON_TURN_RADIUS_N=3.0`，界面上无对应输入框（2026-02-26 删除冗余 UI，原因见§十二变更日志）。有压管道的渐变段设置复用倒虹吸的 `siphon_transition_*` 字段。
 
 ### 3.3 OpenChannelParams（明渠段参数）
 
@@ -131,6 +140,7 @@ WaterProfilePanel
 | 隧洞 | 隧洞-圆形、隧洞-圆拱直墙型、隧洞-马蹄形Ⅰ型、隧洞-马蹄形Ⅱ型 | |
 | 暗涵 | 矩形暗涵 | |
 | 倒虹吸 | 倒虹吸 | |
+| 有压管道 | 有压管道 | 类似倒虹吸，多行模式（进口+IP点+出口），水损外部导入；详见 `PRD_有压管道批量计算_V1.0.md` |
 | 闸 | 分水闸、分水口、节制闸、泄水闸 | |
 
 ---
@@ -162,7 +172,7 @@ WaterProfilePanel
 | 隧洞-马蹄形 | 2 × r（等效直径） |
 | 明渠-U形 | `section_params['h_prime']` |
 | 其他（梯形/矩形/渡槽/暗涵）| 必须从批量计算导入 |
-| 倒虹吸 | 不计算渠顶高程，跳过 |
+| 倒虹吸 / 有压管道 | 不计算渠顶高程，跳过 |
 
 #### 5.2.2 各结构水深/面积/湿周
 
@@ -193,6 +203,7 @@ $$h_w = \frac{n^2 \cdot L_{arc} \cdot v^2}{R^{4/3}} \times \frac{3}{4}\sqrt{\fra
 | 结构类型 | 计算方式 |
 |---------|---------|
 | **倒虹吸** | 直接返回外部导入的总水头损失（`inverted_siphon_losses[name]`），不另行计算弯管/沿程 |
+| **有压管道** | 直接返回外部导入的总水头损失（`pressure_pipe_losses[name]`），处理逻辑与倒虹吸一致 |
 | 闸类（分水闸/节制闸等） | 返回 0（过闸损失在 `head_loss_gate` 中单独计算） |
 | 其他 | 查表 `LOCAL_LOSS_COEFFICIENTS`，按进出口标识查进口/出口系数 |
 
@@ -203,17 +214,20 @@ $$Z_i = Z_{i-1} - h_f - h_j - h_w - h_{tr}$$
 $$h_{total,i} = h_f + h_j + h_w + h_{reserve} + h_{gate} + h_{siphon}$$
 
 - $h_{tr}$：上一节点到当前节点之间所有渐变段损失之和（累计）
+- $h_{siphon}$：含倒虹吸和有压管道的水头损失（均写入 `head_loss_siphon` 字段）
 - 闸类节点：$Z_i = Z_{i-1} - h_{gate}$（仅扣过闸损失）
 - 首节点：$Z_0 =$ 用户输入起始水位（不参与递推）
 
-#### 5.2.7 倒虹吸出口渠底高程（公式10.3.6）
+#### 5.2.7 有压流建筑物出口渠底高程（公式10.3.6）
 
 $$H_d = H_u + h_u - h_d - \Delta Z$$
 
 - $H_u$：上游渠道末端渠底高程
 - $h_u$：上游渠道设计水深
 - $h_d$：下游渠道设计水深
-- $\Delta Z$：倒虹吸水损 + 渐变段损失
+- $\Delta Z$：倒虹吸/有压管道水损 + 渐变段损失
+
+适用于倒虹吸和有压管道的出口节点。
 
 ### 5.3 渐变段与明渠段插入算法
 
@@ -248,6 +262,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 | 起始水位(m) | `start_wl_edit` | 首节点水位 |
 | 渠道糙率 | `roughness_edit` | 明渠/渡槽/隧洞/暗涵 |
 | 倒虹吸糙率 | `siphon_roughness_chips` | 倒虹吸管道专用糙率（SiphonRoughnessChipContainer） |
+| 有压管道参数 | `pressure_pipe_roughness_chips` | 有压管道管材与 f/m/b 参数展示（SiphonRoughnessChipContainer，复用同一控件类型） |
 | 设计流量(m³/s) | `design_flow_edit` | 支持逗号分隔的多流量段（如"4.6, 4.5, 4.3"）；`editingFinished` 触发 `_on_design_flow_changed` 自动按加大流量表推算对应加大流量 |
 | 加大流量(m³/s) | `max_flow_edit` | 支持多值，留空则自动计算；也可手动覆盖 |
 | 起始桩号(m) | `start_station_edit` | 格式：`前缀+公里+米`，如 `0+000.000`；`editingFinished` 触发 `_format_start_station` 自动格式化 |
@@ -263,7 +278,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 | 明渠-U形 | 水面宽（弧区/直线段分支计算） | R ≥ 水面宽 × 5 |
 | 渡槽 | 连接明渠渠底宽 B | R ≥ B × 5 |
 | 矩形暗涵 | 涵宽 B | R ≥ B × 5 |
-| 倒虹吸 | — | 跳过（不参与自动计算） |
+| 倒虹吸 / 有压管道 | — | 跳过（不参与自动计算） |
 
 遍历所有节点后取各结构最小允许半径中的最大值，弹窗展示逐节点推算过程，用户确认后写入 `turn_radius_edit`。
 
@@ -275,9 +290,9 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 |----|-----------|------|
 | 第1行 | 渡槽/隧洞 | 进口形式+ζ₁（表K.1.2）、出口形式+ζ₂ |
 | 第2行 | 明渠 | 渐变段形式+ζ（明渠不同子类型间的过渡） |
-| 第3行 | 倒虹吸 | 进口形式+ζ₁（表L.1.2）、出口形式+ζ₂、"参考系数表"按钮 |
+| 第3行 | 倒虹吸/有压管道 | 进口形式+ζ₁（表L.1.2）、出口形式+ζ₂、"参考系数表"按钮 |
 
-点击"参考系数表"弹出 `TransitionReferenceDialog`，展示 K.1.2（渡槽/隧洞）和 L.1.2（倒虹吸）的系数图表（含示意图缩略图，支持点击放大）。
+点击"参考系数表"弹出 `TransitionReferenceDialog`，展示 K.1.2（渡槽/隧洞）和 L.1.2（倒虹吸/有压管道）的系数图表（含示意图缩略图，支持点击放大）。
 
 ### 6.4 节点数据表工具栏按钮
 
@@ -286,6 +301,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 | **从批量计算导入** | PrimaryPushButton | 从 SharedDataManager 读取批量计算结果，自动填充节点表 |
 | **插入渐变段** | PrimaryPushButton | 调用 `_insert_transitions()` 自动插入渐变段/明渠段行 |
 | **倒虹吸水力计算** | PrimaryPushButton | 打开 MultiSiphonDialog，计算完毕后回写水头损失和管径 |
+| **有压管道水力计算** | PrimaryPushButton | 调用 `_open_pressure_pipe_calculator()`，提取有压管道分组、计算水头损失并回写 |
 | **执行计算** | PrimaryPushButton | 几何 + 水力全链路计算，结果写回节点表 |
 | 导入Excel | PushButton | 从 Excel 文件导入节点数据；识别列名（模糊匹配）：流量段、建筑物名称、结构形式、X/E坐标、Y/N坐标、转弯半径、底宽B、直径D、半径R、边坡m、糙率n、底坡1/i、流量Q、水深h、流速v；旧版简写"梯形/矩形/圆形"自动映射为"明渠-×" |
 | 添加/插入/删除/复制节点 | PushButton | 节点行操作 |
@@ -307,6 +323,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 - 表头悬停弹出 LaTeX 公式 Tooltip（`FormulaTooltipWidget`）
 - Ctrl+Z 撤销水头损失手动编辑（最多 20 步）
 - **首行锁定**：第一个节点（水位起点）的预留/过闸/倒虹吸水头损失列（col 36/37/38）不可编辑（`FIRST_ROW_LOCKED_LOSS_COLS = {36,37,38}`），因为首节点水位由用户直接输入，不参与递推
+- **倒虹吸水头损失列（col 38）**：同时用于存储倒虹吸和有压管道的水头损失
 
 ### 6.6 双击详情弹窗
 
@@ -316,10 +333,10 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 | 弯道水头损失 | 弯道损失公式逐项展开 |
 | 沿程水头损失 | 沿程损失曼宁公式展开 |
 | 渐变段水头损失 | 渐变段局部+沿程损失详情 |
-| 总水头损失 | 各分项汇总（弯道+渐变段+沿程+局部+预留+过闸+倒虹吸） |
+| 总水头损失 | 各分项汇总（弯道+渐变段+沿程+局部+预留+过闸+倒虹吸/有压管道） |
 | 累计总水头损失 | 逐行明细列表 |
 | 水位 | 水位递推公式展开（含前一节点水位） |
-| 渠底高程 | 渠底高程计算（水位−水深）；倒虹吸出口显示公式10.3.6 |
+| 渠底高程 | 渠底高程计算（水位−水深）；倒虹吸/有压管道出口显示公式10.3.6 |
 | 渠顶高程 | 渠顶高程=渠底+结构高度 |
 
 ### 6.7 结果区
@@ -328,7 +345,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 |------|------|
 | 计算结果摘要（持久显示） | 显示节点总数、水位范围、总水头损失、流量、糙率等摘要信息 |
 | "建筑物长度统计"按钮 | 弹出各建筑物起止桩号和长度汇总表 |
-| 详细过程文本框 | 显示每个节点的水力计算过程文字（曼宁公式展开等） |
+| 详细过程文本框 | 显示每个节点的水力计算过程文字（曼宁公式展开等），有压管道计算详情附加在末尾 |
 
 ---
 
@@ -345,10 +362,10 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 
 ### 7.1 有压流建筑物导出规则（倒虹吸/有压管道）
 
-- 断面汇总表中，有压管道单独输出为“有压管道断面尺寸及水力要素表”，列结构与倒虹吸完全一致。
-- “导出全部DXF”调用统一参数对话框，按建筑物名称分别设置管道材质和 DN，并在导出时复用。
-- 纵断面“坡降”行对倒虹吸与有压管道均留空（按有压流处理）。
-- IP 点名称中，有压管道进/出口采用“管”缩写（示例：`XX管进`、`XX管出`）。
+- 断面汇总表中，有压管道单独输出为"有压管道断面尺寸及水力要素表"，列结构与倒虹吸完全一致。
+- "导出全部DXF"调用统一参数对话框，按建筑物名称分别设置管道材质和 DN，并在导出时复用。
+- 纵断面"坡降"行对倒虹吸与有压管道均留空（按有压流处理）。
+- IP 点名称中，有压管道进/出口采用"压"缩写（示例：`XX管压进`、`XX管压出`）。
 - bzzh2 导出与建筑物名称上平面图均纳入有压管道进/出口识别。
 
 ---
@@ -386,6 +403,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 2. 水面线面板点击"从批量计算导入"后调用 `_import_from_batch()`：
    - 自动同步渠道名称、级别、起始水位、流量等基础设置
    - 自动填充节点表的底宽/水深/糙率/底坡/边坡等参数
+   - 有压管道行标记 `is_pressure_pipe=True`，传递管材和管径等参数
    - 自动计算推荐转弯半径（按规范取大值原则）
    - 触发几何重算（`_recalculate_geometry_impl`）
 
@@ -401,7 +419,21 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
    - `node.head_loss_siphon`：总水头损失
    - `node.section_params["D"]`：管径（用于后续节点几何重算）
 
-### 9.3 向土石方计算模块提供数据
+### 9.3 有压管道水力计算
+
+1. 点击"有压管道水力计算"调用 `_open_pressure_pipe_calculator()`
+2. 通过 `PressurePipeDataExtractor.extract_pipes(nodes, settings)` 从节点表提取有压管道分组（支持多行模式：进口+IP点+出口）
+3. 对每个有压管道：
+   - 根据是否有纵断面数据选择计算模式（平面 / 空间）
+   - 调用 `calc_total_head_loss()` 或 `calc_total_head_loss_with_spatial()` 计算水头损失
+   - 可选灵敏度分析（球墨铸铁管 f 上下限对比）
+4. 计算结果回写：
+   - `node.head_loss_siphon`：总水头损失（与倒虹吸共用同一列）
+   - 持久化到 `PressurePipeManager`
+   - 详细计算过程追加到 detail_text
+5. 有压管道参数芯片更新（`pressure_pipe_roughness_chips`），显示各管道的管材与 f/m/b 系数
+
+### 9.4 向土石方计算模块提供数据
 
 水面线面板的 `calculated_nodes` 属性对外暴露，土石方模块通过父链访问 `water_profile_panel.calculated_nodes`，提取 `station_MC` + `bottom_elevation` 作为设计纵坡（跳过 `is_transition=True` 行）。
 
@@ -411,10 +443,12 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 
 | 规范 | 条文 | 用途 |
 |------|------|------|
-| GB 50288-2018 | §10.2.4 | 倒虹吸渐变段长度（进口5倍h，出口6倍h） |
-| GB 50288-2018 | §10.3.6 | 倒虹吸出口渠底高程计算公式 |
+| GB 50288-2018 | §6.7.2 | 有压管道沿程水头损失公式（hf = f×L×Q^m/d^b） |
+| GB 50288-2018 | §10.2.4 | 倒虹吸/有压管道渐变段长度（进口5倍h，出口6倍h） |
+| GB 50288-2018 | §10.3.6 | 倒虹吸/有压管道出口渠底高程计算公式 |
 | GB 50288-2018 | 附录K 表K.1.2 | 渡槽/隧洞渐变段局部损失系数 |
-| GB 50288-2018 | 附录L 表L.1.2 | 倒虹吸渐变段局部损失系数 |
+| GB 50288-2018 | 附录L 表L.1.2 | 倒虹吸/有压管道渐变段局部损失系数 |
+| GB 50288-2018 | 附录L 表L.1.4-3/L.1.4-4 | 弯管局部损失系数（有压管道复用） |
 | SL 18 / 规范 | - | 弯道水头损失公式 |
 
 ---
@@ -425,13 +459,21 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 
 倒虹吸涉及多管段、弯管、渐变段等复杂因素，由专用的倒虹吸水力计算模块（MultiSiphonDialog）统一计算总水头损失后回写。水面线内核的 `calculate_local_loss` 对倒虹吸节点直接返回外部导入值，不走局部损失公式。
 
-### DDR-2：倒虹吸节点不计算弯道水头损失（hw=0）
+### DDR-2：倒虹吸/有压管道节点不计算弯道水头损失（hw=0）
 
-弯道水头损失仅在 `arc_length > 0` 时触发。实际使用中倒虹吸在水面线节点表中作为黑箱整体出现（无显式平面转角），故 `arc_length=0`，`hw=0`，与倒虹吸面板已包含的弯管损失不重复计算。
+弯道水头损失仅在 `arc_length > 0` 时触发。实际使用中倒虹吸和有压管道在水面线节点表中作为黑箱整体出现（无显式平面转角），故 `arc_length=0`，`hw=0`，与各自面板已包含的弯管损失不重复计算。
 
 ### DDR-3：`siphon_turn_radius_n` 不对外暴露 UI
 
 见 DDR-1/DDR-2：该系数仅用于在几何重算时给倒虹吸节点自动填充转弯半径列的初始值，属于内部参数。固定为常量 3.0 已满足需求，无需用户设置。
+
+### DDR-4：有压管道与倒虹吸共用 `head_loss_siphon` 列
+
+有压管道的水头损失回写到 `head_loss_siphon` 字段（col 38"倒虹吸水头损失"列），因两者都是有压流建筑物，处理逻辑一致（外部导入总损失→参与水位递推），无需新增独立列。
+
+### DDR-5：有压管道渐变段复用倒虹吸设置
+
+有压管道的渐变段型式和ζ系数复用 `ProjectSettings` 中的 `siphon_transition_*` 字段，因两者均依据 GB 50288 附录L 表L.1.2。
 
 ---
 
@@ -441,4 +483,5 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 |------|------|---------|
 | v1.0 | 2026-02-26 | 初始版本，基于已实现代码整理 |
 | v1.1 | 2026-02-26 | **代码**：删除"倒虹吸 R=n×D, n="UI输入框（`siphon_n_edit`），改为固定常量 `DEFAULT_SIPHON_TURN_RADIUS_N=3.0`；同步更新 `_recalculate_geometry_impl`、`_build_settings`、`_open_siphon_calculator`、结果摘要文本共4处引用；列弹性由 `[1,3,5,7,9]` 改为 `[1,3,5,7]`。**PRD修订**：修正§3.2/§6.2变更日志引用（§九→§十二）；修正Excel文件名格式；修正Word章节编号（1-4章由模板生成，手动章节从5开始）；修正§5.2.3沿程损失公式（补充主方法 h_f=i×L，曼宁为备用）；§四补充明渠-U形不在constants.py下拉列表的说明；§九修正SharedDataManager方法名为 `register_batch_results()`；§6.5补充首行锁定机制；§6.2补充自动转弯半径各结构规则表、设计流量联动说明、起始桩号格式化说明；§6.4补充Excel导入识别列名说明 |
-| v1.2 | 2026-03-03 | **代码**：`cad_tools.py` 的“导出全部DXF”新增倒虹吸/有压管道材质+DN参数对话框，并将参数注入断面汇总表生成链路；有压管道在合并导出中执行与倒虹吸一致的表格规则。`SectionSummaryDialog` 增加 DN 正整数校验，并缓存有压流参数供“导出全部DXF”复用。**PRD修订**：更新第七章 CAD 导出功能表与 §7.1 有压流建筑物导出规则。 |
+| v1.2 | 2026-03-03 | **代码**：`cad_tools.py` 的"导出全部DXF"新增倒虹吸/有压管道材质+DN参数对话框，并将参数注入断面汇总表生成链路；有压管道在合并导出中执行与倒虹吸一致的表格规则。`SectionSummaryDialog` 增加 DN 正整数校验，并缓存有压流参数供"导出全部DXF"复用。**PRD修订**：更新第七章 CAD 导出功能表与 §7.1 有压流建筑物导出规则。 |
+| v1.3 | 2026-03-06 | **PRD全面补充有压管道集成**：§1.2核心能力新增有压管道水头损失外部导入；§二文件结构新增 `pressure_pipe_calc.py`、`pressure_pipe_data.py`、`pressure_pipe_manager.py`、`pressure_pipe_extractor.py`、`pressure_pipe_result_helpers.py`；§2.1依赖关系新增有压管道组件；§3.1 ChannelNode字段分组新增特殊标记组（`is_pressure_pipe`、`external_head_loss`）；§3.2补充有压管道复用倒虹吸渐变段设置说明；§四结构形式新增"有压管道"行；§5.2.1结构高度新增有压管道跳过规则；§5.2.5局部损失新增有压管道处理逻辑；§5.2.6水位递推补充 `h_siphon` 含有压管道说明；§5.2.7标题改为"有压流建筑物"统一适用倒虹吸和有压管道；§6.2基础设置区新增有压管道参数芯片；§6.3渐变段设置第3行改为"倒虹吸/有压管道"；§6.4工具栏新增"有压管道水力计算"按钮；§6.5补充col 38共用说明；§九新增§9.3有压管道水力计算流程；新增DDR-4（共用列）和DDR-5（复用渐变段设置）；§十规范引用新增GB 50288 §6.7.2和附录L表L.1.4-3/L.1.4-4 |

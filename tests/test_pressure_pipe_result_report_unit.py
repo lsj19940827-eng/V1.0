@@ -7,7 +7,6 @@ from 推求水面线.utils.pressure_pipe_result_helpers import format_pressure_p
 def test_batch_report_contains_summary_and_details():
     batch = {
         "last_run_at": "2026-03-04 10:20:30",
-        "sensitivity_enabled": True,
         "records": [
             {
                 "identity": "1::牛马道",
@@ -50,7 +49,7 @@ def test_batch_report_contains_summary_and_details():
     assert "数据模式=空间模式（平面+纵断面）" in txt
     assert "总损失: ΔH=1.4938 m" in txt
     assert "沿程=0.3457 m" in txt
-    assert "球墨铸铁管 f 上下限对比: 开启" in txt
+    assert "球墨铸铁管 f 上下限对比: 已自动生成" in txt
     assert "总损失(下限f)=1.4494 m" in txt
     assert "ΔH(下限-主值)=-0.0444 m" in txt
     assert "失败原因: 设计流量无效" in txt

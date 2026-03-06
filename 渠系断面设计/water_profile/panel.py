@@ -37,9 +37,9 @@ from PySide6.QtWidgets import (
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
     QAbstractItemView, QScrollArea, QGridLayout, QFormLayout,
-    QDialog, QDialogButtonBox, QToolTip, QCheckBox
+    QDialog, QDialogButtonBox, QToolTip, QCheckBox, QApplication
 )
-from PySide6.QtCore import Qt, QByteArray, Signal, QTimer, QRect, QPoint
+from PySide6.QtCore import Qt, QByteArray, Signal, QTimer, QRect, QPoint, QEvent, QObject
 from PySide6.QtGui import QFont, QColor, QPixmap, QImage, QShortcut, QKeySequence, QCursor
 
 from qfluentwidgets import (
@@ -355,6 +355,25 @@ class TransitionReferenceDialog(QDialog):
 
 
 # ================================================================
+class _PopupClickFilter(QObject):
+    """全局鼠标点击事件过滤器：点击弹窗和按钮外部时关闭弹窗。"""
+
+    def __init__(self, popup, parent_btn):
+        super().__init__()
+        self._popup = popup
+        self._parent_btn = parent_btn
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress:
+            cursor_pos = QCursor.pos()
+            popup_rect = self._popup.frameGeometry()
+            btn_tl = self._parent_btn.mapToGlobal(self._parent_btn.rect().topLeft())
+            btn_rect = QRect(btn_tl, self._parent_btn.rect().size())
+            if not popup_rect.contains(cursor_pos) and not btn_rect.contains(cursor_pos):
+                self._popup.close()
+        return False
+
+
 # 倒虹吸糙率展示组件（Badge 徽标按钮 + 弹出详情卡片）
 # ================================================================
 class SiphonRoughnessChipContainer(QWidget):
@@ -393,7 +412,7 @@ class SiphonRoughnessChipContainer(QWidget):
         lay.addWidget(self._placeholder)
 
         # 按钮（有数据时显示）
-        self._btn = PushButton("查看详情")
+        self._btn = PushButton("点击查看")
         self._btn.setFixedHeight(28)
         from PySide6.QtWidgets import QSizePolicy
         self._btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
@@ -409,7 +428,6 @@ class SiphonRoughnessChipContainer(QWidget):
             "}"
         )
         self._btn.clicked.connect(self._show_popover)
-        self._btn.enterEvent = lambda e: self._show_popover()
         self._btn.setVisible(False)
         lay.addWidget(self._btn)
 
@@ -427,18 +445,16 @@ class SiphonRoughnessChipContainer(QWidget):
         lay.addStretch()
 
     def _show_popover(self):
-        """鼠标悬浮按钮时弹出糙率详情卡片，鼠标离开按钮+弹窗区域后自动关闭。
+        """点击按钮弹出糙率详情卡片。
 
-        使用 QTimer 轮询检测鼠标位置代替不可靠的 leaveEvent。
-        Qt.Tool + FramelessWindowHint 窗口的 leaveEvent 在 Windows 上
-        会延迟触发或完全不触发，且子控件的 hover 样式会干扰父窗口的
-        leave/enter 事件分发，导致弹窗"粘住"不消失。
+        关闭方式：点击弹窗外部区域关闭，或再次点击按钮切换关闭。
         """
         if not self._pairs:
             return
 
-        # 已有弹窗时不重复创建
+        # 已有弹窗时切换关闭
         if hasattr(self, '_popup_win') and self._popup_win is not None:
+            self._popup_win.close()
             return
 
         primary = self._PRIMARY
@@ -459,11 +475,19 @@ class SiphonRoughnessChipContainer(QWidget):
 
         def _on_destroyed():
             self._popup_win = None
-            if hasattr(self, '_popup_hover_timer'):
-                self._popup_hover_timer.stop()
+            if hasattr(self, '_click_filter') and self._click_filter is not None:
+                app = QApplication.instance()
+                if app:
+                    app.removeEventFilter(self._click_filter)
+                self._click_filter = None
 
         popup.destroyed.connect(_on_destroyed)
         self._popup_win = popup
+
+        self._click_filter = _PopupClickFilter(popup, self._btn)
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self._click_filter)
 
         card_lay = QVBoxLayout(popup)
         card_lay.setContentsMargins(0, 0, 0, 0)
@@ -539,41 +563,6 @@ class SiphonRoughnessChipContainer(QWidget):
         popup.move(btn_pos.x(), btn_pos.y())
         popup.show()
 
-        # ---- 轮询定时器：检测鼠标是否仍在按钮或弹窗区域内 ----
-        # 比 leaveEvent 更可靠：不受窗口类型、子控件 hover 等影响
-        _MARGIN = 15  # 像素容差，避免鼠标微偏就关闭
-
-        def _check_hover():
-            p = popup  # 闭包捕获
-            if p is None or not p.isVisible():
-                self._popup_hover_timer.stop()
-                return
-            cursor_pos = QCursor.pos()
-            # 按钮全局区域
-            btn_rect = self._btn.rect()
-            btn_tl = self._btn.mapToGlobal(btn_rect.topLeft())
-            btn_region = QRect(btn_tl, btn_rect.size()).adjusted(
-                -_MARGIN, -_MARGIN, _MARGIN, _MARGIN)
-            # 弹窗全局区域
-            popup_region = p.frameGeometry().adjusted(
-                -_MARGIN, -_MARGIN, _MARGIN, _MARGIN)
-            if btn_region.contains(cursor_pos) or popup_region.contains(cursor_pos):
-                return  # 鼠标还在有效区域内，保持显示
-            # 鼠标已离开，关闭弹窗
-            p.close()
-
-        if not hasattr(self, '_popup_hover_timer'):
-            self._popup_hover_timer = QTimer(self)
-            self._popup_hover_timer.setInterval(80)  # 80ms 轮询，流畅且低开销
-        else:
-            # 断开旧闭包，避免回调叠加
-            try:
-                self._popup_hover_timer.timeout.disconnect()
-            except RuntimeError:
-                pass
-        self._popup_hover_timer.timeout.connect(_check_hover)
-        self._popup_hover_timer.start()
-
     def set_pairs(self, pairs):
         """设置数据。pairs: [(名称, 糙率), ...]"""
         self._pairs = list(pairs) if pairs else []
@@ -584,16 +573,10 @@ class SiphonRoughnessChipContainer(QWidget):
         if has_data:
             n = len(self._pairs)
             self._badge.setText(str(n))
-            if n == 1:
-                name, val = self._pairs[0]
-                btn_text = f"{name} {self.label_prefix}{val}"
-            else:
-                btn_text = "糙率详情"
+            btn_text = "点击查看"
             self._btn.setText(btn_text)
-            self._btn.setToolTip(btn_text)
-            # 按文本内容给按钮留出最小宽度，避免右侧挤压导致文字被截断
             text_w = self._btn.fontMetrics().horizontalAdvance(btn_text)
-            self._btn.setMinimumWidth(max(88, min(220, text_w + 28)))
+            self._btn.setMinimumWidth(max(88, text_w + 28))
             self._btn.adjustSize()
             self.updateGeometry()
 
@@ -607,7 +590,6 @@ class SiphonRoughnessChipContainer(QWidget):
         self._btn.setVisible(False)
         self._badge.setVisible(False)
         self._btn.setMinimumWidth(0)
-        self._btn.setToolTip("")
 
     def text(self):
         """兼容旧接口"""
@@ -620,19 +602,18 @@ class WaterProfilePanel(QWidget):
     # 数据变化信号（用于项目管理器追踪脏状态）
     data_changed = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, siphon_manager=None, pressure_pipe_manager=None):
         super().__init__(parent)
+        self._siphon_manager = siphon_manager
+        self._pressure_pipe_manager = pressure_pipe_manager
         self.nodes = []
         self.calculated_nodes = []
         self._settings = None
         self.btn_pressure_pipe_calc = None
-        self.chk_pressure_pipe_sensitivity = None
         self._node_toolbar_layout_preset = NODE_TOOLBAR_LAYOUT_PRESET
         self._pressure_pipe_calc_done = {}
         self._pressure_pipe_calc_records = empty_pressure_pipe_calc_records()
         self._pressure_pipe_last_run_at = ""
-        self._pressure_pipe_sensitivity_enabled = True
-        self._pressure_pipe_sensitivity_low_f = 1.899e5
         # 建筑物长度统计缓存
         self._last_building_lengths = []
         self._last_channel_total_length = 0.0
@@ -752,8 +733,7 @@ class WaterProfilePanel(QWidget):
             label_prefix="管材: "
         )
         sg.addWidget(self.pressure_pipe_roughness_chips, r, 11)
-        # 右侧糙率详情列预留更充足宽度，避免按钮文本右端被裁剪
-        sg.setColumnMinimumWidth(11, 170)
+        sg.setColumnMinimumWidth(11, 120)
 
         # 第2行：流量与高级参数
         r = 1
@@ -3485,21 +3465,6 @@ class WaterProfilePanel(QWidget):
         """刷新有压管道计算相关控件状态（计算完成后调用）。"""
         self._refresh_pressure_pipe_controls()
 
-    def _set_pressure_pipe_sensitivity_enabled(self, enabled: bool):
-        enabled_bool = bool(enabled)
-        self._pressure_pipe_sensitivity_enabled = enabled_bool
-        cb = getattr(self, "chk_pressure_pipe_sensitivity", None)
-        if cb is not None and cb.isChecked() != enabled_bool:
-            old = cb.blockSignals(True)
-            cb.setChecked(enabled_bool)
-            cb.blockSignals(old)
-
-    def _is_pressure_pipe_sensitivity_enabled(self) -> bool:
-        cb = getattr(self, "chk_pressure_pipe_sensitivity", None)
-        if cb is not None:
-            return bool(cb.isChecked())
-        return bool(getattr(self, "_pressure_pipe_sensitivity_enabled", False))
-
     def _choose_roughness_value(self, values, label):
         """当同类建筑物糙率不一致时，弹窗让用户选择。
         values: 糙率值列表（已收集的同类建筑物糙率）
@@ -4146,7 +4111,6 @@ class WaterProfilePanel(QWidget):
             if _water_profile_dir not in _sys.path:
                 _sys.path.insert(0, _water_profile_dir)
             from utils.siphon_extractor import SiphonDataExtractor
-            from managers.siphon_manager import SiphonManager
 
             settings = self._build_settings()
             siphon_groups = SiphonDataExtractor.extract_siphons(nodes, settings=settings)
@@ -4155,12 +4119,12 @@ class WaterProfilePanel(QWidget):
                             parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
                 return
 
-            # 获取项目路径
-            project_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "default_project"
-            )
-            manager = SiphonManager(project_path)
+            # 使用共享的 SiphonManager（已绑定项目路径）
+            if self._siphon_manager is not None:
+                manager = self._siphon_manager
+            else:
+                from managers.siphon_manager import SiphonManager
+                manager = SiphonManager()
 
             # 定义导入回调：将水头损失和平面转弯半径写回节点表格
             _panel = self
@@ -4331,6 +4295,14 @@ class WaterProfilePanel(QWidget):
         dlg.setStyleSheet(DIALOG_STYLE)
         dlg.setWindowFlags(Qt.Window)
 
+        from PySide6.QtGui import QIcon
+        _res_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources")
+        for _icon_name in ("logo.ico", "logo.svg"):
+            _icon_path = os.path.join(_res_dir, _icon_name)
+            if os.path.exists(_icon_path):
+                dlg.setWindowIcon(QIcon(_icon_path))
+                break
+
         # 标志：是否通过确认按钮关闭
         dlg._confirmed = False
 
@@ -4341,11 +4313,11 @@ class WaterProfilePanel(QWidget):
 
             from 渠系断面设计.styles import fluent_question
             reply = fluent_question(
+                dlg,
                 "关闭确认",
                 "是否将计算结果应用到水面线计算表格？\n\n"
                 "点击「是」：应用结果并关闭\n"
-                "点击「否」：放弃结果并关闭",
-                dlg
+                "点击「否」：放弃结果并关闭"
             )
             if reply:
                 if results_by_identity:
@@ -4391,79 +4363,96 @@ class WaterProfilePanel(QWidget):
         hh.setSectionResizeMode(11, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(12, QHeaderView.ResizeToContents)
 
-        has_di_material = any(
-            (rec.get("status") == "success") and (str(rec.get("material_key", "") or "") == "球墨铸铁管")
-            for rec in records
-        )
         has_sensitivity_data = any(
             rec.get("sensitivity_low_total_head_loss") is not None for rec in records
         )
-        batch_sensitivity_enabled = bool(data.get("sensitivity_enabled", False))
-        # Default hidden per UX decision: user expands comparison columns on demand.
-        show_sensitivity = False
+        show_sensitivity = has_sensitivity_data
 
-        opt_row = QHBoxLayout()
-
-        # 球墨铸铁管上下限对比勾选框（用于重新计算）
-        try:
-            from qfluentwidgets import CheckBox
-            cb_sensitivity_calc = CheckBox("球墨铸铁管 f 上下限对比")
-        except ImportError:
-            cb_sensitivity_calc = QCheckBox("球墨铸铁管 f 上下限对比")
-
-        cb_sensitivity_calc.setChecked(batch_sensitivity_enabled)
-        cb_sensitivity_calc.setToolTip(
-            "勾选后重新计算将包含球墨铸铁管上下限对比分析\n"
-            "主值 f=223200，下限 f=189900"
+        # ---- 对比摘要卡片 ----
+        compare_card = QFrame()
+        compare_card.setStyleSheet(
+            "QFrame#compareCard {"
+            "  background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f8fbff, stop:1 #f0f5fc);"
+            "  border: 1px solid #c8dff5; border-radius: 6px;"
+            "}"
         )
+        compare_card.setObjectName("compareCard")
+        compare_card_lay = QVBoxLayout(compare_card)
+        compare_card_lay.setContentsMargins(14, 10, 14, 10)
+        compare_card_lay.setSpacing(8)
 
-        def _on_sensitivity_calc_changed(checked: bool):
-            """当用户修改勾选框时，询问是否重新计算"""
-            if checked == batch_sensitivity_enabled:
-                return
+        _card_title = QLabel("📊  球墨铸铁管 f 值对比摘要")
+        _card_title.setStyleSheet("font-size:13px;font-weight:600;color:#0058a3;background:transparent;")
+        compare_card_lay.addWidget(_card_title)
 
-            from 渠系断面设计.styles import fluent_question
-            reply = fluent_question(
-                "重新计算确认",
-                f"您{'开启' if checked else '关闭'}了球墨铸铁管上下限对比。\n\n"
-                "是否立即重新执行有压管道计算？\n"
-                "（重新计算将更新所有有压管道的结果）",
-                dlg
-            )
-            if reply:
-                # 保存新的配置
-                self._set_pressure_pipe_sensitivity_enabled(checked)
-                # 关闭当前对话框
-                dlg.close()
-                # 重新执行计算
-                self._open_pressure_pipe_calculator()
-            else:
-                # 用户取消，恢复原状态
-                cb_sensitivity_calc.blockSignals(True)
-                cb_sensitivity_calc.setChecked(batch_sensitivity_enabled)
-                cb_sensitivity_calc.blockSignals(False)
+        compare_grid = QGridLayout()
+        compare_grid.setSpacing(8)
 
-        cb_sensitivity_calc.toggled.connect(_on_sensitivity_calc_changed)
-        opt_row.addWidget(cb_sensitivity_calc)
+        _compare_items_data = []
+        for rec in records:
+            if rec.get("status") != "success":
+                continue
+            main_val = rec.get("total_head_loss")
+            low_val = rec.get("sensitivity_low_total_head_loss")
+            delta_val = rec.get("sensitivity_delta_total_head_loss")
+            if main_val is None or low_val is None:
+                continue
+            try:
+                main_f = float(main_val)
+                low_f = float(low_val)
+                delta_f = float(delta_val) if delta_val is not None else (low_f - main_f)
+                pct = (delta_f / main_f * 100) if main_f != 0 else 0
+            except (TypeError, ValueError):
+                continue
+            _compare_items_data.append({
+                "name": rec.get("name", "未命名"),
+                "flow_section": rec.get("flow_section", "-"),
+                "main": main_f, "low": low_f, "delta": delta_f, "pct": pct,
+            })
 
-        opt_row.addSpacing(20)
+        _item_style = (
+            "QFrame { background: #fff; border: 1px solid #e0eaf5;"
+            " border-radius: 4px; }"
+        )
+        for idx, citem in enumerate(_compare_items_data):
+            row_label = QLabel(f"流量段 {citem['flow_section']}  —  {citem['name']}")
+            row_label.setStyleSheet("font-size:12px;font-weight:600;color:#333;background:transparent;")
+            compare_grid.addWidget(row_label, idx * 2, 0, 1, 3)
 
-        # 显示/隐藏对比列的勾选框
-        cb_show_sensitivity = QCheckBox("显示球墨铸铁管上下限对比列")
-        cb_show_sensitivity.setChecked(show_sensitivity)
-        cb_show_sensitivity.setEnabled(has_sensitivity_data)
-        if not has_di_material:
-            cb_show_sensitivity.setEnabled(False)
-            cb_show_sensitivity.setToolTip("本批次无球墨铸铁管")
-        elif not has_sensitivity_data:
-            cb_show_sensitivity.setToolTip("本批次未生成上下限对比结果")
-        opt_row.addWidget(cb_show_sensitivity)
-        opt_row.addStretch()
-        lay.addLayout(opt_row)
+            for col, (label_t, val, color) in enumerate([
+                (f"主值 (f=223200)", f"{citem['main']:.4f} m", "#1a1a1a"),
+                (f"下限 (f=189900)", f"{citem['low']:.4f} m", "#1a1a1a"),
+                (f"差值 (下限−主值)", f"{citem['delta']:+.4f} m  ({citem['pct']:+.1f}%)", "#0078d4"),
+            ]):
+                _f = QFrame()
+                _f.setStyleSheet(_item_style)
+                _fl = QVBoxLayout(_f)
+                _fl.setContentsMargins(10, 6, 10, 6)
+                _fl.setSpacing(2)
+                _lbl = QLabel(label_t)
+                _lbl.setStyleSheet("font-size:11px;color:#666;background:transparent;border:none;")
+                _lbl.setAlignment(Qt.AlignCenter)
+                _val = QLabel(val)
+                _val.setStyleSheet(f"font-size:14px;font-weight:600;color:{color};background:transparent;border:none;")
+                _val.setAlignment(Qt.AlignCenter)
+                _fl.addWidget(_lbl)
+                _fl.addWidget(_val)
+                compare_grid.addWidget(_f, idx * 2 + 1, col)
+
+        compare_card_lay.addLayout(compare_grid)
+
+        if not _compare_items_data:
+            _no_data = QLabel("暂无对比数据")
+            _no_data.setStyleSheet("font-size:12px;color:#999;background:transparent;")
+            _no_data.setAlignment(Qt.AlignCenter)
+            compare_card_lay.addWidget(_no_data)
+
+        compare_card.setVisible(show_sensitivity)
 
         def _set_sensitivity_columns_visible(visible: bool):
             table.setColumnHidden(11, not visible)
             table.setColumnHidden(12, not visible)
+            compare_card.setVisible(visible)
 
         _set_sensitivity_columns_visible(show_sensitivity)
 
@@ -4513,9 +4502,8 @@ class WaterProfilePanel(QWidget):
                 note_text = (rec.get("error", "") or "").strip() or "计算失败"
             table.setItem(i, 10, QTableWidgetItem(note_text))
 
-        cb_show_sensitivity.toggled.connect(_set_sensitivity_columns_visible)
-
         lay.addWidget(table, 1)
+        lay.addWidget(compare_card)
         lay.addWidget(QLabel("计算详情预览（标准深度）"))
         lay.addWidget(preview, 1)
 
@@ -4606,7 +4594,6 @@ class WaterProfilePanel(QWidget):
             if _water_profile_dir not in _sys.path:
                 _sys.path.insert(0, _water_profile_dir)
             from utils.pressure_pipe_extractor import PressurePipeDataExtractor
-            from managers.pressure_pipe_manager import PressurePipeManager
 
             settings = self._build_settings()
             pipe_groups = PressurePipeDataExtractor.extract_pipes(nodes, settings=settings)
@@ -4615,11 +4602,12 @@ class WaterProfilePanel(QWidget):
                             parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
                 return
 
-            project_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "default_project"
-            )
-            manager = PressurePipeManager(project_path)
+            # 使用共享的 PressurePipeManager（已绑定项目路径）
+            if self._pressure_pipe_manager is not None:
+                manager = self._pressure_pipe_manager
+            else:
+                from managers.pressure_pipe_manager import PressurePipeManager
+                manager = PressurePipeManager()
         except Exception as e:
             InfoBar.error("错误", f"初始化失败: {e}",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
@@ -4629,7 +4617,6 @@ class WaterProfilePanel(QWidget):
         from 渠系断面设计.water_profile.water_profile_dialogs import PressurePipeConfigDialog
         config_dlg = PressurePipeConfigDialog(
             parent=self,
-            default_sensitivity_enabled=self._is_pressure_pipe_sensitivity_enabled(),
             pipe_groups=pipe_groups,
             manager=manager
         )
@@ -4638,10 +4625,7 @@ class WaterProfilePanel(QWidget):
             return
 
         # 获取用户配置
-        sensitivity_enabled = config_dlg.get_sensitivity_enabled()
-        self._set_pressure_pipe_sensitivity_enabled(sensitivity_enabled)
         longitudinal_nodes_dict = config_dlg.get_longitudinal_nodes_dict()
-        print(f"[DEBUG] 用户配置: sensitivity_enabled={sensitivity_enabled}")
         print(f"[DEBUG] 纵断面数据: {list(longitudinal_nodes_dict.keys())}")
 
         print("[DEBUG] 开始导入模块和提取有压管道分组")
@@ -4655,7 +4639,6 @@ class WaterProfilePanel(QWidget):
             if _water_profile_dir not in _sys.path:
                 _sys.path.insert(0, _water_profile_dir)
             from utils.pressure_pipe_extractor import PressurePipeDataExtractor
-            from managers.pressure_pipe_manager import PressurePipeManager
             from core.pressure_pipe_calc import calc_total_head_loss, calc_total_head_loss_with_spatial, PIPE_MATERIALS
 
             settings = self._build_settings()
@@ -4665,20 +4648,19 @@ class WaterProfilePanel(QWidget):
                             parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
                 return
 
-            # 获取项目路径
-            project_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "default_project"
-            )
-            manager = PressurePipeManager(project_path)
+            # 使用共享的 PressurePipeManager（已绑定项目路径）
+            if self._pressure_pipe_manager is not None:
+                manager = self._pressure_pipe_manager
+            else:
+                from managers.pressure_pipe_manager import PressurePipeManager
+                manager = PressurePipeManager()
 
             # 逐条有压管道计算总水头损失并记录完整过程（标准深度）
             results_by_identity = {}
             records = []
             default_material = "预应力钢筒混凝土管"
             run_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sensitivity_enabled = self._is_pressure_pipe_sensitivity_enabled()
-            sensitivity_low_f = float(getattr(self, "_pressure_pipe_sensitivity_low_f", 1.899e5))
+            SENSITIVITY_LOW_F = 1.899e5
 
             for group in pipe_groups:
                 flow_section = self._get_pressure_pipe_group_flow_section(group)
@@ -4768,7 +4750,7 @@ class WaterProfilePanel(QWidget):
                     "data_mode": calc_res.data_mode,
                     "note": note,
                 }
-                if sensitivity_enabled and material_key == "球墨铸铁管":
+                if material_key == "球墨铸铁管":
                     fr = calc_res.friction_details or {}
                     main_f = fr.get("f")
                     q_m3h = fr.get("Q_m3h")
@@ -4779,11 +4761,11 @@ class WaterProfilePanel(QWidget):
                     try:
                         if all(v is not None for v in [q_m3h, d_mm, m_exp, b_exp]) and float(d_mm) > 0:
                             low_friction_loss = (
-                                sensitivity_low_f * calc_res.total_length * (float(q_m3h) ** float(m_exp))
+                                SENSITIVITY_LOW_F * calc_res.total_length * (float(q_m3h) ** float(m_exp))
                                 / (float(d_mm) ** float(b_exp))
                             )
                         elif main_f:
-                            low_friction_loss = calc_res.friction_loss * (sensitivity_low_f / float(main_f))
+                            low_friction_loss = calc_res.friction_loss * (SENSITIVITY_LOW_F / float(main_f))
                     except Exception:
                         low_friction_loss = None
 
@@ -4797,7 +4779,7 @@ class WaterProfilePanel(QWidget):
                         record.update({
                             "sensitivity_material": "球墨铸铁管",
                             "sensitivity_main_f": main_f,
-                            "sensitivity_low_f": sensitivity_low_f,
+                            "sensitivity_low_f": SENSITIVITY_LOW_F,
                             "sensitivity_low_friction_loss": low_friction_loss,
                             "sensitivity_low_total_head_loss": low_total_head_loss,
                             "sensitivity_delta_total_head_loss": low_total_head_loss - float(calc_res.total_head_loss),
@@ -4821,7 +4803,6 @@ class WaterProfilePanel(QWidget):
 
             batch_data = normalize_pressure_pipe_calc_records({
                 "last_run_at": run_at,
-                "sensitivity_enabled": sensitivity_enabled,
                 "records": records,
             })
             self._pressure_pipe_calc_records = batch_data
@@ -5117,7 +5098,6 @@ class WaterProfilePanel(QWidget):
             "siphon_inlet_zeta": self.siphon_inlet_zeta.text().strip(),
             "siphon_outlet_form": self.siphon_outlet_combo.currentText(),
             "siphon_outlet_zeta": self.siphon_outlet_zeta.text().strip(),
-            "pressure_pipe_sensitivity_enabled": self._is_pressure_pipe_sensitivity_enabled(),
         }
         
         # 序列化 ProjectSettings
@@ -5274,7 +5254,6 @@ class WaterProfilePanel(QWidget):
                     self.siphon_outlet_combo.setCurrentIndex(idx)
             if ui.get("siphon_outlet_zeta"):
                 self.siphon_outlet_zeta.setText(ui["siphon_outlet_zeta"])
-            self._set_pressure_pipe_sensitivity_enabled(bool(ui.get("pressure_pipe_sensitivity_enabled", True)))
             
             # 恢复 ProjectSettings
             proj_settings = d.get("project_settings", {})

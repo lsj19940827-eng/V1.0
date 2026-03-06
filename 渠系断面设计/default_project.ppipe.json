@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_modified": "2026-03-05 22:35:59",
+  "last_modified": "2026-03-06 13:21:24",
   "pipes": {
     "牛马道": {
       "name": "牛马道",
@@ -11,7 +11,7 @@
       "outlet_transition_loss": 0,
       "pipe_velocity": 1.4920775914865188,
       "plan_total_length": 339.4112549695428,
-      "calculated_at": "2026-03-05 22:35:59",
+      "calculated_at": "2026-03-06 13:21:24",
       "data_mode": "平面模式",
       "longitudinal_nodes": []
     },

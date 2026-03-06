@@ -324,6 +324,18 @@ class PressurePipeManager:
         }
         self.save_config()
 
+    def to_dict(self) -> Dict[str, Any]:
+        """将 manager 内部数据序列化为字典（用于存入 .qxproj）"""
+        import copy
+        return copy.deepcopy(self._config)
+
+    def from_dict(self, data: Dict[str, Any]):
+        """从字典恢复 manager 内部数据（用于从 .qxproj 加载）"""
+        if not data or not isinstance(data, dict):
+            return
+        import copy
+        self._config = copy.deepcopy(data)
+
 
 # ============================================================
 # 测试代码

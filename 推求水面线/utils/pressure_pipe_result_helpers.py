@@ -21,7 +21,6 @@ def empty_pressure_pipe_calc_records() -> Dict[str, Any]:
     """返回空的有压管道计算记录结构。"""
     return {
         "last_run_at": "",
-        "sensitivity_enabled": False,
         "summary": {"total": 0, "success": 0, "failed": 0},
         "records": [],
     }
@@ -45,7 +44,6 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
         return out
 
     out["last_run_at"] = str(raw.get("last_run_at", "") or "")
-    out["sensitivity_enabled"] = bool(raw.get("sensitivity_enabled", False))
 
     normalized_records: List[Dict[str, Any]] = []
     for rec in raw.get("records", []) or []:
@@ -168,14 +166,18 @@ def format_pressure_pipe_calc_batch_text(batch: Dict[str, Any], precision: int =
 
     summary = normalized.get("summary", {})
     ts = normalized.get("last_run_at", "") or "-"
+    has_sensitivity = any(rec.get("sensitivity_low_total_head_loss") is not None for rec in records)
+    sensitivity_line = (
+        "球墨铸铁管 f 上下限对比: 已自动生成"
+        "（规范为区间取值：主值223200，下限189900；仅输出对比，不影响主结果回写）"
+    ) if has_sensitivity else ""
     lines = [
         "=" * 80,
         f"【有压管道计算详情】  时间: {ts}",
-        (
-            "球墨铸铁管 f 上下限对比: "
-            f"{'开启' if normalized.get('sensitivity_enabled') else '关闭'}"
-            "（规范为区间取值：主值223200，下限189900；仅输出对比，不影响主结果回写）"
-        ),
+    ]
+    if sensitivity_line:
+        lines.append(sensitivity_line)
+    lines += [
         f"批次汇总: 共{summary.get('total', 0)}条，成功{summary.get('success', 0)}条，失败{summary.get('failed', 0)}条",
         "-" * 80,
     ]

@@ -95,6 +95,450 @@ def calculate_normal_depth(Q, B, m, n, i, D=0.0):
 # OpenChannelParams 已移至核心数据模型层，从此处重新导出以保持兼容
 from 推求水面线.models.data_models import OpenChannelParams
 
+from PySide6.QtGui import (
+    QPainter, QPen, QBrush, QPolygonF,
+    QWheelEvent, QMouseEvent, QPaintEvent
+)
+from PySide6.QtCore import QPointF, QRectF
+
+
+# ============================================================
+# 轻量级纵断面画布 —— 用于有压管道纵断面预览
+# ============================================================
+_TURN_TYPE_CN = {"NONE": "无", "ARC": "圆弧", "FOLD": "折线",
+                 "无": "无", "圆弧": "圆弧", "折线": "折线"}
+
+
+class SimpleProfileCanvas(QWidget):
+    """
+    轻量级纵断面画布，复用倒虹吸 PipelineCanvas 的缩放/平移/绘制模式，
+    但直接工作在节点字典数据上，无需 StructureSegment 模型。
+    """
+
+    C_BG = QColor(20, 20, 30)
+    C_PIPE = QColor(0, 255, 0)
+    C_ARROW = QColor(0, 204, 0)
+    C_INLET = QColor(0, 255, 255)
+    C_BEND = QColor(255, 170, 0)
+    C_NODE = QColor(0, 255, 0)
+    C_ELEV = QColor(170, 170, 170)
+    C_ELEV_LOW = QColor(255, 136, 136)
+    C_INFO = QColor(170, 170, 170)
+    C_HINT = QColor(136, 136, 136)
+    C_GRID = QColor(40, 40, 50)
+
+    def __init__(self, parent=None, fixed_height=None):
+        super().__init__(parent)
+        if fixed_height:
+            self.setFixedHeight(fixed_height)
+        else:
+            self.setMinimumHeight(200)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMouseTracking(True)
+
+        self._zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._drag_start = None
+        self._drag_pan_start = None
+        self._nodes = []
+
+    def set_nodes(self, nodes):
+        self._nodes = nodes or []
+        self._zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self.update()
+
+    def zoom_reset(self):
+        self._zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self.update()
+
+    def get_zoom_percent(self):
+        return int(self._zoom * 100)
+
+    # ---- 事件 ----
+
+    def paintEvent(self, event: QPaintEvent):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.fillRect(self.rect(), self.C_BG)
+        w, h = self.width(), self.height()
+        if w < 20 or h < 20:
+            p.end()
+            return
+        self._draw_profile(p, w, h)
+        p.end()
+
+    def wheelEvent(self, event: QWheelEvent):
+        delta = event.angleDelta().y()
+        factor = 1.15 if delta > 0 else 1 / 1.15
+        pos = event.position()
+        self._apply_zoom(factor, pos.x(), pos.y())
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            self._drag_start = event.position()
+            self._drag_pan_start = (self._pan_x, self._pan_y)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self._drag_start is not None and event.buttons() & Qt.LeftButton:
+            dx = event.position().x() - self._drag_start.x()
+            dy = event.position().y() - self._drag_start.y()
+            self._pan_x = self._drag_pan_start[0] + dx
+            self._pan_y = self._drag_pan_start[1] + dy
+            self.update()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        self._drag_start = None
+        self._drag_pan_start = None
+
+    # ---- 缩放 ----
+
+    def _apply_zoom(self, factor, cx, cy):
+        new_zoom = self._zoom * factor
+        if 0.2 <= new_zoom <= 20.0:
+            actual = new_zoom / self._zoom
+            w2, h2 = self.width() / 2, self.height() / 2
+            self._pan_x = (cx - w2) * (1 - actual) + self._pan_x * actual
+            self._pan_y = (cy - h2) * (1 - actual) + self._pan_y * actual
+            self._zoom = new_zoom
+            self.update()
+
+    # ---- 坐标变换 ----
+
+    def _make_transform(self, data_bounds, w, h, margin=50):
+        min_x, max_x, min_y, max_y = data_bounds
+        dw = max_x - min_x if max_x > min_x else 1
+        dh = max_y - min_y if max_y > min_y else 1
+        sx = (w - 2 * margin) / dw
+        sy = (h - 2 * margin) / dh
+        base_scale = min(sx, sy)
+        scale = base_scale * self._zoom
+        cx = w / 2 + self._pan_x
+        cy = h / 2 + self._pan_y
+        dcx = (min_x + max_x) / 2
+        dcy = (min_y + max_y) / 2
+
+        def transform(x, y):
+            return (cx + (x - dcx) * scale,
+                    cy - (y - dcy) * scale)
+        return transform, scale
+
+    # ---- 绘制 ----
+
+    def _draw_profile(self, p, w, h):
+        nodes = self._nodes
+        if not nodes or len(nodes) < 2:
+            self._draw_centered_text(p, w, h, "暂无纵断面数据\n请导入纵断面DXF")
+            return
+
+        coords = [(n['chainage'], n['elevation']) for n in nodes]
+        xs = [c[0] for c in coords]
+        ys = [c[1] for c in coords]
+        bounds = (min(xs), max(xs), min(ys), max(ys))
+        transform, scale = self._make_transform(bounds, w, h)
+        screen_pts = [transform(c[0], c[1]) for c in coords]
+
+        pipe_lines = [(screen_pts[k][0], screen_pts[k][1],
+                       screen_pts[k + 1][0], screen_pts[k + 1][1])
+                      for k in range(len(screen_pts) - 1)]
+
+        occupied_rects = []
+        _lbl_h = 14
+        _lbl_w = 80
+
+        # 管道中心线
+        pen = QPen(self.C_PIPE, 3)
+        p.setPen(pen)
+        for i in range(len(screen_pts) - 1):
+            p.drawLine(QPointF(*screen_pts[i]), QPointF(*screen_pts[i + 1]))
+
+        # 方向箭头
+        for i in range(len(screen_pts) - 1):
+            self._draw_arrow(p, screen_pts[i], screen_pts[i + 1], self.C_ARROW)
+
+        # 起止标记
+        if screen_pts:
+            self._draw_endpoint(p, screen_pts[0], "起点", True)
+            occupied_rects.append((screen_pts[0][0] - 30, screen_pts[0][1] - 18 - _lbl_h,
+                                   screen_pts[0][0] + 30, screen_pts[0][1] - 18))
+            self._draw_endpoint(p, screen_pts[-1], "终点", False)
+            occupied_rects.append((screen_pts[-1][0] - 30, screen_pts[-1][1] - 18 - _lbl_h,
+                                   screen_pts[-1][0] + 30, screen_pts[-1][1] - 18))
+
+        # 弯折点标记
+        for i, node in enumerate(nodes):
+            tt = node.get('turn_type', 'NONE')
+            angle = node.get('turn_angle', 0.0)
+            if tt in ('NONE', '无') or angle == 0:
+                if i > 0 and i < len(nodes) - 1:
+                    p.setPen(QPen(Qt.white, 1))
+                    p.setBrush(QBrush(self.C_NODE))
+                    p.drawEllipse(QPointF(*screen_pts[i]), 4, 4)
+                continue
+            sx, sy = screen_pts[i]
+            p.setPen(QPen(Qt.white, 1))
+            p.setBrush(QBrush(self.C_BEND))
+            p.drawEllipse(QPointF(sx, sy), 5, 5)
+
+            tt_cn = _TURN_TYPE_CN.get(tt, tt)
+            angle_text = f"{tt_cn} {angle:.1f}°"
+            ft = QFont("Microsoft YaHei", 8)
+            p.setFont(ft)
+            fm_b = p.fontMetrics()
+            atw = fm_b.horizontalAdvance(angle_text)
+
+            # 标注方向：根据前后段计算法线
+            if i > 0 and i < len(nodes) - 1:
+                v1x, v1y = sx - screen_pts[i - 1][0], sy - screen_pts[i - 1][1]
+                v2x, v2y = screen_pts[i + 1][0] - sx, screen_pts[i + 1][1] - sy
+                len1 = math.sqrt(v1x * v1x + v1y * v1y) or 1
+                len2 = math.sqrt(v2x * v2x + v2y * v2y) or 1
+                v1x, v1y = v1x / len1, v1y / len1
+                v2x, v2y = v2x / len2, v2y / len2
+                avg_dx = (v1x + v2x) / 2
+                avg_dy = (v1y + v2y) / 2
+                nx, ny = -avg_dy, avg_dx
+                if ny > 0:
+                    nx, ny = -nx, -ny
+                n_len = math.sqrt(nx * nx + ny * ny) or 1
+                nx, ny = nx / n_len, ny / n_len
+            else:
+                nx, ny = 0, -1
+
+            bend_placed = False
+            for lbl_off in [22, 36, 50]:
+                for d in [1, -1]:
+                    atx = sx + nx * d * lbl_off
+                    aty = sy + ny * d * lbl_off
+                    rect_b = (atx - atw / 2, aty - _lbl_h, atx + atw / 2, aty)
+                    overlap = any(
+                        rect_b[0] < dr[2] and rect_b[2] > dr[0] and
+                        rect_b[1] < dr[3] and rect_b[3] > dr[1]
+                        for dr in occupied_rects
+                    )
+                    if not overlap:
+                        overlap = any(
+                            self._line_rect_intersect(lx1, ly1, lx2, ly2, rect_b)
+                            for lx1, ly1, lx2, ly2 in pipe_lines
+                        )
+                    if not overlap:
+                        p.setPen(QPen(self.C_BEND))
+                        p.drawText(QPointF(atx - atw / 2, aty), angle_text)
+                        occupied_rects.append(rect_b)
+                        bend_placed = True
+                        break
+                if bend_placed:
+                    break
+            if not bend_placed:
+                atx = sx + nx * 22
+                aty = sy + ny * 22
+                p.setPen(QPen(self.C_BEND))
+                p.drawText(QPointF(atx - atw / 2, aty), angle_text)
+                occupied_rects.append((atx - atw / 2, aty - _lbl_h, atx + atw / 2, aty))
+
+        # 高程标注
+        elev_labels = []
+        if coords:
+            elev_labels.append((screen_pts[0][0], screen_pts[0][1], coords[0][1], self.C_ELEV))
+            elev_labels.append((screen_pts[-1][0], screen_pts[-1][1], coords[-1][1], self.C_ELEV))
+        for i, node in enumerate(nodes):
+            tt = node.get('turn_type', 'NONE')
+            angle = node.get('turn_angle', 0.0)
+            if tt not in ('NONE', '无') and angle != 0:
+                elev_labels.append((screen_pts[i][0], screen_pts[i][1], coords[i][1], self.C_ELEV))
+        if coords:
+            min_elev_idx = ys.index(min(ys))
+            if min_elev_idx != 0 and min_elev_idx != len(coords) - 1:
+                elev_labels.append((screen_pts[min_elev_idx][0], screen_pts[min_elev_idx][1],
+                                    min(ys), self.C_ELEV_LOW))
+
+        elev_labels.sort(key=lambda lbl: lbl[0])
+        unique_labels = []
+        for lbl in elev_labels:
+            duplicate = False
+            for j, existing in enumerate(unique_labels):
+                dist = math.sqrt((lbl[0] - existing[0]) ** 2 + (lbl[1] - existing[1]) ** 2)
+                if dist < 5:
+                    if lbl[3] == self.C_ELEV_LOW:
+                        unique_labels[j] = lbl
+                    duplicate = True
+                    break
+            if not duplicate:
+                unique_labels.append(lbl)
+
+        drawn_rects = list(occupied_rects)
+        base_offset_y = 16
+        font_e = QFont("Microsoft YaHei", 8)
+        p.setFont(font_e)
+
+        for sx, sy, elev, color in unique_labels:
+            text = f"▽{elev:.3f}m"
+            fm = p.fontMetrics()
+            tw = fm.horizontalAdvance(text)
+
+            attempts = [
+                (sx, sy + base_offset_y, 'below'),
+                (sx, sy - base_offset_y, 'above'),
+                (sx, sy + base_offset_y + _lbl_h, 'below'),
+                (sx, sy - base_offset_y - _lbl_h, 'above'),
+                (sx + tw / 2 + 8, sy + base_offset_y, 'below'),
+                (sx - tw / 2 - 8, sy - base_offset_y, 'above'),
+            ]
+            lx, ly, anchor = sx, sy + base_offset_y, 'below'
+            placed = False
+            for ax, ay, aa in attempts:
+                if aa == 'below':
+                    rect = (ax - tw / 2, ay, ax + tw / 2, ay + _lbl_h)
+                else:
+                    rect = (ax - tw / 2, ay - _lbl_h, ax + tw / 2, ay)
+                overlap = False
+                for dr in drawn_rects:
+                    if rect[0] < dr[2] and rect[2] > dr[0] and rect[1] < dr[3] and rect[3] > dr[1]:
+                        overlap = True
+                        break
+                if not overlap:
+                    for lx1, ly1, lx2, ly2 in pipe_lines:
+                        if self._line_rect_intersect(lx1, ly1, lx2, ly2, rect):
+                            overlap = True
+                            break
+                if not overlap:
+                    lx, ly, anchor = ax, ay, aa
+                    drawn_rects.append(rect)
+                    placed = True
+                    break
+            if not placed:
+                lx = sx
+                ly = sy + base_offset_y + _lbl_h * 2
+                anchor = 'below'
+                drawn_rects.append((lx - tw / 2, ly, lx + tw / 2, ly + _lbl_h))
+
+            p.setPen(QPen(color))
+            if anchor == 'below':
+                p.drawText(QPointF(lx - tw / 2, ly + _lbl_h - 2), text)
+            else:
+                p.drawText(QPointF(lx - tw / 2, ly - 2), text)
+
+        # 底部信息
+        total_len = coords[-1][0] - coords[0][0] if coords else 0
+        bend_cnt = sum(1 for n in nodes if n.get('turn_type', 'NONE') not in ('NONE', '无')
+                       and n.get('turn_angle', 0) != 0)
+        min_elev = min(ys) if ys else 0
+        info = (f"桩号: {coords[0][0]:.1f}~{coords[-1][0]:.1f}m | "
+                f"节点: {len(nodes)} | 弯/折: {bend_cnt} | "
+                f"最低高程: {min_elev:.2f}m | 缩放: {int(self._zoom * 100)}%")
+        p.setPen(QPen(self.C_INFO))
+        p.setFont(QFont("Microsoft YaHei", 9))
+        p.drawText(QRectF(0, h - 22, w, 20), Qt.AlignCenter, info)
+
+    # ---- 绘图工具 ----
+
+    def _draw_centered_text(self, p, w, h, text):
+        p.setPen(QPen(self.C_HINT))
+        p.setFont(QFont("Microsoft YaHei", 11))
+        p.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, text)
+
+    def _draw_arrow(self, p, pt1, pt2, color):
+        x1, y1 = pt1
+        x2, y2 = pt2
+        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+        dx, dy = x2 - x1, y2 - y1
+        seg_len = math.sqrt(dx * dx + dy * dy)
+        if seg_len < 30:
+            return
+        ux, uy = dx / seg_len, dy / seg_len
+        sz = 8
+        px, py = -uy, ux
+        tri = QPolygonF([
+            QPointF(mx + ux * sz, my + uy * sz),
+            QPointF(mx - ux * sz * 0.5 + px * sz * 0.5, my - uy * sz * 0.5 + py * sz * 0.5),
+            QPointF(mx - ux * sz * 0.5 - px * sz * 0.5, my - uy * sz * 0.5 - py * sz * 0.5),
+        ])
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(color))
+        p.drawPolygon(tri)
+
+    def _draw_endpoint(self, p, pt, label, is_inlet):
+        sx, sy = pt
+        p.setPen(QPen(Qt.white, 1))
+        p.setBrush(QBrush(self.C_INLET))
+        p.drawEllipse(QPointF(sx, sy), 7, 7)
+        p.setPen(QPen(self.C_INLET))
+        p.setFont(QFont("Microsoft YaHei", 9))
+        p.drawText(QPointF(sx - 16, sy - 18), label)
+
+    def _line_rect_intersect(self, x1, y1, x2, y2, rect):
+        left, top, right, bottom = rect
+        if left <= x1 <= right and top <= y1 <= bottom:
+            return True
+        if left <= x2 <= right and top <= y2 <= bottom:
+            return True
+        edges = [
+            (left, top, right, top), (right, top, right, bottom),
+            (left, bottom, right, bottom), (left, top, left, bottom),
+        ]
+        for ex1, ey1, ex2, ey2 in edges:
+            if self._segs_cross(x1, y1, x2, y2, ex1, ey1, ex2, ey2):
+                return True
+        return False
+
+    @staticmethod
+    def _segs_cross(x1, y1, x2, y2, x3, y3, x4, y4):
+        d1x, d1y = x2 - x1, y2 - y1
+        d2x, d2y = x4 - x3, y4 - y3
+        cross = d1x * d2y - d1y * d2x
+        if abs(cross) < 1e-10:
+            return False
+        t = ((x3 - x1) * d2y - (y3 - y1) * d2x) / cross
+        u = ((x3 - x1) * d1y - (y3 - y1) * d1x) / cross
+        return 0 <= t <= 1 and 0 <= u <= 1
+
+
+# ============================================================
+# 纵断面预览对话框
+# ============================================================
+class LongitudinalPreviewDialog(QDialog):
+    """纵断面预览对话框 —— 可调整大小，内含大画布"""
+
+    def __init__(self, parent=None, pipe_name="", nodes=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"纵断面预览 — {pipe_name}")
+        self.resize(800, 500)
+        self.setMinimumSize(500, 350)
+        self.setModal(True)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(6)
+
+        self._canvas = SimpleProfileCanvas(self)
+        self._canvas.set_nodes(nodes or [])
+        lay.addWidget(self._canvas, 1)
+
+        # 底部工具栏
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        toolbar.addStretch()
+
+        try:
+            from qfluentwidgets import PushButton as FluentPushButton
+            btn_reset = FluentPushButton("重置视图")
+            btn_close = FluentPushButton("关闭")
+        except ImportError:
+            btn_reset = QPushButton("重置视图")
+            btn_close = QPushButton("关闭")
+
+        btn_reset.clicked.connect(self._canvas.zoom_reset)
+        btn_close.clicked.connect(self.accept)
+
+        toolbar.addWidget(btn_reset)
+        toolbar.addWidget(btn_close)
+
+        lay.addLayout(toolbar)
+
 
 # ============================================================
 # 有压管道计算配置对话框
@@ -102,19 +546,20 @@ from 推求水面线.models.data_models import OpenChannelParams
 class PressurePipeConfigDialog(QDialog):
     """有压管道计算配置对话框（在计算前配置参数）"""
 
-    def __init__(self, parent=None, default_sensitivity_enabled=True, pipe_groups=None, manager=None):
+    def __init__(self, parent=None, pipe_groups=None, manager=None):
         super().__init__(parent)
         self.setWindowTitle("有压管道水力计算配置")
         self.setMinimumWidth(700)
         self.setMinimumHeight(500)
         self.setModal(True)
 
-        self._sensitivity_enabled = default_sensitivity_enabled
         self._pipe_groups = pipe_groups or []
         self._manager = manager
 
         # 存储每个管道的纵断面数据 {pipe_name: [LongitudinalNode字典列表]}
         self._longitudinal_data = {}
+        # 存储每个管道卡片的UI组件引用 {pipe_name: {hint, stats, canvas, expand_btn, table}}
+        self._card_widgets = {}
 
         # 从manager加载已有的纵断面数据
         if self._manager and self._pipe_groups:
@@ -168,49 +613,6 @@ class PressurePipeConfigDialog(QDialog):
             scroll.setWidget(scroll_widget)
             lay.addWidget(scroll, 1)
 
-        # 配置选项组
-        config_grp = QGroupBox("计算选项")
-        config_grp.setStyleSheet("""
-            QGroupBox {
-                font-size: 13px; font-weight: bold; color: #424242;
-                border: 1px solid #E0E0E0; border-radius: 6px;
-                margin-top: 10px; padding: 14px 12px 10px 12px;
-                background: #FAFAFA;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin; left: 12px;
-                padding: 0 6px; background: #FAFAFA;
-            }
-        """)
-        config_lay = QVBoxLayout(config_grp)
-        config_lay.setSpacing(10)
-
-        # 球墨铸铁管上下限对比勾选框
-        try:
-            from qfluentwidgets import CheckBox
-            self.chk_sensitivity = CheckBox("球墨铸铁管 f 上下限对比")
-        except ImportError:
-            self.chk_sensitivity = QCheckBox("球墨铸铁管 f 上下限对比")
-
-        self.chk_sensitivity.setChecked(self._sensitivity_enabled)
-        self.chk_sensitivity.setStyleSheet("font-size: 13px; color: #424242;")
-        config_lay.addWidget(self.chk_sensitivity)
-
-        # 说明文本
-        sensitivity_desc = QLabel(
-            "球墨铸铁管按规范给定 f 上下限（非单一值）：\n"
-            "  • 主值 f = 223200（用于计算主结果并回写）\n"
-            "  • 下限 f = 189900（仅用于对比分析，不影响回写）\n"
-            "勾选后，结果对话框将显示上下限对比列，便于评估设计裕度。"
-        )
-        sensitivity_desc.setStyleSheet(
-            "font-size: 12px; color: #757575; padding-left: 24px; font-weight: normal;"
-        )
-        sensitivity_desc.setWordWrap(True)
-        config_lay.addWidget(sensitivity_desc)
-
-        lay.addWidget(config_grp)
-
         lay.addStretch()
 
         # 底部按钮
@@ -238,12 +640,8 @@ class PressurePipeConfigDialog(QDialog):
 
         lay.addLayout(btn_lay)
 
-    def get_sensitivity_enabled(self) -> bool:
-        """获取是否启用球墨铸铁管上下限对比"""
-        return self.chk_sensitivity.isChecked()
-
     def _create_pipe_card(self, group):
-        """为单个管道创建卡片"""
+        """为单个管道创建卡片（分层结构：摘要 + 迷你画布 + 可展开表格）"""
         from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget, QHeaderView
 
         card = QGroupBox(f"管道: {group.name}")
@@ -264,18 +662,17 @@ class PressurePipeConfigDialog(QDialog):
         card_lay.setSpacing(10)
 
         # 基本信息
-        info_label = QLabel(f"流量: {group.design_flow:.3f} m³/s  |  管径: {group.diameter:.3f} m  |  管材: {group.material_key}")
+        info_label = QLabel(f"流量: {group.design_flow:.3f} m\u00b3/s  |  管径: {group.diameter:.3f} m  |  管材: {group.material_key}")
         info_label.setStyleSheet("font-size: 12px; color: #7F8C8D; font-weight: normal;")
         card_lay.addWidget(info_label)
 
         # 工具栏
         toolbar = QHBoxLayout()
-
         try:
-            from qfluentwidgets import PushButton
-            btn_import = PushButton("导入纵断面DXF")
-            btn_clear = PushButton("清空纵断面")
-            btn_preview = PushButton("预览纵断面")
+            from qfluentwidgets import PushButton as FPB
+            btn_import = FPB("导入纵断面DXF")
+            btn_clear = FPB("清空纵断面")
+            btn_preview = FPB("预览纵断面")
         except ImportError:
             btn_import = QPushButton("导入纵断面DXF")
             btn_clear = QPushButton("清空纵断面")
@@ -284,32 +681,153 @@ class PressurePipeConfigDialog(QDialog):
         btn_import.clicked.connect(lambda: self._import_longitudinal_dxf(group.name, group.ip_points))
         btn_clear.clicked.connect(lambda: self._clear_longitudinal(group.name))
         btn_preview.clicked.connect(lambda: self._preview_longitudinal(group.name))
-
+        btn_clear.setEnabled(False)
+        btn_preview.setEnabled(False)
         toolbar.addWidget(btn_import)
         toolbar.addWidget(btn_clear)
         toolbar.addWidget(btn_preview)
         toolbar.addStretch()
-
         card_lay.addLayout(toolbar)
 
-        # 纵断面节点表
+        # 空状态提示标签
+        hint_label = QLabel("尚未导入纵断面数据，请点击「导入纵断面DXF」")
+        hint_label.setStyleSheet(
+            "font-size: 12px; color: #E65100; background: #FFF8E1; "
+            "border: 1px solid #FFE0B2; border-radius: 4px; "
+            "padding: 8px 12px; font-weight: normal;"
+        )
+        hint_label.setAlignment(Qt.AlignCenter)
+        hint_label.setObjectName(f"hint_{group.name}")
+        card_lay.addWidget(hint_label)
+
+        # 统计摘要标签
+        stats_label = QLabel("")
+        stats_label.setStyleSheet(
+            "font-size: 12px; color: #546E7A; background: #ECEFF1; "
+            "border: 1px solid #CFD8DC; border-radius: 4px; "
+            "padding: 6px 10px; font-weight: normal;"
+        )
+        stats_label.setWordWrap(True)
+        stats_label.setObjectName(f"stats_{group.name}")
+        stats_label.setVisible(False)
+        card_lay.addWidget(stats_label)
+
+        # 迷你画布
+        mini_canvas = SimpleProfileCanvas(self, fixed_height=200)
+        mini_canvas.setObjectName(f"canvas_{group.name}")
+        mini_canvas.setStyleSheet(
+            "border: 1px solid #CFD8DC; border-radius: 4px;"
+        )
+        mini_canvas.setVisible(False)
+        card_lay.addWidget(mini_canvas)
+
+        # 展开/折叠按钮
+        expand_btn = QPushButton("▶ 查看详细节点数据")
+        expand_btn.setStyleSheet(
+            "QPushButton { font-size: 12px; color: #1976D2; background: transparent; "
+            "border: none; text-align: left; padding: 4px 0; font-weight: normal; }"
+            "QPushButton:hover { color: #1565C0; text-decoration: underline; }"
+        )
+        expand_btn.setCursor(Qt.PointingHandCursor)
+        expand_btn.setObjectName(f"expand_{group.name}")
+        expand_btn.setVisible(False)
+        card_lay.addWidget(expand_btn)
+
+        # 纵断面节点表（默认折叠）
         table = QTableWidget()
         table.setColumnCount(5)
-        table.setHorizontalHeaderLabels(["桩号(m)", "高程(m)", "竖曲线半径(m)", "转弯类型", "转角(°)"])
+        table.setHorizontalHeaderLabels(["桩号(m)", "高程(m)", "竖曲线半径(m)", "转弯类型", "转角(\u00b0)"])
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table.setMaximumHeight(200)
         table.setObjectName(f"long_table_{group.name}")
-
-        # 如果已有纵断面数据，显示表格
-        if group.name in self._longitudinal_data and self._longitudinal_data[group.name]:
-            self._refresh_long_table(group.name, table)
-            table.setVisible(True)
-        else:
-            table.setVisible(False)
-
+        table.setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setAlternatingRowColors(True)
         card_lay.addWidget(table)
 
+        # 展开/折叠点击事件
+        def toggle_table(checked=False, _name=group.name):
+            tbl = self.findChild(QTableWidget, f"long_table_{_name}")
+            btn = self.findChild(QPushButton, f"expand_{_name}")
+            if tbl and btn:
+                vis = not tbl.isVisible()
+                tbl.setVisible(vis)
+                btn.setText("▼ 隐藏详细节点数据" if vis else "▶ 查看详细节点数据")
+        expand_btn.clicked.connect(toggle_table)
+
+        # 保存组件引用
+        self._card_widgets[group.name] = {
+            'hint': hint_label,
+            'stats': stats_label,
+            'canvas': mini_canvas,
+            'expand_btn': expand_btn,
+            'table': table,
+            'btn_clear': btn_clear,
+            'btn_preview': btn_preview,
+        }
+
+        # 根据已有数据初始化状态
+        has_data = group.name in self._longitudinal_data and self._longitudinal_data[group.name]
+        if has_data:
+            self._update_card_data_state(group.name, show_data=True)
+        else:
+            self._update_card_data_state(group.name, show_data=False)
+
         return card
+
+    def _compute_stats(self, nodes):
+        """计算纵断面节点统计摘要"""
+        if not nodes:
+            return ""
+        chainages = [n['chainage'] for n in nodes]
+        elevations = [n['elevation'] for n in nodes]
+        arc_cnt = sum(1 for n in nodes if n.get('turn_type') in ('ARC', '圆弧') and n.get('turn_angle', 0) != 0)
+        fold_cnt = sum(1 for n in nodes if n.get('turn_type') in ('FOLD', '折线') and n.get('turn_angle', 0) != 0)
+        total_len = chainages[-1] - chainages[0] if len(chainages) >= 2 else 0
+
+        parts = [
+            f"节点数: {len(nodes)}",
+            f"桩号: {chainages[0]:.1f} ~ {chainages[-1]:.1f} m",
+            f"高程: {min(elevations):.2f} ~ {max(elevations):.2f} m",
+        ]
+        bend_parts = []
+        if arc_cnt:
+            bend_parts.append(f"圆弧\u00d7{arc_cnt}")
+        if fold_cnt:
+            bend_parts.append(f"折线\u00d7{fold_cnt}")
+        if bend_parts:
+            parts.append(f"弯头: {' '.join(bend_parts)}")
+        parts.append(f"总长度: {total_len:.1f} m")
+        return "  |  ".join(parts)
+
+    def _update_card_data_state(self, pipe_name, show_data=True):
+        """切换卡片的数据显示状态"""
+        w = self._card_widgets.get(pipe_name)
+        if not w:
+            return
+
+        if show_data and pipe_name in self._longitudinal_data and self._longitudinal_data[pipe_name]:
+            nodes = self._longitudinal_data[pipe_name]
+            w['hint'].setVisible(False)
+            w['stats'].setText(self._compute_stats(nodes))
+            w['stats'].setVisible(True)
+            w['canvas'].set_nodes(nodes)
+            w['canvas'].setVisible(True)
+            w['expand_btn'].setText("▶ 查看详细节点数据")
+            w['expand_btn'].setVisible(True)
+            w['table'].setVisible(False)
+            w['btn_clear'].setEnabled(True)
+            w['btn_preview'].setEnabled(True)
+            self._refresh_long_table(pipe_name, w['table'])
+        else:
+            w['hint'].setVisible(True)
+            w['stats'].setVisible(False)
+            w['canvas'].setVisible(False)
+            w['expand_btn'].setVisible(False)
+            w['table'].setVisible(False)
+            w['table'].setRowCount(0)
+            w['btn_clear'].setEnabled(False)
+            w['btn_preview'].setEnabled(False)
 
     def _import_longitudinal_dxf(self, pipe_name, ip_points):
         """导入纵断面DXF"""
@@ -317,7 +835,12 @@ class PressurePipeConfigDialog(QDialog):
         import os
         import sys
 
-        # 导入DXF解析器
+        # 已有数据时弹出替换确认
+        if pipe_name in self._longitudinal_data and self._longitudinal_data[pipe_name]:
+            if not fluent_question(self, "确认替换",
+                                   "当前已有纵断面数据，导入DXF将替换现有数据。\n\n是否继续？"):
+                return
+
         _siphon_dir = os.path.join(os.path.dirname(__file__), '..', '..', '倒虹吸水力计算系统')
         if _siphon_dir not in sys.path:
             sys.path.insert(0, _siphon_dir)
@@ -329,7 +852,6 @@ class PressurePipeConfigDialog(QDialog):
             QMessageBox.warning(self, "导入失败", "DXF解析器未加载")
             return
 
-        # 选择DXF文件
         _res_dir = os.path.join(_siphon_dir, "resources")
         if not os.path.isdir(_res_dir):
             _res_dir = ""
@@ -339,7 +861,6 @@ class PressurePipeConfigDialog(QDialog):
             return
 
         try:
-            # 计算桩号偏移量
             chainage_offset = 0.0
             if ip_points and len(ip_points) > 0:
                 doc = ezdxf.readfile(filepath)
@@ -353,14 +874,12 @@ class PressurePipeConfigDialog(QDialog):
                     mc_inlet = ip_points[0].get('x', 0.0)
                     chainage_offset = mc_inlet - x_start
 
-            # 解析纵断面
             long_nodes, message = DxfParser.parse_longitudinal_profile(filepath, chainage_offset=chainage_offset)
 
             if not long_nodes:
                 QMessageBox.critical(self, "导入失败", message or "DXF文件中未找到纵断面数据")
                 return
 
-            # 转换为字典格式
             long_nodes_dict = []
             for node in long_nodes:
                 node_dict = {
@@ -380,7 +899,6 @@ class PressurePipeConfigDialog(QDialog):
 
             self._longitudinal_data[pipe_name] = long_nodes_dict
 
-            # 检查桩号范围是否匹配
             if ip_points and len(ip_points) >= 2:
                 ip_start = ip_points[0].get('x', 0.0)
                 ip_end = ip_points[-1].get('x', 0.0)
@@ -389,60 +907,48 @@ class PressurePipeConfigDialog(QDialog):
 
                 warning_msg = ""
                 if long_start > ip_start + 1.0:
-                    warning_msg += f"⚠ 纵断面起点桩号({long_start:.2f}m)晚于平面进口桩号({ip_start:.2f}m)\n"
+                    warning_msg += f"纵断面起点桩号({long_start:.2f}m)晚于平面进口桩号({ip_start:.2f}m)\n"
                 if long_end < ip_end - 1.0:
-                    warning_msg += f"⚠ 纵断面终点桩号({long_end:.2f}m)早于平面出口桩号({ip_end:.2f}m)\n"
+                    warning_msg += f"纵断面终点桩号({long_end:.2f}m)早于平面出口桩号({ip_end:.2f}m)\n"
 
                 if warning_msg:
                     warning_msg += "\n超出纵断面范围的部分将按平面数据处理。\n是否继续？"
-                    reply = QMessageBox.question(self, "桩号范围警告", warning_msg,
-                                                QMessageBox.Yes | QMessageBox.No)
-                    if reply == QMessageBox.No:
+                    if not fluent_question(self, "桩号范围警告", warning_msg):
                         del self._longitudinal_data[pipe_name]
+                        self._update_card_data_state(pipe_name, show_data=False)
                         return
 
-            # 刷新表格
-            table = self.findChild(QTableWidget, f"long_table_{pipe_name}")
-            if table:
-                self._refresh_long_table(pipe_name, table)
-                table.setVisible(True)
-
-            QMessageBox.information(self, "导入成功", f"{message}\n变坡点节点: {len(long_nodes)} 个")
+            self._update_card_data_state(pipe_name, show_data=True)
+            fluent_info(self, "导入成功", f"{message}\n变坡点节点: {len(long_nodes)} 个")
 
         except Exception as e:
             QMessageBox.critical(self, "导入失败", str(e))
 
     def _clear_longitudinal(self, pipe_name):
         """清空纵断面数据"""
-        from PySide6.QtWidgets import QMessageBox
+        if pipe_name not in self._longitudinal_data:
+            return
 
-        if pipe_name in self._longitudinal_data:
-            reply = QMessageBox.question(self, "确认清空", f"确定要清空管道 '{pipe_name}' 的纵断面数据吗？",
-                                        QMessageBox.Yes | QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                del self._longitudinal_data[pipe_name]
-                table = self.findChild(QTableWidget, f"long_table_{pipe_name}")
-                if table:
-                    table.setVisible(False)
-                    table.setRowCount(0)
+        if not fluent_question(self, "确认清空", f"确定要清空管道 '{pipe_name}' 的纵断面数据吗？"):
+            return
+
+        del self._longitudinal_data[pipe_name]
+        self._update_card_data_state(pipe_name, show_data=False)
 
     def _preview_longitudinal(self, pipe_name):
-        """预览纵断面数据"""
+        """弹出纵断面预览对话框"""
         from PySide6.QtWidgets import QMessageBox
 
         if pipe_name not in self._longitudinal_data or not self._longitudinal_data[pipe_name]:
             QMessageBox.information(self, "预览", f"管道 '{pipe_name}' 尚未导入纵断面数据")
             return
 
-        nodes = self._longitudinal_data[pipe_name]
-        info = f"管道: {pipe_name}\n纵断面节点数: {len(nodes)}\n\n前3个节点:\n"
-        for i, node in enumerate(nodes[:3]):
-            info += f"  {i+1}. 桩号={node['chainage']:.2f}m, 高程={node['elevation']:.2f}m\n"
-
-        QMessageBox.information(self, "纵断面预览", info)
+        dlg = LongitudinalPreviewDialog(self, pipe_name=pipe_name,
+                                         nodes=self._longitudinal_data[pipe_name])
+        dlg.exec()
 
     def _refresh_long_table(self, pipe_name, table):
-        """刷新纵断面节点表"""
+        """刷新纵断面节点表（优化显示格式）"""
         if pipe_name not in self._longitudinal_data:
             return
 
@@ -450,12 +956,18 @@ class PressurePipeConfigDialog(QDialog):
         table.setRowCount(len(nodes))
 
         for i, node in enumerate(nodes):
-            from PySide6.QtWidgets import QTableWidgetItem
             table.setItem(i, 0, QTableWidgetItem(f"{node['chainage']:.2f}"))
             table.setItem(i, 1, QTableWidgetItem(f"{node['elevation']:.3f}"))
-            table.setItem(i, 2, QTableWidgetItem(f"{node['vertical_curve_radius']:.2f}"))
-            table.setItem(i, 3, QTableWidgetItem(node['turn_type']))
-            table.setItem(i, 4, QTableWidgetItem(f"{node['turn_angle']:.1f}"))
+
+            r = node.get('vertical_curve_radius', 0.0)
+            table.setItem(i, 2, QTableWidgetItem(f"{r:.2f}" if r != 0 else "-"))
+
+            tt_raw = node.get('turn_type', 'NONE')
+            tt_cn = _TURN_TYPE_CN.get(tt_raw, tt_raw)
+            table.setItem(i, 3, QTableWidgetItem(tt_cn))
+
+            angle = node.get('turn_angle', 0.0)
+            table.setItem(i, 4, QTableWidgetItem(f"{angle:.1f}\u00b0" if angle != 0 else "-"))
 
     def get_longitudinal_nodes_dict(self):
         """获取所有管道的纵断面数据字典"""

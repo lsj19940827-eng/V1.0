@@ -40,8 +40,8 @@ PIPE_MATERIALS = {
 
 TRANSITION_FORMS = {
     "反弯扭曲面":   {"inlet_zeta": 0.10, "outlet_zeta": 0.20},
-    "直线扭曲面":   {"inlet_zeta": 0.20, "outlet_zeta": 0.30},
-    "1/4圆弧":      {"inlet_zeta": 0.25, "outlet_zeta": 0.35},
+    "直线扭曲面":   {"inlet_zeta": 0.20, "outlet_zeta": 0.40},
+    "1/4圆弧":      {"inlet_zeta": 0.15, "outlet_zeta": 0.25},
     "方头型":       {"inlet_zeta": 0.30, "outlet_zeta": 0.75},
 }
 

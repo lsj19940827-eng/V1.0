@@ -132,7 +132,8 @@ SECTION_TYPES = [
 #          9边坡系数m, 10底宽B, 11明渠宽深比, 12半径R, 13直径D,
 #          14矩形渡槽深宽比, 15倒角角度, 16倒角底边, 17圆心角, 18不淤流速, 19不冲流速,
 #          20转弯半径（平面弯道，不参与水力计算，透传到推求水面线）
-#          21管材（有压管道专用）, 22局部损失比例（有压管道专用）, 23进出口标识（有压管道专用）
+#          21管材（有压管道专用）
+#          注：局部损失比例、进出口标识等有压管道专用参数通过 Qt.UserRole 元数据传递，不占表格列
 INPUT_HEADERS = [
     "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
     "Q(m³/s)", "糙率n", "比降(1/)",
@@ -433,11 +434,13 @@ class BatchPanel(QWidget):
         _sample_menu = RoundMenu(parent=self)
         _sample_menu.addAction(Action("示例一（综合演示）", triggered=self._add_sample_data))
         _sample_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=self._add_sample_data_2))
+        _sample_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=self._add_sample_data_3))
         btn_sample = DropDownPushButton("示例数据")
         btn_sample.setMenu(_sample_menu)
         _template_menu = RoundMenu(parent=self)
         _template_menu.addAction(Action("示例一（综合演示）", triggered=lambda: self._open_excel_template_file("blank")))
         _template_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=lambda: self._open_excel_template_file("longtang")))
+        _template_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=lambda: self._open_excel_template_file("luojisi")))
         btn_template = DropDownPushButton("打开Excel模板")
         btn_template.setMenu(_template_menu)
         btn_import = PrimaryPushButton("导入Excel"); btn_import.clicked.connect(self._import_from_excel)
@@ -796,6 +799,9 @@ class BatchPanel(QWidget):
         if template_key == "longtang":
             title = "示例二（龙塘马坝河分干渠）"
             desc = "龙塘马坝河分干渠示例数据文件"
+        elif template_key == "luojisi":
+            title = "示例三（罗寂寺支渠）"
+            desc = "罗寂寺支渠示例数据文件"
         else:
             title = "示例一（综合演示）"
             desc = "综合演示模板（多流量段批量计算）"
@@ -823,6 +829,8 @@ class BatchPanel(QWidget):
         """获取Excel模板/示例文件路径（兼容开发环境和打包环境）"""
         if template_key == "longtang":
             template_name = "龙塘马坝河分干渠10+862.622-test.xlsx"
+        elif template_key == "luojisi":
+            template_name = "罗寂寺支渠批量计算用表.xlsx"
         else:
             template_name = "多流量段批量计算_导入Excel（模板）.xlsx"
         if getattr(sys, 'frozen', False):
@@ -1080,6 +1088,24 @@ class BatchPanel(QWidget):
         else:
             base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         return os.path.join(base, "data", "龙塘马坝河分干渠10+862.622-test.xlsx")
+
+    def _add_sample_data_3(self):
+        """加载示例三：罗寂寺支渠数据（从data目录读取xlsx文件）"""
+        path = self._get_sample3_path()
+        if not os.path.exists(path):
+            fluent_info(self, "错误", f"未找到示例三文件：\n{path}")
+            return
+        self._do_load_from_filepath(path, is_sample=True,
+                                    sample_title="示例三",
+                                    sample_desc="罗寂寺支渠示例数据")
+
+    def _get_sample3_path(self):
+        """获取示例三xlsx文件路径（兼容开发环境和打包环境）"""
+        if getattr(sys, 'frozen', False):
+            base = sys._MEIPASS
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return os.path.join(base, "data", "罗寂寺支渠批量计算用表.xlsx")
 
     # ================================================================
     # 结果区

@@ -323,9 +323,24 @@ def build(bump: str = None):
     # ---- 添加资源文件（仅图片/图标/JSON/Excel 等，不包含 .py 源码） ----
     sep = ";"  # Windows 用分号分隔 src;dest
 
+    # 从 data/ 目录逐个添加文件，排除 autosave 子目录和 .qxproj 等运行时产物
+    _data_src = os.path.join(PROJECT_ROOT, "data")
+    _data_exclude_exts = {".qxproj", ".log"}
+    _data_exclude_dirs = {"autosave"}
+    if os.path.isdir(_data_src):
+        for _fname in os.listdir(_data_src):
+            _fpath = os.path.join(_data_src, _fname)
+            if os.path.isdir(_fpath):
+                if _fname not in _data_exclude_dirs:
+                    args.append(f"--add-data={_fpath}{sep}{os.path.join('data', _fname)}")
+                continue
+            if _fname.startswith("~$"):
+                continue
+            if os.path.splitext(_fname)[1] in _data_exclude_exts:
+                continue
+            args.append(f"--add-data={_fpath}{sep}data")
+
     data_entries = [
-        # 项目数据文件（模板等）
-        (os.path.join(PROJECT_ROOT, "data"), "data"),
         # UI 图标与 Logo
         (os.path.join(PROJECT_ROOT, "渠系断面设计", "resources"),
          os.path.join("渠系断面设计", "resources")),

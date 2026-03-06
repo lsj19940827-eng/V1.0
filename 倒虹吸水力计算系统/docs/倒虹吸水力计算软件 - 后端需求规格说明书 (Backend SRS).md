@@ -1,7 +1,7 @@
 # 倒虹吸水力计算软件 - 后端需求规格说明书 (Backend SRS)
 
-**版本**: v3.0  
-**最后更新**: 2026-03-02  
+**版本**: v3.2  
+**最后更新**: 2026-03-06  
 **状态**: 已实现
 
 ---
@@ -170,6 +170,7 @@
 | Q_increased / velocity_increased | 加大流量/流速 |
 | loss_inlet_inc / loss_pipe_inc / loss_outlet_inc | 加大工况三段损失 |
 | total_head_loss_inc | 加大工况总落差 ΔZ加大 (m) |
+| v1_inc_used / v2_inc_used / v3_inc_used | 加大工况实际使用的流速 (m/s) |
 | calculation_steps | 详细计算过程（List[str]） |
 
 ### 2.5 拦污栅参数对象 (TrashRackParams)
@@ -202,6 +203,8 @@
 | turn_angle | 竖向转角 (度) |
 | slope_before / slope_after | 前后坡角 β (弧度) |
 | arc_center_s / arc_center_z | 竖曲线弧心桩号/高程（仅ARC型） |
+| arc_end_chainage | 竖曲线弧终点桩号（仅ARC型，供区间重叠检测） |
+| arc_theta_rad | 竖曲线圆心角 θ (弧度)（仅ARC型，供精确弧长计算） |
 
 #### PlanFeaturePoint（平面IP特征点）
 
@@ -232,6 +235,58 @@
 | spatial_turn_angle | θ_3D (度) |
 | effective_radius | 用于查表的有效半径 (m) |
 | effective_turn_type | 用于查表的转弯类型 |
+| long_arc_end_chainage | 竖曲线弧终点桩号（仅ARC型有效） |
+| long_arc_theta_rad | 竖曲线圆心角 θ (弧度)（仅ARC型有效） |
+| **v5.0 新增** | |
+| alpha_before_rad / alpha_after_rad | 前/后方位角（数学角 rad，解析精确） |
+| beta_before_rad / beta_after_rad | 前/后坡角（rad，解析精确） |
+| T_before / T_after | 前/后切向量 (cosβ·cosα, cosβ·sinα, sinβ)，默认 (1,0,0) |
+| theta_3d_node | 节点折转角（rad） |
+
+#### PlanSegment（平面轴线解析分段，v5.0 新增）
+
+覆盖 s∈[s_start, s_end] 的平面几何，可精确求值 x(s), y(s), α(s)。
+
+| 属性名 | 说明 |
+|--------|------|
+| seg_type | `'LINE'` / `'ARC'` |
+| s_start / s_end | 段起/终桩号 (m) |
+| p_start | LINE段起点坐标 (x, y) |
+| direction | LINE段方向向量 (dx, dy) |
+| center | ARC段圆心坐标 (x, y) |
+| R_h | ARC段半径 (m) |
+| epsilon | +1=左转(CCW), -1=右转(CW) |
+| theta_0 | BC点极角 |
+
+#### ProfileSegment（纵断面轴线解析分段，v5.0 新增）
+
+覆盖 s∈[s_start, s_end] 的纵断面几何，可精确求值 z(s), β(s)。
+
+| 属性名 | 说明 |
+|--------|------|
+| seg_type | `'LINE'` / `'ARC'` |
+| s_start / s_end | 段起/终桩号 (m) |
+| z_start | LINE段起点高程 (m) |
+| k | LINE段斜率 dz/ds |
+| R_v | ARC段半径 (m) |
+| Sc / Zc | ARC段圆心桩号/高程坐标 |
+| eta | +1/-1，由 z(S1)=Z1 确定 |
+| theta_arc | 圆心角 θ (rad) |
+
+#### BendEvent（弯道事件，v5.0 新增）
+
+以区间 [s_a, s_b] 定义弯道事件，包含空间长度、转角和等效半径。
+
+| 属性名 | 说明 |
+|--------|------|
+| s_a / s_b | 事件起/终桩号 (m) |
+| event_type | `'PLAN'` / `'VERTICAL'` / `'COMPOSITE'` |
+| turn_style | TurnType（ARC / FOLD） |
+| L_event | 空间长度（解析积分，m） |
+| theta_event | 空间转角（rad） |
+| R_eff | 等效半径 = L/θ (m)；θ=0时为 inf |
+| R_h / R_v | 平面/纵断面半径（可选，m） |
+| R_3d_mid | 事件中点曲率半径（可选诊断，m） |
 
 #### SpatialMergeResult（空间合并结果）
 
@@ -243,6 +298,10 @@
 | xi_spatial_bends | 空间弯道损失系数总和（预留） |
 | computation_steps | 计算步骤日志 |
 | has_plan_data / has_longitudinal_data | 数据存在标志 |
+| **v5.0 新增** | |
+| bend_events | List[BendEvent]，弯道事件表（供局损查表） |
+| plan_segments | List[PlanSegment]，平面分段序列 |
+| profile_segments | List[ProfileSegment]，纵断面分段序列 |
 
 ---
 
@@ -438,6 +497,9 @@ HydraulicCore.execute_calculation(
     plan_feature_points: List[PlanFeaturePoint] = None,   # 平面IP点（新接口）
     longitudinal_nodes: List[LongitudinalNode] = None,    # 纵断面节点（新接口）
     increase_percent: Optional[float] = None,      # 加大流量比例 (%)
+    v1_inc: Optional[float] = None,               # 加大工况进口始端流速 v₁加大 (m/s)
+    v2_inc: Optional[float] = None,               # 加大工况进口末端流速 v₂加大 (m/s)
+    v3_inc: Optional[float] = None,               # 加大工况出口末端流速 v₃加大 (m/s)
 ) -> CalculationResult
 ```
 
@@ -484,10 +546,19 @@ HydraulicCore.execute_calculation(
 ### 5.6 加大流量工况
 
 当 increase_percent > 0 时，在同一次计算中完成加大工况：
-- Q_inc = Q × (1 + increase_percent/100)
-- v_inc = Q_inc_single / A
-- v₂_inc 按相同策略确定
-- 重新计算 ΔZ₁加大、ΔZ₂加大、ΔZ₃加大
+
+1. **加大流量**：Q_inc = Q × (1 + increase_percent/100)
+2. **加大管道流速**：v_inc = Q_inc_single / A（并联时按单管分摊）
+3. **加大工况流速确定**：
+   - v₁加大：优先使用 `v1_inc` 参数（若 > 0），否则使用设计工况 v₁
+   - v₂加大：根据 v2_strategy 确定
+     - AUTO_PIPE → v₂加大 = v_inc（加大管道流速）
+     - V1_PLUS_02 → v₂加大 = v₁加大 + 0.2
+     - SECTION_CALC / MANUAL → 优先使用 `v2_inc` 参数，否则使用设计工况 v₂
+   - v₃加大：优先使用 `v3_inc` 参数（若 > 0），否则使用设计工况 v₃
+   - v_out加大：= v_inc（加大管道流速）
+4. **重新计算**：ΔZ₁加大、ΔZ₂加大、ΔZ₃加大
+5. **结果记录**：`v1_inc_used`、`v2_inc_used`、`v3_inc_used` 记录实际使用的加大工况流速
 
 ### 5.7 结果格式化 `format_result()`
 
@@ -595,4 +666,5 @@ from_dict(d: dict)            # 反序列化（项目加载），v3.0: plan_sour
 | v1.0 | 2026-02-15 | 初始版本，基础架构 |
 | v2.0 | 2026-02-25 | 全面重写：新增V2Strategy枚举、并联管道、加大流量工况、三维空间合并模式、纵断面DXF解析、折管公式、管道渐变段、直线扭曲面角度插值、进水口形状枚举、拦污栅手动模式；数据模型与代码完全对齐 |
 | v3.0 | 2026-03-02 | **平面DXF解析引擎**：新增 `parse_plan_polyline()` 方法，支持从DXF文件独立导入平面多段线；新增 `_compute_measurement_azimuth()` 辅助方法；新增 `_build_plan_segments()` 和 `_process_plan_straight_segments()` 平面段构建方法；所有DXF平面段标记 `locked=True` 保护几何数据；API接口新增 `parse_plan_polyline` 入口 |
+| v3.1 | 2026-03-06 | **加大流量工况完善**：`execute_calculation()` 新增 `v1_inc`/`v2_inc`/`v3_inc` 参数，支持用户指定加大工况流速；`CalculationResult` 新增 `v1_inc_used`/`v2_inc_used`/`v3_inc_used` 字段。**v5.0 空间数据模型**：`SpatialNode` 新增解析精确方位角/坡角/切向量字段（`alpha_before_rad`/`T_before`/`theta_3d_node` 等）；新增 `PlanSegment`/`ProfileSegment`/`BendEvent` 三个数据类；`SpatialMergeResult` 新增 `bend_events`/`plan_segments`/`profile_segments` 列表。`LongitudinalNode` 补充 `arc_end_chainage`/`arc_theta_rad` 字段。合并原 `拦污栅需求.md`（已全部覆盖于 `PRD_拦污栅配置.md` v1.3） |
 

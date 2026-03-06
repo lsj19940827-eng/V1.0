@@ -364,6 +364,10 @@ class MainWindow(QMainWindow):
         from 推求水面线.managers.siphon_manager import SiphonManager
         self.siphon_manager = SiphonManager()
 
+        # 创建 PressurePipeManager（用于有压管道数据管理）
+        from 推求水面线.managers.pressure_pipe_manager import PressurePipeManager
+        self.pressure_pipe_manager = PressurePipeManager()
+
         # 注册模块面板
         self.open_channel_panel = OpenChannelPanel()
         self.aqueduct_panel = AqueductPanel()
@@ -375,7 +379,10 @@ class MainWindow(QMainWindow):
         )
         self.pressure_pipe_panel = PressurePipePanel()
         self.batch_panel = BatchPanel()
-        self.water_profile_panel = WaterProfilePanel()
+        self.water_profile_panel = WaterProfilePanel(
+            siphon_manager=self.siphon_manager,
+            pressure_pipe_manager=self.pressure_pipe_manager,
+        )
         self.stack.addWidget(self.open_channel_panel)
         self.stack.addWidget(self.aqueduct_panel)
         self.stack.addWidget(self.tunnel_panel)
@@ -403,6 +410,9 @@ class MainWindow(QMainWindow):
             culvert_panel=self.culvert_panel,
             siphon_panel=self.siphon_panel,
             pressure_pipe_panel=self.pressure_pipe_panel,
+            earthwork_panel=getattr(self, 'earthwork_panel', None),
+            siphon_manager=self.siphon_manager,
+            pressure_pipe_manager=self.pressure_pipe_manager,
         )
 
         # 连接信号
@@ -446,6 +456,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'siphon_manager') and self.siphon_manager:
             self.siphon_manager.set_project_path(path)
             print(f"[SiphonManager] 项目路径已更新: {path}")
+
+        # 更新 PressurePipeManager 的项目路径
+        if hasattr(self, 'pressure_pipe_manager') and self.pressure_pipe_manager:
+            self.pressure_pipe_manager.set_project_path(path)
+            print(f"[PressurePipeManager] 项目路径已更新: {path}")
 
     def _on_dirty_changed(self, is_dirty: bool):
         """脏状态变化时更新窗口标题"""
