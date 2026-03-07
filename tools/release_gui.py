@@ -257,9 +257,16 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
         _git("git add version.py")
         _git(f'git commit -m "release: v{new_ver}"')
         _git(f"git tag v{new_ver}")
-        r = _git("git push origin main")
+        current_branch = subprocess.run(
+            "git rev-parse --abbrev-ref HEAD",
+            cwd=PROJECT_ROOT, shell=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        ).stdout.strip() or "master"
+        if current_branch == "HEAD":
+            current_branch = "master"
+        r = _git(f"git push origin {current_branch}")
         if r.returncode != 0:
-            log("push main 失败，尝试继续...", W)
+            log(f"push {current_branch} 失败，尝试继续...", W)
         r = _git(f"git push origin v{new_ver}")
         if r.returncode != 0:
             log("push tag 失败，尝试继续...", W)
