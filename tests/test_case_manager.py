@@ -15,7 +15,7 @@ if sys.platform == 'win32':
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from 渠系断面设计.siphon.case_manager import CaseManager, CaseInfo
+from app_渠系计算前端.siphon.case_manager import CaseManager, CaseInfo
 
 
 def test_case_manager():

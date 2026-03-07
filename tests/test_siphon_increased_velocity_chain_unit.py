@@ -4,7 +4,7 @@
 from types import SimpleNamespace
 
 from 推求水面线.utils.siphon_extractor import SiphonGroup
-from 渠系断面设计.siphon.multi_siphon_dialog import MultiSiphonDialog
+from app_渠系计算前端.siphon.multi_siphon_dialog import MultiSiphonDialog
 
 
 def _fake_dialog(turn_n: float = 0.0):

@@ -805,10 +805,10 @@ calculate_pressure_pipe(
 
 | 文件 | 关键方法/类 |
 |------|------------|
-| `渠系断面设计/water_profile/panel.py` | `_insert_transitions()`, `open_channel_callback()`, `_show_transition_length_details()`, `_show_transition_calc_details()`, `_open_transition_reference()` |
-| `渠系断面设计/water_profile/water_profile_dialogs.py` | `BatchChannelConfirmDialog`, `_fill_all_recommended()`, `_fill_with_fallback_if_empty()` |
-| `渠系断面设计/water_profile/formula_dialog.py` | `show_transition_loss_dialog()`, `show_transition_length_dialog()` |
-| `渠系断面设计/water_profile/cad_tools.py` | `_is_special_structure_sv()` |
+| `app_渠系计算前端/water_profile/panel.py` | `_insert_transitions()`, `open_channel_callback()`, `_show_transition_length_details()`, `_show_transition_calc_details()`, `_open_transition_reference()` |
+| `app_渠系计算前端/water_profile/water_profile_dialogs.py` | `BatchChannelConfirmDialog`, `_fill_all_recommended()`, `_fill_with_fallback_if_empty()` |
+| `app_渠系计算前端/water_profile/formula_dialog.py` | `show_transition_loss_dialog()`, `show_transition_length_dialog()` |
+| `app_渠系计算前端/water_profile/cad_tools.py` | `_is_special_structure_sv()` |
 
 ### 14.3 倒虹吸水力计算
 

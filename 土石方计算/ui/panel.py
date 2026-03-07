@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from qfluentwidgets import PushButton, PrimaryPushButton, LineEdit as FLineEdit, InfoBar, InfoBarPosition
 
-from 渠系断面设计.styles import P, S, W, E, BG, CARD, BD, T1, T2
+from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _ROOT not in sys.path:

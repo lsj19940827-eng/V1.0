@@ -12,7 +12,7 @@ import os
 
 # 添加父目录到路径以支持相对导入
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "推求水面线"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "渠系断面设计"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app_渠系计算前端"))
 
 from models.data_models import ChannelNode
 from models.enums import StructureType, InOutType

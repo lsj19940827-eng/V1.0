@@ -49,7 +49,7 @@
     ├── pressure_pipe_result_helpers.py  # 有压管道结果格式化/序列化辅助
     └── excel_io.py                # Excel 导入导出工具
 
-渠系断面设计/water_profile/         # UI 层
+app_渠系计算前端/water_profile/         # UI 层
 ├── panel.py                       # WaterProfilePanel 主面板（~4000行）
 ├── cad_tools.py                   # CAD 导出工具（纵断面/汇总/IP表/bzzh2/平面图）
 ├── formula_dialog.py              # 公式说明弹窗（表头 Tooltip + 双击详情）

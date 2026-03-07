@@ -14,7 +14,7 @@ os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from PySide6.QtWidgets import QApplication, QWidget
-import 渠系断面设计.siphon.panel as siphon_panel_mod
+import app_渠系计算前端.siphon.panel as siphon_panel_mod
 
 try:
     from siphon_models import SegmentDirection

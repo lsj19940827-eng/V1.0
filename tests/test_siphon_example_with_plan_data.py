@@ -18,7 +18,7 @@ if _root not in sys.path:
     sys.path.insert(0, _root)
 
 from PySide6.QtWidgets import QApplication
-from 渠系断面设计.siphon.panel import SiphonPanel
+from app_渠系计算前端.siphon.panel import SiphonPanel
 from siphon_models import PlanFeaturePoint
 
 

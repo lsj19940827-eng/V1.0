@@ -3,7 +3,7 @@
 
 import sys, os, math, itertools
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                "渠系建筑物断面计算"))
+                                "calc_渠系计算算法内核"))
 from 矩形暗涵设计 import (
     calculate_rectangular_outputs, solve_water_depth_rectangular,
     get_required_freeboard_height_rect, get_flow_increase_percent_rect,

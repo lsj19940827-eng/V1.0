@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from 推求水面线.managers.siphon_manager import SiphonManager, SiphonConfig
-from 渠系断面设计.siphon.multi_siphon_dialog import MultiSiphonDialog
+from app_渠系计算前端.siphon.multi_siphon_dialog import MultiSiphonDialog
 
 
 def _project_path():

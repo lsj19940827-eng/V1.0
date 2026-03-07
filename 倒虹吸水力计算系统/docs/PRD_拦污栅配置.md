@@ -19,7 +19,7 @@
 ## 二、文件结构
 
 ```
-渠系断面设计/siphon/
+app_渠系计算前端/siphon/
 └── dialogs.py           # TrashRackConfigDialog（配置对话框）
 
 倒虹吸水力计算系统/
@@ -30,7 +30,7 @@
     └── 表L.1.4-1.png    # 形状系数表图片（存在但未使用）
 ```
 
-> **集成入口**：`渠系断面设计/siphon/panel.py` — 结构段表格双击/编辑分发逻辑（第2178行）
+> **集成入口**：`app_渠系计算前端/siphon/panel.py` — 结构段表格双击/编辑分发逻辑（第2178行）
 
 ---
 
@@ -105,7 +105,7 @@ $$\xi_s = \left[\beta_1 \cdot \left(\frac{s_1}{b_1}\right)^{4/3} + \beta_2 \cdot
 
 ## 五、配置对话框（TrashRackConfigDialog）
 
-**文件**: `渠系断面设计/siphon/dialogs.py:448-754`  
+**文件**: `app_渠系计算前端/siphon/dialogs.py:448-754`  
 **继承**: `QDialog`  
 **窗口尺寸**: 900×750（最小 820×660）
 

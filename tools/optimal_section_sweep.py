@@ -12,13 +12,13 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 
 sys.path.insert(0, r'C:\Users\大渔\Desktop\V1.0')
 
-from 渠系建筑物断面计算.明渠设计 import (
+from calc_渠系计算算法内核.明渠设计 import (
     quick_calculate_trapezoidal, quick_calculate_rectangular,
     quick_calculate_circular as oc_circular,
 )
-from 渠系建筑物断面计算.渡槽设计 import quick_calculate_u, quick_calculate_rect as aq_rect
-from 渠系建筑物断面计算.矩形暗涵设计 import quick_calculate_rectangular_culvert
-import 渠系建筑物断面计算.隧洞设计 as tunnel
+from calc_渠系计算算法内核.渡槽设计 import quick_calculate_u, quick_calculate_rect as aq_rect
+from calc_渠系计算算法内核.矩形暗涵设计 import quick_calculate_rectangular_culvert
+import calc_渠系计算算法内核.隧洞设计 as tunnel
 
 Q_LIST = [round(0.10 + i * 0.01, 2) for i in range(191)]
 

@@ -160,7 +160,7 @@ def _clean_unused_qt_dlls(dist_folder):
 def _clean_py_sources(dist_folder):
     """删除 dist 目录中项目相关的 .py 源码文件（双保险防止源码泄露）"""
     project_dirs = [
-        "渠系断面设计", "渠系建筑物断面计算", "推求水面线",
+        "app_渠系计算前端", "calc_渠系计算算法内核", "推求水面线",
         "倒虹吸水力计算系统", "土石方计算",
     ]
     removed = 0
@@ -233,12 +233,12 @@ def build(bump: str = None):
         args.append(f"--icon={ICON_FILE}")
 
     # ---- 模块搜索路径 ----
-    # 项目根目录：让 PyInstaller 发现 渠系断面设计、土石方计算 等正式包
-    # 子目录：渠系建筑物断面计算、倒虹吸水力计算系统、推求水面线 没有 __init__.py，
+    # 项目根目录：让 PyInstaller 发现 app_渠系计算前端、土石方计算 等正式包
+    # 子目录：calc_渠系计算算法内核、倒虹吸水力计算系统、推求水面线 没有 __init__.py，
     #         代码通过 sys.path.insert() 后以顶层模块名导入（如 from 明渠设计 import ...）
     search_paths = [
         PROJECT_ROOT,
-        os.path.join(PROJECT_ROOT, "渠系建筑物断面计算"),
+        os.path.join(PROJECT_ROOT, "calc_渠系计算算法内核"),
         os.path.join(PROJECT_ROOT, "倒虹吸水力计算系统"),
         os.path.join(PROJECT_ROOT, "推求水面线"),
     ]
@@ -275,7 +275,7 @@ def build(bump: str = None):
         "seaborn", "pypdf",
         "scipy", "scipy.optimize",
         "有压管道设计",
-        # ---- 渠系建筑物断面计算（无 __init__.py，sys.path hack 导入） ----
+        # ---- calc_渠系计算算法内核（无 __init__.py，sys.path hack 导入） ----
         "明渠设计",
         "渡槽设计",
         "隧洞设计",
@@ -307,7 +307,7 @@ def build(bump: str = None):
 
     # ---- 收集正式 Python 包的子模块（有 __init__.py，编译为字节码） ----
     collect_submodules = [
-        "渠系断面设计",
+        "app_渠系计算前端",
         "土石方计算",
     ]
     for mod in collect_submodules:
@@ -342,15 +342,15 @@ def build(bump: str = None):
 
     data_entries = [
         # UI 图标与 Logo
-        (os.path.join(PROJECT_ROOT, "渠系断面设计", "resources"),
-         os.path.join("渠系断面设计", "resources")),
+        (os.path.join(PROJECT_ROOT, "app_渠系计算前端", "resources"),
+         os.path.join("app_渠系计算前端", "resources")),
         (os.path.join(PROJECT_ROOT, "倒虹吸水力计算系统", "resources"),
          os.path.join("倒虹吸水力计算系统", "resources")),
         (os.path.join(PROJECT_ROOT, "推求水面线", "resources"),
          os.path.join("推求水面线", "resources")),
         # JSON 配置文件
-        (os.path.join(PROJECT_ROOT, "渠系断面设计", "default_project.siphon.json"),
-         "渠系断面设计"),
+        (os.path.join(PROJECT_ROOT, "app_渠系计算前端", "default_project.siphon.json"),
+         "app_渠系计算前端"),
     ]
     for src, dest in data_entries:
         if os.path.exists(src):

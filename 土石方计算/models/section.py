@@ -99,7 +99,7 @@ class ChannelType(Enum):
 @dataclass
 class DesignSection:
     """
-    渠道设计断面参数（单个断面类型，与渠系断面设计模块对接）
+    渠道设计断面参数（单个断面类型，与app_渠系计算前端模块对接）
 
     对于梯形明渠：b（底宽）、h（渠深）、m_left/m_right（内坡比）
     对于矩形暗涵：b（底宽）、h（断面高）

@@ -4,7 +4,7 @@
 
 ### 1. 新增 Fluent Design 风格的三按钮对话框
 
-在 `渠系断面设计/styles.py` 中新增了 `fluent_save_discard_cancel()` 函数，用于替代系统原生的 QMessageBox 三按钮对话框。
+在 `app_渠系计算前端/styles.py` 中新增了 `fluent_save_discard_cancel()` 函数，用于替代系统原生的 QMessageBox 三按钮对话框。
 
 **特性：**
 - Win11 Fluent Design 风格
@@ -32,7 +32,7 @@ def fluent_save_discard_cancel(
 
 ### 2. 更新项目管理器对话框
 
-在 `渠系断面设计/project_manager.py` 中：
+在 `app_渠系计算前端/project_manager.py` 中：
 - 导入新的 `fluent_save_discard_cancel` 函数
 - 替换 `_check_save_before_close()` 方法中的 `QMessageBox.question()` 调用
 - 将英文按钮（Save/Discard/Cancel）改为中文（保存/放弃/取消）

@@ -8,7 +8,7 @@ os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
 from PySide6.QtWidgets import QApplication, QWidget
 
-import 渠系断面设计.siphon.panel as siphon_panel_mod
+import app_渠系计算前端.siphon.panel as siphon_panel_mod
 
 
 class _FakeWebEngineView(QWidget):

@@ -20,7 +20,7 @@ sys.path.insert(0, _pkg_root)
 
 from PySide6.QtWidgets import QApplication
 from 推求水面线.managers.siphon_manager import SiphonManager, SiphonConfig
-from 渠系断面设计.siphon.panel import SiphonPanel
+from app_渠系计算前端.siphon.panel import SiphonPanel
 
 
 def _project_path():
@@ -63,7 +63,7 @@ def test_scenario1_same_process_auto_confirm():
     panel2 = SiphonPanel(show_case_management=False, disable_autosave_load=True)
 
     # 加载配置（模拟 MultiSiphonDialog._config_to_panel_dict）
-    from 渠系断面设计.siphon.multi_siphon_dialog import MultiSiphonDialog
+    from app_渠系计算前端.siphon.multi_siphon_dialog import MultiSiphonDialog
     from types import SimpleNamespace
     fake_dialog = SimpleNamespace(manager=manager)
 
@@ -116,7 +116,7 @@ def test_scenario2_new_process_no_auto_confirm():
 
     # 加载配置
     panel = SiphonPanel(show_case_management=False, disable_autosave_load=True)
-    from 渠系断面设计.siphon.multi_siphon_dialog import MultiSiphonDialog
+    from app_渠系计算前端.siphon.multi_siphon_dialog import MultiSiphonDialog
     from types import SimpleNamespace
     fake_dialog = SimpleNamespace(manager=manager2)
 

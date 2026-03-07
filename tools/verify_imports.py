@@ -23,7 +23,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 模块搜索路径（与 build.py 保持一致）
 SEARCH_PATHS = [
     PROJECT_ROOT,
-    os.path.join(PROJECT_ROOT, "渠系建筑物断面计算"),
+    os.path.join(PROJECT_ROOT, "calc_渠系计算算法内核"),
     os.path.join(PROJECT_ROOT, "倒虹吸水力计算系统"),
     os.path.join(PROJECT_ROOT, "推求水面线"),
 ]
@@ -35,7 +35,7 @@ CORE_MODULES = {
         "version",
         "updater",
     ],
-    "渠系建筑物断面计算": [
+    "calc_渠系计算算法内核": [
         "明渠设计",
         "渡槽设计",
         "隧洞设计",

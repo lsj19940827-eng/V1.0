@@ -12,7 +12,7 @@ import shutil
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "渠系建筑物断面计算"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "calc_渠系计算算法内核"))
 
 from 有压管道设计 import (
     run_batch_scan, BatchScanConfig, BatchScanResult,

@@ -2,7 +2,7 @@
 """倒虹吸统一架构自动确认测试
 
 测试场景：
-1. 渠系断面设计模块：单倒虹吸面板自动确认
+1. app_渠系计算前端模块：单倒虹吸面板自动确认
 2. 推求水面线模块：多倒虹吸窗口自动确认
 3. 数据迁移：autosave 数据迁移到 SiphonManager
 """
@@ -18,7 +18,7 @@ sys.path.insert(0, _pkg_root)
 
 from PySide6.QtWidgets import QApplication
 from 推求水面线.managers.siphon_manager import SiphonManager, SiphonConfig
-from 渠系断面设计.siphon.panel import SiphonPanel
+from app_渠系计算前端.siphon.panel import SiphonPanel
 
 
 def _project_path():
@@ -28,8 +28,8 @@ def _project_path():
 
 
 def test_single_siphon_panel_auto_confirm():
-    """测试渠系断面设计模块的单倒虹吸面板自动确认"""
-    print("\n=== 测试1：渠系断面设计模块 - 单倒虹吸面板 ===")
+    """测试app_渠系计算前端模块的单倒虹吸面板自动确认"""
+    print("\n=== 测试1：app_渠系计算前端模块 - 单倒虹吸面板 ===")
 
     app = QApplication.instance() or QApplication(sys.argv)
     project_path = _project_path()
@@ -136,7 +136,7 @@ def test_multi_siphon_dialog_auto_confirm():
 
     # 同一进程内再次打开
     print("2. 同一进程内再次打开")
-    from 渠系断面设计.siphon.multi_siphon_dialog import MultiSiphonDialog
+    from app_渠系计算前端.siphon.multi_siphon_dialog import MultiSiphonDialog
     from types import SimpleNamespace
     fake_dialog = SimpleNamespace(manager=manager)
 

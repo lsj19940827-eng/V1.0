@@ -384,7 +384,7 @@ P = (B - 2c) + 2 × (h / c_h) × c_hyp
 
 ### 7.1 DXF 断面图导出
 
-**文件**：`渠系断面设计/aqueduct/dxf_export.py`
+**文件**：`app_渠系计算前端/aqueduct/dxf_export.py`
 
 **比例尺选择**：1:20 / 1:50 / 1:100 / 1:200 / 1:500
 
@@ -406,7 +406,7 @@ P = (B - 2c) + 2 × (h / c_h) × c_hyp
 
 **依赖**：`ezdxf` 库，缺失时 `ImportError` 提示安装。
 
-共用工具函数来自 `渠系断面设计/open_channel/dxf_export.py`：`_add_layer`、`_add_dim_h`、`_add_dim_v`、`_add_text_block`。
+共用工具函数来自 `app_渠系计算前端/open_channel/dxf_export.py`：`_add_layer`、`_add_dim_h`、`_add_dim_v`、`_add_text_block`。
 
 ### 7.2 Word 计算书导出
 
@@ -421,7 +421,7 @@ P = (B - 2c) + 2 × (h / c_h) × c_hyp
 
 **依赖**：`python-docx`、`latex2mathml`、`lxml`，缺失时 InfoBar 提示安装命令。
 
-共用工具函数来自 `渠系断面设计/export_utils.py`：`create_styled_doc`、`doc_add_h1`、`doc_add_formula`、`doc_render_calc_text`、`doc_add_figure` 等。
+共用工具函数来自 `app_渠系计算前端/export_utils.py`：`create_styled_doc`、`doc_add_h1`、`doc_add_formula`、`doc_render_calc_text`、`doc_add_figure` 等。
 
 ### 7.3 计算结果显示
 
@@ -454,10 +454,10 @@ P = (B - 2c) + 2 × (h / c_h) × c_hyp
 ## 8. 文件结构
 
 ```
-渠系建筑物断面计算/
+calc_渠系计算算法内核/
   └── 渡槽设计.py              # 计算引擎（纯算法，无UI依赖）
 
-渠系断面设计/
+app_渠系计算前端/
   └── aqueduct/
       ├── __init__.py           # 模块声明
       ├── panel.py              # UI面板 (AqueductPanel : QWidget)
@@ -514,10 +514,10 @@ P = (B - 2c) + 2 × (h / c_h) × c_hyp
 
 | 依赖模块 | 导入内容 | 说明 |
 |---------|---------|------|
-| `渠系断面设计.styles` | 颜色/样式常量、`fluent_question` | 统一风格 |
-| `渠系断面设计.export_utils` | Word 导出工具函数 | 共享文档生成 |
-| `渠系断面设计.formula_renderer` | HTML 公式渲染器 | 计算结果显示 |
-| `渠系断面设计.open_channel.dxf_export` | DXF 绘图工具函数 | 共享标注函数 |
+| `app_渠系计算前端.styles` | 颜色/样式常量、`fluent_question` | 统一风格 |
+| `app_渠系计算前端.export_utils` | Word 导出工具函数 | 共享文档生成 |
+| `app_渠系计算前端.formula_renderer` | HTML 公式渲染器 | 计算结果显示 |
+| `app_渠系计算前端.open_channel.dxf_export` | DXF 绘图工具函数 | 共享标注函数 |
 
 ---
 

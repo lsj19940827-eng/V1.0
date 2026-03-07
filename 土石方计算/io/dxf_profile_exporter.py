@@ -609,7 +609,7 @@ class LongitudinalDXFExporter:
     """
     纵断面 DXF 导出器
 
-    复用水面线模块的格式（`渠系断面设计/water_profile/cad_tools.py`），
+    复用水面线模块的格式（`app_渠系计算前端/water_profile/cad_tools.py`），
     新增「地面高程」和「挖深/填高」数据行。
 
     Usage

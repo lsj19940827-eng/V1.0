@@ -351,9 +351,9 @@ class ReleaseWindow(QWidget):
         self.resize(780, 760)
 
         # 窗口图标
-        _logo = os.path.join(PROJECT_ROOT, "渠系断面设计", "resources", "logo.ico")
+        _logo = os.path.join(PROJECT_ROOT, "app_渠系计算前端", "resources", "logo.ico")
         if not os.path.exists(_logo):
-            _logo = os.path.join(PROJECT_ROOT, "渠系断面设计", "resources", "logo.svg")
+            _logo = os.path.join(PROJECT_ROOT, "app_渠系计算前端", "resources", "logo.svg")
         if os.path.exists(_logo):
             self.setWindowIcon(QIcon(_logo))
         self._bridge = SignalBridge()
@@ -388,9 +388,9 @@ class ReleaseWindow(QWidget):
         title_row = QHBoxLayout()
         title_row.setSpacing(10)
 
-        _logo_path = os.path.join(PROJECT_ROOT, "渠系断面设计", "resources", "logo.ico")
+        _logo_path = os.path.join(PROJECT_ROOT, "app_渠系计算前端", "resources", "logo.ico")
         if not os.path.exists(_logo_path):
-            _logo_path = os.path.join(PROJECT_ROOT, "渠系断面设计", "resources", "logo.svg")
+            _logo_path = os.path.join(PROJECT_ROOT, "app_渠系计算前端", "resources", "logo.svg")
         if os.path.exists(_logo_path):
             logo_lbl = QLabel()
             logo_lbl.setFixedSize(36, 36)

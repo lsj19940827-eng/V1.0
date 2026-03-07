@@ -3,7 +3,7 @@
 > 文档类型：现状功能PRD（基于已实现代码）  
 > 适用版本：渠系建筑物水力计算系统 V1.0  
 > 基线日期：2026-03-04  
-> 主要依据：`渠系断面设计/app.py`、`渠系断面设计/project_manager.py` 及各面板 `to_project_dict/from_project_dict`
+> 主要依据：`app_渠系计算前端/app.py`、`app_渠系计算前端/project_manager.py` 及各面板 `to_project_dict/from_project_dict`
 
 ---
 
@@ -439,8 +439,8 @@
 
 ## 11. 附：与“项目管理按钮”直接相关的代码入口
 
-1. 菜单与动作定义：`渠系断面设计/app.py`
-2. 项目管理核心逻辑：`渠系断面设计/project_manager.py`
-3. 保存确认对话框：`渠系断面设计/styles.py` 中 `fluent_save_discard_cancel`
+1. 菜单与动作定义：`app_渠系计算前端/app.py`
+2. 项目管理核心逻辑：`app_渠系计算前端/project_manager.py`
+3. 保存确认对话框：`app_渠系计算前端/styles.py` 中 `fluent_save_discard_cancel`
 4. 各模块序列化接口：各 `panel.py` 的 `to_project_dict/from_project_dict`
 

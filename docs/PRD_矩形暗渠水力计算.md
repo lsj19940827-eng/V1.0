@@ -36,9 +36,9 @@
 
 ```
 项目根目录/
-├── 渠系建筑物断面计算/
+├── calc_渠系计算算法内核/
 │   └── 矩形暗涵设计.py              # 计算内核（纯算法，无UI依赖）
-├── 渠系断面设计/
+├── app_渠系计算前端/
 │   └── culvert/
 │       ├── __init__.py               # 模块声明
 │       ├── panel.py                  # UI面板（CulvertPanel, QWidget）
@@ -54,11 +54,11 @@
 ```
 panel.py
   ├── 矩形暗涵设计.py          (计算内核)
-  ├── 渠系断面设计/styles.py    (共享样式常量)
-  ├── 渠系断面设计/export_utils.py  (Word导出工具)
-  ├── 渠系断面设计/formula_renderer.py  (公式渲染: SVG + QWebEngineView)
+  ├── app_渠系计算前端/styles.py    (共享样式常量)
+  ├── app_渠系计算前端/export_utils.py  (Word导出工具)
+  ├── app_渠系计算前端/formula_renderer.py  (公式渲染: SVG + QWebEngineView)
   └── culvert/dxf_export.py    (DXF导出)
-        └── 渠系断面设计/open_channel/dxf_export.py  (共享DXF绘图函数)
+        └── app_渠系计算前端/open_channel/dxf_export.py  (共享DXF绘图函数)
 ```
 
 ### 2.2 第三方依赖

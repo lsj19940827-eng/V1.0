@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayou
 # 添加项目路径
 sys.path.insert(0, '.')
 
-from 渠系断面设计.styles import fluent_save_discard_cancel
+from app_渠系计算前端.styles import fluent_save_discard_cancel
 
 
 class TestWindow(QMainWindow):

@@ -17,7 +17,7 @@
 12. 边界条件与异常输入
 """
 import sys, os, math
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "渠系建筑物断面计算"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "calc_渠系计算算法内核"))
 
 from 隧洞设计 import (
     calculate_circular_area, calculate_circular_perimeter,

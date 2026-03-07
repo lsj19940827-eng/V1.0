@@ -103,7 +103,7 @@
 
 ## 关键文件修改清单
 
-### 1. 新建文件：`渠系断面设计/project_manager.py`
+### 1. 新建文件：`app_渠系计算前端/project_manager.py`
 
 **ProjectManager 类**：项目保存/加载的核心管理器
 
@@ -129,7 +129,7 @@ class ProjectManager(QObject):
     def mark_dirty(self)             # 标记为已修改
 ```
 
-### 2. 修改：`渠系断面设计/app.py`
+### 2. 修改：`app_渠系计算前端/app.py`
 
 - 创建 `ProjectManager` 实例并注入
 - 替换侧边栏"项目设置"按钮为"项目管理"按钮 + QMenu弹出菜单
@@ -138,14 +138,14 @@ class ProjectManager(QObject):
 - 修改 `closeEvent()` 添加保存提示逻辑
 - 连接 `project_changed` 和 `dirty_changed` 信号到窗口标题更新
 
-### 3. 修改：`渠系断面设计/batch/panel.py`
+### 3. 修改：`app_渠系计算前端/batch/panel.py`
 
 新增两个方法：
 - `to_project_dict()` - 序列化输入表格数据
 - `from_project_dict(d)` - 反序列化恢复输入表格
 - 连接 `input_table.cellChanged` 到 `mark_dirty()`
 
-### 4. 修改：`渠系断面设计/water_profile/panel.py`
+### 4. 修改：`app_渠系计算前端/water_profile/panel.py`
 
 新增两个方法：
 - `to_project_dict()` - 序列化所有设置和节点数据

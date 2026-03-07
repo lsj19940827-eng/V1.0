@@ -29,10 +29,10 @@
 ## 二、文件结构
 
 ```
-渠系建筑物断面计算/
+calc_渠系计算算法内核/
   └── 明渠设计.py              # 计算引擎（1513行）
 
-渠系断面设计/
+app_渠系计算前端/
   └── open_channel/
       ├── __init__.py           # 模块声明
       ├── panel.py              # UI面板（1341行）
@@ -49,11 +49,11 @@
 
 ### 2.2 共享模块依赖
 
-- `渠系断面设计/styles.py` — 全局样式常量（颜色、字体、布局）
-- `渠系断面设计/export_utils.py` — Word导出工具（OMML公式转换、styled表格）
-- `渠系断面设计/formula_renderer.py` — KaTeX/SVG公式渲染器
-- `渠系断面设计/frozen_table.py` — 冻结列表格控件（批量面板使用）
-- `渠系断面设计/structure_type_selector.py` — 结构类型分类选择器（批量面板使用）
+- `app_渠系计算前端/styles.py` — 全局样式常量（颜色、字体、布局）
+- `app_渠系计算前端/export_utils.py` — Word导出工具（OMML公式转换、styled表格）
+- `app_渠系计算前端/formula_renderer.py` — KaTeX/SVG公式渲染器
+- `app_渠系计算前端/frozen_table.py` — 冻结列表格控件（批量面板使用）
+- `app_渠系计算前端/structure_type_selector.py` — 结构类型分类选择器（批量面板使用）
 
 ---
 
@@ -594,7 +594,7 @@ QHBoxLayout
 
 ### 8.1 批量计算面板
 
-`渠系断面设计/batch/panel.py` 支持明渠所有断面类型的批量输入、计算和结果汇总。
+`app_渠系计算前端/batch/panel.py` 支持明渠所有断面类型的批量输入、计算和结果汇总。
 
 结构类型映射：`明渠-梯形`, `明渠-矩形`, `明渠-圆形`
 

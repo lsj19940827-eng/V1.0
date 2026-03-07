@@ -4,7 +4,7 @@ import sys, math, traceback, io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.path.insert(0, r'C:\Users\大渔\Desktop\V1.0')
 
-from 渠系建筑物断面计算.渡槽设计 import (
+from calc_渠系计算算法内核.渡槽设计 import (
     calculate_u_hydro_elements, calculate_u_total_area,
     calculate_u_water_depth, calculate_rect_hydro_elements,
     calculate_rect_hydro_elements_with_chamfer, calculate_rect_water_depth,

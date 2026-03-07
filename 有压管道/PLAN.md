@@ -16,10 +16,10 @@
 - 批量参数默认值可编辑，后台线程执行，输出目录每次选择
 
 ### 目标文件
-- 新增内核：[有压管道设计.py](C:/Users/大渔/Desktop/V1.0/渠系建筑物断面计算/有压管道设计.py)
-- 新增面板包：[__init__.py](C:/Users/大渔/Desktop/V1.0/渠系断面设计/pressure_pipe/__init__.py)
-- 新增面板：[panel.py](C:/Users/大渔/Desktop/V1.0/渠系断面设计/pressure_pipe/panel.py)
-- 主程序导航接入：[app.py](C:/Users/大渔/Desktop/V1.0/渠系断面设计/app.py)
+- 新增内核：[有压管道设计.py](C:/Users/大渔/Desktop/V1.0/calc_渠系计算算法内核/有压管道设计.py)
+- 新增面板包：[__init__.py](C:/Users/大渔/Desktop/V1.0/app_渠系计算前端/pressure_pipe/__init__.py)
+- 新增面板：[panel.py](C:/Users/大渔/Desktop/V1.0/app_渠系计算前端/pressure_pipe/panel.py)
+- 主程序导航接入：[app.py](C:/Users/大渔/Desktop/V1.0/app_渠系计算前端/app.py)
 - 打包脚本更新：[build.py](C:/Users/大渔/Desktop/V1.0/tools/build.py)
 - 依赖更新：[requirements.txt](C:/Users/大渔/Desktop/V1.0/tools/requirements.txt)
 - 新增测试：[test_pressure_pipe_kernel.py](C:/Users/大渔/Desktop/V1.0/tests/test_pressure_pipe_kernel.py)

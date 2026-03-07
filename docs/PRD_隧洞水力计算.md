@@ -28,10 +28,10 @@
 ## 2. 文件结构
 
 ```
-渠系建筑物断面计算/
+calc_渠系计算算法内核/
   隧洞设计.py              # 计算内核（1154行）
 
-渠系断面设计/
+app_渠系计算前端/
   tunnel/
     __init__.py            # 模块声明
     panel.py               # UI面板 TunnelPanel（1069行）
@@ -456,7 +456,7 @@ matplotlib 绘制，1行2列子图:
 
 ### 8.5 公共绘图工具
 
-复用自 `渠系断面设计.open_channel.dxf_export`:
+复用自 `app_渠系计算前端.open_channel.dxf_export`:
 - `_add_layer()`: 创建图层
 - `_add_dim_h()`: 水平尺寸标注
 - `_add_dim_v()`: 垂直尺寸标注
@@ -488,7 +488,7 @@ matplotlib 绘制，1行2列子图:
 
 ### 10.1 公开函数
 
-文件: `渠系建筑物断面计算/隧洞设计.py`
+文件: `calc_渠系计算算法内核/隧洞设计.py`
 
 | 函数 | 说明 |
 |------|------|
@@ -639,10 +639,10 @@ DIM_INCREMENT = 0.01             # 尺寸搜索步长
 
 ### 14.1 主应用注册
 
-文件: `渠系断面设计/app.py`
+文件: `app_渠系计算前端/app.py`
 
 ```python
-from 渠系断面设计.tunnel.panel import TunnelPanel
+from app_渠系计算前端.tunnel.panel import TunnelPanel
 self.tunnel_panel = TunnelPanel()
 self.stack.addWidget(self.tunnel_panel)
 ```
@@ -651,7 +651,7 @@ self.stack.addWidget(self.tunnel_panel)
 
 ### 14.2 内核导入路径
 
-`panel.py` 通过 `sys.path` 注入 `渠系建筑物断面计算/` 目录后导入:
+`panel.py` 通过 `sys.path` 注入 `calc_渠系计算算法内核/` 目录后导入:
 ```python
 from 隧洞设计 import (
     quick_calculate_circular,
@@ -663,12 +663,12 @@ from 隧洞设计 import (
 
 ### 14.3 样式复用
 
-从 `渠系断面设计.styles` 导入共享样式常量:
+从 `app_渠系计算前端.styles` 导入共享样式常量:
 `P, S, W, E, BG, CARD, BD, T1, T2, INPUT_LABEL_STYLE, INPUT_SECTION_STYLE, INPUT_HINT_STYLE`
 
-从 `渠系断面设计.export_utils` 导入共享导出工具。
+从 `app_渠系计算前端.export_utils` 导入共享导出工具。
 
-从 `渠系断面设计.formula_renderer` 导入公式渲染工具:
+从 `app_渠系计算前端.formula_renderer` 导入公式渲染工具:
 `plain_text_to_formula_html, load_formula_page, make_plain_html, HelpPageBuilder`
 
 ---

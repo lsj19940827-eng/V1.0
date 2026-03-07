@@ -24,9 +24,9 @@
 
 | 功能 | 文件路径 |
 |------|----------|
-| 计算内核 | `渠系建筑物断面计算/有压管道设计.py` |
-| UI面板 | `渠系断面设计/pressure_pipe/panel.py` |
-| 主程序接入 | `渠系断面设计/app.py` |
+| 计算内核 | `calc_渠系计算算法内核/有压管道设计.py` |
+| UI面板 | `app_渠系计算前端/pressure_pipe/panel.py` |
+| 主程序接入 | `app_渠系计算前端/app.py` |
 
 ### 2.2 内核接口（有压管道设计.py）
 
@@ -100,7 +100,7 @@ $$h_f = f \times L \times \frac{Q^m}{d^b}$$
     ├── enums.py                       # StructureType.PRESSURE_PIPE
     └── data_models.py                 # ChannelNode.is_pressure_pipe, external_head_loss
 
-渠系断面设计/
+app_渠系计算前端/
 ├── batch/panel.py                     # 批量计算面板（有压管道占位行）
 └── water_profile/panel.py             # 水面线面板（有压管道计算按钮 + 集成）
 ```
@@ -452,15 +452,15 @@ $$h_f = f \times L \times \frac{Q_{m^3/h}^m}{d_{mm}^b}$$
 
 | 功能 | 文件路径 |
 |------|----------|
-| 有压管道设计内核（V9） | `渠系建筑物断面计算/有压管道设计.py` |
-| 有压管道设计面板 | `渠系断面设计/pressure_pipe/panel.py` |
+| 有压管道设计内核（V9） | `calc_渠系计算算法内核/有压管道设计.py` |
+| 有压管道设计面板 | `app_渠系计算前端/pressure_pipe/panel.py` |
 | 水头损失计算核心 | `推求水面线/core/pressure_pipe_calc.py` |
 | 简版数据提取器（batch用） | `推求水面线/core/pressure_pipe_data.py` |
 | 完整版数据提取器（水面线用） | `推求水面线/utils/pressure_pipe_extractor.py` |
 | 持久化管理器 | `推求水面线/managers/pressure_pipe_manager.py` |
 | 结果辅助函数 | `推求水面线/utils/pressure_pipe_result_helpers.py` |
-| 批量计算面板 | `渠系断面设计/batch/panel.py` |
-| 水面线面板 | `渠系断面设计/water_profile/panel.py` |
+| 批量计算面板 | `app_渠系计算前端/batch/panel.py` |
+| 水面线面板 | `app_渠系计算前端/water_profile/panel.py` |
 | 枚举定义 | `推求水面线/models/enums.py` |
 | 数据模型 | `推求水面线/models/data_models.py` |
 | 倒虹吸系数服务（复用） | `倒虹吸水力计算系统/siphon_coefficients.py` |
