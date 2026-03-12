@@ -1,0 +1,372 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>推求水面线工具栏预览 v3（强差异版）</title>
+<style>
+  :root {
+    --bg: #f3f6fb;
+    --card: #ffffff;
+    --line: #d9e2ef;
+    --text: #1f2937;
+    --muted: #64748b;
+    --tab: #e8eef7;
+    --tab-active: #1e88f5;
+    --primary: #0e9fb0;
+    --preview-w: 100%;
+  }
+  * { box-sizing: border-box; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--text); }
+
+  .page { width: 100%; max-width: 1920px; margin: 14px auto; padding: 0 10px 20px; }
+
+  .top-note {
+    background: #eef6ff; border: 1px solid #bfdbfe; color: #1e3a8a;
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 10px;
+    font-size: 14px; line-height: 1.5;
+  }
+
+  .controls {
+    position: sticky; top: 0; z-index: 20;
+    background: #fff; border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 10px; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .controls .label { font-weight: 700; color: #0f172a; margin-right: 2px; }
+  .chip {
+    border: 1px solid #cbd5e1; border-radius: 999px;
+    background: #f8fafc; color: #0f172a;
+    padding: 5px 11px; font-size: 13px; cursor: pointer;
+  }
+  .chip.active { background: #0ea5e9; color: #fff; border-color: #0ea5e9; }
+
+  .preview-frame {
+    width: var(--preview-w);
+    margin: 0 auto;
+    transition: width .2s ease;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  @media (max-width: 1400px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--card);
+    border: 2px solid #dbe4f0;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, .05);
+  }
+
+  .card-title {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; padding: 8px 10px;
+    background: #f8fafc; border-bottom: 1px dashed #d7e0eb;
+    font-weight: 700;
+  }
+  .tag { font-size: 12px; color: var(--muted); font-weight: 500; }
+
+  .tabs {
+    display: flex; border-bottom: 1px solid var(--line); background: #f8fbff;
+  }
+  .tab {
+    padding: 9px 12px; border-right: 1px solid #dce7f5;
+    background: var(--tab); font-size: 16px; white-space: nowrap;
+  }
+  .tab.active { background: var(--tab-active); color: #fff; font-weight: 700; }
+  .tab-spacer { flex: 1; }
+
+  .toolbar { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row + .row { margin-top: 8px; }
+
+  .title { font-size: 15px; font-weight: 800; white-space: nowrap; }
+  .lbl { font-size: 14px; white-space: nowrap; }
+  .input {
+    border: 1px solid #cfd8e3; border-radius: 8px; background: #fff;
+    min-width: 200px; max-width: 320px; width: clamp(200px, 18vw, 320px);
+    padding: 6px 10px; font-size: 14px;
+  }
+  .btn {
+    border: 1px solid #cfd8e3; border-radius: 9px; background: #f8fafc;
+    font-size: 14px; padding: 7px 12px; white-space: nowrap;
+  }
+  .btn.primary { background: var(--primary); color: #fff; border-color: #0f8ea0; }
+  .spacer { flex: 1; }
+
+  .check {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 14px; white-space: nowrap;
+  }
+  .box {
+    width: 22px; height: 22px; border-radius: 6px;
+    border: 2px solid #9ca3af; background: #fff;
+    display: inline-flex; justify-content: center; align-items: center;
+    color: #fff; font-size: 14px;
+  }
+  .box.on { background: #0891b2; border-color: #0891b2; }
+
+  .sub-toolbar { padding: 8px 10px; }
+  .sub-row {
+    display: flex; align-items: center; gap: 8px;
+    flex-wrap: nowrap; overflow-x: auto;
+  }
+  .hint { color: #0b5cad; font-size: 13px; font-weight: 700; white-space: nowrap; }
+
+  .outline-a { outline: 2px dashed #93c5fd; outline-offset: 2px; }
+  .outline-b { outline: 2px dashed #86efac; outline-offset: 2px; }
+  .outline-c { outline: 2px dashed #f9a8d4; outline-offset: 2px; }
+
+  /* --- A1: 顶行右对齐 --- */
+  .a1 .row-top { justify-content: space-between; }
+  .a1 .left-pack { display: flex; align-items: center; gap: 8px; }
+  .a1 .opts { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+  /* --- A2: 顶行复选框与下行按钮左边界对齐 --- */
+  .a2 .row-top {
+    display: grid;
+    grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr);
+    align-items: center;
+    gap: 8px;
+  }
+  .a2 .left-pack { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .a2 .opts { display: flex; align-items: center; gap: 10px; justify-content: flex-start; }
+  .a2 .row-btn { justify-content: flex-start; }
+
+  /* --- A3: 顶行复选框浅底分组，视觉焦点 --- */
+  .a3 .row-top { justify-content: space-between; }
+  .a3 .left-pack { display: flex; align-items: center; gap: 8px; }
+  .a3 .opts {
+    display: flex; align-items: center; gap: 10px;
+    padding: 5px 10px; border: 1px solid #bfdbfe; border-radius: 10px; background: #f1f7ff;
+  }
+
+  /* --- A4: 选项居中，按钮靠左（差异最明显） --- */
+  .a4 .row-top { justify-content: center; }
+  .a4 .left-pack { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+  .a4 .opts { display: flex; align-items: center; gap: 10px; margin: 0 auto; }
+  .a4 .row-btn { justify-content: flex-start; }
+
+  /* 窄窗口：自动两行（你指定的策略） */
+  @media (max-width: 1250px) {
+    .a1 .row-top, .a2 .row-top, .a3 .row-top, .a4 .row-top {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+    }
+    .a1 .opts, .a2 .opts, .a3 .opts, .a4 .opts { margin-left: 0; }
+    .row-btn { overflow-x: auto; }
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="top-note">
+      <b>v3 说明：</b>上个版本差异不明显，这版把四个方案做成<strong>强对比</strong>（边界框 + 对齐策略 + 分组样式差异），并加了“模拟窗口宽度”。
+      你在浏览器 100% 缩放也能看出区别。
+    </div>
+
+    <div class="controls" id="controls">
+      <span class="label">模拟窗口宽度：</span>
+      <button class="chip active" data-w="100%">自适应</button>
+      <button class="chip" data-w="1600px">1600</button>
+      <button class="chip" data-w="1440px">1440</button>
+      <button class="chip" data-w="1280px">1280</button>
+      <button class="chip" data-w="1180px">1180</button>
+      <span style="margin-left:8px;color:#64748b;font-size:12px;">（点击切换，看窄窗口自动两行效果）</span>
+    </div>
+
+    <div class="preview-frame" id="frame">
+      <div class="grid">
+
+        <section class="card a1">
+          <div class="card-title">
+            <span>A1：顶行右对齐（已按你要求调整）</span>
+            <span class="tag">特点：应用到表1位于输入框后、复选框前</span>
+          </div>
+          <div class="tabs">
+            <div class="tab active">表1：基本参数输入</div>
+            <div class="tab">表2：断面计算结果</div>
+            <div class="tab">表3：水面线计算表</div>
+            <div class="tab">结果与导出</div>
+            <div class="tab-spacer"></div>
+          </div>
+          <div class="toolbar">
+            <div class="row row-top outline-a">
+              <div class="left-pack outline-b">
+                <span class="title">表1：基本参数输入</span>
+                <span class="lbl">流量段设置(m³/s):</span>
+                <span class="input">5.0, 4.0, 3.0</span>
+              </div>
+              <button class="btn">应用到表1</button>
+              <div class="opts outline-c">
+                <span class="check"><span class="box on">✓</span>考虑加大流量</span>
+                <span class="check"><span class="box"></span>展示详细计算过程</span>
+              </div>
+            </div>
+            <div class="row row-btn">
+              <button class="btn primary">导入Excel</button>
+              <button class="btn primary">开始批量计算</button>
+              <button class="btn">示例数据 ⌄</button>
+              <button class="btn">打开Excel模板 ⌄</button>
+            </div>
+          </div>
+          <div class="sub-toolbar">
+            <div class="sub-row">
+              <button class="btn">新增行</button><button class="btn">插入行</button><button class="btn">删除行</button>
+              <button class="btn">复制行</button><button class="btn">清空输入</button><button class="btn">清空表1/表2</button><button class="btn">参数设置</button>
+              <span class="spacer"></span>
+              <span class="hint">提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card a2">
+          <div class="card-title">
+            <span>A2：复选框与按钮左边界对齐</span>
+            <span class="tag">特点：更工整，左起线统一</span>
+          </div>
+          <div class="tabs">
+            <div class="tab active">表1：基本参数输入</div>
+            <div class="tab">表2：断面计算结果</div>
+            <div class="tab">表3：水面线计算表</div>
+            <div class="tab">结果与导出</div>
+            <div class="tab-spacer"></div>
+          </div>
+          <div class="toolbar">
+            <div class="row row-top outline-a">
+              <div class="left-pack outline-b">
+                <span class="title">表1：基本参数输入</span>
+                <span class="lbl">流量段设置(m³/s):</span>
+                <span class="input">5.0, 4.0, 3.0</span>
+              </div>
+              <div class="opts outline-c">
+                <span class="check"><span class="box on">✓</span>考虑加大流量</span>
+                <span class="check"><span class="box"></span>展示详细计算过程</span>
+              </div>
+            </div>
+            <div class="row row-btn">
+              <button class="btn">应用到表1</button>
+              <button class="btn primary">导入Excel</button>
+              <button class="btn primary">开始批量计算</button>
+              <button class="btn">示例数据 ⌄</button>
+              <button class="btn">打开Excel模板 ⌄</button>
+            </div>
+          </div>
+          <div class="sub-toolbar">
+            <div class="sub-row">
+              <button class="btn">新增行</button><button class="btn">插入行</button><button class="btn">删除行</button>
+              <button class="btn">复制行</button><button class="btn">清空输入</button><button class="btn">清空表1/表2</button><button class="btn">参数设置</button>
+              <span class="spacer"></span>
+              <span class="hint">提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card a3">
+          <div class="card-title">
+            <span>A3：复选框浅底分组</span>
+            <span class="tag">特点：选项更显眼，适合新用户</span>
+          </div>
+          <div class="tabs">
+            <div class="tab active">表1：基本参数输入</div>
+            <div class="tab">表2：断面计算结果</div>
+            <div class="tab">表3：水面线计算表</div>
+            <div class="tab">结果与导出</div>
+            <div class="tab-spacer"></div>
+          </div>
+          <div class="toolbar">
+            <div class="row row-top outline-a">
+              <div class="left-pack outline-b">
+                <span class="title">表1：基本参数输入</span>
+                <span class="lbl">流量段设置(m³/s):</span>
+                <span class="input">5.0, 4.0, 3.0</span>
+              </div>
+              <div class="opts outline-c">
+                <span class="check"><span class="box on">✓</span>考虑加大流量</span>
+                <span class="check"><span class="box"></span>展示详细计算过程</span>
+              </div>
+            </div>
+            <div class="row row-btn">
+              <button class="btn">应用到表1</button>
+              <button class="btn primary">导入Excel</button>
+              <button class="btn primary">开始批量计算</button>
+              <button class="btn">示例数据 ⌄</button>
+              <button class="btn">打开Excel模板 ⌄</button>
+            </div>
+          </div>
+          <div class="sub-toolbar">
+            <div class="sub-row">
+              <button class="btn">新增行</button><button class="btn">插入行</button><button class="btn">删除行</button>
+              <button class="btn">复制行</button><button class="btn">清空输入</button><button class="btn">清空表1/表2</button><button class="btn">参数设置</button>
+              <span class="spacer"></span>
+              <span class="hint">提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card a4">
+          <div class="card-title">
+            <span>A4：复选框顶行居中（最不一样）</span>
+            <span class="tag">特点：视觉中心明显，紧凑感最强</span>
+          </div>
+          <div class="tabs">
+            <div class="tab active">表1：基本参数输入</div>
+            <div class="tab">表2：断面计算结果</div>
+            <div class="tab">表3：水面线计算表</div>
+            <div class="tab">结果与导出</div>
+            <div class="tab-spacer"></div>
+          </div>
+          <div class="toolbar">
+            <div class="row row-top outline-a">
+              <div class="left-pack outline-b">
+                <span class="title">表1：基本参数输入</span>
+                <span class="lbl">流量段设置(m³/s):</span>
+                <span class="input">5.0, 4.0, 3.0</span>
+              </div>
+              <div class="opts outline-c">
+                <span class="check"><span class="box on">✓</span>考虑加大流量</span>
+                <span class="check"><span class="box"></span>展示详细计算过程</span>
+              </div>
+            </div>
+            <div class="row row-btn">
+              <button class="btn">应用到表1</button>
+              <button class="btn primary">导入Excel</button>
+              <button class="btn primary">开始批量计算</button>
+              <button class="btn">示例数据 ⌄</button>
+              <button class="btn">打开Excel模板 ⌄</button>
+            </div>
+          </div>
+          <div class="sub-toolbar">
+            <div class="sub-row">
+              <button class="btn">新增行</button><button class="btn">插入行</button><button class="btn">删除行</button>
+              <button class="btn">复制行</button><button class="btn">清空输入</button><button class="btn">清空表1/表2</button><button class="btn">参数设置</button>
+              <span class="spacer"></span>
+              <span class="hint">提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型</span>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+
+<script>
+  const frame = document.getElementById('frame');
+  const chips = Array.from(document.querySelectorAll('.chip'));
+  chips.forEach(chip => {
+    chip.addEventListener('click', () => {
+      chips.forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      frame.style.setProperty('--preview-w', chip.dataset.w);
+    });
+  });
+</script>
+</body>
+</html>

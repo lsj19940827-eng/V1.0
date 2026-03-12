@@ -48,6 +48,8 @@ class SiphonGroup:
     downstream_velocity: float = 0.0            # 下游渠道流速 → 出口渐变段末端流速 v₃
     upstream_velocity_increased: float = 0.0    # 上游渠道加大流速 → v₁加大
     downstream_velocity_increased: float = 0.0  # 下游渠道加大流速 → v₃加大
+    upstream_velocity_source: str = "missing"   # 上游流速来源: adjacent / same_section_nearest_channel_fallback / missing
+    downstream_velocity_source: str = "missing"  # 下游流速来源: adjacent / same_section_nearest_channel_fallback / missing
     
     # 上游渠道断面参数（用于自动计算进口渐变段末端流速 v₂）
     upstream_structure_type: Optional[str] = None  # 上游渠道结构类型（如"明渠-梯形"、"明渠-圆形"等）
@@ -106,6 +108,10 @@ class SiphonDataExtractor:
     
     从渠道节点列表中识别和提取倒虹吸分组。
     """
+
+    VELOCITY_SOURCE_ADJACENT = "adjacent"
+    VELOCITY_SOURCE_SAME_SECTION_FALLBACK = "same_section_nearest_channel_fallback"
+    VELOCITY_SOURCE_MISSING = "missing"
     
     @staticmethod
     def extract_siphons(nodes: List[ChannelNode], settings=None) -> List[SiphonGroup]:
@@ -211,154 +217,266 @@ class SiphonDataExtractor:
         - upstream_section_B/h/m → 自动计算进口渐变段末端流速 v₂
         - downstream_velocity → 出口渐变段末端流速 v₃
         """
+        group.upstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_MISSING
+        group.downstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_MISSING
+
         # === 提取上游渠道节点数据 ===
         if group.inlet_row_index >= 0:
+            inlet_section = SiphonDataExtractor._get_flow_section(nodes, group.inlet_row_index)
             upstream_node = SiphonDataExtractor._find_adjacent_channel_node(
                 nodes=nodes,
                 start_index=group.inlet_row_index - 1,
-                step=-1
+                step=-1,
+                target_flow_section=inlet_section
             )
+            if upstream_node is None:
+                upstream_node = SiphonDataExtractor._find_nearest_channel_node_in_same_section(
+                    nodes=nodes,
+                    anchor_index=group.inlet_row_index,
+                    flow_section=inlet_section,
+                    preferred_step=-1
+                )
+                if upstream_node is not None:
+                    group.upstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_SAME_SECTION_FALLBACK
+            else:
+                group.upstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_ADJACENT
+
             if upstream_node is not None:
-                # 提取上游流速
-                if upstream_node.velocity > 0:
-                    group.upstream_velocity = upstream_node.velocity
-                # 提取上游加大流速（批量计算的加大流量工况流速）
-                _v_inc = getattr(upstream_node, 'velocity_increased', 0.0)
-                if _v_inc and _v_inc > 0:
-                    group.upstream_velocity_increased = _v_inc
-
-                # 提取上游结构类型
-                if upstream_node.structure_type is not None:
-                    st_val = (upstream_node.structure_type.value
-                              if hasattr(upstream_node.structure_type, 'value')
-                              else str(upstream_node.structure_type))
-                    group.upstream_structure_type = st_val
-
-                # 提取上游断面参数（B、h、m、D、R_circle）
-                # 注意：m=0 对矩形断面是有效值，需要一并传递
-                sp = upstream_node.section_params or {}
-                B = sp.get("B", 0.0)
-                h = upstream_node.water_depth
-                m = sp.get("m", 0.0)
-                D = sp.get("D", 0.0)
-                R_circle = sp.get("R_circle", 0.0)
-
-                if B > 0 and h > 0:
-                    group.upstream_section_B = B
-                    group.upstream_section_h = h
-                    group.upstream_section_m = m  # m=0 表示矩形断面，也是有效值
-                elif D > 0 and h > 0:
-                    # 圆形断面：B=0 但 D>0，用 D 作为特征宽度
-                    group.upstream_section_B = D  # 以直径作为等效宽度供渐变段计算
-                    group.upstream_section_h = h
-                    group.upstream_section_m = 0
-                elif R_circle > 0 and h > 0:
-                    # U形/马蹄形断面：用 2R 作为特征宽度
-                    group.upstream_section_B = 2 * R_circle
-                    group.upstream_section_h = h
-                    group.upstream_section_m = 0
-
-                # 额外存储上游 D 和 R_circle（供精确计算使用）
-                if D > 0:
-                    group.upstream_section_D = D
-                if R_circle > 0:
-                    group.upstream_section_R = R_circle
-                # 对于圆形/U形等，水深也需要提取
-                if h > 0 and group.upstream_section_h is None:
-                    group.upstream_section_h = h
+                SiphonDataExtractor._apply_upstream_node_data(group, upstream_node)
 
         # === 提取下游渠道节点数据 ===
         if group.outlet_row_index >= 0:
+            outlet_section = SiphonDataExtractor._get_flow_section(nodes, group.outlet_row_index)
             downstream_node = SiphonDataExtractor._find_adjacent_channel_node(
                 nodes=nodes,
                 start_index=group.outlet_row_index + 1,
-                step=1
+                step=1,
+                target_flow_section=outlet_section
             )
+            if downstream_node is None:
+                downstream_node = SiphonDataExtractor._find_nearest_channel_node_in_same_section(
+                    nodes=nodes,
+                    anchor_index=group.outlet_row_index,
+                    flow_section=outlet_section,
+                    preferred_step=1
+                )
+                if downstream_node is not None:
+                    group.downstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_SAME_SECTION_FALLBACK
+            else:
+                group.downstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_ADJACENT
+
             if downstream_node is not None:
-                # 提取下游流速
-                if downstream_node.velocity > 0:
-                    group.downstream_velocity = downstream_node.velocity
-                # 提取下游加大流速（批量计算的加大流量工况流速）
-                _v_inc = getattr(downstream_node, 'velocity_increased', 0.0)
-                if _v_inc and _v_inc > 0:
-                    group.downstream_velocity_increased = _v_inc
-
-                # 提取下游结构类型
-                if downstream_node.structure_type is not None:
-                    st_val = (downstream_node.structure_type.value
-                              if hasattr(downstream_node.structure_type, 'value')
-                              else str(downstream_node.structure_type))
-                    group.downstream_structure_type = st_val
-
-                # 提取下游断面参数（B、h、m、D、R）
-                # 注意：m=0 对矩形断面是有效值，需要一并传递
-                sp = downstream_node.section_params or {}
-                B = sp.get("B", 0.0)
-                h = downstream_node.water_depth
-                m = sp.get("m", 0.0)
-                D = sp.get("D", 0.0)
-                R_circle = sp.get("R_circle", 0.0)
-
-                if B > 0 and h > 0:
-                    group.downstream_section_B = B
-                    group.downstream_section_h = h
-                    group.downstream_section_m = m  # m=0 表示矩形断面，也是有效值
-                elif D > 0 and h > 0:
-                    # 圆形断面：B=0 但 D>0，用 D 作为特征宽度
-                    group.downstream_section_B = D
-                    group.downstream_section_h = h
-                    group.downstream_section_m = 0
-                elif R_circle > 0 and h > 0:
-                    # U形/马蹄形断面：用 2R 作为特征宽度
-                    group.downstream_section_B = 2 * R_circle
-                    group.downstream_section_h = h
-                    group.downstream_section_m = 0
-
-                if D > 0:
-                    group.downstream_section_D = D
-                if R_circle > 0:
-                    group.downstream_section_R = R_circle
-                # 对于圆形/U形等，水深也需要提取
-                if h > 0 and group.downstream_section_h is None:
-                    group.downstream_section_h = h
+                SiphonDataExtractor._apply_downstream_node_data(group, downstream_node)
 
     @staticmethod
     def _find_adjacent_channel_node(
         nodes: List[ChannelNode],
         start_index: int,
-        step: int
+        step: int,
+        target_flow_section: str
     ) -> Optional[ChannelNode]:
         """
-        查找倒虹吸相邻渠道节点（优先真实渠道，回退自动连接段）。
-
-        规则：
-        1. 跳过渐变段和倒虹吸行
-        2. 遇到自动插入连接段先暂存为回退候选，继续搜索真实渠道
-        3. 一旦找到真实渠道立即返回
-        4. 若未找到真实渠道，返回最近的自动连接段候选
+        查找倒虹吸相邻同流量段明渠节点（闸穿透，不跨段）。
         """
-        fallback_auto_node: Optional[ChannelNode] = None
+        target_section = SiphonDataExtractor._normalize_flow_section(target_flow_section)
         i = start_index
         while 0 <= i < len(nodes):
             node = nodes[i]
+            node_section = SiphonDataExtractor._normalize_flow_section(getattr(node, "flow_section", ""))
+            if node_section != target_section:
+                break
+
             if getattr(node, 'is_transition', False):
                 i += step
                 continue
             if SiphonDataExtractor._is_inverted_siphon(node):
                 i += step
                 continue
-
             if getattr(node, 'is_auto_inserted_channel', False):
-                if fallback_auto_node is None:
-                    fallback_auto_node = node
+                i += step
+                continue
+            if SiphonDataExtractor._is_gate_node(node):
+                i += step
+                continue
+            if not SiphonDataExtractor._is_open_channel_node(node):
                 i += step
                 continue
 
-            # 真实渠道优先
             return node
 
-        # 真实渠道缺失时回退自动连接段
-        return fallback_auto_node
+        return None
+
+    @staticmethod
+    def _find_nearest_channel_node_in_same_section(
+        nodes: List[ChannelNode],
+        anchor_index: int,
+        flow_section: str,
+        preferred_step: int
+    ) -> Optional[ChannelNode]:
+        """
+        在同一流量段内查找距离 anchor 最近的明渠节点。
+        若距离相同，优先选择原扫描方向（preferred_step）上的节点。
+        """
+        target_section = SiphonDataExtractor._normalize_flow_section(flow_section)
+        best_node: Optional[ChannelNode] = None
+        best_score = None
+
+        for idx, node in enumerate(nodes):
+            if idx == anchor_index:
+                continue
+
+            node_section = SiphonDataExtractor._normalize_flow_section(getattr(node, "flow_section", ""))
+            if node_section != target_section:
+                continue
+            if getattr(node, 'is_transition', False):
+                continue
+            if SiphonDataExtractor._is_inverted_siphon(node):
+                continue
+            if getattr(node, 'is_auto_inserted_channel', False):
+                continue
+            if SiphonDataExtractor._is_gate_node(node):
+                continue
+            if not SiphonDataExtractor._is_open_channel_node(node):
+                continue
+
+            distance = abs(idx - anchor_index)
+            same_direction = (idx - anchor_index) * preferred_step > 0
+            score = (distance, 0 if same_direction else 1, idx)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_node = node
+
+        return best_node
+
+    @staticmethod
+    def _normalize_flow_section(flow_section) -> str:
+        if flow_section is None:
+            return ""
+        return str(flow_section).strip()
+
+    @staticmethod
+    def _get_flow_section(nodes: List[ChannelNode], row_index: int) -> str:
+        if row_index < 0 or row_index >= len(nodes):
+            return ""
+        return SiphonDataExtractor._normalize_flow_section(getattr(nodes[row_index], "flow_section", ""))
+
+    @staticmethod
+    def _is_open_channel_node(node: ChannelNode) -> bool:
+        st = getattr(node, "structure_type", None)
+        if st is None:
+            return False
+        st_val = st.value if hasattr(st, "value") else str(st)
+        return st_val in {"明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", "矩形"}
+
+    @staticmethod
+    def _is_gate_node(node: ChannelNode) -> bool:
+        if getattr(node, "is_diversion_gate", False):
+            return True
+        st = getattr(node, "structure_type", None)
+        if st is None:
+            return False
+        if hasattr(st, "value"):
+            return StructureType.is_diversion_gate(st)
+        return StructureType.is_diversion_gate_str(str(st))
+
+    @staticmethod
+    def _apply_upstream_node_data(group: SiphonGroup, upstream_node: ChannelNode):
+        # 提取上游流速
+        if upstream_node.velocity > 0:
+            group.upstream_velocity = upstream_node.velocity
+        # 提取上游加大流速（批量计算的加大流量工况流速）
+        _v_inc = getattr(upstream_node, 'velocity_increased', 0.0)
+        if _v_inc and _v_inc > 0:
+            group.upstream_velocity_increased = _v_inc
+
+        # 提取上游结构类型
+        if upstream_node.structure_type is not None:
+            st_val = (upstream_node.structure_type.value
+                      if hasattr(upstream_node.structure_type, 'value')
+                      else str(upstream_node.structure_type))
+            group.upstream_structure_type = st_val
+
+        # 提取上游断面参数（B、h、m、D、R_circle）
+        # 注意：m=0 对矩形断面是有效值，需要一并传递
+        sp = upstream_node.section_params or {}
+        B = sp.get("B", 0.0)
+        h = upstream_node.water_depth
+        m = sp.get("m", 0.0)
+        D = sp.get("D", 0.0)
+        R_circle = sp.get("R_circle", 0.0)
+
+        if B > 0 and h > 0:
+            group.upstream_section_B = B
+            group.upstream_section_h = h
+            group.upstream_section_m = m  # m=0 表示矩形断面，也是有效值
+        elif D > 0 and h > 0:
+            # 圆形断面：B=0 但 D>0，用 D 作为特征宽度
+            group.upstream_section_B = D  # 以直径作为等效宽度供渐变段计算
+            group.upstream_section_h = h
+            group.upstream_section_m = 0
+        elif R_circle > 0 and h > 0:
+            # U形/马蹄形断面：用 2R 作为特征宽度
+            group.upstream_section_B = 2 * R_circle
+            group.upstream_section_h = h
+            group.upstream_section_m = 0
+
+        # 额外存储上游 D 和 R_circle（供精确计算使用）
+        if D > 0:
+            group.upstream_section_D = D
+        if R_circle > 0:
+            group.upstream_section_R = R_circle
+        # 对于圆形/U形等，水深也需要提取
+        if h > 0 and group.upstream_section_h is None:
+            group.upstream_section_h = h
+
+    @staticmethod
+    def _apply_downstream_node_data(group: SiphonGroup, downstream_node: ChannelNode):
+        # 提取下游流速
+        if downstream_node.velocity > 0:
+            group.downstream_velocity = downstream_node.velocity
+        # 提取下游加大流速（批量计算的加大流量工况流速）
+        _v_inc = getattr(downstream_node, 'velocity_increased', 0.0)
+        if _v_inc and _v_inc > 0:
+            group.downstream_velocity_increased = _v_inc
+
+        # 提取下游结构类型
+        if downstream_node.structure_type is not None:
+            st_val = (downstream_node.structure_type.value
+                      if hasattr(downstream_node.structure_type, 'value')
+                      else str(downstream_node.structure_type))
+            group.downstream_structure_type = st_val
+
+        # 提取下游断面参数（B、h、m、D、R）
+        # 注意：m=0 对矩形断面是有效值，需要一并传递
+        sp = downstream_node.section_params or {}
+        B = sp.get("B", 0.0)
+        h = downstream_node.water_depth
+        m = sp.get("m", 0.0)
+        D = sp.get("D", 0.0)
+        R_circle = sp.get("R_circle", 0.0)
+
+        if B > 0 and h > 0:
+            group.downstream_section_B = B
+            group.downstream_section_h = h
+            group.downstream_section_m = m  # m=0 表示矩形断面，也是有效值
+        elif D > 0 and h > 0:
+            # 圆形断面：B=0 但 D>0，用 D 作为特征宽度
+            group.downstream_section_B = D
+            group.downstream_section_h = h
+            group.downstream_section_m = 0
+        elif R_circle > 0 and h > 0:
+            # U形/马蹄形断面：用 2R 作为特征宽度
+            group.downstream_section_B = 2 * R_circle
+            group.downstream_section_h = h
+            group.downstream_section_m = 0
+
+        if D > 0:
+            group.downstream_section_D = D
+        if R_circle > 0:
+            group.downstream_section_R = R_circle
+        # 对于圆形/U形等，水深也需要提取
+        if h > 0 and group.downstream_section_h is None:
+            group.downstream_section_h = h
     
     @staticmethod
     def _extract_transition_forms(group: SiphonGroup, settings):
@@ -469,8 +587,9 @@ class SiphonDataExtractor:
                     })
             
             # 2. 在中间IP点处添加弯管段（不在首尾IP处添加，因为首尾为进出口）
+            # 注意：此处转角来自 geometry_calc 的坐标计算，< 0.1° 视为直线通过（坐标噪声），不生成弯管段
             if 0 < i < len(rows) - 1:
-                if node.turn_angle > 0:
+                if node.turn_angle >= 0.1:
                     radius = node.turn_radius if node.turn_radius > 0 else 0.0
                     arc_len = radius * math.radians(node.turn_angle) if radius > 0 else 0.0
                     plan_segments.append({
@@ -500,8 +619,9 @@ class SiphonDataExtractor:
         feature_points = []
         for i, node in enumerate(rows):
             # 确定转弯类型
+            # 注意：此处转角来自坐标计算，< 0.1° 视为直线通过（坐标噪声），turn_type 设为"无"
             turn_type = "无"
-            if 0 < i < len(rows) - 1 and node.turn_angle > 0:
+            if 0 < i < len(rows) - 1 and node.turn_angle >= 0.1:
                 turn_type = "圆弧" if node.turn_radius > 0 else "折线"
             
             fp = {

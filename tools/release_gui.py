@@ -365,6 +365,9 @@ class ReleaseWindow(QWidget):
         self._step_labels = []
         self._init_ui()
 
+    def _info_parent(self):
+        return self
+
     def _init_ui(self):
         self.setStyleSheet(f"""
             QWidget {{ background: {BG}; font-family: 'Microsoft YaHei', sans-serif; }}
@@ -538,7 +541,7 @@ class ReleaseWindow(QWidget):
             InfoBar.error(
                 title="缺少 Token",
                 content="请在项目根目录 .env 文件中配置 GITHUB_TOKEN",
-                parent=self, position=InfoBarPosition.TOP, duration=5000,
+                parent=self._info_parent(), position=InfoBarPosition.TOP, duration=5000,
             )
             return
 
@@ -635,7 +638,7 @@ class ReleaseWindow(QWidget):
             InfoBar.success(
                 title="发版成功",
                 content=msg,
-                parent=self, position=InfoBarPosition.TOP, duration=8000,
+                parent=self._info_parent(), position=InfoBarPosition.TOP, duration=8000,
             )
             # 更新显示的版本号
             from version import APP_VERSION as new_ver
@@ -652,7 +655,7 @@ class ReleaseWindow(QWidget):
             InfoBar.error(
                 title="发版失败",
                 content=msg[:200],
-                parent=self, position=InfoBarPosition.TOP, duration=8000,
+                parent=self._info_parent(), position=InfoBarPosition.TOP, duration=8000,
             )
 
 

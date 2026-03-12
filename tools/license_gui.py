@@ -173,7 +173,7 @@ class _AddTab(QWidget):
         self.e_name.clear(); self.e_mid.clear(); self.combo.setCurrentIndex(0); self.lbl_date.setText("")
     def _infobar(self, level, title, msg):
         fn = {"success": InfoBar.success, "warning": InfoBar.warning, "error": InfoBar.error, "info": InfoBar.info}[level]
-        fn(title, msg, duration=3000, parent=self._win, position=InfoBarPosition.TOP)
+        fn(title, msg, duration=3000, parent=self._win._info_parent(), position=InfoBarPosition.TOP)
     def _do_add(self):
         name = self.e_name.text().strip(); mid = self.e_mid.text().strip()
         exp = _calc_expire_date(self.combo.currentText())
@@ -253,15 +253,18 @@ class LicenseManager(QMainWindow):
         if not os.path.exists(LEDGER_PATH) or os.path.getsize(LEDGER_PATH) < 10:
             QTimer.singleShot(400, self._auto_pull)
 
+    def _info_parent(self):
+        return self
+
     def _async_sync(self, rows):
         w = _GistWorker("sync", rows)
         def _done(ok):
             if ok:
                 InfoBar.success("台账已同步", "云端台账和黑名单已更新",
-                                duration=3000, parent=self, position=InfoBarPosition.TOP)
+                                duration=3000, parent=self._info_parent(), position=InfoBarPosition.TOP)
             else:
                 InfoBar.error("同步失败", "云端同步失败，请检查网络",
-                              duration=4000, parent=self, position=InfoBarPosition.TOP)
+                              duration=4000, parent=self._info_parent(), position=InfoBarPosition.TOP)
         w.done.connect(_done); w.start(); self._workers.append(w)
 
     def _auto_pull(self):
@@ -269,7 +272,7 @@ class LicenseManager(QMainWindow):
         if isinstance(result, list) and result:
             _save_ledger(result); self.list_tab.refresh()
             InfoBar.success("已恢复", f"从云端恢复 {len(result)} 条授权记录",
-                            duration=3000, parent=self, position=InfoBarPosition.TOP)
+                            duration=3000, parent=self._info_parent(), position=InfoBarPosition.TOP)
 
 
 class _ListTab(QWidget):
@@ -342,7 +345,7 @@ class _ListTab(QWidget):
     # ── 辅助 ─────────────────────────────────────────────────
     def _ib(self, level, title, msg, dur=3000):
         fn = {"s": InfoBar.success, "w": InfoBar.warning, "e": InfoBar.error, "i": InfoBar.info}[level]
-        fn(title, msg, duration=dur, parent=self._win, position=InfoBarPosition.TOP)
+        fn(title, msg, duration=dur, parent=self._win._info_parent(), position=InfoBarPosition.TOP)
 
     def _get_sel(self, from_revoked=False):
         table = self._revoked_table if from_revoked else self._active_table

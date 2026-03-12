@@ -88,6 +88,7 @@ class MultiSiphonDialog(QDialog):
         self.on_import_losses = on_import_losses
         self._siphon_turn_radius_n = siphon_turn_radius_n
         self._show_case_management = bool(show_case_management)
+        self._velocity_source_warnings_shown = False
 
         # 面板字典 {倒虹吸名称: SiphonPanel}
         self.panels: Dict[str, SiphonPanel] = {}
@@ -98,6 +99,7 @@ class MultiSiphonDialog(QDialog):
         self._create_ui()
         print("[DEBUG MultiSiphonDialog] 调用 _load_saved_data()")
         self._load_saved_data()
+        QTimer.singleShot(0, self._show_velocity_source_warnings_once)
         print("[DEBUG MultiSiphonDialog] __init__ 完成")
 
         # 标记第一次显示，用于 showEvent 中的置顶操作
@@ -167,6 +169,7 @@ class MultiSiphonDialog(QDialog):
         self.notebook.setTabsClosable(False)
         self.notebook.setMovable(False)
         main_lay.addWidget(self.notebook, 1)
+        self.notebook.currentChanged.connect(self._on_tab_changed)
 
         # 为每个倒虹吸创建标签页
         for group in self.siphon_groups:
@@ -201,6 +204,13 @@ class MultiSiphonDialog(QDialog):
         # 添加到 TabWidget
         self.notebook.addTab(panel, group.name)
         self.panels[group.name] = panel
+
+    def _on_tab_changed(self, index: int):
+        """切换标签页后，自动聚焦拟定流速输入框"""
+        panel = self.notebook.widget(index)
+        if panel and hasattr(panel, 'edit_v'):
+            panel.edit_v.setFocus()
+            panel.edit_v.selectAll()
 
     def _build_params_from_group(self, group) -> dict:
         """从 SiphonGroup 构建 set_params 所需的参数字典"""
@@ -282,6 +292,76 @@ class MultiSiphonDialog(QDialog):
             params['outlet_downstream_R'] = _dsR
 
         return params
+
+    @staticmethod
+    def _collect_velocity_source_warning_metadata(groups: List) -> Dict[str, List[str]]:
+        """
+        汇总倒虹吸流速来源告警元数据。
+
+        Returns:
+            {
+                "fallback": ["倒虹吸A（上游）", ...],
+                "missing": ["倒虹吸B（下游）", ...],
+            }
+        """
+        source_fallback = "same_section_nearest_channel_fallback"
+        source_missing = "missing"
+
+        fallback_items: List[str] = []
+        missing_items: List[str] = []
+
+        for group in groups or []:
+            up_source = getattr(group, 'upstream_velocity_source', source_missing)
+            down_source = getattr(group, 'downstream_velocity_source', source_missing)
+
+            fallback_sides = []
+            if up_source == source_fallback:
+                fallback_sides.append("上游")
+            if down_source == source_fallback:
+                fallback_sides.append("下游")
+            if fallback_sides:
+                fallback_items.append(f'{group.name}（{"/".join(fallback_sides)}）')
+
+            missing_sides = []
+            if up_source == source_missing:
+                missing_sides.append("上游")
+            if down_source == source_missing:
+                missing_sides.append("下游")
+            if missing_sides:
+                missing_items.append(f'{group.name}（{"/".join(missing_sides)}）')
+
+        return {
+            "fallback": fallback_items,
+            "missing": missing_items,
+        }
+
+    def _show_velocity_source_warnings_once(self):
+        """仅在窗口初始化后汇总提示一次流速来源告警。"""
+        if self._velocity_source_warnings_shown:
+            return
+        self._velocity_source_warnings_shown = True
+
+        metadata = self._collect_velocity_source_warning_metadata(self.siphon_groups)
+        fallback_items = metadata.get("fallback", [])
+        missing_items = metadata.get("missing", [])
+
+        if fallback_items:
+            names_str = "、".join(fallback_items)
+            InfoBar.warning(
+                "已使用同流量段最近明渠兜底",
+                f"以下倒虹吸的 v₁/v₃ 与 v₁加大/v₃加大 已使用同流量段最近明渠兜底：{names_str}\n请核对对应流速。",
+                parent=self, duration=9000,
+                position=InfoBarPosition.TOP
+            )
+
+        if missing_items:
+            names_str = "、".join(missing_items)
+            InfoBar.warning(
+                "同流量段无可用明渠流速",
+                f"以下倒虹吸在同流量段内未找到可用明渠，v₁加大/v₃加大 可能缺失：{names_str}\n请人工确认并补录。",
+                parent=self, duration=10000,
+                position=InfoBarPosition.TOP
+            )
 
     def _make_result_callback(self, siphon_name: str):
         """为指定倒虹吸创建计算结果回调"""
@@ -682,7 +762,6 @@ class MultiSiphonDialog(QDialog):
             first_panel.edit_v.selectAll()
             first_panel._flash_v_field()
             names_str = "、".join(unconfirmed)
-            from qfluentwidgets import InfoBar, InfoBarPosition
             InfoBar.error(
                 "请先输入拟定流速",
                 f'以下倒虹吸的"拟定流速 v"尚未确认: {names_str}\n请逐个输入流速值后再执行批量计算。',
@@ -690,6 +769,20 @@ class MultiSiphonDialog(QDialog):
                 position=InfoBarPosition.TOP
             )
             return
+
+        # 管道根数N：批量计算前仅汇总提醒一次，不阻断
+        unconfirmed_num_pipes = [
+            name for name, panel in self.panels.items()
+            if not getattr(panel, '_num_pipes_user_confirmed', False)
+        ]
+        if unconfirmed_num_pipes:
+            names_str = "、".join(unconfirmed_num_pipes)
+            InfoBar.warning(
+                "请确认管道根数（建议）",
+                f'以下倒虹吸的"管道根数 N"尚未确认：{names_str}\n本次将继续按当前N值执行批量计算。',
+                parent=self, duration=7000,
+                position=InfoBarPosition.TOP
+            )
 
         total = len(self.panels)
         success_count = 0
@@ -703,8 +796,12 @@ class MultiSiphonDialog(QDialog):
         self._update_status(f"正在计算 0/{total}...")
 
         # 2. 抑制所有面板的结果窗口自动弹出 + 水损阈值警告
+        _np_warning_flags = {}
         for panel in self.panels.values():
             panel._suppress_result_display = True
+            # 批量模式下抑制每个面板的N重复提醒，仅保留上面的汇总提示
+            _np_warning_flags[panel] = getattr(panel, '_suppress_num_pipes_warning', False)
+            panel._suppress_num_pipes_warning = True
             # 保存原始阈值并临时清空，避免批量模式下弹出水损超限提示
             panel._saved_threshold = panel.edit_threshold.text()
             panel.edit_threshold.setText('')
@@ -734,6 +831,7 @@ class MultiSiphonDialog(QDialog):
             # 4. 恢复标志 & 阈值 & 隐藏进度条
             for panel in self.panels.values():
                 panel._suppress_result_display = False
+                panel._suppress_num_pipes_warning = _np_warning_flags.get(panel, False)
                 if hasattr(panel, '_saved_threshold'):
                     panel.edit_threshold.setText(panel._saved_threshold)
                     del panel._saved_threshold

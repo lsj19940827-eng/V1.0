@@ -4,14 +4,14 @@
 
 功能：
 1. 基础设置（渠道名称、级别、起始水位、流量等）
-2. 节点数据表格（输入/编辑/从批量计算导入）
+2. 节点数据表格（输入/编辑/断面计算同步）
 3. 调用核心计算引擎进行水面线推求
 4. 结果展示（结果表格 + 详细过程）
 5. 导出Excel/Word
 
-与批量计算模块的数据交互：
-- 通过SharedDataManager从批量计算结果导入节点数据
-- 导入后自动填充断面参数（底宽、水深、糙率等）
+与断面计算子流程的数据交互：
+- 断面批量计算结果通过 SharedDataManager 同步到水面线计算表
+- 同步后自动填充断面参数（底宽、水深、糙率等）
 """
 
 import sys
@@ -19,6 +19,7 @@ import os
 import math
 import re
 import datetime
+from contextlib import contextmanager
 
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -36,15 +37,15 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
-    QAbstractItemView, QScrollArea, QGridLayout, QFormLayout,
+    QAbstractItemView, QScrollArea, QGridLayout, QFormLayout, QSizePolicy,
     QDialog, QDialogButtonBox, QToolTip, QCheckBox, QApplication
 )
-from PySide6.QtCore import Qt, QByteArray, Signal, QTimer, QRect, QPoint, QEvent, QObject
-from PySide6.QtGui import QFont, QColor, QPixmap, QImage, QShortcut, QKeySequence, QCursor
+from PySide6.QtCore import Qt, QByteArray, Signal, QTimer, QRect, QPoint, QEvent, QObject, QSignalBlocker
+from PySide6.QtGui import QFont, QColor, QPixmap, QImage, QShortcut, QKeySequence, QCursor, QBrush
 
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, ComboBox,
-    InfoBar, InfoBarPosition
+    InfoBar, InfoBarPosition, DropDownPushButton, RoundMenu, Action, MessageBox
 )
 
 from app_渠系计算前端.frozen_table import FrozenColumnTableWidget
@@ -61,7 +62,8 @@ from app_渠系计算前端.report_meta import (
     ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
 from app_渠系计算前端.structure_type_selector import StructureTypeSelector
-from app_渠系计算前端.batch.panel import format_station_display, parse_station_input
+from app_渠系计算前端.case_manager import FlowLayout as _FlowLayout
+from app_渠系计算前端.batch.panel import BatchPanel, format_station_display, parse_station_input
 from utils.pressure_pipe_result_helpers import (
     make_pressure_pipe_identity,
     empty_pressure_pipe_calc_records,
@@ -122,6 +124,8 @@ except ImportError:
 # 节点表列定义（与原版Tkinter ALL_COLUMNS保持完全一致的列顺序）
 # 可编辑列索引集合（基础输入0-7 + 水力输入20-26 + 预留/过闸/倒虹吸或有压管道损失36,37,38）
 EDITABLE_COLS = set(range(8)) | {20, 21, 22, 23, 24, 25, 26, 36, 37, 38}
+# 表1同步来源行锁定列（需要回到表1修改后重同步）
+TABLE1_SOURCE_LOCKED_COLS = set(range(8)) | set(range(20, 27))
 # 第一行（水位起点）锁定的水头损失列：初始水位是用户输入的定值，不受水头损失影响
 FIRST_ROW_LOCKED_LOSS_COLS = {36, 37, 38}
 
@@ -399,6 +403,7 @@ class SiphonRoughnessChipContainer(QWidget):
         self._title_text = title_text
         self._empty_text = empty_text
         self.label_prefix = label_prefix
+        self._compact_min_width = 0
         self._build_ui()
 
     def _build_ui(self):
@@ -441,8 +446,25 @@ class SiphonRoughnessChipContainer(QWidget):
         )
         self._badge.setVisible(False)
         lay.addWidget(self._badge)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self._apply_width_policy()
 
-        lay.addStretch()
+    def set_compact_min_width(self, width: int):
+        """设置有数据时的紧凑最小宽度；无数据时会自动放宽以完整显示占位文案。"""
+        self._compact_min_width = max(0, int(width))
+        self._apply_width_policy()
+
+    def _placeholder_min_width(self) -> int:
+        return self._placeholder.fontMetrics().horizontalAdvance(self._empty_text) + 12
+
+    def _apply_width_policy(self):
+        has_data = bool(self._pairs)
+        if has_data:
+            target_min_w = self._compact_min_width
+        else:
+            target_min_w = max(self._compact_min_width, self._placeholder_min_width())
+        self.setMinimumWidth(target_min_w)
+        self.updateGeometry()
 
     def _show_popover(self):
         """点击按钮弹出糙率详情卡片。
@@ -578,7 +600,7 @@ class SiphonRoughnessChipContainer(QWidget):
             text_w = self._btn.fontMetrics().horizontalAdvance(btn_text)
             self._btn.setMinimumWidth(max(88, text_w + 28))
             self._btn.adjustSize()
-            self.updateGeometry()
+        self._apply_width_policy()
 
     def set_siphon_data(self, pairs):
         """兼容旧接口"""
@@ -590,6 +612,7 @@ class SiphonRoughnessChipContainer(QWidget):
         self._btn.setVisible(False)
         self._badge.setVisible(False)
         self._btn.setMinimumWidth(0)
+        self._apply_width_policy()
 
     def text(self):
         """兼容旧接口"""
@@ -614,6 +637,7 @@ class WaterProfilePanel(QWidget):
         self._pressure_pipe_calc_done = {}
         self._pressure_pipe_calc_records = empty_pressure_pipe_calc_records()
         self._pressure_pipe_last_run_at = ""
+        self._pressure_turn_radius_fallback_groups = set()
         # 建筑物长度统计缓存
         self._last_building_lengths = []
         self._last_channel_total_length = 0.0
@@ -624,6 +648,21 @@ class WaterProfilePanel(QWidget):
             'text_height': 3.5, 'rotation': 90, 'elev_decimals': 3,
             'y_name': 112, 'y_slope': 102, 'y_ip': 77,
             'y_station': 47, 'y_line_height': 120,
+            'profile_row_items': [
+                {"id": "building_name", "enabled": True},
+                {"id": "slope", "enabled": True},
+                {"id": "ip_name", "enabled": True},
+                {"id": "station", "enabled": True},
+                {"id": "top_elev", "enabled": True},
+                {"id": "water_elev", "enabled": True},
+                {"id": "bottom_elev", "enabled": True},
+                {"id": "bd_ip_before", "enabled": False},
+                # {"id": "be_ip_text", "enabled": False},  # 暂停：与 IP点名称 重复
+                {"id": "bf_ip_after", "enabled": False},
+                {"id": "bj_station_before", "enabled": False},
+                # {"id": "bk_station", "enabled": False},  # 暂停：与 里程桩号 重复
+                {"id": "bl_station_after", "enabled": False},
+            ],
         }
         # 缓存每行的结构高度（structure_height）
         # 该属性不显示在表格列中，但用于计算渠顶高程 = 渠底高程 + 结构高度
@@ -653,6 +692,57 @@ class WaterProfilePanel(QWidget):
         # 节点表行操作撤销栈（添加/删除/插入/复制/清空行）
         self._node_table_undo_stack = []
         self._node_table_redo_stack = []
+        # 合并面板：断面批量计算后端（复用 BatchPanel 的计算与校验能力）
+        self._batch_backend = BatchPanel(self)
+        self._batch_backend.set_info_parent(lambda: self)
+        self._batch_backend.hide()
+        try:
+            self._batch_backend._clear_input(force=True)
+            self._batch_backend._clear_results()
+        except Exception:
+            pass
+        self._section_sync_ready = False
+        self._section_first_success_switched = False
+        self._section_failure_auto_expanded_once = False
+        self._section_failure_records = []
+        self._settings_group = None
+        self._transition_group = None
+        self._siphon_pressure_group = None
+        self._last_layout_width = 0
+        self._section_status_bar = None
+        self._section_state_icon = None
+        self._section_state_label = None
+        self._section_status_kind = "neutral"
+        self._btn_section_failure_summary = None
+        self._section_failure_panel = None
+        self._section_failure_table = None
+        self._btn_section_failure_copy = None
+        self._btn_section_failure_locate = None
+        self._btn_section_failure_collapse = None
+        self._btn_section_calc = None
+        self._btn_section_clear = None
+        self._workspace_tabs = None
+        self._process_tabs = None
+        self._tab_section_input = None
+        self._tab_section_result = None
+        self._tab_water_profile = None
+        self._tab_output = None
+        self._btn_section_import_excel = None
+        self._btn_section_sample = None
+        self._btn_section_template = None
+        self._btn_section_add = None
+        self._btn_section_insert = None
+        self._btn_section_delete = None
+        self._btn_section_copy = None
+        self._btn_section_params = None
+        self._btn_section_export_excel = None
+        self._btn_section_export_word = None
+        self._btn_table3_clear = None
+        self._btn_transition = None
+        self._btn_siphon = None
+        self._btn_calc = None
+        self._section_input_table = None
+        self._section_result_table = None
         self._init_ui()
 
     # ================================================================
@@ -672,103 +762,107 @@ class WaterProfilePanel(QWidget):
         self._build_top_area(top_w)
         self._splitter.addWidget(top_w)
 
-        # 下半区：结果
+        # 下半区：流程工作区（表1/表2/表3/结果与导出）
         bottom_w = QWidget()
-        self._build_result_area(bottom_w)
+        self._build_workspace_area(bottom_w)
         self._splitter.addWidget(bottom_w)
 
-        self._splitter.setSizes([600, 340])
+        self._splitter.setSizes([260, 760])
 
     def _build_top_area(self, parent):
         lay = QVBoxLayout(parent)
+        self._top_lay = lay
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
+        lay.setSpacing(4)
+        lay.setAlignment(Qt.AlignTop)
 
         # ────────────────────────────────────────────
-        # 基础设置区（2行网格布局，可折叠）
+        # 基础设置区（连续自适应重排，可折叠）
         # ────────────────────────────────────────────
         settings_grp = CollapsibleGroupBox("基础设置")
-        sg = QGridLayout(settings_grp.content_widget())
-        sg.setHorizontalSpacing(10)
-        sg.setVerticalSpacing(4)
-        sg.setContentsMargins(8, 4, 8, 4)
+        settings_grp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._settings_group = settings_grp
+        settings_content_lay = QVBoxLayout(settings_grp.content_widget())
+        settings_content_lay.setContentsMargins(8, 6, 8, 6)
+        settings_content_lay.setSpacing(6)
+        row1_flow = _FlowLayout(spacing=8)
+        row1_flow.setContentsMargins(0, 0, 0, 0)
+        settings_content_lay.addLayout(row1_flow)
+        row2_flow = _FlowLayout(spacing=8)
+        row2_flow.setContentsMargins(0, 0, 0, 0)
+        settings_content_lay.addLayout(row2_flow)
 
-        # 第1行：渠道基本信息
-        r = 0
-        sg.addWidget(QLabel("渠道名称:"), r, 0, Qt.AlignRight)
+        def _make_field_group(label_text: str, widgets: list, min_w: int = 0):
+            group_w = QWidget()
+            group_lay = QHBoxLayout(group_w)
+            group_lay.setContentsMargins(0, 0, 0, 0)
+            group_lay.setSpacing(6)
+            label = QLabel(label_text)
+            label_w = max(label.fontMetrics().horizontalAdvance(label_text) + 8, 56)
+            label.setMinimumWidth(label_w)
+            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+            group_lay.addWidget(label)
+            for widget in widgets:
+                group_lay.addWidget(widget)
+            group_w.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+            if min_w > 0:
+                group_w.setMinimumWidth(min_w)
+            return group_w
+
         self.channel_name_edit = LineEdit()
         self.channel_name_edit.setText("南峰寺")
-        self.channel_name_edit.setMinimumWidth(90)
-        sg.addWidget(self.channel_name_edit, r, 1)
+        self.channel_name_edit.setFixedWidth(72)
+        row1_flow.addWidget(_make_field_group("渠道名称:", [self.channel_name_edit], min_w=114))
 
-        sg.addWidget(QLabel("级别:"), r, 2, Qt.AlignRight)
         self.channel_level_combo = ComboBox()
         self.channel_level_combo.addItems(CHANNEL_LEVEL_OPTIONS)
         self.channel_level_combo.setCurrentText("支渠")
-        self.channel_level_combo.setMinimumWidth(75)
-        sg.addWidget(self.channel_level_combo, r, 3)
+        self.channel_level_combo.setMinimumWidth(90)
+        row1_flow.addWidget(_make_field_group("级别:", [self.channel_level_combo], min_w=150))
 
-        sg.addWidget(QLabel("起始水位(m):"), r, 4, Qt.AlignRight)
         self.start_wl_edit = LineEdit()
         self.start_wl_edit.setText("100.0")
-        self.start_wl_edit.setMinimumWidth(70)
-        self.start_wl_edit.setMaximumWidth(160)
-        self.start_wl_edit.textChanged.connect(lambda t, e=self.start_wl_edit: e.setFixedWidth(max(70, min(160, e.fontMetrics().horizontalAdvance(t) + 24))))
-        sg.addWidget(self.start_wl_edit, r, 5)
-
-        sg.addWidget(QLabel("渠道糙率:"), r, 6, Qt.AlignRight)
-        self.roughness_edit = LineEdit()
-        self.roughness_edit.setText(str(DEFAULT_ROUGHNESS))
-        self.roughness_edit.setFixedWidth(68)
-        self.roughness_edit.setToolTip("渠道糙率：适用于明渠、渡槽、隧洞、暗涵等非倒虹吸建筑物")
-        sg.addWidget(self.roughness_edit, r, 7)
-
-        sg.addWidget(QLabel("倒虹吸糙率:"), r, 8, Qt.AlignRight)
-        self.siphon_roughness_chips = SiphonRoughnessChipContainer()
-        sg.addWidget(self.siphon_roughness_chips, r, 9)
-        sg.addWidget(QLabel("有压管道参数:"), r, 10, Qt.AlignRight)
-        self.pressure_pipe_roughness_chips = SiphonRoughnessChipContainer(
-            title_text="有压管道参数详情",
-            empty_text="导入后自动显示",
-            label_prefix="管材: "
+        self.start_wl_edit.setMinimumWidth(62)
+        self.start_wl_edit.setMaximumWidth(94)
+        self.start_wl_edit.textChanged.connect(
+            lambda t, e=self.start_wl_edit: e.setFixedWidth(max(62, min(94, e.fontMetrics().horizontalAdvance(t) + 34)))
         )
-        sg.addWidget(self.pressure_pipe_roughness_chips, r, 11)
-        sg.setColumnMinimumWidth(11, 120)
+        self.start_wl_edit.setFixedWidth(
+            max(62, min(94, self.start_wl_edit.fontMetrics().horizontalAdvance(self.start_wl_edit.text()) + 34))
+        )
+        row1_flow.addWidget(_make_field_group("起始水位(m):", [self.start_wl_edit], min_w=108))
 
-        # 第2行：流量与高级参数
-        r = 1
-        sg.addWidget(QLabel("设计流量(m³/s):"), r, 0, Qt.AlignRight)
         self.design_flow_edit = LineEdit()
         self.design_flow_edit.setText("")
-        self.design_flow_edit.setMinimumWidth(110)
+        self.design_flow_edit.setMinimumWidth(180)
         self.design_flow_edit.setPlaceholderText("多段用逗号分隔")
-        sg.addWidget(self.design_flow_edit, r, 1)
+        row1_flow.addWidget(_make_field_group("设计流量(m³/s):", [self.design_flow_edit], min_w=300))
         self.design_flow_edit.editingFinished.connect(self._on_design_flow_changed)
 
-        sg.addWidget(QLabel("加大流量(m³/s):"), r, 2, Qt.AlignRight)
         self.max_flow_edit = LineEdit()
         self.max_flow_edit.setText("")
-        self.max_flow_edit.setMinimumWidth(110)
+        self.max_flow_edit.setMinimumWidth(227)
         self.max_flow_edit.setPlaceholderText("自动计算")
-        sg.addWidget(self.max_flow_edit, r, 3)
+        row1_flow.addWidget(_make_field_group("加大流量(m³/s):", [self.max_flow_edit], min_w=378))
 
-        sg.addWidget(QLabel("起始桩号(m):"), r, 4, Qt.AlignRight)
         self.start_station_edit = LineEdit()
         self.start_station_edit.setText("0+000.000")
-        self.start_station_edit.setMinimumWidth(100)
-        sg.addWidget(self.start_station_edit, r, 5)
+        self.start_station_edit.setMinimumWidth(130)
+        row2_flow.addWidget(_make_field_group("起始桩号(m):", [self.start_station_edit], min_w=230))
         self.start_station_edit.editingFinished.connect(self._format_start_station)
         self.start_station_edit.installEventFilter(self)
 
-        sg.addWidget(QLabel("转弯半径(m):"), r, 6, Qt.AlignRight)
-        turn_r_box = QHBoxLayout()
-        turn_r_box.setSpacing(4)
+        turn_r_box_w = QWidget()
+        turn_r_box = QHBoxLayout(turn_r_box_w)
+        turn_r_box.setContentsMargins(0, 0, 0, 0)
+        turn_r_box.setSpacing(6)
         self.turn_radius_edit = LineEdit()
         self.turn_radius_edit.setText(str(DEFAULT_TURN_RADIUS))
-        self.turn_radius_edit.setFixedWidth(60)
+        self.turn_radius_edit.setFixedWidth(84)
         turn_r_box.addWidget(self.turn_radius_edit)
         btn_auto_r = PushButton("自动")
-        btn_auto_r.setFixedWidth(52)
+        btn_auto_r.setFixedWidth(58)
         btn_auto_r.setToolTip(
             "根据规范自动计算推荐转弯半径（取大值原则）\n"
             "• 隧洞：弯曲半径≥洞径(或洞宽)×5\n"
@@ -777,14 +871,41 @@ class WaterProfilePanel(QWidget):
         )
         btn_auto_r.clicked.connect(self._auto_calc_turn_radius)
         turn_r_box.addWidget(btn_auto_r)
-        turn_r_box.addStretch()
-        sg.addLayout(turn_r_box, r, 7)
+        row2_flow.addWidget(_make_field_group("转弯半径(m):", [turn_r_box_w], min_w=230))
 
-        # 列弹性
-        for c in [1, 3, 5, 7]:
-            sg.setColumnStretch(c, 1)
-        sg.setColumnStretch(9, 1)
-        sg.setColumnStretch(11, 2)
+        self.roughness_edit = LineEdit()
+        self.roughness_edit.setText(str(DEFAULT_ROUGHNESS))
+        self.roughness_edit.setFixedWidth(78)
+        self.roughness_edit.setToolTip("渠道糙率：适用于明渠、渡槽、隧洞、暗涵等非倒虹吸建筑物")
+        row2_flow.addWidget(_make_field_group("渠道糙率:", [self.roughness_edit], min_w=160))
+
+        # 倒虹吸与有压管道糙率字段放在第2行末尾，按同一显隐规则同步显示
+        self.siphon_roughness_chips = SiphonRoughnessChipContainer()
+        self.siphon_roughness_chips.set_compact_min_width(96)
+        self.siphon_roughness_chips.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        siphon_group = _make_field_group("倒虹吸糙率:", [self.siphon_roughness_chips], min_w=180)
+
+        self.pressure_pipe_roughness_chips = SiphonRoughnessChipContainer(
+            title_text="有压管道糙率详情",
+            empty_text="导入后自动显示",
+            label_prefix="管材: "
+        )
+        self.pressure_pipe_roughness_chips.set_compact_min_width(108)
+        self.pressure_pipe_roughness_chips.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        pressure_pipe_group = _make_field_group("有压管道糙率:", [self.pressure_pipe_roughness_chips], min_w=200)
+
+        siphon_pressure_pair = QWidget()
+        siphon_pressure_pair_lay = QHBoxLayout(siphon_pressure_pair)
+        siphon_pressure_pair_lay.setContentsMargins(0, 0, 0, 0)
+        siphon_pressure_pair_lay.setSpacing(4)
+        siphon_pressure_pair_lay.addWidget(siphon_group)
+        siphon_pressure_pair_lay.addWidget(pressure_pipe_group)
+        siphon_pressure_pair.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+
+        self._siphon_pressure_group = siphon_pressure_pair
+        row2_flow.addWidget(siphon_pressure_pair)
+        self._refresh_roughness_overview_visibility()
+
         settings_grp.toggled.connect(self._on_settings_toggled)
         lay.addWidget(settings_grp)
 
@@ -792,12 +913,27 @@ class WaterProfilePanel(QWidget):
         # 渐变段设置区（3行网格布局，按类型分行，可折叠）
         # ────────────────────────────────────────────
         trans_grp = CollapsibleGroupBox("渐变段设置")
+        trans_grp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._transition_group = trans_grp
         tg = QGridLayout(trans_grp.content_widget())
-        tg.setHorizontalSpacing(8)
-        tg.setVerticalSpacing(4)
-        tg.setContentsMargins(8, 4, 8, 4)
+        tg.setHorizontalSpacing(10)
+        tg.setVerticalSpacing(8)
+        tg.setContentsMargins(8, 8, 8, 8)
 
         _cat_style = f"font-weight:bold; color:{P}; font-size:12px;"
+        _transition_field_h = max(34, self.fontMetrics().height() + 16)
+
+        def _setup_transition_combo(combo: ComboBox, min_width: int):
+            combo.setMinimumWidth(min_width)
+            combo.setMinimumHeight(_transition_field_h)
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        def _setup_transition_zeta(edit: LineEdit, default_text: str):
+            edit.setText(default_text)
+            edit.setFixedWidth(72)
+            edit.setMinimumHeight(_transition_field_h)
+            edit.setAlignment(Qt.AlignCenter)
+            edit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         # 行0：渡槽/隧洞
         r = 0
@@ -807,22 +943,20 @@ class WaterProfilePanel(QWidget):
         tg.addWidget(QLabel("进口:"), r, 1, Qt.AlignRight)
         self.trans_inlet_combo = ComboBox()
         self.trans_inlet_combo.addItems(TRANSITION_FORM_OPTIONS)
-        self.trans_inlet_combo.setMinimumWidth(130)
+        _setup_transition_combo(self.trans_inlet_combo, 220)
         tg.addWidget(self.trans_inlet_combo, r, 2)
         tg.addWidget(QLabel("ζ₁="), r, 3, Qt.AlignRight)
         self.trans_inlet_zeta = LineEdit()
-        self.trans_inlet_zeta.setText("0.10")
-        self.trans_inlet_zeta.setFixedWidth(65)
+        _setup_transition_zeta(self.trans_inlet_zeta, "0.10")
         tg.addWidget(self.trans_inlet_zeta, r, 4)
         tg.addWidget(QLabel("出口:"), r, 5, Qt.AlignRight)
         self.trans_outlet_combo = ComboBox()
         self.trans_outlet_combo.addItems(TRANSITION_FORM_OPTIONS)
-        self.trans_outlet_combo.setMinimumWidth(130)
+        _setup_transition_combo(self.trans_outlet_combo, 220)
         tg.addWidget(self.trans_outlet_combo, r, 6)
         tg.addWidget(QLabel("ζ₂="), r, 7, Qt.AlignRight)
         self.trans_outlet_zeta = LineEdit()
-        self.trans_outlet_zeta.setText("0.20")
-        self.trans_outlet_zeta.setFixedWidth(65)
+        _setup_transition_zeta(self.trans_outlet_zeta, "0.20")
         tg.addWidget(self.trans_outlet_zeta, r, 8)
 
         # 行1：明渠
@@ -833,12 +967,11 @@ class WaterProfilePanel(QWidget):
         tg.addWidget(QLabel("型式:"), r, 1, Qt.AlignRight)
         self.oc_trans_combo = ComboBox()
         self.oc_trans_combo.addItems(TRANSITION_FORM_OPTIONS)
-        self.oc_trans_combo.setMinimumWidth(130)
+        _setup_transition_combo(self.oc_trans_combo, 220)
         tg.addWidget(self.oc_trans_combo, r, 2)
         tg.addWidget(QLabel("ζ="), r, 3, Qt.AlignRight)
         self.oc_trans_zeta = LineEdit()
-        self.oc_trans_zeta.setText("0.10")
-        self.oc_trans_zeta.setFixedWidth(65)
+        _setup_transition_zeta(self.oc_trans_zeta, "0.10")
         tg.addWidget(self.oc_trans_zeta, r, 4)
 
         # 行2：倒虹吸
@@ -849,35 +982,40 @@ class WaterProfilePanel(QWidget):
         tg.addWidget(QLabel("进口:"), r, 1, Qt.AlignRight)
         self.siphon_inlet_combo = ComboBox()
         self.siphon_inlet_combo.addItems(SIPHON_TRANSITION_FORM_OPTIONS)
-        self.siphon_inlet_combo.setMinimumWidth(110)
+        _setup_transition_combo(self.siphon_inlet_combo, 220)
         tg.addWidget(self.siphon_inlet_combo, r, 2)
         tg.addWidget(QLabel("ζ₁="), r, 3, Qt.AlignRight)
         self.siphon_inlet_zeta = LineEdit()
-        self.siphon_inlet_zeta.setText("0.10")
-        self.siphon_inlet_zeta.setFixedWidth(65)
+        _setup_transition_zeta(self.siphon_inlet_zeta, "0.10")
         tg.addWidget(self.siphon_inlet_zeta, r, 4)
         tg.addWidget(QLabel("出口:"), r, 5, Qt.AlignRight)
         self.siphon_outlet_combo = ComboBox()
         self.siphon_outlet_combo.addItems(SIPHON_TRANSITION_FORM_OPTIONS)
-        self.siphon_outlet_combo.setMinimumWidth(110)
+        _setup_transition_combo(self.siphon_outlet_combo, 220)
         tg.addWidget(self.siphon_outlet_combo, r, 6)
         tg.addWidget(QLabel("ζ₂="), r, 7, Qt.AlignRight)
         self.siphon_outlet_zeta = LineEdit()
-        self.siphon_outlet_zeta.setText("0.20")
-        self.siphon_outlet_zeta.setFixedWidth(65)
+        _setup_transition_zeta(self.siphon_outlet_zeta, "0.20")
         tg.addWidget(self.siphon_outlet_zeta, r, 8)
 
         # 参考系数表按钮（放在倒虹吸行末尾）
         btn_ref = PushButton("参考系数表")
         btn_ref.setToolTip("查看表K.1.2（渡槽/隧洞）和表L.1.2（倒虹吸）渐变段局部损失系数")
+        btn_ref.setMinimumWidth(104)
+        btn_ref.setMinimumHeight(_transition_field_h)
         btn_ref.clicked.connect(self._open_transition_reference)
         tg.addWidget(btn_ref, r, 9)
 
         # 列弹性
         tg.setColumnStretch(2, 1)
         tg.setColumnStretch(6, 1)
+        tg.setColumnMinimumWidth(4, 72)
+        tg.setColumnMinimumWidth(8, 72)
+        for row_idx in range(3):
+            tg.setRowMinimumHeight(row_idx, _transition_field_h)
         trans_grp.toggled.connect(self._on_settings_toggled)
         lay.addWidget(trans_grp)
+        lay.addStretch(1)
 
         # 渐变段型式变更 → 自动更新ζ系数
         self.trans_inlet_combo.currentTextChanged.connect(self._on_trans_inlet_form_changed)
@@ -886,34 +1024,327 @@ class WaterProfilePanel(QWidget):
         self.siphon_inlet_combo.currentTextChanged.connect(self._on_siphon_inlet_form_changed)
         self.siphon_outlet_combo.currentTextChanged.connect(self._on_siphon_outlet_form_changed)
 
-        # ────────────────────────────────────────────
-        # 工具栏（单行分组布局，优化间距与宽度）
-        # ────────────────────────────────────────────
+    def _on_settings_toggled(self, collapsed):
+        """折叠/展开设置区时，自动调整splitter分配，让底部图表获得释放的空间"""
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._adjust_splitter_for_settings)
+        QTimer.singleShot(80, self._adjust_splitter_for_settings)
+
+    def _refresh_top_layout_for_measurement(self):
+        """测量 splitter 前，强制更新顶部折叠区布局缓存。"""
+        top_w = self._splitter.widget(0)
+        top_layout = getattr(self, "_top_lay", None)
+        if top_layout is None:
+            top_layout = top_w.layout()
+
+        for group in (
+            getattr(self, "_settings_group", None),
+            getattr(self, "_transition_group", None),
+        ):
+            if group is None:
+                continue
+
+            content_layout = group.content_layout()
+            if content_layout is not None:
+                content_layout.invalidate()
+                content_layout.activate()
+
+            content_widget = group.content_widget()
+            if content_widget is not None:
+                content_widget.adjustSize()
+                content_widget.updateGeometry()
+
+            group.updateGeometry()
+
+        if top_layout is not None:
+            top_layout.invalidate()
+            top_layout.activate()
+
+        top_w.updateGeometry()
+        return top_w, top_layout
+
+    def _adjust_splitter_for_settings(self):
+        """根据上半区实际需求高度重新分配 splitter 空间。"""
+        top_w, top_layout = self._refresh_top_layout_for_measurement()
+
+        if top_layout is not None:
+            margins = top_layout.contentsMargins()
+            current_width = max(1, top_w.width() - margins.left() - margins.right())
+            hfw_hint = top_layout.totalHeightForWidth(current_width)
+            size_hint = top_layout.totalSizeHint().height()
+            top_hint = hfw_hint if hfw_hint > 0 else size_hint
+            top_hint = max(top_hint, top_layout.totalMinimumSize().height())
+        else:
+            top_hint = max(top_w.sizeHint().height(), top_w.minimumSizeHint().height())
+
+        top_hint = max(54, int(top_hint))
+        total = max(1, self._splitter.height())
+        min_bottom_h = 180
+        top_cap = max(int(total * 0.78), total - min_bottom_h)
+        top_h = min(top_hint, max(0, top_cap))
+        bottom_h = total - top_h
+        self._splitter.setSizes([top_h, bottom_h])
+
+    def _build_workspace_area(self, parent):
+        """构建下半区流程化标签页工作区。"""
+        lay = QVBoxLayout(parent)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+
+        self._workspace_tabs = QTabWidget(parent)
+        self._workspace_tabs.setDocumentMode(True)
+
+        self._tab_section_input = QWidget()
+        self._tab_section_result = QWidget()
+        self._tab_water_profile = QWidget()
+        self._tab_output = QWidget()
+
+        self._workspace_tabs.addTab(self._tab_section_input, "表1：基本参数输入")
+        self._workspace_tabs.addTab(self._tab_section_result, "表2：断面计算结果")
+        self._workspace_tabs.addTab(self._tab_water_profile, "表3：水面线计算表")
+        self._workspace_tabs.addTab(self._tab_output, "结果与导出")
+        self._workspace_tabs.tabBar().setUsesScrollButtons(True)
+        self._workspace_tabs.tabBar().setElideMode(Qt.ElideNone)
+        for tab_idx in range(self._workspace_tabs.count()):
+            self._workspace_tabs.tabBar().setTabToolTip(tab_idx, self._workspace_tabs.tabText(tab_idx))
+
+        self._build_tab_section_input(self._tab_section_input)
+        self._build_tab_section_result(self._tab_section_result)
+        self._build_tab_water_profile(self._tab_water_profile)
+        self._build_tab_output(self._tab_output)
+        self._workspace_tabs.setCurrentWidget(self._tab_section_input)
+
+        lay.addWidget(self._workspace_tabs)
+
+    def _switch_workspace_tab(self, target_widget):
+        if self._workspace_tabs and target_widget:
+            self._workspace_tabs.setCurrentWidget(target_widget)
+
+    def _switch_to_output_process_tab(self, process_index: int = 1):
+        """切到“结果与导出”页，并定位到详细过程子标签。"""
+        self._switch_workspace_tab(self._tab_output)
+        if not self._process_tabs:
+            return
+        max_index = self._process_tabs.count() - 1
+        if max_index < 0:
+            return
+        self._process_tabs.setCurrentIndex(max(0, min(process_index, max_index)))
+
+    def _build_tab_section_input(self, parent):
+        lay = QVBoxLayout(parent)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(6)
+
+        # 第一行：批量工具链
+        tb1 = QHBoxLayout()
+        tb1.setSpacing(6)
+        lbl = QLabel("表1：基本参数输入")
+        lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
+        tb1.addWidget(lbl)
+        tb1.addSpacing(8)
+
+        tb1.addWidget(QLabel("流量段设置(m³/s):"))
+        self._section_flow_segments_edit = LineEdit()
+        self._section_flow_segments_edit.setText(
+            self._batch_backend.flow_segments_edit.text().strip() or "5.0, 4.0, 3.0"
+        )
+        self._section_flow_segments_edit.setMinimumWidth(220)
+        tb1.addWidget(self._section_flow_segments_edit)
+
+        self._btn_section_apply_flow = PushButton("应用到表1")
+        self._btn_section_apply_flow.clicked.connect(self._apply_flow_values_to_section_table)
+        tb1.addWidget(self._btn_section_apply_flow)
+
+        # A1：复选框位于顶行右侧（在“应用到表1”之后）
+        has_option_toggle = False
+        if hasattr(self._batch_backend, "inc_cb") and self._batch_backend.inc_cb:
+            self._batch_backend.inc_cb.setParent(parent)
+            self._batch_backend.inc_cb.setText("考虑加大流量")
+            tb1.addWidget(self._batch_backend.inc_cb)
+            has_option_toggle = True
+        if hasattr(self._batch_backend, "detail_cb") and self._batch_backend.detail_cb:
+            self._batch_backend.detail_cb.setParent(parent)
+            self._batch_backend.detail_cb.setText("展示详细计算过程")
+            tb1.addWidget(self._batch_backend.detail_cb)
+            has_option_toggle = True
+        if not has_option_toggle:
+            tb1.addSpacing(12)
+        tb1.addStretch()
+        lay.addLayout(tb1)
+
+        # 第一行下方：批量工具按钮（导入/计算/示例/模板）
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(6)
+        self._btn_section_import_excel = PrimaryPushButton("导入Excel")
+        self._btn_section_import_excel.clicked.connect(self._import_section_excel)
+        button_row.addWidget(self._btn_section_import_excel)
+
+        self._btn_section_calc = PrimaryPushButton("开始批量计算")
+        self._btn_section_calc.clicked.connect(self._run_section_batch_calculate)
+        button_row.addWidget(self._btn_section_calc)
+
+        sample_menu = RoundMenu(parent=self)
+        sample_menu.addAction(Action("示例一（综合演示）", triggered=self._load_section_sample_1))
+        sample_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=self._load_section_sample_2))
+        sample_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=self._load_section_sample_3))
+        self._btn_section_sample = DropDownPushButton("示例数据")
+        self._btn_section_sample.setMenu(sample_menu)
+        button_row.addWidget(self._btn_section_sample)
+
+        template_menu = RoundMenu(parent=self)
+        template_menu.addAction(Action("示例一（综合演示）", triggered=lambda: self._open_section_excel_template("blank")))
+        template_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=lambda: self._open_section_excel_template("longtang")))
+        template_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=lambda: self._open_section_excel_template("luojisi")))
+        self._btn_section_template = DropDownPushButton("打开Excel模板")
+        self._btn_section_template.setMenu(template_menu)
+        button_row.addWidget(self._btn_section_template)
+        button_row.addStretch()
+
+        lay.addLayout(button_row)
+
+        # 下一行：行操作
+        tb2 = QHBoxLayout()
+        tb2.setSpacing(6)
+        self._btn_section_add = PushButton("新增行")
+        self._btn_section_add.clicked.connect(lambda: self._on_section_input_action(self._batch_backend._add_row))
+        tb2.addWidget(self._btn_section_add)
+
+        self._btn_section_insert = PushButton("插入行")
+        self._btn_section_insert.clicked.connect(lambda: self._on_section_input_action(self._batch_backend._insert_row))
+        tb2.addWidget(self._btn_section_insert)
+
+        self._btn_section_delete = PushButton("删除行")
+        self._btn_section_delete.clicked.connect(lambda: self._on_section_input_action(self._batch_backend._del_row))
+        tb2.addWidget(self._btn_section_delete)
+
+        self._btn_section_copy = PushButton("复制行")
+        self._btn_section_copy.clicked.connect(lambda: self._on_section_input_action(self._batch_backend._copy_row))
+        tb2.addWidget(self._btn_section_copy)
+
+        self._btn_section_clear = PushButton("清空表1/表2")
+        self._btn_section_clear.setToolTip("清空表1输入与表2结果\n▶ 表1可 Ctrl+Z 撤销；表2需重新计算生成")
+        self._btn_section_clear.clicked.connect(self._clear_section_tables)
+        tb2.addWidget(self._btn_section_clear)
+
+        self._btn_section_params = PushButton("参数设置")
+        self._btn_section_params.clicked.connect(self._batch_backend._open_parameter_dialog)
+        tb2.addWidget(self._btn_section_params)
+        hint = QLabel("提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型")
+        hint.setStyleSheet("font-size:12px;font-weight:600;color:#0B5CAD;")
+        tb2.addWidget(hint)
+        tb2.addStretch()
+        lay.addLayout(tb2)
+
+        # 第三行：独立状态条（避免与按钮抢宽度）
+        self._section_status_bar = QFrame(parent)
+        self._section_status_bar.setObjectName("sectionStatusBar")
+        self._section_status_bar.setStyleSheet(
+            "QFrame#sectionStatusBar{border:1px solid #D9E2EF;border-radius:6px;background:#F7FAFE;}"
+        )
+        status_lay = QHBoxLayout(self._section_status_bar)
+        status_lay.setContentsMargins(10, 6, 10, 6)
+        status_lay.setSpacing(8)
+        self._section_state_icon = QLabel("ℹ")
+        self._section_state_icon.setStyleSheet("font-size:14px;color:#546E7A;font-weight:600;")
+        self._section_state_icon.setFixedWidth(18)
+        status_lay.addWidget(self._section_state_icon, alignment=Qt.AlignTop)
+        self._section_state_label = QLabel("状态：未执行断面批量计算")
+        self._section_state_label.setWordWrap(True)
+        self._section_state_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._section_state_label.setStyleSheet("font-size:12px;color:#455A64;")
+        status_lay.addWidget(self._section_state_label, stretch=1)
+        self._btn_section_failure_summary = PushButton("失败原因汇总")
+        self._btn_section_failure_summary.setVisible(False)
+        self._btn_section_failure_summary.clicked.connect(self._show_section_failure_summary_from_status)
+        status_lay.addWidget(self._btn_section_failure_summary)
+        lay.addWidget(self._section_status_bar)
+
+        # 表1输入表
+        self._section_input_table = self._batch_backend.input_table
+        self._section_input_table.setParent(parent)
+        self._section_input_table.cellChanged.connect(self._on_section_input_changed)
+        lay.addWidget(self._section_input_table, stretch=1)
+
+    def _build_tab_section_result(self, parent):
+        lay = QVBoxLayout(parent)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(6)
+
+        tb = QHBoxLayout()
+        tb.setSpacing(6)
+        lbl = QLabel("表2：断面计算结果汇总")
+        lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
+        tb.addWidget(lbl)
+        tb.addStretch()
+
+        self._btn_section_export_excel = PushButton("导出Excel报告")
+        self._btn_section_export_excel.clicked.connect(self._batch_backend._export_excel)
+        tb.addWidget(self._btn_section_export_excel)
+
+        self._btn_section_export_word = PushButton("导出详细过程(Word)")
+        self._btn_section_export_word.clicked.connect(self._batch_backend._export_word)
+        tb.addWidget(self._btn_section_export_word)
+        lay.addLayout(tb)
+
+        # 失败锁定提示条（复用批量面板）
+        if hasattr(self._batch_backend, "_error_lock_label") and self._batch_backend._error_lock_label:
+            self._batch_backend._error_lock_label.setParent(parent)
+            lay.addWidget(self._batch_backend._error_lock_label)
+
+        self._section_result_table = self._batch_backend.result_table
+        self._section_result_table.setParent(parent)
+        lay.addWidget(self._section_result_table, stretch=1)
+
+        # 失败原因汇总面板（默认收起，失败时可一键展开）
+        self._section_failure_panel = QFrame(parent)
+        self._section_failure_panel.setObjectName("sectionFailurePanel")
+        self._section_failure_panel.setStyleSheet(
+            "QFrame#sectionFailurePanel{border:1px solid #F1D0D0;border-radius:6px;background:#FFF8F8;}"
+        )
+        fail_lay = QVBoxLayout(self._section_failure_panel)
+        fail_lay.setContentsMargins(10, 8, 10, 8)
+        fail_lay.setSpacing(6)
+        head_lay = QHBoxLayout()
+        head_lay.setSpacing(8)
+        fail_title = QLabel("失败原因汇总")
+        fail_title.setStyleSheet("font-size:12px;font-weight:bold;color:#C62828;")
+        head_lay.addWidget(fail_title)
+        head_lay.addStretch()
+        self._btn_section_failure_copy = PushButton("复制全部原因")
+        self._btn_section_failure_copy.clicked.connect(self._copy_section_failure_reasons)
+        head_lay.addWidget(self._btn_section_failure_copy)
+        self._btn_section_failure_locate = PushButton("定位到选中行")
+        self._btn_section_failure_locate.clicked.connect(self._locate_selected_section_failure)
+        head_lay.addWidget(self._btn_section_failure_locate)
+        self._btn_section_failure_collapse = PushButton("收起")
+        self._btn_section_failure_collapse.clicked.connect(lambda: self._toggle_section_failure_panel(False))
+        head_lay.addWidget(self._btn_section_failure_collapse)
+        fail_lay.addLayout(head_lay)
+
+        self._section_failure_table = QTableWidget(0, 3, self._section_failure_panel)
+        self._section_failure_table.setHorizontalHeaderLabels(["序号", "建筑物", "失败原因"])
+        self._section_failure_table.verticalHeader().setVisible(False)
+        self._section_failure_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._section_failure_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._section_failure_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._section_failure_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._section_failure_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._section_failure_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self._section_failure_table.itemDoubleClicked.connect(lambda _item: self._locate_selected_section_failure())
+        fail_lay.addWidget(self._section_failure_table)
+        self._section_failure_panel.setVisible(False)
+        lay.addWidget(self._section_failure_panel)
+
+    def _build_tab_water_profile(self, parent):
+        lay = QVBoxLayout(parent)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(6)
+
         toolbar_presets = {
-            "compact": {
-                "h_spacing": 6,
-                "btn_height": 34,
-                "extra_primary": 10,
-                "extra_primary_long": 12,
-                "extra_normal": 8,
-                "extra_clear": 6,
-            },
-            "balanced": {
-                "h_spacing": 8,
-                "btn_height": 36,
-                "extra_primary": 10,
-                "extra_primary_long": 12,
-                "extra_normal": 8,
-                "extra_clear": 6,
-            },
-            "comfortable": {
-                "h_spacing": 10,
-                "btn_height": 38,
-                "extra_primary": 12,
-                "extra_primary_long": 14,
-                "extra_normal": 10,
-                "extra_clear": 8,
-            },
+            "compact": {"h_spacing": 6, "btn_height": 34, "extra_primary": 10, "extra_primary_long": 12, "extra_normal": 8, "extra_clear": 6},
+            "balanced": {"h_spacing": 8, "btn_height": 36, "extra_primary": 10, "extra_primary_long": 12, "extra_normal": 8, "extra_clear": 6},
+            "comfortable": {"h_spacing": 10, "btn_height": 38, "extra_primary": 12, "extra_primary_long": 14, "extra_normal": 10, "extra_clear": 8},
         }
         self._node_toolbar_preset = toolbar_presets.get(self._node_toolbar_layout_preset, toolbar_presets["balanced"])
 
@@ -922,7 +1353,7 @@ class WaterProfilePanel(QWidget):
         tb.setSpacing(self._node_toolbar_preset["h_spacing"])
         tb.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
-        lbl = QLabel("节点数据表")
+        lbl = QLabel("表3：水面线计算表")
         lbl.setStyleSheet(f"font-size:13px; font-weight:bold; color:{T1};")
         from PySide6.QtWidgets import QSizePolicy
         lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
@@ -945,42 +1376,31 @@ class WaterProfilePanel(QWidget):
             btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             btn.setFixedSize(width, self._node_toolbar_preset["btn_height"])
 
-        # 数据导入组
-        btn_import = PrimaryPushButton("从批量计算导入")
-        btn_import.clicked.connect(self._import_from_batch)
-        _register_toolbar_button(btn_import, "primary_long")
-        tb.addWidget(btn_import)
+        self._btn_transition = PrimaryPushButton("插入渐变段")
+        self._btn_transition.clicked.connect(self._insert_transitions)
+        _register_toolbar_button(self._btn_transition, "primary")
 
-        # 计算组（醒目按钮，紧跟在导入按钮之后）
-        btn_transition = PrimaryPushButton("插入渐变段")
-        btn_transition.clicked.connect(self._insert_transitions)
-        _register_toolbar_button(btn_transition, "primary")
-        
-        btn_siphon = PrimaryPushButton("倒虹吸水力计算")
-        btn_siphon.clicked.connect(self._open_siphon_calculator)
-        _register_toolbar_button(btn_siphon, "primary_long")
-        
+        self._btn_siphon = PrimaryPushButton("倒虹吸水力计算")
+        self._btn_siphon.clicked.connect(self._open_siphon_calculator)
+        _register_toolbar_button(self._btn_siphon, "primary_long")
+
         self.btn_pressure_pipe_calc = PrimaryPushButton("有压管道水力计算")
         self.btn_pressure_pipe_calc.clicked.connect(self._open_pressure_pipe_calculator)
         _register_toolbar_button(self.btn_pressure_pipe_calc, "primary_long")
 
-        btn_calc = PrimaryPushButton("执行计算")
-        btn_calc.clicked.connect(self._calculate)
-        _register_toolbar_button(btn_calc, "primary")
-        for w in [btn_transition, btn_siphon, self.btn_pressure_pipe_calc, btn_calc]:
+        self._btn_calc = PrimaryPushButton("执行计算")
+        self._btn_calc.clicked.connect(self._calculate)
+        _register_toolbar_button(self._btn_calc, "primary")
+        for w in [self._btn_transition, self._btn_siphon, self.btn_pressure_pipe_calc, self._btn_calc]:
             tb.addWidget(w)
 
-        # 数据清理组
-        btn_clear = PushButton("清空")
-        btn_clear.setToolTip("清空表格中所有节点\n▶ 支持 Ctrl+Z 撤销")
-        btn_clear.clicked.connect(self._clear_nodes)
-        _register_toolbar_button(btn_clear, "clear")
-
-        tb.addWidget(btn_clear)
-
+        self._btn_table3_clear = PushButton("清空表3")
+        self._btn_table3_clear.setToolTip("清空表3节点并清理倒虹吸/有压管道配置\n▶ 表3可 Ctrl+Z 撤销；配置清理不可撤销")
+        self._btn_table3_clear.clicked.connect(self._on_clear_table3_clicked)
+        _register_toolbar_button(self._btn_table3_clear, "clear")
+        tb.addWidget(self._btn_table3_clear)
         lay.addLayout(tb)
 
-        # 统一节点表（输入+结果在同一个表格，与Tkinter版一致）
         self.node_table = FrozenColumnTableWidget(0, len(NODE_ALL_HEADERS), frozen_count=4)
         self.node_table.setHorizontalHeaderLabels(NODE_ALL_HEADERS)
         self.node_table.horizontalHeader().setStretchLastSection(False)
@@ -995,38 +1415,571 @@ class WaterProfilePanel(QWidget):
         self.node_table.cellDoubleClicked.connect(self._on_node_cell_double_clicked)
         self.node_table.cellChanged.connect(self._on_loss_cell_changed)
         self.node_table.currentCellChanged.connect(self._on_current_cell_changed)
-        # Undo/Redo 通过 FrozenColumnTableWidget 的信号连接（表格 keyPressEvent 先处理按键）
         self.node_table.undoRequested.connect(self._undo_loss_edit)
         self.node_table.redoRequested.connect(self._redo_loss_edit)
-        # Delete 键删除时记录快照
         self.node_table.deleteRequested.connect(self._push_undo_snapshot)
+        self.node_table.installEventFilter(self)
+        self.node_table.viewport().installEventFilter(self)
         lay.addWidget(self.node_table, stretch=1)
-        
-        # 面板级别的撤销/重做快捷键（无需选中单元格也能撤销）
-        from PySide6.QtGui import QShortcut, QKeySequence
+
         undo_sc = QShortcut(QKeySequence.StandardKey.Undo, self)
         undo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         undo_sc.activated.connect(self._undo_loss_edit)
         redo_sc = QShortcut(QKeySequence.StandardKey.Redo, self)
         redo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         redo_sc.activated.connect(self._redo_loss_edit)
+
         self._setup_header_tooltips()
+        self._set_downstream_actions_enabled(False, state_text="状态：断面结果未就绪，请先执行断面批量计算")
         self._refresh_pressure_pipe_controls()
 
-    def _on_settings_toggled(self, collapsed):
-        """折叠/展开设置区时，自动调整splitter分配，让底部图表获得释放的空间"""
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, self._adjust_splitter_for_settings)
+    def _build_tab_output(self, parent):
+        lay = QVBoxLayout(parent)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(4)
 
-    def _adjust_splitter_for_settings(self):
-        """根据上半区实际需要的高度重新分配splitter空间"""
-        top_w = self._splitter.widget(0)
-        top_hint = top_w.minimumSizeHint().height()
-        total = self._splitter.height()
-        # 上半区取实际需要的高度（但不超过总高度的70%）
-        top_h = min(top_hint, int(total * 0.7))
-        bottom_h = total - top_h
-        self._splitter.setSizes([top_h, bottom_h])
+        # 导出工具栏
+        tb = QHBoxLayout()
+        lbl = QLabel("计算结果")
+        lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
+        tb.addWidget(lbl)
+        tb.addStretch()
+        btn_export_excel = PushButton("导出Excel")
+        btn_export_excel.clicked.connect(self._export_excel)
+        btn_export_word = PushButton("导出Word")
+        btn_export_word.clicked.connect(self._export_word)
+        for w in [btn_export_excel, btn_export_word]:
+            tb.addWidget(w)
+        lay.addLayout(tb)
+
+        # CAD工具栏
+        cad_tb = QHBoxLayout()
+        cad_tb.setSpacing(6)
+        cad_lbl = QLabel("CAD工具")
+        cad_lbl.setStyleSheet(f"font-size:12px;font-weight:bold;color:{T2};")
+        cad_tb.addWidget(cad_lbl)
+        cad_tb.addStretch()
+        btn_profile = PushButton("生成纵断面表格"); btn_profile.clicked.connect(self._cad_longitudinal_profile)
+        btn_profile.setToolTip("导出上纵断面表格 DXF/TXT\n含线框、渠底/渠顶/水面折线、高程文字、桩号、建筑物名称、坡降、IP点名称")
+        btn_summary = PushButton("生成断面汇总表"); btn_summary.clicked.connect(self._cad_section_summary)
+        btn_summary.setToolTip("导出各类断面尺寸及水力要素汇总表 DXF\n含明渠/隧洞/渡槽/暗涵/倒虹吸等断面参数")
+        btn_ip = PushButton("IP坐标及弯道参数表"); btn_ip.clicked.connect(self._cad_ip_table)
+        btn_ip.setToolTip("导出IP坐标及弯道参数表 DXF/Excel\n含IP点坐标、桩号、转角、半径、切线长、弧长、底高程")
+        btn_combined = PrimaryPushButton("导出全部DXF"); btn_combined.clicked.connect(self._cad_combined_dxf)
+        btn_combined.setToolTip("一键合并导出：纵断面表格 + 断面汇总表 + IP坐标表\n三个表格输出到同一个DXF文件，分图层管理")
+        btn_bzzh2 = PushButton("生成bzzh2命令内容"); btn_bzzh2.clicked.connect(self._cad_bzzh2)
+        btn_bzzh2.setToolTip("生成ZDM用的bzzh2命令 TXT\n提取建筑物进出口数据")
+        btn_plan = PushButton("建筑物名称上平面图"); btn_plan.clicked.connect(self._cad_building_plan)
+        btn_plan.setToolTip("生成AutoCAD -TEXT命令并复制到剪贴板\n将建筑物名称平行于轴线放置在平面图上")
+        for w in [btn_profile, btn_summary, btn_ip, btn_combined, btn_bzzh2, btn_plan]:
+            cad_tb.addWidget(w)
+        lay.addLayout(cad_tb)
+
+        # 计算结果摘要面板（持久显示）
+        self.summary_grp = QGroupBox("计算结果摘要")
+        sg_lay = QHBoxLayout(self.summary_grp)
+        sg_lay.setContentsMargins(8, 4, 8, 4)
+        sg_lay.setSpacing(16)
+        self.lbl_summary_info = QLabel("尚未计算")
+        self.lbl_summary_info.setStyleSheet("font-size: 12px;")
+        sg_lay.addWidget(self.lbl_summary_info, stretch=1)
+        self.btn_building_stats = PushButton("建筑物长度统计")
+        self.btn_building_stats.clicked.connect(self._show_building_length_dialog)
+        self.btn_building_stats.setEnabled(False)
+        sg_lay.addWidget(self.btn_building_stats)
+        lay.addWidget(self.summary_grp)
+
+        # 详细过程双子标签
+        self._process_tabs = QTabWidget(parent)
+        tab_batch_detail = QWidget()
+        batch_detail_lay = QVBoxLayout(tab_batch_detail)
+        batch_detail_lay.setContentsMargins(2, 2, 2, 2)
+        self._batch_backend.detail_text.setParent(tab_batch_detail)
+        self._batch_backend.detail_text.setReadOnly(True)
+        batch_detail_lay.addWidget(self._batch_backend.detail_text)
+        self._process_tabs.addTab(tab_batch_detail, "表2断面计算结果详细过程")
+
+        tab_water_detail = QWidget()
+        water_detail_lay = QVBoxLayout(tab_water_detail)
+        water_detail_lay.setContentsMargins(2, 2, 2, 2)
+        self.detail_text = QTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setFont(QFont("Consolas", 10))
+        water_detail_lay.addWidget(self.detail_text)
+        self._process_tabs.addTab(tab_water_detail, "水面线详细过程")
+        self._process_tabs.tabBar().setUsesScrollButtons(True)
+        self._process_tabs.tabBar().setElideMode(Qt.ElideNone)
+        for tab_idx in range(self._process_tabs.count()):
+            self._process_tabs.tabBar().setTabToolTip(tab_idx, self._process_tabs.tabText(tab_idx))
+        self._process_tabs.setCurrentIndex(1)
+        lay.addWidget(self._process_tabs, stretch=1)
+
+        # 初始帮助
+        self._show_help()
+
+    def _import_section_excel(self):
+        self._batch_backend._import_from_excel()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _load_section_sample_1(self):
+        self._batch_backend._add_sample_data()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _load_section_sample_2(self):
+        self._batch_backend._add_sample_data_2()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _load_section_sample_3(self):
+        self._batch_backend._add_sample_data_3()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _open_section_excel_template(self, template_key: str):
+        if not self._batch_backend:
+            return
+        self._batch_backend._open_excel_template_file(template_key, dialog_parent=self)
+
+    def _on_section_input_action(self, action):
+        if not action:
+            return
+        action()
+        self._switch_workspace_tab(self._tab_section_input)
+        self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _ask_destructive_confirm(self, title: str, content: str, yes_text: str = "确认", no_text: str = "取消") -> bool:
+        box = MessageBox(title, content, self)
+        box.yesButton.setText(yes_text)
+        box.cancelButton.setText(no_text)
+        try:
+            box.yesButton.setAutoDefault(False)
+            box.yesButton.setDefault(False)
+            box.cancelButton.setAutoDefault(True)
+            box.cancelButton.setDefault(True)
+        except Exception:
+            pass
+        box.cancelButton.setFocus(Qt.TabFocusReason)
+        return bool(box.exec())
+
+    def _clear_section_results_only(self):
+        self._batch_backend._clear_results()
+        if SHARED_DATA_AVAILABLE:
+            try:
+                get_shared_data_manager().clear_batch_results()
+            except Exception:
+                pass
+        self._switch_workspace_tab(self._tab_section_result)
+        self._mark_section_results_stale("状态：表2结果已清空，请重新执行断面批量计算")
+        self._refresh_section_failure_feedback(auto_focus=False, auto_expand_once=False)
+
+    def _apply_flow_values_to_section_table(self):
+        """将流量段设置应用到表1。"""
+        if not self._batch_backend:
+            return
+        self._batch_backend.flow_segments_edit.setText(self._section_flow_segments_edit.text().strip())
+        self._batch_backend._apply_flow_segments()
+
+    def _copy_global_settings_to_batch_backend(self):
+        """同步渠道基础设置到断面计算后端。"""
+        if not self._batch_backend:
+            return
+        self._batch_backend.channel_name_edit.setText(self.channel_name_edit.text().strip())
+        self._batch_backend.channel_level_combo.setCurrentText(self.channel_level_combo.currentText())
+        self._batch_backend.start_wl_edit.setText(self.start_wl_edit.text().strip())
+        self._batch_backend.start_station_edit.setText(self.start_station_edit.text().strip())
+        flow_text = self._section_flow_segments_edit.text().strip()
+        if not flow_text:
+            flow_text = self.design_flow_edit.text().strip()
+        self._batch_backend.flow_segments_edit.setText(flow_text)
+
+    def _count_section_calc_failures(self) -> int:
+        """统计表2中的失败行数量。"""
+        return len(self._collect_section_failures())
+
+    def _collect_section_failures(self):
+        failures = []
+        table = self._section_result_table
+        if not table:
+            return failures
+        status_col = table.columnCount() - 1
+        for row in range(table.rowCount()):
+            status_item = table.item(row, status_col)
+            status_text = (status_item.text() if status_item else "").strip()
+            if not any(tag in status_text for tag in ("✗", "失败", "错误")):
+                continue
+            seq_item = table.item(row, 0)
+            name_item = table.item(row, 2)
+            failures.append({
+                "row": row,
+                "seq": (seq_item.text().strip() if seq_item else str(row + 1)) or str(row + 1),
+                "name": (name_item.text().strip() if name_item else "") or "-",
+                "reason": self._normalize_section_failure_reason(status_text),
+                "status": status_text,
+            })
+        return failures
+
+    @staticmethod
+    def _normalize_section_failure_reason(status_text: str) -> str:
+        text = (status_text or "").strip()
+        if text.startswith("✗"):
+            text = text.lstrip("✗").strip()
+        text = re.sub(r"^(失败|错误)\s*[:：]?\s*", "", text)
+        return text or "计算失败"
+
+    def _highlight_section_failure_rows(self, failures):
+        table = self._section_result_table
+        if not table:
+            return
+        failed_rows = {f.get("row", -1) for f in failures}
+        for row in range(table.rowCount()):
+            is_failed = row in failed_rows
+            for col in range(table.columnCount()):
+                item = table.item(row, col)
+                if not item:
+                    continue
+                if is_failed:
+                    item.setBackground(QColor("#FDEBEC"))
+                else:
+                    item.setBackground(QBrush())
+
+    def _focus_section_result_row(self, row: int):
+        table = self._section_result_table
+        if not table or row < 0 or row >= table.rowCount():
+            return
+        table.clearSelection()
+        table.selectRow(row)
+        focus_item = table.item(row, 0) or table.item(row, table.columnCount() - 1)
+        if focus_item:
+            table.setCurrentItem(focus_item)
+            table.scrollToItem(focus_item, QAbstractItemView.PositionAtCenter)
+
+    def _refresh_section_failure_panel(self, failures):
+        if not self._section_failure_table:
+            return
+        self._section_failure_table.setRowCount(len(failures))
+        for idx, info in enumerate(failures):
+            seq_item = QTableWidgetItem(str(info.get("seq", "")))
+            seq_item.setTextAlignment(Qt.AlignCenter)
+            seq_item.setData(Qt.UserRole, info.get("row", -1))
+            name_item = QTableWidgetItem(str(info.get("name", "")))
+            reason_item = QTableWidgetItem(str(info.get("reason", "")))
+            reason_item.setToolTip(str(info.get("status", "")))
+            self._section_failure_table.setItem(idx, 0, seq_item)
+            self._section_failure_table.setItem(idx, 1, name_item)
+            self._section_failure_table.setItem(idx, 2, reason_item)
+        if failures:
+            self._section_failure_table.selectRow(0)
+
+    def _toggle_section_failure_panel(self, visible=None, switch_to_result_tab: bool = True):
+        if not self._section_failure_panel:
+            return
+        if visible is None:
+            visible = not self._section_failure_panel.isVisible()
+        if visible and not self._section_failure_records:
+            visible = False
+        self._section_failure_panel.setVisible(bool(visible))
+        if self._btn_section_failure_summary:
+            self._btn_section_failure_summary.setVisible(bool(self._section_failure_records))
+            self._btn_section_failure_summary.setText("收起失败汇总" if visible else "失败原因汇总")
+        if visible and switch_to_result_tab:
+            self._switch_workspace_tab(self._tab_section_result)
+
+    def _show_section_failure_summary_from_status(self):
+        if not self._section_failure_records:
+            return
+        self._toggle_section_failure_panel(True, switch_to_result_tab=True)
+        self._focus_section_result_row(self._section_failure_records[0]["row"])
+
+    def _copy_section_failure_reasons(self):
+        if not self._section_failure_records:
+            return
+        lines = [f"序号{f['seq']}（{f['name']}）：{f['reason']}" for f in self._section_failure_records]
+        QApplication.clipboard().setText("\n".join(lines))
+        InfoBar.success(
+            "已复制",
+            f"已复制 {len(lines)} 条失败原因到剪贴板。",
+            parent=self._info_parent(), duration=2500, position=InfoBarPosition.TOP
+        )
+
+    def _locate_selected_section_failure(self):
+        if not self._section_failure_table or not self._section_failure_records:
+            return
+        row = self._section_failure_table.currentRow()
+        if row < 0:
+            row = 0
+        item = self._section_failure_table.item(row, 0)
+        target_row = int(item.data(Qt.UserRole)) if item else -1
+        self._toggle_section_failure_panel(True, switch_to_result_tab=True)
+        self._focus_section_result_row(target_row)
+
+    def _refresh_section_failure_feedback(self, auto_focus: bool = False, auto_expand_once: bool = False):
+        failures = self._collect_section_failures()
+        self._section_failure_records = failures
+        self._highlight_section_failure_rows(failures)
+        self._refresh_section_failure_panel(failures)
+        if self._btn_section_failure_summary:
+            self._btn_section_failure_summary.setVisible(bool(failures))
+            self._btn_section_failure_summary.setText("失败原因汇总")
+        if not failures:
+            self._toggle_section_failure_panel(False, switch_to_result_tab=False)
+            return failures
+        if auto_focus:
+            self._focus_section_result_row(failures[0]["row"])
+        if auto_expand_once and not self._section_failure_auto_expanded_once:
+            self._toggle_section_failure_panel(True, switch_to_result_tab=True)
+            self._section_failure_auto_expanded_once = True
+        return failures
+
+    def _set_section_status(self, state_text: str, status_kind: str = "neutral"):
+        if not self._section_state_label:
+            return
+        palette = {
+            "success": {"bg": "#ECF8F0", "bd": "#B9E0C8", "fg": "#2E7D32", "icon": "✔"},
+            "error": {"bg": "#FFF1F0", "bd": "#F1C1BE", "fg": "#C62828", "icon": "✗"},
+            "warning": {"bg": "#FFF8E8", "bd": "#F3D9A7", "fg": "#B76E00", "icon": "⚠"},
+            "neutral": {"bg": "#F7FAFE", "bd": "#D9E2EF", "fg": "#455A64", "icon": "ℹ"},
+        }
+        final_kind = status_kind if status_kind in palette else "neutral"
+        self._section_status_kind = final_kind
+        token = palette[final_kind]
+        if self._section_status_bar:
+            self._section_status_bar.setStyleSheet(
+                "QFrame#sectionStatusBar{"
+                f"border:1px solid {token['bd']};border-radius:6px;background:{token['bg']};"
+                "}"
+            )
+        if self._section_state_icon:
+            self._section_state_icon.setText(token["icon"])
+            self._section_state_icon.setStyleSheet(f"font-size:14px;color:{token['fg']};font-weight:700;")
+        self._section_state_label.setText(state_text or "状态：未执行断面批量计算")
+        self._section_state_label.setStyleSheet(f"font-size:12px;color:{token['fg']};font-weight:600;")
+
+    def get_first_success_auto_jump_marker(self) -> bool:
+        return bool(getattr(self, "_section_first_success_switched", False))
+
+    def set_first_success_auto_jump_marker(self, marked: bool):
+        self._section_first_success_switched = bool(marked)
+
+    def reset_first_success_auto_jump_marker(self):
+        self._section_first_success_switched = False
+
+    def _run_section_batch_calculate(self):
+        """执行表1断面批量计算，并在全成功后自动同步到表3。"""
+        if not self._batch_backend:
+            return
+        self._copy_global_settings_to_batch_backend()
+        self._batch_backend._batch_calculate()
+        self._switch_workspace_tab(self._tab_section_result)
+
+        result_rows = self._section_result_table.rowCount() if self._section_result_table else 0
+        fail_count = self._count_section_calc_failures()
+        if result_rows == 0:
+            self._mark_section_results_stale("状态：断面计算未生成结果")
+            self._refresh_section_failure_feedback(auto_focus=False, auto_expand_once=False)
+            return
+        if fail_count > 0:
+            self._mark_section_results_stale(
+                f"状态：断面计算存在 {fail_count} 条失败，已锁定下游操作",
+                status_kind="error"
+            )
+            self._refresh_section_failure_feedback(auto_focus=True, auto_expand_once=True)
+            InfoBar.warning(
+                "断面计算未通过",
+                "存在失败行，已锁定插入渐变段/倒虹吸/有压管道/执行计算，请修复表1后重算。",
+                parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP
+            )
+            return
+
+        if not self._sync_to_water_profile_table():
+            self._mark_section_results_stale("状态：同步到表3失败，请重试", status_kind="error")
+            return
+
+        self._refresh_section_failure_feedback(auto_focus=False, auto_expand_once=False)
+        self._section_sync_ready = True
+        self._set_downstream_actions_enabled(True, state_text="状态：断面全成功，表1+表2已同步到表3")
+        if not self._section_first_success_switched:
+            self._section_first_success_switched = True
+            self._switch_workspace_tab(self._tab_water_profile)
+
+    def _sync_to_water_profile_table(self) -> bool:
+        """表1+表2自动同步到表3（仅断面全成功后调用）。"""
+        if not SHARED_DATA_AVAILABLE:
+            InfoBar.warning(
+                "不可用", "SharedDataManager未加载，无法同步到表3",
+                parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP
+            )
+            return False
+        try:
+            shared_data = get_shared_data_manager()
+            if not shared_data.get_batch_results():
+                InfoBar.warning(
+                    "无法同步",
+                    "未检测到可同步的断面结果，请先执行断面批量计算且确保全部成功。",
+                    parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP
+                )
+                return False
+            self._import_from_batch()
+            return self.node_table.rowCount() > 0
+        except Exception as e:
+            InfoBar.error(
+                "同步失败", f"表1/表2同步到表3失败：{e}",
+                parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP
+            )
+            return False
+
+    def _clear_section_tables(self):
+        """清空表1与表2（不清空表3）。"""
+        if not self._batch_backend:
+            return
+        input_rows = self._section_input_table.rowCount() if self._section_input_table else 0
+        result_rows = self._section_result_table.rowCount() if self._section_result_table else 0
+        if input_rows <= 0 and result_rows <= 0:
+            self._mark_section_results_stale("状态：表1/表2已为空，请先执行断面批量计算", status_kind="warning")
+            self._refresh_section_failure_feedback(auto_focus=False, auto_expand_once=False)
+            InfoBar.info(
+                "已为空",
+                "表1与表2已为空，无需清空；下游操作已保持锁定，请先执行断面批量计算。",
+                parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP
+            )
+            return
+        confirm_msg = (
+            f"将清空表1与表2数据：\n"
+            f"• 表1输入行数：{input_rows}\n"
+            f"• 表2结果行数：{result_rows}\n\n"
+            "影响：将锁定下游操作，需重新执行断面批量计算后同步到表3。\n"
+            "恢复说明：表1可按 Ctrl+Z 撤销，表2需重新计算生成。"
+        )
+        if not self._ask_destructive_confirm("确认清空表1+表2", confirm_msg, yes_text="确认清空", no_text="取消"):
+            return
+        if input_rows > 0:
+            self._batch_backend._clear_input(force=True)
+        elif result_rows > 0:
+            self._batch_backend._clear_results()
+        self._mark_section_results_stale("状态：表1/表2已清空，请重新执行断面批量计算", status_kind="warning")
+        self._refresh_section_failure_feedback(auto_focus=False, auto_expand_once=False)
+        InfoBar.success(
+            "清空完成",
+            f"已清空表1 {input_rows} 行、表2 {result_rows} 行。表1可按 Ctrl+Z 撤销，表2需重新计算生成。",
+            parent=self._info_parent(), duration=2500, position=InfoBarPosition.TOP
+        )
+
+    def _on_section_input_changed(self, row, col):
+        """表1任意编辑后，立即使下游链路失效并锁定。"""
+        _ = (row, col)
+        if getattr(self, "_loading_project", False):
+            return
+        if self._section_sync_ready:
+            self._mark_section_results_stale("状态：表1已变更，结果已失效，请重新执行断面批量计算")
+
+    def _mark_section_results_stale(self, state_text: str, status_kind: str = ""):
+        self._section_sync_ready = False
+        self._set_downstream_actions_enabled(False, state_text=state_text, status_kind=status_kind)
+
+    def _set_downstream_actions_enabled(self, enabled: bool, state_text: str = "", status_kind: str = ""):
+        for btn in [self._btn_transition, self._btn_siphon, self.btn_pressure_pipe_calc, self._btn_calc]:
+            if btn:
+                btn.setEnabled(enabled)
+        if state_text:
+            final_kind = status_kind
+            if not final_kind:
+                if enabled:
+                    final_kind = "success"
+                elif any(k in state_text for k in ("失败", "错误", "锁定")):
+                    final_kind = "error"
+                elif any(k in state_text for k in ("未生成", "未就绪", "请先", "请重新")):
+                    final_kind = "warning"
+                else:
+                    final_kind = "neutral"
+            self._set_section_status(state_text, final_kind)
+
+    def _ensure_downstream_ready(self, action_name: str) -> bool:
+        if self._section_sync_ready:
+            return True
+        InfoBar.info(
+            "操作已锁定",
+            f"{action_name}前请先完成断面批量计算并确保全成功（自动同步到表3后解锁）。",
+            parent=self._info_parent(), duration=4500, position=InfoBarPosition.TOP
+        )
+        return False
+
+    def _is_table1_source_row(self, row: int) -> bool:
+        table = self.node_table
+        if not table or row < 0 or row >= table.rowCount():
+            return False
+        first_item = table.item(row, 0)
+        payload = first_item.data(Qt.UserRole) if first_item else None
+        if isinstance(payload, dict) and "_from_table1_source" in payload:
+            return bool(payload.get("_from_table1_source"))
+        if isinstance(payload, dict) and payload.get("_auto_channel"):
+            return False
+        struct_item = table.item(row, 2)
+        struct_text = struct_item.text().strip() if struct_item else ""
+        if "渐变段" in struct_text or "(连接段)" in struct_text:
+            return False
+        basic_text = ""
+        for col in (0, 1, 2):
+            item = table.item(row, col)
+            if item and item.text().strip():
+                basic_text = item.text().strip()
+                break
+        return bool(basic_text)
+
+    def _is_pressure_pipe_row(self, row: int) -> bool:
+        table = self.node_table
+        if not table or row < 0 or row >= table.rowCount():
+            return False
+        struct_item = table.item(row, 2)
+        struct_text = struct_item.text().strip() if struct_item else ""
+        return "有压管道" in struct_text
+
+    def _is_table1_source_locked_cell(self, row: int, col: int) -> bool:
+        if col == 7 and self._is_pressure_pipe_row(row):
+            return True
+        if col not in TABLE1_SOURCE_LOCKED_COLS:
+            return False
+        return self._is_table1_source_row(row)
+
+    def _show_table1_source_lock_hint(self):
+        InfoBar.info(
+            "来源列已锁定",
+            "该列数据来自表1，请在“表1：基本参数输入”修改后重新同步。",
+            parent=self._info_parent(), duration=2600, position=InfoBarPosition.TOP
+        )
+
+    def _apply_table1_source_row_lock_flags(self):
+        table = self.node_table
+        if not table:
+            return
+        for row in range(table.rowCount()):
+            is_source_row = self._is_table1_source_row(row)
+            for col in range(table.columnCount()):
+                item = table.item(row, col)
+                if not item:
+                    continue
+                editable = col in EDITABLE_COLS
+                if row == 0 and col in FIRST_ROW_LOCKED_LOSS_COLS:
+                    editable = False
+                if col == 7 and self._is_pressure_pipe_row(row):
+                    editable = False
+                if is_source_row and col in TABLE1_SOURCE_LOCKED_COLS:
+                    editable = False
+                flags = item.flags()
+                if editable:
+                    new_flags = flags | Qt.ItemIsEditable
+                else:
+                    new_flags = flags & ~Qt.ItemIsEditable
+                if new_flags != flags:
+                    item.setFlags(new_flags)
 
     def _setup_header_tooltips(self):
         """为表头设置悬浮提示（LaTeX公式渲染），使用自定义Fluent悬浮卡片"""
@@ -1046,6 +1999,9 @@ class WaterProfilePanel(QWidget):
 
     def _on_node_cell_double_clicked(self, row, col):
         """双击单元格：结构形式列弹出选择面板；水头损失/高程列显示详细计算过程"""
+        if self._is_table1_source_locked_cell(row, col):
+            self._show_table1_source_lock_hint()
+            return
         col_name = NODE_ALL_HEADERS[col] if col < len(NODE_ALL_HEADERS) else ""
 
         # 结构形式列：弹出分类选择面板
@@ -1293,67 +2249,8 @@ class WaterProfilePanel(QWidget):
                                    {"bottom_elevation": be, "structure_height": sh, "top_elevation": te})
 
     def _build_result_area(self, parent):
-        lay = QVBoxLayout(parent)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
-
-        # 导出工具栏
-        tb = QHBoxLayout()
-        lbl = QLabel("计算结果")
-        lbl.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
-        tb.addWidget(lbl)
-        tb.addStretch()
-        btn_export_excel = PushButton("导出Excel"); btn_export_excel.clicked.connect(self._export_excel)
-        btn_export_word = PushButton("导出Word"); btn_export_word.clicked.connect(self._export_word)
-        for w in [btn_export_excel, btn_export_word]:
-            tb.addWidget(w)
-        lay.addLayout(tb)
-
-        # CAD工具栏
-        cad_tb = QHBoxLayout()
-        cad_tb.setSpacing(6)
-        cad_lbl = QLabel("CAD工具")
-        cad_lbl.setStyleSheet(f"font-size:12px;font-weight:bold;color:{T2};")
-        cad_tb.addWidget(cad_lbl)
-        cad_tb.addStretch()
-        btn_profile = PushButton("生成纵断面表格"); btn_profile.clicked.connect(self._cad_longitudinal_profile)
-        btn_profile.setToolTip("导出上纵断面表格 DXF/TXT\n含线框、渠底/渠顶/水面折线、高程文字、桩号、建筑物名称、坡降、IP点名称")
-        btn_summary = PushButton("生成断面汇总表"); btn_summary.clicked.connect(self._cad_section_summary)
-        btn_summary.setToolTip("导出各类断面尺寸及水力要素汇总表 DXF\n含明渠/隧洞/渡槽/暗涵/倒虹吸等断面参数")
-        btn_ip = PushButton("IP坐标及弯道参数表"); btn_ip.clicked.connect(self._cad_ip_table)
-        btn_ip.setToolTip("导出IP坐标及弯道参数表 DXF/Excel\n含IP点坐标、桩号、转角、半径、切线长、弧长、底高程")
-        btn_combined = PrimaryPushButton("导出全部DXF"); btn_combined.clicked.connect(self._cad_combined_dxf)
-        btn_combined.setToolTip("一键合并导出：纵断面表格 + 断面汇总表 + IP坐标表\n三个表格输出到同一个DXF文件，分图层管理")
-        btn_bzzh2 = PushButton("生成bzzh2命令内容"); btn_bzzh2.clicked.connect(self._cad_bzzh2)
-        btn_bzzh2.setToolTip("生成ZDM用的bzzh2命令 TXT\n提取建筑物进出口数据")
-        btn_plan = PushButton("建筑物名称上平面图"); btn_plan.clicked.connect(self._cad_building_plan)
-        btn_plan.setToolTip("生成AutoCAD -TEXT命令并复制到剪贴板\n将建筑物名称平行于轴线放置在平面图上")
-        for w in [btn_profile, btn_summary, btn_ip, btn_combined, btn_bzzh2, btn_plan]:
-            cad_tb.addWidget(w)
-        lay.addLayout(cad_tb)
-
-        # 计算结果摘要面板（持久显示）
-        self.summary_grp = QGroupBox("计算结果摘要")
-        sg_lay = QHBoxLayout(self.summary_grp)
-        sg_lay.setContentsMargins(8, 4, 8, 4)
-        sg_lay.setSpacing(16)
-        self.lbl_summary_info = QLabel("尚未计算")
-        self.lbl_summary_info.setStyleSheet("font-size: 12px;")
-        sg_lay.addWidget(self.lbl_summary_info, stretch=1)
-        self.btn_building_stats = PushButton("建筑物长度统计")
-        self.btn_building_stats.clicked.connect(self._show_building_length_dialog)
-        self.btn_building_stats.setEnabled(False)
-        sg_lay.addWidget(self.btn_building_stats)
-        lay.addWidget(self.summary_grp)
-
-        # 详细过程文本框
-        self.detail_text = QTextEdit()
-        self.detail_text.setReadOnly(True)
-        self.detail_text.setFont(QFont("Consolas", 10))
-        lay.addWidget(self.detail_text)
-
-        # 初始帮助
-        self._show_help()
+        """兼容旧调用：v3.2 起统一走流程标签工作区。"""
+        self._build_workspace_area(parent)
 
     def _show_help(self):
         lines = [
@@ -1362,19 +2259,18 @@ class WaterProfilePanel(QWidget):
             "=" * 70, "",
             "操作步骤：",
             "  1. 填写基础设置（渠道名称、起始水位、流量等）",
-            "  2. 输入节点数据（从批量计算导入）",
-            "  3. 核对基础设置和渐变段设置",
-            "  4. 点击「插入渐变段」",
-            "  5.（如有倒虹吸）点击「倒虹吸水力计算」",
-            "  6.（如有有压管道）点击「有压管道水力计算」",
-            "  7. 点击「执行计算」",
-            "  8. 查看结果表格和详细过程", "",
-            "从批量计算导入：",
-            "  - 先在「批量计算」模块完成计算",
-            "  - 点击「从批量计算导入」自动填充节点表",
-            "  - 导入后自动同步渠道名称、级别、起始水位等基础设置",
-            "  - 自动填充多流量段设计流量和加大流量",
-            "  - 自动计算推荐转弯半径（按规范取大值原则）", "",
+            "  2. 在表1填写断面参数并点击「断面批量计算」",
+            "  3. 断面全成功后，系统自动同步表1+表2到表3",
+            "  4. 核对基础设置和渐变段设置",
+            "  5. 点击「插入渐变段」",
+            "  6.（如有倒虹吸）点击「倒虹吸水力计算」",
+            "  7.（如有有压管道）点击「有压管道水力计算」",
+            "  8. 点击「执行计算」",
+            "  9. 查看结果表格和详细过程", "",
+            "同步与锁定规则：",
+            "  - 仅断面全成功时允许自动同步到表3",
+            "  - 表1存在失败行时，后续操作保持锁定",
+            "  - 表1任意编辑后，表3结果立即失效并重新锁定", "",
             "多流量段支持：",
             "  - 设计流量和加大流量支持逗号分隔的多值输入",
             "  - 例如：5.0, 8.0, 10.0",
@@ -1683,6 +2579,11 @@ class WaterProfilePanel(QWidget):
             'chamfer_params': dict(self._node_chamfer_params),
             'u_params': dict(self._node_u_params),
             'velocity_increased': dict(self._node_velocity_increased),
+            'section_sync_ready': bool(getattr(self, "_section_sync_ready", False)),
+            'section_state_text': (self._section_state_label.text().strip() if self._section_state_label else ""),
+            'section_status_kind': str(getattr(self, "_section_status_kind", "neutral") or "neutral"),
+            'siphon_manager_config': self._snapshot_manager_config(getattr(self, "_siphon_manager", None)),
+            'pressure_pipe_manager_config': self._snapshot_manager_config(getattr(self, "_pressure_pipe_manager", None)),
         }
         for r in range(self.node_table.rowCount()):
             row_data = []
@@ -1693,6 +2594,54 @@ class WaterProfilePanel(QWidget):
             first_item = self.node_table.item(r, 0)
             snapshot['row_meta'].append(first_item.data(Qt.UserRole) if first_item else None)
         return snapshot
+
+    @staticmethod
+    def _snapshot_manager_config(manager):
+        if manager is None:
+            return None
+        to_dict = getattr(manager, "to_dict", None)
+        if not callable(to_dict):
+            return None
+        try:
+            import copy
+            return copy.deepcopy(to_dict())
+        except Exception:
+            return None
+
+    @staticmethod
+    def _restore_manager_config(manager, config_data):
+        if manager is None or not isinstance(config_data, dict):
+            return
+        from_dict = getattr(manager, "from_dict", None)
+        if not callable(from_dict):
+            return
+        try:
+            from_dict(config_data)
+        except Exception:
+            return
+        save_fn = getattr(manager, "save_config", None)
+        if callable(save_fn):
+            try:
+                save_fn()
+            except Exception:
+                pass
+
+    def _restore_section_gate_from_snapshot(self, snapshot):
+        if not isinstance(snapshot, dict):
+            return
+        sync_ready = bool(snapshot.get('section_sync_ready', getattr(self, "_section_sync_ready", False)))
+        state_text = str(snapshot.get('section_state_text', "") or "").strip()
+        status_kind = str(snapshot.get('section_status_kind', "") or "").strip()
+        if not state_text:
+            state_text = (
+                "状态：断面全成功，表1+表2已同步到表3"
+                if sync_ready else
+                "状态：断面结果未就绪，请先执行断面批量计算"
+            )
+        if status_kind not in ("success", "error", "warning", "neutral"):
+            status_kind = ""
+        self._section_sync_ready = sync_ready
+        self._set_downstream_actions_enabled(sync_ready, state_text=state_text, status_kind=status_kind)
 
     def _restore_node_table(self, snapshot):
         """从快照恢复完整节点表状态"""
@@ -1723,7 +2672,9 @@ class WaterProfilePanel(QWidget):
             self._node_velocity_increased = dict(snapshot.get('velocity_increased', {}))
         finally:
             self._updating_cells = False
-        self._refresh_pressure_pipe_controls()
+        self._restore_manager_config(getattr(self, "_siphon_manager", None), snapshot.get('siphon_manager_config'))
+        self._restore_manager_config(getattr(self, "_pressure_pipe_manager", None), snapshot.get('pressure_pipe_manager_config'))
+        self._restore_section_gate_from_snapshot(snapshot)
         nodes_for_view = self._build_nodes_from_table()
         self._update_pressure_pipe_roughness_overview(
             self._collect_pressure_pipe_roughness_pairs_from_nodes(nodes_for_view)
@@ -1891,12 +2842,16 @@ class WaterProfilePanel(QWidget):
                         node.top_elevation = te
 
     # ================================================================
-    def _add_node_row(self, data=None, _skip_undo=False):
+    def _add_node_row(self, data=None, _skip_undo=False, _from_table1_source=False, _defer_controls_refresh=False):
         """添加一行节点，_skip_undo=True 时跳过撤销快照（内部调用用）"""
         if not _skip_undo:
             self._push_node_table_undo()
         row = self.node_table.rowCount()
         self.node_table.insertRow(row)
+        struct_text_in_data = ""
+        if isinstance(data, (list, tuple)) and len(data) > 2:
+            struct_text_in_data = str(data[2] or "").strip()
+        row_is_pressure_pipe = "有压管道" in struct_text_in_data
         total_cols = len(NODE_ALL_HEADERS)
         for col in range(total_cols):
             if data and isinstance(data, (list, tuple)) and col < len(data) and data[col]:
@@ -1911,11 +2866,23 @@ class WaterProfilePanel(QWidget):
             # 第一行（水位起点）锁定水头损失列
             if row == 0 and col in FIRST_ROW_LOCKED_LOSS_COLS:
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            if _from_table1_source and col in TABLE1_SOURCE_LOCKED_COLS:
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            if row_is_pressure_pipe and col == 7:
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
             self.node_table.setItem(row, col, item)
-        self._refresh_pressure_pipe_controls()
+        first_item = self.node_table.item(row, 0)
+        if first_item:
+            payload = first_item.data(Qt.UserRole)
+            if not isinstance(payload, dict):
+                payload = {}
+            payload["_from_table1_source"] = bool(_from_table1_source)
+            first_item.setData(Qt.UserRole, payload)
+        if not _defer_controls_refresh:
+            self._refresh_pressure_pipe_controls()
 
-    def _clear_nodes(self):
-        if self.node_table.rowCount() > 0:
+    def _clear_nodes(self, _skip_undo=False):
+        if not _skip_undo and self.node_table.rowCount() > 0:
             self._push_node_table_undo()
         self.node_table.setRowCount(0)
         self._node_structure_heights.clear()
@@ -1928,7 +2895,90 @@ class WaterProfilePanel(QWidget):
             self.siphon_roughness_chips.clear()
         if hasattr(self, 'pressure_pipe_roughness_chips'):
             self.pressure_pipe_roughness_chips.clear()
+        self._refresh_roughness_overview_visibility()
         self._refresh_pressure_pipe_controls()
+
+    def _count_table3_related_config_entries(self):
+        siphon_count = 0
+        pressure_count = 0
+        manager = getattr(self, "_siphon_manager", None)
+        if manager is not None:
+            getter = getattr(manager, "get_siphon_names", None)
+            if callable(getter):
+                try:
+                    siphon_count = len([name for name in getter() if str(name).strip()])
+                except Exception:
+                    siphon_count = 0
+        manager = getattr(self, "_pressure_pipe_manager", None)
+        if manager is not None:
+            getter = getattr(manager, "get_all_pipe_names", None)
+            if callable(getter):
+                try:
+                    pressure_count = len([name for name in getter() if str(name).strip()])
+                except Exception:
+                    pressure_count = 0
+        return siphon_count, pressure_count
+
+    def _clear_table3_related_configs(self):
+        cleared_siphon = 0
+        cleared_pressure = 0
+        manager = getattr(self, "_siphon_manager", None)
+        if manager is not None:
+            getter = getattr(manager, "get_siphon_names", None)
+            clear_fn = getattr(manager, "clear_all", None)
+            save_fn = getattr(manager, "save_config", None)
+            try:
+                if callable(getter):
+                    cleared_siphon = len([name for name in getter() if str(name).strip()])
+                if callable(clear_fn):
+                    clear_fn()
+                if callable(save_fn):
+                    save_fn()
+            except Exception:
+                cleared_siphon = 0
+        manager = getattr(self, "_pressure_pipe_manager", None)
+        if manager is not None:
+            getter = getattr(manager, "get_all_pipe_names", None)
+            clear_fn = getattr(manager, "clear_all", None)
+            try:
+                if callable(getter):
+                    cleared_pressure = len([name for name in getter() if str(name).strip()])
+                if callable(clear_fn):
+                    clear_fn()
+            except Exception:
+                cleared_pressure = 0
+        return cleared_siphon, cleared_pressure
+
+    def _on_clear_table3_clicked(self):
+        node_rows = self.node_table.rowCount() if self.node_table else 0
+        siphon_count, pressure_count = self._count_table3_related_config_entries()
+        if node_rows <= 0 and siphon_count <= 0 and pressure_count <= 0:
+            self._mark_section_results_stale("状态：表3已为空，请先执行断面批量计算", status_kind="warning")
+            InfoBar.info(
+                "已为空",
+                "表3已为空，无需清空；下游操作已保持锁定，请先执行断面批量计算。",
+                parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP
+            )
+            return
+        confirm_msg = (
+            f"将清空表3并清理联动配置：\n"
+            f"• 表3节点行数：{node_rows}\n"
+            f"• 倒虹吸配置：{siphon_count} 组\n"
+            f"• 有压管道配置：{pressure_count} 组\n\n"
+            "影响：将锁定下游操作，需重新执行断面批量计算后同步到表3。\n"
+            "恢复说明：表3行可按 Ctrl+Z 撤销；配置清理不可撤销。"
+        )
+        if not self._ask_destructive_confirm("确认清空表3", confirm_msg, yes_text="确认清空", no_text="取消"):
+            return
+        self._push_node_table_undo()
+        self._clear_nodes(_skip_undo=True)
+        cleared_siphon, cleared_pressure = self._clear_table3_related_configs()
+        self._mark_section_results_stale("状态：表3已清空并清理联动配置，请先执行断面批量计算", status_kind="warning")
+        InfoBar.success(
+            "清空完成",
+            f"已清空表3 {node_rows} 行，清理倒虹吸 {cleared_siphon} 组、有压管道 {cleared_pressure} 组。表3可按 Ctrl+Z 撤销，配置清理不可撤销。",
+            parent=self._info_parent(), duration=2500, position=InfoBarPosition.TOP
+        )
 
     def _get_node_row_data(self, row):
         data = []
@@ -1938,7 +2988,7 @@ class WaterProfilePanel(QWidget):
         return data
 
     # ================================================================
-    # 从批量计算导入
+    # 从断面计算结果同步到表3
     # ================================================================
     def _import_from_batch(self):
         if not SHARED_DATA_AVAILABLE:
@@ -1948,7 +2998,7 @@ class WaterProfilePanel(QWidget):
         shared_data = get_shared_data_manager()
         results = shared_data.get_batch_results()
         if not results:
-            InfoBar.warning("无数据", "批量计算模块尚无结果。请先在「批量计算」模块完成计算。",
+            InfoBar.warning("无数据", "断面批量计算尚无可同步结果。请先完成表1断面批量计算。",
                            parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
             return
 
@@ -1956,6 +3006,7 @@ class WaterProfilePanel(QWidget):
         self._sync_batch_settings()
 
         self._updating_cells = True
+        table_signal_blocker = QSignalBlocker(self.node_table)
         self._clear_nodes()
         imported = 0
         flow_segment_map = {}  # {流量段编号: 设计流量}
@@ -2020,15 +3071,13 @@ class WaterProfilePanel(QWidget):
                 _n_float = float(n_val) if n_val and str(n_val).strip() else 0.0
             except (ValueError, TypeError):
                 _n_float = 0.0
-            if _n_float > 0:
+            if "有压管道" in section_type:
+                pressure_pipe_params_pairs.append(
+                    (building_name or f"有压管道{len(pressure_pipe_params_pairs)+1}", pipe_material)
+                )
+            elif _n_float > 0:
                 if "倒虹吸" in section_type:
                     siphon_roughness_pairs.append((building_name or f"倒虹吸{len(siphon_roughness_pairs)+1}", _n_float))
-                elif "有压管道" in section_type:
-                    # 有压管道收集管材信息而非糙率
-                    if pipe_material:
-                        pressure_pipe_params_pairs.append(
-                            (building_name or f"有压管道{len(pressure_pipe_params_pairs)+1}", pipe_material)
-                        )
                 else:
                     # 排除闸类占位行（闸类无糙率意义）
                     if "闸" not in section_type and "分水" not in section_type:
@@ -2072,7 +3121,12 @@ class WaterProfilePanel(QWidget):
             row_data[24] = fmt(n_val)
             row_data[25] = fmt(slope_inv)
             row_data[26] = fmt(Q)
-            self._add_node_row(row_data, _skip_undo=True)
+            self._add_node_row(
+                row_data,
+                _skip_undo=True,
+                _from_table1_source=True,
+                _defer_controls_refresh=True
+            )
 
             # 写入水力结果到结果列（原版通过set_nodes写入water_depth/velocity等）
             cur_row = self.node_table.rowCount() - 1
@@ -2197,6 +3251,9 @@ class WaterProfilePanel(QWidget):
         if has_pressure_pipe:
             next_steps += "【有压管道水力计算】→"
         next_steps += "【执行计算】"
+        self._apply_table1_source_row_lock_flags()
+        self._refresh_pressure_pipe_controls()
+        del table_signal_blocker
 
         InfoBar.success("导入成功",
                        f"已导入 {imported} 个节点，已自动填充流量和推荐转弯半径（全局）。{next_steps}",
@@ -2232,7 +3289,8 @@ class WaterProfilePanel(QWidget):
         turn_radius = self._fval(self.turn_radius_edit, 0)
         siphon_n = DEFAULT_SIPHON_TURN_RADIUS_N
         # 记录倒虹吸/有压管道行中已有明确写回值的行（Step3 中保留，不清空）
-        pressurized_rows_with_existing = set()
+        siphon_rows_with_existing = set()
+        pressure_rows_with_existing = set()
         for r in range(self.node_table.rowCount()):
             existing_r = 0.0
             ei = self.node_table.item(r, 7)
@@ -2248,12 +3306,14 @@ class WaterProfilePanel(QWidget):
             _is_pressure_pipe = "有压管道" in struct_text
             _is_gate = "闸" in struct_text or "分水" in struct_text
             if existing_r > 0:
-                if _is_siphon or _is_pressure_pipe:
-                    pressurized_rows_with_existing.add(r)
+                if _is_siphon:
+                    siphon_rows_with_existing.add(r)
+                if _is_pressure_pipe:
+                    pressure_rows_with_existing.add(r)
                 continue  # 保留导入/手动输入/写回的转弯半径
             if r == 0 or _is_gate:
                 continue  # 首行/闸类：不填转弯半径
-            if _is_siphon or _is_pressure_pipe:
+            if _is_siphon:
                 # 倒虹吸/有压管道行：临时写 n×D 供几何计算（Step3 会清空）
                 d_item = self.node_table.item(r, 21)  # 直径D
                 d_val = 0.0
@@ -2265,6 +3325,8 @@ class WaterProfilePanel(QWidget):
                     item = QTableWidgetItem(f"{r_val:.1f}")
                     item.setTextAlignment(Qt.AlignCenter)
                     self.node_table.setItem(r, 7, item)
+            elif _is_pressure_pipe:
+                continue
             elif turn_radius > 0:
                 # 普通行：使用全局转弯半径
                 item = QTableWidgetItem(f"{turn_radius:.1f}")
@@ -2314,11 +3376,14 @@ class WaterProfilePanel(QWidget):
             _is_gate_r3 = "闸" in _st_r3 or "分水" in _st_r3
             if r == 0 or _is_gate_r3:
                 pass  # 首行/闸类：不写 col 7
-            elif _is_siphon_r3 or _is_pressure_pipe_r3:
-                if r not in pressurized_rows_with_existing:
+            elif _is_siphon_r3:
+                if r not in siphon_rows_with_existing:
                     # 清空临时写入的 n×D，等待倒虹吸/有压管道计算后写回真实值
                     self.node_table.setItem(r, 7, QTableWidgetItem(""))
                 # else: pressurized_rows_with_existing 中的行已有写回值，保留不动
+            elif _is_pressure_pipe_r3:
+                if r not in pressure_rows_with_existing:
+                    self.node_table.setItem(r, 7, QTableWidgetItem(""))
             elif node.turn_radius and node.turn_radius > 0:
                 item = QTableWidgetItem(f"{node.turn_radius:.1f}")
                 item.setTextAlignment(Qt.AlignCenter)
@@ -2410,25 +3475,42 @@ class WaterProfilePanel(QWidget):
             node.turn_radius = 0.0
 
     def _sync_batch_settings(self):
-        """从批量计算面板同步渠道基础信息"""
+        """从断面计算输入区同步渠道基础信息"""
         try:
-            main_win = self.window()
-            if main_win and hasattr(main_win, 'batch_panel'):
-                bp = main_win.batch_panel
-                if hasattr(bp, 'channel_name_edit'):
-                    name = bp.channel_name_edit.text().strip()
-                    if name: self.channel_name_edit.setText(name)
-                if hasattr(bp, 'channel_level_combo'):
-                    level = bp.channel_level_combo.currentText()
-                    if level:
-                        idx = self.channel_level_combo.findText(level)
-                        if idx >= 0: self.channel_level_combo.setCurrentIndex(idx)
-                if hasattr(bp, 'start_wl_edit'):
-                    wl = bp.start_wl_edit.text().strip()
-                    if wl: self.start_wl_edit.setText(wl)
-                if hasattr(bp, 'start_station_edit'):
-                    st = bp.start_station_edit.text().strip()
-                    if st: self.start_station_edit.setText(st)
+            bp = getattr(self, "_batch_backend", None)
+            if not bp:
+                main_win = self.window()
+                if main_win and hasattr(main_win, 'batch_panel'):
+                    bp = main_win.batch_panel
+            if not bp:
+                return
+            if hasattr(bp, 'channel_name_edit'):
+                name = bp.channel_name_edit.text().strip()
+                if name:
+                    self.channel_name_edit.setText(name)
+            if hasattr(bp, 'channel_level_combo'):
+                level = bp.channel_level_combo.currentText()
+                if level:
+                    idx = self.channel_level_combo.findText(level)
+                    if idx >= 0:
+                        self.channel_level_combo.setCurrentIndex(idx)
+            if hasattr(bp, 'start_wl_edit'):
+                wl = bp.start_wl_edit.text().strip()
+                if wl:
+                    self.start_wl_edit.setText(wl)
+            if hasattr(bp, 'start_station_edit'):
+                st = bp.start_station_edit.text().strip()
+                if st:
+                    self.start_station_edit.setText(st)
+            if hasattr(bp, 'flow_segments_edit'):
+                flow_segments = bp.flow_segments_edit.text().strip()
+                if flow_segments:
+                    if hasattr(self, '_section_flow_segments_edit') and self._section_flow_segments_edit:
+                        self._section_flow_segments_edit.setText(flow_segments)
+                    if hasattr(self, 'design_flow_edit') and self.design_flow_edit:
+                        self.design_flow_edit.setText(flow_segments)
+                        if hasattr(self, '_on_design_flow_changed'):
+                            self._on_design_flow_changed()
         except Exception:
             pass
 
@@ -2533,6 +3615,10 @@ class WaterProfilePanel(QWidget):
 
         nodes = []
         _default_q = (self._parse_flow_values(self.design_flow_edit.text()) or [5.0])[0]
+        global_turn_radius = self._fval(self.turn_radius_edit, DEFAULT_TURN_RADIUS)
+        pressure_cfg_radius_cache = {}
+        pressure_global_fallback_groups = set()
+        self._pressure_turn_radius_fallback_groups = set()
 
         for r in range(table.rowCount()):
             data = self._get_node_row_data(r)
@@ -2568,6 +3654,7 @@ class WaterProfilePanel(QWidget):
             pipe_material = ""
             local_loss_ratio = None
             in_out_raw = ""
+            from_table1_source = False
             # 恢复自动插入明渠段标记（通过UserRole存储）
             _first_item = table.item(r, 0)
             if _first_item:
@@ -2586,6 +3673,8 @@ class WaterProfilePanel(QWidget):
                     node.transition_zeta = td.get('transition_zeta', 0.0)
                     node.transition_theta = td.get('transition_theta', 0.0)
                 if isinstance(_ur, dict):
+                    if "_from_table1_source" in _ur:
+                        from_table1_source = bool(_ur.get("_from_table1_source"))
                     _ext = _ur.get('_external_head_loss', None)
                     if _ext is not None and str(_ext).strip() != "":
                         try:
@@ -2604,6 +3693,9 @@ class WaterProfilePanel(QWidget):
                             local_loss_ratio = float(_llr)
                         except (ValueError, TypeError):
                             local_loss_ratio = None
+            if not from_table1_source and not getattr(node, 'is_transition', False) and not getattr(node, 'is_auto_inserted_channel', False):
+                from_table1_source = True
+            node.from_table1_source = from_table1_source
 
             # 进出口 (col 3)
             _io_text = _read_text(r, 3)
@@ -2624,6 +3716,39 @@ class WaterProfilePanel(QWidget):
                 node.turn_radius = self._sf(data[7], 0.0)
             else:
                 node.turn_radius = self._sf(data[7], self._fval(self.turn_radius_edit, DEFAULT_TURN_RADIUS))
+            # 有压管道三层来源：表1行值 -> 管道配置R -> 全局半径（仅用于本次计算）
+            try:
+                _struct_for_turn = str(data[2]).strip()
+                _is_pressure_turn = "有压管道" in _struct_for_turn
+                _is_siphon_turn = "倒虹吸" in _struct_for_turn
+                _is_gate_turn = ("闸" in _struct_for_turn) or ("分水" in _struct_for_turn)
+                _row_turn = self._sf(data[7], 0.0)
+                if _is_pressure_turn and r != 0 and (not _is_gate_turn):
+                    if _row_turn > 0:
+                        node.turn_radius = _row_turn
+                    else:
+                        _group_name = str(data[1]).strip()
+                        _manager_turn = pressure_cfg_radius_cache.get(_group_name, None)
+                        if _manager_turn is None:
+                            _manager_turn = 0.0
+                            _mgr = getattr(self, "_pressure_pipe_manager", None)
+                            if _mgr is not None and _group_name:
+                                try:
+                                    _cfg = _mgr.get_pipe_config(_group_name)
+                                    _manager_turn = float(getattr(_cfg, "turn_R", 0.0) or 0.0) if _cfg else 0.0
+                                except Exception:
+                                    _manager_turn = 0.0
+                            pressure_cfg_radius_cache[_group_name] = _manager_turn
+                        if _manager_turn > 0:
+                            node.turn_radius = _manager_turn
+                        else:
+                            node.turn_radius = global_turn_radius if global_turn_radius > 0 else 0.0
+                            if node.turn_radius > 0:
+                                pressure_global_fallback_groups.add(_group_name or f"row-{r+1}")
+                elif _is_siphon_turn:
+                    node.turn_radius = _row_turn
+            except Exception:
+                pass
 
             # ===== 几何结果列 (8-19) =====
             # 转角 (col 8)
@@ -2807,9 +3932,12 @@ class WaterProfilePanel(QWidget):
                 node.velocity_increased = self._node_velocity_increased[r]
 
             nodes.append(node)
+        self._pressure_turn_radius_fallback_groups = set(pressure_global_fallback_groups)
         return nodes
 
     def _calculate(self):
+        if not self._ensure_downstream_ready("执行计算"):
+            return
         if not CALCULATOR_AVAILABLE:
             InfoBar.error("不可用", "核心计算引擎未加载，无法计算",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
@@ -2926,19 +4054,21 @@ class WaterProfilePanel(QWidget):
             msg = f"共{len(calculated)}个节点，总长{total_len:.1f}m，水位落差{wl_drop:.3f}m"
             if missing_height_names:
                 msg += f"\n⚠ 以下节点缺少结构总高，渠顶高程未计算: {', '.join(missing_height_names)}"
-                msg += "\n请通过【从批量计算导入】获取正确的结构总高。"
+                msg += "\n请通过【断面批量计算】并自动同步后获取正确的结构总高。"
                 InfoBar.warning("计算完成（部分渠顶高程缺失）", msg,
                                parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
             else:
                 InfoBar.success("计算完成", msg,
                                parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
+            self._switch_workspace_tab(self._tab_output)
+
         except Exception as e:
             InfoBar.error("计算错误", f"计算过程出错: {str(e)}",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             import traceback
             self.detail_text.setPlainText(f"计算错误:\n{traceback.format_exc()}")
-            self.result_notebook.setCurrentIndex(1)
+            self._switch_to_output_process_tab(process_index=1)
 
     def _recalculate_silent(self):
         """静默重新推求水面线（跳过前置检查和InfoBar提示）。
@@ -2987,11 +4117,9 @@ class WaterProfilePanel(QWidget):
 
     def _update_table_from_nodes_full(self, nodes, prefix=""):
         """用计算后的完整节点数据重建统一表格（输入列+结果列）"""
-        self._updating_cells = True
-        try:
+        with self._table_batch_update(self.node_table):
             self._update_table_from_nodes_full_impl(nodes, prefix)
-        finally:
-            self._updating_cells = False
+            self._apply_table1_source_row_lock_flags()
         self._update_pressure_pipe_roughness_overview(
             self._collect_pressure_pipe_roughness_pairs_from_nodes(nodes)
         )
@@ -3031,6 +4159,9 @@ class WaterProfilePanel(QWidget):
 
             _is_trans = getattr(node, 'is_transition', False)
             _is_auto_ch = getattr(node, 'is_auto_inserted_channel', False)
+            _is_source_row = bool(getattr(node, "from_table1_source", False))
+            if not _is_source_row and (not _is_trans) and (not _is_auto_ch):
+                _is_source_row = True
 
             # 构建完整46列数据，按列索引直接赋值
             vals = [""] * len(NODE_ALL_HEADERS)
@@ -3147,6 +4278,10 @@ class WaterProfilePanel(QWidget):
                 # 第一行（水位起点）锁定水头损失列
                 if r == 0 and c in FIRST_ROW_LOCKED_LOSS_COLS:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                if _is_source_row and c in TABLE1_SOURCE_LOCKED_COLS:
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                if c == 7 and ("有压管道" in _st_str or getattr(node, 'is_pressure_pipe', False)):
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 # 渐变段行灰色
                 if _is_trans:
                     item.setForeground(QColor("#9E9E9E"))
@@ -3198,6 +4333,7 @@ class WaterProfilePanel(QWidget):
                             payload['_local_loss_ratio'] = _llr_f
                     except (ValueError, TypeError):
                         pass
+                payload["_from_table1_source"] = bool(_is_source_row)
                 if payload:
                     first_item.setData(Qt.UserRole, payload)
 
@@ -3400,6 +4536,20 @@ class WaterProfilePanel(QWidget):
                     self._formula_tooltip.schedule_hide()
             elif event.type() == QEvent.Type.Leave:
                 self._formula_tooltip.schedule_hide()
+        elif hasattr(self, "node_table") and self.node_table and obj in (self.node_table, self.node_table.viewport()):
+            if event.type() == QEvent.Type.KeyPress:
+                key = event.key()
+                modifiers = event.modifiers()
+                is_edit_key = bool(event.text().strip()) or key in {
+                    Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Return, Qt.Key_Enter, Qt.Key_F2
+                }
+                is_paste = bool(modifiers & Qt.ControlModifier) and key in {Qt.Key_V, Qt.Key_X}
+                if is_edit_key or is_paste:
+                    row = self.node_table.currentRow()
+                    col = self.node_table.currentColumn()
+                    if self._is_table1_source_locked_cell(row, col):
+                        self._show_table1_source_lock_hint()
+                        return True
         return super().eventFilter(obj, event)
 
     def _format_start_station(self):
@@ -3409,12 +4559,32 @@ class WaterProfilePanel(QWidget):
         formatted = format_station_display(value)
         self.start_station_edit.setText(formatted)
 
+    def _refresh_roughness_overview_visibility(self):
+        groups = getattr(self, "_siphon_pressure_group", None)
+        if groups is None:
+            return
+        if not isinstance(groups, (list, tuple)):
+            groups = [groups]
+        siphon_pairs = getattr(getattr(self, "siphon_roughness_chips", None), "_pairs", [])
+        ppipe_pairs = getattr(getattr(self, "pressure_pipe_roughness_chips", None), "_pairs", [])
+        show_group = bool(siphon_pairs) or bool(ppipe_pairs)
+        changed = False
+        for group in groups:
+            if group is None:
+                continue
+            if group.isVisible() != show_group:
+                group.setVisible(show_group)
+                changed = True
+        if changed and self.isVisible():
+            QTimer.singleShot(0, self._adjust_splitter_for_settings)
+
     def _update_siphon_roughness_overview(self, pairs):
         """更新倒虹吸糙率芯片展示。
         pairs: [(名称, 糙率), ...] 列表
         """
         if not pairs:
             self.siphon_roughness_chips.clear()
+            self._refresh_roughness_overview_visibility()
             return
         # 去重：同名倒虹吸只取第一个（批量计算中同一倒虹吸可能有多行）
         seen = {}
@@ -3422,6 +4592,7 @@ class WaterProfilePanel(QWidget):
             if name not in seen:
                 seen[name] = n_val
         self.siphon_roughness_chips.set_siphon_data(list(seen.items()))
+        self._refresh_roughness_overview_visibility()
 
     def _update_pressure_pipe_roughness_overview(self, pairs):
         """更新有压管道参数芯片展示。pairs: [(名称, 管材名称), ...]"""
@@ -3429,6 +4600,7 @@ class WaterProfilePanel(QWidget):
             return
         if not pairs:
             self.pressure_pipe_roughness_chips.clear()
+            self._refresh_roughness_overview_visibility()
             return
         seen = {}
         default_idx = 1
@@ -3445,6 +4617,7 @@ class WaterProfilePanel(QWidget):
                     param_str = material if material else "未指定管材"
                 seen[display_name] = param_str
         self.pressure_pipe_roughness_chips.set_pairs(list(seen.items()))
+        self._refresh_roughness_overview_visibility()
 
     def _collect_pressure_pipe_roughness_pairs_from_nodes(self, nodes):
         """从节点列表提取有压管道参数展示对。"""
@@ -3468,6 +4641,10 @@ class WaterProfilePanel(QWidget):
         """刷新有压管道按钮提示状态（按钮始终可点击）。"""
         btn = getattr(self, "btn_pressure_pipe_calc", None)
         if btn is None:
+            return
+        if not getattr(self, "_section_sync_ready", False):
+            btn.setEnabled(False)
+            btn.setToolTip("已锁定：请先完成断面批量计算并同步到表3")
             return
         table = getattr(self, "node_table", None)
         if table is None:
@@ -3546,8 +4723,27 @@ class WaterProfilePanel(QWidget):
         except ValueError: return default
 
     def _info_parent(self):
-        w = self.window()
-        return w if w else self
+        return self
+
+    @contextmanager
+    def _table_batch_update(self, table):
+        """批量更新表格：屏蔽信号 + 暂停重绘 + 兜底维护 _updating_cells。"""
+        if table is None:
+            yield
+            return
+        prev_updating = self._updating_cells
+        prev_updates_enabled = table.updatesEnabled()
+        self._updating_cells = True
+        blocker = QSignalBlocker(table)
+        if prev_updates_enabled:
+            table.setUpdatesEnabled(False)
+        try:
+            yield
+        finally:
+            if prev_updates_enabled:
+                table.setUpdatesEnabled(True)
+            del blocker
+            self._updating_cells = prev_updating
 
     def _calculate_recommended_turn_radius(self, nodes):
         """根据规范计算推荐的转弯半径（取大值原则）
@@ -3836,6 +5032,8 @@ class WaterProfilePanel(QWidget):
 
     def _insert_transitions(self):
         """插入渐变段"""
+        if not self._ensure_downstream_ready("插入渐变段"):
+            return
         if not CALCULATOR_AVAILABLE:
             InfoBar.error("不可用", "核心计算引擎未加载",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
@@ -3855,7 +5053,7 @@ class WaterProfilePanel(QWidget):
             design_flows = self._parse_flow_values(self.design_flow_edit.text())
             max_flows = self._parse_flow_values(self.max_flow_edit.text())
             if not design_flows or not max_flows or all(q <= 0 for q in design_flows):
-                InfoBar.info("提示", "请先点击【从批量计算导入】导入数据后，再点击【插入渐变段】。",
+                InfoBar.info("提示", "请先执行【断面批量计算】并完成自动同步后，再点击【插入渐变段】。",
                             parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
                 return
 
@@ -4085,6 +5283,8 @@ class WaterProfilePanel(QWidget):
                 # 第一行（水位起点）锁定水头损失列
                 if r == 0 and c in FIRST_ROW_LOCKED_LOSS_COLS:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                if c == 7 and ("有压管道" in _st_str or getattr(node, 'is_pressure_pipe', False)):
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 if _is_trans:
                     item.setForeground(QColor("#9E9E9E"))
                 elif _is_auto_ch:
@@ -4096,6 +5296,8 @@ class WaterProfilePanel(QWidget):
     def _open_siphon_calculator(self):
         """打开倒虹吸水力计算（PySide6 多标签页窗口）"""
         print("[DEBUG] _open_siphon_calculator 被调用")
+        if not self._ensure_downstream_ready("倒虹吸水力计算"):
+            return
         if not CALCULATOR_AVAILABLE:
             print("[DEBUG] CALCULATOR_AVAILABLE = False，返回")
             InfoBar.error("不可用", "核心计算引擎未加载",
@@ -4251,6 +5453,128 @@ class WaterProfilePanel(QWidget):
             self._get_pressure_pipe_group_flow_section(group),
             getattr(group, "name", "") or ""
         )
+
+    @staticmethod
+    def _parse_item_float(item) -> float:
+        if item is None:
+            return 0.0
+        try:
+            txt = item.text().strip()
+            return float(txt) if txt else 0.0
+        except Exception:
+            return 0.0
+
+    def _set_table_cell_text_preserve_flags(self, row: int, col: int, text: str):
+        if not self.node_table:
+            return
+        old_item = self.node_table.item(row, col)
+        flags = old_item.flags() if old_item else (Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+        item = QTableWidgetItem(text)
+        item.setTextAlignment(Qt.AlignCenter)
+        item.setFlags(flags)
+        self.node_table.setItem(row, col, item)
+
+    def _apply_pressure_pipe_d_override_payload(self, pipe_groups, d_payload: dict) -> int:
+        if not d_payload:
+            return 0
+        changed = 0
+        for group in pipe_groups or []:
+            d_val = d_payload.get(getattr(group, "name", ""))
+            if d_val is None:
+                continue
+            try:
+                d_num = float(d_val)
+            except (TypeError, ValueError):
+                continue
+            if d_num <= 0:
+                continue
+            d_text = f"{d_num:.3f}"
+            for row_idx in getattr(group, "row_indices", []) or []:
+                if row_idx < 0 or row_idx >= self.node_table.rowCount():
+                    continue
+                cur_val = self._parse_item_float(self.node_table.item(row_idx, 21))
+                if abs(cur_val - d_num) <= 1e-9:
+                    continue
+                self._set_table_cell_text_preserve_flags(row_idx, 21, d_text)
+                changed += 1
+        return changed
+
+    def _apply_pressure_pipe_turn_radius_payload(self, pipe_groups, radius_payload: dict) -> dict:
+        result = {"changed_cells": 0, "force_groups": 0, "fill_groups": 0}
+        if not radius_payload:
+            return result
+        for group in pipe_groups or []:
+            group_name = getattr(group, "name", "")
+            cfg = radius_payload.get(group_name)
+            if not isinstance(cfg, dict):
+                continue
+            turn_r = float(cfg.get("turn_R", 0.0) or 0.0)
+            if turn_r <= 0:
+                continue
+            force_override = bool(cfg.get("force_override", False))
+            if force_override:
+                result["force_groups"] += 1
+            else:
+                result["fill_groups"] += 1
+            radius_text = f"{turn_r:.2f}"
+            for row_idx in getattr(group, "row_indices", []) or []:
+                if row_idx < 0 or row_idx >= self.node_table.rowCount():
+                    continue
+                cur_val = self._parse_item_float(self.node_table.item(row_idx, 7))
+                if (not force_override) and cur_val > 0:
+                    continue
+                if abs(cur_val - turn_r) <= 1e-9:
+                    continue
+                self._set_table_cell_text_preserve_flags(row_idx, 7, radius_text)
+                result["changed_cells"] += 1
+        return result
+
+    def _apply_pressure_pipe_dialog_payloads(self, pipe_groups, radius_payload: dict, d_payload: dict) -> dict:
+        d_changed = self._apply_pressure_pipe_d_override_payload(pipe_groups, d_payload)
+        radius_result = self._apply_pressure_pipe_turn_radius_payload(pipe_groups, radius_payload)
+        total_changed = d_changed + int(radius_result.get("changed_cells", 0))
+        if total_changed > 0:
+            self._apply_table1_source_row_lock_flags()
+        return {
+            "changed_cells": total_changed,
+            "d_changed": d_changed,
+            "radius_changed": int(radius_result.get("changed_cells", 0)),
+            "force_groups": int(radius_result.get("force_groups", 0)),
+            "fill_groups": int(radius_result.get("fill_groups", 0)),
+        }
+
+    def _show_pressure_turn_radius_fallback_notice_if_needed(self):
+        groups = sorted({str(g).strip() for g in (self._pressure_turn_radius_fallback_groups or set()) if str(g).strip()})
+        if not groups:
+            return
+        preview = " / ".join(groups[:6])
+        suffix = "" if len(groups) <= 6 else f" (+{len(groups)} groups)"
+        msg = (
+            "Pressure-pipe planar R had blank rows; this run used global radius fallback for: "
+            f"{preview}{suffix}."
+        )
+        InfoBar.info(
+            "Planar R fallback",
+            msg,
+            parent=self._info_parent(),
+            duration=4800,
+            position=InfoBarPosition.TOP,
+        )
+        self._pressure_turn_radius_fallback_groups = set()
+        return
+        """
+        preview = "、".join(groups[:6])
+        suffix = "" if len(groups) <= 6 else f" 等{len(groups)}组"
+        msg = f"有压管道平面R存在空值，已在本次计算中回退顶部全局半径：{preview}{suffix}。"
+        InfoBar.info(
+            "平面R回退提示",
+            msg,
+            parent=self._info_parent(),
+            duration=4800,
+            position=InfoBarPosition.TOP,
+        )
+
+        """
 
     def _apply_pressure_pipe_results(self, results_by_identity: dict, batch_data: dict):
         """将有压管道计算结果回写到表格"""
@@ -4601,6 +5925,8 @@ class WaterProfilePanel(QWidget):
     def _open_pressure_pipe_calculator(self):
         """打开有压管道水力计算窗口"""
         print("[DEBUG] _open_pressure_pipe_calculator 被调用")
+        if not self._ensure_downstream_ready("有压管道水力计算"):
+            return
         if not CALCULATOR_AVAILABLE:
             print("[DEBUG] CALCULATOR_AVAILABLE = False，返回")
             InfoBar.error("不可用", "核心计算引擎未加载",
@@ -4661,6 +5987,7 @@ class WaterProfilePanel(QWidget):
             else:
                 from managers.pressure_pipe_manager import PressurePipeManager
                 manager = PressurePipeManager()
+                self._pressure_pipe_manager = manager
         except Exception as e:
             InfoBar.error("错误", f"初始化失败: {e}",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
@@ -4678,6 +6005,17 @@ class WaterProfilePanel(QWidget):
             return
 
         # 获取用户配置
+        turn_radius_payload = config_dlg.get_turn_radius_payload() if hasattr(config_dlg, "get_turn_radius_payload") else {}
+        d_override_payload = config_dlg.get_d_override_payload() if hasattr(config_dlg, "get_d_override_payload") else {}
+        payload_apply_result = self._apply_pressure_pipe_dialog_payloads(
+            pipe_groups,
+            turn_radius_payload,
+            d_override_payload,
+        )
+        if payload_apply_result.get("changed_cells", 0) > 0:
+            self._recalculate_geometry()
+        nodes = self._build_nodes_from_table()
+        self._show_pressure_turn_radius_fallback_notice_if_needed()
         longitudinal_nodes_dict = config_dlg.get_longitudinal_nodes_dict()
         print(f"[DEBUG] 纵断面数据: {list(longitudinal_nodes_dict.keys())}")
 
@@ -4707,6 +6045,7 @@ class WaterProfilePanel(QWidget):
             else:
                 from managers.pressure_pipe_manager import PressurePipeManager
                 manager = PressurePipeManager()
+                self._pressure_pipe_manager = manager
 
             # 逐条有压管道计算总水头损失并记录完整过程（标准深度）
             results_by_identity = {}
@@ -5112,9 +6451,18 @@ class WaterProfilePanel(QWidget):
             from app_渠系计算前端.styles import fluent_error
             fluent_error(self.window(), "操作失败", f"生成IP坐标表时发生错误:\n{e}")
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._adjust_splitter_for_settings)
+        QTimer.singleShot(80, self._adjust_splitter_for_settings)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         auto_resize_table(self.node_table)
+        width = event.size().width()
+        if abs(width - self._last_layout_width) >= 8:
+            self._last_layout_width = width
+            QTimer.singleShot(0, self._adjust_splitter_for_settings)
 
     # ================================================================
     # 项目文件序列化/反序列化（用于 .qxproj 项目保存功能）
@@ -5205,19 +6553,57 @@ class WaterProfilePanel(QWidget):
         pressure_pipe_roughness_data = []
         if hasattr(self, 'pressure_pipe_roughness_chips') and hasattr(self.pressure_pipe_roughness_chips, '_pairs'):
             pressure_pipe_roughness_data = list(self.pressure_pipe_roughness_chips._pairs)
+
+        # 合并面板附加状态（表1/表2 + 下游门禁）
+        section_result_rows = []
+        if self._section_result_table:
+            for row in range(self._section_result_table.rowCount()):
+                row_data = []
+                for col in range(self._section_result_table.columnCount()):
+                    item = self._section_result_table.item(row, col)
+                    row_data.append(item.text() if item else "")
+                section_result_rows.append(row_data)
+        batch_panel_compat = {}
+        if self._batch_backend and hasattr(self._batch_backend, "to_project_dict"):
+            try:
+                batch_panel_compat = self._batch_backend.to_project_dict()
+            except Exception:
+                batch_panel_compat = {}
+        merged_section = {
+            "sync_ready": bool(getattr(self, "_section_sync_ready", False)),
+            "state_text": self._section_state_label.text().strip() if self._section_state_label else "",
+            "flow_segments_text": self._section_flow_segments_edit.text().strip() if hasattr(self, "_section_flow_segments_edit") and self._section_flow_segments_edit else "",
+            "result_rows": section_result_rows,
+            "first_success_auto_jump_done": bool(getattr(self, "_section_first_success_switched", False)),
+            "settings_collapsed": bool(self._settings_group.is_collapsed()) if self._settings_group else False,
+            "transition_settings_collapsed": bool(self._transition_group.is_collapsed()) if self._transition_group else False,
+        }
         
+        # 表3原始快照（用于重开后逐单元格一致恢复）
+        table3_rows = []
+        if self.node_table:
+            for row in range(self.node_table.rowCount()):
+                row_data = []
+                for col in range(self.node_table.columnCount()):
+                    item = self.node_table.item(row, col)
+                    row_data.append(item.text() if item else "")
+                table3_rows.append(row_data)
+
         return {
             "version": "1.0",
             "ui_settings": ui_settings,
             "project_settings": project_settings,
             "nodes": nodes_data,
             "calculated_nodes": calculated_nodes_data,
+            "node_table_rows": table3_rows,
             "extra_caches": extra_caches,
             "siphon_roughness_data": siphon_roughness_data,
             "pressure_pipe_roughness_data": pressure_pipe_roughness_data,
             "pressure_pipe_calc_records": normalize_pressure_pipe_calc_records(
                 getattr(self, "_pressure_pipe_calc_records", None)
             ),
+            "batch_panel_compat": batch_panel_compat,
+            "merged_section": merged_section,
         }
     
     def from_project_dict(self, d: dict, skip_dirty_signal: bool = False):
@@ -5242,6 +6628,8 @@ class WaterProfilePanel(QWidget):
             # 默认重置有压管道计算记录（兼容旧项目缺失字段）
             self._pressure_pipe_calc_records = empty_pressure_pipe_calc_records()
             self._pressure_pipe_last_run_at = ""
+            self._section_failure_auto_expanded_once = False
+            self._section_failure_records = []
 
             # 恢复 UI 设置
             ui = d.get("ui_settings", {})
@@ -5375,19 +6763,69 @@ class WaterProfilePanel(QWidget):
             
             # 恢复倒虹吸糙率数据
             siphon_data = d.get("siphon_roughness_data", [])
-            if siphon_data and hasattr(self.siphon_roughness_chips, 'set_siphon_data'):
-                self.siphon_roughness_chips.set_siphon_data(siphon_data)
+            if hasattr(self, 'siphon_roughness_chips'):
+                if siphon_data:
+                    self.siphon_roughness_chips.set_siphon_data(siphon_data)
+                else:
+                    self.siphon_roughness_chips.clear()
             ppipe_data = d.get("pressure_pipe_roughness_data", [])
-            if ppipe_data and hasattr(self, 'pressure_pipe_roughness_chips'):
-                self.pressure_pipe_roughness_chips.set_pairs(ppipe_data)
+            if hasattr(self, 'pressure_pipe_roughness_chips'):
+                if ppipe_data:
+                    self.pressure_pipe_roughness_chips.set_pairs(ppipe_data)
+                else:
+                    self.pressure_pipe_roughness_chips.clear()
+            self._refresh_roughness_overview_visibility()
 
             # 恢复有压管道计算记录
             self._pressure_pipe_calc_records = normalize_pressure_pipe_calc_records(
                 d.get("pressure_pipe_calc_records", None)
             )
             self._pressure_pipe_last_run_at = self._pressure_pipe_calc_records.get("last_run_at", "")
+
+            # 恢复合并面板附加状态（表1/表2）
+            merged_section = d.get("merged_section", {})
+            if not isinstance(merged_section, dict):
+                merged_section = {}
+            self._section_first_success_switched = bool(
+                merged_section.get("first_success_auto_jump_done", False)
+            )
+            settings_collapsed = bool(merged_section.get("settings_collapsed", False))
+            transition_collapsed = bool(merged_section.get("transition_settings_collapsed", False))
+            if self._settings_group:
+                self._settings_group.set_collapsed(settings_collapsed)
+            if self._transition_group:
+                self._transition_group.set_collapsed(transition_collapsed)
+            batch_panel_compat = d.get("batch_panel_compat", {})
+            if not isinstance(batch_panel_compat, dict):
+                batch_panel_compat = {}
+            if self._batch_backend:
+                try:
+                    self._batch_backend._clear_input(force=True)
+                    self._batch_backend._clear_results()
+                except Exception:
+                    pass
+                if batch_panel_compat and hasattr(self._batch_backend, "from_project_dict"):
+                    self._batch_backend.from_project_dict(batch_panel_compat, skip_dirty_signal=True)
+            flow_segments_text = str(
+                merged_section.get("flow_segments_text", "") or batch_panel_compat.get("flow_segments", "")
+            ).strip()
+            if flow_segments_text and hasattr(self, "_section_flow_segments_edit") and self._section_flow_segments_edit:
+                self._section_flow_segments_edit.setText(flow_segments_text)
+            result_rows = merged_section.get("result_rows", [])
+            if self._section_result_table and isinstance(result_rows, list) and result_rows:
+                with self._table_batch_update(self._section_result_table):
+                    self._section_result_table.setRowCount(len(result_rows))
+                    for row_idx, row_data in enumerate(result_rows):
+                        if not isinstance(row_data, (list, tuple)):
+                            continue
+                        for col_idx, cell_value in enumerate(row_data):
+                            if col_idx >= self._section_result_table.columnCount():
+                                break
+                            item = QTableWidgetItem(str(cell_value) if cell_value is not None else "")
+                            self._section_result_table.setItem(row_idx, col_idx, item)
+            self._refresh_section_failure_feedback(auto_focus=False, auto_expand_once=True)
             
-            # 刷新节点表格显示
+            # 刷新节点表格显示（先按节点模型恢复）
             if self.calculated_nodes:
                 # 有计算结果，显示计算后的数据
                 self._update_table_from_nodes_full(self.calculated_nodes)
@@ -5397,8 +6835,66 @@ class WaterProfilePanel(QWidget):
             else:
                 # 清空表格
                 self.node_table.setRowCount(0)
-                self._refresh_pressure_pipe_controls()
+
+            # 再按原始快照覆盖文本，确保“保存→重开”逐单元格一致
+            table3_rows = d.get("node_table_rows", [])
+            if isinstance(table3_rows, list) and table3_rows:
+                self._apply_node_table_text_snapshot(table3_rows)
+
+            # 恢复下游门禁状态（默认锁定）
+            state_text = str(merged_section.get("state_text", "")).strip()
+            sync_ready = bool(merged_section.get("sync_ready", False))
+            legacy_loaded = (not merged_section) and self.node_table.rowCount() > 0
+            if sync_ready and self.node_table.rowCount() > 0:
+                self._section_sync_ready = True
+                self._set_downstream_actions_enabled(
+                    True,
+                    state_text=state_text or "状态：断面全成功，表1+表2已同步到表3"
+                )
+            elif legacy_loaded:
+                self._section_sync_ready = True
+                self._set_downstream_actions_enabled(
+                    True,
+                    state_text="状态：已加载旧版项目结果，可继续计算（建议先执行断面批量计算）"
+                )
+            else:
+                self._mark_section_results_stale(
+                    state_text or "状态：断面结果未就绪，请先执行断面批量计算"
+                )
+            self._refresh_pressure_pipe_controls()
+            self._switch_workspace_tab(self._tab_section_input)
+            QTimer.singleShot(0, self._adjust_splitter_for_settings)
             
         finally:
             self._updating_cells = old_updating
             self._loading_project = old_loading
+
+    def _apply_node_table_text_snapshot(self, table_rows):
+        """将保存的表3文本快照回填到当前node_table，保持单元格文本一致。"""
+        if not self.node_table or not isinstance(table_rows, list):
+            return
+
+        with self._table_batch_update(self.node_table):
+            # 若当前行数与快照不一致，按快照调整（尽量保留现有 item 的样式/只读状态）
+            self.node_table.setRowCount(len(table_rows))
+            col_count = self.node_table.columnCount()
+            for row_idx, row_data in enumerate(table_rows):
+                if not isinstance(row_data, (list, tuple)):
+                    continue
+                for col_idx in range(col_count):
+                    text = ""
+                    if col_idx < len(row_data):
+                        cell_value = row_data[col_idx]
+                        text = str(cell_value) if cell_value is not None else ""
+                    item = self.node_table.item(row_idx, col_idx)
+                    if item is None:
+                        item = QTableWidgetItem("")
+                        item.setTextAlignment(Qt.AlignCenter)
+                        if col_idx not in EDITABLE_COLS:
+                            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                        if row_idx == 0 and col_idx in FIRST_ROW_LOCKED_LOSS_COLS:
+                            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                        self.node_table.setItem(row_idx, col_idx, item)
+                    if item.text() != text:
+                        item.setText(text)
+            self._apply_table1_source_row_lock_flags()

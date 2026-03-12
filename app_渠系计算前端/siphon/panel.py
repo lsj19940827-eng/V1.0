@@ -203,6 +203,8 @@ class _NumPipesWidget(QWidget):
         self.btn_minus = QPushButton("−")
         self.btn_minus.setFixedSize(30, 30)
         self.btn_minus.setCursor(Qt.PointingHandCursor)
+        self.btn_minus.setAutoDefault(False)
+        self.btn_minus.setDefault(False)
         self.edit_val = _QLineEdit("1")
         self.edit_val.setFixedSize(36, 30)
         self.edit_val.setAlignment(Qt.AlignCenter)
@@ -212,6 +214,8 @@ class _NumPipesWidget(QWidget):
         self.btn_plus = QPushButton("+")
         self.btn_plus.setFixedSize(30, 30)
         self.btn_plus.setCursor(Qt.PointingHandCursor)
+        self.btn_plus.setAutoDefault(False)
+        self.btn_plus.setDefault(False)
         lay.addWidget(self.btn_minus)
         lay.addWidget(self.edit_val)
         lay.addWidget(self.btn_plus)
@@ -308,6 +312,8 @@ class SiphonPanel(QWidget):
         self.calculation_result = None
         self._detail_text_cache = ""
         self._suppress_result_display = False
+        # 批量计算时用于抑制“管道根数N”的逐面板重复提示（仅进程内临时状态）
+        self._suppress_num_pipes_warning = False
         self.on_result_callback = None
         self.show_detailed_process = True
         self._plan_source = 'none'       # 平面数据来源: 'none' / 'dxf' / 'water_profile'
@@ -626,8 +632,8 @@ class SiphonPanel(QWidget):
         self.spin_num_pipes.btn_minus.clicked.connect(self._on_num_pipes_confirmed)
         self.spin_num_pipes.btn_plus.clicked.connect(self._on_num_pipes_confirmed)
         self.spin_num_pipes.editingFinished.connect(self._on_num_pipes_confirmed)
-        self.lbl_num_pipes_hint = QLabel("← 请输入管道根数")
-        self.lbl_num_pipes_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
+        self.lbl_num_pipes_hint = QLabel("← 请确认管道数（建议）")
+        self.lbl_num_pipes_hint.setStyleSheet("color:#CC6600;font-size:12px;font-weight:bold;")
         _ml.addWidget(_hrow(self.spin_num_pipes, self.lbl_num_pipes_hint))
         _ml.addSpacing(4)
 
@@ -2537,8 +2543,8 @@ document.addEventListener("DOMContentLoaded", function(){
             self.lbl_num_pipes_hint.setStyleSheet(f"color:{S};font-size:12px;font-weight:bold;")
         else:
             self._apply_np_unconfirmed_style()
-            self.lbl_num_pipes_hint.setText("← 请确认管道数")
-            self.lbl_num_pipes_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
+            self.lbl_num_pipes_hint.setText("← 请确认管道数（建议）")
+            self.lbl_num_pipes_hint.setStyleSheet("color:#CC6600;font-size:12px;font-weight:bold;")
 
     def _flash_num_pipes_field(self):
         """管道根数控件边框闪烁3次红色警告"""
@@ -2564,20 +2570,19 @@ document.addEventListener("DOMContentLoaded", function(){
         self._flash_np_timer.start()
 
     def _validate_num_pipes_before_calc(self) -> bool:
-        """计算前检查管道根数是否已确认。返回True=通过，False=拦截"""
+        """计算前检查管道根数是否已确认。未确认时仅提醒，不阻断。"""
         if self._num_pipes_user_confirmed:
             return True
-        self.params_notebook.setCurrentIndex(0)
-        self.spin_num_pipes.setFocus()
-        self.spin_num_pipes.selectAll()
-        self._flash_num_pipes_field()
-        InfoBar.error(
-            "请先确认管道根数",
-            "「管道根数 N」是必填参数，请输入后按 Enter 或点击 [+]/[−] 确认。",
-            parent=self._info_parent(), duration=6000,
+        if getattr(self, '_suppress_num_pipes_warning', False):
+            return True
+        n_val = self.spin_num_pipes.value() if hasattr(self, 'spin_num_pipes') else 1
+        InfoBar.warning(
+            "请确认管道根数（建议）",
+            f"建议确认“管道根数 N”，当前将按 N={n_val} 继续计算。",
+            parent=self._info_parent(), duration=4500,
             position=InfoBarPosition.TOP
         )
-        return False
+        return True
 
     # ================================================================
     # 平面转弯半径倍数确认交互（方案B：温和提醒）
@@ -3527,6 +3532,8 @@ document.addEventListener("DOMContentLoaded", function(){
             InfoBar.warning("提示", "请先选择要删除的行", parent=self._info_parent(),
                            duration=2000, position=InfoBarPosition.TOP)
             return
+        if self._longitudinal_is_example:
+            self._longitudinal_is_example = False
         self._push_long_undo()
         self._long_undo_group += 1
         for r in rows:
@@ -3874,6 +3881,9 @@ document.addEventListener("DOMContentLoaded", function(){
         """节点表编辑（单元格值变更 / 转弯类型下拉框切换）后触发正向同步"""
         if self._syncing:
             return
+
+        if self._longitudinal_is_example:
+            self._longitudinal_is_example = False
 
         if self._long_undo_group == 0 and self._long_pre_edit_snapshot is not None:
             self._long_undo_stack.append(self._long_pre_edit_snapshot)
@@ -4248,14 +4258,20 @@ document.addEventListener("DOMContentLoaded", function(){
                             parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
                         return
 
+            if self._longitudinal_is_example:
+                long_nodes_for_calc = []
+                segs_for_calc = [s for s in self.segments if s.direction == SegmentDirection.COMMON]
+            else:
+                long_nodes_for_calc = self.longitudinal_nodes
+                segs_for_calc = self.segments
             result = HydraulicCore.execute_calculation(
-                params, self.segments,
+                params, segs_for_calc,
                 diameter_override=D_override,
                 verbose=verbose,
                 plan_segments=self.plan_segments,
                 plan_total_length=self.plan_total_length,
                 plan_feature_points=self.plan_feature_points,
-                longitudinal_nodes=self.longitudinal_nodes,
+                longitudinal_nodes=long_nodes_for_calc,
                 increase_percent=inc_pct_for_engine,
                 v1_inc=v1_inc_for_engine,
                 v2_inc=v2_inc_for_engine,
@@ -4319,6 +4335,11 @@ document.addEventListener("DOMContentLoaded", function(){
             # 更新画布和状态
             self._update_canvas()
             self._update_data_status()
+
+            # N（管道根数）— 计算成功后视为已确认，避免重复提醒
+            if not self._num_pipes_user_confirmed:
+                self._num_pipes_user_confirmed = True
+                self._update_num_pipes_style()
 
             # 标记进程内确认状态（支持自动确认）
             if self.siphon_manager:
@@ -4427,7 +4448,7 @@ document.addEventListener("DOMContentLoaded", function(){
         """更新数据状态标签（含空间合并模式提示，与Tkinter版一致）"""
         has_plan_points = len(self.plan_feature_points) >= 2
         has_plan_segments = len(self.plan_segments) > 0 or self.plan_total_length > 0
-        has_long_nodes = len(self.longitudinal_nodes) >= 2
+        has_long_nodes = len(self.longitudinal_nodes) >= 2 and not self._longitudinal_is_example
 
         # 空间合并模式判断
         if has_plan_points and has_long_nodes:
@@ -4492,8 +4513,7 @@ document.addEventListener("DOMContentLoaded", function(){
         except ValueError: return default
 
     def _info_parent(self):
-        w = self.window()
-        return w if w else self
+        return self
 
     def _clear_results(self):
         self.summary_text.clear()
@@ -4522,16 +4542,22 @@ document.addEventListener("DOMContentLoaded", function(){
                 params = self._get_global_params()
                 if params:
                     self.longitudinal_nodes = self._build_longitudinal_nodes()
+                    if self._longitudinal_is_example:
+                        long_nodes_for_calc = []
+                        segs_for_calc = [s for s in self.segments if s.direction == SegmentDirection.COMMON]
+                    else:
+                        long_nodes_for_calc = self.longitudinal_nodes
+                        segs_for_calc = self.segments
                     D_override_text = self.edit_D_override.text().strip()
                     D_override = float(D_override_text) if D_override_text else None
                     result = HydraulicCore.execute_calculation(
-                        params, self.segments,
+                        params, segs_for_calc,
                         diameter_override=D_override,
                         verbose=True,
                         plan_segments=self.plan_segments,
                         plan_total_length=self.plan_total_length,
                         plan_feature_points=self.plan_feature_points,
-                        longitudinal_nodes=self.longitudinal_nodes,
+                        longitudinal_nodes=long_nodes_for_calc,
                     )
                     self.calculation_result = result
             except Exception:
@@ -4820,7 +4846,6 @@ document.addEventListener("DOMContentLoaded", function(){
         if hasattr(self, 'long_table'):
             self._refresh_long_table()
         self._sync_nodes_to_segments()
-        # 恢复示例标志（_sync_nodes_to_segments会将其设为False）
         self._longitudinal_is_example = True
         self._refresh_seg_table()
         self._update_canvas()

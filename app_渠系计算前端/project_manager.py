@@ -261,6 +261,8 @@ class ProjectManager(QObject):
                 self._water_profile_panel.nodes.clear()
                 self._water_profile_panel.calculated_nodes.clear()
                 self._water_profile_panel._update_table_from_nodes_full()
+                if hasattr(self._water_profile_panel, "_clear_section_tables"):
+                    self._water_profile_panel._clear_section_tables()
                 self._water_profile_panel.channel_name_edit.clear()
                 self._water_profile_panel.start_wl_edit.clear()
                 self._water_profile_panel.design_flow_edit.clear()
@@ -347,6 +349,17 @@ class ProjectManager(QObject):
         if not path.lower().endswith(PROJECT_EXT):
             path += PROJECT_EXT
 
+        old_first_jump_marker = None
+        marker_reset_applied = False
+        if self._water_profile_panel and hasattr(self._water_profile_panel, "reset_first_success_auto_jump_marker"):
+            try:
+                if hasattr(self._water_profile_panel, "get_first_success_auto_jump_marker"):
+                    old_first_jump_marker = self._water_profile_panel.get_first_success_auto_jump_marker()
+                self._water_profile_panel.reset_first_success_auto_jump_marker()
+                marker_reset_applied = True
+            except Exception:
+                marker_reset_applied = False
+
         try:
             self._save_to_file(path)
             self._current_path = path
@@ -359,6 +372,13 @@ class ProjectManager(QObject):
             self.status_message.emit(f"已保存: {os.path.basename(path)}")
             return True
         except Exception as e:
+            if marker_reset_applied and self._water_profile_panel and hasattr(self._water_profile_panel, "set_first_success_auto_jump_marker"):
+                try:
+                    self._water_profile_panel.set_first_success_auto_jump_marker(
+                        bool(old_first_jump_marker)
+                    )
+                except Exception:
+                    pass
             QMessageBox.critical(None, "保存失败", f"无法保存项目：\n{e}")
             return False
 
@@ -469,8 +489,9 @@ class ProjectManager(QObject):
     def _collect_project_data(self) -> Dict[str, Any]:
         """收集所有面板数据"""
         data = {
-            "version": "1.2",
+            "version": "2.0",
             "created_at": datetime.now().isoformat(),
+            "merged_panel": None,
             "batch_panel": None,
             "water_profile_panel": None,
             "open_channel_panel": None,
@@ -485,10 +506,29 @@ class ProjectManager(QObject):
             "report_meta": None,
         }
 
-        # ---- 面板数据 ----
+        # ---- 合并面板（双写：merged_panel + water_profile_panel）----
+        water_profile_data = None
+        if self._water_profile_panel:
+            try:
+                water_profile_data = self._water_profile_panel.to_project_dict()
+                data["merged_panel"] = water_profile_data
+                data["water_profile_panel"] = water_profile_data
+            except Exception as e:
+                print(f"[ProjectManager] 收集WaterProfilePanel数据失败: {e}")
+
+        # ---- 批量面板（双写窗口：优先真实batch_panel，否则写兼容块）----
+        if self._batch_panel:
+            try:
+                data["batch_panel"] = self._batch_panel.to_project_dict()
+            except Exception as e:
+                print(f"[ProjectManager] 收集BatchPanel数据失败: {e}")
+        elif isinstance(water_profile_data, dict):
+            compat_batch = water_profile_data.get("batch_panel_compat")
+            if isinstance(compat_batch, dict) and compat_batch:
+                data["batch_panel"] = compat_batch
+
+        # ---- 其余面板数据 ----
         _panel_keys = [
-            ("batch_panel", self._batch_panel, "BatchPanel"),
-            ("water_profile_panel", self._water_profile_panel, "WaterProfilePanel"),
             ("open_channel_panel", self._open_channel_panel, "OpenChannelPanel"),
             ("aqueduct_panel", self._aqueduct_panel, "AqueductPanel"),
             ("tunnel_panel", self._tunnel_panel, "TunnelPanel"),
@@ -530,10 +570,33 @@ class ProjectManager(QObject):
 
     def _restore_project_data(self, data: Dict[str, Any]):
         """恢复所有面板数据"""
-        # ---- 面板数据 ----
+        # ---- 合并面板恢复（读取优先级：merged_panel > water_profile_panel）----
+        batch_panel_data = data.get("batch_panel")
+        merged_panel_data = data.get("merged_panel")
+        water_profile_data = merged_panel_data if merged_panel_data else data.get("water_profile_panel")
+        if isinstance(water_profile_data, dict) and isinstance(batch_panel_data, dict):
+            if not isinstance(water_profile_data.get("batch_panel_compat"), dict):
+                water_profile_data = dict(water_profile_data)
+                water_profile_data["batch_panel_compat"] = batch_panel_data
+        if self._water_profile_panel and water_profile_data:
+            try:
+                self._water_profile_panel.from_project_dict(water_profile_data, skip_dirty_signal=True)
+            except Exception as e:
+                print(f"[ProjectManager] 恢复WaterProfilePanel数据失败: {e}")
+
+        # ---- 兼容恢复 batch_panel（老界面/回滚版本需要）----
+        if (not batch_panel_data) and isinstance(water_profile_data, dict):
+            compat_batch = water_profile_data.get("batch_panel_compat")
+            if isinstance(compat_batch, dict):
+                batch_panel_data = compat_batch
+        if self._batch_panel and batch_panel_data:
+            try:
+                self._batch_panel.from_project_dict(batch_panel_data, skip_dirty_signal=True)
+            except Exception as e:
+                print(f"[ProjectManager] 恢复BatchPanel数据失败: {e}")
+
+        # ---- 其余面板数据 ----
         _panel_keys = [
-            ("batch_panel", self._batch_panel, "BatchPanel"),
-            ("water_profile_panel", self._water_profile_panel, "WaterProfilePanel"),
             ("open_channel_panel", self._open_channel_panel, "OpenChannelPanel"),
             ("aqueduct_panel", self._aqueduct_panel, "AqueductPanel"),
             ("tunnel_panel", self._tunnel_panel, "TunnelPanel"),

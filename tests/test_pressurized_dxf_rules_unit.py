@@ -85,7 +85,7 @@ def test_merge_pressurized_param_defaults():
     assert merged[1] == ("管道2", "球墨铸铁管", 1500)
 
 
-def test_build_pressurized_segments():
+def test_build_pressurized_segments_keeps_distinct_rows_for_distinct_params():
     qs = [2.0, 1.0]
     overrides = {1: {"n": 0.012}, 2: {"n": 0.013}}
     params = [("管道A", "钢管", 1800), ("管道B", "球墨铸铁管", 1600)]
@@ -99,11 +99,75 @@ def test_build_pressurized_segments():
     )
 
     assert len(segs) == 4
-    assert [s["name"] for s in segs] == ["管道A-S1", "管道A-S2", "管道B-S1", "管道B-S2"]
-    assert segs[0]["Q"] == 2.0 and segs[1]["Q"] == 1.0
-    assert segs[0]["DN_mm"] == 1800 and segs[2]["DN_mm"] == 1600
+    assert [s["name"] for s in segs] == ["管道A-S1", "管道B-S1", "管道A-S2", "管道B-S2"]
+    assert segs[0]["Q"] == 2.0 and segs[2]["Q"] == 1.0
+    assert segs[0]["DN_mm"] == 1800 and segs[1]["DN_mm"] == 1600
     assert segs[0]["pipe_material"] == "钢管"
-    assert segs[1]["n"] == 0.013
+    assert segs[2]["n"] == 0.013
+
+
+def test_build_pressurized_segments_dedup_same_signature_by_flow_segment():
+    qs = [4.5, 4.3, 4.0]
+    overrides = {
+        1: {"name": "第一流量段", "n": 0.014},
+        2: {"name": "第二流量段", "n": 0.014},
+        3: {"name": "第三流量段", "n": 0.014},
+    }
+    params = [
+        ("倒虹吸A", "球墨铸铁管", 1600),
+        ("倒虹吸B", "球墨铸铁管", 1600),
+        ("倒虹吸C", "球墨铸铁管", 1600),
+    ]
+
+    segs = cad_tools._build_pressurized_segments(
+        qs=qs,
+        overrides_by_idx=overrides,
+        params=params,
+        has_source_data=True,
+        segment_name_fn=lambda idx: f"S{idx}",
+    )
+
+    assert len(segs) == 3
+    assert [s["name"] for s in segs] == ["S1", "S2", "S3"]
+    assert [s["Q"] for s in segs] == qs
+    assert all(s["DN_mm"] == 1600 for s in segs)
+    assert all(s["pipe_material"] == "球墨铸铁管" for s in segs)
+    assert all(s["n"] == 0.014 for s in segs)
+
+
+def test_build_pressurized_segments_keeps_prefix_when_same_flow_diff_signature():
+    qs = [4.5]
+    overrides = {1: {"name": "第二流量段", "n": 0.014}}
+    params = [
+        ("倒虹吸A", "球墨铸铁管", 1800),
+        ("倒虹吸B", "钢管", 1800),
+    ]
+
+    segs = cad_tools._build_pressurized_segments(
+        qs=qs,
+        overrides_by_idx=overrides,
+        params=params,
+        has_source_data=True,
+        segment_name_fn=lambda idx: f"S{idx}",
+    )
+
+    assert len(segs) == 2
+    assert [s["name"] for s in segs] == ["倒虹吸A-S1", "倒虹吸B-S1"]
+    assert [s["pipe_material"] for s in segs] == ["球墨铸铁管", "钢管"]
+
+
+def test_build_pressurized_segments_does_not_overwrite_display_name_from_overrides():
+    segs = cad_tools._build_pressurized_segments(
+        qs=[2.0],
+        overrides_by_idx={1: {"name": "第二流量段", "n": 0.012}},
+        params=[("倒虹吸A", "球墨铸铁管", 1600)],
+        has_source_data=True,
+        segment_name_fn=lambda idx: f"S{idx}",
+    )
+
+    assert len(segs) == 1
+    assert segs[0]["name"] == "S1"
+    assert segs[0]["n"] == 0.012
 
 
 def test_pressure_pipe_follows_siphon_summary_rules():

@@ -38,6 +38,10 @@ class PressurePipeConfig:
     
     # 纵断面变坡点节点（从DXF导入，可选）
     longitudinal_nodes: List[Dict[str, Any]] = None
+    turn_n: float = 0.0                       # n 倍数
+    turn_R: float = 0.0                       # 平面转弯半径 R(m)
+    force_override: bool = False              # 是否强制覆盖表1值
+    radius_applied_at: str = ""               # 半径参数应用时间
     
     # 计算结果
     friction_loss: Optional[float] = None           # 沿程水头损失 (m)
@@ -183,6 +187,10 @@ class PressurePipeManager:
             ip_points=data.get("ip_points", []),
             plan_total_length=data.get("plan_total_length", 0.0),
             longitudinal_nodes=data.get("longitudinal_nodes", []),
+            turn_n=data.get("turn_n", 0.0),
+            turn_R=data.get("turn_R", 0.0),
+            force_override=bool(data.get("force_override", False)),
+            radius_applied_at=data.get("radius_applied_at", ""),
             friction_loss=data.get("friction_loss"),
             total_bend_loss=data.get("total_bend_loss"),
             inlet_transition_loss=data.get("inlet_transition_loss"),
@@ -219,6 +227,10 @@ class PressurePipeManager:
             "ip_points": config.ip_points,
             "plan_total_length": config.plan_total_length,
             "longitudinal_nodes": config.longitudinal_nodes,
+            "turn_n": config.turn_n,
+            "turn_R": config.turn_R,
+            "force_override": bool(config.force_override),
+            "radius_applied_at": config.radius_applied_at,
             "friction_loss": config.friction_loss,
             "total_bend_loss": config.total_bend_loss,
             "inlet_transition_loss": config.inlet_transition_loss,

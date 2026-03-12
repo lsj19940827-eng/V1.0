@@ -1,0 +1,288 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>推求水面线工具栏 - A方案细化预览</title>
+<style>
+  :root {
+    --bg: #f4f7fb;
+    --card: #fff;
+    --line: #d9e2ef;
+    --text: #1f2937;
+    --muted: #64748b;
+    --tab: #e8eef7;
+    --tab-active: #1988f4;
+    --primary: #0e9fb0;
+  }
+  * { box-sizing: border-box; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--text); }
+  .wrap { width: min(1820px, 100%); margin: 16px auto; padding: 0 12px; }
+  .note {
+    border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a;
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; font-size: 14px;
+  }
+  .case {
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    background: var(--card); margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, .05);
+  }
+  .case-title {
+    background: #f8fafc; border-bottom: 1px dashed var(--line);
+    padding: 10px 12px; display: flex; justify-content: space-between; align-items: center;
+    font-weight: 700;
+  }
+  .score { color: var(--muted); font-size: 13px; font-weight: 500; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); background: #f8fbff; }
+  .tab { padding: 11px 18px; border-right: 1px solid #dce7f5; background: var(--tab); font-size: 28px; }
+  .tab.active { background: var(--tab-active); color: #fff; font-weight: 700; }
+  .tab-spacer { flex: 1; }
+
+  .toolbar { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .topline, .bottomline, .sub-row { display: flex; align-items: center; gap: 8px; }
+  .topline { min-height: 54px; }
+  .bottomline { min-height: 56px; margin-top: 8px; }
+
+  .group-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .title { font-size: 34px; font-weight: 700; white-space: nowrap; }
+  .label { font-size: 30px; white-space: nowrap; }
+
+  .input {
+    border: 1px solid #cfd8e3; border-radius: 8px;
+    padding: 8px 12px; font-size: 29px; background: #fff;
+    width: min(25vw, 340px); min-width: 240px;  /* 内容自适应策略示意 */
+  }
+
+  .btn {
+    border: 1px solid #cfd8e3; border-radius: 10px;
+    background: #f9fbff; color: #111827;
+    padding: 9px 14px; font-size: 30px; line-height: 1.2; white-space: nowrap;
+  }
+  .btn.primary { background: var(--primary); color: #fff; border-color: #0f8fa0; }
+
+  .check-row { display: inline-flex; align-items: center; gap: 12px; white-space: nowrap; }
+  .check {
+    display: inline-flex; align-items: center; gap: 8px; font-size: 30px; white-space: nowrap;
+  }
+  .box {
+    width: 34px; height: 34px; border-radius: 7px;
+    border: 2px solid #9ca3af; display: inline-flex; align-items: center; justify-content: center;
+    background: #fff; color: #fff; font-size: 22px;
+  }
+  .box.on { background: #0891b2; border-color: #0891b2; }
+
+  .spacer { flex: 1; }
+  .sub-toolbar { padding: 10px 12px; }
+  .sub-row { flex-wrap: nowrap; overflow-x: auto; }
+  .sub-row::-webkit-scrollbar { height: 8px; }
+  .sub-row::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+  .hint { color: #0b5cad; font-size: 28px; font-weight: 700; white-space: nowrap; }
+
+  /* 变体：A1 默认推荐 */
+  .a1 .check-wrap { margin-left: auto; }
+
+  /* 变体：A2 选项与按钮左边界对齐 */
+  .a2 .check-wrap { margin-left: 0; padding-left: 392px; }
+
+  /* 变体：A3 选项置于浅底条更聚焦 */
+  .a3 .check-wrap {
+    margin-left: auto; padding: 6px 10px; border: 1px solid #dbeafe; border-radius: 10px; background: #f5f9ff;
+  }
+
+  /* 变体：A4 选项紧贴按钮组（最紧凑） */
+  .a4 .topline { justify-content: space-between; }
+  .a4 .check-wrap { margin-left: 0; }
+
+  /* 窄窗口：自动切为两行（顶行参数+选项，底行按钮） */
+  @media (max-width: 1540px) {
+    .topline { flex-wrap: wrap; }
+    .topline .group-main { flex: 1 1 100%; }
+    .a1 .check-wrap, .a2 .check-wrap, .a3 .check-wrap, .a4 .check-wrap {
+      margin-left: 0; padding-left: 0;
+    }
+    .bottomline { overflow-x: auto; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="note">你当前选项已生效：主方案 A、方框复选、上下两行、导入+计算高亮、第二行不换行、提示在右侧同一行、窄窗口自动两行、标签内容自适应、"基本参数输入"不弱化、"应用到表1"后紧接"导入Excel"。</div>
+
+    <section class="case a1">
+      <div class="case-title">A1（推荐）：复选框在顶行右侧<span class="score">阅读顺序自然，稳妥</span></div>
+      <div class="tabs">
+        <div class="tab active">表1：基本参数输入</div>
+        <div class="tab">表2：断面计算结果</div>
+        <div class="tab">表3：水面线计算表</div>
+        <div class="tab">结果与导出</div>
+        <div class="tab-spacer"></div>
+      </div>
+      <div class="toolbar">
+        <div class="topline">
+          <div class="group-main">
+            <span class="title">表1：基本参数输入</span>
+            <span class="label">流量段设置(m³/s):</span>
+            <span class="input">5.0, 4.0, 3.0</span>
+          </div>
+          <div class="check-wrap check-row">
+            <span class="check"><span class="box on">✓</span>考虑加大流量</span>
+            <span class="check"><span class="box"></span>展示详细计算过程</span>
+          </div>
+        </div>
+        <div class="bottomline">
+          <button class="btn">应用到表1</button>
+          <button class="btn primary">导入Excel</button>
+          <button class="btn primary">开始批量计算</button>
+          <button class="btn">示例数据 ⌄</button>
+          <button class="btn">打开Excel模板 ⌄</button>
+        </div>
+      </div>
+      <div class="sub-toolbar">
+        <div class="sub-row">
+          <button class="btn">新增行</button>
+          <button class="btn">插入行</button>
+          <button class="btn">删除行</button>
+          <button class="btn">复制行</button>
+          <button class="btn">清空输入</button>
+          <button class="btn">清空表1/表2</button>
+          <button class="btn">参数设置</button>
+          <span class="spacer"></span>
+          <span class="hint">提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="case a2">
+      <div class="case-title">A2：复选框与按钮组左边界对齐<span class="score">更工整，顶部更满</span></div>
+      <div class="tabs">
+        <div class="tab active">表1：基本参数输入</div>
+        <div class="tab">表2：断面计算结果</div>
+        <div class="tab">表3：水面线计算表</div>
+        <div class="tab">结果与导出</div>
+        <div class="tab-spacer"></div>
+      </div>
+      <div class="toolbar">
+        <div class="topline">
+          <div class="group-main">
+            <span class="title">表1：基本参数输入</span>
+            <span class="label">流量段设置(m³/s):</span>
+            <span class="input">5.0, 4.0, 3.0</span>
+          </div>
+          <div class="check-wrap check-row">
+            <span class="check"><span class="box on">✓</span>考虑加大流量</span>
+            <span class="check"><span class="box"></span>展示详细计算过程</span>
+          </div>
+        </div>
+        <div class="bottomline">
+          <button class="btn">应用到表1</button>
+          <button class="btn primary">导入Excel</button>
+          <button class="btn primary">开始批量计算</button>
+          <button class="btn">示例数据 ⌄</button>
+          <button class="btn">打开Excel模板 ⌄</button>
+        </div>
+      </div>
+      <div class="sub-toolbar">
+        <div class="sub-row">
+          <button class="btn">新增行</button>
+          <button class="btn">插入行</button>
+          <button class="btn">删除行</button>
+          <button class="btn">复制行</button>
+          <button class="btn">清空输入</button>
+          <button class="btn">清空表1/表2</button>
+          <button class="btn">参数设置</button>
+          <span class="spacer"></span>
+          <span class="hint">提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="case a3">
+      <div class="case-title">A3：复选框带浅底分组<span class="score">选项更醒目，便于初次用户</span></div>
+      <div class="tabs">
+        <div class="tab active">表1：基本参数输入</div>
+        <div class="tab">表2：断面计算结果</div>
+        <div class="tab">表3：水面线计算表</div>
+        <div class="tab">结果与导出</div>
+        <div class="tab-spacer"></div>
+      </div>
+      <div class="toolbar">
+        <div class="topline">
+          <div class="group-main">
+            <span class="title">表1：基本参数输入</span>
+            <span class="label">流量段设置(m³/s):</span>
+            <span class="input">5.0, 4.0, 3.0</span>
+          </div>
+          <div class="check-wrap check-row">
+            <span class="check"><span class="box on">✓</span>考虑加大流量</span>
+            <span class="check"><span class="box"></span>展示详细计算过程</span>
+          </div>
+        </div>
+        <div class="bottomline">
+          <button class="btn">应用到表1</button>
+          <button class="btn primary">导入Excel</button>
+          <button class="btn primary">开始批量计算</button>
+          <button class="btn">示例数据 ⌄</button>
+          <button class="btn">打开Excel模板 ⌄</button>
+        </div>
+      </div>
+      <div class="sub-toolbar">
+        <div class="sub-row">
+          <button class="btn">新增行</button>
+          <button class="btn">插入行</button>
+          <button class="btn">删除行</button>
+          <button class="btn">复制行</button>
+          <button class="btn">清空输入</button>
+          <button class="btn">清空表1/表2</button>
+          <button class="btn">参数设置</button>
+          <span class="spacer"></span>
+          <span class="hint">提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="case a4">
+      <div class="case-title">A4：复选框紧贴按钮组（最紧凑）<span class="score">最省空间，密度更高</span></div>
+      <div class="tabs">
+        <div class="tab active">表1：基本参数输入</div>
+        <div class="tab">表2：断面计算结果</div>
+        <div class="tab">表3：水面线计算表</div>
+        <div class="tab">结果与导出</div>
+        <div class="tab-spacer"></div>
+      </div>
+      <div class="toolbar">
+        <div class="topline">
+          <div class="group-main">
+            <span class="title">表1：基本参数输入</span>
+            <span class="label">流量段设置(m³/s):</span>
+            <span class="input">5.0, 4.0, 3.0</span>
+          </div>
+          <div class="check-wrap check-row">
+            <span class="check"><span class="box on">✓</span>考虑加大流量</span>
+            <span class="check"><span class="box"></span>展示详细计算过程</span>
+          </div>
+        </div>
+        <div class="bottomline">
+          <button class="btn">应用到表1</button>
+          <button class="btn primary">导入Excel</button>
+          <button class="btn primary">开始批量计算</button>
+          <button class="btn">示例数据 ⌄</button>
+          <button class="btn">打开Excel模板 ⌄</button>
+        </div>
+      </div>
+      <div class="sub-toolbar">
+        <div class="sub-row">
+          <button class="btn">新增行</button>
+          <button class="btn">插入行</button>
+          <button class="btn">删除行</button>
+          <button class="btn">复制行</button>
+          <button class="btn">清空输入</button>
+          <button class="btn">清空表1/表2</button>
+          <button class="btn">参数设置</button>
+          <span class="spacer"></span>
+          <span class="hint">提示: 双击参数列打开参数设置弹窗; 双击断面类型列可选择类型</span>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

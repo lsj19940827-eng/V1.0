@@ -364,6 +364,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 
 - 断面汇总表中，有压管道单独输出为"有压管道断面尺寸及水力要素表"，列结构与倒虹吸完全一致。
 - "导出全部DXF"调用统一参数对话框，按建筑物名称分别设置管道材质和 DN，并在导出时复用。
+- 倒虹吸/有压管道断面汇总在同一流量段内执行去重规则：`Q`、`n`、`DN_mm`、`pipe_material` 全一致时仅保留 1 行（名称为流量段）；存在差异时保留多行并使用"建筑物名称-流量段"命名。
 - 纵断面"坡降"行对倒虹吸与有压管道均留空（按有压流处理）。
 - IP 点名称中，有压管道进/出口采用"压"缩写（示例：`XX管压进`、`XX管压出`）。
 - bzzh2 导出与建筑物名称上平面图均纳入有压管道进/出口识别。
@@ -411,6 +412,9 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 
 1. 点击"倒虹吸水力计算"调用 `_open_siphon_calculator()`
 2. 通过 `SiphonDataExtractor` 从节点表提取倒虹吸分组
+   - `_extract_plan_segments()`：提取平面弯管段。转角来自 `node.turn_angle`（由 `geometry_calc` 根据坐标 XY 自动计算）。**为过滤坐标计算引入的浮点噪声，转角 < 0.1° 时不生成弯管段，视为直线通过**。
+   - `_extract_plan_feature_points()`：提取空间合并所需的 IP 特征点。同理，转角 < 0.1° 时 `turn_type` 设为"无"，不参与空间弯道计算。
+   - 对比：倒虹吸面板本身通过 DXF 导入的平面段，角度来自真实几何，不受此阈值限制（路径不经过 `SiphonDataExtractor`）。
 3. 打开 `MultiSiphonDialog`，传入：
    - 倒虹吸分组（`siphon_groups`）
    - 倒虹吸转弯半径倍数 n（固定为常量 `DEFAULT_SIPHON_TURN_RADIUS_N=3.0`）
@@ -475,6 +479,15 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 
 有压管道的渐变段型式和ζ系数复用 `ProjectSettings` 中的 `siphon_transition_*` 字段，因两者均依据 GB 50288 附录L 表L.1.2。
 
+### DDR-6：坐标计算路径的弯头转角须加 0.1° 阈值过滤，DXF 路径不受限制
+
+水面线面板从节点坐标（XY）自动计算转角时，浮点运算可能对"直线通过"的 IP 点产生 << 0.1° 的噪声值。若不过滤，这些噪声值会通过 `CoefficientService.get_gamma()` 的边界逻辑（角度 ≤ 5° 统一返回 γ=0.125）放大为不应存在的弯头损失。
+
+**规则**：
+- **坐标计算路径**（`pressure_pipe_extractor._calc_turn_angles`、`siphon_extractor._extract_plan_segments`、`siphon_extractor._extract_plan_feature_points`）：转角 < 0.1° 视为直线通过，不生成弯头/弯管段，计算过程中打印"直线通过，不计弯头损失"说明。
+- **DXF 导入路径**（倒虹吸面板直接导入平面/纵断面 DXF）：角度来自真实几何，不加阈值，按实际值计算。
+- 0.1° 阈值与空间模式已有的 `spatial_turn_angle > 0.1` 保持一致。
+
 ---
 
 ## 十二、变更日志
@@ -485,3 +498,4 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 | v1.1 | 2026-02-26 | **代码**：删除"倒虹吸 R=n×D, n="UI输入框（`siphon_n_edit`），改为固定常量 `DEFAULT_SIPHON_TURN_RADIUS_N=3.0`；同步更新 `_recalculate_geometry_impl`、`_build_settings`、`_open_siphon_calculator`、结果摘要文本共4处引用；列弹性由 `[1,3,5,7,9]` 改为 `[1,3,5,7]`。**PRD修订**：修正§3.2/§6.2变更日志引用（§九→§十二）；修正Excel文件名格式；修正Word章节编号（1-4章由模板生成，手动章节从5开始）；修正§5.2.3沿程损失公式（补充主方法 h_f=i×L，曼宁为备用）；§四补充明渠-U形不在constants.py下拉列表的说明；§九修正SharedDataManager方法名为 `register_batch_results()`；§6.5补充首行锁定机制；§6.2补充自动转弯半径各结构规则表、设计流量联动说明、起始桩号格式化说明；§6.4补充Excel导入识别列名说明 |
 | v1.2 | 2026-03-03 | **代码**：`cad_tools.py` 的"导出全部DXF"新增倒虹吸/有压管道材质+DN参数对话框，并将参数注入断面汇总表生成链路；有压管道在合并导出中执行与倒虹吸一致的表格规则。`SectionSummaryDialog` 增加 DN 正整数校验，并缓存有压流参数供"导出全部DXF"复用。**PRD修订**：更新第七章 CAD 导出功能表与 §7.1 有压流建筑物导出规则。 |
 | v1.3 | 2026-03-06 | **PRD全面补充有压管道集成**：§1.2核心能力新增有压管道水头损失外部导入；§二文件结构新增 `pressure_pipe_calc.py`、`pressure_pipe_data.py`、`pressure_pipe_manager.py`、`pressure_pipe_extractor.py`、`pressure_pipe_result_helpers.py`；§2.1依赖关系新增有压管道组件；§3.1 ChannelNode字段分组新增特殊标记组（`is_pressure_pipe`、`external_head_loss`）；§3.2补充有压管道复用倒虹吸渐变段设置说明；§四结构形式新增"有压管道"行；§5.2.1结构高度新增有压管道跳过规则；§5.2.5局部损失新增有压管道处理逻辑；§5.2.6水位递推补充 `h_siphon` 含有压管道说明；§5.2.7标题改为"有压流建筑物"统一适用倒虹吸和有压管道；§6.2基础设置区新增有压管道参数芯片；§6.3渐变段设置第3行改为"倒虹吸/有压管道"；§6.4工具栏新增"有压管道水力计算"按钮；§6.5补充col 38共用说明；§九新增§9.3有压管道水力计算流程；新增DDR-4（共用列）和DDR-5（复用渐变段设置）；§十规范引用新增GB 50288 §6.7.2和附录L表L.1.4-3/L.1.4-4 |
+| v1.4 | 2026-03-09 | **代码**：修复 `导出全部DXF` 中倒虹吸/有压管道断面汇总“复读机”问题：同流量段按 `Q`、`n`、`DN_mm`、`pipe_material` 进行一致性判定；一致时去重为单行，不一致时保留多行并显示"建筑物名称-流量段"；同时修复 `overrides.name` 覆盖显示名称的问题。**PRD修订**：补充 §7.1 导出去重与命名规则。 |

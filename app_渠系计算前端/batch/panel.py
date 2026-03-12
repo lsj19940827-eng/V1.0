@@ -354,6 +354,7 @@ class BatchPanel(QWidget):
         self._table_redo_stack = []
         self._undo_group = 0
         self._pre_edit_snapshot = None
+        self._info_parent_override = None
         self._load_user_prefs()
         self._init_ui()
 
@@ -444,9 +445,9 @@ class BatchPanel(QWidget):
         btn_template = DropDownPushButton("打开Excel模板")
         btn_template.setMenu(_template_menu)
         btn_import = PrimaryPushButton("导入Excel"); btn_import.clicked.connect(self._import_from_excel)
-        self.detail_cb = CheckBox("启用详细计算过程输出")
-        self.detail_cb.setChecked(False)
-        self.inc_cb = CheckBox("考虑加大流量比例系数")
+        self.detail_cb = CheckBox("展示详细计算过程")
+        self.detail_cb.setChecked(True)
+        self.inc_cb = CheckBox("考虑加大流量")
         self.inc_cb.setChecked(True)
 
         for w in [btn_import, btn_calc, btn_sample, btn_template]:
@@ -792,10 +793,11 @@ class BatchPanel(QWidget):
 
     def _open_excel_template(self):
         """兼容性包装：调用标准导入模板"""
-        self._open_excel_template_file("blank")
+        self._open_excel_template_file("blank", dialog_parent=self._info_parent())
 
-    def _open_excel_template_file(self, template_key: str):
+    def _open_excel_template_file(self, template_key: str, dialog_parent=None):
         """使用默认程序打开指定Excel模板文件"""
+        host = dialog_parent if dialog_parent is not None else self._info_parent()
         if template_key == "longtang":
             title = "示例二（龙塘马坝河分干渠）"
             desc = "龙塘马坝河分干渠示例数据文件"
@@ -805,7 +807,7 @@ class BatchPanel(QWidget):
         else:
             title = "示例一（综合演示）"
             desc = "综合演示模板（多流量段批量计算）"
-        if not fluent_question(self, f"打开{title}",
+        if not fluent_question(host, f"打开{title}",
             f"打开{desc}\n\n"
             "即将使用默认程序打开该文件。\n\n"
             "使用说明：\n"
@@ -816,14 +818,14 @@ class BatchPanel(QWidget):
             return
         template_path = self._get_template_path(template_key)
         if not os.path.exists(template_path):
-            fluent_info(self, "错误", f"未找到文件：\n{template_path}")
+            fluent_info(host, "错误", f"未找到文件：\n{template_path}")
             return
         try:
             os.startfile(template_path)
             self._has_opened_template = True
             self._save_user_prefs()
         except Exception as e:
-            fluent_error(self, "错误", f"打开文件失败：{str(e)}")
+            fluent_error(host, "错误", f"打开文件失败：{str(e)}")
 
     def _get_template_path(self, template_key: str = "blank"):
         """获取Excel模板/示例文件路径（兼容开发环境和打包环境）"""
@@ -2598,9 +2600,26 @@ class BatchPanel(QWidget):
             self.input_table.setColumnWidth(col, max_w)
             self.result_table.setColumnWidth(col, max_w)
 
+    def set_info_parent(self, parent_or_callable):
+        """设置 InfoBar 的宿主控件（可传 QWidget 或返回 QWidget 的可调用对象）。"""
+        self._info_parent_override = parent_or_callable
+
+    def _resolve_info_parent_override(self):
+        override = self._info_parent_override
+        if override is None:
+            return None
+        if callable(override):
+            try:
+                return override()
+            except Exception:
+                return None
+        return override
+
     def _info_parent(self):
-        w = self.window()
-        return w if w else self
+        host = self._resolve_info_parent_override()
+        if host is not None:
+            return host
+        return self
 
     def _update_lock_state(self, has_errors: bool):
         """根据计算是否存在失败条目，锁定或解锁导出/下游操作按钮。"""
@@ -3185,7 +3204,7 @@ class BatchPanel(QWidget):
             
             # 恢复计算选项
             self.inc_cb.setChecked(d.get("inc_checked", True))
-            self.detail_cb.setChecked(d.get("detail_checked", False))
+            self.detail_cb.setChecked(d.get("detail_checked", True))
             
             # 恢复输入表格数据
             input_rows = d.get("input_rows", [])

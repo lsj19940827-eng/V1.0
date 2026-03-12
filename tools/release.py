@@ -38,7 +38,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from version import APP_NAME_EN
 from repo_config import (
-    GITHUB_OWNER, GITHUB_REPO, GIST_ID, DOWNLOAD_PROXIES,
+    GITHUB_OWNER, GITHUB_REPO, GIST_ID, GIST_ID_TEST, DOWNLOAD_PROXIES,
 )
 
 
@@ -75,6 +75,25 @@ def _get_token() -> str:
         print("[错误] 未找到 GITHUB_TOKEN")
         sys.exit(1)
     return token
+
+
+def _current_branch() -> str:
+    """获取当前分支名。"""
+    branch = subprocess.run(
+        "git rev-parse --abbrev-ref HEAD",
+        cwd=PROJECT_ROOT, shell=True, capture_output=True, text=True
+    ).stdout.strip()
+    return branch or "master"
+
+
+def _has_staged_changes() -> bool:
+    """判断 git 暂存区是否有变更。"""
+    result = subprocess.run(
+        "git diff --cached --quiet",
+        cwd=PROJECT_ROOT,
+        shell=True
+    )
+    return result.returncode != 0
 
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -204,6 +223,14 @@ def step_bump_version(level: str) -> str:
     return new_ver
 
 
+def step_get_current_version() -> str:
+    """读取当前 version.py 中的版本号（不递增）。"""
+    import importlib
+    import version as _ver_mod
+    importlib.reload(_ver_mod)
+    return _ver_mod.APP_VERSION
+
+
 def step_build() -> dict:
     """步骤2：打包"""
     print(f"\n{'='*60}")
@@ -244,10 +271,10 @@ def step_build() -> dict:
     return assets
 
 
-def step_git_commit_and_tag(version: str):
+def step_git_commit_and_tag(tag_name: str, branch: str, commit_message: str):
     """步骤3：git commit + tag"""
     print(f"\n{'='*60}")
-    print(f"  [步骤 3/6] Git commit + tag v{version}")
+    print(f"  [步骤 3/6] Git commit + tag {tag_name}")
     print(f"{'='*60}\n")
 
     def _run(cmd):
@@ -255,30 +282,41 @@ def step_git_commit_and_tag(version: str):
         subprocess.run(cmd, cwd=PROJECT_ROOT, shell=True, check=True)
 
     _run("git add -A")
-    _run(f'git commit -m "release: v{version}"')
-    _run(f"git tag v{version}")
-    # 自动检测当前分支名（兼容 main / master）
-    branch = subprocess.run(
-        "git rev-parse --abbrev-ref HEAD",
-        cwd=PROJECT_ROOT, shell=True, capture_output=True, text=True
-    ).stdout.strip() or "master"
+    if _has_staged_changes():
+        safe_msg = commit_message.replace('"', "'")
+        _run(f'git commit -m "{safe_msg}"')
+    else:
+        print("  [提示] 当前无可提交变更，跳过 commit。")
+
+    tag_exists = subprocess.run(
+        f"git rev-parse -q --verify refs/tags/{tag_name}",
+        cwd=PROJECT_ROOT, shell=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ).returncode == 0
+    if tag_exists:
+        print(f"[错误] 标签已存在：{tag_name}")
+        sys.exit(1)
+
+    _run(f"git tag {tag_name}")
     _run(f"git push origin {branch}")
-    _run(f"git push origin v{version}")
+    _run(f"git push origin {tag_name}")
 
 
-def step_create_release(version: str, token: str, changelog: str) -> dict:
+def step_create_release(tag_name: str, release_name: str, token: str, changelog: str,
+                        prerelease: bool = False) -> dict:
     """步骤4：创建 GitHub Release"""
     print(f"\n{'='*60}")
-    print(f"  [步骤 4/6] 创建 GitHub Release v{version}")
+    release_type = "Pre-release" if prerelease else "正式 Release"
+    print(f"  [步骤 4/6] 创建 GitHub {release_type} {tag_name}")
     print(f"{'='*60}\n")
 
     url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
     data = {
-        "tag_name": f"v{version}",
-        "name": f"V{version}",
-        "body": changelog or f"V{version} 版本发布",
+        "tag_name": tag_name,
+        "name": release_name,
+        "body": changelog or f"{release_name} 版本发布",
         "draft": False,
-        "prerelease": False,
+        "prerelease": bool(prerelease),
     }
 
     release = _github_api("POST", url, token, data=data)
@@ -306,10 +344,13 @@ def step_upload_assets(release: dict, assets: dict, token: str) -> dict:
 
 
 def step_update_gist(version: str, urls: dict, assets: dict,
-                     token: str, changelog: str) -> dict:
+                     token: str, changelog: str,
+                     gist_id: str, gist_target: str = "prod",
+                     prerelease: bool = False) -> dict:
     """步骤6：更新 GitHub Gist version.json"""
     print(f"\n{'='*60}")
-    print(f"  [步骤 6/6] 更新 GitHub Gist version.json")
+    target_text = "测试通道" if gist_target == "test" else "正式通道"
+    print(f"  [步骤 6/6] 更新 GitHub Gist version.json（{target_text}）")
     print(f"{'='*60}\n")
 
     full_size = os.path.getsize(assets["full_zip"]) / (1024 * 1024)
@@ -322,6 +363,7 @@ def step_update_gist(version: str, urls: dict, assets: dict,
         "release_date": date.today().isoformat(),
         "min_version": "1.0.0",
         "file_size_mb": round(full_size, 1),
+        "channel": "prerelease" if prerelease else "stable",
     }
 
     if "patch_url" in urls:
@@ -332,7 +374,7 @@ def step_update_gist(version: str, urls: dict, assets: dict,
         # 兼容旧客户端（V1.0.6-）：旧版 updater 用 patch_base_version 精确匹配
         version_data["patch_base_version"] = assets.get("patch_min_version", "")
 
-    gist_url = f"https://api.github.com/gists/{GIST_ID}"
+    gist_url = f"https://api.github.com/gists/{gist_id}"
     data = {
         "files": {
             "version.json": {
@@ -342,7 +384,7 @@ def step_update_gist(version: str, urls: dict, assets: dict,
     }
 
     _github_api("PATCH", gist_url, token, data=data)
-    print(f"  Gist 更新成功!")
+    print(f"  Gist 更新成功! (target={gist_target}, gist={gist_id})")
     print(f"  内容: {json.dumps(version_data, ensure_ascii=False, indent=2)}")
     return version_data
 
@@ -350,7 +392,11 @@ def step_update_gist(version: str, urls: dict, assets: dict,
 # ============================================================
 # 主流程
 # ============================================================
-def release(level: str, changelog: str = ""):
+def release(level: str, changelog: str = "",
+            prerelease: bool = False,
+            gist_target: str = "prod",
+            no_bump: bool = False,
+            tag_suffix: str = ""):
     token = _get_token()
 
     # 测试 token 是否有效
@@ -364,31 +410,84 @@ def release(level: str, changelog: str = ""):
         sys.exit(1)
     print()
 
-    # 步骤 1：bump
+    branch = _current_branch()
+    gist_target = (gist_target or "prod").strip().lower()
+    if gist_target not in ("prod", "test"):
+        print(f"[错误] --gist-target 仅支持 prod/test，收到: {gist_target}")
+        sys.exit(1)
+    if branch != "master" and not prerelease:
+        print(f"[错误] 当前分支为 {branch}，非 master 分支禁止正式发布。")
+        print("       请使用 --prerelease 进行预发布，或切换到 master。")
+        sys.exit(1)
+    if not prerelease and gist_target != "prod":
+        print("[错误] 正式发布仅允许 --gist-target prod。")
+        sys.exit(1)
+    if prerelease and gist_target == "prod":
+        print("[错误] 预发布禁止写入正式 Gist（prod）。请使用 --gist-target test。")
+        sys.exit(1)
+    if gist_target == "test" and not GIST_ID_TEST:
+        print("[错误] 未配置 GIST_ID_TEST，无法写入测试更新通道。")
+        print("       请先在 repo_config.py 中设置 GIST_ID_TEST。")
+        sys.exit(1)
+
     print(f"{'='*60}")
-    print(f"  [步骤 1/6] 递增版本号 ({level})")
+    print("  发布上下文")
+    print(f"{'='*60}")
+    print(f"  branch      : {branch}")
+    print(f"  prerelease  : {prerelease}")
+    print(f"  gist_target : {gist_target}")
+    print(f"  no_bump     : {no_bump}")
     print(f"{'='*60}\n")
-    new_ver = step_bump_version(level)
+
+    # 步骤 1：版本号
+    print(f"{'='*60}")
+    if no_bump:
+        print("  [步骤 1/6] 跳过版本递增（--no-bump）")
+        print(f"{'='*60}\n")
+        new_ver = step_get_current_version()
+        print(f"  当前版本: {new_ver}\n")
+    else:
+        print(f"  [步骤 1/6] 递增版本号 ({level})")
+        print(f"{'='*60}\n")
+        new_ver = step_bump_version(level)
+
+    suffix = (tag_suffix or "").strip()
+    if prerelease and not suffix:
+        suffix = "beta"
+
+    tag_name = f"v{new_ver}" + (f"-{suffix}" if suffix else "")
+    release_name = f"V{new_ver}" + (f" ({suffix})" if suffix else "")
+    commit_message = f"release: {tag_name}"
 
     # 步骤 2：打包
     assets = step_build()
 
     # 步骤 3：git
-    step_git_commit_and_tag(new_ver)
+    step_git_commit_and_tag(tag_name, branch, commit_message)
 
     # 步骤 4：创建 GitHub Release
-    release_obj = step_create_release(new_ver, token, changelog)
+    release_obj = step_create_release(
+        tag_name, release_name, token, changelog, prerelease=prerelease
+    )
 
     # 步骤 5：上传附件到 GitHub
     urls = step_upload_assets(release_obj, assets, token)
 
     # 步骤 6：更新 GitHub Gist
-    step_update_gist(new_ver, urls, assets, token, changelog)
+    target_gist_id = GIST_ID if gist_target == "prod" else GIST_ID_TEST
+    step_update_gist(
+        new_ver, urls, assets, token, changelog,
+        gist_id=target_gist_id,
+        gist_target=gist_target,
+        prerelease=prerelease
+    )
 
     # 完成
     print(f"\n{'='*60}")
-    print(f"  V{new_ver} 发版完成！")
+    release_type = "预发布" if prerelease else "正式发布"
+    print(f"  {tag_name} {release_type}完成！")
     print(f"  - GitHub: 已发布")
+    print(f"  - Gist通道: {gist_target}")
     print(f"{'='*60}\n")
 
 
@@ -400,11 +499,28 @@ if __name__ == "__main__":
   python tools/release.py patch                    # 1.0.2 → 1.0.3
   python tools/release.py minor                    # 1.0.2 → 1.1.0
   python tools/release.py patch -m "修复水面线bug"  # 带更新日志
+  python tools/release.py patch --prerelease --gist-target test --no-bump \\
+      --tag-suffix beta.20260307.1
 """)
     parser.add_argument("level", choices=["patch", "minor", "major"],
-                        help="版本递增级别")
+                        help="版本递增级别（--no-bump 时仅作兼容占位）")
     parser.add_argument("-m", "--message", default="",
                         help="更新日志（用 \\n 分隔多条）")
+    parser.add_argument("--prerelease", action="store_true",
+                        help="发布为 GitHub 预发布（Pre-release）")
+    parser.add_argument("--gist-target", choices=["prod", "test"], default="prod",
+                        help="更新通道：prod=正式Gist，test=测试Gist")
+    parser.add_argument("--no-bump", action="store_true",
+                        help="不递增 version.py（适合预发布验证）")
+    parser.add_argument("--tag-suffix", default="",
+                        help="tag后缀，如 beta.20260307.1，生成 vX.Y.Z-<suffix>")
 
     args = parser.parse_args()
-    release(args.level, args.message)
+    release(
+        args.level,
+        args.message,
+        prerelease=args.prerelease,
+        gist_target=args.gist_target,
+        no_bump=args.no_bump,
+        tag_suffix=args.tag_suffix,
+    )
