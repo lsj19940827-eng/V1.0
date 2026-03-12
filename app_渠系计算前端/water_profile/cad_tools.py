@@ -62,6 +62,19 @@ _PRESSURIZED_PIPE_MATERIALS = [
 ]
 
 
+def _safe_qt_parent(candidate):
+    """Return a QWidget parent when available, otherwise None."""
+    if isinstance(candidate, QWidget):
+        return candidate
+    if candidate is None:
+        return None
+    try:
+        parent = candidate.window()
+    except Exception:
+        return None
+    return parent if isinstance(parent, QWidget) else None
+
+
 class _ProfileRowItemWidget(QWidget):
     """列表行组件：使用 qfluentwidgets.CheckBox 保持 Fluent 原生勾选框样式。"""
 
@@ -4788,23 +4801,24 @@ def export_combined_dxf(panel):
     布局：纵断面表格在上方（全宽），下方左侧放断面汇总表，右侧放IP表。
     """
     import ezdxf
+    parent_window = _safe_qt_parent(panel)
 
     if not MODELS_AVAILABLE:
-        fluent_info(panel.window(), "不可用", "核心模型未加载")
+        fluent_info(parent_window, "不可用", "核心模型未加载")
         return
 
     nodes = panel.calculated_nodes
     if not nodes:
-        fluent_info(panel.window(), "警告", "没有数据可导出，请先执行计算")
+        fluent_info(parent_window, "警告", "没有数据可导出，请先执行计算")
         return
 
     valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
     if not valid_nodes:
-        fluent_info(panel.window(), "警告", "没有可用的高程数据，请先执行计算。")
+        fluent_info(parent_window, "警告", "没有可用的高程数据，请先执行计算。")
         return
 
     # ---- 1. 纵断面参数设置 ----
-    dlg = TextExportSettingsDialog(panel.window(), panel._text_export_settings)
+    dlg = TextExportSettingsDialog(parent_window, panel._text_export_settings)
     if dlg.exec() != QDialog.Accepted or dlg.result is None:
         return
     panel._text_export_settings.update(dlg.result)
@@ -4825,12 +4839,13 @@ def export_combined_dxf(panel):
         auto_name_dlg = f"{ch_name_for_dlg}{ch_level_for_dlg}_断面汇总表.xlsx"
     except Exception:
         auto_name_dlg = "断面汇总表.xlsx"
-    summary_dlg = SectionSummaryDialog(
-        panel.window(), nodes, proj_settings, auto_name_dlg,
-        panel=panel, config_only=True,
-    )
-    if summary_dlg.exec() != QDialog.Accepted:
-        return
+    if parent_window is not None:
+        summary_dlg = SectionSummaryDialog(
+            parent_window, nodes, proj_settings, auto_name_dlg,
+            panel=panel, config_only=True,
+        )
+        if summary_dlg.exec() != QDialog.Accepted:
+            return
     cached_pressurized = getattr(panel, "_custom_pressurized_pipe_params", {}) or {}
     pressurized_params = {
         "siphon": cached_pressurized.get("siphon", []),
@@ -4846,7 +4861,7 @@ def export_combined_dxf(panel):
         auto_name = "全部表格.dxf"
 
     file_path, _ = QFileDialog.getSaveFileName(
-        panel, "保存合并DXF（纵断面+断面汇总+IP表）", auto_name,
+        parent_window, "保存合并DXF（纵断面+断面汇总+IP表）", auto_name,
         "DXF 文件 (*.dxf);;所有文件 (*.*)")
     if not file_path:
         return
@@ -4893,7 +4908,7 @@ def export_combined_dxf(panel):
         except Exception as e:
             import traceback; traceback.print_exc()
             fluent_error(
-                panel.window(),
+                parent_window,
                 "导出失败",
                 f"断面汇总表生成失败，已取消“导出全部DXF”。\n{e}",
             )
@@ -4901,7 +4916,7 @@ def export_combined_dxf(panel):
 
         if drawn_table_count <= 0:
             fluent_error(
-                panel.window(),
+                parent_window,
                 "导出失败",
                 "断面汇总表无可导出内容，已取消“导出全部DXF”。",
             )
@@ -4912,7 +4927,7 @@ def export_combined_dxf(panel):
         except Exception as e:
             import traceback; traceback.print_exc()
             fluent_error(
-                panel.window(),
+                parent_window,
                 "导出失败",
                 f"IP坐标及弯道参数表生成失败，已取消“导出全部DXF”。\n{e}",
             )
@@ -4920,7 +4935,7 @@ def export_combined_dxf(panel):
 
         if not ip_preview:
             fluent_error(
-                panel.window(),
+                parent_window,
                 "导出失败",
                 "IP坐标及弯道参数表无可导出内容，已取消“导出全部DXF”。",
             )
@@ -4940,7 +4955,7 @@ def export_combined_dxf(panel):
         except Exception as e:
             import traceback; traceback.print_exc()
             fluent_error(
-                panel.window(),
+                parent_window,
                 "导出失败",
                 f"IP坐标及弯道参数表绘制失败，已取消“导出全部DXF”。\n{e}",
             )
@@ -4948,7 +4963,7 @@ def export_combined_dxf(panel):
 
         doc.saveas(file_path)
         if fluent_question(
-            panel.window(),
+            parent_window,
             "导出完成",
             f"合并DXF已生成：\n{file_path}\n\n"
             f"包含：纵断面表格 + 断面汇总表 + IP坐标表\n"
@@ -4962,11 +4977,11 @@ def export_combined_dxf(panel):
         return
 
     except PermissionError:
-        fluent_error(panel.window(), "文件被占用",
+        fluent_error(parent_window, "文件被占用",
                      f"无法写入文件：\n{file_path}\n\n请先关闭该文件后重试。")
     except Exception as e:
         import traceback; traceback.print_exc()
-        fluent_error(panel.window(), "导出失败",
+        fluent_error(parent_window, "导出失败",
                      f"合并DXF导出失败:\n{str(e)}")
 
 
