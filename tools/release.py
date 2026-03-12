@@ -29,6 +29,21 @@ import urllib.error
 import urllib.parse
 from datetime import date
 
+
+def _configure_stdio():
+    """Avoid crashing on consoles that cannot encode some Unicode symbols."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None or not hasattr(stream, "reconfigure"):
+            continue
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
+
+_configure_stdio()
+
 # ============================================================
 # 路径与配置
 # ============================================================
@@ -199,15 +214,15 @@ def _upload_release_asset(upload_url: str, file_path: str, token: str):
 
     result = subprocess.run(cmd, stdout=subprocess.PIPE)
     if result.returncode != 0:
-        print(f"✗  [上传失败] curl 退出码 {result.returncode}")
+        print(f"[ERROR] [上传失败] curl 退出码 {result.returncode}")
         raise RuntimeError(f"curl upload failed: exit {result.returncode}")
 
     resp = json.loads(result.stdout.decode("utf-8", errors="replace"))
     if "browser_download_url" not in resp:
-        print(f"✗  [上传失败] 响应: {str(resp)[:300]}")
+        print(f"[ERROR] [上传失败] 响应: {str(resp)[:300]}")
         raise RuntimeError(f"upload response missing browser_download_url: {resp}")
 
-    print(f"  ✓")
+    print("  [OK]")
     return resp["browser_download_url"]
 
 
