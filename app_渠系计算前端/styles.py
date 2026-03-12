@@ -54,15 +54,49 @@ class CollapsibleGroupBox(QWidget):
 
     toggled = Signal(bool)  # collapsed state
 
-    def toggle(self):
-        self._collapsed = not self._collapsed
+    def _refresh_layout_chain(self):
+        """强制失效并重建从内容到父级的布局缓存链。"""
+        content_layout = self._content.layout()
+        if content_layout is not None:
+            content_layout.invalidate()
+            content_layout.activate()
+        self._content.adjustSize()
+        self._content.updateGeometry()
+
+        own_layout = self.layout()
+        if own_layout is not None:
+            own_layout.invalidate()
+            own_layout.activate()
+
+        parent_widget = self.parentWidget()
+        while parent_widget is not None:
+            parent_layout = parent_widget.layout()
+            if parent_layout is not None:
+                parent_layout.invalidate()
+                parent_layout.activate()
+            parent_widget.updateGeometry()
+            parent_widget = parent_widget.parentWidget()
+
+        self.updateGeometry()
+
+    def _apply_collapsed_state(self, collapsed: bool, emit_signal: bool = True):
+        collapsed = bool(collapsed)
+        if self._collapsed == collapsed:
+            return
+
+        self._collapsed = collapsed
         self._content.setVisible(not self._collapsed)
         self._update_header()
-        self.toggled.emit(self._collapsed)
+        self._refresh_layout_chain()
+
+        if emit_signal:
+            self.toggled.emit(self._collapsed)
+
+    def toggle(self):
+        self._apply_collapsed_state(not self._collapsed, emit_signal=True)
 
     def set_collapsed(self, collapsed: bool):
-        if self._collapsed != collapsed:
-            self.toggle()
+        self._apply_collapsed_state(collapsed, emit_signal=True)
 
     def is_collapsed(self) -> bool:
         return self._collapsed

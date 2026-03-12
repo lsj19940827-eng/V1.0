@@ -140,7 +140,8 @@ def calc_bend_local_loss(D_m: float, turn_radius_m: float, turn_angle_deg: float
     Returns:
         (局部损失系数 ξ, 局部水头损失 hj (m), 计算详情字典)
     """
-    if D_m <= 0 or turn_radius_m <= 0 or turn_angle_deg <= 0:
+    # < 0.1° 视为直线通过（坐标噪声），>= 180° 为旧版错误存档值，均不计损失
+    if D_m <= 0 or turn_radius_m <= 0 or turn_angle_deg < 0.1 or turn_angle_deg >= 180:
         return 0.0, 0.0, {"error": "参数无效"}
     
     R_D = turn_radius_m / D_m
@@ -303,15 +304,20 @@ def calc_turn_angle(p_prev: Tuple[float, float], p_curr: Tuple[float, float],
     # 点积
     dot = v_in[0] * v_out[0] + v_in[1] * v_out[1]
     
-    # cos(θ) = dot / (|v_in| × |v_out|)
+    # cos(θ) = dot / (|v_in| × |v_out|)，θ 是两方向向量的夹角
     cos_theta = dot / (len_in * len_out)
     cos_theta = max(-1.0, min(1.0, cos_theta))  # 防止浮点误差
     
-    # 转角 = 180° - 夹角（因为转角是方向改变量）
+    # 转角（偏角）= 两方向向量的夹角本身
+    # 注意：不能用 180° - acos()；该公式仅适用于余弦定理中的"内角"定义。
+    # 当 v_in、v_out 同向（直线）时 cos=1，acos=0°，转角=0°（正确）
+    # 当 v_in、v_out 垂直（90°弯）时 cos=0，acos=90°，转角=90°（正确）
     angle_rad = math.acos(cos_theta)
-    turn_angle = 180.0 - math.degrees(angle_rad)
+    turn_angle = math.degrees(angle_rad)
     
-    return abs(turn_angle)
+    # 小于0.1°的转角视为坐标噪声/直线通过，返回0以免产生虚假弯头损失
+    _MIN_MEANINGFUL_ANGLE = 0.1
+    return turn_angle if turn_angle >= _MIN_MEANINGFUL_ANGLE else 0.0
 
 
 def calc_segment_length(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
@@ -459,12 +465,18 @@ def calc_total_head_loss(
         turn_angle = ip.get('turn_angle', 0)
         turn_radius = ip.get('turn_radius', 0)
         
-        if turn_angle > 0 and turn_radius > 0:
+        # turn_angle >= 180 表示直线通过（无弯折），不计弯头损失
+        if 0 < turn_angle < 180 and turn_radius > 0:
             xi, hj, details = calc_bend_local_loss(D, turn_radius, turn_angle, V_pipe)
             bend_losses.append(hj)
             bend_details.append(details)
             total_bend_loss += hj
             steps.append(f"   IP{i}: R={turn_radius:.2f}m, θ={turn_angle:.1f}°, ξ={xi:.4f}, hj={hj:.4f}m")
+        else:
+            if turn_angle < 0.1:
+                steps.append(f"   IP{i}: R={turn_radius:.2f}m, θ={turn_angle:.1f}°（直线通过，不计弯头损失）")
+            elif turn_radius <= 0:
+                steps.append(f"   IP{i}: θ={turn_angle:.1f}°，未设转弯半径（不计弯头损失）")
     
     result.bend_losses = bend_losses
     result.total_bend_loss = total_bend_loss
@@ -837,12 +849,18 @@ def calc_total_head_loss_with_spatial(
             turn_angle = ip.get('turn_angle', 0)
             turn_radius = ip.get('turn_radius', 0)
 
-            if turn_angle > 0 and turn_radius > 0:
+            # turn_angle >= 180 表示直线通过（无弯折），不计弯头损失
+            if 0 < turn_angle < 180 and turn_radius > 0:
                 xi, hj, details = calc_bend_local_loss(D, turn_radius, turn_angle, V_pipe)
                 bend_losses.append(hj)
                 bend_details.append(details)
                 total_bend_loss += hj
                 steps.append(f"   IP{i}: R={turn_radius:.2f}m, θ={turn_angle:.1f}°, ξ={xi:.4f}, hj={hj:.4f}m")
+            else:
+                if turn_angle < 0.1:
+                    steps.append(f"   IP{i}: R={turn_radius:.2f}m, θ={turn_angle:.1f}°（直线通过，不计弯头损失）")
+                elif turn_radius <= 0:
+                    steps.append(f"   IP{i}: θ={turn_angle:.1f}°，未设转弯半径（不计弯头损失）")
 
         result.bend_losses = bend_losses
         result.total_bend_loss = total_bend_loss

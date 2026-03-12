@@ -40,3 +40,23 @@ def test_zero_increased_velocity_not_injected_into_params():
     assert "v_channel_in_inc" not in params
     assert "v_pipe_out_inc" not in params
 
+
+def test_collect_velocity_source_warning_metadata_for_fallback_and_missing():
+    groups = [
+        SiphonGroup(
+            name="虹吸C",
+            upstream_velocity_source="adjacent",
+            downstream_velocity_source="same_section_nearest_channel_fallback",
+        ),
+        SiphonGroup(
+            name="虹吸D",
+            upstream_velocity_source="missing",
+            downstream_velocity_source="missing",
+        ),
+    ]
+
+    metadata = MultiSiphonDialog._collect_velocity_source_warning_metadata(groups)
+
+    assert metadata["fallback"] == ["虹吸C（下游）"]
+    assert metadata["missing"] == ["虹吸D（上游/下游）"]
+

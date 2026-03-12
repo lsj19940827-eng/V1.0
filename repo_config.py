@@ -12,9 +12,17 @@ GITHUB_OWNER = "lsj19940827-eng"
 GITHUB_REPO = "V1.0"
 GITHUB_REPO_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}"
 GIST_ID = "5b065a668e99faddcec02415cb423d96"
+# 预发布（测试）更新通道 Gist。未配置时保持为空字符串。
+# 建议单独创建一个仅用于测试用户的 version.json。
+GIST_ID_TEST = ""
 GITHUB_VERSION_URL = (
     f"https://gist.githubusercontent.com/"
     f"{GITHUB_OWNER}/{GIST_ID}/raw/version.json"
+)
+GITHUB_VERSION_URL_TEST = (
+    f"https://gist.githubusercontent.com/"
+    f"{GITHUB_OWNER}/{GIST_ID_TEST}/raw/version.json"
+    if GIST_ID_TEST else ""
 )
 
 # ============================================================

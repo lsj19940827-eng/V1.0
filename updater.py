@@ -25,6 +25,7 @@
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -37,6 +38,7 @@ from typing import Optional, Callable
 from version import APP_VERSION, APP_NAME_EN
 from repo_config import (
     GITHUB_VERSION_URL as _GITHUB_VERSION_URL,
+    GITHUB_VERSION_URL_TEST as _GITHUB_VERSION_URL_TEST,
     DOWNLOAD_PROXIES as _DOWNLOAD_PROXIES,
 )
 
@@ -48,16 +50,38 @@ _PROXY_PROBE_TIMEOUT = 5  # 代理探测超时（秒）
 # 鐗堟湰姣旇緝
 # ============================================================
 def _parse_version(v: str) -> tuple:
-    """灏?'1.0.2' 瑙ｆ瀽涓?(1, 0, 2) 浠ヤ究姣旇緝"""
-    try:
-        return tuple(int(x) for x in v.strip().split("."))
-    except (ValueError, AttributeError):
+    """将版本字符串解析为可比较的 3 段整数元组。"""
+    if not isinstance(v, str):
         return (0, 0, 0)
+    nums = re.findall(r"\d+", v)
+    if not nums:
+        return (0, 0, 0)
+    parts = [int(x) for x in nums[:3]]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+def compare_versions(a: str, b: str) -> int:
+    """
+    比较两个版本号。
+    Returns:
+        1  -> a > b
+        0  -> a == b
+        -1 -> a < b
+    """
+    pa = _parse_version(a)
+    pb = _parse_version(b)
+    if pa > pb:
+        return 1
+    if pa < pb:
+        return -1
+    return 0
 
 
 def is_newer(remote_ver: str, local_ver: str = APP_VERSION) -> bool:
-    """杩滅▼鐗堟湰鏄惁姣旀湰鍦扮増鏈洿鏂?"""
-    return _parse_version(remote_ver) > _parse_version(local_ver)
+    """远程版本是否比本地版本新。"""
+    return compare_versions(remote_ver, local_ver) > 0
 
 
 # ============================================================
@@ -70,24 +94,54 @@ class UpdateInfo:
         self.download_url: str = data.get("download_url", "")
         self.patch_url: str = data.get("patch_url", "")
         self.source: str = data.get("source", "")
+        self.channel: str = data.get("channel", "")
         self.changelog: str = data.get("changelog", "")
         self.release_date: str = data.get("release_date", "")
         self.min_version: str = data.get("min_version", "0.0.0")
         self.file_size_mb: float = data.get("file_size_mb", 0)
         self.patch_size_mb: float = data.get("patch_size_mb", 0)
         self.min_patch_version: str = data.get("min_patch_version", "")
+        self.requested_channel: str = "prod"
+        self.allow_downgrade: bool = False
         # 兼容旧版 version.json 中的 patch_base_version 字段
         if not self.min_patch_version:
             self.min_patch_version = data.get("patch_base_version", "")
 
     @property
+    def version_cmp(self) -> int:
+        return compare_versions(self.latest_version, APP_VERSION)
+
+    @property
+    def is_newer_than_local(self) -> bool:
+        return self.version_cmp > 0
+
+    @property
+    def is_older_than_local(self) -> bool:
+        return self.version_cmp < 0
+
+    @property
+    def can_offer_downgrade(self) -> bool:
+        """
+        正式通道可提供“降级安装”入口：
+        - 远程正式版低于当前本地版本
+        - 存在可下载全量包
+        """
+        return (
+            self.requested_channel == "prod"
+            and self.is_older_than_local
+            and bool(self.download_url)
+        )
+
+    @property
     def has_update(self) -> bool:
-        return is_newer(self.latest_version)
+        return self.is_newer_than_local or (
+            self.allow_downgrade and self.can_offer_downgrade
+        )
 
     @property
     def is_forced(self) -> bool:
         """当前版本低于最低要求版本时，强制更新"""
-        return _parse_version(APP_VERSION) < _parse_version(self.min_version)
+        return compare_versions(APP_VERSION, self.min_version) < 0
 
     @property
     def has_patch(self) -> bool:
@@ -101,12 +155,14 @@ class UpdateInfo:
             return False
         if not self.min_patch_version:
             return True
-        return _parse_version(APP_VERSION) >= _parse_version(self.min_patch_version)
+        return compare_versions(APP_VERSION, self.min_patch_version) >= 0
 
 
 def _check_remote(url: str, source_name: str) -> Optional[UpdateInfo]:
     """浠庤繙绋?URL 璇诲彇鐗堟湰淇℃伅"""
     try:
+        if not url:
+            return None
         req = urllib.request.Request(
             url,
             headers={"User-Agent": f"{APP_NAME_EN}/{APP_VERSION}"},
@@ -120,14 +176,34 @@ def _check_remote(url: str, source_name: str) -> Optional[UpdateInfo]:
         return None
 
 
-def check_for_update() -> Optional[UpdateInfo]:
+def _normalize_channel(channel: str) -> str:
+    if str(channel).lower().strip() == "test":
+        return "test"
+    return "prod"
+
+
+def _get_version_url(channel: str) -> str:
+    channel = _normalize_channel(channel)
+    if channel == "test":
+        return _GITHUB_VERSION_URL_TEST
+    return _GITHUB_VERSION_URL
+
+
+def check_for_update(channel: str = "prod", allow_downgrade: bool = False) -> Optional[UpdateInfo]:
     """
     Check updates from GitHub.
+    Args:
+        channel: prod | test
+        allow_downgrade: 是否允许在正式通道提供降级入口
     Returns:
         UpdateInfo or None
     """
-    info = _check_remote(_GITHUB_VERSION_URL, "github")
+    selected_channel = _normalize_channel(channel)
+    source = f"github:{selected_channel}"
+    info = _check_remote(_get_version_url(selected_channel), source)
     if info is not None:
+        info.requested_channel = selected_channel
+        info.allow_downgrade = bool(allow_downgrade)
         return info
 
     return None

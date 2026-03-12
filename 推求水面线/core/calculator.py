@@ -234,6 +234,73 @@ class WaterProfileCalculator:
                 dy = node.y - prev.y
                 node.straight_distance = math.sqrt(dx * dx + dy * dy)
 
+    @staticmethod
+    def _is_real_profile_node(node: ChannelNode) -> bool:
+        """判断纵断面真实节点（排除渐变段和自动插入明渠段）。"""
+        if getattr(node, 'is_transition', False):
+            return False
+        if getattr(node, 'is_auto_inserted_channel', False):
+            return False
+        return True
+
+    @staticmethod
+    def _profile_conflict_node_label(node: ChannelNode) -> str:
+        """生成冲突报错中的节点标识。"""
+        ip_no = getattr(node, 'ip_number', None)
+        ip_text = f"IP{ip_no}" if ip_no is not None else "IP?"
+        name = str(getattr(node, 'name', '') or '').strip()
+        return f"{ip_text}({name})" if name else ip_text
+
+    def _validate_real_node_station_conflicts(self, nodes: List[ChannelNode], tol: float = 1e-6) -> None:
+        """校验真实节点同桩号高程非零冲突；冲突时抛异常阻断后续导出。"""
+        grouped = {}
+        order = []
+        for node in nodes:
+            if not self._is_real_profile_node(node):
+                continue
+            try:
+                station_val = float(getattr(node, 'station_MC', 0) or 0.0)
+            except (TypeError, ValueError):
+                station_val = 0.0
+            station_key = round(station_val, 9)
+            if station_key not in grouped:
+                grouped[station_key] = []
+                order.append(station_key)
+            grouped[station_key].append(node)
+
+        field_labels = (
+            ('bottom_elevation', '渠底高程'),
+            ('top_elevation', '渠顶高程'),
+            ('water_level', '设计水位'),
+        )
+
+        for station_key in order:
+            group_nodes = grouped[station_key]
+            station_val = float(getattr(group_nodes[0], 'station_MC', station_key))
+            for attr_name, field_label in field_labels:
+                unique_non_zero = []
+                for node in group_nodes:
+                    try:
+                        value = float(getattr(node, attr_name, 0) or 0.0)
+                    except (TypeError, ValueError):
+                        value = 0.0
+                    if abs(value) <= tol:
+                        continue
+                    if any(abs(value - prev_val) <= tol for prev_val, _ in unique_non_zero):
+                        continue
+                    unique_non_zero.append((value, node))
+
+                if len(unique_non_zero) <= 1:
+                    continue
+
+                detail = "，".join(
+                    f"{val:.6f}@{self._profile_conflict_node_label(node)}"
+                    for val, node in unique_non_zero
+                )
+                raise ValueError(
+                    f"同桩号高程冲突：桩号 {station_val:.6f} 的{field_label}存在多个非零值（{detail}）。"
+                )
+
     def calculate_all(self, nodes: List[ChannelNode], 
                       open_channel_callback=None) -> List[ChannelNode]:
         """
@@ -287,6 +354,9 @@ class WaterProfileCalculator:
         
         # 9. 计算累计总水头损失
         self._calculate_cumulative_head_loss(nodes)
+
+        # 10. 导出前约束：真实节点同桩号高程冲突校验
+        self._validate_real_node_station_conflicts(nodes)
         
         return nodes
     

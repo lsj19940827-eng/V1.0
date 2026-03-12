@@ -18,12 +18,12 @@ import time
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QTextEdit, QWidget, QSizePolicy, QApplication,
+    QProgressBar, QTextEdit, QWidget, QSizePolicy, QApplication, QComboBox,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSettings
 from PySide6.QtGui import QFont
 
-from version import APP_VERSION, APP_NAME
+from version import APP_VERSION
 
 
 # ============================================================
@@ -33,9 +33,17 @@ class CheckUpdateThread(QThread):
     """后台检查远程版本"""
     finished = Signal(object)  # UpdateInfo or None
 
+    def __init__(self, parent=None, channel: str = "prod", allow_downgrade: bool = False):
+        super().__init__(parent)
+        self.channel = channel
+        self.allow_downgrade = allow_downgrade
+
     def run(self):
         from updater import check_for_update
-        info = check_for_update()
+        info = check_for_update(
+            channel=self.channel,
+            allow_downgrade=self.allow_downgrade,
+        )
         self.finished.emit(info)
 
 
@@ -91,16 +99,23 @@ class UpdateDialog(QDialog):
         self._update_info = None
         self._zip_path = None
         self._is_patch = False
+        self._is_downgrade = False
         self._patch_failed = False     # 避免重试时再次尝试已失败的 patch
         self._check_thread = None
         self._download_thread = None
+        self._active_channel = "prod"
         self._dl_start_time = 0.0      # 下载开始时间，用于速度计算
+        self._settings = QSettings("CanalHydraulicCalc", "Updater")
 
         self._init_ui()
 
         if info is not None:
-            # 直接展示已有结果，不再发起网络请求
-            QTimer.singleShot(0, lambda: self._on_check_finished(info))
+            if getattr(info, "requested_channel", "prod") == self._current_channel():
+                # 直接展示已有结果，不再发起网络请求
+                QTimer.singleShot(0, lambda: self._on_check_finished(info))
+            else:
+                # 缓存结果与当前通道不一致时，直接按当前通道重查
+                QTimer.singleShot(0, self._on_check)
         elif auto_check:
             QTimer.singleShot(100, self._on_check)
 
@@ -119,6 +134,29 @@ class UpdateDialog(QDialog):
         self._status_label.setStyleSheet("color: #888; font-size: 12px;")
         top_layout.addWidget(self._status_label)
         layout.addLayout(top_layout)
+
+        # ---- 更新通道 ----
+        channel_layout = QHBoxLayout()
+        channel_layout.setSpacing(8)
+        channel_layout.addWidget(QLabel("更新通道："))
+
+        self._channel_combo = QComboBox()
+        self._channel_combo.setFixedWidth(220)
+        self._channel_combo.addItem("正式（稳定）", "prod")
+        self._channel_combo.addItem("测试（预发布）", "test")
+        saved_channel = str(self._settings.value("update/channel", "prod"))
+        idx = 1 if saved_channel == "test" else 0
+        self._channel_combo.setCurrentIndex(idx)
+        self._channel_combo.currentIndexChanged.connect(self._on_channel_changed)
+        channel_layout.addWidget(self._channel_combo)
+        channel_layout.addStretch()
+        layout.addLayout(channel_layout)
+
+        self._channel_tip_label = QLabel("")
+        self._channel_tip_label.setWordWrap(True)
+        self._channel_tip_label.setStyleSheet("color: #E65100; font-size: 12px;")
+        layout.addWidget(self._channel_tip_label)
+        self._on_channel_changed()
 
         # ---- 更新信息区 ----
         self._info_text = QTextEdit()
@@ -229,17 +267,79 @@ class UpdateDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+    def _current_channel(self) -> str:
+        channel = self._channel_combo.currentData()
+        if channel == "test":
+            return "test"
+        return "prod"
+
+    def _on_channel_changed(self):
+        channel = self._current_channel()
+        self._settings.setValue("update/channel", channel)
+        if channel == "test":
+            self._channel_tip_label.setText(
+                "⚠ 测试版可能不稳定，建议仅用于验证；如需稳定生产，请切回正式通道。"
+            )
+        else:
+            self._channel_tip_label.setText(
+                "正式通道更稳定；若当前安装了测试构建，可在此通道执行降级安装。"
+            )
+
+    def _bind_download_handler(self, handler):
+        try:
+            self._btn_download.clicked.disconnect()
+        except Exception:
+            pass
+        self._btn_download.clicked.connect(handler)
+
+    def _reset_download_button(self):
+        self._btn_download.setEnabled(True)
+        self._btn_download.setStyleSheet("""
+            QPushButton {
+                background: #388E3C; color: white;
+                border: none; border-radius: 6px;
+                font-size: 13px; font-weight: bold;
+                padding: 0 24px;
+            }
+            QPushButton:hover { background: #2E7D32; }
+            QPushButton:disabled { background: #A5D6A7; }
+        """)
+        self._bind_download_handler(self._on_download)
+
+    def _download_button_text(self) -> str:
+        info = self._update_info
+        if not info:
+            return "下载并更新"
+        if self._is_downgrade:
+            if info.file_size_mb:
+                return f"下载正式版并降级 ({info.file_size_mb:.1f} MB)"
+            return "下载正式版并降级"
+        if info.can_use_patch and not self._patch_failed and info.patch_size_mb:
+            return f"下载增量补丁包 ({info.patch_size_mb:.1f} MB)"
+        if info.file_size_mb:
+            return f"下载全量包 ({info.file_size_mb:.1f} MB)"
+        return "下载并更新"
+
     # ---- 检查更新 ----
     def _on_check(self):
+        self._reset_download_button()
+        self._zip_path = None
+        self._is_downgrade = False
+        self._active_channel = self._current_channel()
         self._btn_check.setEnabled(False)
         self._btn_check.setText("正在检查...")
-        self._status_label.setText("正在连接服务器...")
+        channel_name = "测试通道" if self._active_channel == "test" else "正式通道"
+        self._status_label.setText(f"正在连接{channel_name}服务器...")
         self._status_label.setStyleSheet("color: #1976D2; font-size: 12px;")
         self._info_text.clear()
         self._btn_download.setVisible(False)
         self._patch_failed = False
 
-        self._check_thread = CheckUpdateThread(self)
+        self._check_thread = CheckUpdateThread(
+            self,
+            channel=self._active_channel,
+            allow_downgrade=(self._active_channel == "prod"),
+        )
         self._check_thread.finished.connect(self._on_check_finished)
         self._check_thread.start()
 
@@ -250,18 +350,27 @@ class UpdateDialog(QDialog):
         if info is None:
             self._status_label.setText("⚠ 无法连接到更新服务器")
             self._status_label.setStyleSheet("color: #E65100; font-size: 12px;")
+            is_test_channel = (self._active_channel == "test")
+            channel_hint = (
+                "测试通道未配置或暂不可用。\n"
+                if is_test_channel else
+                ""
+            )
             self._info_text.setPlainText(
                 "检查更新失败，可能的原因：\n\n"
                 "1. 网络未连接\n"
                 "2. 更新服务器暂时不可用\n"
                 "3. 防火墙阻止了连接\n\n"
+                f"{channel_hint}"
                 "请稍后再试，或联系技术支持获取最新版本。"
             )
             return
 
         self._update_info = info
+        self._active_channel = getattr(info, "requested_channel", self._active_channel)
+        self._is_downgrade = bool(info.allow_downgrade and info.can_offer_downgrade)
 
-        if info.has_update:
+        if info.is_newer_than_local:
             self._status_label.setText(f"✨ 发现新版本 V{info.latest_version}")
             self._status_label.setStyleSheet(
                 "color: #388E3C; font-weight: bold; font-size: 12px;"
@@ -297,19 +406,41 @@ class UpdateDialog(QDialog):
                 )
 
             self._info_text.setHtml("\n".join(lines))
+            self._btn_download.setText(self._download_button_text())
+            self._btn_download.setVisible(True)
+        elif self._is_downgrade:
+            self._status_label.setText(f"↩ 可降级到正式版 V{info.latest_version}")
+            self._status_label.setStyleSheet(
+                "color: #E65100; font-weight: bold; font-size: 12px;"
+            )
 
-            # 按钮文字显示文件大小，让用户有预期
-            if info.can_use_patch and not self._patch_failed and info.patch_size_mb:
-                self._btn_download.setText(
-                    f"下载增量补丁包 ({info.patch_size_mb:.1f} MB)"
+            lines = [
+                f"<h3 style='margin:0 0 4px 0;'>正式版 V{info.latest_version}</h3>",
+                f"<p style='color:#666; margin:2px 0;'>发布日期：{info.release_date}</p>",
+                "<p style='color:#E65100; margin:6px 0;'>"
+                "当前版本高于正式通道，可选择下载正式版执行降级。</p>",
+            ]
+            if info.file_size_mb:
+                lines.append(
+                    f"<p style='color:#666; margin:2px 0;'>"
+                    f"下载大小：<b>{info.file_size_mb:.1f} MB</b></p>"
                 )
-            else:
-                self._btn_download.setText(
-                    f"下载全量包 ({info.file_size_mb:.1f} MB)"
-                )
+            lines.append("<hr style='margin:8px 0;'>")
+            lines.append("<b>正式版更新内容：</b>")
+            for line in info.changelog.split("\n"):
+                line = line.strip()
+                if line.startswith("- "):
+                    lines.append(f"<li style='margin:2px 0;'>{line[2:]}</li>")
+                elif line:
+                    lines.append(f"<p style='margin:2px 0;'>{line}</p>")
+            self._info_text.setHtml("\n".join(lines))
+            self._btn_download.setText(self._download_button_text())
             self._btn_download.setVisible(True)
         else:
-            self._status_label.setText("✅ 已是最新版本")
+            if self._active_channel == "test":
+                self._status_label.setText("✅ 当前测试通道已是最新")
+            else:
+                self._status_label.setText("✅ 已是最新版本")
             self._status_label.setStyleSheet(
                 "color: #388E3C; font-weight: bold; font-size: 12px;"
             )
@@ -323,8 +454,13 @@ class UpdateDialog(QDialog):
             return
 
         info = self._update_info
+        if self._is_downgrade:
+            self._is_patch = False
+            url = info.download_url
+            size_text = f"{info.file_size_mb:.1f} MB" if info.file_size_mb else "未知大小"
+            label = f"正在下载正式版（降级）({size_text}) ..."
         # 优先下载补丁包（除非已知 patch 失败）
-        if info.can_use_patch and not self._patch_failed:
+        elif info.can_use_patch and not self._patch_failed:
             self._is_patch = True
             url = info.patch_url
             label = f"正在下载增量补丁包 ({info.patch_size_mb:.1f} MB) ..."
@@ -393,7 +529,7 @@ class UpdateDialog(QDialog):
         self._btn_cancel.setVisible(False)
         self._btn_close.setVisible(True)
 
-        self._btn_download.setText("立即安装更新")
+        self._btn_download.setText("立即安装并降级" if self._is_downgrade else "立即安装更新")
         self._btn_download.setEnabled(True)
         self._btn_download.setStyleSheet("""
             QPushButton {
@@ -416,17 +552,7 @@ class UpdateDialog(QDialog):
         self._btn_check.setEnabled(True)
         self._status_label.setText("已取消下载")
         self._status_label.setStyleSheet("color: #888; font-size: 12px;")
-        # 恢复按钮文字
-        info = self._update_info
-        if info:
-            if info.can_use_patch and not self._patch_failed and info.patch_size_mb:
-                self._btn_download.setText(
-                    f"下载增量补丁包 ({info.patch_size_mb:.1f} MB)"
-                )
-            else:
-                self._btn_download.setText(
-                    f"下载全量包 ({info.file_size_mb:.1f} MB)"
-                )
+        self._btn_download.setText(self._download_button_text())
 
     def _on_cancel(self):
         """点击取消按钮"""
@@ -486,11 +612,21 @@ class UpdateDialog(QDialog):
         if not self._zip_path:
             return
 
+        if self._is_downgrade:
+            title_text = "确认降级安装"
+            body_text = (
+                "将安装正式版并覆盖当前版本（降级）。\n\n"
+                "请确认已备份项目并保存所有工作，点击「确定」继续。"
+            )
+        else:
+            title_text = "确认安装更新"
+            body_text = "安装更新需要关闭程序，请确保已保存所有工作。\n\n点击「确定」立即关闭并更新。"
+
         try:
             from qfluentwidgets import MessageBox as FluentMessageBox
             w = FluentMessageBox(
-                "确认安装更新",
-                "安装更新需要关闭程序，请确保已保存所有工作。\n\n点击「确定」立即关闭并更新。",
+                title_text,
+                body_text,
                 self,
             )
             if not w.exec():
@@ -499,7 +635,7 @@ class UpdateDialog(QDialog):
             from PySide6.QtWidgets import QMessageBox
             ret = QMessageBox.question(
                 self, "确认更新",
-                "安装更新需要关闭程序。\n\n请确保已保存所有工作，点击「是」开始更新。",
+                body_text,
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
             )
             if ret != QMessageBox.Yes:
@@ -527,8 +663,8 @@ class SilentUpdateChecker(CheckUpdateThread):
     """
     update_available = Signal(object)  # UpdateInfo
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def __init__(self, parent=None, channel: str = "prod"):
+        super().__init__(parent, channel=channel, allow_downgrade=False)
         self.finished.connect(self._handle_result)
 
     def _handle_result(self, info):

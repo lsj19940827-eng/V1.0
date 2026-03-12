@@ -581,8 +581,7 @@ class TunnelPanel(QWidget):
         except ValueError: return None
 
     def _info_parent(self):
-        w = self.window()
-        return w if w else self
+        return self
 
     # ================================================================
     # 计算

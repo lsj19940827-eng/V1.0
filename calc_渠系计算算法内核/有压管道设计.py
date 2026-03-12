@@ -398,6 +398,14 @@ def _auto_recommend(candidates):
     return None, "无可用"
 
 
+def _order_for_display(top: List["DiameterCandidate"], recommended: "DiameterCandidate") -> List["DiameterCandidate"]:
+    """候选展示排序：推荐项固定首位，其余按(类别优先级, hf_total)排序。"""
+    rec_D = recommended.D
+    others = [c for c in top if abs(c.D - rec_D) > 1e-6]
+    others_sorted = sorted(others, key=lambda c: (_CAT_ORDER.get(c.category, 9), c.hf_total_km))
+    return [recommended] + others_sorted
+
+
 def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
     """
     推荐管径算法：
@@ -448,9 +456,9 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
                 if c.D not in seen_D:
                     top5.append(c)
                     seen_D.add(c.D)
-                    if len(top5) >= 6:
+                    if len(top5) >= 5:
                         break
-            top5 = sorted(top5, key=lambda c: (_CAT_ORDER.get(c.category, 9), c.hf_total_km))
+            top5 = _order_for_display(top5, manual_candidate)
             reason = (f"用户指定: D={manual_candidate.D:.3f}m, "
                       f"V={manual_candidate.V_press:.3f}m/s, "
                       f"hf_total={manual_candidate.hf_total_km:.4f}m/km "
@@ -488,14 +496,14 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
                     seen_D.add(c.D)
                     if len(top) >= 5:
                         break
-        return sorted(top, key=lambda c: (_CAT_ORDER.get(c.category, 9), c.hf_total_km))
+        return top
 
     # ---- 自动推荐模式（原逻辑） ----
 
     # 第一步：经济区
     if eco:
         rec = eco[0]
-        top5 = _fill_top5(eco, fallback_sorted)
+        top5 = _order_for_display(_fill_top5(eco, fallback_sorted), rec)
         reason = f"经济优先: D={rec.D:.3f}m, V={rec.V_press:.3f}m/s, hf_total={rec.hf_total_km:.4f}m/km"
         calc_text = _build_process_text(inp, candidates, rec, "经济")
         return RecommendationResult(
@@ -506,7 +514,7 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
     # 第二步：妥协区
     if comp:
         rec = comp[0]
-        top5 = _fill_top5(comp, fallback_sorted)
+        top5 = _order_for_display(_fill_top5(comp, fallback_sorted), rec)
         reason = f"妥协兜底: D={rec.D:.3f}m, V={rec.V_press:.3f}m/s, hf_total={rec.hf_total_km:.4f}m/km"
         calc_text = _build_process_text(inp, candidates, rec, "妥协")
         return RecommendationResult(
@@ -517,7 +525,7 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
     # 第三步：兜底
     rec = fallback_sorted[0]
     rec.flags.append("未满足约束")
-    top5 = sorted(fallback_sorted[:5], key=lambda c: (_CAT_ORDER.get(c.category, 9), c.hf_total_km))
+    top5 = _order_for_display(fallback_sorted[:5], rec)
     reason = f"就近流速兜底: D={rec.D:.3f}m, V={rec.V_press:.3f}m/s, hf_total={rec.hf_total_km:.4f}m/km (未满足约束)"
     calc_text = _build_process_text(inp, candidates, rec, "兜底")
     return RecommendationResult(
@@ -1311,10 +1319,14 @@ def _build_process_text(
     o.append("  2. 妥协区条件:")
     o.append("     0.6 ≤ V < 0.9 m/s 且 hf总 ≤ 5.0 m/km")
     o.append("")
-    o.append(f"  3. 评价统计:")
+    o.append("  3. 双规范说明:")
+    o.append("     规范依据并列展示：GB 50288-2018 与 GB/T 20203-2017")
+    o.append("     当前程序筛选规则仍按 GB 50288-2018 执行")
+    o.append("")
+    o.append(f"  4. 评价统计:")
     o.append(f"     全部 {len(all_candidates)} 种口径: 经济区 {eco_count} 个, 妥协区 {comp_count} 个, 兜底 {fallback_count} 个")
     o.append("")
-    o.append(f"  4. 筛选结论:")
+    o.append(f"  5. 筛选结论:")
     if is_manual:
         o.append(f"     用户指定管径: D = {recommended.D} m ({recommended.D * 1000:.0f} mm)")
         o.append(f"     该管径属于「{recommended.category}」区")
@@ -1338,7 +1350,7 @@ def _build_process_text(
     o.append(f"  局部水损: hj = {recommended.hf_local_km:.4f} m/km")
     o.append(f"  总水损: hf总 = {recommended.hf_total_km:.4f} m/km")
     o.append(f"  按管长折算总损失: H损 = {recommended.h_loss_total_m:.4f} m (L={inp.length_m}m)")
-    o.append(f"  所属类别: {recommended.category}")
+    o.append(f"  所属类别: {'指定' if is_manual else recommended.category}")
     if recommended.flags:
         o.append(f"  标记: {', '.join(recommended.flags)}")
     o.append("")
@@ -1352,48 +1364,5 @@ def _build_process_text(
         o.append(f"  按管长折算总损失: H损 = {auto_rec.h_loss_total_m:.4f} m")
         o.append(f"  推荐类别: {auto_cat}")
         o.append("")
-
-    # ---- 候选管径 ----
-    has_auto_compare = (is_manual and auto_rec is not None and auto_cat
-                        and abs(auto_rec.D - recommended.D) > 1e-6)
-    section_num = "七" if has_auto_compare else "六"
-    o.append(f"【{section_num}、前5候选管径】")
-    eco_pool = sorted([c for c in all_candidates if c.category == "经济"], key=lambda c: c.D)
-    comp_pool = sorted([c for c in all_candidates if c.category == "妥协"], key=lambda c: c.D)
-    fb_pool = sorted(all_candidates, key=lambda c: (abs(c.V_press - 0.9), c.hf_total_km))
-
-    if is_manual:
-        # 指定D排首位，其余按 fallback 排序补足
-        manual_c = [c for c in all_candidates if "用户指定" in c.flags]
-        pool = list(manual_c[:1])
-        seen_D = {c.D for c in pool}
-        for c in fb_pool:
-            if c.D not in seen_D:
-                pool.append(c)
-                seen_D.add(c.D)
-                if len(pool) >= 5:
-                    break
-    else:
-        if category == "经济":
-            primary = eco_pool
-        elif category == "妥协":
-            primary = comp_pool
-        else:
-            primary = fb_pool
-        pool = list(primary[:5])
-        if len(pool) < 5:
-            seen_D = {c.D for c in pool}
-            for c in fb_pool:
-                if c.D not in seen_D:
-                    pool.append(c)
-                    seen_D.add(c.D)
-                    if len(pool) >= 5:
-                        break
-
-    pool = sorted(pool, key=lambda c: c.D)
-    for i, c in enumerate(pool[:5]):
-        marker = " ★" if "用户指定" in c.flags else ""
-        o.append(f"  [{i+1}] D = {c.D} m ({c.D*1000:.0f}mm), V = {c.V_press:.4f} m/s, hf总 = {c.hf_total_km:.4f} m/km, H损 = {c.h_loss_total_m:.4f} m, 类别: {c.category}{marker}")
-    o.append("")
 
     return "\n".join(o)

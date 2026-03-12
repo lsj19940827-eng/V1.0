@@ -412,9 +412,8 @@ class AqueductPanel(QWidget):
         except ValueError: return None
 
     def _info_parent(self):
-        """获取InfoBar的父窗口"""
-        w = self.window()
-        return w if w else self
+        """获取InfoBar宿主，优先当前页面。"""
+        return self
 
     # ================================================================
     # 工况管理

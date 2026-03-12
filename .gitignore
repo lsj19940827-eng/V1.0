@@ -51,10 +51,24 @@ V1.00207的备份/
 *.bak
 ~$*
 
+# 工具临时输出
+tools/_tmp_test_outputs/
+
+# 运行时缓存
+.matplotlib/
+.codex/
+.pytest_tmp/
+tmp_*.png
+
+# 用户本地配置（水面线计算模块）
+推求水面线/*_config.json
+
 # 自动保存文件（仅保留在本地，不入版本库）
 data/*_autosave.qxproj
 data/siphon_autosave.json
 data/autosave/
+data/_test_auto_confirm/
+data/_test_unified_confirm/
 
 # 用户数据文件（DXF图纸、Excel、项目文件等，仅本地保留）
 data/*.dxf
@@ -62,6 +76,8 @@ data/*.qxproj
 data/*.xlsm
 data/*.xlsx
 data/*.docx
+修改方向.docx
+南峰寺支渠_全部表格.dxf
 
 # 授权系统（密钥和台账不进版本库）
 tools/_secret_key.py

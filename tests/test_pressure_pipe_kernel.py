@@ -268,6 +268,45 @@ class TestRecommendation:
         assert result.calc_steps
         assert len(result.calc_steps) > 100
 
+    def test_top_candidates_recommended_first_then_sorted(self):
+        """候选展示排序：推荐项固定首位，其余按(类别, hf总)"""
+        inp = PressurePipeInput(Q=0.5, material_key="HDPE管")
+        result = recommend_diameter(inp)
+        assert result.recommended is not None
+        assert len(result.top_candidates) > 0
+        assert result.top_candidates[0].D == result.recommended.D
+
+        cat_order = {"经济": 0, "妥协": 1, "兜底": 2}
+        tail = result.top_candidates[1:]
+        sorted_tail = sorted(tail, key=lambda c: (cat_order.get(c.category, 9), c.hf_total_km))
+        assert [c.D for c in tail] == [c.D for c in sorted_tail]
+
+    def test_calc_steps_remove_top5_section_and_keep_continuous_sections(self):
+        """详细过程不再包含'前5候选管径'，章节编号连续"""
+        inp = PressurePipeInput(Q=0.5, material_key="钢管")
+        result = recommend_diameter(inp)
+        assert "前5候选管径" not in result.calc_steps
+
+        cn_map = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+        section_nums = []
+        for line in result.calc_steps.splitlines():
+            if line.startswith("【") and "、" in line:
+                sec = line[1:line.index("、")]
+                if sec in cn_map:
+                    section_nums.append(cn_map[sec])
+        assert section_nums
+        assert section_nums == list(range(section_nums[0], section_nums[-1] + 1))
+
+    def test_manual_mode_category_marked_as_specified(self):
+        """指定管径场景保持'指定'类别并保留底层分类用于分析"""
+        inp = PressurePipeInput(Q=0.5, material_key="钢管", manual_D=0.8)
+        result = recommend_diameter(inp)
+        assert result.category == "指定"
+        assert result.recommended is not None
+        assert result.top_candidates[0].D == result.recommended.D
+        assert len(result.top_candidates) <= 5
+        assert "所属类别: 指定" in result.calc_steps
+
 
 # ============================================================
 # 非法输入防御

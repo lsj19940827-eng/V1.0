@@ -1073,7 +1073,7 @@ class PressurePipePanel(QWidget):
         self.data_changed.emit()
 
     def _show_initial_help(self):
-        """初始帮助页：含 GB 50288-2018 §6.7.2 规范条文"""
+        """初始帮助页：含 GB 50288-2018 与 GB/T 20203-2017 摘要"""
         h = HelpPageBuilder("有压管道水力计算", '请输入参数后点击"计算"按钮')
 
         h.section("支持功能")
@@ -1130,6 +1130,77 @@ class PressurePipePanel(QWidget):
         h.section("3  经济流速")
         h.text("管道设计流速宜控制在经济流速 0.9m/s～1.5m/s，超出此范围时应经技术经济比较确定。")
         h.hint("本程序推荐规则：经济区 0.9≤V≤1.5 m/s 且 hf总≤5 m/km；妥协区 0.6≤V<0.9 m/s 且 hf总≤5 m/km")
+
+        h.divider()
+        h.section("规范依据：GB/T 20203-2017（摘要）")
+        h.text("《管道输水灌溉工程技术规范》 GB/T 20203-2017 第5.1.4~5.1.6条。")
+
+        h.section("5.1.4.1  管道沿程水头损失（式14）")
+        h.text("管道沿程水头损失应按式(14)计算，各种管材的 f、m、b 值可按表4确定。")
+        h.formula("hf = f × Q^m × L / D^b", "沿程水头损失公式 (式14)")
+        h.bullet_list([
+            "hf —— 管道沿程水头损失，单位为米(m)",
+            "f —— 管材摩阻系数",
+            "Q —— 计算管段的设计流量，单位为立方米每小时(m³/h)",
+            "D —— 管道内径，单位为毫米(mm)",
+            "L —— 管长，单位为米(m)",
+            "m —— 流量指数",
+            "b —— 管径指数",
+        ])
+
+        h.section("表4  f、m、b 值（摘要）")
+        h.table(
+            ["管材类别", "f", "m", "b"],
+            [
+                ["混凝土管 (n=0.013)", "1.312×10⁶", "2", "5.33"],
+                ["混凝土管 (n=0.014)", "1.516×10⁶", "2", "5.33"],
+                ["混凝土管 (n=0.015)", "1.749×10⁶", "2", "5.33"],
+                ["硬塑料管", "0.948×10⁵", "1.77", "4.77"],
+                ["钢管、铸铁管", "6.25×10⁵", "1.9", "5.1"],
+                ["球墨铸铁管", "1.899×10⁵ ~ 2.232×10⁵", "1.852", "4.87"],
+                ["铝合金管", "0.861×10⁵", "1.74", "4.74"],
+            ]
+        )
+        h.hint("球墨铸铁管 f 值在规范中为区间；程序当前计算取上限值 2.232×10⁵。")
+
+        h.section("5.1.4.4  管道局部水头损失（式17）")
+        h.text("管道局部水头损失应按式(17)计算，规划阶段可按沿程水头损失的 10%~15% 估算。")
+        h.formula("hj = ζ × v^2 / (2g)", "局部水头损失公式 (式17)")
+        h.bullet_list([
+            "hj —— 管道局部水头损失，单位为米(m)",
+            "ζ —— 局部损失系数",
+            "v —— 管内流速，单位为米每秒(m/s)",
+            "g —— 重力加速度，单位为米每二次方秒(m/s²)",
+        ])
+        h.hint("本程序局部损失按比例法简化：默认局部损失比例 0.15，可按 10%~15% 范围手动调整。")
+
+        h.section("5.1.5  允许设计流速（摘要）")
+        h.text("5.1.5.1 允许设计流速宜根据管线、管材、管径、管网结构及管道投资、运行成本等因素综合考虑确定。")
+        h.bullet_list([
+            "5.1.5.2(a)：在设计流量下，管内最小流速不宜低于 0.3 m/s；配水管网兼有施肥或施药任务时，不宜低于 0.6 m/s。",
+            "5.1.5.2(b)：自压管道输水灌溉系统设计流速不宜大于 2.5 m/s；采用较大流速时应进行惯性力和推力分析。",
+            "5.1.5.2(c)：机压管道输水灌溉系统设计流速不宜大于 2.0 m/s。",
+            "5.1.5.3：采用多泥沙水源时，设计流速应大于管道临界不淤流速，缺乏试验时可按附录A经验公式计算。",
+        ])
+
+        h.section("5.1.6  管径与管道工作压力（摘要）")
+        h.text("5.1.6.1 管道系统各管段直径应通过技术经济分析计算确定；初选管径时可按式(18)估算。")
+        h.formula("D = 18.8 × √(Q / v)", "初选管径估算公式 (式18)")
+        h.text("5.1.6.2 计算管径时，流速可采用经济流速，不同管材可按表5确定。")
+
+        h.section("表5  管道经济流速推荐表（单位：m/s，摘要）")
+        h.table(
+            ["管材类别", "经济流速范围 (m/s)"],
+            [
+                ["混凝土管", "0.5 ~ 1.0"],
+                ["钢筋混凝土管", "0.8 ~ 1.5"],
+                ["硬塑料管", "1.0 ~ 1.5"],
+                ["金属管", "1.5 ~ 2.0"],
+                ["薄膜管", "0.5 ~ 1.2"],
+            ]
+        )
+        h.text("5.1.6.4 正常运行时管顶内水压不宜小于 2m，局部不应出现负值。")
+        h.hint("说明：本程序当前推荐筛选规则仍按 GB 50288-2018 执行；GB/T 20203-2017 条款在此页面按摘要并列展示。")
 
         h.divider()
         h.section("加大流量比例规范表")
@@ -1292,7 +1363,7 @@ class PressurePipePanel(QWidget):
         is_manual = (result.category == "指定")
         cat_color = {"经济": S, "妥协": W, "兜底": E}.get(
             rec.category if is_manual else result.category, T2)
-        badge_text = f"用户指定({rec.category})" if is_manual else f"{result.category}区推荐"
+        badge_text = "指定" if is_manual else result.category
 
         # 迷你摘要条
         sep_style = f"width:1px;height:28px;background:#e0e0e0;flex-shrink:0;"
@@ -1372,14 +1443,18 @@ class PressurePipePanel(QWidget):
         </div>"""
 
         # 候选表
-        _CAT_COLORS = {"经济": "#2e7d32", "妥协": "#e67e22", "兜底": "#c62828"}
+        _CAT_COLORS = {"经济": "#2e7d32", "妥协": "#e67e22", "兜底": "#c62828", "指定": "#1565c0"}
         candidates = result.top_candidates
         if candidates:
             _tbl_title = f"候选管径对比（工况{case_idx+1}：Q = {inp.Q} m³/s）" if _multi else "候选管径对比"
             html += f"""
         <div style="font-size:13px;font-weight:600;color:#555;margin:10px 0 4px;
                     padding-left:4px;border-left:3px solid #90caf9;">
-            {_tbl_title}</div>"""
+            {_tbl_title}
+            <span style="font-size:11px;color:#888;margin-left:8px;font-weight:500;">
+                排序：推荐优先，类别→hf总
+            </span>
+        </div>"""
             html += """
         <table style="width:100%;border-collapse:collapse;font-size:13px;margin:4px 0 12px;">
             <tr style="background:#f8f9fa;">
@@ -1417,16 +1492,17 @@ class PressurePipePanel(QWidget):
                 else:
                     row_style = ""
                     td_extra = ""
-                cc = _CAT_COLORS.get(c.category, "#666")
+                display_cat = "指定" if is_user else c.category
+                cc = _CAT_COLORS.get(display_cat, "#666")
                 badge_html = ""
-                if is_rec:
-                    badge_html = ('<span style="display:inline-block;background:#2e7d32;color:#fff;'
-                                  'padding:2px 8px;border-radius:10px;font-size:11px;'
-                                  'font-weight:600;">★ 推荐</span>')
-                elif is_user:
+                if is_user:
                     badge_html = ('<span style="display:inline-block;background:#e67e22;color:#fff;'
                                   'padding:2px 8px;border-radius:10px;font-size:11px;'
                                   'font-weight:600;">★ 指定</span>')
+                elif is_rec:
+                    badge_html = ('<span style="display:inline-block;background:#2e7d32;color:#fff;'
+                                  'padding:2px 8px;border-radius:10px;font-size:11px;'
+                                  'font-weight:600;">★ 推荐</span>')
                 td_s = f"padding:7px 8px;text-align:center;border-bottom:1px solid #f0f0f0;{td_extra}"
                 html += f"""
             <tr style="{row_style}">
@@ -1438,7 +1514,7 @@ class PressurePipePanel(QWidget):
                 <td style="{td_s}">{c.hf_local_km:.4f}</td>
                 <td style="{td_s}">{c.hf_total_km:.4f}</td>
                 <td style="{td_s}">{c.h_loss_total_m:.4f}</td>
-                <td style="{td_s}color:{cc};font-weight:bold;">{_e(c.category)}</td>
+                <td style="{td_s}color:{cc};font-weight:bold;">{_e(display_cat)}</td>
                 <td style="{td_s}">{badge_html}</td>
             </tr>"""
             html += "\n        </table>"
@@ -1459,7 +1535,7 @@ class PressurePipePanel(QWidget):
             fg, bg = _NAV_CAT_COLORS.get(cat, ("#999", "#f5f5f5"))
             q_text = f"Q{_sub(case_idx + 1)}={inp.Q}"
             if rec:
-                summary = f"D={rec.D*1000:.0f}mm {rec.category if cat == '指定' else cat}"
+                summary = f"D={rec.D*1000:.0f}mm {cat}"
             else:
                 summary = "无结果"
             btns.append(
@@ -1525,9 +1601,8 @@ class PressurePipePanel(QWidget):
     # Word 导出
     # ================================================================
     def _info_parent(self):
-        """获取InfoBar的父窗口（向上查找主窗口）"""
-        w = self.window()
-        return w if w else self
+        """获取InfoBar宿主，优先当前页面。"""
+        return self
 
     def _export_word(self):
         if not WORD_EXPORT_AVAILABLE:
@@ -1587,11 +1662,16 @@ class PressurePipePanel(QWidget):
 
         # 5、基础公式
         doc_add_eng_h(doc, '5、基础公式')
-        doc_add_eng_body(doc, '根据《灌溉与排水工程设计标准》(GB 50288-2018) 第6.7.2条：')
+        doc_add_eng_body(doc, '根据《灌溉与排水工程设计标准》(GB 50288-2018) 第6.7.2条，并参照《管道输水灌溉工程技术规范》(GB/T 20203-2017) 第5.1.4~5.1.6条：')
         doc_add_formula(doc, r'h_f = f \times \frac{L \times Q^m}{d^b}', '沿程水头损失公式：')
+        doc_add_formula(doc, r'h_j = \zeta \times \frac{v^2}{2g}', '局部水头损失规范公式（GB/T 20203 式(17)）：')
         doc_add_formula(doc, r'h_j = \xi_j \times h_f', '局部水头损失（按沿程损失比例简化）：')
         doc_add_formula(doc, r'V = \frac{4Q}{\pi D^2}', '管道流速公式：')
         doc_add_eng_body(doc, '经济流速范围：0.9 m/s ≤ V ≤ 1.5 m/s。')
+        doc_add_eng_body(doc, 'GB/T 20203-2017 第5.1.4.4：规划阶段局部损失可按沿程损失的10%~15%估算（程序默认局部损失比例为0.15，可手动调整）。')
+        doc_add_eng_body(doc, 'GB/T 20203-2017 第5.1.5.2：允许设计流速要求包括最小流速0.3m/s（施肥施药工况0.6m/s）以及自压系统不宜大于2.5m/s、机压系统不宜大于2.0m/s。')
+        doc_add_eng_body(doc, 'GB/T 20203-2017 第5.1.6.4：正常运行时管顶内水压不宜小于2m，局部不应出现负值。')
+        doc_add_eng_body(doc, '说明：当前程序推荐筛选规则仍按 GB 50288-2018 执行（经济区0.9~1.5m/s、妥协区0.6~0.9m/s且hf总≤5m/km）。')
 
         # 6、计算过程
         doc_add_eng_h(doc, '6、计算过程')
@@ -1603,6 +1683,7 @@ class PressurePipePanel(QWidget):
             rec = result.recommended
             if rec is None:
                 continue
+            display_result_category = "指定" if result.category == "指定" else result.category
             mat_key = inp.material_key
             mat_name = PIPE_MATERIALS[mat_key]["name"]
             mat_info = PIPE_MATERIALS[mat_key]
@@ -1621,7 +1702,7 @@ class PressurePipePanel(QWidget):
                 summary_items.append(("加大后流量", f"{rec.Q_increased:.4f} m³/s"))
             summary_items += [
                 ("推荐管径 D", f"{rec.D} m ({rec.D*1000:.0f} mm)"),
-                ("推荐类别", result.category),
+                ("推荐类别", display_result_category),
                 ("有压流速 V", f"{rec.V_press:.4f} m/s"),
                 ("沿程水损", f"{rec.hf_friction_km:.4f} m/km"),
                 ("局部水损", f"{rec.hf_local_km:.4f} m/km"),
@@ -1635,15 +1716,17 @@ class PressurePipePanel(QWidget):
             if candidates:
                 sec_num = f'8.{ri+1}' if n_cases > 1 else '8'
                 doc_add_eng_h(doc, f'{sec_num}、候选管径对比表')
+                doc_add_eng_body(doc, '排序规则：推荐优先，类别优先级（经济→妥协→兜底），同类别按hf总升序。')
                 headers = ["D(m)", "D(mm)", "V(m/s)", "hf(m/km)", "hj(m/km)",
                             "hf总(m/km)", "H损(m)", "类别"]
                 data = []
                 for c in candidates:
+                    display_cat = "指定" if "用户指定" in c.flags else c.category
                     data.append([
                         f"{c.D:.3f}", f"{c.D*1000:.0f}", f"{c.V_press:.4f}",
                         f"{c.hf_friction_km:.4f}", f"{c.hf_local_km:.4f}",
                         f"{c.hf_total_km:.4f}", f"{c.h_loss_total_m:.4f}",
-                        c.category,
+                        display_cat,
                     ])
                 doc_add_styled_table(doc, headers, data,
                                       highlight_col=0, highlight_val=f"{rec.D:.3f}",

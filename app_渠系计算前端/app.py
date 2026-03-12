@@ -3,7 +3,7 @@
 渠系建筑物水力计算系统 —— 主入口
 
 侧边导航 + 面板切换框架
-支持模块：明渠设计、渡槽设计、隧洞设计、矩形暗涵设计、倒虹吸设计、有压管道设计、批量计算、推求水面线
+支持模块：明渠设计、渡槽设计、隧洞设计、矩形暗涵设计、倒虹吸设计、有压管道设计、推求水面线
 """
 
 import sys
@@ -37,7 +37,6 @@ from app_渠系计算前端.open_channel.panel import OpenChannelPanel
 from app_渠系计算前端.aqueduct.panel import AqueductPanel
 from app_渠系计算前端.tunnel.panel import TunnelPanel
 from app_渠系计算前端.culvert.panel import CulvertPanel
-from app_渠系计算前端.batch.panel import BatchPanel
 from app_渠系计算前端.siphon.panel import SiphonPanel
 from app_渠系计算前端.water_profile.panel import WaterProfilePanel
 from app_渠系计算前端.pressure_pipe.panel import PressurePipePanel
@@ -228,8 +227,7 @@ class MainWindow(QMainWindow):
             ("矩形暗涵设计", "经济最优断面/指定参数"),
             ("倒虹吸设计", "倒虹吸管水力计算"),
             ("有压管道设计", "有压管道水力计算"),
-            ("批量计算", "多流量段批量水力计算"),
-            ("推求水面线", "水面线推求与纵剖面"),
+            ("推求水面线", "断面批量计算 + 水面线推求"),
         ]
         for idx, (name, desc) in enumerate(modules):
             btn = NavButton(name)
@@ -378,7 +376,6 @@ class MainWindow(QMainWindow):
             siphon_name="单倒虹吸"
         )
         self.pressure_pipe_panel = PressurePipePanel()
-        self.batch_panel = BatchPanel()
         self.water_profile_panel = WaterProfilePanel(
             siphon_manager=self.siphon_manager,
             pressure_pipe_manager=self.pressure_pipe_manager,
@@ -389,7 +386,6 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.culvert_panel)
         self.stack.addWidget(self.siphon_panel)
         self.stack.addWidget(self.pressure_pipe_panel)
-        self.stack.addWidget(self.batch_panel)
         self.stack.addWidget(self.water_profile_panel)
         if _EARTHWORK_AVAILABLE:
             self.earthwork_panel = EarthworkPanel()
@@ -402,7 +398,6 @@ class MainWindow(QMainWindow):
         """初始化项目管理器"""
         self.project_manager = ProjectManager(self)
         self.project_manager.set_panels(
-            batch_panel=self.batch_panel,
             water_profile_panel=self.water_profile_panel,
             open_channel_panel=self.open_channel_panel,
             aqueduct_panel=self.aqueduct_panel,
@@ -595,7 +590,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self._nav_buttons):
             btn.set_selected(i == index)
-        names = ["明渠设计", "渡槽设计", "隧洞设计", "矩形暗涵设计", "倒虹吸设计", "有压管道设计", "批量计算", "推求水面线"]
+        names = ["明渠设计", "渡槽设计", "隧洞设计", "矩形暗涵设计", "倒虹吸设计", "有压管道设计", "推求水面线"]
         if index < len(names):
             self.statusBar().showMessage(f"当前模块: {names[index]}", 5000)
 

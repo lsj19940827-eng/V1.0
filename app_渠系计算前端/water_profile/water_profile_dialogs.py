@@ -10,6 +10,8 @@
 """
 
 import math
+import datetime
+from collections import Counter
 from typing import List, Dict, Any, Optional
 
 from PySide6.QtWidgets import (
@@ -111,8 +113,8 @@ _TURN_TYPE_CN = {"NONE": "无", "ARC": "圆弧", "FOLD": "折线",
 
 class SimpleProfileCanvas(QWidget):
     """
-    轻量级纵断面画布，复用倒虹吸 PipelineCanvas 的缩放/平移/绘制模式，
-    但直接工作在节点字典数据上，无需 StructureSegment 模型。
+    轻量级管道可视化画布，支持纵断面/平面图双视图切换、缩放、平移。
+    直接工作在节点字典数据上，无需 StructureSegment 模型。
     """
 
     C_BG = QColor(20, 20, 30)
@@ -136,19 +138,49 @@ class SimpleProfileCanvas(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMouseTracking(True)
 
+        self._view_mode = "plan"
         self._zoom = 1.0
         self._pan_x = 0.0
         self._pan_y = 0.0
         self._drag_start = None
         self._drag_pan_start = None
         self._nodes = []
+        self._ip_points = []
+
+    # ---- 公共接口 ----
 
     def set_nodes(self, nodes):
         self._nodes = nodes or []
-        self._zoom = 1.0
-        self._pan_x = 0.0
-        self._pan_y = 0.0
+        if self._view_mode == "profile":
+            self._zoom = 1.0
+            self._pan_x = 0.0
+            self._pan_y = 0.0
         self.update()
+
+    def set_ip_points(self, ip_points):
+        self._ip_points = ip_points or []
+        if self._view_mode == "plan":
+            self._zoom = 1.0
+            self._pan_x = 0.0
+            self._pan_y = 0.0
+        self.update()
+
+    def set_view_mode(self, mode):
+        if mode in ("profile", "plan") and mode != self._view_mode:
+            self._view_mode = mode
+            self._zoom = 1.0
+            self._pan_x = 0.0
+            self._pan_y = 0.0
+            self.update()
+
+    def get_view_mode(self):
+        return self._view_mode
+
+    def has_plan_data(self):
+        return len(self._ip_points) >= 2
+
+    def has_profile_data(self):
+        return len(self._nodes) >= 2
 
     def zoom_reset(self):
         self._zoom = 1.0
@@ -169,7 +201,10 @@ class SimpleProfileCanvas(QWidget):
         if w < 20 or h < 20:
             p.end()
             return
-        self._draw_profile(p, w, h)
+        if self._view_mode == "plan":
+            self._draw_plan(p, w, h)
+        else:
+            self._draw_profile(p, w, h)
         p.end()
 
     def wheelEvent(self, event: QWheelEvent):
@@ -434,6 +469,188 @@ class SimpleProfileCanvas(QWidget):
         p.setFont(QFont("Microsoft YaHei", 9))
         p.drawText(QRectF(0, h - 22, w, 20), Qt.AlignCenter, info)
 
+    # ---- 平面视图 ----
+
+    def _draw_plan(self, p, w, h):
+        ip_list = self._ip_points
+        if not ip_list or len(ip_list) < 2:
+            self._draw_centered_text(p, w, h, "暂无平面数据\n有压管道至少需要2个IP点")
+            return
+
+        xs = [pt['x'] for pt in ip_list]
+        ys = [pt['y'] for pt in ip_list]
+        bounds = (min(xs), max(xs), min(ys), max(ys))
+        transform, scale = self._make_transform(bounds, w, h)
+        screen_pts = [transform(pt['x'], pt['y']) for pt in ip_list]
+
+        # 计算累计桩号
+        chainages = [0.0]
+        for i in range(1, len(ip_list)):
+            dx = ip_list[i]['x'] - ip_list[i - 1]['x']
+            dy = ip_list[i]['y'] - ip_list[i - 1]['y']
+            chainages.append(chainages[-1] + math.sqrt(dx * dx + dy * dy))
+
+        # 预计算转角
+        computed_angles = [0.0] * len(ip_list)
+        for i in range(1, len(ip_list) - 1):
+            if ip_list[i].get('turn_angle', 0) > 0:
+                computed_angles[i] = ip_list[i]['turn_angle']
+            else:
+                dx1 = ip_list[i]['x'] - ip_list[i - 1]['x']
+                dy1 = ip_list[i]['y'] - ip_list[i - 1]['y']
+                dx2 = ip_list[i + 1]['x'] - ip_list[i]['x']
+                dy2 = ip_list[i + 1]['y'] - ip_list[i]['y']
+                len1 = math.sqrt(dx1 * dx1 + dy1 * dy1)
+                len2 = math.sqrt(dx2 * dx2 + dy2 * dy2)
+                if len1 > 1e-6 and len2 > 1e-6:
+                    cos_a = (dx1 * dx2 + dy1 * dy2) / (len1 * len2)
+                    cos_a = max(-1.0, min(1.0, cos_a))
+                    angle_deg = math.degrees(math.acos(cos_a))
+                    if angle_deg > 0.5:
+                        computed_angles[i] = round(angle_deg, 1)
+
+        # 管道线
+        pen = QPen(self.C_PIPE, 3)
+        p.setPen(pen)
+        for i in range(len(screen_pts) - 1):
+            p.drawLine(QPointF(*screen_pts[i]), QPointF(*screen_pts[i + 1]))
+
+        # 箭头
+        for i in range(len(screen_pts) - 1):
+            self._draw_arrow(p, screen_pts[i], screen_pts[i + 1], self.C_ARROW)
+
+        # 节点圆圈
+        for i, sp in enumerate(screen_pts):
+            is_start = (i == 0)
+            is_end = (i == len(screen_pts) - 1)
+            is_bend = computed_angles[i] > 0
+
+            if is_start or is_end:
+                r, color = 7, self.C_INLET
+            elif is_bend:
+                r, color = 5, self.C_BEND
+            else:
+                r, color = 5, self.C_NODE
+
+            p.setPen(QPen(Qt.white, 1))
+            p.setBrush(QBrush(color))
+            p.drawEllipse(QPointF(*sp), r, r)
+
+        # ---- 标签智能布局 ----
+        occupied = []
+
+        if len(screen_pts) > 1:
+            _total_sd = sum(
+                math.sqrt((screen_pts[k + 1][0] - screen_pts[k][0]) ** 2 +
+                          (screen_pts[k + 1][1] - screen_pts[k][1]) ** 2)
+                for k in range(len(screen_pts) - 1)
+            )
+            avg_sd = _total_sd / (len(screen_pts) - 1)
+        else:
+            avg_sd = 200.0
+        label_scale = min(1.0, max(0.45, avg_sd / 120.0))
+        show_mc_for_bends = avg_sd >= 60
+
+        for i, sp in enumerate(screen_pts):
+            r = max(4, int((8 if (i == 0 or i == len(screen_pts) - 1) else 6) * label_scale))
+            occupied.append((sp[0] - r, sp[1] - r, sp[0] + r, sp[1] + r))
+
+        plan_pipe_lines = [(screen_pts[k][0], screen_pts[k][1],
+                            screen_pts[k + 1][0], screen_pts[k + 1][1])
+                           for k in range(len(screen_pts) - 1)]
+
+        pending = []
+        for i, sp in enumerate(screen_pts):
+            is_start = (i == 0)
+            is_end = (i == len(screen_pts) - 1)
+            is_bend = computed_angles[i] > 0
+            mc_text = f"MC {chainages[i]:.3f}"
+            if is_start:
+                pending.append((sp[0], sp[1], "进水口", self.C_INLET, 9))
+                pending.append((sp[0], sp[1], mc_text, self.C_ELEV, 8))
+            elif is_end:
+                pending.append((sp[0], sp[1], "出水口", self.C_INLET, 9))
+                pending.append((sp[0], sp[1], mc_text, self.C_ELEV, 8))
+            elif is_bend:
+                pending.append((sp[0], sp[1], f"α={computed_angles[i]:.3f}°", self.C_BEND, 8))
+                if show_mc_for_bends:
+                    pending.append((sp[0], sp[1], mc_text, self.C_ELEV, 8))
+
+        for ax, ay, text, color, font_size in pending:
+            scaled_fs = max(6, int(font_size * label_scale + 0.5))
+            ft = QFont("Microsoft YaHei", scaled_fs)
+            p.setFont(ft)
+            fm = p.fontMetrics()
+            tw = fm.horizontalAdvance(text)
+            th = fm.height()
+            pad = 3
+            gap = max(4, int(12 * label_scale))
+            gap2 = max(3, int(8 * label_scale))
+            gap3 = max(6, int(20 * label_scale))
+
+            cands = [
+                (0, -(th / 2 + gap)),
+                (0, th / 2 + gap),
+                (tw / 2 + gap, 0),
+                (-(tw / 2 + gap), 0),
+                (tw / 2 + gap2, -(th / 2 + gap2)),
+                (tw / 2 + gap2, th / 2 + gap2),
+                (-(tw / 2 + gap2), -(th / 2 + gap2)),
+                (-(tw / 2 + gap2), th / 2 + gap2),
+                (0, -(th / 2 + gap * 2)),
+                (0, th / 2 + gap * 2),
+                (tw / 2 + gap3, -(th / 2 + gap)),
+                (-(tw / 2 + gap3), -(th / 2 + gap)),
+            ]
+
+            best = None
+            best_dist = float('inf')
+            for cdx, cdy in cands:
+                cx = ax + cdx
+                cy = ay + cdy
+                rect = (cx - tw / 2 - pad, cy - th / 2 - pad,
+                        cx + tw / 2 + pad, cy + th / 2 + pad)
+                overlap = any(
+                    rect[0] < dr[2] and rect[2] > dr[0] and
+                    rect[1] < dr[3] and rect[3] > dr[1]
+                    for dr in occupied
+                )
+                if not overlap:
+                    overlap = any(
+                        self._line_rect_intersect(lx1, ly1, lx2, ly2, rect)
+                        for lx1, ly1, lx2, ly2 in plan_pipe_lines
+                    )
+                if not overlap:
+                    dist = cdx * cdx + cdy * cdy
+                    if dist < best_dist:
+                        best_dist = dist
+                        best = (cx, cy, rect)
+
+            if best:
+                cx, cy, rect = best
+                occupied.append(rect)
+                p.setPen(QPen(color))
+                p.setFont(ft)
+                p.drawText(QPointF(cx - tw / 2,
+                                   cy + (fm.ascent() - fm.descent()) / 2), text)
+            else:
+                cy = ay - th / 2 - 50
+                rect = (ax - tw / 2 - pad, cy - th / 2 - pad,
+                        ax + tw / 2 + pad, cy + th / 2 + pad)
+                occupied.append(rect)
+                p.setPen(QPen(color))
+                p.setFont(ft)
+                p.drawText(QPointF(ax - tw / 2,
+                                   cy + (fm.ascent() - fm.descent()) / 2), text)
+
+        # 底部信息
+        plan_len = chainages[-1] if chainages else 0
+        bend_cnt = sum(1 for a in computed_angles if a > 0)
+        info = f"平面总长: {plan_len:.1f}m | IP点: {len(ip_list)} | 弯管: {bend_cnt} | 缩放: {int(self._zoom * 100)}%"
+        p.setPen(QPen(self.C_INFO))
+        p.setFont(QFont("Microsoft YaHei", 9))
+        p.drawText(QRectF(0, h - 22, w, 20), Qt.AlignCenter, info)
+
     # ---- 绘图工具 ----
 
     def _draw_centered_text(self, p, w, h, text):
@@ -501,11 +718,23 @@ class SimpleProfileCanvas(QWidget):
 # 纵断面预览对话框
 # ============================================================
 class LongitudinalPreviewDialog(QDialog):
-    """纵断面预览对话框 —— 可调整大小，内含大画布"""
+    """管道预览对话框 —— 支持纵断面/平面图双视图，可调整大小"""
 
-    def __init__(self, parent=None, pipe_name="", nodes=None):
+    _ACTIVE_BTN_STYLE = (
+        "QPushButton { font-size: 12px; font-weight: bold; color: #FFFFFF; "
+        "background: #1976D2; border: 1px solid #1565C0; border-radius: 4px; "
+        "padding: 4px 14px; }"
+    )
+    _INACTIVE_BTN_STYLE = (
+        "QPushButton { font-size: 12px; color: #546E7A; "
+        "background: #ECEFF1; border: 1px solid #CFD8DC; border-radius: 4px; "
+        "padding: 4px 14px; }"
+        "QPushButton:hover { background: #CFD8DC; }"
+    )
+
+    def __init__(self, parent=None, pipe_name="", nodes=None, ip_points=None):
         super().__init__(parent)
-        self.setWindowTitle(f"纵断面预览 — {pipe_name}")
+        self.setWindowTitle(f"管道预览 — {pipe_name}")
         self.resize(800, 500)
         self.setMinimumSize(500, 350)
         self.setModal(True)
@@ -514,9 +743,48 @@ class LongitudinalPreviewDialog(QDialog):
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(6)
 
+        # 顶部视图切换工具栏
+        view_bar = QHBoxLayout()
+        view_bar.setSpacing(4)
+        self._btn_plan = QPushButton("平面图")
+        self._btn_plan.setFixedSize(80, 28)
+        self._btn_plan.setCursor(Qt.PointingHandCursor)
+        self._btn_profile = QPushButton("纵断面")
+        self._btn_profile.setFixedSize(80, 28)
+        self._btn_profile.setCursor(Qt.PointingHandCursor)
+        self._zoom_label = QLabel("100%")
+        self._zoom_label.setStyleSheet("font-size: 12px; color: #90A4AE;")
+        view_bar.addWidget(self._btn_plan)
+        view_bar.addWidget(self._btn_profile)
+        view_bar.addStretch()
+        view_bar.addWidget(self._zoom_label)
+        lay.addLayout(view_bar)
+
         self._canvas = SimpleProfileCanvas(self)
-        self._canvas.set_nodes(nodes or [])
         lay.addWidget(self._canvas, 1)
+
+        has_nodes = nodes and len(nodes) >= 2
+        has_ip = ip_points and len(ip_points) >= 2
+
+        if has_nodes:
+            self._canvas.set_nodes(nodes)
+        if has_ip:
+            self._canvas.set_ip_points(ip_points)
+
+        if has_ip:
+            self._canvas.set_view_mode("plan")
+            self._btn_plan.setStyleSheet(self._ACTIVE_BTN_STYLE)
+            self._btn_profile.setStyleSheet(self._INACTIVE_BTN_STYLE)
+        elif has_nodes:
+            self._canvas.set_view_mode("profile")
+            self._btn_plan.setStyleSheet(self._INACTIVE_BTN_STYLE)
+            self._btn_profile.setStyleSheet(self._ACTIVE_BTN_STYLE)
+
+        self._btn_plan.setEnabled(bool(has_ip))
+        self._btn_profile.setEnabled(bool(has_nodes))
+
+        self._btn_plan.clicked.connect(lambda: self._switch_view("plan"))
+        self._btn_profile.clicked.connect(lambda: self._switch_view("profile"))
 
         # 底部工具栏
         toolbar = QHBoxLayout()
@@ -531,7 +799,7 @@ class LongitudinalPreviewDialog(QDialog):
             btn_reset = QPushButton("重置视图")
             btn_close = QPushButton("关闭")
 
-        btn_reset.clicked.connect(self._canvas.zoom_reset)
+        btn_reset.clicked.connect(self._on_reset)
         btn_close.clicked.connect(self.accept)
 
         toolbar.addWidget(btn_reset)
@@ -539,12 +807,38 @@ class LongitudinalPreviewDialog(QDialog):
 
         lay.addLayout(toolbar)
 
+    def _switch_view(self, mode):
+        self._canvas.set_view_mode(mode)
+        self._zoom_label.setText(f"{self._canvas.get_zoom_percent()}%")
+        if mode == "plan":
+            self._btn_plan.setStyleSheet(self._ACTIVE_BTN_STYLE)
+            self._btn_profile.setStyleSheet(self._INACTIVE_BTN_STYLE)
+        else:
+            self._btn_plan.setStyleSheet(self._INACTIVE_BTN_STYLE)
+            self._btn_profile.setStyleSheet(self._ACTIVE_BTN_STYLE)
+
+    def _on_reset(self):
+        self._canvas.zoom_reset()
+        self._zoom_label.setText(f"{self._canvas.get_zoom_percent()}%")
+
 
 # ============================================================
 # 有压管道计算配置对话框
 # ============================================================
 class PressurePipeConfigDialog(QDialog):
     """有压管道计算配置对话框（在计算前配置参数）"""
+
+    _VIEW_BTN_ACTIVE = (
+        "QPushButton { font-size: 12px; font-weight: bold; color: #FFFFFF; "
+        "background: #1976D2; border: 1px solid #1565C0; border-radius: 4px; "
+        "padding: 3px 10px; }"
+    )
+    _VIEW_BTN_INACTIVE = (
+        "QPushButton { font-size: 12px; color: #546E7A; "
+        "background: #ECEFF1; border: 1px solid #CFD8DC; border-radius: 4px; "
+        "padding: 3px 10px; }"
+        "QPushButton:hover { background: #CFD8DC; }"
+    )
 
     def __init__(self, parent=None, pipe_groups=None, manager=None):
         super().__init__(parent)
@@ -560,6 +854,11 @@ class PressurePipeConfigDialog(QDialog):
         self._longitudinal_data = {}
         # 存储每个管道卡片的UI组件引用 {pipe_name: {hint, stats, canvas, expand_btn, table}}
         self._card_widgets = {}
+        self._radius_configs: Dict[str, Dict[str, Any]] = {}
+        self._d_override_payload: Dict[str, float] = {}
+        self._last_apply_summary: Dict[str, Any] = {}
+        self._syncing_radius = False
+        self._last_turn_n = 3.0
 
         # 从manager加载已有的纵断面数据
         if self._manager and self._pipe_groups:
@@ -567,8 +866,575 @@ class PressurePipeConfigDialog(QDialog):
                 config = self._manager.get_pipe_config(group.name)
                 if config and config.longitudinal_nodes:
                     self._longitudinal_data[group.name] = config.longitudinal_nodes
+                if config:
+                    _cfg_turn_n = float(getattr(config, "turn_n", 0.0) or 0.0)
+                    _cfg_turn_r = float(getattr(config, "turn_R", 0.0) or 0.0)
+                    _cfg_applied = bool(_cfg_turn_r > 0)
+                    self._radius_configs[group.name] = {
+                        "turn_n": _cfg_turn_n,
+                        "turn_R": _cfg_turn_r,
+                        "force_override": bool(getattr(config, "force_override", False)),
+                        "radius_applied_at": str(getattr(config, "radius_applied_at", "") or ""),
+                        "applied": _cfg_applied,
+                        "dirty": False,
+                        "applied_turn_n": _cfg_turn_n if _cfg_applied else 0.0,
+                        "applied_turn_R": _cfg_turn_r if _cfg_applied else 0.0,
+                    }
+
+        self._last_turn_n = self._resolve_last_turn_n()
 
         self._init_ui()
+
+    def _resolve_last_turn_n(self) -> float:
+        n_values = []
+        if self._manager and hasattr(self._manager, "get_all_pipe_names"):
+            for pipe_name in self._manager.get_all_pipe_names():
+                cfg = self._manager.get_pipe_config(pipe_name)
+                if not cfg:
+                    continue
+                n_val = float(getattr(cfg, "turn_n", 0.0) or 0.0)
+                if n_val > 0:
+                    n_values.append((str(getattr(cfg, "radius_applied_at", "") or ""), n_val))
+        if not n_values:
+            return 3.0
+        n_values.sort(key=lambda item: item[0])
+        return float(n_values[-1][1])
+
+    @staticmethod
+    def _safe_float(value, default=0.0) -> float:
+        try:
+            if value is None:
+                return default
+            txt = str(value).strip()
+            if txt == "":
+                return default
+            return float(txt)
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def _fmt_radius(value: float) -> str:
+        if value and value > 0:
+            return f"{float(value):.2f}"
+        return ""
+
+    @staticmethod
+    def _fmt_turn_n(value: float) -> str:
+        if value and value > 0:
+            return f"{float(value):.3f}".rstrip("0").rstrip(".")
+        return ""
+
+    def _collect_group_d_values(self, group) -> List[float]:
+        values = []
+        for node in getattr(group, "rows", []) or []:
+            sp = getattr(node, "section_params", {}) or {}
+            d_val = self._safe_float(sp.get("D", 0.0), 0.0)
+            values.append(d_val)
+        return values
+
+    def _suggest_group_d(self, group) -> float:
+        d_values = self._collect_group_d_values(group)
+        valid_vals = [round(v, 6) for v in d_values if v > 0]
+        if valid_vals:
+            counter = Counter(valid_vals)
+            max_count = max(counter.values())
+            candidates = [val for val, cnt in counter.items() if cnt == max_count]
+            if len(candidates) == 1:
+                return float(candidates[0])
+            inlet_d = self._safe_float(getattr(group, "diameter", 0.0), 0.0)
+            if inlet_d > 0:
+                return inlet_d
+            return float(candidates[0])
+        inlet_d = self._safe_float(getattr(group, "diameter", 0.0), 0.0)
+        return inlet_d if inlet_d > 0 else 0.0
+
+    def _is_group_d_consistent(self, group) -> bool:
+        d_values = [round(v, 6) for v in self._collect_group_d_values(group) if v > 0]
+        if not d_values:
+            return False
+        return len(set(d_values)) == 1
+
+    def _group_radius_values(self, group) -> List[float]:
+        values = []
+        for node in getattr(group, "rows", []) or []:
+            r_val = self._safe_float(getattr(node, "turn_radius", 0.0), 0.0)
+            if r_val > 0:
+                values.append(round(r_val, 6))
+        return sorted(set(values))
+
+    def _apply_group_d_override(self, group, target_d: float):
+        if target_d <= 0:
+            return
+        rounded_d = round(float(target_d), 3)
+        for node in getattr(group, "rows", []) or []:
+            if not hasattr(node, "section_params") or not node.section_params:
+                node.section_params = {}
+            node.section_params["D"] = rounded_d
+        group.diameter = rounded_d
+        self._d_override_payload[group.name] = rounded_d
+
+    def _build_group_identity(self, group) -> str:
+        try:
+            flow_section = ""
+            for node in getattr(group, "rows", []) or []:
+                fs = str(getattr(node, "flow_section", "") or "").strip()
+                if fs:
+                    flow_section = fs
+                    break
+            from utils.pressure_pipe_result_helpers import make_pressure_pipe_identity
+            return make_pressure_pipe_identity(flow_section or "-", str(getattr(group, "name", "") or ""))
+        except Exception:
+            return str(getattr(group, "name", "") or "")
+
+    def _persist_group_radius_config(self, group, turn_n: float, turn_r: float, force_override: bool):
+        if not self._manager:
+            return
+        cfg = self._manager.get_pipe_config(group.name)
+        if cfg is None:
+            try:
+                from managers.pressure_pipe_manager import PressurePipeConfig
+                cfg = PressurePipeConfig()
+            except Exception:
+                return
+            cfg.name = group.name
+            cfg.Q = float(getattr(group, "design_flow", 0.0) or 0.0)
+            cfg.D = float(getattr(group, "diameter", 0.0) or 0.0)
+            cfg.material_key = str(getattr(group, "material_key", "") or "")
+            cfg.ip_points = list(getattr(group, "ip_points", []) or [])
+        cfg.turn_n = round(float(turn_n), 3) if turn_n > 0 else 0.0
+        cfg.turn_R = round(float(turn_r), 2) if turn_r > 0 else 0.0
+        cfg.force_override = bool(force_override)
+        cfg.radius_applied_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cfg.longitudinal_nodes = self._longitudinal_data.get(group.name, getattr(cfg, "longitudinal_nodes", []) or [])
+        self._manager.set_pipe_config(group.name, cfg)
+
+    def _refresh_apply_summary_label(self):
+        label = getattr(self, "_lbl_apply_summary", None)
+        if not label:
+            return
+        applied = 0
+        total = len(self._pipe_groups or [])
+        for group in self._pipe_groups or []:
+            cfg = self._radius_configs.get(group.name, {})
+            if bool(cfg.get("applied")) and self._safe_float(cfg.get("applied_turn_R", 0.0), 0.0) > 0:
+                applied += 1
+        if total <= 0:
+            label.setText("平面R未检测到管道分组")
+            return
+        label.setText(f"平面R已应用 {applied}/{total} 组")
+
+    def _resolve_group_turn_state(self, group) -> Dict[str, Any]:
+        cfg = dict(self._radius_configs.get(group.name, {}) or {})
+        radius_values = self._group_radius_values(group)
+        mixed_radius = len(radius_values) > 1
+        row_r = radius_values[0] if len(radius_values) == 1 else 0.0
+        suggest_d = self._suggest_group_d(group)
+        has_cfg_turn_r = "turn_R" in cfg
+        has_cfg_turn_n = "turn_n" in cfg
+
+        turn_r = self._safe_float(cfg.get("turn_R", 0.0), 0.0)
+        if (not has_cfg_turn_r) and turn_r <= 0 and row_r > 0:
+            turn_r = row_r
+        turn_n = self._safe_float(cfg.get("turn_n", 0.0), 0.0)
+        if turn_n <= 0 and turn_r > 0 and suggest_d > 0:
+            turn_n = turn_r / suggest_d
+        if turn_n <= 0 and (not has_cfg_turn_n):
+            turn_n = self._last_turn_n if self._last_turn_n > 0 else 3.0
+
+        applied = bool(cfg.get("applied", False))
+        applied_turn_r = self._safe_float(cfg.get("applied_turn_R", 0.0), 0.0)
+        applied_turn_n = self._safe_float(cfg.get("applied_turn_n", 0.0), 0.0)
+        if applied and applied_turn_r <= 0 and turn_r > 0:
+            applied_turn_r = turn_r
+        if applied and applied_turn_n <= 0:
+            if turn_n > 0:
+                applied_turn_n = turn_n
+            elif applied_turn_r > 0 and suggest_d > 0:
+                applied_turn_n = applied_turn_r / suggest_d
+
+        cfg_turn_n = self._safe_float(cfg.get("turn_n", 0.0), 0.0)
+        cfg_turn_r = self._safe_float(cfg.get("turn_R", 0.0), 0.0)
+        dirty = bool(cfg.get("dirty", False))
+        if applied and applied_turn_r > 0:
+            same_as_applied = bool(
+                cfg_turn_n > 0
+                and cfg_turn_r > 0
+                and abs(cfg_turn_r - applied_turn_r) <= 1e-9
+                and abs(cfg_turn_n - applied_turn_n) <= 1e-9
+            )
+            if same_as_applied:
+                dirty = False
+
+        normalized = {
+            "turn_n": round(float(turn_n), 6) if turn_n > 0 else 0.0,
+            "turn_R": round(float(turn_r), 6) if turn_r > 0 else 0.0,
+            "force_override": bool(cfg.get("force_override", False)),
+            "applied": bool(applied and applied_turn_r > 0),
+            "radius_applied_at": str(cfg.get("radius_applied_at", "") or ""),
+            "dirty": dirty,
+            "applied_turn_n": round(float(applied_turn_n), 6) if applied_turn_n > 0 else 0.0,
+            "applied_turn_R": round(float(applied_turn_r), 6) if applied_turn_r > 0 else 0.0,
+            "mixed_radius": mixed_radius,
+            "radius_values": radius_values,
+            "d_consistent": self._is_group_d_consistent(group),
+            "suggest_d": suggest_d,
+        }
+        self._radius_configs[group.name] = dict(normalized)
+        return normalized
+
+    @staticmethod
+    def _fmt_live_value(value: float, digits: int = 6) -> str:
+        if value <= 0:
+            return ""
+        txt = f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
+        return txt if txt else ""
+
+    def _update_group_apply_button(self, group, dirty: bool):
+        widgets = self._card_widgets.get(group.name, {})
+        btn_apply_group = widgets.get("btn_apply_group")
+        if not btn_apply_group:
+            return
+        btn_apply_group.setText("应用*" if dirty else "应用")
+        if dirty:
+            btn_apply_group.setToolTip("参数已修改，尚未应用")
+            btn_apply_group.setStyleSheet("font-weight: bold; color: #E65100;")
+        else:
+            btn_apply_group.setToolTip("")
+            btn_apply_group.setStyleSheet("")
+
+    def _set_group_dirty(self, group, dirty: bool):
+        cfg = self._radius_configs.setdefault(group.name, {})
+        cfg["dirty"] = bool(dirty)
+
+    def _update_group_radius_ui(self, group, preserve_input: bool = False):
+        widgets = self._card_widgets.get(group.name, {})
+        if not widgets:
+            return
+        turn_n_edit = widgets.get("turn_n_edit")
+        turn_r_edit = widgets.get("turn_r_edit")
+        force_chk = widgets.get("force_override_chk")
+        radius_status = widgets.get("radius_status_label")
+        d_status = widgets.get("d_status_label")
+        d_target_edit = widgets.get("d_target_edit")
+        btn_unify_d = widgets.get("btn_unify_d")
+        if not turn_n_edit or not turn_r_edit:
+            return
+
+        state = self._resolve_group_turn_state(group)
+        _keep_n_text = turn_n_edit.text() if preserve_input else None
+        _keep_r_text = turn_r_edit.text() if preserve_input else None
+
+        self._syncing_radius = True
+        try:
+            if state["turn_n"] > 0:
+                turn_n_edit.setText(self._fmt_turn_n(state["turn_n"]))
+            elif not turn_n_edit.text().strip():
+                turn_n_edit.setText("")
+
+            if state["turn_R"] > 0:
+                turn_r_edit.setText(self._fmt_radius(state["turn_R"]))
+                turn_r_edit.setPlaceholderText("输入 R (m)")
+            else:
+                if not turn_r_edit.text().strip():
+                    turn_r_edit.setText("")
+                turn_r_edit.setPlaceholderText("混合值" if state["mixed_radius"] else "输入 R (m)")
+
+            if force_chk is not None and force_chk.isChecked() != state["force_override"]:
+                force_chk.setChecked(state["force_override"])
+        finally:
+            self._syncing_radius = False
+        if preserve_input:
+            self._syncing_radius = True
+            try:
+                turn_n_edit.setText(_keep_n_text or "")
+                turn_r_edit.setText(_keep_r_text or "")
+            finally:
+                self._syncing_radius = False
+
+        if d_target_edit:
+            cur_txt = d_target_edit.text().strip()
+            if (not cur_txt) and state["suggest_d"] > 0:
+                d_target_edit.setText(f"{state['suggest_d']:.3f}")
+        if d_status:
+            if state["d_consistent"] and state["suggest_d"] > 0:
+                d_status.setText(f"D一致：{state['suggest_d']:.3f} m")
+                d_status.setStyleSheet("font-size: 12px; color: #2E7D32;")
+            elif state["d_consistent"]:
+                d_status.setText("D一致：当前值为空")
+                d_status.setStyleSheet("font-size: 12px; color: #2E7D32;")
+            else:
+                d_values = ", ".join(f"{v:.3f}" for v in self._collect_group_d_values(group) if v > 0)
+                d_status.setText(f"D不一致（已阻断应用）：{d_values or '无有效D'}")
+                d_status.setStyleSheet("font-size: 12px; color: #D84315;")
+        if btn_unify_d:
+            btn_unify_d.setEnabled(not state["d_consistent"])
+
+        self._update_group_apply_button(group, bool(state.get("dirty", False)))
+        if radius_status:
+            if state.get("dirty", False):
+                radius_status.setText("已修改未应用：当前输入仅预览，点击“应用”后生效")
+                radius_status.setStyleSheet("font-size: 12px; color: #EF6C00;")
+            elif state["mixed_radius"] and state["turn_R"] <= 0:
+                radius_status.setText("平面R为混合值：建议先应用统一参数")
+                radius_status.setStyleSheet("font-size: 12px; color: #EF6C00;")
+            elif state["applied"] and state["applied_turn_R"] > 0:
+                ts = state["radius_applied_at"]
+                suffix = f"（{ts}）" if ts else ""
+                radius_status.setText(
+                    f"已应用：R={state['applied_turn_R']:.2f} m, n={state['applied_turn_n']:.3f}{suffix}"
+                )
+                radius_status.setStyleSheet("font-size: 12px; color: #2E7D32;")
+            else:
+                radius_status.setText("未应用平面R参数")
+                radius_status.setStyleSheet("font-size: 12px; color: #546E7A;")
+
+        self._refresh_apply_summary_label()
+
+    def _on_group_turn_n_changed(self, group):
+        if self._syncing_radius:
+            return
+        widgets = self._card_widgets.get(group.name, {})
+        turn_n_edit = widgets.get("turn_n_edit")
+        turn_r_edit = widgets.get("turn_r_edit")
+        if not turn_n_edit or not turn_r_edit:
+            return
+        cfg = self._radius_configs.setdefault(group.name, {})
+        raw_n = turn_n_edit.text().strip()
+        turn_n = self._safe_float(raw_n, 0.0)
+        n_valid = (raw_n != "") and (turn_n > 0)
+
+        cfg["turn_n"] = round(float(turn_n), 6) if n_valid else 0.0
+        self._set_group_dirty(group, True)
+
+        can_link = n_valid and self._is_group_d_consistent(group)
+        suggest_d = self._suggest_group_d(group) if can_link else 0.0
+        if can_link and suggest_d > 0:
+            turn_r = turn_n * suggest_d
+            cfg["turn_R"] = round(float(turn_r), 6)
+            self._last_turn_n = turn_n
+            self._syncing_radius = True
+            try:
+                turn_r_edit.setText(self._fmt_live_value(turn_r, digits=6))
+            finally:
+                self._syncing_radius = False
+        self._update_group_radius_ui(group, preserve_input=True)
+
+    def _on_group_turn_r_changed(self, group):
+        if self._syncing_radius:
+            return
+        widgets = self._card_widgets.get(group.name, {})
+        turn_n_edit = widgets.get("turn_n_edit")
+        turn_r_edit = widgets.get("turn_r_edit")
+        if not turn_n_edit or not turn_r_edit:
+            return
+        cfg = self._radius_configs.setdefault(group.name, {})
+        raw_r = turn_r_edit.text().strip()
+        turn_r = self._safe_float(raw_r, 0.0)
+        r_valid = (raw_r != "") and (turn_r > 0)
+
+        cfg["turn_R"] = round(float(turn_r), 6) if r_valid else 0.0
+        self._set_group_dirty(group, True)
+
+        can_link = r_valid and self._is_group_d_consistent(group)
+        suggest_d = self._suggest_group_d(group) if can_link else 0.0
+        if can_link and suggest_d > 0:
+            turn_n = turn_r / suggest_d
+            cfg["turn_n"] = round(float(turn_n), 6)
+            self._last_turn_n = turn_n
+            self._syncing_radius = True
+            try:
+                turn_n_edit.setText(self._fmt_live_value(turn_n, digits=6))
+            finally:
+                self._syncing_radius = False
+        self._update_group_radius_ui(group, preserve_input=True)
+
+    def _on_group_turn_n_editing_finished(self, group):
+        if self._syncing_radius:
+            return
+        widgets = self._card_widgets.get(group.name, {})
+        turn_n_edit = widgets.get("turn_n_edit")
+        if not turn_n_edit:
+            return
+        raw_n = turn_n_edit.text().strip()
+        turn_n = self._safe_float(raw_n, 0.0)
+        if raw_n and turn_n > 0:
+            cfg = self._radius_configs.setdefault(group.name, {})
+            cfg["turn_n"] = round(float(turn_n), 6)
+            self._syncing_radius = True
+            try:
+                turn_n_edit.setText(self._fmt_turn_n(turn_n))
+            finally:
+                self._syncing_radius = False
+        self._update_group_radius_ui(group, preserve_input=False)
+
+    def _on_group_turn_r_editing_finished(self, group):
+        if self._syncing_radius:
+            return
+        widgets = self._card_widgets.get(group.name, {})
+        turn_r_edit = widgets.get("turn_r_edit")
+        if not turn_r_edit:
+            return
+        raw_r = turn_r_edit.text().strip()
+        turn_r = self._safe_float(raw_r, 0.0)
+        if raw_r and turn_r > 0:
+            cfg = self._radius_configs.setdefault(group.name, {})
+            cfg["turn_R"] = round(float(turn_r), 6)
+            self._syncing_radius = True
+            try:
+                turn_r_edit.setText(self._fmt_radius(turn_r))
+            finally:
+                self._syncing_radius = False
+        self._update_group_radius_ui(group, preserve_input=False)
+
+    def _on_unify_group_d_clicked(self, group):
+        widgets = self._card_widgets.get(group.name, {})
+        d_target_edit = widgets.get("d_target_edit")
+        target_d = self._safe_float(d_target_edit.text() if d_target_edit else "", 0.0)
+        if target_d <= 0:
+            target_d = self._suggest_group_d(group)
+        if target_d <= 0:
+            fluent_error(self, "统一D失败", f"组“{group.name}”未找到有效D建议值")
+            return
+        self._apply_group_d_override(group, target_d)
+        if d_target_edit:
+            d_target_edit.setText(f"{target_d:.3f}")
+        self._update_group_radius_ui(group)
+        fluent_info(self, "已统一D", f"组“{group.name}”已统一为 D={target_d:.3f} m")
+
+    def _apply_group_radius(self, group):
+        widgets = self._card_widgets.get(group.name, {})
+        turn_n_edit = widgets.get("turn_n_edit")
+        turn_r_edit = widgets.get("turn_r_edit")
+        force_chk = widgets.get("force_override_chk")
+        if not turn_n_edit or not turn_r_edit:
+            return False, "缺少R参数输入控件"
+
+        if not self._is_group_d_consistent(group):
+            return False, "组内D不一致，请先执行“一键统一D”"
+
+        suggest_d = self._suggest_group_d(group)
+        if suggest_d <= 0:
+            return False, "未检测到有效D，无法计算R=n×D"
+
+        turn_n_in = self._safe_float(turn_n_edit.text(), 0.0)
+        turn_r_in = self._safe_float(turn_r_edit.text(), 0.0)
+
+        if turn_r_in > 0:
+            turn_r = round(turn_r_in, 2)
+            turn_n = round((turn_r / suggest_d), 3) if suggest_d > 0 else round(turn_n_in, 3)
+        elif turn_n_in > 0:
+            turn_n = round(turn_n_in, 3)
+            turn_r = round(turn_n * suggest_d, 2)
+        else:
+            base_n = self._last_turn_n if self._last_turn_n > 0 else 3.0
+            turn_n = round(base_n, 3)
+            turn_r = round(turn_n * suggest_d, 2)
+
+        if turn_r <= 0:
+            return False, "转弯半径R无效"
+
+        force_override = bool(force_chk.isChecked()) if force_chk else False
+        applied_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._radius_configs[group.name] = {
+            "turn_n": turn_n,
+            "turn_R": turn_r,
+            "force_override": force_override,
+            "applied": True,
+            "radius_applied_at": applied_at,
+            "dirty": False,
+            "applied_turn_n": turn_n,
+            "applied_turn_R": turn_r,
+        }
+        self._last_turn_n = turn_n
+
+        self._syncing_radius = True
+        try:
+            turn_n_edit.setText(self._fmt_turn_n(turn_n))
+            turn_r_edit.setText(self._fmt_radius(turn_r))
+        finally:
+            self._syncing_radius = False
+
+        self._persist_group_radius_config(group, turn_n, turn_r, force_override)
+        self._update_group_radius_ui(group)
+        return True, f"R={turn_r:.2f} m, n={turn_n:.3f}"
+
+    def _on_apply_group_clicked(self, group):
+        ok, message = self._apply_group_radius(group)
+        if ok:
+            fluent_info(self, "应用成功", f"组“{group.name}”已应用：{message}")
+        else:
+            fluent_error(self, "应用失败", f"组“{group.name}”：{message}")
+
+    def _on_apply_all_groups_clicked(self):
+        selected_groups = []
+        for group in self._pipe_groups or []:
+            widgets = self._card_widgets.get(group.name, {})
+            force_chk = widgets.get("force_override_chk")
+            if force_chk and force_chk.isChecked():
+                selected_groups.append(group)
+
+        if not selected_groups:
+            self._last_apply_summary = {"ok": 0, "failed": 0, "skipped": len(self._pipe_groups or [])}
+            self._refresh_apply_summary_label()
+            fluent_info(self, "提示", "未勾选“强制覆盖表1”的分组，未执行批量应用")
+            return
+
+        ok_count = 0
+        failed_msgs = []
+        for group in selected_groups:
+            ok, msg = self._apply_group_radius(group)
+            if ok:
+                ok_count += 1
+            else:
+                failed_msgs.append(f"{group.name}: {msg}")
+
+        self._last_apply_summary = {
+            "ok": ok_count,
+            "failed": len(failed_msgs),
+            "skipped": max(0, len(self._pipe_groups or []) - len(selected_groups)),
+            "failed_messages": failed_msgs,
+        }
+        self._refresh_apply_summary_label()
+
+        if failed_msgs:
+            fluent_error(
+                self,
+                "部分组应用失败",
+                f"成功 {ok_count} 组，失败 {len(failed_msgs)} 组。\n" + "\n".join(failed_msgs[:8]),
+            )
+        else:
+            fluent_info(
+                self,
+                "全部应用完成",
+                f"已应用 {ok_count} 组（仅处理勾选“强制覆盖表1”的分组）",
+            )
+
+    def get_turn_radius_payload(self) -> Dict[str, Dict[str, Any]]:
+        payload: Dict[str, Dict[str, Any]] = {}
+        for group in self._pipe_groups or []:
+            state = self._resolve_group_turn_state(group)
+            applied_turn_r = self._safe_float(state.get("applied_turn_R", 0.0), 0.0)
+            applied_turn_n = self._safe_float(state.get("applied_turn_n", 0.0), 0.0)
+            if (not state["applied"]) and (not state["force_override"]):
+                continue
+            if applied_turn_r <= 0:
+                continue
+            payload[group.name] = {
+                "turn_n": round(float(applied_turn_n), 3) if applied_turn_n > 0 else 0.0,
+                "turn_R": round(float(applied_turn_r), 2) if applied_turn_r > 0 else 0.0,
+                "force_override": bool(state["force_override"]),
+                "applied": bool(state["applied"] and applied_turn_r > 0),
+                "radius_applied_at": str(state["radius_applied_at"] or ""),
+                "row_indices": list(getattr(group, "row_indices", []) or []),
+                "identity": self._build_group_identity(group),
+            }
+        return payload
+
+    def get_d_override_payload(self) -> Dict[str, float]:
+        return {k: round(float(v), 3) for k, v in (self._d_override_payload or {}).items() if float(v) > 0}
+
+    def get_apply_summary(self) -> Dict[str, Any]:
+        return dict(self._last_apply_summary or {})
 
     def _init_ui(self):
         """初始化UI"""
@@ -612,6 +1478,17 @@ class PressurePipeConfigDialog(QDialog):
             scroll_lay.addStretch()
             scroll.setWidget(scroll_widget)
             lay.addWidget(scroll, 1)
+
+            radius_toolbar = QHBoxLayout()
+            radius_toolbar.setSpacing(10)
+            self._lbl_apply_summary = QLabel("平面R尚未应用")
+            self._lbl_apply_summary.setStyleSheet("font-size: 12px; color: #546E7A;")
+            radius_toolbar.addWidget(self._lbl_apply_summary, 1)
+            btn_apply_all = PushButton("应用到全部管道")
+            btn_apply_all.clicked.connect(self._on_apply_all_groups_clicked)
+            radius_toolbar.addWidget(btn_apply_all, 0, Qt.AlignRight)
+            lay.addLayout(radius_toolbar)
+            self._refresh_apply_summary_label()
 
         lay.addStretch()
 
@@ -666,30 +1543,104 @@ class PressurePipeConfigDialog(QDialog):
         info_label.setStyleSheet("font-size: 12px; color: #7F8C8D; font-weight: normal;")
         card_lay.addWidget(info_label)
 
+        # 平面转弯半径参数（R=n×D 与 R 双入口）
+        radius_panel = QFrame()
+        radius_panel.setStyleSheet(
+            "QFrame { background: #F7FAFC; border: 1px solid #CFD8DC; border-radius: 6px; }"
+        )
+        radius_lay = QVBoxLayout(radius_panel)
+        radius_lay.setContentsMargins(10, 8, 10, 8)
+        radius_lay.setSpacing(6)
+
+        row_n = QHBoxLayout()
+        row_n.setSpacing(8)
+        lbl_n_title = QLabel("转弯倍数 n（R = n × D）：")
+        lbl_n_title.setStyleSheet("font-size: 12px; color: #1565C0; font-weight: bold;")
+        row_n.addWidget(lbl_n_title)
+        turn_n_edit = LineEdit()
+        turn_n_edit.setPlaceholderText("如: 5")
+        turn_n_edit.setFixedWidth(90)
+        row_n.addWidget(turn_n_edit)
+        lbl_n_hint = QLabel("（请确认倍数）")
+        lbl_n_hint.setStyleSheet("color: #FF6600; font-size: 12px;")
+        row_n.addWidget(lbl_n_hint)
+        row_n.addStretch()
+        radius_lay.addLayout(row_n)
+
+        row_r = QHBoxLayout()
+        row_r.setSpacing(8)
+        lbl_r_title = QLabel("转弯半径 R（m）：")
+        lbl_r_title.setStyleSheet("font-size: 12px; color: #37474F;")
+        row_r.addWidget(lbl_r_title)
+        turn_r_edit = LineEdit()
+        turn_r_edit.setPlaceholderText("输入 R (m)")
+        turn_r_edit.setFixedWidth(110)
+        row_r.addWidget(turn_r_edit)
+        lbl_r_hint = QLabel("← 修改 R 将反推 n")
+        lbl_r_hint.setStyleSheet("color: #888; font-size: 12px;")
+        row_r.addWidget(lbl_r_hint)
+        row_r.addStretch()
+        radius_lay.addLayout(row_r)
+
+        row_d = QHBoxLayout()
+        row_d.setSpacing(8)
+        d_status_label = QLabel("")
+        d_status_label.setStyleSheet("font-size: 12px; color: #546E7A;")
+        row_d.addWidget(d_status_label, 1)
+        row_d.addWidget(QLabel("统一D:"))
+        d_target_edit = LineEdit()
+        d_target_edit.setPlaceholderText("D(m)")
+        d_target_edit.setFixedWidth(100)
+        row_d.addWidget(d_target_edit)
+        btn_unify_d = PushButton("一键统一D")
+        btn_unify_d.clicked.connect(lambda: self._on_unify_group_d_clicked(group))
+        row_d.addWidget(btn_unify_d)
+        radius_lay.addLayout(row_d)
+
+        row_apply = QHBoxLayout()
+        row_apply.setSpacing(8)
+        force_override_chk = QCheckBox("强制覆盖表1")
+        row_apply.addWidget(force_override_chk)
+        radius_status_label = QLabel("未应用平面R参数")
+        radius_status_label.setStyleSheet("font-size: 12px; color: #546E7A;")
+        row_apply.addWidget(radius_status_label, 1)
+        btn_apply_group = PushButton("应用")
+        btn_apply_group.clicked.connect(lambda: self._on_apply_group_clicked(group))
+        row_apply.addWidget(btn_apply_group)
+        radius_lay.addLayout(row_apply)
+
+        turn_n_edit.textEdited.connect(lambda _txt, g=group: self._on_group_turn_n_changed(g))
+        turn_r_edit.textEdited.connect(lambda _txt, g=group: self._on_group_turn_r_changed(g))
+        turn_n_edit.editingFinished.connect(lambda g=group: self._on_group_turn_n_editing_finished(g))
+        turn_r_edit.editingFinished.connect(lambda g=group: self._on_group_turn_r_editing_finished(g))
+
+        card_lay.addWidget(radius_panel)
+
         # 工具栏
         toolbar = QHBoxLayout()
         try:
             from qfluentwidgets import PushButton as FPB
             btn_import = FPB("导入纵断面DXF")
             btn_clear = FPB("清空纵断面")
-            btn_preview = FPB("预览纵断面")
+            btn_preview = FPB("预览")
         except ImportError:
             btn_import = QPushButton("导入纵断面DXF")
             btn_clear = QPushButton("清空纵断面")
-            btn_preview = QPushButton("预览纵断面")
+            btn_preview = QPushButton("预览")
 
         btn_import.clicked.connect(lambda: self._import_longitudinal_dxf(group.name, group.ip_points))
         btn_clear.clicked.connect(lambda: self._clear_longitudinal(group.name))
         btn_preview.clicked.connect(lambda: self._preview_longitudinal(group.name))
         btn_clear.setEnabled(False)
-        btn_preview.setEnabled(False)
+        _has_ip_for_preview = len(getattr(group, 'ip_points', []) or []) >= 2
+        btn_preview.setEnabled(_has_ip_for_preview)
         toolbar.addWidget(btn_import)
         toolbar.addWidget(btn_clear)
         toolbar.addWidget(btn_preview)
         toolbar.addStretch()
         card_lay.addLayout(toolbar)
 
-        # 空状态提示标签
+        # 空状态提示标签（仅纵断面相关，平面图始终可用时隐藏）
         hint_label = QLabel("尚未导入纵断面数据，请点击「导入纵断面DXF」")
         hint_label.setStyleSheet(
             "font-size: 12px; color: #E65100; background: #FFF8E1; "
@@ -698,6 +1649,7 @@ class PressurePipeConfigDialog(QDialog):
         )
         hint_label.setAlignment(Qt.AlignCenter)
         hint_label.setObjectName(f"hint_{group.name}")
+        hint_label.setVisible(False)
         card_lay.addWidget(hint_label)
 
         # 统计摘要标签
@@ -712,14 +1664,74 @@ class PressurePipeConfigDialog(QDialog):
         stats_label.setVisible(False)
         card_lay.addWidget(stats_label)
 
-        # 迷你画布
+        # 视图切换工具栏
+        view_toolbar = QHBoxLayout()
+        view_toolbar.setSpacing(4)
+        btn_view_plan = QPushButton("平面图")
+        btn_view_plan.setFixedSize(70, 26)
+        btn_view_plan.setCursor(Qt.PointingHandCursor)
+        btn_view_plan.setStyleSheet(self._VIEW_BTN_ACTIVE)
+        btn_view_profile = QPushButton("纵断面")
+        btn_view_profile.setFixedSize(70, 26)
+        btn_view_profile.setCursor(Qt.PointingHandCursor)
+        btn_view_profile.setStyleSheet(self._VIEW_BTN_INACTIVE)
+        zoom_label = QLabel("100%")
+        zoom_label.setStyleSheet("font-size: 11px; color: #90A4AE; font-weight: normal;")
+        btn_zoom_reset = QPushButton("重置")
+        btn_zoom_reset.setFixedSize(44, 22)
+        btn_zoom_reset.setStyleSheet(
+            "QPushButton { font-size: 11px; color: #546E7A; background: #ECEFF1; "
+            "border: 1px solid #CFD8DC; border-radius: 3px; padding: 1px 6px; }"
+            "QPushButton:hover { background: #CFD8DC; }"
+        )
+        btn_zoom_reset.setCursor(Qt.PointingHandCursor)
+        view_toolbar.addWidget(btn_view_plan)
+        view_toolbar.addWidget(btn_view_profile)
+        view_toolbar.addStretch()
+        view_toolbar.addWidget(zoom_label)
+        view_toolbar.addWidget(btn_zoom_reset)
+        card_lay.addLayout(view_toolbar)
+
+        # 迷你画布（始终可见，默认显示平面图）
         mini_canvas = SimpleProfileCanvas(self, fixed_height=200)
         mini_canvas.setObjectName(f"canvas_{group.name}")
         mini_canvas.setStyleSheet(
             "border: 1px solid #CFD8DC; border-radius: 4px;"
         )
-        mini_canvas.setVisible(False)
         card_lay.addWidget(mini_canvas)
+
+        # 视图切换与缩放逻辑
+        has_plan = len(getattr(group, 'ip_points', []) or []) >= 2
+
+        def _switch_view(mode, _name=group.name):
+            w = self._card_widgets.get(_name)
+            if not w:
+                return
+            canvas = w['canvas']
+            has_profile = canvas.has_profile_data()
+            if mode == "profile" and not has_profile:
+                return
+            canvas.set_view_mode(mode)
+            w['zoom_label'].setText(f"{canvas.get_zoom_percent()}%")
+            if mode == "plan":
+                w['btn_view_plan'].setStyleSheet(self._VIEW_BTN_ACTIVE)
+                w['btn_view_profile'].setStyleSheet(self._VIEW_BTN_INACTIVE)
+            else:
+                w['btn_view_plan'].setStyleSheet(self._VIEW_BTN_INACTIVE)
+                w['btn_view_profile'].setStyleSheet(self._VIEW_BTN_ACTIVE)
+
+        btn_view_plan.clicked.connect(lambda: _switch_view("plan"))
+        btn_view_profile.clicked.connect(lambda: _switch_view("profile"))
+        btn_zoom_reset.clicked.connect(lambda _c=False, _name=group.name: self._on_canvas_zoom_reset(_name))
+
+        # 喂入平面数据
+        if has_plan:
+            mini_canvas.set_ip_points(group.ip_points)
+            mini_canvas.set_view_mode("plan")
+
+        # 无纵断面时禁用纵断面按钮
+        has_long = group.name in self._longitudinal_data and self._longitudinal_data[group.name]
+        btn_view_profile.setEnabled(bool(has_long))
 
         # 展开/折叠按钮
         expand_btn = QPushButton("▶ 查看详细节点数据")
@@ -764,14 +1776,32 @@ class PressurePipeConfigDialog(QDialog):
             'table': table,
             'btn_clear': btn_clear,
             'btn_preview': btn_preview,
+            'btn_view_plan': btn_view_plan,
+            'btn_view_profile': btn_view_profile,
+            'zoom_label': zoom_label,
+            'btn_zoom_reset': btn_zoom_reset,
+            'turn_n_edit': turn_n_edit,
+            'turn_r_edit': turn_r_edit,
+            'force_override_chk': force_override_chk,
+            'radius_status_label': radius_status_label,
+            'd_status_label': d_status_label,
+            'd_target_edit': d_target_edit,
+            'btn_unify_d': btn_unify_d,
+            'btn_apply_group': btn_apply_group,
         }
 
+        force_override_chk.toggled.connect(
+            lambda checked, g=group.name: (
+                self._radius_configs.setdefault(g, {}).update({"force_override": bool(checked)}),
+                self._refresh_apply_summary_label()
+            )
+        )
+        self._update_group_radius_ui(group)
+
         # 根据已有数据初始化状态
-        has_data = group.name in self._longitudinal_data and self._longitudinal_data[group.name]
-        if has_data:
+        has_long_data = group.name in self._longitudinal_data and self._longitudinal_data[group.name]
+        if has_long_data:
             self._update_card_data_state(group.name, show_data=True)
-        else:
-            self._update_card_data_state(group.name, show_data=False)
 
         return card
 
@@ -800,8 +1830,16 @@ class PressurePipeConfigDialog(QDialog):
         parts.append(f"总长度: {total_len:.1f} m")
         return "  |  ".join(parts)
 
+    def _on_canvas_zoom_reset(self, pipe_name):
+        """重置画布缩放"""
+        w = self._card_widgets.get(pipe_name)
+        if not w:
+            return
+        w['canvas'].zoom_reset()
+        w['zoom_label'].setText(f"{w['canvas'].get_zoom_percent()}%")
+
     def _update_card_data_state(self, pipe_name, show_data=True):
-        """切换卡片的数据显示状态"""
+        """切换卡片的纵断面数据显示状态（画布始终可见）"""
         w = self._card_widgets.get(pipe_name)
         if not w:
             return
@@ -812,22 +1850,28 @@ class PressurePipeConfigDialog(QDialog):
             w['stats'].setText(self._compute_stats(nodes))
             w['stats'].setVisible(True)
             w['canvas'].set_nodes(nodes)
-            w['canvas'].setVisible(True)
             w['expand_btn'].setText("▶ 查看详细节点数据")
             w['expand_btn'].setVisible(True)
             w['table'].setVisible(False)
             w['btn_clear'].setEnabled(True)
             w['btn_preview'].setEnabled(True)
+            w['btn_view_profile'].setEnabled(True)
             self._refresh_long_table(pipe_name, w['table'])
         else:
-            w['hint'].setVisible(True)
+            has_plan = w['canvas'].has_plan_data()
+            w['hint'].setVisible(not has_plan)
             w['stats'].setVisible(False)
-            w['canvas'].setVisible(False)
             w['expand_btn'].setVisible(False)
             w['table'].setVisible(False)
             w['table'].setRowCount(0)
             w['btn_clear'].setEnabled(False)
-            w['btn_preview'].setEnabled(False)
+            w['btn_preview'].setEnabled(has_plan)
+            w['btn_view_profile'].setEnabled(False)
+            if w['canvas'].get_view_mode() == "profile":
+                w['canvas'].set_view_mode("plan")
+                w['btn_view_plan'].setStyleSheet(self._VIEW_BTN_ACTIVE)
+                w['btn_view_profile'].setStyleSheet(self._VIEW_BTN_INACTIVE)
+            w['zoom_label'].setText(f"{w['canvas'].get_zoom_percent()}%")
 
     def _import_longitudinal_dxf(self, pipe_name, ip_points):
         """导入纵断面DXF"""
@@ -936,15 +1980,20 @@ class PressurePipeConfigDialog(QDialog):
         self._update_card_data_state(pipe_name, show_data=False)
 
     def _preview_longitudinal(self, pipe_name):
-        """弹出纵断面预览对话框"""
-        from PySide6.QtWidgets import QMessageBox
+        """弹出管道预览对话框（含纵断面+平面图双视图）"""
+        nodes = self._longitudinal_data.get(pipe_name)
+        ip_points = None
+        for g in (self._pipe_groups or []):
+            if g.name == pipe_name:
+                ip_points = getattr(g, 'ip_points', None)
+                break
 
-        if pipe_name not in self._longitudinal_data or not self._longitudinal_data[pipe_name]:
-            QMessageBox.information(self, "预览", f"管道 '{pipe_name}' 尚未导入纵断面数据")
+        if (not nodes or len(nodes) < 2) and (not ip_points or len(ip_points) < 2):
+            fluent_info(self, "预览", f"管道 '{pipe_name}' 暂无可预览的数据")
             return
 
         dlg = LongitudinalPreviewDialog(self, pipe_name=pipe_name,
-                                         nodes=self._longitudinal_data[pipe_name])
+                                         nodes=nodes, ip_points=ip_points)
         dlg.exec()
 
     def _refresh_long_table(self, pipe_name, table):
