@@ -1,6 +1,8 @@
 # V1.0 项目依赖
 # ================================
 # 基础依赖
+PyInstaller>=6.0.0      # Windows onedir 打包
+PySide6-Fluent-Widgets>=1.11.0  # Fluent 风格控件
 tksheet>=7.5.0          # 表格组件
 pandas>=2.0.0           # 数据处理
 openpyxl>=3.1.0         # Excel读写(.xlsx)
@@ -10,8 +12,10 @@ matplotlib>=3.7.0       # 可视化（断面图、公式渲染）
 # 倒虹吸系统依赖
 ezdxf>=1.0.0            # DXF文件解析
 Pillow>=9.0.0           # 图片处理
+shapely>=2.0.0          # 几何处理
 
 # 有压管道设计依赖
 scipy>=1.10.0           # 无压Manning方程数值求解
 seaborn>=0.12.0         # 统计可视化（批量绘图）
 pypdf>=3.0.0            # PDF合并
+latex2mathml>=3.0.0     # 公式转 MathML

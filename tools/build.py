@@ -142,6 +142,14 @@ BUILD_DIR = os.path.join(PROJECT_ROOT, "build")
 MANIFEST_STORE_DIR = os.path.join(PROJECT_ROOT, ".release-manifests")
 MAIN_SCRIPT = os.path.join(PROJECT_ROOT, "main.py")
 ICON_FILE = os.path.join(PROJECT_ROOT, "icon.ico")
+PROJECT_VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
+
+
+def _project_python() -> str:
+    """Prefer the project's venv interpreter for reproducible builds."""
+    if os.path.exists(PROJECT_VENV_PYTHON):
+        return PROJECT_VENV_PYTHON
+    return sys.executable
 
 
 
@@ -220,6 +228,7 @@ def build(bump: str = None):
     print(f"{'=' * 60}")
     print(f"  {APP_NAME} 打包工具")
     print(f"  版本: V{APP_VERSION}")
+    print(f"  Python: {_project_python()}")
     print(f"{'=' * 60}")
 
     # 清理 data 目录中的 Excel 临时锁文件
@@ -232,7 +241,7 @@ def build(bump: str = None):
 
     # ---- 构建 PyInstaller 参数 ----
     args = [
-        sys.executable, "-m", "PyInstaller",
+        _project_python(), "-m", "PyInstaller",
         "--noconfirm",                      # 不询问确认
         "--clean",                          # 清理临时文件
         "--windowed",                       # 隐藏控制台窗口

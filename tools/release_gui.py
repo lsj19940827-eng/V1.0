@@ -24,10 +24,18 @@ from datetime import date
 # ---- 路径设置 ----
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+PROJECT_VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
 sys.path.insert(0, PROJECT_ROOT)
 sys.path.insert(0, SCRIPT_DIR)
 
 os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+
+
+def _project_python() -> str:
+    """Prefer the project's venv interpreter for reproducible release builds."""
+    if os.path.exists(PROJECT_VENV_PYTHON):
+        return PROJECT_VENV_PYTHON
+    return sys.executable
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -205,10 +213,11 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
         # ---- 2. 打包 ----
         set_step(2, "running")
         log("正在打包，请耐心等待（约 3~10 分钟）...")
+        log(f"使用解释器: {_project_python()}")
         bridge.progress_signal.emit(-1)  # indeterminate
 
         result = subprocess.run(
-            [sys.executable, os.path.join(SCRIPT_DIR, "build.py")],
+            [_project_python(), os.path.join(SCRIPT_DIR, "build.py")],
             cwd=PROJECT_ROOT,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )

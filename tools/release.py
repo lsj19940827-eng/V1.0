@@ -7,6 +7,7 @@
 
 用法：
     python tools/release.py patch     # 补丁版本 1.0.2 → 1.0.3
+    python tools/release.py hotfix    # 热修复版 1.0.3 → 1.0.3.1
     python tools/release.py minor     # 次版本   1.0.2 → 1.1.0
     python tools/release.py major     # 主版本   1.0.2 → 2.0.0
 
@@ -49,6 +50,7 @@ _configure_stdio()
 # ============================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+PROJECT_VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
 sys.path.insert(0, PROJECT_ROOT)
 
 from version import APP_NAME_EN
@@ -101,6 +103,13 @@ def _current_branch() -> str:
     return branch or "master"
 
 
+def _project_python() -> str:
+    """Prefer the project's venv interpreter for reproducible release builds."""
+    if os.path.exists(PROJECT_VENV_PYTHON):
+        return PROJECT_VENV_PYTHON
+    return sys.executable
+
+
 def _has_staged_changes() -> bool:
     """判断 git 暂存区是否有变更。"""
     result = subprocess.run(
@@ -111,14 +120,14 @@ def _has_staged_changes() -> bool:
     return result.returncode != 0
 
 
-_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
 
 
 def _version_key(v: str) -> tuple:
     m = _VERSION_RE.match((v or "").strip())
     if not m:
-        return (0, 0, 0)
-    return tuple(int(x) for x in m.groups())
+        return (0, 0, 0, 0)
+    return tuple(int(x) if x is not None else 0 for x in m.groups())
 
 
 def _load_universal_patch(dist_dir: str, version: str) -> dict:
@@ -252,8 +261,11 @@ def step_build() -> dict:
     print(f"  [步骤 2/6] 打包...")
     print(f"{'='*60}\n")
 
+    python_exe = _project_python()
+    print(f"  [环境] 使用解释器: {python_exe}")
+
     result = subprocess.run(
-        [sys.executable, os.path.join(SCRIPT_DIR, "build.py")],
+        [python_exe, os.path.join(SCRIPT_DIR, "build.py")],
         cwd=PROJECT_ROOT,
     )
     if result.returncode != 0:
@@ -512,12 +524,13 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""示例：
   python tools/release.py patch                    # 1.0.2 → 1.0.3
+  python tools/release.py hotfix                   # 1.0.3 → 1.0.3.1
   python tools/release.py minor                    # 1.0.2 → 1.1.0
   python tools/release.py patch -m "修复水面线bug"  # 带更新日志
   python tools/release.py patch --prerelease --gist-target test --no-bump \\
       --tag-suffix beta.20260307.1
 """)
-    parser.add_argument("level", choices=["patch", "minor", "major"],
+    parser.add_argument("level", choices=["hotfix", "patch", "minor", "major"],
                         help="版本递增级别（--no-bump 时仅作兼容占位）")
     parser.add_argument("-m", "--message", default="",
                         help="更新日志（用 \\n 分隔多条）")
