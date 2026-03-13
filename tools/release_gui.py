@@ -53,7 +53,7 @@ from version import APP_VERSION, APP_NAME, APP_NAME_EN
 
 # ---- 从 repo_config 读取配置 ----
 from repo_config import (
-    GITHUB_OWNER, GITHUB_REPO, GIST_ID,
+    GITHUB_OWNER, GITHUB_REPO, GIST_ID, DOWNLOAD_PROXIES,
 )
 
 # ---- 样式常量 ----
@@ -66,6 +66,16 @@ CARD = "#FFFFFF"
 BD = "#E0E0E0"
 T1 = "#212121"
 T2 = "#424242"
+
+
+def _proxied_url(url: str) -> str:
+    """给 GitHub 下载 URL 加上第一个可用的代理前缀。"""
+    if not url or not url.startswith("https://github.com/"):
+        return url
+    for prefix in DOWNLOAD_PROXIES:
+        if prefix:
+            return prefix + url
+    return url
 
 
 # ============================================================
@@ -316,6 +326,8 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
         version_json = {
             "latest_version": new_ver,
             "download_url": download_url,
+            "download_url_direct": download_url,
+            "download_url_proxy": _proxied_url(download_url),
             "changelog": changelog or f"V{new_ver} 版本发布",
             "release_date": date.today().isoformat(),
             "min_version": "1.0.0",
@@ -324,6 +336,8 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
 
         if patch_download_url:
             version_json["patch_url"] = patch_download_url
+            version_json["patch_url_direct"] = patch_download_url
+            version_json["patch_url_proxy"] = _proxied_url(patch_download_url)
             version_json["patch_size_mb"] = patch_size_mb
             version_json["min_patch_version"] = patch_min_version
             # 兼容旧客户端（V1.0.6-）

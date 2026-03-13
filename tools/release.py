@@ -381,11 +381,15 @@ def step_update_gist(version: str, urls: dict, assets: dict,
     print(f"{'='*60}\n")
 
     full_size = os.path.getsize(assets["full_zip"]) / (1024 * 1024)
+    download_url_direct = urls.get("download_url", "")
+    download_url_proxy = _proxied_url(download_url_direct)
 
     version_data = {
         "latest_version": version,
-        "download_url": _proxied_url(urls.get("download_url", "")),
-        "download_url_direct": urls.get("download_url", ""),
+        # 主字段保持直连地址，由客户端统一决定是否使用代理。
+        "download_url": download_url_direct,
+        "download_url_direct": download_url_direct,
+        "download_url_proxy": download_url_proxy,
         "changelog": changelog or f"V{version} 版本发布",
         "release_date": date.today().isoformat(),
         "min_version": "1.0.0",
@@ -394,8 +398,10 @@ def step_update_gist(version: str, urls: dict, assets: dict,
     }
 
     if "patch_url" in urls:
-        version_data["patch_url"] = _proxied_url(urls["patch_url"])
-        version_data["patch_url_direct"] = urls["patch_url"]
+        patch_url_direct = urls["patch_url"]
+        version_data["patch_url"] = patch_url_direct
+        version_data["patch_url_direct"] = patch_url_direct
+        version_data["patch_url_proxy"] = _proxied_url(patch_url_direct)
         version_data["patch_size_mb"] = assets.get("patch_size_mb", 0)
         version_data["min_patch_version"] = assets.get("patch_min_version", "")
         # 兼容旧客户端（V1.0.6-）：旧版 updater 用 patch_base_version 精确匹配

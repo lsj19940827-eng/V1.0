@@ -50,14 +50,14 @@ _PROXY_PROBE_TIMEOUT = 5  # 代理探测超时（秒）
 # 鐗堟湰姣旇緝
 # ============================================================
 def _parse_version(v: str) -> tuple:
-    """将版本字符串解析为可比较的 3 段整数元组。"""
+    """将版本字符串解析为可比较的 4 段整数元组。"""
     if not isinstance(v, str):
-        return (0, 0, 0)
+        return (0, 0, 0, 0)
     nums = re.findall(r"\d+", v)
     if not nums:
-        return (0, 0, 0)
-    parts = [int(x) for x in nums[:3]]
-    while len(parts) < 3:
+        return (0, 0, 0, 0)
+    parts = [int(x) for x in nums[:4]]
+    while len(parts) < 4:
         parts.append(0)
     return tuple(parts)
 
@@ -91,8 +91,9 @@ class UpdateInfo:
 
     def __init__(self, data: dict):
         self.latest_version: str = data.get("latest_version", "0.0.0")
-        self.download_url: str = data.get("download_url", "")
-        self.patch_url: str = data.get("patch_url", "")
+        # 优先使用直连地址，由客户端统一决定是否套代理。
+        self.download_url: str = data.get("download_url_direct") or data.get("download_url", "")
+        self.patch_url: str = data.get("patch_url_direct") or data.get("patch_url", "")
         self.source: str = data.get("source", "")
         self.channel: str = data.get("channel", "")
         self.changelog: str = data.get("changelog", "")
@@ -101,6 +102,8 @@ class UpdateInfo:
         self.file_size_mb: float = data.get("file_size_mb", 0)
         self.patch_size_mb: float = data.get("patch_size_mb", 0)
         self.min_patch_version: str = data.get("min_patch_version", "")
+        self.download_url_proxy: str = data.get("download_url_proxy", "")
+        self.patch_url_proxy: str = data.get("patch_url_proxy", "")
         self.requested_channel: str = "prod"
         self.allow_downgrade: bool = False
         # 兼容旧版 version.json 中的 patch_base_version 字段
