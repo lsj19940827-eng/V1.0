@@ -1,10 +1,10 @@
 {
   "version": "1.0.9.1",
-  "build_time": "2026-03-13T10:09:43",
+  "build_time": "2026-03-13T10:47:10",
   "file_count": 5134,
   "files": {
-    "CanalHydraulicCalc.exe": "034075959a00c9c25686242e2104a2f5d62b1503348ade76489d0dea04b93397",
-    "_internal/base_library.zip": "cbaadfe9cccea012c65e5429510edfc9e9c6843ae6f57addd72fd4909a84d3b5",
+    "CanalHydraulicCalc.exe": "3d61bdd5560118f96731861cfd1f1ffbc04ecf54c5918afef1871cc3d3ad1d23",
+    "_internal/base_library.zip": "affbd86390a5f40b7e19dcab431d51a92dd12019e9131ae1788423f1dffe59d7",
     "_internal/geos.dll": "1887dca48c9bf4281f436ab418e1bb2ef802081610773ef91e2623c349484401",
     "_internal/geos_c.dll": "091ba76407e4884058686ac1c2cdb601101b5ede94ec853e2d8d3f0abf8e2899",
     "_internal/libcrypto-3.dll": "ccfffddcd3defb8d899026298af9af43bc186130f8483d77e97c93233d5f27d7",
