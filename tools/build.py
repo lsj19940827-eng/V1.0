@@ -119,6 +119,20 @@ PYSIDE6_UNUSED_MODULES = [
     "PySide6.QtQuick3D",
 ]
 
+# ------------------------------------------------------------
+# 显式排除当前桌面应用未使用、但容易被静态分析误收入的可选 AI/视觉栈
+# 触发链：scipy.optimize -> scipy._lib._array_api -> torch ->
+#         torch.testing._internal.common_distributed -> transformers ->
+#         transformers.video_utils / transformers.data.metrics -> cv2 / sklearn
+# 这些依赖在当前项目源码中没有直接导入，但会显著放大全量包和补丁包。
+# ------------------------------------------------------------
+OPTIONAL_ML_EXCLUDES = [
+    "torch",
+    "transformers",
+    "cv2",
+    "sklearn",
+]
+
 # ============================================================
 # 路径（build.py 位于 tools/ 下，项目根目录在上一级）
 # ============================================================
@@ -303,6 +317,10 @@ def build(bump: str = None):
 
     # ---- 排除明确不需要的 PySide6 子模块（减少分析范围） ----
     for mod in PYSIDE6_UNUSED_MODULES:
+        args.append(f"--exclude-module={mod}")
+
+    # ---- 排除被 scipy / 第三方 hook 误带入的可选 ML 依赖 ----
+    for mod in OPTIONAL_ML_EXCLUDES:
         args.append(f"--exclude-module={mod}")
 
     # ---- 收集正式 Python 包的子模块（有 __init__.py，编译为字节码） ----
