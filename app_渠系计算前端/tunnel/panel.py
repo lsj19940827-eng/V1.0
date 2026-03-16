@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWebEngineWidgets import QWebEngineView
+from app_渠系计算前端.webview_compat import create_web_view
 
 from qfluentwidgets import (
     ComboBox, PushButton, PrimaryPushButton, LineEdit,
@@ -313,7 +313,7 @@ class TunnelPanel(QWidget):
 
         t1 = QWidget(); t1l = QVBoxLayout(t1); t1l.setContentsMargins(5,5,5,5)
         grp = QGroupBox("计算结果详情"); gl = QVBoxLayout(grp)
-        self.result_text = QWebEngineView()
+        self.result_text = create_web_view()
         gl.addWidget(self.result_text)
         t1l.addWidget(grp)
         self.notebook.addTab(t1, "计算结果")

@@ -13,6 +13,8 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from app_渠系计算前端.styles import fluent_save_discard_cancel
 
+from app_渠系计算前端.debug_utils import debug_print
+
 if TYPE_CHECKING:
     from app_渠系计算前端.batch.panel import BatchPanel
     from app_渠系计算前端.water_profile.panel import WaterProfilePanel
@@ -408,11 +410,11 @@ class ProjectManager(QObject):
     # ----------------------------------------------------------------
     def _check_save_before_close(self) -> bool:
         """关闭/新建/打开前检查是否需要保存，返回是否继续"""
-        print(f"[DEBUG] _check_save_before_close called, _is_dirty={self._is_dirty}")
+        debug_print(f"[DEBUG] _check_save_before_close called, _is_dirty={self._is_dirty}")
         if not self._is_dirty:
             return True
 
-        print(f"[DEBUG] Showing save dialog, parent={self.parent()}")
+        debug_print(f"[DEBUG] Showing save dialog, parent={self.parent()}")
         result = fluent_save_discard_cancel(
             self.parent(),
             "保存项目",
@@ -421,7 +423,7 @@ class ProjectManager(QObject):
             discard_text="放弃",
             cancel_text="取消"
         )
-        print(f"[DEBUG] Dialog result: {result}")
+        debug_print(f"[DEBUG] Dialog result: {result}")
 
         if result == 'save':
             return self.save_project()

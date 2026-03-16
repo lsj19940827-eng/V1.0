@@ -1,2 +1,8 @@
 # -*- coding: utf-8 -*-
-"""渠系断面水力计算系统 —— PySide6 + QFluentWidgets"""
+"""渠道前端包初始化。"""
+
+from app_渠系计算前端.qfluentwidgets_compat import ensure_qfluentwidgets_compat
+
+ensure_qfluentwidgets_compat()
+
+__all__ = ["ensure_qfluentwidgets_compat"]

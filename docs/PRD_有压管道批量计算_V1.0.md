@@ -1,8 +1,8 @@
 # 有压管道 — 综合 PRD
 
-> **版本**: V2.1  
+> **版本**: V2.5  
 > **创建日期**: 2026-03-03  
-> **最后更新**: 2026-03-08  
+> **最后更新**: 2026-03-13  
 > **状态**: 已实现
 
 ---
@@ -82,6 +82,13 @@ $$h_f = f \times L \times \frac{Q^m}{d^b}$$
 - 输出区：推荐管径卡片 + 前5候选表 + 详细计算过程
 - 批量计算区：默认值可编辑、QThread 后台执行、进度条 + 取消、输出 CSV + PNG + PDF
 - 导出：单次 Word/Excel/TXT；批量 CSV + 图表 PDF
+
+#### 2.4.1 当前实现同步说明
+
+- 主程序启动前会先执行 `app_渠系计算前端/qfluentwidgets_compat.py`，不再直接依赖系统 `darkdetect` 成功返回；当系统主题探测异常或阻塞时，自动回退为浅色主题，避免 `qfluentwidgets` 导入卡住导致 `main.py` 无法启动。
+- `app_渠系计算前端/pressure_pipe/panel.py` 中的结果视图已从“强依赖 `QWebEngineView`”调整为“优先使用 `QWebEngineView`，失败时自动降级为只读 HTML 视图”。
+- 触发降级的典型场景包括 `PySide6.QtWebEngineWidgets` 导入失败、页面文件不足或当前环境缺少 WebEngine 运行条件；降级后主程序仍可打开，有压管道页会显示简化结果视图提示。
+- 本次兼容修复的目标是“主程序先可启动、结果页可回退显示”，不是改变有压管道的水力计算公式、推荐逻辑或批量扫描规则。
 
 ### 2.5 依赖
 
@@ -503,6 +510,7 @@ $$h_f = f \times L \times \frac{Q_{m^3/h}^m}{d_{mm}^b}$$
 | `tests/test_pressure_pipe_result_persistence_unit.py` | 结果持久化测试 |
 | `tests/test_pressure_pipe_result_identity_unit.py` | 结果身份键测试 |
 | `tests/test_pressure_pipe_persistence_with_long_unit.py` | 纵断面数据持久化测试 |
+| `tests/test_qfluentwidgets_compat.py` | 启动兼容层测试（`darkdetect` 超时/缺失兜底） |
 
 ---
 
@@ -516,3 +524,4 @@ $$h_f = f \times L \times \frac{Q_{m^3/h}^m}{d_{mm}^b}$$
 | V2.2 | 2026-03-06 | **灵敏度分析全自动化**：球墨铸铁管 f 上下限对比改为自动检测并计算，删除 `sensitivity_enabled` 开关字段；配置对话框删除勾选框；结果对话框删除勾选框和开关，对比列/摘要卡片根据数据自动显示 |
 | V2.3 | 2026-03-08 | **双规范展示恢复**：有压管道页面与 Word 导出并列展示 GB 50288 + GB/T 20203 摘要；新增 GB/T 20203 §5.1.4~§5.1.6 条文摘要（含表4、表5、式14/17、式18仅页面）；补充“当前算法仍按 GB 50288 执行”说明；`report_meta.py` 中 `pressure_pipe` 参考文献与计算目的模板改为双规范并列。 |
 | V2.4 | 2026-03-09 | **导出规则修复**：修复 `导出全部DXF` 中倒虹吸/有压管道断面汇总“复读机”问题；同流量段按 `Q`、`n`、`DN_mm`、`pipe_material` 判定一致性，一致则去重为单行，不一致则保留多行并显示"建筑物名称-流量段"；并修复 `overrides.name` 覆盖显示名称的问题。 |
+| V2.5 | 2026-03-13 | **启动兼容修复**：新增 `qfluentwidgets_compat.py`，在主程序导入 `qfluentwidgets` 前为 `darkdetect` 提供超时/缺失兜底，避免系统主题探测阻塞导致程序无法启动；`pressure_pipe/panel.py` 的结果视图改为优先 `QWebEngineView`、失败自动降级为只读 HTML 视图，解决 `QtWebEngineWidgets` 因页面文件不足等环境问题导致主程序启动失败。 |

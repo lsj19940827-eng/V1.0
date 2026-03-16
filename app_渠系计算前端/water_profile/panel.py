@@ -64,6 +64,7 @@ from app_渠系计算前端.report_meta import (
 from app_渠系计算前端.structure_type_selector import StructureTypeSelector
 from app_渠系计算前端.case_manager import FlowLayout as _FlowLayout
 from app_渠系计算前端.batch.panel import BatchPanel, format_station_display, parse_station_input
+from app_渠系计算前端.debug_utils import debug_print
 from utils.pressure_pipe_result_helpers import (
     make_pressure_pipe_identity,
     empty_pressure_pipe_calc_records,
@@ -155,6 +156,9 @@ NODE_EXPORT_HEADERS = NODE_ALL_HEADERS
 # 节点数据表工具栏布局预设：
 # compact（紧凑）/ balanced（平衡，默认）/ comfortable（宽松）
 NODE_TOOLBAR_LAYOUT_PRESET = "balanced"
+
+SOURCE_COORD_X_ROLE_KEY = "_source_x_text"
+SOURCE_COORD_Y_ROLE_KEY = "_source_y_text"
 
 
 # ================================================================
@@ -1188,6 +1192,7 @@ class WaterProfilePanel(QWidget):
         sample_menu.addAction(Action("示例一（综合演示）", triggered=self._load_section_sample_1))
         sample_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=self._load_section_sample_2))
         sample_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=self._load_section_sample_3))
+        sample_menu.addAction(Action("示例四（飞龙分干渠）", triggered=self._load_section_sample_4))
         self._btn_section_sample = DropDownPushButton("示例数据")
         self._btn_section_sample.setMenu(sample_menu)
         button_row.addWidget(self._btn_section_sample)
@@ -1196,6 +1201,7 @@ class WaterProfilePanel(QWidget):
         template_menu.addAction(Action("示例一（综合演示）", triggered=lambda: self._open_section_excel_template("blank")))
         template_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=lambda: self._open_section_excel_template("longtang")))
         template_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=lambda: self._open_section_excel_template("luojisi")))
+        template_menu.addAction(Action("示例四（飞龙分干渠）", triggered=lambda: self._open_section_excel_template("feilong")))
         self._btn_section_template = DropDownPushButton("打开Excel模板")
         self._btn_section_template.setMenu(template_menu)
         button_row.addWidget(self._btn_section_template)
@@ -1540,6 +1546,13 @@ class WaterProfilePanel(QWidget):
 
     def _load_section_sample_3(self):
         self._batch_backend._add_sample_data_3()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _load_section_sample_4(self):
+        self._batch_backend._add_sample_data_4()
         self._sync_batch_settings()
         self._switch_workspace_tab(self._tab_section_input)
         if self._section_input_table and self._section_input_table.rowCount() > 0:
@@ -2877,6 +2890,19 @@ class WaterProfilePanel(QWidget):
             if not isinstance(payload, dict):
                 payload = {}
             payload["_from_table1_source"] = bool(_from_table1_source)
+            if _from_table1_source:
+                x_text = ""
+                y_text = ""
+                if isinstance(data, (list, tuple)):
+                    if len(data) > 5:
+                        x_text = self._normalize_coord_text(data[5])
+                    if len(data) > 6:
+                        y_text = self._normalize_coord_text(data[6])
+                payload[SOURCE_COORD_X_ROLE_KEY] = x_text
+                payload[SOURCE_COORD_Y_ROLE_KEY] = y_text
+            else:
+                payload.pop(SOURCE_COORD_X_ROLE_KEY, None)
+                payload.pop(SOURCE_COORD_Y_ROLE_KEY, None)
             first_item.setData(Qt.UserRole, payload)
         if not _defer_controls_refresh:
             self._refresh_pressure_pipe_controls()
@@ -2987,6 +3013,97 @@ class WaterProfilePanel(QWidget):
             data.append(item.text() if item else "")
         return data
 
+    def _get_node_row_payload(self, row):
+        table = getattr(self, "node_table", None)
+        if not table or row < 0 or row >= table.rowCount():
+            return {}
+        first_item = table.item(row, 0)
+        payload = first_item.data(Qt.UserRole) if first_item else None
+        return payload if isinstance(payload, dict) else {}
+
+    def _normalize_coord_text(self, value) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip()
+        if not text or text == "-":
+            return ""
+        return text
+
+    def _coord_decimal_places(self, value) -> int:
+        text = self._normalize_coord_text(value)
+        if not text:
+            return 0
+        if text[0] in "+-":
+            text = text[1:]
+        if "e" in text.lower() or "." not in text:
+            return 0
+        return len(text.split(".", 1)[1])
+
+    def _node_is_source_row(self, node) -> bool:
+        if bool(getattr(node, "from_table1_source", False)):
+            return True
+        return not getattr(node, "is_transition", False) and not getattr(node, "is_auto_inserted_channel", False)
+
+    def _get_node_source_coord_text(self, node, axis: str) -> str:
+        attr = "source_x_text" if axis == "x" else "source_y_text"
+        return self._normalize_coord_text(getattr(node, attr, ""))
+
+    def _resolve_neighbor_coord_precision(self, nodes, index: int, axis: str, default: int = 6) -> int:
+        precisions = []
+        for direction in (-1, 1):
+            cursor = index + direction
+            while 0 <= cursor < len(nodes):
+                candidate = nodes[cursor]
+                if self._node_is_source_row(candidate):
+                    text = self._get_node_source_coord_text(candidate, axis)
+                    if text:
+                        precisions.append(self._coord_decimal_places(text))
+                    break
+                cursor += direction
+        if precisions:
+            return max(precisions)
+        current_text = self._get_node_source_coord_text(nodes[index], axis) if 0 <= index < len(nodes) else ""
+        if current_text:
+            return self._coord_decimal_places(current_text)
+        return default
+
+    def _format_coord_value(self, value, decimals: int) -> str:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return ""
+        if abs(number) < 1e-15:
+            return ""
+        return f"{number:.{max(0, int(decimals))}f}"
+
+    def _resolve_node_coord_display_text(self, nodes, index: int, node, axis: str, default: int = 6) -> str:
+        if self._node_is_source_row(node):
+            source_text = self._get_node_source_coord_text(node, axis)
+            if source_text:
+                return source_text
+        decimals = self._resolve_neighbor_coord_precision(nodes, index, axis, default=default)
+        return self._format_coord_value(getattr(node, axis, 0.0), decimals)
+
+    def _refresh_source_coord_payloads_from_table(self):
+        table = getattr(self, "node_table", None)
+        if not table:
+            return
+        for row in range(table.rowCount()):
+            payload = self._get_node_row_payload(row)
+            if not payload and not self._is_table1_source_row(row):
+                continue
+            x_text = self._normalize_coord_text(table.item(row, 5).text() if table.item(row, 5) else "")
+            y_text = self._normalize_coord_text(table.item(row, 6).text() if table.item(row, 6) else "")
+            if self._is_table1_source_row(row):
+                payload[SOURCE_COORD_X_ROLE_KEY] = x_text
+                payload[SOURCE_COORD_Y_ROLE_KEY] = y_text
+            else:
+                payload.pop(SOURCE_COORD_X_ROLE_KEY, None)
+                payload.pop(SOURCE_COORD_Y_ROLE_KEY, None)
+            first_item = table.item(row, 0)
+            if first_item and payload:
+                first_item.setData(Qt.UserRole, payload)
+
     # ================================================================
     # 从断面计算结果同步到表3
     # ================================================================
@@ -3092,6 +3209,13 @@ class WaterProfilePanel(QWidget):
             if seg_num not in flow_segment_map and q_val > 0:
                 flow_segment_map[seg_num] = q_val
 
+            x_text = self._normalize_coord_text(raw_result.get("coord_X_text", ""))
+            y_text = self._normalize_coord_text(raw_result.get("coord_Y_text", ""))
+            if not x_text:
+                x_text = self._normalize_coord_text(x)
+            if not y_text:
+                y_text = self._normalize_coord_text(y)
+
             def fmt(v):
                 if v is None or v == "" or v == 0: return ""
                 if isinstance(v, float): return f"{v:.4f}" if v < 1 else f"{v:.3f}"
@@ -3111,8 +3235,8 @@ class WaterProfilePanel(QWidget):
             row_data[0] = flow_section
             row_data[1] = building_name
             row_data[2] = section_type
-            row_data[5] = fmt(x)
-            row_data[6] = fmt(y)
+            row_data[5] = x_text
+            row_data[6] = y_text
             row_data[7] = fmt(tr_r) if tr_r > 0 else ""
             row_data[20] = fmt(B) if B else ""
             row_data[21] = fmt(D) if D else ""
@@ -3697,15 +3821,31 @@ class WaterProfilePanel(QWidget):
                 from_table1_source = True
             node.from_table1_source = from_table1_source
 
+            source_x_text = ""
+            source_y_text = ""
+            if _first_item and isinstance(_ur, dict):
+                source_x_text = self._normalize_coord_text(_ur.get(SOURCE_COORD_X_ROLE_KEY, ""))
+                source_y_text = self._normalize_coord_text(_ur.get(SOURCE_COORD_Y_ROLE_KEY, ""))
+
+            x_text = self._normalize_coord_text(data[5])
+            y_text = self._normalize_coord_text(data[6])
+            if x_text:
+                node.x = self._sf(x_text)
+            if y_text:
+                node.y = self._sf(y_text)
+            if self._node_is_source_row(node):
+                node.source_x_text = x_text or source_x_text
+                node.source_y_text = y_text or source_y_text
+            else:
+                node.source_x_text = ""
+                node.source_y_text = ""
+
             # 进出口 (col 3)
             _io_text = _read_text(r, 3)
             if _io_text:
                 node.in_out = InOutType.from_string(_io_text)
             # IP编号 (col 4) — 支持复合格式 (#11)
             node.ip_number = _parse_ip_number(_read_text(r, 4))
-
-            node.x = self._sf(data[5])
-            node.y = self._sf(data[6])
             # 转弯半径 fallback 规则：
             #   首行/闸类/倒虹吸 → 0（不用默认全局半径，避免刷表时写入错误值）
             #   普通行           → 全局转弯半径（保持原有逻辑）
@@ -4159,9 +4299,7 @@ class WaterProfilePanel(QWidget):
 
             _is_trans = getattr(node, 'is_transition', False)
             _is_auto_ch = getattr(node, 'is_auto_inserted_channel', False)
-            _is_source_row = bool(getattr(node, "from_table1_source", False))
-            if not _is_source_row and (not _is_trans) and (not _is_auto_ch):
-                _is_source_row = True
+            _is_source_row = self._node_is_source_row(node)
 
             # 构建完整46列数据，按列索引直接赋值
             vals = [""] * len(NODE_ALL_HEADERS)
@@ -4174,8 +4312,8 @@ class WaterProfilePanel(QWidget):
             if not _is_trans:
                 vals[3] = node.get_in_out_str()
                 vals[4] = "" if _is_auto_ch else node.get_ip_str()
-                vals[5] = f"{node.x:.6f}" if (node.x and not _is_auto_ch) else ""
-                vals[6] = f"{node.y:.6f}" if (node.y and not _is_auto_ch) else ""
+                vals[5] = "" if _is_auto_ch else self._resolve_node_coord_display_text(nodes, r, node, "x")
+                vals[6] = "" if _is_auto_ch else self._resolve_node_coord_display_text(nodes, r, node, "y")
                 # 转弯半径 col 7：首行始终为空（起始节点无弯道意义）；
                 # 闸类/分水口/倒虹吸 fallback=0（改动C），空 col7→0→显示"" 自然处理，
                 # 不强制清空，允许用户手动填入的值保留显示
@@ -4333,6 +4471,12 @@ class WaterProfilePanel(QWidget):
                             payload['_local_loss_ratio'] = _llr_f
                     except (ValueError, TypeError):
                         pass
+                if _is_source_row:
+                    payload[SOURCE_COORD_X_ROLE_KEY] = self._normalize_coord_text(vals[5])
+                    payload[SOURCE_COORD_Y_ROLE_KEY] = self._normalize_coord_text(vals[6])
+                else:
+                    payload.pop(SOURCE_COORD_X_ROLE_KEY, None)
+                    payload.pop(SOURCE_COORD_Y_ROLE_KEY, None)
                 payload["_from_table1_source"] = bool(_is_source_row)
                 if payload:
                     first_item.setData(Qt.UserRole, payload)
@@ -5295,18 +5439,18 @@ class WaterProfilePanel(QWidget):
 
     def _open_siphon_calculator(self):
         """打开倒虹吸水力计算（PySide6 多标签页窗口）"""
-        print("[DEBUG] _open_siphon_calculator 被调用")
+        debug_print("[DEBUG] _open_siphon_calculator 被调用")
         if not self._ensure_downstream_ready("倒虹吸水力计算"):
             return
         if not CALCULATOR_AVAILABLE:
-            print("[DEBUG] CALCULATOR_AVAILABLE = False，返回")
+            debug_print("[DEBUG] CALCULATOR_AVAILABLE = False，返回")
             InfoBar.error("不可用", "核心计算引擎未加载",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
 
         nodes = self._build_nodes_from_table()
         if not nodes:
-            print("[DEBUG] nodes 为空，返回")
+            debug_print("[DEBUG] nodes 为空，返回")
             InfoBar.info("提示", "表格中没有数据，请先导入断面参数",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
@@ -5314,7 +5458,7 @@ class WaterProfilePanel(QWidget):
         # 检查是否已插入渐变段
         has_transitions = any(getattr(n, 'is_transition', False) for n in nodes)
         if not has_transitions:
-            print("[DEBUG] has_transitions = False，返回")
+            debug_print("[DEBUG] has_transitions = False，返回")
             InfoBar.warning("提示",
                            "请先点击工具栏的【插入渐变段】按钮，完成渐变段插入后再进行倒虹吸水力计算。\n"
                            "插入渐变段后，系统才能准确获取倒虹吸上下游流速、断面参数等信息。",
@@ -5326,14 +5470,14 @@ class WaterProfilePanel(QWidget):
             n.structure_type and "倒虹吸" in n.structure_type.value
             for n in nodes if n.structure_type
         )
-        print(f"[DEBUG] has_siphon = {has_siphon}")
+        debug_print(f"[DEBUG] has_siphon = {has_siphon}")
         if not has_siphon:
-            print("[DEBUG] has_siphon = False，返回")
+            debug_print("[DEBUG] has_siphon = False，返回")
             InfoBar.info("提示", "表格中没有倒虹吸数据，请确保有结构形式为\"倒虹吸\"的行",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
 
-        print("[DEBUG] 开始导入模块和提取倒虹吸分组")
+        debug_print("[DEBUG] 开始导入模块和提取倒虹吸分组")
         try:
             from app_渠系计算前端.siphon.multi_siphon_dialog import MultiSiphonDialog
 
@@ -5416,7 +5560,7 @@ class WaterProfilePanel(QWidget):
             siphon_n = DEFAULT_SIPHON_TURN_RADIUS_N
 
             # 打开PySide6多标签页倒虹吸计算窗口
-            print(f"[DEBUG] 正在创建 MultiSiphonDialog，倒虹吸组数量: {len(siphon_groups)}")
+            debug_print(f"[DEBUG] 正在创建 MultiSiphonDialog，倒虹吸组数量: {len(siphon_groups)}")
             dlg = MultiSiphonDialog(
                 self._info_parent(),
                 siphon_groups,
@@ -5425,9 +5569,9 @@ class WaterProfilePanel(QWidget):
                 siphon_turn_radius_n=siphon_n,
                 show_case_management=False
             )
-            print(f"[DEBUG] MultiSiphonDialog 创建完成，准备调用 exec()")
+            debug_print("[DEBUG] MultiSiphonDialog 创建完成，准备调用 exec()")
             result = dlg.exec()
-            print(f"[DEBUG] dlg.exec() 返回值: {result}")
+            debug_print(f"[DEBUG] dlg.exec() 返回值: {result}")
 
         except ImportError as e:
             import traceback
@@ -5453,6 +5597,249 @@ class WaterProfilePanel(QWidget):
             self._get_pressure_pipe_group_flow_section(group),
             getattr(group, "name", "") or ""
         )
+
+    @staticmethod
+    def _is_valid_pressure_pipe_total_head_loss(value) -> bool:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(number) and number >= 0
+
+    @staticmethod
+    def _make_pressure_pipe_export_target(name, flow_section) -> dict:
+        flow_section_text = str(flow_section or "").strip()
+        name_text = str(name or "").strip() or "未命名"
+        return {
+            "identity": make_pressure_pipe_identity(flow_section_text, name_text),
+            "flow_section": flow_section_text,
+            "name": name_text,
+        }
+
+    def _collect_pressure_pipe_export_targets(self, rows=None) -> list:
+        targets = []
+        if rows is not None:
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    continue
+                targets.append(
+                    self._make_pressure_pipe_export_target(
+                        row.get("name", ""),
+                        row.get("flow_section", ""),
+                    )
+                )
+            return targets
+
+        try:
+            from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+
+            settings = self._build_settings()
+            cur_nodes = self._build_nodes_from_table()
+            cur_groups = PressurePipeDataExtractor.extract_pipes(cur_nodes, settings=settings)
+        except Exception:
+            return targets
+
+        for group in cur_groups or []:
+            targets.append(
+                self._make_pressure_pipe_export_target(
+                    getattr(group, "name", ""),
+                    self._get_pressure_pipe_group_flow_section(group),
+                )
+            )
+        return targets
+
+    def _index_pressure_pipe_calc_records_for_export(self) -> tuple:
+        exact = {}
+        plain_name_candidates = {}
+        data = normalize_pressure_pipe_calc_records(getattr(self, "_pressure_pipe_calc_records", None))
+        for record in data.get("records", []):
+            if str(record.get("status", "")).strip().lower() != "success":
+                continue
+            total_head_loss = record.get("total_head_loss")
+            if not self._is_valid_pressure_pipe_total_head_loss(total_head_loss):
+                continue
+            name = str(record.get("name", "") or "").strip() or "未命名"
+            flow_section = str(record.get("flow_section", "") or "").strip()
+            identity = str(record.get("identity", "") or "").strip()
+            if not identity:
+                identity = make_pressure_pipe_identity(flow_section, name)
+            payload = {
+                "identity": identity,
+                "flow_section": flow_section,
+                "name": name,
+                "total_head_loss": float(total_head_loss),
+                "source": "calc_records",
+            }
+            exact[identity] = payload
+            plain_name_candidates.setdefault(name, []).append(payload)
+
+        plain_name = {}
+        for name, items in plain_name_candidates.items():
+            if len({item["identity"] for item in items}) == 1:
+                plain_name[name] = items[-1]
+        return exact, plain_name
+
+    def _index_pressure_pipe_table_results_for_export(self, target_identities=None) -> tuple:
+        exact = {}
+        plain_name_candidates = {}
+        try:
+            from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+
+            settings = self._build_settings()
+            cur_nodes = self._build_nodes_from_table()
+            cur_groups = PressurePipeDataExtractor.extract_pipes(cur_nodes, settings=settings)
+        except Exception:
+            return exact, {}
+
+        target_identity_set = set(target_identities or [])
+        for group in cur_groups or []:
+            identity = self._build_pressure_pipe_group_identity(group)
+            if target_identity_set and identity not in target_identity_set:
+                continue
+
+            outlet_idx_raw = getattr(group, "outlet_row_index", -1)
+            try:
+                outlet_idx = int(outlet_idx_raw)
+            except (TypeError, ValueError):
+                outlet_idx = -1
+            if outlet_idx < 0 or outlet_idx >= len(cur_nodes):
+                continue
+
+            outlet_node = cur_nodes[outlet_idx]
+            total_head_loss = getattr(outlet_node, "head_loss_siphon", None)
+            if (
+                not self._is_valid_pressure_pipe_total_head_loss(total_head_loss)
+                or float(total_head_loss) <= 0
+            ):
+                total_head_loss = getattr(outlet_node, "external_head_loss", None)
+            if not self._is_valid_pressure_pipe_total_head_loss(total_head_loss):
+                continue
+
+            flow_section = self._get_pressure_pipe_group_flow_section(group)
+            name = str(getattr(group, "name", "") or "").strip() or "未命名"
+            payload = {
+                "identity": identity,
+                "flow_section": flow_section,
+                "name": name,
+                "total_head_loss": float(total_head_loss),
+                "source": "table3",
+            }
+            exact[identity] = payload
+            plain_name_candidates.setdefault(name, []).append(payload)
+
+        plain_name = {}
+        for name, items in plain_name_candidates.items():
+            if len({item["identity"] for item in items}) == 1:
+                plain_name[name] = items[-1]
+        return exact, plain_name
+
+    def _index_pressure_pipe_manager_results_for_export(self, target_identities=None) -> tuple:
+        exact = {}
+        plain_name_candidates = {}
+        manager = getattr(self, "_pressure_pipe_manager", None)
+        to_dict = getattr(manager, "to_dict", None)
+        if not callable(to_dict):
+            return exact, {}
+
+        try:
+            raw = to_dict() or {}
+        except Exception:
+            return exact, {}
+        pipes = raw.get("pipes", {}) if isinstance(raw, dict) else {}
+        identity_set = set(target_identities or [])
+
+        for key, pipe_data in pipes.items():
+            row = pipe_data if isinstance(pipe_data, dict) else {}
+            total_head_loss = row.get("total_head_loss")
+            if not self._is_valid_pressure_pipe_total_head_loss(total_head_loss):
+                continue
+
+            key_text = str(key or "").strip()
+            name = str(row.get("name", "") or "").strip()
+            flow_section = str(row.get("flow_section", "") or "").strip()
+
+            candidate_identities = []
+            if key_text and "::" in key_text:
+                candidate_identities.append(key_text)
+                if not name:
+                    name = key_text.split("::", 1)[1].strip()
+            if flow_section or name:
+                candidate_identities.append(make_pressure_pipe_identity(flow_section, name or key_text))
+
+            resolved_identity = ""
+            for candidate in candidate_identities:
+                if candidate and candidate in identity_set:
+                    resolved_identity = candidate
+                    break
+            if not resolved_identity and candidate_identities and candidate_identities[0].count("::") > 0:
+                resolved_identity = candidate_identities[0]
+
+            if not name:
+                if key_text and "::" in key_text:
+                    name = key_text.split("::", 1)[1].strip() or "未命名"
+                else:
+                    name = key_text or "未命名"
+
+            payload = {
+                "identity": resolved_identity or "",
+                "flow_section": flow_section,
+                "name": name,
+                "total_head_loss": float(total_head_loss),
+                "source": "manager",
+            }
+            if resolved_identity:
+                exact[resolved_identity] = payload
+            plain_name_candidates.setdefault(name, []).append(payload)
+
+        plain_name = {}
+        for name, items in plain_name_candidates.items():
+            identities = {item.get("identity", "") for item in items}
+            identities.discard("")
+            if len(identities) <= 1:
+                plain_name[name] = items[-1]
+        return exact, plain_name
+
+    def get_pressure_pipe_export_results(self, rows=None) -> dict:
+        """
+        返回断面汇总导出可直接复用的有压管道结果映射。
+
+        优先级固定为：
+        1. 当前表3出口行已写回的损失值
+        2. 当前批次 _pressure_pipe_calc_records
+        3. 共享 PressurePipeManager 持久化结果
+        """
+        targets = self._collect_pressure_pipe_export_targets(rows)
+        if not targets:
+            return {}
+
+        target_name_counts = {}
+        target_identities = []
+        for target in targets:
+            target_identities.append(target["identity"])
+            target_name_counts[target["name"]] = target_name_counts.get(target["name"], 0) + 1
+
+        table_exact, table_by_name = self._index_pressure_pipe_table_results_for_export(target_identities)
+        calc_exact, calc_by_name = self._index_pressure_pipe_calc_records_for_export()
+        manager_exact, manager_by_name = self._index_pressure_pipe_manager_results_for_export(target_identities)
+
+        resolved = {}
+        for target in targets:
+            identity = target["identity"]
+            name = target["name"]
+            result = table_exact.get(identity)
+            if result is None and target_name_counts.get(name, 0) == 1:
+                result = table_by_name.get(name)
+            if result is None:
+                result = calc_exact.get(identity)
+            if result is None and target_name_counts.get(name, 0) == 1:
+                result = calc_by_name.get(name)
+            if result is None:
+                result = manager_exact.get(identity)
+            if result is None and target_name_counts.get(name, 0) == 1:
+                result = manager_by_name.get(name)
+            if result is not None:
+                resolved[identity] = dict(result)
+        return resolved
 
     @staticmethod
     def _parse_item_float(item) -> float:
@@ -5924,18 +6311,18 @@ class WaterProfilePanel(QWidget):
 
     def _open_pressure_pipe_calculator(self):
         """打开有压管道水力计算窗口"""
-        print("[DEBUG] _open_pressure_pipe_calculator 被调用")
+        debug_print("[DEBUG] _open_pressure_pipe_calculator 被调用")
         if not self._ensure_downstream_ready("有压管道水力计算"):
             return
         if not CALCULATOR_AVAILABLE:
-            print("[DEBUG] CALCULATOR_AVAILABLE = False，返回")
+            debug_print("[DEBUG] CALCULATOR_AVAILABLE = False，返回")
             InfoBar.error("不可用", "核心计算引擎未加载",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
 
         nodes = self._build_nodes_from_table()
         if not nodes:
-            print("[DEBUG] nodes 为空，返回")
+            debug_print("[DEBUG] nodes 为空，返回")
             InfoBar.info("提示", "表格中没有数据，请先导入断面参数",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
@@ -5943,7 +6330,7 @@ class WaterProfilePanel(QWidget):
         # 检查是否已插入渐变段
         has_transitions = any(getattr(n, 'is_transition', False) for n in nodes)
         if not has_transitions:
-            print("[DEBUG] has_transitions = False，返回")
+            debug_print("[DEBUG] has_transitions = False，返回")
             InfoBar.warning("提示",
                            "请先点击工具栏的【插入渐变段】按钮，完成渐变段插入后再进行有压管道水力计算。\n"
                            "插入渐变段后，系统才能准确获取有压管道上下游流速、断面参数等信息。",
@@ -5955,15 +6342,15 @@ class WaterProfilePanel(QWidget):
             n.structure_type and "有压管道" in n.structure_type.value
             for n in nodes if n.structure_type
         )
-        print(f"[DEBUG] has_ppipe = {has_ppipe}")
+        debug_print(f"[DEBUG] has_ppipe = {has_ppipe}")
         if not has_ppipe:
-            print("[DEBUG] has_ppipe = False，返回")
+            debug_print("[DEBUG] has_ppipe = False，返回")
             InfoBar.info("提示", "表格中没有有压管道数据，请确保有结构形式为\"有压管道\"的行",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
 
         # 先提取pipe_groups和manager
-        print("[DEBUG] 开始提取有压管道分组")
+        debug_print("[DEBUG] 开始提取有压管道分组")
         try:
             _water_profile_dir = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -6001,7 +6388,7 @@ class WaterProfilePanel(QWidget):
             manager=manager
         )
         if config_dlg.exec() != QDialog.Accepted:
-            print("[DEBUG] 用户取消了配置对话框")
+            debug_print("[DEBUG] 用户取消了配置对话框")
             return
 
         # 获取用户配置
@@ -6017,9 +6404,9 @@ class WaterProfilePanel(QWidget):
         nodes = self._build_nodes_from_table()
         self._show_pressure_turn_radius_fallback_notice_if_needed()
         longitudinal_nodes_dict = config_dlg.get_longitudinal_nodes_dict()
-        print(f"[DEBUG] 纵断面数据: {list(longitudinal_nodes_dict.keys())}")
+        debug_print(f"[DEBUG] 纵断面数据: {list(longitudinal_nodes_dict.keys())}")
 
-        print("[DEBUG] 开始导入模块和提取有压管道分组")
+        debug_print("[DEBUG] 开始导入模块和提取有压管道分组")
         try:
             # 导入有压管道相关模块
             _water_profile_dir = os.path.join(
@@ -6520,16 +6907,10 @@ class WaterProfilePanel(QWidget):
         
         # 收集额外缓存数据（key 转为字符串，JSON 要求）
         _pp_cache = getattr(self, "_custom_pressurized_pipe_params", {}) or {}
-        _pp_siphon = [
-            [str(row[0]), str(row[1]), row[2]]
-            for row in _pp_cache.get("siphon", [])
-            if isinstance(row, (tuple, list)) and len(row) >= 3
-        ]
-        _pp_pressure = [
-            [str(row[0]), str(row[1]), row[2]]
-            for row in _pp_cache.get("pressure_pipe", [])
-            if isinstance(row, (tuple, list)) and len(row) >= 3
-        ]
+        from app_渠系计算前端.water_profile.cad_tools import _serialize_pressurized_cache_rows
+
+        _pp_siphon = _serialize_pressurized_cache_rows(_pp_cache.get("siphon", []), "siphon")
+        _pp_pressure = _serialize_pressurized_cache_rows(_pp_cache.get("pressure_pipe", []), "pressure_pipe")
         extra_caches = {
             "node_structure_heights": {str(k): v for k, v in self._node_structure_heights.items()},
             "node_chamfer_params": {str(k): v for k, v in self._node_chamfer_params.items()},
@@ -6739,17 +7120,24 @@ class WaterProfilePanel(QWidget):
             # 恢复 CAD 导出复用参数缓存
             pp_cache = extra.get("custom_pressurized_pipe_params", {})
             if isinstance(pp_cache, dict):
-                def _restore_pressurized_rows(rows):
-                    restored = []
-                    for row in rows or []:
-                        if not isinstance(row, (tuple, list)) or len(row) < 3:
-                            continue
-                        restored.append((str(row[0]), str(row[1]), row[2]))
-                    return restored
+                from app_渠系计算前端.water_profile.cad_tools import (
+                    _extract_pressurized_param_entities,
+                    _merge_pressurized_param_defaults,
+                    _serialize_pressurized_cache_rows,
+                )
 
+                source_nodes = self.calculated_nodes or self.nodes
+                siphon_entities, _ = _extract_pressurized_param_entities(source_nodes, "siphon")
+                pressure_entities, _ = _extract_pressurized_param_entities(source_nodes, "pressure_pipe")
                 self._custom_pressurized_pipe_params = {
-                    "siphon": _restore_pressurized_rows(pp_cache.get("siphon", [])),
-                    "pressure_pipe": _restore_pressurized_rows(pp_cache.get("pressure_pipe", [])),
+                    "siphon": _serialize_pressurized_cache_rows(
+                        _merge_pressurized_param_defaults(siphon_entities, pp_cache.get("siphon", [])),
+                        "siphon",
+                    ),
+                    "pressure_pipe": _serialize_pressurized_cache_rows(
+                        _merge_pressurized_param_defaults(pressure_entities, pp_cache.get("pressure_pipe", [])),
+                        "pressure_pipe",
+                    ),
                 }
             else:
                 self._custom_pressurized_pipe_params = {"siphon": [], "pressure_pipe": []}
@@ -6898,3 +7286,4 @@ class WaterProfilePanel(QWidget):
                     if item.text() != text:
                         item.setText(text)
             self._apply_table1_source_row_lock_flags()
+            self._refresh_source_coord_payloads_from_table()

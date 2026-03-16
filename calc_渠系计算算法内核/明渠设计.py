@@ -1186,6 +1186,64 @@ def quick_calculate_u_section(Q: float, R: float, alpha_deg: float, theta_deg: f
     return result
 
 
+def search_minimum_u_section_radius(
+    Q: float,
+    alpha_deg: float,
+    theta_deg: float,
+    n: float,
+    slope_inv: float,
+    v_min: float = 0.5,
+    v_max: float = 3.0,
+    manual_increase_percent: Optional[float] = None,
+    start_R: float = 0.1,
+    max_R: float = 10.0,
+    step: float = 0.05,
+) -> Dict[str, Any]:
+    """
+    搜索满足流速约束的最小 U 形明渠半径。
+
+    该包装器用于跨流量段 donor 借型时的自动重设计。
+    """
+    if Q <= ZERO_TOLERANCE:
+        return {"success": False, "error_message": "Q (流量) 必须大于0"}
+    if n <= ZERO_TOLERANCE:
+        return {"success": False, "error_message": "n (糙率) 必须大于0"}
+    if slope_inv <= ZERO_TOLERANCE:
+        return {"success": False, "error_message": "坡度倒数必须大于0"}
+    if theta_deg <= 0 or theta_deg > 360:
+        return {"success": False, "error_message": "θ (圆心角) 必须在 (0°, 360°] 范围内"}
+    if v_min >= v_max:
+        return {"success": False, "error_message": "不淤流速必须小于不冲流速"}
+
+    R_current = max(step, start_R)
+    while R_current <= max_R + ZERO_TOLERANCE:
+        result = quick_calculate_u_section(
+            Q=Q,
+            R=round(R_current, 3),
+            alpha_deg=alpha_deg,
+            theta_deg=theta_deg,
+            n=n,
+            slope_inv=slope_inv,
+            v_min=v_min,
+            v_max=v_max,
+            manual_increase_percent=manual_increase_percent,
+        )
+        if result.get("success"):
+            v_design = result.get("V_design", 0.0)
+            v_increased = result.get("V_increased", 0.0)
+            design_ok = v_min <= v_design <= v_max
+            increased_ok = v_increased <= 0 or v_min <= v_increased <= v_max
+            if design_ok and increased_ok:
+                result["design_method"] = f"搜索最小R; 起始R={start_R:.3f}m"
+                return result
+        R_current += step
+
+    return {
+        "success": False,
+        "error_message": "未找到满足约束条件的U形断面半径",
+    }
+
+
 # ============================================================
 # 7. 圆形明渠水力计算
 # ============================================================

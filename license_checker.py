@@ -231,6 +231,27 @@ def _save_blacklist_cache(ids):
 # ============================================================
 # HMAC 校验
 # ============================================================
+def _get_brand_logo_paths():
+    """Return candidate logo paths from the existing app resources."""
+    base_dir = _get_app_dir()
+    logo_dir = os.path.join(base_dir, "app_渠系计算前端", "resources")
+    return {
+        "ico": os.path.join(logo_dir, "logo.ico"),
+        "png": os.path.join(logo_dir, "logo.png"),
+        "svg": os.path.join(logo_dir, "logo.svg"),
+    }
+
+
+def _get_existing_brand_logo(*preferred_keys):
+    """Pick the first existing logo path by preferred format order."""
+    logo_paths = _get_brand_logo_paths()
+    for key in preferred_keys:
+        path = logo_paths.get(key)
+        if path and os.path.exists(path):
+            return path
+    return ""
+
+
 def _verify_hmac(data: dict, sig: str) -> bool:
     payload = json.dumps(data, sort_keys=True, ensure_ascii=False)
     expected = hmac.new(
@@ -248,11 +269,15 @@ def _show_error(msg: str):
     """显示普通错误弹窗（优先 Qt，回退 tkinter，再回退控制台）"""
     try:
         from PySide6.QtWidgets import QApplication, QMessageBox
+        from PySide6.QtGui import QIcon
         app = QApplication.instance() or QApplication(sys.argv)
         box = QMessageBox()
         box.setWindowTitle("授权验证失败")
         box.setText(msg)
         box.setIcon(QMessageBox.Icon.Critical)
+        icon_path = _get_existing_brand_logo("ico", "svg", "png")
+        if icon_path:
+            box.setWindowIcon(QIcon(icon_path))
         box.exec()
     except Exception:
         try:
@@ -260,6 +285,9 @@ def _show_error(msg: str):
             from tkinter import messagebox
             root = tk.Tk()
             root.withdraw()
+            icon_path = _get_existing_brand_logo("ico")
+            if icon_path:
+                root.iconbitmap(icon_path)
             messagebox.showerror("授权验证失败", msg)
             root.destroy()
         except Exception:
@@ -281,25 +309,39 @@ def _show_activation_dialog(machine_id: str, lic_path: str) -> bool:
             QLabel, QLineEdit, QTextEdit, QPushButton,
         )
         from PySide6.QtCore import Qt
-        from PySide6.QtGui import QFont
+        from PySide6.QtGui import QFont, QIcon
 
         app = QApplication.instance() or QApplication(sys.argv)
         activated = [False]
+        icon_path = _get_existing_brand_logo("ico", "svg", "png")
+        header_logo_path = _get_existing_brand_logo("png", "svg", "ico")
 
         dlg = QDialog()
         dlg.setWindowTitle("软件激活")
         dlg.setMinimumWidth(560)
         dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        if icon_path:
+            dlg.setWindowIcon(QIcon(icon_path))
 
         root_layout = QVBoxLayout(dlg)
         root_layout.setSpacing(10)
         root_layout.setContentsMargins(24, 20, 24, 16)
 
         # ── 标题 ──
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+        if header_logo_path:
+            lbl_logo = QLabel()
+            lbl_logo.setFixedSize(44, 44)
+            lbl_logo.setPixmap(QIcon(header_logo_path).pixmap(40, 40))
+            lbl_logo.setAlignment(Qt.AlignCenter)
+            title_row.addWidget(lbl_logo, 0, Qt.AlignTop)
+
         lbl_title = QLabel("本软件需要授权才能使用")
         f = lbl_title.font(); f.setPointSize(13); f.setBold(True)
         lbl_title.setFont(f)
-        root_layout.addWidget(lbl_title)
+        title_row.addWidget(lbl_title, 1)
+        root_layout.addLayout(title_row)
 
         # ── 步骤1 ──
         lbl_s1 = QLabel("第 1 步：复制本机机器码，通过微信/QQ 发给管理员")
@@ -407,9 +449,25 @@ def _show_activation_dialog(machine_id: str, lic_path: str) -> bool:
         root.title("软件激活")
         root.resizable(False, False)
         root.geometry("560x380")
+        icon_path = _get_existing_brand_logo("ico")
+        if icon_path:
+            root.iconbitmap(icon_path)
+        logo_photo = None
+        logo_png = _get_existing_brand_logo("png")
+        if logo_png:
+            try:
+                logo_photo = tk.PhotoImage(file=logo_png)
+                logo_photo = logo_photo.subsample(12, 12)
+                root._logo_photo = logo_photo
+            except Exception:
+                logo_photo = None
 
-        tk.Label(root, text="本软件需要授权才能使用",
-                 font=("Microsoft YaHei", 13, "bold")).pack(pady=(14, 4))
+        title_frm = tk.Frame(root)
+        title_frm.pack(fill="x", padx=16, pady=(14, 4))
+        if logo_photo is not None:
+            tk.Label(title_frm, image=logo_photo).pack(side="left", padx=(0, 10))
+        tk.Label(title_frm, text="本软件需要授权才能使用",
+                 font=("Microsoft YaHei", 13, "bold")).pack(side="left")
 
         tk.Label(root, text="第 1 步：复制本机机器码，发给管理员",
                  font=("Microsoft YaHei", 10), anchor="w").pack(fill="x", padx=16)
