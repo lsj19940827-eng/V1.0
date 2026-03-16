@@ -88,6 +88,23 @@ class StructureType(Enum):
     def is_special_structure(cls, structure_type: 'StructureType') -> bool:
         """判断是否为特殊建筑物（需要进出口标识）"""
         return structure_type in cls.get_special_structures()
+
+    @classmethod
+    def get_optional_name_structures(cls) -> list:
+        """获取允许建筑物名称留空的结构类型（首版仅放开三类明渠）。"""
+        return [
+            cls.MINGQU_TRAPEZOIDAL,
+            cls.MINGQU_RECTANGULAR,
+            cls.MINGQU_CIRCULAR,
+        ]
+
+    @classmethod
+    def allows_empty_name(cls, structure_type) -> bool:
+        """判断结构类型是否允许建筑物名称留空。"""
+        if structure_type is None:
+            return False
+        value = structure_type.value if hasattr(structure_type, "value") else str(structure_type)
+        return value in {item.value for item in cls.get_optional_name_structures()}
     
     @classmethod
     def is_diversion_gate(cls, structure_type: 'StructureType') -> bool:

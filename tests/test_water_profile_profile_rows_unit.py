@@ -144,3 +144,11 @@ def test_special_angle_warning_contains_near_and_over_threshold():
     assert "超过阈值" in message
     assert "IP21 甲倒虹吸进" in message
     assert "IP22 乙有压管道出" in message
+
+
+def test_get_building_display_name_falls_back_to_structure_for_unnamed_open_channel():
+    node = _make_node(ip_no=5, mc=88, structure="明渠-圆形", name="")
+
+    display = cad_tools._get_building_display_name(node)
+
+    assert display == "明渠-圆形"

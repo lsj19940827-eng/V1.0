@@ -1133,6 +1133,39 @@ def _struct_val(struct_type):
     return struct_type.value if hasattr(struct_type, 'value') else str(struct_type)
 
 
+def _allows_optional_blank_name(struct_type):
+    """判断结构是否允许建筑物名称留空。"""
+    if not MODELS_AVAILABLE:
+        return False
+    return StructureType.allows_empty_name(struct_type)
+
+
+def _collect_optional_blank_name_rows(nodes):
+    rows = []
+    for idx, node in enumerate(nodes or [], start=1):
+        if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+            continue
+        if not _allows_optional_blank_name(getattr(node, "structure_type", None)):
+            continue
+        if str(getattr(node, "name", "") or "").strip():
+            continue
+        rows.append((idx, _struct_val(getattr(node, "structure_type", None)) or "明渠"))
+    return rows
+
+
+def _build_optional_blank_name_notice(nodes, *, action_name):
+    rows = _collect_optional_blank_name_rows(nodes)
+    if not rows:
+        return ""
+    preview = "；".join(f"第{idx}行（{struct_name}）" for idx, struct_name in rows[:8])
+    if len(rows) > 8:
+        preview += f" 等{len(rows)}行"
+    return (
+        f"检测到部分明渠名称为空，已按结构形式/占位符参与{action_name}，不影响本次处理：\n"
+        f"{preview}"
+    )
+
+
 def _in_out_val(in_out):
     """获取 InOutType 的字符串值（兼容双路径导入的 enum 实例）"""
     if in_out is None:
@@ -5383,6 +5416,10 @@ def export_combined_dxf(panel):
         fluent_info(parent_window, "警告", "没有可用的高程数据，请先执行计算。")
         return
 
+    optional_blank_name_notice = _build_optional_blank_name_notice(nodes, action_name="导出")
+    if optional_blank_name_notice:
+        fluent_info(parent_window, "提示", optional_blank_name_notice)
+
     # ---- 1. 纵断面参数设置 ----
     dlg = TextExportSettingsDialog(parent_window, panel._text_export_settings)
     if dlg.exec() != QDialog.Accepted or dlg.result is None:
@@ -5566,35 +5603,48 @@ class _MultiLineElidedLabel(QLabel):
         self.setWordWrap(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.setMaximumHeight(self._line_height() * self._max_lines)
         self.set_full_text(text, tooltip_text=tooltip_text)
 
     def hasHeightForWidth(self):
         return True
 
     def heightForWidth(self, width):
-        line_count = len(self._wrapped_lines(max(1, width)))
-        visible_lines = max(1, min(self._max_lines, line_count))
-        margins = self.contentsMargins()
-        return visible_lines * self._line_height() + margins.top() + margins.bottom()
+        return self._height_for_width(width)
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        hint.setHeight(self._height_for_width(self._available_width()))
+        return hint
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setHeight(self._height_for_width(self._available_width()))
+        return hint
+
+    def setStyleSheet(self, style_sheet):
+        super().setStyleSheet(style_sheet)
+        self._sync_height_constraints()
 
     def set_full_text(self, text, tooltip_text=""):
         self._full_text = str(text or "")
         self._tooltip_text = str(tooltip_text or "")
         self.setToolTip(self._tooltip_text)
         self._refresh_visible_text()
+        self._sync_height_constraints()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._refresh_visible_text()
+        self._sync_height_constraints()
 
     def event(self, event):
         if event.type() in (QEvent.FontChange, QEvent.LayoutRequest, QEvent.StyleChange):
-            self.setMaximumHeight(self._line_height() * self._max_lines)
             self._refresh_visible_text()
+            self._sync_height_constraints()
         return super().event(event)
 
     def _line_height(self):
+        self.ensurePolished()
         return max(1, self.fontMetrics().lineSpacing())
 
     def _available_width(self):
@@ -5665,6 +5715,22 @@ class _MultiLineElidedLabel(QLabel):
         if visible_text != self.text():
             super().setText(visible_text)
             self.updateGeometry()
+
+    def _visible_line_count_for_width(self, width):
+        wrapped = self._wrapped_lines(max(1, width))
+        return max(1, min(self._max_lines, len(wrapped)))
+
+    def _height_for_width(self, width):
+        visible_lines = self._visible_line_count_for_width(width)
+        margins = self.contentsMargins()
+        return visible_lines * self._line_height() + margins.top() + margins.bottom()
+
+    def _sync_height_constraints(self):
+        target_height = self._height_for_width(self._available_width())
+        if self.minimumHeight() != target_height:
+            self.setMinimumHeight(target_height)
+        if self.maximumHeight() != target_height:
+            self.setMaximumHeight(target_height)
 
 
 class SectionSummaryDialog(QDialog):
@@ -5885,6 +5951,63 @@ class SectionSummaryDialog(QDialog):
         summary = ", ".join(names)
         return f"{base_label}（{summary}）", summary
 
+    def _styled_name_value_label(self, text, tooltip_text="", max_lines=None):
+        if max_lines is not None:
+            lbl = _MultiLineElidedLabel(text, tooltip_text=tooltip_text, max_lines=max_lines)
+        else:
+            lbl = QLabel(text)
+            if tooltip_text:
+                lbl.setToolTip(tooltip_text)
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        lbl.setStyleSheet("font-size:12px;")
+        return lbl
+
+    def _styled_q_segment_title_label(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet("font-size:12px;")
+        lbl.setWordWrap(False)
+        lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        return lbl
+
+    def _build_q_segment_label(self, flow_section_idx):
+        segment_title = self._segment_name(flow_section_idx)
+        names = self._q_segment_structure_names.get(flow_section_idx, [])
+        names_text = ", ".join(names)
+        return {
+            "segment_title": segment_title,
+            "names_text": names_text,
+            "tooltip_text": names_text,
+        }
+
+    def _build_q_segment_row_widget(self, flow_section_idx):
+        parts = self._build_q_segment_label(flow_section_idx)
+        container = QWidget()
+        container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        title_label = self._styled_q_segment_title_label(parts["segment_title"])
+        layout.addWidget(title_label)
+
+        names_label = None
+        if parts["names_text"]:
+            names_label = self._styled_name_value_label(
+                parts["names_text"],
+                tooltip_text=parts["tooltip_text"],
+                max_lines=2,
+            )
+            layout.addWidget(names_label)
+            container.setToolTip(parts["tooltip_text"])
+
+        container._segment_title_label = title_label
+        container._segment_names_label = names_label
+        return container
+
     def _make_fixed_line_edit(self, width, text="", placeholder_text=""):
         edit = LineEdit()
         edit.setFixedWidth(width)
@@ -6021,17 +6144,12 @@ class SectionSummaryDialog(QDialog):
         self._q_segment_structure_names = self._build_q_segment_structure_names()
         self._q_edits = []
         for i in range(self._segment_count):
-            label_text, tooltip_text = self._build_q_segment_label(i + 1)
-            lbl = self._styled_name_value_label(
-                label_text,
-                tooltip_text=tooltip_text,
-                max_lines=3,
-            )
+            row_widget = self._build_q_segment_row_widget(i + 1)
             edit = self._make_fixed_line_edit(
                 self._ui_q_value_column_width,
                 text=default_qs[i] if i < len(default_qs) else default_qs[-1],
             )
-            q_grid.addWidget(lbl, i, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+            q_grid.addWidget(row_widget, i, 0)
             q_grid.addWidget(edit, i, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
             self._q_edits.append(edit)
 

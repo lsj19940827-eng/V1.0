@@ -861,7 +861,7 @@ class BatchPanel(QWidget):
             confirm_msg = f"确定要删除行 '{name_text}' 吗?"
         else:
             confirm_msg = f"确定要删除选中的 {count} 行吗?"
-        if not fluent_question(self, "确认删除", confirm_msg):
+        if not fluent_question(self._dialog_parent(), "确认删除", confirm_msg):
             return
         self._push_undo_snapshot()
         self._undo_group += 1
@@ -889,7 +889,7 @@ class BatchPanel(QWidget):
         if self.input_table.rowCount() == 0:
             return
         if not force:
-            if not fluent_question(self, "确认", "确定要清空所有输入数据吗?"):
+            if not fluent_question(self._dialog_parent(), "确认", "确定要清空所有输入数据吗?"):
                 return
         self._push_undo_snapshot()
         self.input_table.setRowCount(0)
@@ -2648,6 +2648,17 @@ class BatchPanel(QWidget):
             return host
         return self
 
+    def _dialog_parent(self):
+        """Prefer the injected host widget for modal dialogs when this panel is embedded invisibly."""
+        host = self._resolve_info_parent_override()
+        if host is not None:
+            return host
+        try:
+            window = self.window()
+        except Exception:
+            window = None
+        return window or self
+
     def _update_lock_state(self, has_errors: bool):
         """根据计算是否存在失败条目，锁定或解锁导出/下游操作按钮。"""
         self._has_calc_errors = has_errors
@@ -2707,7 +2718,7 @@ class BatchPanel(QWidget):
         """从Excel文件导入数据（自动兼容模板格式和导出格式，与原版一致）"""
         # 首次导入且未查看过模板时，提示用户是否先查看模板（与原版一致）
         if not self._has_opened_template and self._last_import_dir is None:
-            ret = fluent_question(self, "导入Excel",
+            ret = fluent_question(self._dialog_parent(), "导入Excel",
                 "检测到您尚未查看过Excel模板。\n\n"
                 "建议先打开模板了解格式要求，再填写数据后导入。\n\n"
                 "点击「查看模板」先打开模板\n"
@@ -2728,7 +2739,7 @@ class BatchPanel(QWidget):
                 initial_dir = template_dir
             else:
                 initial_dir = os.path.expanduser("~/Desktop")
-        filepath, _ = QFileDialog.getOpenFileName(self, "选择Excel文件", initial_dir, "Excel文件 (*.xlsx *.xls);;所有文件 (*.*)")
+        filepath, _ = QFileDialog.getOpenFileName(self._dialog_parent(), "选择Excel文件", initial_dir, "Excel文件 (*.xlsx *.xls);;所有文件 (*.*)")
         if not filepath: return
         # 记录本次导入的目录（与原版一致）
         self._last_import_dir = os.path.dirname(filepath)
@@ -2835,7 +2846,7 @@ class BatchPanel(QWidget):
                 has_xy_cols = "Q" in h7_val.upper() or "流量" in h7_val
 
             if self.input_table.rowCount() > 0 and not self._is_sample_data:
-                if not fluent_question(self, "确认覆盖",
+                if not fluent_question(self._dialog_parent(), "确认覆盖",
                         f"当前表格已有 {self.input_table.rowCount()} 行数据，\n"
                         f"导入将覆盖全部现有数据。\n\n确定继续吗？",
                         yes_text="覆盖导入", no_text="取消"):
@@ -2919,7 +2930,7 @@ class BatchPanel(QWidget):
             InfoBar.warning("缺少依赖", "需要安装 openpyxl: pip install openpyxl", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
         auto_name = f"{channel_name}{channel_level}_多流量段批量计算结果.xlsx" if channel_name else "批量计算结果.xlsx"
-        filepath, _ = QFileDialog.getSaveFileName(self, "保存Excel报告", auto_name, "Excel文件 (*.xlsx)")
+        filepath, _ = QFileDialog.getSaveFileName(self._dialog_parent(), "保存Excel报告", auto_name, "Excel文件 (*.xlsx)")
         if not filepath: return
         try:
             # 从输入表获取参数数据，建立映射（以序号为key）
@@ -3004,7 +3015,7 @@ class BatchPanel(QWidget):
         channel_name = self.channel_name_edit.text().strip()
         channel_level = self.channel_level_combo.currentText()
         auto_name = f"{channel_name}{channel_level}_多流量段批量水力计算书.docx" if channel_name else "多流量段批量水力计算书.docx"
-        filepath, _ = QFileDialog.getSaveFileName(self, "保存Word报告", auto_name, "Word文档 (*.docx);;所有文件 (*.*)")
+        filepath, _ = QFileDialog.getSaveFileName(self._dialog_parent(), "保存Word报告", auto_name, "Word文档 (*.docx);;所有文件 (*.*)")
         if not filepath: return
         try:
             self._build_word_report(filepath)

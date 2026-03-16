@@ -4075,6 +4075,33 @@ class WaterProfilePanel(QWidget):
         self._pressure_turn_radius_fallback_groups = set(pressure_global_fallback_groups)
         return nodes
 
+    def _collect_optional_blank_name_rows(self, nodes):
+        rows = []
+        for idx, node in enumerate(nodes, start=1):
+            if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+                continue
+            if not StructureType.allows_empty_name(getattr(node, "structure_type", None)):
+                continue
+            if str(getattr(node, "name", "") or "").strip():
+                continue
+            rows.append((idx, node.get_structure_type_str() or "明渠"))
+        return rows
+
+    def _show_optional_blank_name_notice(self, nodes, *, action_name):
+        rows = self._collect_optional_blank_name_rows(nodes)
+        if not rows:
+            return
+        preview = "；".join(f"第{idx}行（{struct_name}）" for idx, struct_name in rows[:8])
+        if len(rows) > 8:
+            preview += f" 等{len(rows)}行"
+        InfoBar.info(
+            "提示",
+            f"检测到部分明渠名称为空，已按结构形式/占位符参与{action_name}，不影响本次处理：\n{preview}",
+            parent=self._info_parent(),
+            duration=5000,
+            position=InfoBarPosition.TOP,
+        )
+
     def _calculate(self):
         if not self._ensure_downstream_ready("执行计算"):
             return
@@ -4156,6 +4183,8 @@ class WaterProfilePanel(QWidget):
                 InfoBar.error("输入错误", "\n".join(errors),
                              parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
                 return
+
+            self._show_optional_blank_name_notice(nodes, action_name="计算")
 
             calculated = calculator.calculate_all(nodes)
             self.calculated_nodes = calculated

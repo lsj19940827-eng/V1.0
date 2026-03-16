@@ -69,7 +69,7 @@ class _FakeDoc:
         self.saved_path = path
 
 
-def _build_panel():
+def _build_panel(*, name="N1"):
     node = SimpleNamespace(
         bottom_elevation=408.5,
         top_elevation=409.2,
@@ -77,7 +77,7 @@ def _build_panel():
         structure_type=SimpleNamespace(value="明渠-矩形"),
         is_transition=False,
         is_auto_inserted_channel=False,
-        name="N1",
+        name=name,
     )
     panel = SimpleNamespace(
         calculated_nodes=[node],
@@ -170,3 +170,31 @@ def test_combined_dxf_saves_when_all_sections_succeed(monkeypatch):
     assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
     assert questions, "成功导出后应弹出打开文件确认"
     assert "断面汇总表: 2" in questions[-1][2]
+
+
+def test_combined_dxf_warns_but_saves_when_open_channel_name_missing(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    panel = _build_panel(name="")
+    errors = []
+    infos = []
+    questions = []
+
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **kwargs: infos.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: questions.append(args) or False)
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
+    monkeypatch.setattr(
+        cad_tools,
+        "_compute_ip_preview_data",
+        lambda *_a, **_k: ([["IP1"]], []),
+    )
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert not errors
+    assert infos, "明渠名称为空时应给出非阻断提示"
+    assert "部分明渠名称为空" in infos[-1][2]
+    assert "第1行（明渠-矩形）" in infos[-1][2]
+    assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
+    assert questions, "成功导出后仍应弹出打开文件确认"

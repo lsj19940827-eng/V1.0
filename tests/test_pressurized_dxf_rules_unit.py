@@ -10,7 +10,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QSizePolicy
 
 
 def _load_cad_tools():
@@ -519,11 +519,12 @@ def test_build_q_segment_label_uses_type_suffix_for_same_name_cross_types():
         _segment_name=lambda idx: f"SEG-{idx}",
     )
 
-    label, tooltip = cad_tools.SectionSummaryDialog._build_q_segment_label(dlg, 1)
+    parts = cad_tools.SectionSummaryDialog._build_q_segment_label(dlg, 1)
 
-    assert label == "SEG-1（Longwanggou (siphon), Longwanggou (pressure pipe), Backup pipe）"
-    assert tooltip == "Longwanggou (siphon), Longwanggou (pressure pipe), Backup pipe"
-    assert "等" not in label
+    assert parts["segment_title"] == "SEG-1"
+    assert parts["names_text"] == "Longwanggou (siphon), Longwanggou (pressure pipe), Backup pipe"
+    assert parts["tooltip_text"] == "Longwanggou (siphon), Longwanggou (pressure pipe), Backup pipe"
+    assert "等" not in parts["names_text"]
 
 
 def test_block_invalid_pressurized_export_returns_true_and_emits_error(monkeypatch):
@@ -570,10 +571,43 @@ def test_section_summary_dialog_q_grid_uses_compact_two_column_form_layout():
     assert dlg._q_form_grid.columnStretch(0) == 1
     assert dlg._q_form_grid.columnStretch(1) == 0
     assert dlg._q_edits[0].minimumWidth() == dlg._ui_q_value_column_width
-    assert dlg._q_form_grid.itemAtPosition(0, 0).widget().wordWrap() is True
-    assert isinstance(dlg._q_form_grid.itemAtPosition(0, 0).widget(), cad_tools._MultiLineElidedLabel)
+    row_widget = dlg._q_form_grid.itemAtPosition(0, 0).widget()
+    assert row_widget.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+    assert isinstance(row_widget._segment_title_label, QLabel)
+    assert row_widget._segment_names_label is None
 
     dlg.deleteLater()
+
+
+def test_build_q_segment_row_widget_uses_separate_title_and_two_line_name_label():
+    _get_qapp()
+    dlg = _dialog_shell(
+        _q_segment_structure_names={
+            2: ["Cuicun", "Zuzi", "Lijiatang", "Zhuojiawan", "Miaowan", "Yaojiawan"]
+        },
+        _segment_name=lambda idx: f"SEG-{idx}",
+        _styled_q_segment_title_label=lambda text: cad_tools.SectionSummaryDialog._styled_q_segment_title_label(
+            _dialog_shell(), text
+        ),
+    )
+    dlg._styled_name_value_label = lambda text, tooltip_text="", max_lines=None: cad_tools.SectionSummaryDialog._styled_name_value_label(
+        _dialog_shell(), text, tooltip_text=tooltip_text, max_lines=max_lines
+    )
+
+    row_widget = cad_tools.SectionSummaryDialog._build_q_segment_row_widget(dlg, 2)
+
+    assert isinstance(row_widget._segment_title_label, QLabel)
+    assert row_widget._segment_title_label.text() == "SEG-2"
+    assert isinstance(row_widget._segment_names_label, cad_tools._MultiLineElidedLabel)
+    assert row_widget._segment_names_label.toolTip() == "Cuicun, Zuzi, Lijiatang, Zhuojiawan, Miaowan, Yaojiawan"
+    assert row_widget.layout().count() == 2
+
+    row_widget.resize(320, 120)
+    row_widget.show()
+    _get_qapp().processEvents()
+    assert row_widget._segment_names_label.text().count("\n") <= 1
+
+    row_widget.deleteLater()
 
 
 def test_multi_line_elided_label_uses_three_lines_and_tooltip_for_long_text():
@@ -596,6 +630,31 @@ def test_multi_line_elided_label_uses_three_lines_and_tooltip_for_long_text():
     app.processEvents()
     assert "GuangGaolu" in label.text()
     assert "Niumadao" in label.text()
+
+    label.deleteLater()
+
+
+def test_multi_line_elided_label_recomputes_height_after_stylesheet_font_change():
+    app = _get_qapp()
+    label = cad_tools._MultiLineElidedLabel(
+        "SEG-2 (Cuicun, Zuzi, Lijiatang, Zhuojiawan, Miaowan, Yaojiawan)",
+        tooltip_text="Cuicun, Zuzi, Lijiatang, Zhuojiawan, Miaowan, Yaojiawan",
+        max_lines=3,
+    )
+    label.resize(120, 200)
+    label.show()
+    app.processEvents()
+
+    before_height = label.maximumHeight()
+    label.setStyleSheet("font-size: 18px;")
+    app.processEvents()
+
+    expected_height = label.heightForWidth(label.width())
+    assert label.maximumHeight() == expected_height
+    assert label.minimumHeight() == expected_height
+    assert expected_height >= before_height
+    assert label.sizeHint().height() == expected_height
+    assert label.minimumSizeHint().height() == expected_height
 
     label.deleteLater()
 

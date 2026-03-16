@@ -2038,15 +2038,26 @@ class WaterProfileCalculator:
         if len(nodes) < 2:
             errors.append("至少需要2个节点才能进行计算")
         
+        missing_required_name_rows = []
+
         # 验证每个节点
         for i, node in enumerate(nodes):
             # 跳过渐变段和自动插入的连接段（这些行由系统自动生成，无需用户填写结构形式）
             if getattr(node, 'is_transition', False) or getattr(node, 'is_auto_inserted_channel', False):
                 continue
-            if not node.name:
-                errors.append(f"第{i+1}行: 建筑物名称不能为空")
             if node.structure_type is None:
                 errors.append(f"第{i+1}行: 请选择结构形式")
+                continue
+            if not str(getattr(node, "name", "") or "").strip() and not StructureType.allows_empty_name(node.structure_type):
+                missing_required_name_rows.append((i + 1, node.get_structure_type_str() or "当前结构"))
+
+        if missing_required_name_rows:
+            errors.append(
+                "建筑物名称仅以下结构必填：倒虹吸、有压管道、隧洞、渡槽、矩形暗涵等；"
+                "明渠-矩形/梯形/圆形可留空。"
+            )
+            for row_index, struct_name in missing_required_name_rows:
+                errors.append(f"第{row_index}行: {struct_name} 需要填写建筑物名称")
         
         return len(errors) == 0, errors
     
