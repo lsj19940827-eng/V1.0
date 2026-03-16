@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QColor, QBrush, QIntValidator, QShortcut, QKeySequence
-from PySide6.QtWebEngineWidgets import QWebEngineView
+from app_渠系计算前端.webview_compat import create_web_view
 
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox,
@@ -1152,7 +1152,7 @@ class SiphonPanel(QWidget):
         self.result_notebook.addTab(t2, "详细计算过程")
 
         # Sub-Tab3: 计算公式（QWebEngineView + KaTeX 渲染）
-        self.formula_view = QWebEngineView()
+        self.formula_view = create_web_view()
         self.formula_view.setHtml(self._build_formula_html())
         self.result_notebook.addTab(self.formula_view, "计算公式")
 

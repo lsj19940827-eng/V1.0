@@ -24,6 +24,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QShortcut, QKeySequence, QAction
 
+from app_渠系计算前端 import ensure_qfluentwidgets_compat
+
+ensure_qfluentwidgets_compat()
+
 from qfluentwidgets import (
     PushButton, InfoBar, InfoBarPosition, setTheme, Theme
 )
@@ -41,6 +45,12 @@ from app_渠系计算前端.siphon.panel import SiphonPanel
 from app_渠系计算前端.water_profile.panel import WaterProfilePanel
 from app_渠系计算前端.pressure_pipe.panel import PressurePipePanel
 from app_渠系计算前端.project_manager import ProjectManager
+from app_渠系计算前端.webview_compat import (
+    web_engine_available,
+    get_web_engine_import_error,
+)
+from app_渠系计算前端.debug_utils import debug_print
+
 _EARTHWORK_AVAILABLE = False
 
 
@@ -159,6 +169,8 @@ class MainWindow(QMainWindow):
         # 默认选中第一个
         self._switch_to(0)
         self.statusBar().showMessage(f"就绪 | 渠系建筑物水力计算系统 V{APP_VERSION}")
+
+        self._notify_optional_runtime_degradations()
 
         # ---- 启动时静默检查更新 ----
         self._start_silent_update_check()
@@ -498,6 +510,34 @@ class MainWindow(QMainWindow):
         dlg = ProjectSettingsDialog(self)
         dlg.exec()
 
+    def _notify_optional_runtime_degradations(self):
+        """提示当前环境下被动降级的可选能力。"""
+        if web_engine_available():
+            return
+
+        err = get_web_engine_import_error()
+        detail = str(err) if err else "QtWebEngine unavailable"
+        self.statusBar().showMessage(
+            "检测到 Qt WebEngine 不可用，公式与说明页已切换为兼容显示模式。",
+            12000,
+        )
+        try:
+            InfoBar.warning(
+                title="已启用兼容显示模式",
+                content="当前环境无法加载 Qt WebEngine，主程序可继续使用，但部分公式页会以简化 HTML 显示。",
+                orient=Qt.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=12000,
+                parent=self,
+            )
+        except Exception:
+            pass
+        try:
+            print(f"[Runtime] Qt WebEngine unavailable: {detail}")
+        except Exception:
+            pass
+
     # ---- 更新相关 ----
     def _open_update_dialog(self):
         """打开更新对话框（手动检查）"""
@@ -559,18 +599,18 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """关闭窗口前检查项目保存，保存倒虹吸面板状态"""
-        print("[DEBUG] MainWindow closeEvent called")
+        debug_print("[DEBUG] MainWindow closeEvent called")
         # 检查项目是否需要保存
         if hasattr(self, 'project_manager'):
-            print(f"[DEBUG] project_manager exists, calling check_save_on_close")
+            debug_print("[DEBUG] project_manager exists, calling check_save_on_close")
             if not self.project_manager.check_save_on_close():
-                print("[DEBUG] User cancelled close, ignoring event")
+                debug_print("[DEBUG] User cancelled close, ignoring event")
                 event.ignore()
                 return
         else:
-            print("[DEBUG] No project_manager found")
+            debug_print("[DEBUG] No project_manager found")
 
-        print("[DEBUG] Proceeding with close")
+        debug_print("[DEBUG] Proceeding with close")
         self.hide()
         try:
             self.siphon_panel._save_autosave()

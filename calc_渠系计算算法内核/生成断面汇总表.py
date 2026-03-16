@@ -27,6 +27,9 @@ from typing import List, Dict, Any, Optional, Tuple
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
+_REPO_ROOT = os.path.dirname(_THIS_DIR)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from 明渠设计 import (
     quick_calculate_rectangular,
@@ -42,6 +45,15 @@ from 隧洞设计 import (
 )
 from 渡槽设计 import quick_calculate_u as _calc_aqueduct_u
 from 矩形暗涵设计 import quick_calculate_rectangular_culvert as _calc_rect_culvert
+from 有压管道设计 import (
+    PIPE_MATERIALS as PRESSURE_PIPE_MATERIALS,
+    get_flow_increase_percent as _pressure_pipe_inc_pct,
+)
+
+try:
+    from 推求水面线.core.pressure_pipe_calc import calc_total_head_loss as _calc_pressure_pipe_total_head_loss
+except ImportError:
+    _calc_pressure_pipe_total_head_loss = None
 
 # ============================================================
 # 常量
@@ -79,6 +91,106 @@ SIPHON_MATERIALS = {
     "钢筋混凝土管": 0.014,
     "玻璃钢夹砂管": 0.009,
 }
+
+PRESSURE_PIPE_MATERIAL_ALIASES = {
+    "PCCP管": "预应力钢筒混凝土管",
+    "钢筋混凝土管": "预应力钢筒混凝土管",
+}
+
+PRESSURE_PIPE_DISPLAY_NAME_TO_KEY = {
+    str(params.get("name") or key): key
+    for key, params in PRESSURE_PIPE_MATERIALS.items()
+}
+
+
+def _normalize_pressure_pipe_material_key(material_key: str) -> str:
+    text = str(material_key or "").strip()
+    if not text:
+        return "球墨铸铁管"
+    if text in PRESSURE_PIPE_MATERIALS:
+        return text
+    display_key = PRESSURE_PIPE_DISPLAY_NAME_TO_KEY.get(text)
+    if display_key in PRESSURE_PIPE_MATERIALS:
+        return display_key
+    alias = PRESSURE_PIPE_MATERIAL_ALIASES.get(text)
+    if alias in PRESSURE_PIPE_MATERIALS:
+        return alias
+    return "球墨铸铁管"
+
+
+def _get_pressure_pipe_material_params(material_key: str) -> Tuple[str, Dict[str, Any]]:
+    key = _normalize_pressure_pipe_material_key(material_key)
+    return key, dict(PRESSURE_PIPE_MATERIALS.get(key, PRESSURE_PIPE_MATERIALS["球墨铸铁管"]))
+
+
+def normalize_pressure_pipe_material_key(material_key: str) -> str:
+    """导出/界面共用：将历史材质名或展示名归一化为 canonical key。"""
+    return _normalize_pressure_pipe_material_key(material_key)
+
+
+def get_pressure_pipe_material_display_name(material_key: str) -> str:
+    """导出/界面共用：返回材质的人类可读全称。"""
+    key, params = _get_pressure_pipe_material_params(material_key)
+    return str(params.get("name") or key)
+
+
+def _fmt_compact(value: float, digits: int = 3) -> str:
+    return f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
+
+
+def _format_pressure_pipe_fmb(material_key: str) -> str:
+    _, params = _get_pressure_pipe_material_params(material_key)
+    return f"{int(round(params['f']))} / {_fmt_compact(params['m'])} / {_fmt_compact(params['b'])}"
+
+
+def _format_pressure_pipe_total_head_loss(value):
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text == "-":
+            return "-"
+        try:
+            value = float(text)
+        except (TypeError, ValueError):
+            return "-"
+    if isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "-"
+        if math.isfinite(number) and number >= 0:
+            return round(number, 4)
+    return "-"
+
+
+def _compute_pressure_pipe_total_head_loss(seg: Dict[str, Any], q_value: float, d_m: float, material_key: str):
+    total_head_loss = seg.get("total_head_loss", "")
+    if isinstance(total_head_loss, (int, float)) and total_head_loss >= 0:
+        return float(total_head_loss)
+    if _calc_pressure_pipe_total_head_loss is None:
+        return total_head_loss
+
+    ip_points = seg.get("ip_points") or []
+    if len(ip_points) < 2:
+        return total_head_loss
+
+    try:
+        result = _calc_pressure_pipe_total_head_loss(
+            name=str(seg.get("name") or ""),
+            Q=float(q_value),
+            D=float(d_m),
+            material_key=material_key,
+            ip_points=ip_points,
+            upstream_velocity=_to_float(seg.get("upstream_velocity", 0.0), 0.0),
+            downstream_velocity=_to_float(seg.get("downstream_velocity", 0.0), 0.0),
+            inlet_transition_form=str(seg.get("inlet_transition_form") or "反弯扭曲面"),
+            outlet_transition_form=str(seg.get("outlet_transition_form") or "反弯扭曲面"),
+            inlet_transition_zeta=_to_float(seg.get("inlet_transition_zeta", 0.0), 0.0) or None,
+            outlet_transition_zeta=_to_float(seg.get("outlet_transition_zeta", 0.0), 0.0) or None,
+        )
+    except Exception:
+        return total_head_loss
+
+    return float(result.total_head_loss)
 
 # ============================================================
 # 推求水面线结果提取（尽可能复用计算结果）
@@ -1147,32 +1259,47 @@ def compute_siphon(segments: List[Dict],
 
 def compute_pressure_pipe(segments: List[Dict],
                           pipe_material: str = "球墨铸铁管") -> List[Dict]:
-    """有压管道断面汇总表计算（与倒虹吸表格格式一致）"""
+    """有压管道断面汇总表计算（使用有压管道专属 f/m/b 参数体系）"""
     rows = []
     for seg in segments:
         # 支持每段独立材质：优先使用段级 pipe_material，否则用全局参数
         seg_mat = seg.get("pipe_material", pipe_material)
-        n = SIPHON_MATERIALS.get(seg_mat, 0.012)
+        material_key, material_params = _get_pressure_pipe_material_params(seg_mat)
+        fmb_text = _format_pressure_pipe_fmb(seg_mat)
 
         Q = seg["Q"]
         DN_mm = seg.get("DN_mm", 1500)
         D_m = DN_mm / 1000.0
         A = PI / 4 * D_m ** 2
         V = Q / A if A > 1e-9 else 0
+        total_head_loss = _compute_pressure_pipe_total_head_loss(seg, Q, D_m, material_key)
 
         row = {
-            "name":          seg["name"],
-            "Q":             Q,
-            "Q_inc":         round(Q * (1 + _tunnel_inc_pct(Q) / 100), 3),
-            "n":             n,
-            "DN_mm":         DN_mm,
-            "pipe_material": seg_mat,
-            "V":             round(V, 2),
+            "name":               seg["name"],
+            "Q":                  Q,
+            "Q_inc":              round(Q * (1 + _pressure_pipe_inc_pct(Q) / 100), 3),
+            "friction_params":    fmb_text,
+            "pressure_f":         material_params["f"],
+            "pressure_m":         material_params["m"],
+            "pressure_b":         material_params["b"],
+            "DN_mm":              DN_mm,
+            "pipe_material":      get_pressure_pipe_material_display_name(material_key),
+            "pipe_material_key":  material_key,
+            "V":                  round(V, 2),
+            "total_head_loss":    _format_pressure_pipe_total_head_loss(total_head_loss),
         }
         _apply_overrides(row, seg, {
             "Q": "Q",
-            "n": "n", "DN_mm": "DN_mm", "pipe_material": "pipe_material",
+            "friction_params": "friction_params",
+            "DN_mm": "DN_mm",
+            "pipe_material": "pipe_material",
+            "total_head_loss": "total_head_loss",
         })
+        row["pipe_material"] = get_pressure_pipe_material_display_name(row.get("pipe_material"))
+        row["pipe_material_key"] = normalize_pressure_pipe_material_key(
+            row.get("pipe_material_key") or row.get("pipe_material")
+        )
+        row["total_head_loss"] = _format_pressure_pipe_total_head_loss(row.get("total_head_loss"))
         rows.append(row)
     return rows
 
@@ -1736,7 +1863,7 @@ def _write_siphon(ws, data, styles, gcl, col_offset=0):
     R1 = 1
 
     headers = [
-        ("流量段",     None),
+        ("倒虹吸名称及流量段", None),
         ("设计流量",   "m³/s"),
         ("加大流量",   "m³/s"),
         ("糙率",       None),
@@ -1768,21 +1895,22 @@ def _write_siphon(ws, data, styles, gcl, col_offset=0):
 # ============================================================
 
 def _write_pressure_pipe(ws, data, styles, gcl, col_offset=0):
-    """有压管道 Excel 导出（与倒虹吸格式一致）"""
+    """有压管道 Excel 导出（使用 f/m/b 参数与总水头损失）"""
     C = col_offset
-    NCOLS = 7
+    NCOLS = 8
     R1 = 1
 
     headers = [
-        ("流量段",     None),
-        ("设计流量",   "m³/s"),
-        ("加大流量",   "m³/s"),
-        ("糙率",       None),
-        ("直径DN",     "mm"),
-        ("管道材质",   None),
-        ("设计流速v",  "m/s"),
+        ("有压管道名称及流量段", None),
+        ("设计流量",          "m³/s"),
+        ("加大流量",          "m³/s"),
+        ("摩阻参数f/m/b",     None),
+        ("直径DN",            "mm"),
+        ("管道材质",          None),
+        ("设计流速v",         "m/s"),
+        ("总水头损失",        "m"),
     ]
-    col_widths = [14, 12, 12, 10, 12, 15, 12]
+    col_widths = [22, 12, 12, 26, 12, 15, 12, 14]
 
     _write_title(ws, R1, C + 1, C + NCOLS, "有压管道断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
@@ -1792,9 +1920,16 @@ def _write_pressure_pipe(ws, data, styles, gcl, col_offset=0):
 
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
-        vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                d["n"], d.get("DN_mm", ""), d.get("pipe_material", ""),
-                d.get("V", "")]
+        vals = [
+            d["name"],
+            d["Q"],
+            d.get("Q_inc", ""),
+            d.get("friction_params", ""),
+            d.get("DN_mm", ""),
+            d.get("pipe_material", ""),
+            d.get("V", ""),
+            d.get("total_head_loss", ""),
+        ]
         for ci, v in enumerate(vals):
             _sc(ws, r, C + 1 + ci, v, styles)
 
@@ -2493,7 +2628,7 @@ def _dxf_build_circular_pipe(data):
 def _dxf_build_siphon(data):
     title = "倒虹吸断面尺寸及水力要素表"
     headers = [
-        ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
+        ("倒虹吸名称及流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("糙率", None), ("直径DN", "mm"), ("管道材质", None),
         ("设计流速v", "m/s"),
     ]
@@ -2509,20 +2644,20 @@ def _dxf_build_siphon(data):
 
 
 def _dxf_build_pressure_pipe(data):
-    """有压管道断面汇总表（与倒虹吸格式一致）"""
+    """有压管道断面汇总表（使用 f/m/b 参数与总水头损失）"""
     title = "有压管道断面尺寸及水力要素表"
     headers = [
-        ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
-        ("糙率", None), ("直径DN", "mm"), ("管道材质", None),
-        ("设计流速v", "m/s"),
+        ("有压管道名称及流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
+        ("摩阻参数f/m/b", None), ("直径DN", "mm"), ("管道材质", None),
+        ("设计流速v", "m/s"), ("总水头损失", "m"),
     ]
-    col_widths = _dxf_col_widths([12, 10, 10, 8, 10, 14, 10])
+    col_widths = _dxf_col_widths([18, 10, 10, 22, 10, 14, 10, 12])
     rows = []
     for d in data:
         rows.append([
             d["name"], d["Q"], d.get("Q_inc", ""),
-            d["n"], d.get("DN_mm", ""), d.get("pipe_material", ""),
-            d.get("V", ""),
+            d.get("friction_params", ""), d.get("DN_mm", ""), d.get("pipe_material", ""),
+            d.get("V", ""), d.get("total_head_loss", ""),
         ])
     return title, headers, col_widths, rows, None
 

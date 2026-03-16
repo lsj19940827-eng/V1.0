@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QColor, QPixmap, QImage
-from PySide6.QtWebEngineWidgets import QWebEngineView
+from app_渠系计算前端.webview_compat import create_web_view
 
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox,
@@ -138,7 +138,7 @@ class InletShapeDialog(QDialog):
         self.lbl_range = QLabel("")
         self.lbl_range.setStyleSheet(f"color:{T2};font-size:11px;")
         cgl.addWidget(self.lbl_range, 1, 0, 1, 3)
-        self._inlet_formula_view = QWebEngineView()
+        self._inlet_formula_view = create_web_view()
         self._inlet_formula_view.setMinimumHeight(36)
         self._inlet_formula_view.setStyleSheet(
             "border:1px solid #E3ECF9; border-radius:8px; background:#F8F9FE;")
@@ -340,7 +340,7 @@ class OutletShapeDialog(QDialog):
         self.lbl_calc_xi = QLabel("ξc = (1 - ωg/ωq)² = --")
         self.lbl_calc_xi.setStyleSheet(f"color:{S};font-weight:bold;font-size:12px;")
         rl.addWidget(self.lbl_calc_xi)
-        self._outlet_formula_view = QWebEngineView()
+        self._outlet_formula_view = create_web_view()
         self._outlet_formula_view.setMinimumHeight(36)
         self._outlet_formula_view.setStyleSheet(
             "border:1px solid #E3ECF9; border-radius:8px; background:#F8F9FE;")
@@ -672,7 +672,7 @@ class TrashRackConfigDialog(QDialog):
         self.lbl_result.setStyleSheet(f"font-size:20px;font-weight:bold;color:{P};padding:4px 0;")
         rl.addWidget(self.lbl_result)
         # 公式卡片（独立容器，固定尺寸防止布局抖动）
-        self.formula_view = QWebEngineView()
+        self.formula_view = create_web_view()
         self.formula_view.setMinimumHeight(40)
         self.formula_view.setStyleSheet(
             "border:1px solid #E3ECF9; border-radius:8px; background:#F8F9FE;"
@@ -1288,7 +1288,7 @@ class SegmentEditDialog(QDialog):
         self._formula_title.setStyleSheet("font-size:11px; color:#666;")
         self._formula_title.setAlignment(Qt.AlignCenter)
         ffl.addWidget(self._formula_title)
-        self.formula_view = QWebEngineView()
+        self.formula_view = create_web_view()
         self.formula_view.setMinimumHeight(36)
         self.formula_view.setStyleSheet("border:none; background:transparent;")
         ffl.addWidget(self.formula_view)

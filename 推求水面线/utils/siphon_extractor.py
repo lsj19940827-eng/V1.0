@@ -7,15 +7,32 @@
 
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from typing import Any, Dict, Iterator, List, Optional
 from collections import defaultdict
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+_water_profile_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _water_profile_dir not in sys.path:
+    sys.path.insert(0, _water_profile_dir)
+
+_repo_root = os.path.dirname(_water_profile_dir)
+_kernel_dir = os.path.join(_repo_root, "calc_渠系计算算法内核")
+if _kernel_dir not in sys.path:
+    sys.path.insert(0, _kernel_dir)
 
 from models.data_models import ChannelNode
 from models.enums import StructureType, InOutType
+
+from 明渠设计 import (
+    get_flow_increase_percent,
+    quick_calculate_circular,
+    quick_calculate_rectangular,
+    quick_calculate_trapezoidal,
+    quick_calculate_u_section,
+    search_minimum_u_section_radius,
+)
 
 
 @dataclass
@@ -48,8 +65,10 @@ class SiphonGroup:
     downstream_velocity: float = 0.0            # 下游渠道流速 → 出口渐变段末端流速 v₃
     upstream_velocity_increased: float = 0.0    # 上游渠道加大流速 → v₁加大
     downstream_velocity_increased: float = 0.0  # 下游渠道加大流速 → v₃加大
-    upstream_velocity_source: str = "missing"   # 上游流速来源: adjacent / same_section_nearest_channel_fallback / missing
-    downstream_velocity_source: str = "missing"  # 下游流速来源: adjacent / same_section_nearest_channel_fallback / missing
+    upstream_velocity_source: str = "missing"   # 上游流速来源: same_section_donor / cross_section_donor / missing
+    downstream_velocity_source: str = "missing"  # 下游流速来源: same_section_donor / cross_section_donor / missing
+    upstream_velocity_provenance: Dict[str, Any] = field(default_factory=dict)    # 上游 donor 命中来源详情
+    downstream_velocity_provenance: Dict[str, Any] = field(default_factory=dict)  # 下游 donor 命中来源详情
     
     # 上游渠道断面参数（用于自动计算进口渐变段末端流速 v₂）
     upstream_structure_type: Optional[str] = None  # 上游渠道结构类型（如"明渠-梯形"、"明渠-圆形"等）
@@ -102,6 +121,14 @@ class SiphonGroup:
         return ""
 
 
+@dataclass
+class _VelocityDonorCandidate:
+    node: ChannelNode
+    index: int
+    level: str
+    scan_direction: str
+
+
 class SiphonDataExtractor:
     """
     倒虹吸数据提取器
@@ -109,9 +136,15 @@ class SiphonDataExtractor:
     从渠道节点列表中识别和提取倒虹吸分组。
     """
 
-    VELOCITY_SOURCE_ADJACENT = "adjacent"
-    VELOCITY_SOURCE_SAME_SECTION_FALLBACK = "same_section_nearest_channel_fallback"
+    VELOCITY_SOURCE_SAME_SECTION = "same_section_donor"
+    VELOCITY_SOURCE_CROSS_SECTION = "cross_section_donor"
     VELOCITY_SOURCE_MISSING = "missing"
+    DONOR_LEVEL_SAME_SECTION = "same_section"
+    DONOR_LEVEL_CROSS_SECTION = "cross_section"
+    DONOR_SCAN_UPSTREAM = "upstream"
+    DONOR_SCAN_DOWNSTREAM = "downstream"
+    OPEN_CHANNEL_V_MIN = 0.5
+    OPEN_CHANNEL_V_MAX = 3.0
     
     @staticmethod
     def extract_siphons(nodes: List[ChannelNode], settings=None) -> List[SiphonGroup]:
@@ -207,146 +240,196 @@ class SiphonDataExtractor:
     @staticmethod
     def _extract_adjacent_node_data(group: SiphonGroup, nodes: List[ChannelNode]):
         """
-        从倒虹吸进口的上游节点和出口的下游节点中提取流速、断面参数
-        
-        - 上游节点：进口行索引 - 1（跳过渐变段行）
-        - 下游节点：出口行索引 + 1（跳过渐变段行）
-        
-        提取数据用途：
-        - upstream_velocity → 进口渐变段始端流速 v₁
-        - upstream_section_B/h/m → 自动计算进口渐变段末端流速 v₂
-        - downstream_velocity → 出口渐变段末端流速 v₃
+        为倒虹吸两侧提取 donor 流速与断面参数。
+
+        donor 搜索顺序统一为：
+        1. 同流量段上游
+        2. 同流量段下游
+        3. 跨流量段上游
+        4. 跨流量段下游
+
+        同流量段 donor 直接复用现成 velocity / velocity_increased；
+        跨流量段 donor 使用倒虹吸所在流量段 Q / Q加大 重算，必要时允许重设计。
         """
         group.upstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_MISSING
         group.downstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_MISSING
+        group.upstream_velocity_provenance = {}
+        group.downstream_velocity_provenance = {}
 
-        # === 提取上游渠道节点数据 ===
-        if group.inlet_row_index >= 0:
-            inlet_section = SiphonDataExtractor._get_flow_section(nodes, group.inlet_row_index)
-            upstream_node = SiphonDataExtractor._find_adjacent_channel_node(
-                nodes=nodes,
-                start_index=group.inlet_row_index - 1,
-                step=-1,
-                target_flow_section=inlet_section
-            )
-            if upstream_node is None:
-                upstream_node = SiphonDataExtractor._find_nearest_channel_node_in_same_section(
-                    nodes=nodes,
-                    anchor_index=group.inlet_row_index,
-                    flow_section=inlet_section,
-                    preferred_step=-1
-                )
-                if upstream_node is not None:
-                    group.upstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_SAME_SECTION_FALLBACK
-            else:
-                group.upstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_ADJACENT
+        candidates = list(SiphonDataExtractor._iter_velocity_donor_candidates(group, nodes))
 
-            if upstream_node is not None:
-                SiphonDataExtractor._apply_upstream_node_data(group, upstream_node)
+        upstream_resolution = SiphonDataExtractor._resolve_velocity_donor(group, candidates)
+        SiphonDataExtractor._apply_velocity_resolution(group, upstream_resolution, side="upstream")
 
-        # === 提取下游渠道节点数据 ===
-        if group.outlet_row_index >= 0:
-            outlet_section = SiphonDataExtractor._get_flow_section(nodes, group.outlet_row_index)
-            downstream_node = SiphonDataExtractor._find_adjacent_channel_node(
-                nodes=nodes,
-                start_index=group.outlet_row_index + 1,
-                step=1,
-                target_flow_section=outlet_section
-            )
-            if downstream_node is None:
-                downstream_node = SiphonDataExtractor._find_nearest_channel_node_in_same_section(
-                    nodes=nodes,
-                    anchor_index=group.outlet_row_index,
-                    flow_section=outlet_section,
-                    preferred_step=1
-                )
-                if downstream_node is not None:
-                    group.downstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_SAME_SECTION_FALLBACK
-            else:
-                group.downstream_velocity_source = SiphonDataExtractor.VELOCITY_SOURCE_ADJACENT
-
-            if downstream_node is not None:
-                SiphonDataExtractor._apply_downstream_node_data(group, downstream_node)
+        downstream_resolution = SiphonDataExtractor._resolve_velocity_donor(group, candidates)
+        SiphonDataExtractor._apply_velocity_resolution(group, downstream_resolution, side="downstream")
 
     @staticmethod
-    def _find_adjacent_channel_node(
+    def _iter_velocity_donor_candidates(
+        group: SiphonGroup,
+        nodes: List[ChannelNode]
+    ) -> Iterator[_VelocityDonorCandidate]:
+        target_section = SiphonDataExtractor._get_group_flow_section(group, nodes)
+        if not target_section:
+            return
+
+        inlet_index = group.inlet_row_index if group.inlet_row_index >= 0 else min(group.row_indices or [-1])
+        outlet_index = group.outlet_row_index if group.outlet_row_index >= 0 else max(group.row_indices or [-1])
+        if inlet_index < 0 or outlet_index < 0:
+            return
+
+        yield from SiphonDataExtractor._iter_same_section_candidates(
+            nodes=nodes,
+            target_flow_section=target_section,
+            start_index=inlet_index - 1,
+            step=-1,
+            scan_direction=SiphonDataExtractor.DONOR_SCAN_UPSTREAM,
+        )
+        yield from SiphonDataExtractor._iter_same_section_candidates(
+            nodes=nodes,
+            target_flow_section=target_section,
+            start_index=outlet_index + 1,
+            step=1,
+            scan_direction=SiphonDataExtractor.DONOR_SCAN_DOWNSTREAM,
+        )
+        yield from SiphonDataExtractor._iter_cross_section_candidates(
+            nodes=nodes,
+            target_flow_section=target_section,
+            start_index=inlet_index - 1,
+            step=-1,
+            scan_direction=SiphonDataExtractor.DONOR_SCAN_UPSTREAM,
+        )
+        yield from SiphonDataExtractor._iter_cross_section_candidates(
+            nodes=nodes,
+            target_flow_section=target_section,
+            start_index=outlet_index + 1,
+            step=1,
+            scan_direction=SiphonDataExtractor.DONOR_SCAN_DOWNSTREAM,
+        )
+
+    @staticmethod
+    def _iter_same_section_candidates(
         nodes: List[ChannelNode],
+        target_flow_section: str,
         start_index: int,
         step: int,
-        target_flow_section: str
-    ) -> Optional[ChannelNode]:
-        """
-        查找倒虹吸相邻同流量段明渠节点（闸穿透，不跨段）。
-        """
+        scan_direction: str,
+    ) -> Iterator[_VelocityDonorCandidate]:
         target_section = SiphonDataExtractor._normalize_flow_section(target_flow_section)
-        i = start_index
-        while 0 <= i < len(nodes):
-            node = nodes[i]
+        idx = start_index
+        while 0 <= idx < len(nodes):
+            node = nodes[idx]
             node_section = SiphonDataExtractor._normalize_flow_section(getattr(node, "flow_section", ""))
             if node_section != target_section:
                 break
-
-            if getattr(node, 'is_transition', False):
-                i += step
-                continue
-            if SiphonDataExtractor._is_inverted_siphon(node):
-                i += step
-                continue
-            if getattr(node, 'is_auto_inserted_channel', False):
-                i += step
-                continue
-            if SiphonDataExtractor._is_gate_node(node):
-                i += step
-                continue
-            if not SiphonDataExtractor._is_open_channel_node(node):
-                i += step
-                continue
-
-            return node
-
-        return None
+            if SiphonDataExtractor._is_velocity_donor_candidate_node(node):
+                yield _VelocityDonorCandidate(
+                    node=node,
+                    index=idx,
+                    level=SiphonDataExtractor.DONOR_LEVEL_SAME_SECTION,
+                    scan_direction=scan_direction,
+                )
+            idx += step
 
     @staticmethod
-    def _find_nearest_channel_node_in_same_section(
+    def _iter_cross_section_candidates(
         nodes: List[ChannelNode],
-        anchor_index: int,
-        flow_section: str,
-        preferred_step: int
-    ) -> Optional[ChannelNode]:
-        """
-        在同一流量段内查找距离 anchor 最近的明渠节点。
-        若距离相同，优先选择原扫描方向（preferred_step）上的节点。
-        """
-        target_section = SiphonDataExtractor._normalize_flow_section(flow_section)
-        best_node: Optional[ChannelNode] = None
-        best_score = None
-
-        for idx, node in enumerate(nodes):
-            if idx == anchor_index:
-                continue
-
+        target_flow_section: str,
+        start_index: int,
+        step: int,
+        scan_direction: str,
+    ) -> Iterator[_VelocityDonorCandidate]:
+        target_section = SiphonDataExtractor._normalize_flow_section(target_flow_section)
+        idx = start_index
+        while 0 <= idx < len(nodes):
+            node = nodes[idx]
             node_section = SiphonDataExtractor._normalize_flow_section(getattr(node, "flow_section", ""))
-            if node_section != target_section:
+            if node_section == target_section:
+                idx += step
                 continue
-            if getattr(node, 'is_transition', False):
-                continue
-            if SiphonDataExtractor._is_inverted_siphon(node):
-                continue
-            if getattr(node, 'is_auto_inserted_channel', False):
-                continue
-            if SiphonDataExtractor._is_gate_node(node):
-                continue
-            if not SiphonDataExtractor._is_open_channel_node(node):
-                continue
+            if SiphonDataExtractor._is_velocity_donor_candidate_node(node):
+                yield _VelocityDonorCandidate(
+                    node=node,
+                    index=idx,
+                    level=SiphonDataExtractor.DONOR_LEVEL_CROSS_SECTION,
+                    scan_direction=scan_direction,
+                )
+            idx += step
 
-            distance = abs(idx - anchor_index)
-            same_direction = (idx - anchor_index) * preferred_step > 0
-            score = (distance, 0 if same_direction else 1, idx)
-            if best_score is None or score < best_score:
-                best_score = score
-                best_node = node
+    @staticmethod
+    def _is_velocity_donor_candidate_node(node: ChannelNode) -> bool:
+        if getattr(node, 'is_transition', False):
+            return False
+        if SiphonDataExtractor._is_inverted_siphon(node):
+            return False
+        if getattr(node, 'is_auto_inserted_channel', False):
+            return False
+        if SiphonDataExtractor._is_gate_node(node):
+            return False
+        return SiphonDataExtractor._is_open_channel_node(node)
 
-        return best_node
+    @staticmethod
+    def _resolve_velocity_donor(
+        group: SiphonGroup,
+        candidates: List[_VelocityDonorCandidate]
+    ) -> Dict[str, Any]:
+        for candidate in candidates:
+            if candidate.level == SiphonDataExtractor.DONOR_LEVEL_SAME_SECTION:
+                return {
+                    "source": SiphonDataExtractor.VELOCITY_SOURCE_SAME_SECTION,
+                    "node": candidate.node,
+                    "provenance": SiphonDataExtractor._build_velocity_provenance(
+                        candidate,
+                        applied_node=candidate.node,
+                        redesigned=False,
+                    ),
+                }
+
+            computed_node, redesigned = SiphonDataExtractor._build_cross_section_donor_node(group, candidate)
+            if computed_node is None:
+                continue
+            return {
+                "source": SiphonDataExtractor.VELOCITY_SOURCE_CROSS_SECTION,
+                "node": computed_node,
+                "provenance": SiphonDataExtractor._build_velocity_provenance(
+                    candidate,
+                    applied_node=computed_node,
+                    redesigned=redesigned,
+                ),
+            }
+
+        return {
+            "source": SiphonDataExtractor.VELOCITY_SOURCE_MISSING,
+            "node": None,
+            "provenance": {
+                "level": "missing",
+                "scan_direction": "",
+                "donor_name": "",
+                "donor_flow_section": "",
+                "redesigned": False,
+                "structure_type": "",
+                "dimensions": {},
+            },
+        }
+
+    @staticmethod
+    def _build_velocity_provenance(
+        candidate: _VelocityDonorCandidate,
+        applied_node: ChannelNode,
+        redesigned: bool,
+    ) -> Dict[str, Any]:
+        return {
+            "level": candidate.level,
+            "scan_direction": candidate.scan_direction,
+            "donor_name": getattr(candidate.node, "name", ""),
+            "donor_flow_section": SiphonDataExtractor._normalize_flow_section(
+                getattr(candidate.node, "flow_section", "")
+            ),
+            "donor_index": candidate.index,
+            "redesigned": redesigned,
+            "structure_type": SiphonDataExtractor._get_structure_type_str(applied_node),
+            "dimensions": SiphonDataExtractor._extract_section_dimensions(applied_node),
+        }
 
     @staticmethod
     def _normalize_flow_section(flow_section) -> str:
@@ -359,6 +442,246 @@ class SiphonDataExtractor:
         if row_index < 0 or row_index >= len(nodes):
             return ""
         return SiphonDataExtractor._normalize_flow_section(getattr(nodes[row_index], "flow_section", ""))
+
+    @staticmethod
+    def _get_group_flow_section(group: SiphonGroup, nodes: List[ChannelNode]) -> str:
+        if group.inlet_row_index >= 0:
+            section = SiphonDataExtractor._get_flow_section(nodes, group.inlet_row_index)
+            if section:
+                return section
+        if group.outlet_row_index >= 0:
+            section = SiphonDataExtractor._get_flow_section(nodes, group.outlet_row_index)
+            if section:
+                return section
+        for row_index in group.row_indices:
+            section = SiphonDataExtractor._get_flow_section(nodes, row_index)
+            if section:
+                return section
+        return ""
+
+    @staticmethod
+    def _get_structure_type_str(node: ChannelNode) -> str:
+        st = getattr(node, "structure_type", None)
+        if st is None:
+            return ""
+        return st.value if hasattr(st, "value") else str(st)
+
+    @staticmethod
+    def _extract_section_dimensions(node: ChannelNode) -> Dict[str, float]:
+        sp = getattr(node, "section_params", None) or {}
+        dims: Dict[str, float] = {}
+        for key in ("B", "m", "D", "R_circle", "theta_deg", "chamfer_angle", "slope_inv"):
+            val = sp.get(key)
+            if isinstance(val, (int, float)) and (val > 0 or key == "m"):
+                dims[key] = float(val)
+        water_depth = getattr(node, "water_depth", 0.0)
+        if water_depth and water_depth > 0:
+            dims["h"] = float(water_depth)
+        return dims
+
+    @staticmethod
+    def _build_cross_section_donor_node(
+        group: SiphonGroup,
+        candidate: _VelocityDonorCandidate
+    ) -> tuple[Optional[ChannelNode], bool]:
+        donor_node = candidate.node
+        calc_result = SiphonDataExtractor._calculate_cross_section_channel(
+            group=group,
+            donor_node=donor_node,
+            redesign=False,
+        )
+        if calc_result is not None:
+            return calc_result["node"], False
+
+        calc_result = SiphonDataExtractor._calculate_cross_section_channel(
+            group=group,
+            donor_node=donor_node,
+            redesign=True,
+        )
+        if calc_result is not None:
+            return calc_result["node"], True
+
+        return None, False
+
+    @staticmethod
+    def _calculate_cross_section_channel(
+        group: SiphonGroup,
+        donor_node: ChannelNode,
+        redesign: bool,
+    ) -> Optional[Dict[str, Any]]:
+        structure_type = SiphonDataExtractor._get_structure_type_str(donor_node)
+        target_flow = getattr(group, "design_flow", 0.0) or 0.0
+        if target_flow <= 0:
+            return None
+
+        n_value = getattr(donor_node, "roughness", 0.0) or group.roughness or 0.014
+        slope_inv = SiphonDataExtractor._get_donor_slope_inv(donor_node)
+        if n_value <= 0 or slope_inv <= 0:
+            return None
+
+        increase_percent = get_flow_increase_percent(target_flow)
+        sp = donor_node.section_params or {}
+        v_min = SiphonDataExtractor.OPEN_CHANNEL_V_MIN
+        v_max = SiphonDataExtractor.OPEN_CHANNEL_V_MAX
+
+        if structure_type == "明渠-梯形":
+            result = quick_calculate_trapezoidal(
+                Q=target_flow,
+                m=sp.get("m", 0.0),
+                n=n_value,
+                slope_inv=slope_inv,
+                v_min=v_min,
+                v_max=v_max,
+                manual_b=None if redesign else sp.get("B"),
+                manual_increase_percent=increase_percent,
+            )
+            if not result.get("success"):
+                return None
+            return {
+                "node": SiphonDataExtractor._build_virtual_open_channel_node(
+                    donor_node=donor_node,
+                    velocity=result.get("V_design", 0.0),
+                    velocity_increased=result.get("V_increased", 0.0),
+                    water_depth=result.get("h_design", 0.0),
+                    section_params={
+                        "B": result.get("b_design", 0.0),
+                        "m": sp.get("m", 0.0),
+                        "slope_inv": slope_inv,
+                    },
+                )
+            }
+
+        if structure_type in {"明渠-矩形", "矩形"}:
+            result = quick_calculate_rectangular(
+                Q=target_flow,
+                n=n_value,
+                slope_inv=slope_inv,
+                v_min=v_min,
+                v_max=v_max,
+                manual_b=None if redesign else sp.get("B"),
+                manual_increase_percent=increase_percent,
+            )
+            if not result.get("success"):
+                return None
+            return {
+                "node": SiphonDataExtractor._build_virtual_open_channel_node(
+                    donor_node=donor_node,
+                    velocity=result.get("V_design", 0.0),
+                    velocity_increased=result.get("V_increased", 0.0),
+                    water_depth=result.get("h_design", 0.0),
+                    section_params={
+                        "B": result.get("b_design", 0.0),
+                        "m": 0.0,
+                        "slope_inv": slope_inv,
+                    },
+                )
+            }
+
+        if structure_type == "明渠-圆形":
+            result = quick_calculate_circular(
+                Q=target_flow,
+                n=n_value,
+                slope_inv=slope_inv,
+                v_min=v_min,
+                v_max=v_max,
+                increase_percent=increase_percent,
+                manual_D=None if redesign else sp.get("D"),
+            )
+            if not result.get("success"):
+                return None
+            return {
+                "node": SiphonDataExtractor._build_virtual_open_channel_node(
+                    donor_node=donor_node,
+                    velocity=result.get("V_d", 0.0),
+                    velocity_increased=result.get("V_i", 0.0),
+                    water_depth=result.get("y_d", 0.0),
+                    section_params={
+                        "D": result.get("D_design", 0.0),
+                        "slope_inv": slope_inv,
+                    },
+                )
+            }
+
+        if structure_type == "明渠-U形":
+            alpha_deg = sp.get("chamfer_angle", 0.0)
+            theta_deg = sp.get("theta_deg", 0.0)
+            if redesign:
+                result = search_minimum_u_section_radius(
+                    Q=target_flow,
+                    alpha_deg=alpha_deg,
+                    theta_deg=theta_deg,
+                    n=n_value,
+                    slope_inv=slope_inv,
+                    v_min=v_min,
+                    v_max=v_max,
+                    manual_increase_percent=increase_percent,
+                    start_R=sp.get("R_circle", 0.1),
+                )
+            else:
+                result = quick_calculate_u_section(
+                    Q=target_flow,
+                    R=sp.get("R_circle", 0.0),
+                    alpha_deg=alpha_deg,
+                    theta_deg=theta_deg,
+                    n=n_value,
+                    slope_inv=slope_inv,
+                    v_min=v_min,
+                    v_max=v_max,
+                    manual_increase_percent=increase_percent,
+                )
+            if not result.get("success"):
+                return None
+            return {
+                "node": SiphonDataExtractor._build_virtual_open_channel_node(
+                    donor_node=donor_node,
+                    velocity=result.get("V_design", 0.0),
+                    velocity_increased=result.get("V_increased", 0.0),
+                    water_depth=result.get("h_design", 0.0),
+                    section_params={
+                        "R_circle": result.get("R", 0.0),
+                        "theta_deg": theta_deg,
+                        "chamfer_angle": alpha_deg,
+                        "slope_inv": slope_inv,
+                    },
+                )
+            }
+
+        return None
+
+    @staticmethod
+    def _get_donor_slope_inv(node: ChannelNode) -> float:
+        sp = getattr(node, "section_params", None) or {}
+        slope_inv = sp.get("slope_inv", 0.0) or 0.0
+        if slope_inv > 0:
+            return float(slope_inv)
+
+        slope_i = getattr(node, "slope_i", 0.0) or 0.0
+        if slope_i > 0:
+            return 1.0 / slope_i
+
+        return 0.0
+
+    @staticmethod
+    def _build_virtual_open_channel_node(
+        donor_node: ChannelNode,
+        velocity: float,
+        velocity_increased: float,
+        water_depth: float,
+        section_params: Dict[str, float],
+    ) -> ChannelNode:
+        return ChannelNode(
+            name=getattr(donor_node, "name", ""),
+            structure_type=getattr(donor_node, "structure_type", None),
+            in_out=InOutType.NORMAL,
+            flow_section=getattr(donor_node, "flow_section", ""),
+            flow=getattr(donor_node, "flow", 0.0),
+            roughness=getattr(donor_node, "roughness", 0.014),
+            section_params=section_params,
+            water_depth=water_depth or 0.0,
+            velocity=velocity or 0.0,
+            velocity_increased=velocity_increased or 0.0,
+            slope_i=getattr(donor_node, "slope_i", 0.0),
+        )
 
     @staticmethod
     def _is_open_channel_node(node: ChannelNode) -> bool:
@@ -380,103 +703,80 @@ class SiphonDataExtractor:
         return StructureType.is_diversion_gate_str(str(st))
 
     @staticmethod
+    def _apply_velocity_resolution(group: SiphonGroup, resolution: Dict[str, Any], side: str):
+        source = resolution.get("source", SiphonDataExtractor.VELOCITY_SOURCE_MISSING)
+        provenance = resolution.get("provenance", {}) or {}
+        donor_node = resolution.get("node")
+
+        if side == "upstream":
+            group.upstream_velocity_source = source
+            group.upstream_velocity_provenance = provenance
+            if donor_node is not None:
+                SiphonDataExtractor._apply_upstream_node_data(group, donor_node)
+            return
+
+        group.downstream_velocity_source = source
+        group.downstream_velocity_provenance = provenance
+        if donor_node is not None:
+            SiphonDataExtractor._apply_downstream_node_data(group, donor_node)
+
+    @staticmethod
     def _apply_upstream_node_data(group: SiphonGroup, upstream_node: ChannelNode):
-        # 提取上游流速
-        if upstream_node.velocity > 0:
-            group.upstream_velocity = upstream_node.velocity
-        # 提取上游加大流速（批量计算的加大流量工况流速）
-        _v_inc = getattr(upstream_node, 'velocity_increased', 0.0)
-        if _v_inc and _v_inc > 0:
-            group.upstream_velocity_increased = _v_inc
-
-        # 提取上游结构类型
-        if upstream_node.structure_type is not None:
-            st_val = (upstream_node.structure_type.value
-                      if hasattr(upstream_node.structure_type, 'value')
-                      else str(upstream_node.structure_type))
-            group.upstream_structure_type = st_val
-
-        # 提取上游断面参数（B、h、m、D、R_circle）
-        # 注意：m=0 对矩形断面是有效值，需要一并传递
-        sp = upstream_node.section_params or {}
-        B = sp.get("B", 0.0)
-        h = upstream_node.water_depth
-        m = sp.get("m", 0.0)
-        D = sp.get("D", 0.0)
-        R_circle = sp.get("R_circle", 0.0)
-
-        if B > 0 and h > 0:
-            group.upstream_section_B = B
-            group.upstream_section_h = h
-            group.upstream_section_m = m  # m=0 表示矩形断面，也是有效值
-        elif D > 0 and h > 0:
-            # 圆形断面：B=0 但 D>0，用 D 作为特征宽度
-            group.upstream_section_B = D  # 以直径作为等效宽度供渐变段计算
-            group.upstream_section_h = h
-            group.upstream_section_m = 0
-        elif R_circle > 0 and h > 0:
-            # U形/马蹄形断面：用 2R 作为特征宽度
-            group.upstream_section_B = 2 * R_circle
-            group.upstream_section_h = h
-            group.upstream_section_m = 0
-
-        # 额外存储上游 D 和 R_circle（供精确计算使用）
-        if D > 0:
-            group.upstream_section_D = D
-        if R_circle > 0:
-            group.upstream_section_R = R_circle
-        # 对于圆形/U形等，水深也需要提取
-        if h > 0 and group.upstream_section_h is None:
-            group.upstream_section_h = h
+        SiphonDataExtractor._apply_group_side_node_data(group, upstream_node, side="upstream")
 
     @staticmethod
     def _apply_downstream_node_data(group: SiphonGroup, downstream_node: ChannelNode):
-        # 提取下游流速
-        if downstream_node.velocity > 0:
-            group.downstream_velocity = downstream_node.velocity
-        # 提取下游加大流速（批量计算的加大流量工况流速）
-        _v_inc = getattr(downstream_node, 'velocity_increased', 0.0)
-        if _v_inc and _v_inc > 0:
-            group.downstream_velocity_increased = _v_inc
+        SiphonDataExtractor._apply_group_side_node_data(group, downstream_node, side="downstream")
 
-        # 提取下游结构类型
-        if downstream_node.structure_type is not None:
-            st_val = (downstream_node.structure_type.value
-                      if hasattr(downstream_node.structure_type, 'value')
-                      else str(downstream_node.structure_type))
-            group.downstream_structure_type = st_val
+    @staticmethod
+    def _apply_group_side_node_data(group: SiphonGroup, donor_node: ChannelNode, side: str):
+        velocity_attr = f"{side}_velocity"
+        velocity_inc_attr = f"{side}_velocity_increased"
+        struct_attr = f"{side}_structure_type"
+        section_b_attr = f"{side}_section_B"
+        section_h_attr = f"{side}_section_h"
+        section_m_attr = f"{side}_section_m"
+        section_d_attr = f"{side}_section_D"
+        section_r_attr = f"{side}_section_R"
 
-        # 提取下游断面参数（B、h、m、D、R）
-        # 注意：m=0 对矩形断面是有效值，需要一并传递
-        sp = downstream_node.section_params or {}
+        velocity = getattr(donor_node, "velocity", 0.0)
+        if velocity and velocity > 0:
+            setattr(group, velocity_attr, velocity)
+
+        velocity_increased = getattr(donor_node, "velocity_increased", 0.0)
+        if velocity_increased and velocity_increased > 0:
+            setattr(group, velocity_inc_attr, velocity_increased)
+
+        structure_type = SiphonDataExtractor._get_structure_type_str(donor_node)
+        if structure_type:
+            setattr(group, struct_attr, structure_type)
+
+        sp = donor_node.section_params or {}
         B = sp.get("B", 0.0)
-        h = downstream_node.water_depth
+        h = getattr(donor_node, "water_depth", 0.0)
         m = sp.get("m", 0.0)
         D = sp.get("D", 0.0)
         R_circle = sp.get("R_circle", 0.0)
 
         if B > 0 and h > 0:
-            group.downstream_section_B = B
-            group.downstream_section_h = h
-            group.downstream_section_m = m  # m=0 表示矩形断面，也是有效值
+            setattr(group, section_b_attr, B)
+            setattr(group, section_h_attr, h)
+            setattr(group, section_m_attr, m)
         elif D > 0 and h > 0:
-            # 圆形断面：B=0 但 D>0，用 D 作为特征宽度
-            group.downstream_section_B = D
-            group.downstream_section_h = h
-            group.downstream_section_m = 0
+            setattr(group, section_b_attr, D)
+            setattr(group, section_h_attr, h)
+            setattr(group, section_m_attr, 0.0)
         elif R_circle > 0 and h > 0:
-            # U形/马蹄形断面：用 2R 作为特征宽度
-            group.downstream_section_B = 2 * R_circle
-            group.downstream_section_h = h
-            group.downstream_section_m = 0
+            setattr(group, section_b_attr, 2 * R_circle)
+            setattr(group, section_h_attr, h)
+            setattr(group, section_m_attr, 0.0)
 
         if D > 0:
-            group.downstream_section_D = D
+            setattr(group, section_d_attr, D)
         if R_circle > 0:
-            group.downstream_section_R = R_circle
-        # 对于圆形/U形等，水深也需要提取
-        if h > 0 and group.downstream_section_h is None:
-            group.downstream_section_h = h
+            setattr(group, section_r_attr, R_circle)
+        if h > 0 and getattr(group, section_h_attr) is None:
+            setattr(group, section_h_attr, h)
     
     @staticmethod
     def _extract_transition_forms(group: SiphonGroup, settings):

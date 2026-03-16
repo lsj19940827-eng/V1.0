@@ -59,6 +59,8 @@ tools/_tmp_test_outputs/
 .codex/
 .pytest_tmp/
 tmp_*.png
+/tmp/
+fix_temp_perms.bat
 
 # 用户本地配置（水面线计算模块）
 推求水面线/*_config.json
@@ -71,6 +73,10 @@ data/_test_auto_confirm/
 data/_test_unified_confirm/
 
 # 用户数据文件（DXF图纸、Excel、项目文件等，仅本地保留）
+/*.dxf
+/*.xlsx
+/*.xlsm
+/*.log
 data/*.dxf
 data/*.qxproj
 data/*.xlsm

@@ -20,7 +20,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QThread, Signal, QRect, QPoint, QSize, QTimer
 from PySide6.QtGui import QPainter, QPen, QColor
-from PySide6.QtWebEngineWidgets import QWebEngineView
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+    _WEB_ENGINE_IMPORT_ERROR = None
+except ImportError as _web_engine_error:
+    QWebEngineView = None
+    _WEB_ENGINE_IMPORT_ERROR = _web_engine_error
 
 from qfluentwidgets import (
     ComboBox, PushButton, PrimaryPushButton, LineEdit,
@@ -58,6 +63,21 @@ from app_渠系计算前端.report_meta import (
 
 def _e(s):
     return html_mod.escape(str(s))
+
+
+class _FallbackHtmlView(QTextEdit):
+    """QWebEngine 不可用时的轻量降级视图。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setAcceptRichText(True)
+
+
+def _create_result_view(parent=None):
+    if QWebEngineView is not None:
+        return QWebEngineView(parent)
+    return _FallbackHtmlView(parent)
 
 
 # ============================================================
@@ -682,8 +702,13 @@ class PressurePipePanel(QWidget):
         t1l.setContentsMargins(5, 5, 5, 5)
         grp = QGroupBox("计算结果详情")
         gl = QVBoxLayout(grp)
-        self.result_view = QWebEngineView()
+        self.result_view = _create_result_view()
         gl.addWidget(self.result_view)
+        if _WEB_ENGINE_IMPORT_ERROR is not None:
+            warn = QLabel("当前环境未能加载 Qt WebEngine，结果页已自动降级为简化 HTML 视图。")
+            warn.setWordWrap(True)
+            warn.setStyleSheet("font-size:12px;color:#a15c00;padding:4px 0;")
+            gl.addWidget(warn)
         t1l.addWidget(grp)
         self.notebook.addTab(t1, "计算结果")
 

@@ -15,6 +15,7 @@ import sys
 import math
 import copy
 import json
+import re
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -53,13 +54,24 @@ try:
 except ImportError:
     MODELS_AVAILABLE = False
 
-_PRESSURIZED_PIPE_MATERIALS = [
+from utils.pressure_pipe_result_helpers import make_pressure_pipe_identity
+
+_SIPHON_PIPE_MATERIALS = [
     "PCCP管",
     "球墨铸铁管",
     "钢管",
     "钢筋混凝土管",
     "玻璃钢夹砂管",
 ]
+_PRESSURE_PIPE_MATERIALS = [
+    "HDPE管",
+    "玻璃钢夹砂管",
+    "球墨铸铁管",
+    "PCCP管",
+    "钢管",
+    "钢筋混凝土管",
+]
+_PRESSURIZED_PIPE_MATERIALS = list(dict.fromkeys(_SIPHON_PIPE_MATERIALS + _PRESSURE_PIPE_MATERIALS))
 
 
 def _safe_qt_parent(candidate):
@@ -1952,6 +1964,8 @@ def _normalize_dn_mm(dn_value, default_dn=1500):
 
 def _extract_named_pressurized_groups(nodes, structure_kind):
     """提取按名称分组的有压流建筑物，返回 [(name, dn_mm), ...]。"""
+    valid_rows, _ = _extract_pressurized_param_entities(nodes, structure_kind)
+    return valid_rows
     groups = {}
     order = []
     if not nodes:
@@ -2001,8 +2015,438 @@ def _extract_named_pressurized_groups(nodes, structure_kind):
     return [(name, groups[name]) for name in order]
 
 
+_SEGMENT_LABELS = [
+    "第一流量段",
+    "第二流量段",
+    "第三流量段",
+    "第四流量段",
+    "第五流量段",
+    "第六流量段",
+    "第七流量段",
+    "第八流量段",
+    "第九流量段",
+    "第十流量段",
+]
+
+
+def _pressurized_structure_label(structure_kind):
+    return "倒虹吸" if structure_kind == "siphon" else "有压管道"
+
+
+def _segment_label_from_index(flow_section_idx):
+    if isinstance(flow_section_idx, int) and flow_section_idx > 0:
+        if flow_section_idx <= len(_SEGMENT_LABELS):
+            return _SEGMENT_LABELS[flow_section_idx - 1]
+        return f"第{flow_section_idx}流量段"
+    return ""
+
+
+def _parse_flow_section_index(flow_section):
+    if flow_section is None:
+        return None
+    if isinstance(flow_section, int):
+        return flow_section if flow_section > 0 else None
+    if isinstance(flow_section, float):
+        if flow_section.is_integer() and flow_section > 0:
+            return int(flow_section)
+        return None
+
+    text = str(flow_section).strip()
+    if not text:
+        return None
+
+    matched = re.search(r"\d+", text)
+    if matched:
+        idx = int(matched.group(0))
+        return idx if idx > 0 else None
+
+    for idx, label in enumerate(_SEGMENT_LABELS, start=1):
+        if label in text:
+            return idx
+    return None
+
+
+def _normalize_pressurized_name(name, structure_kind):
+    text = str(name or "").strip()
+    if text and text != "-":
+        return text
+    return f"未命名{_pressurized_structure_label(structure_kind)}"
+
+
+def _make_pressurized_param_row(
+    *,
+    name,
+    flow_section,
+    structure_kind,
+    pipe_material,
+    dn_mm,
+    display_name=None,
+):
+    flow_section_idx = _parse_flow_section_index(flow_section)
+    base_name = _normalize_pressurized_name(name, structure_kind)
+    fallback_display = (
+        f"{base_name}-{_segment_label_from_index(flow_section_idx)}"
+        if flow_section_idx
+        else base_name
+    )
+    return {
+        "name": base_name,
+        "flow_section": flow_section_idx,
+        "display_name": str(display_name or "").strip() or fallback_display,
+        "pipe_material": str(pipe_material or "").strip() or "球墨铸铁管",
+        "DN_mm": _normalize_dn_mm(dn_mm, 1500),
+        "structure_kind": structure_kind,
+    }
+
+
+def _extract_pressurized_dn_mm(node):
+    params = getattr(node, "section_params", {}) or {}
+    for key in ("D", "d"):
+        try:
+            value = float(params.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value > 0:
+            return int(round(value * 1000 if value < 20 else value))
+    try:
+        structure_height = float(getattr(node, "structure_height", 0) or 0)
+    except (TypeError, ValueError):
+        structure_height = 0.0
+    if structure_height > 0:
+        return int(round(structure_height * 1000 if structure_height < 20 else structure_height))
+    return None
+
+
+def _extract_pressurized_param_entities(nodes, structure_kind):
+    entities = {}
+    entity_order = []
+    invalid = {}
+    invalid_order = []
+    if not nodes:
+        return [], []
+
+    is_siphon = (structure_kind == "siphon")
+    for node in nodes:
+        if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+            continue
+
+        st_str = _struct_val(getattr(node, "structure_type", None))
+        if is_siphon:
+            matched = bool(getattr(node, "is_inverted_siphon", False) or ("倒虹吸" in st_str))
+        else:
+            matched = ("有压管道" in st_str)
+        if not matched:
+            continue
+
+        base_name = _normalize_pressurized_name(getattr(node, "name", ""), structure_kind)
+        dn_mm = _extract_pressurized_dn_mm(node)
+        flow_section_idx = _parse_flow_section_index(getattr(node, "flow_section", ""))
+
+        if flow_section_idx is None:
+            invalid_key = (base_name, structure_kind)
+            if invalid_key not in invalid:
+                invalid[invalid_key] = {
+                    "name": base_name,
+                    "display_name": base_name,
+                    "structure_kind": structure_kind,
+                }
+                invalid_order.append(invalid_key)
+            continue
+
+        entity_key = (base_name, flow_section_idx, structure_kind)
+        if entity_key not in entities:
+            entities[entity_key] = {
+                "name": base_name,
+                "flow_section": flow_section_idx,
+                "display_name": f"{base_name}-{_segment_label_from_index(flow_section_idx)}",
+                "structure_kind": structure_kind,
+                "DN_mm": 0,
+            }
+            entity_order.append(entity_key)
+
+        if dn_mm is not None:
+            entities[entity_key]["DN_mm"] = max(entities[entity_key]["DN_mm"], dn_mm)
+
+    entity_rows = []
+    for entity_key in entity_order:
+        item = dict(entities[entity_key])
+        item["pipe_material"] = "球墨铸铁管"
+        item["DN_mm"] = _normalize_dn_mm(item.get("DN_mm"), 1500)
+        entity_rows.append(item)
+    invalid_rows = [invalid[key] for key in invalid_order]
+    return entity_rows, invalid_rows
+
+
+def _extract_pressure_pipe_calc_contexts(nodes, proj_settings=None):
+    """提取有压管道断面表所需的水头损失计算上下文。"""
+    try:
+        from 推求水面线.core.pressure_pipe_calc import calc_turn_angle
+    except ImportError:
+        return {}
+
+    contexts = {}
+    order = []
+    if not nodes:
+        return contexts
+
+    for idx, node in enumerate(nodes):
+        if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+            continue
+        st_str = _struct_val(getattr(node, "structure_type", None))
+        if "有压管道" not in st_str and not getattr(node, "is_pressure_pipe", False):
+            continue
+
+        flow_section_idx = _parse_flow_section_index(getattr(node, "flow_section", ""))
+        if flow_section_idx is None:
+            continue
+
+        base_name = _normalize_pressurized_name(getattr(node, "name", ""), "pressure_pipe")
+        key = (base_name, flow_section_idx)
+        if key not in contexts:
+            contexts[key] = {
+                "rows": [],
+                "row_indices": [],
+                "inlet_row_index": -1,
+                "outlet_row_index": -1,
+                "inlet_transition_form": str(getattr(proj_settings, "siphon_transition_inlet_form", "反弯扭曲面") or "反弯扭曲面"),
+                "outlet_transition_form": str(getattr(proj_settings, "siphon_transition_outlet_form", "反弯扭曲面") or "反弯扭曲面"),
+                "inlet_transition_zeta": float(getattr(proj_settings, "siphon_transition_inlet_zeta", 0.10) or 0.10),
+                "outlet_transition_zeta": float(getattr(proj_settings, "siphon_transition_outlet_zeta", 0.20) or 0.20),
+                "upstream_velocity": 0.0,
+                "downstream_velocity": 0.0,
+            }
+            order.append(key)
+
+        ctx = contexts[key]
+        ctx["rows"].append(node)
+        ctx["row_indices"].append(idx)
+
+        params = getattr(node, "section_params", {}) or {}
+        in_out_raw = str(params.get("in_out_raw", "") or "").strip()
+        in_out = getattr(node, "in_out", None)
+        if in_out_raw == "进" or str(in_out) == "InOutType.INLET":
+            ctx["inlet_row_index"] = idx
+        elif in_out_raw == "出" or str(in_out) == "InOutType.OUTLET":
+            ctx["outlet_row_index"] = idx
+
+    for key in order:
+        ctx = contexts[key]
+        rows = ctx["rows"]
+        row_indices = ctx["row_indices"]
+        if not rows:
+            continue
+
+        if ctx["inlet_row_index"] < 0:
+            ctx["inlet_row_index"] = row_indices[0]
+        if ctx["outlet_row_index"] < 0:
+            ctx["outlet_row_index"] = row_indices[-1]
+
+        ip_points = []
+        for row in rows:
+            ip_points.append({
+                "x": getattr(row, "x", 0.0) or 0.0,
+                "y": getattr(row, "y", 0.0) or 0.0,
+                "turn_radius": getattr(row, "turn_radius", 0.0) or 0.0,
+                "turn_angle": 0.0,
+            })
+        for i in range(1, len(ip_points) - 1):
+            p_prev = (ip_points[i - 1]["x"], ip_points[i - 1]["y"])
+            p_curr = (ip_points[i]["x"], ip_points[i]["y"])
+            p_next = (ip_points[i + 1]["x"], ip_points[i + 1]["y"])
+            try:
+                ip_points[i]["turn_angle"] = calc_turn_angle(p_prev, p_curr, p_next)
+            except Exception:
+                ip_points[i]["turn_angle"] = 0.0
+        ctx["ip_points"] = ip_points
+
+        inlet_idx = ctx["inlet_row_index"]
+        outlet_idx = ctx["outlet_row_index"]
+
+        for i in range(inlet_idx - 1, -1, -1):
+            upstream = nodes[i]
+            if getattr(upstream, "is_transition", False):
+                continue
+            up_struct = _struct_val(getattr(upstream, "structure_type", None))
+            if "有压管道" in up_struct or getattr(upstream, "is_pressure_pipe", False):
+                continue
+            ctx["upstream_velocity"] = float(getattr(upstream, "velocity", 0.0) or 0.0)
+            break
+
+        for i in range(outlet_idx + 1, len(nodes)):
+            downstream = nodes[i]
+            if getattr(downstream, "is_transition", False):
+                continue
+            down_struct = _struct_val(getattr(downstream, "structure_type", None))
+            if "有压管道" in down_struct or getattr(downstream, "is_pressure_pipe", False):
+                continue
+            ctx["downstream_velocity"] = float(getattr(downstream, "velocity", 0.0) or 0.0)
+            break
+
+        ctx.pop("rows", None)
+        ctx.pop("row_indices", None)
+
+    return contexts
+
+
+def _normalize_pressure_pipe_total_head_loss_value(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0:
+        return None
+    return round(number, 4)
+
+
+def _get_panel_pressure_pipe_export_results(panel, rows):
+    getter = getattr(panel, "get_pressure_pipe_export_results", None)
+    if not callable(getter):
+        return {}
+    try:
+        data = getter(rows)
+    except TypeError:
+        data = getter()
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _attach_pressure_pipe_calc_contexts_to_rows(rows, calc_contexts):
+    contexts = calc_contexts or {}
+    for row in rows or []:
+        key = (row.get("name"), row.get("flow_section"))
+        context = contexts.get(key)
+        if not context:
+            continue
+        for field in (
+            "ip_points",
+            "upstream_velocity",
+            "downstream_velocity",
+            "inlet_transition_form",
+            "outlet_transition_form",
+            "inlet_transition_zeta",
+            "outlet_transition_zeta",
+        ):
+            if field in context:
+                row[field] = copy.deepcopy(context[field])
+    return rows
+
+
+def _attach_pressure_pipe_export_results_to_rows(rows, panel=None):
+    results_by_identity = _get_panel_pressure_pipe_export_results(panel, rows)
+    if not results_by_identity:
+        return rows
+    for row in rows or []:
+        identity = make_pressure_pipe_identity(row.get("flow_section"), row.get("name"))
+        result = results_by_identity.get(identity)
+        if not isinstance(result, dict):
+            continue
+        total_head_loss = _normalize_pressure_pipe_total_head_loss_value(
+            result.get("total_head_loss")
+        )
+        if total_head_loss is None:
+            continue
+        row["total_head_loss"] = total_head_loss
+    return rows
+
+
+def _normalize_pressurized_cache_rows(rows, structure_kind, default_material="球墨铸铁管"):
+    normalized = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            row_kind = str(row.get("structure_kind") or structure_kind or "").strip() or structure_kind
+            if not row_kind:
+                continue
+            base_row = _make_pressurized_param_row(
+                name=row.get("name"),
+                flow_section=row.get("flow_section"),
+                structure_kind=row_kind,
+                pipe_material=row.get("pipe_material", row.get("material", default_material)),
+                dn_mm=row.get("DN_mm", row.get("dn_mm", row.get("dn", 1500))),
+                display_name=row.get("display_name"),
+            )
+            for key, value in row.items():
+                if key not in base_row:
+                    base_row[key] = copy.deepcopy(value)
+            normalized.append(base_row)
+            continue
+
+        if not isinstance(row, (tuple, list)) or len(row) < 3:
+            continue
+        normalized.append(
+            _make_pressurized_param_row(
+                name=row[0],
+                flow_section=None,
+                structure_kind=structure_kind,
+                pipe_material=row[1],
+                dn_mm=row[2],
+                display_name=row[0],
+            )
+        )
+    return normalized
+
+
+def _serialize_pressurized_cache_rows(rows, structure_kind):
+    serialized = []
+    for row in _normalize_pressurized_cache_rows(rows, structure_kind):
+        serialized.append(copy.deepcopy(row))
+    return serialized
+
+
+def _prepare_pressure_pipe_export_rows(rows, panel=None, calc_contexts=None):
+    prepared_rows = _normalize_pressurized_cache_rows(rows, "pressure_pipe")
+    _attach_pressure_pipe_calc_contexts_to_rows(prepared_rows, calc_contexts)
+    _attach_pressure_pipe_export_results_to_rows(prepared_rows, panel=panel)
+    return prepared_rows
+
+
 def _merge_pressurized_param_defaults(group_items, cached_rows, default_material="球墨铸铁管"):
     """按名称将历史配置与当前分组合并，返回 [(name, material, dn_mm), ...]。"""
+    structure_kind = None
+    if group_items:
+        structure_kind = str(group_items[0].get("structure_kind") or "").strip() or None
+    if not structure_kind:
+        for row in cached_rows or []:
+            if isinstance(row, dict):
+                structure_kind = str(row.get("structure_kind") or "").strip() or None
+                if structure_kind:
+                    break
+    structure_kind = structure_kind or "siphon"
+
+    normalized_cache = _normalize_pressurized_cache_rows(
+        cached_rows,
+        structure_kind=structure_kind,
+        default_material=default_material,
+    )
+    if not group_items:
+        return normalized_cache
+
+    exact_cache = {}
+    legacy_by_name = {}
+    for row in normalized_cache:
+        exact_key = (row["name"], row.get("flow_section"), row["structure_kind"])
+        if row.get("flow_section"):
+            exact_cache[exact_key] = row
+        legacy_by_name.setdefault((row["name"], row["structure_kind"]), row)
+
+    merged_rows = []
+    for item in group_items:
+        base = _make_pressurized_param_row(
+            name=item.get("name"),
+            flow_section=item.get("flow_section"),
+            structure_kind=item.get("structure_kind", structure_kind),
+            pipe_material=item.get("pipe_material", default_material),
+            dn_mm=item.get("DN_mm", 1500),
+            display_name=item.get("display_name"),
+        )
+        cache_row = exact_cache.get(
+            (base["name"], base.get("flow_section"), base["structure_kind"])
+        ) or legacy_by_name.get((base["name"], base["structure_kind"]))
+        if cache_row:
+            base["pipe_material"] = cache_row["pipe_material"]
+            base["DN_mm"] = _normalize_dn_mm(cache_row["DN_mm"], base["DN_mm"])
+        merged_rows.append(base)
+    return merged_rows
     cached_map = {}
     for row in cached_rows or []:
         if not isinstance(row, (tuple, list)) or len(row) < 3:
@@ -2026,6 +2470,91 @@ def _build_pressurized_segments(qs, overrides_by_idx, params, has_source_data, s
     """基于分组参数构建倒虹吸/有压管道 segments。"""
     if not params:
         return []
+    passthrough_keys = (
+        "flow_section",
+        "structure_kind",
+        "ip_points",
+        "upstream_velocity",
+        "downstream_velocity",
+        "inlet_transition_form",
+        "outlet_transition_form",
+        "inlet_transition_zeta",
+        "outlet_transition_zeta",
+        "total_head_loss",
+        "friction_params",
+    )
+
+    structure_kind = None
+    for row in params or []:
+        if isinstance(row, dict):
+            structure_kind = str(row.get("structure_kind") or "").strip() or None
+            if structure_kind:
+                break
+    structure_kind = structure_kind or "siphon"
+
+    normalized_params = _normalize_pressurized_cache_rows(params, structure_kind)
+    if not normalized_params:
+        return []
+
+    overrides = overrides_by_idx or {}
+    segs = []
+    has_mapped_model = any(isinstance(row, dict) for row in params or [])
+
+    mapped_params = []
+    if has_source_data:
+        for row in normalized_params:
+            flow_section_idx = row.get("flow_section")
+            if flow_section_idx is None:
+                continue
+            if overrides and flow_section_idx not in overrides:
+                continue
+            mapped_params.append(row)
+
+    if has_source_data and has_mapped_model and not mapped_params:
+        return []
+
+    if has_source_data and mapped_params:
+        params_by_segment = {}
+        segment_order = []
+        for row in mapped_params:
+            flow_section_idx = row["flow_section"]
+            if flow_section_idx not in params_by_segment:
+                params_by_segment[flow_section_idx] = []
+                segment_order.append(flow_section_idx)
+            params_by_segment[flow_section_idx].append(row)
+
+        for flow_section_idx in segment_order:
+            base_override = {}
+            if flow_section_idx in overrides and isinstance(overrides[flow_section_idx], dict):
+                base_override = {
+                    key: value
+                    for key, value in overrides[flow_section_idx].items()
+                    if key != "name"
+                }
+
+            candidates = []
+            for row in params_by_segment[flow_section_idx]:
+                seg = {
+                    "name": row["display_name"],
+                    "_struct_name": row.get("name"),
+                    "flow_section": flow_section_idx,
+                    "structure_kind": row.get("structure_kind"),
+                }
+                if base_override:
+                    seg.update(base_override)
+                if 0 < flow_section_idx <= len(qs):
+                    seg["Q"] = qs[flow_section_idx - 1]
+                seg["DN_mm"] = row["DN_mm"]
+                seg["pipe_material"] = row["pipe_material"]
+                for key in passthrough_keys:
+                    if key in row:
+                        seg[key] = copy.deepcopy(row[key])
+                candidates.append(seg)
+
+            # 有源建筑物数据时，始终保留“原名 + 流量段”的逐行展示，
+            # 避免同流量段同参数的不同建筑物在弹窗与 DXF 中被合并后丢失名称。
+            segs.extend(candidates)
+        return segs
 
     overrides = overrides_by_idx or {}
     if has_source_data and overrides:
@@ -2043,7 +2572,6 @@ def _build_pressurized_segments(qs, overrides_by_idx, params, has_source_data, s
             _normalize_dn_mm(dn_mm, 1500),
         ))
 
-    multi = len(normalized_params) > 1
     segs = []
     for idx in indices:
         seg_label = segment_name_fn(idx)
@@ -2053,8 +2581,12 @@ def _build_pressurized_segments(qs, overrides_by_idx, params, has_source_data, s
 
         candidates = []
         for struct_name, pipe_material, dn_norm in normalized_params:
-            display_name = f"{struct_name}-{seg_label}" if multi else seg_label
-            seg = {"name": display_name}
+            seg = {
+                "name": seg_label,
+                "_struct_name": struct_name,
+                "flow_section": idx,
+                "structure_kind": structure_kind,
+            }
             if base_override:
                 seg.update(base_override)
             if 0 < idx <= len(qs):
@@ -2064,24 +2596,39 @@ def _build_pressurized_segments(qs, overrides_by_idx, params, has_source_data, s
             candidates.append(seg)
 
         if len(candidates) <= 1:
-            segs.extend(candidates)
+            single = dict(candidates[0])
+            single.pop("_struct_name", None)
+            segs.append(single)
             continue
 
-        signatures = {
-            (
+        grouped = {}
+        for item in candidates:
+            signature = (
                 item.get("Q"),
                 item.get("n"),
                 item.get("DN_mm"),
                 item.get("pipe_material"),
             )
-            for item in candidates
-        }
-        if len(signatures) == 1:
+            grouped.setdefault(signature, []).append(item)
+
+        if len(grouped) == 1:
             merged = dict(candidates[0])
             merged["name"] = seg_label
+            merged.pop("_struct_name", None)
             segs.append(merged)
-        else:
-            segs.extend(candidates)
+            continue
+
+        mergeable_group_count = sum(1 for items in grouped.values() if len(items) > 1)
+        for items in grouped.values():
+            merged = dict(items[0])
+            anchor_name = str(merged.get("_struct_name") or "").strip()
+            use_segment_name = mergeable_group_count == 1 and len(items) > 1
+            if use_segment_name:
+                merged["name"] = seg_label
+            else:
+                merged["name"] = f"{anchor_name}-{seg_label}" if anchor_name else seg_label
+            merged.pop("_struct_name", None)
+            segs.append(merged)
     return segs
 
 
@@ -3032,7 +3579,7 @@ class PressurizedPipeConfigDialog(QDialog):
         lay = QVBoxLayout(self)
         desc = QLabel(
             "请确认倒虹吸/有压管道导出参数。\n"
-            "规则与倒虹吸断面汇总表一致：按材质确定糙率，按 DN 计算设计流速。"
+            "倒虹吸按材质确定糙率 n；有压管道按材质自动派生摩阻参数 f/m/b，并结合 DN 计算设计流速。"
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("font-size:12px; color:#333;")
@@ -3042,17 +3589,19 @@ class PressurizedPipeConfigDialog(QDialog):
             self._build_group(
                 parent_layout=lay,
                 group_title="倒虹吸参数",
-                name_header="倒虹吸名称",
+                name_header="倒虹吸名称（含流量段）",
                 source_rows=siphon_rows,
                 target_rows=self._siphon_rows,
+                structure_kind="siphon",
             )
         if pressure_pipe_rows:
             self._build_group(
                 parent_layout=lay,
                 group_title="有压管道参数",
-                name_header="有压管道名称",
+                name_header="有压管道名称（含流量段）",
                 source_rows=pressure_pipe_rows,
                 target_rows=self._pressure_pipe_rows,
+                structure_kind="pressure_pipe",
             )
 
         btn_lay = QHBoxLayout()
@@ -3068,7 +3617,7 @@ class PressurizedPipeConfigDialog(QDialog):
         QShortcut(QKeySequence(Qt.Key_Escape), self, self.reject)
         QShortcut(QKeySequence(Qt.Key_Return), self, self._on_confirm)
 
-    def _build_group(self, parent_layout, group_title, name_header, source_rows, target_rows):
+    def _build_group(self, parent_layout, group_title, name_header, source_rows, target_rows, structure_kind):
         group = QGroupBox(group_title)
         group.setStyleSheet("QGroupBox{font-weight:bold;font-size:12px;}")
         glay = QVBoxLayout(group)
@@ -3086,23 +3635,24 @@ class PressurizedPipeConfigDialog(QDialog):
 
         grid = QGridLayout()
         grid.setSpacing(4)
-        for ri, (name, material, dn_mm) in enumerate(source_rows):
-            name_lbl = QLabel(name)
+        normalized_rows = _normalize_pressurized_cache_rows(source_rows, structure_kind)
+        for ri, row in enumerate(normalized_rows):
+            name_lbl = QLabel(row["display_name"])
             name_lbl.setStyleSheet("font-size:12px;")
             grid.addWidget(name_lbl, ri, 0)
 
             mat_combo = QComboBox()
             mat_combo.addItems(self._materials)
-            mat_combo.setCurrentText(material if material in self._materials else self._materials[0])
+            mat_combo.setCurrentText(row["pipe_material"] if row["pipe_material"] in self._materials else self._materials[0])
             mat_combo.setFixedWidth(160)
             grid.addWidget(mat_combo, ri, 1)
 
             dn_edit = LineEdit()
             dn_edit.setFixedWidth(100)
-            dn_edit.setText(str(_normalize_dn_mm(dn_mm, 1500)))
+            dn_edit.setText(str(_normalize_dn_mm(row["DN_mm"], 1500)))
             grid.addWidget(dn_edit, ri, 2)
 
-            target_rows.append((name, mat_combo, dn_edit))
+            target_rows.append((dict(row), mat_combo, dn_edit))
 
         grid.setColumnStretch(0, 2)
         grid.setColumnStretch(1, 3)
@@ -3112,12 +3662,22 @@ class PressurizedPipeConfigDialog(QDialog):
 
     def _read_rows(self, rows, title_prefix):
         out = []
-        for name, mat_combo, dn_edit in rows:
+        for row, mat_combo, dn_edit in rows:
             dn = _parse_positive_dn(dn_edit.text())
+            row_name = row.get("display_name") or row.get("name") or title_prefix
             if dn is None:
-                fluent_error(self, "输入错误", f"{title_prefix}“{name}”的 DN 必须为正整数")
+                fluent_error(self, "输入错误", f"{row_name} 的 DN 必须为正整数")
                 return None
-            out.append((name, mat_combo.currentText(), dn))
+            out.append(
+                _make_pressurized_param_row(
+                    name=row.get("name"),
+                    flow_section=row.get("flow_section"),
+                    structure_kind=row.get("structure_kind"),
+                    pipe_material=mat_combo.currentText(),
+                    dn_mm=dn,
+                    display_name=row.get("display_name"),
+                )
+            )
         return out
 
     def _on_confirm(self):
@@ -4669,6 +5229,12 @@ def _draw_section_summary_on_msp(
     ar = _make_segs(_default_segments_aqueduct_rect, node_defaults.get("aqueduct_rect"))
     rv = _make_segs(_default_segments_rect_culvert, node_defaults.get("rect_culvert"))
     cp = _make_segs(_default_segments_circular_pipe, node_defaults.get("circular_channel"))
+    pressure_pipe_params = _prepare_pressure_pipe_export_rows(
+        pressurized_params.get("pressure_pipe", []),
+        panel=panel,
+        calc_contexts=_extract_pressure_pipe_calc_contexts(nodes, proj_settings),
+    )
+
     sp = _build_pressurized_segments(
         qs=qs,
         overrides_by_idx=node_defaults.get("siphon", {}),
@@ -4679,7 +5245,7 @@ def _draw_section_summary_on_msp(
     pp = _build_pressurized_segments(
         qs=qs,
         overrides_by_idx=node_defaults.get("pressure_pipe", {}),
-        params=pressurized_params.get("pressure_pipe", []),
+        params=pressure_pipe_params,
         has_source_data=has_source,
         segment_name_fn=_segment_name,
     )
@@ -4989,6 +5555,118 @@ def export_combined_dxf(panel):
 # 5. 断面汇总表
 # ================================================================
 
+class _MultiLineElidedLabel(QLabel):
+    """Wrap text and elide only the last visible line."""
+
+    def __init__(self, text="", tooltip_text="", max_lines=3, parent=None):
+        super().__init__(parent)
+        self._full_text = ""
+        self._tooltip_text = ""
+        self._max_lines = max(1, int(max_lines or 1))
+        self.setWordWrap(True)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.setMaximumHeight(self._line_height() * self._max_lines)
+        self.set_full_text(text, tooltip_text=tooltip_text)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        line_count = len(self._wrapped_lines(max(1, width)))
+        visible_lines = max(1, min(self._max_lines, line_count))
+        margins = self.contentsMargins()
+        return visible_lines * self._line_height() + margins.top() + margins.bottom()
+
+    def set_full_text(self, text, tooltip_text=""):
+        self._full_text = str(text or "")
+        self._tooltip_text = str(tooltip_text or "")
+        self.setToolTip(self._tooltip_text)
+        self._refresh_visible_text()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh_visible_text()
+
+    def event(self, event):
+        if event.type() in (QEvent.FontChange, QEvent.LayoutRequest, QEvent.StyleChange):
+            self.setMaximumHeight(self._line_height() * self._max_lines)
+            self._refresh_visible_text()
+        return super().event(event)
+
+    def _line_height(self):
+        return max(1, self.fontMetrics().lineSpacing())
+
+    def _available_width(self):
+        width = self.contentsRect().width()
+        if width > 0:
+            return width
+        width = self.width()
+        if width > 0:
+            return width
+        return self.fontMetrics().horizontalAdvance(self._full_text or " ")
+
+    def _wrapped_lines(self, width):
+        text = self._full_text
+        if not text:
+            return [""]
+        metrics = self.fontMetrics()
+        lines = []
+        for paragraph in text.splitlines() or [""]:
+            if not paragraph:
+                lines.append("")
+                continue
+            current = ""
+            tokens = re.findall(r"[^,，]+(?:[,，]\s*)?|[,，]\s*", paragraph) or [paragraph]
+            for token in tokens:
+                token = token if current else token.lstrip()
+                candidate = f"{current}{token}"
+                if current and metrics.horizontalAdvance(candidate) <= width:
+                    current = candidate
+                    continue
+
+                if current:
+                    lines.append(current.rstrip())
+                    current = ""
+                    token = token.lstrip()
+
+                if metrics.horizontalAdvance(token) <= width:
+                    current = token
+                    continue
+
+                for ch in token:
+                    candidate = f"{current}{ch}"
+                    if current and metrics.horizontalAdvance(candidate) > width:
+                        lines.append(current.rstrip())
+                        current = ch.lstrip()
+                    else:
+                        current = candidate
+            if current:
+                lines.append(current.rstrip())
+        return lines or [text]
+
+    def _refresh_visible_text(self):
+        text = self._full_text
+        if not text:
+            super().setText("")
+            self.updateGeometry()
+            return
+
+        width = max(1, self._available_width())
+        wrapped = self._wrapped_lines(width)
+        if len(wrapped) <= self._max_lines:
+            visible_text = "\n".join(wrapped)
+        else:
+            prefix_lines = wrapped[: self._max_lines - 1]
+            last_line_source = "".join(wrapped[self._max_lines - 1 :])
+            last_line = self.fontMetrics().elidedText(last_line_source, Qt.ElideRight, width)
+            visible_text = "\n".join(prefix_lines + [last_line])
+
+        if visible_text != self.text():
+            super().setText(visible_text)
+            self.updateGeometry()
+
+
 class SectionSummaryDialog(QDialog):
     """断面尺寸及水力要素汇总表生成对话框（纯 PySide6 版）"""
 
@@ -5016,9 +5694,13 @@ class SectionSummaryDialog(QDialog):
         from calc_渠系计算算法内核.生成断面汇总表 import (
             _extract_segment_defaults_from_nodes,
             _segment_name,
+            PRESSURE_PIPE_MATERIALS,
             SIPHON_MATERIALS,
             ROCK_CLASSES,
             ROCK_LINING_DEFAULT,
+            normalize_pressure_pipe_material_key,
+            get_pressure_pipe_material_display_name,
+            compute_pressure_pipe,
             generate_excel,
             generate_dxf,
             _default_segments_rect_channel,
@@ -5037,6 +5719,10 @@ class SectionSummaryDialog(QDialog):
         self._generate_dxf = generate_dxf
         self._segment_name = _segment_name
         self._SIPHON_MATERIALS = SIPHON_MATERIALS
+        self._PRESSURE_PIPE_MATERIALS = PRESSURE_PIPE_MATERIALS
+        self._normalize_pressure_pipe_material_key = normalize_pressure_pipe_material_key
+        self._get_pressure_pipe_material_display_name = get_pressure_pipe_material_display_name
+        self._compute_pressure_pipe = compute_pressure_pipe
         self._default_fns = {
             'rect_channel': _default_segments_rect_channel,
             'trap_channel': _default_segments_trap_channel,
@@ -5048,13 +5734,23 @@ class SectionSummaryDialog(QDialog):
             'rect_culvert': _default_segments_rect_culvert,
             'circular_pipe': _default_segments_circular_pipe,
         }
+        self._ui_name_column_min_width = 220
+        self._ui_material_column_width = 200
+        self._ui_dn_column_width = 108
+        self._ui_q_value_column_width = 108
+        self._ui_numeric_column_width = 96
+        self._ui_grid_spacing = 8
+        self._ui_group_margins = (14, 12, 14, 12)
 
         node_defaults, flow_qs = _extract_segment_defaults_from_nodes(nodes)
         self._node_defaults = node_defaults
         self._flow_qs = flow_qs
 
-        # 提取倒虹吸分组（按名称，支持不同材质和管径）
-        self._siphon_groups = self._extract_siphon_groups()
+        # 提取实际的有压流实体，并记录缺失流量段的条目以便提示后跳过
+        self._siphon_groups, self._invalid_siphon_groups = self._extract_siphon_groups()
+        self._pressure_pipe_groups, self._invalid_pressure_pipe_groups = self._extract_pressure_pipe_groups()
+        self._pressure_pipe_calc_contexts = _extract_pressure_pipe_calc_contexts(self._nodes, self._proj_settings)
+        self._invalid_pressurized_notice_shown = False
 
         # 确定流量段数
         self._segment_count = self._get_segment_count()
@@ -5097,10 +5793,165 @@ class SectionSummaryDialog(QDialog):
         return list(fallback) + [fallback[-1]] * (sc - len(fallback))
 
     def _extract_siphon_groups(self):
-        return _extract_named_pressurized_groups(self._nodes, "siphon")
+        return _extract_pressurized_param_entities(self._nodes, "siphon")
     
     def _extract_pressure_pipe_groups(self):
-        return _extract_named_pressurized_groups(self._nodes, "pressure_pipe")
+        return _extract_pressurized_param_entities(self._nodes, "pressure_pipe")
+
+    def _build_q_segment_structure_names(self):
+        segment_names = {idx: [] for idx in range(1, self._segment_count + 1)}
+        seen = {idx: set() for idx in range(1, self._segment_count + 1)}
+        for node in self._nodes or []:
+            if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+                continue
+            st_str = _struct_val(getattr(node, "structure_type", None))
+            if getattr(node, "is_inverted_siphon", False) or ("倒虹吸" in st_str):
+                structure_kind = "siphon"
+            elif "有压管道" in st_str or getattr(node, "is_pressure_pipe", False):
+                structure_kind = "pressure_pipe"
+            else:
+                continue
+
+            flow_section_idx = _parse_flow_section_index(getattr(node, "flow_section", ""))
+            if flow_section_idx is None or flow_section_idx not in segment_names:
+                continue
+
+            base_name = _normalize_pressurized_name(getattr(node, "name", ""), structure_kind)
+            entity_key = (base_name, structure_kind)
+            if entity_key in seen[flow_section_idx]:
+                continue
+            seen[flow_section_idx].add(entity_key)
+            segment_names[flow_section_idx].append({
+                "base_name": base_name,
+                "structure_kind": structure_kind,
+            })
+
+        formatted_names = {}
+        for flow_section_idx, items in segment_names.items():
+            name_counts = {}
+            for item in items:
+                base_name = item["base_name"]
+                name_counts[base_name] = name_counts.get(base_name, 0) + 1
+
+            formatted_names[flow_section_idx] = []
+            for item in items:
+                base_name = item["base_name"]
+                if name_counts.get(base_name, 0) > 1:
+                    suffix = "倒虹吸" if item["structure_kind"] == "siphon" else "有压管道"
+                    formatted_names[flow_section_idx].append(f"{base_name}（{suffix}）")
+                else:
+                    formatted_names[flow_section_idx].append(base_name)
+        return formatted_names
+
+    def _build_q_segment_label(self, flow_section_idx):
+        base_label = self._segment_name(flow_section_idx)
+        names = self._q_segment_structure_names.get(flow_section_idx, [])
+        if not names:
+            return base_label, ""
+        if len(names) <= 2:
+            summary = "、".join(names)
+        else:
+            summary = f"{names[0]}、{names[1]}等{len(names)}项"
+        return f"{base_label}（{summary}）", "、".join(names)
+
+    def _pressure_pipe_material_key(self, material_value):
+        normalizer = getattr(self, "_normalize_pressure_pipe_material_key", None)
+        if callable(normalizer):
+            return normalizer(material_value)
+        return str(material_value or "").strip() or "球墨铸铁管"
+
+    def _pressure_pipe_material_display_name(self, material_value):
+        display_getter = getattr(self, "_get_pressure_pipe_material_display_name", None)
+        if callable(display_getter):
+            return display_getter(material_value)
+        return str(material_value or "").strip() or "球墨铸铁管"
+
+    def _styled_form_header_label(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
+        lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        return lbl
+
+    def _styled_name_value_label(self, text, tooltip_text="", max_lines=3):
+        lbl = _MultiLineElidedLabel(text, tooltip_text=tooltip_text, max_lines=max_lines)
+        lbl.setStyleSheet("font-size:12px;")
+        return lbl
+
+    def _build_q_segment_label(self, flow_section_idx):
+        base_label = self._segment_name(flow_section_idx)
+        names = self._q_segment_structure_names.get(flow_section_idx, [])
+        if not names:
+            return base_label, ""
+        summary = ", ".join(names)
+        return f"{base_label}（{summary}）", summary
+
+    def _make_fixed_line_edit(self, width, text="", placeholder_text=""):
+        edit = LineEdit()
+        edit.setFixedWidth(width)
+        if text:
+            edit.setText(str(text))
+        if placeholder_text:
+            edit.setPlaceholderText(str(placeholder_text))
+        return edit
+
+    def _apply_group_body_layout(self, layout):
+        left, top, right, bottom = self._ui_group_margins
+        layout.setContentsMargins(left, top, right, bottom)
+        layout.setSpacing(self._ui_grid_spacing)
+
+    def _configure_q_grid(self, grid):
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        grid.setColumnMinimumWidth(0, self._ui_name_column_min_width)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnMinimumWidth(1, self._ui_q_value_column_width)
+        grid.setColumnStretch(1, 0)
+
+    def _configure_pressurized_form_grid(self, grid):
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        grid.setColumnMinimumWidth(0, self._ui_name_column_min_width)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnMinimumWidth(1, self._ui_material_column_width)
+        grid.setColumnStretch(1, 0)
+        grid.setColumnMinimumWidth(2, self._ui_dn_column_width)
+        grid.setColumnStretch(2, 0)
+
+    def _configure_struct_form_grid(self, grid, value_column_count):
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        grid.setColumnMinimumWidth(0, 120)
+        grid.setColumnStretch(0, 1)
+        for ci in range(1, value_column_count + 1):
+            grid.setColumnMinimumWidth(ci, self._ui_numeric_column_width)
+            grid.setColumnStretch(ci, 0)
+
+    def _set_grid_first_column_labels(self, grid, labels):
+        for row, label in labels:
+            label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            label.setMinimumWidth(120)
+            grid.addWidget(label, row, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+
+    def _populate_pressure_pipe_material_combo(self, combo):
+        combo.clear()
+        for material_key in self._PRESSURE_PIPE_MATERIALS.keys():
+            combo.addItem(self._pressure_pipe_material_display_name(material_key), material_key)
+
+    def _set_pressure_pipe_material_combo_value(self, combo, material_value):
+        material_key = self._pressure_pipe_material_key(material_value)
+        idx = combo.findData(material_key)
+        if idx < 0:
+            idx = 0
+        combo.setCurrentIndex(idx)
+
+    def _current_pressure_pipe_material_value(self, combo):
+        material_key = combo.currentData()
+        if material_key:
+            return str(material_key)
+        return self._pressure_pipe_material_key(combo.currentText())
 
     def showEvent(self, event):
         """确保对话框不超出屏幕可见区域"""
@@ -5147,85 +5998,100 @@ class SectionSummaryDialog(QDialog):
         desc.setStyleSheet("font-size:13px; color:#333;")
         lay.addWidget(desc)
 
+        invalid_notice = self._build_invalid_pressurized_notice()
+        if invalid_notice:
+            invalid_lbl = QLabel(invalid_notice)
+            invalid_lbl.setWordWrap(True)
+            invalid_lbl.setStyleSheet(
+                "font-size:11px; color:#8a4b00; background:#fff4e5; border:1px solid #f3d19c; "
+                "border-radius:6px; padding:8px;"
+            )
+            lay.addWidget(invalid_lbl)
+
         # ---- 流量段参数 ----
         q_group = QGroupBox("流量段设计流量 Q (m³/s)")
         q_group.setStyleSheet("QGroupBox{font-weight:bold;font-size:12px;}")
         q_lay = QVBoxLayout(q_group)
+        self._apply_group_body_layout(q_lay)
 
         q_grid = QGridLayout()
-        q_grid.setSpacing(4)
+        self._configure_q_grid(q_grid)
+        self._q_form_grid = q_grid
 
+        self._q_segment_structure_names = self._build_q_segment_structure_names()
         self._q_edits = []
         for i in range(self._segment_count):
-            lbl = QLabel(self._segment_name(i + 1))
-            lbl.setStyleSheet("font-size:12px;")
-            edit = LineEdit()
-            edit.setFixedWidth(100)
-            edit.setText(str(default_qs[i] if i < len(default_qs) else default_qs[-1]))
-            q_grid.addWidget(lbl, i, 0)
-            q_grid.addWidget(edit, i, 1)
+            label_text, tooltip_text = self._build_q_segment_label(i + 1)
+            lbl = self._styled_name_value_label(
+                label_text,
+                tooltip_text=tooltip_text,
+                max_lines=3,
+            )
+            edit = self._make_fixed_line_edit(
+                self._ui_q_value_column_width,
+                text=default_qs[i] if i < len(default_qs) else default_qs[-1],
+            )
+            q_grid.addWidget(lbl, i, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+            q_grid.addWidget(edit, i, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
             self._q_edits.append(edit)
 
-        q_grid.setColumnStretch(2, 1)
         q_lay.addLayout(q_grid)
         lay.addWidget(q_group)
 
-        # ---- 倒虹吸管道参数（按名称分组） ----
+        # ---- 倒虹吸管道参数（按建筑物 + 流量段） ----
         siphon_group = QGroupBox("倒虹吸管道参数")
         siphon_group.setStyleSheet("QGroupBox{font-weight:bold;font-size:12px;}")
         siphon_lay = QVBoxLayout(siphon_group)
+        self._apply_group_body_layout(siphon_lay)
 
-        # 构建倒虹吸分组列表；无数据时提供一个默认行
         if self._siphon_groups:
             siphon_items = _merge_pressurized_param_defaults(
                 self._siphon_groups,
                 self._cached_pressurized.get("siphon", []),
             )
         else:
-            siphon_items = [("倒虹吸", "球墨铸铁管", 1500)]
+            siphon_items = [] if self._nodes else [
+                _make_pressurized_param_row(
+                    name="倒虹吸",
+                    flow_section=None,
+                    structure_kind="siphon",
+                    pipe_material="球墨铸铁管",
+                    dn_mm=1500,
+                    display_name="倒虹吸",
+                )
+            ]
 
-        # 表头
-        hdr_grid = QGridLayout()
-        hdr_grid.setSpacing(6)
-        for ci, txt in enumerate(['倒虹吸名称', '管道材质', 'DN (mm)']):
-            lbl = QLabel(txt)
-            lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
-            hdr_grid.addWidget(lbl, 0, ci)
-        hdr_grid.setColumnStretch(0, 2)
-        hdr_grid.setColumnStretch(1, 3)
-        hdr_grid.setColumnStretch(2, 2)
-        siphon_lay.addLayout(hdr_grid)
-
-        self._siphon_rows = []  # [(name, mat_combo, dn_edit), ...]
+        self._siphon_rows = []  # [(row_dict, mat_combo, dn_edit), ...]
         sp_grid = QGridLayout()
-        sp_grid.setSpacing(4)
-        for ri, (sp_name, sp_material, sp_dn) in enumerate(siphon_items):
-            # 名称标签
-            name_lbl = QLabel(sp_name)
-            name_lbl.setStyleSheet("font-size:12px;")
-            sp_grid.addWidget(name_lbl, ri, 0)
+        self._configure_pressurized_form_grid(sp_grid)
+        self._siphon_form_grid = sp_grid
+        for ci, txt in enumerate(['倒虹吸名称（含流量段）', '管道材质', 'DN (mm)']):
+            sp_grid.addWidget(
+                self._styled_form_header_label(txt),
+                0,
+                ci,
+                alignment=Qt.AlignLeft | Qt.AlignVCenter,
+            )
+        for ri, sp_row in enumerate(siphon_items):
+            row_index = ri + 1
+            name_lbl = self._styled_name_value_label(sp_row["display_name"])
+            sp_grid.addWidget(name_lbl, row_index, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
-            # 材质下拉
             mat_combo = QComboBox()
             mat_combo.addItems(list(self._SIPHON_MATERIALS.keys()))
             mat_combo.setCurrentText(
-                sp_material if sp_material in self._SIPHON_MATERIALS else "球墨铸铁管"
+                sp_row["pipe_material"] if sp_row["pipe_material"] in self._SIPHON_MATERIALS else "球墨铸铁管"
             )
-            mat_combo.setFixedWidth(160)
-            sp_grid.addWidget(mat_combo, ri, 1)
+            mat_combo.setFixedWidth(self._ui_material_column_width)
+            sp_grid.addWidget(mat_combo, row_index, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
-            # DN 输入框
-            dn_edit = LineEdit()
-            dn_edit.setFixedWidth(100)
-            dn_val = _normalize_dn_mm(sp_dn, 1500)
+            dn_edit = self._make_fixed_line_edit(self._ui_dn_column_width)
+            dn_val = _normalize_dn_mm(sp_row["DN_mm"], 1500)
             dn_edit.setText(str(dn_val))
-            sp_grid.addWidget(dn_edit, ri, 2)
+            sp_grid.addWidget(dn_edit, row_index, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
-            self._siphon_rows.append((sp_name, mat_combo, dn_edit))
+            self._siphon_rows.append((dict(sp_row), mat_combo, dn_edit))
 
-        sp_grid.setColumnStretch(0, 2)
-        sp_grid.setColumnStretch(1, 3)
-        sp_grid.setColumnStretch(2, 2)
         siphon_lay.addLayout(sp_grid)
 
         dn_note = QLabel("（DN 从倒虹吸计算结果自动导入，也可手动修改）")
@@ -5233,63 +6099,58 @@ class SectionSummaryDialog(QDialog):
         siphon_lay.addWidget(dn_note)
         lay.addWidget(siphon_group)
 
-        # ---- 有压管道参数（与倒虹吸类似） ----
+        # ---- 有压管道参数（按建筑物 + 流量段） ----
         pressure_pipe_group = QGroupBox("有压管道参数")
         pressure_pipe_group.setStyleSheet("QGroupBox{font-weight:bold;font-size:12px;}")
         pp_lay = QVBoxLayout(pressure_pipe_group)
+        self._apply_group_body_layout(pp_lay)
 
-        # 提取有压管道分组
-        self._pressure_pipe_groups = self._extract_pressure_pipe_groups()
         if self._pressure_pipe_groups:
             pp_items = _merge_pressurized_param_defaults(
                 self._pressure_pipe_groups,
                 self._cached_pressurized.get("pressure_pipe", []),
             )
         else:
-            pp_items = [("有压管道", "球墨铸铁管", 1500)]
+            pp_items = [] if self._nodes else [
+                _make_pressurized_param_row(
+                    name="有压管道",
+                    flow_section=None,
+                    structure_kind="pressure_pipe",
+                    pipe_material="球墨铸铁管",
+                    dn_mm=1500,
+                    display_name="有压管道",
+                )
+            ]
 
-        # 表头
-        pp_hdr_grid = QGridLayout()
-        pp_hdr_grid.setSpacing(6)
-        for ci, txt in enumerate(['有压管道名称', '管道材质', 'DN (mm)']):
-            lbl = QLabel(txt)
-            lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
-            pp_hdr_grid.addWidget(lbl, 0, ci)
-        pp_hdr_grid.setColumnStretch(0, 2)
-        pp_hdr_grid.setColumnStretch(1, 3)
-        pp_hdr_grid.setColumnStretch(2, 2)
-        pp_lay.addLayout(pp_hdr_grid)
-
-        self._pressure_pipe_rows = []  # [(name, mat_combo, dn_edit), ...]
+        self._pressure_pipe_rows = []  # [(row_dict, mat_combo, dn_edit), ...]
         pp_grid = QGridLayout()
-        pp_grid.setSpacing(4)
-        for ri, (pp_name, pp_material, pp_dn) in enumerate(pp_items):
-            # 名称标签
-            name_lbl = QLabel(pp_name)
-            name_lbl.setStyleSheet("font-size:12px;")
-            pp_grid.addWidget(name_lbl, ri, 0)
-
-            # 材质下拉
-            mat_combo = QComboBox()
-            mat_combo.addItems(list(self._SIPHON_MATERIALS.keys()))
-            mat_combo.setCurrentText(
-                pp_material if pp_material in self._SIPHON_MATERIALS else "球墨铸铁管"
+        self._configure_pressurized_form_grid(pp_grid)
+        self._pressure_pipe_form_grid = pp_grid
+        for ci, txt in enumerate(['有压管道名称（含流量段）', '管道材质', 'DN (mm)']):
+            pp_grid.addWidget(
+                self._styled_form_header_label(txt),
+                0,
+                ci,
+                alignment=Qt.AlignLeft | Qt.AlignVCenter,
             )
-            mat_combo.setFixedWidth(160)
-            pp_grid.addWidget(mat_combo, ri, 1)
+        for ri, pp_row in enumerate(pp_items):
+            row_index = ri + 1
+            name_lbl = self._styled_name_value_label(pp_row["display_name"])
+            pp_grid.addWidget(name_lbl, row_index, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
-            # DN 输入框
-            dn_edit = LineEdit()
-            dn_edit.setFixedWidth(100)
-            dn_val = _normalize_dn_mm(pp_dn, 1500)
+            mat_combo = QComboBox()
+            self._populate_pressure_pipe_material_combo(mat_combo)
+            self._set_pressure_pipe_material_combo_value(mat_combo, pp_row.get("pipe_material"))
+            mat_combo.setFixedWidth(self._ui_material_column_width)
+            pp_grid.addWidget(mat_combo, row_index, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+
+            dn_edit = self._make_fixed_line_edit(self._ui_dn_column_width)
+            dn_val = _normalize_dn_mm(pp_row["DN_mm"], 1500)
             dn_edit.setText(str(dn_val))
-            pp_grid.addWidget(dn_edit, ri, 2)
+            pp_grid.addWidget(dn_edit, row_index, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
-            self._pressure_pipe_rows.append((pp_name, mat_combo, dn_edit))
+            self._pressure_pipe_rows.append((dict(pp_row), mat_combo, dn_edit))
 
-        pp_grid.setColumnStretch(0, 2)
-        pp_grid.setColumnStretch(1, 3)
-        pp_grid.setColumnStretch(2, 2)
         pp_lay.addLayout(pp_grid)
 
         pp_note = QLabel("（DN 从有压管道计算结果自动导入，也可手动修改）")
@@ -5312,12 +6173,15 @@ class SectionSummaryDialog(QDialog):
         tc_lay.setSpacing(6)
 
         tc_grid = QGridLayout()
-        tc_grid.setSpacing(4)
-        tc_grid.addWidget(QLabel(""), 0, 0)  # 空占位
+        self._configure_struct_form_grid(tc_grid, 2)
+        self._struct_channel_grid = tc_grid
         for ci, txt in enumerate(['壁厚 t (m)', '拉杆尺寸 (m)']):
-            lbl = QLabel(txt)
-            lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
-            tc_grid.addWidget(lbl, 0, ci + 1)
+            tc_grid.addWidget(
+                self._styled_form_header_label(txt),
+                0,
+                ci + 1,
+                alignment=Qt.AlignLeft | Qt.AlignVCenter,
+            )
 
         def _tie_rod_pair(default_w=0.2, default_h=0.2):
             """创建拉杆尺寸 [宽] × [高] 组合控件，返回 (container, w_edit, h_edit)。"""
@@ -5342,24 +6206,23 @@ class SectionSummaryDialog(QDialog):
             return container, w_edit, h_edit
 
         # 矩形明渠
-        tc_grid.addWidget(QLabel("矩形明渠"), 1, 0)
-        self._rect_ch_wall_t = LineEdit(); self._rect_ch_wall_t.setFixedWidth(90)
-        self._rect_ch_wall_t.setText("0.3"); self._rect_ch_wall_t.setPlaceholderText("0.3")
-        tc_grid.addWidget(self._rect_ch_wall_t, 1, 1)
+        self._set_grid_first_column_labels(
+            tc_grid,
+            [
+                (1, QLabel("矩形明渠")),
+                (2, QLabel("梯形明渠")),
+            ],
+        )
+        self._rect_ch_wall_t = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.3", "0.3")
+        tc_grid.addWidget(self._rect_ch_wall_t, 1, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         rc_tr_container, self._rect_ch_tie_w, self._rect_ch_tie_h = _tie_rod_pair()
-        tc_grid.addWidget(rc_tr_container, 1, 2)
+        tc_grid.addWidget(rc_tr_container, 1, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
         # 梯形明渠
-        tc_grid.addWidget(QLabel("梯形明渠"), 2, 0)
-        self._trap_ch_wall_t = LineEdit(); self._trap_ch_wall_t.setFixedWidth(90)
-        self._trap_ch_wall_t.setText("0.3"); self._trap_ch_wall_t.setPlaceholderText("0.3")
-        tc_grid.addWidget(self._trap_ch_wall_t, 2, 1)
+        self._trap_ch_wall_t = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.3", "0.3")
+        tc_grid.addWidget(self._trap_ch_wall_t, 2, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         tp_tr_container, self._trap_ch_tie_w, self._trap_ch_tie_h = _tie_rod_pair()
-        tc_grid.addWidget(tp_tr_container, 2, 2)
-
-        tc_grid.setColumnStretch(0, 1)
-        tc_grid.setColumnStretch(1, 2)
-        tc_grid.setColumnStretch(2, 3)
+        tc_grid.addWidget(tp_tr_container, 2, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         tc_lay.addLayout(tc_grid)
         tc_lay.addStretch()
         struct_tabs.addTab(tab_channel, "明渠类")
@@ -5370,26 +6233,24 @@ class SectionSummaryDialog(QDialog):
         ta_lay.setSpacing(6)
 
         ta_grid = QGridLayout()
-        ta_grid.setSpacing(4)
-        ta_grid.addWidget(QLabel(""), 0, 0)
-        lbl_t = QLabel("壁厚 t (m)")
-        lbl_t.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
-        ta_grid.addWidget(lbl_t, 0, 1)
+        self._configure_struct_form_grid(ta_grid, 1)
+        self._struct_aqueduct_grid = ta_grid
+        ta_grid.addWidget(self._styled_form_header_label("壁厚 t (m)"), 0, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
         # U形渡槽
-        ta_grid.addWidget(QLabel("U形渡槽"), 1, 0)
-        self._aq_u_wall_t = LineEdit(); self._aq_u_wall_t.setFixedWidth(90)
-        self._aq_u_wall_t.setText("0.35"); self._aq_u_wall_t.setPlaceholderText("0.35")
-        ta_grid.addWidget(self._aq_u_wall_t, 1, 1)
+        self._set_grid_first_column_labels(
+            ta_grid,
+            [
+                (1, QLabel("U形渡槽")),
+                (2, QLabel("矩形渡槽")),
+            ],
+        )
+        self._aq_u_wall_t = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.35", "0.35")
+        ta_grid.addWidget(self._aq_u_wall_t, 1, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
         # 矩形渡槽
-        ta_grid.addWidget(QLabel("矩形渡槽"), 2, 0)
-        self._aq_rect_wall_t = LineEdit(); self._aq_rect_wall_t.setFixedWidth(90)
-        self._aq_rect_wall_t.setText("0.35"); self._aq_rect_wall_t.setPlaceholderText("0.35")
-        ta_grid.addWidget(self._aq_rect_wall_t, 2, 1)
-
-        ta_grid.setColumnStretch(0, 1)
-        ta_grid.setColumnStretch(1, 2)
+        self._aq_rect_wall_t = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.35", "0.35")
+        ta_grid.addWidget(self._aq_rect_wall_t, 2, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         ta_lay.addLayout(ta_grid)
         ta_lay.addStretch()
         struct_tabs.addTab(tab_aqueduct, "渡槽类")
@@ -5400,28 +6261,23 @@ class SectionSummaryDialog(QDialog):
         tv_lay.setSpacing(6)
 
         tv_grid = QGridLayout()
-        tv_grid.setSpacing(4)
-        tv_grid.addWidget(QLabel(""), 0, 0)
+        self._configure_struct_form_grid(tv_grid, 3)
+        self._struct_culvert_grid = tv_grid
         for ci, txt in enumerate(['底板厚 t\u2080 (m)', '边墙厚 t\u2081 (m)', '顶板厚 t\u2082 (m)']):
-            lbl = QLabel(txt)
-            lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
-            tv_grid.addWidget(lbl, 0, ci + 1)
+            tv_grid.addWidget(
+                self._styled_form_header_label(txt),
+                0,
+                ci + 1,
+                alignment=Qt.AlignLeft | Qt.AlignVCenter,
+            )
 
-        tv_grid.addWidget(QLabel("矩形暗涵"), 1, 0)
-        self._culvert_t0 = LineEdit(); self._culvert_t0.setFixedWidth(90)
-        self._culvert_t0.setText("0.4"); self._culvert_t0.setPlaceholderText("0.4")
-        tv_grid.addWidget(self._culvert_t0, 1, 1)
-        self._culvert_t1 = LineEdit(); self._culvert_t1.setFixedWidth(90)
-        self._culvert_t1.setText("0.4"); self._culvert_t1.setPlaceholderText("0.4")
-        tv_grid.addWidget(self._culvert_t1, 1, 2)
-        self._culvert_t2 = LineEdit(); self._culvert_t2.setFixedWidth(90)
-        self._culvert_t2.setText("0.4"); self._culvert_t2.setPlaceholderText("0.4")
-        tv_grid.addWidget(self._culvert_t2, 1, 3)
-
-        tv_grid.setColumnStretch(0, 1)
-        tv_grid.setColumnStretch(1, 2)
-        tv_grid.setColumnStretch(2, 2)
-        tv_grid.setColumnStretch(3, 2)
+        self._set_grid_first_column_labels(tv_grid, [(1, QLabel("矩形暗涵"))])
+        self._culvert_t0 = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.4", "0.4")
+        tv_grid.addWidget(self._culvert_t0, 1, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        self._culvert_t1 = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.4", "0.4")
+        tv_grid.addWidget(self._culvert_t1, 1, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        self._culvert_t2 = self._make_fixed_line_edit(self._ui_numeric_column_width, "0.4", "0.4")
+        tv_grid.addWidget(self._culvert_t2, 1, 3, alignment=Qt.AlignLeft | Qt.AlignVCenter)
         tv_lay.addLayout(tv_grid)
         tv_lay.addStretch()
         struct_tabs.addTab(tab_culvert, "暗涵")
@@ -5436,28 +6292,28 @@ class SectionSummaryDialog(QDialog):
         tt_lay.addWidget(tt_desc)
 
         tt_grid = QGridLayout()
-        tt_grid.setSpacing(4)
-        tt_grid.addWidget(QLabel(""), 0, 0)
+        self._configure_struct_form_grid(tt_grid, 2)
+        self._struct_tunnel_grid = tt_grid
         for ci, txt in enumerate(['底板厚 t\u2080 (m)', '边墙/顶拱/衬砌厚 t (m)']):
-            lbl = QLabel(txt)
-            lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold;")
-            tt_grid.addWidget(lbl, 0, ci + 1)
+            tt_grid.addWidget(
+                self._styled_form_header_label(txt),
+                0,
+                ci + 1,
+                alignment=Qt.AlignLeft | Qt.AlignVCenter,
+            )
 
         self._lining_edits = {}  # {rock_class: (t0_edit, t_edit)}
         for ri, rc in enumerate(self._ROCK_CLASSES):
-            tt_grid.addWidget(QLabel(rc), ri + 1, 0)
+            name_lbl = QLabel(rc)
+            name_lbl.setMinimumWidth(120)
+            tt_grid.addWidget(name_lbl, ri + 1, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
             defaults = self._ROCK_LINING_DEFAULT[rc]
-            t0_edit = LineEdit(); t0_edit.setFixedWidth(90)
-            t0_edit.setText(str(defaults['t0'])); t0_edit.setPlaceholderText(str(defaults['t0']))
-            tt_grid.addWidget(t0_edit, ri + 1, 1)
-            t_edit = LineEdit(); t_edit.setFixedWidth(90)
-            t_edit.setText(str(defaults['t'])); t_edit.setPlaceholderText(str(defaults['t']))
-            tt_grid.addWidget(t_edit, ri + 1, 2)
+            t0_edit = self._make_fixed_line_edit(self._ui_numeric_column_width, str(defaults['t0']), str(defaults['t0']))
+            tt_grid.addWidget(t0_edit, ri + 1, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+            t_edit = self._make_fixed_line_edit(self._ui_numeric_column_width, str(defaults['t']), str(defaults['t']))
+            tt_grid.addWidget(t_edit, ri + 1, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
             self._lining_edits[rc] = (t0_edit, t_edit)
 
-        tt_grid.setColumnStretch(0, 1)
-        tt_grid.setColumnStretch(1, 3)
-        tt_grid.setColumnStretch(2, 3)
         tt_lay.addLayout(tt_grid)
 
         # ---- 隧洞断面设计方式 ----
@@ -5577,6 +6433,98 @@ class SectionSummaryDialog(QDialog):
         outer_lay.addLayout(btn_lay)
 
     # ---- 读取构造参数 ----
+    def _invalid_pressurized_items(self):
+        items = []
+        for row in self._invalid_siphon_groups:
+            items.append(f"倒虹吸：{row.get('display_name') or row.get('name') or '倒虹吸'}")
+        for row in self._invalid_pressure_pipe_groups:
+            items.append(f"有压管道：{row.get('display_name') or row.get('name') or '有压管道'}")
+        return items
+
+    def _build_invalid_pressurized_notice(self):
+        items = self._invalid_pressurized_items()
+        if not items:
+            return ""
+        return "以下有压流建筑物缺少有效流量段，当前无法导出，请先补全后再试：\n" + "；".join(items)
+
+    def _block_invalid_pressurized_export(self):
+        notice = self._build_invalid_pressurized_notice()
+        if notice:
+            self._invalid_pressurized_notice_shown = True
+            fluent_error(self, "无法导出", notice)
+            return True
+        return False
+
+    def _read_pressurized_rows(self, rows, title_prefix):
+        out = []
+        for row, mat_combo, dn_edit in rows:
+            dn = _parse_positive_dn(dn_edit.text())
+            row_name = row.get("display_name") or row.get("name") or title_prefix
+            if dn is None:
+                fluent_error(self, "输入错误", f"{row_name} 的 DN 必须为正整数")
+                return None
+            pipe_material = mat_combo.currentText()
+            if title_prefix == "有压管道":
+                pipe_material = self._current_pressure_pipe_material_value(mat_combo)
+            out.append(
+                _make_pressurized_param_row(
+                    name=row.get("name"),
+                    flow_section=row.get("flow_section"),
+                    structure_kind=row.get("structure_kind"),
+                    pipe_material=pipe_material,
+                    dn_mm=dn,
+                    display_name=row.get("display_name"),
+                )
+            )
+        return out
+
+    def _attach_pressure_pipe_calc_contexts(self, rows):
+        return _attach_pressure_pipe_calc_contexts_to_rows(
+            rows,
+            getattr(self, "_pressure_pipe_calc_contexts", None),
+        )
+
+    @staticmethod
+    def _normalize_pressure_pipe_total_head_loss_value(value):
+        return _normalize_pressure_pipe_total_head_loss_value(value)
+
+    def _get_panel_pressure_pipe_export_results(self, rows):
+        return _get_panel_pressure_pipe_export_results(getattr(self, "_panel", None), rows)
+
+    def _attach_pressure_pipe_export_results(self, rows):
+        return _attach_pressure_pipe_export_results_to_rows(rows, panel=getattr(self, "_panel", None))
+
+    def _summarize_pressurized_materials(self, rows):
+        parts = []
+        for row in rows or []:
+            label = row.get("display_name") or row.get("name")
+            material = row.get("pipe_material")
+            if row.get("structure_kind") == "pressure_pipe" and material:
+                material = self._pressure_pipe_material_display_name(material)
+            if label and material:
+                parts.append(f"{label}({material})")
+        return "、".join(parts)
+
+    def _collect_pressure_pipe_missing_total_head_loss_labels(self, rows):
+        if not rows:
+            return []
+        computed_rows = self._compute_pressure_pipe(rows)
+        return [
+            row.get("name") or ""
+            for row in computed_rows
+            if str(row.get("total_head_loss", "")).strip() == "-"
+        ]
+
+    def _warn_pressure_pipe_missing_total_head_loss(self, rows):
+        items = [label for label in self._collect_pressure_pipe_missing_total_head_loss_labels(rows) if label]
+        if not items:
+            return
+        fluent_info(
+            self,
+            "提示",
+            "以下有压管道因上下文不足未能计算总水头损失，本次导出将以“-”显示：\n" + "；".join(items),
+        )
+
     def _read_float(self, edit, default):
         """安全读取 LineEdit 的浮点值，空或非法返回默认值。"""
         t = edit.text().strip()
@@ -5652,23 +6600,21 @@ class SectionSummaryDialog(QDialog):
             fluent_error(self, "输入错误", "流量值必须为数字")
             return
 
-        # 读取每个倒虹吸的材质和 DN
-        siphon_params = []  # [(name, material, dn), ...]
-        for sp_name, mat_combo, dn_edit in self._siphon_rows:
-            dn = _parse_positive_dn(dn_edit.text())
-            if dn is None:
-                fluent_error(self, "输入错误", f"{sp_name} 的 DN 必须为正整数")
-                return
-            siphon_params.append((sp_name, mat_combo.currentText(), dn))
-        
-        # 读取每个有压管道的材质和 DN（与倒虹吸类似）
-        pressure_pipe_params = []  # [(name, material, dn), ...]
-        for pp_name, mat_combo, dn_edit in self._pressure_pipe_rows:
-            dn = _parse_positive_dn(dn_edit.text())
-            if dn is None:
-                fluent_error(self, "输入错误", f"{pp_name} 的 DN 必须为正整数")
-                return
-            pressure_pipe_params.append((pp_name, mat_combo.currentText(), dn))
+        if self._block_invalid_pressurized_export():
+            return
+
+        siphon_params = self._read_pressurized_rows(self._siphon_rows, "倒虹吸")
+        if siphon_params is None:
+            return
+
+        pressure_pipe_params = self._read_pressurized_rows(self._pressure_pipe_rows, "有压管道")
+        if pressure_pipe_params is None:
+            return
+        pressure_pipe_params = _prepare_pressure_pipe_export_rows(
+            pressure_pipe_params,
+            panel=getattr(self, "_panel", None),
+            calc_contexts=getattr(self, "_pressure_pipe_calc_contexts", None),
+        )
 
         # config_only 模式：只读取并缓存参数，不生成文件
         if self._config_only:
@@ -5682,8 +6628,8 @@ class SectionSummaryDialog(QDialog):
                 self._panel._custom_struct_thickness = struct_t
                 self._panel._custom_tunnel_unified = tunnel_unified
                 self._panel._custom_pressurized_pipe_params = {
-                    "siphon": list(siphon_params),
-                    "pressure_pipe": list(pressure_pipe_params),
+                    "siphon": _serialize_pressurized_cache_rows(siphon_params, "siphon"),
+                    "pressure_pipe": _serialize_pressurized_cache_rows(pressure_pipe_params, "pressure_pipe"),
                 }
             self.accept()
             return
@@ -5830,8 +6776,8 @@ class SectionSummaryDialog(QDialog):
             self._panel._custom_struct_thickness = struct_t
             self._panel._custom_tunnel_unified = tunnel_unified
             self._panel._custom_pressurized_pipe_params = {
-                "siphon": list(siphon_params),
-                "pressure_pipe": list(pressure_pipe_params),
+                "siphon": _serialize_pressurized_cache_rows(siphon_params, "siphon"),
+                "pressure_pipe": _serialize_pressurized_cache_rows(pressure_pipe_params, "pressure_pipe"),
             }
 
         # 构建有压管道 segments（与倒虹吸类似）
@@ -5843,6 +6789,8 @@ class SectionSummaryDialog(QDialog):
             has_source_data=has_source_data,
             segment_name_fn=_segment_name,
         )
+
+        self._warn_pressure_pipe_missing_total_head_loss(pp_segs)
 
         gen_kwargs = dict(
             filepath=fp,
@@ -5856,9 +6804,9 @@ class SectionSummaryDialog(QDialog):
             rect_culvert_segs=rv_segs,
             circular_pipe_segs=cp_segs,
             siphon_segs=sp_segs,
-            siphon_material=siphon_params[0][1] if siphon_params else "球墨铸铁管",
+            siphon_material=siphon_params[0]["pipe_material"] if siphon_params else "球墨铸铁管",
             pressure_pipe_segs=pp_segs,
-            pressure_pipe_material=pressure_pipe_params[0][1] if pressure_pipe_params else "球墨铸铁管",
+            pressure_pipe_material=pressure_pipe_params[0]["pipe_material"] if pressure_pipe_params else "球墨铸铁管",
             rock_lining=rock_lining,
             table_order=_table_order,
             tunnel_unified_arch=tunnel_unified.get("tunnel_arch", False),
@@ -5874,8 +6822,8 @@ class SectionSummaryDialog(QDialog):
             else:
                 self._generate_excel(**gen_kwargs)
             self.unsetCursor()
-            mat_summary = '、'.join(f"{n}({m})" for n, m, _ in siphon_params)
-            pp_mat_summary = '、'.join(f"{n}({m})" for n, m, _ in pressure_pipe_params) if pressure_pipe_params else ""
+            mat_summary = self._summarize_pressurized_materials(siphon_params)
+            pp_mat_summary = self._summarize_pressurized_materials(pressure_pipe_params)
             fmt_name = "DXF" if export_dxf else "Excel"
             extra = "" if export_dxf else "\n表格数量以计算结果为准，另含 1 个汇总 Sheet。"
             msg_parts = [f"断面汇总表已生成（{fmt_name}）：\n{fp}\n{extra}"]
@@ -5931,3 +6879,4 @@ def open_section_summary_table(panel):
         import traceback; traceback.print_exc()
         fluent_error(panel.window(), "打开失败",
                      f"断面汇总表生成器打开失败：\n{str(e)}")
+
