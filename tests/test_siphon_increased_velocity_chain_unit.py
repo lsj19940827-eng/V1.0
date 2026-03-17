@@ -111,35 +111,47 @@ def test_collect_velocity_source_warning_metadata_covers_new_categories():
     MultiSiphonDialog = _get_dialog_class()
     groups = [
         SiphonGroup(
-            name="催龙村",
+            name="same-culvert",
             upstream_velocity_source="same_section_donor",
             downstream_velocity_source="same_section_donor",
-            upstream_velocity_provenance={"scan_direction": "downstream", "donor_name": "南一支渠"},
-            downstream_velocity_provenance={"scan_direction": "downstream", "donor_name": "南一支渠"},
+            upstream_velocity_provenance={
+                "scan_direction": "downstream",
+                "donor_name": "culvert-donor",
+                "section_family": "culvert",
+            },
+            downstream_velocity_provenance={
+                "scan_direction": "downstream",
+                "donor_name": "culvert-donor",
+                "section_family": "culvert",
+            },
         ),
         SiphonGroup(
-            name="龙王沟",
+            name="cross-culvert",
             upstream_velocity_source="cross_section_donor",
             downstream_velocity_source="cross_section_donor",
             upstream_velocity_provenance={
                 "scan_direction": "downstream",
-                "donor_name": "北二支渠",
+                "donor_name": "cross-donor",
                 "donor_flow_section": "2",
                 "redesigned": True,
-                "structure_type": "明渠-圆形",
-                "dimensions": {"D": 1.5},
+                "redesign_mode": "keep_bottom_width_raise_height",
+                "section_family": "culvert",
+                "structure_type": "矩形暗涵",
+                "dimensions": {"B": 1.6, "H_total": 2.4},
             },
             downstream_velocity_provenance={
                 "scan_direction": "downstream",
-                "donor_name": "北二支渠",
+                "donor_name": "cross-donor",
                 "donor_flow_section": "2",
                 "redesigned": True,
-                "structure_type": "明渠-圆形",
-                "dimensions": {"D": 1.5},
+                "redesign_mode": "keep_bottom_width_raise_height",
+                "section_family": "culvert",
+                "structure_type": "矩形暗涵",
+                "dimensions": {"B": 1.6, "H_total": 2.4},
             },
         ),
         SiphonGroup(
-            name="虹吸D",
+            name="missing-siphon",
             upstream_velocity_source="missing",
             downstream_velocity_source="missing",
         ),
@@ -147,19 +159,34 @@ def test_collect_velocity_source_warning_metadata_covers_new_categories():
 
     metadata = MultiSiphonDialog._collect_velocity_source_warning_metadata(groups)
 
-    assert metadata["same_section"] == ["催龙村：上游/下游流速均借用下游侧断面“南一支渠”"]
-    assert metadata["cross_section"] == [
-        "龙王沟：上游/下游流速均借自第2流量段的下游侧断面“北二支渠”，并已按当前流量段的设计流量和加大流量重新计算"
-    ]
-    assert metadata["redesigned"] == ["龙王沟：上游/下游借用后已重新确定断面尺寸（圆形，D=1.50 m）"]
-    assert metadata["missing"] == ["虹吸D：上游/下游仍未找到可借用断面"]
+    same_item = metadata["same_section"][0]
+    cross_item = metadata["cross_section"][0]
+    redesigned_item = metadata["redesigned"][0]
+    missing_item = metadata["missing"][0]
+
+    assert "same-culvert" in same_item
+    assert "邻接断面流速已复用同段暗渠" in same_item
+    assert "culvert-donor" in same_item
+
+    assert "cross-culvert" in cross_item
+    assert "邻接断面流速已借用跨段暗渠" in cross_item
+    assert "第2流量段" in cross_item
+    assert "cross-donor" in cross_item
+
+    assert "cross-culvert" in redesigned_item
+    assert "保留原底宽并自动增大高度" in redesigned_item
+    assert "矩形暗渠" in redesigned_item
+    assert "H=2.40 m" in redesigned_item
+
+    assert "missing-siphon" in missing_item
+    assert "仍未找到可用邻接断面（明渠或暗渠）" in missing_item
 
 
 def test_build_velocity_source_warning_message_omits_empty_sections():
     MultiSiphonDialog = _get_dialog_class()
     message = MultiSiphonDialog._build_velocity_source_warning_message(
         {
-            "same_section": ["催龙村：上游/下游流速均借用下游侧断面“南一支渠”"],
+            "same_section": ["same-culvert：上游/下游邻接断面流速已复用同段暗渠（下游侧断面“culvert-donor”）"],
             "cross_section": [],
             "redesigned": [],
             "missing": [],
@@ -167,11 +194,12 @@ def test_build_velocity_source_warning_message_omits_empty_sections():
     )
 
     assert "流速来源提醒" not in message
-    assert "v₁/v₃（进口/出口渠道流速）" in message
-    assert "同段借用：" in message
-    assert "跨段借用并重算：" not in message
-    assert "借用后重新确定断面尺寸：" not in message
-    assert "仍未找到可借用断面：" not in message
+    assert "邻接断面流速" in message
+    assert "v₁加大/v₃加大" in message
+    assert "同段复用：" in message
+    assert "跨段借型并重算：" not in message
+    assert "借用后重定邻接断面：" not in message
+    assert "仍未找到可用邻接断面：" not in message
 
 
 def test_show_velocity_source_warnings_once_merges_into_single_infobar():
@@ -189,31 +217,47 @@ def test_show_velocity_source_warnings_once_merges_into_single_infobar():
         _velocity_source_warnings_shown=False,
         siphon_groups=[
             SiphonGroup(
-                name="催龙村",
+                name="same-culvert",
                 upstream_velocity_source="same_section_donor",
                 downstream_velocity_source="same_section_donor",
-                upstream_velocity_provenance={"scan_direction": "downstream", "donor_name": "南一支渠"},
-                downstream_velocity_provenance={"scan_direction": "downstream", "donor_name": "南一支渠"},
+                upstream_velocity_provenance={
+                    "scan_direction": "downstream",
+                    "donor_name": "culvert-donor",
+                    "section_family": "culvert",
+                },
+                downstream_velocity_provenance={
+                    "scan_direction": "downstream",
+                    "donor_name": "culvert-donor",
+                    "section_family": "culvert",
+                },
             ),
             SiphonGroup(
-                name="龙王沟",
+                name="cross-culvert",
                 upstream_velocity_source="cross_section_donor",
                 downstream_velocity_source="cross_section_donor",
                 upstream_velocity_provenance={
                     "scan_direction": "downstream",
-                    "donor_name": "北二支渠",
+                    "donor_name": "cross-donor",
                     "donor_flow_section": "2",
                     "redesigned": True,
+                    "redesign_mode": "keep_bottom_width_raise_height",
+                    "section_family": "culvert",
+                    "structure_type": "矩形暗涵",
+                    "dimensions": {"B": 1.6, "H_total": 2.4},
                 },
                 downstream_velocity_provenance={
                     "scan_direction": "downstream",
-                    "donor_name": "北二支渠",
+                    "donor_name": "cross-donor",
                     "donor_flow_section": "2",
                     "redesigned": True,
+                    "redesign_mode": "keep_bottom_width_raise_height",
+                    "section_family": "culvert",
+                    "structure_type": "矩形暗涵",
+                    "dimensions": {"B": 1.6, "H_total": 2.4},
                 },
             ),
             SiphonGroup(
-                name="虹吸D",
+                name="missing-siphon",
                 upstream_velocity_source="missing",
                 downstream_velocity_source="missing",
             ),
@@ -226,9 +270,10 @@ def test_show_velocity_source_warnings_once_merges_into_single_infobar():
     assert len(calls) == 1
     warning_args, warning_kwargs = calls[0]
     assert warning_args[0] == "流速来源提醒"
-    assert "同段借用：" in warning_args[1]
-    assert "跨段借用并重算：" in warning_args[1]
-    assert "借用后重新确定断面尺寸：" in warning_args[1]
-    assert "仍未找到可借用断面：" in warning_args[1]
-    assert "请人工确认并补录。" in warning_args[1]
+    assert "同段复用：" in warning_args[1]
+    assert "跨段借型并重算：" in warning_args[1]
+    assert "借用后重定邻接断面：" in warning_args[1]
+    assert "仍未找到可用邻接断面：" in warning_args[1]
+    assert "请人工确认并补录" in warning_args[1]
+    assert "暗渠" in warning_args[1]
     assert warning_kwargs["parent"] is dialog

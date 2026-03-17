@@ -33,6 +33,11 @@ from 明渠设计 import (
     quick_calculate_u_section,
     search_minimum_u_section_radius,
 )
+from 矩形暗涵设计 import (
+    calculate_rectangular_outputs,
+    quick_calculate_rectangular_culvert,
+    solve_water_depth_rectangular,
+)
 
 
 @dataclass
@@ -145,6 +150,8 @@ class SiphonDataExtractor:
     DONOR_SCAN_DOWNSTREAM = "downstream"
     OPEN_CHANNEL_V_MIN = 0.5
     OPEN_CHANNEL_V_MAX = 3.0
+    DONOR_FAMILY_OPEN_CHANNEL = "open_channel"
+    DONOR_FAMILY_CULVERT = "culvert"
     
     @staticmethod
     def extract_siphons(nodes: List[ChannelNode], settings=None) -> List[SiphonGroup]:
@@ -366,7 +373,7 @@ class SiphonDataExtractor:
             return False
         if SiphonDataExtractor._is_gate_node(node):
             return False
-        return SiphonDataExtractor._is_open_channel_node(node)
+        return SiphonDataExtractor._is_velocity_donor_section_node(node)
 
     @staticmethod
     def _resolve_velocity_donor(
@@ -385,7 +392,7 @@ class SiphonDataExtractor:
                     ),
                 }
 
-            computed_node, redesigned = SiphonDataExtractor._build_cross_section_donor_node(group, candidate)
+            computed_node, redesigned, redesign_mode = SiphonDataExtractor._build_cross_section_donor_node(group, candidate)
             if computed_node is None:
                 continue
             return {
@@ -395,6 +402,7 @@ class SiphonDataExtractor:
                     candidate,
                     applied_node=computed_node,
                     redesigned=redesigned,
+                    redesign_mode=redesign_mode,
                 ),
             }
 
@@ -407,7 +415,9 @@ class SiphonDataExtractor:
                 "donor_name": "",
                 "donor_flow_section": "",
                 "redesigned": False,
+                "redesign_mode": "",
                 "structure_type": "",
+                "section_family": "",
                 "dimensions": {},
             },
         }
@@ -417,6 +427,7 @@ class SiphonDataExtractor:
         candidate: _VelocityDonorCandidate,
         applied_node: ChannelNode,
         redesigned: bool,
+        redesign_mode: str = "",
     ) -> Dict[str, Any]:
         return {
             "level": candidate.level,
@@ -427,7 +438,9 @@ class SiphonDataExtractor:
             ),
             "donor_index": candidate.index,
             "redesigned": redesigned,
+            "redesign_mode": redesign_mode,
             "structure_type": SiphonDataExtractor._get_structure_type_str(applied_node),
+            "section_family": SiphonDataExtractor._get_velocity_donor_family(applied_node),
             "dimensions": SiphonDataExtractor._extract_section_dimensions(applied_node),
         }
 
@@ -470,20 +483,23 @@ class SiphonDataExtractor:
     def _extract_section_dimensions(node: ChannelNode) -> Dict[str, float]:
         sp = getattr(node, "section_params", None) or {}
         dims: Dict[str, float] = {}
-        for key in ("B", "m", "D", "R_circle", "theta_deg", "chamfer_angle", "slope_inv"):
+        for key in ("B", "m", "D", "R_circle", "theta_deg", "chamfer_angle", "slope_inv", "H_total"):
             val = sp.get(key)
             if isinstance(val, (int, float)) and (val > 0 or key == "m"):
                 dims[key] = float(val)
         water_depth = getattr(node, "water_depth", 0.0)
         if water_depth and water_depth > 0:
             dims["h"] = float(water_depth)
+        structure_height = getattr(node, "structure_height", 0.0)
+        if structure_height and structure_height > 0 and "H_total" not in dims:
+            dims["H_total"] = float(structure_height)
         return dims
 
     @staticmethod
     def _build_cross_section_donor_node(
         group: SiphonGroup,
         candidate: _VelocityDonorCandidate
-    ) -> tuple[Optional[ChannelNode], bool]:
+    ) -> tuple[Optional[ChannelNode], bool, str]:
         donor_node = candidate.node
         calc_result = SiphonDataExtractor._calculate_cross_section_channel(
             group=group,
@@ -491,7 +507,7 @@ class SiphonDataExtractor:
             redesign=False,
         )
         if calc_result is not None:
-            return calc_result["node"], False
+            return calc_result["node"], False, calc_result.get("redesign_mode", "")
 
         calc_result = SiphonDataExtractor._calculate_cross_section_channel(
             group=group,
@@ -499,9 +515,9 @@ class SiphonDataExtractor:
             redesign=True,
         )
         if calc_result is not None:
-            return calc_result["node"], True
+            return calc_result["node"], True, calc_result.get("redesign_mode", "")
 
-        return None, False
+        return None, False, ""
 
     @staticmethod
     def _calculate_cross_section_channel(
@@ -777,6 +793,312 @@ class SiphonDataExtractor:
             setattr(group, section_r_attr, R_circle)
         if h > 0 and getattr(group, section_h_attr) is None:
             setattr(group, section_h_attr, h)
+
+    @staticmethod
+    def _calculate_cross_section_channel(
+        group: SiphonGroup,
+        donor_node: ChannelNode,
+        redesign: bool,
+    ) -> Optional[Dict[str, Any]]:
+        structure_type = SiphonDataExtractor._get_structure_type_str(donor_node)
+        target_flow = getattr(group, "design_flow", 0.0) or 0.0
+        if target_flow <= 0:
+            return None
+
+        n_value = getattr(donor_node, "roughness", 0.0) or group.roughness or 0.014
+        slope_inv = SiphonDataExtractor._get_donor_slope_inv(donor_node)
+        if n_value <= 0 or slope_inv <= 0:
+            return None
+
+        increase_percent = get_flow_increase_percent(target_flow)
+        sp = donor_node.section_params or {}
+        v_min = SiphonDataExtractor.OPEN_CHANNEL_V_MIN
+        v_max = SiphonDataExtractor.OPEN_CHANNEL_V_MAX
+
+        if structure_type == "明渠-梯形":
+            result = quick_calculate_trapezoidal(
+                Q=target_flow,
+                m=sp.get("m", 0.0),
+                n=n_value,
+                slope_inv=slope_inv,
+                v_min=v_min,
+                v_max=v_max,
+                manual_b=None if redesign else sp.get("B"),
+                manual_increase_percent=increase_percent,
+            )
+            if not result.get("success"):
+                return None
+            return {
+                "node": SiphonDataExtractor._build_virtual_section_node(
+                    donor_node=donor_node,
+                    velocity=result.get("V_design", 0.0),
+                    velocity_increased=result.get("V_increased", 0.0),
+                    water_depth=result.get("h_design", 0.0),
+                    section_params={
+                        "B": result.get("b_design", 0.0),
+                        "m": sp.get("m", 0.0),
+                        "slope_inv": slope_inv,
+                    },
+                ),
+                "redesign_mode": "auto_redesign" if redesign else "",
+            }
+
+        if structure_type in {"明渠-矩形", "矩形"}:
+            result = quick_calculate_rectangular(
+                Q=target_flow,
+                n=n_value,
+                slope_inv=slope_inv,
+                v_min=v_min,
+                v_max=v_max,
+                manual_b=None if redesign else sp.get("B"),
+                manual_increase_percent=increase_percent,
+            )
+            if not result.get("success"):
+                return None
+            return {
+                "node": SiphonDataExtractor._build_virtual_section_node(
+                    donor_node=donor_node,
+                    velocity=result.get("V_design", 0.0),
+                    velocity_increased=result.get("V_increased", 0.0),
+                    water_depth=result.get("h_design", 0.0),
+                    section_params={
+                        "B": result.get("b_design", 0.0),
+                        "m": 0.0,
+                        "slope_inv": slope_inv,
+                    },
+                ),
+                "redesign_mode": "auto_redesign" if redesign else "",
+            }
+
+        if structure_type == "明渠-圆形":
+            result = quick_calculate_circular(
+                Q=target_flow,
+                n=n_value,
+                slope_inv=slope_inv,
+                v_min=v_min,
+                v_max=v_max,
+                increase_percent=increase_percent,
+                manual_D=None if redesign else sp.get("D"),
+            )
+            if not result.get("success"):
+                return None
+            return {
+                "node": SiphonDataExtractor._build_virtual_section_node(
+                    donor_node=donor_node,
+                    velocity=result.get("V_d", 0.0),
+                    velocity_increased=result.get("V_i", 0.0),
+                    water_depth=result.get("y_d", 0.0),
+                    section_params={
+                        "D": result.get("D_design", 0.0),
+                        "slope_inv": slope_inv,
+                    },
+                ),
+                "redesign_mode": "auto_redesign" if redesign else "",
+            }
+
+        if structure_type == "明渠-U形":
+            alpha_deg = sp.get("chamfer_angle", 0.0)
+            theta_deg = sp.get("theta_deg", 0.0)
+            if redesign:
+                result = search_minimum_u_section_radius(
+                    Q=target_flow,
+                    alpha_deg=alpha_deg,
+                    theta_deg=theta_deg,
+                    n=n_value,
+                    slope_inv=slope_inv,
+                    v_min=v_min,
+                    v_max=v_max,
+                    manual_increase_percent=increase_percent,
+                    start_R=sp.get("R_circle", 0.1),
+                )
+            else:
+                result = quick_calculate_u_section(
+                    Q=target_flow,
+                    R=sp.get("R_circle", 0.0),
+                    alpha_deg=alpha_deg,
+                    theta_deg=theta_deg,
+                    n=n_value,
+                    slope_inv=slope_inv,
+                    v_min=v_min,
+                    v_max=v_max,
+                    manual_increase_percent=increase_percent,
+                )
+            if not result.get("success"):
+                return None
+            return {
+                "node": SiphonDataExtractor._build_virtual_section_node(
+                    donor_node=donor_node,
+                    velocity=result.get("V_design", 0.0),
+                    velocity_increased=result.get("V_increased", 0.0),
+                    water_depth=result.get("h_design", 0.0),
+                    section_params={
+                        "R_circle": result.get("R", 0.0),
+                        "theta_deg": theta_deg,
+                        "chamfer_angle": alpha_deg,
+                        "slope_inv": slope_inv,
+                    },
+                ),
+                "redesign_mode": "auto_redesign" if redesign else "",
+            }
+
+        if SiphonDataExtractor._is_rect_culvert_structure_type(structure_type):
+            if redesign:
+                result = quick_calculate_rectangular_culvert(
+                    Q=target_flow,
+                    n=n_value,
+                    slope_inv=slope_inv,
+                    v_min=v_min,
+                    v_max=v_max,
+                    manual_B=sp.get("B"),
+                    manual_increase_percent=increase_percent,
+                )
+                if not result.get("success"):
+                    return None
+                return {
+                    "node": SiphonDataExtractor._build_virtual_section_node(
+                        donor_node=donor_node,
+                        velocity=result.get("V_design", 0.0),
+                        velocity_increased=result.get("V_increased", 0.0),
+                        water_depth=result.get("h_design", 0.0),
+                        section_params={
+                            "B": result.get("B", 0.0),
+                            "H_total": result.get("H", 0.0),
+                            "slope_inv": slope_inv,
+                        },
+                        structure_height=result.get("H", 0.0),
+                    ),
+                    "redesign_mode": "keep_bottom_width_raise_height",
+                }
+
+            fixed_node = SiphonDataExtractor._try_rectangular_culvert_with_fixed_box(
+                donor_node=donor_node,
+                target_flow=target_flow,
+                n_value=n_value,
+                slope_inv=slope_inv,
+                increase_percent=increase_percent,
+                v_min=v_min,
+                v_max=v_max,
+            )
+            if fixed_node is None:
+                return None
+            return {
+                "node": fixed_node,
+                "redesign_mode": "",
+            }
+
+        return None
+
+    @staticmethod
+    def _try_rectangular_culvert_with_fixed_box(
+        donor_node: ChannelNode,
+        target_flow: float,
+        n_value: float,
+        slope_inv: float,
+        increase_percent: float,
+        v_min: float,
+        v_max: float,
+    ) -> Optional[ChannelNode]:
+        sp = donor_node.section_params or {}
+        width = sp.get("B", 0.0) or 0.0
+        total_height = sp.get("H_total", 0.0) or getattr(donor_node, "structure_height", 0.0) or 0.0
+        if width <= 0 or total_height <= 0:
+            return None
+
+        slope = 1.0 / slope_inv
+        increased_flow = target_flow * (1 + increase_percent / 100.0)
+
+        h_design, success_design = solve_water_depth_rectangular(width, total_height, n_value, slope, target_flow)
+        if not success_design or h_design >= total_height:
+            return None
+        outputs_design = calculate_rectangular_outputs(width, total_height, h_design, n_value, slope)
+        velocity_design = outputs_design.get("V", 0.0)
+        if velocity_design < v_min or velocity_design > v_max:
+            return None
+
+        h_increased, success_increased = solve_water_depth_rectangular(
+            width,
+            total_height,
+            n_value,
+            slope,
+            increased_flow,
+        )
+        if not success_increased or h_increased >= total_height:
+            return None
+        outputs_increased = calculate_rectangular_outputs(width, total_height, h_increased, n_value, slope)
+        velocity_increased = outputs_increased.get("V", 0.0)
+        if velocity_increased < v_min or velocity_increased > v_max:
+            return None
+
+        return SiphonDataExtractor._build_virtual_section_node(
+            donor_node=donor_node,
+            velocity=velocity_design,
+            velocity_increased=velocity_increased,
+            water_depth=h_design,
+            section_params={
+                "B": width,
+                "H_total": total_height,
+                "slope_inv": slope_inv,
+            },
+            structure_height=total_height,
+        )
+
+    @staticmethod
+    def _build_virtual_section_node(
+        donor_node: ChannelNode,
+        velocity: float,
+        velocity_increased: float,
+        water_depth: float,
+        section_params: Dict[str, float],
+        structure_height: float = 0.0,
+    ) -> ChannelNode:
+        return ChannelNode(
+            name=getattr(donor_node, "name", ""),
+            structure_type=getattr(donor_node, "structure_type", None),
+            in_out=InOutType.NORMAL,
+            flow_section=getattr(donor_node, "flow_section", ""),
+            flow=getattr(donor_node, "flow", 0.0),
+            roughness=getattr(donor_node, "roughness", 0.014),
+            section_params=section_params,
+            water_depth=water_depth or 0.0,
+            velocity=velocity or 0.0,
+            velocity_increased=velocity_increased or 0.0,
+            slope_i=getattr(donor_node, "slope_i", 0.0),
+            structure_height=structure_height or getattr(donor_node, "structure_height", 0.0),
+        )
+
+    @staticmethod
+    def _is_velocity_donor_section_node(node: ChannelNode) -> bool:
+        structure_type = SiphonDataExtractor._get_structure_type_str(node)
+        return (
+            SiphonDataExtractor._is_open_channel_structure_type(structure_type)
+            or SiphonDataExtractor._is_rect_culvert_structure_type(structure_type)
+        )
+
+    @staticmethod
+    def _is_open_channel_structure_type(structure_type: str) -> bool:
+        normalized = SiphonDataExtractor._normalize_structure_type(structure_type)
+        return normalized in {"明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", "矩形"}
+
+    @staticmethod
+    def _is_rect_culvert_structure_type(structure_type: str) -> bool:
+        normalized = SiphonDataExtractor._normalize_structure_type(structure_type)
+        return normalized == "矩形暗涵"
+
+    @staticmethod
+    def _normalize_structure_type(structure_type: str) -> str:
+        text = str(structure_type or "").strip()
+        if text in {"暗渠", "矩形暗渠", "矩形暗涵"}:
+            return "矩形暗涵"
+        return text
+
+    @staticmethod
+    def _get_velocity_donor_family(node: ChannelNode) -> str:
+        structure_type = SiphonDataExtractor._get_structure_type_str(node)
+        if SiphonDataExtractor._is_rect_culvert_structure_type(structure_type):
+            return SiphonDataExtractor.DONOR_FAMILY_CULVERT
+        if SiphonDataExtractor._is_open_channel_structure_type(structure_type):
+            return SiphonDataExtractor.DONOR_FAMILY_OPEN_CHANNEL
+        return ""
     
     @staticmethod
     def _extract_transition_forms(group: SiphonGroup, settings):

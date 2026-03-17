@@ -757,7 +757,7 @@ class SiphonPanel(QWidget):
         self.edit_v1 = LineEdit(); self.edit_v1.setPlaceholderText("留空=0"); self.edit_v1.setFixedWidth(80)
         self.edit_v1.textChanged.connect(self._on_v_channel_in_changed)
         inlet_r1.addWidget(self.edit_v1)
-        self.lbl_v1_hint = QLabel("(上游渠道流速)")
+        self.lbl_v1_hint = QLabel("(上游邻接断面流速)")
         self.lbl_v1_hint.setStyleSheet("color:#FF6600;font-size:12px;")
         inlet_r1.addWidget(self.lbl_v1_hint)
         # v1_inc 加大流量输入框（默认隐藏）
@@ -893,7 +893,7 @@ class SiphonPanel(QWidget):
         outlet_r2.addWidget(QLabel("末端流速v₃(m/s):"))
         self.edit_v3 = LineEdit(); self.edit_v3.setPlaceholderText("留空=0"); self.edit_v3.setFixedWidth(80)
         outlet_r2.addWidget(self.edit_v3)
-        self.lbl_v3_hint = QLabel("(下游渠道流速)")
+        self.lbl_v3_hint = QLabel("(下游邻接断面流速)")
         self.lbl_v3_hint.setStyleSheet("color:#FF6600;font-size:12px;")
         outlet_r2.addWidget(self.lbl_v3_hint)
         # v3_inc 加大流量输入框（默认隐藏）
@@ -1419,14 +1419,14 @@ document.addEventListener("DOMContentLoaded", function(){
         if 'v_channel_in' in kwargs and kwargs['v_channel_in']:
             self.edit_v1.setText(f"{kwargs['v_channel_in']:.4f}")
             self.edit_v1.setStyleSheet(f"color:#0066CC;")
-            self.lbl_v1_hint.setText("(已导入上游渠道断面平均流速)")
+            self.lbl_v1_hint.setText("(已导入上游邻接断面平均流速)")
             self.lbl_v1_hint.setStyleSheet(f"color:#0066CC;font-size:12px;")
             # 仅在 V1_PLUS_02 策略下联动更新 v₂
             self._on_v_channel_in_changed()
         if 'v_pipe_out' in kwargs and kwargs['v_pipe_out']:
             self.edit_v3.setText(f"{kwargs['v_pipe_out']:.4f}")
             self.edit_v3.setStyleSheet(f"color:#0066CC;")
-            self.lbl_v3_hint.setText("(已导入下游渠道断面平均流速)")
+            self.lbl_v3_hint.setText("(已导入下游邻接断面平均流速)")
             self.lbl_v3_hint.setStyleSheet(f"color:#0066CC;font-size:12px;")
         if 'v_channel_out' in kwargs and kwargs['v_channel_out']:
             self.edit_v_out.setText(f"{kwargs['v_channel_out']:.4f}")

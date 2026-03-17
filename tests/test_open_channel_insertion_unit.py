@@ -98,7 +98,7 @@ class TestOpenChannelInsertion:
         # 渐变段长度：出口 12m, 进口 10m, 总计 22m
         # 里程差 15m < 22m，不应插入明渠段
         assert result['need_open_channel'] == False, "里程差小于渐变段长度之和时不应插入明渠段"
-        assert result['available_length'] < 0, "可用长度应为负数"
+        assert result['available_length'] == 0.0, "长度不足时应统一压成 0.0"
     
     def test_available_length_calculation(self):
         """
@@ -380,7 +380,7 @@ class TestOpenChannelInsertion:
         
         # 里程差很小，不应插入明渠段
         assert result['need_open_channel'] == False, "里程差很小时不应插入明渠段"
-        assert result['available_length'] < 0, "可用长度应为负数"
+        assert result['available_length'] == 0.0, "极短距离场景应统一压成 0.0"
 
 
 if __name__ == "__main__":

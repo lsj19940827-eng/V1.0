@@ -567,6 +567,220 @@ class MultiSiphonDialog(QDialog):
                 position=InfoBarPosition.TOP
             )
 
+    @staticmethod
+    def _format_velocity_warning_item(
+        group_name: str,
+        side_entries: List,
+        category: str,
+    ) -> str:
+        side_text = MultiSiphonDialog._format_velocity_warning_sides(side_entries)
+        donor_direction = MultiSiphonDialog._get_common_scan_direction_label(side_entries)
+        donor_name = MultiSiphonDialog._get_common_provenance_value(side_entries, "donor_name")
+        flow_section = MultiSiphonDialog._get_common_provenance_value(side_entries, "donor_flow_section")
+        donor_family = MultiSiphonDialog._get_common_donor_family_label(side_entries)
+
+        if category == "same_section":
+            source_text = MultiSiphonDialog._build_velocity_donor_reference(
+                donor_direction,
+                donor_name,
+            )
+            return f"{group_name}：{side_text}邻接断面流速已复用同段{donor_family}{source_text}"
+
+        if category == "cross_section":
+            source_text = MultiSiphonDialog._build_velocity_donor_reference(
+                donor_direction,
+                donor_name,
+                flow_section=flow_section,
+            )
+            return (
+                f"{group_name}：{side_text}邻接断面流速已借用跨段{donor_family}{source_text}，"
+                "并已按当前流量段的设计流量和加大流量重新计算"
+            )
+
+        if category == "redesigned":
+            detail_text = MultiSiphonDialog._build_redesigned_structure_summary(side_entries)
+            mode_label = MultiSiphonDialog._get_redesign_mode_label(side_entries)
+            suffix = f"（{detail_text}）" if detail_text else ""
+            if mode_label:
+                return f"{group_name}：{side_text}借用后的{donor_family}断面已{mode_label}{suffix}"
+            return f"{group_name}：{side_text}借用后的{donor_family}断面已重新确定尺寸{suffix}"
+
+        if category == "missing":
+            return f"{group_name}：{side_text}仍未找到可用邻接断面（明渠或暗渠）"
+
+        return f"{group_name}：{side_text}"
+
+    @staticmethod
+    def _format_velocity_warning_sides(side_entries: List) -> str:
+        sides = [side for side, _prov in side_entries]
+        return "/".join(sides)
+
+    @staticmethod
+    def _get_common_donor_family_label(side_entries: List) -> str:
+        family = MultiSiphonDialog._get_common_provenance_value(side_entries, "section_family")
+        if family == "culvert":
+            return "暗渠"
+        if family == "open_channel":
+            return "明渠"
+
+        structure_type = MultiSiphonDialog._get_common_provenance_value(side_entries, "structure_type")
+        if "暗涵" in structure_type or "暗渠" in structure_type:
+            return "暗渠"
+        return "明渠或暗渠"
+
+    @staticmethod
+    def _get_redesign_mode_label(side_entries: List) -> str:
+        redesign_mode = MultiSiphonDialog._get_common_provenance_value(side_entries, "redesign_mode")
+        if redesign_mode == "keep_bottom_width_raise_height":
+            return "保留原底宽并自动增大高度"
+        if redesign_mode == "auto_redesign":
+            return "按当前流量自动重定断面"
+        return ""
+
+    @staticmethod
+    def _get_common_provenance_value(side_entries: List, key: str) -> str:
+        values = []
+        for _side, prov in side_entries:
+            value = prov.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                values.append(text)
+
+        unique_values = list(dict.fromkeys(values))
+        if len(unique_values) == 1:
+            return unique_values[0]
+        return ""
+
+    @staticmethod
+    def _get_common_scan_direction_label(side_entries: List) -> str:
+        direction = MultiSiphonDialog._get_common_provenance_value(side_entries, "scan_direction")
+        if direction == "upstream":
+            return "上游侧"
+        if direction == "downstream":
+            return "下游侧"
+        return ""
+
+    @staticmethod
+    def _build_velocity_donor_reference(
+        direction_label: str,
+        donor_name: str,
+        flow_section: str = "",
+    ) -> str:
+        reference_parts = []
+        if flow_section:
+            reference_parts.append(f"第{flow_section}流量段")
+        if direction_label:
+            reference_parts.append(direction_label)
+        reference_parts.append("断面")
+        reference = "".join(reference_parts)
+        if donor_name:
+            reference += f"“{donor_name}”"
+        return f"（{reference}）" if reference else ""
+
+    @staticmethod
+    def _build_redesigned_structure_summary(side_entries: List) -> str:
+        summaries = []
+        for _side, prov in side_entries:
+            structure_type = str(prov.get("structure_type") or "").strip()
+            dimensions = prov.get("dimensions") or {}
+            summary = MultiSiphonDialog._format_structure_summary(structure_type, dimensions)
+            if summary:
+                summaries.append(summary)
+
+        unique_summaries = list(dict.fromkeys(summaries))
+        if len(unique_summaries) == 1:
+            return unique_summaries[0]
+        return ""
+
+    @staticmethod
+    def _format_structure_summary(structure_type: str, dimensions: Dict) -> str:
+        type_label = MultiSiphonDialog._format_structure_type_label(structure_type)
+        dim_parts: List[str] = []
+
+        def _append_dim(key: str, label: str, unit: str = " m"):
+            value = dimensions.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                dim_parts.append(f"{label}={value:.2f}{unit}")
+
+        _append_dim("H_total", "H")
+        _append_dim("D", "D")
+        _append_dim("R_circle", "R")
+        _append_dim("B", "B")
+        _append_dim("h", "h")
+        value_m = dimensions.get("m")
+        if isinstance(value_m, (int, float)) and value_m >= 0:
+            dim_parts.append(f"m={value_m:.2f}")
+
+        summary_parts: List[str] = []
+        if type_label:
+            summary_parts.append(type_label)
+        if dim_parts:
+            summary_parts.append("，".join(dim_parts[:2]))
+        return "，".join(summary_parts)
+
+    @staticmethod
+    def _format_structure_type_label(structure_type: str) -> str:
+        if not structure_type:
+            return ""
+        type_label = structure_type.replace("明渠-", "").strip()
+        if type_label == "矩形暗涵":
+            return "矩形暗渠"
+        return type_label
+
+    @staticmethod
+    def _build_velocity_source_warning_message(metadata: Dict[str, List[str]]) -> str:
+        sections: List[str] = []
+
+        same_section_items = metadata.get("same_section", [])
+        cross_section_items = metadata.get("cross_section", [])
+        redesigned_items = metadata.get("redesigned", [])
+        missing_items = metadata.get("missing", [])
+
+        if same_section_items:
+            sections.append("同段复用：\n- " + "\n- ".join(same_section_items))
+
+        if cross_section_items:
+            sections.append("跨段借型并重算：\n- " + "\n- ".join(cross_section_items))
+
+        if redesigned_items:
+            sections.append("借用后重定邻接断面：\n- " + "\n- ".join(redesigned_items))
+
+        if missing_items:
+            sections.append(
+                "仍未找到可用邻接断面：\n- "
+                + "\n- ".join(missing_items)
+                + "\n已按同段上游 -> 同段下游 -> 跨段上游 -> 跨段下游全部尝试，请人工确认并补录。"
+            )
+
+        if not sections:
+            return ""
+
+        header = "以下倒虹吸的邻接断面流速（v₁/v₃ 及 v₁加大/v₃加大）需要重点核对："
+        return header + "\n\n" + "\n\n".join(sections)
+
+    def _show_velocity_source_warnings_once(self):
+        """仅在窗口初始化后汇总提示一次流速来源告警。"""
+        if self._velocity_source_warnings_shown:
+            return
+        self._velocity_source_warnings_shown = True
+
+        metadata = MultiSiphonDialog._collect_velocity_source_warning_metadata(self.siphon_groups)
+        same_section_items = metadata.get("same_section", [])
+        cross_section_items = metadata.get("cross_section", [])
+        redesigned_items = metadata.get("redesigned", [])
+        missing_items = metadata.get("missing", [])
+
+        if same_section_items or cross_section_items or redesigned_items or missing_items:
+            content = MultiSiphonDialog._build_velocity_source_warning_message(metadata)
+            InfoBar.warning(
+                "流速来源提醒",
+                content,
+                parent=self, duration=15000,
+                position=InfoBarPosition.TOP
+            )
+
     def _make_result_callback(self, siphon_name: str):
         """为指定倒虹吸创建计算结果回调"""
         def callback(result):

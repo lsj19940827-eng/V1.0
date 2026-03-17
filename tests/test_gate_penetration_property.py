@@ -51,7 +51,7 @@ def pressurized_flow_outlet_strategy(draw):
 @st.composite
 def gate_node_strategy(draw):
     """生成闸类节点（分水闸、节制闸、泄水闸）"""
-    gate_types = ["分水闸", "节制闸", "泄水闸"]
+    gate_types = ["分水闸", "节制闸", "泄水闸", "退水闸"]
     gate_type = draw(st.sampled_from(gate_types))
     
     node = ChannelNode()

@@ -175,7 +175,8 @@ def test_property_9_open_channel_insertion_condition(data):
             return  # Skip further checks for this case
     
     # 验证点 1 & 2: 明渠段插入条件
-    if distance > total_transition_length:
+    tolerance = 1e-6
+    if distance - total_transition_length > tolerance:
         assert result['need_open_channel'] == True, \
             f"里程差 {distance}m > 渐变段长度之和 {total_transition_length}m 时应插入明渠段"
         
@@ -186,7 +187,7 @@ def test_property_9_open_channel_insertion_condition(data):
             f"插入明渠段时应插入进口渐变段"
         
         # 验证点 5: 明渠段可用长度计算
-        expected_available_length = distance - total_transition_length
+        expected_available_length = max(0.0, distance - total_transition_length)
         assert abs(result['available_length'] - expected_available_length) < 0.001, \
             f"明渠段可用长度计算错误: 期望 {expected_available_length}m, 实际 {result['available_length']}m"
         
@@ -410,7 +411,7 @@ if __name__ == "__main__":
         result = calculator._should_insert_open_channel(outlet, inlet)
         
         assert result['need_open_channel'] == False, "里程差小于渐变段长度之和时不应插入明渠段"
-        assert result['available_length'] < 0, "可用长度应为负数"
+        assert result['available_length'] == 0.0, "长度不足时应统一压成 0.0"
         
         print("✓ 里程差过小不插入明渠段测试通过")
         

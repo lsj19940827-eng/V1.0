@@ -689,6 +689,120 @@ def show_top_elevation_dialog(parent, node_name: str, details: Dict[str, Any]):
     FormulaDialog(parent, f"{node_name} - 渠顶高程计算详情", sections)
 
 
+def show_terminal_gate_backfill_bottom_dialog(parent, node_name: str, details: Dict[str, Any]):
+    """末尾闸行渠底高程回推详情。"""
+    target_row = details.get('target_row', 0)
+    target_wl = details.get('target_water_level', 0.0)
+    donor_row = details.get('donor_row')
+    donor_name = details.get('donor_name', '-')
+    donor_type = details.get('donor_structure_type', '-')
+    donor_depth = details.get('donor_water_depth', 0.0)
+    bottom = details.get('bottom', {}) or {}
+    result = bottom.get('result', details.get('bottom_elevation', 0.0))
+    reason = bottom.get('failure_reason') or details.get('failure_reason', '')
+    donor_text = (
+        f"第 {donor_row} 行 {donor_name}（{donor_type}）" if donor_row else "未找到有效参考断面"
+    )
+
+    sections = [
+        {
+            "title": "1. 末尾闸行渠底高程回推规则",
+            "formula": r"$Z_b = Z_{gate} - h_{ref}$",
+            "content": "其中: $Z_{gate}$=末尾闸行水位, $h_{ref}$=同流量段上游参考断面的水深",
+        },
+        {
+            "title": "2. 参考来源",
+            "values": f"目标行: 第 {target_row} 行\n参考行: {donor_text}",
+        },
+    ]
+
+    if bottom.get('success'):
+        sections.extend([
+            {
+                "title": "3. 计算参数",
+                "values": f"末尾闸行水位  $Z_{{gate}} = {target_wl:.4f}$ m\n参考断面水深  $h_{{ref}} = {donor_depth:.4f}$ m",
+            },
+            {
+                "title": "4. 代入公式计算",
+                "values": f"$Z_b = {target_wl:.4f} - {donor_depth:.4f} = {result:.4f}$ m",
+            },
+            {
+                "title": "5. 计算结果",
+                "formula": f"$Z_b = {result:.4f} \\ m$",
+            },
+        ])
+    else:
+        sections.extend([
+            {
+                "title": "3. 回推失败原因",
+                "values": reason or "未记录失败原因",
+            },
+            {
+                "title": "4. 处理结果",
+                "values": "本行渠底高程保持为空。",
+            },
+        ])
+
+    FormulaDialog(parent, f"{node_name} - 渠底高程回推详情", sections)
+
+
+def show_terminal_gate_backfill_top_dialog(parent, node_name: str, details: Dict[str, Any]):
+    """末尾闸行渠顶高程回推详情。"""
+    target_row = details.get('target_row', 0)
+    donor_row = details.get('donor_row')
+    donor_name = details.get('donor_name', '-')
+    donor_type = details.get('donor_structure_type', '-')
+    donor_height = details.get('donor_structure_height', 0.0)
+    top = details.get('top', {}) or {}
+    base_bottom = top.get('base_bottom_elevation', details.get('bottom_elevation', 0.0))
+    result = top.get('result', details.get('top_elevation', 0.0))
+    reason = top.get('failure_reason') or details.get('failure_reason', '')
+    donor_text = (
+        f"第 {donor_row} 行 {donor_name}（{donor_type}）" if donor_row else "未找到有效参考断面"
+    )
+
+    sections = [
+        {
+            "title": "1. 末尾闸行渠顶高程回推规则",
+            "formula": r"$Z_t = Z_b + H_{ref}$",
+            "content": "其中: $Z_b$=末尾闸行渠底高程, $H_{ref}$=同流量段上游参考断面的结构高度",
+        },
+        {
+            "title": "2. 参考来源",
+            "values": f"目标行: 第 {target_row} 行\n参考行: {donor_text}",
+        },
+    ]
+
+    if top.get('success'):
+        sections.extend([
+            {
+                "title": "3. 计算参数",
+                "values": f"末尾闸行渠底高程  $Z_b = {base_bottom:.4f}$ m\n参考结构高度  $H_{{ref}} = {donor_height:.4f}$ m",
+            },
+            {
+                "title": "4. 代入公式计算",
+                "values": f"$Z_t = {base_bottom:.4f} + {donor_height:.4f} = {result:.4f}$ m",
+            },
+            {
+                "title": "5. 计算结果",
+                "formula": f"$Z_t = {result:.4f} \\ m$",
+            },
+        ])
+    else:
+        sections.extend([
+            {
+                "title": "3. 回推失败原因",
+                "values": reason or "未记录失败原因",
+            },
+            {
+                "title": "4. 处理结果",
+                "values": "本行渠顶高程保持为空。",
+            },
+        ])
+
+    FormulaDialog(parent, f"{node_name} - 渠顶高程回推详情", sections)
+
+
 def show_transition_length_dialog(parent, node_name: str, details: Dict[str, Any]):
     """渐变段长度计算详情"""
     transition_type = details.get('transition_type', '')

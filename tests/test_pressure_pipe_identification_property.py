@@ -36,7 +36,7 @@ def structure_type_strategy(draw):
         "隧洞-圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
         "渡槽-U形", "渡槽-矩形",
         "矩形暗涵", "倒虹吸", "有压管道",
-        "分水闸", "节制闸", "泄水闸"
+        "分水闸", "节制闸", "泄水闸", "退水闸"
     ]
     type_str = draw(st.sampled_from(structure_types))
     return StructureType.from_string(type_str)

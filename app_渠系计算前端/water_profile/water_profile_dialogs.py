@@ -4,8 +4,8 @@
 
 包含：
 - BuildingLengthDialog: 建筑物长度统计对话框
-- BatchChannelConfirmDialog: 批量明渠段插入确认对话框
-- OpenChannelDialog: 明渠段参数选择对话框（逐一弹窗模式）
+- BatchChannelConfirmDialog: 批量补段插入确认对话框
+- OpenChannelDialog: 补段参数选择对话框（逐一弹窗模式）
 - PressurePipeConfigDialog: 有压管道计算配置对话框
 """
 
@@ -19,12 +19,13 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QGroupBox, QGridLayout, QComboBox, QLineEdit,
     QRadioButton, QButtonGroup, QSplitter, QApplication,
-    QSizePolicy, QTabWidget, QCheckBox, QScrollArea, QFrame
+    QSizePolicy, QTabWidget, QCheckBox, QScrollArea, QFrame, QStackedWidget
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
 
 from app_渠系计算前端.styles import auto_resize_table, fluent_info, fluent_error, fluent_question
+from 推求水面线.models.data_models import OpenChannelParams
 
 try:
     from qfluentwidgets import PushButton, PrimaryPushButton, LineEdit, ComboBox
@@ -94,8 +95,125 @@ def calculate_normal_depth(Q, B, m, n, i, D=0.0):
     return h
 
 
-# OpenChannelParams 已移至核心数据模型层，从此处重新导出以保持兼容
-from 推求水面线.models.data_models import OpenChannelParams
+TRANSITION_FILLER_TYPES = ["明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", "矩形暗涵"]
+
+
+def normalize_transition_structure_type(structure_type: str) -> str:
+    aliases = {
+        "矩形": "明渠-矩形",
+        "暗渠": "矩形暗涵",
+        "矩形暗渠": "矩形暗涵",
+    }
+    return aliases.get(structure_type or "", structure_type or "")
+
+
+def is_transition_culvert_type(structure_type: str) -> bool:
+    return normalize_transition_structure_type(structure_type) == "矩形暗涵"
+
+
+def is_transition_u_channel_type(structure_type: str) -> bool:
+    return normalize_transition_structure_type(structure_type) == "明渠-U形"
+
+
+def is_transition_circular_channel_type(structure_type: str) -> bool:
+    return normalize_transition_structure_type(structure_type) == "明渠-圆形"
+
+
+def describe_transition_gap_source(gap: Dict[str, Any]) -> str:
+    reference = gap.get("reference_segment") or gap.get("upstream_channel")
+    if not reference:
+        return "需手动填写"
+    structure_type = normalize_transition_structure_type(reference.get("structure_type", ""))
+    family_label = "暗渠" if is_transition_culvert_type(structure_type) else "明渠"
+    scope_label = "同段" if reference.get("flow_section") == gap.get("flow_section") else "跨段"
+    return f"自动推荐-{scope_label}{family_label}"
+
+
+def build_transition_fill_params(
+    structure_type: str,
+    B: float,
+    m: float,
+    H: float,
+    n: float,
+    slope_inv: float,
+    Q: float,
+    flow_section: str,
+    upstream_channel: Optional[Dict[str, Any]] = None,
+) -> Optional[OpenChannelParams]:
+    structure_type = normalize_transition_structure_type(structure_type)
+    slope_i = 1.0 / slope_inv if slope_inv > 0 else 0.0
+
+    if Q <= 0 or n <= 0 or slope_i <= 0:
+        return None
+
+    if is_transition_culvert_type(structure_type):
+        if B <= 0 or H <= 0:
+            return None
+        h, ok = solve_water_depth_rectangular(B, H, n, slope_i, Q)
+        if (not ok or h <= 0) and upstream_channel:
+            h = upstream_channel.get("water_depth", 0.0)
+        if h <= 0:
+            return None
+        return OpenChannelParams(
+            name="-",
+            structure_type=structure_type,
+            bottom_width=B,
+            water_depth=h,
+            side_slope=0.0,
+            roughness=n,
+            slope_inv=slope_inv,
+            flow=Q,
+            flow_section=flow_section,
+            structure_height=H,
+        )
+
+    if B <= 0 and not is_transition_circular_channel_type(structure_type) and not is_transition_u_channel_type(structure_type):
+        return None
+
+    if is_transition_u_channel_type(structure_type) and B <= 0:
+        return None
+
+    D_param = B if is_transition_circular_channel_type(structure_type) else 0.0
+    B_param = 0.0 if is_transition_circular_channel_type(structure_type) or is_transition_u_channel_type(structure_type) else B
+    side_slope = m if structure_type == "明渠-梯形" else 0.0
+    h = calculate_normal_depth(Q, B_param, side_slope, n, slope_i, D=D_param)
+    if h <= 0 and upstream_channel:
+        h = upstream_channel.get("water_depth", 0.0)
+    if h <= 0:
+        return None
+
+    structure_height = upstream_channel.get("structure_height", 0.0) if upstream_channel else 0.0
+    if is_transition_u_channel_type(structure_type):
+        return OpenChannelParams(
+            name="-",
+            structure_type=structure_type,
+            bottom_width=0.0,
+            water_depth=h,
+            side_slope=0.0,
+            roughness=n,
+            slope_inv=slope_inv,
+            flow=Q,
+            flow_section=flow_section,
+            structure_height=structure_height,
+            arc_radius=B,
+            theta_deg=(upstream_channel or {}).get("theta_deg", 0.0),
+        )
+
+    return OpenChannelParams(
+        name="-",
+        structure_type=structure_type,
+        bottom_width=B,
+        water_depth=h,
+        side_slope=side_slope,
+        roughness=n,
+        slope_inv=slope_inv,
+        flow=Q,
+        flow_section=flow_section,
+        structure_height=structure_height,
+    )
+
+
+from 矩形暗涵设计 import solve_water_depth_rectangular
 
 from PySide6.QtGui import (
     QPainter, QPen, QBrush, QPolygonF,
@@ -2600,20 +2718,20 @@ class FormattedLayoutDialog(QDialog):
 
 
 # ============================================================
-# 批量明渠段插入确认对话框
+# 批量补段插入确认对话框
 # ============================================================
 class BatchChannelConfirmDialog(QDialog):
     """
-    批量明渠段插入确认对话框（PySide6版）
+    批量补段插入确认对话框（PySide6版）
 
-    展示所有需要插入明渠段的位置，提供表格编辑和逐一确认两种模式。
+    展示所有需要插入补段的位置，提供表格编辑和逐一确认两种模式。
     """
 
     RESULT_TABLE_EDIT = "table_edit"
     RESULT_MANUAL_EACH = "manual_each"
     RESULT_CANCELLED = "cancelled"
 
-    STRUCTURE_TYPES = ["明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形"]
+    STRUCTURE_TYPES = TRANSITION_FILLER_TYPES
 
     def __init__(self, parent, total_count: int, gaps_info: list):
         super().__init__(parent)
@@ -2626,9 +2744,9 @@ class BatchChannelConfirmDialog(QDialog):
         self._param_undo_group = 0
         self._param_pre_edit_snapshot = None
 
-        self.setWindowTitle("批量插入明渠段")
-        self.resize(1100, 580)
-        self.setMinimumSize(900, 400)
+        self.setWindowTitle("批量插入补段")
+        self.resize(1280, 580)
+        self.setMinimumSize(1040, 400)
         self._create_ui()
         self._fill_all_recommended()
 
@@ -2637,28 +2755,28 @@ class BatchChannelConfirmDialog(QDialog):
         lay.setSpacing(6)
 
         # 标题 & 统计
-        has_upstream = sum(1 for g in self.gaps_info if g.get('has_upstream'))
-        no_upstream = self.total_count - has_upstream
+        has_reference = sum(1 for g in self.gaps_info if g.get('has_reference'))
+        missing_reference = self.total_count - has_reference
 
-        lbl_title = QLabel(f"系统检测到 <b>{self.total_count}</b> 处需要插入明渠段")
+        lbl_title = QLabel(f"系统检测到 <b>{self.total_count}</b> 处需要插入补段")
         lay.addWidget(lbl_title)
 
-        if has_upstream == self.total_count:
-            lbl_sub = QLabel(f"全部 {self.total_count} 处均可自动匹配同流量段明渠参数")
+        if has_reference == self.total_count:
+            lbl_sub = QLabel(f"全部 {self.total_count} 处均可自动匹配补段参数")
             lbl_sub.setStyleSheet("color: green;")
         else:
-            lbl_sub = QLabel(f"其中 {has_upstream} 处可自动匹配参数，{no_upstream} 处需手动输入")
+            lbl_sub = QLabel(f"其中 {has_reference} 处可自动匹配参数，{missing_reference} 处需手动输入")
             lbl_sub.setStyleSheet("color: #CC6600;")
         lay.addWidget(lbl_sub)
 
         # 原理说明
-        tip_grp = QGroupBox("为什么需要插入明渠段？")
+        tip_grp = QGroupBox("为什么需要插入补段？")
         tip_lay = QVBoxLayout(tip_grp)
         tip_text = (
             "渠系中各建筑物之间往往存在无建筑物覆盖的空余渠段。"
             "系统通过比较相邻建筑物间的里程差与渐变段长度之和，自动检测出这些空隙位置。\n"
-            "为保证水面线推算的连续性，需要在空隙处补充明渠段。"
-            "推荐直接复制上游已有明渠的断面参数，也可手动修改。"
+            "为保证水面线推算的连续性，需要在空隙处补充补段。"
+            "推荐直接复制系统找到的参考补段断面参数，也可手动修改。"
         )
         lbl_tip = QLabel(tip_text)
         lbl_tip.setWordWrap(True)
@@ -2692,8 +2810,8 @@ class BatchChannelConfirmDialog(QDialog):
         lay.addLayout(tb)
 
         # 参数表格
-        self.param_table = QTableWidget(self.total_count, 10)
-        headers = ["#", "上游", "下游", "可用长度(m)", "结构形式", "B(m)", "m", "n", "底坡1/i", "Q(m³/s)"]
+        self.param_table = QTableWidget(self.total_count, 12)
+        headers = ["#", "上游", "下游", "可用长度(m)", "结构形式", "B(m)", "H(m)", "m", "n", "底坡1/i", "Q(m3/s)", "状态/来源"]
         self.param_table.setHorizontalHeaderLabels(headers)
         self.param_table.horizontalHeader().setStretchLastSection(False)
         self.param_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -2741,7 +2859,7 @@ class BatchChannelConfirmDialog(QDialog):
 
             # B, m, n, 底坡, Q 输入框
             row_widgets = {'gap': gap, 'type_combo': type_cb, 'entries': {}}
-            for c, key in [(5, 'B'), (6, 'm'), (7, 'n'), (8, 'slope'), (9, 'Q')]:
+            for c, key in [(5, 'B'), (6, 'H'), (7, 'm'), (8, 'n'), (9, 'slope'), (10, 'Q')]:
                 default_val = ""
                 if key == 'n':
                     default_val = "0.014"
@@ -2754,33 +2872,22 @@ class BatchChannelConfirmDialog(QDialog):
                 self.param_table.setItem(idx, c, item)
                 row_widgets['entries'][key] = (idx, c)
 
+            status_text = describe_transition_gap_source(gap)
+            item_status = QTableWidgetItem(status_text)
+            item_status.setFlags(item_status.flags() & ~Qt.ItemIsEditable)
+            item_status.setTextAlignment(Qt.AlignCenter)
+            item_status.setToolTip(status_text)
+            if status_text == "需手动填写":
+                item_status.setForeground(QColor("#CC6600"))
+            else:
+                item_status.setForeground(QColor("#2E7D32"))
+            self.param_table.setItem(idx, 11, item_status)
+
             self._row_widgets.append(row_widgets)
+            type_cb.currentTextChanged.connect(lambda _text, row_idx=idx: self._apply_row_type_mode(row_idx))
+            self._apply_row_type_mode(idx)
 
-            # 若有经济断面预算选项，切换类型时自动填充
-            computed_opts = gap.get('computed_channel_options')
-            if computed_opts:
-                row_ref = row_widgets  # capture reference
-                def _make_type_handler(rw, opts):
-                    def _on_type_changed(index):
-                        selected = rw['type_combo'].currentText()
-                        p = opts.get(selected)
-                        if p:
-                            rw['gap']['upstream_channel'] = dict(p)
-                            rw['gap']['upstream_channel'].update({
-                                'flow': gap['flow'],
-                                'flow_section': gap.get('flow_section', ''),
-                                'structure_height': 0.0,
-                                'name': '-',
-                            })
-                            self._push_param_undo()
-                            self._param_undo_group += 1
-                            try:
-                                self._fill_recommended(self._row_widgets.index(rw))
-                            finally:
-                                self._param_undo_group -= 1
-                    return _on_type_changed
-                type_cb.currentIndexChanged.connect(_make_type_handler(row_ref, computed_opts))
-
+        self._apply_param_table_column_widths()
         lay.addWidget(self.param_table, stretch=1)
         self.param_table.currentCellChanged.connect(self._on_param_current_cell_changed)
         self.param_table.cellChanged.connect(self._on_param_cell_changed)
@@ -2801,6 +2908,35 @@ class BatchChannelConfirmDialog(QDialog):
         btn_ok.setFocus()
         btn_lay.addWidget(btn_ok)
         lay.addLayout(btn_lay)
+
+    def _apply_param_table_column_widths(self):
+        header = self.param_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.Interactive)
+
+        width_map = {
+            0: 44,
+            1: 170,
+            2: 170,
+            3: 110,
+            4: 120,
+            5: 80,
+            6: 80,
+            7: 65,
+            8: 80,
+            9: 90,
+            10: 100,
+        }
+        for col, width in width_map.items():
+            self.param_table.setColumnWidth(col, width)
+
+        metrics = self.param_table.fontMetrics()
+        status_width = metrics.horizontalAdvance("状态/来源") + 26
+        for row in range(self.param_table.rowCount()):
+            item = self.param_table.item(row, 11)
+            if item and item.text():
+                status_width = max(status_width, metrics.horizontalAdvance(item.text()) + 26)
+        self.param_table.setColumnWidth(11, max(145, status_width))
 
     def _snapshot_param_table(self):
         rows = []
@@ -2889,17 +3025,40 @@ class BatchChannelConfirmDialog(QDialog):
         else:
             item.setText(str(val))
 
+    def _apply_row_type_mode(self, row_idx):
+        row = self._row_widgets[row_idx]
+        structure_type = normalize_transition_structure_type(row['type_combo'].currentText())
+        entries = row['entries']
+        is_culvert = is_transition_culvert_type(structure_type)
+        h_item = self.param_table.item(*entries['H'])
+        m_item = self.param_table.item(*entries['m'])
+        if h_item:
+            if is_culvert:
+                h_item.setFlags(h_item.flags() | Qt.ItemIsEditable)
+            else:
+                h_item.setFlags(h_item.flags() & ~Qt.ItemIsEditable)
+                if h_item.text().strip():
+                    h_item.setText("")
+        if m_item:
+            if is_culvert:
+                m_item.setFlags(m_item.flags() & ~Qt.ItemIsEditable)
+                if m_item.text().strip():
+                    m_item.setText("")
+            else:
+                m_item.setFlags(m_item.flags() | Qt.ItemIsEditable)
+
     def _fill_recommended(self, row_idx):
         """用上游参数填充一行"""
         row = self._row_widgets[row_idx]
-        up = row['gap'].get('upstream_channel')
+        up = row['gap'].get('reference_segment') or row['gap'].get('upstream_channel')
         if not up:
             return
-        st = up.get('structure_type', '明渠-梯形')
+        st = normalize_transition_structure_type(up.get('structure_type', '明渠-梯形'))
         idx_in_combo = self.STRUCTURE_TYPES.index(st) if st in self.STRUCTURE_TYPES else 0
         row['type_combo'].blockSignals(True)
         row['type_combo'].setCurrentIndex(idx_in_combo)
         row['type_combo'].blockSignals(False)
+        self._apply_row_type_mode(row_idx)
 
         entries = row['entries']
         # U形明渠使用半径R（arc_radius），其他使用底宽B
@@ -2908,7 +3067,8 @@ class BatchChannelConfirmDialog(QDialog):
         else:
             b_val = up.get('bottom_width', 0)
         self._set_cell(entries['B'][0], entries['B'][1], f"{b_val:.2f}")
-        self._set_cell(entries['m'][0], entries['m'][1], f"{up.get('side_slope', 0)}")
+        self._set_cell(entries['H'][0], entries['H'][1], f"{up.get('structure_height', 0):.2f}" if is_transition_culvert_type(st) and up.get('structure_height', 0) > 0 else "")
+        self._set_cell(entries['m'][0], entries['m'][1], "" if is_transition_culvert_type(st) else f"{up.get('side_slope', 0)}")
         self._set_cell(entries['n'][0], entries['n'][1], f"{up.get('roughness', 0.014)}")
         self._set_cell(entries['slope'][0], entries['slope'][1], f"{up.get('slope_inv', 3000):.0f}")
         self._set_cell(entries['Q'][0], entries['Q'][1], f"{row['gap']['flow']:.3f}")
@@ -2918,21 +3078,10 @@ class BatchChannelConfirmDialog(QDialog):
         self._param_undo_group += 1
         try:
             for i, row in enumerate(self._row_widgets):
-                if row['gap'].get('upstream_channel'):
+                if row['gap'].get('reference_segment') or row['gap'].get('upstream_channel'):
                     self._fill_recommended(i)
         finally:
             self._param_undo_group -= 1
-
-    def _fill_with_fallback_if_empty(self):
-        """auto_confirm模式专用：对未填充的行使用 fallback 参数（原始上游明渠）兜底填充"""
-        for i, row in enumerate(self._row_widgets):
-            if not row['gap'].get('has_upstream'):
-                fallback = row['gap'].get('upstream_channel_fallback')
-                if fallback:
-                    orig = row['gap'].get('upstream_channel')
-                    row['gap']['upstream_channel'] = fallback
-                    self._fill_recommended(i)
-                    row['gap']['upstream_channel'] = orig
 
     def _clear_all(self):
         self._push_param_undo()
@@ -2943,10 +3092,12 @@ class BatchChannelConfirmDialog(QDialog):
             row['type_combo'].blockSignals(False)
             entries = row['entries']
             self._set_cell(entries['B'][0], entries['B'][1], "")
+            self._set_cell(entries['H'][0], entries['H'][1], "")
             self._set_cell(entries['m'][0], entries['m'][1], "")
             self._set_cell(entries['n'][0], entries['n'][1], "0.014")
             self._set_cell(entries['slope'][0], entries['slope'][1], "3000")
             self._set_cell(entries['Q'][0], entries['Q'][1], f"{row['gap']['flow']:.3f}")
+            self._apply_row_type_mode(self._row_widgets.index(row))
         self._param_undo_group -= 1
 
     def _on_mode_change(self):
@@ -2955,7 +3106,7 @@ class BatchChannelConfirmDialog(QDialog):
         self._clear_btn.setEnabled(enabled)
         # 禁用/启用表格编辑
         for r in range(self.param_table.rowCount()):
-            for c in range(5, 10):
+            for c in range(5, 11):
                 item = self.param_table.item(r, c)
                 if item:
                     if enabled:
@@ -3044,9 +3195,57 @@ class BatchChannelConfirmDialog(QDialog):
                 return None
         return params
 
+    def _validate_and_collect_v2(self):
+        params = {}
+        for idx, row in enumerate(self._row_widgets):
+            entries = row['entries']
+            try:
+                st = normalize_transition_structure_type(row['type_combo'].currentText())
+                B = self._get_cell_val(entries['B'][0], entries['B'][1])
+                H = self._get_cell_val(entries['H'][0], entries['H'][1])
+                m = self._get_cell_val(entries['m'][0], entries['m'][1]) if st == "明渠-梯形" else 0.0
+                n = self._get_cell_val(entries['n'][0], entries['n'][1], 0.014)
+                si = self._get_cell_val(entries['slope'][0], entries['slope'][1], 3000)
+                Q = self._get_cell_val(entries['Q'][0], entries['Q'][1])
+                if Q <= 0:
+                    fluent_info(self, "输入错误", f"第 {idx+1} 处: 流量 Q 必须大于 0")
+                    return None
+                if B <= 0 and st not in ("明渠-圆形", "明渠-U形"):
+                    fluent_info(self, "输入错误", f"第 {idx+1} 处: 底宽 B 必须大于 0")
+                    return None
+                if st == "明渠-U形" and B <= 0:
+                    fluent_info(self, "输入错误", f"第 {idx+1} 处: 半径 R 必须大于 0")
+                    return None
+                if is_transition_culvert_type(st) and H <= 0:
+                    fluent_info(self, "输入错误", f"第 {idx+1} 处: 暗涵高度 H 必须大于 0")
+                    return None
+                if n <= 0 or si <= 0:
+                    fluent_info(self, "输入错误", f"第 {idx+1} 处: 糙率 n 和底坡 1/i 必须大于 0")
+                    return None
+
+                upstream = row['gap'].get('reference_segment') or row['gap'].get('upstream_channel')
+                params[idx] = build_transition_fill_params(
+                    structure_type=st,
+                    B=B,
+                    m=m,
+                    H=H,
+                    n=n,
+                    slope_inv=si,
+                    Q=Q,
+                    flow_section=row['gap'].get('flow_section', ''),
+                    upstream_channel=upstream,
+                )
+                if params[idx] is None:
+                    fluent_info(self, "计算错误", f"第 {idx+1} 处: 无法生成有效的补段参数，请检查 B/H/m/n/底坡")
+                    return None
+            except ValueError:
+                fluent_info(self, "输入错误", f"第 {idx+1} 处: 请输入有效数值")
+                return None
+        return params
+
     def _on_ok(self):
         if self.rb_table.isChecked():
-            params = self._validate_and_collect()
+            params = self._validate_and_collect_v2()
             if params is None:
                 return
             self.result = {'mode': self.RESULT_TABLE_EDIT, 'params': params}
@@ -3056,7 +3255,7 @@ class BatchChannelConfirmDialog(QDialog):
 
     def closeEvent(self, event):
         if fluent_question(self, "确认取消",
-                "关闭后将跳过明渠段插入，渠段之间可能出现空隙。\n确定要取消吗？"):
+                "关闭后将跳过补段插入，渠段之间可能出现空隙。\n确定要取消吗？"):
             self.result = {'mode': self.RESULT_CANCELLED, 'params': {}}
             event.accept()
         else:
@@ -3067,16 +3266,16 @@ class BatchChannelConfirmDialog(QDialog):
 
 
 # ============================================================
-# 明渠段参数选择对话框（逐一弹窗模式）
+# 补段参数选择对话框（逐一弹窗模式）
 # ============================================================
 class OpenChannelDialog(QDialog):
     """
-    明渠段参数选择对话框（PySide6版）
+    补段参数选择对话框（PySide6版）
 
-    用于在建筑物之间插入明渠段时，让用户选择参数来源。
+    用于在建筑物之间插入补段时，让用户选择参数来源。
     """
 
-    STRUCTURE_TYPES = ["明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形"]
+    STRUCTURE_TYPES = TRANSITION_FILLER_TYPES
 
     def __init__(self, parent,
                  upstream_channel: Optional[Dict] = None,
@@ -3101,9 +3300,9 @@ class OpenChannelDialog(QDialog):
         self.apply_all_remaining = False
 
         if total_count > 1:
-            self.setWindowTitle(f"插入明渠段 ({current_index}/{total_count})")
+            self.setWindowTitle(f"插入补段 ({current_index}/{total_count})")
         else:
-            self.setWindowTitle("插入明渠段")
+            self.setWindowTitle("插入补段")
         self.resize(520, 560)
         self.setMinimumSize(420, 440)
         self._create_ui()
@@ -3124,7 +3323,7 @@ class OpenChannelDialog(QDialog):
         src_grp = QGroupBox("参数来源")
         src_lay = QVBoxLayout(src_grp)
         self.src_group = QButtonGroup(self)
-        self.rb_copy = QRadioButton("复制同流量段明渠参数（推荐）")
+        self.rb_copy = QRadioButton("复制推荐补段参数（推荐）")
         self.rb_manual = QRadioButton("手动输入参数")
         self.src_group.addButton(self.rb_copy)
         self.src_group.addButton(self.rb_manual)
@@ -3139,7 +3338,11 @@ class OpenChannelDialog(QDialog):
                 b_label = f"R={up.get('arc_radius', 0):.2f}m"
             else:
                 b_label = f"B={up.get('bottom_width', 0):.2f}m"
-            info = f"  → {st_type}  {b_label}  m={up.get('side_slope', 0)}  n={up.get('roughness', 0.014)}  底坡1/{up.get('slope_inv', 3000):.0f}"
+            if is_transition_culvert_type(st_type):
+                extra_label = f"H={up.get('structure_height', 0):.2f}m"
+            else:
+                extra_label = f"m={up.get('side_slope', 0)}"
+            info = f"  → {st_type}  {b_label}  {extra_label}  n={up.get('roughness', 0.014)}  底坡1/{up.get('slope_inv', 3000):.0f}"
             lbl_info = QLabel(info)
             lbl_info.setStyleSheet("color: green; margin-left: 20px;")
             src_lay.addWidget(lbl_info)
@@ -3151,13 +3354,14 @@ class OpenChannelDialog(QDialog):
         lay.addWidget(src_grp)
 
         # 参数编辑区
-        param_grp = QGroupBox("明渠段参数")
+        param_grp = QGroupBox("补段参数")
         pg = QGridLayout(param_grp)
         pg.setVerticalSpacing(10)
         pg.setHorizontalSpacing(12)
         pg.setContentsMargins(12, 16, 12, 12)
 
         _row_h = 32
+        self._secondary_row_height = _row_h
         pg.addWidget(QLabel("结构形式:"), 0, 0)
         self.type_combo = QComboBox()
         self.type_combo.setMinimumHeight(_row_h)
@@ -3168,11 +3372,20 @@ class OpenChannelDialog(QDialog):
         self.edit_B = QLineEdit()
         self.edit_B.setMinimumHeight(_row_h)
         pg.addWidget(self.edit_B, 1, 1)
-
-        pg.addWidget(QLabel("边坡 m:"), 2, 0)
+        self.secondary_label = QLabel("边坡 m:")
+        pg.addWidget(self.secondary_label, 2, 0)
         self.edit_m = QLineEdit()
         self.edit_m.setMinimumHeight(_row_h)
-        pg.addWidget(self.edit_m, 2, 1)
+        self.edit_m.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.edit_H = QLineEdit()
+        self.edit_H.setMinimumHeight(_row_h)
+        self.edit_H.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.secondary_input_stack = QStackedWidget()
+        self.secondary_input_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.secondary_input_stack.addWidget(self.edit_m)
+        self.secondary_input_stack.addWidget(self.edit_H)
+        self._sync_secondary_input_height()
+        pg.addWidget(self.secondary_input_stack, 2, 1)
 
         pg.addWidget(QLabel("糙率 n:"), 3, 0)
         self.edit_n = QLineEdit()
@@ -3210,7 +3423,7 @@ class OpenChannelDialog(QDialog):
         lay.addLayout(btn_lay)
 
         # 收集可编辑控件，用于禁用/启用切换
-        self._param_widgets = [self.type_combo, self.edit_B, self.edit_m,
+        self._param_widgets = [self.type_combo, self.edit_B, self.edit_H, self.edit_m,
                                self.edit_n, self.edit_slope, self.edit_Q]
 
         # 如果有上游参数，默认填充
@@ -3218,6 +3431,39 @@ class OpenChannelDialog(QDialog):
             self._fill_from_upstream()
         self._on_source_change()  # 初始化启用/禁用状态
         self.rb_copy.toggled.connect(self._on_source_change)
+        self.type_combo.currentTextChanged.connect(self._update_type_mode)
+        self._update_type_mode()
+
+    def _update_type_mode(self, _text=None):
+        structure_type = normalize_transition_structure_type(self.type_combo.currentText())
+        is_culvert = is_transition_culvert_type(structure_type)
+        self.secondary_label.setText("高度 H(m):" if is_culvert else "边坡 m:")
+        self.secondary_input_stack.setCurrentWidget(self.edit_H if is_culvert else self.edit_m)
+        self._sync_secondary_input_height()
+        self.edit_H.setEnabled(self.rb_manual.isChecked() and is_culvert)
+        self.edit_m.setEnabled(self.rb_manual.isChecked() and not is_culvert)
+        if is_culvert:
+            self.edit_m.clear()
+        else:
+            self.edit_H.clear()
+
+    def _sync_secondary_input_height(self):
+        row_height = getattr(self, "_secondary_row_height", 0)
+        for widget in (self.edit_m, self.edit_H):
+            row_height = max(
+                row_height,
+                widget.minimumHeight(),
+                widget.minimumSizeHint().height(),
+                widget.sizeHint().height(),
+            )
+
+        for widget in (self.edit_m, self.edit_H):
+            widget.setMinimumHeight(row_height)
+            widget.updateGeometry()
+
+        self.secondary_input_stack.setMinimumHeight(row_height)
+        self.secondary_input_stack.setMaximumHeight(row_height)
+        self.secondary_input_stack.updateGeometry()
 
     def _fill_from_upstream(self):
         """用上游参数填充"""
@@ -3225,6 +3471,7 @@ class OpenChannelDialog(QDialog):
         if not up:
             return
         st = up.get('structure_type', '明渠-梯形')
+        st = normalize_transition_structure_type(st)
         idx = self.STRUCTURE_TYPES.index(st) if st in self.STRUCTURE_TYPES else 0
         self.type_combo.setCurrentIndex(idx)
         # U形明渠使用半径R（arc_radius），其他使用底宽B
@@ -3233,9 +3480,11 @@ class OpenChannelDialog(QDialog):
         else:
             b_val = up.get('bottom_width', 0)
         self.edit_B.setText(f"{b_val:.2f}")
-        self.edit_m.setText(f"{up.get('side_slope', 0)}")
+        self.edit_H.setText(f"{up.get('structure_height', 0):.2f}" if is_transition_culvert_type(st) and up.get('structure_height', 0) > 0 else "")
+        self.edit_m.setText("" if is_transition_culvert_type(st) else f"{up.get('side_slope', 0)}")
         self.edit_n.setText(f"{up.get('roughness', 0.014)}")
         self.edit_slope.setText(f"{up.get('slope_inv', 3000):.0f}")
+        self._update_type_mode()
 
     def _on_source_change(self, checked=None):
         is_manual = self.rb_manual.isChecked()
@@ -3243,6 +3492,7 @@ class OpenChannelDialog(QDialog):
             w.setEnabled(is_manual)
         if not is_manual and self.upstream_channel:
             self._fill_from_upstream()
+        self._update_type_mode()
 
     def _on_apply_all(self):
         """剩余全部用推荐"""
@@ -3253,26 +3503,43 @@ class OpenChannelDialog(QDialog):
 
     def _on_ok(self):
         try:
-            st = self.type_combo.currentText()
+            st = normalize_transition_structure_type(self.type_combo.currentText())
             B = float(self.edit_B.text() or 0)
-            m = float(self.edit_m.text() or 0) if st == "明渠-梯形" else 0
+            H = float(self.edit_H.text() or 0)
+            m = float(self.edit_m.text() or 0) if st == "明渠-梯形" else 0.0
             n = float(self.edit_n.text() or 0.014)
             si = float(self.edit_slope.text() or 3000)
             Q = float(self.edit_Q.text() or 0)
-            slope_i = 1.0 / si if si > 0 else 0
 
             if Q <= 0:
                 fluent_info(self, "输入错误", "流量 Q 必须大于 0")
                 return
-            # U形明渠和圆形明渠没有底宽B，验证时跳过
             if B <= 0 and st not in ("明渠-圆形", "明渠-U形"):
                 fluent_info(self, "输入错误", "底宽 B 必须大于 0")
                 return
-            # U形明渠验证半径R
             if st == "明渠-U形" and B <= 0:
                 fluent_info(self, "输入错误", "半径 R 必须大于 0")
                 return
+            if is_transition_culvert_type(st) and H <= 0:
+                fluent_info(self, "输入错误", "暗涵高度 H 必须大于 0")
+                return
 
+            self._result = build_transition_fill_params(
+                structure_type=st,
+                B=B,
+                m=m,
+                H=H,
+                n=n,
+                slope_inv=si,
+                Q=Q,
+                flow_section=self.flow_section,
+                upstream_channel=self.upstream_channel,
+            )
+            if self._result is None:
+                fluent_info(self, "计算错误", "无法生成有效的补段参数，请检查 B/H/m/n/底坡")
+                return
+            self.accept()
+            return
             D_param = B if st == "明渠-圆形" else 0.0
             B_param = 0.0 if st in ("明渠-圆形", "明渠-U形") else B
             h = calculate_normal_depth(Q, B_param, m, n, slope_i, D=D_param)

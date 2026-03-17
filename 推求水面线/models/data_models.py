@@ -74,6 +74,7 @@ class ChannelNode:
     bend_calc_details: Dict[str, Any] = field(default_factory=dict)      # 弯道损失计算详情
     friction_calc_details: Dict[str, Any] = field(default_factory=dict)  # 沿程损失计算详情
     siphon_outlet_elev_details: Dict[str, Any] = field(default_factory=dict)  # 倒虹吸出口渠底高程计算详情（公式10.3.6）
+    terminal_gate_backfill_details: Dict[str, Any] = field(default_factory=dict)  # 末尾闸行高程回推详情
     
     # ========== 特殊标记 ==========
     is_inverted_siphon: bool = False            # 是否为倒虹吸（水损需外部导入）
@@ -251,6 +252,7 @@ class ChannelNode:
             "bend_calc_details": self.bend_calc_details,
             "friction_calc_details": self.friction_calc_details,
             "siphon_outlet_elev_details": self.siphon_outlet_elev_details,
+            "terminal_gate_backfill_details": self.terminal_gate_backfill_details,
             
             # ========== 特殊标记 ==========
             "is_inverted_siphon": self.is_inverted_siphon,
@@ -359,6 +361,7 @@ class ChannelNode:
         node.bend_calc_details = d.get("bend_calc_details", {})
         node.friction_calc_details = d.get("friction_calc_details", {})
         node.siphon_outlet_elev_details = d.get("siphon_outlet_elev_details", {})
+        node.terminal_gate_backfill_details = d.get("terminal_gate_backfill_details", {})
         
         # ========== 特殊标记 ==========
         node.is_inverted_siphon = d.get("is_inverted_siphon", False)

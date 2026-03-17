@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from version import APP_VERSION, APP_NAME, APP_NAME_EN
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
+UNIVERSAL_PATCH_MIN_VERSION = "1.0.9"
 
 
 def _version_key(v: str) -> tuple:
@@ -36,6 +37,29 @@ def _version_key(v: str) -> tuple:
     if not m:
         return (0, 0, 0)
     return tuple(int(x) for x in m.groups() if x is not None)
+
+
+def _select_universal_patch_manifest_files(manifest_files, current_version: str) -> list[str]:
+    """Keep only manifests that are still within the supported patch upgrade floor."""
+    selected = []
+    current_key = _version_key(current_version)
+    min_key = _version_key(UNIVERSAL_PATCH_MIN_VERSION)
+
+    for name in manifest_files:
+        if not (name.startswith("manifest-V") and name.endswith(".json")):
+            continue
+        version = name.replace("manifest-V", "").replace(".json", "")
+        version_key = _version_key(version)
+        if version_key >= current_key:
+            continue
+        if version_key < min_key:
+            continue
+        selected.append(name)
+
+    return sorted(
+        selected,
+        key=lambda x: _version_key(x.replace("manifest-V", "").replace(".json", "")),
+    )
 
 
 def bump_version(level: str) -> str:
@@ -422,18 +446,27 @@ def build(bump: str = None):
     # ---- 生成通用增量补丁包（一个包覆盖所有旧版本） ----
     patch_path = None
     patch_result = None
-    old_manifest_files = sorted(
+    manifest_files = os.listdir(MANIFEST_STORE_DIR)
+    old_manifest_files = _select_universal_patch_manifest_files(manifest_files, APP_VERSION)
+    skipped_manifest_count = len(
         [
-            f for f in os.listdir(MANIFEST_STORE_DIR)
+            f for f in manifest_files
             if f.startswith("manifest-V") and f.endswith(".json")
             and f != f"manifest-V{APP_VERSION}.json"
-        ],
-        key=lambda x: _version_key(x.replace("manifest-V", "").replace(".json", "")),
+            and _version_key(f.replace("manifest-V", "").replace(".json", ""))
+            < _version_key(UNIVERSAL_PATCH_MIN_VERSION)
+        ]
     )
 
     patch_info_path = os.path.join(DIST_DIR, "patch-info.json")
     if os.path.exists(patch_info_path):
         os.remove(patch_info_path)
+
+    if skipped_manifest_count:
+        print(
+            f"  [patch] 已忽略 {skipped_manifest_count} 个 "
+            f"V{UNIVERSAL_PATCH_MIN_VERSION} 之前的旧版 manifest"
+        )
 
     if old_manifest_files:
         # 加载所有旧版 manifest

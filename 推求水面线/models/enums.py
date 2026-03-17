@@ -40,6 +40,7 @@ class StructureType(Enum):
     
     # 其他闸类型（点状结构，产生过闸水头损失）
     DISCHARGE_GATE = "泄水闸"
+    RETURN_WATER_GATE = "退水闸"
     CHECK_GATE = "节制闸"
     
     # 倒虹吸（保留用于水面线计算中的特殊处理）

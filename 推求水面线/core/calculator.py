@@ -5,18 +5,26 @@
 整合几何计算和水力计算，提供完整的水面线推求功能。
 """
 
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import math
 import sys
 import os
 
 # 添加父目录到路径以支持相对导入
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_water_profile_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _water_profile_dir not in sys.path:
+    sys.path.insert(0, _water_profile_dir)
 
-from models.data_models import ChannelNode, ProjectSettings
+_repo_root = os.path.dirname(_water_profile_dir)
+_kernel_dir = os.path.join(_repo_root, "calc_渠系计算算法内核")
+if _kernel_dir not in sys.path:
+    sys.path.insert(0, _kernel_dir)
+
+from models.data_models import ChannelNode, OpenChannelParams, ProjectSettings
 from models.enums import StructureType, InOutType
 from core.geometry_calc import GeometryCalculator
 from core.hydraulic_calc import HydraulicCalculator
+from 矩形暗涵设计 import calculate_rectangular_outputs
 
 
 class WaterProfileCalculator:
@@ -351,11 +359,14 @@ class WaterProfileCalculator:
 
         # 8. 应用公式10.3.6计算倒虹吸出口渐变段末端渠底高程
         self.hyd_calc.apply_siphon_outlet_elevation(nodes)
+
+        # 9. 对整表末尾闸行执行高程回推（仅补缺失项）
+        self.hyd_calc.apply_terminal_gate_elevation_backfill(nodes)
         
-        # 9. 计算累计总水头损失
+        # 10. 计算累计总水头损失
         self._calculate_cumulative_head_loss(nodes)
 
-        # 10. 导出前约束：真实节点同桩号高程冲突校验
+        # 11. 导出前约束：真实节点同桩号高程冲突校验
         self._validate_real_node_station_conflicts(nodes)
         
         return nodes
@@ -390,25 +401,12 @@ class WaterProfileCalculator:
                     check_result = self._check_gap_gate_to_entry(current_node, next_node)
                     if check_result['need_open_channel']:
                         ref_idx = i + 1
-                        upstream_channel, computed_options = self._find_reference_channel_same_section(nodes, ref_idx)
+                        upstream_channel = self._find_reference_segment_same_section_v2(nodes, ref_idx, i, i + 1)
                         if upstream_channel is None:
-                            ref = self._find_global_nearest_channel(nodes, ref_idx)
-                            if ref:
-                                flow_q = next_node.flow if next_node.flow and next_node.flow > 0 else 1.0
-                                computed_options = self._compute_economic_section(
-                                    flow_q, ref['slope_i'], ref['roughness'], ref['side_slope']
-                                )
-                                upstream_channel = computed_options.get('明渠-矩形')
-                                if upstream_channel:
-                                    upstream_channel = dict(upstream_channel)
-                                    upstream_channel.update({'flow': flow_q, 'flow_section': next_node.flow_section,
-                                                             'structure_height': 0.0, 'name': '-'})
-                        upstream_channel_fallback = upstream_channel or self._find_nearest_upstream_channel(nodes, ref_idx)
+                            upstream_channel = self._find_reference_segment_cross_section_v2(nodes, ref_idx, i, i + 1)
                         gaps.append({
                             'index': i,
                             'upstream_channel': upstream_channel,
-                            'upstream_channel_fallback': upstream_channel_fallback,
-                            'computed_channel_options': computed_options,
                             'available_length': check_result['available_length'],
                             'prev_struct': current_node.structure_type.value if current_node.structure_type else "",
                             'next_struct': next_node.structure_type.value if next_node.structure_type else "",
@@ -416,7 +414,9 @@ class WaterProfileCalculator:
                             'next_name': getattr(next_node, 'name', '') or '',
                             'flow_section': next_node.flow_section,
                             'flow': next_node.flow,
-                            'has_upstream': upstream_channel is not None
+                            'has_upstream': upstream_channel is not None,
+                            'reference_segment': upstream_channel,
+                            'has_reference': upstream_channel is not None
                         })
                     continue
 
@@ -424,25 +424,12 @@ class WaterProfileCalculator:
                 if self._is_diversion_gate_type(next_node.structure_type):
                     check_result = self._check_gap_exit_to_gate(current_node, next_node)
                     if check_result['need_open_channel']:
-                        upstream_channel, computed_options = self._find_reference_channel_same_section(nodes, i)
+                        upstream_channel = self._find_reference_segment_same_section_v2(nodes, i, i, i + 1)
                         if upstream_channel is None:
-                            ref = self._find_global_nearest_channel(nodes, i)
-                            if ref:
-                                flow_q = current_node.flow if current_node.flow and current_node.flow > 0 else 1.0
-                                computed_options = self._compute_economic_section(
-                                    flow_q, ref['slope_i'], ref['roughness'], ref['side_slope']
-                                )
-                                upstream_channel = computed_options.get('明渠-矩形')
-                                if upstream_channel:
-                                    upstream_channel = dict(upstream_channel)
-                                    upstream_channel.update({'flow': flow_q, 'flow_section': current_node.flow_section,
-                                                             'structure_height': 0.0, 'name': '-'})
-                        upstream_channel_fallback = upstream_channel or self._find_nearest_upstream_channel(nodes, i)
+                            upstream_channel = self._find_reference_segment_cross_section_v2(nodes, i, i, i + 1)
                         gaps.append({
                             'index': i,
                             'upstream_channel': upstream_channel,
-                            'upstream_channel_fallback': upstream_channel_fallback,
-                            'computed_channel_options': computed_options,
                             'available_length': check_result['available_length'],
                             'prev_struct': current_node.structure_type.value if current_node.structure_type else "",
                             'next_struct': next_node.structure_type.value if next_node.structure_type else "",
@@ -450,7 +437,9 @@ class WaterProfileCalculator:
                             'next_name': getattr(next_node, 'name', '') or '',
                             'flow_section': current_node.flow_section,
                             'flow': current_node.flow,
-                            'has_upstream': upstream_channel is not None
+                            'has_upstream': upstream_channel is not None,
+                            'reference_segment': upstream_channel,
+                            'has_reference': upstream_channel is not None
                         })
                     continue
 
@@ -459,21 +448,9 @@ class WaterProfileCalculator:
                     current_node, next_node, nodes
                 )
                 if check_result['need_open_channel']:
-                    upstream_channel, computed_options = self._find_reference_channel_same_section(nodes, i)
-                    # 同段无明渠：用经济断面公式计算回退
+                    upstream_channel = self._find_reference_segment_same_section_v2(nodes, i, i, i + 1)
                     if upstream_channel is None:
-                        ref = self._find_global_nearest_channel(nodes, i)
-                        if ref:
-                            flow_q = current_node.flow if current_node.flow and current_node.flow > 0 else 1.0
-                            computed_options = self._compute_economic_section(
-                                flow_q, ref['slope_i'], ref['roughness'], ref['side_slope']
-                            )
-                            upstream_channel = computed_options.get('明渠-矩形')
-                            if upstream_channel:
-                                upstream_channel = dict(upstream_channel)
-                                upstream_channel.update({'flow': flow_q, 'flow_section': current_node.flow_section,
-                                                         'structure_height': 0.0, 'name': '-'})
-                    upstream_channel_fallback = upstream_channel or self._find_nearest_upstream_channel(nodes, i)
+                        upstream_channel = self._find_reference_segment_cross_section_v2(nodes, i, i, i + 1)
                     prev_struct = (current_node.structure_type.value
                                    if current_node.structure_type else "")
                     next_struct = (next_node.structure_type.value
@@ -483,8 +460,6 @@ class WaterProfileCalculator:
                     gaps.append({
                         'index': i,
                         'upstream_channel': upstream_channel,
-                        'upstream_channel_fallback': upstream_channel_fallback,
-                        'computed_channel_options': computed_options,
                         'available_length': check_result['available_length'],
                         'prev_struct': prev_struct,
                         'next_struct': next_struct,
@@ -492,7 +467,9 @@ class WaterProfileCalculator:
                         'next_name': next_name,
                         'flow_section': current_node.flow_section,
                         'flow': current_node.flow,
-                        'has_upstream': upstream_channel is not None
+                        'has_upstream': upstream_channel is not None,
+                        'reference_segment': upstream_channel,
+                        'has_reference': upstream_channel is not None
                     })
         return gaps
     
@@ -612,6 +589,18 @@ class WaterProfileCalculator:
         
         return True
     
+    @staticmethod
+    def _normalize_structure_type_value(structure_type) -> str:
+        """Normalize legacy aliases used by imports and historical tables."""
+        if structure_type is None:
+            return ""
+        sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
+        return {
+            "矩形": "明渠-矩形",
+            "暗渠": "矩形暗涵",
+            "矩形暗渠": "矩形暗涵",
+        }.get(sv, sv)
+
     def _is_mingqu_type(self, structure_type) -> bool:
         """判断是否为明渠类型（使用 .value 字符串比较）"""
         if structure_type is None:
@@ -927,7 +916,10 @@ class WaterProfileCalculator:
             result['use_merged_transition'] = False
 
         # 可用于明渠的长度（基于压缩后的长度）
-        result['available_length'] = result['distance'] - result['transition_length_1'] - result['transition_length_2']
+        result['available_length'] = max(
+            0.0,
+            result['distance'] - result['transition_length_1'] - result['transition_length_2'],
+        )
 
         # 判断是否需要插入明渠段
         result['need_open_channel'] = result['available_length'] > 0
@@ -972,7 +964,7 @@ class WaterProfileCalculator:
             calculated_length = self._estimate_transition_length(exit_node, "出口")
             # 渐变段长度不能超过可用里程
             result['transition_length_1'] = min(calculated_length, result['distance'])
-        result['available_length'] = result['distance'] - result['transition_length_1']
+        result['available_length'] = max(0.0, result['distance'] - result['transition_length_1'])
         result['need_open_channel'] = result['available_length'] > 0
         return result
 
@@ -1014,7 +1006,7 @@ class WaterProfileCalculator:
             calculated_length = self._estimate_transition_length(entry_node, "进口")
             # 渐变段长度不能超过可用里程
             result['transition_length_2'] = min(calculated_length, result['distance'])
-        result['available_length'] = result['distance'] - result['transition_length_2']
+        result['available_length'] = max(0.0, result['distance'] - result['transition_length_2'])
         result['need_open_channel'] = result['available_length'] > 0
         return result
 
@@ -1042,7 +1034,12 @@ class WaterProfileCalculator:
         # 尝试查找参考明渠的底宽
         B_channel = None
         if nodes and gap_index is not None:
-            ref_channel, _ = self._find_reference_channel_same_section(nodes, gap_index)
+            ref_channel = self._find_reference_segment_same_section_v2(
+                nodes,
+                gap_index,
+                gap_index,
+                min(len(nodes) - 1, gap_index + 1),
+            )
             if ref_channel:
                 B_channel = ref_channel.get('bottom_width', 0)
 
@@ -1342,6 +1339,160 @@ class WaterProfileCalculator:
         }
         return channel, None   # 无需经济断面选项
     
+    def _reference_family_for_gap_type(self, structure_type) -> str:
+        sv = self._normalize_structure_type_value(structure_type)
+        if sv == "矩形暗涵":
+            return "culvert"
+        if sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形"):
+            return "open_channel"
+        return ""
+
+    def _is_reference_segment_type_v2(self, structure_type) -> bool:
+        return self._reference_family_for_gap_type(structure_type) in {"open_channel", "culvert"}
+
+    def _extract_reference_segment_v2(self, node: ChannelNode) -> Dict[str, Any]:
+        sp = node.section_params or {}
+        structure_type = self._normalize_structure_type_value(node.structure_type)
+        bottom_width = sp.get("B", 0) or sp.get("D", 0)
+        if bottom_width == 0 and structure_type == "明渠-U形":
+            bottom_width = sp.get("R_circle", 0)
+        return {
+            "name": node.name,
+            "structure_type": structure_type,
+            "section_family": self._reference_family_for_gap_type(structure_type),
+            "bottom_width": bottom_width,
+            "water_depth": node.water_depth,
+            "side_slope": sp.get("m", 0),
+            "roughness": node.roughness,
+            "slope_inv": 1.0 / node.slope_i if node.slope_i and node.slope_i > 0 else 3000,
+            "flow": node.flow,
+            "flow_section": node.flow_section,
+            "structure_height": node.structure_height or sp.get("H_total", 0),
+            "arc_radius": sp.get("R_circle", 0),
+            "theta_deg": sp.get("theta_deg", 0),
+            "source_name": node.name,
+        }
+
+    def _resolve_gap_real_structures_v2(
+        self,
+        nodes: List[ChannelNode],
+        left_index: int,
+        right_index: int,
+    ) -> Tuple[str, str]:
+        left = left_index
+        while left >= 0 and self._is_diversion_gate_type(nodes[left].structure_type):
+            left -= 1
+        right = right_index
+        while right < len(nodes) and self._is_diversion_gate_type(nodes[right].structure_type):
+            right += 1
+        left_sv = self._normalize_structure_type_value(nodes[left].structure_type) if left >= 0 else ""
+        right_sv = self._normalize_structure_type_value(nodes[right].structure_type) if right < len(nodes) else ""
+        return left_sv, right_sv
+
+    def _preferred_reference_family_v2(
+        self,
+        nodes: List[ChannelNode],
+        left_index: int,
+        right_index: int,
+    ) -> str:
+        left_sv, right_sv = self._resolve_gap_real_structures_v2(nodes, left_index, right_index)
+        left_family = self._reference_family_for_gap_type(left_sv)
+        right_family = self._reference_family_for_gap_type(right_sv)
+        if left_family == "culvert" and right_family == "culvert":
+            return "culvert"
+        return "open_channel"
+
+    def _collect_reference_candidates_v2(
+        self,
+        nodes: List[ChannelNode],
+        gap_index: int,
+        preferred_family: str,
+        same_section_only: bool,
+    ) -> List[Tuple[int, ChannelNode]]:
+        flow_section = nodes[gap_index].flow_section if 0 <= gap_index < len(nodes) else None
+        family_rank = {"open_channel": 0, "culvert": 1}
+        if preferred_family == "culvert":
+            family_rank = {"culvert": 0, "open_channel": 1}
+
+        candidates: List[Tuple[int, ChannelNode]] = []
+        for idx, node in enumerate(nodes):
+            family = self._reference_family_for_gap_type(node.structure_type)
+            if family not in {"open_channel", "culvert"}:
+                continue
+            if same_section_only and node.flow_section != flow_section:
+                continue
+            candidates.append((idx, node))
+
+        candidates.sort(
+            key=lambda item: (
+                family_rank.get(self._reference_family_for_gap_type(item[1].structure_type), 99),
+                abs(item[0] - gap_index),
+                item[0],
+            )
+        )
+        return candidates
+
+    def _find_reference_segment_same_section_v2(
+        self,
+        nodes: List[ChannelNode],
+        gap_index: int,
+        left_index: int,
+        right_index: int,
+    ) -> Optional[Dict]:
+        preferred_family = self._preferred_reference_family_v2(nodes, left_index, right_index)
+        candidates = self._collect_reference_candidates_v2(
+            nodes,
+            gap_index,
+            preferred_family,
+            same_section_only=True,
+        )
+        if not candidates:
+            return None
+        return self._extract_reference_segment_v2(candidates[0][1])
+
+    def _find_reference_segment_cross_section_v2(
+        self,
+        nodes: List[ChannelNode],
+        gap_index: int,
+        left_index: int,
+        right_index: int,
+    ) -> Optional[Dict]:
+        preferred_family = self._preferred_reference_family_v2(nodes, left_index, right_index)
+        candidates = self._collect_reference_candidates_v2(
+            nodes,
+            gap_index,
+            preferred_family,
+            same_section_only=False,
+        )
+        same_flow_section = nodes[gap_index].flow_section if 0 <= gap_index < len(nodes) else None
+        for idx, node in candidates:
+            if node.flow_section != same_flow_section:
+                return self._extract_reference_segment_v2(node)
+        return None
+
+    def _build_open_channel_params_from_reference(
+        self,
+        reference: Optional[Dict[str, Any]],
+        default_flow_section: str,
+        default_flow: float,
+    ) -> Optional[OpenChannelParams]:
+        if not reference:
+            return None
+        return OpenChannelParams(
+            name="-",
+            structure_type=reference.get("structure_type", "明渠-梯形"),
+            bottom_width=reference.get("bottom_width", 0.0),
+            water_depth=reference.get("water_depth", 0.0),
+            side_slope=reference.get("side_slope", 0.0),
+            roughness=reference.get("roughness", 0.014),
+            slope_inv=reference.get("slope_inv", 3000.0),
+            flow=reference.get("flow", default_flow),
+            flow_section=reference.get("flow_section", default_flow_section),
+            structure_height=reference.get("structure_height", 0.0),
+            arc_radius=reference.get("arc_radius", 0.0),
+            theta_deg=reference.get("theta_deg", 0.0),
+        )
+
     def _create_open_channel_node(self, params, prev_node: ChannelNode, 
                                   next_node: ChannelNode) -> ChannelNode:
         """
@@ -1358,17 +1509,27 @@ class WaterProfileCalculator:
         open_channel = ChannelNode()
         
         open_channel.name = params.name
-        open_channel.structure_type = StructureType.from_string(params.structure_type)
+        structure_type = self._normalize_structure_type_value(params.structure_type)
+        open_channel.structure_type = StructureType.from_string(structure_type)
         open_channel.flow_section = params.flow_section if params.flow_section else prev_node.flow_section
         
         # 设置断面参数（区分圆形、U形和非圆形）
         is_circular = "圆形" in params.structure_type and "U形" not in params.structure_type
         is_u_section = "U形" in params.structure_type and "明渠" in params.structure_type
+        is_circular = "圆形" in structure_type and "U形" not in structure_type
+        is_u_section = "U形" in structure_type and "明渠" in structure_type
+        is_culvert = structure_type == "矩形暗涵"
         if is_circular:
             # 圆形明渠：bottom_width 实际存储的是直径 D
             open_channel.section_params = {
                 "D": params.bottom_width,
                 "m": 0
+            }
+        elif is_culvert:
+            open_channel.section_params = {
+                "B": params.bottom_width,
+                "H_total": params.structure_height,
+                "m": 0,
             }
         elif is_u_section:
             # U形明渠：R_circle存圆弧半径，theta_deg存圆心角
@@ -1398,6 +1559,20 @@ class WaterProfileCalculator:
                 D = params.bottom_width
                 if D > 0:
                     self.hyd_calc._fill_circular_section_params(open_channel, D, h)
+            elif is_culvert:
+                outputs = calculate_rectangular_outputs(
+                    params.bottom_width,
+                    params.structure_height,
+                    h,
+                    params.roughness,
+                    open_channel.slope_i,
+                )
+                if outputs.get("A", 0) > 0:
+                    open_channel.section_params["A"] = round(outputs["A"], 3)
+                    open_channel.section_params["X"] = round(outputs["P"], 3)
+                    open_channel.section_params["R"] = round(outputs["R_hyd"], 3)
+                    from config.constants import VELOCITY_PRECISION
+                    open_channel.velocity = round(outputs["V"], VELOCITY_PRECISION)
             elif is_u_section:
                 # U形断面：复用 hydraulic_calc 的面积/湿周计算
                 self.hyd_calc.fill_section_params(open_channel)
@@ -1631,17 +1806,9 @@ class WaterProfileCalculator:
                 gate_check = self._check_gap_gate_to_entry(current_node, next_node)
                 if gate_check['need_open_channel']:
                     ref_idx = i + 1
-                    upstream_channel, _computed = self._find_reference_channel_same_section(nodes, ref_idx)
+                    upstream_channel = self._find_reference_segment_same_section_v2(nodes, ref_idx, i, i + 1)
                     if upstream_channel is None:
-                        ref = self._find_global_nearest_channel(nodes, ref_idx)
-                        if ref:
-                            flow_q = next_node.flow if next_node.flow and next_node.flow > 0 else 1.0
-                            opts = self._compute_economic_section(flow_q, ref['slope_i'], ref['roughness'], ref['side_slope'])
-                            upstream_channel = opts.get('明渠-矩形')
-                            if upstream_channel:
-                                upstream_channel = dict(upstream_channel)
-                                upstream_channel.update({'flow': flow_q, 'flow_section': next_node.flow_section,
-                                                         'structure_height': 0.0, 'name': '-'})
+                        upstream_channel = self._find_reference_segment_cross_section_v2(nodes, ref_idx, i, i + 1)
                     open_channel_params = None
                     if open_channel_callback:
                         open_channel_params = open_channel_callback(
@@ -1651,19 +1818,10 @@ class WaterProfileCalculator:
                             next_node.flow_section, next_node.flow
                         )
                     elif upstream_channel:
-                        from models.data_models import OpenChannelParams
-                        open_channel_params = OpenChannelParams(
-                            name="-", structure_type=upstream_channel.get('structure_type', '明渠-梯形'),
-                            bottom_width=upstream_channel.get('bottom_width', 0),
-                            water_depth=upstream_channel.get('water_depth', 0),
-                            side_slope=upstream_channel.get('side_slope', 0),
-                            roughness=upstream_channel.get('roughness', 0.014),
-                            slope_inv=upstream_channel.get('slope_inv', 3000),
-                            flow=upstream_channel.get('flow', next_node.flow),
-                            flow_section=upstream_channel.get('flow_section', next_node.flow_section),
-                            structure_height=upstream_channel.get('structure_height', 0.0),
-                            arc_radius=upstream_channel.get('arc_radius', 0),
-                            theta_deg=upstream_channel.get('theta_deg', 0),
+                        open_channel_params = self._build_open_channel_params_from_reference(
+                            upstream_channel,
+                            next_node.flow_section,
+                            next_node.flow,
                         )
                     if open_channel_params:
                         oc_slope_i = 1.0 / open_channel_params.slope_inv if open_channel_params.slope_inv > 0 else 0
@@ -1703,17 +1861,9 @@ class WaterProfileCalculator:
             if self._is_diversion_gate_type(next_node.structure_type):
                 gate_check = self._check_gap_exit_to_gate(current_node, next_node)
                 if gate_check['need_open_channel']:
-                    upstream_channel, _computed = self._find_reference_channel_same_section(nodes, i)
+                    upstream_channel = self._find_reference_segment_same_section_v2(nodes, i, i, i + 1)
                     if upstream_channel is None:
-                        ref = self._find_global_nearest_channel(nodes, i)
-                        if ref:
-                            flow_q = current_node.flow if current_node.flow and current_node.flow > 0 else 1.0
-                            opts = self._compute_economic_section(flow_q, ref['slope_i'], ref['roughness'], ref['side_slope'])
-                            upstream_channel = opts.get('明渠-矩形')
-                            if upstream_channel:
-                                upstream_channel = dict(upstream_channel)
-                                upstream_channel.update({'flow': flow_q, 'flow_section': current_node.flow_section,
-                                                         'structure_height': 0.0, 'name': '-'})
+                        upstream_channel = self._find_reference_segment_cross_section_v2(nodes, i, i, i + 1)
                     open_channel_params = None
                     if open_channel_callback:
                         open_channel_params = open_channel_callback(
@@ -1723,19 +1873,10 @@ class WaterProfileCalculator:
                             current_node.flow_section, current_node.flow
                         )
                     elif upstream_channel:
-                        from models.data_models import OpenChannelParams
-                        open_channel_params = OpenChannelParams(
-                            name="-", structure_type=upstream_channel.get('structure_type', '明渠-梯形'),
-                            bottom_width=upstream_channel.get('bottom_width', 0),
-                            water_depth=upstream_channel.get('water_depth', 0),
-                            side_slope=upstream_channel.get('side_slope', 0),
-                            roughness=upstream_channel.get('roughness', 0.014),
-                            slope_inv=upstream_channel.get('slope_inv', 3000),
-                            flow=upstream_channel.get('flow', current_node.flow),
-                            flow_section=upstream_channel.get('flow_section', current_node.flow_section),
-                            structure_height=upstream_channel.get('structure_height', 0.0),
-                            arc_radius=upstream_channel.get('arc_radius', 0),
-                            theta_deg=upstream_channel.get('theta_deg', 0),
+                        open_channel_params = self._build_open_channel_params_from_reference(
+                            upstream_channel,
+                            current_node.flow_section,
+                            current_node.flow,
                         )
                     if open_channel_params:
                         oc_slope_i = 1.0 / open_channel_params.slope_inv if open_channel_params.slope_inv > 0 else 0
@@ -1772,17 +1913,9 @@ class WaterProfileCalculator:
                 # 需要插入明渠段（里程差 > 渐变段之和）
                 
                 # 获取明渠段参数（同流量段优先级匹配）
-                upstream_channel, _computed = self._find_reference_channel_same_section(nodes, i)
+                upstream_channel = self._find_reference_segment_same_section_v2(nodes, i, i, i + 1)
                 if upstream_channel is None:
-                    ref = self._find_global_nearest_channel(nodes, i)
-                    if ref:
-                        flow_q = current_node.flow if current_node.flow and current_node.flow > 0 else 1.0
-                        opts = self._compute_economic_section(flow_q, ref['slope_i'], ref['roughness'], ref['side_slope'])
-                        upstream_channel = opts.get('明渠-矩形')
-                        if upstream_channel:
-                            upstream_channel = dict(upstream_channel)
-                            upstream_channel.update({'flow': flow_q, 'flow_section': current_node.flow_section,
-                                                     'structure_height': 0.0, 'name': '-'})
+                    upstream_channel = self._find_reference_segment_cross_section_v2(nodes, i, i, i + 1)
                 flow_section = current_node.flow_section
                 flow = current_node.flow
                 open_channel_params = None
@@ -1799,22 +1932,11 @@ class WaterProfileCalculator:
                         flow
                     )
                 elif upstream_channel:
-                    from models.data_models import OpenChannelParams
-                    open_channel_params = OpenChannelParams(
-                        name="-",
-                        structure_type=upstream_channel.get('structure_type', '明渠-梯形'),
-                        bottom_width=upstream_channel.get('bottom_width', 0),
-                        water_depth=upstream_channel.get('water_depth', 0),
-                        side_slope=upstream_channel.get('side_slope', 0),
-                        roughness=upstream_channel.get('roughness', 0.014),
-                        slope_inv=upstream_channel.get('slope_inv', 3000),
-                        flow=upstream_channel.get('flow', flow),
-                        flow_section=upstream_channel.get('flow_section', flow_section),
-                        structure_height=upstream_channel.get('structure_height', 0.0),
-                        arc_radius=upstream_channel.get('arc_radius', 0),
-                        theta_deg=upstream_channel.get('theta_deg', 0),
+                    open_channel_params = self._build_open_channel_params_from_reference(
+                        upstream_channel,
+                        flow_section,
+                        flow,
                     )
-                
                 if open_channel_params:
                     oc_slope_i = 1.0 / open_channel_params.slope_inv if open_channel_params.slope_inv > 0 else 0
                     

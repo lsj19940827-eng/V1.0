@@ -328,3 +328,16 @@ def test_sample_overwrite_prompt_uses_visible_host_parent(monkeypatch):
     assert captured["question_parent"] is host
     assert captured["question_title"] == "确认覆盖"
     assert captured["yes_text"] == "覆盖导入"
+
+
+def test_get_template_path_returns_chating_sample_file():
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+
+    template_path = BatchPanel._get_template_path(panel, "chating")
+    sample_path = BatchPanel._get_sample5_path(panel)
+
+    assert template_path.endswith("茶亭支渠批量计算.xlsx")
+    assert sample_path.endswith("茶亭支渠批量计算.xlsx")
+    assert template_path == sample_path

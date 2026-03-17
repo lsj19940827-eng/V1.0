@@ -85,10 +85,16 @@ except ImportError as _e:
 
 # 共享数据管理器
 try:
-    from shared.shared_data_manager import get_shared_data_manager
+    from shared.shared_data_manager import (
+        get_shared_data_manager,
+        normalize_section_type_name,
+    )
     SHARED_DATA_AVAILABLE = True
 except ImportError:
     SHARED_DATA_AVAILABLE = False
+
+    def normalize_section_type_name(section_type):
+        return str(section_type or "").strip()
 
 # 配置常量
 try:
@@ -103,7 +109,7 @@ except ImportError:
         "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
         "渡槽-U形", "渡槽-矩形",
         "隧洞-圆形", "隧洞-圆弧直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
-        "矩形暗涵", "倒虹吸", "有压管道", "分水闸", "分水口", "节制闸", "泄水闸",
+        "矩形暗涵", "倒虹吸", "有压管道", "分水闸", "分水口", "节制闸", "泄水闸", "退水闸",
     ]
     CHANNEL_LEVEL_OPTIONS = ["总干渠", "总干管", "分干渠", "分干管", "干渠", "干管", "支渠", "支管", "分支渠", "分支管"]
     DEFAULT_ROUGHNESS = 0.014
@@ -1193,6 +1199,7 @@ class WaterProfilePanel(QWidget):
         sample_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=self._load_section_sample_2))
         sample_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=self._load_section_sample_3))
         sample_menu.addAction(Action("示例四（飞龙分干渠）", triggered=self._load_section_sample_4))
+        sample_menu.addAction(Action("示例五（茶亭支渠）", triggered=self._load_section_sample_5))
         self._btn_section_sample = DropDownPushButton("示例数据")
         self._btn_section_sample.setMenu(sample_menu)
         button_row.addWidget(self._btn_section_sample)
@@ -1202,6 +1209,7 @@ class WaterProfilePanel(QWidget):
         template_menu.addAction(Action("示例二（龙塘马坝河分干渠）", triggered=lambda: self._open_section_excel_template("longtang")))
         template_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=lambda: self._open_section_excel_template("luojisi")))
         template_menu.addAction(Action("示例四（飞龙分干渠）", triggered=lambda: self._open_section_excel_template("feilong")))
+        template_menu.addAction(Action("示例五（茶亭支渠）", triggered=lambda: self._open_section_excel_template("chating")))
         self._btn_section_template = DropDownPushButton("打开Excel模板")
         self._btn_section_template.setMenu(template_menu)
         button_row.addWidget(self._btn_section_template)
@@ -1553,6 +1561,13 @@ class WaterProfilePanel(QWidget):
 
     def _load_section_sample_4(self):
         self._batch_backend._add_sample_data_4()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _load_section_sample_5(self):
+        self._batch_backend._add_sample_data_5()
         self._sync_batch_settings()
         self._switch_workspace_tab(self._tab_section_input)
         if self._section_input_table and self._section_input_table.rowCount() > 0:
@@ -2214,9 +2229,134 @@ class WaterProfilePanel(QWidget):
         from app_渠系计算前端.water_profile.formula_dialog import show_water_level_dialog
         show_water_level_dialog(self, node.name or f"行{row_idx+1}", details)
 
+    def _collect_terminal_gate_backfill_records(self, nodes=None):
+        """收集末尾闸行高程回推记录。"""
+        source_nodes = nodes if nodes is not None else (self.calculated_nodes or [])
+        records = []
+        for node in source_nodes:
+            details = getattr(node, "terminal_gate_backfill_details", None) or {}
+            if details.get("attempted"):
+                records.append(details)
+        return records
+
+    @staticmethod
+    def _format_terminal_gate_backfill_target(details):
+        row = details.get("target_row", 0)
+        name = details.get("target_name", f"行{row}") or f"行{row}"
+        struct_type = details.get("target_structure_type", "闸类")
+        return f"第 {row} 行 {name}（{struct_type}）"
+
+    @staticmethod
+    def _format_terminal_gate_backfill_source(details):
+        row = details.get("donor_row")
+        if not row:
+            return "未找到有效参考断面"
+        name = details.get("donor_name", f"行{row}") or f"行{row}"
+        struct_type = details.get("donor_structure_type", "参考断面")
+        return f"第 {row} 行 {name}（{struct_type}）"
+
+    def _build_terminal_gate_backfill_notice_lines(self, nodes=None):
+        """构建计算完成后的末尾闸行回推提示。"""
+        records = self._collect_terminal_gate_backfill_records(nodes)
+        lines = []
+        for details in records:
+            target = self._format_terminal_gate_backfill_target(details)
+            source = self._format_terminal_gate_backfill_source(details)
+            bottom_ok = bool((details.get("bottom") or {}).get("success"))
+            top_ok = bool((details.get("top") or {}).get("success"))
+            if details.get("status") == "success":
+                fields = []
+                if bottom_ok:
+                    fields.append("渠底高程")
+                if top_ok:
+                    fields.append("渠顶高程")
+                lines.append(
+                    f"末尾闸行 {target} 已按回推规则补齐{'、'.join(fields)}，参考来源：{source}"
+                )
+                continue
+            if details.get("status") == "partial":
+                fields = []
+                if bottom_ok:
+                    fields.append("渠底高程")
+                if top_ok:
+                    fields.append("渠顶高程")
+                failure_reason = details.get("failure_reason") or (
+                    (details.get("bottom") or {}).get("failure_reason")
+                    or (details.get("top") or {}).get("failure_reason")
+                    or "未记录失败原因"
+                )
+                lines.append(
+                    f"末尾闸行 {target} 已部分回推{'、'.join(fields)}，参考来源：{source}；未完成部分原因：{failure_reason}"
+                )
+                continue
+            failure_reason = details.get("failure_reason") or (
+                (details.get("bottom") or {}).get("failure_reason")
+                or (details.get("top") or {}).get("failure_reason")
+                or "未记录失败原因"
+            )
+            lines.append(
+                f"末尾闸行 {target} 未能完成高程回推，参考搜索范围为同流量段上游明渠/矩形暗涵；原因：{failure_reason}"
+            )
+        return lines
+
+    def _build_terminal_gate_backfill_report_lines(self, nodes=None):
+        """构建详细过程/导出中的末尾闸行回推说明。"""
+        records = self._collect_terminal_gate_backfill_records(nodes)
+        if not records:
+            return []
+
+        lines = [
+            "=" * 80,
+            "  末尾闸行高程回推说明",
+            "-" * 80,
+        ]
+        for details in records:
+            target = self._format_terminal_gate_backfill_target(details)
+            source = self._format_terminal_gate_backfill_source(details)
+            lines.append(f"  目标闸行: {target}")
+            lines.append(
+                f"  搜索范围: 同流量段 {details.get('target_flow_section') or '-'} 上游明渠/矩形暗涵"
+            )
+            lines.append(f"  参考来源: {source}")
+
+            bottom = details.get("bottom") or {}
+            if bottom.get("attempted"):
+                if bottom.get("success"):
+                    lines.append(
+                        "  渠底高程: "
+                        f"Zb = {details.get('target_water_level', 0.0):.3f} - "
+                        f"{details.get('donor_water_depth', 0.0):.3f} = "
+                        f"{bottom.get('result', 0.0):.3f} m"
+                    )
+                else:
+                    lines.append(
+                        f"  渠底高程: 未回推。原因：{bottom.get('failure_reason') or '未记录失败原因'}"
+                    )
+
+            top = details.get("top") or {}
+            if top.get("attempted"):
+                if top.get("success"):
+                    lines.append(
+                        "  渠顶高程: "
+                        f"Zt = {top.get('base_bottom_elevation', 0.0):.3f} + "
+                        f"{details.get('donor_structure_height', 0.0):.3f} = "
+                        f"{top.get('result', 0.0):.3f} m"
+                    )
+                else:
+                    lines.append(
+                        f"  渠顶高程: 未回推。原因：{top.get('failure_reason') or '未记录失败原因'}"
+                    )
+            lines.append("")
+        return lines
+
     def _show_bottom_elevation_details(self, row_idx, node, nodes):
         if getattr(node, 'is_transition', False):
             fluent_info(self, "提示", "渐变段行不显示渠底高程")
+            return
+        gate_backfill = getattr(node, 'terminal_gate_backfill_details', None) or {}
+        if gate_backfill.get("attempted") and (gate_backfill.get("bottom") or {}).get("attempted"):
+            from app_渠系计算前端.water_profile.formula_dialog import show_terminal_gate_backfill_bottom_dialog
+            show_terminal_gate_backfill_bottom_dialog(self, node.name or f"行{row_idx+1}", gate_backfill)
             return
         # 倒虹吸出口节点：使用公式10.3.6专用弹窗
         try:
@@ -2247,6 +2387,11 @@ class WaterProfilePanel(QWidget):
     def _show_top_elevation_details(self, row_idx, node):
         if getattr(node, 'is_transition', False):
             fluent_info(self, "提示", "渐变段行不显示渠顶高程")
+            return
+        gate_backfill = getattr(node, 'terminal_gate_backfill_details', None) or {}
+        if gate_backfill.get("attempted") and (gate_backfill.get("top") or {}).get("attempted"):
+            from app_渠系计算前端.water_profile.formula_dialog import show_terminal_gate_backfill_top_dialog
+            show_terminal_gate_backfill_top_dialog(self, node.name or f"行{row_idx+1}", gate_backfill)
             return
         sh = node.structure_height or 0.0
         if sh <= 0:
@@ -3138,13 +3283,13 @@ class WaterProfilePanel(QWidget):
             # 兜底：计算引擎返回的简化名（正常流程已在batch注册时修正）
             "圆拱直墙型": "隧洞-圆拱直墙型",
             "马蹄形标准Ⅰ型": "隧洞-马蹄形Ⅰ型", "马蹄形标准Ⅱ型": "隧洞-马蹄形Ⅱ型",
-            "矩形暗涵": "矩形暗涵",
+            "矩形暗涵": "矩形暗涵", "暗渠": "矩形暗涵", "矩形暗渠": "矩形暗涵", "退水闸": "退水闸",
         }
 
         for sr in results:
             flow_section = str(getattr(sr, 'flow_section', ''))
             building_name = str(getattr(sr, 'building_name', ''))
-            section_type = str(getattr(sr, 'section_type', ''))
+            section_type = normalize_section_type_name(getattr(sr, 'section_type', ''))
             raw_result = getattr(sr, 'raw_result', {}) or {}
             x = getattr(sr, 'coord_X', 0)
             y = getattr(sr, 'coord_Y', 0)
@@ -3180,7 +3325,7 @@ class WaterProfilePanel(QWidget):
                 section_type = "隧洞-马蹄形Ⅰ型"
             elif "隧洞-马蹄形Ⅱ" in section_type:
                 section_type = "隧洞-马蹄形Ⅱ型"
-            elif "暗涵" in section_type:
+            elif "暗涵" in section_type or "暗渠" in section_type:
                 section_type = "矩形暗涵"
 
             # 收集糙率分类（倒虹吸 vs 一般建筑物）
@@ -3757,7 +3902,9 @@ class WaterProfilePanel(QWidget):
             node.name = str(data[1]).strip()
 
             # 结构形式 (col 2)
-            struct_str = str(data[2]).strip()
+            struct_str = normalize_section_type_name(str(data[2]).strip())
+            if struct_str in {"暗渠", "矩形暗渠", "矩形暗涵"}:
+                struct_str = "矩形暗涵"
             if struct_str:
                 try:
                     node.structure_type = StructureType.from_string(struct_str)
@@ -3779,7 +3926,7 @@ class WaterProfilePanel(QWidget):
             local_loss_ratio = None
             in_out_raw = ""
             from_table1_source = False
-            # 恢复自动插入明渠段标记（通过UserRole存储）
+            # 恢复自动插入补段标记（通过UserRole存储）
             _first_item = table.item(r, 0)
             if _first_item:
                 _ur = _first_item.data(Qt.UserRole)
@@ -4221,10 +4368,21 @@ class WaterProfilePanel(QWidget):
                     missing_height_names.append(nd.name or "未命名")
 
             msg = f"共{len(calculated)}个节点，总长{total_len:.1f}m，水位落差{wl_drop:.3f}m"
+            gate_backfill_notice_lines = self._build_terminal_gate_backfill_notice_lines(calculated)
+            if gate_backfill_notice_lines:
+                msg += "\n" + "\n".join(gate_backfill_notice_lines)
+
+            has_gate_backfill_issue = any(
+                details.get("status") != "success"
+                for details in self._collect_terminal_gate_backfill_records(calculated)
+            )
             if missing_height_names:
                 msg += f"\n⚠ 以下节点缺少结构总高，渠顶高程未计算: {', '.join(missing_height_names)}"
                 msg += "\n请通过【断面批量计算】并自动同步后获取正确的结构总高。"
                 InfoBar.warning("计算完成（部分渠顶高程缺失）", msg,
+                               parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
+            elif has_gate_backfill_issue:
+                InfoBar.warning("计算完成（末尾闸行回推未完成）", msg,
                                parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
             else:
                 InfoBar.success("计算完成", msg,
@@ -4452,10 +4610,10 @@ class WaterProfilePanel(QWidget):
                 # 渐变段行灰色
                 if _is_trans:
                     item.setForeground(QColor("#9E9E9E"))
-                # 自动插入明渠段绿色
+                # 自动插入补段绿色
                 elif _is_auto_ch:
                     item.setForeground(QColor("#2E7D32"))
-                    item.setToolTip("自动插入的明渠连接段，用于计算两个建筑物之间的沿程及弯道水头损失。\n几何列留空因为该行不是真实IP转折点。")
+                    item.setToolTip("自动插入的补段，用于计算两个建筑物之间的沿程及弯道水头损失。\n几何列留空因为该行不是真实IP转折点。")
                 # 倒虹吸蓝色
                 elif getattr(node, 'is_inverted_siphon', False):
                     item.setForeground(QColor("#1565C0"))
@@ -4555,7 +4713,7 @@ class WaterProfilePanel(QWidget):
             if getattr(node, 'is_transition', False):
                 tag = " [渐变段]"
             elif getattr(node, 'is_auto_inserted_channel', False):
-                tag = " [自动插入明渠段]"
+                tag = " [自动插入补段]"
             elif getattr(node, 'is_inverted_siphon', False):
                 tag = " [倒虹吸]"
             elif getattr(node, 'is_diversion_gate', False):
@@ -4674,6 +4832,10 @@ class WaterProfilePanel(QWidget):
                     lines.append("")
             except Exception:
                 pass
+
+        gate_backfill_lines = self._build_terminal_gate_backfill_report_lines(nodes)
+        if gate_backfill_lines:
+            lines.extend(gate_backfill_lines)
 
         lines.append("=" * 80)
         lines.append("  计算完毕")
@@ -5243,7 +5405,7 @@ class WaterProfilePanel(QWidget):
                                parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
                 return
 
-            # 检查是否已经插入过渐变段或自动明渠段
+            # 检查是否已经插入过渐变段或自动补段
             has_transitions = any(getattr(n, 'is_transition', False) for n in nodes)
             has_auto_channels = any(getattr(n, 'is_auto_inserted_channel', False) for n in nodes)
             if has_transitions or has_auto_channels:
@@ -5252,7 +5414,7 @@ class WaterProfilePanel(QWidget):
                         "是否清除已有渐变段并重新插入？\n"
                         "（选「否」则保留现有渐变段不做任何操作）"):
                     return
-                # 同时清除渐变段行和自动插入的明渠段行，避免重复插入
+                # 同时清除渐变段行和自动插入的补段行，避免重复插入
                 nodes = [n for n in nodes
                          if not getattr(n, 'is_transition', False)
                          and not getattr(n, 'is_auto_inserted_channel', False)]
@@ -5267,7 +5429,7 @@ class WaterProfilePanel(QWidget):
             # 而跳过进/出节点转角计算，导致station_MC被覆盖为错误值。
             calculator.preprocess_nodes(nodes)
 
-            # ===== 预扫描明渠段缺口 =====
+            # ===== 预扫描补段缺口 =====
             gaps = calculator.pre_scan_open_channels(nodes)
 
             # 批量处理状态
@@ -5279,7 +5441,7 @@ class WaterProfilePanel(QWidget):
                 'inserted_channels': []
             }
 
-            # 若有多处（≥2）需要插入明渠段，弹出批量选择对话框
+            # 若有多处（≥2）需要插入补段，弹出批量选择对话框
             from app_渠系计算前端.water_profile.water_profile_dialogs import (
                 BatchChannelConfirmDialog, OpenChannelDialog, OpenChannelParams
             )
@@ -5294,8 +5456,8 @@ class WaterProfilePanel(QWidget):
                     batch_state['mode'] = 'table_edit'
                     batch_state['preset_params'] = batch_result['params']
 
-            # 创建明渠段参数获取回调
-            def open_channel_callback(upstream_channel, available_length,
+            # 创建补段参数获取回调
+            def open_channel_callback(reference_segment, available_length,
                                        prev_struct, next_struct, flow_section, flow):
                 idx = batch_state['current_index']
                 batch_state['current_index'] += 1
@@ -5317,20 +5479,11 @@ class WaterProfilePanel(QWidget):
                     return p
 
                 # ② 自动推荐模式
-                if batch_state['mode'] == 'auto_recommend' and upstream_channel:
-                    p = OpenChannelParams(
-                        name="-",
-                        structure_type=upstream_channel.get("structure_type", "明渠-梯形"),
-                        bottom_width=upstream_channel.get("bottom_width", 0),
-                        water_depth=upstream_channel.get("water_depth", 0),
-                        side_slope=upstream_channel.get("side_slope", 0),
-                        roughness=upstream_channel.get("roughness", 0.014),
-                        slope_inv=upstream_channel.get("slope_inv", 3000),
-                        flow=upstream_channel.get("flow", flow),
-                        flow_section=upstream_channel.get("flow_section", flow_section),
-                        structure_height=upstream_channel.get("structure_height", 0.0),
-                        arc_radius=upstream_channel.get("arc_radius", 0.0),
-                        theta_deg=upstream_channel.get("theta_deg", 0.0),
+                if batch_state['mode'] == 'auto_recommend' and reference_segment:
+                    p = calculator._build_open_channel_params_from_reference(
+                        reference_segment,
+                        flow_section,
+                        flow,
                     )
                     _track(p, '推荐')
                     return p
@@ -5338,7 +5491,7 @@ class WaterProfilePanel(QWidget):
                 # ③ 手动模式：逐一弹窗
                 dlg = OpenChannelDialog(
                     self,
-                    upstream_channel=upstream_channel,
+                    upstream_channel=reference_segment,
                     available_length=available_length,
                     prev_structure=prev_struct,
                     next_structure=next_struct,
@@ -5395,7 +5548,7 @@ class WaterProfilePanel(QWidget):
             )
 
             # 汇总信息（InfoBar非阻塞通知）
-            summary = f"渐变段插入完成！共 {len(prepared_nodes)} 行（渐变段 {transition_count}，明渠段 {open_channel_count}）"
+            summary = f"渐变段插入完成！共 {len(prepared_nodes)} 行（渐变段 {transition_count}，补段 {open_channel_count}）"
             if has_siphon or has_pressure_pipe:
                 step_parts = []
                 if has_siphon:
@@ -6680,6 +6833,25 @@ class WaterProfilePanel(QWidget):
                 for c in range(self.node_table.columnCount()):
                     item = self.node_table.item(r, c)
                     ws.cell(row=r+4, column=c+1, value=item.text() if item else "")
+
+            note_lines = self._build_terminal_gate_backfill_report_lines(self.calculated_nodes)
+            if note_lines:
+                note_start_row = self.node_table.rowCount() + 6
+                ws.cell(row=note_start_row, column=1, value="末尾闸行高程回推说明").font = Font(bold=True)
+                ws.merge_cells(
+                    start_row=note_start_row,
+                    start_column=1,
+                    end_row=note_start_row,
+                    end_column=ncols,
+                )
+                for offset, line in enumerate(note_lines[3:], start=1):
+                    ws.cell(row=note_start_row + offset, column=1, value=line)
+                    ws.merge_cells(
+                        start_row=note_start_row + offset,
+                        start_column=1,
+                        end_row=note_start_row + offset,
+                        end_column=ncols,
+                    )
             # 自动列宽
             for col_num in range(1, ncols + 1):
                 max_len = len(str(NODE_EXPORT_HEADERS[col_num-1]))
@@ -6780,6 +6952,13 @@ class WaterProfilePanel(QWidget):
         self._append_pressure_pipe_calc_details(getattr(self, "_pressure_pipe_calc_records", None))
         calc_text = self.detail_text.toPlainText()
         doc_render_calc_text_eng(doc, calc_text, skip_title_keyword='详细计算结果')
+
+        gate_backfill_lines = self._build_terminal_gate_backfill_report_lines(nodes)
+        if gate_backfill_lines and "末尾闸行高程回推说明" not in calc_text:
+            doc_add_eng_h(doc, '末尾闸行高程回推说明')
+            for line in gate_backfill_lines[3:]:
+                if line.strip():
+                    doc_add_eng_body(doc, line.strip())
 
         # 7. 建筑物长度汇总
         if hasattr(self, '_last_building_lengths') and self._last_building_lengths:

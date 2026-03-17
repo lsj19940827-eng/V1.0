@@ -12,6 +12,23 @@ from dataclasses import dataclass, field
 import time
 
 
+def normalize_section_type_name(section_type: Any) -> str:
+    """统一结构/断面类型别名，避免各模块口径差异导致后续识别失败。"""
+    text = str(section_type or "").strip()
+    alias_map = {
+        "暗渠": "矩形暗涵",
+        "矩形暗渠": "矩形暗涵",
+        "矩形暗涵": "矩形暗涵",
+        "退水闸": "退水闸",
+    }
+    return alias_map.get(text, text)
+
+
+def _normalize_section_type_name(section_type: Any) -> str:
+    """兼容旧调用入口。"""
+    return normalize_section_type_name(section_type)
+
+
 @dataclass
 class SectionResult:
     """断面计算结果"""
@@ -166,7 +183,7 @@ class SharedDataManager:
     def _extract_section_result(self, source: str, result: Dict) -> Optional[SectionResult]:
         """从计算结果中提取断面参数"""
         try:
-            section_type = result.get('section_type', '')
+            section_type = _normalize_section_type_name(result.get('section_type', ''))
             
             # 判断是否为批量计算结果（检测特征字段）
             is_batch = 'coord_X' in result or 'channel_name' in result or 'flow_section' in result

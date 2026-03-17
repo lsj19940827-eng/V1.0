@@ -6,6 +6,18 @@
 
 ---
 
+## 当前实现同步说明（2026-03-16）
+
+- 插入渐变段的“补段”参考断面已从仅支持明渠扩展为支持 `明渠 + 矩形暗涵`，其中 Excel / 批量结果中的 `暗渠`、`矩形暗渠` 统一按内部 `矩形暗涵` 处理。
+- donor 搜索顺序已调整为：`同段首选家族 -> 同段非首选家族 -> 跨段首选家族 -> 跨段非首选家族`。只有当空隙两端真实结构都属于矩形暗涵场景时，首选家族才为暗渠；其他场景仍首选明渠。
+- donor 命中后，自动补段默认继承 donor 的结构形式；当前前台允许用户在 `明渠-梯形 / 明渠-矩形 / 明渠-圆形 / 明渠-U形 / 矩形暗涵` 之间手动改型。
+- donor 缺失时，系统不再回退到“经济矩形明渠”自动估算，也不会自动编造暗渠尺寸；该位置保留为空并要求人工确认。
+- 批量补段弹窗已新增“状态/来源”列，明确区分 `自动推荐-同段明渠 / 自动推荐-同段暗渠 / 自动推荐-跨段明渠 / 自动推荐-跨段暗渠 / 需手动填写`。
+- 补段逐一弹窗已改为真切换表单：明渠显示 `B / m / n / 1/i / Q`，矩形暗涵显示 `B / H / n / 1/i / Q`。
+- 自动插入的矩形暗涵节点继续沿用 `is_auto_inserted_channel=True` 标记，内部模型名 `OpenChannelParams` 保持不变，但已允许 `structure_type="矩形暗涵"`，并携带 `B / H_total / water_depth / roughness / slope_i`。
+- “矩形明渠 ↔ 矩形暗涵且底宽相同可不插渐变段”的既有规则保持不变；隧洞仍不纳入本次补段 donor 范围。
+- `available_length` 在长度不足时会统一压成 `0.0`；`need_open_channel` 仅在 `available_length > 0` 时成立，不再保留负值差额语义。
+
 ## 一、概述
 
 ### 1.1 什么是渐变段
@@ -149,7 +161,7 @@ valid_type_values = {
    - ζ系数：使用出口渐变段的ζ系数
 
 3. **明渠段判断**：基于压缩后的渐变段长度判断是否插入明渠段。
-   - 公式：`available_length = distance - transition_length_1 - transition_length_2`
+   - 公式：`available_length = max(0.0, distance - transition_length_1 - transition_length_2)`
    - 条件：`need_open_channel = (available_length > 0)`
 
 4. **水头损失计算**：
@@ -415,7 +427,7 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
 |------|------|
 | 同流量段有明渠 | 自动预填参数，行全部有值 |
 | 同流量段无明渠 | 经济断面公式计算，预填明渠-矩形；切换类型自动更新参数 |
-| 一键全流程（auto_confirm） | 同上自动预填；若仍有空行则用 `_fill_with_fallback_if_empty()`（向前最近明渠）兜底 |
+| 一键全流程（auto_confirm） | 同上自动预填；无 donor 的空行保持空白并要求人工确认，不再做最近明渠兜底 |
 
 ### 5.5 明渠段节点创建（`_create_open_channel_node`）
 
@@ -725,35 +737,41 @@ $$\Delta Z = \Delta Z_1 + \Delta Z_2 - \Delta Z_3$$
 
 ### 12.6 `v₁/v₃` 与 `v₁加大/v₃加大` 读取链路规则
 
-倒虹吸参数自动导入时，流速读取遵循以下规则（与 2026-03-13 代码实现一致）：
+倒虹吸参数自动导入时，流速读取遵循以下规则（与 2026-03-16 代码实现一致）：
 
 1. **整座倒虹吸统一上游优先**  
    - 不再区分“进口侧保持上游、出口侧保持下游”的物理方向口径。  
    - `v₁/v₁加大` 与 `v₃/v₃加大` 统一采用同一 donor 顺序：`同流量段上游 -> 同流量段下游 -> 跨流量段上游 -> 跨流量段下游`。
-2. **同流量段 donor 搜索**  
-   - 先从倒虹吸上游侧按表格行序逆向扫描同段明渠，再从下游侧按表格行序正向扫描同段明渠。  
+2. **同流量段 donor 搜索**
+   - 先从倒虹吸上游侧按表格行序逆向扫描同段可用邻接断面，再从下游侧按表格行序正向扫描同段可用邻接断面。当前可用 donor 范围为“明渠 + 暗渠（矩形暗涵）”；隧洞不纳入 donor。
    - 扫描过程中继续执行“闸穿透”：跳过闸类节点（分水闸/分水口/泄水闸/节制闸），也跳过渐变段、倒虹吸节点、自动插入连接段。  
-   - 同流量段 donor 命中后，直接复用该 donor 已有的 `velocity / velocity_increased` 与断面参数，来源标记为 `same_section_donor`。
-3. **跨流量段 donor 搜索与重算**  
-   - 若同流量段内无可用 donor，则继续按“跨段上游优先、跨段下游次之”扫描其他流量段的明渠节点。  
+   - 若同流量段内同时存在明渠和暗渠，则按“距离倒虹吸最近的可用断面”命中，不额外增加明渠/暗渠优先级。
+   - 同流量段 donor 命中后，直接复用该 donor 已有的 `velocity / velocity_increased` 与邻接断面参数，来源标记为 `same_section_donor`。
+3. **跨流量段 donor 搜索与重算**
+   - 若同流量段内无可用 donor，则继续按“跨段上游优先、跨段下游次之”扫描其他流量段的可用 donor。当前 donor 范围同样为明渠或暗渠（矩形暗涵）。
    - 跨段 donor 不直接借用原 donor 的流速值，而是借用其断面型式与水力上下文，使用倒虹吸所在流量段的 `Q_target` 重新计算 `v` 与 `v加大`。  
    - `Q加大` 使用倒虹吸目标流量对应的 `get_flow_increase_percent(Q_target)`，不沿用 donor 原流量段的加大比例。  
    - 首先按 donor 原尺寸试算；若原尺寸不足，再允许按 donor 型式自动重设计后重试。来源标记为 `cross_section_donor`。
-4. **跨段重设计策略**  
+4. **跨段重设计策略**
    - `明渠-圆形`：复用 donor 的 `n / slope_inv`，自动搜索最小可行 `D`。  
    - `明渠-梯形`：复用 donor 的 `m / n / slope_inv`，允许重新确定 `B`。  
    - `明渠-矩形`：复用 donor 的 `n / slope_inv`，允许重新确定 `B`。  
    - `明渠-U形`：复用 donor 的 `alpha_deg / theta_deg / n / slope_inv`，自动搜索最小可行 `R`。  
+   - `矩形暗涵`：先按 donor 原 `B/H` 试算；若原尺寸不足，则优先保留原底宽 `B`，自动增大总高 `H` 后重算；若仍失败，再继续尝试后续 donor。
    - 若当前 donor 在“原尺寸试算 + 重设计试算”后仍失败，则继续尝试后续 donor，而不是立即判为缺失。
 5. **缺失与 provenance**  
    - 若按 `同段上游 -> 同段下游 -> 跨段上游 -> 跨段下游` 全部尝试后仍无可用 donor，则保持缺失，来源标记 `missing`。  
    - `SiphonGroup` 需为上下游两侧分别记录 provenance：命中层级（`same_section / cross_section / missing`）、扫描方向（`upstream / downstream`）、donor 名称、donor 流量段、是否发生重设计、最终采用的断面型式与关键尺寸。
-6. **当前实现同步说明（2026-03-13）**  
-   - `龙王沟` 类场景已允许跨段借型：当同流量段没有明渠时，可借后续流量段的圆形明渠型式，并按倒虹吸本段 `Q` 自动重算；固定 `D=1.3` 失败后进入自动搜径，当前实现可得到约 `D=1.8`、`V_d≈0.789`、`V_i≈0.830`。  
+6. **当前实现同步说明（2026-03-16）**
+   - `龙王沟` 类场景继续允许跨段借型：当同流量段没有可用 donor 时，可借后续流量段的圆形明渠型式，并按倒虹吸本段 `Q` 自动重算；固定 `D=1.3` 失败后进入自动搜径，当前实现可得到约 `D=1.8`、`V_d≈0.789`、`V_i≈0.830`。
    - `催龙村` 类场景仍优先命中同流量段 donor，但在新口径下整座倒虹吸统一采用同一 donor 方向，不再按 `v₁` / `v₃` 分别套用不同优先级。
-7. **UI 告警分类**  
-   - UI 不再使用“同流量段最近明渠兜底”措辞。  
-   - 当前实现改为汇总四类提示：`已使用同段 donor`、`已使用跨段 donor`、`donor 已发生重设计`、`候选耗尽仍缺失`。
+   - 当 Excel/批量结果仅提供 `暗渠` 或 `矩形暗渠` 时，当前实现会先在导入阶段把名称归一为内部标准类型 `矩形暗涵`，随后纳入 donor 搜索与 UI 展示链路；前台提示文案统一使用“邻接断面”“暗渠/矩形暗渠”口径，内部枚举和值对象名称仍保持 `矩形暗涵`。
+   - 当跨段 donor 为矩形暗涵时，当前实现会先尝试原 `B/H`；若失败，再按“保留原底宽并自动增大高度”重算，并在 provenance 与 UI 提示中写明 `redesign_mode=keep_bottom_width_raise_height`。
+   - 若按 `同段上游 -> 同段下游 -> 跨段上游 -> 跨段下游` 全部候选仍失败，则保持 `missing` 并要求人工确认，不自动回退默认流速。
+7. **UI 告警分类**
+   - UI 不再使用“同流量段最近明渠兜底”措辞，也不再把 donor 限定表述为“明渠”。
+   - 当前实现改为汇总四类提示：`同段复用`、`跨段借型并重算`、`借用后重定邻接断面`、`仍未找到可用邻接断面`。
+   - 汇总提示中会展示 donor 类型（明渠/暗渠）、来源流量段、扫描方向，以及是否发生“保留原底宽并自动增大高度”等重设计方式。
 
 ---
 
@@ -839,7 +857,7 @@ calculate_pressure_pipe(
 | 文件 | 关键方法/类 |
 |------|------------|
 | `app_渠系计算前端/water_profile/panel.py` | `_insert_transitions()`, `open_channel_callback()`, `_show_transition_length_details()`, `_show_transition_calc_details()`, `_open_transition_reference()` |
-| `app_渠系计算前端/water_profile/water_profile_dialogs.py` | `BatchChannelConfirmDialog`, `_fill_all_recommended()`, `_fill_with_fallback_if_empty()` |
+| `app_渠系计算前端/water_profile/water_profile_dialogs.py` | `BatchChannelConfirmDialog`, `_fill_all_recommended()`, `OpenChannelDialog` |
 | `app_渠系计算前端/water_profile/formula_dialog.py` | `show_transition_loss_dialog()`, `show_transition_length_dialog()` |
 | `app_渠系计算前端/water_profile/cad_tools.py` | `_is_special_structure_sv()` |
 
@@ -915,3 +933,4 @@ calculate_pressure_pipe(
 | **v3.0** | **2026-03-06** | **整合为统一PRD**：合并原 `PRD_渐变段与明渠段插入算法.md`、`渐变段计算说明.md`、`PRD_推求水面线.md`（渐变段部分）、`PRD_有压管道批量计算_V1.0.md`（渐变段部分）、`附录L-水力计算核心.md`（渐变段部分）、`倒虹吸后端SRS`（渐变段部分）为一份文档；新增§十二倒虹吸三段式渐变段公式（ΔZ₁/ΔZ₃/GradientType/V2Strategy/管道渐变段）；新增§十三有压管道渐变段计算（损失公式/PressurePipeCalcResult/calc_transition_loss）；新增§十一 UI交互流程（设置区/插入按钮交互/双击弹窗）；新增§十五计算调用流程概览；新增§六.3渐变段形式与ζ系数选取逻辑（按建筑物类型区分配置来源）；§九OpenChannelParams补充`name`/`structure_height`字段及默认值；§十新增水位递推说明；§十四代码索引扩展至4个子系统 |
 | **v3.1** | **2026-03-09** | **修复倒虹吸加大流速读取链路**：新增“同方向+同流量段”扫描、不跨段硬约束、闸穿透应用到倒虹吸相邻流速提取；新增同段最近明渠兜底与来源标记（`adjacent` / `same_section_nearest_channel_fallback` / `missing`）；新增UI汇总告警规则（兜底提示与同段无明渠缺失提示）。 |
 | **v3.2** | **2026-03-13** | **倒虹吸 donor 规则重构**：`v₁/v₃` 与 `v₁加大/v₃加大` 改为整座倒虹吸统一上游优先；donor 顺序改为 `同段上游 -> 同段下游 -> 跨段上游 -> 跨段下游`；跨段 donor 支持按倒虹吸目标流量重算并按断面型式自动重设计（圆形/梯形/矩形/U形）；新增 per-side provenance 字段与四类 UI 汇总告警（同段 donor / 跨段 donor / donor 重设计 / 候选耗尽仍缺失）。 |
+| **v3.3** | **2026-03-16** | **倒虹吸 donor 扩展到暗渠**：donor 候选从“仅明渠”扩展到“明渠 + 暗渠（矩形暗涵）”，明确排除隧洞；批量结果与 Excel 导入口径兼容 `暗渠`、`矩形暗渠` 并统一归一为内部 `矩形暗涵`；跨段矩形暗涵新增“原 B/H 试算，失败后保留 B 自动增大 H”重算策略；缺失时继续保持人工确认；UI 汇总提示改为“邻接断面”口径，并展示 donor 类型、扫描方向与重设计方式。 |

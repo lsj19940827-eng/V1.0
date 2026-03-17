@@ -1450,6 +1450,180 @@ class HydraulicCalculator:
                 # 如果碰到非倒虹吸节点就停止
                 if sv_n2 != "倒虹吸":
                     break
+
+    @staticmethod
+    def _is_terminal_gate_backfill_donor(node: ChannelNode) -> bool:
+        """判断节点是否可作为末尾闸行高程回推的参考断面。"""
+        if getattr(node, "is_transition", False):
+            return False
+        struct_type = getattr(node, "structure_type", None)
+        if struct_type is None:
+            return False
+        sv = struct_type.value if hasattr(struct_type, "value") else str(struct_type)
+        return sv in {
+            "明渠-梯形",
+            "明渠-矩形",
+            "明渠-圆形",
+            "明渠-U形",
+            "矩形暗涵",
+            "矩形",  # 兼容旧项目中的矩形明渠值
+        }
+
+    @staticmethod
+    def _find_last_non_transition_index(nodes: List[ChannelNode]) -> Optional[int]:
+        """查找整表最后一个非渐变段节点。"""
+        for idx in range(len(nodes) - 1, -1, -1):
+            if not getattr(nodes[idx], "is_transition", False):
+                return idx
+        return None
+
+    def _find_terminal_gate_backfill_donor(
+        self, nodes: List[ChannelNode], target_index: int
+    ) -> tuple[Optional[int], Optional[ChannelNode]]:
+        """在同流量段内向上游查找同时具备水深和结构高度的参考断面。"""
+        target = nodes[target_index]
+        target_flow_section = getattr(target, "flow_section", "")
+        for idx in range(target_index - 1, -1, -1):
+            donor = nodes[idx]
+            if getattr(donor, "is_transition", False):
+                continue
+            if getattr(donor, "flow_section", "") != target_flow_section:
+                continue
+            if not self._is_terminal_gate_backfill_donor(donor):
+                continue
+            donor_depth = float(getattr(donor, "water_depth", 0.0) or 0.0)
+            donor_height = float(getattr(donor, "structure_height", 0.0) or 0.0)
+            if donor_depth > 0 and donor_height > 0:
+                return idx, donor
+        return None, None
+
+    def apply_terminal_gate_elevation_backfill(
+        self, nodes: List[ChannelNode]
+    ) -> Optional[Dict]:
+        """
+        对整表末尾闸行按同流量段上游断面执行渠底/渠顶高程回推。
+
+        规则：
+        1. 仅作用于整表最后一个非渐变段节点；
+        2. 该节点必须为闸类；
+        3. 仅回推缺失字段，不覆盖已有值；
+        4. 参考断面只在相同 flow_section 内向上游搜索；
+        5. 参考断面必须同时具备水深和结构高度。
+        """
+        for node in nodes:
+            node.terminal_gate_backfill_details = {}
+
+        target_index = self._find_last_non_transition_index(nodes)
+        if target_index is None:
+            return None
+
+        target = nodes[target_index]
+        target_struct = target.structure_type.value if target.structure_type else ""
+        is_gate = bool(getattr(target, "is_diversion_gate", False)) or (
+            "闸" in target_struct or "分水" in target_struct
+        )
+        if not is_gate:
+            return None
+
+        need_bottom = not (float(getattr(target, "bottom_elevation", 0.0) or 0.0) > 0)
+        need_top = not (float(getattr(target, "top_elevation", 0.0) or 0.0) > 0)
+        if not need_bottom and not need_top:
+            return None
+
+        details = {
+            "attempted": True,
+            "status": "failed",
+            "target_row": target_index + 1,
+            "target_name": target.name or f"行{target_index + 1}",
+            "target_structure_type": target_struct or "闸类",
+            "target_flow_section": getattr(target, "flow_section", "") or "",
+            "target_water_level": round(float(getattr(target, "water_level", 0.0) or 0.0), ELEVATION_PRECISION),
+            "requested_fields": [],
+            "filled_fields": [],
+            "donor_row": None,
+            "donor_name": "",
+            "donor_structure_type": "",
+            "donor_water_depth": 0.0,
+            "donor_structure_height": 0.0,
+            "failure_reason": "",
+            "bottom": {
+                "attempted": need_bottom,
+                "success": False,
+                "formula": r"Z_b = Z_gate - h_ref",
+                "result": 0.0,
+                "failure_reason": "",
+            },
+            "top": {
+                "attempted": need_top,
+                "success": False,
+                "formula": r"Z_t = Z_b + H_ref",
+                "result": 0.0,
+                "base_bottom_elevation": round(float(getattr(target, "bottom_elevation", 0.0) or 0.0), ELEVATION_PRECISION),
+                "failure_reason": "",
+            },
+        }
+        if need_bottom:
+            details["requested_fields"].append("bottom_elevation")
+        if need_top:
+            details["requested_fields"].append("top_elevation")
+
+        donor_index, donor = self._find_terminal_gate_backfill_donor(nodes, target_index)
+        if donor is not None:
+            donor_struct = donor.structure_type.value if donor.structure_type else ""
+            details["donor_row"] = donor_index + 1
+            details["donor_name"] = donor.name or f"行{donor_index + 1}"
+            details["donor_structure_type"] = donor_struct
+            details["donor_water_depth"] = round(float(donor.water_depth or 0.0), ELEVATION_PRECISION)
+            details["donor_structure_height"] = round(float(donor.structure_height or 0.0), ELEVATION_PRECISION)
+        else:
+            details["failure_reason"] = "同流量段上游未找到同时具备水深和结构高度的明渠/矩形暗涵参考断面"
+
+        if need_bottom:
+            water_level = float(getattr(target, "water_level", 0.0) or 0.0)
+            if water_level <= 0:
+                details["bottom"]["failure_reason"] = "本行无可用水位，无法回推渠底高程"
+            elif donor is None:
+                details["bottom"]["failure_reason"] = details["failure_reason"]
+            else:
+                bottom_elevation = round(water_level - float(donor.water_depth or 0.0), ELEVATION_PRECISION)
+                target.bottom_elevation = bottom_elevation
+                details["bottom"]["success"] = True
+                details["bottom"]["result"] = bottom_elevation
+                details["filled_fields"].append("bottom_elevation")
+
+        if need_top:
+            base_bottom = float(getattr(target, "bottom_elevation", 0.0) or 0.0)
+            details["top"]["base_bottom_elevation"] = round(base_bottom, ELEVATION_PRECISION)
+            if donor is None:
+                details["top"]["failure_reason"] = details["failure_reason"]
+            elif base_bottom <= 0:
+                details["top"]["failure_reason"] = "渠底高程仍为空，无法回推渠顶高程"
+            else:
+                top_elevation = round(base_bottom + float(donor.structure_height or 0.0), ELEVATION_PRECISION)
+                target.top_elevation = top_elevation
+                details["top"]["success"] = True
+                details["top"]["result"] = top_elevation
+                details["filled_fields"].append("top_elevation")
+
+        attempted_items = [details["bottom"], details["top"]]
+        attempted_items = [item for item in attempted_items if item.get("attempted")]
+        success_count = sum(1 for item in attempted_items if item.get("success"))
+        if attempted_items and success_count == len(attempted_items):
+            details["status"] = "success"
+        elif success_count > 0:
+            details["status"] = "partial"
+        else:
+            details["status"] = "failed"
+            if not details["failure_reason"]:
+                reasons = [
+                    item.get("failure_reason", "")
+                    for item in attempted_items
+                    if item.get("failure_reason")
+                ]
+                details["failure_reason"] = "；".join(dict.fromkeys(reasons))
+
+        target.terminal_gate_backfill_details = details
+        return details
     
     def _estimate_transition_loss(self, prev_node: ChannelNode, next_node: ChannelNode) -> float:
         """

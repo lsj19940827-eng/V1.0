@@ -116,6 +116,36 @@ def _u_channel_node(
     )
 
 
+def _rect_culvert_node(
+    *,
+    name: str = "culvert",
+    flow_section: str,
+    width: float = 1.6,
+    height: float = 2.0,
+    slope_inv: float = 3000.0,
+    roughness: float = 0.014,
+    velocity: float = 0.65,
+    velocity_inc: float = 0.78,
+    water_depth: float = 1.1,
+) -> ChannelNode:
+    node = ChannelNode(
+        name=name,
+        structure_type=StructureType.RECT_CULVERT,
+        in_out=InOutType.NORMAL,
+        flow_section=flow_section,
+        velocity=velocity,
+        velocity_increased=velocity_inc,
+        water_depth=water_depth,
+        roughness=roughness,
+        section_params={"B": width, "H_total": height},
+        structure_height=height,
+    )
+    if slope_inv and slope_inv > 0:
+        node.slope_i = 1.0 / slope_inv
+        node.section_params["slope_inv"] = slope_inv
+    return node
+
+
 def _siphon_pair(name: str, flow_section: str, flow: float):
     return [
         ChannelNode(
@@ -333,3 +363,128 @@ def test_cross_section_u_shape_redesign_failure_keeps_missing(monkeypatch):
 
     assert group.upstream_velocity_source == "missing"
     assert group.downstream_velocity_source == "missing"
+
+
+def test_same_section_rect_culvert_donor_is_reused():
+    siphon_in, siphon_out = _siphon_pair("culvert-siphon", "A", 1.0)
+    donor = _rect_culvert_node(
+        name="same-culvert",
+        flow_section="A",
+        velocity=0.72,
+        velocity_inc=0.88,
+        width=1.8,
+        height=2.2,
+    )
+
+    group = _extract_one([donor, siphon_in, siphon_out])
+
+    assert group.upstream_velocity == pytest.approx(0.72)
+    assert group.downstream_velocity == pytest.approx(0.72)
+    assert group.upstream_velocity_increased == pytest.approx(0.88)
+    assert group.downstream_velocity_increased == pytest.approx(0.88)
+    assert group.upstream_velocity_source == "same_section_donor"
+    assert group.downstream_velocity_source == "same_section_donor"
+    assert group.upstream_velocity_provenance["section_family"] == "culvert"
+    assert group.downstream_velocity_provenance["section_family"] == "culvert"
+    assert group.upstream_velocity_provenance["redesigned"] is False
+
+
+def test_cross_section_rect_culvert_uses_original_box_when_it_still_works(monkeypatch):
+    siphon_in, siphon_out = _siphon_pair("culvert-fixed", "A", 1.2)
+    donor = _rect_culvert_node(name="fixed-culvert", flow_section="B", width=1.8, height=2.1)
+    quick_calls = []
+
+    monkeypatch.setattr(siphon_extractor_mod, "get_flow_increase_percent", lambda _q: 10.0)
+
+    def _fake_solve(width, height, n_value, slope, target_flow):
+        assert width == pytest.approx(1.8)
+        assert height == pytest.approx(2.1)
+        return (1.05 if target_flow < 1.3 else 1.25), True
+
+    def _fake_outputs(width, height, water_depth, n_value, slope):
+        return {"V": 0.76 if water_depth < 1.2 else 0.92}
+
+    def _unexpected_quick_calc(**kwargs):
+        quick_calls.append(kwargs)
+        return {"success": False}
+
+    monkeypatch.setattr(siphon_extractor_mod, "solve_water_depth_rectangular", _fake_solve)
+    monkeypatch.setattr(siphon_extractor_mod, "calculate_rectangular_outputs", _fake_outputs)
+    monkeypatch.setattr(siphon_extractor_mod, "quick_calculate_rectangular_culvert", _unexpected_quick_calc)
+
+    group = _extract_one([siphon_in, siphon_out, donor])
+
+    assert not quick_calls
+    assert group.upstream_velocity_source == "cross_section_donor"
+    assert group.downstream_velocity_source == "cross_section_donor"
+    assert group.upstream_velocity == pytest.approx(0.76)
+    assert group.upstream_velocity_increased == pytest.approx(0.92)
+    assert group.upstream_velocity_provenance["section_family"] == "culvert"
+    assert group.upstream_velocity_provenance["redesigned"] is False
+    assert group.upstream_velocity_provenance["redesign_mode"] == ""
+    assert group.upstream_section_B == pytest.approx(1.8)
+    assert group.upstream_section_h == pytest.approx(1.05)
+    assert group.upstream_velocity_provenance["dimensions"]["H_total"] == pytest.approx(2.1)
+
+
+def test_cross_section_rect_culvert_redesign_keeps_bottom_width_and_raises_height(monkeypatch):
+    siphon_in, siphon_out = _siphon_pair("culvert-redesign", "A", 1.4)
+    donor = _rect_culvert_node(name="resize-culvert", flow_section="B", width=1.7, height=1.9)
+
+    monkeypatch.setattr(
+        siphon_extractor_mod,
+        "solve_water_depth_rectangular",
+        lambda *args, **kwargs: (0.0, False),
+    )
+    monkeypatch.setattr(
+        siphon_extractor_mod,
+        "quick_calculate_rectangular_culvert",
+        lambda **kwargs: {
+            "success": True,
+            "B": kwargs["manual_B"],
+            "H": 2.6,
+            "h_design": 1.45,
+            "V_design": 0.84,
+            "V_increased": 0.97,
+        },
+    )
+
+    group = _extract_one([siphon_in, siphon_out, donor])
+
+    assert group.upstream_velocity_source == "cross_section_donor"
+    assert group.upstream_velocity == pytest.approx(0.84)
+    assert group.upstream_velocity_increased == pytest.approx(0.97)
+    assert group.upstream_section_B == pytest.approx(1.7)
+    assert group.upstream_section_h == pytest.approx(1.45)
+    assert group.upstream_velocity_provenance["dimensions"]["H_total"] == pytest.approx(2.6)
+    assert group.upstream_velocity_provenance["section_family"] == "culvert"
+    assert group.upstream_velocity_provenance["redesigned"] is True
+    assert (
+        group.upstream_velocity_provenance["redesign_mode"]
+        == "keep_bottom_width_raise_height"
+    )
+
+
+def test_cross_section_rect_culvert_failure_keeps_missing(monkeypatch):
+    siphon_in, siphon_out = _siphon_pair("culvert-missing", "A", 1.5)
+    donor = _rect_culvert_node(name="failed-culvert", flow_section="B", width=1.5, height=1.6)
+
+    monkeypatch.setattr(
+        siphon_extractor_mod,
+        "solve_water_depth_rectangular",
+        lambda *args, **kwargs: (0.0, False),
+    )
+    monkeypatch.setattr(
+        siphon_extractor_mod,
+        "quick_calculate_rectangular_culvert",
+        lambda **kwargs: {"success": False, "error_message": "no culvert fit"},
+    )
+
+    group = _extract_one([siphon_in, siphon_out, donor])
+
+    assert group.upstream_velocity_source == "missing"
+    assert group.downstream_velocity_source == "missing"
+    assert group.upstream_velocity == 0.0
+    assert group.downstream_velocity == 0.0
+    assert group.upstream_velocity_provenance["level"] == "missing"
+    assert group.upstream_velocity_provenance["section_family"] == ""

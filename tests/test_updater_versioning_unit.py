@@ -25,7 +25,7 @@ def test_updateinfo_offers_patch_for_supported_old_version(monkeypatch):
             "latest_version": "1.0.9.1",
             "download_url": "https://example.com/full.zip",
             "patch_url": "https://example.com/patch.zip",
-            "min_patch_version": "1.0.4",
+            "min_patch_version": "1.0.9",
         }
     )
 
@@ -41,7 +41,7 @@ def test_updateinfo_falls_back_to_full_package_below_patch_floor(monkeypatch):
             "latest_version": "1.0.9.1",
             "download_url": "https://example.com/full.zip",
             "patch_url": "https://example.com/patch.zip",
-            "min_patch_version": "1.0.4",
+            "min_patch_version": "1.0.9",
         }
     )
 
