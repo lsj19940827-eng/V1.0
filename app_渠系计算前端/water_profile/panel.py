@@ -3786,6 +3786,11 @@ class WaterProfilePanel(QWidget):
     # ================================================================
     # 计算
     # ================================================================
+    def _get_current_start_station_value(self):
+        """统一读取当前项目级起始桩号，供表3各类重算入口复用。"""
+        text = self.start_station_edit.text() if self.start_station_edit else ""
+        return parse_station_input(text)
+
     def _build_settings(self):
         """从UI读取设置，构建ProjectSettings"""
         if not CALCULATOR_AVAILABLE:
@@ -3794,7 +3799,8 @@ class WaterProfilePanel(QWidget):
         settings.channel_name = self.channel_name_edit.text().strip() or "未命名渠道"
         settings.channel_level = self.channel_level_combo.currentText()
         settings.start_water_level = self._fval(self.start_wl_edit, 100.0)
-        settings.start_station = parse_station_input(self.start_station_edit.text())
+        settings.start_station = self._get_current_start_station_value()
+        settings._start_station_from_ui = True
         # 多流量段支持
         design_flows = self._parse_flow_values(self.design_flow_edit.text())
         max_flows = self._parse_flow_values(self.max_flow_edit.text())

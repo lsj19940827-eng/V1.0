@@ -166,7 +166,7 @@ class WaterProfileCalculator:
         self.geo_calc.calculate_all_geometry(nodes)
         
         # 计算桩号
-        self.geo_calc.calculate_stations(nodes)
+        self.geo_calc.calculate_stations(nodes, self._resolve_station_start(nodes))
     
     def calculate_hydraulics(self, nodes: List[ChannelNode]) -> None:
         """
@@ -215,10 +215,33 @@ class WaterProfileCalculator:
         # 只需为新插入的自动明渠段节点补算 straight_distance，再统一推算桩号即可。
         # 自动明渠/连接段仅在原区间内部落位，不参与真实IP累计，不能改变下游原始节点桩号。
         self._compute_auto_channel_distances(nodes)
-        start_station = nodes[0].station_MC if nodes else 0.0
+        start_station = self._resolve_station_start(nodes)
         self.geo_calc.calculate_stations(nodes, start_station)
         
         return nodes
+
+    def _resolve_station_start(self, nodes: List[ChannelNode]) -> float:
+        """
+        解析当前重算应使用的起始桩号。
+
+        优先采用项目设置中的起始桩号，避免表3首行旧桩号快照反向覆盖全局设置；
+        仅在 settings 未明确提供有效起点时，才回退到节点当前已有桩号。
+        """
+        settings_start = getattr(self.settings, "start_station", None)
+        explicit_from_ui = bool(getattr(self.settings, "_start_station_from_ui", False))
+
+        if isinstance(settings_start, (int, float)) and math.isfinite(settings_start):
+            if explicit_from_ui or abs(float(settings_start)) > 1e-9:
+                return float(settings_start)
+
+        if nodes:
+            first_station = getattr(nodes[0], "station_MC", None)
+            if isinstance(first_station, (int, float)) and math.isfinite(first_station):
+                return float(first_station)
+
+        if isinstance(settings_start, (int, float)) and math.isfinite(settings_start):
+            return float(settings_start)
+        return 0.0
     
     def _compute_auto_channel_distances(self, nodes: List[ChannelNode]) -> None:
         """
