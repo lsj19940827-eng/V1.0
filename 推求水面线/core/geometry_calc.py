@@ -370,6 +370,21 @@ class GeometryCalculator:
         """
         if not nodes:
             return
+
+        def _is_auxiliary_node(node: ChannelNode) -> bool:
+            """渐变段和自动插入连接段都属于辅助节点，不参与真实IP累计。"""
+            return (
+                getattr(node, 'is_transition', False)
+                or getattr(node, 'is_auto_inserted_channel', False)
+            )
+
+        def _find_prev_real_node(idx: int) -> ChannelNode:
+            """向前找到最近的真实节点，跳过渐变段和自动补段。"""
+            for j in range(idx - 1, -1, -1):
+                candidate = nodes[j]
+                if not _is_auxiliary_node(candidate):
+                    return candidate
+            return nodes[idx - 1]
         
         # 起点桩号
         nodes[0].station_ip = start_station
@@ -392,33 +407,37 @@ class GeometryCalculator:
                 curr_node.station_EC = prev_node.station_MC
                 curr_node.curve_length = 0.0
                 continue
-            
-            # IP点桩号 = 累计直线距离
-            # straight_distance现在存储在curr_node中，表示从prev_node到curr_node的距离
-            cumulative_ip_distance += curr_node.straight_distance
-            curr_node.station_ip = cumulative_ip_distance
-            
+
+            is_auto_channel = getattr(curr_node, 'is_auto_inserted_channel', False)
+            anchor_node = _find_prev_real_node(i)
+
+            # 真实节点推进真实IP累计；自动补段只在区间内部落位，不改变下游原始节点桩号
+            if is_auto_channel:
+                curr_node.station_ip = cumulative_ip_distance
+            else:
+                cumulative_ip_distance += curr_node.straight_distance
+                curr_node.station_ip = cumulative_ip_distance
+
             # 里程MC递推公式:
-            # S_MC(i) = S_MC(i-1) + D(i-1,i) - T(i-1) - T(i) + L_arc(i-1)/2 + L_arc(i)/2
-            # D(i-1,i) = curr_node.straight_distance (从前一点到当前点的距离)
-            # 注意：prev_node可能是渐变段（T=0, L=0），需向前查找真实前驱IP节点的T和L
-            _actual_prev = prev_node
-            for _j in range(i - 1, -1, -1):
-                if not getattr(nodes[_j], 'is_transition', False):
-                    _actual_prev = nodes[_j]
-                    break
-            prev_T = _actual_prev.tangent_length
-            curr_T = curr_node.tangent_length
-            prev_L = _actual_prev.arc_length
-            curr_L = curr_node.arc_length
-            
-            station_MC = (prev_node.station_MC + 
-                          curr_node.straight_distance - 
-                          prev_T - curr_T + 
-                          prev_L / 2 + curr_L / 2)
+            # S_MC(i) = S_MC(anchor) + D(anchor,i) - T(anchor) - T(i) + L_arc(anchor)/2 + L_arc(i)/2
+            # 自动补段的 straight_distance 由 prepare_transitions 预先补成“上游真实节点 -> 补段内部点”的距离，
+            # 因此它自身可以落在区间内部，但不能成为下游真实节点的累计基准。
+            prev_T = anchor_node.tangent_length
+            prev_L = anchor_node.arc_length
+            curr_T = 0.0 if is_auto_channel else curr_node.tangent_length
+            curr_L = 0.0 if is_auto_channel else curr_node.arc_length
+
+            station_MC = (
+                anchor_node.station_MC
+                + curr_node.straight_distance
+                - prev_T
+                - curr_T
+                + prev_L / 2
+                + curr_L / 2
+            )
             # 兜底保护：切线长过大（坐标无效）时station_MC可能为负，用累计IP距离兜底
             if station_MC < 0:
-                station_MC = max(0.0, prev_node.station_MC + curr_node.straight_distance)
+                station_MC = max(0.0, anchor_node.station_MC + curr_node.straight_distance)
             curr_node.station_MC = station_MC
             
             # 弯前BC: S_BC = S_MC - L_arc/2

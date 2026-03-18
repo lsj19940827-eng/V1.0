@@ -22,6 +22,8 @@ import matplotlib
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
+from app_渠系计算前端.webview_compat import load_html_content
+
 # ============================================================
 # matplotlib mathtext 配置（支持中文下角标 + SVG 路径输出）
 # ============================================================
@@ -231,12 +233,12 @@ def get_svg_height_px(svg_str, padding=16):
     return 40
 
 
-def load_formula_page(web_view, html_content):
+def load_formula_page(web_view, html_content, base_path=None):
     """将含 SVG 公式的 HTML 加载到 QWebEngineView。
 
     所有资源都内联在 HTML 中，无需网络访问。
     """
-    web_view.setHtml(html_content)
+    load_html_content(web_view, html_content, base_path=base_path)
 
 
 # ============================================================
@@ -251,6 +253,21 @@ _GREEK_MAP = {
     'π': '\\pi',
     'ζ': '\\zeta',
 }
+
+_LEGACY_SYMBOL_TRANSLATION = str.maketrans({
+    '蠂': 'χ',
+    '尾': 'β',
+    '胃': 'θ',
+    '蟺': 'π',
+    '味': 'ζ',
+    '脳': '×',
+    '脑': '×',
+    '梅': '÷',
+    '鈭': '√',
+    '虏': '²',
+    '鲁': '³',
+    '掳': '°',
+})
 
 # 需要跳过（不转换）的关键词
 _SKIP_KEYWORDS = [
@@ -275,7 +292,7 @@ def text_to_latex(line):
 
     使用 ``\\text{}`` 处理中文（兼容 KaTeX 字体渲染）。
     """
-    s = line.strip()
+    s = line.strip().translate(_LEGACY_SYMBOL_TRANSLATION)
     if not s:
         return None
 
@@ -283,6 +300,7 @@ def text_to_latex(line):
     _CMP_OPS = ('<', '>', '≤', '≥')
     has_eq = '=' in s
     has_cmp = any(op in s for op in _CMP_OPS)
+    has_cmp = has_cmp or any(op in s for op in ('≤', '≥'))
     if not has_eq and not has_cmp:
         return None
 
@@ -334,6 +352,8 @@ def text_to_latex(line):
 
     # ------ 开始转换为 LaTeX ------
     latex = s
+    latex = latex.replace('≥', ' \\geq ')
+    latex = latex.replace('≤', ' \\leq ')
 
     # 1. 百分号
     latex = re.sub(r'(\d+\.?\d*)\s*%', r'\1\\%', latex)
@@ -416,6 +436,139 @@ def text_to_latex(line):
 # ============================================================
 # 块分组 & 渲染（卡片 + 横幅 + 徽章混搭排版）
 # ============================================================
+
+_FORMULA_OPS = ('=', '<', '>', '≤', '≥')
+_EMBEDDED_FORMULA_PATTERNS = (
+    r'[A-Za-z]{1,4}(?:/[A-Za-z]{1,4})?(?:_[\u4e00-\u9fff]+|[\u4e00-\u9fff]{1,4})?\s*(?:=|[<>≤≥])',
+    r'[\u0391-\u03c9]\s*(?:=|[<>≤≥])',
+    r'[\u4e00-\u9fff]{1,4}\s*(?:=|[<>≤≥])',
+)
+
+
+def _is_formula_candidate(text):
+    """Return True when a fragment looks like an engineering formula."""
+    s = text.strip()
+    if not s:
+        return False
+    if text_to_latex(s):
+        return True
+    if not any(op in s for op in _FORMULA_OPS):
+        return False
+    if re.search(r'[A-Za-z\u0391-\u03c9]', s):
+        return True
+    return bool(re.match(r'^[\u4e00-\u9fff]{1,4}\s*(?:=|[<>≤≥])', s))
+
+
+def _find_embedded_formula_start(text):
+    """Locate the start index of an inline formula inside a descriptive line."""
+    starts = []
+    for pattern in _EMBEDDED_FORMULA_PATTERNS:
+        m = re.search(pattern, text)
+        if m:
+            starts.append(m.start())
+    return min(starts) if starts else None
+
+
+def _split_formula_suffix(text):
+    """Split trailing descriptive text after a formula fragment."""
+    for sep in ('，', ','):
+        idx = text.find(sep)
+        if idx <= 0:
+            continue
+        head = text[:idx].strip()
+        tail = text[idx + 1:].strip()
+        if head and tail and _is_formula_candidate(head) and not _is_formula_candidate(tail):
+            return head, tail
+    return text.strip(), ''
+
+
+def _split_parallel_formula_clauses(text):
+    """Split comma-joined formula clauses like 'A = ..., B = ...'."""
+    if not any(sep in text for sep in ('，', ',')):
+        return None
+    parts = [p.strip() for p in re.split(r'\s*[，,]\s*', text) if p.strip()]
+    if len(parts) < 2:
+        return None
+    if all(_is_formula_candidate(part) or _find_embedded_formula_start(part) not in (None, 0) for part in parts):
+        return parts
+    return None
+
+
+def _split_embedded_formula(text):
+    """Split '说明 + 公式 [+ 说明]' into separate lines."""
+    start = _find_embedded_formula_start(text)
+    if start in (None, 0):
+        return None
+
+    prefix = text[:start].rstrip(' ：:,，')
+    formula_text = text[start:].strip()
+    formula_text, suffix = _split_formula_suffix(formula_text)
+    if not prefix or not _is_formula_candidate(formula_text):
+        return None
+
+    prefix_line = prefix if prefix.endswith(('：', ':')) else f'{prefix}:'
+    parts = [prefix_line, formula_text]
+    if suffix:
+        parts.append(suffix)
+    return parts
+
+
+def _normalize_formula_fragments(text):
+    """Normalize one logical line into smaller render-friendly fragments."""
+    fragments = [text.strip()]
+    for _ in range(3):
+        changed = False
+        normalized = []
+        for fragment in fragments:
+            split = _split_parallel_formula_clauses(fragment)
+            if split:
+                normalized.extend(split)
+                changed = True
+                continue
+            split = _split_embedded_formula(fragment)
+            if split:
+                normalized.extend(split)
+                changed = True
+                continue
+            normalized.append(fragment)
+        fragments = normalized
+        if not changed:
+            break
+    return fragments
+
+
+def _normalize_formula_lines(lines):
+    """Pre-split mixed engineering prose so the renderer can treat formulas separately."""
+    normalized = []
+    in_raw_html = False
+
+    for line in lines:
+        stripped = line.strip()
+        if in_raw_html:
+            normalized.append(line)
+            if stripped == '{{/HTML}}':
+                in_raw_html = False
+            continue
+
+        if stripped.startswith('{{HTML}}'):
+            normalized.append(line)
+            in_raw_html = True
+            continue
+
+        if (
+            not stripped
+            or stripped.startswith('【')
+            or re.match(r'^\d+\.\s+.+', stripped)
+            or (len(stripped) > 5 and all(c in '=- \t' for c in stripped))
+        ):
+            normalized.append(line)
+            continue
+
+        indent = line[:len(line) - len(line.lstrip())]
+        fragments = _normalize_formula_fragments(stripped)
+        normalized.extend((indent + fragment) if fragment else '' for fragment in fragments)
+
+    return normalized
 
 def _group_lines_into_blocks(lines):
     """将文本行分组为逻辑块（章节、步骤、文本）。"""
@@ -664,15 +817,7 @@ def _render_param_grid(step_blocks):
             stripped = line.strip()
             if not stripped:
                 continue
-            latex = text_to_latex(stripped)
-            if latex:
-                svg = render_latex_svg(latex, fontsize=13)
-                if svg:
-                    value_parts.append(f'<div style="margin:2px 0;">{svg}</div>')
-                    continue
-            value_parts.append(
-                f'<div style="margin:2px 0;font-size:13px;color:#424242;">{_e(stripped)}</div>'
-            )
+            value_parts.append(_render_content_line(stripped, 'margin:2px 0;', enable_formula=True))
         value_html = '\n'.join(value_parts)
         cells.append(
             f'<div class="param-cell">'
@@ -764,7 +909,7 @@ def _render_block(block):
 
 def plain_text_to_formula_body(plain_text):
     """将纯文本计算结果转换为 HTML body 内容（不含 <html>/<head> 标签）。"""
-    lines = plain_text.split('\n')
+    lines = _normalize_formula_lines(plain_text.split('\n'))
     blocks = _group_lines_into_blocks(lines)
     html_parts = []
     i = 0

@@ -19,11 +19,11 @@ sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea,
-    QPushButton,
+    QPushButton, QApplication,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QSizePolicy
-from app_渠系计算前端.webview_compat import create_web_view
+from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
 
 from qfluentwidgets import (
     ComboBox, PushButton, PrimaryPushButton, LineEdit,
@@ -39,6 +39,8 @@ from app_渠系计算前端.case_manager import (
     CASE_TAG_ACTIVE_SS as _CASE_TAG_ACTIVE_SS,
     CASE_TAG_INACTIVE_SS as _CASE_TAG_INACTIVE_SS,
     CASE_QUICK_SS as _CASE_QUICK_SS,
+    CaseTagNavigator as _CaseTagNavigator,
+    CaseWorkbenchStrip as _CaseWorkbenchStrip,
 )
 
 import matplotlib
@@ -76,8 +78,15 @@ from app_渠系计算前端.report_meta import (
 )
 from app_渠系计算前端.culvert.dxf_export import export_culvert_dxf
 from app_渠系计算前端.formula_renderer import (
-    plain_text_to_formula_html, load_formula_page, make_plain_html,
+    plain_text_to_formula_html, plain_text_to_formula_body, wrap_with_katex,
+    load_formula_page, make_plain_html,
     HelpPageBuilder
+)
+from app_渠系计算前端.result_navigation import (
+    build_result_nav_bar,
+    build_result_navigation_head,
+    make_case_result_anchor,
+    wrap_case_result_block,
 )
 if WORD_EXPORT_AVAILABLE:
     from docx import Document as DocxDocument
@@ -97,7 +106,11 @@ class CulvertPanel(QWidget):
         self._current_case_idx = 0
         self._all_results = []          # [(case_idx, input_params, result), ...]
         self._loading_case = False
+        self._panel_key = "culvert"
+        self._results_dirty = False
+        self._has_rendered_results = False
         self._init_ui()
+        self._setup_result_dirty_tracking()
         self._rebuild_case_tags()
 
     # ================================================================
@@ -136,7 +149,21 @@ class CulvertPanel(QWidget):
         lay = QVBoxLayout(parent)
         lay.setContentsMargins(5, 5, 5, 5)
         lay.setSpacing(6)
+        self._input_title = QLabel("输入参数")
+        self._input_title.setStyleSheet("font-size:18px;font-weight:700;color:#0E5DB8;padding:0 2px 2px 2px;")
+        lay.addWidget(self._input_title)
+        self._case_strip = _CaseWorkbenchStrip(parent)
+        self._case_strip.add_requested.connect(self._add_case)
+        self._case_strip.case_switched.connect(self._switch_case)
+        self._case_strip.case_renamed.connect(self._on_case_renamed)
+        self._case_strip.apply_to_all_requested.connect(self._apply_to_all_cases)
+        self._case_strip.copy_from_prev_requested.connect(self._copy_from_prev_case)
+        self._case_strip.remove_current_requested.connect(self._remove_current_case)
+        self._case_nav = self._case_strip.navigator()
+        lay.addWidget(self._case_strip)
         grp = QGroupBox("输入参数")
+        self._input_group = grp
+        grp.setTitle("")
         fl = QVBoxLayout(grp)
         fl.setSpacing(5)
 
@@ -156,6 +183,14 @@ class CulvertPanel(QWidget):
         self._case_count_label = QLabel("1 个计算工况")
         self._case_count_label.setStyleSheet("font-size:11px;color:#999;")
         fl.addWidget(self._case_count_label)
+        self._case_tag_container.hide()
+        self._add_case_btn.hide()
+        self._case_count_label.hide()
+        self._case_nav = _CaseTagNavigator(parent=grp)
+        self._case_nav.add_requested.connect(self._add_case)
+        self._case_nav.case_switched.connect(self._switch_case)
+        self._case_nav.case_renamed.connect(self._on_case_renamed)
+        fl.addWidget(self._case_nav)
 
         # 工况管理行（与工况标签挂钩）
         _quick_row = QHBoxLayout()
@@ -179,6 +214,15 @@ class CulvertPanel(QWidget):
         self._del_case_btn.clicked.connect(self._remove_current_case)
         _quick_row.addWidget(self._del_case_btn)
         fl.addLayout(_quick_row)
+        self._case_tag_container.hide()
+        self._add_case_btn.hide()
+        self._case_count_label.hide()
+        self._case_nav.hide()
+        _copy_all_btn.hide()
+        _copy_prev_btn.hide()
+        self._del_case_btn.hide()
+        self._legacy_case_nav = self._case_nav
+        self._case_nav = self._case_strip.navigator()
 
         fl.addWidget(self._sep())
 
@@ -420,12 +464,12 @@ class CulvertPanel(QWidget):
         self._loading_case = False
 
     def _switch_case(self, idx):
-        if idx == self._current_case_idx:
-            return
-        self._save_current_case()
-        self._current_case_idx = idx
-        self._load_case(idx)
-        self._rebuild_case_tags()
+        if idx != self._current_case_idx:
+            self._save_current_case()
+            self._current_case_idx = idx
+            self._load_case(idx)
+            self._rebuild_case_tags()
+        self._jump_to_case_result(idx)
 
     def _add_case(self):
         if len(self._cases) >= MAX_CASES:
@@ -437,6 +481,7 @@ class CulvertPanel(QWidget):
         new_case['Q'] = ''
         new_case['custom_label'] = None
         self._cases.append(new_case)
+        self._mark_results_dirty()
         self._current_case_idx = len(self._cases) - 1
         self._load_case(self._current_case_idx)
         self._rebuild_case_tags()
@@ -449,6 +494,7 @@ class CulvertPanel(QWidget):
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
         idx = self._current_case_idx
+        self._mark_results_dirty()
         self._cases.pop(idx)
         if self._current_case_idx >= len(self._cases):
             self._current_case_idx = len(self._cases) - 1
@@ -459,6 +505,14 @@ class CulvertPanel(QWidget):
                         parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
 
     def _rebuild_case_tags(self):
+        if hasattr(self, '_case_strip'):
+            self._case_strip.sync_cases(self._cases, self._current_case_idx, self._case_view)
+            self._case_strip.set_remove_enabled(len(self._cases) > 1)
+            self._case_nav = self._case_strip.navigator()
+            return
+        if hasattr(self, '_case_nav'):
+            self._case_nav.sync_cases(self._cases, self._current_case_idx, self._case_view)
+            return
         if not hasattr(self, '_case_tag_flow'):
             return
         layout = self._case_tag_flow
@@ -478,6 +532,18 @@ class CulvertPanel(QWidget):
         self._case_count_label.setText(f"{n} 个计算工况")
         self._case_tag_container.updateGeometry()
         self._case_tag_container.update()
+
+    def _case_view(self, case, idx):
+        q_text = (case.get('Q', '') or '').strip() or '?'
+        custom = (case.get('custom_label') or '').strip()
+        label = f"{custom or '矩形暗涵'} · Q={q_text}"
+        return {
+            "label": label,
+            "tooltip": f"{label}\n设计流量 Q={q_text} m³/s",
+        }
+
+    def _case_label(self, case, idx):
+        return self._case_view(case, idx)["label"]
 
     def _auto_label(self, case, idx):
         q_text = (case.get('Q', '') or '').strip() or '?'
@@ -504,8 +570,96 @@ class CulvertPanel(QWidget):
             self._cases[self._current_case_idx]['Q'] = text
         self._rebuild_case_tags()
 
+    def _setup_result_dirty_tracking(self):
+        if not hasattr(self, "_input_group"):
+            return
+        for widget in self._input_group.findChildren(QWidget):
+            if hasattr(widget, "textChanged"):
+                try:
+                    widget.textChanged.connect(self._on_result_inputs_changed)
+                except Exception:
+                    pass
+            if hasattr(widget, "currentTextChanged"):
+                try:
+                    widget.currentTextChanged.connect(self._on_result_inputs_changed)
+                except Exception:
+                    pass
+            if hasattr(widget, "stateChanged"):
+                try:
+                    widget.stateChanged.connect(self._on_result_inputs_changed)
+                except Exception:
+                    pass
+
+    def _on_result_inputs_changed(self, *_args):
+        self._mark_results_dirty()
+
+    def _mark_results_dirty(self):
+        if self._loading_case:
+            return
+        if self._has_rendered_results or self._all_results:
+            self._results_dirty = True
+
+    def _mark_results_fresh(self):
+        self._results_dirty = False
+        self._has_rendered_results = bool(self._all_results)
+
+    def _show_result_jump_hint(self, stale=False):
+        content = (
+            "参数已变更，请先重新计算后查看对应工况结果。"
+            if stale else
+            "当前没有可定位的计算结果，请先完成计算。"
+        )
+        InfoBar.warning(
+            title="无法定位结果",
+            content=content,
+            parent=self._info_parent(),
+            position=InfoBarPosition.TOP,
+            duration=2500,
+        )
+
+    def _case_result_nav_label(self, case_idx):
+        if 0 <= case_idx < len(self._cases):
+            return self._case_label(self._cases[case_idx], case_idx)
+        return f"工况 {case_idx + 1}"
+
+    def _case_result_nav_summary(self, case_idx, params, result):
+        q_raw = params.get("Q", self._cases[case_idx].get("Q", ""))
+        try:
+            q_text = f"Q={float(q_raw):.3f}"
+        except Exception:
+            q_text = f"Q={str(q_raw).strip() or '?'}"
+        return "计算失败" if not result.get("success") else f"矩形暗涵 · {q_text}"
+
+    def _build_case_nav_items(self):
+        items = []
+        for case_idx, params, result in self._all_results:
+            items.append({
+                "anchor_id": make_case_result_anchor(self._panel_key, case_idx),
+                "label": self._case_result_nav_label(case_idx),
+                "summary": self._case_result_nav_summary(case_idx, params, result),
+                "is_error": not result.get("success"),
+            })
+        return items
+
+    def _jump_to_case_result(self, case_idx, *, defer_until_load=False):
+        if not self._all_results or not self._has_rendered_results:
+            self._show_result_jump_hint(stale=False)
+            return False
+        if self._results_dirty:
+            self._show_result_jump_hint(stale=True)
+            return False
+        self.notebook.setCurrentIndex(0)
+        return scroll_view_to_anchor(
+            self.result_text,
+            make_case_result_anchor(self._panel_key, case_idx),
+            highlight=True,
+            smooth=True,
+            defer_until_load=defer_until_load,
+        )
+
     def _apply_to_all_cases(self):
         self._save_current_case()
+        self._mark_results_dirty()
         src = self._cases[self._current_case_idx]
         keys = ('n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct',
                 'detail_checked', 'bh', 'hb', 'B')
@@ -527,6 +681,7 @@ class CulvertPanel(QWidget):
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
         self._save_current_case()
+        self._mark_results_dirty()
         prev = self._cases[self._current_case_idx - 1]
         curr = self._cases[self._current_case_idx]
         for k in ('n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct',
@@ -539,6 +694,20 @@ class CulvertPanel(QWidget):
     # ================================================================
     # 计算
     # ================================================================
+    def _prepare_calculation_run(self):
+        # Flush pending UI updates before reading the active case snapshot.
+        try:
+            QApplication.sendPostedEvents(None, 0)
+            QApplication.processEvents()
+        except Exception:
+            pass
+        self._save_current_case()
+        self._rebuild_case_tags()
+        self._all_results = []
+        self.current_result = None
+        self.input_params = {}
+        self._export_plain_text = ""
+
     def _parse_case(self, case, case_num):
         """解析单个工况数据，返回 (input_params, kwargs) 或抛异常"""
         def _fv(key, label, must_positive=True):
@@ -592,8 +761,7 @@ class CulvertPanel(QWidget):
         return input_params
 
     def _calculate(self):
-        self._save_current_case()
-        self._all_results = []
+        self._prepare_calculation_run()
         errors = []
 
         for i, case in enumerate(self._cases):
@@ -690,6 +858,66 @@ class CulvertPanel(QWidget):
 
         # 断面图：显示第一个成功结果（或当前工况）
         self._update_section_plot_all()
+
+    def _display_all_results_legacy(self):
+        """显示所有工况计算结果，并为多工况提供快捷定位。"""
+        _multi = len(self._all_results) > 1
+        all_plain_parts = []
+        all_html_parts = []
+
+        for case_idx, params, result in self._all_results:
+            if not result.get('success'):
+                q_raw = params.get('Q', '')
+                try:
+                    q_text = f"{float(q_raw):.3f} m³/s"
+                except Exception:
+                    q_text = "-"
+                plain = (
+                    f"【工况 {case_idx + 1}｜矩形暗涵｜Q = {q_text}】\n\n"
+                    f"计算失败：\n{result.get('error_message', '未知错误')}\n"
+                )
+                body_text = plain.split("\n\n", 1)[-1]
+                body_html = plain_text_to_formula_body(body_text)
+            else:
+                detail = self._cases[case_idx].get('detail_checked', True) if case_idx < len(self._cases) else True
+                txt = self._build_culvert_result_text(params, result, detail)
+                export_txt = self._build_culvert_result_text(
+                    params,
+                    result,
+                    detail,
+                    case_idx if _multi else None,
+                )
+                import re as _re
+                plain = _re.sub(
+                    r'\{\{HTML\}\}.*?\{\{/HTML\}\}',
+                    '{{NORM_TABLE_11_2_5}}',
+                    export_txt, flags=_re.DOTALL
+                )
+                body_html = plain_text_to_formula_body(txt)
+            all_plain_parts.append(plain)
+            all_html_parts.append(
+                wrap_case_result_block(
+                    self._panel_key,
+                    case_idx,
+                    f"工况 {case_idx + 1}",
+                    body_html,
+                    subtitle=self._case_result_nav_label(case_idx),
+                    is_error=not result.get("success"),
+                )
+            )
+
+        self._export_plain_text = "\n\n".join(all_plain_parts)
+        nav_html = build_result_nav_bar(self._build_case_nav_items())
+        combined_body = nav_html + "\n".join(all_html_parts)
+        combined_head = build_result_navigation_head()
+        load_formula_page(self.result_text, wrap_with_katex(combined_body, extra_head=combined_head))
+
+        self._mark_results_fresh()
+        self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
+        self._update_section_plot_all()
+
+    def _display_all_results(self):
+        return CulvertPanel._display_all_results_legacy(self)
 
     def _update_section_plot_all(self):
         """多工况断面图"""
@@ -1163,6 +1391,8 @@ class CulvertPanel(QWidget):
         self._cases = [self._default_case()]
         self._current_case_idx = 0
         self._all_results = []
+        self._results_dirty = False
+        self._has_rendered_results = False
         self._load_case(0)
         self._rebuild_case_tags()
         self._update_calc_btn_text()

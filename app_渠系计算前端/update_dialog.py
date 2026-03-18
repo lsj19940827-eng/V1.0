@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 应用内更新对话框
 
@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QTextEdit, QWidget, QSizePolicy, QApplication, QComboBox,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSettings
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont
 
 from version import APP_VERSION
@@ -33,17 +33,13 @@ class CheckUpdateThread(QThread):
     """后台检查远程版本"""
     finished = Signal(object)  # UpdateInfo or None
 
-    def __init__(self, parent=None, channel: str = "prod", allow_downgrade: bool = False):
+    def __init__(self, parent=None, allow_downgrade: bool = False):
         super().__init__(parent)
-        self.channel = channel
         self.allow_downgrade = allow_downgrade
 
     def run(self):
         from updater import check_for_update
-        info = check_for_update(
-            channel=self.channel,
-            allow_downgrade=self.allow_downgrade,
-        )
+        info = check_for_update(allow_downgrade=self.allow_downgrade)
         self.finished.emit(info)
 
 
@@ -105,17 +101,16 @@ class UpdateDialog(QDialog):
         self._download_thread = None
         self._active_channel = "prod"
         self._dl_start_time = 0.0      # 下载开始时间，用于速度计算
-        self._settings = QSettings("CanalHydraulicCalc", "Updater")
 
         self._init_ui()
 
         if info is not None:
-            if getattr(info, "requested_channel", "prod") == self._current_channel():
+            QTimer.singleShot(0, lambda: self._on_check_finished(info))
                 # 直接展示已有结果，不再发起网络请求
-                QTimer.singleShot(0, lambda: self._on_check_finished(info))
-            else:
+            # cached result reuse
+            # legacy channel cache path removed
                 # 缓存结果与当前通道不一致时，直接按当前通道重查
-                QTimer.singleShot(0, self._on_check)
+            # legacy re-check path removed
         elif auto_check:
             QTimer.singleShot(100, self._on_check)
 
@@ -143,18 +138,19 @@ class UpdateDialog(QDialog):
         self._channel_combo = QComboBox()
         self._channel_combo.setFixedWidth(220)
         self._channel_combo.addItem("正式（稳定）", "prod")
-        self._channel_combo.addItem("测试（预发布）", "test")
-        saved_channel = str(self._settings.value("update/channel", "prod"))
-        idx = 1 if saved_channel == "test" else 0
+        saved_channel = "prod"
+        idx = 0
         self._channel_combo.setCurrentIndex(idx)
         self._channel_combo.currentIndexChanged.connect(self._on_channel_changed)
+        self._channel_combo.setVisible(False)
         channel_layout.addWidget(self._channel_combo)
         channel_layout.addStretch()
-        layout.addLayout(channel_layout)
+        # channel layout intentionally hidden from end users
 
         self._channel_tip_label = QLabel("")
         self._channel_tip_label.setWordWrap(True)
         self._channel_tip_label.setStyleSheet("color: #E65100; font-size: 12px;")
+        self._channel_tip_label.setVisible(False)
         layout.addWidget(self._channel_tip_label)
         self._on_channel_changed()
 
@@ -268,14 +264,14 @@ class UpdateDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _current_channel(self) -> str:
-        channel = self._channel_combo.currentData()
-        if channel == "test":
+        channel = "prod"
+        if False:
             return "test"
         return "prod"
 
     def _on_channel_changed(self):
         channel = self._current_channel()
-        self._settings.setValue("update/channel", channel)
+        channel = "prod"
         if channel == "test":
             self._channel_tip_label.setText(
                 "⚠ 测试版可能不稳定，建议仅用于验证；如需稳定生产，请切回正式通道。"
@@ -325,10 +321,10 @@ class UpdateDialog(QDialog):
         self._reset_download_button()
         self._zip_path = None
         self._is_downgrade = False
-        self._active_channel = self._current_channel()
+        self._active_channel = "prod"
         self._btn_check.setEnabled(False)
         self._btn_check.setText("正在检查...")
-        channel_name = "测试通道" if self._active_channel == "test" else "正式通道"
+        channel_name = "正式通道"
         self._status_label.setText(f"正在连接{channel_name}服务器...")
         self._status_label.setStyleSheet("color: #1976D2; font-size: 12px;")
         self._info_text.clear()
@@ -337,8 +333,7 @@ class UpdateDialog(QDialog):
 
         self._check_thread = CheckUpdateThread(
             self,
-            channel=self._active_channel,
-            allow_downgrade=(self._active_channel == "prod"),
+            allow_downgrade=True,
         )
         self._check_thread.finished.connect(self._on_check_finished)
         self._check_thread.start()
@@ -350,12 +345,8 @@ class UpdateDialog(QDialog):
         if info is None:
             self._status_label.setText("⚠ 无法连接到更新服务器")
             self._status_label.setStyleSheet("color: #E65100; font-size: 12px;")
-            is_test_channel = (self._active_channel == "test")
-            channel_hint = (
-                "测试通道未配置或暂不可用。\n"
-                if is_test_channel else
-                ""
-            )
+            is_test_channel = False
+            channel_hint = ""
             self._info_text.setPlainText(
                 "检查更新失败，可能的原因：\n\n"
                 "1. 网络未连接\n"
@@ -367,7 +358,7 @@ class UpdateDialog(QDialog):
             return
 
         self._update_info = info
-        self._active_channel = getattr(info, "requested_channel", self._active_channel)
+        self._active_channel = "prod"
         self._is_downgrade = bool(info.allow_downgrade and info.can_offer_downgrade)
 
         if info.is_newer_than_local:
@@ -437,10 +428,7 @@ class UpdateDialog(QDialog):
             self._btn_download.setText(self._download_button_text())
             self._btn_download.setVisible(True)
         else:
-            if self._active_channel == "test":
-                self._status_label.setText("✅ 当前测试通道已是最新")
-            else:
-                self._status_label.setText("✅ 已是最新版本")
+            self._status_label.setText("✅ 已是最新版本")
             self._status_label.setStyleSheet(
                 "color: #388E3C; font-weight: bold; font-size: 12px;"
             )
@@ -663,10 +651,11 @@ class SilentUpdateChecker(CheckUpdateThread):
     """
     update_available = Signal(object)  # UpdateInfo
 
-    def __init__(self, parent=None, channel: str = "prod"):
-        super().__init__(parent, channel=channel, allow_downgrade=False)
+    def __init__(self, parent=None):
+        super().__init__(parent, allow_downgrade=False)
         self.finished.connect(self._handle_result)
 
     def _handle_result(self, info):
         if info is not None and info.has_update:
             self.update_available.emit(info)
+

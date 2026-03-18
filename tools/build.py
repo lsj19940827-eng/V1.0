@@ -392,7 +392,7 @@ def build(bump: str = None):
             args.append(f"--add-data={_fpath}{sep}data")
 
     data_entries = [
-        # UI 图标与 Logo
+        # UI 图标、Logo 与本地化网页静态资源（含 Tabulator）
         (os.path.join(PROJECT_ROOT, "app_渠系计算前端", "resources"),
          os.path.join("app_渠系计算前端", "resources")),
         (os.path.join(PROJECT_ROOT, "倒虹吸水力计算系统", "resources"),

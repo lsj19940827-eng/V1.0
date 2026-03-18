@@ -213,6 +213,7 @@ class WaterProfileCalculator:
         # 从表格正确读回，不可再调用 calculate_geometry（会因 in_out 已为 INLET/OUTLET
         # 而将这些节点的 T/L 重置为0，导致所有下游 station_MC 错误偏移）。
         # 只需为新插入的自动明渠段节点补算 straight_distance，再统一推算桩号即可。
+        # 自动明渠/连接段仅在原区间内部落位，不参与真实IP累计，不能改变下游原始节点桩号。
         self._compute_auto_channel_distances(nodes)
         start_station = nodes[0].station_MC if nodes else 0.0
         self.geo_calc.calculate_stations(nodes, start_station)

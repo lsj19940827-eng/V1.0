@@ -19,10 +19,10 @@ sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea,
-    QPushButton,
+    QPushButton, QApplication,
 )
 from PySide6.QtCore import Qt, Signal
-from app_渠系计算前端.webview_compat import create_web_view
+from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
 
 from qfluentwidgets import (
     ComboBox, PushButton, PrimaryPushButton, LineEdit,
@@ -70,11 +70,20 @@ from app_渠系计算前端.case_manager import (
     CASE_TAG_ACTIVE_SS as _CASE_TAG_ACTIVE_SS,
     CASE_TAG_INACTIVE_SS as _CASE_TAG_INACTIVE_SS,
     CASE_QUICK_SS as _CASE_QUICK_SS,
+    CaseTagNavigator as _CaseTagNavigator,
+    CaseWorkbenchStrip as _CaseWorkbenchStrip,
 )
 from app_渠系计算前端.tunnel.dxf_export import export_tunnel_dxf
 from app_渠系计算前端.formula_renderer import (
-    plain_text_to_formula_html, load_formula_page, make_plain_html,
+    plain_text_to_formula_html, plain_text_to_formula_body, wrap_with_katex,
+    load_formula_page, make_plain_html,
     HelpPageBuilder
+)
+from app_渠系计算前端.result_navigation import (
+    build_result_nav_bar,
+    build_result_navigation_head,
+    make_case_result_anchor,
+    wrap_case_result_block,
 )
 if WORD_EXPORT_AVAILABLE:
     from docx import Document as DocxDocument
@@ -99,7 +108,11 @@ class TunnelPanel(QWidget):
         self._current_case_idx = 0
         self._all_results = []
         self._loading_case = False
+        self._panel_key = "tunnel"
+        self._results_dirty = False
+        self._has_rendered_results = False
         self._init_ui()
+        self._setup_result_dirty_tracking()
         self._rebuild_case_tags()
 
     # ================================================================
@@ -153,7 +166,21 @@ class TunnelPanel(QWidget):
         lay = QVBoxLayout(parent)
         lay.setContentsMargins(5, 5, 5, 5)
         lay.setSpacing(6)
+        self._input_title = QLabel("输入参数")
+        self._input_title.setStyleSheet("font-size:18px;font-weight:700;color:#0E5DB8;padding:0 2px 2px 2px;")
+        lay.addWidget(self._input_title)
+        self._case_strip = _CaseWorkbenchStrip(parent)
+        self._case_strip.add_requested.connect(self._add_case)
+        self._case_strip.case_switched.connect(self._switch_case)
+        self._case_strip.case_renamed.connect(self._on_case_renamed)
+        self._case_strip.apply_to_all_requested.connect(self._apply_to_all_cases)
+        self._case_strip.copy_from_prev_requested.connect(self._copy_from_prev_case)
+        self._case_strip.remove_current_requested.connect(self._remove_current_case)
+        self._case_nav = self._case_strip.navigator()
+        lay.addWidget(self._case_strip)
         grp = QGroupBox("输入参数")
+        self._input_group = grp
+        grp.setTitle("")
         fl = QVBoxLayout(grp)
         fl.setSpacing(5)
 
@@ -173,6 +200,14 @@ class TunnelPanel(QWidget):
         self._case_count_label = QLabel("1 个计算工况")
         self._case_count_label.setStyleSheet("font-size:11px;color:#999;")
         fl.addWidget(self._case_count_label)
+        self._case_tag_container.hide()
+        self._add_case_btn.hide()
+        self._case_count_label.hide()
+        self._case_nav = _CaseTagNavigator(parent=grp)
+        self._case_nav.add_requested.connect(self._add_case)
+        self._case_nav.case_switched.connect(self._switch_case)
+        self._case_nav.case_renamed.connect(self._on_case_renamed)
+        fl.addWidget(self._case_nav)
 
         # 工况管理行（与工况标签挂钩）
         _quick_row = QHBoxLayout()
@@ -196,6 +231,15 @@ class TunnelPanel(QWidget):
         self._del_case_btn.clicked.connect(self._remove_current_case)
         _quick_row.addWidget(self._del_case_btn)
         fl.addLayout(_quick_row)
+        self._case_tag_container.hide()
+        self._add_case_btn.hide()
+        self._case_count_label.hide()
+        self._case_nav.hide()
+        _copy_all_btn.hide()
+        _copy_prev_btn.hide()
+        self._del_case_btn.hide()
+        self._legacy_case_nav = self._case_nav
+        self._case_nav = self._case_strip.navigator()
 
         fl.addWidget(self._sep())
 
@@ -397,13 +441,13 @@ class TunnelPanel(QWidget):
         self._loading_case = False
 
     def _switch_case(self, idx):
-        if idx == self._current_case_idx:
-            return
-        self._save_current_case()
-        self._current_case_idx = idx
-        self._load_case(idx)
-        self._rebuild_case_tags()
-        self._update_calc_btn_text()
+        if idx != self._current_case_idx:
+            self._save_current_case()
+            self._current_case_idx = idx
+            self._load_case(idx)
+            self._rebuild_case_tags()
+            self._update_calc_btn_text()
+        self._jump_to_case_result(idx)
 
     def _add_case(self):
         if len(self._cases) >= MAX_CASES:
@@ -415,6 +459,7 @@ class TunnelPanel(QWidget):
         new_case['Q'] = ''
         new_case['custom_label'] = None
         self._cases.append(new_case)
+        self._mark_results_dirty()
         self._current_case_idx = len(self._cases) - 1
         self._load_case(self._current_case_idx)
         self._rebuild_case_tags()
@@ -427,6 +472,7 @@ class TunnelPanel(QWidget):
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
         idx = self._current_case_idx
+        self._mark_results_dirty()
         self._cases.pop(idx)
         if self._current_case_idx >= len(self._cases):
             self._current_case_idx = len(self._cases) - 1
@@ -437,6 +483,14 @@ class TunnelPanel(QWidget):
                         parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
 
     def _rebuild_case_tags(self):
+        if hasattr(self, '_case_strip'):
+            self._case_strip.sync_cases(self._cases, self._current_case_idx, self._case_view)
+            self._case_strip.set_remove_enabled(len(self._cases) > 1)
+            self._case_nav = self._case_strip.navigator()
+            return
+        if hasattr(self, '_case_nav'):
+            self._case_nav.sync_cases(self._cases, self._current_case_idx, self._case_view)
+            return
         if not hasattr(self, '_case_tag_flow'):
             return
         layout = self._case_tag_flow
@@ -456,6 +510,19 @@ class TunnelPanel(QWidget):
         self._case_count_label.setText(f"{n} 个计算工况")
         self._case_tag_container.updateGeometry()
         self._case_tag_container.update()
+
+    def _case_view(self, case, idx):
+        stype = case.get('section_type', '圆形')
+        q_text = (case.get('Q', '') or '').strip() or '?'
+        custom = (case.get('custom_label') or '').strip()
+        label = f"{custom or stype} · Q={q_text}"
+        return {
+            "label": label,
+            "tooltip": f"{label}\n断面类型：{stype}\n设计流量 Q={q_text} m³/s",
+        }
+
+    def _case_label(self, case, idx):
+        return self._case_view(case, idx)["label"]
 
     def _auto_label(self, case, idx):
         stype = case.get('section_type', '圆形')
@@ -483,8 +550,101 @@ class TunnelPanel(QWidget):
             self._cases[self._current_case_idx]['Q'] = text
         self._rebuild_case_tags()
 
+    def _setup_result_dirty_tracking(self):
+        if not hasattr(self, "_input_group"):
+            return
+        for widget in self._input_group.findChildren(QWidget):
+            if hasattr(widget, "textChanged"):
+                try:
+                    widget.textChanged.connect(self._on_result_inputs_changed)
+                except Exception:
+                    pass
+            if hasattr(widget, "currentTextChanged"):
+                try:
+                    widget.currentTextChanged.connect(self._on_result_inputs_changed)
+                except Exception:
+                    pass
+            if hasattr(widget, "stateChanged"):
+                try:
+                    widget.stateChanged.connect(self._on_result_inputs_changed)
+                except Exception:
+                    pass
+
+    def _on_result_inputs_changed(self, *_args):
+        self._mark_results_dirty()
+
+    def _mark_results_dirty(self):
+        if self._loading_case:
+            return
+        if self._has_rendered_results or self._all_results:
+            self._results_dirty = True
+
+    def _mark_results_fresh(self):
+        self._results_dirty = False
+        self._has_rendered_results = bool(self._all_results)
+
+    def _show_result_jump_hint(self, stale=False):
+        content = (
+            "参数已变更，请先重新计算后查看对应工况结果。"
+            if stale else
+            "当前没有可定位的计算结果，请先完成计算。"
+        )
+        InfoBar.warning(
+            title="无法定位结果",
+            content=content,
+            parent=self._info_parent(),
+            position=InfoBarPosition.TOP,
+            duration=2500,
+        )
+
+    def _case_result_nav_label(self, case_idx):
+        if 0 <= case_idx < len(self._cases):
+            return self._case_label(self._cases[case_idx], case_idx)
+        return f"工况 {case_idx + 1}"
+
+    def _case_result_nav_summary(self, case_idx, item):
+        inp = item.get("input") or {}
+        case = item.get("case") or {}
+        res = item.get("result") or {}
+        stype = inp.get("section_type") or case.get("section_type", "圆形")
+        q_raw = inp.get("Q", case.get("Q", ""))
+        try:
+            q_text = f"Q={float(q_raw):.3f}"
+        except Exception:
+            q_text = f"Q={str(q_raw).strip() or '?'}"
+        return "计算失败" if not res.get("success") else f"{stype} · {q_text}"
+
+    def _build_case_nav_items(self):
+        items = []
+        for case_idx, item in enumerate(self._all_results):
+            result = item.get("result") or {}
+            items.append({
+                "anchor_id": make_case_result_anchor(self._panel_key, case_idx),
+                "label": self._case_result_nav_label(case_idx),
+                "summary": self._case_result_nav_summary(case_idx, item),
+                "is_error": not result.get("success"),
+            })
+        return items
+
+    def _jump_to_case_result(self, case_idx, *, defer_until_load=False):
+        if not self._all_results or not self._has_rendered_results:
+            self._show_result_jump_hint(stale=False)
+            return False
+        if self._results_dirty:
+            self._show_result_jump_hint(stale=True)
+            return False
+        self.notebook.setCurrentIndex(0)
+        return scroll_view_to_anchor(
+            self.result_text,
+            make_case_result_anchor(self._panel_key, case_idx),
+            highlight=True,
+            smooth=True,
+            defer_until_load=defer_until_load,
+        )
+
     def _apply_to_all_cases(self):
         self._save_current_case()
+        self._mark_results_dirty()
         src = self._cases[self._current_case_idx]
         n_copied = len(self._cases) - 1
         if n_copied == 0:
@@ -510,6 +670,7 @@ class TunnelPanel(QWidget):
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
         self._save_current_case()
+        self._mark_results_dirty()
         prev = self._cases[self._current_case_idx - 1]
         cur = self._cases[self._current_case_idx]
         if prev.get('section_type') == cur.get('section_type'):
@@ -586,21 +747,40 @@ class TunnelPanel(QWidget):
     # ================================================================
     # 计算
     # ================================================================
-    def _parse_and_calc_case(self, case_dict):
-        """解析单个工况并计算，返回 (input_params, result) 或抛出异常"""
-        stype = case_dict.get('section_type', '圆形')
-        Q = float(case_dict.get('Q') or 0)
-        n = float(case_dict.get('n') or 0)
-        slope_inv = float(case_dict.get('slope_inv') or 0)
-        v_min = float(case_dict.get('v_min') or 0)
-        v_max = float(case_dict.get('v_max') or 0)
+    def _prepare_calculation_run(self):
+        # Flush pending UI updates before reading the active case snapshot.
+        try:
+            QApplication.sendPostedEvents(None, 0)
+            QApplication.processEvents()
+        except Exception:
+            pass
+        self._save_current_case()
+        self._rebuild_case_tags()
+        self._all_results = []
+        self.current_result = None
+        self.input_params = {}
+        self._export_plain_text = ""
 
-        if Q <= 0:
-            raise ValueError("设计流量 Q 必须大于0")
-        if n <= 0:
-            raise ValueError("糙率 n 必须大于0")
-        if slope_inv <= 0:
-            raise ValueError("水力坡降倒数必须大于0")
+    def _parse_and_calc_case(self, case_dict, case_num):
+        """解析单个工况并计算，返回 (input_params, result) 或抛出异常"""
+        def _required_float(key, label, must_positive=True):
+            text = (case_dict.get(key, "") or "").strip()
+            if not text:
+                raise ValueError(f"工况{case_num}: 请输入{label}")
+            try:
+                value = float(text)
+            except ValueError as exc:
+                raise ValueError(f"工况{case_num}: {label}输入无效") from exc
+            if must_positive and value <= 0:
+                raise ValueError(f"工况{case_num}: {label}必须大于0")
+            return value
+
+        stype = case_dict.get('section_type', '圆形')
+        Q = _required_float('Q', '设计流量 Q')
+        n = _required_float('n', '糙率 n')
+        slope_inv = _required_float('slope_inv', '水力坡降倒数')
+        v_min = _required_float('v_min', '不淤流速', must_positive=False)
+        v_max = _required_float('v_max', '不冲流速', must_positive=False)
         if v_min >= v_max:
             raise ValueError("不淤流速必须小于不冲流速")
 
@@ -658,14 +838,13 @@ class TunnelPanel(QWidget):
         return input_params, result
 
     def _calculate(self):
-        self._save_current_case()
-        self._all_results = []
+        self._prepare_calculation_run()
         error_msgs = []
 
         for i, c in enumerate(self._cases):
             label = c.get('custom_label') or self._auto_label(c, i)
             try:
-                inp, res = self._parse_and_calc_case(c)
+                inp, res = self._parse_and_calc_case(c, i + 1)
                 self._all_results.append({'label': label, 'input': inp, 'result': res, 'case': c})
                 if not res.get('success'):
                     error_msgs.append(f"[{label}] {res.get('error_message', '未知错误')}")
@@ -698,7 +877,7 @@ class TunnelPanel(QWidget):
     # ================================================================
     # 结果显示
     # ================================================================
-    def _display_all_results(self):
+    def _display_all_results_legacy(self):
         """显示所有工况的计算结果"""
         all_text_parts = []
         for case_idx, item in enumerate(self._all_results):
@@ -736,6 +915,65 @@ class TunnelPanel(QWidget):
         combined = "\n".join(all_text_parts)
         self._export_plain_text = combined
         load_formula_page(self.result_text, plain_text_to_formula_html(combined))
+
+    def _display_all_results_legacy(self):
+        """显示所有工况的计算结果，并在多工况时生成顶部导航。"""
+        _multi = len(self._all_results) > 1
+        all_text_parts = []
+        all_html_parts = []
+
+        for case_idx, item in enumerate(self._all_results):
+            inp = item.get('input')
+            res = item.get('result') or {}
+            case = item.get('case') or {}
+            stype = (inp or {}).get('section_type', case.get('section_type', '圆形'))
+            q_raw = (inp or {}).get('Q', case.get('Q', ''))
+            try:
+                q_text = f"{float(q_raw):.3f}"
+            except Exception:
+                q_text = (str(q_raw).strip() or '-')
+            header = f"【工况 {case_idx + 1}｜{stype}断面｜Q = {q_text} m³/s】"
+            if not res:
+                continue
+            if not res.get('success'):
+                plain = f"{header}\n\n计算失败：{res.get('error_message', '未知错误')}\n"
+                body_text = plain.split("\n\n", 1)[-1]
+                body_html = plain_text_to_formula_body(body_text)
+            else:
+                self.input_params = inp
+                detail = inp.get('detail_checked', True)
+                if stype == "圆形":
+                    type_label = "圆形"
+                elif stype == "圆拱直墙型":
+                    type_label = "圆拱直墙型"
+                else:
+                    type_label = res.get('section_type', '马蹄形')
+                txt = self._build_result_text(res, type_label, detail, inp)
+                plain = header + "\n\n" + txt
+                body_html = plain_text_to_formula_body(txt)
+            all_text_parts.append(plain)
+            all_html_parts.append(
+                wrap_case_result_block(
+                    self._panel_key,
+                    case_idx,
+                    f"工况 {case_idx + 1}",
+                    body_html,
+                    subtitle=self._case_result_nav_label(case_idx),
+                    is_error=not res.get("success"),
+                )
+            )
+
+        self._export_plain_text = "\n".join(all_text_parts)
+        nav_html = build_result_nav_bar(self._build_case_nav_items())
+        combined_body = nav_html + "\n".join(all_html_parts)
+        combined_head = build_result_navigation_head()
+        load_formula_page(self.result_text, wrap_with_katex(combined_body, extra_head=combined_head))
+
+        self._mark_results_fresh()
+        self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
+
+    def _display_all_results(self):
+        return TunnelPanel._display_all_results_legacy(self)
 
     def _build_result_text(self, result, type_label, detail, p):
         """构建单个工况的结果文本（从_show_result提取）"""
@@ -1521,6 +1759,8 @@ class TunnelPanel(QWidget):
         self._cases = [self._default_case()]
         self._current_case_idx = 0
         self._all_results = []
+        self._results_dirty = False
+        self._has_rendered_results = False
         self._load_case(0)
         self._rebuild_case_tags()
         self._update_calc_btn_text()

@@ -38,7 +38,6 @@ from typing import Optional, Callable
 from version import APP_VERSION, APP_NAME_EN
 from repo_config import (
     GITHUB_VERSION_URL as _GITHUB_VERSION_URL,
-    GITHUB_VERSION_URL_TEST as _GITHUB_VERSION_URL_TEST,
     DOWNLOAD_PROXIES as _DOWNLOAD_PROXIES,
 )
 
@@ -104,7 +103,6 @@ class UpdateInfo:
         self.min_patch_version: str = data.get("min_patch_version", "")
         self.download_url_proxy: str = data.get("download_url_proxy", "")
         self.patch_url_proxy: str = data.get("patch_url_proxy", "")
-        self.requested_channel: str = "prod"
         self.allow_downgrade: bool = False
         # 兼容旧版 version.json 中的 patch_base_version 字段
         if not self.min_patch_version:
@@ -130,8 +128,7 @@ class UpdateInfo:
         - 存在可下载全量包
         """
         return (
-            self.requested_channel == "prod"
-            and self.is_older_than_local
+            self.is_older_than_local
             and bool(self.download_url)
         )
 
@@ -179,33 +176,16 @@ def _check_remote(url: str, source_name: str) -> Optional[UpdateInfo]:
         return None
 
 
-def _normalize_channel(channel: str) -> str:
-    if str(channel).lower().strip() == "test":
-        return "test"
-    return "prod"
-
-
-def _get_version_url(channel: str) -> str:
-    channel = _normalize_channel(channel)
-    if channel == "test":
-        return _GITHUB_VERSION_URL_TEST
-    return _GITHUB_VERSION_URL
-
-
-def check_for_update(channel: str = "prod", allow_downgrade: bool = False) -> Optional[UpdateInfo]:
+def check_for_update(allow_downgrade: bool = False) -> Optional[UpdateInfo]:
     """
     Check updates from GitHub.
     Args:
-        channel: prod | test
         allow_downgrade: 是否允许在正式通道提供降级入口
     Returns:
         UpdateInfo or None
     """
-    selected_channel = _normalize_channel(channel)
-    source = f"github:{selected_channel}"
-    info = _check_remote(_get_version_url(selected_channel), source)
+    info = _check_remote(_GITHUB_VERSION_URL, "github:prod")
     if info is not None:
-        info.requested_channel = selected_channel
         info.allow_downgrade = bool(allow_downgrade)
         return info
 

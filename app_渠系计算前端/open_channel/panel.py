@@ -11,7 +11,9 @@ import os
 import math
 import re
 import copy
+import json
 import html as html_mod
+from pathlib import Path
 
 # 将计算模块目录加入搜索路径
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,11 +22,17 @@ sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QFileDialog, QScrollArea,
-    QPushButton,
+    QPushButton, QApplication,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont
-from app_渠系计算前端.webview_compat import create_web_view
+from app_渠系计算前端.webview_compat import (
+    create_web_view,
+    get_web_engine_import_error,
+    run_view_javascript,
+    scroll_view_to_anchor,
+    view_supports_scripted_html,
+)
 
 from qfluentwidgets import (
     ComboBox, PushButton, PrimaryPushButton, LineEdit,
@@ -40,6 +48,8 @@ from app_渠系计算前端.case_manager import (
     CASE_TAG_ACTIVE_SS as _CASE_TAG_ACTIVE_SS,
     CASE_TAG_INACTIVE_SS as _CASE_TAG_INACTIVE_SS,
     CASE_QUICK_SS as _CASE_QUICK_SS,
+    CaseTagNavigator as _CaseTagNavigator,
+    CaseWorkbenchStrip as _CaseWorkbenchStrip,
 )
 
 import matplotlib
@@ -69,7 +79,7 @@ from 明渠设计 import (
 )
 
 # 共享模块
-from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, AE_CSS, INPUT_LABEL_STYLE, INPUT_SECTION_STYLE, INPUT_HINT_STYLE
+from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPUT_LABEL_STYLE, INPUT_SECTION_STYLE, INPUT_HINT_STYLE
 from app_渠系计算前端.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_h2,
@@ -82,10 +92,26 @@ from app_渠系计算前端.report_meta import (
     ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
 from app_渠系计算前端.open_channel.dxf_export import export_open_channel_dxf
+from app_渠系计算前端.open_channel.appendix_e_table import (
+    appendix_e_probe_script,
+    appendix_e_shared_head_html,
+    appendix_e_tabulator_head_html,
+    build_appendix_e_error_body,
+    build_appendix_e_qt_compatible_body,
+    build_appendix_e_static_body,
+    build_appendix_e_tabulator_body,
+    make_appendix_e_payload,
+)
 from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, plain_text_to_formula_body,
     wrap_with_katex, load_formula_page, make_plain_html,
     HelpPageBuilder
+)
+from app_渠系计算前端.result_navigation import (
+    build_result_nav_bar,
+    build_result_navigation_head,
+    make_case_result_anchor,
+    wrap_case_result_block,
 )
 if WORD_EXPORT_AVAILABLE:
     from docx import Document as DocxDocument
@@ -107,12 +133,20 @@ class OpenChannelPanel(QWidget):
         self.current_result = None
         self._appendix_e_export_text = ""
         self._export_plain_text = ""
+        self._scripted_render_token = 0
+        self._scripted_load_probe_handler = None
+        self._captured_render_body = ""
+        self._captured_render_head = ""
         self._cases = [self._default_case()]
         self._current_case_idx = 0
         self._all_results = []          # [(case_idx, input_params, result), ...]
         self._loading_case = False
         self._suppress_result_render = False
+        self._panel_key = "open-channel"
+        self._results_dirty = False
+        self._has_rendered_results = False
         self._init_ui()
+        self._setup_result_dirty_tracking()
         self._rebuild_case_tags()
 
     # ================================================================
@@ -151,7 +185,21 @@ class OpenChannelPanel(QWidget):
         lay = QVBoxLayout(parent)
         lay.setContentsMargins(5, 5, 5, 5)
         lay.setSpacing(6)
+        self._input_title = QLabel("输入参数")
+        self._input_title.setStyleSheet("font-size:18px;font-weight:700;color:#0E5DB8;padding:0 2px 2px 2px;")
+        lay.addWidget(self._input_title)
+        self._case_strip = _CaseWorkbenchStrip(parent)
+        self._case_strip.add_requested.connect(self._add_case)
+        self._case_strip.case_switched.connect(self._switch_case)
+        self._case_strip.case_renamed.connect(self._on_case_renamed)
+        self._case_strip.apply_to_all_requested.connect(self._apply_to_all_cases)
+        self._case_strip.copy_from_prev_requested.connect(self._copy_from_prev_case)
+        self._case_strip.remove_current_requested.connect(self._remove_current_case)
+        self._case_nav = self._case_strip.navigator()
+        lay.addWidget(self._case_strip)
         grp = QGroupBox("输入参数")
+        self._input_group = grp
+        grp.setTitle("")
         fl = QVBoxLayout(grp)
         fl.setSpacing(5)
 
@@ -171,6 +219,14 @@ class OpenChannelPanel(QWidget):
         self._case_count_label = QLabel("1 个计算工况")
         self._case_count_label.setStyleSheet("font-size:11px;color:#999;")
         fl.addWidget(self._case_count_label)
+        self._case_tag_container.hide()
+        self._add_case_btn.hide()
+        self._case_count_label.hide()
+        self._case_nav = _CaseTagNavigator(parent=grp)
+        self._case_nav.add_requested.connect(self._add_case)
+        self._case_nav.case_switched.connect(self._switch_case)
+        self._case_nav.case_renamed.connect(self._on_case_renamed)
+        fl.addWidget(self._case_nav)
 
         # 工况管理行（与工况标签挂钩）
         _quick_row = QHBoxLayout()
@@ -194,6 +250,15 @@ class OpenChannelPanel(QWidget):
         self._del_case_btn.clicked.connect(self._remove_current_case)
         _quick_row.addWidget(self._del_case_btn)
         fl.addLayout(_quick_row)
+        self._case_tag_container.hide()
+        self._add_case_btn.hide()
+        self._case_count_label.hide()
+        self._case_nav.hide()
+        _copy_all_btn.hide()
+        _copy_prev_btn.hide()
+        self._del_case_btn.hide()
+        self._legacy_case_nav = self._case_nav
+        self._case_nav = self._case_strip.navigator()
 
         fl.addWidget(self._sep())
 
@@ -354,6 +419,94 @@ class OpenChannelPanel(QWidget):
             self._cases[self._current_case_idx]['section_type'] = stype
         self._rebuild_case_tags()
 
+    def _setup_result_dirty_tracking(self):
+        if not hasattr(self, "_input_group"):
+            return
+        for widget in self._input_group.findChildren(QWidget):
+            if hasattr(widget, "textChanged"):
+                try:
+                    widget.textChanged.connect(self._on_result_inputs_changed)
+                except Exception:
+                    pass
+            if hasattr(widget, "currentTextChanged"):
+                try:
+                    widget.currentTextChanged.connect(self._on_result_inputs_changed)
+                except Exception:
+                    pass
+            if hasattr(widget, "stateChanged"):
+                try:
+                    widget.stateChanged.connect(self._on_result_inputs_changed)
+                except Exception:
+                    pass
+
+    def _on_result_inputs_changed(self, *_args):
+        self._mark_results_dirty()
+
+    def _mark_results_dirty(self):
+        if self._loading_case:
+            return
+        if self._has_rendered_results or self._all_results:
+            self._results_dirty = True
+
+    def _mark_results_fresh(self):
+        self._results_dirty = False
+        self._has_rendered_results = bool(self._all_results)
+
+    def _show_result_jump_hint(self, stale=False):
+        content = (
+            "参数已变更，请先重新计算后查看对应工况结果。"
+            if stale else
+            "当前没有可定位的计算结果，请先完成计算。"
+        )
+        InfoBar.warning(
+            title="无法定位结果",
+            content=content,
+            parent=self._info_parent(),
+            position=InfoBarPosition.TOP,
+            duration=2500,
+        )
+
+    def _case_result_nav_label(self, case_idx):
+        if 0 <= case_idx < len(self._cases):
+            return self._case_label(self._cases[case_idx], case_idx)
+        return f"工况 {case_idx + 1}"
+
+    def _case_result_nav_summary(self, case_idx, params, result):
+        stype = params.get("section_type") or self._cases[case_idx].get("section_type", "梯形")
+        q_raw = params.get("Q", self._cases[case_idx].get("Q", ""))
+        try:
+            q_text = f"Q={float(q_raw):.3f}"
+        except Exception:
+            q_text = f"Q={str(q_raw).strip() or '?'}"
+        return f"{stype} · {'计算失败' if not result.get('success') else q_text}"
+
+    def _build_case_nav_items(self):
+        items = []
+        for case_idx, params, result in self._all_results:
+            items.append({
+                "anchor_id": make_case_result_anchor(self._panel_key, case_idx),
+                "label": self._case_result_nav_label(case_idx),
+                "summary": self._case_result_nav_summary(case_idx, params, result),
+                "is_error": not result.get("success"),
+            })
+        return items
+
+    def _jump_to_case_result(self, case_idx, *, defer_until_load=False):
+        if not self._all_results or not self._has_rendered_results:
+            self._show_result_jump_hint(stale=False)
+            return False
+        if self._results_dirty:
+            self._show_result_jump_hint(stale=True)
+            return False
+        self.notebook.setCurrentIndex(0)
+        return scroll_view_to_anchor(
+            self.result_text,
+            make_case_result_anchor(self._panel_key, case_idx),
+            highlight=True,
+            smooth=True,
+            defer_until_load=defer_until_load,
+        )
+
     # ----------------------------------------------------------------
     # 初始帮助
     # ----------------------------------------------------------------
@@ -502,12 +655,12 @@ class OpenChannelPanel(QWidget):
         self._loading_case = False
 
     def _switch_case(self, idx):
-        if idx == self._current_case_idx:
-            return
-        self._save_current_case()
-        self._current_case_idx = idx
-        self._load_case(idx)
-        self._rebuild_case_tags()
+        if idx != self._current_case_idx:
+            self._save_current_case()
+            self._current_case_idx = idx
+            self._load_case(idx)
+            self._rebuild_case_tags()
+        self._jump_to_case_result(idx)
 
     def _add_case(self):
         if len(self._cases) >= MAX_CASES:
@@ -515,6 +668,7 @@ class OpenChannelPanel(QWidget):
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
         self._save_current_case()
+        self._mark_results_dirty()
         new_case = copy.deepcopy(self._cases[self._current_case_idx])
         new_case['Q'] = ''
         new_case['custom_label'] = None
@@ -530,6 +684,7 @@ class OpenChannelPanel(QWidget):
             InfoBar.warning(title="提示", content="至少保留一个工况",
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
+        self._mark_results_dirty()
         idx = self._current_case_idx
         self._cases.pop(idx)
         if self._current_case_idx >= len(self._cases):
@@ -541,6 +696,14 @@ class OpenChannelPanel(QWidget):
                         parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
 
     def _rebuild_case_tags(self):
+        if hasattr(self, '_case_strip'):
+            self._case_strip.sync_cases(self._cases, self._current_case_idx, self._case_view)
+            self._case_strip.set_remove_enabled(len(self._cases) > 1)
+            self._case_nav = self._case_strip.navigator()
+            return
+        if hasattr(self, '_case_nav'):
+            self._case_nav.sync_cases(self._cases, self._current_case_idx, self._case_view)
+            return
         if not hasattr(self, '_case_tag_flow'):
             return
         layout = self._case_tag_flow
@@ -560,6 +723,19 @@ class OpenChannelPanel(QWidget):
         self._case_count_label.setText(f"{n} 个计算工况")
         self._case_tag_container.updateGeometry()
         self._case_tag_container.update()
+
+    def _case_view(self, case, idx):
+        stype = case.get('section_type', '梯形')
+        q_text = (case.get('Q', '') or '').strip() or '?'
+        custom = (case.get('custom_label') or '').strip()
+        label = f"{custom or stype} · Q={q_text}"
+        return {
+            "label": label,
+            "tooltip": f"{label}\n断面类型：{stype}\n设计流量 Q={q_text} m³/s",
+        }
+
+    def _case_label(self, case, idx):
+        return self._case_view(case, idx)["label"]
 
     def _auto_label(self, case, idx):
         stype = case.get('section_type', '梯形')
@@ -589,6 +765,7 @@ class OpenChannelPanel(QWidget):
 
     def _apply_to_all_cases(self):
         self._save_current_case()
+        self._mark_results_dirty()
         src = self._cases[self._current_case_idx]
         keys = ('section_type', 'm', 'n', 'slope_inv', 'v_min', 'v_max',
                 'inc_checked', 'inc_pct', 'detail_checked',
@@ -611,6 +788,7 @@ class OpenChannelPanel(QWidget):
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
         self._save_current_case()
+        self._mark_results_dirty()
         prev = self._cases[self._current_case_idx - 1]
         curr = self._cases[self._current_case_idx]
         for k in ('section_type', 'm', 'n', 'slope_inv', 'v_min', 'v_max',
@@ -624,6 +802,20 @@ class OpenChannelPanel(QWidget):
     # ================================================================
     # 计算
     # ================================================================
+    def _prepare_calculation_run(self):
+        # Flush pending UI updates before reading the active case snapshot.
+        try:
+            QApplication.sendPostedEvents(None, 0)
+            QApplication.processEvents()
+        except Exception:
+            pass
+        self._save_current_case()
+        self._rebuild_case_tags()
+        self._all_results = []
+        self.current_result = None
+        self.input_params = {}
+        self._export_plain_text = ""
+
     def _parse_and_calc_case(self, case, case_num):
         """解析单个工况并执行计算，返回 (input_params, result)"""
         def _fv(key, label, must_positive=True):
@@ -721,8 +913,7 @@ class OpenChannelPanel(QWidget):
         return params, result
 
     def _calculate(self):
-        self._save_current_case()
-        self._all_results = []
+        self._prepare_calculation_run()
         errors = []
 
         for i, case in enumerate(self._cases):
@@ -773,25 +964,77 @@ class OpenChannelPanel(QWidget):
         self.input_params = first_params
         self.current_result = first_result
 
-        # 显示结果
-        self._display_all_results()
-        self.data_changed.emit()
+        try:
+            self._display_all_results()
+            self.notebook.setCurrentIndex(0)
+            self.data_changed.emit()
+        except Exception as ex:
+            message = str(ex) or ex.__class__.__name__
+            InfoBar.error(
+                title="结果显示失败",
+                content=f"本次计算已完成，但结果渲染失败：{message}",
+                parent=self._info_parent(),
+                position=InfoBarPosition.TOP,
+                duration=6000,
+            )
+            self._show_render_failure(message)
+
+    def _build_multi_case_summary_text(self):
+        total = len(self._all_results)
+        success = sum(1 for _, _, result in self._all_results if result.get('success'))
+        failed = max(0, total - success)
+        return "\n".join([
+            "【本次计算总览】",
+            f"共 {total} 个工况，成功 {success} 个，失败 {failed} 个",
+            "结果已按工况顺序重新刷新显示。",
+        ])
+
+    def _show_render_failure(self, message):
+        total = len(self._all_results)
+        success = sum(1 for _, _, result in self._all_results if result.get('success'))
+        failed = max(0, total - success)
+        text = "\n".join([
+            "本次计算已完成，但结果渲染失败。",
+            "",
+            f"本次共计算 {total} 个工况，成功 {success} 个，失败 {failed} 个。",
+            f"错误信息：{message}",
+            "",
+            "请重新计算，或切换工况后重试。",
+        ])
+        self._export_plain_text = text
+        self.notebook.setCurrentIndex(0)
+        failure_html = make_plain_html(text)
+        try:
+            self._render_result_html(failure_html)
+        except Exception:
+            try:
+                load_formula_page(self.result_text, failure_html)
+            except Exception:
+                try:
+                    self.result_text.setHtml(failure_html)
+                except Exception:
+                    pass
 
     def _display_all_results(self):
         """多工况结果显示：逐个调用原有display，捕获文本后合并渲染"""
         _multi = len(self._all_results) > 1
         all_plain_parts = []
-        collect_only = _multi
-        if collect_only:
-            self._suppress_result_render = True
+        all_html_parts = []
+        nav_items = []
+        extra_heads = []
+        seen_heads = set()
+        panel_key = getattr(self, "_panel_key", "open-channel")
+        label_getter = getattr(self, "_case_result_nav_label", None)
+        summary_getter = getattr(self, "_case_result_nav_summary", None)
+        self._suppress_result_render = True
 
         try:
             for case_idx, params, result in self._all_results:
-                # 临时设置 input_params 让原有 show 方法使用
-                self.input_params = params
-                self.current_result = result
-                self._update_result_display(result)
-                plain = self._export_plain_text or ''
+                rendered = OpenChannelPanel._render_case_result_content(self, params, result)
+                plain = rendered["plain_text"]
+                raw_plain = plain
+                body_html = rendered["body_html"]
+                extra_head = rendered["extra_head"]
                 if _multi:
                     q_val = params.get('Q', 0.0)
                     try:
@@ -799,11 +1042,63 @@ class OpenChannelPanel(QWidget):
                     except Exception:
                         q_val = 0.0
                     header = f"【工况 {case_idx + 1}｜{params.get('section_type', '梯形')}断面｜Q = {q_val:.3f} m³/s】"
+                    header = f"【工况 {case_idx + 1}｜{params.get('section_type', '梯形')}断面｜Q = {q_val:.3f} m³/s】"
                     plain = header + "\n\n" + plain
-                all_plain_parts.append(plain)
+                if _multi:
+                    header_text = "【工况 {}｜{}断面｜Q = {} m³/s】".format(
+                        case_idx + 1,
+                        section_type,
+                        q_text,
+                    )
+                    plain = header_text + "\n\n" + raw_plain
+                    body_html = (
+                        '<div class="codex-case-block__summary">'
+                        f"{html_mod.escape(header_text)}"
+                        "</div>"
+                        + body_html
+                    )
+                if _multi:
+                    header_text = "【工况 {}｜{}断面｜Q = {} m³/s】".format(
+                        case_idx + 1,
+                        section_type,
+                        q_text,
+                    )
+                    plain = header_text + "\n\n" + raw_plain
+                    body_html = (
+                        '<div class="codex-case-block__summary">'
+                        f"{html_mod.escape(header_text)}"
+                        "</div>"
+                        + body_html
+                    )
+                all_plain_parts.append(plain)  # duplicate helper block
+                all_html_parts.append(
+                    wrap_case_result_block(
+                        panel_key,
+                        case_idx,
+                        f"工况 {case_idx + 1}",
+                        body_html,
+                        subtitle=nav_label,
+                        is_error=not result.get("success"),
+                    )
+                )
+                extra_head = (extra_head or "").strip()
+                nav_items.append({
+                    "anchor_id": make_case_result_anchor(panel_key, case_idx),
+                    "label": nav_label,
+                    "summary": nav_summary,
+                    "is_error": not result.get("success"),
+                })
+                nav_items.append({
+                    "anchor_id": make_case_result_anchor(panel_key, case_idx),
+                    "label": nav_label,
+                    "summary": nav_summary,
+                    "is_error": not result.get("success"),
+                })
+                if extra_head and extra_head not in seen_heads:
+                    seen_heads.add(extra_head)
+                    extra_heads.append(extra_head)
         finally:
-            if collect_only:
-                self._suppress_result_render = False
+            self._suppress_result_render = False
 
         # 恢复到第一个结果
         _, first_params, first_result = self._all_results[0]
@@ -812,13 +1107,170 @@ class OpenChannelPanel(QWidget):
 
         # 合并文本
         combined_text = "\n\n".join(all_plain_parts)
+        summary_text = ""
+        if _multi:
+            summary_builder = getattr(self, "_build_multi_case_summary_text", None)
+            if callable(summary_builder):
+                summary_text = summary_builder()
+            else:
+                success_count = sum(1 for _ci, _params, result in self._all_results if result.get("success"))
+                fail_count = len(self._all_results) - success_count
+                summary_text = f"共 {len(self._all_results)} 个工况，成功 {success_count} 个，失败 {fail_count} 个。"
+            combined_text = summary_text + "\n\n" + combined_text
         self._export_plain_text = combined_text
+
+        nav_builder = getattr(self, "_build_case_nav_items", None)
+        nav_html = build_result_nav_bar(nav_builder() if callable(nav_builder) else nav_items)
+        summary_body = ""
+        if summary_text:
+            summary_body = (
+                '<div style="margin-bottom:24px;">'
+                f'{plain_text_to_formula_body(summary_text)}'
+                '</div>'
+            )
+        combined_body = nav_html + summary_body + "\n".join(all_html_parts)
+        combined_head = build_result_navigation_head()
+        if extra_heads:
+            combined_head = combined_head + "\n" + "\n".join(extra_heads)
+        self._render_result_html(wrap_with_katex(combined_body, extra_head=combined_head))
+        self._mark_results_fresh()
+        self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
+        self._update_section_plot_all()
+        return
 
         # 多工况时重新渲染合并后的页面
         if _multi:
-            self._render_result_html(plain_text_to_formula_html(combined_text))
+            summary_body = ""
+            if summary_text:
+                summary_body = (
+                    '<div style="margin-bottom:24px;">'
+                    f'{plain_text_to_formula_body(summary_text)}'
+                    '</div>'
+                )
+            combined_body = summary_body + "\n".join(all_html_parts)
+            combined_head = "\n".join(extra_heads)
+            self._render_result_html(wrap_with_katex(combined_body, extra_head=combined_head))
 
         # 断面图
+        self._update_section_plot_all()
+
+    def _display_all_results(self):
+        """澶氬伐鍐电粨鏋滄樉绀猴細鍚堝苟缁撴灉骞舵彁渚涘揩鎹峰鑸€?"""
+        _multi = len(self._all_results) > 1
+        all_plain_parts = []
+        all_html_parts = []
+        nav_items = []
+        extra_heads = []
+        seen_heads = set()
+        panel_key = getattr(self, "_panel_key", "open-channel")
+        label_getter = getattr(self, "_case_result_nav_label", None)
+        summary_getter = getattr(self, "_case_result_nav_summary", None)
+        self._suppress_result_render = True
+
+        try:
+            for case_idx, params, result in self._all_results:
+                rendered = OpenChannelPanel._render_case_result_content(self, params, result)
+                plain = rendered["plain_text"]
+                raw_plain = plain
+                body_html = rendered["body_html"]
+                extra_head = (rendered["extra_head"] or "").strip()
+                nav_label = (
+                    label_getter(case_idx)
+                    if callable(label_getter)
+                    else f"工况 {case_idx + 1}"
+                )
+                if callable(summary_getter):
+                    nav_summary = summary_getter(case_idx, params, result)
+                else:
+                    section_type = params.get("section_type", "梯形")
+                    q_raw = params.get("Q", 0.0)
+                    try:
+                        nav_q_text = f"Q={float(q_raw):.3f}"
+                    except Exception:
+                        nav_q_text = f"Q={str(q_raw).strip() or '?'}"
+                    nav_summary = (
+                        f"{section_type} · {'计算失败' if not result.get('success') else nav_q_text}"
+                    )
+                if _multi:
+                    section_type = params.get("section_type", "梯形")
+                    q_raw = params.get("Q", 0.0)
+                    try:
+                        q_text = f"{float(q_raw):.3f}"
+                    except Exception:
+                        q_text = str(q_raw).strip() or "-"
+                    plain = "【工况 {}｜{}断面｜Q = {} m³/s】\n\n{}".format(
+                        case_idx + 1,
+                        section_type,
+                        q_text,
+                        plain,
+                    )
+                if _multi:
+                    header_text = "【工况 {}｜{}断面｜Q = {} m³/s】".format(
+                        case_idx + 1,
+                        section_type,
+                        q_text,
+                    )
+                    plain = header_text + "\n\n" + raw_plain
+                    body_html = (
+                        '<div class="codex-case-block__summary">'
+                        f"{html_mod.escape(header_text)}"
+                        "</div>"
+                        + body_html
+                    )
+                all_plain_parts.append(plain)
+                all_html_parts.append(
+                    wrap_case_result_block(
+                        panel_key,
+                        case_idx,
+                        f"工况 {case_idx + 1}",
+                        body_html,
+                        subtitle=nav_label,
+                        is_error=not result.get("success"),
+                    )
+                )
+                if extra_head and extra_head not in seen_heads:
+                    seen_heads.add(extra_head)
+                    extra_heads.append(extra_head)
+        finally:
+            self._suppress_result_render = False
+
+        _, first_params, first_result = self._all_results[0]
+        self.input_params = first_params
+        self.current_result = first_result
+
+        combined_text = "\n\n".join(all_plain_parts)
+        summary_text = ""
+        if _multi:
+            summary_builder = getattr(self, "_build_multi_case_summary_text", None)
+            if callable(summary_builder):
+                summary_text = summary_builder()
+            else:
+                success_count = sum(1 for _ci, _params, result in self._all_results if result.get("success"))
+                fail_count = len(self._all_results) - success_count
+                summary_text = f"共 {len(self._all_results)} 个工况，成功 {success_count} 个，失败 {fail_count} 个。"
+            combined_text = summary_text + "\n\n" + combined_text
+        self._export_plain_text = combined_text
+
+        nav_builder = getattr(self, "_build_case_nav_items", None)
+        nav_html = build_result_nav_bar(nav_builder() if callable(nav_builder) else nav_items)
+        summary_body = ""
+        if summary_text:
+            summary_body = (
+                '<div style="margin-bottom:24px;">'
+                f"{plain_text_to_formula_body(summary_text)}"
+                "</div>"
+            )
+        combined_body = nav_html + summary_body + "\n".join(all_html_parts)
+        combined_head = build_result_navigation_head()
+        if extra_heads:
+            combined_head += "\n" + "\n".join(extra_heads)
+        self._render_result_html(wrap_with_katex(combined_body, extra_head=combined_head))
+        mark_fresh = getattr(self, "_mark_results_fresh", None)
+        if callable(mark_fresh):
+            mark_fresh()
+        jump_to_case = getattr(self, "_jump_to_case_result", None)
+        if callable(jump_to_case):
+            jump_to_case(getattr(self, "_current_case_idx", 0), defer_until_load=True)
         self._update_section_plot_all()
 
     def _update_section_plot_all(self):
@@ -884,15 +1336,229 @@ class OpenChannelPanel(QWidget):
         out.append("-" * 70)
         out.append("请修正后重新计算。")
         out.append("=" * 70)
-        self._export_plain_text = "\n".join(out)
-        if not self._suppress_result_render:
-            self.result_text.setHtml(make_plain_html("\n".join(out)))
+        plain_text = "\n".join(out)
+        self._export_plain_text = plain_text
+        html = make_plain_html(plain_text)
+        if self._suppress_result_render:
+            OpenChannelPanel._capture_render_output(self, html)
+            return
+        self.result_text.setHtml(html)
 
-    def _render_result_html(self, html):
+    def _reset_render_capture(self):
+        self._captured_render_body = ""
+        self._captured_render_head = ""
+
+    @staticmethod
+    def _split_rendered_html_document(html):
+        if not html:
+            return "", ""
+        head_match = re.search(r"<head[^>]*>(.*?)</head>", html, flags=re.IGNORECASE | re.DOTALL)
+        body_match = re.search(r"<body[^>]*>(.*?)</body>", html, flags=re.IGNORECASE | re.DOTALL)
+        head = head_match.group(1) if head_match else ""
+        body = body_match.group(1) if body_match else html
+        head = re.sub(r"<meta\b[^>]*>\s*", "", head, flags=re.IGNORECASE)
+        return head.strip(), body.strip()
+
+    def _capture_render_output(self, html):
+        head, body = OpenChannelPanel._split_rendered_html_document(html)
+        self._captured_render_head = head
+        self._captured_render_body = body
+
+    def _consume_render_capture(self):
+        body_html = getattr(self, "_captured_render_body", "")
+        extra_head = getattr(self, "_captured_render_head", "")
+        OpenChannelPanel._reset_render_capture(self)
+        if not body_html and not extra_head:
+            return None
+        return {
+            "body_html": body_html,
+            "extra_head": extra_head,
+        }
+
+    def _render_case_result_content(self, params, result):
+        OpenChannelPanel._reset_render_capture(self)
+        self.input_params = params
+        self.current_result = result
+        self._update_result_display(result)
+        plain_text = self._export_plain_text or ""
+        captured = OpenChannelPanel._consume_render_capture(self)
+        if captured is None:
+            captured = {
+                "body_html": plain_text_to_formula_body(plain_text),
+                "extra_head": "",
+            }
+        captured["plain_text"] = plain_text
+        return captured
+
+    def _disconnect_scripted_probe_handler(self):
+        signal = getattr(self.result_text, "loadFinished", None)
+        handler = getattr(self, "_scripted_load_probe_handler", None)
+        if signal is not None and handler is not None:
+            try:
+                signal.disconnect(handler)
+            except (RuntimeError, TypeError):
+                pass
+        self._scripted_load_probe_handler = None
+
+    def _appendix_e_runtime_mode_label(self):
+        if view_supports_scripted_html(self.result_text):
+            return "QWebEngineView"
+        err = get_web_engine_import_error()
+        if err is not None:
+            return f"QTextBrowser 降级视图（QtWebEngine 导入失败: {err.__class__.__name__}）"
+        return "QTextBrowser 降级视图"
+
+    def _appendix_e_guidance_lines(self):
+        lines = [
+            "请确认程序是从完整发布目录启动，而不是单独拷贝 exe 或某个子目录。",
+            "请确认发布版包含 QtWebEngineProcess、qtwebengine_resources 和本地 Tabulator 资源。",
+            "如果这是开发环境，请优先检查 Qt WebEngine 依赖是否完整安装。",
+        ]
+        err = get_web_engine_import_error()
+        if err is not None:
+            lines.append(f"当前导入异常: {err.__class__.__name__}: {err}")
+        return lines
+
+    def _build_appendix_e_failure_html(self, payload, pre1, pre2, reason_text):
+        error_body = build_appendix_e_error_body(
+            payload,
+            summary_text="未能确认 Tabulator 已在当前结果页完成初始化。",
+            runtime_mode=self._appendix_e_runtime_mode_label(),
+            reason_text=reason_text,
+            guidance_lines=self._appendix_e_guidance_lines(),
+        )
+        full_body = plain_text_to_formula_body(pre1) + error_body + plain_text_to_formula_body(pre2)
+        return wrap_with_katex(full_body, extra_head=appendix_e_shared_head_html())
+
+    def _handle_scripted_probe_result(self, token, probe_script, failure_builder, attempt, raw_result):
+        if token != self._scripted_render_token:
+            return
+
+        probe = {}
+        if isinstance(raw_result, str) and raw_result:
+            try:
+                probe = json.loads(raw_result)
+            except json.JSONDecodeError:
+                probe = {"state": "invalid-json", "errorText": raw_result}
+        elif isinstance(raw_result, dict):
+            probe = raw_result
+
+        if probe.get("ready"):
+            return
+
+        if attempt < 6:
+            QTimer.singleShot(
+                180,
+                lambda: self._probe_scripted_render_state(
+                    token, probe_script, failure_builder, attempt + 1
+                ),
+            )
+            return
+
+        state = probe.get("state") or "unknown"
+        error_text = probe.get("errorText") or ""
+        if state == "loading":
+            reason = "页面已载入，但多次探测后仍停留在初始化阶段，未检测到 Tabulator 表格 DOM。"
+        elif state == "error":
+            reason = "页面脚本已报告 Tabulator 初始化失败。"
+        elif probe.get("hasTable"):
+            reason = "检测到了表格容器，但握手标记未进入 ready 状态。"
+        else:
+            reason = "页面已载入，但未检测到 Tabulator 表格 DOM，说明第三方组件未真正完成渲染。"
+        if error_text:
+            reason = f"{reason} {error_text}"
+        load_formula_page(self.result_text, failure_builder(reason))
+
+    def _probe_scripted_render_state(self, token, probe_script, failure_builder, attempt=1):
+        if token != self._scripted_render_token:
+            return
+
+        started = run_view_javascript(
+            self.result_text,
+            probe_script,
+            lambda raw_result: self._handle_scripted_probe_result(
+                token, probe_script, failure_builder, attempt, raw_result
+            ),
+        )
+        if not started:
+            load_formula_page(
+                self.result_text,
+                failure_builder("当前结果页无法执行 JavaScript 探针，第三方表格运行环境不可用。"),
+            )
+
+    def _render_result_html(self, html, base_dir=None, scripted_probe=None, scripted_failure_builder=None):
         """统一结果页渲染入口，支持批量收集时抑制中间渲染。"""
         if self._suppress_result_render:
+            OpenChannelPanel._capture_render_output(self, html)
             return
-        load_formula_page(self.result_text, html)
+
+        self._scripted_render_token += 1
+        token = self._scripted_render_token
+        self._disconnect_scripted_probe_handler()
+
+        if scripted_probe and not view_supports_scripted_html(self.result_text):
+            if scripted_failure_builder is not None:
+                reason = "当前结果页未进入 QWebEngineView，桌面端无法执行第三方表格脚本。"
+                load_formula_page(self.result_text, scripted_failure_builder(reason))
+            else:
+                load_formula_page(self.result_text, html, base_path=base_dir)
+            return
+
+        if scripted_probe and scripted_failure_builder is not None:
+            def _on_load_finished(ok):
+                if token != self._scripted_render_token:
+                    return
+                self._disconnect_scripted_probe_handler()
+                if not ok:
+                    load_formula_page(
+                        self.result_text,
+                        scripted_failure_builder("QWebEngine 未能完成附录E结果页载入。"),
+                    )
+                    return
+                self._probe_scripted_render_state(token, scripted_probe, scripted_failure_builder)
+
+            self._scripted_load_probe_handler = _on_load_finished
+            self.result_text.loadFinished.connect(_on_load_finished)
+
+        load_formula_page(self.result_text, html, base_path=base_dir)
+
+    @staticmethod
+    def _appendix_e_resource_dir():
+        return Path(__file__).resolve().parents[1] / "resources"
+
+    def _build_appendix_e_payload(self, schemes, sel_b, sel_h, v_min, v_max):
+        return make_appendix_e_payload(schemes, sel_b, sel_h, v_min, v_max)
+
+    def _build_appendix_e_markup(self, payload):
+        scripted_view = view_supports_scripted_html(getattr(self, "result_text", None))
+        if scripted_view:
+            render_mode = "QWebEngineView 静态表格"
+            body = build_appendix_e_static_body(payload, runtime_mode=render_mode)
+            head = appendix_e_shared_head_html()
+            mode = "webengine-static"
+        else:
+            render_mode = "QTextBrowser 兼容表格"
+            body = build_appendix_e_qt_compatible_body(payload, runtime_mode=render_mode)
+            head = ""
+            mode = "qtextbrowser-compatible"
+        try:
+            print(f"[AppendixE] render_mode={mode}")
+        except Exception:
+            pass
+        return {
+            "body": body,
+            "head": head,
+            "mode": mode,
+        }
+
+    def _render_appendix_e_result_html(self, pre1, pre2, ae_payload, ae_markup):
+        full_body = (
+            plain_text_to_formula_body(pre1)
+            + ae_markup["body"]
+            + plain_text_to_formula_body(pre2)
+        )
+        full_html = wrap_with_katex(full_body, extra_head=ae_markup["head"])
+        self._render_result_html(full_html)
 
     # ================================================================
     # 结果显示分发
@@ -986,7 +1652,8 @@ class OpenChannelPanel(QWidget):
         schemes = result.get('appendix_e_schemes', [])
         if schemes:
             pre1 = "\n".join(o)
-            ae_html = self._build_ae_html(schemes, b, h, v_min, v_max)
+            ae_payload = self._build_appendix_e_payload(schemes, b, h, v_min, v_max)
+            ae_markup = self._build_appendix_e_markup(ae_payload)
             self._appendix_e_export_text = self._build_ae_text(schemes, b, h, v_min, v_max)
 
             o2 = []
@@ -1025,15 +1692,8 @@ class OpenChannelPanel(QWidget):
             o2.append("=" * 70)
             pre2 = "\n".join(o2)
 
-            body1 = plain_text_to_formula_body(pre1)
-            ae_body = "\n<b>【附录E断面方案对比表】</b><br>"
-            ae_body += "  说明: α=1.00为水力最佳断面(深窄)，α越大断面越宽浅，面积增加但流速降低<br><br>"
-            ae_body += ae_html
-            ae_body += f"<br>  注: 流速约束范围 {v_min} ~ {v_max} m/s<br><br>"
-            full_body = body1 + ae_body + plain_text_to_formula_body("\n".join(o2))
-            full_html = wrap_with_katex(full_body, extra_head=AE_CSS)
             self._export_plain_text = pre1 + "\n\n" + self._appendix_e_export_text + "\n\n" + pre2
-            self._render_result_html(full_html)
+            self._render_appendix_e_result_html(pre1, pre2, ae_payload, ae_markup)
             return
 
         use_increase = p.get('use_increase', True)
@@ -1158,7 +1818,8 @@ class OpenChannelPanel(QWidget):
         has_ae = bool(schemes)
         if has_ae:
             pre1 = "\n".join(o)
-            ae_html = self._build_ae_html(schemes, b, h, v_min, v_max)
+            ae_payload = self._build_appendix_e_payload(schemes, b, h, v_min, v_max)
+            ae_markup = self._build_appendix_e_markup(ae_payload)
             self._appendix_e_export_text = self._build_ae_text(schemes, b, h, v_min, v_max)
             o = []
 
@@ -1320,14 +1981,8 @@ class OpenChannelPanel(QWidget):
 
         if has_ae:
             pre2 = "\n".join(o)
-            ae_body = "\n<b>【附录E断面方案对比表】</b><br>"
-            ae_body += "  说明: α=1.00为水力最佳断面(深窄)，α越大断面越宽浅，面积增加但流速降低<br><br>"
-            ae_body += ae_html
-            ae_body += f"<br>  注: 流速约束范围 {v_min} ~ {v_max} m/s<br><br>"
-            full_body = plain_text_to_formula_body(pre1) + ae_body + plain_text_to_formula_body(pre2)
-            full_html = wrap_with_katex(full_body, extra_head=AE_CSS)
             self._export_plain_text = pre1 + "\n\n" + self._appendix_e_export_text + "\n\n" + pre2
-            self._render_result_html(full_html)
+            self._render_appendix_e_result_html(pre1, pre2, ae_payload, ae_markup)
         else:
             txt = "\n".join(o)
             self._export_plain_text = txt
@@ -2164,6 +2819,8 @@ class OpenChannelPanel(QWidget):
         self._cases = [self._default_case()]
         self._current_case_idx = 0
         self._all_results = []
+        self._results_dirty = False
+        self._has_rendered_results = False
         self._load_case(0)
         self._rebuild_case_tags()
         self._update_calc_btn_text()
