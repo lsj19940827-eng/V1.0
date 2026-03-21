@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QFrame, QStackedWidget, QSizePolicy, QDialog, QMenu
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QShortcut, QKeySequence, QAction
 
 from app_渠系计算前端 import ensure_qfluentwidgets_compat
@@ -32,6 +32,7 @@ from qfluentwidgets import (
     PushButton, InfoBar, InfoBarPosition, setTheme, Theme
 )
 
+import updater
 from version import APP_VERSION
 from app_渠系计算前端.styles import (
     P, S, W, E, BG, CARD, BD, T1, T2, GLOBAL_STYLE, NAV_STYLE
@@ -52,6 +53,35 @@ from app_渠系计算前端.webview_compat import (
 from app_渠系计算前端.debug_utils import debug_print
 
 _EARTHWORK_AVAILABLE = False
+
+
+def _main_window_on_update_available(self, info):
+    """静默检查发现新版本时，直接弹出更新对话框。"""
+    self._cached_update_info = info
+    if self._update_prompt_shown:
+        return
+    self._update_prompt_shown = True
+    self.statusBar().showMessage(
+        f"发现新版本 V{info.latest_version}，已打开更新窗口。", 10000
+    )
+    QTimer.singleShot(500, self._open_update_dialog)
+
+
+def _main_window_open_update_dialog(self, force_full_package_once=None):
+    """打开更新对话框，并支持本次强制走全量包。"""
+    from app_渠系计算前端.update_dialog import UpdateDialog
+
+    if force_full_package_once is None:
+        force_full_package_once = self._pending_force_full_package_once
+        self._pending_force_full_package_once = False
+    cached = getattr(self, "_cached_update_info", None)
+    dlg = UpdateDialog(
+        self,
+        auto_check=(cached is None),
+        info=cached,
+        force_full_package_once=bool(force_full_package_once),
+    )
+    dlg.exec()
 
 
 # ============================================================
@@ -116,10 +146,17 @@ class NavButton(PushButton):
 class MainWindow(QMainWindow):
     """渠系建筑物水力计算系统 —— 主窗口"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        update_prompt_already_handled: bool = False,
+        pending_force_full_package_once: bool = False,
+    ):
         super().__init__()
         self._base_title = f"渠系建筑物水力计算系统 V{APP_VERSION}"
         self.setWindowTitle(self._base_title)
+        self._update_prompt_shown = update_prompt_already_handled
+        self._pending_force_full_package_once = pending_force_full_package_once
 
         # ---- 根据屏幕分辨率自适应窗口尺寸 ----
         screen = QApplication.primaryScreen()
@@ -597,6 +634,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+
     def closeEvent(self, event):
         """关闭窗口前检查项目保存，保存倒虹吸面板状态"""
         debug_print("[DEBUG] MainWindow closeEvent called")
@@ -633,6 +671,13 @@ class MainWindow(QMainWindow):
         names = ["明渠设计", "渡槽设计", "隧洞设计", "矩形暗涵设计", "倒虹吸设计", "有压管道设计", "推求水面线"]
         if index < len(names):
             self.statusBar().showMessage(f"当前模块: {names[index]}", 5000)
+
+
+# ============================================================
+# 入口
+# ============================================================
+MainWindow._on_update_available = _main_window_on_update_available
+MainWindow._open_update_dialog = _main_window_open_update_dialog
 
 
 # ============================================================
@@ -687,8 +732,15 @@ def main():
     # Matplotlib 全局 DPI 适配
     _setup_matplotlib_dpi()
 
-    window = MainWindow()
+    open_update_dialog = updater.UPDATE_FLAG_OPEN_DIALOG in sys.argv
+    force_full_package = updater.UPDATE_FLAG_FORCE_FULL_PACKAGE in sys.argv
+    window = MainWindow(
+        update_prompt_already_handled=open_update_dialog,
+        pending_force_full_package_once=force_full_package,
+    )
     window.show()
+    if open_update_dialog:
+        QTimer.singleShot(300, window._open_update_dialog)
     sys.exit(app.exec())
 
 

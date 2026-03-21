@@ -35,6 +35,7 @@ from 明渠设计 import (
     quick_calculate_rectangular,
     quick_calculate_trapezoidal,
     quick_calculate_circular as _calc_circular_pipe,
+    quick_calculate_u_section as _calc_u_channel,
 )
 from 隧洞设计 import (
     quick_calculate_horseshoe as _calc_horseshoe,
@@ -61,6 +62,8 @@ except ImportError:
 PI = math.pi
 V_MIN = 0.3
 V_MAX = 6.0
+U_CHANNEL_ALPHA_DEFAULT = 14.0
+U_CHANNEL_THETA_DEFAULT = 152.0
 
 SEGMENT_NAMES = [
     "第一流量段", "第二流量段", "第三流量段", "第四流量段",
@@ -253,6 +256,59 @@ def _get_struct_name(node) -> str:
     return str(st or "")
 
 
+def _parse_horseshoe_section_type(value: Any) -> Optional[int]:
+    if isinstance(value, (int, float)):
+        ivalue = int(value)
+        if ivalue in (1, 2):
+            return ivalue
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if "Ⅱ" in text or "II" in text or "2" in text:
+        return 2
+    if "Ⅰ" in text or "I" in text or "1" in text:
+        return 1
+    return None
+
+
+def _resolve_horseshoe_section_type(seg: Dict[str, Any], default: Optional[int] = 1) -> Optional[int]:
+    for key in ("horseshoe_section_type", "section_type", "section_type_name"):
+        parsed = _parse_horseshoe_section_type(seg.get(key))
+        if parsed is not None:
+            return parsed
+    return default
+
+
+def _group_horseshoe_segments(segments: List[Dict[str, Any]]) -> List[Tuple[int, List[Dict[str, Any]]]]:
+    grouped: Dict[int, List[Dict[str, Any]]] = {}
+    order: List[int] = []
+    for seg in segments or []:
+        section_type = _resolve_horseshoe_section_type(seg, default=1) or 1
+        if section_type not in grouped:
+            grouped[section_type] = []
+            order.append(section_type)
+        seg_copy = dict(seg)
+        seg_copy["horseshoe_section_type"] = section_type
+        grouped[section_type].append(seg_copy)
+    return [(section_type, grouped[section_type]) for section_type in order]
+
+
+def _expand_horseshoe_table_order(table_order: List[str], horseshoe_keys: List[str]) -> List[str]:
+    if not horseshoe_keys:
+        return [key for key in table_order if key != "tunnel_horseshoe"]
+    expanded: List[str] = []
+    inserted = False
+    for key in table_order:
+        if key == "tunnel_horseshoe":
+            expanded.extend(horseshoe_keys)
+            inserted = True
+            continue
+        expanded.append(key)
+    if not inserted:
+        expanded.extend(horseshoe_keys)
+    return expanded
+
+
 def _classify_structure(node) -> Optional[str]:
     name = _get_struct_name(node)
     params = getattr(node, "section_params", {}) or {}
@@ -301,6 +357,9 @@ def _classify_structure(node) -> Optional[str]:
     if "明渠-圆形" in name or "圆形明渠" in name or "明渠圆形" in name or "圆管涵" in name:
         return "circular_channel"
 
+    if "明渠-U形" in name or "U形明渠" in name or "明渠U形" in name:
+        return "u_channel"
+
     # 明渠梯形 / 矩形
     if "明渠-梯形" in name or ("明渠" in name and "梯形" in name) or "梯形明渠" in name:
         return "trap_channel"
@@ -308,6 +367,8 @@ def _classify_structure(node) -> Optional[str]:
         return "rect_channel"
 
     # 兼容旧值：仅写“矩形/梯形/圆形”
+    if "U形" in name and "明渠" in name:
+        return "u_channel"
     if "梯形" in name:
         return "trap_channel"
     if "矩形" in name:
@@ -320,6 +381,10 @@ def _classify_structure(node) -> Optional[str]:
         d_val = _to_float(params.get("D", params.get("R_circle", 0.0)), 0.0)
         if d_val > 0:
             return "circular_channel"
+        theta_val = _to_float(params.get("theta_deg", 0.0), 0.0)
+        r_val = _to_float(params.get("R_circle", params.get("R", 0.0)), 0.0)
+        if theta_val > 0 and r_val > 0:
+            return "u_channel"
         m_val = _to_float(params.get("m", 0.0), 0.0)
         if m_val > 0:
             return "trap_channel"
@@ -346,6 +411,7 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
         "rect_channel": {},
         "trap_channel": {},
         "circular_channel": {},
+        "u_channel": {},
         "tunnel_arch": {},
         "tunnel_circular": {},
         "tunnel_horseshoe": {},
@@ -409,6 +475,22 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
         h_total = _to_float(getattr(node, "structure_height", 0.0), 0.0)
         _assign_if_valid(target, "H", math.ceil(h_total * 100) / 100)
 
+        theta_deg = _to_float(params.get("theta_deg", 0.0), 0.0)
+        _assign_if_valid(target, "theta_deg", theta_deg)
+
+        alpha_deg = _to_float(params.get("alpha_deg", params.get("chamfer_angle", 0.0)), 0.0)
+        _assign_if_valid(target, "alpha_deg", alpha_deg)
+
+        total_head_loss = _to_float(
+            getattr(node, "head_loss_siphon", getattr(node, "external_head_loss", 0.0)),
+            0.0,
+        )
+        _assign_if_valid(target, "total_head_loss", total_head_loss)
+
+        pipe_material = str(params.get("pipe_material", "") or "").strip()
+        if pipe_material:
+            _assign_if_valid(target, "pipe_material", pipe_material)
+
         # 矩形渡槽倒角参数
         if struct_key == "aqueduct_rect":
             chamfer_angle = _to_float(params.get("chamfer_angle", 0.0), 0.0)
@@ -430,6 +512,17 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
                 dn_mm = dn_src * 1000 if dn_src < 20 else dn_src
                 _assign_if_valid(target, "DN_mm", dn_mm)
 
+        if struct_key == "tunnel_horseshoe":
+            struct_type = getattr(node, "structure_type", None)
+            struct_name = str(getattr(struct_type, "value", struct_type) or "")
+            horseshoe_section_type = (
+                _parse_horseshoe_section_type(struct_name)
+                or _parse_horseshoe_section_type(params.get("horseshoe_section_type"))
+                or _parse_horseshoe_section_type(params.get("section_type"))
+            )
+            if horseshoe_section_type in (1, 2):
+                _assign_if_valid(target, "horseshoe_section_type", horseshoe_section_type)
+
     return defaults, flow_qs
 
 
@@ -444,6 +537,59 @@ def _apply_overrides(row: Dict[str, Any], seg: Dict[str, Any], mapping: Dict[str
                 if val is None or (isinstance(val, str) and not val.strip()):
                     continue
             row[row_key] = val
+
+
+def _positive_or_none(value: Any) -> Optional[float]:
+    number = _to_float(value, 0.0)
+    return number if number > 0 else None
+
+
+def _first_positive(seg: Dict[str, Any], *keys: str) -> Optional[float]:
+    for key in keys:
+        if key in seg:
+            value = _positive_or_none(seg.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _has_locked_geometry(seg: Dict[str, Any], keys: Tuple[str, ...]) -> bool:
+    return any(_positive_or_none(seg.get(key)) is not None for key in keys)
+
+
+def _locked_geometry_present(segments: List[Dict[str, Any]], keys: Tuple[str, ...]) -> bool:
+    return any(_has_locked_geometry(seg, keys) for seg in segments or [])
+
+
+def _derive_tunnel_arch_geometry(
+    *,
+    b: Optional[float],
+    h_total: Optional[float],
+    h_straight: Optional[float],
+    r_arch: Optional[float],
+    theta_deg: Optional[float],
+) -> Optional[Tuple[float, float, float, float, float]]:
+    B = _positive_or_none(b)
+    H_total = _positive_or_none(h_total)
+    H_straight = _positive_or_none(h_straight)
+    theta = _positive_or_none(theta_deg) or 180.0
+    theta_rad = math.radians(theta)
+    sin_half = math.sin(theta_rad / 2.0)
+    one_minus_cos = 1.0 - math.cos(theta_rad / 2.0)
+
+    R_arch = _positive_or_none(r_arch)
+    if R_arch is None and B is not None and abs(sin_half) > 1e-9:
+        R_arch = (B / 2.0) / sin_half
+    if H_straight is None and H_total is not None and R_arch is not None:
+        H_straight = H_total - R_arch * one_minus_cos
+    if H_total is None and H_straight is not None and R_arch is not None:
+        H_total = H_straight + R_arch * one_minus_cos
+    if B is None and R_arch is not None and abs(sin_half) > 1e-9:
+        B = 2.0 * R_arch * sin_half
+
+    if not all(value is not None and value > 0 for value in (B, H_total, H_straight, R_arch)):
+        return None
+    return float(B), float(H_total), float(H_straight), float(R_arch), float(theta)
 
 # ============================================================
 # 默认流量段参数（各表独立）
@@ -462,6 +608,15 @@ def _default_segments_trap_channel():
     slopes = [3000, 3000, 3000, 3000, 5555, 6666, 7777]
     return [{"name": _segment_name(i + 1), "Q": Qs[i], "slope_inv": slopes[i], "n": 0.014,
              "m": 1.0, "wall_t": 0.3, "tie_rod": "0.2×0.2"} for i in range(7)]
+
+
+def _default_segments_u_channel():
+    """U形明渠默认参数"""
+    Qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
+    slopes = [3000, 3000, 3000, 3000, 5555, 6666, 7777]
+    return [{"name": _segment_name(i + 1), "Q": Qs[i], "slope_inv": slopes[i], "n": 0.014,
+             "R": 0.8, "alpha_deg": U_CHANNEL_ALPHA_DEFAULT, "theta_deg": U_CHANNEL_THETA_DEFAULT}
+            for i in range(7)]
 
 def _default_segments_tunnel():
     """隧洞（圆拱直墙型）默认参数"""
@@ -540,6 +695,7 @@ def compute_rect_channel(segments: List[Dict]) -> List[Dict]:
 
         res = quick_calculate_rectangular(
             Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
+            manual_b=_first_positive(seg, "B"),
         )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
@@ -568,7 +724,8 @@ def compute_rect_channel(segments: List[Dict]) -> List[Dict]:
             "V":         round(res["V_design"], 3),
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+            "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
             "t": "t", "tie_rod": "tie_rod",
         })
         rows.append(row)
@@ -591,6 +748,8 @@ def compute_trapezoid_channel(segments: List[Dict]) -> List[Dict]:
 
         res = quick_calculate_trapezoidal(
             Q=Q, m=m, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
+            manual_beta=_first_positive(seg, "beta", "Beta_design"),
+            manual_b=_first_positive(seg, "B"),
         )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
@@ -621,8 +780,84 @@ def compute_trapezoid_channel(segments: List[Dict]) -> List[Dict]:
             "beta":      round(res.get("Beta_design", 0) or 0, 3) if res.get("Beta_design", 0) else "",
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
-            "m": "m", "t": "t", "tie_rod": "tie_rod",
+            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+            "m": "m", "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
+            "beta": "beta", "t": "t", "tie_rod": "tie_rod",
+        })
+        rows.append(row)
+    return rows
+
+
+# ============================================================
+# 2b. U形明渠
+# ============================================================
+
+def compute_u_channel(segments: List[Dict]) -> List[Dict]:
+    rows = []
+    for seg in segments:
+        Q = seg["Q"]
+        slope_inv = seg["slope_inv"]
+        n = seg.get("n", 0.014)
+        radius = _first_positive(seg, "R")
+        alpha_deg = _first_positive(seg, "alpha_deg", "chamfer_angle") or U_CHANNEL_ALPHA_DEFAULT
+        theta_deg = _first_positive(seg, "theta_deg") or U_CHANNEL_THETA_DEFAULT
+
+        if radius is None:
+            row = {
+                "name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv, "n": n,
+                "R": "", "alpha_deg": alpha_deg, "theta_deg": theta_deg,
+                "H": "", "H1": "", "H2": "", "V": "",
+            }
+            _apply_overrides(row, seg, {
+                "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+                "R": "R", "alpha_deg": "alpha_deg", "theta_deg": "theta_deg",
+                "H": "H", "H1": "H1", "H2": "H2", "V": "V",
+            })
+            rows.append(row)
+            continue
+
+        res = _calc_u_channel(
+            Q=Q,
+            R=radius,
+            alpha_deg=alpha_deg,
+            theta_deg=theta_deg,
+            n=n,
+            slope_inv=slope_inv,
+            v_min=V_MIN,
+            v_max=V_MAX,
+        )
+        if not res.get("success"):
+            row = {
+                "name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv, "n": n,
+                "R": round(radius, 2), "alpha_deg": alpha_deg, "theta_deg": theta_deg,
+                "H": "", "H1": "", "H2": "", "V": "",
+            }
+            _apply_overrides(row, seg, {
+                "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+                "R": "R", "alpha_deg": "alpha_deg", "theta_deg": "theta_deg",
+                "H": "H", "H1": "H1", "H2": "H2", "V": "V",
+            })
+            rows.append(row)
+            continue
+
+        row = {
+            "name": seg["name"],
+            "Q": Q,
+            "Q_inc": round(res["Q_increased"], 3),
+            "slope_inv": slope_inv,
+            "n": n,
+            "R": round(res["R"], 2),
+            "alpha_deg": round(res.get("alpha_deg", alpha_deg), 3),
+            "theta_deg": round(res.get("theta_deg", theta_deg), 3),
+            "H": round(res["h_prime"], 3),
+            "H1": round(res["h_design"], 3),
+            "H2": round(res["h_increased"], 3),
+            "V": round(res["V_design"], 3),
+        }
+        _apply_overrides(row, seg, {
+            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+            "R": "R", "alpha_deg": "alpha_deg", "theta_deg": "theta_deg",
+            "H": "H", "H1": "H1", "H2": "H2", "V": "V",
         })
         rows.append(row)
     return rows
@@ -646,7 +881,9 @@ def compute_tunnel(segments: List[Dict],
         rock_lining = ROCK_LINING_DEFAULT
 
     override_map = {
-        "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+        "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+        "B": "B", "H_straight": "H_straight", "R_arch": "R_arch",
+        "H1": "H1", "H2": "H2", "V": "V",
     }
 
     def _design_one_seg(seg, B, H_total, H_straight, R_arch, theta_rad):
@@ -701,27 +938,51 @@ def compute_tunnel(segments: List[Dict],
             seg_rows.append(row)
         return seg_rows
 
+    def _resolve_geometry(seg):
+        geom = _derive_tunnel_arch_geometry(
+            b=seg.get("B"),
+            h_total=seg.get("H_total", seg.get("H")),
+            h_straight=seg.get("H_straight"),
+            r_arch=seg.get("R_arch"),
+            theta_deg=seg.get("theta_deg"),
+        )
+        if geom is not None:
+            return geom
+
+        res = _calc_horseshoe(
+            Q=seg["Q"], n=seg.get("n", 0.014),
+            slope_inv=seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
+            theta_deg=_first_positive(seg, "theta_deg") or 180.0,
+            manual_B=_first_positive(seg, "B"),
+        )
+        if not res.get("success"):
+            return None
+
+        B = res["B"]
+        H_total = res["H_total"]
+        H_straight = res["H_straight"]
+        theta_deg = res.get("theta_deg", 180.0)
+        theta_rad = math.radians(theta_deg)
+        sin_half = math.sin(theta_rad / 2)
+        R_arch = (B / 2) / sin_half if abs(sin_half) > 1e-9 else B / 2
+        return B, H_total, H_straight, R_arch, theta_deg
+
+    if unified and _locked_geometry_present(segments, ("B", "H", "H_total", "H_straight", "R_arch", "theta_deg")):
+        unified = False
+
     if unified:
         # --- 统一断面：用最大 Q 设计 ---
         max_seg = max(segments, key=lambda s: s["Q"])
-        res_max = _calc_horseshoe(
-            Q=max_seg["Q"], n=max_seg.get("n", 0.014),
-            slope_inv=max_seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
-        )
-        if not res_max.get("success"):
+        geom_max = _resolve_geometry(max_seg)
+        if geom_max is None:
             empty_info = {"B": 0, "H_total": 0, "H_straight": 0, "R_arch": 0, "theta_deg": 180}
             rows = []
             for seg in segments:
                 rows.extend(_empty_rows_for_seg(seg))
             return rows, empty_info
 
-        B = res_max["B"]
-        H_total = res_max["H_total"]
-        H_straight = res_max["H_straight"]
-        theta_deg = res_max.get("theta_deg", 180.0)
+        B, H_total, H_straight, R_arch, theta_deg = geom_max
         theta_rad = math.radians(theta_deg)
-        sin_half = math.sin(theta_rad / 2)
-        R_arch = (B / 2) / sin_half if abs(sin_half) > 1e-9 else B / 2
 
         tunnel_info = {"B": B, "H_total": H_total, "H_straight": H_straight,
                        "R_arch": R_arch, "theta_deg": theta_deg}
@@ -735,21 +996,13 @@ def compute_tunnel(segments: List[Dict],
         rows = []
         first_info = None
         for seg in segments:
-            res = _calc_horseshoe(
-                Q=seg["Q"], n=seg.get("n", 0.014),
-                slope_inv=seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
-            )
-            if not res.get("success"):
+            geom = _resolve_geometry(seg)
+            if geom is None:
                 rows.extend(_empty_rows_for_seg(seg))
                 continue
 
-            B = res["B"]
-            H_total = res["H_total"]
-            H_straight = res["H_straight"]
-            theta_deg = res.get("theta_deg", 180.0)
+            B, H_total, H_straight, R_arch, theta_deg = geom
             theta_rad = math.radians(theta_deg)
-            sin_half = math.sin(theta_rad / 2)
-            R_arch = (B / 2) / sin_half if abs(sin_half) > 1e-9 else B / 2
 
             if first_info is None:
                 first_info = {"B": B, "H_total": H_total, "H_straight": H_straight,
@@ -786,7 +1039,8 @@ def compute_tunnel_circular(segments: List[Dict],
     from 隧洞设计 import solve_water_depth_circular, calculate_circular_outputs
 
     override_map = {
-        "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+        "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+        "D": "D", "H1": "H1", "H2": "H2", "V": "V",
     }
 
     def _design_one_seg(seg, D):
@@ -837,13 +1091,16 @@ def compute_tunnel_circular(segments: List[Dict],
             seg_rows.append(row)
         return seg_rows
 
+    if unified and _locked_geometry_present(segments, ("D",)):
+        unified = False
+
     if unified:
         # --- 统一断面：用最大 Q 设计 ---
         max_seg = max(segments, key=lambda s: s["Q"])
         res_max = _calc_tunnel_circular(
             Q=max_seg["Q"], n=max_seg.get("n", 0.014),
             slope_inv=max_seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
-            manual_D=max_seg.get("D"),
+            manual_D=_first_positive(max_seg, "D"),
         )
         if not res_max.get("success"):
             empty_info = {"D": 0}
@@ -864,15 +1121,17 @@ def compute_tunnel_circular(segments: List[Dict],
         rows = []
         first_info = None
         for seg in segments:
-            res = _calc_tunnel_circular(
-                Q=seg["Q"], n=seg.get("n", 0.014),
-                slope_inv=seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
-            )
-            if not res.get("success"):
-                rows.extend(_empty_rows_for_seg(seg))
-                continue
-
-            D = res["D"]
+            D = _first_positive(seg, "D")
+            if D is None:
+                res = _calc_tunnel_circular(
+                    Q=seg["Q"], n=seg.get("n", 0.014),
+                    slope_inv=seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
+                    manual_D=_first_positive(seg, "D"),
+                )
+                if not res.get("success"):
+                    rows.extend(_empty_rows_for_seg(seg))
+                    continue
+                D = res["D"]
             if first_info is None:
                 first_info = {"D": D}
 
@@ -912,7 +1171,8 @@ def compute_tunnel_horseshoe(segments: List[Dict],
     type_name = "马蹄形标准Ⅰ型" if section_type == 1 else "马蹄形标准Ⅱ型"
 
     override_map = {
-        "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+        "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+        "R": "R", "H1": "H1", "H2": "H2", "V": "V",
     }
 
     def _design_one_seg(seg, R):
@@ -963,6 +1223,9 @@ def compute_tunnel_horseshoe(segments: List[Dict],
             seg_rows.append(row)
         return seg_rows
 
+    if unified and _locked_geometry_present(segments, ("R",)):
+        unified = False
+
     if unified:
         # --- 统一断面：用最大 Q 设计 ---
         max_seg = max(segments, key=lambda s: s["Q"])
@@ -970,7 +1233,7 @@ def compute_tunnel_horseshoe(segments: List[Dict],
             Q=max_seg["Q"], n=max_seg.get("n", 0.014),
             slope_inv=max_seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
             section_type=section_type,
-            manual_r=max_seg.get("R"),
+            manual_r=_first_positive(max_seg, "R"),
         )
         if not res_max.get("success"):
             empty_info = {"R": 0, "section_type_name": type_name}
@@ -991,16 +1254,18 @@ def compute_tunnel_horseshoe(segments: List[Dict],
         rows = []
         first_info = None
         for seg in segments:
-            res = quick_calculate_horseshoe_std(
-                Q=seg["Q"], n=seg.get("n", 0.014),
-                slope_inv=seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
-                section_type=section_type,
-            )
-            if not res.get("success"):
-                rows.extend(_empty_rows_for_seg(seg))
-                continue
-
-            R = res["r"]
+            R = _first_positive(seg, "R")
+            if R is None:
+                res = quick_calculate_horseshoe_std(
+                    Q=seg["Q"], n=seg.get("n", 0.014),
+                    slope_inv=seg["slope_inv"], v_min=V_MIN, v_max=V_MAX,
+                    section_type=section_type,
+                    manual_r=_first_positive(seg, "R"),
+                )
+                if not res.get("success"):
+                    rows.extend(_empty_rows_for_seg(seg))
+                    continue
+                R = res["r"]
             if first_info is None:
                 first_info = {"R": R, "section_type_name": type_name}
 
@@ -1009,6 +1274,36 @@ def compute_tunnel_horseshoe(segments: List[Dict],
         if first_info is None:
             first_info = {"R": 0, "section_type_name": type_name}
         return rows, first_info
+
+
+def _build_horseshoe_export_entries(
+    segments: List[Dict],
+    rock_lining: Dict = None,
+    unified: bool = False,
+) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    grouped_segments = _group_horseshoe_segments(segments)
+    mixed_types = len(grouped_segments) > 1
+    for section_type, grouped in grouped_segments:
+        rows, info = compute_tunnel_horseshoe(
+            grouped,
+            section_type=section_type,
+            rock_lining=rock_lining,
+            unified=unified,
+        )
+        section_type_name = info.get("section_type_name") or (
+            "马蹄形标准Ⅰ型" if section_type == 1 else "马蹄形标准Ⅱ型"
+        )
+        table_key = f"tunnel_horseshoe_{section_type}" if mixed_types else "tunnel_horseshoe"
+        entries.append({
+            "key": table_key,
+            "section_type": section_type,
+            "rows": rows,
+            "sheet_name": section_type_name + "隧洞",
+            "title": section_type_name + "隧洞断面尺寸及水力要素表",
+            "info": info,
+        })
+    return entries
 
 
 # ============================================================
@@ -1023,7 +1318,10 @@ def compute_aqueduct_u(segments: List[Dict]) -> List[Dict]:
         n = seg.get("n", 0.014)
         wall_t = seg.get("wall_t", 0.35)
 
-        res = _calc_aqueduct_u(Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX)
+        res = _calc_aqueduct_u(
+            Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
+            manual_R=_first_positive(seg, "R"),
+        )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "R": "", "H": "", "t": wall_t,
@@ -1055,8 +1353,9 @@ def compute_aqueduct_u(segments: List[Dict]) -> List[Dict]:
             "HB_ratio":  round(hb_ratio, 3),
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
-            "t": "t",
+            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+            "R": "R", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
+            "t": "t", "HB_ratio": "HB_ratio",
         })
         rows.append(row)
     return rows
@@ -1077,8 +1376,11 @@ def compute_aqueduct_rect(segments: List[Dict]) -> List[Dict]:
         chamfer_angle = seg.get("chamfer_angle", 0)
         chamfer_length = seg.get("chamfer_length", 0)
 
-        res = _calc_aqueduct_rect(Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
-                                  chamfer_angle=chamfer_angle, chamfer_length=chamfer_length)
+        res = _calc_aqueduct_rect(
+            Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
+            chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
+            manual_B=_first_positive(seg, "B"),
+        )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "B": "", "H": "", "t": wall_t,
@@ -1109,7 +1411,8 @@ def compute_aqueduct_rect(segments: List[Dict]) -> List[Dict]:
             "V":              round(res["V_design"], 3),
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+            "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
             "t": "t", "chamfer_angle": "chamfer_angle", "chamfer_length": "chamfer_length",
         })
         rows.append(row)
@@ -1130,7 +1433,10 @@ def compute_rect_culvert(segments: List[Dict]) -> List[Dict]:
         t1 = seg.get("t1", 0.4)
         t2 = seg.get("t2", 0.4)
 
-        res = _calc_rect_culvert(Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX)
+        res = _calc_rect_culvert(
+            Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
+            manual_B=_first_positive(seg, "B"),
+        )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "B": "", "H": "", "t0": t0, "t1": t1, "t2": t2,
@@ -1159,7 +1465,8 @@ def compute_rect_culvert(segments: List[Dict]) -> List[Dict]:
             "V":         round(res["V_design"], 2),
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
+            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+            "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
             "t0": "t0", "t1": "t1", "t2": "t2",
         })
         rows.append(row)
@@ -1179,7 +1486,10 @@ def compute_circular_pipe(segments: List[Dict]) -> List[Dict]:
         n = seg.get("n", 0.014)
         pipe_mat = seg.get("pipe_material", "钢筋混凝土")
 
-        res = _calc_circular_pipe(Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX)
+        res = _calc_circular_pipe(
+            Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
+            manual_D=_first_positive(seg, "D"),
+        )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "D": "", "pipe_material": pipe_mat,
@@ -1211,8 +1521,9 @@ def compute_circular_pipe(segments: List[Dict]) -> List[Dict]:
             "V":             round(V_d, 3) if V_d else "",
         }
         _apply_overrides(row, seg, {
-            "Q": "Q", "slope_inv": "slope_inv", "n": "n",
-            "pipe_material": "pipe_material",
+            "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+            "D": "D", "pipe_material": "pipe_material",
+            "H1": "H1", "H2": "H2", "V": "V",
         })
         rows.append(row)
     return rows
@@ -1228,13 +1539,10 @@ def compute_siphon(segments: List[Dict],
     for seg in segments:
         # 支持每段独立材质：优先使用段级 pipe_material，否则用全局参数
         seg_mat = seg.get("pipe_material", pipe_material)
-        n = SIPHON_MATERIALS.get(seg_mat, 0.012)
+        n = seg.get("n", SIPHON_MATERIALS.get(seg_mat, 0.012))
 
         Q = seg["Q"]
         DN_mm = seg.get("DN_mm", 1500)
-        D_m = DN_mm / 1000.0
-        A = PI / 4 * D_m ** 2
-        V = Q / A if A > 1e-9 else 0
 
         row = {
             "name":          seg["name"],
@@ -1243,11 +1551,11 @@ def compute_siphon(segments: List[Dict],
             "n":             n,
             "DN_mm":         DN_mm,
             "pipe_material": seg_mat,
-            "V":             round(V, 2),
+            "V":             "-",
         }
         _apply_overrides(row, seg, {
-            "Q": "Q",
-            "n": "n", "DN_mm": "DN_mm", "pipe_material": "pipe_material",
+            "Q": "Q", "Q_inc": "Q_inc",
+            "n": "n", "DN_mm": "DN_mm", "pipe_material": "pipe_material", "V": "V",
         })
         rows.append(row)
     return rows
@@ -1269,10 +1577,6 @@ def compute_pressure_pipe(segments: List[Dict],
 
         Q = seg["Q"]
         DN_mm = seg.get("DN_mm", 1500)
-        D_m = DN_mm / 1000.0
-        A = PI / 4 * D_m ** 2
-        V = Q / A if A > 1e-9 else 0
-        total_head_loss = _compute_pressure_pipe_total_head_loss(seg, Q, D_m, material_key)
 
         row = {
             "name":               seg["name"],
@@ -1285,14 +1589,15 @@ def compute_pressure_pipe(segments: List[Dict],
             "DN_mm":              DN_mm,
             "pipe_material":      get_pressure_pipe_material_display_name(material_key),
             "pipe_material_key":  material_key,
-            "V":                  round(V, 2),
-            "total_head_loss":    _format_pressure_pipe_total_head_loss(total_head_loss),
+            "V":                  "-",
+            "total_head_loss":    "-",
         }
         _apply_overrides(row, seg, {
-            "Q": "Q",
+            "Q": "Q", "Q_inc": "Q_inc",
             "friction_params": "friction_params",
             "DN_mm": "DN_mm",
             "pipe_material": "pipe_material",
+            "V": "V",
             "total_head_loss": "total_head_loss",
         })
         row["pipe_material"] = get_pressure_pipe_material_display_name(row.get("pipe_material"))
@@ -1471,6 +1776,51 @@ def _write_trapezoid_channel(ws, data, styles, gcl, col_offset=0):
 
 
 # ============================================================
+# Sheet 1c: U形明渠
+# ============================================================
+
+def _write_u_channel(ws, data, styles, gcl, col_offset=0):
+    C = col_offset
+    NCOLS = 12
+    R1 = 1
+
+    headers = [
+        ("流量段", None),
+        ("设计流量", "m³/s"),
+        ("加大流量", "m³/s"),
+        ("1/底坡", None),
+        ("糙率", None),
+        ("半径R", "m"),
+        ("外倾角α", "°"),
+        ("圆心角θ", "°"),
+        ("高度H", "m"),
+        ("设计水深H1", "m"),
+        ("加大水深H2", "m"),
+        ("设计流速", "m/s"),
+    ]
+    col_widths = [14, 12, 12, 12, 10, 10, 10, 10, 12, 13, 13, 12]
+
+    _write_title(ws, R1, C + 1, C + NCOLS, "U形明渠断面尺寸及水力要素表", styles)
+    for i, (name, unit) in enumerate(headers):
+        _write_header_2row(ws, R1 + 1, R1 + 2, C + 1 + i, name, unit, styles)
+    for i, w in enumerate(col_widths):
+        _set_col_width(ws, C + 1 + i, w, gcl)
+
+    for ri, d in enumerate(data):
+        r = R1 + 3 + ri
+        vals = [
+            d["name"], d["Q"], d.get("Q_inc", ""),
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"], d.get("R", ""), d.get("alpha_deg", ""), d.get("theta_deg", ""),
+            d.get("H", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", "")
+        ]
+        for ci, v in enumerate(vals):
+            _sc(ws, r, C + 1 + ci, v, styles)
+
+    return NCOLS
+
+
+# ============================================================
 # Sheet 2: 隧洞
 # ============================================================
 
@@ -1599,7 +1949,7 @@ def _write_tunnel_circular(ws, data, styles, gcl, col_offset=0):
 # Sheet 2c: 马蹄形隧洞
 # ============================================================
 
-def _write_tunnel_horseshoe(ws, data, styles, gcl, col_offset=0):
+def _write_tunnel_horseshoe(ws, data, styles, gcl, col_offset=0, title=None):
     C = col_offset
     NCOLS = 12
     R1 = 1
@@ -1620,7 +1970,7 @@ def _write_tunnel_horseshoe(ws, data, styles, gcl, col_offset=0):
     ]
     col_widths = [14, 12, 12, 12, 12, 10, 10, 11, 11, 13, 13, 12]
 
-    _write_title(ws, R1, C + 1, C + NCOLS, "马蹄形隧洞断面尺寸及水力要素表", styles)
+    _write_title(ws, R1, C + 1, C + NCOLS, title or "马蹄形隧洞断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
         _write_header_2row(ws, R1 + 1, R1 + 2, C + 1 + i, name, unit, styles)
     for i, w in enumerate(col_widths):
@@ -1956,6 +2306,7 @@ def generate_excel(
     filepath: str,
     rect_channel_segs: List[Dict] = None,
     trap_channel_segs: List[Dict] = None,
+    u_channel_segs: List[Dict] = None,
     tunnel_segs: List[Dict] = None,
     tunnel_arch_segs: List[Dict] = None,
     tunnel_circular_segs: List[Dict] = None,
@@ -1999,6 +2350,8 @@ def generate_excel(
         rect_channel_segs = _default_segments_rect_channel()
     if trap_channel_segs is None:
         trap_channel_segs = []
+    if u_channel_segs is None:
+        u_channel_segs = []
 
     # 隧洞：向后兼容旧 tunnel_segs 参数 → tunnel_arch_segs
     if tunnel_arch_segs is None and tunnel_segs is not None:
@@ -2030,9 +2383,14 @@ def generate_excel(
     # ---- 计算 ----
     d1 = compute_rect_channel(rect_channel_segs) if rect_channel_segs else []
     d1b = compute_trapezoid_channel(trap_channel_segs) if trap_channel_segs else []
+    d1c = compute_u_channel(u_channel_segs) if u_channel_segs else []
     d2_arch, _ = compute_tunnel(tunnel_arch_segs, rock_lining, unified=tunnel_unified_arch) if tunnel_arch_segs else ([], {})
     d2_circ, _ = compute_tunnel_circular(tunnel_circular_segs, rock_lining, unified=tunnel_unified_circular) if tunnel_circular_segs else ([], {})
-    d2_horse, d2_horse_info = compute_tunnel_horseshoe(tunnel_horseshoe_segs, rock_lining=rock_lining, unified=tunnel_unified_horseshoe) if tunnel_horseshoe_segs else ([], {})
+    horseshoe_entries = _build_horseshoe_export_entries(
+        tunnel_horseshoe_segs,
+        rock_lining=rock_lining,
+        unified=tunnel_unified_horseshoe,
+    ) if tunnel_horseshoe_segs else []
     d3_u = compute_aqueduct_u(aqueduct_u_segs) if aqueduct_u_segs else []
     d3_rect = compute_aqueduct_rect(aqueduct_rect_segs) if aqueduct_rect_segs else []
     d4 = compute_rect_culvert(rect_culvert_segs) if rect_culvert_segs else []
@@ -2040,19 +2398,14 @@ def generate_excel(
     d6 = compute_siphon(siphon_segs, siphon_material) if siphon_segs else []
     d7 = compute_pressure_pipe(pressure_pipe_segs, pressure_pipe_material) if pressure_pipe_segs else []
 
-    # 马蹄形隧洞 Sheet 名称动态显示型号
-    horseshoe_sheet_name = "马蹄形隧洞"
-    if d2_horse_info and d2_horse_info.get("section_type_name"):
-        horseshoe_sheet_name = d2_horse_info["section_type_name"] + "隧洞"
-
     wb = openpyxl.Workbook()
 
     tables_map = {
+        "u_channel":        ("U形明渠",              _write_u_channel,          d1c),
         "rect_channel":     ("矩形明渠",          _write_rect_channel,       d1),
         "trap_channel":     ("梯形明渠",          _write_trapezoid_channel,  d1b),
         "tunnel_arch":      ("圆拱直墙型隧洞",    _write_tunnel,             d2_arch),
         "tunnel_circular":  ("圆形隧洞",          _write_tunnel_circular,    d2_circ),
-        "tunnel_horseshoe": (horseshoe_sheet_name, _write_tunnel_horseshoe,   d2_horse),
         "aqueduct_u":       ("U形渡槽",           _write_aqueduct,           d3_u),
         "aqueduct_rect":    ("矩形渡槽",          _write_aqueduct_rect,      d3_rect),
         "rect_culvert":     ("矩形暗涵",          _write_rect_culvert,       d4),
@@ -2063,12 +2416,28 @@ def generate_excel(
         "tunnel":           ("圆拱直墙型隧洞",    _write_tunnel,             d2_arch),
         "aqueduct":         ("U形渡槽",           _write_aqueduct,           d3_u),
     }
+    horseshoe_keys = [entry["key"] for entry in horseshoe_entries]
+    for entry in horseshoe_entries:
+        title = entry["title"]
+        tables_map[entry["key"]] = (
+            entry["sheet_name"],
+            lambda ws, data, styles, gcl, col_offset=0, _title=title: _write_tunnel_horseshoe(
+                ws,
+                data,
+                styles,
+                gcl,
+                col_offset=col_offset,
+                title=_title,
+            ),
+            entry["rows"],
+        )
     
     if not table_order:
-        table_order = ["rect_channel", "trap_channel",
+        table_order = ["rect_channel", "trap_channel", "u_channel",
                        "tunnel_arch", "tunnel_circular", "tunnel_horseshoe",
                        "aqueduct_u", "aqueduct_rect",
                        "rect_culvert", "circular_channel", "siphon", "pressure_pipe"]
+    table_order = _expand_horseshoe_table_order(table_order, horseshoe_keys)
 
     tables = []
     for key in table_order:
@@ -2470,6 +2839,26 @@ def _dxf_build_trapezoid_channel(data):
     return title, headers, col_widths, rows, None
 
 
+def _dxf_build_u_channel(data):
+    title = "U形明渠断面尺寸及水力要素表"
+    headers = [
+        ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
+        ("1/底坡", None), ("糙率", None), ("半径R", "m"),
+        ("外倾角α", "°"), ("圆心角θ", "°"),
+        ("高度H", "m"), ("设计水深H1", "m"), ("加大水深H2", "m"), ("设计流速", "m/s"),
+    ]
+    col_widths = _dxf_col_widths([14, 10, 10, 10, 8, 8, 8, 8, 10, 10, 10, 10])
+    rows = []
+    for d in data:
+        rows.append([
+            d["name"], d["Q"], d.get("Q_inc", ""),
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"], d.get("R", ""), d.get("alpha_deg", ""), d.get("theta_deg", ""),
+            d.get("H", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
+        ])
+    return title, headers, col_widths, rows, None
+
+
 def _dxf_build_tunnel(data):
     title = "圆拱直墙型隧洞断面尺寸及水力要素表"
     headers = [
@@ -2519,8 +2908,8 @@ def _dxf_build_tunnel_circular(data):
     return title, headers, col_widths, rows, merge
 
 
-def _dxf_build_tunnel_horseshoe(data):
-    title = "马蹄形隧洞断面尺寸及水力要素表"
+def _dxf_build_tunnel_horseshoe(data, title=None):
+    title = title or "马蹄形隧洞断面尺寸及水力要素表"
     headers = [
         ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("围岩类型", None), ("1/底坡", None), ("糙率", None),
@@ -2666,9 +3055,12 @@ def _dxf_build_pressure_pipe(data):
 _DXF_BUILDERS = {
     "rect_channel":     _dxf_build_rect_channel,
     "trap_channel":     _dxf_build_trapezoid_channel,
+    "u_channel":        _dxf_build_u_channel,
     "tunnel_arch":      _dxf_build_tunnel,
     "tunnel_circular":  _dxf_build_tunnel_circular,
     "tunnel_horseshoe": _dxf_build_tunnel_horseshoe,
+    "tunnel_horseshoe_1": _dxf_build_tunnel_horseshoe,
+    "tunnel_horseshoe_2": _dxf_build_tunnel_horseshoe,
     "aqueduct_u":       _dxf_build_aqueduct_u,
     "aqueduct_rect":    _dxf_build_aqueduct_rect,
     "rect_culvert":     _dxf_build_rect_culvert,
@@ -2685,6 +3077,7 @@ def generate_dxf(
     filepath: str,
     rect_channel_segs: List[Dict] = None,
     trap_channel_segs: List[Dict] = None,
+    u_channel_segs: List[Dict] = None,
     tunnel_segs: List[Dict] = None,
     tunnel_arch_segs: List[Dict] = None,
     tunnel_circular_segs: List[Dict] = None,
@@ -2719,6 +3112,8 @@ def generate_dxf(
         rect_channel_segs = _default_segments_rect_channel()
     if trap_channel_segs is None:
         trap_channel_segs = []
+    if u_channel_segs is None:
+        u_channel_segs = []
     if tunnel_arch_segs is None and tunnel_segs is not None:
         tunnel_arch_segs = tunnel_segs
     if tunnel_arch_segs is None:
@@ -2745,9 +3140,14 @@ def generate_dxf(
     # ---- 计算 ----
     d1 = compute_rect_channel(rect_channel_segs) if rect_channel_segs else []
     d1b = compute_trapezoid_channel(trap_channel_segs) if trap_channel_segs else []
+    d1c = compute_u_channel(u_channel_segs) if u_channel_segs else []
     d2_arch, _ = compute_tunnel(tunnel_arch_segs, rock_lining, unified=tunnel_unified_arch) if tunnel_arch_segs else ([], {})
     d2_circ, _ = compute_tunnel_circular(tunnel_circular_segs, rock_lining, unified=tunnel_unified_circular) if tunnel_circular_segs else ([], {})
-    d2_horse, d2_horse_info_dxf = compute_tunnel_horseshoe(tunnel_horseshoe_segs, rock_lining=rock_lining, unified=tunnel_unified_horseshoe) if tunnel_horseshoe_segs else ([], {})
+    horseshoe_entries = _build_horseshoe_export_entries(
+        tunnel_horseshoe_segs,
+        rock_lining=rock_lining,
+        unified=tunnel_unified_horseshoe,
+    ) if tunnel_horseshoe_segs else []
     d3_u = compute_aqueduct_u(aqueduct_u_segs) if aqueduct_u_segs else []
     d3_rect = compute_aqueduct_rect(aqueduct_rect_segs) if aqueduct_rect_segs else []
     d4 = compute_rect_culvert(rect_culvert_segs) if rect_culvert_segs else []
@@ -2755,17 +3155,12 @@ def generate_dxf(
     d6 = compute_siphon(siphon_segs, siphon_material) if siphon_segs else []
     d7 = compute_pressure_pipe(pressure_pipe_segs, pressure_pipe_material) if pressure_pipe_segs else []
 
-    # 马蹄形隧洞标题动态显示型号（与 generate_excel 一致）
-    horseshoe_title = "马蹄形隧洞断面尺寸及水力要素表"
-    if d2_horse_info_dxf and d2_horse_info_dxf.get("section_type_name"):
-        horseshoe_title = d2_horse_info_dxf["section_type_name"] + "隧洞断面尺寸及水力要素表"
-
     data_map = {
         "rect_channel":     d1,
         "trap_channel":     d1b,
+        "u_channel":        d1c,
         "tunnel_arch":      d2_arch,
         "tunnel_circular":  d2_circ,
-        "tunnel_horseshoe": d2_horse,
         "aqueduct_u":       d3_u,
         "aqueduct_rect":    d3_rect,
         "rect_culvert":     d4,
@@ -2775,12 +3170,17 @@ def generate_dxf(
         "tunnel":           d2_arch,
         "aqueduct":         d3_u,
     }
+    horseshoe_keys = [entry["key"] for entry in horseshoe_entries]
+    horseshoe_titles = {entry["key"]: entry["title"] for entry in horseshoe_entries}
+    for entry in horseshoe_entries:
+        data_map[entry["key"]] = entry["rows"]
 
     if not table_order:
-        table_order = ["rect_channel", "trap_channel",
+        table_order = ["rect_channel", "trap_channel", "u_channel",
                        "tunnel_arch", "tunnel_circular", "tunnel_horseshoe",
                        "aqueduct_u", "aqueduct_rect",
                        "rect_culvert", "circular_channel", "siphon", "pressure_pipe"]
+    table_order = _expand_horseshoe_table_order(table_order, horseshoe_keys)
 
     # 收集有数据的表格
     tables = []
@@ -2815,9 +3215,8 @@ def generate_dxf(
     current_y = 0.0
     for key, builder, d in tables:
         title, headers, col_widths, rows, merge = builder(d)
-        # 马蹄形隧洞使用动态标题
-        if key == "tunnel_horseshoe":
-            title = horseshoe_title
+        if key in horseshoe_titles:
+            title = horseshoe_titles[key]
         h = _dxf_draw_table(
             msp, 0.0, current_y,
             title, headers, col_widths, rows,

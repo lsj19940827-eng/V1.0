@@ -51,3 +51,26 @@ def test_config_to_panel_dict_uses_runtime_confirm_only():
     manager.mark_runtime_confirmed("虹吸B")
     data2 = MultiSiphonDialog._config_to_panel_dict(fake_dialog, config)
     assert data2.get("calculated_at")
+
+
+def test_update_siphon_result_persists_velocity_and_loads_compatibly():
+    project_path = _project_path()
+    manager = SiphonManager(project_path)
+
+    manager.update_siphon_result("siphon-c", total_head_loss=1.25, diameter=0.9, velocity=1.23)
+    manager.save_config()
+
+    reloaded = SiphonManager(project_path)
+    config = reloaded.get_siphon_config("siphon-c")
+    assert config is not None
+    assert config.total_head_loss == 1.25
+    assert config.diameter == 0.9
+    assert config.velocity == 1.23
+
+    reloaded._config["siphons"]["legacy"] = {
+        "total_head_loss": 0.88,
+        "diameter": 0.7,
+    }
+    compat = reloaded.get_siphon_config("legacy")
+    assert compat is not None
+    assert compat.velocity is None

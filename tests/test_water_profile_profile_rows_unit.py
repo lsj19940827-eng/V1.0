@@ -90,6 +90,104 @@ def test_profile_row_layout_tingzikou_height_and_positions():
     assert 0 in boundaries and 135 in boundaries
 
 
+def test_runtime_advanced_mapping_separates_legacy_writeback_and_enabled_runtime_rows():
+    settings = {
+        "y_line_height": 120,
+        "profile_row_items": [
+            {"id": "building_name", "enabled": True},
+            {"id": "station", "enabled": True},
+            {"id": "bottom_elev", "enabled": True},
+            {"id": "slope", "enabled": False},
+            {"id": "ip_name", "enabled": False},
+            {"id": "top_elev", "enabled": False},
+            {"id": "water_elev", "enabled": False},
+            {"id": "bd_ip_before", "enabled": False},
+            {"id": "bf_ip_after", "enabled": False},
+            {"id": "bj_station_before", "enabled": False},
+            {"id": "bl_station_after", "enabled": False},
+        ],
+    }
+
+    runtime = cad_tools._compute_runtime_advanced_parameter_view(settings)
+
+    assert runtime["legacy_writeback_values"]["y_name"] == 50.0
+    assert runtime["legacy_writeback_values"]["y_station"] == 17.0
+    assert runtime["legacy_writeback_values"]["y_bottom"] == 1.0
+    assert runtime["legacy_writeback_values"]["y_top"] is None
+    assert runtime["legacy_enabled_state"]["y_top"] is False
+    assert runtime["line_height"] == 120.0
+    assert [item["id"] for item in runtime["enabled_runtime_rows"]] == [
+        "building_name",
+        "station",
+        "bottom_elev",
+    ]
+    assert runtime["enabled_runtime_rows"][0]["text_y"] == 50.0
+    assert runtime["enabled_runtime_rows"][1]["source_label"] == "底+2 / 行高 30"
+    assert runtime["row_details"] == runtime["enabled_runtime_rows"]
+
+
+def test_enabled_runtime_rows_include_all_auxiliary_visible_rows():
+    settings = {
+        "y_line_height": 120,
+        "profile_row_items": [
+            {"id": "building_name", "enabled": True},
+            {"id": "slope", "enabled": True},
+            {"id": "ip_name", "enabled": True},
+            {"id": "station", "enabled": True},
+            {"id": "top_elev", "enabled": True},
+            {"id": "water_elev", "enabled": True},
+            {"id": "bottom_elev", "enabled": True},
+            {"id": "bd_ip_before", "enabled": True},
+            {"id": "bf_ip_after", "enabled": True},
+            {"id": "bj_station_before", "enabled": True},
+            {"id": "bl_station_after", "enabled": True},
+        ],
+    }
+
+    runtime = cad_tools._compute_runtime_advanced_parameter_view(settings)
+    enabled_runtime_rows = runtime["enabled_runtime_rows"]
+
+    assert [item["id"] for item in enabled_runtime_rows] == [
+        "building_name",
+        "slope",
+        "ip_name",
+        "station",
+        "top_elev",
+        "water_elev",
+        "bottom_elev",
+        "bd_ip_before",
+        "bf_ip_after",
+        "bj_station_before",
+        "bl_station_after",
+    ]
+    assert enabled_runtime_rows[7]["text_y"] == 102.0
+    assert enabled_runtime_rows[8]["text_y"] == 62.0
+    assert enabled_runtime_rows[9]["text_y"] == 32.0
+    assert enabled_runtime_rows[10]["text_y"] == 2.0
+    assert runtime["legacy_writeback_values"]["y_station"] == 187.0
+    assert runtime["legacy_writeback_values"]["y_line_height"] == 275.0
+
+
+def test_runtime_line_height_uses_max_of_content_height_and_compat_value():
+    low_settings = {
+        "y_line_height": 60,
+        "profile_row_items": cad_tools._default_profile_row_items(),
+    }
+    high_settings = {
+        "y_line_height": 220,
+        "profile_row_items": cad_tools._default_profile_row_items(),
+    }
+
+    low_runtime = cad_tools._compute_runtime_advanced_parameter_view(low_settings)
+    high_runtime = cad_tools._compute_runtime_advanced_parameter_view(high_settings)
+
+    assert low_runtime["total_height"] == 135.0
+    assert low_runtime["line_height"] == 135.0
+    assert low_runtime["legacy_writeback_values"]["y_line_height"] == 135.0
+    assert high_runtime["line_height"] == 220.0
+    assert high_runtime["legacy_writeback_values"]["y_line_height"] == 220.0
+
+
 def test_station_before_after_row_heights_are_30():
     row_defs = cad_tools._PROFILE_ROW_DEF_MAP
 
@@ -100,30 +198,23 @@ def test_station_before_after_row_heights_are_30():
 def test_ip_related_records_suffix_and_duplicate_offset_rules():
     nodes = [
         _make_node(ip_no=1, mc=20, bc=10, ec=30, angle=12),
-        _make_node(ip_no=2, mc=20, bc=10, ec=30, angle=15),  # 与上一行同BC/MC/EC，触发+6
+        _make_node(ip_no=2, mc=20, bc=10, ec=30, angle=15),
         _make_node(
             ip_no=8, mc=420.5, bc=420.5, ec=420.5, angle=0,
-            structure="隧洞-马蹄形", name="土地垭", in_out="进",
+            structure="隧洞-马蹄形", name="土地坝", in_out="进",
         ),
-        _make_node(ip_no=3, mc=55, bc=50, ec=60, angle=0),  # 普通IP且F=0，无弯前/弯后
+        _make_node(ip_no=3, mc=55, bc=50, ec=60, angle=0),
     ]
     rec = cad_tools._build_ip_related_row_records(nodes, station_prefix="")
 
-    # 普通IP有转角：应有弯前/弯后
     assert rec["bd_ip_before"][0]["text"].endswith("弯前")
     assert rec["bf_ip_after"][0]["text"].endswith("弯后")
-
-    # 第二条同桩号触发 +6 规则
     assert rec["bd_ip_before"][1]["x"] == rec["bd_ip_before"][0]["x"] + 6
     assert rec["be_ip_text"][1]["x"] == rec["be_ip_text"][0]["x"] + 6
     assert rec["bf_ip_after"][1]["x"] == rec["bf_ip_after"][0]["x"] + 6
-
-    # 特殊建筑：结构全称+进出，且不加弯前/弯后
-    assert rec["be_ip_text"][2]["text"] == "IP8 土地垭隧洞进"
-    assert rec["bd_ip_before"][2]["text"] == "IP8 土地垭隧洞进"
-    assert rec["bf_ip_after"][2]["text"] == "IP8 土地垭隧洞进"
-
-    # 普通IP且F=0：不加弯前/弯后
+    assert rec["be_ip_text"][2]["text"] == "IP8 土地坝隧洞进"
+    assert rec["bd_ip_before"][2]["text"] == "IP8 土地坝隧洞进"
+    assert rec["bf_ip_after"][2]["text"] == "IP8 土地坝隧洞进"
     assert rec["bd_ip_before"][3]["text"] == "IP3"
     assert rec["bf_ip_after"][3]["text"] == "IP3"
 

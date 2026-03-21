@@ -11,6 +11,9 @@ import pytest
 
 def _load_cad_tools():
     root = Path(__file__).resolve().parents[1]
+    root_str = str(root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
     matches = list(root.glob("*/water_profile/cad_tools.py"))
     assert matches, "未找到 cad_tools.py"
     spec = importlib.util.spec_from_file_location("cad_tools_longitudinal_dedup_test_mod", matches[0])
@@ -54,8 +57,15 @@ class _TextEntity:
 class _DummyMSP:
     def __init__(self):
         self.text_records = []
+        self.line_records = []
 
-    def add_line(self, *_args, **_kwargs):
+    def add_line(self, start, end, **_kwargs):
+        self.line_records.append(
+            {
+                "start": (float(start[0]), float(start[1])),
+                "end": (float(end[0]), float(end[1])),
+            }
+        )
         return None
 
     def add_lwpolyline(self, *_args, **_kwargs):
@@ -192,6 +202,36 @@ def _parse_text_cmds(path):
     return rows
 
 
+def _parse_pl_cmds(path):
+    pat = re.compile(
+        r"^pl\s+([-\d.eE]+),([-\d.eE]+)\s+([-\d.eE]+),([-\d.eE]+)\s*$"
+    )
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = pat.match(line.strip())
+        if not m:
+            continue
+        rows.append(
+            {
+                "start": (float(m.group(1)), float(m.group(2))),
+                "end": (float(m.group(3)), float(m.group(4))),
+            }
+        )
+    return rows
+
+
+def _has_line(records, start, end, tol=1e-6):
+    for rec in records:
+        if (
+            abs(rec["start"][0] - start[0]) <= tol
+            and abs(rec["start"][1] - start[1]) <= tol
+            and abs(rec["end"][0] - end[0]) <= tol
+            and abs(rec["end"][1] - end[1]) <= tol
+        ):
+            return True
+    return False
+
+
 def test_draw_profile_on_msp_dedup_station_text(monkeypatch):
     ezdxf_stub = SimpleNamespace(
         enums=SimpleNamespace(
@@ -214,6 +254,8 @@ def test_draw_profile_on_msp_dedup_station_text(monkeypatch):
         _default_settings(),
         station_prefix="",
     )
+    _, layout, _, line_height, _ = cad_tools._build_profile_row_layout(_default_settings())
+    short_line_height = layout["slope"]["bottom"]
 
     # dxf 分支除首列外 x 会减 1，因此 station=100/200 的文本 x 分别是 99/199
     assert _texts_at(msp.text_records, 99.0, 1.0) == ["407.898"]
@@ -229,12 +271,16 @@ def test_draw_profile_on_msp_dedup_station_text(monkeypatch):
     assert len(_texts_at(msp.text_records, 199.0, 47.0)) == 1
     assert any("IP15" in txt for txt in _texts_at(msp.text_records, 99.0, 77.0))
     assert _texts_at(msp.text_records, 199.0, 77.0) == ["IP20"]
+    assert _has_line(msp.line_records, (100.0, 0.0), (100.0, short_line_height))
+    assert _has_line(msp.line_records, (200.0, 0.0), (200.0, line_height))
 
 
 def test_export_longitudinal_txt_dedup_station_text(tmp_path, monkeypatch):
     nodes = _sample_nodes()
     valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
     out_file = tmp_path / "longitudinal_profile.txt"
+    _, layout, _, line_height, _ = cad_tools._build_profile_row_layout(_default_settings())
+    short_line_height = layout["slope"]["bottom"]
 
     monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
     monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
@@ -249,6 +295,7 @@ def test_export_longitudinal_txt_dedup_station_text(tmp_path, monkeypatch):
     )
 
     rows = _parse_text_cmds(out_file)
+    pl_rows = _parse_pl_cmds(out_file)
     key = lambda x, y: [r["text"] for r in rows if abs(r["x"] - x) <= 1e-6 and abs(r["y"] - y) <= 1e-6]
 
     assert key(100.0, 1.0) == ["407.898"]
@@ -264,6 +311,8 @@ def test_export_longitudinal_txt_dedup_station_text(tmp_path, monkeypatch):
     assert len(key(200.0, 47.0)) == 1
     assert any("IP15" in txt for txt in key(100.0, 77.0))
     assert key(200.0, 77.0) == ["IP20"]
+    assert _has_line(pl_rows, (100.0, 0.0), (100.0, short_line_height))
+    assert _has_line(pl_rows, (200.0, 0.0), (200.0, line_height))
 
 
 def test_profile_text_nodes_filter_transition_and_auto_inserted():

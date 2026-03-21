@@ -341,3 +341,16 @@ def test_get_template_path_returns_chating_sample_file():
     assert template_path.endswith("茶亭支渠批量计算.xlsx")
     assert sample_path.endswith("茶亭支渠批量计算.xlsx")
     assert template_path == sample_path
+
+
+def test_get_template_path_returns_hezuo_sample_file():
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+
+    template_path = BatchPanel._get_template_path(panel, "hezuo")
+    sample_path = BatchPanel._get_sample6_path(panel)
+
+    assert template_path.endswith("合作干渠批量计算用表.xlsx")
+    assert sample_path.endswith("合作干渠批量计算用表.xlsx")
+    assert template_path == sample_path

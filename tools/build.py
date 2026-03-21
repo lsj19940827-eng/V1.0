@@ -165,8 +165,10 @@ DIST_DIR = os.path.join(PROJECT_ROOT, "dist")
 BUILD_DIR = os.path.join(PROJECT_ROOT, "build")
 MANIFEST_STORE_DIR = os.path.join(PROJECT_ROOT, ".release-manifests")
 MAIN_SCRIPT = os.path.join(PROJECT_ROOT, "main.py")
+UPDATE_HELPER_SCRIPT = os.path.join(PROJECT_ROOT, "update_helper.py")
 ICON_FILE = os.path.join(PROJECT_ROOT, "icon.ico")
 PROJECT_VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
+UPDATE_HELPER_NAME = f"{APP_NAME_EN}Updater"
 
 
 def _project_python() -> str:
@@ -243,6 +245,41 @@ def _clean_excel_temp_files(directory):
                 pass
     if removed:
         print(f"  [清理] 已删除 {directory} 中 {removed} 个 Excel 临时文件")
+
+
+def _build_update_helper(app_dist_dir: str):
+    """构建独立更新助手，输出到主程序目录。"""
+    if not os.path.exists(UPDATE_HELPER_SCRIPT):
+        raise FileNotFoundError(f"未找到更新助手入口：{UPDATE_HELPER_SCRIPT}")
+
+    helper_workdir = os.path.join(BUILD_DIR, "update_helper")
+    os.makedirs(helper_workdir, exist_ok=True)
+    args = [
+        _project_python(), "-m", "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "--onefile",
+        "--windowed",
+        f"--name={UPDATE_HELPER_NAME}",
+        f"--distpath={app_dist_dir}",
+        f"--workpath={helper_workdir}",
+        f"--specpath={helper_workdir}",
+        f"--paths={PROJECT_ROOT}",
+        "--hidden-import=PySide6",
+        "--hidden-import=PySide6.QtCore",
+        "--hidden-import=PySide6.QtGui",
+        "--hidden-import=PySide6.QtWidgets",
+        "--hidden-import=updater",
+        "--hidden-import=version",
+    ]
+    if os.path.exists(ICON_FILE):
+        args.append(f"--icon={ICON_FILE}")
+    args.append(UPDATE_HELPER_SCRIPT)
+
+    print("\n[helper] 正在构建独立更新助手...\n")
+    result = subprocess.run(args, cwd=PROJECT_ROOT)
+    if result.returncode != 0:
+        raise RuntimeError(f"更新助手构建失败，退出码：{result.returncode}")
 
 
 def build(bump: str = None):
@@ -417,15 +454,18 @@ def build(bump: str = None):
         print(f"\n[错误] 打包失败（退出码: {result.returncode}）")
         sys.exit(1)
 
+    app_dist_dir = os.path.join(DIST_DIR, APP_NAME_EN)
+    _build_update_helper(app_dist_dir)
+
     # ---- 清理残留的 .py 源码文件（双保险） ----
-    _clean_py_sources(os.path.join(DIST_DIR, APP_NAME_EN))
+    _clean_py_sources(app_dist_dir)
 
     # ---- 删除用不到的 Qt 模块 DLL ----
-    _clean_unused_qt_dlls(os.path.join(DIST_DIR, APP_NAME_EN))
+    _clean_unused_qt_dlls(app_dist_dir)
 
     # ---- 生成文件清单 manifest.json（供增量补丁对比） ----
     print(f"\n[2/3] 生成文件清单 manifest.json...\n")
-    dist_folder = os.path.join(DIST_DIR, APP_NAME_EN)
+    dist_folder = app_dist_dir
     if not os.path.exists(dist_folder):
         print("[错误] 未找到打包产物")
         sys.exit(1)

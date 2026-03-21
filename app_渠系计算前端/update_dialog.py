@@ -12,13 +12,12 @@
 """
 
 import os
-import sys
 import threading
 import time
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QTextEdit, QWidget, QSizePolicy, QApplication, QComboBox,
+    QProgressBar, QTextEdit, QMessageBox, QComboBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont
@@ -82,7 +81,13 @@ class DownloadThread(QThread):
 class UpdateDialog(QDialog):
     """应用内更新对话框"""
 
-    def __init__(self, parent=None, auto_check: bool = False, info=None):
+    def __init__(
+        self,
+        parent=None,
+        auto_check: bool = False,
+        info=None,
+        force_full_package_once: bool = False,
+    ):
         """
         info: 可选，已有的 UpdateInfo（由静默检查传入，跳过重复网络请求）
         """
@@ -97,6 +102,7 @@ class UpdateDialog(QDialog):
         self._is_patch = False
         self._is_downgrade = False
         self._patch_failed = False     # 避免重试时再次尝试已失败的 patch
+        self._force_full_package_once = force_full_package_once
         self._check_thread = None
         self._download_thread = None
         self._active_channel = "prod"
@@ -310,7 +316,12 @@ class UpdateDialog(QDialog):
             if info.file_size_mb:
                 return f"下载正式版并降级 ({info.file_size_mb:.1f} MB)"
             return "下载正式版并降级"
-        if info.can_use_patch and not self._patch_failed and info.patch_size_mb:
+        if (
+            not self._force_full_package_once
+            and info.can_use_patch
+            and not self._patch_failed
+            and info.patch_size_mb
+        ):
             return f"下载增量补丁包 ({info.patch_size_mb:.1f} MB)"
         if info.file_size_mb:
             return f"下载全量包 ({info.file_size_mb:.1f} MB)"
@@ -371,11 +382,21 @@ class UpdateDialog(QDialog):
                 f"<h3 style='margin:0 0 4px 0;'>新版本 V{info.latest_version}</h3>",
                 f"<p style='color:#666; margin:2px 0;'>发布日期：{info.release_date}</p>",
             ]
-            if info.can_use_patch and not self._patch_failed and info.patch_size_mb:
+            if (
+                not self._force_full_package_once
+                and info.can_use_patch
+                and not self._patch_failed
+                and info.patch_size_mb
+            ):
                 lines.append(
                     f"<p style='color:#1976D2; margin:2px 0;'>"
                     f"补丁包：<b>{info.patch_size_mb:.1f} MB</b>"
                     f"&nbsp;&nbsp;<span style='color:#999;'>（全量包 {info.file_size_mb:.1f} MB）</span></p>"
+                )
+            if self._force_full_package_once and info.file_size_mb:
+                lines.append(
+                    f"<p style='color:#E65100; margin:2px 0;'>"
+                    f"本次将直接下载全量包：<b>{info.file_size_mb:.1f} MB</b></p>"
                 )
             elif info.file_size_mb:
                 lines.append(
@@ -448,7 +469,11 @@ class UpdateDialog(QDialog):
             size_text = f"{info.file_size_mb:.1f} MB" if info.file_size_mb else "未知大小"
             label = f"正在下载正式版（降级）({size_text}) ..."
         # 优先下载补丁包（除非已知 patch 失败）
-        elif info.can_use_patch and not self._patch_failed:
+        elif (
+            not self._force_full_package_once
+            and info.can_use_patch
+            and not self._patch_failed
+        ):
             self._is_patch = True
             url = info.patch_url
             label = f"正在下载增量补丁包 ({info.patch_size_mb:.1f} MB) ..."
@@ -595,9 +620,42 @@ class UpdateDialog(QDialog):
             self._download_thread.wait(3000)
         super().closeEvent(event)
 
+    def _is_project_dirty(self) -> bool:
+        parent = self.parent()
+        project_manager = getattr(parent, "project_manager", None)
+        return bool(project_manager and getattr(project_manager, "is_dirty", False))
+
+    def _validate_before_install(self) -> bool:
+        if self._is_project_dirty():
+            QMessageBox.warning(
+                self,
+                "请先保存当前项目",
+                "检测到当前项目还有未保存修改。\n\n请先保存项目，再重新点击“立即安装更新”。",
+            )
+            return False
+
+        from updater import ensure_install_ready, UpdatePreparationError
+
+        try:
+            ensure_install_ready(self._zip_path, self._is_patch)
+        except UpdatePreparationError as exc:
+            QMessageBox.warning(self, "暂时无法安装", str(exc))
+            return False
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "安装前检查失败",
+                f"安装前检查时出现异常：\n{exc}\n\n请稍后重试，或重新下载更新包。",
+            )
+            return False
+
+        return True
+
     # ---- 安装更新 ----
     def _on_install(self):
         if not self._zip_path:
+            return
+        if not self._validate_before_install():
             return
 
         if self._is_downgrade:
@@ -629,15 +687,19 @@ class UpdateDialog(QDialog):
             if ret != QMessageBox.Yes:
                 return
 
-        from updater import apply_update, launch_updater_and_exit
+        from updater import create_update_session, launch_updater_and_exit
         try:
-            bat_path = apply_update(self._zip_path, is_patch=self._is_patch)
-            launch_updater_and_exit(bat_path)
+            session_path = create_update_session(
+                self._zip_path,
+                is_patch=self._is_patch,
+                target_version=self._update_info.latest_version if self._update_info else APP_VERSION,
+                current_version=APP_VERSION,
+            )
+            launch_updater_and_exit(session_path)
         except Exception as e:
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(
                 self, "更新失败",
-                f"生成更新脚本失败：\n{e}\n\n请手动下载最新版本。"
+                f"启动安装助手失败：\n{e}\n\n请重新下载更新包后重试。"
             )
 
 

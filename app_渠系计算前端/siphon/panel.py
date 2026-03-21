@@ -1820,6 +1820,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 longitudinal_nodes=data.get('longitudinal_nodes', []),
                 total_head_loss=data.get('total_head_loss'),
                 diameter=data.get('diameter'),
+                velocity=data.get('velocity'),
                 calculated_at='',  # 不保存时间戳，每次打开程序都需要重新确认
                 num_pipes=int(data.get('num_pipes', 1)),
             )
@@ -2023,6 +2024,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 longitudinal_nodes=data.get('longitudinal_nodes', []),
                 total_head_loss=data.get('total_head_loss'),
                 diameter=data.get('diameter'),
+                velocity=data.get('velocity'),
                 calculated_at='',
                 num_pipes=int(data.get('num_pipes', 1)),
             )

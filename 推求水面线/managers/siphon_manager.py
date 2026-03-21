@@ -49,6 +49,8 @@ class SiphonConfig:
     calculated_at: str = ""                   # 计算时间
     num_pipes: int = 1                        # 管道根数
     
+    velocity: Optional[float] = None         # 璁捐娴侀€?
+
     def __post_init__(self):
         if self.segments is None:
             self.segments = []
@@ -232,6 +234,7 @@ class SiphonManager:
             longitudinal_nodes=data.get("longitudinal_nodes", []),
             total_head_loss=data.get("total_head_loss"),
             diameter=data.get("diameter"),
+            velocity=data.get("velocity"),
             calculated_at=data.get("calculated_at", ""),
             num_pipes=data.get("num_pipes", 1)
         )
@@ -265,12 +268,13 @@ class SiphonManager:
             "longitudinal_nodes": config.longitudinal_nodes,
             "total_head_loss": config.total_head_loss,
             "diameter": config.diameter,
+            "velocity": config.velocity,
             "calculated_at": config.calculated_at,
             "num_pipes": config.num_pipes
         }
     
     def update_siphon_result(self, siphon_name: str, total_head_loss: float,
-                            diameter: float = None):
+                            diameter: float = None, velocity: float = None):
         """
         更新倒虹吸计算结果（使用加大流量工况水损）
 
@@ -288,6 +292,8 @@ class SiphonManager:
         self._config["siphons"][siphon_name]["total_head_loss"] = total_head_loss
         if diameter is not None:
             self._config["siphons"][siphon_name]["diameter"] = diameter
+        if velocity is not None:
+            self._config["siphons"][siphon_name]["velocity"] = velocity
         self._config["siphons"][siphon_name]["calculated_at"] = \
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.mark_runtime_confirmed(siphon_name)

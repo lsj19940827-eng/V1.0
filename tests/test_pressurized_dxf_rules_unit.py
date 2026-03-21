@@ -61,7 +61,17 @@ def _node(
     is_pressure_pipe=False,
     is_transition=False,
     is_auto=False,
+    pipe_material=None,
+    velocity=None,
+    head_loss_siphon=None,
+    external_head_loss=None,
+    section_params_extra=None,
 ):
+    section_params = {"D": d} if d else {}
+    if pipe_material is not None:
+        section_params["pipe_material"] = pipe_material
+    if section_params_extra:
+        section_params.update(section_params_extra)
     return SimpleNamespace(
         is_transition=is_transition,
         is_auto_inserted_channel=is_auto,
@@ -70,8 +80,11 @@ def _node(
         structure_type=SimpleNamespace(value=structure_type),
         name=name,
         flow_section=flow_section,
-        section_params={"D": d} if d else {},
+        section_params=section_params,
         structure_height=h,
+        velocity=velocity,
+        head_loss_siphon=head_loss_siphon,
+        external_head_loss=external_head_loss,
     )
 
 
@@ -117,6 +130,41 @@ def test_extract_pressurized_param_entities_tracks_flow_sections_and_invalid_row
     assert [row["display_name"] for row in pressure_rows] == ["1号管道-第三流量段"]
     assert pressure_rows[0]["DN_mm"] == 1200
     assert pressure_invalid == []
+
+
+def test_extract_pressurized_param_entities_preserves_locked_material_and_results():
+    nodes = [
+        _node(
+            structure_type="倒虹吸",
+            name="锁定倒虹吸",
+            d=0.90,
+            flow_section="1",
+            is_siphon=True,
+            pipe_material="钢管",
+            velocity=1.236,
+            head_loss_siphon=0.4821,
+        ),
+        _node(
+            structure_type="有压管道",
+            name="锁定有压管道",
+            d=1.20,
+            flow_section="2",
+            is_pressure_pipe=True,
+            pipe_material="玻璃钢夹砂管",
+            velocity=1.458,
+            external_head_loss=0.7314,
+        ),
+    ]
+
+    siphon_rows, _ = cad_tools._extract_pressurized_param_entities(nodes, "siphon")
+    pressure_rows, _ = cad_tools._extract_pressurized_param_entities(nodes, "pressure_pipe")
+
+    assert siphon_rows[0]["pipe_material"] == "钢管"
+    assert siphon_rows[0]["V"] == 1.236
+    assert siphon_rows[0]["total_head_loss"] == 0.4821
+    assert pressure_rows[0]["pipe_material"] == "玻璃钢夹砂管"
+    assert pressure_rows[0]["V"] == 1.458
+    assert pressure_rows[0]["total_head_loss"] == 0.7314
 
 
 def test_merge_pressurized_param_defaults_migrates_legacy_name_cache_to_actual_segments():
@@ -257,6 +305,26 @@ def test_build_pressurized_segments_returns_empty_for_unmapped_dict_rows():
     assert segs == []
 
 
+def test_build_pressurized_segments_preserves_locked_velocity_and_total_loss():
+    segs = cad_tools._build_pressurized_segments(
+        qs=[2.0],
+        overrides_by_idx={1: {"n": 0.012}},
+        params=[
+            {
+                **_pressurized_row("锁定有压管道", 1, "球墨铸铁管", 1600, structure_kind="pressure_pipe"),
+                "V": 1.357,
+                "total_head_loss": 0.5627,
+            }
+        ],
+        has_source_data=True,
+        segment_name_fn=cad_tools._segment_label_from_index,
+    )
+
+    assert len(segs) == 1
+    assert segs[0]["V"] == 1.357
+    assert segs[0]["total_head_loss"] == 0.5627
+
+
 def test_siphon_dxf_header_uses_structure_name_and_flow_section():
     rows = summary_mod.compute_siphon([
         {"name": "龙王沟-第一流量段", "Q": 1.1, "DN_mm": 850, "pipe_material": "球墨铸铁管"}
@@ -269,47 +337,23 @@ def test_siphon_dxf_header_uses_structure_name_and_flow_section():
     assert table_rows[0][0] == "龙王沟-第一流量段"
 
 
-def test_pressure_pipe_summary_uses_fmb_headers_and_total_loss():
-    from 推求水面线.core.pressure_pipe_calc import calc_total_head_loss
-
-    ip_points = [
-        {"x": 0.0, "y": 0.0, "turn_radius": 0.0, "turn_angle": 0.0},
-        {"x": 120.0, "y": 0.0, "turn_radius": 0.0, "turn_angle": 0.0},
-    ]
-    segs = [{
+def test_pressure_pipe_summary_uses_fmb_headers_and_locked_total_loss_only():
+    rows = summary_mod.compute_pressure_pipe([{
         "name": "有压A-第一流量段",
         "Q": 1.1,
         "DN_mm": 850,
         "pipe_material": "球墨铸铁管",
-        "ip_points": ip_points,
-        "upstream_velocity": 0.8,
-        "downstream_velocity": 0.7,
-        "inlet_transition_form": "反弯扭曲面",
-        "outlet_transition_form": "反弯扭曲面",
-        "inlet_transition_zeta": 0.10,
-        "outlet_transition_zeta": 0.20,
-    }]
-
-    rows = summary_mod.compute_pressure_pipe(segs)
-    expected_total = round(
-        calc_total_head_loss(
-            name="有压A-第一流量段",
-            Q=1.1,
-            D=0.85,
-            material_key="球墨铸铁管",
-            ip_points=ip_points,
-            upstream_velocity=0.8,
-            downstream_velocity=0.7,
-            inlet_transition_form="反弯扭曲面",
-            outlet_transition_form="反弯扭曲面",
-            inlet_transition_zeta=0.10,
-            outlet_transition_zeta=0.20,
-        ).total_head_loss,
-        4,
-    )
+        "V": 1.624,
+        "total_head_loss": 0.4382,
+        "ip_points": [
+            {"x": 0.0, "y": 0.0, "turn_radius": 0.0, "turn_angle": 0.0},
+            {"x": 120.0, "y": 0.0, "turn_radius": 0.0, "turn_angle": 0.0},
+        ],
+    }])
 
     assert rows[0]["friction_params"] == "223200 / 1.852 / 4.87"
-    assert rows[0]["total_head_loss"] == expected_total
+    assert rows[0]["V"] == 1.624
+    assert rows[0]["total_head_loss"] == 0.4382
 
     _, headers, _, table_rows, _ = summary_mod._dxf_build_pressure_pipe(rows)
     assert headers[0] == ("有压管道名称及流量段", None)
@@ -317,18 +361,55 @@ def test_pressure_pipe_summary_uses_fmb_headers_and_total_loss():
     assert headers[-1] == ("总水头损失", "m")
     assert table_rows[0][0] == "有压A-第一流量段"
     assert table_rows[0][3] == "223200 / 1.852 / 4.87"
-    assert table_rows[0][-1] == expected_total
+    assert table_rows[0][4] == 850
+    assert table_rows[0][-2] == 1.624
+    assert table_rows[0][-1] == 0.4382
 
 
 def test_pressure_pipe_summary_uses_dash_when_total_loss_missing():
     rows = summary_mod.compute_pressure_pipe([
-        {"name": "有压B-第一流量段", "Q": 1.1, "DN_mm": 850, "pipe_material": "球墨铸铁管"}
+        {
+            "name": "有压B-第一流量段",
+            "Q": 1.1,
+            "DN_mm": 850,
+            "pipe_material": "球墨铸铁管",
+            "ip_points": [
+                {"x": 0.0, "y": 0.0, "turn_radius": 0.0, "turn_angle": 0.0},
+                {"x": 120.0, "y": 0.0, "turn_radius": 0.0, "turn_angle": 0.0},
+            ],
+            "upstream_velocity": 0.8,
+            "downstream_velocity": 0.7,
+        }
     ])
 
+    assert rows[0]["V"] == "-"
     assert rows[0]["total_head_loss"] == "-"
 
     _, _, _, table_rows, _ = summary_mod._dxf_build_pressure_pipe(rows)
+    assert table_rows[0][-2] == "-"
     assert table_rows[0][-1] == "-"
+
+
+def test_siphon_summary_uses_dash_when_velocity_missing():
+    rows = summary_mod.compute_siphon([
+        {"name": "倒虹吸A-第一流量段", "Q": 1.1, "DN_mm": 850, "pipe_material": "球墨铸铁管"}
+    ])
+
+    assert rows[0]["V"] == "-"
+
+    _, _, _, table_rows, _ = summary_mod._dxf_build_siphon(rows)
+    assert table_rows[0][-1] == "-"
+
+
+def test_siphon_summary_uses_locked_velocity_when_present():
+    rows = summary_mod.compute_siphon([
+        {"name": "倒虹吸A-第一流量段", "Q": 1.1, "DN_mm": 850, "pipe_material": "球墨铸铁管", "V": 1.426}
+    ])
+
+    assert rows[0]["V"] == 1.426
+
+    _, _, _, table_rows, _ = summary_mod._dxf_build_siphon(rows)
+    assert table_rows[0][-1] == 1.426
 
 
 def test_section_summary_dialog_backfills_pressure_pipe_total_loss_from_panel_results():
@@ -404,6 +485,29 @@ def test_prepare_pressure_pipe_export_rows_uses_panel_results_for_cached_rows():
     assert prepared[0]["total_head_loss"] == 0.5627
 
 
+def test_prepare_pressure_pipe_export_rows_uses_panel_velocity_for_cached_rows():
+    rows = [
+        {
+            "name": "牛马道",
+            "flow_section": 3,
+            "display_name": "牛马道-第三流量段",
+            "pipe_material": "球墨铸铁管",
+            "DN_mm": 1600,
+            "structure_kind": "pressure_pipe",
+        }
+    ]
+    panel = SimpleNamespace(
+        get_pressure_pipe_export_results=lambda export_rows=None: {
+            "3::牛马道": {"pipe_velocity": 1.438, "total_head_loss": 0.5627, "source": "table3"}
+        }
+    )
+
+    prepared = cad_tools._prepare_pressure_pipe_export_rows(rows, panel=panel, calc_contexts={})
+
+    assert prepared[0]["V"] == 1.438
+    assert prepared[0]["total_head_loss"] == 0.5627
+
+
 def test_draw_section_summary_on_msp_uses_panel_backfilled_pressure_pipe_total_loss(monkeypatch):
     actual_summary = importlib.import_module("calc_渠系计算算法内核.生成断面汇总表")
     captured = {}
@@ -475,6 +579,45 @@ def test_draw_section_summary_on_msp_uses_panel_backfilled_pressure_pipe_total_l
 
     pressure_rows = captured["有压管道断面尺寸及水力要素表"]
     assert pressure_rows[0][-1] == 0.5627
+
+
+def test_build_horseshoe_export_entries_splits_mixed_section_types():
+    entries = summary_mod._build_horseshoe_export_entries(
+        [
+            {"name": "马蹄Ⅰ-第一流量段", "Q": 2.0, "n": 0.014, "slope_inv": 1500, "horseshoe_section_type": 1, "R": 1.8},
+            {"name": "马蹄Ⅱ-第二流量段", "Q": 1.5, "n": 0.014, "slope_inv": 1800, "horseshoe_section_type": 2, "R": 2.2},
+        ],
+        rock_lining=None,
+        unified=False,
+    )
+
+    assert [entry["key"] for entry in entries] == ["tunnel_horseshoe_1", "tunnel_horseshoe_2"]
+    assert entries[0]["title"].startswith("马蹄形标准Ⅰ型")
+    assert entries[1]["title"].startswith("马蹄形标准Ⅱ型")
+    assert entries[0]["sheet_name"].startswith("马蹄形标准Ⅰ型")
+    assert entries[1]["sheet_name"].startswith("马蹄形标准Ⅱ型")
+
+
+def test_collect_siphon_missing_velocity_labels_uses_dash_rows():
+    dlg = _dialog_shell()
+
+    labels = cad_tools.SectionSummaryDialog._collect_siphon_missing_velocity_labels(
+        dlg,
+        [{"name": "缺流速-第一流量段", "Q": 1.0, "DN_mm": 1000, "pipe_material": "球墨铸铁管"}],
+    )
+
+    assert labels == ["缺流速-第一流量段"]
+
+
+def test_collect_siphon_missing_velocity_labels_skips_rows_with_valid_velocity():
+    dlg = _dialog_shell()
+
+    labels = cad_tools.SectionSummaryDialog._collect_siphon_missing_velocity_labels(
+        dlg,
+        [{"name": "已算流速-第一流量段", "V": 1.238}],
+    )
+
+    assert labels == []
 
 
 def test_pressure_pipe_summary_maps_legacy_material_names_to_fmb():

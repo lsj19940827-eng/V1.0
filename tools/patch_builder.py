@@ -44,6 +44,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
+MISSING_FILE_SENTINEL = "__MISSING__"
 
 
 def _version_key(v: str) -> tuple:
@@ -268,6 +269,15 @@ def build_universal_patch(
     # 被某些旧版标记为 deleted，但在新版中存在的文件不应删除
     all_deleted -= set(new_files.keys())
 
+    watched_paths = sorted(all_changed | all_deleted)
+    allowed_source_hashes = {}
+    for rel_path in watched_paths:
+        allowed_values = {
+            old_manifest.get("files", {}).get(rel_path, MISSING_FILE_SENTINEL)
+            for _old_ver, old_manifest in old_manifests
+        }
+        allowed_source_hashes[rel_path] = sorted(allowed_values)
+
     target_version = new_manifest.get("version", "")
     patch_meta = {
         "type": "universal_patch",
@@ -277,6 +287,7 @@ def build_universal_patch(
         "target_files": new_files,
         "deleted": sorted(all_deleted),
         "included_files": sorted(all_changed),
+        "allowed_source_hashes": allowed_source_hashes,
     }
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:

@@ -788,7 +788,8 @@ class MultiSiphonDialog(QDialog):
                 self.manager.update_siphon_result(
                     siphon_name,
                     result.total_head_loss,
-                    result.diameter
+                    result.diameter,
+                    result.velocity
                 )
                 self.manager.save_config()
                 self._update_time_label()
@@ -1290,6 +1291,7 @@ class MultiSiphonDialog(QDialog):
                 results[name] = {
                     "head_loss": head_loss,
                     "diameter": result.diameter,
+                    "velocity": result.velocity,
                     "turn_radius": panel.get_plan_bend_radius(),
                 }
         return results

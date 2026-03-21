@@ -18,13 +18,13 @@ import json
 import re
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout,
     QLabel, QGroupBox, QTextEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QFileDialog, QApplication, QScrollArea, QWidget, QComboBox, QFrame,
-    QSizePolicy, QMenu, QListWidget, QListWidgetItem,
+    QSizePolicy, QMenu, QListWidget, QListWidgetItem, QLayout,
 )
-from PySide6.QtCore import Qt, Signal, QMimeData, QSettings, QSize, QEvent
+from PySide6.QtCore import Qt, Signal, QMimeData, QSettings, QSize, QEvent, QTimer
 from PySide6.QtGui import QFont, QShortcut, QKeySequence, QDrag, QColor
 
 from qfluentwidgets import (
@@ -32,6 +32,10 @@ from qfluentwidgets import (
     PopupTeachingTip, TeachingTipTailPosition, InfoBarIcon,
     ElevatedCardWidget, HeaderCardWidget, ListWidget, SegmentedWidget,
     ToolButton, FluentIcon, BodyLabel, CaptionLabel, InfoBar, InfoBarPosition, CheckBox,
+)
+
+from app_渠系计算前端.water_profile.text_export_settings_dialog import (
+    create_text_export_settings_dialog,
 )
 
 from app_渠系计算前端.styles import (
@@ -85,6 +89,68 @@ def _safe_qt_parent(candidate):
     except Exception:
         return None
     return parent if isinstance(parent, QWidget) else None
+
+
+class _AutoWrapCaptionLabel(CaptionLabel):
+    """CaptionLabel variant that reports wrapped height accurately for layouts."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setWordWrap(True)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.setText(text)
+        self._sync_height_constraints()
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        margins = self.contentsMargins()
+        available_width = max(1, int(width) - margins.left() - margins.right())
+        text = self.text().strip()
+        if not text:
+            return margins.top() + margins.bottom()
+        flags = int(self.alignment()) | int(Qt.TextWordWrap)
+        rect = self.fontMetrics().boundingRect(0, 0, available_width, 32767, flags, text)
+        return rect.height() + margins.top() + margins.bottom()
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        hint.setHeight(self.heightForWidth(self._current_width_hint(hint.width())))
+        return hint
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setHeight(self.heightForWidth(self._current_width_hint(hint.width())))
+        return hint
+
+    def setText(self, text):
+        super().setText(text)
+        self._sync_height_constraints()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_height_constraints()
+
+    def event(self, event):
+        if event.type() in (QEvent.FontChange, QEvent.StyleChange, QEvent.LayoutRequest):
+            self._sync_height_constraints()
+        return super().event(event)
+
+    def _current_width_hint(self, default_width=0):
+        width = self.width()
+        if width > 0:
+            return width
+        parent = self.parentWidget()
+        if parent is not None and parent.width() > 0:
+            return parent.width()
+        return max(1, int(default_width or 1))
+
+    def _sync_height_constraints(self):
+        target_height = self.heightForWidth(self._current_width_hint(super().sizeHint().width()))
+        if self.minimumHeight() != target_height:
+            self.setMinimumHeight(target_height)
+        self.updateGeometry()
 
 
 class _ProfileRowItemWidget(QWidget):
@@ -317,9 +383,11 @@ class _SingleListTextExportSettingsDialog(QDialog):
     _UI_SETTINGS_APP = "HydroCalc"
     _UI_SIZE_W_KEY = "water_profile/text_export_dialog_width"
     _UI_SIZE_H_KEY = "water_profile/text_export_dialog_height"
-    _UI_PREVIEW_EXPANDED_KEY = "water_profile/text_export_dialog_preview_expanded"
     _ICON_COLLAPSED = None
     _ICON_EXPANDED = None
+    _DESIGN_MIN_WIDTH = 960
+    _DESIGN_MIN_HEIGHT = 500
+    _MIN_SCREEN_MARGIN = 24
 
     def __init__(self, parent=None, defaults=None):
         super().__init__(parent)
@@ -327,9 +395,9 @@ class _SingleListTextExportSettingsDialog(QDialog):
             type(self)._ICON_COLLAPSED = _resolve_fluent_icon("CHEVRON_RIGHT_MED", "CHEVRON_RIGHT", "CHEVRON_DOWN_MED")
             type(self)._ICON_EXPANDED = _resolve_fluent_icon("CHEVRON_DOWN_MED", "CHEVRON_RIGHT_MED", "CHEVRON_RIGHT")
         self.setWindowTitle("纵断面文字导出设置")
-        self.setMinimumSize(960, 500)
         self._ui_settings = QSettings(self._UI_SETTINGS_ORG, self._UI_SETTINGS_APP)
-        self._preview_expanded = self._read_setting_bool(self._UI_PREVIEW_EXPANDED_KEY, True)
+        self._dialog_min_size = self._resolve_minimum_dialog_size()
+        self.setMinimumSize(self._dialog_min_size)
         self._apply_initial_size()
         self.setSizeGripEnabled(True)
         self.setStyleSheet(DIALOG_STYLE + """
@@ -366,13 +434,28 @@ class _SingleListTextExportSettingsDialog(QDialog):
         self._ordered_row_ids = list(_PROFILE_ROW_VISIBLE_ORDER)
         self._enabled_row_ids = []
         self._row_widgets = {}
+        self._compat_advanced_values = {
+            key: defaults.get(key)
+            for key in _PROFILE_RUNTIME_ADVANCED_KEYS
+        }
+        self._parameter_content_layout = None
+        self._parameter_card = None
+        self._parameter_left_section = None
+        self._parameter_right_section = None
+        self._runtime_rows_widget = None
+        self._runtime_rows_layout = None
+        self._runtime_row_labels = {}
+        self._runtime_summary_label = None
 
         self._row_list = None
-        self._advanced_body = None
-        self._advanced_toggle_btn = None
-        self._preview_label = None
-        self._preview_body = None
-        self._preview_toggle_btn = None
+        self._body_scroll = None
+        self._body_content_widget = None
+        self._body_layout = None
+        self._rows_card = None
+        self._btn_reset = None
+        self._btn_cancel = None
+        self._btn_ok = None
+        self._layout_refresh_pending = False
 
         self._init_ui()
 
@@ -409,76 +492,108 @@ class _SingleListTextExportSettingsDialog(QDialog):
                 screen = app.primaryScreen()
         return screen.availableGeometry() if screen is not None else None
 
+    def _resolve_minimum_dialog_size(self):
+        avail = self._available_geometry()
+        if avail is None:
+            return QSize(self._DESIGN_MIN_WIDTH, self._DESIGN_MIN_HEIGHT)
+
+        width = min(self._DESIGN_MIN_WIDTH, max(640, avail.width() - self._MIN_SCREEN_MARGIN))
+        height = min(self._DESIGN_MIN_HEIGHT, max(420, avail.height() - self._MIN_SCREEN_MARGIN))
+        return QSize(width, height)
+
     def _apply_initial_size(self):
         avail = self._available_geometry()
+        min_size = self._dialog_min_size
         if avail is not None:
-            default_w = min(max(self.minimumWidth(), int(avail.width() * 0.78)), 1360)
-            default_h = min(max(self.minimumHeight(), int(avail.height() * 0.72)), int(avail.height() * 0.92))
-            max_w = max(self.minimumWidth(), int(avail.width() * 0.96))
-            max_h = max(self.minimumHeight(), int(avail.height() * 0.92))
+            default_w = min(max(min_size.width(), int(avail.width() * 0.78)), 1360)
+            default_h = min(max(min_size.height(), int(avail.height() * 0.72)), int(avail.height() * 0.92))
+            max_w = max(min_size.width(), int(avail.width() * 0.96))
+            max_h = max(min_size.height(), int(avail.height() * 0.92))
         else:
             default_w, default_h = 1160, 640
             max_w, max_h = 1400, 900
 
         width = self._read_setting_int(self._UI_SIZE_W_KEY, default_w)
         height = self._read_setting_int(self._UI_SIZE_H_KEY, default_h)
-        width = max(self.minimumWidth(), min(width, max_w))
-        height = max(self.minimumHeight(), min(height, max_h))
+        width = max(min_size.width(), min(width, max_w))
+        height = max(min_size.height(), min(height, max_h))
         self.resize(width, height)
+
+    def minimumSizeHint(self):
+        return QSize(self.minimumWidth(), self.minimumHeight())
+
+    def sizeHint(self):
+        avail = self._available_geometry()
+        if avail is None:
+            return QSize(max(self.minimumWidth(), 1160), max(self.minimumHeight(), 640))
+
+        width = min(
+            max(self.minimumWidth(), int(avail.width() * 0.78)),
+            max(self.minimumWidth(), int(avail.width() * 0.96)),
+        )
+        height = min(
+            max(self.minimumHeight(), int(avail.height() * 0.72)),
+            max(self.minimumHeight(), int(avail.height() * 0.92)),
+        )
+        return QSize(width, height)
 
     def _persist_ui_state(self):
         size = self.size()
         self._ui_settings.setValue(self._UI_SIZE_W_KEY, int(size.width()))
         self._ui_settings.setValue(self._UI_SIZE_H_KEY, int(size.height()))
-        self._ui_settings.setValue(self._UI_PREVIEW_EXPANDED_KEY, bool(self._preview_expanded))
 
     def closeEvent(self, event):
         self._persist_ui_state()
         super().closeEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_responsive_layout_mode()
+        self._ensure_row_lists_visible_rows()
+        self._request_dialog_layout_refresh(deferred=False)
+
+    def _make_wrap_caption(self, text=""):
+        return _AutoWrapCaptionLabel(text, self)
 
     def _init_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 8, 14, 8)
         root.setSpacing(6)
 
-        body_row = QHBoxLayout()
-        body_row.setSpacing(8)
+        body_widget = QWidget(self)
+        self._body_content_widget = body_widget
+        self._body_layout = QVBoxLayout(body_widget)
+        self._body_layout.setSizeConstraint(QLayout.SetMinAndMaxSize)
+        self._body_layout.setContentsMargins(0, 0, 0, 0)
+        self._body_layout.setSpacing(10)
+        self._parameter_card = self._build_parameter_card()
+        self._body_layout.addWidget(self._parameter_card, 0)
+        self._rows_card = self._build_rows_card()
+        self._body_layout.addWidget(self._rows_card, 0)
+        self._body_layout.addStretch(1)
 
-        left_col = QVBoxLayout()
-        left_col.setSpacing(8)
-        left_col.addWidget(self._build_basic_card())
-        left_col.addWidget(self._build_advanced_card())
-        left_col.addStretch(0)
-
-        right_col = QVBoxLayout()
-        right_col.setSpacing(8)
-        right_col.addWidget(self._build_rows_card(), 0)
-        right_col.addWidget(self._build_preview_card(), 0)
-        right_col.addStretch(1)
-
-        body_row.addLayout(left_col, 38)
-        body_row.addLayout(right_col, 62)
-        body_row.setAlignment(left_col, Qt.AlignTop)
-        body_row.setAlignment(right_col, Qt.AlignTop)
-        root.addLayout(body_row, 1)
+        self._body_scroll = QScrollArea(self)
+        self._body_scroll.setWidgetResizable(True)
+        self._body_scroll.setFrameShape(QFrame.NoFrame)
+        self._body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._body_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._body_scroll.setWidget(body_widget)
+        root.addWidget(self._body_scroll, 1)
 
         btn_row = QHBoxLayout()
-        btn_reset = PushButton("恢复默认")
-        btn_reset.clicked.connect(self._reset_defaults)
-        btn_row.addWidget(btn_reset)
+        self._btn_reset = PushButton("恢复默认")
+        self._btn_reset.clicked.connect(self._reset_defaults)
+        btn_row.addWidget(self._btn_reset)
         btn_row.addStretch(1)
-        btn_cancel = PushButton("取消")
-        btn_cancel.clicked.connect(self.reject)
-        btn_ok = PrimaryPushButton("确定")
-        btn_ok.clicked.connect(self._on_confirm)
-        btn_row.addWidget(btn_cancel)
-        btn_row.addWidget(btn_ok)
+        self._btn_cancel = PushButton("取消")
+        self._btn_cancel.clicked.connect(self.reject)
+        self._btn_ok = PrimaryPushButton("确定")
+        self._btn_ok.clicked.connect(self._on_confirm)
+        btn_row.addWidget(self._btn_cancel)
+        btn_row.addWidget(self._btn_ok)
         root.addLayout(btn_row)
 
         self._load_rows(self._defaults.get("profile_row_items"))
-        for entry in self._entries.values():
-            entry.textChanged.connect(self._update_preview)
-        self._update_preview()
 
         QShortcut(QKeySequence(Qt.Key_Escape), self, self.reject)
         QShortcut(QKeySequence(Qt.Key_Return), self, self._on_confirm)
@@ -487,63 +602,175 @@ class _SingleListTextExportSettingsDialog(QDialog):
         QShortcut(QKeySequence("Ctrl+Home"), self, lambda: self._move_selected_row_to_edge(True))
         QShortcut(QKeySequence("Ctrl+End"), self, lambda: self._move_selected_row_to_edge(False))
         QShortcut(QKeySequence(Qt.Key_Delete), self, self._disable_selected_row)
+        self._update_responsive_layout_mode()
+        self._request_dialog_layout_refresh()
 
-    def _build_basic_card(self):
+    def _run_dialog_layout_refresh(self):
+        layouts = [
+            self.layout(),
+            self._body_layout,
+            self._parameter_card.layout() if self._parameter_card is not None else None,
+            self._rows_card.layout() if self._rows_card is not None else None,
+            self._parameter_content_layout,
+            self._runtime_rows_layout,
+        ]
+        widgets = [
+            self,
+            self._body_scroll,
+            self._body_content_widget,
+            self._parameter_card,
+            self._rows_card,
+            self._parameter_left_section,
+            self._parameter_right_section,
+            self._runtime_rows_widget,
+            self._runtime_summary_label,
+            self._row_list,
+        ]
+
+        for layout in layouts:
+            if layout is not None:
+                layout.invalidate()
+
+        for widget in widgets:
+            if widget is not None:
+                widget.updateGeometry()
+
+        if self._body_content_widget is not None:
+            self._body_content_widget.adjustSize()
+            layout = self._body_content_widget.layout()
+            if layout is not None:
+                layout.activate()
+
+        if self._body_scroll is not None:
+            self._body_scroll.updateGeometry()
+            viewport = self._body_scroll.viewport()
+            if viewport is not None:
+                viewport.updateGeometry()
+
+        for layout in layouts:
+            if layout is not None:
+                layout.activate()
+
+    def _flush_deferred_dialog_layout_refresh(self):
+        self._layout_refresh_pending = False
+        self._run_dialog_layout_refresh()
+
+    def _request_dialog_layout_refresh(self, *, deferred=True):
+        self._run_dialog_layout_refresh()
+        if deferred and not self._layout_refresh_pending:
+            self._layout_refresh_pending = True
+            QTimer.singleShot(0, self._flush_deferred_dialog_layout_refresh)
+
+    def _update_responsive_layout_mode(self):
+        if self._parameter_content_layout is None or self._body_scroll is None:
+            return
+
+        viewport_width = self._body_scroll.viewport().width()
+        direction = QBoxLayout.TopToBottom if viewport_width and viewport_width < 1120 else QBoxLayout.LeftToRight
+        if self._parameter_content_layout.direction() != direction:
+            self._parameter_content_layout.setDirection(direction)
+
+        if self._parameter_left_section is not None:
+            self._parameter_left_section.setMaximumWidth(16777215 if direction == QBoxLayout.TopToBottom else 430)
+        if self._parameter_content_layout.count() >= 2:
+            self._parameter_content_layout.setStretch(0, 0 if direction == QBoxLayout.TopToBottom else 38)
+            self._parameter_content_layout.setStretch(1, 1 if direction == QBoxLayout.TopToBottom else 62)
+
+    def _build_parameter_card(self):
         card = ElevatedCardWidget(self)
         card_lay = QVBoxLayout(card)
+        card_lay.setSizeConstraint(QLayout.SetMinAndMaxSize)
         card_lay.setContentsMargins(12, 10, 12, 10)
-        card_lay.setSpacing(8)
+        card_lay.setSpacing(10)
 
-        card_lay.addWidget(BodyLabel("基础参数"))
-        form = QGridLayout()
-        form.setHorizontalSpacing(8)
-        form.setVerticalSpacing(8)
-        form.setColumnStretch(0, 0)
-        form.setColumnStretch(1, 0)
-        form.setColumnStretch(2, 1)
-        self._add_entry_row(form, 0, "字高", "text_height", "")
-        self._add_entry_row(form, 1, "旋转角度", "rotation", "")
-        self._add_entry_row(form, 2, "高程小数位数", "elev_decimals", "")
-        self._add_entry_row(form, 3, "X方向比例(1:N)", "scale_x", "如 1:1000 则输入 1000")
-        self._add_entry_row(form, 4, "Y方向比例(1:N)", "scale_y", "如 1:1000 则输入 1000")
-        card_lay.addLayout(form)
-        return card
+        title = BodyLabel("参数设置")
+        card_lay.addWidget(title)
 
-    def _build_advanced_card(self):
-        card = ElevatedCardWidget(self)
-        card_lay = QVBoxLayout(card)
-        card_lay.setContentsMargins(12, 10, 12, 10)
-        card_lay.setSpacing(8)
+        hint = self._make_wrap_caption("左侧设置基础参数，右侧实时查看当前已启用行的 Y 值与来源。")
+        card_lay.addWidget(hint)
 
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        row.addWidget(BodyLabel("高级参数（旧版Y坐标）"))
-        self._advanced_toggle_btn = ToolButton(self._ICON_COLLAPSED)
-        self._advanced_toggle_btn.clicked.connect(self._toggle_advanced)
-        row.addStretch(1)
-        row.addWidget(self._advanced_toggle_btn)
-        card_lay.addLayout(row)
+        content_widget = QWidget(self)
+        self._parameter_content_layout = QBoxLayout(QBoxLayout.LeftToRight, content_widget)
+        self._parameter_content_layout.setContentsMargins(0, 0, 0, 0)
+        self._parameter_content_layout.setSpacing(10)
 
-        self._advanced_body = QWidget()
-        adv_form = QGridLayout(self._advanced_body)
-        adv_form.setHorizontalSpacing(8)
-        adv_form.setVerticalSpacing(6)
-        adv_form.setColumnStretch(2, 1)
-        self._add_entry_row(adv_form, 0, "渠底文字Y", "y_bottom", "")
-        self._add_entry_row(adv_form, 1, "渠顶文字Y", "y_top", "")
-        self._add_entry_row(adv_form, 2, "水面文字Y", "y_water", "")
-        self._add_entry_row(adv_form, 3, "建筑物名称Y", "y_name", "兼容旧项目")
-        self._add_entry_row(adv_form, 4, "坡降Y", "y_slope", "兼容旧项目")
-        self._add_entry_row(adv_form, 5, "IP点名称Y", "y_ip", "兼容旧项目")
-        self._add_entry_row(adv_form, 6, "里程桩号Y", "y_station", "兼容旧项目")
-        self._add_entry_row(adv_form, 7, "最小竖线高度", "y_line_height", "最小值 > 0")
-        self._advanced_body.setVisible(False)
-        card_lay.addWidget(self._advanced_body)
+        self._parameter_left_section = QWidget(self)
+        self._parameter_left_section.setObjectName("profileParameterSection")
+        left_lay = QVBoxLayout(self._parameter_left_section)
+        left_lay.setContentsMargins(12, 12, 12, 12)
+        left_lay.setSpacing(8)
+        left_lay.addWidget(BodyLabel("基础参数"))
+        basic_form = QGridLayout()
+        basic_form.setHorizontalSpacing(8)
+        basic_form.setVerticalSpacing(8)
+        basic_form.setColumnStretch(0, 0)
+        basic_form.setColumnStretch(1, 0)
+        basic_form.setColumnStretch(2, 1)
+        self._add_entry_row(basic_form, 0, "字高", "text_height", "")
+        self._add_entry_row(basic_form, 1, "旋转角度", "rotation", "")
+        self._add_entry_row(basic_form, 2, "高程小数位数", "elev_decimals", "")
+        self._add_entry_row(basic_form, 3, "X方向比例(1:N)", "scale_x", "如 1:1000 则输入 1000")
+        self._add_entry_row(basic_form, 4, "Y方向比例(1:N)", "scale_y", "如 1:1000 则输入 1000")
+        left_lay.addLayout(basic_form)
+        left_lay.addStretch(1)
+
+        self._parameter_right_section = QWidget(self)
+        self._parameter_right_section.setObjectName("profileParameterSection")
+        right_lay = QVBoxLayout(self._parameter_right_section)
+        right_lay.setSizeConstraint(QLayout.SetMinAndMaxSize)
+        right_lay.setContentsMargins(12, 12, 12, 12)
+        right_lay.setSpacing(8)
+        right_lay.addWidget(BodyLabel("启用行实时参数"))
+
+        runtime_hint = self._make_wrap_caption("只显示当前已启用项；顺序、启停和拖拽变化会立即同步到这里。")
+        right_lay.addWidget(runtime_hint)
+
+        runtime_headers = QGridLayout()
+        runtime_headers.setHorizontalSpacing(8)
+        runtime_headers.setVerticalSpacing(4)
+        hdr_name = CaptionLabel("行内容")
+        hdr_value = CaptionLabel("实时Y")
+        hdr_source = CaptionLabel("来源")
+        runtime_headers.addWidget(hdr_name, 0, 0)
+        runtime_headers.addWidget(hdr_value, 0, 1)
+        runtime_headers.addWidget(hdr_source, 0, 2)
+        runtime_headers.setColumnStretch(0, 3)
+        runtime_headers.setColumnStretch(1, 0)
+        runtime_headers.setColumnStretch(2, 2)
+        right_lay.addLayout(runtime_headers)
+
+        runtime_rows_widget = QWidget(self)
+        self._runtime_rows_widget = runtime_rows_widget
+        self._runtime_rows_layout = QGridLayout(runtime_rows_widget)
+        self._runtime_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._runtime_rows_layout.setHorizontalSpacing(8)
+        self._runtime_rows_layout.setVerticalSpacing(6)
+        self._runtime_rows_layout.setColumnStretch(0, 3)
+        self._runtime_rows_layout.setColumnStretch(1, 0)
+        self._runtime_rows_layout.setColumnStretch(2, 2)
+        right_lay.addWidget(runtime_rows_widget)
+
+        self._runtime_summary_label = self._make_wrap_caption("")
+        right_lay.addWidget(self._runtime_summary_label)
+        right_lay.addStretch(1)
+
+        self._parameter_content_layout.addWidget(self._parameter_left_section, 38)
+        self._parameter_content_layout.addWidget(self._parameter_right_section, 62)
+        card_lay.addWidget(content_widget)
+
+        card.setStyleSheet(card.styleSheet() + """
+            QWidget#profileParameterSection {
+                background: rgba(255,255,255,0.74);
+                border: 1px solid rgba(209,219,231,0.85);
+                border-radius: 14px;
+            }
+        """)
         return card
 
     def _build_rows_card(self):
         card = ElevatedCardWidget(self)
         card_lay = QVBoxLayout(card)
+        card_lay.setSizeConstraint(QLayout.SetMinAndMaxSize)
         card_lay.setContentsMargins(12, 10, 12, 10)
         card_lay.setSpacing(6)
 
@@ -570,16 +797,14 @@ class _SingleListTextExportSettingsDialog(QDialog):
         quick_row.addStretch(1)
         card_lay.addLayout(quick_row)
 
-        hint = CaptionLabel(
+        hint = self._make_wrap_caption(
             "操作说明：勾选即启用；拖动已启用项即可排序；右键支持启用/停用/置顶/置底；Ctrl+Up/Ctrl+Down 可微调顺序。"
         )
-        hint.setWordWrap(True)
         card_lay.addWidget(hint)
 
-        hidden_hint = CaptionLabel(
+        hidden_hint = self._make_wrap_caption(
             "本版本暂不显示：IP文字(BE)、桩号文字(BK)，避免与 IP点名称、里程桩号重复。"
         )
-        hidden_hint.setWordWrap(True)
         card_lay.addWidget(hidden_hint)
 
         self._row_list = _ProfileRowListWidget(self)
@@ -607,42 +832,6 @@ class _SingleListTextExportSettingsDialog(QDialog):
         card_lay.addLayout(sort_row)
         return card
 
-    def _build_preview_card(self):
-        card = ElevatedCardWidget(self)
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(6)
-        row = QHBoxLayout()
-        row.addWidget(BodyLabel("当前配置预览"))
-        row.addStretch(1)
-        self._preview_toggle_btn = ToolButton(self._ICON_EXPANDED)
-        self._preview_toggle_btn.clicked.connect(self._toggle_preview)
-        row.addWidget(self._preview_toggle_btn)
-        lay.addLayout(row)
-
-        self._preview_body = QWidget()
-        preview_lay = QVBoxLayout(self._preview_body)
-        preview_lay.setContentsMargins(0, 0, 0, 0)
-        preview_lay.setSpacing(0)
-
-        self._preview_label = QLabel()
-        self._preview_label.setWordWrap(True)
-        self._preview_label.setStyleSheet("color:#245A9B; font-family:'Consolas','Microsoft YaHei';")
-        preview_lay.addWidget(self._preview_label)
-        lay.addWidget(self._preview_body)
-        self._set_preview_expanded(self._preview_expanded)
-        return card
-
-    def _set_preview_expanded(self, expanded):
-        self._preview_expanded = bool(expanded)
-        if self._preview_body is not None:
-            self._preview_body.setVisible(self._preview_expanded)
-        if self._preview_toggle_btn is not None:
-            self._preview_toggle_btn.setIcon(self._ICON_EXPANDED if self._preview_expanded else self._ICON_COLLAPSED)
-
-    def _toggle_preview(self):
-        self._set_preview_expanded(not self._preview_expanded)
-
     def _add_entry_row(self, layout, row, label, key, hint):
         layout.addWidget(QLabel(f"{label}:"), row, 0)
         entry = LineEdit()
@@ -652,10 +841,104 @@ class _SingleListTextExportSettingsDialog(QDialog):
         layout.addWidget(CaptionLabel(hint), row, 2)
         self._entries[key] = entry
 
-    def _toggle_advanced(self):
-        visible = not self._advanced_body.isVisible()
-        self._advanced_body.setVisible(visible)
-        self._advanced_toggle_btn.setIcon(self._ICON_EXPANDED if visible else self._ICON_COLLAPSED)
+    def _build_runtime_view_input_settings(self):
+        settings = dict(self._defaults)
+        settings.update(self._compat_advanced_values)
+        settings["profile_row_items"] = self._row_data_from_table()
+
+        for key in ("text_height", "rotation", "elev_decimals", "scale_x", "scale_y"):
+            entry = self._entries.get(key)
+            if entry is None:
+                continue
+            txt = entry.text().strip()
+            try:
+                value = float(txt)
+                if key == "elev_decimals":
+                    value = int(value)
+                settings[key] = value
+            except Exception:
+                # 输入中的临时非法值不打断实时预览，保留旧值。
+                continue
+        return settings
+
+    def _clear_layout_widgets(self, layout):
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            child_layout = item.layout()
+            child_widget = item.widget()
+            if child_layout is not None:
+                self._clear_layout_widgets(child_layout)
+            if child_widget is not None:
+                child_widget.deleteLater()
+
+    def _make_runtime_value_chip(self, text):
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignCenter)
+        label.setMinimumWidth(76)
+        label.setStyleSheet(
+            "color:#173A63; background: rgba(255,255,255,0.94);"
+            "border: 1px solid rgba(198,210,224,0.92); border-radius: 8px;"
+            "padding: 3px 10px; font-family:'Consolas','Microsoft YaHei'; font-size:12px;"
+        )
+        return label
+
+    def _refresh_runtime_advanced_view(self):
+        if self._runtime_rows_layout is None:
+            return
+        runtime = _compute_runtime_advanced_parameter_view(self._build_runtime_view_input_settings())
+        enabled_rows = list(runtime.get("enabled_runtime_rows") or [])
+        self._runtime_row_labels = {}
+        self._clear_layout_widgets(self._runtime_rows_layout)
+
+        if not enabled_rows:
+            empty_label = self._make_wrap_caption("\u5f53\u524d\u5c1a\u672a\u542f\u7528\u4efb\u4f55\u7eb5\u65ad\u9762\u884c\u3002")
+            self._runtime_rows_layout.addWidget(empty_label, 0, 0, 1, 3)
+        else:
+            for row_index, row in enumerate(enabled_rows):
+                display_label = QLabel(f"{row['order']:02d}. {row['label']}")
+                display_label.setStyleSheet("color:#24384D; font-size:13px; font-weight:600;")
+                value_label = self._make_runtime_value_chip(_format_number(row["text_y"]))
+                source_label = self._make_wrap_caption(row.get("source_label", ""))
+                self._runtime_rows_layout.addWidget(display_label, row_index, 0)
+                self._runtime_rows_layout.addWidget(value_label, row_index, 1)
+                self._runtime_rows_layout.addWidget(source_label, row_index, 2)
+                self._runtime_row_labels[row["id"]] = {
+                    "title": display_label,
+                    "value": value_label,
+                    "source": source_label,
+                }
+
+        line_row = len(enabled_rows)
+        divider = QFrame(self)
+        divider.setFrameShape(QFrame.HLine)
+        divider.setFrameShadow(QFrame.Sunken)
+        divider.setStyleSheet("color: rgba(210,218,229,0.95);")
+        self._runtime_rows_layout.addWidget(divider, line_row, 0, 1, 3)
+
+        line_height_row = line_row + 1
+        line_height_title = QLabel("\u751f\u6548\u7ad6\u7ebf\u9ad8\u5ea6")
+        line_height_title.setStyleSheet("color:#24384D; font-size:13px; font-weight:600;")
+        line_height_value = self._make_runtime_value_chip(_format_number(runtime["line_height"]))
+        line_height_source = self._make_wrap_caption("max(\u5185\u5bb9\u603b\u9ad8, \u6700\u5c0f\u7ad6\u7ebf\u53c2\u6570)")
+        self._runtime_rows_layout.addWidget(line_height_title, line_height_row, 0)
+        self._runtime_rows_layout.addWidget(line_height_value, line_height_row, 1)
+        self._runtime_rows_layout.addWidget(line_height_source, line_height_row, 2)
+        self._runtime_row_labels["y_line_height"] = {
+            "title": line_height_title,
+            "value": line_height_value,
+            "source": line_height_source,
+        }
+
+        if self._runtime_summary_label is not None:
+            self._runtime_summary_label.setText(
+                f"\u5b9e\u65f6\u6c47\u603b\uff1a\u542f\u7528 {len(runtime['enabled_row_ids'])} \u9879 / "
+                f"\u5185\u5bb9\u603b\u9ad8 {_format_number(runtime['total_height'])} / "
+                f"\u751f\u6548\u7ad6\u7ebf\u9ad8\u5ea6 {_format_number(runtime['line_height'])} / "
+                f"\u6700\u5c0f\u7ad6\u7ebf\u53c2\u6570 {_format_number(runtime['min_line_height'])}"
+            )
+        self._request_dialog_layout_refresh()
 
     def _selected_row_id(self):
         if not self._row_list:
@@ -772,7 +1055,8 @@ class _SingleListTextExportSettingsDialog(QDialog):
         self._ensure_row_list_visible_rows()
         self._set_current_row_id(keep_current)
         self._update_row_widget_selection()
-        self._update_preview()
+        self._refresh_runtime_advanced_view()
+        self._request_dialog_layout_refresh()
 
     def _ensure_row_list_visible_rows(self):
         if not self._row_list:
@@ -957,21 +1241,6 @@ class _SingleListTextExportSettingsDialog(QDialog):
         elif chosen == action_bottom:
             self._move_selected_row_to_edge(False)
 
-    def _update_preview(self):
-        try:
-            enabled = [item for item in self._row_data_from_table() if item.get("enabled")]
-            labels = [_PROFILE_ROW_DEF_MAP[item["id"]]["label"] for item in enabled[:6]]
-            summary = "、".join(labels) if labels else "无"
-            if len(enabled) > 6:
-                summary += f" ...（共{len(enabled)}行）"
-            self._preview_label.setText(
-                f"已启用行：{summary}\n"
-                f"示例：-text X,Y {self._entries['text_height'].text().strip()} "
-                f"{self._entries['rotation'].text().strip()} 文本"
-            )
-        except Exception:
-            self._preview_label.setText("预览不可用")
-
     def _reset_defaults(self):
         original = {
             "y_bottom": 1, "y_top": 31, "y_water": 16,
@@ -983,16 +1252,14 @@ class _SingleListTextExportSettingsDialog(QDialog):
         for key, value in original.items():
             if key in self._entries:
                 self._entries[key].setText(str(value))
+        for key in _PROFILE_RUNTIME_ADVANCED_KEYS:
+            self._compat_advanced_values[key] = original.get(key)
         self._load_rows(_default_profile_row_items())
-        self._update_preview()
 
     def _focus_invalid_entry(self, key):
         entry = self._entries.get(key)
         if not entry:
             return
-        if key in {"y_bottom", "y_top", "y_water", "y_name", "y_slope", "y_ip", "y_station", "y_line_height"}:
-            if self._advanced_body and not self._advanced_body.isVisible():
-                self._toggle_advanced()
         entry.setFocus()
         entry.selectAll()
 
@@ -1001,8 +1268,6 @@ class _SingleListTextExportSettingsDialog(QDialog):
             parsed = {}
             ordered_keys = [
                 "text_height", "rotation", "elev_decimals", "scale_x", "scale_y",
-                "y_bottom", "y_top", "y_water",
-                "y_name", "y_slope", "y_ip", "y_station", "y_line_height",
             ]
             labels = {
                 "text_height": "字高",
@@ -1010,14 +1275,6 @@ class _SingleListTextExportSettingsDialog(QDialog):
                 "elev_decimals": "高程小数位数",
                 "scale_x": "X方向比例",
                 "scale_y": "Y方向比例",
-                "y_bottom": "渠底文字Y",
-                "y_top": "渠顶文字Y",
-                "y_water": "水面文字Y",
-                "y_name": "建筑物名称Y",
-                "y_slope": "坡降Y",
-                "y_ip": "IP点名称Y",
-                "y_station": "里程桩号Y",
-                "y_line_height": "最小竖线高度",
             }
             for key in ordered_keys:
                 entry = self._entries[key]
@@ -1035,9 +1292,9 @@ class _SingleListTextExportSettingsDialog(QDialog):
                         self._focus_invalid_entry(key)
                         raise ValueError("高程小数位数必须为非负整数")
                     val = int(val)
-                if key in ("scale_x", "scale_y", "y_line_height") and val <= 0:
+                if key in ("scale_x", "scale_y") and val <= 0:
                     self._focus_invalid_entry(key)
-                    raise ValueError("比例与最小竖线高度必须大于0")
+                    raise ValueError("比例必须大于0")
                 parsed[key] = val
 
             row_items = self._row_data_from_table()
@@ -1046,8 +1303,27 @@ class _SingleListTextExportSettingsDialog(QDialog):
                     self._row_list.setFocus()
                 raise ValueError("至少选择1项行内容")
 
+            runtime_input = dict(self._defaults)
+            runtime_input.update(self._compat_advanced_values)
+            runtime_input.update(parsed)
+            runtime_input["profile_row_items"] = row_items
+            runtime = _compute_runtime_advanced_parameter_view(runtime_input)
+
+            compatibility_values = {}
+            runtime_values = runtime["legacy_writeback_values"]
+            runtime_enabled_state = runtime["legacy_enabled_state"]
+            for key in _PROFILE_RUNTIME_ADVANCED_KEYS:
+                if key == "y_line_height":
+                    compatibility_values[key] = float(runtime_values.get(key, self._compat_advanced_values.get(key, 120)))
+                    continue
+                if runtime_enabled_state.get(key):
+                    compatibility_values[key] = float(runtime_values.get(key))
+                else:
+                    compatibility_values[key] = self._compat_advanced_values.get(key, self._defaults.get(key))
+
             result = dict(self._defaults)
             result.update(parsed)
+            result.update(compatibility_values)
             result["profile_row_items"] = row_items
             self.result = _normalize_text_export_settings(result)
             self.accept()
@@ -1316,6 +1592,30 @@ _PROFILE_RECOMMENDED_ROW_IDS = {
     "building_name", "slope", "top_elev", "water_elev", "bottom_elev"
 }
 _PROFILE_EXTENDED_ROW_IDS = [rid for rid in _PROFILE_ROW_VISIBLE_ORDER if rid not in _TINGZIKOU_TEMPLATE_ROW_IDS]
+_PROFILE_RUNTIME_ADVANCED_ROW_BINDINGS = {
+    "y_bottom": "bottom_elev",
+    "y_top": "top_elev",
+    "y_water": "water_elev",
+    "y_name": "building_name",
+    "y_slope": "slope",
+    "y_ip": "ip_name",
+    "y_station": "station",
+}
+_PROFILE_RUNTIME_ADVANCED_KEYS = (
+    "y_bottom",
+    "y_top",
+    "y_water",
+    "y_name",
+    "y_slope",
+    "y_ip",
+    "y_station",
+    "y_line_height",
+)
+_PROFILE_RUNTIME_ANCHOR_LABELS = {
+    "center": "中线",
+    "bottom1": "底+1",
+    "bottom2": "底+2",
+}
 _SPECIAL_STRUCTURE_FULLNAME_MAP = (
     ("隧洞", "隧洞"),
     ("倒虹吸", "倒虹吸"),
@@ -1411,6 +1711,7 @@ def _build_profile_row_layout(settings):
             "top": top,
             "text_y": text_y,
             "height": height,
+            "anchor": row_def.get("anchor", "bottom2"),
             "header_lines": list(row_def.get("header_lines", [])),
             "label": row_def["label"],
         }
@@ -1418,6 +1719,56 @@ def _build_profile_row_layout(settings):
         boundaries.add(top)
 
     return enabled_ids, row_layout, total_height, line_height, sorted(boundaries)
+
+
+def _compute_runtime_advanced_parameter_view(settings):
+    """\u6839\u636e\u5f53\u524d\u884c\u914d\u7f6e\u8ba1\u7b97\u9ad8\u7ea7\u53c2\u6570\u5b9e\u65f6\u89c6\u56fe\u3002"""
+    normalized = _normalize_text_export_settings(settings)
+    enabled_ids, row_layout, total_height, line_height, boundaries = _build_profile_row_layout(normalized)
+    legacy_writeback_values = {}
+    legacy_enabled_state = {}
+    for key, rid in _PROFILE_RUNTIME_ADVANCED_ROW_BINDINGS.items():
+        if rid in row_layout:
+            legacy_writeback_values[key] = float(row_layout[rid]["text_y"])
+            legacy_enabled_state[key] = True
+        else:
+            legacy_writeback_values[key] = None
+            legacy_enabled_state[key] = False
+    legacy_writeback_values["y_line_height"] = float(line_height)
+    legacy_enabled_state["y_line_height"] = True
+
+    enabled_runtime_rows = []
+    for order, rid in enumerate(enabled_ids, start=1):
+        row_info = row_layout.get(rid, {})
+        anchor = str(row_info.get("anchor", ""))
+        enabled_runtime_rows.append({
+            "order": order,
+            "id": rid,
+            "label": str(row_info.get("label", rid)),
+            "text_y": float(row_info.get("text_y", 0.0)),
+            "height": float(row_info.get("height", 0.0)),
+            "anchor": anchor,
+            "source_label": (
+                f"{_PROFILE_RUNTIME_ANCHOR_LABELS.get(anchor, anchor or '--')} / \u884c\u9ad8 "
+                f"{_format_number(float(row_info.get('height', 0.0)))}"
+            ),
+        })
+
+    return {
+        "enabled_row_ids": list(enabled_ids),
+        "total_height": float(total_height),
+        "line_height": float(line_height),
+        "min_line_height": float(normalized.get("y_line_height", 120)),
+        "boundaries": [float(v) for v in boundaries],
+        "legacy_writeback_values": legacy_writeback_values,
+        "legacy_enabled_state": legacy_enabled_state,
+        "enabled_runtime_rows": enabled_runtime_rows,
+        "row_details": enabled_runtime_rows,
+        # keep aliases for older internal callers
+        "compatibility_values": legacy_writeback_values,
+        "enabled_state": legacy_enabled_state,
+    }
+
 
 
 def _compute_node_vline_segments(node, row_layout, enabled_row_ids, v_top, tol=1e-9):
@@ -1481,6 +1832,13 @@ def _is_special_inout_node(node):
     if not _is_special_structure_sv(getattr(node, "structure_type", None)):
         return False
     return _in_out_val(getattr(node, "in_out", None)) in ("进", "出")
+
+
+def _resolve_profile_vline_top(is_special, is_last_node, short_line_height, line_height):
+    """普通节点保留顶部合并单元格，末列右边界和特殊进/出节点补齐整高。"""
+    if is_special or is_last_node:
+        return line_height
+    return short_line_height
 
 
 def _get_special_structure_full_name(struct_type):
@@ -2150,6 +2508,33 @@ def _extract_pressurized_dn_mm(node):
     return None
 
 
+def _normalize_locked_velocity_value(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0:
+        return None
+    return round(number, 4)
+
+
+def _extract_pressurized_pipe_material(node):
+    params = getattr(node, "section_params", {}) or {}
+    value = params.get("pipe_material", getattr(node, "pipe_material", ""))
+    return str(value or "").strip() or "球墨铸铁管"
+
+
+def _extract_pressurized_total_head_loss(node):
+    value = getattr(node, "head_loss_siphon", None)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = None
+    if number is None or not math.isfinite(number) or number <= 0:
+        value = getattr(node, "external_head_loss", None)
+    return _normalize_pressure_pipe_total_head_loss_value(value)
+
+
 def _extract_pressurized_param_entities(nodes, structure_kind):
     entities = {}
     entity_order = []
@@ -2194,16 +2579,27 @@ def _extract_pressurized_param_entities(nodes, structure_kind):
                 "display_name": f"{base_name}-{_segment_label_from_index(flow_section_idx)}",
                 "structure_kind": structure_kind,
                 "DN_mm": 0,
+                "pipe_material": "",
             }
             entity_order.append(entity_key)
 
         if dn_mm is not None:
             entities[entity_key]["DN_mm"] = max(entities[entity_key]["DN_mm"], dn_mm)
+        if not entities[entity_key].get("pipe_material"):
+            entities[entity_key]["pipe_material"] = _extract_pressurized_pipe_material(node)
+
+        velocity = _normalize_locked_velocity_value(getattr(node, "velocity", None))
+        if velocity is not None:
+            entities[entity_key]["V"] = velocity
+
+        total_head_loss = _extract_pressurized_total_head_loss(node)
+        if total_head_loss is not None:
+            entities[entity_key]["total_head_loss"] = total_head_loss
 
     entity_rows = []
     for entity_key in entity_order:
         item = dict(entities[entity_key])
-        item["pipe_material"] = "球墨铸铁管"
+        item["pipe_material"] = str(item.get("pipe_material") or "").strip() or "球墨铸铁管"
         item["DN_mm"] = _normalize_dn_mm(item.get("DN_mm"), 1500)
         entity_rows.append(item)
     invalid_rows = [invalid[key] for key in invalid_order]
@@ -2374,6 +2770,11 @@ def _attach_pressure_pipe_export_results_to_rows(rows, panel=None):
         result = results_by_identity.get(identity)
         if not isinstance(result, dict):
             continue
+        velocity = _normalize_locked_velocity_value(
+            result.get("pipe_velocity", result.get("velocity"))
+        )
+        if velocity is not None:
+            row["V"] = velocity
         total_head_loss = _normalize_pressure_pipe_total_head_loss_value(
             result.get("total_head_loss")
         )
@@ -2513,6 +2914,7 @@ def _build_pressurized_segments(qs, overrides_by_idx, params, has_source_data, s
         "outlet_transition_form",
         "inlet_transition_zeta",
         "outlet_transition_zeta",
+        "V",
         "total_head_loss",
         "friction_params",
     )
@@ -3590,7 +3992,849 @@ class _LegacyTextExportSettingsDialogDualList(QDialog):
 # 有压流参数配置对话框
 # ================================================================
 
-TextExportSettingsDialog = _SingleListTextExportSettingsDialog
+class _FluentProfileDragHandle(QLabel):
+    """Drag handle that only starts sorting when the user drags the grip."""
+
+    dragRequested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(":::")
+        self._press_pos = None
+        self.setAlignment(Qt.AlignCenter)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setFixedWidth(20)
+        self.setStyleSheet("color:#7F8B99; font-size:16px; font-weight:600; letter-spacing:1px;")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._press_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.LeftButton) or self._press_pos is None:
+            super().mouseMoveEvent(event)
+            return
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        if (pos - self._press_pos).manhattanLength() >= QApplication.startDragDistance():
+            self.dragRequested.emit()
+            self._press_pos = None
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._press_pos = None
+        self.setCursor(Qt.OpenHandCursor)
+        super().mouseReleaseEvent(event)
+
+
+class _FluentProfileRowItemWidget(QWidget):
+    """Two-line Fluent row with checkbox, subtle recommendation badge and drag handle."""
+
+    clicked = Signal()
+    doubleClicked = Signal()
+    dragRequested = Signal()
+
+    def __init__(self, title, subtitle, enabled, recommended=False, parent=None):
+        super().__init__(parent)
+        self._selected = False
+        self._enabled = bool(enabled)
+        self._recommended = bool(recommended)
+
+        self.setObjectName("profileRowItemFluent")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 5, 10, 5)
+        layout.setSpacing(8)
+
+        self.checkbox = CheckBox("")
+        self.checkbox.setFixedWidth(36)
+        self.checkbox.clicked.connect(self.clicked)
+        layout.addWidget(self.checkbox, 0, Qt.AlignTop)
+
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(2)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
+
+        self.title_label = QLabel()
+        self.title_label.setTextInteractionFlags(Qt.NoTextInteraction)
+        title_row.addWidget(self.title_label, 1)
+
+        self.badge_label = QLabel("推荐")
+        self.badge_label.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.badge_label.setVisible(False)
+        title_row.addWidget(self.badge_label, 0, Qt.AlignVCenter)
+        title_row.addStretch(0)
+
+        self.subtitle_label = QLabel()
+        self.subtitle_label.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.subtitle_label.setWordWrap(False)
+
+        text_col.addLayout(title_row)
+        text_col.addWidget(self.subtitle_label)
+        layout.addLayout(text_col, 1)
+
+        self.drag_handle = _FluentProfileDragHandle(self)
+        self.drag_handle.dragRequested.connect(self.dragRequested)
+        layout.addWidget(self.drag_handle, 0, Qt.AlignVCenter)
+
+        for child in (self.title_label, self.subtitle_label, self.badge_label):
+            child.installEventFilter(self)
+
+        self.set_content(title, subtitle, enabled, recommended)
+        self.set_selected(False)
+
+    def set_content(self, title, subtitle, enabled, recommended=False):
+        self._enabled = bool(enabled)
+        self._recommended = bool(recommended)
+        self.title_label.setText(title)
+        self.subtitle_label.setText(subtitle)
+        self.checkbox.setChecked(bool(enabled))
+        self.drag_handle.setVisible(bool(enabled))
+        self.badge_label.setVisible(self._recommended)
+        self._apply_visual_state()
+
+    def set_selected(self, selected):
+        self._selected = bool(selected)
+        self._apply_visual_state()
+
+    def _apply_visual_state(self):
+        if self._selected:
+            self.setStyleSheet(
+                "QWidget#profileRowItemFluent {"
+                "background: rgba(230, 238, 248, 0.96);"
+                "border: 1px solid rgba(0, 120, 212, 0.28);"
+                "border-radius: 10px;"
+                "}"
+            )
+        else:
+            self.setStyleSheet(
+                "QWidget#profileRowItemFluent {"
+                "background: rgba(255, 255, 255, 0.88);"
+                "border: 1px solid rgba(198, 210, 224, 0.32);"
+                "border-radius: 10px;"
+                "}"
+            )
+
+        if self._selected:
+            title_style = "color:#173A63; font-size:13px; font-weight:600;"
+            subtitle_style = "color:#43617E; font-size:11px;"
+        elif self._enabled:
+            title_style = "color:#24384D; font-size:13px; font-weight:600;"
+            subtitle_style = "color:#5C6E81; font-size:11px;"
+        else:
+            title_style = "color:#2F4457; font-size:13px; font-weight:500;"
+            subtitle_style = "color:#697B8D; font-size:11px;"
+
+        self.title_label.setStyleSheet(title_style)
+        self.subtitle_label.setStyleSheet(subtitle_style)
+        self.badge_label.setStyleSheet(
+            "color:#5F6F82; background: rgba(225, 231, 238, 0.92);"
+            "border: 1px solid rgba(198, 210, 224, 0.85); border-radius: 9px;"
+            "padding: 1px 7px; font-size:11px;"
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.doubleClicked.emit()
+        super().mouseDoubleClickEvent(event)
+
+    def eventFilter(self, obj, event):
+        if obj in {self.title_label, self.subtitle_label, self.badge_label}:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self.clicked.emit()
+                return True
+            if event.type() == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+                self.doubleClicked.emit()
+                return True
+        return super().eventFilter(obj, event)
+
+
+class _FluentProfileRowListWidget(QListWidget):
+    """Single-selection list used by the grouped text export dialog."""
+
+    enabledRowDropped = Signal(str, int)
+    toggleRequested = Signal(str)
+
+    def __init__(self, allow_reorder=False, parent=None):
+        super().__init__(parent)
+        self._allow_reorder = bool(allow_reorder)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        if self._allow_reorder:
+            self.setDragEnabled(True)
+            self.viewport().setAcceptDrops(True)
+            self.setAcceptDrops(True)
+            self.setDropIndicatorShown(True)
+            self.setDefaultDropAction(Qt.MoveAction)
+            self.setDragDropMode(QAbstractItemView.DragDrop)
+        else:
+            self.setDragEnabled(False)
+            self.setAcceptDrops(False)
+            self.setDropIndicatorShown(False)
+            self.setDragDropMode(QAbstractItemView.NoDragDrop)
+        self._set_drag_feedback(False)
+
+    def current_row_id(self):
+        item = self.currentItem()
+        if item is None:
+            return ""
+        return str(item.data(Qt.UserRole) or "").strip()
+
+    def start_drag_for_row_id(self, rid):
+        if not self._allow_reorder:
+            return
+        rid = str(rid or "").strip()
+        if not rid:
+            return
+        for row in range(self.count()):
+            item = self.item(row)
+            if item is not None and str(item.data(Qt.UserRole) or "").strip() == rid:
+                self.setCurrentRow(row)
+                self.startDrag(Qt.MoveAction)
+                return
+
+    def _set_drag_feedback(self, active: bool):
+        if active and self._allow_reorder:
+            self.setStyleSheet(
+                "QListView { border: 1px solid rgba(0, 120, 212, 0.45); "
+                "background: rgba(0, 120, 212, 0.05); border-radius: 12px; }"
+            )
+        else:
+            self.setStyleSheet("")
+
+    def startDrag(self, supportedActions):
+        if not self._allow_reorder:
+            return
+        rid = self.current_row_id()
+        if not rid:
+            return
+        mime = QMimeData()
+        mime.setData("application/x-profile-enabled-row-id", rid.encode("utf-8"))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        self._set_drag_feedback(True)
+        try:
+            drag.exec(Qt.MoveAction)
+        finally:
+            self._set_drag_feedback(False)
+
+    def dragEnterEvent(self, event):
+        if self._allow_reorder and event.mimeData().hasFormat("application/x-profile-enabled-row-id"):
+            self._set_drag_feedback(True)
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self._set_drag_feedback(False)
+        super().dragLeaveEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._allow_reorder and event.mimeData().hasFormat("application/x-profile-enabled-row-id"):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if not self._allow_reorder:
+            super().dropEvent(event)
+            return
+        data = event.mimeData()
+        if not data.hasFormat("application/x-profile-enabled-row-id"):
+            super().dropEvent(event)
+            return
+        self._set_drag_feedback(False)
+        try:
+            rid = bytes(data.data("application/x-profile-enabled-row-id")).decode("utf-8").strip()
+            if not rid:
+                event.ignore()
+                return
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            row = self.indexAt(pos).row()
+            if row < 0:
+                row = self.count()
+            row = max(0, min(self.count(), row))
+            self.enabledRowDropped.emit(rid, row)
+            event.acceptProposedAction()
+        except Exception:
+            event.ignore()
+
+    def keyPressEvent(self, event):
+        rid = self.current_row_id()
+        if rid and event.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            self.toggleRequested.emit(rid)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class _GroupedFluentTextExportSettingsDialog(_SingleListTextExportSettingsDialog):
+    """Grouped Fluent variant: enabled rows are sortable, candidates stay lightweight."""
+
+    def __init__(self, parent=None, defaults=None):
+        self._enabled_list = None
+        self._candidate_list = None
+        self._enabled_caption_label = None
+        self._candidate_caption_label = None
+        self._candidate_body = None
+        self._candidate_search = None
+        self._candidate_toggle_btn = None
+        self._candidate_expanded = False
+        self._selection_syncing = False
+        self._active_list_role = "enabled"
+        super().__init__(parent=parent, defaults=defaults)
+        self.setStyleSheet(self.styleSheet() + """
+            QWidget#profileRowsSection {
+                background: rgba(255,255,255,0.66);
+                border: 1px solid rgba(209,219,231,0.8);
+                border-radius: 14px;
+            }
+        """)
+
+    def _build_rows_card(self):
+        card = ElevatedCardWidget(self)
+        card_lay = QVBoxLayout(card)
+        card_lay.setSizeConstraint(QLayout.SetMinAndMaxSize)
+        card_lay.setContentsMargins(12, 10, 12, 10)
+        card_lay.setSpacing(10)
+
+        title_row = QHBoxLayout()
+        title_row.addWidget(BodyLabel("纵断面行内容"))
+        title_row.addStretch(1)
+        btn_preset = PushButton("应用亭子口二期项建/可研阶段模板")
+        btn_preset.clicked.connect(self._apply_tingzikou_preset)
+        title_row.addWidget(btn_preset)
+        card_lay.addLayout(title_row)
+
+        hint = self._make_wrap_caption(
+            "已启用区优先完整展示；勾选即可启用；拖动右侧手柄排序；Ctrl+Up/Ctrl+Down 可微调顺序。"
+        )
+        card_lay.addWidget(hint)
+
+        hidden_hint = self._make_wrap_caption("本版本暂不显示：IP文字(BE)、桩号文字(BK)。")
+        card_lay.addWidget(hidden_hint)
+
+        enabled_section = QWidget(self)
+        enabled_section.setObjectName("profileRowsSection")
+        enabled_lay = QVBoxLayout(enabled_section)
+        enabled_lay.setSizeConstraint(QLayout.SetMinAndMaxSize)
+        enabled_lay.setContentsMargins(10, 10, 10, 10)
+        enabled_lay.setSpacing(6)
+        enabled_section.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+
+        enabled_header = QHBoxLayout()
+        enabled_header.addWidget(BodyLabel("已启用"))
+        self._enabled_caption_label = CaptionLabel("")
+        enabled_header.addWidget(self._enabled_caption_label)
+        enabled_header.addStretch(1)
+        btn_up = PushButton("上移")
+        btn_up.clicked.connect(lambda: self._move_selected_row(-1))
+        btn_down = PushButton("下移")
+        btn_down.clicked.connect(lambda: self._move_selected_row(1))
+        btn_top = PushButton("置顶")
+        btn_top.clicked.connect(lambda: self._move_selected_row_to_edge(True))
+        btn_bottom = PushButton("置底")
+        btn_bottom.clicked.connect(lambda: self._move_selected_row_to_edge(False))
+        enabled_header.addWidget(btn_up)
+        enabled_header.addWidget(btn_down)
+        enabled_header.addWidget(btn_top)
+        enabled_header.addWidget(btn_bottom)
+        enabled_lay.addLayout(enabled_header)
+
+        enabled_desc = self._make_wrap_caption("参与导出的项目会尽量一次性完整展示在这里，拖动右侧手柄即可排序。")
+        enabled_lay.addWidget(enabled_desc)
+
+        self._enabled_list = _FluentProfileRowListWidget(allow_reorder=True, parent=self)
+        self._enabled_list.enabledRowDropped.connect(self._on_enabled_row_dropped)
+        self._enabled_list.toggleRequested.connect(lambda rid: self._toggle_current_row(rid, show_feedback=True))
+        self._enabled_list.itemDoubleClicked.connect(lambda _item: self._toggle_current_row(show_feedback=True))
+        self._enabled_list.currentItemChanged.connect(
+            lambda current, previous: self._on_list_current_changed("enabled", current, previous)
+        )
+        self._enabled_list.customContextMenuRequested.connect(
+            lambda pos: self._show_grouped_row_context_menu("enabled", pos)
+        )
+        self._enabled_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._enabled_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._row_list = self._enabled_list
+        enabled_lay.addWidget(self._enabled_list, 0)
+        card_lay.addWidget(enabled_section, 0)
+
+        candidate_section = QWidget(self)
+        candidate_section.setObjectName("profileRowsSection")
+        candidate_lay = QVBoxLayout(candidate_section)
+        candidate_lay.setSizeConstraint(QLayout.SetMinAndMaxSize)
+        candidate_lay.setContentsMargins(10, 10, 10, 10)
+        candidate_lay.setSpacing(6)
+        candidate_section.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+
+        candidate_header = QHBoxLayout()
+        candidate_header.addWidget(BodyLabel("可选项"))
+        self._candidate_caption_label = CaptionLabel("")
+        candidate_header.addWidget(self._candidate_caption_label)
+        candidate_header.addStretch(1)
+        self._candidate_toggle_btn = ToolButton(self._ICON_EXPANDED)
+        self._candidate_toggle_btn.clicked.connect(self._toggle_candidate_section)
+        candidate_header.addWidget(self._candidate_toggle_btn)
+        candidate_lay.addLayout(candidate_header)
+
+        self._candidate_body = QWidget(self)
+        candidate_body_lay = QVBoxLayout(self._candidate_body)
+        candidate_body_lay.setSizeConstraint(QLayout.SetMinAndMaxSize)
+        candidate_body_lay.setContentsMargins(0, 0, 0, 0)
+        candidate_body_lay.setSpacing(6)
+
+        candidate_desc = self._make_wrap_caption("展开后可搜索并勾选加入；推荐顺序被打乱时，新项会追加到已启用末尾。")
+        candidate_body_lay.addWidget(candidate_desc)
+
+        search_row = QHBoxLayout()
+        self._candidate_search = SearchLineEdit(self)
+        self._candidate_search.setPlaceholderText("搜索可选项")
+        self._candidate_search.textChanged.connect(lambda _text: self._refresh_all_row_lists())
+        search_row.addWidget(self._candidate_search, 1)
+        btn_enable_all = PushButton("全启用")
+        btn_enable_all.clicked.connect(self._enable_all_rows)
+        btn_disable_all = PushButton("全停用")
+        btn_disable_all.clicked.connect(self._disable_all_rows)
+        btn_restore_recommended = PushButton("恢复推荐")
+        btn_restore_recommended.clicked.connect(self._restore_recommended_rows)
+        search_row.addWidget(btn_enable_all)
+        search_row.addWidget(btn_disable_all)
+        search_row.addWidget(btn_restore_recommended)
+        candidate_body_lay.addLayout(search_row)
+
+        self._candidate_list = _FluentProfileRowListWidget(allow_reorder=False, parent=self)
+        self._candidate_list.toggleRequested.connect(lambda rid: self._toggle_current_row(rid, show_feedback=True))
+        self._candidate_list.itemDoubleClicked.connect(lambda _item: self._toggle_current_row(show_feedback=True))
+        self._candidate_list.currentItemChanged.connect(
+            lambda current, previous: self._on_list_current_changed("candidate", current, previous)
+        )
+        self._candidate_list.customContextMenuRequested.connect(
+            lambda pos: self._show_grouped_row_context_menu("candidate", pos)
+        )
+        self._candidate_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._candidate_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        candidate_body_lay.addWidget(self._candidate_list, 0)
+
+        candidate_lay.addWidget(self._candidate_body, 1)
+        card_lay.addWidget(candidate_section, 0)
+        self._set_candidate_expanded(False)
+        return card
+
+    def _set_candidate_expanded(self, expanded):
+        self._candidate_expanded = bool(expanded)
+        if self._candidate_body is not None:
+            self._candidate_body.setVisible(self._candidate_expanded)
+        if self._candidate_toggle_btn is not None:
+            self._candidate_toggle_btn.setIcon(self._ICON_EXPANDED if self._candidate_expanded else self._ICON_COLLAPSED)
+        self._ensure_row_lists_visible_rows()
+        self._request_dialog_layout_refresh()
+
+    def _toggle_candidate_section(self):
+        self._set_candidate_expanded(not self._candidate_expanded)
+
+    def _row_display(self, rid, enabled, order_index=None):
+        row_def = _PROFILE_ROW_DEF_MAP[rid]
+        title = row_def["label"]
+        if enabled and order_index is not None:
+            title = f"{order_index + 1:02d}. {title}"
+        subtitle_parts = ["已启用" if enabled else "可选项"]
+        hint = str(row_def.get("hint", "") or "").strip()
+        if hint:
+            subtitle_parts.append(hint)
+        return title, " | ".join(subtitle_parts), rid in _PROFILE_RECOMMENDED_ROW_IDS
+
+    def _create_row_item(self, rid, enabled, order_index=None):
+        item = QListWidgetItem()
+        item.setData(Qt.UserRole, rid)
+        item.setData(Qt.UserRole + 1, bool(enabled))
+        item.setSizeHint(QSize(0, 58))
+        widget = self._create_row_widget_for_state(rid, enabled, order_index)
+        return item, widget
+
+    def _create_row_widget_for_state(self, rid, enabled, order_index=None):
+        title, subtitle, recommended = self._row_display(rid, enabled, order_index)
+        widget = _FluentProfileRowItemWidget(title, subtitle, enabled, recommended)
+        widget.checkbox.stateChanged.connect(
+            lambda _state, row_id=rid: self._on_row_widget_checkbox_changed(None, row_id)
+        )
+        widget.clicked.connect(
+            lambda row_id=rid, prefer_enabled=bool(enabled): self._set_current_row_id(row_id, prefer_enabled=prefer_enabled)
+        )
+        widget.doubleClicked.connect(lambda row_id=rid: self._toggle_current_row(row_id, show_feedback=True))
+        if enabled:
+            widget.drag_handle.dragRequested.connect(lambda row_id=rid: self._enabled_list.start_drag_for_row_id(row_id))
+        return widget
+
+    def _refresh_row_widget_content(self, rid):
+        widget = self._row_widgets.get(rid)
+        if widget is None:
+            return
+        enabled = rid in self._enabled_row_ids
+        order_index = self._enabled_row_ids.index(rid) if enabled else None
+        title, subtitle, recommended = self._row_display(rid, enabled, order_index)
+        widget.set_content(title, subtitle, enabled, recommended)
+
+    def _on_row_widget_checkbox_changed(self, item, rid):
+        if self._row_updating:
+            return
+        widget = self._row_widgets.get(rid)
+        if widget is None:
+            return
+        self._set_current_row_id(rid, prefer_enabled=(rid in self._enabled_row_ids))
+        self._set_row_enabled(rid, widget.checkbox.isChecked(), show_feedback=True)
+
+    def _candidate_row_ids(self):
+        row_ids = [rid for rid in self._ordered_row_ids if rid not in self._enabled_row_ids]
+        query = ""
+        if self._candidate_search is not None:
+            query = self._candidate_search.text().strip().lower()
+        if not query:
+            return row_ids
+        filtered = []
+        for rid in row_ids:
+            row_def = _PROFILE_ROW_DEF_MAP.get(rid, {})
+            haystack = " ".join([
+                rid,
+                str(row_def.get("label", "")),
+                str(row_def.get("hint", "")),
+            ]).lower()
+            if query in haystack:
+                filtered.append(rid)
+        return filtered
+
+    def _refresh_section_labels(self):
+        enabled_count = len(self._enabled_row_ids)
+        candidate_count = len(self._candidate_row_ids())
+        if self._enabled_caption_label is not None:
+            self._enabled_caption_label.setText(f"{enabled_count} 项")
+        if self._candidate_caption_label is not None:
+            self._candidate_caption_label.setText(f"{candidate_count} 项")
+
+    def _ensure_row_lists_visible_rows(self):
+        if not self._enabled_list or not self._candidate_list:
+            return
+        enabled_row_h = self._enabled_list.sizeHintForRow(0)
+        candidate_row_h = self._candidate_list.sizeHintForRow(0)
+        if enabled_row_h <= 0:
+            enabled_row_h = 50
+        if candidate_row_h <= 0:
+            candidate_row_h = 50
+
+        enabled_visible = max(1, len(self._enabled_row_ids))
+        candidate_count = len(self._candidate_row_ids())
+        candidate_visible = max(1, candidate_count) if candidate_count else 0
+        if not self._candidate_expanded:
+            candidate_visible = 0
+
+        enabled_height = enabled_row_h * enabled_visible + 12
+        candidate_height = candidate_row_h * candidate_visible + 12 if candidate_visible else 0
+        self._enabled_list.setMinimumHeight(enabled_height)
+        self._enabled_list.setMaximumHeight(enabled_height)
+        self._candidate_list.setMinimumHeight(candidate_height)
+        self._candidate_list.setMaximumHeight(candidate_height)
+
+    def _find_item_in_list(self, list_widget, rid):
+        if list_widget is None:
+            return None, -1
+        for row in range(list_widget.count()):
+            item = list_widget.item(row)
+            if item is not None and str(item.data(Qt.UserRole) or "").strip() == rid:
+                return item, row
+        return None, -1
+
+    def _insert_row_into_list(self, list_widget, rid, enabled, row):
+        row = max(0, min(list_widget.count(), int(row)))
+        item, widget = self._create_row_item(rid, enabled, None)
+        item.setData(Qt.UserRole, rid)
+        item.setData(Qt.UserRole + 1, bool(enabled))
+        list_widget.insertItem(row, item)
+        list_widget.setItemWidget(item, widget)
+        self._row_widgets[rid] = widget
+        self._refresh_row_widget_content(rid)
+
+    def _refresh_all_row_lists(self, selected_rid="", prefer_enabled=True):
+        if not self._enabled_list or not self._candidate_list:
+            return
+        self._normalize_row_model()
+        self._row_updating = True
+        try:
+            self._enabled_list.clear()
+            self._candidate_list.clear()
+            self._row_widgets = {}
+            for row, rid in enumerate(self._enabled_row_ids):
+                self._insert_row_into_list(self._enabled_list, rid, True, row)
+            for row, rid in enumerate(self._candidate_row_ids()):
+                self._insert_row_into_list(self._candidate_list, rid, False, row)
+        finally:
+            self._row_updating = False
+
+        self._refresh_section_labels()
+        self._ensure_row_lists_visible_rows()
+        if selected_rid:
+            self._set_current_row_id(selected_rid, prefer_enabled=prefer_enabled)
+        else:
+            self._update_row_widget_selection()
+        self._refresh_runtime_advanced_view()
+
+    def _load_rows(self, row_items):
+        normalized = _normalize_profile_row_items(row_items)
+        self._ordered_row_ids = [item["id"] for item in normalized]
+        self._enabled_row_ids = [item["id"] for item in normalized if item.get("enabled")]
+        candidate_ids = [item["id"] for item in normalized if not item.get("enabled")]
+        prefer_enabled = bool(self._enabled_row_ids)
+        selected_rid = self._enabled_row_ids[0] if prefer_enabled else (candidate_ids[0] if candidate_ids else "")
+        self._refresh_all_row_lists(selected_rid=selected_rid, prefer_enabled=prefer_enabled)
+
+    def _selected_row_id(self):
+        primary = self._enabled_list if self._active_list_role == "enabled" else self._candidate_list
+        secondary = self._candidate_list if primary is self._enabled_list else self._enabled_list
+        for list_widget in (primary, secondary):
+            if list_widget is None:
+                continue
+            rid = list_widget.current_row_id()
+            if rid:
+                return rid
+        return ""
+
+    def _set_current_row_id(self, rid, prefer_enabled=None):
+        rid = str(rid or "").strip()
+        if not rid:
+            return
+        if prefer_enabled is True:
+            roles = [("enabled", self._enabled_list), ("candidate", self._candidate_list)]
+        elif prefer_enabled is False:
+            roles = [("candidate", self._candidate_list), ("enabled", self._enabled_list)]
+        else:
+            roles = [(self._active_list_role, self._enabled_list if self._active_list_role == "enabled" else self._candidate_list)]
+            roles.append((
+                "candidate" if self._active_list_role == "enabled" else "enabled",
+                self._candidate_list if self._active_list_role == "enabled" else self._enabled_list,
+            ))
+
+        for role, list_widget in roles:
+            item, _row = self._find_item_in_list(list_widget, rid)
+            if item is None:
+                continue
+            self._selection_syncing = True
+            try:
+                other = self._candidate_list if role == "enabled" else self._enabled_list
+                if other is not None:
+                    other.clearSelection()
+                    other.setCurrentItem(None)
+                list_widget.setCurrentItem(item)
+                list_widget.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+                list_widget.setFocus()
+            finally:
+                self._selection_syncing = False
+            self._active_list_role = role
+            self._update_row_widget_selection()
+            return
+
+    def _on_list_current_changed(self, role, current, previous):
+        if self._selection_syncing or current is None:
+            self._update_row_widget_selection()
+            return
+        other = self._candidate_list if role == "enabled" else self._enabled_list
+        self._selection_syncing = True
+        try:
+            if other is not None:
+                other.clearSelection()
+                other.setCurrentItem(None)
+        finally:
+            self._selection_syncing = False
+        self._active_list_role = role
+        self._update_row_widget_selection()
+
+    def _update_row_widget_selection(self):
+        current_rid = self._selected_row_id()
+        for rid, widget in self._row_widgets.items():
+            if widget is not None:
+                widget.set_selected(rid == current_rid)
+
+
+
+    def _show_grouped_row_context_menu(self, role, pos):
+        list_widget = self._enabled_list if role == "enabled" else self._candidate_list
+        if list_widget is None:
+            return
+        item = list_widget.itemAt(pos)
+        if item is None:
+            return
+        rid = str(item.data(Qt.UserRole) or "").strip()
+        self._set_current_row_id(rid, prefer_enabled=(role == "enabled"))
+
+        menu = QMenu(self)
+        if role == "enabled":
+            action_toggle = menu.addAction("停用")
+            menu.addSeparator()
+            action_up = menu.addAction("上移")
+            action_down = menu.addAction("下移")
+            action_top = menu.addAction("置顶")
+            action_bottom = menu.addAction("置底")
+            row = self._enabled_row_ids.index(rid)
+            action_up.setEnabled(row > 0)
+            action_top.setEnabled(row > 0)
+            action_down.setEnabled(row < len(self._enabled_row_ids) - 1)
+            action_bottom.setEnabled(row < len(self._enabled_row_ids) - 1)
+        else:
+            action_toggle = menu.addAction("启用")
+            action_up = action_down = action_top = action_bottom = None
+
+        chosen = menu.exec(list_widget.viewport().mapToGlobal(pos))
+        if chosen == action_toggle:
+            self._set_row_enabled(rid, role != "enabled", show_feedback=True)
+        elif chosen == action_up:
+            self._move_selected_row(-1)
+        elif chosen == action_down:
+            self._move_selected_row(1)
+        elif chosen == action_top:
+            self._move_selected_row_to_edge(True)
+        elif chosen == action_bottom:
+            self._move_selected_row_to_edge(False)
+
+    def _row_data_from_table(self):
+        self._normalize_row_model()
+        enabled = set(self._enabled_row_ids)
+        return _normalize_profile_row_items([
+            {"id": rid, "enabled": rid in enabled}
+            for rid in self._ordered_row_ids
+        ])
+
+    def _get_recommended_insert_row(self, rid):
+        if rid not in _PROFILE_RECOMMENDED_ROW_IDS:
+            return len(self._enabled_row_ids)
+
+        current_recommended = [row_id for row_id in self._enabled_row_ids if row_id in _PROFILE_RECOMMENDED_ROW_IDS]
+        expected_recommended = [
+            row_id for row_id in _PROFILE_ROW_VISIBLE_ORDER
+            if row_id in _PROFILE_RECOMMENDED_ROW_IDS and row_id in current_recommended
+        ]
+        if current_recommended != expected_recommended:
+            return len(self._enabled_row_ids)
+
+        rid_index = _PROFILE_ROW_VISIBLE_ORDER.index(rid)
+        for row, row_id in enumerate(self._enabled_row_ids):
+            if row_id in _PROFILE_RECOMMENDED_ROW_IDS and _PROFILE_ROW_VISIBLE_ORDER.index(row_id) > rid_index:
+                return row
+
+        previous_recommended = [
+            row_id for row_id in self._enabled_row_ids
+            if row_id in _PROFILE_RECOMMENDED_ROW_IDS and _PROFILE_ROW_VISIBLE_ORDER.index(row_id) < rid_index
+        ]
+        if previous_recommended:
+            return self._enabled_row_ids.index(previous_recommended[-1]) + 1
+        return len(self._enabled_row_ids)
+
+    def _set_row_enabled(self, rid, enabled, *, show_feedback=False):
+        if rid not in _PROFILE_ROW_VISIBLE_ID_SET:
+            return
+        current_enabled = rid in self._enabled_row_ids
+        enabled = bool(enabled)
+        if current_enabled == enabled:
+            return
+
+        if enabled:
+            insert_row = self._get_recommended_insert_row(rid)
+            self._enabled_row_ids = [row_id for row_id in self._enabled_row_ids if row_id != rid]
+            self._enabled_row_ids.insert(insert_row, rid)
+        else:
+            self._enabled_row_ids = [row_id for row_id in self._enabled_row_ids if row_id != rid]
+
+        self._normalize_row_model()
+        self._refresh_all_row_lists(selected_rid=rid, prefer_enabled=enabled)
+
+        if show_feedback:
+            row_label = _PROFILE_ROW_DEF_MAP[rid]["label"]
+            if enabled:
+                InfoBar.success(
+                    "已启用",
+                    f"{row_label} 已加入导出。",
+                    parent=self,
+                    position=InfoBarPosition.TOP_RIGHT,
+                    duration=1200,
+                )
+            else:
+                InfoBar.info(
+                    "已停用",
+                    f"{row_label} 已移回可选项。",
+                    parent=self,
+                    position=InfoBarPosition.TOP_RIGHT,
+                    duration=1200,
+                )
+
+    def _toggle_current_row(self, rid=None, *, show_feedback=False):
+        rid = str(rid or self._selected_row_id() or "").strip()
+        if not rid:
+            return
+        self._set_row_enabled(rid, rid not in self._enabled_row_ids, show_feedback=show_feedback)
+
+    def _reorder_enabled_row(self, rid, target_row):
+        enabled = list(self._enabled_row_ids)
+        if rid not in enabled:
+            return
+        old_row = enabled.index(rid)
+        enabled.pop(old_row)
+        target_row = max(0, min(len(enabled), int(target_row)))
+        if target_row > old_row:
+            target_row -= 1
+        enabled.insert(target_row, rid)
+        self._enabled_row_ids = enabled
+        self._normalize_row_model()
+        self._refresh_all_row_lists(selected_rid=rid, prefer_enabled=True)
+
+    def _enable_all_rows(self):
+        self._enabled_row_ids = list(_PROFILE_ROW_VISIBLE_ORDER)
+        self._refresh_all_row_lists(selected_rid=self._enabled_row_ids[0] if self._enabled_row_ids else "", prefer_enabled=True)
+        InfoBar.success("已全启用", "所有可选行已加入导出。", parent=self, position=InfoBarPosition.TOP_RIGHT, duration=1200)
+
+    def _disable_all_rows(self):
+        self._enabled_row_ids = []
+        candidate_ids = [item["id"] for item in _default_profile_row_items()]
+        self._refresh_all_row_lists(selected_rid=candidate_ids[0] if candidate_ids else "", prefer_enabled=False)
+        InfoBar.info("已全停用", "当前没有启用任何导出行。", parent=self, position=InfoBarPosition.TOP_RIGHT, duration=1200)
+
+    def _restore_recommended_rows(self):
+        self._enabled_row_ids = [
+            rid for rid in _PROFILE_ROW_VISIBLE_ORDER
+            if rid in _PROFILE_RECOMMENDED_ROW_IDS
+        ]
+        selected_rid = self._enabled_row_ids[0] if self._enabled_row_ids else ""
+        self._refresh_all_row_lists(selected_rid=selected_rid, prefer_enabled=True)
+        InfoBar.success("已恢复推荐", "已切换到推荐的启用项组合。", parent=self, position=InfoBarPosition.TOP_RIGHT, duration=1200)
+
+    def _apply_tingzikou_preset(self):
+        ordered = list(_TINGZIKOU_TEMPLATE_ROW_IDS) + [
+            rid for rid in _PROFILE_ROW_VISIBLE_ORDER if rid not in _TINGZIKOU_TEMPLATE_ROW_IDS
+        ]
+        self._ordered_row_ids = ordered
+        self._enabled_row_ids = list(_TINGZIKOU_TEMPLATE_ROW_IDS)
+        self._refresh_all_row_lists(selected_rid=self._enabled_row_ids[0], prefer_enabled=True)
+        InfoBar.success(
+            "模板已应用",
+            "已切换为亭子口推荐顺序。",
+            parent=self,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=1500,
+        )
+
+TextExportSettingsDialog = create_text_export_settings_dialog(globals())
 
 
 class PressurizedPipeConfigDialog(QDialog):
@@ -3916,12 +5160,18 @@ def _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix,
                 ip_segment_map[round(_mc, 6)] = n
 
     tall_line_mcs = []
-    for node in nodes:
+    for idx, node in enumerate(nodes):
         mc = node.station_MC
         is_special = _is_special_inout_node(node)
         if is_special:
             tall_line_mcs.append(mc)
-        v_top = line_height if is_special else short_line_height
+        is_last_node = idx == len(nodes) - 1
+        v_top = _resolve_profile_vline_top(
+            is_special=is_special,
+            is_last_node=is_last_node,
+            short_line_height=short_line_height,
+            line_height=line_height,
+        )
 
         ip_ref = ip_segment_map.get(round(float(mc), 6)) if has_bc_ec_rows else None
         if ip_ref is not None:
@@ -4211,12 +5461,18 @@ def _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_p
                     ip_segment_map[round(_mc, 6)] = n
 
         tall_line_mcs = []
-        for node in nodes:
+        for idx, node in enumerate(nodes):
             station_mc = float(getattr(node, "station_MC", 0) or 0.0)
             is_special = _is_special_inout_node(node)
             if is_special:
                 tall_line_mcs.append(station_mc)
-            v_top_val = line_height if is_special else short_line_height
+            is_last_node = idx == len(nodes) - 1
+            v_top_val = _resolve_profile_vline_top(
+                is_special=is_special,
+                is_last_node=is_last_node,
+                short_line_height=short_line_height,
+                line_height=line_height,
+            )
 
             ip_ref = ip_segment_map.get(round(station_mc, 6)) if has_bc_ec_rows else None
             if ip_ref is not None:
@@ -4591,10 +5847,10 @@ def export_building_name_plan(panel):
 
             node_a = coord_nodes[mid_left]
             node_b = coord_nodes[mid_right]
-            # 坐标修正：node.x 存储的是北坐标N，node.y 存储的是东坐标E
-            # AutoCAD 使用 X,Y 格式，X为东坐标E，Y为北坐标N
-            x1, y1 = node_a.y, node_a.x
-            x2, y2 = node_b.y, node_b.x
+            # 建筑物名称上平面图与表3 / IP坐标表保持同一坐标口径：
+            # node.x -> CAD X，node.y -> CAD Y。
+            x1, y1 = node_a.x, node_a.y
+            x2, y2 = node_b.x, node_b.y
 
             dx = x2 - x1
             dy = y2 - y1
@@ -5169,11 +6425,13 @@ def _draw_section_summary_on_msp(
         _dxf_auto_col_widths,
         _DXF_TABLE_GAP,
         _DXF_BUILDERS,
+        _build_horseshoe_export_entries,
+        _expand_horseshoe_table_order,
         compute_rect_channel,
         compute_trapezoid_channel,
+        compute_u_channel,
         compute_tunnel,
         compute_tunnel_circular,
-        compute_tunnel_horseshoe,
         compute_aqueduct_u,
         compute_aqueduct_rect,
         compute_rect_culvert,
@@ -5182,6 +6440,7 @@ def _draw_section_summary_on_msp(
         compute_pressure_pipe,
         _default_segments_rect_channel,
         _default_segments_trap_channel,
+        _default_segments_u_channel,
         _default_segments_tunnel_arch,
         _default_segments_tunnel_circular,
         _default_segments_tunnel_horseshoe,
@@ -5207,17 +6466,17 @@ def _draw_section_summary_on_msp(
     seg_count = max(1, max(counts)) if counts else 7
 
     fallback_qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
-    if proj_settings and getattr(proj_settings, "design_flows", None):
+    if flow_qs:
+        qs = []
+        for i in range(1, seg_count + 1):
+            q = flow_qs.get(i, 0.0)
+            qs.append(q if q > 0 else (fallback_qs[i - 1] if i - 1 < len(fallback_qs) else fallback_qs[-1]))
+    elif proj_settings and getattr(proj_settings, "design_flows", None):
         flows = [q for q in proj_settings.design_flows if isinstance(q, (int, float)) and q > 0]
         if flows:
             qs = [flows[i] if i < len(flows) else flows[-1] for i in range(seg_count)]
         else:
             qs = fallback_qs[:seg_count]
-    elif flow_qs:
-        qs = []
-        for i in range(1, seg_count + 1):
-            q = flow_qs.get(i, 0.0)
-            qs.append(q if q > 0 else (fallback_qs[i - 1] if i - 1 < len(fallback_qs) else fallback_qs[-1]))
     else:
         qs = list(fallback_qs[:seg_count]) + [fallback_qs[-1]] * max(0, seg_count - len(fallback_qs))
 
@@ -5255,6 +6514,7 @@ def _draw_section_summary_on_msp(
 
     rc = _make_segs(_default_segments_rect_channel, node_defaults.get("rect_channel"))
     tr = _make_segs(_default_segments_trap_channel, node_defaults.get("trap_channel"))
+    uc = _make_segs(_default_segments_u_channel, node_defaults.get("u_channel"))
     ta = _make_segs(_default_segments_tunnel_arch, node_defaults.get("tunnel_arch"))
     tc = _make_segs(_default_segments_tunnel_circular, node_defaults.get("tunnel_circular"))
     th = _make_segs(_default_segments_tunnel_horseshoe, node_defaults.get("tunnel_horseshoe"))
@@ -5316,12 +6576,21 @@ def _draw_section_summary_on_msp(
     _tu_arch = _tu.get("tunnel_arch", False)
     _tu_circ = _tu.get("tunnel_circular", False)
     _tu_horse = _tu.get("tunnel_horseshoe", False)
+    if has_source:
+        _tu_arch = False
+        _tu_circ = False
+        _tu_horse = False
 
     d_rc = compute_rect_channel(rc) if rc else []
     d_tr = compute_trapezoid_channel(tr) if tr else []
+    d_uc = compute_u_channel(uc) if uc else []
     d_ta, _ = compute_tunnel(ta, _rock_lining, unified=_tu_arch) if ta else ([], {})
     d_tc, _ = compute_tunnel_circular(tc, _rock_lining, unified=_tu_circ) if tc else ([], {})
-    d_th, d_th_info = compute_tunnel_horseshoe(th, rock_lining=_rock_lining, unified=_tu_horse) if th else ([], {})
+    horseshoe_entries = _build_horseshoe_export_entries(
+        th,
+        rock_lining=_rock_lining,
+        unified=_tu_horse,
+    ) if th else []
     d_au = compute_aqueduct_u(au) if au else []
     d_ar = compute_aqueduct_rect(ar) if ar else []
     d_rv = compute_rect_culvert(rv) if rv else []
@@ -5332,9 +6601,9 @@ def _draw_section_summary_on_msp(
     data_map = {
         "rect_channel": d_rc,
         "trap_channel": d_tr,
+        "u_channel": d_uc,
         "tunnel_arch": d_ta,
         "tunnel_circular": d_tc,
-        "tunnel_horseshoe": d_th,
         "aqueduct_u": d_au,
         "aqueduct_rect": d_ar,
         "rect_culvert": d_rv,
@@ -5342,9 +6611,16 @@ def _draw_section_summary_on_msp(
         "siphon": d_sp,
         "pressure_pipe": d_pp,
     }
+    horseshoe_titles = {}
+    horseshoe_keys = []
+    for entry in horseshoe_entries:
+        data_map[entry["key"]] = entry["rows"]
+        horseshoe_titles[entry["key"]] = entry["title"]
+        horseshoe_keys.append(entry["key"])
     table_order = [
         "rect_channel",
         "trap_channel",
+        "u_channel",
         "tunnel_arch",
         "tunnel_circular",
         "tunnel_horseshoe",
@@ -5355,6 +6631,7 @@ def _draw_section_summary_on_msp(
         "siphon",
         "pressure_pipe",
     ]
+    table_order = _expand_horseshoe_table_order(table_order, horseshoe_keys)
 
     cur_y = below_y
     max_table_w = 0.0
@@ -5364,11 +6641,12 @@ def _draw_section_summary_on_msp(
         data_rows = data_map.get(key)
         builder = _DXF_BUILDERS.get(key)
         if data_rows and builder:
-            title_t, headers, col_widths, rows, merge = builder(data_rows)
-            if key == "tunnel_horseshoe" and d_th_info:
-                st_name = d_th_info.get("section_type_name")
-                if st_name:
-                    title_t = f"{st_name}隧洞断面尺寸及水力要素表"
+            title_arg = horseshoe_titles.get(key)
+            title_t, headers, col_widths, rows, merge = (
+                builder(data_rows, title=title_arg)
+                if title_arg is not None
+                else builder(data_rows)
+            )
             table_h = _dxf_draw_table(
                 msp,
                 0.0,
@@ -5771,6 +7049,7 @@ class SectionSummaryDialog(QDialog):
             generate_dxf,
             _default_segments_rect_channel,
             _default_segments_trap_channel,
+            _default_segments_u_channel,
             _default_segments_tunnel_arch,
             _default_segments_tunnel_circular,
             _default_segments_tunnel_horseshoe,
@@ -5792,6 +7071,7 @@ class SectionSummaryDialog(QDialog):
         self._default_fns = {
             'rect_channel': _default_segments_rect_channel,
             'trap_channel': _default_segments_trap_channel,
+            'u_channel': _default_segments_u_channel,
             'tunnel_arch': _default_segments_tunnel_arch,
             'tunnel_circular': _default_segments_tunnel_circular,
             'tunnel_horseshoe': _default_segments_tunnel_horseshoe,
@@ -5811,6 +7091,7 @@ class SectionSummaryDialog(QDialog):
         node_defaults, flow_qs = _extract_segment_defaults_from_nodes(nodes)
         self._node_defaults = node_defaults
         self._flow_qs = flow_qs
+        self._has_source_data = bool(self._nodes) and any(self._node_defaults.values())
 
         # 提取实际的有压流实体，并记录缺失流量段的条目以便提示后跳过
         self._siphon_groups, self._invalid_siphon_groups = self._extract_siphon_groups()
@@ -5844,16 +7125,16 @@ class SectionSummaryDialog(QDialog):
         fallback = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
         sc = self._segment_count
         ps = self._proj_settings
-        if ps is not None and getattr(ps, "design_flows", None):
-            flows = [q for q in ps.design_flows if isinstance(q, (int, float)) and q > 0]
-            if flows:
-                return [flows[i] if i < len(flows) else flows[-1] for i in range(sc)]
         if self._flow_qs:
             out = []
             for i in range(1, sc + 1):
                 q = self._flow_qs.get(i, 0.0)
                 out.append(q if q > 0 else (fallback[i - 1] if i - 1 < len(fallback) else fallback[-1]))
             return out
+        if ps is not None and getattr(ps, "design_flows", None):
+            flows = [q for q in ps.design_flows if isinstance(q, (int, float)) and q > 0]
+            if flows:
+                return [flows[i] if i < len(flows) else flows[-1] for i in range(sc)]
         if sc <= len(fallback):
             return list(fallback[:sc])
         return list(fallback) + [fallback[-1]] * (sc - len(fallback))
@@ -6149,6 +7430,9 @@ class SectionSummaryDialog(QDialog):
                 self._ui_q_value_column_width,
                 text=default_qs[i] if i < len(default_qs) else default_qs[-1],
             )
+            if self._has_source_data:
+                edit.setReadOnly(True)
+                edit.setToolTip("当前导出严格复用表2/表3结果，流量不允许在导出阶段改写。")
             q_grid.addWidget(row_widget, i, 0)
             q_grid.addWidget(edit, i, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
             self._q_edits.append(edit)
@@ -6201,18 +7485,28 @@ class SectionSummaryDialog(QDialog):
                 sp_row["pipe_material"] if sp_row["pipe_material"] in self._SIPHON_MATERIALS else "球墨铸铁管"
             )
             mat_combo.setFixedWidth(self._ui_material_column_width)
+            if self._has_source_data:
+                mat_combo.setEnabled(False)
             sp_grid.addWidget(mat_combo, row_index, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
             dn_edit = self._make_fixed_line_edit(self._ui_dn_column_width)
             dn_val = _normalize_dn_mm(sp_row["DN_mm"], 1500)
             dn_edit.setText(str(dn_val))
+            if self._has_source_data:
+                dn_edit.setReadOnly(True)
+                dn_edit.setToolTip("当前导出严格复用表2/表3结果，DN 不允许在导出阶段改写。")
             sp_grid.addWidget(dn_edit, row_index, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
             self._siphon_rows.append((dict(sp_row), mat_combo, dn_edit))
 
         siphon_lay.addLayout(sp_grid)
 
-        dn_note = QLabel("（DN 从倒虹吸计算结果自动导入，也可手动修改）")
+        dn_note_text = (
+            "（检测到表2/表3结果时，倒虹吸 DN 与相关结果将严格复用当前已确认值，导出阶段不可改写）"
+            if self._has_source_data
+            else "（DN 从倒虹吸计算结果自动导入，可在缺少源结果时作为补全参数）"
+        )
+        dn_note = QLabel(dn_note_text)
         dn_note.setStyleSheet("font-size:11px; color:#666;")
         siphon_lay.addWidget(dn_note)
         lay.addWidget(siphon_group)
@@ -6260,18 +7554,28 @@ class SectionSummaryDialog(QDialog):
             self._populate_pressure_pipe_material_combo(mat_combo)
             self._set_pressure_pipe_material_combo_value(mat_combo, pp_row.get("pipe_material"))
             mat_combo.setFixedWidth(self._ui_material_column_width)
+            if self._has_source_data:
+                mat_combo.setEnabled(False)
             pp_grid.addWidget(mat_combo, row_index, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
             dn_edit = self._make_fixed_line_edit(self._ui_dn_column_width)
             dn_val = _normalize_dn_mm(pp_row["DN_mm"], 1500)
             dn_edit.setText(str(dn_val))
+            if self._has_source_data:
+                dn_edit.setReadOnly(True)
+                dn_edit.setToolTip("当前导出严格复用表2/表3结果，DN 不允许在导出阶段改写。")
             pp_grid.addWidget(dn_edit, row_index, 2, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
             self._pressure_pipe_rows.append((dict(pp_row), mat_combo, dn_edit))
 
         pp_lay.addLayout(pp_grid)
 
-        pp_note = QLabel("（DN 从有压管道计算结果自动导入，也可手动修改）")
+        pp_note_text = (
+            "（检测到表2/表3结果时，有压管道 DN、材质及相关结果将严格复用当前已确认值，导出阶段不可改写）"
+            if self._has_source_data
+            else "（DN 从有压管道计算结果自动导入，可在缺少源结果时作为补全参数）"
+        )
+        pp_note = QLabel(pp_note_text)
         pp_note.setStyleSheet("font-size:11px; color:#666;")
         pp_lay.addWidget(pp_note)
         lay.addWidget(pressure_pipe_group)
@@ -6626,12 +7930,30 @@ class SectionSummaryDialog(QDialog):
     def _collect_pressure_pipe_missing_total_head_loss_labels(self, rows):
         if not rows:
             return []
-        computed_rows = self._compute_pressure_pipe(rows)
         return [
             row.get("name") or ""
-            for row in computed_rows
-            if str(row.get("total_head_loss", "")).strip() == "-"
+            for row in rows
+            if self._normalize_pressure_pipe_total_head_loss_value(row.get("total_head_loss")) is None
         ]
+
+    def _collect_siphon_missing_velocity_labels(self, rows):
+        if not rows:
+            return []
+        return [
+            row.get("name") or ""
+            for row in rows
+            if _normalize_locked_velocity_value(row.get("V")) is None
+        ]
+
+    def _warn_siphon_missing_velocity(self, rows):
+        items = [label for label in self._collect_siphon_missing_velocity_labels(rows) if label]
+        if not items:
+            return
+        fluent_info(
+            self,
+            "提示",
+            "以下倒虹吸缺少已算流速结果，本次导出将以“-”显示：\n" + "；".join(items),
+        )
 
     def _warn_pressure_pipe_missing_total_head_loss(self, rows):
         items = [label for label in self._collect_pressure_pipe_missing_total_head_loss_labels(rows) if label]
@@ -6640,7 +7962,7 @@ class SectionSummaryDialog(QDialog):
         fluent_info(
             self,
             "提示",
-            "以下有压管道因上下文不足未能计算总水头损失，本次导出将以“-”显示：\n" + "；".join(items),
+            "以下有压管道缺少已算总水头损失结果，本次导出将以“-”显示：\n" + "；".join(items),
         )
 
     def _read_float(self, edit, default):
@@ -6701,6 +8023,7 @@ class SectionSummaryDialog(QDialog):
         from calc_渠系计算算法内核.生成断面汇总表 import (
             _default_segments_rect_channel,
             _default_segments_trap_channel,
+            _default_segments_u_channel,
             _default_segments_tunnel_arch,
             _default_segments_tunnel_circular,
             _default_segments_tunnel_horseshoe,
@@ -6717,6 +8040,9 @@ class SectionSummaryDialog(QDialog):
         except ValueError:
             fluent_error(self, "输入错误", "流量值必须为数字")
             return
+
+        if self._has_source_data:
+            qs = self._build_default_qs()
 
         if self._block_invalid_pressurized_export():
             return
@@ -6775,7 +8101,7 @@ class SectionSummaryDialog(QDialog):
             fp += ext
 
         # 构建各表参数
-        has_source_data = bool(self._nodes) and any(node_defaults.values())
+        has_source_data = self._has_source_data
 
         def _make_segs(default_fn, overrides_by_idx=None):
             # 有源数据时，只生成有实际节点数据的流量段
@@ -6811,6 +8137,7 @@ class SectionSummaryDialog(QDialog):
 
         rc_segs = _make_segs(_default_segments_rect_channel, node_defaults.get("rect_channel"))
         tr_segs = _make_segs(_default_segments_trap_channel, node_defaults.get("trap_channel"))
+        uc_segs = _make_segs(_default_segments_u_channel, node_defaults.get("u_channel"))
         tn_arch_segs = _make_segs(_default_segments_tunnel_arch, node_defaults.get("tunnel_arch"))
         tn_circ_segs = _make_segs(_default_segments_tunnel_circular, node_defaults.get("tunnel_circular"))
         tn_horse_segs = _make_segs(_default_segments_tunnel_horseshoe, node_defaults.get("tunnel_horseshoe"))
@@ -6820,7 +8147,7 @@ class SectionSummaryDialog(QDialog):
         cp_segs = _make_segs(_default_segments_circular_pipe, node_defaults.get("circular_channel"))
 
         if not has_source_data:
-            for segs_list in [rc_segs, tr_segs, tn_arch_segs, tn_circ_segs, tn_horse_segs,
+            for segs_list in [rc_segs, tr_segs, uc_segs, tn_arch_segs, tn_circ_segs, tn_horse_segs,
                               aq_u_segs, aq_rect_segs, rv_segs, cp_segs]:
                 for i, seg in enumerate(segs_list):
                     seg["name"] = _segment_name(i + 1)
@@ -6842,6 +8169,8 @@ class SectionSummaryDialog(QDialog):
                 _table_order.append("rect_channel")
             if node_defaults.get("trap_channel"):
                 _table_order.append("trap_channel")
+            if node_defaults.get("u_channel"):
+                _table_order.append("u_channel")
             if node_defaults.get("tunnel_arch"):
                 _table_order.append("tunnel_arch")
             if node_defaults.get("tunnel_circular"):
@@ -6908,12 +8237,14 @@ class SectionSummaryDialog(QDialog):
             segment_name_fn=_segment_name,
         )
 
+        self._warn_siphon_missing_velocity(sp_segs)
         self._warn_pressure_pipe_missing_total_head_loss(pp_segs)
 
         gen_kwargs = dict(
             filepath=fp,
             rect_channel_segs=rc_segs,
             trap_channel_segs=tr_segs,
+            u_channel_segs=uc_segs,
             tunnel_arch_segs=tn_arch_segs,
             tunnel_circular_segs=tn_circ_segs,
             tunnel_horseshoe_segs=tn_horse_segs,
@@ -6927,9 +8258,9 @@ class SectionSummaryDialog(QDialog):
             pressure_pipe_material=pressure_pipe_params[0]["pipe_material"] if pressure_pipe_params else "球墨铸铁管",
             rock_lining=rock_lining,
             table_order=_table_order,
-            tunnel_unified_arch=tunnel_unified.get("tunnel_arch", False),
-            tunnel_unified_circular=tunnel_unified.get("tunnel_circular", False),
-            tunnel_unified_horseshoe=tunnel_unified.get("tunnel_horseshoe", False),
+            tunnel_unified_arch=False if has_source_data else tunnel_unified.get("tunnel_arch", False),
+            tunnel_unified_circular=False if has_source_data else tunnel_unified.get("tunnel_circular", False),
+            tunnel_unified_horseshoe=False if has_source_data else tunnel_unified.get("tunnel_horseshoe", False),
         )
 
         try:

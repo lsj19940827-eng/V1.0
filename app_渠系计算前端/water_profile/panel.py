@@ -656,7 +656,7 @@ class WaterProfilePanel(QWidget):
         self._text_export_settings = {
             'y_bottom': 1, 'y_top': 31, 'y_water': 16,
             'text_height': 3.5, 'rotation': 90, 'elev_decimals': 3,
-            'y_name': 112, 'y_slope': 102, 'y_ip': 77,
+            'y_name': 115, 'y_slope': 105, 'y_ip': 77,
             'y_station': 47, 'y_line_height': 120,
             'profile_row_items': [
                 {"id": "building_name", "enabled": True},
@@ -822,7 +822,7 @@ class WaterProfilePanel(QWidget):
 
         self.channel_name_edit = LineEdit()
         self.channel_name_edit.setText("南峰寺")
-        self.channel_name_edit.setFixedWidth(72)
+        self.channel_name_edit.setFixedWidth(84)
         row1_flow.addWidget(_make_field_group("渠道名称:", [self.channel_name_edit], min_w=114))
 
         self.channel_level_combo = ComboBox()
@@ -1200,6 +1200,7 @@ class WaterProfilePanel(QWidget):
         sample_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=self._load_section_sample_3))
         sample_menu.addAction(Action("示例四（飞龙分干渠）", triggered=self._load_section_sample_4))
         sample_menu.addAction(Action("示例五（茶亭支渠）", triggered=self._load_section_sample_5))
+        sample_menu.addAction(Action("示例六（合作干渠）", triggered=self._load_section_sample_6))
         self._btn_section_sample = DropDownPushButton("示例数据")
         self._btn_section_sample.setMenu(sample_menu)
         button_row.addWidget(self._btn_section_sample)
@@ -1210,6 +1211,7 @@ class WaterProfilePanel(QWidget):
         template_menu.addAction(Action("示例三（罗寂寺支渠）", triggered=lambda: self._open_section_excel_template("luojisi")))
         template_menu.addAction(Action("示例四（飞龙分干渠）", triggered=lambda: self._open_section_excel_template("feilong")))
         template_menu.addAction(Action("示例五（茶亭支渠）", triggered=lambda: self._open_section_excel_template("chating")))
+        template_menu.addAction(Action("示例六（合作干渠）", triggered=lambda: self._open_section_excel_template("hezuo")))
         self._btn_section_template = DropDownPushButton("打开Excel模板")
         self._btn_section_template.setMenu(template_menu)
         button_row.addWidget(self._btn_section_template)
@@ -1568,6 +1570,13 @@ class WaterProfilePanel(QWidget):
 
     def _load_section_sample_5(self):
         self._batch_backend._add_sample_data_5()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _load_section_sample_6(self):
+        self._batch_backend._add_sample_data_6()
         self._sync_batch_settings()
         self._switch_workspace_tab(self._tab_section_input)
         if self._section_input_table and self._section_input_table.rowCount() > 0:
@@ -5700,16 +5709,19 @@ class WaterProfilePanel(QWidget):
                 cur_groups = SiphonDataExtractor.extract_siphons(cur_nodes)
                 imported_count = 0
                 has_radius_update = False
+                has_velocity_update = False
                 for group in cur_groups:
                     if group.name in results and results[group.name] is not None:
                         result_data = results[group.name]
                         if isinstance(result_data, dict):
                             head_loss = result_data.get("head_loss", 0.0)
                             diameter = result_data.get("diameter", 0.0)
+                            velocity = result_data.get("velocity")
                             turn_radius = result_data.get("turn_radius", 0.0)
                         else:
                             head_loss = result_data
                             diameter = 0.0
+                            velocity = None
                             turn_radius = 0.0
                         outlet_idx = group.outlet_row_index
                         if 0 <= outlet_idx < len(cur_nodes):
@@ -5730,13 +5742,22 @@ class WaterProfilePanel(QWidget):
                                     if not hasattr(cur_nodes[row_idx], 'section_params') or not cur_nodes[row_idx].section_params:
                                         cur_nodes[row_idx].section_params = {}
                                     cur_nodes[row_idx].section_params["D"] = diameter
+                        try:
+                            velocity_value = float(velocity)
+                        except (TypeError, ValueError):
+                            velocity_value = None
+                        if velocity_value is not None and velocity_value > 0:
+                            for row_idx in group.row_indices:
+                                if 0 <= row_idx < len(cur_nodes):
+                                    cur_nodes[row_idx].velocity = velocity_value
+                                    has_velocity_update = True
                         # 将平面转弯半径写回该倒虹吸所有行（进口+出口）
                         if turn_radius > 0:
                             for row_idx in group.row_indices:
                                 if 0 <= row_idx < len(cur_nodes):
                                     cur_nodes[row_idx].turn_radius = turn_radius
                                     has_radius_update = True
-                if imported_count > 0 or has_radius_update:
+                if imported_count > 0 or has_radius_update or has_velocity_update:
                     _panel._append_loss_undo_snapshot(_panel._snapshot_editable_cols())
                     _s = _panel._build_settings()
                     _pfx = _s.get_station_prefix() if _s else ""

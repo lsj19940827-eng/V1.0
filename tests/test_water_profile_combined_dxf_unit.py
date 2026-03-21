@@ -2,6 +2,7 @@
 """合并导出 DXF（纵断面 + 断面汇总 + IP表）行为单元测试。"""
 
 from pathlib import Path
+import importlib
 import importlib.util
 import sys
 from types import SimpleNamespace
@@ -9,6 +10,9 @@ from types import SimpleNamespace
 
 def _load_cad_tools():
     root = Path(__file__).resolve().parents[1]
+    root_str = str(root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
     matches = list(root.glob("*/water_profile/cad_tools.py"))
     assert matches, "未找到 cad_tools.py"
     spec = importlib.util.spec_from_file_location("cad_tools_combined_dxf_test_mod", matches[0])
@@ -198,3 +202,69 @@ def test_combined_dxf_warns_but_saves_when_open_channel_name_missing(monkeypatch
     assert "第1行（明渠-矩形）" in infos[-1][2]
     assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
     assert questions, "成功导出后仍应弹出打开文件确认"
+
+
+def test_draw_section_summary_on_msp_splits_mixed_horseshoe_tables(monkeypatch):
+    actual_summary = importlib.import_module("calc_渠系计算算法内核.生成断面汇总表")
+    captured_titles = []
+
+    def _fake_draw_table(msp, x0, y0, title, headers, col_widths, rows, merge_groups=None, layer="0"):
+        _ = (msp, x0, y0, headers, col_widths, rows, merge_groups, layer)
+        captured_titles.append(title)
+        return 100.0
+
+    monkeypatch.setattr(actual_summary, "_dxf_draw_table", _fake_draw_table)
+
+    panel = SimpleNamespace(
+        _custom_struct_thickness=None,
+        _custom_rock_lining=None,
+        _custom_tunnel_unified={},
+    )
+    nodes = [
+        SimpleNamespace(
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=False,
+            structure_type=SimpleNamespace(value="隧洞-马蹄形Ⅰ型"),
+            name="马蹄Ⅰ",
+            flow_section="1",
+            flow=2.0,
+            roughness=0.014,
+            slope_i=1 / 1500,
+            section_params={"R": 1.8, "horseshoe_section_type": 1},
+            water_depth=1.25,
+            velocity=1.48,
+            rock_class="III",
+        ),
+        SimpleNamespace(
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=False,
+            structure_type=SimpleNamespace(value="隧洞-马蹄形Ⅱ型"),
+            name="马蹄Ⅱ",
+            flow_section="2",
+            flow=1.5,
+            roughness=0.014,
+            slope_i=1 / 1800,
+            section_params={"R": 2.2, "horseshoe_section_type": 2},
+            water_depth=1.35,
+            velocity=1.32,
+            rock_class="IV",
+        ),
+    ]
+
+    _, _, drawn_count = cad_tools._draw_section_summary_on_msp(
+        panel=panel,
+        msp=object(),
+        nodes=nodes,
+        proj_settings=None,
+        pressurized_params={"siphon": [], "pressure_pipe": []},
+        below_y=0.0,
+        summary_layer="SUMMARY",
+    )
+
+    assert drawn_count == 2
+    assert any("马蹄形标准Ⅰ型隧洞断面尺寸及水力要素表" == title for title in captured_titles)
+    assert any("马蹄形标准Ⅱ型隧洞断面尺寸及水力要素表" == title for title in captured_titles)
