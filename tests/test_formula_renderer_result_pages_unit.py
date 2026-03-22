@@ -104,6 +104,24 @@ def test_text_to_latex_normalizes_engineering_symbols_without_leaking_legacy_pla
         assert legacy not in latex
 
 
+def test_formula_renderer_keeps_design_method_step_as_plain_text_card():
+    text = (
+        "【二、设计方法】\n"
+        "\n"
+        "  1. 采用方法:\n"
+        "     依据《灌溉与排水工程设计标准-2018》附录E，按水力最佳断面（α=1.00）"
+        "及实用经济断面（α=1.01～1.05）进行比选\n"
+    )
+
+    body = renderer.plain_text_to_formula_body(text)
+
+    assert 'class="step-card"' in body
+    assert "采用方法" in body
+    assert 'class="content-line"' in body
+    assert "<svg" not in body
+    assert 'class="formula-line"' not in body
+
+
 def test_aqueduct_u_detail_result_page_renders_svg_cards():
     result = aqueduct_kernel.quick_calculate_u(
         Q=5.0,

@@ -849,13 +849,16 @@ def _render_step_card(block):
 
     base_indent = _calc_base_indent(lines)
     parts = []
+    force_plain_text = title.strip() in ("采用方法:", "采用方法：")
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
         rel = max(0, len(line) - len(line.lstrip()) - base_indent)
         ms = f'margin-left:{rel * 7}px;' if rel > 0 else ''
-        parts.append(_render_content_line(stripped, ms, enable_formula=True))
+        parts.append(
+            _render_content_line(stripped, ms, enable_formula=not force_plain_text)
+        )
 
     return (
         f'<div class="{card_cls}">'

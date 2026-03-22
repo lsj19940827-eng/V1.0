@@ -93,3 +93,5 @@ tools/授权台账.csv
 
 # GitHub Token（发版脚本用）
 .env
+Microsoft/
+.tmp_pytest/

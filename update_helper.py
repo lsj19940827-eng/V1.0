@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -393,6 +394,18 @@ def _run_session_ui(session_path: str) -> int:
     return app.exec()
 
 
+def _show_direct_launch_hint() -> int:
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setApplicationName(updater.UPDATE_HELPER_NAME)
+    app.setFont(QFont("Microsoft YaHei", 10))
+    QMessageBox.information(
+        None,
+        "更新助手说明",
+        "请双击 CanalHydraulicCalc.exe 启动软件。\n\n本程序仅在自动更新时由系统调用，不能单独运行。",
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="CanalHydraulicCalc update helper")
     parser.add_argument("--spawn-session")
@@ -401,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
 
     session_path = args.spawn_session or args.run_session
     if not session_path:
-        raise SystemExit("missing update session path")
+        return _show_direct_launch_hint()
 
     if args.spawn_session:
         _spawn_runner(session_path)

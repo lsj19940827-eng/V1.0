@@ -52,6 +52,10 @@ MAX_B_ITER = 100             # 底宽迭代次数
 # --- 附录E 梯形渠道实用经济断面计算常量 ---
 # α值范围：面积增大系数，从1.00（水力最佳）到1.05（最宽浅）
 ALPHA_VALUES = [1.00, 1.01, 1.02, 1.03, 1.04, 1.05]
+APPENDIX_E_METHOD_TEXT = (
+    "依据《灌溉与排水工程设计标准-2018》附录E，按水力最佳断面（α=1.00）"
+    "及实用经济断面（α=1.01～1.05）进行比选"
+)
 
 # --- 圆形明渠常量 ---
 PI = math.pi
@@ -328,10 +332,7 @@ def calculate_economic_section_appendix_e(Q: float, n: float, i: float, m: float
     
     if selected_scheme:
         alpha = selected_scheme['alpha']
-        if abs(alpha - 1.00) < ZERO_TOLERANCE:
-            method = "灌溉与排水工程设计标准-2018 附录E 水力最佳断面(α=1.00)与实用经济断面(α=1.01~1.05)"
-        else:
-            method = f"灌溉与排水工程设计标准-2018 附录E 水力最佳断面(α=1.00)与实用经济断面(α=1.01~1.05)"
+        method = APPENDIX_E_METHOD_TEXT
         return (True, selected_scheme['h'], selected_scheme['b'], 
                 selected_scheme['beta'], alpha, method, all_schemes)
     

@@ -439,10 +439,6 @@ def _render_shell_start(payload, runtime_mode: str | None = None) -> str:
         f"<div class=\"appendix-e-title\">{_e(payload['summary']['title'])}</div>",
         f"<div class=\"appendix-e-note\">{_e(payload['summary']['note'])}</div>",
     ]
-    if runtime_mode:
-        html_parts.append(
-            f"<div class=\"appendix-e-runtime-hint\">渲染模式: {_e(runtime_mode)}</div>"
-        )
     return "".join(html_parts)
 
 
@@ -526,7 +522,6 @@ def build_appendix_e_qt_compatible_body(payload, runtime_mode: str) -> str:
         "<div style=\"margin:8px 0 12px 0; padding:14px 16px; background:#FFFFFF; border:1px solid #DCE7F4;\">"
         f"<p style=\"margin:0 0 10px 0;\"><b>{_e(payload['summary']['title'])}</b></p>"
         f"<p style=\"margin:0 0 10px 0;\">{_e(payload['summary']['note'])}</p>"
-        f"<p style=\"margin:0 0 10px 0;\"><font color=\"#60758C\">渲染模式: {_e(runtime_mode)}</font></p>"
         "<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\" width=\"100%\">"
         "<thead><tr bgcolor=\"#EAF3FC\">"
         "<th width=\"8%\">α值</th>"
@@ -552,20 +547,22 @@ def build_appendix_e_error_body(
     reason_text: str,
     guidance_lines: list[str] | tuple[str, ...],
 ) -> str:
-    detail_lines = [
-        f"<div class=\"appendix-e-runtime-status-line\"><b>当前模式:</b> {_e(runtime_mode)}</div>",
-        f"<div class=\"appendix-e-runtime-status-line\"><b>失败原因:</b> {_e(summary_text)}</div>",
-        f"<div class=\"appendix-e-runtime-status-line\"><b>诊断信息:</b> {_e(reason_text)}</div>",
-    ]
+    del runtime_mode
+    del reason_text
+    detail_lines = []
+    if summary_text:
+        detail_lines.append(
+            f"<div class=\"appendix-e-runtime-status-line\">{_e(summary_text)}</div>"
+        )
     for line in guidance_lines:
         detail_lines.append(
-            f"<div class=\"appendix-e-runtime-status-line\">• {_e(line)}</div>"
+            f"<div class=\"appendix-e-runtime-status-line\">{_e(line)}</div>"
         )
 
     return (
         _render_shell_start(payload)
         + "<div class=\"appendix-e-runtime-status is-error\">"
-        + "<div class=\"appendix-e-runtime-status-title\">第三方表格未成功渲染</div>"
+        + "<div class=\"appendix-e-runtime-status-title\">附录E断面方案对比表暂时无法显示</div>"
         + "".join(detail_lines)
         + "</div>"
         + _render_shell_end(payload)
@@ -577,8 +574,8 @@ def build_appendix_e_tabulator_body(payload, asset_root: str = "vendor/tabulator
     return f"""
 {_render_shell_start(payload)}
   <div id="appendix-e-runtime-status" class="appendix-e-runtime-status">
-    <div class="appendix-e-runtime-status-title">正在初始化第三方表格</div>
-    <div class="appendix-e-runtime-status-line">正在载入本地 Tabulator 组件并渲染附录E方案对比表。</div>
+    <div class="appendix-e-runtime-status-title">正在生成附录E断面方案对比表</div>
+    <div class="appendix-e-runtime-status-line">请稍候，结果正在加载。</div>
   </div>
   <div id="appendix-e-table-shell" class="appendix-e-table-shell is-hidden">
     <div id="appendix-e-table"></div>
@@ -638,13 +635,13 @@ def build_appendix_e_tabulator_body(payload, asset_root: str = "vendor/tabulator
     return next;
   }}
 
-  setRuntimeState(loadingValue, "正在初始化第三方表格", [
-    "正在载入本地 Tabulator 组件并渲染附录E方案对比表。"
+  setRuntimeState(loadingValue, "正在生成附录E断面方案对比表", [
+    "请稍候，结果正在加载。"
   ]);
 
   try {{
     if (typeof Tabulator !== "function") {{
-      throw new Error("Tabulator 库未正确加载");
+      throw new Error("附录E断面方案对比表初始化失败");
     }}
 
     const table = new Tabulator("#appendix-e-table", {{
@@ -682,12 +679,12 @@ def build_appendix_e_tabulator_body(payload, asset_root: str = "vendor/tabulator
     if (runtimeCard) {{
       runtimeCard.style.display = "none";
     }}
-    setRuntimeState(readyValue, "第三方表格初始化成功", []);
+    setRuntimeState(readyValue, "附录E断面方案对比表已生成", []);
     window.__appendixETabulatorReady = true;
   }} catch (error) {{
-    setRuntimeState(errorValue, "第三方表格初始化失败", [
-      "附录E未能渲染为 Tabulator 表格。",
-      String(error && error.message ? error.message : error)
+    setRuntimeState(errorValue, "附录E断面方案对比表暂时无法显示", [
+      "请重新计算后再试。",
+      "若仍无法显示，请重启程序后再试。"
     ]);
     if (tableShell) {{
       tableShell.classList.add("is-hidden");

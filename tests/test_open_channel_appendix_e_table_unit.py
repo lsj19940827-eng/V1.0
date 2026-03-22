@@ -15,6 +15,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 BASE_PACKAGE = "app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef"
+FORBIDDEN_USER_VISIBLE_TOKENS = (
+    "QWebEngineView",
+    "QTextBrowser",
+    "渲染模式",
+    "静态表格",
+    "第三方表格",
+    "Tabulator",
+)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
@@ -90,7 +98,10 @@ def _sample_trapezoid_params(q, detail_checked=False):
 def _sample_trapezoid_result(q, b, h):
     return {
         "success": True,
-        "design_method": "附录E 水力最佳断面与实用经济断面综合比选",
+        "design_method": (
+            "依据《灌溉与排水工程设计标准-2018》附录E，按水力最佳断面（α=1.00）"
+            "及实用经济断面（α=1.01～1.05）进行比选"
+        ),
         "b_design": b,
         "h_design": h,
         "V_design": 1.11,
@@ -218,12 +229,15 @@ def test_appendix_e_tabulator_body_includes_handshake_probe_markup():
     assert "display: flex;" not in head_html
     assert 'data-appendix-e-tabulator-ready' in body_html
     assert "appendix-e-runtime-status" in body_html
-    assert "Tabulator 库未正确加载" in body_html
+    assert "附录E断面方案对比表初始化失败" in body_html
+    assert "正在生成附录E断面方案对比表" in body_html
     assert "流速约束范围 0.1 ~ 2 m/s" in fallback_html
     assert "appendix-e-static-table-wrap" in fallback_html
     assert "appendix-e-badge is-selected" in fallback_html
     assert "overflow-x: hidden;" in head_html
     assert "min-width: 1080px" not in fallback_html
+    for token in FORBIDDEN_USER_VISIBLE_TOKENS:
+        assert token not in fallback_html
 
 
 def test_appendix_e_static_body_contains_expected_headers_and_note():
@@ -317,9 +331,10 @@ def test_appendix_e_qt_compatible_body_uses_qt_friendly_table_markup():
     assert 'bgcolor="#EAF3FC"' in html
     assert 'align="left"' in html
     assert 'align="right"' in html
-    assert '\u6e32\u67d3\u6a21\u5f0f: QTextBrowser \u517c\u5bb9\u8868\u683c' in html
     assert "appendix-e-badge" not in html
     assert "appendix-e-static-table" not in html
+    for token in FORBIDDEN_USER_VISIBLE_TOKENS:
+        assert token not in html
 
 
 def test_open_channel_panel_renders_webengine_static_table_when_supported():
@@ -361,9 +376,10 @@ def test_open_channel_panel_renders_webengine_static_table_when_supported():
     assert "data-appendix-e-tabulator-ready" not in html
     assert 'id="appendix-e-table-shell"' not in html
     assert "vendor/tabulator/tabulator.min.css" not in html
-    assert "\u6e32\u67d3\u6a21\u5f0f: QWebEngineView \u9759\u6001\u8868\u683c" in html
     assert "PRE1" in html
     assert "PRE2" in html
+    for token in FORBIDDEN_USER_VISIBLE_TOKENS:
+        assert token not in html
 
 
 def test_open_channel_panel_renders_qtextbrowser_compatible_table_when_fallback():
@@ -403,25 +419,27 @@ def test_open_channel_panel_renders_qtextbrowser_compatible_table_when_fallback(
     assert '<table border="1" cellspacing="0" cellpadding="6" width="100%">' in html
     assert "appendix-e-static-table" not in html
     assert "appendix-e-badge" not in html
-    assert "\u6e32\u67d3\u6a21\u5f0f: QTextBrowser \u517c\u5bb9\u8868\u683c" in html
+    for token in FORBIDDEN_USER_VISIBLE_TOKENS:
+        assert token not in html
 
 
-def test_appendix_e_error_body_contains_runtime_diagnostics():
+def test_appendix_e_error_body_uses_business_friendly_copy():
     helper = _load_helper_module()
     payload = helper.make_appendix_e_payload([], sel_b=1.0, sel_h=1.0, v_min=0.1, v_max=2.0)
 
     error_html = helper.build_appendix_e_error_body(
         payload,
-        summary_text="未能确认 Tabulator 已在当前结果页完成初始化。",
+        summary_text="附录E断面方案对比表暂时无法显示，请重新计算后再试。",
         runtime_mode="QTextBrowser 降级视图",
         reason_text="当前结果页未进入 QWebEngineView，桌面端无法执行第三方表格脚本。",
-        guidance_lines=["请确认发布目录完整。"],
+        guidance_lines=["若仍无法显示，请重启程序后再试。"],
     )
 
-    assert "第三方表格未成功渲染" in error_html
-    assert "当前模式:" in error_html
-    assert "QTextBrowser 降级视图" in error_html
-    assert "请确认发布目录完整。" in error_html
+    assert "附录E断面方案对比表暂时无法显示" in error_html
+    assert "请重新计算后再试。" in error_html
+    assert "若仍无法显示，请重启程序后再试。" in error_html
+    for token in FORBIDDEN_USER_VISIBLE_TOKENS:
+        assert token not in error_html
 
 
 def test_open_channel_panel_multi_case_keeps_static_appendix_e_tables():

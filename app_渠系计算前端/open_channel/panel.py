@@ -1409,20 +1409,16 @@ class OpenChannelPanel(QWidget):
         return "QTextBrowser 降级视图"
 
     def _appendix_e_guidance_lines(self):
-        lines = [
-            "请确认程序是从完整发布目录启动，而不是单独拷贝 exe 或某个子目录。",
-            "请确认发布版包含 QtWebEngineProcess、qtwebengine_resources 和本地 Tabulator 资源。",
-            "如果这是开发环境，请优先检查 Qt WebEngine 依赖是否完整安装。",
+        return [
+            "请重新计算后再试。",
+            "若仍无法显示，请重启程序后再试。",
+            "若问题持续存在，请从完整安装目录启动程序后再试。",
         ]
-        err = get_web_engine_import_error()
-        if err is not None:
-            lines.append(f"当前导入异常: {err.__class__.__name__}: {err}")
-        return lines
 
     def _build_appendix_e_failure_html(self, payload, pre1, pre2, reason_text):
         error_body = build_appendix_e_error_body(
             payload,
-            summary_text="未能确认 Tabulator 已在当前结果页完成初始化。",
+            summary_text="附录E断面方案对比表暂时无法显示，请重新计算后再试。",
             runtime_mode=self._appendix_e_runtime_mode_label(),
             reason_text=reason_text,
             guidance_lines=self._appendix_e_guidance_lines(),
@@ -1532,13 +1528,11 @@ class OpenChannelPanel(QWidget):
     def _build_appendix_e_markup(self, payload):
         scripted_view = view_supports_scripted_html(getattr(self, "result_text", None))
         if scripted_view:
-            render_mode = "QWebEngineView 静态表格"
-            body = build_appendix_e_static_body(payload, runtime_mode=render_mode)
+            body = build_appendix_e_static_body(payload)
             head = appendix_e_shared_head_html()
             mode = "webengine-static"
         else:
-            render_mode = "QTextBrowser 兼容表格"
-            body = build_appendix_e_qt_compatible_body(payload, runtime_mode=render_mode)
+            body = build_appendix_e_qt_compatible_body(payload, runtime_mode="")
             head = ""
             mode = "qtextbrowser-compatible"
         try:
