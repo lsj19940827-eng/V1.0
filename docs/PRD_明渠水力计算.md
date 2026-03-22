@@ -1,8 +1,8 @@
 # 明渠水力计算模块 — 产品需求文档 (PRD)
 
-> **版本**: v1.2  
+> **版本**: v1.3  
 > **创建日期**: 2026-02-22  
-> **最后更新**: 2026-02-25  
+> **最后更新**: 2026-03-22  
 > **状态**: 已实现（完成度 100%，含 U形）
 
 ---
@@ -33,6 +33,8 @@ calc_渠系计算算法内核/
   └── 明渠设计.py              # 计算引擎（1513行）
 
 app_渠系计算前端/
+  ├── dxf_common.py            # 断面 DXF 共享图层 / 偏移 / 网格布局工具
+  ├── dxf_multi_export.py      # 多工况 DXF 导出弹窗与合并导出工具
   └── open_channel/
       ├── __init__.py           # 模块声明
       ├── panel.py              # UI面板（1341行）
@@ -518,13 +520,23 @@ QHBoxLayout
 
 | 图层名 | ACI颜色 | 线宽 | 内容 |
 |--------|---------|------|------|
-| `OUTLINE` | 7 (白/黑) | 50 | 断面轮廓线 |
-| `WATER_DESIGN` | 5 (蓝) | 25 | 设计水面线 |
-| `WATER_INCREASED` | 4 (青) | 25 | 加大水面线（虚线） |
-| `DIMENSION` | 2 (黄) | 18 | 尺寸标注 |
-| `TEXT_PARAMS` | 3 (绿) | 18 | 参数文字块 |
+| `轮廓线` | 7 (白/黑) | 50 | 断面轮廓线 |
+| `设计水位` | 5 (蓝) | 25 | 设计水面线 |
+| `加大水位` | 4 (青) | 25 | 加大水面线（虚线） |
+| `尺寸标注` | 2 (黄) | 18 | 尺寸标注 |
+| `参数文字` | 3 (绿) | 18 | 参数文字块 |
 
-### 6.3 图形内容
+### 6.3 当前实现同步说明（2026-03-22）
+
+- 单工况点击 `导出DXF` 时仍沿用原流程：先选择比例尺，再保存 1 个断面 DXF。
+- 多工况点击 `导出DXF` 时，固定弹出共享 DXF 对话框，包含 `当前工况`、`勾选多个工况`、`全部工况` 三种范围、比例尺选择和工况勾选列表。
+- 多工况中的“当前工况”固定以左侧输入区顶部当前激活工况标签 `_current_case_idx` 为准，不再使用兼容字段 `current_result` / `input_params` 推断，因此不会再误导出第一个工况。
+- 工况列表会显示 `工况 N｜标签`、状态列 `可导出 / 将跳过` 与原因列 `计算失败 / 结果已失效 / 无计算结果`；`勾选多个工况` 允许全部取消勾选，但此时不能确认导出。
+- 当最终有效工况数大于 1 时，输出 1 个合并 DXF，自动按网格排版：`ncols = ceil(sqrt(n))`、`nrows = ceil(n / ncols)`，按从左到右、从上到下摆放。
+- 合并 DXF 为每个工况附加独立图层前缀，例如 `工况1_轮廓线`、`工况1_设计水位`，并在图内标题显示 `工况 N｜{标签}`。
+- 无效工况定义为：无计算结果、计算失败、或当前面板 `_results_dirty=True`；批量导出时会自动跳过，并在完成后汇总提示。
+
+### 6.4 图形内容
 
 #### 6.3.1 梯形/矩形
 
@@ -550,7 +562,7 @@ QHBoxLayout
    - 半径线 + `R=...m`（45°方向）
 5. **参数文字块**（右侧）
 
-### 6.4 标注细节
+### 6.5 标注细节
 
 - 箭头：实心三角形（SOLID图元）
 - 延伸线：超出尺寸线0.5×箭头长度
@@ -683,6 +695,8 @@ quick_calculate(Q, m, n, slope_inv, v_min, v_max, ...) → Dict
 
 ```python
 export_open_channel_dxf(filepath, result, input_params, scale_denom=100)
+draw_open_channel_dxf_on_msp(msp, result, input_params, scale_denom=100,
+                             layer_prefix="", title="") -> tuple[float, float]
 ```
 
 ### 11.3 UI 面板（`panel.py`）
@@ -731,3 +745,4 @@ design_channel(SectionType.U_SECTION,   Q=2.0,  n=0.014, slope_inv=3000, v_min=0
 | v1.0 | 2026-02-22 | 创建。担梯形/矩形/圆形三种断面类型，完整计算引擎 + UI + DXF导出 + 批量计算集成 |
 | v1.1 | 2026-02-25 | 新增U形明渠断面类型。改动点：(1)明渠设计.py新增SectionType.U_SECTION、_u_arc_geometry、calculate_u_depth_for_flow、quick_calculate_u_section；(2)open_channel/panel.py UI/计算/结果显示/DXF/Word全链路；(3)open_channel/dxf_export.py _draw_u_section；(4)batch/panel.py批量计算+示例数据增至46行；(5)structure_type_selector.py明渠分类新增U形；(6)推求水面线全链路支持（enums/data_models/calculator/hydraulic_calc/shared_data_manager/water_profile面板）；(7)新增test21/22/23 U形测试 |
 | v1.2 | 2026-02-25 | 新增“考虑加大流量比例系数”CheckBox控件（`inc_cb`，默认勾选）：不勾选时`manual_increase_percent=0`传入计算内核，简要/详细模式均跳过加大流量工况段落，验证结果仅使用设计流量数据。Bug修复：`quick_calculate_trapezoidal`结果字典新增`result['m'] = m`，修复水面线计算中梯形断面边坡系数丢失问题。涉及文件：明渠设计.py、open_channel/panel.py、batch/panel.py |
+| v1.3 | 2026-03-22 | DXF 多工况导出改造：当前工况固定取左侧工况标签 `_current_case_idx`；新增共享 DXF 范围弹窗（当前 / 勾选 / 全部）；支持多个工况合并导出为 1 个 DXF，自动网格排版并为每个工况追加图层前缀；无效工况自动跳过并汇总提示。涉及文件：open_channel/panel.py、open_channel/dxf_export.py、dxf_common.py、dxf_multi_export.py |

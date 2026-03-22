@@ -76,16 +76,29 @@ from app_渠系计算前端.export_utils import (
 from app_渠系计算前端.report_meta import (
     ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
-from app_渠系计算前端.aqueduct.dxf_export import export_aqueduct_dxf
+from app_渠系计算前端.dxf_multi_export import (
+    DxfExportCaseEntry,
+    choose_scale_denom,
+    export_combined_case_dxf,
+    format_empty_export_warning,
+    format_export_result_message,
+    partition_valid_case_entries,
+    select_case_entries,
+    show_multi_case_dxf_dialog,
+)
+from app_渠系计算前端.aqueduct.dxf_export import export_aqueduct_dxf, draw_aqueduct_dxf_on_msp
 from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, plain_text_to_formula_body,
     wrap_with_katex, load_formula_page, make_plain_html,
     HelpPageBuilder
 )
+from app_渠系计算前端.plot_title_utils import apply_flow_velocity_title
 from app_渠系计算前端.result_navigation import (
+    CaseResultNavigationBar,
     build_result_nav_bar,
     build_result_navigation_head,
     make_case_result_anchor,
+    sync_case_result_nav_bar,
     wrap_case_result_block,
 )
 if WORD_EXPORT_AVAILABLE:
@@ -345,6 +358,9 @@ class AqueductPanel(QWidget):
         # Tab1: 计算结果
         t1 = QWidget(); t1l = QVBoxLayout(t1); t1l.setContentsMargins(5, 5, 5, 5)
         grp = QGroupBox("计算结果详情"); gl = QVBoxLayout(grp)
+        self._result_case_nav = CaseResultNavigationBar(grp)
+        self._result_case_nav.case_requested.connect(self._jump_to_case_result)
+        gl.addWidget(self._result_case_nav)
         self.result_text = create_web_view()
         gl.addWidget(self.result_text)
         t1l.addWidget(grp)
@@ -385,6 +401,7 @@ class AqueductPanel(QWidget):
     # 初始帮助
     # ----------------------------------------------------------------
     def _show_initial_help(self):
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         h = HelpPageBuilder("渡槽水力计算", '请输入参数后点击“计算”按钮')
         h.section("支持断面类型")
         h.numbered_list([
@@ -609,6 +626,20 @@ class AqueductPanel(QWidget):
         q_text = (case.get('Q', '') or '').strip() or '?'
         return f"{stype}-Q{_sub(idx + 1)}={q_text}"
 
+    @staticmethod
+    def _section_plot_title(case_idx, section_type, custom_label=None):
+        custom = (custom_label or '').strip()
+        if custom:
+            return custom
+        stype = section_type or 'U形'
+        if case_idx is None:
+            return stype
+        return f"工况 {case_idx + 1}｜{stype}"
+
+    @staticmethod
+    def _apply_section_plot_title(ax, title, Q, V):
+        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
+
     def _on_case_renamed(self, idx, new_name):
         if 0 <= idx < len(self._cases):
             self._cases[idx]['custom_label'] = new_name
@@ -695,6 +726,7 @@ class AqueductPanel(QWidget):
         items = []
         for case_idx, params, result in self._all_results:
             items.append({
+                "case_idx": case_idx,
                 "anchor_id": make_case_result_anchor(self._panel_key, case_idx),
                 "label": self._case_result_nav_label(case_idx),
                 "summary": self._case_result_nav_summary(case_idx, params, result),
@@ -1004,58 +1036,75 @@ class AqueductPanel(QWidget):
         self.current_result = first_result
 
         self._export_plain_text = "\n\n".join(all_plain_parts)
-        nav_html = build_result_nav_bar(self._build_case_nav_items())
+        nav_builder = getattr(self, "_build_case_nav_items", None)
+        nav_items = nav_builder() if callable(nav_builder) else []
+        nav_html = build_result_nav_bar(nav_items, hidden=True)
         combined_body = nav_html + "\n".join(all_html_parts)
         combined_head = build_result_navigation_head()
         self._render_result_html(wrap_with_katex(combined_body, extra_head=combined_head))
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), nav_items)
 
         self._mark_results_fresh()
         self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
         self._update_section_plot_all()
 
     def _update_section_plot_all(self):
-        success_results = [(ci, p, r) for ci, p, r in self._all_results if r.get('success')]
-        if not success_results:
+        valid_results = []
+        for case_idx, params, result in self._all_results:
+            if not result.get('success'):
+                continue
+            case = self._cases[case_idx] if 0 <= case_idx < len(self._cases) else {}
+            valid_results.append((case_idx, case, params, result))
+        if not valid_results:
             self.section_fig.clear()
             self.section_canvas.draw()
             return
-        if len(success_results) == 1:
-            _, p, r = success_results[0]
-            self.input_params = p
-            self._update_section_plot(r)
+        if len(valid_results) == 1:
+            _, _, params, result = valid_results[0]
+            self.input_params = params
+            self._update_section_plot(result)
             return
         self.section_fig.clear()
-        n = len(success_results)
+        n = len(valid_results)
         ncols = min(n, 3)
         nrows = (n + ncols - 1) // ncols
         axes = self.section_fig.subplots(nrows, ncols, squeeze=False)
-        for idx_r, (ci, p, r) in enumerate(success_results):
-            row, col = divmod(idx_r, ncols)
+        for plot_idx, (case_idx, case, params, result) in enumerate(valid_results):
+            row, col = divmod(plot_idx, ncols)
             ax = axes[row][col]
-            stype = p.get('section_type', 'U形')
-            Q = p['Q']
-            ax.set_title(f"工况{ci+1} {stype}\nQ={Q:.2f}", fontsize=9)
-            if stype == 'U形' and r.get('R'):
-                R = r.get('R', 1)
-                h = r.get('h_design', R)
-                theta = np.linspace(-np.pi/2, np.pi/2, 50)
-                ax.plot(R * np.cos(theta), R * np.sin(theta) + R, 'b-', lw=1.5)
-                ax.plot([-R, -R], [R, R + h - R if h > R else R], 'b-', lw=1.5)
-                ax.plot([R, R], [R, R + h - R if h > R else R], 'b-', lw=1.5)
-            elif stype == '矩形':
-                B = r.get('B', 1)
-                H = r.get('H', 1)
-                ax.plot([-B/2, -B/2, B/2, B/2], [0, H, H, 0], 'b-', lw=1.5)
-                ax.plot([-B/2, B/2], [0, 0], 'b-', lw=1.5)
-            ax.set_aspect('equal')
-            ax.grid(True, alpha=0.3)
-        for idx_r in range(n, nrows * ncols):
-            row, col = divmod(idx_r, ncols)
-            axes[row][col].set_visible(False)
+            stype = params.get('section_type', result.get('section_type', 'U形'))
+            title = self._section_plot_title(case_idx, stype, case.get('custom_label'))
+            Q = params.get('Q', 0.0)
+            if stype == 'U形':
+                self._draw_u_section(
+                    ax,
+                    result.get('R', 0.0),
+                    result.get('f', 0.0),
+                    result.get('H_total', 0.0),
+                    result.get('h_design', 0.0),
+                    result.get('V_design', 0.0),
+                    Q,
+                    title,
+                )
+            else:
+                self._draw_rect_section(
+                    ax,
+                    result.get('B', 0.0),
+                    result.get('H_total', 0.0),
+                    result.get('h_design', 0.0),
+                    result.get('V_design', 0.0),
+                    Q,
+                    title,
+                    result,
+                )
+        for plot_idx in range(n, nrows * ncols):
+            row, col = divmod(plot_idx, ncols)
+            axes[row][col].axis('off')
         self.section_fig.tight_layout()
         self.section_canvas.draw()
 
     def _show_error(self, title, msg):
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         out = []
         out.append("=" * 70)
         out.append(f"  {title}")
@@ -1906,25 +1955,35 @@ class AqueductPanel(QWidget):
         if not result.get('success'):
             self.section_canvas.draw(); return
 
-        stype = result.get('section_type', 'U形')
+        stype = result.get('section_type', self.input_params.get('section_type', 'U形'))
         Q = self.input_params['Q']
-        Q_inc = result['Q_increased']
+        use_increase = bool(self.input_params.get('use_increase', True))
+        Q_inc = result.get('Q_increased', 0.0)
+        h_inc = result.get('h_increased', 0.0)
+        V_inc = result.get('V_increased', 0.0)
+        show_increase = use_increase and Q_inc > 0 and h_inc > 0
 
         if stype == 'U形':
             R = result['R']; f = result['f']
             h_d = result['h_design']; V_d = result['V_design']
-            h_inc = result['h_increased']; V_inc = result['V_increased']
             H_total = result['H_total']
-            axes = self.section_fig.subplots(1, 2)
-            self._draw_u_section(axes[0], R, f, H_total, h_d, V_d, Q, "设计流量")
-            self._draw_u_section(axes[1], R, f, H_total, h_inc, V_inc, Q_inc, "加大流量")
+            if show_increase:
+                axes = self.section_fig.subplots(1, 2)
+                self._draw_u_section(axes[0], R, f, H_total, h_d, V_d, Q, "设计流量")
+                self._draw_u_section(axes[1], R, f, H_total, h_inc, V_inc, Q_inc, "加大流量")
+            else:
+                ax = self.section_fig.add_subplot(111)
+                self._draw_u_section(ax, R, f, H_total, h_d, V_d, Q, "设计流量")
         else:
             B = result['B']; H_total = result['H_total']
             h_d = result['h_design']; V_d = result['V_design']
-            h_inc = result['h_increased']; V_inc = result['V_increased']
-            axes = self.section_fig.subplots(1, 2)
-            self._draw_rect_section(axes[0], B, H_total, h_d, V_d, Q, "设计流量", result)
-            self._draw_rect_section(axes[1], B, H_total, h_inc, V_inc, Q_inc, "加大流量", result)
+            if show_increase:
+                axes = self.section_fig.subplots(1, 2)
+                self._draw_rect_section(axes[0], B, H_total, h_d, V_d, Q, "设计流量", result)
+                self._draw_rect_section(axes[1], B, H_total, h_inc, V_inc, Q_inc, "加大流量", result)
+            else:
+                ax = self.section_fig.add_subplot(111)
+                self._draw_rect_section(ax, B, H_total, h_d, V_d, Q, "设计流量", result)
 
         self.section_fig.tight_layout()
         self.section_canvas.draw()
@@ -1996,7 +2055,7 @@ class AqueductPanel(QWidget):
         ax.set_xlim(-R*2.2, R*2.2)
         ax.set_ylim(-R*0.6, (R+f)*1.2)
         ax.set_aspect('equal')
-        ax.set_title(f'{title}\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
+        self._apply_section_plot_title(ax, title, Q, V)
         ax.grid(True, alpha=0.3)
         ax.axhline(y=0, color='brown', lw=3)
 
@@ -2071,7 +2130,7 @@ class AqueductPanel(QWidget):
         ax.set_aspect('equal')
 
         title_suffix = "(带倒角)" if has_chamfer and chamfer_angle > 0 else ""
-        ax.set_title(f'{title}{title_suffix}\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
+        self._apply_section_plot_title(ax, f'{title}{title_suffix}', Q, V)
         ax.grid(True, alpha=0.3)
         ax.axhline(y=0, color='brown', lw=3)
 
@@ -2098,29 +2157,48 @@ class AqueductPanel(QWidget):
     # 导出
     # ================================================================
     def _export_dxf(self):
-        if not self.current_result or not self.current_result.get('success'):
-            InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+        case_entries = self._build_dxf_export_case_entries()
+        current_entry = self._get_current_dxf_export_entry(case_entries)
+        if len(self._cases) <= 1:
+            if current_entry is None or not current_entry.is_valid:
+                self._warn_single_dxf_entry_unavailable(current_entry)
+                return
+            try:
+                filepath = self._export_single_dxf_entry(current_entry)
+                if not filepath:
+                    return
+                InfoBar.success("导出成功", f"DXF已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+                ask_open_file(filepath, self._info_parent())
+            except ImportError as e:
+                InfoBar.error("缺少依赖", str(e), parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
+            except PermissionError:
+                InfoBar.error("文件被占用", "无法写入文件，请先关闭已打开的同名DXF文件。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
+            except Exception as e:
+                InfoBar.error("导出失败", f"DXF导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
-        res = self.current_result; p = self.input_params
-        stype = res.get('section_type', p.get('section_type', 'U形'))
-        if stype == 'U形':
-            R = res.get('R', 0.0); H = res.get('H_total', 0.0)
-            default_name = f'渡槽断面_U形_R{R:.2f}xH{H:.2f}.dxf'
-        else:
-            B = res.get('B', 0.0); H = res.get('H_total', 0.0)
-            default_name = f'渡槽断面_矩形_B{B:.2f}xH{H:.2f}.dxf'
-        scales = ['1:20', '1:50', '1:100', '1:200', '1:500']
-        from app_渠系计算前端.styles import fluent_select
-        scale_str, ok = fluent_select(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2)
-        if not ok: return
-        scale_denom = int(scale_str.split(':')[1])
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, "保存DXF文件", default_name, "DXF文件 (*.dxf);;所有文件 (*.*)"
-        )
-        if not filepath: return
+
+        dialog_result = show_multi_case_dxf_dialog(self._info_parent(), "渡槽断面", case_entries, self._current_case_idx)
+        if dialog_result is None:
+            return
+        selected_entries = select_case_entries(case_entries, dialog_result.scope, self._current_case_idx, dialog_result.checked_case_indexes)
+        valid_entries, invalid_entries = partition_valid_case_entries(selected_entries)
+        if not valid_entries:
+            InfoBar.warning("提示", format_empty_export_warning(invalid_entries), parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            return
         try:
-            export_aqueduct_dxf(filepath, res, p, scale_denom)
-            InfoBar.success("导出成功", f"DXF已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            if len(valid_entries) == 1:
+                filepath = self._export_single_dxf_entry(valid_entries[0], scale_denom=dialog_result.scale_denom)
+            else:
+                filepath = self._export_combined_dxf_entries(valid_entries, dialog_result.scale_denom)
+            if not filepath:
+                return
+            InfoBar.success(
+                "导出成功",
+                f"{format_export_result_message(len(valid_entries), invalid_entries)}\n文件：{filepath}",
+                parent=self._info_parent(),
+                duration=5000,
+                position=InfoBarPosition.TOP,
+            )
             ask_open_file(filepath, self._info_parent())
         except ImportError as e:
             InfoBar.error("缺少依赖", str(e), parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
@@ -2128,6 +2206,74 @@ class AqueductPanel(QWidget):
             InfoBar.error("文件被占用", "无法写入文件，请先关闭已打开的同名DXF文件。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
         except Exception as e:
             InfoBar.error("导出失败", f"DXF导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+
+    def _build_dxf_export_case_entries(self):
+        entries = []
+        results_dirty = bool(getattr(self, "_results_dirty", False))
+        result_map = {case_idx: (params, result) for case_idx, params, result in self._all_results}
+        for case_idx, case in enumerate(self._cases):
+            params, result = result_map.get(case_idx, ({}, None))
+            invalid_reason = None
+            if results_dirty and self._all_results:
+                invalid_reason = "结果已失效"
+            elif result is None:
+                invalid_reason = "无计算结果"
+            elif not result.get("success"):
+                invalid_reason = "计算失败"
+            entries.append(
+                DxfExportCaseEntry(
+                    case_idx=case_idx,
+                    label=self._case_label(case, case_idx),
+                    input_params=params or {},
+                    result=result,
+                    is_valid=invalid_reason is None,
+                    invalid_reason=invalid_reason,
+                )
+            )
+        return entries
+
+    def _get_current_dxf_export_entry(self, case_entries):
+        for entry in case_entries:
+            if entry.case_idx == self._current_case_idx:
+                return entry
+        return case_entries[0] if case_entries else None
+
+    def _warn_single_dxf_entry_unavailable(self, entry):
+        content = "参数已变更，请先重新计算后再导出。" if entry is not None and entry.invalid_reason == "结果已失效" else "请先进行计算后再导出。"
+        InfoBar.warning("提示", content, parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+
+    def _single_dxf_default_name(self, entry):
+        result = entry.result or {}
+        params = entry.input_params or {}
+        stype = result.get('section_type', params.get('section_type', 'U形'))
+        if stype == 'U形':
+            return f"渡槽断面_U形_R{result.get('R', 0.0):.2f}xH{result.get('H_total', 0.0):.2f}.dxf"
+        return f"渡槽断面_矩形_B{result.get('B', 0.0):.2f}xH{result.get('H_total', 0.0):.2f}.dxf"
+
+    def _combined_dxf_default_name(self, count):
+        return f"渡槽断面_{count}个工况_合并.dxf"
+
+    def _choose_dxf_filepath(self, default_name):
+        filepath, _ = QFileDialog.getSaveFileName(self, "保存DXF文件", default_name, "DXF文件 (*.dxf);;所有文件 (*.*)")
+        if not filepath:
+            return None
+        return filepath if filepath.lower().endswith(".dxf") else f"{filepath}.dxf"
+
+    def _export_single_dxf_entry(self, entry, scale_denom=None):
+        scale = scale_denom if scale_denom is not None else choose_scale_denom(self)
+        if scale is None:
+            return None
+        filepath = self._choose_dxf_filepath(self._single_dxf_default_name(entry))
+        if not filepath:
+            return None
+        export_aqueduct_dxf(filepath, entry.result or {}, entry.input_params or {}, scale)
+        return filepath
+
+    def _export_combined_dxf_entries(self, entries, scale_denom):
+        filepath = self._choose_dxf_filepath(self._combined_dxf_default_name(len(entries)))
+        if not filepath:
+            return None
+        return export_combined_case_dxf(filepath, entries, scale_denom, draw_aqueduct_dxf_on_msp)
 
     def _export_report(self):
         if not self.current_result or not self.current_result.get('success'):

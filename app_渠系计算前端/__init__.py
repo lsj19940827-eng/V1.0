@@ -3,6 +3,4 @@
 
 from app_渠系计算前端.qfluentwidgets_compat import ensure_qfluentwidgets_compat
 
-ensure_qfluentwidgets_compat()
-
 __all__ = ["ensure_qfluentwidgets_compat"]

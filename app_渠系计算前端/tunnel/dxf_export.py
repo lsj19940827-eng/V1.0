@@ -1,8 +1,20 @@
 # -*- coding: utf-8 -*-
 """隧洞断面 DXF 导出（圆形 / 圆拱直墙型 / 马蹄形）"""
 import math
-from app_渠系计算前端.open_channel.dxf_export import (
-    _setup_font_style, _add_layer, _add_dim_h, _add_dim_v, _add_text_block
+from app_渠系计算前端.dxf_common import (
+    _add_dim_h,
+    _add_dim_v,
+    _add_text_block,
+    add_case_title,
+    ensure_tracked_msp,
+    setup_section_dxf_document,
+)
+from app_渠系计算前端.tunnel.geometry import (
+    arch_half_width,
+    build_arch_geometry,
+    build_arch_outline_polyline,
+    build_standard_horseshoe_geometry,
+    standard_horseshoe_half_width,
 )
 
 
@@ -11,32 +23,42 @@ def export_tunnel_dxf(filepath, result, input_params, scale_denom=100):
         import ezdxf
     except ImportError:
         raise ImportError("需要安装 ezdxf 库: pip install ezdxf")
+    doc = ezdxf.new('R2010')
+    setup_section_dxf_document(doc, scale_denom=scale_denom)
+    draw_tunnel_dxf_on_msp(
+        doc.modelspace(),
+        result,
+        input_params,
+        scale_denom=scale_denom,
+    )
+    doc.saveas(filepath)
 
+
+def draw_tunnel_dxf_on_msp(
+    msp,
+    result,
+    input_params,
+    scale_denom=100,
+    layer_prefix="",
+    title="",
+):
+    tracked_msp = ensure_tracked_msp(msp, layer_prefix=layer_prefix)
     stype = input_params.get('section_type', '圆形')
     sf = 1000.0 / scale_denom
-    doc = ezdxf.new('R2010')
-    doc.header['$INSUNITS'] = 4
-    doc.header['$MEASUREMENT'] = 1
-    doc.header['$LTSCALE'] = sf * 0.5
-    _add_layer(doc, '轮廓线',         color=7, lw=50)
-    _add_layer(doc, '设计水位',    color=5, lw=25)
-    _add_layer(doc, '加大水位', color=4, lw=25)
-    _add_layer(doc, '尺寸标注',       color=2, lw=18)
-    _add_layer(doc, '参数文字',     color=3, lw=18)
-    if 'DASHED' not in doc.linetypes:
-        doc.linetypes.add('DASHED', pattern='A,.5,-.25')
-    _setup_font_style(doc)
-    msp = doc.modelspace()
-
     if stype == '圆形':
-        _draw_circ(msp, result, input_params, sf, scale_denom)
+        _draw_circ(tracked_msp, result, input_params, sf, scale_denom)
     elif stype == '圆拱直墙型':
-        _draw_arch(msp, result, input_params, sf, scale_denom)
+        _draw_arch(tracked_msp, result, input_params, sf, scale_denom)
     else:
         sec_t = input_params.get('sec_type_int', 1 if 'Ⅰ' in stype else 2)
-        _draw_shoe(msp, result, input_params, sec_t, sf, scale_denom)
+        _draw_shoe(tracked_msp, result, input_params, sec_t, sf, scale_denom)
+    if title:
+        add_case_title(tracked_msp, title)
+    return tracked_msp.size()
 
-    doc.saveas(filepath)
+
+def _scale_point(point, sf):
+    return (point[0] * sf, point[1] * sf)
 
 
 
@@ -100,21 +122,21 @@ def _draw_arch(msp, result, p, sf=1.0, scale_denom=100):
     inc = result.get('increase_percent', 0.0)
 
     tr = math.radians(theta_deg)
-    Ra = (B/2)/math.sin(tr/2) if abs(math.sin(tr/2)) > 1e-9 else B/2
-    Ha = Ra*(1 - math.cos(tr/2)); Hs = max(0.0, H - Ha)
-    cy = Hs + Ra*math.cos(tr/2)
+    geom = build_arch_geometry(B, H, tr)
+    Hs = geom['H_straight']
 
     char = max(B, H, 1.0)*sf; th = 3.5; ar = th*0.85; gap = char*0.18
 
-    # 底 + 直墙 + 拱
-    msp.add_line((-B/2*sf, 0), (B/2*sf, 0),      dxfattribs={'layer': '轮廓线'})
-    msp.add_line((-B/2*sf, 0), (-B/2*sf, Hs*sf),  dxfattribs={'layer': '轮廓线'})
-    msp.add_line((B/2*sf,  0), (B/2*sf,  Hs*sf),  dxfattribs={'layer': '轮廓线'})
-    N = 40; sa = math.pi/2 - tr/2; ea = math.pi/2 + tr/2
-    for i in range(N):
-        a1 = sa + i*(ea-sa)/N; a2 = sa + (i+1)*(ea-sa)/N
-        msp.add_line((Ra*math.cos(a1)*sf, (cy+Ra*math.sin(a1))*sf),
-                     (Ra*math.cos(a2)*sf, (cy+Ra*math.sin(a2))*sf), dxfattribs={'layer': '轮廓线'})
+    # 非圆弧边界改为多段线，拱顶使用原生 ARC
+    outline_points = [_scale_point(point, sf) for point in build_arch_outline_polyline(geom)]
+    msp.add_lwpolyline(outline_points, dxfattribs={'layer': '轮廓线'})
+    msp.add_arc(
+        _scale_point(geom['center'], sf),
+        geom['R_arch'] * sf,
+        geom['start_deg'],
+        geom['end_deg'],
+        dxfattribs={'layer': '轮廓线'},
+    )
 
     # 水面线 + 居中标注（重叠时上下错开）
     _olap_a = h_d > 0 and h_inc > 0 and (h_inc - h_d) * sf < th * 2.0
@@ -122,8 +144,10 @@ def _draw_arch(msp, result, p, sf=1.0, scale_denom=100):
         (h_d,  '设计水位',    None,     f'▽ 设计水位 h={h_d:.3f}m'),
         (h_inc,'加大水位', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
     ]:
-        if h_w and h_w > 0:
-            hw = B/2*sf
+        if h_w and 0 < h_w < H:
+            hw = arch_half_width(geom, h_w) * sf
+            if hw <= 1e-9:
+                continue
             att = {'layer': layer}
             if lt: att['linetype'] = lt
             msp.add_line((-hw, h_w*sf), (hw, h_w*sf), dxfattribs=att)
@@ -158,30 +182,19 @@ def _draw_shoe(msp, result, p, sec_type, sf=1.0, scale_denom=100):
     V_inc = result.get('V_increased', 0.0); fb_inc = result.get('freeboard_hgt_inc', 2*r-h_inc)
     inc = result.get('increase_percent', 0.0)
 
-    t = 3.0 if sec_type == 1 else 2.0
-    theta = 0.294515 if sec_type == 1 else 0.424031
-    Ra = t * r; e = Ra * (1 - math.cos(theta))
-    name = '标准Ⅰ型' if sec_type == 1 else '标准Ⅱ型'
-
-    def half_w(h):
-        if h <= 0: return 0.0
-        elif h <= e:
-            return Ra * math.sin(math.acos(max(-1, min(1, 1 - h/Ra))))
-        elif h <= r:
-            return r * (t * math.cos(math.asin(max(-1, min(1, (1-h/r)/t)))) - t + 1)
-        elif h <= 2*r:
-            return r * math.sin(math.acos(max(-1, min(1, h/r - 1))))
-        return 0.0
+    geom = build_standard_horseshoe_geometry(sec_type, r)
+    name = geom['type_name']
 
     char = max(2*r, 1.0)*sf; th = 3.5; ar = th*0.85; gap = char*0.20
 
-    N = 80
-    heights = [i * 2*r / N for i in range(N+1)]
-    for i in range(len(heights)-1):
-        msp.add_line((-half_w(heights[i])*sf,   heights[i]*sf),
-                     (-half_w(heights[i+1])*sf, heights[i+1]*sf), dxfattribs={'layer': '轮廓线'})
-        msp.add_line((half_w(heights[i])*sf,    heights[i]*sf),
-                     (half_w(heights[i+1])*sf,  heights[i+1]*sf), dxfattribs={'layer': '轮廓线'})
+    for arc in geom['arcs']:
+        msp.add_arc(
+            _scale_point(arc['center'], sf),
+            arc['radius'] * sf,
+            arc['start_deg'],
+            arc['end_deg'],
+            dxfattribs={'layer': '轮廓线'},
+        )
 
     _olap_s = h_d > 0 and h_inc > 0 and 0 < h_inc < 2*r and (h_inc - h_d) * sf < th * 2.0
     for h_w, layer, lt, lbl in [
@@ -189,7 +202,7 @@ def _draw_shoe(msp, result, p, sec_type, sf=1.0, scale_denom=100):
         (h_inc,'加大水位', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
     ]:
         if h_w and 0 < h_w < 2*r:
-            hw = half_w(h_w) * sf
+            hw = standard_horseshoe_half_width(geom, h_w) * sf
             att = {'layer': layer}
             if lt: att['linetype'] = lt
             msp.add_line((-hw, h_w*sf), (hw, h_w*sf), dxfattribs=att)

@@ -53,9 +53,11 @@ from app_渠系计算前端.formula_renderer import (
 )
 from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
 from app_渠系计算前端.result_navigation import (
+    CaseResultNavigationBar,
     build_result_nav_bar,
     build_result_navigation_head,
     make_case_result_anchor,
+    sync_case_result_nav_bar,
     wrap_case_result_block,
 )
 from app_渠系计算前端.export_utils import (
@@ -749,6 +751,9 @@ class PressurePipePanel(QWidget):
         t1l.setContentsMargins(5, 5, 5, 5)
         grp = QGroupBox("计算结果详情")
         gl = QVBoxLayout(grp)
+        self._result_case_nav = CaseResultNavigationBar(grp)
+        self._result_case_nav.case_requested.connect(self._jump_to_case_result)
+        gl.addWidget(self._result_case_nav)
         self.result_view = _create_result_view()
         gl.addWidget(self.result_view)
         if _WEB_ENGINE_IMPORT_ERROR is not None:
@@ -1187,6 +1192,7 @@ class PressurePipePanel(QWidget):
         items = []
         for case_idx, inp, result in self._all_results:
             items.append({
+                "case_idx": case_idx,
                 "anchor_id": make_case_result_anchor(self._panel_key, case_idx),
                 "label": self._case_result_nav_label(case_idx),
                 "summary": self._case_result_nav_summary(case_idx, inp, result),
@@ -1266,6 +1272,7 @@ class PressurePipePanel(QWidget):
 
     def _show_initial_help(self):
         """初始帮助页：含 GB 50288-2018 与 GB/T 20203-2017 摘要"""
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         h = HelpPageBuilder("有压管道水力计算", '请输入参数后点击"计算"按钮')
 
         h.section("支持功能")
@@ -1532,6 +1539,7 @@ class PressurePipePanel(QWidget):
             if errors:
                 err_txt = "部分或全部工况计算失败：\n\n" + "\n".join(errors)
                 self._export_plain_text = err_txt
+                sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
                 load_formula_page(self.result_view, plain_text_to_formula_html(err_txt))
                 self.notebook.setCurrentIndex(0)
                 self.data_changed.emit()
@@ -1834,12 +1842,17 @@ class PressurePipePanel(QWidget):
 
         full_html = "\n".join(parts)
         if _multi:
+            nav_builder = getattr(self, "_build_case_nav_items", None)
+            nav_items = nav_builder() if callable(nav_builder) else []
             full_html = (
                 build_result_navigation_head()
-                + build_result_nav_bar(self._build_case_nav_items())
+                + build_result_nav_bar(nav_items, hidden=True)
                 + full_html
             )
+        else:
+            nav_items = []
         load_formula_page(self.result_view, full_html)
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), nav_items)
         self.notebook.setCurrentIndex(0)
         self._mark_results_fresh()
         self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
@@ -2241,6 +2254,7 @@ class PressurePipePanel(QWidget):
         if self._last_errors:
             err_txt = "部分或全部工况计算失败：\n\n" + "\n".join(self._last_errors)
             self._export_plain_text = err_txt
+            sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
             load_formula_page(self.result_view, plain_text_to_formula_html(err_txt))
             if hasattr(self, 'notebook'):
                 self.notebook.setCurrentIndex(0)

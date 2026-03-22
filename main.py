@@ -19,30 +19,10 @@ def main():
     if _root not in sys.path:
         sys.path.insert(0, _root)
 
-    # ============================================================
-    # 1. 高DPI设置（必须在任何 QApplication 创建之前，含授权弹窗）
-    # ============================================================
-    os.environ.setdefault('QT_ENABLE_HIGHDPI_SCALING', '1')
-    from PySide6.QtWidgets import QApplication
-    from PySide6.QtCore import Qt
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
-
-    # ============================================================
-    # 2. 授权校验
-    # ============================================================
-    from license_checker import check_license
-    if not check_license():
-        sys.exit(1)
-
-    # ============================================================
-    # 3. 启动 PySide6 主窗口
-    # ============================================================
-    from app_渠系计算前端.app import main as app_main
+    from app_渠系计算前端.bootstrap import run as bootstrap_run
 
     try:
-        app_main()
+        sys.exit(bootstrap_run())
     except Exception as e:
         import traceback
         try:

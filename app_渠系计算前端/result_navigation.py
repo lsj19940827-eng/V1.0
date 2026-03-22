@@ -6,9 +6,287 @@ from __future__ import annotations
 import html as html_mod
 import re
 
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import (
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
 
 def _e(value) -> str:
     return html_mod.escape(str(value))
+
+
+_CASE_NAV_BAR_SS = """
+QWidget#codexCaseResultNavBar {
+    background: transparent;
+}
+QFrame#codexCaseResultNavCard {
+    background: #FFFFFF;
+    border: 1px solid #E0E7EF;
+    border-radius: 12px;
+}
+QLabel#codexCaseResultNavTitle {
+    font-size: 12px;
+    color: #6B7A90;
+    font-weight: 700;
+    padding-right: 4px;
+}
+"""
+
+_CASE_NAV_CHIP_BASE_SS = (
+    "QPushButton{{"
+    "border:1.5px solid {border};"
+    "border-radius:18px;"
+    "background:{bg};"
+    "color:{fg};"
+    "font-size:13px;"
+    "font-weight:700;"
+    "padding:6px 14px;"
+    "text-align:center;"
+    "}}"
+    "QPushButton:hover{{background:{hover};}}"
+    "QPushButton:pressed{{background:{pressed};}}"
+)
+
+
+class CaseResultNavChip(QPushButton):
+    """Desktop-native case navigation chip."""
+
+    case_requested = Signal(int)
+
+    def __init__(self, case_idx: int, label: str, *, summary: str = "",
+                 is_error: bool = False, parent=None):
+        super().__init__(parent)
+        self.case_idx = int(case_idx)
+        self.setProperty("resultNavError", bool(is_error))
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(34)
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        summary_text = str(summary or "").strip()
+        label_text = str(label or "").strip() or f"工况 {self.case_idx + 1}"
+        if summary_text:
+            self.setText(f"{label_text}  {summary_text}")
+            self.setToolTip(f"{label_text}\n{summary_text}")
+        else:
+            self.setText(label_text)
+            self.setToolTip(label_text)
+        if is_error:
+            self.setStyleSheet(
+                _CASE_NAV_CHIP_BASE_SS.format(
+                    border="#C62828",
+                    bg="#FFFFFF",
+                    fg="#C62828",
+                    hover="#FFF4F4",
+                    pressed="#FDECEC",
+                )
+            )
+        else:
+            self.setStyleSheet(
+                _CASE_NAV_CHIP_BASE_SS.format(
+                    border="#1565C0",
+                    bg="#FFFFFF",
+                    fg="#1565C0",
+                    hover="#F1F7FF",
+                    pressed="#EAF3FF",
+                )
+            )
+        self.clicked.connect(self._emit_case_requested)
+
+    def _emit_case_requested(self):
+        self.case_requested.emit(self.case_idx)
+
+
+class _CaseNavChipWrap(QWidget):
+    """Wrap chips across multiple rows without relying on the shared FlowLayout."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._chips = []
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(8)
+        self._grid.setVerticalSpacing(8)
+
+    def clear_chips(self):
+        self._chips = []
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+        self.updateGeometry()
+
+    def set_chips(self, chips):
+        self._chips = list(chips or [])
+        self._relayout()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._relayout()
+
+    def _relayout(self):
+        while self._grid.count():
+            self._grid.takeAt(0)
+
+        if not self._chips:
+            self.updateGeometry()
+            return
+
+        spacing = max(0, self._grid.horizontalSpacing())
+        available_width = max(1, self.contentsRect().width())
+        current_width = 0
+        row = 0
+        column = 0
+
+        for chip in self._chips:
+            chip_width = max(chip.minimumSizeHint().width(), chip.sizeHint().width())
+            required_width = chip_width if column == 0 else chip_width + spacing
+            if column > 0 and current_width + required_width > available_width:
+                row += 1
+                column = 0
+                current_width = 0
+                required_width = chip_width
+            self._grid.addWidget(chip, row, column, Qt.AlignLeft | Qt.AlignVCenter)
+            current_width += required_width
+            column += 1
+
+        self.updateGeometry()
+
+
+class CaseResultNavigationBar(QWidget):
+    """Desktop-native fixed case navigation bar shown above result views."""
+
+    case_requested = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._chips = []
+        self._items = []
+        self._height_sync_pending = False
+        self._syncing_height = False
+        self.setObjectName("codexCaseResultNavBar")
+        self.setStyleSheet(_CASE_NAV_BAR_SS)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._card = QFrame(self)
+        self._card.setObjectName("codexCaseResultNavCard")
+        self._card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        outer.addWidget(self._card)
+
+        row = QHBoxLayout(self._card)
+        row.setContentsMargins(16, 12, 16, 12)
+        row.setSpacing(8)
+
+        self._title_label = QLabel("工况快捷导航", self._card)
+        self._title_label.setObjectName("codexCaseResultNavTitle")
+        self._title_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        row.addWidget(self._title_label, 0, Qt.AlignTop)
+
+        self._chip_host = _CaseNavChipWrap(self._card)
+        self._chip_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        row.addWidget(self._chip_host, 1, Qt.AlignTop)
+
+        self.hide()
+
+    def chips(self):
+        return list(self._chips)
+
+    def chip_count(self) -> int:
+        return len(self._chips)
+
+    def items(self):
+        return list(self._items)
+
+    def clear_items(self):
+        self._items = []
+        self._chips = []
+        self._chip_host.clear_chips()
+        self._reset_height_constraints()
+        self.hide()
+
+    def set_items(self, items, *, title: str = "工况快捷导航"):
+        normalized = list(items or [])
+        self.clear_items()
+        self._title_label.setText(str(title or "工况快捷导航"))
+        self._items = normalized
+        if len(normalized) <= 1:
+            return
+
+        for order_idx, item in enumerate(normalized):
+            case_idx = item.get("case_idx")
+            if case_idx is None:
+                case_idx = order_idx
+            chip = CaseResultNavChip(
+                case_idx,
+                item.get("label", ""),
+                summary=item.get("summary", ""),
+                is_error=bool(item.get("is_error", False)),
+                parent=self._chip_host,
+            )
+            chip.case_requested.connect(self.case_requested.emit)
+            self._chips.append(chip)
+
+        self._chip_host.set_chips(self._chips)
+        self.show()
+        self._schedule_height_sync()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._chips and self.isVisible():
+            self._schedule_height_sync()
+
+    def _schedule_height_sync(self):
+        if self._height_sync_pending:
+            return
+        self._height_sync_pending = True
+        QTimer.singleShot(0, self._sync_height_to_contents)
+
+    def _sync_height_to_contents(self):
+        self._height_sync_pending = False
+        if self._syncing_height:
+            return
+        if not self._chips:
+            self._reset_height_constraints()
+            return
+
+        self._syncing_height = True
+        try:
+            self._chip_host._relayout()
+            self._card.layout().activate()
+            self.layout().activate()
+            target_height = max(self.minimumSizeHint().height(), self.sizeHint().height())
+            if target_height <= 0:
+                return
+            if self.minimumHeight() != target_height or self.maximumHeight() != target_height:
+                self.setFixedHeight(target_height)
+                self.updateGeometry()
+        finally:
+            self._syncing_height = False
+
+    def _reset_height_constraints(self):
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(16777215)
+
+
+def sync_case_result_nav_bar(bar, items, *, title: str = "工况快捷导航"):
+    """Update a desktop-native case result nav bar when present."""
+    if bar is None:
+        return
+    try:
+        bar.set_items(items, title=title)
+    except Exception:
+        return
 
 
 def make_case_result_anchor(panel_key: str, case_idx: int) -> str:
@@ -33,6 +311,9 @@ def build_result_navigation_head() -> str:
     border:1px solid #E0E7EF;
     border-radius:12px;
     box-shadow:0 1px 4px rgba(0,0,0,0.06);
+}
+.codex-case-nav--hidden {
+    display:none !important;
 }
 .codex-case-nav__title {
     font-size:12px;
@@ -159,14 +440,13 @@ def build_result_navigation_head() -> str:
 })();
 </script>
 """
-
-
-def build_result_nav_bar(items, title: str = "工况快捷导航") -> str:
+def build_result_nav_bar(items, title: str = "工况快捷导航", hidden: bool = False) -> str:
     """Build a shared top navigation bar for multi-case result pages."""
     if not items or len(items) <= 1:
         return ""
 
-    parts = ['<div class="codex-case-nav">', f'<span class="codex-case-nav__title">{_e(title)}</span>']
+    nav_cls = "codex-case-nav codex-case-nav--hidden" if hidden else "codex-case-nav"
+    parts = [f'<div class="{nav_cls}">', f'<span class="codex-case-nav__title">{_e(title)}</span>']
     for item in items:
         anchor_id = item["anchor_id"]
         label = item["label"]

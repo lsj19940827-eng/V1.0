@@ -68,6 +68,12 @@ def _set_case(panel, case_index, q_value, section_type="梯形"):
     _flush_events()
 
 
+def _add_cases(panel, target_count):
+    while len(panel._cases) < target_count:
+        panel._add_case()
+        _flush_events()
+
+
 def test_open_channel_second_recalc_refreshes_visible_summary(monkeypatch):
     _get_qapp()
     panel_mod = _load_panel_module(monkeypatch)
@@ -200,7 +206,63 @@ def test_open_channel_multi_case_render_contains_case_anchors(monkeypatch):
     panel.deleteLater()
 
 
-def test_open_channel_stale_results_prevent_case_jump(monkeypatch):
+def test_open_channel_four_case_nav_renders_unique_anchors_and_jumps(monkeypatch):
+    _get_qapp()
+    panel_mod = _load_panel_module(monkeypatch)
+
+    scroll_calls = []
+    captured_html = {}
+
+    def _spy_scroll(*args, **kwargs):
+        scroll_calls.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(panel_mod, "scroll_view_to_anchor", _spy_scroll)
+
+    panel = panel_mod.OpenChannelPanel()
+    panel.resize(1400, 900)
+    panel.show()
+    _flush_events(6)
+
+    original_render = panel._render_result_html
+
+    def _capture_render(html, *args, **kwargs):
+        captured_html["value"] = html
+        return original_render(html, *args, **kwargs)
+
+    panel._render_result_html = _capture_render
+
+    _add_cases(panel, 4)
+    for idx, (q_value, section_type) in enumerate(
+        (("5", "梯形"), ("6", "梯形"), ("10", "矩形"), ("10", "圆形"))
+    ):
+        _set_case(panel, idx, q_value, section_type=section_type)
+
+    panel._calc_btn.click()
+    _flush_events(8)
+
+    html = captured_html["value"]
+
+    assert len(panel._all_results) == 4
+    for case_idx in range(4):
+        anchor = f"case-result-open-channel-{case_idx}"
+        assert html.count(f'id="{anchor}"') == 1
+    assert panel._result_case_nav.chip_count() == 4
+
+    scroll_calls.clear()
+    panel._result_case_nav.chips()[2].click()
+    _flush_events(2)
+    panel._result_case_nav.chips()[3].click()
+    _flush_events(2)
+
+    anchors = [args[1] for args, _kwargs in scroll_calls]
+    assert "case-result-open-channel-2" in anchors
+    assert "case-result-open-channel-3" in anchors
+
+    panel.deleteLater()
+
+
+def test_open_channel_switching_cases_without_fresh_results_skips_jump_warning(monkeypatch):
     _get_qapp()
     panel_mod = _load_panel_module(monkeypatch)
 
@@ -229,22 +291,83 @@ def test_open_channel_stale_results_prevent_case_jump(monkeypatch):
     panel.show()
     _flush_events(6)
 
-    panel._add_case()
-    _flush_events()
+    _add_cases(panel, 4)
+    _set_case(panel, 0, "5")
+    _set_case(panel, 1, "6")
+    _set_case(panel, 2, "10", section_type="矩形")
+    _set_case(panel, 3, "10", section_type="圆形")
+
+    scroll_calls.clear()
+    _InfoBarSpy.warnings.clear()
+    panel._switch_case(2)
+    _flush_events(2)
+    panel._switch_case(3)
+    _flush_events(2)
+
+    assert panel._current_case_idx == 3
+    assert scroll_calls == []
+    assert _InfoBarSpy.warnings == []
+
+    panel._calc_btn.click()
+    _flush_events(8)
+
+    scroll_calls.clear()
+    _InfoBarSpy.warnings.clear()
+    panel.Q_edit.setText("12")
+    _flush_events(2)
+    panel._switch_case(1)
+    _flush_events(2)
+
+    assert panel._results_dirty is True
+    assert scroll_calls == []
+    assert _InfoBarSpy.warnings == []
+
+    panel.deleteLater()
+
+
+def test_open_channel_result_nav_click_warns_when_results_are_stale(monkeypatch):
+    _get_qapp()
+    panel_mod = _load_panel_module(monkeypatch)
+
+    scroll_calls = []
+
+    def _spy_scroll(*args, **kwargs):
+        scroll_calls.append((args, kwargs))
+        return True
+
+    class _InfoBarSpy:
+        warnings = []
+
+        @classmethod
+        def warning(cls, **kwargs):
+            cls.warnings.append(kwargs)
+
+        @classmethod
+        def error(cls, **kwargs):
+            pass
+
+    monkeypatch.setattr(panel_mod, "scroll_view_to_anchor", _spy_scroll)
+    monkeypatch.setattr(panel_mod, "InfoBar", _InfoBarSpy)
+
+    panel = panel_mod.OpenChannelPanel()
+    panel.resize(1400, 900)
+    panel.show()
+    _flush_events(6)
+
+    _add_cases(panel, 2)
     _set_case(panel, 0, "5")
     _set_case(panel, 1, "4")
 
     panel._calc_btn.click()
     _flush_events(6)
-    scroll_calls.clear()
-    _InfoBarSpy.warnings.clear()
 
     panel._switch_case(0)
     _flush_events(2)
     scroll_calls.clear()
+    _InfoBarSpy.warnings.clear()
     panel.Q_edit.setText("6")
     _flush_events(2)
-    panel._switch_case(1)
+    panel._result_case_nav.chips()[1].click()
     _flush_events(2)
 
     assert panel._results_dirty is True

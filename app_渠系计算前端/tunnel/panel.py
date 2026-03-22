@@ -73,16 +73,39 @@ from app_渠系计算前端.case_manager import (
     CaseTagNavigator as _CaseTagNavigator,
     CaseWorkbenchStrip as _CaseWorkbenchStrip,
 )
-from app_渠系计算前端.tunnel.dxf_export import export_tunnel_dxf
+from app_渠系计算前端.dxf_multi_export import (
+    DxfExportCaseEntry,
+    choose_scale_denom,
+    export_combined_case_dxf,
+    format_empty_export_warning,
+    format_export_result_message,
+    partition_valid_case_entries,
+    select_case_entries,
+    show_multi_case_dxf_dialog,
+)
+from app_渠系计算前端.tunnel.dxf_export import export_tunnel_dxf, draw_tunnel_dxf_on_msp
 from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, plain_text_to_formula_body, wrap_with_katex,
     load_formula_page, make_plain_html,
     HelpPageBuilder
 )
+from app_渠系计算前端.plot_title_utils import (
+    apply_flow_velocity_title,
+    format_flow_velocity_metrics,
+)
+from app_渠系计算前端.tunnel.geometry import (
+    arch_half_width as _arch_half_width,
+    build_arch_geometry as _build_arch_geometry,
+    build_standard_horseshoe_geometry as _build_standard_horseshoe_geometry,
+    sample_arc as _sample_arc,
+    standard_horseshoe_half_width as _standard_horseshoe_half_width,
+)
 from app_渠系计算前端.result_navigation import (
+    CaseResultNavigationBar,
     build_result_nav_bar,
     build_result_navigation_head,
     make_case_result_anchor,
+    sync_case_result_nav_bar,
     wrap_case_result_block,
 )
 if WORD_EXPORT_AVAILABLE:
@@ -357,6 +380,9 @@ class TunnelPanel(QWidget):
 
         t1 = QWidget(); t1l = QVBoxLayout(t1); t1l.setContentsMargins(5,5,5,5)
         grp = QGroupBox("计算结果详情"); gl = QVBoxLayout(grp)
+        self._result_case_nav = CaseResultNavigationBar(grp)
+        self._result_case_nav.case_requested.connect(self._jump_to_case_result)
+        gl.addWidget(self._result_case_nav)
         self.result_text = create_web_view()
         gl.addWidget(self.result_text)
         t1l.addWidget(grp)
@@ -529,6 +555,68 @@ class TunnelPanel(QWidget):
         q_text = (case.get('Q', '') or '').strip() or '?'
         return f"{stype}-Q{_sub(idx + 1)}={q_text}"
 
+    @staticmethod
+    def _section_plot_title(case_idx, section_type, custom_label=None):
+        custom = (custom_label or '').strip()
+        if custom:
+            return custom
+        stype = section_type or '圆形'
+        if case_idx is None:
+            return stype
+        return f"工况 {case_idx + 1}｜{stype}"
+
+    @staticmethod
+    def _section_plot_metrics(Q, V):
+        return format_flow_velocity_metrics(Q, V)
+
+    @staticmethod
+    def _apply_section_plot_title(ax, title, Q, V):
+        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
+
+    @staticmethod
+    def _horseshoe_plot_geometry(B, H_total, theta_rad):
+        return _build_arch_geometry(B, H_total, theta_rad)
+
+    @staticmethod
+    def _horseshoe_plot_half_width(geom, h):
+        if not geom:
+            return 0.0
+        return _arch_half_width(geom, h)
+
+    @staticmethod
+    def _horseshoe_cap_polygon(geom, h_w, samples=30):
+        if not geom:
+            return None, None
+        h_clamped = min(max(h_w, geom['H_straight']), geom['H_total'])
+        if h_clamped <= geom['H_straight'] + 1e-9:
+            return None, None
+
+        sin_value = max(-1.0, min(1.0, (h_clamped - geom['center_y']) / geom['R_arch']))
+        right_angle = math.asin(sin_value)
+        left_angle = math.pi - right_angle
+        water_half_width = TunnelPanel._horseshoe_plot_half_width(geom, h_clamped)
+
+        right_arc_theta = np.linspace(right_angle, geom['start_angle'], samples)
+        left_arc_theta = np.linspace(geom['end_angle'], left_angle, samples)
+        right_arc_x = geom['R_arch'] * np.cos(right_arc_theta)
+        right_arc_y = geom['center_y'] + geom['R_arch'] * np.sin(right_arc_theta)
+        left_arc_x = geom['R_arch'] * np.cos(left_arc_theta)
+        left_arc_y = geom['center_y'] + geom['R_arch'] * np.sin(left_arc_theta)
+
+        fill_x = np.concatenate((
+            np.array([-water_half_width, water_half_width]),
+            right_arc_x,
+            np.array([-geom['B'] / 2]),
+            left_arc_x,
+        ))
+        fill_y = np.concatenate((
+            np.array([h_clamped, h_clamped]),
+            right_arc_y,
+            np.array([geom['H_straight']]),
+            left_arc_y,
+        ))
+        return fill_x, fill_y
+
     def _on_case_renamed(self, idx, new_label):
         if 0 <= idx < len(self._cases):
             self._cases[idx]['custom_label'] = new_label
@@ -619,6 +707,7 @@ class TunnelPanel(QWidget):
         for case_idx, item in enumerate(self._all_results):
             result = item.get("result") or {}
             items.append({
+                "case_idx": case_idx,
                 "anchor_id": make_case_result_anchor(self._panel_key, case_idx),
                 "label": self._case_result_nav_label(case_idx),
                 "summary": self._case_result_nav_summary(case_idx, item),
@@ -685,6 +774,7 @@ class TunnelPanel(QWidget):
                         parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
 
     def _show_initial_help(self):
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         h = HelpPageBuilder("隧洞水力计算", '请输入参数后点击“计算”按钮')
         h.section("支持断面类型")
         h.numbered_list([
@@ -871,6 +961,7 @@ class TunnelPanel(QWidget):
             self.data_changed.emit()
 
     def _show_error(self, title, msg):
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         out = ["=" * 70, f"  {title}", "=" * 70, "", msg, "", "-" * 70, "请修正后重新计算。", "=" * 70]
         self.result_text.setHtml(make_plain_html("\n".join(out)))
 
@@ -964,10 +1055,13 @@ class TunnelPanel(QWidget):
             )
 
         self._export_plain_text = "\n".join(all_text_parts)
-        nav_html = build_result_nav_bar(self._build_case_nav_items())
+        nav_builder = getattr(self, "_build_case_nav_items", None)
+        nav_items = nav_builder() if callable(nav_builder) else []
+        nav_html = build_result_nav_bar(nav_items, hidden=True)
         combined_body = nav_html + "\n".join(all_html_parts)
         combined_head = build_result_navigation_head()
         load_formula_page(self.result_text, wrap_with_katex(combined_body, extra_head=combined_head))
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), nav_items)
 
         self._mark_results_fresh()
         self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
@@ -1577,7 +1671,11 @@ class TunnelPanel(QWidget):
     def _update_section_plot_all(self):
         """绘制所有工况的断面图（网格布局）"""
         self.section_fig.clear()
-        valid = [r for r in self._all_results if r.get('result', {}).get('success')]
+        valid = [
+            (case_idx, item)
+            for case_idx, item in enumerate(self._all_results)
+            if item.get('result', {}).get('success')
+        ]
         if not valid:
             self.section_canvas.draw()
             return
@@ -1585,26 +1683,27 @@ class TunnelPanel(QWidget):
         cols = min(n, 3)
         rows = (n + cols - 1) // cols
         axes = self.section_fig.subplots(rows, cols, squeeze=False)
-        for idx, item in enumerate(valid):
-            r_idx, c_idx = divmod(idx, cols)
+        for plot_idx, (case_idx, item) in enumerate(valid):
+            r_idx, c_idx = divmod(plot_idx, cols)
             ax = axes[r_idx][c_idx]
             res = item['result']
             inp = item['input']
-            label = item['label']
+            case = item.get('case') or {}
             stype = inp.get('section_type', '圆形')
+            title = self._section_plot_title(case_idx, stype, case.get('custom_label'))
             Q = inp['Q']
             h_d = res['h_design']
             V_d = res['V_design']
             if stype == "圆形":
                 D = res['D']
-                self._draw_circular(ax, D, h_d, V_d, Q, label)
+                self._draw_circular(ax, D, h_d, V_d, Q, title)
             elif stype == "圆拱直墙型":
                 B = res['B']; H = res['H_total']; theta = math.radians(res['theta_deg'])
-                self._draw_horseshoe(ax, B, H, theta, h_d, V_d, Q, label)
+                self._draw_horseshoe(ax, B, H, theta, h_d, V_d, Q, title)
             else:
                 r_val = res['r']
                 sec_int = inp.get('sec_type_int', 1)
-                self._draw_horseshoe_std(ax, sec_int, r_val, h_d, V_d, Q, label)
+                self._draw_horseshoe_std(ax, sec_int, r_val, h_d, V_d, Q, title)
         # 隐藏多余子图
         for idx in range(n, rows * cols):
             r_idx, c_idx = divmod(idx, cols)
@@ -1637,19 +1736,19 @@ class TunnelPanel(QWidget):
             ax.annotate('', xy=(-R-0.12*R, h_w), xytext=(-R-0.12*R, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
             ax.text(-R-0.2*R, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
         ax.set_xlim(-R*1.7, R*1.7); ax.set_ylim(-R*0.4, D*1.2)
-        ax.set_aspect('equal'); ax.set_title(f'{title}\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
+        ax.set_aspect('equal'); self._apply_section_plot_title(ax, title, Q, V)
         ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
 
     def _draw_horseshoe(self, ax, B, H_total, theta_rad, h_w, V, Q, title):
         """绘制圆拱直墙型断面"""
-        R_arch = (B / 2) / math.sin(theta_rad / 2) if abs(math.sin(theta_rad / 2)) > 1e-9 else B/2
-        H_arch = R_arch * (1 - math.cos(theta_rad / 2))
-        H_straight = max(0, H_total - H_arch)
-        center_y = H_straight + R_arch * math.cos(theta_rad / 2)
+        geom = self._horseshoe_plot_geometry(B, H_total, theta_rad)
+        R_arch = geom['R_arch']
+        H_straight = geom['H_straight']
+        center_y = geom['center_y']
         # 拱部
-        start_angle = math.pi/2 - theta_rad/2
-        end_angle = math.pi/2 + theta_rad/2
-        arch_theta = np.linspace(start_angle, end_angle, 50)
+        start_angle = geom['start_angle']
+        end_angle = geom['end_angle']
+        arch_theta = np.linspace(start_angle, end_angle, 101)
         arch_x = R_arch * np.cos(arch_theta)
         arch_y = center_y + R_arch * np.sin(arch_theta)
         # 直墙
@@ -1668,71 +1767,36 @@ class TunnelPanel(QWidget):
                 rect_y = [0, min(h_w, H_straight), min(h_w, H_straight), 0]
                 ax.fill(rect_x, rect_y, color='lightblue', alpha=0.7)
                 if h_w > H_straight and h_w <= H_total:
-                    hw_in = h_w - H_straight
-                    d_temp = R_arch - (H_arch - hw_in)
-                    if abs(d_temp) <= R_arch:
-                        alpha_t = math.acos(max(-1, min(1, d_temp / R_arch)))
-                        hw_half = R_arch * math.sin(alpha_t) if alpha_t > 0 else 0
-                        if hw_half > 0:
-                            fill_theta = np.linspace(start_angle, math.pi/2 - alpha_t, 30)
-                            fill_theta2 = np.linspace(math.pi/2 + alpha_t, end_angle, 30)
-                            fill_x = np.concatenate([[hw_half], R_arch*np.cos(fill_theta[::-1]), R_arch*np.cos(fill_theta2[::-1]), [-hw_half]])
-                            fill_y = np.concatenate([[h_w], center_y+R_arch*np.sin(fill_theta[::-1]), center_y+R_arch*np.sin(fill_theta2[::-1]), [h_w]])
-                            valid = fill_y <= h_w + 0.01
-                            ax.fill(fill_x[valid], fill_y[valid], color='lightblue', alpha=0.7)
-            ax.plot([-B/2, B/2], [h_w, h_w], 'b-', lw=1.5)
+                    fill_x, fill_y = self._horseshoe_cap_polygon(geom, h_w)
+                    if fill_x is not None and fill_y is not None:
+                        ax.fill(fill_x, fill_y, color='lightblue', alpha=0.7)
+            water_half_width = self._horseshoe_plot_half_width(geom, h_w)
+            ax.plot([-water_half_width, water_half_width], [h_w, h_w], 'b-', lw=1.5)
         # 标注
         ax.annotate('', xy=(B/2, -0.08*H_total), xytext=(-B/2, -0.08*H_total), arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
         ax.text(0, -0.16*H_total, f'B={B:.2f}m', ha='center', fontsize=9, color='gray')
         ax.annotate('', xy=(B/2+0.1*B, H_total), xytext=(B/2+0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
         ax.text(B/2+0.18*B, H_total/2, f'H={H_total:.2f}m', fontsize=8, color='purple', rotation=90, va='center')
         ax.set_xlim(-B*0.9, B*0.9); ax.set_ylim(-H_total*0.3, H_total*1.2)
-        ax.set_aspect('equal'); ax.set_title(f'{title}\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
+        ax.set_aspect('equal'); self._apply_section_plot_title(ax, title, Q, V)
         ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
 
     def _draw_horseshoe_std(self, ax, sec_type, r, h_w, V, Q, title):
-        """绘制标准马蹄形断面（精确轮廓）"""
-        if sec_type == 1:
-            t = 3.0; theta = 0.294515; type_name = '标准Ⅰ型'
-        else:
-            t = 2.0; theta = 0.424031; type_name = '标准Ⅱ型'
-
-        R_arch = t * r
-        e = R_arch * (1 - math.cos(theta))
-
-        def get_half_width(h):
-            if h <= 0: return 0
-            elif h <= e:
-                cos_val = max(-1, min(1, 1 - h / R_arch))
-                beta = math.acos(cos_val)
-                return R_arch * math.sin(beta)
-            elif h <= r:
-                sin_val = max(-1, min(1, (1 - h / r) / t))
-                alpha = math.asin(sin_val)
-                return r * (t * math.cos(alpha) - t + 1)
-            elif h <= 2 * r:
-                cos_val = max(-1, min(1, h / r - 1))
-                phi_half = math.acos(cos_val)
-                return r * math.sin(phi_half)
-            else: return 0
-
-        num_points = 100
-        heights = np.linspace(0, 2*r, num_points)
-        left_x = []; left_y = []; right_x = []; right_y = []
-        for h in heights:
-            hw = get_half_width(h)
-            left_x.append(-hw); left_y.append(h)
-            right_x.append(hw); right_y.append(h)
-
-        ax.plot(left_x, left_y, 'k-', lw=2)
-        ax.plot(right_x, right_y, 'k-', lw=2)
+        """绘制标准马蹄形断面（真实圆弧预览）"""
+        geom = _build_standard_horseshoe_geometry(sec_type, r)
+        type_name = geom['type_name']
+        for arc in geom['arcs']:
+            points = _sample_arc(arc, samples=80)
+            x_vals = [point[0] for point in points]
+            y_vals = [point[1] for point in points]
+            ax.plot(x_vals, y_vals, 'k-', lw=2)
 
         if h_w > 0 and h_w < 2 * r:
-            water_half_width = get_half_width(h_w)
+            water_half_width = _standard_horseshoe_half_width(geom, h_w)
             water_heights = np.linspace(0, h_w, 50)
-            wl_x = [-get_half_width(h) for h in water_heights]
+            wl_x = [-_standard_horseshoe_half_width(geom, h) for h in water_heights]
             wl_y = list(water_heights)
-            wr_x = [get_half_width(h) for h in water_heights]
+            wr_x = [_standard_horseshoe_half_width(geom, h) for h in water_heights]
             wr_y = list(water_heights)
             fill_x = wl_x + wr_x[::-1]
             fill_y = wl_y + wr_y[::-1]
@@ -1745,7 +1809,7 @@ class TunnelPanel(QWidget):
             ax.annotate('', xy=(-r-0.2*r, h_w), xytext=(-r-0.2*r, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
             ax.text(-r-0.3*r, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
         ax.set_xlim(-r*2.2, r*2.2); ax.set_ylim(-r*0.3, 2.3*r)
-        ax.set_aspect('equal'); ax.set_title(f'{title} ({type_name})\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
+        ax.set_aspect('equal'); self._apply_section_plot_title(ax, f'{title} ({type_name})', Q, V)
         ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
 
     # ================================================================
@@ -1766,31 +1830,70 @@ class TunnelPanel(QWidget):
         self._update_calc_btn_text()
 
     def _export_dxf(self):
-        if not self.current_result or not self.current_result.get('success'):
-            InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP); return
-        res = self.current_result; p = self.input_params
-        stype = p.get('section_type', '圆形')
-        if stype == '圆形':
-            D = res.get('D', 0.0)
-            default_name = f'隧洞断面_圆形_D{D:.2f}.dxf'
-        elif stype == '圆拱直墙型':
-            B = res.get('B', 0.0); H = res.get('H_total', 0.0)
-            default_name = f'隧洞断面_圆拱直墙_B{B:.2f}xH{H:.2f}.dxf'
-        else:
-            r = res.get('r', 0.0)
-            default_name = f'隧洞断面_马蹄形_r{r:.2f}.dxf'
-        scales = ['1:20', '1:50', '1:100', '1:200', '1:500']
-        from app_渠系计算前端.styles import fluent_select
-        scale_str, ok = fluent_select(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2)
-        if not ok: return
-        scale_denom = int(scale_str.split(':')[1])
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, "保存DXF文件", default_name, "DXF文件 (*.dxf);;所有文件 (*.*)"
+        case_entries = self._build_dxf_export_case_entries()
+        current_entry = self._get_current_dxf_export_entry(case_entries)
+        if len(self._cases) <= 1:
+            if current_entry is None or not current_entry.is_valid:
+                self._warn_single_dxf_entry_unavailable(current_entry)
+                return
+            try:
+                filepath = self._export_single_dxf_entry(current_entry)
+                if not filepath:
+                    return
+                InfoBar.success(
+                    "导出成功",
+                    f"DXF已保存到: {filepath}",
+                    parent=self._info_parent(),
+                    duration=4000,
+                    position=InfoBarPosition.TOP,
+                )
+                ask_open_file(filepath, self._info_parent())
+            except ImportError as e:
+                InfoBar.error("缺少依赖", str(e), parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
+            except PermissionError:
+                InfoBar.error("文件被占用", "无法写入文件，请关闭已打开的同名DXF文件。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
+            except Exception as e:
+                InfoBar.error("导出失败", f"DXF导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            return
+
+        dialog_result = show_multi_case_dxf_dialog(
+            self._info_parent(),
+            "隧洞断面",
+            case_entries,
+            self._current_case_idx,
         )
-        if not filepath: return
+        if dialog_result is None:
+            return
+        selected_entries = select_case_entries(
+            case_entries,
+            dialog_result.scope,
+            self._current_case_idx,
+            dialog_result.checked_case_indexes,
+        )
+        valid_entries, invalid_entries = partition_valid_case_entries(selected_entries)
+        if not valid_entries:
+            InfoBar.warning(
+                "提示",
+                format_empty_export_warning(invalid_entries),
+                parent=self._info_parent(),
+                duration=4000,
+                position=InfoBarPosition.TOP,
+            )
+            return
         try:
-            export_tunnel_dxf(filepath, res, p, scale_denom)
-            InfoBar.success("导出成功", f"DXF已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            if len(valid_entries) == 1:
+                filepath = self._export_single_dxf_entry(valid_entries[0], scale_denom=dialog_result.scale_denom)
+            else:
+                filepath = self._export_combined_dxf_entries(valid_entries, dialog_result.scale_denom)
+            if not filepath:
+                return
+            InfoBar.success(
+                "导出成功",
+                f"{format_export_result_message(len(valid_entries), invalid_entries)}\n文件：{filepath}",
+                parent=self._info_parent(),
+                duration=5000,
+                position=InfoBarPosition.TOP,
+            )
             ask_open_file(filepath, self._info_parent())
         except ImportError as e:
             InfoBar.error("缺少依赖", str(e), parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
@@ -1798,6 +1901,96 @@ class TunnelPanel(QWidget):
             InfoBar.error("文件被占用", "无法写入文件，请关闭已打开的同名DXF文件。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
         except Exception as e:
             InfoBar.error("导出失败", f"DXF导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+
+    def _build_dxf_export_case_entries(self):
+        entries = []
+        results_dirty = bool(getattr(self, "_results_dirty", False))
+        for case_idx, case in enumerate(self._cases):
+            item = self._all_results[case_idx] if case_idx < len(self._all_results) else None
+            input_params = (item or {}).get("input") or {}
+            result = (item or {}).get("result")
+            invalid_reason = None
+            if results_dirty and self._all_results:
+                invalid_reason = "结果已失效"
+            elif item is None or result is None:
+                invalid_reason = "无计算结果"
+            elif not result.get("success"):
+                invalid_reason = "计算失败"
+            entries.append(
+                DxfExportCaseEntry(
+                    case_idx=case_idx,
+                    label=self._case_label(case, case_idx),
+                    input_params=input_params,
+                    result=result,
+                    is_valid=invalid_reason is None,
+                    invalid_reason=invalid_reason,
+                )
+            )
+        return entries
+
+    def _get_current_dxf_export_entry(self, case_entries):
+        for entry in case_entries:
+            if entry.case_idx == self._current_case_idx:
+                return entry
+        return case_entries[0] if case_entries else None
+
+    def _warn_single_dxf_entry_unavailable(self, entry):
+        if entry is not None and entry.invalid_reason == "结果已失效":
+            content = "参数已变更，请先重新计算后再导出。"
+        else:
+            content = "请先进行计算后再导出。"
+        InfoBar.warning(
+            "提示",
+            content,
+            parent=self._info_parent(),
+            duration=3000,
+            position=InfoBarPosition.TOP,
+        )
+
+    def _single_dxf_default_name(self, entry):
+        result = entry.result or {}
+        input_params = entry.input_params or {}
+        stype = input_params.get('section_type', '圆形')
+        if stype == '圆形':
+            return f"隧洞断面_圆形_D{result.get('D', 0.0):.2f}.dxf"
+        if stype == '圆拱直墙型':
+            return f"隧洞断面_圆拱直墙_B{result.get('B', 0.0):.2f}xH{result.get('H_total', 0.0):.2f}.dxf"
+        return f"隧洞断面_马蹄形_r{result.get('r', 0.0):.2f}.dxf"
+
+    def _combined_dxf_default_name(self, count):
+        return f"隧洞断面_{count}个工况_合并.dxf"
+
+    def _choose_dxf_filepath(self, default_name):
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存DXF文件",
+            default_name,
+            "DXF文件 (*.dxf);;所有文件 (*.*)",
+        )
+        if not filepath:
+            return None
+        return filepath if filepath.lower().endswith(".dxf") else f"{filepath}.dxf"
+
+    def _export_single_dxf_entry(self, entry, scale_denom=None):
+        scale = scale_denom if scale_denom is not None else choose_scale_denom(self)
+        if scale is None:
+            return None
+        filepath = self._choose_dxf_filepath(self._single_dxf_default_name(entry))
+        if not filepath:
+            return None
+        export_tunnel_dxf(filepath, entry.result or {}, entry.input_params or {}, scale)
+        return filepath
+
+    def _export_combined_dxf_entries(self, entries, scale_denom):
+        filepath = self._choose_dxf_filepath(self._combined_dxf_default_name(len(entries)))
+        if not filepath:
+            return None
+        return export_combined_case_dxf(
+            filepath,
+            entries,
+            scale_denom,
+            draw_tunnel_dxf_on_msp,
+        )
 
     def _export_report(self):
         if not self.current_result or not self.current_result.get('success'):

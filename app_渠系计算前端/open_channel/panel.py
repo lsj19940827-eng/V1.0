@@ -91,7 +91,20 @@ from app_渠系计算前端.export_utils import (
 from app_渠系计算前端.report_meta import (
     ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
-from app_渠系计算前端.open_channel.dxf_export import export_open_channel_dxf
+from app_渠系计算前端.dxf_multi_export import (
+    DxfExportCaseEntry,
+    choose_scale_denom,
+    export_combined_case_dxf,
+    format_empty_export_warning,
+    format_export_result_message,
+    partition_valid_case_entries,
+    select_case_entries,
+    show_multi_case_dxf_dialog,
+)
+from app_渠系计算前端.open_channel.dxf_export import (
+    export_open_channel_dxf,
+    draw_open_channel_dxf_on_msp,
+)
 from app_渠系计算前端.open_channel.appendix_e_table import (
     appendix_e_probe_script,
     appendix_e_shared_head_html,
@@ -107,10 +120,13 @@ from app_渠系计算前端.formula_renderer import (
     wrap_with_katex, load_formula_page, make_plain_html,
     HelpPageBuilder
 )
+from app_渠系计算前端.plot_title_utils import apply_flow_velocity_title
 from app_渠系计算前端.result_navigation import (
+    CaseResultNavigationBar,
     build_result_nav_bar,
     build_result_navigation_head,
     make_case_result_anchor,
+    sync_case_result_nav_bar,
     wrap_case_result_block,
 )
 if WORD_EXPORT_AVAILABLE:
@@ -365,6 +381,9 @@ class OpenChannelPanel(QWidget):
         # Tab1: 计算结果
         t1 = QWidget(); t1l = QVBoxLayout(t1); t1l.setContentsMargins(5, 5, 5, 5)
         grp = QGroupBox("计算结果详情"); gl = QVBoxLayout(grp)
+        self._result_case_nav = CaseResultNavigationBar(grp)
+        self._result_case_nav.case_requested.connect(self._jump_to_case_result)
+        gl.addWidget(self._result_case_nav)
         self.result_text = create_web_view()
         gl.addWidget(self.result_text)
         t1l.addWidget(grp)
@@ -484,6 +503,7 @@ class OpenChannelPanel(QWidget):
         items = []
         for case_idx, params, result in self._all_results:
             items.append({
+                "case_idx": case_idx,
                 "anchor_id": make_case_result_anchor(self._panel_key, case_idx),
                 "label": self._case_result_nav_label(case_idx),
                 "summary": self._case_result_nav_summary(case_idx, params, result),
@@ -511,6 +531,7 @@ class OpenChannelPanel(QWidget):
     # 初始帮助
     # ----------------------------------------------------------------
     def _show_initial_help(self):
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         h = HelpPageBuilder("明渠水力计算", '请选择断面类型并输入参数后点击“计算”按钮')
         h.section("支持断面类型")
         h.numbered_list([
@@ -533,10 +554,10 @@ class OpenChannelPanel(QWidget):
         )
         h.section("U形断面几何公式")
         h.formula("h_0 = R·(1 − cos(θ/2))", "弧区高度")
-        h.formula("当 h ≤ h_0: A = R²·arccos((R−h)/R) − (R−h)·√(2Rh−h²)", "纯弧区面积")
-        h.formula("当 h ≤ h_0: χ = 2R·arccos((R−h)/R)", "纯弧区湿周")
-        h.formula("当 h > h_0: A = A_{arc} + (b_{arc} + m·h_s)·h_s", "直线段区面积")
-        h.formula("当 h > h_0: χ = θ/180·π·R + 2·h_s·√(1+m²)", "直线段区湿周")
+        h.formula("A = R²·arccos((R−h)/R) − (R−h)·√(2Rh−h²)", "纯弧区面积（h ≤ h_0）")
+        h.formula("χ = 2R·arccos((R−h)/R)", "纯弧区湿周（h ≤ h_0）")
+        h.formula("A = A_{arc} + (b_{arc} + m·h_s)·h_s", "直线段区面积（h > h_0）")
+        h.formula("χ = θ/180·π·R + 2·h_s·√(1+m²)", "直线段区湿周（h > h_0）")
         h.hint("矩形/梯形：宽深比 β 与底宽 B 不可同时填写（二选一）")
         h.section("曼宁公式")
         h.text("本程序基于曼宁公式进行计算：")
@@ -660,7 +681,8 @@ class OpenChannelPanel(QWidget):
             self._current_case_idx = idx
             self._load_case(idx)
             self._rebuild_case_tags()
-        self._jump_to_case_result(idx)
+        if self._all_results and self._has_rendered_results and not self._results_dirty:
+            self._jump_to_case_result(idx)
 
     def _add_case(self):
         if len(self._cases) >= MAX_CASES:
@@ -1016,146 +1038,7 @@ class OpenChannelPanel(QWidget):
                     pass
 
     def _display_all_results(self):
-        """多工况结果显示：逐个调用原有display，捕获文本后合并渲染"""
-        _multi = len(self._all_results) > 1
-        all_plain_parts = []
-        all_html_parts = []
-        nav_items = []
-        extra_heads = []
-        seen_heads = set()
-        panel_key = getattr(self, "_panel_key", "open-channel")
-        label_getter = getattr(self, "_case_result_nav_label", None)
-        summary_getter = getattr(self, "_case_result_nav_summary", None)
-        self._suppress_result_render = True
-
-        try:
-            for case_idx, params, result in self._all_results:
-                rendered = OpenChannelPanel._render_case_result_content(self, params, result)
-                plain = rendered["plain_text"]
-                raw_plain = plain
-                body_html = rendered["body_html"]
-                extra_head = rendered["extra_head"]
-                if _multi:
-                    q_val = params.get('Q', 0.0)
-                    try:
-                        q_val = float(q_val)
-                    except Exception:
-                        q_val = 0.0
-                    header = f"【工况 {case_idx + 1}｜{params.get('section_type', '梯形')}断面｜Q = {q_val:.3f} m³/s】"
-                    header = f"【工况 {case_idx + 1}｜{params.get('section_type', '梯形')}断面｜Q = {q_val:.3f} m³/s】"
-                    plain = header + "\n\n" + plain
-                if _multi:
-                    header_text = "【工况 {}｜{}断面｜Q = {} m³/s】".format(
-                        case_idx + 1,
-                        section_type,
-                        q_text,
-                    )
-                    plain = header_text + "\n\n" + raw_plain
-                    body_html = (
-                        '<div class="codex-case-block__summary">'
-                        f"{html_mod.escape(header_text)}"
-                        "</div>"
-                        + body_html
-                    )
-                if _multi:
-                    header_text = "【工况 {}｜{}断面｜Q = {} m³/s】".format(
-                        case_idx + 1,
-                        section_type,
-                        q_text,
-                    )
-                    plain = header_text + "\n\n" + raw_plain
-                    body_html = (
-                        '<div class="codex-case-block__summary">'
-                        f"{html_mod.escape(header_text)}"
-                        "</div>"
-                        + body_html
-                    )
-                all_plain_parts.append(plain)  # duplicate helper block
-                all_html_parts.append(
-                    wrap_case_result_block(
-                        panel_key,
-                        case_idx,
-                        f"工况 {case_idx + 1}",
-                        body_html,
-                        subtitle=nav_label,
-                        is_error=not result.get("success"),
-                    )
-                )
-                extra_head = (extra_head or "").strip()
-                nav_items.append({
-                    "anchor_id": make_case_result_anchor(panel_key, case_idx),
-                    "label": nav_label,
-                    "summary": nav_summary,
-                    "is_error": not result.get("success"),
-                })
-                nav_items.append({
-                    "anchor_id": make_case_result_anchor(panel_key, case_idx),
-                    "label": nav_label,
-                    "summary": nav_summary,
-                    "is_error": not result.get("success"),
-                })
-                if extra_head and extra_head not in seen_heads:
-                    seen_heads.add(extra_head)
-                    extra_heads.append(extra_head)
-        finally:
-            self._suppress_result_render = False
-
-        # 恢复到第一个结果
-        _, first_params, first_result = self._all_results[0]
-        self.input_params = first_params
-        self.current_result = first_result
-
-        # 合并文本
-        combined_text = "\n\n".join(all_plain_parts)
-        summary_text = ""
-        if _multi:
-            summary_builder = getattr(self, "_build_multi_case_summary_text", None)
-            if callable(summary_builder):
-                summary_text = summary_builder()
-            else:
-                success_count = sum(1 for _ci, _params, result in self._all_results if result.get("success"))
-                fail_count = len(self._all_results) - success_count
-                summary_text = f"共 {len(self._all_results)} 个工况，成功 {success_count} 个，失败 {fail_count} 个。"
-            combined_text = summary_text + "\n\n" + combined_text
-        self._export_plain_text = combined_text
-
-        nav_builder = getattr(self, "_build_case_nav_items", None)
-        nav_html = build_result_nav_bar(nav_builder() if callable(nav_builder) else nav_items)
-        summary_body = ""
-        if summary_text:
-            summary_body = (
-                '<div style="margin-bottom:24px;">'
-                f'{plain_text_to_formula_body(summary_text)}'
-                '</div>'
-            )
-        combined_body = nav_html + summary_body + "\n".join(all_html_parts)
-        combined_head = build_result_navigation_head()
-        if extra_heads:
-            combined_head = combined_head + "\n" + "\n".join(extra_heads)
-        self._render_result_html(wrap_with_katex(combined_body, extra_head=combined_head))
-        self._mark_results_fresh()
-        self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
-        self._update_section_plot_all()
-        return
-
-        # 多工况时重新渲染合并后的页面
-        if _multi:
-            summary_body = ""
-            if summary_text:
-                summary_body = (
-                    '<div style="margin-bottom:24px;">'
-                    f'{plain_text_to_formula_body(summary_text)}'
-                    '</div>'
-                )
-            combined_body = summary_body + "\n".join(all_html_parts)
-            combined_head = "\n".join(extra_heads)
-            self._render_result_html(wrap_with_katex(combined_body, extra_head=combined_head))
-
-        # 断面图
-        self._update_section_plot_all()
-
-    def _display_all_results(self):
-        """澶氬伐鍐电粨鏋滄樉绀猴細鍚堝苟缁撴灉骞舵彁渚涘揩鎹峰鑸€?"""
+        """多工况结果显示：合并结果并提供快捷导航。"""
         _multi = len(self._all_results) > 1
         all_plain_parts = []
         all_html_parts = []
@@ -1252,7 +1135,8 @@ class OpenChannelPanel(QWidget):
         self._export_plain_text = combined_text
 
         nav_builder = getattr(self, "_build_case_nav_items", None)
-        nav_html = build_result_nav_bar(nav_builder() if callable(nav_builder) else nav_items)
+        nav_items = nav_builder() if callable(nav_builder) else []
+        nav_html = build_result_nav_bar(nav_items, hidden=True)
         summary_body = ""
         if summary_text:
             summary_body = (
@@ -1265,6 +1149,7 @@ class OpenChannelPanel(QWidget):
         if extra_heads:
             combined_head += "\n" + "\n".join(extra_heads)
         self._render_result_html(wrap_with_katex(combined_body, extra_head=combined_head))
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), nav_items)
         mark_fresh = getattr(self, "_mark_results_fresh", None)
         if callable(mark_fresh):
             mark_fresh()
@@ -1326,6 +1211,7 @@ class OpenChannelPanel(QWidget):
         self.section_canvas.draw()
 
     def _show_error(self, title, msg):
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         out = []
         out.append("=" * 70)
         out.append(f"  {title}")
@@ -2696,7 +2582,7 @@ class OpenChannelPanel(QWidget):
         ax.set_xlim(-tw*0.85, tw*0.85)
         ax.set_ylim(-h_ch*0.4, h_ch*1.2)
         ax.set_aspect('equal')
-        ax.set_title(f'{title}\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
+        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.axhline(y=0, color='brown', lw=3)
 
@@ -2762,7 +2648,7 @@ class OpenChannelPanel(QWidget):
         ax.set_xlim(-max_x, max_x)
         ax.set_ylim(-H_ch * 0.3, H_ch * 1.3)
         ax.set_aspect('equal')
-        ax.set_title(f'{title}\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
+        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.axhline(y=0, color='brown', lw=3)
         # 标注
@@ -2802,7 +2688,7 @@ class OpenChannelPanel(QWidget):
         ax.set_xlim(-R*1.7, R*1.7)
         ax.set_ylim(-R*0.4, D*1.2)
         ax.set_aspect('equal')
-        ax.set_title(f'{title}\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
+        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.axhline(y=0, color='brown', lw=3)
 
@@ -2829,38 +2715,58 @@ class OpenChannelPanel(QWidget):
     # 导出
     # ================================================================
     def _export_dxf(self):
-        if not self.current_result or not self.current_result.get('success'):
-            InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+        case_entries = self._build_dxf_export_case_entries()
+        current_entry = self._get_current_dxf_export_entry(case_entries)
+        if len(self._cases) <= 1:
+            if current_entry is None or not current_entry.is_valid:
+                self._warn_single_dxf_entry_unavailable(current_entry)
+                return
+            try:
+                filepath = self._export_single_dxf_entry(current_entry)
+                if not filepath:
+                    return
+                InfoBar.success("导出成功", f"DXF已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+                ask_open_file(filepath, self._info_parent())
+            except ImportError as e:
+                InfoBar.error("缺少依赖", str(e), parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
+            except PermissionError:
+                InfoBar.error("文件被占用", "无法写入文件，请先关闭已打开的同名DXF文件，然后重新操作。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
+            except Exception as e:
+                InfoBar.error("导出失败", f"DXF导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
-        p = self.input_params
-        res = self.current_result
-        stype = p.get('section_type', '梯形')
-        if stype == '圆形':
-            D = res.get('D_design', 0.0)
-            default_name = f'明渠断面_圆形_D{D:.2f}.dxf'
-        elif stype == 'U形':
-            R_val = res.get('R', 0.0)
-            default_name = f'明渠断面_U形_R{R_val:.2f}.dxf'
-        else:
-            b = res.get('b_design', 0.0)
-            H = res.get('h_prime', 0.0)
-            if H <= 0:
-                h_inc = res.get('h_increased', 0.0)
-                H = (h_inc + res.get('Fb', 0.3)) if h_inc > 0 else res.get('h_design', 0.0) * 1.35
-            default_name = f'明渠断面_{stype}_B{b:.2f}xH{H:.2f}.dxf'
-        scales = ['1:20', '1:50', '1:100', '1:200', '1:500']
-        from app_渠系计算前端.styles import fluent_select
-        scale_str, ok = fluent_select(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2)
-        if not ok: return
-        scale_denom = int(scale_str.split(':')[1])
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, "保存DXF文件", default_name, "DXF文件 (*.dxf);;所有文件 (*.*)"
+
+        dialog_result = show_multi_case_dxf_dialog(
+            self._info_parent(),
+            "明渠断面",
+            case_entries,
+            self._current_case_idx,
         )
-        if not filepath:
+        if dialog_result is None:
+            return
+        selected_entries = select_case_entries(
+            case_entries,
+            dialog_result.scope,
+            self._current_case_idx,
+            dialog_result.checked_case_indexes,
+        )
+        valid_entries, invalid_entries = partition_valid_case_entries(selected_entries)
+        if not valid_entries:
+            InfoBar.warning("提示", format_empty_export_warning(invalid_entries), parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
             return
         try:
-            export_open_channel_dxf(filepath, res, p, scale_denom)
-            InfoBar.success("导出成功", f"DXF已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            if len(valid_entries) == 1:
+                filepath = self._export_single_dxf_entry(valid_entries[0], scale_denom=dialog_result.scale_denom)
+            else:
+                filepath = self._export_combined_dxf_entries(valid_entries, dialog_result.scale_denom)
+            if not filepath:
+                return
+            InfoBar.success(
+                "导出成功",
+                f"{format_export_result_message(len(valid_entries), invalid_entries)}\n文件：{filepath}",
+                parent=self._info_parent(),
+                duration=5000,
+                position=InfoBarPosition.TOP,
+            )
             ask_open_file(filepath, self._info_parent())
         except ImportError as e:
             InfoBar.error("缺少依赖", str(e), parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
@@ -2868,6 +2774,80 @@ class OpenChannelPanel(QWidget):
             InfoBar.error("文件被占用", "无法写入文件，请先关闭已打开的同名DXF文件，然后重新操作。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
         except Exception as e:
             InfoBar.error("导出失败", f"DXF导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+
+    def _build_dxf_export_case_entries(self):
+        entries = []
+        results_dirty = bool(getattr(self, "_results_dirty", False))
+        result_map = {case_idx: (params, result) for case_idx, params, result in self._all_results}
+        for case_idx, case in enumerate(self._cases):
+            params, result = result_map.get(case_idx, ({}, None))
+            invalid_reason = None
+            if results_dirty and self._all_results:
+                invalid_reason = "结果已失效"
+            elif result is None:
+                invalid_reason = "无计算结果"
+            elif not result.get("success"):
+                invalid_reason = "计算失败"
+            entries.append(
+                DxfExportCaseEntry(
+                    case_idx=case_idx,
+                    label=self._case_label(case, case_idx),
+                    input_params=params or {},
+                    result=result,
+                    is_valid=invalid_reason is None,
+                    invalid_reason=invalid_reason,
+                )
+            )
+        return entries
+
+    def _get_current_dxf_export_entry(self, case_entries):
+        for entry in case_entries:
+            if entry.case_idx == self._current_case_idx:
+                return entry
+        return case_entries[0] if case_entries else None
+
+    def _warn_single_dxf_entry_unavailable(self, entry):
+        content = "参数已变更，请先重新计算后再导出。" if entry is not None and entry.invalid_reason == "结果已失效" else "请先进行计算后再导出。"
+        InfoBar.warning("提示", content, parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+
+    def _single_dxf_default_name(self, entry):
+        params = entry.input_params or {}
+        result = entry.result or {}
+        stype = params.get('section_type', '梯形')
+        if stype == '圆形':
+            return f"明渠断面_圆形_D{result.get('D_design', 0.0):.2f}.dxf"
+        if stype == 'U形':
+            return f"明渠断面_U形_R{result.get('R', 0.0):.2f}.dxf"
+        h_val = result.get('h_prime', 0.0)
+        if h_val <= 0:
+            h_inc = result.get('h_increased', 0.0)
+            h_val = (h_inc + result.get('Fb', 0.3)) if h_inc > 0 else result.get('h_design', 0.0) * 1.35
+        return f"明渠断面_{stype}_B{result.get('b_design', 0.0):.2f}xH{h_val:.2f}.dxf"
+
+    def _combined_dxf_default_name(self, count):
+        return f"明渠断面_{count}个工况_合并.dxf"
+
+    def _choose_dxf_filepath(self, default_name):
+        filepath, _ = QFileDialog.getSaveFileName(self, "保存DXF文件", default_name, "DXF文件 (*.dxf);;所有文件 (*.*)")
+        if not filepath:
+            return None
+        return filepath if filepath.lower().endswith(".dxf") else f"{filepath}.dxf"
+
+    def _export_single_dxf_entry(self, entry, scale_denom=None):
+        scale = scale_denom if scale_denom is not None else choose_scale_denom(self)
+        if scale is None:
+            return None
+        filepath = self._choose_dxf_filepath(self._single_dxf_default_name(entry))
+        if not filepath:
+            return None
+        export_open_channel_dxf(filepath, entry.result or {}, entry.input_params or {}, scale)
+        return filepath
+
+    def _export_combined_dxf_entries(self, entries, scale_denom):
+        filepath = self._choose_dxf_filepath(self._combined_dxf_default_name(len(entries)))
+        if not filepath:
+            return None
+        return export_combined_case_dxf(filepath, entries, scale_denom, draw_open_channel_dxf_on_msp)
 
     def _export_report(self):
         if not self.current_result or not self.current_result.get('success'):

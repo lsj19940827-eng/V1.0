@@ -8,6 +8,12 @@
 
 import math
 
+from app_渠系计算前端.dxf_common import (
+    add_case_title,
+    ensure_tracked_msp,
+    setup_section_dxf_document,
+)
+
 
 def export_open_channel_dxf(filepath, result, input_params, scale_denom=100):
     """导出明渠断面 DXF 文件（完整版：轮廓+水面线+标注+参数文字）"""
@@ -15,38 +21,39 @@ def export_open_channel_dxf(filepath, result, input_params, scale_denom=100):
         import ezdxf
     except ImportError:
         raise ImportError("需要安装 ezdxf 库: pip install ezdxf")
+    doc = ezdxf.new('R2010')
+    setup_section_dxf_document(doc, scale_denom=scale_denom)
+    draw_open_channel_dxf_on_msp(
+        doc.modelspace(),
+        result,
+        input_params,
+        scale_denom=scale_denom,
+    )
+    doc.saveas(filepath)
 
+
+def draw_open_channel_dxf_on_msp(
+    msp,
+    result,
+    input_params,
+    scale_denom=100,
+    layer_prefix="",
+    title="",
+):
+    tracked_msp = ensure_tracked_msp(msp, layer_prefix=layer_prefix)
     stype = input_params.get('section_type', '梯形')
-
     sf = 1000.0 / scale_denom
 
-    doc = ezdxf.new('R2010')
-    doc.header['$INSUNITS'] = 4    # 4 = mm (paper units)
-    doc.header['$MEASUREMENT'] = 1  # 1 = metric
-    doc.header['$LTSCALE'] = sf * 0.5
-
-    # 图层定义  ACI: 1=红 2=黄 3=绿 4=青 5=蓝 7=白/黑
-    _add_layer(doc, '轮廓线',          color=7,  lw=50)
-    _add_layer(doc, '设计水位',     color=5,  lw=25)
-    _add_layer(doc, '加大水位',  color=4,  lw=25)
-    _add_layer(doc, '尺寸标注',        color=2,  lw=18)
-    _add_layer(doc, '参数文字',      color=3,  lw=18)
-
-    # 虚线线型
-    if 'DASHED' not in doc.linetypes:
-        doc.linetypes.add('DASHED', pattern='A,.5,-.25')
-
-    _setup_font_style(doc)
-    msp = doc.modelspace()
-
     if stype == '圆形':
-        _draw_circular(msp, result, input_params, sf, scale_denom)
+        _draw_circular(tracked_msp, result, input_params, sf, scale_denom)
     elif stype == 'U形':
-        _draw_u_section(msp, result, input_params, sf, scale_denom)
+        _draw_u_section(tracked_msp, result, input_params, sf, scale_denom)
     else:
-        _draw_trapezoid(msp, result, input_params, sf, scale_denom)
+        _draw_trapezoid(tracked_msp, result, input_params, sf, scale_denom)
 
-    doc.saveas(filepath)
+    if title:
+        add_case_title(tracked_msp, title)
+    return tracked_msp.size()
 
 
 # ============================================================

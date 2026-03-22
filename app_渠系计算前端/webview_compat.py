@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """Qt WebEngine 兼容层。"""
 
+import re
+import tempfile
 from pathlib import Path
+from urllib.parse import quote_from_bytes
 
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QTextBrowser
@@ -12,6 +15,9 @@ try:
 except Exception as exc:  # pragma: no cover - 依赖环境相关
     _QtWebEngineView = None
     _WEB_ENGINE_IMPORT_ERROR = exc
+
+
+_SET_HTML_DATA_URL_LIMIT = (2 * 1024 * 1024) - 30
 
 
 class FallbackHtmlView(QTextBrowser):
@@ -227,14 +233,114 @@ def _base_url(base_path) -> QUrl:
     return QUrl.fromLocalFile(as_posix)
 
 
+def _encoded_html_size(html_content: str) -> int:
+    if not html_content:
+        return 0
+    return len(quote_from_bytes(str(html_content).encode("utf-8"), safe=""))
+
+
+def _can_use_set_html(html_content: str) -> bool:
+    return _encoded_html_size(html_content) <= _SET_HTML_DATA_URL_LIMIT
+
+
+def _disconnect_temp_file_cleanup(view):
+    signal = getattr(view, "destroyed", None)
+    handler = getattr(view, "_codex_temp_html_cleanup_handler", None)
+    if signal is not None and handler is not None:
+        try:
+            signal.disconnect(handler)
+        except (RuntimeError, TypeError):
+            pass
+    try:
+        view._codex_temp_html_cleanup_handler = None
+    except Exception:
+        pass
+
+
+def _cleanup_temp_html_file(view):
+    path = getattr(view, "_codex_temp_html_path", None)
+    if not path:
+        return
+    try:
+        Path(path).unlink(missing_ok=True)
+    except Exception:
+        pass
+    try:
+        view._codex_temp_html_path = None
+    except Exception:
+        pass
+
+
+def _base_tag(base_path) -> str:
+    if not base_path:
+        return ""
+    return f'<base href="{_base_url(base_path).toString()}">'
+
+
+def _with_base_href(html_content: str, base_path=None) -> str:
+    base_tag = _base_tag(base_path)
+    if not base_tag:
+        return html_content
+    if re.search(r"<base\b", html_content, flags=re.IGNORECASE):
+        return html_content
+
+    head_match = re.search(r"<head[^>]*>", html_content, flags=re.IGNORECASE)
+    if head_match:
+        insert_at = head_match.end()
+        return f"{html_content[:insert_at]}{base_tag}{html_content[insert_at:]}"
+    return f"<head>{base_tag}</head>{html_content}"
+
+
+def _load_large_html_via_temp_file(view, html_content: str, base_path=None) -> bool:
+    loader = getattr(view, "load", None)
+    if not callable(loader):
+        return False
+
+    _cleanup_temp_html_file(view)
+    _disconnect_temp_file_cleanup(view)
+
+    temp_dir = Path(tempfile.gettempdir()) / "codex_html_cache"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    html_path = temp_dir / f"codex-view-{id(view)}.html"
+    html_path.write_text(_with_base_href(html_content, base_path=base_path), encoding="utf-8")
+
+    try:
+        view._codex_temp_html_path = str(html_path)
+    except Exception:
+        pass
+
+    destroyed = getattr(view, "destroyed", None)
+    if destroyed is not None:
+        def _on_destroyed(*_args):
+            _cleanup_temp_html_file(view)
+            _disconnect_temp_file_cleanup(view)
+        try:
+            view._codex_temp_html_cleanup_handler = _on_destroyed
+            destroyed.connect(_on_destroyed)
+        except Exception:
+            _disconnect_temp_file_cleanup(view)
+
+    loader(QUrl.fromLocalFile(str(html_path)))
+    return True
+
+
 def load_html_content(view, html_content, base_path=None, reset_scroll=True):
     """Load HTML into either QWebEngineView or fallback browser."""
     if reset_scroll and view_supports_scripted_html(view):
         reset_view_scroll_position(view)
-    if view_supports_scripted_html(view) and base_path:
-        view.setHtml(html_content, _base_url(base_path))
-    elif view_supports_scripted_html(view):
-        view.setHtml(html_content)
+    if view_supports_scripted_html(view):
+        if _can_use_set_html(html_content):
+            _cleanup_temp_html_file(view)
+            _disconnect_temp_file_cleanup(view)
+            if base_path:
+                view.setHtml(html_content, _base_url(base_path))
+            else:
+                view.setHtml(html_content)
+        elif not _load_large_html_via_temp_file(view, html_content, base_path=base_path):
+            if base_path:
+                view.setHtml(html_content, _base_url(base_path))
+            else:
+                view.setHtml(html_content)
     else:
         view.setHtml(html_content)
     if reset_scroll and not view_supports_scripted_html(view):

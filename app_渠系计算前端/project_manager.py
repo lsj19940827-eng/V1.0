@@ -6,7 +6,7 @@
 import json
 import os
 from datetime import datetime
-from typing import Optional, Any, Dict, List, TYPE_CHECKING
+from typing import Optional, Any, Dict, List, TYPE_CHECKING, Set
 
 from PySide6.QtCore import QObject, Signal, QTimer, QSettings
 from PySide6.QtWidgets import QFileDialog, QMessageBox
@@ -17,6 +17,7 @@ from app_渠系计算前端.debug_utils import debug_print
 
 if TYPE_CHECKING:
     from app_渠系计算前端.batch.panel import BatchPanel
+    from app_渠系计算前端.panel_registry import PanelRegistry
     from app_渠系计算前端.water_profile.panel import WaterProfilePanel
     from app_渠系计算前端.open_channel.panel import OpenChannelPanel
     from app_渠系计算前端.aqueduct.panel import AqueductPanel
@@ -60,16 +61,9 @@ class ProjectManager(QObject):
         self._current_path: str = ""     # 当前项目路径（空串表示新建未保存）
         self._is_dirty: bool = False     # 是否有未保存的修改
 
-        # ---- 面板引用（由 MainWindow 设置）----
-        self._batch_panel: Optional["BatchPanel"] = None
-        self._water_profile_panel: Optional["WaterProfilePanel"] = None
-        self._open_channel_panel: Optional["OpenChannelPanel"] = None
-        self._aqueduct_panel: Optional["AqueductPanel"] = None
-        self._tunnel_panel: Optional["TunnelPanel"] = None
-        self._culvert_panel: Optional["CulvertPanel"] = None
-        self._siphon_panel: Optional["SiphonPanel"] = None
-        self._pressure_pipe_panel: Optional["PressurePipePanel"] = None
-        self._earthwork_panel = None
+        # ---- 运行时引用（由 MainWindow 设置）----
+        self._panel_registry: Optional["PanelRegistry"] = None
+        self._connected_panel_ids: Set[int] = set()
 
         # ---- Manager 引用（由 MainWindow 设置）----
         self._siphon_manager: Optional["SiphonManager"] = None
@@ -100,41 +94,77 @@ class ProjectManager(QObject):
         return list(self._recent_projects)
 
     # ----------------------------------------------------------------
-    # 面板设置
+    # 运行时绑定
     # ----------------------------------------------------------------
-    def set_panels(
+    def bind_runtime(
         self,
-        batch_panel: "BatchPanel" = None,
-        water_profile_panel: "WaterProfilePanel" = None,
-        open_channel_panel: "OpenChannelPanel" = None,
-        aqueduct_panel: "AqueductPanel" = None,
-        tunnel_panel: "TunnelPanel" = None,
-        culvert_panel: "CulvertPanel" = None,
-        siphon_panel: "SiphonPanel" = None,
-        pressure_pipe_panel: "PressurePipePanel" = None,
-        earthwork_panel=None,
-        siphon_manager: "SiphonManager" = None,
-        pressure_pipe_manager: "PressurePipeManager" = None,
-    ):
-        """设置需要管理的面板引用，并连接脏状态信号"""
-        self._batch_panel = batch_panel
-        self._water_profile_panel = water_profile_panel
-        self._open_channel_panel = open_channel_panel
-        self._aqueduct_panel = aqueduct_panel
-        self._tunnel_panel = tunnel_panel
-        self._culvert_panel = culvert_panel
-        self._siphon_panel = siphon_panel
-        self._pressure_pipe_panel = pressure_pipe_panel
-        self._earthwork_panel = earthwork_panel
-        self._siphon_manager = siphon_manager
-        self._pressure_pipe_manager = pressure_pipe_manager
+        panel_registry: "PanelRegistry",
+        services: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """绑定运行时面板注册表与相关 manager。"""
+        services = services or {}
 
-        # 连接面板的data_changed信号到mark_dirty
-        for panel in [batch_panel, water_profile_panel, open_channel_panel,
-                      aqueduct_panel, tunnel_panel, culvert_panel,
-                      siphon_panel, pressure_pipe_panel, earthwork_panel]:
-            if panel and hasattr(panel, 'data_changed'):
-                panel.data_changed.connect(self.mark_dirty)
+        if self._panel_registry is not None:
+            try:
+                self._panel_registry.instance_created.disconnect(self._on_panel_instance_created)
+            except Exception:
+                pass
+
+        self._panel_registry = panel_registry
+        self._siphon_manager = services.get("siphon_manager")
+        self._pressure_pipe_manager = services.get("pressure_pipe_manager")
+        self._connected_panel_ids.clear()
+
+        self._panel_registry.instance_created.connect(self._on_panel_instance_created)
+        for panel in self._panel_registry.iter_instances(create_missing=False):
+            self._connect_panel_dirty_signal(panel)
+
+    def _on_panel_instance_created(self, _key: str, panel: Any) -> None:
+        self._connect_panel_dirty_signal(panel)
+
+    def _connect_panel_dirty_signal(self, panel: Any) -> None:
+        if panel is None or not hasattr(panel, "data_changed"):
+            return
+        panel_id = id(panel)
+        if panel_id in self._connected_panel_ids:
+            return
+        panel.data_changed.connect(self.mark_dirty)
+        self._connected_panel_ids.add(panel_id)
+
+    def _get_panel(self, project_slot: str, *, create_missing: bool = True) -> Any:
+        if project_slot == "batch_panel" or self._panel_registry is None:
+            return None
+        descriptor = self._panel_registry.descriptor_for_project_slot(project_slot)
+        if descriptor is None:
+            return None
+        if create_missing:
+            return self._panel_registry.get(descriptor.key)
+        return self._panel_registry.get_existing(descriptor.key)
+
+    def _get_primary_channel_panel(self, *, create_missing: bool = True) -> Any:
+        batch_panel = self._get_panel("batch_panel", create_missing=create_missing)
+        if batch_panel is not None:
+            return batch_panel
+        return self._get_panel("water_profile_panel", create_missing=create_missing)
+
+    def _iter_project_panel_entries(
+        self,
+        *,
+        create_missing: bool = True,
+        exclude_slots: Optional[Set[str]] = None,
+    ) -> List[tuple[str, Any, str]]:
+        if self._panel_registry is None:
+            return []
+
+        exclude_slots = exclude_slots or set()
+        entries: List[tuple[str, Any, str]] = []
+        for descriptor in self._panel_registry.descriptors:
+            project_slot = descriptor.project_slot
+            if not project_slot or project_slot in exclude_slots:
+                continue
+            panel = self._panel_registry.get(descriptor.key) if create_missing else self._panel_registry.get_existing(descriptor.key)
+            entries.append((project_slot, panel, descriptor.attr_name))
+        return entries
 
     # ----------------------------------------------------------------
     # 脏状态管理
@@ -210,12 +240,10 @@ class ProjectManager(QObject):
         # 生成文件名：渠道名_级别_时间戳
         channel_name = "未命名"
         channel_level = ""
-        if self._batch_panel:
-            channel_name = self._batch_panel.channel_name_edit.text().strip() or "未命名"
-            channel_level = self._batch_panel.channel_level_combo.currentText().strip()
-        elif self._water_profile_panel:
-            channel_name = self._water_profile_panel.channel_name_edit.text().strip() or "未命名"
-            channel_level = self._water_profile_panel.channel_level_combo.currentText().strip()
+        primary_panel = self._get_primary_channel_panel(create_missing=False)
+        if primary_panel:
+            channel_name = primary_panel.channel_name_edit.text().strip() or "未命名"
+            channel_level = primary_panel.channel_level_combo.currentText().strip()
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = "".join(c for c in channel_name if c.isalnum() or c in "_ -")[:20]
@@ -245,33 +273,35 @@ class ProjectManager(QObject):
 
     def _reset_panels(self):
         """重置所有面板到初始状态"""
-        if self._batch_panel:
+        batch_panel = self._get_panel("batch_panel", create_missing=False)
+        if batch_panel:
             try:
                 # 清空表格
-                self._batch_panel.input_table.setRowCount(0)
-                self._batch_panel.channel_name_edit.clear()
-                self._batch_panel.start_wl_edit.clear()
-                self._batch_panel.start_station_edit.setText("0")
-                self._batch_panel.channel_level_combo.setCurrentIndex(0)
-                self._batch_panel.batch_results.clear()
+                batch_panel.input_table.setRowCount(0)
+                batch_panel.channel_name_edit.clear()
+                batch_panel.start_wl_edit.clear()
+                batch_panel.start_station_edit.setText("0")
+                batch_panel.channel_level_combo.setCurrentIndex(0)
+                batch_panel.batch_results.clear()
             except Exception:
                 pass
 
-        if self._water_profile_panel:
+        water_profile_panel = self._get_panel("water_profile_panel", create_missing=False)
+        if water_profile_panel:
             try:
                 # 清空表格和数据
-                self._water_profile_panel.nodes.clear()
-                self._water_profile_panel.calculated_nodes.clear()
-                self._water_profile_panel._update_table_from_nodes_full()
-                if hasattr(self._water_profile_panel, "_clear_section_tables"):
-                    self._water_profile_panel._clear_section_tables()
-                self._water_profile_panel.channel_name_edit.clear()
-                self._water_profile_panel.start_wl_edit.clear()
-                self._water_profile_panel.design_flow_edit.clear()
-                self._water_profile_panel.max_flow_edit.clear()
-                self._water_profile_panel.start_station_edit.setText("0")
-                self._water_profile_panel.roughness_edit.setText("0.017")
-                self._water_profile_panel.channel_level_combo.setCurrentIndex(0)
+                water_profile_panel.nodes.clear()
+                water_profile_panel.calculated_nodes.clear()
+                water_profile_panel._update_table_from_nodes_full()
+                if hasattr(water_profile_panel, "_clear_section_tables"):
+                    water_profile_panel._clear_section_tables()
+                water_profile_panel.channel_name_edit.clear()
+                water_profile_panel.start_wl_edit.clear()
+                water_profile_panel.design_flow_edit.clear()
+                water_profile_panel.max_flow_edit.clear()
+                water_profile_panel.start_station_edit.setText("0")
+                water_profile_panel.roughness_edit.setText("0.017")
+                water_profile_panel.channel_level_combo.setCurrentIndex(0)
             except Exception:
                 pass
 
@@ -351,13 +381,14 @@ class ProjectManager(QObject):
         if not path.lower().endswith(PROJECT_EXT):
             path += PROJECT_EXT
 
+        water_profile_panel = self._get_panel("water_profile_panel")
         old_first_jump_marker = None
         marker_reset_applied = False
-        if self._water_profile_panel and hasattr(self._water_profile_panel, "reset_first_success_auto_jump_marker"):
+        if water_profile_panel and hasattr(water_profile_panel, "reset_first_success_auto_jump_marker"):
             try:
-                if hasattr(self._water_profile_panel, "get_first_success_auto_jump_marker"):
-                    old_first_jump_marker = self._water_profile_panel.get_first_success_auto_jump_marker()
-                self._water_profile_panel.reset_first_success_auto_jump_marker()
+                if hasattr(water_profile_panel, "get_first_success_auto_jump_marker"):
+                    old_first_jump_marker = water_profile_panel.get_first_success_auto_jump_marker()
+                water_profile_panel.reset_first_success_auto_jump_marker()
                 marker_reset_applied = True
             except Exception:
                 marker_reset_applied = False
@@ -374,9 +405,9 @@ class ProjectManager(QObject):
             self.status_message.emit(f"已保存: {os.path.basename(path)}")
             return True
         except Exception as e:
-            if marker_reset_applied and self._water_profile_panel and hasattr(self._water_profile_panel, "set_first_success_auto_jump_marker"):
+            if marker_reset_applied and water_profile_panel and hasattr(water_profile_panel, "set_first_success_auto_jump_marker"):
                 try:
-                    self._water_profile_panel.set_first_success_auto_jump_marker(
+                    water_profile_panel.set_first_success_auto_jump_marker(
                         bool(old_first_jump_marker)
                     )
                 except Exception:
@@ -389,12 +420,10 @@ class ProjectManager(QObject):
         channel_name = "新项目"
         channel_level = ""
 
-        if self._batch_panel:
-            channel_name = self._batch_panel.channel_name_edit.text().strip() or "新项目"
-            channel_level = self._batch_panel.channel_level_combo.currentText().strip()
-        elif self._water_profile_panel:
-            channel_name = self._water_profile_panel.channel_name_edit.text().strip() or "新项目"
-            channel_level = self._water_profile_panel.channel_level_combo.currentText().strip()
+        primary_panel = self._get_primary_channel_panel(create_missing=False)
+        if primary_panel:
+            channel_name = primary_panel.channel_name_edit.text().strip() or "新项目"
+            channel_level = primary_panel.channel_level_combo.currentText().strip()
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = "".join(c for c in channel_name if c.isalnum() or c in "_ -")[:30]
@@ -510,18 +539,20 @@ class ProjectManager(QObject):
 
         # ---- 合并面板（双写：merged_panel + water_profile_panel）----
         water_profile_data = None
-        if self._water_profile_panel:
+        water_profile_panel = self._get_panel("water_profile_panel")
+        if water_profile_panel:
             try:
-                water_profile_data = self._water_profile_panel.to_project_dict()
+                water_profile_data = water_profile_panel.to_project_dict()
                 data["merged_panel"] = water_profile_data
                 data["water_profile_panel"] = water_profile_data
             except Exception as e:
                 print(f"[ProjectManager] 收集WaterProfilePanel数据失败: {e}")
 
         # ---- 批量面板（双写窗口：优先真实batch_panel，否则写兼容块）----
-        if self._batch_panel:
+        batch_panel = self._get_panel("batch_panel")
+        if batch_panel:
             try:
-                data["batch_panel"] = self._batch_panel.to_project_dict()
+                data["batch_panel"] = batch_panel.to_project_dict()
             except Exception as e:
                 print(f"[ProjectManager] 收集BatchPanel数据失败: {e}")
         elif isinstance(water_profile_data, dict):
@@ -530,16 +561,7 @@ class ProjectManager(QObject):
                 data["batch_panel"] = compat_batch
 
         # ---- 其余面板数据 ----
-        _panel_keys = [
-            ("open_channel_panel", self._open_channel_panel, "OpenChannelPanel"),
-            ("aqueduct_panel", self._aqueduct_panel, "AqueductPanel"),
-            ("tunnel_panel", self._tunnel_panel, "TunnelPanel"),
-            ("culvert_panel", self._culvert_panel, "CulvertPanel"),
-            ("siphon_panel", self._siphon_panel, "SiphonPanel"),
-            ("pressure_pipe_panel", self._pressure_pipe_panel, "PressurePipePanel"),
-            ("earthwork_panel", self._earthwork_panel, "EarthworkPanel"),
-        ]
-        for key, panel, label in _panel_keys:
+        for key, panel, label in self._iter_project_panel_entries(exclude_slots={"water_profile_panel"}):
             if panel:
                 try:
                     data[key] = panel.to_project_dict()
@@ -580,9 +602,10 @@ class ProjectManager(QObject):
             if not isinstance(water_profile_data.get("batch_panel_compat"), dict):
                 water_profile_data = dict(water_profile_data)
                 water_profile_data["batch_panel_compat"] = batch_panel_data
-        if self._water_profile_panel and water_profile_data:
+        water_profile_panel = self._get_panel("water_profile_panel")
+        if water_profile_panel and water_profile_data:
             try:
-                self._water_profile_panel.from_project_dict(water_profile_data, skip_dirty_signal=True)
+                water_profile_panel.from_project_dict(water_profile_data, skip_dirty_signal=True)
             except Exception as e:
                 print(f"[ProjectManager] 恢复WaterProfilePanel数据失败: {e}")
 
@@ -591,23 +614,15 @@ class ProjectManager(QObject):
             compat_batch = water_profile_data.get("batch_panel_compat")
             if isinstance(compat_batch, dict):
                 batch_panel_data = compat_batch
-        if self._batch_panel and batch_panel_data:
+        batch_panel = self._get_panel("batch_panel")
+        if batch_panel and batch_panel_data:
             try:
-                self._batch_panel.from_project_dict(batch_panel_data, skip_dirty_signal=True)
+                batch_panel.from_project_dict(batch_panel_data, skip_dirty_signal=True)
             except Exception as e:
                 print(f"[ProjectManager] 恢复BatchPanel数据失败: {e}")
 
         # ---- 其余面板数据 ----
-        _panel_keys = [
-            ("open_channel_panel", self._open_channel_panel, "OpenChannelPanel"),
-            ("aqueduct_panel", self._aqueduct_panel, "AqueductPanel"),
-            ("tunnel_panel", self._tunnel_panel, "TunnelPanel"),
-            ("culvert_panel", self._culvert_panel, "CulvertPanel"),
-            ("siphon_panel", self._siphon_panel, "SiphonPanel"),
-            ("pressure_pipe_panel", self._pressure_pipe_panel, "PressurePipePanel"),
-            ("earthwork_panel", self._earthwork_panel, "EarthworkPanel"),
-        ]
-        for key, panel, label in _panel_keys:
+        for key, panel, label in self._iter_project_panel_entries(exclude_slots={"water_profile_panel"}):
             if panel and data.get(key):
                 try:
                     panel.from_project_dict(data[key])

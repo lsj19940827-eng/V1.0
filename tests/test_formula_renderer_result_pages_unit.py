@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Regression tests for formula-rendered result pages."""
 
+from html import escape
 import importlib
 import os
 import sys
@@ -24,6 +25,7 @@ for calc_dir in ROOT.glob("calc_*"):
 
 renderer = importlib.import_module("app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.formula_renderer")
 result_nav = importlib.import_module("app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.result_navigation")
+open_channel_panel_mod = importlib.import_module("app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.open_channel.panel")
 aqueduct_panel_mod = importlib.import_module("app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.aqueduct.panel")
 tunnel_panel_mod = importlib.import_module("app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.tunnel.panel")
 culvert_panel_mod = importlib.import_module("app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.culvert.panel")
@@ -57,7 +59,25 @@ def _assert_wrapped_result_page_html(html, *, expect_nav, min_svg, min_case_bloc
     assert html.count("<svg") >= min_svg
     assert html.count('class="codex-case-block') >= min_case_blocks
     if expect_nav:
-        assert 'class="codex-case-nav"' in html
+        assert 'class="codex-case-nav' in html
+
+
+def _capture_initial_help_html(panel_cls):
+    class _DummyText:
+        def __init__(self):
+            self.html = ""
+
+        def setHtml(self, html):
+            self.html = html
+
+    class _Dummy:
+        pass
+
+    dummy = _Dummy()
+    dummy._result_case_nav = None
+    dummy.result_text = _DummyText()
+    panel_cls._show_initial_help(dummy)
+    return dummy.result_text.html
 
 
 @pytest.mark.parametrize(
@@ -118,8 +138,140 @@ def test_formula_renderer_keeps_design_method_step_as_plain_text_card():
     assert 'class="step-card"' in body
     assert "采用方法" in body
     assert 'class="content-line"' in body
+    assert 'class="info-subtitle"' not in body
     assert "<svg" not in body
     assert 'class="formula-line"' not in body
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_svg", "forbidden_fragments"),
+    [
+        (
+            "查表：净空高度应 ≥ D/6 = 2.40/6 = 0.400m",
+            1,
+            ("查表：净:",),
+        ),
+        (
+            "→ 要求净空高度 ≥ max(0.4, 0.400) = 0.400m",
+            1,
+            ("0.400) = 0.400m", ">→:</div>"),
+        ),
+        (
+            "范围要求: 0.1 ≤ V ≤ 100.0 m/s",
+            1,
+            ("范围要求: 0.1 ≤:",),
+        ),
+        (
+            "Fb加大 = H - h加大 = 2.38 - 1.980 = 0.400 m",
+            1,
+            ("Fb加大 = H -:", "h加大 = 2.38 - 1.980 = 0.400 m"),
+        ),
+    ],
+)
+def test_formula_renderer_avoids_fragmenting_embedded_formula_lines(
+    text,
+    expected_svg,
+    forbidden_fragments,
+):
+    body = renderer.plain_text_to_formula_body(text)
+
+    assert body.count("<svg") == expected_svg
+    assert 'class="content-line"' not in body
+    for fragment in forbidden_fragments:
+        assert fragment not in body
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "当 h ≤ R 时:",
+        "当 h加大 > R 时:",
+    ],
+)
+def test_formula_renderer_preserves_condition_formula_lines_as_single_block(text):
+    body = renderer.plain_text_to_formula_body(text)
+
+    render_block_count = (
+        body.count('class="formula-line"')
+        + body.count('class="info-subtitle"')
+        + body.count('class="content-line"')
+    )
+
+    assert render_block_count == 1
+    assert "当:</div>" not in body
+
+
+def test_formula_renderer_preserves_explanatory_formula_sentence_as_single_text_line():
+    text = "根据设计流量 Q = 5.000 m³/s 和底宽 B = 2.40 m，利用曼宁公式反算水深:"
+    body = renderer.plain_text_to_formula_body(text)
+
+    assert escape(text) in body
+    assert body.count('class="formula-line"') == 0
+    assert body.count('class="info-subtitle"') + body.count('class="content-line"') == 1
+    assert "根据设计流量:</div>" not in body
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "规范要求: Fb ≥ 0.4 m",
+        "计算结果: V = 1.316 m/s",
+    ],
+)
+def test_formula_renderer_keeps_safe_label_plus_formula_layout(text):
+    body = renderer.plain_text_to_formula_body(text)
+
+    assert body.count("<svg") == 1
+    assert 'class="info-subtitle"' in body
+    assert 'class="content-line"' not in body
+
+
+def test_open_channel_initial_help_renders_all_u_shape_formula_cards_as_svg():
+    html = _capture_initial_help_html(open_channel_panel_mod.OpenChannelPanel)
+
+    assert html.count("<svg") >= 9
+    assert 'class="formula-text"' not in html
+    for label in (
+        "弧区高度",
+        "纯弧区面积（h ≤ h_0）",
+        "纯弧区湿周（h ≤ h_0）",
+        "直线段区面积（h > h_0）",
+        "直线段区湿周（h > h_0）",
+    ):
+        assert escape(label) in html
+
+
+@pytest.mark.parametrize(
+    ("panel_cls", "expected_svg", "expected_labels"),
+    [
+        (
+            aqueduct_panel_mod.AqueductPanel,
+            2,
+            ("流量公式", "流速公式"),
+        ),
+        (
+            tunnel_panel_mod.TunnelPanel,
+            1,
+            ("流量公式",),
+        ),
+        (
+            culvert_panel_mod.CulvertPanel,
+            2,
+            ("优化目标：总截面面积最小", "流量公式"),
+        ),
+    ],
+)
+def test_structure_initial_help_formula_cards_render_as_svg(
+    panel_cls,
+    expected_svg,
+    expected_labels,
+):
+    html = _capture_initial_help_html(panel_cls)
+
+    assert html.count("<svg") >= expected_svg
+    assert 'class="formula-text"' not in html
+    for label in expected_labels:
+        assert label in html
 
 
 def test_aqueduct_u_detail_result_page_renders_svg_cards():

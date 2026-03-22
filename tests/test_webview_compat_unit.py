@@ -57,11 +57,17 @@ class _FakeScriptedView:
 
     def __init__(self):
         self.calls = []
+        self.load_calls = []
         self._page = _FakePage()
         self.loadFinished = _FakeSignal()
+        self.destroyed = _FakeSignal()
 
     def setHtml(self, html_content, base_url=None):
         self.calls.append((html_content, base_url))
+        self.loadFinished.emit(True)
+
+    def load(self, url):
+        self.load_calls.append(url)
         self.loadFinished.emit(True)
 
     def page(self):
@@ -96,6 +102,32 @@ def test_load_html_content_passes_base_url_to_scripted_views():
     assert view.calls[0][0] == "<html></html>"
     assert view.calls[0][1].isLocalFile() is True
     assert view.page().calls[-1][0] == "window.scrollTo(0, 0);"
+    assert view.load_calls == []
+
+
+def test_load_html_content_uses_local_file_when_scripted_html_exceeds_sethtml_limit():
+    module = _load_webview_module()
+    view = _FakeScriptedView()
+    original_limit = module._SET_HTML_DATA_URL_LIMIT
+    module._SET_HTML_DATA_URL_LIMIT = 32
+    try:
+        module.load_html_content(view, "<html><body>超大页面</body></html>", base_path=Path("."))
+    finally:
+        module._SET_HTML_DATA_URL_LIMIT = original_limit
+
+    assert view.calls == []
+    assert len(view.load_calls) == 1
+
+    loaded_path = Path(view.load_calls[0].toLocalFile())
+    assert loaded_path.exists() is True
+    file_text = loaded_path.read_text(encoding="utf-8")
+    assert "<body>超大页面</body>" in file_text
+    assert "<base href=" in file_text
+    assert str(loaded_path) == getattr(view, "_codex_temp_html_path")
+
+    view.destroyed.emit()
+
+    assert loaded_path.exists() is False
 
 
 def test_load_html_content_uses_plain_set_html_for_fallback_views():

@@ -441,7 +441,7 @@ _FORMULA_OPS = ('=', '<', '>', '≤', '≥')
 _EMBEDDED_FORMULA_PATTERNS = (
     r'[A-Za-z]{1,4}(?:/[A-Za-z]{1,4})?(?:_[\u4e00-\u9fff]+|[\u4e00-\u9fff]{1,4})?\s*(?:=|[<>≤≥])',
     r'[\u0391-\u03c9]\s*(?:=|[<>≤≥])',
-    r'[\u4e00-\u9fff]{1,4}\s*(?:=|[<>≤≥])',
+    r'[\u4e00-\u9fff]{1,6}\s*(?:=|[<>≤≥])',
 )
 
 
@@ -456,27 +456,87 @@ def _is_formula_candidate(text):
         return False
     if re.search(r'[A-Za-z\u0391-\u03c9]', s):
         return True
-    return bool(re.match(r'^[\u4e00-\u9fff]{1,4}\s*(?:=|[<>≤≥])', s))
+    return bool(re.match(r'^[\u4e00-\u9fff]{1,6}\s*(?:=|[<>≤≥])', s))
+
+
+def _split_top_level_segments(text, separators=('，', ',')):
+    """Split text by top-level separators while keeping nested clauses intact."""
+    parts = []
+    start = 0
+    depth = 0
+    pairs = {'(': ')', '（': '）', '[': ']', '{': '}'}
+    closing = set(pairs.values())
+
+    for idx, ch in enumerate(text):
+        if ch in pairs:
+            depth += 1
+            continue
+        if ch in closing:
+            depth = max(0, depth - 1)
+            continue
+        if depth == 0 and ch in separators:
+            parts.append(text[start:idx].strip())
+            start = idx + 1
+
+    parts.append(text[start:].strip())
+    return [part for part in parts if part]
+
+
+def _has_safe_formula_boundary(text, start):
+    """Return True when a potential embedded formula starts at a safe split point."""
+    if start <= 0:
+        return False
+
+    prev = text[start - 1]
+    if prev in ':：•·-([{（':
+        return True
+    if not prev.isspace():
+        return False
+
+    idx = start - 1
+    while idx >= 0 and text[idx].isspace():
+        idx -= 1
+    if idx < 0:
+        return True
+    return text[idx] not in _FORMULA_OPS + ('/', '(', '（')
 
 
 def _find_embedded_formula_start(text):
     """Locate the start index of an inline formula inside a descriptive line."""
     starts = []
     for pattern in _EMBEDDED_FORMULA_PATTERNS:
-        m = re.search(pattern, text)
-        if m:
-            starts.append(m.start())
+        for m in re.finditer(pattern, text):
+            if _has_safe_formula_boundary(text, m.start()):
+                starts.append(m.start())
     return min(starts) if starts else None
+
+
+def _should_preserve_formula_sentence(text):
+    """Keep condition/explanatory sentences intact instead of splitting them into fragments."""
+    s = text.strip()
+    if not s:
+        return False
+
+    if re.match(r'^当\s*.+时[:：]?\s*$', s):
+        return True
+
+    if s.startswith('根据') and s.endswith(('：', ':')):
+        natural_language_markers = ('，', ',', '利用', '按', '依据', '反算', '计算', '求得', '取')
+        if any(marker in s for marker in natural_language_markers):
+            return True
+
+    return False
 
 
 def _split_formula_suffix(text):
     """Split trailing descriptive text after a formula fragment."""
-    for sep in ('，', ','):
-        idx = text.find(sep)
-        if idx <= 0:
-            continue
-        head = text[:idx].strip()
-        tail = text[idx + 1:].strip()
+    parts = _split_top_level_segments(text)
+    if len(parts) <= 1:
+        return text.strip(), ''
+
+    for idx in range(1, len(parts)):
+        head = ', '.join(parts[:idx]).strip()
+        tail = ', '.join(parts[idx:]).strip()
         if head and tail and _is_formula_candidate(head) and not _is_formula_candidate(tail):
             return head, tail
     return text.strip(), ''
@@ -486,7 +546,7 @@ def _split_parallel_formula_clauses(text):
     """Split comma-joined formula clauses like 'A = ..., B = ...'."""
     if not any(sep in text for sep in ('，', ',')):
         return None
-    parts = [p.strip() for p in re.split(r'\s*[，,]\s*', text) if p.strip()]
+    parts = _split_top_level_segments(text)
     if len(parts) < 2:
         return None
     if all(_is_formula_candidate(part) or _find_embedded_formula_start(part) not in (None, 0) for part in parts):
@@ -494,8 +554,29 @@ def _split_parallel_formula_clauses(text):
     return None
 
 
+def _rebalance_embedded_formula_prefix(prefix, formula_text):
+    """Move leading cue words like '要求' back into the descriptive prefix."""
+    cue_words = ('要求',)
+    rebalanced_prefix = prefix.strip()
+    rebalanced_formula = formula_text.strip()
+
+    for cue in cue_words:
+        if not rebalanced_formula.startswith(cue):
+            continue
+        candidate = rebalanced_formula[len(cue):].lstrip()
+        if candidate and _is_formula_candidate(candidate):
+            rebalanced_prefix = f'{rebalanced_prefix} {cue}'.strip()
+            rebalanced_formula = candidate
+            break
+
+    return rebalanced_prefix, rebalanced_formula
+
+
 def _split_embedded_formula(text):
     """Split '说明 + 公式 [+ 说明]' into separate lines."""
+    if text_to_latex(text.strip()):
+        return None
+
     start = _find_embedded_formula_start(text)
     if start in (None, 0):
         return None
@@ -503,6 +584,7 @@ def _split_embedded_formula(text):
     prefix = text[:start].rstrip(' ：:,，')
     formula_text = text[start:].strip()
     formula_text, suffix = _split_formula_suffix(formula_text)
+    prefix, formula_text = _rebalance_embedded_formula_prefix(prefix, formula_text)
     if not prefix or not _is_formula_candidate(formula_text):
         return None
 
@@ -520,6 +602,9 @@ def _normalize_formula_fragments(text):
         changed = False
         normalized = []
         for fragment in fragments:
+            if _should_preserve_formula_sentence(fragment):
+                normalized.append(fragment)
+                continue
             split = _split_parallel_formula_clauses(fragment)
             if split:
                 normalized.extend(split)
@@ -541,6 +626,7 @@ def _normalize_formula_lines(lines):
     """Pre-split mixed engineering prose so the renderer can treat formulas separately."""
     normalized = []
     in_raw_html = False
+    in_plain_text_step = False
 
     for line in lines:
         stripped = line.strip()
@@ -553,6 +639,26 @@ def _normalize_formula_lines(lines):
         if stripped.startswith('{{HTML}}'):
             normalized.append(line)
             in_raw_html = True
+            continue
+
+        if in_plain_text_step:
+            if (
+                stripped
+                and (
+                    stripped.startswith('【')
+                    or re.match(r'^\d+\.\s+.+', stripped)
+                    or (len(stripped) > 5 and all(c in '=- \t' for c in stripped))
+                )
+            ):
+                in_plain_text_step = False
+            else:
+                normalized.append(line)
+                continue
+
+        step_match = re.match(r'^\d+\.\s+(.+)', stripped)
+        if step_match and step_match.group(1).strip() in ('采用方法:', '采用方法：'):
+            normalized.append(line)
+            in_plain_text_step = True
             continue
 
         if (

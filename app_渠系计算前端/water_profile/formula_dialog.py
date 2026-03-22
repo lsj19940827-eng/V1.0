@@ -30,16 +30,14 @@ except ImportError:
     HAS_SVG = False
 
 try:
-    from PySide6.QtWebEngineWidgets import QWebEngineView
-    HAS_WEBENGINE = True
-except ImportError:
-    HAS_WEBENGINE = False
-
-try:
     from app_渠系计算前端.formula_renderer import render_latex_svg
     HAS_SVG_RENDERER = True
 except ImportError:
     HAS_SVG_RENDERER = False
+
+from app_渠系计算前端.webview_compat import create_web_view, web_engine_available
+
+HAS_WEBENGINE = web_engine_available()
 
 
 # ================================================================
@@ -340,7 +338,7 @@ class FormulaDialog(QDialog):
         layout = QVBoxLayout(self)
 
         if HAS_WEBENGINE and HAS_SVG_RENDERER:
-            self._web = QWebEngineView()
+            self._web = create_web_view()
             layout.addWidget(self._web, 1)
             self._web.setHtml(self._build_html(sections))
         else:

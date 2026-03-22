@@ -6,99 +6,87 @@
 支持模块：明渠设计、渡槽设计、隧洞设计、矩形暗涵设计、倒虹吸设计、有压管道设计、推求水面线
 """
 
-import sys
 import os
-
-# 确保项目根目录在搜索路径中
-_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _root not in sys.path:
-    sys.path.insert(0, _root)
-
-# ---- 高DPI环境变量（必须在 QApplication 之前设置） ----
-os.environ.setdefault('QT_ENABLE_HIGHDPI_SCALING', '1')
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QFrame, QStackedWidget, QSizePolicy, QDialog, QMenu
+    QLabel, QFrame, QStackedWidget, QSizePolicy, QMenu
 )
 from PySide6.QtCore import Qt, QSize, QTimer
-from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QShortcut, QKeySequence, QAction
-
-from app_渠系计算前端 import ensure_qfluentwidgets_compat
-
-ensure_qfluentwidgets_compat()
+from PySide6.QtGui import QIcon, QShortcut, QKeySequence, QAction
 
 from qfluentwidgets import (
-    PushButton, InfoBar, InfoBarPosition, setTheme, Theme
+    PushButton, InfoBar, InfoBarPosition
 )
 
-import updater
+from app_渠系计算前端.panel_registry import PanelDescriptor, PanelRegistry
 from version import APP_VERSION
 from app_渠系计算前端.styles import (
-    P, S, W, E, BG, CARD, BD, T1, T2, GLOBAL_STYLE, NAV_STYLE
+    P, BD, T1, T2, NAV_STYLE
 )
 from app_渠系计算前端.report_meta import ProjectSettingsDialog
-from app_渠系计算前端.open_channel.panel import OpenChannelPanel
-from app_渠系计算前端.aqueduct.panel import AqueductPanel
-from app_渠系计算前端.tunnel.panel import TunnelPanel
-from app_渠系计算前端.culvert.panel import CulvertPanel
-from app_渠系计算前端.siphon.panel import SiphonPanel
-from app_渠系计算前端.water_profile.panel import WaterProfilePanel
-from app_渠系计算前端.pressure_pipe.panel import PressurePipePanel
 from app_渠系计算前端.project_manager import ProjectManager
-from app_渠系计算前端.webview_compat import (
-    web_engine_available,
-    get_web_engine_import_error,
-)
+from app_渠系计算前端.startup_context import StartupContext
+from app_渠系计算前端.webengine_diagnostics import EMERGENCY_SINGLE_PROCESS_ENV
 from app_渠系计算前端.debug_utils import debug_print
 
-_EARTHWORK_AVAILABLE = False
+_MODULE_TOOLTIPS = {
+    "open_channel": "梯形/矩形/圆形明渠",
+    "aqueduct": "U形/矩形渡槽",
+    "tunnel": "圆形/圆拱直墙/马蹄形",
+    "culvert": "经济最优断面/指定参数",
+    "siphon": "倒虹吸管水力计算",
+    "pressure_pipe": "有压管道水力计算",
+    "water_profile": "断面批量计算 + 水面线推求",
+}
 
 
-def _main_window_on_update_available(self, info):
-    """静默检查发现新版本时，直接弹出更新对话框。"""
-    self._cached_update_info = info
-    if self._update_prompt_shown:
-        return
-    self._update_prompt_shown = True
-    self.statusBar().showMessage(
-        f"发现新版本 V{info.latest_version}，已打开更新窗口。", 10000
+def _create_open_channel_panel():
+    from app_渠系计算前端.open_channel.panel import OpenChannelPanel
+
+    return OpenChannelPanel()
+
+
+def _create_aqueduct_panel():
+    from app_渠系计算前端.aqueduct.panel import AqueductPanel
+
+    return AqueductPanel()
+
+
+def _create_tunnel_panel():
+    from app_渠系计算前端.tunnel.panel import TunnelPanel
+
+    return TunnelPanel()
+
+
+def _create_culvert_panel():
+    from app_渠系计算前端.culvert.panel import CulvertPanel
+
+    return CulvertPanel()
+
+
+def _create_siphon_panel(*, siphon_manager):
+    from app_渠系计算前端.siphon.panel import SiphonPanel
+
+    return SiphonPanel(
+        siphon_manager=siphon_manager,
+        siphon_name="单倒虹吸",
     )
-    QTimer.singleShot(500, self._open_update_dialog)
 
 
-def _main_window_open_update_dialog(self, force_full_package_once=None):
-    """打开更新对话框，并支持本次强制走全量包。"""
-    from app_渠系计算前端.update_dialog import UpdateDialog
+def _create_pressure_pipe_panel():
+    from app_渠系计算前端.pressure_pipe.panel import PressurePipePanel
 
-    if force_full_package_once is None:
-        force_full_package_once = self._pending_force_full_package_once
-        self._pending_force_full_package_once = False
-    cached = getattr(self, "_cached_update_info", None)
-    dlg = UpdateDialog(
-        self,
-        auto_check=(cached is None),
-        info=cached,
-        force_full_package_once=bool(force_full_package_once),
+    return PressurePipePanel()
+
+
+def _create_water_profile_panel(*, siphon_manager, pressure_pipe_manager):
+    from app_渠系计算前端.water_profile.panel import WaterProfilePanel
+
+    return WaterProfilePanel(
+        siphon_manager=siphon_manager,
+        pressure_pipe_manager=pressure_pipe_manager,
     )
-    dlg.exec()
-
-
-# ============================================================
-# 导航按钮
-# ============================================================
-def _get_dpi_scale() -> float:
-    """获取当前主屏幕的 DPI 缩放因子（1.0 = 100%，1.5 = 150%，2.0 = 200%）
-
-    Qt 6 默认开启高DPI缩放，logicalDotsPerInch() 始终返回 96，
-    因此使用 devicePixelRatio() 获取实际缩放比。
-    """
-    app = QApplication.instance()
-    if app:
-        screen = app.primaryScreen()
-        if screen:
-            return screen.devicePixelRatio()
-    return 1.0
 
 
 class NavButton(PushButton):
@@ -146,17 +134,19 @@ class NavButton(PushButton):
 class MainWindow(QMainWindow):
     """渠系建筑物水力计算系统 —— 主窗口"""
 
-    def __init__(
-        self,
-        *,
-        update_prompt_already_handled: bool = False,
-        pending_force_full_package_once: bool = False,
-    ):
+    def __init__(self, startup_context: StartupContext):
         super().__init__()
+        self.startup_context = startup_context
         self._base_title = f"渠系建筑物水力计算系统 V{APP_VERSION}"
         self.setWindowTitle(self._base_title)
-        self._update_prompt_shown = update_prompt_already_handled
-        self._pending_force_full_package_once = pending_force_full_package_once
+        self._cached_update_info = None
+        self._silent_checker = None
+        self._update_prompt_shown = False
+        self._pending_force_full_package_once = False
+        self._nav_buttons = []
+
+        self._init_runtime_services()
+        self._panel_registry = self._build_panel_registry()
 
         # ---- 根据屏幕分辨率自适应窗口尺寸 ----
         screen = QApplication.primaryScreen()
@@ -193,7 +183,6 @@ class MainWindow(QMainWindow):
         if os.path.exists(_icon_src):
             self.setWindowIcon(QIcon(_icon_src))
 
-        self._nav_buttons = []
         self._init_ui()
 
         # ---- 项目管理器初始化 ----
@@ -209,8 +198,84 @@ class MainWindow(QMainWindow):
 
         self._notify_optional_runtime_degradations()
 
-        # ---- 启动时静默检查更新 ----
-        self._start_silent_update_check()
+    def __getattr__(self, name):
+        panel_registry = self.__dict__.get("_panel_registry")
+        if panel_registry is not None:
+            panel = panel_registry.get_by_attr_name(name)
+            if panel is not None:
+                return panel
+        raise AttributeError(f"{type(self).__name__!s} has no attribute {name!r}")
+
+    def _init_runtime_services(self):
+        from 推求水面线.managers.siphon_manager import SiphonManager
+        from 推求水面线.managers.pressure_pipe_manager import PressurePipeManager
+
+        self.siphon_manager = SiphonManager()
+        self.pressure_pipe_manager = PressurePipeManager()
+
+    def _build_panel_registry(self) -> PanelRegistry:
+        descriptors = [
+            PanelDescriptor(
+                key="open_channel",
+                title="明渠设计",
+                nav_order=0,
+                attr_name="open_channel_panel",
+                factory=_create_open_channel_panel,
+                project_slot="open_channel_panel",
+            ),
+            PanelDescriptor(
+                key="aqueduct",
+                title="渡槽设计",
+                nav_order=1,
+                attr_name="aqueduct_panel",
+                factory=_create_aqueduct_panel,
+                project_slot="aqueduct_panel",
+            ),
+            PanelDescriptor(
+                key="tunnel",
+                title="隧洞设计",
+                nav_order=2,
+                attr_name="tunnel_panel",
+                factory=_create_tunnel_panel,
+                project_slot="tunnel_panel",
+            ),
+            PanelDescriptor(
+                key="culvert",
+                title="矩形暗涵设计",
+                nav_order=3,
+                attr_name="culvert_panel",
+                factory=_create_culvert_panel,
+                project_slot="culvert_panel",
+            ),
+            PanelDescriptor(
+                key="siphon",
+                title="倒虹吸设计",
+                nav_order=4,
+                attr_name="siphon_panel",
+                factory=lambda: _create_siphon_panel(siphon_manager=self.siphon_manager),
+                project_slot="siphon_panel",
+            ),
+            PanelDescriptor(
+                key="pressure_pipe",
+                title="有压管道设计",
+                nav_order=5,
+                attr_name="pressure_pipe_panel",
+                factory=_create_pressure_pipe_panel,
+                project_slot="pressure_pipe_panel",
+            ),
+            PanelDescriptor(
+                key="water_profile",
+                title="推求水面线",
+                nav_order=6,
+                attr_name="water_profile_panel",
+                factory=lambda: _create_water_profile_panel(
+                    siphon_manager=self.siphon_manager,
+                    pressure_pipe_manager=self.pressure_pipe_manager,
+                ),
+                project_slot="water_profile_panel",
+            ),
+        ]
+        return PanelRegistry(descriptors, self)
 
     def _init_ui(self):
         central = QWidget()
@@ -269,18 +334,9 @@ class MainWindow(QMainWindow):
         nav_lay.addSpacing(6)
 
         # 导航按钮
-        modules = [
-            ("明渠设计", "梯形/矩形/圆形明渠"),
-            ("渡槽设计", "U形/矩形渡槽"),
-            ("隧洞设计", "圆形/圆拱直墙/马蹄形"),
-            ("矩形暗涵设计", "经济最优断面/指定参数"),
-            ("倒虹吸设计", "倒虹吸管水力计算"),
-            ("有压管道设计", "有压管道水力计算"),
-            ("推求水面线", "断面批量计算 + 水面线推求"),
-        ]
-        for idx, (name, desc) in enumerate(modules):
-            btn = NavButton(name)
-            btn.setToolTip(desc)
+        for idx, descriptor in enumerate(self._panel_registry.descriptors):
+            btn = NavButton(descriptor.title)
+            btn.setToolTip(_MODULE_TOOLTIPS.get(descriptor.key, descriptor.title))
             btn.clicked.connect(lambda checked, i=idx: self._switch_to(i))
             nav_lay.addWidget(btn)
             self._nav_buttons.append(btn)
@@ -407,38 +463,12 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         main_lay.addWidget(self.stack, 1)
 
-        # 创建 SiphonManager（用于倒虹吸数据管理和自动确认）
-        from 推求水面线.managers.siphon_manager import SiphonManager
-        self.siphon_manager = SiphonManager()
-
-        # 创建 PressurePipeManager（用于有压管道数据管理）
-        from 推求水面线.managers.pressure_pipe_manager import PressurePipeManager
-        self.pressure_pipe_manager = PressurePipeManager()
-
-        # 注册模块面板
-        self.open_channel_panel = OpenChannelPanel()
-        self.aqueduct_panel = AqueductPanel()
-        self.tunnel_panel = TunnelPanel()
-        self.culvert_panel = CulvertPanel()
-        self.siphon_panel = SiphonPanel(
-            siphon_manager=self.siphon_manager,
-            siphon_name="单倒虹吸"
-        )
-        self.pressure_pipe_panel = PressurePipePanel()
-        self.water_profile_panel = WaterProfilePanel(
-            siphon_manager=self.siphon_manager,
-            pressure_pipe_manager=self.pressure_pipe_manager,
-        )
-        self.stack.addWidget(self.open_channel_panel)
-        self.stack.addWidget(self.aqueduct_panel)
-        self.stack.addWidget(self.tunnel_panel)
-        self.stack.addWidget(self.culvert_panel)
-        self.stack.addWidget(self.siphon_panel)
-        self.stack.addWidget(self.pressure_pipe_panel)
-        self.stack.addWidget(self.water_profile_panel)
-        if _EARTHWORK_AVAILABLE:
-            self.earthwork_panel = EarthworkPanel()
-            self.stack.addWidget(self.earthwork_panel)
+        # 第一阶段仍保持即时实例化，但改为通过注册表装配。
+        self._panel_registry.create_all_eagerly()
+        for descriptor in self._panel_registry.descriptors:
+            panel = self._panel_registry.get(descriptor.key)
+            setattr(self, descriptor.attr_name, panel)
+            self.stack.addWidget(panel)
 
     # ----------------------------------------------------------------
     # 项目管理
@@ -446,17 +476,12 @@ class MainWindow(QMainWindow):
     def _init_project_manager(self):
         """初始化项目管理器"""
         self.project_manager = ProjectManager(self)
-        self.project_manager.set_panels(
-            water_profile_panel=self.water_profile_panel,
-            open_channel_panel=self.open_channel_panel,
-            aqueduct_panel=self.aqueduct_panel,
-            tunnel_panel=self.tunnel_panel,
-            culvert_panel=self.culvert_panel,
-            siphon_panel=self.siphon_panel,
-            pressure_pipe_panel=self.pressure_pipe_panel,
-            earthwork_panel=getattr(self, 'earthwork_panel', None),
-            siphon_manager=self.siphon_manager,
-            pressure_pipe_manager=self.pressure_pipe_manager,
+        self.project_manager.bind_runtime(
+            self._panel_registry,
+            services={
+                "siphon_manager": self.siphon_manager,
+                "pressure_pipe_manager": self.pressure_pipe_manager,
+            },
         )
 
         # 连接信号
@@ -548,20 +573,20 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _notify_optional_runtime_degradations(self):
-        """提示当前环境下被动降级的可选能力。"""
-        if web_engine_available():
+        """提醒当前会话是否显式启用了 WebEngine 应急模式。"""
+        if self.startup_context.webengine_mode != "single-process":
             return
-
-        err = get_web_engine_import_error()
-        detail = str(err) if err else "QtWebEngine unavailable"
         self.statusBar().showMessage(
-            "检测到 Qt WebEngine 不可用，公式与说明页已切换为兼容显示模式。",
+            "当前会话已启用 Qt WebEngine 应急单进程模式，仅用于排障。",
             12000,
         )
         try:
             InfoBar.warning(
-                title="已启用兼容显示模式",
-                content="当前环境无法加载 Qt WebEngine，主程序可继续使用，但部分公式页会以简化 HTML 显示。",
+                title="已启用 WebEngine 应急模式",
+                content=(
+                    "当前会话已通过隐藏开关启用 Qt WebEngine 单进程模式。"
+                    f"如标准模式恢复，请移除环境变量 {EMERGENCY_SINGLE_PROCESS_ENV}。"
+                ),
                 orient=Qt.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP_RIGHT,
@@ -570,21 +595,33 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             pass
-        try:
-            print(f"[Runtime] Qt WebEngine unavailable: {detail}")
-        except Exception:
-            pass
+
+    def prepare_update_prompt(self, *, force_full_package_once: bool = False):
+        """Mark that this session should immediately open the update dialog."""
+        self._update_prompt_shown = True
+        self._pending_force_full_package_once = bool(force_full_package_once)
 
     # ---- 更新相关 ----
-    def _open_update_dialog(self):
-        """打开更新对话框（手动检查）"""
+    def _open_update_dialog(self, force_full_package_once=None):
+        """打开更新对话框，并支持本次强制走全量包。"""
         from app_渠系计算前端.update_dialog import UpdateDialog
-        cached = getattr(self, '_cached_update_info', None)
-        dlg = UpdateDialog(self, auto_check=(cached is None), info=cached)
+
+        if force_full_package_once is None:
+            force_full_package_once = self._pending_force_full_package_once
+            self._pending_force_full_package_once = False
+        cached = getattr(self, "_cached_update_info", None)
+        dlg = UpdateDialog(
+            self,
+            auto_check=(cached is None),
+            info=cached,
+            force_full_package_once=bool(force_full_package_once),
+        )
         dlg.exec()
 
-    def _start_silent_update_check(self):
+    def start_silent_update_check(self):
         """启动时后台静默检查更新"""
+        if not self.startup_context.update_checks_enabled:
+            return
         self._cached_update_info = None
         from app_渠系计算前端.update_dialog import SilentUpdateChecker
         self._silent_checker = SilentUpdateChecker(self)
@@ -592,48 +629,16 @@ class MainWindow(QMainWindow):
         self._silent_checker.start()
 
     def _on_update_available(self, info):
-        """静默检查发现新版本时，缓存结果并在 InfoBar 提示"""
+        """静默检查发现新版本时，直接弹出更新对话框。"""
         self._cached_update_info = info
-        try:
-            from PySide6.QtWidgets import QPushButton as _QPushButton
-            from qfluentwidgets import InfoBarIcon
-            bar = InfoBar.new(
-                icon=InfoBarIcon.INFORMATION,
-                title=f"发现新版本 V{info.latest_version}",
-                content=f"更新内容：{info.changelog[:40]}{'...' if len(info.changelog) > 40 else ''}",
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT,
-                duration=12000,
-                parent=self,
-            )
-            btn = _QPushButton("立即更新")
-            btn.setFixedHeight(28)
-            btn.setStyleSheet(
-                "QPushButton{background:#1976D2;color:white;border:none;"
-                "border-radius:4px;padding:0 12px;font-size:12px;}"
-                "QPushButton:hover{background:#1565C0;}"
-            )
-            btn.clicked.connect(bar.close)
-            btn.clicked.connect(self._open_update_dialog)
-            bar.addWidget(btn)
-            self.statusBar().showMessage(
-                f"✨ 新版本 V{info.latest_version} 可用！点击「检查更新」或通知栏「立即更新」下载。"
-            )
-        except Exception:
-            try:
-                InfoBar.info(
-                    title=f"发现新版本 V{info.latest_version}",
-                    content="点击侧边栏「检查更新」按钮查看详情并下载。",
-                    orient=Qt.Horizontal,
-                    isClosable=True,
-                    position=InfoBarPosition.TOP_RIGHT,
-                    duration=8000,
-                    parent=self,
-                )
-            except Exception:
-                pass
-
+        if self._update_prompt_shown:
+            return
+        self._update_prompt_shown = True
+        self.statusBar().showMessage(
+            f"发现新版本 V{info.latest_version}，已打开更新窗口。",
+            10000,
+        )
+        QTimer.singleShot(500, self._open_update_dialog)
 
     def closeEvent(self, event):
         """关闭窗口前检查项目保存，保存倒虹吸面板状态"""
@@ -668,81 +673,17 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self._nav_buttons):
             btn.set_selected(i == index)
-        names = ["明渠设计", "渡槽设计", "隧洞设计", "矩形暗涵设计", "倒虹吸设计", "有压管道设计", "推求水面线"]
-        if index < len(names):
-            self.statusBar().showMessage(f"当前模块: {names[index]}", 5000)
-
-
-# ============================================================
-# 入口
-# ============================================================
-MainWindow._on_update_available = _main_window_on_update_available
-MainWindow._open_update_dialog = _main_window_open_update_dialog
-
-
-# ============================================================
-# 入口
-# ============================================================
-def _setup_matplotlib_dpi():
-    """配置 Matplotlib 全局 DPI 与中文字体，确保图表在高分屏下清晰"""
-    try:
-        import matplotlib
-        matplotlib.use('QtAgg')
-        import matplotlib.pyplot as plt
-
-        scale = _get_dpi_scale()
-        # 提高 Figure 默认 DPI，高分屏下图表更清晰
-        fig_dpi = max(100, int(100 * scale))
-        plt.rcParams['figure.dpi'] = fig_dpi
-        plt.rcParams['savefig.dpi'] = 150  # 导出图片保持 150dpi
-
-        # 字体大小随 DPI 微调
-        base_font = max(10, int(10 * scale))
-        plt.rcParams['font.size'] = base_font
-        plt.rcParams['axes.titlesize'] = base_font + 2
-        plt.rcParams['axes.labelsize'] = base_font
-        plt.rcParams['xtick.labelsize'] = base_font - 1
-        plt.rcParams['ytick.labelsize'] = base_font - 1
-        plt.rcParams['legend.fontsize'] = base_font - 1
-
-        # 中文字体
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun']
-        plt.rcParams['axes.unicode_minus'] = False
-    except Exception:
-        pass
-
+        panel_titles = [descriptor.title for descriptor in self._panel_registry.descriptors]
+        if index < len(panel_titles):
+            self.statusBar().showMessage(f"当前模块: {panel_titles[index]}", 5000)
 
 def main():
-    # ---- 高DPI舍入策略（main.py 已提前调用；此处为直接运行 app.py 时的兜底）----
-    # PassThrough: 保留精确缩放比（如1.25/1.5），Qt 6 默认值，
-    # 支持非整数缩放比，确保 2K(125%)/4K(150%/200%) 正确渲染
-    # 注意：若 QApplication 已存在（如首次激活弹窗后），此调用将被 Qt 静默忽略
-    if not QApplication.instance():
-        QApplication.setHighDpiScaleFactorRoundingPolicy(
-            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-        )
+    from app_渠系计算前端.bootstrap import run
 
-    app = QApplication.instance() or QApplication(sys.argv)
-    app.setStyle("Fusion")
-
-    # 基础字体：使用磅值（pt），天然 DPI 自适应
-    app.setFont(QFont("Microsoft YaHei", 10))
-    app.setStyleSheet(GLOBAL_STYLE)
-
-    # Matplotlib 全局 DPI 适配
-    _setup_matplotlib_dpi()
-
-    open_update_dialog = updater.UPDATE_FLAG_OPEN_DIALOG in sys.argv
-    force_full_package = updater.UPDATE_FLAG_FORCE_FULL_PACKAGE in sys.argv
-    window = MainWindow(
-        update_prompt_already_handled=open_update_dialog,
-        pending_force_full_package_once=force_full_package,
-    )
-    window.show()
-    if open_update_dialog:
-        QTimer.singleShot(300, window._open_update_dialog)
-    sys.exit(app.exec())
+    return run()
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    sys.exit(main())

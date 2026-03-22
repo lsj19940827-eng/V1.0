@@ -76,16 +76,29 @@ from app_渠系计算前端.export_utils import (
 from app_渠系计算前端.report_meta import (
     ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
 )
-from app_渠系计算前端.culvert.dxf_export import export_culvert_dxf
+from app_渠系计算前端.dxf_multi_export import (
+    DxfExportCaseEntry,
+    choose_scale_denom,
+    export_combined_case_dxf,
+    format_empty_export_warning,
+    format_export_result_message,
+    partition_valid_case_entries,
+    select_case_entries,
+    show_multi_case_dxf_dialog,
+)
+from app_渠系计算前端.culvert.dxf_export import export_culvert_dxf, draw_culvert_dxf_on_msp
 from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, plain_text_to_formula_body, wrap_with_katex,
     load_formula_page, make_plain_html,
     HelpPageBuilder
 )
+from app_渠系计算前端.plot_title_utils import apply_flow_velocity_title
 from app_渠系计算前端.result_navigation import (
+    CaseResultNavigationBar,
     build_result_nav_bar,
     build_result_navigation_head,
     make_case_result_anchor,
+    sync_case_result_nav_bar,
     wrap_case_result_block,
 )
 if WORD_EXPORT_AVAILABLE:
@@ -316,6 +329,9 @@ class CulvertPanel(QWidget):
 
         t1 = QWidget(); t1l = QVBoxLayout(t1); t1l.setContentsMargins(5,5,5,5)
         grp = QGroupBox("计算结果详情"); gl = QVBoxLayout(grp)
+        self._result_case_nav = CaseResultNavigationBar(grp)
+        self._result_case_nav.case_requested.connect(self._jump_to_case_result)
+        gl.addWidget(self._result_case_nav)
         self.result_text = create_web_view()
         gl.addWidget(self.result_text)
         t1l.addWidget(grp)
@@ -332,6 +348,7 @@ class CulvertPanel(QWidget):
         self._show_initial_help()
 
     def _show_initial_help(self):
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         h = HelpPageBuilder("矩形暗涵水力计算", '请输入参数后点击“计算”按钮')
         h.section("断面特点")
         h.bullet_list([
@@ -634,6 +651,7 @@ class CulvertPanel(QWidget):
         items = []
         for case_idx, params, result in self._all_results:
             items.append({
+                "case_idx": case_idx,
                 "anchor_id": make_case_result_anchor(self._panel_key, case_idx),
                 "label": self._case_result_nav_label(case_idx),
                 "summary": self._case_result_nav_summary(case_idx, params, result),
@@ -812,6 +830,7 @@ class CulvertPanel(QWidget):
         self.data_changed.emit()
 
     def _show_error(self, title, msg):
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         out = ["=" * 70, f"  {title}", "=" * 70, "", msg, "", "-" * 70, "请修正后重新计算。", "=" * 70]
         self.result_text.setHtml(make_plain_html("\n".join(out)))
 
@@ -907,10 +926,13 @@ class CulvertPanel(QWidget):
             )
 
         self._export_plain_text = "\n\n".join(all_plain_parts)
-        nav_html = build_result_nav_bar(self._build_case_nav_items())
+        nav_builder = getattr(self, "_build_case_nav_items", None)
+        nav_items = nav_builder() if callable(nav_builder) else []
+        nav_html = build_result_nav_bar(nav_items, hidden=True)
         combined_body = nav_html + "\n".join(all_html_parts)
         combined_head = build_result_navigation_head()
         load_formula_page(self.result_text, wrap_with_katex(combined_body, extra_head=combined_head))
+        sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), nav_items)
 
         self._mark_results_fresh()
         self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
@@ -1380,7 +1402,7 @@ class CulvertPanel(QWidget):
         ax.set_xlim(-B*0.9, B*0.9)
         ax.set_ylim(-H*0.35, H*1.25)
         ax.set_aspect('equal')
-        ax.set_title(f'{title}\nQ={Q:.2f}m$^3$/s, V={V:.2f}m/s', fontsize=10)
+        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.axhline(y=0, color='brown', lw=3)
 
@@ -1403,23 +1425,48 @@ class CulvertPanel(QWidget):
         self._export_plain_text = ""
 
     def _export_dxf(self):
-        if not self.current_result or not self.current_result.get('success'):
-            InfoBar.warning("提示", "请先进行计算后再导出。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP); return
-        res = self.current_result; p = self.input_params
-        B = res.get('B', 0.0); H = res.get('H', 0.0)
-        default_name = f'暗渠断面_矩形_B{B:.2f}xH{H:.2f}.dxf'
-        scales = ['1:20', '1:50', '1:100', '1:200', '1:500']
-        from app_渠系计算前端.styles import fluent_select
-        scale_str, ok = fluent_select(self, '选择比例尺', '输出比例尺 (图纸单位: mm):', scales, 2)
-        if not ok: return
-        scale_denom = int(scale_str.split(':')[1])
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, "保存DXF文件", default_name, "DXF文件 (*.dxf);;所有文件 (*.*)"
-        )
-        if not filepath: return
+        case_entries = self._build_dxf_export_case_entries()
+        current_entry = self._get_current_dxf_export_entry(case_entries)
+        if len(self._cases) <= 1:
+            if current_entry is None or not current_entry.is_valid:
+                self._warn_single_dxf_entry_unavailable(current_entry)
+                return
+            try:
+                filepath = self._export_single_dxf_entry(current_entry)
+                if not filepath:
+                    return
+                InfoBar.success("导出成功", f"DXF已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+                ask_open_file(filepath, self._info_parent())
+            except ImportError as e:
+                InfoBar.error("缺少依赖", str(e), parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
+            except PermissionError:
+                InfoBar.error("文件被占用", "无法写入文件，请关闭已打开的同名DXF文件。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
+            except Exception as e:
+                InfoBar.error("导出失败", f"DXF导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            return
+
+        dialog_result = show_multi_case_dxf_dialog(self._info_parent(), "矩形暗涵断面", case_entries, self._current_case_idx)
+        if dialog_result is None:
+            return
+        selected_entries = select_case_entries(case_entries, dialog_result.scope, self._current_case_idx, dialog_result.checked_case_indexes)
+        valid_entries, invalid_entries = partition_valid_case_entries(selected_entries)
+        if not valid_entries:
+            InfoBar.warning("提示", format_empty_export_warning(invalid_entries), parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            return
         try:
-            export_culvert_dxf(filepath, res, p, scale_denom)
-            InfoBar.success("导出成功", f"DXF已保存到: {filepath}", parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+            if len(valid_entries) == 1:
+                filepath = self._export_single_dxf_entry(valid_entries[0], scale_denom=dialog_result.scale_denom)
+            else:
+                filepath = self._export_combined_dxf_entries(valid_entries, dialog_result.scale_denom)
+            if not filepath:
+                return
+            InfoBar.success(
+                "导出成功",
+                f"{format_export_result_message(len(valid_entries), invalid_entries)}\n文件：{filepath}",
+                parent=self._info_parent(),
+                duration=5000,
+                position=InfoBarPosition.TOP,
+            )
             ask_open_file(filepath, self._info_parent())
         except ImportError as e:
             InfoBar.error("缺少依赖", str(e), parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
@@ -1427,6 +1474,70 @@ class CulvertPanel(QWidget):
             InfoBar.error("文件被占用", "无法写入文件，请关闭已打开的同名DXF文件。", parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
         except Exception as e:
             InfoBar.error("导出失败", f"DXF导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+
+    def _build_dxf_export_case_entries(self):
+        entries = []
+        results_dirty = bool(getattr(self, "_results_dirty", False))
+        result_map = {case_idx: (params, result) for case_idx, params, result in self._all_results}
+        for case_idx, case in enumerate(self._cases):
+            params, result = result_map.get(case_idx, ({}, None))
+            invalid_reason = None
+            if results_dirty and self._all_results:
+                invalid_reason = "结果已失效"
+            elif result is None:
+                invalid_reason = "无计算结果"
+            elif not result.get("success"):
+                invalid_reason = "计算失败"
+            entries.append(
+                DxfExportCaseEntry(
+                    case_idx=case_idx,
+                    label=self._case_label(case, case_idx),
+                    input_params=params or {},
+                    result=result,
+                    is_valid=invalid_reason is None,
+                    invalid_reason=invalid_reason,
+                )
+            )
+        return entries
+
+    def _get_current_dxf_export_entry(self, case_entries):
+        for entry in case_entries:
+            if entry.case_idx == self._current_case_idx:
+                return entry
+        return case_entries[0] if case_entries else None
+
+    def _warn_single_dxf_entry_unavailable(self, entry):
+        content = "参数已变更，请先重新计算后再导出。" if entry is not None and entry.invalid_reason == "结果已失效" else "请先进行计算后再导出。"
+        InfoBar.warning("提示", content, parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+
+    def _single_dxf_default_name(self, entry):
+        result = entry.result or {}
+        return f"暗渠断面_矩形_B{result.get('B', 0.0):.2f}xH{result.get('H', 0.0):.2f}.dxf"
+
+    def _combined_dxf_default_name(self, count):
+        return f"矩形暗涵断面_{count}个工况_合并.dxf"
+
+    def _choose_dxf_filepath(self, default_name):
+        filepath, _ = QFileDialog.getSaveFileName(self, "保存DXF文件", default_name, "DXF文件 (*.dxf);;所有文件 (*.*)")
+        if not filepath:
+            return None
+        return filepath if filepath.lower().endswith(".dxf") else f"{filepath}.dxf"
+
+    def _export_single_dxf_entry(self, entry, scale_denom=None):
+        scale = scale_denom if scale_denom is not None else choose_scale_denom(self)
+        if scale is None:
+            return None
+        filepath = self._choose_dxf_filepath(self._single_dxf_default_name(entry))
+        if not filepath:
+            return None
+        export_culvert_dxf(filepath, entry.result or {}, entry.input_params or {}, scale)
+        return filepath
+
+    def _export_combined_dxf_entries(self, entries, scale_denom):
+        filepath = self._choose_dxf_filepath(self._combined_dxf_default_name(len(entries)))
+        if not filepath:
+            return None
+        return export_combined_case_dxf(filepath, entries, scale_denom, draw_culvert_dxf_on_msp)
 
     def _export_report(self):
         if not self.current_result or not self.current_result.get('success'):

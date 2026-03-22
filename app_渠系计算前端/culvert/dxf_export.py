@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 """矩形暗涵断面 DXF 导出（封闭矩形）"""
 import math
-from app_渠系计算前端.open_channel.dxf_export import (
-    _setup_font_style, _add_layer, _add_dim_h, _add_dim_v, _add_text_block
+from app_渠系计算前端.dxf_common import (
+    _add_dim_h,
+    _add_dim_v,
+    _add_text_block,
+    add_case_title,
+    ensure_tracked_msp,
+    setup_section_dxf_document,
 )
 
 
@@ -11,23 +16,31 @@ def export_culvert_dxf(filepath, result, input_params, scale_denom=100):
         import ezdxf
     except ImportError:
         raise ImportError("需要安装 ezdxf 库: pip install ezdxf")
-
-    sf = 1000.0 / scale_denom
     doc = ezdxf.new('R2010')
-    doc.header['$INSUNITS'] = 4
-    doc.header['$MEASUREMENT'] = 1
-    doc.header['$LTSCALE'] = sf * 0.5
-    _add_layer(doc, '轮廓线',         color=7, lw=50)
-    _add_layer(doc, '设计水位',    color=5, lw=25)
-    _add_layer(doc, '加大水位', color=4, lw=25)
-    _add_layer(doc, '尺寸标注',       color=2, lw=18)
-    _add_layer(doc, '参数文字',     color=3, lw=18)
-    if 'DASHED' not in doc.linetypes:
-        doc.linetypes.add('DASHED', pattern='A,.5,-.25')
-    _setup_font_style(doc)
-    msp = doc.modelspace()
-    _draw_rect_culvert(msp, result, input_params, sf, scale_denom)
+    setup_section_dxf_document(doc, scale_denom=scale_denom)
+    draw_culvert_dxf_on_msp(
+        doc.modelspace(),
+        result,
+        input_params,
+        scale_denom=scale_denom,
+    )
     doc.saveas(filepath)
+
+
+def draw_culvert_dxf_on_msp(
+    msp,
+    result,
+    input_params,
+    scale_denom=100,
+    layer_prefix="",
+    title="",
+):
+    tracked_msp = ensure_tracked_msp(msp, layer_prefix=layer_prefix)
+    sf = 1000.0 / scale_denom
+    _draw_rect_culvert(tracked_msp, result, input_params, sf, scale_denom)
+    if title:
+        add_case_title(tracked_msp, title)
+    return tracked_msp.size()
 
 
 def _draw_rect_culvert(msp, result, p, sf=1.0, scale_denom=100):

@@ -32,6 +32,9 @@ def _flush_events(rounds: int = 4):
 
 
 def _load_panel_class(folder: str, class_name: str):
+    webview_compat = importlib.import_module("app_渠系计算前端.webview_compat")
+    webview_compat._QtWebEngineView = None
+    webview_compat._WEB_ENGINE_IMPORT_ERROR = RuntimeError("forced fallback web view in smoke test")
     module = importlib.import_module(f"app_渠系计算前端.{folder}.panel")
     if hasattr(module, "QWebEngineView"):
         module.QWebEngineView = None
@@ -82,7 +85,9 @@ def test_open_channel_panel_places_case_strip_above_input_group_and_refreshes_la
 
     assert panel._case_strip.chip_count() == 5
 
+    panel.close()
     panel.deleteLater()
+    _flush_events(4)
 
 
 def test_pressure_pipe_panel_uses_external_case_strip_and_supports_custom_labels():
@@ -121,7 +126,9 @@ def test_pressure_pipe_panel_uses_external_case_strip_and_supports_custom_labels
     assert "L=" not in labels[1]
     assert panel._case_strip._remove_button.isEnabled() is True
 
+    panel.close()
     panel.deleteLater()
+    _flush_events(4)
 
 
 def test_open_channel_panel_keeps_last_added_chip_visible_and_active_during_incremental_adds():
@@ -154,4 +161,57 @@ def test_open_channel_panel_keeps_last_added_chip_visible_and_active_during_incr
         if expected_count >= 4:
             assert geometries[-1] != geometries[0]
 
+    panel.close()
     panel.deleteLater()
+    _flush_events(4)
+
+
+def test_pressure_pipe_result_case_nav_bar_is_visible_and_clicks_reuse_anchor_jump():
+    _get_qapp()
+    webview_compat = importlib.import_module("app_渠系计算前端.webview_compat")
+    webview_compat._QtWebEngineView = None
+    webview_compat._WEB_ENGINE_IMPORT_ERROR = RuntimeError("forced fallback web view in smoke test")
+    module = importlib.import_module("app_渠系计算前端.pressure_pipe.panel")
+    module.QWebEngineView = None
+    module._WEB_ENGINE_IMPORT_ERROR = RuntimeError("forced fallback web view in smoke test")
+
+    scroll_calls = []
+
+    def _spy_scroll(*args, **kwargs):
+        scroll_calls.append((args, kwargs))
+        return True
+
+    module.scroll_view_to_anchor = _spy_scroll
+
+    panel = module.PressurePipePanel()
+    panel.resize(1366, 900)
+    panel.show()
+    _flush_events(6)
+
+    panel.Q_edit.setText("0.8")
+    _flush_events()
+    panel._add_case()
+    _flush_events()
+    panel._switch_case(1)
+    _flush_events()
+    panel.Q_edit.setText("1.2")
+    _flush_events()
+
+    panel._calc_btn.click()
+    _flush_events(8)
+
+    assert panel._result_case_nav.isVisible() is True
+    assert panel._result_case_nav.chip_count() == 2
+    assert panel._result_case_nav.height() == panel._result_case_nav.sizeHint().height()
+    assert panel._result_case_nav.height() < 120
+
+    scroll_calls.clear()
+    panel._result_case_nav.chips()[1].click()
+    _flush_events(2)
+
+    assert scroll_calls
+    assert scroll_calls[-1][0][1] == "case-result-pressure-pipe-1"
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)

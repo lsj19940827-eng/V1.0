@@ -139,6 +139,13 @@ def _result_text(panel):
     return getattr(panel, "_export_plain_text", "") or ""
 
 
+def _assert_result_case_nav_bar(panel, expected_count):
+    bar = getattr(panel, "_result_case_nav", None)
+    assert bar is not None
+    assert bar.isVisible() is True
+    assert bar.chip_count() == expected_count
+
+
 def _prepare_panel(panel):
     panel.resize(1400, 900)
     panel.show()
@@ -209,6 +216,7 @@ def test_multi_case_panels_recalculate_after_backfilling_missing_q(
     assert actual_qs == expected_qs
     assert len(second_rows) == 4
     assert all(row["success"] is True for row in second_rows)
+    _assert_result_case_nav_bar(panel, len(second_rows))
     assert ZERO_Q_HEADER not in second_text
     assert MISSING_Q_MSG not in second_text
     assert STALE_HINT_MSG not in second_text
@@ -226,9 +234,20 @@ def test_main_window_multi_case_recalc_regression_uses_latest_q_values(monkeypat
     monkeypatch.setattr(project_manager_module.ProjectManager, "start_auto_save", lambda self: None)
     monkeypatch.setattr(project_manager_module.ProjectManager, "check_save_on_close", lambda self: True)
 
+    compat_module = importlib.import_module(BASE_PACKAGE + ".qfluentwidgets_compat")
+    compat_module.ensure_qfluentwidgets_compat()
+
     app_module = importlib.import_module(BASE_PACKAGE + ".app")
-    monkeypatch.setattr(app_module.MainWindow, "_start_silent_update_check", lambda self: None)
+    startup_context_module = importlib.import_module(BASE_PACKAGE + ".startup_context")
     monkeypatch.setattr(app_module.MainWindow, "_notify_optional_runtime_degradations", lambda self: None)
+    monkeypatch.setattr(
+        app_module.MainWindow,
+        "_init_runtime_services",
+        lambda self: (
+            setattr(self, "siphon_manager", object()),
+            setattr(self, "pressure_pipe_manager", object()),
+        ),
+    )
 
     from PySide6.QtWidgets import QWidget
 
@@ -236,11 +255,21 @@ def test_main_window_multi_case_recalc_regression_uses_latest_q_values(monkeypat
         def __init__(self, *args, **kwargs):
             super().__init__()
 
-    monkeypatch.setattr(app_module, "SiphonPanel", DummyPanel)
-    monkeypatch.setattr(app_module, "PressurePipePanel", DummyPanel)
-    monkeypatch.setattr(app_module, "WaterProfilePanel", DummyPanel)
+        def _save_autosave(self):
+            return None
 
-    window = app_module.MainWindow()
+    monkeypatch.setattr(app_module, "_create_siphon_panel", lambda **kwargs: DummyPanel())
+    monkeypatch.setattr(app_module, "_create_pressure_pipe_panel", lambda: DummyPanel())
+    monkeypatch.setattr(app_module, "_create_water_profile_panel", lambda **kwargs: DummyPanel())
+
+    startup_context = startup_context_module.StartupContext(
+        webengine_mode="standard",
+        webengine_probe_result=None,
+        update_checks_enabled=False,
+        is_frozen_runtime=False,
+    )
+
+    window = app_module.MainWindow(startup_context)
     window.resize(1600, 960)
     window.show()
     _flush_events(8)
@@ -263,6 +292,7 @@ def test_main_window_multi_case_recalc_regression_uses_latest_q_values(monkeypat
         assert actual_qs == expected_qs
         assert len(second_rows) == 4
         assert all(row["success"] is True for row in second_rows)
+        _assert_result_case_nav_bar(panel, len(second_rows))
         assert ZERO_Q_HEADER not in second_text
         assert MISSING_Q_MSG not in second_text
         assert STALE_HINT_MSG not in second_text
