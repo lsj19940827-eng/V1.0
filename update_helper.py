@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -44,10 +45,15 @@ STAGE_ORDER = [
     ("done", "安装完成"),
 ]
 
+DEFAULT_WINDOW_WIDTH = 620
+DEFAULT_WINDOW_HEIGHT = 520
+STAGE_LABEL_MIN_HEIGHT = 18
+
 
 def _resolve_window_icon_path() -> str | None:
     project_root = updater._get_project_root()
     candidate_paths = [
+        os.path.join(project_root, "app_渠系计算前端", "resources", "update_helper.ico"),
         os.path.join(project_root, "app_渠系计算前端", "resources", "logo.ico"),
         os.path.join(project_root, "app_渠系计算前端", "resources", "logo.svg"),
         os.path.join(project_root, "icon.ico"),
@@ -168,7 +174,7 @@ class UpdateHelperWindow(QWidget):
     def _setup_ui(self):
         self.setWindowTitle("安装更新")
         self.setMinimumSize(560, 460)
-        self.resize(620, 520)
+        self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         icon_path = _resolve_window_icon_path()
@@ -187,6 +193,7 @@ class UpdateHelperWindow(QWidget):
             f"即将把 V{self.session.current_version} 更新到 V{self.session.target_version}"
         )
         self.status_label.setWordWrap(True)
+        self.status_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.status_label.setStyleSheet("color: #555; font-size: 13px;")
         root.addWidget(self.status_label)
 
@@ -200,6 +207,8 @@ class UpdateHelperWindow(QWidget):
         guidance_layout.setSpacing(6)
 
         self.guidance_title_label = QLabel("")
+        self.guidance_title_label.setWordWrap(True)
+        self.guidance_title_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.guidance_title_label.setStyleSheet(
             "color: #E65100; font-size: 13px; font-weight: bold;"
         )
@@ -207,40 +216,51 @@ class UpdateHelperWindow(QWidget):
 
         self.guidance_body_label = QLabel("")
         self.guidance_body_label.setWordWrap(True)
+        self.guidance_body_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.guidance_body_label.setStyleSheet("color: #8A4B08; font-size: 12px;")
         guidance_layout.addWidget(self.guidance_body_label)
         root.addWidget(self.guidance_card)
 
-        stage_card = QFrame()
-        stage_card.setStyleSheet(
+        self.stage_card = QFrame()
+        self.stage_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.stage_card.setStyleSheet(
             "QFrame { background: #F7F9FC; border: 1px solid #DCE3EB; border-radius: 10px; }"
         )
-        stage_layout = QVBoxLayout(stage_card)
-        stage_layout.setContentsMargins(16, 16, 16, 16)
-        stage_layout.setSpacing(10)
+        self.stage_layout = QVBoxLayout(self.stage_card)
+        self.stage_layout.setContentsMargins(16, 16, 16, 16)
+        self.stage_layout.setSpacing(10)
 
         for key, text in STAGE_ORDER:
             label = QLabel(f"○ {text}")
+            label.setMinimumHeight(STAGE_LABEL_MIN_HEIGHT)
+            label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             label.setStyleSheet("color: #7A869A; font-size: 13px;")
-            stage_layout.addWidget(label)
+            self.stage_layout.addWidget(label)
             self._stage_labels[key] = label
         self.result_stage_label = QLabel("")
+        self.result_stage_label.setMinimumHeight(STAGE_LABEL_MIN_HEIGHT)
+        self.result_stage_label.setWordWrap(True)
+        self.result_stage_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.result_stage_label.setVisible(False)
         self.result_stage_label.setStyleSheet(
             "color: #C62828; font-size: 13px; font-weight: bold;"
         )
-        stage_layout.addWidget(self.result_stage_label)
-        root.addWidget(stage_card)
+        self.stage_layout.addWidget(self.result_stage_label)
+        root.addWidget(self.stage_card)
 
         self.detail_text = QTextEdit()
         self.detail_text.setReadOnly(True)
         self.detail_text.setPlaceholderText("安装日志会显示在这里。")
+        self.detail_text.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.detail_text.setMinimumHeight(70)
         self.detail_text.setStyleSheet(
             "QTextEdit { background: white; border: 1px solid #DCE3EB; border-radius: 8px; font-size: 12px; }"
         )
         root.addWidget(self.detail_text, 1)
 
         self.footer_label = QLabel("安装过程中请不要关闭此窗口。")
+        self.footer_label.setWordWrap(True)
+        self.footer_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         self.footer_label.setStyleSheet("color: #666; font-size: 12px;")
         root.addWidget(self.footer_label)
 
@@ -273,6 +293,7 @@ class UpdateHelperWindow(QWidget):
         button_row.addWidget(self.btn_close)
 
         root.addLayout(button_row)
+        self._sync_content_metrics()
 
     def _start_worker(self):
         self._worker_thread = QThread(self)
@@ -297,11 +318,14 @@ class UpdateHelperWindow(QWidget):
         }
         self.status_label.setText(text)
         self.status_label.setStyleSheet(styles.get(tone, styles["normal"]))
+        self._sync_label_height(self.status_label)
 
     def _show_guidance(self, title: str, body: str):
         self.guidance_title_label.setText(title)
         self.guidance_body_label.setText(body)
         self.guidance_card.setVisible(True)
+        self._sync_label_height(self.guidance_title_label)
+        self._sync_label_height(self.guidance_body_label)
 
     def _clear_guidance(self):
         self.guidance_title_label.clear()
@@ -316,16 +340,67 @@ class UpdateHelperWindow(QWidget):
                 reached = True
                 label.setText(f"● {text}")
                 label.setStyleSheet("color: #1565C0; font-size: 13px; font-weight: bold;")
-                continue
-            if not reached:
+            elif not reached:
                 label.setText(f"✓ {text}")
                 label.setStyleSheet("color: #2E7D32; font-size: 13px;")
             else:
                 label.setText(f"○ {text}")
                 label.setStyleSheet("color: #7A869A; font-size: 13px;")
+            self._sync_label_height(label, minimum=STAGE_LABEL_MIN_HEIGHT)
+        self._sync_stage_card_minimum_height()
 
     def _append_detail(self, text: str):
         self.detail_text.append(text)
+
+    def _set_footer_text(self, text: str):
+        self.footer_label.setText(text)
+        self._sync_label_height(self.footer_label)
+
+    def _sync_label_height(self, label: QLabel, *, minimum: int | None = None) -> int:
+        hint_height = label.sizeHint().height()
+        if label.wordWrap():
+            width = label.width()
+            if width <= 0:
+                margins = self.layout().contentsMargins()
+                width = max(self.width() - margins.left() - margins.right(), 1)
+            if label.hasHeightForWidth():
+                hint_height = max(hint_height, label.heightForWidth(width))
+        if minimum is not None:
+            hint_height = max(hint_height, minimum)
+        label.setMinimumHeight(hint_height)
+        return hint_height
+
+    def _sync_stage_card_minimum_height(self):
+        margins = self.stage_layout.contentsMargins()
+        total_height = margins.top() + margins.bottom()
+        visible_labels = list(self._stage_labels.values())
+        if self.result_stage_label.isVisible():
+            visible_labels.append(self.result_stage_label)
+        for index, label in enumerate(visible_labels):
+            total_height += self._sync_label_height(label, minimum=STAGE_LABEL_MIN_HEIGHT)
+            if index < len(visible_labels) - 1:
+                total_height += self.stage_layout.spacing()
+        self.stage_card.setMinimumHeight(total_height)
+
+    def _sync_content_metrics(self):
+        self._sync_label_height(self.status_label)
+        self._sync_label_height(self.footer_label)
+        if self.guidance_card.isVisible():
+            self._sync_label_height(self.guidance_title_label)
+            self._sync_label_height(self.guidance_body_label)
+        self._sync_stage_card_minimum_height()
+
+    def _expand_window_for_content(self):
+        self._sync_content_metrics()
+        self.layout().activate()
+        target_width = max(self.width(), DEFAULT_WINDOW_WIDTH, self.minimumWidth())
+        target_height = max(self.height(), DEFAULT_WINDOW_HEIGHT, self.sizeHint().height())
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            available_height = max(screen.availableGeometry().height() - 60, DEFAULT_WINDOW_HEIGHT)
+            target_height = min(target_height, available_height)
+        self.resize(target_width, target_height)
+        self.layout().activate()
 
     def _on_stage_changed(self, stage_key: str, text: str):
         if stage_key in self._stage_labels:
@@ -384,9 +459,10 @@ def _update_helper_on_completed(self, result: dict):
         self._stage_labels["done"].setStyleSheet(
             "color: #2E7D32; font-size: 13px; font-weight: bold;"
         )
+        self._sync_label_height(self._stage_labels["done"], minimum=STAGE_LABEL_MIN_HEIGHT)
         self._set_status_text("安装完成，可以启动新版本。", tone="success")
         self._clear_guidance()
-        self.footer_label.setText("旧版本备份和临时文件已经清理。")
+        self._set_footer_text("旧版本备份和临时文件已经清理。")
         self.btn_launch.setVisible(True)
         self._append_detail(f"安装日志：{result.get('log_path', '')}")
         return
@@ -404,7 +480,7 @@ def _update_helper_on_completed(self, result: dict):
             "请重新下载完整安装包",
             f"{guidance_body}\n下一步：点击下方“重新下载完整安装包”继续安装；如需排查，可先查看日志。",
         )
-        self.footer_label.setText("下一步：点击“重新下载完整安装包”继续安装；如需排查，可先查看日志。")
+        self._set_footer_text("下一步：点击“重新下载完整安装包”继续安装；如需排查，可先查看日志。")
         self.result_stage_label.setText("补丁包不适用，需下载完整安装包")
     else:
         fallback_text = (
@@ -417,11 +493,12 @@ def _update_helper_on_completed(self, result: dict):
             self._show_guidance("安装未完成", user_message)
         else:
             self._clear_guidance()
-        self.footer_label.setText("可以查看日志或打开更新目录继续排查。")
+        self._set_footer_text("可以查看日志或打开更新目录继续排查。")
         self.result_stage_label.setText(
             "安装失败并回滚" if rollback_ok else "安装失败，回滚未完成"
         )
     self.result_stage_label.setVisible(True)
+    self._sync_label_height(self.result_stage_label, minimum=STAGE_LABEL_MIN_HEIGHT)
     self._append_detail(user_message or "安装未完成，请重新下载后再试。")
     self._append_detail(f"安装日志：{result.get('log_path', '')}")
     self.btn_open_log.setVisible(True)
@@ -432,6 +509,7 @@ def _update_helper_on_completed(self, result: dict):
     else:
         self.btn_retry.setText("重新下载后再试")
     self.btn_close.setText("关闭")
+    self._expand_window_for_content()
 
 
 def _update_helper_retry_download(self):

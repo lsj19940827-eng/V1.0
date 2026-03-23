@@ -39,17 +39,18 @@ def test_main_shows_hint_when_started_without_session(monkeypatch):
     assert calls == ["shown"]
 
 
-def test_resolve_window_icon_path_prefers_shared_logo(monkeypatch):
+def test_resolve_window_icon_path_prefers_dedicated_helper_icon(monkeypatch):
     project_root = Path(tempfile.mkdtemp(prefix="update-helper-icon-"))
     shared_resources = project_root / "app_渠系计算前端" / "resources"
     shared_resources.mkdir(parents=True)
-    shared_logo = shared_resources / "logo.ico"
-    shared_logo.write_bytes(b"shield-logo")
+    helper_logo = shared_resources / "update_helper.ico"
+    helper_logo.write_bytes(b"shield-helper-logo")
+    (shared_resources / "logo.ico").write_bytes(b"legacy-shared-logo")
     (project_root / "icon.ico").write_bytes(b"legacy-icon")
 
     monkeypatch.setattr(update_helper.updater, "_get_project_root", lambda: str(project_root))
 
-    assert update_helper._resolve_window_icon_path() == str(shared_logo)
+    assert update_helper._resolve_window_icon_path() == str(helper_logo)
 
 
 def test_update_helper_surfaces_full_package_guidance_for_patch_mismatch(monkeypatch):
@@ -84,4 +85,44 @@ def test_update_helper_surfaces_full_package_guidance_for_patch_mismatch(monkeyp
     assert "完整安装包" in window.status_label.text()
     assert "重新下载完整安装包" in window.footer_label.text()
     assert window.btn_retry.text() == "重新下载完整安装包"
+    window.close()
+
+
+def test_update_helper_expands_failure_window_to_keep_stage_lines_readable(monkeypatch):
+    app = _get_qapp()
+    fake_session = SimpleNamespace(
+        current_version="1.0.0",
+        target_version="1.1.0",
+        work_dir="C:/temp/update-work",
+        log_dir="C:/temp/update-logs",
+    )
+
+    monkeypatch.setattr(
+        update_helper.updater.UpdateSession,
+        "from_file",
+        lambda _path: fake_session,
+    )
+    monkeypatch.setattr(update_helper.UpdateHelperWindow, "_start_worker", lambda self: None)
+
+    window = update_helper.UpdateHelperWindow("dummy-session.json")
+    initial_height = window.height()
+
+    window._on_completed(
+        {
+            "success": False,
+            "rollback_ok": False,
+            "error_code": "patch_mismatch",
+            "user_message": "当前安装状态不适合直接应用补丁，请重新下载完整安装包后再试。",
+            "retry_mode": update_helper.updater.RETRY_MODE_FULL_PACKAGE,
+            "error": "本机文件状态与补丁预期不一致",
+            "log_path": "C:/temp/update-logs/install.log",
+        }
+    )
+    window.show()
+    app.processEvents()
+
+    stage_heights = [label.height() for label in window._stage_labels.values()]
+    assert window.height() > initial_height
+    assert min(stage_heights) >= 15
+    assert window.result_stage_label.height() >= 15
     window.close()
