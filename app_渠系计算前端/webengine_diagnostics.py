@@ -8,13 +8,14 @@ import os
 import platform
 import subprocess
 import sys
-import textwrap
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 EMERGENCY_SINGLE_PROCESS_ENV = "CANAL_QTWEBENGINE_FORCE_SINGLE_PROCESS"
 EMERGENCY_SINGLE_PROCESS_FLAGS = ("--single-process", "--disable-gpu")
 PROBE_TIMEOUT_SECONDS = 8
+PROBE_CHILD_ARG = "--webengine-probe-child"
 _PROBE_SUCCESS_TOKEN = "WEBENGINE_PROBE_OK"
 
 
@@ -88,6 +89,7 @@ def _current_runtime_facts() -> dict:
         "qt_webengine_process_path": "",
         "qt_webengine_process_exists": False,
         "import_error": "",
+        "is_frozen_runtime": bool(getattr(sys, "frozen", False)),
     }
 
     try:
@@ -148,45 +150,64 @@ def _tail_text(value: str, *, max_lines: int = 20) -> str:
     return "\n".join(lines[-max_lines:])
 
 
-def _probe_child_code() -> str:
-    return textwrap.dedent(
-        f"""
-        import sys
-        import time
-        from PySide6.QtWidgets import QApplication
-        from PySide6.QtWebEngineWidgets import QWebEngineView
+def _main_script_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "main.py"
 
-        app = QApplication.instance() or QApplication([])
-        state = {{"loaded": False, "ok": False}}
 
-        view = QWebEngineView()
+def _probe_child_command(facts: dict) -> list[str]:
+    if facts.get("is_frozen_runtime"):
+        return [facts["python_executable"], PROBE_CHILD_ARG]
 
-        def _on_load_finished(ok):
-            state["loaded"] = True
-            state["ok"] = bool(ok)
+    cmd = [facts["python_executable"], "-X", "faulthandler"]
+    main_script = _main_script_path()
+    if main_script.exists():
+        cmd.extend([str(main_script), PROBE_CHILD_ARG])
+        return cmd
 
-        view.loadFinished.connect(_on_load_finished)
-        view.setHtml("<html><body><h1>Qt WebEngine Probe</h1><p>ok</p></body></html>")
+    raise FileNotFoundError(f"未找到 WebEngine 探测入口脚本: {main_script}")
 
-        deadline = time.time() + 2.5
-        while time.time() < deadline:
-            app.processEvents()
-            time.sleep(0.01)
-            if state["loaded"]:
-                break
 
-        if not state["loaded"]:
-            print("WEBENGINE_PROBE_TIMEOUT", file=sys.stderr)
-            sys.exit(3)
+def is_webengine_probe_child_command(argv: list[str] | tuple[str, ...]) -> bool:
+    return PROBE_CHILD_ARG in list(argv or [])
 
-        if not state["ok"]:
-            print("WEBENGINE_PROBE_LOAD_FAILED", file=sys.stderr)
-            sys.exit(4)
 
-        print("{_PROBE_SUCCESS_TOKEN}")
-        sys.exit(0)
-        """
-    ).strip()
+def run_webengine_probe_child() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+
+    app = QApplication.instance() or QApplication([])
+    state = {"loaded": False, "ok": False}
+    view = QWebEngineView()
+
+    def _on_load_finished(ok):
+        state["loaded"] = True
+        state["ok"] = bool(ok)
+
+    view.loadFinished.connect(_on_load_finished)
+    view.setHtml("<html><body><h1>Qt WebEngine Probe</h1><p>ok</p></body></html>")
+
+    deadline = time.time() + 2.5
+    while time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+        if state["loaded"]:
+            break
+
+    if not state["loaded"]:
+        print("WEBENGINE_PROBE_TIMEOUT", file=sys.stderr)
+        return 3
+
+    if not state["ok"]:
+        print("WEBENGINE_PROBE_LOAD_FAILED", file=sys.stderr)
+        return 4
+
+    print(_PROBE_SUCCESS_TOKEN)
+    return 0
 
 
 def probe_standard_webengine(*, timeout_seconds: int = PROBE_TIMEOUT_SECONDS) -> WebEngineProbeResult:
@@ -227,7 +248,7 @@ def probe_standard_webengine(*, timeout_seconds: int = PROBE_TIMEOUT_SECONDS) ->
 
     try:
         completed = subprocess.run(
-            [facts["python_executable"], "-X", "faulthandler", "-c", _probe_child_code()],
+            _probe_child_command(facts),
             capture_output=True,
             text=True,
             errors="replace",

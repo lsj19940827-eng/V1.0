@@ -45,6 +45,19 @@ STAGE_ORDER = [
 ]
 
 
+def _resolve_window_icon_path() -> str | None:
+    project_root = updater._get_project_root()
+    candidate_paths = [
+        os.path.join(project_root, "app_渠系计算前端", "resources", "logo.ico"),
+        os.path.join(project_root, "app_渠系计算前端", "resources", "logo.svg"),
+        os.path.join(project_root, "icon.ico"),
+    ]
+    for path in candidate_paths:
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def _source_launch_context() -> tuple[str, dict[str, str]]:
     project_root = updater._get_project_root()
     return project_root, updater._with_pythonpath(os.environ, project_root)
@@ -158,8 +171,8 @@ class UpdateHelperWindow(QWidget):
         self.resize(620, 520)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
-        icon_path = os.path.join(updater._get_project_root(), "icon.ico")
-        if os.path.exists(icon_path):
+        icon_path = _resolve_window_icon_path()
+        if icon_path:
             self.setWindowIcon(QIcon(icon_path))
 
         root = QVBoxLayout(self)
@@ -176,6 +189,27 @@ class UpdateHelperWindow(QWidget):
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet("color: #555; font-size: 13px;")
         root.addWidget(self.status_label)
+
+        self.guidance_card = QFrame()
+        self.guidance_card.setVisible(False)
+        self.guidance_card.setStyleSheet(
+            "QFrame { background: #FFF4E5; border: 1px solid #FFCC80; border-radius: 10px; }"
+        )
+        guidance_layout = QVBoxLayout(self.guidance_card)
+        guidance_layout.setContentsMargins(14, 12, 14, 12)
+        guidance_layout.setSpacing(6)
+
+        self.guidance_title_label = QLabel("")
+        self.guidance_title_label.setStyleSheet(
+            "color: #E65100; font-size: 13px; font-weight: bold;"
+        )
+        guidance_layout.addWidget(self.guidance_title_label)
+
+        self.guidance_body_label = QLabel("")
+        self.guidance_body_label.setWordWrap(True)
+        self.guidance_body_label.setStyleSheet("color: #8A4B08; font-size: 12px;")
+        guidance_layout.addWidget(self.guidance_body_label)
+        root.addWidget(self.guidance_card)
 
         stage_card = QFrame()
         stage_card.setStyleSheet(
@@ -255,6 +289,25 @@ class UpdateHelperWindow(QWidget):
         self._installing = installing
         self.btn_close.setVisible(not installing)
 
+    def _set_status_text(self, text: str, *, tone: str = "normal"):
+        styles = {
+            "normal": "color: #555; font-size: 13px;",
+            "success": "color: #2E7D32; font-size: 13px; font-weight: bold;",
+            "error": "color: #C62828; font-size: 13px; font-weight: bold;",
+        }
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(styles.get(tone, styles["normal"]))
+
+    def _show_guidance(self, title: str, body: str):
+        self.guidance_title_label.setText(title)
+        self.guidance_body_label.setText(body)
+        self.guidance_card.setVisible(True)
+
+    def _clear_guidance(self):
+        self.guidance_title_label.clear()
+        self.guidance_body_label.clear()
+        self.guidance_card.setVisible(False)
+
     def _set_stage_state(self, stage_key: str):
         reached = False
         for key, text in STAGE_ORDER:
@@ -277,7 +330,7 @@ class UpdateHelperWindow(QWidget):
     def _on_stage_changed(self, stage_key: str, text: str):
         if stage_key in self._stage_labels:
             self._set_stage_state(stage_key)
-        self.status_label.setText(text)
+        self._set_status_text(text)
         self._append_detail(text)
 
     def _on_completed(self, result: dict):
@@ -331,24 +384,45 @@ def _update_helper_on_completed(self, result: dict):
         self._stage_labels["done"].setStyleSheet(
             "color: #2E7D32; font-size: 13px; font-weight: bold;"
         )
-        self.status_label.setText("安装完成，可以启动新版本。")
+        self._set_status_text("安装完成，可以启动新版本。", tone="success")
+        self._clear_guidance()
         self.footer_label.setText("旧版本备份和临时文件已经清理。")
         self.btn_launch.setVisible(True)
         self._append_detail(f"安装日志：{result.get('log_path', '')}")
         return
 
     rollback_ok = result.get("rollback_ok")
-    self.status_label.setText(
-        "安装失败，已自动回滚到旧版本。"
-        if rollback_ok
-        else "安装失败，且自动回滚未完成。"
-    )
-    self.footer_label.setText("可以查看日志或打开更新目录继续排查。")
-    self.result_stage_label.setText(
-        "安装失败并回滚" if rollback_ok else "安装失败，回滚未完成"
-    )
+    retry_mode = result.get("retry_mode")
+    user_message = (result.get("user_message") or "").strip()
+    if retry_mode == updater.RETRY_MODE_FULL_PACKAGE:
+        self._set_status_text(
+            "当前补丁包无法直接应用，请改用完整安装包继续更新。",
+            tone="error",
+        )
+        guidance_body = user_message or "当前安装环境与补丁包要求不一致，无法继续补丁安装。"
+        self._show_guidance(
+            "请重新下载完整安装包",
+            f"{guidance_body}\n下一步：点击下方“重新下载完整安装包”继续安装；如需排查，可先查看日志。",
+        )
+        self.footer_label.setText("下一步：点击“重新下载完整安装包”继续安装；如需排查，可先查看日志。")
+        self.result_stage_label.setText("补丁包不适用，需下载完整安装包")
+    else:
+        fallback_text = (
+            "安装失败，已自动回滚到旧版本。"
+            if rollback_ok
+            else "安装失败，且自动回滚未完成。"
+        )
+        self._set_status_text(user_message or fallback_text, tone="error")
+        if user_message:
+            self._show_guidance("安装未完成", user_message)
+        else:
+            self._clear_guidance()
+        self.footer_label.setText("可以查看日志或打开更新目录继续排查。")
+        self.result_stage_label.setText(
+            "安装失败并回滚" if rollback_ok else "安装失败，回滚未完成"
+        )
     self.result_stage_label.setVisible(True)
-    self._append_detail(result.get("user_message", "安装未完成，请重新下载后再试。"))
+    self._append_detail(user_message or "安装未完成，请重新下载后再试。")
     self._append_detail(f"安装日志：{result.get('log_path', '')}")
     self.btn_open_log.setVisible(True)
     self.btn_open_workdir.setVisible(True)

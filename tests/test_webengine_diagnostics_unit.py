@@ -109,6 +109,41 @@ def test_probe_standard_webengine_short_circuits_when_process_is_missing(monkeyp
     assert called["run"] is False
 
 
+def test_probe_standard_webengine_uses_hidden_child_command_in_frozen_runtime(monkeypatch):
+    monkeypatch.setattr(
+        diagnostics,
+        "_current_runtime_facts",
+        lambda: {
+            "python_executable": r"C:\Program Files\CanalHydraulicCalc\CanalHydraulicCalc.exe",
+            "python_version": "3.13.3",
+            "platform_summary": "Windows-11-10.0.26100-SP0",
+            "windows_build": "26100",
+            "pyside_version": "6.10.2",
+            "qt_webengine_process_path": r"C:\Program Files\CanalHydraulicCalc\_internal\PySide6\QtWebEngineProcess.exe",
+            "qt_webengine_process_exists": True,
+            "import_error": "",
+            "is_frozen_runtime": True,
+        },
+    )
+
+    calls = {}
+
+    def _fake_run(cmd, **kwargs):
+        calls["cmd"] = cmd
+        calls["kwargs"] = kwargs
+        return types.SimpleNamespace(returncode=0, stdout="WEBENGINE_PROBE_OK\n", stderr="")
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", _fake_run)
+
+    result = diagnostics.probe_standard_webengine()
+
+    assert result.ok is True
+    assert calls["cmd"] == [
+        r"C:\Program Files\CanalHydraulicCalc\CanalHydraulicCalc.exe",
+        "--webengine-probe-child",
+    ]
+
+
 def test_build_startup_context_uses_standard_mode_when_probe_passes(monkeypatch):
     probe_result = _probe_result(ok=True, failure_kind="none", exit_code=0)
 
@@ -166,6 +201,35 @@ def test_build_startup_context_blocks_and_reports_on_probe_failure(monkeypatch):
     assert context is None
     assert app_calls == [None]
     assert dialog_calls == [failing_result]
+
+
+def test_bootstrap_run_short_circuits_hidden_webengine_probe_child(monkeypatch):
+    compat_calls = []
+    child_calls = []
+
+    monkeypatch.setattr(bootstrap, "initialize_runtime_environment", lambda: None)
+    monkeypatch.setattr(
+        bootstrap,
+        "ensure_qfluentwidgets_compat",
+        lambda: compat_calls.append("ensure_qfluentwidgets_compat"),
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "run_webengine_probe_child",
+        lambda: child_calls.append(True) or 7,
+        raising=False,
+    )
+
+    def _unexpected_license_check():
+        raise AssertionError("license check should not run for hidden webengine probe child")
+
+    monkeypatch.setattr(bootstrap, "_check_license", _unexpected_license_check)
+
+    code = bootstrap.run(["main.py", "--webengine-probe-child"])
+
+    assert code == 7
+    assert child_calls == [True]
+    assert compat_calls == []
 
 
 def test_package_import_does_not_run_qfluentwidgets_compat(monkeypatch):

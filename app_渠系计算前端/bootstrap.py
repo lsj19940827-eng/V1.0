@@ -20,7 +20,9 @@ from app_渠系计算前端.webengine_diagnostics import (
     build_failure_summary,
     emergency_single_process_requested,
     format_probe_report,
+    is_webengine_probe_child_command,
     probe_standard_webengine,
+    run_webengine_probe_child,
 )
 
 
@@ -165,6 +167,10 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     """Bootstrap the application and return the process exit code."""
     argv_list = list(argv) if argv is not None else list(sys.argv)
     initialize_runtime_environment()
+
+    if is_webengine_probe_child_command(argv_list):
+        return run_webengine_probe_child()
+
     ensure_qfluentwidgets_compat()
 
     if not _check_license():
