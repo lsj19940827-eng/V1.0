@@ -11,6 +11,10 @@
 - **B. 传统模式**：仅有平面段或平面总长度
 - **C. 单数据源模式**：仅有纵断面或无空间数据
 
+说明：
+- 模式 A 的空间弯道局损以 `SpatialMergeResult.bend_events` 为唯一查表真源。
+- `SpatialMergeResult.nodes` 仅用于空间坐标求值、绘图与诊断，不参与空间弯道数量统计或重复累计。
+
 ---
 
 ## 步骤 1：几何设计与流速计算 (Geometry & Velocity)
@@ -77,7 +81,7 @@ $$C = \frac{1}{n} R_h^{1/6}$$
 
 ### 计算模式与长度/弯道来源
 
-- **模式A（三维空间合并）**：调用 `SpatialMerger.merge_and_compute()`，使用空间长度 $L_{spatial} = \sqrt{\Delta s^2 + \Delta Z^2}$ 和空间转角 $\theta_{3D}$ 查表。详见 `空间轴线合并算法-PRD.md`
+- **模式A（三维空间合并）**：调用 `SpatialMerger.merge_and_compute()`，使用空间长度 $L_{spatial}$ 与 `bend_events` 中的事件级空间转角 $\theta_{event}$、等效半径 $R_{eff}$ 逐事件查表。详见 `空间轴线合并算法-PRD.md`
 - **模式B（传统）**：使用平面总长度和平面弯管查表
 - **模式C（单数据源）**：使用纵断面段长度之和
 

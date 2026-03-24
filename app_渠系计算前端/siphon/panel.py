@@ -84,10 +84,13 @@ except ImportError:
 
 # 可视化画布
 try:
-    from app_渠系计算前端.siphon.canvas_view import PipelineCanvas
+    from app_渠系计算前端.siphon.canvas_view import PipelineCanvas, format_length_m
     CANVAS_AVAILABLE = True
 except ImportError:
     CANVAS_AVAILABLE = False
+
+    def format_length_m(value: float) -> str:
+        return f"{value:.3f}m"
 
 # 对话框
 try:
@@ -318,6 +321,8 @@ class SiphonPanel(QWidget):
         self.show_detailed_process = True
         self._plan_source = 'none'       # 平面数据来源: 'none' / 'dxf' / 'water_profile'
         self._plan_undo_stack = []       # 平面数据撤回栈
+        self._plan_segments_dirty_since_import = False
+        self.btn_reverse_plan = None
 
         # 拟定流速确认标志（方案D：用户是否已手动输入或确认过流速）
         self._v_user_confirmed = False
@@ -934,12 +939,15 @@ class SiphonPanel(QWidget):
         # 平面组
         btn_dxf_plan = PushButton("导入平面DXF"); btn_dxf_plan.clicked.connect(self._import_plan_dxf)
         btn_dxf_plan.setToolTip("从DXF文件导入平面多段线（工程坐标：X=东, Y=北）")
+        self.btn_reverse_plan = PushButton("平面反向"); self.btn_reverse_plan.clicked.connect(self._reverse_plan_dxf)
+        self.btn_reverse_plan.setToolTip("按当前平面特征点反转首尾方向，并重建平面段")
         btn_undo_plan = PushButton("撤回平面"); btn_undo_plan.clicked.connect(self._undo_plan_import)
         btn_undo_plan.setToolTip("撤回上一次平面DXF导入操作")
         btn_clr_plan = PushButton("清空平面"); btn_clr_plan.clicked.connect(self._clear_plan_data)
         btn_clr_plan.setToolTip("清空所有平面数据（DXF导入的平面段和特征点）")
-        for w in [btn_dxf_plan, btn_undo_plan, btn_clr_plan]:
+        for w in [btn_dxf_plan, self.btn_reverse_plan, btn_undo_plan, btn_clr_plan]:
             tb1.addWidget(w)
+        self.btn_reverse_plan.hide()
 
         # 分隔符
         _sep1 = QFrame(); _sep1.setFrameShape(QFrame.Shape.VLine); _sep1.setFrameShadow(QFrame.Shadow.Sunken)
@@ -1500,6 +1508,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 else:
                     self.plan_segments = data
                 self._plan_source = 'water_profile'
+                self._plan_segments_dirty_since_import = False
             if 'plan_feature_points' in kwargs:
                 if 'plan_segments' not in kwargs:
                     self._push_plan_undo()
@@ -1509,6 +1518,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 else:
                     self.plan_feature_points = data
                 self._plan_source = 'water_profile'
+                self._plan_segments_dirty_since_import = False
             if 'plan_total_length' in kwargs:
                 self.plan_total_length = kwargs['plan_total_length']
 
@@ -2276,6 +2286,7 @@ document.addEventListener("DOMContentLoaded", function(){
             self._plan_source = 'water_profile'  # 兼容旧数据默认推求水面线
         else:
             self._plan_source = 'none'
+        self._plan_segments_dirty_since_import = False
 
         # 自动确认：如果存在 calculated_at（进程内已计算），跳过所有确认对话框
         if 'calculated_at' in d and d['calculated_at']:
@@ -2726,6 +2737,10 @@ document.addEventListener("DOMContentLoaded", function(){
                 seg.xi_calc = CoefficientService.calculate_bend_coeff(
                     seg.radius, D, seg.angle, verbose=False)
                 updated = True
+            elif seg.segment_type == SegmentType.FOLD and seg.angle > 0:
+                seg.xi_calc = CoefficientService.calculate_fold_coeff(
+                    seg.angle, verbose=False)
+                updated = True
         if updated:
             self._refresh_seg_table()
 
@@ -3145,6 +3160,7 @@ document.addEventListener("DOMContentLoaded", function(){
             self.seg_hint_label.setVisible(self._longitudinal_is_example)
 
         auto_resize_table(self.seg_table)
+        self._refresh_plan_reverse_button()
         self._update_data_status()
         # 自动切换画布视图（与原版_auto_select_canvas_view一致）
         if self.canvas:
@@ -3204,6 +3220,7 @@ document.addEventListener("DOMContentLoaded", function(){
         to_remove = []
         plan_to_remove = []
         has_long_del = False
+        has_plan_del = False
         for r in rows:
             if r < 0 or r >= len(display_segments):
                 continue
@@ -3218,6 +3235,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 try:
                     plan_idx = self.plan_segments.index(seg)
                     plan_to_remove.append(plan_idx)
+                    has_plan_del = True
                 except ValueError:
                     pass
         for idx in sorted(to_remove, reverse=True):
@@ -3226,6 +3244,8 @@ document.addEventListener("DOMContentLoaded", function(){
         for idx in sorted(plan_to_remove, reverse=True):
             if 0 <= idx < len(self.plan_segments):
                 self.plan_segments.pop(idx)
+        if has_plan_del and self._plan_source == 'dxf':
+            self._plan_segments_dirty_since_import = True
         self._refresh_seg_table()
         self._update_canvas()
         if has_long_del and len(self.longitudinal_nodes) >= 2:
@@ -3382,6 +3402,8 @@ document.addEventListener("DOMContentLoaded", function(){
                     real_idx = self.plan_segments.index(seg)
                     self.plan_segments[real_idx] = dlg.result
                     self.plan_segments[real_idx].direction = SegmentDirection.PLAN
+                    if self._plan_source == 'dxf':
+                        self._plan_segments_dirty_since_import = True
                 except ValueError:
                     pass
                 self._refresh_seg_table()
@@ -3603,6 +3625,7 @@ document.addEventListener("DOMContentLoaded", function(){
             'plan_feature_points': copy.deepcopy(self.plan_feature_points),
             'plan_total_length': self.plan_total_length,
             'plan_source': self._plan_source,
+            'plan_segments_dirty_since_import': self._plan_segments_dirty_since_import,
         }
         self._plan_undo_stack.append(snapshot)
         # 限制栈深度
@@ -3620,6 +3643,9 @@ document.addEventListener("DOMContentLoaded", function(){
         self.plan_feature_points = snapshot['plan_feature_points']
         self.plan_total_length = snapshot['plan_total_length']
         self._plan_source = snapshot['plan_source']
+        self._plan_segments_dirty_since_import = snapshot.get(
+            'plan_segments_dirty_since_import', False
+        )
         self._refresh_seg_table()
         self._update_canvas()
         self._update_data_status()
@@ -3639,11 +3665,58 @@ document.addEventListener("DOMContentLoaded", function(){
         self.plan_feature_points.clear()
         self.plan_total_length = 0.0
         self._plan_source = 'none'
+        self._plan_segments_dirty_since_import = False
         self._refresh_seg_table()
         self._update_canvas()
         self._update_data_status()
         InfoBar.success("已清空", "平面数据已全部清除",
                        parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+
+    def _refresh_plan_reverse_button(self):
+        """根据当前平面数据来源刷新“平面反向”按钮显隐。"""
+        if not getattr(self, 'btn_reverse_plan', None):
+            return
+        should_show = (
+            self._plan_source == 'dxf' and
+            len(self.plan_feature_points) >= 2
+        )
+        self.btn_reverse_plan.setVisible(should_show)
+
+    def _has_real_longitudinal_data(self):
+        """返回当前是否存在可参与空间合并的真实纵断面数据。"""
+        return len(self.longitudinal_nodes) >= 2 and not self._longitudinal_is_example
+
+    def _reverse_plan_dxf(self):
+        """按当前平面特征点反转 DXF 平面方向，并重建平面段。"""
+        if self._plan_source != 'dxf' or len(self.plan_feature_points) < 2:
+            return
+
+        was_dirty = self._plan_segments_dirty_since_import
+        self._push_plan_undo()
+
+        plan_points, plan_segments, total_length = DxfParser.reverse_plan_geometry(
+            self.plan_feature_points
+        )
+        self.plan_feature_points = plan_points
+        self.plan_segments = plan_segments
+        self.plan_total_length = total_length
+        self._plan_segments_dirty_since_import = False
+
+        self._refresh_seg_table()
+        self._update_segment_coefficients()
+        self._update_canvas()
+        self._update_data_status()
+
+        detail = f"已按当前平面特征点重建首尾方向，平面总长: {format_length_m(self.plan_total_length)}。"
+        if was_dirty:
+            detail += "\n平面段已按特征点重建，之前的手工平面段修改已被覆盖，可用撤回平面恢复。"
+        InfoBar.success(
+            "平面反向完成",
+            detail,
+            parent=self._info_parent(),
+            duration=5000,
+            position=InfoBarPosition.TOP,
+        )
 
     def _import_plan_dxf(self):
         """导入平面DXF文件（工程坐标多段线）"""
@@ -3686,6 +3759,7 @@ document.addEventListener("DOMContentLoaded", function(){
             else:
                 self.plan_total_length = 0.0
             self._plan_source = 'dxf'
+            self._plan_segments_dirty_since_import = False
             # 刷新UI
             self._refresh_seg_table()
             self._update_segment_coefficients()
@@ -3694,7 +3768,7 @@ document.addEventListener("DOMContentLoaded", function(){
             # 提示信息
             pt_info = f"特征点: {len(plan_points)} 个" if plan_points else ""
             seg_info = f"平面段: {len(plan_segs)} 个" if plan_segs else ""
-            length_info = f"平面总长: {self.plan_total_length:.2f}m"
+            length_info = f"平面总长: {format_length_m(self.plan_total_length)}"
             arcs = sum(1 for s in plan_segs if s.segment_type == SegmentType.BEND)
             folds = sum(1 for s in plan_segs if s.segment_type == SegmentType.FOLD)
             turn_info = ""
@@ -3704,13 +3778,14 @@ document.addEventListener("DOMContentLoaded", function(){
                 if folds: parts.append(f"折管{folds}个")
                 turn_info = f"（{', '.join(parts)}）"
             spatial_info = ""
-            if self.longitudinal_nodes and len(self.longitudinal_nodes) >= 2:
+            if self._has_real_longitudinal_data():
                 spatial_info = "\n已检测到纵断面数据，将使用三维空间合并计算"
             else:
                 spatial_info = "\n未检测到纵断面数据，将使用平面独立计算模式"
+            reverse_hint = "\n若方向相反，可点击“平面反向”纠正首尾。"
             detail_parts = [p for p in [pt_info, seg_info, length_info + turn_info] if p]
             InfoBar.success("平面DXF导入成功",
-                f"{message}\n{', '.join(detail_parts)}{spatial_info}",
+                f"{message}\n{', '.join(detail_parts)}{spatial_info}{reverse_hint}",
                 parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
         except Exception as e:
             InfoBar.error("导入失败", str(e), parent=self._info_parent(),
@@ -4450,7 +4525,7 @@ document.addEventListener("DOMContentLoaded", function(){
         """更新数据状态标签（含空间合并模式提示，与Tkinter版一致）"""
         has_plan_points = len(self.plan_feature_points) >= 2
         has_plan_segments = len(self.plan_segments) > 0 or self.plan_total_length > 0
-        has_long_nodes = len(self.longitudinal_nodes) >= 2 and not self._longitudinal_is_example
+        has_long_nodes = self._has_real_longitudinal_data()
 
         # 空间合并模式判断
         if has_plan_points and has_long_nodes:

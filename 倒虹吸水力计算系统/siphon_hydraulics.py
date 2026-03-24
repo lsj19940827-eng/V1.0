@@ -16,7 +16,7 @@ from typing import List, Optional
 from siphon_models import (
     GlobalParameters, StructureSegment, CalculationResult, SegmentType, SegmentDirection,
     PlanFeaturePoint, LongitudinalNode, SpatialMergeResult, TurnType, V2Strategy,
-    is_common_type
+    is_common_type, GEOMETRY_DISPLAY_DECIMALS
 )
 from siphon_coefficients import CoefficientService
 from spatial_merger import SpatialMerger
@@ -74,7 +74,7 @@ class HydraulicCore:
         
         支持三种计算模式：
         A. 三维空间合并模式（优先）：当同时有 plan_feature_points 和 longitudinal_nodes 时
-           使用 SpatialMerger 计算空间长度和空间转角 θ_3D
+           使用 SpatialMerger 计算空间长度，并按 bend_events 逐事件查表空间弯道局损
         B. 平面+纵断面独立模式（退化）：分别计算平面弯道和纵向弯道损失
         C. 单数据源模式（退化）：仅有平面或仅有纵断面时的简化计算
         
@@ -116,9 +116,9 @@ class HydraulicCore:
         result.velocity_channel_in = v_1
         result.velocity_channel_out = v_3
         
-        # ========== 步骤1：几何设计与流速计算 (Geometry & Velocity) ==========
+        # ========== 步骤1：几何设计与流速计算 ==========
         steps.append("=" * 50)
-        steps.append("步骤1：几何设计与流速计算 (Geometry & Velocity)")
+        steps.append("步骤1：几何设计与流速计算")
         steps.append("=" * 50)
         
         if num_pipes > 1:
@@ -201,10 +201,10 @@ class HydraulicCore:
         steps.append("")
         steps.append(f"  出口渐变段始端流速 v = 管道实际流速 = {v_out:.4f} m/s")
         
-        # ========== 步骤2：阻力参数初始化 (Resistance Setup) ==========
+        # ========== 步骤2：阻力参数初始化 ==========
         steps.append("")
         steps.append("=" * 50)
-        steps.append("步骤2：阻力参数初始化 (Resistance Setup)")
+        steps.append("步骤2：阻力参数初始化")
         steps.append("=" * 50)
         
         # 谢才系数 C = (1/n) * R^(1/6) (依据 L.1.4)
@@ -254,24 +254,33 @@ class HydraulicCore:
             xi_spatial_bends = 0.0
             steps.append("")
             steps.append("【空间弯道损失系数查表】")
-            for nd in spatial_result.nodes:
-                if nd.has_turn and nd.spatial_turn_angle > 0.1:
-                    if nd.effective_turn_type == TurnType.ARC and nd.effective_radius > 0:
-                        xi_b, b_steps = CoefficientService.calculate_bend_coeff(
-                            nd.effective_radius, D, nd.spatial_turn_angle, verbose=True
-                        )
-                        xi_spatial_bends += xi_b
-                        steps.append(f"  桩号{nd.chainage:.1f}m 空间弯管: "
-                                   f"R={nd.effective_radius:.2f}m, θ_3D={nd.spatial_turn_angle:.1f}°")
-                        steps.append(f"    {b_steps.replace(chr(10), chr(10) + '    ')}")
-                    elif nd.effective_turn_type == TurnType.FOLD:
-                        xi_f, f_steps = CoefficientService.calculate_fold_coeff(
-                            nd.spatial_turn_angle, verbose=True
-                        )
-                        xi_spatial_bends += xi_f
-                        steps.append(f"  桩号{nd.chainage:.1f}m 空间折管: "
-                                   f"θ_3D={nd.spatial_turn_angle:.1f}°")
-                        steps.append(f"    {f_steps.replace(chr(10), chr(10) + '    ')}")
+            counted_events = [
+                ev for ev in spatial_result.bend_events
+                if math.degrees(ev.theta_event) > SpatialMerger.TURN_ANGLE_THRESH
+            ]
+            for ev in counted_events:
+                theta_deg = math.degrees(ev.theta_event)
+                if ev.turn_style == TurnType.ARC and ev.R_eff > 0:
+                    xi_b, b_steps = CoefficientService.calculate_bend_coeff(
+                        ev.R_eff, D, theta_deg, verbose=True
+                    )
+                    xi_spatial_bends += xi_b
+                    steps.append(
+                        f"  s=[{ev.s_a:.{GEOMETRY_DISPLAY_DECIMALS}f},{ev.s_b:.{GEOMETRY_DISPLAY_DECIMALS}f}] 空间弯管: "
+                        f"R_eff={ev.R_eff:.{GEOMETRY_DISPLAY_DECIMALS}f}m, "
+                        f"θ_3D={theta_deg:.{GEOMETRY_DISPLAY_DECIMALS}f}°"
+                    )
+                    steps.append(f"    {b_steps.replace(chr(10), chr(10) + '    ')}")
+                elif ev.turn_style == TurnType.FOLD:
+                    xi_f, f_steps = CoefficientService.calculate_fold_coeff(
+                        theta_deg, verbose=True
+                    )
+                    xi_spatial_bends += xi_f
+                    steps.append(
+                        f"  s={ev.s_a:.{GEOMETRY_DISPLAY_DECIMALS}f}m 空间折管: "
+                        f"θ_3D={theta_deg:.{GEOMETRY_DISPLAY_DECIMALS}f}°"
+                    )
+                    steps.append(f"    {f_steps.replace(chr(10), chr(10) + '    ')}")
             
             xi_sum_middle += xi_spatial_bends
             steps.append(f"  空间弯道损失系数合计 Σξ_空间弯 = {xi_spatial_bends:.4f}")
@@ -349,10 +358,10 @@ class HydraulicCore:
         steps.append(f"进口系数 ξ_1 = {xi_1:.4f} (表 L.1.2)")
         steps.append(f"出口系数 ξ_2 = {xi_2:.4f} (表 L.1.4-5 或 L.1.3)")
         
-        # ========== 步骤3：水头损失求解 (Head Loss Calculation) ==========
+        # ========== 步骤3：水头损失求解 ==========
         steps.append("")
         steps.append("=" * 50)
-        steps.append("步骤3：水头损失求解 (Head Loss Calculation)")
+        steps.append("步骤3：水头损失求解")
         steps.append("=" * 50)
         steps.append("依据规范 L.1.6: ΔZ = ΔZ1 + ΔZ2 - ΔZ3")
         steps.append("")

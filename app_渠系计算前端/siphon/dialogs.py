@@ -1364,6 +1364,18 @@ class SegmentEditDialog(QDialog):
         lay.addLayout(row)
         return lay
 
+    @staticmethod
+    def _fmt_precise(value, digits=6) -> str:
+        """格式化输入值，尽量保留有效精度，同时避免无意义尾零。"""
+        if value is None:
+            return ""
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return ""
+        text = f"{num:.{digits}f}".rstrip("0").rstrip(".")
+        return text or "0"
+
     # ---- 类型切换 ----
     def _on_type(self, *_):
         t = self.combo_type.currentText()
@@ -1464,7 +1476,9 @@ class SegmentEditDialog(QDialog):
             if r > 0 and a > 0:
                 arc = r * math.radians(a)
                 self.lbl_sp_val.setText(f"{arc:.3f}")
-                self.lbl_sp_hint.setText(f"= R\u00d7\u03b8 = {r:.2f}\u00d7{a:.1f}\u00b0")
+                r_text = self._fmt_precise(r)
+                a_text = self._fmt_precise(a)
+                self.lbl_sp_hint.setText(f"= R\u00d7\u03b8 = {r_text}\u00d7{a_text}\u00b0")
             else:
                 self.lbl_sp_val.setText("--")
                 self.lbl_sp_hint.setText("")
@@ -1503,10 +1517,14 @@ class SegmentEditDialog(QDialog):
                     xi_90 = CoefficientService.get_xi_90(r_d)
                     gamma = CoefficientService.get_gamma(a)
                     xi = xi_90 * gamma
+                    r_text = self._fmt_precise(r)
+                    d_text = self._fmt_precise(self._D_theory)
+                    a_text = self._fmt_precise(a)
+                    r_d_text = self._fmt_precise(r_d)
                     latex_lines = [
-                        f"R/D_0 = R / D = {r:.3f} / {self._D_theory:.3f} = {r_d:.3f}",
+                        f"R/D_0 = R / D = {r_text} / {d_text} = {r_d_text}",
                         f"\\text{{查表 L.1.4-3：}}\\xi_{{90}} = {xi_90:.4f}",
-                        f"\\text{{查表 L.1.4-4：}}\\gamma = {gamma:.4f}",
+                        f"\\text{{查表 L.1.4-4：}}\\gamma({a_text}^\\circ) = {gamma:.4f}",
                         f"\\xi = \\xi_{{90}} \\times \\gamma = {xi_90:.4f} \\times {gamma:.4f} = {xi:.4f}",
                     ]
             except ValueError:
@@ -1577,8 +1595,8 @@ class SegmentEditDialog(QDialog):
             self.combo_type.addItems([st.value for st in SegmentType])
         self.combo_type.setCurrentText(seg.segment_type.value)
         self.ed_length.setText(f"{seg.length:.3f}")
-        self.ed_radius.setText(f"{seg.radius:.2f}")
-        self.ed_angle.setText(f"{seg.angle:.1f}")
+        self.ed_radius.setText(self._fmt_precise(seg.radius))
+        self.ed_angle.setText(self._fmt_precise(seg.angle))
         if seg.start_elevation is not None:
             self.ed_start_elev.setText(f"{seg.start_elevation:.2f}")
         if seg.end_elevation is not None:
@@ -1591,6 +1609,9 @@ class SegmentEditDialog(QDialog):
         self._on_type()
         self._update_spatial()
         self._loading = False
+        if not self.ed_xi.text().strip():
+            self._auto_xi()
+            self._update_formula()
 
     # ---- 确定 ----
     def _on_ok(self):

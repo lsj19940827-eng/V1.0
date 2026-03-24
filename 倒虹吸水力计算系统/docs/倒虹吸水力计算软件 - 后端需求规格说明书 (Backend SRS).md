@@ -210,7 +210,7 @@
 
 | 属性名 | 说明 |
 |--------|------|
-| chainage | MC桩号 (m) |
+| chainage | MC桩号 (m)。对 DXF 导入圆弧，表示弧段起点桩号；对传统 IP/QZ 数据，表示特征点/QZ 桩号 |
 | x / y | 工程坐标（X=东, Y=北） |
 | azimuth_meas_deg | 测量方位角 (度)，正北=0°顺时针 |
 | turn_radius | 水平转弯半径 R_h (m) |
@@ -223,6 +223,7 @@
 #### SpatialNode（三维空间节点）
 
 由 SpatialMerger 按桩号合并 PlanFeaturePoint 和 LongitudinalNode 生成。
+用于空间坐标求值、绘图与诊断，不作为空间弯道局损事件清单。
 
 | 属性名 | 说明 |
 |--------|------|
@@ -232,9 +233,9 @@
 | has_plan_turn / has_long_turn | 是否有平面/纵断面转弯 |
 | plan_turn_radius / long_turn_radius | 平面/纵断面转弯半径 |
 | plan_turn_angle / long_turn_angle | 平面/纵断面转角 |
-| spatial_turn_angle | θ_3D (度) |
-| effective_radius | 用于查表的有效半径 (m) |
-| effective_turn_type | 用于查表的转弯类型 |
+| spatial_turn_angle | θ_3D (度，兼容节点字段) |
+| effective_radius | 兼容字段：节点关联事件的有效半径 (m) |
+| effective_turn_type | 兼容字段：节点关联事件的转弯类型 |
 | long_arc_end_chainage | 竖曲线弧终点桩号（仅ARC型有效） |
 | long_arc_theta_rad | 竖曲线圆心角 θ (弧度)（仅ARC型有效） |
 | **v5.0 新增** | |
@@ -295,11 +296,11 @@
 | nodes | List[SpatialNode] |
 | total_spatial_length | 空间总长度 (m) |
 | segment_lengths | 各段空间长度列表 |
-| xi_spatial_bends | 空间弯道损失系数总和（预留） |
+| xi_spatial_bends | 空间弯道损失系数总和（由 HydraulicCore 按 bend_events 计算） |
 | computation_steps | 计算步骤日志 |
 | has_plan_data / has_longitudinal_data | 数据存在标志 |
 | **v5.0 新增** | |
-| bend_events | List[BendEvent]，弯道事件表（供局损查表） |
+| bend_events | List[BendEvent]，弯道事件表（空间局损查表真源） |
 | plan_segments | List[PlanSegment]，平面分段序列 |
 | profile_segments | List[ProfileSegment]，纵断面分段序列 |
 
@@ -369,6 +370,7 @@
      - 相邻直线段折角 > 1度 -> TurnType.FOLD（turn_angle = 折角度数）
      - 其他 -> TurnType.NONE
    - ip_index：顺序编号
+   - 运行时兼容两类 ARC 语义：DXF 导入时 `ARC` 点表示“弧段起点，下一点为弧段终点”；传统推求水面线/IP 数据时 `ARC` 点表示“IP/QZ 特征点”
 
 5. **StructureSegment 生成**（调用 `_build_plan_segments()`）：
    - 所有段 direction = SegmentDirection.PLAN
@@ -526,7 +528,7 @@ HydraulicCore.execute_calculation(
 
 1. **谢才系数**：C = (1/n) × R_h^(1/6)
 2. **计算模式判断**：
-   - 模式A → 调用 SpatialMerger.merge_and_compute()，遍历空间节点查表计算弯道ξ
+   - 模式A → 调用 SpatialMerger.merge_and_compute()，按 `bend_events` 逐事件查表计算空间弯道 ξ
    - 模式B → 遍历 plan_segments 计算平面弯管ξ
 3. **通用构件贡献**：遍历 segments 中 direction=COMMON 或 is_common_type 的段，累加ξ和长度
 4. **进出口系数**：从 global_params 获取 xi_inlet / xi_outlet
@@ -592,7 +594,7 @@ SpatialMerger.merge_and_compute(
 ### 6.3 核心算法
 
 1. **桩号并集**（不修改任何原始桩号）
-2. **复合弯道事件检测**（EVENT_WINDOW = 2.0m）
+2. **复合弯道事件检测**（基于弯道区间分割合并，不再依赖节点窗口）
 3. **空间坐标插值**（圆弧段精确几何 / 切线段线性插值）
 4. **方位角/坡角填充**（圆弧型用入/出切线精确方向覆盖坐标差推算值）
 5. **空间转角计算**：θ_3D = arccos(T_before · T_after)，T = (cosβ·cosα, cosβ·sinα, sinβ)

@@ -32,6 +32,22 @@ except ImportError:
     MODELS_AVAILABLE = False
 
 
+def format_length_m(value: float) -> str:
+    """统一长度状态文案显示精度：保留 3 位小数。"""
+    return f"{value:.3f}m"
+
+
+def build_plan_footer_info(plan_len: float, ip_count: int, bend_count: int, zoom: float) -> str:
+    return (
+        f"平面总长: {format_length_m(plan_len)} | IP点: {ip_count} | "
+        f"弯管: {bend_count} | 缩放: {int(zoom * 100)}%"
+    )
+
+
+def build_profile_footer_info(total_len: float, segment_count: int, zoom: float) -> str:
+    return f"总长度: {format_length_m(total_len)} | 结构段: {segment_count} | 缩放: {int(zoom * 100)}%"
+
+
 class PipelineCanvas(QWidget):
     """管道可视化画布 —— 支持纵断面/平面视图切换、缩放、平移"""
 
@@ -496,7 +512,7 @@ class PipelineCanvas(QWidget):
         total_len = sum(s.length for s in pipe_segs if s.length > 0)
         bend_cnt = sum(1 for s in pipe_segs if s.segment_type in (SegmentType.BEND, SegmentType.FOLD))
         min_elev = min(ys)
-        info = (f"总长度: {total_len:.1f}m | 结构段: {len(pipe_segs)} | "
+        info = (f"总长度: {format_length_m(total_len)} | 结构段: {len(pipe_segs)} | "
                 f"弯/折管: {bend_cnt} | 最低高程: {min_elev:.2f}m | "
                 f"缩放: {int(self._zoom * 100)}%")
         p.setPen(QPen(self.C_INFO))
@@ -695,7 +711,12 @@ class PipelineCanvas(QWidget):
         plan_len = self._plan_total_length if self._plan_total_length > 0 else sum(
             s.length for s in self._plan_segments if s.length > 0)
         bend_cnt = sum(1 for a in computed_angles if a > 0)
-        info = f"平面总长: {plan_len:.1f}m | IP点: {len(fp_list)} | 弯管: {bend_cnt} | 缩放: {int(self._zoom * 100)}%"
+        info = build_plan_footer_info(
+            plan_len=plan_len,
+            ip_count=len(fp_list),
+            bend_count=bend_cnt,
+            zoom=self._zoom,
+        )
         p.setPen(QPen(self.C_INFO))
         p.setFont(QFont("Microsoft YaHei", 9))
         p.drawText(QRectF(0, h - 22, w, 20), Qt.AlignCenter, info)
@@ -745,7 +766,11 @@ class PipelineCanvas(QWidget):
         p.drawText(QPointF(bl[0] + 5, bl[1] + 14), "渠底高程")
 
         # 底部信息
-        info = f"总长度: {total_len:.1f}m | 结构段: {len(self._segments)} | 缩放: {int(self._zoom * 100)}%"
+        info = build_profile_footer_info(
+            total_len=total_len,
+            segment_count=len(self._segments),
+            zoom=self._zoom,
+        )
         p.setPen(QPen(self.C_INFO))
         p.setFont(QFont("Microsoft YaHei", 9))
         p.drawText(QRectF(0, h - 22, w, 20), Qt.AlignCenter, info)

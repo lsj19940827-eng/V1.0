@@ -8,12 +8,18 @@ import math
 from typing import List, Tuple, Optional
 from siphon_models import (
     StructureSegment, SegmentType, SegmentDirection, LongitudinalNode, TurnType,
-    InletOutletShape, INLET_SHAPE_COEFFICIENTS, PlanFeaturePoint
+    InletOutletShape, INLET_SHAPE_COEFFICIENTS, PlanFeaturePoint,
+    GEOMETRY_STORAGE_DECIMALS,
 )
 
 
 class DxfParser:
     """DXF解析器类"""
+
+    @staticmethod
+    def _round_geometry_value(value: float) -> float:
+        """统一几何字段的后台保留精度。"""
+        return round(float(value), GEOMETRY_STORAGE_DECIMALS)
     
     @staticmethod
     def parse_dxf(file_path: str) -> Tuple[List[StructureSegment], float, str]:
@@ -576,6 +582,29 @@ class DxfParser:
         return meas_deg
 
     @staticmethod
+    def _build_plan_segment_infos_from_points(
+            plan_points: List[PlanFeaturePoint]) -> List[dict]:
+        """
+        兼容入口：从 PlanFeaturePoint 派生平面有向段信息。
+
+        真实实现统一落在 _build_plan_seg_infos_from_feature_points，
+        这里保留旧名称，避免其它调用点分叉。
+        """
+        return DxfParser._build_plan_seg_infos_from_feature_points(plan_points)
+
+    @staticmethod
+    def _rebuild_plan_geometry_from_segment_infos(
+            seg_infos: List[dict]) -> Tuple[List[PlanFeaturePoint],
+                                            List[StructureSegment],
+                                            float]:
+        """
+        兼容入口：从平面有向段信息重建规范化平面几何。
+
+        真实实现统一落在 _build_plan_geometry_from_seg_infos。
+        """
+        return DxfParser._build_plan_geometry_from_seg_infos(seg_infos)
+
+    @staticmethod
     def parse_plan_polyline(file_path: str) -> Tuple[
             List['PlanFeaturePoint'], List[StructureSegment], str]:
         """
@@ -697,29 +726,105 @@ class DxfParser:
             else:
                 si['dir'] = (1.0, 0.0)
         
-        # ---- 第3步：生成 PlanFeaturePoint 列表 ----
+        # ---- 第3步：生成 PlanFeaturePoint 列表和 StructureSegment 列表 ----
+        plan_points, plan_segments, _total_length = DxfParser._build_plan_geometry_from_seg_infos(
+            seg_infos
+        )
+        
+        msg = (f"成功解析平面DXF：{n}个顶点 → "
+               f"{len(plan_points)}个特征点, {len(plan_segments)}个平面段")
+        return plan_points, plan_segments, msg
+
+    @staticmethod
+    def _build_plan_seg_infos_from_feature_points(
+        plan_points: List['PlanFeaturePoint']
+    ) -> list:
+        """
+        从 PlanFeaturePoint 列表恢复有向平面段信息。
+
+        用于导入后“平面反向”时以特征点为单一真实来源重建平面段。
+        """
+        if not plan_points or len(plan_points) < 2:
+            return []
+
+        ordered_points = sorted(
+            enumerate(plan_points),
+            key=lambda item: (item[1].chainage, item[1].ip_index, item[0]),
+        )
+        pts = [item[1] for item in ordered_points]
+
+        seg_infos = []
+        for idx in range(len(pts) - 1):
+            start = pts[idx]
+            end = pts[idx + 1]
+            p1 = (float(start.x), float(start.y))
+            p2 = (float(end.x), float(end.y))
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            chord = math.sqrt(dx**2 + dy**2)
+            chainage_delta = float(end.chainage) - float(start.chainage)
+
+            if (start.turn_type == TurnType.ARC and
+                    float(start.turn_radius) > 0 and
+                    float(start.turn_angle) > 0):
+                angle_rad = math.radians(float(start.turn_angle))
+                radius = float(start.turn_radius)
+                length = chainage_delta if chainage_delta > 1e-6 else radius * angle_rad
+                seg_infos.append({
+                    'type': 'arc',
+                    'p1': p1,
+                    'p2': p2,
+                    'chord': chord,
+                    'radius': radius,
+                    'angle_rad': angle_rad,
+                    'length': length,
+                    'dir': DxfParser._get_direction(p1, p2),
+                    'azimuth_meas_deg': DxfParser._compute_measurement_azimuth(dx, dy),
+                    'source_ip_index': start.ip_index,
+                })
+            else:
+                length = chainage_delta if chainage_delta > 1e-6 else chord
+                if chord < 1e-6 and length < 1e-6:
+                    continue
+                seg_infos.append({
+                    'type': 'line',
+                    'p1': p1,
+                    'p2': p2,
+                    'chord': chord,
+                    'length': length,
+                    'dir': DxfParser._get_direction(p1, p2),
+                    'azimuth_meas_deg': DxfParser._compute_measurement_azimuth(dx, dy),
+                    'source_ip_index': start.ip_index,
+                })
+
+        return seg_infos
+
+    @staticmethod
+    def _build_plan_geometry_from_seg_infos(
+        seg_infos: list
+    ) -> Tuple[List['PlanFeaturePoint'], List[StructureSegment], float]:
+        """从有向平面段信息构建规范化平面特征点、平面段和平面总长。"""
+        if not seg_infos:
+            return [], [], 0.0
+
         plan_points = []
         chainage = 0.0
-        
+
         for i, si in enumerate(seg_infos):
             px, py = si['p1']
-            
-            # 计算该顶点处的方位角（使用该段的方向）
             dx_seg = si['p2'][0] - si['p1'][0]
             dy_seg = si['p2'][1] - si['p1'][1]
             azimuth = DxfParser._compute_measurement_azimuth(dx_seg, dy_seg)
-            
-            # 检测转弯类型
+
             turn_type = TurnType.NONE
             turn_angle = 0.0
             turn_radius = 0.0
-            
+
             if si['type'] == 'arc':
                 turn_type = TurnType.ARC
                 turn_angle = math.degrees(si['angle_rad'])
                 turn_radius = si['radius']
             elif i > 0 and seg_infos[i - 1]['type'] == 'line' and si['type'] == 'line':
-                # 线-线过渡：检查折角
                 prev_dir = seg_infos[i - 1]['dir']
                 curr_dir = si['dir']
                 dot = prev_dir[0] * curr_dir[0] + prev_dir[1] * curr_dir[1]
@@ -728,39 +833,68 @@ class DxfParser:
                 if fold_angle > 1.0:
                     turn_type = TurnType.FOLD
                     turn_angle = fold_angle
-            
-            fp = PlanFeaturePoint(
-                chainage=round(chainage, 6),
-                x=px, y=py,
-                azimuth_meas_deg=round(azimuth, 4),
-                turn_radius=round(turn_radius, 4),
-                turn_angle=round(turn_angle, 4),
+
+            plan_points.append(PlanFeaturePoint(
+                chainage=DxfParser._round_geometry_value(chainage),
+                x=px,
+                y=py,
+                azimuth_meas_deg=DxfParser._round_geometry_value(azimuth),
+                turn_radius=DxfParser._round_geometry_value(turn_radius),
+                turn_angle=DxfParser._round_geometry_value(turn_angle),
                 turn_type=turn_type,
                 ip_index=i,
-            )
-            plan_points.append(fp)
+            ))
             chainage += si['length']
-        
-        # 末端点
+
         last_si = seg_infos[-1]
         last_px, last_py = last_si['p2']
         last_dx = last_si['p2'][0] - last_si['p1'][0]
         last_dy = last_si['p2'][1] - last_si['p1'][1]
         last_azimuth = DxfParser._compute_measurement_azimuth(last_dx, last_dy)
         plan_points.append(PlanFeaturePoint(
-            chainage=round(chainage, 6),
-            x=last_px, y=last_py,
-            azimuth_meas_deg=round(last_azimuth, 4),
+            chainage=DxfParser._round_geometry_value(chainage),
+            x=last_px,
+            y=last_py,
+            azimuth_meas_deg=DxfParser._round_geometry_value(last_azimuth),
             turn_type=TurnType.NONE,
             ip_index=len(seg_infos),
         ))
-        
-        # ---- 第4步：生成 StructureSegment 列表（direction=PLAN）----
+
         plan_segments = DxfParser._build_plan_segments(seg_infos)
-        
-        msg = (f"成功解析平面DXF：{n}个顶点 → "
-               f"{len(plan_points)}个特征点, {len(plan_segments)}个平面段")
-        return plan_points, plan_segments, msg
+        return plan_points, plan_segments, DxfParser._round_geometry_value(chainage)
+
+    @staticmethod
+    def build_plan_geometry_from_feature_points(
+        plan_points: List['PlanFeaturePoint']
+    ) -> Tuple[List['PlanFeaturePoint'], List[StructureSegment], float]:
+        """从现有 PlanFeaturePoint 重建规范化平面几何。"""
+        seg_infos = DxfParser._build_plan_seg_infos_from_feature_points(plan_points)
+        return DxfParser._build_plan_geometry_from_seg_infos(seg_infos)
+
+    @staticmethod
+    def reverse_plan_geometry(
+        plan_points: List['PlanFeaturePoint']
+    ) -> Tuple[List['PlanFeaturePoint'], List[StructureSegment], float]:
+        """反向当前平面特征点，并重建规范化平面几何。"""
+        seg_infos = DxfParser._build_plan_seg_infos_from_feature_points(plan_points)
+        if not seg_infos:
+            return [], [], 0.0
+
+        reversed_infos = []
+        for idx, si in enumerate(reversed(seg_infos)):
+            p1 = si['p2']
+            p2 = si['p1']
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            reversed_si = dict(si)
+            reversed_si['p1'] = p1
+            reversed_si['p2'] = p2
+            reversed_si['dir'] = DxfParser._get_direction(p1, p2)
+            reversed_si['azimuth_meas_deg'] = DxfParser._compute_measurement_azimuth(dx, dy)
+            reversed_si['source_ip_index'] = idx
+            reversed_infos.append(reversed_si)
+
+        return DxfParser._build_plan_geometry_from_seg_infos(reversed_infos)
 
     @staticmethod
     def _build_plan_segments(seg_infos: list) -> List[StructureSegment]:
@@ -783,12 +917,13 @@ class DxfParser:
                 # 弯管段
                 segments.append(StructureSegment(
                     segment_type=SegmentType.BEND,
-                    length=round(si['length'], 4),
-                    radius=round(si['radius'], 4),
-                    angle=round(math.degrees(si['angle_rad']), 4),
+                    length=DxfParser._round_geometry_value(si['length']),
+                    radius=DxfParser._round_geometry_value(si['radius']),
+                    angle=DxfParser._round_geometry_value(math.degrees(si['angle_rad'])),
                     coordinates=[si['p1'], si['p2']],
                     locked=True,
                     direction=SegmentDirection.PLAN,
+                    source_ip_index=si.get('source_ip_index'),
                 ))
             else:
                 # 直线段 — 累积后统一处理折管检测
@@ -816,10 +951,11 @@ class DxfParser:
             if i == 0:
                 result.append(StructureSegment(
                     segment_type=SegmentType.STRAIGHT,
-                    length=round(si['length'], 4),
+                    length=DxfParser._round_geometry_value(si['length']),
                     coordinates=[si['p1'], si['p2']],
                     locked=True,
                     direction=SegmentDirection.PLAN,
+                    source_ip_index=si.get('source_ip_index'),
                 ))
             else:
                 prev_dir = straight_infos[i - 1]['dir']
@@ -834,40 +970,44 @@ class DxfParser:
                         prev_seg = result[-1]
                         fold_seg = StructureSegment(
                             segment_type=SegmentType.FOLD,
-                            length=round(prev_seg.length + si['length'], 4),
-                            angle=round(angle_deg, 4),
+                            length=DxfParser._round_geometry_value(prev_seg.length + si['length']),
+                            angle=DxfParser._round_geometry_value(angle_deg),
                             coordinates=prev_seg.coordinates + [si['p2']],
                             locked=True,
                             direction=SegmentDirection.PLAN,
+                            source_ip_index=si.get('source_ip_index'),
                         )
                         result[-1] = fold_seg
                     elif result and result[-1].segment_type == SegmentType.FOLD:
                         prev_half_len = straight_infos[i - 1]['length']
                         fold_seg = StructureSegment(
                             segment_type=SegmentType.FOLD,
-                            length=round(prev_half_len + si['length'], 4),
-                            angle=round(angle_deg, 4),
+                            length=DxfParser._round_geometry_value(prev_half_len + si['length']),
+                            angle=DxfParser._round_geometry_value(angle_deg),
                             coordinates=[si['p1'], si['p2']],
                             locked=True,
                             direction=SegmentDirection.PLAN,
+                            source_ip_index=si.get('source_ip_index'),
                         )
                         result.append(fold_seg)
                     else:
                         result.append(StructureSegment(
                             segment_type=SegmentType.FOLD,
-                            length=round(si['length'], 4),
-                            angle=round(angle_deg, 4),
+                            length=DxfParser._round_geometry_value(si['length']),
+                            angle=DxfParser._round_geometry_value(angle_deg),
                             coordinates=[si['p1'], si['p2']],
                             locked=True,
                             direction=SegmentDirection.PLAN,
+                            source_ip_index=si.get('source_ip_index'),
                         ))
                 else:
                     result.append(StructureSegment(
                         segment_type=SegmentType.STRAIGHT,
-                        length=round(si['length'], 4),
+                        length=DxfParser._round_geometry_value(si['length']),
                         coordinates=[si['p1'], si['p2']],
                         locked=True,
                         direction=SegmentDirection.PLAN,
+                        source_ip_index=si.get('source_ip_index'),
                     ))
         
         return result

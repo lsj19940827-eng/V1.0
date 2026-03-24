@@ -30,8 +30,8 @@ v5.0 相对 v4.0 的核心变更：
   - merge_and_compute() 签名完全不变
   - SpatialMergeResult 保留全部现有字段
   - _backfill_node_fields() 将 BendEvent 结果回填到 SpatialNode
-    保证 siphon_hydraulics.py 消费路径（has_turn, spatial_turn_angle,
-    effective_radius, effective_turn_type）完全不变
+    保证节点兼容字段（has_turn, spatial_turn_angle, effective_radius,
+    effective_turn_type）仍可被旧代码与绘图逻辑消费
 """
 
 import math
@@ -40,6 +40,7 @@ from siphon_models import (
     PlanFeaturePoint, LongitudinalNode, SpatialNode,
     SpatialMergeResult, TurnType,
     PlanSegment, ProfileSegment, BendEvent,
+    GEOMETRY_DISPLAY_DECIMALS, GEOMETRY_MATCH_DECIMALS,
 )
 
 
@@ -136,9 +137,13 @@ class SpatialMerger:
         result.bend_events = events
         for ev in events:
             if ev.theta_event > math.radians(SpatialMerger.TURN_ANGLE_THRESH):
-                steps.append(f"  [{ev.event_type}] s=[{ev.s_a:.1f},{ev.s_b:.1f}] "
-                             f"θ={math.degrees(ev.theta_event):.2f}° "
-                             f"R_eff={ev.R_eff:.2f}m L={ev.L_event:.2f}m")
+                steps.append(
+                    f"  [{ev.event_type}] "
+                    f"s=[{ev.s_a:.{GEOMETRY_DISPLAY_DECIMALS}f},{ev.s_b:.{GEOMETRY_DISPLAY_DECIMALS}f}] "
+                    f"θ={math.degrees(ev.theta_event):.{GEOMETRY_DISPLAY_DECIMALS}f}° "
+                    f"R_eff={ev.R_eff:.{GEOMETRY_DISPLAY_DECIMALS}f}m "
+                    f"L={ev.L_event:.{GEOMETRY_DISPLAY_DECIMALS}f}m"
+                )
 
         # 向后兼容：将事件结果回填到 SpatialNode
         SpatialMerger._backfill_node_fields(spatial_nodes, events)
@@ -211,52 +216,216 @@ class SpatialMerger:
     # ==================================================================
 
     @staticmethod
+    def _norm2(dx: float, dy: float) -> Optional[Tuple[float, float]]:
+        """二维向量归一化；退化零向量返回 None。"""
+        d = math.hypot(dx, dy)
+        if d <= 1e-12:
+            return None
+        return (dx / d, dy / d)
+
+    @staticmethod
+    def _fallback_dir(vec: Optional[Tuple[float, float]]) -> Tuple[float, float]:
+        return vec if vec is not None else (1.0, 0.0)
+
+    @staticmethod
+    def _positive_angle(delta_rad: float) -> float:
+        while delta_rad < 0.0:
+            delta_rad += 2.0 * math.pi
+        while delta_rad >= 2.0 * math.pi:
+            delta_rad -= 2.0 * math.pi
+        return delta_rad
+
+    @staticmethod
+    def _classify_plan_arc_semantics(plan_points: List[PlanFeaturePoint], idx: int) -> Optional[str]:
+        """识别平面 ARC 点语义：DXF 弧段起点 or 传统 IP/QZ 点。"""
+        if idx < 0 or idx >= len(plan_points):
+            return None
+        pp = plan_points[idx]
+        if pp.turn_type != TurnType.ARC or pp.turn_radius <= 0 or pp.turn_angle < 0.1:
+            return None
+
+        if idx + 1 < len(plan_points):
+            arc_len = pp.turn_radius * math.radians(pp.turn_angle)
+            ds_next = plan_points[idx + 1].chainage - pp.chainage
+            tol = max(0.05, 0.02 * arc_len)
+            if ds_next > 1e-6 and abs(ds_next - arc_len) <= tol:
+                return "DXF_SEGMENT"
+
+        return "IP_QZ"
+
+    @staticmethod
+    def _build_ip_arc_geometry(plan_points: List[PlanFeaturePoint], idx: int) -> Optional[dict]:
+        """传统 IP/QZ 语义：当前 ARC 点是交点/QZ，弧段边界由前后切线反算。"""
+        if idx <= 0 or idx >= len(plan_points) - 1:
+            return None
+
+        pp = plan_points[idx]
+        pp_p, pp_n = plan_points[idx - 1], plan_points[idx + 1]
+        d_in = SpatialMerger._norm2(pp.x - pp_p.x, pp.y - pp_p.y)
+        d_out = SpatialMerger._norm2(pp_n.x - pp.x, pp_n.y - pp.y)
+        if d_in is None or d_out is None:
+            return None
+
+        cross_z = d_in[0] * d_out[1] - d_in[1] * d_out[0]
+        left = cross_z > 0
+        eps = 1 if left else -1
+
+        R_h = pp.turn_radius
+        a_rad = math.radians(pp.turn_angle)
+        T_len = R_h * math.tan(a_rad / 2)
+        L_h = R_h * a_rad
+
+        bc = (pp.x - T_len * d_in[0], pp.y - T_len * d_in[1])
+        ec = (pp.x + T_len * d_out[0], pp.y + T_len * d_out[1])
+        nin = (-d_in[1], d_in[0]) if left else (d_in[1], -d_in[0])
+        center = (bc[0] + R_h * nin[0], bc[1] + R_h * nin[1])
+        bc_s = pp.chainage - L_h / 2.0
+        ec_s = pp.chainage + L_h / 2.0
+        th0 = math.atan2(bc[1] - center[1], bc[0] - center[0])
+        qz = SpatialMerger._arc_point(center, R_h, bc, a_rad / 2.0, left)
+
+        return dict(
+            mode="IP_QZ",
+            bc=bc,
+            ec=ec,
+            bc_s=bc_s,
+            ec_s=ec_s,
+            cen=center,
+            center=center,
+            R_h=R_h,
+            eps=eps,
+            th0=th0,
+            qz=qz,
+            bc_chainage=bc_s,
+            ec_chainage=ec_s,
+            d_in=d_in,
+            d_out=d_out,
+            left_turn=left,
+        )
+
+    @staticmethod
+    def _build_dxf_arc_geometry(plan_points: List[PlanFeaturePoint], idx: int) -> Optional[dict]:
+        """DXF 语义：当前 ARC 点是弧段起点，下一点是弧段终点。"""
+        if idx < 0 or idx >= len(plan_points) - 1:
+            return None
+
+        start = plan_points[idx]
+        end = plan_points[idx + 1]
+        start_xy = (start.x, start.y)
+        end_xy = (end.x, end.y)
+        R_h = start.turn_radius
+        a_rad = math.radians(start.turn_angle)
+        chord_dx = end_xy[0] - start_xy[0]
+        chord_dy = end_xy[1] - start_xy[1]
+        chord = math.hypot(chord_dx, chord_dy)
+        if chord <= 1e-9:
+            return None
+
+        half_chord = chord / 2.0
+        center_offset_sq = max(0.0, R_h * R_h - half_chord * half_chord)
+        center_offset = math.sqrt(center_offset_sq)
+        chord_dir = SpatialMerger._fallback_dir(SpatialMerger._norm2(chord_dx, chord_dy))
+        normal = (-chord_dir[1], chord_dir[0])
+        midpoint = ((start_xy[0] + end_xy[0]) / 2.0, (start_xy[1] + end_xy[1]) / 2.0)
+
+        prev_dir = None
+        if idx > 0:
+            prev = plan_points[idx - 1]
+            prev_dir = SpatialMerger._norm2(start_xy[0] - prev.x, start_xy[1] - prev.y)
+
+        next_dir = None
+        if idx + 2 < len(plan_points):
+            nxt = plan_points[idx + 2]
+            next_dir = SpatialMerger._norm2(nxt.x - end_xy[0], nxt.y - end_xy[1])
+
+        best = None
+        for sign in (1.0, -1.0):
+            center = (
+                midpoint[0] + sign * center_offset * normal[0],
+                midpoint[1] + sign * center_offset * normal[1],
+            )
+            theta_start = math.atan2(start_xy[1] - center[1], start_xy[0] - center[0])
+            theta_end = math.atan2(end_xy[1] - center[1], end_xy[0] - center[0])
+            for eps in (1, -1):
+                delta = (
+                    SpatialMerger._positive_angle(theta_end - theta_start)
+                    if eps == 1
+                    else SpatialMerger._positive_angle(theta_start - theta_end)
+                )
+                tangent_start = (-eps * math.sin(theta_start), eps * math.cos(theta_start))
+                tangent_end = (-eps * math.sin(theta_end), eps * math.cos(theta_end))
+                score = abs(delta - a_rad)
+                if prev_dir is not None:
+                    dot_start = max(-1.0, min(1.0, prev_dir[0] * tangent_start[0] + prev_dir[1] * tangent_start[1]))
+                    score += 0.5 * (1.0 - dot_start)
+                if next_dir is not None:
+                    dot_end = max(-1.0, min(1.0, next_dir[0] * tangent_end[0] + next_dir[1] * tangent_end[1]))
+                    score += 0.5 * (1.0 - dot_end)
+
+                candidate = dict(
+                    mode="DXF_SEGMENT",
+                    bc=start_xy,
+                    ec=end_xy,
+                    bc_s=start.chainage,
+                    ec_s=end.chainage,
+                    cen=center,
+                    center=center,
+                    R_h=R_h,
+                    eps=eps,
+                    th0=theta_start,
+                    qz=SpatialMerger._arc_point(center, R_h, start_xy, a_rad / 2.0, eps == 1),
+                    bc_chainage=start.chainage,
+                    ec_chainage=end.chainage,
+                    d_in=prev_dir,
+                    d_out=next_dir,
+                    left_turn=(eps == 1),
+                    score=score,
+                )
+                if best is None or candidate["score"] < best["score"]:
+                    best = candidate
+
+        if best is None:
+            return None
+        best.pop("score", None)
+        return best
+
+    @staticmethod
+    def _build_plan_arc_geometries(plan_points: List[PlanFeaturePoint]) -> Tuple[dict, set]:
+        """统一构建平面 ARC 几何，兼容 DXF 弧段起点和传统 IP/QZ 两类语义。"""
+        arc_geom = {}
+        skip_points = set()
+
+        for idx, pp in enumerate(plan_points):
+            if pp.turn_type != TurnType.ARC or pp.turn_radius <= 0 or pp.turn_angle < 0.1:
+                continue
+
+            semantics = SpatialMerger._classify_plan_arc_semantics(plan_points, idx)
+            if semantics == "DXF_SEGMENT":
+                geom = SpatialMerger._build_dxf_arc_geometry(plan_points, idx)
+                if geom is not None:
+                    skip_points.update({idx, idx + 1})
+            else:
+                geom = SpatialMerger._build_ip_arc_geometry(plan_points, idx)
+
+            if geom is not None:
+                arc_geom[idx] = geom
+
+        return arc_geom, skip_points
+
+    @staticmethod
     def _build_plan_segments(plan_points: List[PlanFeaturePoint]) -> List[PlanSegment]:
         """§4: 从 PlanFeaturePoint[] 构建平面解析分段序列（LINE/ARC 不重叠全覆盖）"""
         n = len(plan_points)
         if n < 2:
             return []
 
-        def norm2(dx, dy):
-            d = math.hypot(dx, dy)
-            return (dx/d, dy/d) if d > 1e-12 else (1., 0.)
-
-        # Step 1: 对每个内部 ARC 型 IP 反算圆弧几何（§4.1）
-        arc_geom = {}   # ip_index -> dict
-        for i in range(1, n - 1):
-            pp = plan_points[i]
-            if pp.turn_type != TurnType.ARC or pp.turn_radius <= 0 or pp.turn_angle < 0.1:
-                continue
-            pp_p, pp_n = plan_points[i - 1], plan_points[i + 1]
-            d_in  = norm2(pp.x - pp_p.x, pp.y - pp_p.y)
-            d_out = norm2(pp_n.x - pp.x, pp_n.y - pp.y)
-
-            cross_z = d_in[0]*d_out[1] - d_in[1]*d_out[0]
-            left = cross_z > 0
-            eps  = 1 if left else -1
-
-            R_h   = pp.turn_radius
-            a_rad = math.radians(pp.turn_angle)
-            T_len = R_h * math.tan(a_rad / 2)
-            L_h   = R_h * a_rad
-
-            bc  = (pp.x - T_len*d_in[0],  pp.y - T_len*d_in[1])
-            ec  = (pp.x + T_len*d_out[0], pp.y + T_len*d_out[1])
-            nin = (-d_in[1], d_in[0]) if left else (d_in[1], -d_in[0])
-            cen = (bc[0] + R_h*nin[0], bc[1] + R_h*nin[1])
-
-            bc_s  = pp.chainage - L_h / 2.0
-            ec_s  = pp.chainage + L_h / 2.0
-            th0   = math.atan2(bc[1] - cen[1], bc[0] - cen[0])
-
-            arc_geom[i] = dict(bc=bc, ec=ec, bc_s=bc_s, ec_s=ec_s,
-                               cen=cen, R_h=R_h, eps=eps, th0=th0)
+        arc_geom, skip_points = SpatialMerger._build_plan_arc_geometries(plan_points)
 
         # Step 2: 按桩号排序事件，生成 LINE/ARC 段序列（§4.2）
-        # 包含所有 IP 点（FOLD/NONE 型中间 IP 的坐标就在轴线上，必须作为段边界）
+        # FOLD/NONE 型中间点都作为段边界；DXF 弧段的起终点由 B/E 事件承载，避免重复插点。
         events = []
         for i, pp in enumerate(plan_points):
-            if i not in arc_geom:   # 非 ARC 型（含首尾、FOLD、中间 NONE）
+            if i not in arc_geom and i not in skip_points:
                 events.append((pp.chainage, (pp.x, pp.y), 'P', -1))
         for i, g in arc_geom.items():
             events.append((g['bc_s'], g['bc'], 'B', i))
@@ -268,9 +437,11 @@ class SpatialMerger:
         for s, xy, k, idx in events[1:]:
             if k == 'B':
                 if s > prev_s + 1e-6:
-                    dx, dy = xy[0]-prev_xy[0], xy[1]-prev_xy[1]
+                    dx, dy = xy[0] - prev_xy[0], xy[1] - prev_xy[1]
                     segs.append(PlanSegment(seg_type='LINE', s_start=prev_s, s_end=s,
-                                            p_start=prev_xy, direction=norm2(dx, dy)))
+                                            p_start=prev_xy,
+                                            direction=SpatialMerger._fallback_dir(
+                                                SpatialMerger._norm2(dx, dy))))
                 prev_s, prev_xy, in_arc = s, xy, idx
             elif k == 'E' and in_arc == idx:
                 g = arc_geom[idx]
@@ -279,9 +450,11 @@ class SpatialMerger:
                                         epsilon=g['eps'], theta_0=g['th0']))
                 prev_s, prev_xy, in_arc = s, xy, None
             elif k == 'P' and in_arc is None and s > prev_s + 1e-6:
-                dx, dy = xy[0]-prev_xy[0], xy[1]-prev_xy[1]
+                dx, dy = xy[0] - prev_xy[0], xy[1] - prev_xy[1]
                 segs.append(PlanSegment(seg_type='LINE', s_start=prev_s, s_end=s,
-                                        p_start=prev_xy, direction=norm2(dx, dy)))
+                                        p_start=prev_xy,
+                                        direction=SpatialMerger._fallback_dir(
+                                            SpatialMerger._norm2(dx, dy))))
                 prev_s, prev_xy = s, xy
         return segs
 
@@ -853,11 +1026,17 @@ class SpatialMerger:
     def _tag_turn_nodes(nodes, plan_segs, prof_segs, plan_points, long_nodes):
         """为节点打上平面/纵断面转弯标记（保留旧字段，供 _backfill_node_fields 使用）"""
         # 从原始 plan_points 对应节点（QZ桩号）精确匹配
-        plan_dict = {round(pp.chainage, 3): pp for pp in plan_points}
-        long_dict  = {round(ln.chainage, 3): ln for ln in long_nodes}
+        plan_dict = {
+            round(pp.chainage, GEOMETRY_MATCH_DECIMALS): pp
+            for pp in plan_points
+        }
+        long_dict = {
+            round(ln.chainage, GEOMETRY_MATCH_DECIMALS): ln
+            for ln in long_nodes
+        }
 
         for nd in nodes:
-            s_r = round(nd.chainage, 3)
+            s_r = round(nd.chainage, GEOMETRY_MATCH_DECIMALS)
             pp  = plan_dict.get(s_r)
             ln  = long_dict.get(s_r)
 
@@ -883,39 +1062,25 @@ class SpatialMerger:
 
     @staticmethod
     def _build_plan_geometry(plan_points: List[PlanFeaturePoint]) -> List[dict]:
-        """保留：为每个圆弧型IP点预计算精确几何参数（供运行时断言）"""
+        """兼容：为每个圆弧型点预计算几何参数，支持 DXF 弧段起点与传统 IP/QZ 语义。"""
         n = len(plan_points)
         geom = [dict(bc=None, ec=None, center=None, qz=None,
                      bc_chainage=None, ec_chainage=None,
                      d_in=None, d_out=None, left_turn=True)
                 for _ in range(n)]
-        for i in range(1, n - 1):
-            pp = plan_points[i]
-            if pp.turn_type != TurnType.ARC or pp.turn_angle < 0.1 or pp.turn_radius <= 0:
-                continue
-            pp_prev = plan_points[i - 1]; pp_next = plan_points[i + 1]
-            dx_in  = pp.x - pp_prev.x; dy_in  = pp.y - pp_prev.y
-            dx_out = pp_next.x - pp.x; dy_out = pp_next.y - pp.y
-            len_in  = math.sqrt(dx_in**2 + dy_in**2)
-            len_out = math.sqrt(dx_out**2 + dy_out**2)
-            if len_in < 1e-9 or len_out < 1e-9:
-                continue
-            d_in  = (dx_in/len_in,  dy_in/len_in)
-            d_out = (dx_out/len_out, dy_out/len_out)
-            R = pp.turn_radius; a_rad = math.radians(pp.turn_angle)
-            T = R * math.tan(a_rad / 2); L_arc = R * a_rad
-            bc = (pp.x - T*d_in[0],  pp.y - T*d_in[1])
-            ec = (pp.x + T*d_out[0], pp.y + T*d_out[1])
-            left_turn = (d_in[0]*d_out[1] - d_in[1]*d_out[0]) > 0
-            if left_turn:
-                center = (bc[0] - R*d_in[1], bc[1] + R*d_in[0])
-            else:
-                center = (bc[0] + R*d_in[1], bc[1] - R*d_in[0])
-            bc_ch = pp.chainage - L_arc/2.; ec_ch = pp.chainage + L_arc/2.
-            qz = SpatialMerger._arc_point(center, R, bc, a_rad/2., left_turn)
-            geom[i] = dict(bc=bc, ec=ec, center=center, qz=qz,
-                           bc_chainage=bc_ch, ec_chainage=ec_ch,
-                           d_in=d_in, d_out=d_out, left_turn=left_turn)
+        arc_geom, _skip_points = SpatialMerger._build_plan_arc_geometries(plan_points)
+        for i, g in arc_geom.items():
+            geom[i] = dict(
+                bc=g['bc'],
+                ec=g['ec'],
+                center=g['center'],
+                qz=g['qz'],
+                bc_chainage=g['bc_chainage'],
+                ec_chainage=g['ec_chainage'],
+                d_in=g['d_in'],
+                d_out=g['d_out'],
+                left_turn=g['left_turn'],
+            )
         return geom
 
     @staticmethod
@@ -952,7 +1117,11 @@ class SpatialMerger:
             if ds < 1e-6: continue
             dh = math.hypot(n2.x - n1.x, n2.y - n1.y)
             if dh > ds + EPS:
-                warnings.append(f"[断言2] 弦长>桩号差: 段{i} dh={dh:.4f}>ds={ds:.4f}")
+                warnings.append(
+                    f"[断言2] 弦长>桩号差: 段{i} "
+                    f"(s={n1.chainage:.3f}->{n2.chainage:.3f}) "
+                    f"dh={dh:.4f}>ds={ds:.4f}"
+                )
 
         # 断言3：平面弧段圆方程
         if plan_points:
@@ -984,7 +1153,8 @@ class SpatialMerger:
             warnings.append(f"[断言5] L_spatial<L_horizontal: {total_spatial_length:.4f}<{total_h:.4f}")
 
         steps.append("")
-        steps.append("【几何一致性检查】")
+        steps.append("【几何一致性诊断】")
+        steps.append("  注：仅为非阻断诊断，不参与弯道数量识别或局损累计")
         if warnings:
             for w in warnings: steps.append(f"  ⚠ {w}")
         else:

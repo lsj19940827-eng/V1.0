@@ -49,6 +49,10 @@ COMMON_SEGMENT_TYPES = {
     SegmentType.OTHER,
 }
 
+GEOMETRY_STORAGE_DECIMALS = 6
+GEOMETRY_DISPLAY_DECIMALS = 3
+GEOMETRY_MATCH_DECIMALS = GEOMETRY_STORAGE_DECIMALS
+
 
 def is_common_type(segment_type: SegmentType) -> bool:
     """判断某个结构段类型是否属于通用构件（不涉及平面/纵断面几何线形）"""
@@ -428,6 +432,7 @@ class SpatialNode:
     三维空间节点（合并平面+纵断面后的特征点）
     
     由 SpatialMerger 按桩号合并 PlanFeaturePoint 和 LongitudinalNode 生成。
+    用于坐标求值、绘图和诊断；不是空间弯道局损事件清单。
     """
     chainage: float = 0.0               # 桩号 (m)
     x: float = 0.0                      # X坐标
@@ -448,10 +453,10 @@ class SpatialNode:
     plan_turn_type: TurnType = TurnType.NONE
     long_turn_type: TurnType = TurnType.NONE
     
-    # 空间计算结果
+    # 空间计算结果（兼容旧消费路径，局损查表真源应使用 bend_events）
     spatial_turn_angle: float = 0.0     # θ_3D (度)
-    effective_radius: float = 0.0       # 用于查表的有效半径 (m)
-    effective_turn_type: TurnType = TurnType.NONE  # 用于查表的转弯类型
+    effective_radius: float = 0.0       # 兼容字段：节点关联事件的有效半径 (m)
+    effective_turn_type: TurnType = TurnType.NONE  # 兼容字段：节点关联事件的转弯类型
     
     # 竖曲线弧段标记（供精确弧长计算，风险点D）
     long_arc_end_chainage: Optional[float] = None  # 该节点为竖曲线弧起点时，弧终点桩号
@@ -481,12 +486,12 @@ class SpatialMergeResult:
     nodes: List[SpatialNode] = field(default_factory=list)
     total_spatial_length: float = 0.0
     segment_lengths: List[float] = field(default_factory=list)
-    xi_spatial_bends: float = 0.0       # 空间弯道损失系数总和
+    xi_spatial_bends: float = 0.0       # 空间弯道损失系数总和（由 HydraulicCore 按 bend_events 计算）
     computation_steps: List[str] = field(default_factory=list)
     has_plan_data: bool = False
     has_longitudinal_data: bool = False
     # v5.0 新增
-    bend_events: List['BendEvent'] = field(default_factory=list)      # 弯道事件表（供局损查表）
+    bend_events: List['BendEvent'] = field(default_factory=list)      # 弯道事件表（空间局损查表真源）
     plan_segments: List['PlanSegment'] = field(default_factory=list)  # 平面分段序列
     profile_segments: List['ProfileSegment'] = field(default_factory=list)  # 纵断面分段序列
 
