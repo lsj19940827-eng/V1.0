@@ -200,6 +200,7 @@ def test_qxproj_roundtrip_supports_immediate_export_details_and_table_edit(monke
         panel = _build_panel(module)
         try:
             panel._settings = _make_settings()
+            panel._length_rule_nudge_seen = True
             nodes = _make_nodes()
             panel.calculated_nodes = nodes
             panel._update_table_from_nodes_full(nodes)
@@ -222,6 +223,7 @@ def test_qxproj_roundtrip_supports_immediate_export_details_and_table_edit(monke
             _flush_events()
             assert restored.node_table.item(1, 32).text() == "5.000"
             assert restored.calculated_nodes[1].transition_length_override_m == 5.0
+            assert restored._length_rule_nudge_seen is True
             assert len(restored._settings.transition_length_rules) == 1
             assert restored._settings.transition_length_rules[0].rule_mode == "step_up"
 
