@@ -18,6 +18,10 @@ class _FakeWebEngineView(QWidget):
         return None
 
 
+def _fake_web_view_factory(parent=None):
+    return _FakeWebEngineView(parent)
+
+
 def _get_qapp():
     return QApplication.instance() or QApplication([])
 
@@ -31,7 +35,7 @@ def _make_two_plan_points():
 
 def test_example_longitudinal_is_ignored_in_calc(monkeypatch):
     _get_qapp()
-    monkeypatch.setattr(siphon_panel_mod, "QWebEngineView", _FakeWebEngineView)
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
 
     panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
     panel._suppress_result_display = True
@@ -80,7 +84,7 @@ def test_example_longitudinal_is_ignored_in_calc(monkeypatch):
 
 def test_data_status_shows_plan_only_when_longitudinal_is_example(monkeypatch):
     _get_qapp()
-    monkeypatch.setattr(siphon_panel_mod, "QWebEngineView", _FakeWebEngineView)
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
 
     panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
     panel.plan_feature_points = _make_two_plan_points()

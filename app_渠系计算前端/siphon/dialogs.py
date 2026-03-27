@@ -1591,6 +1591,9 @@ class SegmentEditDialog(QDialog):
         self._on_type()
         self._update_spatial()
         self._loading = False
+        if not self.ed_xi.text().strip():
+            self._auto_xi()
+            self._update_formula()
 
     # ---- 确定 ----
     def _on_ok(self):

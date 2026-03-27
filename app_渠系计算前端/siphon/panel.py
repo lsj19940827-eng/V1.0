@@ -2726,6 +2726,10 @@ document.addEventListener("DOMContentLoaded", function(){
                 seg.xi_calc = CoefficientService.calculate_bend_coeff(
                     seg.radius, D, seg.angle, verbose=False)
                 updated = True
+            elif seg.segment_type == SegmentType.FOLD and seg.angle > 0:
+                seg.xi_calc = CoefficientService.calculate_fold_coeff(
+                    seg.angle, verbose=False)
+                updated = True
         if updated:
             self._refresh_seg_table()
 

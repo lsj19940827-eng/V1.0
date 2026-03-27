@@ -18,13 +18,17 @@ class _FakeWebEngineView(QWidget):
         return None
 
 
+def _fake_web_view_factory(parent=None):
+    return _FakeWebEngineView(parent)
+
+
 def _get_qapp():
     return QApplication.instance() or QApplication([])
 
 
 def test_set_params_autofills_increased_velocity_fields(monkeypatch):
     _get_qapp()
-    monkeypatch.setattr(siphon_panel_mod, "QWebEngineView", _FakeWebEngineView)
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
 
     panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
     panel.set_params(v_channel_in_inc=1.23456, v_pipe_out_inc=2.34567)
