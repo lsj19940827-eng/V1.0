@@ -70,6 +70,7 @@ data/*_autosave.qxproj
 data/siphon_autosave.json
 data/autosave/
 data/_test_auto_confirm/
+data/_test_runtime_confirm/
 data/_test_unified_confirm/
 
 # 用户数据文件（DXF图纸、Excel、项目文件等，仅本地保留）

@@ -1,12 +1,12 @@
 # PRD：渐变段（过渡段）完整需求规格说明书
 
-> **版本**：v3.2 | **最后更新**：2026-03-13
+> **版本**：v3.3 | **最后更新**：2026-03-26
 >
 > 整合推求水面线模块、倒虹吸水力计算系统、有压管道批量计算中所有与渐变段相关的需求，统一为一份完整文档。
 
 ---
 
-## 当前实现同步说明（2026-03-16）
+## 当前实现同步说明（2026-03-26）
 
 - 插入渐变段的“补段”参考断面已从仅支持明渠扩展为支持 `明渠 + 矩形暗涵`，其中 Excel / 批量结果中的 `暗渠`、`矩形暗渠` 统一按内部 `矩形暗涵` 处理。
 - donor 搜索顺序已调整为：`同段首选家族 -> 同段非首选家族 -> 跨段首选家族 -> 跨段非首选家族`。只有当空隙两端真实结构都属于矩形暗涵场景时，首选家族才为暗渠；其他场景仍首选明渠。
@@ -17,6 +17,12 @@
 - 自动插入的矩形暗涵节点继续沿用 `is_auto_inserted_channel=True` 标记，内部模型名 `OpenChannelParams` 保持不变，但已允许 `structure_type="矩形暗涵"`，并携带 `B / H_total / water_depth / roughness / slope_i`。
 - “矩形明渠 ↔ 矩形暗涵且底宽相同可不插渐变段”的既有规则保持不变；隧洞仍不纳入本次补段 donor 范围。
 - `available_length` 在长度不足时会统一压成 `0.0`；`need_open_channel` 仅在 `available_length > 0` 时成立，不再保留负值差额语义。
+- 渐变段长度当前已支持项目级“组合规则”和节点级“单条覆盖”。实际采用顺序为：`单条覆盖 > 组合规则 > 公式/规范值`；若最终长度因里程不足被压缩，则额外记录 `distance_clamped=True` 告警。
+- 组合规则按 `上游结构类型 + 下游结构类型 + transition_type(进口/出口)` 匹配，规则模式支持 `formula / step_up / fixed`。规则候选只来自当前工程已出现的结构组合。
+- 组合规则候选当前已支持“插入前预览”：即使表3还没有渐变段行，也会基于当前结构相邻关系推导出可配置的组合。
+- 结果表第 32 列已由“完全只读”升级为“仅渐变段行可编辑”。双击仍保留为详情弹窗；`Enter/F2` 与右键菜单用于内联编辑或恢复公式/规则结果。
+- 单条覆盖长度若超过当前局部拓扑可用里程，系统会直接阻止保存，并提示用户重新插入渐变段；不再允许用“改单条长度”的方式隐式改变现有拓扑。
+- `.qxproj` 持久化已覆盖 `ProjectSettings.transition_length_rules`、`ChannelNode.transition_length_override_m`、长度来源/警告/原始结构对等字段；项目重开后可直接查看详情、导出和继续改单条长度，无需先重新计算。
 
 ## 一、概述
 
@@ -252,12 +258,42 @@ $$L = k \times |B_1 - B_2|$$
     "transition_type", "struct_name", "B1", "B2", "coefficient",
     "L_basic", "channel_depth", "L_result", "constraint_applied",
     "prev_name", "next_name",
+    # 当前已落地的长度来源链字段：
+    "formula_length",         # 公式/规范计算值
+    "rule_mode",              # formula / step_up / fixed
+    "rule_value",             # 步长或固定值；formula 模式下等于 formula_length
+    "actual_length",          # 最终采用长度（已考虑组合规则/单条覆盖/压缩）
+    "source",                 # formula / rule:formula / rule:step_up / rule:fixed / override
+    "warning",                # 低于公式值或受里程压缩时的告警文案
+    "distance_clamped",       # 是否因可用里程不足而被压缩
+    "uses_existing_length",   # 是否沿用了已有采用值
+    "matched_rule",           # 命中的组合规则快照（若有）
+    "upstream_structure_type",
+    "downstream_structure_type",
     # 约束类型特有字段：
     "depth_multiplier", "L_depth",                    # 渡槽/倒虹吸
     "tunnel_multiplier", "tunnel_size", "L_tunnel",   # 隧洞
     "constraint_desc",                                 # 所有类型
 }
 ```
+
+### 3.7 长度来源优先级与规则应用
+
+当前实现中，渐变段长度的决策顺序如下：
+
+1. 先按结构类型与规范约束计算 `formula_length`
+2. 若命中项目级组合规则：
+   - `formula`：直接采用公式值
+   - `step_up`：按步长向上修约
+   - `fixed`：采用固定值
+3. 若该条渐变段存在 `transition_length_override_m`，则覆盖组合规则结果
+4. 若外部实际可用里程更短，则在最终采用值上做压缩，并记录 `distance_clamped=True`
+
+补充口径：
+
+- 允许单条覆盖值或固定值小于 `formula_length`，但会在详情弹窗、tooltip 和表格着色中显示警告。
+- `step_up` 的修约目标始终是公式/规范值，而不是基础公式 `L_basic`。
+- 组合规则在“插入前判断是否需要补段”和“插入后补建详情/损失”两条链路上共用同一套解析逻辑，避免 UI 展示值与实际采用值不一致。
 
 ---
 
@@ -559,6 +595,24 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
 | `siphon_transition_inlet_zeta` | `0.10` | 进口ζ系数 |
 | `siphon_transition_outlet_zeta` | `0.20` | 出口ζ系数 |
 
+### 8.4 项目级渐变段长度规则
+
+`ProjectSettings.transition_length_rules` 当前已落地为项目级持久化字段。每条规则固定包含：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `upstream_structure_type` | `str` | 原始上游结构类型 |
+| `downstream_structure_type` | `str` | 原始下游结构类型 |
+| `transition_type` | `"进口" \| "出口"` | 同一结构对在进口侧和出口侧分开配置 |
+| `rule_mode` | `"formula" \| "step_up" \| "fixed"` | 长度采用模式 |
+| `step_size_m` | `float` | `step_up` 模式的向上修约步长 |
+| `fixed_length_m` | `float` | `fixed` 模式的固定值 |
+
+说明：
+
+- 规则对话框只展示“当前工程已经出现过”的组合，不做全量排列；候选来源于当前表3结构对推导，不要求先插入渐变段。
+- 同一组合在工程中出现多次时，共用同一条项目级规则。
+
 ---
 
 ## 九、ChannelNode 渐变段相关字段
@@ -574,6 +628,11 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
 | `transition_zeta` | `float` | `0.0` | 局部损失系数ζ |
 | `transition_theta` | `float` | `0.0` | 直线形扭曲面的θ角度 |
 | `transition_length` | `float` | `0.0` | 渐变段长度L（m） |
+| `transition_length_override_m` | `float \| null` | `None` | 单条覆盖长度；有值时优先于组合规则 |
+| `transition_length_source` | `str` | `"formula"` | 当前来源：`formula / rule:* / override` |
+| `transition_length_warning` | `str` | `""` | 当前采用值的告警信息 |
+| `transition_rule_upstream_structure_type` | `str` | `""` | 规则追溯用的原始上游结构类型 |
+| `transition_rule_downstream_structure_type` | `str` | `""` | 规则追溯用的原始下游结构类型 |
 | `transition_water_width_1` | `float` | `0.0` | 起始水面宽度B₁（m） |
 | `transition_water_width_2` | `float` | `0.0` | 末端水面宽度B₂（m） |
 | `transition_velocity_1` | `float` | `0.0` | 起始流速v₁（m/s） |
@@ -647,9 +706,15 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
 |----|-----------|------|
 | 第1行 | 渡槽/隧洞 | 进口形式+ζ₁（表K.1.2）、出口形式+ζ₂ |
 | 第2行 | 明渠 | 渐变段形式+ζ（明渠不同子类型间的过渡） |
-| 第3行 | 倒虹吸 | 进口形式+ζ₁（表L.1.2）、出口形式+ζ₂、"参考系数表"按钮 |
+| 第3行 | 倒虹吸 / 有压管道 | 进口形式+ζ₁（表L.1.2）、出口形式+ζ₂、"参考系数表"按钮、"长度规则"按钮 |
 
 点击"参考系数表"弹出 `TransitionReferenceDialog`，展示 K.1.2（渡槽/隧洞）和 L.1.2（倒虹吸）的系数图表（含示意图缩略图，支持点击放大）。
+
+点击“长度规则”弹出 `TransitionLengthRuleDialog`，按 `上游结构 / 下游结构 / 渐变段类型` 列出当前工程已出现的组合，支持：
+
+- 保持公式值；
+- 按步长向上修约；
+- 指定该组合的固定长度。
 
 ### 11.2 插入渐变段按钮交互流程
 
@@ -674,15 +739,22 @@ $$\Delta S_{MC} > L_{出口渐变段} + L_{进口渐变段}$$
 
 | 双击列 | 弹出内容 |
 |--------|---------|
-| 渐变段长度L | 基本公式+各约束条件+最终取值 |
+| 渐变段长度L | 基本公式+各约束条件+组合规则结果+当前采用值+来源+警告；弹窗底部可保存单条覆盖或恢复公式/规则 |
 | 渐变段水头损失 | 局部损失（ζ/v₁/v₂）+ 沿程损失（R_avg/v_avg/n/L）+ 总损失 |
 
 ### 11.4 节点数据表列定义（渐变段相关列）
 
 | 列索引 | 列名 | 宽度 | 可编辑 |
 |--------|------|------|--------|
-| 32 | 渐变段长度L | 90 | 只读 |
+| 32 | 渐变段长度L | 90 | 仅渐变段行可编辑 |
 | 33 | 渐变段水头损失 | 110 | 只读 |
+
+列 32 的交互口径以当前实现为准：
+
+- 双击：打开详情弹窗，不直接进入单元格编辑；
+- `Enter / F2`：对当前渐变段行启动内联编辑；
+- 右键菜单：可执行“查看详情 / 编辑渐变段长度 / 恢复公式或规则结果”。
+- 若输入长度超过当前局部可用里程，编辑会被拦截，并提示“请重新插入渐变段或调整结构布置”。
 
 ---
 

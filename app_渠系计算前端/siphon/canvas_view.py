@@ -53,6 +53,7 @@ class PipelineCanvas(QWidget):
 
     view_changed = Signal(str)   # 视图切换信号
     zoom_changed = Signal(float)   # 缩放变化信号
+    open_detail_requested = Signal()   # 请求打开独立详情查看器
 
     # 颜色常量
     C_BG = QColor(20, 20, 30)
@@ -97,12 +98,8 @@ class PipelineCanvas(QWidget):
     def set_view_mode(self, mode: str):
         if mode in ("profile", "plan") and mode != self._view_mode:
             self._view_mode = mode
-            self._zoom = 1.0
-            self._pan_x = 0.0
-            self._pan_y = 0.0
-            self.update()
+            self.fit_to_content()
             self.view_changed.emit(mode)
-            self.zoom_changed.emit(self._zoom)
 
     def get_view_mode(self):
         return self._view_mode
@@ -138,7 +135,57 @@ class PipelineCanvas(QWidget):
         self.zoom_changed.emit(self._zoom)
 
     def zoom_fit(self):
-        self.zoom_reset()
+        self.fit_to_content()
+
+    def fit_to_content(self):
+        """适配全图：回到当前数据内容的默认居中视图。"""
+        if self.content_bounds() is None:
+            self.zoom_reset()
+            return
+        self._zoom = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self.update()
+        self.zoom_changed.emit(self._zoom)
+
+    def content_bounds(self, mode: str = None):
+        """返回当前视图内容边界 (min_x, max_x, min_y, max_y)。"""
+        view_mode = mode or self._view_mode
+        if view_mode == "plan":
+            fp_list = self._get_plan_feature_points_for_draw()
+            if not fp_list or len(fp_list) < 2:
+                return None
+            xs = [fp.x for fp in fp_list]
+            ys = [fp.y for fp in fp_list]
+            return (min(xs), max(xs), min(ys), max(ys))
+
+        all_coords = self._get_profile_coords_for_draw()
+        if all_coords:
+            xs = [c[0] for c in all_coords]
+            ys = [c[1] for c in all_coords]
+            return (min(xs), max(xs), min(ys), max(ys))
+
+        simplified = self._get_simplified_profile_points()
+        if simplified:
+            xs = [c[0] for c in simplified]
+            ys = [c[1] for c in simplified]
+            return (min(xs), max(xs), min(ys) - 2, max(ys) + 5)
+        return None
+
+    def should_suggest_detail_view(self) -> bool:
+        """判断当前预览区是否适合给出“建议展开查看”的提示。"""
+        bounds = self.content_bounds()
+        if not bounds:
+            return False
+        w, h = max(self.width(), 1), max(self.height(), 1)
+        dw = max(bounds[1] - bounds[0], 1e-6)
+        dh = max(bounds[3] - bounds[2], 1e-6)
+        elongated = max(dw, dh) / max(min(dw, dh), 1e-6) >= 3.0
+        preview_is_flat = w / max(h, 1) >= 2.0
+        orientation_mismatch = (dh > dw * 1.8 and preview_is_flat) or (
+            dw > dh * 2.8 and h > w * 0.8
+        )
+        return elongated and (orientation_mismatch or min(w, h) <= 220)
 
     def auto_select_view(self):
         """根据数据状态自动选择视图"""
@@ -204,6 +251,13 @@ class PipelineCanvas(QWidget):
         self._drag_start = None
         self._drag_pan_start = None
 
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            self.open_detail_requested.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     # ---- 缩放辅助 ----
 
     def _apply_zoom(self, factor, cx, cy):
@@ -238,6 +292,65 @@ class PipelineCanvas(QWidget):
                     cy - (y - dcy) * scale)
         return transform, scale
 
+    def _resolve_content_margin(self, w, h, data_bounds):
+        short_side = max(1, min(w, h))
+        margin = max(14, min(48, int(short_side * 0.1)))
+        if data_bounds:
+            dw = max(data_bounds[1] - data_bounds[0], 1e-6)
+            dh = max(data_bounds[3] - data_bounds[2], 1e-6)
+            if max(dw, dh) / max(min(dw, dh), 1e-6) >= 3.0:
+                margin = max(10, min(margin, int(short_side * 0.06)))
+        return margin
+
+    def _get_plan_feature_points_for_draw(self):
+        fp_list = self._plan_feature_points
+        if not fp_list or len(fp_list) < 2:
+            if self._plan_segments:
+                fp_list = self._gen_plan_coords()
+        if not fp_list or len(fp_list) < 2:
+            return []
+        return fp_list
+
+    def _get_profile_pipe_segments(self):
+        if not MODELS_AVAILABLE:
+            return []
+        return [
+            s for s in self._segments
+            if s.segment_type not in COMMON_SEGMENT_TYPES and len(s.coordinates) > 0
+        ]
+
+    def _get_profile_coords_for_draw(self):
+        all_coords = []
+        for seg in self._get_profile_pipe_segments():
+            for c in seg.coordinates:
+                if not all_coords or (
+                    abs(c[0] - all_coords[-1][0]) > 1e-6 or
+                    abs(c[1] - all_coords[-1][1]) > 1e-6
+                ):
+                    all_coords.append(c)
+        return all_coords
+
+    def _get_simplified_profile_points(self):
+        if not MODELS_AVAILABLE:
+            return []
+        has_pipe = any(
+            s.direction == SegmentDirection.LONGITUDINAL
+            and s.segment_type not in COMMON_SEGMENT_TYPES
+            for s in self._segments
+        )
+        if not has_pipe or not self._longitudinal_is_example:
+            return []
+
+        total_len = sum(s.length for s in self._segments if s.length > 0) or 100
+        h_bottom = 95.0
+        depth = 5
+        pts = []
+        for t_frac in [0, 0.15, 0.3, 0.45, 0.5, 0.55, 0.7, 0.85, 1.0]:
+            x = t_frac * total_len
+            y = h_bottom - depth * math.sin(math.pi * t_frac)
+            pts.append((x, y))
+        return pts
+
     # ---- 纵断面视图 ----
 
     def _draw_profile(self, p: QPainter, w, h):
@@ -246,15 +359,8 @@ class PipelineCanvas(QWidget):
             return
 
         # 收集管身段坐标
-        pipe_segs = [s for s in self._segments
-                     if s.segment_type not in COMMON_SEGMENT_TYPES and len(s.coordinates) > 0]
-
-        all_coords = []
-        for seg in pipe_segs:
-            for c in seg.coordinates:
-                if not all_coords or (abs(c[0] - all_coords[-1][0]) > 1e-6 or
-                                       abs(c[1] - all_coords[-1][1]) > 1e-6):
-                    all_coords.append(c)
+        pipe_segs = self._get_profile_pipe_segments()
+        all_coords = self._get_profile_coords_for_draw()
 
         if not all_coords:
             # 无真实坐标 → 简化示意图或提示
@@ -273,7 +379,8 @@ class PipelineCanvas(QWidget):
         xs = [c[0] for c in all_coords]
         ys = [c[1] for c in all_coords]
         bounds = (min(xs), max(xs), min(ys), max(ys))
-        transform, scale = self._make_transform(bounds, w, h)
+        transform, scale = self._make_transform(
+            bounds, w, h, margin=self._resolve_content_margin(w, h, bounds))
         screen_pts = [transform(c[0], c[1]) for c in all_coords]
 
         # 管线段用于标签碰撞检测
@@ -526,18 +633,16 @@ class PipelineCanvas(QWidget):
             self._draw_centered_text(p, w, h, "模型未加载")
             return
 
-        fp_list = self._plan_feature_points
+        fp_list = self._get_plan_feature_points_for_draw()
         if not fp_list or len(fp_list) < 2:
-            if self._plan_segments:
-                fp_list = self._gen_plan_coords()
-            if not fp_list or len(fp_list) < 2:
-                self._draw_centered_text(p, w, h, "暂无平面数据\n请从推求水面线导入平面管道信息")
-                return
+            self._draw_centered_text(p, w, h, "暂无平面数据\n请从推求水面线导入平面管道信息")
+            return
 
         xs = [fp.x for fp in fp_list]
         ys = [fp.y for fp in fp_list]
         bounds = (min(xs), max(xs), min(ys), max(ys))
-        transform, scale = self._make_transform(bounds, w, h)
+        transform, scale = self._make_transform(
+            bounds, w, h, margin=self._resolve_content_margin(w, h, bounds))
         screen_pts = [transform(fp.x, fp.y) for fp in fp_list]
 
         # 管道线
@@ -724,7 +829,6 @@ class PipelineCanvas(QWidget):
     # ---- 简化示意图 ----
 
     def _draw_simplified(self, p: QPainter, w, h):
-        margin = 50
         total_len = sum(s.length for s in self._segments if s.length > 0) or 100
         H_bottom = 95.0
         depth = 5
@@ -738,7 +842,8 @@ class PipelineCanvas(QWidget):
         xs = [c[0] for c in pts]
         ys = [c[1] for c in pts]
         bounds = (min(xs), max(xs), min(ys) - 2, max(ys) + 5)
-        transform, scale = self._make_transform(bounds, w, h, margin)
+        transform, scale = self._make_transform(
+            bounds, w, h, margin=self._resolve_content_margin(w, h, bounds))
         spts = [transform(c[0], c[1]) for c in pts]
 
         # 管道曲线

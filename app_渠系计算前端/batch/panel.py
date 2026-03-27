@@ -86,6 +86,11 @@ except ImportError:
     def normalize_section_type_name(section_type):
         return str(section_type or "").strip()
 
+try:
+    from config.constants import CHANNEL_LEVEL_OPTIONS
+except ImportError:
+    CHANNEL_LEVEL_OPTIONS = ["总干渠", "总干管", "分干渠", "分干管", "干渠", "干管", "支渠", "支管", "分支渠", "分支管", "充水渠", "泄水渠"]
+
 # 计算引擎导入
 try:
     from 明渠设计 import (
@@ -401,7 +406,7 @@ class BatchPanel(QWidget):
         ig = QHBoxLayout(info_grp)
         ig.setSpacing(8)
         ig.addWidget(QLabel("渠道名称:")); self.channel_name_edit = LineEdit(); self.channel_name_edit.setText("南峰寺"); self.channel_name_edit.setFixedWidth(100); ig.addWidget(self.channel_name_edit)
-        ig.addWidget(QLabel("渠道类型:")); self.channel_level_combo = ComboBox(); self.channel_level_combo.addItems(["总干渠","总干管","分干渠","分干管","干渠","干管","支渠","支管","分支渠","分支管"]); self.channel_level_combo.setCurrentText("支渠"); self.channel_level_combo.setFixedWidth(80); ig.addWidget(self.channel_level_combo)
+        ig.addWidget(QLabel("渠道类型:")); self.channel_level_combo = ComboBox(); self.channel_level_combo.addItems(CHANNEL_LEVEL_OPTIONS); self.channel_level_combo.setCurrentText("支渠"); self.channel_level_combo.setFixedWidth(80); ig.addWidget(self.channel_level_combo)
         ig.addWidget(QLabel("起始水位(m):")); self.start_wl_edit = LineEdit(); self.start_wl_edit.setMinimumWidth(70); self.start_wl_edit.setMaximumWidth(160); self.start_wl_edit.textChanged.connect(lambda t, e=self.start_wl_edit: e.setFixedWidth(max(70, min(160, e.fontMetrics().horizontalAdvance(t) + 24)))); ig.addWidget(self.start_wl_edit)
         ig.addWidget(QLabel("起始桩号:")); self.start_station_edit = LineEdit(); self.start_station_edit.setText("0+000.000"); self.start_station_edit.setFixedWidth(100); ig.addWidget(self.start_station_edit)
         self.start_station_edit.editingFinished.connect(self._format_start_station_display)

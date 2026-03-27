@@ -154,6 +154,16 @@ def test_initial_load_hides_be_and_bk_rows():
     dlg.deleteLater()
 
 
+def test_dialog_defaults_show_profile_ratio_denominators():
+    _get_qapp()
+    dlg = cad_tools.TextExportSettingsDialog()
+
+    assert dlg._entries["scale_x"].text() == "2000"
+    assert dlg._entries["scale_y"].text() == "1000"
+
+    dlg.deleteLater()
+
+
 def test_dialog_uses_splitter_workbench_and_footer_stays_visible(monkeypatch):
     _get_qapp()
     _clear_dialog_ui_settings()

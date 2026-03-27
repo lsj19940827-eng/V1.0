@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QButtonGroup, QSplitter, QApplication,
     QSizePolicy, QTabWidget, QCheckBox, QScrollArea, QFrame, QStackedWidget
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
 
 from app_渠系计算前端.styles import auto_resize_table, fluent_info, fluent_error, fluent_question
@@ -235,6 +235,10 @@ class SimpleProfileCanvas(QWidget):
     直接工作在节点字典数据上，无需 StructureSegment 模型。
     """
 
+    view_changed = Signal(str)
+    zoom_changed = Signal(float)
+    open_detail_requested = Signal()
+
     C_BG = QColor(20, 20, 30)
     C_PIPE = QColor(0, 255, 0)
     C_ARROW = QColor(0, 204, 0)
@@ -290,6 +294,7 @@ class SimpleProfileCanvas(QWidget):
             self._pan_x = 0.0
             self._pan_y = 0.0
             self.update()
+            self.view_changed.emit(mode)
 
     def get_view_mode(self):
         return self._view_mode
@@ -305,6 +310,7 @@ class SimpleProfileCanvas(QWidget):
         self._pan_x = 0.0
         self._pan_y = 0.0
         self.update()
+        self.zoom_changed.emit(self._zoom)
 
     def get_zoom_percent(self):
         return int(self._zoom * 100)
@@ -348,6 +354,13 @@ class SimpleProfileCanvas(QWidget):
         self._drag_start = None
         self._drag_pan_start = None
 
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton and (self.has_plan_data() or self.has_profile_data()):
+            self.open_detail_requested.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     # ---- 缩放 ----
 
     def _apply_zoom(self, factor, cx, cy):
@@ -359,6 +372,7 @@ class SimpleProfileCanvas(QWidget):
             self._pan_y = (cy - h2) * (1 - actual) + self._pan_y * actual
             self._zoom = new_zoom
             self.update()
+            self.zoom_changed.emit(self._zoom)
 
     # ---- 坐标变换 ----
 
@@ -838,6 +852,8 @@ class SimpleProfileCanvas(QWidget):
 class LongitudinalPreviewDialog(QDialog):
     """管道预览对话框 —— 支持纵断面/平面图双视图，可调整大小"""
 
+    view_mode_changed = Signal(str)
+
     _ACTIVE_BTN_STYLE = (
         "QPushButton { font-size: 12px; font-weight: bold; color: #FFFFFF; "
         "background: #1976D2; border: 1px solid #1565C0; border-radius: 4px; "
@@ -855,7 +871,9 @@ class LongitudinalPreviewDialog(QDialog):
         self.setWindowTitle(f"管道预览 — {pipe_name}")
         self.resize(800, 500)
         self.setMinimumSize(500, 350)
-        self.setModal(True)
+        self.setModal(False)
+        self.setWindowFlag(Qt.Window, True)
+        self._pipe_name = ""
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
@@ -879,27 +897,8 @@ class LongitudinalPreviewDialog(QDialog):
         lay.addLayout(view_bar)
 
         self._canvas = SimpleProfileCanvas(self)
+        self._canvas.zoom_changed.connect(self._sync_zoom_label)
         lay.addWidget(self._canvas, 1)
-
-        has_nodes = nodes and len(nodes) >= 2
-        has_ip = ip_points and len(ip_points) >= 2
-
-        if has_nodes:
-            self._canvas.set_nodes(nodes)
-        if has_ip:
-            self._canvas.set_ip_points(ip_points)
-
-        if has_ip:
-            self._canvas.set_view_mode("plan")
-            self._btn_plan.setStyleSheet(self._ACTIVE_BTN_STYLE)
-            self._btn_profile.setStyleSheet(self._INACTIVE_BTN_STYLE)
-        elif has_nodes:
-            self._canvas.set_view_mode("profile")
-            self._btn_plan.setStyleSheet(self._INACTIVE_BTN_STYLE)
-            self._btn_profile.setStyleSheet(self._ACTIVE_BTN_STYLE)
-
-        self._btn_plan.setEnabled(bool(has_ip))
-        self._btn_profile.setEnabled(bool(has_nodes))
 
         self._btn_plan.clicked.connect(lambda: self._switch_view("plan"))
         self._btn_profile.clicked.connect(lambda: self._switch_view("profile"))
@@ -918,16 +917,63 @@ class LongitudinalPreviewDialog(QDialog):
             btn_close = QPushButton("关闭")
 
         btn_reset.clicked.connect(self._on_reset)
-        btn_close.clicked.connect(self.accept)
+        btn_close.clicked.connect(self.close)
 
         toolbar.addWidget(btn_reset)
         toolbar.addWidget(btn_close)
 
         lay.addLayout(toolbar)
 
+        self.sync_pipe_data(pipe_name=pipe_name, nodes=nodes, ip_points=ip_points)
+
+    def sync_pipe_data(self, pipe_name="", nodes=None, ip_points=None, view_mode=None):
+        self._pipe_name = pipe_name or self._pipe_name
+        self.setWindowTitle(f"管道预览 — {self._pipe_name}")
+        self._canvas.set_nodes(nodes or [])
+        self._canvas.set_ip_points(ip_points or [])
+
+        has_nodes = bool(nodes and len(nodes) >= 2)
+        has_ip = bool(ip_points and len(ip_points) >= 2)
+        self._btn_plan.setEnabled(has_ip)
+        self._btn_profile.setEnabled(has_nodes)
+
+        target_mode = view_mode
+        if target_mode not in ("plan", "profile"):
+            if has_ip:
+                target_mode = "plan"
+            elif has_nodes:
+                target_mode = "profile"
+            else:
+                target_mode = "plan"
+
+        if target_mode == "profile" and not has_nodes:
+            target_mode = "plan" if has_ip else "profile"
+        if target_mode == "plan" and not has_ip:
+            target_mode = "profile" if has_nodes else "plan"
+
+        self._canvas.set_view_mode(target_mode)
+        self._apply_view_mode_style(target_mode)
+        self._sync_zoom_label()
+
+    def show_and_focus(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def _switch_view(self, mode):
         self._canvas.set_view_mode(mode)
+        self._apply_view_mode_style(mode)
+        self._sync_zoom_label()
+        self.view_mode_changed.emit(mode)
+
+    def _on_reset(self):
+        self._canvas.zoom_reset()
+        self._sync_zoom_label()
+
+    def _sync_zoom_label(self, _zoom=None):
         self._zoom_label.setText(f"{self._canvas.get_zoom_percent()}%")
+
+    def _apply_view_mode_style(self, mode):
         if mode == "plan":
             self._btn_plan.setStyleSheet(self._ACTIVE_BTN_STYLE)
             self._btn_profile.setStyleSheet(self._INACTIVE_BTN_STYLE)
@@ -935,16 +981,18 @@ class LongitudinalPreviewDialog(QDialog):
             self._btn_plan.setStyleSheet(self._INACTIVE_BTN_STYLE)
             self._btn_profile.setStyleSheet(self._ACTIVE_BTN_STYLE)
 
-    def _on_reset(self):
-        self._canvas.zoom_reset()
-        self._zoom_label.setText(f"{self._canvas.get_zoom_percent()}%")
-
 
 # ============================================================
 # 有压管道计算配置对话框
 # ============================================================
 class PressurePipeConfigDialog(QDialog):
     """有压管道计算配置对话框（在计算前配置参数）"""
+
+    _SCREEN_WIDTH_RATIO = 0.88
+    _SCREEN_HEIGHT_RATIO = 0.92
+    _FALLBACK_MAX_WIDTH = 1200
+    _FALLBACK_MAX_HEIGHT = 980
+    _WINDOW_CHROME_PADDING = 24
 
     _VIEW_BTN_ACTIVE = (
         "QPushButton { font-size: 12px; font-weight: bold; color: #FFFFFF; "
@@ -977,6 +1025,11 @@ class PressurePipeConfigDialog(QDialog):
         self._last_apply_summary: Dict[str, Any] = {}
         self._syncing_radius = False
         self._last_turn_n = 3.0
+        self._canvas_viewer = None
+        self._active_viewer_pipe_name = ""
+        self._pipe_scroll_area = None
+        self._pipe_scroll_widget = None
+        self._did_apply_initial_size = False
 
         # 从manager加载已有的纵断面数据
         if self._manager and self._pipe_groups:
@@ -1002,6 +1055,7 @@ class PressurePipeConfigDialog(QDialog):
         self._last_turn_n = self._resolve_last_turn_n()
 
         self._init_ui()
+        self._apply_initial_size()
 
     def _resolve_last_turn_n(self) -> float:
         n_values = []
@@ -1584,6 +1638,8 @@ class PressurePipeConfigDialog(QDialog):
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
             scroll_widget = QWidget()
             scroll_lay = QVBoxLayout(scroll_widget)
@@ -1595,6 +1651,8 @@ class PressurePipeConfigDialog(QDialog):
 
             scroll_lay.addStretch()
             scroll.setWidget(scroll_widget)
+            self._pipe_scroll_area = scroll
+            self._pipe_scroll_widget = scroll_widget
             lay.addWidget(scroll, 1)
 
             radius_toolbar = QHBoxLayout()
@@ -1634,6 +1692,113 @@ class PressurePipeConfigDialog(QDialog):
         btn_lay.addWidget(btn_start)
 
         lay.addLayout(btn_lay)
+
+    @staticmethod
+    def _pick_size_value(*values) -> int:
+        positive = [int(v) for v in values if isinstance(v, (int, float)) and int(v) > 0]
+        return max(positive) if positive else 0
+
+    def _available_geometry(self):
+        screen = None
+        parent_widget = self.parentWidget()
+        if parent_widget is not None:
+            parent_window = parent_widget.window()
+            if parent_window is not None and parent_window.windowHandle() is not None:
+                screen = parent_window.windowHandle().screen()
+            if screen is None and parent_window is not None:
+                try:
+                    screen = parent_window.screen()
+                except Exception:
+                    screen = None
+        if screen is None:
+            app = QApplication.instance()
+            if app is not None:
+                screen = app.primaryScreen()
+        return screen.availableGeometry() if screen is not None else None
+
+    def _resolve_content_size(self) -> QSize:
+        root_layout = self.layout()
+        if root_layout is None:
+            return QSize(self.minimumWidth(), self.minimumHeight())
+
+        self.ensurePolished()
+        root_layout.activate()
+
+        margins = root_layout.contentsMargins()
+        spacing = max(0, root_layout.spacing())
+        total_w = margins.left() + margins.right()
+        total_h = margins.top() + margins.bottom()
+        visible_items = 0
+
+        for index in range(root_layout.count()):
+            item = root_layout.itemAt(index)
+            if item is None or item.spacerItem() is not None:
+                continue
+
+            if item.widget() is not None:
+                widget = item.widget()
+                if widget is self._pipe_scroll_area and self._pipe_scroll_widget is not None:
+                    self._pipe_scroll_widget.adjustSize()
+                    hint = self._pipe_scroll_widget.sizeHint()
+                    width_hint = self._pick_size_value(
+                        hint.width(),
+                        self._pipe_scroll_widget.minimumSizeHint().width(),
+                    )
+                    height_hint = self._pick_size_value(
+                        hint.height(),
+                        self._pipe_scroll_widget.minimumSizeHint().height(),
+                    )
+                else:
+                    hint = widget.sizeHint()
+                    width_hint = self._pick_size_value(
+                        hint.width(),
+                        widget.minimumSizeHint().width(),
+                        widget.minimumWidth(),
+                    )
+                    height_hint = self._pick_size_value(
+                        hint.height(),
+                        widget.minimumSizeHint().height(),
+                        widget.minimumHeight(),
+                    )
+            elif item.layout() is not None:
+                hint = item.layout().sizeHint()
+                width_hint = self._pick_size_value(hint.width())
+                height_hint = self._pick_size_value(hint.height())
+            else:
+                continue
+
+            total_w = max(total_w, margins.left() + margins.right() + width_hint)
+            total_h += height_hint
+            visible_items += 1
+
+        if visible_items > 1:
+            total_h += spacing * (visible_items - 1)
+
+        total_w = max(self.minimumWidth(), total_w + self._WINDOW_CHROME_PADDING)
+        total_h = max(self.minimumHeight(), total_h + self._WINDOW_CHROME_PADDING)
+        return QSize(total_w, total_h)
+
+    def _apply_initial_size(self):
+        content_size = self._resolve_content_size()
+        avail = self._available_geometry()
+        if avail is not None:
+            max_w = max(self.minimumWidth(), int(avail.width() * self._SCREEN_WIDTH_RATIO))
+            max_h = max(self.minimumHeight(), int(avail.height() * self._SCREEN_HEIGHT_RATIO))
+        else:
+            max_w = self._FALLBACK_MAX_WIDTH
+            max_h = self._FALLBACK_MAX_HEIGHT
+
+        target_w = min(content_size.width(), max_w)
+        target_h = min(content_size.height(), max_h)
+        target_w = max(self.minimumWidth(), target_w)
+        target_h = max(self.minimumHeight(), target_h)
+        self.resize(target_w, target_h)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._did_apply_initial_size:
+            self._apply_initial_size()
+            self._did_apply_initial_size = True
 
     def _create_pipe_card(self, group):
         """为单个管道创建卡片（分层结构：摘要 + 迷你画布 + 可展开表格）"""
@@ -1748,7 +1913,7 @@ class PressurePipeConfigDialog(QDialog):
 
         btn_import.clicked.connect(lambda: self._import_longitudinal_dxf(group.name, group.ip_points))
         btn_clear.clicked.connect(lambda: self._clear_longitudinal(group.name))
-        btn_preview.clicked.connect(lambda: self._preview_longitudinal(group.name))
+        btn_preview.clicked.connect(lambda: self._open_canvas_viewer(group.name))
         btn_clear.setEnabled(False)
         _has_ip_for_preview = len(getattr(group, 'ip_points', []) or []) >= 2
         btn_preview.setEnabled(_has_ip_for_preview)
@@ -1817,29 +1982,15 @@ class PressurePipeConfigDialog(QDialog):
             "border: 1px solid #CFD8DC; border-radius: 4px;"
         )
         card_lay.addWidget(mini_canvas)
+        mini_canvas.open_detail_requested.connect(
+            lambda _name=group.name: self._open_canvas_viewer(_name)
+        )
 
         # 视图切换与缩放逻辑
         has_plan = len(getattr(group, 'ip_points', []) or []) >= 2
 
-        def _switch_view(mode, _name=group.name):
-            w = self._card_widgets.get(_name)
-            if not w:
-                return
-            canvas = w['canvas']
-            has_profile = canvas.has_profile_data()
-            if mode == "profile" and not has_profile:
-                return
-            canvas.set_view_mode(mode)
-            w['zoom_label'].setText(f"{canvas.get_zoom_percent()}%")
-            if mode == "plan":
-                w['btn_view_plan'].setStyleSheet(self._VIEW_BTN_ACTIVE)
-                w['btn_view_profile'].setStyleSheet(self._VIEW_BTN_INACTIVE)
-            else:
-                w['btn_view_plan'].setStyleSheet(self._VIEW_BTN_INACTIVE)
-                w['btn_view_profile'].setStyleSheet(self._VIEW_BTN_ACTIVE)
-
-        btn_view_plan.clicked.connect(lambda: _switch_view("plan"))
-        btn_view_profile.clicked.connect(lambda: _switch_view("profile"))
+        btn_view_plan.clicked.connect(lambda: self._set_card_view_mode(group.name, "plan", sync_viewer=True))
+        btn_view_profile.clicked.connect(lambda: self._set_card_view_mode(group.name, "profile", sync_viewer=True))
         btn_zoom_reset.clicked.connect(lambda _c=False, _name=group.name: self._on_canvas_zoom_reset(_name))
 
         # 喂入平面数据
@@ -1956,6 +2107,69 @@ class PressurePipeConfigDialog(QDialog):
         w['canvas'].zoom_reset()
         w['zoom_label'].setText(f"{w['canvas'].get_zoom_percent()}%")
 
+    def _set_card_view_mode(self, pipe_name, mode, sync_viewer=False):
+        w = self._card_widgets.get(pipe_name)
+        if not w:
+            return
+        canvas = w['canvas']
+        has_profile = canvas.has_profile_data()
+        has_plan = canvas.has_plan_data()
+        if mode == "profile" and not has_profile:
+            return
+        if mode == "plan" and not has_plan:
+            return
+        canvas.set_view_mode(mode)
+        w['zoom_label'].setText(f"{canvas.get_zoom_percent()}%")
+        if mode == "plan":
+            w['btn_view_plan'].setStyleSheet(self._VIEW_BTN_ACTIVE)
+            w['btn_view_profile'].setStyleSheet(self._VIEW_BTN_INACTIVE)
+        else:
+            w['btn_view_plan'].setStyleSheet(self._VIEW_BTN_INACTIVE)
+            w['btn_view_profile'].setStyleSheet(self._VIEW_BTN_ACTIVE)
+        if sync_viewer and self._active_viewer_pipe_name == pipe_name:
+            self._sync_canvas_viewer(pipe_name)
+
+    def _ensure_canvas_viewer(self):
+        viewer = getattr(self, "_canvas_viewer", None)
+        if viewer is not None:
+            return viewer
+        viewer = LongitudinalPreviewDialog(self)
+        viewer.view_mode_changed.connect(self._on_viewer_mode_changed)
+        self._canvas_viewer = viewer
+        return viewer
+
+    def _sync_canvas_viewer(self, pipe_name):
+        viewer = getattr(self, "_canvas_viewer", None)
+        if viewer is None:
+            return
+        widgets = self._card_widgets.get(pipe_name)
+        if not widgets:
+            return
+        self._active_viewer_pipe_name = pipe_name
+        viewer.sync_pipe_data(
+            pipe_name=pipe_name,
+            nodes=self._longitudinal_data.get(pipe_name) or [],
+            ip_points=getattr(widgets["canvas"], "_ip_points", []) or [],
+            view_mode=widgets["canvas"].get_view_mode(),
+        )
+
+    def _open_canvas_viewer(self, pipe_name):
+        widgets = self._card_widgets.get(pipe_name)
+        if not widgets:
+            return
+        canvas = widgets["canvas"]
+        if not canvas.has_plan_data() and not canvas.has_profile_data():
+            fluent_info(self, "预览", f"管道 '{pipe_name}' 暂无可预览的数据")
+            return
+        viewer = self._ensure_canvas_viewer()
+        self._sync_canvas_viewer(pipe_name)
+        viewer.show_and_focus()
+
+    def _on_viewer_mode_changed(self, mode):
+        pipe_name = getattr(self, "_active_viewer_pipe_name", "")
+        if pipe_name:
+            self._set_card_view_mode(pipe_name, mode, sync_viewer=False)
+
     def _update_card_data_state(self, pipe_name, show_data=True):
         """切换卡片的纵断面数据显示状态（画布始终可见）"""
         w = self._card_widgets.get(pipe_name)
@@ -1986,10 +2200,10 @@ class PressurePipeConfigDialog(QDialog):
             w['btn_preview'].setEnabled(has_plan)
             w['btn_view_profile'].setEnabled(False)
             if w['canvas'].get_view_mode() == "profile":
-                w['canvas'].set_view_mode("plan")
-                w['btn_view_plan'].setStyleSheet(self._VIEW_BTN_ACTIVE)
-                w['btn_view_profile'].setStyleSheet(self._VIEW_BTN_INACTIVE)
+                self._set_card_view_mode(pipe_name, "plan", sync_viewer=False)
             w['zoom_label'].setText(f"{w['canvas'].get_zoom_percent()}%")
+        if self._active_viewer_pipe_name == pipe_name:
+            self._sync_canvas_viewer(pipe_name)
 
     def _import_longitudinal_dxf(self, pipe_name, ip_points):
         """导入纵断面DXF"""
@@ -2099,20 +2313,13 @@ class PressurePipeConfigDialog(QDialog):
 
     def _preview_longitudinal(self, pipe_name):
         """弹出管道预览对话框（含纵断面+平面图双视图）"""
-        nodes = self._longitudinal_data.get(pipe_name)
-        ip_points = None
-        for g in (self._pipe_groups or []):
-            if g.name == pipe_name:
-                ip_points = getattr(g, 'ip_points', None)
-                break
+        self._open_canvas_viewer(pipe_name)
 
-        if (not nodes or len(nodes) < 2) and (not ip_points or len(ip_points) < 2):
-            fluent_info(self, "预览", f"管道 '{pipe_name}' 暂无可预览的数据")
-            return
-
-        dlg = LongitudinalPreviewDialog(self, pipe_name=pipe_name,
-                                         nodes=nodes, ip_points=ip_points)
-        dlg.exec()
+    def closeEvent(self, event):
+        viewer = getattr(self, "_canvas_viewer", None)
+        if viewer is not None:
+            viewer.close()
+        super().closeEvent(event)
 
     def _refresh_long_table(self, pipe_name, table):
         """刷新纵断面节点表（优化显示格式）"""

@@ -4,9 +4,15 @@
 import os
 import sys
 from types import SimpleNamespace
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "倒虹吸水力计算系统"))
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
@@ -91,7 +97,7 @@ def _make_group(name: str):
 
 def test_num_pipes_unconfirmed_warns_but_not_blocked_and_auto_confirms(monkeypatch):
     _get_qapp()
-    monkeypatch.setattr(siphon_panel_mod, "QWebEngineView", _FakeWebEngineView)
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", lambda parent=None: _FakeWebEngineView(parent))
     monkeypatch.setattr(siphon_panel_mod, "InfoBar", _InfoBarSpy)
     _InfoBarSpy.reset()
 
@@ -135,7 +141,7 @@ def test_num_pipes_unconfirmed_warns_but_not_blocked_and_auto_confirms(monkeypat
 
 def test_v_confirmation_still_blocks_calculation(monkeypatch):
     _get_qapp()
-    monkeypatch.setattr(siphon_panel_mod, "QWebEngineView", _FakeWebEngineView)
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", lambda parent=None: _FakeWebEngineView(parent))
     monkeypatch.setattr(siphon_panel_mod, "InfoBar", _InfoBarSpy)
     _InfoBarSpy.reset()
 
@@ -267,7 +273,7 @@ def test_batch_num_pipes_warning_is_once_and_does_not_block(monkeypatch):
 
 def test_first_tab_enter_on_velocity_does_not_confirm_num_pipes(monkeypatch):
     _get_qapp()
-    monkeypatch.setattr(siphon_panel_mod, "QWebEngineView", _FakeWebEngineView)
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", lambda parent=None: _FakeWebEngineView(parent))
 
     dialog = multi_siphon_dialog_mod.MultiSiphonDialog(
         None,

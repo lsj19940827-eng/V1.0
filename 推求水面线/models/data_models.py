@@ -6,7 +6,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 from .enums import StructureType, InOutType
 
 
@@ -92,6 +92,11 @@ class ChannelNode:
     transition_zeta: float = 0.0                # 渐变段局部损失系数ζ
     transition_theta: float = 0.0               # 直线形扭曲面的θ角度
     transition_length: float = 0.0              # 渐变段长度L（m）
+    transition_length_override_m: Optional[float] = None  # 渐变段单条覆盖长度（m）
+    transition_length_source: str = "formula"   # 渐变段长度来源：override/rule:*/formula
+    transition_length_warning: str = ""         # 渐变段长度告警信息
+    transition_rule_upstream_structure_type: str = ""    # 规则追溯：原始上游结构类型
+    transition_rule_downstream_structure_type: str = ""  # 规则追溯：原始下游结构类型
     transition_water_width_1: float = 0.0       # 渐变段起始水面宽度B1（m）
     transition_water_width_2: float = 0.0       # 渐变段末端水面宽度B2（m）
     transition_velocity_1: float = 0.0          # 渐变段起始流速v1（m/s）
@@ -270,6 +275,11 @@ class ChannelNode:
             "transition_zeta": self.transition_zeta,
             "transition_theta": self.transition_theta,
             "transition_length": self.transition_length,
+            "transition_length_override_m": self.transition_length_override_m,
+            "transition_length_source": self.transition_length_source,
+            "transition_length_warning": self.transition_length_warning,
+            "transition_rule_upstream_structure_type": self.transition_rule_upstream_structure_type,
+            "transition_rule_downstream_structure_type": self.transition_rule_downstream_structure_type,
             "transition_water_width_1": self.transition_water_width_1,
             "transition_water_width_2": self.transition_water_width_2,
             "transition_velocity_1": self.transition_velocity_1,
@@ -379,6 +389,11 @@ class ChannelNode:
         node.transition_zeta = d.get("transition_zeta", 0.0)
         node.transition_theta = d.get("transition_theta", 0.0)
         node.transition_length = d.get("transition_length", 0.0)
+        node.transition_length_override_m = d.get("transition_length_override_m")
+        node.transition_length_source = d.get("transition_length_source", "formula")
+        node.transition_length_warning = d.get("transition_length_warning", "")
+        node.transition_rule_upstream_structure_type = d.get("transition_rule_upstream_structure_type", "")
+        node.transition_rule_downstream_structure_type = d.get("transition_rule_downstream_structure_type", "")
         node.transition_water_width_1 = d.get("transition_water_width_1", 0.0)
         node.transition_water_width_2 = d.get("transition_water_width_2", 0.0)
         node.transition_velocity_1 = d.get("transition_velocity_1", 0.0)
@@ -392,6 +407,59 @@ class ChannelNode:
         node.transition_length_calc_details = d.get("transition_length_calc_details", {})
         
         return node
+
+
+@dataclass
+class TransitionLengthRule:
+    """渐变段长度组合规则。"""
+
+    upstream_structure_type: str = ""
+    downstream_structure_type: str = ""
+    transition_type: Literal["进口", "出口"] = "出口"
+    rule_mode: Literal["formula", "step_up", "fixed"] = "formula"
+    step_size_m: float = 0.0
+    fixed_length_m: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为项目保存用字典。"""
+        return {
+            "upstream_structure_type": self.upstream_structure_type,
+            "downstream_structure_type": self.downstream_structure_type,
+            "transition_type": self.transition_type,
+            "rule_mode": self.rule_mode,
+            "step_size_m": self.step_size_m,
+            "fixed_length_m": self.fixed_length_m,
+        }
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "TransitionLengthRule":
+        """从字典恢复组合规则，缺失字段自动回退默认值。"""
+        rule = TransitionLengthRule()
+        if not isinstance(d, dict):
+            return rule
+
+        rule.upstream_structure_type = str(d.get("upstream_structure_type", "") or "")
+        rule.downstream_structure_type = str(d.get("downstream_structure_type", "") or "")
+
+        transition_type = str(d.get("transition_type", "出口") or "出口")
+        rule.transition_type = "进口" if transition_type == "进口" else "出口"
+
+        rule_mode = str(d.get("rule_mode", "formula") or "formula")
+        if rule_mode not in ("formula", "step_up", "fixed"):
+            rule_mode = "formula"
+        rule.rule_mode = rule_mode
+
+        try:
+            rule.step_size_m = float(d.get("step_size_m", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            rule.step_size_m = 0.0
+
+        try:
+            rule.fixed_length_m = float(d.get("fixed_length_m", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            rule.fixed_length_m = 0.0
+
+        return rule
 
 
 @dataclass
@@ -430,6 +498,7 @@ class ProjectSettings:
     
     # ========== 倒虹吸平面转弯半径设置 ==========
     siphon_turn_radius_n: float = 3.0                  # 倒虹吸转弯半径倍数n（R = n × D，D为管径）
+    transition_length_rules: List[TransitionLengthRule] = field(default_factory=list)  # 渐变段长度组合规则
     
     def get_station_prefix(self) -> str:
         """
@@ -570,6 +639,7 @@ class ProjectSettings:
             "倒虹吸进口渐变段局部损失系数": self.siphon_transition_inlet_zeta,
             "倒虹吸出口渐变段局部损失系数": self.siphon_transition_outlet_zeta,
             "倒虹吸转弯半径倍数n": self.siphon_turn_radius_n,
+            "渐变段长度规则": [rule.to_dict() for rule in self.transition_length_rules],
         }
     
     @staticmethod
@@ -633,6 +703,16 @@ class ProjectSettings:
         # 倒虹吸转弯半径
         settings.siphon_turn_radius_n = d.get("倒虹吸转弯半径倍数n", 
                                                d.get("siphon_turn_radius_n", 3.0))
+
+        # 渐变段长度组合规则
+        raw_rules = d.get("渐变段长度规则", d.get("transition_length_rules", []))
+        settings.transition_length_rules = []
+        if isinstance(raw_rules, list):
+            for item in raw_rules:
+                if isinstance(item, TransitionLengthRule):
+                    settings.transition_length_rules.append(item)
+                elif isinstance(item, dict):
+                    settings.transition_length_rules.append(TransitionLengthRule.from_dict(item))
         
         return settings
 
