@@ -18,6 +18,7 @@ import sys
 import os
 import math
 import re
+import copy
 import datetime
 from contextlib import contextmanager
 
@@ -42,6 +43,43 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QByteArray, Signal, QTimer, QRect, QPoint, QEvent, QObject, QSignalBlocker
 from PySide6.QtGui import QFont, QColor, QPixmap, QImage, QShortcut, QKeySequence, QCursor, QBrush
+
+try:
+    from PySide6.QtWidgets import QDoubleSpinBox
+except ImportError:
+    class QDoubleSpinBox(QWidget):
+        """兼容精简 Qt stub 的占位控件；真实运行环境会使用原生 QDoubleSpinBox。"""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._value = 0.0
+
+        def setDecimals(self, *_args, **_kwargs):
+            pass
+
+        def setRange(self, *_args, **_kwargs):
+            pass
+
+        def setSingleStep(self, *_args, **_kwargs):
+            pass
+
+        def setSuffix(self, *_args, **_kwargs):
+            pass
+
+        def setToolTip(self, *_args, **_kwargs):
+            pass
+
+        def setValue(self, value):
+            try:
+                self._value = float(value)
+            except (TypeError, ValueError):
+                self._value = 0.0
+
+        def value(self):
+            return float(self._value)
+
+        def setEnabled(self, *_args, **_kwargs):
+            pass
 
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, ComboBox,
@@ -75,13 +113,14 @@ from utils.pressure_pipe_result_helpers import (
 
 # 核心计算引擎
 try:
-    from models.data_models import ChannelNode, ProjectSettings
+    from models.data_models import ChannelNode, ProjectSettings, TransitionLengthRule
     from models.enums import StructureType, InOutType
     from core.calculator import WaterProfileCalculator
     CALCULATOR_AVAILABLE = True
 except ImportError as _e:
     print(f"[水面线] 核心计算引擎加载失败: {_e}")
     CALCULATOR_AVAILABLE = False
+    TransitionLengthRule = None
 
 # 共享数据管理器
 try:
@@ -130,7 +169,7 @@ except ImportError:
 
 # 节点表列定义（与原版Tkinter ALL_COLUMNS保持完全一致的列顺序）
 # 可编辑列索引集合（基础输入0-7 + 水力输入20-26 + 预留/过闸/倒虹吸或有压管道损失36,37,38）
-EDITABLE_COLS = set(range(8)) | {20, 21, 22, 23, 24, 25, 26, 36, 37, 38}
+EDITABLE_COLS = set(range(8)) | {20, 21, 22, 23, 24, 25, 26, 32, 36, 37, 38}
 # 表1同步来源行锁定列（需要回到表1修改后重同步）
 TABLE1_SOURCE_LOCKED_COLS = set(range(8)) | set(range(20, 27))
 # 第一行（水位起点）锁定的水头损失列：初始水位是用户输入的定值，不受水头损失影响
@@ -165,6 +204,12 @@ NODE_TOOLBAR_LAYOUT_PRESET = "balanced"
 
 SOURCE_COORD_X_ROLE_KEY = "_source_x_text"
 SOURCE_COORD_Y_ROLE_KEY = "_source_y_text"
+TRANSITION_LENGTH_RULE_STEP_DEFAULT = 1.0
+TRANSITION_LENGTH_RULE_MODE_OPTIONS = (
+    ("公式值", "formula"),
+    ("向上修约", "step_up"),
+    ("固定值", "fixed"),
+)
 
 
 # ================================================================
@@ -366,6 +411,179 @@ class TransitionReferenceDialog(QDialog):
 
         dlg.resize(pm.width() + 40, pm.height() + 80)
         dlg.exec()
+
+
+# ================================================================
+class TransitionLengthRuleDialog(QDialog):
+    """按当前工程组合编辑渐变段长度规则。"""
+
+    def __init__(self, rule_rows, parent=None):
+        super().__init__(parent)
+        self._rule_rows = list(rule_rows or [])
+        self._result_rules = {}
+        self.setWindowTitle("渐变段长度规则")
+        self.setStyleSheet(DIALOG_STYLE)
+        self.setMinimumSize(860, 420)
+        self.resize(920, 500)
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        intro = QLabel(
+            "仅展示当前工程已出现的渐变段组合。可选择保留公式值、按步长向上修约，或直接指定固定长度。"
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #555; font-size: 12px;")
+        layout.addWidget(intro)
+
+        self.table = QTableWidget(len(self._rule_rows), 7)
+        self.table.setHorizontalHeaderLabels(
+            ["上游结构", "下游结构", "渐变段类型", "出现次数", "规则模式", "步长(m)", "固定值(m)"]
+        )
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+
+        self._row_editors = {}
+        for row_idx, row in enumerate(self._rule_rows):
+            for col_idx, key in enumerate(("upstream_structure_type", "downstream_structure_type", "transition_type")):
+                item = QTableWidgetItem(str(row.get(key, "") or ""))
+                item.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(row_idx, col_idx, item)
+
+            count_item = QTableWidgetItem(str(int(row.get("count", 0) or 0)))
+            count_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row_idx, 3, count_item)
+
+            mode_combo = QComboBox(self.table)
+            for label, value in TRANSITION_LENGTH_RULE_MODE_OPTIONS:
+                mode_combo.addItem(label, value)
+            current_mode = str(row.get("rule_mode", "formula") or "formula")
+            current_index = 0
+            for idx in range(mode_combo.count()):
+                if str(mode_combo.itemData(idx) or "") == current_mode:
+                    current_index = idx
+                    break
+            mode_combo.setCurrentIndex(current_index)
+            self.table.setCellWidget(row_idx, 4, mode_combo)
+
+            step_box = QDoubleSpinBox(self.table)
+            step_box.setDecimals(3)
+            step_box.setRange(0.0, 9999.0)
+            step_box.setSingleStep(0.1)
+            step_box.setSuffix(" m")
+            step_box.setValue(float(row.get("step_size_m", TRANSITION_LENGTH_RULE_STEP_DEFAULT) or 0.0))
+            step_box.setToolTip("仅在“向上修约”模式下生效；0 表示停用步长修约。")
+            self.table.setCellWidget(row_idx, 5, step_box)
+
+            fixed_box = QDoubleSpinBox(self.table)
+            fixed_box.setDecimals(3)
+            fixed_box.setRange(0.0, 9999.0)
+            fixed_box.setSingleStep(0.1)
+            fixed_box.setSuffix(" m")
+            fixed_box.setValue(float(row.get("fixed_length_m", 0.0) or 0.0))
+            fixed_box.setToolTip("仅在“固定值”模式下生效。")
+            self.table.setCellWidget(row_idx, 6, fixed_box)
+
+            self._row_editors[row_idx] = {
+                "mode_combo": mode_combo,
+                "step_box": step_box,
+                "fixed_box": fixed_box,
+            }
+            mode_combo.currentIndexChanged.connect(
+                lambda _idx, row_idx=row_idx: self._sync_row_mode_state(row_idx)
+            )
+            self._sync_row_mode_state(row_idx)
+
+        layout.addWidget(self.table, 1)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        reset_formula_btn = PushButton("全部恢复公式值")
+        reset_formula_btn.clicked.connect(self._reset_formula_rules)
+        footer.addWidget(reset_formula_btn)
+        reset_step_btn = PushButton("全部默认 1.0 m 修约")
+        reset_step_btn.clicked.connect(self._reset_default_steps)
+        footer.addWidget(reset_step_btn)
+        layout.addLayout(footer)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn_box.button(QDialogButtonBox.Ok).setText("保存并应用")
+        btn_box.button(QDialogButtonBox.Cancel).setText("取消")
+        btn_box.accepted.connect(self._accept_rules)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def _sync_row_mode_state(self, row_idx: int):
+        editors = self._row_editors.get(row_idx, {})
+        mode_combo = editors.get("mode_combo")
+        step_box = editors.get("step_box")
+        fixed_box = editors.get("fixed_box")
+        mode_value = str(mode_combo.currentData() or "formula") if mode_combo is not None else "formula"
+        if step_box is not None:
+            step_box.setEnabled(mode_value == "step_up")
+        if fixed_box is not None:
+            fixed_box.setEnabled(mode_value == "fixed")
+
+    def _reset_default_steps(self):
+        for row_idx, editors in self._row_editors.items():
+            mode_combo = editors.get("mode_combo")
+            step_box = editors.get("step_box")
+            fixed_box = editors.get("fixed_box")
+            if mode_combo is not None:
+                for idx in range(mode_combo.count()):
+                    if str(mode_combo.itemData(idx) or "") == "step_up":
+                        mode_combo.setCurrentIndex(idx)
+                        break
+            if step_box is not None:
+                step_box.setValue(TRANSITION_LENGTH_RULE_STEP_DEFAULT)
+            if fixed_box is not None:
+                fixed_box.setValue(0.0)
+            self._sync_row_mode_state(row_idx)
+
+    def _reset_formula_rules(self):
+        for row_idx, editors in self._row_editors.items():
+            mode_combo = editors.get("mode_combo")
+            if mode_combo is not None:
+                mode_combo.setCurrentIndex(0)
+            self._sync_row_mode_state(row_idx)
+
+    def _accept_rules(self):
+        result = {}
+        for row_idx, row in enumerate(self._rule_rows):
+            editors = self._row_editors.get(row_idx, {})
+            mode_combo = editors.get("mode_combo")
+            step_box = editors.get("step_box")
+            fixed_box = editors.get("fixed_box")
+            rule_mode = str(mode_combo.currentData() or "formula") if mode_combo is not None else "formula"
+            step_size_m = float(step_box.value()) if step_box is not None else TRANSITION_LENGTH_RULE_STEP_DEFAULT
+            fixed_length_m = float(fixed_box.value()) if fixed_box is not None else 0.0
+            key = str(row.get("rule_key", "") or "").strip()
+            if not key:
+                continue
+            result[key] = {
+                "upstream_structure_type": str(row.get("upstream_structure_type", "") or "").strip(),
+                "downstream_structure_type": str(row.get("downstream_structure_type", "") or "").strip(),
+                "transition_type": str(row.get("transition_type", "") or "").strip(),
+                "rule_mode": rule_mode,
+                "step_size_m": step_size_m,
+                "fixed_length_m": fixed_length_m,
+            }
+        self._result_rules = result
+        self.accept()
+
+    def get_rules(self):
+        return dict(self._result_rules)
 
 
 # ================================================================
@@ -652,12 +870,14 @@ class WaterProfilePanel(QWidget):
         self._last_building_lengths = []
         self._last_channel_total_length = 0.0
         self._last_type_summary = []
+        self._transition_length_rules = {}
         # 纵断面文字导出设置（记住上次使用的参数）
         self._text_export_settings = {
             'y_bottom': 1, 'y_top': 31, 'y_water': 16,
             'text_height': 3.5, 'rotation': 90, 'elev_decimals': 3,
             'y_name': 115, 'y_slope': 105, 'y_ip': 77,
             'y_station': 47, 'y_line_height': 120,
+            'scale_x': 2000, 'scale_y': 1000,
             'profile_row_items': [
                 {"id": "building_name", "enabled": True},
                 {"id": "slope", "enabled": True},
@@ -1015,6 +1235,13 @@ class WaterProfilePanel(QWidget):
         btn_ref.setMinimumHeight(_transition_field_h)
         btn_ref.clicked.connect(self._open_transition_reference)
         tg.addWidget(btn_ref, r, 9)
+
+        btn_rules = PushButton("长度规则")
+        btn_rules.setToolTip("按当前工程已出现的上游/下游结构组合编辑渐变段长度 step_up 规则")
+        btn_rules.setMinimumWidth(104)
+        btn_rules.setMinimumHeight(_transition_field_h)
+        btn_rules.clicked.connect(self._open_transition_length_rules)
+        tg.addWidget(btn_rules, r, 10)
 
         # 列弹性
         tg.setColumnStretch(2, 1)
@@ -1425,6 +1652,9 @@ class WaterProfilePanel(QWidget):
         self.node_table.setSelectionBehavior(QAbstractItemView.SelectItems)
         self.node_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.node_table.setAlternatingRowColors(True)
+        self.node_table.setEditTriggers(
+            QAbstractItemView.EditKeyPressed | QAbstractItemView.AnyKeyPressed
+        )
         self.node_table.setFont(QFont("Microsoft YaHei", 10))
         self.node_table.verticalHeader().setDefaultSectionSize(26)
         self.node_table.setMinimumHeight(180)
@@ -1434,6 +1664,8 @@ class WaterProfilePanel(QWidget):
         self.node_table.undoRequested.connect(self._undo_loss_edit)
         self.node_table.redoRequested.connect(self._redo_loss_edit)
         self.node_table.deleteRequested.connect(self._push_undo_snapshot)
+        self.node_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.node_table.customContextMenuRequested.connect(self._show_node_table_context_menu)
         self.node_table.installEventFilter(self)
         self.node_table.viewport().installEventFilter(self)
         lay.addWidget(self.node_table, stretch=1)
@@ -1993,6 +2225,578 @@ class WaterProfilePanel(QWidget):
             parent=self._info_parent(), duration=2600, position=InfoBarPosition.TOP
         )
 
+    def _is_transition_row(self, row: int, source_nodes=None) -> bool:
+        nodes = source_nodes if source_nodes is not None else None
+        if nodes and 0 <= row < len(nodes):
+            return bool(getattr(nodes[row], 'is_transition', False))
+        table = self.node_table
+        if not table or row < 0 or row >= table.rowCount():
+            return False
+        item = table.item(row, 2)
+        if not item:
+            return False
+        return "渐变段" in str(item.text() or "").strip()
+
+    def _is_transition_length_editable_cell(self, row: int, col: int, source_nodes=None) -> bool:
+        return col == 32 and self._is_transition_row(row, source_nodes)
+
+    @staticmethod
+    def _make_transition_length_rule_key(upstream_structure_type: str,
+                                         downstream_structure_type: str,
+                                         transition_type: str) -> str:
+        upstream = str(upstream_structure_type or "").strip()
+        downstream = str(downstream_structure_type or "").strip()
+        trans_type = str(transition_type or "").strip()
+        return f"{upstream}|{downstream}|{trans_type}"
+
+    def _normalize_transition_length_rule(self, rule, *, key: str = "",
+                                          upstream_structure_type: str = "",
+                                          downstream_structure_type: str = "",
+                                          transition_type: str = "") -> dict:
+        if isinstance(rule, TransitionLengthRule):
+            src = rule.to_dict()
+        elif hasattr(rule, "to_dict") and callable(getattr(rule, "to_dict")):
+            try:
+                src = dict(rule.to_dict() or {})
+            except Exception:
+                src = {}
+        elif hasattr(rule, "upstream_structure_type") or hasattr(rule, "rule_mode"):
+            src = {
+                "upstream_structure_type": getattr(rule, "upstream_structure_type", ""),
+                "downstream_structure_type": getattr(rule, "downstream_structure_type", ""),
+                "transition_type": getattr(rule, "transition_type", ""),
+                "rule_mode": getattr(rule, "rule_mode", "formula"),
+                "step_size_m": getattr(rule, "step_size_m", 0.0),
+                "fixed_length_m": getattr(rule, "fixed_length_m", 0.0),
+            }
+        elif isinstance(rule, dict):
+            src = dict(rule or {})
+        else:
+            src = {}
+        upstream = str(src.get("upstream_structure_type", upstream_structure_type) or "").strip()
+        downstream = str(src.get("downstream_structure_type", downstream_structure_type) or "").strip()
+        trans_type = str(src.get("transition_type", transition_type) or "").strip()
+        resolved_key = str(key or src.get("rule_key") or "").strip()
+        if not resolved_key:
+            resolved_key = self._make_transition_length_rule_key(upstream, downstream, trans_type)
+        try:
+            step_size_m = float(src.get("step_size_m", src.get("step_up", TRANSITION_LENGTH_RULE_STEP_DEFAULT)))
+        except (TypeError, ValueError):
+            step_size_m = TRANSITION_LENGTH_RULE_STEP_DEFAULT
+        try:
+            fixed_length_m = float(src.get("fixed_length_m", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            fixed_length_m = 0.0
+        rule_mode = str(src.get("rule_mode", "formula") or "formula").strip()
+        if rule_mode not in {"formula", "step_up", "fixed"}:
+            rule_mode = "formula"
+        step_size_m = max(0.0, step_size_m)
+        fixed_length_m = max(0.0, fixed_length_m)
+        return {
+            "rule_key": resolved_key,
+            "upstream_structure_type": upstream,
+            "downstream_structure_type": downstream,
+            "transition_type": trans_type,
+            "rule_mode": rule_mode,
+            "step_size_m": step_size_m,
+            "fixed_length_m": fixed_length_m,
+        }
+
+    def _normalize_transition_length_rule_map(self, rules) -> dict:
+        normalized = {}
+        if isinstance(rules, dict):
+            iterable = rules.items()
+        elif isinstance(rules, list):
+            iterable = [(None, raw_rule) for raw_rule in rules]
+        else:
+            iterable = []
+        for raw_key, raw_rule in iterable:
+            rule = self._normalize_transition_length_rule(raw_rule, key=str(raw_key or "").strip())
+            if rule["rule_key"]:
+                normalized[rule["rule_key"]] = rule
+        return normalized
+
+    def _serialize_transition_length_rules(self) -> list:
+        rules = []
+        for key in sorted(self._transition_length_rules.keys()):
+            normalized = self._normalize_transition_length_rule(
+                self._transition_length_rules.get(key, {}),
+                key=key,
+            )
+            if not normalized["rule_key"]:
+                continue
+            rules.append(
+                TransitionLengthRule(
+                    upstream_structure_type=normalized["upstream_structure_type"],
+                    downstream_structure_type=normalized["downstream_structure_type"],
+                    transition_type=normalized["transition_type"] or "出口",
+                    rule_mode=normalized["rule_mode"],
+                    step_size_m=normalized["step_size_m"],
+                    fixed_length_m=normalized["fixed_length_m"],
+                )
+            )
+        return rules
+
+    def _load_transition_length_rules(self, rules) -> None:
+        self._transition_length_rules = self._normalize_transition_length_rule_map(rules)
+
+    @staticmethod
+    def _get_transition_length_source_kind(source: str) -> str:
+        source = str(source or "").strip()
+        if source == "override":
+            return "single_override"
+        if source.startswith("rule:"):
+            return "combo_rule"
+        if source == "formula":
+            return "formula"
+        return "other"
+
+    @staticmethod
+    def _get_transition_length_source_label(source: str) -> str:
+        source = str(source or "").strip()
+        if source == "override":
+            return "单条覆盖"
+        if source == "rule:step_up":
+            return "组合规则-向上修约"
+        if source == "rule:fixed":
+            return "组合规则-固定值"
+        if source == "rule:formula":
+            return "组合规则-公式值"
+        if source == "formula":
+            return "公式/规范"
+        return "当前采用值"
+
+    @staticmethod
+    def _round_up_transition_length(length: float, step_up: float) -> float:
+        try:
+            value = float(length)
+        except (TypeError, ValueError):
+            return 0.0
+        try:
+            step = float(step_up)
+        except (TypeError, ValueError):
+            step = 0.0
+        if value <= 0 or step <= 0:
+            return round(max(0.0, value), 3)
+        multiple = math.ceil((value - 1e-9) / step)
+        return round(multiple * step, 3)
+
+    def _get_transition_nodes_for_editing(self, source_nodes=None):
+        if source_nodes is not None:
+            uses_calculated = bool(getattr(self, 'calculated_nodes', None) and source_nodes is self.calculated_nodes)
+            return source_nodes, uses_calculated
+        nodes = self._build_nodes_from_table()
+        self.nodes = nodes
+        return nodes, bool(getattr(self, 'calculated_nodes', None))
+
+    @staticmethod
+    def _get_node_stat_length_value(node) -> float:
+        try:
+            value = float(getattr(node, "stat_length", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        return max(0.0, value)
+
+    def _get_transition_length_override_upper_bound(self, ctx) -> float:
+        if not ctx:
+            return 0.0
+
+        node = ctx["node"]
+        nodes = ctx["nodes"]
+        row_idx = ctx["row_idx"]
+        base_length = 0.0
+        try:
+            base_length = float(getattr(node, "transition_length", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            base_length = 0.0
+
+        extra_slack = 0.0
+        transition_type = str(getattr(node, "transition_type", "") or "").strip()
+        if transition_type == "出口":
+            cursor = row_idx + 1
+            while cursor < len(nodes) and getattr(nodes[cursor], "is_auto_inserted_channel", False):
+                extra_slack += self._get_node_stat_length_value(nodes[cursor])
+                cursor += 1
+        elif transition_type == "进口":
+            cursor = row_idx - 1
+            while cursor >= 0 and getattr(nodes[cursor], "is_auto_inserted_channel", False):
+                extra_slack += self._get_node_stat_length_value(nodes[cursor])
+                cursor -= 1
+
+        return max(0.0, base_length + extra_slack)
+
+    def _reject_transition_length_override(self, row_idx: int, fallback_length: float, message: str) -> bool:
+        table = getattr(self, "node_table", None)
+        if table and 0 <= row_idx < table.rowCount():
+            item = table.item(row_idx, 32)
+            if item is None:
+                item = QTableWidgetItem("")
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row_idx, 32, item)
+            item.setText(f"{max(0.0, float(fallback_length or 0.0)):.3f}")
+        InfoBar.warning(
+            "需要重新插入渐变段",
+            message,
+            parent=self._info_parent(),
+            duration=3500,
+            position=InfoBarPosition.TOP,
+        )
+        return False
+
+    def _get_transition_context_for_row(self, row_idx: int, source_nodes=None):
+        nodes, uses_calculated = self._get_transition_nodes_for_editing(source_nodes)
+        if not nodes or row_idx < 0 or row_idx >= len(nodes):
+            return None
+        node = nodes[row_idx]
+        if not getattr(node, 'is_transition', False):
+            return None
+
+        prev_node = None
+        next_node = None
+        prev_idx = -1
+        next_idx = -1
+        for idx in range(row_idx - 1, -1, -1):
+            if not getattr(nodes[idx], 'is_transition', False):
+                prev_node = nodes[idx]
+                prev_idx = idx
+                break
+        for idx in range(row_idx + 1, len(nodes)):
+            if not getattr(nodes[idx], 'is_transition', False):
+                next_node = nodes[idx]
+                next_idx = idx
+                break
+        if prev_node is None or next_node is None:
+            return None
+
+        upstream_structure_type = str(
+            getattr(node, "transition_rule_upstream_structure_type", "") or ""
+        ).strip()
+        downstream_structure_type = str(
+            getattr(node, "transition_rule_downstream_structure_type", "") or ""
+        ).strip()
+        if not upstream_structure_type:
+            upstream_structure_type = prev_node.get_structure_type_str() if hasattr(prev_node, "get_structure_type_str") else str(getattr(prev_node, "structure_type", "") or "")
+        if not downstream_structure_type:
+            downstream_structure_type = next_node.get_structure_type_str() if hasattr(next_node, "get_structure_type_str") else str(getattr(next_node, "structure_type", "") or "")
+        transition_type = str(getattr(node, "transition_type", "") or "").strip()
+        rule_key = self._make_transition_length_rule_key(
+            upstream_structure_type,
+            downstream_structure_type,
+            transition_type,
+        )
+        return {
+            "nodes": nodes,
+            "uses_calculated_nodes": uses_calculated,
+            "node": node,
+            "row_idx": row_idx,
+            "prev_node": prev_node,
+            "next_node": next_node,
+            "prev_idx": prev_idx,
+            "next_idx": next_idx,
+            "upstream_structure_type": upstream_structure_type,
+            "downstream_structure_type": downstream_structure_type,
+            "transition_type": transition_type,
+            "rule_key": rule_key,
+        }
+
+    def _collect_transition_length_rule_rows(self, source_nodes=None):
+        nodes, _ = self._get_transition_nodes_for_editing(source_nodes)
+        if not nodes:
+            return []
+        base_nodes = [
+            copy.deepcopy(node)
+            for node in nodes
+            if not getattr(node, 'is_transition', False) and not getattr(node, 'is_auto_inserted_channel', False)
+        ]
+        if len(base_nodes) < 2:
+            return []
+        if not CALCULATOR_AVAILABLE:
+            return []
+        try:
+            settings = self._build_settings()
+            calculator = WaterProfileCalculator(settings)
+            preserved_state = []
+            for node in base_nodes:
+                preserved_state.append({
+                    "in_out": getattr(node, "in_out", None),
+                    "station_MC": float(getattr(node, "station_MC", 0.0) or 0.0),
+                })
+            calculator.preprocess_nodes(base_nodes)
+            for node, state in zip(base_nodes, preserved_state):
+                explicit_io = state["in_out"]
+                explicit_io_value = getattr(explicit_io, "value", "") if explicit_io is not None else ""
+                if explicit_io_value in {"进", "出"}:
+                    node.in_out = explicit_io
+                if abs(state["station_MC"]) > 1e-9:
+                    node.station_MC = state["station_MC"]
+        except Exception:
+            return []
+
+        def _get_struct_type_name(node):
+            if not node or not getattr(node, "structure_type", None):
+                return ""
+            structure_type = node.structure_type
+            return structure_type.value if hasattr(structure_type, "value") else str(structure_type or "")
+
+        rows_by_key = {}
+
+        def _append_candidate(upstream_node, downstream_node, transition_type):
+            upstream_structure_type = _get_struct_type_name(upstream_node)
+            downstream_structure_type = _get_struct_type_name(downstream_node)
+            key = self._make_transition_length_rule_key(
+                upstream_structure_type,
+                downstream_structure_type,
+                transition_type,
+            )
+            entry = rows_by_key.setdefault(key, {
+                "rule_key": key,
+                "upstream_structure_type": upstream_structure_type,
+                "downstream_structure_type": downstream_structure_type,
+                "transition_type": transition_type,
+                "count": 0,
+            })
+            entry["count"] += 1
+
+        for idx in range(len(base_nodes) - 1):
+            current_node = base_nodes[idx]
+            next_node = base_nodes[idx + 1]
+
+            if calculator._is_diversion_gate_type(current_node.structure_type):
+                gate_check = calculator._check_gap_gate_to_entry(current_node, next_node)
+                if gate_check.get("need_transition_2"):
+                    _append_candidate(current_node, next_node, "进口")
+                continue
+
+            if calculator._is_diversion_gate_type(next_node.structure_type):
+                gate_check = calculator._check_gap_exit_to_gate(current_node, next_node)
+                if gate_check.get("need_transition_1"):
+                    _append_candidate(current_node, next_node, "出口")
+                continue
+
+            if not calculator._needs_transition(current_node, next_node):
+                continue
+
+            check_result = calculator._should_insert_open_channel(current_node, next_node, base_nodes)
+            if check_result.get("need_transition_1"):
+                _append_candidate(current_node, next_node, "出口")
+            if check_result.get("need_transition_2"):
+                _append_candidate(current_node, next_node, "进口")
+
+        result = []
+        for key in sorted(rows_by_key.keys()):
+            entry = rows_by_key[key]
+            stored_rule = self._normalize_transition_length_rule(
+                self._transition_length_rules.get(key, {}),
+                key=key,
+                upstream_structure_type=entry["upstream_structure_type"],
+                downstream_structure_type=entry["downstream_structure_type"],
+                transition_type=entry["transition_type"],
+            )
+            entry["rule_mode"] = stored_rule["rule_mode"]
+            entry["step_size_m"] = stored_rule["step_size_m"]
+            entry["fixed_length_m"] = stored_rule["fixed_length_m"]
+            result.append(entry)
+        return result
+
+    @staticmethod
+    def _get_transition_length_source_kind(details) -> str:
+        if not isinstance(details, dict):
+            return ""
+        source = str(details.get("source", details.get("length_source_kind", "")) or "").strip()
+        if source in {"override", "single_override"}:
+            return "single_override"
+        if source.startswith("rule:"):
+            return source
+        return "formula"
+
+    @classmethod
+    def _get_transition_length_source_label(cls, details) -> str:
+        source_kind = cls._get_transition_length_source_kind(details)
+        if source_kind == "single_override":
+            return "单条覆盖"
+        if source_kind == "rule:step_up":
+            return "长度规则(step_up)"
+        if source_kind == "rule:fixed":
+            return "长度规则(fixed)"
+        if source_kind == "rule:formula":
+            return "长度规则(按公式)"
+        return "公式/规范"
+
+    @classmethod
+    def _build_transition_length_rule_key_from_details(cls, details) -> str:
+        if not isinstance(details, dict):
+            return ""
+        explicit_key = str(details.get("length_rule_key", "") or "").strip()
+        if explicit_key:
+            return explicit_key
+        upstream = str(details.get("upstream_structure_type", "") or "").strip()
+        downstream = str(details.get("downstream_structure_type", "") or "").strip()
+        transition_type = str(details.get("transition_type", "") or "").strip()
+        if not (upstream or downstream or transition_type):
+            return ""
+        return cls._make_transition_length_rule_key(upstream, downstream, transition_type)
+
+    def _build_transition_length_rule_objects(self):
+        rule_objects = []
+        if TransitionLengthRule is None:
+            return rule_objects
+        normalized_rules = self._normalize_transition_length_rule_map(self._transition_length_rules)
+        if (not normalized_rules) and getattr(self, "_settings", None):
+            normalized_rules = self._normalize_transition_length_rule_map(
+                getattr(self._settings, "transition_length_rules", []) or []
+            )
+            if normalized_rules:
+                self._transition_length_rules = dict(normalized_rules)
+        for rule in normalized_rules.values():
+            rule_objects.append(
+                TransitionLengthRule(
+                    upstream_structure_type=rule["upstream_structure_type"],
+                    downstream_structure_type=rule["downstream_structure_type"],
+                    transition_type="进口" if rule["transition_type"] == "进口" else "出口",
+                    rule_mode=rule.get("rule_mode", "formula") or "formula",
+                    step_size_m=max(0.0, float(rule.get("step_size_m", 0.0) or 0.0)),
+                    fixed_length_m=max(0.0, float(rule.get("fixed_length_m", 0.0) or 0.0)),
+                )
+            )
+        return rule_objects
+
+    def _rebuild_calculation_summary_state(self, nodes):
+        """在不重新执行总计算的情况下刷新摘要面板。"""
+        if not nodes:
+            self._update_summary_panel([])
+            return
+
+        total_len = float(getattr(self, "_last_channel_total_length", 0.0) or 0.0)
+        if total_len <= 0:
+            regular_nodes = [node for node in nodes if not getattr(node, "is_transition", False)]
+            if len(regular_nodes) >= 2:
+                start_mc = float(getattr(regular_nodes[0], "station_MC", 0.0) or 0.0)
+                end_mc = float(getattr(regular_nodes[-1], "station_MC", 0.0) or 0.0)
+                total_len = max(0.0, end_mc - start_mc)
+
+        summary = None
+        regular_nodes = [node for node in nodes if not getattr(node, "is_transition", False)]
+        if regular_nodes:
+            first_node = regular_nodes[0]
+            last_node = regular_nodes[-1]
+            summary = {
+                "起点桩号": float(getattr(first_node, "station_MC", 0.0) or 0.0),
+                "终点桩号": float(getattr(last_node, "station_MC", 0.0) or 0.0),
+                "起点水位": float(getattr(first_node, "water_level", 0.0) or 0.0),
+                "终点水位": float(getattr(last_node, "water_level", 0.0) or 0.0),
+            }
+        wl_drop = None
+        if summary:
+            wl_drop = summary["起点水位"] - summary["终点水位"]
+
+        self._update_summary_panel(nodes, total_len=total_len, wl_drop=wl_drop, summary=summary)
+
+    @staticmethod
+    def _should_display_transition_length_value(node) -> bool:
+        if getattr(node, "transition_length_override_m", None) is not None:
+            return True
+        if getattr(node, "transition_length_calc_details", None):
+            return True
+        return bool(getattr(node, "transition_length", 0.0))
+
+    @staticmethod
+    def _should_display_transition_loss_value(node) -> bool:
+        if getattr(node, "transition_calc_details", None):
+            return True
+        return bool(getattr(node, "head_loss_transition", 0.0))
+
+    def _persist_transition_calc_payload_for_row(self, row_idx: int, node=None):
+        table = getattr(self, "node_table", None)
+        if not table or row_idx < 0 or row_idx >= table.rowCount():
+            return
+        first_item = table.item(row_idx, 0)
+        if first_item is None:
+            first_item = QTableWidgetItem("")
+            first_item.setTextAlignment(Qt.AlignCenter)
+            if 0 not in EDITABLE_COLS:
+                first_item.setFlags(first_item.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row_idx, 0, first_item)
+        payload = first_item.data(Qt.UserRole)
+        if not isinstance(payload, dict):
+            payload = {}
+        node_obj = node
+        if node_obj is None and getattr(self, "calculated_nodes", None) and row_idx < len(self.calculated_nodes):
+            node_obj = self.calculated_nodes[row_idx]
+        if node_obj is None:
+            first_item.setData(Qt.UserRole, payload)
+            return
+        override_value = getattr(node_obj, "transition_length_override_m", None)
+        if override_value is None or str(override_value).strip() == "":
+            payload.pop("_transition_length_override_m", None)
+        else:
+            payload["_transition_length_override_m"] = float(override_value)
+        payload["_transition_length_source"] = str(getattr(node_obj, "transition_length_source", "") or "")
+        payload["_transition_length_warning"] = str(getattr(node_obj, "transition_length_warning", "") or "")
+        payload["_transition_rule_upstream_structure_type"] = str(
+            getattr(node_obj, "transition_rule_upstream_structure_type", "") or ""
+        )
+        payload["_transition_rule_downstream_structure_type"] = str(
+            getattr(node_obj, "transition_rule_downstream_structure_type", "") or ""
+        )
+        payload["_transition_length_calc_details"] = copy.deepcopy(
+            getattr(node_obj, "transition_length_calc_details", {}) or {}
+        )
+        payload["_transition_loss_calc_details"] = copy.deepcopy(
+            getattr(node_obj, "transition_calc_details", {}) or {}
+        )
+        first_item.setData(Qt.UserRole, payload)
+
+    def _build_transition_length_tooltip(self, details):
+        if not isinstance(details, dict):
+            return ""
+        formula_length = details.get("formula_length", details.get("L_result", 0.0) or 0.0) or 0.0
+        actual_length = details.get("actual_length", details.get("L_result", 0.0) or 0.0) or 0.0
+        lines = [
+            f"来源：{self._get_transition_length_source_label(details)}",
+            f"公式/规范长度：{formula_length:.3f} m",
+            f"当前采用长度：{actual_length:.3f} m",
+        ]
+        warning = str(details.get("warning", details.get("length_warning", "")) or "").strip()
+        if warning:
+            lines.append(f"警告：{warning}")
+        rule_key = self._build_transition_length_rule_key_from_details(details)
+        if rule_key:
+            lines.append(f"组合键：{rule_key}")
+        return "\n".join(lines)
+
+    def _refresh_transition_length_item_presentation(self, row_idx: int, source_nodes=None):
+        table = self.node_table
+        if not table or row_idx < 0 or row_idx >= table.rowCount():
+            return
+        nodes = source_nodes if source_nodes is not None else getattr(self, 'calculated_nodes', None)
+        details = None
+        if nodes and row_idx < len(nodes):
+            details = getattr(nodes[row_idx], 'transition_length_calc_details', None)
+        tooltip = self._build_transition_length_tooltip(details)
+        warning = str(details.get("warning", details.get("length_warning", "")) or "").strip() if isinstance(details, dict) else ""
+        source_kind = self._get_transition_length_source_kind(details)
+        for col in (32, 33):
+            item = table.item(row_idx, col)
+            if not item:
+                continue
+            item.setToolTip(tooltip)
+            if warning:
+                item.setBackground(QColor("#FFF4CE"))
+            elif source_kind == "single_override":
+                item.setBackground(QColor("#E8F4FD"))
+            elif source_kind.startswith("rule:"):
+                item.setBackground(QColor("#EEF7E8"))
+            else:
+                item.setBackground(QBrush())
+
+    def _refresh_all_transition_length_presentations(self, source_nodes=None):
+        table = getattr(self, "node_table", None)
+        if not table:
+            return
+        for row_idx in range(table.rowCount()):
+            if self._is_transition_row(row_idx, source_nodes):
+                self._refresh_transition_length_item_presentation(row_idx, source_nodes)
+
     def _apply_table1_source_row_lock_flags(self):
         table = self.node_table
         if not table:
@@ -2004,6 +2808,8 @@ class WaterProfilePanel(QWidget):
                 if not item:
                     continue
                 editable = col in EDITABLE_COLS
+                if col == 32:
+                    editable = self._is_transition_length_editable_cell(row, col)
                 if row == 0 and col in FIRST_ROW_LOCKED_LOSS_COLS:
                     editable = False
                 if col == 7 and self._is_pressure_pipe_row(row):
@@ -2017,6 +2823,235 @@ class WaterProfilePanel(QWidget):
                     new_flags = flags & ~Qt.ItemIsEditable
                 if new_flags != flags:
                     item.setFlags(new_flags)
+
+    def _begin_transition_length_edit(self, row_idx: int) -> bool:
+        table = getattr(self, "node_table", None)
+        if not table or not self._is_transition_length_editable_cell(row_idx, 32):
+            return False
+        item = table.item(row_idx, 32)
+        if item is None:
+            item = QTableWidgetItem("")
+            item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row_idx, 32, item)
+            self._apply_table1_source_row_lock_flags()
+        table.setCurrentCell(row_idx, 32)
+        table.editItem(item)
+        return True
+
+    def _show_node_table_context_menu(self, pos):
+        table = getattr(self, "node_table", None)
+        if not table:
+            return
+        index = table.indexAt(pos)
+        if not index.isValid():
+            return
+        row = index.row()
+        col = index.column()
+        table.setCurrentCell(row, col)
+        if col != 32 or not self._is_transition_row(row):
+            return
+
+        menu = RoundMenu(parent=self)
+        menu.addAction(Action("查看渐变段长度详情", triggered=lambda: self._on_node_cell_double_clicked(row, 32)))
+        if self._is_transition_length_editable_cell(row, 32):
+            menu.addAction(Action("编辑渐变段长度", triggered=lambda: self._begin_transition_length_edit(row)))
+        ctx = self._get_transition_context_for_row(row)
+        node = ctx["node"] if ctx else None
+        if node is not None and getattr(node, "transition_length_override_m", None) is not None:
+            menu.addAction(
+                Action(
+                    "恢复公式/规则结果",
+                    triggered=lambda: self._apply_transition_length_override(
+                        row,
+                        clear_override=True,
+                        mark_dirty=True,
+                    ),
+                )
+            )
+        menu.exec(table.viewport().mapToGlobal(pos))
+
+    def _open_transition_length_rules(self):
+        rule_rows = self._collect_transition_length_rule_rows()
+        if not rule_rows:
+            fluent_info(self, "提示", "当前工程尚未出现可配置的渐变段组合")
+            return
+        dialog = TransitionLengthRuleDialog(rule_rows, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self._transition_length_rules = self._normalize_transition_length_rule_map(dialog.get_rules())
+        self._settings = self._build_settings()
+
+        nodes_for_apply, _ = self._get_transition_nodes_for_editing()
+        changed_rows = []
+        if nodes_for_apply:
+            with self._table_batch_update(self.node_table):
+                for row_idx, node in enumerate(nodes_for_apply):
+                    if not getattr(node, "is_transition", False):
+                        continue
+                    if getattr(node, "transition_length_override_m", None) is not None:
+                        self._refresh_transition_length_item_presentation(row_idx, nodes_for_apply)
+                        continue
+                    if self._apply_transition_length_override(
+                        row_idx,
+                        source_nodes=nodes_for_apply,
+                        trigger_downstream=False,
+                        refresh_summary=False,
+                        mark_dirty=False,
+                    ):
+                        changed_rows.append(row_idx)
+                if changed_rows:
+                    self._recalc_downstream(min(changed_rows))
+            self._refresh_all_transition_length_presentations(nodes_for_apply)
+
+        self._rebuild_calculation_summary_state(nodes_for_apply)
+        if not getattr(self, "_loading_project", False):
+            self.data_changed.emit()
+        InfoBar.success(
+            "已应用长度规则",
+            f"共更新 {len(changed_rows)} 条渐变段长度规则命中结果",
+            parent=self._info_parent(),
+            duration=3000,
+            position=InfoBarPosition.TOP,
+        )
+
+    def _apply_transition_length_override(
+        self,
+        row_idx: int,
+        manual_length=None,
+        *,
+        clear_override: bool = False,
+        source_nodes=None,
+        trigger_downstream: bool = True,
+        refresh_summary: bool = True,
+        mark_dirty: bool = False,
+    ) -> bool:
+        if not CALCULATOR_AVAILABLE:
+            return False
+        ctx = self._get_transition_context_for_row(row_idx, source_nodes)
+        if not ctx:
+            return False
+
+        node = ctx["node"]
+        nodes = ctx["nodes"]
+        prev_node = ctx["prev_node"]
+        next_node = ctx["next_node"]
+
+        override_value = None
+        if manual_length is not None:
+            try:
+                override_value = float(manual_length)
+            except (TypeError, ValueError):
+                InfoBar.warning(
+                    "输入无效",
+                    "渐变段长度请输入大于等于 0 的数值。",
+                    parent=self._info_parent(),
+                    duration=2500,
+                    position=InfoBarPosition.TOP,
+                )
+                return False
+            if override_value < 0:
+                InfoBar.warning(
+                    "输入无效",
+                    "渐变段长度请输入大于等于 0 的数值。",
+                    parent=self._info_parent(),
+                    duration=2500,
+                    position=InfoBarPosition.TOP,
+                )
+                return False
+
+        settings = self._build_settings()
+        self._settings = settings
+
+        try:
+            from core.hydraulic_calc import HydraulicCalculator
+            hyd_calc = HydraulicCalculator(settings)
+        except Exception:
+            return False
+
+        if clear_override:
+            node.transition_length_override_m = None
+        elif override_value is not None:
+            current_length = 0.0
+            try:
+                current_length = float(getattr(node, "transition_length", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                current_length = 0.0
+            upper_bound = self._get_transition_length_override_upper_bound(ctx)
+            if override_value > upper_bound + 1e-6:
+                return self._reject_transition_length_override(
+                    row_idx,
+                    current_length,
+                    "输入的渐变段长度超过当前可用里程，会改变现有拓扑。请重新插入渐变段或调整结构布置。",
+                )
+            node.transition_length_override_m = override_value
+
+        old_updating = self._updating_cells
+        self._updating_cells = True
+        try:
+            hyd_calc.ensure_transition_length_details(
+                node,
+                prev_node,
+                next_node,
+                nodes,
+                actual_length=override_value,
+                preserve_existing_length=False,
+            )
+            hyd_calc.ensure_transition_loss_details(
+                node,
+                prev_node,
+                next_node,
+                nodes,
+                actual_length=override_value,
+                preserve_existing_length=False,
+            )
+
+            length_details = getattr(node, "transition_length_calc_details", None)
+            if not isinstance(length_details, dict):
+                length_details = {}
+                node.transition_length_calc_details = length_details
+            length_details["length_rule_key"] = ctx["rule_key"]
+            length_details["source"] = str(
+                length_details.get("source", getattr(node, "transition_length_source", "formula")) or "formula"
+            )
+            length_details["warning"] = str(
+                length_details.get("warning", getattr(node, "transition_length_warning", "")) or ""
+            )
+
+            loss_details = getattr(node, "transition_calc_details", None)
+            if not isinstance(loss_details, dict):
+                loss_details = {}
+                node.transition_calc_details = loss_details
+            loss_details["length_rule_key"] = ctx["rule_key"]
+            loss_details["length_details"] = copy.deepcopy(length_details)
+
+            table = self.node_table
+            for col_idx in (32, 33):
+                item = table.item(row_idx, col_idx)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    item.setTextAlignment(Qt.AlignCenter)
+                    table.setItem(row_idx, col_idx, item)
+            table.item(row_idx, 32).setText(f"{float(getattr(node, 'transition_length', 0.0) or 0.0):.3f}")
+            table.item(row_idx, 33).setText(f"{float(getattr(node, 'head_loss_transition', 0.0) or 0.0):.4f}")
+            self._persist_transition_calc_payload_for_row(row_idx, node)
+            self._apply_table1_source_row_lock_flags()
+            self._refresh_transition_length_item_presentation(row_idx, nodes)
+        finally:
+            self._updating_cells = old_updating
+
+        if ctx["uses_calculated_nodes"]:
+            self.calculated_nodes = nodes
+        else:
+            self.nodes = nodes
+
+        if trigger_downstream:
+            self._recalc_downstream(row_idx)
+        if refresh_summary:
+            self._rebuild_calculation_summary_state(nodes)
+        if mark_dirty and not getattr(self, "_loading_project", False):
+            self.data_changed.emit()
+        return True
 
     def _setup_header_tooltips(self):
         """为表头设置悬浮提示（LaTeX公式渲染），使用自定义Fluent悬浮卡片"""
@@ -2063,6 +3098,16 @@ class WaterProfilePanel(QWidget):
         from app_渠系计算前端.water_profile.formula_dialog import DOUBLE_CLICK_COLUMNS
         if col_name not in DOUBLE_CLICK_COLUMNS:
             return
+        if col_name == "渐变段长度L":
+            ctx = self._get_transition_context_for_row(row)
+            if not ctx:
+                return
+            if ctx["uses_calculated_nodes"]:
+                self._sync_losses_from_table()
+                self._sync_transition_lengths_from_table(ctx["nodes"])
+            self._show_transition_length_details(row, ctx["node"], ctx["nodes"])
+            return
+
         if not hasattr(self, 'calculated_nodes') or not self.calculated_nodes:
             return
         nodes = self.calculated_nodes
@@ -2070,10 +3115,11 @@ class WaterProfilePanel(QWidget):
             return
         # 弹窗前强制从表格同步损失/水位/高程到 calculated_nodes，确保显示最新值
         self._sync_losses_from_table()
+        self._sync_transition_lengths_from_table(nodes)
         node = nodes[row]
 
         if col_name == "渐变段长度L":
-            self._show_transition_length_details(row, node)
+            self._show_transition_length_details(row, node, nodes)
         elif col_name == "弯道水头损失":
             self._show_bend_calc_details(row, node)
         elif col_name == "沿程水头损失":
@@ -2094,13 +3140,252 @@ class WaterProfilePanel(QWidget):
     # ================================================================
     # 双击查看详细计算过程（与原版Tkinter data_table.py完全对齐）
     # ================================================================
-    def _show_transition_length_details(self, row_idx, node):
+    def _show_transition_length_details(self, row_idx, node, source_nodes=None):
         details = getattr(node, 'transition_length_calc_details', None)
+        if not details:
+            details = self._repair_transition_length_details_for_row(row_idx, source_nodes)
         if not details:
             fluent_info(self, "提示", "该行没有渐变段长度计算数据")
             return
         from app_渠系计算前端.water_profile.formula_dialog import show_transition_length_dialog
-        show_transition_length_dialog(self, node.name or f"行{row_idx+1}", details)
+        try:
+            show_transition_length_dialog(
+                self,
+                node.name or f"行{row_idx+1}",
+                details,
+                on_save_override=lambda value: self._apply_transition_length_override(
+                    row_idx,
+                    manual_length=value,
+                    source_nodes=source_nodes,
+                    mark_dirty=True,
+                ),
+                on_clear_override=lambda: self._apply_transition_length_override(
+                    row_idx,
+                    clear_override=True,
+                    source_nodes=source_nodes,
+                    mark_dirty=True,
+                ),
+            )
+        except TypeError as exc:
+            message = str(exc)
+            if "unexpected keyword argument" not in message and "positional arguments" not in message:
+                raise
+            show_transition_length_dialog(
+                self,
+                node.name or f"行{row_idx+1}",
+                details,
+            )
+
+    def _sync_transition_lengths_from_table(self, source_nodes=None):
+        """将表格中的渐变段长度文本同步回节点模型。"""
+        nodes = source_nodes if source_nodes is not None else getattr(self, 'calculated_nodes', None)
+        if not nodes or not getattr(self, 'node_table', None):
+            return
+
+        row_count = min(self.node_table.rowCount(), len(nodes))
+        for row_idx in range(row_count):
+            item = self.node_table.item(row_idx, 32)
+            if not item:
+                continue
+            raw_text = str(item.text() or "").strip()
+            if raw_text in ("", "-"):
+                nodes[row_idx].transition_length = 0.0
+                continue
+            try:
+                length_val = float(raw_text)
+            except (TypeError, ValueError):
+                continue
+            if length_val >= 0:
+                nodes[row_idx].transition_length = length_val
+
+    def _get_transition_length_cell_value(self, row_idx):
+        """读取表格中的渐变段长度，返回 (是否显式数值, 数值)。"""
+        if not getattr(self, 'node_table', None):
+            return False, None
+        item = self.node_table.item(row_idx, 32)
+        if not item:
+            return False, None
+        raw_text = str(item.text() or "").strip()
+        if raw_text in ("", "-"):
+            return False, 0.0
+        try:
+            return True, float(raw_text)
+        except (TypeError, ValueError):
+            return False, None
+
+    def _repair_transition_length_details_for_row(self, row_idx, source_nodes=None):
+        """按当前表格/节点上下文补建某一行的渐变段长度详情。"""
+        if not CALCULATOR_AVAILABLE:
+            return None
+
+        nodes = source_nodes if source_nodes is not None else getattr(self, 'calculated_nodes', None)
+        if not nodes or row_idx < 0 or row_idx >= len(nodes):
+            return None
+
+        self._sync_transition_lengths_from_table(nodes)
+        node = nodes[row_idx]
+        details = getattr(node, 'transition_length_calc_details', None)
+        if details:
+            return details
+        if not getattr(node, 'is_transition', False):
+            return None
+
+        has_explicit_length, cell_length = self._get_transition_length_cell_value(row_idx)
+        actual_length = getattr(node, 'transition_length', 0.0) or 0.0
+        if has_explicit_length and cell_length is not None and cell_length >= 0:
+            actual_length = cell_length
+        if actual_length < 0:
+            return None
+        if actual_length == 0 and not has_explicit_length:
+            return None
+
+        prev_node = None
+        next_node = None
+        for idx in range(row_idx - 1, -1, -1):
+            if not getattr(nodes[idx], 'is_transition', False):
+                prev_node = nodes[idx]
+                break
+        for idx in range(row_idx + 1, len(nodes)):
+            if not getattr(nodes[idx], 'is_transition', False):
+                next_node = nodes[idx]
+                break
+        if prev_node is None or next_node is None:
+            return None
+
+        try:
+            settings = self._build_settings()
+        except Exception:
+            settings = ProjectSettings()
+
+        try:
+            from core.hydraulic_calc import HydraulicCalculator
+            hyd_calc = HydraulicCalculator(settings)
+            details = hyd_calc.ensure_transition_length_details(
+                node,
+                prev_node,
+                next_node,
+                nodes,
+                actual_length=actual_length,
+                preserve_existing_length=True,
+            )
+            node.transition_length = actual_length
+            return details
+        except Exception:
+            return None
+
+    def _repair_missing_transition_length_details(self, source_nodes=None):
+        """批量补建缺失的渐变段长度详情，兼容旧项目或表格回填场景。"""
+        nodes = source_nodes if source_nodes is not None else getattr(self, 'calculated_nodes', None)
+        if not nodes:
+            return False
+
+        repaired = False
+        self._sync_transition_lengths_from_table(nodes)
+        for row_idx, node in enumerate(nodes):
+            if not getattr(node, 'is_transition', False):
+                continue
+            has_explicit_length, _ = self._get_transition_length_cell_value(row_idx)
+            actual_length = getattr(node, 'transition_length', 0.0) or 0.0
+            if actual_length < 0:
+                continue
+            if actual_length == 0 and not has_explicit_length:
+                continue
+            if getattr(node, 'transition_length_calc_details', None):
+                continue
+            if self._repair_transition_length_details_for_row(row_idx, nodes):
+                repaired = True
+        return repaired
+
+    def _transition_loss_details_complete(self, details):
+        required_keys = ("R1", "R2", "n", "hydraulic_slope_i", "length_details")
+        return isinstance(details, dict) and all(key in details for key in required_keys)
+
+    def _repair_transition_loss_details_for_row(self, row_idx, source_nodes=None):
+        """按当前表格/节点上下文补建某一行的渐变段水头损失详情。"""
+        nodes = source_nodes if source_nodes is not None else getattr(self, 'calculated_nodes', None)
+        details = None
+        if nodes and 0 <= row_idx < len(nodes):
+            details = getattr(nodes[row_idx], 'transition_calc_details', None)
+
+        if not CALCULATOR_AVAILABLE:
+            return details
+        if not nodes or row_idx < 0 or row_idx >= len(nodes):
+            return details
+
+        self._sync_transition_lengths_from_table(nodes)
+        node = nodes[row_idx]
+        details = getattr(node, 'transition_calc_details', None)
+        if self._transition_loss_details_complete(details):
+            return details
+        if not getattr(node, 'is_transition', False):
+            return details
+        if getattr(node, 'transition_skip_loss', False):
+            return details
+
+        has_explicit_length, cell_length = self._get_transition_length_cell_value(row_idx)
+        actual_length = getattr(node, 'transition_length', 0.0) or 0.0
+        if has_explicit_length and cell_length is not None and cell_length >= 0:
+            actual_length = cell_length
+        if actual_length < 0:
+            return details
+        if actual_length == 0 and not has_explicit_length and not details:
+            return None
+
+        prev_node = None
+        next_node = None
+        for idx in range(row_idx - 1, -1, -1):
+            if not getattr(nodes[idx], 'is_transition', False):
+                prev_node = nodes[idx]
+                break
+        for idx in range(row_idx + 1, len(nodes)):
+            if not getattr(nodes[idx], 'is_transition', False):
+                next_node = nodes[idx]
+                break
+        if prev_node is None or next_node is None:
+            return details
+
+        try:
+            settings = self._build_settings()
+        except Exception:
+            settings = ProjectSettings()
+
+        try:
+            from core.hydraulic_calc import HydraulicCalculator
+            hyd_calc = HydraulicCalculator(settings)
+            repaired = hyd_calc.ensure_transition_loss_details(
+                node,
+                prev_node,
+                next_node,
+                nodes,
+                actual_length=actual_length if (has_explicit_length or actual_length > 0) else None,
+                preserve_existing_length=has_explicit_length or actual_length > 0,
+            )
+            if has_explicit_length and cell_length is not None and cell_length >= 0:
+                node.transition_length = cell_length
+            return repaired
+        except Exception:
+            return details
+
+    def _repair_missing_transition_loss_details(self, source_nodes=None):
+        """批量补建缺失或旧版的渐变段水头损失详情。"""
+        nodes = source_nodes if source_nodes is not None else getattr(self, 'calculated_nodes', None)
+        if not nodes:
+            return False
+
+        repaired = False
+        self._sync_transition_lengths_from_table(nodes)
+        for row_idx, node in enumerate(nodes):
+            if not getattr(node, 'is_transition', False):
+                continue
+            if getattr(node, 'transition_skip_loss', False):
+                continue
+            details = getattr(node, 'transition_calc_details', None)
+            if self._transition_loss_details_complete(details):
+                continue
+            result = self._repair_transition_loss_details_for_row(row_idx, nodes)
+            if self._transition_loss_details_complete(result):
+                repaired = True
+        return repaired
 
     def _show_bend_calc_details(self, row_idx, node):
         if not getattr(node, 'bend_calc_details', None):
@@ -2121,6 +3406,10 @@ class WaterProfilePanel(QWidget):
             fluent_info(self, "提示", "该行不是渐变段，无法显示详细计算过程")
             return
         details = getattr(node, 'transition_calc_details', None)
+        if not self._transition_loss_details_complete(details):
+            repaired = self._repair_transition_loss_details_for_row(row_idx)
+            if repaired:
+                details = repaired
         if not details:
             fluent_info(self, "提示", "该渐变段尚未计算水头损失")
             return
@@ -2562,8 +3851,55 @@ class WaterProfilePanel(QWidget):
                 self._append_loss_undo_snapshot(self._pre_edit_snapshot)
                 self._pre_edit_snapshot = None
 
+            if col == 32:
+                if not self._is_transition_length_editable_cell(row, col):
+                    return
+                item = self.node_table.item(row, col)
+                raw_text = str(item.text() if item else "").strip()
+                if raw_text in ("", "-"):
+                    self._apply_transition_length_override(
+                        row,
+                        clear_override=True,
+                        mark_dirty=False,
+                    )
+                else:
+                    try:
+                        manual_length = float(raw_text)
+                    except (TypeError, ValueError):
+                        fallback_text = ""
+                        if self._pre_edit_cell_value and self._pre_edit_cell_value[:2] == (row, col):
+                            fallback_text = self._pre_edit_cell_value[2]
+                        if item is not None:
+                            item.setText(fallback_text)
+                        InfoBar.warning(
+                            "输入无效",
+                            "渐变段长度请输入大于等于 0 的数值。",
+                            parent=self._info_parent(),
+                            duration=2500,
+                            position=InfoBarPosition.TOP,
+                        )
+                        return
+                    if manual_length < 0:
+                        fallback_text = ""
+                        if self._pre_edit_cell_value and self._pre_edit_cell_value[:2] == (row, col):
+                            fallback_text = self._pre_edit_cell_value[2]
+                        if item is not None:
+                            item.setText(fallback_text)
+                        InfoBar.warning(
+                            "输入无效",
+                            "渐变段长度请输入大于等于 0 的数值。",
+                            parent=self._info_parent(),
+                            duration=2500,
+                            position=InfoBarPosition.TOP,
+                        )
+                        return
+                    self._apply_transition_length_override(
+                        row,
+                        manual_length=manual_length,
+                        mark_dirty=False,
+                    )
             # 对于水头损失列（36, 37, 38），触发联动计算
-            if col in (36, 37, 38) and row > 0:
+            elif col in (36, 37, 38) and row > 0:
                 self._recalc_downstream(row)
         finally:
             self._updating_cells = False
@@ -2759,7 +4095,7 @@ class WaterProfilePanel(QWidget):
                 row_data.append(item.text() if item else "")
             snapshot['rows'].append(row_data)
             first_item = self.node_table.item(r, 0)
-            snapshot['row_meta'].append(first_item.data(Qt.UserRole) if first_item else None)
+            snapshot['row_meta'].append(copy.deepcopy(first_item.data(Qt.UserRole)) if first_item else None)
         return snapshot
 
     @staticmethod
@@ -2843,6 +4179,8 @@ class WaterProfilePanel(QWidget):
         self._restore_manager_config(getattr(self, "_pressure_pipe_manager", None), snapshot.get('pressure_pipe_manager_config'))
         self._restore_section_gate_from_snapshot(snapshot)
         nodes_for_view = self._build_nodes_from_table()
+        self._apply_table1_source_row_lock_flags()
+        self._refresh_all_transition_length_presentations(nodes_for_view)
         self._update_pressure_pipe_roughness_overview(
             self._collect_pressure_pipe_roughness_pairs_from_nodes(nodes_for_view)
         )
@@ -3836,6 +5174,7 @@ class WaterProfilePanel(QWidget):
         settings.siphon_transition_outlet_zeta = self._fval(self.siphon_outlet_zeta, 0.20)
         # 倒虹吸转弯半径倍数n
         settings.siphon_turn_radius_n = DEFAULT_SIPHON_TURN_RADIUS_N
+        settings.transition_length_rules = self._build_transition_length_rule_objects()
         return settings
 
     def _build_nodes_from_table(self):
@@ -3949,6 +5288,10 @@ class WaterProfilePanel(QWidget):
                     node.is_auto_inserted_channel = True
                     node.x = float(_ur.get('_x', 0.0) or 0.0)
                     node.y = float(_ur.get('_y', 0.0) or 0.0)
+                    try:
+                        node.stat_length = float(_ur.get('_stat_length', 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        node.stat_length = 0.0
                 elif _ur == "auto_channel":  # 兼容旧格式
                     node.is_auto_inserted_channel = True
                 # 恢复渐变段详细参数（#10）
@@ -3959,6 +5302,34 @@ class WaterProfilePanel(QWidget):
                     node.transition_zeta = td.get('transition_zeta', 0.0)
                     node.transition_theta = td.get('transition_theta', 0.0)
                 if isinstance(_ur, dict):
+                    _override = _ur.get("_transition_length_override_m", None)
+                    if _override is not None and str(_override).strip() != "":
+                        try:
+                            node.transition_length_override_m = float(_override)
+                        except (TypeError, ValueError):
+                            node.transition_length_override_m = None
+                    node.transition_length_source = str(_ur.get("_transition_length_source", "formula") or "formula")
+                    node.transition_length_warning = str(_ur.get("_transition_length_warning", "") or "")
+                    node.transition_rule_upstream_structure_type = str(
+                        _ur.get("_transition_rule_upstream_structure_type", "") or ""
+                    )
+                    node.transition_rule_downstream_structure_type = str(
+                        _ur.get("_transition_rule_downstream_structure_type", "") or ""
+                    )
+                    _length_details = _ur.get("_transition_length_calc_details", None)
+                    if isinstance(_length_details, dict):
+                        node.transition_length_calc_details = copy.deepcopy(_length_details)
+                        if not node.transition_rule_upstream_structure_type:
+                            node.transition_rule_upstream_structure_type = str(
+                                _length_details.get("upstream_structure_type", "") or ""
+                            )
+                        if not node.transition_rule_downstream_structure_type:
+                            node.transition_rule_downstream_structure_type = str(
+                                _length_details.get("downstream_structure_type", "") or ""
+                            )
+                    _loss_details = _ur.get("_transition_loss_calc_details", None)
+                    if isinstance(_loss_details, dict):
+                        node.transition_calc_details = copy.deepcopy(_loss_details)
                     if "_from_table1_source" in _ur:
                         from_table1_source = bool(_ur.get("_from_table1_source"))
                     _ext = _ur.get('_external_head_loss', None)
@@ -4153,8 +5524,9 @@ class WaterProfilePanel(QWidget):
 
             # ===== 水头损失列 (32-40) =====
             # 渐变段长度 (col 32)
+            _trl_text = _read_text(r, 32)
             _trl = _read_float(r, 32)
-            if _trl > 0:
+            if _trl_text:
                 node.transition_length = _trl
             # 渐变段损失 (col 33)
             _ht = _read_float(r, 33)
@@ -4644,7 +6016,12 @@ class WaterProfilePanel(QWidget):
                 if not isinstance(payload, dict):
                     payload = {}
                 if _is_auto_ch:
-                    payload.update({"_auto_channel": True, "_x": node.x, "_y": node.y})
+                    payload.update({
+                        "_auto_channel": True,
+                        "_x": node.x,
+                        "_y": node.y,
+                        "_stat_length": float(getattr(node, "stat_length", 0.0) or 0.0),
+                    })
                 elif _is_trans and (node.transition_type or node.transition_form):
                     # 渐变段详细参数保存到UserRole（#10）
                     payload.update({
@@ -4655,6 +6032,12 @@ class WaterProfilePanel(QWidget):
                             'transition_theta': getattr(node, 'transition_theta', 0.0),
                         }
                     })
+                    payload["_transition_rule_upstream_structure_type"] = str(
+                        getattr(node, "transition_rule_upstream_structure_type", "") or ""
+                    )
+                    payload["_transition_rule_downstream_structure_type"] = str(
+                        getattr(node, "transition_rule_downstream_structure_type", "") or ""
+                    )
                 if getattr(node, 'external_head_loss', None) is not None:
                     payload['_external_head_loss'] = getattr(node, 'external_head_loss')
                 # 持久化有压管道专用参数（表格无专门列，放在UserRole）
@@ -4682,6 +6065,8 @@ class WaterProfilePanel(QWidget):
                 payload["_from_table1_source"] = bool(_is_source_row)
                 if payload:
                     first_item.setData(Qt.UserRole, payload)
+                if _is_trans:
+                    self._persist_transition_calc_payload_for_row(r, node)
 
     def _generate_detail_report(self, nodes, settings, calculator=None):
         """生成详细计算过程文本"""
@@ -4887,16 +6272,30 @@ class WaterProfilePanel(QWidget):
             elif event.type() == QEvent.Type.Leave:
                 self._formula_tooltip.schedule_hide()
         elif hasattr(self, "node_table") and self.node_table and obj in (self.node_table, self.node_table.viewport()):
+            if obj is self.node_table.viewport() and event.type() == QEvent.Type.MouseButtonDblClick:
+                try:
+                    pos = event.position().toPoint()
+                except AttributeError:
+                    pos = event.pos()
+                index = self.node_table.indexAt(pos)
+                if index.isValid() and index.column() == 32 and self._is_transition_row(index.row()):
+                    self.node_table.setCurrentCell(index.row(), index.column())
+                    self._on_node_cell_double_clicked(index.row(), index.column())
+                    return True
             if event.type() == QEvent.Type.KeyPress:
                 key = event.key()
                 modifiers = event.modifiers()
+                row = self.node_table.currentRow()
+                col = self.node_table.currentColumn()
+                if col == 32 and self._is_transition_length_editable_cell(row, col):
+                    if key in {Qt.Key_Return, Qt.Key_Enter, Qt.Key_F2} and not (modifiers & Qt.ControlModifier):
+                        self._begin_transition_length_edit(row)
+                        return True
                 is_edit_key = bool(event.text().strip()) or key in {
                     Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Return, Qt.Key_Enter, Qt.Key_F2
                 }
                 is_paste = bool(modifiers & Qt.ControlModifier) and key in {Qt.Key_V, Qt.Key_X}
                 if is_edit_key or is_paste:
-                    row = self.node_table.currentRow()
-                    col = self.node_table.currentColumn()
                     if self._is_table1_source_locked_cell(row, col):
                         self._show_table1_source_lock_hint()
                         return True
@@ -7125,8 +8524,10 @@ class WaterProfilePanel(QWidget):
         
         # 序列化 ProjectSettings
         project_settings = {}
-        if self._settings:
-            project_settings = self._settings.to_dict()
+        current_settings = self._build_settings() if CALCULATOR_AVAILABLE else self._settings
+        if current_settings:
+            self._settings = current_settings
+            project_settings = current_settings.to_dict()
         
         # 序列化节点列表
         nodes_data = []
@@ -7316,6 +8717,12 @@ class WaterProfilePanel(QWidget):
             proj_settings = d.get("project_settings", {})
             if proj_settings:
                 self._settings = ProjectSettings.from_dict(proj_settings)
+                self._load_transition_length_rules(
+                    getattr(self._settings, "transition_length_rules", []) or []
+                )
+            else:
+                self._settings = None
+                self._load_transition_length_rules([])
             
             # 恢复节点列表
             nodes_data = d.get("nodes", [])
@@ -7463,6 +8870,10 @@ class WaterProfilePanel(QWidget):
             table3_rows = d.get("node_table_rows", [])
             if isinstance(table3_rows, list) and table3_rows:
                 self._apply_node_table_text_snapshot(table3_rows)
+            if self.calculated_nodes:
+                self._repair_missing_transition_length_details(self.calculated_nodes)
+                self._repair_missing_transition_loss_details(self.calculated_nodes)
+            self._refresh_all_transition_length_presentations(self.calculated_nodes or self.nodes)
 
             # 恢复下游门禁状态（默认锁定）
             state_text = str(merged_section.get("state_text", "")).strip()
@@ -7486,6 +8897,7 @@ class WaterProfilePanel(QWidget):
                 )
             self._refresh_pressure_pipe_controls()
             self._switch_workspace_tab(self._tab_section_input)
+            self._rebuild_calculation_summary_state(self.calculated_nodes or self.nodes)
             QTimer.singleShot(0, self._adjust_splitter_for_settings)
             
         finally:

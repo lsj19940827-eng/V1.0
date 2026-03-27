@@ -92,6 +92,15 @@ except ImportError:
     def format_length_m(value: float) -> str:
         return f"{value:.3f}m"
 
+try:
+    from app_渠系计算前端.siphon.viewer_dialog import SiphonCanvasViewerDialog
+    VIEWER_AVAILABLE = True
+except ImportError:
+    VIEWER_AVAILABLE = False
+
+    class SiphonCanvasViewerDialog:  # type: ignore[no-redef]
+        pass
+
 # 对话框
 try:
     from app_渠系计算前端.siphon.dialogs import (
@@ -330,6 +339,7 @@ class SiphonPanel(QWidget):
         self._turn_n_user_confirmed = False
         # 管道根数确认标志（用户需Enter/失焦/按钮确认）
         self._num_pipes_user_confirmed = False
+        self.canvas_viewer = None
 
         # 断面参数缓存（v₂策略=断面参数计算用）
         self._section_B = None
@@ -435,11 +445,16 @@ class SiphonPanel(QWidget):
         tb.addWidget(self.lbl_zoom)
 
         for text, slot in [("＋", "_zoom_in"), ("－", "_zoom_out"),
-                           ("重置", "_zoom_reset")]:
+                           ("适配", "_zoom_fit")]:
             btn = PushButton(text)
             btn.setFixedHeight(26)
             btn.clicked.connect(getattr(self, slot))
             tb.addWidget(btn)
+
+        self.btn_view_expand = PushButton("展开")
+        self.btn_view_expand.setFixedHeight(26)
+        self.btn_view_expand.clicked.connect(self._open_canvas_viewer)
+        tb.addWidget(self.btn_view_expand)
 
         cl.addLayout(tb)
 
@@ -449,6 +464,7 @@ class SiphonPanel(QWidget):
             self.canvas.setMinimumHeight(140)
             self.canvas.setMaximumHeight(200)
             self.canvas.zoom_changed.connect(self._update_zoom_label)
+            self.canvas.open_detail_requested.connect(self._open_canvas_viewer)
             cl.addWidget(self.canvas)
         else:
             self.canvas = None
@@ -457,6 +473,13 @@ class SiphonPanel(QWidget):
             lbl.setStyleSheet("color:#424242;font-size:12px;background:transparent;border:none;")
             lbl.setMinimumHeight(100)
             cl.addWidget(lbl)
+
+        self.lbl_canvas_hint = QLabel("")
+        self.lbl_canvas_hint.setWordWrap(True)
+        self.lbl_canvas_hint.setVisible(False)
+        self.lbl_canvas_hint.setStyleSheet(
+            "color:#CC6600;font-size:12px;background:#FFF6E6;border:1px solid #F1D6A8;border-radius:4px;padding:4px 8px;")
+        cl.addWidget(self.lbl_canvas_hint)
 
         # 状态提示
         self.lbl_data_status = QLabel("")
@@ -469,6 +492,8 @@ class SiphonPanel(QWidget):
         if self.canvas:
             self.canvas.set_view_mode(mode)
             self._update_zoom_label()
+            self._update_canvas_hint()
+            self._sync_canvas_viewer(fit_to_content=True)
 
     def _zoom_in(self):
         if self.canvas: self.canvas.zoom_in(); self._update_zoom_label()
@@ -479,9 +504,50 @@ class SiphonPanel(QWidget):
     def _zoom_reset(self):
         if self.canvas: self.canvas.zoom_reset(); self._update_zoom_label()
 
+    def _zoom_fit(self):
+        if self.canvas: self.canvas.zoom_fit(); self._update_zoom_label()
+
     def _update_zoom_label(self, _zoom=None):
         if self.canvas:
             self.lbl_zoom.setText(f"{int(self.canvas._zoom * 100)}%")
+
+    def _open_canvas_viewer(self):
+        if not CANVAS_AVAILABLE or not VIEWER_AVAILABLE or not self.canvas:
+            return
+        if self.canvas_viewer is None:
+            self.canvas_viewer = SiphonCanvasViewerDialog(self.window())
+            self.canvas_viewer.view_mode_changed.connect(self._on_viewer_mode_changed)
+        self._sync_canvas_viewer(fit_to_content=True)
+        self.canvas_viewer.show_and_focus()
+
+    def _sync_canvas_viewer(self, fit_to_content=False):
+        if self.canvas_viewer is None:
+            return
+        self.canvas_viewer.sync_from_panel(
+            view_mode=self.canvas.get_view_mode() if self.canvas else "profile",
+            segments=self.segments,
+            plan_segments=self.plan_segments,
+            plan_feature_points=self.plan_feature_points,
+            plan_total_length=self.plan_total_length,
+            longitudinal_nodes=self.longitudinal_nodes,
+            longitudinal_is_example=self._longitudinal_is_example,
+            fit_to_content=fit_to_content,
+        )
+
+    def _on_viewer_mode_changed(self, mode: str):
+        if self.canvas and mode != self.canvas.get_view_mode():
+            self._switch_view(mode)
+
+    def _update_canvas_hint(self):
+        if not self.canvas or not hasattr(self, "lbl_canvas_hint"):
+            return
+        if self.canvas.should_suggest_detail_view():
+            view_label = "平面图" if self.canvas.get_view_mode() == "plan" else "纵断面"
+            self.lbl_canvas_hint.setText(f"当前{view_label}轴线较细长，建议点“展开”或双击预览查看大图。")
+            self.lbl_canvas_hint.setVisible(True)
+        else:
+            self.lbl_canvas_hint.clear()
+            self.lbl_canvas_hint.setVisible(False)
 
     # ---- B: 参数区 ----
     def _build_params_area(self, parent_lay):
@@ -4520,6 +4586,8 @@ document.addEventListener("DOMContentLoaded", function(){
             )
             self.canvas.auto_select_view()
             self._update_zoom_label()
+            self._update_canvas_hint()
+            self._sync_canvas_viewer()
 
     def _update_data_status(self):
         """更新数据状态标签（含空间合并模式提示，与Tkinter版一致）"""
@@ -4951,5 +5019,7 @@ document.addEventListener("DOMContentLoaded", function(){
         """关闭时保存"""
         if self._data_dirty:
             self._do_autosave()
+        if self.canvas_viewer is not None:
+            self.canvas_viewer.close()
         super().closeEvent(event)
         auto_resize_table(self.long_table)

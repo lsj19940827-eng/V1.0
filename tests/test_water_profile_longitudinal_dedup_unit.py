@@ -4,7 +4,9 @@
 from pathlib import Path
 import importlib.util
 import re
+import shutil
 import sys
+import tempfile
 from types import SimpleNamespace
 import pytest
 
@@ -183,6 +185,18 @@ def _texts_at(records, x, y, tol=1e-6):
     ]
 
 
+@pytest.fixture
+def local_tmp_path():
+    root = Path(__file__).resolve().parents[1]
+    base_dir = root / ".pytest_tmp" / "water_profile_longitudinal_dedup_unit"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(dir=base_dir))
+    try:
+        yield temp_dir
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def _parse_text_cmds(path):
     pat = re.compile(
         r"^-text\s+([-\d.eE]+),([-\d.eE]+)\s+[-\d.eE]+\s+[-\d.eE]+\s+(.+?)\s*$"
@@ -232,6 +246,10 @@ def _has_line(records, start, end, tol=1e-6):
     return False
 
 
+def _scaled_m_to_mm(value_m, scale_denom):
+    return float(value_m) * 1000.0 / float(scale_denom)
+
+
 def test_draw_profile_on_msp_dedup_station_text(monkeypatch):
     ezdxf_stub = SimpleNamespace(
         enums=SimpleNamespace(
@@ -256,31 +274,43 @@ def test_draw_profile_on_msp_dedup_station_text(monkeypatch):
     )
     _, layout, _, line_height, _ = cad_tools._build_profile_row_layout(_default_settings())
     short_line_height = layout["slope"]["bottom"]
+    scale_x = _default_settings()["scale_x"]
+    x_100 = _scaled_m_to_mm(100.0, scale_x) - 1.0
+    x_200 = _scaled_m_to_mm(200.0, scale_x) - 1.0
 
-    # dxf 分支除首列外 x 会减 1，因此 station=100/200 的文本 x 分别是 99/199
-    assert _texts_at(msp.text_records, 99.0, 1.0) == ["407.898"]
-    assert _texts_at(msp.text_records, 99.0, 16.0) == ["408.460"]
-    assert _texts_at(msp.text_records, 99.0, 31.0) == ["409.898"]
-    assert _texts_at(msp.text_records, 199.0, 1.0) == ["405.123"]
-    assert _texts_at(msp.text_records, 199.0, 16.0) == ["405.789"]
-    assert _texts_at(msp.text_records, 199.0, 31.0) == ["406.456"]
+    # dxf 分支除首列外 x 会减 1；scale=1 现在表示严格 1:1（米 -> mm）
+    assert _texts_at(msp.text_records, x_100, 1.0) == ["407.898"]
+    assert _texts_at(msp.text_records, x_100, 16.0) == ["408.460"]
+    assert _texts_at(msp.text_records, x_100, 31.0) == ["409.898"]
+    assert _texts_at(msp.text_records, x_200, 1.0) == ["405.123"]
+    assert _texts_at(msp.text_records, x_200, 16.0) == ["405.789"]
+    assert _texts_at(msp.text_records, x_200, 31.0) == ["406.456"]
 
-    assert "0.000" not in _texts_at(msp.text_records, 99.0, 1.0)
-    assert "0.000" not in _texts_at(msp.text_records, 199.0, 1.0)
-    assert len(_texts_at(msp.text_records, 99.0, 47.0)) == 1
-    assert len(_texts_at(msp.text_records, 199.0, 47.0)) == 1
-    assert any("IP15" in txt for txt in _texts_at(msp.text_records, 99.0, 77.0))
-    assert _texts_at(msp.text_records, 199.0, 77.0) == ["IP20"]
-    assert _has_line(msp.line_records, (100.0, 0.0), (100.0, short_line_height))
-    assert _has_line(msp.line_records, (200.0, 0.0), (200.0, line_height))
+    assert "0.000" not in _texts_at(msp.text_records, x_100, 1.0)
+    assert "0.000" not in _texts_at(msp.text_records, x_200, 1.0)
+    assert len(_texts_at(msp.text_records, x_100, 47.0)) == 1
+    assert len(_texts_at(msp.text_records, x_200, 47.0)) == 1
+    assert any("IP15" in txt for txt in _texts_at(msp.text_records, x_100, 77.0))
+    assert _texts_at(msp.text_records, x_200, 77.0) == ["IP20"]
+    assert _has_line(
+        msp.line_records,
+        (_scaled_m_to_mm(100.0, scale_x), 0.0),
+        (_scaled_m_to_mm(100.0, scale_x), short_line_height),
+    )
+    assert _has_line(
+        msp.line_records,
+        (_scaled_m_to_mm(200.0, scale_x), 0.0),
+        (_scaled_m_to_mm(200.0, scale_x), line_height),
+    )
 
 
-def test_export_longitudinal_txt_dedup_station_text(tmp_path, monkeypatch):
+def test_export_longitudinal_txt_dedup_station_text(local_tmp_path, monkeypatch):
     nodes = _sample_nodes()
     valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
-    out_file = tmp_path / "longitudinal_profile.txt"
+    out_file = local_tmp_path / "longitudinal_profile.txt"
     _, layout, _, line_height, _ = cad_tools._build_profile_row_layout(_default_settings())
     short_line_height = layout["slope"]["bottom"]
+    scale_x = _default_settings()["scale_x"]
 
     monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
     monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
@@ -298,21 +328,23 @@ def test_export_longitudinal_txt_dedup_station_text(tmp_path, monkeypatch):
     pl_rows = _parse_pl_cmds(out_file)
     key = lambda x, y: [r["text"] for r in rows if abs(r["x"] - x) <= 1e-6 and abs(r["y"] - y) <= 1e-6]
 
-    assert key(100.0, 1.0) == ["407.898"]
-    assert key(100.0, 16.0) == ["408.460"]
-    assert key(100.0, 31.0) == ["409.898"]
-    assert key(200.0, 1.0) == ["405.123"]
-    assert key(200.0, 16.0) == ["405.789"]
-    assert key(200.0, 31.0) == ["406.456"]
+    x_100 = _scaled_m_to_mm(100.0, scale_x)
+    x_200 = _scaled_m_to_mm(200.0, scale_x)
+    assert key(x_100, 1.0) == ["407.898"]
+    assert key(x_100, 16.0) == ["408.460"]
+    assert key(x_100, 31.0) == ["409.898"]
+    assert key(x_200, 1.0) == ["405.123"]
+    assert key(x_200, 16.0) == ["405.789"]
+    assert key(x_200, 31.0) == ["406.456"]
 
-    assert "0.000" not in key(100.0, 1.0)
-    assert "0.000" not in key(200.0, 1.0)
-    assert len(key(100.0, 47.0)) == 1
-    assert len(key(200.0, 47.0)) == 1
-    assert any("IP15" in txt for txt in key(100.0, 77.0))
-    assert key(200.0, 77.0) == ["IP20"]
-    assert _has_line(pl_rows, (100.0, 0.0), (100.0, short_line_height))
-    assert _has_line(pl_rows, (200.0, 0.0), (200.0, line_height))
+    assert "0.000" not in key(x_100, 1.0)
+    assert "0.000" not in key(x_200, 1.0)
+    assert len(key(x_100, 47.0)) == 1
+    assert len(key(x_200, 47.0)) == 1
+    assert any("IP15" in txt for txt in key(x_100, 77.0))
+    assert key(x_200, 77.0) == ["IP20"]
+    assert _has_line(pl_rows, (x_100, 0.0), (x_100, short_line_height))
+    assert _has_line(pl_rows, (x_200, 0.0), (x_200, line_height))
 
 
 def test_profile_text_nodes_filter_transition_and_auto_inserted():
@@ -344,7 +376,7 @@ def test_single_point_segment_mid_resolves_to_cell_center():
     assert cad_tools._resolve_segment_mid_mc(100.0, 100.0, [0.0, 100.0]) == pytest.approx(50.0)
 
 
-def test_bd_be_bf_bj_bk_bl_offsets_match_station_rows_in_dxf_and_txt(tmp_path, monkeypatch):
+def test_bd_be_bf_bj_bk_bl_offsets_match_station_rows_in_dxf_and_txt(local_tmp_path, monkeypatch):
     ezdxf_stub = SimpleNamespace(
         enums=SimpleNamespace(
             TextEntityAlignment=SimpleNamespace(
@@ -378,6 +410,7 @@ def test_bd_be_bf_bj_bk_bl_offsets_match_station_rows_in_dxf_and_txt(tmp_path, m
     _, layout, _, _, _ = cad_tools._build_profile_row_layout(settings)
     ip_records = cad_tools._build_ip_related_row_records(nodes, "")
     first_offset = settings["text_height"] + 1.3
+    scale_x = settings["scale_x"]
 
     msp = _DummyMSP()
     cad_tools._draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix="")
@@ -387,14 +420,15 @@ def test_bd_be_bf_bj_bk_bl_offsets_match_station_rows_in_dxf_and_txt(tmp_path, m
         row_records = [r for r in msp.text_records if abs(r["y"] - y) <= 1e-6]
         assert len(row_records) >= 2
         for idx, rec in enumerate(ip_records[rid]):
-            expected_x = rec["x"] + first_offset if idx == 0 else rec["x"] - 1
+            scaled_x = _scaled_m_to_mm(rec["x"], scale_x)
+            expected_x = scaled_x + first_offset if idx == 0 else scaled_x - 1
             matched = [
                 item for item in row_records
                 if abs(item["x"] - expected_x) <= 1e-6 and item["text"] == rec["text"]
             ]
             assert matched, f"DXF row {rid} at idx={idx} does not match offset rule"
 
-    out_file = tmp_path / "rows_offsets.txt"
+    out_file = local_tmp_path / "rows_offsets.txt"
     monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
     monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
     monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
@@ -406,7 +440,8 @@ def test_bd_be_bf_bj_bk_bl_offsets_match_station_rows_in_dxf_and_txt(tmp_path, m
         row_records = [r for r in rows if abs(r["y"] - y) <= 1e-6]
         assert len(row_records) >= 2
         for idx, rec in enumerate(ip_records[rid]):
-            expected_x = rec["x"] + first_offset if idx == 0 else rec["x"]
+            scaled_x = _scaled_m_to_mm(rec["x"], scale_x)
+            expected_x = scaled_x + first_offset if idx == 0 else scaled_x
             matched = [
                 item for item in row_records
                 if abs(item["x"] - expected_x) <= 1e-6 and item["text"] == rec["text"]

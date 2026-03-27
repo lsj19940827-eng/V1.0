@@ -920,11 +920,21 @@ class WaterProfileCalculator:
 
         if result['need_transition_1']:
             result['transition_length_1'] = self._estimate_transition_length(
-                node1, "出口", all_nodes, gap_index
+                node1,
+                "出口",
+                all_nodes,
+                gap_index,
+                upstream_node=node1,
+                downstream_node=node2,
             )
         if result['need_transition_2']:
             result['transition_length_2'] = self._estimate_transition_length(
-                node2, "进口", all_nodes, gap_index
+                node2,
+                "进口",
+                all_nodes,
+                gap_index,
+                upstream_node=node1,
+                downstream_node=node2,
             )
 
         total_transition_length = result['transition_length_1'] + result['transition_length_2']
@@ -985,7 +995,12 @@ class WaterProfileCalculator:
         # 所有闸前后的渐变段都标记 skip_loss=True
         result['skip_loss_transition_1'] = result['need_transition_1']
         if result['need_transition_1']:
-            calculated_length = self._estimate_transition_length(exit_node, "出口")
+            calculated_length = self._estimate_transition_length(
+                exit_node,
+                "出口",
+                upstream_node=exit_node,
+                downstream_node=gate_node,
+            )
             # 渐变段长度不能超过可用里程
             result['transition_length_1'] = min(calculated_length, result['distance'])
         result['available_length'] = max(0.0, result['distance'] - result['transition_length_1'])
@@ -1027,15 +1042,67 @@ class WaterProfileCalculator:
         # 所有闸前后的渐变段都标记 skip_loss=True
         result['skip_loss_transition_2'] = result['need_transition_2']
         if result['need_transition_2']:
-            calculated_length = self._estimate_transition_length(entry_node, "进口")
+            calculated_length = self._estimate_transition_length(
+                entry_node,
+                "进口",
+                upstream_node=gate_node,
+                downstream_node=entry_node,
+            )
             # 渐变段长度不能超过可用里程
             result['transition_length_2'] = min(calculated_length, result['distance'])
         result['available_length'] = max(0.0, result['distance'] - result['transition_length_2'])
         result['need_open_channel'] = result['available_length'] > 0
         return result
 
+    @staticmethod
+    def _get_structure_type_name(node: Optional[ChannelNode]) -> str:
+        """获取节点结构类型字符串。"""
+        if not node or not getattr(node, 'structure_type', None):
+            return ""
+        structure_type = node.structure_type
+        return structure_type.value if hasattr(structure_type, 'value') else str(structure_type or "")
+
+    def _set_transition_rule_context(self, transition_node: ChannelNode,
+                                     upstream_node: Optional[ChannelNode],
+                                     downstream_node: Optional[ChannelNode]) -> None:
+        """写入渐变段规则追溯上下文。"""
+        transition_node.transition_rule_upstream_structure_type = self._get_structure_type_name(upstream_node)
+        transition_node.transition_rule_downstream_structure_type = self._get_structure_type_name(downstream_node)
+
+    def _hydrate_transition_length_state(self, transition_node: ChannelNode,
+                                         prev_node: ChannelNode,
+                                         next_node: ChannelNode,
+                                         actual_length: Optional[float] = None,
+                                         preserve_existing_length: bool = False) -> Dict[str, Any]:
+        """补齐渐变段长度详情，并同步最终长度/来源/告警。"""
+        details = self.hyd_calc.ensure_transition_length_details(
+            transition_node,
+            prev_node,
+            next_node,
+            [prev_node, transition_node, next_node],
+            actual_length=actual_length,
+            preserve_existing_length=preserve_existing_length,
+        )
+        transition_node.transition_length = details.get(
+            "actual_length",
+            getattr(transition_node, "transition_length", 0.0) or 0.0,
+        )
+        transition_node.stat_length = max(0.0, transition_node.transition_length or 0.0)
+        transition_node.transition_length_source = details.get(
+            "source",
+            getattr(transition_node, "transition_length_source", "formula") or "formula",
+        )
+        transition_node.transition_length_warning = details.get(
+            "warning",
+            getattr(transition_node, "transition_length_warning", "") or "",
+        )
+        return details
+
     def _estimate_transition_length(self, node: ChannelNode, transition_type: str,
-                                    nodes: List[ChannelNode] = None, gap_index: int = None) -> float:
+                                    nodes: List[ChannelNode] = None,
+                                    gap_index: int = None,
+                                    upstream_node: Optional[ChannelNode] = None,
+                                    downstream_node: Optional[ChannelNode] = None) -> float:
         """
         快速估算渐变段长度（用于判断是否需要插入明渠）
 
@@ -1090,9 +1157,36 @@ class WaterProfileCalculator:
             # 进口取上游渠道设计水深的3~5倍（取大值5倍）
             # 出口取下游渠道设计水深的4~6倍（取大值6倍）
             L_pressurized = 5 * h_design if transition_type == "进口" else 6 * h_design
-            return L_pressurized
-        
-        return L_basic
+            L_basic = L_pressurized
+
+        preview_transition = ChannelNode()
+        preview_transition.is_transition = True
+        preview_transition.structure_type = StructureType.TRANSITION
+        preview_transition.transition_type = transition_type
+        preview_transition.flow_section = node.flow_section
+        preview_transition.roughness = node.roughness if node.roughness > 0 else self.settings.roughness
+
+        if upstream_node is None:
+            upstream_node = node if transition_type == "出口" else None
+        if downstream_node is None:
+            downstream_node = node if transition_type == "进口" else None
+        if upstream_node is None:
+            upstream_node = node
+        if downstream_node is None:
+            downstream_node = node
+
+        self._set_transition_rule_context(
+            preview_transition,
+            upstream_node,
+            downstream_node,
+        )
+        resolved = self.hyd_calc.resolve_transition_length_from_formula(
+            L_basic,
+            preview_transition,
+            upstream_node,
+            downstream_node,
+        )
+        return resolved.get('selected_length', L_basic)
     
     def _find_global_nearest_channel(self, nodes: List[ChannelNode],
                                      gap_index: int) -> Optional[Dict]:
@@ -1653,6 +1747,7 @@ class WaterProfileCalculator:
         transition.name = "-"
         transition.structure_type = StructureType.TRANSITION
         transition.flow_section = node1.flow_section
+        self._set_transition_rule_context(transition, node1, node2)
         
         # 使用实际里程差作为长度
         transition.transition_length = distance
@@ -1687,7 +1782,8 @@ class WaterProfileCalculator:
         
         return transition
     
-    def _create_inlet_transition_node(self, next_node: ChannelNode) -> ChannelNode:
+    def _create_inlet_transition_node(self, next_node: ChannelNode,
+                                      upstream_context_node: Optional[ChannelNode] = None) -> ChannelNode:
         """
         创建进口渐变段节点
         
@@ -1704,6 +1800,11 @@ class WaterProfileCalculator:
         transition.name = "-"
         transition.structure_type = StructureType.TRANSITION
         transition.flow_section = next_node.flow_section
+        self._set_transition_rule_context(
+            transition,
+            upstream_context_node,
+            next_node,
+        )
         
         # 继承坐标（使用后一节点的坐标）
         transition.x = next_node.x
@@ -1752,6 +1853,7 @@ class WaterProfileCalculator:
         transition.structure_type = StructureType.TRANSITION
         
         transition.flow_section = prev_node.flow_section
+        self._set_transition_rule_context(transition, prev_node, next_node)
         
         # 继承坐标（使用前一节点的坐标）
         transition.x = prev_node.x
@@ -1853,10 +1955,16 @@ class WaterProfileCalculator:
                         oc.stat_length = max(0.0, gate_check['available_length'])
                         deferred_nodes.append(oc)
                         if gate_check['need_transition_2']:
-                            tr_in = self._create_inlet_transition_node(next_node)
+                            tr_in = self._create_inlet_transition_node(next_node, current_node)
                             tr_in.slope_i = oc_slope_i
                             tr_in.transition_skip_loss = gate_check.get('skip_loss_transition_2', False)
-                            tr_in.stat_length = max(0.0, gate_check.get('transition_length_2', 0.0))
+                            self._hydrate_transition_length_state(
+                                tr_in,
+                                oc,
+                                next_node,
+                                actual_length=gate_check.get('transition_length_2', 0.0),
+                                preserve_existing_length=True,
+                            )
                             deferred_nodes.append(tr_in)
                     elif gate_check['need_transition_2'] and gate_check['distance'] > 0:
                         merged = self._create_merged_transition_node(
@@ -1867,6 +1975,13 @@ class WaterProfileCalculator:
                         if upstream_channel:
                             us_sinv = upstream_channel.get('slope_inv', 0)
                             merged.slope_i = 1.0 / us_sinv if us_sinv > 0 else 0
+                        self._hydrate_transition_length_state(
+                            merged,
+                            current_node,
+                            next_node,
+                            actual_length=gate_check['distance'],
+                            preserve_existing_length=True,
+                        )
                         deferred_nodes.append(merged)
                 elif gate_check['need_transition_2'] and gate_check['distance'] > 0:
                     us_ch = self._find_nearest_upstream_channel(nodes, i + 1)
@@ -1878,6 +1993,13 @@ class WaterProfileCalculator:
                     if us_ch:
                         us_sinv = us_ch.get('slope_inv', 0)
                         merged.slope_i = 1.0 / us_sinv if us_sinv > 0 else 0
+                    self._hydrate_transition_length_state(
+                        merged,
+                        current_node,
+                        next_node,
+                        actual_length=gate_check['distance'],
+                        preserve_existing_length=True,
+                    )
                     deferred_nodes.append(merged)
                 continue
 
@@ -1904,19 +2026,32 @@ class WaterProfileCalculator:
                         )
                     if open_channel_params:
                         oc_slope_i = 1.0 / open_channel_params.slope_inv if open_channel_params.slope_inv > 0 else 0
+                        oc = self._create_open_channel_node(open_channel_params, current_node, next_node)
+                        oc.stat_length = max(0.0, gate_check['available_length'])
                         if gate_check['need_transition_1']:
                             tr_out = self._create_transition_node(current_node, next_node)
                             tr_out.slope_i = oc_slope_i
                             tr_out.transition_skip_loss = gate_check.get('skip_loss_transition_1', False)
-                            tr_out.stat_length = max(0.0, gate_check.get('transition_length_1', 0.0))
+                            self._hydrate_transition_length_state(
+                                tr_out,
+                                current_node,
+                                oc,
+                                actual_length=gate_check.get('transition_length_1', 0.0),
+                                preserve_existing_length=True,
+                            )
                             new_nodes.append(tr_out)
-                        oc = self._create_open_channel_node(open_channel_params, current_node, next_node)
-                        oc.stat_length = max(0.0, gate_check['available_length'])
                         new_nodes.append(oc)
                     elif gate_check['need_transition_1'] and gate_check['distance'] > 0:
                         merged = self._create_merged_transition_node(
                             current_node, next_node, gate_check['distance'], "出口")
                         merged.transition_skip_loss = gate_check.get('skip_loss_transition_1', False)
+                        self._hydrate_transition_length_state(
+                            merged,
+                            current_node,
+                            next_node,
+                            actual_length=gate_check['distance'],
+                            preserve_existing_length=True,
+                        )
                         new_nodes.append(merged)
                 elif gate_check['need_transition_1'] and gate_check['distance'] > 0:
                     us_ch = self._find_nearest_upstream_channel(nodes, i)
@@ -1926,6 +2061,13 @@ class WaterProfileCalculator:
                     if us_ch:
                         us_sinv = us_ch.get('slope_inv', 0)
                         merged.slope_i = 1.0 / us_sinv if us_sinv > 0 else 0
+                    self._hydrate_transition_length_state(
+                        merged,
+                        current_node,
+                        next_node,
+                        actual_length=gate_check['distance'],
+                        preserve_existing_length=True,
+                    )
                     new_nodes.append(merged)
                 continue
 
@@ -1963,22 +2105,34 @@ class WaterProfileCalculator:
                     )
                 if open_channel_params:
                     oc_slope_i = 1.0 / open_channel_params.slope_inv if open_channel_params.slope_inv > 0 else 0
+                    open_channel = self._create_open_channel_node(open_channel_params, current_node, next_node)
+                    open_channel.stat_length = max(0.0, check_result.get('available_length', 0.0))
                     
                     # ===== 普通模式：插入3行（出口渐变段 → 明渠段 → 进口渐变段） =====
                     if check_result['need_transition_1']:
                         transition_out = self._create_transition_node(current_node, next_node)
                         transition_out.slope_i = oc_slope_i
                         transition_out.transition_skip_loss = check_result.get('skip_loss_transition_1', False)
-                        transition_out.stat_length = max(0.0, check_result.get('transition_length_1', 0.0))
+                        self._hydrate_transition_length_state(
+                            transition_out,
+                            current_node,
+                            open_channel,
+                            actual_length=check_result.get('transition_length_1', 0.0),
+                            preserve_existing_length=True,
+                        )
                         new_nodes.append(transition_out)
-                    open_channel = self._create_open_channel_node(open_channel_params, current_node, next_node)
-                    open_channel.stat_length = max(0.0, check_result.get('available_length', 0.0))
                     new_nodes.append(open_channel)
                     if check_result['need_transition_2']:
-                        transition_in = self._create_inlet_transition_node(next_node)
+                        transition_in = self._create_inlet_transition_node(next_node, current_node)
                         transition_in.slope_i = oc_slope_i
                         transition_in.transition_skip_loss = check_result.get('skip_loss_transition_2', False)
-                        transition_in.stat_length = max(0.0, check_result.get('transition_length_2', 0.0))
+                        self._hydrate_transition_length_state(
+                            transition_in,
+                            open_channel,
+                            next_node,
+                            actual_length=check_result.get('transition_length_2', 0.0),
+                            preserve_existing_length=True,
+                        )
                         new_nodes.append(transition_in)
                 else:
                     # 明渠段未能插入，回退为1行合并渐变段（避免出现两个连续渐变段）
@@ -1995,6 +2149,13 @@ class WaterProfileCalculator:
                             if upstream_channel:
                                 us_sinv = upstream_channel.get('slope_inv', 0)
                                 merged_transition.slope_i = 1.0 / us_sinv if us_sinv > 0 else 0
+                            self._hydrate_transition_length_state(
+                                merged_transition,
+                                current_node,
+                                next_node,
+                                actual_length=check_result['distance'],
+                                preserve_existing_length=True,
+                            )
                             new_nodes.append(merged_transition)
             
             elif check_result['need_transition_1'] or check_result['need_transition_2']:
@@ -2015,6 +2176,13 @@ class WaterProfileCalculator:
                     if us_ch:
                         us_sinv = us_ch.get('slope_inv', 0)
                         merged_transition.slope_i = 1.0 / us_sinv if us_sinv > 0 else 0
+                    self._hydrate_transition_length_state(
+                        merged_transition,
+                        current_node,
+                        next_node,
+                        actual_length=check_result['distance'],
+                        preserve_existing_length=True,
+                    )
                     new_nodes.append(merged_transition)
             
             elif self._needs_transition(current_node, next_node):
@@ -2036,6 +2204,11 @@ class WaterProfileCalculator:
                 # 有压流建筑物（倒虹吸/有压管道）相邻渐变段为占位行，跳过损失计算
                 if self.is_pressurized_flow_structure(current_node) or self.is_pressurized_flow_structure(next_node):
                     transition_node.transition_skip_loss = True
+                self._hydrate_transition_length_state(
+                    transition_node,
+                    current_node,
+                    next_node,
+                )
                 new_nodes.append(transition_node)
         
         # 闸穿透：刷新残留的延迟节点（闸在节点列表末尾的情况）
@@ -2070,17 +2243,11 @@ class WaterProfileCalculator:
                         break
                 
                 if prev_node and next_node:
-                    # 倒虹吸占位渐变段：只计算渐变段长度，不计算水头损失
-                    # （水头损失已含在倒虹吸水力计算中）
-                    if node.transition_skip_loss:
-                        length = self.hyd_calc.calculate_transition_length(
-                            node, prev_node, next_node, nodes
-                        )
-                        node.transition_length = length
-                    else:
-                        self.hyd_calc.calculate_transition_loss(
-                            node, prev_node, next_node, nodes
-                        )
+                    # 统一走 calculate_transition_loss()，由底层兼容处理
+                    # skip_loss、已有长度复用、以及详情补建逻辑。
+                    self.hyd_calc.calculate_transition_loss(
+                        node, prev_node, next_node, nodes
+                    )
     
     def _update_total_head_loss(self, nodes: List[ChannelNode]) -> None:
         """

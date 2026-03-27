@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "推求水面�
 from models.data_models import ChannelNode, ProjectSettings
 from models.enums import StructureType, InOutType
 from core.hydraulic_calc import HydraulicCalculator
+from core.calculator import WaterProfileCalculator
 
 
 def test_skip_loss_true_returns_zero():
@@ -142,6 +143,54 @@ def test_skip_loss_false_calculates_normally():
         "应计算沿程水头损失"
 
 
+def test_existing_transition_length_still_builds_length_details():
+    """
+    测试已有渐变段长度时仍会生成双击详情数据
+
+    场景：transition_length 已经由表格/旧结果回填，但本次仍需双击查看详情
+    期望：calculate_transition_loss() 不应因为长度已存在而跳过
+    transition_length_calc_details 的重建
+    """
+    prev_node = ChannelNode()
+    prev_node.structure_type = StructureType.from_string("明渠-梯形")
+    prev_node.flow_section = "渠道1"
+    prev_node.section_params = {"B": 2.0, "m": 1.5, "h": 1.6}
+    prev_node.velocity = 1.4
+    prev_node.water_depth = 1.6
+    prev_node.roughness = 0.014
+
+    transition = ChannelNode()
+    transition.is_transition = True
+    transition.transition_skip_loss = False
+    transition.transition_type = "进口"
+    transition.transition_form = "曲线形反弯扭曲面"
+    transition.transition_length = 9.0
+    transition.flow_section = "渠道1"
+
+    next_node = ChannelNode()
+    next_node.structure_type = StructureType.from_string("隧洞-圆形")
+    next_node.name = "隧洞1"
+    next_node.in_out = InOutType.INLET
+    next_node.section_params = {"D": 2.4}
+    next_node.velocity = 2.1
+    next_node.water_depth = 1.8
+    next_node.roughness = 0.014
+    next_node.flow_section = "渠道1"
+
+    calc = HydraulicCalculator(ProjectSettings())
+    loss = calc.calculate_transition_loss(
+        transition, prev_node, next_node, [prev_node, transition, next_node]
+    )
+
+    assert loss > 0, "已有长度时仍应继续计算渐变段损失"
+    assert transition.transition_length == 9.0, "已有长度不应被本次损失计算覆盖"
+    assert transition.transition_length_calc_details, \
+        "已有长度时仍应生成渐变段长度详情，供双击查看"
+    assert "B1" in transition.transition_length_calc_details
+    assert "B2" in transition.transition_length_calc_details
+    assert "L_result" in transition.transition_length_calc_details
+
+
 def test_skip_loss_still_calculates_length():
     """
     测试 skip_loss=True 时仍然计算渐变段长度
@@ -203,6 +252,99 @@ def test_skip_loss_still_calculates_length():
         f"渐变段长度应为非负值，实际长度 {transition.transition_length}"
 
 
+def test_skip_loss_existing_length_still_builds_length_details():
+    """
+    测试 skip_loss=True 且已有长度时仍能补建双击详情
+
+    场景：旧结果或表格回填已经给了 transition_length，
+    当前重新计算只需补详情，不应覆盖当前采用长度。
+    """
+    prev_node = ChannelNode()
+    prev_node.structure_type = StructureType.from_string("明渠-梯形")
+    prev_node.flow_section = "渠道3"
+    prev_node.section_params = {"B": 2.2, "m": 1.5, "h": 1.4}
+    prev_node.velocity = 1.3
+    prev_node.water_depth = 1.4
+    prev_node.roughness = 0.014
+
+    transition = ChannelNode()
+    transition.is_transition = True
+    transition.transition_skip_loss = True
+    transition.transition_type = "进口"
+    transition.transition_form = "曲线形反弯扭曲面"
+    transition.transition_length = 7.5
+    transition.flow_section = "渠道3"
+
+    next_node = ChannelNode()
+    next_node.structure_type = StructureType.from_string("倒虹吸")
+    next_node.name = "倒虹吸1"
+    next_node.in_out = InOutType.INLET
+    next_node.section_params = {"D": 2.0}
+    next_node.velocity = 2.0
+    next_node.water_depth = 1.6
+    next_node.roughness = 0.014
+    next_node.flow_section = "渠道3"
+
+    calc = HydraulicCalculator(ProjectSettings())
+    loss = calc.calculate_transition_loss(
+        transition, prev_node, next_node, [prev_node, transition, next_node]
+    )
+
+    assert loss == 0.0, "skip_loss=True 时损失应保持为 0"
+    assert transition.transition_length == 7.5, "已有长度应保留为当前采用长度"
+    assert transition.transition_length_calc_details, \
+        "skip_loss=True 且已有长度时仍应补建长度详情"
+    assert transition.transition_length_calc_details.get("actual_length") == 7.5
+    assert transition.transition_length_calc_details.get("L_result") == 7.5
+    assert transition.transition_length_calc_details.get("uses_existing_length") is True
+
+
+def test_main_calculator_preserves_existing_skip_loss_length_details():
+    """
+    测试主计算入口 calculate_transition_losses() 也走兼容逻辑
+
+    场景：生产流程中 skip_loss 渐变段已有采用长度（可能来自压缩/合并）。
+    期望：主计算入口不覆盖当前长度，并补建双击详情。
+    """
+    prev_node = ChannelNode()
+    prev_node.structure_type = StructureType.from_string("明渠-梯形")
+    prev_node.flow_section = "渠道4"
+    prev_node.section_params = {"B": 2.2, "m": 1.5, "h": 1.4}
+    prev_node.velocity = 1.3
+    prev_node.water_depth = 1.4
+    prev_node.roughness = 0.014
+
+    transition = ChannelNode()
+    transition.is_transition = True
+    transition.transition_skip_loss = True
+    transition.transition_type = "进口"
+    transition.transition_form = "曲线形反弯扭曲面"
+    transition.transition_length = 7.5
+    transition.flow_section = "渠道4"
+
+    next_node = ChannelNode()
+    next_node.structure_type = StructureType.from_string("倒虹吸")
+    next_node.name = "倒虹吸2"
+    next_node.in_out = InOutType.INLET
+    next_node.section_params = {"D": 2.0}
+    next_node.velocity = 2.0
+    next_node.water_depth = 1.6
+    next_node.roughness = 0.014
+    next_node.flow_section = "渠道4"
+
+    calc = WaterProfileCalculator(ProjectSettings())
+    nodes = [prev_node, transition, next_node]
+
+    calc.calculate_transition_losses(nodes)
+
+    assert transition.head_loss_transition == 0.0, "skip_loss=True 时主入口也应保持损失为 0"
+    assert transition.transition_length == 7.5, "主计算入口不应覆盖当前采用长度"
+    assert transition.transition_length_calc_details, "主计算入口应补建长度详情"
+    assert transition.transition_length_calc_details.get("actual_length") == 7.5
+    assert transition.transition_length_calc_details.get("L_result") == 7.5
+    assert transition.transition_length_calc_details.get("uses_existing_length") is True
+
+
 if __name__ == "__main__":
     # 运行测试
     test_skip_loss_true_returns_zero()
@@ -210,8 +352,17 @@ if __name__ == "__main__":
     
     test_skip_loss_false_calculates_normally()
     print("✓ test_skip_loss_false_calculates_normally passed")
+
+    test_existing_transition_length_still_builds_length_details()
+    print("✓ test_existing_transition_length_still_builds_length_details passed")
     
     test_skip_loss_still_calculates_length()
     print("✓ test_skip_loss_still_calculates_length passed")
+
+    test_skip_loss_existing_length_still_builds_length_details()
+    print("✓ test_skip_loss_existing_length_still_builds_length_details passed")
+
+    test_main_calculator_preserves_existing_skip_loss_length_details()
+    print("✓ test_main_calculator_preserves_existing_skip_loss_length_details passed")
     
     print("\n所有测试通过！")

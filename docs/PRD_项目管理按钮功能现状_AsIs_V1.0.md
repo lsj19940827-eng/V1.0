@@ -2,7 +2,7 @@
 
 > 文档类型：现状功能PRD（基于已实现代码）  
 > 适用版本：渠系建筑物水力计算系统 V1.0  
-> 基线日期：2026-03-04  
+> 基线日期：2026-03-26  
 > 主要依据：`app_渠系计算前端/app.py`、`app_渠系计算前端/project_manager.py` 及各面板 `to_project_dict/from_project_dict`
 
 ---
@@ -344,11 +344,13 @@
 ### B. 推求水面线 `water_profile_panel`
 
 1. `ui_settings`：渠道、流量、桩号、糙率、转弯半径、渐变段参数等
-2. `project_settings`：`ProjectSettings`序列化结果
+2. `project_settings`：`ProjectSettings`序列化结果，当前已包含 `transition_length_rules`（项目级渐变段长度组合规则）
 3. `nodes`：原始节点
-4. `calculated_nodes`：计算后节点
-5. `extra_caches`：结构高程、倒角、U形参数、文字导出设置、平面图文字设置、自定义有压管参数等
-6. `siphon_roughness_data`、`pressure_pipe_roughness_data`
+4. `calculated_nodes`：计算后节点；当前会一并保存渐变段单条覆盖与来源元数据，如 `transition_length_override_m`、`transition_length_source`、`transition_length_warning`、`transition_rule_upstream_structure_type`、`transition_rule_downstream_structure_type`、`transition_length_calc_details`
+5. `node_table_rows`：表3逐单元格文本快照，用于“保存→重开”后保持显示文本与编辑态一致
+6. `extra_caches`：结构高程、倒角、U形参数、文字导出设置、平面图文字设置、自定义有压管参数等
+7. `siphon_roughness_data`、`pressure_pipe_roughness_data`
+8. `merged_section`、`batch_panel_compat`、`pressure_pipe_calc_records`
 
 ### C. 明渠/渡槽/隧洞/暗涵
 
@@ -410,6 +412,7 @@
 3. 自动保存文件默认不清理，目录可能随使用增长
 4. 保存采用整文件重写，不是增量写入
 5. 读写异常通过UI提示，面板序列化异常多采用控制台打印后继续
+6. 推求水面线面板在项目加载后会主动重建渐变段详情、恢复表3快照、刷新摘要和下游导出依赖状态，确保“刚打开项目就导出/双击详情/改单条长度”可直接工作
 
 ---
 
@@ -421,6 +424,7 @@
 4. 加载项目时仅恢复存在且为真值的模块字段；若某模块字段缺失，可能保留当前内存中的旧状态。
 5. 最近项目“路径存在性过滤”发生在启动加载时；程序运行中若文件被外部删除，列表项仍可能暂时存在，点击时才报不存在。
 6. `⚙ 项目设置`数据保存在独立 `QSettings("SichuanShuifa", "HydroCalc")`，不等同于 `.qxproj` 的统一项目载入行为。
+7. 推求水面线的项目保存当前不再只依赖缓存态 `self._settings`；保存时会即时调用 `_build_settings()` 采集界面上的最新渐变段参数与长度规则，避免规则编辑后未重算就丢失。
 
 ---
 

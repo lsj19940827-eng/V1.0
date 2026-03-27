@@ -18,7 +18,7 @@ from typing import List, Dict, Optional, Callable
 from datetime import datetime
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel,
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel,
     QWidget, QProgressBar, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView, QCheckBox,
     QSizePolicy, QFrame
@@ -1231,7 +1231,6 @@ class MultiSiphonDialog(QDialog):
                 self._update_status(f"正在计算 {i + 1}/{total}: {name}")
                 self.progress_bar.setValue(i)
                 # 强制刷新UI
-                from PySide6.QtWidgets import QApplication
                 QApplication.processEvents()
 
                 try:

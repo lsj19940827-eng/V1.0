@@ -1247,7 +1247,7 @@ class _SingleListTextExportSettingsDialog(QDialog):
             "text_height": 3.5, "rotation": 90, "elev_decimals": 3,
             "y_name": 115, "y_slope": 105, "y_ip": 77,
             "y_station": 47, "y_line_height": 120,
-            "scale_x": 1, "scale_y": 1,
+            "scale_x": 2000, "scale_y": 1000,
         }
         for key, value in original.items():
             if key in self._entries:
@@ -1668,8 +1668,8 @@ def _normalize_text_export_settings(settings):
     src["y_ip"] = src.get("y_ip", 77)
     src["y_station"] = src.get("y_station", 47)
     src["y_line_height"] = src.get("y_line_height", 120)
-    src["scale_x"] = src.get("scale_x", 1)
-    src["scale_y"] = src.get("scale_y", 1)
+    src["scale_x"] = src.get("scale_x", 2000)
+    src["scale_y"] = src.get("scale_y", 1000)
     src["profile_row_items"] = _normalize_profile_row_items(src.get("profile_row_items"))
     return src
 
@@ -2249,6 +2249,20 @@ def _setup_dxf_style(doc):
     except Exception:
         pass
     _sty.set_xdata("ACAD", [(1000, "仿宋"), (1071, 0)])
+
+
+def _setup_profile_dxf_document(doc):
+    """初始化纵断面相关 DXF 文档的图纸单位与文字样式。"""
+    _setup_dxf_style(doc)
+    header = getattr(doc, "header", None)
+    if header is not None:
+        header["$INSUNITS"] = 4
+        header["$MEASUREMENT"] = 1
+
+
+def _profile_meters_to_paper_mm(value_m, scale_denom):
+    """将纵断面源数据（米）按 1:N 比例换算为图纸单位（mm）。"""
+    return float(value_m) * 1000.0 / float(scale_denom)
 
 
 def _ensure_profile_layers(doc, layer_prefix=""):
@@ -3095,8 +3109,8 @@ class _LegacyTextExportSettingsDialog(QDialog):
             'y_ip': defaults.get('y_ip', 77),
             'y_station': defaults.get('y_station', 47),
             'y_line_height': defaults.get('y_line_height', 120),
-            'scale_x': defaults.get('scale_x', 1),
-            'scale_y': defaults.get('scale_y', 1),
+            'scale_x': defaults.get('scale_x', 2000),
+            'scale_y': defaults.get('scale_y', 1000),
         }
 
         self._entries = {}
@@ -3210,7 +3224,7 @@ class _LegacyTextExportSettingsDialog(QDialog):
             'text_height': 3.5, 'rotation': 90, 'elev_decimals': 3,
             'y_name': 115, 'y_slope': 105, 'y_ip': 77,
             'y_station': 47, 'y_line_height': 120,
-            'scale_x': 1, 'scale_y': 1,
+            'scale_x': 2000, 'scale_y': 1000,
         }
         for key, value in original.items():
             self._entries[key].setText(str(value))
@@ -3914,7 +3928,7 @@ class _LegacyTextExportSettingsDialogDualList(QDialog):
             "text_height": 3.5, "rotation": 90, "elev_decimals": 3,
             "y_name": 115, "y_slope": 105, "y_ip": 77,
             "y_station": 47, "y_line_height": 120,
-            "scale_x": 1, "scale_y": 1,
+            "scale_x": 2000, "scale_y": 1000,
         }
         for key, value in original.items():
             if key in self._entries:
@@ -5120,10 +5134,10 @@ def _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix,
     first_col_x_offset = text_height + 1.3
 
     def sx(mc):
-        return mc / scale_x
+        return _profile_meters_to_paper_mm(mc, scale_x)
 
     def sy(elev):
-        return elev / scale_y
+        return _profile_meters_to_paper_mm(elev, scale_y)
 
     def fmt_elev(value):
         if value is None:
@@ -5378,7 +5392,7 @@ def export_longitudinal_profile_dxf(panel):
 
         doc = ezdxf.new("R2010")
         msp = doc.modelspace()
-        _setup_dxf_style(doc)
+        _setup_profile_dxf_document(doc)
         _ensure_profile_layers(doc)
 
         _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix)
@@ -5412,10 +5426,10 @@ def _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_p
     first_col_x_offset = text_height + 1.3
 
     def sx(mc):
-        return mc / scale_x
+        return _profile_meters_to_paper_mm(mc, scale_x)
 
     def sy(elev):
-        return elev / scale_y
+        return _profile_meters_to_paper_mm(elev, scale_y)
 
     def fmt_elev(value):
         if value is None:
@@ -6110,7 +6124,7 @@ def _write_ip_table_dxf(file_path, preview_data, title="IP坐标及弯道参数�
     import ezdxf
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
-    _setup_dxf_style(doc)
+    _setup_profile_dxf_document(doc)
     _draw_ip_table_on_msp(msp, 0.0, 0.0, preview_data, title, "IP_TABLE")
     doc.saveas(file_path)
 
@@ -6753,7 +6767,7 @@ def export_combined_dxf(panel):
         # ---- 创建 DXF 文档 ----
         doc = ezdxf.new("R2010")
         msp = doc.modelspace()
-        _setup_dxf_style(doc)
+        _setup_profile_dxf_document(doc)
 
         # 三个组件使用独立图层（带前缀），便于在CAD中分别控制显示
         _PROF_PREFIX = "纵断面_"

@@ -6,6 +6,7 @@
 注意：具体计算公式将在后续完善。
 """
 
+import copy
 import math
 from typing import List, Dict, Optional
 import sys
@@ -1892,7 +1893,249 @@ class HydraulicCalculator:
         
         # 默认值
         return 0.1 if transition_type == "进口" else 0.2
-    
+
+    @staticmethod
+    def _get_structure_type_name(node: Optional[ChannelNode]) -> str:
+        """获取节点结构类型字符串。"""
+        if not node or not getattr(node, 'structure_type', None):
+            return ""
+        structure_type = node.structure_type
+        return structure_type.value if hasattr(structure_type, 'value') else str(structure_type or "")
+
+    @staticmethod
+    def _append_transition_warning(warnings: List[str], text: str) -> None:
+        """按去重方式追加警告文本。"""
+        text = str(text or "").strip()
+        if not text or text in warnings:
+            return
+        warnings.append(text)
+
+    @staticmethod
+    def _normalize_length_value(value: Optional[float]) -> Optional[float]:
+        """规范化长度输入；无效值返回 None。"""
+        if value is None:
+            return None
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(numeric):
+            return None
+        return max(0.0, numeric)
+
+    @staticmethod
+    def _round_up_to_step(value: float, step_size: float) -> float:
+        """按步长向上取整；0 长度保持 0。"""
+        if value <= ZERO_TOLERANCE:
+            return 0.0
+        if step_size <= ZERO_TOLERANCE:
+            return max(0.0, value)
+        return math.ceil((value - ZERO_TOLERANCE) / step_size) * step_size
+
+    def _get_transition_rule_pair(self, transition_node: ChannelNode,
+                                  prev_node: Optional[ChannelNode],
+                                  next_node: Optional[ChannelNode]) -> tuple:
+        """获取渐变段规则匹配所需的原始结构对。"""
+        upstream_type = str(
+            getattr(transition_node, 'transition_rule_upstream_structure_type', '') or ''
+        ).strip()
+        downstream_type = str(
+            getattr(transition_node, 'transition_rule_downstream_structure_type', '') or ''
+        ).strip()
+
+        if not upstream_type:
+            upstream_type = self._get_structure_type_name(prev_node)
+        if not downstream_type:
+            downstream_type = self._get_structure_type_name(next_node)
+
+        transition_node.transition_rule_upstream_structure_type = upstream_type
+        transition_node.transition_rule_downstream_structure_type = downstream_type
+        return upstream_type, downstream_type
+
+    def get_transition_length_rule_candidates(self,
+                                              upstream_structure_type: str,
+                                              downstream_structure_type: str,
+                                              transition_type: str) -> List[Dict[str, float]]:
+        """
+        获取当前工程命中的渐变段长度组合规则候选。
+
+        返回纯数据，供 UI 或其他链路按需展示。
+        """
+        upstream_structure_type = str(upstream_structure_type or "").strip()
+        downstream_structure_type = str(downstream_structure_type or "").strip()
+        transition_type = str(transition_type or "").strip()
+
+        candidates = []
+        rules = getattr(self.settings, 'transition_length_rules', None) or []
+        for index, rule in enumerate(rules):
+            if not rule:
+                continue
+
+            if str(getattr(rule, 'upstream_structure_type', '') or '').strip() != upstream_structure_type:
+                continue
+            if str(getattr(rule, 'downstream_structure_type', '') or '').strip() != downstream_structure_type:
+                continue
+            if str(getattr(rule, 'transition_type', '') or '').strip() != transition_type:
+                continue
+
+            try:
+                step_size_m = float(getattr(rule, 'step_size_m', 0.0) or 0.0)
+            except (TypeError, ValueError):
+                step_size_m = 0.0
+            try:
+                fixed_length_m = float(getattr(rule, 'fixed_length_m', 0.0) or 0.0)
+            except (TypeError, ValueError):
+                fixed_length_m = 0.0
+
+            candidates.append({
+                "index": index,
+                "upstream_structure_type": upstream_structure_type,
+                "downstream_structure_type": downstream_structure_type,
+                "transition_type": transition_type,
+                "rule_mode": str(getattr(rule, 'rule_mode', 'formula') or 'formula'),
+                "step_size_m": max(0.0, step_size_m),
+                "fixed_length_m": max(0.0, fixed_length_m),
+            })
+
+        return candidates
+
+    def _match_transition_length_rule(self, transition_node: ChannelNode,
+                                      prev_node: Optional[ChannelNode],
+                                      next_node: Optional[ChannelNode]) -> Optional[Dict[str, float]]:
+        """匹配首个组合规则。"""
+        upstream_type, downstream_type = self._get_transition_rule_pair(
+            transition_node, prev_node, next_node
+        )
+        candidates = self.get_transition_length_rule_candidates(
+            upstream_type,
+            downstream_type,
+            getattr(transition_node, 'transition_type', ''),
+        )
+        return candidates[0] if candidates else None
+
+    def _should_preserve_existing_transition_length(self, transition_node: ChannelNode) -> bool:
+        """判断当前节点是否已有应被保留的最终采用长度。"""
+        existing_length = self._normalize_length_value(
+            getattr(transition_node, 'transition_length', None)
+        )
+        if existing_length is not None and existing_length > ZERO_TOLERANCE:
+            return True
+
+        override_length = self._normalize_length_value(
+            getattr(transition_node, 'transition_length_override_m', None)
+        )
+        if (override_length is not None and existing_length is not None
+                and abs(existing_length - override_length) <= ZERO_TOLERANCE):
+            return True
+
+        details = getattr(transition_node, 'transition_length_calc_details', None)
+        if isinstance(details, dict):
+            if details.get("uses_existing_length") is True:
+                return True
+            actual_length = self._normalize_length_value(details.get("actual_length"))
+            if actual_length is not None and actual_length <= ZERO_TOLERANCE:
+                return True
+
+        source = str(getattr(transition_node, 'transition_length_source', '') or '').strip()
+        if source == "override" and existing_length is not None:
+            return True
+
+        return False
+
+    def resolve_transition_length_from_formula(self, formula_length: float,
+                                               transition_node: ChannelNode,
+                                               prev_node: Optional[ChannelNode] = None,
+                                               next_node: Optional[ChannelNode] = None,
+                                               actual_length: Optional[float] = None,
+                                               preserve_existing_length: bool = False) -> Dict[str, float]:
+        """
+        基于公式值统一应用：单条覆盖 > 组合规则 > 公式/规范值 > 已采用最终值。
+        """
+        formula_length = max(0.0, float(formula_length or 0.0))
+        matched_rule = self._match_transition_length_rule(
+            transition_node, prev_node, next_node
+        )
+        warnings: List[str] = []
+
+        override_length = self._normalize_length_value(
+            getattr(transition_node, 'transition_length_override_m', None)
+        )
+        source = "formula"
+        rule_mode = "formula"
+        rule_value = formula_length
+        selected_length = formula_length
+
+        if override_length is not None:
+            selected_length = override_length
+            source = "override"
+            rule_mode = "fixed"
+            rule_value = override_length
+            if override_length + ZERO_TOLERANCE < formula_length:
+                self._append_transition_warning(
+                    warnings,
+                    "单条覆盖长度小于公式/规范值，按手动值采用。",
+                )
+        elif matched_rule:
+            rule_mode = matched_rule.get("rule_mode", "formula") or "formula"
+            if rule_mode == "step_up":
+                step_size_m = max(0.0, float(matched_rule.get("step_size_m", 0.0) or 0.0))
+                rule_value = step_size_m
+                selected_length = self._round_up_to_step(formula_length, step_size_m)
+                source = "rule:step_up"
+            elif rule_mode == "fixed":
+                fixed_length_m = max(0.0, float(matched_rule.get("fixed_length_m", 0.0) or 0.0))
+                rule_value = fixed_length_m
+                selected_length = fixed_length_m
+                source = "rule:fixed"
+                if fixed_length_m + ZERO_TOLERANCE < formula_length:
+                    self._append_transition_warning(
+                        warnings,
+                        "组合规则长度小于公式/规范值，按规则值采用。",
+                    )
+            else:
+                rule_mode = "formula"
+                rule_value = formula_length
+                selected_length = formula_length
+                source = "rule:formula"
+
+        effective_length = selected_length
+        uses_existing_length = override_length is not None
+        distance_clamped = False
+
+        preserved_length = self._normalize_length_value(actual_length)
+        if preserve_existing_length and preserved_length is not None:
+            effective_length = preserved_length
+            uses_existing_length = True
+            if preserved_length + ZERO_TOLERANCE < selected_length:
+                distance_clamped = True
+                self._append_transition_warning(
+                    warnings,
+                    "最终采用长度受可用里程约束已压缩。",
+                )
+
+        warning = "；".join(warnings)
+        transition_node.transition_length_source = source
+        transition_node.transition_length_warning = warning
+
+        upstream_type, downstream_type = self._get_transition_rule_pair(
+            transition_node, prev_node, next_node
+        )
+
+        return {
+            "formula_length": formula_length,
+            "rule_mode": rule_mode,
+            "rule_value": rule_value,
+            "selected_length": selected_length,
+            "actual_length": effective_length,
+            "source": source,
+            "warning": warning,
+            "distance_clamped": distance_clamped,
+            "uses_existing_length": uses_existing_length,
+            "matched_rule": copy.deepcopy(matched_rule) if matched_rule else None,
+            "upstream_structure_type": upstream_type,
+            "downstream_structure_type": downstream_type,
+        }
+
     def calculate_transition_length(self, transition_node: ChannelNode,
                                     prev_node: ChannelNode,
                                     next_node: ChannelNode,
@@ -2057,9 +2300,113 @@ class HydraulicCalculator:
             transition_node.transition_length_calc_details["constraint_desc"] = f"{_dm}倍渠道设计水深"
         elif "暗涵" in struct_name:
             transition_node.transition_length_calc_details["constraint_desc"] = "仅基础公式"
+
+        upstream_type, downstream_type = self._get_transition_rule_pair(
+            transition_node, prev_node, next_node
+        )
+        transition_node.transition_length_calc_details["formula_length"] = L_result
+        transition_node.transition_length_calc_details["rule_mode"] = "formula"
+        transition_node.transition_length_calc_details["rule_value"] = L_result
+        transition_node.transition_length_calc_details["actual_length"] = L_result
+        transition_node.transition_length_calc_details["source"] = "formula"
+        transition_node.transition_length_calc_details["warning"] = ""
+        transition_node.transition_length_calc_details["distance_clamped"] = False
+        transition_node.transition_length_calc_details["uses_existing_length"] = False
+        transition_node.transition_length_calc_details["upstream_structure_type"] = upstream_type
+        transition_node.transition_length_calc_details["downstream_structure_type"] = downstream_type
         
         return L_result
+
+    def ensure_transition_length_details(self, transition_node: ChannelNode,
+                                         prev_node: ChannelNode,
+                                         next_node: ChannelNode,
+                                         all_nodes: List[ChannelNode],
+                                         actual_length: Optional[float] = None,
+                                         preserve_existing_length: bool = False) -> Dict[str, float]:
+        """
+        确保渐变段长度详情存在，并在需要时保留外部已采用的实际长度。
+
+        用于兼容以下场景：
+        - 表格回填/旧项目恢复后只有 transition_length 数值，没有详情；
+        - 合并/压缩渐变段时，公式长度与当前采用长度不一致；
+        - skip_loss 渐变段仍需支持双击查看长度详情。
+        """
+        formula_length = self.calculate_transition_length(
+            transition_node, prev_node, next_node, all_nodes
+        )
+        details = getattr(transition_node, 'transition_length_calc_details', None)
+        if not isinstance(details, dict):
+            details = {}
+            transition_node.transition_length_calc_details = details
+
+        resolved = self.resolve_transition_length_from_formula(
+            formula_length,
+            transition_node,
+            prev_node,
+            next_node,
+            actual_length=actual_length,
+            preserve_existing_length=preserve_existing_length,
+        )
+        details["formula_length"] = resolved["formula_length"]
+        details["rule_mode"] = resolved["rule_mode"]
+        details["rule_value"] = resolved["rule_value"]
+        details["actual_length"] = resolved["actual_length"]
+        details["L_result"] = resolved["actual_length"]
+        details["source"] = resolved["source"]
+        details["warning"] = resolved["warning"]
+        details["distance_clamped"] = resolved["distance_clamped"]
+        details["uses_existing_length"] = resolved["uses_existing_length"]
+        details["matched_rule"] = copy.deepcopy(resolved["matched_rule"])
+        details["upstream_structure_type"] = resolved["upstream_structure_type"]
+        details["downstream_structure_type"] = resolved["downstream_structure_type"]
+
+        transition_node.transition_length = resolved["actual_length"]
+        transition_node.transition_length_source = resolved["source"]
+        transition_node.transition_length_warning = resolved["warning"]
+
+        return details
     
+    def _calculate_transition_average_metrics(self, transition_node: ChannelNode,
+                                              prev_node: ChannelNode,
+                                              next_node: ChannelNode) -> Dict[str, float]:
+        """计算渐变段平均值法所需的全部中间参数。"""
+        prev_params = prev_node.section_params or {}
+        next_params = next_node.section_params or {}
+
+        R1 = prev_params.get('R', prev_params.get('水力半径', 0))
+        R2 = next_params.get('R', next_params.get('水力半径', 0))
+
+        if R1 <= 0:
+            R1 = self.calculate_hydraulic_radius(prev_node)
+        if R2 <= 0:
+            R2 = self.calculate_hydraulic_radius(next_node)
+
+        R_avg = (R1 + R2) / 2 if (R1 > 0 and R2 > 0) else max(R1, R2)
+
+        v1 = prev_node.velocity
+        v2 = next_node.velocity
+        v_avg = (v1 + v2) / 2 if (v1 > 0 and v2 > 0) else max(v1, v2)
+
+        n = transition_node.roughness if transition_node.roughness > 0 else self.roughness
+        if R_avg > ZERO_TOLERANCE and v_avg > ZERO_TOLERANCE:
+            hydraulic_slope_i = (v_avg * n / (R_avg ** (2.0 / 3.0))) ** 2
+        else:
+            hydraulic_slope_i = 0.0
+
+        transition_node.transition_avg_R = R_avg
+        transition_node.transition_avg_v = v_avg
+
+        return {
+            "R1": R1,
+            "R2": R2,
+            "R_avg": R_avg,
+            "v1": v1,
+            "v2": v2,
+            "v_avg": v_avg,
+            "n": n,
+            "hydraulic_slope_i": hydraulic_slope_i,
+        }
+
     def calculate_transition_friction_loss(self, transition_node: ChannelNode,
                                            prev_node: ChannelNode,
                                            next_node: ChannelNode,
@@ -2071,47 +2418,81 @@ class HydraulicCalculator:
         1. 计算两断面的R和v平均值
         2. 代入曼宁公式求平均水力坡降i
         3. h_f = i × L
-        
-        Args:
-            transition_node: 渐变段节点
-            prev_node: 前一节点
-            next_node: 后一节点
-            length: 渐变段长度
-            
-        Returns:
-            沿程水头损失（m）
         """
-        # 获取水力半径
-        R1 = prev_node.section_params.get('R', prev_node.section_params.get('水力半径', 0))
-        R2 = next_node.section_params.get('R', next_node.section_params.get('水力半径', 0))
-        
-        if R1 <= 0:
-            R1 = self.calculate_hydraulic_radius(prev_node)
-        if R2 <= 0:
-            R2 = self.calculate_hydraulic_radius(next_node)
-        
-        R_avg = (R1 + R2) / 2 if (R1 > 0 and R2 > 0) else max(R1, R2)
-        transition_node.transition_avg_R = R_avg
-        
-        # 获取流速
-        v1 = prev_node.velocity
-        v2 = next_node.velocity
-        v_avg = (v1 + v2) / 2 if (v1 > 0 and v2 > 0) else max(v1, v2)
-        transition_node.transition_avg_v = v_avg
-        
-        # 糙率
-        n = transition_node.roughness if transition_node.roughness > 0 else self.roughness
-        
-        # 曼宁公式反算水力坡降
-        if R_avg > ZERO_TOLERANCE and v_avg > ZERO_TOLERANCE:
-            i = (v_avg * n / (R_avg ** (2.0 / 3.0))) ** 2
-        else:
-            i = 0.0
-        
-        # 沿程损失
-        h_f = i * length
-        
+        metrics = self._calculate_transition_average_metrics(
+            transition_node, prev_node, next_node
+        )
+        h_f = metrics["hydraulic_slope_i"] * length
         return round(h_f, HEAD_LOSS_PRECISION)
+
+    def ensure_transition_loss_details(self, transition_node: ChannelNode,
+                                       prev_node: ChannelNode,
+                                       next_node: ChannelNode,
+                                       all_nodes: List[ChannelNode],
+                                       actual_length: Optional[float] = None,
+                                       preserve_existing_length: bool = False) -> Dict[str, float]:
+        """
+        确保渐变段水头损失详情存在，并补齐完整推导所需的中间参数。
+
+        该入口既供正式计算使用，也供旧项目/旧详情懒补建使用。
+        """
+        length_details = self.ensure_transition_length_details(
+            transition_node,
+            prev_node,
+            next_node,
+            all_nodes,
+            actual_length=actual_length,
+            preserve_existing_length=preserve_existing_length,
+        )
+
+        length = length_details.get(
+            "actual_length",
+            length_details.get("L_result", getattr(transition_node, "transition_length", 0.0) or 0.0),
+        )
+        transition_node.transition_length = length
+
+        zeta = self.get_transition_zeta(transition_node)
+        transition_node.transition_zeta = zeta
+
+        metrics = self._calculate_transition_average_metrics(
+            transition_node, prev_node, next_node
+        )
+        v1 = metrics["v1"]
+        v2 = metrics["v2"]
+        transition_node.transition_velocity_1 = v1
+        transition_node.transition_velocity_2 = v2
+
+        h_j1 = zeta * abs(v2 * v2 - v1 * v1) / (2 * GRAVITY)
+        h_j1 = round(h_j1, HEAD_LOSS_PRECISION)
+        h_f = round(metrics["hydraulic_slope_i"] * length, HEAD_LOSS_PRECISION)
+        total_loss = round(h_j1 + h_f, HEAD_LOSS_PRECISION)
+
+        transition_node.transition_head_loss_local = h_j1
+        transition_node.transition_head_loss_friction = h_f
+        transition_node.head_loss_transition = total_loss
+
+        transition_node.transition_calc_details = {
+            "transition_type": transition_node.transition_type,
+            "transition_form": transition_node.transition_form,
+            "zeta": zeta,
+            "v1": v1,
+            "v2": v2,
+            "B1": transition_node.transition_water_width_1,
+            "B2": transition_node.transition_water_width_2,
+            "length": length,
+            "R1": metrics["R1"],
+            "R2": metrics["R2"],
+            "R_avg": metrics["R_avg"],
+            "v_avg": metrics["v_avg"],
+            "n": metrics["n"],
+            "hydraulic_slope_i": metrics["hydraulic_slope_i"],
+            "h_j1": h_j1,
+            "h_f": h_f,
+            "total": total_loss,
+            "length_details": copy.deepcopy(length_details),
+        }
+
+        return transition_node.transition_calc_details
     
     def calculate_transition_loss(self, transition_node: ChannelNode,
                                   prev_node: ChannelNode,
@@ -2142,12 +2523,34 @@ class HydraulicCalculator:
             总水头损失（m）
         """
         # 0. 检查是否跳过损失计算
+        preserve_existing_length = self._should_preserve_existing_transition_length(
+            transition_node
+        )
+        existing_length = self._normalize_length_value(
+            getattr(transition_node, 'transition_length', None)
+        ) if preserve_existing_length else None
+
         if transition_node.transition_skip_loss:
-            # 仍然计算渐变段长度
-            length = self.calculate_transition_length(
-                transition_node, prev_node, next_node, all_nodes
-            )
-            transition_node.transition_length = length
+            if existing_length is not None:
+                self.ensure_transition_length_details(
+                    transition_node,
+                    prev_node,
+                    next_node,
+                    all_nodes,
+                    actual_length=existing_length,
+                    preserve_existing_length=True,
+                )
+                length = existing_length
+            else:
+                # 仍然计算渐变段长度，并统一应用覆盖/组合规则
+                length_details = self.ensure_transition_length_details(
+                    transition_node,
+                    prev_node,
+                    next_node,
+                    all_nodes,
+                )
+                length = length_details.get("actual_length", 0.0)
+                transition_node.transition_length = length
 
             # 设置损失为 0
             transition_node.head_loss_transition = 0.0
@@ -2156,60 +2559,15 @@ class HydraulicCalculator:
 
             return 0.0
 
-        # 1. 获取ζ系数
-        zeta = self.get_transition_zeta(transition_node)
-        transition_node.transition_zeta = zeta
-
-        # 2. 计算渐变段长度（如果已设置则使用已设置的值）
-        if transition_node.transition_length > 0:
-            # 已经设置了长度（可能是压缩后的长度）
-            length = transition_node.transition_length
-        else:
-            # 计算标准长度
-            length = self.calculate_transition_length(
-                transition_node, prev_node, next_node, all_nodes
-            )
-            transition_node.transition_length = length
-
-        # 3. 获取起始和末端流速
-        v1 = prev_node.velocity
-        v2 = next_node.velocity
-        transition_node.transition_velocity_1 = v1
-        transition_node.transition_velocity_2 = v2
-
-        # 4. 计算局部水头损失: h_j1 = ξ × |v₂² - v₁²| / (2g)
-        h_j1 = zeta * abs(v2 * v2 - v1 * v1) / (2 * GRAVITY)
-        h_j1 = round(h_j1, HEAD_LOSS_PRECISION)
-        transition_node.transition_head_loss_local = h_j1
-
-        # 5. 计算沿程水头损失（使用压缩后的实际长度）
-        h_f = self.calculate_transition_friction_loss(
-            transition_node, prev_node, next_node, length
+        details = self.ensure_transition_loss_details(
+            transition_node,
+            prev_node,
+            next_node,
+            all_nodes,
+            actual_length=existing_length,
+            preserve_existing_length=preserve_existing_length,
         )
-        transition_node.transition_head_loss_friction = h_f
-
-        # 6. 总损失
-        total_loss = h_j1 + h_f
-        transition_node.head_loss_transition = round(total_loss, HEAD_LOSS_PRECISION)
-
-        # 7. 记录计算详细过程（用于LaTeX显示）
-        transition_node.transition_calc_details = {
-            "transition_type": transition_node.transition_type,
-            "transition_form": transition_node.transition_form,
-            "zeta": zeta,
-            "v1": v1,
-            "v2": v2,
-            "B1": transition_node.transition_water_width_1,
-            "B2": transition_node.transition_water_width_2,
-            "length": length,
-            "R_avg": transition_node.transition_avg_R,
-            "v_avg": transition_node.transition_avg_v,
-            "h_j1": h_j1,
-            "h_f": h_f,
-            "total": total_loss,
-        }
-
-        return total_loss
+        return details.get("total", 0.0)
 
     def calculate_transition_loss_inline(self, prev_node: ChannelNode,
                                          next_node: ChannelNode,
@@ -2254,101 +2612,18 @@ class HydraulicCalculator:
         else:
             zeta = 0.2
         
-        # 3. 计算水面宽度
-        B1 = self.get_water_surface_width(prev_node)
-        B2 = self.get_water_surface_width(next_node)
-        
-        # 4. 计算渐变段长度
-        coefficient = TRANSITION_LENGTH_COEFFICIENTS.get(transition_type, 3.5)
-        L_basic = coefficient * abs(B1 - B2)
-        
-        # 应用约束条件（从特殊建筑物节点获取结构类型）
-        length = L_basic
-        struct_node = next_node if transition_type == "进口" else prev_node
-        structure_type = struct_node.structure_type
-        if structure_type:
-            struct_name = structure_type.value
-            # 水深：出口→下游明渠(next_node)，进口→上游明渠(prev_node)
-            channel_node = prev_node if transition_type == "进口" else next_node
-            channel_depth = channel_node.water_depth if channel_node.water_depth > 0 else 0
-            
-            # 渡槽约束
-            if "渡槽" in struct_name:
-                constraints = TRANSITION_LENGTH_CONSTRAINTS.get("渡槽", {})
-                type_constraint = constraints.get(transition_type, {})
-                depth_multiplier = type_constraint.get("depth_multiplier", 6 if transition_type == "进口" else 8)
-                L_min = depth_multiplier * channel_depth
-                length = max(length, L_min)
-            
-            # 隧洞约束
-            elif "隧洞" in struct_name:
-                constraints = TRANSITION_LENGTH_CONSTRAINTS.get("隧洞", {})
-                type_constraint = constraints.get(transition_type, {})
-                depth_multiplier = type_constraint.get("depth_multiplier", 5)
-                tunnel_multiplier = type_constraint.get("tunnel_multiplier", 3)
-                
-                L_depth = depth_multiplier * channel_depth
-                
-                # 获取洞径（从结构节点）
-                params = struct_node.section_params or {}
-                D = params.get('D', params.get('直径', 0))
-                R = params.get('R_circle', params.get('半径', 0))
-                tunnel_size = D if D > 0 else (2 * R if R > 0 else 0)
-                L_tunnel = tunnel_multiplier * tunnel_size
-                
-                length = max(length, L_depth, L_tunnel)
-        
-        # 5. 获取流速
-        v1 = prev_node.velocity
-        v2 = next_node.velocity
-        
-        # 6. 计算局部水头损失: h_j1 = ξ × |v₂² - v₁²| / (2g)
-        h_j1 = zeta * abs(v2 * v2 - v1 * v1) / (2 * GRAVITY)
-        h_j1 = round(h_j1, HEAD_LOSS_PRECISION)
-        
-        # 7. 计算沿程水头损失（平均值法）
-        # 获取水力半径
-        R1 = prev_node.section_params.get('R', prev_node.section_params.get('水力半径', 0)) if prev_node.section_params else 0
-        R2 = next_node.section_params.get('R', next_node.section_params.get('水力半径', 0)) if next_node.section_params else 0
-        
-        if R1 <= 0:
-            R1 = self.calculate_hydraulic_radius(prev_node)
-        if R2 <= 0:
-            R2 = self.calculate_hydraulic_radius(next_node)
-        
-        R_avg = (R1 + R2) / 2 if (R1 > 0 and R2 > 0) else max(R1, R2)
-        v_avg = (v1 + v2) / 2 if (v1 > 0 and v2 > 0) else max(v1, v2)
-        
-        # 糙率
-        n = prev_node.roughness if prev_node.roughness > 0 else self.roughness
-        
-        # 曼宁公式反算水力坡降
-        if R_avg > ZERO_TOLERANCE and v_avg > ZERO_TOLERANCE:
-            i = (v_avg * n / (R_avg ** (2.0 / 3.0))) ** 2
-        else:
-            i = 0.0
-        
-        h_f = i * length
-        h_f = round(h_f, HEAD_LOSS_PRECISION)
-        
-        # 8. 总损失
-        total_loss = round(h_j1 + h_f, HEAD_LOSS_PRECISION)
-        
-        # 9. 构建详细计算信息
-        details = {
-            "transition_type": transition_type,
-            "transition_form": transition_form,
-            "zeta": zeta,
-            "v1": v1,
-            "v2": v2,
-            "B1": B1,
-            "B2": B2,
-            "length": length,
-            "R_avg": R_avg,
-            "v_avg": v_avg,
-            "h_j1": h_j1,
-            "h_f": h_f,
-            "total": total_loss,
-        }
-        
-        return total_loss, details
+        transition_node = ChannelNode()
+        transition_node.is_transition = True
+        transition_node.structure_type = StructureType.TRANSITION
+        transition_node.transition_type = transition_type
+        transition_node.transition_form = transition_form
+        transition_node.roughness = prev_node.roughness if prev_node.roughness > 0 else self.roughness
+        transition_node.flow_section = prev_node.flow_section or next_node.flow_section
+
+        details = self.ensure_transition_loss_details(
+            transition_node,
+            prev_node,
+            next_node,
+            [prev_node, transition_node, next_node],
+        )
+        return details.get("total", 0.0), details

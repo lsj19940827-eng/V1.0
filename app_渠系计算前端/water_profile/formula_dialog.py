@@ -14,7 +14,7 @@ from typing import List, Dict, Any
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
-    QWidget, QFrame, QSizePolicy,
+    QWidget, QFrame, QSizePolicy, QLineEdit,
 )
 try:
     from qfluentwidgets import PushButton
@@ -328,7 +328,7 @@ class FormulaDialog(QDialog):
     """
 
     def __init__(self, parent, title: str, sections: List[Dict[str, Any]],
-                 width: int = 700, height: int = 600):
+                 width: int = 700, height: int = 600, auto_exec: bool = True):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.resize(width, height)
@@ -336,6 +336,7 @@ class FormulaDialog(QDialog):
         self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint)
 
         layout = QVBoxLayout(self)
+        self._main_layout = layout
 
         if HAS_WEBENGINE and HAS_SVG_RENDERER:
             self._web = create_web_view()
@@ -370,8 +371,103 @@ class FormulaDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         btn_row.addWidget(close_btn)
         layout.addLayout(btn_row)
+        self._close_btn = close_btn
 
+        if auto_exec:
+            self.exec()
+
+
+class TransitionLengthOverrideDialog(FormulaDialog):
+    """在长度详情弹窗底部提供施工采用值编辑入口。"""
+
+    def __init__(self, parent, title: str, sections: List[Dict[str, Any]],
+                 details: Dict[str, Any], on_save_override=None, on_clear_override=None):
+        self._details = details or {}
+        self._on_save_override = on_save_override
+        self._on_clear_override = on_clear_override
+        super().__init__(parent, title, sections, auto_exec=False)
+        self._inject_override_editor()
         self.exec()
+
+    def _inject_override_editor(self):
+        layout = getattr(self, "_main_layout", None)
+        if layout is None:
+            return
+
+        wrapper = QFrame(self)
+        wrapper.setStyleSheet(
+            "QFrame { background: #F8FAFC; border: 1px solid #E5E7EB; border-radius: 10px; }"
+            "QLineEdit { background: white; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 8px; }"
+        )
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(14, 12, 14, 12)
+        wrapper_layout.setSpacing(8)
+
+        source = str(self._details.get("source", "") or "").strip()
+        formula_length = float(self._details.get("formula_length", self._details.get("L_result", 0.0) or 0.0) or 0.0)
+        actual_length = float(self._details.get("actual_length", self._details.get("L_result", 0.0) or 0.0) or 0.0)
+        source_label = "单条覆盖" if source == "override" else "当前施工采用值"
+
+        intro = QLabel(
+            f"公式/规范长度：{formula_length:.3f} m    {source_label}：{actual_length:.3f} m"
+        )
+        intro.setStyleSheet("font-size: 12px; color: #334155;")
+        wrapper_layout.addWidget(intro)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(QLabel("施工采用长度(m)"))
+        self._override_edit = QLineEdit(f"{actual_length:.3f}")
+        self._override_edit.setPlaceholderText("例如 13.000")
+        row.addWidget(self._override_edit, 1)
+        wrapper_layout.addLayout(row)
+
+        self._error_label = QLabel("")
+        self._error_label.setStyleSheet("color: #C62828; font-size: 12px;")
+        self._error_label.setVisible(False)
+        wrapper_layout.addWidget(self._error_label)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        if callable(self._on_clear_override):
+            clear_btn = PushButton("恢复公式/规则")
+            clear_btn.clicked.connect(self._handle_clear)
+            btn_row.addWidget(clear_btn)
+        save_btn = PushButton("保存采用值")
+        save_btn.clicked.connect(self._handle_save)
+        btn_row.addWidget(save_btn)
+        wrapper_layout.addLayout(btn_row)
+
+        layout.insertWidget(max(0, layout.count() - 1), wrapper)
+
+    def _show_error(self, message: str):
+        self._error_label.setText(message)
+        self._error_label.setVisible(bool(message))
+
+    def _handle_save(self):
+        raw_text = self._override_edit.text().strip()
+        try:
+            value = float(raw_text)
+        except (TypeError, ValueError):
+            self._show_error("请输入大于等于 0 的数值。")
+            return
+        if value < 0:
+            self._show_error("请输入大于等于 0 的数值。")
+            return
+        self._show_error("")
+        if callable(self._on_save_override):
+            result = self._on_save_override(value)
+            if result is False:
+                return
+        self.accept()
+
+    def _handle_clear(self):
+        self._show_error("")
+        if callable(self._on_clear_override):
+            result = self._on_clear_override()
+            if result is False:
+                return
+        self.accept()
 
     # ---- HTML 构建 ----
 
@@ -526,8 +622,125 @@ def show_friction_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
     FormulaDialog(parent, f"{node_name} - 沿程水头损失计算详情", sections)
 
 
-def show_transition_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
-    """渐变段水头损失计算详情"""
+def _get_transition_length_display_context(details: Dict[str, Any]) -> Dict[str, Any]:
+    """标准化渐变段长度详情展示上下文，供多个弹窗复用。"""
+    transition_type = details.get('transition_type', '')
+    struct_name = details.get('struct_name', '')
+    B1 = details.get('B1', 0)
+    B2 = details.get('B2', 0)
+    coefficient = details.get('coefficient', 2.5)
+    L_basic = details.get('L_basic', 0)
+    channel_depth = details.get('channel_depth', 0)
+    L_result = details.get('L_result', 0)
+    actual_length = details.get('actual_length', L_result)
+    formula_length = details.get('formula_length', L_result)
+    uses_existing_length = bool(details.get('uses_existing_length', False))
+    constraint_applied = details.get('constraint_applied', '')
+    prev_name = details.get('prev_name', '')
+    next_name = details.get('next_name', '')
+    displayed_formula_length = formula_length if uses_existing_length else L_result
+
+    if transition_type == "进口":
+        formula_str = r"$L = 2.5 \times |B_1 - B_2|$"
+        coeff_note = "进口系数 = 2.5"
+    else:
+        formula_str = r"$L = 3.5 \times |B_1 - B_2|$"
+        coeff_note = "出口系数 = 3.5"
+
+    return {
+        "transition_type": transition_type,
+        "struct_name": struct_name,
+        "B1": B1,
+        "B2": B2,
+        "coefficient": coefficient,
+        "L_basic": L_basic,
+        "channel_depth": channel_depth,
+        "L_result": L_result,
+        "actual_length": actual_length,
+        "formula_length": formula_length,
+        "uses_existing_length": uses_existing_length,
+        "constraint_applied": constraint_applied,
+        "prev_name": prev_name,
+        "next_name": next_name,
+        "displayed_formula_length": displayed_formula_length,
+        "formula_str": formula_str,
+        "coeff_note": coeff_note,
+    }
+
+
+def _format_transition_length_constraint_values(ctx: Dict[str, Any]) -> str:
+    """生成长度约束段的正文，保持与长度弹窗一致的措辞。"""
+    constraint_applied = ctx["constraint_applied"]
+    if not constraint_applied:
+        return "无规范约束条件生效，直接采用基本公式计算值。"
+
+    details = ctx["details"]
+    channel_depth = ctx["channel_depth"]
+    L_basic = ctx["L_basic"]
+    displayed_formula_length = ctx["displayed_formula_length"]
+    depth_multiplier = details.get('depth_multiplier', 0)
+    L_depth = details.get('L_depth', 0)
+
+    lines = [f"渠道设计水深  $h = {channel_depth:.3f}$ m"]
+    if "隧洞" in constraint_applied:
+        tunnel_multiplier = details.get('tunnel_multiplier', 3)
+        tunnel_size = details.get('tunnel_size', 0)
+        L_tunnel = details.get('L_tunnel', 0)
+        lines.extend([
+            f"{depth_multiplier}倍水深约束  $L_{{depth}} = {depth_multiplier} \\times {channel_depth:.3f} = {L_depth:.3f}$ m",
+            f"洞径/洞宽  $D = {tunnel_size:.3f}$ m",
+            f"{tunnel_multiplier}倍洞径约束  $L_{{tunnel}} = {tunnel_multiplier} \\times {tunnel_size:.3f} = {L_tunnel:.3f}$ m",
+            "───────────────────────",
+            f"取大值:  $L = max({L_basic:.3f},\\; {L_depth:.3f},\\; {L_tunnel:.3f}) = {displayed_formula_length:.3f}$ m",
+        ])
+    elif "渡槽" in constraint_applied or "倒虹吸" in constraint_applied:
+        lines.extend([
+            f"{depth_multiplier}倍水深约束  $L_{{depth}} = {depth_multiplier} \\times {channel_depth:.3f} = {L_depth:.3f}$ m",
+            "───────────────────────",
+            f"取大值:  $L = max({L_basic:.3f},\\; {L_depth:.3f}) = {displayed_formula_length:.3f}$ m",
+        ])
+
+    return "\n".join(lines)
+
+
+def _build_transition_length_process_section(details: Dict[str, Any], title: str) -> Dict[str, Any]:
+    """将渐变段长度过程压成单节，供渐变段水损弹窗内嵌展示。"""
+    ctx = _get_transition_length_display_context(details)
+    ctx["details"] = details
+
+    values_lines = [
+        f"渐变段类型:  {ctx['transition_type']}渐变段",
+        f"关联建筑物:  {ctx['struct_name']}",
+        f"起始端（{ctx['prev_name']}）水面宽度  $B_1 = {ctx['B1']:.3f}$ m",
+        f"末端（{ctx['next_name']}）水面宽度  $B_2 = {ctx['B2']:.3f}$ m",
+        f"$L_{{basic}} = {ctx['coefficient']} \\times |{ctx['B1']:.3f} - {ctx['B2']:.3f}|$",
+        f"    $= {ctx['coefficient']} \\times {abs(ctx['B1'] - ctx['B2']):.3f}$",
+        f"    $= {ctx['L_basic']:.3f}$ m",
+        _format_transition_length_constraint_values(ctx),
+    ]
+
+    if ctx["uses_existing_length"]:
+        values_lines.extend([
+            f"公式/规范计算值  $L_{{formula}} = {ctx['displayed_formula_length']:.3f}$ m",
+            f"当前采用长度  $L_{{actual}} = {ctx['actual_length']:.3f}$ m",
+        ])
+    else:
+        values_lines.append(f"最终采用长度  $L = {ctx['L_result']:.3f}$ m")
+
+    return {
+        "title": title,
+        "formula": ctx["formula_str"],
+        "values": "\n".join(values_lines),
+        "content": ctx["coeff_note"],
+    }
+
+
+def _has_complete_transition_loss_details(details: Dict[str, Any]) -> bool:
+    required_keys = ("R1", "R2", "n", "hydraulic_slope_i", "length_details")
+    return isinstance(details, dict) and all(key in details for key in required_keys)
+
+
+def _build_legacy_transition_loss_sections(details: Dict[str, Any]) -> List[Dict[str, Any]]:
     zeta = details.get('zeta', 0)
     v1 = details.get('v1', 0); v2 = details.get('v2', 0)
     B1 = details.get('B1', 0); B2 = details.get('B2', 0)
@@ -535,7 +748,7 @@ def show_transition_loss_dialog(parent, node_name: str, details: Dict[str, Any])
     v_avg = details.get('v_avg', 0)
     h_j1 = details.get('h_j1', 0); h_f = details.get('h_f', 0)
     total = details.get('total', 0)
-    sections = [
+    return [
         {"title": "1. 基本信息",
          "values": f"渐变段类型:  {details.get('transition_type', '')}\n渐变段形式:  {details.get('transition_form', '')}\n"
                    f"局部损失系数  $\\zeta_1 = {zeta:.4f}$"},
@@ -552,6 +765,58 @@ def show_transition_loss_dialog(parent, node_name: str, details: Dict[str, Any])
          "formula": r"$h_f = i \times L$",
          "values": f"$h_f = {h_f:.4f}$ m"},
         {"title": "7. 总水头损失",
+         "formula": r"$h_{tr} = h_{j1} + h_f$",
+         "values": f"$h_{{tr}} = {h_j1:.4f} + {h_f:.4f} = {total:.4f}$ m"},
+    ]
+
+
+def show_transition_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
+    """渐变段水头损失计算详情"""
+    if not _has_complete_transition_loss_details(details):
+        sections = _build_legacy_transition_loss_sections(details)
+        FormulaDialog(parent, f"{node_name} - 渐变段水头损失计算详情", sections)
+        return
+
+    zeta = details.get('zeta', 0)
+    v1 = details.get('v1', 0); v2 = details.get('v2', 0)
+    R1 = details.get('R1', 0); R2 = details.get('R2', 0)
+    length = details.get('length', 0)
+    R_avg = details.get('R_avg', 0); v_avg = details.get('v_avg', 0)
+    n = details.get('n', 0)
+    slope_i = details.get('hydraulic_slope_i', 0)
+    h_j1 = details.get('h_j1', 0); h_f = details.get('h_f', 0)
+    total = details.get('total', 0)
+    length_details = details.get('length_details', {}) or {}
+
+    sections = [
+        {"title": "1. 基本信息",
+         "values": f"渐变段类型:  {details.get('transition_type', '')}\n"
+                   f"渐变段形式:  {details.get('transition_form', '')}\n"
+                   f"局部损失系数  $\\zeta_1 = {zeta:.4f}$"},
+        _build_transition_length_process_section(length_details, "2. 渐变段长度计算过程"),
+        {"title": "3. 流速参数",
+         "values": f"起始流速  $v_1 = {v1:.4f}$ m/s\n"
+                   f"末端流速  $v_2 = {v2:.4f}$ m/s"},
+        {"title": "4. 水力半径参数",
+         "values": f"起始水力半径  $R_1 = {R1:.4f}$ m\n"
+                   f"末端水力半径  $R_2 = {R2:.4f}$ m\n"
+                   f"糙率  $n = {n:.6f}$"},
+        {"title": "5. 平均参数计算",
+         "values": f"$v_{{avg}} = ({v1:.4f} + {v2:.4f}) / 2 = {v_avg:.4f}$ m/s\n"
+                   f"$R_{{avg}} = ({R1:.4f} + {R2:.4f}) / 2 = {R_avg:.4f}$ m"},
+        {"title": "6. 局部水头损失公式与代入",
+         "formula": r"$h_{j1} = \zeta_1 \times \frac{|v_2^2 - v_1^2|}{2g}$",
+         "values": f"$h_{{j1}} = {zeta:.4f} \\times |{v2:.4f}^2 - {v1:.4f}^2| / (2 \\times 9.81)$\n"
+                   f"    $= {h_j1:.4f}$ m"},
+        {"title": "7. 平均水力坡降计算",
+         "formula": r"$i = \left(\frac{v_{avg} \times n}{R_{avg}^{2/3}}\right)^2$",
+         "values": f"$i = \\left(\\frac{{{v_avg:.4f} \\times {n:.6f}}}{{{R_avg:.4f}^{{2/3}}}}\\right)^2$\n"
+                   f"    $= {slope_i:.8f}$"},
+        {"title": "8. 沿程水头损失代入计算",
+         "formula": r"$h_f = i \times L$",
+         "values": f"$h_f = {slope_i:.8f} \\times {length:.3f}$\n"
+                   f"    $= {h_f:.4f}$ m"},
+        {"title": "9. 总水头损失",
          "formula": r"$h_{tr} = h_{j1} + h_f$",
          "values": f"$h_{{tr}} = {h_j1:.4f} + {h_f:.4f} = {total:.4f}$ m"},
     ]
@@ -801,27 +1066,26 @@ def show_terminal_gate_backfill_top_dialog(parent, node_name: str, details: Dict
     FormulaDialog(parent, f"{node_name} - 渠顶高程回推详情", sections)
 
 
-def show_transition_length_dialog(parent, node_name: str, details: Dict[str, Any]):
+def show_transition_length_dialog(parent, node_name: str, details: Dict[str, Any],
+                                  on_save_override=None, on_clear_override=None):
     """渐变段长度计算详情"""
-    transition_type = details.get('transition_type', '')
-    struct_name = details.get('struct_name', '')
-    B1 = details.get('B1', 0)
-    B2 = details.get('B2', 0)
-    coefficient = details.get('coefficient', 2.5)
-    L_basic = details.get('L_basic', 0)
-    channel_depth = details.get('channel_depth', 0)
-    L_result = details.get('L_result', 0)
-    constraint_applied = details.get('constraint_applied', '')
-    prev_name = details.get('prev_name', '')
-    next_name = details.get('next_name', '')
-
-    # 基本公式说明
-    if transition_type == "进口":
-        formula_str = r"$L = 2.5 \times |B_1 - B_2|$"
-        coeff_note = "进口系数 = 2.5"
-    else:
-        formula_str = r"$L = 3.5 \times |B_1 - B_2|$"
-        coeff_note = "出口系数 = 3.5"
+    ctx = _get_transition_length_display_context(details)
+    transition_type = ctx["transition_type"]
+    struct_name = ctx["struct_name"]
+    B1 = ctx["B1"]
+    B2 = ctx["B2"]
+    coefficient = ctx["coefficient"]
+    L_basic = ctx["L_basic"]
+    channel_depth = ctx["channel_depth"]
+    L_result = ctx["L_result"]
+    actual_length = ctx["actual_length"]
+    uses_existing_length = ctx["uses_existing_length"]
+    constraint_applied = ctx["constraint_applied"]
+    prev_name = ctx["prev_name"]
+    next_name = ctx["next_name"]
+    displayed_formula_length = ctx["displayed_formula_length"]
+    formula_str = ctx["formula_str"]
+    coeff_note = ctx["coeff_note"]
 
     sections = [
         {"title": "1. 渐变段长度基本公式",
@@ -844,48 +1108,56 @@ def show_transition_length_dialog(parent, node_name: str, details: Dict[str, Any
         depth_multiplier = details.get('depth_multiplier', 0)
         L_depth = details.get('L_depth', 0)
 
-        constraint_vals = f"渠道设计水深  $h = {channel_depth:.3f}$ m\n"
-
-        if "隧洞" in constraint_applied:
-            tunnel_multiplier = details.get('tunnel_multiplier', 3)
-            tunnel_size = details.get('tunnel_size', 0)
-            L_tunnel = details.get('L_tunnel', 0)
-            constraint_vals += (
-                f"{depth_multiplier}倍水深约束  $L_{{depth}} = {depth_multiplier} \\times {channel_depth:.3f} = {L_depth:.3f}$ m\n"
-                f"洞径/洞宽  $D = {tunnel_size:.3f}$ m\n"
-                f"{tunnel_multiplier}倍洞径约束  $L_{{tunnel}} = {tunnel_multiplier} \\times {tunnel_size:.3f} = {L_tunnel:.3f}$ m\n"
-                f"───────────────────────\n"
-                f"取大值:  $L = max({L_basic:.3f},\\; {L_depth:.3f},\\; {L_tunnel:.3f}) = {L_result:.3f}$ m"
-            )
-        elif "渡槽" in constraint_applied:
-            constraint_vals += (
-                f"{depth_multiplier}倍水深约束  $L_{{depth}} = {depth_multiplier} \\times {channel_depth:.3f} = {L_depth:.3f}$ m\n"
-                f"───────────────────────\n"
-                f"取大值:  $L = max({L_basic:.3f},\\; {L_depth:.3f}) = {L_result:.3f}$ m"
-            )
-        elif "倒虹吸" in constraint_applied:
-            constraint_vals += (
-                f"{depth_multiplier}倍水深约束  $L_{{depth}} = {depth_multiplier} \\times {channel_depth:.3f} = {L_depth:.3f}$ m\n"
-                f"───────────────────────\n"
-                f"取大值:  $L = max({L_basic:.3f},\\; {L_depth:.3f}) = {L_result:.3f}$ m"
-            )
+        constraint_vals = _format_transition_length_constraint_values(
+            {**ctx, "details": details}
+        )
 
         sections.append(
             {"title": f"4. 规范约束条件（{constraint_desc}）",
              "values": constraint_vals}
         )
+    else:
+        sections.append(
+            {"title": "4. 公式结果",
+             "formula": f"$L = {displayed_formula_length:.3f} \\ m$",
+             "content": "无规范约束条件生效，直接采用基本公式计算值。"}
+        )
+
+    if uses_existing_length:
+        sections.append(
+            {
+                "title": "5. 当前采用长度",
+                "values": (
+                    f"公式/规范计算值  $L_{{formula}} = {displayed_formula_length:.3f}$ m\n"
+                    f"当前采用长度  $L_{{actual}} = {actual_length:.3f}$ m"
+                ),
+                "content": "当前结果保留表格/旧项目中的实际采用长度，双击仅补建说明详情，不覆盖现有 L 值。",
+            }
+        )
+        sections.append(
+            {
+                "title": "6. 最终采用长度",
+                "formula": f"$L = {actual_length:.3f} \\ m$",
+            }
+        )
+    elif constraint_applied:
         sections.append(
             {"title": "5. 计算结果（取大值）",
              "formula": f"$L = {L_result:.3f} \\ m$"}
         )
-    else:
-        sections.append(
-            {"title": "4. 计算结果",
-             "formula": f"$L = {L_result:.3f} \\ m$",
-             "content": "无规范约束条件生效，直接采用基本公式计算值。"}
-        )
 
-    FormulaDialog(parent, f"{node_name} - 渐变段长度计算详情", sections)
+    title = f"{node_name} - 渐变段长度计算详情"
+    if callable(on_save_override) or callable(on_clear_override):
+        TransitionLengthOverrideDialog(
+            parent,
+            title,
+            sections,
+            details,
+            on_save_override=on_save_override,
+            on_clear_override=on_clear_override,
+        )
+    else:
+        FormulaDialog(parent, title, sections)
 
 
 def show_cumulative_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
