@@ -2122,23 +2122,94 @@ def _is_gate_name(name):
     return "闸" in name or "分水" in name
 
 
-def _get_segment_slope_text(mc_list, mc_to_node):
-    """从建筑物段的节点列表中提取坡降文本
+def _get_profile_slope_segment_identity(node):
+    """返回坡降分段用的结构标识，避免与建筑物名称分段强绑定。"""
+    struct_str = _struct_val(getattr(node, "structure_type", None))
+    if not struct_str:
+        return ""
+    if struct_str.startswith("明渠") or struct_str == "矩形暗涵":
+        return struct_str
+    category = struct_str.split("-")[0]
+    raw_name = str(getattr(node, "name", "") or "").strip()
+    return _merge_building_and_structure_name(raw_name, category) if raw_name else category
 
-    遍历段内所有 MC 对应的节点，取第一个有效的 slope_i 作为坡降。
-    Args:
-        mc_list: 该建筑物段包含的桩号列表
-        mc_to_node: {station_MC: node} 查找表
-    Returns:
-        坡降文本（如 "1/3000"），无数据时返回 None
-    """
-    for mc in mc_list:
-        node = mc_to_node.get(mc)
-        if node:
-            st = _format_slope_text(getattr(node, 'slope_i', None))
-            if st != "/":
-                return st
-    return None
+
+def _is_profile_slope_placeholder_node(node):
+    """判断坡降行是否应以 '-' 占位（倒虹吸/有压管道）。"""
+    struct_type = getattr(node, "structure_type", None)
+    struct_value = _struct_val(struct_type)
+    struct_name = getattr(struct_type, "name", "")
+    return bool(
+        getattr(node, "is_inverted_siphon", False)
+        or getattr(node, "is_pressure_pipe", False)
+        or ("倒虹吸" in struct_value)
+        or ("有压管道" in struct_value)
+        or struct_name in ("INVERTED_SIPHON", "PRESSURE_PIPE")
+    )
+
+
+def _build_profile_slope_segments(nodes, profile_text_nodes=None):
+    """按“当前节点作为区间终点”构建纵断面坡降区间，供 DXF/TXT 共用。"""
+    visible_nodes = list(profile_text_nodes) if profile_text_nodes is not None else _build_profile_text_nodes(nodes or [])
+    segments = []
+    prev_visible_mc = None
+    prev_merge_key = None
+
+    for node in visible_nodes:
+        current_mc = float(_profile_station_value(node))
+        if prev_visible_mc is None:
+            prev_visible_mc = current_mc
+            prev_merge_key = None
+            continue
+
+        identity = _get_profile_slope_segment_identity(node)
+        gate_hint = identity or _struct_val(getattr(node, "structure_type", None))
+        if _is_gate_name(gate_hint):
+            prev_visible_mc = current_mc
+            prev_merge_key = None
+            continue
+
+        if _is_profile_slope_placeholder_node(node):
+            text = "-"
+            merge_key = ("placeholder", identity, text)
+        else:
+            text = _get_node_slope_text(node)
+            if not text or text == "/":
+                prev_visible_mc = current_mc
+                prev_merge_key = None
+                continue
+            merge_key = ("slope", identity, text)
+
+        if segments and prev_merge_key == merge_key:
+            segments[-1]["end_mc"] = current_mc
+        else:
+            segments.append(
+                {
+                    "text": text,
+                    "start_mc": prev_visible_mc,
+                    "end_mc": current_mc,
+                }
+            )
+
+        prev_visible_mc = current_mc
+        prev_merge_key = merge_key
+
+    return segments
+
+
+def _collect_profile_slope_boundary_mcs(slope_segments, tol=1e-9):
+    """提取坡降行需要补齐短竖线的区间边界。"""
+    boundary_mcs = []
+    for segment in slope_segments or []:
+        for key in ("start_mc", "end_mc"):
+            try:
+                mc = float(segment.get(key, 0.0) or 0.0)
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if any(abs(mc - prev_mc) <= tol for prev_mc in boundary_mcs):
+                continue
+            boundary_mcs.append(mc)
+    return boundary_mcs
 
 
 def _merge_segments_across_gates(segments, gate_mc_set=None):
@@ -5174,6 +5245,7 @@ def _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix,
                 ip_segment_map[round(_mc, 6)] = n
 
     tall_line_mcs = []
+    full_vline_mcs = set()
     for idx, node in enumerate(nodes):
         mc = node.station_MC
         is_special = _is_special_inout_node(node)
@@ -5186,6 +5258,8 @@ def _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix,
             short_line_height=short_line_height,
             line_height=line_height,
         )
+        if v_top > short_line_height + 1e-9:
+            full_vline_mcs.add(round(float(mc), 9))
 
         ip_ref = ip_segment_map.get(round(float(mc), 6)) if has_bc_ec_rows else None
         if ip_ref is not None:
@@ -5231,10 +5305,22 @@ def _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix,
 
     # ======== 6. 各行文本 ========
     profile_text_nodes = _build_profile_text_nodes(nodes)
+    slope_segments = _build_profile_slope_segments(nodes, profile_text_nodes=profile_text_nodes)
     ip_records = _build_ip_related_row_records(nodes, station_prefix)
-    mc_to_node = {node.station_MC: node for node in nodes}
     text_attr_rot = {"layer": layer_text, "height": text_height, "rotation": rotation, "width": 0.7, "style": "Standard"}
     text_attr_no_rot = {"layer": layer_text, "height": text_height, "width": 0.7, "style": "Standard"}
+
+    if "slope" in row_layout:
+        slope_top = row_layout["slope"]["top"]
+        slope_bottom = row_layout["slope"]["bottom"]
+        for boundary_mc in _collect_profile_slope_boundary_mcs(slope_segments):
+            if round(float(boundary_mc), 9) in full_vline_mcs:
+                continue
+            msp.add_line(
+                (sx(boundary_mc), slope_bottom),
+                (sx(boundary_mc), slope_top),
+                dxfattribs={"layer": layer_grid},
+            )
 
     for rid in enabled_row_ids:
         y_pos = row_layout[rid]["text_y"]
@@ -5270,21 +5356,9 @@ def _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix,
             continue
 
         if rid == "slope":
-            for bname, mc_list in building_segments:
-                if _is_gate_name(bname):
-                    continue
-                seg_start = mc_list[0]
-                seg_end = mc_list[-1]
-                mid_mc = _resolve_segment_mid_mc(seg_start, seg_end, tall_line_mcs)
-                if "倒虹吸" in bname or "有压管道" in bname:
-                    msp.add_text("-", dxfattribs=text_attr_no_rot).set_placement(
-                        (sx(mid_mc), y_pos), align=ezdxf.enums.TextEntityAlignment.MIDDLE
-                    )
-                    continue
-                slope_text = _get_segment_slope_text(mc_list, mc_to_node)
-                if not slope_text:
-                    continue
-                msp.add_text(slope_text, dxfattribs=text_attr_no_rot).set_placement(
+            for segment in slope_segments:
+                mid_mc = (segment["start_mc"] + segment["end_mc"]) / 2.0
+                msp.add_text(segment["text"], dxfattribs=text_attr_no_rot).set_placement(
                     (sx(mid_mc), y_pos), align=ezdxf.enums.TextEntityAlignment.MIDDLE
                 )
             continue
@@ -5475,6 +5549,7 @@ def _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_p
                     ip_segment_map[round(_mc, 6)] = n
 
         tall_line_mcs = []
+        full_vline_mcs = set()
         for idx, node in enumerate(nodes):
             station_mc = float(getattr(node, "station_MC", 0) or 0.0)
             is_special = _is_special_inout_node(node)
@@ -5487,6 +5562,8 @@ def _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_p
                 short_line_height=short_line_height,
                 line_height=line_height,
             )
+            if v_top_val > short_line_height + 1e-9:
+                full_vline_mcs.add(round(station_mc, 9))
 
             ip_ref = ip_segment_map.get(round(station_mc, 6)) if has_bc_ec_rows else None
             if ip_ref is not None:
@@ -5535,20 +5612,16 @@ def _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_p
             else:
                 building_segments.append((bname, [bmc]))
         building_segments = _merge_segments_across_gates(building_segments)
-        mc_to_node = {node.station_MC: node for node in nodes}
+        slope_segments = _build_profile_slope_segments(nodes, profile_text_nodes=profile_text_nodes)
 
-        def _should_skip_segment_slope(mc_list):
-            for mc in mc_list:
-                seg_node = mc_to_node.get(mc)
-                if seg_node is None:
+        if "slope" in row_layout:
+            slope_top = row_layout["slope"]["top"]
+            slope_bottom = row_layout["slope"]["bottom"]
+            for boundary_mc in _collect_profile_slope_boundary_mcs(slope_segments):
+                if round(float(boundary_mc), 9) in full_vline_mcs:
                     continue
-                if getattr(seg_node, "is_inverted_siphon", False) or getattr(seg_node, "is_pressure_pipe", False):
-                    return True
-                struct_type = getattr(seg_node, "structure_type", None)
-                struct_name = getattr(struct_type, "name", "")
-                if struct_name in ("INVERTED_SIPHON", "PRESSURE_PIPE"):
-                    return True
-            return False
+                lines.append(f"pl {fmt(sx(boundary_mc))},{fmt(slope_bottom)} {fmt(sx(boundary_mc))},{fmt(slope_top)} ")
+            lines.append("")
 
         for rid in enabled_row_ids:
             y_pos = row_layout[rid]["text_y"]
@@ -5581,19 +5654,9 @@ def _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_p
                 continue
 
             if rid == "slope":
-                for bname, mc_list in building_segments:
-                    if _is_gate_name(bname):
-                        continue
-                    seg_start = mc_list[0]
-                    seg_end = mc_list[-1]
-                    mid_mc = _resolve_segment_mid_mc(seg_start, seg_end, tall_line_mcs)
-                    if _should_skip_segment_slope(mc_list):
-                        lines.append(f"-text j mc {fmt(sx(mid_mc))},{fmt(y_pos)} {s_height} 0 - ")
-                        continue
-                    slope_text = _get_segment_slope_text(mc_list, mc_to_node)
-                    if not slope_text:
-                        continue
-                    lines.append(f"-text j mc {fmt(sx(mid_mc))},{fmt(y_pos)} {s_height} 0 {slope_text} ")
+                for segment in slope_segments:
+                    mid_mc = (segment["start_mc"] + segment["end_mc"]) / 2.0
+                    lines.append(f"-text j mc {fmt(sx(mid_mc))},{fmt(y_pos)} {s_height} 0 {segment['text']} ")
                 lines.append("")
                 continue
 
@@ -6686,6 +6749,49 @@ def _draw_section_summary_on_msp(
     return max_table_w, summary_h, drawn_table_count
 
 
+def _resolve_section_summary_source_nodes(panel, fallback_nodes=None):
+    """返回断面汇总导出的节点列表及其来源描述。"""
+    build_nodes = getattr(panel, "_build_nodes_from_table", None)
+    if callable(build_nodes):
+        try:
+            current_nodes = build_nodes()
+        except Exception:
+            current_nodes = None
+        if current_nodes:
+            return current_nodes, "current_table_snapshot"
+
+    if fallback_nodes:
+        return fallback_nodes, "fallback_nodes"
+
+    return list(getattr(panel, "calculated_nodes", None) or []), "calculated_nodes"
+
+
+def _record_section_summary_runtime_debug(panel, nodes, nodes_source):
+    """记录断面汇总运行态来源，便于排查源码与导出链路是否一致。"""
+    summary_module_file = ""
+    try:
+        from calc_渠系计算算法内核 import 生成断面汇总表 as summary_module
+
+        summary_module_file = os.path.abspath(getattr(summary_module, "__file__", "") or "")
+    except Exception:
+        summary_module_file = ""
+
+    try:
+        panel._last_section_summary_runtime_debug = {
+            "summary_nodes_source": str(nodes_source or ""),
+            "summary_node_count": len(nodes or []),
+            "summary_module_file": summary_module_file,
+        }
+    except Exception:
+        pass
+
+
+def _get_section_summary_source_nodes(panel, fallback_nodes=None):
+    """断面汇总导出优先使用当前表3快照，避免吃到过期 calculated_nodes。"""
+    nodes, _source = _resolve_section_summary_source_nodes(panel, fallback_nodes=fallback_nodes)
+    return nodes
+
+
 def export_combined_dxf(panel):
     """将纵断面表格、断面汇总表、IP坐标表合并导出到一个DXF文件。
 
@@ -6726,6 +6832,8 @@ def export_combined_dxf(panel):
     except Exception:
         proj_settings = None
         station_prefix = ""
+    summary_nodes, summary_nodes_source = _resolve_section_summary_source_nodes(panel, fallback_nodes=nodes)
+    _record_section_summary_runtime_debug(panel, summary_nodes, summary_nodes_source)
 
     # ---- 3. 断面汇总表参数设置（构造参数、有压流参数等）----
     try:
@@ -6736,7 +6844,7 @@ def export_combined_dxf(panel):
         auto_name_dlg = "断面汇总表.xlsx"
     if parent_window is not None:
         summary_dlg = SectionSummaryDialog(
-            parent_window, nodes, proj_settings, auto_name_dlg,
+            parent_window, summary_nodes, proj_settings, auto_name_dlg,
             panel=panel, config_only=True,
         )
         if summary_dlg.exec() != QDialog.Accepted:
@@ -6794,7 +6902,7 @@ def export_combined_dxf(panel):
             summary_w, summary_h, drawn_table_count = _draw_section_summary_on_msp(
                 panel=panel,
                 msp=msp,
-                nodes=nodes,
+                nodes=summary_nodes,
                 proj_settings=proj_settings,
                 pressurized_params=pressurized_params,
                 below_y=below_y,
@@ -8314,7 +8422,11 @@ class SectionSummaryDialog(QDialog):
 
 def open_section_summary_table(panel):
     """打开断面汇总表生成器（纯 PySide6 对话框）"""
-    nodes = panel.calculated_nodes
+    nodes, nodes_source = _resolve_section_summary_source_nodes(
+        panel,
+        fallback_nodes=getattr(panel, "calculated_nodes", None) or [],
+    )
+    _record_section_summary_runtime_debug(panel, nodes, nodes_source)
     if not nodes:
         fluent_info(panel.window(), "警告", "没有数据可用，请先执行计算。")
         return

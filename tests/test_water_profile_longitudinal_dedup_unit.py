@@ -152,6 +152,207 @@ def _sample_nodes():
     ]
 
 
+def _sample_multi_slope_nodes():
+    n1 = _make_node(
+        ip_no=1,
+        mc=0.0,
+        bottom=410.0,
+        top=412.0,
+        water=411.0,
+        structure="明渠-矩形",
+    )
+    n1.slope_i = 1 / 2
+
+    gate = _make_node(
+        ip_no=2,
+        mc=100.0,
+        bottom=409.0,
+        top=413.0,
+        water=411.2,
+        structure="节制闸",
+        name="一号",
+    )
+    gate.slope_i = None
+
+    n3 = _make_node(
+        ip_no=3,
+        mc=200.0,
+        bottom=408.0,
+        top=410.0,
+        water=409.0,
+        structure="明渠-矩形",
+    )
+    n3.slope_i = 1 / 5
+
+    n4 = _make_node(
+        ip_no=4,
+        mc=300.0,
+        bottom=407.0,
+        top=409.0,
+        water=408.0,
+        structure="明渠-矩形",
+    )
+    n4.slope_i = 1 / 15
+
+    return [n1, gate, n3, n4]
+
+
+def _sample_current_as_endpoint_slope_nodes():
+    n10 = _make_node(
+        ip_no=10,
+        mc=262.321,
+        bottom=410.0,
+        top=412.0,
+        water=411.0,
+        structure="隧洞-圆拱直墙型",
+        name="叫化岩",
+        in_out="出",
+    )
+    n10.slope_i = None
+
+    n11 = _make_node(
+        ip_no=11,
+        mc=287.852,
+        bottom=409.0,
+        top=411.0,
+        water=410.0,
+        structure="明渠-矩形",
+    )
+    n11.slope_i = 1 / 2
+
+    n12 = _make_node(
+        ip_no=12,
+        mc=318.787,
+        bottom=408.0,
+        top=410.0,
+        water=409.0,
+        structure="明渠-矩形",
+    )
+    n12.slope_i = 1 / 5
+
+    n13 = _make_node(
+        ip_no=13,
+        mc=331.055,
+        bottom=407.0,
+        top=409.0,
+        water=408.0,
+        structure="明渠-矩形",
+    )
+    n13.slope_i = 1 / 15
+
+    n14 = _make_node(
+        ip_no=14,
+        mc=348.836,
+        bottom=406.0,
+        top=408.0,
+        water=407.0,
+        structure="明渠-矩形",
+    )
+    n14.slope_i = 1 / 15
+
+    n15 = _make_node(
+        ip_no=15,
+        mc=358.947,
+        bottom=405.0,
+        top=407.0,
+        water=406.0,
+        structure="明渠-矩形",
+    )
+    n15.slope_i = 1 / 2
+
+    n16 = _make_node(
+        ip_no=16,
+        mc=419.606,
+        bottom=404.0,
+        top=406.0,
+        water=405.0,
+        structure="明渠-矩形",
+    )
+    n16.slope_i = 1 / 14
+
+    n17 = _make_node(
+        ip_no=17,
+        mc=472.834,
+        bottom=403.0,
+        top=405.0,
+        water=404.0,
+        structure="明渠-矩形",
+    )
+    n17.slope_i = 1 / 14
+
+    n18 = _make_node(
+        ip_no=18,
+        mc=561.362,
+        bottom=402.0,
+        top=404.0,
+        water=403.0,
+        structure="明渠-矩形",
+    )
+    n18.slope_i = 1 / 20
+
+    n19 = _make_node(
+        ip_no=19,
+        mc=584.807,
+        bottom=401.0,
+        top=403.0,
+        water=402.0,
+        structure="明渠-矩形",
+    )
+    n19.slope_i = 1 / 20
+
+    return [n10, n11, n12, n13, n14, n15, n16, n17, n18, n19]
+
+
+def _sample_placeholder_slope_nodes():
+    n1 = _make_node(
+        ip_no=1,
+        mc=100.0,
+        bottom=410.0,
+        top=412.0,
+        water=411.0,
+        structure="明渠-矩形",
+    )
+    n1.slope_i = None
+
+    n2 = _make_node(
+        ip_no=2,
+        mc=150.0,
+        bottom=409.0,
+        top=411.0,
+        water=410.0,
+        structure="倒虹吸-圆形",
+        name="一号",
+        in_out="进",
+    )
+    n2.slope_i = None
+    n2.is_inverted_siphon = True
+
+    n3 = _make_node(
+        ip_no=3,
+        mc=210.0,
+        bottom=408.0,
+        top=410.0,
+        water=409.0,
+        structure="倒虹吸-圆形",
+        name="一号",
+        in_out="出",
+    )
+    n3.slope_i = None
+    n3.is_inverted_siphon = True
+
+    n4 = _make_node(
+        ip_no=4,
+        mc=280.0,
+        bottom=407.0,
+        top=409.0,
+        water=408.0,
+        structure="明渠-矩形",
+    )
+    n4.slope_i = 1 / 50
+
+    return [n1, n2, n3, n4]
+
+
 def _default_settings():
     return {
         "y_bottom": 1,
@@ -185,6 +386,16 @@ def _texts_at(records, x, y, tol=1e-6):
     ]
 
 
+def _row_records_at(records, y, tol=1e-6):
+    return [rec for rec in records if abs(rec["y"] - y) <= tol]
+
+
+def _assert_text_position_map(actual, expected):
+    assert set(actual) == set(expected)
+    for text, expected_xs in expected.items():
+        assert sorted(actual[text]) == pytest.approx(sorted(expected_xs))
+
+
 @pytest.fixture
 def local_tmp_path():
     root = Path(__file__).resolve().parents[1]
@@ -199,7 +410,7 @@ def local_tmp_path():
 
 def _parse_text_cmds(path):
     pat = re.compile(
-        r"^-text\s+([-\d.eE]+),([-\d.eE]+)\s+[-\d.eE]+\s+[-\d.eE]+\s+(.+?)\s*$"
+        r"^-text(?:\s+j\s+mc)?\s+([-\d.eE]+),([-\d.eE]+)\s+[-\d.eE]+\s+[-\d.eE]+\s+(.+?)\s*$"
     )
     rows = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -345,6 +556,178 @@ def test_export_longitudinal_txt_dedup_station_text(local_tmp_path, monkeypatch)
     assert key(x_200, 77.0) == ["IP20"]
     assert _has_line(pl_rows, (x_100, 0.0), (x_100, short_line_height))
     assert _has_line(pl_rows, (x_200, 0.0), (x_200, line_height))
+
+
+def test_build_profile_slope_segments_returns_interval_records():
+    nodes = _sample_current_as_endpoint_slope_nodes()
+
+    segments = cad_tools._build_profile_slope_segments(nodes)
+
+    assert segments == [
+        {"text": "1/2", "start_mc": 262.321, "end_mc": 287.852},
+        {"text": "1/5", "start_mc": 287.852, "end_mc": 318.787},
+        {"text": "1/15", "start_mc": 318.787, "end_mc": 348.836},
+        {"text": "1/2", "start_mc": 348.836, "end_mc": 358.947},
+        {"text": "1/14", "start_mc": 358.947, "end_mc": 472.834},
+        {"text": "1/20", "start_mc": 472.834, "end_mc": 584.807},
+    ]
+
+
+def test_profile_slope_segments_use_interval_centers_in_dxf_and_txt(local_tmp_path, monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = _sample_current_as_endpoint_slope_nodes()
+    valid_nodes = nodes
+    settings = _default_settings()
+    _, layout, _, _, _ = cad_tools._build_profile_row_layout(settings)
+    slope_y = layout["slope"]["text_y"]
+    scale_x = settings["scale_x"]
+    expected_positions = {
+        "1/2": sorted([
+            _scaled_m_to_mm((262.321 + 287.852) / 2.0, scale_x),
+            _scaled_m_to_mm((348.836 + 358.947) / 2.0, scale_x),
+        ]),
+        "1/5": [_scaled_m_to_mm((287.852 + 318.787) / 2.0, scale_x)],
+        "1/15": [_scaled_m_to_mm((318.787 + 348.836) / 2.0, scale_x)],
+        "1/14": [_scaled_m_to_mm((358.947 + 472.834) / 2.0, scale_x)],
+        "1/20": [_scaled_m_to_mm((472.834 + 584.807) / 2.0, scale_x)],
+    }
+
+    msp = _DummyMSP()
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        valid_nodes,
+        settings,
+        station_prefix="",
+    )
+    dxf_rows = _row_records_at(msp.text_records, slope_y)
+    dxf_positions = {}
+    for rec in dxf_rows:
+        if rec["text"] not in expected_positions:
+            continue
+        dxf_positions.setdefault(rec["text"], []).append(rec["x"])
+    _assert_text_position_map(dxf_positions, expected_positions)
+
+    out_file = local_tmp_path / "multi_slope_profile.txt"
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    cad_tools._export_longitudinal_txt_to_path(
+        _Panel(""),
+        nodes,
+        valid_nodes,
+        settings,
+        str(out_file),
+    )
+
+    txt_rows = _parse_text_cmds(out_file)
+    txt_positions = {}
+    for rec in _row_records_at(txt_rows, slope_y):
+        if rec["text"] not in expected_positions:
+            continue
+        txt_positions.setdefault(rec["text"], []).append(rec["x"])
+    _assert_text_position_map(txt_positions, expected_positions)
+
+
+def test_profile_slope_placeholder_segments_stay_isolated_from_open_channel(local_tmp_path, monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = _sample_placeholder_slope_nodes()
+    settings = _default_settings()
+    _, layout, _, _, _ = cad_tools._build_profile_row_layout(settings)
+    slope_y = layout["slope"]["text_y"]
+    scale_x = settings["scale_x"]
+
+    segments = cad_tools._build_profile_slope_segments(nodes)
+    assert segments == [
+        {"text": "-", "start_mc": 100.0, "end_mc": 210.0},
+        {"text": "1/50", "start_mc": 210.0, "end_mc": 280.0},
+    ]
+
+    expected_positions = {
+        "-": [_scaled_m_to_mm((100.0 + 210.0) / 2.0, scale_x)],
+        "1/50": [_scaled_m_to_mm((210.0 + 280.0) / 2.0, scale_x)],
+    }
+
+    msp = _DummyMSP()
+    cad_tools._draw_profile_on_msp(msp, nodes, nodes, settings, station_prefix="")
+    dxf_positions = {}
+    for rec in _row_records_at(msp.text_records, slope_y):
+        if rec["text"] not in expected_positions:
+            continue
+        dxf_positions.setdefault(rec["text"], []).append(rec["x"])
+    _assert_text_position_map(dxf_positions, expected_positions)
+
+    out_file = local_tmp_path / "placeholder_slope_profile.txt"
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    cad_tools._export_longitudinal_txt_to_path(_Panel(""), nodes, nodes, settings, str(out_file))
+
+    txt_positions = {}
+    for rec in _row_records_at(_parse_text_cmds(out_file), slope_y):
+        if rec["text"] not in expected_positions:
+            continue
+        txt_positions.setdefault(rec["text"], []).append(rec["x"])
+    _assert_text_position_map(txt_positions, expected_positions)
+
+
+def test_profile_slope_segment_boundaries_draw_short_vlines_in_slope_row(local_tmp_path, monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = _sample_current_as_endpoint_slope_nodes()
+    settings = _default_settings()
+    _, layout, _, _, _ = cad_tools._build_profile_row_layout(settings)
+    slope_bottom = layout["slope"]["bottom"]
+    slope_top = layout["slope"]["top"]
+    scale_x = settings["scale_x"]
+    boundary_mcs = [287.852, 318.787, 348.836, 358.947, 472.834]
+    merged_inner_mc = 331.055
+
+    msp = _DummyMSP()
+    cad_tools._draw_profile_on_msp(msp, nodes, nodes, settings, station_prefix="")
+    for mc in boundary_mcs:
+        x = _scaled_m_to_mm(mc, scale_x)
+        assert _has_line(msp.line_records, (x, slope_bottom), (x, slope_top))
+    merged_inner_x = _scaled_m_to_mm(merged_inner_mc, scale_x)
+    assert not _has_line(msp.line_records, (merged_inner_x, slope_bottom), (merged_inner_x, slope_top))
+
+    out_file = local_tmp_path / "slope_boundary_profile.txt"
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    cad_tools._export_longitudinal_txt_to_path(_Panel(""), nodes, nodes, settings, str(out_file))
+
+    pl_rows = _parse_pl_cmds(out_file)
+    for mc in boundary_mcs:
+        x = _scaled_m_to_mm(mc, scale_x)
+        assert _has_line(pl_rows, (x, slope_bottom), (x, slope_top))
+    assert not _has_line(pl_rows, (merged_inner_x, slope_bottom), (merged_inner_x, slope_top))
 
 
 def test_profile_text_nodes_filter_transition_and_auto_inserted():

@@ -625,6 +625,37 @@ def test_manual_params():
                   f"Q_inc={result['Q_increased']}, expected={Q_inc_exp:.3f}")
 
 
+def test_preserve_manual_b_keeps_imported_width_without_appendix_e_fallback():
+    default_result = quick_calculate_rectangular(
+        1.0, 0.014, 2.2, 0.1, 100.0, manual_b=1.5
+    )
+
+    assert default_result["success"] is True
+    assert default_result["used_manual_b"] is False
+    assert abs(default_result["b_design"] - 0.429) < 0.001
+
+    preserved_result = quick_calculate_rectangular(
+        1.0, 0.014, 2.2, 0.1, 100.0, manual_b=1.5, preserve_manual_b=True
+    )
+
+    assert preserved_result["success"] is True
+    assert preserved_result["used_manual_b"] is True
+    assert preserved_result["preserved_manual_b"] is True
+    assert preserved_result["b_design"] == 1.5
+    assert preserved_result["design_method"] == "指定底宽(保留输入尺寸)"
+    assert any("宽深比" in warning for warning in preserved_result["constraint_warnings"])
+
+
+def test_preserve_manual_b_returns_error_when_depth_cannot_be_solved():
+    result = quick_calculate_rectangular(
+        1000.0, 0.014, 2000, 0.1, 100.0, manual_b=0.01, preserve_manual_b=True
+    )
+
+    assert result["success"] is False
+    assert "未自动改写" in result["error_message"]
+    assert result["preserved_manual_b"] is False
+
+
 # ============================================================
 # 测试10: 圆形明渠无量纲系数
 # ============================================================

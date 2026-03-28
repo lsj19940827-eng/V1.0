@@ -452,6 +452,11 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
             _assign_if_valid(target, "slope_inv", 1.0 / slope_i)
 
         params = getattr(node, "section_params", {}) or {}
+        if "use_increase" in params or hasattr(node, "use_increase"):
+            target["use_increase"] = _normalize_use_increase(
+                params.get("use_increase", getattr(node, "use_increase", None)),
+                True,
+            )
         b_val = _to_float(params.get("B", params.get("b", params.get("b_design", 0.0))), 0.0)
         _assign_if_valid(target, "B", b_val)
 
@@ -473,7 +478,8 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
         _assign_if_valid(target, "V", v_val)
 
         h_total = _to_float(getattr(node, "structure_height", 0.0), 0.0)
-        _assign_if_valid(target, "H", math.ceil(h_total * 100) / 100)
+        if struct_key not in {"rect_channel", "trap_channel"}:
+            _assign_if_valid(target, "H", math.ceil(h_total * 100) / 100)
 
         theta_deg = _to_float(params.get("theta_deg", 0.0), 0.0)
         _assign_if_valid(target, "theta_deg", theta_deg)
@@ -537,6 +543,121 @@ def _apply_overrides(row: Dict[str, Any], seg: Dict[str, Any], mapping: Dict[str
                 if val is None or (isinstance(val, str) and not val.strip()):
                     continue
             row[row_key] = val
+
+
+def _normalize_use_increase(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in {"0", "false", "no", "off", "否", "不", "unchecked"}:
+        return False
+    if text in {"1", "true", "yes", "on", "是", "checked"}:
+        return True
+    return default
+
+
+def _resolve_manual_increase_percent(seg: Dict[str, Any], use_increase: bool) -> Optional[float]:
+    if not use_increase:
+        return 0.0
+    for key in ("manual_increase_percent", "manual_increase", "increase_percent"):
+        if key not in seg:
+            continue
+        value = seg.get(key)
+        try:
+            percent = float(value)
+        except (TypeError, ValueError):
+            continue
+        if percent >= 0:
+            return percent
+    return None
+
+
+def _parse_tie_rod_height(value: Any) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    normalized = (
+        text.replace("×", "x")
+        .replace("X", "x")
+        .replace("*", "x")
+        .replace(" ", "")
+    )
+    parts = [part for part in normalized.split("x") if part]
+    if len(parts) < 2:
+        return 0.0
+    try:
+        height = float(parts[1])
+    except (TypeError, ValueError):
+        return 0.0
+    return height if height > 0 else 0.0
+
+
+def _compose_open_channel_height(base_height: Any, tie_rod: Any = "") -> Any:
+    if not isinstance(base_height, (int, float)) or base_height <= 0:
+        return base_height
+    return round(float(base_height) + _parse_tie_rod_height(tie_rod), 3)
+
+
+def _blank_increase_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    if _normalize_use_increase(row.get("use_increase"), True):
+        return row
+    row["Q_inc"] = ""
+    row["H2"] = ""
+    return row
+
+
+def _blank_open_channel_increase_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    return _blank_increase_fields(row)
+
+
+def _open_channel_include_increase_columns(data: List[Dict[str, Any]]) -> bool:
+    if not data:
+        return True
+    return any(_normalize_use_increase((row or {}).get("use_increase"), True) for row in data)
+
+
+def _format_slope_inv_text(value: Any) -> str:
+    return f"1/{value:g}" if value else ""
+
+
+def _open_channel_increase_value(row: Dict[str, Any], key: str) -> Any:
+    if not _normalize_use_increase((row or {}).get("use_increase"), True):
+        return ""
+    return row.get(key, "")
+
+
+def _filter_increase_columns(
+    headers: List[Tuple[Any, Any]],
+    col_widths: List[Any],
+    rows: List[List[Any]],
+    *,
+    include_increase: bool,
+    merge_groups: Optional[List[Tuple[List[int], int]]] = None,
+) -> Tuple[List[Tuple[Any, Any]], List[Any], List[List[Any]], Optional[List[Tuple[List[int], int]]]]:
+    if include_increase:
+        return headers, col_widths, rows, merge_groups
+
+    removable = {"加大流量", "加大水深H₂"}
+    keep_indices = [idx for idx, (name, _unit) in enumerate(headers) if name not in removable]
+    index_map = {old_idx: new_idx for new_idx, old_idx in enumerate(keep_indices)}
+
+    filtered_headers = [headers[idx] for idx in keep_indices]
+    filtered_widths = [col_widths[idx] for idx in keep_indices]
+    filtered_rows = [[row[idx] for idx in keep_indices] for row in rows]
+
+    filtered_merge = []
+    for cols, span in merge_groups or []:
+        mapped_cols = [index_map[idx] for idx in cols if idx in index_map]
+        if mapped_cols:
+            filtered_merge.append((mapped_cols, span))
+
+    return filtered_headers, filtered_widths, filtered_rows, (filtered_merge or None)
 
 
 def _positive_or_none(value: Any) -> Optional[float]:
@@ -692,21 +813,25 @@ def compute_rect_channel(segments: List[Dict]) -> List[Dict]:
         n = seg.get("n", 0.014)
         wall_t = seg.get("wall_t", 0.3)
         tie_rod = seg.get("tie_rod", "0.2×0.2")
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
+        manual_b = _first_positive(seg, "B")
 
         res = quick_calculate_rectangular(
             Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
-            manual_b=_first_positive(seg, "B"),
+            manual_b=manual_b,
+            manual_increase_percent=_resolve_manual_increase_percent(seg, use_increase),
+            preserve_manual_b=manual_b is not None,
         )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "B": "", "H": "", "t": wall_t, "tie_rod": tie_rod,
-                   "H1": "", "H2": "", "V": ""}
+                   "H1": "", "H2": "", "V": "", "use_increase": use_increase}
             _apply_overrides(row, seg, {
                 "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
                 "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
                 "t": "t", "tie_rod": "tie_rod",
             })
-            rows.append(row)
+            rows.append(_blank_open_channel_increase_fields(row))
             continue
 
         row = {
@@ -716,19 +841,20 @@ def compute_rect_channel(segments: List[Dict]) -> List[Dict]:
             "slope_inv": slope_inv,
             "n":         n,
             "B":         round(res["b_design"], 2),
-            "H":         round(res["h_prime"], 3),
+            "H":         _compose_open_channel_height(round(res["h_prime"], 3), tie_rod),
             "t":         wall_t,
             "tie_rod":   tie_rod,
             "H1":        round(res["h_design"], 3),
             "H2":        round(res["h_increased"], 3),
             "V":         round(res["V_design"], 3),
+            "use_increase": use_increase,
         }
         _apply_overrides(row, seg, {
             "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
             "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
             "t": "t", "tie_rod": "tie_rod",
         })
-        rows.append(row)
+        rows.append(_blank_open_channel_increase_fields(row))
     return rows
 
 
@@ -745,22 +871,26 @@ def compute_trapezoid_channel(segments: List[Dict]) -> List[Dict]:
         m = seg.get("m", 1.0)
         wall_t = seg.get("wall_t", 0.3)
         tie_rod = seg.get("tie_rod", "0.2×0.2")
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
+        manual_b = _first_positive(seg, "B")
 
         res = quick_calculate_trapezoidal(
             Q=Q, m=m, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
             manual_beta=_first_positive(seg, "beta", "Beta_design"),
-            manual_b=_first_positive(seg, "B"),
+            manual_b=manual_b,
+            manual_increase_percent=_resolve_manual_increase_percent(seg, use_increase),
+            preserve_manual_b=manual_b is not None,
         )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "m": m, "B": "", "H": "", "t": wall_t, "tie_rod": tie_rod,
-                   "H1": "", "H2": "", "V": "", "beta": ""}
+                   "H1": "", "H2": "", "V": "", "beta": "", "use_increase": use_increase}
             _apply_overrides(row, seg, {
                 "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
                 "m": "m", "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
                 "t": "t", "tie_rod": "tie_rod", "beta": "beta",
             })
-            rows.append(row)
+            rows.append(_blank_open_channel_increase_fields(row))
             continue
 
         row = {
@@ -771,20 +901,21 @@ def compute_trapezoid_channel(segments: List[Dict]) -> List[Dict]:
             "n":         n,
             "m":         m,
             "B":         round(res["b_design"], 2),
-            "H":         round(res["h_prime"], 3),
+            "H":         _compose_open_channel_height(round(res["h_prime"], 3), tie_rod),
             "t":         wall_t,
             "tie_rod":   tie_rod,
             "H1":        round(res["h_design"], 3),
             "H2":        round(res["h_increased"], 3),
             "V":         round(res["V_design"], 3),
             "beta":      round(res.get("Beta_design", 0) or 0, 3) if res.get("Beta_design", 0) else "",
+            "use_increase": use_increase,
         }
         _apply_overrides(row, seg, {
             "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
             "m": "m", "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
             "beta": "beta", "t": "t", "tie_rod": "tie_rod",
         })
-        rows.append(row)
+        rows.append(_blank_open_channel_increase_fields(row))
     return rows
 
 
@@ -801,19 +932,20 @@ def compute_u_channel(segments: List[Dict]) -> List[Dict]:
         radius = _first_positive(seg, "R")
         alpha_deg = _first_positive(seg, "alpha_deg", "chamfer_angle") or U_CHANNEL_ALPHA_DEFAULT
         theta_deg = _first_positive(seg, "theta_deg") or U_CHANNEL_THETA_DEFAULT
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
 
         if radius is None:
             row = {
                 "name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv, "n": n,
                 "R": "", "alpha_deg": alpha_deg, "theta_deg": theta_deg,
-                "H": "", "H1": "", "H2": "", "V": "",
+                "H": "", "H1": "", "H2": "", "V": "", "use_increase": use_increase,
             }
             _apply_overrides(row, seg, {
                 "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
                 "R": "R", "alpha_deg": "alpha_deg", "theta_deg": "theta_deg",
                 "H": "H", "H1": "H1", "H2": "H2", "V": "V",
             })
-            rows.append(row)
+            rows.append(_blank_open_channel_increase_fields(row))
             continue
 
         res = _calc_u_channel(
@@ -825,19 +957,20 @@ def compute_u_channel(segments: List[Dict]) -> List[Dict]:
             slope_inv=slope_inv,
             v_min=V_MIN,
             v_max=V_MAX,
+            manual_increase_percent=_resolve_manual_increase_percent(seg, use_increase),
         )
         if not res.get("success"):
             row = {
                 "name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv, "n": n,
                 "R": round(radius, 2), "alpha_deg": alpha_deg, "theta_deg": theta_deg,
-                "H": "", "H1": "", "H2": "", "V": "",
+                "H": "", "H1": "", "H2": "", "V": "", "use_increase": use_increase,
             }
             _apply_overrides(row, seg, {
                 "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
                 "R": "R", "alpha_deg": "alpha_deg", "theta_deg": "theta_deg",
                 "H": "H", "H1": "H1", "H2": "H2", "V": "V",
             })
-            rows.append(row)
+            rows.append(_blank_open_channel_increase_fields(row))
             continue
 
         row = {
@@ -853,13 +986,14 @@ def compute_u_channel(segments: List[Dict]) -> List[Dict]:
             "H1": round(res["h_design"], 3),
             "H2": round(res["h_increased"], 3),
             "V": round(res["V_design"], 3),
+            "use_increase": use_increase,
         }
         _apply_overrides(row, seg, {
             "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
             "R": "R", "alpha_deg": "alpha_deg", "theta_deg": "theta_deg",
             "H": "H", "H1": "H1", "H2": "H2", "V": "V",
         })
-        rows.append(row)
+        rows.append(_blank_open_channel_increase_fields(row))
     return rows
 
 
@@ -892,11 +1026,15 @@ def compute_tunnel(segments: List[Dict],
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
         slope = 1.0 / slope_inv
-        inc_pct = _tunnel_inc_pct(Q)
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
+        inc_pct = _tunnel_inc_pct(Q) if use_increase else 0.0
         Q_inc = Q * (1 + inc_pct / 100)
 
         h_d, ok_d = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q)
-        h_i, ok_i = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q_inc)
+        if use_increase:
+            h_i, ok_i = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q_inc)
+        else:
+            h_i, ok_i = 0.0, False
 
         V_d = 0.0
         if ok_d and h_d > 0:
@@ -908,7 +1046,7 @@ def compute_tunnel(segments: List[Dict],
             row = {
                 "name":       seg["name"],
                 "Q":          Q,
-                "Q_inc":      round(Q_inc, 3),
+                "Q_inc":      round(Q_inc, 3) if use_increase else "",
                 "rock_class": rc,
                 "slope_inv":  slope_inv,
                 "n":          n,
@@ -918,14 +1056,16 @@ def compute_tunnel(segments: List[Dict],
                 "t0":         rock_lining[rc]["t0"],
                 "t":          rock_lining[rc]["t"],
                 "H1":         round(h_d, 2) if ok_d else "",
-                "H2":         round(h_i, 2) if ok_i else "",
+                "H2":         round(h_i, 2) if use_increase and ok_i else "",
                 "V":          round(V_d, 2) if V_d > 0 else "",
+                "use_increase": use_increase,
             }
             _apply_overrides(row, seg, override_map)
-            seg_rows.append(row)
+            seg_rows.append(_blank_increase_fields(row))
         return seg_rows
 
     def _empty_rows_for_seg(seg):
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
         seg_rows = []
         for rc in ROCK_CLASSES:
             row = {"name": seg["name"], "Q": seg["Q"], "Q_inc": "",
@@ -933,9 +1073,9 @@ def compute_tunnel(segments: List[Dict],
                    "n": seg.get("n", 0.014),
                    "B": "", "H_straight": "", "R_arch": "",
                    "t0": rock_lining[rc]["t0"], "t": rock_lining[rc]["t"],
-                   "H1": "", "H2": "", "V": ""}
+                   "H1": "", "H2": "", "V": "", "use_increase": use_increase}
             _apply_overrides(row, seg, override_map)
-            seg_rows.append(row)
+            seg_rows.append(_blank_increase_fields(row))
         return seg_rows
 
     def _resolve_geometry(seg):
@@ -1048,11 +1188,15 @@ def compute_tunnel_circular(segments: List[Dict],
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
         slope = 1.0 / slope_inv
-        inc_pct = _tunnel_inc_pct(Q)
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
+        inc_pct = _tunnel_inc_pct(Q) if use_increase else 0.0
         Q_inc = Q * (1 + inc_pct / 100)
 
         h_d, ok_d = solve_water_depth_circular(D, n, slope, Q)
-        h_i, ok_i = solve_water_depth_circular(D, n, slope, Q_inc)
+        if use_increase:
+            h_i, ok_i = solve_water_depth_circular(D, n, slope, Q_inc)
+        else:
+            h_i, ok_i = 0.0, False
 
         V_d = 0.0
         if ok_d and h_d > 0:
@@ -1064,7 +1208,7 @@ def compute_tunnel_circular(segments: List[Dict],
             row = {
                 "name":       seg["name"],
                 "Q":          Q,
-                "Q_inc":      round(Q_inc, 3),
+                "Q_inc":      round(Q_inc, 3) if use_increase else "",
                 "rock_class": rc,
                 "slope_inv":  slope_inv,
                 "n":          n,
@@ -1072,23 +1216,25 @@ def compute_tunnel_circular(segments: List[Dict],
                 "t0":         rock_lining[rc]["t0"],
                 "t":          rock_lining[rc]["t"],
                 "H1":         round(h_d, 2) if ok_d else "",
-                "H2":         round(h_i, 2) if ok_i else "",
+                "H2":         round(h_i, 2) if use_increase and ok_i else "",
                 "V":          round(V_d, 2) if V_d > 0 else "",
+                "use_increase": use_increase,
             }
             _apply_overrides(row, seg, override_map)
-            seg_rows.append(row)
+            seg_rows.append(_blank_increase_fields(row))
         return seg_rows
 
     def _empty_rows_for_seg(seg):
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
         seg_rows = []
         for rc in ROCK_CLASSES:
             row = {"name": seg["name"], "Q": seg["Q"], "Q_inc": "",
                    "rock_class": rc, "slope_inv": seg["slope_inv"],
                    "n": seg.get("n", 0.014),
                    "D": "", "t0": rock_lining[rc]["t0"], "t": rock_lining[rc]["t"],
-                   "H1": "", "H2": "", "V": ""}
+                   "H1": "", "H2": "", "V": "", "use_increase": use_increase}
             _apply_overrides(row, seg, override_map)
-            seg_rows.append(row)
+            seg_rows.append(_blank_increase_fields(row))
         return seg_rows
 
     if unified and _locked_geometry_present(segments, ("D",)):
@@ -1180,11 +1326,15 @@ def compute_tunnel_horseshoe(segments: List[Dict],
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
         slope = 1.0 / slope_inv
-        inc_pct = _tunnel_inc_pct(Q)
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
+        inc_pct = _tunnel_inc_pct(Q) if use_increase else 0.0
         Q_inc = Q * (1 + inc_pct / 100)
 
         h_d, ok_d = solve_water_depth_horseshoe_std(section_type, R, n, slope, Q)
-        h_i, ok_i = solve_water_depth_horseshoe_std(section_type, R, n, slope, Q_inc)
+        if use_increase:
+            h_i, ok_i = solve_water_depth_horseshoe_std(section_type, R, n, slope, Q_inc)
+        else:
+            h_i, ok_i = 0.0, False
 
         V_d = 0.0
         if ok_d and h_d > 0:
@@ -1196,7 +1346,7 @@ def compute_tunnel_horseshoe(segments: List[Dict],
             row = {
                 "name":       seg["name"],
                 "Q":          Q,
-                "Q_inc":      round(Q_inc, 3),
+                "Q_inc":      round(Q_inc, 3) if use_increase else "",
                 "rock_class": rc,
                 "slope_inv":  slope_inv,
                 "n":          n,
@@ -1204,23 +1354,25 @@ def compute_tunnel_horseshoe(segments: List[Dict],
                 "t0":         rock_lining[rc]["t0"],
                 "t":          rock_lining[rc]["t"],
                 "H1":         round(h_d, 2) if ok_d else "",
-                "H2":         round(h_i, 2) if ok_i else "",
+                "H2":         round(h_i, 2) if use_increase and ok_i else "",
                 "V":          round(V_d, 2) if V_d > 0 else "",
+                "use_increase": use_increase,
             }
             _apply_overrides(row, seg, override_map)
-            seg_rows.append(row)
+            seg_rows.append(_blank_increase_fields(row))
         return seg_rows
 
     def _empty_rows_for_seg(seg):
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
         seg_rows = []
         for rc in ROCK_CLASSES:
             row = {"name": seg["name"], "Q": seg["Q"], "Q_inc": "",
                    "rock_class": rc, "slope_inv": seg["slope_inv"],
                    "n": seg.get("n", 0.014),
                    "R": "", "t0": rock_lining[rc]["t0"], "t": rock_lining[rc]["t"],
-                   "H1": "", "H2": "", "V": ""}
+                   "H1": "", "H2": "", "V": "", "use_increase": use_increase}
             _apply_overrides(row, seg, override_map)
-            seg_rows.append(row)
+            seg_rows.append(_blank_increase_fields(row))
         return seg_rows
 
     if unified and _locked_geometry_present(segments, ("R",)):
@@ -1317,21 +1469,23 @@ def compute_aqueduct_u(segments: List[Dict]) -> List[Dict]:
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
         wall_t = seg.get("wall_t", 0.35)
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
 
         res = _calc_aqueduct_u(
             Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
             manual_R=_first_positive(seg, "R"),
+            manual_increase_percent=_resolve_manual_increase_percent(seg, use_increase),
         )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "R": "", "H": "", "t": wall_t,
-                   "H1": "", "H2": "", "V": "", "HB_ratio": ""}
+                   "H1": "", "H2": "", "V": "", "HB_ratio": "", "use_increase": use_increase}
             _apply_overrides(row, seg, {
                 "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
                 "R": "R", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
                 "t": "t",
             })
-            rows.append(row)
+            rows.append(_blank_increase_fields(row))
             continue
 
         R = res["R"]
@@ -1351,13 +1505,14 @@ def compute_aqueduct_u(segments: List[Dict]) -> List[Dict]:
             "H2":        round(res["h_increased"], 2),
             "V":         round(res["V_design"], 3),
             "HB_ratio":  round(hb_ratio, 3),
+            "use_increase": use_increase,
         }
         _apply_overrides(row, seg, {
             "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
             "R": "R", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
             "t": "t", "HB_ratio": "HB_ratio",
         })
-        rows.append(row)
+        rows.append(_blank_increase_fields(row))
     return rows
 
 
@@ -1375,24 +1530,26 @@ def compute_aqueduct_rect(segments: List[Dict]) -> List[Dict]:
         wall_t = seg.get("wall_t", 0.35)
         chamfer_angle = seg.get("chamfer_angle", 0)
         chamfer_length = seg.get("chamfer_length", 0)
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
 
         res = _calc_aqueduct_rect(
             Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
             chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
             manual_B=_first_positive(seg, "B"),
+            manual_increase_percent=_resolve_manual_increase_percent(seg, use_increase),
         )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "B": "", "H": "", "t": wall_t,
                    "chamfer_angle": chamfer_angle if chamfer_angle else "",
                    "chamfer_length": chamfer_length if chamfer_length else "",
-                   "H1": "", "H2": "", "V": ""}
+                   "H1": "", "H2": "", "V": "", "use_increase": use_increase}
             _apply_overrides(row, seg, {
                 "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
                 "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
                 "t": "t", "chamfer_angle": "chamfer_angle", "chamfer_length": "chamfer_length",
             })
-            rows.append(row)
+            rows.append(_blank_increase_fields(row))
             continue
 
         row = {
@@ -1409,13 +1566,14 @@ def compute_aqueduct_rect(segments: List[Dict]) -> List[Dict]:
             "H1":             round(res["h_design"], 2),
             "H2":             round(res["h_increased"], 2),
             "V":              round(res["V_design"], 3),
+            "use_increase":   use_increase,
         }
         _apply_overrides(row, seg, {
             "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
             "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
             "t": "t", "chamfer_angle": "chamfer_angle", "chamfer_length": "chamfer_length",
         })
-        rows.append(row)
+        rows.append(_blank_increase_fields(row))
     return rows
 
 
@@ -1432,21 +1590,23 @@ def compute_rect_culvert(segments: List[Dict]) -> List[Dict]:
         t0 = seg.get("t0", 0.4)
         t1 = seg.get("t1", 0.4)
         t2 = seg.get("t2", 0.4)
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
 
         res = _calc_rect_culvert(
             Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
             manual_B=_first_positive(seg, "B"),
+            manual_increase_percent=_resolve_manual_increase_percent(seg, use_increase),
         )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "B": "", "H": "", "t0": t0, "t1": t1, "t2": t2,
-                   "H1": "", "H2": "", "V": ""}
+                   "H1": "", "H2": "", "V": "", "use_increase": use_increase}
             _apply_overrides(row, seg, {
                 "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
                 "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
                 "t0": "t0", "t1": "t1", "t2": "t2",
             })
-            rows.append(row)
+            rows.append(_blank_increase_fields(row))
             continue
 
         row = {
@@ -1463,13 +1623,14 @@ def compute_rect_culvert(segments: List[Dict]) -> List[Dict]:
             "H1":        round(res["h_design"], 2),
             "H2":        round(res["h_increased"], 2),
             "V":         round(res["V_design"], 2),
+            "use_increase": use_increase,
         }
         _apply_overrides(row, seg, {
             "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
             "B": "B", "H": "H", "H1": "H1", "H2": "H2", "V": "V",
             "t0": "t0", "t1": "t1", "t2": "t2",
         })
-        rows.append(row)
+        rows.append(_blank_increase_fields(row))
     return rows
 
 
@@ -1485,21 +1646,23 @@ def compute_circular_pipe(segments: List[Dict]) -> List[Dict]:
         slope_inv = seg["slope_inv"]
         n = seg.get("n", 0.014)
         pipe_mat = seg.get("pipe_material", "钢筋混凝土")
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
 
         res = _calc_circular_pipe(
             Q=Q, n=n, slope_inv=slope_inv, v_min=V_MIN, v_max=V_MAX,
+            increase_percent=_resolve_manual_increase_percent(seg, use_increase),
             manual_D=_first_positive(seg, "D"),
         )
         if not res.get("success"):
             row = {"name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv,
                    "n": n, "D": "", "pipe_material": pipe_mat,
-                   "H1": "", "H2": "", "V": ""}
+                   "H1": "", "H2": "", "V": "", "use_increase": use_increase}
             _apply_overrides(row, seg, {
                 "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
                 "D": "D", "pipe_material": "pipe_material",
                 "H1": "H1", "H2": "H2", "V": "V",
             })
-            rows.append(row)
+            rows.append(_blank_open_channel_increase_fields(row))
             continue
 
         D_val = res.get("D_design", 0) or 0
@@ -1519,13 +1682,14 @@ def compute_circular_pipe(segments: List[Dict]) -> List[Dict]:
             "H1":            round(y_d, 3) if y_d else "",
             "H2":            round(y_i, 3) if y_i else "",
             "V":             round(V_d, 3) if V_d else "",
+            "use_increase":  use_increase,
         }
         _apply_overrides(row, seg, {
             "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
             "D": "D", "pipe_material": "pipe_material",
             "H1": "H1", "H2": "H2", "V": "V",
         })
-        rows.append(row)
+        rows.append(_blank_open_channel_increase_fields(row))
     return rows
 
 
@@ -1682,6 +1846,102 @@ def _set_col_width(ws, col, width, gcl):
     ws.column_dimensions[gcl(col)].width = width
 
 
+def _filter_table_columns(column_defs: List[Dict[str, Any]], include_increase: bool) -> List[Dict[str, Any]]:
+    columns: List[Dict[str, Any]] = []
+    for col in column_defs:
+        if col.get("increase_only") and not include_increase:
+            continue
+        columns.append(col)
+    return columns
+
+
+def _table_headers(column_defs: List[Dict[str, Any]]) -> List[Tuple[str, Optional[str]]]:
+    return [(str(col["header"]), col.get("unit")) for col in column_defs]
+
+
+def _table_excel_widths(column_defs: List[Dict[str, Any]]) -> List[float]:
+    return [float(col["excel_width"]) for col in column_defs]
+
+
+def _table_dxf_widths(column_defs: List[Dict[str, Any]]) -> List[float]:
+    return _dxf_col_widths([float(col["dxf_width"]) for col in column_defs])
+
+
+def _table_row_values(row: Dict[str, Any], column_defs: List[Dict[str, Any]]) -> List[Any]:
+    values: List[Any] = []
+    for col in column_defs:
+        getter = col["getter"]
+        values.append(getter(row))
+    return values
+
+
+def _rect_channel_column_defs(include_increase: bool) -> List[Dict[str, Any]]:
+    return _filter_table_columns([
+        {"header": "流量段", "unit": None, "excel_width": 14, "dxf_width": 12, "getter": lambda d: d["name"]},
+        {"header": "设计流量", "unit": "m³/s", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d["Q"]},
+        {"header": "加大流量", "unit": "m³/s", "excel_width": 12, "dxf_width": 10, "increase_only": True, "getter": lambda d: _open_channel_increase_value(d, "Q_inc")},
+        {"header": "1/底坡", "unit": None, "excel_width": 12, "dxf_width": 10, "getter": lambda d: _format_slope_inv_text(d.get("slope_inv"))},
+        {"header": "糙率", "unit": None, "excel_width": 10, "dxf_width": 8, "getter": lambda d: d["n"]},
+        {"header": "底宽B", "unit": "m", "excel_width": 10, "dxf_width": 8, "getter": lambda d: d.get("B", "")},
+        {"header": "高度H", "unit": "m", "excel_width": 10, "dxf_width": 9, "getter": lambda d: d.get("H", "")},
+        {"header": "壁厚t", "unit": "m", "excel_width": 10, "dxf_width": 8, "getter": lambda d: d.get("t", "")},
+        {"header": "拉杆尺寸", "unit": "m", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d.get("tie_rod", "")},
+        {"header": "设计水深H₁", "unit": "m", "excel_width": 13, "dxf_width": 12, "getter": lambda d: d.get("H1", "")},
+        {"header": "加大水深H₂", "unit": "m", "excel_width": 13, "dxf_width": 12, "increase_only": True, "getter": lambda d: _open_channel_increase_value(d, "H2")},
+        {"header": "设计流速", "unit": "m/s", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d.get("V", "")},
+    ], include_increase)
+
+
+def _trapezoid_channel_column_defs(include_increase: bool) -> List[Dict[str, Any]]:
+    return _filter_table_columns([
+        {"header": "流量段", "unit": None, "excel_width": 14, "dxf_width": 12, "getter": lambda d: d["name"]},
+        {"header": "设计流量", "unit": "m³/s", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d["Q"]},
+        {"header": "加大流量", "unit": "m³/s", "excel_width": 12, "dxf_width": 10, "increase_only": True, "getter": lambda d: _open_channel_increase_value(d, "Q_inc")},
+        {"header": "1/坡降", "unit": None, "excel_width": 12, "dxf_width": 10, "getter": lambda d: _format_slope_inv_text(d.get("slope_inv"))},
+        {"header": "糙率", "unit": None, "excel_width": 10, "dxf_width": 8, "getter": lambda d: d["n"]},
+        {"header": "边坡系数m", "unit": None, "excel_width": 12, "dxf_width": 10, "getter": lambda d: d.get("m", "")},
+        {"header": "底宽B", "unit": "m", "excel_width": 10, "dxf_width": 8, "getter": lambda d: d.get("B", "")},
+        {"header": "高度H", "unit": "m", "excel_width": 10, "dxf_width": 9, "getter": lambda d: d.get("H", "")},
+        {"header": "壁厚t", "unit": "m", "excel_width": 10, "dxf_width": 8, "getter": lambda d: d.get("t", "")},
+        {"header": "拉杆尺寸", "unit": "m", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d.get("tie_rod", "")},
+        {"header": "设计水深H₁", "unit": "m", "excel_width": 13, "dxf_width": 12, "getter": lambda d: d.get("H1", "")},
+        {"header": "加大水深H₂", "unit": "m", "excel_width": 13, "dxf_width": 12, "increase_only": True, "getter": lambda d: _open_channel_increase_value(d, "H2")},
+        {"header": "设计流速", "unit": "m/s", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d.get("V", "")},
+    ], include_increase)
+
+
+def _u_channel_column_defs(include_increase: bool) -> List[Dict[str, Any]]:
+    return _filter_table_columns([
+        {"header": "流量段", "unit": None, "excel_width": 14, "dxf_width": 14, "getter": lambda d: d["name"]},
+        {"header": "设计流量", "unit": "m³/s", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d["Q"]},
+        {"header": "加大流量", "unit": "m³/s", "excel_width": 12, "dxf_width": 10, "increase_only": True, "getter": lambda d: _open_channel_increase_value(d, "Q_inc")},
+        {"header": "1/底坡", "unit": None, "excel_width": 12, "dxf_width": 10, "getter": lambda d: _format_slope_inv_text(d.get("slope_inv"))},
+        {"header": "糙率", "unit": None, "excel_width": 10, "dxf_width": 8, "getter": lambda d: d["n"]},
+        {"header": "半径R", "unit": "m", "excel_width": 10, "dxf_width": 8, "getter": lambda d: d.get("R", "")},
+        {"header": "外倾角α", "unit": "°", "excel_width": 10, "dxf_width": 8, "getter": lambda d: d.get("alpha_deg", "")},
+        {"header": "圆心角θ", "unit": "°", "excel_width": 10, "dxf_width": 8, "getter": lambda d: d.get("theta_deg", "")},
+        {"header": "高度H", "unit": "m", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d.get("H", "")},
+        {"header": "设计水深H1", "unit": "m", "excel_width": 13, "dxf_width": 10, "getter": lambda d: d.get("H1", "")},
+        {"header": "加大水深H2", "unit": "m", "excel_width": 13, "dxf_width": 10, "increase_only": True, "getter": lambda d: _open_channel_increase_value(d, "H2")},
+        {"header": "设计流速", "unit": "m/s", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d.get("V", "")},
+    ], include_increase)
+
+
+def _circular_channel_column_defs(include_increase: bool) -> List[Dict[str, Any]]:
+    return _filter_table_columns([
+        {"header": "流量段", "unit": None, "excel_width": 14, "dxf_width": 12, "getter": lambda d: d["name"]},
+        {"header": "设计流量", "unit": "m³/s", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d["Q"]},
+        {"header": "加大流量", "unit": "m³/s", "excel_width": 12, "dxf_width": 10, "increase_only": True, "getter": lambda d: _open_channel_increase_value(d, "Q_inc")},
+        {"header": "1/底坡", "unit": None, "excel_width": 12, "dxf_width": 10, "getter": lambda d: _format_slope_inv_text(d.get("slope_inv"))},
+        {"header": "糙率", "unit": None, "excel_width": 10, "dxf_width": 8, "getter": lambda d: d["n"]},
+        {"header": "直径D", "unit": "m", "excel_width": 10, "dxf_width": 8, "getter": lambda d: d.get("D", "")},
+        {"header": "管道材质", "unit": None, "excel_width": 15, "dxf_width": 14, "getter": lambda d: d.get("pipe_material", "")},
+        {"header": "设计水深H₁", "unit": "m", "excel_width": 13, "dxf_width": 12, "getter": lambda d: d.get("H1", "")},
+        {"header": "加大水深H₂", "unit": "m", "excel_width": 13, "dxf_width": 12, "increase_only": True, "getter": lambda d: _open_channel_increase_value(d, "H2")},
+        {"header": "设计流速v", "unit": "m/s", "excel_width": 12, "dxf_width": 10, "getter": lambda d: d.get("V", "")},
+    ], include_increase)
+
+
 # ============================================================
 # Sheet 1: 矩形明渠
 # ============================================================
@@ -1689,24 +1949,11 @@ def _set_col_width(ws, col, width, gcl):
 def _write_rect_channel(ws, data, styles, gcl, col_offset=0):
     """写入矩形明渠表到 ws，从 col_offset+1 列开始"""
     C = col_offset  # 列偏移
-    NCOLS = 12
     R1 = 1  # 标题行
-
-    headers = [
-        ("流量段",    None),
-        ("设计流量",  "m³/s"),
-        ("加大流量",  "m³/s"),
-        ("1/底坡",    None),
-        ("糙率",      None),
-        ("底宽B",     "m"),
-        ("高度H",     "m"),
-        ("壁厚t",     "m"),
-        ("拉杆尺寸",  "m"),
-        ("设计水深H₁", "m"),
-        ("加大水深H₂", "m"),
-        ("设计流速",  "m/s"),
-    ]
-    col_widths = [14, 12, 12, 12, 10, 10, 10, 10, 12, 13, 13, 12]
+    columns = _rect_channel_column_defs(_open_channel_include_increase_columns(data))
+    headers = _table_headers(columns)
+    col_widths = _table_excel_widths(columns)
+    NCOLS = len(columns)
 
     # 标题
     _write_title(ws, R1, C + 1, C + NCOLS, "矩形明渠断面尺寸及水力要素表", styles)
@@ -1719,10 +1966,7 @@ def _write_rect_channel(ws, data, styles, gcl, col_offset=0):
     # 数据
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
-        vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-                d["n"], d.get("B", ""), d.get("H", ""), d.get("t", ""),
-                d.get("tie_rod", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", "")]
+        vals = _table_row_values(d, columns)
         for ci, v in enumerate(vals):
             _sc(ws, r, C + 1 + ci, v, styles)
 
@@ -1736,25 +1980,11 @@ def _write_rect_channel(ws, data, styles, gcl, col_offset=0):
 def _write_trapezoid_channel(ws, data, styles, gcl, col_offset=0):
     """写入梯形明渠表到 ws，从 col_offset+1 列开始"""
     C = col_offset
-    NCOLS = 13
     R1 = 1
-
-    headers = [
-        ("流量段",      None),
-        ("设计流量",    "m³/s"),
-        ("加大流量",    "m³/s"),
-        ("1/坡降",      None),
-        ("糙率",        None),
-        ("边坡系数m",   None),
-        ("底宽B",       "m"),
-        ("高度H",       "m"),
-        ("壁厚t",       "m"),
-        ("拉杆尺寸",     "m"),
-        ("设计水深H₁",  "m"),
-        ("加大水深H₂",  "m"),
-        ("设计流速",    "m/s"),
-    ]
-    col_widths = [14, 12, 12, 12, 10, 12, 10, 10, 10, 12, 13, 13, 12]
+    columns = _trapezoid_channel_column_defs(_open_channel_include_increase_columns(data))
+    headers = _table_headers(columns)
+    col_widths = _table_excel_widths(columns)
+    NCOLS = len(columns)
 
     _write_title(ws, R1, C + 1, C + NCOLS, "梯形明渠断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
@@ -1764,11 +1994,7 @@ def _write_trapezoid_channel(ws, data, styles, gcl, col_offset=0):
 
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
-        vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-                d["n"], d.get("m", ""),
-                d.get("B", ""), d.get("H", ""), d.get("t", ""),
-                d.get("tie_rod", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", "")]
+        vals = _table_row_values(d, columns)
         for ci, v in enumerate(vals):
             _sc(ws, r, C + 1 + ci, v, styles)
 
@@ -1781,24 +2007,11 @@ def _write_trapezoid_channel(ws, data, styles, gcl, col_offset=0):
 
 def _write_u_channel(ws, data, styles, gcl, col_offset=0):
     C = col_offset
-    NCOLS = 12
     R1 = 1
-
-    headers = [
-        ("流量段", None),
-        ("设计流量", "m³/s"),
-        ("加大流量", "m³/s"),
-        ("1/底坡", None),
-        ("糙率", None),
-        ("半径R", "m"),
-        ("外倾角α", "°"),
-        ("圆心角θ", "°"),
-        ("高度H", "m"),
-        ("设计水深H1", "m"),
-        ("加大水深H2", "m"),
-        ("设计流速", "m/s"),
-    ]
-    col_widths = [14, 12, 12, 12, 10, 10, 10, 10, 12, 13, 13, 12]
+    columns = _u_channel_column_defs(_open_channel_include_increase_columns(data))
+    headers = _table_headers(columns)
+    col_widths = _table_excel_widths(columns)
+    NCOLS = len(columns)
 
     _write_title(ws, R1, C + 1, C + NCOLS, "U形明渠断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
@@ -1808,12 +2021,7 @@ def _write_u_channel(ws, data, styles, gcl, col_offset=0):
 
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
-        vals = [
-            d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-            d["n"], d.get("R", ""), d.get("alpha_deg", ""), d.get("theta_deg", ""),
-            d.get("H", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", "")
-        ]
+        vals = _table_row_values(d, columns)
         for ci, v in enumerate(vals):
             _sc(ws, r, C + 1 + ci, v, styles)
 
@@ -1826,10 +2034,9 @@ def _write_u_channel(ws, data, styles, gcl, col_offset=0):
 
 def _write_tunnel(ws, data, styles, gcl, col_offset=0):
     C = col_offset
-    NCOLS = 14
     R1 = 1
 
-    headers = [
+    headers_full = [
         ("流量段",      None),
         ("设计流量",    "m³/s"),
         ("加大流量",    "m³/s"),
@@ -1845,7 +2052,26 @@ def _write_tunnel(ws, data, styles, gcl, col_offset=0):
         ("加大水深H₂",  "m"),
         ("设计流速",    "m/s"),
     ]
-    col_widths = [14, 12, 12, 12, 12, 10, 10, 10, 12, 11, 13, 13, 13, 12]
+    col_widths_full = [14, 12, 12, 12, 12, 10, 10, 10, 12, 11, 13, 13, 13, 12]
+    rows_full = []
+    for d in data:
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
+            d["rock_class"],
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"],
+            d.get("B", ""), d.get("H_straight", ""), d.get("R_arch", ""),
+            d["t0"], d["t"],
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
+        ])
+    headers, col_widths, rows, merge_groups = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+        merge_groups=[([0, 1, 2], 3)] if len(data) >= 3 else None,
+    )
+    NCOLS = len(headers)
 
     _write_title(ws, R1, C + 1, C + NCOLS, "圆拱直墙型隧洞断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
@@ -1853,32 +2079,25 @@ def _write_tunnel(ws, data, styles, gcl, col_offset=0):
     for i, w in enumerate(col_widths):
         _set_col_width(ws, C + 1 + i, w, gcl)
 
-    # 数据：每 3 行为一组（III/IV/V）
-    num_segments = len(data) // 3 if data else 0
+    num_segments = len(rows) // 3 if rows else 0
+    merged_cols = {col for cols, _span in merge_groups or [] for col in cols}
     for si in range(num_segments):
         base_idx = si * 3
         r_start = R1 + 3 + base_idx
         r_end = r_start + 2
-        d0 = data[base_idx]
+        first_vals = rows[base_idx]
 
-        # 合并列: 流量段、设计流量、加大流量
-        _merge_vertical(ws, r_start, r_end, C + 1, d0["name"], styles)
-        _merge_vertical(ws, r_start, r_end, C + 2, d0["Q"], styles)
-        _merge_vertical(ws, r_start, r_end, C + 3, d0.get("Q_inc", ""), styles)
+        for cols, _span in merge_groups or []:
+            for col_idx in cols:
+                _merge_vertical(ws, r_start, r_end, C + 1 + col_idx, first_vals[col_idx], styles)
 
         for j in range(3):
-            d = data[base_idx + j]
             r = r_start + j
-            vals = [
-                d["rock_class"],
-                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-                d["n"],
-                d.get("B", ""), d.get("H_straight", ""), d.get("R_arch", ""),
-                d["t0"], d["t"],
-                d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
-            ]
+            vals = rows[base_idx + j]
             for ci, v in enumerate(vals):
-                _sc(ws, r, C + 4 + ci, v, styles)
+                if ci in merged_cols:
+                    continue
+                _sc(ws, r, C + 1 + ci, v, styles)
 
     return NCOLS
 
@@ -1892,10 +2111,9 @@ _write_tunnel_arch = _write_tunnel
 
 def _write_tunnel_circular(ws, data, styles, gcl, col_offset=0):
     C = col_offset
-    NCOLS = 12
     R1 = 1
 
-    headers = [
+    headers_full = [
         ("流量段",      None),
         ("设计流量",    "m³/s"),
         ("加大流量",    "m³/s"),
@@ -1909,7 +2127,25 @@ def _write_tunnel_circular(ws, data, styles, gcl, col_offset=0):
         ("加大水深H₂",  "m"),
         ("设计流速",    "m/s"),
     ]
-    col_widths = [14, 12, 12, 12, 12, 10, 10, 11, 11, 13, 13, 12]
+    col_widths_full = [14, 12, 12, 12, 12, 10, 10, 11, 11, 13, 13, 12]
+    rows_full = []
+    for d in data:
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
+            d["rock_class"],
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"],
+            d.get("D", ""), d["t0"], d["t"],
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
+        ])
+    headers, col_widths, rows, merge_groups = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+        merge_groups=[([0, 1, 2], 3)] if len(data) >= 3 else None,
+    )
+    NCOLS = len(headers)
 
     _write_title(ws, R1, C + 1, C + NCOLS, "圆形隧洞断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
@@ -1917,30 +2153,25 @@ def _write_tunnel_circular(ws, data, styles, gcl, col_offset=0):
     for i, w in enumerate(col_widths):
         _set_col_width(ws, C + 1 + i, w, gcl)
 
-    num_segments = len(data) // 3 if data else 0
+    num_segments = len(rows) // 3 if rows else 0
+    merged_cols = {col for cols, _span in merge_groups or [] for col in cols}
     for si in range(num_segments):
         base_idx = si * 3
         r_start = R1 + 3 + base_idx
         r_end = r_start + 2
-        d0 = data[base_idx]
+        first_vals = rows[base_idx]
 
-        _merge_vertical(ws, r_start, r_end, C + 1, d0["name"], styles)
-        _merge_vertical(ws, r_start, r_end, C + 2, d0["Q"], styles)
-        _merge_vertical(ws, r_start, r_end, C + 3, d0.get("Q_inc", ""), styles)
+        for cols, _span in merge_groups or []:
+            for col_idx in cols:
+                _merge_vertical(ws, r_start, r_end, C + 1 + col_idx, first_vals[col_idx], styles)
 
         for j in range(3):
-            d = data[base_idx + j]
             r = r_start + j
-            vals = [
-                d["rock_class"],
-                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-                d["n"],
-                d.get("D", ""),
-                d["t0"], d["t"],
-                d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
-            ]
+            vals = rows[base_idx + j]
             for ci, v in enumerate(vals):
-                _sc(ws, r, C + 4 + ci, v, styles)
+                if ci in merged_cols:
+                    continue
+                _sc(ws, r, C + 1 + ci, v, styles)
 
     return NCOLS
 
@@ -1951,10 +2182,9 @@ def _write_tunnel_circular(ws, data, styles, gcl, col_offset=0):
 
 def _write_tunnel_horseshoe(ws, data, styles, gcl, col_offset=0, title=None):
     C = col_offset
-    NCOLS = 12
     R1 = 1
 
-    headers = [
+    headers_full = [
         ("流量段",      None),
         ("设计流量",    "m³/s"),
         ("加大流量",    "m³/s"),
@@ -1968,7 +2198,25 @@ def _write_tunnel_horseshoe(ws, data, styles, gcl, col_offset=0, title=None):
         ("加大水深H₂",  "m"),
         ("设计流速",    "m/s"),
     ]
-    col_widths = [14, 12, 12, 12, 12, 10, 10, 11, 11, 13, 13, 12]
+    col_widths_full = [14, 12, 12, 12, 12, 10, 10, 11, 11, 13, 13, 12]
+    rows_full = []
+    for d in data:
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
+            d["rock_class"],
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"],
+            d.get("R", ""), d["t0"], d["t"],
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
+        ])
+    headers, col_widths, rows, merge_groups = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+        merge_groups=[([0, 1, 2], 3)] if len(data) >= 3 else None,
+    )
+    NCOLS = len(headers)
 
     _write_title(ws, R1, C + 1, C + NCOLS, title or "马蹄形隧洞断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
@@ -1976,30 +2224,25 @@ def _write_tunnel_horseshoe(ws, data, styles, gcl, col_offset=0, title=None):
     for i, w in enumerate(col_widths):
         _set_col_width(ws, C + 1 + i, w, gcl)
 
-    num_segments = len(data) // 3 if data else 0
+    num_segments = len(rows) // 3 if rows else 0
+    merged_cols = {col for cols, _span in merge_groups or [] for col in cols}
     for si in range(num_segments):
         base_idx = si * 3
         r_start = R1 + 3 + base_idx
         r_end = r_start + 2
-        d0 = data[base_idx]
+        first_vals = rows[base_idx]
 
-        _merge_vertical(ws, r_start, r_end, C + 1, d0["name"], styles)
-        _merge_vertical(ws, r_start, r_end, C + 2, d0["Q"], styles)
-        _merge_vertical(ws, r_start, r_end, C + 3, d0.get("Q_inc", ""), styles)
+        for cols, _span in merge_groups or []:
+            for col_idx in cols:
+                _merge_vertical(ws, r_start, r_end, C + 1 + col_idx, first_vals[col_idx], styles)
 
         for j in range(3):
-            d = data[base_idx + j]
             r = r_start + j
-            vals = [
-                d["rock_class"],
-                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-                d["n"],
-                d.get("R", ""),
-                d["t0"], d["t"],
-                d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
-            ]
+            vals = rows[base_idx + j]
             for ci, v in enumerate(vals):
-                _sc(ws, r, C + 4 + ci, v, styles)
+                if ci in merged_cols:
+                    continue
+                _sc(ws, r, C + 1 + ci, v, styles)
 
     return NCOLS
 
@@ -2010,10 +2253,9 @@ def _write_tunnel_horseshoe(ws, data, styles, gcl, col_offset=0, title=None):
 
 def _write_aqueduct(ws, data, styles, gcl, col_offset=0):
     C = col_offset
-    NCOLS = 12
     R1 = 1
 
-    headers = [
+    headers_full = [
         ("流量段",     None),
         ("设计流量",   "m³/s"),
         ("加大流量",   "m³/s"),
@@ -2027,7 +2269,23 @@ def _write_aqueduct(ws, data, styles, gcl, col_offset=0):
         ("设计流速",   "m/s"),
         ("高宽比",     None),
     ]
-    col_widths = [14, 12, 12, 12, 10, 10, 10, 10, 13, 13, 12, 10]
+    col_widths_full = [14, 12, 12, 12, 10, 10, 10, 10, 13, 13, 12, 10]
+    rows_full = []
+    for d in data:
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"], d.get("R", ""), d.get("H", ""), d.get("t", ""),
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
+            d.get("HB_ratio", ""),
+        ])
+    headers, col_widths, rows, _merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+    )
+    NCOLS = len(headers)
 
     _write_title(ws, R1, C + 1, C + NCOLS, "U形渡槽断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
@@ -2035,13 +2293,8 @@ def _write_aqueduct(ws, data, styles, gcl, col_offset=0):
     for i, w in enumerate(col_widths):
         _set_col_width(ws, C + 1 + i, w, gcl)
 
-    for ri, d in enumerate(data):
+    for ri, vals in enumerate(rows):
         r = R1 + 3 + ri
-        vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-                d["n"], d.get("R", ""), d.get("H", ""), d.get("t", ""),
-                d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
-                d.get("HB_ratio", "")]
         for ci, v in enumerate(vals):
             _sc(ws, r, C + 1 + ci, v, styles)
 
@@ -2063,8 +2316,7 @@ def _write_aqueduct_rect(ws, data, styles, gcl, col_offset=0):
     R1 = 1
 
     if has_chamfer:
-        NCOLS = 13
-        headers = [
+        headers_full = [
             ("流量段",     None),
             ("设计流量",   "m³/s"),
             ("加大流量",   "m³/s"),
@@ -2079,10 +2331,9 @@ def _write_aqueduct_rect(ws, data, styles, gcl, col_offset=0):
             ("加大水深H₂", "m"),
             ("设计流速",   "m/s"),
         ]
-        col_widths = [14, 12, 12, 12, 10, 10, 10, 10, 11, 11, 13, 13, 12]
+        col_widths_full = [14, 12, 12, 12, 10, 10, 10, 10, 11, 11, 13, 13, 12]
     else:
-        NCOLS = 11
-        headers = [
+        headers_full = [
             ("流量段",     None),
             ("设计流量",   "m³/s"),
             ("加大流量",   "m³/s"),
@@ -2095,7 +2346,25 @@ def _write_aqueduct_rect(ws, data, styles, gcl, col_offset=0):
             ("加大水深H₂", "m"),
             ("设计流速",   "m/s"),
         ]
-        col_widths = [14, 12, 12, 12, 10, 10, 10, 10, 13, 13, 12]
+        col_widths_full = [14, 12, 12, 12, 10, 10, 10, 10, 13, 13, 12]
+
+    rows_full = []
+    for d in data:
+        vals = [d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
+                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+                d["n"], d.get("B", ""), d.get("H", ""), d.get("t", "")]
+        if has_chamfer:
+            vals += [d.get("chamfer_angle", ""), d.get("chamfer_length", "")]
+        vals += [d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", "")]
+        rows_full.append(vals)
+
+    headers, col_widths, rows, _merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+    )
+    NCOLS = len(headers)
 
     _write_title(ws, R1, C + 1, C + NCOLS, "矩形渡槽断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
@@ -2103,14 +2372,8 @@ def _write_aqueduct_rect(ws, data, styles, gcl, col_offset=0):
     for i, w in enumerate(col_widths):
         _set_col_width(ws, C + 1 + i, w, gcl)
 
-    for ri, d in enumerate(data):
+    for ri, vals in enumerate(rows):
         r = R1 + 3 + ri
-        vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-                d["n"], d.get("B", ""), d.get("H", ""), d.get("t", "")]
-        if has_chamfer:
-            vals += [d.get("chamfer_angle", ""), d.get("chamfer_length", "")]
-        vals += [d.get("H1", ""), d.get("H2", ""), d.get("V", "")]
         for ci, v in enumerate(vals):
             _sc(ws, r, C + 1 + ci, v, styles)
 
@@ -2123,10 +2386,9 @@ def _write_aqueduct_rect(ws, data, styles, gcl, col_offset=0):
 
 def _write_rect_culvert(ws, data, styles, gcl, col_offset=0):
     C = col_offset
-    NCOLS = 13
     R1 = 1
 
-    headers = [
+    headers_full = [
         ("流量段",     None),
         ("设计流量",   "m³/s"),
         ("加大流量",   "m³/s"),
@@ -2141,7 +2403,23 @@ def _write_rect_culvert(ws, data, styles, gcl, col_offset=0):
         ("加大水深H₂", "m"),
         ("设计流速",   "m/s"),
     ]
-    col_widths = [14, 12, 12, 12, 10, 10, 10, 11, 11, 11, 13, 13, 12]
+    col_widths_full = [14, 12, 12, 12, 10, 10, 10, 11, 11, 11, 13, 13, 12]
+    rows_full = []
+    for d in data:
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"], d.get("B", ""), d.get("H", ""),
+            d.get("t0", ""), d.get("t1", ""), d.get("t2", ""),
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
+        ])
+    headers, col_widths, rows, _merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+    )
+    NCOLS = len(headers)
 
     _write_title(ws, R1, C + 1, C + NCOLS, "矩形暗涵断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
@@ -2149,13 +2427,8 @@ def _write_rect_culvert(ws, data, styles, gcl, col_offset=0):
     for i, w in enumerate(col_widths):
         _set_col_width(ws, C + 1 + i, w, gcl)
 
-    for ri, d in enumerate(data):
+    for ri, vals in enumerate(rows):
         r = R1 + 3 + ri
-        vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-                d["n"], d.get("B", ""), d.get("H", ""),
-                d.get("t0", ""), d.get("t1", ""), d.get("t2", ""),
-                d.get("H1", ""), d.get("H2", ""), d.get("V", "")]
         for ci, v in enumerate(vals):
             _sc(ws, r, C + 1 + ci, v, styles)
 
@@ -2168,22 +2441,11 @@ def _write_rect_culvert(ws, data, styles, gcl, col_offset=0):
 
 def _write_circular_pipe(ws, data, styles, gcl, col_offset=0):
     C = col_offset
-    NCOLS = 10
     R1 = 1
-
-    headers = [
-        ("流量段",      None),
-        ("设计流量",    "m³/s"),
-        ("加大流量",    "m³/s"),
-        ("1/底坡",      None),
-        ("糙率",        None),
-        ("直径D",       "m"),
-        ("管道材质",    None),
-        ("设计水深H₁",  "m"),
-        ("加大水深H₂",  "m"),
-        ("设计流速v",   "m/s"),
-    ]
-    col_widths = [14, 12, 12, 12, 10, 10, 15, 13, 13, 12]
+    columns = _circular_channel_column_defs(_open_channel_include_increase_columns(data))
+    headers = _table_headers(columns)
+    col_widths = _table_excel_widths(columns)
+    NCOLS = len(columns)
 
     _write_title(ws, R1, C + 1, C + NCOLS, "圆管涵断面尺寸及水力要素表", styles)
     for i, (name, unit) in enumerate(headers):
@@ -2193,10 +2455,7 @@ def _write_circular_pipe(ws, data, styles, gcl, col_offset=0):
 
     for ri, d in enumerate(data):
         r = R1 + 3 + ri
-        vals = [d["name"], d["Q"], d.get("Q_inc", ""),
-                f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-                d["n"], d.get("D", ""), d.get("pipe_material", ""),
-                d.get("H1", ""), d.get("H2", ""), d.get("V", "")]
+        vals = _table_row_values(d, columns)
         for ci, v in enumerate(vals):
             _sc(ws, r, C + 1 + ci, v, styles)
 
@@ -2800,217 +3059,215 @@ def _dxf_col_widths(excel_widths):
 
 def _dxf_build_rect_channel(data):
     title = "矩形明渠断面尺寸及水力要素表"
-    headers = [
-        ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
-        ("1/底坡", None), ("糙率", None), ("底宽B", "m"), ("高度H", "m"),
-        ("壁厚t", "m"), ("拉杆尺寸", "m"),
-        ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速", "m/s"),
-    ]
-    col_widths = _dxf_col_widths([12, 10, 10, 10, 8, 8, 9, 8, 10, 12, 12, 10])
+    columns = _rect_channel_column_defs(_open_channel_include_increase_columns(data))
+    headers = _table_headers(columns)
+    col_widths = _table_dxf_widths(columns)
     rows = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-            d["n"], d.get("B", ""), d.get("H", ""), d.get("t", ""),
-            d.get("tie_rod", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
-        ])
+        rows.append(_table_row_values(d, columns))
     return title, headers, col_widths, rows, None
 
 
 def _dxf_build_trapezoid_channel(data):
     title = "梯形明渠断面尺寸及水力要素表"
-    headers = [
-        ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
-        ("1/坡降", None), ("糙率", None), ("边坡系数m", None),
-        ("底宽B", "m"), ("高度H", "m"), ("壁厚t", "m"), ("拉杆尺寸", "m"),
-        ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速", "m/s"),
-    ]
-    col_widths = _dxf_col_widths([12, 10, 10, 10, 8, 10, 8, 9, 8, 10, 12, 12, 10])
+    columns = _trapezoid_channel_column_defs(_open_channel_include_increase_columns(data))
+    headers = _table_headers(columns)
+    col_widths = _table_dxf_widths(columns)
     rows = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-            d["n"], d.get("m", ""),
-            d.get("B", ""), d.get("H", ""), d.get("t", ""),
-            d.get("tie_rod", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
-        ])
+        rows.append(_table_row_values(d, columns))
     return title, headers, col_widths, rows, None
 
 
 def _dxf_build_u_channel(data):
     title = "U形明渠断面尺寸及水力要素表"
-    headers = [
-        ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
-        ("1/底坡", None), ("糙率", None), ("半径R", "m"),
-        ("外倾角α", "°"), ("圆心角θ", "°"),
-        ("高度H", "m"), ("设计水深H1", "m"), ("加大水深H2", "m"), ("设计流速", "m/s"),
-    ]
-    col_widths = _dxf_col_widths([14, 10, 10, 10, 8, 8, 8, 8, 10, 10, 10, 10])
+    columns = _u_channel_column_defs(_open_channel_include_increase_columns(data))
+    headers = _table_headers(columns)
+    col_widths = _table_dxf_widths(columns)
     rows = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-            d["n"], d.get("R", ""), d.get("alpha_deg", ""), d.get("theta_deg", ""),
-            d.get("H", ""), d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
-        ])
+        rows.append(_table_row_values(d, columns))
     return title, headers, col_widths, rows, None
 
 
 def _dxf_build_tunnel(data):
     title = "圆拱直墙型隧洞断面尺寸及水力要素表"
-    headers = [
+    headers_full = [
         ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("围岩类型", None), ("1/底坡", None), ("糙率", None),
         ("底宽B", "m"), ("直墙高H", "m"), ("顶拱半径R", "m"),
         ("底板厚t₀", "m"), ("边墙顶拱厚t", "m"),
         ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速", "m/s"),
     ]
-    col_widths = _dxf_col_widths([12, 10, 10, 10, 10, 8, 8, 9, 11, 10, 12, 12, 12, 10])
-    rows = []
+    col_widths_full = _dxf_col_widths([12, 10, 10, 10, 10, 8, 8, 9, 11, 10, 12, 12, 12, 10])
+    rows_full = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
             d["rock_class"],
             f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"],
             d.get("B", ""), d.get("H_straight", ""), d.get("R_arch", ""),
             d["t0"], d["t"],
-            d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
         ])
-    # 隧洞每3行为一组（III/IV/V类围岩），前3列合并
-    merge = [([0, 1, 2], 3)] if len(data) >= 3 else None
+    headers, col_widths, rows, merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+        merge_groups=[([0, 1, 2], 3)] if len(data) >= 3 else None,
+    )
     return title, headers, col_widths, rows, merge
 
 
 def _dxf_build_tunnel_circular(data):
     title = "圆形隧洞断面尺寸及水力要素表"
-    headers = [
+    headers_full = [
         ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("围岩类型", None), ("1/底坡", None), ("糙率", None),
         ("直径D", "m"), ("底板厚t₀", "m"), ("衬砌厚t", "m"),
         ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速", "m/s"),
     ]
-    col_widths = _dxf_col_widths([12, 10, 10, 10, 10, 8, 8, 10, 10, 12, 12, 10])
-    rows = []
+    col_widths_full = _dxf_col_widths([12, 10, 10, 10, 10, 8, 8, 10, 10, 12, 12, 10])
+    rows_full = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
             d["rock_class"],
             f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"],
             d.get("D", ""), d["t0"], d["t"],
-            d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
         ])
-    merge = [([0, 1, 2], 3)] if len(data) >= 3 else None
+    headers, col_widths, rows, merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+        merge_groups=[([0, 1, 2], 3)] if len(data) >= 3 else None,
+    )
     return title, headers, col_widths, rows, merge
 
 
 def _dxf_build_tunnel_horseshoe(data, title=None):
     title = title or "马蹄形隧洞断面尺寸及水力要素表"
-    headers = [
+    headers_full = [
         ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("围岩类型", None), ("1/底坡", None), ("糙率", None),
         ("半径R", "m"), ("底板厚t₀", "m"), ("衬砌厚t", "m"),
         ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速", "m/s"),
     ]
-    col_widths = _dxf_col_widths([12, 10, 10, 10, 10, 8, 8, 10, 10, 12, 12, 10])
-    rows = []
+    col_widths_full = _dxf_col_widths([12, 10, 10, 10, 10, 8, 8, 10, 10, 12, 12, 10])
+    rows_full = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
             d["rock_class"],
             f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"],
             d.get("R", ""), d["t0"], d["t"],
-            d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
         ])
-    merge = [([0, 1, 2], 3)] if len(data) >= 3 else None
+    headers, col_widths, rows, merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+        merge_groups=[([0, 1, 2], 3)] if len(data) >= 3 else None,
+    )
     return title, headers, col_widths, rows, merge
 
 
 def _dxf_build_aqueduct_u(data):
     title = "U形渡槽断面尺寸及水力要素表"
-    headers = [
+    headers_full = [
         ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("1/底坡", None), ("糙率", None), ("半径R", None),
         ("槽深H", "m"), ("壁厚t", "m"),
         ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速", "m/s"),
         ("高宽比", None),
     ]
-    col_widths = _dxf_col_widths([12, 10, 10, 10, 8, 8, 8, 8, 12, 12, 10, 8])
-    rows = []
+    col_widths_full = _dxf_col_widths([12, 10, 10, 10, 8, 8, 8, 8, 12, 12, 10, 8])
+    rows_full = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
             f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"], d.get("R", ""), d.get("H", ""), d.get("t", ""),
-            d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
             d.get("HB_ratio", ""),
         ])
+    headers, col_widths, rows, _merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+    )
     return title, headers, col_widths, rows, None
 
 
 def _dxf_build_aqueduct_rect(data):
     title = "矩形渡槽断面尺寸及水力要素表"
-    headers = [
+    headers_full = [
         ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("1/底坡", None), ("糙率", None), ("底宽B", "m"),
         ("槽深H", "m"), ("壁厚t", "m"),
         ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速", "m/s"),
     ]
-    col_widths = _dxf_col_widths([12, 10, 10, 10, 8, 8, 8, 8, 12, 12, 10])
-    rows = []
+    col_widths_full = _dxf_col_widths([12, 10, 10, 10, 8, 8, 8, 8, 12, 12, 10])
+    rows_full = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
             f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"], d.get("B", ""), d.get("H", ""), d.get("t", ""),
-            d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
         ])
+    headers, col_widths, rows, _merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+    )
     return title, headers, col_widths, rows, None
 
 
 def _dxf_build_rect_culvert(data):
     title = "矩形暗涵断面尺寸及水力要素表"
-    headers = [
+    headers_full = [
         ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
         ("1/底坡", None), ("糙率", None), ("底宽B", "m"),
         ("高度H", "m"), ("底板厚t₀", "m"), ("边墙厚t₁", "m"), ("顶板厚t₂", "m"),
         ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速", "m/s"),
     ]
-    col_widths = _dxf_col_widths([12, 10, 10, 10, 8, 8, 8, 10, 10, 10, 12, 12, 10])
-    rows = []
+    col_widths_full = _dxf_col_widths([12, 10, 10, 10, 8, 8, 8, 10, 10, 10, 12, 12, 10])
+    rows_full = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
             f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
             d["n"], d.get("B", ""), d.get("H", ""),
             d.get("t0", ""), d.get("t1", ""), d.get("t2", ""),
-            d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
         ])
+    headers, col_widths, rows, _merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+    )
     return title, headers, col_widths, rows, None
 
 
 def _dxf_build_circular_pipe(data):
     title = "圆管涵断面尺寸及水力要素表"
-    headers = [
-        ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
-        ("1/底坡", None), ("糙率", None), ("直径D", "m"),
-        ("管道材质", None),
-        ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速v", "m/s"),
-    ]
-    col_widths = _dxf_col_widths([12, 10, 10, 10, 8, 8, 14, 12, 12, 10])
+    columns = _circular_channel_column_defs(_open_channel_include_increase_columns(data))
+    headers = _table_headers(columns)
+    col_widths = _table_dxf_widths(columns)
     rows = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
-            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
-            d["n"], d.get("D", ""), d.get("pipe_material", ""),
-            d.get("H1", ""), d.get("H2", ""), d.get("V", ""),
-        ])
+        rows.append(_table_row_values(d, columns))
     return title, headers, col_widths, rows, None
 
 

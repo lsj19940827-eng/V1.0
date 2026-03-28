@@ -2,7 +2,7 @@
 
 > **版本**: v1.3  
 > **创建日期**: 2026-02-22  
-> **最后更新**: 2026-03-22  
+> **最后更新**: 2026-03-27  
 > **状态**: 已实现（完成度 100%，含 U形）
 
 ---
@@ -220,10 +220,11 @@ class SectionType(Enum):
 
 #### 4.2.5 主计算函数 `quick_calculate_trapezoidal`
 
-**参数**：`Q, m, n, slope_inv, v_min, v_max, manual_beta, manual_b, manual_increase_percent`
+**参数**：`Q, m, n, slope_inv, v_min, v_max, manual_beta, manual_b, manual_increase_percent, preserve_manual_b`
 
 **设计方法优先级**：
 1. **指定底宽优先** — 若指定 `manual_b`，二分法反算水深，验证流速+宽深比
+   - 当 `preserve_manual_b=True` 且 `manual_b` 可反算出有效水深时，保留输入底宽，不再因为流速/宽深比约束静默回退到附录E；改为返回约束警告
 2. **指定宽深比次之** — 若指定 `manual_beta`，解析法计算尺寸，验证流速
 3. **附录E算法兜底** — 自动计算水力最佳/实用经济断面
 
@@ -242,7 +243,13 @@ class SectionType(Enum):
 - 渠道尺寸：`Fb`, `h_prime`
 - 状态：`success`, `error_message`, `design_method`
 - 附录E：`appendix_e_schemes`（方案列表，每项含 alpha/eta/h/b/beta/A/V/area_increase/scheme_type）
-- 标记：`used_manual_beta`, `used_manual_b`
+- 标记：`used_manual_beta`, `used_manual_b`, `preserved_manual_b`, `constraint_warnings`
+
+**当前实现同步说明（2026-03-27）**：
+- 合并面板批量链路中，只要表1的明渠矩形/梯形行显式填写了底宽 `B`，批量计算就会把该 `B` 作为锁定尺寸传入内核。
+- 上述显式 `B` 锁定当前不区分数据来源：真实 Excel 导入、示例数据、手工录入、复制行，以及工程保存/重开后恢复的数据，都会走同一口径。
+- 当锁定 `B` 能反算出有效水深时，内核保留该 `B` 并继续完成设计/加大流量计算；若 `β` 或流速超出经验/校核范围，通过 `constraint_warnings` 返回警告，不再静默改写为附录E新底宽。
+- 当锁定 `B` 无法反算出有效水深时，返回失败并明确标注“未自动改写”，由批量面板维持失败锁定状态。
 
 #### 4.2.6 矩形明渠 `quick_calculate_rectangular`
 

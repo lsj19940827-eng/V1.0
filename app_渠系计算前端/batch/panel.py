@@ -155,6 +155,9 @@ INPUT_HEADERS = [
     "管材",
 ]
 
+_EXCEL_IMPORTED_ROW_ROLE = getattr(Qt, "UserRole", 0x0100) + 101
+_IMPORTED_RATIO_WARNING_TOLERANCE = 0.01
+
 # 输入表头悬浮提示（与原版一致）
 _HEADER_TOOLTIPS = {
     "底宽B(m)": (
@@ -360,6 +363,7 @@ class BatchPanel(QWidget):
         self._has_opened_template = False
         self._is_sample_data = False
         self._loading_sample = False
+        self._excel_import_session_active = False
         self._has_calc_errors = False
         self._table_undo_stack = []
         self._table_redo_stack = []
@@ -450,6 +454,7 @@ class BatchPanel(QWidget):
         _sample_menu.addAction(Action("示例四（飞龙分干渠）", triggered=self._add_sample_data_4))
         _sample_menu.addAction(Action("示例五（茶亭支渠）", triggered=self._add_sample_data_5))
         _sample_menu.addAction(Action("示例六（合作干渠）", triggered=self._add_sample_data_6))
+        _sample_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=self._add_sample_data_7))
         btn_sample = DropDownPushButton("示例数据")
         btn_sample.setMenu(_sample_menu)
         _template_menu = RoundMenu(parent=self)
@@ -459,6 +464,7 @@ class BatchPanel(QWidget):
         _template_menu.addAction(Action("示例四（飞龙分干渠）", triggered=lambda: self._open_excel_template_file("feilong")))
         _template_menu.addAction(Action("示例五（茶亭支渠）", triggered=lambda: self._open_excel_template_file("chating")))
         _template_menu.addAction(Action("示例六（合作干渠）", triggered=lambda: self._open_excel_template_file("hezuo")))
+        _template_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=lambda: self._open_excel_template_file("ganjiagou")))
         btn_template = DropDownPushButton("打开Excel模板")
         btn_template.setMenu(_template_menu)
         btn_import = PrimaryPushButton("导入Excel"); btn_import.clicked.connect(self._import_from_excel)
@@ -830,6 +836,9 @@ class BatchPanel(QWidget):
         elif template_key == "hezuo":
             title = "示例六（合作干渠）"
             desc = "合作干渠示例数据文件"
+        elif template_key == "ganjiagou":
+            title = "示例七（甘家沟充水渠）"
+            desc = "甘家沟充水渠示例数据文件"
         else:
             title = "示例一（综合演示）"
             desc = "综合演示模板（多流量段批量计算）"
@@ -865,6 +874,8 @@ class BatchPanel(QWidget):
             template_name = "茶亭支渠批量计算.xlsx"
         elif template_key == "hezuo":
             template_name = "合作干渠批量计算用表.xlsx"
+        elif template_key == "ganjiagou":
+            template_name = "甘家沟充水渠批量计算用表.xlsx"
         else:
             template_name = "多流量段批量计算_导入Excel（模板）.xlsx"
         if getattr(sys, 'frozen', False):
@@ -920,6 +931,7 @@ class BatchPanel(QWidget):
         self.input_table.setRowCount(0)
         self._last_calc_snapshot = None
         self._last_calc_detail = None
+        self._set_excel_import_session_active(False)
         if not self._loading_sample:
             self._is_sample_data = False
         # 同步清空结果（防止清空输入后仍能导出/查看旧结果）
@@ -1195,6 +1207,24 @@ class BatchPanel(QWidget):
             base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         return os.path.join(base, "data", "合作干渠批量计算用表.xlsx")
 
+    def _add_sample_data_7(self):
+        """加载示例七：甘家沟充水渠数据（从data目录读取xlsx文件）"""
+        path = self._get_sample7_path()
+        if not os.path.exists(path):
+            fluent_info(self, "错误", f"未找到示例七文件：\n{path}")
+            return
+        self._do_load_from_filepath(path, is_sample=True,
+                                    sample_title="示例七",
+                                    sample_desc="甘家沟充水渠示例数据")
+
+    def _get_sample7_path(self):
+        """获取示例七xlsx文件路径（兼容开发环境和打包环境）"""
+        if getattr(sys, 'frozen', False):
+            base = sys._MEIPASS
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return os.path.join(base, "data", "甘家沟充水渠批量计算用表.xlsx")
+
     # ================================================================
     # 结果区
     # ================================================================
@@ -1304,7 +1334,7 @@ class BatchPanel(QWidget):
         detail_lines.append("-" * 80)
         detail_lines.append("")
 
-        for values in input_rows:
+        for row_idx, values in enumerate(input_rows):
             values = self._normalize_row(values, len(INPUT_HEADERS))
             section_type = str(values[3]).strip()
             if not section_type:
@@ -1408,13 +1438,21 @@ class BatchPanel(QWidget):
 
                 # 计算分发
                 use_inc = self.inc_cb.isChecked()
+                preserve_explicit_bottom_width = self._should_preserve_explicit_bottom_width(
+                    section_type, b
+                )
+                preserve_imported_dimensions = self._should_preserve_imported_dimensions(
+                    row_idx, section_type, b
+                )
                 result = self._calculate_single(
                     section_type, Q, n, slope_inv, v_min, v_max,
                     m=m, b=b, beta=beta, R=R, D=D,
                     ducao_depth_ratio=ducao_depth_ratio,
                     chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
                     theta_deg=theta_deg,
-                    manual_increase_percent=0 if not use_inc else None
+                    manual_increase_percent=0 if not use_inc else None,
+                    preserve_explicit_bottom_width=preserve_explicit_bottom_width,
+                    preserve_imported_dimensions=preserve_imported_dimensions,
                 )
                 if result:
                     result['_use_increase'] = use_inc
@@ -1455,7 +1493,9 @@ class BatchPanel(QWidget):
                 item.setTextAlignment(Qt.AlignCenter)
                 # 状态列着色
                 if c == len(RESULT_HEADERS) - 1:
-                    if "✓" in str(val) or "成功" in str(val):
+                    if "⚠" in str(val) or "警告" in str(val):
+                        item.setForeground(QColor("#B26A00"))
+                    elif "✓" in str(val) or "成功" in str(val):
                         item.setForeground(QColor("#2E7D32"))
                     elif "✗" in str(val) or "失败" in str(val) or "错误" in str(val):
                         item.setForeground(QColor("#C62828"))
@@ -1534,7 +1574,9 @@ class BatchPanel(QWidget):
     def _calculate_single(self, section_type, Q, n, slope_inv, v_min, v_max, *,
                           m=0, b=0, beta=0, R=0, D=0,
                           ducao_depth_ratio=0, chamfer_angle=0, chamfer_length=0, theta_deg=0,
-                          manual_increase_percent=None):
+                          manual_increase_percent=None,
+                          preserve_explicit_bottom_width=False,
+                          preserve_imported_dimensions=False):
         """根据断面类型调用对应计算引擎"""
         _inc = manual_increase_percent
         if "明渠-梯形" in section_type:
@@ -1543,14 +1585,16 @@ class BatchPanel(QWidget):
                                     v_min=v_min, v_max=v_max,
                                     manual_b=b if b > 0 else None,
                                     manual_beta=beta if beta > 0 else None,
-                                    manual_increase_percent=_inc)
+                                    manual_increase_percent=_inc,
+                                    preserve_manual_b=preserve_explicit_bottom_width)
         elif "明渠-矩形" in section_type:
             if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
             return mingqu_calculate(Q=Q, m=0, n=n, slope_inv=slope_inv,
                                     v_min=v_min, v_max=v_max,
                                     manual_b=b if b > 0 else None,
                                     manual_beta=beta if beta > 0 else None,
-                                    manual_increase_percent=_inc)
+                                    manual_increase_percent=_inc,
+                                    preserve_manual_b=preserve_explicit_bottom_width)
         elif "明渠-圆形" in section_type:
             if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
             return circular_calculate(Q=Q, n=n, slope_inv=slope_inv,
@@ -1573,6 +1617,15 @@ class BatchPanel(QWidget):
                                      manual_increase_percent=_inc)
         elif "渡槽-矩形" in section_type:
             if not DUCAO_AVAILABLE: return {'success': False, 'error_message': '渡槽计算模块未加载'}
+            if preserve_imported_dimensions:
+                dr = ducao_depth_ratio if ducao_depth_ratio > 0 else None
+                result = ducao_rect_calculate(Q=Q, n=n, slope_inv=slope_inv,
+                                              v_min=v_min, v_max=v_max,
+                                              depth_width_ratio=dr,
+                                              chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
+                                              manual_increase_percent=_inc,
+                                              manual_B=b if b > 0 else None)
+                return self._annotate_rect_aqueduct_imported_b_result(result, b, ducao_depth_ratio)
             dr = ducao_depth_ratio if ducao_depth_ratio > 0 else 0.8
             return ducao_rect_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                         v_min=v_min, v_max=v_max,
@@ -1719,6 +1772,10 @@ class BatchPanel(QWidget):
             Q_inc = h_inc = V_inc = "—"
             Fb_cl_i = Fb_pct_i = "—"
 
+        status_text = "✓ 成功"
+        if result.get('preserved_manual_b') and result.get('constraint_warnings'):
+            status_text = "⚠ 按显式底宽计算" if "明渠" in section_type else "⚠ 按导入尺寸计算"
+
         return [seq, segment, building_name, section_type,
                 fmt(B_val), fmt(D_val), fmt(R_val),
                 fmt(h_design), fmt(V_design), fmt(A_design), fmt(R_hyd), fmt(chi),
@@ -1730,7 +1787,7 @@ class BatchPanel(QWidget):
                 Fb_cl_i if Fb_cl_i == "—" else fmt(Fb_cl_i),
                 fmt_pct(Fb_pct_d),
                 Fb_pct_i if Fb_pct_i == "—" else fmt_pct(Fb_pct_i),
-                "✓ 成功"]
+                status_text]
 
     # ================================================================
     # 详细报告（与原版一致，按断面类型分发）
@@ -2012,6 +2069,10 @@ class BatchPanel(QWidget):
             o.append("")
             o.append("【二、设计方法】")
             o.append(f"  采用方法: {result.get('design_method', '自动计算')}")
+            if result.get('preserved_manual_b'):
+                o.append("  说明: 已按表1显式填写的底宽 B 保留输入尺寸，未自动改写为附录E结果。")
+                for idx, warning in enumerate(result.get('constraint_warnings', []), 1):
+                    o.append(f"  约束提示{idx}: {warning}")
             o.append("")
             o.append("【三、设计结果】")
             o.append(f"  1. 设计底宽 B = {b:.2f} m")
@@ -2087,6 +2148,16 @@ class BatchPanel(QWidget):
             o.append(f"  槽宽 B = {B:.2f} m")
             o.append(f"  深宽比 = {ratio:.3f}")
             o.append(f"  槽高 H = B × 深宽比 = {B:.2f} × {ratio:.3f} = {H_total:.2f} m")
+            if result.get('preserved_manual_b'):
+                o.append("  说明: 已按导入Excel中的底宽 B 锁定计算。")
+                imported_ratio = result.get('imported_depth_width_ratio')
+                if imported_ratio is not None:
+                    o.append(f"  导入深宽比 H/B = {imported_ratio:.3f}（仅作参考）")
+                    o.append(f"  实际深宽比 H/B = {ratio:.3f}")
+                if result.get('constraint_warnings'):
+                    o.append("  处理结论: 底宽 B 优先，导入 H/B 未作为控制条件。")
+                    for idx, warning in enumerate(result.get('constraint_warnings', []), 1):
+                        o.append(f"  约束提示{idx}: {warning}")
             if result.get('has_chamfer', False):
                 o.append(f"  倒角参数: 角度 {result.get('chamfer_angle', 0):.1f}°, 底边 {result.get('chamfer_length', 0):.2f} m")
 
@@ -2641,6 +2712,67 @@ class BatchPanel(QWidget):
         try: return float(s)
         except ValueError: return default
 
+    def _set_excel_import_session_active(self, active: bool):
+        self._excel_import_session_active = bool(active)
+
+    def _mark_row_as_excel_imported(self, row_idx: int, imported: bool):
+        if row_idx < 0 or row_idx >= self.input_table.rowCount():
+            return
+        item = self.input_table.item(row_idx, 0)
+        if item is None:
+            item = QTableWidgetItem(str(row_idx + 1))
+            item.setTextAlignment(Qt.AlignCenter)
+            self.input_table.setItem(row_idx, 0, item)
+        item.setData(_EXCEL_IMPORTED_ROW_ROLE, bool(imported))
+
+    def _is_row_excel_imported(self, row_idx: int) -> bool:
+        if not getattr(self, "_excel_import_session_active", False):
+            return False
+        if row_idx < 0 or row_idx >= self.input_table.rowCount():
+            return False
+        item = self.input_table.item(row_idx, 0)
+        return bool(item and item.data(_EXCEL_IMPORTED_ROW_ROLE))
+
+    def _should_preserve_explicit_bottom_width(self, section_type: str, b_value: float) -> bool:
+        if b_value <= 0:
+            return False
+        return "明渠-梯形" in section_type or "明渠-矩形" in section_type
+
+    def _should_preserve_imported_dimensions(self, row_idx: int, section_type: str, b_value: float) -> bool:
+        if b_value <= 0:
+            return False
+        if "渡槽-矩形" not in section_type:
+            return False
+        return self._is_row_excel_imported(row_idx)
+
+    def _annotate_rect_aqueduct_imported_b_result(self, result: dict, manual_b: float, imported_ratio: float):
+        if not isinstance(result, dict):
+            return result
+
+        imported_ratio_val = imported_ratio if imported_ratio and imported_ratio > 0 else None
+        result['imported_depth_width_ratio'] = imported_ratio_val
+        result.setdefault('constraint_warnings', [])
+
+        if not result.get('success'):
+            result.setdefault('used_manual_b', False)
+            result.setdefault('preserved_manual_b', False)
+            return result
+
+        result['used_manual_b'] = True
+        result['preserved_manual_b'] = True
+
+        warnings = list(result.get('constraint_warnings') or [])
+        actual_ratio = result.get('depth_width_ratio')
+        if (imported_ratio_val is not None
+                and isinstance(actual_ratio, (int, float))
+                and abs(actual_ratio - imported_ratio_val) > _IMPORTED_RATIO_WARNING_TOLERANCE):
+            warnings.append(
+                f"导入 H/B={imported_ratio_val:.3f} 仅作参考，已按导入底宽 B={manual_b:.3f} m 锁定计算；"
+                f"实际 H/B={actual_ratio:.3f}。"
+            )
+        result['constraint_warnings'] = warnings
+        return result
+
     def _normalize_row(self, row, length):
         row = list(row) if row else []
         while len(row) < length:
@@ -2944,11 +3076,13 @@ class BatchPanel(QWidget):
                     if section_type == "有压管道":
                         mapped[7] = ""
                     self._add_row(mapped)
+                    self._mark_row_as_excel_imported(self.input_table.rowCount() - 1, not is_sample)
                 self._auto_detect_flow_segments()
             finally:
                 self._undo_group -= 1
             auto_resize_table(self.input_table)
             self._is_sample_data = is_sample
+            self._set_excel_import_session_active(not is_sample)
             if is_sample:
                 InfoBar.success(sample_title, f"已加载{sample_desc}（{len(data_rows)} 行）",
                                parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
@@ -3335,6 +3469,7 @@ class BatchPanel(QWidget):
             
             # 标记为非示例数据
             self._is_sample_data = False
+            self._set_excel_import_session_active(False)
             
         finally:
             self._loading_project = old_loading

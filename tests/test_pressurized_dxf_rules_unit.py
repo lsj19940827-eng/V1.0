@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import importlib.util
 import importlib
+import sys
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -15,6 +16,9 @@ from PySide6.QtWidgets import QApplication, QLabel, QSizePolicy
 
 def _load_cad_tools():
     root = Path(__file__).resolve().parents[1]
+    root_str = str(root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
     matches = list(root.glob("*/water_profile/cad_tools.py"))
     assert matches, "未找到 cad_tools.py"
     spec = importlib.util.spec_from_file_location("cad_tools_test_mod", matches[0])
@@ -28,6 +32,9 @@ cad_tools = _load_cad_tools()
 
 def _load_summary_module():
     root = Path(__file__).resolve().parents[1]
+    root_str = str(root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
     matches = [p for p in root.glob("*/*.py") if p.name == "生成断面汇总表.py"]
     assert matches, "未找到 生成断面汇总表.py"
     spec = importlib.util.spec_from_file_location("summary_table_test_mod", matches[0])
@@ -637,6 +644,346 @@ def test_pressure_pipe_material_helpers_normalize_legacy_names_to_canonical_key_
     assert summary_mod.normalize_pressure_pipe_material_key("钢筋混凝土管") == "预应力钢筒混凝土管"
     assert summary_mod.normalize_pressure_pipe_material_key("预应力钢筒混凝土管(n=0.014)") == "预应力钢筒混凝土管_n014"
     assert summary_mod.get_pressure_pipe_material_display_name("预应力钢筒混凝土管_n015") == "预应力钢筒混凝土管(n=0.015)"
+
+
+def test_rect_channel_dxf_builder_hides_increase_columns_when_all_rows_disable_increase():
+    title, headers, _col_widths, rows, _merge = summary_mod._dxf_build_rect_channel(
+        [
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "Q_inc": 1.25,
+                "slope_inv": 2000,
+                "n": 0.014,
+                "B": 1.5,
+                "H": 1.39,
+                "t": 0.3,
+                "tie_rod": "0.2×0.2",
+                "H1": 0.789,
+                "H2": 0.936,
+                "V": 0.845,
+                "use_increase": False,
+            }
+        ]
+    )
+
+    assert title == "矩形明渠断面尺寸及水力要素表"
+    assert [name for name, _unit in headers] == [
+        "流量段", "设计流量", "1/底坡", "糙率", "底宽B", "高度H",
+        "壁厚t", "拉杆尺寸", "设计水深H₁", "设计流速",
+    ]
+    assert rows == [[
+        "第一流量段", 1.0, "1/2000", 0.014, 1.5, 1.39, 0.3, "0.2×0.2", 0.789, 0.845
+    ]]
+
+
+def test_rect_channel_dxf_builder_keeps_increase_columns_for_mixed_rows_but_blanks_disabled_values():
+    _title, headers, _col_widths, rows, _merge = summary_mod._dxf_build_rect_channel(
+        [
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "Q_inc": 1.25,
+                "slope_inv": 2000,
+                "n": 0.014,
+                "B": 1.5,
+                "H": 1.39,
+                "t": 0.3,
+                "tie_rod": "0.2×0.2",
+                "H1": 0.789,
+                "H2": 0.936,
+                "V": 0.845,
+                "use_increase": False,
+            },
+            {
+                "name": "第二流量段",
+                "Q": 2.0,
+                "Q_inc": 2.5,
+                "slope_inv": 1500,
+                "n": 0.014,
+                "B": 2.0,
+                "H": 1.68,
+                "t": 0.3,
+                "tie_rod": "0.2×0.2",
+                "H1": 1.032,
+                "H2": 1.192,
+                "V": 0.914,
+                "use_increase": True,
+            },
+        ]
+    )
+
+    assert [name for name, _unit in headers] == [
+        "流量段", "设计流量", "加大流量", "1/底坡", "糙率", "底宽B", "高度H",
+        "壁厚t", "拉杆尺寸", "设计水深H₁", "加大水深H₂", "设计流速",
+    ]
+    assert rows[0] == [
+        "第一流量段", 1.0, "", "1/2000", 0.014, 1.5, 1.39, 0.3, "0.2×0.2", 0.789, "", 0.845
+    ]
+    assert rows[1] == [
+        "第二流量段", 2.0, 2.5, "1/1500", 0.014, 2.0, 1.68, 0.3, "0.2×0.2", 1.032, 1.192, 0.914
+    ]
+
+
+def test_write_rect_channel_hides_increase_columns_when_all_rows_disable_increase():
+    openpyxl, styles, gcl = summary_mod._get_openpyxl()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+
+    ncols = summary_mod._write_rect_channel(
+        ws,
+        [
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "Q_inc": 1.25,
+                "slope_inv": 2000,
+                "n": 0.014,
+                "B": 1.5,
+                "H": 1.39,
+                "t": 0.3,
+                "tie_rod": "0.2×0.2",
+                "H1": 0.789,
+                "H2": 0.936,
+                "V": 0.845,
+                "use_increase": False,
+            }
+        ],
+        styles,
+        gcl,
+    )
+
+    assert ncols == 10
+    assert ws.cell(1, 1).value == "矩形明渠断面尺寸及水力要素表"
+    assert [ws.cell(2, c).value for c in range(1, 11)] == [
+        "流量段", "设计流量", "1/底坡", "糙率", "底宽B", "高度H",
+        "壁厚t", "拉杆尺寸", "设计水深H₁", "设计流速",
+    ]
+    assert [ws.cell(4, c).value for c in range(1, 11)] == [
+        "第一流量段", 1.0, "1/2000", 0.014, 1.5, 1.39, 0.3, "0.2×0.2", 0.789, 0.845
+    ]
+
+
+def test_dxf_build_tunnel_hides_increase_columns_when_all_rows_disable_increase():
+    title, headers, _col_widths, rows, merge = summary_mod._dxf_build_tunnel(
+        [
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "Q_inc": 1.25,
+                "rock_class": "III类",
+                "slope_inv": 2000,
+                "n": 0.014,
+                "B": 1.8,
+                "H_straight": 1.1,
+                "R_arch": 0.9,
+                "t0": 0.35,
+                "t": 0.3,
+                "H1": 0.662,
+                "H2": 0.780,
+                "V": 0.84,
+                "use_increase": False,
+            },
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "Q_inc": 1.25,
+                "rock_class": "IV类",
+                "slope_inv": 2000,
+                "n": 0.014,
+                "B": 1.8,
+                "H_straight": 1.1,
+                "R_arch": 0.9,
+                "t0": 0.4,
+                "t": 0.4,
+                "H1": 0.662,
+                "H2": 0.780,
+                "V": 0.84,
+                "use_increase": False,
+            },
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "Q_inc": 1.25,
+                "rock_class": "V类",
+                "slope_inv": 2000,
+                "n": 0.014,
+                "B": 1.8,
+                "H_straight": 1.1,
+                "R_arch": 0.9,
+                "t0": 0.5,
+                "t": 0.5,
+                "H1": 0.662,
+                "H2": 0.780,
+                "V": 0.84,
+                "use_increase": False,
+            },
+        ]
+    )
+
+    assert title == "圆拱直墙型隧洞断面尺寸及水力要素表"
+    assert [name for name, _unit in headers] == [
+        "流量段", "设计流量", "围岩类型", "1/底坡", "糙率",
+        "底宽B", "直墙高H", "顶拱半径R", "底板厚t₀", "边墙顶拱厚t",
+        "设计水深H₁", "设计流速",
+    ]
+    assert rows[0] == [
+        "第一流量段", 1.0, "III类", "1/2000", 0.014, 1.8, 1.1, 0.9, 0.35, 0.3, 0.662, 0.84
+    ]
+    assert merge == [([0, 1], 3)]
+
+
+def test_write_tunnel_hides_increase_columns_when_all_rows_disable_increase():
+    openpyxl, styles, gcl = summary_mod._get_openpyxl()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+
+    ncols = summary_mod._write_tunnel(
+        ws,
+        [
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "Q_inc": 1.25,
+                "rock_class": "III类",
+                "slope_inv": 2000,
+                "n": 0.014,
+                "B": 1.8,
+                "H_straight": 1.1,
+                "R_arch": 0.9,
+                "t0": 0.35,
+                "t": 0.3,
+                "H1": 0.662,
+                "H2": 0.780,
+                "V": 0.84,
+                "use_increase": False,
+            },
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "Q_inc": 1.25,
+                "rock_class": "IV类",
+                "slope_inv": 2000,
+                "n": 0.014,
+                "B": 1.8,
+                "H_straight": 1.1,
+                "R_arch": 0.9,
+                "t0": 0.4,
+                "t": 0.4,
+                "H1": 0.662,
+                "H2": 0.780,
+                "V": 0.84,
+                "use_increase": False,
+            },
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "Q_inc": 1.25,
+                "rock_class": "V类",
+                "slope_inv": 2000,
+                "n": 0.014,
+                "B": 1.8,
+                "H_straight": 1.1,
+                "R_arch": 0.9,
+                "t0": 0.5,
+                "t": 0.5,
+                "H1": 0.662,
+                "H2": 0.780,
+                "V": 0.84,
+                "use_increase": False,
+            },
+        ],
+        styles,
+        gcl,
+    )
+
+    assert ncols == 12
+    assert ws.cell(1, 1).value == "圆拱直墙型隧洞断面尺寸及水力要素表"
+    assert [ws.cell(2, c).value for c in range(1, 13)] == [
+        "流量段", "设计流量", "围岩类型", "1/底坡", "糙率",
+        "底宽B", "直墙高H", "顶拱半径R", "底板厚t₀", "边墙顶拱厚t",
+        "设计水深H₁", "设计流速",
+    ]
+
+
+def test_compute_rect_channel_adds_tie_rod_height_to_export_H(monkeypatch):
+    captured_kwargs = []
+
+    def _fake_rectangular(**_kwargs):
+        captured_kwargs.append(dict(_kwargs))
+        return {
+            "success": True,
+            "Q_increased": 1.25,
+            "b_design": 1.5,
+            "h_prime": 1.19,
+            "h_design": 0.789,
+            "h_increased": 0.936,
+            "V_design": 0.845,
+        }
+
+    monkeypatch.setattr(summary_mod, "quick_calculate_rectangular", _fake_rectangular)
+
+    rows = summary_mod.compute_rect_channel(
+        [
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "slope_inv": 2000,
+                "n": 0.014,
+                "B": 1.5,
+                "wall_t": 0.3,
+                "tie_rod": "0.2×0.2",
+            }
+        ]
+    )
+
+    assert captured_kwargs
+    assert captured_kwargs[0]["manual_b"] == 1.5
+    assert captured_kwargs[0]["preserve_manual_b"] is True
+    assert rows[0]["H"] == 1.39
+    assert rows[0]["B"] == 1.5
+    assert rows[0]["tie_rod"] == "0.2×0.2"
+
+
+def test_compute_trapezoid_channel_adds_tie_rod_height_to_export_H(monkeypatch):
+    captured_kwargs = []
+
+    def _fake_trapezoidal(**_kwargs):
+        captured_kwargs.append(dict(_kwargs))
+        return {
+            "success": True,
+            "Q_increased": 1.25,
+            "b_design": 1.5,
+            "h_prime": 1.19,
+            "h_design": 0.789,
+            "h_increased": 0.936,
+            "V_design": 0.845,
+            "Beta_design": 1.902,
+        }
+
+    monkeypatch.setattr(summary_mod, "quick_calculate_trapezoidal", _fake_trapezoidal)
+
+    rows = summary_mod.compute_trapezoid_channel(
+        [
+            {
+                "name": "第一流量段",
+                "Q": 1.0,
+                "slope_inv": 2000,
+                "n": 0.014,
+                "m": 1.0,
+                "B": 1.5,
+                "wall_t": 0.3,
+                "tie_rod": "0.2 X 0.2",
+            }
+        ]
+    )
+
+    assert captured_kwargs
+    assert captured_kwargs[0]["manual_b"] == 1.5
+    assert captured_kwargs[0]["preserve_manual_b"] is True
+    assert rows[0]["H"] == 1.39
+    assert rows[0]["B"] == 1.5
+    assert rows[0]["tie_rod"] == "0.2 X 0.2"
 
 
 def test_build_q_segment_structure_names_distinguishes_same_name_cross_types():

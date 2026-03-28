@@ -686,7 +686,8 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
                                 v_min: float, v_max: float,
                                 manual_beta: float = None,
                                 manual_b: float = None,
-                                manual_increase_percent: float = None) -> Dict[str, Any]:
+                                manual_increase_percent: float = None,
+                                preserve_manual_b: bool = False) -> Dict[str, Any]:
     """
     梯形明渠快速计算主函数
 
@@ -732,6 +733,8 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
         # 设计方法标记
         'used_manual_beta': False,
         'used_manual_b': False,
+        'preserved_manual_b': False,
+        'constraint_warnings': [],
         
         # 附录E备选方案列表（仅当未指定参数时填充）
         'appendix_e_schemes': [],
@@ -772,19 +775,46 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
             V_out = calculate_velocity(Q, A_out)
             Beta_out = manual_b / h_out if h_out > ZERO_TOLERANCE else 0
 
-            if V_out > v_min and V_out < v_max and Beta_out > ZERO_TOLERANCE and Beta_out <= MAX_BETA:
+            if preserve_manual_b:
                 b_designed = manual_b
                 h_designed = h_out
                 V_designed = V_out
                 design_successful = True
-                design_method = '指定底宽'
+                design_method = '指定底宽(保留输入尺寸)'
                 result['used_manual_b'] = True
+                result['preserved_manual_b'] = True
+
+                warnings = []
+                if V_out <= v_min:
+                    warnings.append(f"设计流速 V={V_out:.3f} m/s 未大于不淤流速 {v_min:.3f} m/s")
+                elif V_out >= v_max:
+                    warnings.append(f"设计流速 V={V_out:.3f} m/s 未小于不冲流速 {v_max:.3f} m/s")
+                if Beta_out <= ZERO_TOLERANCE:
+                    warnings.append("宽深比 β 计算失败，已按输入底宽保留结果")
+                elif Beta_out > MAX_BETA:
+                    warnings.append(f"宽深比 β={Beta_out:.3f} 超出经验上限 {MAX_BETA:.1f}")
+                result['constraint_warnings'] = warnings
             else:
-                if V_out <= v_min or V_out >= v_max:
-                    design_method = '指定底宽(流速不符)'
+                if V_out > v_min and V_out < v_max and Beta_out > ZERO_TOLERANCE and Beta_out <= MAX_BETA:
+                    b_designed = manual_b
+                    h_designed = h_out
+                    V_designed = V_out
+                    design_successful = True
+                    design_method = '指定底宽'
+                    result['used_manual_b'] = True
                 else:
-                    design_method = '指定底宽(宽深比不符)'
+                    if V_out <= v_min or V_out >= v_max:
+                        design_method = '指定底宽(流速不符)'
+                    else:
+                        design_method = '指定底宽(宽深比不符)'
         else:
+            if preserve_manual_b:
+                result['error_message'] = (
+                    f"指定底宽 B={manual_b:.3f} m 无法满足当前流量/坡降条件，"
+                    "已按输入尺寸锁定，未自动改写。"
+                )
+                result['design_method'] = '指定底宽(保留输入尺寸失败)'
+                return result
             design_method = '指定底宽(计算失败)'
 
     # ========== 指定宽深比次之 (如果底宽未指定) ==========
@@ -926,7 +956,8 @@ def quick_calculate_rectangular(Q: float, n: float, slope_inv: float,
                                v_min: float, v_max: float,
                                manual_beta: float = None,
                                manual_b: float = None,
-                               manual_increase_percent: float = None) -> Dict[str, Any]:
+                               manual_increase_percent: float = None,
+                               preserve_manual_b: bool = False) -> Dict[str, Any]:
     """
     矩形明渠快速计算 (梯形明渠 m=0 的特例)
 
@@ -944,7 +975,8 @@ def quick_calculate_rectangular(Q: float, n: float, slope_inv: float,
         包含所有计算结果的字典
     """
     return quick_calculate_trapezoidal(Q, 0.0, n, slope_inv, v_min, v_max,
-                                      manual_beta, manual_b, manual_increase_percent)
+                                      manual_beta, manual_b, manual_increase_percent,
+                                      preserve_manual_b)
 
 
 # ============================================================
@@ -1743,7 +1775,8 @@ def design_channel(section_type: SectionType, **kwargs) -> Dict[str, Any]:
             kwargs.get('Q'), kwargs.get('n'), kwargs.get('slope_inv'),
             kwargs.get('v_min'), kwargs.get('v_max'),
             kwargs.get('manual_beta'), kwargs.get('manual_b'),
-            kwargs.get('manual_increase_percent')
+            kwargs.get('manual_increase_percent'),
+            kwargs.get('preserve_manual_b', False)
         )
 
     else: # TRAPEZOIDAL
@@ -1751,7 +1784,8 @@ def design_channel(section_type: SectionType, **kwargs) -> Dict[str, Any]:
             kwargs.get('Q'), kwargs.get('m', 0.0), kwargs.get('n'), kwargs.get('slope_inv'),
             kwargs.get('v_min'), kwargs.get('v_max'),
             kwargs.get('manual_beta'), kwargs.get('manual_b'),
-            kwargs.get('manual_increase_percent')
+            kwargs.get('manual_increase_percent'),
+            kwargs.get('preserve_manual_b', False)
         )
 
 
@@ -1763,12 +1797,14 @@ def quick_calculate(Q: float, m: float, n: float, slope_inv: float,
                     v_min: float, v_max: float,
                     manual_beta: float = None,
                     manual_b: float = None,
-                    manual_increase_percent: float = None) -> Dict[str, Any]:
+                    manual_increase_percent: float = None,
+                    preserve_manual_b: bool = False) -> Dict[str, Any]:
     """
     梯形明渠快速计算（向后兼容接口）
     """
     return quick_calculate_trapezoidal(Q, m, n, slope_inv, v_min, v_max,
-                                      manual_beta, manual_b, manual_increase_percent)
+                                      manual_beta, manual_b, manual_increase_percent,
+                                      preserve_manual_b)
 
 
 # ============================================================

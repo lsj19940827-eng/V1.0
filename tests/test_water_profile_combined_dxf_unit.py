@@ -268,3 +268,175 @@ def test_draw_section_summary_on_msp_splits_mixed_horseshoe_tables(monkeypatch):
     assert drawn_count == 2
     assert any("马蹄形标准Ⅰ型隧洞断面尺寸及水力要素表" == title for title in captured_titles)
     assert any("马蹄形标准Ⅱ型隧洞断面尺寸及水力要素表" == title for title in captured_titles)
+
+
+def test_draw_section_summary_on_msp_keeps_open_channel_without_increase_columns(monkeypatch):
+    actual_summary = importlib.import_module("calc_渠系计算算法内核.生成断面汇总表")
+    captured_tables = []
+
+    def _fake_draw_table(msp, x0, y0, title, headers, col_widths, rows, merge_groups=None, layer="0"):
+        _ = (msp, x0, y0, col_widths, merge_groups, layer)
+        captured_tables.append({
+            "title": title,
+            "headers": headers,
+            "rows": rows,
+        })
+        return 120.0
+
+    monkeypatch.setattr(actual_summary, "_dxf_draw_table", _fake_draw_table)
+
+    panel = SimpleNamespace(
+        _custom_struct_thickness=None,
+        _custom_rock_lining=None,
+        _custom_tunnel_unified={},
+    )
+    nodes = [
+        SimpleNamespace(
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=False,
+            structure_type=SimpleNamespace(value="明渠-矩形"),
+            name="甘家沟充水渠",
+            flow_section="1",
+            flow=1.0,
+            roughness=0.014,
+            slope_i=1 / 2000,
+            section_params={"B": 1.5, "use_increase": False},
+            water_depth=0.789,
+            velocity=0.845,
+            structure_height=1.19,
+        ),
+    ]
+
+    _, _, drawn_count = cad_tools._draw_section_summary_on_msp(
+        panel=panel,
+        msp=object(),
+        nodes=nodes,
+        proj_settings=None,
+        pressurized_params={"siphon": [], "pressure_pipe": []},
+        below_y=0.0,
+        summary_layer="SUMMARY",
+    )
+
+    assert drawn_count == 1
+    assert len(captured_tables) == 1
+    assert captured_tables[0]["title"] == "矩形明渠断面尺寸及水力要素表"
+    header_names = [name for name, _unit in captured_tables[0]["headers"]]
+    assert "加大流量" not in header_names
+    assert "加大水深H₂" not in header_names
+    assert len(captured_tables[0]["rows"][0]) == len(header_names)
+
+
+def test_open_section_summary_table_prefers_current_table_snapshot_over_stale_calculated_nodes(monkeypatch):
+    stale_nodes = [
+        SimpleNamespace(
+            structure_type=SimpleNamespace(value="明渠-矩形"),
+            name="旧节点",
+            section_params={"B": 1.5, "use_increase": True},
+        )
+    ]
+    current_nodes = [
+        SimpleNamespace(
+            structure_type=SimpleNamespace(value="明渠-矩形"),
+            name="当前节点",
+            section_params={"B": 1.5, "use_increase": False},
+        )
+    ]
+    captured = {}
+
+    class _CapturingDialog:
+        def __init__(self, _parent, nodes, _proj_settings, _auto_name, panel=None, config_only=False):
+            _ = (panel, config_only)
+            captured["nodes"] = nodes
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    panel = _build_panel()
+    panel.calculated_nodes = stale_nodes
+    panel._build_nodes_from_table = lambda: current_nodes
+
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _CapturingDialog)
+
+    cad_tools.open_section_summary_table(panel)
+
+    assert captured["nodes"] is current_nodes
+
+
+def test_export_combined_dxf_passes_current_table_snapshot_to_section_summary(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    stale_nodes = [
+        SimpleNamespace(
+            bottom_elevation=408.5,
+            top_elevation=409.2,
+            water_level=408.9,
+            structure_type=SimpleNamespace(value="明渠-矩形"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            name="旧节点",
+            section_params={"B": 1.5, "use_increase": True},
+        )
+    ]
+    current_nodes = [
+        SimpleNamespace(
+            structure_type=SimpleNamespace(value="明渠-矩形"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=False,
+            name="当前节点",
+            flow_section="1",
+            flow=1.0,
+            roughness=0.014,
+            slope_i=1 / 2000,
+            section_params={"B": 1.5, "use_increase": False},
+            water_depth=0.789,
+            velocity=0.845,
+            structure_height=1.19,
+        )
+    ]
+    captured = {}
+
+    class _ConfigOnlyDialog:
+        def __init__(self, _parent, nodes, _proj_settings, _auto_name, panel=None, config_only=False):
+            _ = panel
+            captured["dialog_nodes"] = nodes
+            captured["config_only"] = config_only
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    panel = _build_panel()
+    panel.calculated_nodes = stale_nodes
+    panel._build_nodes_from_table = lambda: current_nodes
+
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda value: value)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: False)
+
+    def _fake_draw_section_summary_on_msp(*args, **kwargs):
+        _ = args
+        captured["summary_nodes"] = kwargs["nodes"]
+        return 320.0, 180.0, 1
+
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", _fake_draw_section_summary_on_msp)
+    monkeypatch.setattr(
+        cad_tools,
+        "_compute_ip_preview_data",
+        lambda *_a, **_k: ([["IP1"]], []),
+    )
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
+    assert captured["config_only"] is True
+    assert captured["dialog_nodes"] is current_nodes
+    assert captured["summary_nodes"] is current_nodes
+    debug_info = getattr(panel, "_last_section_summary_runtime_debug", None)
+    assert isinstance(debug_info, dict)
+    assert debug_info["summary_nodes_source"] == "current_table_snapshot"
+    assert "calc_渠系计算算法内核" in debug_info["summary_module_file"]
+    assert debug_info["summary_module_file"].endswith("生成断面汇总表.py")

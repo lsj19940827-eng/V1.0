@@ -44,7 +44,7 @@ def _install_panel_import_stubs():
     qfw = types.ModuleType("qfluentwidgets")
     for name in (
         "PushButton", "PrimaryPushButton", "LineEdit", "ComboBox",
-        "InfoBar", "InfoBarPosition", "DropDownPushButton", "RoundMenu",
+        "InfoBar", "InfoBarIcon", "InfoBarPosition", "DropDownPushButton", "RoundMenu",
         "Action", "MessageBox",
     ):
         setattr(qfw, name, type(name, (), {}))
@@ -337,6 +337,35 @@ def _make_node(**overrides):
     return SimpleNamespace(**defaults)
 
 
+def _make_batch_result(**overrides):
+    defaults = {
+        "flow_section": "1",
+        "building_name": "甘家沟充水渠",
+        "section_type": "明渠-矩形",
+        "raw_result": {},
+        "coord_X": 3441081.797491,
+        "coord_Y": 639354.23486,
+        "B": 1.5,
+        "D": "",
+        "R": "",
+        "m": 0,
+        "n": 0.014,
+        "slope_inv": 2000,
+        "Q": 1.0,
+        "use_increase": False,
+        "h": 0.789,
+        "V": 0.845,
+        "V_max": 0.0,
+        "A": 1.183,
+        "X": 3.078,
+        "R_hydraulic": 0.385,
+        "H_total": 1.19,
+        "turn_radius": 0.0,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
 @contextmanager
 def _fake_batch_update(_table):
     yield
@@ -483,3 +512,90 @@ def test_build_nodes_from_table_reads_source_coordinate_text_without_rounding():
     assert nodes[0].source_y_text == "3377745.982674"
     assert nodes[0].x == 649606.177086
     assert nodes[0].y == 3377745.982674
+
+
+def test_import_from_batch_persists_use_increase_payload_for_open_channel_rows():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.SHARED_DATA_AVAILABLE = True
+    module.CALCULATOR_AVAILABLE = False
+    module.QSignalBlocker = lambda *_args, **_kwargs: object()
+    module.InfoBar = SimpleNamespace(
+        success=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+    )
+    module.InfoBarPosition = SimpleNamespace(TOP=1)
+    module.auto_resize_table = lambda *_args, **_kwargs: None
+    module.get_shared_data_manager = lambda: SimpleNamespace(
+        get_batch_results=lambda: [_make_batch_result(use_increase=False)]
+    )
+
+    panel._sync_batch_settings = lambda: None
+    panel._clear_nodes = lambda: panel.node_table.setRowCount(0)
+    panel._choose_roughness_value = lambda *_args, **_kwargs: None
+    panel._update_siphon_roughness_overview = lambda *_args, **_kwargs: None
+    panel._update_pressure_pipe_roughness_overview = lambda *_args, **_kwargs: None
+    panel._on_design_flow_changed = lambda: None
+    panel._apply_table1_source_row_lock_flags = lambda: None
+    panel._refresh_pressure_pipe_controls = lambda: None
+    panel._recalculate_geometry = lambda: None
+    panel._info_parent = lambda: None
+    panel.design_flow_edit = SimpleNamespace(text=lambda: "5.0", setText=lambda _text: None)
+
+    module.WaterProfilePanel._import_from_batch(panel)
+
+    payload = panel.node_table.item(0, 0).data(module.Qt.UserRole)
+    assert payload[module.USE_INCREASE_ROLE_KEY] is False
+
+
+def test_import_from_batch_roundtrips_use_increase_into_rebuilt_nodes():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.SHARED_DATA_AVAILABLE = True
+    module.CALCULATOR_AVAILABLE = True
+    module.QSignalBlocker = lambda *_args, **_kwargs: object()
+    module.InfoBar = SimpleNamespace(
+        success=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+    )
+    module.InfoBarPosition = SimpleNamespace(TOP=1)
+    module.auto_resize_table = lambda *_args, **_kwargs: None
+    module.get_shared_data_manager = lambda: SimpleNamespace(
+        get_batch_results=lambda: [_make_batch_result(use_increase=False)]
+    )
+    module.StructureType = _FakeStructureType
+    module.InOutType = _FakeInOutType
+
+    class _BuildNode:
+        def __init__(self):
+            self.section_params = {}
+            self.is_transition = False
+            self.is_auto_inserted_channel = False
+            self.is_diversion_gate = False
+            self.is_inverted_siphon = False
+            self.is_pressure_pipe = False
+            self.in_out = None
+            self.external_head_loss = None
+
+    module.ChannelNode = _BuildNode
+
+    panel._sync_batch_settings = lambda: None
+    panel._clear_nodes = lambda: panel.node_table.setRowCount(0)
+    panel._choose_roughness_value = lambda *_args, **_kwargs: None
+    panel._update_siphon_roughness_overview = lambda *_args, **_kwargs: None
+    panel._update_pressure_pipe_roughness_overview = lambda *_args, **_kwargs: None
+    panel._on_design_flow_changed = lambda: None
+    panel._apply_table1_source_row_lock_flags = lambda: None
+    panel._refresh_pressure_pipe_controls = lambda: None
+    panel._recalculate_geometry = lambda: None
+    panel._calculate_recommended_turn_radius = lambda _nodes: 0.0
+    panel._info_parent = lambda: None
+    panel.design_flow_edit = SimpleNamespace(text=lambda: "5.0", setText=lambda _text: None)
+
+    module.WaterProfilePanel._import_from_batch(panel)
+
+    nodes = module.WaterProfilePanel._build_nodes_from_table(panel)
+
+    assert len(nodes) == 1
+    assert nodes[0].use_increase is False
+    assert nodes[0].section_params["use_increase"] is False

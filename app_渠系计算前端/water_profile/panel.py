@@ -204,12 +204,30 @@ NODE_TOOLBAR_LAYOUT_PRESET = "balanced"
 
 SOURCE_COORD_X_ROLE_KEY = "_source_x_text"
 SOURCE_COORD_Y_ROLE_KEY = "_source_y_text"
+USE_INCREASE_ROLE_KEY = "_use_increase"
 TRANSITION_LENGTH_RULE_STEP_DEFAULT = 1.0
 TRANSITION_LENGTH_RULE_MODE_OPTIONS = (
     ("公式值", "formula"),
     ("向上修约", "step_up"),
     ("固定值", "fixed"),
 )
+
+
+def normalize_use_increase_flag(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in {"true", "1", "yes", "y", "on"}:
+        return True
+    if text in {"false", "0", "no", "n", "off"}:
+        return False
+    return bool(value)
 
 
 # ================================================================
@@ -1443,6 +1461,7 @@ class WaterProfilePanel(QWidget):
         sample_menu.addAction(Action("示例四（飞龙分干渠）", triggered=self._load_section_sample_4))
         sample_menu.addAction(Action("示例五（茶亭支渠）", triggered=self._load_section_sample_5))
         sample_menu.addAction(Action("示例六（合作干渠）", triggered=self._load_section_sample_6))
+        sample_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=self._load_section_sample_7))
         self._btn_section_sample = DropDownPushButton("示例数据")
         self._btn_section_sample.setMenu(sample_menu)
         button_row.addWidget(self._btn_section_sample)
@@ -1454,6 +1473,7 @@ class WaterProfilePanel(QWidget):
         template_menu.addAction(Action("示例四（飞龙分干渠）", triggered=lambda: self._open_section_excel_template("feilong")))
         template_menu.addAction(Action("示例五（茶亭支渠）", triggered=lambda: self._open_section_excel_template("chating")))
         template_menu.addAction(Action("示例六（合作干渠）", triggered=lambda: self._open_section_excel_template("hezuo")))
+        template_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=lambda: self._open_section_excel_template("ganjiagou")))
         self._btn_section_template = DropDownPushButton("打开Excel模板")
         self._btn_section_template.setMenu(template_menu)
         button_row.addWidget(self._btn_section_template)
@@ -1824,6 +1844,13 @@ class WaterProfilePanel(QWidget):
 
     def _load_section_sample_6(self):
         self._batch_backend._add_sample_data_6()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _load_section_sample_7(self):
+        self._batch_backend._add_sample_data_7()
         self._sync_batch_settings()
         self._switch_workspace_tab(self._tab_section_input)
         if self._section_input_table and self._section_input_table.rowCount() > 0:
@@ -4838,6 +4865,10 @@ class WaterProfilePanel(QWidget):
             in_out_raw = str(
                 getattr(sr, 'in_out_raw', '') or raw_result.get('in_out_raw', '')
             ).strip()
+            use_increase = normalize_use_increase_flag(
+                getattr(sr, 'use_increase', raw_result.get('use_increase', raw_result.get('_use_increase', True))),
+                default=True,
+            )
 
             if section_type in struct_map:
                 section_type = struct_map[section_type]
@@ -4926,9 +4957,16 @@ class WaterProfilePanel(QWidget):
 
             # 写入水力结果到结果列（原版通过set_nodes写入water_depth/velocity等）
             cur_row = self.node_table.rowCount() - 1
+            first_item = self.node_table.item(cur_row, 0)
+            if first_item:
+                payload = first_item.data(Qt.UserRole)
+                if not isinstance(payload, dict):
+                    payload = {}
+                # use_increase 是自由水面导出链路的重要运行态字段，不能只在有压流参数存在时才落盘。
+                payload[USE_INCREASE_ROLE_KEY] = use_increase
+                first_item.setData(Qt.UserRole, payload)
             # 通过行级元数据透传有压管道专用参数（表格无专门列）
             if pipe_material or in_out_raw or (local_loss_ratio and float(local_loss_ratio) > 0):
-                first_item = self.node_table.item(cur_row, 0)
                 if first_item:
                     payload = first_item.data(Qt.UserRole)
                     if not isinstance(payload, dict):
@@ -5459,6 +5497,7 @@ class WaterProfilePanel(QWidget):
             pipe_material = ""
             local_loss_ratio = None
             in_out_raw = ""
+            use_increase = True
             from_table1_source = False
             # 恢复自动插入补段标记（通过UserRole存储）
             _first_item = table.item(r, 0)
@@ -5530,6 +5569,11 @@ class WaterProfilePanel(QWidget):
                             local_loss_ratio = float(_llr)
                         except (ValueError, TypeError):
                             local_loss_ratio = None
+                    if USE_INCREASE_ROLE_KEY in _ur:
+                        use_increase = normalize_use_increase_flag(
+                            _ur.get(USE_INCREASE_ROLE_KEY),
+                            default=True,
+                        )
             if not from_table1_source and not getattr(node, 'is_transition', False) and not getattr(node, 'is_auto_inserted_channel', False):
                 from_table1_source = True
             node.from_table1_source = from_table1_source
@@ -5665,6 +5709,8 @@ class WaterProfilePanel(QWidget):
             node.section_params['D'] = D
             node.section_params['R_circle'] = R
             node.section_params['m'] = m_val
+            node.section_params['use_increase'] = use_increase
+            node.use_increase = use_increase
             if pipe_material:
                 node.section_params['pipe_material'] = pipe_material
             if in_out_raw:
@@ -6229,6 +6275,10 @@ class WaterProfilePanel(QWidget):
                     payload['_pipe_material'] = _pm
                 if _ior:
                     payload['_in_out_raw'] = _ior
+                payload[USE_INCREASE_ROLE_KEY] = normalize_use_increase_flag(
+                    _sp.get('use_increase', getattr(node, 'use_increase', True)),
+                    default=True,
+                )
                 if _llr is not None and str(_llr).strip() != "":
                     try:
                         _llr_f = float(_llr)

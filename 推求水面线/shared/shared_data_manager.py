@@ -29,6 +29,24 @@ def _normalize_section_type_name(section_type: Any) -> str:
     return normalize_section_type_name(section_type)
 
 
+def normalize_use_increase_flag(value: Any, default: bool = True) -> bool:
+    """统一解析 use_increase 标记，兼容批量结果中的新旧键名。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in {"true", "1", "yes", "y", "on"}:
+        return True
+    if text in {"false", "0", "no", "n", "off"}:
+        return False
+    return bool(value)
+
+
 @dataclass
 class SectionResult:
     """断面计算结果"""
@@ -82,7 +100,8 @@ class SectionResult:
     pipe_material: str = ""       # 管材（有压管道专用）
     local_loss_ratio: float = 0.0 # 局部损失比例（有压管道专用）
     in_out_raw: str = ""          # 进出口标识原始值（有压管道专用）
-    
+    use_increase: bool = True     # 是否采用加大流量工况
+
     # 原始结果字典（用于导出完整数据）
     raw_result: Dict = field(default_factory=dict)
     
@@ -105,6 +124,7 @@ class SectionResult:
             'roughness': self.n,
             'water_depth': self.h,
             'velocity': self.V,
+            'use_increase': self.use_increase,
             'x': self.coord_X,
             'y': self.coord_Y,
             'flow_section': self.flow_section,
@@ -124,6 +144,7 @@ class SectionResult:
                 'pipe_material': self.pipe_material or None,
                 'local_loss_ratio': self.local_loss_ratio if self.local_loss_ratio else None,
                 'in_out_raw': self.in_out_raw or None,
+                'use_increase': self.use_increase,
             }
         }
         # 计算比降
@@ -184,6 +205,10 @@ class SharedDataManager:
         """从计算结果中提取断面参数"""
         try:
             section_type = _normalize_section_type_name(result.get('section_type', ''))
+            use_increase = normalize_use_increase_flag(
+                result.get('use_increase', result.get('_use_increase', True)),
+                default=True,
+            )
             
             # 判断是否为批量计算结果（检测特征字段）
             is_batch = 'coord_X' in result or 'channel_name' in result or 'flow_section' in result
@@ -203,6 +228,7 @@ class SharedDataManager:
                     flow_section=str(result.get('flow_section', '')),
                     building_name=str(result.get('building_name', '')),
                     turn_radius=float(result.get('turn_radius', 0.0) or 0.0),
+                    use_increase=use_increase,
                     raw_result=result
                 )
             
@@ -221,6 +247,7 @@ class SharedDataManager:
                     flow_section=str(result.get('flow_section', '')),
                     building_name=str(result.get('building_name', '')),
                     turn_radius=float(result.get('turn_radius', 0.0) or 0.0),
+                    use_increase=use_increase,
                     raw_result=result
                 )
             
@@ -243,6 +270,7 @@ class SharedDataManager:
                     pipe_material=str(result.get('pipe_material', '') or ''),
                     local_loss_ratio=float(result.get('local_loss_ratio', 0.0) or 0.0),
                     in_out_raw=str(result.get('in_out_raw', '') or ''),
+                    use_increase=use_increase,
                     raw_result=result
                 )
             
@@ -255,6 +283,7 @@ class SharedDataManager:
                 slope_inv=result.get('slope_inv', 0),
                 V=result.get('V_design', result.get('v_design', result.get('V_d', 0))),
                 A=result.get('A_design', result.get('area_design', result.get('A_d', 0))),
+                use_increase=use_increase,
                 raw_result=result
             )
             
