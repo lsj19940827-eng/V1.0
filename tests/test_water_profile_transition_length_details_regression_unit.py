@@ -228,7 +228,7 @@ def test_project_reload_repairs_missing_transition_length_details():
         restored.deleteLater()
 
 
-def test_rule_rows_can_be_collected_before_transitions_are_inserted():
+def test_rule_rows_require_existing_transition_instances():
     module = _load_panel_module()
     panel = _build_panel(module)
     try:
@@ -240,19 +240,7 @@ def test_rule_rows_can_be_collected_before_transitions_are_inserted():
 
         rows = panel._collect_transition_length_rule_rows()
 
-        rule_keys = {
-            (
-                row["upstream_structure_type"],
-                row["downstream_structure_type"],
-                row["transition_type"],
-                row["count"],
-                row["hit_count"],
-                row["hit_scope"],
-            )
-            for row in rows
-        }
-        assert ("矩形暗涵", "隧洞-圆形", "出口", 1, 1, "predicted") in rule_keys
-        assert ("矩形暗涵", "隧洞-圆形", "进口", 1, 1, "predicted") in rule_keys
+        assert rows == []
     finally:
         panel.deleteLater()
 
@@ -297,7 +285,7 @@ def test_transition_length_rule_dialog_displays_hit_scope_copy():
                 "transition_type": "进口",
                 "count": 1,
                 "hit_count": 2,
-                "hit_scope": "predicted",
+                "hit_scope": "current",
                 "rule_mode": "formula",
                 "step_size_m": 1.0,
                 "fixed_length_m": 0.0,
@@ -307,12 +295,12 @@ def test_transition_length_rule_dialog_displays_hit_scope_copy():
     try:
         assert dialog.table.columnCount() == 8
         assert dialog.table.horizontalHeaderItem(3).text() == "命中情况"
-        assert dialog.table.item(0, 3).text() == "预计命中 2 处"
+        assert dialog.table.item(0, 3).text() == "当前命中 2 条"
     finally:
         dialog.deleteLater()
 
 
-def test_should_show_transition_length_nudge_requires_candidates_without_customization():
+def test_open_transition_length_rules_requires_inserted_transition_instances(monkeypatch):
     module = _load_panel_module()
     panel = _build_panel(module)
     try:
@@ -321,29 +309,51 @@ def test_should_show_transition_length_nudge_requires_candidates_without_customi
         panel._update_table_from_nodes_full(raw_nodes)
         _flush_events()
 
-        assert panel._should_show_transition_length_rule_nudge() is True
+        dialog_calls = []
+        prompt_calls = []
 
-        panel._length_rule_nudge_seen = True
-        assert panel._should_show_transition_length_rule_nudge() is False
+        class _UnexpectedDialog:
+            def __init__(self, rows, parent=None):
+                dialog_calls.append((rows, parent))
 
-        panel._length_rule_nudge_seen = False
-        panel._transition_length_rules = {
-            "矩形暗涵|隧洞-圆形|进口": {
-                "rule_key": "矩形暗涵|隧洞-圆形|进口",
-                "upstream_structure_type": "矩形暗涵",
-                "downstream_structure_type": "隧洞-圆形",
-                "transition_type": "进口",
-                "rule_mode": "step_up",
-                "step_size_m": 1.0,
-                "fixed_length_m": 0.0,
-            }
-        }
-        assert panel._should_show_transition_length_rule_nudge() is False
+            def exec(self):
+                raise AssertionError("插入前不应打开长度规则编辑表")
+
+        monkeypatch.setattr(module, "TransitionLengthRuleDialog", _UnexpectedDialog)
+        monkeypatch.setattr(
+            panel,
+            "_show_transition_length_rules_insert_first_dialog",
+            lambda: prompt_calls.append("shown"),
+            raising=False,
+        )
+
+        panel._open_transition_length_rules()
+
+        assert prompt_calls == ["shown"]
+        assert dialog_calls == []
     finally:
         panel.deleteLater()
 
 
-def test_should_not_show_transition_length_nudge_when_transitions_already_exist():
+def test_insert_transitions_no_longer_defers_to_length_rule_nudge(monkeypatch):
+    module = _load_panel_module()
+    panel = _build_panel(module)
+    try:
+        panel.node_table.setRowCount(2)
+        panel.design_flow_edit.setText("5.0")
+        panel.max_flow_edit.setText("5.5")
+        monkeypatch.setattr(panel, "_ensure_downstream_ready", lambda _action: True)
+        build_settings_calls = []
+        monkeypatch.setattr(panel, "_build_settings", lambda: build_settings_calls.append("called") or None)
+
+        panel._insert_transitions()
+
+        assert build_settings_calls
+    finally:
+        panel.deleteLater()
+
+
+def test_open_transition_length_rules_after_insert_uses_current_rows_only(monkeypatch):
     module = _load_panel_module()
     panel = _build_panel(module)
     try:
@@ -352,121 +362,27 @@ def test_should_not_show_transition_length_nudge_when_transitions_already_exist(
         panel._update_table_from_nodes_full(nodes)
         _flush_events()
 
-        panel._length_rule_nudge_seen = False
-        panel._transition_length_rules = {}
-
-        assert panel._should_show_transition_length_rule_nudge() is False
-    finally:
-        panel.deleteLater()
-
-
-def test_insert_transitions_defers_first_click_to_length_rule_nudge(monkeypatch):
-    module = _load_panel_module()
-    panel = _build_panel(module)
-    try:
-        panel.node_table.setRowCount(2)
-        panel.design_flow_edit.setText("5.0")
-        panel.max_flow_edit.setText("5.5")
-        monkeypatch.setattr(panel, "_ensure_downstream_ready", lambda _action: True)
-        monkeypatch.setattr(panel, "_should_show_transition_length_rule_nudge", lambda: True)
-
-        nudge_calls = []
-        monkeypatch.setattr(
-            panel,
-            "_show_transition_length_rule_nudge",
-            lambda: nudge_calls.append("shown"),
-        )
-        monkeypatch.setattr(
-            panel,
-            "_build_settings",
-            lambda: (_ for _ in ()).throw(AssertionError("首次提醒后不应继续执行插入")),
-        )
-
-        panel._insert_transitions()
-
-        assert nudge_calls == ["shown"]
-    finally:
-        panel.deleteLater()
-
-
-def test_open_transition_length_rules_formula_save_marks_nudge_as_handled(monkeypatch):
-    module = _load_panel_module()
-    panel = _build_panel(module)
-    try:
         rule_rows = [
             {
-                "rule_key": "矩形暗涵|隧洞-圆形|进口",
-                "upstream_structure_type": "矩形暗涵",
-                "downstream_structure_type": "隧洞-圆形",
-                "transition_type": "进口",
+                "rule_key": "隧洞-圆形|矩形暗涵|出口",
+                "upstream_structure_type": "隧洞-圆形",
+                "downstream_structure_type": "矩形暗涵",
+                "transition_type": "出口",
                 "count": 1,
                 "hit_count": 1,
-                "hit_scope": "predicted",
+                "hit_scope": "current",
                 "rule_mode": "formula",
                 "step_size_m": 1.0,
                 "fixed_length_m": 0.0,
             }
         ]
 
-        class _AcceptedDialog:
-            def __init__(self, rows, parent=None):
-                self.rows = rows
-
-            def exec(self):
-                return module.QDialog.DialogCode.Accepted
-
-            def get_rules(self):
-                return {
-                    row["rule_key"]: {
-                        "rule_key": row["rule_key"],
-                        "upstream_structure_type": row["upstream_structure_type"],
-                        "downstream_structure_type": row["downstream_structure_type"],
-                        "transition_type": row["transition_type"],
-                        "rule_mode": "formula",
-                        "step_size_m": row["step_size_m"],
-                        "fixed_length_m": row["fixed_length_m"],
-                    }
-                    for row in self.rows
-                }
-
-        monkeypatch.setattr(module, "TransitionLengthRuleDialog", _AcceptedDialog)
-        monkeypatch.setattr(panel, "_collect_transition_length_rule_rows", lambda: rule_rows)
-        monkeypatch.setattr(panel, "_get_transition_nodes_for_editing", lambda source_nodes=None: (_make_rule_pair_nodes(), False))
-        monkeypatch.setattr(panel, "_build_settings", lambda: object())
-        monkeypatch.setattr(panel, "_refresh_all_transition_length_presentations", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(panel, "_rebuild_calculation_summary_state", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(module.InfoBar, "success", lambda *args, **kwargs: None)
-
-        panel._length_rule_nudge_seen = False
-        panel._open_transition_length_rules()
-
-        assert panel._length_rule_nudge_seen is True
-    finally:
-        panel.deleteLater()
-
-
-def test_open_transition_length_rules_pre_insert_reports_saved_for_next_insert(monkeypatch):
-    module = _load_panel_module()
-    panel = _build_panel(module)
-    try:
-        rule_rows = [
-            {
-                "rule_key": "矩形暗涵|隧洞-圆形|进口",
-                "upstream_structure_type": "矩形暗涵",
-                "downstream_structure_type": "隧洞-圆形",
-                "transition_type": "进口",
-                "count": 1,
-                "hit_count": 1,
-                "hit_scope": "predicted",
-                "rule_mode": "step_up",
-                "step_size_m": 1.0,
-                "fixed_length_m": 0.0,
-            }
-        ]
+        seen_rows = []
 
         class _AcceptedDialog:
             def __init__(self, rows, parent=None):
                 self.rows = rows
+                seen_rows.extend(rows)
 
             def exec(self):
                 return module.QDialog.DialogCode.Accepted
@@ -486,21 +402,18 @@ def test_open_transition_length_rules_pre_insert_reports_saved_for_next_insert(m
                 }
 
         monkeypatch.setattr(module, "TransitionLengthRuleDialog", _AcceptedDialog)
-        monkeypatch.setattr(panel, "_collect_transition_length_rule_rows", lambda: rule_rows)
-        monkeypatch.setattr(panel, "_get_transition_nodes_for_editing", lambda source_nodes=None: (_make_rule_pair_nodes(), False))
+        monkeypatch.setattr(panel, "_collect_transition_length_rule_rows", lambda *_args, **_kwargs: rule_rows)
+        monkeypatch.setattr(panel, "_get_transition_nodes_for_editing", lambda source_nodes=None: (nodes, True))
         monkeypatch.setattr(panel, "_build_settings", lambda: object())
         monkeypatch.setattr(panel, "_refresh_all_transition_length_presentations", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(panel, "_rebuild_calculation_summary_state", lambda *_args, **_kwargs: None)
-
-        success_calls = []
-        monkeypatch.setattr(module.InfoBar, "success", lambda *args, **kwargs: success_calls.append((args, kwargs)))
+        monkeypatch.setattr(panel, "_recalc_downstream", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(panel, "_apply_transition_length_override", lambda *_args, **_kwargs: False)
 
         panel._open_transition_length_rules()
 
-        assert success_calls, "插入前保存规则应给出“保存待生效”提示"
-        success_text = " ".join(str(part) for part in success_calls[0][0])
-        assert "规则已保存" in success_text
-        assert "下次插入渐变段时生效" in success_text
+        assert seen_rows == rule_rows
+        assert all(row["hit_scope"] == "current" for row in seen_rows)
     finally:
         panel.deleteLater()
 
@@ -564,7 +477,7 @@ def test_open_transition_length_rules_reports_updated_and_skipped_rows(monkeypat
                 }
 
         monkeypatch.setattr(module, "TransitionLengthRuleDialog", _AcceptedDialog)
-        monkeypatch.setattr(panel, "_collect_transition_length_rule_rows", lambda: rule_rows)
+        monkeypatch.setattr(panel, "_collect_transition_length_rule_rows", lambda *_args, **_kwargs: rule_rows)
         monkeypatch.setattr(panel, "_get_transition_nodes_for_editing", lambda source_nodes=None: (nodes, True))
         monkeypatch.setattr(panel, "_build_settings", lambda: object())
         monkeypatch.setattr(panel, "_refresh_all_transition_length_presentations", lambda *_args, **_kwargs: None)
@@ -574,6 +487,7 @@ def test_open_transition_length_rules_reports_updated_and_skipped_rows(monkeypat
         def _fake_apply(row_idx, **kwargs):
             source_nodes = kwargs.get("source_nodes") or nodes
             if row_idx == 3:
+                source_nodes[row_idx].transition_length = 6.0
                 source_nodes[row_idx].transition_length_calc_details = {
                     "distance_clamped": True,
                     "warning": "规则长度受现有拓扑限制",
@@ -594,15 +508,183 @@ def test_open_transition_length_rules_reports_updated_and_skipped_rows(monkeypat
         success_text = " ".join(str(part) for part in success_calls[0][0])
         assert "已更新 1 条" in success_text
         assert "1 条因单条覆盖未改" in success_text
-
-        assert warning_calls, "命中结果受当前拓扑限制时应提示重新插入渐变段"
-        warning_text = " ".join(str(part) for part in warning_calls[0][0])
-        assert "重新插入渐变段" in warning_text
+        assert "1 条受物理极限约束" in success_text
+        assert warning_calls == []
     finally:
         panel.deleteLater()
 
 
-def test_rule_rows_follow_current_table_snapshot_not_stale_calculated_nodes():
+def test_open_transition_length_rules_clamps_requested_length_to_physical_limit(monkeypatch):
+    module = _load_panel_module()
+    panel = _build_panel(module)
+    try:
+        panel.start_wl_edit.setText("420.000")
+        nodes = _make_transition_edit_nodes()
+        panel.calculated_nodes = nodes
+        panel._update_table_from_nodes_full(nodes)
+        _flush_events()
+
+        rule_rows = [
+            {
+                "rule_key": "隧洞-圆形|矩形暗涵|出口",
+                "upstream_structure_type": "隧洞-圆形",
+                "downstream_structure_type": "矩形暗涵",
+                "transition_type": "出口",
+                "count": 1,
+                "hit_count": 1,
+                "hit_scope": "current",
+                "rule_mode": "formula",
+                "step_size_m": 1.0,
+                "fixed_length_m": 0.0,
+            },
+            {
+                "rule_key": "隧洞-圆形|矩形暗涵|进口",
+                "upstream_structure_type": "隧洞-圆形",
+                "downstream_structure_type": "矩形暗涵",
+                "transition_type": "进口",
+                "count": 1,
+                "hit_count": 1,
+                "hit_scope": "current",
+                "rule_mode": "fixed",
+                "step_size_m": 1.0,
+                "fixed_length_m": 10.0,
+            },
+        ]
+
+        class _AcceptedDialog:
+            def __init__(self, rows, parent=None):
+                self.rows = rows
+
+            def exec(self):
+                return module.QDialog.DialogCode.Accepted
+
+            def get_rules(self):
+                return {
+                    row["rule_key"]: {
+                        "rule_key": row["rule_key"],
+                        "upstream_structure_type": row["upstream_structure_type"],
+                        "downstream_structure_type": row["downstream_structure_type"],
+                        "transition_type": row["transition_type"],
+                        "rule_mode": row["rule_mode"],
+                        "step_size_m": row["step_size_m"],
+                        "fixed_length_m": row["fixed_length_m"],
+                    }
+                    for row in self.rows
+                }
+
+        monkeypatch.setattr(module, "TransitionLengthRuleDialog", _AcceptedDialog)
+        monkeypatch.setattr(panel, "_collect_transition_length_rule_rows", lambda *_args, **_kwargs: rule_rows)
+
+        success_calls = []
+        warning_calls = []
+        monkeypatch.setattr(module.InfoBar, "success", lambda *args, **kwargs: success_calls.append((args, kwargs)))
+        monkeypatch.setattr(module.InfoBar, "warning", lambda *args, **kwargs: warning_calls.append((args, kwargs)))
+
+        panel._open_transition_length_rules()
+
+        details = panel.calculated_nodes[3].transition_length_calc_details
+        assert panel.node_table.item(3, 32).text() == "7.000"
+        assert details["requested_length"] == 10.0
+        assert details["physical_limit"] == 7.0
+        assert details["actual_length"] == 7.0
+        assert details["distance_clamped"] is True
+        tooltip = panel._build_transition_length_tooltip(details)
+        assert "规则目标长度：10.000 m" in tooltip
+        assert "物理上限：7.000 m" in tooltip
+        assert "最终采用长度：7.000 m" in tooltip
+        assert success_calls, "应用规则后应给出更新摘要"
+        success_text = " ".join(str(part) for part in success_calls[0][0])
+        assert "已更新 " in success_text
+        assert "1 条受物理极限约束" in success_text
+        assert not warning_calls, "批量规则应自动裁剪，不再额外弹出重新插入警告"
+    finally:
+        panel.deleteLater()
+
+
+def test_transition_length_process_section_displays_requested_and_physical_limit():
+    formula_module = importlib.import_module("app_渠系计算前端.water_profile.formula_dialog")
+
+    section = formula_module._build_transition_length_process_section(
+        {
+            "transition_type": "进口",
+            "struct_name": "矩形暗涵",
+            "B1": 2.2,
+            "B2": 1.8,
+            "coefficient": 2.5,
+            "L_basic": 1.0,
+            "channel_depth": 1.5,
+            "L_result": 7.0,
+            "formula_length": 5.4,
+            "requested_length": 10.0,
+            "physical_limit": 7.0,
+            "actual_length": 7.0,
+            "uses_existing_length": False,
+            "constraint_applied": "倒虹吸",
+            "constraint_desc": "5倍渠道设计水深",
+            "depth_multiplier": 5,
+            "L_depth": 7.5,
+            "prev_name": "上游明渠",
+            "next_name": "下游建筑物",
+            "warning": "目标长度超过当前物理上限，已按最大可用长度采用。",
+        },
+        "2. 渐变段长度计算过程",
+    )
+
+    assert "公式/规范计算值" in section["values"]
+    assert "规则目标长度" in section["values"]
+    assert "物理上限" in section["values"]
+    assert "最终采用长度" in section["values"]
+
+
+def test_show_transition_length_dialog_displays_rule_target_and_physical_limit(monkeypatch):
+    formula_module = importlib.import_module("app_渠系计算前端.water_profile.formula_dialog")
+    captured = {}
+
+    def _fake_formula_dialog(parent, title, sections):
+        captured["title"] = title
+        captured["sections"] = sections
+
+    monkeypatch.setattr(formula_module, "FormulaDialog", _fake_formula_dialog)
+
+    formula_module.show_transition_length_dialog(
+        None,
+        "测试渐变段",
+        {
+            "transition_type": "出口",
+            "struct_name": "矩形暗涵",
+            "B1": 3.0,
+            "B2": 1.4,
+            "coefficient": 3.5,
+            "L_basic": 5.6,
+            "channel_depth": 1.2,
+            "L_result": 6.0,
+            "formula_length": 5.4,
+            "requested_length": 10.0,
+            "physical_limit": 6.0,
+            "actual_length": 6.0,
+            "constraint_applied": "倒虹吸",
+            "constraint_desc": "5倍渠道设计水深",
+            "depth_multiplier": 5,
+            "L_depth": 6.0,
+            "prev_name": "上游建筑物",
+            "next_name": "下游明渠",
+            "source": "rule:step_up",
+            "warning": "目标长度超过当前物理上限，已按最大可用长度采用。",
+        },
+    )
+
+    assert captured["title"] == "测试渐变段 - 渐变段长度计算详情"
+    summary_section = next(sec for sec in captured["sections"] if sec["title"] == "5. 长度规则与采用结果")
+    assert "长度来源：组合规则-向上修约" in summary_section["values"]
+    assert "规则目标长度" in summary_section["values"]
+    assert "物理上限" in summary_section["values"]
+    assert "最终采用长度" in summary_section["values"]
+    assert "向上修整先计算目标整数长度，再按当前物理可用长度裁剪" in summary_section["content"]
+    final_section = next(sec for sec in captured["sections"] if sec["title"] == "6. 最终采用长度")
+    assert "$L = 6.000 \\ m$" == final_section["formula"]
+
+
+def test_rule_rows_require_transition_rows_even_if_table_text_changes():
     module = _load_panel_module()
     panel = _build_panel(module)
     try:
@@ -617,8 +699,7 @@ def test_rule_rows_follow_current_table_snapshot_not_stale_calculated_nodes():
 
         rows = panel._collect_transition_length_rule_rows()
 
-        assert rows, "应基于当前表3文本重新推导规则候选"
-        assert all(row["upstream_structure_type"] == "矩形暗涵" for row in rows)
+        assert rows == []
     finally:
         panel.deleteLater()
 

@@ -405,12 +405,25 @@ class TransitionLengthOverrideDialog(FormulaDialog):
 
         source = str(self._details.get("source", "") or "").strip()
         formula_length = float(self._details.get("formula_length", self._details.get("L_result", 0.0) or 0.0) or 0.0)
-        actual_length = float(self._details.get("actual_length", self._details.get("L_result", 0.0) or 0.0) or 0.0)
-        source_label = "单条覆盖" if source == "override" else "当前施工采用值"
-
-        intro = QLabel(
-            f"公式/规范长度：{formula_length:.3f} m    {source_label}：{actual_length:.3f} m"
+        requested_length = float(
+            self._details.get("requested_length", self._details.get("selected_length", formula_length) or 0.0) or 0.0
         )
+        physical_limit = float(self._details.get("physical_limit", 0.0) or 0.0)
+        actual_length = float(self._details.get("actual_length", self._details.get("L_result", 0.0) or 0.0) or 0.0)
+        warning = str(self._details.get("warning", self._details.get("length_warning", "")) or "").strip()
+        source_label = _get_transition_length_source_label(source)
+
+        intro_lines = [
+            f"来源：{source_label}",
+            f"公式/规范长度：{formula_length:.3f} m    规则目标长度：{requested_length:.3f} m",
+            f"当前采用长度：{actual_length:.3f} m",
+        ]
+        if physical_limit > 0:
+            intro_lines.append(f"物理上限：{physical_limit:.3f} m")
+        if warning:
+            intro_lines.append(f"说明：{warning}")
+        intro = QLabel("\n".join(intro_lines))
+        intro.setWordWrap(True)
         intro.setStyleSheet("font-size: 12px; color: #334155;")
         wrapper_layout.addWidget(intro)
 
@@ -634,11 +647,15 @@ def _get_transition_length_display_context(details: Dict[str, Any]) -> Dict[str,
     L_result = details.get('L_result', 0)
     actual_length = details.get('actual_length', L_result)
     formula_length = details.get('formula_length', L_result)
+    requested_length = details.get('requested_length', details.get('selected_length', formula_length))
+    physical_limit = details.get('physical_limit', 0.0) or 0.0
     uses_existing_length = bool(details.get('uses_existing_length', False))
     constraint_applied = details.get('constraint_applied', '')
     prev_name = details.get('prev_name', '')
     next_name = details.get('next_name', '')
-    displayed_formula_length = formula_length if uses_existing_length else L_result
+    displayed_formula_length = formula_length
+    warning = details.get('warning', details.get('length_warning', '')) or ''
+    source = details.get('source', '') or ''
 
     if transition_type == "进口":
         formula_str = r"$L = 2.5 \times |B_1 - B_2|$"
@@ -658,6 +675,8 @@ def _get_transition_length_display_context(details: Dict[str, Any]) -> Dict[str,
         "L_result": L_result,
         "actual_length": actual_length,
         "formula_length": formula_length,
+        "requested_length": requested_length,
+        "physical_limit": physical_limit,
         "uses_existing_length": uses_existing_length,
         "constraint_applied": constraint_applied,
         "prev_name": prev_name,
@@ -665,7 +684,25 @@ def _get_transition_length_display_context(details: Dict[str, Any]) -> Dict[str,
         "displayed_formula_length": displayed_formula_length,
         "formula_str": formula_str,
         "coeff_note": coeff_note,
+        "warning": warning,
+        "source": source,
+        "source_label": _get_transition_length_source_label(source),
     }
+
+
+def _get_transition_length_source_label(source: str) -> str:
+    source = str(source or "").strip()
+    if source == "override":
+        return "单条覆盖"
+    if source == "rule:step_up":
+        return "组合规则-向上修约"
+    if source == "rule:fixed":
+        return "组合规则-固定值"
+    if source == "rule:formula":
+        return "组合规则-公式值"
+    if source == "formula":
+        return "公式/规范"
+    return "当前采用值"
 
 
 def _format_transition_length_constraint_values(ctx: Dict[str, Any]) -> str:
@@ -719,13 +756,15 @@ def _build_transition_length_process_section(details: Dict[str, Any], title: str
         _format_transition_length_constraint_values(ctx),
     ]
 
-    if ctx["uses_existing_length"]:
-        values_lines.extend([
-            f"公式/规范计算值  $L_{{formula}} = {ctx['displayed_formula_length']:.3f}$ m",
-            f"当前采用长度  $L_{{actual}} = {ctx['actual_length']:.3f}$ m",
-        ])
-    else:
-        values_lines.append(f"最终采用长度  $L = {ctx['L_result']:.3f}$ m")
+    values_lines.extend([
+        f"公式/规范计算值  $L_{{formula}} = {ctx['formula_length']:.3f}$ m",
+        f"规则目标长度  $L_{{target}} = {ctx['requested_length']:.3f}$ m",
+    ])
+    if ctx["physical_limit"] > 0:
+        values_lines.append(f"物理上限  $L_{{limit}} = {ctx['physical_limit']:.3f}$ m")
+    values_lines.append(f"最终采用长度  $L_{{actual}} = {ctx['actual_length']:.3f}$ m")
+    if ctx["warning"]:
+        values_lines.append(f"说明：{ctx['warning']}")
 
     return {
         "title": title,
@@ -1079,13 +1118,17 @@ def show_transition_length_dialog(parent, node_name: str, details: Dict[str, Any
     channel_depth = ctx["channel_depth"]
     L_result = ctx["L_result"]
     actual_length = ctx["actual_length"]
-    uses_existing_length = ctx["uses_existing_length"]
     constraint_applied = ctx["constraint_applied"]
     prev_name = ctx["prev_name"]
     next_name = ctx["next_name"]
     displayed_formula_length = ctx["displayed_formula_length"]
     formula_str = ctx["formula_str"]
     coeff_note = ctx["coeff_note"]
+    formula_length = ctx["formula_length"]
+    requested_length = ctx["requested_length"]
+    physical_limit = ctx["physical_limit"]
+    warning = ctx["warning"]
+    source_label = ctx["source_label"]
 
     sections = [
         {"title": "1. 渐变段长度基本公式",
@@ -1123,28 +1166,36 @@ def show_transition_length_dialog(parent, node_name: str, details: Dict[str, Any
              "content": "无规范约束条件生效，直接采用基本公式计算值。"}
         )
 
-    if uses_existing_length:
-        sections.append(
-            {
-                "title": "5. 当前采用长度",
-                "values": (
-                    f"公式/规范计算值  $L_{{formula}} = {displayed_formula_length:.3f}$ m\n"
-                    f"当前采用长度  $L_{{actual}} = {actual_length:.3f}$ m"
-                ),
-                "content": "当前结果保留表格/旧项目中的实际采用长度，双击仅补建说明详情，不覆盖现有 L 值。",
-            }
-        )
-        sections.append(
-            {
-                "title": "6. 最终采用长度",
-                "formula": f"$L = {actual_length:.3f} \\ m$",
-            }
-        )
-    elif constraint_applied:
-        sections.append(
-            {"title": "5. 计算结果（取大值）",
-             "formula": f"$L = {L_result:.3f} \\ m$"}
-        )
+    summary_lines = [
+        f"长度来源：{source_label}",
+        f"公式/规范计算值  $L_{{formula}} = {formula_length:.3f}$ m",
+        f"规则目标长度  $L_{{target}} = {requested_length:.3f}$ m",
+    ]
+    if physical_limit > 0:
+        summary_lines.append(f"物理上限  $L_{{limit}} = {physical_limit:.3f}$ m")
+    summary_lines.append(f"最终采用长度  $L_{{actual}} = {actual_length:.3f}$ m")
+    if warning:
+        summary_lines.append(f"说明：{warning}")
+
+    summary_content = "向上修整先计算目标整数长度，再按当前物理可用长度裁剪。"
+    if constraint_applied:
+        summary_content += " 当前结果已结合规范约束与长度规则统一确定。"
+    else:
+        summary_content += " 当前结果直接在公式值与长度规则基础上确定。"
+
+    sections.append(
+        {
+            "title": "5. 长度规则与采用结果",
+            "values": "\n".join(summary_lines),
+            "content": summary_content,
+        }
+    )
+    sections.append(
+        {
+            "title": "6. 最终采用长度",
+            "formula": f"$L = {actual_length:.3f} \\ m$",
+        }
+    )
 
     title = f"{node_name} - 渐变段长度计算详情"
     if callable(on_save_override) or callable(on_clear_override):

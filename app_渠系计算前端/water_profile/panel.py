@@ -448,17 +448,14 @@ class TransitionLengthRuleDialog(QDialog):
     @staticmethod
     def _format_hit_scope_text(row: dict) -> str:
         hit_count = int(row.get("hit_count", row.get("count", 0)) or 0)
-        hit_scope = str(row.get("hit_scope", "predicted") or "predicted").strip()
-        if hit_scope == "current":
-            return f"当前命中 {hit_count} 条"
-        return f"预计命中 {hit_count} 处"
+        return f"当前命中 {hit_count} 条"
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
         intro = QLabel(
-            "仅展示当前工程已出现的渐变段组合。可选择保留公式值、按步长向上修约，或直接指定固定长度。命中情况会随插入前后切换为预计或当前统计。"
+            "仅展示表3中已插入的渐变段实例组合。可选择保留公式值、按步长向上修约，或直接指定固定长度。"
         )
         intro.setWordWrap(True)
         intro.setStyleSheet("color: #555; font-size: 12px;")
@@ -547,6 +544,13 @@ class TransitionLengthRuleDialog(QDialog):
         reset_step_btn.clicked.connect(self._reset_default_steps)
         footer.addWidget(reset_step_btn)
         layout.addLayout(footer)
+
+        note = QLabel(
+            "说明：向上修整先计算目标整数长度，再按当前物理可用长度裁剪；若当前拓扑不足，最终长度可能不是整数。"
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #6B7280; font-size: 12px;")
+        layout.addWidget(note)
 
         btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btn_box.button(QDialogButtonBox.Ok).setText("保存并应用")
@@ -2405,14 +2409,14 @@ class WaterProfilePanel(QWidget):
             for node in nodes
         )
 
+    def _has_current_transition_instances(self, source_nodes=None) -> bool:
+        nodes, _ = self._get_transition_nodes_for_editing(source_nodes)
+        if not nodes:
+            return False
+        return any(getattr(node, "is_transition", False) for node in nodes)
+
     def _should_show_transition_length_rule_nudge(self) -> bool:
-        if getattr(self, "_length_rule_nudge_seen", False):
-            return False
-        if self._has_existing_transition_insertions():
-            return False
-        if self._has_customized_transition_length_rules():
-            return False
-        return bool(self._collect_transition_length_rule_rows())
+        return False
 
     def _clear_transition_length_rule_nudge(self) -> None:
         info_bar = getattr(self, "_length_rule_nudge_bar", None)
@@ -2425,19 +2429,39 @@ class WaterProfilePanel(QWidget):
             pass
 
     def _show_transition_length_rule_nudge(self) -> None:
-        self._length_rule_nudge_seen = True
-        self._clear_transition_length_rule_nudge()
+        self._show_transition_length_rules_insert_first_dialog()
 
+    def _show_transition_length_rules_insert_first_dialog(self) -> None:
+        box = MessageBox(
+            "请先插入渐变段",
+            "长度规则需要基于已插入的渐变段实例设置。\n\n当前还没有渐变段实例，请先执行“插入渐变段”。",
+            self,
+        )
+        box.yesButton.setText("去插入渐变段")
+        box.cancelButton.setText("关闭")
+        try:
+            box.yesButton.setAutoDefault(False)
+            box.yesButton.setDefault(False)
+            box.cancelButton.setAutoDefault(True)
+            box.cancelButton.setDefault(True)
+        except Exception:
+            pass
+        box.cancelButton.setFocus(Qt.TabFocusReason)
+        if box.exec():
+            self._insert_transitions()
+
+    def _show_transition_length_rules_post_insert_bar(self, summary: str, next_step: str) -> None:
+        self._clear_transition_length_rule_nudge()
         info_bar = InfoBar.new(
-            InfoBarIcon.INFORMATION,
-            "可先设置长度规则",
-            "本次将按公式/规范值插入；如需统一控制长度，可先设置长度规则。",
+            InfoBarIcon.SUCCESS,
+            summary,
+            next_step,
             isClosable=True,
             duration=6000,
             position=InfoBarPosition.TOP,
             parent=self._info_parent(),
         )
-        action_btn = PushButton("去设置长度规则")
+        action_btn = PushButton("继续设置长度规则")
         action_btn.clicked.connect(
             lambda: (
                 self._clear_transition_length_rule_nudge(),
@@ -2447,9 +2471,6 @@ class WaterProfilePanel(QWidget):
         info_bar.addWidget(action_btn)
         info_bar.destroyed.connect(lambda *_args: setattr(self, "_length_rule_nudge_bar", None))
         self._length_rule_nudge_bar = info_bar
-
-        if not getattr(self, "_loading_project", False):
-            self.data_changed.emit()
 
     @staticmethod
     def _get_transition_length_source_kind(source: str) -> str:
@@ -2648,114 +2669,42 @@ class WaterProfilePanel(QWidget):
             entry["hit_scope"] = hit_scope
 
         has_current_transitions = any(getattr(node, "is_transition", False) for node in nodes)
-        if has_current_transitions:
-            for row_idx, node in enumerate(nodes):
-                if not getattr(node, "is_transition", False):
-                    continue
-                details = getattr(node, "transition_length_calc_details", None) or {}
-                upstream_structure_type = str(
-                    getattr(node, "transition_rule_upstream_structure_type", "") or details.get("upstream_structure_type", "")
-                ).strip()
-                downstream_structure_type = str(
-                    getattr(node, "transition_rule_downstream_structure_type", "") or details.get("downstream_structure_type", "")
-                ).strip()
-                transition_type = str(getattr(node, "transition_type", "") or details.get("transition_type", "")).strip()
+        if not has_current_transitions:
+            return []
 
-                if not upstream_structure_type:
-                    for idx in range(row_idx - 1, -1, -1):
-                        candidate = nodes[idx]
-                        if getattr(candidate, "is_transition", False) or getattr(candidate, "is_auto_inserted_channel", False):
-                            continue
-                        upstream_structure_type = _get_struct_type_name(candidate)
-                        break
-                if not downstream_structure_type:
-                    for idx in range(row_idx + 1, len(nodes)):
-                        candidate = nodes[idx]
-                        if getattr(candidate, "is_transition", False) or getattr(candidate, "is_auto_inserted_channel", False):
-                            continue
-                        downstream_structure_type = _get_struct_type_name(candidate)
-                        break
+        for row_idx, node in enumerate(nodes):
+            if not getattr(node, "is_transition", False):
+                continue
+            details = getattr(node, "transition_length_calc_details", None) or {}
+            upstream_structure_type = str(
+                getattr(node, "transition_rule_upstream_structure_type", "") or details.get("upstream_structure_type", "")
+            ).strip()
+            downstream_structure_type = str(
+                getattr(node, "transition_rule_downstream_structure_type", "") or details.get("downstream_structure_type", "")
+            ).strip()
+            transition_type = str(getattr(node, "transition_type", "") or details.get("transition_type", "")).strip()
 
-                _append_rule_hit(
-                    upstream_structure_type,
-                    downstream_structure_type,
-                    transition_type,
-                    "current",
-                )
-        else:
-            base_nodes = [
-                copy.deepcopy(node)
-                for node in nodes
-                if not getattr(node, 'is_transition', False) and not getattr(node, 'is_auto_inserted_channel', False)
-            ]
-            if len(base_nodes) < 2:
-                return []
-            if not CALCULATOR_AVAILABLE:
-                return []
-            try:
-                settings = self._build_settings()
-                calculator = WaterProfileCalculator(settings)
-                preserved_state = []
-                for node in base_nodes:
-                    preserved_state.append({
-                        "in_out": getattr(node, "in_out", None),
-                        "station_MC": float(getattr(node, "station_MC", 0.0) or 0.0),
-                    })
-                calculator.preprocess_nodes(base_nodes)
-                for node, state in zip(base_nodes, preserved_state):
-                    explicit_io = state["in_out"]
-                    explicit_io_value = getattr(explicit_io, "value", "") if explicit_io is not None else ""
-                    if explicit_io_value in {"进", "出"}:
-                        node.in_out = explicit_io
-                    if abs(state["station_MC"]) > 1e-9:
-                        node.station_MC = state["station_MC"]
-            except Exception:
-                return []
+            if not upstream_structure_type:
+                for idx in range(row_idx - 1, -1, -1):
+                    candidate = nodes[idx]
+                    if getattr(candidate, "is_transition", False) or getattr(candidate, "is_auto_inserted_channel", False):
+                        continue
+                    upstream_structure_type = _get_struct_type_name(candidate)
+                    break
+            if not downstream_structure_type:
+                for idx in range(row_idx + 1, len(nodes)):
+                    candidate = nodes[idx]
+                    if getattr(candidate, "is_transition", False) or getattr(candidate, "is_auto_inserted_channel", False):
+                        continue
+                    downstream_structure_type = _get_struct_type_name(candidate)
+                    break
 
-            for idx in range(len(base_nodes) - 1):
-                current_node = base_nodes[idx]
-                next_node = base_nodes[idx + 1]
-
-                if calculator._is_diversion_gate_type(current_node.structure_type):
-                    gate_check = calculator._check_gap_gate_to_entry(current_node, next_node)
-                    if gate_check.get("need_transition_2"):
-                        _append_rule_hit(
-                            _get_struct_type_name(current_node),
-                            _get_struct_type_name(next_node),
-                            "进口",
-                            "predicted",
-                        )
-                    continue
-
-                if calculator._is_diversion_gate_type(next_node.structure_type):
-                    gate_check = calculator._check_gap_exit_to_gate(current_node, next_node)
-                    if gate_check.get("need_transition_1"):
-                        _append_rule_hit(
-                            _get_struct_type_name(current_node),
-                            _get_struct_type_name(next_node),
-                            "出口",
-                            "predicted",
-                        )
-                    continue
-
-                if not calculator._needs_transition(current_node, next_node):
-                    continue
-
-                check_result = calculator._should_insert_open_channel(current_node, next_node, base_nodes)
-                if check_result.get("need_transition_1"):
-                    _append_rule_hit(
-                        _get_struct_type_name(current_node),
-                        _get_struct_type_name(next_node),
-                        "出口",
-                        "predicted",
-                    )
-                if check_result.get("need_transition_2"):
-                    _append_rule_hit(
-                        _get_struct_type_name(current_node),
-                        _get_struct_type_name(next_node),
-                        "进口",
-                        "predicted",
-                    )
+            _append_rule_hit(
+                upstream_structure_type,
+                downstream_structure_type,
+                transition_type,
+                "current",
+            )
 
         result = []
         for key in sorted(rows_by_key.keys()):
@@ -2790,11 +2739,11 @@ class WaterProfilePanel(QWidget):
         if source_kind == "single_override":
             return "单条覆盖"
         if source_kind == "rule:step_up":
-            return "长度规则(step_up)"
+            return "组合规则-向上修约"
         if source_kind == "rule:fixed":
-            return "长度规则(fixed)"
+            return "组合规则-固定值"
         if source_kind == "rule:formula":
-            return "长度规则(按公式)"
+            return "组合规则-公式值"
         return "公式/规范"
 
     @classmethod
@@ -2925,12 +2874,17 @@ class WaterProfilePanel(QWidget):
         if not isinstance(details, dict):
             return ""
         formula_length = details.get("formula_length", details.get("L_result", 0.0) or 0.0) or 0.0
+        requested_length = details.get("requested_length", details.get("selected_length", formula_length) or 0.0) or 0.0
+        physical_limit = details.get("physical_limit", 0.0) or 0.0
         actual_length = details.get("actual_length", details.get("L_result", 0.0) or 0.0) or 0.0
         lines = [
             f"来源：{self._get_transition_length_source_label(details)}",
             f"公式/规范长度：{formula_length:.3f} m",
-            f"当前采用长度：{actual_length:.3f} m",
+            f"规则目标长度：{requested_length:.3f} m",
         ]
+        if physical_limit > 0:
+            lines.append(f"物理上限：{physical_limit:.3f} m")
+        lines.append(f"最终采用长度：{actual_length:.3f} m")
         warning = str(details.get("warning", details.get("length_warning", "")) or "").strip()
         if warning:
             lines.append(f"警告：{warning}")
@@ -3045,11 +2999,23 @@ class WaterProfilePanel(QWidget):
             )
         menu.exec(table.viewport().mapToGlobal(pos))
 
+    @staticmethod
+    def _get_transition_length_update_signature(node):
+        return (
+            round(float(getattr(node, "transition_length", 0.0) or 0.0), 6),
+            round(float(getattr(node, "head_loss_transition", 0.0) or 0.0), 6),
+        )
+
     def _open_transition_length_rules(self):
         self._clear_transition_length_rule_nudge()
-        rule_rows = self._collect_transition_length_rule_rows()
+        nodes_for_apply, uses_calculated_nodes = self._get_transition_nodes_for_editing()
+        if not nodes_for_apply or not any(getattr(node, "is_transition", False) for node in nodes_for_apply):
+            self._show_transition_length_rules_insert_first_dialog()
+            return
+
+        rule_rows = self._collect_transition_length_rule_rows(nodes_for_apply)
         if not rule_rows:
-            fluent_info(self, "提示", "当前工程尚未出现可配置组合")
+            fluent_info(self, "提示", "当前未找到可配置的渐变段实例")
             return
         dialog = TransitionLengthRuleDialog(rule_rows, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -3059,13 +3025,9 @@ class WaterProfilePanel(QWidget):
         self._transition_length_rules = self._normalize_transition_length_rule_map(dialog.get_rules())
         self._settings = self._build_settings()
 
-        nodes_for_apply, uses_calculated_nodes = self._get_transition_nodes_for_editing()
-        has_current_transitions = bool(
-            nodes_for_apply and any(getattr(node, "is_transition", False) for node in nodes_for_apply)
-        )
         changed_rows = []
         skipped_override_rows = 0
-        topology_limited_rows = 0
+        clamped_rows = 0
         if nodes_for_apply:
             with self._table_batch_update(self.node_table):
                 for row_idx, node in enumerate(nodes_for_apply):
@@ -3075,6 +3037,7 @@ class WaterProfilePanel(QWidget):
                         skipped_override_rows += 1
                         self._refresh_transition_length_item_presentation(row_idx, nodes_for_apply)
                         continue
+                    before_signature = self._get_transition_length_update_signature(node)
                     if self._apply_transition_length_override(
                         row_idx,
                         source_nodes=nodes_for_apply,
@@ -3082,10 +3045,12 @@ class WaterProfilePanel(QWidget):
                         refresh_summary=False,
                         mark_dirty=False,
                     ):
-                        changed_rows.append(row_idx)
                         details = getattr(nodes_for_apply[row_idx], "transition_length_calc_details", None) or {}
+                        after_signature = self._get_transition_length_update_signature(nodes_for_apply[row_idx])
+                        if before_signature != after_signature:
+                            changed_rows.append(row_idx)
                         if bool(details.get("distance_clamped", False)):
-                            topology_limited_rows += 1
+                            clamped_rows += 1
                 if changed_rows:
                     self._recalc_downstream(min(changed_rows))
             self._refresh_all_transition_length_presentations(nodes_for_apply)
@@ -3097,30 +3062,21 @@ class WaterProfilePanel(QWidget):
         self._rebuild_calculation_summary_state(nodes_for_apply)
         if not getattr(self, "_loading_project", False):
             self.data_changed.emit()
-        if has_current_transitions:
-            InfoBar.success(
-                "已应用长度规则",
-                f"已更新 {len(changed_rows)} 条渐变段；{skipped_override_rows} 条因单条覆盖未改",
-                parent=self._info_parent(),
-                duration=3000,
-                position=InfoBarPosition.TOP,
+        detail_parts = []
+        if skipped_override_rows > 0:
+            detail_parts.append(f"{skipped_override_rows} 条因单条覆盖未改")
+        if clamped_rows > 0:
+            detail_parts.append(
+                f"其中 {clamped_rows} 条受物理极限约束，未能修整到目标整数；如需更长长度，请重新插入渐变段或调整结构布置"
             )
-        else:
-            InfoBar.success(
-                "规则已保存",
-                "长度规则已保存，将在下次插入渐变段时生效。",
-                parent=self._info_parent(),
-                duration=3000,
-                position=InfoBarPosition.TOP,
-            )
-        if topology_limited_rows > 0:
-            InfoBar.warning(
-                "需重新插入渐变段",
-                f"{topology_limited_rows} 条命中结果受当前拓扑限制；若需按新规则重建拓扑，请重新插入渐变段。",
-                parent=self._info_parent(),
-                duration=3500,
-                position=InfoBarPosition.TOP,
-            )
+        detail_text = "；".join(detail_parts) if detail_parts else "已按当前实例重新计算并应用长度规则。"
+        InfoBar.success(
+            "已应用长度规则",
+            f"已更新 {len(changed_rows)} 条渐变段。{detail_text}",
+            parent=self._info_parent(),
+            duration=4500,
+            position=InfoBarPosition.TOP,
+        )
 
     def _apply_transition_length_override(
         self,
@@ -3176,6 +3132,10 @@ class WaterProfilePanel(QWidget):
         except Exception:
             return False
 
+        physical_limit = self._get_transition_length_override_upper_bound(ctx)
+        if physical_limit <= 0:
+            physical_limit = None
+
         if clear_override:
             node.transition_length_override_m = None
         elif override_value is not None:
@@ -3184,7 +3144,7 @@ class WaterProfilePanel(QWidget):
                 current_length = float(getattr(node, "transition_length", 0.0) or 0.0)
             except (TypeError, ValueError):
                 current_length = 0.0
-            upper_bound = self._get_transition_length_override_upper_bound(ctx)
+            upper_bound = physical_limit or 0.0
             if override_value > upper_bound + 1e-6:
                 return self._reject_transition_length_override(
                     row_idx,
@@ -3203,6 +3163,7 @@ class WaterProfilePanel(QWidget):
                 nodes,
                 actual_length=override_value,
                 preserve_existing_length=False,
+                physical_limit=physical_limit,
             )
             hyd_calc.ensure_transition_loss_details(
                 node,
@@ -3211,6 +3172,7 @@ class WaterProfilePanel(QWidget):
                 nodes,
                 actual_length=override_value,
                 preserve_existing_length=False,
+                physical_limit=physical_limit,
             )
 
             length_details = getattr(node, "transition_length_calc_details", None)
@@ -7032,10 +6994,6 @@ class WaterProfilePanel(QWidget):
                             parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
                 return
 
-            if self._should_show_transition_length_rule_nudge():
-                self._show_transition_length_rule_nudge()
-                return
-
             settings = self._build_settings()
             if not settings:
                 return
@@ -7207,8 +7165,7 @@ class WaterProfilePanel(QWidget):
                 next_step = "下一步：请点击" + "→".join(step_parts)
             else:
                 next_step = "下一步：请点击【执行计算】"
-            InfoBar.success(summary, next_step,
-                           parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
+            self._show_transition_length_rules_post_insert_bar(summary, next_step)
 
         except Exception as e:
             import traceback

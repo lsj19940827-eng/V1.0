@@ -2047,7 +2047,8 @@ class HydraulicCalculator:
                                                prev_node: Optional[ChannelNode] = None,
                                                next_node: Optional[ChannelNode] = None,
                                                actual_length: Optional[float] = None,
-                                               preserve_existing_length: bool = False) -> Dict[str, float]:
+                                               preserve_existing_length: bool = False,
+                                               physical_limit: Optional[float] = None) -> Dict[str, float]:
         """
         基于公式值统一应用：单条覆盖 > 组合规则 > 公式/规范值 > 已采用最终值。
         """
@@ -2098,9 +2099,11 @@ class HydraulicCalculator:
                 selected_length = formula_length
                 source = "rule:formula"
 
+        requested_length = selected_length
         effective_length = selected_length
         uses_existing_length = override_length is not None
         distance_clamped = False
+        physical_limit_value = self._normalize_length_value(physical_limit)
 
         preserved_length = self._normalize_length_value(actual_length)
         if preserve_existing_length and preserved_length is not None:
@@ -2112,6 +2115,13 @@ class HydraulicCalculator:
                     warnings,
                     "最终采用长度受可用里程约束已压缩。",
                 )
+        elif physical_limit_value is not None and physical_limit_value + ZERO_TOLERANCE < effective_length:
+            effective_length = physical_limit_value
+            distance_clamped = True
+            self._append_transition_warning(
+                warnings,
+                "目标长度超过当前物理上限，已按最大可用长度采用。",
+            )
 
         warning = "；".join(warnings)
         transition_node.transition_length_source = source
@@ -2126,6 +2136,8 @@ class HydraulicCalculator:
             "rule_mode": rule_mode,
             "rule_value": rule_value,
             "selected_length": selected_length,
+            "requested_length": requested_length,
+            "physical_limit": physical_limit_value,
             "actual_length": effective_length,
             "source": source,
             "warning": warning,
@@ -2322,7 +2334,8 @@ class HydraulicCalculator:
                                          next_node: ChannelNode,
                                          all_nodes: List[ChannelNode],
                                          actual_length: Optional[float] = None,
-                                         preserve_existing_length: bool = False) -> Dict[str, float]:
+                                         preserve_existing_length: bool = False,
+                                         physical_limit: Optional[float] = None) -> Dict[str, float]:
         """
         确保渐变段长度详情存在，并在需要时保留外部已采用的实际长度。
 
@@ -2346,10 +2359,13 @@ class HydraulicCalculator:
             next_node,
             actual_length=actual_length,
             preserve_existing_length=preserve_existing_length,
+            physical_limit=physical_limit,
         )
         details["formula_length"] = resolved["formula_length"]
         details["rule_mode"] = resolved["rule_mode"]
         details["rule_value"] = resolved["rule_value"]
+        details["requested_length"] = resolved["requested_length"]
+        details["physical_limit"] = resolved["physical_limit"]
         details["actual_length"] = resolved["actual_length"]
         details["L_result"] = resolved["actual_length"]
         details["source"] = resolved["source"]
@@ -2430,7 +2446,8 @@ class HydraulicCalculator:
                                        next_node: ChannelNode,
                                        all_nodes: List[ChannelNode],
                                        actual_length: Optional[float] = None,
-                                       preserve_existing_length: bool = False) -> Dict[str, float]:
+                                       preserve_existing_length: bool = False,
+                                       physical_limit: Optional[float] = None) -> Dict[str, float]:
         """
         确保渐变段水头损失详情存在，并补齐完整推导所需的中间参数。
 
@@ -2443,6 +2460,7 @@ class HydraulicCalculator:
             all_nodes,
             actual_length=actual_length,
             preserve_existing_length=preserve_existing_length,
+            physical_limit=physical_limit,
         )
 
         length = length_details.get(
