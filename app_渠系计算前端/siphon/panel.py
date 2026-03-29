@@ -438,6 +438,17 @@ class SiphonPanel(QWidget):
         self.btn_view_plan.clicked.connect(lambda: self._switch_view("plan"))
         tb.addWidget(self.btn_view_plan)
 
+        self.lbl_canvas_hint = QLabel("")
+        self.lbl_canvas_hint.setWordWrap(False)
+        self.lbl_canvas_hint.setVisible(False)
+        self.lbl_canvas_hint.setMinimumWidth(0)
+        self.lbl_canvas_hint.setMaximumWidth(320)
+        self.lbl_canvas_hint.setFixedHeight(22)
+        self.lbl_canvas_hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.lbl_canvas_hint.setStyleSheet(
+            "color:#CC6600;font-size:11px;background:#FFF6E6;border:1px solid #F1D6A8;"
+            "border-radius:11px;padding:1px 8px;")
+        tb.addWidget(self.lbl_canvas_hint)
         tb.addStretch()
 
         self.lbl_zoom = QLabel("100%")
@@ -473,13 +484,6 @@ class SiphonPanel(QWidget):
             lbl.setStyleSheet("color:#424242;font-size:12px;background:transparent;border:none;")
             lbl.setMinimumHeight(100)
             cl.addWidget(lbl)
-
-        self.lbl_canvas_hint = QLabel("")
-        self.lbl_canvas_hint.setWordWrap(True)
-        self.lbl_canvas_hint.setVisible(False)
-        self.lbl_canvas_hint.setStyleSheet(
-            "color:#CC6600;font-size:12px;background:#FFF6E6;border:1px solid #F1D6A8;border-radius:4px;padding:4px 8px;")
-        cl.addWidget(self.lbl_canvas_hint)
 
         # 状态提示
         self.lbl_data_status = QLabel("")
@@ -543,10 +547,14 @@ class SiphonPanel(QWidget):
             return
         if self.canvas.should_suggest_detail_view():
             view_label = "平面图" if self.canvas.get_view_mode() == "plan" else "纵断面"
-            self.lbl_canvas_hint.setText(f"当前{view_label}轴线较细长，建议点“展开”或双击预览查看大图。")
+            self.lbl_canvas_hint.setText(f"{view_label}较细长，建议点“展开”查看大图")
+            self.lbl_canvas_hint.setToolTip(
+                f"当前{view_label}轴线较细长，建议点“展开”或双击预览查看大图。"
+            )
             self.lbl_canvas_hint.setVisible(True)
         else:
             self.lbl_canvas_hint.clear()
+            self.lbl_canvas_hint.setToolTip("")
             self.lbl_canvas_hint.setVisible(False)
 
     # ---- B: 参数区 ----
@@ -578,24 +586,36 @@ class SiphonPanel(QWidget):
     def _build_basic_params_tab(self, parent):
         lay = QVBoxLayout(parent)
         lay.setContentsMargins(4, 2, 4, 2)
-        lay.setSpacing(6)
+        lay.setSpacing(4)
 
         # ========== Card 1: 全局水力参数 — 三栏布局（新方案，标签上方） ==========
         # 左栏(管道基础参数) | 中栏(管道运行参数) | 右栏(转弯控制参数)
         card1 = QGroupBox("全局水力参数")
         _c1_lay = QHBoxLayout(card1)
-        _c1_lay.setContentsMargins(10, 8, 10, 8)
+        _c1_lay.setContentsMargins(8, 4, 8, 4)
         _c1_lay.setSpacing(0)
 
         def _vsep():
             _s = QFrame(); _s.setFrameShape(QFrame.Shape.VLine); _s.setFrameShadow(QFrame.Shadow.Sunken)
             _s.setStyleSheet("color:#D0D5E0;"); return _s
 
-        def _hrow(*widgets):
+        def _hrow(*widgets, protect_height=False):
             _w = QWidget(); _l = QHBoxLayout(_w)
             _l.setContentsMargins(0, 0, 0, 0); _l.setSpacing(6)
-            for ww in widgets: _l.addWidget(ww)
-            _l.addStretch(); return _w
+            row_min_height = 0
+            for ww in widgets:
+                _l.addWidget(ww)
+                if hasattr(ww, "minimumHeight") and callable(ww.minimumHeight):
+                    row_min_height = max(row_min_height, ww.minimumHeight())
+                if hasattr(ww, "minimumSizeHint") and callable(ww.minimumSizeHint):
+                    row_min_height = max(row_min_height, ww.minimumSizeHint().height())
+                if hasattr(ww, "sizeHint") and callable(ww.sizeHint):
+                    row_min_height = max(row_min_height, ww.sizeHint().height())
+            _l.addStretch()
+            if protect_height and row_min_height > 0:
+                _w.setFixedHeight(row_min_height)
+                _w.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            return _w
 
         def _star(color):
             _s = QLabel(f"<span style='color:{color};font-weight:bold;font-size:14px;'>*</span>")
@@ -610,7 +630,7 @@ class SiphonPanel(QWidget):
         col_l = QWidget()
         _ll = QVBoxLayout(col_l)
         _ll.setContentsMargins(0, 0, 12, 0)
-        _ll.setSpacing(3)
+        _ll.setSpacing(2)
 
         _ll.addWidget(QLabel("设计流量 Q (m³/s):"))
         self.edit_Q = LineEdit(); self.edit_Q.setText("10.0"); self.edit_Q.setFixedWidth(80)
@@ -618,24 +638,24 @@ class SiphonPanel(QWidget):
         self.lbl_Q_hint = QLabel("")
         self.lbl_Q_hint.setStyleSheet("color:#0066CC;font-size:12px;")
         _ll.addWidget(_hrow(self.edit_Q, self.lbl_Q_hint))
-        _ll.addSpacing(4)
+        _ll.addSpacing(2)
 
         _ll.addWidget(QLabel("糙率 n:"))
         self.edit_n = LineEdit(); self.edit_n.setText("0.014"); self.edit_n.setFixedWidth(60)
         self.lbl_n_hint = QLabel("")
         self.lbl_n_hint.setStyleSheet("color:#0066CC;font-size:12px;")
         _ll.addWidget(_hrow(self.edit_n, self.lbl_n_hint))
-        _ll.addSpacing(4)
+        _ll.addSpacing(2)
 
         _ll.addWidget(QLabel("管径 D:"))
         self.lbl_D_theory = QLabel("D = --")
         self.lbl_D_theory.setStyleSheet(f"color:{P};font-size:12px;font-weight:bold;")
         _ll.addWidget(self.lbl_D_theory)
-        _ll.addSpacing(4)
+        _ll.addSpacing(2)
 
         _d_container = QWidget()
         _d_vlay = QVBoxLayout(_d_container)
-        _d_vlay.setContentsMargins(0, 0, 0, 0); _d_vlay.setSpacing(3)
+        _d_vlay.setContentsMargins(0, 0, 0, 0); _d_vlay.setSpacing(2)
         _d_cb_row = QWidget(); _d_cb_lay = QHBoxLayout(_d_cb_row)
         _d_cb_lay.setContentsMargins(0, 0, 0, 0); _d_cb_lay.setSpacing(6)
         self.cb_D_override = CheckBox("指定管径")
@@ -683,7 +703,7 @@ class SiphonPanel(QWidget):
         col_m = QWidget()
         _ml = QVBoxLayout(col_m)
         _ml.setContentsMargins(12, 0, 12, 0)
-        _ml.setSpacing(3)
+        _ml.setSpacing(2)
 
         _ml.addWidget(_lbl_with_star("拟定流速 v (m/s):", "#E53935"))
         self.edit_v = LineEdit(); self.edit_v.setText("2.0"); self.edit_v.setFixedWidth(70)
@@ -693,8 +713,8 @@ class SiphonPanel(QWidget):
         self.edit_v.editingFinished.connect(self._on_v_confirmed)
         self.lbl_v_hint = QLabel("← 请输入拟定流速")
         self.lbl_v_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
-        _ml.addWidget(_hrow(self.edit_v, self.lbl_v_hint))
-        _ml.addSpacing(4)
+        _ml.addWidget(_hrow(self.edit_v, self.lbl_v_hint, protect_height=True))
+        _ml.addSpacing(2)
 
         _ml.addWidget(_lbl_with_star("管道根数 N (根):", "#E53935"))
         self.spin_num_pipes = _NumPipesWidget()
@@ -705,21 +725,20 @@ class SiphonPanel(QWidget):
         self.spin_num_pipes.editingFinished.connect(self._on_num_pipes_confirmed)
         self.lbl_num_pipes_hint = QLabel("← 请确认管道数（建议）")
         self.lbl_num_pipes_hint.setStyleSheet("color:#CC6600;font-size:12px;font-weight:bold;")
-        _ml.addWidget(_hrow(self.spin_num_pipes, self.lbl_num_pipes_hint))
-        _ml.addSpacing(4)
+        _ml.addWidget(_hrow(self.spin_num_pipes, self.lbl_num_pipes_hint, protect_height=True))
+        _ml.addSpacing(2)
 
-        _ml.addWidget(QLabel("计算目标:"))
-        self.lbl_calc_target = QLabel("计算总水头损失")
+        self.lbl_calc_target = QLabel("计算目标：计算总水头损失")
         self.lbl_calc_target.setStyleSheet("color:#00796B;font-weight:bold;")
         _ml.addWidget(self.lbl_calc_target)
-        _ml.addSpacing(4)
+        _ml.addSpacing(2)
 
         self.inc_cb = CheckBox("考虑加大流量比例系数")
         self.inc_cb.setChecked(True)
         self.inc_cb.stateChanged.connect(self._on_inc_toggle)
-        _ml.addWidget(self.inc_cb)
         _inc_r = QWidget(); _inc_r_lay = QHBoxLayout(_inc_r)
         _inc_r_lay.setContentsMargins(0, 0, 0, 0); _inc_r_lay.setSpacing(6)
+        _inc_r_lay.addWidget(self.inc_cb)
         _inc_r_lay.addWidget(QLabel("加大比例(%):"))
         self.edit_inc = LineEdit()
         self.edit_inc.setPlaceholderText("留空自动计算")
@@ -739,7 +758,7 @@ class SiphonPanel(QWidget):
         col_r = QWidget()
         _rl = QVBoxLayout(col_r)
         _rl.setContentsMargins(12, 0, 0, 0)
-        _rl.setSpacing(3)
+        _rl.setSpacing(2)
 
         _rl.addWidget(_lbl_with_star("平面转弯半径倍数 (R=nD):", "#1565C0"))
         self.edit_turn_n = LineEdit(); self.edit_turn_n.setText("3.0"); self.edit_turn_n.setFixedWidth(50)
@@ -748,8 +767,8 @@ class SiphonPanel(QWidget):
         self.edit_turn_n.textChanged.connect(self._on_turn_n_changed)
         _lbl_tn_hint = QLabel("(请确认倍数)")
         _lbl_tn_hint.setStyleSheet("color:#FF6600;font-size:12px;")
-        _rl.addWidget(_hrow(self.edit_turn_n, _lbl_tn_hint))
-        _rl.addSpacing(4)
+        _rl.addWidget(_hrow(self.edit_turn_n, _lbl_tn_hint, protect_height=True))
+        _rl.addSpacing(2)
 
         _rl.addWidget(QLabel("平面转弯半径 R (m):"))
         self.edit_turn_R = LineEdit()
@@ -765,7 +784,7 @@ class SiphonPanel(QWidget):
         self.lbl_turn_R.setStyleSheet("color:#1565C0;font-size:12px;")
         self.lbl_turn_R.setWordWrap(True)
         _rl.addWidget(self.lbl_turn_R)
-        _rl.addSpacing(4)
+        _rl.addSpacing(2)
 
         _rl.addWidget(QLabel("水损阈值 (m):"))
         self.edit_threshold = LineEdit()
