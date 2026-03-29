@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from PySide6.QtWidgets import QApplication, QWidget
+
 
 def _load_formula_dialog_module():
     module_path = next(Path(".").glob("**/water_profile/formula_dialog.py")).resolve()
@@ -20,6 +22,10 @@ def _load_formula_dialog_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _get_qapp():
+    return QApplication.instance() or QApplication([])
 
 
 def test_show_transition_loss_dialog_renders_complete_derivation_sections(monkeypatch):
@@ -103,3 +109,30 @@ def test_show_transition_loss_dialog_renders_complete_derivation_sections(monkey
     assert "v_{avg}" in text_blob
     assert "i =" in text_blob
     assert "h_f = i" in text_blob
+
+
+def test_formula_dialog_builds_html_in_webview_mode(monkeypatch):
+    module = _load_formula_dialog_module()
+    _get_qapp()
+    captured = {}
+
+    class _FakeWebView(QWidget):
+        def setHtml(self, html):
+            captured["html"] = html
+
+    monkeypatch.setattr(module, "HAS_WEBENGINE", True)
+    monkeypatch.setattr(module, "HAS_SVG_RENDERER", True)
+    monkeypatch.setattr(module, "create_web_view", lambda: _FakeWebView())
+
+    dialog = module.FormulaDialog(
+        None,
+        "测试弹窗",
+        [{"title": "1. 标题", "content": "正文"}],
+        auto_exec=False,
+    )
+    try:
+        assert "测试弹窗" == dialog.windowTitle()
+        assert "1. 标题" in captured["html"]
+        assert "正文" in captured["html"]
+    finally:
+        dialog.deleteLater()

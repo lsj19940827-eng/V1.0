@@ -1168,7 +1168,15 @@ class HydraulicCalculator:
             if first_regular_node.velocity <= 0:
                 first_regular_node.velocity = self.calculate_velocity(first_regular_node)
             if first_regular_node.arc_length > ZERO_TOLERANCE:
-                first_regular_node.head_loss_bend = self.calculate_bend_loss(first_regular_node)
+                existing_bend_loss = first_regular_node.head_loss_bend or 0.0
+                if existing_bend_loss <= ZERO_TOLERANCE or not getattr(first_regular_node, 'bend_calc_details', None):
+                    calculated_bend_loss = self.calculate_bend_loss(first_regular_node)
+                    if existing_bend_loss > ZERO_TOLERANCE:
+                        first_regular_node.head_loss_bend = existing_bend_loss
+                        if getattr(first_regular_node, 'bend_calc_details', None):
+                            first_regular_node.bend_calc_details['hw'] = round(existing_bend_loss, HEAD_LOSS_PRECISION)
+                    else:
+                        first_regular_node.head_loss_bend = calculated_bend_loss
         
         # 遍历计算水位
         prev_regular_node = first_regular_node
@@ -1208,8 +1216,16 @@ class HydraulicCalculator:
                 curr_node.velocity = self.calculate_velocity(curr_node)
             
             # 计算当前节点的弯道损失（如果有弧长且未计算）
-            if curr_node.arc_length > ZERO_TOLERANCE and curr_node.head_loss_bend == 0:
-                curr_node.head_loss_bend = self.calculate_bend_loss(curr_node)
+            if curr_node.arc_length > ZERO_TOLERANCE:
+                existing_bend_loss = curr_node.head_loss_bend or 0.0
+                if existing_bend_loss <= ZERO_TOLERANCE or not getattr(curr_node, 'bend_calc_details', None):
+                    calculated_bend_loss = self.calculate_bend_loss(curr_node)
+                    if existing_bend_loss > ZERO_TOLERANCE:
+                        curr_node.head_loss_bend = existing_bend_loss
+                        if getattr(curr_node, 'bend_calc_details', None):
+                            curr_node.bend_calc_details['hw'] = round(existing_bend_loss, HEAD_LOSS_PRECISION)
+                    else:
+                        curr_node.head_loss_bend = calculated_bend_loss
             hw = curr_node.head_loss_bend or 0.0
             
             # 查找前一个非渐变段节点到当前节点之间的渐变段损失

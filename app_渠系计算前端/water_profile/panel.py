@@ -2529,6 +2529,14 @@ class WaterProfilePanel(QWidget):
             value = 0.0
         return max(0.0, value)
 
+    @staticmethod
+    def _get_node_station_mc_value(node) -> float:
+        try:
+            value = float(getattr(node, "station_MC", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        return value
+
     def _get_transition_length_override_upper_bound(self, ctx) -> float:
         if not ctx:
             return 0.0
@@ -2536,6 +2544,10 @@ class WaterProfilePanel(QWidget):
         node = ctx["node"]
         nodes = ctx["nodes"]
         row_idx = ctx["row_idx"]
+        prev_node = ctx.get("prev_node")
+        next_node = ctx.get("next_node")
+        prev_idx = int(ctx.get("prev_idx", -1))
+        next_idx = int(ctx.get("next_idx", -1))
         base_length = 0.0
         try:
             base_length = float(getattr(node, "transition_length", 0.0) or 0.0)
@@ -2554,6 +2566,33 @@ class WaterProfilePanel(QWidget):
             while cursor >= 0 and getattr(nodes[cursor], "is_auto_inserted_channel", False):
                 extra_slack += self._get_node_stat_length_value(nodes[cursor])
                 cursor -= 1
+
+        # 直接夹在两个真实节点之间的渐变段，没有显式自动连接段可借时，
+        # 仍应按前后真实节点的 gap 里程判断物理上限。
+        if (
+            extra_slack <= 1e-9
+            and prev_idx >= 0
+            and next_idx >= 0
+            and prev_node is not None
+            and next_node is not None
+            and not getattr(prev_node, "is_auto_inserted_channel", False)
+            and not getattr(next_node, "is_auto_inserted_channel", False)
+        ):
+            has_other_auxiliary = any(
+                idx != row_idx
+                and (
+                    getattr(nodes[idx], "is_transition", False)
+                    or getattr(nodes[idx], "is_auto_inserted_channel", False)
+                )
+                for idx in range(prev_idx + 1, next_idx)
+            )
+            if not has_other_auxiliary:
+                gap_distance = (
+                    self._get_node_station_mc_value(next_node)
+                    - self._get_node_station_mc_value(prev_node)
+                )
+                if gap_distance > 0:
+                    return max(base_length, gap_distance)
 
         return max(0.0, base_length + extra_slack)
 
@@ -3556,12 +3595,55 @@ class WaterProfilePanel(QWidget):
                 repaired = True
         return repaired
 
+    def _repair_bend_loss_details_for_row(self, row_idx, source_nodes=None):
+        """按当前节点上下文补建某一行的弯道水头损失详情。"""
+        nodes = source_nodes if source_nodes is not None else getattr(self, 'calculated_nodes', None)
+        details = None
+        if nodes and 0 <= row_idx < len(nodes):
+            details = getattr(nodes[row_idx], 'bend_calc_details', None)
+
+        if not CALCULATOR_AVAILABLE:
+            return details
+        if not nodes or row_idx < 0 or row_idx >= len(nodes):
+            return details
+
+        node = nodes[row_idx]
+        details = getattr(node, 'bend_calc_details', None)
+        if details:
+            return details
+
+        existing_loss = float(getattr(node, 'head_loss_bend', 0.0) or 0.0)
+        if existing_loss <= 0 and float(getattr(node, 'arc_length', 0.0) or 0.0) <= 0:
+            return details
+
+        try:
+            settings = self._build_settings()
+        except Exception:
+            settings = ProjectSettings()
+
+        try:
+            from core.hydraulic_calc import HydraulicCalculator
+            hyd_calc = HydraulicCalculator(settings)
+            hyd_calc.calculate_bend_loss(node)
+            details = getattr(node, 'bend_calc_details', None)
+            if details and existing_loss > 0:
+                node.head_loss_bend = existing_loss
+                details['hw'] = existing_loss
+            return details
+        except Exception:
+            return details
+
     def _show_bend_calc_details(self, row_idx, node):
-        if not getattr(node, 'bend_calc_details', None):
+        details = getattr(node, 'bend_calc_details', None)
+        if not details:
+            repaired = self._repair_bend_loss_details_for_row(row_idx)
+            if repaired:
+                details = repaired
+        if not details:
             fluent_info(self, "提示", "该行没有弯道水头损失计算数据")
             return
         from app_渠系计算前端.water_profile.formula_dialog import show_bend_loss_dialog
-        show_bend_loss_dialog(self, node.name or f"行{row_idx+1}", node.bend_calc_details)
+        show_bend_loss_dialog(self, node.name or f"行{row_idx+1}", details)
 
     def _show_friction_calc_details(self, row_idx, node):
         if not getattr(node, 'friction_calc_details', None):
@@ -3587,7 +3669,7 @@ class WaterProfilePanel(QWidget):
 
     def _show_total_calc_details(self, row_idx, node, nodes):
         if getattr(node, 'is_transition', False):
-            fluent_info(self, "提示", "渐变段行没有总水头损失，请双击渐变段水头损失列查看")
+            self._show_transition_calc_details(row_idx, node)
             return
         details = {
             'head_loss_bend': node.head_loss_bend or 0.0,
@@ -3637,6 +3719,23 @@ class WaterProfilePanel(QWidget):
         show_cumulative_loss_dialog(self, node.name or f"行{row_idx+1}",
                                     {"cumulative": cumulative, "rows_text": "\n".join(lines)})
 
+    @staticmethod
+    def _get_loss_value_for_cumulative_detail(node) -> float:
+        if getattr(node, 'is_transition', False):
+            loss = float(getattr(node, 'head_loss_transition', 0.0) or 0.0)
+            if loss <= 0 and getattr(node, 'transition_calc_details', None):
+                loss = float(node.transition_calc_details.get('total', 0.0) or 0.0)
+            return loss
+        return float(getattr(node, 'head_loss_total', 0.0) or 0.0)
+
+    def _calculate_exact_cumulative_loss_for_row(self, nodes, row_idx: int) -> float:
+        if not nodes or row_idx < 0:
+            return 0.0
+        exact_cumulative = 0.0
+        for i in range(min(row_idx, len(nodes) - 1) + 1):
+            exact_cumulative += self._get_loss_value_for_cumulative_detail(nodes[i])
+        return round(exact_cumulative, 6)
+
     def _show_water_level_details(self, row_idx, node, nodes):
         if getattr(node, 'is_transition', False):
             fluent_info(self, "提示", "渐变段行不显示水位")
@@ -3663,13 +3762,23 @@ class WaterProfilePanel(QWidget):
             "start_level": start_level,
             "cumulative": node.head_loss_cumulative or 0.0,
             "total_loss": node.head_loss_total or 0.0,
+            "start_level_exact": round(float(start_level or 0.0), 6),
         }
         if is_first:
-            pass
+            details["cumulative_exact"] = self._calculate_exact_cumulative_loss_for_row(nodes, row_idx)
+            details["water_level_exact"] = round(float(start_level or 0.0), 6)
         elif prev_idx is not None:
             details["prev_level"] = nodes[prev_idx].water_level or 0.0
+            prev_cumulative_exact = self._calculate_exact_cumulative_loss_for_row(nodes, prev_idx)
+            prev_level_exact = round(float(start_level or 0.0) - prev_cumulative_exact, 6)
+            details["prev_level_exact"] = prev_level_exact
             if is_gate:
-                details["head_loss_gate"] = getattr(node, 'head_loss_gate', 0.0) or 0.0
+                head_loss_gate = getattr(node, 'head_loss_gate', 0.0) or 0.0
+                details["head_loss_gate"] = head_loss_gate
+                details["head_loss_gate_exact"] = round(float(head_loss_gate or 0.0), 6)
+                cumulative_exact = self._calculate_exact_cumulative_loss_for_row(nodes, row_idx)
+                details["cumulative_exact"] = cumulative_exact
+                details["water_level_exact"] = round(float(start_level or 0.0) - cumulative_exact, 6)
             else:
                 hf = node.head_loss_friction or 0.0
                 hj = getattr(node, 'head_loss_local', 0.0) or 0.0
@@ -3694,6 +3803,12 @@ class WaterProfilePanel(QWidget):
                 details["total_loss"] = round(row_total_loss, 4)
                 details["transition_step_loss"] = round(transition_step_loss, 4)
                 details["step_drop"] = round(row_total_loss + transition_step_loss, 4)
+                details["total_loss_exact"] = round(float(row_total_loss or 0.0), 6)
+                details["transition_step_loss_exact"] = round(float(transition_step_loss or 0.0), 6)
+                details["step_drop_exact"] = round(float(row_total_loss or 0.0) + float(transition_step_loss or 0.0), 6)
+                cumulative_exact = self._calculate_exact_cumulative_loss_for_row(nodes, row_idx)
+                details["cumulative_exact"] = cumulative_exact
+                details["water_level_exact"] = round(float(start_level or 0.0) - cumulative_exact, 6)
         else:
             fluent_info(self, "提示", "该行无法获取上一节点水位")
             return
@@ -6167,6 +6282,7 @@ class WaterProfilePanel(QWidget):
                 vals[26] = f"{node.flow:.3f}" if node.flow else ""
                 vals[32] = f"{getattr(node, 'transition_length', 0):.3f}" if getattr(node, 'transition_length', None) else "-"
                 vals[33] = f"{node.head_loss_transition:.4f}" if node.head_loss_transition else "-"
+                vals[39] = f"{node.head_loss_transition:.4f}" if node.head_loss_transition else "-"
                 vals[40] = f"{node.head_loss_cumulative:.4f}" if node.head_loss_cumulative else "-"
 
             # 渐变段长度（所有行通用）

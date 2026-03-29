@@ -182,18 +182,18 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
         "description": "表3普通行自身的总水头损失，不含单独渐变段行",
         "formula": r"hΣ,row = hw + hj + hf + h_res + h_gate + h_sip",
         "latex": r"h_{\Sigma,row} = h_w + h_j + h_f + h_{res} + h_{gate} + h_{sip}",
-        "note": "渐变段损失单独显示在渐变段行；双击单元格可查看详细计算过程",
+        "note": "普通行显示 hΣ,row；渐变段行显示 h_{tr}。双击单元格可查看对应详细计算过程",
     },
     "累计总水头损失": {
         "title": "累计总水头损失",
-        "description": "从第一行开始逐行累加的水头损失",
+        "description": "普通行总损失与渐变段损失按行序累加",
         "formula": r"h_cum,i = Σ hk",
         "latex": r"h_{cum,i} = \sum h_k",
         "note": "普通行取普通行总水头损失，渐变段行取渐变段水头损失\n双击单元格可查看详细计算过程",
     },
     "水位": {
         "title": "水位计算",
-        "description": "根据上一普通节点与本步总落差递推当前水位",
+        "description": "由上一普通节点按本步总落差递推，本步总落差可能包含中间渐变段",
         "formula": r"Zi = Zi-1 - Δh_step",
         "latex": r"Z_i = Z_{i-1} - \Delta h_{step}",
         "note": "本页同时展示本普通行总水头损失与本步总落差；首节点水位取起始水位，分水闸按过闸损失扣减\n双击单元格可查看详细计算过程",
@@ -317,6 +317,14 @@ def _e(s):
     return html_mod.escape(str(s))
 
 
+def _fmt_exact(value: Any, precision: int = 6) -> str:
+    """格式化详情弹窗中的精确值展示。"""
+    try:
+        return f"{float(value or 0.0):.{precision}f}"
+    except (TypeError, ValueError):
+        return f"{0.0:.{precision}f}"
+
+
 # ================================================================
 # FormulaDialog — PySide6 版公式渲染对话框（SVG 矢量渲染）
 # ================================================================
@@ -375,6 +383,83 @@ class FormulaDialog(QDialog):
 
         if auto_exec:
             self.exec()
+
+    def _build_html(self, sections):
+        """将 sections 数据构建为含 SVG 公式的完整 HTML 页面。"""
+        body_parts = []
+        for i, sec in enumerate(sections):
+            if i > 0:
+                body_parts.append('<hr class="sep">')
+            if "title" in sec:
+                body_parts.append(
+                    f'<div class="sec-title">{_e(sec["title"])}</div>')
+            if "formula" in sec:
+                body_parts.append(self._render_formula_block(sec["formula"]))
+            if "content" in sec:
+                body_parts.append(self._render_content_block(sec["content"]))
+            if "values" in sec:
+                body_parts.append(self._render_values_block(sec["values"]))
+        body = '\n'.join(body_parts)
+        return (f'<html><head><meta charset="utf-8">'
+                f'<style>{_DIALOG_CSS}</style></head>'
+                f'<body>{body}</body></html>')
+
+    @staticmethod
+    def _latex_to_svg(latex_str, fontsize=16):
+        """去除 $...$ 并渲染为 SVG。"""
+        clean = latex_str.strip()
+        if clean.startswith('$') and clean.endswith('$'):
+            clean = clean[1:-1].strip()
+        return render_latex_svg(clean, fontsize=fontsize)
+
+    @staticmethod
+    def _inline_replace(text, fontsize=14):
+        """将文本中的 $...$ 替换为 SVG 内联公式。"""
+        parts = re.split(r'(\$[^$]+\$)', text)
+        html_parts = []
+        for part in parts:
+            if part.startswith('$') and part.endswith('$'):
+                latex = part[1:-1]
+                svg = render_latex_svg(latex, fontsize=fontsize)
+                html_parts.append(svg if svg else _e(part))
+            else:
+                html_parts.append(_e(part))
+        return ''.join(html_parts)
+
+    def _render_formula_block(self, formula_text):
+        """渲染独立公式块（大字号，白色卡片）。"""
+        svg = self._latex_to_svg(formula_text, fontsize=16)
+        if svg:
+            return f'<div class="formula-card">{svg}</div>'
+        clean = formula_text.replace('$', '')
+        return f'<div class="formula-card"><code>{_e(clean)}</code></div>'
+
+    def _render_content_block(self, content_text):
+        """渲染描述文本（可含内联 $...$）。"""
+        if '$' in content_text:
+            rendered = self._inline_replace(content_text, fontsize=14)
+        else:
+            rendered = _e(content_text)
+        return f'<div class="content-text">{rendered}</div>'
+
+    def _render_values_block(self, values_text):
+        """渲染多行计算过程（每行含中文标签 + 内联 $...$）。"""
+        lines = values_text.split('\n')
+        html_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if len(stripped) >= 3 and all(
+                    c in '─━═—–\u2015-' for c in stripped):
+                html_lines.append('<hr class="val-sep">')
+                continue
+            if '$' in stripped:
+                rendered = self._inline_replace(stripped, fontsize=14)
+            else:
+                rendered = _e(stripped)
+            html_lines.append(f'<div class="val-line">{rendered}</div>')
+        return '<div class="values-card">' + ''.join(html_lines) + '</div>'
 
 
 class TransitionLengthOverrideDialog(FormulaDialog):
@@ -924,6 +1009,13 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
         row_total = details.get('total_loss', hf + hj + hw + h_res + h_gate + h_sip)
         transition_step_loss = details.get('transition_step_loss', details.get('h_tr', 0.0))
         step_drop = details.get('step_drop', row_total + transition_step_loss)
+        prev_exact = details.get('prev_level_exact', prev)
+        start_exact = details.get('start_level_exact', start_level)
+        cumulative_exact = details.get('cumulative_exact', cumulative)
+        water_level_exact = details.get('water_level_exact', wl)
+        row_total_exact = details.get('total_loss_exact', row_total)
+        transition_step_loss_exact = details.get('transition_step_loss_exact', transition_step_loss)
+        step_drop_exact = details.get('step_drop_exact', row_total_exact + transition_step_loss_exact)
         sections = [
             {"title": "1. 水位递推口径",
              "formula": r"$Z_i = Z_{i-1} - \Delta h_{step}$",
@@ -939,10 +1031,24 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
                        f"本普通行总水头损失  $h_{{\\Sigma,row}} = {row_total:.4f}$ m\n"
                        f"───────────────────────\n本步总落差  $\\Delta h_{{step}} = {transition_step_loss:.4f} + {row_total:.4f} = {step_drop:.4f}$ m\n"
                        f"本步总落差比本普通行总水头损失多出的部分来自上一普通节点与本行之间的渐变段。"},
-            {"title": "4. 水位校验（以累计总水头损失为准）",
-             "values": f"起始水位  $Z_{{start}} = {start_level:.4f}$ m\n累计总水头损失 $= {cumulative:.4f}$ m\n"
-                       f"$Z_i = Z_{{start}} - h_{{cum}} = {start_level:.4f} - {cumulative:.4f} = {wl:.4f}$ m"},
-            {"title": "5. 计算结果", "formula": f"$Z_i = {wl:.4f} \\ m$"},
+            {"title": "4. 递推计算过程（按 6 位精确值）",
+             "values": f"上一普通节点精确水位  $Z_{{i-1}} = {_fmt_exact(prev_exact)}$ m\n"
+                       f"中间渐变段精确小计  $h_{{tr,step}} = {_fmt_exact(transition_step_loss_exact)}$ m\n"
+                       f"本普通行精确总损失  $h_{{\\Sigma,row}} = {_fmt_exact(row_total_exact)}$ m\n"
+                       f"───────────────────────\n本步精确总落差  $\\Delta h_{{step}} = {_fmt_exact(transition_step_loss_exact)} + {_fmt_exact(row_total_exact)} = {_fmt_exact(step_drop_exact)}$ m\n"
+                       f"$Z_i = {_fmt_exact(prev_exact)} - {_fmt_exact(step_drop_exact)} = {_fmt_exact(water_level_exact)}$ m"},
+            {"title": "5. 累计校验过程（按 6 位精确值）",
+             "values": f"起始水位  $Z_{{start}} = {_fmt_exact(start_exact)}$ m\n累计总水头损失  $h_{{cum}} = {_fmt_exact(cumulative_exact)}$ m\n"
+                       f"$Z_i = {_fmt_exact(start_exact)} - {_fmt_exact(cumulative_exact)} = {_fmt_exact(water_level_exact)}$ m\n"
+                       f"两条 6 位精确计算链应完全对应同一个结果。"},
+            {"title": "6. 表格显示值",
+             "values": f"上一普通节点显示水位  $Z_{{i-1,display}} = {prev:.4f}$ m\n"
+                       f"本普通行显示总损失  $h_{{\\Sigma,row,display}} = {row_total:.4f}$ m\n"
+                       f"本步显示总落差  $\\Delta h_{{step,display}} = {step_drop:.4f}$ m\n"
+                       f"累计总水头损失显示值  $h_{{cum,display}} = {cumulative:.4f}$ m\n"
+                       f"表格显示水位  $Z_{{i,display}} = {wl:.4f}$ m\n"
+                       f"说明：表格按显示口径四舍五入，精确对账以上述 6 位计算链为准。"},
+            {"title": "7. 计算结果", "formula": f"$Z_i = {wl:.4f} \\ m$"},
         ]
     FormulaDialog(parent, f"{node_name} - 水位计算详情", sections)
 
@@ -1182,7 +1288,7 @@ def show_transition_length_dialog(parent, node_name: str, details: Dict[str, Any
     ]
     if physical_limit > 0:
         summary_lines.append(f"物理上限  $L_{{limit}} = {physical_limit:.3f}$ m")
-    summary_lines.append(f"最终采用长度  $L_{{actual}} = {actual_length:.3f}$ m")
+    summary_lines.append(f"当前采用长度（最终采用长度）  $L_{{actual}} = {actual_length:.3f}$ m")
     if warning:
         summary_lines.append(f"说明：{warning}")
 
@@ -1226,7 +1332,7 @@ def show_cumulative_loss_dialog(parent, node_name: str, details: Dict[str, Any])
     rows_text = details.get('rows_text', '')
     sections = [
         {"title": "1. 累计总水头损失公式", "formula": r"$h_{cum,i} = \sum_{k=1}^{i} h_k$",
-         "content": "普通行取总水头损失，渐变段行取渐变段水头损失。"},
+         "content": "普通行总损失与渐变段损失按行序累加。"},
         {"title": "2. 逐行累加明细", "values": rows_text},
         {"title": "3. 计算结果", "formula": f"$h_{{cum,i}} = {cumulative:.4f} \\ m$"},
     ]

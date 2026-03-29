@@ -199,6 +199,54 @@ def _make_transition_edit_nodes():
     return [upstream, transition_out, open_channel, transition_in, downstream]
 
 
+def _make_direct_gap_transition_nodes():
+    upstream = ChannelNode()
+    upstream.flow_section = "1"
+    upstream.name = "-"
+    upstream.structure_type = StructureType.from_string("明渠-圆形")
+    upstream.station_MC = 10097.309
+    upstream.section_params = {"D": 0.9, "A": 0.636, "X": 2.827, "R": 0.225}
+    upstream.water_depth = 0.65
+    upstream.velocity = 1.3
+    upstream.roughness = 0.014
+    upstream.flow = 0.51
+
+    transition = ChannelNode()
+    transition.flow_section = "1"
+    transition.name = "-"
+    transition.structure_type = StructureType.TRANSITION
+    transition.is_transition = True
+    transition.transition_type = "进口"
+    transition.transition_form = "曲线形反弯扭曲面"
+    transition.transition_length = 5.4
+    transition.transition_rule_upstream_structure_type = "明渠-圆形"
+    transition.transition_rule_downstream_structure_type = "隧洞-圆拱直墙型"
+    transition.transition_length_calc_details = {
+        "transition_type": "进口",
+        "actual_length": 5.4,
+        "formula_length": 5.4,
+        "source": "formula",
+        "upstream_structure_type": "明渠-圆形",
+        "downstream_structure_type": "隧洞-圆拱直墙型",
+    }
+    transition.roughness = 0.014
+    transition.flow = 0.51
+
+    downstream = ChannelNode()
+    downstream.flow_section = "1"
+    downstream.name = "合作"
+    downstream.structure_type = StructureType.from_string("隧洞-圆拱直墙型")
+    downstream.in_out = InOutType.INLET
+    downstream.station_MC = 10112.880
+    downstream.section_params = {"D": 0.95, "A": 0.709, "X": 3.012, "R": 0.235}
+    downstream.water_depth = 0.7
+    downstream.velocity = 1.4
+    downstream.roughness = 0.014
+    downstream.flow = 0.51
+
+    return [upstream, transition, downstream]
+
+
 def test_project_reload_repairs_missing_transition_length_details():
     module = _load_panel_module()
     panel = _build_panel(module)
@@ -597,6 +645,79 @@ def test_open_transition_length_rules_clamps_requested_length_to_physical_limit(
         assert "已更新 " in success_text
         assert "1 条受物理极限约束" in success_text
         assert not warning_calls, "批量规则应自动裁剪，不再额外弹出重新插入警告"
+    finally:
+        panel.deleteLater()
+
+
+def test_open_transition_length_rules_uses_real_gap_for_direct_transition_without_auto_channel(monkeypatch):
+    module = _load_panel_module()
+    panel = _build_panel(module)
+    try:
+        panel.start_wl_edit.setText("420.000")
+        nodes = _make_direct_gap_transition_nodes()
+        panel.calculated_nodes = nodes
+        panel._update_table_from_nodes_full(nodes)
+        _flush_events()
+
+        rule_rows = [
+            {
+                "rule_key": "明渠-圆形|隧洞-圆拱直墙型|进口",
+                "upstream_structure_type": "明渠-圆形",
+                "downstream_structure_type": "隧洞-圆拱直墙型",
+                "transition_type": "进口",
+                "count": 1,
+                "hit_count": 1,
+                "hit_scope": "current",
+                "rule_mode": "fixed",
+                "step_size_m": 1.0,
+                "fixed_length_m": 6.0,
+            },
+        ]
+
+        class _AcceptedDialog:
+            def __init__(self, rows, parent=None):
+                self.rows = rows
+
+            def exec(self):
+                return module.QDialog.DialogCode.Accepted
+
+            def get_rules(self):
+                return {
+                    row["rule_key"]: {
+                        "rule_key": row["rule_key"],
+                        "upstream_structure_type": row["upstream_structure_type"],
+                        "downstream_structure_type": row["downstream_structure_type"],
+                        "transition_type": row["transition_type"],
+                        "rule_mode": row["rule_mode"],
+                        "step_size_m": row["step_size_m"],
+                        "fixed_length_m": row["fixed_length_m"],
+                    }
+                    for row in self.rows
+                }
+
+        monkeypatch.setattr(module, "TransitionLengthRuleDialog", _AcceptedDialog)
+        monkeypatch.setattr(panel, "_collect_transition_length_rule_rows", lambda *_args, **_kwargs: rule_rows)
+
+        success_calls = []
+        warning_calls = []
+        monkeypatch.setattr(module.InfoBar, "success", lambda *args, **kwargs: success_calls.append((args, kwargs)))
+        monkeypatch.setattr(module.InfoBar, "warning", lambda *args, **kwargs: warning_calls.append((args, kwargs)))
+
+        ctx = panel._get_transition_context_for_row(1, nodes)
+        assert round(panel._get_transition_length_override_upper_bound(ctx), 3) == 15.571
+
+        panel._open_transition_length_rules()
+
+        details = panel.calculated_nodes[1].transition_length_calc_details
+        assert panel.node_table.item(1, 32).text() == "6.000"
+        assert details["requested_length"] == 6.0
+        assert round(details["physical_limit"], 3) == 15.571
+        assert details["actual_length"] == 6.0
+        assert details["distance_clamped"] is False
+        success_text = " ".join(str(part) for part in success_calls[0][0])
+        assert "已更新 1 条" in success_text
+        assert "受物理极限约束" not in success_text
+        assert warning_calls == []
     finally:
         panel.deleteLater()
 

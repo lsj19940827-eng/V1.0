@@ -112,6 +112,36 @@ def _legacy_transition_calc_details(details):
     }
 
 
+def _make_bend_nodes():
+    upstream = ChannelNode()
+    upstream.flow_section = "1"
+    upstream.name = "上游明渠"
+    upstream.structure_type = StructureType.from_string("明渠-梯形")
+    upstream.section_params = {"B": 2.2, "m": 1.5, "h": 1.4, "A": 6.02, "X": 5.84, "R": 1.03}
+    upstream.water_depth = 1.4
+    upstream.velocity = 1.1
+    upstream.roughness = 0.014
+    upstream.flow = 6.6
+    upstream.water_level = 565.116
+
+    bend = ChannelNode()
+    bend.flow_section = "1"
+    bend.name = "合作"
+    bend.structure_type = StructureType.from_string("隧洞-圆拱直墙型")
+    bend.section_params = {"B": 2.4, "m": 0.0, "h": 1.8, "A": 4.78, "X": 5.54, "R": 0.863}
+    bend.water_depth = 1.8
+    bend.velocity = 0.598
+    bend.roughness = 0.014
+    bend.flow = 6.6
+    bend.arc_length = 5.698
+    bend.turn_radius = 9.0
+
+    calc = HydraulicCalculator(ProjectSettings())
+    bend.head_loss_bend = calc.calculate_bend_loss(bend)
+    bend.bend_calc_details = {}
+    return [upstream, bend]
+
+
 def test_project_reload_repairs_legacy_transition_loss_details():
     module = _load_panel_module()
     panel = _build_panel(module)
@@ -215,3 +245,34 @@ def test_project_reload_repairs_transition_loss_details_with_override_length():
         assert "单条覆盖长度小于公式/规范值" in (length_details.get("warning") or "")
     finally:
         restored.deleteLater()
+
+
+def test_show_bend_details_lazy_repairs_missing_details(monkeypatch):
+    module = _load_panel_module()
+    panel = _build_panel(module)
+    try:
+        panel.calculated_nodes = _make_bend_nodes()
+        panel._update_table_from_nodes_full(panel.calculated_nodes)
+        _flush_events()
+
+        dialog_calls = []
+        info_calls = []
+        formula_module = importlib.import_module("app_渠系计算前端.water_profile.formula_dialog")
+
+        monkeypatch.setattr(
+            formula_module,
+            "show_bend_loss_dialog",
+            lambda parent, node_name, details: dialog_calls.append((parent, node_name, details)),
+        )
+        monkeypatch.setattr(module, "fluent_info", lambda *args, **kwargs: info_calls.append((args, kwargs)))
+
+        panel._show_bend_calc_details(1, panel.calculated_nodes[1])
+
+        assert dialog_calls, "弯道损失已有数值但详情缺失时，双击应先懒补建详情"
+        assert not info_calls, "懒补建成功后不应提示“没有弯道水头损失计算数据”"
+        details = dialog_calls[0][2]
+        assert details.get("hw", 0.0) > 0.0
+        assert details.get("L", 0.0) > 0.0
+        assert details.get("Rc", 0.0) > 0.0
+    finally:
+        panel.deleteLater()
