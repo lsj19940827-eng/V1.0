@@ -806,7 +806,6 @@ class SiphonPanel(QWidget):
         inlet_r1.addWidget(QLabel("渐变段型式:"))
         self.combo_inlet_type = ComboBox()
         self.combo_inlet_type.addItems(GRADIENT_TYPE_OPTIONS)
-        self.combo_inlet_type.setCurrentText("无")
         self.combo_inlet_type.setFixedWidth(140)
         self.combo_inlet_type.currentTextChanged.connect(self._on_inlet_type_changed)
         inlet_r1.addWidget(self.combo_inlet_type)
@@ -860,6 +859,7 @@ class SiphonPanel(QWidget):
         _ti_lay.addStretch()
         self._twist_in_row.setVisible(False)
         ibl.addWidget(self._twist_in_row)
+        self.combo_inlet_type.setCurrentText("直线扭曲面")
 
         # 进口 Row 2: v₂策略 + 末端流速v₂
         inlet_r2 = QHBoxLayout(); inlet_r2.setSpacing(6)
@@ -915,7 +915,6 @@ class SiphonPanel(QWidget):
         outlet_r1.addWidget(QLabel("渐变段型式:"))
         self.combo_outlet_type = ComboBox()
         self.combo_outlet_type.addItems(GRADIENT_TYPE_OPTIONS)
-        self.combo_outlet_type.setCurrentText("无")
         self.combo_outlet_type.setFixedWidth(140)
         self.combo_outlet_type.currentTextChanged.connect(self._on_outlet_type_changed)
         outlet_r1.addWidget(self.combo_outlet_type)
@@ -958,6 +957,7 @@ class SiphonPanel(QWidget):
         _to_lay.addStretch()
         self._twist_out_row.setVisible(False)
         obl.addWidget(self._twist_out_row)
+        self.combo_outlet_type.setCurrentText("直线扭曲面")
 
         # 出口 Row 2: 末端流速v₃
         outlet_r2 = QHBoxLayout(); outlet_r2.setSpacing(6)
