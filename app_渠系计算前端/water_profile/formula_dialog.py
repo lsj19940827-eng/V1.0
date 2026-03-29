@@ -179,24 +179,24 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
     },
     "总水头损失": {
         "title": "总水头损失",
-        "description": "该节点的总水头损失（包含弯道、渐变段、沿程及其他损失）",
-        "formula": r"hΣ = hw + h_tr + hf + h_res + h_gate + h_sip",
-        "latex": r"h_{\Sigma} = h_w + h_{tr} + h_f + h_{res} + h_{gate} + h_{sip}",
-        "note": "双击单元格可查看详细计算过程",
+        "description": "表3普通行自身的总水头损失，不含单独渐变段行",
+        "formula": r"hΣ,row = hw + hj + hf + h_res + h_gate + h_sip",
+        "latex": r"h_{\Sigma,row} = h_w + h_j + h_f + h_{res} + h_{gate} + h_{sip}",
+        "note": "渐变段损失单独显示在渐变段行；双击单元格可查看详细计算过程",
     },
     "累计总水头损失": {
         "title": "累计总水头损失",
         "description": "从第一行开始逐行累加的水头损失",
         "formula": r"h_cum,i = Σ hk",
         "latex": r"h_{cum,i} = \sum h_k",
-        "note": "普通行取总水头损失，渐变段行取渐变段水头损失\n双击单元格可查看详细计算过程",
+        "note": "普通行取普通行总水头损失，渐变段行取渐变段水头损失\n双击单元格可查看详细计算过程",
     },
     "水位": {
         "title": "水位计算",
-        "description": "根据上一节点水位与各项损失推求当前水位",
-        "formula": r"Zi = Zi-1 - hf - hj - hw - h_tr",
-        "latex": r"Z_i = Z_{i-1} - \Delta h_i",
-        "note": "首节点水位取起始水位；分水闸按过闸损失扣减\n双击单元格可查看详细计算过程",
+        "description": "根据上一普通节点与本步总落差递推当前水位",
+        "formula": r"Zi = Zi-1 - Δh_step",
+        "latex": r"Z_i = Z_{i-1} - \Delta h_{step}",
+        "note": "本页同时展示本普通行总水头损失与本步总落差；首节点水位取起始水位，分水闸按过闸损失扣减\n双击单元格可查看详细计算过程",
     },
     "渠底高程": {
         "title": "渠底高程计算",
@@ -865,25 +865,26 @@ def show_transition_loss_dialog(parent, node_name: str, details: Dict[str, Any])
 def show_total_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
     """总水头损失计算详情"""
     hw = details.get('head_loss_bend', 0)
-    h_tr = details.get('head_loss_transition', 0)
     hf = details.get('head_loss_friction', 0)
     hj = details.get('head_loss_local', 0)
     h_res = details.get('head_loss_reserve', 0)
     h_gate = details.get('head_loss_gate', 0)
     h_sip = details.get('head_loss_siphon', 0)
-    h_total = hw + hj + h_tr + hf + h_res + h_gate + h_sip
+    h_total = details.get('head_loss_total', hw + hj + hf + h_res + h_gate + h_sip)
     sections = [
-        {"title": "1. 总水头损失公式",
-         "formula": r"$h_{\Sigma} = h_w + h_j + h_{tr} + h_f + h_{res} + h_{gate} + h_{sip}$",
-         "content": "其中: $h_w$=弯道损失, $h_j$=局部损失, $h_{tr}$=渐变段损失, $h_f$=沿程损失, $h_{res}$=预留损失, $h_{gate}$=过闸损失, $h_{sip}$=倒虹吸损失"},
-        {"title": "2. 各项损失值",
+        {"title": "1. 普通行总水头损失口径",
+         "formula": r"$h_{\Sigma,row} = h_w + h_j + h_f + h_{res} + h_{gate} + h_{sip}$",
+         "content": "这里解释的是表3普通行自身损失，不含前方单独渐变段行。前方渐变段损失请在渐变段水头损失列单独查看。"},
+        {"title": "2. 本普通行各项损失值",
          "values": f"弯道水头损失  $h_w = {hw:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
-                   f"渐变段水头损失  $h_{{tr}} = {h_tr:.4f}$ m\n沿程水头损失  $h_f = {hf:.4f}$ m\n"
+                   f"沿程水头损失  $h_f = {hf:.4f}$ m\n"
                    f"预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n"
-                   f"倒虹吸/有压管道水头损失  $h_{{sip}} = {h_sip:.4f}$ m"},
+                   f"倒虹吸/有压管道水头损失  $h_{{sip}} = {h_sip:.4f}$ m\n"
+                   f"───────────────────────\n本普通行总水头损失  $h_{{\\Sigma,row}} = {h_total:.4f}$ m"},
         {"title": "3. 代入公式计算",
-         "values": f"$h_{{\\Sigma}} = {hw:.4f} + {hj:.4f} + {h_tr:.4f} + {hf:.4f} + {h_res:.4f} + {h_gate:.4f} + {h_sip:.4f}$\n    $= {h_total:.4f}$ m"},
-        {"title": "4. 计算结果", "formula": f"$h_{{\\Sigma}} = {h_total:.4f} \\ m$"},
+         "values": f"$h_{{\\Sigma,row}} = {hw:.4f} + {hj:.4f} + {hf:.4f} + {h_res:.4f} + {h_gate:.4f} + {h_sip:.4f}$\n"
+                   f"    $= {h_total:.4f}$ m"},
+        {"title": "4. 计算结果", "formula": f"$h_{{\\Sigma,row}} = {h_total:.4f} \\ m$"},
     ]
     FormulaDialog(parent, f"{node_name} - 总水头损失计算详情", sections)
 
@@ -916,23 +917,31 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
     else:
         prev = details.get('prev_level', 0.0)
         hf = details.get('hf', 0.0); hj = details.get('hj', 0.0)
-        hw = details.get('hw', 0.0); h_tr = details.get('h_tr', 0.0)
+        hw = details.get('hw', 0.0)
         h_res = details.get('h_reserve', 0.0)
         h_gate = details.get('h_gate', 0.0)
         h_sip = details.get('h_siphon', 0.0)
-        delta = hf + hj + hw + h_tr + h_res + h_gate + h_sip
+        row_total = details.get('total_loss', hf + hj + hw + h_res + h_gate + h_sip)
+        transition_step_loss = details.get('transition_step_loss', details.get('h_tr', 0.0))
+        step_drop = details.get('step_drop', row_total + transition_step_loss)
         sections = [
-            {"title": "1. 水位推求公式（逐段递推）", "formula": r"$Z_i = Z_{i-1} - \Delta h_i$",
-             "content": "$\\Delta h_i$ 为该行全部水头损失之和。"},
-            {"title": "2. 该行各项水头损失",
+            {"title": "1. 水位递推口径",
+             "formula": r"$Z_i = Z_{i-1} - \Delta h_{step}$",
+             "content": "本页同时展示表3中的本普通行总水头损失，以及用于上一普通节点递推到本行的本步总落差。"},
+            {"title": "2. 本普通行总水头损失（对应表3）",
              "values": f"沿程水头损失  $h_f = {hf:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
-                       f"弯道水头损失  $h_w = {hw:.4f}$ m\n渐变段损失  $h_{{tr}} = {h_tr:.4f}$ m\n"
-                       f"预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n"
-                       f"倒虹吸/有压管道水头损失  $h_{{sip}} = {h_sip:.4f}$ m\n"
-                       f"───────────────────────\n该行水位降落  $\\Delta h_i = {delta:.4f}$ m"},
-            {"title": "3. 代入公式计算", "values": f"$Z_i = {prev:.4f} - {delta:.4f} = {prev-delta:.4f}$ m"},
-            {"title": "4. 校验", "values": f"起始水位  $Z_{{start}} = {start_level:.4f}$ m\n累计总水头损失 $= {cumulative:.4f}$ m\n"
-                                            f"$Z_{{start}}$ - 累计 $= {start_level - cumulative:.4f}$ m"},
+                       f"弯道水头损失  $h_w = {hw:.4f}$ m\n预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n"
+                       f"过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n倒虹吸/有压管道水头损失  $h_{{sip}} = {h_sip:.4f}$ m\n"
+                       f"───────────────────────\n本普通行总水头损失  $h_{{\\Sigma,row}} = {row_total:.4f}$ m"},
+            {"title": "3. 本步总落差（用于水位递推）",
+             "values": f"上一普通节点水位  $Z_{{i-1}} = {prev:.4f}$ m\n"
+                       f"中间渐变段小计  $h_{{tr,step}} = {transition_step_loss:.4f}$ m\n"
+                       f"本普通行总水头损失  $h_{{\\Sigma,row}} = {row_total:.4f}$ m\n"
+                       f"───────────────────────\n本步总落差  $\\Delta h_{{step}} = {transition_step_loss:.4f} + {row_total:.4f} = {step_drop:.4f}$ m\n"
+                       f"本步总落差比本普通行总水头损失多出的部分来自上一普通节点与本行之间的渐变段。"},
+            {"title": "4. 水位校验（以累计总水头损失为准）",
+             "values": f"起始水位  $Z_{{start}} = {start_level:.4f}$ m\n累计总水头损失 $= {cumulative:.4f}$ m\n"
+                       f"$Z_i = Z_{{start}} - h_{{cum}} = {start_level:.4f} - {cumulative:.4f} = {wl:.4f}$ m"},
             {"title": "5. 计算结果", "formula": f"$Z_i = {wl:.4f} \\ m$"},
         ]
     FormulaDialog(parent, f"{node_name} - 水位计算详情", sections)

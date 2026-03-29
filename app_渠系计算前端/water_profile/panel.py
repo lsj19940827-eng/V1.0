@@ -3589,16 +3589,9 @@ class WaterProfilePanel(QWidget):
         if getattr(node, 'is_transition', False):
             fluent_info(self, "提示", "渐变段行没有总水头损失，请双击渐变段水头损失列查看")
             return
-        # 收集渐变段损失
-        h_transition = 0.0
-        for i in range(row_idx - 1, -1, -1):
-            if nodes[i].is_transition:
-                h_transition += nodes[i].head_loss_transition or 0.0
-            elif not nodes[i].is_transition:
-                break
         details = {
             'head_loss_bend': node.head_loss_bend or 0.0,
-            'head_loss_transition': h_transition,
+            'head_loss_transition': 0.0,
             'head_loss_friction': node.head_loss_friction or 0.0,
             'head_loss_local': getattr(node, 'head_loss_local', 0.0) or 0.0,
             'head_loss_reserve': getattr(node, 'head_loss_reserve', 0.0) or 0.0,
@@ -3678,18 +3671,29 @@ class WaterProfilePanel(QWidget):
             if is_gate:
                 details["head_loss_gate"] = getattr(node, 'head_loss_gate', 0.0) or 0.0
             else:
-                details["hf"] = node.head_loss_friction or 0.0
-                details["hj"] = getattr(node, 'head_loss_local', 0.0) or 0.0
-                details["hw"] = node.head_loss_bend or 0.0
-                # 收集渐变段损失
-                h_tr = 0.0
+                hf = node.head_loss_friction or 0.0
+                hj = getattr(node, 'head_loss_local', 0.0) or 0.0
+                hw = node.head_loss_bend or 0.0
+                h_reserve = getattr(node, 'head_loss_reserve', 0.0) or 0.0
+                h_gate = getattr(node, 'head_loss_gate', 0.0) or 0.0
+                h_siphon = getattr(node, 'head_loss_siphon', 0.0) or 0.0
+                row_total_loss = node.head_loss_total or 0.0
+
+                transition_step_loss = 0.0
                 for j in range(prev_idx + 1, row_idx):
                     if nodes[j].is_transition:
-                        h_tr += nodes[j].head_loss_transition or 0.0
-                details["h_tr"] = h_tr
-                details["h_reserve"] = getattr(node, 'head_loss_reserve', 0.0) or 0.0
-                details["h_gate"] = getattr(node, 'head_loss_gate', 0.0) or 0.0
-                details["h_siphon"] = getattr(node, 'head_loss_siphon', 0.0) or 0.0
+                        transition_step_loss += nodes[j].head_loss_transition or 0.0
+
+                details["hf"] = hf
+                details["hj"] = hj
+                details["hw"] = hw
+                details["h_tr"] = transition_step_loss
+                details["h_reserve"] = h_reserve
+                details["h_gate"] = h_gate
+                details["h_siphon"] = h_siphon
+                details["total_loss"] = round(row_total_loss, 4)
+                details["transition_step_loss"] = round(transition_step_loss, 4)
+                details["step_drop"] = round(row_total_loss + transition_step_loss, 4)
         else:
             fluent_info(self, "提示", "该行无法获取上一节点水位")
             return
