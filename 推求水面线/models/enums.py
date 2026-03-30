@@ -48,6 +48,10 @@ class StructureType(Enum):
     
     # 有压管道（类似倒虹吸，参与批量计算和水面线推求）
     PRESSURE_PIPE = "有压管道"
+
+    # xx管专用管道结构
+    DIRECTIONAL_DRILL = "定向钻"
+    PIPE_JACKING = "顶管"
     
     # 渐变段（用于渐变段专用行）
     TRANSITION = "渐变段"
