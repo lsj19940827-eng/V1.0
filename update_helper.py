@@ -53,6 +53,8 @@ STAGE_LABEL_MIN_HEIGHT = 18
 def _resolve_window_icon_path() -> str | None:
     project_root = updater._get_project_root()
     candidate_paths = [
+        os.path.join(project_root, "app_渠系计算前端", "resources", "license_shield.ico"),
+        os.path.join(project_root, "tools", "license_icon.ico"),
         os.path.join(project_root, "app_渠系计算前端", "resources", "update_helper.ico"),
         os.path.join(project_root, "app_渠系计算前端", "resources", "logo.ico"),
         os.path.join(project_root, "app_渠系计算前端", "resources", "logo.svg"),

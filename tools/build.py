@@ -167,9 +167,13 @@ MANIFEST_STORE_DIR = os.path.join(PROJECT_ROOT, ".release-manifests")
 MAIN_SCRIPT = os.path.join(PROJECT_ROOT, "main.py")
 UPDATE_HELPER_SCRIPT = os.path.join(PROJECT_ROOT, "update_helper.py")
 ICON_FILE = os.path.join(PROJECT_ROOT, "icon.ico")
+SHARED_UPDATE_HELPER_ICON_FILE = os.path.join(
+    PROJECT_ROOT, "app_渠系计算前端", "resources", "license_shield.ico"
+)
 UPDATE_HELPER_ICON_FILE = os.path.join(
     PROJECT_ROOT, "app_渠系计算前端", "resources", "update_helper.ico"
 )
+LICENSE_MANAGER_ICON_FILE = os.path.join(PROJECT_ROOT, "tools", "license_icon.ico")
 PROJECT_VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
 UPDATE_HELPER_NAME = f"{APP_NAME_EN}Updater"
 
@@ -182,8 +186,13 @@ def _project_python() -> str:
 
 
 def _resolve_update_helper_icon_file() -> str:
-    if os.path.exists(UPDATE_HELPER_ICON_FILE):
-        return UPDATE_HELPER_ICON_FILE
+    for path in (
+        SHARED_UPDATE_HELPER_ICON_FILE,
+        LICENSE_MANAGER_ICON_FILE,
+        UPDATE_HELPER_ICON_FILE,
+    ):
+        if os.path.exists(path):
+            return path
     return ICON_FILE
 
 

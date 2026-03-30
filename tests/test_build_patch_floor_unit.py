@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import sys
 import zipfile
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -44,6 +45,29 @@ def test_select_universal_patch_manifest_files_excludes_current_and_future():
     )
 
     assert selected == ["manifest-V1.0.9.json"]
+
+
+def test_resolve_update_helper_icon_file_prefers_shared_shield_icon(monkeypatch):
+    project_root = Path(tempfile.mkdtemp(prefix="build-update-helper-icon-"))
+    shared_resources = project_root / "app_渠系计算前端" / "resources"
+    shared_resources.mkdir(parents=True)
+    shield_logo = shared_resources / "license_shield.ico"
+    shield_logo.write_bytes(b"shield-logo")
+    helper_logo = shared_resources / "update_helper.ico"
+    helper_logo.write_bytes(b"legacy-helper-logo")
+    app_icon = project_root / "icon.ico"
+    app_icon.write_bytes(b"legacy-app-icon")
+
+    monkeypatch.setattr(
+        build,
+        "SHARED_UPDATE_HELPER_ICON_FILE",
+        str(shield_logo),
+        raising=False,
+    )
+    monkeypatch.setattr(build, "UPDATE_HELPER_ICON_FILE", str(helper_logo))
+    monkeypatch.setattr(build, "ICON_FILE", str(app_icon))
+
+    assert build._resolve_update_helper_icon_file() == str(shield_logo)
 
 
 def test_build_universal_patch_includes_allowed_source_hashes(tmp_path):

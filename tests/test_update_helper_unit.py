@@ -39,18 +39,20 @@ def test_main_shows_hint_when_started_without_session(monkeypatch):
     assert calls == ["shown"]
 
 
-def test_resolve_window_icon_path_prefers_dedicated_helper_icon(monkeypatch):
+def test_resolve_window_icon_path_prefers_shared_shield_icon(monkeypatch):
     project_root = Path(tempfile.mkdtemp(prefix="update-helper-icon-"))
     shared_resources = project_root / "app_渠系计算前端" / "resources"
     shared_resources.mkdir(parents=True)
+    shield_logo = shared_resources / "license_shield.ico"
+    shield_logo.write_bytes(b"shield-logo")
     helper_logo = shared_resources / "update_helper.ico"
-    helper_logo.write_bytes(b"shield-helper-logo")
+    helper_logo.write_bytes(b"legacy-helper-logo")
     (shared_resources / "logo.ico").write_bytes(b"legacy-shared-logo")
     (project_root / "icon.ico").write_bytes(b"legacy-icon")
 
     monkeypatch.setattr(update_helper.updater, "_get_project_root", lambda: str(project_root))
 
-    assert update_helper._resolve_window_icon_path() == str(helper_logo)
+    assert update_helper._resolve_window_icon_path() == str(shield_logo)
 
 
 def test_update_helper_surfaces_full_package_guidance_for_patch_mismatch(monkeypatch):
