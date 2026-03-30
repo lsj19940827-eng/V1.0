@@ -2691,6 +2691,155 @@ def _extract_pressurized_param_entities(nodes, structure_kind):
     return entity_rows, invalid_rows
 
 
+def _xxpipe_longitudinal_node_get(node, key, default=None):
+    if isinstance(node, dict):
+        return node.get(key, default)
+    return getattr(node, key, default)
+
+
+def _xxpipe_longitudinal_node_float(node, key, *, required=True, default=None):
+    value = _xxpipe_longitudinal_node_get(node, key, default)
+    if value is None:
+        if required:
+            raise ValueError(f"xx管纵断面节点缺少有效字段: {key}")
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        if required:
+            raise ValueError(f"xx管纵断面节点字段 {key} 不是有效数值: {value!r}") from exc
+        return None
+    if not math.isfinite(number):
+        if required:
+            raise ValueError(f"xx管纵断面节点字段 {key} 不是有限数值: {value!r}")
+        return None
+    return number
+
+
+def _normalize_xxpipe_longitudinal_nodes(longitudinal_nodes):
+    if not longitudinal_nodes or len(longitudinal_nodes) < 2:
+        raise ValueError("xx管轴线高程采样至少需要 2 个纵断面节点")
+
+    normalized = []
+    for idx, node in enumerate(longitudinal_nodes):
+        chainage = _xxpipe_longitudinal_node_float(node, "chainage")
+        elevation = _xxpipe_longitudinal_node_float(node, "elevation")
+        turn_type_raw = _xxpipe_longitudinal_node_get(node, "turn_type", "NONE")
+        turn_type = getattr(turn_type_raw, "name", turn_type_raw)
+        normalized.append(
+            {
+                "index": idx,
+                "chainage": chainage,
+                "elevation": elevation,
+                "turn_type": str(turn_type or "NONE").strip().upper(),
+                "vertical_curve_radius": _xxpipe_longitudinal_node_float(
+                    node, "vertical_curve_radius", required=False, default=0.0
+                ) or 0.0,
+                "arc_center_s": _xxpipe_longitudinal_node_float(
+                    node, "arc_center_s", required=False, default=None
+                ),
+                "arc_center_z": _xxpipe_longitudinal_node_float(
+                    node, "arc_center_z", required=False, default=None
+                ),
+                "arc_end_chainage": _xxpipe_longitudinal_node_float(
+                    node, "arc_end_chainage", required=False, default=None
+                ),
+                "arc_theta_rad": _xxpipe_longitudinal_node_float(
+                    node, "arc_theta_rad", required=False, default=None
+                ),
+            }
+        )
+
+    normalized.sort(key=lambda item: (item["chainage"], item["index"]))
+    return normalized
+
+
+def _is_xxpipe_arc_segment_start(node):
+    return (
+        node["turn_type"] == "ARC"
+        and node["vertical_curve_radius"] > 0
+        and node["arc_center_s"] is not None
+        and node["arc_center_z"] is not None
+        and node["arc_end_chainage"] is not None
+        and node["arc_theta_rad"] is not None
+        and node["arc_theta_rad"] > 0
+        and node["arc_end_chainage"] > node["chainage"]
+    )
+
+
+def _sample_xxpipe_arc_segment_elevation(node, station_mc):
+    start_chainage = node["chainage"]
+    start_elevation = node["elevation"]
+    center_s = node["arc_center_s"]
+    center_z = node["arc_center_z"]
+    radius = node["vertical_curve_radius"]
+
+    inside_start = max(0.0, radius ** 2 - (start_chainage - center_s) ** 2)
+    root_start = math.sqrt(inside_start)
+    eta = 1 if abs(center_z + root_start - start_elevation) <= abs(center_z - root_start - start_elevation) else -1
+
+    inside_station = radius ** 2 - (station_mc - center_s) ** 2
+    if inside_station < -1e-8:
+        raise ValueError(
+            f"station {station_mc:.6f} 超出 xx管轴线圆弧几何定义，无法根据纵断面节点求高程"
+        )
+    return center_z + eta * math.sqrt(max(0.0, inside_station))
+
+
+def sample_xxpipe_centerline_elevation(longitudinal_nodes, station_mc):
+    """按桩号求 xx管 管中心线高程；超出纵断面覆盖范围时拒绝外推。"""
+    nodes = _normalize_xxpipe_longitudinal_nodes(longitudinal_nodes)
+    station_value = _xxpipe_longitudinal_node_float({"station_mc": station_mc}, "station_mc")
+    tol = 1e-9
+
+    for node in nodes:
+        if abs(node["chainage"] - station_value) <= tol:
+            return node["elevation"]
+
+    coverage_start = nodes[0]["chainage"]
+    coverage_end = nodes[-1]["chainage"]
+    if station_value < coverage_start - tol or station_value > coverage_end + tol:
+        raise ValueError(
+            f"station {station_value:.6f} 超出 xx管轴线高程覆盖范围 "
+            f"[{coverage_start:.6f}, {coverage_end:.6f}]，不允许外推"
+        )
+
+    for idx, current in enumerate(nodes[:-1]):
+        nxt = nodes[idx + 1]
+        segment_start = current["chainage"]
+        if _is_xxpipe_arc_segment_start(current):
+            segment_end = current["arc_end_chainage"]
+            if segment_start - tol <= station_value <= segment_end + tol:
+                return _sample_xxpipe_arc_segment_elevation(current, station_value)
+            continue
+
+        segment_end = nxt["chainage"]
+        if segment_start - tol <= station_value <= segment_end + tol:
+            ds = segment_end - segment_start
+            if abs(ds) <= tol:
+                return current["elevation"]
+            ratio = (station_value - segment_start) / ds
+            return current["elevation"] + (nxt["elevation"] - current["elevation"]) * ratio
+
+    raise ValueError(
+        f"station {station_value:.6f} 超出 xx管轴线高程覆盖范围 "
+        f"[{coverage_start:.6f}, {coverage_end:.6f}]，不允许外推"
+    )
+
+
+def find_xxpipe_axis_elevation_coverage_gaps(longitudinal_nodes, station_mcs):
+    """批量检查给定桩号是否全部落在 xx管纵断面覆盖范围内。"""
+    missing = []
+    for station_mc in station_mcs or []:
+        try:
+            sample_xxpipe_centerline_elevation(longitudinal_nodes, station_mc)
+        except ValueError as exc:
+            if "超出 xx管轴线高程覆盖范围" not in str(exc):
+                raise
+            missing.append(station_mc)
+    return missing
+
+
 def _extract_pressure_pipe_calc_contexts(nodes, proj_settings=None):
     """提取有压管道断面表所需的水头损失计算上下文。"""
     try:
