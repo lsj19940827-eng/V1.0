@@ -2812,6 +2812,16 @@ def _normalize_pressure_pipe_total_head_loss_value(value):
     return round(number, 4)
 
 
+def _normalize_pressure_pipe_total_length_value(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return round(number, 4)
+
+
 def _get_panel_pressure_pipe_export_results(panel, rows):
     getter = getattr(panel, "get_pressure_pipe_export_results", None)
     if not callable(getter):
@@ -2860,12 +2870,28 @@ def _attach_pressure_pipe_export_results_to_rows(rows, panel=None):
         )
         if velocity is not None:
             row["V"] = velocity
+        total_length = _normalize_pressure_pipe_total_length_value(
+            result.get("total_length", result.get("plan_total_length"))
+        )
+        if total_length is not None:
+            row["total_length"] = total_length
         total_head_loss = _normalize_pressure_pipe_total_head_loss_value(
             result.get("total_head_loss")
         )
-        if total_head_loss is None:
+        if total_head_loss is not None:
+            row["total_head_loss"] = total_head_loss
+    return rows
+
+
+def _apply_pressure_pipe_length_fallbacks(rows):
+    for row in rows or []:
+        total_length = _normalize_pressure_pipe_total_length_value(row.get("total_length"))
+        if total_length is not None:
+            row["total_length"] = total_length
             continue
-        row["total_head_loss"] = total_head_loss
+        fallback_length = _normalize_pressure_pipe_total_length_value(row.get("plan_total_length"))
+        if fallback_length is not None:
+            row["total_length"] = fallback_length
     return rows
 
 
@@ -2916,7 +2942,127 @@ def _prepare_pressure_pipe_export_rows(rows, panel=None, calc_contexts=None):
     prepared_rows = _normalize_pressurized_cache_rows(rows, "pressure_pipe")
     _attach_pressure_pipe_calc_contexts_to_rows(prepared_rows, calc_contexts)
     _attach_pressure_pipe_export_results_to_rows(prepared_rows, panel=panel)
+    _apply_pressure_pipe_length_fallbacks(prepared_rows)
     return prepared_rows
+
+
+def _normalize_pressure_pipe_flow_section_key(flow_section):
+    idx = _parse_flow_section_index(flow_section)
+    if idx is not None:
+        return str(idx)
+    return str(flow_section or "").strip()
+
+
+def _resolve_pressure_pipe_characteristic_export_summary(panel, rows=None):
+    getter = getattr(panel, "get_pressure_pipe_characteristic_export_summary", None)
+    if not callable(getter):
+        return {}
+    try:
+        result = getter(rows)
+    except TypeError:
+        result = getter()
+    except Exception:
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def _merge_pressure_pipe_export_rows_by_flow_section(rows, panel=None):
+    if not rows:
+        return []
+
+    summary_by_flow_section = _resolve_pressure_pipe_characteristic_export_summary(panel, rows)
+    grouped_rows = {}
+    row_order = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        flow_section = row.get("flow_section")
+        if flow_section is None:
+            continue
+        if flow_section not in grouped_rows:
+            grouped_rows[flow_section] = []
+            row_order.append(flow_section)
+        grouped_rows[flow_section].append(row)
+
+    merged_rows = []
+    show_building_characteristics = False
+    preferred_keys = (
+        "Q",
+        "Q_inc",
+        "pipe_material",
+        "DN_mm",
+        "V",
+        "plan_total_length",
+        "total_length",
+        "total_head_loss",
+        "friction_params",
+        "pressure_f",
+        "pressure_m",
+        "pressure_b",
+        "pipe_material_key",
+        "ip_points",
+        "upstream_velocity",
+        "downstream_velocity",
+        "inlet_transition_form",
+        "outlet_transition_form",
+        "inlet_transition_zeta",
+        "outlet_transition_zeta",
+    )
+
+    for flow_section in row_order:
+        items = grouped_rows[flow_section]
+        base = copy.deepcopy(items[0])
+        flow_section_key = _normalize_pressure_pipe_flow_section_key(flow_section)
+        segment_label = _segment_label_from_index(flow_section) or flow_section_key or base.get("name", "")
+        base["name"] = segment_label
+        base["display_name"] = segment_label
+        for key in preferred_keys:
+            for item in items:
+                value = item.get(key)
+                if value in (None, "", "-"):
+                    continue
+                base[key] = copy.deepcopy(value)
+                break
+
+        summary = summary_by_flow_section.get(flow_section_key)
+        if summary is None:
+            summary = summary_by_flow_section.get(flow_section)
+        if isinstance(summary, dict):
+            for key in (
+                "start_water_level",
+                "end_water_level",
+                "tunnel_count",
+                "tunnel_length",
+                "directional_drill_count",
+                "directional_drill_length",
+                "jacking_count",
+                "jacking_length",
+            ):
+                if key in summary:
+                    base[key] = copy.deepcopy(summary.get(key))
+
+        tunnel_count = 0
+        directional_drill_count = 0
+        jacking_count = 0
+        try:
+            tunnel_count = max(int(float(base.get("tunnel_count", 0) or 0)), 0)
+        except (TypeError, ValueError):
+            tunnel_count = 0
+        try:
+            directional_drill_count = max(int(float(base.get("directional_drill_count", 0) or 0)), 0)
+        except (TypeError, ValueError):
+            directional_drill_count = 0
+        try:
+            jacking_count = max(int(float(base.get("jacking_count", 0) or 0)), 0)
+        except (TypeError, ValueError):
+            jacking_count = 0
+        if tunnel_count > 0 or directional_drill_count > 0 or jacking_count > 0:
+            show_building_characteristics = True
+        merged_rows.append(base)
+
+    for row in merged_rows:
+        row["show_building_characteristics"] = show_building_characteristics
+    return merged_rows
 
 
 def _merge_pressurized_param_defaults(group_items, cached_rows, default_material="球墨铸铁管"):
@@ -3000,8 +3146,19 @@ def _build_pressurized_segments(qs, overrides_by_idx, params, has_source_data, s
         "inlet_transition_zeta",
         "outlet_transition_zeta",
         "V",
+        "plan_total_length",
+        "total_length",
         "total_head_loss",
         "friction_params",
+        "start_water_level",
+        "end_water_level",
+        "tunnel_count",
+        "tunnel_length",
+        "directional_drill_count",
+        "directional_drill_length",
+        "jacking_count",
+        "jacking_length",
+        "show_building_characteristics",
     )
 
     structure_kind = None
@@ -6604,6 +6761,10 @@ def _draw_section_summary_on_msp(
         panel=panel,
         calc_contexts=_extract_pressure_pipe_calc_contexts(nodes, proj_settings),
     )
+    pressure_pipe_export_rows = _merge_pressure_pipe_export_rows_by_flow_section(
+        pressure_pipe_params,
+        panel=panel,
+    )
 
     sp = _build_pressurized_segments(
         qs=qs,
@@ -6615,7 +6776,7 @@ def _draw_section_summary_on_msp(
     pp = _build_pressurized_segments(
         qs=qs,
         overrides_by_idx=node_defaults.get("pressure_pipe", {}),
-        params=pressure_pipe_params,
+        params=pressure_pipe_export_rows,
         has_source_data=has_source,
         segment_name_fn=_segment_name,
     )
@@ -8078,14 +8239,9 @@ class SectionSummaryDialog(QDialog):
         )
 
     def _warn_pressure_pipe_missing_total_head_loss(self, rows):
-        items = [label for label in self._collect_pressure_pipe_missing_total_head_loss_labels(rows) if label]
-        if not items:
-            return
-        fluent_info(
-            self,
-            "提示",
-            "以下有压管道缺少已算总水头损失结果，本次导出将以“-”显示：\n" + "；".join(items),
-        )
+        # 新版导出表不再展示总水头损失，因此这里保留检测逻辑但不弹提示。
+        _ = rows
+        return
 
     def _read_float(self, edit, default):
         """安全读取 LineEdit 的浮点值，空或非法返回默认值。"""
@@ -8180,6 +8336,10 @@ class SectionSummaryDialog(QDialog):
             pressure_pipe_params,
             panel=getattr(self, "_panel", None),
             calc_contexts=getattr(self, "_pressure_pipe_calc_contexts", None),
+        )
+        pressure_pipe_export_rows = _merge_pressure_pipe_export_rows_by_flow_section(
+            pressure_pipe_params,
+            panel=getattr(self, "_panel", None),
         )
 
         # config_only 模式：只读取并缓存参数，不生成文件
@@ -8354,7 +8514,7 @@ class SectionSummaryDialog(QDialog):
         pp_segs = _build_pressurized_segments(
             qs=qs,
             overrides_by_idx=pp_overrides,
-            params=pressure_pipe_params,
+            params=pressure_pipe_export_rows,
             has_source_data=has_source_data,
             segment_name_fn=_segment_name,
         )

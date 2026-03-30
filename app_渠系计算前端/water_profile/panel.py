@@ -7526,6 +7526,18 @@ class WaterProfilePanel(QWidget):
         return math.isfinite(number) and number >= 0
 
     @staticmethod
+    def _normalize_pressure_pipe_export_number(value, *, allow_zero=False) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        if allow_zero:
+            return number if number >= 0 else None
+        return number if number > 0 else None
+
+    @staticmethod
     def _make_pressure_pipe_export_target(name, flow_section) -> dict:
         flow_section_text = str(flow_section or "").strip()
         name_text = str(name or "").strip() or "未命名"
@@ -7574,8 +7586,12 @@ class WaterProfilePanel(QWidget):
         for record in data.get("records", []):
             if str(record.get("status", "")).strip().lower() != "success":
                 continue
-            total_head_loss = record.get("total_head_loss")
-            if not self._is_valid_pressure_pipe_total_head_loss(total_head_loss):
+            total_head_loss = self._normalize_pressure_pipe_export_number(
+                record.get("total_head_loss"), allow_zero=True
+            )
+            pipe_velocity = self._normalize_pressure_pipe_export_number(record.get("pipe_velocity"))
+            total_length = self._normalize_pressure_pipe_export_number(record.get("total_length"))
+            if total_head_loss is None and pipe_velocity is None and total_length is None:
                 continue
             name = str(record.get("name", "") or "").strip() or "未命名"
             flow_section = str(record.get("flow_section", "") or "").strip()
@@ -7586,9 +7602,14 @@ class WaterProfilePanel(QWidget):
                 "identity": identity,
                 "flow_section": flow_section,
                 "name": name,
-                "total_head_loss": float(total_head_loss),
                 "source": "calc_records",
             }
+            if total_head_loss is not None:
+                payload["total_head_loss"] = float(total_head_loss)
+            if pipe_velocity is not None:
+                payload["pipe_velocity"] = float(pipe_velocity)
+            if total_length is not None:
+                payload["total_length"] = float(total_length)
             exact[identity] = payload
             plain_name_candidates.setdefault(name, []).append(payload)
 
@@ -7631,7 +7652,12 @@ class WaterProfilePanel(QWidget):
                 or float(total_head_loss) <= 0
             ):
                 total_head_loss = getattr(outlet_node, "external_head_loss", None)
-            if not self._is_valid_pressure_pipe_total_head_loss(total_head_loss):
+            total_head_loss = self._normalize_pressure_pipe_export_number(total_head_loss, allow_zero=True)
+            pipe_velocity = self._normalize_pressure_pipe_export_number(getattr(outlet_node, "velocity", None))
+            total_length = self._normalize_pressure_pipe_export_number(
+                getattr(group, "plan_total_length", None)
+            )
+            if total_head_loss is None and pipe_velocity is None and total_length is None:
                 continue
 
             flow_section = self._get_pressure_pipe_group_flow_section(group)
@@ -7640,9 +7666,14 @@ class WaterProfilePanel(QWidget):
                 "identity": identity,
                 "flow_section": flow_section,
                 "name": name,
-                "total_head_loss": float(total_head_loss),
                 "source": "table3",
             }
+            if total_head_loss is not None:
+                payload["total_head_loss"] = float(total_head_loss)
+            if pipe_velocity is not None:
+                payload["pipe_velocity"] = float(pipe_velocity)
+            if total_length is not None:
+                payload["total_length"] = float(total_length)
             exact[identity] = payload
             plain_name_candidates.setdefault(name, []).append(payload)
 
@@ -7669,8 +7700,14 @@ class WaterProfilePanel(QWidget):
 
         for key, pipe_data in pipes.items():
             row = pipe_data if isinstance(pipe_data, dict) else {}
-            total_head_loss = row.get("total_head_loss")
-            if not self._is_valid_pressure_pipe_total_head_loss(total_head_loss):
+            total_head_loss = self._normalize_pressure_pipe_export_number(
+                row.get("total_head_loss"), allow_zero=True
+            )
+            pipe_velocity = self._normalize_pressure_pipe_export_number(row.get("pipe_velocity"))
+            total_length = self._normalize_pressure_pipe_export_number(
+                row.get("plan_total_length", row.get("total_length"))
+            )
+            if total_head_loss is None and pipe_velocity is None and total_length is None:
                 continue
 
             key_text = str(key or "").strip()
@@ -7703,9 +7740,14 @@ class WaterProfilePanel(QWidget):
                 "identity": resolved_identity or "",
                 "flow_section": flow_section,
                 "name": name,
-                "total_head_loss": float(total_head_loss),
                 "source": "manager",
             }
+            if total_head_loss is not None:
+                payload["total_head_loss"] = float(total_head_loss)
+            if pipe_velocity is not None:
+                payload["pipe_velocity"] = float(pipe_velocity)
+            if total_length is not None:
+                payload["total_length"] = float(total_length)
             if resolved_identity:
                 exact[resolved_identity] = payload
             plain_name_candidates.setdefault(name, []).append(payload)
@@ -7717,6 +7759,181 @@ class WaterProfilePanel(QWidget):
             if len(identities) <= 1:
                 plain_name[name] = items[-1]
         return exact, plain_name
+
+    @staticmethod
+    def _normalize_pressure_pipe_summary_flow_section(flow_section) -> str:
+        text = str(flow_section or "").strip()
+        if not text or text == "-":
+            return ""
+        try:
+            number = float(text)
+        except (TypeError, ValueError):
+            return text
+        if not math.isfinite(number):
+            return text
+        if abs(number - round(number)) <= 1e-9:
+            return str(int(round(number)))
+        return text
+
+    @staticmethod
+    def _get_pressure_pipe_summary_structure_type(node) -> str:
+        getter = getattr(node, "get_structure_type_str", None)
+        if callable(getter):
+            try:
+                text = str(getter() or "").strip()
+                if text:
+                    return text
+            except Exception:
+                pass
+        struct_type = getattr(node, "structure_type", None)
+        value = getattr(struct_type, "value", struct_type)
+        return str(value or "").strip()
+
+    @classmethod
+    def _classify_pressure_pipe_summary_bucket(cls, node) -> str | None:
+        if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+            return None
+        structure_text = cls._get_pressure_pipe_summary_structure_type(node)
+        if "隧洞" in structure_text:
+            return "隧洞"
+        if "定向钻" in structure_text:
+            return "定向钻"
+        if "顶管" in structure_text:
+            return "顶管"
+        if "有压管道" in structure_text or getattr(node, "is_pressure_pipe", False):
+            return "有压管道"
+        return None
+
+    def _get_pressure_pipe_summary_source_nodes(self) -> list:
+        nodes = getattr(self, "calculated_nodes", None) or getattr(self, "nodes", None) or []
+        return nodes if isinstance(nodes, list) else []
+
+    def _get_pressure_pipe_summary_waterline(self, nodes) -> tuple[float | None, float | None]:
+        start_water_level = None
+        end_water_level = None
+        if nodes and CALCULATOR_AVAILABLE:
+            try:
+                calculator = WaterProfileCalculator(self._build_settings())
+                summary = calculator.get_calculation_summary(nodes)
+            except Exception:
+                summary = {}
+            if isinstance(summary, dict):
+                start_water_level = self._normalize_pressure_pipe_export_number(
+                    summary.get("起点水位"), allow_zero=True
+                )
+                end_water_level = self._normalize_pressure_pipe_export_number(
+                    summary.get("终点水位"), allow_zero=True
+                )
+        if start_water_level is None and nodes:
+            start_water_level = self._normalize_pressure_pipe_export_number(
+                getattr(nodes[0], "water_level", None), allow_zero=True
+            )
+        if end_water_level is None and nodes:
+            end_water_level = self._normalize_pressure_pipe_export_number(
+                getattr(nodes[-1], "water_level", None), allow_zero=True
+            )
+        return start_water_level, end_water_level
+
+    def _build_pressure_pipe_characteristic_export_summary_from_nodes(self, nodes) -> tuple[dict, float | None, float | None]:
+        start_water_level, end_water_level = self._get_pressure_pipe_summary_waterline(nodes)
+
+        def _make_entry(flow_section_text: str) -> dict:
+            return {
+                "flow_section": flow_section_text,
+                "start_water_level": start_water_level,
+                "end_water_level": end_water_level,
+                "tunnel_count": 0,
+                "tunnel_length": 0.0,
+                "directional_drill_count": 0,
+                "directional_drill_length": 0.0,
+                "jacking_count": 0,
+                "jacking_length": 0.0,
+            }
+
+        summary_by_flow_section = {}
+        if not nodes:
+            return summary_by_flow_section, start_water_level, end_water_level
+
+        count_map = {
+            "隧洞": "tunnel_count",
+            "定向钻": "directional_drill_count",
+            "顶管": "jacking_count",
+        }
+        length_map = {
+            "隧洞": "tunnel_length",
+            "定向钻": "directional_drill_length",
+            "顶管": "jacking_length",
+        }
+        building_buckets = set(count_map.keys())
+
+        previous_marker = None
+        for node in nodes:
+            flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
+                getattr(node, "flow_section", "")
+            )
+            bucket = self._classify_pressure_pipe_summary_bucket(node)
+            if flow_section_text and bucket:
+                summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
+            marker = (flow_section_text, bucket) if flow_section_text and bucket in building_buckets else None
+            if marker is not None and marker != previous_marker:
+                entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
+                entry[count_map[bucket]] += 1
+            previous_marker = marker
+
+        for idx in range(len(nodes) - 1):
+            current = nodes[idx]
+            nxt = nodes[idx + 1]
+            flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
+                getattr(current, "flow_section", "")
+            )
+            next_flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
+                getattr(nxt, "flow_section", "")
+            )
+            bucket = self._classify_pressure_pipe_summary_bucket(current)
+            if not flow_section_text or flow_section_text != next_flow_section_text:
+                continue
+            if bucket not in building_buckets:
+                continue
+            try:
+                seg_len = float(getattr(nxt, "station_MC", 0.0) or 0.0) - float(getattr(current, "station_MC", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if seg_len <= 0:
+                continue
+            entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
+            entry[length_map[bucket]] += seg_len
+
+        return summary_by_flow_section, start_water_level, end_water_level
+
+    def get_pressure_pipe_characteristic_export_summary(self, rows=None) -> dict:
+        targets = self._collect_pressure_pipe_export_targets(rows)
+        if not targets:
+            return {}
+
+        nodes = self._get_pressure_pipe_summary_source_nodes()
+        summary_by_flow_section, start_water_level, end_water_level = (
+            self._build_pressure_pipe_characteristic_export_summary_from_nodes(nodes)
+        )
+
+        resolved = {}
+        for target in targets:
+            flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
+                target.get("flow_section", "")
+            )
+            if not flow_section_text:
+                continue
+            payload = copy.deepcopy(summary_by_flow_section.get(flow_section_text) or {})
+            payload.setdefault("flow_section", flow_section_text)
+            payload.setdefault("start_water_level", start_water_level)
+            payload.setdefault("end_water_level", end_water_level)
+            payload.setdefault("tunnel_count", 0)
+            payload.setdefault("tunnel_length", 0.0)
+            payload.setdefault("directional_drill_count", 0)
+            payload.setdefault("directional_drill_length", 0.0)
+            payload.setdefault("jacking_count", 0)
+            payload.setdefault("jacking_length", 0.0)
+            resolved[flow_section_text] = payload
+        return resolved
 
     def get_pressure_pipe_export_results(self, rows=None) -> dict:
         """
