@@ -43,7 +43,21 @@ def _load_summary_module():
     return module
 
 
+def _load_panel_module():
+    root = Path(__file__).resolve().parents[1]
+    root_str = str(root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+    matches = list(root.glob("*/water_profile/panel.py"))
+    assert matches, "未找到 panel.py"
+    spec = importlib.util.spec_from_file_location("panel_test_mod", matches[0])
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 summary_mod = _load_summary_module()
+panel_mod = _load_panel_module()
 
 
 def _get_qapp():
@@ -344,14 +358,17 @@ def test_siphon_dxf_header_uses_structure_name_and_flow_section():
     assert table_rows[0][0] == "龙王沟-第一流量段"
 
 
-def test_pressure_pipe_summary_uses_fmb_headers_and_locked_total_loss_only():
+def test_pressure_pipe_summary_hides_building_characteristics_when_all_counts_are_zero():
     rows = summary_mod.compute_pressure_pipe([{
-        "name": "有压A-第一流量段",
-        "Q": 1.1,
-        "DN_mm": 850,
+        "name": "第一流量段",
+        "Q": 3.0,
+        "DN_mm": 1600,
         "pipe_material": "球墨铸铁管",
         "V": 1.624,
+        "total_length": 1520.0,
         "total_head_loss": 0.4382,
+        "start_water_level": 510.25,
+        "end_water_level": 507.8,
         "ip_points": [
             {"x": 0.0, "y": 0.0, "turn_radius": 0.0, "turn_angle": 0.0},
             {"x": 120.0, "y": 0.0, "turn_radius": 0.0, "turn_angle": 0.0},
@@ -361,19 +378,82 @@ def test_pressure_pipe_summary_uses_fmb_headers_and_locked_total_loss_only():
     assert rows[0]["friction_params"] == "223200 / 1.852 / 4.87"
     assert rows[0]["V"] == 1.624
     assert rows[0]["total_head_loss"] == 0.4382
+    assert rows[0]["total_length"] == 1520.0
 
-    _, headers, _, table_rows, _ = summary_mod._dxf_build_pressure_pipe(rows)
-    assert headers[0] == ("有压管道名称及流量段", None)
-    assert headers[3] == ("摩阻参数f/m/b", None)
-    assert headers[-1] == ("总水头损失", "m")
-    assert table_rows[0][0] == "有压A-第一流量段"
-    assert table_rows[0][3] == "223200 / 1.852 / 4.87"
-    assert table_rows[0][4] == 850
-    assert table_rows[0][-2] == 1.624
-    assert table_rows[0][-1] == 0.4382
+    title, headers, _, table_rows, _ = summary_mod._dxf_build_pressure_pipe(rows)
+    assert title == "压力管道特性表"
+    assert [name for name, _unit in headers] == [
+        "流量段", "设计流量", "加大流量", "长度", "管材", "管径", "设计流速",
+        "渠首水位", "渠末水位",
+    ]
+    assert headers[3] == ("长度", "km")
+    assert headers[5] == ("管径", "m")
+    assert headers[7] == ("渠首水位", "m")
+    assert headers[8] == ("渠末水位", "m")
+    assert table_rows[0][0] == "第一流量段"
+    assert table_rows[0][3] == 1.52
+    assert table_rows[0][4] == "球墨铸铁管"
+    assert table_rows[0][5] == 1.6
+    assert table_rows[0][6] == 1.624
+    assert table_rows[0][7] == 510.25
+    assert table_rows[0][8] == 507.8
 
 
-def test_pressure_pipe_summary_uses_dash_when_total_loss_missing():
+def test_pressure_pipe_summary_shows_building_characteristics_groups_and_zero_values_as_dash():
+    rows = summary_mod.compute_pressure_pipe([
+        {
+            "name": "第一流量段",
+            "Q": 3.0,
+            "DN_mm": 1600,
+            "pipe_material": "球墨铸铁管",
+            "V": 1.438,
+            "total_length": 1520.0,
+            "start_water_level": 512.3,
+            "end_water_level": 509.7,
+            "tunnel_count": 2,
+            "tunnel_length": 1200.0,
+            "directional_drill_count": 1,
+            "directional_drill_length": 200.0,
+            "jacking_count": 0,
+            "jacking_length": 0.0,
+            "show_building_characteristics": True,
+        },
+        {
+            "name": "第二流量段",
+            "Q": 2.0,
+            "DN_mm": 1400,
+            "pipe_material": "钢管",
+            "V": 1.251,
+            "total_length": 980.0,
+            "start_water_level": 512.3,
+            "end_water_level": 509.7,
+            "tunnel_count": 0,
+            "tunnel_length": 0.0,
+            "directional_drill_count": 0,
+            "directional_drill_length": 0.0,
+            "jacking_count": 0,
+            "jacking_length": 0.0,
+            "show_building_characteristics": True,
+        },
+    ])
+
+    _, headers, _, table_rows, merge = summary_mod._dxf_build_pressure_pipe(rows)
+
+    assert [name for name, _unit in headers[-6:]] == [
+        "隧洞座数", "隧洞长度（km）",
+        "定向钻座数", "定向钻长度（km）",
+        "顶管座数", "顶管长度（km）",
+    ]
+    assert merge["header_row_count"] == 3
+    assert any(cell["text"] == "建筑物特性" for cell in merge["header_cells"])
+    assert any(cell["text"] == "隧洞" for cell in merge["header_cells"])
+    assert any(cell["text"] == "定向钻" for cell in merge["header_cells"])
+    assert any(cell["text"] == "顶管" for cell in merge["header_cells"])
+    assert table_rows[0][-6:] == [2, 1.2, 1, 0.2, "-", "-"]
+    assert table_rows[1][-6:] == ["-", "-", "-", "-", "-", "-"]
+
+
+def test_pressure_pipe_summary_uses_dash_when_length_and_velocity_missing():
     rows = summary_mod.compute_pressure_pipe([
         {
             "name": "有压B-第一流量段",
@@ -391,9 +471,11 @@ def test_pressure_pipe_summary_uses_dash_when_total_loss_missing():
 
     assert rows[0]["V"] == "-"
     assert rows[0]["total_head_loss"] == "-"
+    assert rows[0]["total_length"] == "-"
 
     _, _, _, table_rows, _ = summary_mod._dxf_build_pressure_pipe(rows)
-    assert table_rows[0][-2] == "-"
+    assert table_rows[0][3] == "-"
+    assert table_rows[0][5] == 0.85
     assert table_rows[0][-1] == "-"
 
 
@@ -492,6 +574,48 @@ def test_prepare_pressure_pipe_export_rows_uses_panel_results_for_cached_rows():
     assert prepared[0]["total_head_loss"] == 0.5627
 
 
+def test_prepare_pressure_pipe_export_rows_prefers_total_length_from_panel_results():
+    rows = [
+        {
+            "name": "牛马道",
+            "flow_section": 3,
+            "display_name": "牛马道-第三流量段",
+            "pipe_material": "球墨铸铁管",
+            "DN_mm": 1600,
+            "structure_kind": "pressure_pipe",
+            "plan_total_length": 1480.0,
+        }
+    ]
+    panel = SimpleNamespace(
+        get_pressure_pipe_export_results=lambda export_rows=None: {
+            "3::牛马道": {"total_length": 1520.0, "source": "table3"}
+        }
+    )
+
+    prepared = cad_tools._prepare_pressure_pipe_export_rows(rows, panel=panel, calc_contexts={})
+
+    assert prepared[0]["total_length"] == 1520.0
+
+
+def test_prepare_pressure_pipe_export_rows_falls_back_to_plan_total_length():
+    rows = [
+        {
+            "name": "牛马道",
+            "flow_section": 3,
+            "display_name": "牛马道-第三流量段",
+            "pipe_material": "球墨铸铁管",
+            "DN_mm": 1600,
+            "structure_kind": "pressure_pipe",
+            "plan_total_length": 1480.0,
+        }
+    ]
+    panel = SimpleNamespace(get_pressure_pipe_export_results=lambda export_rows=None: {})
+
+    prepared = cad_tools._prepare_pressure_pipe_export_rows(rows, panel=panel, calc_contexts={})
+
+    assert prepared[0]["total_length"] == 1480.0
+
+
 def test_prepare_pressure_pipe_export_rows_uses_panel_velocity_for_cached_rows():
     rows = [
         {
@@ -515,6 +639,175 @@ def test_prepare_pressure_pipe_export_rows_uses_panel_velocity_for_cached_rows()
     assert prepared[0]["total_head_loss"] == 0.5627
 
 
+def test_merge_pressure_pipe_export_rows_by_flow_section_collapses_rows_and_attaches_summary():
+    rows = [
+        {
+            "name": "牛马道主线",
+            "flow_section": 3,
+            "display_name": "牛马道主线-第三流量段",
+            "pipe_material": "球墨铸铁管",
+            "DN_mm": 1600,
+            "structure_kind": "pressure_pipe",
+            "Q": 3.0,
+            "Q_inc": 3.75,
+            "V": 1.49,
+            "total_length": 1520.0,
+            "total_head_loss": 0.5627,
+            "friction_params": "223200 / 1.852 / 4.87",
+        },
+        {
+            "name": "牛马道支线",
+            "flow_section": 3,
+            "display_name": "牛马道支线-第三流量段",
+            "pipe_material": "球墨铸铁管",
+            "DN_mm": 1600,
+            "structure_kind": "pressure_pipe",
+            "Q": 3.0,
+        },
+        {
+            "name": "四段管道",
+            "flow_section": 4,
+            "display_name": "四段管道-第四流量段",
+            "pipe_material": "钢管",
+            "DN_mm": 1400,
+            "structure_kind": "pressure_pipe",
+            "Q": 2.2,
+            "Q_inc": 2.75,
+            "V": 1.31,
+            "total_length": 980.0,
+        },
+    ]
+    panel = SimpleNamespace(
+        get_pressure_pipe_characteristic_export_summary=lambda export_rows=None: {
+            "3": {
+                "start_water_level": 512.3,
+                "end_water_level": 509.7,
+                "tunnel_count": 2,
+                "tunnel_length": 1200.0,
+                "directional_drill_count": 1,
+                "directional_drill_length": 200.0,
+                "jacking_count": 0,
+                "jacking_length": 0.0,
+            },
+            "4": {
+                "start_water_level": 512.3,
+                "end_water_level": 509.7,
+                "tunnel_count": 0,
+                "tunnel_length": 0.0,
+                "directional_drill_count": 0,
+                "directional_drill_length": 0.0,
+                "jacking_count": 0,
+                "jacking_length": 0.0,
+            },
+        }
+    )
+
+    merged = cad_tools._merge_pressure_pipe_export_rows_by_flow_section(rows, panel=panel)
+
+    assert [row["flow_section"] for row in merged] == [3, 4]
+    assert [row["name"] for row in merged] == ["第三流量段", "第四流量段"]
+    assert merged[0]["start_water_level"] == 512.3
+    assert merged[0]["end_water_level"] == 509.7
+    assert merged[0]["tunnel_count"] == 2
+    assert merged[0]["directional_drill_count"] == 1
+    assert merged[0]["jacking_count"] == 0
+    assert merged[0]["show_building_characteristics"] is True
+    assert merged[1]["show_building_characteristics"] is True
+
+
+def test_panel_pressure_pipe_characteristic_summary_merges_tunnel_subtypes_and_accumulates_lengths():
+    dummy_panel = SimpleNamespace(
+        calculated_nodes=[
+            SimpleNamespace(
+                flow_section="3",
+                station_MC=0.0,
+                water_level=512.3,
+                structure_type=SimpleNamespace(value="隧洞-圆形"),
+                is_transition=False,
+                is_auto_inserted_channel=False,
+                is_pressure_pipe=False,
+            ),
+            SimpleNamespace(
+                flow_section="3",
+                station_MC=400.0,
+                water_level=511.8,
+                structure_type=SimpleNamespace(value="隧洞-马蹄形Ⅰ型"),
+                is_transition=False,
+                is_auto_inserted_channel=False,
+                is_pressure_pipe=False,
+            ),
+            SimpleNamespace(
+                flow_section="3",
+                station_MC=650.0,
+                water_level=511.0,
+                structure_type=SimpleNamespace(value="定向钻"),
+                is_transition=False,
+                is_auto_inserted_channel=False,
+                is_pressure_pipe=False,
+            ),
+            SimpleNamespace(
+                flow_section="3",
+                station_MC=850.0,
+                water_level=510.2,
+                structure_type=SimpleNamespace(value="顶管"),
+                is_transition=False,
+                is_auto_inserted_channel=False,
+                is_pressure_pipe=False,
+            ),
+            SimpleNamespace(
+                flow_section="3",
+                station_MC=1000.0,
+                water_level=509.7,
+                structure_type=SimpleNamespace(value="有压管道"),
+                is_transition=False,
+                is_auto_inserted_channel=False,
+                is_pressure_pipe=True,
+            ),
+        ],
+        _build_settings=lambda: SimpleNamespace(),
+    )
+    for name in (
+        "_collect_pressure_pipe_export_targets",
+        "_build_pressure_pipe_characteristic_export_summary_from_nodes",
+        "_get_pressure_pipe_summary_source_nodes",
+        "_get_pressure_pipe_summary_waterline",
+    ):
+        setattr(
+            dummy_panel,
+            name,
+            getattr(panel_mod.WaterProfilePanel, name).__get__(dummy_panel, type(dummy_panel)),
+        )
+    dummy_panel._normalize_pressure_pipe_summary_flow_section = (
+        panel_mod.WaterProfilePanel._normalize_pressure_pipe_summary_flow_section
+    )
+    dummy_panel._normalize_pressure_pipe_export_number = (
+        panel_mod.WaterProfilePanel._normalize_pressure_pipe_export_number
+    )
+    dummy_panel._get_pressure_pipe_summary_structure_type = (
+        panel_mod.WaterProfilePanel._get_pressure_pipe_summary_structure_type
+    )
+    dummy_panel._make_pressure_pipe_export_target = (
+        panel_mod.WaterProfilePanel._make_pressure_pipe_export_target
+    )
+    dummy_panel._classify_pressure_pipe_summary_bucket = (
+        lambda node: panel_mod.WaterProfilePanel._classify_pressure_pipe_summary_bucket(node)
+    )
+
+    summary = panel_mod.WaterProfilePanel.get_pressure_pipe_characteristic_export_summary(
+        dummy_panel,
+        rows=[{"name": "第三流量段", "flow_section": 3}],
+    )
+
+    assert summary["3"]["start_water_level"] == 512.3
+    assert summary["3"]["end_water_level"] == 509.7
+    assert summary["3"]["tunnel_count"] == 1
+    assert summary["3"]["tunnel_length"] == 650.0
+    assert summary["3"]["directional_drill_count"] == 1
+    assert summary["3"]["directional_drill_length"] == 200.0
+    assert summary["3"]["jacking_count"] == 1
+    assert summary["3"]["jacking_length"] == 150.0
+
+
 def test_draw_section_summary_on_msp_uses_panel_backfilled_pressure_pipe_total_loss(monkeypatch):
     actual_summary = importlib.import_module("calc_渠系计算算法内核.生成断面汇总表")
     captured = {}
@@ -531,7 +824,24 @@ def test_draw_section_summary_on_msp_uses_panel_backfilled_pressure_pipe_total_l
         _custom_rock_lining=None,
         _custom_tunnel_unified={},
         get_pressure_pipe_export_results=lambda rows=None: {
-            "3::牛马道": {"total_head_loss": 0.5627, "source": "table3"}
+            "3::牛马道": {
+                "total_head_loss": 0.5627,
+                "total_length": 1520.0,
+                "pipe_velocity": 1.49,
+                "source": "table3",
+            }
+        },
+        get_pressure_pipe_characteristic_export_summary=lambda export_rows=None: {
+            "3": {
+                "start_water_level": 512.3,
+                "end_water_level": 509.7,
+                "tunnel_count": 2,
+                "tunnel_length": 1200.0,
+                "directional_drill_count": 0,
+                "directional_drill_length": 0.0,
+                "jacking_count": 1,
+                "jacking_length": 300.0,
+            }
         },
     )
     nodes = [
@@ -584,8 +894,13 @@ def test_draw_section_summary_on_msp_uses_panel_backfilled_pressure_pipe_total_l
         summary_layer="SUMMARY",
     )
 
-    pressure_rows = captured["有压管道断面尺寸及水力要素表"]
-    assert pressure_rows[0][-1] == 0.5627
+    pressure_rows = captured["压力管道特性表"]
+    assert pressure_rows[0][0] == "第三流量段"
+    assert pressure_rows[0][3] == 1.52
+    assert pressure_rows[0][6] == 1.49
+    assert pressure_rows[0][7] == 512.3
+    assert pressure_rows[0][8] == 509.7
+    assert pressure_rows[0][-6:] == [2, 1.2, "-", "-", 1, 0.3]
 
 
 def test_build_horseshoe_export_entries_splits_mixed_section_types():
@@ -906,6 +1221,52 @@ def test_write_tunnel_hides_increase_columns_when_all_rows_disable_increase():
     ]
 
 
+def test_write_pressure_pipe_uses_characteristics_headers_and_hidden_metrics():
+    openpyxl, styles, gcl = summary_mod._get_openpyxl()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+
+    ncols = summary_mod._write_pressure_pipe(
+        ws,
+        summary_mod.compute_pressure_pipe([
+            {
+                "name": "第三流量段",
+                "Q": 3.0,
+                "DN_mm": 1600,
+                "pipe_material": "球墨铸铁管",
+                "V": 1.438,
+                "total_length": 1520.0,
+                "total_head_loss": 0.5627,
+                "start_water_level": 512.3,
+                "end_water_level": 509.7,
+                "tunnel_count": 2,
+                "tunnel_length": 1200.0,
+                "directional_drill_count": 0,
+                "directional_drill_length": 0.0,
+                "jacking_count": 1,
+                "jacking_length": 300.0,
+                "show_building_characteristics": True,
+            }
+        ]),
+        styles,
+        gcl,
+    )
+
+    assert ncols == 15
+    assert ws.cell(1, 1).value == "压力管道特性表"
+    assert ws.cell(2, 8).value == "设计压力线"
+    assert ws.cell(3, 8).value == "渠首水位"
+    assert ws.cell(4, 8).value == "m"
+    assert ws.cell(2, 10).value == "建筑物特性"
+    assert ws.cell(3, 10).value == "隧洞"
+    assert ws.cell(4, 10).value == "座数"
+    assert ws.cell(4, 11).value == "长度（km）"
+    assert [ws.cell(5, c).value for c in range(1, 16)] == [
+        "第三流量段", 3.0, 3.75, 1.52, "球墨铸铁管", 1.6, 1.438,
+        512.3, 509.7, 2, 1.2, "-", "-", 1, 0.3,
+    ]
+
+
 def test_compute_rect_channel_adds_tie_rod_height_to_export_H(monkeypatch):
     captured_kwargs = []
 
@@ -1039,17 +1400,20 @@ def test_block_invalid_pressurized_export_returns_true_and_emits_error(monkeypat
     assert "缺段有压管道" in captured["content"]
 
 
-def test_collect_pressure_pipe_missing_total_head_loss_labels_uses_dash_rows():
+def test_warn_pressure_pipe_missing_total_head_loss_is_suppressed(monkeypatch):
     dlg = _dialog_shell(
         _compute_pressure_pipe=summary_mod.compute_pressure_pipe,
     )
+    calls = []
 
-    labels = cad_tools.SectionSummaryDialog._collect_pressure_pipe_missing_total_head_loss_labels(
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    cad_tools.SectionSummaryDialog._warn_pressure_pipe_missing_total_head_loss(
         dlg,
         [{"name": "缺损失-第一流量段", "Q": 1.0, "DN_mm": 1000, "pipe_material": "球墨铸铁管"}],
     )
 
-    assert labels == ["缺损失-第一流量段"]
+    assert calls == []
 
 
 def test_section_summary_dialog_q_grid_uses_compact_two_column_form_layout():

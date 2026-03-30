@@ -165,6 +165,221 @@ def _format_pressure_pipe_total_head_loss(value):
     return "-"
 
 
+def _format_pressure_pipe_total_length(value):
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text == "-":
+            return "-"
+        try:
+            value = float(text)
+        except (TypeError, ValueError):
+            return "-"
+    if isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "-"
+        if math.isfinite(number) and number > 0:
+            return round(number, 4)
+    return "-"
+
+
+def _pressure_pipe_length_km(value):
+    length_m = _format_pressure_pipe_total_length(value)
+    if length_m == "-":
+        return "-"
+    return round(float(length_m) / 1000.0, 3)
+
+
+def _pressure_pipe_diameter_m(value):
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text == "-":
+            return "-"
+        try:
+            value = float(text)
+        except (TypeError, ValueError):
+            return "-"
+    if isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "-"
+        if not math.isfinite(number) or number <= 0:
+            return "-"
+        if number > 20:
+            number /= 1000.0
+        return round(number, 3)
+    return "-"
+
+
+_PRESSURE_PIPE_BUILDING_GROUPS = [
+    ("tunnel", "隧洞", "tunnel_count", "tunnel_length"),
+    ("directional_drill", "定向钻", "directional_drill_count", "directional_drill_length"),
+    ("jacking", "顶管", "jacking_count", "jacking_length"),
+]
+
+
+def _format_pressure_pipe_water_level(value):
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text == "-":
+            return "-"
+        try:
+            value = float(text)
+        except (TypeError, ValueError):
+            return "-"
+    if isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "-"
+        if math.isfinite(number):
+            return round(number, 3)
+    return "-"
+
+
+def _pressure_pipe_building_count(value):
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text == "-":
+            return 0
+        try:
+            value = float(text)
+        except (TypeError, ValueError):
+            return 0
+    if isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0
+        if math.isfinite(number) and number > 0:
+            return int(round(number))
+    return 0
+
+
+def _pressure_pipe_building_length_km(value):
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text == "-":
+            return "-"
+        try:
+            value = float(text)
+        except (TypeError, ValueError):
+            return "-"
+    if isinstance(value, (int, float)):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "-"
+        if math.isfinite(number) and number >= 0:
+            return round(number / 1000.0, 3)
+    return "-"
+
+
+def _pressure_pipe_show_building_characteristics(data: List[Dict[str, Any]]) -> bool:
+    for row in data or []:
+        if bool(row.get("show_building_characteristics")):
+            return True
+        for _key, _label, count_key, _length_key in _PRESSURE_PIPE_BUILDING_GROUPS:
+            if _pressure_pipe_building_count(row.get(count_key)) > 0:
+                return True
+    return False
+
+
+def _pressure_pipe_row_values(row: Dict[str, Any], include_buildings: bool) -> List[Any]:
+    values = [
+        row["name"],
+        row["Q"],
+        row.get("Q_inc", ""),
+        _pressure_pipe_length_km(row.get("total_length")),
+        row.get("pipe_material", ""),
+        _pressure_pipe_diameter_m(row.get("DN_mm", "")),
+        row.get("V", ""),
+        _format_pressure_pipe_water_level(row.get("start_water_level")),
+        _format_pressure_pipe_water_level(row.get("end_water_level")),
+    ]
+    if include_buildings:
+        for _key, _label, count_key, length_key in _PRESSURE_PIPE_BUILDING_GROUPS:
+            count_value = _pressure_pipe_building_count(row.get(count_key))
+            if count_value <= 0:
+                values.extend(["-", "-"])
+                continue
+            values.extend([count_value, _pressure_pipe_building_length_km(row.get(length_key))])
+    return values
+
+
+def _pressure_pipe_dxf_headers(include_buildings: bool) -> List[Tuple[str, Optional[str]]]:
+    headers = [
+        ("流量段", None),
+        ("设计流量", "m³/s"),
+        ("加大流量", "m³/s"),
+        ("长度", "km"),
+        ("管材", None),
+        ("管径", "m"),
+        ("设计流速", "m/s"),
+        ("渠首水位", "m"),
+        ("渠末水位", "m"),
+    ]
+    if include_buildings:
+        headers.extend([
+            ("隧洞座数", None),
+            ("隧洞长度（km）", None),
+            ("定向钻座数", None),
+            ("定向钻长度（km）", None),
+            ("顶管座数", None),
+            ("顶管长度（km）", None),
+        ])
+    return headers
+
+
+def _pressure_pipe_excel_col_widths(include_buildings: bool) -> List[float]:
+    widths = [14, 12, 12, 12, 14, 10, 12, 11, 11]
+    if include_buildings:
+        widths.extend([8, 11, 8, 11, 8, 11])
+    return widths
+
+
+def _pressure_pipe_dxf_col_widths(include_buildings: bool) -> List[float]:
+    widths = [16, 10, 10, 10, 14, 10, 10, 10, 10]
+    if include_buildings:
+        widths.extend([8, 10, 8, 10, 8, 10])
+    return _dxf_col_widths(widths)
+
+
+def _pressure_pipe_header_cells(include_buildings: bool) -> List[Dict[str, Any]]:
+    cells = [
+        {"row": 0, "col": 0, "rowspan": 3, "colspan": 1, "text": "流量段"},
+        {"row": 0, "col": 1, "rowspan": 1, "colspan": 1, "text": "设计流量"},
+        {"row": 1, "col": 1, "rowspan": 2, "colspan": 1, "text": "m³/s"},
+        {"row": 0, "col": 2, "rowspan": 1, "colspan": 1, "text": "加大流量"},
+        {"row": 1, "col": 2, "rowspan": 2, "colspan": 1, "text": "m³/s"},
+        {"row": 0, "col": 3, "rowspan": 1, "colspan": 1, "text": "长度"},
+        {"row": 1, "col": 3, "rowspan": 2, "colspan": 1, "text": "km"},
+        {"row": 0, "col": 4, "rowspan": 3, "colspan": 1, "text": "管材"},
+        {"row": 0, "col": 5, "rowspan": 1, "colspan": 1, "text": "管径"},
+        {"row": 1, "col": 5, "rowspan": 2, "colspan": 1, "text": "m"},
+        {"row": 0, "col": 6, "rowspan": 1, "colspan": 1, "text": "设计流速"},
+        {"row": 1, "col": 6, "rowspan": 2, "colspan": 1, "text": "m/s"},
+        {"row": 0, "col": 7, "rowspan": 1, "colspan": 2, "text": "设计压力线"},
+        {"row": 1, "col": 7, "rowspan": 1, "colspan": 1, "text": "渠首水位"},
+        {"row": 2, "col": 7, "rowspan": 1, "colspan": 1, "text": "m"},
+        {"row": 1, "col": 8, "rowspan": 1, "colspan": 1, "text": "渠末水位"},
+        {"row": 2, "col": 8, "rowspan": 1, "colspan": 1, "text": "m"},
+    ]
+    if not include_buildings:
+        return cells
+
+    start_col = 9
+    cells.append({"row": 0, "col": start_col, "rowspan": 1, "colspan": 6, "text": "建筑物特性"})
+    for offset, (_key, label, _count_key, _length_key) in enumerate(_PRESSURE_PIPE_BUILDING_GROUPS):
+        col = start_col + offset * 2
+        cells.append({"row": 1, "col": col, "rowspan": 1, "colspan": 2, "text": label})
+        cells.append({"row": 2, "col": col, "rowspan": 1, "colspan": 1, "text": "座数"})
+        cells.append({"row": 2, "col": col + 1, "rowspan": 1, "colspan": 1, "text": "长度（km）"})
+    return cells
+
+
 def _compute_pressure_pipe_total_head_loss(seg: Dict[str, Any], q_value: float, d_m: float, material_key: str):
     total_head_loss = seg.get("total_head_loss", "")
     if isinstance(total_head_loss, (int, float)) and total_head_loss >= 0:
@@ -1731,7 +1946,7 @@ def compute_siphon(segments: List[Dict],
 
 def compute_pressure_pipe(segments: List[Dict],
                           pipe_material: str = "球墨铸铁管") -> List[Dict]:
-    """有压管道断面汇总表计算（使用有压管道专属 f/m/b 参数体系）"""
+    """有压管道断面汇总表计算（保留 f/m/b 与总损失数据，但新版表只显示特性字段）"""
     rows = []
     for seg in segments:
         # 支持每段独立材质：优先使用段级 pipe_material，否则用全局参数
@@ -1754,7 +1969,18 @@ def compute_pressure_pipe(segments: List[Dict],
             "pipe_material":      get_pressure_pipe_material_display_name(material_key),
             "pipe_material_key":  material_key,
             "V":                  "-",
+            "plan_total_length":  seg.get("plan_total_length", "-"),
+            "total_length":       seg.get("total_length", seg.get("plan_total_length", "-")),
             "total_head_loss":    "-",
+            "start_water_level":  seg.get("start_water_level", "-"),
+            "end_water_level":    seg.get("end_water_level", "-"),
+            "tunnel_count":       seg.get("tunnel_count", 0),
+            "tunnel_length":      seg.get("tunnel_length", 0.0),
+            "directional_drill_count": seg.get("directional_drill_count", 0),
+            "directional_drill_length": seg.get("directional_drill_length", 0.0),
+            "jacking_count":      seg.get("jacking_count", 0),
+            "jacking_length":     seg.get("jacking_length", 0.0),
+            "show_building_characteristics": bool(seg.get("show_building_characteristics", False)),
         }
         _apply_overrides(row, seg, {
             "Q": "Q", "Q_inc": "Q_inc",
@@ -1762,13 +1988,30 @@ def compute_pressure_pipe(segments: List[Dict],
             "DN_mm": "DN_mm",
             "pipe_material": "pipe_material",
             "V": "V",
+            "plan_total_length": "plan_total_length",
+            "total_length": "total_length",
             "total_head_loss": "total_head_loss",
+            "start_water_level": "start_water_level",
+            "end_water_level": "end_water_level",
+            "tunnel_count": "tunnel_count",
+            "tunnel_length": "tunnel_length",
+            "directional_drill_count": "directional_drill_count",
+            "directional_drill_length": "directional_drill_length",
+            "jacking_count": "jacking_count",
+            "jacking_length": "jacking_length",
+            "show_building_characteristics": "show_building_characteristics",
         })
         row["pipe_material"] = get_pressure_pipe_material_display_name(row.get("pipe_material"))
         row["pipe_material_key"] = normalize_pressure_pipe_material_key(
             row.get("pipe_material_key") or row.get("pipe_material")
         )
+        if row.get("total_length") in (None, "", "-"):
+            row["total_length"] = row.get("plan_total_length", "-")
+        row["total_length"] = _format_pressure_pipe_total_length(row.get("total_length"))
         row["total_head_loss"] = _format_pressure_pipe_total_head_loss(row.get("total_head_loss"))
+        row["start_water_level"] = _format_pressure_pipe_water_level(row.get("start_water_level"))
+        row["end_water_level"] = _format_pressure_pipe_water_level(row.get("end_water_level"))
+        row["show_building_characteristics"] = bool(row.get("show_building_characteristics"))
         rows.append(row)
     return rows
 
@@ -1840,6 +2083,27 @@ def _merge_vertical(ws, r_start, r_end, col, val, styles, font_key="cell_font"):
     for r in range(r_start, r_end + 1):
         ws.cell(row=r, column=col).border = styles["border"]
         ws.cell(row=r, column=col).alignment = styles["center"]
+
+
+def _merge_header_cell(ws, r_start, c_start, r_end, c_end, value, styles):
+    if r_start != r_end or c_start != c_end:
+        ws.merge_cells(
+            start_row=r_start,
+            start_column=c_start,
+            end_row=r_end,
+            end_column=c_end,
+        )
+    cell = ws.cell(row=r_start, column=c_start, value=value)
+    cell.font = styles["hdr_font"]
+    cell.alignment = styles["center"]
+    cell.border = styles["border"]
+    cell.fill = styles["hdr_fill"]
+    for r in range(r_start, r_end + 1):
+        for c in range(c_start, c_end + 1):
+            hdr_cell = ws.cell(row=r, column=c)
+            hdr_cell.border = styles["border"]
+            hdr_cell.alignment = styles["center"]
+            hdr_cell.fill = styles["hdr_fill"]
 
 
 def _set_col_width(ws, col, width, gcl):
@@ -2504,41 +2768,32 @@ def _write_siphon(ws, data, styles, gcl, col_offset=0):
 # ============================================================
 
 def _write_pressure_pipe(ws, data, styles, gcl, col_offset=0):
-    """有压管道 Excel 导出（使用 f/m/b 参数与总水头损失）"""
+    """有压管道 Excel 导出（新版特性表，保留隐藏计算结果但不显示）"""
     C = col_offset
-    NCOLS = 8
     R1 = 1
+    include_buildings = _pressure_pipe_show_building_characteristics(data)
+    headers = _pressure_pipe_dxf_headers(include_buildings)
+    col_widths = _pressure_pipe_excel_col_widths(include_buildings)
+    NCOLS = len(headers)
 
-    headers = [
-        ("有压管道名称及流量段", None),
-        ("设计流量",          "m³/s"),
-        ("加大流量",          "m³/s"),
-        ("摩阻参数f/m/b",     None),
-        ("直径DN",            "mm"),
-        ("管道材质",          None),
-        ("设计流速v",         "m/s"),
-        ("总水头损失",        "m"),
-    ]
-    col_widths = [22, 12, 12, 26, 12, 15, 12, 14]
-
-    _write_title(ws, R1, C + 1, C + NCOLS, "有压管道断面尺寸及水力要素表", styles)
-    for i, (name, unit) in enumerate(headers):
-        _write_header_2row(ws, R1 + 1, R1 + 2, C + 1 + i, name, unit, styles)
+    _write_title(ws, R1, C + 1, C + NCOLS, "压力管道特性表", styles)
     for i, w in enumerate(col_widths):
         _set_col_width(ws, C + 1 + i, w, gcl)
 
+    for cell_def in _pressure_pipe_header_cells(include_buildings):
+        _merge_header_cell(
+            ws,
+            R1 + 1 + int(cell_def["row"]),
+            C + 1 + int(cell_def["col"]),
+            R1 + int(cell_def["row"]) + int(cell_def.get("rowspan", 1)),
+            C + int(cell_def["col"]) + int(cell_def.get("colspan", 1)),
+            cell_def["text"],
+            styles,
+        )
+
     for ri, d in enumerate(data):
-        r = R1 + 3 + ri
-        vals = [
-            d["name"],
-            d["Q"],
-            d.get("Q_inc", ""),
-            d.get("friction_params", ""),
-            d.get("DN_mm", ""),
-            d.get("pipe_material", ""),
-            d.get("V", ""),
-            d.get("total_head_loss", ""),
-        ]
+        r = R1 + 4 + ri
+        vals = _pressure_pipe_row_values(d, include_buildings)
         for ci, v in enumerate(vals):
             _sc(ws, r, C + 1 + ci, v, styles)
 
@@ -2877,6 +3132,14 @@ def _dxf_draw_table(msp, origin_x, origin_y, title, headers, col_widths_mm,
     """
     import ezdxf
 
+    data_merge_groups = merge_groups
+    header_row_count = 2
+    header_cells = None
+    if isinstance(merge_groups, dict):
+        data_merge_groups = merge_groups.get("data_merge_groups")
+        header_row_count = int(merge_groups.get("header_row_count", 2) or 2)
+        header_cells = merge_groups.get("header_cells") or None
+
     # 自适应列宽：取内容估算宽度与传入最小宽度的较大值
     auto_widths = _dxf_auto_col_widths(headers, data_rows)
     col_widths_mm = [max(a, m) for a, m in zip(auto_widths, col_widths_mm)]
@@ -2893,9 +3156,14 @@ def _dxf_draw_table(msp, origin_x, origin_y, title, headers, col_widths_mm,
     # Y 坐标（向下为负）
     y_title_top = origin_y
     y_title_bot = y_title_top - _DXF_TITLE_ROW_H
-    y_hdr1_bot  = y_title_bot - _DXF_HDR_ROW_H
-    y_hdr2_bot  = y_hdr1_bot - _DXF_HDR_ROW_H
-    y_data_top  = y_hdr2_bot
+    header_row_tops = []
+    header_row_bottoms = []
+    current_y = y_title_bot
+    for _ in range(max(header_row_count, 1)):
+        header_row_tops.append(current_y)
+        current_y -= _DXF_HDR_ROW_H
+        header_row_bottoms.append(current_y)
+    y_data_top = header_row_bottoms[-1]
 
     # 各数据行的 Y 坐标
     row_y = [y_data_top]
@@ -2910,8 +3178,8 @@ def _dxf_draw_table(msp, origin_x, origin_y, title, headers, col_widths_mm,
     # ---- 构建合并信息查找表 ----
     # merged_cells[ri][ci] = (group_start_row, group_size) 如果该单元格被合并
     merged_cells = {}
-    if merge_groups:
-        for merge_cols, group_size in merge_groups:
+    if data_merge_groups:
+        for merge_cols, group_size in data_merge_groups:
             if group_size <= 1:
                 continue
             num_groups = nrows // group_size
@@ -2930,25 +3198,73 @@ def _dxf_draw_table(msp, origin_x, origin_y, title, headers, col_widths_mm,
     msp.add_line((x_left, y_title_top), (x_left, y_title_bot), dxfattribs=dxfattribs_line)
     msp.add_line((x_right, y_title_top), (x_right, y_title_bot), dxfattribs=dxfattribs_line)
 
-    # ---- 绘制表头区 ----
-    # 表头区有两行：名称行 + 单位行
-    # 无单位的列需要合并两行（不画中间水平线）
-    hdr_merged_cols = set()  # 需要合并表头两行的列索引
-    for ci, (name, unit) in enumerate(headers):
-        if not unit:
-            hdr_merged_cols.add(ci)
+    if header_cells:
+        header_matrix = [[None for _ in range(ncols)] for _ in range(header_row_count)]
+        for idx, cell in enumerate(header_cells):
+            row = int(cell["row"])
+            col = int(cell["col"])
+            rowspan = int(cell.get("rowspan", 1))
+            colspan = int(cell.get("colspan", 1))
+            for ri in range(row, row + rowspan):
+                for ci in range(col, col + colspan):
+                    if 0 <= ri < header_row_count and 0 <= ci < ncols:
+                        header_matrix[ri][ci] = idx
 
-    # 表头顶线（即标题底线已画）、中间分隔线、底线
-    # 中间分隔线需要分段画（跳过合并列）
-    for ci in range(ncols):
-        if ci not in hdr_merged_cols:
-            msp.add_line((col_x[ci], y_hdr1_bot), (col_x[ci + 1], y_hdr1_bot),
-                         dxfattribs=dxfattribs_line)
-    # 表头底线（完整画）
-    msp.add_line((x_left, y_hdr2_bot), (x_right, y_hdr2_bot), dxfattribs=dxfattribs_line)
-    # 表头区竖线
-    for x in col_x:
-        msp.add_line((x, y_title_bot), (x, y_hdr2_bot), dxfattribs=dxfattribs_line)
+        for boundary_idx in range(header_row_count - 1):
+            y_line = header_row_bottoms[boundary_idx]
+            seg_start = None
+            for ci in range(ncols):
+                same_cell = header_matrix[boundary_idx][ci] == header_matrix[boundary_idx + 1][ci]
+                if same_cell:
+                    if seg_start is not None:
+                        msp.add_line(
+                            (col_x[seg_start], y_line),
+                            (col_x[ci], y_line),
+                            dxfattribs=dxfattribs_line,
+                        )
+                        seg_start = None
+                elif seg_start is None:
+                    seg_start = ci
+            if seg_start is not None:
+                msp.add_line(
+                    (col_x[seg_start], y_line),
+                    (col_x[ncols], y_line),
+                    dxfattribs=dxfattribs_line,
+                )
+
+        msp.add_line((x_left, y_data_top), (x_right, y_data_top), dxfattribs=dxfattribs_line)
+
+        for ci in range(1, ncols):
+            x_line = col_x[ci]
+            for ri in range(header_row_count):
+                if header_matrix[ri][ci - 1] == header_matrix[ri][ci]:
+                    continue
+                msp.add_line(
+                    (x_line, header_row_tops[ri]),
+                    (x_line, header_row_bottoms[ri]),
+                    dxfattribs=dxfattribs_line,
+                )
+        msp.add_line((x_left, y_title_bot), (x_left, y_data_top), dxfattribs=dxfattribs_line)
+        msp.add_line((x_right, y_title_bot), (x_right, y_data_top), dxfattribs=dxfattribs_line)
+    else:
+        # ---- 绘制表头区 ----
+        # 表头区有两行：名称行 + 单位行
+        # 无单位的列需要合并两行（不画中间水平线）
+        hdr_merged_cols = set()
+        for ci, (_name, unit) in enumerate(headers):
+            if not unit:
+                hdr_merged_cols.add(ci)
+
+        y_hdr1_bot = header_row_bottoms[0]
+        y_hdr2_bot = header_row_bottoms[1] if header_row_count > 1 else header_row_bottoms[0]
+
+        for ci in range(ncols):
+            if ci not in hdr_merged_cols:
+                msp.add_line((col_x[ci], y_hdr1_bot), (col_x[ci + 1], y_hdr1_bot),
+                             dxfattribs=dxfattribs_line)
+        msp.add_line((x_left, y_hdr2_bot), (x_right, y_hdr2_bot), dxfattribs=dxfattribs_line)
+        for x in col_x:
+            msp.add_line((x, y_title_bot), (x, y_hdr2_bot), dxfattribs=dxfattribs_line)
 
     # ---- 绘制数据区水平线（分段画，跳过合并单元格） ----
     # 第一行顶线和最后一行底线是完整的
@@ -3007,16 +3323,28 @@ def _dxf_draw_table(msp, origin_x, origin_y, title, headers, col_widths_mm,
     _add_cell_text(title, title_cx, title_cy, _DXF_TITLE_TEXT_H)
 
     # ---- 写入表头文字 ----
-    for ci, (name, unit) in enumerate(headers):
-        cx = (col_x[ci] + col_x[ci + 1]) / 2
-        if unit:
-            cy1 = (y_title_bot + y_hdr1_bot) / 2
-            _add_cell_text(name, cx, cy1, _DXF_HDR_TEXT_H)
-            cy2 = (y_hdr1_bot + y_hdr2_bot) / 2
-            _add_cell_text(unit, cx, cy2, _DXF_HDR_TEXT_H)
-        else:
-            cy = (y_title_bot + y_hdr2_bot) / 2
-            _add_cell_text(name, cx, cy, _DXF_HDR_TEXT_H)
+    if header_cells:
+        for cell in header_cells:
+            row = int(cell["row"])
+            col = int(cell["col"])
+            rowspan = int(cell.get("rowspan", 1))
+            colspan = int(cell.get("colspan", 1))
+            cx = (col_x[col] + col_x[col + colspan]) / 2
+            cy = (header_row_tops[row] + header_row_bottoms[row + rowspan - 1]) / 2
+            _add_cell_text(str(cell["text"]), cx, cy, _DXF_HDR_TEXT_H)
+    else:
+        y_hdr1_bot = header_row_bottoms[0]
+        y_hdr2_bot = header_row_bottoms[1] if header_row_count > 1 else header_row_bottoms[0]
+        for ci, (name, unit) in enumerate(headers):
+            cx = (col_x[ci] + col_x[ci + 1]) / 2
+            if unit:
+                cy1 = (y_title_bot + y_hdr1_bot) / 2
+                _add_cell_text(name, cx, cy1, _DXF_HDR_TEXT_H)
+                cy2 = (y_hdr1_bot + y_hdr2_bot) / 2
+                _add_cell_text(unit, cx, cy2, _DXF_HDR_TEXT_H)
+            else:
+                cy = (y_title_bot + y_hdr2_bot) / 2
+                _add_cell_text(name, cx, cy, _DXF_HDR_TEXT_H)
 
     # ---- 写入数据文字（考虑合并） ----
     written_merged = set()  # 已写入的合并单元格 (r_start, ci)
@@ -3290,22 +3618,19 @@ def _dxf_build_siphon(data):
 
 
 def _dxf_build_pressure_pipe(data):
-    """有压管道断面汇总表（使用 f/m/b 参数与总水头损失）"""
-    title = "有压管道断面尺寸及水力要素表"
-    headers = [
-        ("有压管道名称及流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
-        ("摩阻参数f/m/b", None), ("直径DN", "mm"), ("管道材质", None),
-        ("设计流速v", "m/s"), ("总水头损失", "m"),
-    ]
-    col_widths = _dxf_col_widths([18, 10, 10, 22, 10, 14, 10, 12])
+    """有压管道断面汇总表（新版特性表，保留隐藏计算结果但不显示）"""
+    title = "压力管道特性表"
+    include_buildings = _pressure_pipe_show_building_characteristics(data)
+    headers = _pressure_pipe_dxf_headers(include_buildings)
+    col_widths = _pressure_pipe_dxf_col_widths(include_buildings)
     rows = []
     for d in data:
-        rows.append([
-            d["name"], d["Q"], d.get("Q_inc", ""),
-            d.get("friction_params", ""), d.get("DN_mm", ""), d.get("pipe_material", ""),
-            d.get("V", ""), d.get("total_head_loss", ""),
-        ])
-    return title, headers, col_widths, rows, None
+        rows.append(_pressure_pipe_row_values(d, include_buildings))
+    return title, headers, col_widths, rows, {
+        "data_merge_groups": None,
+        "header_row_count": 3,
+        "header_cells": _pressure_pipe_header_cells(include_buildings),
+    }
 
 
 # DXF 构建函数映射
