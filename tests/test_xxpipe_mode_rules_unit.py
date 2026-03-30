@@ -59,11 +59,7 @@ def test_xxpipe_allowed_structure_options_include_all_tunnel_dropdown_variants()
     assert tunnel_options.issubset(set(XXPIPE_ALLOWED_STRUCTURE_OPTIONS))
 
 
-@pytest.mark.xfail(
-    raises=AttributeError,
-    reason="cad_tools 层的 xx管 helper 合约留给后续任务实现",
-)
-def test_cad_tools_xxpipe_helper_contract_is_reserved_for_follow_up():
+def test_cad_tools_xxpipe_helper_contract_is_available():
     root = Path(__file__).resolve().parents[1]
     matches = list(root.glob("*/water_profile/cad_tools.py"))
     assert matches, "未找到 cad_tools.py"
@@ -75,3 +71,6 @@ def test_cad_tools_xxpipe_helper_contract_is_reserved_for_follow_up():
     assert callable(module._is_xxpipe_channel_level)
     assert callable(module._is_xxpipe_allowed_structure)
     assert callable(module._is_xxpipe_named_structure)
+    assert module._is_xxpipe_channel_level("支管")
+    assert module._is_xxpipe_allowed_structure("定向钻")
+    assert module._is_xxpipe_named_structure("顶管")

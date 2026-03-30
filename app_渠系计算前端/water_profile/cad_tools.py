@@ -60,6 +60,25 @@ except ImportError:
 
 from utils.pressure_pipe_result_helpers import make_pressure_pipe_identity
 
+try:
+    from config.constants import (
+        XXPIPE_CHANNEL_LEVEL_OPTIONS,
+        XXPIPE_ALLOWED_STRUCTURE_KEYWORDS,
+        XXPIPE_ALLOWED_STRUCTURE_OPTIONS,
+    )
+except Exception:
+    XXPIPE_CHANNEL_LEVEL_OPTIONS = ["总干管", "分干管", "干管", "支管", "分支管"]
+    XXPIPE_ALLOWED_STRUCTURE_KEYWORDS = ("隧洞",)
+    XXPIPE_ALLOWED_STRUCTURE_OPTIONS = [
+        "有压管道",
+        "隧洞-圆形",
+        "隧洞-圆拱直墙型",
+        "隧洞-马蹄形Ⅰ型",
+        "隧洞-马蹄形Ⅱ型",
+        "定向钻",
+        "顶管",
+    ]
+
 _SIPHON_PIPE_MATERIALS = [
     "PCCP管",
     "球墨铸铁管",
@@ -1454,7 +1473,7 @@ def _is_special_structure_sv(struct_type):
 
     避免双路径导入导致 enum 实例比较失败"""
     sv = _struct_val(struct_type)
-    return any(k in sv for k in ("隧洞", "倒虹吸", "有压管道", "渡槽", "暗涵"))
+    return any(k in sv for k in ("隧洞", "倒虹吸", "有压管道", "渡槽", "暗涵", "定向钻", "顶管"))
 
 
 _PROFILE_ROW_DEFS = [
@@ -1616,10 +1635,55 @@ _PROFILE_RUNTIME_ANCHOR_LABELS = {
     "bottom1": "底+1",
     "bottom2": "底+2",
 }
+_XXPIPE_PROFILE_ROW_DEFS = [
+    {
+        "id": "building_name",
+        "label": "建筑物名称",
+        "hint": "仅隧洞/定向钻/顶管段显示",
+        "header_lines": ["建筑物名称"],
+        "height": 20.0,
+        "anchor": "center",
+    },
+    {
+        "id": "ip_name",
+        "label": "IP点名称",
+        "hint": "复用现有 IP 名称文案",
+        "header_lines": ["IP点名称"],
+        "height": 40.0,
+        "anchor": "bottom2",
+    },
+    {
+        "id": "station",
+        "label": "里程桩号（千米+米）",
+        "hint": "显示格式：1+234.567",
+        "header_lines": ["里程桩号", "（千米+米）"],
+        "height": 30.0,
+        "anchor": "bottom2",
+    },
+    {
+        "id": "centerline_elev",
+        "label": "管中心线高程（米）",
+        "hint": "按导入轴线纵断面插值",
+        "header_lines": ["管中心线高程（米）"],
+        "height": 20.0,
+        "anchor": "bottom1",
+    },
+    {
+        "id": "pipe_material",
+        "label": "管材（管径/米）",
+        "hint": "只显示管材与管径",
+        "header_lines": ["管材（管径/米）"],
+        "height": 20.0,
+        "anchor": "center",
+    },
+]
+_XXPIPE_PROFILE_ROW_IDS = [row["id"] for row in _XXPIPE_PROFILE_ROW_DEFS]
 _SPECIAL_STRUCTURE_FULLNAME_MAP = (
     ("隧洞", "隧洞"),
     ("倒虹吸", "倒虹吸"),
     ("有压管道", "有压管道"),
+    ("定向钻", "定向钻"),
+    ("顶管", "顶管"),
     ("渡槽", "渡槽"),
     ("暗涵", "暗涵"),
 )
@@ -1672,6 +1736,47 @@ def _normalize_text_export_settings(settings):
     src["scale_y"] = src.get("scale_y", 1000)
     src["profile_row_items"] = _normalize_profile_row_items(src.get("profile_row_items"))
     return src
+
+
+def _get_xxpipe_profile_row_defs():
+    return [dict(row) for row in _XXPIPE_PROFILE_ROW_DEFS]
+
+
+def _build_xxpipe_profile_row_layout(settings):
+    normalized = _normalize_text_export_settings(settings)
+    enabled_ids = list(_XXPIPE_PROFILE_ROW_IDS)
+    total_height = sum(float(row["height"]) for row in _XXPIPE_PROFILE_ROW_DEFS)
+    min_line_height = float(normalized.get("y_line_height", 120))
+    line_height = max(total_height, min_line_height)
+
+    row_layout = {}
+    boundaries = {0.0, total_height, line_height}
+    cursor_top = total_height
+    for row_def in _XXPIPE_PROFILE_ROW_DEFS:
+        rid = row_def["id"]
+        height = float(row_def["height"])
+        top = cursor_top
+        bottom = top - height
+        cursor_top = bottom
+        anchor = row_def.get("anchor", "bottom2")
+        if anchor == "center":
+            text_y = (bottom + top) / 2.0
+        elif anchor == "bottom1":
+            text_y = bottom + 1.0
+        else:
+            text_y = bottom + 2.0
+        row_layout[rid] = {
+            "bottom": bottom,
+            "top": top,
+            "text_y": text_y,
+            "height": height,
+            "anchor": anchor,
+            "header_lines": list(row_def.get("header_lines", [])),
+            "label": row_def["label"],
+        }
+        boundaries.add(bottom)
+        boundaries.add(top)
+    return normalized, enabled_ids, row_layout, total_height, line_height, sorted(boundaries)
 
 
 def _get_enabled_profile_row_ids(settings):
@@ -1859,6 +1964,64 @@ def _merge_building_and_structure_name(building_name, structure_full):
     if struct in name:
         return name
     return f"{name}{struct}" if name else struct
+
+
+def _is_xxpipe_channel_level(level):
+    return str(level or "").strip() in set(XXPIPE_CHANNEL_LEVEL_OPTIONS)
+
+
+def _is_xxpipe_allowed_structure(struct_name):
+    text = str(struct_name or "").strip()
+    if not text:
+        return False
+    if text == "有压管道":
+        return True
+    if any(keyword in text for keyword in XXPIPE_ALLOWED_STRUCTURE_KEYWORDS):
+        return True
+    return text in {"定向钻", "顶管"}
+
+
+def _is_xxpipe_named_structure(struct_name):
+    text = str(struct_name or "").strip()
+    if not text:
+        return False
+    if any(keyword in text for keyword in XXPIPE_ALLOWED_STRUCTURE_KEYWORDS):
+        return True
+    return text in {"定向钻", "顶管"}
+
+
+def _get_xxpipe_structure_display_name(struct_name):
+    text = str(struct_name or "").strip()
+    if not text:
+        return ""
+    if "隧洞" in text:
+        return "隧洞"
+    return text
+
+
+def _get_xxpipe_building_display_name(struct_name, building_name):
+    if not _is_xxpipe_named_structure(struct_name):
+        return ""
+    return _merge_building_and_structure_name(
+        building_name,
+        _get_xxpipe_structure_display_name(struct_name),
+    )
+
+
+def _format_xxpipe_pipe_material_text(row):
+    if not isinstance(row, dict):
+        return ""
+    material = str(
+        row.get("pipe_material")
+        or row.get("material")
+        or row.get("material_key")
+        or ""
+    ).strip() or "球墨铸铁管"
+    dn_mm = _normalize_dn_mm(
+        row.get("DN_mm", row.get("dn_mm", row.get("dn", row.get("D", 1500)))),
+        1500,
+    )
+    return f"{material} DN{dn_mm}"
 
 
 def _build_profile_ip_base_text(node):
@@ -2340,7 +2503,7 @@ def _ensure_profile_layers(doc, layer_prefix=""):
     """确保纵断面所需的图层存在。layer_prefix 用于合并导出时区分组件。"""
     layer_defs = [
         ("表格线框", 7), ("渠底高程线", 3), ("渠顶高程线", 1),
-        ("设计水位线", 5), ("文字标注", 7),
+        ("设计水位线", 5), ("管中心线", 2), ("文字标注", 7),
     ]
     for name, color in layer_defs:
         full = layer_prefix + name
@@ -2840,6 +3003,14 @@ def find_xxpipe_axis_elevation_coverage_gaps(longitudinal_nodes, station_mcs):
     return missing
 
 
+def _sample_xxpipe_centerline_elevation(longitudinal_nodes, station_mc):
+    return sample_xxpipe_centerline_elevation(longitudinal_nodes, station_mc)
+
+
+def _validate_xxpipe_centerline_coverage(longitudinal_nodes, station_mcs):
+    return find_xxpipe_axis_elevation_coverage_gaps(longitudinal_nodes, station_mcs)
+
+
 def _extract_pressure_pipe_calc_contexts(nodes, proj_settings=None):
     """提取有压管道断面表所需的水头损失计算上下文。"""
     try:
@@ -2974,6 +3145,64 @@ def _get_panel_pressure_pipe_export_results(panel, rows):
     return data if isinstance(data, dict) else {}
 
 
+def _get_panel_pressure_pipe_longitudinal_nodes_for_export(panel, rows):
+    getter = getattr(panel, "get_pressure_pipe_longitudinal_nodes_for_export", None)
+    if not callable(getter):
+        return {}
+    try:
+        data = getter(rows)
+    except TypeError:
+        data = getter()
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _get_panel_xxpipe_manager_config_by_identity(panel, rows):
+    manager = getattr(panel, "_pressure_pipe_manager", None)
+    to_dict = getattr(manager, "to_dict", None)
+    if not callable(to_dict):
+        return {}
+    try:
+        raw = to_dict() or {}
+    except Exception:
+        return {}
+    pipes = raw.get("pipes", {}) if isinstance(raw, dict) else {}
+    targets = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        identity = make_pressure_pipe_identity(row.get("flow_section"), row.get("name"))
+        name = str(row.get("name", "") or "").strip() or "未命名"
+        flow_section = str(row.get("flow_section", "") or "").strip()
+        targets[identity] = {"name": name, "flow_section": flow_section}
+
+    resolved = {}
+    for key, pipe_data in pipes.items():
+        if not isinstance(pipe_data, dict):
+            continue
+        key_text = str(key or "").strip()
+        name = str(pipe_data.get("name", "") or "").strip()
+        flow_section = str(pipe_data.get("flow_section", "") or "").strip()
+        candidate_identities = []
+        if key_text and "::" in key_text:
+            candidate_identities.append(key_text)
+            if not name:
+                name = key_text.split("::", 1)[1].strip()
+        candidate_identities.append(make_pressure_pipe_identity(flow_section, name or key_text))
+        for identity, target in targets.items():
+            if identity in candidate_identities:
+                resolved[identity] = copy.deepcopy(pipe_data)
+                break
+            if (
+                target["name"] == name
+                and target["flow_section"] == flow_section
+            ):
+                resolved[identity] = copy.deepcopy(pipe_data)
+                break
+    return resolved
+
+
 def _attach_pressure_pipe_calc_contexts_to_rows(rows, calc_contexts):
     contexts = calc_contexts or {}
     for row in rows or []:
@@ -3066,6 +3295,249 @@ def _prepare_pressure_pipe_export_rows(rows, panel=None, calc_contexts=None):
     _attach_pressure_pipe_calc_contexts_to_rows(prepared_rows, calc_contexts)
     _attach_pressure_pipe_export_results_to_rows(prepared_rows, panel=panel)
     return prepared_rows
+
+
+def _iter_xxpipe_export_nodes(nodes):
+    for node in nodes or []:
+        if getattr(node, "is_transition", False):
+            continue
+        if getattr(node, "is_auto_inserted_channel", False):
+            continue
+        yield node
+
+
+def _make_xxpipe_identity_from_node(node):
+    return make_pressure_pipe_identity(
+        getattr(node, "flow_section", ""),
+        getattr(node, "name", ""),
+    )
+
+
+def _build_xxpipe_segment_records(items):
+    segments = []
+    for item in items:
+        text = str(item.get("text", "") or "").strip()
+        if not text:
+            continue
+        station_mc = float(item.get("station_mc", 0.0) or 0.0)
+        identity = str(item.get("identity", "") or "").strip()
+        if (
+            segments
+            and segments[-1]["text"] == text
+            and segments[-1]["identity"] == identity
+        ):
+            segments[-1]["mcs"].append(station_mc)
+            continue
+        segments.append({
+            "text": text,
+            "identity": identity,
+            "mcs": [station_mc],
+        })
+
+    out = []
+    for segment in segments:
+        mc_list = segment["mcs"]
+        start_mc = mc_list[0]
+        end_mc = mc_list[-1]
+        mid_mc = _resolve_segment_mid_mc(start_mc, end_mc, [])
+        out.append({
+            "text": segment["text"],
+            "identity": segment["identity"],
+            "start_mc": start_mc,
+            "end_mc": end_mc,
+            "mid_mc": mid_mc,
+        })
+    return out
+
+
+def _build_xxpipe_profile_data(
+    nodes,
+    longitudinal_nodes_by_identity,
+    *,
+    station_prefix="",
+    manager_config_by_identity=None,
+):
+    visible_nodes = list(_iter_xxpipe_export_nodes(nodes))
+    if not visible_nodes:
+        raise ValueError("xx管纵断面导出没有可用节点")
+
+    invalid_nodes = []
+    for node in visible_nodes:
+        struct_name = _struct_val(getattr(node, "structure_type", None))
+        if _is_xxpipe_allowed_structure(struct_name):
+            continue
+        invalid_nodes.append(
+            f"{getattr(node, 'name', '') or '未命名'}({struct_name or '未知结构'})"
+        )
+    if invalid_nodes:
+        raise ValueError("xx管模式仅允许有压管道/隧洞/定向钻/顶管，检测到冲突结构：\n" + "；".join(invalid_nodes))
+
+    profile_text_nodes = _build_profile_text_nodes(visible_nodes)
+    ip_records = _build_ip_related_row_records(visible_nodes, station_prefix).get("ip_name", [])
+    manager_map = manager_config_by_identity or {}
+    long_map = longitudinal_nodes_by_identity or {}
+
+    centerline_points = []
+    centerline_records = []
+    missing_axis = []
+    for node in profile_text_nodes:
+        station_mc = _profile_station_value(node)
+        identity = _make_xxpipe_identity_from_node(node)
+        long_nodes = long_map.get(identity) or []
+        if not long_nodes:
+            missing_axis.append(f"{identity} 缺少轴线纵断面")
+            continue
+        try:
+            centerline_elev = sample_xxpipe_centerline_elevation(long_nodes, station_mc)
+        except ValueError as exc:
+            if "超出 xx管轴线高程覆盖范围" not in str(exc):
+                raise
+            try:
+                station_text = ProjectSettings.format_station(station_mc, station_prefix)
+            except Exception:
+                station_text = f"{station_mc:.3f}"
+            missing_axis.append(f"{identity}@{station_text}")
+            continue
+        centerline_points.append((station_mc, centerline_elev))
+        centerline_records.append({
+            "identity": identity,
+            "station_mc": station_mc,
+            "elevation": centerline_elev,
+        })
+
+    if missing_axis:
+        raise ValueError("以下节点缺少可用的 xx管 轴线高程覆盖：\n" + "；".join(missing_axis))
+
+    building_segments = _build_xxpipe_segment_records([
+        {
+            "identity": _make_xxpipe_identity_from_node(node),
+            "station_mc": _profile_station_value(node),
+            "text": _get_xxpipe_building_display_name(
+                _struct_val(getattr(node, "structure_type", None)),
+                getattr(node, "name", ""),
+            ),
+        }
+        for node in visible_nodes
+    ])
+
+    material_segments = []
+    for node in visible_nodes:
+        identity = _make_xxpipe_identity_from_node(node)
+        manager_row = manager_map.get(identity, {})
+        row = {
+            "pipe_material": _extract_pressurized_pipe_material(node),
+            "DN_mm": _extract_pressurized_dn_mm(node),
+        }
+        if not row["pipe_material"] and isinstance(manager_row, dict):
+            row["pipe_material"] = manager_row.get("material_key", "")
+        if row["DN_mm"] is None and isinstance(manager_row, dict):
+            row["DN_mm"] = manager_row.get("D")
+        material_segments.append({
+            "identity": identity,
+            "station_mc": _profile_station_value(node),
+            "text": _format_xxpipe_pipe_material_text(row),
+        })
+    material_segments = _build_xxpipe_segment_records(material_segments)
+
+    return {
+        "profile_text_nodes": profile_text_nodes,
+        "ip_records": ip_records,
+        "centerline_points": centerline_points,
+        "centerline_records": centerline_records,
+        "building_segments": building_segments,
+        "material_segments": material_segments,
+    }
+
+
+def _build_xxpipe_identity_rows(nodes):
+    rows = []
+    seen = set()
+    for node in _iter_xxpipe_export_nodes(nodes):
+        identity = _make_xxpipe_identity_from_node(node)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        rows.append(
+            {
+                "name": getattr(node, "name", ""),
+                "flow_section": getattr(node, "flow_section", ""),
+            }
+        )
+    return rows
+
+
+def _get_panel_channel_level_text(panel):
+    combo = getattr(panel, "channel_level_combo", None)
+    current_text = getattr(combo, "currentText", None)
+    if callable(current_text):
+        try:
+            text = current_text()
+        except Exception:
+            text = ""
+        if str(text or "").strip():
+            return str(text).strip()
+
+    build_settings = getattr(panel, "_build_settings", None)
+    if callable(build_settings):
+        try:
+            proj_settings = build_settings()
+        except Exception:
+            proj_settings = None
+        text = getattr(proj_settings, "channel_level", "")
+        if str(text or "").strip():
+            return str(text).strip()
+
+    settings_obj = getattr(panel, "_settings", None)
+    text = getattr(settings_obj, "channel_level", "")
+    return str(text or "").strip()
+
+
+def _is_panel_xxpipe_mode(panel):
+    return _is_xxpipe_channel_level(_get_panel_channel_level_text(panel))
+
+
+def _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=None):
+    nodes, _source = _resolve_section_summary_source_nodes(panel, fallback_nodes=fallback_nodes)
+    return list(nodes or [])
+
+
+def _build_panel_xxpipe_profile_data(panel, nodes, station_prefix=""):
+    rows = _build_xxpipe_identity_rows(nodes)
+    longitudinal_nodes = _get_panel_pressure_pipe_longitudinal_nodes_for_export(panel, rows)
+    manager_config = _get_panel_xxpipe_manager_config_by_identity(panel, rows)
+    return _build_xxpipe_profile_data(
+        nodes,
+        longitudinal_nodes,
+        station_prefix=station_prefix,
+        manager_config_by_identity=manager_config,
+    )
+
+
+def _collect_xxpipe_full_height_boundary_mcs(profile_data):
+    boundary_mcs = []
+
+    def _add(mc):
+        try:
+            value = float(mc)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(value):
+            return
+        if any(abs(value - existing) <= 1e-9 for existing in boundary_mcs):
+            return
+        boundary_mcs.append(value)
+
+    for key in ("building_segments", "material_segments"):
+        for segment in profile_data.get(key, []) or []:
+            _add(segment.get("start_mc"))
+            _add(segment.get("end_mc"))
+
+    records = profile_data.get("centerline_records", []) or []
+    if records:
+        _add(records[0].get("station_mc"))
+        _add(records[-1].get("station_mc"))
+
+    return sorted(boundary_mcs)
 
 
 def _merge_pressurized_param_defaults(group_items, cached_rows, default_material="球墨铸铁管"):
@@ -5297,15 +5769,23 @@ def export_longitudinal_profile_txt(panel):
         fluent_info(panel.window(), "不可用", "核心模型未加载")
         return
 
+    export_mode = "xxpipe" if _is_panel_xxpipe_mode(panel) else None
     nodes = panel.calculated_nodes
     if not nodes:
         fluent_info(panel.window(), "警告", "没有数据可导出")
         return
 
-    valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
-    if not valid_nodes:
-        fluent_info(panel.window(), "警告", "没有可用的高程数据，请先执行计算。")
-        return
+    if export_mode == "xxpipe":
+        nodes = _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=nodes)
+        if not nodes:
+            fluent_info(panel.window(), "警告", "没有可用于 xx管 纵断面导出的节点数据。")
+            return
+        valid_nodes = list(nodes)
+    else:
+        valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
+        if not valid_nodes:
+            fluent_info(panel.window(), "警告", "没有可用的高程数据，请先执行计算。")
+            return
 
     dlg = TextExportSettingsDialog(panel.window(), panel._text_export_settings)
     if dlg.exec() != QDialog.Accepted or dlg.result is None:
@@ -5327,21 +5807,204 @@ def export_longitudinal_profile_txt(panel):
     if not file_path:
         return
 
-    _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_path)
+    _export_longitudinal_txt_to_path(
+        panel,
+        nodes,
+        valid_nodes,
+        settings,
+        file_path,
+        export_mode=export_mode,
+    )
+
+
+def _draw_xxpipe_profile_on_msp(
+    msp,
+    nodes,
+    settings,
+    station_prefix,
+    *,
+    xxpipe_profile_data,
+    layer_prefix="",
+):
+    import ezdxf
+
+    if not isinstance(xxpipe_profile_data, dict):
+        raise ValueError("xx管纵断面绘制缺少可用的 profile_data")
+
+    settings, enabled_row_ids, row_layout, _total_height, line_height, h_line_y_values = _build_xxpipe_profile_row_layout(
+        settings
+    )
+    text_height = settings["text_height"]
+    rotation = settings["rotation"]
+    elev_decimals = int(settings.get("elev_decimals", 3))
+    scale_x = settings.get("scale_x", 1)
+    scale_y = settings.get("scale_y", 1)
+    first_col_x_offset = text_height + 1.3
+
+    profile_text_nodes = list(xxpipe_profile_data.get("profile_text_nodes", []) or [])
+    if not profile_text_nodes:
+        raise ValueError("xx管纵断面导出没有可用于绘制的节点")
+
+    centerline_records = list(xxpipe_profile_data.get("centerline_records", []) or [])
+    centerline_points = list(xxpipe_profile_data.get("centerline_points", []) or [])
+    ip_records = list(xxpipe_profile_data.get("ip_records", []) or [])
+    building_segments = list(xxpipe_profile_data.get("building_segments", []) or [])
+    material_segments = list(xxpipe_profile_data.get("material_segments", []) or [])
+
+    def sx(mc):
+        return _profile_meters_to_paper_mm(mc, scale_x)
+
+    def sy(elev):
+        return _profile_meters_to_paper_mm(elev, scale_y)
+
+    def fmt_elev(value):
+        if value is None:
+            return f"{0:.{elev_decimals}f}"
+        return f"{value:.{elev_decimals}f}"
+
+    last_mc = _profile_station_value(profile_text_nodes[-1])
+    layer_grid = layer_prefix + "表格线框"
+    layer_text = layer_prefix + "文字标注"
+    layer_centerline = layer_prefix + "管中心线"
+
+    for hy in h_line_y_values:
+        msp.add_line((-40, hy), (sx(0), hy), dxfattribs={"layer": layer_grid})
+    msp.add_line((-40, 0), (-40, line_height), dxfattribs={"layer": layer_grid})
+    msp.add_line((0, 0), (0, line_height), dxfattribs={"layer": layer_grid})
+
+    top_merge_bottom = row_layout["building_name"]["bottom"]
+    bottom_merge_top = row_layout["pipe_material"]["top"]
+    full_height_boundary_mcs = {
+        round(float(mc), 9)
+        for mc in _collect_xxpipe_full_height_boundary_mcs(xxpipe_profile_data)
+    }
+
+    for node in profile_text_nodes:
+        station_mc = _profile_station_value(node)
+        if round(station_mc, 9) in full_height_boundary_mcs or top_merge_bottom <= bottom_merge_top:
+            y0, y1 = 0.0, line_height
+        else:
+            y0, y1 = bottom_merge_top, top_merge_bottom
+        msp.add_line((sx(station_mc), y0), (sx(station_mc), y1), dxfattribs={"layer": layer_grid})
+
+    for hy in h_line_y_values:
+        msp.add_line((sx(0), hy), (sx(last_mc), hy), dxfattribs={"layer": layer_grid})
+
+    if len(centerline_points) >= 2:
+        msp.add_lwpolyline(
+            [(sx(mc), sy(elev)) for mc, elev in centerline_points],
+            dxfattribs={"layer": layer_centerline},
+        )
+
+    text_attr_rot = {"layer": layer_text, "height": text_height, "rotation": rotation, "width": 0.7, "style": "Standard"}
+    text_attr_no_rot = {"layer": layer_text, "height": text_height, "width": 0.7, "style": "Standard"}
+    centerline_elev_by_station = {
+        round(float(record.get("station_mc", 0.0) or 0.0), 9): record.get("elevation")
+        for record in centerline_records
+    }
+
+    for rid in enabled_row_ids:
+        y_pos = row_layout[rid]["text_y"]
+        if rid == "building_name":
+            for segment in building_segments:
+                msp.add_text(segment["text"], dxfattribs=text_attr_no_rot).set_placement(
+                    (sx(segment["mid_mc"]), y_pos),
+                    align=ezdxf.enums.TextEntityAlignment.MIDDLE,
+                )
+            continue
+
+        if rid == "pipe_material":
+            for segment in material_segments:
+                msp.add_text(segment["text"], dxfattribs=text_attr_no_rot).set_placement(
+                    (sx(segment["mid_mc"]), y_pos),
+                    align=ezdxf.enums.TextEntityAlignment.MIDDLE,
+                )
+            continue
+
+        if rid == "ip_name":
+            for idx, rec in enumerate(ip_records):
+                text_x = sx(rec["x"]) + first_col_x_offset if idx == 0 else sx(rec["x"]) - 1
+                msp.add_text(rec["text"], dxfattribs=text_attr_rot).set_placement((text_x, y_pos))
+            continue
+
+        if rid == "station":
+            for idx, node in enumerate(profile_text_nodes):
+                station_mc = _profile_station_value(node)
+                text_x = sx(station_mc) + first_col_x_offset if idx == 0 else sx(station_mc) - 1
+                try:
+                    text = ProjectSettings.format_station(station_mc, station_prefix)
+                except Exception:
+                    text = f"{station_prefix}{station_mc:.3f}"
+                msp.add_text(text, dxfattribs=text_attr_rot).set_placement((text_x, y_pos))
+            continue
+
+        if rid == "centerline_elev":
+            for idx, node in enumerate(profile_text_nodes):
+                station_mc = _profile_station_value(node)
+                text_x = sx(station_mc) + first_col_x_offset if idx == 0 else sx(station_mc) - 1
+                text = fmt_elev(centerline_elev_by_station.get(round(station_mc, 9)))
+                msp.add_text(text, dxfattribs=text_attr_rot).set_placement((text_x, y_pos))
+            continue
+
+    header_cx = -40 + 20
+    for rid in enabled_row_ids:
+        row_info = row_layout[rid]
+        labels = row_info.get("header_lines", [])
+        if not labels:
+            continue
+        if len(labels) == 1:
+            msp.add_text(
+                labels[0],
+                dxfattribs=text_attr_no_rot,
+            ).set_placement(
+                (header_cx, (row_info["bottom"] + row_info["top"]) / 2.0),
+                align=ezdxf.enums.TextEntityAlignment.MIDDLE_CENTER,
+            )
+            continue
+        line_spacing = text_height * 2.5
+        block_h = line_spacing + text_height
+        y_bottom_line = row_info["bottom"] + (row_info["height"] - block_h) / 2.0 + text_height / 2.0
+        y_top_line = y_bottom_line + line_spacing
+        msp.add_text(labels[0], dxfattribs=text_attr_no_rot).set_placement(
+            (header_cx, y_top_line), align=ezdxf.enums.TextEntityAlignment.MIDDLE_CENTER
+        )
+        msp.add_text(labels[1], dxfattribs=text_attr_no_rot).set_placement(
+            (header_cx, y_bottom_line), align=ezdxf.enums.TextEntityAlignment.MIDDLE_CENTER
+        )
+
+    return 40 + sx(last_mc), line_height
 
 
 # ================================================================
 # 1b. ?????????
 # ================================================================
 
-def _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix,
-                         layer_prefix=""):
+def _draw_profile_on_msp(
+    msp,
+    nodes,
+    valid_nodes,
+    settings,
+    station_prefix,
+    layer_prefix="",
+    export_mode=None,
+    xxpipe_profile_data=None,
+):
     """在 modelspace 上绘制纵断面表格（核心绘图逻辑）。
 
     msp 可以是真实的 ezdxf modelspace 或 _OffsetMSP 包装器。
     layer_prefix 用于合并导出时给图层名添加前缀以区分组件。
     返回 (width, height)。
     """
+    if export_mode == "xxpipe":
+        return _draw_xxpipe_profile_on_msp(
+            msp,
+            nodes,
+            settings,
+            station_prefix,
+            xxpipe_profile_data=xxpipe_profile_data,
+            layer_prefix=layer_prefix,
+        )
+
     import ezdxf
 
     settings = _normalize_text_export_settings(settings)
@@ -5564,15 +6227,23 @@ def export_longitudinal_profile_dxf(panel):
         fluent_info(panel.window(), "不可用", "核心模型未加载")
         return
 
+    export_mode = "xxpipe" if _is_panel_xxpipe_mode(panel) else None
     nodes = panel.calculated_nodes
     if not nodes:
         fluent_info(panel.window(), "警告", "没有数据可导出")
         return
 
-    valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
-    if not valid_nodes:
-        fluent_info(panel.window(), "警告", "没有可用的高程数据，请先执行计算。")
-        return
+    if export_mode == "xxpipe":
+        nodes = _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=nodes)
+        if not nodes:
+            fluent_info(panel.window(), "警告", "没有可用于 xx管 纵断面导出的节点数据。")
+            return
+        valid_nodes = list(nodes)
+    else:
+        valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
+        if not valid_nodes:
+            fluent_info(panel.window(), "警告", "没有可用的高程数据，请先执行计算。")
+            return
 
     # 弹出参数配置对话框（复用 TXT 版设置）
     dlg = TextExportSettingsDialog(panel.window(), panel._text_export_settings)
@@ -5581,11 +6252,12 @@ def export_longitudinal_profile_dxf(panel):
 
     settings = _normalize_text_export_settings(dlg.result)
     panel._text_export_settings.update(settings)
-    if not _get_enabled_profile_row_ids(settings):
+    if export_mode != "xxpipe" and not _get_enabled_profile_row_ids(settings):
         fluent_error(panel.window(), "导出失败", "至少选择1项行内容后再导出。")
         return
 
-    _show_special_angle_warning(panel, nodes)
+    if export_mode != "xxpipe":
+        _show_special_angle_warning(panel, nodes)
 
     # 自动文件名
     try:
@@ -5603,7 +6275,14 @@ def export_longitudinal_profile_dxf(panel):
 
     # 如果用户选择了 .txt，走原有 TXT 导出逻辑
     if file_path.lower().endswith('.txt'):
-        _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_path)
+        _export_longitudinal_txt_to_path(
+            panel,
+            nodes,
+            valid_nodes,
+            settings,
+            file_path,
+            export_mode=export_mode,
+        )
         return
 
     try:
@@ -5613,12 +6292,24 @@ def export_longitudinal_profile_dxf(panel):
         except Exception:
             station_prefix = ""
 
+        xxpipe_profile_data = None
+        if export_mode == "xxpipe":
+            xxpipe_profile_data = _build_panel_xxpipe_profile_data(panel, nodes, station_prefix=station_prefix)
+
         doc = ezdxf.new("R2010")
         msp = doc.modelspace()
         _setup_profile_dxf_document(doc)
         _ensure_profile_layers(doc)
 
-        _draw_profile_on_msp(msp, nodes, valid_nodes, settings, station_prefix)
+        _draw_profile_on_msp(
+            msp,
+            nodes,
+            valid_nodes,
+            settings,
+            station_prefix,
+            export_mode=export_mode,
+            xxpipe_profile_data=xxpipe_profile_data,
+        )
 
         doc.saveas(file_path)
 
@@ -5635,7 +6326,166 @@ def export_longitudinal_profile_dxf(panel):
         fluent_error(panel.window(), "导出错误", f"生成上纵断面表格 DXF 失败:\n{str(e)}")
 
 
-def _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_path):
+def _export_xxpipe_longitudinal_txt_to_path(
+    panel,
+    nodes,
+    settings,
+    file_path,
+    *,
+    station_prefix="",
+    xxpipe_profile_data=None,
+):
+    fmt = _format_number
+    settings, enabled_row_ids, row_layout, _total_height, line_height, h_line_y_values = _build_xxpipe_profile_row_layout(
+        settings
+    )
+    text_height = settings["text_height"]
+    rotation = settings["rotation"]
+    elev_decimals = int(settings.get("elev_decimals", 3))
+    scale_x = settings.get("scale_x", 1)
+    scale_y = settings.get("scale_y", 1)
+    first_col_x_offset = text_height + 1.3
+
+    if xxpipe_profile_data is None:
+        xxpipe_profile_data = _build_panel_xxpipe_profile_data(panel, nodes, station_prefix=station_prefix)
+
+    profile_text_nodes = list(xxpipe_profile_data.get("profile_text_nodes", []) or [])
+    if not profile_text_nodes:
+        raise ValueError("xx管纵断面导出没有可用于绘制的节点")
+
+    centerline_records = list(xxpipe_profile_data.get("centerline_records", []) or [])
+    centerline_points = list(xxpipe_profile_data.get("centerline_points", []) or [])
+    ip_records = list(xxpipe_profile_data.get("ip_records", []) or [])
+    building_segments = list(xxpipe_profile_data.get("building_segments", []) or [])
+    material_segments = list(xxpipe_profile_data.get("material_segments", []) or [])
+
+    def sx(mc):
+        return _profile_meters_to_paper_mm(mc, scale_x)
+
+    def sy(elev):
+        return _profile_meters_to_paper_mm(elev, scale_y)
+
+    def fmt_elev(value):
+        if value is None:
+            return f"{0:.{elev_decimals}f}"
+        return f"{value:.{elev_decimals}f}"
+
+    lines = []
+    s_height = fmt(text_height)
+    s_rotation = fmt(rotation)
+    last_mc = _profile_station_value(profile_text_nodes[-1])
+
+    for hy in h_line_y_values:
+        hy_fmt = fmt(hy)
+        lines.append(f"pl {fmt(sx(0))},{hy_fmt} -40,{hy_fmt} ")
+    lines.append(f"pl -40,0 -40,{fmt(line_height)} ")
+    lines.append(f"pl 0,0 0,{fmt(line_height)} ")
+    lines.append("")
+
+    top_merge_bottom = row_layout["building_name"]["bottom"]
+    bottom_merge_top = row_layout["pipe_material"]["top"]
+    full_height_boundary_mcs = {
+        round(float(mc), 9)
+        for mc in _collect_xxpipe_full_height_boundary_mcs(xxpipe_profile_data)
+    }
+    for node in profile_text_nodes:
+        station_mc = _profile_station_value(node)
+        if round(station_mc, 9) in full_height_boundary_mcs or top_merge_bottom <= bottom_merge_top:
+            y0, y1 = 0.0, line_height
+        else:
+            y0, y1 = bottom_merge_top, top_merge_bottom
+        lines.append(f"pl {fmt(sx(station_mc))},{fmt(y0)} {fmt(sx(station_mc))},{fmt(y1)} ")
+    lines.append("")
+
+    for hy in h_line_y_values:
+        lines.append(f"pl {fmt(sx(0))},{fmt(hy)} {fmt(sx(last_mc))},{fmt(hy)} ")
+    lines.append("")
+
+    for station_mc, elevation in centerline_points:
+        lines.append(f"pl {fmt(sx(station_mc))},{fmt(sy(elevation))}")
+    lines.append("")
+
+    centerline_elev_by_station = {
+        round(float(record.get("station_mc", 0.0) or 0.0), 9): record.get("elevation")
+        for record in centerline_records
+    }
+
+    for rid in enabled_row_ids:
+        y_pos = row_layout[rid]["text_y"]
+        if rid == "building_name":
+            for segment in building_segments:
+                lines.append(f"-text j mc {fmt(sx(segment['mid_mc']))},{fmt(y_pos)} {s_height} 0 {segment['text']} ")
+            lines.append("")
+            continue
+
+        if rid == "pipe_material":
+            for segment in material_segments:
+                lines.append(f"-text j mc {fmt(sx(segment['mid_mc']))},{fmt(y_pos)} {s_height} 0 {segment['text']} ")
+            lines.append("")
+            continue
+
+        if rid == "ip_name":
+            for idx, rec in enumerate(ip_records):
+                text_x = sx(rec["x"]) + first_col_x_offset if idx == 0 else sx(rec["x"])
+                lines.append(f"-text {fmt(text_x)},{fmt(y_pos)} {s_height} {s_rotation} {rec['text']} ")
+            lines.append("")
+            continue
+
+        if rid == "station":
+            for idx, node in enumerate(profile_text_nodes):
+                station_mc = _profile_station_value(node)
+                text_x = sx(station_mc) + first_col_x_offset if idx == 0 else sx(station_mc)
+                try:
+                    text = ProjectSettings.format_station(station_mc, station_prefix)
+                except Exception:
+                    text = f"{station_prefix}{station_mc:.3f}"
+                lines.append(f"-text {fmt(text_x)},{fmt(y_pos)} {s_height} {s_rotation} {text} ")
+            lines.append("")
+            continue
+
+        if rid == "centerline_elev":
+            for idx, node in enumerate(profile_text_nodes):
+                station_mc = _profile_station_value(node)
+                text_x = sx(station_mc) + first_col_x_offset if idx == 0 else sx(station_mc)
+                text = fmt_elev(centerline_elev_by_station.get(round(station_mc, 9)))
+                lines.append(f"-text {fmt(text_x)},{fmt(y_pos)} {s_height} {s_rotation} {text} ")
+            lines.append("")
+            continue
+
+    header_cx = fmt(-40 + 20)
+    for rid in enabled_row_ids:
+        row_info = row_layout[rid]
+        labels = row_info.get("header_lines", [])
+        if not labels:
+            continue
+        if len(labels) == 1:
+            center_y = (row_info["bottom"] + row_info["top"]) / 2.0
+            lines.append(f"-text j mc {header_cx},{fmt(center_y)} {s_height} 0 {labels[0]} ")
+            continue
+        line_spacing = text_height * 2.5
+        block_h = line_spacing + text_height
+        y_bottom_line = row_info["bottom"] + (row_info["height"] - block_h) / 2.0 + text_height / 2.0
+        y_top_line = y_bottom_line + line_spacing
+        lines.append(f"-text j mc {header_cx},{fmt(y_top_line)} {s_height} 0 {labels[0]} ")
+        lines.append(f"-text j mc {header_cx},{fmt(y_bottom_line)} {s_height} 0 {labels[1]} ")
+    lines.append("")
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+    if fluent_question(panel.window(), "完成", f"上纵断面表格已生成（{len(nodes)} 个节点）：{file_path}"):
+        os.startfile(file_path)
+
+
+def _export_longitudinal_txt_to_path(
+    panel,
+    nodes,
+    valid_nodes,
+    settings,
+    file_path,
+    export_mode=None,
+    xxpipe_profile_data=None,
+):
     """Internal helper: export longitudinal profile as AutoCAD TXT commands."""
     fmt = _format_number
 
@@ -5666,6 +6516,16 @@ def _export_longitudinal_txt_to_path(panel, nodes, valid_nodes, settings, file_p
         station_prefix = ""
 
     try:
+        if export_mode == "xxpipe":
+            return _export_xxpipe_longitudinal_txt_to_path(
+                panel,
+                nodes,
+                settings,
+                file_path,
+                station_prefix=station_prefix,
+                xxpipe_profile_data=xxpipe_profile_data,
+            )
+
         lines = []
         s_height = fmt(text_height)
         s_rotation = fmt(rotation)
@@ -6953,19 +7813,23 @@ def export_combined_dxf(panel):
         fluent_info(parent_window, "不可用", "核心模型未加载")
         return
 
+    export_mode = "xxpipe" if _is_panel_xxpipe_mode(panel) else None
     nodes = panel.calculated_nodes
     if not nodes:
         fluent_info(parent_window, "警告", "没有数据可导出，请先执行计算")
         return
 
-    valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
-    if not valid_nodes:
-        fluent_info(parent_window, "警告", "没有可用的高程数据，请先执行计算。")
-        return
+    if export_mode == "xxpipe":
+        valid_nodes = list(nodes)
+    else:
+        valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
+        if not valid_nodes:
+            fluent_info(parent_window, "警告", "没有可用的高程数据，请先执行计算。")
+            return
 
-    optional_blank_name_notice = _build_optional_blank_name_notice(nodes, action_name="导出")
-    if optional_blank_name_notice:
-        fluent_info(parent_window, "提示", optional_blank_name_notice)
+        optional_blank_name_notice = _build_optional_blank_name_notice(nodes, action_name="导出")
+        if optional_blank_name_notice:
+            fluent_info(parent_window, "提示", optional_blank_name_notice)
 
     # ---- 1. 纵断面参数设置 ----
     dlg = TextExportSettingsDialog(parent_window, panel._text_export_settings)
@@ -6983,6 +7847,15 @@ def export_combined_dxf(panel):
         station_prefix = ""
     summary_nodes, summary_nodes_source = _resolve_section_summary_source_nodes(panel, fallback_nodes=nodes)
     _record_section_summary_runtime_debug(panel, summary_nodes, summary_nodes_source)
+    profile_nodes = summary_nodes if export_mode == "xxpipe" else nodes
+    profile_valid_nodes = profile_nodes if export_mode == "xxpipe" else valid_nodes
+    ip_source_nodes = summary_nodes if export_mode == "xxpipe" else nodes
+    xxpipe_profile_data = None
+    if export_mode == "xxpipe":
+        if not profile_nodes:
+            fluent_info(parent_window, "警告", "没有可用于 xx管 纵断面导出的节点数据。")
+            return
+        xxpipe_profile_data = _build_panel_xxpipe_profile_data(panel, profile_nodes, station_prefix=station_prefix)
 
     # ---- 3. 断面汇总表参数设置（构造参数、有压流参数等）----
     try:
@@ -7041,8 +7914,15 @@ def export_combined_dxf(panel):
 
         # ======== A. 纵断面表格（顶部，原点(0,0)） ========
         prof_w, prof_h = _draw_profile_on_msp(
-            msp, nodes, valid_nodes, profile_settings, station_prefix,
-            layer_prefix=_PROF_PREFIX)
+            msp,
+            profile_nodes,
+            profile_valid_nodes,
+            profile_settings,
+            station_prefix,
+            layer_prefix=_PROF_PREFIX,
+            export_mode=export_mode,
+            xxpipe_profile_data=xxpipe_profile_data,
+        )
 
         # 下方区域起始Y（纵断面底部再向下留间距）
         below_y = -GAP
@@ -7075,7 +7955,7 @@ def export_combined_dxf(panel):
             return
 
         try:
-            ip_preview, ip_nodes = _compute_ip_preview_data(nodes, station_prefix)
+            ip_preview, ip_nodes = _compute_ip_preview_data(ip_source_nodes, station_prefix)
         except Exception as e:
             import traceback; traceback.print_exc()
             fluent_error(

@@ -440,3 +440,80 @@ def test_export_combined_dxf_passes_current_table_snapshot_to_section_summary(mo
     assert debug_info["summary_nodes_source"] == "current_table_snapshot"
     assert "calc_渠系计算算法内核" in debug_info["summary_module_file"]
     assert debug_info["summary_module_file"].endswith("生成断面汇总表.py")
+
+
+def test_export_combined_dxf_uses_xxpipe_profile_branch_and_current_snapshot(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    stale_nodes = [
+        SimpleNamespace(
+            station_MC=0.0,
+            bottom_elevation=0.0,
+            top_elevation=0.0,
+            water_level=0.0,
+            structure_type=SimpleNamespace(value="定向钻"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            name="旧节点",
+            flow_section="1",
+        )
+    ]
+    current_nodes = [
+        SimpleNamespace(
+            station_MC=0.0,
+            bottom_elevation=0.0,
+            top_elevation=0.0,
+            water_level=0.0,
+            structure_type=SimpleNamespace(value="定向钻"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=False,
+            name="穿路段",
+            flow_section="1",
+        )
+    ]
+    captured = {}
+
+    class _ConfigOnlyDialog:
+        def __init__(self, _parent, nodes, _proj_settings, _auto_name, panel=None, config_only=False):
+            _ = panel
+            captured["dialog_nodes"] = nodes
+            captured["config_only"] = config_only
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    panel = _build_panel()
+    panel.calculated_nodes = stale_nodes
+    panel._build_nodes_from_table = lambda: current_nodes
+    panel.channel_level_combo = _ComboStub("支管")
+
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda value: value)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: False)
+    monkeypatch.setattr(cad_tools, "_build_panel_xxpipe_profile_data", lambda *_a, **_k: {"profile_text_nodes": current_nodes})
+
+    def _fake_draw_profile_on_msp(*args, **kwargs):
+        _ = args
+        captured["profile_nodes"] = kwargs.get("xxpipe_profile_data", {})
+        captured["export_mode"] = kwargs.get("export_mode")
+        return 240.0, 120.0
+
+    monkeypatch.setattr(cad_tools, "_draw_profile_on_msp", _fake_draw_profile_on_msp)
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
+
+    def _fake_compute_ip_preview_data(nodes, _station_prefix):
+        captured["ip_nodes"] = nodes
+        return [["IP1"]], nodes
+
+    monkeypatch.setattr(cad_tools, "_compute_ip_preview_data", _fake_compute_ip_preview_data)
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
+    assert captured["config_only"] is True
+    assert captured["dialog_nodes"] is current_nodes
+    assert captured["export_mode"] == "xxpipe"
+    assert captured["ip_nodes"] is current_nodes
