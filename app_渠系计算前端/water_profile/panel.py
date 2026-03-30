@@ -7718,6 +7718,75 @@ class WaterProfilePanel(QWidget):
                 plain_name[name] = items[-1]
         return exact, plain_name
 
+    @staticmethod
+    def _has_exportable_pressure_pipe_longitudinal_nodes(value) -> bool:
+        return isinstance(value, list) and len(value) > 0
+
+    def _index_pressure_pipe_manager_longitudinal_nodes_for_export(self, target_identities=None) -> tuple:
+        exact = {}
+        plain_name_candidates = {}
+        manager = getattr(self, "_pressure_pipe_manager", None)
+        to_dict = getattr(manager, "to_dict", None)
+        if not callable(to_dict):
+            return exact, {}
+
+        try:
+            raw = to_dict() or {}
+        except Exception:
+            return exact, {}
+        pipes = raw.get("pipes", {}) if isinstance(raw, dict) else {}
+        identity_set = set(target_identities or [])
+
+        for key, pipe_data in pipes.items():
+            row = pipe_data if isinstance(pipe_data, dict) else {}
+            longitudinal_nodes = row.get("longitudinal_nodes")
+            if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
+                continue
+
+            key_text = str(key or "").strip()
+            name = str(row.get("name", "") or "").strip()
+            flow_section = str(row.get("flow_section", "") or "").strip()
+
+            candidate_identities = []
+            if key_text and "::" in key_text:
+                candidate_identities.append(key_text)
+                if not name:
+                    name = key_text.split("::", 1)[1].strip()
+            if flow_section or name:
+                candidate_identities.append(make_pressure_pipe_identity(flow_section, name or key_text))
+
+            resolved_identity = ""
+            for candidate in candidate_identities:
+                if candidate and candidate in identity_set:
+                    resolved_identity = candidate
+                    break
+            if not resolved_identity and candidate_identities and candidate_identities[0].count("::") > 0:
+                resolved_identity = candidate_identities[0]
+
+            if not name:
+                if key_text and "::" in key_text:
+                    name = key_text.split("::", 1)[1].strip() or "未命名"
+                else:
+                    name = key_text or "未命名"
+
+            payload = {
+                "identity": resolved_identity or "",
+                "flow_section": flow_section,
+                "name": name,
+                "longitudinal_nodes": copy.deepcopy(longitudinal_nodes),
+            }
+            if resolved_identity:
+                exact[resolved_identity] = payload
+            plain_name_candidates.setdefault(name, []).append(payload)
+
+        plain_name = {}
+        for name, items in plain_name_candidates.items():
+            identities = {item.get("identity", "") for item in items}
+            identities.discard("")
+            if len(identities) <= 1:
+                plain_name[name] = items[-1]
+        return exact, plain_name
+
     def get_pressure_pipe_export_results(self, rows=None) -> dict:
         """
         返回断面汇总导出可直接复用的有压管道结果映射。
@@ -7758,6 +7827,42 @@ class WaterProfilePanel(QWidget):
                 result = manager_by_name.get(name)
             if result is not None:
                 resolved[identity] = dict(result)
+        return resolved
+
+    def get_pressure_pipe_longitudinal_nodes_for_export(self, rows=None) -> dict:
+        """
+        返回断面汇总导出可直接复用的有压管道纵断面节点映射。
+
+        优先按 identity 精确匹配；仅在目标名称唯一时才允许名称兜底，
+        以避免同名不同 flow_section 的数据串用。
+        """
+        targets = self._collect_pressure_pipe_export_targets(rows)
+        if not targets:
+            return {}
+
+        target_name_counts = {}
+        target_identities = []
+        for target in targets:
+            target_identities.append(target["identity"])
+            target_name_counts[target["name"]] = target_name_counts.get(target["name"], 0) + 1
+
+        manager_exact, manager_by_name = self._index_pressure_pipe_manager_longitudinal_nodes_for_export(
+            target_identities
+        )
+
+        resolved = {}
+        for target in targets:
+            identity = target["identity"]
+            name = target["name"]
+            result = manager_exact.get(identity)
+            if result is None and target_name_counts.get(name, 0) == 1:
+                result = manager_by_name.get(name)
+            if result is None:
+                continue
+            longitudinal_nodes = result.get("longitudinal_nodes")
+            if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
+                continue
+            resolved[identity] = copy.deepcopy(longitudinal_nodes)
         return resolved
 
     @staticmethod
