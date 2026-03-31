@@ -21,7 +21,13 @@ from config.constants import (
     GRAVITY, ZERO_TOLERANCE, VELOCITY_PRECISION, 
     ELEVATION_PRECISION, HEAD_LOSS_PRECISION, LOCAL_LOSS_COEFFICIENTS,
     TRANSITION_ZETA_COEFFICIENTS, TRANSITION_TWISTED_ZETA_RANGE,
-    TRANSITION_LENGTH_COEFFICIENTS, TRANSITION_LENGTH_CONSTRAINTS
+    TRANSITION_LENGTH_COEFFICIENTS, TRANSITION_LENGTH_CONSTRAINTS,
+    XXPIPE_CHANNEL_LEVEL_OPTIONS,
+)
+from core.pressure_pipe_calc import (
+    PIPE_MATERIALS,
+    calc_bend_local_loss as calc_pressure_pipe_bend_local_loss,
+    calc_friction_loss as calc_pressure_pipe_friction_loss,
 )
 
 
@@ -36,6 +42,14 @@ class HydraulicCalculator:
     - 局部水头损失
     - 水位衔接（水面线推求）
     """
+
+    _DEFAULT_PRESSURE_PIPE_MATERIAL = "预应力钢筒混凝土管"
+    _PRESSURE_PIPE_MATERIAL_ALIASES = {
+        "PCCP管": "预应力钢筒混凝土管",
+        "钢筋混凝土管": "预应力钢筒混凝土管",
+        "预应力钢筒混凝土管(n=0.013)": "预应力钢筒混凝土管",
+        "预应力钢筒混凝土管(n=0.014)": "预应力钢筒混凝土管_n014",
+    }
     
     def __init__(self, settings: ProjectSettings):
         """
@@ -53,6 +67,108 @@ class HydraulicCalculator:
         self.inverted_siphon_losses: Dict[str, float] = {}
         # 有压管道水头损失字典（按名称匹配）
         self.pressure_pipe_losses: Dict[str, float] = {}
+
+    def _is_unnamed_regular_pressure_pipe(self, node: Optional[ChannelNode]) -> bool:
+        """判断是否为空名称普通有压管道行。"""
+        if (
+            node is None
+            or getattr(node, "is_transition", False)
+            or not self._is_xxpipe_channel_level()
+        ):
+            return False
+        structure_value = node.structure_type.value if node.structure_type else ""
+        node_name = str(getattr(node, "name", "") or "").strip()
+        return structure_value == StructureType.PRESSURE_PIPE.value and not node_name
+
+    def _is_xxpipe_channel_level(self) -> bool:
+        """判断当前项目是否处于 xx管 渠道级别。"""
+        channel_level = str(getattr(self.settings, "channel_level", "") or "").strip()
+        return channel_level in set(XXPIPE_CHANNEL_LEVEL_OPTIONS)
+
+    def _resolve_pressure_pipe_material_key(self, node: ChannelNode) -> str:
+        """解析匿名有压管道行的管材键名，缺失时回退到默认值。"""
+        params = getattr(node, "section_params", {}) or {}
+        raw_material = str(
+            params.get("pipe_material", getattr(node, "pipe_material", "")) or ""
+        ).strip()
+        material_key = self._PRESSURE_PIPE_MATERIAL_ALIASES.get(raw_material, raw_material)
+        if material_key in PIPE_MATERIALS:
+            return material_key
+        return self._DEFAULT_PRESSURE_PIPE_MATERIAL
+
+    def _build_effective_length_context(
+        self,
+        node1: ChannelNode,
+        node2: ChannelNode,
+        transition_length: float = 0.0,
+    ) -> Dict[str, float]:
+        """计算当前两行之间的有效长度及其拆分项。"""
+        L_mc = (node2.station_MC or 0.0) - (node1.station_MC or 0.0)
+        arc1 = node1.arc_length if node1.arc_length else 0.0
+        arc2 = node2.arc_length if node2.arc_length else 0.0
+        arc1_half = arc1 / 2.0
+        arc2_half = arc2 / 2.0
+        effective_length = max(0.0, L_mc - transition_length - arc1_half - arc2_half)
+        return {
+            "L_mc": L_mc,
+            "transition_length": transition_length,
+            "arc1_half": arc1_half,
+            "arc2_half": arc2_half,
+            "effective_length": effective_length,
+        }
+
+    def _normalize_pressure_pipe_window_override(self, value) -> Dict[str, object]:
+        """规范化匿名有压管道窗口覆盖载荷。"""
+        if not isinstance(value, dict):
+            return {}
+        enabled = bool(value.get("enabled", False))
+        identity = str(value.get("identity", "") or "").strip()
+        if not enabled or not identity:
+            return {}
+        normalized = {
+            "enabled": True,
+            "identity": identity,
+        }
+        for field_name in (
+            "friction_loss",
+            "total_bend_loss",
+            "local_loss",
+            "inlet_transition_loss",
+            "outlet_transition_loss",
+            "total_head_loss",
+        ):
+            try:
+                normalized[field_name] = float(value.get(field_name, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                normalized[field_name] = 0.0
+        for detail_field in ("friction_details", "bend_details", "local_details"):
+            detail_value = value.get(detail_field, {})
+            normalized[detail_field] = copy.deepcopy(detail_value) if isinstance(detail_value, dict) else {}
+        return normalized
+
+    def _get_pressure_pipe_window_override(self, node: Optional[ChannelNode]) -> Dict[str, object]:
+        """读取匿名有压管道窗口覆盖结果。"""
+        if node is None:
+            return {}
+        override = self._normalize_pressure_pipe_window_override(
+            getattr(node, "pressure_pipe_window_override", {})
+        )
+        if not override:
+            params = getattr(node, "section_params", {}) or {}
+            override = self._normalize_pressure_pipe_window_override(
+                params.get("pressure_pipe_window_override", {})
+            )
+        if override:
+            setattr(node, "pressure_pipe_window_override", copy.deepcopy(override))
+        return override
+
+    def _should_calculate_bend_loss(self, node: Optional[ChannelNode]) -> bool:
+        """判断当前节点是否需要尝试计算弯道损失。"""
+        if node is None:
+            return False
+        if (node.arc_length or 0.0) > ZERO_TOLERANCE:
+            return True
+        return self._is_unnamed_regular_pressure_pipe(node)
     
     def import_inverted_siphon_losses(self, losses: Dict[str, float]) -> None:
         """
@@ -806,22 +922,53 @@ class HydraulicCalculator:
         Returns:
             沿程水头损失（m）
         """
-        # 计算里程MC差
-        L_mc = node2.station_MC - node1.station_MC
-        
-        # 扣除渐变段长度
-        L_mc -= transition_length
-        
-        # 扣除弧长的一半
-        arc1 = node1.arc_length if node1.arc_length else 0.0
-        arc2 = node2.arc_length if node2.arc_length else 0.0
-        L_mc -= (arc1 / 2.0)
-        L_mc -= (arc2 / 2.0)
-        
-        # 防止负值
-        effective_length = max(0.0, L_mc)
-        
+        length_ctx = self._build_effective_length_context(node1, node2, transition_length)
+        effective_length = length_ctx["effective_length"]
         if effective_length <= 0:
+            node2.friction_calc_details = {}
+            return 0.0
+
+        if self._is_unnamed_regular_pressure_pipe(node2):
+            pipe_params = getattr(node2, "section_params", {}) or {}
+            pipe_diameter = self._get_diameter(pipe_params)
+            pipe_flow = node2.flow if node2.flow > ZERO_TOLERANCE else self.design_flow
+            material_key = self._resolve_pressure_pipe_material_key(node2)
+
+            if pipe_flow > ZERO_TOLERANCE and pipe_diameter > ZERO_TOLERANCE:
+                hf, details = calc_pressure_pipe_friction_loss(
+                    pipe_flow,
+                    pipe_diameter,
+                    effective_length,
+                    material_key,
+                )
+                node2.friction_calc_details = {
+                    'method': 'pressure_pipe_fmb',
+                    'Q_m3s': pipe_flow,
+                    'D_m': pipe_diameter,
+                    'pipe_material': material_key,
+                    'L_effective': effective_length,
+                    'L_mc': length_ctx['L_mc'],
+                    'L_transition': length_ctx['transition_length'],
+                    'arc1_half': length_ctx['arc1_half'],
+                    'arc2_half': length_ctx['arc2_half'],
+                    **details,
+                    'hf': hf,
+                }
+                return hf
+
+            node2.friction_calc_details = {
+                'method': 'pressure_pipe_fmb',
+                'Q_m3s': pipe_flow,
+                'D_m': pipe_diameter,
+                'pipe_material': material_key,
+                'L_effective': effective_length,
+                'L_mc': length_ctx['L_mc'],
+                'L_transition': length_ctx['transition_length'],
+                'arc1_half': length_ctx['arc1_half'],
+                'arc2_half': length_ctx['arc2_half'],
+                'hf': 0.0,
+                'warning': '缺少有效流量或管径，未计算沿程损失',
+            }
             return 0.0
         
         # 优先使用node2的底坡（下游点），如果没有则使用node1的
@@ -836,6 +983,10 @@ class HydraulicCalculator:
                 'method': 'slope',
                 'slope_i': slope_i,
                 'L_effective': effective_length,
+                'L_mc': length_ctx['L_mc'],
+                'L_transition': length_ctx['transition_length'],
+                'arc1_half': length_ctx['arc1_half'],
+                'arc2_half': length_ctx['arc2_half'],
                 'hf': round(hf, HEAD_LOSS_PRECISION)
             }
             
@@ -964,6 +1115,42 @@ class HydraulicCalculator:
         Returns:
             弯道水头损失（m）
         """
+        if self._is_unnamed_regular_pressure_pipe(node):
+            pipe_params = getattr(node, "section_params", {}) or {}
+            pipe_diameter = self._get_diameter(pipe_params)
+            turn_radius = node.turn_radius if node.turn_radius > ZERO_TOLERANCE else self.settings.turn_radius
+            turn_angle = node.turn_angle or 0.0
+            velocity = node.velocity
+
+            if (
+                pipe_diameter <= ZERO_TOLERANCE
+                or turn_radius <= ZERO_TOLERANCE
+                or velocity <= ZERO_TOLERANCE
+                or turn_angle < 0.1
+                or turn_angle >= 180
+            ):
+                node.bend_calc_details = {}
+                return 0.0
+
+            xi_bend, hw, details = calc_pressure_pipe_bend_local_loss(
+                pipe_diameter,
+                turn_radius,
+                turn_angle,
+                velocity,
+            )
+            node.bend_calc_details = {
+                'method': 'pressure_pipe_bend',
+                'D_m': pipe_diameter,
+                'turn_radius_m': turn_radius,
+                'turn_angle_deg': turn_angle,
+                'V_m_s': velocity,
+                **details,
+                'xi_bend': xi_bend,
+                'hj': hw,
+                'hw': hw,
+            }
+            return hw
+
         # 获取弯道长度（使用弧长）
         L = node.arc_length
         if L <= ZERO_TOLERANCE:
@@ -1167,7 +1354,7 @@ class HydraulicCalculator:
             # 计算第一个节点的流速和弯道损失
             if first_regular_node.velocity <= 0:
                 first_regular_node.velocity = self.calculate_velocity(first_regular_node)
-            if first_regular_node.arc_length > ZERO_TOLERANCE:
+            if self._should_calculate_bend_loss(first_regular_node):
                 existing_bend_loss = first_regular_node.head_loss_bend or 0.0
                 if existing_bend_loss <= ZERO_TOLERANCE or not getattr(first_regular_node, 'bend_calc_details', None):
                     calculated_bend_loss = self.calculate_bend_loss(first_regular_node)
@@ -1215,8 +1402,23 @@ class HydraulicCalculator:
             if curr_node.velocity <= 0:
                 curr_node.velocity = self.calculate_velocity(curr_node)
             
-            # 计算当前节点的弯道损失（如果有弧长且未计算）
-            if curr_node.arc_length > ZERO_TOLERANCE:
+            # 计算当前节点的弯道损失（明渠按弧长，有压管道匿名行按承压弯头口径）
+            window_override = self._get_pressure_pipe_window_override(curr_node)
+            if window_override:
+                curr_node.head_loss_bend = float(window_override.get("total_bend_loss", 0.0) or 0.0)
+                if self._is_unnamed_regular_pressure_pipe(curr_node):
+                    bend_details = copy.deepcopy(window_override.get("bend_details", {}) or {})
+                    if bend_details:
+                        bend_details.setdefault('source', 'window_override')
+                        bend_details.setdefault('hw', round(curr_node.head_loss_bend, HEAD_LOSS_PRECISION))
+                        curr_node.bend_calc_details = bend_details
+                    else:
+                        curr_node.bend_calc_details = {
+                            'method': 'pressure_pipe_bend',
+                            'source': 'window_override',
+                            'hw': round(curr_node.head_loss_bend, HEAD_LOSS_PRECISION),
+                        }
+            elif self._should_calculate_bend_loss(curr_node):
                 existing_bend_loss = curr_node.head_loss_bend or 0.0
                 if existing_bend_loss <= ZERO_TOLERANCE or not getattr(curr_node, 'bend_calc_details', None):
                     calculated_bend_loss = self.calculate_bend_loss(curr_node)
@@ -1239,12 +1441,33 @@ class HydraulicCalculator:
                         transition_len_between += nodes[j].transition_length
             
             # 计算沿程损失
-            hf = self.calculate_friction_loss(prev_regular_node, curr_node, transition_len_between)
+            if window_override:
+                hf = float(window_override.get("friction_loss", 0.0) or 0.0)
+                friction_details = copy.deepcopy(window_override.get("friction_details", {}) or {})
+                if friction_details:
+                    friction_details.setdefault('source', 'window_override')
+                    friction_details.setdefault('hf', round(hf, HEAD_LOSS_PRECISION))
+                    curr_node.friction_calc_details = friction_details
+                else:
+                    curr_node.friction_calc_details = {
+                        'method': 'pressure_pipe_window_override',
+                        'source': 'window_override',
+                        'hf': round(hf, HEAD_LOSS_PRECISION),
+                    }
+            else:
+                hf = self.calculate_friction_loss(prev_regular_node, curr_node, transition_len_between)
             curr_node.head_loss_friction = hf
             
             # 计算局部损失
-            hj = self.calculate_local_loss(curr_node)
+            if window_override:
+                hj = float(window_override.get("local_loss", 0.0) or 0.0)
+                curr_node.transition_calc_details = copy.deepcopy(window_override.get("local_details", {}) or {})
+            else:
+                hj = self.calculate_local_loss(curr_node)
             curr_node.head_loss_local = hj
+            if window_override and self._is_unnamed_regular_pressure_pipe(curr_node):
+                curr_node.head_loss_siphon = 0.0
+                curr_node.external_head_loss = None
             
             # 计算当前节点水位
             curr_node.water_level = prev_regular_node.water_level - hf - hj - hw - accumulated_transition_loss

@@ -403,6 +403,68 @@ def test_total_loss_dialog_describes_regular_row_loss_only(monkeypatch):
     assert "h_{tr}" not in text_blob
 
 
+def test_total_loss_details_for_xxpipe_unnamed_pressure_pipe_do_not_repeat_pressure_pipe_term(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    _ = app
+
+    panel_module = _load_panel_module()
+    formula_module = importlib.import_module("app_渠系计算前端.water_profile.formula_dialog")
+    captured = {}
+
+    monkeypatch.setattr(
+        formula_module,
+        "show_total_loss_dialog",
+        lambda parent, node_name, details: captured.update(
+            parent=parent, node_name=node_name, details=details
+        ),
+    )
+
+    panel = _build_panel(panel_module)
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支管")
+    node = _make_node(
+        name="",
+        structure_type=SimpleNamespace(value="有压管道"),
+        head_loss_bend=0.0100,
+        head_loss_friction=0.0215,
+        head_loss_total=0.0315,
+    )
+
+    panel_module.WaterProfilePanel._show_total_calc_details(panel, 0, node, [node])
+
+    assert captured["details"]["head_loss_siphon"] == 0.0
+    assert captured["details"]["pressure_pipe_display_loss"] == 0.0315
+    assert captured["details"]["pressure_pipe_display_is_row_sum"] is True
+
+
+def test_total_loss_dialog_marks_row_level_display_without_duplicate_siphon(monkeypatch):
+    module = _load_formula_dialog_module()
+    captured = _capture_formula_dialog(monkeypatch, module)
+
+    module.show_total_loss_dialog(
+        None,
+        "行5",
+        {
+            "head_loss_bend": 0.0100,
+            "head_loss_transition": 0.0,
+            "head_loss_friction": 0.0215,
+            "head_loss_local": 0.0,
+            "head_loss_reserve": 0.0,
+            "head_loss_gate": 0.0,
+            "head_loss_siphon": 0.0,
+            "pressure_pipe_display_loss": 0.0315,
+            "pressure_pipe_display_is_row_sum": True,
+            "head_loss_total": 0.0315,
+        },
+    )
+
+    text_blob = _build_text_blob(captured["sections"])
+
+    assert "列38只是本行承压段显示值" in text_blob
+    assert "只用于表3该列显示" in text_blob
+    assert "不重复计入总损失" in text_blob
+    assert "倒虹吸/有压管道水头损失  $h_{sip} = 0.0000" not in text_blob
+
+
 def test_water_level_dialog_shows_both_row_loss_and_step_drop(monkeypatch):
     module = _load_formula_dialog_module()
     captured = _capture_formula_dialog(monkeypatch, module)
@@ -452,6 +514,48 @@ def test_water_level_dialog_shows_both_row_loss_and_step_drop(monkeypatch):
     assert "564.6320" in text_blob
 
 
+def test_water_level_dialog_marks_row_level_display_without_duplicate_siphon(monkeypatch):
+    module = _load_formula_dialog_module()
+    captured = _capture_formula_dialog(monkeypatch, module)
+
+    module.show_water_level_dialog(
+        None,
+        "行5",
+        {
+            "is_first": False,
+            "is_gate": False,
+            "prev_level": 564.9000,
+            "start_level": 565.1160,
+            "cumulative": 0.2240,
+            "water_level": 564.8920,
+            "total_loss": 0.0315,
+            "transition_step_loss": 0.0,
+            "step_drop": 0.0315,
+            "prev_level_exact": 564.900000,
+            "start_level_exact": 565.116000,
+            "cumulative_exact": 0.224000,
+            "water_level_exact": 564.892000,
+            "total_loss_exact": 0.031500,
+            "transition_step_loss_exact": 0.000000,
+            "step_drop_exact": 0.031500,
+            "hf": 0.0215,
+            "hj": 0.0,
+            "hw": 0.0100,
+            "h_reserve": 0.0,
+            "h_gate": 0.0,
+            "h_siphon": 0.0,
+            "pressure_pipe_display_loss": 0.0315,
+            "pressure_pipe_display_is_row_sum": True,
+        },
+    )
+
+    text_blob = _build_text_blob(captured["sections"])
+
+    assert "只用于表3该列显示" in text_blob
+    assert "不重复计入总损失" in text_blob
+    assert "倒虹吸/有压管道水头损失  $h_{sip} = 0.0000" not in text_blob
+
+
 def test_water_level_details_without_transition_use_row_total_as_step_drop(monkeypatch):
     app = QApplication.instance() or QApplication([])
     _ = app
@@ -486,6 +590,42 @@ def test_water_level_details_without_transition_use_row_total_as_step_drop(monke
     assert details["total_loss"] == 0.0080
     assert details["transition_step_loss"] == 0.0
     assert details["step_drop"] == 0.0080
+
+
+def test_cumulative_loss_details_for_xxpipe_unnamed_pressure_pipe_skip_duplicate_pressure_pipe_part(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    _ = app
+
+    panel_module = _load_panel_module()
+    formula_module = importlib.import_module("app_渠系计算前端.water_profile.formula_dialog")
+    captured = {}
+
+    monkeypatch.setattr(
+        formula_module,
+        "show_cumulative_loss_dialog",
+        lambda parent, node_name, details: captured.update(
+            parent=parent, node_name=node_name, details=details
+        ),
+    )
+
+    panel = _build_panel(panel_module)
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支管")
+    nodes = [
+        _make_node(
+            name="",
+            structure_type=SimpleNamespace(value="有压管道"),
+            head_loss_bend=0.0100,
+            head_loss_friction=0.0215,
+            head_loss_total=0.0315,
+        ),
+    ]
+
+    panel_module.WaterProfilePanel._show_cumulative_loss_details(panel, 0, nodes[0], nodes)
+
+    rows_text = captured["details"]["rows_text"]
+    assert "弯道0.0100" in rows_text
+    assert "沿程0.0215" in rows_text
+    assert "倒虹吸0.0315" not in rows_text
 
 
 def test_water_level_dialog_first_row_keeps_start_level_explanation(monkeypatch):

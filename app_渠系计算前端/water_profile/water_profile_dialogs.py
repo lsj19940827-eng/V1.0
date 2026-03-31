@@ -1034,14 +1034,15 @@ class PressurePipeConfigDialog(QDialog):
         # 从manager加载已有的纵断面数据
         if self._manager and self._pipe_groups:
             for group in self._pipe_groups:
-                config = self._manager.get_pipe_config(group.name)
+                config = self._get_manager_group_config(group)
+                group_key = self._group_storage_key(group)
                 if config and config.longitudinal_nodes:
-                    self._longitudinal_data[group.name] = config.longitudinal_nodes
+                    self._longitudinal_data[group_key] = config.longitudinal_nodes
                 if config:
                     _cfg_turn_n = float(getattr(config, "turn_n", 0.0) or 0.0)
                     _cfg_turn_r = float(getattr(config, "turn_R", 0.0) or 0.0)
                     _cfg_applied = bool(_cfg_turn_r > 0)
-                    self._radius_configs[group.name] = {
+                    self._radius_configs[group_key] = {
                         "turn_n": _cfg_turn_n,
                         "turn_R": _cfg_turn_r,
                         "force_override": bool(getattr(config, "force_override", False)),
@@ -1056,6 +1057,66 @@ class PressurePipeConfigDialog(QDialog):
 
         self._init_ui()
         self._apply_initial_size()
+
+    @staticmethod
+    def _group_storage_key(group) -> str:
+        """返回分组稳定存储键。"""
+        key = str(getattr(group, "storage_key", "") or "").strip()
+        if key:
+            return key
+        identity = str(getattr(group, "identity", "") or "").strip()
+        if identity:
+            return identity
+        return str(getattr(group, "name", "") or "").strip()
+
+    @staticmethod
+    def _group_display_name(group) -> str:
+        """返回分组展示名称。"""
+        display_name = str(getattr(group, "display_name", "") or "").strip()
+        if display_name:
+            return display_name
+        name = str(getattr(group, "name", "") or "").strip()
+        return name or "未命名有压管道"
+
+    @staticmethod
+    def _group_identity(group) -> str:
+        """返回分组稳定身份键。"""
+        identity = str(getattr(group, "identity", "") or "").strip()
+        if identity:
+            return identity
+        return str(getattr(group, "name", "") or "").strip()
+
+    @staticmethod
+    def _group_edit_rows(group):
+        """返回需要用于 D/R 参数编辑的目标行。"""
+        rows = list(getattr(group, "rows", []) or [])
+        if str(getattr(group, "group_mode", "") or "").strip() == "unnamed_row_segment" and rows:
+            return rows[-1:]
+        return rows
+
+    def _get_manager_group_config(self, group):
+        """优先按 storage_key 读取配置，兼容旧数据按名称回退。"""
+        if not self._manager:
+            return None
+        group_key = self._group_storage_key(group)
+        config = self._manager.get_pipe_config(group_key)
+        if config is not None:
+            return config
+        legacy_name = str(getattr(group, "name", "") or "").strip()
+        if legacy_name and legacy_name != group_key:
+            return self._manager.get_pipe_config(legacy_name)
+        return None
+
+    def _resolve_pipe_label(self, pipe_key: str) -> str:
+        """根据键名解析界面展示名称。"""
+        widgets = self._card_widgets.get(pipe_key, {})
+        display_name = str(widgets.get("display_name", "") or "").strip()
+        if display_name:
+            return display_name
+        for group in self._pipe_groups or []:
+            if self._group_storage_key(group) == pipe_key:
+                return self._group_display_name(group)
+        return str(pipe_key or "未命名有压管道")
 
     def _resolve_last_turn_n(self) -> float:
         n_values = []
@@ -1098,7 +1159,7 @@ class PressurePipeConfigDialog(QDialog):
 
     def _collect_group_d_values(self, group) -> List[float]:
         values = []
-        for node in getattr(group, "rows", []) or []:
+        for node in self._group_edit_rows(group):
             sp = getattr(node, "section_params", {}) or {}
             d_val = self._safe_float(sp.get("D", 0.0), 0.0)
             values.append(d_val)
@@ -1128,7 +1189,7 @@ class PressurePipeConfigDialog(QDialog):
 
     def _group_radius_values(self, group) -> List[float]:
         values = []
-        for node in getattr(group, "rows", []) or []:
+        for node in self._group_edit_rows(group):
             r_val = self._safe_float(getattr(node, "turn_radius", 0.0), 0.0)
             if r_val > 0:
                 values.append(round(r_val, 6))
@@ -1138,37 +1199,28 @@ class PressurePipeConfigDialog(QDialog):
         if target_d <= 0:
             return
         rounded_d = round(float(target_d), 3)
-        for node in getattr(group, "rows", []) or []:
+        for node in self._group_edit_rows(group):
             if not hasattr(node, "section_params") or not node.section_params:
                 node.section_params = {}
             node.section_params["D"] = rounded_d
         group.diameter = rounded_d
-        self._d_override_payload[group.name] = rounded_d
+        self._d_override_payload[self._group_storage_key(group)] = rounded_d
 
     def _build_group_identity(self, group) -> str:
-        try:
-            flow_section = ""
-            for node in getattr(group, "rows", []) or []:
-                fs = str(getattr(node, "flow_section", "") or "").strip()
-                if fs:
-                    flow_section = fs
-                    break
-            from utils.pressure_pipe_result_helpers import make_pressure_pipe_identity
-            return make_pressure_pipe_identity(flow_section or "-", str(getattr(group, "name", "") or ""))
-        except Exception:
-            return str(getattr(group, "name", "") or "")
+        return self._group_identity(group)
 
     def _persist_group_radius_config(self, group, turn_n: float, turn_r: float, force_override: bool):
         if not self._manager:
             return
-        cfg = self._manager.get_pipe_config(group.name)
+        group_key = self._group_storage_key(group)
+        cfg = self._get_manager_group_config(group)
         if cfg is None:
             try:
                 from managers.pressure_pipe_manager import PressurePipeConfig
                 cfg = PressurePipeConfig()
             except Exception:
                 return
-            cfg.name = group.name
+            cfg.name = self._group_display_name(group)
             cfg.Q = float(getattr(group, "design_flow", 0.0) or 0.0)
             cfg.D = float(getattr(group, "diameter", 0.0) or 0.0)
             cfg.material_key = str(getattr(group, "material_key", "") or "")
@@ -1177,8 +1229,10 @@ class PressurePipeConfigDialog(QDialog):
         cfg.turn_R = round(float(turn_r), 2) if turn_r > 0 else 0.0
         cfg.force_override = bool(force_override)
         cfg.radius_applied_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cfg.longitudinal_nodes = self._longitudinal_data.get(group.name, getattr(cfg, "longitudinal_nodes", []) or [])
-        self._manager.set_pipe_config(group.name, cfg)
+        cfg.longitudinal_nodes = self._longitudinal_data.get(
+            group_key, getattr(cfg, "longitudinal_nodes", []) or []
+        )
+        self._manager.set_pipe_config(group_key, cfg)
 
     def _refresh_apply_summary_label(self):
         label = getattr(self, "_lbl_apply_summary", None)
@@ -1187,7 +1241,7 @@ class PressurePipeConfigDialog(QDialog):
         applied = 0
         total = len(self._pipe_groups or [])
         for group in self._pipe_groups or []:
-            cfg = self._radius_configs.get(group.name, {})
+            cfg = self._radius_configs.get(self._group_storage_key(group), {})
             if bool(cfg.get("applied")) and self._safe_float(cfg.get("applied_turn_R", 0.0), 0.0) > 0:
                 applied += 1
         if total <= 0:
@@ -1196,7 +1250,8 @@ class PressurePipeConfigDialog(QDialog):
         label.setText(f"平面R已应用 {applied}/{total} 组")
 
     def _resolve_group_turn_state(self, group) -> Dict[str, Any]:
-        cfg = dict(self._radius_configs.get(group.name, {}) or {})
+        group_key = self._group_storage_key(group)
+        cfg = dict(self._radius_configs.get(group_key, {}) or {})
         radius_values = self._group_radius_values(group)
         mixed_radius = len(radius_values) > 1
         row_r = radius_values[0] if len(radius_values) == 1 else 0.0
@@ -1251,7 +1306,7 @@ class PressurePipeConfigDialog(QDialog):
             "d_consistent": self._is_group_d_consistent(group),
             "suggest_d": suggest_d,
         }
-        self._radius_configs[group.name] = dict(normalized)
+        self._radius_configs[group_key] = dict(normalized)
         return normalized
 
     @staticmethod
@@ -1262,7 +1317,7 @@ class PressurePipeConfigDialog(QDialog):
         return txt if txt else ""
 
     def _update_group_apply_button(self, group, dirty: bool):
-        widgets = self._card_widgets.get(group.name, {})
+        widgets = self._card_widgets.get(self._group_storage_key(group), {})
         btn_apply_group = widgets.get("btn_apply_group")
         if not btn_apply_group:
             return
@@ -1275,11 +1330,11 @@ class PressurePipeConfigDialog(QDialog):
             btn_apply_group.setStyleSheet("")
 
     def _set_group_dirty(self, group, dirty: bool):
-        cfg = self._radius_configs.setdefault(group.name, {})
+        cfg = self._radius_configs.setdefault(self._group_storage_key(group), {})
         cfg["dirty"] = bool(dirty)
 
     def _update_group_radius_ui(self, group, preserve_input: bool = False):
-        widgets = self._card_widgets.get(group.name, {})
+        widgets = self._card_widgets.get(self._group_storage_key(group), {})
         if not widgets:
             return
         turn_n_edit = widgets.get("turn_n_edit")
@@ -1365,12 +1420,12 @@ class PressurePipeConfigDialog(QDialog):
     def _on_group_turn_n_changed(self, group):
         if self._syncing_radius:
             return
-        widgets = self._card_widgets.get(group.name, {})
+        widgets = self._card_widgets.get(self._group_storage_key(group), {})
         turn_n_edit = widgets.get("turn_n_edit")
         turn_r_edit = widgets.get("turn_r_edit")
         if not turn_n_edit or not turn_r_edit:
             return
-        cfg = self._radius_configs.setdefault(group.name, {})
+        cfg = self._radius_configs.setdefault(self._group_storage_key(group), {})
         raw_n = turn_n_edit.text().strip()
         turn_n = self._safe_float(raw_n, 0.0)
         n_valid = (raw_n != "") and (turn_n > 0)
@@ -1394,12 +1449,12 @@ class PressurePipeConfigDialog(QDialog):
     def _on_group_turn_r_changed(self, group):
         if self._syncing_radius:
             return
-        widgets = self._card_widgets.get(group.name, {})
+        widgets = self._card_widgets.get(self._group_storage_key(group), {})
         turn_n_edit = widgets.get("turn_n_edit")
         turn_r_edit = widgets.get("turn_r_edit")
         if not turn_n_edit or not turn_r_edit:
             return
-        cfg = self._radius_configs.setdefault(group.name, {})
+        cfg = self._radius_configs.setdefault(self._group_storage_key(group), {})
         raw_r = turn_r_edit.text().strip()
         turn_r = self._safe_float(raw_r, 0.0)
         r_valid = (raw_r != "") and (turn_r > 0)
@@ -1423,14 +1478,14 @@ class PressurePipeConfigDialog(QDialog):
     def _on_group_turn_n_editing_finished(self, group):
         if self._syncing_radius:
             return
-        widgets = self._card_widgets.get(group.name, {})
+        widgets = self._card_widgets.get(self._group_storage_key(group), {})
         turn_n_edit = widgets.get("turn_n_edit")
         if not turn_n_edit:
             return
         raw_n = turn_n_edit.text().strip()
         turn_n = self._safe_float(raw_n, 0.0)
         if raw_n and turn_n > 0:
-            cfg = self._radius_configs.setdefault(group.name, {})
+            cfg = self._radius_configs.setdefault(self._group_storage_key(group), {})
             cfg["turn_n"] = round(float(turn_n), 6)
             self._syncing_radius = True
             try:
@@ -1442,14 +1497,14 @@ class PressurePipeConfigDialog(QDialog):
     def _on_group_turn_r_editing_finished(self, group):
         if self._syncing_radius:
             return
-        widgets = self._card_widgets.get(group.name, {})
+        widgets = self._card_widgets.get(self._group_storage_key(group), {})
         turn_r_edit = widgets.get("turn_r_edit")
         if not turn_r_edit:
             return
         raw_r = turn_r_edit.text().strip()
         turn_r = self._safe_float(raw_r, 0.0)
         if raw_r and turn_r > 0:
-            cfg = self._radius_configs.setdefault(group.name, {})
+            cfg = self._radius_configs.setdefault(self._group_storage_key(group), {})
             cfg["turn_R"] = round(float(turn_r), 6)
             self._syncing_radius = True
             try:
@@ -1459,22 +1514,23 @@ class PressurePipeConfigDialog(QDialog):
         self._update_group_radius_ui(group, preserve_input=False)
 
     def _on_unify_group_d_clicked(self, group):
-        widgets = self._card_widgets.get(group.name, {})
+        widgets = self._card_widgets.get(self._group_storage_key(group), {})
         d_target_edit = widgets.get("d_target_edit")
         target_d = self._safe_float(d_target_edit.text() if d_target_edit else "", 0.0)
         if target_d <= 0:
             target_d = self._suggest_group_d(group)
         if target_d <= 0:
-            fluent_error(self, "统一D失败", f"组“{group.name}”未找到有效D建议值")
+            fluent_error(self, "统一D失败", f"组“{self._group_display_name(group)}”未找到有效D建议值")
             return
         self._apply_group_d_override(group, target_d)
         if d_target_edit:
             d_target_edit.setText(f"{target_d:.3f}")
         self._update_group_radius_ui(group)
-        fluent_info(self, "已统一D", f"组“{group.name}”已统一为 D={target_d:.3f} m")
+        fluent_info(self, "已统一D", f"组“{self._group_display_name(group)}”已统一为 D={target_d:.3f} m")
 
     def _apply_group_radius(self, group):
-        widgets = self._card_widgets.get(group.name, {})
+        group_key = self._group_storage_key(group)
+        widgets = self._card_widgets.get(group_key, {})
         turn_n_edit = widgets.get("turn_n_edit")
         turn_r_edit = widgets.get("turn_r_edit")
         force_chk = widgets.get("force_override_chk")
@@ -1507,7 +1563,7 @@ class PressurePipeConfigDialog(QDialog):
 
         force_override = bool(force_chk.isChecked()) if force_chk else False
         applied_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self._radius_configs[group.name] = {
+        self._radius_configs[group_key] = {
             "turn_n": turn_n,
             "turn_R": turn_r,
             "force_override": force_override,
@@ -1533,14 +1589,14 @@ class PressurePipeConfigDialog(QDialog):
     def _on_apply_group_clicked(self, group):
         ok, message = self._apply_group_radius(group)
         if ok:
-            fluent_info(self, "应用成功", f"组“{group.name}”已应用：{message}")
+            fluent_info(self, "应用成功", f"组“{self._group_display_name(group)}”已应用：{message}")
         else:
-            fluent_error(self, "应用失败", f"组“{group.name}”：{message}")
+            fluent_error(self, "应用失败", f"组“{self._group_display_name(group)}”：{message}")
 
     def _on_apply_all_groups_clicked(self):
         selected_groups = []
         for group in self._pipe_groups or []:
-            widgets = self._card_widgets.get(group.name, {})
+            widgets = self._card_widgets.get(self._group_storage_key(group), {})
             force_chk = widgets.get("force_override_chk")
             if force_chk and force_chk.isChecked():
                 selected_groups.append(group)
@@ -1558,7 +1614,7 @@ class PressurePipeConfigDialog(QDialog):
             if ok:
                 ok_count += 1
             else:
-                failed_msgs.append(f"{group.name}: {msg}")
+                failed_msgs.append(f"{self._group_display_name(group)}: {msg}")
 
         self._last_apply_summary = {
             "ok": ok_count,
@@ -1591,7 +1647,7 @@ class PressurePipeConfigDialog(QDialog):
                 continue
             if applied_turn_r <= 0:
                 continue
-            payload[group.name] = {
+            payload[self._group_storage_key(group)] = {
                 "turn_n": round(float(applied_turn_n), 3) if applied_turn_n > 0 else 0.0,
                 "turn_R": round(float(applied_turn_r), 2) if applied_turn_r > 0 else 0.0,
                 "force_override": bool(state["force_override"]),
@@ -1599,6 +1655,7 @@ class PressurePipeConfigDialog(QDialog):
                 "radius_applied_at": str(state["radius_applied_at"] or ""),
                 "row_indices": list(getattr(group, "row_indices", []) or []),
                 "identity": self._build_group_identity(group),
+                "display_name": self._group_display_name(group),
             }
         return payload
 
@@ -1804,7 +1861,10 @@ class PressurePipeConfigDialog(QDialog):
         """为单个管道创建卡片（分层结构：摘要 + 迷你画布 + 可展开表格）"""
         from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget, QHeaderView
 
-        card = QGroupBox(f"管道: {group.name}")
+        group_key = self._group_storage_key(group)
+        display_name = self._group_display_name(group)
+
+        card = QGroupBox(f"管道: {display_name}")
         card.setStyleSheet("""
             QGroupBox {
                 font-size: 13px; font-weight: bold; color: #2C3E50;
@@ -1822,7 +1882,9 @@ class PressurePipeConfigDialog(QDialog):
         card_lay.setSpacing(10)
 
         # 基本信息
-        info_label = QLabel(f"流量: {group.design_flow:.3f} m\u00b3/s  |  管径: {group.diameter:.3f} m  |  管材: {group.material_key}")
+        info_label = QLabel(
+            f"流量: {group.design_flow:.3f} m\u00b3/s  |  管径: {group.diameter:.3f} m  |  管材: {group.material_key}"
+        )
         info_label.setStyleSheet("font-size: 12px; color: #7F8C8D; font-weight: normal;")
         card_lay.addWidget(info_label)
 
@@ -1911,9 +1973,9 @@ class PressurePipeConfigDialog(QDialog):
             btn_clear = QPushButton("清空纵断面")
             btn_preview = QPushButton("预览")
 
-        btn_import.clicked.connect(lambda: self._import_longitudinal_dxf(group.name, group.ip_points))
-        btn_clear.clicked.connect(lambda: self._clear_longitudinal(group.name))
-        btn_preview.clicked.connect(lambda: self._open_canvas_viewer(group.name))
+        btn_import.clicked.connect(lambda: self._import_longitudinal_dxf(group_key, group.ip_points))
+        btn_clear.clicked.connect(lambda: self._clear_longitudinal(group_key))
+        btn_preview.clicked.connect(lambda: self._open_canvas_viewer(group_key))
         btn_clear.setEnabled(False)
         _has_ip_for_preview = len(getattr(group, 'ip_points', []) or []) >= 2
         btn_preview.setEnabled(_has_ip_for_preview)
@@ -1931,7 +1993,7 @@ class PressurePipeConfigDialog(QDialog):
             "padding: 8px 12px; font-weight: normal;"
         )
         hint_label.setAlignment(Qt.AlignCenter)
-        hint_label.setObjectName(f"hint_{group.name}")
+        hint_label.setObjectName(f"hint_{group_key}")
         hint_label.setVisible(False)
         card_lay.addWidget(hint_label)
 
@@ -1943,7 +2005,7 @@ class PressurePipeConfigDialog(QDialog):
             "padding: 6px 10px; font-weight: normal;"
         )
         stats_label.setWordWrap(True)
-        stats_label.setObjectName(f"stats_{group.name}")
+        stats_label.setObjectName(f"stats_{group_key}")
         stats_label.setVisible(False)
         card_lay.addWidget(stats_label)
 
@@ -1977,21 +2039,21 @@ class PressurePipeConfigDialog(QDialog):
 
         # 迷你画布（始终可见，默认显示平面图）
         mini_canvas = SimpleProfileCanvas(self, fixed_height=200)
-        mini_canvas.setObjectName(f"canvas_{group.name}")
+        mini_canvas.setObjectName(f"canvas_{group_key}")
         mini_canvas.setStyleSheet(
             "border: 1px solid #CFD8DC; border-radius: 4px;"
         )
         card_lay.addWidget(mini_canvas)
         mini_canvas.open_detail_requested.connect(
-            lambda _name=group.name: self._open_canvas_viewer(_name)
+            lambda _name=group_key: self._open_canvas_viewer(_name)
         )
 
         # 视图切换与缩放逻辑
         has_plan = len(getattr(group, 'ip_points', []) or []) >= 2
 
-        btn_view_plan.clicked.connect(lambda: self._set_card_view_mode(group.name, "plan", sync_viewer=True))
-        btn_view_profile.clicked.connect(lambda: self._set_card_view_mode(group.name, "profile", sync_viewer=True))
-        btn_zoom_reset.clicked.connect(lambda _c=False, _name=group.name: self._on_canvas_zoom_reset(_name))
+        btn_view_plan.clicked.connect(lambda: self._set_card_view_mode(group_key, "plan", sync_viewer=True))
+        btn_view_profile.clicked.connect(lambda: self._set_card_view_mode(group_key, "profile", sync_viewer=True))
+        btn_zoom_reset.clicked.connect(lambda _c=False, _name=group_key: self._on_canvas_zoom_reset(_name))
 
         # 喂入平面数据
         if has_plan:
@@ -1999,7 +2061,7 @@ class PressurePipeConfigDialog(QDialog):
             mini_canvas.set_view_mode("plan")
 
         # 无纵断面时禁用纵断面按钮
-        has_long = group.name in self._longitudinal_data and self._longitudinal_data[group.name]
+        has_long = group_key in self._longitudinal_data and self._longitudinal_data[group_key]
         btn_view_profile.setEnabled(bool(has_long))
 
         # 展开/折叠按钮
@@ -2010,7 +2072,7 @@ class PressurePipeConfigDialog(QDialog):
             "QPushButton:hover { color: #1565C0; text-decoration: underline; }"
         )
         expand_btn.setCursor(Qt.PointingHandCursor)
-        expand_btn.setObjectName(f"expand_{group.name}")
+        expand_btn.setObjectName(f"expand_{group_key}")
         expand_btn.setVisible(False)
         card_lay.addWidget(expand_btn)
 
@@ -2020,14 +2082,14 @@ class PressurePipeConfigDialog(QDialog):
         table.setHorizontalHeaderLabels(["桩号(m)", "高程(m)", "竖曲线半径(m)", "转弯类型", "转角(\u00b0)"])
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table.setMaximumHeight(200)
-        table.setObjectName(f"long_table_{group.name}")
+        table.setObjectName(f"long_table_{group_key}")
         table.setVisible(False)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setAlternatingRowColors(True)
         card_lay.addWidget(table)
 
         # 展开/折叠点击事件
-        def toggle_table(checked=False, _name=group.name):
+        def toggle_table(checked=False, _name=group_key):
             tbl = self.findChild(QTableWidget, f"long_table_{_name}")
             btn = self.findChild(QPushButton, f"expand_{_name}")
             if tbl and btn:
@@ -2037,7 +2099,8 @@ class PressurePipeConfigDialog(QDialog):
         expand_btn.clicked.connect(toggle_table)
 
         # 保存组件引用
-        self._card_widgets[group.name] = {
+        self._card_widgets[group_key] = {
+            'display_name': display_name,
             'hint': hint_label,
             'stats': stats_label,
             'canvas': mini_canvas,
@@ -2060,7 +2123,7 @@ class PressurePipeConfigDialog(QDialog):
         }
 
         force_override_chk.toggled.connect(
-            lambda checked, g=group.name: (
+            lambda checked, g=group_key: (
                 self._radius_configs.setdefault(g, {}).update({"force_override": bool(checked)}),
                 self._refresh_apply_summary_label()
             )
@@ -2068,9 +2131,9 @@ class PressurePipeConfigDialog(QDialog):
         self._update_group_radius_ui(group)
 
         # 根据已有数据初始化状态
-        has_long_data = group.name in self._longitudinal_data and self._longitudinal_data[group.name]
+        has_long_data = group_key in self._longitudinal_data and self._longitudinal_data[group_key]
         if has_long_data:
-            self._update_card_data_state(group.name, show_data=True)
+            self._update_card_data_state(group_key, show_data=True)
 
         return card
 
@@ -2147,7 +2210,7 @@ class PressurePipeConfigDialog(QDialog):
             return
         self._active_viewer_pipe_name = pipe_name
         viewer.sync_pipe_data(
-            pipe_name=pipe_name,
+            pipe_name=self._resolve_pipe_label(pipe_name),
             nodes=self._longitudinal_data.get(pipe_name) or [],
             ip_points=getattr(widgets["canvas"], "_ip_points", []) or [],
             view_mode=widgets["canvas"].get_view_mode(),
@@ -2159,7 +2222,7 @@ class PressurePipeConfigDialog(QDialog):
             return
         canvas = widgets["canvas"]
         if not canvas.has_plan_data() and not canvas.has_profile_data():
-            fluent_info(self, "预览", f"管道 '{pipe_name}' 暂无可预览的数据")
+            fluent_info(self, "预览", f"管道 '{self._resolve_pipe_label(pipe_name)}' 暂无可预览的数据")
             return
         viewer = self._ensure_canvas_viewer()
         self._sync_canvas_viewer(pipe_name)
@@ -2210,6 +2273,7 @@ class PressurePipeConfigDialog(QDialog):
         from PySide6.QtWidgets import QFileDialog, QMessageBox
         import os
         import sys
+        pipe_label = self._resolve_pipe_label(pipe_name)
 
         # 已有数据时弹出替换确认
         if pipe_name in self._longitudinal_data and self._longitudinal_data[pipe_name]:
@@ -2295,7 +2359,7 @@ class PressurePipeConfigDialog(QDialog):
                         return
 
             self._update_card_data_state(pipe_name, show_data=True)
-            fluent_info(self, "导入成功", f"{message}\n变坡点节点: {len(long_nodes)} 个")
+            fluent_info(self, "导入成功", f"{pipe_label}\n{message}\n变坡点节点: {len(long_nodes)} 个")
 
         except Exception as e:
             QMessageBox.critical(self, "导入失败", str(e))
@@ -2305,7 +2369,7 @@ class PressurePipeConfigDialog(QDialog):
         if pipe_name not in self._longitudinal_data:
             return
 
-        if not fluent_question(self, "确认清空", f"确定要清空管道 '{pipe_name}' 的纵断面数据吗？"):
+        if not fluent_question(self, "确认清空", f"确定要清空管道 '{self._resolve_pipe_label(pipe_name)}' 的纵断面数据吗？"):
             return
 
         del self._longitudinal_data[pipe_name]

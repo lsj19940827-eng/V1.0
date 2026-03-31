@@ -8,7 +8,7 @@
 
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict
 
 import sys
@@ -18,6 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.data_models import ChannelNode
 from models.enums import StructureType, InOutType
 from core.pressure_pipe_calc import calc_turn_angle, calc_segment_length
+from config.constants import XXPIPE_CHANNEL_LEVEL_OPTIONS
+from utils.pressure_pipe_result_helpers import make_pressure_pipe_identity
 
 
 @dataclass
@@ -58,9 +60,23 @@ class PressurePipeGroup:
     outlet_transition_form: str = "反弯扭曲面"  # 出口渐变段型式
     inlet_transition_zeta: float = 0.10         # 进口渐变段局部损失系数
     outlet_transition_zeta: float = 0.20        # 出口渐变段局部损失系数
+    group_mode: str = "named_group"             # 分组模式：named_group / unnamed_row_segment
+    display_name: str = ""                      # 界面展示名称
+    storage_key: str = ""                       # 存储键
+    identity: str = ""                          # 稳定身份键
+    target_row_index: int = -1                  # 匿名段目标行索引
+    upstream_row_index: int = -1                # 匿名段上一普通行索引
     
     def is_valid(self) -> bool:
         """检查有压管道数据是否有效"""
+        if self.group_mode == "unnamed_row_segment":
+            return (
+                self.target_row_index >= 0 and
+                self.upstream_row_index >= 0 and
+                self.design_flow > 0 and
+                self.diameter > 0 and
+                len(self.ip_points) >= 2
+            )
         return (
             len(self.rows) >= 2 and  # 至少有进口和出口
             self.name and
@@ -73,6 +89,19 @@ class PressurePipeGroup:
     def get_validation_message(self) -> str:
         """获取验证信息"""
         issues = []
+        label = self.display_name or self.name or "未命名有压管道"
+        if self.group_mode == "unnamed_row_segment":
+            if self.upstream_row_index < 0:
+                issues.append("缺少上一普通行")
+            if len(self.ip_points) < 2:
+                issues.append("缺少有效平面坐标")
+            if self.design_flow <= 0:
+                issues.append("设计流量无效")
+            if self.diameter <= 0:
+                issues.append("管径无效")
+            if issues:
+                return f"{label}: " + ", ".join(issues)
+            return ""
         if len(self.rows) < 2:
             issues.append("至少需要进口和出口两行")
         if self.inlet_row_index < 0:
@@ -87,7 +116,7 @@ class PressurePipeGroup:
             issues.append("未指定管材")
         
         if issues:
-            return f"{self.name}: " + ", ".join(issues)
+            return f"{label}: " + ", ".join(issues)
         return ""
 
 
@@ -201,6 +230,40 @@ class PressurePipeDataExtractor:
             result.append(group)
         
         return result
+
+    @staticmethod
+    def extract_dialog_pipe_groups(nodes: List[ChannelNode], settings=None) -> List[PressurePipeGroup]:
+        """
+        提取“有压管道水力计算配置”窗口专用分组。
+
+        返回两类对象：
+        1. 原有命名有压管道/定向钻/顶管组；
+        2. xx管渠道级别下的空名称普通“有压管道”匿名段。
+        """
+        if not nodes:
+            return []
+
+        ordered_groups: List[Tuple[int, PressurePipeGroup]] = []
+
+        for group in PressurePipeDataExtractor.extract_pipes(nodes, settings=settings):
+            flow_section = PressurePipeDataExtractor._resolve_group_flow_section(group)
+            group.group_mode = "named_group"
+            group.display_name = group.name or "未命名"
+            group.storage_key = group.name or ""
+            group.identity = make_pressure_pipe_identity(flow_section or "-", group.name or "")
+            group.target_row_index = group.outlet_row_index
+            group.upstream_row_index = group.inlet_row_index
+            ordered_groups.append((PressurePipeDataExtractor._group_order_index(group), group))
+
+        if PressurePipeDataExtractor._is_xxpipe_channel_level(settings):
+            for idx, node in enumerate(nodes):
+                if not PressurePipeDataExtractor._is_unnamed_regular_pressure_pipe(node):
+                    continue
+                anonymous_group = PressurePipeDataExtractor._build_unnamed_row_group(nodes, idx, settings=settings)
+                ordered_groups.append((idx, anonymous_group))
+
+        ordered_groups.sort(key=lambda item: item[0])
+        return [group for _, group in ordered_groups]
     
     @staticmethod
     def _is_pressure_pipe(node: ChannelNode) -> bool:
@@ -210,6 +273,145 @@ class PressurePipeDataExtractor:
         if getattr(node, 'is_pressure_pipe', False):
             return True
         return False
+
+    @staticmethod
+    def _is_regular_pressure_pipe(node: Optional[ChannelNode]) -> bool:
+        """判断是否为普通有压管道行。"""
+        if node is None or getattr(node, "is_transition", False):
+            return False
+        structure_value = node.structure_type.value if getattr(node, "structure_type", None) else ""
+        return structure_value == StructureType.PRESSURE_PIPE.value
+
+    @staticmethod
+    def _is_unnamed_regular_pressure_pipe(node: Optional[ChannelNode]) -> bool:
+        """判断是否为空名称普通有压管道行。"""
+        if not PressurePipeDataExtractor._is_regular_pressure_pipe(node):
+            return False
+        return not str(getattr(node, "name", "") or "").strip()
+
+    @staticmethod
+    def _is_xxpipe_channel_level(settings) -> bool:
+        """判断当前是否为 xx管 渠道级别。"""
+        channel_level = str(getattr(settings, "channel_level", "") or "").strip()
+        return channel_level in set(XXPIPE_CHANNEL_LEVEL_OPTIONS)
+
+    @staticmethod
+    def _resolve_group_flow_section(group: PressurePipeGroup) -> str:
+        """解析分组所属流量段。"""
+        for node in getattr(group, "rows", []) or []:
+            flow_section = str(getattr(node, "flow_section", "") or "").strip()
+            if flow_section:
+                return flow_section
+        return ""
+
+    @staticmethod
+    def _group_order_index(group: PressurePipeGroup) -> int:
+        """返回分组在表3中的排序位置。"""
+        indices = [idx for idx in (getattr(group, "row_indices", []) or []) if isinstance(idx, int)]
+        if indices:
+            return min(indices)
+        return max(0, int(getattr(group, "target_row_index", 0) or 0))
+
+    @staticmethod
+    def _build_pressure_pipe_row_identity(node: ChannelNode, row_index: int) -> str:
+        """构造匿名有压管道行稳定标识。"""
+        identity = str(getattr(node, "pressure_pipe_row_identity", "") or "").strip()
+        if identity:
+            return identity
+        flow_section = str(getattr(node, "flow_section", "") or "").strip()
+        row_part = f"row{int(row_index) + 1}"
+        if flow_section:
+            return f"flow{flow_section}-{row_part}"
+        return row_part
+
+    @staticmethod
+    def _build_unnamed_display_name(node: ChannelNode, row_index: int) -> str:
+        """构造匿名段展示名称。"""
+        flow_section = str(getattr(node, "flow_section", "") or "").strip() or "-"
+        return f"流量段{flow_section} 第{int(row_index) + 1}行有压管道"
+
+    @staticmethod
+    def _find_previous_regular_row_index(nodes: List[ChannelNode], target_index: int) -> int:
+        """查找当前行之前最近的普通行。"""
+        for idx in range(target_index - 1, -1, -1):
+            node = nodes[idx]
+            if getattr(node, "is_transition", False):
+                continue
+            if getattr(node, "is_auto_inserted_channel", False):
+                continue
+            return idx
+        return -1
+
+    @staticmethod
+    def _can_use_plan_point(node: Optional[ChannelNode]) -> bool:
+        """判断节点是否具备可用于平面预览的坐标。"""
+        if node is None:
+            return False
+        try:
+            x_val = float(getattr(node, "x", 0.0) or 0.0)
+            y_val = float(getattr(node, "y", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(x_val) and math.isfinite(y_val)
+
+    @staticmethod
+    def _make_plan_point(node: ChannelNode, in_out_text: str = "") -> Dict[str, Any]:
+        """构造平面点字典。"""
+        return {
+            "x": float(getattr(node, "x", 0.0) or 0.0),
+            "y": float(getattr(node, "y", 0.0) or 0.0),
+            "turn_radius": float(getattr(node, "turn_radius", 0.0) or 0.0),
+            "turn_angle": float(getattr(node, "turn_angle", 0.0) or 0.0),
+            "in_out": in_out_text,
+            "name": str(getattr(node, "name", "") or ""),
+        }
+
+    @staticmethod
+    def _build_unnamed_row_group(nodes: List[ChannelNode], row_index: int, settings=None) -> PressurePipeGroup:
+        """构造匿名普通有压管道段对象。"""
+        node = nodes[row_index]
+        upstream_index = PressurePipeDataExtractor._find_previous_regular_row_index(nodes, row_index)
+        upstream_node = nodes[upstream_index] if 0 <= upstream_index < len(nodes) else None
+        section_params = getattr(node, "section_params", {}) or {}
+        flow_section = str(getattr(node, "flow_section", "") or "").strip()
+        storage_key = PressurePipeDataExtractor._build_pressure_pipe_row_identity(node, row_index)
+        display_name = PressurePipeDataExtractor._build_unnamed_display_name(node, row_index)
+
+        group = PressurePipeGroup(
+            name="",
+            rows=[node],
+            row_indices=[row_index],
+            inlet_row_index=upstream_index,
+            outlet_row_index=row_index,
+            ip_row_indices=[],
+            design_flow=float(getattr(node, "flow", 0.0) or 0.0),
+            diameter=section_params.get("D", 0.0) or section_params.get("直径D", 0.0) or 0.0,
+            material_key=str(section_params.get("pipe_material", "") or ""),
+            local_loss_ratio=section_params.get("local_loss_ratio", 0.15) or 0.15,
+            plan_segments=[],
+            plan_total_length=0.0,
+            group_mode="unnamed_row_segment",
+            display_name=display_name,
+            storage_key=storage_key,
+            identity=storage_key,
+            target_row_index=row_index,
+            upstream_row_index=upstream_index,
+        )
+
+        ip_points: List[Dict[str, Any]] = []
+        if PressurePipeDataExtractor._can_use_plan_point(upstream_node):
+            ip_points.append(PressurePipeDataExtractor._make_plan_point(upstream_node, in_out_text="进"))
+        if PressurePipeDataExtractor._can_use_plan_point(node):
+            ip_points.append(PressurePipeDataExtractor._make_plan_point(node, in_out_text="出"))
+        group.ip_points = ip_points
+
+        if len(ip_points) >= 2:
+            PressurePipeDataExtractor._calc_plan_segments(group)
+
+        PressurePipeDataExtractor._extract_adjacent_node_data_for_unnamed_segment(group, nodes)
+        if settings is not None:
+            PressurePipeDataExtractor._extract_transition_forms(group, settings)
+        return group
 
     @staticmethod
     def _get_in_out_raw(node: ChannelNode) -> str:
@@ -332,32 +534,52 @@ class PressurePipeDataExtractor:
                 'R': sp.get('R', 0) or sp.get('R_circle', 0) or sp.get('半径R', 0),
             }
             break
-        
-        # 提取下游节点数据
-        for i in range(group.outlet_row_index + 1, len(nodes)):
-            downstream_node = nodes[i]
-            
-            # 跳过渐变段
-            if getattr(downstream_node, 'is_transition', False):
-                continue
-            
-            # 跳过同名有压管道行
-            if PressurePipeDataExtractor._is_pressure_pipe(downstream_node):
-                continue
-            
-            # 找到下游节点
-            group.downstream_velocity = downstream_node.velocity if downstream_node.velocity > 0 else 0.0
-            group.downstream_structure_type = downstream_node.structure_type.value if downstream_node.structure_type else ""
-            
-            sp = downstream_node.section_params or {}
-            group.downstream_section_params = {
-                'B': sp.get('B', 0) or sp.get('底宽b', 0) or sp.get('底宽B', 0),
-                'h': downstream_node.water_depth,
-                'm': sp.get('m', 0) or sp.get('边坡m', 0),
-                'D': sp.get('D', 0) or sp.get('直径D', 0),
-                'R': sp.get('R', 0) or sp.get('R_circle', 0) or sp.get('半径R', 0),
-            }
-            break
+
+    @staticmethod
+    def _extract_adjacent_node_data_for_unnamed_segment(group: PressurePipeGroup, nodes: List[ChannelNode]):
+        """
+        提取匿名段专项的上下游参照流速。
+
+        规则：
+        - 上游：若上一普通行为非有压流结构，直接使用该行；
+        - 下游：从目标行之后寻找第一个非渐变普通行，且仅在其为非有压流结构时使用。
+        """
+        upstream_idx = getattr(group, "upstream_row_index", -1)
+        target_idx = getattr(group, "target_row_index", -1)
+
+        if 0 <= upstream_idx < len(nodes):
+            upstream_node = nodes[upstream_idx]
+            if not PressurePipeDataExtractor._is_pressure_pipe(upstream_node):
+                group.upstream_velocity = upstream_node.velocity if upstream_node.velocity > 0 else 0.0
+                group.upstream_structure_type = upstream_node.structure_type.value if upstream_node.structure_type else ""
+                sp = upstream_node.section_params or {}
+                group.upstream_section_params = {
+                    'B': sp.get('B', 0) or sp.get('底宽b', 0) or sp.get('底宽B', 0),
+                    'h': upstream_node.water_depth,
+                    'm': sp.get('m', 0) or sp.get('边坡m', 0),
+                    'D': sp.get('D', 0) or sp.get('直径D', 0),
+                    'R': sp.get('R', 0) or sp.get('R_circle', 0) or sp.get('半径R', 0),
+                }
+
+        if target_idx >= 0:
+            for idx in range(target_idx + 1, len(nodes)):
+                downstream_node = nodes[idx]
+                if getattr(downstream_node, "is_transition", False):
+                    continue
+                if getattr(downstream_node, "is_auto_inserted_channel", False):
+                    continue
+                if not PressurePipeDataExtractor._is_pressure_pipe(downstream_node):
+                    group.downstream_velocity = downstream_node.velocity if downstream_node.velocity > 0 else 0.0
+                    group.downstream_structure_type = downstream_node.structure_type.value if downstream_node.structure_type else ""
+                    sp = downstream_node.section_params or {}
+                    group.downstream_section_params = {
+                        'B': sp.get('B', 0) or sp.get('底宽b', 0) or sp.get('底宽B', 0),
+                        'h': downstream_node.water_depth,
+                        'm': sp.get('m', 0) or sp.get('边坡m', 0),
+                        'D': sp.get('D', 0) or sp.get('直径D', 0),
+                        'R': sp.get('R', 0) or sp.get('R_circle', 0) or sp.get('半径R', 0),
+                    }
+                break
     
     @staticmethod
     def _extract_transition_forms(group: PressurePipeGroup, settings):

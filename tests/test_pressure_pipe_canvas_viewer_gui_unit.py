@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QGroupBox
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -104,6 +104,30 @@ def _make_group(name: str = "测试管道"):
     )
 
 
+def _make_unnamed_group():
+    rows = [
+        SimpleNamespace(section_params={"D": 1.4}, turn_radius=35.0, flow_section="2"),
+    ]
+    return SimpleNamespace(
+        name="",
+        display_name="流量段2 第5行有压管道",
+        storage_key="flow2-row5",
+        identity="flow2-row5",
+        group_mode="unnamed_row_segment",
+        design_flow=1.12,
+        diameter=1.4,
+        material_key="球墨铸铁管",
+        ip_points=[
+            {"x": 0.0, "y": 0.0, "turn_angle": 0.0},
+            {"x": 47.0, "y": 0.0, "turn_angle": 22.0},
+        ],
+        rows=rows,
+        row_indices=[4],
+        target_row_index=4,
+        upstream_row_index=3,
+    )
+
+
 def _make_dialog():
     _get_qapp()
     group = _make_group()
@@ -114,6 +138,25 @@ def _make_dialog():
     dialog.show()
     _flush_events(6)
     return dialog, group
+
+
+def _make_unnamed_group():
+    row = SimpleNamespace(section_params={"D": 1.4}, turn_radius=0.0, flow_section="2")
+    return SimpleNamespace(
+        name="",
+        display_name="流量段2 第5行有压管道",
+        storage_key="flow2-row5",
+        identity="flow2-row5",
+        group_mode="unnamed_row_segment",
+        design_flow=1.55,
+        diameter=1.4,
+        material_key="球墨铸铁管",
+        ip_points=_make_ip_points(),
+        rows=[row],
+        row_indices=[4],
+        target_row_index=4,
+        upstream_row_index=3,
+    )
 
 
 def test_simple_profile_canvas_double_click_requests_detail_view():
@@ -178,5 +221,44 @@ def test_pressure_pipe_config_dialog_reuses_single_non_modal_viewer(monkeypatch)
 
     if viewer is not None:
         viewer.close()
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_uses_storage_key_for_unnamed_segment():
+    _get_qapp()
+    group = _make_unnamed_group()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=[group],
+        manager=_FakeManager(group.storage_key, _make_longitudinal_nodes()),
+    )
+    dialog.show()
+    _flush_events(6)
+
+    assert group.storage_key in dialog._card_widgets
+    assert dialog._resolve_pipe_label(group.storage_key) == group.display_name
+    assert group.storage_key in dialog.get_longitudinal_nodes_dict()
+
+    titles = [box.title() for box in dialog.findChildren(QGroupBox)]
+    assert any(group.display_name in title for title in titles)
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_uses_storage_key_for_unnamed_segments():
+    _get_qapp()
+    group = _make_unnamed_group()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=[group],
+        manager=_FakeManager(group.storage_key, _make_longitudinal_nodes()),
+    )
+    dialog.show()
+    _flush_events(6)
+
+    assert group.storage_key in dialog._card_widgets
+    assert dialog._card_widgets[group.storage_key]["display_name"] == group.display_name
+    assert group.storage_key in dialog.get_longitudinal_nodes_dict()
+
     dialog.close()
     dialog.deleteLater()

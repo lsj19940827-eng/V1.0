@@ -3,6 +3,7 @@
 
 import os
 import sys
+from types import SimpleNamespace
 
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "推求水面线"))
@@ -24,6 +25,10 @@ def _make_node(flow_section, name, structure, in_out, diameter=1.2, flow=2.4):
         "in_out_raw": in_out.value if hasattr(in_out, "value") else str(in_out),
     }
     return node
+
+
+def _make_settings(channel_level):
+    return SimpleNamespace(channel_level=channel_level)
 
 
 def test_extract_pipes_skips_unnamed_pressure_pipe_rows_and_keeps_named_groups_only():
@@ -55,3 +60,138 @@ def test_extract_pipes_ignores_incomplete_unnamed_group():
     groups = PressurePipeDataExtractor.extract_pipes(nodes)
 
     assert groups == []
+
+
+def test_extract_dialog_pipe_groups_includes_unnamed_regular_pressure_pipe_rows_for_xxpipe():
+    upstream = _make_node("2", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.8)
+    upstream.x = 0.0
+    upstream.y = 0.0
+    upstream.velocity = 0.9
+    upstream.water_depth = 1.3
+    upstream.section_params = {"B": 2.2, "m": 1.5}
+
+    named_inlet = _make_node("2", "半兽人", "定向钻", InOutType.INLET, diameter=1.0, flow=1.8)
+    named_inlet.x = 10.0
+    named_inlet.y = 0.0
+
+    named_outlet = _make_node("2", "半兽人", "定向钻", InOutType.OUTLET, diameter=1.0, flow=1.8)
+    named_outlet.x = 20.0
+    named_outlet.y = 0.0
+
+    anonymous = _make_node("2", "", "有压管道", InOutType.NORMAL, diameter=1.0, flow=1.8)
+    anonymous.x = 30.0
+    anonymous.y = 5.0
+    anonymous.pressure_pipe_row_identity = "flow2-row4"
+
+    downstream = _make_node("2", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.8)
+    downstream.x = 45.0
+    downstream.y = 5.0
+    downstream.velocity = 1.1
+    downstream.water_depth = 1.1
+    downstream.section_params = {"B": 2.0, "m": 1.2}
+
+    nodes = [upstream, named_inlet, named_outlet, anonymous, downstream]
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        nodes,
+        settings=_make_settings("干管"),
+    )
+
+    assert [group.display_name for group in groups] == ["半兽人", "流量段2 第4行有压管道"]
+
+    named_group = groups[0]
+    assert named_group.group_mode == "named_group"
+    assert named_group.name == "半兽人"
+    assert named_group.display_name == "半兽人"
+    assert named_group.storage_key == "半兽人"
+    assert named_group.identity == "2::半兽人"
+
+    anonymous_group = groups[1]
+    assert anonymous_group.group_mode == "unnamed_row_segment"
+    assert anonymous_group.name == ""
+    assert anonymous_group.display_name == "流量段2 第4行有压管道"
+    assert anonymous_group.storage_key == "flow2-row4"
+    assert anonymous_group.identity == "flow2-row4"
+    assert anonymous_group.target_row_index == 3
+    assert anonymous_group.upstream_row_index == 2
+    assert anonymous_group.row_indices == [3]
+    assert anonymous_group.rows == [anonymous]
+    assert len(anonymous_group.ip_points) == 2
+    assert anonymous_group.ip_points[0]["x"] == 20.0
+    assert anonymous_group.ip_points[1]["x"] == 30.0
+
+
+def test_extract_dialog_pipe_groups_skips_unnamed_regular_pressure_pipe_rows_for_non_xxpipe():
+    upstream = _make_node("3", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.2)
+    upstream.x = 0.0
+    upstream.y = 0.0
+
+    anonymous = _make_node("3", "", "有压管道", InOutType.NORMAL, diameter=0.8, flow=1.2)
+    anonymous.x = 12.0
+    anonymous.y = 0.0
+    anonymous.pressure_pipe_row_identity = "flow3-row2"
+
+    nodes = [upstream, anonymous]
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        nodes,
+        settings=_make_settings("支渠"),
+    )
+
+    assert groups == []
+
+
+def test_extract_dialog_pipe_groups_builds_fallback_identity_for_unnamed_row():
+    upstream = _make_node("5", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=2.0)
+    upstream.x = 1.0
+    upstream.y = 1.0
+
+    anonymous = _make_node("5", "", "有压管道", InOutType.NORMAL, diameter=1.1, flow=2.0)
+    anonymous.x = 9.0
+    anonymous.y = 4.0
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [upstream, anonymous],
+        settings=_make_settings("总干管"),
+    )
+
+    assert len(groups) == 1
+    assert groups[0].name == ""
+    assert groups[0].display_name == "流量段5 第2行有压管道"
+    assert groups[0].storage_key == "flow5-row2"
+    assert groups[0].identity == "flow5-row2"
+
+
+def test_extract_dialog_pipe_groups_downstream_reference_stops_at_first_regular_row():
+    upstream = _make_node("6", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.6)
+    upstream.x = 0.0
+    upstream.y = 0.0
+    upstream.velocity = 0.8
+    upstream.water_depth = 1.0
+    upstream.section_params = {"B": 2.0, "m": 1.0}
+
+    anonymous = _make_node("6", "", "有压管道", InOutType.NORMAL, diameter=0.9, flow=1.6)
+    anonymous.x = 10.0
+    anonymous.y = 0.0
+    anonymous.pressure_pipe_row_identity = "flow6-row2"
+
+    next_pressure_pipe = _make_node("6", "另一段", "顶管", InOutType.INLET, diameter=0.9, flow=1.6)
+    next_pressure_pipe.x = 18.0
+    next_pressure_pipe.y = 0.0
+
+    later_open_channel = _make_node("6", "后续明渠", "明渠-梯形", InOutType.NORMAL, flow=1.6)
+    later_open_channel.x = 30.0
+    later_open_channel.y = 0.0
+    later_open_channel.velocity = 1.4
+    later_open_channel.water_depth = 0.9
+    later_open_channel.section_params = {"B": 1.8, "m": 1.2}
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [upstream, anonymous, next_pressure_pipe, later_open_channel],
+        settings=_make_settings("分干管"),
+    )
+
+    anonymous_group = groups[0]
+    assert anonymous_group.group_mode == "unnamed_row_segment"
+    assert anonymous_group.downstream_velocity == 0.0
+    assert anonymous_group.downstream_section_params == {}

@@ -282,6 +282,7 @@ def _make_basic_panel(module):
     panel._fval = lambda _widget, default=0.0: default
     panel._parse_flow_values = lambda _text: [5.0]
     panel.design_flow_edit = SimpleNamespace(text=lambda: "5.0")
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支管")
     panel.turn_radius_edit = object()
     panel.roughness_edit = object()
     return panel
@@ -582,6 +583,75 @@ def test_build_nodes_from_table_preserves_unnamed_pressure_pipe_display_loss_wit
     assert getattr(nodes[0], "pressure_pipe_row_identity", "") == "flow2-row1"
     assert getattr(nodes[0], "head_loss_siphon", 0.0) == 0.0
     assert getattr(nodes[0], "_pressure_pipe_display_loss", 0.0) == 0.0315
+
+
+def test_update_table_from_nodes_full_impl_hides_row_level_pressure_pipe_loss_outside_xxpipe():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支渠")
+
+    anonymous_pipe = _make_node(
+        structure_type=_FakeStructureType.PRESSURE_PIPE,
+        is_pressure_pipe=True,
+        head_loss_bend=0.0100,
+        head_loss_friction=0.0215,
+        head_loss_total=0.0315,
+        get_structure_type_str=lambda: "有压管道",
+        get_in_out_str=lambda: "",
+    )
+
+    module.WaterProfilePanel._update_table_from_nodes_full_impl(panel, [anonymous_pipe])
+
+    assert panel.node_table.item(0, 38).text() == "-"
+    payload = panel.node_table.item(0, 0).data(module.Qt.UserRole)
+    assert module.PRESSURE_PIPE_ROW_ID_ROLE_KEY not in payload
+
+
+def test_build_nodes_from_table_ignores_row_level_pressure_pipe_display_loss_outside_xxpipe():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支渠")
+    module.CALCULATOR_AVAILABLE = True
+
+    class _BuildNode:
+        def __init__(self):
+            self.section_params = {}
+            self.is_transition = False
+            self.is_auto_inserted_channel = False
+            self.is_diversion_gate = False
+            self.is_inverted_siphon = False
+            self.is_pressure_pipe = False
+            self.in_out = None
+            self.external_head_loss = None
+
+    module.ChannelNode = _BuildNode
+    module.StructureType = _FakeStructureType
+    module.InOutType = _FakeInOutType
+
+    panel.node_table.setRowCount(1)
+    for col, text in (
+        (0, "2"),
+        (1, ""),
+        (2, "有压管道"),
+        (24, "0.014"),
+        (25, "3000"),
+        (26, "1.8"),
+        (34, "0.0100"),
+        (35, "0.0215"),
+        (38, "0.0315"),
+        (39, "0.0315"),
+    ):
+        panel.node_table.setItem(0, col, _FakeItem(text))
+    panel.node_table.item(0, 0).setData(
+        module.Qt.UserRole,
+        {"_pressure_pipe_row_identity": "flow2-row1"},
+    )
+
+    nodes = module.WaterProfilePanel._build_nodes_from_table(panel)
+
+    assert len(nodes) == 1
+    assert getattr(nodes[0], "head_loss_siphon", 0.0) == 0.0
+    assert getattr(nodes[0], "_pressure_pipe_display_loss", 0.0) == 0.0
 
 
 def test_import_from_batch_persists_use_increase_payload_for_open_channel_rows():

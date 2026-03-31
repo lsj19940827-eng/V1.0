@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "推求水面�
 from models.data_models import ChannelNode, ProjectSettings
 from models.enums import StructureType, InOutType
 from core.hydraulic_calc import HydraulicCalculator
+from core.pressure_pipe_calc import calc_bend_local_loss, calc_friction_loss
 
 
 def test_external_head_loss_included_in_total():
@@ -342,6 +343,256 @@ def test_multiple_nodes_with_external_loss():
         f"预期: {expected_total2:.3f}, 实际: {outlet2.head_loss_total:.3f}"
 
 
+def test_unnamed_pressure_pipe_row_uses_fmb_friction_loss():
+    """
+    测试空名称普通有压管道行按 FMB 公式计算沿程损失。
+    """
+    upstream = ChannelNode()
+    upstream.structure_type = StructureType.from_string("明渠-梯形")
+    upstream.flow_section = "渠道1"
+    upstream.section_params = {"b": 2.0, "m": 1.5, "h": 1.6}
+    upstream.station_MC = 50.0
+    upstream.velocity = 1.2
+    upstream.water_depth = 1.6
+    upstream.roughness = 0.014
+
+    anonymous_pipe = ChannelNode()
+    anonymous_pipe.structure_type = StructureType.from_string("有压管道")
+    anonymous_pipe.name = ""
+    anonymous_pipe.is_pressure_pipe = True
+    anonymous_pipe.flow_section = "渠道1"
+    anonymous_pipe.section_params = {
+        "D": 1.0,
+        "pipe_material": "预应力钢筒混凝土管",
+    }
+    anonymous_pipe.flow = 1.8
+    anonymous_pipe.station_MC = 150.0
+    anonymous_pipe.velocity = 1.8
+    anonymous_pipe.water_depth = 1.0
+    anonymous_pipe.slope_i = 1.0 / 1000.0
+
+    settings = ProjectSettings()
+    settings.channel_level = "支管"
+    settings.start_water_level = 100.0
+    calc = HydraulicCalculator(settings)
+
+    hf = calc.calculate_friction_loss(upstream, anonymous_pipe)
+    expected_hf, _details = calc_friction_loss(
+        anonymous_pipe.flow,
+        anonymous_pipe.section_params["D"],
+        anonymous_pipe.station_MC - upstream.station_MC,
+        anonymous_pipe.section_params["pipe_material"],
+    )
+
+    assert abs(hf - expected_hf) < 1e-6, (
+        f"空名称普通有压管道行应走 FMB 公式。预期 {expected_hf:.6f}，实际 {hf:.6f}"
+    )
+
+
+def test_unnamed_pressure_pipe_row_updates_total_loss_and_water_level():
+    """
+    测试空名称普通有压管道行的行级损失会进入总损失和水位递推。
+    """
+    start_channel = ChannelNode()
+    start_channel.structure_type = StructureType.from_string("明渠-梯形")
+    start_channel.flow_section = "渠道1"
+    start_channel.section_params = {"b": 2.5, "m": 1.5, "h": 1.8}
+    start_channel.station_MC = 50.0
+    start_channel.velocity = 1.4
+    start_channel.water_depth = 1.8
+    start_channel.roughness = 0.014
+
+    anonymous_pipe = ChannelNode()
+    anonymous_pipe.structure_type = StructureType.from_string("有压管道")
+    anonymous_pipe.name = ""
+    anonymous_pipe.is_pressure_pipe = True
+    anonymous_pipe.flow_section = "渠道1"
+    anonymous_pipe.section_params = {
+        "D": 1.0,
+        "pipe_material": "预应力钢筒混凝土管",
+    }
+    anonymous_pipe.flow = 1.8
+    anonymous_pipe.station_MC = 150.0
+    anonymous_pipe.velocity = 2.0
+    anonymous_pipe.water_depth = 1.0
+    anonymous_pipe.turn_radius = 3.0
+    anonymous_pipe.turn_angle = 45.0
+
+    downstream = ChannelNode()
+    downstream.structure_type = StructureType.from_string("明渠-梯形")
+    downstream.flow_section = "渠道1"
+    downstream.section_params = {"b": 2.2, "m": 1.5, "h": 1.6}
+    downstream.station_MC = 250.0
+    downstream.velocity = 1.3
+    downstream.water_depth = 1.6
+    downstream.roughness = 0.014
+
+    nodes = [start_channel, anonymous_pipe, downstream]
+
+    settings = ProjectSettings()
+    settings.channel_level = "支管"
+    settings.start_water_level = 100.0
+    calc = HydraulicCalculator(settings)
+
+    for node in nodes:
+        calc.fill_section_params(node)
+
+    calc.calculate_water_profile(nodes, method="forward")
+
+    expected_hf, _details = calc_friction_loss(
+        anonymous_pipe.flow,
+        anonymous_pipe.section_params["D"],
+        anonymous_pipe.station_MC - start_channel.station_MC,
+        anonymous_pipe.section_params["pipe_material"],
+    )
+    _xi, expected_bend, _bend_details = calc_bend_local_loss(
+        anonymous_pipe.section_params["D"],
+        anonymous_pipe.turn_radius,
+        anonymous_pipe.turn_angle,
+        anonymous_pipe.velocity,
+    )
+
+    assert abs(anonymous_pipe.head_loss_friction - expected_hf) < 1e-6
+    assert abs(anonymous_pipe.head_loss_bend - expected_bend) < 1e-6
+    assert anonymous_pipe.head_loss_siphon == 0.0
+    assert abs(
+        anonymous_pipe.head_loss_total
+        - (anonymous_pipe.head_loss_friction + anonymous_pipe.head_loss_bend + anonymous_pipe.head_loss_local)
+    ) < 1e-6
+    assert abs(
+        anonymous_pipe.water_level
+        - (settings.start_water_level - anonymous_pipe.head_loss_total)
+    ) < 1e-6
+
+
+def test_tunnel_friction_loss_still_uses_bottom_slope():
+    """
+    测试隧洞沿程损失仍保持底坡乘长度口径。
+    """
+    upstream = ChannelNode()
+    upstream.structure_type = StructureType.from_string("明渠-梯形")
+    upstream.station_MC = 50.0
+    upstream.arc_length = 0.0
+    upstream.slope_i = 1.0 / 2000.0
+
+    tunnel = ChannelNode()
+    tunnel.structure_type = StructureType.from_string("隧洞-圆形")
+    tunnel.station_MC = 150.0
+    tunnel.arc_length = 0.0
+    tunnel.slope_i = 1.0 / 2500.0
+
+    settings = ProjectSettings()
+    calc = HydraulicCalculator(settings)
+
+    hf = calc.calculate_friction_loss(upstream, tunnel)
+    expected = (1.0 / 2500.0) * 100.0
+
+    assert abs(hf - expected) < 1e-6, f"隧洞应保持底坡法。预期 {expected:.6f}，实际 {hf:.6f}"
+
+
+def test_unnamed_pressure_pipe_row_outside_xxpipe_keeps_original_scope():
+    """
+    测试匿名普通有压管道行的新口径只在 xx管 渠道级别下生效。
+    """
+    upstream = ChannelNode()
+    upstream.structure_type = StructureType.from_string("明渠-梯形")
+    upstream.station_MC = 50.0
+    upstream.arc_length = 0.0
+    upstream.slope_i = 1.0 / 2000.0
+
+    anonymous_pipe = ChannelNode()
+    anonymous_pipe.structure_type = StructureType.from_string("有压管道")
+    anonymous_pipe.name = ""
+    anonymous_pipe.is_pressure_pipe = True
+    anonymous_pipe.section_params = {
+        "D": 1.0,
+        "pipe_material": "预应力钢筒混凝土管",
+    }
+    anonymous_pipe.flow = 1.8
+    anonymous_pipe.station_MC = 150.0
+    anonymous_pipe.arc_length = 0.0
+    anonymous_pipe.slope_i = 1.0 / 1000.0
+
+    settings = ProjectSettings()
+    settings.channel_level = "支渠"
+    calc = HydraulicCalculator(settings)
+
+    hf = calc.calculate_friction_loss(upstream, anonymous_pipe)
+    expected = anonymous_pipe.slope_i * (anonymous_pipe.station_MC - upstream.station_MC)
+
+    assert abs(hf - expected) < 1e-6
+    assert anonymous_pipe.friction_calc_details.get("method") == "slope"
+
+
+def test_unnamed_pressure_pipe_window_override_takes_priority():
+    """
+    测试匿名普通有压管道行应用窗口结果后，静默重算仍优先使用窗口覆盖。
+    """
+    upstream = ChannelNode()
+    upstream.structure_type = StructureType.from_string("明渠-梯形")
+    upstream.flow_section = "渠道1"
+    upstream.section_params = {"b": 2.0, "m": 1.5, "h": 1.5}
+    upstream.station_MC = 10.0
+    upstream.velocity = 1.2
+    upstream.water_depth = 1.5
+    upstream.roughness = 0.014
+
+    anonymous_pipe = ChannelNode()
+    anonymous_pipe.structure_type = StructureType.from_string("有压管道")
+    anonymous_pipe.name = ""
+    anonymous_pipe.is_pressure_pipe = True
+    anonymous_pipe.flow_section = "渠道1"
+    anonymous_pipe.section_params = {
+        "D": 1.0,
+        "pipe_material": "预应力钢筒混凝土管",
+        "pressure_pipe_window_override": {
+            "enabled": True,
+            "identity": "flow渠道1-row2",
+            "friction_loss": 0.21,
+            "total_bend_loss": 0.08,
+            "local_loss": 0.05,
+            "inlet_transition_loss": 0.02,
+            "outlet_transition_loss": 0.03,
+            "total_head_loss": 0.34,
+        },
+    }
+    anonymous_pipe.pressure_pipe_window_override = dict(
+        anonymous_pipe.section_params["pressure_pipe_window_override"]
+    )
+    anonymous_pipe.flow = 1.6
+    anonymous_pipe.station_MC = 60.0
+    anonymous_pipe.turn_radius = 3.5
+    anonymous_pipe.turn_angle = 45.0
+    anonymous_pipe.water_depth = 1.0
+
+    downstream = ChannelNode()
+    downstream.structure_type = StructureType.from_string("明渠-梯形")
+    downstream.flow_section = "渠道1"
+    downstream.section_params = {"b": 2.0, "m": 1.5, "h": 1.5}
+    downstream.station_MC = 110.0
+    downstream.velocity = 1.1
+    downstream.water_depth = 1.5
+    downstream.roughness = 0.014
+
+    settings = ProjectSettings()
+    settings.channel_level = "支管"
+    settings.start_water_level = 100.0
+    calc = HydraulicCalculator(settings)
+
+    nodes = [upstream, anonymous_pipe, downstream]
+    for node in nodes:
+        calc.fill_section_params(node)
+
+    calc.calculate_water_profile(nodes, method="forward")
+
+    assert abs(anonymous_pipe.head_loss_friction - 0.21) < 1e-9
+    assert abs(anonymous_pipe.head_loss_bend - 0.08) < 1e-9
+    assert abs(anonymous_pipe.head_loss_local - 0.05) < 1e-9
+    assert anonymous_pipe.head_loss_siphon == 0.0
+    assert abs(anonymous_pipe.head_loss_total - 0.34) < 1e-9
+    assert abs(anonymous_pipe.water_level - (settings.start_water_level - 0.34)) < 1e-9
+
+
 if __name__ == "__main__":
     # 运行测试
     test_external_head_loss_included_in_total()
@@ -355,5 +606,14 @@ if __name__ == "__main__":
     
     test_multiple_nodes_with_external_loss()
     print("✓ test_multiple_nodes_with_external_loss")
-    
+
+    test_unnamed_pressure_pipe_row_uses_fmb_friction_loss()
+    print("✓ test_unnamed_pressure_pipe_row_uses_fmb_friction_loss")
+
+    test_unnamed_pressure_pipe_row_updates_total_loss_and_water_level()
+    print("✓ test_unnamed_pressure_pipe_row_updates_total_loss_and_water_level")
+
+    test_tunnel_friction_loss_still_uses_bottom_slope()
+    print("✓ test_tunnel_friction_loss_still_uses_bottom_slope")
+
     print("\n所有单元测试通过！")

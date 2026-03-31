@@ -407,6 +407,59 @@ def test_pressure_pipe_calculator_skips_anonymous_pressure_pipe_rows():
     assert any("未找到有压管道数据组" in rec["content"] for rec in _FakeInfoBar.records)
 
 
+def test_pressure_pipe_calculator_opens_dialog_for_xxpipe_anonymous_row_segments():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    module.CALCULATOR_AVAILABLE = True
+    module.InfoBar = _FakeInfoBar
+    module.InfoBarPosition = SimpleNamespace(TOP="top")
+    module.QDialog = SimpleNamespace(Accepted=1)
+
+    nodes = _make_pressure_pipe_nodes()
+    panel = _build_minimal_panel(WaterProfilePanel, nodes)
+    panel._transition_topology_prepared = True
+    panel._build_settings = lambda: SimpleNamespace(channel_level="支管")
+    panel._extract_pressure_pipe_dialog_groups = lambda _nodes, settings=None: [
+        SimpleNamespace(
+            name="",
+            display_name="流量段1 第2行有压管道",
+            storage_key="flow1-row2",
+            identity="flow1-row2",
+            group_mode="unnamed_row_segment",
+            rows=[nodes[-1]],
+            row_indices=[1],
+            target_row_index=1,
+            upstream_row_index=0,
+            ip_points=[{"x": 0.0, "y": 0.0}, {"x": 10.0, "y": 0.0}],
+            design_flow=2.4,
+            diameter=1.2,
+            material_key="预应力钢筒混凝土管",
+            inlet_transition_form="反弯扭曲面",
+            outlet_transition_form="反弯扭曲面",
+            inlet_transition_zeta=0.10,
+            outlet_transition_zeta=0.20,
+            upstream_velocity=1.0,
+            downstream_velocity=1.0,
+            is_valid=lambda: True,
+            get_validation_message=lambda: "",
+        )
+    ]
+    opened = []
+    saved_dialog = _install_pressure_pipe_dialog_stub(opened)
+    _FakeInfoBar.reset()
+    try:
+        WaterProfilePanel._open_pressure_pipe_calculator(panel)
+    finally:
+        if saved_dialog is None:
+            sys.modules.pop("app_渠系计算前端.water_profile.water_profile_dialogs", None)
+        else:
+            sys.modules["app_渠系计算前端.water_profile.water_profile_dialogs"] = saved_dialog
+
+    assert len(opened) == 1
+    assert opened[0]["pipe_groups"][0].storage_key == "flow1-row2"
+    assert opened[0]["pipe_groups"][0].display_name == "流量段1 第2行有压管道"
+
+
 def test_mark_section_results_stale_clears_transition_topology_prepared_flag():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
