@@ -306,6 +306,86 @@ def test_unnamed_pressure_pipe_around_tunnel_inserts_transition_rows_after_prepr
     assert nodes[-1].in_out == InOutType.NORMAL, "空名称有压管道原始进出口状态仍应保持 NORMAL"
 
 
+def test_xxpipe_unnamed_pressure_pipe_next_to_directional_drill_has_no_transition_gap():
+    """
+    验证 xx管 模式下，空名称普通有压管道紧邻定向钻时不再识别渐变段/补段。
+    """
+    anonymous_pipe = ChannelNode()
+    anonymous_pipe.flow_section = "2"
+    anonymous_pipe.structure_type = StructureType.from_string("有压管道")
+    anonymous_pipe.name = ""
+    anonymous_pipe.in_out = InOutType.NORMAL
+    anonymous_pipe.section_params = {"D": 1.0}
+    anonymous_pipe.station_MC = 100.0
+
+    drill_inlet = ChannelNode()
+    drill_inlet.flow_section = "2"
+    drill_inlet.structure_type = StructureType.from_string("定向钻")
+    drill_inlet.name = "半兽人"
+    drill_inlet.in_out = InOutType.INLET
+    drill_inlet.section_params = {"D": 1.0}
+    drill_inlet.station_MC = 160.0
+
+    settings = ProjectSettings()
+    settings.channel_level = "支管"
+    calculator = WaterProfileCalculator(settings)
+
+    result = calculator._should_insert_open_channel(anonymous_pipe, drill_inlet, [anonymous_pipe, drill_inlet])
+
+    assert result["need_transition_1"] == False, "xx管 匿名有压管道紧邻定向钻时不应插出口渐变段"
+    assert result["need_transition_2"] == False, "xx管 匿名有压管道紧邻定向钻时不应插进口渐变段"
+    assert result["need_open_channel"] == False, "xx管 匿名有压管道紧邻定向钻时不应再弹补段"
+
+
+def test_xxpipe_prescan_and_insert_only_keep_tunnel_side_gaps():
+    """
+    验证 xx管 模式下，整组顺序里只保留匿名有压管道与隧洞之间的两处补段。
+    """
+    def _make_node(flow_section, structure, station, name="", in_out=InOutType.NORMAL, diameter=1.0):
+        node = ChannelNode()
+        node.flow_section = str(flow_section)
+        node.structure_type = StructureType.from_string(structure)
+        node.name = name
+        node.in_out = in_out
+        node.station_MC = station
+        node.section_params = {"D": diameter}
+        return node
+
+    nodes = [
+        _make_node(1, "有压管道", 100.0, "", InOutType.NORMAL, 1.5),
+        _make_node(1, "隧洞-圆形", 160.0, "纯牛马", InOutType.INLET, 2.0),
+        _make_node(1, "隧洞-圆形", 220.0, "纯牛马", InOutType.OUTLET, 2.0),
+        _make_node(1, "有压管道", 280.0, "", InOutType.NORMAL, 1.5),
+        _make_node(2, "有压管道", 330.0, "", InOutType.NORMAL, 1.0),
+        _make_node(2, "定向钻", 390.0, "半兽人", InOutType.INLET, 1.0),
+        _make_node(2, "定向钻", 450.0, "半兽人", InOutType.OUTLET, 1.0),
+        _make_node(2, "有压管道", 510.0, "", InOutType.NORMAL, 1.0),
+        _make_node(3, "有压管道", 560.0, "", InOutType.NORMAL, 0.8),
+        _make_node(3, "顶管", 620.0, "饿了么", InOutType.INLET, 0.8),
+        _make_node(3, "顶管", 680.0, "饿了么", InOutType.OUTLET, 0.8),
+        _make_node(3, "有压管道", 740.0, "", InOutType.NORMAL, 0.8),
+    ]
+
+    settings = ProjectSettings()
+    settings.channel_level = "支管"
+    calculator = WaterProfileCalculator(settings)
+
+    calculator.preprocess_nodes(nodes)
+    gaps = calculator.pre_scan_open_channels(nodes)
+    result_nodes = calculator.identify_and_insert_transitions(nodes)
+
+    transition_rows = [node for node in result_nodes if getattr(node, "is_transition", False)]
+    open_channel_rows = [node for node in result_nodes if getattr(node, "is_auto_inserted_channel", False)]
+
+    assert len(gaps) == 2, "xx管 匿名有压管道整组里，预扫描补段只应保留纯牛马两侧"
+    assert {(gap["prev_name"], gap["next_name"]) for gap in gaps} == {
+        ("", "纯牛马"),
+        ("纯牛马", ""),
+    }, "预扫描补段应只落在纯牛马隧洞前后"
+    assert len(open_channel_rows) == 0, "无可复制明渠参考时，不应额外插入补段行"
+    assert len(transition_rows) == 2, "实际插入时应只保留纯牛马前后两条渐变段"
+
+
 if __name__ == "__main__":
     import pytest
     

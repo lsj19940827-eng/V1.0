@@ -22,6 +22,7 @@ if _kernel_dir not in sys.path:
 
 from models.data_models import ChannelNode, OpenChannelParams, ProjectSettings
 from models.enums import StructureType, InOutType
+from config.constants import XXPIPE_CHANNEL_LEVEL_OPTIONS
 from core.geometry_calc import GeometryCalculator
 from core.hydraulic_calc import HydraulicCalculator
 from 矩形暗涵设计 import calculate_rectangular_outputs
@@ -86,6 +87,61 @@ class WaterProfileCalculator:
         if not self.is_pressure_pipe(node):
             return False
         return not str(getattr(node, "name", "") or "").strip()
+
+    def _is_xxpipe_channel_level(self) -> bool:
+        """判断当前项目是否处于 xx管 渠道级别。"""
+        channel_level = str(getattr(self.settings, "channel_level", "") or "").strip()
+        return channel_level in set(XXPIPE_CHANNEL_LEVEL_OPTIONS)
+
+    def _is_unnamed_regular_pressure_pipe_node(self, node: ChannelNode) -> bool:
+        """判断节点是否为 xx管 模式下的空名称普通有压管道行。"""
+        if not node or not getattr(node, "structure_type", None):
+            return False
+        structure_text = (
+            node.structure_type.value
+            if hasattr(node.structure_type, "value")
+            else str(node.structure_type)
+        )
+        if structure_text != StructureType.PRESSURE_PIPE.value:
+            return False
+        return not str(getattr(node, "name", "") or "").strip()
+
+    def _should_skip_xxpipe_unnamed_pressure_pipe_gap(
+        self,
+        node1: ChannelNode,
+        node2: ChannelNode,
+    ) -> bool:
+        """
+        判断 xx管 匿名普通有压管道相邻缺口是否应直接跳过插段。
+
+        仅收敛本次问题场景：
+        - 匿名普通有压管道 ↔ 定向钻
+        - 匿名普通有压管道 ↔ 顶管
+        - 匿名普通有压管道 ↔ 匿名普通有压管道
+        """
+        if not self._is_xxpipe_channel_level():
+            return False
+        if not (self.is_pressure_pipe(node1) and self.is_pressure_pipe(node2)):
+            return False
+
+        node1_is_unnamed_regular = self._is_unnamed_regular_pressure_pipe_node(node1)
+        node2_is_unnamed_regular = self._is_unnamed_regular_pressure_pipe_node(node2)
+        if not (node1_is_unnamed_regular or node2_is_unnamed_regular):
+            return False
+
+        if node1_is_unnamed_regular and node2_is_unnamed_regular:
+            return True
+
+        other_node = node2 if node1_is_unnamed_regular else node1
+        other_structure = (
+            other_node.structure_type.value
+            if getattr(other_node, "structure_type", None) and hasattr(other_node.structure_type, "value")
+            else str(getattr(other_node, "structure_type", "") or "")
+        )
+        return other_structure in {
+            StructureType.DIRECTIONAL_DRILL.value,
+            StructureType.PIPE_JACKING.value,
+        }
 
     def _matches_gap_outlet_role(self, node: ChannelNode) -> bool:
         """判断节点在插渐变段阶段是否可临时视为出口边界。"""
@@ -907,6 +963,11 @@ class WaterProfileCalculator:
             return result
         if self._is_diversion_gate_type(node2.structure_type):
             return result
+
+        # xx管 模式下，匿名普通有压管道紧邻定向钻/顶管/匿名普通有压管道时，
+        # 这些行都按同一段承压占位链路处理，不再额外插入渐变段或补段。
+        if self._should_skip_xxpipe_unnamed_pressure_pipe_gap(node1, node2):
+            return result
         
         # 特殊情况：有压管道 → 有压管道
         # 如果两个节点都是有压管道，需要判断是否属于同一建筑物
@@ -982,10 +1043,11 @@ class WaterProfileCalculator:
 
         # 渐变段长度压缩处理
         if total_transition_length > result['distance'] and result['distance'] > 0:
-            # 当总长度超过可用里程时，合并为单个渐变段
+            # 当总长度超过可用里程时，合并为单个渐变段。
+            # 这里只合并采用长度，不改变两侧原本“需要渐变段”的语义，
+            # 这样预扫描、直接判断和最终插入的口径保持一致。
             result['transition_length_1'] = result['distance']
             result['transition_length_2'] = 0.0
-            result['need_transition_2'] = False
             result['use_merged_transition'] = True
         else:
             result['use_merged_transition'] = False

@@ -68,7 +68,7 @@ def test_merged_transition_when_both_exceed():
     # 如果总长度超过可用里程，应该合并为单个渐变段
     if result.get('use_merged_transition'):
         assert result['need_transition_1'] == True
-        assert result['need_transition_2'] == False
+        assert result['need_transition_2'] == True
         assert result['transition_length_1'] == 10.0
         assert result['transition_length_2'] == 0.0
         assert result['available_length'] == 0.0
