@@ -916,7 +916,7 @@ class HydraulicCalculator:
             return 0.0
         
         # 有压管道：使用外部导入的水头损失
-        if sv == "有压管道":
+        if StructureType.is_pressure_pipe_like_str(sv) or getattr(node, 'is_pressure_pipe', False):
             if node.name in self.pressure_pipe_losses:
                 return self.pressure_pipe_losses[node.name]
             if node.external_head_loss is not None:
@@ -1665,12 +1665,17 @@ class HydraulicCalculator:
         # 根据前后节点结构类型判定渐变段类型（进口/出口相对于特殊建筑物而言）
         sv_next = next_node.structure_type.value if next_node.structure_type else ""
         sv_prev = prev_node.structure_type.value if prev_node.structure_type else ""
-        _special_kw = ("隧洞", "渡槽", "倒虹吸", "有压管道", "暗涵")
-        if any(kw in sv_next for kw in _special_kw):
+        _special_kw = ("隧洞", "渡槽", "倒虹吸", "暗涵")
+        if any(kw in sv_next for kw in _special_kw) or StructureType.is_pressure_pipe_like_str(sv_next):
             transition_type = "进口"
         else:
             transition_type = "出口"
-        _pressurized_adjacent = ("倒虹吸" in sv_prev) or ("倒虹吸" in sv_next) or ("有压管道" in sv_prev) or ("有压管道" in sv_next)
+        _pressurized_adjacent = (
+            ("倒虹吸" in sv_prev)
+            or ("倒虹吸" in sv_next)
+            or StructureType.is_pressure_pipe_like_str(sv_prev)
+            or StructureType.is_pressure_pipe_like_str(sv_next)
+        )
         if transition_type == "进口":
             if _pressurized_adjacent:
                 transition_form = getattr(self.settings, 'siphon_transition_inlet_form', "反弯扭曲面") or "反弯扭曲面"
@@ -1699,7 +1704,7 @@ class HydraulicCalculator:
         # 计算渐变段长度
         # 倒虹吸/有压管道直接按水深倍数确定（GB 50288-2018 §10.2.4），其他结构用基础公式
         _siphon_adjacent = ("倒虹吸" in sv_prev) or ("倒虹吸" in sv_next)
-        _ppipe_adjacent = ("有压管道" in sv_prev) or ("有压管道" in sv_next)
+        _ppipe_adjacent = StructureType.is_pressure_pipe_like_str(sv_prev) or StructureType.is_pressure_pipe_like_str(sv_next)
         if _siphon_adjacent or _ppipe_adjacent:
             _h_ch = prev_node.water_depth if transition_type == "进口" else next_node.water_depth
             if _h_ch <= 0:
@@ -2623,17 +2628,29 @@ class HydraulicCalculator:
         """
         # 1. 确定渐变段类型和形式（进口/出口相对于特殊建筑物而言）
         sv_next = next_node.structure_type.value if next_node.structure_type else ""
-        _special_kw = ("隧洞", "渡槽", "倒虹吸", "有压管道", "暗涵")
-        if any(kw in sv_next for kw in _special_kw):
+        _special_kw = ("隧洞", "渡槽", "倒虹吸", "暗涵")
+        if any(kw in sv_next for kw in _special_kw) or StructureType.is_pressure_pipe_like_str(sv_next):
             transition_type = "进口"
-            _pressurized_adjacent = ("倒虹吸" in sv_next) or ("倒虹吸" in (prev_node.structure_type.value if prev_node.structure_type else "")) or ("有压管道" in sv_next) or ("有压管道" in (prev_node.structure_type.value if prev_node.structure_type else ""))
+            _prev_sv = prev_node.structure_type.value if prev_node.structure_type else ""
+            _pressurized_adjacent = (
+                ("倒虹吸" in sv_next)
+                or ("倒虹吸" in _prev_sv)
+                or StructureType.is_pressure_pipe_like_str(sv_next)
+                or StructureType.is_pressure_pipe_like_str(_prev_sv)
+            )
             if _pressurized_adjacent:
                 transition_form = getattr(settings, 'siphon_transition_inlet_form', "反弯扭曲面") or "反弯扭曲面"
             else:
                 transition_form = getattr(settings, 'transition_inlet_form', "曲线形反弯扭曲面") or "曲线形反弯扭曲面"
         else:
             transition_type = "出口"
-            _pressurized_adjacent = ("倒虹吸" in sv_next) or ("倒虹吸" in (prev_node.structure_type.value if prev_node.structure_type else "")) or ("有压管道" in sv_next) or ("有压管道" in (prev_node.structure_type.value if prev_node.structure_type else ""))
+            _prev_sv = prev_node.structure_type.value if prev_node.structure_type else ""
+            _pressurized_adjacent = (
+                ("倒虹吸" in sv_next)
+                or ("倒虹吸" in _prev_sv)
+                or StructureType.is_pressure_pipe_like_str(sv_next)
+                or StructureType.is_pressure_pipe_like_str(_prev_sv)
+            )
             if _pressurized_adjacent:
                 transition_form = getattr(settings, 'siphon_transition_outlet_form', "反弯扭曲面") or "反弯扭曲面"
             else:

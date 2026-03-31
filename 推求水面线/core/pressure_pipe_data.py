@@ -115,7 +115,10 @@ class PressurePipeDataExtractor:
                     continue
                 elif node.in_out == InOutType.OUTLET and unnamed_pending_inlet is not None:
                     # 找到配对的出口节点，分配默认名称
-                    name = f"有压管道{unnamed_counter}"
+                    name = PressurePipeDataExtractor._default_group_name(
+                        unnamed_pending_inlet or node,
+                        unnamed_counter,
+                    )
                     unnamed_counter += 1
                     
                     # 创建分组
@@ -142,7 +145,7 @@ class PressurePipeDataExtractor:
                     continue
                 else:
                     # 单独的无名出口节点，分配默认名称
-                    name = f"有压管道{unnamed_counter}"
+                    name = PressurePipeDataExtractor._default_group_name(node, unnamed_counter)
                     unnamed_counter += 1
             
             # 创建或获取分组（有名称的节点）
@@ -162,7 +165,7 @@ class PressurePipeDataExtractor:
         
         # 处理剩余的待配对进口节点
         if unnamed_pending_inlet is not None:
-            name = f"有压管道{unnamed_counter}"
+            name = PressurePipeDataExtractor._default_group_name(unnamed_pending_inlet, unnamed_counter)
             groups_dict[name] = PressurePipeGroup(name=name)
             group_order.append(name)
             
@@ -207,10 +210,17 @@ class PressurePipeDataExtractor:
         """
         if node.structure_type is None:
             return False
-        
-        # 检查结构形式字符串是否包含"有压管道"
+
         struct_str = str(node.structure_type.value) if hasattr(node.structure_type, 'value') else str(node.structure_type)
-        return "有压管道" in struct_str
+        return StructureType.is_pressure_pipe_like_str(struct_str) or getattr(node, 'is_pressure_pipe', False)
+
+    @staticmethod
+    def _default_group_name(node: ChannelNode, index: int) -> str:
+        struct_type = getattr(node, "structure_type", None)
+        struct_str = str(getattr(struct_type, "value", struct_type) or "").strip()
+        if StructureType.is_pressure_pipe_like_str(struct_str):
+            return f"{struct_str}{index}"
+        return f"有压管道{index}"
     
     @staticmethod
     def validate_pressure_pipe_groups(groups: List[PressurePipeGroup]) -> tuple:
@@ -254,7 +264,7 @@ class PressurePipeDataExtractor:
             if PressurePipeDataExtractor._is_pressure_pipe(node):
                 name = node.name.strip()
                 if not name:
-                    name = f"有压管道{unnamed_counter}"
+                    name = PressurePipeDataExtractor._default_group_name(node, unnamed_counter)
                     unnamed_counter += 1
                 if name and name not in seen:
                     names.append(name)

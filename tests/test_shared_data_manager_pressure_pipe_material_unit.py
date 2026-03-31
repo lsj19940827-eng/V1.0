@@ -50,3 +50,34 @@ def test_pressure_pipe_fields_are_preserved_in_shared_data_manager():
     assert abs(section_params["local_loss_ratio"] - 0.12) < 1e-12
     assert section_params["in_out_raw"] == "进"
 
+
+def test_pressure_pipe_like_results_preserve_original_xxpipe_section_type():
+    """定向钻/顶管应保留原工艺名，同时继续走有压管道语义。"""
+    manager = SharedDataManager()
+
+    for section_type in ("定向钻", "顶管"):
+        manager.clear_batch_results()
+        payload = [{
+            "success": True,
+            "section_type": section_type,
+            "is_pressure_pipe": True,
+            "flow_section": "2",
+            "building_name": f"{section_type}穿越段",
+            "coord_X": 451333.9116,
+            "coord_Y": 3047880.2791,
+            "Q": 1.55,
+            "n": 0.0,
+            "D": 1.4,
+            "turn_radius": 0.0,
+            "pipe_material": "钢管",
+            "local_loss_ratio": 0.0,
+            "in_out_raw": "进",
+        }]
+
+        count = manager.register_batch_results(payload)
+
+        assert count == 1
+        section = manager.get_batch_results()[0]
+        assert section.section_type == section_type
+        assert section.pipe_material == "钢管"
+

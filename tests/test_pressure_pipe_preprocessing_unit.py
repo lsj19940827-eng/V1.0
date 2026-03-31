@@ -184,6 +184,44 @@ def test_multiple_pressure_pipes_with_different_names():
     assert nodes[3].in_out == InOutType.OUTLET, "有压管道2 第二个节点应为出口"
 
 
+def test_unnamed_pressure_pipe_rows_do_not_pair_across_table():
+    """
+    空名称有压管道行应视为逐行独立管段，不参与全表首尾配对。
+    """
+    anon_before = ChannelNode()
+    anon_before.structure_type = StructureType.from_string("有压管道")
+    anon_before.name = ""
+    anon_before.section_params = {"D": 1.0}
+
+    named_inlet = ChannelNode()
+    named_inlet.structure_type = StructureType.from_string("定向钻")
+    named_inlet.name = "半兽人"
+    named_inlet.section_params = {"D": 1.0}
+
+    named_outlet = ChannelNode()
+    named_outlet.structure_type = StructureType.from_string("定向钻")
+    named_outlet.name = "半兽人"
+    named_outlet.section_params = {"D": 1.0}
+
+    anon_after = ChannelNode()
+    anon_after.structure_type = StructureType.from_string("有压管道")
+    anon_after.name = ""
+    anon_after.section_params = {"D": 1.0}
+
+    nodes = [anon_before, named_inlet, named_outlet, anon_after]
+
+    settings = ProjectSettings()
+    calculator = WaterProfileCalculator(settings)
+    calculator.preprocess_nodes(nodes)
+
+    assert nodes[0].is_pressure_pipe is True
+    assert nodes[3].is_pressure_pipe is True
+    assert nodes[0].in_out == InOutType.NORMAL, "空名称有压管道首行不应被误判为进口"
+    assert nodes[3].in_out == InOutType.NORMAL, "空名称有压管道末行不应被误判为出口"
+    assert nodes[1].in_out == InOutType.INLET, "命名定向钻首行仍应为进口"
+    assert nodes[2].in_out == InOutType.OUTLET, "命名定向钻末行仍应为出口"
+
+
 def test_pressure_pipe_with_siphon():
     """
     测试有压管道与倒虹吸共存

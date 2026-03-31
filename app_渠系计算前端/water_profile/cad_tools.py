@@ -2723,6 +2723,7 @@ def _make_pressurized_param_row(
 ):
     flow_section_idx = _parse_flow_section_index(flow_section)
     base_name = _normalize_pressurized_name(name, structure_kind)
+    parsed_dn_mm = _parse_positive_dn(dn_mm)
     fallback_display = (
         f"{base_name}-{_segment_label_from_index(flow_section_idx)}"
         if flow_section_idx
@@ -2733,7 +2734,8 @@ def _make_pressurized_param_row(
         "flow_section": flow_section_idx,
         "display_name": str(display_name or "").strip() or fallback_display,
         "pipe_material": str(pipe_material or "").strip() or "球墨铸铁管",
-        "DN_mm": _normalize_dn_mm(dn_mm, 1500),
+        "DN_mm": parsed_dn_mm if parsed_dn_mm is not None else _normalize_dn_mm(dn_mm, 1500),
+        "_has_valid_dn_mm": parsed_dn_mm is not None,
         "structure_kind": structure_kind,
     }
 
@@ -2764,6 +2766,47 @@ def _normalize_locked_velocity_value(value):
     if not math.isfinite(number) or number < 0:
         return None
     return round(number, 4)
+
+
+def _normalize_positive_flow_value(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
+
+
+def _row_has_valid_pressurized_dn_mm(row):
+    if not isinstance(row, dict):
+        return False
+    flag = row.get("_has_valid_dn_mm")
+    if flag is not None:
+        return bool(flag)
+    return _parse_positive_dn(row.get("DN_mm", row.get("dn_mm", row.get("dn")))) is not None
+
+
+def _backfill_pressure_pipe_velocity_from_q_and_dn(row):
+    if not isinstance(row, dict):
+        return None
+    if _normalize_locked_velocity_value(row.get("V")) is not None:
+        return _normalize_locked_velocity_value(row.get("V"))
+
+    q_value = _normalize_positive_flow_value(row.get("Q"))
+    dn_mm = _parse_positive_dn(row.get("DN_mm"))
+    if q_value is None or dn_mm is None or not _row_has_valid_pressurized_dn_mm(row):
+        return None
+
+    try:
+        from 推求水面线.core.pressure_pipe_calc import calc_pipe_velocity
+    except ImportError:
+        return None
+
+    velocity = _normalize_locked_velocity_value(calc_pipe_velocity(q_value, dn_mm / 1000.0))
+    if velocity is not None:
+        row["V"] = velocity
+    return velocity
 
 
 def _extract_pressurized_pipe_material(node):
@@ -3273,6 +3316,12 @@ def _apply_pressure_pipe_length_fallbacks(rows):
     return rows
 
 
+def _apply_pressure_pipe_velocity_fallbacks(rows):
+    for row in rows or []:
+        _backfill_pressure_pipe_velocity_from_q_and_dn(row)
+    return rows
+
+
 def _normalize_pressurized_cache_rows(rows, structure_kind, default_material="球墨铸铁管"):
     normalized = []
     for row in rows or []:
@@ -3288,6 +3337,8 @@ def _normalize_pressurized_cache_rows(rows, structure_kind, default_material="�
                 dn_mm=row.get("DN_mm", row.get("dn_mm", row.get("dn", 1500))),
                 display_name=row.get("display_name"),
             )
+            if "_has_valid_dn_mm" in row:
+                base_row["_has_valid_dn_mm"] = bool(row.get("_has_valid_dn_mm"))
             for key, value in row.items():
                 if key not in base_row:
                     base_row[key] = copy.deepcopy(value)
@@ -3320,6 +3371,7 @@ def _prepare_pressure_pipe_export_rows(rows, panel=None, calc_contexts=None):
     prepared_rows = _normalize_pressurized_cache_rows(rows, "pressure_pipe")
     _attach_pressure_pipe_calc_contexts_to_rows(prepared_rows, calc_contexts)
     _attach_pressure_pipe_export_results_to_rows(prepared_rows, panel=panel)
+    _apply_pressure_pipe_velocity_fallbacks(prepared_rows)
     _apply_pressure_pipe_length_fallbacks(prepared_rows)
     return prepared_rows
 
@@ -9248,6 +9300,22 @@ class SectionSummaryDialog(QDialog):
             if self._normalize_pressure_pipe_total_head_loss_value(row.get("total_head_loss")) is None
         ]
 
+    def _collect_pressure_pipe_missing_velocity_labels(self, rows):
+        if not rows:
+            return []
+        labels = []
+        for row in rows:
+            if _normalize_locked_velocity_value(row.get("V")) is not None:
+                continue
+            q_value = _normalize_positive_flow_value(row.get("Q"))
+            dn_ready = _parse_positive_dn(row.get("DN_mm")) is not None and _row_has_valid_pressurized_dn_mm(row)
+            if q_value is not None and dn_ready:
+                continue
+            label = row.get("display_name") or row.get("name") or ""
+            if label:
+                labels.append(label)
+        return labels
+
     def _collect_siphon_missing_velocity_labels(self, rows):
         if not rows:
             return []
@@ -9265,6 +9333,16 @@ class SectionSummaryDialog(QDialog):
             self,
             "提示",
             "以下倒虹吸缺少已算流速结果，本次导出将以“-”显示：\n" + "；".join(items),
+        )
+
+    def _warn_pressure_pipe_missing_velocity(self, rows):
+        items = [label for label in self._collect_pressure_pipe_missing_velocity_labels(rows) if label]
+        if not items:
+            return
+        fluent_info(
+            self,
+            "提示",
+            "以下有压管道缺少已算流速结果，且无法根据 Q/DN 补算，本次导出将以“-”显示：\n" + "；".join(items),
         )
 
     def _warn_pressure_pipe_missing_total_head_loss(self, rows):
@@ -9549,7 +9627,7 @@ class SectionSummaryDialog(QDialog):
         )
 
         self._warn_siphon_missing_velocity(sp_segs)
-        self._warn_pressure_pipe_missing_total_head_loss(pp_segs)
+        self._warn_pressure_pipe_missing_velocity(pressure_pipe_params)
 
         gen_kwargs = dict(
             filepath=fp,

@@ -134,9 +134,16 @@ SECTION_TYPES = [
     "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
     "渡槽-U形", "渡槽-矩形",
     "隧洞-圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
-    "矩形暗涵", "倒虹吸", "有压管道",
+    "矩形暗涵", "倒虹吸", "有压管道", "定向钻", "顶管",
     "分水闸", "分水口", "节制闸", "泄水闸", "退水闸",
 ]
+
+PRESSURE_PIPE_LIKE_SECTION_TYPES = {"有压管道", "定向钻", "顶管"}
+
+
+def is_pressure_pipe_like_section_type(section_type) -> bool:
+    """判断结构类型是否按有压管道占位语义处理。"""
+    return normalize_section_type_name(section_type) in PRESSURE_PIPE_LIKE_SECTION_TYPES
 
 # 输入表列定义（含X/Y坐标列）
 # 列索引: 0序号, 1流量段, 2建筑物名称, 3结构形式, 4X, 5Y, 6Q, 7糙率n, 8比降,
@@ -582,7 +589,7 @@ class BatchPanel(QWidget):
             self._pre_edit_snapshot = self._snapshot_table()
 
     def _update_roughness_cell_state(self, row):
-        """更新指定行的糙率n列可编辑状态（有压管道行禁用）"""
+        """更新指定行的糙率n列可编辑状态（有压管道同类行禁用）"""
         section_item = self.input_table.item(row, 3)
         if not section_item:
             return
@@ -592,7 +599,7 @@ class BatchPanel(QWidget):
             n_item = QTableWidgetItem("")
             self.input_table.setItem(row, 7, n_item)
 
-        if section_type == "有压管道":
+        if is_pressure_pipe_like_section_type(section_type):
             # 禁用编辑
             n_item.setFlags(n_item.flags() & ~Qt.ItemIsEditable)
             n_item.setBackground(QColor(240, 240, 240))
@@ -730,7 +737,7 @@ class BatchPanel(QWidget):
             section_item = self.input_table.item(row, 3)
             section_type = section_item.text().strip() if section_item else ""
             act_param = menu.addAction("打开参数设置...")
-            if not section_type or "分水" in section_type or "闸" in section_type or "倒虹吸" in section_type or "有压管道" in section_type:
+            if not section_type or "分水" in section_type or "闸" in section_type or "倒虹吸" in section_type or is_pressure_pipe_like_section_type(section_type):
                 act_param.setEnabled(False)
             act_param.triggered.connect(lambda: self._open_parameter_dialog_for_row(row))
 
@@ -1366,22 +1373,22 @@ class BatchPanel(QWidget):
                         detail_lines.append("\n" + "*" * 80 + "\n")
                     continue
 
-                # 有压管道占位行
-                if section_type == "有压管道":
+                # 有压管道同类占位行
+                if is_pressure_pipe_like_section_type(section_type):
                     row_out = ["-"] * len(RESULT_HEADERS)
                     row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
-                    row_out[3] = "有压管道"; row_out[-1] = "⏭ 占位行(不参与计算)"
+                    row_out[3] = section_type; row_out[-1] = "⏭ 占位行(不参与计算)"
                     result_rows.append(row_out)
                     # 读取有压管道专用列（col 21-23）
                     pipe_material = str(values[21]).strip() if len(values) > 21 else ""
                     local_loss_ratio = self._sf(values[22], 0.0) if len(values) > 22 else 0.0
                     in_out_raw = str(values[23]).strip() if len(values) > 23 else ""
                     ppipe_result = {
-                        'success': True, 'section_type': '有压管道', 'is_pressure_pipe': True,
+                        'success': True, 'section_type': section_type, 'is_pressure_pipe': True,
                         'flow_section': segment, 'building_name': building_name,
                         'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
-                        'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.014), 'slope_inv': 0,
-                        'D': self._sf(values[13], 0.0),  # 直径D用于有压管道
+                        'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.0), 'slope_inv': 0,
+                        'D': self._sf(values[13], 0.0),  # 直径D用于有压管道同类结构
                         'turn_radius': self._sf(values[20], 0.0) if len(values) > 20 else 0.0,
                         'pipe_material': pipe_material,
                         'local_loss_ratio': local_loss_ratio,
@@ -1418,7 +1425,7 @@ class BatchPanel(QWidget):
 
                 # 解析输入参数
                 Q = self._sf(values[6])
-                n = self._sf(values[7], 0.014)
+                n = self._sf(values[7], 0.0)
                 slope_inv = self._sf(values[8])
                 m = self._sf(values[9], 0)
                 b = self._sf(values[10], 0)
@@ -1483,6 +1490,7 @@ class BatchPanel(QWidget):
                 row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
                 row_out[3] = section_type; row_out[-1] = f"错误: {str(e)}"
                 result_rows.append(row_out)
+                error_details.append(f"序号{seq} ({building_name or '-'}): {str(e)}")
                 fail_count += 1
 
         # 填充结果表格
@@ -1515,13 +1523,13 @@ class BatchPanel(QWidget):
         # 汇总
         msg = f"总计: {total_count}条\n成功: {success_count}条\n失败: {fail_count}条"
         if skip_count > 0:
-            msg += f"\n跳过: {skip_count}条 (倒虹吸/有压管道/闸类占位行不参与断面计算)"
+            msg += f"\n跳过: {skip_count}条 (倒虹吸/有压管道〔含定向钻、顶管〕/闸类占位行不参与断面计算)"
         if error_details:
-            fluent_batch_result(self, "批量计算完成 (存在异常)", msg, "\n\n".join(error_details))
+            fluent_batch_result(self._dialog_parent(), "批量计算完成 (存在异常)", msg, "\n\n".join(error_details))
         elif fail_count == 0:
             InfoBar.success("批量计算完成", msg.replace('\n', ' | '), parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
         else:
-            fluent_info(self, "批量计算完成", msg)
+            fluent_info(self._dialog_parent(), "批量计算完成", msg)
 
         self._update_lock_state(fail_count > 0)
 
@@ -1816,7 +1824,7 @@ class BatchPanel(QWidget):
         try:
             if "倒虹吸" in section_type:
                 return self._fmt_placeholder_report(input_vals, result, "倒虹吸")
-            if "有压管道" in section_type:
+            if is_pressure_pipe_like_section_type(section_type):
                 return self._fmt_pressure_pipe_report(input_vals, result)
             if "分水" in section_type or "闸" in section_type:
                 return self._fmt_diversion_gate_report(input_vals, result)
@@ -1897,18 +1905,20 @@ class BatchPanel(QWidget):
         return "\n".join(o)
 
     def _fmt_pressure_pipe_report(self, input_vals, result):
-        """格式化有压管道占位行详细报告"""
+        """格式化有压管道同类占位行详细报告。"""
         segment = str(input_vals[1]).strip()
         building_name = str(input_vals[2]).strip()
+        section_type = normalize_section_type_name(str(input_vals[3]).strip()) or "有压管道"
         o = []
-        o.append("  ⏭ 有压管道占位行（不参与断面计算）")
+        o.append(f"  ⏭ {section_type}占位行（不参与断面计算）")
         o.append("")
         o.append("【基本信息】")
         channel_name = self.channel_name_edit.text().strip()
         channel_level = self.channel_level_combo.currentText()
         if channel_name:
             o.append(f"  渠道: {channel_name} {channel_level}")
-        o.append(f"  管道名称: {building_name}")
+        o.append(f"  建筑物名称: {building_name}")
+        o.append(f"  结构形式: {section_type}")
         o.append(f"  所在流量段: 第{segment}段")
         coord_x = input_vals[4] if len(input_vals) > 4 else ""
         coord_y = input_vals[5] if len(input_vals) > 5 else ""
@@ -1933,7 +1943,7 @@ class BatchPanel(QWidget):
             o.append(f"  进出口标识: {in_out}")
         o.append("")
         o.append("【说明】")
-        o.append("  有压管道行作为占位行导入推求水面线模块，")
+        o.append(f"  {section_type}行作为有压管道同类占位行导入推求水面线模块，")
         o.append("  需在【有压管道计算】窗口中完成水头损失计算后参与水面线推求。")
         return "\n".join(o)
 
@@ -2361,7 +2371,7 @@ class BatchPanel(QWidget):
         values = self._get_row_data(row_idx)
         values = self._normalize_row(values, len(INPUT_HEADERS))
         section_type = str(values[3]).strip()
-        if not section_type or "分水" in section_type or "闸" in section_type or "倒虹吸" in section_type or "有压管道" in section_type:
+        if not section_type or "分水" in section_type or "闸" in section_type or "倒虹吸" in section_type or is_pressure_pipe_like_section_type(section_type):
             InfoBar.info("提示", f"{section_type or '未设置类型'} 无需设置断面参数",
                         parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
             return
@@ -2829,7 +2839,7 @@ class BatchPanel(QWidget):
         self._info_parent_override = parent_or_callable
 
     def _resolve_info_parent_override(self):
-        override = self._info_parent_override
+        override = getattr(self, "_info_parent_override", None)
         if override is None:
             return None
         if callable(override):
@@ -3071,9 +3081,9 @@ class BatchPanel(QWidget):
                             rd[18] if len(rd) > 18 else "",
                             rd[19] if len(rd) > 19 else "",
                         ]
-                    # 有压管道行自动忽略糙率n值（索引7）
+                    # 有压管道同类行自动忽略糙率n值（索引7）
                     section_type = str(mapped[3]).strip() if len(mapped) > 3 else ""
-                    if section_type == "有压管道":
+                    if is_pressure_pipe_like_section_type(section_type):
                         mapped[7] = ""
                     self._add_row(mapped)
                     self._mark_row_as_excel_imported(self.input_table.rowCount() - 1, not is_sample)

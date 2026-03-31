@@ -73,8 +73,6 @@ class PressurePipeGroup:
     def get_validation_message(self) -> str:
         """获取验证信息"""
         issues = []
-        if not self.name:
-            issues.append("缺少建筑物名称")
         if len(self.rows) < 2:
             issues.append("至少需要进口和出口两行")
         if self.inlet_row_index < 0:
@@ -107,7 +105,7 @@ class PressurePipeDataExtractor:
         
         识别规则：
         1. structure_type == StructureType.PRESSURE_PIPE（结构形式为"有压管道"）
-        2. 按 name（建筑物名称）分组，相同名称的行属于同一管道
+        2. 仅提取带有建筑物名称的组；空名称行视为表3逐行独立管段，不参与外部有压管道分组
         3. 通过 section_params['in_out_raw'] 识别进口("进")/IP点("IP")/出口("出")
         4. 提取上下游渠道节点的流速、断面参数等
         
@@ -124,27 +122,26 @@ class PressurePipeDataExtractor:
         # 按名称分组，同时记录索引
         groups_dict: Dict[str, PressurePipeGroup] = {}
         group_order: List[str] = []  # 记录出现顺序
-        
+
         for idx, node in enumerate(nodes):
             # 检查是否为有压管道
             if not PressurePipeDataExtractor._is_pressure_pipe(node):
                 continue
             
-            name = node.name.strip()
+            name = (node.name or "").strip()
             if not name:
                 continue
+            in_out_raw = PressurePipeDataExtractor._get_in_out_raw(node)
+            group_key = name
             
             # 创建或获取分组
-            if name not in groups_dict:
-                groups_dict[name] = PressurePipeGroup(name=name)
-                group_order.append(name)
+            if group_key not in groups_dict:
+                groups_dict[group_key] = PressurePipeGroup(name=name)
+                group_order.append(group_key)
             
-            group = groups_dict[name]
+            group = groups_dict[group_key]
             group.rows.append(node)
             group.row_indices.append(idx)
-            
-            # 获取进出口标识
-            in_out_raw = node.section_params.get('in_out_raw', '') if node.section_params else ''
             
             # 识别进口/IP/出口
             if in_out_raw == "进" or node.in_out == InOutType.INLET:
@@ -170,11 +167,11 @@ class PressurePipeDataExtractor:
         
         # 处理每个分组，提取参数
         result = []
-        for name in group_order:
-            group = groups_dict[name]
+        for group_key in group_order:
+            group = groups_dict[group_key]
             
-            # 如果没有明确的进出口标记，尝试根据位置推断
-            if group.inlet_row_index < 0 and group.row_indices:
+            # 如果没有明确的进出口标记，仅在存在多行时尝试根据位置推断
+            if group.inlet_row_index < 0 and len(group.row_indices) >= 2:
                 group.inlet_row_index = group.row_indices[0]
                 first_node = group.rows[0]
                 group.design_flow = first_node.flow if first_node.flow > 0 else 0
@@ -182,7 +179,7 @@ class PressurePipeDataExtractor:
                 group.diameter = sp.get('D', 0) or sp.get('直径D', 0)
                 group.material_key = sp.get('pipe_material', '')
             
-            if group.outlet_row_index < 0 and group.row_indices:
+            if group.outlet_row_index < 0 and len(group.row_indices) >= 2:
                 group.outlet_row_index = group.row_indices[-1]
             
             # 提取IP点信息
@@ -208,15 +205,24 @@ class PressurePipeDataExtractor:
     @staticmethod
     def _is_pressure_pipe(node: ChannelNode) -> bool:
         """判断节点是否为有压管道"""
-        if node.structure_type == StructureType.PRESSURE_PIPE:
+        if node.structure_type and StructureType.is_pressure_pipe_like(node.structure_type):
             return True
-        if node.structure_type and node.structure_type.value == "有压管道":
-            return True
-        # 检查is_pressure_pipe标记
         if getattr(node, 'is_pressure_pipe', False):
             return True
         return False
-    
+
+    @staticmethod
+    def _get_in_out_raw(node: ChannelNode) -> str:
+        """统一提取进出口原始标记。"""
+        raw = node.section_params.get('in_out_raw', '') if node.section_params else ''
+        raw = str(raw or "").strip()
+        if raw:
+            return raw
+        in_out = getattr(node, 'in_out', None)
+        if in_out is None:
+            return ""
+        return str(getattr(in_out, "value", in_out) or "").strip()
+
     @staticmethod
     def _extract_ip_points(group: PressurePipeGroup):
         """
