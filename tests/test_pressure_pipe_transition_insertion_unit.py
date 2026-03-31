@@ -221,6 +221,66 @@ def test_pressure_pipe_to_siphon():
     assert result['distance'] == 25.0, f"里程差应为 25.0，实际为 {result['distance']}"
 
 
+def test_unnamed_pressure_pipe_before_tunnel_inlet_uses_local_outlet_role():
+    """
+    测试空名称有压管道在隧洞进口上游时，插渐变段阶段可临时视为出口。
+
+    验证：
+    - 不改空名称有压管道的常规 NORMAL 状态
+    - 仅在插渐变段判断时，仍能识别出两侧渐变段需求
+    """
+    pressure_pipe = ChannelNode()
+    pressure_pipe.structure_type = StructureType.from_string("有压管道")
+    pressure_pipe.name = ""
+    pressure_pipe.in_out = InOutType.NORMAL
+    pressure_pipe.section_params = {"D": 1.5}
+    pressure_pipe.station_MC = 100.0
+
+    tunnel_inlet = ChannelNode()
+    tunnel_inlet.structure_type = StructureType.from_string("隧洞-圆形")
+    tunnel_inlet.name = "隧洞1"
+    tunnel_inlet.in_out = InOutType.INLET
+    tunnel_inlet.section_params = {"D": 2.0}
+    tunnel_inlet.station_MC = 130.0
+
+    settings = ProjectSettings()
+    calculator = WaterProfileCalculator(settings)
+    result = calculator._should_insert_open_channel(pressure_pipe, tunnel_inlet)
+
+    assert result["need_transition_1"] == True, "空名称有压管道上游侧应临时识别为出口渐变段"
+    assert result["need_transition_2"] == True, "隧洞进口侧应识别为进口渐变段"
+    assert result["skip_loss_transition_1"] == True, "有压管道侧仍应跳过渐变段损失"
+    assert result["skip_loss_transition_2"] == False, "隧洞侧不应跳过渐变段损失"
+
+
+def test_tunnel_outlet_to_unnamed_pressure_pipe_uses_local_inlet_role():
+    """
+    测试空名称有压管道在隧洞出口下游时，插渐变段阶段可临时视为进口。
+    """
+    tunnel_outlet = ChannelNode()
+    tunnel_outlet.structure_type = StructureType.from_string("隧洞-圆形")
+    tunnel_outlet.name = "隧洞1"
+    tunnel_outlet.in_out = InOutType.OUTLET
+    tunnel_outlet.section_params = {"D": 2.0}
+    tunnel_outlet.station_MC = 200.0
+
+    pressure_pipe = ChannelNode()
+    pressure_pipe.structure_type = StructureType.from_string("有压管道")
+    pressure_pipe.name = ""
+    pressure_pipe.in_out = InOutType.NORMAL
+    pressure_pipe.section_params = {"D": 1.5}
+    pressure_pipe.station_MC = 230.0
+
+    settings = ProjectSettings()
+    calculator = WaterProfileCalculator(settings)
+    result = calculator._should_insert_open_channel(tunnel_outlet, pressure_pipe)
+
+    assert result["need_transition_1"] == True, "隧洞出口侧应识别为出口渐变段"
+    assert result["need_transition_2"] == True, "空名称有压管道下游侧应临时识别为进口渐变段"
+    assert result["skip_loss_transition_1"] == False, "隧洞侧不应跳过渐变段损失"
+    assert result["skip_loss_transition_2"] == True, "有压管道侧仍应跳过渐变段损失"
+
+
 def test_siphon_to_pressure_pipe():
     """
     测试倒虹吸 → 有压管道
@@ -314,7 +374,13 @@ if __name__ == "__main__":
     
     test_pressure_pipe_to_siphon()
     print("✓ 测试有压管道 → 倒虹吸")
-    
+
+    test_unnamed_pressure_pipe_before_tunnel_inlet_uses_local_outlet_role()
+    print("✓ 测试空名称有压管道 → 隧洞进口")
+
+    test_tunnel_outlet_to_unnamed_pressure_pipe_uses_local_inlet_role()
+    print("✓ 测试隧洞出口 → 空名称有压管道")
+
     test_siphon_to_pressure_pipe()
     print("✓ 测试倒虹吸 → 有压管道")
     
