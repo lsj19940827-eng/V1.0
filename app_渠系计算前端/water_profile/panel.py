@@ -81,10 +81,21 @@ except ImportError:
         def setEnabled(self, *_args, **_kwargs):
             pass
 
-from qfluentwidgets import (
-    PushButton, PrimaryPushButton, LineEdit, ComboBox,
-    InfoBar, InfoBarIcon, InfoBarPosition, DropDownPushButton, RoundMenu, Action, MessageBox
-)
+try:
+    from qfluentwidgets import (
+        PushButton, PrimaryPushButton, LineEdit, ComboBox,
+        InfoBar, InfoBarIcon, InfoBarPosition, DropDownPushButton, RoundMenu, Action, MessageBox
+    )
+except ImportError:
+    from qfluentwidgets import (
+        PushButton, PrimaryPushButton, LineEdit, ComboBox,
+        InfoBar, InfoBarPosition, DropDownPushButton, RoundMenu, Action, MessageBox
+    )
+
+    class _InfoBarIconFallback:
+        SUCCESS = None
+
+    InfoBarIcon = _InfoBarIconFallback()
 
 from app_渠系计算前端.frozen_table import FrozenColumnTableWidget
 from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, CollapsibleGroupBox, fluent_info, fluent_question, DIALOG_STYLE
@@ -173,8 +184,10 @@ except ImportError:
 EDITABLE_COLS = set(range(8)) | {20, 21, 22, 23, 24, 25, 26, 32, 36, 37, 38}
 # 表1同步来源行锁定列（需要回到表1修改后重同步）
 TABLE1_SOURCE_LOCKED_COLS = set(range(8)) | set(range(20, 27))
+TRANSITION_PREPARATION_RELEVANT_COLS = set(range(8)) | set(range(20, 27))
 # 第一行（水位起点）锁定的水头损失列：初始水位是用户输入的定值，不受水头损失影响
 FIRST_ROW_LOCKED_LOSS_COLS = {36, 37, 38}
+PRESSURE_PIPE_LIKE_STRUCTURE_TEXTS = {"有压管道", "定向钻", "顶管"}
 
 NODE_ALL_HEADERS = [
     # 基础输入列 (0-7) — 对应Tkinter INPUT_COLUMNS
@@ -206,6 +219,7 @@ NODE_TOOLBAR_LAYOUT_PRESET = "balanced"
 SOURCE_COORD_X_ROLE_KEY = "_source_x_text"
 SOURCE_COORD_Y_ROLE_KEY = "_source_y_text"
 USE_INCREASE_ROLE_KEY = "_use_increase"
+PRESSURE_PIPE_ROW_ID_ROLE_KEY = "_pressure_pipe_row_identity"
 TRANSITION_LENGTH_RULE_STEP_DEFAULT = 1.0
 TRANSITION_LENGTH_RULE_MODE_OPTIONS = (
     ("公式值", "formula"),
@@ -970,6 +984,7 @@ class WaterProfilePanel(QWidget):
         except Exception:
             pass
         self._section_sync_ready = False
+        self._transition_topology_prepared = False
         self._section_first_success_switched = False
         self._section_failure_auto_expanded_once = False
         self._section_failure_records = []
@@ -2199,7 +2214,15 @@ class WaterProfilePanel(QWidget):
 
     def _mark_section_results_stale(self, state_text: str, status_kind: str = ""):
         self._section_sync_ready = False
+        self._transition_topology_prepared = False
         self._set_downstream_actions_enabled(False, state_text=state_text, status_kind=status_kind)
+
+    def _has_transition_topology_ready(self, nodes=None) -> bool:
+        source_nodes = nodes
+        if source_nodes is None:
+            source_nodes = self.calculated_nodes or self.nodes
+        has_transition_rows = any(getattr(node, 'is_transition', False) for node in (source_nodes or []))
+        return has_transition_rows or bool(getattr(self, "_transition_topology_prepared", False))
 
     def _set_downstream_actions_enabled(self, enabled: bool, state_text: str = "", status_kind: str = ""):
         for btn in [self._btn_transition, self._btn_siphon, self.btn_pressure_pipe_calc, self._btn_calc]:
@@ -2256,7 +2279,145 @@ class WaterProfilePanel(QWidget):
             return False
         struct_item = table.item(row, 2)
         struct_text = struct_item.text().strip() if struct_item else ""
-        return "有压管道" in struct_text
+        return self._is_pressure_pipe_like_structure_text(struct_text)
+
+    @staticmethod
+    def _is_pressure_pipe_like_structure_text(struct_text: str) -> bool:
+        text = normalize_section_type_name(struct_text)
+        if not text:
+            return False
+        structure_type_cls = globals().get("StructureType")
+        helper = getattr(structure_type_cls, "is_pressure_pipe_like_str", None)
+        if callable(helper):
+            try:
+                return bool(helper(text))
+            except Exception:
+                pass
+        return text in PRESSURE_PIPE_LIKE_STRUCTURE_TEXTS
+
+    @classmethod
+    def _is_pressure_pipe_like_node(cls, node) -> bool:
+        if getattr(node, "is_pressure_pipe", False):
+            return True
+        struct_type = getattr(node, "structure_type", None)
+        structure_type_cls = globals().get("StructureType")
+        helper = getattr(structure_type_cls, "is_pressure_pipe_like", None)
+        if callable(helper):
+            try:
+                return bool(helper(struct_type))
+            except Exception:
+                pass
+        value = getattr(struct_type, "value", struct_type)
+        return cls._is_pressure_pipe_like_structure_text(value)
+
+    @classmethod
+    def _is_unnamed_pressure_pipe_row_node(cls, node) -> bool:
+        if not cls._is_pressure_pipe_like_node(node):
+            return False
+        return not str(getattr(node, "name", "") or "").strip()
+
+    @classmethod
+    def _is_named_pressure_pipe_group_node(cls, node) -> bool:
+        return cls._is_pressure_pipe_like_node(node) and not cls._is_unnamed_pressure_pipe_row_node(node)
+
+    @staticmethod
+    def _build_pressure_pipe_row_identity(node, row_index: int) -> str:
+        flow_section = str(getattr(node, "flow_section", "") or "").strip()
+        row_part = f"row{int(row_index) + 1}"
+        if flow_section:
+            return f"flow{flow_section}-{row_part}"
+        return row_part
+
+    @classmethod
+    def _ensure_pressure_pipe_row_identity(cls, node, row_index: int | None = None) -> str:
+        identity = str(getattr(node, "pressure_pipe_row_identity", "") or "").strip()
+        if not identity and row_index is not None:
+            identity = cls._build_pressure_pipe_row_identity(node, row_index)
+            setattr(node, "pressure_pipe_row_identity", identity)
+        return identity
+
+    @classmethod
+    def _get_unnamed_pressure_pipe_row_display_loss(cls, node) -> float:
+        display_loss = getattr(node, "_pressure_pipe_display_loss", None)
+        if display_loss is not None:
+            try:
+                display_loss = float(display_loss)
+            except (TypeError, ValueError):
+                display_loss = 0.0
+            if display_loss > 0:
+                setattr(node, "_pressure_pipe_display_loss", display_loss)
+                return display_loss
+
+        siphon_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
+        if siphon_loss > 0:
+            setattr(node, "_pressure_pipe_display_loss", siphon_loss)
+            return siphon_loss
+
+        hydraulic_loss = (
+            float(getattr(node, "head_loss_bend", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_local", 0.0) or 0.0)
+        )
+        if hydraulic_loss > 0:
+            setattr(node, "_pressure_pipe_display_loss", hydraulic_loss)
+            return hydraulic_loss
+
+        total_loss = float(getattr(node, "head_loss_total", 0.0) or 0.0)
+        reserve_loss = float(getattr(node, "head_loss_reserve", 0.0) or 0.0)
+        gate_loss = float(getattr(node, "head_loss_gate", 0.0) or 0.0)
+        display_loss = max(total_loss - reserve_loss - gate_loss, 0.0)
+        setattr(node, "_pressure_pipe_display_loss", display_loss)
+        return display_loss
+
+    @classmethod
+    def _get_pressure_pipe_loss_display_value(cls, node, row_index: int | None = None) -> float:
+        if cls._is_unnamed_pressure_pipe_row_node(node):
+            cls._ensure_pressure_pipe_row_identity(node, row_index)
+            return cls._get_unnamed_pressure_pipe_row_display_loss(node)
+
+        display_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
+        external_loss = getattr(node, "external_head_loss", None)
+        is_named_outlet = (
+            cls._is_named_pressure_pipe_group_node(node)
+            and getattr(node, "in_out", None) is not None
+            and getattr(node.in_out, "value", "") == "出"
+        )
+        if display_loss <= 0 and is_named_outlet and external_loss is not None:
+            try:
+                display_loss = float(external_loss)
+            except (TypeError, ValueError):
+                display_loss = 0.0
+            if display_loss > 0:
+                node.head_loss_siphon = display_loss
+            node.external_head_loss = None
+        return display_loss
+
+    @classmethod
+    def _apply_pressure_pipe_loss_cell_to_node(cls, node, value) -> float:
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            numeric_value = 0.0
+
+        if cls._is_unnamed_pressure_pipe_row_node(node):
+            cls._ensure_pressure_pipe_row_identity(node)
+            node.head_loss_siphon = 0.0
+            setattr(node, "_pressure_pipe_display_loss", numeric_value)
+            return numeric_value
+
+        if hasattr(node, "_pressure_pipe_display_loss"):
+            setattr(node, "_pressure_pipe_display_loss", 0.0)
+        node.head_loss_siphon = numeric_value
+        if numeric_value > 0 and getattr(node, "external_head_loss", None) is not None:
+            node.external_head_loss = None
+        return numeric_value
+
+    @classmethod
+    def _collect_named_pressure_pipe_groups(cls, nodes, settings=None):
+        if not nodes:
+            return []
+        from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+        return PressurePipeDataExtractor.extract_pipes(nodes, settings=settings)
 
     def _is_table1_source_locked_cell(self, row: int, col: int) -> bool:
         if col == 7 and self._is_pressure_pipe_row(row):
@@ -3679,7 +3840,7 @@ class WaterProfilePanel(QWidget):
             'head_loss_local': getattr(node, 'head_loss_local', 0.0) or 0.0,
             'head_loss_reserve': getattr(node, 'head_loss_reserve', 0.0) or 0.0,
             'head_loss_gate': getattr(node, 'head_loss_gate', 0.0) or 0.0,
-            'head_loss_siphon': getattr(node, 'head_loss_siphon', 0.0) or 0.0,
+            'head_loss_siphon': self._get_pressure_pipe_loss_display_value(node, row_index=row_idx),
             'head_loss_total': node.head_loss_total or 0.0,
         }
         from app_渠系计算前端.water_profile.formula_dialog import show_total_loss_dialog
@@ -3707,7 +3868,7 @@ class WaterProfilePanel(QWidget):
                 hj = getattr(n, 'head_loss_local', 0.0) or 0.0
                 hr = getattr(n, 'head_loss_reserve', 0.0) or 0.0
                 hg = getattr(n, 'head_loss_gate', 0.0) or 0.0
-                hs = getattr(n, 'head_loss_siphon', 0.0) or 0.0
+                hs = self._get_pressure_pipe_loss_display_value(n, row_index=i)
                 if hw: parts.append(f"弯道{hw:.4f}")
                 if hf: parts.append(f"沿程{hf:.4f}")
                 if hj: parts.append(f"局部{hj:.4f}")
@@ -3786,7 +3947,7 @@ class WaterProfilePanel(QWidget):
                 hw = node.head_loss_bend or 0.0
                 h_reserve = getattr(node, 'head_loss_reserve', 0.0) or 0.0
                 h_gate = getattr(node, 'head_loss_gate', 0.0) or 0.0
-                h_siphon = getattr(node, 'head_loss_siphon', 0.0) or 0.0
+                h_siphon = self._get_pressure_pipe_loss_display_value(node, row_index=row_idx)
                 row_total_loss = node.head_loss_total or 0.0
 
                 transition_step_loss = 0.0
@@ -4069,7 +4230,7 @@ class WaterProfilePanel(QWidget):
                 # 可编辑损失列（用户可能手动修改）
                 node.head_loss_reserve = _rf(r, 36)
                 node.head_loss_gate = _rf(r, 37)
-                node.head_loss_siphon = _rf(r, 38)
+                self._apply_pressure_pipe_loss_cell_to_node(node, _rf(r, 38))
                 # 联动计算列
                 node.head_loss_total = _rf(r, 39) or node.head_loss_total
                 node.head_loss_cumulative = _rf(r, 40) or node.head_loss_cumulative
@@ -4195,6 +4356,8 @@ class WaterProfilePanel(QWidget):
         # 更新 pre_edit 为当前新值，以便连续编辑同一单元格时也能撤销
         item = self.node_table.item(row, col)
         self._pre_edit_cell_value = (row, col, item.text() if item else "")
+        if col in TRANSITION_PREPARATION_RELEVANT_COLS:
+            self._transition_topology_prepared = False
 
         self._refresh_pressure_pipe_controls()
         if col in (2, 24):
@@ -4275,7 +4438,7 @@ class WaterProfilePanel(QWidget):
                     else:
                         node.head_loss_reserve = _rf(r, 36)
                         node.head_loss_gate = _rf(r, 37)
-                        node.head_loss_siphon = _rf(r, 38)
+                        self._apply_pressure_pipe_loss_cell_to_node(node, _rf(r, 38))
                         node.head_loss_total = _rf(r, 39)
                         node.head_loss_cumulative = _rf(r, 40)
                         node.water_level = _rf(r, 41)
@@ -4343,7 +4506,7 @@ class WaterProfilePanel(QWidget):
                     else:
                         node.head_loss_reserve = _rf(r, 36)
                         node.head_loss_gate = _rf(r, 37)
-                        node.head_loss_siphon = _rf(r, 38)
+                        self._apply_pressure_pipe_loss_cell_to_node(node, _rf(r, 38))
                         node.head_loss_total = _rf(r, 39)
                         node.head_loss_cumulative = _rf(r, 40)
                         node.water_level = _rf(r, 41)
@@ -4372,6 +4535,7 @@ class WaterProfilePanel(QWidget):
             'u_params': dict(self._node_u_params),
             'velocity_increased': dict(self._node_velocity_increased),
             'section_sync_ready': bool(getattr(self, "_section_sync_ready", False)),
+            'transition_topology_prepared': bool(getattr(self, "_transition_topology_prepared", False)),
             'section_state_text': (self._section_state_label.text().strip() if self._section_state_label else ""),
             'section_status_kind': str(getattr(self, "_section_status_kind", "neutral") or "neutral"),
             'siphon_manager_config': self._snapshot_manager_config(getattr(self, "_siphon_manager", None)),
@@ -4422,6 +4586,9 @@ class WaterProfilePanel(QWidget):
         if not isinstance(snapshot, dict):
             return
         sync_ready = bool(snapshot.get('section_sync_ready', getattr(self, "_section_sync_ready", False)))
+        self._transition_topology_prepared = bool(
+            snapshot.get('transition_topology_prepared', getattr(self, "_transition_topology_prepared", False))
+        )
         state_text = str(snapshot.get('section_state_text', "") or "").strip()
         status_kind = str(snapshot.get('section_status_kind', "") or "").strip()
         if not state_text:
@@ -4624,7 +4791,7 @@ class WaterProfilePanel(QWidget):
                 else:
                     node.head_loss_reserve = _rf(r, 36)
                     node.head_loss_gate = _rf(r, 37)
-                    node.head_loss_siphon = _rf(r, 38)
+                    self._apply_pressure_pipe_loss_cell_to_node(node, _rf(r, 38))
                     node.head_loss_total = _rf(r, 39)
                     node.head_loss_cumulative = _rf(r, 40)
                     node.water_level = _rf(r, 41)
@@ -4640,12 +4807,13 @@ class WaterProfilePanel(QWidget):
         """添加一行节点，_skip_undo=True 时跳过撤销快照（内部调用用）"""
         if not _skip_undo:
             self._push_node_table_undo()
+        self._transition_topology_prepared = False
         row = self.node_table.rowCount()
         self.node_table.insertRow(row)
         struct_text_in_data = ""
         if isinstance(data, (list, tuple)) and len(data) > 2:
             struct_text_in_data = str(data[2] or "").strip()
-        row_is_pressure_pipe = "有压管道" in struct_text_in_data
+        row_is_pressure_pipe = self._is_pressure_pipe_like_structure_text(struct_text_in_data)
         total_cols = len(NODE_ALL_HEADERS)
         for col in range(total_cols):
             if data and isinstance(data, (list, tuple)) and col < len(data) and data[col]:
@@ -4692,6 +4860,7 @@ class WaterProfilePanel(QWidget):
         if not _skip_undo and self.node_table.rowCount() > 0:
             self._push_node_table_undo()
         self.node_table.setRowCount(0)
+        self._transition_topology_prepared = False
         self._node_structure_heights.clear()
         self._node_chamfer_params.clear()
         self._node_u_params.clear()
@@ -4973,9 +5142,9 @@ class WaterProfilePanel(QWidget):
                 _n_float = float(n_val) if n_val and str(n_val).strip() else 0.0
             except (ValueError, TypeError):
                 _n_float = 0.0
-            if "有压管道" in section_type:
+            if self._is_pressure_pipe_like_structure_text(section_type) and str(building_name or "").strip():
                 pressure_pipe_params_pairs.append(
-                    (building_name or f"有压管道{len(pressure_pipe_params_pairs)+1}", pipe_material)
+                    (building_name, pipe_material)
                 )
             elif _n_float > 0:
                 if "倒虹吸" in section_type:
@@ -5151,7 +5320,7 @@ class WaterProfilePanel(QWidget):
                 for n in nodes if n.structure_type
             )
             has_pressure_pipe = any(
-                n.structure_type and "有压管道" in n.structure_type.value
+                self._is_pressure_pipe_like_node(n)
                 for n in nodes if n.structure_type
             )
 
@@ -5219,7 +5388,7 @@ class WaterProfilePanel(QWidget):
             struct_item = self.node_table.item(r, 2)
             struct_text = struct_item.text().strip() if struct_item else ""
             _is_siphon = "倒虹吸" in struct_text
-            _is_pressure_pipe = "有压管道" in struct_text
+            _is_pressure_pipe = self._is_pressure_pipe_like_structure_text(struct_text)
             _is_gate = "闸" in struct_text or "分水" in struct_text
             if existing_r > 0:
                 if _is_siphon:
@@ -5288,7 +5457,7 @@ class WaterProfilePanel(QWidget):
             # 普通行：写回计算值（与原逻辑一致）
             _st_r3 = node.get_structure_type_str() if hasattr(node, 'get_structure_type_str') else ""
             _is_siphon_r3 = "倒虹吸" in _st_r3
-            _is_pressure_pipe_r3 = "有压管道" in _st_r3
+            _is_pressure_pipe_r3 = self._is_pressure_pipe_like_structure_text(_st_r3)
             _is_gate_r3 = "闸" in _st_r3 or "分水" in _st_r3
             if r == 0 or _is_gate_r3:
                 pass  # 首行/闸类：不写 col 7
@@ -5574,13 +5743,14 @@ class WaterProfilePanel(QWidget):
             if node.structure_type and node.structure_type == StructureType.INVERTED_SIPHON:
                 node.is_inverted_siphon = True
             # 标记有压管道
-            if node.structure_type and node.structure_type == StructureType.PRESSURE_PIPE:
+            if node.structure_type and self._is_pressure_pipe_like_structure_text(node.structure_type.value):
                 node.is_pressure_pipe = True
             pipe_material = ""
             local_loss_ratio = None
             in_out_raw = ""
             use_increase = True
             from_table1_source = False
+            pressure_pipe_row_identity = ""
             # 恢复自动插入补段标记（通过UserRole存储）
             _first_item = table.item(r, 0)
             if _first_item:
@@ -5633,6 +5803,9 @@ class WaterProfilePanel(QWidget):
                         node.transition_calc_details = copy.deepcopy(_loss_details)
                     if "_from_table1_source" in _ur:
                         from_table1_source = bool(_ur.get("_from_table1_source"))
+                    pressure_pipe_row_identity = str(
+                        _ur.get(PRESSURE_PIPE_ROW_ID_ROLE_KEY, "") or ""
+                    ).strip()
                     _ext = _ur.get('_external_head_loss', None)
                     if _ext is not None and str(_ext).strip() != "":
                         try:
@@ -5678,6 +5851,10 @@ class WaterProfilePanel(QWidget):
             else:
                 node.source_x_text = ""
                 node.source_y_text = ""
+            if pressure_pipe_row_identity:
+                node.pressure_pipe_row_identity = pressure_pipe_row_identity
+            elif self._is_unnamed_pressure_pipe_row_node(node):
+                self._ensure_pressure_pipe_row_identity(node, r)
 
             # 进出口 (col 3)
             _io_text = _read_text(r, 3)
@@ -5698,7 +5875,7 @@ class WaterProfilePanel(QWidget):
             # 有压管道三层来源：表1行值 -> 管道配置R -> 全局半径（仅用于本次计算）
             try:
                 _struct_for_turn = str(data[2]).strip()
-                _is_pressure_turn = "有压管道" in _struct_for_turn
+                _is_pressure_turn = self._is_pressure_pipe_like_structure_text(_struct_for_turn)
                 _is_siphon_turn = "倒虹吸" in _struct_for_turn
                 _is_gate_turn = ("闸" in _struct_for_turn) or ("分水" in _struct_for_turn)
                 _row_turn = self._sf(data[7], 0.0)
@@ -5858,10 +6035,10 @@ class WaterProfilePanel(QWidget):
                 node.head_loss_gate = _hg
             # 倒虹吸/有压管道损失 (col 38)
             _hs = _read_float(r, 38)
-            if _hs > 0:
-                node.head_loss_siphon = _hs
-            elif (
-                node.is_pressure_pipe
+            self._apply_pressure_pipe_loss_cell_to_node(node, _hs)
+            if (
+                _hs <= 0
+                and self._is_named_pressure_pipe_group_node(node)
                 and getattr(node, 'in_out', None) is not None
                 and node.in_out.value == "出"
                 and getattr(node, 'external_head_loss', None) is not None
@@ -5965,8 +6142,7 @@ class WaterProfilePanel(QWidget):
                 return
 
             # 前置检查：渐变段必须已插入
-            has_transitions = any(getattr(n, 'is_transition', False) for n in nodes)
-            if not has_transitions:
+            if not self._has_transition_topology_ready(nodes):
                 InfoBar.warning("提示",
                                "请先点击工具栏的【插入渐变段】按钮，完成渐变段插入后再执行计算。",
                                parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
@@ -5992,26 +6168,25 @@ class WaterProfilePanel(QWidget):
                                parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
                 return
 
-            # 前置检查：有压管道水力计算（阻断式）
-            has_pressure_pipe = any(
-                n.structure_type and "有压管道" in n.structure_type.value
-                for n in nodes if n.structure_type
-            )
-            has_pressure_pipe_loss = any(
-                n.structure_type
-                and "有压管道" in n.structure_type.value
-                and getattr(n, 'in_out', None) is not None
-                and n.in_out.value == "出"
-                and (
-                    (getattr(n, 'head_loss_siphon', 0.0) or 0.0) > 0
-                    or getattr(n, 'external_head_loss', None) is not None
+            # 前置检查：命名有压管道组必须已完成外部水力计算；匿名行按逐行损失计算，不阻断执行。
+            named_pressure_pipe_groups = self._collect_named_pressure_pipe_groups(nodes, settings=settings)
+            missing_pressure_pipe_groups = []
+            for group in named_pressure_pipe_groups:
+                outlet_idx = int(getattr(group, "outlet_row_index", -1) or -1)
+                if outlet_idx < 0 or outlet_idx >= len(nodes):
+                    missing_pressure_pipe_groups.append((getattr(group, "name", "") or "未命名组").strip())
+                    continue
+                outlet_node = nodes[outlet_idx]
+                has_group_loss = (
+                    (getattr(outlet_node, 'head_loss_siphon', 0.0) or 0.0) > 0
+                    or getattr(outlet_node, 'external_head_loss', None) is not None
                 )
-                for n in nodes if n.structure_type
-            )
-            if has_pressure_pipe and not has_pressure_pipe_loss:
+                if not has_group_loss:
+                    missing_pressure_pipe_groups.append((getattr(group, "name", "") or "未命名组").strip())
+            if missing_pressure_pipe_groups:
                 InfoBar.warning(
                     "提示",
-                    "检测到表格中包含有压管道，但尚未执行水力计算。"
+                    "检测到表格中包含有压管道同类结构（有压管道/定向钻/顶管），但尚未执行水力计算。"
                     "请先点击【有压管道水力计算】按钮完成计算后，再点击【执行计算】。",
                     parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP
                 )
@@ -6247,24 +6422,7 @@ class WaterProfilePanel(QWidget):
                 vals[35] = f"{node.head_loss_friction:.4f}" if node.head_loss_friction else "-"
                 vals[36] = f"{getattr(node, 'head_loss_reserve', 0):.4f}" if getattr(node, 'head_loss_reserve', None) else "-"
                 vals[37] = f"{node.head_loss_gate:.4f}" if node.head_loss_gate else "-"
-                _h_sp = getattr(node, 'head_loss_siphon', 0.0) or 0.0
-                _ext = getattr(node, 'external_head_loss', None)
-                _is_pp_outlet = (
-                    getattr(node, 'is_pressure_pipe', False)
-                    and getattr(node, 'in_out', None) is not None
-                    and getattr(node.in_out, 'value', '') == "出"
-                )
-                if _h_sp <= 0 and _is_pp_outlet and _ext is not None:
-                    # 兼容旧项目：将 external_head_loss 迁移到统一展示列（col 38）
-                    try:
-                        _ext_f = float(_ext)
-                    except (TypeError, ValueError):
-                        _ext_f = 0.0
-                    if _ext_f > 0:
-                        _h_sp = _ext_f
-                        node.head_loss_siphon = _ext_f
-                    # 迁移后清空旧字段，避免下次构建节点时重复计损
-                    node.external_head_loss = None
+                _h_sp = self._get_pressure_pipe_loss_display_value(node, row_index=r)
                 vals[38] = f"{_h_sp:.4f}" if _h_sp else "-"
                 vals[39] = f"{node.head_loss_total:.4f}" if node.head_loss_total else "-"
                 vals[40] = f"{node.head_loss_cumulative:.4f}" if node.head_loss_cumulative else "-"
@@ -6301,7 +6459,10 @@ class WaterProfilePanel(QWidget):
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 if _is_source_row and c in TABLE1_SOURCE_LOCKED_COLS:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                if c == 7 and ("有压管道" in _st_str or getattr(node, 'is_pressure_pipe', False)):
+                if c == 7 and (
+                    self._is_pressure_pipe_like_structure_text(_st_str)
+                    or getattr(node, 'is_pressure_pipe', False)
+                ):
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 # 渐变段行灰色
                 if _is_trans:
@@ -6349,6 +6510,8 @@ class WaterProfilePanel(QWidget):
                     )
                 if getattr(node, 'external_head_loss', None) is not None:
                     payload['_external_head_loss'] = getattr(node, 'external_head_loss')
+                elif '_external_head_loss' in payload:
+                    payload.pop('_external_head_loss', None)
                 # 持久化有压管道专用参数（表格无专门列，放在UserRole）
                 _sp = getattr(node, 'section_params', {}) or {}
                 _pm = str(_sp.get('pipe_material', '') or '').strip()
@@ -6369,6 +6532,10 @@ class WaterProfilePanel(QWidget):
                             payload['_local_loss_ratio'] = _llr_f
                     except (ValueError, TypeError):
                         pass
+                if self._is_unnamed_pressure_pipe_row_node(node):
+                    payload[PRESSURE_PIPE_ROW_ID_ROLE_KEY] = self._ensure_pressure_pipe_row_identity(node, r)
+                else:
+                    payload.pop(PRESSURE_PIPE_ROW_ID_ROLE_KEY, None)
                 if _is_source_row:
                     payload[SOURCE_COORD_X_ROLE_KEY] = self._normalize_coord_text(vals[5])
                     payload[SOURCE_COORD_Y_ROLE_KEY] = self._normalize_coord_text(vals[6])
@@ -6686,15 +6853,10 @@ class WaterProfilePanel(QWidget):
         pairs = []
         if not nodes:
             return pairs
-        default_idx = 1
         for node in nodes:
-            st = node.structure_type.value if node.structure_type else ""
-            if "有压管道" not in st:
+            if not self._is_named_pressure_pipe_group_node(node):
                 continue
             name = (node.name or "").strip()
-            if not name:
-                name = f"有压管道{default_idx}"
-                default_idx += 1
             material = node.section_params.get('pipe_material', '') if hasattr(node, 'section_params') else ''
             pairs.append((name, material))
         return pairs
@@ -6714,22 +6876,30 @@ class WaterProfilePanel(QWidget):
             btn.setToolTip("执行有压管道水力计算并回写到\"倒虹吸/有压管道水头损失\"列")
             return
         has_ppipe = False
+        has_named_ppipe_group = False
         has_transition = False
         for r in range(table.rowCount()):
             st_item = table.item(r, 2)
             st = st_item.text().strip() if st_item else ""
-            if "有压管道" in st:
+            if self._is_pressure_pipe_like_structure_text(st):
                 has_ppipe = True
+                name_item = table.item(r, 1)
+                name_text = name_item.text().strip() if name_item else ""
+                if name_text:
+                    has_named_ppipe_group = True
             if "渐变段" in st:
                 has_transition = True
-            if has_ppipe and has_transition:
+            if has_named_ppipe_group and has_transition:
                 break
+        transition_topology_ready = has_transition or bool(getattr(self, "_transition_topology_prepared", False))
         # 交互优化：按钮始终保持可点击，具体前置校验在 _open_pressure_pipe_calculator 中处理并提示。
         btn.setEnabled(True)
         if not has_ppipe:
-            self.btn_pressure_pipe_calc.setToolTip("尚未检测到有压管道节点。可先导入数据，点击按钮可查看前置提示")
-        elif not has_transition:
-            self.btn_pressure_pipe_calc.setToolTip("已检测到有压管道。请先插入渐变段后再执行有压管道水力计算")
+            self.btn_pressure_pipe_calc.setToolTip("尚未检测到有压管道同类节点。可先导入数据，点击按钮可查看前置提示")
+        elif not has_named_ppipe_group:
+            self.btn_pressure_pipe_calc.setToolTip("仅检测到匿名有压管道行；这些行按逐行损失计算，无需先执行有压管道水力计算")
+        elif not transition_topology_ready:
+            self.btn_pressure_pipe_calc.setToolTip("已检测到有压管道同类结构。请先插入渐变段后再执行有压管道水力计算")
         else:
             self.btn_pressure_pipe_calc.setToolTip("执行有压管道水力计算并回写到\"倒虹吸/有压管道水头损失\"列")
 
@@ -7243,6 +7413,7 @@ class WaterProfilePanel(QWidget):
             prefix = settings.get_station_prefix() if settings else ""
             self._update_table_from_nodes_full(prepared_nodes, prefix)
             auto_resize_table(self.node_table)
+            self._transition_topology_prepared = True
 
             # 统计
             transition_count = sum(1 for n in prepared_nodes if getattr(n, 'is_transition', False))
@@ -7269,13 +7440,16 @@ class WaterProfilePanel(QWidget):
                 if n.structure_type and not getattr(n, 'is_transition', False)
             )
             has_pressure_pipe = any(
-                n.structure_type and "有压管道" in n.structure_type.value
+                self._is_pressure_pipe_like_node(n)
                 for n in prepared_nodes
                 if n.structure_type and not getattr(n, 'is_transition', False)
             )
 
             # 汇总信息（InfoBar非阻塞通知）
-            summary = f"渐变段插入完成！共 {len(prepared_nodes)} 行（渐变段 {transition_count}，补段 {open_channel_count}）"
+            if transition_count == 0 and open_channel_count == 0:
+                summary = f"当前拓扑无需新增渐变段/补段，已完成拓扑检查：共 {len(prepared_nodes)} 行"
+            else:
+                summary = f"渐变段插入完成！共 {len(prepared_nodes)} 行（渐变段 {transition_count}，补段 {open_channel_count}）"
             if has_siphon or has_pressure_pipe:
                 step_parts = []
                 if has_siphon:
@@ -7335,7 +7509,7 @@ class WaterProfilePanel(QWidget):
                 # 第一行（水位起点）锁定水头损失列
                 if r == 0 and c in FIRST_ROW_LOCKED_LOSS_COLS:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                if c == 7 and ("有压管道" in _st_str or getattr(node, 'is_pressure_pipe', False)):
+                if c == 7 and (self._is_pressure_pipe_like_structure_text(_st_str) or getattr(node, 'is_pressure_pipe', False)):
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 if _is_trans:
                     item.setForeground(QColor("#9E9E9E"))
@@ -7364,9 +7538,9 @@ class WaterProfilePanel(QWidget):
             return
 
         # 检查是否已插入渐变段
-        has_transitions = any(getattr(n, 'is_transition', False) for n in nodes)
-        if not has_transitions:
-            debug_print("[DEBUG] has_transitions = False，返回")
+        transition_topology_ready = self._has_transition_topology_ready(nodes)
+        if not transition_topology_ready:
+            debug_print("[DEBUG] transition_topology_ready = False，返回")
             InfoBar.warning("提示",
                            "请先点击工具栏的【插入渐变段】按钮，完成渐变段插入后再进行倒虹吸水力计算。\n"
                            "插入渐变段后，系统才能准确获取倒虹吸上下游流速、断面参数等信息。",
@@ -7870,7 +8044,7 @@ class WaterProfilePanel(QWidget):
             return "定向钻"
         if "顶管" in structure_text:
             return "顶管"
-        if "有压管道" in structure_text or getattr(node, "is_pressure_pipe", False):
+        if cls._is_pressure_pipe_like_structure_text(structure_text) or getattr(node, "is_pressure_pipe", False):
             return "有压管道"
         return None
 
@@ -8570,9 +8744,9 @@ class WaterProfilePanel(QWidget):
             return
 
         # 检查是否已插入渐变段
-        has_transitions = any(getattr(n, 'is_transition', False) for n in nodes)
-        if not has_transitions:
-            debug_print("[DEBUG] has_transitions = False，返回")
+        transition_topology_ready = self._has_transition_topology_ready(nodes)
+        if not transition_topology_ready:
+            debug_print("[DEBUG] transition_topology_ready = False，返回")
             InfoBar.warning("提示",
                            "请先点击工具栏的【插入渐变段】按钮，完成渐变段插入后再进行有压管道水力计算。\n"
                            "插入渐变段后，系统才能准确获取有压管道上下游流速、断面参数等信息。",
@@ -8581,13 +8755,13 @@ class WaterProfilePanel(QWidget):
 
         # 检查是否有有压管道
         has_ppipe = any(
-            n.structure_type and "有压管道" in n.structure_type.value
+            self._is_pressure_pipe_like_node(n)
             for n in nodes if n.structure_type
         )
         debug_print(f"[DEBUG] has_ppipe = {has_ppipe}")
         if not has_ppipe:
             debug_print("[DEBUG] has_ppipe = False，返回")
-            InfoBar.info("提示", "表格中没有有压管道数据，请确保有结构形式为\"有压管道\"的行",
+            InfoBar.info("提示", "表格中没有有压管道同类数据，请确保存在结构形式为“有压管道/定向钻/顶管”的行",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
 
@@ -9223,6 +9397,7 @@ class WaterProfilePanel(QWidget):
                 batch_panel_compat = {}
         merged_section = {
             "sync_ready": bool(getattr(self, "_section_sync_ready", False)),
+            "transition_topology_prepared": bool(getattr(self, "_transition_topology_prepared", False)),
             "state_text": self._section_state_label.text().strip() if self._section_state_label else "",
             "flow_segments_text": self._section_flow_segments_edit.text().strip() if hasattr(self, "_section_flow_segments_edit") and self._section_flow_segments_edit else "",
             "result_rows": section_result_rows,
@@ -9515,6 +9690,9 @@ class WaterProfilePanel(QWidget):
             # 恢复下游门禁状态（默认锁定）
             state_text = str(merged_section.get("state_text", "")).strip()
             sync_ready = bool(merged_section.get("sync_ready", False))
+            self._transition_topology_prepared = bool(
+                merged_section.get("transition_topology_prepared", False)
+            )
             legacy_loaded = (not merged_section) and self.node_table.rowCount() > 0
             if sync_ready and self.node_table.rowCount() > 0:
                 self._section_sync_ready = True

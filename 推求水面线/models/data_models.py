@@ -146,7 +146,7 @@ class ChannelNode:
                     struct_abbr = "倒"
                 elif "渡槽" in struct_str or struct_str == "渡槽":
                     struct_abbr = "渡"
-                elif "有压管道" in struct_str or struct_str == "有压管道":
+                elif StructureType.is_pressure_pipe_like_str(struct_str):
                     struct_abbr = "压"
             
             # 获取进出口简写

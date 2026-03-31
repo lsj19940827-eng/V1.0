@@ -66,6 +66,26 @@ class WaterProfileCalculator:
             losses: 倒虹吸名称到水头损失的映射
         """
         self.hyd_calc.import_inverted_siphon_losses(losses)
+
+    @staticmethod
+    def _build_pressure_pipe_row_identity(node: ChannelNode, row_index: int) -> str:
+        flow_section = str(getattr(node, "flow_section", "") or "").strip()
+        row_part = f"row{int(row_index) + 1}"
+        if flow_section:
+            return f"flow{flow_section}-{row_part}"
+        return row_part
+
+    def _ensure_pressure_pipe_row_identity(self, node: ChannelNode, row_index: int) -> str:
+        identity = str(getattr(node, "pressure_pipe_row_identity", "") or "").strip()
+        if not identity:
+            identity = self._build_pressure_pipe_row_identity(node, row_index)
+            setattr(node, "pressure_pipe_row_identity", identity)
+        return identity
+
+    def _is_unnamed_pressure_pipe_node(self, node: ChannelNode) -> bool:
+        if not self.is_pressure_pipe(node):
+            return False
+        return not str(getattr(node, "name", "") or "").strip()
     
     def preprocess_nodes(self, nodes: List[ChannelNode]) -> None:
         """
@@ -85,8 +105,12 @@ class WaterProfileCalculator:
         # 第一轮遍历：统计每个特殊建筑物名称的总出现次数
         # 使用 (名称, 类别) 复合键，避免不同类型同名建筑物合并计数
         structure_total: Dict[tuple, int] = {}
-        for node in nodes:
+        for idx, node in enumerate(nodes):
             if node.structure_type and self._is_special_structure_sv(node.structure_type):
+                if self._is_unnamed_pressure_pipe_node(node):
+                    node.is_pressure_pipe = True
+                    self._ensure_pressure_pipe_row_identity(node, idx)
+                    continue
                 key = (node.name, self._get_structure_category(node.structure_type))
                 structure_total[key] = structure_total.get(key, 0) + 1
         
@@ -105,23 +129,26 @@ class WaterProfileCalculator:
             # 2. 自动判断进出口标识
             if node.structure_type and self._is_special_structure_sv(node.structure_type):
                 # 特殊建筑物需要标识进出口
-                key = (node.name, self._get_structure_category(node.structure_type))
-                count = structure_count.get(key, 0) + 1
-                structure_count[key] = count
-                total = structure_total.get(key, 2)
-                
-                # 根据当前次数和总次数判断进出口
-                # 第1次=进口，最后1次=出口，中间=普通断面
-                in_out_result = InOutType.from_count(count, total)
-                node.in_out = in_out_result[0]
-                
                 # 标记倒虹吸
                 sv = node.structure_type.value if node.structure_type else ""
                 if sv == "倒虹吸":
                     node.is_inverted_siphon = True
                 # 标记有压管道
-                if "有压管道" in sv:
+                if StructureType.is_pressure_pipe_like_str(sv):
                     node.is_pressure_pipe = True
+                if self._is_unnamed_pressure_pipe_node(node):
+                    self._ensure_pressure_pipe_row_identity(node, i)
+                    node.in_out = InOutType.NORMAL
+                else:
+                    key = (node.name, self._get_structure_category(node.structure_type))
+                    count = structure_count.get(key, 0) + 1
+                    structure_count[key] = count
+                    total = structure_total.get(key, 2)
+
+                    # 根据当前次数和总次数判断进出口
+                    # 第1次=进口，最后1次=出口，中间=普通断面
+                    in_out_result = InOutType.from_count(count, total)
+                    node.in_out = in_out_result[0]
             else:
                 # 普通明渠、分水闸等不标识进出口
                 node.in_out = InOutType.NORMAL
@@ -676,8 +703,8 @@ class WaterProfileCalculator:
         if structure_type is None:
             return False
         sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
-        special_keywords = ("隧洞", "渡槽", "倒虹吸", "有压管道", "暗涵")
-        return any(kw in sv for kw in special_keywords)
+        special_keywords = ("隧洞", "渡槽", "倒虹吸", "暗涵")
+        return any(kw in sv for kw in special_keywords) or StructureType.is_pressure_pipe_like_str(sv)
     
     def _is_diversion_gate_sv(self, structure_type) -> bool:
         """判断是否为闸类结构（使用 .value 字符串比较）"""
@@ -706,7 +733,7 @@ class WaterProfileCalculator:
         if not node.structure_type:
             return False
         sv = node.structure_type.value if hasattr(node.structure_type, 'value') else str(node.structure_type)
-        return sv == "倒虹吸" or "有压管道" in sv
+        return sv == "倒虹吸" or StructureType.is_pressure_pipe_like_str(sv)
 
     def is_pressure_pipe(self, node: ChannelNode) -> bool:
         """
@@ -721,7 +748,7 @@ class WaterProfileCalculator:
         if not node.structure_type:
             return False
         sv = node.structure_type.value if hasattr(node.structure_type, 'value') else str(node.structure_type)
-        return "有压管道" in sv
+        return StructureType.is_pressure_pipe_like_str(sv) or getattr(node, 'is_pressure_pipe', False)
 
     
     @staticmethod
@@ -1152,7 +1179,7 @@ class WaterProfileCalculator:
             D = node.section_params.get("D", 3.0) if node.section_params else 3.0
             L_min = max(5 * h_design, 3 * D)
             return max(L_basic, L_min)
-        elif "倒虹吸" in struct_name or "有压管道" in struct_name:
+        elif "倒虹吸" in struct_name or StructureType.is_pressure_pipe_like_str(struct_name):
             # GB 50288-2018 §10.2.4：有压流建筑物（倒虹吸/有压管道）使用相同公式
             # 进口取上游渠道设计水深的3~5倍（取大值5倍）
             # 出口取下游渠道设计水深的4~6倍（取大值6倍）
@@ -2366,8 +2393,8 @@ class WaterProfileCalculator:
 
         if missing_required_name_rows:
             errors.append(
-                "建筑物名称仅以下结构必填：倒虹吸、有压管道、隧洞、渡槽、矩形暗涵等；"
-                "明渠-矩形/梯形/圆形可留空。"
+                "建筑物名称仅以下结构必填：倒虹吸、隧洞、渡槽、矩形暗涵等；"
+                "明渠-矩形/梯形/圆形、有压管道可留空。"
             )
             for row_index, struct_name in missing_required_name_rows:
                 errors.append(f"第{row_index}行: {struct_name} 需要填写建筑物名称")
