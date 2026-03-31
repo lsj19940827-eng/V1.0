@@ -21,6 +21,8 @@ from core.pressure_pipe_calc import calc_turn_angle, calc_segment_length
 from config.constants import XXPIPE_CHANNEL_LEVEL_OPTIONS
 from utils.pressure_pipe_result_helpers import make_pressure_pipe_identity
 
+NO_TRANSITION_REASON = "紧邻有压同类结构，无渐变段"
+
 
 @dataclass
 class PressurePipeGroup:
@@ -66,6 +68,10 @@ class PressurePipeGroup:
     identity: str = ""                          # 稳定身份键
     target_row_index: int = -1                  # 匿名段目标行索引
     upstream_row_index: int = -1                # 匿名段上一普通行索引
+    has_inlet_transition: bool = True           # 进口侧是否存在渐变段
+    has_outlet_transition: bool = True          # 出口侧是否存在渐变段
+    inlet_transition_reason: str = ""           # 进口侧无渐变段原因
+    outlet_transition_reason: str = ""          # 出口侧无渐变段原因
     
     def is_valid(self) -> bool:
         """检查有压管道数据是否有效"""
@@ -503,37 +509,50 @@ class PressurePipeDataExtractor:
         """
         提取上下游渠道节点数据（流速、断面参数等）
         
-        上游：进口行往前找第一个非有压管道节点
-        下游：出口行往后找第一个非有压管道节点
+        上游：进口行往前跳过渐变段后，判断第一个非渐变节点
+        下游：出口行往后跳过渐变段后，判断第一个非渐变节点
         """
         if group.inlet_row_index < 0 or group.outlet_row_index < 0:
             return
-        
-        # 提取上游节点数据
-        for i in range(group.inlet_row_index - 1, -1, -1):
-            upstream_node = nodes[i]
-            
-            # 跳过渐变段
-            if getattr(upstream_node, 'is_transition', False):
+
+        PressurePipeDataExtractor._extract_one_side_adjacent_data(
+            group=group,
+            nodes=nodes,
+            start_index=group.inlet_row_index - 1,
+            step=-1,
+            is_inlet=True,
+        )
+        PressurePipeDataExtractor._extract_one_side_adjacent_data(
+            group=group,
+            nodes=nodes,
+            start_index=group.outlet_row_index + 1,
+            step=1,
+            is_inlet=False,
+        )
+
+    @staticmethod
+    def _extract_one_side_adjacent_data(
+        group: PressurePipeGroup,
+        nodes: List[ChannelNode],
+        start_index: int,
+        step: int,
+        is_inlet: bool,
+    ):
+        """提取单侧相邻节点信息，必要时标记该侧无渐变段。"""
+        index = start_index
+        while 0 <= index < len(nodes):
+            adjacent_node = nodes[index]
+
+            if getattr(adjacent_node, "is_transition", False):
+                index += step
                 continue
-            
-            # 跳过同名有压管道行
-            if PressurePipeDataExtractor._is_pressure_pipe(upstream_node):
-                continue
-            
-            # 找到上游节点
-            group.upstream_velocity = upstream_node.velocity if upstream_node.velocity > 0 else 0.0
-            group.upstream_structure_type = upstream_node.structure_type.value if upstream_node.structure_type else ""
-            
-            sp = upstream_node.section_params or {}
-            group.upstream_section_params = {
-                'B': sp.get('B', 0) or sp.get('底宽b', 0) or sp.get('底宽B', 0),
-                'h': upstream_node.water_depth,
-                'm': sp.get('m', 0) or sp.get('边坡m', 0),
-                'D': sp.get('D', 0) or sp.get('直径D', 0),
-                'R': sp.get('R', 0) or sp.get('R_circle', 0) or sp.get('半径R', 0),
-            }
-            break
+
+            if PressurePipeDataExtractor._is_pressure_pipe(adjacent_node):
+                PressurePipeDataExtractor._mark_transition_missing(group, is_inlet=is_inlet)
+                return
+
+            PressurePipeDataExtractor._assign_adjacent_node_data(group, adjacent_node, is_inlet=is_inlet)
+            return
 
     @staticmethod
     def _extract_adjacent_node_data_for_unnamed_segment(group: PressurePipeGroup, nodes: List[ChannelNode]):
@@ -549,17 +568,10 @@ class PressurePipeDataExtractor:
 
         if 0 <= upstream_idx < len(nodes):
             upstream_node = nodes[upstream_idx]
-            if not PressurePipeDataExtractor._is_pressure_pipe(upstream_node):
-                group.upstream_velocity = upstream_node.velocity if upstream_node.velocity > 0 else 0.0
-                group.upstream_structure_type = upstream_node.structure_type.value if upstream_node.structure_type else ""
-                sp = upstream_node.section_params or {}
-                group.upstream_section_params = {
-                    'B': sp.get('B', 0) or sp.get('底宽b', 0) or sp.get('底宽B', 0),
-                    'h': upstream_node.water_depth,
-                    'm': sp.get('m', 0) or sp.get('边坡m', 0),
-                    'D': sp.get('D', 0) or sp.get('直径D', 0),
-                    'R': sp.get('R', 0) or sp.get('R_circle', 0) or sp.get('半径R', 0),
-                }
+            if PressurePipeDataExtractor._is_pressure_pipe(upstream_node):
+                PressurePipeDataExtractor._mark_transition_missing(group, is_inlet=True)
+            else:
+                PressurePipeDataExtractor._assign_adjacent_node_data(group, upstream_node, is_inlet=True)
 
         if target_idx >= 0:
             for idx in range(target_idx + 1, len(nodes)):
@@ -568,18 +580,50 @@ class PressurePipeDataExtractor:
                     continue
                 if getattr(downstream_node, "is_auto_inserted_channel", False):
                     continue
-                if not PressurePipeDataExtractor._is_pressure_pipe(downstream_node):
-                    group.downstream_velocity = downstream_node.velocity if downstream_node.velocity > 0 else 0.0
-                    group.downstream_structure_type = downstream_node.structure_type.value if downstream_node.structure_type else ""
-                    sp = downstream_node.section_params or {}
-                    group.downstream_section_params = {
-                        'B': sp.get('B', 0) or sp.get('底宽b', 0) or sp.get('底宽B', 0),
-                        'h': downstream_node.water_depth,
-                        'm': sp.get('m', 0) or sp.get('边坡m', 0),
-                        'D': sp.get('D', 0) or sp.get('直径D', 0),
-                        'R': sp.get('R', 0) or sp.get('R_circle', 0) or sp.get('半径R', 0),
-                    }
+                if PressurePipeDataExtractor._is_pressure_pipe(downstream_node):
+                    PressurePipeDataExtractor._mark_transition_missing(group, is_inlet=False)
+                else:
+                    PressurePipeDataExtractor._assign_adjacent_node_data(group, downstream_node, is_inlet=False)
                 break
+
+    @staticmethod
+    def _mark_transition_missing(group: PressurePipeGroup, is_inlet: bool):
+        """标记某一侧紧邻有压同类结构，因此不存在渐变段。"""
+        if is_inlet:
+            group.has_inlet_transition = False
+            group.inlet_transition_reason = NO_TRANSITION_REASON
+            return
+        group.has_outlet_transition = False
+        group.outlet_transition_reason = NO_TRANSITION_REASON
+
+    @staticmethod
+    def _assign_adjacent_node_data(group: PressurePipeGroup, node: ChannelNode, is_inlet: bool):
+        """写入单侧相邻渠道节点数据。"""
+        section_params = PressurePipeDataExtractor._build_section_params(node)
+        structure_type = node.structure_type.value if node.structure_type else ""
+        velocity = node.velocity if node.velocity > 0 else 0.0
+
+        if is_inlet:
+            group.upstream_velocity = velocity
+            group.upstream_structure_type = structure_type
+            group.upstream_section_params = section_params
+            return
+
+        group.downstream_velocity = velocity
+        group.downstream_structure_type = structure_type
+        group.downstream_section_params = section_params
+
+    @staticmethod
+    def _build_section_params(node: ChannelNode) -> Dict:
+        """提取节点断面参数。"""
+        sp = node.section_params or {}
+        return {
+            'B': sp.get('B', 0) or sp.get('底宽b', 0) or sp.get('底宽B', 0),
+            'h': node.water_depth,
+            'm': sp.get('m', 0) or sp.get('边坡m', 0),
+            'D': sp.get('D', 0) or sp.get('直径D', 0),
+            'R': sp.get('R', 0) or sp.get('R_circle', 0) or sp.get('半径R', 0),
+        }
     
     @staticmethod
     def _extract_transition_forms(group: PressurePipeGroup, settings):

@@ -195,3 +195,48 @@ def test_extract_dialog_pipe_groups_downstream_reference_stops_at_first_regular_
     assert anonymous_group.group_mode == "unnamed_row_segment"
     assert anonymous_group.downstream_velocity == 0.0
     assert anonymous_group.downstream_section_params == {}
+
+
+def test_extract_pipes_stops_at_adjacent_pressure_pipe_like_nodes():
+    nodes = [
+        _make_node("2", "上游渠道", "隧洞-圆形", InOutType.INLET, flow=0.0),
+        _make_node("2", "", "有压管道", InOutType.INLET, diameter=1.0, flow=1.55),
+        _make_node("2", "半兽人", "定向钻", InOutType.INLET, diameter=1.0, flow=1.55),
+        _make_node("2", "半兽人", "定向钻", InOutType.OUTLET, diameter=1.0, flow=1.55),
+        _make_node("2", "", "有压管道", InOutType.OUTLET, diameter=1.0, flow=1.55),
+        _make_node("2", "下游渠道", "隧洞-圆形", InOutType.OUTLET, flow=0.0),
+    ]
+    nodes[0].velocity = 1.039
+    nodes[5].velocity = 1.039
+
+    groups = PressurePipeDataExtractor.extract_pipes(nodes)
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group.name == "半兽人"
+    assert group.has_inlet_transition is False
+    assert group.has_outlet_transition is False
+    assert group.inlet_transition_reason == "紧邻有压同类结构，无渐变段"
+    assert group.outlet_transition_reason == "紧邻有压同类结构，无渐变段"
+    assert group.upstream_velocity == 0.0
+    assert group.downstream_velocity == 0.0
+
+
+def test_extract_pipes_keeps_channel_velocity_when_adjacent_node_is_not_pressure_pipe_like():
+    nodes = [
+        _make_node("3", "上游渠道", "隧洞-圆形", InOutType.INLET, flow=0.0),
+        _make_node("3", "饿了么", "顶管", InOutType.INLET, diameter=0.8, flow=1.2),
+        _make_node("3", "饿了么", "顶管", InOutType.OUTLET, diameter=0.8, flow=1.2),
+        _make_node("3", "下游渠道", "隧洞-圆形", InOutType.OUTLET, flow=0.0),
+    ]
+    nodes[0].velocity = 1.039
+    nodes[3].velocity = 0.886
+
+    groups = PressurePipeDataExtractor.extract_pipes(nodes)
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group.has_inlet_transition is True
+    assert group.has_outlet_transition is True
+    assert group.upstream_velocity == 1.039
+    assert group.downstream_velocity == 0.886

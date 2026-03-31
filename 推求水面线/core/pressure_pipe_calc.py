@@ -272,6 +272,38 @@ def get_transition_zeta(form: str, is_inlet: bool) -> float:
         return TRANSITION_FORMS[form]["outlet_zeta"]
 
 
+def _resolve_transition_zeta(form: str, zeta_override: Optional[float], is_inlet: bool) -> float:
+    """解析渐变段局部损失系数，优先使用显式传入值。"""
+    if zeta_override is not None and zeta_override > 0:
+        return zeta_override
+    return get_transition_zeta(form, is_inlet=is_inlet)
+
+
+def _build_skipped_transition_details(
+    *,
+    V_pipe: float,
+    V_channel: float,
+    zeta: float,
+    form: str,
+    is_inlet: bool,
+    reason: str,
+) -> Dict:
+    """构造“无渐变段，跳过计算”时的详情字典。"""
+    formula = "hj = ζ × (V_pipe² - V_channel²) / (2g)" if is_inlet else "hj = ζ × (V_channel² - V_pipe²) / (2g)"
+    return {
+        "formula": formula,
+        "is_inlet": is_inlet,
+        "V_pipe": V_pipe,
+        "V_channel": V_channel,
+        "zeta": zeta,
+        "delta_v2": 0.0,
+        "hj": 0.0,
+        "form": form,
+        "skipped": True,
+        "reason": reason,
+    }
+
+
 # ============================================================
 # 4. 转角计算
 # ============================================================
@@ -354,6 +386,10 @@ class PressurePipeCalcResult:
     total_bend_loss: float = 0.0        # 弯头局部损失合计 (m)
     inlet_transition_loss: float = 0.0  # 进口渐变段损失 (m)
     outlet_transition_loss: float = 0.0 # 出口渐变段损失 (m)
+    has_inlet_transition: bool = True   # 进口侧是否存在渐变段
+    has_outlet_transition: bool = True  # 出口侧是否存在渐变段
+    inlet_transition_reason: str = ""   # 进口侧无渐变段原因
+    outlet_transition_reason: str = ""  # 出口侧无渐变段原因
     
     # 总水头损失
     total_head_loss: float = 0.0        # 总水头损失 (m)
@@ -381,6 +417,10 @@ def calc_total_head_loss(
     outlet_transition_form: str = "反弯扭曲面",
     inlet_transition_zeta: Optional[float] = None,
     outlet_transition_zeta: Optional[float] = None,
+    has_inlet_transition: bool = True,
+    has_outlet_transition: bool = True,
+    inlet_transition_reason: str = "",
+    outlet_transition_reason: str = "",
 ) -> PressurePipeCalcResult:
     """
     计算有压管道总水头损失
@@ -406,6 +446,10 @@ def calc_total_head_loss(
         material_key=material_key,
         total_length=0.0,
         pipe_velocity=0.0,
+        has_inlet_transition=has_inlet_transition,
+        has_outlet_transition=has_outlet_transition,
+        inlet_transition_reason=inlet_transition_reason,
+        outlet_transition_reason=outlet_transition_reason,
     )
     result.data_mode = "平面模式"
     
@@ -486,30 +530,54 @@ def calc_total_head_loss(
     
     # 5. 进口渐变段损失
     steps.append(f"5. 进口渐变段水头损失")
-    if inlet_transition_zeta is not None and inlet_transition_zeta > 0:
-        inlet_zeta = inlet_transition_zeta
+    inlet_zeta = _resolve_transition_zeta(inlet_transition_form, inlet_transition_zeta, is_inlet=True)
+    if has_inlet_transition:
+        hj_inlet, inlet_details = calc_transition_loss(V_pipe, upstream_velocity, inlet_zeta, is_inlet=True)
     else:
-        inlet_zeta = get_transition_zeta(inlet_transition_form, is_inlet=True)
-    hj_inlet, inlet_details = calc_transition_loss(V_pipe, upstream_velocity, inlet_zeta, is_inlet=True)
+        hj_inlet = 0.0
+        inlet_details = _build_skipped_transition_details(
+            V_pipe=V_pipe,
+            V_channel=upstream_velocity,
+            zeta=inlet_zeta,
+            form=inlet_transition_form,
+            is_inlet=True,
+            reason=inlet_transition_reason,
+        )
     result.inlet_transition_loss = hj_inlet
     result.inlet_transition_details = inlet_details
     steps.append(f"   型式: {inlet_transition_form}, ζ₁ = {inlet_zeta:.2f}")
-    steps.append(f"   V_渠道 = {upstream_velocity:.4f} m/s, V_管道 = {V_pipe:.4f} m/s")
-    steps.append(f"   hj₁ = ζ₁ × (V²_管道 - V²_渠道) / (2g) = {hj_inlet:.4f} m")
+    if has_inlet_transition:
+        steps.append(f"   V_渠道 = {upstream_velocity:.4f} m/s, V_管道 = {V_pipe:.4f} m/s")
+        steps.append(f"   hj₁ = ζ₁ × (V²_管道 - V²_渠道) / (2g) = {hj_inlet:.4f} m")
+    else:
+        steps.append(f"   该侧{inlet_transition_reason or '无渐变段'}，hj=0")
+        steps.append(f"   hj₁ = {hj_inlet:.4f} m")
     steps.append("")
     
     # 6. 出口渐变段损失
     steps.append(f"6. 出口渐变段水头损失")
-    if outlet_transition_zeta is not None and outlet_transition_zeta > 0:
-        outlet_zeta = outlet_transition_zeta
+    outlet_zeta = _resolve_transition_zeta(outlet_transition_form, outlet_transition_zeta, is_inlet=False)
+    if has_outlet_transition:
+        hj_outlet, outlet_details = calc_transition_loss(V_pipe, downstream_velocity, outlet_zeta, is_inlet=False)
     else:
-        outlet_zeta = get_transition_zeta(outlet_transition_form, is_inlet=False)
-    hj_outlet, outlet_details = calc_transition_loss(V_pipe, downstream_velocity, outlet_zeta, is_inlet=False)
+        hj_outlet = 0.0
+        outlet_details = _build_skipped_transition_details(
+            V_pipe=V_pipe,
+            V_channel=downstream_velocity,
+            zeta=outlet_zeta,
+            form=outlet_transition_form,
+            is_inlet=False,
+            reason=outlet_transition_reason,
+        )
     result.outlet_transition_loss = hj_outlet
     result.outlet_transition_details = outlet_details
     steps.append(f"   型式: {outlet_transition_form}, ζ₃ = {outlet_zeta:.2f}")
-    steps.append(f"   V_管道 = {V_pipe:.4f} m/s, V_渠道 = {downstream_velocity:.4f} m/s")
-    steps.append(f"   hj₃ = ζ₃ × (V²_渠道 - V²_管道) / (2g) = {hj_outlet:.4f} m")
+    if has_outlet_transition:
+        steps.append(f"   V_管道 = {V_pipe:.4f} m/s, V_渠道 = {downstream_velocity:.4f} m/s")
+        steps.append(f"   hj₃ = ζ₃ × (V²_渠道 - V²_管道) / (2g) = {hj_outlet:.4f} m")
+    else:
+        steps.append(f"   该侧{outlet_transition_reason or '无渐变段'}，hj=0")
+        steps.append(f"   hj₃ = {hj_outlet:.4f} m")
     steps.append("")
     
     # 7. 总水头损失
@@ -677,6 +745,10 @@ def calc_total_head_loss_with_spatial(
     outlet_transition_form: str = "反弯扭曲面",
     inlet_transition_zeta: Optional[float] = None,
     outlet_transition_zeta: Optional[float] = None,
+    has_inlet_transition: bool = True,
+    has_outlet_transition: bool = True,
+    inlet_transition_reason: str = "",
+    outlet_transition_reason: str = "",
 ) -> PressurePipeCalcResult:
     """
     计算有压管道总水头损失（支持空间模式）
@@ -705,6 +777,10 @@ def calc_total_head_loss_with_spatial(
         material_key=material_key,
         total_length=0.0,
         pipe_velocity=0.0,
+        has_inlet_transition=has_inlet_transition,
+        has_outlet_transition=has_outlet_transition,
+        inlet_transition_reason=inlet_transition_reason,
+        outlet_transition_reason=outlet_transition_reason,
     )
 
     steps = []
@@ -870,30 +946,54 @@ def calc_total_head_loss_with_spatial(
 
     # 5. 进口渐变段损失
     steps.append(f"5. 进口渐变段水头损失")
-    if inlet_transition_zeta is not None and inlet_transition_zeta > 0:
-        inlet_zeta = inlet_transition_zeta
+    inlet_zeta = _resolve_transition_zeta(inlet_transition_form, inlet_transition_zeta, is_inlet=True)
+    if has_inlet_transition:
+        hj_inlet, inlet_details = calc_transition_loss(V_pipe, upstream_velocity, inlet_zeta, is_inlet=True)
     else:
-        inlet_zeta = get_transition_zeta(inlet_transition_form, is_inlet=True)
-    hj_inlet, inlet_details = calc_transition_loss(V_pipe, upstream_velocity, inlet_zeta, is_inlet=True)
+        hj_inlet = 0.0
+        inlet_details = _build_skipped_transition_details(
+            V_pipe=V_pipe,
+            V_channel=upstream_velocity,
+            zeta=inlet_zeta,
+            form=inlet_transition_form,
+            is_inlet=True,
+            reason=inlet_transition_reason,
+        )
     result.inlet_transition_loss = hj_inlet
     result.inlet_transition_details = inlet_details
     steps.append(f"   型式: {inlet_transition_form}, ζ₁ = {inlet_zeta:.2f}")
-    steps.append(f"   V_渠道 = {upstream_velocity:.4f} m/s, V_管道 = {V_pipe:.4f} m/s")
-    steps.append(f"   hj₁ = ζ₁ × (V²_管道 - V²_渠道) / (2g) = {hj_inlet:.4f} m")
+    if has_inlet_transition:
+        steps.append(f"   V_渠道 = {upstream_velocity:.4f} m/s, V_管道 = {V_pipe:.4f} m/s")
+        steps.append(f"   hj₁ = ζ₁ × (V²_管道 - V²_渠道) / (2g) = {hj_inlet:.4f} m")
+    else:
+        steps.append(f"   该侧{inlet_transition_reason or '无渐变段'}，hj=0")
+        steps.append(f"   hj₁ = {hj_inlet:.4f} m")
     steps.append("")
 
     # 6. 出口渐变段损失
     steps.append(f"6. 出口渐变段水头损失")
-    if outlet_transition_zeta is not None and outlet_transition_zeta > 0:
-        outlet_zeta = outlet_transition_zeta
+    outlet_zeta = _resolve_transition_zeta(outlet_transition_form, outlet_transition_zeta, is_inlet=False)
+    if has_outlet_transition:
+        hj_outlet, outlet_details = calc_transition_loss(V_pipe, downstream_velocity, outlet_zeta, is_inlet=False)
     else:
-        outlet_zeta = get_transition_zeta(outlet_transition_form, is_inlet=False)
-    hj_outlet, outlet_details = calc_transition_loss(V_pipe, downstream_velocity, outlet_zeta, is_inlet=False)
+        hj_outlet = 0.0
+        outlet_details = _build_skipped_transition_details(
+            V_pipe=V_pipe,
+            V_channel=downstream_velocity,
+            zeta=outlet_zeta,
+            form=outlet_transition_form,
+            is_inlet=False,
+            reason=outlet_transition_reason,
+        )
     result.outlet_transition_loss = hj_outlet
     result.outlet_transition_details = outlet_details
     steps.append(f"   型式: {outlet_transition_form}, ζ₃ = {outlet_zeta:.2f}")
-    steps.append(f"   V_管道 = {V_pipe:.4f} m/s, V_渠道 = {downstream_velocity:.4f} m/s")
-    steps.append(f"   hj₃ = ζ₃ × (V²_渠道 - V²_管道) / (2g) = {hj_outlet:.4f} m")
+    if has_outlet_transition:
+        steps.append(f"   V_管道 = {V_pipe:.4f} m/s, V_渠道 = {downstream_velocity:.4f} m/s")
+        steps.append(f"   hj₃ = ζ₃ × (V²_渠道 - V²_管道) / (2g) = {hj_outlet:.4f} m")
+    else:
+        steps.append(f"   该侧{outlet_transition_reason or '无渐变段'}，hj=0")
+        steps.append(f"   hj₃ = {hj_outlet:.4f} m")
     steps.append("")
 
     # 7. 总水头损失

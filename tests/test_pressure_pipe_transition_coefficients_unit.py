@@ -100,6 +100,36 @@ def test_pressure_pipe_calc_falls_back_when_override_not_positive():
     assert result.outlet_transition_details["zeta"] == pytest.approx(expected_out, rel=1e-9)
 
 
+def test_pressure_pipe_calc_skips_transition_when_side_is_marked_missing():
+    material_key = next(iter(PIPE_MATERIALS.keys()))
+    q = 1.55
+    d = 1.0
+
+    result = calc_total_head_loss(
+        name="P-3",
+        Q=q,
+        D=d,
+        material_key=material_key,
+        ip_points=[{"x": 0.0, "y": 0.0}, {"x": 60.0, "y": 0.0}],
+        upstream_velocity=1.039,
+        downstream_velocity=0.886,
+        has_inlet_transition=False,
+        has_outlet_transition=False,
+        inlet_transition_reason="紧邻有压同类结构，无渐变段",
+        outlet_transition_reason="紧邻有压同类结构，无渐变段",
+    )
+
+    assert result.inlet_transition_loss == pytest.approx(0.0, rel=1e-9)
+    assert result.outlet_transition_loss == pytest.approx(0.0, rel=1e-9)
+    assert result.has_inlet_transition is False
+    assert result.has_outlet_transition is False
+    assert result.inlet_transition_details["reason"] == "紧邻有压同类结构，无渐变段"
+    assert result.outlet_transition_details["reason"] == "紧邻有压同类结构，无渐变段"
+    assert "紧邻有压同类结构，无渐变段" in result.calc_steps
+    assert "hj₁ = 0.0000 m" in result.calc_steps
+    assert "hj₃ = 0.0000 m" in result.calc_steps
+
+
 def test_create_transition_node_uses_siphon_settings_for_pressure_pipe_adjacency():
     settings = ProjectSettings()
     settings.transition_outlet_form = "NORMAL-OUT"

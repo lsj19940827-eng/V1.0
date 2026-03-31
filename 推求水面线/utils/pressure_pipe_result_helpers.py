@@ -35,6 +35,42 @@ def _to_float_or_none(v: Any) -> Optional[float]:
         return None
 
 
+def _to_bool_or_default(v: Any, default: bool) -> bool:
+    """将值转换为布尔值，无法判断时回退到默认值。"""
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        text = v.strip().lower()
+        if text in ("true", "1", "yes", "y", "是"):
+            return True
+        if text in ("false", "0", "no", "n", "否"):
+            return False
+        return default
+    return bool(v)
+
+
+def build_pressure_pipe_transition_note(
+    has_inlet_transition: bool = True,
+    inlet_transition_reason: str = "",
+    has_outlet_transition: bool = True,
+    outlet_transition_reason: str = "",
+) -> str:
+    """汇总进口/出口两侧“无渐变段”说明。"""
+    notes: List[str] = []
+
+    inlet_reason = str(inlet_transition_reason or "").strip()
+    outlet_reason = str(outlet_transition_reason or "").strip()
+
+    if not has_inlet_transition:
+        notes.append(f"进口侧{inlet_reason or '无渐变段'}")
+    if not has_outlet_transition:
+        notes.append(f"出口侧{outlet_reason or '无渐变段'}")
+
+    return "；".join(notes)
+
+
 def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
     """
     规范化记录结构，兼容缺失字段/旧项目数据。
@@ -80,10 +116,21 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
             "sensitivity_low_friction_loss": _to_float_or_none(rec.get("sensitivity_low_friction_loss")),
             "sensitivity_low_total_head_loss": _to_float_or_none(rec.get("sensitivity_low_total_head_loss")),
             "sensitivity_delta_total_head_loss": _to_float_or_none(rec.get("sensitivity_delta_total_head_loss")),
+            "has_inlet_transition": _to_bool_or_default(rec.get("has_inlet_transition"), True),
+            "has_outlet_transition": _to_bool_or_default(rec.get("has_outlet_transition"), True),
+            "inlet_transition_reason": str(rec.get("inlet_transition_reason", "") or ""),
+            "outlet_transition_reason": str(rec.get("outlet_transition_reason", "") or ""),
             "calc_steps": str(rec.get("calc_steps", "") or ""),
             "error": str(rec.get("error", "") or ""),
             "note": str(rec.get("note", "") or ""),
         }
+        if not row["note"]:
+            row["note"] = build_pressure_pipe_transition_note(
+                has_inlet_transition=row["has_inlet_transition"],
+                inlet_transition_reason=row["inlet_transition_reason"],
+                has_outlet_transition=row["has_outlet_transition"],
+                outlet_transition_reason=row["outlet_transition_reason"],
+            )
         normalized_records.append(row)
 
     total = len(normalized_records)

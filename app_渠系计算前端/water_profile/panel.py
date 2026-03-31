@@ -120,6 +120,7 @@ from utils.pressure_pipe_result_helpers import (
     normalize_pressure_pipe_calc_records,
     format_pressure_pipe_record_detail,
     append_pressure_pipe_calc_batch_text,
+    build_pressure_pipe_transition_note,
 )
 
 # 核心计算引擎
@@ -9539,6 +9540,10 @@ class WaterProfilePanel(QWidget):
                             outlet_transition_form=group.outlet_transition_form,
                             inlet_transition_zeta=group.inlet_transition_zeta,
                             outlet_transition_zeta=group.outlet_transition_zeta,
+                            has_inlet_transition=group.has_inlet_transition,
+                            has_outlet_transition=group.has_outlet_transition,
+                            inlet_transition_reason=group.inlet_transition_reason,
+                            outlet_transition_reason=group.outlet_transition_reason,
                         )
                     else:
                         # 使用平面模式计算
@@ -9554,8 +9559,19 @@ class WaterProfilePanel(QWidget):
                             outlet_transition_form=group.outlet_transition_form,
                             inlet_transition_zeta=group.inlet_transition_zeta,
                             outlet_transition_zeta=group.outlet_transition_zeta,
+                            has_inlet_transition=group.has_inlet_transition,
+                            has_outlet_transition=group.has_outlet_transition,
+                            inlet_transition_reason=group.inlet_transition_reason,
+                            outlet_transition_reason=group.outlet_transition_reason,
                         )
                 except Exception as ex:
+                    transition_note = build_pressure_pipe_transition_note(
+                        has_inlet_transition=group.has_inlet_transition,
+                        inlet_transition_reason=group.inlet_transition_reason,
+                        has_outlet_transition=group.has_outlet_transition,
+                        outlet_transition_reason=group.outlet_transition_reason,
+                    )
+                    note_parts = [item for item in [note, transition_note] if item]
                     records.append({
                         **base_record,
                         "status": "failed",
@@ -9563,10 +9579,21 @@ class WaterProfilePanel(QWidget):
                         "D": group.diameter,
                         "material_key": material_key,
                         "error": f"计算失败: {ex}",
-                        "note": note,
+                        "note": "；".join(note_parts),
+                        "has_inlet_transition": group.has_inlet_transition,
+                        "has_outlet_transition": group.has_outlet_transition,
+                        "inlet_transition_reason": group.inlet_transition_reason,
+                        "outlet_transition_reason": group.outlet_transition_reason,
                     })
                     continue
 
+                transition_note = build_pressure_pipe_transition_note(
+                    has_inlet_transition=calc_res.has_inlet_transition,
+                    inlet_transition_reason=calc_res.inlet_transition_reason,
+                    has_outlet_transition=calc_res.has_outlet_transition,
+                    outlet_transition_reason=calc_res.outlet_transition_reason,
+                )
+                note_parts = [item for item in [note, transition_note] if item]
                 record = {
                     **base_record,
                     "status": "success",
@@ -9582,7 +9609,11 @@ class WaterProfilePanel(QWidget):
                     "total_head_loss": calc_res.total_head_loss,
                     "calc_steps": calc_res.calc_steps,
                     "data_mode": calc_res.data_mode,
-                    "note": note,
+                    "note": "；".join(note_parts),
+                    "has_inlet_transition": calc_res.has_inlet_transition,
+                    "has_outlet_transition": calc_res.has_outlet_transition,
+                    "inlet_transition_reason": calc_res.inlet_transition_reason,
+                    "outlet_transition_reason": calc_res.outlet_transition_reason,
                 }
                 if material_key == "球墨铸铁管":
                     fr = calc_res.friction_details or {}

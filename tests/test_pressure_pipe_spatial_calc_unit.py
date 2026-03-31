@@ -121,6 +121,60 @@ def test_plane_mode_without_longitudinal():
     print(f"  数据模式: {result.data_mode}")
 
 
+def test_spatial_mode_skips_marked_missing_outlet_transition():
+    ip_points = [
+        {"x": 0, "y": 0, "turn_radius": 0, "turn_angle": 0},
+        {"x": 100, "y": 0, "turn_radius": 0, "turn_angle": 0},
+    ]
+    longitudinal_nodes = [
+        {
+            'chainage': 0.0,
+            'elevation': 100.0,
+            'vertical_curve_radius': 0.0,
+            'turn_type': 'NONE',
+            'turn_angle': 0.0,
+            'slope_before': 0.0,
+            'slope_after': -0.01,
+            'arc_center_s': None,
+            'arc_center_z': None,
+            'arc_end_chainage': None,
+            'arc_theta_rad': None,
+        },
+        {
+            'chainage': 100.0,
+            'elevation': 99.0,
+            'vertical_curve_radius': 0.0,
+            'turn_type': 'NONE',
+            'turn_angle': 0.0,
+            'slope_before': -0.01,
+            'slope_after': 0.0,
+            'arc_center_s': None,
+            'arc_center_z': None,
+            'arc_end_chainage': None,
+            'arc_theta_rad': None,
+        },
+    ]
+
+    result = calc_total_head_loss_with_spatial(
+        name="测试管道",
+        Q=1.2,
+        D=0.8,
+        material_key="预应力钢筒混凝土管",
+        ip_points=ip_points,
+        longitudinal_nodes=longitudinal_nodes,
+        upstream_velocity=0.92,
+        downstream_velocity=1.039,
+        has_outlet_transition=False,
+        outlet_transition_reason="紧邻有压同类结构，无渐变段",
+    )
+
+    assert result.data_mode == "空间模式（平面+纵断面）"
+    assert result.outlet_transition_loss == 0.0
+    assert result.has_outlet_transition is False
+    assert result.outlet_transition_details["reason"] == "紧邻有压同类结构，无渐变段"
+    assert "紧邻有压同类结构，无渐变段" in result.calc_steps
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("有压管道空间模式计算单元测试")
