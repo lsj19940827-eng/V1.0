@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """有压管道结果报告文本格式单元测试。"""
 
-from 推求水面线.utils.pressure_pipe_result_helpers import format_pressure_pipe_calc_batch_text
+from 推求水面线.utils.pressure_pipe_result_helpers import (
+    build_pressure_pipe_transition_note,
+    format_pressure_pipe_calc_batch_text,
+)
 
 
 def test_batch_report_contains_summary_and_details():
@@ -53,3 +56,14 @@ def test_batch_report_contains_summary_and_details():
     assert "总损失(下限f)=1.4494 m" in txt
     assert "ΔH(下限-主值)=-0.0444 m" in txt
     assert "失败原因: 设计流量无效" in txt
+
+
+def test_build_pressure_pipe_transition_note_merges_both_sides():
+    note = build_pressure_pipe_transition_note(
+        has_inlet_transition=False,
+        inlet_transition_reason="紧邻有压同类结构，无渐变段",
+        has_outlet_transition=False,
+        outlet_transition_reason="紧邻有压同类结构，无渐变段",
+    )
+
+    assert note == "进口侧紧邻有压同类结构，无渐变段；出口侧紧邻有压同类结构，无渐变段"
