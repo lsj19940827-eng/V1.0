@@ -42,11 +42,23 @@ def test_validate_input_allows_empty_name_for_open_channel_allowlist():
     assert errors == []
 
 
-@pytest.mark.parametrize("structure_type", [StructureType.PRESSURE_PIPE, StructureType.INVERTED_SIPHON])
-def test_validate_input_blocks_empty_name_for_required_structures(structure_type):
+def test_validate_input_allows_empty_name_for_pressure_pipe():
     calc = WaterProfileCalculator(_make_settings())
     nodes = [
-        _make_node(structure_type, name=""),
+        _make_node(StructureType.PRESSURE_PIPE, name=""),
+        _make_node(StructureType.MINGQU_CIRCULAR, name="", flow_section="2"),
+    ]
+
+    is_valid, errors = calc.validate_input(nodes)
+
+    assert is_valid is True
+    assert errors == []
+
+
+def test_validate_input_blocks_empty_name_for_inverted_siphon():
+    calc = WaterProfileCalculator(_make_settings())
+    nodes = [
+        _make_node(StructureType.INVERTED_SIPHON, name=""),
         _make_node(StructureType.MINGQU_CIRCULAR, name="", flow_section="2"),
     ]
 
@@ -54,5 +66,5 @@ def test_validate_input_blocks_empty_name_for_required_structures(structure_type
 
     assert is_valid is False
     assert any("建筑物名称仅以下结构必填" in error for error in errors)
-    assert any("明渠-矩形/梯形/圆形可留空" in error for error in errors)
-    assert any(structure_type.value in error and "需要填写建筑物名称" in error for error in errors)
+    assert any("明渠-矩形/梯形/圆形、有压管道可留空" in error for error in errors)
+    assert any(StructureType.INVERTED_SIPHON.value in error and "需要填写建筑物名称" in error for error in errors)

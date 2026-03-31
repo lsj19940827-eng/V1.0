@@ -11,6 +11,11 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 import time
 
+try:
+    from models.enums import StructureType
+except ImportError:
+    StructureType = None
+
 
 def normalize_section_type_name(section_type: Any) -> str:
     """统一结构/断面类型别名，避免各模块口径差异导致后续识别失败。"""
@@ -27,6 +32,14 @@ def normalize_section_type_name(section_type: Any) -> str:
 def _normalize_section_type_name(section_type: Any) -> str:
     """兼容旧调用入口。"""
     return normalize_section_type_name(section_type)
+
+
+def is_pressure_pipe_like_section_type(section_type: Any) -> bool:
+    """判断结构类型是否按有压管道语义处理。"""
+    text = normalize_section_type_name(section_type)
+    if StructureType is not None and hasattr(StructureType, "is_pressure_pipe_like_str"):
+        return StructureType.is_pressure_pipe_like_str(text)
+    return text in {"有压管道", "定向钻", "顶管"}
 
 
 def normalize_use_increase_flag(value: Any, default: bool = True) -> bool:
@@ -252,12 +265,12 @@ class SharedDataManager:
                 )
             
             # 有压管道特殊处理：不参与水力计算，只记录位置、管径和名称信息
-            is_pressure_pipe = result.get('is_pressure_pipe', False) or section_type == "有压管道"
+            is_pressure_pipe = result.get('is_pressure_pipe', False) or is_pressure_pipe_like_section_type(section_type)
             if is_pressure_pipe:
                 return SectionResult(
                     source=source,
                     timestamp=time.time(),
-                    section_type="有压管道",
+                    section_type=section_type,
                     Q=result.get('Q', 0.0),
                     n=result.get('n', 0.014),
                     slope_inv=0,

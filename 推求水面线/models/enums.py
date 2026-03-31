@@ -70,6 +70,31 @@ class StructureType(Enum):
     def get_all_options(cls) -> list:
         """获取所有结构形式选项（用于下拉菜单）"""
         return [item.value for item in cls]
+
+    @classmethod
+    def get_pressure_pipe_like_structures(cls) -> list:
+        """获取按有压管道语义处理的结构类型。"""
+        return [
+            cls.PRESSURE_PIPE,
+            cls.DIRECTIONAL_DRILL,
+            cls.PIPE_JACKING,
+        ]
+
+    @classmethod
+    def is_pressure_pipe_like(cls, structure_type) -> bool:
+        """判断结构类型是否按有压管道语义处理。"""
+        if structure_type is None:
+            return False
+        value = structure_type.value if hasattr(structure_type, "value") else str(structure_type)
+        return cls.is_pressure_pipe_like_str(value)
+
+    @classmethod
+    def is_pressure_pipe_like_str(cls, structure_type_str: str) -> bool:
+        """判断结构形式字符串是否为有压管道同类。"""
+        text = str(structure_type_str or "").strip()
+        if not text:
+            return False
+        return text in {item.value for item in cls.get_pressure_pipe_like_structures()}
     
     @classmethod
     def get_special_structures(cls) -> list:
@@ -83,6 +108,8 @@ class StructureType(Enum):
             cls.TUNNEL_HORSESHOE_1, cls.TUNNEL_HORSESHOE_2,
             cls.INVERTED_SIPHON,
             cls.PRESSURE_PIPE,
+            cls.DIRECTIONAL_DRILL,
+            cls.PIPE_JACKING,
             cls.AQUEDUCT_U, cls.AQUEDUCT_RECT,
             cls.RECT_CULVERT,
             # 兼容旧版本
@@ -96,11 +123,12 @@ class StructureType(Enum):
 
     @classmethod
     def get_optional_name_structures(cls) -> list:
-        """获取允许建筑物名称留空的结构类型（首版仅放开三类明渠）。"""
+        """获取允许建筑物名称留空的结构类型。"""
         return [
             cls.MINGQU_TRAPEZOIDAL,
             cls.MINGQU_RECTANGULAR,
             cls.MINGQU_CIRCULAR,
+            cls.PRESSURE_PIPE,
         ]
 
     @classmethod

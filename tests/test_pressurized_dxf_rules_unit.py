@@ -625,6 +625,7 @@ def test_prepare_pressure_pipe_export_rows_uses_panel_velocity_for_cached_rows()
             "pipe_material": "球墨铸铁管",
             "DN_mm": 1600,
             "structure_kind": "pressure_pipe",
+            "Q": 3.0,
         }
     ]
     panel = SimpleNamespace(
@@ -637,6 +638,83 @@ def test_prepare_pressure_pipe_export_rows_uses_panel_velocity_for_cached_rows()
 
     assert prepared[0]["V"] == 1.438
     assert prepared[0]["total_head_loss"] == 0.5627
+
+
+def test_prepare_pressure_pipe_export_rows_backfills_velocity_from_q_and_dn_when_export_result_missing():
+    rows = [
+        {
+            "name": "牛马道",
+            "flow_section": 3,
+            "display_name": "牛马道-第三流量段",
+            "pipe_material": "球墨铸铁管",
+            "DN_mm": 1600,
+            "structure_kind": "pressure_pipe",
+            "Q": 3.0,
+        }
+    ]
+    panel = SimpleNamespace(get_pressure_pipe_export_results=lambda export_rows=None: {})
+
+    prepared = cad_tools._prepare_pressure_pipe_export_rows(rows, panel=panel, calc_contexts={})
+    computed = summary_mod.compute_pressure_pipe(prepared)
+    _, _, _, table_rows, _ = summary_mod._dxf_build_pressure_pipe(computed)
+
+    assert prepared[0]["V"] == 1.4921
+    assert computed[0]["V"] == 1.4921
+    assert table_rows[0][6] == 1.4921
+
+
+def test_prepare_pressure_pipe_export_rows_preserves_existing_velocity_over_q_dn_backfill():
+    rows = [
+        {
+            "name": "牛马道",
+            "flow_section": 3,
+            "display_name": "牛马道-第三流量段",
+            "pipe_material": "球墨铸铁管",
+            "DN_mm": 1600,
+            "structure_kind": "pressure_pipe",
+            "Q": 3.0,
+            "V": 1.377,
+        }
+    ]
+    panel = SimpleNamespace(get_pressure_pipe_export_results=lambda export_rows=None: {})
+
+    prepared = cad_tools._prepare_pressure_pipe_export_rows(rows, panel=panel, calc_contexts={})
+
+    assert prepared[0]["V"] == 1.377
+
+
+def test_prepare_pressure_pipe_export_rows_warns_when_velocity_cannot_be_backfilled(monkeypatch):
+    rows = [
+        {
+            "name": "缺参管道",
+            "flow_section": 3,
+            "display_name": "缺参管道-第三流量段",
+            "pipe_material": "球墨铸铁管",
+            "DN_mm": None,
+            "structure_kind": "pressure_pipe",
+            "Q": 3.0,
+        }
+    ]
+    panel = SimpleNamespace(get_pressure_pipe_export_results=lambda export_rows=None: {})
+    notices = []
+
+    monkeypatch.setattr(
+        cad_tools,
+        "fluent_info",
+        lambda parent, title, message: notices.append((parent, title, message)),
+    )
+
+    prepared = cad_tools._prepare_pressure_pipe_export_rows(rows, panel=panel, calc_contexts={})
+    cad_tools.SectionSummaryDialog._warn_pressure_pipe_missing_velocity(_dialog_shell(), prepared)
+    computed = summary_mod.compute_pressure_pipe(prepared)
+    _, _, _, table_rows, _ = summary_mod._dxf_build_pressure_pipe(computed)
+
+    assert "V" not in prepared[0]
+    assert table_rows[0][6] == "-"
+    assert notices
+    assert notices[0][1] == "提示"
+    assert "缺参管道" in notices[0][2]
+    assert "Q/DN" in notices[0][2]
 
 
 def test_merge_pressure_pipe_export_rows_by_flow_section_collapses_rows_and_attaches_summary():
