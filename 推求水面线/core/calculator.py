@@ -86,6 +86,22 @@ class WaterProfileCalculator:
         if not self.is_pressure_pipe(node):
             return False
         return not str(getattr(node, "name", "") or "").strip()
+
+    def _matches_gap_outlet_role(self, node: ChannelNode) -> bool:
+        """判断节点在插渐变段阶段是否可临时视为出口边界。"""
+        io_value = node.in_out.value if getattr(node, "in_out", None) else ""
+        if io_value == "出":
+            return True
+        # 空名称有压管道不参与全表配对，但在相邻建筑物补渐变段时，
+        # 仍需要按当前位置临时识别为边界。
+        return self._is_unnamed_pressure_pipe_node(node)
+
+    def _matches_gap_inlet_role(self, node: ChannelNode) -> bool:
+        """判断节点在插渐变段阶段是否可临时视为进口边界。"""
+        io_value = node.in_out.value if getattr(node, "in_out", None) else ""
+        if io_value == "进":
+            return True
+        return self._is_unnamed_pressure_pipe_node(node)
     
     def preprocess_nodes(self, nodes: List[ChannelNode]) -> None:
         """
@@ -879,13 +895,11 @@ class WaterProfileCalculator:
         
         # 检查前置条件
         # node1必须是出口
-        io1 = node1.in_out.value if node1.in_out else ""
-        if io1 != "出":
+        if not self._matches_gap_outlet_role(node1):
             return result
         
         # node2必须是进口
-        io2 = node2.in_out.value if node2.in_out else ""
-        if io2 != "进":
+        if not self._matches_gap_inlet_role(node2):
             return result
         
         # 分水闸/分水口与任何建筑物之间不插入明渠段
@@ -1007,8 +1021,7 @@ class WaterProfileCalculator:
             'distance': 0.0,
             'available_length': 0.0
         }
-        io1 = exit_node.in_out.value if exit_node.in_out else ""
-        if io1 != "出":
+        if not self._matches_gap_outlet_role(exit_node):
             return result
         result['distance'] = gate_node.station_MC - exit_node.station_MC
         if result['distance'] <= 0:
@@ -1054,8 +1067,7 @@ class WaterProfileCalculator:
             'distance': 0.0,
             'available_length': 0.0
         }
-        io2 = entry_node.in_out.value if entry_node.in_out else ""
-        if io2 != "进":
+        if not self._matches_gap_inlet_role(entry_node):
             return result
         result['distance'] = entry_node.station_MC - gate_node.station_MC
         if result['distance'] <= 0:

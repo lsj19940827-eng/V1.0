@@ -261,6 +261,51 @@ def test_with_open_channel_insertion():
         "隧洞侧的进口渐变段应标记 skip_loss=False"
 
 
+def test_unnamed_pressure_pipe_around_tunnel_inserts_transition_rows_after_preprocess():
+    """
+    验证空名称有压管道包夹隧洞时，预处理后仍能在两侧插入渐变段。
+    """
+    pipe_before = ChannelNode()
+    pipe_before.structure_type = StructureType.from_string("有压管道")
+    pipe_before.name = ""
+    pipe_before.section_params = {"D": 1.5}
+    pipe_before.station_MC = 100.0
+
+    tunnel_inlet = ChannelNode()
+    tunnel_inlet.structure_type = StructureType.from_string("隧洞-圆形")
+    tunnel_inlet.name = "纯牛马"
+    tunnel_inlet.section_params = {"D": 2.0}
+    tunnel_inlet.station_MC = 130.0
+
+    tunnel_outlet = ChannelNode()
+    tunnel_outlet.structure_type = StructureType.from_string("隧洞-圆形")
+    tunnel_outlet.name = "纯牛马"
+    tunnel_outlet.section_params = {"D": 2.0}
+    tunnel_outlet.station_MC = 180.0
+
+    pipe_after = ChannelNode()
+    pipe_after.structure_type = StructureType.from_string("有压管道")
+    pipe_after.name = ""
+    pipe_after.section_params = {"D": 1.5}
+    pipe_after.station_MC = 210.0
+
+    settings = ProjectSettings()
+    calculator = WaterProfileCalculator(settings)
+    nodes = [pipe_before, tunnel_inlet, tunnel_outlet, pipe_after]
+
+    calculator.preprocess_nodes(nodes)
+    result_nodes = calculator.identify_and_insert_transitions(nodes)
+
+    transition_rows = [node for node in result_nodes if getattr(node, "is_transition", False)]
+
+    assert len(transition_rows) >= 2, "空名称有压管道包夹隧洞时，两侧都应至少插入一条渐变段"
+    assert getattr(result_nodes[1], "is_transition", False) == True, "隧洞进口前应出现渐变段"
+    assert getattr(result_nodes[-2], "is_transition", False) == True, "隧洞出口后应出现渐变段"
+    assert all(node.transition_skip_loss for node in transition_rows), "含有压管道侧的渐变段应保持 skip_loss=True"
+    assert nodes[0].in_out == InOutType.NORMAL, "空名称有压管道原始进出口状态仍应保持 NORMAL"
+    assert nodes[-1].in_out == InOutType.NORMAL, "空名称有压管道原始进出口状态仍应保持 NORMAL"
+
+
 if __name__ == "__main__":
     import pytest
     
