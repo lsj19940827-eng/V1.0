@@ -73,12 +73,12 @@ class _FakeDoc:
         self.saved_path = path
 
 
-def _build_panel(*, name="N1"):
+def _build_panel(*, name="N1", structure_type="明渠-矩形"):
     node = SimpleNamespace(
         bottom_elevation=408.5,
         top_elevation=409.2,
         water_level=408.9,
-        structure_type=SimpleNamespace(value="明渠-矩形"),
+        structure_type=SimpleNamespace(value=structure_type),
         is_transition=False,
         is_auto_inserted_channel=False,
         name=name,
@@ -198,8 +198,37 @@ def test_combined_dxf_warns_but_saves_when_open_channel_name_missing(monkeypatch
 
     assert not errors
     assert infos, "明渠名称为空时应给出非阻断提示"
-    assert "部分明渠名称为空" in infos[-1][2]
+    assert "部分建筑物名称为空" in infos[-1][2]
     assert "第1行（明渠-矩形）" in infos[-1][2]
+    assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
+    assert questions, "成功导出后仍应弹出打开文件确认"
+
+
+def test_combined_dxf_warns_with_generic_message_when_pressure_pipe_name_missing(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    panel = _build_panel(name="", structure_type="有压管道")
+    errors = []
+    infos = []
+    questions = []
+
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **kwargs: infos.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: questions.append(args) or False)
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
+    monkeypatch.setattr(
+        cad_tools,
+        "_compute_ip_preview_data",
+        lambda *_a, **_k: ([["IP1"]], []),
+    )
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert not errors
+    assert infos, "有压管道名称为空时应给出非阻断提示"
+    assert "部分建筑物名称为空" in infos[-1][2]
+    assert "明渠名称为空" not in infos[-1][2]
+    assert "第1行（有压管道）" in infos[-1][2]
     assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
     assert questions, "成功导出后仍应弹出打开文件确认"
 
@@ -517,3 +546,69 @@ def test_export_combined_dxf_uses_xxpipe_profile_branch_and_current_snapshot(mon
     assert captured["dialog_nodes"] is current_nodes
     assert captured["export_mode"] == "xxpipe"
     assert captured["ip_nodes"] is current_nodes
+
+
+def test_export_combined_dxf_translates_missing_xxpipe_longitudinal_error(monkeypatch):
+    _patch_common(monkeypatch)
+    panel = _build_panel(name="穿路段", structure_type="定向钻")
+    errors = []
+
+    class _ConfigOnlyDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda value: value)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        cad_tools,
+        "_build_panel_xxpipe_profile_data",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            ValueError("以下节点缺少可用的 xx管 轴线高程覆盖：\n1::穿路段 缺少轴线纵断面")
+        ),
+    )
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert errors
+    assert "对应整线还没有导入纵断面DXF" in errors[-1][2]
+    assert "请先到表3的有压管道水力计算中导入后再导出" in errors[-1][2]
+    assert "缺少轴线纵断面" not in errors[-1][2]
+
+
+def test_export_combined_dxf_translates_incomplete_xxpipe_coverage_error(monkeypatch):
+    _patch_common(monkeypatch)
+    panel = _build_panel(name="穿路段", structure_type="定向钻")
+    errors = []
+
+    class _ConfigOnlyDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda value: value)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        cad_tools,
+        "_build_panel_xxpipe_profile_data",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            ValueError("以下节点缺少可用的 xx管 轴线高程覆盖：\n1::穿路段@0+080.000")
+        ),
+    )
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert errors
+    assert "已导入纵断面DXF，但未覆盖整线全部桩号" in errors[-1][2]
+    assert "请重新导入完整纵断面后再导出" in errors[-1][2]
+    assert "@0+080.000" not in errors[-1][2]

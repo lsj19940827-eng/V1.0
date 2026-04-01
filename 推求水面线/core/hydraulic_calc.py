@@ -29,6 +29,7 @@ from core.pressure_pipe_calc import (
     calc_bend_local_loss as calc_pressure_pipe_bend_local_loss,
     calc_friction_loss as calc_pressure_pipe_friction_loss,
 )
+from utils.pressure_pipe_common import resolve_pressure_pipe_material
 
 
 class HydraulicCalculator:
@@ -44,13 +45,6 @@ class HydraulicCalculator:
     """
 
     _DEFAULT_PRESSURE_PIPE_MATERIAL = "预应力钢筒混凝土管"
-    _PRESSURE_PIPE_MATERIAL_ALIASES = {
-        "PCCP管": "预应力钢筒混凝土管",
-        "钢筋混凝土管": "预应力钢筒混凝土管",
-        "预应力钢筒混凝土管(n=0.013)": "预应力钢筒混凝土管",
-        "预应力钢筒混凝土管(n=0.014)": "预应力钢筒混凝土管_n014",
-    }
-    
     def __init__(self, settings: ProjectSettings):
         """
         初始化水力计算器
@@ -67,6 +61,16 @@ class HydraulicCalculator:
         self.inverted_siphon_losses: Dict[str, float] = {}
         # 有压管道水头损失字典（按名称匹配）
         self.pressure_pipe_losses: Dict[str, float] = {}
+
+    def _resolve_turn_radius(self, node: ChannelNode) -> float:
+        """解析当前节点应使用的转弯半径。"""
+        # 表格里明确填 0 时，表示本节点不计转弯半径，不能回退到全局值。
+        if bool(getattr(node, "turn_radius_is_explicit", False)):
+            return float(getattr(node, "turn_radius", 0.0) or 0.0)
+        turn_radius = float(getattr(node, "turn_radius", 0.0) or 0.0)
+        if turn_radius > ZERO_TOLERANCE:
+            return turn_radius
+        return float(getattr(self.settings, "turn_radius", 0.0) or 0.0)
 
     def _is_unnamed_regular_pressure_pipe(self, node: Optional[ChannelNode]) -> bool:
         """判断是否为空名称普通有压管道行。"""
@@ -91,10 +95,13 @@ class HydraulicCalculator:
         raw_material = str(
             params.get("pipe_material", getattr(node, "pipe_material", "")) or ""
         ).strip()
-        material_key = self._PRESSURE_PIPE_MATERIAL_ALIASES.get(raw_material, raw_material)
-        if material_key in PIPE_MATERIALS:
-            return material_key
-        return self._DEFAULT_PRESSURE_PIPE_MATERIAL
+        return str(
+            resolve_pressure_pipe_material(
+                raw_material,
+                PIPE_MATERIALS,
+                default_material=self._DEFAULT_PRESSURE_PIPE_MATERIAL,
+            ).get("canonical_key", self._DEFAULT_PRESSURE_PIPE_MATERIAL)
+        )
 
     def _build_effective_length_context(
         self,
@@ -1118,7 +1125,7 @@ class HydraulicCalculator:
         if self._is_unnamed_regular_pressure_pipe(node):
             pipe_params = getattr(node, "section_params", {}) or {}
             pipe_diameter = self._get_diameter(pipe_params)
-            turn_radius = node.turn_radius if node.turn_radius > ZERO_TOLERANCE else self.settings.turn_radius
+            turn_radius = self._resolve_turn_radius(node)
             turn_angle = node.turn_angle or 0.0
             velocity = node.velocity
 
@@ -1172,9 +1179,7 @@ class HydraulicCalculator:
             return 0.0
         
         # 获取转弯半径（弯道半径）
-        Rc = node.turn_radius
-        if Rc <= ZERO_TOLERANCE:
-            Rc = self.settings.turn_radius
+        Rc = self._resolve_turn_radius(node)
         if Rc <= ZERO_TOLERANCE:
             return 0.0
         
@@ -2351,14 +2356,21 @@ class HydraulicCalculator:
 
         preserved_length = self._normalize_length_value(actual_length)
         if preserve_existing_length and preserved_length is not None:
-            effective_length = preserved_length
-            uses_existing_length = True
-            if preserved_length + ZERO_TOLERANCE < selected_length:
-                distance_clamped = True
-                self._append_transition_warning(
-                    warnings,
-                    "最终采用长度受可用里程约束已压缩。",
-                )
+            # 只保留“更短的现有采用值”，用于物理压缩、合并渐变段或旧结果回填。
+            # 当旧值反而大于当前公式/规则值时，说明它多半来自旧口径或过期缓存，应回到当前规则结果。
+            should_preserve_length = (
+                override_length is not None
+                or preserved_length <= selected_length + ZERO_TOLERANCE
+            )
+            if should_preserve_length:
+                effective_length = preserved_length
+                uses_existing_length = True
+                if preserved_length + ZERO_TOLERANCE < selected_length:
+                    distance_clamped = True
+                    self._append_transition_warning(
+                        warnings,
+                        "最终采用长度受可用里程约束已压缩。",
+                    )
         elif physical_limit_value is not None and physical_limit_value + ZERO_TOLERANCE < effective_length:
             effective_length = physical_limit_value
             distance_clamped = True

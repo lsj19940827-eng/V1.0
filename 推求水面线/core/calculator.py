@@ -1241,9 +1241,17 @@ class WaterProfileCalculator:
 
         coefficient = TRANSITION_LENGTH_COEFFICIENTS.get(transition_type, 3.0)
         L_basic = coefficient * abs(B_channel - B)
-        
-        # 应用约束条件
-        h_design = node.water_depth if node.water_depth > 0 else 2.0
+
+        # 约束水深优先跟正式计算保持一致：
+        # 先取渐变段相邻明渠水深，再回退同流量段参考明渠，最后才用节点自身/默认值。
+        h_design = self._resolve_transition_estimate_channel_depth(
+            node,
+            transition_type,
+            nodes=nodes,
+            gap_index=gap_index,
+            upstream_node=upstream_node,
+            downstream_node=downstream_node,
+        )
         struct_name = node.structure_type.value if node.structure_type else ""
         
         if "渡槽" in struct_name:
@@ -1288,6 +1296,52 @@ class WaterProfileCalculator:
             downstream_node,
         )
         return resolved.get('selected_length', L_basic)
+
+    def _resolve_transition_estimate_channel_depth(
+        self,
+        node: ChannelNode,
+        transition_type: str,
+        nodes: List[ChannelNode] = None,
+        gap_index: int = None,
+        upstream_node: Optional[ChannelNode] = None,
+        downstream_node: Optional[ChannelNode] = None,
+    ) -> float:
+        """为插入阶段估算渐变段长度补齐与正式计算一致的渠道设计水深来源。"""
+        channel_depth = 0.0
+
+        adjacent_channel = downstream_node if transition_type == "出口" else upstream_node
+        if adjacent_channel:
+            channel_depth = float(getattr(adjacent_channel, "water_depth", 0.0) or 0.0)
+            if channel_depth <= 0 and getattr(adjacent_channel, "section_params", None):
+                params = adjacent_channel.section_params or {}
+                channel_depth = float(params.get("水深", params.get("h", 0.0)) or 0.0)
+
+        ref_channel = None
+        if channel_depth <= 0 and nodes and gap_index is not None:
+            ref_channel = self._find_reference_segment_same_section_v2(
+                nodes,
+                gap_index,
+                gap_index,
+                min(len(nodes) - 1, gap_index + 1),
+            )
+            if ref_channel:
+                channel_depth = float(ref_channel.get("water_depth", 0.0) or 0.0)
+
+        if channel_depth <= 0 and nodes:
+            channel_depth = float(
+                self.hyd_calc.get_channel_design_depth(node.flow_section, nodes) or 0.0
+            )
+
+        if channel_depth <= 0:
+            channel_depth = float(getattr(node, "water_depth", 0.0) or 0.0)
+            if channel_depth <= 0 and getattr(node, "section_params", None):
+                params = node.section_params or {}
+                channel_depth = float(params.get("水深", params.get("h", 0.0)) or 0.0)
+
+        if channel_depth <= 0:
+            channel_depth = 2.0
+
+        return channel_depth
     
     def _find_global_nearest_channel(self, nodes: List[ChannelNode],
                                      gap_index: int) -> Optional[Dict]:

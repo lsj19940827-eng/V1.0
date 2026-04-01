@@ -24,7 +24,7 @@ from models.enums import StructureType
 
 def _load_formula_dialog_module():
     """加载渐变段长度详情弹窗模块。"""
-    module_path = next(Path(".").glob("**/water_profile/formula_dialog.py")).resolve()
+    module_path = (ROOT / "app_渠系计算前端" / "water_profile" / "formula_dialog.py").resolve()
     spec = importlib.util.spec_from_file_location(
         "wp_transition_length_pressure_pipe_alignment_test",
         module_path,
@@ -40,15 +40,15 @@ def _make_pressure_pipe_transition_case():
     prev_node.structure_type = StructureType.from_string("明渠-矩形")
     prev_node.name = "上游明渠"
     prev_node.section_params = {
-        "B": 1.0,
+        "B": 3.063,
         "m": 0.0,
-        "h": 2.0,
-        "水深": 2.0,
-        "A": 2.0,
-        "X": 5.0,
+        "h": 1.031,
+        "水深": 1.031,
+        "A": 3.158,
+        "X": 5.125,
         "R": 0.4,
     }
-    prev_node.water_depth = 2.0
+    prev_node.water_depth = 1.031
     prev_node.roughness = 0.014
     prev_node.flow_section = "1"
 
@@ -56,7 +56,7 @@ def _make_pressure_pipe_transition_case():
     next_node.structure_type = StructureType.from_string("有压管道")
     next_node.name = "有压管道1"
     next_node.section_params = {"D": 1.0}
-    next_node.water_depth = 2.0
+    next_node.water_depth = 0.0
     next_node.roughness = 0.014
     next_node.flow_section = "1"
 
@@ -71,7 +71,7 @@ def _make_pressure_pipe_transition_case():
 
 
 def test_pressure_pipe_transition_formula_matches_topology_estimate():
-    """普通有压管道详情里的公式值应与插入阶段口径一致。"""
+    """普通有压管道在无自身水深时，也应按相邻渠道水深估算。"""
     settings = ProjectSettings()
     topology_calc = WaterProfileCalculator(settings)
     hydraulic_calc = HydraulicCalculator(settings)
@@ -95,16 +95,16 @@ def test_pressure_pipe_transition_formula_matches_topology_estimate():
         preserve_existing_length=True,
     )
 
-    assert estimate == 10.0
-    assert details["formula_length"] == 10.0
-    assert details["requested_length"] == 10.0
-    assert details["actual_length"] == 10.0
+    assert round(estimate, 3) == 5.155
+    assert round(details["formula_length"], 3) == 5.155
+    assert round(details["requested_length"], 3) == 5.155
+    assert round(details["actual_length"], 3) == 5.155
     assert transition.transition_length_calc_details["constraint_applied"] == "有压管道"
     assert transition.transition_length_calc_details["constraint_desc"] == "5倍渠道设计水深"
 
 
 def test_pressure_pipe_transition_dialog_shows_aligned_formula_length(monkeypatch):
-    """普通有压管道弹窗不应再显示基础公式 2.5m 这类错位值。"""
+    """普通有压管道详情补建时，不应继续保留更大的旧采用值。"""
     module = _load_formula_dialog_module()
     captured = {}
 
@@ -121,14 +121,7 @@ def test_pressure_pipe_transition_dialog_shows_aligned_formula_length(monkeypatc
     hydraulic_calc = HydraulicCalculator(settings)
     prev_node, transition, next_node = _make_pressure_pipe_transition_case()
 
-    adopted_length = topology_calc._estimate_transition_length(
-        next_node,
-        "进口",
-        [prev_node, next_node],
-        0,
-        upstream_node=prev_node,
-        downstream_node=next_node,
-    )
+    adopted_length = 10.0
     details = hydraulic_calc.ensure_transition_length_details(
         transition,
         prev_node,
@@ -146,7 +139,7 @@ def test_pressure_pipe_transition_dialog_shows_aligned_formula_length(monkeypatc
     )
 
     assert captured["title"] == "行2 - 渐变段长度计算详情"
-    assert "公式/规范计算值  $L_{formula} = 10.000$ m" in text_blob
-    assert "规则目标长度  $L_{target} = 10.000$ m" in text_blob
-    assert "当前采用长度（最终采用长度）  $L_{actual} = 10.000$ m" in text_blob
-    assert "2.500" not in text_blob
+    assert "公式/规范计算值  $L_{formula} = 5.155$ m" in text_blob
+    assert "规则目标长度  $L_{target} = 5.155$ m" in text_blob
+    assert "当前采用长度（最终采用长度）  $L_{actual} = 5.155$ m" in text_blob
+    assert "10.000" not in text_blob

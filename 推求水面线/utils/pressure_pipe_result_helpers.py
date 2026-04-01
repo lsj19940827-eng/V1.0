@@ -53,6 +53,18 @@ def _to_bool_or_default(v: Any, default: bool) -> bool:
     return bool(v)
 
 
+def _to_row_index_or_default(v: Any, default: int = -1) -> int:
+    """将行索引转换为整数，保留合法的 0。"""
+    if v is None:
+        return default
+    if isinstance(v, str) and not v.strip():
+        return default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def build_pressure_pipe_transition_note(
     has_inlet_transition: bool = True,
     inlet_transition_reason: str = "",
@@ -109,6 +121,7 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
             "Q": _to_float_or_none(rec.get("Q")),
             "D": _to_float_or_none(rec.get("D")),
             "material_key": str(rec.get("material_key", "") or ""),
+            "resolved_material_key": str(rec.get("resolved_material_key", "") or ""),
             "total_length": _to_float_or_none(rec.get("total_length")),
             "pipe_velocity": _to_float_or_none(rec.get("pipe_velocity")),
             "friction_loss": _to_float_or_none(rec.get("friction_loss")),
@@ -117,8 +130,8 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
             "inlet_transition_loss": _to_float_or_none(rec.get("inlet_transition_loss")),
             "outlet_transition_loss": _to_float_or_none(rec.get("outlet_transition_loss")),
             "total_head_loss": _to_float_or_none(rec.get("total_head_loss")),
-            "target_row_index": int(rec.get("target_row_index", -1) or -1),
-            "upstream_row_index": int(rec.get("upstream_row_index", -1) or -1),
+            "target_row_index": _to_row_index_or_default(rec.get("target_row_index", -1)),
+            "upstream_row_index": _to_row_index_or_default(rec.get("upstream_row_index", -1)),
             "sensitivity_material": str(rec.get("sensitivity_material", "") or ""),
             "sensitivity_main_f": _to_float_or_none(rec.get("sensitivity_main_f")),
             "sensitivity_low_f": _to_float_or_none(rec.get("sensitivity_low_f")),
@@ -218,11 +231,16 @@ def format_pressure_pipe_record_detail(record: Dict[str, Any], precision: int = 
     lines = [f"[{status}] 流量段={flow_section}  名称={name}{mode_suffix}"]
 
     if record.get("status") == "success":
+        material_text = (
+            str(record.get("material_key", "") or "").strip()
+            or str(record.get("resolved_material_key", "") or "").strip()
+            or "-"
+        )
         lines.append(
             "输入参数: "
             f"Q={_fmt_num(record.get('Q'), precision)} m3/s, "
             f"D={_fmt_num(record.get('D'), precision)} m, "
-            f"管材={record.get('material_key', '') or '-'}, "
+            f"管材={material_text}, "
             f"L={_fmt_num(record.get('total_length'), precision)} m, "
             f"V={_fmt_num(record.get('pipe_velocity'), precision)} m/s"
         )

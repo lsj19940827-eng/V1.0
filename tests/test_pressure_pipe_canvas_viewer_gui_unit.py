@@ -7,9 +7,10 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QGroupBox, QLabel
+from PySide6.QtWidgets import QApplication, QDialog, QGroupBox, QLabel, QPushButton, QFileDialog, QMessageBox
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -17,6 +18,7 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "calc_渠系计算算法内核") not in sys.path:
     sys.path.insert(0, str(ROOT / "calc_渠系计算算法内核"))
 
+import app_渠系计算前端.water_profile.water_profile_dialogs as dialog_mod
 from app_渠系计算前端.water_profile.water_profile_dialogs import (
     PressurePipeConfigDialog,
     SimpleProfileCanvas,
@@ -291,8 +293,11 @@ def test_pressure_pipe_config_dialog_uses_storage_key_for_unnamed_segment():
     assert group.storage_key in dialog.get_longitudinal_nodes_dict()
 
 
-def _make_route_groups():
-    route_key = "flow2-route1"
+def _make_route_groups(
+    route_key: str = "flow2-route1",
+    display_name: str = "流量段2 整线1",
+    flow_section: str = "2",
+):
     route_points = [
         {"x": 0.0, "y": 0.0, "turn_angle": 0.0},
         {"x": 20.0, "y": 0.0, "turn_angle": 0.0},
@@ -304,9 +309,9 @@ def _make_route_groups():
         name="穿路段",
         display_name="穿路段",
         storage_key="穿路段",
-        identity="2::穿路段",
+        identity=f"{flow_section}::穿路段",
         route_key=route_key,
-        route_display_name="流量段2 整线1",
+        route_display_name=display_name,
         route_ip_points=list(route_points),
         route_start_mc=0.0,
         route_end_mc=80.0,
@@ -319,16 +324,16 @@ def _make_route_groups():
         diameter=1.0,
         material_key="钢管",
         ip_points=[route_points[0], route_points[1]],
-        rows=[SimpleNamespace(section_params={"D": 1.0}, turn_radius=0.0, flow_section="2") for _ in range(2)],
+        rows=[SimpleNamespace(section_params={"D": 1.0}, turn_radius=0.0, flow_section=flow_section) for _ in range(2)],
         row_indices=[1, 2],
     )
     group2 = SimpleNamespace(
         name="",
-        display_name="流量段2 第6行有压管道",
-        storage_key="flow2-row6",
-        identity="flow2-row6",
+        display_name=f"流量段{flow_section} 第6行有压管道",
+        storage_key=f"flow{flow_section}-row6",
+        identity=f"flow{flow_section}-row6",
         route_key=route_key,
-        route_display_name="流量段2 整线1",
+        route_display_name=display_name,
         route_ip_points=list(route_points),
         route_start_mc=0.0,
         route_end_mc=80.0,
@@ -341,18 +346,18 @@ def _make_route_groups():
         diameter=1.0,
         material_key="钢管",
         ip_points=[route_points[2], route_points[3]],
-        rows=[SimpleNamespace(section_params={"D": 1.0}, turn_radius=0.0, flow_section="2")],
+        rows=[SimpleNamespace(section_params={"D": 1.0}, turn_radius=0.0, flow_section=flow_section)],
         row_indices=[5],
         target_row_index=5,
         upstream_row_index=4,
     )
-    manager = _FakeManager(group1.storage_key, long_nodes, route_key=route_key, route_display_name="流量段2 整线1")
+    manager = _FakeManager(group1.storage_key, long_nodes, route_key=route_key, route_display_name=display_name)
     manager.set_pipe_config(
         group2.storage_key,
         SimpleNamespace(
             longitudinal_nodes=list(long_nodes),
             route_key=route_key,
-            route_display_name="流量段2 整线1",
+            route_display_name=display_name,
             turn_n=0.0,
             turn_R=0.0,
             force_override=False,
@@ -384,6 +389,335 @@ def test_pressure_pipe_config_dialog_builds_single_route_card_for_xxpipe_groups(
     titles = [box.title() for box in dialog.findChildren(QGroupBox)]
     assert any("整线1" in title for title in titles)
     assert any(groups[0].display_name in title for title in titles)
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_hides_chain_and_segment_cards_in_xxpipe_route_mode():
+    _get_qapp()
+    route_key, groups, manager = _make_route_groups()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        pressure_chains=_make_chain_descriptors(groups[0]),
+        xxpipe_route_mode=True,
+    )
+    dialog.show()
+    _flush_events(6)
+
+    assert hasattr(dialog, "_route_widgets")
+    assert route_key in dialog._route_widgets
+    assert len(dialog._route_widgets) == 1
+    assert dialog._card_widgets == {}
+    assert route_key in dialog.get_longitudinal_nodes_dict()
+
+    titles = [box.title() for box in dialog.findChildren(QGroupBox)]
+    assert titles == ["链路: 流量段2 整线1"]
+
+    label_texts = [label.text() for label in dialog.findChildren(QLabel)]
+    assert any("整线卡负责统一导入平面/纵断面" in text for text in label_texts)
+    assert not any("本成员参与连续承压链计算" in text for text in label_texts)
+    assert not any("平面R已应用" in text for text in label_texts)
+
+    button_texts = [btn.text() for btn in dialog.findChildren(QPushButton)]
+    assert "应用到全部管道" not in button_texts
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_rejects_route_import_when_station_coverage_is_incomplete():
+    _get_qapp()
+    route_key, groups, manager = _make_route_groups()
+    route_nodes = [
+        SimpleNamespace(
+            name="穿路段",
+            flow_section="2",
+            ip_number=1,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value="进"),
+            station_MC=0.0,
+            x=0.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="穿路段",
+            flow_section="2",
+            ip_number=2,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value=""),
+            station_MC=50.0,
+            x=50.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="穿路段",
+            flow_section="2",
+            ip_number=3,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value="出"),
+            station_MC=80.0,
+            x=80.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+        route_import_targets={
+            route_key: {
+                "display_name": "流量段2 整线1",
+                "station_prefix": "",
+                "nodes": route_nodes,
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="未覆盖以下节点桩号"):
+        dialog._validate_xxpipe_route_import_coverage(
+            route_key,
+            [
+                {"chainage": 0.0, "elevation": 422.0, "turn_type": "NONE"},
+                {"chainage": 40.0, "elevation": 418.0, "turn_type": "NONE"},
+            ],
+        )
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_rejects_xxpipe_import_when_coverage_is_incomplete(monkeypatch):
+    _get_qapp()
+    route_key, groups, _manager = _make_route_groups()
+    route_nodes = [
+        SimpleNamespace(
+            ip_number=1,
+            name="穿路段",
+            flow_section="2",
+            station_MC=0.0,
+            x=0.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            pressure_pipe_row_identity="2::穿路段",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=2,
+            name="穿路段",
+            flow_section="2",
+            station_MC=80.0,
+            x=80.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            pressure_pipe_row_identity="2::穿路段",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=_FakeManager("unused", []),
+        xxpipe_route_mode=True,
+        route_import_targets={
+            route_key: {
+                "display_name": "流量段2 整线1",
+                "station_prefix": "",
+                "nodes": route_nodes,
+            }
+        },
+    )
+
+    class _FakePolyline:
+        def get_points(self, format="xyseb"):
+            return [(0.0, 0.0, 0.0, 0.0, 0.0)]
+
+    class _FakeModelSpace:
+        def query(self, _query_text):
+            return [_FakePolyline()]
+
+    class _FakeDoc:
+        def modelspace(self):
+            return _FakeModelSpace()
+
+    class _FakeParser:
+        @staticmethod
+        def parse_longitudinal_profile(_filepath, chainage_offset=0.0):
+            assert chainage_offset == 0.0
+            turn_type = SimpleNamespace(name="NONE")
+            return (
+                [
+                    SimpleNamespace(
+                        chainage=0.0,
+                        elevation=422.0,
+                        vertical_curve_radius=0.0,
+                        turn_type=turn_type,
+                        turn_angle=0.0,
+                        slope_before=0.0,
+                        slope_after=0.0,
+                        arc_center_s=None,
+                        arc_center_z=None,
+                        arc_end_chainage=None,
+                        arc_theta_rad=None,
+                    ),
+                    SimpleNamespace(
+                        chainage=50.0,
+                        elevation=418.0,
+                        vertical_curve_radius=0.0,
+                        turn_type=turn_type,
+                        turn_angle=0.0,
+                        slope_before=0.0,
+                        slope_after=0.0,
+                        arc_center_s=None,
+                        arc_center_z=None,
+                        arc_end_chainage=None,
+                        arc_theta_rad=None,
+                    ),
+                ],
+                "测试导入",
+            )
+
+    errors = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *_a, **_k: ("fake.dxf", "DXF")))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_a: errors.append(_a[2])))
+    monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(readfile=lambda *_a, **_k: _FakeDoc()))
+    monkeypatch.setitem(sys.modules, "dxf_parser", SimpleNamespace(DxfParser=_FakeParser))
+
+    dialog._import_longitudinal_dxf(route_key, groups[0].route_ip_points)
+
+    assert errors
+    assert "未覆盖以下节点桩号" in errors[0]
+    assert "IP2@0+080.000" in errors[0]
+    assert route_key not in dialog.get_longitudinal_nodes_dict()
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_blocks_xxpipe_accept_without_longitudinal_and_highlights_route(monkeypatch):
+    _get_qapp()
+    route_key, groups, _manager = _make_route_groups()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=_FakeManager("unused", []),
+        xxpipe_route_mode=True,
+    )
+    dialog.show()
+    _flush_events(6)
+
+    errors = []
+    monkeypatch.setattr(dialog_mod, "fluent_error", lambda *_a, **_k: errors.append(_a[2]))
+
+    dialog.accept()
+    _flush_events(4)
+
+    assert errors
+    assert "还差一步：请先为“流量段2 整线1”导入纵断面DXF，然后再开始计算。" in errors[0]
+    assert "flow2-route1" not in errors[0]
+    assert "flow2-row6" not in errors[0]
+    assert dialog.result() != QDialog.Accepted
+    assert dialog._route_widgets[route_key]["card"].property("missing_longitudinal_highlight") is True
+    assert dialog._route_widgets[route_key]["btn_import"].property("missing_longitudinal_highlight") is True
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_aggregates_missing_xxpipe_routes_without_internal_ids(monkeypatch):
+    _get_qapp()
+    route_key1, groups1, _manager1 = _make_route_groups()
+    route_key2, groups2, _manager2 = _make_route_groups(
+        route_key="flow3-route1",
+        display_name="流量段3 整线1",
+        flow_section="3",
+    )
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups1 + groups2,
+        manager=_FakeManager("unused", []),
+        xxpipe_route_mode=True,
+    )
+    dialog.show()
+    _flush_events(6)
+
+    errors = []
+    monkeypatch.setattr(dialog_mod, "fluent_error", lambda *_a, **_k: errors.append(_a[2]))
+
+    dialog.accept()
+    _flush_events(4)
+
+    assert errors
+    assert "以下整线还没有导入纵断面DXF" in errors[0]
+    assert "流量段2 整线1" in errors[0]
+    assert "流量段3 整线1" in errors[0]
+    assert route_key1 not in errors[0]
+    assert route_key2 not in errors[0]
+    assert "flow2-row6" not in errors[0]
+    assert "flow3-row6" not in errors[0]
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_clears_xxpipe_highlight_after_import_and_accepts(monkeypatch):
+    _get_qapp()
+    route_key, groups, _manager = _make_route_groups()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=_FakeManager("unused", []),
+        xxpipe_route_mode=True,
+    )
+    dialog.show()
+    _flush_events(6)
+
+    errors = []
+    monkeypatch.setattr(dialog_mod, "fluent_error", lambda *_a, **_k: errors.append(_a[2]))
+
+    dialog.accept()
+    _flush_events(4)
+
+    dialog._longitudinal_data[route_key] = _make_longitudinal_nodes()
+    dialog._update_card_data_state(route_key, show_data=True)
+    _flush_events(4)
+    dialog.accept()
+    _flush_events(4)
+
+    assert len(errors) == 1
+    assert dialog._route_widgets[route_key]["card"].property("missing_longitudinal_highlight") in (False, None)
+    assert dialog._route_widgets[route_key]["btn_import"].property("missing_longitudinal_highlight") in (False, None)
+    assert dialog.result() == QDialog.Accepted
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_does_not_block_non_xxpipe_accept_without_longitudinal(monkeypatch):
+    _get_qapp()
+    route_key, groups, _manager = _make_route_groups()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=_FakeManager("unused", []),
+        xxpipe_route_mode=False,
+    )
+    dialog.show()
+    _flush_events(6)
+
+    errors = []
+    monkeypatch.setattr(dialog_mod, "fluent_error", lambda *_a, **_k: errors.append(_a[2]))
+
+    dialog.accept()
+    _flush_events(4)
+
+    assert errors == []
+    assert dialog.result() == QDialog.Accepted
+    assert dialog._route_widgets[route_key]["card"].property("missing_longitudinal_highlight") in (False, None)
 
     dialog.close()
     dialog.deleteLater()

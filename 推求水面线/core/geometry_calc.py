@@ -40,6 +40,16 @@ class GeometryCalculator:
         """
         self.settings = settings
         self.default_turn_radius = settings.turn_radius  # 默认转弯半径
+
+    def _resolve_turn_radius(self, node: ChannelNode) -> float:
+        """解析当前节点应使用的转弯半径。"""
+        # 用户在表格里明确填了 0 时，要按 0 处理，不能再退回默认半径。
+        if bool(getattr(node, "turn_radius_is_explicit", False)):
+            return float(getattr(node, "turn_radius", 0.0) or 0.0)
+        turn_radius = float(getattr(node, "turn_radius", 0.0) or 0.0)
+        if turn_radius > 0:
+            return turn_radius
+        return float(self.default_turn_radius or 0.0)
     
     def calculate_azimuth(self, x1: float, y1: float, x2: float, y2: float) -> float:
         """
@@ -340,8 +350,8 @@ class GeometryCalculator:
             )
             node.turn_angle = turn_angle
             
-            # 获取该节点的转弯半径（如果未设置则使用默认值）
-            turn_radius = node.turn_radius if node.turn_radius > 0 else self.default_turn_radius
+            # 获取该节点的转弯半径（显式填写 0 时不再使用默认值）
+            turn_radius = self._resolve_turn_radius(node)
             
             # 计算切线长: T = R × tan(α/2 × π/180)
             tangent = self.calculate_tangent_length(turn_angle, turn_radius)

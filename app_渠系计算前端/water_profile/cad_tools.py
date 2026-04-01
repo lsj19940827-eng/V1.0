@@ -68,13 +68,9 @@ try:
     )
 except Exception:
     XXPIPE_CHANNEL_LEVEL_OPTIONS = ["总干管", "分干管", "干管", "支管", "分支管"]
-    XXPIPE_ALLOWED_STRUCTURE_KEYWORDS = ("隧洞",)
+    XXPIPE_ALLOWED_STRUCTURE_KEYWORDS = ()
     XXPIPE_ALLOWED_STRUCTURE_OPTIONS = [
         "有压管道",
-        "隧洞-圆形",
-        "隧洞-圆拱直墙型",
-        "隧洞-马蹄形Ⅰ型",
-        "隧洞-马蹄形Ⅱ型",
         "定向钻",
         "顶管",
     ]
@@ -1456,7 +1452,7 @@ def _build_optional_blank_name_notice(nodes, *, action_name):
     if len(rows) > 8:
         preview += f" 等{len(rows)}行"
     return (
-        f"检测到部分明渠名称为空，已按结构形式/占位符参与{action_name}，不影响本次处理：\n"
+        f"检测到部分建筑物名称为空，已按结构形式/占位符参与{action_name}，不影响本次处理：\n"
         f"{preview}"
     )
 
@@ -1974,19 +1970,13 @@ def _is_xxpipe_allowed_structure(struct_name):
     text = str(struct_name or "").strip()
     if not text:
         return False
-    if text == "有压管道":
-        return True
-    if any(keyword in text for keyword in XXPIPE_ALLOWED_STRUCTURE_KEYWORDS):
-        return True
-    return text in {"定向钻", "顶管"}
+    return text in {"有压管道", "定向钻", "顶管"}
 
 
 def _is_xxpipe_named_structure(struct_name):
     text = str(struct_name or "").strip()
     if not text:
         return False
-    if any(keyword in text for keyword in XXPIPE_ALLOWED_STRUCTURE_KEYWORDS):
-        return True
     return text in {"定向钻", "顶管"}
 
 
@@ -1994,8 +1984,6 @@ def _get_xxpipe_structure_display_name(struct_name):
     text = str(struct_name or "").strip()
     if not text:
         return ""
-    if "隧洞" in text:
-        return "隧洞"
     return text
 
 
@@ -2060,7 +2048,7 @@ def _iter_profile_ip_nodes(nodes):
     return result
 
 
-def _build_ip_related_row_records(nodes, station_prefix):
+def _build_ip_related_row_records(nodes, station_prefix, station_resolver=None):
     """构建 BD/BE/BF/BJ/BK/BL 六类文本记录。
 
     返回: {row_id: [{"x": float, "text": str, "node": node}, ...], ...}
@@ -2083,8 +2071,8 @@ def _build_ip_related_row_records(nodes, station_prefix):
         after_text = base_text if (is_special or angle <= 0) else f"{base_text}弯后"
         center_text = base_text
 
-        station_bc = float(getattr(node, "station_BC", _profile_station_value(node)) or 0.0)
-        station_mc = _profile_station_value(node)
+        station_mc = _resolve_profile_station_value(node, station_resolver)
+        station_bc = float(getattr(node, "station_BC", station_mc) or 0.0)
         station_ec = float(getattr(node, "station_EC", station_mc) or station_mc)
 
         try:
@@ -2153,12 +2141,268 @@ def _show_special_angle_warning(panel, nodes):
         fluent_info(panel.window(), "特殊建筑转角提示", msg)
 
 
+def _parse_valid_station_value(value):
+    """解析有效桩号值，无法使用时返回 None。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    if number < 0:
+        return None
+    return number
+
+
+def _get_station_node_value(node, key, default=None):
+    """兼容对象/字典两类节点取值。"""
+    if isinstance(node, dict):
+        return node.get(key, default)
+    return getattr(node, key, default)
+
+
+def _parse_plan_point(node):
+    """解析节点平面坐标，无法使用时返回 None。"""
+    try:
+        x_val = float(_get_station_node_value(node, "x", None))
+        y_val = float(_get_station_node_value(node, "y", None))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(x_val) or not math.isfinite(y_val):
+        return None
+    return (x_val, y_val)
+
+
+def _build_station_fallback_prefix(nodes):
+    """为桩号回退计算准备距离前缀和。"""
+    visible_nodes = list(nodes or [])
+    segment_lengths = []
+    prefix_lengths = [0.0]
+    prefix_missing = [0]
+
+    for index in range(1, len(visible_nodes)):
+        start_point = _parse_plan_point(visible_nodes[index - 1])
+        end_point = _parse_plan_point(visible_nodes[index])
+        if start_point is None or end_point is None:
+            distance = None
+        else:
+            distance = math.hypot(end_point[0] - start_point[0], end_point[1] - start_point[1])
+        segment_lengths.append(distance)
+        prefix_lengths.append(prefix_lengths[-1] + (distance or 0.0))
+        prefix_missing.append(prefix_missing[-1] + (0 if distance is not None else 1))
+
+    return segment_lengths, prefix_lengths, prefix_missing
+
+
+def _segment_distance_between(prefix_lengths, prefix_missing, start_index: int, end_index: int):
+    """计算节点区间的累计距离，中间存在缺失坐标时返回 None。"""
+    if start_index == end_index:
+        return 0.0
+    if start_index > end_index:
+        distance = _segment_distance_between(prefix_lengths, prefix_missing, end_index, start_index)
+        return -distance if distance is not None else None
+    if start_index < 0 or end_index >= len(prefix_lengths):
+        return None
+    missing_count = prefix_missing[end_index] - prefix_missing[start_index]
+    if missing_count > 0:
+        return None
+    return prefix_lengths[end_index] - prefix_lengths[start_index]
+
+
+def _build_station_resolution_label(node, index: int):
+    """生成桩号解析提示标签。"""
+    ip_no = _get_station_node_value(node, "ip_number", None)
+    name = str(_get_station_node_value(node, "name", "") or "").strip()
+    if isinstance(ip_no, (int, float)):
+        base = f"IP{int(ip_no)}"
+    else:
+        base = f"第{int(index) + 1}个节点"
+    return f"{base} {name}".strip()
+
+
+def resolve_ordered_node_stations(nodes):
+    """解析顺序节点桩号，个别缺失时按平面累计距离回退。"""
+    ordered_nodes = list(nodes or [])
+    if not ordered_nodes:
+        return {"stations": [], "fallback_indices": [], "missing_items": []}
+
+    _segment_lengths, prefix_lengths, prefix_missing = _build_station_fallback_prefix(ordered_nodes)
+    explicit_stations = [
+        _parse_valid_station_value(_get_station_node_value(node, "station_MC", _get_station_node_value(node, "station_mc", None)))
+        for node in ordered_nodes
+    ]
+    explicit_indices = [index for index, value in enumerate(explicit_stations) if value is not None]
+    stations = []
+    fallback_indices = []
+    missing_items = []
+
+    for index, node in enumerate(ordered_nodes):
+        station_mc = explicit_stations[index]
+        used_fallback = False
+        error_reason = ""
+
+        if station_mc is None:
+            if not explicit_indices:
+                if prefix_missing[-1] == 0:
+                    distance_from_start = _segment_distance_between(prefix_lengths, prefix_missing, 0, index)
+                    if distance_from_start is not None:
+                        station_mc = float(distance_from_start)
+                        used_fallback = index > 0
+                if station_mc is None:
+                    error_reason = "缺少可用桩号锚点"
+            else:
+                prev_anchor = next(
+                    (
+                        anchor_index
+                        for anchor_index in range(index - 1, -1, -1)
+                        if explicit_stations[anchor_index] is not None
+                        and _segment_distance_between(prefix_lengths, prefix_missing, anchor_index, index) is not None
+                    ),
+                    None,
+                )
+                next_anchor = next(
+                    (
+                        anchor_index
+                        for anchor_index in range(index + 1, len(ordered_nodes))
+                        if explicit_stations[anchor_index] is not None
+                        and _segment_distance_between(prefix_lengths, prefix_missing, index, anchor_index) is not None
+                    ),
+                    None,
+                )
+
+                if prev_anchor is not None and next_anchor is not None:
+                    prev_distance = _segment_distance_between(prefix_lengths, prefix_missing, prev_anchor, index)
+                    next_distance = _segment_distance_between(prefix_lengths, prefix_missing, index, next_anchor)
+                    span_distance = _segment_distance_between(prefix_lengths, prefix_missing, prev_anchor, next_anchor)
+                    if (
+                        prev_distance is not None
+                        and next_distance is not None
+                        and span_distance is not None
+                        and abs(span_distance) > 1e-9
+                    ):
+                        station_mc = (
+                            explicit_stations[prev_anchor]
+                            + (explicit_stations[next_anchor] - explicit_stations[prev_anchor])
+                            * (prev_distance / span_distance)
+                        )
+                        used_fallback = True
+                elif prev_anchor is not None:
+                    prev_distance = _segment_distance_between(prefix_lengths, prefix_missing, prev_anchor, index)
+                    if prev_distance is not None:
+                        station_mc = explicit_stations[prev_anchor] + prev_distance
+                        used_fallback = True
+                elif next_anchor is not None:
+                    next_distance = _segment_distance_between(prefix_lengths, prefix_missing, index, next_anchor)
+                    if next_distance is not None:
+                        station_mc = explicit_stations[next_anchor] - next_distance
+                        used_fallback = True
+
+                if station_mc is None:
+                    error_reason = "缺少可用于回退的连续平面坐标"
+
+        stations.append(station_mc)
+        if station_mc is None:
+            missing_items.append(
+                {
+                    "index": index,
+                    "label": _build_station_resolution_label(node, index),
+                    "reason": error_reason or "缺少可用桩号",
+                }
+            )
+        elif used_fallback:
+            fallback_indices.append(index)
+
+    return {
+        "stations": stations,
+        "fallback_indices": fallback_indices,
+        "missing_items": missing_items,
+    }
+
+
+def resolve_xxpipe_profile_station_targets(nodes, station_prefix=""):
+    """解析 xx管 纵断面导出节点桩号，个别缺失时按平面累计距离回退。"""
+    visible_nodes = list(_iter_xxpipe_export_nodes(nodes))
+    station_data = resolve_ordered_node_stations(visible_nodes)
+    resolved_targets = []
+    errors = list(station_data["missing_items"])
+
+    for index, node in enumerate(visible_nodes):
+        station_mc = station_data["stations"][index]
+        used_fallback = index in set(station_data["fallback_indices"])
+
+        node_label = _build_profile_ip_base_text(node)
+        if not node_label:
+            node_label = _make_xxpipe_identity_from_node(node)
+
+        station_text = "-"
+        if station_mc is not None:
+            try:
+                station_text = ProjectSettings.format_station(station_mc, station_prefix)
+            except Exception:
+                station_text = f"{station_mc:.3f}"
+
+        resolved_targets.append(
+            {
+                "node": node,
+                "identity": _make_xxpipe_identity_from_node(node),
+                "label": node_label,
+                "station_mc": station_mc,
+                "station_text": station_text,
+                "used_fallback": used_fallback,
+            }
+        )
+    normalized_errors = []
+    for item in errors:
+        node = visible_nodes[item["index"]]
+        normalized_errors.append(
+            {
+                "node": node,
+                "identity": _make_xxpipe_identity_from_node(node),
+                "label": item["label"],
+                "reason": item["reason"],
+            }
+        )
+    return resolved_targets, normalized_errors
+
+
+def resolve_xxpipe_target_station_values(targets, station_prefix=""):
+    """解析 xx管 整线覆盖校验目标桩号，缺失时按平面累计距离回退。"""
+    ordered_targets = list(targets or [])
+    station_data = resolve_ordered_node_stations(ordered_targets)
+    resolved_targets = []
+    fallback_indices = set(station_data["fallback_indices"])
+
+    for index, target in enumerate(ordered_targets):
+        station_mc = station_data["stations"][index]
+        station_text = "-"
+        if station_mc is not None:
+            try:
+                station_text = ProjectSettings.format_station(station_mc, station_prefix)
+            except Exception:
+                station_text = f"{station_mc:.3f}"
+
+        payload = dict(target) if isinstance(target, dict) else {"value": target}
+        payload["resolved_station_mc"] = station_mc
+        payload["station_text"] = station_text
+        payload["used_fallback"] = index in fallback_indices
+        resolved_targets.append(payload)
+
+    return resolved_targets, list(station_data["missing_items"])
+
+
 def _profile_station_value(node):
     """提取纵断面导出用 station_MC 浮点值。"""
-    try:
-        return float(getattr(node, "station_MC", 0) or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
+    value = _parse_valid_station_value(getattr(node, "station_MC", None))
+    return float(value) if value is not None else 0.0
+
+
+def _resolve_profile_station_value(node, station_resolver=None):
+    """提取纵断面导出桩号，必要时使用外部回退结果。"""
+    if isinstance(station_resolver, dict):
+        value = station_resolver.get(id(node), None)
+        if value is not None:
+            return float(value)
+    return _profile_station_value(node)
 
 
 def _profile_elevation_score(node):
@@ -2184,14 +2428,14 @@ def _is_profile_text_export_node(node):
     return True
 
 
-def _build_profile_text_nodes(nodes):
+def _build_profile_text_nodes(nodes, station_resolver=None):
     """构建纵断面四行文本输出节点（真实节点过滤 + 同桩号归并 + 冲突校验）。"""
     grouped_by_station = {}
     station_order = []
     for node in nodes:
         if not _is_profile_text_export_node(node):
             continue
-        station_val = _profile_station_value(node)
+        station_val = _resolve_profile_station_value(node, station_resolver)
         station_key = round(station_val, 9)
         if station_key not in grouped_by_station:
             grouped_by_station[station_key] = []
@@ -3560,12 +3804,12 @@ def _build_xxpipe_profile_data(
     station_prefix="",
     manager_config_by_identity=None,
 ):
-    visible_nodes = list(_iter_xxpipe_export_nodes(nodes))
-    if not visible_nodes:
+    raw_visible_nodes = list(_iter_xxpipe_export_nodes(nodes))
+    if not raw_visible_nodes:
         raise ValueError("xx管纵断面导出没有可用节点")
 
     invalid_nodes = []
-    for node in visible_nodes:
+    for node in raw_visible_nodes:
         struct_name = _struct_val(getattr(node, "structure_type", None))
         if _is_xxpipe_allowed_structure(struct_name):
             continue
@@ -3573,7 +3817,26 @@ def _build_xxpipe_profile_data(
             f"{getattr(node, 'name', '') or '未命名'}({struct_name or '未知结构'})"
         )
     if invalid_nodes:
-        raise ValueError("xx管模式仅允许有压管道/隧洞/定向钻/顶管，检测到冲突结构：\n" + "；".join(invalid_nodes))
+        raise ValueError("xx管模式仅允许有压管道/定向钻/顶管，检测到冲突结构：\n" + "；".join(invalid_nodes))
+
+    station_targets, station_errors = resolve_xxpipe_profile_station_targets(
+        raw_visible_nodes,
+        station_prefix=station_prefix,
+    )
+    if station_errors:
+        raise ValueError(
+            "以下节点缺少可用桩号，无法读取 xx管 轴线高程：\n"
+            + "；".join(
+                f"{item['label']}（{item['reason']}）"
+                for item in station_errors
+            )
+        )
+
+    visible_nodes = []
+    for target in station_targets:
+        node_copy = copy.copy(target["node"])
+        setattr(node_copy, "station_MC", float(target["station_mc"]))
+        visible_nodes.append(node_copy)
 
     profile_text_nodes = _build_profile_text_nodes(visible_nodes)
     ip_records = _build_ip_related_row_records(visible_nodes, station_prefix).get("ip_name", [])
@@ -3715,6 +3978,21 @@ def _build_panel_xxpipe_profile_data(panel, nodes, station_prefix=""):
         station_prefix=station_prefix,
         manager_config_by_identity=manager_config,
     )
+
+
+def _translate_xxpipe_export_error(exc):
+    """将 xx管 纵断面导出的技术异常翻译成用户可执行的提示。"""
+    message = str(exc or "").strip()
+    if not message:
+        return None
+    if "缺少轴线纵断面" in message:
+        return "对应整线还没有导入纵断面DXF，请先到表3的有压管道水力计算中导入后再导出。"
+    if (
+        "以下节点缺少可用的 xx管 轴线高程覆盖" in message
+        or "超出 xx管轴线高程覆盖范围" in message
+    ):
+        return "已导入纵断面DXF，但未覆盖整线全部桩号，请重新导入完整纵断面后再导出。"
+    return None
 
 
 def _collect_xxpipe_full_height_boundary_mcs(profile_data):
@@ -8074,7 +8352,14 @@ def export_combined_dxf(panel):
         if not profile_nodes:
             fluent_info(parent_window, "警告", "没有可用于 xx管 纵断面导出的节点数据。")
             return
-        xxpipe_profile_data = _build_panel_xxpipe_profile_data(panel, profile_nodes, station_prefix=station_prefix)
+        try:
+            xxpipe_profile_data = _build_panel_xxpipe_profile_data(panel, profile_nodes, station_prefix=station_prefix)
+        except Exception as exc:
+            friendly_message = _translate_xxpipe_export_error(exc)
+            if friendly_message:
+                fluent_error(parent_window, "导出失败", friendly_message)
+                return
+            raise
 
     # ---- 3. 断面汇总表参数设置（构造参数、有压流参数等）----
     try:
@@ -8132,16 +8417,24 @@ def export_combined_dxf(panel):
         GAP = 20.0  # 各区域间距
 
         # ======== A. 纵断面表格（顶部，原点(0,0)） ========
-        prof_w, prof_h = _draw_profile_on_msp(
-            msp,
-            profile_nodes,
-            profile_valid_nodes,
-            profile_settings,
-            station_prefix,
-            layer_prefix=_PROF_PREFIX,
-            export_mode=export_mode,
-            xxpipe_profile_data=xxpipe_profile_data,
-        )
+        try:
+            prof_w, prof_h = _draw_profile_on_msp(
+                msp,
+                profile_nodes,
+                profile_valid_nodes,
+                profile_settings,
+                station_prefix,
+                layer_prefix=_PROF_PREFIX,
+                export_mode=export_mode,
+                xxpipe_profile_data=xxpipe_profile_data,
+            )
+        except Exception as exc:
+            if export_mode == "xxpipe":
+                friendly_message = _translate_xxpipe_export_error(exc)
+                if friendly_message:
+                    fluent_error(parent_window, "导出失败", friendly_message)
+                    return
+            raise
 
         # 下方区域起始Y（纵断面底部再向下留间距）
         below_y = -GAP

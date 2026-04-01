@@ -26,6 +26,7 @@ from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
 
 from app_渠系计算前端.styles import auto_resize_table, fluent_info, fluent_error, fluent_question
 from 推求水面线.models.data_models import OpenChannelParams
+from 推求水面线.utils.pressure_pipe_common import coerce_row_index
 
 try:
     from qfluentwidgets import PushButton, PrimaryPushButton, LineEdit, ComboBox
@@ -1005,8 +1006,46 @@ class PressurePipeConfigDialog(QDialog):
         "padding: 3px 10px; }"
         "QPushButton:hover { background: #CFD8DC; }"
     )
+    _ROUTE_CARD_STYLE = """
+        QGroupBox {
+            font-size: 13px; font-weight: bold; color: #2E7D32;
+            border: 2px solid #60C16B; border-radius: 8px;
+            margin-top: 12px; padding: 16px 12px 12px 12px;
+            background: #FFFFFF;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin; left: 16px;
+            padding: 0 8px; background: #FFFFFF;
+        }
+    """
+    _ROUTE_CARD_HIGHLIGHT_STYLE = """
+        QGroupBox {
+            font-size: 13px; font-weight: bold; color: #C45500;
+            border: 2px solid #E65100; border-radius: 8px;
+            margin-top: 12px; padding: 16px 12px 12px 12px;
+            background: #FFF8E1;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin; left: 16px;
+            padding: 0 8px; background: #FFF8E1;
+        }
+    """
+    _IMPORT_BTN_HIGHLIGHT_STYLE = (
+        "QPushButton { font-size: 12px; font-weight: bold; color: #FFFFFF; "
+        "background: #E65100; border: 1px solid #BF360C; border-radius: 4px; "
+        "padding: 4px 14px; }"
+        "QPushButton:hover { background: #F57C00; }"
+    )
 
-    def __init__(self, parent=None, pipe_groups=None, manager=None, pressure_chains=None):
+    def __init__(
+        self,
+        parent=None,
+        pipe_groups=None,
+        manager=None,
+        pressure_chains=None,
+        xxpipe_route_mode: bool = False,
+        route_import_targets: Dict[str, Any] | None = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("有压管道水力计算配置")
         self.setMinimumWidth(700)
@@ -1016,6 +1055,16 @@ class PressurePipeConfigDialog(QDialog):
         self._pipe_groups = pipe_groups or []
         self._manager = manager
         self._pressure_chains = list(pressure_chains or [])
+        self._xxpipe_route_mode = bool(xxpipe_route_mode)
+        self._route_import_targets = {}
+        for key, value in (route_import_targets or {}).items():
+            route_key = str(key or "").strip()
+            if not route_key:
+                continue
+            if isinstance(value, dict):
+                self._route_import_targets[route_key] = dict(value)
+            else:
+                self._route_import_targets[route_key] = {"targets": list(value or [])}
 
         # 存储每个管道的纵断面数据 {pipe_name: [LongitudinalNode字典列表]}
         self._longitudinal_data = {}
@@ -1121,8 +1170,11 @@ class PressurePipeConfigDialog(QDialog):
     def _build_pressure_chain_summary_text(self, chain) -> str:
         """构造连续承压链摘要。"""
         flow_section = str(self._chain_item_value(chain, "flow_section", "") or "").strip() or "-"
-        start_row_index = int(self._chain_item_value(chain, "start_row_index", -1) or -1)
-        end_row_index = int(self._chain_item_value(chain, "end_row_index", start_row_index) or start_row_index)
+        start_row_index = coerce_row_index(self._chain_item_value(chain, "start_row_index", -1))
+        end_row_index = coerce_row_index(
+            self._chain_item_value(chain, "end_row_index", start_row_index),
+            start_row_index,
+        )
         members = self._resolve_pressure_chain_members(chain)
         pressure_count = 0
         tunnel_count = 0
@@ -1152,7 +1204,7 @@ class PressurePipeConfigDialog(QDialog):
 
         display_name = str(self._chain_item_value(member, "display_name", "") or "").strip() or "未命名成员"
         structure_type = str(self._chain_item_value(member, "structure_type", "") or "").strip() or "承压成员"
-        target_row_index = int(self._chain_item_value(member, "target_row_index", -1) or -1)
+        target_row_index = coerce_row_index(self._chain_item_value(member, "target_row_index", -1))
         row_text = f"第{target_row_index + 1}行" if target_row_index >= 0 else "未定位行"
 
         title = QLabel(f"{structure_type}: {display_name}")
@@ -1867,6 +1919,7 @@ class PressurePipeConfigDialog(QDialog):
         lay.addWidget(line)
 
         # 如果有多个管道，显示管道卡片
+        route_only_mode = bool(self._xxpipe_route_mode and self._route_contexts)
         if self._pipe_groups or self._pressure_chains:
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
@@ -1882,14 +1935,15 @@ class PressurePipeConfigDialog(QDialog):
             for route_context in self._route_contexts.values():
                 route_card = self._create_route_card(route_context)
                 scroll_lay.addWidget(route_card)
-            for chain in self._pressure_chains:
-                scroll_lay.addWidget(self._create_pressure_chain_card(chain, used_group_keys))
+            if not route_only_mode:
+                for chain in self._pressure_chains:
+                    scroll_lay.addWidget(self._create_pressure_chain_card(chain, used_group_keys))
 
-            for group in self._pipe_groups:
-                if self._group_storage_key(group) in used_group_keys:
-                    continue
-                card = self._create_pipe_card(group)
-                scroll_lay.addWidget(card)
+                for group in self._pipe_groups:
+                    if self._group_storage_key(group) in used_group_keys:
+                        continue
+                    card = self._create_pipe_card(group)
+                    scroll_lay.addWidget(card)
 
             scroll_lay.addStretch()
             scroll.setWidget(scroll_widget)
@@ -1897,16 +1951,17 @@ class PressurePipeConfigDialog(QDialog):
             self._pipe_scroll_widget = scroll_widget
             lay.addWidget(scroll, 1)
 
-            radius_toolbar = QHBoxLayout()
-            radius_toolbar.setSpacing(10)
-            self._lbl_apply_summary = QLabel("平面R尚未应用")
-            self._lbl_apply_summary.setStyleSheet("font-size: 12px; color: #546E7A;")
-            radius_toolbar.addWidget(self._lbl_apply_summary, 1)
-            btn_apply_all = PushButton("应用到全部管道")
-            btn_apply_all.clicked.connect(self._on_apply_all_groups_clicked)
-            radius_toolbar.addWidget(btn_apply_all, 0, Qt.AlignRight)
-            lay.addLayout(radius_toolbar)
-            self._refresh_apply_summary_label()
+            if not route_only_mode:
+                radius_toolbar = QHBoxLayout()
+                radius_toolbar.setSpacing(10)
+                self._lbl_apply_summary = QLabel("平面R尚未应用")
+                self._lbl_apply_summary.setStyleSheet("font-size: 12px; color: #546E7A;")
+                radius_toolbar.addWidget(self._lbl_apply_summary, 1)
+                btn_apply_all = PushButton("应用到全部管道")
+                btn_apply_all.clicked.connect(self._on_apply_all_groups_clicked)
+                radius_toolbar.addWidget(btn_apply_all, 0, Qt.AlignRight)
+                lay.addLayout(radius_toolbar)
+                self._refresh_apply_summary_label()
 
         lay.addStretch()
 
@@ -1934,6 +1989,17 @@ class PressurePipeConfigDialog(QDialog):
         btn_lay.addWidget(btn_start)
 
         lay.addLayout(btn_lay)
+
+    def accept(self):
+        """开始计算前，先校验 xx管 整线是否已导入纵断面。"""
+        missing_route_keys = self._collect_missing_xxpipe_route_keys()
+        if missing_route_keys:
+            self._apply_xxpipe_route_missing_highlights(missing_route_keys)
+            self._focus_missing_xxpipe_route(missing_route_keys[0])
+            fluent_error(self, "缺少步骤", self._build_missing_xxpipe_route_message(missing_route_keys))
+            return
+        self._apply_xxpipe_route_missing_highlights([])
+        super().accept()
 
     @staticmethod
     def _pick_size_value(*values) -> int:
@@ -2078,7 +2144,7 @@ class PressurePipeConfigDialog(QDialog):
             f"{float(segment_end):.3f} m  |  本段损失按子段单独计算"
         )
 
-    def _add_visual_section(self, card_lay, pipe_name: str, ip_points) -> Dict[str, Any]:
+    def _add_visual_section(self, card_lay, pipe_name: str, ip_points, is_route_card: bool = False) -> Dict[str, Any]:
         """为卡片补充统一的平面/纵断面可视化区域。"""
         from PySide6.QtWidgets import QPushButton, QTableWidget, QHeaderView
 
@@ -2105,7 +2171,11 @@ class PressurePipeConfigDialog(QDialog):
         toolbar.addStretch()
         card_lay.addLayout(toolbar)
 
-        hint_label = QLabel("尚未导入纵断面数据，请点击「导入纵断面DXF」")
+        if self._xxpipe_route_mode and is_route_card:
+            hint_text = "还未导入纵断面DXF，请点击上方按钮完成这一步"
+        else:
+            hint_text = "尚未导入纵断面数据，请点击「导入纵断面DXF」"
+        hint_label = QLabel(hint_text)
         hint_label.setStyleSheet(
             "font-size: 12px; color: #E65100; background: #FFF8E1; "
             "border: 1px solid #FFE0B2; border-radius: 4px; "
@@ -2211,6 +2281,7 @@ class PressurePipeConfigDialog(QDialog):
             "canvas": mini_canvas,
             "expand_btn": expand_btn,
             "table": table,
+            "btn_import": btn_import,
             "btn_clear": btn_clear,
             "btn_preview": btn_preview,
             "btn_view_plan": btn_view_plan,
@@ -2226,18 +2297,7 @@ class PressurePipeConfigDialog(QDialog):
         route_ip_points = list(route_context.get("ip_points", []) or [])
 
         card = QGroupBox(f"链路: {display_name}")
-        card.setStyleSheet("""
-            QGroupBox {
-                font-size: 13px; font-weight: bold; color: #2E7D32;
-                border: 2px solid #60C16B; border-radius: 8px;
-                margin-top: 12px; padding: 16px 12px 12px 12px;
-                background: #FFFFFF;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin; left: 16px;
-                padding: 0 8px; background: #FFFFFF;
-            }
-        """)
+        card.setStyleSheet(self._ROUTE_CARD_STYLE)
 
         card_lay = QVBoxLayout(card)
         card_lay.setSpacing(10)
@@ -2247,19 +2307,26 @@ class PressurePipeConfigDialog(QDialog):
         info_label.setWordWrap(True)
         card_lay.addWidget(info_label)
 
-        desc_label = QLabel("整线卡负责统一导入平面/纵断面，下面各分段只保留参数配置和分段计算。")
+        if self._xxpipe_route_mode:
+            desc_text = "整线卡负责统一导入平面/纵断面，当前弹窗仅保留整线轴线配置。"
+        else:
+            desc_text = "整线卡负责统一导入平面/纵断面，下面各分段只保留参数配置和分段计算。"
+        desc_label = QLabel(desc_text)
         desc_label.setStyleSheet("font-size: 12px; color: #546E7A; font-weight: normal;")
         desc_label.setWordWrap(True)
         card_lay.addWidget(desc_label)
 
-        visual_refs = self._add_visual_section(card_lay, route_key, route_ip_points)
+        visual_refs = self._add_visual_section(card_lay, route_key, route_ip_points, is_route_card=True)
         self._route_widgets[route_key] = {
+            "card": card,
             "display_name": display_name,
             "route_context": route_context,
             **visual_refs,
         }
         if route_key in self._longitudinal_data and self._longitudinal_data[route_key]:
             self._update_card_data_state(route_key, show_data=True)
+        else:
+            self._update_card_data_state(route_key, show_data=False)
         return card
 
     def _create_pipe_card(self, group):
@@ -2396,7 +2463,7 @@ class PressurePipeConfigDialog(QDialog):
             card_lay.addWidget(notice_label)
             card_refs['route_notice_label'] = notice_label
         else:
-            card_refs.update(self._add_visual_section(card_lay, group_key, getattr(group, 'ip_points', []) or []))
+            card_refs.update(self._add_visual_section(card_lay, group_key, getattr(group, 'ip_points', []) or [], is_route_card=False))
 
         self._card_widgets[group_key] = card_refs
 
@@ -2439,6 +2506,62 @@ class PressurePipeConfigDialog(QDialog):
             parts.append(f"弯头: {' '.join(bend_parts)}")
         parts.append(f"总长度: {total_len:.1f} m")
         return "  |  ".join(parts)
+
+    def _collect_missing_xxpipe_route_keys(self) -> List[str]:
+        """收集 xx管 模式下仍未导入纵断面的整线。"""
+        if not (self._xxpipe_route_mode and self._route_contexts):
+            return []
+        missing = []
+        for route_key in self._route_contexts.keys():
+            if not (self._longitudinal_data.get(route_key) or []):
+                missing.append(route_key)
+        return missing
+
+    def _build_missing_xxpipe_route_message(self, route_keys: List[str]) -> str:
+        """构造 xx管 缺少纵断面的统一提示语。"""
+        route_names = [self._resolve_pipe_label(route_key) for route_key in route_keys if str(route_key).strip()]
+        if len(route_names) == 1:
+            return f"还差一步：请先为“{route_names[0]}”导入纵断面DXF，然后再开始计算。"
+        route_text = "；".join(route_names)
+        return f"还差一步：以下整线还没有导入纵断面DXF：{route_text}。请先分别导入后再开始计算。"
+
+    def _set_route_missing_longitudinal_highlight(self, route_key: str, highlighted: bool):
+        """切换整线卡与导入按钮的高亮状态。"""
+        widgets = self._route_widgets.get(str(route_key or "").strip(), {})
+        card = widgets.get("card")
+        btn_import = widgets.get("btn_import")
+        if card is not None:
+            card.setProperty("missing_longitudinal_highlight", bool(highlighted))
+            card.setStyleSheet(self._ROUTE_CARD_HIGHLIGHT_STYLE if highlighted else self._ROUTE_CARD_STYLE)
+            card.style().unpolish(card)
+            card.style().polish(card)
+        if btn_import is not None:
+            btn_import.setProperty("missing_longitudinal_highlight", bool(highlighted))
+            btn_import.setStyleSheet(self._IMPORT_BTN_HIGHLIGHT_STYLE if highlighted else "")
+            btn_import.style().unpolish(btn_import)
+            btn_import.style().polish(btn_import)
+
+    def _apply_xxpipe_route_missing_highlights(self, missing_route_keys: List[str]):
+        """按缺失情况统一刷新整线卡高亮。"""
+        missing_set = {str(item or "").strip() for item in (missing_route_keys or []) if str(item or "").strip()}
+        for route_key in self._route_widgets.keys():
+            self._set_route_missing_longitudinal_highlight(route_key, route_key in missing_set)
+
+    def _focus_missing_xxpipe_route(self, route_key: str):
+        """滚动到缺失纵断面的整线卡，并把焦点落到导入按钮。"""
+        widgets = self._route_widgets.get(str(route_key or "").strip(), {})
+        card = widgets.get("card")
+        btn_import = widgets.get("btn_import")
+        if card is not None and self._pipe_scroll_area is not None:
+            try:
+                self._pipe_scroll_area.ensureWidgetVisible(card, 0, 80)
+            except Exception:
+                pass
+        if btn_import is not None:
+            try:
+                btn_import.setFocus(Qt.OtherFocusReason)
+            except Exception:
+                pass
 
     def _on_canvas_zoom_reset(self, pipe_name):
         """重置画布缩放"""
@@ -2532,9 +2655,14 @@ class PressurePipeConfigDialog(QDialog):
             w['btn_preview'].setEnabled(True)
             w['btn_view_profile'].setEnabled(True)
             self._refresh_long_table(pipe_name, w['table'])
+            if pipe_name in self._route_widgets:
+                self._set_route_missing_longitudinal_highlight(pipe_name, False)
         else:
             has_plan = w['canvas'].has_plan_data()
-            w['hint'].setVisible(not has_plan)
+            show_hint = not has_plan
+            if self._xxpipe_route_mode and pipe_name in self._route_widgets:
+                show_hint = True
+            w['hint'].setVisible(show_hint)
             w['stats'].setVisible(False)
             w['expand_btn'].setVisible(False)
             w['table'].setVisible(False)
@@ -2545,8 +2673,60 @@ class PressurePipeConfigDialog(QDialog):
             if w['canvas'].get_view_mode() == "profile":
                 self._set_card_view_mode(pipe_name, "plan", sync_viewer=False)
             w['zoom_label'].setText(f"{w['canvas'].get_zoom_percent()}%")
+            if pipe_name in self._route_widgets:
+                self._set_route_missing_longitudinal_highlight(pipe_name, False)
         if self._active_viewer_pipe_name == pipe_name:
             self._sync_canvas_viewer(pipe_name)
+
+    def _resolve_route_import_payload(self, pipe_name: str) -> Dict[str, Any]:
+        """读取整线导入校验上下文。"""
+        payload = self._route_import_targets.get(str(pipe_name or "").strip(), {})
+        return payload if isinstance(payload, dict) else {}
+
+    def _validate_xxpipe_route_import_coverage(self, pipe_name: str, longitudinal_nodes):
+        """xx管 整线导入后立即校验导出节点桩号是否都被覆盖。"""
+        payload = self._resolve_route_import_payload(pipe_name)
+        route_nodes = list(payload.get("nodes", []) or [])
+        station_prefix = str(payload.get("station_prefix", "") or "")
+        display_name = str(payload.get("display_name", "") or self._resolve_pipe_label(pipe_name)).strip()
+        if not route_nodes:
+            return
+
+        from app_渠系计算前端.water_profile.cad_tools import (
+            resolve_xxpipe_profile_station_targets,
+            sample_xxpipe_centerline_elevation,
+        )
+
+        station_targets, station_errors = resolve_xxpipe_profile_station_targets(
+            route_nodes,
+            station_prefix=station_prefix,
+        )
+        if station_errors:
+            raise ValueError(
+                f"{display_name} 缺少可用于导入校验的桩号信息：\n"
+                + "；".join(
+                    f"{item['label']}（{item['reason']}）"
+                    for item in station_errors
+                )
+            )
+
+        missing_targets = []
+        for target in station_targets:
+            station_mc = target.get("station_mc", None)
+            if station_mc is None:
+                continue
+            try:
+                sample_xxpipe_centerline_elevation(longitudinal_nodes, float(station_mc))
+            except ValueError as exc:
+                if "超出 xx管轴线高程覆盖范围" not in str(exc):
+                    raise
+                missing_targets.append(f"{target.get('label', '-')}@{target.get('station_text', '-')}")
+
+        if missing_targets:
+            raise ValueError(
+                f"{display_name} 导入的纵断面未覆盖以下节点桩号：\n"
+                + "；".join(missing_targets)
+            )
 
     def _import_longitudinal_dxf(self, pipe_name, ip_points):
         """导入纵断面DXF"""
@@ -2591,7 +2771,7 @@ class PressurePipeConfigDialog(QDialog):
                 if polys:
                     first_point = list(polys[0].get_points(format='xyseb'))[0]
                     x_start = first_point[0]
-                    mc_inlet = ip_points[0].get('x', 0.0)
+                    mc_inlet = ip_points[0].get('station_mc', ip_points[0].get('x', 0.0))
                     chainage_offset = mc_inlet - x_start
 
             long_nodes, message = DxfParser.parse_longitudinal_profile(filepath, chainage_offset=chainage_offset)
@@ -2617,9 +2797,10 @@ class PressurePipeConfigDialog(QDialog):
                 }
                 long_nodes_dict.append(node_dict)
 
-            self._longitudinal_data[pipe_name] = long_nodes_dict
+            if self._xxpipe_route_mode:
+                self._validate_xxpipe_route_import_coverage(pipe_name, long_nodes_dict)
 
-            if ip_points and len(ip_points) >= 2:
+            if not self._xxpipe_route_mode and ip_points and len(ip_points) >= 2:
                 ip_start = ip_points[0].get('x', 0.0)
                 ip_end = ip_points[-1].get('x', 0.0)
                 long_start = long_nodes[0].chainage
@@ -2634,10 +2815,10 @@ class PressurePipeConfigDialog(QDialog):
                 if warning_msg:
                     warning_msg += "\n超出纵断面范围的部分将按平面数据处理。\n是否继续？"
                     if not fluent_question(self, "桩号范围警告", warning_msg):
-                        del self._longitudinal_data[pipe_name]
                         self._update_card_data_state(pipe_name, show_data=False)
                         return
 
+            self._longitudinal_data[pipe_name] = long_nodes_dict
             self._update_card_data_state(pipe_name, show_data=True)
             fluent_info(self, "导入成功", f"{pipe_label}\n{message}\n变坡点节点: {len(long_nodes)} 个")
 

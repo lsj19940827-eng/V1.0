@@ -54,3 +54,24 @@ def test_records_roundtrip_is_stable():
 def test_missing_records_field_compatible_with_old_project():
     assert normalize_pressure_pipe_calc_records(None) == empty_pressure_pipe_calc_records()
     assert normalize_pressure_pipe_calc_records({}) == empty_pressure_pipe_calc_records()
+
+
+def test_records_preserve_explicit_zero_row_indices():
+    raw = {
+        "records": [
+            {
+                "identity": "flow1-row1",
+                "flow_section": "1",
+                "name": "流量段1 第1行有压管道",
+                "status": "success",
+                "writeback_enabled": False,
+                "target_row_index": 0,
+                "upstream_row_index": 0,
+            }
+        ]
+    }
+
+    normalized = normalize_pressure_pipe_calc_records(raw)
+
+    assert normalized["records"][0]["target_row_index"] == 0
+    assert normalized["records"][0]["upstream_row_index"] == 0

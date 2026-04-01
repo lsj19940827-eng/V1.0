@@ -4,6 +4,7 @@
 import importlib.util
 import os
 import sys
+import types
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -247,6 +248,50 @@ def _make_direct_gap_transition_nodes():
     return [upstream, transition, downstream]
 
 
+def _make_pressure_pipe_stale_length_nodes():
+    upstream = ChannelNode()
+    upstream.flow_section = "1"
+    upstream.name = "上游明渠"
+    upstream.structure_type = StructureType.from_string("明渠-矩形")
+    upstream.section_params = {"B": 3.063, "m": 0.0, "h": 1.031, "水深": 1.031, "A": 3.158, "X": 5.125, "R": 0.616}
+    upstream.water_depth = 1.031
+    upstream.velocity = 1.4
+    upstream.roughness = 0.014
+    upstream.flow = 5.0
+
+    transition = ChannelNode()
+    transition.flow_section = "1"
+    transition.name = "-"
+    transition.structure_type = StructureType.TRANSITION
+    transition.is_transition = True
+    transition.transition_type = "进口"
+    transition.transition_form = "曲线形反弯扭曲面"
+    transition.transition_length = 10.0
+    transition.transition_length_calc_details = {
+        "transition_type": "进口",
+        "struct_name": "有压管道",
+        "formula_length": 5.155,
+        "requested_length": 5.155,
+        "actual_length": 10.0,
+        "source": "formula",
+    }
+    transition.roughness = 0.014
+    transition.flow = 5.0
+
+    pressure_pipe = ChannelNode()
+    pressure_pipe.flow_section = "1"
+    pressure_pipe.name = "有压管道1"
+    pressure_pipe.structure_type = StructureType.from_string("有压管道")
+    pressure_pipe.in_out = InOutType.INLET
+    pressure_pipe.section_params = {"D": 1.0}
+    pressure_pipe.water_depth = 0.0
+    pressure_pipe.velocity = 2.0
+    pressure_pipe.roughness = 0.014
+    pressure_pipe.flow = 5.0
+
+    return [upstream, transition, pressure_pipe]
+
+
 def test_project_reload_repairs_missing_transition_length_details():
     module = _load_panel_module()
     panel = _build_panel(module)
@@ -274,6 +319,57 @@ def test_project_reload_repairs_missing_transition_length_details():
         assert repaired.get("L_result") == 9.0
     finally:
         restored.deleteLater()
+
+
+def test_transition_length_detail_refresh_replaces_stale_pressure_pipe_length():
+    module = _load_panel_module()
+    panel = _build_panel(module)
+    try:
+        nodes = _make_pressure_pipe_stale_length_nodes()
+        panel.calculated_nodes = nodes
+        panel._update_table_from_nodes_full(nodes)
+        _flush_events()
+
+        panel.node_table.item(1, 32).setText("10.000")
+
+        repaired = panel._repair_transition_length_details_for_row(1, nodes)
+
+        assert repaired, "已有详情时也应按当前规则刷新"
+        assert panel.node_table.item(1, 32).text() == "5.155"
+        assert round(nodes[1].transition_length, 3) == 5.155
+        assert round(repaired.get("formula_length", 0.0), 3) == 5.155
+        assert round(repaired.get("actual_length", 0.0), 3) == 5.155
+    finally:
+        panel.deleteLater()
+
+
+def test_show_transition_length_details_refreshes_stale_pressure_pipe_details(monkeypatch):
+    module = _load_panel_module()
+    panel = _build_panel(module)
+    try:
+        panel.calculated_nodes = _make_pressure_pipe_stale_length_nodes()
+        panel._update_table_from_nodes_full(panel.calculated_nodes)
+        _flush_events()
+
+        dialog_calls = []
+        info_calls = []
+        formula_module = types.ModuleType("app_渠系计算前端.water_profile.formula_dialog")
+        formula_module.show_transition_length_dialog = (
+            lambda parent, node_name, details, **kwargs: dialog_calls.append((parent, node_name, details))
+        )
+        monkeypatch.setitem(sys.modules, "app_渠系计算前端.water_profile.formula_dialog", formula_module)
+        monkeypatch.setattr(module, "fluent_info", lambda *args, **kwargs: info_calls.append((args, kwargs)))
+
+        panel._show_transition_length_details(1, panel.calculated_nodes[1], panel.calculated_nodes)
+
+        assert dialog_calls, "已有旧详情时，双击也应先刷新后再弹窗"
+        assert not info_calls, "刷新成功后不应提示没有计算数据"
+        details = dialog_calls[0][2]
+        assert round(details.get("formula_length", 0.0), 3) == 5.155
+        assert round(details.get("actual_length", 0.0), 3) == 5.155
+        assert panel.node_table.item(1, 32).text() == "5.155"
+    finally:
+        panel.deleteLater()
 
 
 def test_rule_rows_require_existing_transition_instances():

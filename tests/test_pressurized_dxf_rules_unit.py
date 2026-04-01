@@ -1035,6 +1035,7 @@ def test_pressure_pipe_summary_maps_legacy_material_names_to_fmb():
 def test_pressure_pipe_material_helpers_normalize_legacy_names_to_canonical_key_and_display():
     assert summary_mod.normalize_pressure_pipe_material_key("PCCP管") == "预应力钢筒混凝土管"
     assert summary_mod.normalize_pressure_pipe_material_key("钢筋混凝土管") == "预应力钢筒混凝土管"
+    assert summary_mod.normalize_pressure_pipe_material_key("PE管") == "HDPE管"
     assert summary_mod.normalize_pressure_pipe_material_key("预应力钢筒混凝土管(n=0.014)") == "预应力钢筒混凝土管_n014"
     assert summary_mod.get_pressure_pipe_material_display_name("预应力钢筒混凝土管_n015") == "预应力钢筒混凝土管(n=0.015)"
 

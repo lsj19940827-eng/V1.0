@@ -50,6 +50,7 @@ from 有压管道设计 import (
     PIPE_MATERIALS as PRESSURE_PIPE_MATERIALS,
     get_flow_increase_percent as _pressure_pipe_inc_pct,
 )
+from 推求水面线.utils.pressure_pipe_common import normalize_pressure_pipe_material_key as _normalize_shared_pressure_pipe_material_key
 
 try:
     from 推求水面线.core.pressure_pipe_calc import calc_total_head_loss as _calc_pressure_pipe_total_head_loss
@@ -95,30 +96,12 @@ SIPHON_MATERIALS = {
     "玻璃钢夹砂管": 0.009,
 }
 
-PRESSURE_PIPE_MATERIAL_ALIASES = {
-    "PCCP管": "预应力钢筒混凝土管",
-    "钢筋混凝土管": "预应力钢筒混凝土管",
-}
-
-PRESSURE_PIPE_DISPLAY_NAME_TO_KEY = {
-    str(params.get("name") or key): key
-    for key, params in PRESSURE_PIPE_MATERIALS.items()
-}
-
-
 def _normalize_pressure_pipe_material_key(material_key: str) -> str:
-    text = str(material_key or "").strip()
-    if not text:
-        return "球墨铸铁管"
-    if text in PRESSURE_PIPE_MATERIALS:
-        return text
-    display_key = PRESSURE_PIPE_DISPLAY_NAME_TO_KEY.get(text)
-    if display_key in PRESSURE_PIPE_MATERIALS:
-        return display_key
-    alias = PRESSURE_PIPE_MATERIAL_ALIASES.get(text)
-    if alias in PRESSURE_PIPE_MATERIALS:
-        return alias
-    return "球墨铸铁管"
+    return _normalize_shared_pressure_pipe_material_key(
+        material_key,
+        PRESSURE_PIPE_MATERIALS,
+        default_material="球墨铸铁管",
+    )
 
 
 def _get_pressure_pipe_material_params(material_key: str) -> Tuple[str, Dict[str, Any]]:

@@ -104,7 +104,8 @@ def _install_panel_import_stubs():
     for name in (
         "make_pressure_pipe_identity", "empty_pressure_pipe_calc_records",
         "normalize_pressure_pipe_calc_records", "format_pressure_pipe_record_detail",
-        "append_pressure_pipe_calc_batch_text",
+        "format_pressure_pipe_chain_summary", "append_pressure_pipe_calc_batch_text",
+        "build_pressure_pipe_transition_note",
     ):
         setattr(pressure_mod, name, lambda *args, **kwargs: None)
     sys.modules["utils.pressure_pipe_result_helpers"] = pressure_mod
@@ -583,6 +584,56 @@ def test_build_nodes_from_table_preserves_unnamed_pressure_pipe_display_loss_wit
     assert getattr(nodes[0], "pressure_pipe_row_identity", "") == "flow2-row1"
     assert getattr(nodes[0], "head_loss_siphon", 0.0) == 0.0
     assert getattr(nodes[0], "_pressure_pipe_display_loss", 0.0) == 0.0315
+
+
+def test_build_nodes_from_table_preserves_explicit_zero_turn_radius_for_pressure_pipe():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.CALCULATOR_AVAILABLE = True
+
+    class _BuildNode:
+        def __init__(self):
+            self.section_params = {}
+            self.is_transition = False
+            self.is_auto_inserted_channel = False
+            self.is_diversion_gate = False
+            self.is_inverted_siphon = False
+            self.is_pressure_pipe = False
+            self.in_out = None
+            self.external_head_loss = None
+
+    module.ChannelNode = _BuildNode
+    module.StructureType = _FakeStructureType
+    module.InOutType = _FakeInOutType
+
+    panel.node_table.setRowCount(2)
+    for col, text in (
+        (0, "1"),
+        (1, ""),
+        (2, "有压管道"),
+        (21, "1.2"),
+        (24, "0.014"),
+        (25, "3000"),
+        (26, "5.0"),
+    ):
+        panel.node_table.setItem(0, col, _FakeItem(text))
+    for col, text in (
+        (0, "1"),
+        (1, ""),
+        (2, "有压管道"),
+        (7, "0"),
+        (21, "1.2"),
+        (24, "0.014"),
+        (25, "3000"),
+        (26, "5.0"),
+    ):
+        panel.node_table.setItem(1, col, _FakeItem(text))
+
+    nodes = module.WaterProfilePanel._build_nodes_from_table(panel)
+
+    assert len(nodes) == 2
+    assert nodes[1].turn_radius == 0.0
+    assert getattr(nodes[1], "turn_radius_is_explicit", False) is True
 
 
 def test_update_table_from_nodes_full_impl_hides_row_level_pressure_pipe_loss_outside_xxpipe():

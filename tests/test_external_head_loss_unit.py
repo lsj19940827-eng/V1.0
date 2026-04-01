@@ -389,6 +389,47 @@ def test_unnamed_pressure_pipe_row_uses_fmb_friction_loss():
     )
 
 
+def test_unnamed_pressure_pipe_row_normalizes_pe_material_to_hdpe():
+    """
+    测试空名称普通有压管道行会把 PE管 归一化为 HDPE管 系数。
+    """
+    upstream = ChannelNode()
+    upstream.structure_type = StructureType.from_string("明渠-梯形")
+    upstream.flow_section = "渠道1"
+    upstream.station_MC = 10.0
+    upstream.arc_length = 0.0
+    upstream.slope_i = 1.0 / 2000.0
+
+    anonymous_pipe = ChannelNode()
+    anonymous_pipe.structure_type = StructureType.from_string("有压管道")
+    anonymous_pipe.name = ""
+    anonymous_pipe.is_pressure_pipe = True
+    anonymous_pipe.flow_section = "渠道1"
+    anonymous_pipe.section_params = {
+        "D": 0.4,
+        "pipe_material": "PE管",
+    }
+    anonymous_pipe.flow = 0.1
+    anonymous_pipe.station_MC = 110.0
+    anonymous_pipe.arc_length = 0.0
+    anonymous_pipe.slope_i = 1.0 / 1000.0
+
+    settings = ProjectSettings()
+    settings.channel_level = "干管"
+    calc = HydraulicCalculator(settings)
+
+    hf = calc.calculate_friction_loss(upstream, anonymous_pipe)
+    expected_hf, _details = calc_friction_loss(
+        anonymous_pipe.flow,
+        anonymous_pipe.section_params["D"],
+        anonymous_pipe.station_MC - upstream.station_MC,
+        "HDPE管",
+    )
+
+    assert abs(hf - expected_hf) < 1e-9
+    assert anonymous_pipe.friction_calc_details["pipe_material"] == "HDPE管"
+
+
 def test_unnamed_pressure_pipe_row_updates_total_loss_and_water_level():
     """
     测试空名称普通有压管道行的行级损失会进入总损失和水位递推。

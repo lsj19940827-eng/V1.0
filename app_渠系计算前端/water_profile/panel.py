@@ -2372,6 +2372,17 @@ class WaterProfilePanel(QWidget):
                 return level_text
         return ""
 
+    @staticmethod
+    def _get_settings_station_prefix(settings=None) -> str:
+        """读取当前工程桩号前缀。"""
+        getter = getattr(settings, "get_station_prefix", None)
+        if callable(getter):
+            try:
+                return str(getter() or "").strip()
+            except Exception:
+                return ""
+        return str(getattr(settings, "station_prefix", "") or "").strip()
+
     @classmethod
     def _is_regular_pressure_pipe_node(cls, node) -> bool:
         return cls._get_node_structure_type_text(node) == "有压管道"
@@ -2470,6 +2481,18 @@ class WaterProfilePanel(QWidget):
         return route_nodes, copy.deepcopy(route_nodes), ""
 
     @staticmethod
+    def _coerce_pressure_pipe_row_index(value, default: int = -1) -> int:
+        """将有压管道相关行索引安全转换为整数，保留合法的 0。"""
+        if value is None:
+            return default
+        if isinstance(value, str) and not value.strip():
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
     def _normalize_pressure_pipe_window_override(value) -> dict:
         """规范化匿名有压管道窗口覆盖结构。"""
         if not isinstance(value, dict):
@@ -2487,8 +2510,8 @@ class WaterProfilePanel(QWidget):
             "data_mode": str(value.get("data_mode", "") or "").strip(),
             "applied_at": str(value.get("applied_at", "") or "").strip(),
             "calc_steps": str(value.get("calc_steps", "") or "").strip(),
-            "target_row_index": int(value.get("target_row_index", -1) or -1),
-            "upstream_row_index": int(value.get("upstream_row_index", -1) or -1),
+            "target_row_index": WaterProfilePanel._coerce_pressure_pipe_row_index(value.get("target_row_index", -1)),
+            "upstream_row_index": WaterProfilePanel._coerce_pressure_pipe_row_index(value.get("upstream_row_index", -1)),
         }
         numeric_fields = (
             "Q", "D", "total_length", "pipe_velocity", "friction_loss", "total_bend_loss",
@@ -3792,9 +3815,10 @@ class WaterProfilePanel(QWidget):
     # 双击查看详细计算过程（与原版Tkinter data_table.py完全对齐）
     # ================================================================
     def _show_transition_length_details(self, row_idx, node, source_nodes=None):
-        details = getattr(node, 'transition_length_calc_details', None)
+        # 双击时优先按当前表格与规则刷新一次，避免旧详情缓存继续把过期采用值带回弹窗。
+        details = self._repair_transition_length_details_for_row(row_idx, source_nodes)
         if not details:
-            details = self._repair_transition_length_details_for_row(row_idx, source_nodes)
+            details = getattr(node, 'transition_length_calc_details', None)
         if not details:
             fluent_info(self, "提示", "该行没有渐变段长度计算数据")
             return
@@ -3865,7 +3889,7 @@ class WaterProfilePanel(QWidget):
             return False, None
 
     def _repair_transition_length_details_for_row(self, row_idx, source_nodes=None):
-        """按当前表格/节点上下文补建某一行的渐变段长度详情。"""
+        """按当前表格/节点上下文补建或刷新某一行的渐变段长度详情。"""
         if not CALCULATOR_AVAILABLE:
             return None
 
@@ -3875,9 +3899,6 @@ class WaterProfilePanel(QWidget):
 
         self._sync_transition_lengths_from_table(nodes)
         node = nodes[row_idx]
-        details = getattr(node, 'transition_length_calc_details', None)
-        if details:
-            return details
         if not getattr(node, 'is_transition', False):
             return None
 
@@ -3919,7 +3940,14 @@ class WaterProfilePanel(QWidget):
                 actual_length=actual_length,
                 preserve_existing_length=True,
             )
-            node.transition_length = actual_length
+            repaired_length = float(details.get("actual_length", getattr(node, "transition_length", 0.0) or 0.0) or 0.0)
+            node.transition_length = repaired_length
+            if getattr(self, "node_table", None):
+                item = self.node_table.item(row_idx, 32)
+                if item is not None:
+                    item.setText(f"{repaired_length:.3f}" if repaired_length > 0 else "-")
+            self._persist_transition_calc_payload_for_row(row_idx, node)
+            self._refresh_transition_length_item_presentation(row_idx, nodes)
             return details
         except Exception:
             return None
@@ -6181,25 +6209,31 @@ class WaterProfilePanel(QWidget):
                 node.in_out = InOutType.from_string(_io_text)
             # IP编号 (col 4) — 支持复合格式 (#11)
             node.ip_number = _parse_ip_number(_read_text(r, 4))
+            # 记录转弯半径是否来自用户/表格的显式输入；"0" 也算显式输入，不能再当成空白兜底。
+            _turn_radius_text = _read_text(r, 7)
+            _turn_radius_is_explicit = bool(_turn_radius_text)
+            node.turn_radius_is_explicit = _turn_radius_is_explicit
+            _row_turn = self._sf(_turn_radius_text, 0.0) if _turn_radius_is_explicit else 0.0
             # 转弯半径 fallback 规则：
             #   首行/闸类/倒虹吸 → 0（不用默认全局半径，避免刷表时写入错误值）
             #   普通行           → 全局转弯半径（保持原有逻辑）
             _struct_for_r = str(data[2]).strip()
             _is_siphon_for_r = "倒虹吸" in _struct_for_r
             _is_gate_for_r = "闸" in _struct_for_r or "分水" in _struct_for_r
-            if r == 0 or _is_siphon_for_r or _is_gate_for_r:
-                node.turn_radius = self._sf(data[7], 0.0)
+            if _turn_radius_is_explicit:
+                node.turn_radius = _row_turn
+            elif r == 0 or _is_siphon_for_r or _is_gate_for_r:
+                node.turn_radius = 0.0
             else:
-                node.turn_radius = self._sf(data[7], self._fval(self.turn_radius_edit, DEFAULT_TURN_RADIUS))
+                node.turn_radius = self._fval(self.turn_radius_edit, DEFAULT_TURN_RADIUS)
             # 有压管道三层来源：表1行值 -> 管道配置R -> 全局半径（仅用于本次计算）
             try:
                 _struct_for_turn = str(data[2]).strip()
                 _is_pressure_turn = self._is_pressure_pipe_like_structure_text(_struct_for_turn)
                 _is_siphon_turn = "倒虹吸" in _struct_for_turn
                 _is_gate_turn = ("闸" in _struct_for_turn) or ("分水" in _struct_for_turn)
-                _row_turn = self._sf(data[7], 0.0)
                 if _is_pressure_turn and r != 0 and (not _is_gate_turn):
-                    if _row_turn > 0:
+                    if _turn_radius_is_explicit:
                         node.turn_radius = _row_turn
                     else:
                         _group_name = str(data[1]).strip()
@@ -6220,7 +6254,7 @@ class WaterProfilePanel(QWidget):
                             node.turn_radius = global_turn_radius if global_turn_radius > 0 else 0.0
                             if node.turn_radius > 0:
                                 pressure_global_fallback_groups.add(_group_name or f"row-{r+1}")
-                elif _is_siphon_turn:
+                elif _is_siphon_turn and _turn_radius_is_explicit:
                     node.turn_radius = _row_turn
             except Exception:
                 pass
@@ -6434,7 +6468,7 @@ class WaterProfilePanel(QWidget):
             preview += f" 等{len(rows)}行"
         InfoBar.info(
             "提示",
-            f"检测到部分明渠名称为空，已按结构形式/占位符参与{action_name}，不影响本次处理：\n{preview}",
+            f"检测到部分建筑物名称为空，已按结构形式/占位符参与{action_name}，不影响本次处理：\n{preview}",
             parent=self._info_parent(),
             duration=5000,
             position=InfoBarPosition.TOP,
@@ -6491,7 +6525,7 @@ class WaterProfilePanel(QWidget):
             named_pressure_pipe_groups = self._collect_named_pressure_pipe_groups(nodes, settings=settings)
             missing_pressure_pipe_groups = []
             for group in named_pressure_pipe_groups:
-                outlet_idx = int(getattr(group, "outlet_row_index", -1) or -1)
+                outlet_idx = self._coerce_pressure_pipe_row_index(getattr(group, "outlet_row_index", -1))
                 if outlet_idx < 0 or outlet_idx >= len(nodes):
                     missing_pressure_pipe_groups.append((getattr(group, "name", "") or "未命名组").strip())
                     continue
@@ -8714,25 +8748,170 @@ class WaterProfilePanel(QWidget):
         """判断是否为单行链成员。"""
         return str(getattr(member, "member_type", "") or "").strip() == "single_row"
 
+    @staticmethod
+    def _summarize_pressure_pipe_chain_flow_sections(chain) -> str:
+        """汇总连续承压链覆盖的流量段文本。"""
+        flow_sections = []
+        for member in list(getattr(chain, "members", []) or []):
+            flow_section = str(getattr(member, "flow_section", "") or "").strip()
+            if flow_section and flow_section not in flow_sections:
+                flow_sections.append(flow_section)
+        if flow_sections:
+            return "、".join(flow_sections)
+        return str(getattr(chain, "flow_section", "") or "").strip() or "-"
+
     def _build_pressure_pipe_chain_descriptors(self, chains) -> list[dict]:
         """将连续承压链转换为界面与结果汇总可复用的描述结构。"""
         descriptors = []
-        flow_section_counters = {}
-        for chain in chains or []:
-            flow_section = str(getattr(chain, "flow_section", "") or "").strip() or "-"
-            flow_section_counters[flow_section] = flow_section_counters.get(flow_section, 0) + 1
-            chain_index = flow_section_counters[flow_section]
-            start_row_index = int(getattr(chain, "start_row_index", -1) or -1)
-            end_row_index = int(getattr(chain, "end_row_index", start_row_index) or start_row_index)
+        for chain_index, chain in enumerate(chains or [], start=1):
+            flow_section = self._summarize_pressure_pipe_chain_flow_sections(chain)
+            start_row_index = self._coerce_pressure_pipe_row_index(getattr(chain, "start_row_index", -1))
+            end_row_index = self._coerce_pressure_pipe_row_index(
+                getattr(chain, "end_row_index", start_row_index),
+                start_row_index,
+            )
             descriptors.append({
-                "chain_id": f"flow{flow_section}-chain{chain_index}-r{start_row_index + 1}-{end_row_index + 1}",
+                "chain_id": f"chain{chain_index}-r{start_row_index + 1}-{end_row_index + 1}",
                 "flow_section": flow_section,
-                "display_name": f"流量段{flow_section} 连续承压链{chain_index}",
+                "display_name": f"连续承压链{chain_index}",
                 "members": list(getattr(chain, "members", []) or []),
                 "start_row_index": start_row_index,
                 "end_row_index": end_row_index,
             })
         return descriptors
+
+    @staticmethod
+    def _get_pressure_pipe_node_structure_text(node) -> str:
+        """提取节点结构形式文本。"""
+        struct_type = getattr(node, "structure_type", None)
+        value = getattr(struct_type, "value", struct_type)
+        return str(value or "").strip()
+
+    @classmethod
+    def _build_xxpipe_route_target_label(cls, node, row_index: int) -> str:
+        """生成 xx管 整线覆盖校验目标的展示文本。"""
+        name = str(getattr(node, "name", "") or "").strip()
+        struct_text = cls._get_pressure_pipe_node_structure_text(node) or "未知结构"
+        base_text = name or struct_text
+        return f"第{int(row_index) + 1}行 {base_text}"
+
+    @classmethod
+    def _collect_xxpipe_route_context_map(cls, nodes, pipe_groups) -> dict:
+        """按整线汇总 xx管 路由信息，识别是否夹带隧洞。"""
+        route_map = {}
+        total_nodes = len(nodes or [])
+
+        for group in pipe_groups or []:
+            route_key = cls._get_pressure_pipe_group_route_key(group)
+            if not route_key or route_key in route_map:
+                continue
+
+            display_name = cls._get_pressure_pipe_group_route_display_name(group) or route_key
+            route_indices = []
+            start_idx = getattr(group, "route_start_row_index", None)
+            end_idx = getattr(group, "route_end_row_index", None)
+            if isinstance(start_idx, int) and isinstance(end_idx, int) and total_nodes > 0:
+                start = max(0, min(int(start_idx), total_nodes - 1))
+                end = max(start, min(int(end_idx), total_nodes - 1))
+                route_indices = list(range(start, end + 1))
+            else:
+                for row_idx in list(getattr(group, "row_indices", []) or []):
+                    if isinstance(row_idx, int) and 0 <= row_idx < total_nodes:
+                        route_indices.append(row_idx)
+                target_row_index = getattr(group, "target_row_index", None)
+                if isinstance(target_row_index, int) and 0 <= target_row_index < total_nodes:
+                    route_indices.append(target_row_index)
+                route_indices = sorted(set(route_indices))
+
+            route_nodes = []
+            route_targets = []
+            contains_tunnel = False
+            for row_idx in route_indices:
+                node = nodes[row_idx]
+                if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+                    continue
+                struct_text = cls._get_pressure_pipe_node_structure_text(node)
+                if "隧洞" in struct_text:
+                    contains_tunnel = True
+                route_nodes.append(node)
+                route_targets.append({
+                    "row_index": int(row_idx),
+                    "label": cls._build_xxpipe_route_target_label(node, row_idx),
+                    "station_mc": getattr(node, "station_MC", None),
+                    "x": getattr(node, "x", None),
+                    "y": getattr(node, "y", None),
+                })
+
+            route_map[route_key] = {
+                "route_key": route_key,
+                "display_name": display_name,
+                "contains_tunnel": contains_tunnel,
+                "targets": route_targets,
+                "nodes": route_nodes,
+            }
+
+        return route_map
+
+    def _prepare_pressure_pipe_dialog_context(self, nodes, settings=None, *, show_xxpipe_warning: bool = True) -> dict:
+        """提取并规范化有压管道弹窗上下文。"""
+        pipe_groups = list(self._extract_pressure_pipe_dialog_groups(nodes, settings=settings) or [])
+        pressure_chains = list(self._extract_pressure_pipe_dialog_chains(nodes, settings=settings) or [])
+        chain_descriptors = self._build_pressure_pipe_chain_descriptors(pressure_chains)
+
+        xxpipe_route_mode = self._is_xxpipe_channel_level_text(self._get_current_channel_level_text(settings))
+        if not xxpipe_route_mode:
+            return {
+                "pipe_groups": pipe_groups,
+                "chain_descriptors": chain_descriptors,
+                "xxpipe_route_mode": False,
+                "route_import_targets": {},
+                "blocked_route_names": [],
+            }
+
+        route_map = self._collect_xxpipe_route_context_map(nodes, pipe_groups)
+        blocked_route_names = [
+            str(meta.get("display_name", "") or meta.get("route_key", "")).strip()
+            for meta in route_map.values()
+            if bool(meta.get("contains_tunnel"))
+        ]
+        if blocked_route_names and show_xxpipe_warning:
+            content = (
+                "以下 xx管 整线夹带隧洞，当前暂不支持有压管道水力计算，已跳过：\n"
+                + "\n".join(blocked_route_names)
+            )
+            InfoBar.warning(
+                "提示",
+                content,
+                parent=self._info_parent(),
+                duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+
+        supported_groups = []
+        for group in pipe_groups:
+            route_key = self._get_pressure_pipe_group_route_key(group)
+            if route_key and bool(route_map.get(route_key, {}).get("contains_tunnel")):
+                continue
+            supported_groups.append(group)
+
+        station_prefix = self._get_settings_station_prefix(settings)
+        route_import_targets = {
+            route_key: {
+                "display_name": str(meta.get("display_name", "") or route_key).strip(),
+                "station_prefix": station_prefix,
+                "targets": list(meta.get("targets", []) or []),
+                "nodes": list(meta.get("nodes", []) or []),
+            }
+            for route_key, meta in route_map.items()
+            if not bool(meta.get("contains_tunnel"))
+        }
+        return {
+            "pipe_groups": supported_groups,
+            "chain_descriptors": [],
+            "xxpipe_route_mode": True,
+            "route_import_targets": route_import_targets,
+            "blocked_route_names": blocked_route_names,
+        }
 
     @staticmethod
     def _find_next_regular_row_index(nodes, start_index: int) -> int:
@@ -8821,8 +9000,8 @@ class WaterProfilePanel(QWidget):
             "name": display_name,
             "structure_type": structure_type,
             "group_mode": group_mode,
-            "target_row_index": int(getattr(member, "target_row_index", -1) or -1),
-            "upstream_row_index": int(getattr(member, "upstream_row_index", -1) or -1),
+            "target_row_index": self._coerce_pressure_pipe_row_index(getattr(member, "target_row_index", -1)),
+            "upstream_row_index": self._coerce_pressure_pipe_row_index(getattr(member, "upstream_row_index", -1)),
         }
 
     def _build_pressure_chain_anchor_record(self, member) -> dict:
@@ -8835,7 +9014,18 @@ class WaterProfilePanel(QWidget):
         record.update({
             "status": "success",
             "writeback_enabled": False,
-            "total_head_loss": 0.0,
+            "Q": None,
+            "D": None,
+            "material_key": "",
+            "resolved_material_key": "",
+            "pipe_velocity": None,
+            "total_length": None,
+            "friction_loss": None,
+            "total_bend_loss": None,
+            "local_loss": None,
+            "inlet_transition_loss": None,
+            "outlet_transition_loss": None,
+            "total_head_loss": None,
             "note": "链起点锚点，本行不写回",
             "calc_steps": "【连续承压链锚点】\n本成员仅用于确定链起点，不生成本行损失。",
         })
@@ -8862,8 +9052,8 @@ class WaterProfilePanel(QWidget):
         if self._is_pressure_chain_anchor_member(member):
             return self._build_pressure_chain_anchor_record(member)
 
-        target_idx = int(getattr(member, "target_row_index", -1) or -1)
-        upstream_idx = int(getattr(member, "upstream_row_index", -1) or -1)
+        target_idx = self._coerce_pressure_pipe_row_index(getattr(member, "target_row_index", -1))
+        upstream_idx = self._coerce_pressure_pipe_row_index(getattr(member, "upstream_row_index", -1))
         if (
             upstream_idx < 0
             or target_idx < 0
@@ -8954,6 +9144,7 @@ class WaterProfilePanel(QWidget):
             calc_pipe_velocity,
             calc_transition_loss,
         )
+        from utils.pressure_pipe_common import resolve_pressure_pipe_material
 
         flow_section = self._get_pressure_pipe_group_flow_section(group)
         display_name = self._get_pressure_pipe_group_display_name(group)
@@ -8975,19 +9166,24 @@ class WaterProfilePanel(QWidget):
                 "error": group.get_validation_message() or f"{display_name}: 数据不完整，已跳过",
             }
 
-        target_idx = int(getattr(group, "target_row_index", -1) or -1)
-        upstream_idx = int(getattr(group, "upstream_row_index", -1) or -1)
+        target_idx = self._coerce_pressure_pipe_row_index(getattr(group, "target_row_index", -1))
+        upstream_idx = self._coerce_pressure_pipe_row_index(getattr(group, "upstream_row_index", -1))
         target_node = nodes[target_idx]
         next_regular_idx = self._find_next_regular_row_index(nodes, target_idx)
         next_regular_node = nodes[next_regular_idx] if 0 <= next_regular_idx < len(nodes) else None
 
         default_material = "预应力钢筒混凝土管"
-        material_key = str(getattr(group, "material_key", "") or "").strip()
+        raw_material_key = str(getattr(group, "material_key", "") or "").strip()
+        material_info = resolve_pressure_pipe_material(
+            raw_material_key,
+            PIPE_MATERIALS,
+            default_material=default_material,
+        )
+        material_key = str(material_info.get("canonical_key", default_material) or default_material)
+        display_material = str(material_info.get("display_value", raw_material_key or material_key) or material_key)
         note_parts = []
-        if material_key not in PIPE_MATERIALS:
-            if material_key:
-                note_parts.append(f"未识别管材“{material_key}”，已按“{default_material}”计算")
-            material_key = default_material
+        if raw_material_key and bool(material_info.get("used_default")):
+            note_parts.append(f"未识别管材“{raw_material_key}”，已按“{default_material}”计算")
 
         Q = float(getattr(group, "design_flow", 0.0) or 0.0)
         D = float(getattr(group, "diameter", 0.0) or 0.0)
@@ -9092,7 +9288,11 @@ class WaterProfilePanel(QWidget):
         steps = [
             "【匿名有压管道段水头损失计算】",
             f"对象: {display_name}",
-            f"Q = {Q:.4f} m³/s, D = {D:.4f} m, 管材 = {material_key}",
+            (
+                f"Q = {Q:.4f} m³/s, D = {D:.4f} m, 管材 = {display_material}"
+                if display_material == material_key
+                else f"Q = {Q:.4f} m³/s, D = {D:.4f} m, 管材 = {display_material}（按 {material_key} 计算）"
+            ),
             f"长度 = {total_length:.2f} m（{'空间长度' if spatial_length > 0 else '表3有效长度'}）",
             f"沿程损失 hf = {friction_loss:.4f} m",
             f"弯头损失 hw = {bend_loss:.4f} m",
@@ -9108,7 +9308,8 @@ class WaterProfilePanel(QWidget):
             "writeback_enabled": True,
             "Q": Q,
             "D": D,
-            "material_key": material_key,
+            "material_key": display_material,
+            "resolved_material_key": material_key,
             "pipe_velocity": V_pipe,
             "total_length": total_length,
             "friction_loss": friction_loss,
@@ -9138,8 +9339,12 @@ class WaterProfilePanel(QWidget):
             "data_mode": str(record.get("data_mode", "") or "").strip(),
             "applied_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "calc_steps": str(record.get("calc_steps", "") or "").strip(),
-            "target_row_index": int(record.get("target_row_index", getattr(group, "target_row_index", -1)) or -1),
-            "upstream_row_index": int(record.get("upstream_row_index", getattr(group, "upstream_row_index", -1)) or -1),
+            "target_row_index": self._coerce_pressure_pipe_row_index(
+                record.get("target_row_index", getattr(group, "target_row_index", -1))
+            ),
+            "upstream_row_index": self._coerce_pressure_pipe_row_index(
+                record.get("upstream_row_index", getattr(group, "upstream_row_index", -1))
+            ),
             "Q": float(record.get("Q", 0.0) or 0.0),
             "D": float(record.get("D", 0.0) or 0.0),
             "total_length": float(record.get("total_length", 0.0) or 0.0),
@@ -9173,7 +9378,9 @@ class WaterProfilePanel(QWidget):
         row_override_modes = {"unnamed_row_segment", "chain_row_member", "chain_tunnel_member"}
 
         if group_mode in row_override_modes:
-            target_row_index = int(record.get("target_row_index", getattr(group, "target_row_index", -1)) or -1)
+            target_row_index = self._coerce_pressure_pipe_row_index(
+                record.get("target_row_index", getattr(group, "target_row_index", -1))
+            )
             if target_row_index >= 0 and hasattr(self, "_ensure_pressure_pipe_row_identity"):
                 try:
                     self._ensure_pressure_pipe_row_identity(node, target_row_index)
@@ -9244,7 +9451,7 @@ class WaterProfilePanel(QWidget):
                 continue
             d_text = f"{d_num:.3f}"
             if self._is_pressure_pipe_row_segment_group(group):
-                row_indices = [int(getattr(group, "target_row_index", -1) or -1)]
+                row_indices = [self._coerce_pressure_pipe_row_index(getattr(group, "target_row_index", -1))]
             else:
                 row_indices = list(getattr(group, "row_indices", []) or [])
             for row_idx in row_indices:
@@ -9276,7 +9483,7 @@ class WaterProfilePanel(QWidget):
                 result["fill_groups"] += 1
             radius_text = f"{turn_r:.2f}"
             if self._is_pressure_pipe_row_segment_group(group):
-                row_indices = [int(getattr(group, "target_row_index", -1) or -1)]
+                row_indices = [self._coerce_pressure_pipe_row_index(getattr(group, "target_row_index", -1))]
             else:
                 row_indices = list(getattr(group, "row_indices", []) or [])
             for row_idx in row_indices:
@@ -9364,8 +9571,8 @@ class WaterProfilePanel(QWidget):
                     if not record:
                         continue
                     handled_identities.add(identity)
-                    target_idx = int(
-                        record.get("target_row_index", getattr(member, "target_row_index", -1)) or -1
+                    target_idx = self._coerce_pressure_pipe_row_index(
+                        record.get("target_row_index", getattr(member, "target_row_index", -1))
                     )
                     if not (0 <= target_idx < len(cur_nodes)):
                         continue
@@ -9387,9 +9594,9 @@ class WaterProfilePanel(QWidget):
                     continue
                 handled_identities.add(identity)
                 target_idx = (
-                    int(getattr(group, "target_row_index", -1) or -1)
+                    self._coerce_pressure_pipe_row_index(getattr(group, "target_row_index", -1))
                     if self._is_pressure_pipe_row_segment_group(group)
-                    else int(getattr(group, "outlet_row_index", -1) or -1)
+                    else self._coerce_pressure_pipe_row_index(getattr(group, "outlet_row_index", -1))
                 )
                 if not (0 <= target_idx < len(cur_nodes)):
                     continue
@@ -9774,10 +9981,18 @@ class WaterProfilePanel(QWidget):
             if _water_profile_dir not in _sys.path:
                 _sys.path.insert(0, _water_profile_dir)
             settings = self._build_settings()
-            pipe_groups = self._extract_pressure_pipe_dialog_groups(nodes, settings=settings)
-            pressure_chains = self._extract_pressure_pipe_dialog_chains(nodes, settings=settings)
-            chain_descriptors = self._build_pressure_pipe_chain_descriptors(pressure_chains)
+            dialog_context = self._prepare_pressure_pipe_dialog_context(
+                nodes,
+                settings=settings,
+                show_xxpipe_warning=True,
+            )
+            pipe_groups = dialog_context["pipe_groups"]
+            chain_descriptors = dialog_context["chain_descriptors"]
+            xxpipe_route_mode = bool(dialog_context.get("xxpipe_route_mode"))
+            route_import_targets = dict(dialog_context.get("route_import_targets", {}) or {})
             if not pipe_groups and not chain_descriptors:
+                if xxpipe_route_mode and dialog_context.get("blocked_route_names"):
+                    return
                 InfoBar.info("提示", "未找到有压管道数据组",
                             parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
                 return
@@ -9801,6 +10016,8 @@ class WaterProfilePanel(QWidget):
             pipe_groups=pipe_groups,
             manager=manager,
             pressure_chains=chain_descriptors,
+            xxpipe_route_mode=xxpipe_route_mode,
+            route_import_targets=route_import_targets,
         )
         if config_dlg.exec() != QDialog.Accepted:
             debug_print("[DEBUG] 用户取消了配置对话框")
@@ -9832,11 +10049,16 @@ class WaterProfilePanel(QWidget):
             if _water_profile_dir not in _sys.path:
                 _sys.path.insert(0, _water_profile_dir)
             from core.pressure_pipe_calc import calc_total_head_loss, calc_total_head_loss_with_spatial, PIPE_MATERIALS
+            from utils.pressure_pipe_common import resolve_pressure_pipe_material
 
             settings = self._build_settings()
-            pipe_groups = self._extract_pressure_pipe_dialog_groups(nodes, settings=settings)
-            pressure_chains = self._extract_pressure_pipe_dialog_chains(nodes, settings=settings)
-            chain_descriptors = self._build_pressure_pipe_chain_descriptors(pressure_chains)
+            dialog_context = self._prepare_pressure_pipe_dialog_context(
+                nodes,
+                settings=settings,
+                show_xxpipe_warning=False,
+            )
+            pipe_groups = dialog_context["pipe_groups"]
+            chain_descriptors = dialog_context["chain_descriptors"]
             if not pipe_groups and not chain_descriptors:
                 InfoBar.info("提示", "未找到有压管道数据组",
                             parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
@@ -9923,10 +10145,17 @@ class WaterProfilePanel(QWidget):
                     })
                     continue
 
-                material_key = group.material_key if group.material_key in PIPE_MATERIALS else default_material
+                raw_material_key = str(getattr(group, "material_key", "") or "").strip()
+                material_info = resolve_pressure_pipe_material(
+                    raw_material_key,
+                    PIPE_MATERIALS,
+                    default_material=default_material,
+                )
+                material_key = str(material_info.get("canonical_key", default_material) or default_material)
+                display_material = str(material_info.get("display_value", raw_material_key or material_key) or material_key)
                 note = ""
-                if group.material_key not in PIPE_MATERIALS:
-                    note = f"未识别管材\"{group.material_key}\"，已按\"{default_material}\"计算"
+                if raw_material_key and bool(material_info.get("used_default")):
+                    note = f"未识别管材\"{raw_material_key}\"，已按\"{default_material}\"计算"
                 if spatial_fallback_reason:
                     note = "；".join([item for item in [note, spatial_fallback_reason] if item])
 
@@ -9984,7 +10213,8 @@ class WaterProfilePanel(QWidget):
                         "writeback_enabled": False,
                         "Q": group.design_flow,
                         "D": group.diameter,
-                        "material_key": material_key,
+                        "material_key": display_material,
+                        "resolved_material_key": material_key,
                         "error": f"计算失败: {ex}",
                         "note": "；".join(note_parts),
                         "has_inlet_transition": group.has_inlet_transition,
@@ -10007,7 +10237,8 @@ class WaterProfilePanel(QWidget):
                     "writeback_enabled": True,
                     "Q": group.design_flow,
                     "D": group.diameter,
-                    "material_key": material_key,
+                    "material_key": display_material,
+                    "resolved_material_key": material_key,
                     "total_length": calc_res.total_length,
                     "pipe_velocity": calc_res.pipe_velocity,
                     "friction_loss": calc_res.friction_loss,

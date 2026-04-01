@@ -100,3 +100,45 @@ def test_find_xxpipe_axis_elevation_coverage_gaps_returns_missing_stations():
         [0.0, 5.0, 16.0, -1.0, 25.0, 31.0],
     )
     assert missing == [-1.0, 31.0]
+
+
+def test_resolve_ordered_node_stations_falls_back_to_plan_distance_without_station_anchor():
+    station_data = cad_tools.resolve_ordered_node_stations(
+        [
+            {"label": "起点", "x": 0.0, "y": 0.0},
+            {"label": "中点", "x": 3.0, "y": 4.0},
+            {"label": "终点", "x": 6.0, "y": 8.0},
+        ]
+    )
+
+    assert station_data["stations"] == pytest.approx([0.0, 5.0, 10.0])
+    assert station_data["fallback_indices"] == [1, 2]
+    assert station_data["missing_items"] == []
+
+
+def test_resolve_ordered_node_stations_falls_back_to_plan_distance_between_anchors():
+    nodes = [
+        {"station_MC": 0.0, "x": 0.0, "y": 0.0, "ip_number": 1, "name": "起点"},
+        {"x": 30.0, "y": 40.0, "ip_number": 2, "name": "中点"},
+        {"station_MC": 100.0, "x": 60.0, "y": 80.0, "ip_number": 3, "name": "终点"},
+    ]
+
+    station_data = cad_tools.resolve_ordered_node_stations(nodes)
+
+    assert station_data["stations"] == pytest.approx([0.0, 50.0, 100.0])
+    assert station_data["fallback_indices"] == [1]
+    assert station_data["missing_items"] == []
+
+
+def test_resolve_ordered_node_stations_reports_missing_when_anchor_and_distance_both_unavailable():
+    nodes = [
+        {"x": 0.0, "y": 0.0, "ip_number": 1, "name": "起点"},
+        {"ip_number": 2, "name": "中点"},
+        {"x": 60.0, "y": 80.0, "ip_number": 3, "name": "终点"},
+    ]
+
+    station_data = cad_tools.resolve_ordered_node_stations(nodes)
+
+    assert station_data["stations"] == [None, None, None]
+    assert len(station_data["missing_items"]) == 3
+    assert any("缺少可用桩号锚点" in item["reason"] for item in station_data["missing_items"])

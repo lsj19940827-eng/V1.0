@@ -116,6 +116,33 @@ def test_extract_continuous_pressure_chains_marks_flow_section_start_single_row_
     assert chains[0].members[1].should_generate_row_loss is True
 
 
+def test_extract_continuous_pressure_chains_merges_members_across_flow_sections_when_continuous():
+    nodes = [
+        _make_node(0, "2", "穿路段", "定向钻", InOutType.INLET),
+        _make_node(1, "2", "穿路段", "定向钻", InOutType.OUTLET),
+        _make_node(2, "3", "跨段洞身", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        _make_node(3, "3", "", "有压管道", InOutType.NORMAL),
+        _make_node(4, "3", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+        nodes,
+        settings=_make_settings(),
+    )
+
+    assert len(chains) == 1
+
+    chain = chains[0]
+    assert chain.start_row_index == 0
+    assert chain.end_row_index == 3
+    assert [member.display_name for member in chain.members] == [
+        "穿路段",
+        "跨段洞身",
+        "流量段3 第4行有压管道",
+    ]
+    assert [member.flow_section for member in chain.members] == ["2", "3", "3"]
+
+
 @pytest.mark.parametrize("breaker_structure", ["明渠-梯形", "分水闸", "倒虹吸", "矩形暗涵"])
 def test_extract_continuous_pressure_chains_breaks_on_non_chain_structures(breaker_structure):
     nodes = [

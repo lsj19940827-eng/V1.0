@@ -264,3 +264,75 @@ def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_
             (50.0, 90.0),
         ]
     )
+
+
+def test_build_xxpipe_profile_data_rejects_tunnel_structures():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="隧洞-圆形", in_out="进"),
+        _make_node(ip_no=2, mc=50.0, structure="隧洞-圆形"),
+        _make_node(ip_no=3, mc=100.0, structure="隧洞-圆形", in_out="出"),
+    ]
+
+    with pytest.raises(ValueError, match="仅允许有压管道/定向钻/顶管"):
+        cad_tools._build_xxpipe_profile_data(
+            nodes,
+            {
+                "1::穿路段": [
+                    {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
+                    {"chainage": 100.0, "elevation": 90.0, "turn_type": "无"},
+                ]
+            },
+            station_prefix="",
+        )
+
+
+def test_build_xxpipe_profile_data_uses_plan_distance_station_fallback():
+    start = _make_node(ip_no=1, mc=0.0, in_out="进")
+    middle = _make_node(ip_no=2, mc=50.0)
+    end = _make_node(ip_no=3, mc=100.0, in_out="出")
+    middle.station_MC = None
+    start.x, start.y = 0.0, 0.0
+    middle.x, middle.y = 30.0, 40.0
+    end.x, end.y = 60.0, 80.0
+    nodes = [start, middle, end]
+
+    data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        {
+            "1::穿路段": [
+                {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
+                {"chainage": 100.0, "elevation": 90.0, "turn_type": "无"},
+            ]
+        },
+        station_prefix="",
+    )
+
+    assert [record["station_mc"] for record in data["centerline_records"]] == pytest.approx([0.0, 50.0, 100.0])
+    assert [record["elevation"] for record in data["centerline_records"]] == pytest.approx([100.0, 95.0, 90.0])
+
+
+def test_build_xxpipe_profile_data_uses_distance_fallback_without_any_station_anchor():
+    start = _make_node(ip_no=1, mc=0.0, structure="有压管道", in_out="进")
+    middle = _make_node(ip_no=2, mc=0.0, structure="有压管道")
+    end = _make_node(ip_no=3, mc=0.0, structure="有压管道", in_out="出")
+    start.station_MC = None
+    middle.station_MC = None
+    end.station_MC = None
+    start.x, start.y = 0.0, 0.0
+    middle.x, middle.y = 30.0, 0.0
+    end.x, end.y = 60.0, 0.0
+    nodes = [start, middle, end]
+
+    data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        {
+            "1::穿路段": [
+                {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
+                {"chainage": 60.0, "elevation": 94.0, "turn_type": "无"},
+            ]
+        },
+        station_prefix="",
+    )
+
+    assert [record["station_mc"] for record in data["centerline_records"]] == pytest.approx([0.0, 30.0, 60.0])
+    assert [record["elevation"] for record in data["centerline_records"]] == pytest.approx([100.0, 97.0, 94.0])

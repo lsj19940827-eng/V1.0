@@ -19,6 +19,7 @@ from models.data_models import ChannelNode
 from models.enums import StructureType, InOutType
 from core.pressure_pipe_calc import calc_turn_angle, calc_segment_length
 from config.constants import XXPIPE_CHANNEL_LEVEL_OPTIONS
+from utils.pressure_pipe_common import coerce_row_index
 from utils.pressure_pipe_result_helpers import make_pressure_pipe_identity
 
 NO_TRANSITION_REASON = "紧邻有压同类结构，无渐变段"
@@ -166,7 +167,9 @@ class PressurePipeChain:
     """
     连续承压链。
 
-    同一流量段内连续出现的承压结构会被组织成一条链。
+    表内连续出现的承压结构会被组织成一条链。
+
+    当结构本身保持连续时，允许跨流量段延续，`flow_section` 记录链起始流量段。
     """
 
     flow_section: str = ""                                # 所属流量段
@@ -345,7 +348,7 @@ class PressurePipeDataExtractor:
         1. 仅在 xx管 渠道级别下启用；
         2. 命名有压组沿用现有整组识别；
         3. 空名称有压同类结构、隧洞普通行按单行成员处理；
-        4. 链不跨流量段，遇到非链结构即断开。
+        4. 遇到非链结构即断开；若结构本身连续，允许跨流量段延续。
         """
         if not nodes or not PressurePipeDataExtractor._is_xxpipe_channel_level(settings):
             return []
@@ -392,7 +395,7 @@ class PressurePipeDataExtractor:
                 index = next_index
                 continue
 
-            if current_chain is None or current_chain.flow_section != member.flow_section:
+            if current_chain is None:
                 if current_chain is not None:
                     chains.append(current_chain)
                 current_chain = PressurePipeChain(
@@ -508,6 +511,29 @@ class PressurePipeDataExtractor:
         points.append(point)
 
     @staticmethod
+    def _build_xxpipe_route_display_name(
+        route_nodes: List[ChannelNode],
+        flow_key: str,
+        route_no: int,
+    ) -> str:
+        """生成人能看懂的 xx管 整线名称。"""
+        flow_sections: List[str] = []
+        for route_node in route_nodes or []:
+            flow_section = str(getattr(route_node, "flow_section", "") or "").strip()
+            if flow_section and flow_section not in flow_sections:
+                flow_sections.append(flow_section)
+
+        if len(flow_sections) <= 1:
+            return f"流量段{flow_key} 整线{route_no}"
+
+        for route_node in route_nodes or []:
+            name = str(getattr(route_node, "name", "") or "").strip()
+            if name:
+                return f"{name}连续整线"
+
+        return f"连续整线{route_no}"
+
+    @staticmethod
     def _is_xxpipe_route_candidate(node: Optional[ChannelNode]) -> bool:
         """判断节点是否属于 xx管 整线候选结构。"""
         if node is None:
@@ -549,18 +575,18 @@ class PressurePipeDataExtractor:
                 next_node = nodes[end_idx + 1]
                 if not PressurePipeDataExtractor._is_xxpipe_route_candidate(next_node):
                     break
-                next_flow_section = str(getattr(next_node, "flow_section", "") or "").strip()
-                if next_flow_section != flow_section:
-                    break
                 end_idx += 1
 
             flow_key = flow_section or "-"
             flow_route_seq[flow_key] += 1
             route_no = flow_route_seq[flow_key]
             route_key = f"flow{flow_key}-route{route_no}"
-            route_display_name = f"流量段{flow_key} 整线{route_no}"
-
             route_nodes = nodes[start_idx : end_idx + 1]
+            route_display_name = PressurePipeDataExtractor._build_xxpipe_route_display_name(
+                route_nodes,
+                flow_key,
+                route_no,
+            )
             route_ip_points: List[Dict[str, Any]] = []
             for route_node in route_nodes:
                 if not PressurePipeDataExtractor._can_use_plan_point(route_node):
@@ -589,7 +615,7 @@ class PressurePipeDataExtractor:
                 idx for idx in (getattr(group, "row_indices", []) or []) if isinstance(idx, int) and idx >= 0
             ]
             if not candidate_indices:
-                target_row_index = int(getattr(group, "target_row_index", -1) or -1)
+                target_row_index = coerce_row_index(getattr(group, "target_row_index", -1))
                 if target_row_index >= 0:
                     candidate_indices.append(target_row_index)
             route_key = ""
@@ -615,8 +641,8 @@ class PressurePipeDataExtractor:
             return [dict(point) for point in (group.ip_points or [])]
         points: List[Dict[str, Any]] = []
         candidate_indices = []
-        upstream_idx = int(getattr(group, "upstream_row_index", -1) or -1)
-        target_idx = int(getattr(group, "target_row_index", -1) or -1)
+        upstream_idx = coerce_row_index(getattr(group, "upstream_row_index", -1))
+        target_idx = coerce_row_index(getattr(group, "target_row_index", -1))
         if upstream_idx >= 0:
             candidate_indices.append(upstream_idx)
         if target_idx >= 0:
@@ -635,8 +661,8 @@ class PressurePipeDataExtractor:
     @staticmethod
     def _resolve_named_group_segment_range(group: PressurePipeGroup, nodes: List[ChannelNode]) -> Tuple[float, float]:
         """解析命名组子段范围。"""
-        start_idx = int(getattr(group, "inlet_row_index", -1) or -1)
-        end_idx = int(getattr(group, "outlet_row_index", -1) or -1)
+        start_idx = coerce_row_index(getattr(group, "inlet_row_index", -1))
+        end_idx = coerce_row_index(getattr(group, "outlet_row_index", -1))
         indices = [idx for idx in (start_idx, end_idx) if 0 <= idx < len(nodes)]
         if not indices:
             indices = [
@@ -650,12 +676,24 @@ class PressurePipeDataExtractor:
         return start_mc, end_mc
 
     @staticmethod
+    def _resolve_unnamed_segment_start_node(group: PressurePipeGroup, nodes: List[ChannelNode]) -> Optional[ChannelNode]:
+        """解析匿名普通有压段的起点节点。"""
+        upstream_idx = coerce_row_index(getattr(group, "upstream_row_index", -1))
+        target_idx = coerce_row_index(getattr(group, "target_row_index", -1))
+        target_node = nodes[target_idx] if 0 <= target_idx < len(nodes) else None
+        upstream_node = nodes[upstream_idx] if 0 <= upstream_idx < len(nodes) else None
+        if upstream_node is None:
+            return target_node
+        if PressurePipeDataExtractor._is_tunnel_structure(upstream_node) and getattr(upstream_node, "in_out", None) == InOutType.NORMAL:
+            return target_node
+        return upstream_node
+
+    @staticmethod
     def _resolve_group_segment_range(group: PressurePipeGroup, nodes: List[ChannelNode]) -> Tuple[float, float]:
         """解析当前分组自身桩号范围。"""
         if str(getattr(group, "group_mode", "") or "").strip() == "unnamed_row_segment":
-            upstream_idx = int(getattr(group, "upstream_row_index", -1) or -1)
-            target_idx = int(getattr(group, "target_row_index", -1) or -1)
-            start_node = nodes[upstream_idx] if 0 <= upstream_idx < len(nodes) else None
+            target_idx = coerce_row_index(getattr(group, "target_row_index", -1))
+            start_node = PressurePipeDataExtractor._resolve_unnamed_segment_start_node(group, nodes)
             end_node = nodes[target_idx] if 0 <= target_idx < len(nodes) else None
             return (
                 PressurePipeDataExtractor._resolve_node_station_mc(start_node),
@@ -676,7 +714,7 @@ class PressurePipeDataExtractor:
         group.route_start_row_index = PressurePipeDataExtractor._group_order_index(group)
         group.route_end_row_index = max(
             [int(idx) for idx in (getattr(group, "row_indices", []) or []) if isinstance(idx, int)] or
-            [int(getattr(group, "target_row_index", -1) or -1)]
+            [coerce_row_index(getattr(group, "target_row_index", -1))]
         )
         group.route_start_mc = segment_start_mc
         group.route_end_mc = segment_end_mc
@@ -693,14 +731,14 @@ class PressurePipeDataExtractor:
             idx for idx in (getattr(group, "row_indices", []) or []) if isinstance(idx, int) and idx >= 0
         ]
         if not row_candidates:
-            target_row_index = int(getattr(group, "target_row_index", -1) or -1)
+            target_row_index = coerce_row_index(getattr(group, "target_row_index", -1))
             if target_row_index >= 0:
                 row_candidates.append(target_row_index)
 
         selected_route = None
         for route_context in route_contexts.values():
-            route_start = int(route_context.get("route_start_row_index", -1) or -1)
-            route_end = int(route_context.get("route_end_row_index", -1) or -1)
+            route_start = coerce_row_index(route_context.get("route_start_row_index", -1))
+            route_end = coerce_row_index(route_context.get("route_end_row_index", -1))
             if any(route_start <= row_idx <= route_end for row_idx in row_candidates):
                 selected_route = route_context
                 break
@@ -918,8 +956,8 @@ class PressurePipeDataExtractor:
             end_row_index=end_row_index,
             identity=str(getattr(group, "identity", "") or ""),
             storage_key=str(getattr(group, "storage_key", "") or ""),
-            target_row_index=int(getattr(group, "target_row_index", group.outlet_row_index) or group.outlet_row_index),
-            upstream_row_index=int(getattr(group, "upstream_row_index", group.inlet_row_index) or group.inlet_row_index),
+            target_row_index=coerce_row_index(getattr(group, "target_row_index", group.outlet_row_index), group.outlet_row_index),
+            upstream_row_index=coerce_row_index(getattr(group, "upstream_row_index", group.inlet_row_index), group.inlet_row_index),
             group=group,
             should_generate_row_loss=True,
         )

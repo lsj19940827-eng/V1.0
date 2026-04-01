@@ -3,7 +3,7 @@
 ## 项目功能简介
 
 这是一个本地桌面计算工具，用来处理渠系纵断面、水面线、倒虹吸、有压管道、土石方等工程计算与导出。
-当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及 xx管 的“整线纵断面 + 子段计算 + 连续承压链”规则。
+当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及 xx管 的“整线纵断面 + 中心线高程导出 + 整线弹窗”规则。
 
 ## 技术架构
 
@@ -30,6 +30,7 @@
 - 运行本次相关回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_external_head_loss_unit.py tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_channel_level_options_unit.py tests/test_pressure_pipe_preprocessing_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py tests/test_water_profile_transition_ready_unit.py -q`
 - 运行本次窗口联动回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_window_override_unit.py tests/test_external_head_loss_unit.py tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py tests/test_water_profile_transition_ready_unit.py -q`
 - 运行本次 xx管 整线回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_export_longitudinal_nodes_unit.py tests/test_pressure_pipe_persistence_with_long_unit.py tests/test_pressure_pipe_longitudinal_utils_unit.py tests/test_pressure_pipe_spatial_calc_unit.py tests/test_xxpipe_export_context_unit.py tests/test_xxpipe_longitudinal_export_unit.py tests/test_xxpipe_axis_elevation_unit.py tests/test_water_profile_transition_ready_unit.py -q`
+- 运行本次 xx管 弹窗与导出回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_water_profile_transition_ready_unit.py tests/test_pressure_pipe_export_longitudinal_nodes_unit.py tests/test_xxpipe_longitudinal_export_unit.py tests/test_xxpipe_axis_elevation_unit.py -q`
 - 运行本次连续承压链回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_config_dialog_sizing_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_preprocessing_unit.py tests/test_external_head_loss_unit.py`
 
 ## 搜索记录
@@ -47,14 +48,14 @@
 - 隧洞沿程损失继续保持原有“底坡 × 有效长度”口径，没有被承压管道逻辑带偏。
 - xx管 模式下，匿名普通有压管道紧邻定向钻、顶管或另一条匿名普通有压管道时，不再误弹补段；匿名普通有压管道与隧洞相邻时仍会保留前后两处渐变段。
 - 普通有压管道/定向钻/顶管的渐变段长度详情，现已和插入阶段统一按 `5h/6h` 显示；当长度被压缩时，也会继续明确标出物理上限和最终采用值。
-- xx管 有压管道窗口现在支持整线卡：同一条连续线路只导入一份平面/纵断面，下面各子段继续单独配置 R/D 和单独计算损失。
+- xx管 有压管道窗口现在只保留整线卡：同一条纯“有压管道 / 定向钻 / 顶管”线路只导入一份平面/纵断面，弹窗里不再编辑子段 `R / D`。
 - xx管 整线纵断面现按 `route_key` 持久化，空间长度、导出中心线高程和材料/建筑物分段都会先找整线数据，再按子段桩号裁切。
 - 多个空名称 xx管 子段现在会优先使用 `pressure_pipe_row_identity` 区分，避免导出和纵断面取值时相互串用。
-- `xx管` 现在会把连续出现的有压管道、定向钻、顶管和隧洞识别成一条连续承压链，在结果窗口显示“总览 + 逐成员明细”。
-- 连续承压链支持首行有压管道作为锚点，不再因为缺少上一普通行而整条链计算失败。
-- 配置窗口现在会按连续承压链分组展示，同链内的隧洞成员会显示为只读提示，不再误当成要填写 R / D 的有压卡片。
+- xx管 弹窗里的纵断面 DXF 现在会在导入时立即校验整线导出节点是否都被覆盖，覆盖不足会直接拦截，不再“先导入、导出时再发现缺口”。
+- 夹带隧洞的 xx管 整线当前不再进入有压管道水力计算，窗口会直接提示“暂不支持”并跳过该整线。
+- 图2“管中心线高程（米）”继续在导出时按当前平面桩号现算；节点 `station_MC` 缺失时只对个别节点按平面累计距离回退，整线都没有有效桩号锚点时直接报错。
 
 ## 待办事项
 
-- 结合真实工程样表继续做界面联调，确认更多 xx管 混合“有压管道 + 隧洞”场景下的显示细节。
+- 结合真实工程样表继续做界面联调，确认后续要不要恢复“有压管道夹带隧洞”的半兼容计算。
 - 继续补充 route 覆盖不足、圆弧边界裁切、连续承压链，以及更多匿名子段组合场景的回归样例。

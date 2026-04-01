@@ -231,6 +231,35 @@ def test_apply_pressure_pipe_member_result_skips_anchor_row():
     assert panel._pressure_pipe_calc_done == {}
 
 
+def test_build_pressure_pipe_chain_anchor_record_preserves_zero_indices_and_uses_blank_losses():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._get_pressure_chain_member_identity = WaterProfilePanel._get_pressure_chain_member_identity
+
+    member = SimpleNamespace(
+        member_type="single_row",
+        identity="flow1-row1",
+        storage_key="flow1-row1",
+        display_name="流量段1 第1行有压管道",
+        flow_section="1",
+        structure_type="有压管道",
+        target_row_index=0,
+        upstream_row_index=0,
+    )
+
+    record = WaterProfilePanel._build_pressure_chain_anchor_record(panel, member)
+
+    assert record["target_row_index"] == 0
+    assert record["upstream_row_index"] == 0
+    assert record["total_head_loss"] is None
+    assert record["friction_loss"] is None
+    assert record["total_bend_loss"] is None
+    assert record["inlet_transition_loss"] is None
+    assert record["outlet_transition_loss"] is None
+    assert record["pipe_velocity"] is None
+    assert record["total_length"] is None
+
+
 def test_apply_pressure_pipe_member_result_writes_chain_row_override():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -483,3 +512,27 @@ def test_apply_pressure_pipe_results_applies_chain_member_outside_pipe_groups():
     assert node1.section_params["pressure_pipe_window_override"]["identity"] == "flow2-row4"
     assert getattr(node1, "_ensured_row_index", None) == 1
     assert getattr(panel, "_silent_recalc_called", False) is True
+
+
+def test_build_pressure_pipe_chain_descriptors_uses_global_chain_name_for_cross_section_chain():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    chain = SimpleNamespace(
+        flow_section="2",
+        start_row_index=0,
+        end_row_index=3,
+        members=[
+            SimpleNamespace(flow_section="2"),
+            SimpleNamespace(flow_section="3"),
+            SimpleNamespace(flow_section="3"),
+        ],
+    )
+
+    descriptors = WaterProfilePanel._build_pressure_pipe_chain_descriptors(panel, [chain])
+
+    assert len(descriptors) == 1
+    descriptor = descriptors[0]
+    assert descriptor["display_name"] == "连续承压链1"
+    assert descriptor["flow_section"] == "2、3"
+    assert descriptor["chain_id"].startswith("chain1-")
