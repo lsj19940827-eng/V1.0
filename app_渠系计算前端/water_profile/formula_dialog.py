@@ -850,6 +850,11 @@ def _get_transition_length_source_label(source: str) -> str:
     return "当前采用值"
 
 
+def _is_pressure_pipe_like_structure_name(structure_name: str) -> bool:
+    """判断说明弹窗里的结构名是否属于普通有压管道类。"""
+    return str(structure_name or "").strip() in {"有压管道", "定向钻", "顶管"}
+
+
 def _format_transition_length_constraint_values(ctx: Dict[str, Any]) -> str:
     """生成长度约束段的正文，保持与长度弹窗一致的措辞。"""
     constraint_applied = ctx["constraint_applied"]
@@ -875,7 +880,11 @@ def _format_transition_length_constraint_values(ctx: Dict[str, Any]) -> str:
             "───────────────────────",
             f"取大值:  $L = max({L_basic:.3f},\\; {L_depth:.3f},\\; {L_tunnel:.3f}) = {displayed_formula_length:.3f}$ m",
         ])
-    elif "渡槽" in constraint_applied or "倒虹吸" in constraint_applied:
+    elif (
+        "渡槽" in constraint_applied
+        or "倒虹吸" in constraint_applied
+        or _is_pressure_pipe_like_structure_name(constraint_applied)
+    ):
         lines.extend([
             f"{depth_multiplier}倍水深约束  $L_{{depth}} = {depth_multiplier} \\times {channel_depth:.3f} = {L_depth:.3f}$ m",
             "───────────────────────",

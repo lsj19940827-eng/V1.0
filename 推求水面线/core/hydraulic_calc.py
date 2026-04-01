@@ -2409,6 +2409,7 @@ class HydraulicCalculator:
         - 隧洞进出口: max(计算值, 5倍渠道水深, 3倍洞径或洞宽)
         - 倒虹吸进口: 直接取 5倍上游渠道设计水深（GB 50288-2018 §10.2.4，3~5倍取大值）
         - 倒虹吸出口: 直接取 6倍下游渠道设计水深（GB 50288-2018 §10.2.4，4~6倍取大值）
+        - 普通有压管道/定向钻/顶管: 与倒虹吸一致，直接取 5h/6h
         
         Args:
             transition_node: 渐变段节点
@@ -2499,11 +2500,11 @@ class HydraulicCalculator:
             
             L_result = max(L_result, L_depth, L_tunnel)
         
-        # 倒虹吸（GB 50288-2018 §10.2.4）
+        # 倒虹吸/普通有压管道（GB 50288-2018 §10.2.4）
         # 进口渐变段长度宜取上游渠道设计水深的3~5倍（取大值5倍）
         # 出口渐变段长度宜取下游渠道设计水深的4~6倍（取大值6倍）
-        # 注意：倒虹吸直接按水深倍数确定，不使用基础公式 L=k×|B₁-B₂|
-        elif "倒虹吸" in struct_name:
+        # 注意：有压流建筑物直接按水深倍数确定，不使用基础公式 L=k×|B₁-B₂|
+        elif "倒虹吸" in struct_name or StructureType.is_pressure_pipe_like_str(struct_name):
             constraints = TRANSITION_LENGTH_CONSTRAINTS.get("倒虹吸", {})
             type_constraint = constraints.get(transition_type, {})
             depth_multiplier = type_constraint.get("depth_multiplier", 5 if transition_type == "进口" else 6)
@@ -2522,7 +2523,7 @@ class HydraulicCalculator:
             "L_basic": L_basic,
             "channel_depth": channel_depth,
             "L_result": L_result,
-            "constraint_applied": struct_name if ("倒虹吸" in struct_name or L_result > L_basic) else "",
+            "constraint_applied": struct_name if ("倒虹吸" in struct_name or StructureType.is_pressure_pipe_like_str(struct_name) or L_result > L_basic) else "",
             "prev_name": prev_node.name or "",
             "next_name": next_node.name or "",
         }
@@ -2549,7 +2550,7 @@ class HydraulicCalculator:
             transition_node.transition_length_calc_details["tunnel_size"] = _ts
             transition_node.transition_length_calc_details["L_tunnel"] = _tm * _ts
             transition_node.transition_length_calc_details["constraint_desc"] = f"max({_dm}倍水深, {_tm}倍洞径/洞宽)"
-        elif "倒虹吸" in struct_name:
+        elif "倒虹吸" in struct_name or StructureType.is_pressure_pipe_like_str(struct_name):
             _dm = TRANSITION_LENGTH_CONSTRAINTS.get("倒虹吸", {}).get(transition_type, {}).get("depth_multiplier", 5 if transition_type == "进口" else 6)
             transition_node.transition_length_calc_details["depth_multiplier"] = _dm
             transition_node.transition_length_calc_details["L_depth"] = _dm * channel_depth
