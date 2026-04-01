@@ -1020,6 +1020,8 @@ class PressurePipeConfigDialog(QDialog):
         self._longitudinal_data = {}
         # 存储每个管道卡片的UI组件引用 {pipe_name: {hint, stats, canvas, expand_btn, table}}
         self._card_widgets = {}
+        # 存储每条整线卡片的UI组件引用 {route_key: {...}}
+        self._route_widgets = {}
         self._radius_configs: Dict[str, Dict[str, Any]] = {}
         self._d_override_payload: Dict[str, float] = {}
         self._last_apply_summary: Dict[str, Any] = {}
@@ -1030,14 +1032,18 @@ class PressurePipeConfigDialog(QDialog):
         self._pipe_scroll_area = None
         self._pipe_scroll_widget = None
         self._did_apply_initial_size = False
+        self._route_contexts = self._build_route_contexts()
 
         # 从manager加载已有的纵断面数据
         if self._manager and self._pipe_groups:
             for group in self._pipe_groups:
                 config = self._get_manager_group_config(group)
                 group_key = self._group_storage_key(group)
+                route_key = self._group_route_key(group)
                 if config and config.longitudinal_nodes:
-                    self._longitudinal_data[group_key] = config.longitudinal_nodes
+                    storage_key = route_key or group_key
+                    if storage_key not in self._longitudinal_data:
+                        self._longitudinal_data[storage_key] = list(config.longitudinal_nodes)
                 if config:
                     _cfg_turn_n = float(getattr(config, "turn_n", 0.0) or 0.0)
                     _cfg_turn_r = float(getattr(config, "turn_R", 0.0) or 0.0)
@@ -1094,6 +1100,57 @@ class PressurePipeConfigDialog(QDialog):
             return rows[-1:]
         return rows
 
+    @staticmethod
+    def _group_route_key(group) -> str:
+        """返回分组所属整线键。"""
+        return str(getattr(group, "route_key", "") or "").strip()
+
+    @staticmethod
+    def _group_route_display_name(group) -> str:
+        """返回整线展示名称。"""
+        route_display_name = str(getattr(group, "route_display_name", "") or "").strip()
+        if route_display_name:
+            return route_display_name
+        return ""
+
+    @staticmethod
+    def _group_route_ip_points(group) -> List[Dict[str, Any]]:
+        """返回整线平面点；没有整线数据时回退到本段平面点。"""
+        route_points = list(getattr(group, "route_ip_points", []) or [])
+        if route_points:
+            return route_points
+        return list(getattr(group, "ip_points", []) or [])
+
+    def _build_route_contexts(self) -> Dict[str, Dict[str, Any]]:
+        """从分组列表中整理整线卡上下文。"""
+        contexts: Dict[str, Dict[str, Any]] = {}
+        for group in self._pipe_groups or []:
+            route_key = self._group_route_key(group)
+            if not route_key:
+                continue
+            if route_key not in contexts:
+                contexts[route_key] = {
+                    "route_key": route_key,
+                    "display_name": self._group_route_display_name(group) or route_key,
+                    "ip_points": self._group_route_ip_points(group),
+                    "route_start_row_index": getattr(group, "route_start_row_index", None),
+                    "route_end_row_index": getattr(group, "route_end_row_index", None),
+                    "route_start_mc": getattr(group, "route_start_mc", None),
+                    "route_end_mc": getattr(group, "route_end_mc", None),
+                    "groups": [],
+                }
+            contexts[route_key]["groups"].append(group)
+            if not contexts[route_key].get("ip_points"):
+                contexts[route_key]["ip_points"] = self._group_route_ip_points(group)
+        return contexts
+
+    def _lookup_visual_widgets(self, pipe_name: str) -> Dict[str, Any]:
+        """按键名查找可视化卡片组件，优先整线卡。"""
+        route_widgets = self._route_widgets.get(pipe_name)
+        if route_widgets:
+            return route_widgets
+        return self._card_widgets.get(pipe_name, {})
+
     def _get_manager_group_config(self, group):
         """优先按 storage_key 读取配置，兼容旧数据按名称回退。"""
         if not self._manager:
@@ -1109,11 +1166,15 @@ class PressurePipeConfigDialog(QDialog):
 
     def _resolve_pipe_label(self, pipe_key: str) -> str:
         """根据键名解析界面展示名称。"""
-        widgets = self._card_widgets.get(pipe_key, {})
+        widgets = self._lookup_visual_widgets(pipe_key)
         display_name = str(widgets.get("display_name", "") or "").strip()
         if display_name:
             return display_name
         for group in self._pipe_groups or []:
+            if self._group_route_key(group) == pipe_key:
+                route_display_name = self._group_route_display_name(group)
+                if route_display_name:
+                    return route_display_name
             if self._group_storage_key(group) == pipe_key:
                 return self._group_display_name(group)
         return str(pipe_key or "未命名有压管道")
@@ -1213,6 +1274,7 @@ class PressurePipeConfigDialog(QDialog):
         if not self._manager:
             return
         group_key = self._group_storage_key(group)
+        route_key = self._group_route_key(group)
         cfg = self._get_manager_group_config(group)
         if cfg is None:
             try:
@@ -1225,12 +1287,15 @@ class PressurePipeConfigDialog(QDialog):
             cfg.D = float(getattr(group, "diameter", 0.0) or 0.0)
             cfg.material_key = str(getattr(group, "material_key", "") or "")
             cfg.ip_points = list(getattr(group, "ip_points", []) or [])
+        cfg.route_key = route_key
+        cfg.route_display_name = self._group_route_display_name(group)
         cfg.turn_n = round(float(turn_n), 3) if turn_n > 0 else 0.0
         cfg.turn_R = round(float(turn_r), 2) if turn_r > 0 else 0.0
         cfg.force_override = bool(force_override)
         cfg.radius_applied_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        longitudinal_key = route_key or group_key
         cfg.longitudinal_nodes = self._longitudinal_data.get(
-            group_key, getattr(cfg, "longitudinal_nodes", []) or []
+            longitudinal_key, getattr(cfg, "longitudinal_nodes", []) or []
         )
         self._manager.set_pipe_config(group_key, cfg)
 
@@ -1702,6 +1767,10 @@ class PressurePipeConfigDialog(QDialog):
             scroll_lay = QVBoxLayout(scroll_widget)
             scroll_lay.setSpacing(12)
 
+            for route_context in self._route_contexts.values():
+                route_card = self._create_route_card(route_context)
+                scroll_lay.addWidget(route_card)
+
             for group in self._pipe_groups:
                 card = self._create_pipe_card(group)
                 scroll_lay.addWidget(card)
@@ -1857,12 +1926,234 @@ class PressurePipeConfigDialog(QDialog):
             self._apply_initial_size()
             self._did_apply_initial_size = True
 
+    def _format_row_range_text(self, start_row_index, end_row_index) -> str:
+        """格式化整线行号范围。"""
+        if start_row_index is None or end_row_index is None:
+            return "范围: -"
+        return f"范围: 第{int(start_row_index) + 1}行 ~ 第{int(end_row_index) + 1}行"
+
+    def _format_chainage_range_text(self, start_mc, end_mc) -> str:
+        """格式化整线桩号范围。"""
+        if start_mc is None or end_mc is None:
+            return "桩号: -"
+        return f"桩号: {float(start_mc):.3f} ~ {float(end_mc):.3f} m"
+
+    def _build_route_summary_text(self, route_context: Dict[str, Any]) -> str:
+        """生成整线摘要文本。"""
+        groups = list(route_context.get("groups", []) or [])
+        return (
+            f"{self._format_row_range_text(route_context.get('route_start_row_index'), route_context.get('route_end_row_index'))}"
+            f"  |  {self._format_chainage_range_text(route_context.get('route_start_mc'), route_context.get('route_end_mc'))}"
+            f"  |  成员数: {len(groups)}"
+        )
+
+    def _build_segment_summary_text(self, group) -> str:
+        """生成子段摘要文本。"""
+        route_key = self._group_route_key(group)
+        if not route_key:
+            return ""
+        route_name = self._group_route_display_name(group) or route_key
+        segment_start = getattr(group, "segment_start_mc", None)
+        segment_end = getattr(group, "segment_end_mc", None)
+        if segment_start is None or segment_end is None:
+            return f"整线: {route_name}  |  本段损失按子段单独计算"
+        return (
+            f"整线: {route_name}  |  本段桩号: {float(segment_start):.3f} ~ "
+            f"{float(segment_end):.3f} m  |  本段损失按子段单独计算"
+        )
+
+    def _add_visual_section(self, card_lay, pipe_name: str, ip_points) -> Dict[str, Any]:
+        """为卡片补充统一的平面/纵断面可视化区域。"""
+        from PySide6.QtWidgets import QPushButton, QTableWidget, QHeaderView
+
+        toolbar = QHBoxLayout()
+        try:
+            from qfluentwidgets import PushButton as FPB
+            btn_import = FPB("导入纵断面DXF")
+            btn_clear = FPB("清空纵断面")
+            btn_preview = FPB("预览")
+        except ImportError:
+            btn_import = QPushButton("导入纵断面DXF")
+            btn_clear = QPushButton("清空纵断面")
+            btn_preview = QPushButton("预览")
+
+        btn_import.clicked.connect(lambda: self._import_longitudinal_dxf(pipe_name, ip_points))
+        btn_clear.clicked.connect(lambda: self._clear_longitudinal(pipe_name))
+        btn_preview.clicked.connect(lambda: self._open_canvas_viewer(pipe_name))
+        btn_clear.setEnabled(False)
+        has_ip_for_preview = len(ip_points or []) >= 2
+        btn_preview.setEnabled(has_ip_for_preview)
+        toolbar.addWidget(btn_import)
+        toolbar.addWidget(btn_clear)
+        toolbar.addWidget(btn_preview)
+        toolbar.addStretch()
+        card_lay.addLayout(toolbar)
+
+        hint_label = QLabel("尚未导入纵断面数据，请点击「导入纵断面DXF」")
+        hint_label.setStyleSheet(
+            "font-size: 12px; color: #E65100; background: #FFF8E1; "
+            "border: 1px solid #FFE0B2; border-radius: 4px; "
+            "padding: 8px 12px; font-weight: normal;"
+        )
+        hint_label.setAlignment(Qt.AlignCenter)
+        hint_label.setObjectName(f"hint_{pipe_name}")
+        hint_label.setVisible(False)
+        card_lay.addWidget(hint_label)
+
+        stats_label = QLabel("")
+        stats_label.setStyleSheet(
+            "font-size: 12px; color: #546E7A; background: #ECEFF1; "
+            "border: 1px solid #CFD8DC; border-radius: 4px; "
+            "padding: 6px 10px; font-weight: normal;"
+        )
+        stats_label.setWordWrap(True)
+        stats_label.setObjectName(f"stats_{pipe_name}")
+        stats_label.setVisible(False)
+        card_lay.addWidget(stats_label)
+
+        view_toolbar = QHBoxLayout()
+        view_toolbar.setSpacing(4)
+        btn_view_plan = QPushButton("平面图")
+        btn_view_plan.setFixedSize(70, 26)
+        btn_view_plan.setCursor(Qt.PointingHandCursor)
+        btn_view_plan.setStyleSheet(self._VIEW_BTN_ACTIVE)
+        btn_view_profile = QPushButton("纵断面")
+        btn_view_profile.setFixedSize(70, 26)
+        btn_view_profile.setCursor(Qt.PointingHandCursor)
+        btn_view_profile.setStyleSheet(self._VIEW_BTN_INACTIVE)
+        zoom_label = QLabel("100%")
+        zoom_label.setStyleSheet("font-size: 11px; color: #90A4AE; font-weight: normal;")
+        btn_zoom_reset = QPushButton("重置")
+        btn_zoom_reset.setFixedSize(44, 22)
+        btn_zoom_reset.setStyleSheet(
+            "QPushButton { font-size: 11px; color: #546E7A; background: #ECEFF1; "
+            "border: 1px solid #CFD8DC; border-radius: 3px; padding: 1px 6px; }"
+            "QPushButton:hover { background: #CFD8DC; }"
+        )
+        btn_zoom_reset.setCursor(Qt.PointingHandCursor)
+        view_toolbar.addWidget(btn_view_plan)
+        view_toolbar.addWidget(btn_view_profile)
+        view_toolbar.addStretch()
+        view_toolbar.addWidget(zoom_label)
+        view_toolbar.addWidget(btn_zoom_reset)
+        card_lay.addLayout(view_toolbar)
+
+        mini_canvas = SimpleProfileCanvas(self, fixed_height=200)
+        mini_canvas.setObjectName(f"canvas_{pipe_name}")
+        mini_canvas.setStyleSheet("border: 1px solid #CFD8DC; border-radius: 4px;")
+        card_lay.addWidget(mini_canvas)
+        mini_canvas.open_detail_requested.connect(
+            lambda _name=pipe_name: self._open_canvas_viewer(_name)
+        )
+
+        btn_view_plan.clicked.connect(lambda: self._set_card_view_mode(pipe_name, "plan", sync_viewer=True))
+        btn_view_profile.clicked.connect(lambda: self._set_card_view_mode(pipe_name, "profile", sync_viewer=True))
+        btn_zoom_reset.clicked.connect(lambda _c=False, _name=pipe_name: self._on_canvas_zoom_reset(_name))
+
+        if has_ip_for_preview:
+            mini_canvas.set_ip_points(ip_points)
+            mini_canvas.set_view_mode("plan")
+
+        has_long = pipe_name in self._longitudinal_data and self._longitudinal_data[pipe_name]
+        btn_view_profile.setEnabled(bool(has_long))
+
+        expand_btn = QPushButton("▶ 查看详细节点数据")
+        expand_btn.setStyleSheet(
+            "QPushButton { font-size: 12px; color: #1976D2; background: transparent; "
+            "border: none; text-align: left; padding: 4px 0; font-weight: normal; }"
+            "QPushButton:hover { color: #1565C0; text-decoration: underline; }"
+        )
+        expand_btn.setCursor(Qt.PointingHandCursor)
+        expand_btn.setObjectName(f"expand_{pipe_name}")
+        expand_btn.setVisible(False)
+        card_lay.addWidget(expand_btn)
+
+        table = QTableWidget()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["桩号(m)", "高程(m)", "竖曲线半径(m)", "转弯类型", "转角(°)"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setMaximumHeight(200)
+        table.setObjectName(f"long_table_{pipe_name}")
+        table.setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        card_lay.addWidget(table)
+
+        def toggle_table(checked=False, _name=pipe_name):
+            tbl = self.findChild(QTableWidget, f"long_table_{_name}")
+            btn = self.findChild(QPushButton, f"expand_{_name}")
+            if tbl and btn:
+                vis = not tbl.isVisible()
+                tbl.setVisible(vis)
+                btn.setText("▼ 隐藏详细节点数据" if vis else "▶ 查看详细节点数据")
+
+        expand_btn.clicked.connect(toggle_table)
+
+        return {
+            "hint": hint_label,
+            "stats": stats_label,
+            "canvas": mini_canvas,
+            "expand_btn": expand_btn,
+            "table": table,
+            "btn_clear": btn_clear,
+            "btn_preview": btn_preview,
+            "btn_view_plan": btn_view_plan,
+            "btn_view_profile": btn_view_profile,
+            "zoom_label": zoom_label,
+            "btn_zoom_reset": btn_zoom_reset,
+        }
+
+    def _create_route_card(self, route_context: Dict[str, Any]):
+        """为整线创建统一几何卡片。"""
+        route_key = str(route_context.get("route_key", "") or "").strip()
+        display_name = str(route_context.get("display_name", "") or route_key).strip()
+        route_ip_points = list(route_context.get("ip_points", []) or [])
+
+        card = QGroupBox(f"链路: {display_name}")
+        card.setStyleSheet("""
+            QGroupBox {
+                font-size: 13px; font-weight: bold; color: #2E7D32;
+                border: 2px solid #60C16B; border-radius: 8px;
+                margin-top: 12px; padding: 16px 12px 12px 12px;
+                background: #FFFFFF;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin; left: 16px;
+                padding: 0 8px; background: #FFFFFF;
+            }
+        """)
+
+        card_lay = QVBoxLayout(card)
+        card_lay.setSpacing(10)
+
+        info_label = QLabel(self._build_route_summary_text(route_context))
+        info_label.setStyleSheet("font-size: 12px; color: #607D8B; font-weight: normal;")
+        info_label.setWordWrap(True)
+        card_lay.addWidget(info_label)
+
+        desc_label = QLabel("整线卡负责统一导入平面/纵断面，下面各分段只保留参数配置和分段计算。")
+        desc_label.setStyleSheet("font-size: 12px; color: #546E7A; font-weight: normal;")
+        desc_label.setWordWrap(True)
+        card_lay.addWidget(desc_label)
+
+        visual_refs = self._add_visual_section(card_lay, route_key, route_ip_points)
+        self._route_widgets[route_key] = {
+            "display_name": display_name,
+            "route_context": route_context,
+            **visual_refs,
+        }
+        if route_key in self._longitudinal_data and self._longitudinal_data[route_key]:
+            self._update_card_data_state(route_key, show_data=True)
+        return card
+
     def _create_pipe_card(self, group):
         """为单个管道创建卡片（分层结构：摘要 + 迷你画布 + 可展开表格）"""
         from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget, QHeaderView
 
         group_key = self._group_storage_key(group)
         display_name = self._group_display_name(group)
+        route_key = self._group_route_key(group)
+        route_managed = bool(route_key)
 
         card = QGroupBox(f"管道: {display_name}")
         card.setStyleSheet("""
@@ -1887,6 +2178,12 @@ class PressurePipeConfigDialog(QDialog):
         )
         info_label.setStyleSheet("font-size: 12px; color: #7F8C8D; font-weight: normal;")
         card_lay.addWidget(info_label)
+
+        segment_label = QLabel(self._build_segment_summary_text(group))
+        segment_label.setStyleSheet("font-size: 12px; color: #607D8B; font-weight: normal;")
+        segment_label.setWordWrap(True)
+        segment_label.setVisible(route_managed)
+        card_lay.addWidget(segment_label)
 
         # 平面转弯半径参数（R=n×D 与 R 双入口）
         radius_panel = QFrame()
@@ -1961,157 +2258,8 @@ class PressurePipeConfigDialog(QDialog):
 
         card_lay.addWidget(radius_panel)
 
-        # 工具栏
-        toolbar = QHBoxLayout()
-        try:
-            from qfluentwidgets import PushButton as FPB
-            btn_import = FPB("导入纵断面DXF")
-            btn_clear = FPB("清空纵断面")
-            btn_preview = FPB("预览")
-        except ImportError:
-            btn_import = QPushButton("导入纵断面DXF")
-            btn_clear = QPushButton("清空纵断面")
-            btn_preview = QPushButton("预览")
-
-        btn_import.clicked.connect(lambda: self._import_longitudinal_dxf(group_key, group.ip_points))
-        btn_clear.clicked.connect(lambda: self._clear_longitudinal(group_key))
-        btn_preview.clicked.connect(lambda: self._open_canvas_viewer(group_key))
-        btn_clear.setEnabled(False)
-        _has_ip_for_preview = len(getattr(group, 'ip_points', []) or []) >= 2
-        btn_preview.setEnabled(_has_ip_for_preview)
-        toolbar.addWidget(btn_import)
-        toolbar.addWidget(btn_clear)
-        toolbar.addWidget(btn_preview)
-        toolbar.addStretch()
-        card_lay.addLayout(toolbar)
-
-        # 空状态提示标签（仅纵断面相关，平面图始终可用时隐藏）
-        hint_label = QLabel("尚未导入纵断面数据，请点击「导入纵断面DXF」")
-        hint_label.setStyleSheet(
-            "font-size: 12px; color: #E65100; background: #FFF8E1; "
-            "border: 1px solid #FFE0B2; border-radius: 4px; "
-            "padding: 8px 12px; font-weight: normal;"
-        )
-        hint_label.setAlignment(Qt.AlignCenter)
-        hint_label.setObjectName(f"hint_{group_key}")
-        hint_label.setVisible(False)
-        card_lay.addWidget(hint_label)
-
-        # 统计摘要标签
-        stats_label = QLabel("")
-        stats_label.setStyleSheet(
-            "font-size: 12px; color: #546E7A; background: #ECEFF1; "
-            "border: 1px solid #CFD8DC; border-radius: 4px; "
-            "padding: 6px 10px; font-weight: normal;"
-        )
-        stats_label.setWordWrap(True)
-        stats_label.setObjectName(f"stats_{group_key}")
-        stats_label.setVisible(False)
-        card_lay.addWidget(stats_label)
-
-        # 视图切换工具栏
-        view_toolbar = QHBoxLayout()
-        view_toolbar.setSpacing(4)
-        btn_view_plan = QPushButton("平面图")
-        btn_view_plan.setFixedSize(70, 26)
-        btn_view_plan.setCursor(Qt.PointingHandCursor)
-        btn_view_plan.setStyleSheet(self._VIEW_BTN_ACTIVE)
-        btn_view_profile = QPushButton("纵断面")
-        btn_view_profile.setFixedSize(70, 26)
-        btn_view_profile.setCursor(Qt.PointingHandCursor)
-        btn_view_profile.setStyleSheet(self._VIEW_BTN_INACTIVE)
-        zoom_label = QLabel("100%")
-        zoom_label.setStyleSheet("font-size: 11px; color: #90A4AE; font-weight: normal;")
-        btn_zoom_reset = QPushButton("重置")
-        btn_zoom_reset.setFixedSize(44, 22)
-        btn_zoom_reset.setStyleSheet(
-            "QPushButton { font-size: 11px; color: #546E7A; background: #ECEFF1; "
-            "border: 1px solid #CFD8DC; border-radius: 3px; padding: 1px 6px; }"
-            "QPushButton:hover { background: #CFD8DC; }"
-        )
-        btn_zoom_reset.setCursor(Qt.PointingHandCursor)
-        view_toolbar.addWidget(btn_view_plan)
-        view_toolbar.addWidget(btn_view_profile)
-        view_toolbar.addStretch()
-        view_toolbar.addWidget(zoom_label)
-        view_toolbar.addWidget(btn_zoom_reset)
-        card_lay.addLayout(view_toolbar)
-
-        # 迷你画布（始终可见，默认显示平面图）
-        mini_canvas = SimpleProfileCanvas(self, fixed_height=200)
-        mini_canvas.setObjectName(f"canvas_{group_key}")
-        mini_canvas.setStyleSheet(
-            "border: 1px solid #CFD8DC; border-radius: 4px;"
-        )
-        card_lay.addWidget(mini_canvas)
-        mini_canvas.open_detail_requested.connect(
-            lambda _name=group_key: self._open_canvas_viewer(_name)
-        )
-
-        # 视图切换与缩放逻辑
-        has_plan = len(getattr(group, 'ip_points', []) or []) >= 2
-
-        btn_view_plan.clicked.connect(lambda: self._set_card_view_mode(group_key, "plan", sync_viewer=True))
-        btn_view_profile.clicked.connect(lambda: self._set_card_view_mode(group_key, "profile", sync_viewer=True))
-        btn_zoom_reset.clicked.connect(lambda _c=False, _name=group_key: self._on_canvas_zoom_reset(_name))
-
-        # 喂入平面数据
-        if has_plan:
-            mini_canvas.set_ip_points(group.ip_points)
-            mini_canvas.set_view_mode("plan")
-
-        # 无纵断面时禁用纵断面按钮
-        has_long = group_key in self._longitudinal_data and self._longitudinal_data[group_key]
-        btn_view_profile.setEnabled(bool(has_long))
-
-        # 展开/折叠按钮
-        expand_btn = QPushButton("▶ 查看详细节点数据")
-        expand_btn.setStyleSheet(
-            "QPushButton { font-size: 12px; color: #1976D2; background: transparent; "
-            "border: none; text-align: left; padding: 4px 0; font-weight: normal; }"
-            "QPushButton:hover { color: #1565C0; text-decoration: underline; }"
-        )
-        expand_btn.setCursor(Qt.PointingHandCursor)
-        expand_btn.setObjectName(f"expand_{group_key}")
-        expand_btn.setVisible(False)
-        card_lay.addWidget(expand_btn)
-
-        # 纵断面节点表（默认折叠）
-        table = QTableWidget()
-        table.setColumnCount(5)
-        table.setHorizontalHeaderLabels(["桩号(m)", "高程(m)", "竖曲线半径(m)", "转弯类型", "转角(\u00b0)"])
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setMaximumHeight(200)
-        table.setObjectName(f"long_table_{group_key}")
-        table.setVisible(False)
-        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        table.setAlternatingRowColors(True)
-        card_lay.addWidget(table)
-
-        # 展开/折叠点击事件
-        def toggle_table(checked=False, _name=group_key):
-            tbl = self.findChild(QTableWidget, f"long_table_{_name}")
-            btn = self.findChild(QPushButton, f"expand_{_name}")
-            if tbl and btn:
-                vis = not tbl.isVisible()
-                tbl.setVisible(vis)
-                btn.setText("▼ 隐藏详细节点数据" if vis else "▶ 查看详细节点数据")
-        expand_btn.clicked.connect(toggle_table)
-
-        # 保存组件引用
-        self._card_widgets[group_key] = {
+        card_refs = {
             'display_name': display_name,
-            'hint': hint_label,
-            'stats': stats_label,
-            'canvas': mini_canvas,
-            'expand_btn': expand_btn,
-            'table': table,
-            'btn_clear': btn_clear,
-            'btn_preview': btn_preview,
-            'btn_view_plan': btn_view_plan,
-            'btn_view_profile': btn_view_profile,
-            'zoom_label': zoom_label,
-            'btn_zoom_reset': btn_zoom_reset,
             'turn_n_edit': turn_n_edit,
             'turn_r_edit': turn_r_edit,
             'force_override_chk': force_override_chk,
@@ -2120,7 +2268,21 @@ class PressurePipeConfigDialog(QDialog):
             'd_target_edit': d_target_edit,
             'btn_unify_d': btn_unify_d,
             'btn_apply_group': btn_apply_group,
+            'route_key': route_key,
         }
+        if route_managed:
+            notice_label = QLabel("整线几何、纵断面导入和预览已统一放到上方整线卡。")
+            notice_label.setStyleSheet(
+                "font-size: 12px; color: #546E7A; background: #F5F7FA; "
+                "border: 1px solid #D9E2EC; border-radius: 4px; padding: 8px 10px;"
+            )
+            notice_label.setWordWrap(True)
+            card_lay.addWidget(notice_label)
+            card_refs['route_notice_label'] = notice_label
+        else:
+            card_refs.update(self._add_visual_section(card_lay, group_key, getattr(group, 'ip_points', []) or []))
+
+        self._card_widgets[group_key] = card_refs
 
         force_override_chk.toggled.connect(
             lambda checked, g=group_key: (
@@ -2164,17 +2326,19 @@ class PressurePipeConfigDialog(QDialog):
 
     def _on_canvas_zoom_reset(self, pipe_name):
         """重置画布缩放"""
-        w = self._card_widgets.get(pipe_name)
-        if not w:
+        w = self._lookup_visual_widgets(pipe_name)
+        canvas = w.get('canvas')
+        if not w or canvas is None:
             return
-        w['canvas'].zoom_reset()
-        w['zoom_label'].setText(f"{w['canvas'].get_zoom_percent()}%")
+        canvas.zoom_reset()
+        if w.get('zoom_label') is not None:
+            w['zoom_label'].setText(f"{canvas.get_zoom_percent()}%")
 
     def _set_card_view_mode(self, pipe_name, mode, sync_viewer=False):
-        w = self._card_widgets.get(pipe_name)
-        if not w:
+        w = self._lookup_visual_widgets(pipe_name)
+        canvas = w.get('canvas')
+        if not w or canvas is None:
             return
-        canvas = w['canvas']
         has_profile = canvas.has_profile_data()
         has_plan = canvas.has_plan_data()
         if mode == "profile" and not has_profile:
@@ -2205,8 +2369,8 @@ class PressurePipeConfigDialog(QDialog):
         viewer = getattr(self, "_canvas_viewer", None)
         if viewer is None:
             return
-        widgets = self._card_widgets.get(pipe_name)
-        if not widgets:
+        widgets = self._lookup_visual_widgets(pipe_name)
+        if not widgets or widgets.get("canvas") is None:
             return
         self._active_viewer_pipe_name = pipe_name
         viewer.sync_pipe_data(
@@ -2217,8 +2381,8 @@ class PressurePipeConfigDialog(QDialog):
         )
 
     def _open_canvas_viewer(self, pipe_name):
-        widgets = self._card_widgets.get(pipe_name)
-        if not widgets:
+        widgets = self._lookup_visual_widgets(pipe_name)
+        if not widgets or widgets.get("canvas") is None:
             return
         canvas = widgets["canvas"]
         if not canvas.has_plan_data() and not canvas.has_profile_data():
@@ -2235,8 +2399,8 @@ class PressurePipeConfigDialog(QDialog):
 
     def _update_card_data_state(self, pipe_name, show_data=True):
         """切换卡片的纵断面数据显示状态（画布始终可见）"""
-        w = self._card_widgets.get(pipe_name)
-        if not w:
+        w = self._lookup_visual_widgets(pipe_name)
+        if not w or w.get('canvas') is None:
             return
 
         if show_data and pipe_name in self._longitudinal_data and self._longitudinal_data[pipe_name]:

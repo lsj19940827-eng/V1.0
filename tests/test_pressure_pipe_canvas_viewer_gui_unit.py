@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QGroupBox
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if str(ROOT / "calc_渠系计算算法内核") not in sys.path:
     sys.path.insert(0, str(ROOT / "calc_渠系计算算法内核"))
 
 from app_渠系计算前端.water_profile.water_profile_dialogs import (
@@ -67,10 +68,12 @@ def _make_longitudinal_nodes():
 
 
 class _FakeManager:
-    def __init__(self, pipe_name: str, nodes):
+    def __init__(self, pipe_name: str, nodes, route_key: str = "", route_display_name: str = ""):
         self._configs = {
             pipe_name: SimpleNamespace(
                 longitudinal_nodes=list(nodes),
+                route_key=route_key,
+                route_display_name=route_display_name,
                 turn_n=0.0,
                 turn_R=0.0,
                 force_override=False,
@@ -239,8 +242,100 @@ def test_pressure_pipe_config_dialog_uses_storage_key_for_unnamed_segment():
     assert dialog._resolve_pipe_label(group.storage_key) == group.display_name
     assert group.storage_key in dialog.get_longitudinal_nodes_dict()
 
+
+def _make_route_groups():
+    route_key = "flow2-route1"
+    route_points = [
+        {"x": 0.0, "y": 0.0, "turn_angle": 0.0},
+        {"x": 20.0, "y": 0.0, "turn_angle": 0.0},
+        {"x": 50.0, "y": 15.0, "turn_angle": 12.0},
+        {"x": 80.0, "y": 15.0, "turn_angle": 0.0},
+    ]
+    long_nodes = _make_longitudinal_nodes()
+    group1 = SimpleNamespace(
+        name="穿路段",
+        display_name="穿路段",
+        storage_key="穿路段",
+        identity="2::穿路段",
+        route_key=route_key,
+        route_display_name="流量段2 整线1",
+        route_ip_points=list(route_points),
+        route_start_mc=0.0,
+        route_end_mc=80.0,
+        route_start_row_index=1,
+        route_end_row_index=5,
+        segment_start_mc=0.0,
+        segment_end_mc=20.0,
+        group_mode="named_group",
+        design_flow=1.2,
+        diameter=1.0,
+        material_key="钢管",
+        ip_points=[route_points[0], route_points[1]],
+        rows=[SimpleNamespace(section_params={"D": 1.0}, turn_radius=0.0, flow_section="2") for _ in range(2)],
+        row_indices=[1, 2],
+    )
+    group2 = SimpleNamespace(
+        name="",
+        display_name="流量段2 第6行有压管道",
+        storage_key="flow2-row6",
+        identity="flow2-row6",
+        route_key=route_key,
+        route_display_name="流量段2 整线1",
+        route_ip_points=list(route_points),
+        route_start_mc=0.0,
+        route_end_mc=80.0,
+        route_start_row_index=1,
+        route_end_row_index=5,
+        segment_start_mc=50.0,
+        segment_end_mc=80.0,
+        group_mode="unnamed_row_segment",
+        design_flow=1.2,
+        diameter=1.0,
+        material_key="钢管",
+        ip_points=[route_points[2], route_points[3]],
+        rows=[SimpleNamespace(section_params={"D": 1.0}, turn_radius=0.0, flow_section="2")],
+        row_indices=[5],
+        target_row_index=5,
+        upstream_row_index=4,
+    )
+    manager = _FakeManager(group1.storage_key, long_nodes, route_key=route_key, route_display_name="流量段2 整线1")
+    manager.set_pipe_config(
+        group2.storage_key,
+        SimpleNamespace(
+            longitudinal_nodes=list(long_nodes),
+            route_key=route_key,
+            route_display_name="流量段2 整线1",
+            turn_n=0.0,
+            turn_R=0.0,
+            force_override=False,
+            radius_applied_at="",
+        ),
+    )
+    return route_key, [group1, group2], manager
+
+
+def test_pressure_pipe_config_dialog_builds_single_route_card_for_xxpipe_groups():
+    _get_qapp()
+    route_key, groups, manager = _make_route_groups()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+    )
+    dialog.show()
+    _flush_events(6)
+
+    assert hasattr(dialog, "_route_widgets")
+    assert route_key in dialog._route_widgets
+    assert len(dialog._route_widgets) == 1
+    assert len(dialog._card_widgets) == 2
+    assert route_key in dialog.get_longitudinal_nodes_dict()
+
+    route_canvas = dialog._route_widgets[route_key]["canvas"]
+    assert route_canvas.has_plan_data() is True
+
     titles = [box.title() for box in dialog.findChildren(QGroupBox)]
-    assert any(group.display_name in title for title in titles)
+    assert any("整线1" in title for title in titles)
+    assert any(groups[0].display_name in title for title in titles)
 
     dialog.close()
     dialog.deleteLater()

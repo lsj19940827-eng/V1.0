@@ -2424,6 +2424,50 @@ class WaterProfilePanel(QWidget):
         return str(getattr(group, "name", "") or "").strip() or "未命名有压管道"
 
     @staticmethod
+    def _get_pressure_pipe_group_route_key(group) -> str:
+        """返回有压管道分组所属整线键。"""
+        return str(getattr(group, "route_key", "") or "").strip()
+
+    @staticmethod
+    def _get_pressure_pipe_group_route_display_name(group) -> str:
+        """返回有压管道分组所属整线展示名称。"""
+        return str(getattr(group, "route_display_name", "") or "").strip()
+
+    @classmethod
+    def _get_pressure_pipe_group_longitudinal_storage_key(cls, group) -> str:
+        """返回纵断面优先存储键。"""
+        route_key = cls._get_pressure_pipe_group_route_key(group)
+        if route_key:
+            return route_key
+        return cls._get_pressure_pipe_group_storage_key(group)
+
+    def _resolve_pressure_pipe_group_longitudinal_nodes(self, group, longitudinal_nodes_dict) -> tuple:
+        """解析分组可用的整线/子段纵断面数据。"""
+        route_key = self._get_pressure_pipe_group_route_key(group)
+        storage_key = self._get_pressure_pipe_group_storage_key(group)
+        source_key = self._get_pressure_pipe_group_longitudinal_storage_key(group)
+        route_nodes = copy.deepcopy((longitudinal_nodes_dict or {}).get(source_key, []) or [])
+        if not route_nodes and route_key:
+            route_nodes = copy.deepcopy((longitudinal_nodes_dict or {}).get(storage_key, []) or [])
+        if not route_nodes:
+            return [], [], ""
+
+        segment_start = getattr(group, "segment_start_mc", None)
+        segment_end = getattr(group, "segment_end_mc", None)
+        if route_key and segment_start is not None and segment_end is not None:
+            try:
+                from utils.pressure_pipe_longitudinal_utils import clip_longitudinal_nodes_to_range
+
+                segment_nodes = clip_longitudinal_nodes_to_range(route_nodes, float(segment_start), float(segment_end))
+                return route_nodes, segment_nodes, ""
+            except ValueError as exc:
+                return route_nodes, [], str(exc)
+            except Exception:
+                return route_nodes, [], "整线纵断面裁切失败，已回退到平面长度"
+
+        return route_nodes, copy.deepcopy(route_nodes), ""
+
+    @staticmethod
     def _normalize_pressure_pipe_window_override(value) -> dict:
         """规范化匿名有压管道窗口覆盖结构。"""
         if not isinstance(value, dict):
@@ -8233,6 +8277,65 @@ class WaterProfilePanel(QWidget):
         exact = {}
         plain_name_candidates = {}
         manager = getattr(self, "_pressure_pipe_manager", None)
+        get_pipe_config = getattr(manager, "get_pipe_config", None)
+        identity_set = set(target_identities or [])
+
+        if callable(get_pipe_config):
+            try:
+                settings = self._build_settings()
+                cur_nodes = self._build_nodes_from_table()
+                cur_groups = self._extract_pressure_pipe_dialog_groups(cur_nodes, settings=settings)
+            except Exception:
+                cur_groups = []
+
+            for group in cur_groups or []:
+                identity = self._build_pressure_pipe_group_identity(group)
+                if identity_set and identity not in identity_set:
+                    continue
+                storage_key = self._get_pressure_pipe_group_storage_key(group)
+                config = get_pipe_config(storage_key)
+                if config is None:
+                    continue
+                longitudinal_nodes = copy.deepcopy(getattr(config, "longitudinal_nodes", []) or [])
+                if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
+                    continue
+
+                route_key = self._get_pressure_pipe_group_route_key(group)
+                segment_start = getattr(group, "segment_start_mc", None)
+                segment_end = getattr(group, "segment_end_mc", None)
+                if route_key and segment_start is not None and segment_end is not None:
+                    try:
+                        from utils.pressure_pipe_longitudinal_utils import clip_longitudinal_nodes_to_range
+
+                        longitudinal_nodes = clip_longitudinal_nodes_to_range(
+                            longitudinal_nodes,
+                            float(segment_start),
+                            float(segment_end),
+                        )
+                    except ValueError:
+                        continue
+                    except Exception:
+                        continue
+
+                name = self._get_pressure_pipe_group_display_name(group)
+                payload = {
+                    "identity": identity,
+                    "flow_section": self._get_pressure_pipe_group_flow_section(group),
+                    "name": name,
+                    "longitudinal_nodes": longitudinal_nodes,
+                }
+                exact[identity] = payload
+                plain_name_candidates.setdefault(name, []).append(payload)
+
+            if exact or plain_name_candidates:
+                plain_name = {}
+                for name, items in plain_name_candidates.items():
+                    identities = {item.get("identity", "") for item in items}
+                    identities.discard("")
+                    if len(identities) <= 1:
+                        plain_name[name] = items[-1]
+                return exact, plain_name
+
         to_dict = getattr(manager, "to_dict", None)
         if not callable(to_dict):
             return exact, {}
@@ -8242,8 +8345,6 @@ class WaterProfilePanel(QWidget):
         except Exception:
             return exact, {}
         pipes = raw.get("pipes", {}) if isinstance(raw, dict) else {}
-        identity_set = set(target_identities or [])
-
         for key, pipe_data in pipes.items():
             row = pipe_data if isinstance(pipe_data, dict) else {}
             longitudinal_nodes = row.get("longitudinal_nodes")
@@ -8649,7 +8750,7 @@ class WaterProfilePanel(QWidget):
         except Exception:
             return 0.0
 
-    def _calculate_unnamed_pressure_pipe_group_result(self, group, nodes, longitudinal_nodes):
+    def _calculate_unnamed_pressure_pipe_group_result(self, group, nodes, longitudinal_nodes, spatial_fallback_reason: str = ""):
         """计算匿名普通有压管道段专项结果。"""
         from core.pressure_pipe_calc import (
             PIPE_MATERIALS,
@@ -8701,6 +8802,8 @@ class WaterProfilePanel(QWidget):
         spatial_length = self._calc_pressure_pipe_segment_spatial_length(group, longitudinal_nodes)
         total_length = spatial_length if spatial_length > 0 else float(length_ctx.get("effective_length", 0.0) or 0.0)
         data_mode = "空间模式（平面+纵断面）" if spatial_length > 0 else "段级平面模式"
+        if spatial_fallback_reason and spatial_length <= 0:
+            note_parts.append(spatial_fallback_reason)
 
         friction_loss = 0.0
         friction_details = {}
@@ -9488,7 +9591,12 @@ class WaterProfilePanel(QWidget):
                 flow_section = self._get_pressure_pipe_group_flow_section(group)
                 pipe_name = self._get_pressure_pipe_group_display_name(group)
                 storage_key = self._get_pressure_pipe_group_storage_key(group)
+                route_key = self._get_pressure_pipe_group_route_key(group)
+                route_display_name = self._get_pressure_pipe_group_route_display_name(group)
                 identity = self._build_pressure_pipe_group_identity(group)
+                route_long_nodes, pipe_long_nodes, spatial_fallback_reason = (
+                    self._resolve_pressure_pipe_group_longitudinal_nodes(group, longitudinal_nodes_dict)
+                )
                 base_record = {
                     "identity": identity,
                     "storage_key": storage_key,
@@ -9501,7 +9609,8 @@ class WaterProfilePanel(QWidget):
                     record = self._calculate_unnamed_pressure_pipe_group_result(
                         group,
                         nodes,
-                        longitudinal_nodes_dict.get(storage_key, []),
+                        pipe_long_nodes,
+                        spatial_fallback_reason=spatial_fallback_reason,
                     )
                     records.append(record)
                     if record.get("status") == "success":
@@ -9516,7 +9625,9 @@ class WaterProfilePanel(QWidget):
                             pipe_velocity=float(record.get("pipe_velocity", 0.0) or 0.0),
                             plan_total_length=float(record.get("total_length", 0.0) or 0.0),
                             data_mode=str(record.get("data_mode", "") or ""),
-                            longitudinal_nodes=longitudinal_nodes_dict.get(storage_key, []),
+                            longitudinal_nodes=route_long_nodes,
+                            route_key=route_key,
+                            route_display_name=route_display_name,
                         )
                     continue
 
@@ -9533,11 +9644,10 @@ class WaterProfilePanel(QWidget):
                 note = ""
                 if group.material_key not in PIPE_MATERIALS:
                     note = f"未识别管材\"{group.material_key}\"，已按\"{default_material}\"计算"
+                if spatial_fallback_reason:
+                    note = "；".join([item for item in [note, spatial_fallback_reason] if item])
 
                 try:
-                    # 判断是否有纵断面数据
-                    pipe_long_nodes = longitudinal_nodes_dict.get(storage_key, [])
-
                     if pipe_long_nodes:
                         # 使用空间模式计算
                         calc_res = calc_total_head_loss_with_spatial(
@@ -9676,7 +9786,9 @@ class WaterProfilePanel(QWidget):
                     pipe_velocity=calc_res.pipe_velocity,
                     plan_total_length=calc_res.total_length,
                     data_mode=calc_res.data_mode,
-                    longitudinal_nodes=pipe_long_nodes,
+                    longitudinal_nodes=route_long_nodes,
+                    route_key=route_key,
+                    route_display_name=route_display_name,
                 )
 
             batch_data = normalize_pressure_pipe_calc_records({

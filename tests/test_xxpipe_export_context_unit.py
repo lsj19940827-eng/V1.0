@@ -41,6 +41,7 @@ def _make_node(
     in_out="",
     material="球墨铸铁管",
     diameter=1.2,
+    row_identity="",
 ):
     return _Node(
         ip_number=ip_no,
@@ -59,6 +60,7 @@ def _make_node(
         top_elevation=0.0,
         water_level=0.0,
         section_params={"pipe_material": material, "D": diameter},
+        pressure_pipe_row_identity=row_identity,
     )
 
 
@@ -100,3 +102,81 @@ def test_build_xxpipe_profile_data_rejects_unallowed_structure():
 
     with pytest.raises(ValueError, match="明渠-矩形"):
         cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
+
+
+def test_make_xxpipe_identity_from_node_prefers_pressure_pipe_row_identity_for_unnamed_segment():
+    node = _make_node(
+        ip_no=1,
+        mc=20.0,
+        structure="有压管道",
+        name="",
+        flow_section="2",
+        row_identity="flow2-row6",
+    )
+
+    assert cad_tools._make_xxpipe_identity_from_node(node) == "flow2-row6"
+
+
+def test_build_xxpipe_identity_rows_keeps_multiple_unnamed_segments_separate():
+    nodes = [
+        _make_node(
+            ip_no=1,
+            mc=0.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            row_identity="flow2-row6",
+        ),
+        _make_node(
+            ip_no=2,
+            mc=50.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            row_identity="flow2-row7",
+        ),
+    ]
+
+    rows = cad_tools._build_xxpipe_identity_rows(nodes)
+
+    assert [row["identity"] for row in rows] == ["flow2-row6", "flow2-row7"]
+
+
+def test_build_xxpipe_profile_data_uses_row_identity_for_multiple_unnamed_segments():
+    nodes = [
+        _make_node(
+            ip_no=1,
+            mc=0.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            row_identity="flow2-row6",
+            material="钢管",
+            diameter=1.0,
+        ),
+        _make_node(
+            ip_no=2,
+            mc=50.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            row_identity="flow2-row7",
+            material="球墨铸铁管",
+            diameter=1.2,
+        ),
+    ]
+    long_map = {
+        "flow2-row6": [
+            {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
+            {"chainage": 20.0, "elevation": 98.0, "turn_type": "无"},
+        ],
+        "flow2-row7": [
+            {"chainage": 40.0, "elevation": 96.0, "turn_type": "无"},
+            {"chainage": 60.0, "elevation": 94.0, "turn_type": "无"},
+        ],
+    }
+
+    data = cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
+
+    assert [record["identity"] for record in data["centerline_records"]] == ["flow2-row6", "flow2-row7"]
+    assert [segment["identity"] for segment in data["material_segments"]] == ["flow2-row6", "flow2-row7"]

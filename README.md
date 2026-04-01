@@ -3,14 +3,14 @@
 ## 项目功能简介
 
 这是一个本地桌面计算工具，用来处理渠系纵断面、水面线、倒虹吸、有压管道、土石方等工程计算与导出。
-当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及 xx管 纵断面相关规则。
+当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及 xx管 的“整线纵断面 + 子段计算 + 导出复用”规则。
 
 ## 技术架构
 
 - 前端界面：`PySide6`，主要代码在 `app_渠系计算前端/`。
 - 计算内核：Python 纯计算模块，主要代码在 `推求水面线/`、`calc_渠系计算算法内核/`。
 - 专项模块：`倒虹吸水力计算系统/`、`有压管道/` 提供专项计算能力。
-- 自动化验证：`pytest`，测试文件集中在 `tests/`。
+- 自动化验证：`pytest`，测试文件集中在 `tests/`，其中 xx管 整线纵断面会同时覆盖界面、持久化、计算和导出链路。
 
 ## 本地运行方法
 
@@ -29,6 +29,7 @@
 - 运行界面口径测试：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py -q`
 - 运行本次相关回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_external_head_loss_unit.py tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_channel_level_options_unit.py tests/test_pressure_pipe_preprocessing_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py tests/test_water_profile_transition_ready_unit.py -q`
 - 运行本次窗口联动回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_window_override_unit.py tests/test_external_head_loss_unit.py tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py tests/test_water_profile_transition_ready_unit.py -q`
+- 运行本次 xx管 整线回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_export_longitudinal_nodes_unit.py tests/test_pressure_pipe_persistence_with_long_unit.py tests/test_pressure_pipe_longitudinal_utils_unit.py tests/test_pressure_pipe_spatial_calc_unit.py tests/test_xxpipe_export_context_unit.py tests/test_xxpipe_longitudinal_export_unit.py tests/test_xxpipe_axis_elevation_unit.py tests/test_water_profile_transition_ready_unit.py -q`
 
 ## 搜索记录
 
@@ -45,8 +46,11 @@
 - 隧洞沿程损失继续保持原有“底坡 × 有效长度”口径，没有被承压管道逻辑带偏。
 - xx管 模式下，匿名普通有压管道紧邻定向钻、顶管或另一条匿名普通有压管道时，不再误弹补段；匿名普通有压管道与隧洞相邻时仍会保留前后两处渐变段。
 - 普通有压管道/定向钻/顶管的渐变段长度详情，现已和插入阶段统一按 `5h/6h` 显示；当长度被压缩时，也会继续明确标出物理上限和最终采用值。
+- xx管 有压管道窗口现在支持整线卡：同一条连续线路只导入一份平面/纵断面，下面各子段继续单独配置 R/D 和单独计算损失。
+- xx管 整线纵断面现按 `route_key` 持久化，空间长度、导出中心线高程和材料/建筑物分段都会先找整线数据，再按子段桩号裁切。
+- 多个空名称 xx管 子段现在会优先使用 `pressure_pipe_row_identity` 区分，避免导出和纵断面取值时相互串用。
 
 ## 待办事项
 
-- 结合真实工程样表继续做界面联调，确认更多 xx管 组合场景下的显示细节。
-- 继续补充命名有压管道组、匿名普通有压管道和渐变段混合场景的回归样例。
+- 结合真实工程样表继续做界面联调，确认更多 xx管 混合“有压管道 + 隧洞”场景下的显示细节。
+- 继续补充 route 覆盖不足、圆弧边界裁切和更多匿名子段组合场景的回归样例。

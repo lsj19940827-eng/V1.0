@@ -27,6 +27,13 @@ def _make_node(flow_section, name, structure, in_out, diameter=1.2, flow=2.4):
     return node
 
 
+def _set_plan_station(node, station_mc, x, y):
+    node.station_MC = float(station_mc)
+    node.x = float(x)
+    node.y = float(y)
+    return node
+
+
 def _make_settings(channel_level):
     return SimpleNamespace(channel_level=channel_level)
 
@@ -240,3 +247,122 @@ def test_extract_pipes_keeps_channel_velocity_when_adjacent_node_is_not_pressure
     assert group.has_outlet_transition is True
     assert group.upstream_velocity == 1.039
     assert group.downstream_velocity == 0.886
+
+
+def test_extract_dialog_pipe_groups_assigns_shared_route_context_for_mixed_xxpipe_run():
+    upstream = _set_plan_station(
+        _make_node("2", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.8),
+        0.0,
+        0.0,
+        0.0,
+    )
+    upstream.velocity = 0.9
+    upstream.water_depth = 1.3
+    upstream.section_params = {"B": 2.2, "m": 1.5}
+
+    drill_inlet = _set_plan_station(
+        _make_node("2", "穿路段", "定向钻", InOutType.INLET, diameter=1.0, flow=1.8),
+        10.0,
+        10.0,
+        0.0,
+    )
+    drill_outlet = _set_plan_station(
+        _make_node("2", "穿路段", "定向钻", InOutType.OUTLET, diameter=1.0, flow=1.8),
+        30.0,
+        30.0,
+        0.0,
+    )
+    tunnel_inlet = _set_plan_station(
+        _make_node("2", "1#洞段", "隧洞-圆形", InOutType.INLET, flow=0.0),
+        50.0,
+        50.0,
+        3.0,
+    )
+    tunnel_outlet = _set_plan_station(
+        _make_node("2", "1#洞段", "隧洞-圆形", InOutType.OUTLET, flow=0.0),
+        80.0,
+        80.0,
+        3.0,
+    )
+    anonymous = _set_plan_station(
+        _make_node("2", "", "有压管道", InOutType.NORMAL, diameter=1.0, flow=1.8),
+        100.0,
+        100.0,
+        6.0,
+    )
+    anonymous.pressure_pipe_row_identity = "flow2-row6"
+
+    downstream = _set_plan_station(
+        _make_node("2", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.8),
+        130.0,
+        130.0,
+        6.0,
+    )
+    downstream.velocity = 1.1
+    downstream.water_depth = 1.1
+    downstream.section_params = {"B": 2.0, "m": 1.2}
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [upstream, drill_inlet, drill_outlet, tunnel_inlet, tunnel_outlet, anonymous, downstream],
+        settings=_make_settings("干管"),
+    )
+
+    assert [group.display_name for group in groups] == ["穿路段", "流量段2 第6行有压管道"]
+
+    named_group, anonymous_group = groups
+    assert named_group.route_key
+    assert named_group.route_key == anonymous_group.route_key
+    assert named_group.route_start_row_index == 1
+    assert named_group.route_end_row_index == 5
+    assert named_group.route_start_mc == 10.0
+    assert named_group.route_end_mc == 100.0
+    assert named_group.segment_start_mc == 10.0
+    assert named_group.segment_end_mc == 30.0
+    assert anonymous_group.segment_start_mc == 80.0
+    assert anonymous_group.segment_end_mc == 100.0
+    assert len(named_group.route_ip_points) >= 5
+    assert named_group.route_ip_points[0]["x"] == 10.0
+    assert named_group.route_ip_points[-1]["x"] == 100.0
+
+
+def test_extract_dialog_pipe_groups_keeps_route_start_when_tunnel_is_first_member():
+    tunnel_inlet = _set_plan_station(
+        _make_node("3", "前置隧洞", "隧洞-圆形", InOutType.INLET, flow=0.0),
+        0.0,
+        0.0,
+        0.0,
+    )
+    tunnel_outlet = _set_plan_station(
+        _make_node("3", "前置隧洞", "隧洞-圆形", InOutType.OUTLET, flow=0.0),
+        20.0,
+        20.0,
+        0.0,
+    )
+    drill_inlet = _set_plan_station(
+        _make_node("3", "后续顶管", "顶管", InOutType.INLET, diameter=0.9, flow=1.2),
+        40.0,
+        40.0,
+        5.0,
+    )
+    drill_outlet = _set_plan_station(
+        _make_node("3", "后续顶管", "顶管", InOutType.OUTLET, diameter=0.9, flow=1.2),
+        60.0,
+        60.0,
+        5.0,
+    )
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [tunnel_inlet, tunnel_outlet, drill_inlet, drill_outlet],
+        settings=_make_settings("分干管"),
+    )
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group.route_start_row_index == 0
+    assert group.route_end_row_index == 3
+    assert group.route_start_mc == 0.0
+    assert group.route_end_mc == 60.0
+    assert group.segment_start_mc == 40.0
+    assert group.segment_end_mc == 60.0
+    assert group.route_ip_points[0]["x"] == 0.0
+    assert group.route_ip_points[-1]["x"] == 60.0
