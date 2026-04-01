@@ -176,6 +176,29 @@ def test_combined_dxf_saves_when_all_sections_succeed(monkeypatch):
     assert "断面汇总表: 2" in questions[-1][2]
 
 
+def test_export_combined_dxf_opens_text_dialog_in_xxpipe_mode(monkeypatch):
+    panel = _build_panel(structure_type="有压管道")
+    captured = {}
+
+    class _Dialog:
+        def __init__(self, *args, **kwargs):
+            captured["mode"] = kwargs.get("mode")
+            self.result = None
+
+        def exec(self):
+            return cad_tools.QDialog.Rejected
+
+    monkeypatch.setattr(cad_tools, "MODELS_AVAILABLE", True)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda obj: obj)
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _Dialog)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert captured["mode"] == "xxpipe"
+
+
 def test_combined_dxf_warns_but_saves_when_open_channel_name_missing(monkeypatch):
     docs = _patch_common(monkeypatch)
     panel = _build_panel(name="")

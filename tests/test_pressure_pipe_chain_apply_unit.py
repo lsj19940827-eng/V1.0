@@ -260,6 +260,33 @@ def test_build_pressure_pipe_chain_anchor_record_preserves_zero_indices_and_uses
     assert record["total_length"] is None
 
 
+def test_build_pressure_pipe_route_anchor_record_marks_xxpipe_start_row_as_skip():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    group = SimpleNamespace(
+        group_mode="unnamed_row_segment",
+        identity="flow1-row1",
+        storage_key="flow1-row1",
+        display_name="流量段1 第1行有压管道",
+        rows=[SimpleNamespace(flow_section="1")],
+        target_row_index=0,
+        upstream_row_index=-1,
+        route_start_row_index=0,
+    )
+
+    assert WaterProfilePanel._is_pressure_pipe_route_anchor_group(panel, group) is True
+
+    record = WaterProfilePanel._build_pressure_pipe_route_anchor_record(panel, group)
+
+    assert record["status"] == "success"
+    assert record["writeback_enabled"] is False
+    assert record["target_row_index"] == 0
+    assert record["upstream_row_index"] == -1
+    assert record["total_head_loss"] is None
+    assert record["note"] == "整线起点，不计算本行水头损失"
+
+
 def test_apply_pressure_pipe_member_result_writes_chain_row_override():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

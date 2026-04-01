@@ -546,14 +546,65 @@ def create_text_export_settings_dialog(api_module):
     compute_runtime_advanced_parameter_view = _api_get(
         api_module, "_compute_runtime_advanced_parameter_view"
     )
+    compute_xxpipe_runtime_advanced_parameter_view = _api_get(
+        api_module, "_compute_xxpipe_runtime_advanced_parameter_view"
+    )
     resolve_fluent_icon = _api_get(api_module, "_resolve_fluent_icon")
     format_number = _api_get(api_module, "_format_number")
-    profile_row_def_map = _api_get(api_module, "_PROFILE_ROW_DEF_MAP")
+    profile_row_def_map = dict(_api_get(api_module, "_PROFILE_ROW_DEF_MAP"))
     profile_row_visible_order = list(_api_get(api_module, "_PROFILE_ROW_VISIBLE_ORDER"))
     profile_row_visible_id_set = frozenset(profile_row_visible_order)
     tingzikou_template_row_ids = list(_api_get(api_module, "_TINGZIKOU_TEMPLATE_ROW_IDS"))
     recommended_row_ids = set(_api_get(api_module, "_PROFILE_RECOMMENDED_ROW_IDS"))
+    xxpipe_row_defs = list(_api_get(api_module, "_get_xxpipe_profile_row_defs")())
+    xxpipe_row_def_map = {row["id"]: dict(row) for row in xxpipe_row_defs}
+    xxpipe_row_visible_order = [row["id"] for row in xxpipe_row_defs]
+    xxpipe_row_visible_id_set = frozenset(xxpipe_row_visible_order)
     runtime_advanced_keys = tuple(_api_get(api_module, "_PROFILE_RUNTIME_ADVANCED_KEYS"))
+
+    def _resolve_mode_spec(mode):
+        mode_name = str(mode or "standard").strip().lower()
+        if mode_name == "xxpipe":
+            return {
+                "mode": "xxpipe",
+                "row_def_map": xxpipe_row_def_map,
+                "visible_order": xxpipe_row_visible_order,
+                "visible_id_set": xxpipe_row_visible_id_set,
+                "default_enabled_ids": frozenset(xxpipe_row_visible_order),
+                "tingzikou_template_row_ids": tuple(xxpipe_row_visible_order),
+                "recommended_row_ids": frozenset(xxpipe_row_visible_order),
+                "runtime_view_builder": compute_xxpipe_runtime_advanced_parameter_view,
+                "read_only_rows": True,
+                "toolbar_title": "纵断面行内容",
+                "toolbar_hint": "固定模板，仅展示管道纵断面导出的 5 项。",
+                "enabled_title": "固定 5 项",
+                "enabled_hint": "这里显示 xx管 纵断面导出的固定内容，顺序和启停均已锁定。",
+                "candidate_title": "可选项",
+                "empty_runtime_hint": "当前按 xx管 固定模板展示全部 5 项。",
+                "subtitle_enabled": "固定项",
+                "subtitle_disabled": "固定项",
+            }
+        return {
+            "mode": "standard",
+            "row_def_map": profile_row_def_map,
+            "visible_order": profile_row_visible_order,
+            "visible_id_set": profile_row_visible_id_set,
+            "default_enabled_ids": frozenset(
+                rid for rid in tingzikou_template_row_ids if rid in profile_row_visible_id_set
+            ),
+            "tingzikou_template_row_ids": tuple(tingzikou_template_row_ids),
+            "recommended_row_ids": frozenset(recommended_row_ids),
+            "runtime_view_builder": compute_runtime_advanced_parameter_view,
+            "read_only_rows": False,
+            "toolbar_title": "纵断面行内容工作台",
+            "toolbar_hint": "",
+            "enabled_title": "已启用",
+            "enabled_hint": "",
+            "candidate_title": "可选项",
+            "empty_runtime_hint": "当前尚未启用任何纵断面行。",
+            "subtitle_enabled": "已启用",
+            "subtitle_disabled": "可选项",
+        }
     def _info_bar():
         return _api_get(api_module, "InfoBar")
 
@@ -571,14 +622,16 @@ def create_text_export_settings_dialog(api_module):
         "scale_x": "X方向比例",
         "scale_y": "Y方向比例",
     }
-    default_enabled_ids = frozenset(
-        rid for rid in tingzikou_template_row_ids if rid in profile_row_visible_id_set
-    )
+    def default_profile_row_items(mode_spec):
+        return [
+            {"id": rid, "enabled": rid in mode_spec["default_enabled_ids"]}
+            for rid in mode_spec["visible_order"]
+        ]
 
-    def default_profile_row_items():
-        return [{"id": rid, "enabled": rid in default_enabled_ids} for rid in profile_row_visible_order]
+    def normalize_profile_row_items(raw_items, *, mode_spec):
+        if mode_spec["read_only_rows"]:
+            return [{"id": rid, "enabled": True} for rid in mode_spec["visible_order"]]
 
-    def normalize_profile_row_items(raw_items):
         order = []
         enabled_map = {}
         if isinstance(raw_items, list):
@@ -586,26 +639,31 @@ def create_text_export_settings_dialog(api_module):
                 if not isinstance(item, dict):
                     continue
                 rid = str(item.get("id", "")).strip()
-                if rid not in profile_row_visible_id_set or rid in order:
+                if rid not in mode_spec["visible_id_set"] or rid in order:
                     continue
                 order.append(rid)
-                enabled_map[rid] = bool(item.get("enabled", rid in default_enabled_ids))
-        for rid in profile_row_visible_order:
+                enabled_map[rid] = bool(item.get("enabled", rid in mode_spec["default_enabled_ids"]))
+        for rid in mode_spec["visible_order"]:
             if rid not in order:
                 order.append(rid)
-        return [{"id": rid, "enabled": enabled_map.get(rid, rid in default_enabled_ids)} for rid in order]
+        return [
+            {"id": rid, "enabled": enabled_map.get(rid, rid in mode_spec["default_enabled_ids"])}
+            for rid in order
+        ]
 
-    def normalize_dialog_defaults(settings):
+    def normalize_dialog_defaults(settings, *, mode_spec):
         normalized = normalize_text_export_settings(settings or {})
-        normalized["profile_row_items"] = normalize_profile_row_items(normalized.get("profile_row_items"))
+        normalized["profile_row_items"] = normalize_profile_row_items(
+            normalized.get("profile_row_items"),
+            mode_spec=mode_spec,
+        )
         return normalized
-
-    baseline_defaults = normalize_dialog_defaults({})
 
     class TextExportSettingsState:
         def __init__(
             self,
             *,
+            mode_spec,
             parameter_texts,
             compat_values,
             ordered_row_ids=None,
@@ -615,6 +673,7 @@ def create_text_export_settings_dialog(api_module):
             active_list_role="enabled",
             selected_row_id="",
         ):
+            self.mode_spec = dict(mode_spec or {})
             self.parameter_texts = dict(parameter_texts or {})
             self.compat_values = dict(compat_values or {})
             self.ordered_row_ids = list(ordered_row_ids or [])
@@ -625,14 +684,18 @@ def create_text_export_settings_dialog(api_module):
             self.selected_row_id = str(selected_row_id or "")
 
         @classmethod
-        def from_defaults(cls, defaults):
-            normalized = normalize_dialog_defaults(defaults or {})
-            row_items = normalize_profile_row_items(normalized.get("profile_row_items"))
+        def from_defaults(cls, defaults, *, mode_spec):
+            normalized = normalize_dialog_defaults(defaults or {}, mode_spec=mode_spec)
+            row_items = normalize_profile_row_items(
+                normalized.get("profile_row_items"),
+                mode_spec=mode_spec,
+            )
             enabled_row_ids = [item["id"] for item in row_items if item.get("enabled")]
             candidate_row_ids = [item["id"] for item in row_items if not item.get("enabled")]
             selected_row_id = enabled_row_ids[0] if enabled_row_ids else (candidate_row_ids[0] if candidate_row_ids else "")
             active_role = "enabled" if enabled_row_ids else "candidate"
             return cls(
+                mode_spec=mode_spec,
                 parameter_texts={key: str(normalized.get(key, "")) for key in basic_entry_keys},
                 compat_values={key: normalized.get(key) for key in runtime_advanced_keys},
                 ordered_row_ids=[item["id"] for item in row_items],
@@ -642,9 +705,11 @@ def create_text_export_settings_dialog(api_module):
             )
 
         def normalize_row_model(self):
-            enabled = [rid for rid in self.enabled_row_ids if rid in profile_row_visible_id_set]
-            order = [rid for rid in self.ordered_row_ids if rid in profile_row_visible_id_set]
-            for rid in profile_row_visible_order:
+            visible_id_set = self.mode_spec["visible_id_set"]
+            visible_order = self.mode_spec["visible_order"]
+            enabled = [rid for rid in self.enabled_row_ids if rid in visible_id_set]
+            order = [rid for rid in self.ordered_row_ids if rid in visible_id_set]
+            for rid in visible_order:
                 if rid not in order:
                     order.append(rid)
             disabled = [rid for rid in order if rid not in enabled]
@@ -662,7 +727,7 @@ def create_text_export_settings_dialog(api_module):
                 return row_ids
             filtered = []
             for rid in row_ids:
-                row_def = profile_row_def_map.get(rid, {})
+                row_def = self.mode_spec["row_def_map"].get(rid, {})
                 haystack = " ".join(
                     [rid, str(row_def.get("label", "")), str(row_def.get("hint", ""))]
                 ).lower()
@@ -674,7 +739,8 @@ def create_text_export_settings_dialog(api_module):
             self.normalize_row_model()
             enabled = set(self.enabled_row_ids)
             return normalize_profile_row_items(
-                [{"id": rid, "enabled": rid in enabled} for rid in self.ordered_row_ids]
+                [{"id": rid, "enabled": rid in enabled} for rid in self.ordered_row_ids],
+                mode_spec=self.mode_spec,
             )
 
         def set_basic_value(self, key, value):
@@ -715,7 +781,7 @@ def create_text_export_settings_dialog(api_module):
             return settings
 
         def runtime_view(self, defaults):
-            return compute_runtime_advanced_parameter_view(self.build_runtime_input(defaults))
+            return self.mode_spec["runtime_view_builder"](self.build_runtime_input(defaults))
 
         def ensure_selection(self):
             enabled = list(self.enabled_row_ids)
@@ -751,24 +817,26 @@ def create_text_export_settings_dialog(api_module):
             self.ensure_selection()
 
         def _get_recommended_insert_row(self, rid):
+            recommended_row_ids = self.mode_spec["recommended_row_ids"]
+            visible_order = self.mode_spec["visible_order"]
             if rid not in recommended_row_ids:
                 return len(self.enabled_row_ids)
             current_recommended = [row_id for row_id in self.enabled_row_ids if row_id in recommended_row_ids]
             expected_recommended = [
                 row_id
-                for row_id in profile_row_visible_order
+                for row_id in visible_order
                 if row_id in recommended_row_ids and row_id in current_recommended
             ]
             if current_recommended != expected_recommended:
                 return len(self.enabled_row_ids)
-            rid_index = profile_row_visible_order.index(rid)
+            rid_index = visible_order.index(rid)
             for row, row_id in enumerate(self.enabled_row_ids):
-                if row_id in recommended_row_ids and profile_row_visible_order.index(row_id) > rid_index:
+                if row_id in recommended_row_ids and visible_order.index(row_id) > rid_index:
                     return row
             previous_recommended = [
                 row_id
                 for row_id in self.enabled_row_ids
-                if row_id in recommended_row_ids and profile_row_visible_order.index(row_id) < rid_index
+                if row_id in recommended_row_ids and visible_order.index(row_id) < rid_index
             ]
             if previous_recommended:
                 return self.enabled_row_ids.index(previous_recommended[-1]) + 1
@@ -776,7 +844,9 @@ def create_text_export_settings_dialog(api_module):
 
         def set_row_enabled(self, rid, enabled):
             rid = str(rid or "").strip()
-            if rid not in profile_row_visible_id_set:
+            if rid not in self.mode_spec["visible_id_set"]:
+                return False
+            if self.mode_spec["read_only_rows"]:
                 return False
             current_enabled = rid in self.enabled_row_ids
             enabled = bool(enabled)
@@ -808,6 +878,8 @@ def create_text_export_settings_dialog(api_module):
             return True
 
         def reorder_enabled_row(self, rid, target_row):
+            if self.mode_spec["read_only_rows"]:
+                return False
             rid = str(rid or "").strip()
             enabled = list(self.enabled_row_ids)
             if rid not in enabled:
@@ -826,13 +898,17 @@ def create_text_export_settings_dialog(api_module):
             return True
 
         def enable_all_rows(self):
-            self.enabled_row_ids = list(profile_row_visible_order)
+            if self.mode_spec["read_only_rows"]:
+                return
+            self.enabled_row_ids = list(self.mode_spec["visible_order"])
             self.normalize_row_model()
             self.selected_row_id = self.enabled_row_ids[0] if self.enabled_row_ids else ""
             self.active_list_role = "enabled"
             self.ensure_selection()
 
         def disable_all_rows(self):
+            if self.mode_spec["read_only_rows"]:
+                return
             self.enabled_row_ids = []
             self.normalize_row_model()
             candidates = self.candidate_row_ids()
@@ -841,15 +917,23 @@ def create_text_export_settings_dialog(api_module):
             self.ensure_selection()
 
         def restore_recommended_rows(self):
-            self.enabled_row_ids = [rid for rid in profile_row_visible_order if rid in recommended_row_ids]
+            if self.mode_spec["read_only_rows"]:
+                return
+            visible_order = self.mode_spec["visible_order"]
+            recommended_row_ids = self.mode_spec["recommended_row_ids"]
+            self.enabled_row_ids = [rid for rid in visible_order if rid in recommended_row_ids]
             self.normalize_row_model()
             self.selected_row_id = self.enabled_row_ids[0] if self.enabled_row_ids else ""
             self.active_list_role = "enabled"
             self.ensure_selection()
 
         def apply_tingzikou_preset(self):
+            if self.mode_spec["read_only_rows"]:
+                return
+            visible_order = self.mode_spec["visible_order"]
+            tingzikou_template_row_ids = self.mode_spec["tingzikou_template_row_ids"]
             ordered = list(tingzikou_template_row_ids) + [
-                rid for rid in profile_row_visible_order if rid not in tingzikou_template_row_ids
+                rid for rid in visible_order if rid not in tingzikou_template_row_ids
             ]
             self.ordered_row_ids = ordered
             self.enabled_row_ids = list(tingzikou_template_row_ids)
@@ -878,7 +962,7 @@ def create_text_export_settings_dialog(api_module):
         _ICON_COLLAPSED = None
         _ICON_EXPANDED = None
 
-        def __init__(self, parent=None, defaults=None):
+        def __init__(self, parent=None, defaults=None, mode="standard"):
             super().__init__(parent)
             if self._ICON_COLLAPSED is None or self._ICON_EXPANDED is None:
                 type(self)._ICON_COLLAPSED = resolve_fluent_icon(
@@ -890,9 +974,20 @@ def create_text_export_settings_dialog(api_module):
 
             self.setWindowTitle("纵断面文字导出设置")
             self._ui_settings = QSettings(self._UI_SETTINGS_ORG, self._UI_SETTINGS_APP)
-            self._defaults = normalize_dialog_defaults(defaults or {})
-            self._state = TextExportSettingsState.from_defaults(self._defaults)
-            self._reset_defaults_source = dict(baseline_defaults)
+            self._mode_spec = _resolve_mode_spec(mode)
+            self._standard_defaults = normalize_dialog_defaults(
+                defaults or {},
+                mode_spec=_resolve_mode_spec("standard"),
+            )
+            self._standard_profile_row_items_snapshot = list(
+                self._standard_defaults.get("profile_row_items", [])
+            )
+            self._defaults = normalize_dialog_defaults(defaults or {}, mode_spec=self._mode_spec)
+            self._state = TextExportSettingsState.from_defaults(
+                self._defaults,
+                mode_spec=self._mode_spec,
+            )
+            self._reset_defaults_source = dict(self._defaults)
             self._row_updating = False
             self._selection_syncing = False
             self._splitter_initialized = False
@@ -1270,25 +1365,28 @@ def create_text_export_settings_dialog(api_module):
             lay.setContentsMargins(12, 10, 12, 10)
             lay.setSpacing(8)
 
-            lay.addWidget(BodyLabel("纵断面行内容工作台"))
+            lay.addWidget(BodyLabel(self._mode_spec["toolbar_title"]))
+            if self._mode_spec["toolbar_hint"]:
+                lay.addWidget(self._make_wrap_caption(self._mode_spec["toolbar_hint"]))
 
-            action_row = QHBoxLayout()
-            action_row.setContentsMargins(0, 0, 0, 0)
-            action_row.setSpacing(6)
-            btn_preset = PushButton("应用亭子口二期顶建/可研阶段模板")
-            btn_preset.clicked.connect(self._apply_tingzikou_preset)
-            btn_restore = PushButton("恢复推荐")
-            btn_restore.clicked.connect(self._restore_recommended_rows)
-            btn_enable_all = PushButton("全启用")
-            btn_enable_all.clicked.connect(self._enable_all_rows)
-            btn_disable_all = PushButton("全停用")
-            btn_disable_all.clicked.connect(self._disable_all_rows)
-            action_row.addWidget(btn_preset)
-            action_row.addWidget(btn_restore)
-            action_row.addWidget(btn_enable_all)
-            action_row.addWidget(btn_disable_all)
-            action_row.addStretch(1)
-            lay.addLayout(action_row)
+            if not self._mode_spec["read_only_rows"]:
+                action_row = QHBoxLayout()
+                action_row.setContentsMargins(0, 0, 0, 0)
+                action_row.setSpacing(6)
+                btn_preset = PushButton("应用亭子口二期顶建/可研阶段模板")
+                btn_preset.clicked.connect(self._apply_tingzikou_preset)
+                btn_restore = PushButton("恢复推荐")
+                btn_restore.clicked.connect(self._restore_recommended_rows)
+                btn_enable_all = PushButton("全启用")
+                btn_enable_all.clicked.connect(self._enable_all_rows)
+                btn_disable_all = PushButton("全停用")
+                btn_disable_all.clicked.connect(self._disable_all_rows)
+                action_row.addWidget(btn_preset)
+                action_row.addWidget(btn_restore)
+                action_row.addWidget(btn_enable_all)
+                action_row.addWidget(btn_disable_all)
+                action_row.addStretch(1)
+                lay.addLayout(action_row)
             return card
 
         def _build_enabled_section(self):
@@ -1301,25 +1399,33 @@ def create_text_export_settings_dialog(api_module):
             header = QHBoxLayout()
             header.setContentsMargins(0, 0, 0, 0)
             header.setSpacing(8)
-            header.addWidget(BodyLabel("已启用"))
+            header.addWidget(BodyLabel(self._mode_spec["enabled_title"]))
             self._enabled_caption_label = CaptionLabel("")
             header.addWidget(self._enabled_caption_label)
             header.addStretch(1)
-            btn_up = PushButton("上移")
-            btn_up.clicked.connect(lambda: self._move_selected_row(-1))
-            btn_down = PushButton("下移")
-            btn_down.clicked.connect(lambda: self._move_selected_row(1))
-            btn_top = PushButton("置顶")
-            btn_top.clicked.connect(lambda: self._move_selected_row_to_edge(True))
-            btn_bottom = PushButton("置底")
-            btn_bottom.clicked.connect(lambda: self._move_selected_row_to_edge(False))
-            header.addWidget(btn_up)
-            header.addWidget(btn_down)
-            header.addWidget(btn_top)
-            header.addWidget(btn_bottom)
+            if not self._mode_spec["read_only_rows"]:
+                btn_up = PushButton("上移")
+                btn_up.clicked.connect(lambda: self._move_selected_row(-1))
+                btn_down = PushButton("下移")
+                btn_down.clicked.connect(lambda: self._move_selected_row(1))
+                btn_top = PushButton("置顶")
+                btn_top.clicked.connect(lambda: self._move_selected_row_to_edge(True))
+                btn_bottom = PushButton("置底")
+                btn_bottom.clicked.connect(lambda: self._move_selected_row_to_edge(False))
+                header.addWidget(btn_up)
+                header.addWidget(btn_down)
+                header.addWidget(btn_top)
+                header.addWidget(btn_bottom)
             lay.addLayout(header)
 
-            self._enabled_list = AutoHeightListWidget(allow_reorder=True, auto_height=False, parent=self)
+            if self._mode_spec["enabled_hint"]:
+                lay.addWidget(self._make_wrap_caption(self._mode_spec["enabled_hint"]))
+
+            self._enabled_list = AutoHeightListWidget(
+                allow_reorder=not self._mode_spec["read_only_rows"],
+                auto_height=False,
+                parent=self,
+            )
             self._enabled_list.setSpacing(4)
             self._enabled_list.setMinimumHeight(0)
             self._enabled_list.enabledRowDropped.connect(self._on_enabled_row_dropped)
@@ -1332,9 +1438,10 @@ def create_text_export_settings_dialog(api_module):
             self._enabled_list.currentItemChanged.connect(
                 lambda current, previous: self._on_list_current_changed("enabled", current, previous)
             )
-            self._enabled_list.customContextMenuRequested.connect(
-                lambda pos: self._show_grouped_row_context_menu("enabled", pos)
-            )
+            if not self._mode_spec["read_only_rows"]:
+                self._enabled_list.customContextMenuRequested.connect(
+                    lambda pos: self._show_grouped_row_context_menu("enabled", pos)
+                )
             self._row_list = self._enabled_list
             lay.addWidget(self._enabled_list, 1)
             return section
@@ -1349,7 +1456,7 @@ def create_text_export_settings_dialog(api_module):
             header = QHBoxLayout()
             header.setContentsMargins(0, 0, 0, 0)
             header.setSpacing(8)
-            header.addWidget(BodyLabel("可选项"))
+            header.addWidget(BodyLabel(self._mode_spec["candidate_title"]))
             self._candidate_caption_label = CaptionLabel("")
             header.addWidget(self._candidate_caption_label)
             header.addStretch(1)
@@ -1377,9 +1484,10 @@ def create_text_export_settings_dialog(api_module):
             self._candidate_list.currentItemChanged.connect(
                 lambda current, previous: self._on_list_current_changed("candidate", current, previous)
             )
-            self._candidate_list.customContextMenuRequested.connect(
-                lambda pos: self._show_grouped_row_context_menu("candidate", pos)
-            )
+            if not self._mode_spec["read_only_rows"]:
+                self._candidate_list.customContextMenuRequested.connect(
+                    lambda pos: self._show_grouped_row_context_menu("candidate", pos)
+                )
             candidate_body_lay.addWidget(self._candidate_list, 1)
             lay.addWidget(self._candidate_body)
             return section
@@ -1439,15 +1547,17 @@ def create_text_export_settings_dialog(api_module):
                     child_widget.deleteLater()
 
         def _row_display(self, rid, enabled, order_index=None):
-            row_def = profile_row_def_map[rid]
+            row_def = self._mode_spec["row_def_map"][rid]
             title = row_def["label"]
             if enabled and order_index is not None:
                 title = f"{order_index + 1:02d}. {title}"
-            subtitle_parts = ["已启用" if enabled else "可选项"]
+            subtitle_parts = [
+                self._mode_spec["subtitle_enabled"] if enabled else self._mode_spec["subtitle_disabled"]
+            ]
             hint = str(row_def.get("hint", "") or "").strip()
             if hint:
                 subtitle_parts.append(hint)
-            return title, " | ".join(subtitle_parts), rid in recommended_row_ids
+            return title, " | ".join(subtitle_parts), rid in self._mode_spec["recommended_row_ids"]
 
         def _create_row_widget(self, rid, enabled, *, display_variant="standard"):
             order_index = self._state.enabled_row_ids.index(rid) if enabled and rid in self._state.enabled_row_ids else None
@@ -1472,6 +1582,9 @@ def create_text_export_settings_dialog(api_module):
                 widget.drag_handle.dragRequested.connect(
                     lambda row_id=rid: self._enabled_list.start_drag_for_row_id(row_id)
                 )
+            if self._mode_spec["read_only_rows"]:
+                widget.checkbox.setEnabled(False)
+                widget.drag_handle.hide()
             return widget
 
         def _on_row_widget_checkbox_changed(self, rid):
@@ -1529,7 +1642,7 @@ def create_text_export_settings_dialog(api_module):
         def _render_runtime_advanced_view(self):
             if self._runtime_rows_layout is None:
                 return
-            runtime = compute_runtime_advanced_parameter_view(self._build_runtime_view_input_settings())
+            runtime = self._state.runtime_view(self._defaults)
             enabled_rows = list(runtime.get("enabled_runtime_rows") or [])
             self._runtime_row_labels = {}
             self._clear_layout_widgets(self._runtime_rows_layout)
@@ -1545,7 +1658,7 @@ def create_text_export_settings_dialog(api_module):
                     chip.setText(metric_values.get(key, "--"))
 
             if not enabled_rows:
-                empty_label = self._make_wrap_caption("当前尚未启用任何纵断面行。")
+                empty_label = self._make_wrap_caption(self._mode_spec["empty_runtime_hint"])
                 self._runtime_rows_layout.addWidget(empty_label, 0, 0, 1, 3)
             else:
                 for row_index, row in enumerate(enabled_rows):
@@ -1807,6 +1920,8 @@ def create_text_export_settings_dialog(api_module):
                     widget.set_selected(rid == current_rid)
 
         def _show_grouped_row_context_menu(self, role, pos):
+            if self._mode_spec["read_only_rows"]:
+                return
             list_widget = self._enabled_list if role == "enabled" else self._active_candidate_list_widget()
             if list_widget is None:
                 return
@@ -1879,7 +1994,7 @@ def create_text_export_settings_dialog(api_module):
                 ),
             )
             if show_feedback:
-                row_label = profile_row_def_map[rid]["label"]
+                row_label = self._mode_spec["row_def_map"][rid]["label"]
                 info_bar = _info_bar()
                 info_bar_position = _info_bar_position()
                 if enabled:
@@ -1915,6 +2030,8 @@ def create_text_export_settings_dialog(api_module):
             self._reorder_enabled_row(rid, target_row)
 
         def _enable_all_rows(self):
+            if self._mode_spec["read_only_rows"]:
+                return
             self._state.enable_all_rows()
             self._render()
             info_bar = _info_bar()
@@ -1928,6 +2045,8 @@ def create_text_export_settings_dialog(api_module):
             )
 
         def _disable_all_rows(self):
+            if self._mode_spec["read_only_rows"]:
+                return
             self._state.disable_all_rows()
             self._render()
             info_bar = _info_bar()
@@ -1941,6 +2060,8 @@ def create_text_export_settings_dialog(api_module):
             )
 
         def _restore_recommended_rows(self):
+            if self._mode_spec["read_only_rows"]:
+                return
             self._state.restore_recommended_rows()
             self._render()
             info_bar = _info_bar()
@@ -1954,6 +2075,8 @@ def create_text_export_settings_dialog(api_module):
             )
 
         def _apply_tingzikou_preset(self):
+            if self._mode_spec["read_only_rows"]:
+                return
             self._state.apply_tingzikou_preset()
             self._render()
             info_bar = _info_bar()
@@ -1967,6 +2090,8 @@ def create_text_export_settings_dialog(api_module):
             )
 
         def _move_selected_row(self, delta):
+            if self._mode_spec["read_only_rows"]:
+                return
             rid = self._selected_row_id()
             if not rid or rid not in self._state.enabled_row_ids:
                 return
@@ -1978,6 +2103,8 @@ def create_text_export_settings_dialog(api_module):
             self._reorder_enabled_row(rid, insertion_row)
 
         def _move_selected_row_to_edge(self, to_top):
+            if self._mode_spec["read_only_rows"]:
+                return
             rid = self._selected_row_id()
             if not rid or rid not in self._state.enabled_row_ids:
                 return
@@ -1985,12 +2112,17 @@ def create_text_export_settings_dialog(api_module):
             self._reorder_enabled_row(rid, target)
 
         def _disable_selected_row(self):
+            if self._mode_spec["read_only_rows"]:
+                return
             rid = self._selected_row_id()
             if rid and rid in self._state.enabled_row_ids:
                 self._set_row_enabled(rid, False, show_feedback=True)
 
         def _reset_defaults(self):
-            self._state = TextExportSettingsState.from_defaults(self._reset_defaults_source)
+            self._state = TextExportSettingsState.from_defaults(
+                self._reset_defaults_source,
+                mode_spec=self._mode_spec,
+            )
             for key, entry in self._entries.items():
                 entry.setText(self._state.parameter_texts.get(key, ""))
             self._render()
@@ -2035,7 +2167,7 @@ def create_text_export_settings_dialog(api_module):
                 runtime_input.update(self._state.compat_values)
                 runtime_input.update(parsed)
                 runtime_input["profile_row_items"] = row_items
-                runtime = compute_runtime_advanced_parameter_view(runtime_input)
+                runtime = self._state.runtime_view(runtime_input)
 
                 compatibility_values = {}
                 runtime_values = runtime["legacy_writeback_values"]
@@ -2056,9 +2188,18 @@ def create_text_export_settings_dialog(api_module):
                 result = dict(self._defaults)
                 result.update(parsed)
                 result.update(compatibility_values)
-                result["profile_row_items"] = row_items
-                self.result = normalize_dialog_defaults(result)
-                self.result["profile_row_items"] = row_items
+                if self._mode_spec["read_only_rows"]:
+                    preserved_row_items = list(self._standard_profile_row_items_snapshot)
+                    result["profile_row_items"] = preserved_row_items
+                    self.result = normalize_dialog_defaults(
+                        result,
+                        mode_spec=_resolve_mode_spec("standard"),
+                    )
+                    self.result["profile_row_items"] = preserved_row_items
+                else:
+                    result["profile_row_items"] = row_items
+                    self.result = normalize_dialog_defaults(result, mode_spec=self._mode_spec)
+                    self.result["profile_row_items"] = row_items
                 self.accept()
             except ValueError as exc:
                 message, key = exc.args

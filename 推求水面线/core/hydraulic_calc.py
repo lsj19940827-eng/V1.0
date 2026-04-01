@@ -64,13 +64,13 @@ class HydraulicCalculator:
 
     def _resolve_turn_radius(self, node: ChannelNode) -> float:
         """解析当前节点应使用的转弯半径。"""
-        # 表格里明确填 0 时，表示本节点不计转弯半径，不能回退到全局值。
+        # 新规则：表格留空也按 0 处理，不再回退到全局值。
         if bool(getattr(node, "turn_radius_is_explicit", False)):
             return float(getattr(node, "turn_radius", 0.0) or 0.0)
         turn_radius = float(getattr(node, "turn_radius", 0.0) or 0.0)
         if turn_radius > ZERO_TOLERANCE:
             return turn_radius
-        return float(getattr(self.settings, "turn_radius", 0.0) or 0.0)
+        return 0.0
 
     def _is_unnamed_regular_pressure_pipe(self, node: Optional[ChannelNode]) -> bool:
         """判断是否为空名称普通有压管道行。"""

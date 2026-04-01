@@ -268,8 +268,9 @@ _HEADER_TOOLTIPS = {
         "【转弯半径（单位：米）】\n\n"
         "定义：渠道平面弯道的圆曲线半径\n\n"
         "▶ 怎么填？\n"
-        "  • 留空或填 0 → 导入推求水面线后使用全局自动计算半径\n"
-        "  • 填一个数值 → 该行使用此半径，优先于全局设置\n\n"
+        "  • 留空或填 0 → 导入推求水面线后该行按 0 处理\n"
+        "  • 填一个数值 → 该行使用此半径\n"
+        "  • 如需统一全部行，可在表3顶部填写后点击“应用”\n\n"
         "▶ 说明\n"
         "  本列不参与断面水力计算，\n"
         "  仅在导入至【推求水面线】模块后用于平面几何计算\n\n"
@@ -1568,6 +1569,8 @@ class BatchPanel(QWidget):
                     if 'm' not in r:
                         r['m'] = self._sf(v[9])
                     r['turn_radius'] = self._sf(v[20], 0.0) if len(v) > 20 else 0.0
+                    # 保留用户原始填写文本；"0" 也要透传，供表3识别为显式输入而不是空白。
+                    r['turn_radius_text'] = str(v[20]).strip() if len(v) > 20 and v[20] is not None else ""
                     results_for_register.append(r)
                 count = shared_data.register_batch_results(results_for_register)
                 if count > 0:

@@ -211,6 +211,7 @@ ZERO_TOLERANCE = 1e-9           # 零值容差
 DEFAULT_ROUGHNESS = 0.014       # 默认糙率（明渠/渡槽/隧洞/暗涵等）
 DEFAULT_SIPHON_ROUGHNESS = 0.014  # 默认倒虹吸糙率
 DEFAULT_TURN_RADIUS = 100.0     # 默认转弯半径 (m)
+DEFAULT_AUTO_TURN_RADIUS = 20.0  # 顶部“自动”按钮无可计算依据时采用的统一值
 DEFAULT_GATE_HEAD_LOSS = 0.1    # 默认过闸水头损失 (m)，用于闸类型（分水闸/分水口/泄水闸/节制闸等）
 DEFAULT_SIPHON_TURN_RADIUS_N = 3.0  # 倒虹吸默认转弯半径倍数（R = n × D，n默认取3）
 

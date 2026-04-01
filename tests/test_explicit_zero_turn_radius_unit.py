@@ -62,3 +62,41 @@ def test_hydraulic_calc_respects_explicit_zero_turn_radius_for_xxpipe():
 
     assert bend_loss == pytest.approx(0.0, abs=1e-9)
     assert node.bend_calc_details == {}
+
+
+def test_geometry_calc_blank_turn_radius_defaults_to_zero():
+    """单元格留空时，几何计算也应按 0 处理，不再套用全局半径。"""
+    settings = ProjectSettings()
+    settings.turn_radius = 100.0
+    geo_calc = GeometryCalculator(settings)
+
+    start = _make_pressure_pipe_node(0.0, 0.0)
+    middle = _make_pressure_pipe_node(10.0, 0.0)
+    middle.turn_radius = 0.0
+    middle.turn_radius_is_explicit = False
+    end = _make_pressure_pipe_node(10.0, 10.0)
+
+    geo_calc.calculate_all_geometry([start, middle, end])
+
+    assert middle.turn_angle == pytest.approx(90.0, abs=1e-6)
+    assert middle.tangent_length == pytest.approx(0.0, abs=1e-9)
+    assert middle.arc_length == pytest.approx(0.0, abs=1e-9)
+
+
+def test_hydraulic_calc_blank_turn_radius_defaults_to_zero_for_xxpipe():
+    """xx管匿名有压管道留空时，也应按 0 处理，不再计弯头损失。"""
+    settings = ProjectSettings()
+    settings.turn_radius = 100.0
+    settings.channel_level = "支管"
+    hyd_calc = HydraulicCalculator(settings)
+
+    node = _make_pressure_pipe_node(10.0, 0.0)
+    node.name = ""
+    node.turn_angle = 45.0
+    node.turn_radius = 0.0
+    node.turn_radius_is_explicit = False
+
+    bend_loss = hyd_calc.calculate_bend_loss(node)
+
+    assert bend_loss == pytest.approx(0.0, abs=1e-9)
+    assert node.bend_calc_details == {}

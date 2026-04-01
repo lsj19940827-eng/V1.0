@@ -94,6 +94,15 @@ def test_sample_xxpipe_centerline_elevation_rejects_out_of_coverage_station():
         cad_tools.sample_xxpipe_centerline_elevation(_sample_nodes(), 30.1)
 
 
+def test_sample_xxpipe_centerline_elevation_accepts_millimeter_level_endpoint_gap():
+    nodes = [
+        _node(0.0, 100.0),
+        _node(10501.42576073, 90.0),
+    ]
+
+    assert cad_tools.sample_xxpipe_centerline_elevation(nodes, 10501.426) == pytest.approx(90.0)
+
+
 def test_find_xxpipe_axis_elevation_coverage_gaps_returns_missing_stations():
     missing = cad_tools.find_xxpipe_axis_elevation_coverage_gaps(
         _sample_nodes(),

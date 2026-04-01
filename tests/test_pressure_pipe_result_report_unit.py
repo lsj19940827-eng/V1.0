@@ -3,6 +3,7 @@
 
 from 推求水面线.utils.pressure_pipe_result_helpers import (
     build_pressure_pipe_transition_note,
+    format_pressure_pipe_record_detail,
     format_pressure_pipe_calc_batch_text,
 )
 
@@ -67,6 +68,25 @@ def test_build_pressure_pipe_transition_note_merges_both_sides():
     )
 
     assert note == "进口侧紧邻有压同类结构，无渐变段；出口侧紧邻有压同类结构，无渐变段"
+
+
+def test_record_detail_for_anchor_row_uses_explanation_instead_of_failure_text():
+    txt = format_pressure_pipe_record_detail(
+        {
+            "flow_section": "1",
+            "name": "流量段1 第1行有压管道",
+            "status": "success",
+            "writeback_enabled": False,
+            "note": "整线起点，不计算本行水头损失",
+            "calc_steps": "【xx管整线起点】\n本行位于整线起点，仅作为后续线路的起算位置。",
+        },
+        precision=4,
+    )
+
+    assert "[成功]" in txt
+    assert "说明: 整线起点，不计算本行水头损失" in txt
+    assert "失败原因" not in txt
+    assert "输入参数:" not in txt
 
 
 def test_batch_report_includes_chain_summary_and_member_rollup():

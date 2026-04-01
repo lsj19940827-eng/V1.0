@@ -188,6 +188,39 @@ def test_batch_calculate_preserves_explicit_bottom_width_and_registers_result(mo
     _flush_events(4)
 
 
+def test_batch_calculate_registers_explicit_zero_turn_radius_text(monkeypatch):
+    registered_rows = []
+
+    class _SharedManager:
+        def clear_batch_results(self):
+            return None
+
+        def register_batch_results(self, rows):
+            registered_rows.extend(rows)
+            return len(rows)
+
+    monkeypatch.setattr(batch_panel_mod, "SHARED_DATA_AVAILABLE", True)
+    monkeypatch.setattr(batch_panel_mod, "get_shared_data_manager", lambda: _SharedManager())
+
+    panel = _prepare_panel(monkeypatch)
+    row = _build_row()
+    row[20] = "0"
+    _set_single_row(panel, row)
+    panel.inc_cb.setChecked(False)
+    panel.detail_cb.setChecked(False)
+
+    panel._batch_calculate()
+    _flush_events(6)
+
+    assert registered_rows
+    assert registered_rows[0]["turn_radius"] == 0.0
+    assert registered_rows[0]["turn_radius_text"] == "0"
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
 def test_real_excel_import_marks_rows_as_imported(monkeypatch):
     panel = _prepare_panel(monkeypatch)
     _install_fake_openpyxl(monkeypatch)

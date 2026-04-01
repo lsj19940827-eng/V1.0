@@ -231,6 +231,15 @@ def format_pressure_pipe_record_detail(record: Dict[str, Any], precision: int = 
     lines = [f"[{status}] 流量段={flow_section}  名称={name}{mode_suffix}"]
 
     if record.get("status") == "success":
+        if not record.get("writeback_enabled", True):
+            note = (record.get("note", "") or "").strip() or "本行仅作为起点，不计算本行水头损失"
+            lines.append(f"说明: {note}")
+            steps = (record.get("calc_steps", "") or "").strip()
+            if steps:
+                lines.append("计算过程:")
+                lines.append(steps)
+            return "\n".join(lines)
+
         material_text = (
             str(record.get("material_key", "") or "").strip()
             or str(record.get("resolved_material_key", "") or "").strip()

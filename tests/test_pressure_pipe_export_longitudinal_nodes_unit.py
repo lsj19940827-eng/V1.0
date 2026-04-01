@@ -293,3 +293,103 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_route_bucket_and_
     assert list(result) == ["flow2-row6"]
     assert result["flow2-row6"][0]["chainage"] == 20.0
     assert result["flow2-row6"][-1]["chainage"] == 60.0
+
+
+def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_bucket_when_storage_key_changes():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    group = SimpleNamespace(
+        storage_key="flow2-row8",
+        route_key="flow2-route1",
+        route_display_name="流量段2 整线1",
+        display_name="流量段2 第8行有压管道",
+        name="",
+        identity="flow2-row8",
+        flow_section="2",
+        segment_start_mc=20.0,
+        segment_end_mc=60.0,
+    )
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: None,
+        to_dict=lambda: {
+            "pipes": {
+                "flow2-row6": {
+                    "name": "流量段2 第6行有压管道",
+                    "route_key": "flow2-route1",
+                    "route_display_name": "流量段2 整线1",
+                    "longitudinal_nodes": [],
+                }
+            },
+            "routes": {
+                "flow2-route1": {
+                    "display_name": "流量段2 整线1",
+                    "longitudinal_nodes": [
+                        {"chainage": 0.0, "elevation": 100.0, "turn_type": "NONE"},
+                        {"chainage": 40.0, "elevation": 96.0, "turn_type": "NONE"},
+                        {"chainage": 80.0, "elevation": 92.0, "turn_type": "NONE"},
+                    ],
+                }
+            },
+        },
+    )
+    panel._build_settings = lambda: object()
+    panel._build_nodes_from_table = lambda: ["stub-node"]
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [group]
+
+    result = WaterProfilePanel.get_pressure_pipe_longitudinal_nodes_for_export(
+        panel,
+        rows=[{"name": "", "flow_section": "2", "identity": "flow2-row8"}],
+    )
+
+    assert list(result) == ["flow2-row8"]
+    assert result["flow2-row8"][0]["chainage"] == 20.0
+    assert result["flow2-row8"][-1]["chainage"] == 60.0
+
+
+def test_get_pressure_pipe_longitudinal_nodes_for_export_keeps_route_nodes_for_xxpipe_anchor_group():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    route_nodes = [
+        {"chainage": 0.0, "elevation": 100.0, "turn_type": "NONE"},
+        {"chainage": 40.0, "elevation": 96.0, "turn_type": "NONE"},
+        {"chainage": 80.0, "elevation": 92.0, "turn_type": "NONE"},
+    ]
+    group = SimpleNamespace(
+        group_mode="unnamed_row_segment",
+        storage_key="flow1-row1",
+        route_key="flow1-route1",
+        route_display_name="流量段1 整线1",
+        display_name="流量段1 第1行有压管道",
+        name="",
+        identity="flow1-row1",
+        flow_section="1",
+        segment_start_mc=0.0,
+        segment_end_mc=0.0,
+        target_row_index=0,
+        upstream_row_index=-1,
+        route_start_row_index=0,
+    )
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: None,
+        to_dict=lambda: {
+            "routes": {
+                "flow1-route1": {
+                    "display_name": "流量段1 整线1",
+                    "longitudinal_nodes": route_nodes,
+                }
+            }
+        },
+    )
+    panel._build_settings = lambda: object()
+    panel._build_nodes_from_table = lambda: ["stub-node"]
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [group]
+
+    result = WaterProfilePanel.get_pressure_pipe_longitudinal_nodes_for_export(
+        panel,
+        rows=[{"name": "", "flow_section": "1", "identity": "flow1-row1"}],
+    )
+
+    assert list(result) == ["flow1-row1"]
+    assert result["flow1-row1"] == route_nodes

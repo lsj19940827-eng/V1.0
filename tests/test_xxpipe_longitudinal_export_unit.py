@@ -115,6 +115,9 @@ def _make_node(
     name="穿路段",
     flow_section="1",
     in_out="",
+    material="球墨铸铁管",
+    diameter=1.2,
+    row_identity="",
 ):
     return _Node(
         station_MC=float(mc),
@@ -128,12 +131,13 @@ def _make_node(
         is_transition=False,
         is_auto_inserted_channel=False,
         is_inverted_siphon=False,
-        is_pressure_pipe=("有压管道" in structure),
+        is_pressure_pipe=structure in {"有压管道", "定向钻", "顶管"},
         name=name,
         flow_section=flow_section,
         ip_number=int(ip_no),
         turn_angle=0.0,
-        section_params={"pipe_material": "球墨铸铁管", "D": 1.2},
+        section_params={"pipe_material": material, "D": diameter},
+        pressure_pipe_row_identity=row_identity,
     )
 
 
@@ -171,6 +175,26 @@ def _sample_profile_data():
     return nodes, data
 
 
+def test_build_xxpipe_profile_row_layout_ignores_oversized_y_line_height():
+    settings = {**_scaled_settings(), "y_line_height": 180}
+
+    _, enabled_ids, _row_layout, total_height, line_height, boundaries = cad_tools._build_xxpipe_profile_row_layout(
+        settings
+    )
+
+    assert enabled_ids == [
+        "building_name",
+        "ip_name",
+        "station",
+        "centerline_elev",
+        "pipe_material",
+    ]
+    assert total_height < settings["y_line_height"]
+    assert line_height == total_height
+    assert boundaries[-1] == total_height
+    assert all(value <= total_height for value in boundaries)
+
+
 @pytest.fixture
 def local_tmp_path():
     root = Path(__file__).resolve().parents[1]
@@ -192,6 +216,135 @@ def _parse_polyline_vertex_cmds(path):
             continue
         rows.append((float(m.group(1)), float(m.group(2))))
     return rows
+
+
+def _parse_pl_line_cmds(path):
+    pat = re.compile(
+        r"^pl\s+([-\d.eE]+),([-\d.eE]+)\s+([-\d.eE]+),([-\d.eE]+)\s*$"
+    )
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = pat.match(line.strip())
+        if not m:
+            continue
+        rows.append(
+            {
+                "start": (float(m.group(1)), float(m.group(2))),
+                "end": (float(m.group(3)), float(m.group(4))),
+            }
+        )
+    return rows
+
+
+def _scaled_m_to_mm(value_m, scale_denom):
+    return float(value_m) * 1000.0 / float(scale_denom)
+
+
+def _has_vertical_line_at_x(records, x_value, tol=1e-6):
+    for rec in records:
+        x0, y0 = rec["start"]
+        x1, y1 = rec["end"]
+        if abs(x0 - x1) > tol:
+            continue
+        if abs(x0 - x_value) > tol:
+            continue
+        if abs(y0 - y1) <= tol:
+            continue
+        return True
+    return False
+
+
+def _sample_adjacent_special_profile_data(structure_name):
+    nodes = [
+        _make_node(
+            ip_no=14,
+            mc=850.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            material="HDPE管",
+            diameter=0.4,
+            row_identity="flow2-row14",
+        ),
+        _make_node(
+            ip_no=15,
+            mc=900.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            material="HDPE管",
+            diameter=0.4,
+            row_identity="flow2-row15",
+        ),
+        _make_node(
+            ip_no=16,
+            mc=950.0,
+            structure=structure_name,
+            name="观音岩",
+            flow_section="2",
+            in_out="进",
+            material="钢管",
+            diameter=0.5,
+        ),
+        _make_node(
+            ip_no=17,
+            mc=1000.0,
+            structure=structure_name,
+            name="观音岩",
+            flow_section="2",
+            in_out="出",
+            material="钢管",
+            diameter=0.5,
+        ),
+        _make_node(
+            ip_no=18,
+            mc=1050.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            material="HDPE管",
+            diameter=0.4,
+            row_identity="flow2-row18",
+        ),
+        _make_node(
+            ip_no=19,
+            mc=1100.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            material="HDPE管",
+            diameter=0.4,
+            row_identity="flow2-row19",
+        ),
+    ]
+    long_map = {
+        "flow2-row14": [
+            {"chainage": 840.0, "elevation": 100.0, "turn_type": "无"},
+            {"chainage": 860.0, "elevation": 99.0, "turn_type": "无"},
+        ],
+        "flow2-row15": [
+            {"chainage": 890.0, "elevation": 98.0, "turn_type": "无"},
+            {"chainage": 910.0, "elevation": 97.0, "turn_type": "无"},
+        ],
+        "2::观音岩": [
+            {"chainage": 950.0, "elevation": 96.0, "turn_type": "无"},
+            {"chainage": 1000.0, "elevation": 92.0, "turn_type": "无"},
+        ],
+        "flow2-row18": [
+            {"chainage": 1040.0, "elevation": 91.0, "turn_type": "无"},
+            {"chainage": 1060.0, "elevation": 90.0, "turn_type": "无"},
+        ],
+        "flow2-row19": [
+            {"chainage": 1090.0, "elevation": 89.0, "turn_type": "无"},
+            {"chainage": 1110.0, "elevation": 88.0, "turn_type": "无"},
+        ],
+    }
+    profile_data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        long_map,
+        station_prefix="",
+    )
+    return nodes, profile_data
 
 
 def test_draw_profile_on_msp_in_xxpipe_mode_uses_centerline_polyline_only(monkeypatch):
@@ -228,7 +381,7 @@ def test_draw_profile_on_msp_in_xxpipe_mode_uses_centerline_polyline_only(monkey
     assert "管中心线高程（米）" in texts
     assert "管材（管径/米）" in texts
     assert "穿路段定向钻" in texts
-    assert "球墨铸铁管 DN1200" in texts
+    assert "球墨铸铁管 DN 1200" in texts
     assert "95.000" in texts
 
 
@@ -252,7 +405,7 @@ def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_
 
     content = out_file.read_text(encoding="utf-8")
     assert "管中心线高程（米）" in content
-    assert "球墨铸铁管 DN1200" in content
+    assert "球墨铸铁管 DN 1200" in content
     assert "穿路段定向钻" in content
     assert "渠底高程" not in content
     assert "设计水位" not in content
@@ -264,6 +417,114 @@ def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_
             (50.0, 90.0),
         ]
     )
+
+
+@pytest.mark.parametrize("structure_name", ["定向钻", "顶管"])
+def test_collect_xxpipe_full_height_boundaries_ignores_outer_adjacent_plain_pipe_nodes(structure_name):
+    _nodes, profile_data = _sample_adjacent_special_profile_data(structure_name)
+
+    assert cad_tools._collect_xxpipe_full_height_boundary_mcs(profile_data) == pytest.approx(
+        [850.0, 950.0, 1000.0, 1100.0]
+    )
+
+
+@pytest.mark.parametrize("structure_name", ["定向钻", "顶管"])
+def test_draw_profile_on_msp_skips_outer_adjacent_plain_pipe_vlines_for_special_segments(
+    monkeypatch, structure_name
+):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes, profile_data = _sample_adjacent_special_profile_data(structure_name)
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+        export_mode="xxpipe",
+        xxpipe_profile_data=profile_data,
+    )
+
+    scale_x = _scaled_settings()["scale_x"]
+    for mc in (900.0, 1050.0):
+        assert not _has_vertical_line_at_x(msp.line_records, _scaled_m_to_mm(mc, scale_x))
+    for mc in (850.0, 950.0, 1000.0, 1100.0):
+        assert _has_vertical_line_at_x(msp.line_records, _scaled_m_to_mm(mc, scale_x))
+
+
+@pytest.mark.parametrize("structure_name", ["定向钻", "顶管"])
+def test_export_longitudinal_txt_skips_outer_adjacent_plain_pipe_vlines_for_special_segments(
+    local_tmp_path, monkeypatch, structure_name
+):
+    nodes, profile_data = _sample_adjacent_special_profile_data(structure_name)
+    out_file = local_tmp_path / f"xxpipe_outer_vline_{structure_name}.txt"
+
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+
+    cad_tools._export_longitudinal_txt_to_path(
+        _Panel(""),
+        nodes,
+        nodes,
+        _scaled_settings(),
+        str(out_file),
+        export_mode="xxpipe",
+        xxpipe_profile_data=profile_data,
+    )
+
+    records = _parse_pl_line_cmds(out_file)
+    scale_x = _scaled_settings()["scale_x"]
+    for mc in (900.0, 1050.0):
+        assert not _has_vertical_line_at_x(records, _scaled_m_to_mm(mc, scale_x))
+    for mc in (850.0, 950.0, 1000.0, 1100.0):
+        assert _has_vertical_line_at_x(records, _scaled_m_to_mm(mc, scale_x))
+
+
+@pytest.mark.parametrize(
+    ("func_name", "expected_mode"),
+    [
+        ("export_longitudinal_profile_txt", "xxpipe"),
+        ("export_longitudinal_profile_dxf", "xxpipe"),
+    ],
+)
+def test_xxpipe_export_entries_open_dialog_in_xxpipe_mode(monkeypatch, func_name, expected_mode):
+    captured = {}
+    nodes = _sample_nodes()
+
+    class _Dialog:
+        def __init__(self, *args, **kwargs):
+            captured["mode"] = kwargs.get("mode")
+            self.result = None
+
+        def exec(self):
+            return cad_tools.QDialog.Rejected
+
+    panel = SimpleNamespace(
+        calculated_nodes=list(nodes),
+        _text_export_settings={},
+    )
+    panel.window = lambda: None
+
+    monkeypatch.setattr(cad_tools, "MODELS_AVAILABLE", True)
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "_resolve_xxpipe_export_source_nodes", lambda *_a, **_k: list(nodes))
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _Dialog)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+
+    getattr(cad_tools, func_name)(panel)
+
+    assert captured["mode"] == expected_mode
 
 
 def test_build_xxpipe_profile_data_rejects_tunnel_structures():

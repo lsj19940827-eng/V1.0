@@ -166,7 +166,7 @@ except ImportError:
 try:
     from config.constants import (
         STRUCTURE_TYPE_OPTIONS, CHANNEL_LEVEL_OPTIONS, XXPIPE_CHANNEL_LEVEL_OPTIONS,
-        DEFAULT_ROUGHNESS, DEFAULT_SIPHON_ROUGHNESS, DEFAULT_TURN_RADIUS, DEFAULT_SIPHON_TURN_RADIUS_N, DEFAULT_GATE_HEAD_LOSS,
+        DEFAULT_ROUGHNESS, DEFAULT_SIPHON_ROUGHNESS, DEFAULT_TURN_RADIUS, DEFAULT_AUTO_TURN_RADIUS, DEFAULT_SIPHON_TURN_RADIUS_N, DEFAULT_GATE_HEAD_LOSS,
         TRANSITION_FORM_OPTIONS, SIPHON_TRANSITION_FORM_OPTIONS,
         TRANSITION_ZETA_COEFFICIENTS, SIPHON_TRANSITION_ZETA_COEFFICIENTS
     )
@@ -182,6 +182,7 @@ except ImportError:
     DEFAULT_ROUGHNESS = 0.014
     DEFAULT_SIPHON_ROUGHNESS = 0.014
     DEFAULT_TURN_RADIUS = 100.0
+    DEFAULT_AUTO_TURN_RADIUS = 20.0
     DEFAULT_SIPHON_TURN_RADIUS_N = 3.0
     DEFAULT_GATE_HEAD_LOSS = 0.1
     TRANSITION_FORM_OPTIONS = ["曲线形反弯扭曲面", "直线形扭曲面", "圆弧直墙", "八字形", "直角形"]
@@ -1159,13 +1160,20 @@ class WaterProfilePanel(QWidget):
         turn_r_box.setContentsMargins(0, 0, 0, 0)
         turn_r_box.setSpacing(6)
         self.turn_radius_edit = LineEdit()
-        self.turn_radius_edit.setText(str(DEFAULT_TURN_RADIUS))
+        self.turn_radius_edit.setText("")
+        self.turn_radius_edit.setPlaceholderText("待应用值")
         self.turn_radius_edit.setFixedWidth(84)
         turn_r_box.addWidget(self.turn_radius_edit)
+        btn_apply_r = PushButton("应用")
+        btn_apply_r.setFixedWidth(58)
+        btn_apply_r.setToolTip("将当前栏位中的转弯半径统一应用到表3所有真实导入行")
+        btn_apply_r.clicked.connect(self._apply_pending_turn_radius_to_source_rows)
+        turn_r_box.addWidget(btn_apply_r)
         btn_auto_r = PushButton("自动")
         btn_auto_r.setFixedWidth(58)
         btn_auto_r.setToolTip(
             "根据规范自动计算推荐转弯半径（取大值原则）\n"
+            "仅填入当前栏位，不会自动改写表格各行\n"
             "• 隧洞：弯曲半径≥洞径(或洞宽)×5\n"
             "• 明渠：弯曲半径≥水面宽度×5\n"
             "• 渡槽：弯道半径≥连接明渠渠底宽度×5"
@@ -4523,7 +4531,8 @@ class WaterProfilePanel(QWidget):
             "  - 建筑物名称：节点名称（如隧洞1、渡槽2）",
             "  - 结构形式：双击选择断面类型（含闸·分水等）",
             "  - X/Y：平面坐标（用于几何计算）",
-            "  - 转弯半径：弯道半径（m），留空使用全局设置",
+            "  - 转弯半径：行内留空或填 0 时按 0 处理",
+            "  - 顶部转弯半径栏位：仅在点击「应用」后才统一覆盖真实导入行",
             "  - 底宽B/直径D/半径R/边坡m：断面几何参数",
             "  - 糙率n/底坡1/i/流量Q：水力参数（留空使用全局设置）", "",
             "转弯半径取值规范：",
@@ -5339,6 +5348,185 @@ class WaterProfilePanel(QWidget):
         attr = "source_x_text" if axis == "x" else "source_y_text"
         return self._normalize_coord_text(getattr(node, attr, ""))
 
+    def _get_table_turn_radius_text(self, row: int) -> str:
+        """读取表格中的转弯半径原始文本，显式填写 0 也视为有效输入。"""
+        table = getattr(self, "node_table", None)
+        if table is None or row < 0 or row >= table.rowCount():
+            return ""
+        item = table.item(row, 7)
+        if item is None:
+            return ""
+        text = str(item.text() if hasattr(item, "text") else item).strip()
+        return "" if text == "-" else text
+
+    def _try_parse_turn_radius_text(self, text):
+        """尝试解析转弯半径文本，解析失败返回 None。"""
+        raw = str(text or "").strip()
+        if not raw or raw == "-":
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def _get_source_turn_radius_entry_state(self) -> dict:
+        """统计真实导入行的转弯半径状态，用于决定顶部栏位显示。"""
+        table = getattr(self, "node_table", None)
+        if table is None:
+            return {"has_source_rows": False, "uniform_positive": None, "mixed_positive": False}
+
+        has_source_rows = False
+        positive_values = []
+        for row in range(table.rowCount()):
+            if not self._is_table1_source_row(row):
+                continue
+            has_source_rows = True
+            value = self._try_parse_turn_radius_text(self._get_table_turn_radius_text(row))
+            if value is None or value <= 0:
+                continue
+            positive_values.append(float(value))
+
+        if not positive_values:
+            return {"has_source_rows": has_source_rows, "uniform_positive": None, "mixed_positive": False}
+
+        first_value = positive_values[0]
+        is_uniform = all(abs(value - first_value) <= 1e-9 for value in positive_values[1:])
+        return {
+            "has_source_rows": has_source_rows,
+            "uniform_positive": first_value if is_uniform else None,
+            "mixed_positive": not is_uniform,
+        }
+
+    def _sync_turn_radius_entry_from_source_rows(self):
+        """按真实导入行的状态更新顶部转弯半径栏位。"""
+        edit = getattr(self, "turn_radius_edit", None)
+        if edit is None or not hasattr(edit, "setText"):
+            return
+        state = self._get_source_turn_radius_entry_state()
+        uniform_positive = state.get("uniform_positive")
+        if uniform_positive is None:
+            edit.setText("")
+            return
+        edit.setText(f"{uniform_positive:.1f}")
+
+    def _node_has_explicit_turn_radius(self, node) -> bool:
+        """判断节点是否带有用户显式填写的转弯半径。"""
+        text = str(getattr(node, "turn_radius_text", "") or "").strip()
+        if text and text != "-":
+            return True
+        return bool(getattr(node, "turn_radius_is_explicit", False))
+
+    def _format_node_turn_radius_display_text(self, node, row_index: int) -> str:
+        """生成节点回写到表格时的转弯半径文本。"""
+        text = str(getattr(node, "turn_radius_text", "") or "").strip()
+        if text and text != "-":
+            return text
+        try:
+            turn_radius = float(getattr(node, "turn_radius", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            turn_radius = 0.0
+        if self._node_has_explicit_turn_radius(node):
+            if abs(turn_radius) <= 1e-12:
+                return "0"
+            return f"{turn_radius:.1f}"
+        if turn_radius > 0:
+            return f"{turn_radius:.1f}"
+        if self._node_is_source_row(node):
+            return "0"
+        return ""
+
+    def _describe_turn_radius_entry_usage(self, settings=None) -> str:
+        """生成人类可读的顶部转弯半径栏位状态说明。"""
+        edit = getattr(self, "turn_radius_edit", None)
+        text = str(edit.text().strip()) if edit is not None and hasattr(edit, "text") else ""
+        if text:
+            state = self._get_source_turn_radius_entry_state()
+            value = self._try_parse_turn_radius_text(text)
+            uniform_positive = state.get("uniform_positive")
+            if (
+                value is not None
+                and uniform_positive is not None
+                and abs(value - uniform_positive) <= 1e-9
+                and not state.get("mixed_positive", False)
+            ):
+                return f"已统一为 {text} m"
+            return f"待应用值 {text} m"
+        if settings is not None:
+            try:
+                if float(getattr(settings, "turn_radius", 0.0) or 0.0) > 0:
+                    return f"{float(getattr(settings, 'turn_radius', 0.0)):.1f} m"
+            except (TypeError, ValueError):
+                pass
+        return "未统一应用（按各行值）"
+
+    def _apply_pending_turn_radius_to_source_rows(self):
+        """将顶部栏位中的转弯半径统一应用到所有真实导入行。"""
+        edit = getattr(self, "turn_radius_edit", None)
+        raw_text = str(edit.text().strip()) if edit is not None and hasattr(edit, "text") else ""
+        if not raw_text:
+            InfoBar.warning(
+                "提示",
+                "请先在顶部栏位填写要应用的转弯半径。",
+                parent=self._info_parent(),
+                duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+            return 0
+
+        radius_value = self._try_parse_turn_radius_text(raw_text)
+        if radius_value is None or radius_value < 0:
+            InfoBar.warning(
+                "提示",
+                "转弯半径只能填写 0 或正数。",
+                parent=self._info_parent(),
+                duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+            return 0
+
+        source_rows = [row for row in range(self.node_table.rowCount()) if self._is_table1_source_row(row)]
+        if not source_rows:
+            InfoBar.warning(
+                "提示",
+                "当前没有可应用的真实导入行。",
+                parent=self._info_parent(),
+                duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+            return 0
+
+        confirm_message = (
+            f"点击确认后，会把当前栏位中的转弯半径 {raw_text} m 作用于所有真实导入行。\n\n"
+            "如果希望不同的行使用不同的转弯半径，建议在导入 Excel 前就先在 Excel 中分别填好，"
+            "不要在程序里再统一覆盖。"
+        )
+        if not self._ask_destructive_confirm("确认应用转弯半径", confirm_message, yes_text="确认应用", no_text="取消"):
+            return 0
+
+        changed_cells = 0
+        self._push_node_table_undo()
+        for row in source_rows:
+            if self._get_table_turn_radius_text(row) == raw_text:
+                continue
+            self._set_table_cell_text_preserve_flags(row, 7, raw_text)
+            changed_cells += 1
+
+        if changed_cells <= 0:
+            return 0
+
+        self._apply_table1_source_row_lock_flags()
+        self._recalculate_geometry()
+        self._refresh_pressure_pipe_controls()
+        self._sync_turn_radius_entry_from_source_rows()
+        InfoBar.success(
+            "应用成功",
+            f"已将顶部转弯半径应用到 {changed_cells} 行真实导入行。",
+            parent=self._info_parent(),
+            duration=3000,
+            position=InfoBarPosition.TOP,
+        )
+        return changed_cells
+
     def _resolve_neighbor_coord_precision(self, nodes, index: int, axis: str, default: int = 6) -> int:
         precisions = []
         for direction in (-1, 1):
@@ -5526,13 +5714,15 @@ class WaterProfilePanel(QWidget):
             H_total = getattr(sr, 'H_total', 0) or 0.0
 
             tr_r = getattr(sr, 'turn_radius', 0.0) or 0.0
+            _raw_result = getattr(sr, 'raw_result', {}) or {}
+            tr_r_text = str(getattr(sr, 'turn_radius_text', '') or _raw_result.get('turn_radius_text', '') or '').strip()
             row_data = [""] * len(NODE_ALL_HEADERS)
             row_data[0] = flow_section
             row_data[1] = building_name
             row_data[2] = section_type
             row_data[5] = x_text
             row_data[6] = y_text
-            row_data[7] = fmt(tr_r) if tr_r > 0 else ""
+            row_data[7] = tr_r_text if tr_r_text and tr_r_text != "-" else (fmt(tr_r) if tr_r > 0 else "0")
             row_data[20] = fmt(B) if B else ""
             row_data[21] = fmt(D) if D else ""
             row_data[22] = fmt(R) if R else ""
@@ -5644,13 +5834,6 @@ class WaterProfilePanel(QWidget):
             self.design_flow_edit.setText(", ".join(flow_strs))
             self._on_design_flow_changed()
 
-        # 自动计算推荐转弯半径
-        if CALCULATOR_AVAILABLE:
-            nodes = self._build_nodes_from_table()
-            recommended_r = self._calculate_recommended_turn_radius(nodes)
-            if recommended_r > 0:
-                self.turn_radius_edit.setText(f"{recommended_r:.1f}")
-
         # 检查是否包含倒虹吸
         has_siphon = False
         has_pressure_pipe = False
@@ -5670,6 +5853,7 @@ class WaterProfilePanel(QWidget):
         # 触发几何计算（与原版Tkinter recalculate对齐）
         self._recalculate_geometry()
         self.nodes = self._build_nodes_from_table()
+        self._sync_turn_radius_entry_from_source_rows()
 
         next_steps = "请依次点击【插入渐变段】→"
         if has_siphon:
@@ -5682,7 +5866,7 @@ class WaterProfilePanel(QWidget):
         del table_signal_blocker
 
         InfoBar.success("导入成功",
-                       f"已导入 {imported} 个节点，已自动填充流量和推荐转弯半径（全局）。{next_steps}",
+                       f"已导入 {imported} 个节点，已自动填充流量。转弯半径按各行导入值保留；如需统一，请在顶部填写后点击“应用”。{next_steps}",
                        parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
 
     def _recalculate_geometry(self):
@@ -5690,12 +5874,10 @@ class WaterProfilePanel(QWidget):
         导入数据后触发几何计算（与原版Tkinter recalculate对齐）
 
         流程：
-        1. 填充转弯半径列：普通行用全局半径；倒虹吸行临时写 n×D（供几何算法用）；
-           首行/闸类/分水口行不写（保持空白）
+        1. 保留表格中的行级转弯半径；留空或填 0 的行按 0 参与几何计算；
+           顶部栏位仅作为待应用统一值，不在这里自动介入
         2. 构建节点 → calculate_geometry → preprocess_nodes
-        3. 回写几何结果列(8-19) + 进出口(3) + IP(4)；
-           倒虹吸行清空临时 n×D（倒虹吸计算后由 import_losses_callback 写入真实值）；
-           首行/闸类不写 col 7
+        3. 回写几何结果列(8-19) + 进出口(3) + IP(4)；转弯半径列按行级原始语义保留
         """
         self._updating_cells = True
         try:
@@ -5707,57 +5889,23 @@ class WaterProfilePanel(QWidget):
         if not CALCULATOR_AVAILABLE:
             return
 
-        # ---- 1. 填充转弯半径列 (col 7) ----
-        # 优先级：col 7 已有非零值(导入/手动填写) → 保留；否则按规则填充
-        # 规则：首行/闸类/分水口 → 不填（不参与弯道几何计算）
-        #       倒虹吸/有压管道行 → 临时写 n×D 供几何计算用，Step3 中清空（写回值除外）
-        #       普通行  → 使用全局转弯半径
-        turn_radius = self._fval(self.turn_radius_edit, 0)
-        siphon_n = DEFAULT_SIPHON_TURN_RADIUS_N
-        # 记录倒虹吸/有压管道行中已有明确写回值的行（Step3 中保留，不清空）
+        # ---- 1. 记录显式填写的转弯半径行 ----
+        # 新规则：留空统一按 0 处理，不再为任何结构自动填充全局/临时半径。
         siphon_rows_with_existing = set()
         pressure_rows_with_existing = set()
         for r in range(self.node_table.rowCount()):
-            existing_r = 0.0
-            ei = self.node_table.item(r, 7)
-            if ei:
-                try:
-                    v = ei.text().strip()
-                    existing_r = float(v) if v else 0.0
-                except (ValueError, TypeError):
-                    pass
+            existing_r_text = self._get_table_turn_radius_text(r)
+            has_explicit_turn_radius = bool(existing_r_text)
             struct_item = self.node_table.item(r, 2)
             struct_text = struct_item.text().strip() if struct_item else ""
             _is_siphon = "倒虹吸" in struct_text
             _is_pressure_pipe = self._is_pressure_pipe_like_structure_text(struct_text)
             _is_gate = "闸" in struct_text or "分水" in struct_text
-            if existing_r > 0:
+            if has_explicit_turn_radius:
                 if _is_siphon:
                     siphon_rows_with_existing.add(r)
                 if _is_pressure_pipe:
                     pressure_rows_with_existing.add(r)
-                continue  # 保留导入/手动输入/写回的转弯半径
-            if r == 0 or _is_gate:
-                continue  # 首行/闸类：不填转弯半径
-            if _is_siphon:
-                # 倒虹吸/有压管道行：临时写 n×D 供几何计算（Step3 会清空）
-                d_item = self.node_table.item(r, 21)  # 直径D
-                d_val = 0.0
-                if d_item:
-                    try: d_val = float(d_item.text())
-                    except (ValueError, TypeError): pass
-                r_val = siphon_n * d_val if d_val > 0 else turn_radius
-                if r_val > 0:
-                    item = QTableWidgetItem(f"{r_val:.1f}")
-                    item.setTextAlignment(Qt.AlignCenter)
-                    self.node_table.setItem(r, 7, item)
-            elif _is_pressure_pipe:
-                continue
-            elif turn_radius > 0:
-                # 普通行：使用全局转弯半径
-                item = QTableWidgetItem(f"{turn_radius:.1f}")
-                item.setTextAlignment(Qt.AlignCenter)
-                self.node_table.setItem(r, 7, item)
 
         # ---- 2. 构建节点 & 几何计算 ----
         nodes = self._build_nodes_from_table()
@@ -5792,28 +5940,11 @@ class WaterProfilePanel(QWidget):
             item.setTextAlignment(Qt.AlignCenter)
             self.node_table.setItem(r, 4, item)
 
-            # 转弯半径 (col 7) — 按规则写回
-            # 首行/闸类：不写（保持空白）
-            # 倒虹吸/有压管道行：若已有写回值则保留；否则清空临时 n×D
-            # 普通行：写回计算值（与原逻辑一致）
-            _st_r3 = node.get_structure_type_str() if hasattr(node, 'get_structure_type_str') else ""
-            _is_siphon_r3 = "倒虹吸" in _st_r3
-            _is_pressure_pipe_r3 = self._is_pressure_pipe_like_structure_text(_st_r3)
-            _is_gate_r3 = "闸" in _st_r3 or "分水" in _st_r3
-            if r == 0 or _is_gate_r3:
-                pass  # 首行/闸类：不写 col 7
-            elif _is_siphon_r3:
-                if r not in siphon_rows_with_existing:
-                    # 清空临时写入的 n×D，等待倒虹吸/有压管道计算后写回真实值
-                    self.node_table.setItem(r, 7, QTableWidgetItem(""))
-                # else: pressurized_rows_with_existing 中的行已有写回值，保留不动
-            elif _is_pressure_pipe_r3:
-                if r not in pressure_rows_with_existing:
-                    self.node_table.setItem(r, 7, QTableWidgetItem(""))
-            elif node.turn_radius and node.turn_radius > 0:
-                item = QTableWidgetItem(f"{node.turn_radius:.1f}")
-                item.setTextAlignment(Qt.AlignCenter)
-                self.node_table.setItem(r, 7, item)
+            # 转弯半径 (col 7) — 新规则：源行留空按 0 显示，不再自动套全局半径。
+            turn_radius_text = self._format_node_turn_radius_display_text(node, r)
+            item = QTableWidgetItem(turn_radius_text)
+            item.setTextAlignment(Qt.AlignCenter)
+            self.node_table.setItem(r, 7, item)
 
             # 几何结果列 (8-19) — 无条件格式化，0值也显示（与Tkinter一致）
             fmt_s = lambda s: ProjectSettings.format_station(s, prefix) if s is not None else ""
@@ -5857,6 +5988,10 @@ class WaterProfilePanel(QWidget):
         for node in nodes:
             # 只处理有压管道节点
             if not node.is_pressure_pipe:
+                continue
+            
+            # 用户显式填写的值（包含0）一律保留，不参与临时半径填充
+            if self._node_has_explicit_turn_radius(node):
                 continue
             
             # 如果已有非零转弯半径值，保留不变（可能是用户导入或手动输入的值）
@@ -5968,7 +6103,7 @@ class WaterProfilePanel(QWidget):
         settings.roughness = self._fval(self.roughness_edit, DEFAULT_ROUGHNESS)
         # siphon_roughness 不再从单一输入框读取（已改为只读概览），保留默认值
         # 每个倒虹吸的实际糙率从节点表格对应行读取
-        settings.turn_radius = self._fval(self.turn_radius_edit, DEFAULT_TURN_RADIUS)
+        settings.turn_radius = self._fval(self.turn_radius_edit, 0.0)
         # 渡槽/隧洞渐变段设置
         settings.transition_inlet_form = self.trans_inlet_combo.currentText()
         settings.transition_inlet_zeta = self._fval(self.trans_inlet_zeta, 0.10)
@@ -6049,9 +6184,6 @@ class WaterProfilePanel(QWidget):
         nodes = []
         channel_level = self._get_current_channel_level_text()
         _default_q = (self._parse_flow_values(self.design_flow_edit.text()) or [5.0])[0]
-        global_turn_radius = self._fval(self.turn_radius_edit, DEFAULT_TURN_RADIUS)
-        pressure_cfg_radius_cache = {}
-        pressure_global_fallback_groups = set()
         self._pressure_turn_radius_fallback_groups = set()
 
         for r in range(table.rowCount()):
@@ -6213,47 +6345,23 @@ class WaterProfilePanel(QWidget):
             _turn_radius_text = _read_text(r, 7)
             _turn_radius_is_explicit = bool(_turn_radius_text)
             node.turn_radius_is_explicit = _turn_radius_is_explicit
+            node.turn_radius_text = _turn_radius_text if _turn_radius_is_explicit else ""
             _row_turn = self._sf(_turn_radius_text, 0.0) if _turn_radius_is_explicit else 0.0
-            # 转弯半径 fallback 规则：
-            #   首行/闸类/倒虹吸 → 0（不用默认全局半径，避免刷表时写入错误值）
-            #   普通行           → 全局转弯半径（保持原有逻辑）
-            _struct_for_r = str(data[2]).strip()
-            _is_siphon_for_r = "倒虹吸" in _struct_for_r
-            _is_gate_for_r = "闸" in _struct_for_r or "分水" in _struct_for_r
+            # 新规则：转弯半径单元格留空也按 0 处理，不再回退到全局半径。
             if _turn_radius_is_explicit:
                 node.turn_radius = _row_turn
-            elif r == 0 or _is_siphon_for_r or _is_gate_for_r:
-                node.turn_radius = 0.0
             else:
-                node.turn_radius = self._fval(self.turn_radius_edit, DEFAULT_TURN_RADIUS)
-            # 有压管道三层来源：表1行值 -> 管道配置R -> 全局半径（仅用于本次计算）
+                node.turn_radius = 0.0
+            # 有压管道仅保留表格中的显式值；留空统一按 0 处理。
             try:
                 _struct_for_turn = str(data[2]).strip()
                 _is_pressure_turn = self._is_pressure_pipe_like_structure_text(_struct_for_turn)
                 _is_siphon_turn = "倒虹吸" in _struct_for_turn
-                _is_gate_turn = ("闸" in _struct_for_turn) or ("分水" in _struct_for_turn)
-                if _is_pressure_turn and r != 0 and (not _is_gate_turn):
+                if _is_pressure_turn:
                     if _turn_radius_is_explicit:
                         node.turn_radius = _row_turn
                     else:
-                        _group_name = str(data[1]).strip()
-                        _manager_turn = pressure_cfg_radius_cache.get(_group_name, None)
-                        if _manager_turn is None:
-                            _manager_turn = 0.0
-                            _mgr = getattr(self, "_pressure_pipe_manager", None)
-                            if _mgr is not None and _group_name:
-                                try:
-                                    _cfg = _mgr.get_pipe_config(_group_name)
-                                    _manager_turn = float(getattr(_cfg, "turn_R", 0.0) or 0.0) if _cfg else 0.0
-                                except Exception:
-                                    _manager_turn = 0.0
-                            pressure_cfg_radius_cache[_group_name] = _manager_turn
-                        if _manager_turn > 0:
-                            node.turn_radius = _manager_turn
-                        else:
-                            node.turn_radius = global_turn_radius if global_turn_radius > 0 else 0.0
-                            if node.turn_radius > 0:
-                                pressure_global_fallback_groups.add(_group_name or f"row-{r+1}")
+                        node.turn_radius = 0.0
                 elif _is_siphon_turn and _turn_radius_is_explicit:
                     node.turn_radius = _row_turn
             except Exception:
@@ -6444,10 +6552,10 @@ class WaterProfilePanel(QWidget):
                 node.velocity_increased = self._node_velocity_increased[r]
 
             nodes.append(node)
-        self._pressure_turn_radius_fallback_groups = set(pressure_global_fallback_groups)
+        self._pressure_turn_radius_fallback_groups = set()
         return nodes
 
-    def _collect_optional_blank_name_rows(self, nodes):
+    def _collect_optional_blank_name_rows(self, nodes, channel_level: str | None = None):
         rows = []
         for idx, node in enumerate(nodes, start=1):
             if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
@@ -6456,11 +6564,14 @@ class WaterProfilePanel(QWidget):
                 continue
             if str(getattr(node, "name", "") or "").strip():
                 continue
+            if self._is_unnamed_pressure_pipe_row_node(node, channel_level):
+                continue
             rows.append((idx, node.get_structure_type_str() or "明渠"))
         return rows
 
     def _show_optional_blank_name_notice(self, nodes, *, action_name):
-        rows = self._collect_optional_blank_name_rows(nodes)
+        channel_level = self._get_current_channel_level_text()
+        rows = self._collect_optional_blank_name_rows(nodes, channel_level=channel_level)
         if not rows:
             return
         preview = "；".join(f"第{idx}行（{struct_name}）" for idx, struct_name in rows[:8])
@@ -6725,10 +6836,8 @@ class WaterProfilePanel(QWidget):
                 vals[4] = "" if _is_auto_ch else node.get_ip_str()
                 vals[5] = "" if _is_auto_ch else self._resolve_node_coord_display_text(nodes, r, node, "x")
                 vals[6] = "" if _is_auto_ch else self._resolve_node_coord_display_text(nodes, r, node, "y")
-                # 转弯半径 col 7：首行始终为空（起始节点无弯道意义）；
-                # 闸类/分水口/倒虹吸 fallback=0（改动C），空 col7→0→显示"" 自然处理，
-                # 不强制清空，允许用户手动填入的值保留显示
-                vals[7] = "" if r == 0 else (f"{node.turn_radius:.1f}" if node.turn_radius else "")
+                # 转弯半径 col 7：显式填写值优先保留；只有真正留空时才按原规则显示。
+                vals[7] = self._format_node_turn_radius_display_text(node, r)
 
             if not _is_trans:
                 # 几何结果列 (8-19) — 无条件格式化，0值也显示（与Tkinter一致）
@@ -6939,7 +7048,7 @@ class WaterProfilePanel(QWidget):
         lines.append(f"  糙率: {settings.roughness if settings else '-'}")
         if settings and getattr(settings, 'siphon_roughness', None) is not None:
             lines.append(f"  倒虹吸糙率: {settings.siphon_roughness}")
-        lines.append(f"  转弯半径: {settings.turn_radius if settings else '-'} m")
+        lines.append(f"  转弯半径: {self._describe_turn_radius_entry_usage(settings)}")
         lines.append(f"  总节点数: {len(nodes)}")
         # 渐变段设置
         if settings:
@@ -7392,7 +7501,7 @@ class WaterProfilePanel(QWidget):
             if min_r > max_r:
                 max_r = min_r
         if max_r <= 0:
-            max_r = DEFAULT_TURN_RADIUS
+            max_r = DEFAULT_AUTO_TURN_RADIUS
         return _math.ceil(max_r)
 
     def _on_trans_inlet_form_changed(self, form):
@@ -7515,7 +7624,7 @@ class WaterProfilePanel(QWidget):
                     max_r = min_r
                     controlling_name = name
         if max_r <= 0:
-            max_r = DEFAULT_TURN_RADIUS
+            max_r = DEFAULT_AUTO_TURN_RADIUS
 
         rec_r = _math.ceil(max_r)
         self.turn_radius_edit.setText(f"{rec_r:.1f}")
@@ -7857,7 +7966,7 @@ class WaterProfilePanel(QWidget):
             if not _is_trans:
                 vals[5] = f"{node.x:.6f}" if (node.x and not _is_auto_ch) else ""
                 vals[6] = f"{node.y:.6f}" if (node.y and not _is_auto_ch) else ""
-                vals[7] = "" if r == 0 else (f"{node.turn_radius:.1f}" if node.turn_radius else "")
+                vals[7] = self._format_node_turn_radius_display_text(node, r)
                 # 水力输入列 (20-26)
                 vals[20] = f"{node.section_params.get('B', '')}" if node.section_params.get('B') else ""
                 vals[21] = f"{node.section_params.get('D', '')}" if node.section_params.get('D') else ""
@@ -8314,7 +8423,17 @@ class WaterProfilePanel(QWidget):
         plain_name_candidates = {}
         manager = getattr(self, "_pressure_pipe_manager", None)
         get_pipe_config = getattr(manager, "get_pipe_config", None)
+        to_dict = getattr(manager, "to_dict", None)
         identity_set = set(target_identities or [])
+        raw_manager = {}
+        route_buckets = {}
+
+        if callable(to_dict):
+            try:
+                raw_manager = to_dict() or {}
+            except Exception:
+                raw_manager = {}
+            route_buckets = raw_manager.get("routes", {}) if isinstance(raw_manager, dict) else {}
 
         if callable(get_pipe_config):
             try:
@@ -8330,16 +8449,30 @@ class WaterProfilePanel(QWidget):
                     continue
                 storage_key = self._get_pressure_pipe_group_storage_key(group)
                 config = get_pipe_config(storage_key)
-                if config is None:
-                    continue
-                longitudinal_nodes = copy.deepcopy(getattr(config, "longitudinal_nodes", []) or [])
+                longitudinal_nodes = []
+                route_longitudinal_nodes = []
+                if config is not None:
+                    longitudinal_nodes = copy.deepcopy(getattr(config, "longitudinal_nodes", []) or [])
+
+                route_key = self._get_pressure_pipe_group_route_key(group)
+                if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes) and route_key:
+                    route_data = route_buckets.get(route_key, {}) if isinstance(route_buckets, dict) else {}
+                    if isinstance(route_data, dict):
+                        route_longitudinal_nodes = copy.deepcopy(route_data.get("longitudinal_nodes", []) or [])
+                        longitudinal_nodes = copy.deepcopy(route_longitudinal_nodes)
                 if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
                     continue
 
-                route_key = self._get_pressure_pipe_group_route_key(group)
                 segment_start = getattr(group, "segment_start_mc", None)
                 segment_end = getattr(group, "segment_end_mc", None)
-                if route_key and segment_start is not None and segment_end is not None:
+                is_route_anchor_group = self._is_pressure_pipe_route_anchor_group(group)
+                if (
+                    is_route_anchor_group
+                    and self._has_exportable_pressure_pipe_longitudinal_nodes(route_longitudinal_nodes)
+                ):
+                    # xx管整线起点只对应一个桩号点，导出仍需整线纵断面来取起点高程。
+                    longitudinal_nodes = copy.deepcopy(route_longitudinal_nodes)
+                elif route_key and segment_start is not None and segment_end is not None:
                     try:
                         from utils.pressure_pipe_longitudinal_utils import clip_longitudinal_nodes_to_range
 
@@ -8376,10 +8509,12 @@ class WaterProfilePanel(QWidget):
         if not callable(to_dict):
             return exact, {}
 
-        try:
-            raw = to_dict() or {}
-        except Exception:
-            return exact, {}
+        raw = raw_manager if isinstance(raw_manager, dict) and raw_manager else {}
+        if not raw:
+            try:
+                raw = to_dict() or {}
+            except Exception:
+                return exact, {}
         pipes = raw.get("pipes", {}) if isinstance(raw, dict) else {}
         for key, pipe_data in pipes.items():
             row = pipe_data if isinstance(pipe_data, dict) else {}
@@ -8512,6 +8647,7 @@ class WaterProfilePanel(QWidget):
         def _make_entry(flow_section_text: str) -> dict:
             return {
                 "flow_section": flow_section_text,
+                "total_length": 0.0,
                 "start_water_level": start_water_level,
                 "end_water_level": end_water_level,
                 "tunnel_count": 0,
@@ -8564,7 +8700,7 @@ class WaterProfilePanel(QWidget):
             bucket = self._classify_pressure_pipe_summary_bucket(current)
             if not flow_section_text or flow_section_text != next_flow_section_text:
                 continue
-            if bucket not in building_buckets:
+            if bucket is None:
                 continue
             try:
                 seg_len = float(getattr(nxt, "station_MC", 0.0) or 0.0) - float(getattr(current, "station_MC", 0.0) or 0.0)
@@ -8573,6 +8709,9 @@ class WaterProfilePanel(QWidget):
             if seg_len <= 0:
                 continue
             entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
+            entry["total_length"] += seg_len
+            if bucket not in building_buckets:
+                continue
             entry[length_map[bucket]] += seg_len
 
         return summary_by_flow_section, start_water_level, end_water_level
@@ -9030,6 +9169,48 @@ class WaterProfilePanel(QWidget):
             "calc_steps": "【连续承压链锚点】\n本成员仅用于确定链起点，不生成本行损失。",
         })
         return record
+
+    def _is_pressure_pipe_route_anchor_group(self, group) -> bool:
+        """判断 xx管 整线首行是否应仅作为起点锚点。"""
+        if not self._is_pressure_pipe_row_segment_group(group):
+            return False
+        target_idx = self._coerce_pressure_pipe_row_index(getattr(group, "target_row_index", -1))
+        route_start_idx = self._coerce_pressure_pipe_row_index(getattr(group, "route_start_row_index", -1))
+        upstream_idx = self._coerce_pressure_pipe_row_index(getattr(group, "upstream_row_index", -1))
+        return target_idx >= 0 and route_start_idx >= 0 and target_idx == route_start_idx and upstream_idx < 0
+
+    def _build_pressure_pipe_route_anchor_record(self, group) -> dict:
+        """构造 xx管 整线首行起点记录，避免误报为失败。"""
+        target_idx = self._coerce_pressure_pipe_row_index(getattr(group, "target_row_index", -1))
+        upstream_idx = self._coerce_pressure_pipe_row_index(getattr(group, "upstream_row_index", -1))
+        display_name = self._get_pressure_pipe_group_display_name(group)
+        return {
+            "identity": self._build_pressure_pipe_group_identity(group),
+            "storage_key": self._get_pressure_pipe_group_storage_key(group),
+            "display_name": display_name,
+            "flow_section": self._get_pressure_pipe_group_flow_section(group),
+            "name": display_name,
+            "group_mode": "unnamed_row_segment",
+            "status": "success",
+            "writeback_enabled": False,
+            "data_mode": "起点行",
+            "Q": None,
+            "D": None,
+            "material_key": "",
+            "resolved_material_key": "",
+            "pipe_velocity": None,
+            "total_length": None,
+            "friction_loss": None,
+            "total_bend_loss": None,
+            "local_loss": None,
+            "inlet_transition_loss": None,
+            "outlet_transition_loss": None,
+            "total_head_loss": None,
+            "target_row_index": target_idx,
+            "upstream_row_index": upstream_idx,
+            "note": "整线起点，不计算本行水头损失",
+            "calc_steps": "【xx管整线起点】\n本行位于整线起点，仅作为后续线路的起算位置，不生成本行水头损失。",
+        }
 
     @staticmethod
     def _build_transition_length_between_nodes(nodes, upstream_idx: int, target_idx: int) -> float:
@@ -9489,8 +9670,9 @@ class WaterProfilePanel(QWidget):
             for row_idx in row_indices:
                 if row_idx < 0 or row_idx >= self.node_table.rowCount():
                     continue
+                cur_text = self._get_table_turn_radius_text(row_idx)
                 cur_val = self._parse_item_float(self.node_table.item(row_idx, 7))
-                if (not force_override) and cur_val > 0:
+                if (not force_override) and cur_text:
                     continue
                 if abs(cur_val - turn_r) <= 1e-9:
                     continue
@@ -9866,11 +10048,18 @@ class WaterProfilePanel(QWidget):
             table.setItem(i, 2, QTableWidgetItem(str(rec.get("name", "") or "未命名")))
 
             status_ok = rec.get("status") == "success"
-            status_text = "成功" if status_ok else "失败"
+            is_anchor_row = status_ok and not bool(rec.get("writeback_enabled", True))
+            if is_anchor_row:
+                status_text = "起点"
+                status_color = "#546E7A"
+            else:
+                status_text = "成功" if status_ok else "失败"
+                status_color = "#2E7D32" if status_ok else "#C62828"
             status_item = QTableWidgetItem(status_text)
-            status_item.setForeground(QColor("#2E7D32" if status_ok else "#C62828"))
+            status_item.setForeground(QColor(status_color))
             table.setItem(i, 3, status_item)
-            table.setItem(i, 4, QTableWidgetItem(str(rec.get("data_mode", "") or ("平面模式" if status_ok else "-"))))
+            default_mode = "起点行" if is_anchor_row else ("平面模式" if status_ok else "-")
+            table.setItem(i, 4, QTableWidgetItem(str(rec.get("data_mode", "") or default_mode)))
 
             if status_ok:
                 table.setItem(i, 5, QTableWidgetItem(_fmt(rec.get("total_head_loss"))))
@@ -10109,6 +10298,9 @@ class WaterProfilePanel(QWidget):
                 if self._is_pressure_pipe_row_segment_group(group):
                     if chain_member is not None and self._is_pressure_chain_anchor_member(chain_member):
                         records.append(self._build_pressure_chain_anchor_record(chain_member))
+                        continue
+                    if self._is_pressure_pipe_route_anchor_group(group):
+                        records.append(self._build_pressure_pipe_route_anchor_record(group))
                         continue
                     record = self._calculate_unnamed_pressure_pipe_group_result(
                         group,
@@ -10544,7 +10736,7 @@ class WaterProfilePanel(QWidget):
             params.append(("糙率", str(settings.roughness)))
             if getattr(settings, 'siphon_roughness', None) is not None:
                 params.append(("倒虹吸糙率", str(settings.siphon_roughness)))
-            params.append(("转弯半径", f"{settings.turn_radius} m"))
+            params.append(("转弯半径", self._describe_turn_radius_entry_usage(settings)))
             params.append(("渡槽/隧洞渐变段(进口)", f"{settings.transition_inlet_form}(ζ={settings.transition_inlet_zeta:.2f})"))
             params.append(("渡槽/隧洞渐变段(出口)", f"{settings.transition_outlet_form}(ζ={settings.transition_outlet_zeta:.2f})"))
             params.append(("倒虹吸渐变段(进口)", f"{settings.siphon_transition_inlet_form}(ζ={settings.siphon_transition_inlet_zeta:.2f})"))
@@ -10857,8 +11049,8 @@ class WaterProfilePanel(QWidget):
             if ui.get("roughness"):
                 self.roughness_edit.setText(ui["roughness"])
             
-            if ui.get("turn_radius"):
-                self.turn_radius_edit.setText(ui["turn_radius"])
+            if "turn_radius" in ui:
+                self.turn_radius_edit.setText(ui.get("turn_radius") or "")
             
             # 恢复渐变段设置
             if ui.get("trans_inlet_form"):

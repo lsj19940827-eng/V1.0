@@ -43,13 +43,13 @@ class GeometryCalculator:
 
     def _resolve_turn_radius(self, node: ChannelNode) -> float:
         """解析当前节点应使用的转弯半径。"""
-        # 用户在表格里明确填了 0 时，要按 0 处理，不能再退回默认半径。
+        # 新规则：表格留空也按 0 处理，不再退回默认半径。
         if bool(getattr(node, "turn_radius_is_explicit", False)):
             return float(getattr(node, "turn_radius", 0.0) or 0.0)
         turn_radius = float(getattr(node, "turn_radius", 0.0) or 0.0)
         if turn_radius > 0:
             return turn_radius
-        return float(self.default_turn_radius or 0.0)
+        return 0.0
     
     def calculate_azimuth(self, x1: float, y1: float, x2: float, y2: float) -> float:
         """

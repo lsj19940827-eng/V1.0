@@ -43,6 +43,9 @@ from app_渠系计算前端.styles import (
     fluent_info, fluent_error, fluent_question,
 )
 
+_XXPIPE_PROFILE_STATION_TOL = 1e-3
+_XXPIPE_PROFILE_GEOMETRY_TOL = 1e-9
+
 # 确保推求水面线模块可用
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _water_profile_dir = os.path.join(_pkg_root, '推求水面线')
@@ -1631,6 +1634,11 @@ _PROFILE_RUNTIME_ANCHOR_LABELS = {
     "bottom1": "底+1",
     "bottom2": "底+2",
 }
+_XXPIPE_PROFILE_RUNTIME_ADVANCED_ROW_BINDINGS = {
+    "y_name": "building_name",
+    "y_ip": "ip_name",
+    "y_station": "station",
+}
 _XXPIPE_PROFILE_ROW_DEFS = [
     {
         "id": "building_name",
@@ -1742,11 +1750,10 @@ def _build_xxpipe_profile_row_layout(settings):
     normalized = _normalize_text_export_settings(settings)
     enabled_ids = list(_XXPIPE_PROFILE_ROW_IDS)
     total_height = sum(float(row["height"]) for row in _XXPIPE_PROFILE_ROW_DEFS)
-    min_line_height = float(normalized.get("y_line_height", 120))
-    line_height = max(total_height, min_line_height)
+    line_height = total_height
 
     row_layout = {}
-    boundaries = {0.0, total_height, line_height}
+    boundaries = {0.0, total_height}
     cursor_top = total_height
     for row_def in _XXPIPE_PROFILE_ROW_DEFS:
         rid = row_def["id"]
@@ -1866,6 +1873,58 @@ def _compute_runtime_advanced_parameter_view(settings):
         "enabled_runtime_rows": enabled_runtime_rows,
         "row_details": enabled_runtime_rows,
         # keep aliases for older internal callers
+        "compatibility_values": legacy_writeback_values,
+        "enabled_state": legacy_enabled_state,
+    }
+
+
+def _compute_xxpipe_runtime_advanced_parameter_view(settings):
+    """根据 xx管 固定 5 行模板计算实时参数视图。"""
+    normalized, enabled_ids, row_layout, total_height, line_height, boundaries = _build_xxpipe_profile_row_layout(settings)
+    legacy_writeback_values = {}
+    legacy_enabled_state = {}
+
+    for key in _PROFILE_RUNTIME_ADVANCED_KEYS:
+        if key == "y_line_height":
+            legacy_writeback_values[key] = float(line_height)
+            legacy_enabled_state[key] = True
+            continue
+
+        rid = _XXPIPE_PROFILE_RUNTIME_ADVANCED_ROW_BINDINGS.get(key)
+        if rid and rid in row_layout:
+            legacy_writeback_values[key] = float(row_layout[rid]["text_y"])
+            legacy_enabled_state[key] = True
+        else:
+            legacy_writeback_values[key] = None
+            legacy_enabled_state[key] = False
+
+    enabled_runtime_rows = []
+    for order, rid in enumerate(enabled_ids, start=1):
+        row_info = row_layout.get(rid, {})
+        anchor = str(row_info.get("anchor", ""))
+        enabled_runtime_rows.append({
+            "order": order,
+            "id": rid,
+            "label": str(row_info.get("label", rid)),
+            "text_y": float(row_info.get("text_y", 0.0)),
+            "height": float(row_info.get("height", 0.0)),
+            "anchor": anchor,
+            "source_label": (
+                f"{_PROFILE_RUNTIME_ANCHOR_LABELS.get(anchor, anchor or '--')} / 行高 "
+                f"{_format_number(float(row_info.get('height', 0.0)))}"
+            ),
+        })
+
+    return {
+        "enabled_row_ids": list(enabled_ids),
+        "total_height": float(total_height),
+        "line_height": float(line_height),
+        "min_line_height": float(normalized.get("y_line_height", 120)),
+        "boundaries": [float(v) for v in boundaries],
+        "legacy_writeback_values": legacy_writeback_values,
+        "legacy_enabled_state": legacy_enabled_state,
+        "enabled_runtime_rows": enabled_runtime_rows,
+        "row_details": enabled_runtime_rows,
         "compatibility_values": legacy_writeback_values,
         "enabled_state": legacy_enabled_state,
     }
@@ -2009,7 +2068,7 @@ def _format_xxpipe_pipe_material_text(row):
         row.get("DN_mm", row.get("dn_mm", row.get("dn", row.get("D", 1500)))),
         1500,
     )
-    return f"{material} DN{dn_mm}"
+    return f"{material} DN {dn_mm}"
 
 
 def _build_profile_ip_base_text(node):
@@ -2755,6 +2814,160 @@ def _ensure_profile_layers(doc, layer_prefix=""):
             doc.layers.new(full, dxfattribs={"color": color})
 
 
+_IP_TABLE_COLUMN_DEFS = [
+    {"id": "ip_name", "label": "IP点", "group_label": "IP点", "merge_vertical": True},
+    {"id": "x", "label": "E（m）", "group_label": "坐标值", "excel_number_format": "0.000000"},
+    {"id": "y", "label": "N（m）", "group_label": "坐标值", "excel_number_format": "0.000000"},
+    {"id": "station_bc", "label": "弯前(千米+米)", "group_label": "桩号"},
+    {"id": "station_mc", "label": "弯中(千米+米)", "group_label": "桩号"},
+    {"id": "station_ec", "label": "弯末(千米+米)", "group_label": "桩号"},
+    {"id": "turn_angle", "label": "转角", "group_label": "弯道参数", "excel_number_format": "0.000"},
+    {"id": "turn_radius", "label": "半径", "group_label": "弯道参数", "excel_number_format": "0.000"},
+    {"id": "tangent_length", "label": "切线长", "group_label": "弯道参数", "excel_number_format": "0.000"},
+    {"id": "arc_length", "label": "弧长", "group_label": "弯道参数", "excel_number_format": "0.000"},
+    {"id": "bottom_elevation", "label": "底高程(m)", "group_label": "底高程(m)", "merge_vertical": True, "excel_number_format": "0.000"},
+    {"id": "water_level", "label": "设计水位(m)", "group_label": "设计水位(m)", "merge_vertical": True, "excel_number_format": "0.000"},
+]
+
+
+def _get_ip_table_preview_headers():
+    """返回 IP 表预览/导出共用的列标题。"""
+    return [col["label"] for col in _IP_TABLE_COLUMN_DEFS]
+
+
+def _get_ip_table_group_headers():
+    """按连续列分组生成 IP 表合并表头。"""
+    groups = []
+    start = 0
+    current_group = _IP_TABLE_COLUMN_DEFS[0]["group_label"]
+    for idx, col_def in enumerate(_IP_TABLE_COLUMN_DEFS[1:], start=1):
+        if col_def["group_label"] == current_group:
+            continue
+        groups.append((start, idx - 1, current_group))
+        start = idx
+        current_group = col_def["group_label"]
+    groups.append((start, len(_IP_TABLE_COLUMN_DEFS) - 1, current_group))
+    return groups
+
+
+def _get_ip_table_vertical_merged_columns():
+    """返回需要纵向合并两行表头的列索引。"""
+    return {
+        idx
+        for idx, col_def in enumerate(_IP_TABLE_COLUMN_DEFS)
+        if col_def.get("merge_vertical")
+    }
+
+
+def _ip_table_safe_float(val, default=0.0):
+    """安全转成浮点数，失败时回退默认值。"""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_ip_table_name(node, station_prefix):
+    """格式化 IP 点名称，保持与原导出口径一致。"""
+    try:
+        if _in_out_val(node.in_out) in ("进", "出"):
+            struct_abbr = ""
+            struct_str = _struct_val(node.structure_type)
+            if struct_str:
+                if "隧洞" in struct_str:
+                    struct_abbr = "隧"
+                elif "倒虹吸" in struct_str:
+                    struct_abbr = "倒"
+                elif "有压管道" in struct_str:
+                    struct_abbr = "管"
+                elif "渡槽" in struct_str:
+                    struct_abbr = "渡"
+                elif "暗涵" in struct_str:
+                    struct_abbr = "暗"
+            in_out_str = "进" if _in_out_val(node.in_out) == "进" else "出"
+            return f"{node.name}{struct_abbr}{in_out_str}"
+    except Exception:
+        pass
+    return f"{station_prefix}IP{getattr(node, 'ip_number', 0)}"
+
+
+def _format_ip_table_station(value, station_prefix):
+    """格式化桩号文本。"""
+    return ProjectSettings.format_station(_ip_table_safe_float(value), station_prefix)
+
+
+def _format_ip_table_optional_number_text(value, digits=3):
+    """按 IP 表规则格式化可空数值文本，0 继续显示为横杠。"""
+    number = _ip_table_safe_float(value)
+    if abs(number) <= 1e-9:
+        return "-"
+    return f"{number:.{digits}f}"
+
+
+def _format_ip_table_optional_number_excel(value, digits=3):
+    """按 IP 表规则格式化 Excel 数值，0 继续显示为横杠。"""
+    number = _ip_table_safe_float(value)
+    if abs(number) <= 1e-9:
+        return "-"
+    return round(number, digits)
+
+
+def _build_ip_table_row(node, station_prefix, *, excel_mode=False):
+    """按共享列定义构造一行 IP 表数据。"""
+    text_values = {
+        "ip_name": _format_ip_table_name(node, station_prefix),
+        "x": f"{_ip_table_safe_float(getattr(node, 'x', 0.0)):.6f}",
+        "y": f"{_ip_table_safe_float(getattr(node, 'y', 0.0)):.6f}",
+        "station_bc": _format_ip_table_station(getattr(node, "station_BC", 0.0), station_prefix),
+        "station_mc": _format_ip_table_station(getattr(node, "station_MC", 0.0), station_prefix),
+        "station_ec": _format_ip_table_station(getattr(node, "station_EC", 0.0), station_prefix),
+        "turn_angle": f"{_ip_table_safe_float(getattr(node, 'turn_angle', 0.0)):.3f}",
+        "turn_radius": f"{_ip_table_safe_float(getattr(node, 'turn_radius', 0.0)):.3f}",
+        "tangent_length": f"{_ip_table_safe_float(getattr(node, 'tangent_length', 0.0)):.3f}",
+        "arc_length": f"{_ip_table_safe_float(getattr(node, 'arc_length', 0.0)):.3f}",
+        "bottom_elevation": _format_ip_table_optional_number_text(getattr(node, "bottom_elevation", 0.0)),
+        "water_level": _format_ip_table_optional_number_text(getattr(node, "water_level", 0.0)),
+    }
+    if not excel_mode:
+        return [text_values[col_def["id"]] for col_def in _IP_TABLE_COLUMN_DEFS]
+
+    excel_values = {
+        "ip_name": text_values["ip_name"],
+        "x": _ip_table_safe_float(getattr(node, "x", 0.0)),
+        "y": _ip_table_safe_float(getattr(node, "y", 0.0)),
+        "station_bc": text_values["station_bc"],
+        "station_mc": text_values["station_mc"],
+        "station_ec": text_values["station_ec"],
+        "turn_angle": round(_ip_table_safe_float(getattr(node, "turn_angle", 0.0)), 3),
+        "turn_radius": round(_ip_table_safe_float(getattr(node, "turn_radius", 0.0)), 3),
+        "tangent_length": round(_ip_table_safe_float(getattr(node, "tangent_length", 0.0)), 3),
+        "arc_length": round(_ip_table_safe_float(getattr(node, "arc_length", 0.0)), 3),
+        "bottom_elevation": _format_ip_table_optional_number_excel(getattr(node, "bottom_elevation", 0.0)),
+        "water_level": _format_ip_table_optional_number_excel(getattr(node, "water_level", 0.0)),
+    }
+    return [excel_values[col_def["id"]] for col_def in _IP_TABLE_COLUMN_DEFS]
+
+
+def _build_ip_table_fallback_row(node):
+    """构造异常场景下的 IP 表兜底行。"""
+    return [
+        f"IP{getattr(node, 'ip_number', '?')}",
+        "0.000000",
+        "0.000000",
+        "0+000.000",
+        "0+000.000",
+        "0+000.000",
+        "0.000",
+        "0.000",
+        "0.000",
+        "0.000",
+        "-",
+        "-",
+    ]
+
+
 def _compute_ip_preview_data(nodes, station_prefix):
     """从节点列表计算IP坐标及弯道参数表预览数据。
     返回 (preview_data, real_nodes)。"""
@@ -2764,59 +2977,80 @@ def _compute_ip_preview_data(nodes, station_prefix):
         and not getattr(n, 'is_auto_inserted_channel', False)
     ]
 
-    def _safe_float(val, default=0.0):
-        if val is None:
-            return default
-        try:
-            return float(val)
-        except (TypeError, ValueError):
-            return default
-
-    def _format_ip_name(node):
-        try:
-            if _in_out_val(node.in_out) in ("进", "出"):
-                struct_abbr = ""
-                struct_str = _struct_val(node.structure_type)
-                if struct_str:
-                    if "隧洞" in struct_str: struct_abbr = "隧"
-                    elif "倒虹吸" in struct_str: struct_abbr = "倒"
-                    elif "有压管道" in struct_str: struct_abbr = "管"
-                    elif "渡槽" in struct_str: struct_abbr = "渡"
-                    elif "暗涵" in struct_str: struct_abbr = "暗"
-                in_out_str = "进" if _in_out_val(node.in_out) == "进" else "出"
-                return f"{node.name}{struct_abbr}{in_out_str}"
-        except Exception:
-            pass
-        return f"{station_prefix}IP{getattr(node, 'ip_number', 0)}"
-
-    def _format_station(value):
-        return ProjectSettings.format_station(_safe_float(value), station_prefix)
-
     preview_data = []
-    for idx, node in enumerate(real_nodes):
+    for node in real_nodes:
         try:
-            row = [
-                _format_ip_name(node),
-                f"{_safe_float(node.x):.6f}",
-                f"{_safe_float(node.y):.6f}",
-                _format_station(node.station_BC),
-                _format_station(node.station_MC),
-                _format_station(node.station_EC),
-                f"{_safe_float(node.turn_angle):.3f}",
-                f"{_safe_float(node.turn_radius):.3f}",
-                f"{_safe_float(node.tangent_length):.3f}",
-                f"{_safe_float(node.arc_length):.3f}",
-                f"{_safe_float(node.bottom_elevation):.3f}" if _safe_float(node.bottom_elevation) != 0 else "-",
-            ]
-            preview_data.append(row)
+            preview_data.append(_build_ip_table_row(node, station_prefix))
         except Exception:
-            preview_data.append([
-                f"IP{getattr(node, 'ip_number', '?')}",
-                "0.000000", "0.000000",
-                "0+000.000", "0+000.000", "0+000.000",
-                "0.000", "0.000", "0.000", "0.000", "-",
-            ])
+            preview_data.append(_build_ip_table_fallback_row(node))
     return preview_data, real_nodes
+
+
+def _write_ip_table_excel_sheet(ws, real_nodes, station_prefix):
+    """按共享列定义写入 IP 表 Excel 内容。"""
+    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin'),
+    )
+    header_font = Font(name='Microsoft YaHei', size=10, bold=True)
+    data_font = Font(name='Microsoft YaHei', size=10)
+    center_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    left_align = Alignment(horizontal='left', vertical='center')
+    header_fill = PatternFill(start_color='D9E1F2', end_color='D9E1F2', fill_type='solid')
+
+    group_headers = _get_ip_table_group_headers()
+    ncols = len(_IP_TABLE_COLUMN_DEFS)
+    v_merged = _get_ip_table_vertical_merged_columns()
+
+    for start_idx, end_idx, text in group_headers:
+        start_col = start_idx + 1
+        end_col = end_idx + 1
+        ws.cell(row=1, column=start_col, value=text)
+        if start_idx in v_merged and start_idx == end_idx:
+            ws.merge_cells(start_row=1, start_column=start_col, end_row=2, end_column=end_col)
+            continue
+        if start_col != end_col:
+            ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+
+    for col_idx, header in enumerate(_get_ip_table_preview_headers(), start=1):
+        if (col_idx - 1) in v_merged:
+            continue
+        ws.cell(row=2, column=col_idx, value=header)
+
+    for row in range(1, 3):
+        for col in range(1, ncols + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.font = header_font
+            cell.alignment = center_align
+            cell.border = thin_border
+            cell.fill = header_fill
+
+    for row_idx, node in enumerate(real_nodes, start=3):
+        row_values = _build_ip_table_row(node, station_prefix, excel_mode=True)
+        for col_idx, col_def in enumerate(_IP_TABLE_COLUMN_DEFS, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=row_values[col_idx - 1])
+            number_format = col_def.get("excel_number_format")
+            if number_format and isinstance(row_values[col_idx - 1], (int, float)):
+                cell.number_format = number_format
+            cell.font = data_font
+            cell.border = thin_border
+            cell.alignment = left_align if col_idx == 1 else Alignment(horizontal='center', vertical='center')
+
+    for col_idx in range(1, ncols + 1):
+        col_letter = chr(64 + col_idx)
+        max_len = 0
+        for row_idx in range(1, ws.max_row + 1):
+            cell_val = ws.cell(row=row_idx, column=col_idx).value
+            if cell_val is None:
+                continue
+            text = str(cell_val)
+            char_w = sum(2 if ord(ch) > 0x7F else 1 for ch in text)
+            max_len = max(max_len, char_w)
+        ws.column_dimensions[col_letter].width = max(max_len + 3, 8)
 
 
 def _parse_positive_dn(text):
@@ -3141,6 +3375,183 @@ def _extract_pressurized_param_entities(nodes, structure_kind):
     return entity_rows, invalid_rows
 
 
+def _resolve_pressure_pipe_dialog_group_flow_section(group):
+    """从窗口分组对象里尽量解析出流量段，保证导出按流量段逐行输出。"""
+    rows = []
+    candidates = []
+    if isinstance(group, dict):
+        rows = group.get("rows") or []
+        candidates.extend(
+            (
+                group.get("flow_section"),
+                group.get("identity"),
+                group.get("storage_key"),
+                group.get("display_name"),
+            )
+        )
+    else:
+        rows = getattr(group, "rows", []) or []
+        candidates.extend(
+            (
+                getattr(group, "flow_section", None),
+                getattr(group, "identity", None),
+                getattr(group, "storage_key", None),
+                getattr(group, "display_name", None),
+            )
+        )
+
+    for candidate in candidates:
+        flow_section_idx = _parse_flow_section_index(candidate)
+        if flow_section_idx is not None:
+            return flow_section_idx
+
+    for node in rows:
+        flow_section_idx = _parse_flow_section_index(getattr(node, "flow_section", ""))
+        if flow_section_idx is not None:
+            return flow_section_idx
+    return None
+
+
+def _normalize_pressure_pipe_dialog_group_dn_mm(group):
+    """把窗口分组对象中的米制直径统一折算成导出所需的 DN(mm)。"""
+    if isinstance(group, dict):
+        raw_value = group.get("DN_mm", group.get("diameter"))
+    else:
+        raw_value = getattr(group, "DN_mm", getattr(group, "diameter", None))
+    try:
+        number = float(raw_value)
+    except (TypeError, ValueError):
+        number = None
+    if number is not None and math.isfinite(number) and number > 0:
+        raw_value = number * 1000 if number < 20 else number
+    return _normalize_dn_mm(raw_value, 1500)
+
+
+def _resolve_pressure_pipe_dialog_group_structure_type(group):
+    """解析窗口分组的结构形式文本。"""
+    candidates = []
+    rows = []
+    if isinstance(group, dict):
+        candidates.extend(
+            (
+                group.get("pressure_pipe_structure_type"),
+                group.get("structure_type"),
+            )
+        )
+        rows = group.get("rows") or []
+    else:
+        candidates.extend(
+            (
+                getattr(group, "pressure_pipe_structure_type", None),
+                getattr(group, "structure_type", None),
+            )
+        )
+        rows = getattr(group, "rows", []) or []
+
+    for candidate in candidates:
+        value = getattr(candidate, "value", candidate)
+        text = str(value or "").strip()
+        if text:
+            return text
+
+    for node in rows:
+        getter = getattr(node, "get_structure_type_str", None)
+        if callable(getter):
+            try:
+                text = str(getter() or "").strip()
+            except Exception:
+                text = ""
+            if text:
+                return text
+        struct_type = getattr(node, "structure_type", None)
+        value = getattr(struct_type, "value", struct_type)
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _build_pressure_pipe_param_row_from_dialog_group(group):
+    """把有压管道窗口分组对象转换成导出参数行，并保留稳定元数据。"""
+    if isinstance(group, dict):
+        source = group
+    else:
+        try:
+            source = vars(group)
+        except TypeError:
+            source = {}
+    if not isinstance(source, dict) or not source:
+        return None
+
+    flow_section_idx = _resolve_pressure_pipe_dialog_group_flow_section(group)
+    if flow_section_idx is None:
+        return None
+
+    pipe_material = str(
+        source.get("pipe_material", source.get("material_key", ""))
+        or source.get("material_key", "")
+        or ""
+    ).strip() or "球墨铸铁管"
+    base_row = _make_pressurized_param_row(
+        name=source.get("name"),
+        flow_section=flow_section_idx,
+        structure_kind="pressure_pipe",
+        pipe_material=pipe_material,
+        dn_mm=_normalize_pressure_pipe_dialog_group_dn_mm(source),
+        display_name=source.get("display_name"),
+    )
+    structure_type_text = _resolve_pressure_pipe_dialog_group_structure_type(group)
+    if structure_type_text:
+        base_row["pressure_pipe_structure_type"] = structure_type_text
+
+    metadata = {}
+    for key in (
+        "group_mode",
+        "storage_key",
+        "identity",
+        "target_row_index",
+        "upstream_row_index",
+        "route_key",
+        "route_display_name",
+        "route_start_row_index",
+        "route_end_row_index",
+        "route_start_mc",
+        "route_end_mc",
+        "route_ip_points",
+        "route_member_keys",
+        "segment_start_mc",
+        "segment_end_mc",
+        "ip_points",
+        "plan_total_length",
+        "upstream_velocity",
+        "downstream_velocity",
+        "inlet_transition_form",
+        "outlet_transition_form",
+        "inlet_transition_zeta",
+        "outlet_transition_zeta",
+        "has_inlet_transition",
+        "has_outlet_transition",
+        "inlet_transition_reason",
+        "outlet_transition_reason",
+        "local_loss_ratio",
+    ):
+        if key in source:
+            metadata[key] = source.get(key)
+
+    q_value = _normalize_positive_flow_value(source.get("Q"))
+    if q_value is None:
+        q_value = _normalize_positive_flow_value(source.get("design_flow"))
+    if q_value is not None:
+        metadata["Q"] = q_value
+
+    pipe_material_key = str(source.get("material_key", "") or "").strip()
+    if pipe_material_key:
+        metadata["pipe_material_key"] = pipe_material_key
+
+    _copy_pressurized_row_metadata(base_row, metadata)
+    return base_row
+
+
 def _xxpipe_longitudinal_node_get(node, key, default=None):
     if isinstance(node, dict):
         return node.get(key, default)
@@ -3240,7 +3651,7 @@ def sample_xxpipe_centerline_elevation(longitudinal_nodes, station_mc):
     """按桩号求 xx管 管中心线高程；超出纵断面覆盖范围时拒绝外推。"""
     nodes = _normalize_xxpipe_longitudinal_nodes(longitudinal_nodes)
     station_value = _xxpipe_longitudinal_node_float({"station_mc": station_mc}, "station_mc")
-    tol = 1e-9
+    tol = _XXPIPE_PROFILE_STATION_TOL
 
     for node in nodes:
         if abs(node["chainage"] - station_value) <= tol:
@@ -3266,7 +3677,7 @@ def sample_xxpipe_centerline_elevation(longitudinal_nodes, station_mc):
         segment_end = nxt["chainage"]
         if segment_start - tol <= station_value <= segment_end + tol:
             ds = segment_end - segment_start
-            if abs(ds) <= tol:
+            if abs(ds) <= _XXPIPE_PROFILE_GEOMETRY_TOL:
                 return current["elevation"]
             ratio = (station_value - segment_start) / ds
             return current["elevation"] + (nxt["elevation"] - current["elevation"]) * ratio
@@ -3429,6 +3840,65 @@ def _normalize_pressure_pipe_total_length_value(value):
     return round(number, 4)
 
 
+def _normalize_pressure_pipe_station_value(value):
+    """标准化桩号值；允许 0，非法值返回 None。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return round(number, 6)
+
+
+def _resolve_pressure_pipe_row_segment_length(row):
+    """优先用原始分组起止桩号求长度，避免误用建筑物摘要长度。"""
+    if not isinstance(row, dict):
+        return None
+
+    start_station = _normalize_pressure_pipe_station_value(row.get("segment_start_mc"))
+    end_station = _normalize_pressure_pipe_station_value(row.get("segment_end_mc"))
+    if start_station is None or end_station is None:
+        start_station = _normalize_pressure_pipe_station_value(row.get("route_start_mc"))
+        end_station = _normalize_pressure_pipe_station_value(row.get("route_end_mc"))
+    if start_station is None or end_station is None:
+        return None
+
+    segment_length = end_station - start_station
+    if segment_length <= 0:
+        return None
+    return round(segment_length, 4)
+
+
+def _sum_pressure_pipe_flow_section_total_length(rows):
+    """按流量段下全部原始分组累计总长度。"""
+    total_length = 0.0
+    seen_segments = set()
+
+    for row in rows or []:
+        segment_length = _resolve_pressure_pipe_row_segment_length(row)
+        if segment_length is None:
+            continue
+        start_station = _normalize_pressure_pipe_station_value(row.get("segment_start_mc"))
+        end_station = _normalize_pressure_pipe_station_value(row.get("segment_end_mc"))
+        if start_station is None or end_station is None:
+            start_station = _normalize_pressure_pipe_station_value(row.get("route_start_mc"))
+            end_station = _normalize_pressure_pipe_station_value(row.get("route_end_mc"))
+        segment_key = (
+            str(row.get("identity", "") or "").strip(),
+            start_station,
+            end_station,
+        )
+        if segment_key in seen_segments:
+            continue
+        seen_segments.add(segment_key)
+        total_length += segment_length
+
+    if total_length <= 0:
+        return None
+    return round(total_length, 4)
+
+
 def _get_panel_pressure_pipe_export_results(panel, rows):
     getter = getattr(panel, "get_pressure_pipe_export_results", None)
     if not callable(getter):
@@ -3502,6 +3972,55 @@ def _get_panel_xxpipe_manager_config_by_identity(panel, rows):
     return resolved
 
 
+def _copy_pressurized_row_metadata(base_row, source_row, *, override_keys=()):
+    """把原行中的稳定元数据补回标准化结果，避免导出链断字段。"""
+    if not isinstance(base_row, dict) or not isinstance(source_row, dict):
+        return base_row
+    override_key_set = set(override_keys or ())
+    for key in override_key_set:
+        if key in source_row:
+            base_row[key] = copy.deepcopy(source_row[key])
+    for key, value in source_row.items():
+        if key in override_key_set:
+            continue
+        if key not in base_row:
+            base_row[key] = copy.deepcopy(value)
+    return base_row
+
+
+def _build_pressurized_output_row(source_row, pipe_material, dn_mm):
+    """按当前界面输入生成标准化导出行，并保留原始稳定元数据。"""
+    base_row = _make_pressurized_param_row(
+        name=source_row.get("name"),
+        flow_section=source_row.get("flow_section"),
+        structure_kind=source_row.get("structure_kind"),
+        pipe_material=pipe_material,
+        dn_mm=dn_mm,
+        display_name=source_row.get("display_name"),
+    )
+    skip_keys = {
+        "pipe_material",
+        "material",
+        "material_key",
+        "DN_mm",
+        "dn_mm",
+        "dn",
+        "D",
+        "_has_valid_dn_mm",
+        "display_name",
+        "flow_section",
+        "structure_kind",
+        "dialog_row_kind",
+        "dialog_target_identities",
+        "dialog_target_rows",
+    }
+    for key, value in (source_row or {}).items():
+        if key in skip_keys:
+            continue
+        base_row[key] = copy.deepcopy(value)
+    return base_row
+
+
 def _attach_pressure_pipe_calc_contexts_to_rows(rows, calc_contexts):
     contexts = calc_contexts or {}
     for row in rows or []:
@@ -3528,8 +4047,13 @@ def _attach_pressure_pipe_export_results_to_rows(rows, panel=None):
     if not results_by_identity:
         return rows
     for row in rows or []:
-        identity = make_pressure_pipe_identity(row.get("flow_section"), row.get("name"))
-        result = results_by_identity.get(identity)
+        row_identity = str(row.get("identity", "") or "").strip()
+        legacy_identity = make_pressure_pipe_identity(row.get("flow_section"), row.get("name"))
+        result = None
+        if row_identity:
+            result = results_by_identity.get(row_identity)
+        if not isinstance(result, dict):
+            result = results_by_identity.get(legacy_identity)
         if not isinstance(result, dict):
             continue
         velocity = _normalize_locked_velocity_value(
@@ -3585,9 +4109,7 @@ def _normalize_pressurized_cache_rows(rows, structure_kind, default_material="�
             )
             if "_has_valid_dn_mm" in row:
                 base_row["_has_valid_dn_mm"] = bool(row.get("_has_valid_dn_mm"))
-            for key, value in row.items():
-                if key not in base_row:
-                    base_row[key] = copy.deepcopy(value)
+            _copy_pressurized_row_metadata(base_row, row)
             normalized.append(base_row)
             continue
 
@@ -3703,6 +4225,7 @@ def _merge_pressure_pipe_export_rows_by_flow_section(rows, panel=None):
         summary = summary_by_flow_section.get(flow_section_key)
         if summary is None:
             summary = summary_by_flow_section.get(flow_section)
+        summary_total_length = None
         if isinstance(summary, dict):
             for key in (
                 "start_water_level",
@@ -3716,6 +4239,18 @@ def _merge_pressure_pipe_export_rows_by_flow_section(rows, panel=None):
             ):
                 if key in summary:
                     base[key] = copy.deepcopy(summary.get(key))
+            summary_total_length = _normalize_pressure_pipe_total_length_value(summary.get("total_length"))
+
+        segment_total_length = _sum_pressure_pipe_flow_section_total_length(items)
+        if segment_total_length is None:
+            segment_total_length = summary_total_length
+        if segment_total_length is None:
+            segment_total_length = _normalize_pressure_pipe_total_length_value(base.get("total_length"))
+        if segment_total_length is None:
+            segment_total_length = _normalize_pressure_pipe_total_length_value(base.get("plan_total_length"))
+        if segment_total_length is not None:
+            base["total_length"] = segment_total_length
+            base["plan_total_length"] = segment_total_length
 
         tunnel_count = 0
         directional_drill_count = 0
@@ -3793,6 +4328,61 @@ def _build_xxpipe_segment_records(items):
             "start_mc": start_mc,
             "end_mc": end_mc,
             "mid_mc": mid_mc,
+        })
+    return out
+
+
+def _build_xxpipe_material_segment_records(items):
+    segments = []
+    for item in items:
+        text = str(item.get("text", "") or "").strip()
+        if not text:
+            continue
+        station_mc = float(item.get("station_mc", 0.0) or 0.0)
+        identity = str(item.get("identity", "") or "").strip()
+        struct_name = str(item.get("structure_name", "") or "").strip()
+        flow_section_key = _normalize_pressure_pipe_flow_section_key(item.get("flow_section"))
+        merge_mode = "named_structure" if _is_xxpipe_named_structure(struct_name) else "plain_pressure_pipe"
+        can_merge = False
+        if segments:
+            prev = segments[-1]
+            if merge_mode == "plain_pressure_pipe":
+                can_merge = (
+                    prev.get("merge_mode") == "plain_pressure_pipe"
+                    and prev.get("flow_section_key") == flow_section_key
+                    and prev.get("text") == text
+                )
+            else:
+                can_merge = (
+                    prev.get("merge_mode") == "named_structure"
+                    and prev.get("identity") == identity
+                    and prev.get("text") == text
+                )
+        if can_merge:
+            segments[-1]["mcs"].append(station_mc)
+            continue
+        segments.append({
+            "text": text,
+            "identity": identity,
+            "mcs": [station_mc],
+            "merge_mode": merge_mode,
+            "flow_section_key": flow_section_key,
+        })
+
+    out = []
+    for segment in segments:
+        mc_list = segment["mcs"]
+        start_mc = mc_list[0]
+        end_mc = mc_list[-1]
+        mid_mc = _resolve_segment_mid_mc(start_mc, end_mc, [])
+        out.append({
+            "text": segment["text"],
+            "identity": segment["identity"],
+            "start_mc": start_mc,
+            "end_mc": end_mc,
+            "mid_mc": mid_mc,
+            "merge_mode": segment.get("merge_mode", ""),
+            "flow_section_key": segment.get("flow_section_key", ""),
         })
     return out
 
@@ -3890,6 +4480,7 @@ def _build_xxpipe_profile_data(
     for node in visible_nodes:
         identity = _make_xxpipe_identity_from_node(node)
         manager_row = manager_map.get(identity, {})
+        struct_name = _struct_val(getattr(node, "structure_type", None))
         row = {
             "pipe_material": _extract_pressurized_pipe_material(node),
             "DN_mm": _extract_pressurized_dn_mm(node),
@@ -3901,9 +4492,11 @@ def _build_xxpipe_profile_data(
         material_segments.append({
             "identity": identity,
             "station_mc": _profile_station_value(node),
+            "flow_section": getattr(node, "flow_section", ""),
+            "structure_name": struct_name,
             "text": _format_xxpipe_pipe_material_text(row),
         })
-    material_segments = _build_xxpipe_segment_records(material_segments)
+    material_segments = _build_xxpipe_material_segment_records(material_segments)
 
     return {
         "profile_text_nodes": profile_text_nodes,
@@ -4009,10 +4602,15 @@ def _collect_xxpipe_full_height_boundary_mcs(profile_data):
             return
         boundary_mcs.append(value)
 
-    for key in ("building_segments", "material_segments"):
-        for segment in profile_data.get(key, []) or []:
-            _add(segment.get("start_mc"))
-            _add(segment.get("end_mc"))
+    for segment in profile_data.get("building_segments", []) or []:
+        _add(segment.get("start_mc"))
+        _add(segment.get("end_mc"))
+
+    for segment in profile_data.get("material_segments", []) or []:
+        if str(segment.get("merge_mode", "") or "").strip() != "named_structure":
+            continue
+        _add(segment.get("start_mc"))
+        _add(segment.get("end_mc"))
 
     records = profile_data.get("centerline_records", []) or []
     if records:
@@ -4020,6 +4618,63 @@ def _collect_xxpipe_full_height_boundary_mcs(profile_data):
         _add(records[-1].get("station_mc"))
 
     return sorted(boundary_mcs)
+
+
+def _is_xxpipe_plain_pressure_pipe_profile_node(node):
+    """判断当前文本节点是否为普通有压管道节点。"""
+    return _struct_val(getattr(node, "structure_type", None)) == "有压管道"
+
+
+def _is_xxpipe_named_boundary_profile_node(node):
+    """判断当前文本节点是否为命名的定向钻/顶管进出口节点。"""
+    if node is None:
+        return False
+    if not _is_xxpipe_named_structure(_struct_val(getattr(node, "structure_type", None))):
+        return False
+    if not str(getattr(node, "name", "") or "").strip():
+        return False
+    return _in_out_val(getattr(node, "in_out", None)) in ("进", "出")
+
+
+def _collect_xxpipe_skip_vertical_line_mcs(profile_text_nodes):
+    """收集需要跳过竖线的普通节点桩号。"""
+    skip_mcs = []
+    nodes = list(profile_text_nodes or [])
+
+    def _add(mc):
+        try:
+            value = float(mc)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(value):
+            return
+        if any(abs(value - existing) <= 1e-9 for existing in skip_mcs):
+            return
+        skip_mcs.append(value)
+
+    for idx, node in enumerate(nodes):
+        if idx == 0 or idx == len(nodes) - 1:
+            continue
+        if not _is_xxpipe_plain_pressure_pipe_profile_node(node):
+            continue
+
+        prev_node = nodes[idx - 1] if idx > 0 else None
+        next_node = nodes[idx + 1] if idx + 1 < len(nodes) else None
+
+        if (
+            _is_xxpipe_named_boundary_profile_node(next_node)
+            and _in_out_val(getattr(next_node, "in_out", None)) == "进"
+        ):
+            _add(_profile_station_value(node))
+            continue
+
+        if (
+            _is_xxpipe_named_boundary_profile_node(prev_node)
+            and _in_out_val(getattr(prev_node, "in_out", None)) == "出"
+        ):
+            _add(_profile_station_value(node))
+
+    return sorted(skip_mcs)
 
 
 def _merge_pressurized_param_defaults(group_items, cached_rows, default_material="球墨铸铁管"):
@@ -4061,10 +4716,14 @@ def _merge_pressurized_param_defaults(group_items, cached_rows, default_material
             dn_mm=item.get("DN_mm", 1500),
             display_name=item.get("display_name"),
         )
+        # 先保留当前表格行自带的身份、长度、流量段补充信息。
+        _copy_pressurized_row_metadata(base, item)
         cache_row = exact_cache.get(
             (base["name"], base.get("flow_section"), base["structure_kind"])
         ) or legacy_by_name.get((base["name"], base["structure_kind"]))
         if cache_row:
+            # 再补回缓存里已有但当前行没有的结果字段，避免重新打开窗口后信息断链。
+            _copy_pressurized_row_metadata(base, cache_row)
             base["pipe_material"] = cache_row["pipe_material"]
             base["DN_mm"] = _normalize_dn_mm(cache_row["DN_mm"], base["DN_mm"])
         merged_rows.append(base)
@@ -4079,6 +4738,135 @@ def _merge_pressurized_param_defaults(group_items, cached_rows, default_material
         mat = str(row[1] or "").strip() or default_material
         dn = _normalize_dn_mm(row[2], 1500)
         cached_map[name] = (mat, dn)
+
+
+def _classify_pressure_pipe_dialog_bucket(row):
+    """把有压同类结构归并成弹窗展示所需的类型桶。"""
+    if not isinstance(row, dict):
+        return "有压管道"
+    structure_text = str(
+        row.get("pressure_pipe_structure_type")
+        or row.get("structure_type")
+        or ""
+    ).strip()
+    if "顶管" in structure_text:
+        return "顶管"
+    if "定向钻" in structure_text:
+        return "定向钻"
+    return "有压管道"
+
+
+def _resolve_pressure_pipe_dialog_special_base_label(row):
+    """生成顶管/定向钻弹窗的基础展示名称。"""
+    if not isinstance(row, dict):
+        return "未命名"
+    raw_name = str(row.get("name") or "").strip()
+    if raw_name and raw_name not in {"-", "未命名有压管道"}:
+        return raw_name
+    display_name = str(row.get("display_name") or "").strip()
+    if display_name:
+        return display_name
+    return "未命名"
+
+
+def _resolve_pressure_pipe_dialog_special_label(row, duplicate_name_counts):
+    """生成顶管/定向钻最终展示名；同名跨流量段时补上流量段。"""
+    base_label = _resolve_pressure_pipe_dialog_special_base_label(row)
+    if duplicate_name_counts.get(base_label, 0) <= 1:
+        return base_label
+    flow_section_idx = _parse_flow_section_index(row.get("flow_section"))
+    flow_label = _segment_label_from_index(flow_section_idx)
+    if flow_label:
+        return f"{base_label}-{flow_label}"
+    return base_label
+
+
+def _pick_pressure_pipe_dialog_default_row(rows):
+    """从同流量段普通有压管道里挑出弹窗默认材质与 DN。"""
+    for row in rows or []:
+        if _row_has_valid_pressurized_dn_mm(row):
+            return row
+    return (rows or [None])[0]
+
+
+def _build_pressure_pipe_dialog_rows(group_items, cached_rows, default_material="球墨铸铁管"):
+    """构造有压管道弹窗展示行。"""
+    merged_rows = _merge_pressurized_param_defaults(
+        group_items,
+        cached_rows,
+        default_material=default_material,
+    )
+    if not merged_rows:
+        return []
+
+    flow_section_order = []
+    rows_by_flow_section = {}
+    special_name_counts = {}
+    for row in merged_rows:
+        flow_section_idx = _parse_flow_section_index(row.get("flow_section"))
+        if flow_section_idx not in rows_by_flow_section:
+            rows_by_flow_section[flow_section_idx] = {
+                "ordinary_rows": [],
+                "special_rows": [],
+            }
+            flow_section_order.append(flow_section_idx)
+        bucket = _classify_pressure_pipe_dialog_bucket(row)
+        if bucket == "有压管道":
+            rows_by_flow_section[flow_section_idx]["ordinary_rows"].append(row)
+            continue
+        rows_by_flow_section[flow_section_idx]["special_rows"].append(row)
+        base_label = _resolve_pressure_pipe_dialog_special_base_label(row)
+        special_name_counts[base_label] = special_name_counts.get(base_label, 0) + 1
+
+    dialog_rows = []
+    for flow_section_idx in flow_section_order:
+        bucket_rows = rows_by_flow_section.get(flow_section_idx, {})
+        ordinary_rows = bucket_rows.get("ordinary_rows", [])
+        if ordinary_rows:
+            default_row = _pick_pressure_pipe_dialog_default_row(ordinary_rows) or {}
+            flow_label = _segment_label_from_index(flow_section_idx)
+            dialog_row = _make_pressurized_param_row(
+                name=flow_label or "有压管道",
+                flow_section=flow_section_idx,
+                structure_kind="pressure_pipe",
+                pipe_material=default_row.get("pipe_material", default_material),
+                dn_mm=default_row.get("DN_mm", 1500),
+                display_name=flow_label or default_row.get("display_name") or "有压管道",
+            )
+            dialog_row["pressure_pipe_structure_type"] = "有压管道"
+            dialog_row["dialog_row_kind"] = "flow_section_pressure_pipe"
+            dialog_row["dialog_target_identities"] = [
+                str(target.get("identity") or target.get("storage_key") or "").strip()
+                for target in ordinary_rows
+                if str(target.get("identity") or target.get("storage_key") or "").strip()
+            ]
+            dialog_row["dialog_target_rows"] = [copy.deepcopy(target) for target in ordinary_rows]
+            dialog_rows.append(dialog_row)
+
+        for special_row in bucket_rows.get("special_rows", []):
+            display_name = _resolve_pressure_pipe_dialog_special_label(
+                special_row,
+                special_name_counts,
+            )
+            identity = str(
+                special_row.get("identity") or special_row.get("storage_key") or ""
+            ).strip()
+            dialog_row = _make_pressurized_param_row(
+                name=display_name,
+                flow_section=special_row.get("flow_section"),
+                structure_kind=special_row.get("structure_kind", "pressure_pipe"),
+                pipe_material=special_row.get("pipe_material", default_material),
+                dn_mm=special_row.get("DN_mm", 1500),
+                display_name=display_name,
+            )
+            dialog_row["pressure_pipe_structure_type"] = str(
+                special_row.get("pressure_pipe_structure_type") or ""
+            ).strip()
+            dialog_row["dialog_row_kind"] = "named_pressure_like_group"
+            dialog_row["dialog_target_identities"] = [identity] if identity else []
+            dialog_row["dialog_target_rows"] = [copy.deepcopy(special_row)]
+            dialog_rows.append(dialog_row)
+    return dialog_rows
 
     merged = []
     for name, dn_mm in group_items or []:
@@ -6280,7 +7068,11 @@ def export_longitudinal_profile_txt(panel):
             fluent_info(panel.window(), "警告", "没有可用的高程数据，请先执行计算。")
             return
 
-    dlg = TextExportSettingsDialog(panel.window(), panel._text_export_settings)
+    dlg = TextExportSettingsDialog(
+        panel.window(),
+        panel._text_export_settings,
+        mode=export_mode or "standard",
+    )
     if dlg.exec() != QDialog.Accepted or dlg.result is None:
         return
 
@@ -6371,10 +7163,17 @@ def _draw_xxpipe_profile_on_msp(
         round(float(mc), 9)
         for mc in _collect_xxpipe_full_height_boundary_mcs(xxpipe_profile_data)
     }
+    skip_vertical_mcs = {
+        round(float(mc), 9)
+        for mc in _collect_xxpipe_skip_vertical_line_mcs(profile_text_nodes)
+    }
 
     for node in profile_text_nodes:
         station_mc = _profile_station_value(node)
-        if round(station_mc, 9) in full_height_boundary_mcs or top_merge_bottom <= bottom_merge_top:
+        station_key = round(station_mc, 9)
+        if station_key in skip_vertical_mcs:
+            continue
+        if station_key in full_height_boundary_mcs or top_merge_bottom <= bottom_merge_top:
             y0, y1 = 0.0, line_height
         else:
             y0, y1 = bottom_merge_top, top_merge_bottom
@@ -6739,7 +7538,11 @@ def export_longitudinal_profile_dxf(panel):
             return
 
     # 弹出参数配置对话框（复用 TXT 版设置）
-    dlg = TextExportSettingsDialog(panel.window(), panel._text_export_settings)
+    dlg = TextExportSettingsDialog(
+        panel.window(),
+        panel._text_export_settings,
+        mode=export_mode or "standard",
+    )
     if dlg.exec() != QDialog.Accepted or dlg.result is None:
         return
 
@@ -6881,9 +7684,16 @@ def _export_xxpipe_longitudinal_txt_to_path(
         round(float(mc), 9)
         for mc in _collect_xxpipe_full_height_boundary_mcs(xxpipe_profile_data)
     }
+    skip_vertical_mcs = {
+        round(float(mc), 9)
+        for mc in _collect_xxpipe_skip_vertical_line_mcs(profile_text_nodes)
+    }
     for node in profile_text_nodes:
         station_mc = _profile_station_value(node)
-        if round(station_mc, 9) in full_height_boundary_mcs or top_merge_bottom <= bottom_merge_top:
+        station_key = round(station_mc, 9)
+        if station_key in skip_vertical_mcs:
+            continue
+        if station_key in full_height_boundary_mcs or top_merge_bottom <= bottom_merge_top:
             y0, y1 = 0.0, line_height
         else:
             y0, y1 = bottom_merge_top, top_merge_bottom
@@ -7548,20 +8358,10 @@ def _draw_ip_table_on_msp(msp, ox, oy, preview_data,
     TITLE_TEXT_H = 3.0
     COL_PAD = 3.0
 
-    sub_headers = [
-        "IP点", "E（m）", "N（m）",
-        "弯前(千米+米)", "弯中(千米+米)", "弯末(千米+米)",
-        "转角", "半径", "切线长", "弧长", "底高程(m)",
-    ]
-    group_headers = [
-        (0, 0, "IP点"),
-        (1, 2, "坐标值"),
-        (3, 5, "桩号"),
-        (6, 9, "弯道参数"),
-        (10, 10, "底高程(m)"),
-    ]
-    v_merged = {0, 10}
-    ncols = 11
+    sub_headers = _get_ip_table_preview_headers()
+    group_headers = _get_ip_table_group_headers()
+    v_merged = _get_ip_table_vertical_merged_columns()
+    ncols = len(_IP_TABLE_COLUMN_DEFS)
     nrows = len(preview_data)
 
     _wf = 1.0
@@ -7707,7 +8507,6 @@ def export_ip_plan_table(panel):
 
     try:
         import openpyxl
-        from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
     except ImportError:
         fluent_info(panel.window(), "缺少依赖",
                     "需要安装 openpyxl: pip install openpyxl")
@@ -7719,78 +8518,12 @@ def export_ip_plan_table(panel):
             station_prefix = proj_settings.get_station_prefix()
         except Exception:
             station_prefix = ""
-
-        def _safe_float(val, default=0.0):
-            if val is None:
-                return default
-            try:
-                return float(val)
-            except (TypeError, ValueError):
-                return default
-
-        def _format_ip_name(node):
-            try:
-                if _in_out_val(node.in_out) in ("进", "出"):
-                    struct_abbr = ""
-                    struct_str = _struct_val(node.structure_type)
-                    if struct_str:
-                        if "隧洞" in struct_str: struct_abbr = "隧"
-                        elif "倒虹吸" in struct_str: struct_abbr = "倒"
-                        elif "有压管道" in struct_str: struct_abbr = "管"
-                        elif "渡槽" in struct_str: struct_abbr = "渡"
-                        elif "暗涵" in struct_str: struct_abbr = "暗"
-                    in_out_str = "进" if _in_out_val(node.in_out) == "进" else "出"
-                    return f"{node.name}{struct_abbr}{in_out_str}"
-            except Exception:
-                pass
-            return f"{station_prefix}IP{getattr(node, 'ip_number', 0)}"
-
-        def _format_station(value):
-            return ProjectSettings.format_station(_safe_float(value), station_prefix)
-
-        # 过滤节点
-        real_nodes = [
-            n for n in nodes
-            if not getattr(n, 'is_transition', False)
-            and not getattr(n, 'is_auto_inserted_channel', False)
-        ]
-
+        preview_data, real_nodes = _compute_ip_preview_data(nodes, station_prefix)
         if not real_nodes:
             fluent_info(panel.window(), "警告", "没有有效的IP点数据可导出")
             return
 
-        # 构建预览数据
-        preview_headers = [
-            "IP点", "E（m）", "N（m）",
-            "弯前(千米+米)", "弯中(千米+米)", "弯末(千米+米)",
-            "转角", "半径", "切线长", "弧长", "底高程\nm"
-        ]
-        preview_data = []
-        for idx, node in enumerate(real_nodes):
-            try:
-                row = [
-                    _format_ip_name(node),
-                    f"{_safe_float(node.x):.6f}",
-                    f"{_safe_float(node.y):.6f}",
-                    _format_station(node.station_BC),
-                    _format_station(node.station_MC),
-                    _format_station(node.station_EC),
-                    f"{_safe_float(node.turn_angle):.3f}",
-                    f"{_safe_float(node.turn_radius):.3f}",
-                    f"{_safe_float(node.tangent_length):.3f}",
-                    f"{_safe_float(node.arc_length):.3f}",
-                    f"{_safe_float(node.bottom_elevation):.3f}" if _safe_float(node.bottom_elevation) != 0 else "-",
-                ]
-                preview_data.append(row)
-            except Exception as row_err:
-                print(f"[警告] 第{idx}行数据格式化失败: {row_err}")
-                import traceback; traceback.print_exc()
-                preview_data.append([
-                    f"IP{getattr(node, 'ip_number', '?')}",
-                    "0.000000", "0.000000",
-                    "0+000.000", "0+000.000", "0+000.000",
-                    "0.000", "0.000", "0.000", "0.000", "-",
-                ])
+        preview_headers = _get_ip_table_preview_headers()
 
         # 预览对话框
         preview_dlg = QDialog(panel.window())
@@ -7862,93 +8595,7 @@ def export_ip_plan_table(panel):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "IP点上平面图"
-
-        thin_border = Border(
-            left=Side(style='thin'), right=Side(style='thin'),
-            top=Side(style='thin'), bottom=Side(style='thin'))
-        header_font = Font(name='Microsoft YaHei', size=10, bold=True)
-        data_font = Font(name='Microsoft YaHei', size=10)
-        center_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
-        left_align = Alignment(horizontal='left', vertical='center')
-        header_fill = PatternFill(start_color='D9E1F2', end_color='D9E1F2', fill_type='solid')
-
-        ws.cell(row=1, column=1, value="IP点")
-        ws.cell(row=1, column=2, value="坐标值")
-        ws.cell(row=1, column=4, value="桩号")
-        ws.cell(row=1, column=7, value="弯道参数")
-        ws.cell(row=1, column=11, value="底高程\nm")
-        ws.cell(row=2, column=2, value="E（m）")
-        ws.cell(row=2, column=3, value="N（m）")
-        ws.cell(row=2, column=4, value="弯前(千米+米)")
-        ws.cell(row=2, column=5, value="弯中(千米+米)")
-        ws.cell(row=2, column=6, value="弯末(千米+米)")
-        ws.cell(row=2, column=7, value="转角")
-        ws.cell(row=2, column=8, value="半径")
-        ws.cell(row=2, column=9, value="切线长")
-        ws.cell(row=2, column=10, value="弧长")
-
-        ws.merge_cells('A1:A2')
-        ws.merge_cells('B1:C1')
-        ws.merge_cells('D1:F1')
-        ws.merge_cells('G1:J1')
-        ws.merge_cells('K1:K2')
-
-        for row in range(1, 3):
-            for col in range(1, 12):
-                cell = ws.cell(row=row, column=col)
-                cell.font = header_font
-                cell.alignment = center_align
-                cell.border = thin_border
-                cell.fill = header_fill
-
-        for row_idx, node in enumerate(real_nodes, start=3):
-            ws.cell(row=row_idx, column=1, value=_format_ip_name(node))
-            cell_b = ws.cell(row=row_idx, column=2, value=_safe_float(node.x))
-            cell_b.number_format = '0.000000'
-            cell_c = ws.cell(row=row_idx, column=3, value=_safe_float(node.y))
-            cell_c.number_format = '0.000000'
-            ws.cell(row=row_idx, column=4, value=_format_station(node.station_BC))
-            ws.cell(row=row_idx, column=5, value=_format_station(node.station_MC))
-            ws.cell(row=row_idx, column=6, value=_format_station(node.station_EC))
-            cell_g = ws.cell(row=row_idx, column=7,
-                             value=round(_safe_float(node.turn_angle), 3))
-            cell_g.number_format = '0.000'
-            cell_h = ws.cell(row=row_idx, column=8,
-                             value=round(_safe_float(node.turn_radius), 3))
-            cell_h.number_format = '0.000'
-            cell_i = ws.cell(row=row_idx, column=9,
-                             value=round(_safe_float(node.tangent_length), 3))
-            cell_i.number_format = '0.000'
-            cell_j = ws.cell(row=row_idx, column=10,
-                             value=round(_safe_float(node.arc_length), 3))
-            cell_j.number_format = '0.000'
-            _be_val = _safe_float(node.bottom_elevation)
-            cell_k = ws.cell(row=row_idx, column=11,
-                             value=round(_be_val, 3) if _be_val != 0 else "-")
-            if _be_val != 0:
-                cell_k.number_format = '0.000'
-
-            for col in range(1, 12):
-                cell = ws.cell(row=row_idx, column=col)
-                cell.font = data_font
-                cell.border = thin_border
-                if col == 1:
-                    cell.alignment = left_align
-                else:
-                    cell.alignment = Alignment(horizontal='center', vertical='center')
-
-        # 自适应列宽（根据实际内容计算，避免出现 ###）
-        for col_idx in range(1, 12):
-            col_letter = chr(64 + col_idx)  # A=1, B=2, ...
-            max_len = 0
-            for row_idx2 in range(1, ws.max_row + 1):
-                cell_val = ws.cell(row=row_idx2, column=col_idx).value
-                if cell_val is not None:
-                    s = str(cell_val)
-                    # CJK字符算2个宽度单位
-                    char_w = sum(2 if ord(c) > 0x7F else 1 for c in s)
-                    max_len = max(max_len, char_w)
-            ws.column_dimensions[col_letter].width = max(max_len + 3, 8)
+        _write_ip_table_excel_sheet(ws, real_nodes, station_prefix)
 
         wb.save(file_path)
         wb.close()
@@ -8329,7 +8976,11 @@ def export_combined_dxf(panel):
             fluent_info(parent_window, "提示", optional_blank_name_notice)
 
     # ---- 1. 纵断面参数设置 ----
-    dlg = TextExportSettingsDialog(parent_window, panel._text_export_settings)
+    dlg = TextExportSettingsDialog(
+        parent_window,
+        panel._text_export_settings,
+        mode=export_mode or "standard",
+    )
     if dlg.exec() != QDialog.Accepted or dlg.result is None:
         return
     panel._text_export_settings.update(dlg.result)
@@ -8806,7 +9457,34 @@ class SectionSummaryDialog(QDialog):
         return _extract_pressurized_param_entities(self._nodes, "siphon")
     
     def _extract_pressure_pipe_groups(self):
-        return _extract_pressurized_param_entities(self._nodes, "pressure_pipe")
+        fallback_groups, invalid_groups = _extract_pressurized_param_entities(
+            self._nodes,
+            "pressure_pipe",
+        )
+        panel = getattr(self, "_panel", None)
+        extractor = getattr(panel, "_extract_pressure_pipe_dialog_groups", None)
+        if not callable(extractor):
+            return fallback_groups, invalid_groups
+
+        try:
+            dialog_groups = extractor(
+                self._nodes,
+                settings=getattr(self, "_proj_settings", None),
+            )
+        except TypeError:
+            try:
+                dialog_groups = extractor(self._nodes)
+            except Exception:
+                return fallback_groups, invalid_groups
+        except Exception:
+            return fallback_groups, invalid_groups
+
+        converted_groups = []
+        for group in dialog_groups or []:
+            row = _build_pressure_pipe_param_row_from_dialog_group(group)
+            if isinstance(row, dict):
+                converted_groups.append(row)
+        return (converted_groups or fallback_groups), invalid_groups
 
     def _build_q_segment_structure_names(self):
         segment_names = {idx: [] for idx in range(1, self._segment_count + 1)}
@@ -9181,7 +9859,7 @@ class SectionSummaryDialog(QDialog):
         self._apply_group_body_layout(pp_lay)
 
         if self._pressure_pipe_groups:
-            pp_items = _merge_pressurized_param_defaults(
+            pp_items = _build_pressure_pipe_dialog_rows(
                 self._pressure_pipe_groups,
                 self._cached_pressurized.get("pressure_pipe", []),
             )
@@ -9551,16 +10229,20 @@ class SectionSummaryDialog(QDialog):
             pipe_material = mat_combo.currentText()
             if title_prefix == "有压管道":
                 pipe_material = self._current_pressure_pipe_material_value(mat_combo)
-            out.append(
-                _make_pressurized_param_row(
-                    name=row.get("name"),
-                    flow_section=row.get("flow_section"),
-                    structure_kind=row.get("structure_kind"),
-                    pipe_material=pipe_material,
-                    dn_mm=dn,
-                    display_name=row.get("display_name"),
-                )
-            )
+            target_rows = row.get("dialog_target_rows") if isinstance(row, dict) else None
+            if title_prefix == "有压管道" and isinstance(target_rows, list) and target_rows:
+                for target_row in target_rows:
+                    if not isinstance(target_row, dict):
+                        continue
+                    out.append(
+                        _build_pressurized_output_row(
+                            target_row,
+                            pipe_material,
+                            dn,
+                        )
+                    )
+                continue
+            out.append(_build_pressurized_output_row(row, pipe_material, dn))
         return out
 
     def _attach_pressure_pipe_calc_contexts(self, rows):

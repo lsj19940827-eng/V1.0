@@ -244,6 +244,81 @@ def test_runtime_panel_mirrors_enabled_rows_and_summary_metrics():
     dlg.deleteLater()
 
 
+def test_xxpipe_mode_shows_fixed_read_only_five_rows_and_runtime_view():
+    _get_qapp()
+    defaults = {
+        "profile_row_items": [
+            {"id": "station", "enabled": True},
+            {"id": "building_name", "enabled": False},
+            {"id": "top_elev", "enabled": True},
+        ]
+    }
+    dlg = cad_tools.TextExportSettingsDialog(defaults=defaults, mode="xxpipe")
+    dlg.show()
+    _flush_events(6)
+
+    expected_ids = [
+        "building_name",
+        "ip_name",
+        "station",
+        "centerline_elev",
+        "pipe_material",
+    ]
+    assert _enabled_ids(dlg) == expected_ids
+    assert _enabled_list_ids(dlg) == expected_ids
+    assert dlg._candidate_list.count() == 0
+    assert not dlg._candidate_section.isVisible()
+    assert _runtime_row_ids(dlg) == expected_ids
+    assert _runtime_value_text(dlg, "building_name") == "120"
+    assert _runtime_value_text(dlg, "ip_name") == "72"
+    assert _runtime_value_text(dlg, "station") == "42"
+    assert _runtime_value_text(dlg, "centerline_elev") == "21"
+    assert _runtime_value_text(dlg, "pipe_material") == "10"
+
+    visible_button_texts = {
+        widget.text()
+        for widget in dlg.findChildren(QPushButton)
+        if widget.isVisible() and widget.text()
+    }
+    assert "应用亭子口二期顶建/可研阶段模板" not in visible_button_texts
+    assert "恢复推荐" not in visible_button_texts
+    assert "全启用" not in visible_button_texts
+    assert "全停用" not in visible_button_texts
+    assert "上移" not in visible_button_texts
+    assert "下移" not in visible_button_texts
+    assert "置顶" not in visible_button_texts
+    assert "置底" not in visible_button_texts
+
+    widget = _find_row_widget(dlg, "building_name")
+    assert not widget.checkbox.isEnabled()
+    assert widget.drag_handle.isHidden()
+
+    dlg.deleteLater()
+
+
+def test_xxpipe_mode_confirm_preserves_standard_profile_row_snapshot():
+    _get_qapp()
+    defaults = {
+        "profile_row_items": [
+            {"id": "station", "enabled": True},
+            {"id": "building_name", "enabled": False},
+            {"id": "top_elev", "enabled": True},
+        ]
+    }
+    expected_profile_row_items = cad_tools._normalize_text_export_settings(defaults)["profile_row_items"]
+
+    dlg = cad_tools.TextExportSettingsDialog(defaults=defaults, mode="xxpipe")
+    dlg.show()
+    _flush_events(4)
+
+    dlg._on_confirm()
+
+    assert dlg.result is not None
+    assert dlg.result["profile_row_items"] == expected_profile_row_items
+
+    dlg.deleteLater()
+
+
 def test_apply_tingzikou_preset_reorders_expected_rows():
     _get_qapp()
     dlg = cad_tools.TextExportSettingsDialog()

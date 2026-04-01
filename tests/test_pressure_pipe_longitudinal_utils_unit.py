@@ -75,6 +75,15 @@ def test_clip_longitudinal_nodes_to_range_preserves_arc_sampling():
     )
 
 
+def test_sample_longitudinal_elevation_accepts_millimeter_level_endpoint_gap():
+    nodes = [
+        _node(0.0, 100.0),
+        _node(10501.42576073, 90.0),
+    ]
+
+    assert sample_longitudinal_elevation(nodes, 10501.426) == pytest.approx(90.0)
+
+
 def test_clip_longitudinal_nodes_to_range_rejects_out_of_coverage_range():
     nodes = [
         _node(10.0, 100.0),

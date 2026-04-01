@@ -85,7 +85,7 @@ def test_build_xxpipe_profile_data_samples_centerline_and_segments():
         (100.0, pytest.approx(90.0)),
     ]
     assert [segment["text"] for segment in data["building_segments"]] == ["穿路段定向钻"]
-    assert [segment["text"] for segment in data["material_segments"]] == ["球墨铸铁管 DN1200"]
+    assert [segment["text"] for segment in data["material_segments"]] == ["球墨铸铁管 DN 1200"]
 
 
 def test_build_xxpipe_profile_data_rejects_unallowed_structure():
@@ -180,3 +180,190 @@ def test_build_xxpipe_profile_data_uses_row_identity_for_multiple_unnamed_segmen
 
     assert [record["identity"] for record in data["centerline_records"]] == ["flow2-row6", "flow2-row7"]
     assert [segment["identity"] for segment in data["material_segments"]] == ["flow2-row6", "flow2-row7"]
+    assert [segment["text"] for segment in data["material_segments"]] == ["钢管 DN 1000", "球墨铸铁管 DN 1200"]
+
+
+def test_build_xxpipe_profile_data_merges_continuous_plain_pressure_pipe_material_segments():
+    nodes = [
+        _make_node(
+            ip_no=1,
+            mc=0.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            row_identity="flow2-row6",
+            material="HDPE管",
+            diameter=0.4,
+        ),
+        _make_node(
+            ip_no=2,
+            mc=50.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            row_identity="flow2-row7",
+            material="HDPE管",
+            diameter=0.4,
+        ),
+        _make_node(
+            ip_no=3,
+            mc=100.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            row_identity="flow2-row8",
+            material="HDPE管",
+            diameter=0.4,
+        ),
+    ]
+    long_map = {
+        "flow2-row6": [
+            {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
+            {"chainage": 20.0, "elevation": 98.0, "turn_type": "无"},
+        ],
+        "flow2-row7": [
+            {"chainage": 40.0, "elevation": 96.0, "turn_type": "无"},
+            {"chainage": 60.0, "elevation": 94.0, "turn_type": "无"},
+        ],
+        "flow2-row8": [
+            {"chainage": 80.0, "elevation": 92.0, "turn_type": "无"},
+            {"chainage": 100.0, "elevation": 90.0, "turn_type": "无"},
+        ],
+    }
+
+    data = cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
+
+    assert [record["identity"] for record in data["centerline_records"]] == [
+        "flow2-row6",
+        "flow2-row7",
+        "flow2-row8",
+    ]
+    assert data["material_segments"] == [
+        {
+            "text": "HDPE管 DN 400",
+            "identity": "flow2-row6",
+            "start_mc": 0.0,
+            "end_mc": 100.0,
+            "mid_mc": 50.0,
+            "merge_mode": "plain_pressure_pipe",
+            "flow_section_key": "2",
+        }
+    ]
+
+
+def test_build_xxpipe_profile_data_breaks_plain_pipe_material_segments_at_directional_drill_and_flow_section():
+    nodes = [
+        _make_node(
+            ip_no=1,
+            mc=0.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            row_identity="flow2-row6",
+            material="HDPE管",
+            diameter=0.4,
+        ),
+        _make_node(
+            ip_no=2,
+            mc=50.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            row_identity="flow2-row7",
+            material="HDPE管",
+            diameter=0.4,
+        ),
+        _make_node(
+            ip_no=3,
+            mc=100.0,
+            structure="定向钻",
+            name="穿路段",
+            flow_section="2",
+            material="钢管",
+            diameter=0.5,
+        ),
+        _make_node(
+            ip_no=4,
+            mc=150.0,
+            structure="定向钻",
+            name="穿路段",
+            flow_section="2",
+            material="钢管",
+            diameter=0.5,
+        ),
+        _make_node(
+            ip_no=5,
+            mc=200.0,
+            structure="有压管道",
+            name="",
+            flow_section="3",
+            row_identity="flow3-row8",
+            material="HDPE管",
+            diameter=0.4,
+        ),
+        _make_node(
+            ip_no=6,
+            mc=250.0,
+            structure="有压管道",
+            name="",
+            flow_section="3",
+            row_identity="flow3-row9",
+            material="HDPE管",
+            diameter=0.4,
+        ),
+    ]
+    long_map = {
+        "flow2-row6": [
+            {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
+            {"chainage": 20.0, "elevation": 98.0, "turn_type": "无"},
+        ],
+        "flow2-row7": [
+            {"chainage": 40.0, "elevation": 96.0, "turn_type": "无"},
+            {"chainage": 60.0, "elevation": 94.0, "turn_type": "无"},
+        ],
+        "2::穿路段": [
+            {"chainage": 100.0, "elevation": 92.0, "turn_type": "无"},
+            {"chainage": 150.0, "elevation": 88.0, "turn_type": "无"},
+        ],
+        "flow3-row8": [
+            {"chainage": 180.0, "elevation": 87.0, "turn_type": "无"},
+            {"chainage": 220.0, "elevation": 85.0, "turn_type": "无"},
+        ],
+        "flow3-row9": [
+            {"chainage": 240.0, "elevation": 84.0, "turn_type": "无"},
+            {"chainage": 260.0, "elevation": 82.0, "turn_type": "无"},
+        ],
+    }
+
+    data = cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
+
+    assert [segment["text"] for segment in data["building_segments"]] == ["穿路段定向钻"]
+    assert data["material_segments"] == [
+        {
+            "text": "HDPE管 DN 400",
+            "identity": "flow2-row6",
+            "start_mc": 0.0,
+            "end_mc": 50.0,
+            "mid_mc": 25.0,
+            "merge_mode": "plain_pressure_pipe",
+            "flow_section_key": "2",
+        },
+        {
+            "text": "钢管 DN 500",
+            "identity": "2::穿路段",
+            "start_mc": 100.0,
+            "end_mc": 150.0,
+            "mid_mc": 125.0,
+            "merge_mode": "named_structure",
+            "flow_section_key": "2",
+        },
+        {
+            "text": "HDPE管 DN 400",
+            "identity": "flow3-row8",
+            "start_mc": 200.0,
+            "end_mc": 250.0,
+            "mid_mc": 225.0,
+            "merge_mode": "plain_pressure_pipe",
+            "flow_section_key": "3",
+        },
+    ]

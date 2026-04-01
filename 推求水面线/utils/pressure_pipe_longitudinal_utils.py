@@ -14,6 +14,9 @@ import copy
 import math
 from typing import Any, Dict, List
 
+_LONGITUDINAL_STATION_TOL = 1e-3
+_LONGITUDINAL_GEOMETRY_TOL = 1e-9
+
 
 def normalize_longitudinal_nodes(longitudinal_nodes) -> List[Dict[str, Any]]:
     """将纵断面节点整理为按桩号升序的字典列表。"""
@@ -86,7 +89,7 @@ def sample_longitudinal_elevation(longitudinal_nodes, station_mc: float) -> floa
         raise ValueError("纵断面节点不足，无法按桩号采样")
 
     station_value = float(station_mc)
-    tol = 1e-9
+    tol = _LONGITUDINAL_STATION_TOL
 
     for node in nodes:
         if abs(node["chainage"] - station_value) <= tol:
@@ -112,7 +115,7 @@ def sample_longitudinal_elevation(longitudinal_nodes, station_mc: float) -> floa
         segment_end = nxt["chainage"]
         if segment_start - tol <= station_value <= segment_end + tol:
             ds = segment_end - segment_start
-            if abs(ds) <= tol:
+            if abs(ds) <= _LONGITUDINAL_GEOMETRY_TOL:
                 return current["elevation"]
             ratio = (station_value - segment_start) / ds
             return current["elevation"] + (nxt["elevation"] - current["elevation"]) * ratio
@@ -146,7 +149,7 @@ def _build_boundary_node(base_node: Dict[str, Any], station_mc: float, *, keep_a
 
 def _clone_boundary_node(nodes: List[Dict[str, Any]], station_mc: float, *, is_start: bool) -> Dict[str, Any]:
     """生成起止裁切边界点。"""
-    tol = 1e-9
+    tol = _LONGITUDINAL_STATION_TOL
     for node in nodes:
         if abs(node["chainage"] - station_mc) <= tol:
             return copy.deepcopy(node)
@@ -215,7 +218,7 @@ def clip_longitudinal_nodes_to_range(longitudinal_nodes, start_mc: float, end_mc
 
     coverage_start = nodes[0]["chainage"]
     coverage_end = nodes[-1]["chainage"]
-    tol = 1e-9
+    tol = _LONGITUDINAL_STATION_TOL
     if start_value < coverage_start - tol or end_value > coverage_end + tol:
         raise ValueError(
             f"纵断面覆盖不足，子段桩号范围 [{start_value:.3f}, {end_value:.3f}] "
