@@ -108,9 +108,13 @@ def _install_panel_import_stubs():
 
     helper_path = next(Path(".").glob("**/pressure_pipe_result_helpers.py")).resolve()
     helper_mod = _load_module("pressure_pipe_result_helpers_longitudinal_nodes_test_mod", helper_path)
+    long_utils_path = next(Path(".").glob("**/pressure_pipe_longitudinal_utils.py")).resolve()
+    long_utils_mod = _load_module("pressure_pipe_longitudinal_utils_test_mod", long_utils_path)
     utils_pkg = sys.modules.setdefault("utils", types.ModuleType("utils"))
     setattr(utils_pkg, "pressure_pipe_result_helpers", helper_mod)
+    setattr(utils_pkg, "pressure_pipe_longitudinal_utils", long_utils_mod)
     sys.modules["utils.pressure_pipe_result_helpers"] = helper_mod
+    sys.modules["utils.pressure_pipe_longitudinal_utils"] = long_utils_mod
 
     models_mod = types.ModuleType("models.data_models")
     models_mod.ChannelNode = type("ChannelNode", (), {})
@@ -251,3 +255,41 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_avoids_cross_flow_mix_a
     )
 
     assert result == {}
+
+
+def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_route_bucket_and_clips_segment():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    group = SimpleNamespace(
+        storage_key="flow2-row6",
+        route_key="flow2-route1",
+        route_display_name="流量段2 整线1",
+        display_name="流量段2 第6行有压管道",
+        name="",
+        identity="flow2-row6",
+        flow_section="2",
+        segment_start_mc=20.0,
+        segment_end_mc=60.0,
+    )
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: SimpleNamespace(
+            longitudinal_nodes=[
+                {"chainage": 0.0, "elevation": 100.0, "turn_type": "NONE"},
+                {"chainage": 40.0, "elevation": 96.0, "turn_type": "NONE"},
+                {"chainage": 80.0, "elevation": 92.0, "turn_type": "NONE"},
+            ]
+        ) if key == "flow2-row6" else None
+    )
+    panel._build_settings = lambda: object()
+    panel._build_nodes_from_table = lambda: ["stub-node"]
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [group]
+
+    result = WaterProfilePanel.get_pressure_pipe_longitudinal_nodes_for_export(
+        panel,
+        rows=[{"name": "", "flow_section": "2", "identity": "flow2-row6"}],
+    )
+
+    assert list(result) == ["flow2-row6"]
+    assert result["flow2-row6"][0]["chainage"] == 20.0
+    assert result["flow2-row6"][-1]["chainage"] == 60.0

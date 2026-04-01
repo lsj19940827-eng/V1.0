@@ -3225,7 +3225,9 @@ def _get_panel_xxpipe_manager_config_by_identity(panel, rows):
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        identity = make_pressure_pipe_identity(row.get("flow_section"), row.get("name"))
+        identity = str(row.get("identity", "") or "").strip()
+        if not identity:
+            identity = make_pressure_pipe_identity(row.get("flow_section"), row.get("name"))
         name = str(row.get("name", "") or "").strip() or "未命名"
         flow_section = str(row.get("flow_section", "") or "").strip()
         targets[identity] = {"name": name, "flow_section": flow_section}
@@ -3505,6 +3507,9 @@ def _iter_xxpipe_export_nodes(nodes):
 
 
 def _make_xxpipe_identity_from_node(node):
+    row_identity = str(getattr(node, "pressure_pipe_row_identity", "") or "").strip()
+    if row_identity:
+        return row_identity
     return make_pressure_pipe_identity(
         getattr(node, "flow_section", ""),
         getattr(node, "name", ""),
@@ -3659,6 +3664,7 @@ def _build_xxpipe_identity_rows(nodes):
             {
                 "name": getattr(node, "name", ""),
                 "flow_section": getattr(node, "flow_section", ""),
+                "identity": identity,
             }
         )
     return rows
