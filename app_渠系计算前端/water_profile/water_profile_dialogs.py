@@ -1006,7 +1006,7 @@ class PressurePipeConfigDialog(QDialog):
         "QPushButton:hover { background: #CFD8DC; }"
     )
 
-    def __init__(self, parent=None, pipe_groups=None, manager=None):
+    def __init__(self, parent=None, pipe_groups=None, manager=None, pressure_chains=None):
         super().__init__(parent)
         self.setWindowTitle("有压管道水力计算配置")
         self.setMinimumWidth(700)
@@ -1015,6 +1015,7 @@ class PressurePipeConfigDialog(QDialog):
 
         self._pipe_groups = pipe_groups or []
         self._manager = manager
+        self._pressure_chains = list(pressure_chains or [])
 
         # 存储每个管道的纵断面数据 {pipe_name: [LongitudinalNode字典列表]}
         self._longitudinal_data = {}
@@ -1091,6 +1092,116 @@ class PressurePipeConfigDialog(QDialog):
         if identity:
             return identity
         return str(getattr(group, "name", "") or "").strip()
+
+    @staticmethod
+    def _chain_item_value(item, key: str, default=None):
+        """兼容字典/对象两种链描述结构。"""
+        if isinstance(item, dict):
+            return item.get(key, default)
+        return getattr(item, key, default)
+
+    def _resolve_pressure_chain_display_name(self, chain) -> str:
+        """返回连续承压链展示名称。"""
+        display_name = str(self._chain_item_value(chain, "display_name", "") or "").strip()
+        if display_name:
+            return display_name
+        flow_section = str(self._chain_item_value(chain, "flow_section", "") or "").strip() or "-"
+        chain_id = str(self._chain_item_value(chain, "chain_id", "") or "").strip()
+        return chain_id or f"流量段{flow_section} 连续承压链"
+
+    def _resolve_pressure_chain_members(self, chain) -> List[Any]:
+        """返回连续承压链成员列表。"""
+        members = self._chain_item_value(chain, "members", []) or []
+        return list(members)
+
+    def _resolve_chain_member_group(self, member):
+        """返回链成员关联的有压管道分组。"""
+        return self._chain_item_value(member, "group", None)
+
+    def _build_pressure_chain_summary_text(self, chain) -> str:
+        """构造连续承压链摘要。"""
+        flow_section = str(self._chain_item_value(chain, "flow_section", "") or "").strip() or "-"
+        start_row_index = int(self._chain_item_value(chain, "start_row_index", -1) or -1)
+        end_row_index = int(self._chain_item_value(chain, "end_row_index", start_row_index) or start_row_index)
+        members = self._resolve_pressure_chain_members(chain)
+        pressure_count = 0
+        tunnel_count = 0
+        for member in members:
+            structure_type = str(self._chain_item_value(member, "structure_type", "") or "").strip()
+            if "隧洞" in structure_type:
+                tunnel_count += 1
+            else:
+                pressure_count += 1
+        row_range = "-"
+        if start_row_index >= 0 and end_row_index >= 0:
+            row_range = f"第{start_row_index + 1}行 ~ 第{end_row_index + 1}行"
+        return (
+            f"流量段: {flow_section}  |  范围: {row_range}  |  "
+            f"成员数: {len(members)}（有压成员 {pressure_count}，隧洞成员 {tunnel_count}）"
+        )
+
+    def _create_chain_readonly_member_card(self, member):
+        """创建连续承压链只读成员卡片。"""
+        frame = QFrame()
+        frame.setStyleSheet(
+            "QFrame { background: #F6FBFF; border: 1px solid #CFE3F5; border-radius: 6px; }"
+        )
+        frame_lay = QVBoxLayout(frame)
+        frame_lay.setContentsMargins(12, 10, 12, 10)
+        frame_lay.setSpacing(4)
+
+        display_name = str(self._chain_item_value(member, "display_name", "") or "").strip() or "未命名成员"
+        structure_type = str(self._chain_item_value(member, "structure_type", "") or "").strip() or "承压成员"
+        target_row_index = int(self._chain_item_value(member, "target_row_index", -1) or -1)
+        row_text = f"第{target_row_index + 1}行" if target_row_index >= 0 else "未定位行"
+
+        title = QLabel(f"{structure_type}: {display_name}")
+        title.setStyleSheet("font-size: 12px; font-weight: bold; color: #1F4E79;")
+        frame_lay.addWidget(title)
+
+        info = QLabel(f"位置: {row_text}")
+        info.setStyleSheet("font-size: 12px; color: #546E7A;")
+        frame_lay.addWidget(info)
+
+        hint = QLabel("本成员参与连续承压链计算，不需要设置有压管道的 R / D 参数。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("font-size: 12px; color: #607D8B;")
+        frame_lay.addWidget(hint)
+        return frame
+
+    def _create_pressure_chain_card(self, chain, used_group_keys: set[str]):
+        """按连续承压链创建界面卡片。"""
+        chain_name = self._resolve_pressure_chain_display_name(chain)
+        card = QGroupBox(f"链路: {chain_name}")
+        card.setStyleSheet("""
+            QGroupBox {
+                font-size: 13px; font-weight: bold; color: #1B5E20;
+                border: 2px solid #66BB6A; border-radius: 8px;
+                margin-top: 12px; padding: 16px 12px 12px 12px;
+                background: #FFFFFF;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin; left: 16px;
+                padding: 0 8px; background: #FFFFFF;
+            }
+        """)
+        card_lay = QVBoxLayout(card)
+        card_lay.setSpacing(10)
+
+        summary_label = QLabel(self._build_pressure_chain_summary_text(chain))
+        summary_label.setWordWrap(True)
+        summary_label.setStyleSheet("font-size: 12px; color: #607D8B; font-weight: normal;")
+        card_lay.addWidget(summary_label)
+
+        for member in self._resolve_pressure_chain_members(chain):
+            group = self._resolve_chain_member_group(member)
+            if group is not None:
+                used_group_keys.add(self._group_storage_key(group))
+                card_lay.addWidget(self._create_pipe_card(group))
+                continue
+            card_lay.addWidget(self._create_chain_readonly_member_card(member))
+
+        return card
 
     @staticmethod
     def _group_edit_rows(group):
@@ -1756,7 +1867,7 @@ class PressurePipeConfigDialog(QDialog):
         lay.addWidget(line)
 
         # 如果有多个管道，显示管道卡片
-        if self._pipe_groups:
+        if self._pipe_groups or self._pressure_chains:
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QFrame.NoFrame)
@@ -1767,11 +1878,16 @@ class PressurePipeConfigDialog(QDialog):
             scroll_lay = QVBoxLayout(scroll_widget)
             scroll_lay.setSpacing(12)
 
+            used_group_keys = set()
             for route_context in self._route_contexts.values():
                 route_card = self._create_route_card(route_context)
                 scroll_lay.addWidget(route_card)
+            for chain in self._pressure_chains:
+                scroll_lay.addWidget(self._create_pressure_chain_card(chain, used_group_keys))
 
             for group in self._pipe_groups:
+                if self._group_storage_key(group) in used_group_keys:
+                    continue
                 card = self._create_pipe_card(group)
                 scroll_lay.addWidget(card)
 

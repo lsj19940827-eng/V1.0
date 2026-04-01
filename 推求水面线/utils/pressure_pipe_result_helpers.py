@@ -3,6 +3,7 @@
 有压管道结果展示/持久化辅助函数（纯函数，无 UI 依赖）。
 """
 
+import copy
 from typing import Any, Dict, List, Optional
 
 
@@ -23,6 +24,7 @@ def empty_pressure_pipe_calc_records() -> Dict[str, Any]:
         "last_run_at": "",
         "summary": {"total": 0, "success": 0, "failed": 0},
         "records": [],
+        "chain_summaries": [],
     }
 
 
@@ -98,7 +100,11 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
             "identity": identity,
             "flow_section": flow_section,
             "name": name,
+            "display_name": str(rec.get("display_name", "") or name or ""),
+            "storage_key": str(rec.get("storage_key", "") or identity),
+            "group_mode": str(rec.get("group_mode", "") or ""),
             "status": status,
+            "writeback_enabled": _to_bool_or_default(rec.get("writeback_enabled"), True),
             "data_mode": str(rec.get("data_mode", "") or ""),
             "Q": _to_float_or_none(rec.get("Q")),
             "D": _to_float_or_none(rec.get("D")),
@@ -107,9 +113,12 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
             "pipe_velocity": _to_float_or_none(rec.get("pipe_velocity")),
             "friction_loss": _to_float_or_none(rec.get("friction_loss")),
             "total_bend_loss": _to_float_or_none(rec.get("total_bend_loss")),
+            "local_loss": _to_float_or_none(rec.get("local_loss")),
             "inlet_transition_loss": _to_float_or_none(rec.get("inlet_transition_loss")),
             "outlet_transition_loss": _to_float_or_none(rec.get("outlet_transition_loss")),
             "total_head_loss": _to_float_or_none(rec.get("total_head_loss")),
+            "target_row_index": int(rec.get("target_row_index", -1) or -1),
+            "upstream_row_index": int(rec.get("upstream_row_index", -1) or -1),
             "sensitivity_material": str(rec.get("sensitivity_material", "") or ""),
             "sensitivity_main_f": _to_float_or_none(rec.get("sensitivity_main_f")),
             "sensitivity_low_f": _to_float_or_none(rec.get("sensitivity_low_f")),
@@ -123,6 +132,12 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
             "calc_steps": str(rec.get("calc_steps", "") or ""),
             "error": str(rec.get("error", "") or ""),
             "note": str(rec.get("note", "") or ""),
+            "friction_details": copy.deepcopy(rec.get("friction_details", {}) or {})
+            if isinstance(rec.get("friction_details"), dict) else {},
+            "bend_details": copy.deepcopy(rec.get("bend_details", {}) or {})
+            if isinstance(rec.get("bend_details"), dict) else {},
+            "local_details": copy.deepcopy(rec.get("local_details", {}) or {})
+            if isinstance(rec.get("local_details"), dict) else {},
         }
         if not row["note"]:
             row["note"] = build_pressure_pipe_transition_note(
@@ -133,10 +148,55 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
             )
         normalized_records.append(row)
 
+    normalized_chain_summaries: List[Dict[str, Any]] = []
+    for chain in raw.get("chain_summaries", []) or []:
+        if not isinstance(chain, dict):
+            continue
+
+        flow_section = str(chain.get("flow_section", "") or "")
+        display_name = str(chain.get("display_name", "") or "").strip() or "未命名连续承压链"
+        chain_id = str(chain.get("chain_id", "") or "").strip()
+        if not chain_id:
+            chain_id = make_pressure_pipe_identity(flow_section or "-", display_name)
+
+        member_results: List[Dict[str, Any]] = []
+        for member in chain.get("member_results", []) or []:
+            if not isinstance(member, dict):
+                continue
+            member_status = str(member.get("status", "failed") or "failed").lower()
+            if member_status not in ("success", "failed"):
+                member_status = "failed"
+            member_results.append({
+                "identity": str(member.get("identity", "") or "").strip(),
+                "display_name": str(
+                    member.get("display_name", member.get("name", "")) or ""
+                ).strip() or "未命名成员",
+                "structure_type": str(member.get("structure_type", "") or "").strip() or "-",
+                "status": member_status,
+                "writeback_enabled": _to_bool_or_default(member.get("writeback_enabled"), True),
+                "total_head_loss": _to_float_or_none(member.get("total_head_loss")),
+                "error": str(member.get("error", "") or "").strip(),
+                "note": str(member.get("note", "") or "").strip(),
+            })
+
+        success_count = sum(1 for item in member_results if item.get("status") == "success")
+        failed_count = len(member_results) - success_count
+        normalized_chain_summaries.append({
+            "chain_id": chain_id,
+            "flow_section": flow_section,
+            "display_name": display_name,
+            "total_head_loss": _to_float_or_none(chain.get("total_head_loss")),
+            "member_count": int(chain.get("member_count", len(member_results)) or len(member_results)),
+            "success_count": int(chain.get("success_count", success_count) or success_count),
+            "failed_count": int(chain.get("failed_count", failed_count) or failed_count),
+            "member_results": member_results,
+        })
+
     total = len(normalized_records)
     success = sum(1 for r in normalized_records if r.get("status") == "success")
     failed = total - success
     out["records"] = normalized_records
+    out["chain_summaries"] = normalized_chain_summaries
     out["summary"] = {"total": total, "success": success, "failed": failed}
     return out
 
@@ -204,6 +264,39 @@ def format_pressure_pipe_record_detail(record: Dict[str, Any], precision: int = 
     return "\n".join(lines)
 
 
+def format_pressure_pipe_chain_summary(chain_summary: Dict[str, Any], precision: int = 4) -> str:
+    """将单条连续承压链汇总格式化为纯文本。"""
+    flow_section = chain_summary.get("flow_section", "") or "-"
+    display_name = chain_summary.get("display_name", "") or "未命名连续承压链"
+    total_head_loss = _fmt_num(chain_summary.get("total_head_loss"), precision)
+    member_count = int(chain_summary.get("member_count", 0) or 0)
+    success_count = int(chain_summary.get("success_count", 0) or 0)
+    failed_count = int(chain_summary.get("failed_count", 0) or 0)
+
+    lines = [
+        f"流量段={flow_section}  链路={display_name}",
+        f"链总损失: ΔH={total_head_loss} m",
+        f"成员统计: 共{member_count}个，成功{success_count}个，失败{failed_count}个",
+    ]
+
+    for idx, member in enumerate(chain_summary.get("member_results", []) or [], 1):
+        structure_type = member.get("structure_type", "") or "-"
+        display_text = member.get("display_name", "") or "未命名成员"
+        if not member.get("writeback_enabled", True):
+            lines.append(f"成员{idx}: {structure_type} | {display_text} | 锚点")
+            continue
+        if member.get("status") == "success":
+            lines.append(
+                f"成员{idx}: {structure_type} | {display_text} | "
+                f"ΔH={_fmt_num(member.get('total_head_loss'), precision)} m"
+            )
+            continue
+        error_text = member.get("error", "") or member.get("note", "") or "未知错误"
+        lines.append(f"成员{idx}: {structure_type} | {display_text} | 失败: {error_text}")
+
+    return "\n".join(lines)
+
+
 def format_pressure_pipe_calc_batch_text(batch: Dict[str, Any], precision: int = 4) -> str:
     """将批次记录格式化为可追加到 detail_text 的纯文本章节。"""
     normalized = normalize_pressure_pipe_calc_records(batch)
@@ -212,6 +305,7 @@ def format_pressure_pipe_calc_batch_text(batch: Dict[str, Any], precision: int =
         return ""
 
     summary = normalized.get("summary", {})
+    chain_summaries = normalized.get("chain_summaries", [])
     ts = normalized.get("last_run_at", "") or "-"
     has_sensitivity = any(rec.get("sensitivity_low_total_head_loss") is not None for rec in records)
     sensitivity_line = (
@@ -228,6 +322,13 @@ def format_pressure_pipe_calc_batch_text(batch: Dict[str, Any], precision: int =
         f"批次汇总: 共{summary.get('total', 0)}条，成功{summary.get('success', 0)}条，失败{summary.get('failed', 0)}条",
         "-" * 80,
     ]
+
+    if chain_summaries:
+        lines.append("【连续承压链汇总】")
+        for i, chain_summary in enumerate(chain_summaries, 1):
+            lines.append(f"{i}. {format_pressure_pipe_chain_summary(chain_summary, precision=precision)}")
+            lines.append("")
+        lines.append("-" * 80)
 
     for i, rec in enumerate(records, 1):
         lines.append(f"{i}. {format_pressure_pipe_record_detail(rec, precision=precision)}")
