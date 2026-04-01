@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QGroupBox
+from PySide6.QtWidgets import QApplication, QGroupBox, QLabel
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -140,6 +140,32 @@ def _make_dialog():
     return dialog, group
 
 
+def _make_chain_descriptors(group):
+    return [
+        {
+            "chain_id": "flow2-chain1",
+            "flow_section": "2",
+            "display_name": "流量段2 连续承压链1",
+            "start_row_index": 0,
+            "end_row_index": 2,
+            "members": [
+                SimpleNamespace(
+                    group=group,
+                    display_name=group.name,
+                    structure_type="有压管道",
+                    target_row_index=0,
+                ),
+                SimpleNamespace(
+                    group=None,
+                    display_name="半兽人",
+                    structure_type="隧洞",
+                    target_row_index=5,
+                ),
+            ],
+        }
+    ]
+
+
 def _make_unnamed_group():
     row = SimpleNamespace(section_params={"D": 1.4}, turn_radius=0.0, flow_section="2")
     return SimpleNamespace(
@@ -221,6 +247,28 @@ def test_pressure_pipe_config_dialog_reuses_single_non_modal_viewer(monkeypatch)
 
     if viewer is not None:
         viewer.close()
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_groups_cards_by_chain():
+    _get_qapp()
+    group = _make_group()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=[group],
+        manager=_FakeManager(group.name, _make_longitudinal_nodes()),
+        pressure_chains=_make_chain_descriptors(group),
+    )
+    dialog.show()
+    _flush_events(6)
+
+    titles = [box.title() for box in dialog.findChildren(QGroupBox)]
+    assert "链路: 流量段2 连续承压链1" in titles
+    assert "管道: 测试管道" in titles
+
+    label_texts = [label.text() for label in dialog.findChildren(QLabel)]
+    assert any("本成员参与连续承压链计算" in text for text in label_texts)
+
     dialog.close()
     dialog.deleteLater()
 

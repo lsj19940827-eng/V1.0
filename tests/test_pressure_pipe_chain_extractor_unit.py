@@ -1,0 +1,149 @@
+# -*- coding: utf-8 -*-
+"""连续承压链提取回归测试。"""
+
+import os
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "推求水面线"))
+
+from models.data_models import ChannelNode
+from models.enums import InOutType, StructureType
+from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+
+
+def _make_node(
+    row_index,
+    flow_section,
+    name,
+    structure,
+    in_out=InOutType.NORMAL,
+    flow=1.8,
+    diameter=1.0,
+):
+    """构造最小测试节点。"""
+    node = ChannelNode()
+    node.flow_section = flow_section
+    node.name = name
+    node.structure_type = StructureType.from_string(structure)
+    node.in_out = in_out
+    node.flow = flow
+    node.x = float(row_index * 10)
+    node.y = 0.0
+    node.section_params = {
+        "D": diameter,
+        "in_out_raw": in_out.value if hasattr(in_out, "value") else str(in_out),
+    }
+    node.pressure_pipe_row_identity = f"flow{flow_section}-row{row_index + 1}"
+    return node
+
+
+def _make_settings(channel_level="干管"):
+    """构造 xx管 级别设置。"""
+    return SimpleNamespace(channel_level=channel_level)
+
+
+def test_extract_continuous_pressure_chains_keeps_named_group_and_single_rows_in_one_chain():
+    nodes = [
+        _make_node(0, "2", "半兽人", "定向钻", InOutType.INLET),
+        _make_node(1, "2", "半兽人", "定向钻", InOutType.OUTLET),
+        _make_node(2, "2", "", "有压管道", InOutType.NORMAL),
+        _make_node(3, "2", "隧洞段", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        _make_node(4, "2", "饿了么", "顶管", InOutType.INLET),
+        _make_node(5, "2", "饿了么", "顶管", InOutType.OUTLET),
+        _make_node(6, "2", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+        nodes,
+        settings=_make_settings(),
+    )
+
+    assert len(chains) == 1
+
+    chain = chains[0]
+    assert chain.flow_section == "2"
+    assert chain.start_row_index == 0
+    assert chain.end_row_index == 5
+    assert [member.member_type for member in chain.members] == [
+        "named_group",
+        "single_row",
+        "single_row",
+        "named_group",
+    ]
+    assert [member.display_name for member in chain.members] == [
+        "半兽人",
+        "流量段2 第3行有压管道",
+        "隧洞段",
+        "饿了么",
+    ]
+    assert chain.members[1].row_indices == [2]
+    assert chain.members[2].row_indices == [3]
+    assert chain.members[1].should_generate_row_loss is True
+    assert chain.members[2].should_generate_row_loss is True
+
+
+def test_extract_continuous_pressure_chains_marks_flow_section_start_single_row_as_anchor():
+    nodes = [
+        _make_node(0, "1", "", "有压管道", InOutType.NORMAL),
+        _make_node(1, "1", "隧洞段", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        _make_node(2, "1", "隔断", "倒虹吸", InOutType.NORMAL, flow=0.0),
+        _make_node(3, "2", "", "有压管道", InOutType.NORMAL),
+        _make_node(4, "2", "下游隧洞", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+        nodes,
+        settings=_make_settings(),
+    )
+
+    assert len(chains) == 2
+
+    first_anchor = chains[0].members[0]
+    assert first_anchor.row_indices == [0]
+    assert first_anchor.is_anchor_member is True
+    assert first_anchor.should_generate_row_loss is False
+
+    second_anchor = chains[1].members[0]
+    assert second_anchor.row_indices == [3]
+    assert second_anchor.is_anchor_member is True
+    assert second_anchor.should_generate_row_loss is False
+
+    assert chains[0].members[1].is_anchor_member is False
+    assert chains[0].members[1].should_generate_row_loss is True
+
+
+@pytest.mark.parametrize("breaker_structure", ["明渠-梯形", "分水闸", "倒虹吸", "矩形暗涵"])
+def test_extract_continuous_pressure_chains_breaks_on_non_chain_structures(breaker_structure):
+    nodes = [
+        _make_node(0, "3", "", "有压管道", InOutType.NORMAL),
+        _make_node(1, "3", "断开结构", breaker_structure, InOutType.NORMAL, flow=0.0),
+        _make_node(2, "3", "后续隧洞", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+        nodes,
+        settings=_make_settings(),
+    )
+
+    assert len(chains) == 2
+    assert [chain.start_row_index for chain in chains] == [0, 2]
+    assert [chain.end_row_index for chain in chains] == [0, 2]
+
+
+def test_extract_continuous_pressure_chains_returns_empty_for_non_xxpipe_channel_level():
+    nodes = [
+        _make_node(0, "4", "半兽人", "定向钻", InOutType.INLET),
+        _make_node(1, "4", "半兽人", "定向钻", InOutType.OUTLET),
+        _make_node(2, "4", "", "有压管道", InOutType.NORMAL),
+    ]
+
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+        nodes,
+        settings=_make_settings(channel_level="支渠"),
+    )
+
+    assert chains == []

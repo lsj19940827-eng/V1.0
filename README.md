@@ -3,7 +3,7 @@
 ## 项目功能简介
 
 这是一个本地桌面计算工具，用来处理渠系纵断面、水面线、倒虹吸、有压管道、土石方等工程计算与导出。
-当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及 xx管 纵断面相关规则。
+当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及 `xx管` 连续承压链规则。
 
 ## 技术架构
 
@@ -29,6 +29,7 @@
 - 运行界面口径测试：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py -q`
 - 运行本次相关回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_external_head_loss_unit.py tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_channel_level_options_unit.py tests/test_pressure_pipe_preprocessing_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py tests/test_water_profile_transition_ready_unit.py -q`
 - 运行本次窗口联动回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_window_override_unit.py tests/test_external_head_loss_unit.py tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py tests/test_water_profile_transition_ready_unit.py -q`
+- 运行本次连续承压链回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_config_dialog_sizing_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_preprocessing_unit.py tests/test_external_head_loss_unit.py`
 
 ## 搜索记录
 
@@ -43,8 +44,10 @@
 - 匿名普通有压管道段的窗口结果会回写到当前行，并在后续静默重算中继续作为主来源，表3列38会锁定避免混改。
 - 相关双击说明已经补齐，且总损失、水位、累计损失说明不会再把同一笔承压段损失重复展示。
 - 隧洞沿程损失继续保持原有“底坡 × 有效长度”口径，没有被承压管道逻辑带偏。
+- `xx管` 现在会把连续出现的有压管道、定向钻、顶管和隧洞识别成一条连续承压链，在结果窗口显示“总览 + 逐成员明细”。
+- 连续承压链支持首行有压管道作为锚点，不再因为缺少上一普通行而整条链计算失败。
+- 配置窗口现在会按连续承压链分组展示，同链内的隧洞成员会显示为只读提示，不再误当成要填写 R / D 的有压卡片。
 
 ## 待办事项
 
-- 结合真实工程样表继续做界面联调，确认更多 xx管 组合场景下的显示细节。
 - 继续补充命名有压管道组、匿名普通有压管道和渐变段混合场景的回归样例。

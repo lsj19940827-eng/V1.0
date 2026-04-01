@@ -67,3 +67,78 @@ def test_build_pressure_pipe_transition_note_merges_both_sides():
     )
 
     assert note == "进口侧紧邻有压同类结构，无渐变段；出口侧紧邻有压同类结构，无渐变段"
+
+
+def test_batch_report_includes_chain_summary_and_member_rollup():
+    batch = {
+        "last_run_at": "2026-03-31 10:20:30",
+        "chain_summaries": [
+            {
+                "chain_id": "chain-2-1",
+                "flow_section": "2",
+                "display_name": "流量段2 连续承压链1",
+                "total_head_loss": 0.3854,
+                "member_count": 3,
+                "success_count": 3,
+                "failed_count": 0,
+                "member_results": [
+                    {
+                        "display_name": "流量段2 第1行有压管道",
+                        "structure_type": "有压管道",
+                        "status": "success",
+                        "writeback_enabled": False,
+                        "total_head_loss": 0.0,
+                        "note": "链起点锚点，本行不写回",
+                    },
+                    {
+                        "display_name": "半兽人",
+                        "structure_type": "隧洞-圆形",
+                        "status": "success",
+                        "writeback_enabled": True,
+                        "total_head_loss": 0.2312,
+                    },
+                    {
+                        "display_name": "流量段2 第8行有压管道",
+                        "structure_type": "有压管道",
+                        "status": "success",
+                        "writeback_enabled": True,
+                        "total_head_loss": 0.1542,
+                    },
+                ],
+            }
+        ],
+        "records": [
+            {
+                "identity": "flow2-row1",
+                "flow_section": "2",
+                "name": "流量段2 第1行有压管道",
+                "status": "success",
+                "total_head_loss": 0.0,
+                "note": "链起点锚点，本行不写回",
+            },
+            {
+                "identity": "flow2-row4",
+                "flow_section": "2",
+                "name": "半兽人",
+                "status": "success",
+                "total_head_loss": 0.2312,
+            },
+            {
+                "identity": "flow2-row8",
+                "flow_section": "2",
+                "name": "流量段2 第8行有压管道",
+                "status": "success",
+                "total_head_loss": 0.1542,
+            },
+        ],
+    }
+
+    txt = format_pressure_pipe_calc_batch_text(batch, precision=4)
+
+    assert "【连续承压链汇总】" in txt
+    assert "流量段=2  链路=流量段2 连续承压链1" in txt
+    assert "链总损失: ΔH=0.3854 m" in txt
+    assert "成员统计: 共3个，成功3个，失败0个" in txt
+    assert "成员1: 有压管道 | 流量段2 第1行有压管道 | 锚点" in txt
+    assert "成员2: 隧洞-圆形 | 半兽人 | ΔH=0.2312 m" in txt
+    assert "成员3: 有压管道 | 流量段2 第8行有压管道 | ΔH=0.1542 m" in txt
