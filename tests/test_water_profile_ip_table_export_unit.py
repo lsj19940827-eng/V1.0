@@ -83,7 +83,7 @@ def test_ip_table_preview_headers_include_design_water_level():
         "E（m）",
         "N（m）",
         "弯前(千米+米)",
-        "弯中(千米+米)",
+        "里程(千米+米)",
         "弯末(千米+米)",
         "转角",
         "半径",
@@ -126,6 +126,7 @@ def test_draw_ip_table_on_msp_writes_design_water_level_header_and_value(monkeyp
     cad_tools._draw_ip_table_on_msp(msp, 0.0, 0.0, preview_data)
 
     texts = [text for text, _attrs in msp.texts]
+    assert "里程(千米+米)" in texts
     assert "设计水位(m)" in texts
     assert "408.900" in texts
 
@@ -137,6 +138,7 @@ def test_write_ip_table_excel_sheet_keeps_design_water_level_column():
     cad_tools._write_ip_table_excel_sheet(ws, [_make_node()], "")
 
     assert ws.max_column == 12
+    assert ws["E2"].value == "里程(千米+米)"
     assert ws["L1"].value == "设计水位(m)"
     assert ws["L3"].value == 408.9
     assert ws["L3"].number_format == "0.000"

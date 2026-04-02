@@ -583,6 +583,9 @@ def create_text_export_settings_dialog(api_module):
                 "empty_runtime_hint": "当前按 xx管 固定模板展示全部 5 项。",
                 "subtitle_enabled": "固定项",
                 "subtitle_disabled": "固定项",
+                "decimal_entry_key": "xxpipe_centerline_elev_decimals",
+                "decimal_entry_label": "管中心线高程小数位数",
+                "decimal_entry_hint": "仅影响“管中心线高程（米）”，仅接受非负整数。",
             }
         return {
             "mode": "standard",
@@ -604,6 +607,9 @@ def create_text_export_settings_dialog(api_module):
             "empty_runtime_hint": "当前尚未启用任何纵断面行。",
             "subtitle_enabled": "已启用",
             "subtitle_disabled": "可选项",
+            "decimal_entry_key": "elev_decimals",
+            "decimal_entry_label": "高程小数位数",
+            "decimal_entry_hint": "仅接受非负整数。",
         }
     def _info_bar():
         return _api_get(api_module, "InfoBar")
@@ -614,14 +620,26 @@ def create_text_export_settings_dialog(api_module):
     def _show_error(parent, title, content):
         return _api_get(api_module, "fluent_error")(parent, title, content)
 
-    basic_entry_keys = ("text_height", "rotation", "elev_decimals", "scale_x", "scale_y")
-    basic_entry_labels = {
-        "text_height": "字高",
-        "rotation": "旋转角度",
-        "elev_decimals": "高程小数位数",
-        "scale_x": "X方向比例",
-        "scale_y": "Y方向比例",
-    }
+    def _basic_entry_keys(mode_spec):
+        return (
+            "text_height",
+            "rotation",
+            mode_spec["decimal_entry_key"],
+            "scale_x",
+            "scale_y",
+        )
+
+    def _basic_entry_labels(mode_spec):
+        return {
+            "text_height": "字高",
+            "rotation": "旋转角度",
+            mode_spec["decimal_entry_key"]: mode_spec["decimal_entry_label"],
+            "scale_x": "X方向比例",
+            "scale_y": "Y方向比例",
+        }
+
+    def _is_decimal_entry_key(mode_spec, key):
+        return key == mode_spec["decimal_entry_key"]
     def default_profile_row_items(mode_spec):
         return [
             {"id": rid, "enabled": rid in mode_spec["default_enabled_ids"]}
@@ -696,7 +714,7 @@ def create_text_export_settings_dialog(api_module):
             active_role = "enabled" if enabled_row_ids else "candidate"
             return cls(
                 mode_spec=mode_spec,
-                parameter_texts={key: str(normalized.get(key, "")) for key in basic_entry_keys},
+                parameter_texts={key: str(normalized.get(key, "")) for key in _basic_entry_keys(mode_spec)},
                 compat_values={key: normalized.get(key) for key in runtime_advanced_keys},
                 ordered_row_ids=[item["id"] for item in row_items],
                 enabled_row_ids=enabled_row_ids,
@@ -748,22 +766,23 @@ def create_text_export_settings_dialog(api_module):
 
         def parsed_basic_values(self, *, strict):
             parsed = {}
-            for key in basic_entry_keys:
+            labels = _basic_entry_labels(self.mode_spec)
+            for key in _basic_entry_keys(self.mode_spec):
                 raw = str(self.parameter_texts.get(key, "")).strip()
                 if not raw:
                     if strict:
-                        raise ValueError(f"{basic_entry_labels[key]}不能为空", key)
+                        raise ValueError(f"{labels[key]}不能为空", key)
                     continue
                 try:
                     value = float(raw)
                 except ValueError as exc:
                     if strict:
-                        raise ValueError(f"{basic_entry_labels[key]}必须为数值", key) from exc
+                        raise ValueError(f"{labels[key]}必须为数值", key) from exc
                     continue
-                if key == "elev_decimals":
+                if _is_decimal_entry_key(self.mode_spec, key):
                     if value < 0 or value != int(value):
                         if strict:
-                            raise ValueError("高程小数位数必须为非负整数", key)
+                            raise ValueError(f"{labels[key]}必须为非负整数", key)
                         continue
                     value = int(value)
                 if key in {"scale_x", "scale_y"} and value <= 0:
@@ -1287,9 +1306,16 @@ def create_text_export_settings_dialog(api_module):
             basic_form.setColumnStretch(0, 0)
             basic_form.setColumnStretch(1, 0)
             basic_form.setColumnStretch(2, 1)
+            decimal_key = self._mode_spec["decimal_entry_key"]
             self._add_entry_row(basic_form, 0, "字高", "text_height", "用于 AutoCAD 文字字高。")
             self._add_entry_row(basic_form, 1, "旋转角度", "rotation", "默认沿纵断面竖排显示。")
-            self._add_entry_row(basic_form, 2, "高程小数位数", "elev_decimals", "仅接受非负整数。")
+            self._add_entry_row(
+                basic_form,
+                2,
+                self._mode_spec["decimal_entry_label"],
+                decimal_key,
+                self._mode_spec["decimal_entry_hint"],
+            )
             self._add_entry_row(basic_form, 3, "X方向比例(1:N)", "scale_x", "如 1:1000，则输入 1000。")
             self._add_entry_row(basic_form, 4, "Y方向比例(1:N)", "scale_y", "如 1:1000，则输入 1000。")
             lay.addLayout(basic_form)

@@ -946,6 +946,7 @@ class WaterProfilePanel(QWidget):
         self._text_export_settings = {
             'y_bottom': 1, 'y_top': 31, 'y_water': 16,
             'text_height': 3.5, 'rotation': 90, 'elev_decimals': 3,
+            'xxpipe_centerline_elev_decimals': 2,
             'y_name': 115, 'y_slope': 105, 'y_ip': 77,
             'y_station': 47, 'y_line_height': 120,
             'scale_x': 2000, 'scale_y': 1000,
@@ -1508,6 +1509,7 @@ class WaterProfilePanel(QWidget):
         sample_menu.addAction(Action("示例五（茶亭支渠）", triggered=self._load_section_sample_5))
         sample_menu.addAction(Action("示例六（合作干渠）", triggered=self._load_section_sample_6))
         sample_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=self._load_section_sample_7))
+        sample_menu.addAction(Action("示例八（江家坝支管）", triggered=self._load_section_sample_8))
         self._btn_section_sample = DropDownPushButton("示例数据")
         self._btn_section_sample.setMenu(sample_menu)
         button_row.addWidget(self._btn_section_sample)
@@ -1520,6 +1522,7 @@ class WaterProfilePanel(QWidget):
         template_menu.addAction(Action("示例五（茶亭支渠）", triggered=lambda: self._open_section_excel_template("chating")))
         template_menu.addAction(Action("示例六（合作干渠）", triggered=lambda: self._open_section_excel_template("hezuo")))
         template_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=lambda: self._open_section_excel_template("ganjiagou")))
+        template_menu.addAction(Action("示例八（江家坝支管）", triggered=lambda: self._open_section_excel_template("jiangjiaba")))
         self._btn_section_template = DropDownPushButton("打开Excel模板")
         self._btn_section_template.setMenu(template_menu)
         button_row.addWidget(self._btn_section_template)
@@ -1897,6 +1900,13 @@ class WaterProfilePanel(QWidget):
 
     def _load_section_sample_7(self):
         self._batch_backend._add_sample_data_7()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _load_section_sample_8(self):
+        self._batch_backend._add_sample_data_8()
         self._sync_batch_settings()
         self._switch_workspace_tab(self._tab_section_input)
         if self._section_input_table and self._section_input_table.rowCount() > 0:
@@ -8611,6 +8621,27 @@ class WaterProfilePanel(QWidget):
             return "有压管道"
         return None
 
+    @staticmethod
+    def _get_pressure_pipe_summary_in_out_text(node) -> str:
+        """读取摘要统计需要的进出口标记。"""
+        getter = getattr(node, "get_in_out_str", None)
+        if callable(getter):
+            try:
+                text = str(getter() or "").strip()
+                if text and text != "IP":
+                    return text
+            except Exception:
+                pass
+        section_params = getattr(node, "section_params", None)
+        if isinstance(section_params, dict):
+            text = str(section_params.get("in_out_raw", "") or "").strip()
+            if text and text != "IP":
+                return text
+        in_out = getattr(node, "in_out", None)
+        value = getattr(in_out, "value", in_out)
+        text = str(value or "").strip()
+        return "" if text == "IP" else text
+
     def _get_pressure_pipe_summary_source_nodes(self) -> list:
         nodes = getattr(self, "calculated_nodes", None) or getattr(self, "nodes", None) or []
         return nodes if isinstance(nodes, list) else []
@@ -8658,6 +8689,16 @@ class WaterProfilePanel(QWidget):
                 "jacking_length": 0.0,
             }
 
+        def _resolve_station_mc(node) -> float | None:
+            """提取节点里程桩号。"""
+            try:
+                number = float(getattr(node, "station_MC", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(number):
+                return None
+            return number
+
         summary_by_flow_section = {}
         if not nodes:
             return summary_by_flow_section, start_water_level, end_water_level
@@ -8673,8 +8714,8 @@ class WaterProfilePanel(QWidget):
             "顶管": "jacking_length",
         }
         building_buckets = set(count_map.keys())
+        active_building_starts = {}
 
-        previous_marker = None
         for node in nodes:
             flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
                 getattr(node, "flow_section", "")
@@ -8682,11 +8723,37 @@ class WaterProfilePanel(QWidget):
             bucket = self._classify_pressure_pipe_summary_bucket(node)
             if flow_section_text and bucket:
                 summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
-            marker = (flow_section_text, bucket) if flow_section_text and bucket in building_buckets else None
-            if marker is not None and marker != previous_marker:
+            if not flow_section_text or bucket not in building_buckets:
+                continue
+
+            in_out_text = self._get_pressure_pipe_summary_in_out_text(node)
+            if in_out_text == "进":
                 entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
                 entry[count_map[bucket]] += 1
-            previous_marker = marker
+                station_mc = _resolve_station_mc(node)
+                if station_mc is not None:
+                    key = (flow_section_text, bucket)
+                    active_building_starts.setdefault(key, []).append(station_mc)
+                continue
+
+            if in_out_text != "出":
+                continue
+
+            station_mc = _resolve_station_mc(node)
+            if station_mc is None:
+                continue
+            key = (flow_section_text, bucket)
+            start_stations = active_building_starts.get(key)
+            if not start_stations:
+                continue
+            start_station = start_stations.pop()
+            if not start_stations:
+                active_building_starts.pop(key, None)
+            seg_len = station_mc - start_station
+            if seg_len <= 0:
+                continue
+            entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
+            entry[length_map[bucket]] = round(entry[length_map[bucket]] + seg_len, 6)
 
         for idx in range(len(nodes) - 1):
             current = nodes[idx]
@@ -8709,10 +8776,7 @@ class WaterProfilePanel(QWidget):
             if seg_len <= 0:
                 continue
             entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
-            entry["total_length"] += seg_len
-            if bucket not in building_buckets:
-                continue
-            entry[length_map[bucket]] += seg_len
+            entry["total_length"] = round(entry["total_length"] + seg_len, 6)
 
         return summary_by_flow_section, start_water_level, end_water_level
 

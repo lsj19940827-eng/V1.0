@@ -463,6 +463,7 @@ class BatchPanel(QWidget):
         _sample_menu.addAction(Action("示例五（茶亭支渠）", triggered=self._add_sample_data_5))
         _sample_menu.addAction(Action("示例六（合作干渠）", triggered=self._add_sample_data_6))
         _sample_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=self._add_sample_data_7))
+        _sample_menu.addAction(Action("示例八（江家坝支管）", triggered=self._add_sample_data_8))
         btn_sample = DropDownPushButton("示例数据")
         btn_sample.setMenu(_sample_menu)
         _template_menu = RoundMenu(parent=self)
@@ -473,6 +474,7 @@ class BatchPanel(QWidget):
         _template_menu.addAction(Action("示例五（茶亭支渠）", triggered=lambda: self._open_excel_template_file("chating")))
         _template_menu.addAction(Action("示例六（合作干渠）", triggered=lambda: self._open_excel_template_file("hezuo")))
         _template_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=lambda: self._open_excel_template_file("ganjiagou")))
+        _template_menu.addAction(Action("示例八（江家坝支管）", triggered=lambda: self._open_excel_template_file("jiangjiaba")))
         btn_template = DropDownPushButton("打开Excel模板")
         btn_template.setMenu(_template_menu)
         btn_import = PrimaryPushButton("导入Excel"); btn_import.clicked.connect(self._import_from_excel)
@@ -847,6 +849,9 @@ class BatchPanel(QWidget):
         elif template_key == "ganjiagou":
             title = "示例七（甘家沟充水渠）"
             desc = "甘家沟充水渠示例数据文件"
+        elif template_key == "jiangjiaba":
+            title = "示例八（江家坝支管）"
+            desc = "江家坝支管示例数据文件"
         else:
             title = "示例一（综合演示）"
             desc = "综合演示模板（多流量段批量计算）"
@@ -884,6 +889,8 @@ class BatchPanel(QWidget):
             template_name = "合作干渠批量计算用表.xlsx"
         elif template_key == "ganjiagou":
             template_name = "甘家沟充水渠批量计算用表.xlsx"
+        elif template_key == "jiangjiaba":
+            template_name = "江家坝支管批量计算用表.xlsx"
         else:
             template_name = "多流量段批量计算_导入Excel（模板）.xlsx"
         if getattr(sys, 'frozen', False):
@@ -1232,6 +1239,24 @@ class BatchPanel(QWidget):
         else:
             base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         return os.path.join(base, "data", "甘家沟充水渠批量计算用表.xlsx")
+
+    def _add_sample_data_8(self):
+        """加载示例八：江家坝支管数据（从data目录读取xlsx文件）"""
+        path = self._get_sample8_path()
+        if not os.path.exists(path):
+            fluent_info(self, "错误", f"未找到示例八文件：\n{path}")
+            return
+        self._do_load_from_filepath(path, is_sample=True,
+                                    sample_title="示例八",
+                                    sample_desc="江家坝支管示例数据")
+
+    def _get_sample8_path(self):
+        """获取示例八xlsx文件路径（兼容开发环境和打包环境）"""
+        if getattr(sys, 'frozen', False):
+            base = sys._MEIPASS
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return os.path.join(base, "data", "江家坝支管批量计算用表.xlsx")
 
     # ================================================================
     # 结果区

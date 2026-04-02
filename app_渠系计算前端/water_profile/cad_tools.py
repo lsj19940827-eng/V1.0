@@ -1731,6 +1731,7 @@ def _normalize_text_export_settings(settings):
     src["text_height"] = src.get("text_height", 3.5)
     src["rotation"] = src.get("rotation", 90)
     src["elev_decimals"] = int(src.get("elev_decimals", 3))
+    src["xxpipe_centerline_elev_decimals"] = int(src.get("xxpipe_centerline_elev_decimals", 2))
     src["y_name"] = src.get("y_name", 115)
     src["y_slope"] = src.get("y_slope", 105)
     src["y_ip"] = src.get("y_ip", 77)
@@ -1740,6 +1741,12 @@ def _normalize_text_export_settings(settings):
     src["scale_y"] = src.get("scale_y", 1000)
     src["profile_row_items"] = _normalize_profile_row_items(src.get("profile_row_items"))
     return src
+
+
+def _get_xxpipe_centerline_elev_decimals(settings):
+    """读取 xx管 管中心线高程专用小数位数。"""
+    normalized = _normalize_text_export_settings(settings)
+    return int(normalized.get("xxpipe_centerline_elev_decimals", 2))
 
 
 def _get_xxpipe_profile_row_defs():
@@ -2819,7 +2826,7 @@ _IP_TABLE_COLUMN_DEFS = [
     {"id": "x", "label": "E（m）", "group_label": "坐标值", "excel_number_format": "0.000000"},
     {"id": "y", "label": "N（m）", "group_label": "坐标值", "excel_number_format": "0.000000"},
     {"id": "station_bc", "label": "弯前(千米+米)", "group_label": "桩号"},
-    {"id": "station_mc", "label": "弯中(千米+米)", "group_label": "桩号"},
+    {"id": "station_mc", "label": "里程(千米+米)", "group_label": "桩号"},
     {"id": "station_ec", "label": "弯末(千米+米)", "group_label": "桩号"},
     {"id": "turn_angle", "label": "转角", "group_label": "弯道参数", "excel_number_format": "0.000"},
     {"id": "turn_radius", "label": "半径", "group_label": "弯道参数", "excel_number_format": "0.000"},
@@ -7121,7 +7128,7 @@ def _draw_xxpipe_profile_on_msp(
     )
     text_height = settings["text_height"]
     rotation = settings["rotation"]
-    elev_decimals = int(settings.get("elev_decimals", 3))
+    elev_decimals = _get_xxpipe_centerline_elev_decimals(settings)
     scale_x = settings.get("scale_x", 1)
     scale_y = settings.get("scale_y", 1)
     first_col_x_offset = text_height + 1.3
@@ -7637,7 +7644,7 @@ def _export_xxpipe_longitudinal_txt_to_path(
     )
     text_height = settings["text_height"]
     rotation = settings["rotation"]
-    elev_decimals = int(settings.get("elev_decimals", 3))
+    elev_decimals = _get_xxpipe_centerline_elev_decimals(settings)
     scale_x = settings.get("scale_x", 1)
     scale_y = settings.get("scale_y", 1)
     first_col_x_offset = text_height + 1.3

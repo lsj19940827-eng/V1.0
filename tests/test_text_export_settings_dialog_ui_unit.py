@@ -247,6 +247,7 @@ def test_runtime_panel_mirrors_enabled_rows_and_summary_metrics():
 def test_xxpipe_mode_shows_fixed_read_only_five_rows_and_runtime_view():
     _get_qapp()
     defaults = {
+        "elev_decimals": 3,
         "profile_row_items": [
             {"id": "station", "enabled": True},
             {"id": "building_name", "enabled": False},
@@ -289,6 +290,9 @@ def test_xxpipe_mode_shows_fixed_read_only_five_rows_and_runtime_view():
     assert "置顶" not in visible_button_texts
     assert "置底" not in visible_button_texts
 
+    assert dlg._entries["xxpipe_centerline_elev_decimals"].text() == "2"
+    assert "elev_decimals" not in dlg._entries
+
     widget = _find_row_widget(dlg, "building_name")
     assert not widget.checkbox.isEnabled()
     assert widget.drag_handle.isHidden()
@@ -299,6 +303,7 @@ def test_xxpipe_mode_shows_fixed_read_only_five_rows_and_runtime_view():
 def test_xxpipe_mode_confirm_preserves_standard_profile_row_snapshot():
     _get_qapp()
     defaults = {
+        "elev_decimals": 3,
         "profile_row_items": [
             {"id": "station", "enabled": True},
             {"id": "building_name", "enabled": False},
@@ -311,10 +316,13 @@ def test_xxpipe_mode_confirm_preserves_standard_profile_row_snapshot():
     dlg.show()
     _flush_events(4)
 
+    dlg._entries["xxpipe_centerline_elev_decimals"].setText("3")
     dlg._on_confirm()
 
     assert dlg.result is not None
     assert dlg.result["profile_row_items"] == expected_profile_row_items
+    assert dlg.result["xxpipe_centerline_elev_decimals"] == 3
+    assert dlg.result["elev_decimals"] == 3
 
     dlg.deleteLater()
 

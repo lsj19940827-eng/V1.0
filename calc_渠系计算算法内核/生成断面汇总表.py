@@ -270,6 +270,19 @@ def _pressure_pipe_show_building_characteristics(data: List[Dict[str, Any]]) -> 
     return False
 
 
+def _format_pressure_pipe_velocity(value: Any) -> str:
+    """将压力管道特性表里的设计流速统一格式化为两位小数。"""
+    if value in (None, "", "-"):
+        return "-"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if not math.isfinite(number) or number < 0:
+        return "-"
+    return f"{number:.2f}"
+
+
 def _pressure_pipe_row_values(row: Dict[str, Any], include_buildings: bool) -> List[Any]:
     values = [
         row["name"],
@@ -278,7 +291,7 @@ def _pressure_pipe_row_values(row: Dict[str, Any], include_buildings: bool) -> L
         _pressure_pipe_length_km(row.get("total_length")),
         row.get("pipe_material", ""),
         _pressure_pipe_diameter_m(row.get("DN_mm", "")),
-        row.get("V", ""),
+        _format_pressure_pipe_velocity(row.get("V", "")),
         _format_pressure_pipe_water_level(row.get("start_water_level")),
         _format_pressure_pipe_water_level(row.get("end_water_level")),
     ]

@@ -154,6 +154,7 @@ def _scaled_settings():
         "text_height": 3.5,
         "rotation": 90,
         "elev_decimals": 3,
+        "xxpipe_centerline_elev_decimals": 2,
         "y_line_height": 120,
         "scale_x": 2000,
         "scale_y": 1000,
@@ -382,7 +383,8 @@ def test_draw_profile_on_msp_in_xxpipe_mode_uses_centerline_polyline_only(monkey
     assert "管材（管径/米）" in texts
     assert "穿路段定向钻" in texts
     assert "球墨铸铁管 DN 1200" in texts
-    assert "95.000" in texts
+    assert "95.00" in texts
+    assert "95.000" not in texts
 
 
 def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_tmp_path, monkeypatch):
@@ -409,6 +411,8 @@ def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_
     assert "穿路段定向钻" in content
     assert "渠底高程" not in content
     assert "设计水位" not in content
+    assert "95.00" in content
+    assert "95.000" not in content
 
     assert _parse_polyline_vertex_cmds(out_file) == pytest.approx(
         [
@@ -417,6 +421,29 @@ def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_
             (50.0, 90.0),
         ]
     )
+
+
+def test_xxpipe_export_respects_custom_centerline_decimal_precision(local_tmp_path, monkeypatch):
+    nodes, profile_data = _sample_profile_data()
+    out_file = local_tmp_path / "xxpipe_longitudinal_profile_three_decimals.txt"
+    settings = {**_scaled_settings(), "xxpipe_centerline_elev_decimals": 3}
+
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+
+    cad_tools._export_longitudinal_txt_to_path(
+        _Panel(""),
+        nodes,
+        nodes,
+        settings,
+        str(out_file),
+        export_mode="xxpipe",
+        xxpipe_profile_data=profile_data,
+    )
+
+    content = out_file.read_text(encoding="utf-8")
+    assert "95.000" in content
 
 
 @pytest.mark.parametrize("structure_name", ["定向钻", "顶管"])

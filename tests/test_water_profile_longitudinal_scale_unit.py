@@ -148,6 +148,7 @@ def _scaled_settings():
         "text_height": 3.5,
         "rotation": 90,
         "elev_decimals": 3,
+        "xxpipe_centerline_elev_decimals": 2,
         "y_name": 115,
         "y_slope": 105,
         "y_ip": 77,
