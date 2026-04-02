@@ -58,7 +58,7 @@ def test_xxpipe_building_name_only_marks_named_special_segments():
 def test_xxpipe_pipe_material_text_uses_material_and_dn_only():
     assert cad_tools._format_xxpipe_pipe_material_text(
         {"pipe_material": "球墨铸铁管", "DN_mm": 1200}
-    ) == "球墨铸铁管 DN 1200"
+    ) == "球墨铸铁管 DN1200"
 
 
 def test_xxpipe_profile_row_layout_ignores_legacy_y_line_height():

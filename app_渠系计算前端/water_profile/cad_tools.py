@@ -1731,7 +1731,9 @@ def _normalize_text_export_settings(settings):
     src["text_height"] = src.get("text_height", 3.5)
     src["rotation"] = src.get("rotation", 90)
     src["elev_decimals"] = int(src.get("elev_decimals", 3))
+    src["station_decimals"] = int(src.get("station_decimals", 2))
     src["xxpipe_centerline_elev_decimals"] = int(src.get("xxpipe_centerline_elev_decimals", 2))
+    src["xxpipe_station_decimals"] = int(src.get("xxpipe_station_decimals", 2))
     src["y_name"] = src.get("y_name", 115)
     src["y_slope"] = src.get("y_slope", 105)
     src["y_ip"] = src.get("y_ip", 77)
@@ -1747,6 +1749,44 @@ def _get_xxpipe_centerline_elev_decimals(settings):
     """读取 xx管 管中心线高程专用小数位数。"""
     normalized = _normalize_text_export_settings(settings)
     return int(normalized.get("xxpipe_centerline_elev_decimals", 2))
+
+
+def _get_standard_station_decimals(settings):
+    """读取普通模式导出桩号专用小数位数。"""
+    normalized = _normalize_text_export_settings(settings)
+    return int(normalized.get("station_decimals", 2))
+
+
+def _get_xxpipe_station_decimals(settings):
+    """读取 xx管 里程桩号专用小数位数。"""
+    normalized = _normalize_text_export_settings(settings)
+    return int(normalized.get("xxpipe_station_decimals", 2))
+
+
+def _format_station_with_decimals(station_value, station_prefix="", *, decimals=3):
+    """按指定精度格式化桩号文本。"""
+    try:
+        station_number = float(station_value)
+    except (TypeError, ValueError):
+        station_number = 0.0
+    if station_number < 0:
+        station_number = 0.0
+
+    decimals = max(0, int(decimals))
+    km = int(station_number / 1000)
+    meters = station_number % 1000
+    width = 3 if decimals == 0 else 4 + decimals
+    meters_str = f"{meters:0{width}.{decimals}f}"
+    return f"{station_prefix}{km}+{meters_str}"
+
+
+def _format_xxpipe_station(station_value, station_prefix="", *, decimals=2):
+    """按 xx管 专用精度格式化里程桩号。"""
+    return _format_station_with_decimals(
+        station_value,
+        station_prefix,
+        decimals=decimals,
+    )
 
 
 def _get_xxpipe_profile_row_defs():
@@ -2075,7 +2115,7 @@ def _format_xxpipe_pipe_material_text(row):
         row.get("DN_mm", row.get("dn_mm", row.get("dn", row.get("D", 1500)))),
         1500,
     )
-    return f"{material} DN {dn_mm}"
+    return f"{material} DN{dn_mm}"
 
 
 def _build_profile_ip_base_text(node):
@@ -2114,7 +2154,7 @@ def _iter_profile_ip_nodes(nodes):
     return result
 
 
-def _build_ip_related_row_records(nodes, station_prefix, station_resolver=None):
+def _build_ip_related_row_records(nodes, station_prefix, station_resolver=None, *, station_decimals=3):
     """构建 BD/BE/BF/BJ/BK/BL 六类文本记录。
 
     返回: {row_id: [{"x": float, "text": str, "node": node}, ...], ...}
@@ -2141,14 +2181,21 @@ def _build_ip_related_row_records(nodes, station_prefix, station_resolver=None):
         station_bc = float(getattr(node, "station_BC", station_mc) or 0.0)
         station_ec = float(getattr(node, "station_EC", station_mc) or station_mc)
 
-        try:
-            station_before = ProjectSettings.format_station(station_bc, station_prefix)
-            station_center = ProjectSettings.format_station(station_mc, station_prefix)
-            station_after = ProjectSettings.format_station(station_ec, station_prefix)
-        except Exception:
-            station_before = f"{station_prefix}{station_bc:.3f}"
-            station_center = f"{station_prefix}{station_mc:.3f}"
-            station_after = f"{station_prefix}{station_ec:.3f}"
+        station_before = _format_station_with_decimals(
+            station_bc,
+            station_prefix,
+            decimals=station_decimals,
+        )
+        station_center = _format_station_with_decimals(
+            station_mc,
+            station_prefix,
+            decimals=station_decimals,
+        )
+        station_after = _format_station_with_decimals(
+            station_ec,
+            station_prefix,
+            decimals=station_decimals,
+        )
 
         row_payloads = [
             ("ip_name", station_mc, center_text),
@@ -2900,9 +2947,13 @@ def _format_ip_table_name(node, station_prefix):
     return f"{station_prefix}IP{getattr(node, 'ip_number', 0)}"
 
 
-def _format_ip_table_station(value, station_prefix):
+def _format_ip_table_station(value, station_prefix, *, station_decimals=2):
     """格式化桩号文本。"""
-    return ProjectSettings.format_station(_ip_table_safe_float(value), station_prefix)
+    return _format_station_with_decimals(
+        _ip_table_safe_float(value),
+        station_prefix,
+        decimals=station_decimals,
+    )
 
 
 def _format_ip_table_optional_number_text(value, digits=3):
@@ -2921,15 +2972,28 @@ def _format_ip_table_optional_number_excel(value, digits=3):
     return round(number, digits)
 
 
-def _build_ip_table_row(node, station_prefix, *, excel_mode=False):
+def _build_ip_table_row(node, station_prefix, settings=None, *, excel_mode=False):
     """按共享列定义构造一行 IP 表数据。"""
+    station_decimals = _get_standard_station_decimals(settings)
     text_values = {
         "ip_name": _format_ip_table_name(node, station_prefix),
         "x": f"{_ip_table_safe_float(getattr(node, 'x', 0.0)):.6f}",
         "y": f"{_ip_table_safe_float(getattr(node, 'y', 0.0)):.6f}",
-        "station_bc": _format_ip_table_station(getattr(node, "station_BC", 0.0), station_prefix),
-        "station_mc": _format_ip_table_station(getattr(node, "station_MC", 0.0), station_prefix),
-        "station_ec": _format_ip_table_station(getattr(node, "station_EC", 0.0), station_prefix),
+        "station_bc": _format_ip_table_station(
+            getattr(node, "station_BC", 0.0),
+            station_prefix,
+            station_decimals=station_decimals,
+        ),
+        "station_mc": _format_ip_table_station(
+            getattr(node, "station_MC", 0.0),
+            station_prefix,
+            station_decimals=station_decimals,
+        ),
+        "station_ec": _format_ip_table_station(
+            getattr(node, "station_EC", 0.0),
+            station_prefix,
+            station_decimals=station_decimals,
+        ),
         "turn_angle": f"{_ip_table_safe_float(getattr(node, 'turn_angle', 0.0)):.3f}",
         "turn_radius": f"{_ip_table_safe_float(getattr(node, 'turn_radius', 0.0)):.3f}",
         "tangent_length": f"{_ip_table_safe_float(getattr(node, 'tangent_length', 0.0)):.3f}",
@@ -2975,7 +3039,7 @@ def _build_ip_table_fallback_row(node):
     ]
 
 
-def _compute_ip_preview_data(nodes, station_prefix):
+def _compute_ip_preview_data(nodes, station_prefix, settings=None):
     """从节点列表计算IP坐标及弯道参数表预览数据。
     返回 (preview_data, real_nodes)。"""
     real_nodes = [
@@ -2987,13 +3051,13 @@ def _compute_ip_preview_data(nodes, station_prefix):
     preview_data = []
     for node in real_nodes:
         try:
-            preview_data.append(_build_ip_table_row(node, station_prefix))
+            preview_data.append(_build_ip_table_row(node, station_prefix, settings))
         except Exception:
             preview_data.append(_build_ip_table_fallback_row(node))
     return preview_data, real_nodes
 
 
-def _write_ip_table_excel_sheet(ws, real_nodes, station_prefix):
+def _write_ip_table_excel_sheet(ws, real_nodes, station_prefix, settings=None):
     """按共享列定义写入 IP 表 Excel 内容。"""
     from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
@@ -3037,7 +3101,12 @@ def _write_ip_table_excel_sheet(ws, real_nodes, station_prefix):
             cell.fill = header_fill
 
     for row_idx, node in enumerate(real_nodes, start=3):
-        row_values = _build_ip_table_row(node, station_prefix, excel_mode=True)
+        row_values = _build_ip_table_row(
+            node,
+            station_prefix,
+            settings,
+            excel_mode=True,
+        )
         for col_idx, col_def in enumerate(_IP_TABLE_COLUMN_DEFS, start=1):
             cell = ws.cell(row=row_idx, column=col_idx, value=row_values[col_idx - 1])
             number_format = col_def.get("excel_number_format")
@@ -4643,9 +4712,9 @@ def _is_xxpipe_named_boundary_profile_node(node):
     return _in_out_val(getattr(node, "in_out", None)) in ("进", "出")
 
 
-def _collect_xxpipe_skip_vertical_line_mcs(profile_text_nodes):
-    """收集需要跳过竖线的普通节点桩号。"""
-    skip_mcs = []
+def _collect_xxpipe_lower_half_vertical_line_mcs(profile_text_nodes):
+    """收集需要改画下半段竖线的普通节点桩号。"""
+    partial_mcs = []
     nodes = list(profile_text_nodes or [])
 
     def _add(mc):
@@ -4655,9 +4724,9 @@ def _collect_xxpipe_skip_vertical_line_mcs(profile_text_nodes):
             return
         if not math.isfinite(value):
             return
-        if any(abs(value - existing) <= 1e-9 for existing in skip_mcs):
+        if any(abs(value - existing) <= 1e-9 for existing in partial_mcs):
             return
-        skip_mcs.append(value)
+        partial_mcs.append(value)
 
     for idx, node in enumerate(nodes):
         if idx == 0 or idx == len(nodes) - 1:
@@ -4681,7 +4750,7 @@ def _collect_xxpipe_skip_vertical_line_mcs(profile_text_nodes):
         ):
             _add(_profile_station_value(node))
 
-    return sorted(skip_mcs)
+    return sorted(partial_mcs)
 
 
 def _merge_pressurized_param_defaults(group_items, cached_rows, default_material="球墨铸铁管"):
@@ -7129,6 +7198,7 @@ def _draw_xxpipe_profile_on_msp(
     text_height = settings["text_height"]
     rotation = settings["rotation"]
     elev_decimals = _get_xxpipe_centerline_elev_decimals(settings)
+    station_decimals = _get_xxpipe_station_decimals(settings)
     scale_x = settings.get("scale_x", 1)
     scale_y = settings.get("scale_y", 1)
     first_col_x_offset = text_height + 1.3
@@ -7166,22 +7236,23 @@ def _draw_xxpipe_profile_on_msp(
 
     top_merge_bottom = row_layout["building_name"]["bottom"]
     bottom_merge_top = row_layout["pipe_material"]["top"]
+    lower_half_top = row_layout["ip_name"]["top"]
     full_height_boundary_mcs = {
         round(float(mc), 9)
         for mc in _collect_xxpipe_full_height_boundary_mcs(xxpipe_profile_data)
     }
-    skip_vertical_mcs = {
+    lower_half_vertical_mcs = {
         round(float(mc), 9)
-        for mc in _collect_xxpipe_skip_vertical_line_mcs(profile_text_nodes)
+        for mc in _collect_xxpipe_lower_half_vertical_line_mcs(profile_text_nodes)
     }
 
     for node in profile_text_nodes:
         station_mc = _profile_station_value(node)
         station_key = round(station_mc, 9)
-        if station_key in skip_vertical_mcs:
-            continue
         if station_key in full_height_boundary_mcs or top_merge_bottom <= bottom_merge_top:
             y0, y1 = 0.0, line_height
+        elif station_key in lower_half_vertical_mcs:
+            y0, y1 = 0.0, lower_half_top
         else:
             y0, y1 = bottom_merge_top, top_merge_bottom
         msp.add_line((sx(station_mc), y0), (sx(station_mc), y1), dxfattribs={"layer": layer_grid})
@@ -7230,10 +7301,11 @@ def _draw_xxpipe_profile_on_msp(
             for idx, node in enumerate(profile_text_nodes):
                 station_mc = _profile_station_value(node)
                 text_x = sx(station_mc) + first_col_x_offset if idx == 0 else sx(station_mc) - 1
-                try:
-                    text = ProjectSettings.format_station(station_mc, station_prefix)
-                except Exception:
-                    text = f"{station_prefix}{station_mc:.3f}"
+                text = _format_xxpipe_station(
+                    station_mc,
+                    station_prefix,
+                    decimals=station_decimals,
+                )
                 msp.add_text(text, dxfattribs=text_attr_rot).set_placement((text_x, y_pos))
             continue
 
@@ -7310,6 +7382,7 @@ def _draw_profile_on_msp(
     text_height = settings["text_height"]
     rotation = settings["rotation"]
     elev_decimals = int(settings.get("elev_decimals", 3))
+    station_decimals = _get_standard_station_decimals(settings)
     scale_x = settings.get("scale_x", 1)
     scale_y = settings.get("scale_y", 1)
     enabled_row_ids, row_layout, _total_height, line_height, h_line_y_values = _build_profile_row_layout(settings)
@@ -7417,7 +7490,11 @@ def _draw_profile_on_msp(
     # ======== 6. 各行文本 ========
     profile_text_nodes = _build_profile_text_nodes(nodes)
     slope_segments = _build_profile_slope_segments(nodes, profile_text_nodes=profile_text_nodes)
-    ip_records = _build_ip_related_row_records(nodes, station_prefix)
+    ip_records = _build_ip_related_row_records(
+        nodes,
+        station_prefix,
+        station_decimals=station_decimals,
+    )
     text_attr_rot = {"layer": layer_text, "height": text_height, "rotation": rotation, "width": 0.7, "style": "Standard"}
     text_attr_no_rot = {"layer": layer_text, "height": text_height, "width": 0.7, "style": "Standard"}
 
@@ -7446,10 +7523,11 @@ def _draw_profile_on_msp(
                 elif rid == "water_elev":
                     text = fmt_elev(node.water_level)
                 else:
-                    try:
-                        text = ProjectSettings.format_station(station_mc, station_prefix)
-                    except Exception:
-                        text = f"{station_prefix}{station_mc:.3f}"
+                    text = _format_station_with_decimals(
+                        station_mc,
+                        station_prefix,
+                        decimals=station_decimals,
+                    )
                 msp.add_text(text, dxfattribs=text_attr_rot).set_placement((text_x, y_pos))
             continue
 
@@ -7645,6 +7723,7 @@ def _export_xxpipe_longitudinal_txt_to_path(
     text_height = settings["text_height"]
     rotation = settings["rotation"]
     elev_decimals = _get_xxpipe_centerline_elev_decimals(settings)
+    station_decimals = _get_xxpipe_station_decimals(settings)
     scale_x = settings.get("scale_x", 1)
     scale_y = settings.get("scale_y", 1)
     first_col_x_offset = text_height + 1.3
@@ -7687,21 +7766,22 @@ def _export_xxpipe_longitudinal_txt_to_path(
 
     top_merge_bottom = row_layout["building_name"]["bottom"]
     bottom_merge_top = row_layout["pipe_material"]["top"]
+    lower_half_top = row_layout["ip_name"]["top"]
     full_height_boundary_mcs = {
         round(float(mc), 9)
         for mc in _collect_xxpipe_full_height_boundary_mcs(xxpipe_profile_data)
     }
-    skip_vertical_mcs = {
+    lower_half_vertical_mcs = {
         round(float(mc), 9)
-        for mc in _collect_xxpipe_skip_vertical_line_mcs(profile_text_nodes)
+        for mc in _collect_xxpipe_lower_half_vertical_line_mcs(profile_text_nodes)
     }
     for node in profile_text_nodes:
         station_mc = _profile_station_value(node)
         station_key = round(station_mc, 9)
-        if station_key in skip_vertical_mcs:
-            continue
         if station_key in full_height_boundary_mcs or top_merge_bottom <= bottom_merge_top:
             y0, y1 = 0.0, line_height
+        elif station_key in lower_half_vertical_mcs:
+            y0, y1 = 0.0, lower_half_top
         else:
             y0, y1 = bottom_merge_top, top_merge_bottom
         lines.append(f"pl {fmt(sx(station_mc))},{fmt(y0)} {fmt(sx(station_mc))},{fmt(y1)} ")
@@ -7745,10 +7825,11 @@ def _export_xxpipe_longitudinal_txt_to_path(
             for idx, node in enumerate(profile_text_nodes):
                 station_mc = _profile_station_value(node)
                 text_x = sx(station_mc) + first_col_x_offset if idx == 0 else sx(station_mc)
-                try:
-                    text = ProjectSettings.format_station(station_mc, station_prefix)
-                except Exception:
-                    text = f"{station_prefix}{station_mc:.3f}"
+                text = _format_xxpipe_station(
+                    station_mc,
+                    station_prefix,
+                    decimals=station_decimals,
+                )
                 lines.append(f"-text {fmt(text_x)},{fmt(y_pos)} {s_height} {s_rotation} {text} ")
             lines.append("")
             continue
@@ -7803,6 +7884,7 @@ def _export_longitudinal_txt_to_path(
     text_height = settings["text_height"]
     rotation = settings["rotation"]
     elev_decimals = int(settings.get("elev_decimals", 3))
+    station_decimals = _get_standard_station_decimals(settings)
     scale_x = settings.get("scale_x", 1)
     scale_y = settings.get("scale_y", 1)
     enabled_row_ids, row_layout, _total_height, line_height, h_line_y_values = _build_profile_row_layout(settings)
@@ -7917,7 +7999,11 @@ def _export_longitudinal_txt_to_path(
 
         # ======== 5. ???? ========
         profile_text_nodes = _build_profile_text_nodes(nodes)
-        ip_records = _build_ip_related_row_records(nodes, station_prefix)
+        ip_records = _build_ip_related_row_records(
+            nodes,
+            station_prefix,
+            station_decimals=station_decimals,
+        )
 
         name_mc_pairs = []
         for node in nodes:
@@ -7955,7 +8041,11 @@ def _export_longitudinal_txt_to_path(
                     elif rid == "water_elev":
                         text = fmt_elev(node.water_level)
                     else:
-                        text = ProjectSettings.format_station(station_mc, station_prefix)
+                        text = _format_station_with_decimals(
+                            station_mc,
+                            station_prefix,
+                            decimals=station_decimals,
+                        )
                     lines.append(f"-text {fmt(text_x)},{fmt(y_pos)} {s_height} {s_rotation} {text} ")
                 lines.append("")
                 continue
@@ -8022,6 +8112,54 @@ def _export_longitudinal_txt_to_path(
 # 2. ??bzzh2????
 # ================================================================
 
+def _collect_bzzh2_rows(nodes, station_prefix, settings=None):
+    """收集 bzzh2 导出所需的桩号与说明文本。"""
+    station_decimals = _get_standard_station_decimals(settings)
+    rows = []
+    for node in nodes:
+        try:
+            in_out = getattr(node, 'in_out', None)
+            if _in_out_val(in_out) not in ("进", "出"):
+                continue
+            if getattr(node, 'is_transition', False):
+                continue
+
+            station_mc = getattr(node, 'station_MC', 0.0)
+            if not isinstance(station_mc, (int, float)):
+                station_mc = 0.0
+            station_str = _format_station_with_decimals(
+                station_mc,
+                station_prefix,
+                decimals=station_decimals,
+            )
+
+            struct_name = ""
+            struct_str = _struct_val(node.structure_type)
+            if struct_str:
+                if "隧洞" in struct_str:
+                    struct_name = "隧洞"
+                elif "倒虹吸" in struct_str:
+                    struct_name = "倒虹吸"
+                elif "有压管道" in struct_str:
+                    struct_name = "有压管道"
+                elif "渡槽" in struct_str:
+                    struct_name = "渡槽"
+                elif "暗涵" in struct_str:
+                    struct_name = "暗涵"
+                else:
+                    struct_name = struct_str
+
+            in_out_str = "进" if _in_out_val(in_out) == "进" else "出"
+            name = getattr(node, 'name', '') or ''
+            desc = f"{name}{struct_name}{in_out_str}"
+            rows.append((station_str, desc))
+        except Exception as node_err:
+            import traceback; traceback.print_exc()
+            print(f"[bzzh2] 跳过节点（处理异常）: {node_err}")
+            continue
+    return rows
+
+
 def extract_bzzh2_data(panel):
     """bzzh2命令提取工具
 
@@ -8043,44 +8181,11 @@ def extract_bzzh2_data(panel):
     except Exception:
         station_prefix = ""
 
-    bzzh2_rows = []
-    for node in nodes:
-        try:
-            in_out = getattr(node, 'in_out', None)
-            if _in_out_val(in_out) not in ("进", "出"):
-                continue
-            if getattr(node, 'is_transition', False):
-                continue
-
-            station_mc = getattr(node, 'station_MC', 0.0)
-            if not isinstance(station_mc, (int, float)):
-                station_mc = 0.0
-            station_str = ProjectSettings.format_station(station_mc, station_prefix)
-
-            struct_name = ""
-            struct_str = _struct_val(node.structure_type)
-            if struct_str:
-                if "隧洞" in struct_str:
-                    struct_name = "隧洞"
-                elif "倒虹吸" in struct_str:
-                    struct_name = "倒虹吸"
-                elif "有压管道" in struct_str:
-                    struct_name = "有压管道"
-                elif "渡槽" in struct_str:
-                    struct_name = "渡槽"
-                elif "暗涵" in struct_str:
-                    struct_name = "暗涵"
-                else:
-                    struct_name = struct_str
-
-            in_out_str = "进" if _in_out_val(in_out) == "进" else "出"
-            name = getattr(node, 'name', '') or ''
-            desc = f"{name}{struct_name}{in_out_str}"
-            bzzh2_rows.append((station_str, desc))
-        except Exception as node_err:
-            import traceback; traceback.print_exc()
-            print(f"[bzzh2] 跳过节点（处理异常）: {node_err}")
-            continue
+    bzzh2_rows = _collect_bzzh2_rows(
+        nodes,
+        station_prefix,
+        getattr(panel, "_text_export_settings", {}),
+    )
 
     if not bzzh2_rows:
         fluent_info(
@@ -8525,7 +8630,12 @@ def export_ip_plan_table(panel):
             station_prefix = proj_settings.get_station_prefix()
         except Exception:
             station_prefix = ""
-        preview_data, real_nodes = _compute_ip_preview_data(nodes, station_prefix)
+        preview_settings = _normalize_text_export_settings(getattr(panel, "_text_export_settings", {}))
+        preview_data, real_nodes = _compute_ip_preview_data(
+            nodes,
+            station_prefix,
+            preview_settings,
+        )
         if not real_nodes:
             fluent_info(panel.window(), "警告", "没有有效的IP点数据可导出")
             return
@@ -8602,7 +8712,7 @@ def export_ip_plan_table(panel):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "IP点上平面图"
-        _write_ip_table_excel_sheet(ws, real_nodes, station_prefix)
+        _write_ip_table_excel_sheet(ws, real_nodes, station_prefix, preview_settings)
 
         wb.save(file_path)
         wb.close()
@@ -9125,7 +9235,12 @@ def export_combined_dxf(panel):
             return
 
         try:
-            ip_preview, ip_nodes = _compute_ip_preview_data(ip_source_nodes, station_prefix)
+            ip_preview_settings = _normalize_text_export_settings(getattr(panel, "_text_export_settings", {}))
+            ip_preview, ip_nodes = _compute_ip_preview_data(
+                ip_source_nodes,
+                station_prefix,
+                ip_preview_settings,
+            )
         except Exception as e:
             import traceback; traceback.print_exc()
             fluent_error(

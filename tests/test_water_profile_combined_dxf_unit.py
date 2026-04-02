@@ -555,7 +555,7 @@ def test_export_combined_dxf_uses_xxpipe_profile_branch_and_current_snapshot(mon
     monkeypatch.setattr(cad_tools, "_draw_profile_on_msp", _fake_draw_profile_on_msp)
     monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
 
-    def _fake_compute_ip_preview_data(nodes, _station_prefix):
+    def _fake_compute_ip_preview_data(nodes, _station_prefix, _settings=None):
         captured["ip_nodes"] = nodes
         return [["IP1"]], nodes
 

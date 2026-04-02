@@ -155,6 +155,7 @@ def _scaled_settings():
         "rotation": 90,
         "elev_decimals": 3,
         "xxpipe_centerline_elev_decimals": 2,
+        "xxpipe_station_decimals": 2,
         "y_line_height": 120,
         "scale_x": 2000,
         "scale_y": 1000,
@@ -253,6 +254,21 @@ def _has_vertical_line_at_x(records, x_value, tol=1e-6):
             continue
         return True
     return False
+
+
+def _get_vertical_line_segments_at_x(records, x_value, tol=1e-6):
+    segments = []
+    for rec in records:
+        x0, y0 = rec["start"]
+        x1, y1 = rec["end"]
+        if abs(x0 - x1) > tol:
+            continue
+        if abs(x0 - x_value) > tol:
+            continue
+        if abs(y0 - y1) <= tol:
+            continue
+        segments.append((min(y0, y1), max(y0, y1)))
+    return segments
 
 
 def _sample_adjacent_special_profile_data(structure_name):
@@ -382,7 +398,10 @@ def test_draw_profile_on_msp_in_xxpipe_mode_uses_centerline_polyline_only(monkey
     assert "管中心线高程（米）" in texts
     assert "管材（管径/米）" in texts
     assert "穿路段定向钻" in texts
-    assert "球墨铸铁管 DN 1200" in texts
+    assert "球墨铸铁管 DN1200" in texts
+    assert "0+000.00" in texts
+    assert "0+050.00" in texts
+    assert "0+100.00" in texts
     assert "95.00" in texts
     assert "95.000" not in texts
 
@@ -407,10 +426,13 @@ def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_
 
     content = out_file.read_text(encoding="utf-8")
     assert "管中心线高程（米）" in content
-    assert "球墨铸铁管 DN 1200" in content
+    assert "球墨铸铁管 DN1200" in content
     assert "穿路段定向钻" in content
     assert "渠底高程" not in content
     assert "设计水位" not in content
+    assert "0+000.00" in content
+    assert "0+050.00" in content
+    assert "0+100.00" in content
     assert "95.00" in content
     assert "95.000" not in content
 
@@ -446,6 +468,29 @@ def test_xxpipe_export_respects_custom_centerline_decimal_precision(local_tmp_pa
     assert "95.000" in content
 
 
+def test_xxpipe_export_respects_custom_station_decimal_precision(local_tmp_path, monkeypatch):
+    nodes, profile_data = _sample_profile_data()
+    out_file = local_tmp_path / "xxpipe_longitudinal_profile_station_three_decimals.txt"
+    settings = {**_scaled_settings(), "xxpipe_station_decimals": 3}
+
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+
+    cad_tools._export_longitudinal_txt_to_path(
+        _Panel(""),
+        nodes,
+        nodes,
+        settings,
+        str(out_file),
+        export_mode="xxpipe",
+        xxpipe_profile_data=profile_data,
+    )
+
+    content = out_file.read_text(encoding="utf-8")
+    assert "0+050.000" in content
+
+
 @pytest.mark.parametrize("structure_name", ["定向钻", "顶管"])
 def test_collect_xxpipe_full_height_boundaries_ignores_outer_adjacent_plain_pipe_nodes(structure_name):
     _nodes, profile_data = _sample_adjacent_special_profile_data(structure_name)
@@ -456,7 +501,7 @@ def test_collect_xxpipe_full_height_boundaries_ignores_outer_adjacent_plain_pipe
 
 
 @pytest.mark.parametrize("structure_name", ["定向钻", "顶管"])
-def test_draw_profile_on_msp_skips_outer_adjacent_plain_pipe_vlines_for_special_segments(
+def test_draw_profile_on_msp_keeps_lower_half_vlines_for_outer_adjacent_plain_pipe_nodes(
     monkeypatch, structure_name
 ):
     ezdxf_stub = SimpleNamespace(
@@ -483,14 +528,22 @@ def test_draw_profile_on_msp_skips_outer_adjacent_plain_pipe_vlines_for_special_
     )
 
     scale_x = _scaled_settings()["scale_x"]
+    _settings, _enabled_ids, row_layout, _total_height, _line_height, _boundaries = cad_tools._build_xxpipe_profile_row_layout(
+        _scaled_settings()
+    )
+    expected_top = row_layout["ip_name"]["top"]
     for mc in (900.0, 1050.0):
-        assert not _has_vertical_line_at_x(msp.line_records, _scaled_m_to_mm(mc, scale_x))
+        segments = _get_vertical_line_segments_at_x(
+            msp.line_records,
+            _scaled_m_to_mm(mc, scale_x),
+        )
+        assert segments == pytest.approx([(0.0, expected_top)])
     for mc in (850.0, 950.0, 1000.0, 1100.0):
         assert _has_vertical_line_at_x(msp.line_records, _scaled_m_to_mm(mc, scale_x))
 
 
 @pytest.mark.parametrize("structure_name", ["定向钻", "顶管"])
-def test_export_longitudinal_txt_skips_outer_adjacent_plain_pipe_vlines_for_special_segments(
+def test_export_longitudinal_txt_keeps_lower_half_vlines_for_outer_adjacent_plain_pipe_nodes(
     local_tmp_path, monkeypatch, structure_name
 ):
     nodes, profile_data = _sample_adjacent_special_profile_data(structure_name)
@@ -512,8 +565,16 @@ def test_export_longitudinal_txt_skips_outer_adjacent_plain_pipe_vlines_for_spec
 
     records = _parse_pl_line_cmds(out_file)
     scale_x = _scaled_settings()["scale_x"]
+    _settings, _enabled_ids, row_layout, _total_height, _line_height, _boundaries = cad_tools._build_xxpipe_profile_row_layout(
+        _scaled_settings()
+    )
+    expected_top = row_layout["ip_name"]["top"]
     for mc in (900.0, 1050.0):
-        assert not _has_vertical_line_at_x(records, _scaled_m_to_mm(mc, scale_x))
+        segments = _get_vertical_line_segments_at_x(
+            records,
+            _scaled_m_to_mm(mc, scale_x),
+        )
+        assert segments == pytest.approx([(0.0, expected_top)])
     for mc in (850.0, 950.0, 1000.0, 1100.0):
         assert _has_vertical_line_at_x(records, _scaled_m_to_mm(mc, scale_x))
 

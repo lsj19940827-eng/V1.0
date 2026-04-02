@@ -85,7 +85,7 @@ def test_build_xxpipe_profile_data_samples_centerline_and_segments():
         (100.0, pytest.approx(90.0)),
     ]
     assert [segment["text"] for segment in data["building_segments"]] == ["穿路段定向钻"]
-    assert [segment["text"] for segment in data["material_segments"]] == ["球墨铸铁管 DN 1200"]
+    assert [segment["text"] for segment in data["material_segments"]] == ["球墨铸铁管 DN1200"]
 
 
 def test_build_xxpipe_profile_data_rejects_unallowed_structure():
@@ -180,7 +180,7 @@ def test_build_xxpipe_profile_data_uses_row_identity_for_multiple_unnamed_segmen
 
     assert [record["identity"] for record in data["centerline_records"]] == ["flow2-row6", "flow2-row7"]
     assert [segment["identity"] for segment in data["material_segments"]] == ["flow2-row6", "flow2-row7"]
-    assert [segment["text"] for segment in data["material_segments"]] == ["钢管 DN 1000", "球墨铸铁管 DN 1200"]
+    assert [segment["text"] for segment in data["material_segments"]] == ["钢管 DN1000", "球墨铸铁管 DN1200"]
 
 
 def test_build_xxpipe_profile_data_merges_continuous_plain_pressure_pipe_material_segments():
@@ -240,7 +240,7 @@ def test_build_xxpipe_profile_data_merges_continuous_plain_pressure_pipe_materia
     ]
     assert data["material_segments"] == [
         {
-            "text": "HDPE管 DN 400",
+            "text": "HDPE管 DN400",
             "identity": "flow2-row6",
             "start_mc": 0.0,
             "end_mc": 100.0,
@@ -340,7 +340,7 @@ def test_build_xxpipe_profile_data_breaks_plain_pipe_material_segments_at_direct
     assert [segment["text"] for segment in data["building_segments"]] == ["穿路段定向钻"]
     assert data["material_segments"] == [
         {
-            "text": "HDPE管 DN 400",
+            "text": "HDPE管 DN400",
             "identity": "flow2-row6",
             "start_mc": 0.0,
             "end_mc": 50.0,
@@ -349,7 +349,7 @@ def test_build_xxpipe_profile_data_breaks_plain_pipe_material_segments_at_direct
             "flow_section_key": "2",
         },
         {
-            "text": "钢管 DN 500",
+            "text": "钢管 DN500",
             "identity": "2::穿路段",
             "start_mc": 100.0,
             "end_mc": 150.0,
@@ -358,7 +358,7 @@ def test_build_xxpipe_profile_data_breaks_plain_pipe_material_segments_at_direct
             "flow_section_key": "2",
         },
         {
-            "text": "HDPE管 DN 400",
+            "text": "HDPE管 DN400",
             "identity": "flow3-row8",
             "start_mc": 200.0,
             "end_mc": 250.0,

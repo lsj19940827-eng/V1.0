@@ -361,6 +361,7 @@ def _default_settings():
         "text_height": 3.5,
         "rotation": 90,
         "elev_decimals": 3,
+        "station_decimals": 2,
         "y_name": 115,
         "y_slope": 105,
         "y_ip": 77,
@@ -791,7 +792,11 @@ def test_bd_be_bf_bj_bk_bl_offsets_match_station_rows_in_dxf_and_txt(local_tmp_p
     }
     settings = _settings_with_enabled_rows(enabled)
     _, layout, _, _, _ = cad_tools._build_profile_row_layout(settings)
-    ip_records = cad_tools._build_ip_related_row_records(nodes, "")
+    ip_records = cad_tools._build_ip_related_row_records(
+        nodes,
+        "",
+        station_decimals=settings["station_decimals"],
+    )
     first_offset = settings["text_height"] + 1.3
     scale_x = settings["scale_x"]
 

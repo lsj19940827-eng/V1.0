@@ -148,7 +148,9 @@ def _scaled_settings():
         "text_height": 3.5,
         "rotation": 90,
         "elev_decimals": 3,
+        "station_decimals": 2,
         "xxpipe_centerline_elev_decimals": 2,
+        "xxpipe_station_decimals": 2,
         "y_name": 115,
         "y_slope": 105,
         "y_ip": 77,
@@ -271,6 +273,7 @@ def test_draw_profile_on_msp_uses_mm_per_ratio_scale(monkeypatch):
 
     _, layout, _, line_height, _ = cad_tools._build_profile_row_layout(settings)
     short_line_height = layout["slope"]["bottom"]
+    station_y = layout["station"]["text_y"]
 
     assert width == pytest.approx(140.0)
     assert _has_line(msp.line_records, (50.0, 0.0), (50.0, short_line_height))
@@ -289,6 +292,8 @@ def test_draw_profile_on_msp_uses_mm_per_ratio_scale(monkeypatch):
 
     assert _texts_at(msp.text_records, 49.0, 1.0) == ["407.898"]
     assert _texts_at(msp.text_records, 99.0, 1.0) == ["405.123"]
+    assert _texts_at(msp.text_records, 49.0, station_y) == ["0+100.00"]
+    assert _texts_at(msp.text_records, 99.0, station_y) == ["0+200.00"]
 
 
 def test_export_longitudinal_txt_uses_same_mm_per_ratio_scale(local_tmp_path, monkeypatch):
@@ -323,10 +328,61 @@ def test_export_longitudinal_txt_uses_same_mm_per_ratio_scale(local_tmp_path, mo
 
     assert key(50.0, 1.0) == ["407.898"]
     assert key(100.0, 1.0) == ["405.123"]
+    assert any(rec["text"] == "0+100.00" for rec in text_rows)
+    assert any(rec["text"] == "0+200.00" for rec in text_rows)
     assert _has_line(line_rows, (50.0, 0.0), (50.0, short_line_height))
     assert _has_line(line_rows, (100.0, 0.0), (100.0, line_height))
     assert (50.0, 407.898) in poly_vertices
     assert (100.0, 405.123) in poly_vertices
+
+
+def test_draw_profile_on_msp_respects_custom_station_decimal_precision(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    settings = {**_scaled_settings(), "station_decimals": 3}
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        _sample_nodes(),
+        _sample_nodes(),
+        settings,
+        station_prefix="",
+    )
+
+    texts = [record["text"] for record in msp.text_records]
+    assert "0+100.000" in texts
+    assert "0+200.000" in texts
+
+
+def test_export_longitudinal_txt_respects_custom_station_decimal_precision(local_tmp_path, monkeypatch):
+    settings = {**_scaled_settings(), "station_decimals": 3}
+    nodes = _sample_nodes()
+    out_file = local_tmp_path / "longitudinal_profile_station_scaled.txt"
+
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+
+    cad_tools._export_longitudinal_txt_to_path(
+        _Panel(""),
+        nodes,
+        nodes,
+        settings,
+        str(out_file),
+    )
+
+    content = out_file.read_text(encoding="utf-8")
+    assert "0+100.000" in content
+    assert "0+200.000" in content
 
 
 def test_setup_profile_dxf_document_sets_mm_headers():

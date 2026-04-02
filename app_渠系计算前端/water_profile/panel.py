@@ -946,7 +946,9 @@ class WaterProfilePanel(QWidget):
         self._text_export_settings = {
             'y_bottom': 1, 'y_top': 31, 'y_water': 16,
             'text_height': 3.5, 'rotation': 90, 'elev_decimals': 3,
+            'station_decimals': 2,
             'xxpipe_centerline_elev_decimals': 2,
+            'xxpipe_station_decimals': 2,
             'y_name': 115, 'y_slope': 105, 'y_ip': 77,
             'y_station': 47, 'y_line_height': 120,
             'scale_x': 2000, 'scale_y': 1000,

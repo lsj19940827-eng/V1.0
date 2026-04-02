@@ -97,20 +97,33 @@ def test_ip_table_preview_headers_include_design_water_level():
 def test_compute_ip_preview_data_appends_design_water_level_after_bottom_elevation():
     node = _make_node()
 
-    preview_data, real_nodes = cad_tools._compute_ip_preview_data([node], "")
+    preview_data, real_nodes = cad_tools._compute_ip_preview_data(
+        [node],
+        "",
+        {"station_decimals": 2},
+    )
 
     assert real_nodes == [node]
     assert len(preview_data[0]) == 12
+    assert preview_data[0][3:6] == ["0+000.00", "0+039.50", "0+039.50"]
     assert preview_data[0][-2:] == ["408.500", "408.900"]
 
 
 def test_compute_ip_preview_data_uses_dash_when_design_water_level_is_zero():
     node = _make_node(water_level=0.0)
 
-    preview_data, _ = cad_tools._compute_ip_preview_data([node], "")
+    preview_data, _ = cad_tools._compute_ip_preview_data([node], "", {"station_decimals": 2})
 
     assert len(preview_data[0]) == 12
     assert preview_data[0][-1] == "-"
+
+
+def test_compute_ip_preview_data_respects_custom_station_decimals():
+    node = _make_node()
+
+    preview_data, _ = cad_tools._compute_ip_preview_data([node], "", {"station_decimals": 3})
+
+    assert preview_data[0][3:6] == ["0+000.000", "0+039.497", "0+039.497"]
 
 
 def test_draw_ip_table_on_msp_writes_design_water_level_header_and_value(monkeypatch):
@@ -121,12 +134,13 @@ def test_draw_ip_table_on_msp_writes_design_water_level_header_and_value(monkeyp
     )
     monkeypatch.setitem(sys.modules, "ezdxf", fake_ezdxf)
     msp = _FakeModelspace()
-    preview_data, _ = cad_tools._compute_ip_preview_data([_make_node()], "")
+    preview_data, _ = cad_tools._compute_ip_preview_data([_make_node()], "", {"station_decimals": 2})
 
     cad_tools._draw_ip_table_on_msp(msp, 0.0, 0.0, preview_data)
 
     texts = [text for text, _attrs in msp.texts]
     assert "里程(千米+米)" in texts
+    assert "0+039.50" in texts
     assert "设计水位(m)" in texts
     assert "408.900" in texts
 
@@ -135,10 +149,22 @@ def test_write_ip_table_excel_sheet_keeps_design_water_level_column():
     wb = openpyxl.Workbook()
     ws = wb.active
 
-    cad_tools._write_ip_table_excel_sheet(ws, [_make_node()], "")
+    cad_tools._write_ip_table_excel_sheet(ws, [_make_node()], "", {"station_decimals": 2})
 
     assert ws.max_column == 12
     assert ws["E2"].value == "里程(千米+米)"
+    assert ws["D3"].value == "0+000.00"
+    assert ws["E3"].value == "0+039.50"
+    assert ws["F3"].value == "0+039.50"
     assert ws["L1"].value == "设计水位(m)"
     assert ws["L3"].value == 408.9
     assert ws["L3"].number_format == "0.000"
+
+
+def test_write_ip_table_excel_sheet_respects_custom_station_decimals():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+
+    cad_tools._write_ip_table_excel_sheet(ws, [_make_node()], "", {"station_decimals": 3})
+
+    assert ws["E3"].value == "0+039.497"

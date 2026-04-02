@@ -158,6 +158,7 @@ def test_dialog_defaults_show_profile_ratio_denominators():
     _get_qapp()
     dlg = cad_tools.TextExportSettingsDialog()
 
+    assert dlg._entries["station_decimals"].text() == "2"
     assert dlg._entries["scale_x"].text() == "2000"
     assert dlg._entries["scale_y"].text() == "1000"
 
@@ -291,7 +292,9 @@ def test_xxpipe_mode_shows_fixed_read_only_five_rows_and_runtime_view():
     assert "置底" not in visible_button_texts
 
     assert dlg._entries["xxpipe_centerline_elev_decimals"].text() == "2"
+    assert dlg._entries["xxpipe_station_decimals"].text() == "2"
     assert "elev_decimals" not in dlg._entries
+    assert "station_decimals" not in dlg._entries
 
     widget = _find_row_widget(dlg, "building_name")
     assert not widget.checkbox.isEnabled()
@@ -317,12 +320,29 @@ def test_xxpipe_mode_confirm_preserves_standard_profile_row_snapshot():
     _flush_events(4)
 
     dlg._entries["xxpipe_centerline_elev_decimals"].setText("3")
+    dlg._entries["xxpipe_station_decimals"].setText("4")
     dlg._on_confirm()
 
     assert dlg.result is not None
     assert dlg.result["profile_row_items"] == expected_profile_row_items
     assert dlg.result["xxpipe_centerline_elev_decimals"] == 3
+    assert dlg.result["xxpipe_station_decimals"] == 4
     assert dlg.result["elev_decimals"] == 3
+
+    dlg.deleteLater()
+
+
+def test_standard_mode_confirm_preserves_station_decimals():
+    _get_qapp()
+    dlg = cad_tools.TextExportSettingsDialog()
+    dlg.show()
+    _flush_events(4)
+
+    dlg._entries["station_decimals"].setText("4")
+    dlg._on_confirm()
+
+    assert dlg.result is not None
+    assert dlg.result["station_decimals"] == 4
 
     dlg.deleteLater()
 

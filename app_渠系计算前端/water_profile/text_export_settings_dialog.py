@@ -586,6 +586,9 @@ def create_text_export_settings_dialog(api_module):
                 "decimal_entry_key": "xxpipe_centerline_elev_decimals",
                 "decimal_entry_label": "管中心线高程小数位数",
                 "decimal_entry_hint": "仅影响“管中心线高程（米）”，仅接受非负整数。",
+                "extra_basic_entries": (
+                    ("xxpipe_station_decimals", "里程桩号小数位数", "仅影响“里程桩号（千米+米）”，仅接受非负整数。"),
+                ),
             }
         return {
             "mode": "standard",
@@ -610,6 +613,9 @@ def create_text_export_settings_dialog(api_module):
             "decimal_entry_key": "elev_decimals",
             "decimal_entry_label": "高程小数位数",
             "decimal_entry_hint": "仅接受非负整数。",
+            "extra_basic_entries": (
+                ("station_decimals", "里程桩号小数位数", "仅影响普通模式导出里的桩号显示，且只接受非负整数。"),
+            ),
         }
     def _info_bar():
         return _api_get(api_module, "InfoBar")
@@ -620,26 +626,35 @@ def create_text_export_settings_dialog(api_module):
     def _show_error(parent, title, content):
         return _api_get(api_module, "fluent_error")(parent, title, content)
 
-    def _basic_entry_keys(mode_spec):
-        return (
-            "text_height",
-            "rotation",
-            mode_spec["decimal_entry_key"],
-            "scale_x",
-            "scale_y",
+    def _basic_entry_specs(mode_spec):
+        specs = [
+            ("text_height", "字高", "用于 AutoCAD 文字字高。"),
+            ("rotation", "旋转角度", "默认沿纵断面竖排显示。"),
+            (
+                mode_spec["decimal_entry_key"],
+                mode_spec["decimal_entry_label"],
+                mode_spec["decimal_entry_hint"],
+            ),
+        ]
+        specs.extend(list(mode_spec.get("extra_basic_entries", ())))
+        specs.extend(
+            [
+                ("scale_x", "X方向比例(1:N)", "如 1:1000，则输入 1000。"),
+                ("scale_y", "Y方向比例(1:N)", "如 1:1000，则输入 1000。"),
+            ]
         )
+        return tuple(specs)
+
+    def _basic_entry_keys(mode_spec):
+        return tuple(item[0] for item in _basic_entry_specs(mode_spec))
 
     def _basic_entry_labels(mode_spec):
-        return {
-            "text_height": "字高",
-            "rotation": "旋转角度",
-            mode_spec["decimal_entry_key"]: mode_spec["decimal_entry_label"],
-            "scale_x": "X方向比例",
-            "scale_y": "Y方向比例",
-        }
+        return {key: label for key, label, _hint in _basic_entry_specs(mode_spec)}
 
     def _is_decimal_entry_key(mode_spec, key):
-        return key == mode_spec["decimal_entry_key"]
+        decimal_keys = {mode_spec["decimal_entry_key"]}
+        decimal_keys.update(entry[0] for entry in mode_spec.get("extra_basic_entries", ()))
+        return key in decimal_keys
     def default_profile_row_items(mode_spec):
         return [
             {"id": rid, "enabled": rid in mode_spec["default_enabled_ids"]}
@@ -1306,18 +1321,8 @@ def create_text_export_settings_dialog(api_module):
             basic_form.setColumnStretch(0, 0)
             basic_form.setColumnStretch(1, 0)
             basic_form.setColumnStretch(2, 1)
-            decimal_key = self._mode_spec["decimal_entry_key"]
-            self._add_entry_row(basic_form, 0, "字高", "text_height", "用于 AutoCAD 文字字高。")
-            self._add_entry_row(basic_form, 1, "旋转角度", "rotation", "默认沿纵断面竖排显示。")
-            self._add_entry_row(
-                basic_form,
-                2,
-                self._mode_spec["decimal_entry_label"],
-                decimal_key,
-                self._mode_spec["decimal_entry_hint"],
-            )
-            self._add_entry_row(basic_form, 3, "X方向比例(1:N)", "scale_x", "如 1:1000，则输入 1000。")
-            self._add_entry_row(basic_form, 4, "Y方向比例(1:N)", "scale_y", "如 1:1000，则输入 1000。")
+            for row, (key, label, hint) in enumerate(_basic_entry_specs(self._mode_spec)):
+                self._add_entry_row(basic_form, row, label, key, hint)
             lay.addLayout(basic_form)
             return section
 
