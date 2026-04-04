@@ -5,13 +5,13 @@
 - `main.py`：桌面程序入口，负责启动主界面。
 - `app_渠系计算前端/`：界面层，负责表格编辑、按钮动作、结果展示和导出。
 - `app_渠系计算前端/water_profile/panel.py`：表3水面线页面主控，负责把节点数据和界面单元格互相同步，并管理顶部“转弯半径”统一应用入口，以及普通模式/xx管 的导出精度默认值。
-- `app_渠系计算前端/water_profile/water_profile_dialogs.py`：有压管道配置窗口，负责普通模式的链卡/分段卡，以及 xx管 整线卡、DXF 导入、严格覆盖校验和窗口返回载荷。
-- `app_渠系计算前端/water_profile/cad_tools.py`：纵断面导出与 xx管 中心线高程采样，负责普通模式与 xx管 的导出桩号格式化、按当前桩号现算中心线高程，并统一处理桩号回退与覆盖报错。
+- `app_渠系计算前端/water_profile/water_profile_dialogs.py`：有压管道配置窗口，负责普通模式的链卡/分段卡，以及 xx管 的整线卡、隧洞分段卡、DXF 导入锚点选择、隧洞参数录入与非隧洞覆盖校验。
+- `app_渠系计算前端/water_profile/cad_tools.py`：纵断面导出与 xx管 中心线高程采样，负责普通模式与 xx管 的导出桩号格式化、mixed route 的隧洞段取底高程、第 5 行断面参数文字，以及统一处理桩号回退与覆盖报错。
 - `app_渠系计算前端/water_profile/formula_dialog.py`：表头说明和双击公式弹窗，负责把计算详情解释给用户看。
 - `推求水面线/core/calculator.py`：整表计算总调度，串起预处理、渐变段、水力计算、累计损失和高程递推。
 - `推求水面线/core/hydraulic_calc.py`：水头损失和水位递推核心，负责沿程、弯道、局部损失及水位更新，并消费窗口回写后的承压覆盖结果。
 - `推求水面线/core/pressure_pipe_calc.py`：有压管道专项公式库，提供 FMB 沿程损失和承压弯头局部损失计算。
-- `推求水面线/managers/pressure_pipe_manager.py`：有压管道结果与纵断面持久化，负责 `pipes` 与 `routes` 两层存储。
+- `推求水面线/managers/pressure_pipe_manager.py`：有压管道结果与纵断面持久化，负责 `pipes` 与 `routes` 两层存储，并兼容保存 mixed route 的 `profile_segments` 和隧洞参数缓存。
 - `推求水面线/models/data_models.py`：节点和项目设置的数据结构定义。
 - `推求水面线/models/enums.py`：结构类型、进出口标记和相关判断规则。
 - `推求水面线/utils/pressure_pipe_extractor.py`：保留命名组提取入口，同时补齐整线路由和连续承压链提取，把 `xx管` 下连续出现的有压类结构、隧洞和子段范围组织起来。
@@ -27,14 +27,14 @@
 - `calculator.py` 调用 `hydraulic_calc.py` 计算水头损失和水位，并在需要时结合渐变段处理。
 - `hydraulic_calc.py` 在 xx管 匿名普通有压管道和连续承压链成员场景下，都会优先识别窗口回写后的覆盖结果，并继续复用 `pressure_pipe_calc.py` 的 FMB 和承压弯头公式。
 - `pressure_pipe_extractor.py` 先给 xx管 有压对象补上 `route_key`、整线范围和子段范围，再同时提取普通有压组与连续承压链，交给 `panel.py` 和 `water_profile_dialogs.py` 使用。
-- `water_profile_dialogs.py` 把整线纵断面按 `route_key` 收集后返回给 `panel.py`；在 xx管 模式下，导入时会直接按导出节点桩号校验覆盖范围。
-- `panel.py` 在计算和导出前调用 `pressure_pipe_longitudinal_utils.py`，先按 `route_key` 找整线纵断面，再按 `segment_start_mc / segment_end_mc` 裁切子段。
-- `panel.py` 计算完成后通过 `pressure_pipe_manager.py` 把整线纵断面写入 `routes`，把子段结果写入 `pipes`。
+- `water_profile_dialogs.py` 把整线纵断面按 `route_key` 收集后返回给 `panel.py`；在 xx管 模式下，导入时会自动对齐到首个非隧洞桩号，并直接按非隧洞导出节点校验覆盖范围；隧洞卡片里的参数会同步写进 `PressurePipeManager`。
+- `panel.py` 在计算和导出前调用 `pressure_pipe_longitudinal_utils.py`，纯整线继续按 `route_key` 找整线纵断面再裁切子段；mixed route 则优先使用 route 级 `profile_segments`，并会先从 `PressurePipeManager` 把隧洞缓存参数补回新提取的分组对象。
+- `panel.py` 计算完成后通过 `pressure_pipe_manager.py` 把整线纵断面写入 `routes`，mixed route 额外把分段结果写入 `routes[route_key].profile_segments`，子段结果继续写入 `pipes`。
 - `panel.py` 与 `formula_dialog.py` 配合，把 `ChannelNode` 上保存的详情展示为双击弹窗和表头说明。
 - `panel.py` 会先按当前渠道级别判断是否属于 xx管 匿名普通有压管道，再决定列38显示值、窗口卡片、结果回写和静默重算口径，避免前后端各用一套规则。
 - `panel.py` 保存 `text_export_settings`，普通模式导出入口、IP 表、合并 DXF 里的 IP 表和 bzzh2 都从这里读取 `station_decimals`；xx管 纵断面继续单独读取 `xxpipe_station_decimals`。
 - `panel.py` 顶部“转弯半径”栏位不再作为隐式全局兜底，只在用户点击“应用”后批量覆盖真实导入行；行内留空或 `0` 的计算语义始终由该行自己决定。
-- `panel.py` 打开有压管道窗口时，会先按渠道级别决定是否进入 xx管 整线模式；纯“有压管道 / 定向钻 / 顶管”整线进入整线卡弹窗，夹带隧洞的整线直接跳过并提示暂不支持。
+- `panel.py` 打开有压管道窗口时，会先按渠道级别决定是否进入 xx管 整线模式；纯承压整线和夹带隧洞的 mixed route 都进入同一入口，其中整线卡负责 DXF，隧洞段改走参数生成。
 - 命名有压管道组由专项模块先算出总损失，再回写到表3对应出口行。
 
 ## 关键设计决定和原因
@@ -53,11 +53,12 @@
 - `calculator.py` 的插入阶段估算现在也优先取相邻明渠/同流量段参考明渠的设计水深，而不是在有压管道自身无水深时直接退回默认 `2.0m`；这样“隧洞 ↔ 有压管道”这类 xx管 场景不会先估出过大的 10m。
 - `panel.py` 在展示渐变段长度详情时，会按当前公式重新刷新公式来源的旧长度；只有手动覆盖或物理压缩得到的更短采用值才继续保留，避免旧项目缓存把过期长度反复带回界面。
 - 隧洞沿程损失继续保留原有“底坡 × 有效长度”口径，不混用承压管道公式。
-- xx管 纵断面改为“整线只存一份、子段按范围裁切”的双层口径：几何来源统一，损失仍按子段独立计算。
+- xx管 纵断面改为“整线 DXF + route 级分段结果”双层口径：普通有压段继续按 DXF 裁切，隧洞段改为参数生成；几何来源统一到 `profile_segments`，损失仍按子段独立计算。
 - xx管 有压管道弹窗现在只保留整线卡，不再在该弹窗里编辑子段 `R / D`；子段参数继续沿用表格或历史缓存，避免把“整线几何导入”和“子段参数编辑”混在同一个入口里。
-- 夹带隧洞的 xx管 整线当前直接拦截，不做半兼容计算，先保证纯承压整线的导入、计算和导出链路稳定。
+- xx管 mixed route 的 DXF 只覆盖非隧洞段；若整线起点是隧洞，则导入时自动以第一段非隧洞桩号作为 DXF 对齐锚点，覆盖校验也只看非隧洞目标。
+- 隧洞参数不落回主表，而是挂在有压管道窗口缓存里；这样不会改动表3原始输入列，又能让 mixed route 的计算、导出和重开编辑共用同一份参数。
 - xx管 图2“管中心线高程（米）”继续只在导出时现算，不回写主表；桩号优先使用 `station_MC`，只有个别节点缺失时才允许按平面累计距离回退。
-- `pressure_pipe_manager.py` 同时保留旧的单段纵断面兼容读取和新的 `routes` 桶写入，避免旧项目打不开。
+- `pressure_pipe_manager.py` 同时保留旧的单段纵断面兼容读取、`routes.longitudinal_nodes`，以及新的 `routes.profile_segments`，避免旧项目打不开。
 - xx管 导出和中心线高程采样继续按子段 identity 分段，但匿名子段优先使用 `pressure_pipe_row_identity`，避免同一流量段多个空名称子段撞键。
 - 普通模式新增 `station_decimals`，默认 2 位；它只作用于导出链路里的桩号文本，不改表3和说明文字，避免把现有非导出显示一起带偏。
 - `ProjectSettings.format_station()` 继续保留原有 3 位小数口径；普通模式和 xx管 都改为在 `cad_tools.py` 里按各自设置单独格式化，这样能把影响范围收在导出入口。

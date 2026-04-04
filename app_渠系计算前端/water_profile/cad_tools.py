@@ -2076,14 +2076,14 @@ def _is_xxpipe_allowed_structure(struct_name):
     text = str(struct_name or "").strip()
     if not text:
         return False
-    return text in {"有压管道", "定向钻", "顶管"}
+    return text in {"有压管道", "定向钻", "顶管"} or ("隧洞" in text)
 
 
 def _is_xxpipe_named_structure(struct_name):
     text = str(struct_name or "").strip()
     if not text:
         return False
-    return text in {"定向钻", "顶管"}
+    return text in {"定向钻", "顶管"} or ("隧洞" in text)
 
 
 def _get_xxpipe_structure_display_name(struct_name):
@@ -2116,6 +2116,125 @@ def _format_xxpipe_pipe_material_text(row):
         1500,
     )
     return f"{material} DN{dn_mm}"
+
+
+def _format_xxpipe_metric_text(value):
+    """将米制数值压缩为适合断面标注的短文本。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(number):
+        return ""
+    return f"{number:.3f}".rstrip("0").rstrip(".")
+
+
+def _extract_xxpipe_tunnel_diameter_m(node, fallback_value=None):
+    """提取隧洞断面直径，统一换算为米。"""
+    params = getattr(node, "section_params", {}) or {}
+    for raw_value in (params.get("D"), params.get("d"), fallback_value):
+        try:
+            number = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(number) or number <= 0:
+            continue
+        return number / 1000.0 if number >= 20 else number
+    return None
+
+
+def _normalize_xxpipe_tunnel_section_type(struct_name, manager_row=None):
+    """统一隧洞断面类型文字。"""
+    candidates = []
+    if isinstance(manager_row, dict):
+        candidates.append(manager_row.get("tunnel_section_type", ""))
+    candidates.append(struct_name)
+    for raw_text in candidates:
+        text = str(raw_text or "").strip()
+        if not text:
+            continue
+        if "圆形" in text:
+            return "圆形隧洞"
+        if "圆拱直墙" in text or "圆弧直墙" in text:
+            return "圆拱直墙型隧洞"
+        if "马蹄形Ⅰ" in text or "马蹄形I" in text:
+            return "马蹄形Ⅰ型隧洞"
+        if "马蹄形Ⅱ" in text or "马蹄形II" in text:
+            return "马蹄形Ⅱ型隧洞"
+    return "隧洞"
+
+
+def _collect_xxpipe_tunnel_section_params(node, manager_row=None):
+    """汇总隧洞断面参数，优先使用缓存配置。"""
+    params = {}
+    node_params = getattr(node, "section_params", {}) or {}
+    if isinstance(node_params, dict):
+        params.update(node_params)
+    if isinstance(manager_row, dict):
+        cfg_params = manager_row.get("tunnel_section_params", {}) or {}
+        if isinstance(cfg_params, dict):
+            params.update(cfg_params)
+    return params
+
+
+def _format_xxpipe_profile_section_text(node, struct_name, manager_row=None):
+    """按结构类型生成 xx管 纵断面第五行文字。"""
+    text = str(struct_name or "").strip()
+    if "隧洞" not in text:
+        row = {
+            "pipe_material": _extract_pressurized_pipe_material(node),
+            "DN_mm": _extract_pressurized_dn_mm(node),
+        }
+        if isinstance(manager_row, dict):
+            if not row["pipe_material"]:
+                row["pipe_material"] = manager_row.get("material_key", "")
+            if row["DN_mm"] is None:
+                row["DN_mm"] = manager_row.get("D")
+        return _format_xxpipe_pipe_material_text(row)
+
+    section_name = _normalize_xxpipe_tunnel_section_type(text, manager_row=manager_row)
+    params = _collect_xxpipe_tunnel_section_params(node, manager_row=manager_row)
+    fallback_diameter = manager_row.get("D") if isinstance(manager_row, dict) else None
+
+    if section_name == "圆形隧洞":
+        diameter_m = _extract_xxpipe_tunnel_diameter_m(node, fallback_diameter)
+        if diameter_m is None:
+            return section_name
+        diameter_text = _format_xxpipe_metric_text(diameter_m)
+        return f"{section_name} D={diameter_text}m" if diameter_text else section_name
+
+    if section_name == "圆拱直墙型隧洞":
+        width_text = _format_xxpipe_metric_text(params.get("B"))
+        height_text = _format_xxpipe_metric_text(params.get("H"))
+        if width_text and height_text:
+            return f"{section_name} B/H={width_text}/{height_text}m"
+        return section_name
+
+    if "马蹄形" in section_name:
+        radius_text = _format_xxpipe_metric_text(params.get("R", params.get("R_circle")))
+        if radius_text:
+            return f"{section_name} r={radius_text}m"
+        return section_name
+
+    return section_name
+
+
+def _resolve_xxpipe_profile_elevation(node, sampled_elevation, manager_row=None):
+    """xx管 第4行默认用轴线高程，隧洞按底高程输出。"""
+    struct_name = _struct_val(getattr(node, "structure_type", None))
+    if "隧洞" not in str(struct_name or "").strip():
+        return sampled_elevation
+    if isinstance(manager_row, dict):
+        source_kind = str(manager_row.get("segment_geometry_source", "") or "").strip()
+        if source_kind == "generated_tunnel":
+            return sampled_elevation
+        if manager_row.get("tunnel_invert_inlet") is not None and manager_row.get("tunnel_slope_i") is not None:
+            return sampled_elevation
+    try:
+        bottom_elevation = float(getattr(node, "bottom_elevation", None))
+    except (TypeError, ValueError):
+        return sampled_elevation
+    return bottom_elevation if math.isfinite(bottom_elevation) else sampled_elevation
 
 
 def _build_profile_ip_base_text(node):
@@ -4483,7 +4602,7 @@ def _build_xxpipe_profile_data(
             f"{getattr(node, 'name', '') or '未命名'}({struct_name or '未知结构'})"
         )
     if invalid_nodes:
-        raise ValueError("xx管模式仅允许有压管道/定向钻/顶管，检测到冲突结构：\n" + "；".join(invalid_nodes))
+        raise ValueError("xx管模式仅允许有压管道/定向钻/顶管/隧洞，检测到冲突结构：\n" + "；".join(invalid_nodes))
 
     station_targets, station_errors = resolve_xxpipe_profile_station_targets(
         raw_visible_nodes,
@@ -4530,11 +4649,13 @@ def _build_xxpipe_profile_data(
                 station_text = f"{station_mc:.3f}"
             missing_axis.append(f"{identity}@{station_text}")
             continue
-        centerline_points.append((station_mc, centerline_elev))
+        manager_row = manager_map.get(identity) or {}
+        profile_elev = _resolve_xxpipe_profile_elevation(node, centerline_elev, manager_row=manager_row)
+        centerline_points.append((station_mc, profile_elev))
         centerline_records.append({
             "identity": identity,
             "station_mc": station_mc,
-            "elevation": centerline_elev,
+            "elevation": profile_elev,
         })
 
     if missing_axis:
@@ -4557,20 +4678,12 @@ def _build_xxpipe_profile_data(
         identity = _make_xxpipe_identity_from_node(node)
         manager_row = manager_map.get(identity, {})
         struct_name = _struct_val(getattr(node, "structure_type", None))
-        row = {
-            "pipe_material": _extract_pressurized_pipe_material(node),
-            "DN_mm": _extract_pressurized_dn_mm(node),
-        }
-        if not row["pipe_material"] and isinstance(manager_row, dict):
-            row["pipe_material"] = manager_row.get("material_key", "")
-        if row["DN_mm"] is None and isinstance(manager_row, dict):
-            row["DN_mm"] = manager_row.get("D")
         material_segments.append({
             "identity": identity,
             "station_mc": _profile_station_value(node),
             "flow_section": getattr(node, "flow_section", ""),
             "structure_name": struct_name,
-            "text": _format_xxpipe_pipe_material_text(row),
+            "text": _format_xxpipe_profile_section_text(node, struct_name, manager_row),
         })
     material_segments = _build_xxpipe_material_segment_records(material_segments)
 

@@ -118,12 +118,13 @@ def _make_node(
     material="球墨铸铁管",
     diameter=1.2,
     row_identity="",
+    bottom_elevation=0.0,
 ):
     return _Node(
         station_MC=float(mc),
         station_BC=float(mc),
         station_EC=float(mc),
-        bottom_elevation=0.0,
+        bottom_elevation=float(bottom_elevation),
         top_elevation=0.0,
         water_level=0.0,
         structure_type=SimpleNamespace(value=structure),
@@ -615,24 +616,114 @@ def test_xxpipe_export_entries_open_dialog_in_xxpipe_mode(monkeypatch, func_name
     assert captured["mode"] == expected_mode
 
 
-def test_build_xxpipe_profile_data_rejects_tunnel_structures():
+def test_build_xxpipe_profile_data_supports_tunnel_structures_with_bottom_elevation_and_section_text():
     nodes = [
-        _make_node(ip_no=1, mc=0.0, structure="隧洞-圆形", in_out="进"),
-        _make_node(ip_no=2, mc=50.0, structure="隧洞-圆形"),
-        _make_node(ip_no=3, mc=100.0, structure="隧洞-圆形", in_out="出"),
+        _make_node(
+            ip_no=1,
+            mc=0.0,
+            structure="隧洞-圆形",
+            name="穿山段",
+            in_out="进",
+            material="隧洞",
+            diameter=2.4,
+            bottom_elevation=98.2,
+        ),
+        _make_node(
+            ip_no=2,
+            mc=50.0,
+            structure="隧洞-圆形",
+            name="穿山段",
+            material="隧洞",
+            diameter=2.4,
+            bottom_elevation=93.7,
+        ),
+        _make_node(
+            ip_no=3,
+            mc=100.0,
+            structure="隧洞-圆形",
+            name="穿山段",
+            in_out="出",
+            material="隧洞",
+            diameter=2.4,
+            bottom_elevation=89.1,
+        ),
     ]
+    data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        {
+            "1::穿山段": [
+                {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
+                {"chainage": 100.0, "elevation": 90.0, "turn_type": "无"},
+            ]
+        },
+        station_prefix="",
+    )
 
-    with pytest.raises(ValueError, match="仅允许有压管道/定向钻/顶管"):
-        cad_tools._build_xxpipe_profile_data(
-            nodes,
-            {
-                "1::穿路段": [
-                    {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
-                    {"chainage": 100.0, "elevation": 90.0, "turn_type": "无"},
-                ]
-            },
-            station_prefix="",
-        )
+    assert [record["elevation"] for record in data["centerline_records"]] == pytest.approx([98.2, 93.7, 89.1])
+    assert [segment["text"] for segment in data["building_segments"]] == ["穿山段隧洞-圆形"]
+    assert [segment["text"] for segment in data["material_segments"]] == ["圆形隧洞 D=2.4m"]
+
+
+def test_format_xxpipe_profile_section_text_supports_arch_and_horseshoe_tunnel_labels():
+    arch_node = _make_node(
+        ip_no=1,
+        mc=0.0,
+        structure="隧洞-圆形",
+        material="隧洞",
+        diameter=0.0,
+    )
+    arch_node.section_params = {}
+    horseshoe_node = _make_node(
+        ip_no=1,
+        mc=0.0,
+        structure="隧洞-圆形",
+        material="隧洞",
+        diameter=0.0,
+    )
+    horseshoe_node.section_params = {}
+
+    arch_text = cad_tools._format_xxpipe_profile_section_text(
+        arch_node,
+        "隧洞-圆形",
+        {
+            "tunnel_section_type": "圆拱直墙型隧洞",
+            "tunnel_section_params": {"B": 3.2, "H": 4.5},
+        },
+    )
+    horseshoe_text = cad_tools._format_xxpipe_profile_section_text(
+        horseshoe_node,
+        "隧洞-圆形",
+        {
+            "tunnel_section_type": "马蹄形Ⅰ型隧洞",
+            "tunnel_section_params": {"R": 1.8},
+        },
+    )
+
+    assert arch_text == "圆拱直墙型隧洞 B/H=3.2/4.5m"
+    assert horseshoe_text == "马蹄形Ⅰ型隧洞 r=1.8m"
+
+
+def test_resolve_xxpipe_profile_elevation_prefers_generated_tunnel_profile_from_manager():
+    node = _make_node(
+        ip_no=1,
+        mc=0.0,
+        structure="隧洞-圆形",
+        material="隧洞",
+        diameter=2.4,
+        bottom_elevation=98.2,
+    )
+
+    sampled = cad_tools._resolve_xxpipe_profile_elevation(
+        node,
+        96.4,
+        manager_row={
+            "segment_geometry_source": "generated_tunnel",
+            "tunnel_invert_inlet": 96.8,
+            "tunnel_slope_i": 0.01,
+        },
+    )
+
+    assert sampled == pytest.approx(96.4)
 
 
 def test_build_xxpipe_profile_data_uses_plan_distance_station_fallback():

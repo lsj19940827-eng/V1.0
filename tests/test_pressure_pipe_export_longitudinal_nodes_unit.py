@@ -393,3 +393,66 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_keeps_route_nodes_for_x
 
     assert list(result) == ["flow1-row1"]
     assert result["flow1-row1"] == route_nodes
+
+
+def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_route_profile_segments():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    group = SimpleNamespace(
+        storage_key="flow2-mixed-tunnel",
+        route_key="flow2-route1",
+        route_display_name="流量段2 整线1",
+        display_name="穿山段隧洞",
+        name="穿山段",
+        identity="flow2-mixed-tunnel",
+        flow_section="2",
+        segment_start_mc=0.0,
+        segment_end_mc=20.0,
+    )
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: None,
+        to_dict=lambda: {
+            "routes": {
+                "flow2-route1": {
+                    "display_name": "流量段2 整线1",
+                    "profile_segments": [
+                        {
+                            "segment_identity": "flow2-mixed-tunnel",
+                            "source_kind": "generated_tunnel",
+                            "start_mc": 0.0,
+                            "end_mc": 20.0,
+                            "longitudinal_nodes": [
+                                {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+                                {"chainage": 20.0, "elevation": 419.8, "turn_type": "NONE"},
+                            ],
+                        },
+                        {
+                            "segment_identity": "flow2-row6",
+                            "source_kind": "non_tunnel_dxf",
+                            "start_mc": 20.0,
+                            "end_mc": 80.0,
+                            "longitudinal_nodes": [
+                                {"chainage": 20.0, "elevation": 418.0, "turn_type": "NONE"},
+                                {"chainage": 80.0, "elevation": 412.0, "turn_type": "NONE"},
+                            ],
+                        },
+                    ],
+                }
+            }
+        },
+    )
+    panel._build_settings = lambda: object()
+    panel._build_nodes_from_table = lambda: ["stub-node"]
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [group]
+
+    result = WaterProfilePanel.get_pressure_pipe_longitudinal_nodes_for_export(
+        panel,
+        rows=[{"name": "穿山段", "flow_section": "2", "identity": "flow2-mixed-tunnel"}],
+    )
+
+    assert list(result) == ["flow2-mixed-tunnel"]
+    assert result["flow2-mixed-tunnel"] == [
+        {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+        {"chainage": 20.0, "elevation": 419.8, "turn_type": "NONE"},
+    ]

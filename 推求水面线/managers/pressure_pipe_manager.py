@@ -38,8 +38,15 @@ class PressurePipeConfig:
     
     # 纵断面变坡点节点（从DXF导入，可选）
     longitudinal_nodes: List[Dict[str, Any]] = None
+    profile_segments: List[Dict[str, Any]] = None      # 整线纵断面分段（混合整线模式）
     route_key: str = ""                        # 所属整线键
     route_display_name: str = ""               # 整线展示名称
+    segment_geometry_source: str = ""          # 子段几何来源
+    tunnel_invert_inlet: Optional[float] = None  # 隧洞进口底高
+    tunnel_slope_i: Optional[float] = None     # 隧洞坡降 i
+    tunnel_invert_outlet_check: Optional[float] = None  # 隧洞出口底高校核值
+    tunnel_section_type: str = ""              # 隧洞断面类型
+    tunnel_section_params: Dict[str, Any] = None  # 隧洞断面参数
     turn_n: float = 0.0                       # n 倍数
     turn_R: float = 0.0                       # 平面转弯半径 R(m)
     force_override: bool = False              # 是否强制覆盖表1值
@@ -59,6 +66,10 @@ class PressurePipeConfig:
             self.ip_points = []
         if self.longitudinal_nodes is None:
             self.longitudinal_nodes = []
+        if self.profile_segments is None:
+            self.profile_segments = []
+        if self.tunnel_section_params is None:
+            self.tunnel_section_params = {}
 
 
 class PressurePipeManager:
@@ -179,12 +190,16 @@ class PressurePipeManager:
         route_key = data.get("route_key", "")
         route_display_name = data.get("route_display_name", "")
         longitudinal_nodes = data.get("longitudinal_nodes", [])
+        profile_segments = data.get("profile_segments", [])
         if (not longitudinal_nodes) and route_key:
             route_data = self._config.get("routes", {}).get(route_key, {})
             if isinstance(route_data, dict):
                 route_longitudinal_nodes = route_data.get("longitudinal_nodes", [])
                 if route_longitudinal_nodes:
                     longitudinal_nodes = route_longitudinal_nodes
+                route_profile_segments = route_data.get("profile_segments", [])
+                if not profile_segments and route_profile_segments:
+                    profile_segments = route_profile_segments
                 if not route_display_name:
                     route_display_name = route_data.get("display_name", "")
         return PressurePipeConfig(
@@ -203,8 +218,15 @@ class PressurePipeManager:
             ip_points=data.get("ip_points", []),
             plan_total_length=data.get("plan_total_length", 0.0),
             longitudinal_nodes=longitudinal_nodes,
+            profile_segments=profile_segments,
             route_key=route_key,
             route_display_name=route_display_name,
+            segment_geometry_source=data.get("segment_geometry_source", ""),
+            tunnel_invert_inlet=data.get("tunnel_invert_inlet"),
+            tunnel_slope_i=data.get("tunnel_slope_i"),
+            tunnel_invert_outlet_check=data.get("tunnel_invert_outlet_check"),
+            tunnel_section_type=data.get("tunnel_section_type", ""),
+            tunnel_section_params=data.get("tunnel_section_params", {}),
             turn_n=data.get("turn_n", 0.0),
             turn_R=data.get("turn_R", 0.0),
             force_override=bool(data.get("force_override", False)),
@@ -234,14 +256,19 @@ class PressurePipeManager:
         route_key = str(config.route_key or "").strip()
         route_display_name = str(config.route_display_name or "").strip()
         long_nodes_payload = list(config.longitudinal_nodes or [])
+        profile_segments_payload = list(config.profile_segments or [])
         if route_key:
             route_bucket = self._config["routes"].setdefault(route_key, {})
             route_bucket["display_name"] = route_display_name or route_bucket.get("display_name", "")
             if long_nodes_payload:
                 route_bucket["longitudinal_nodes"] = long_nodes_payload
+            if profile_segments_payload:
+                route_bucket["profile_segments"] = profile_segments_payload
             pipe_longitudinal_nodes = []
+            pipe_profile_segments = []
         else:
             pipe_longitudinal_nodes = long_nodes_payload
+            pipe_profile_segments = profile_segments_payload
         
         self._config["pipes"][pipe_name] = {
             "name": config.name,
@@ -259,8 +286,15 @@ class PressurePipeManager:
             "ip_points": config.ip_points,
             "plan_total_length": config.plan_total_length,
             "longitudinal_nodes": pipe_longitudinal_nodes,
+            "profile_segments": pipe_profile_segments,
             "route_key": route_key,
             "route_display_name": route_display_name,
+            "segment_geometry_source": config.segment_geometry_source,
+            "tunnel_invert_inlet": config.tunnel_invert_inlet,
+            "tunnel_slope_i": config.tunnel_slope_i,
+            "tunnel_invert_outlet_check": config.tunnel_invert_outlet_check,
+            "tunnel_section_type": config.tunnel_section_type,
+            "tunnel_section_params": config.tunnel_section_params or {},
             "turn_n": config.turn_n,
             "turn_R": config.turn_R,
             "force_override": bool(config.force_override),
@@ -281,7 +315,8 @@ class PressurePipeManager:
                    inlet_transition_loss: float = 0, outlet_transition_loss: float = 0,
                    pipe_velocity: float = 0, plan_total_length: float = 0,
                    data_mode: str = "", longitudinal_nodes: Optional[List[Dict[str, Any]]] = None,
-                   route_key: str = "", route_display_name: str = ""):
+                   route_key: str = "", route_display_name: str = "",
+                   profile_segments: Optional[List[Dict[str, Any]]] = None):
         """
         保存计算结果
         
@@ -312,13 +347,22 @@ class PressurePipeManager:
             or ""
         ).strip()
         long_nodes_payload = longitudinal_nodes or []
+        profile_segments_payload = None if profile_segments is None else list(profile_segments)
         if route_key:
             route_bucket = self._config["routes"].setdefault(route_key, {})
             route_bucket["display_name"] = route_display_name or route_bucket.get("display_name", "")
             route_bucket["longitudinal_nodes"] = long_nodes_payload
+            if profile_segments_payload is not None:
+                route_bucket["profile_segments"] = profile_segments_payload
             pipe_longitudinal_nodes = []
+            pipe_profile_segments = []
         else:
             pipe_longitudinal_nodes = long_nodes_payload
+            pipe_profile_segments = (
+                profile_segments_payload
+                if profile_segments_payload is not None
+                else list(existing_row.get("profile_segments", []) or [])
+            )
 
         self._config["pipes"][pipe_name].update({
             "total_head_loss": total_head_loss,
@@ -330,6 +374,7 @@ class PressurePipeManager:
             "plan_total_length": plan_total_length,
             "data_mode": data_mode or "",
             "longitudinal_nodes": pipe_longitudinal_nodes,
+            "profile_segments": pipe_profile_segments,
             "route_key": route_key,
             "route_display_name": route_display_name,
             "calculated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -404,6 +449,10 @@ class PressurePipeManager:
             return
         import copy
         self._config = copy.deepcopy(data)
+        if "pipes" not in self._config or not isinstance(self._config.get("pipes"), dict):
+            self._config["pipes"] = {}
+        if "routes" not in self._config or not isinstance(self._config.get("routes"), dict):
+            self._config["routes"] = {}
 
 
 # ============================================================

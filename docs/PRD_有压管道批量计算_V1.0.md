@@ -1,8 +1,8 @@
 # 有压管道 — 综合 PRD
 
-> **版本**: V2.5  
+> **版本**: V2.11.1  
 > **创建日期**: 2026-03-03  
-> **最后更新**: 2026-04-01  
+> **最后更新**: 2026-04-02  
 > **状态**: 已实现
 
 ---
@@ -299,6 +299,10 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 | 属性 | 说明 |
 |------|------|
 | `name` | 建筑物名称 |
+| `route_key` / `route_display_name` | 所属流量段键值 / 展示名称（mixed route 汇总用） |
+| `route_start_mc` / `route_end_mc` | 整个流量段的起止里程 |
+| `segment_start_mc` / `segment_end_mc` | 当前子段的起止里程 |
+| `route_member_keys` | 同一流量段下全部子段的身份键集合 |
 | `rows` | 该管道所有行（进+IP+出）的 ChannelNode 列表 |
 | `row_indices` | 各行在原始列表中的索引 |
 | `inlet_row_index` / `outlet_row_index` / `ip_row_indices` | 进/出/IP点索引 |
@@ -336,6 +340,7 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 | `ip_points` | IP点列表 |
 | `plan_total_length` | 总管长 |
 | `longitudinal_nodes` | 纵断面变坡点节点（可选，DXF导入） |
+| `profile_segments` | 按流量段保存的纵断面片段列表（mixed route 优先使用） |
 | `friction_loss` / `total_bend_loss` / `inlet_transition_loss` / `outlet_transition_loss` / `total_head_loss` | 计算结果 |
 | `data_mode` | 数据模式 |
 | `calculated_at` | 计算时间 |
@@ -347,6 +352,8 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 - `get_result(name)` / `get_all_results()` — 获取水头损失
 - `has_result(name)` — 检查是否有结果
 - `clear_all()` — 清空
+- `routes[route_key].longitudinal_nodes` 继续兼容纯普通有压管道整线
+- `routes[route_key].profile_segments` 作为 mixed route 的统一几何真源，优先供计算与导出采样使用
 
 ### 3.7 结果辅助函数（pressure_pipe_result_helpers.py）
 
@@ -388,10 +395,13 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 
 `_open_pressure_pipe_calculator()` 执行：
 1. 从节点表提取有压管道分组（`PressurePipeDataExtractor.extract_pipes()`）
-2. 对每个管道执行水头损失计算（`calc_total_head_loss()` 或 `calc_total_head_loss_with_spatial()`）
-3. 结果回写到节点表的 `head_loss_siphon` 列
-4. 持久化保存到 `PressurePipeManager`
-5. 更新详细过程文本区
+2. `xx管` 流量段进入“整线卡 + 隧洞分段卡”混合弹窗；整线仍只导入 1 份 DXF，但只要求覆盖非隧洞区间
+3. 若流量段起点就是隧洞，DXF 第一点评到第一段非隧洞子段起点里程，而不是整线起点
+4. 普通有压段继续使用 DXF 裁切后的纵断面；隧洞段按“进口底高 + 坡降 i + 起终里程”生成理论纵断面，并做交界高差提醒
+5. 对每个管道或链成员执行水头损失计算（`calc_total_head_loss()` 或 `calc_total_head_loss_with_spatial()`）；隧洞成员继续复用既有隧洞计算口径参与承压链累计
+6. 结果回写到节点表的 `head_loss_siphon` 列；隧洞行仍按自身既有规则回写，避免 route 结果重复覆盖
+7. mixed route 的拼接结果持久化到 `PressurePipeManager.routes[route_key].profile_segments`
+8. 更新详细过程文本区
 
 #### 3.8.4 灵敏度分析
 
@@ -427,7 +437,11 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 - 压力管道特性表里的`长度`和`设计流速`必须按流量段逐行输出；其中`长度`要按该流量段下全部原始分组的起止桩号累计，普通有压管道段也必须参与统计，不能退化成隧洞/定向钻/顶管等建筑物长度小计。同一流量段最终只保留 1 行摘要，但匿名普通有压管道也必须沿用行级 `identity`、`Q`、`plan_total_length` 和子段起止桩号参加汇总，不能只靠“流量段 + 名称”回填。整条支管所有转弯半径都为 `0` 时，该长度应与 IP 桩号口径一致；只要任一处转弯半径非 `0`，就应与里程桩号口径一致
 - 压力管道特性表里的`设计流速`只调整展示精度：DXF 和 Excel 都固定保留 2 位小数，底层计算值与缓存值不改，避免影响已有水力计算和回写链路
 - 顶管/定向钻在弹窗里可单独设置材质和 DN，但最终压力管道特性表仍只按流量段输出 1 行；顶管/定向钻只进入对应摘要列，不额外生成主行。`隧洞 / 定向钻 / 顶管` 的摘要长度统一按每组“出口里程MC - 进口里程MC”统计，中间 IP 点只用于识别整组，不得把出口后紧邻的普通有压管道并入建筑物长度
+- `xx管` 夹带隧洞的 mixed route 仍只导入 1 份纵断面 DXF，这份 DXF 只覆盖非隧洞子段；隧洞子段允许在 DXF 中留空，由系统按参数自动补齐
 - 纵断面"坡降"行对有压管道留空（按有压流处理）
+- `xx管` 纵断面第 4 行标题继续保持“管中心线高程（米）”；普通有压段填中心线高程，隧洞段填底高，不额外改标题
+- `xx管` 纵断面第 5 行在隧洞段改为输出断面参数文本，例如“圆形隧洞 D=2.4m”；普通有压段继续显示材质和 DN
+- 纵断面导出采样优先读取 `routes[route_key].profile_segments`；只有纯普通有压整线才回退到旧的 `longitudinal_nodes`
 - IP 点名称中，有压管道进/出口采用"压"缩写（示例：`XX管压进`、`XX管压出`）
 - bzzh2 导出与建筑物名称上平面图均纳入有压管道进/出口识别
 
@@ -513,6 +527,10 @@ $$h_f = f \times L \times \frac{Q_{m^3/h}^m}{d_{mm}^b}$$
 | `tests/test_pressure_pipe_result_persistence_unit.py` | 结果持久化测试 |
 | `tests/test_pressure_pipe_result_identity_unit.py` | 结果身份键测试 |
 | `tests/test_pressure_pipe_persistence_with_long_unit.py` | 纵断面数据持久化测试 |
+| `tests/test_pressure_pipe_export_longitudinal_nodes_unit.py` | mixed route 纵断面导出取数测试 |
+| `tests/test_pressure_pipe_canvas_viewer_gui_unit.py` | mixed route 弹窗与导入覆盖校验测试 |
+| `tests/test_water_profile_transition_ready_unit.py` | mixed route 预处理与计算入口测试 |
+| `tests/test_xxpipe_longitudinal_export_unit.py` | `xx管` 隧洞纵断面表格行输出测试 |
 | `tests/test_qfluentwidgets_compat.py` | 启动兼容层测试（`darkdetect` 超时/缺失兜底） |
 
 ---
@@ -533,3 +551,5 @@ $$h_f = f \times L \times \frac{Q_{m^3/h}^m}{d_{mm}^b}$$
 | V2.8 | 2026-04-01 | **流量段长度口径修正**：压力管道特性表主列长度不再直接复用建筑物摘要总长，改为按该流量段下全部原始分组的起止桩号累计；普通有压管道段也纳入总长统计，多个流量段相加需与整条支管总桩号一致。 |
 | V2.9 | 2026-04-02 | **建筑物长度口径修正**：压力管道特性表中的隧洞、定向钻、顶管摘要长度改为按每组“出口里程MC - 进口里程MC”统计；中间 IP 点仅用于识别整组，不再把出口后紧邻的普通有压管道长度误并进建筑物摘要。 |
 | V2.10 | 2026-04-02 | **设计流速显示精度修正**：压力管道特性表中的“设计流速”在 DXF 与 Excel 中统一按两位小数展示，例如 `0.7954` 显示为 `0.80`；内部计算值与缓存值保持原始精度。 |
+| V2.11 | 2026-04-02 | **xx管 夹带隧洞 mixed route 支持**：取消“夹带隧洞暂不支持”拦截；`xx管` 弹窗改为“整线卡 + 隧洞分段卡”；整线 DXF 只覆盖非隧洞子段，隧洞纵断面按“进口底高 + 坡降 i + 起终里程”生成；新增 `profile_segments` 作为 mixed route 的统一几何真源；纵断面第 4 行隧洞段输出底高，第 5 行输出隧洞断面参数文本。 |
+| V2.11.1 | 2026-04-02 | **mixed route 收口修正**：当整线起点先经过隧洞且首个非隧洞节点没有显式桩号时，DXF 导入会按该节点的回退桩号对齐，不再误回到整线起点；当 mixed route 后续改回纯有压整线时，会显式清空 route 级 `profile_segments`，避免历史隧洞纵断面残留影响导出。 |

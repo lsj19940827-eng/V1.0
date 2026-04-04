@@ -171,3 +171,163 @@ def test_set_result_without_route_args_keeps_existing_route_binding():
     assert raw["pipes"]["flow2-row6"]["route_key"] == "flow2-route1"
     assert raw["pipes"]["flow2-row6"]["route_display_name"] == "流量段2 整线1"
     assert raw["routes"]["flow2-route1"]["longitudinal_nodes"] == long_nodes
+
+
+def test_get_pipe_config_reads_route_profile_segments_from_dict():
+    manager = PressurePipeManager()
+    profile_segments = [
+        {
+            "segment_identity": "flow2-mixed-tunnel",
+            "structure_type": "隧洞-圆形",
+            "source_kind": "generated_tunnel",
+            "start_mc": 0.0,
+            "end_mc": 20.0,
+            "longitudinal_nodes": [
+                {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+                {"chainage": 20.0, "elevation": 419.8, "turn_type": "NONE"},
+            ],
+            "warnings": [],
+        }
+    ]
+
+    manager.from_dict(
+        {
+            "version": "1.0",
+            "last_modified": "",
+            "pipes": {
+                "flow2-row6": {
+                    "name": "流量段2 第6行有压管道",
+                    "route_key": "flow2-route1",
+                    "route_display_name": "流量段2 整线1",
+                    "longitudinal_nodes": [],
+                }
+            },
+            "routes": {
+                "flow2-route1": {
+                    "display_name": "流量段2 整线1",
+                    "longitudinal_nodes": [],
+                    "profile_segments": profile_segments,
+                }
+            },
+        }
+    )
+
+    loaded = manager.get_pipe_config("flow2-row6")
+    assert loaded is not None
+    assert loaded.profile_segments == profile_segments
+
+
+def test_set_result_persists_route_profile_segments_for_mixed_xxpipe():
+    manager = PressurePipeManager()
+    profile_segments = [
+        {
+            "segment_identity": "flow2-mixed-tunnel",
+            "structure_type": "隧洞-圆形",
+            "source_kind": "generated_tunnel",
+            "start_mc": 0.0,
+            "end_mc": 20.0,
+            "longitudinal_nodes": [
+                {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+                {"chainage": 20.0, "elevation": 419.8, "turn_type": "NONE"},
+            ],
+            "warnings": [],
+        },
+        {
+            "segment_identity": "flow2-row6",
+            "structure_type": "有压管道",
+            "source_kind": "non_tunnel_dxf",
+            "start_mc": 20.0,
+            "end_mc": 80.0,
+            "longitudinal_nodes": [
+                {"chainage": 20.0, "elevation": 418.0, "turn_type": "NONE"},
+                {"chainage": 80.0, "elevation": 412.0, "turn_type": "NONE"},
+            ],
+            "warnings": [],
+        },
+    ]
+
+    manager.set_result(
+        pipe_name="flow2-row6",
+        total_head_loss=0.42,
+        friction_loss=0.31,
+        total_bend_loss=0.05,
+        inlet_transition_loss=0.03,
+        outlet_transition_loss=0.03,
+        pipe_velocity=1.1,
+        plan_total_length=75.0,
+        data_mode="空间模式（混合整线）",
+        longitudinal_nodes=[],
+        route_key="flow2-route1",
+        route_display_name="流量段2 整线1",
+        profile_segments=profile_segments,
+    )
+
+    raw = manager.to_dict()
+    assert raw["routes"]["flow2-route1"]["profile_segments"] == profile_segments
+
+    loaded = manager.get_pipe_config("flow2-row6")
+    assert loaded is not None
+    assert loaded.profile_segments == profile_segments
+
+
+def test_set_result_with_empty_route_profile_segments_clears_stale_mixed_route_cache():
+    manager = PressurePipeManager()
+    stale_segments = [
+        {
+            "segment_identity": "flow2-mixed-tunnel",
+            "structure_type": "隧洞-圆形",
+            "source_kind": "generated_tunnel",
+            "start_mc": 0.0,
+            "end_mc": 20.0,
+            "longitudinal_nodes": [
+                {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+                {"chainage": 20.0, "elevation": 419.8, "turn_type": "NONE"},
+            ],
+            "warnings": [],
+        }
+    ]
+
+    manager.from_dict(
+        {
+            "version": "1.0",
+            "last_modified": "",
+            "pipes": {
+                "flow2-row6": {
+                    "name": "流量段2 第6行有压管道",
+                    "route_key": "flow2-route1",
+                    "route_display_name": "流量段2 整线1",
+                    "longitudinal_nodes": [],
+                }
+            },
+            "routes": {
+                "flow2-route1": {
+                    "display_name": "流量段2 整线1",
+                    "longitudinal_nodes": [],
+                    "profile_segments": stale_segments,
+                }
+            },
+        }
+    )
+
+    manager.set_result(
+        pipe_name="flow2-row6",
+        total_head_loss=0.42,
+        friction_loss=0.31,
+        total_bend_loss=0.05,
+        inlet_transition_loss=0.03,
+        outlet_transition_loss=0.03,
+        pipe_velocity=1.1,
+        plan_total_length=75.0,
+        data_mode="空间模式（整线 DXF）",
+        longitudinal_nodes=[],
+        route_key="flow2-route1",
+        route_display_name="流量段2 整线1",
+        profile_segments=[],
+    )
+
+    raw = manager.to_dict()
+    assert raw["routes"]["flow2-route1"]["profile_segments"] == []
+
+    loaded = manager.get_pipe_config("flow2-row6")
+    assert loaded is not None
+    assert loaded.profile_segments == []

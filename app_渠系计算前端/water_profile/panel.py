@@ -2457,6 +2457,18 @@ class WaterProfilePanel(QWidget):
         return str(getattr(group, "name", "") or "").strip() or "未命名有压管道"
 
     @staticmethod
+    def _get_pressure_pipe_group_structure_text(group) -> str:
+        """返回分组结构形式文本。"""
+        value = getattr(group, "structure_type", "")
+        value = getattr(value, "value", value)
+        return str(value or "").strip()
+
+    @classmethod
+    def _is_pressure_pipe_group_tunnel_segment(cls, group) -> bool:
+        """判断分组是否为隧洞子段。"""
+        return "隧洞" in cls._get_pressure_pipe_group_structure_text(group)
+
+    @staticmethod
     def _get_pressure_pipe_group_route_key(group) -> str:
         """返回有压管道分组所属整线键。"""
         return str(getattr(group, "route_key", "") or "").strip()
@@ -2474,14 +2486,103 @@ class WaterProfilePanel(QWidget):
             return route_key
         return cls._get_pressure_pipe_group_storage_key(group)
 
-    def _resolve_pressure_pipe_group_longitudinal_nodes(self, group, longitudinal_nodes_dict) -> tuple:
+    @staticmethod
+    def _normalize_pressure_pipe_profile_segments(profile_segments) -> list[dict]:
+        """清洗 route 级分段纵断面数据。"""
+        normalized = []
+        for raw in list(profile_segments or []):
+            if not isinstance(raw, dict):
+                continue
+            segment = copy.deepcopy(raw)
+            segment["segment_identity"] = str(segment.get("segment_identity", "") or "").strip()
+            segment["source_kind"] = str(segment.get("source_kind", "") or "").strip()
+            segment["structure_type"] = str(segment.get("structure_type", "") or "").strip()
+            segment["warnings"] = list(segment.get("warnings", []) or [])
+            normalized.append(segment)
+        return normalized
+
+    @classmethod
+    def _find_pressure_pipe_profile_segment_for_group(
+        cls,
+        group,
+        profile_segments,
+        *,
+        identity: str = "",
+        storage_key: str = "",
+    ) -> dict | None:
+        """优先按稳定标识，再按桩号范围匹配 route 级分段。"""
+        normalized_segments = cls._normalize_pressure_pipe_profile_segments(profile_segments)
+        if not normalized_segments:
+            return None
+
+        candidate_keys = []
+        for key in (
+            identity,
+            storage_key,
+            getattr(group, "identity", ""),
+            getattr(group, "storage_key", ""),
+        ):
+            key_text = str(key or "").strip()
+            if key_text and key_text not in candidate_keys:
+                candidate_keys.append(key_text)
+
+        for segment in normalized_segments:
+            if str(segment.get("segment_identity", "") or "").strip() in candidate_keys:
+                return segment
+
+        start_mc = getattr(group, "segment_start_mc", None)
+        end_mc = getattr(group, "segment_end_mc", None)
+        try:
+            start_value = float(start_mc)
+            end_value = float(end_mc)
+        except (TypeError, ValueError):
+            return None
+
+        for segment in normalized_segments:
+            try:
+                seg_start = float(segment.get("start_mc"))
+                seg_end = float(segment.get("end_mc"))
+            except (TypeError, ValueError):
+                continue
+            if abs(seg_start - start_value) <= 1e-6 and abs(seg_end - end_value) <= 1e-6:
+                return segment
+        return None
+
+    def _resolve_pressure_pipe_group_longitudinal_nodes(
+        self,
+        group,
+        longitudinal_nodes_dict,
+        route_profile_segments_by_key=None,
+    ) -> tuple:
         """解析分组可用的整线/子段纵断面数据。"""
         route_key = self._get_pressure_pipe_group_route_key(group)
         storage_key = self._get_pressure_pipe_group_storage_key(group)
+        identity = self._build_pressure_pipe_group_identity(group)
         source_key = self._get_pressure_pipe_group_longitudinal_storage_key(group)
         route_nodes = copy.deepcopy((longitudinal_nodes_dict or {}).get(source_key, []) or [])
         if not route_nodes and route_key:
             route_nodes = copy.deepcopy((longitudinal_nodes_dict or {}).get(storage_key, []) or [])
+        if not route_nodes:
+            route_nodes = []
+
+        route_profile_segments = []
+        if isinstance(route_profile_segments_by_key, dict):
+            route_profile_segments = list(route_profile_segments_by_key.get(route_key, []) or [])
+        if route_profile_segments:
+            matched_segment = self._find_pressure_pipe_profile_segment_for_group(
+                group,
+                route_profile_segments,
+                identity=identity,
+                storage_key=storage_key,
+            )
+            if matched_segment is not None:
+                segment_nodes = copy.deepcopy(matched_segment.get("longitudinal_nodes", []) or [])
+                warnings = [
+                    str(item or "").strip()
+                    for item in list(matched_segment.get("warnings", []) or [])
+                    if str(item or "").strip()
+                ]
+                return route_nodes, segment_nodes, "；".join(warnings)
         if not route_nodes:
             return [], [], ""
 
@@ -8463,15 +8564,31 @@ class WaterProfilePanel(QWidget):
                 config = get_pipe_config(storage_key)
                 longitudinal_nodes = []
                 route_longitudinal_nodes = []
+                route_profile_segments = []
                 if config is not None:
                     longitudinal_nodes = copy.deepcopy(getattr(config, "longitudinal_nodes", []) or [])
+                    route_profile_segments = copy.deepcopy(getattr(config, "profile_segments", []) or [])
 
                 route_key = self._get_pressure_pipe_group_route_key(group)
-                if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes) and route_key:
+                if route_key:
                     route_data = route_buckets.get(route_key, {}) if isinstance(route_buckets, dict) else {}
                     if isinstance(route_data, dict):
+                        if not route_profile_segments:
+                            route_profile_segments = copy.deepcopy(route_data.get("profile_segments", []) or [])
                         route_longitudinal_nodes = copy.deepcopy(route_data.get("longitudinal_nodes", []) or [])
-                        longitudinal_nodes = copy.deepcopy(route_longitudinal_nodes)
+                if route_profile_segments:
+                    matched_segment = self._find_pressure_pipe_profile_segment_for_group(
+                        group,
+                        route_profile_segments,
+                        identity=identity,
+                        storage_key=storage_key,
+                    )
+                    if matched_segment is not None:
+                        longitudinal_nodes = copy.deepcopy(
+                            matched_segment.get("longitudinal_nodes", []) or []
+                        )
+                elif not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes) and route_key:
+                    longitudinal_nodes = copy.deepcopy(route_longitudinal_nodes)
                 if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
                     continue
 
@@ -8481,10 +8598,16 @@ class WaterProfilePanel(QWidget):
                 if (
                     is_route_anchor_group
                     and self._has_exportable_pressure_pipe_longitudinal_nodes(route_longitudinal_nodes)
+                    and not route_profile_segments
                 ):
                     # xx管整线起点只对应一个桩号点，导出仍需整线纵断面来取起点高程。
                     longitudinal_nodes = copy.deepcopy(route_longitudinal_nodes)
-                elif route_key and segment_start is not None and segment_end is not None:
+                elif (
+                    route_key
+                    and segment_start is not None
+                    and segment_end is not None
+                    and not route_profile_segments
+                ):
                     try:
                         from utils.pressure_pipe_longitudinal_utils import clip_longitudinal_nodes_to_range
 
@@ -9001,6 +9124,224 @@ class WaterProfilePanel(QWidget):
         return f"第{int(row_index) + 1}行 {base_text}"
 
     @classmethod
+    def _resolve_xxpipe_route_import_anchor_station_mc(cls, route_nodes) -> float | None:
+        """解析 xx管 整线纵断面导入锚点，优先取首个非隧洞节点的实际或回退桩号。"""
+        ordered_nodes = list(route_nodes or [])
+        if not ordered_nodes:
+            return None
+
+        first_target_index = next(
+            (
+                index
+                for index, node in enumerate(ordered_nodes)
+                if "隧洞" not in cls._get_pressure_pipe_node_structure_text(node)
+            ),
+            None,
+        )
+        if first_target_index is None:
+            return None
+
+        station_value = cls._coerce_pressure_pipe_finite_float(
+            getattr(ordered_nodes[first_target_index], "station_MC", None)
+        )
+        if station_value is not None:
+            return station_value
+
+        try:
+            from app_渠系计算前端.water_profile.cad_tools import (
+                resolve_xxpipe_profile_station_targets,
+            )
+
+            station_targets, _station_errors = resolve_xxpipe_profile_station_targets(
+                ordered_nodes,
+                station_prefix="",
+            )
+        except Exception:
+            station_targets = []
+
+        if first_target_index >= len(station_targets):
+            return None
+        return cls._coerce_pressure_pipe_finite_float(
+            station_targets[first_target_index].get("station_mc", None)
+        )
+
+    @staticmethod
+    def _coerce_pressure_pipe_finite_float(value):
+        """将任意值安全转换为有限浮点数。"""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        return number
+
+    @classmethod
+    def _apply_pressure_pipe_manager_tunnel_config_to_group(cls, group, config):
+        """把缓存里的隧洞参数补回当前分组对象。"""
+        if config is None or not cls._is_pressure_pipe_group_tunnel_segment(group):
+            return
+
+        text_fields = ("segment_geometry_source", "tunnel_section_type")
+        float_fields = (
+            "tunnel_invert_inlet",
+            "tunnel_slope_i",
+            "tunnel_invert_outlet_check",
+        )
+        for field_name in text_fields:
+            value = str(getattr(config, field_name, "") or "").strip()
+            if value:
+                setattr(group, field_name, value)
+        for field_name in float_fields:
+            value = getattr(config, field_name, None)
+            if value is not None:
+                setattr(group, field_name, value)
+
+        params = getattr(config, "tunnel_section_params", {}) or {}
+        if isinstance(params, dict) and params:
+            setattr(group, "tunnel_section_params", copy.deepcopy(params))
+
+    def _hydrate_pressure_pipe_groups_from_manager(self, pipe_groups, manager):
+        """把对话框缓存的隧洞参数回填到新提取的分组对象。"""
+        get_pipe_config = getattr(manager, "get_pipe_config", None)
+        if not callable(get_pipe_config):
+            return
+
+        for group in pipe_groups or []:
+            if not self._is_pressure_pipe_group_tunnel_segment(group):
+                continue
+            storage_key = self._get_pressure_pipe_group_storage_key(group)
+            config = get_pipe_config(storage_key)
+            if config is None:
+                legacy_name = str(getattr(group, "name", "") or "").strip()
+                if legacy_name and legacy_name != storage_key:
+                    config = get_pipe_config(legacy_name)
+            self._apply_pressure_pipe_manager_tunnel_config_to_group(group, config)
+
+    @classmethod
+    def _build_generated_tunnel_profile_segment(cls, group) -> tuple[list[dict], list[str]]:
+        """按进口底高和坡降生成隧洞子段纵断面。"""
+        start_mc = cls._coerce_pressure_pipe_finite_float(getattr(group, "segment_start_mc", None))
+        end_mc = cls._coerce_pressure_pipe_finite_float(getattr(group, "segment_end_mc", None))
+        invert_inlet = cls._coerce_pressure_pipe_finite_float(getattr(group, "tunnel_invert_inlet", None))
+        slope_i = cls._coerce_pressure_pipe_finite_float(getattr(group, "tunnel_slope_i", None))
+        if start_mc is None or end_mc is None or invert_inlet is None or slope_i is None:
+            return [], ["隧洞参数不完整，无法生成纵断面"]
+
+        outlet_invert = invert_inlet - slope_i * (end_mc - start_mc)
+        warnings = []
+        outlet_check = cls._coerce_pressure_pipe_finite_float(
+            getattr(group, "tunnel_invert_outlet_check", None)
+        )
+        if outlet_check is not None and abs(outlet_check - outlet_invert) > 0.01:
+            warnings.append(
+                f"出口底高校核值与坡降推算值偏差 {abs(outlet_check - outlet_invert):.3f}m"
+            )
+
+        return [
+            {
+                "chainage": float(start_mc),
+                "elevation": float(invert_inlet),
+                "turn_type": "NONE",
+                "turn_angle": 0.0,
+                "vertical_curve_radius": 0.0,
+            },
+            {
+                "chainage": float(end_mc),
+                "elevation": float(outlet_invert),
+                "turn_type": "NONE",
+                "turn_angle": 0.0,
+                "vertical_curve_radius": 0.0,
+            },
+        ], warnings
+
+    @classmethod
+    def _build_pressure_pipe_route_profile_segments(cls, pipe_groups, longitudinal_nodes_dict) -> dict:
+        """按 route 组装整线分段纵断面，供 mixed route 计算和导出复用。"""
+        route_groups = {}
+        for group in list(pipe_groups or []):
+            route_key = cls._get_pressure_pipe_group_route_key(group)
+            if not route_key:
+                continue
+            route_groups.setdefault(route_key, []).append(group)
+
+        route_profile_segments = {}
+        for route_key, groups in route_groups.items():
+            route_nodes = copy.deepcopy((longitudinal_nodes_dict or {}).get(route_key, []) or [])
+            ordered_groups = sorted(
+                groups,
+                key=lambda item: (
+                    cls._coerce_pressure_pipe_finite_float(getattr(item, "segment_start_mc", None)) is None,
+                    cls._coerce_pressure_pipe_finite_float(getattr(item, "segment_start_mc", None)) or 0.0,
+                ),
+            )
+            segments = []
+            for group in ordered_groups:
+                segment_identity = cls._build_pressure_pipe_group_identity(group) or cls._get_pressure_pipe_group_storage_key(group)
+                structure_text = cls._get_pressure_pipe_group_structure_text(group)
+                start_mc = cls._coerce_pressure_pipe_finite_float(getattr(group, "segment_start_mc", None))
+                end_mc = cls._coerce_pressure_pipe_finite_float(getattr(group, "segment_end_mc", None))
+                warnings = []
+                source_kind = "non_tunnel_dxf"
+                long_nodes = []
+
+                if cls._is_pressure_pipe_group_tunnel_segment(group):
+                    source_kind = "generated_tunnel"
+                    long_nodes, warnings = cls._build_generated_tunnel_profile_segment(group)
+                elif cls._has_exportable_pressure_pipe_longitudinal_nodes(route_nodes):
+                    if start_mc is not None and end_mc is not None:
+                        try:
+                            from utils.pressure_pipe_longitudinal_utils import clip_longitudinal_nodes_to_range
+
+                            long_nodes = clip_longitudinal_nodes_to_range(
+                                route_nodes,
+                                float(start_mc),
+                                float(end_mc),
+                            )
+                        except Exception as exc:
+                            warnings.append(str(exc))
+                    else:
+                        long_nodes = copy.deepcopy(route_nodes)
+                else:
+                    warnings.append("整线未导入可用纵断面DXF")
+
+                if not long_nodes and not warnings:
+                    warnings.append("当前子段缺少可用纵断面")
+                segments.append(
+                    {
+                        "segment_identity": segment_identity,
+                        "structure_type": structure_text,
+                        "source_kind": source_kind,
+                        "start_mc": start_mc,
+                        "end_mc": end_mc,
+                        "longitudinal_nodes": long_nodes,
+                        "warnings": warnings,
+                    }
+                )
+
+            for idx in range(len(segments) - 1):
+                current = segments[idx]
+                nxt = segments[idx + 1]
+                current_nodes = list(current.get("longitudinal_nodes", []) or [])
+                next_nodes = list(nxt.get("longitudinal_nodes", []) or [])
+                if not current_nodes or not next_nodes:
+                    continue
+                current_end = cls._coerce_pressure_pipe_finite_float(current_nodes[-1].get("elevation"))
+                next_start = cls._coerce_pressure_pipe_finite_float(next_nodes[0].get("elevation"))
+                if current_end is None or next_start is None:
+                    continue
+                mismatch = abs(current_end - next_start)
+                if mismatch <= 0.01:
+                    continue
+                warning_text = f"相邻子段接点高差 {mismatch:.3f}m，已保留但建议复核"
+                current.setdefault("warnings", []).append(warning_text)
+                nxt.setdefault("warnings", []).append(warning_text)
+
+            route_profile_segments[route_key] = segments
+
+        return route_profile_segments
+
+    @classmethod
     def _collect_xxpipe_route_context_map(cls, nodes, pipe_groups) -> dict:
         """按整线汇总 xx管 路由信息，识别是否夹带隧洞。"""
         route_map = {}
@@ -9046,11 +9387,13 @@ class WaterProfilePanel(QWidget):
                     "x": getattr(node, "x", None),
                     "y": getattr(node, "y", None),
                 })
+            import_anchor_station_mc = cls._resolve_xxpipe_route_import_anchor_station_mc(route_nodes)
 
             route_map[route_key] = {
                 "route_key": route_key,
                 "display_name": display_name,
                 "contains_tunnel": contains_tunnel,
+                "import_anchor_station_mc": import_anchor_station_mc,
                 "targets": route_targets,
                 "nodes": route_nodes,
             }
@@ -9074,48 +9417,23 @@ class WaterProfilePanel(QWidget):
             }
 
         route_map = self._collect_xxpipe_route_context_map(nodes, pipe_groups)
-        blocked_route_names = [
-            str(meta.get("display_name", "") or meta.get("route_key", "")).strip()
-            for meta in route_map.values()
-            if bool(meta.get("contains_tunnel"))
-        ]
-        if blocked_route_names and show_xxpipe_warning:
-            content = (
-                "以下 xx管 整线夹带隧洞，当前暂不支持有压管道水力计算，已跳过：\n"
-                + "\n".join(blocked_route_names)
-            )
-            InfoBar.warning(
-                "提示",
-                content,
-                parent=self._info_parent(),
-                duration=5000,
-                position=InfoBarPosition.TOP,
-            )
-
-        supported_groups = []
-        for group in pipe_groups:
-            route_key = self._get_pressure_pipe_group_route_key(group)
-            if route_key and bool(route_map.get(route_key, {}).get("contains_tunnel")):
-                continue
-            supported_groups.append(group)
-
         station_prefix = self._get_settings_station_prefix(settings)
         route_import_targets = {
             route_key: {
                 "display_name": str(meta.get("display_name", "") or route_key).strip(),
                 "station_prefix": station_prefix,
+                "import_anchor_station_mc": meta.get("import_anchor_station_mc"),
                 "targets": list(meta.get("targets", []) or []),
                 "nodes": list(meta.get("nodes", []) or []),
             }
             for route_key, meta in route_map.items()
-            if not bool(meta.get("contains_tunnel"))
         }
         return {
-            "pipe_groups": supported_groups,
-            "chain_descriptors": [],
+            "pipe_groups": pipe_groups,
+            "chain_descriptors": chain_descriptors,
             "xxpipe_route_mode": True,
             "route_import_targets": route_import_targets,
-            "blocked_route_names": blocked_route_names,
+            "blocked_route_names": [],
         }
 
     @staticmethod
@@ -10327,6 +10645,8 @@ class WaterProfilePanel(QWidget):
                 manager = PressurePipeManager()
                 self._pressure_pipe_manager = manager
 
+            self._hydrate_pressure_pipe_groups_from_manager(pipe_groups, manager)
+
             # 逐条有压管道计算总水头损失并记录完整过程（标准深度）
             results_by_identity = {}
             records = []
@@ -10335,6 +10655,10 @@ class WaterProfilePanel(QWidget):
             SENSITIVITY_LOW_F = 1.899e5
             chain_member_lookup = {}
             handled_identities = set()
+            route_profile_segments_by_key = self._build_pressure_pipe_route_profile_segments(
+                pipe_groups,
+                longitudinal_nodes_dict,
+            )
             for descriptor in chain_descriptors:
                 for member in descriptor.get("members", []) or []:
                     member_identity = self._get_pressure_chain_member_identity(member)
@@ -10348,8 +10672,23 @@ class WaterProfilePanel(QWidget):
                 route_key = self._get_pressure_pipe_group_route_key(group)
                 route_display_name = self._get_pressure_pipe_group_route_display_name(group)
                 identity = self._build_pressure_pipe_group_identity(group)
+                route_profile_segments = copy.deepcopy(
+                    route_profile_segments_by_key.get(route_key, []) or []
+                )
+                has_generated_tunnel_profile = any(
+                    str(segment.get("source_kind", "") or "").strip() == "generated_tunnel"
+                    for segment in route_profile_segments
+                )
+                if route_key:
+                    persist_profile_segments = route_profile_segments if has_generated_tunnel_profile else []
+                else:
+                    persist_profile_segments = None
                 route_long_nodes, pipe_long_nodes, spatial_fallback_reason = (
-                    self._resolve_pressure_pipe_group_longitudinal_nodes(group, longitudinal_nodes_dict)
+                    self._resolve_pressure_pipe_group_longitudinal_nodes(
+                        group,
+                        longitudinal_nodes_dict,
+                        route_profile_segments_by_key=route_profile_segments_by_key,
+                    )
                 )
                 chain_member = chain_member_lookup.get(identity)
                 base_record = {
@@ -10359,6 +10698,12 @@ class WaterProfilePanel(QWidget):
                     "flow_section": flow_section,
                     "name": pipe_name,
                 }
+                if (
+                    self._is_pressure_pipe_group_tunnel_segment(group)
+                    and chain_member is not None
+                    and self._is_pressure_chain_single_row_member(chain_member)
+                ):
+                    continue
                 handled_identities.add(identity)
 
                 if self._is_pressure_pipe_row_segment_group(group):
@@ -10390,6 +10735,7 @@ class WaterProfilePanel(QWidget):
                             longitudinal_nodes=route_long_nodes,
                             route_key=route_key,
                             route_display_name=route_display_name,
+                            profile_segments=persist_profile_segments,
                         )
                     continue
 
@@ -10563,6 +10909,7 @@ class WaterProfilePanel(QWidget):
                     longitudinal_nodes=route_long_nodes,
                     route_key=route_key,
                     route_display_name=route_display_name,
+                    profile_segments=persist_profile_segments,
                 )
 
             for descriptor in chain_descriptors:

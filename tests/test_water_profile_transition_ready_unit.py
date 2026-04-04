@@ -309,6 +309,63 @@ def _build_minimal_panel(WaterProfilePanel, nodes):
     return panel
 
 
+def test_collect_xxpipe_route_context_map_uses_resolved_first_non_tunnel_anchor(monkeypatch):
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+
+    route_nodes = [
+        SimpleNamespace(
+            name="穿山段",
+            structure_type=SimpleNamespace(value="隧洞-圆形"),
+            station_MC=0.0,
+            x=0.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="穿路段",
+            structure_type=SimpleNamespace(value="有压管道"),
+            station_MC=None,
+            x=20.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="穿路段B",
+            structure_type=SimpleNamespace(value="顶管"),
+            station_MC=60.0,
+            x=60.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    group = SimpleNamespace(
+        route_key="flow2-route1",
+        route_display_name="流量段2 整线1",
+        route_start_row_index=0,
+        route_end_row_index=2,
+        row_indices=[0, 1, 2],
+        target_row_index=1,
+    )
+    cad_tools_mod = types.ModuleType("app_渠系计算前端.water_profile.cad_tools")
+    cad_tools_mod.resolve_xxpipe_profile_station_targets = lambda nodes, station_prefix="": (
+        [
+            {"node": route_nodes[0], "station_mc": 0.0},
+            {"node": route_nodes[1], "station_mc": 20.0},
+            {"node": route_nodes[2], "station_mc": 60.0},
+        ],
+        [],
+    )
+    monkeypatch.setitem(sys.modules, "app_渠系计算前端.water_profile.cad_tools", cad_tools_mod)
+
+    route_map = WaterProfilePanel._collect_xxpipe_route_context_map(route_nodes, [group])
+
+    assert route_map["flow2-route1"]["import_anchor_station_mc"] == 20.0
+
+
 def test_pressure_pipe_calculator_requires_transition_rows_before_topology_ready():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -525,12 +582,12 @@ def test_pressure_pipe_calculator_opens_route_only_dialog_for_supported_xxpipe_r
 
     assert len(opened) == 1
     assert opened[0]["xxpipe_route_mode"] is True
-    assert opened[0]["pressure_chains"] == []
+    assert len(opened[0]["pressure_chains"]) == 1
     assert opened[0]["pipe_groups"][0].route_key == "flow1-route1"
     assert not any("隧洞" in rec["content"] for rec in _FakeInfoBar.records)
 
 
-def test_pressure_pipe_calculator_skips_tunnel_mixed_xxpipe_routes_only():
+def test_pressure_pipe_calculator_keeps_tunnel_mixed_xxpipe_routes_available():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
     module.CALCULATOR_AVAILABLE = True
@@ -668,9 +725,194 @@ def test_pressure_pipe_calculator_skips_tunnel_mixed_xxpipe_routes_only():
             sys.modules["app_渠系计算前端.water_profile.water_profile_dialogs"] = saved_dialog
 
     assert len(opened) == 1
-    assert [group.route_key for group in opened[0]["pipe_groups"]] == ["flow1-route1"]
-    assert any("夹带隧洞" in rec["content"] for rec in _FakeInfoBar.records)
-    assert any("流量段2 整线1" in rec["content"] for rec in _FakeInfoBar.records)
+    assert [group.route_key for group in opened[0]["pipe_groups"]] == ["flow1-route1", "flow2-route1"]
+    assert "flow2-route1" in opened[0]["route_import_targets"]
+    assert len(opened[0]["pressure_chains"]) == 1
+    assert not any("夹带隧洞" in rec["content"] for rec in _FakeInfoBar.records)
+
+
+def test_pressure_pipe_calculator_clears_route_profile_segments_when_pure_xxpipe_route_recomputed():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    module.CALCULATOR_AVAILABLE = True
+    module.InfoBar = _FakeInfoBar
+    module.InfoBarPosition = SimpleNamespace(TOP="top")
+    module.QDialog = SimpleNamespace(Accepted=1)
+    module.normalize_pressure_pipe_calc_records = lambda data: data
+    module.build_pressure_pipe_transition_note = lambda **kwargs: ""
+
+    route_key = "flow1-route1"
+    long_nodes = [
+        {"chainage": 0.0, "elevation": 422.0, "turn_type": "NONE", "turn_angle": 0.0, "vertical_curve_radius": 0.0},
+        {"chainage": 10.0, "elevation": 420.0, "turn_type": "NONE", "turn_angle": 0.0, "vertical_curve_radius": 0.0},
+    ]
+    group = SimpleNamespace(
+        name="穿路段A",
+        display_name="穿路段A",
+        storage_key="flow1-route1-a",
+        identity="1::穿路段A",
+        group_mode="named_group",
+        route_key=route_key,
+        route_display_name="流量段1 整线1",
+        route_start_row_index=0,
+        route_end_row_index=1,
+        route_start_mc=0.0,
+        route_end_mc=10.0,
+        route_ip_points=[{"x": 0.0, "y": 0.0}, {"x": 10.0, "y": 0.0}],
+        row_indices=[0, 1],
+        target_row_index=1,
+        upstream_row_index=0,
+        segment_start_mc=0.0,
+        segment_end_mc=10.0,
+        rows=[],
+        ip_points=[{"x": 0.0, "y": 0.0}, {"x": 10.0, "y": 0.0}],
+        design_flow=2.4,
+        diameter=1.2,
+        material_key="预应力钢筒混凝土管",
+        inlet_transition_form="反弯扭曲面",
+        outlet_transition_form="反弯扭曲面",
+        inlet_transition_zeta=0.10,
+        outlet_transition_zeta=0.20,
+        has_inlet_transition=False,
+        has_outlet_transition=False,
+        inlet_transition_reason="",
+        outlet_transition_reason="",
+        upstream_velocity=1.0,
+        downstream_velocity=1.0,
+        is_valid=lambda: True,
+        get_validation_message=lambda: "",
+    )
+
+    class _FakeAcceptedDialog:
+        def __init__(self, parent=None, pipe_groups=None, manager=None, **kwargs):
+            self._longitudinal = {route_key: list(long_nodes)}
+
+        def exec(self):
+            return module.QDialog.Accepted
+
+        def get_turn_radius_payload(self):
+            return {}
+
+        def get_d_override_payload(self):
+            return {}
+
+        def get_longitudinal_nodes_dict(self):
+            return dict(self._longitudinal)
+
+    class _CaptureManager:
+        def __init__(self):
+            self.calls = []
+
+        def get_pipe_config(self, _pipe_name):
+            return None
+
+        def set_result(self, pipe_name, **kwargs):
+            self.calls.append({"pipe_name": pipe_name, **kwargs})
+
+    pressure_dialog_mod = types.ModuleType("app_渠系计算前端.water_profile.water_profile_dialogs")
+    pressure_dialog_mod.PressurePipeConfigDialog = _FakeAcceptedDialog
+    saved_dialog = sys.modules.get("app_渠系计算前端.water_profile.water_profile_dialogs")
+    sys.modules["app_渠系计算前端.water_profile.water_profile_dialogs"] = pressure_dialog_mod
+
+    pressure_calc_mod = types.ModuleType("core.pressure_pipe_calc")
+    pressure_calc_mod.PIPE_MATERIALS = {"预应力钢筒混凝土管": {}}
+    pressure_calc_mod.calc_total_head_loss = lambda **kwargs: SimpleNamespace(
+        total_length=10.0,
+        pipe_velocity=1.1,
+        friction_loss=0.2,
+        total_bend_loss=0.03,
+        inlet_transition_loss=0.01,
+        outlet_transition_loss=0.01,
+        total_head_loss=0.25,
+        calc_steps="ok",
+        data_mode="平面模式",
+        has_inlet_transition=False,
+        has_outlet_transition=False,
+        inlet_transition_reason="",
+        outlet_transition_reason="",
+        friction_details={},
+        bend_details={},
+    )
+    pressure_calc_mod.calc_total_head_loss_with_spatial = lambda **kwargs: SimpleNamespace(
+        total_length=10.0,
+        pipe_velocity=1.1,
+        friction_loss=0.2,
+        total_bend_loss=0.03,
+        inlet_transition_loss=0.01,
+        outlet_transition_loss=0.01,
+        total_head_loss=0.25,
+        calc_steps="ok",
+        data_mode="空间模式（平面+纵断面）",
+        has_inlet_transition=False,
+        has_outlet_transition=False,
+        inlet_transition_reason="",
+        outlet_transition_reason="",
+        friction_details={},
+        bend_details={},
+    )
+    saved_pressure_calc = sys.modules.get("core.pressure_pipe_calc")
+    sys.modules["core.pressure_pipe_calc"] = pressure_calc_mod
+
+    pressure_common_mod = types.ModuleType("utils.pressure_pipe_common")
+    pressure_common_mod.resolve_pressure_pipe_material = (
+        lambda raw_material_key, _pipe_materials, default_material="": {
+            "canonical_key": raw_material_key or default_material,
+            "display_value": raw_material_key or default_material,
+            "used_default": False,
+        }
+    )
+    saved_pressure_common = sys.modules.get("utils.pressure_pipe_common")
+    sys.modules["utils.pressure_pipe_common"] = pressure_common_mod
+
+    panel = _build_minimal_panel(WaterProfilePanel, [SimpleNamespace(structure_type="有压管道")])
+    panel._transition_topology_prepared = True
+    panel._build_settings = lambda: SimpleNamespace(channel_level="干管")
+    panel._pressure_pipe_manager = _CaptureManager()
+    panel._prepare_pressure_pipe_dialog_context = lambda _nodes, settings=None, show_xxpipe_warning=True: {
+        "pipe_groups": [group],
+        "chain_descriptors": [],
+        "xxpipe_route_mode": True,
+        "route_import_targets": {route_key: {"display_name": "流量段1 整线1"}},
+        "blocked_route_names": [],
+    }
+    panel._build_pressure_pipe_route_profile_segments = (
+        lambda pipe_groups, longitudinal_nodes_dict: {
+            route_key: [
+                {
+                    "segment_identity": group.identity,
+                    "structure_type": "有压管道",
+                    "source_kind": "non_tunnel_dxf",
+                    "start_mc": 0.0,
+                    "end_mc": 10.0,
+                    "longitudinal_nodes": list(long_nodes),
+                    "warnings": [],
+                }
+            ]
+        }
+    )
+    panel._update_pressure_pipe_last_result_button = lambda: None
+    panel._append_pressure_pipe_calc_details = lambda *_args, **_kwargs: None
+    panel._show_pressure_pipe_calc_summary_dialog = lambda *_args, **_kwargs: None
+
+    _FakeInfoBar.reset()
+    try:
+        WaterProfilePanel._open_pressure_pipe_calculator(panel)
+    finally:
+        if saved_dialog is None:
+            sys.modules.pop("app_渠系计算前端.water_profile.water_profile_dialogs", None)
+        else:
+            sys.modules["app_渠系计算前端.water_profile.water_profile_dialogs"] = saved_dialog
+        if saved_pressure_calc is None:
+            sys.modules.pop("core.pressure_pipe_calc", None)
+        else:
+            sys.modules["core.pressure_pipe_calc"] = saved_pressure_calc
+        if saved_pressure_common is None:
+            sys.modules.pop("utils.pressure_pipe_common", None)
+        else:
+            sys.modules["utils.pressure_pipe_common"] = saved_pressure_common
+
+    assert panel._pressure_pipe_manager.calls
+    assert panel._pressure_pipe_manager.calls[0]["profile_segments"] == []
 
 
 def test_mark_section_results_stale_clears_transition_topology_prepared_flag():

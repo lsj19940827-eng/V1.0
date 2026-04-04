@@ -367,6 +367,93 @@ def _make_route_groups(
     return route_key, [group1, group2], manager
 
 
+def _make_mixed_route_groups():
+    route_key = "flow2-route-mixed"
+    display_name = "流量段2 整线夹带隧洞"
+    route_points = [
+        {"x": 0.0, "y": 0.0, "turn_angle": 0.0},
+        {"x": 20.0, "y": 0.0, "turn_angle": 0.0},
+        {"x": 60.0, "y": 0.0, "turn_angle": 0.0},
+        {"x": 100.0, "y": 0.0, "turn_angle": 0.0},
+    ]
+    pipe_group = SimpleNamespace(
+        name="穿路段",
+        display_name="穿路段",
+        storage_key="flow2-mixed-pipe-a",
+        identity="2::穿路段",
+        route_key=route_key,
+        route_display_name=display_name,
+        route_ip_points=list(route_points),
+        route_start_mc=0.0,
+        route_end_mc=100.0,
+        route_start_row_index=1,
+        route_end_row_index=6,
+        segment_start_mc=20.0,
+        segment_end_mc=40.0,
+        group_mode="named_group",
+        structure_type="有压管道",
+        design_flow=1.2,
+        diameter=1.0,
+        material_key="钢管",
+        ip_points=[route_points[1], {"x": 40.0, "y": 0.0, "turn_angle": 0.0}],
+        rows=[SimpleNamespace(section_params={"D": 1.0}, turn_radius=0.0, flow_section="2") for _ in range(2)],
+        row_indices=[2, 3],
+    )
+    tunnel_group = SimpleNamespace(
+        name="穿山段",
+        display_name="穿山段隧洞",
+        storage_key="flow2-mixed-tunnel",
+        identity="flow2-mixed-tunnel",
+        route_key=route_key,
+        route_display_name=display_name,
+        route_ip_points=list(route_points),
+        route_start_mc=0.0,
+        route_end_mc=100.0,
+        route_start_row_index=1,
+        route_end_row_index=6,
+        segment_start_mc=0.0,
+        segment_end_mc=20.0,
+        group_mode="named_group",
+        structure_type="隧洞-圆形",
+        design_flow=1.2,
+        diameter=2.4,
+        material_key="隧洞",
+        ip_points=[route_points[0], route_points[1]],
+        rows=[SimpleNamespace(section_params={"D": 2.4}, turn_radius=0.0, flow_section="2") for _ in range(2)],
+        row_indices=[0, 1],
+        tunnel_invert_inlet=420.0,
+        tunnel_slope_i=0.01,
+        tunnel_invert_outlet_check=419.8,
+        tunnel_section_type="圆形隧洞",
+        tunnel_section_params={"D": 2.4},
+    )
+    pipe_group_b = SimpleNamespace(
+        name="穿路段B",
+        display_name="穿路段B",
+        storage_key="flow2-mixed-pipe-b",
+        identity="2::穿路段B",
+        route_key=route_key,
+        route_display_name=display_name,
+        route_ip_points=list(route_points),
+        route_start_mc=0.0,
+        route_end_mc=100.0,
+        route_start_row_index=1,
+        route_end_row_index=6,
+        segment_start_mc=60.0,
+        segment_end_mc=100.0,
+        group_mode="named_group",
+        structure_type="顶管",
+        design_flow=1.2,
+        diameter=1.0,
+        material_key="钢管",
+        ip_points=[route_points[2], route_points[3]],
+        rows=[SimpleNamespace(section_params={"D": 1.0}, turn_radius=0.0, flow_section="2") for _ in range(2)],
+        row_indices=[4, 5],
+    )
+    manager = _FakeManager(route_key, [], route_key=route_key, route_display_name=display_name)
+    return route_key, [tunnel_group, pipe_group, pipe_group_b], manager
+
+
 def test_pressure_pipe_config_dialog_builds_single_route_card_for_xxpipe_groups():
     _get_qapp()
     route_key, groups, manager = _make_route_groups()
@@ -422,6 +509,102 @@ def test_pressure_pipe_config_dialog_hides_chain_and_segment_cards_in_xxpipe_rou
 
     button_texts = [btn.text() for btn in dialog.findChildren(QPushButton)]
     assert "应用到全部管道" not in button_texts
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_keeps_route_card_and_tunnel_segment_cards_for_mixed_xxpipe_route():
+    _get_qapp()
+    route_key, groups, manager = _make_mixed_route_groups()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+    )
+    dialog.show()
+    _flush_events(6)
+
+    assert route_key in dialog._route_widgets
+    assert list(dialog._card_widgets) == ["flow2-mixed-tunnel"]
+
+    titles = [box.title() for box in dialog.findChildren(QGroupBox)]
+    assert "链路: 流量段2 整线夹带隧洞" in titles
+    assert "管道: 穿山段隧洞" in titles
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_accept_persists_tunnel_parameters_for_mixed_xxpipe():
+    _get_qapp()
+    route_key, groups, manager = _make_mixed_route_groups()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+    )
+    dialog._longitudinal_data[route_key] = _make_longitudinal_nodes()
+    dialog.show()
+    _flush_events(6)
+
+    widgets = dialog._card_widgets["flow2-mixed-tunnel"]
+    widgets["tunnel_section_type_combo"].setCurrentText("圆拱直墙型隧洞")
+    _flush_events(2)
+    widgets["tunnel_invert_edit"].setText("421.5")
+    widgets["tunnel_slope_edit"].setText("0.012")
+    widgets["tunnel_outlet_check_edit"].setText("420.3")
+    widgets["tunnel_param_a_edit"].setText("3.2")
+    widgets["tunnel_param_b_edit"].setText("4.5")
+
+    dialog.accept()
+    _flush_events(4)
+
+    tunnel_group = groups[0]
+    assert dialog.result() == QDialog.Accepted
+    assert tunnel_group.segment_geometry_source == "generated_tunnel"
+    assert tunnel_group.tunnel_invert_inlet == pytest.approx(421.5)
+    assert tunnel_group.tunnel_slope_i == pytest.approx(0.012)
+    assert tunnel_group.tunnel_invert_outlet_check == pytest.approx(420.3)
+    assert tunnel_group.tunnel_section_type == "圆拱直墙型隧洞"
+    assert tunnel_group.tunnel_section_params == {"B": 3.2, "H": 4.5}
+
+    saved = manager.get_pipe_config("flow2-mixed-tunnel")
+    assert saved is not None
+    assert saved.segment_geometry_source == "generated_tunnel"
+    assert saved.tunnel_invert_inlet == pytest.approx(421.5)
+    assert saved.tunnel_slope_i == pytest.approx(0.012)
+    assert saved.tunnel_invert_outlet_check == pytest.approx(420.3)
+    assert saved.tunnel_section_type == "圆拱直墙型隧洞"
+    assert saved.tunnel_section_params == {"B": 3.2, "H": 4.5}
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_rejects_missing_tunnel_parameters_before_accept(monkeypatch):
+    _get_qapp()
+    route_key, groups, manager = _make_mixed_route_groups()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+    )
+    dialog._longitudinal_data[route_key] = _make_longitudinal_nodes()
+    dialog.show()
+    _flush_events(6)
+
+    widgets = dialog._card_widgets["flow2-mixed-tunnel"]
+    widgets["tunnel_invert_edit"].setText("")
+    errors = []
+    monkeypatch.setattr(dialog_mod, "fluent_error", lambda *_args: errors.append(_args[2]))
+
+    dialog.accept()
+    _flush_events(2)
+
+    assert errors
+    assert "进口底高" in errors[0]
+    assert dialog.result() == 0
 
     dialog.close()
     dialog.deleteLater()
@@ -489,6 +672,135 @@ def test_pressure_pipe_config_dialog_rejects_route_import_when_station_coverage_
                 {"chainage": 40.0, "elevation": 418.0, "turn_type": "NONE"},
             ],
         )
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_route_import_coverage_ignores_tunnel_start_segment():
+    _get_qapp()
+    route_key, groups, manager = _make_mixed_route_groups()
+    route_nodes = [
+        SimpleNamespace(
+            name="穿山段",
+            flow_section="2",
+            ip_number=1,
+            structure_type=SimpleNamespace(value="隧洞-圆形"),
+            in_out=SimpleNamespace(value="进"),
+            station_MC=0.0,
+            x=0.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="穿路段",
+            flow_section="2",
+            ip_number=2,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value="进"),
+            station_MC=20.0,
+            x=20.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="穿路段B",
+            flow_section="2",
+            ip_number=3,
+            structure_type=SimpleNamespace(value="顶管"),
+            in_out=SimpleNamespace(value="出"),
+            station_MC=100.0,
+            x=100.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+        route_import_targets={
+            route_key: {
+                "display_name": "流量段2 整线夹带隧洞",
+                "station_prefix": "",
+                "nodes": route_nodes,
+            }
+        },
+    )
+
+    dialog._validate_xxpipe_route_import_coverage(
+        route_key,
+        [
+            {"chainage": 20.0, "elevation": 418.0, "turn_type": "NONE"},
+            {"chainage": 100.0, "elevation": 410.0, "turn_type": "NONE"},
+        ],
+    )
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_resolves_import_anchor_from_first_non_tunnel_station_fallback():
+    _get_qapp()
+    route_key, groups, manager = _make_mixed_route_groups()
+    route_nodes = [
+        SimpleNamespace(
+            name="穿山段",
+            flow_section="2",
+            ip_number=1,
+            structure_type=SimpleNamespace(value="隧洞-圆形"),
+            in_out=SimpleNamespace(value="进"),
+            station_MC=0.0,
+            x=0.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="穿路段",
+            flow_section="2",
+            ip_number=2,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value="进"),
+            station_MC=None,
+            x=20.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="穿路段B",
+            flow_section="2",
+            ip_number=3,
+            structure_type=SimpleNamespace(value="顶管"),
+            in_out=SimpleNamespace(value="出"),
+            station_MC=60.0,
+            x=60.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+        route_import_targets={
+            route_key: {
+                "display_name": "流量段2 整线夹带隧洞",
+                "station_prefix": "",
+                "nodes": route_nodes,
+            }
+        },
+    )
+
+    assert dialog._resolve_xxpipe_route_import_anchor_station(
+        route_key,
+        groups[0].route_ip_points,
+    ) == pytest.approx(20.0)
 
     dialog.close()
     dialog.deleteLater()

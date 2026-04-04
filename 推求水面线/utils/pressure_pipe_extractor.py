@@ -79,6 +79,12 @@ class PressurePipeGroup:
     route_member_keys: List[str] = field(default_factory=list)  # 整线成员键
     segment_start_mc: float = 0.0               # 当前子段起点桩号
     segment_end_mc: float = 0.0                 # 当前子段终点桩号
+    segment_geometry_source: str = ""           # 子段几何来源
+    tunnel_invert_inlet: Optional[float] = None  # 隧洞进口底高
+    tunnel_slope_i: Optional[float] = None      # 隧洞坡降 i
+    tunnel_invert_outlet_check: Optional[float] = None  # 隧洞出口底高校核值
+    tunnel_section_type: str = ""               # 隧洞断面类型
+    tunnel_section_params: Dict[str, Any] = field(default_factory=dict)  # 隧洞断面参数
     has_inlet_transition: bool = True           # 进口侧是否存在渐变段
     has_outlet_transition: bool = True          # 出口侧是否存在渐变段
     inlet_transition_reason: str = ""           # 进口侧无渐变段原因
