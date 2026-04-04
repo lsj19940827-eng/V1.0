@@ -33,7 +33,7 @@ def test_xxpipe_profile_rows_are_fixed_five_lines():
     assert rows[0]["header_lines"] == ["建筑物名称"]
     assert rows[2]["header_lines"] == ["里程桩号", "（千米+米）"]
     assert rows[3]["header_lines"] == ["管中心线高程（米）"]
-    assert rows[4]["header_lines"] == ["管材（管径/米）"]
+    assert rows[4]["header_lines"] == ["管材（管径）"]
 
 
 def test_xxpipe_rule_helpers_cover_channel_level_and_structure_scope():

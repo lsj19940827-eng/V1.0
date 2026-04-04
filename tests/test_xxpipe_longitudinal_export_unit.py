@@ -397,7 +397,7 @@ def test_draw_profile_on_msp_in_xxpipe_mode_uses_centerline_polyline_only(monkey
     assert "里程桩号" in texts
     assert "（千米+米）" in texts
     assert "管中心线高程（米）" in texts
-    assert "管材（管径/米）" in texts
+    assert "管材（管径）" in texts
     assert "穿路段定向钻" in texts
     assert "球墨铸铁管 DN1200" in texts
     assert "0+000.00" in texts

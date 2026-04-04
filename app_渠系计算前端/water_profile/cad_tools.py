@@ -1674,9 +1674,9 @@ _XXPIPE_PROFILE_ROW_DEFS = [
     },
     {
         "id": "pipe_material",
-        "label": "管材（管径/米）",
+        "label": "管材（管径）",
         "hint": "只显示管材与管径",
-        "header_lines": ["管材（管径/米）"],
+        "header_lines": ["管材（管径）"],
         "height": 20.0,
         "anchor": "center",
     },
