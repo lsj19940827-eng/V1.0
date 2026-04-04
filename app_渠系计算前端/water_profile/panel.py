@@ -23,6 +23,8 @@ import datetime
 from contextlib import contextmanager
 
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _pkg_root not in sys.path:
+    sys.path.insert(0, _pkg_root)
 
 # 推求水面线模块路径
 _water_profile_dir = os.path.join(_pkg_root, '推求水面线')
@@ -33,6 +35,8 @@ if _water_profile_dir not in sys.path:
 _calc_dir = os.path.join(_pkg_root, 'calc_渠系计算算法内核')
 if _calc_dir not in sys.path:
     sys.path.insert(0, _calc_dir)
+
+import 推求水面线.utils  # noqa: F401  # 建立顶层 utils 兼容别名，避免打包环境同名包冲突
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,

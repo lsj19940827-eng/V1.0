@@ -35,6 +35,8 @@ from app_渠系计算前端.styles import P, S, T1, T2, BD, auto_resize_table, D
 
 # 倒虹吸系统路径
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _pkg_root not in sys.path:
+    sys.path.insert(0, _pkg_root)
 _siphon_dir = os.path.join(_pkg_root, '倒虹吸水力计算系统')
 if _siphon_dir not in sys.path:
     sys.path.insert(0, _siphon_dir)
@@ -43,6 +45,8 @@ if _siphon_dir not in sys.path:
 _water_profile_dir = os.path.join(_pkg_root, '推求水面线')
 if _water_profile_dir not in sys.path:
     sys.path.insert(0, _water_profile_dir)
+
+import 推求水面线.utils  # noqa: F401  # 建立顶层 utils 兼容别名，避免打包环境同名包冲突
 
 try:
     from managers.siphon_manager import SiphonManager, SiphonConfig

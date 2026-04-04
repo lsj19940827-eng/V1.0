@@ -54,6 +54,8 @@ if _water_profile_dir not in sys.path:
 if _pkg_root not in sys.path:
     sys.path.insert(0, _pkg_root)
 
+import 推求水面线.utils  # noqa: F401  # 建立顶层 utils 兼容别名，避免打包环境同名包冲突
+
 try:
     from models.data_models import ProjectSettings
     from models.enums import StructureType, InOutType
