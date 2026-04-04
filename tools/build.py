@@ -158,6 +158,150 @@ OPTIONAL_ML_EXCLUDES = [
 ]
 
 # ============================================================
+# 隐式导入分组
+# 统一维护 PyInstaller 打包与打包前导入校验所依赖的模块清单。
+# ============================================================
+AUTH_AND_UPDATE_HIDDEN_IMPORTS = [
+    "license_checker",
+    "version",
+    "updater",
+]
+
+THIRD_PARTY_HIDDEN_IMPORTS = [
+    "PySide6",
+    "PySide6.QtWebEngineWidgets",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtSvg",
+    "qfluentwidgets",
+    "pandas",
+    "openpyxl",
+    "matplotlib",
+    "matplotlib.backends.backend_qtagg",
+    "matplotlib.backends.backend_svg",
+    "matplotlib.backends.backend_qt5agg",
+    "matplotlib.backends.backend_pdf",
+    "ezdxf",
+    "PIL",
+    "shapely",
+    "shapely.geometry",
+    "triangle",
+    "startinpy",
+    "scipy",
+    "scipy.spatial",
+    "scipy.optimize",
+    "docx",
+    "latex2mathml",
+    "lxml",
+    "seaborn",
+    "pypdf",
+]
+
+PRESSURE_PIPE_DESIGN_HIDDEN_IMPORTS = [
+    "有压管道设计",
+]
+
+CALC_CORE_HIDDEN_IMPORTS = [
+    "明渠设计",
+    "渡槽设计",
+    "隧洞设计",
+    "矩形暗涵设计",
+    "生成断面汇总表",
+]
+
+SIPHON_CORE_HIDDEN_IMPORTS = [
+    "siphon_models",
+    "siphon_hydraulics",
+    "siphon_coefficients",
+    "dxf_parser",
+    "spatial_merger",
+]
+
+WATER_PROFILE_UTIL_HIDDEN_IMPORTS = [
+    "utils.excel_io",
+    "utils.siphon_extractor",
+    "utils.pressure_pipe_result_helpers",
+]
+
+WATER_PROFILE_CORE_HIDDEN_IMPORTS = [
+    "models",
+    "models.data_models",
+    "models.enums",
+    "core",
+    "core.calculator",
+    "core.geometry_calc",
+    "core.hydraulic_calc",
+    "shared",
+    "shared.shared_data_manager",
+    "shared.k12_images_data",
+    "config",
+    "config.constants",
+    "config.default_data",
+    "utils",
+    *WATER_PROFILE_UTIL_HIDDEN_IMPORTS,
+    "managers",
+    "managers.siphon_manager",
+]
+
+WATER_PROFILE_NAMESPACE_HIDDEN_IMPORTS = [
+    "推求水面线.utils",
+    "推求水面线.utils.excel_io",
+    "推求水面线.utils.siphon_extractor",
+    "推求水面线.utils.pressure_pipe_common",
+    "推求水面线.utils.pressure_pipe_extractor",
+    "推求水面线.utils.pressure_pipe_longitudinal_utils",
+    "推求水面线.utils.pressure_pipe_result_helpers",
+    "推求水面线.models",
+    "推求水面线.models.data_models",
+    "推求水面线.models.enums",
+    "推求水面线.shared",
+    "推求水面线.shared.k12_images_data",
+]
+
+
+def get_hidden_imports() -> list[str]:
+    """返回 PyInstaller 需要强制带入的隐式导入模块列表。"""
+    return [
+        *AUTH_AND_UPDATE_HIDDEN_IMPORTS,
+        *THIRD_PARTY_HIDDEN_IMPORTS,
+        *PRESSURE_PIPE_DESIGN_HIDDEN_IMPORTS,
+        *CALC_CORE_HIDDEN_IMPORTS,
+        *SIPHON_CORE_HIDDEN_IMPORTS,
+        *WATER_PROFILE_CORE_HIDDEN_IMPORTS,
+        *WATER_PROFILE_NAMESPACE_HIDDEN_IMPORTS,
+    ]
+
+
+def get_verify_import_groups() -> dict[str, list[str]]:
+    """返回打包前导入校验使用的模块分组。"""
+    return {
+        "授权与版本": list(AUTH_AND_UPDATE_HIDDEN_IMPORTS),
+        "calc_渠系计算算法内核": [
+            *CALC_CORE_HIDDEN_IMPORTS,
+            *PRESSURE_PIPE_DESIGN_HIDDEN_IMPORTS,
+        ],
+        "倒虹吸水力计算系统": list(SIPHON_CORE_HIDDEN_IMPORTS),
+        "推求水面线": [
+            *WATER_PROFILE_CORE_HIDDEN_IMPORTS,
+            *WATER_PROFILE_NAMESPACE_HIDDEN_IMPORTS,
+        ],
+        "第三方库": [
+            "PySide6",
+            "qfluentwidgets",
+            "pandas",
+            "openpyxl",
+            "matplotlib",
+            "ezdxf",
+            "PIL",
+            "scipy",
+            "scipy.optimize",
+        ],
+        "土石方计算依赖": [
+            "shapely",
+            # triangle 缺失时土石方模块会回退到 scipy.Delaunay，这里不阻断打包前校验。
+        ],
+    }
+
+# ============================================================
 # 路径（build.py 位于 tools/ 下，项目根目录在上一级）
 # ============================================================
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -349,58 +493,7 @@ def build(bump: str = None):
         args.append(f"--paths={p}")
 
     # ---- 需要隐式导入的包（PyInstaller 静态分析可能扫描不到的） ----
-    hidden_imports = [
-        # 授权校验与更新
-        "license_checker",
-        "version",
-        "updater",
-        # 第三方库
-        "PySide6",
-        "PySide6.QtWebEngineWidgets",
-        "PySide6.QtWebEngineCore",
-        "PySide6.QtSvg",
-        "qfluentwidgets",
-        "pandas",
-        "openpyxl",
-        "matplotlib",
-        "matplotlib.backends.backend_qtagg",
-        "matplotlib.backends.backend_svg",
-        "matplotlib.backends.backend_qt5agg",
-        "matplotlib.backends.backend_pdf",  # 有压管道批量计算 PDF 导出
-        "ezdxf",
-        "PIL",
-        "shapely", "shapely.geometry",
-        "triangle",
-        "startinpy",
-        "scipy", "scipy.spatial",
-        "docx", "latex2mathml", "lxml",
-        # ---- 有压管道设计 ----
-        "seaborn", "pypdf",
-        "scipy", "scipy.optimize",
-        "有压管道设计",
-        # ---- calc_渠系计算算法内核（无 __init__.py，sys.path hack 导入） ----
-        "明渠设计",
-        "渡槽设计",
-        "隧洞设计",
-        "矩形暗涵设计",
-        "生成断面汇总表",
-        # ---- 倒虹吸水力计算系统（无 __init__.py，sys.path hack 导入） ----
-        "siphon_models",
-        "siphon_hydraulics",
-        "siphon_coefficients",
-        "dxf_parser",
-        "spatial_merger",
-        # ---- 推求水面线子包（无根 __init__.py，sys.path hack 导入） ----
-        "models", "models.data_models", "models.enums",
-        "core", "core.calculator", "core.geometry_calc", "core.hydraulic_calc",
-        "shared", "shared.shared_data_manager", "shared.k12_images_data",
-        "config", "config.constants", "config.default_data",
-        "utils", "utils.excel_io", "utils.siphon_extractor",
-        "managers", "managers.siphon_manager",
-        # ---- 推求水面线命名空间包式导入（部分代码用 from 推求水面线.xxx import） ----
-        "推求水面线.models", "推求水面线.models.data_models", "推求水面线.models.enums",
-        "推求水面线.shared", "推求水面线.shared.k12_images_data",
-    ]
+    hidden_imports = get_hidden_imports()
     for mod in hidden_imports:
         args.append(f"--hidden-import={mod}")
 

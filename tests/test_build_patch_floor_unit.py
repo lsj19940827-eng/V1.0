@@ -70,6 +70,26 @@ def test_resolve_update_helper_icon_file_prefers_shared_shield_icon(monkeypatch)
     assert build._resolve_update_helper_icon_file() == str(shield_logo)
 
 
+def test_hidden_imports_include_pressure_pipe_result_helpers():
+    hidden_imports = build.get_hidden_imports()
+
+    assert "utils.pressure_pipe_result_helpers" in hidden_imports
+    assert "推求水面线.utils.pressure_pipe_result_helpers" in hidden_imports
+
+
+def test_verify_import_groups_include_pressure_pipe_result_helpers():
+    verify_groups = build.get_verify_import_groups()
+
+    assert (
+        "utils.pressure_pipe_result_helpers"
+        in verify_groups["推求水面线"]
+    )
+    assert (
+        "推求水面线.utils.pressure_pipe_result_helpers"
+        in verify_groups["推求水面线"]
+    )
+
+
 def test_build_universal_patch_includes_allowed_source_hashes(tmp_path):
     dist_dir = tmp_path / "dist"
     dist_dir.mkdir()

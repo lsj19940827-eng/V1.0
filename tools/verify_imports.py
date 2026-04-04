@@ -14,8 +14,10 @@ import os
 import importlib
 import io
 
-# 设置输出编码为 UTF-8
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+try:
+    from tools.build import get_verify_import_groups
+except ImportError:
+    from build import get_verify_import_groups
 
 # 项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,63 +30,7 @@ SEARCH_PATHS = [
     os.path.join(PROJECT_ROOT, "推求水面线"),
 ]
 
-# 需要验证的核心模块（从 build.py hidden_imports 提取）
-CORE_MODULES = {
-    "授权与版本": [
-        "license_checker",
-        "version",
-        "updater",
-    ],
-    "calc_渠系计算算法内核": [
-        "明渠设计",
-        "渡槽设计",
-        "隧洞设计",
-        "矩形暗涵设计",
-        "有压管道设计",
-        "生成断面汇总表",
-    ],
-    "倒虹吸水力计算系统": [
-        "siphon_models",
-        "siphon_hydraulics",
-        "siphon_coefficients",
-        "dxf_parser",
-        "spatial_merger",
-    ],
-    "推求水面线": [
-        "models",
-        "models.data_models",
-        "models.enums",
-        "core",
-        "core.calculator",
-        "core.geometry_calc",
-        "core.hydraulic_calc",
-        "shared",
-        "shared.shared_data_manager",
-        "shared.k12_images_data",
-        "config",
-        "config.constants",
-        "config.default_data",
-        "utils",
-        "utils.excel_io",
-        "managers",
-    ],
-    "第三方库": [
-        "PySide6",
-        "qfluentwidgets",
-        "pandas",
-        "openpyxl",
-        "matplotlib",
-        "ezdxf",
-        "PIL",
-        "scipy",
-        "scipy.optimize",
-    ],
-    "土石方计算依赖": [
-        "shapely",
-        "triangle",
-        # "startinpy",  # 可选依赖，可能未安装
-    ],
-}
+CORE_MODULES = get_verify_import_groups()
 
 
 def setup_paths():
@@ -111,6 +57,10 @@ def verify_module(module_name: str) -> tuple[bool, str]:
 
 
 def main():
+    # 设置输出编码为 UTF-8，避免直接运行脚本时中文乱码。
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
     print("=" * 60)
     print("  渠系水力计算综合系统 - 模块导入验证")
     print("=" * 60)
