@@ -42,7 +42,7 @@ def test_xxpipe_rule_helpers_cover_channel_level_and_structure_scope():
     assert not cad_tools._is_xxpipe_channel_level("支渠")
 
     assert cad_tools._is_xxpipe_allowed_structure("有压管道")
-    assert not cad_tools._is_xxpipe_allowed_structure("隧洞-圆形")
+    assert cad_tools._is_xxpipe_allowed_structure("隧洞-圆形")
     assert cad_tools._is_xxpipe_allowed_structure("定向钻")
     assert cad_tools._is_xxpipe_allowed_structure("顶管")
     assert not cad_tools._is_xxpipe_allowed_structure("明渠-矩形")
@@ -52,7 +52,7 @@ def test_xxpipe_building_name_only_marks_named_special_segments():
     assert cad_tools._get_xxpipe_building_display_name("有压管道", "普通管") == ""
     assert cad_tools._get_xxpipe_building_display_name("定向钻", "穿路段") == "穿路段定向钻"
     assert cad_tools._get_xxpipe_building_display_name("顶管", "") == "顶管"
-    assert cad_tools._get_xxpipe_building_display_name("隧洞-圆形", "1#洞段") == ""
+    assert cad_tools._get_xxpipe_building_display_name("隧洞-圆形", "1#洞段") == "1#洞段隧洞-圆形"
 
 
 def test_xxpipe_pipe_material_text_uses_material_and_dn_only():
