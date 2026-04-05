@@ -6055,6 +6055,10 @@ class WaterProfilePanel(QWidget):
             ip_str = node.get_ip_str() if hasattr(node, 'get_ip_str') else ""
             item = QTableWidgetItem(ip_str)
             item.setTextAlignment(Qt.AlignCenter)
+            item.setData(Qt.UserRole, {
+                "_raw_ip_number": getattr(node, "ip_number", 0),
+                "_display_ip_number": getattr(node, "display_ip_number", None),
+            })
             self.node_table.setItem(r, 4, item)
 
             # 转弯半径 (col 7) — 新规则：源行留空按 0 显示，不再自动套全局半径。
@@ -6283,8 +6287,23 @@ class WaterProfilePanel(QWidget):
             except (ValueError, TypeError):
                 return 0.0
 
-        def _parse_ip_number(text):
+        def _read_ip_metadata(row):
+            """读取 IP 单元格保存的原始/显示编号元数据。"""
+            item = table.item(row, 4)
+            if not item:
+                return {}
+            data = item.data(Qt.UserRole)
+            return data if isinstance(data, dict) else {}
+
+        def _parse_ip_number(row, text):
             """解析IP编号，支持复合格式如 'IP3 沪蓉倒进'（#11）"""
+            meta = _read_ip_metadata(row)
+            raw_ip_number = meta.get("_raw_ip_number", None)
+            if raw_ip_number not in ("", None):
+                try:
+                    return int(raw_ip_number)
+                except (ValueError, TypeError):
+                    pass
             if not text:
                 return 0
             # 先尝试直接转int
@@ -6297,6 +6316,22 @@ class WaterProfilePanel(QWidget):
             if m:
                 return int(m.group(1))
             return 0
+
+        def _parse_display_ip_number(row, text):
+            """解析显示用 IP 编号；特殊建筑进出口允许为空。"""
+            meta = _read_ip_metadata(row)
+            display_ip_number = meta.get("_display_ip_number", None)
+            if display_ip_number not in ("", None):
+                try:
+                    return int(display_ip_number)
+                except (ValueError, TypeError):
+                    pass
+            if not text:
+                return None
+            m = re.match(r'IP\s*(\d+)', text)
+            if m:
+                return int(m.group(1))
+            return None
 
         nodes = []
         channel_level = self._get_current_channel_level_text()
@@ -6348,8 +6383,14 @@ class WaterProfilePanel(QWidget):
                 _ur = _first_item.data(Qt.UserRole)
                 if isinstance(_ur, dict) and _ur.get('_auto_channel'):
                     node.is_auto_inserted_channel = True
-                    node.x = float(_ur.get('_x', 0.0) or 0.0)
-                    node.y = float(_ur.get('_y', 0.0) or 0.0)
+                    _auto_channel_struct = normalize_section_type_name(
+                        str(_ur.get('_auto_channel_structure_type', '') or '')
+                    )
+                    if _auto_channel_struct and not node.structure_type:
+                        try:
+                            node.structure_type = StructureType.from_string(_auto_channel_struct)
+                        except ValueError:
+                            pass
                     try:
                         node.stat_length = float(_ur.get('_stat_length', 0.0) or 0.0)
                     except (TypeError, ValueError):
@@ -6357,13 +6398,23 @@ class WaterProfilePanel(QWidget):
                 elif _ur == "auto_channel":  # 兼容旧格式
                     node.is_auto_inserted_channel = True
                 # 恢复渐变段详细参数（#10）
-                elif isinstance(_ur, dict) and _ur.get('_transition_data'):
+                if isinstance(_ur, dict) and _ur.get('_transition_data'):
                     td = _ur['_transition_data']
                     node.transition_type = td.get('transition_type', '')
                     node.transition_form = td.get('transition_form', '')
                     node.transition_zeta = td.get('transition_zeta', 0.0)
                     node.transition_theta = td.get('transition_theta', 0.0)
+                    if not node.structure_type:
+                        node.structure_type = StructureType.TRANSITION
+                        node.is_transition = True
                 if isinstance(_ur, dict):
+                    if _ur.get('_aux_coords') or _ur.get('_auto_channel'):
+                        try:
+                            node.x = float(_ur.get('_x', 0.0) or 0.0)
+                            node.y = float(_ur.get('_y', 0.0) or 0.0)
+                        except (TypeError, ValueError):
+                            node.x = 0.0
+                            node.y = 0.0
                     _override = _ur.get("_transition_length_override_m", None)
                     if _override is not None and str(_override).strip() != "":
                         try:
@@ -6457,7 +6508,9 @@ class WaterProfilePanel(QWidget):
             if _io_text:
                 node.in_out = InOutType.from_string(_io_text)
             # IP编号 (col 4) — 支持复合格式 (#11)
-            node.ip_number = _parse_ip_number(_read_text(r, 4))
+            ip_text = _read_text(r, 4)
+            node.ip_number = _parse_ip_number(r, ip_text)
+            node.display_ip_number = _parse_display_ip_number(r, ip_text)
             # 记录转弯半径是否来自用户/表格的显式输入；"0" 也算显式输入，不能再当成空白兜底。
             _turn_radius_text = _read_text(r, 7)
             _turn_radius_is_explicit = bool(_turn_radius_text)
@@ -7035,6 +7088,11 @@ class WaterProfilePanel(QWidget):
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(str(v))
                 item.setTextAlignment(Qt.AlignCenter)
+                if c == 4:
+                    item.setData(Qt.UserRole, {
+                        "_raw_ip_number": getattr(node, "ip_number", 0),
+                        "_display_ip_number": getattr(node, "display_ip_number", None),
+                    })
                 # 非可编辑列设为只读
                 if c not in EDITABLE_COLS:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
@@ -7074,9 +7132,11 @@ class WaterProfilePanel(QWidget):
                 if _is_auto_ch:
                     payload.update({
                         "_auto_channel": True,
+                        "_auto_channel_structure_type": _st_str,
                         "_x": node.x,
                         "_y": node.y,
                         "_stat_length": float(getattr(node, "stat_length", 0.0) or 0.0),
+                        "_aux_coords": True,
                     })
                 elif _is_trans and (node.transition_type or node.transition_form):
                     # 渐变段详细参数保存到UserRole（#10）
@@ -7094,6 +7154,12 @@ class WaterProfilePanel(QWidget):
                     payload["_transition_rule_downstream_structure_type"] = str(
                         getattr(node, "transition_rule_downstream_structure_type", "") or ""
                     )
+                if _is_trans:
+                    payload.update({
+                        "_x": node.x,
+                        "_y": node.y,
+                        "_aux_coords": True,
+                    })
                 if getattr(node, 'external_head_loss', None) is not None:
                     payload['_external_head_loss'] = getattr(node, 'external_head_loss')
                 elif '_external_head_loss' in payload:

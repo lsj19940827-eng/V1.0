@@ -22,7 +22,7 @@ if _kernel_dir not in sys.path:
 
 from models.data_models import ChannelNode, OpenChannelParams, ProjectSettings
 from models.enums import StructureType, InOutType
-from config.constants import XXPIPE_CHANNEL_LEVEL_OPTIONS
+from config.constants import XXPIPE_CHANNEL_LEVEL_OPTIONS, ZERO_TOLERANCE
 from core.geometry_calc import GeometryCalculator
 from core.hydraulic_calc import HydraulicCalculator
 from 矩形暗涵设计 import calculate_rectangular_outputs
@@ -158,6 +158,32 @@ class WaterProfileCalculator:
         if io_value == "进":
             return True
         return self._is_unnamed_pressure_pipe_node(node)
+
+    @staticmethod
+    def _should_skip_display_ip_number(node: ChannelNode) -> bool:
+        """判断节点是否应隐藏显示用 IP 编号。"""
+        if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+            return True
+        struct_str = node.get_structure_type_str() if hasattr(node, "get_structure_type_str") else ""
+        if "暗涵" in struct_str:
+            return False
+        io_value = node.in_out.value if getattr(node, "in_out", None) else ""
+        if io_value not in ("进", "出"):
+            return False
+        return any(
+            key in struct_str
+            for key in ("隧洞", "倒虹吸", "有压管道", "渡槽", "定向钻", "顶管")
+        )
+
+    def _assign_display_ip_numbers(self, nodes: List[ChannelNode]) -> None:
+        """按显示规则为节点重建连续 IP 编号。"""
+        display_counter = 0
+        for node in nodes:
+            if self._should_skip_display_ip_number(node):
+                node.display_ip_number = None
+                continue
+            node.display_ip_number = display_counter
+            display_counter += 1
     
     def preprocess_nodes(self, nodes: List[ChannelNode]) -> None:
         """
@@ -241,7 +267,10 @@ class WaterProfileCalculator:
                     if key not in node.section_params:
                         node.section_params[key] = value
         
-        # 4. 闸节点去重：连续同名同坐标闸节点，仅首行保留 head_loss_gate，后续行清零
+        # 4. 显示用 IP 编号：特殊建筑进出口不占号，其余真实节点连续编号
+        self._assign_display_ip_numbers(nodes)
+
+        # 5. 闸节点去重：连续同名同坐标闸节点，仅首行保留 head_loss_gate，后续行清零
         prev_gate = None
         for node in nodes:
             if not getattr(node, 'is_diversion_gate', False):
@@ -261,11 +290,52 @@ class WaterProfileCalculator:
         Args:
             nodes: 节点列表（原地修改）
         """
+        if self._has_auxiliary_geometry_nodes(nodes):
+            self._refresh_geometry_preserving_auxiliary_nodes(nodes)
+            return
+
         # 计算方位角、转角、切线长、弧长、距离
         self.geo_calc.calculate_all_geometry(nodes)
         
         # 计算桩号
         self.geo_calc.calculate_stations(nodes, self._resolve_station_start(nodes))
+
+    @staticmethod
+    def _has_auxiliary_geometry_nodes(nodes: List[ChannelNode]) -> bool:
+        """判断当前节点序列中是否已包含辅助拓扑行。"""
+        return any(
+            getattr(node, 'is_transition', False)
+            or getattr(node, 'is_auto_inserted_channel', False)
+            for node in nodes
+        )
+
+    def _refresh_geometry_preserving_auxiliary_nodes(self, nodes: List[ChannelNode]) -> None:
+        """
+        在已存在渐变段/连接段时安全刷新几何。
+
+        只重算真实节点的转角和曲线要素，再按辅助行现有位置回补内部桩号，
+        避免辅助行参与整套几何重算后把下游真实节点桩号整体带偏。
+        """
+        real_nodes = [node for node in nodes if self._is_real_profile_node(node)]
+        if not real_nodes:
+            return
+
+        self.geo_calc.calculate_all_geometry(real_nodes)
+        start_station = self._resolve_station_start(nodes)
+        self.geo_calc.calculate_stations(real_nodes, start_station)
+
+        for node in nodes:
+            if not self._is_real_profile_node(node):
+                node.turn_angle = 0.0
+                node.tangent_length = 0.0
+                node.arc_length = 0.0
+                node.curve_length = 0.0
+                node.check_pre_curve = 0.0
+                node.check_post_curve = 0.0
+                node.check_total_length = 0.0
+
+        self._compute_auto_channel_distances(nodes)
+        self.geo_calc.calculate_stations(nodes, start_station)
     
     def calculate_hydraulics(self, nodes: List[ChannelNode]) -> None:
         """
@@ -377,10 +447,15 @@ class WaterProfileCalculator:
     @staticmethod
     def _profile_conflict_node_label(node: ChannelNode) -> str:
         """生成冲突报错中的节点标识。"""
-        ip_no = getattr(node, 'ip_number', None)
-        ip_text = f"IP{ip_no}" if ip_no is not None else "IP?"
+        if hasattr(node, "get_ip_str"):
+            ip_text = str(node.get_ip_str() or "").strip() or "IP?"
+        else:
+            ip_no = getattr(node, 'ip_number', None)
+            ip_text = f"IP{ip_no}" if ip_no is not None else "IP?"
         name = str(getattr(node, 'name', '') or '').strip()
-        return f"{ip_text}({name})" if name else ip_text
+        if name and name not in ip_text:
+            return f"{ip_text}({name})"
+        return ip_text
 
     def _validate_real_node_station_conflicts(self, nodes: List[ChannelNode], tol: float = 1e-6) -> None:
         """校验真实节点同桩号高程非零冲突；冲突时抛异常阻断后续导出。"""
@@ -456,13 +531,13 @@ class WaterProfileCalculator:
             return nodes
         
         # 检测渐变段是否已经插入（由 prepare_transitions 完成）
-        has_transitions = any(getattr(node, 'is_transition', False) for node in nodes)
+        has_auxiliary_nodes = self._has_auxiliary_geometry_nodes(nodes)
         
         # 1. 预处理
         self.preprocess_nodes(nodes)
         
         # 2. 识别并插入渐变段行和明渠段（仅在尚未插入时执行）
-        if not has_transitions:
+        if not has_auxiliary_nodes:
             nodes = self.identify_and_insert_transitions(nodes, open_channel_callback)
         
         # 3. 几何计算
@@ -1062,6 +1137,20 @@ class WaterProfileCalculator:
         result['need_open_channel'] = result['available_length'] > 0
 
         return result
+
+    @staticmethod
+    def _transition_has_effective_length(transition: ChannelNode) -> bool:
+        """判断渐变段是否具有有效长度，零长度行不再写入表格。"""
+        length = float(getattr(transition, 'transition_length', 0.0) or 0.0)
+        stat_length = float(getattr(transition, 'stat_length', 0.0) or 0.0)
+        return max(length, stat_length) > ZERO_TOLERANCE
+
+    def _append_effective_transition(self, container: List[ChannelNode], transition: ChannelNode) -> bool:
+        """仅在渐变段长度有效时才追加到结果列表。"""
+        if not self._transition_has_effective_length(transition):
+            return False
+        container.append(transition)
+        return True
     
     def _check_gap_exit_to_gate(self, exit_node: ChannelNode, gate_node: ChannelNode) -> Dict:
         """
@@ -2120,7 +2209,7 @@ class WaterProfileCalculator:
                                 actual_length=gate_check.get('transition_length_2', 0.0),
                                 preserve_existing_length=True,
                             )
-                            deferred_nodes.append(tr_in)
+                            self._append_effective_transition(deferred_nodes, tr_in)
                     elif gate_check['need_transition_2'] and gate_check['distance'] > 0:
                         merged = self._create_merged_transition_node(
                             current_node, next_node, gate_check['distance'], "进口")
@@ -2137,7 +2226,7 @@ class WaterProfileCalculator:
                             actual_length=gate_check['distance'],
                             preserve_existing_length=True,
                         )
-                        deferred_nodes.append(merged)
+                        self._append_effective_transition(deferred_nodes, merged)
                 elif gate_check['need_transition_2'] and gate_check['distance'] > 0:
                     us_ch = self._find_nearest_upstream_channel(nodes, i + 1)
                     merged = self._create_merged_transition_node(
@@ -2155,7 +2244,7 @@ class WaterProfileCalculator:
                         actual_length=gate_check['distance'],
                         preserve_existing_length=True,
                     )
-                    deferred_nodes.append(merged)
+                    self._append_effective_transition(deferred_nodes, merged)
                 continue
 
             # --- 情况2：下一节点是闸 → 只检查出口→闸方向的缺口（直接插入）---
@@ -2194,7 +2283,7 @@ class WaterProfileCalculator:
                                 actual_length=gate_check.get('transition_length_1', 0.0),
                                 preserve_existing_length=True,
                             )
-                            new_nodes.append(tr_out)
+                            self._append_effective_transition(new_nodes, tr_out)
                         new_nodes.append(oc)
                     elif gate_check['need_transition_1'] and gate_check['distance'] > 0:
                         merged = self._create_merged_transition_node(
@@ -2207,7 +2296,7 @@ class WaterProfileCalculator:
                             actual_length=gate_check['distance'],
                             preserve_existing_length=True,
                         )
-                        new_nodes.append(merged)
+                        self._append_effective_transition(new_nodes, merged)
                 elif gate_check['need_transition_1'] and gate_check['distance'] > 0:
                     us_ch = self._find_nearest_upstream_channel(nodes, i)
                     merged = self._create_merged_transition_node(
@@ -2223,7 +2312,7 @@ class WaterProfileCalculator:
                         actual_length=gate_check['distance'],
                         preserve_existing_length=True,
                     )
-                    new_nodes.append(merged)
+                    self._append_effective_transition(new_nodes, merged)
                 continue
 
             # --- 情况3：普通 (非闸, 非闸) 对 ---
@@ -2275,7 +2364,7 @@ class WaterProfileCalculator:
                             actual_length=check_result.get('transition_length_1', 0.0),
                             preserve_existing_length=True,
                         )
-                        new_nodes.append(transition_out)
+                        self._append_effective_transition(new_nodes, transition_out)
                     new_nodes.append(open_channel)
                     if check_result['need_transition_2']:
                         transition_in = self._create_inlet_transition_node(next_node, current_node)
@@ -2288,7 +2377,7 @@ class WaterProfileCalculator:
                             actual_length=check_result.get('transition_length_2', 0.0),
                             preserve_existing_length=True,
                         )
-                        new_nodes.append(transition_in)
+                        self._append_effective_transition(new_nodes, transition_in)
                 else:
                     # 明渠段未能插入，回退为1行合并渐变段（避免出现两个连续渐变段）
                     if check_result['need_transition_1'] or check_result['need_transition_2']:
@@ -2311,7 +2400,7 @@ class WaterProfileCalculator:
                                 actual_length=check_result['distance'],
                                 preserve_existing_length=True,
                             )
-                            new_nodes.append(merged_transition)
+                            self._append_effective_transition(new_nodes, merged_transition)
             
             elif check_result['need_transition_1'] or check_result['need_transition_2']:
                 # 不需要明渠段但需要渐变段（里程差 <= 渐变段之和）
@@ -2338,7 +2427,7 @@ class WaterProfileCalculator:
                         actual_length=check_result['distance'],
                         preserve_existing_length=True,
                     )
-                    new_nodes.append(merged_transition)
+                    self._append_effective_transition(new_nodes, merged_transition)
             
             elif self._needs_transition(current_node, next_node):
                 # 普通渐变段（非建筑物出口→进口的情况，包括明渠→明渠）
@@ -2364,7 +2453,7 @@ class WaterProfileCalculator:
                     current_node,
                     next_node,
                 )
-                new_nodes.append(transition_node)
+                self._append_effective_transition(new_nodes, transition_node)
         
         # 闸穿透：刷新残留的延迟节点（闸在节点列表末尾的情况）
         if deferred_nodes:

@@ -28,6 +28,26 @@ class _Node(SimpleNamespace):
             return struct.value
         return str(struct)
 
+    def get_ip_str(self):
+        """按主模型规则返回当前节点的显示 IP 文本。"""
+        in_out = getattr(getattr(self, "in_out", None), "value", "")
+        struct = self.get_structure_type_str()
+        display_ip_no = getattr(self, "display_ip_number", None)
+        if display_ip_no is None:
+            display_ip_no = getattr(self, "ip_number", 0)
+        if in_out in ("进", "出") and "暗涵" not in struct:
+            struct_abbr = ""
+            if "隧洞" in struct:
+                struct_abbr = "隧"
+            elif "倒虹吸" in struct:
+                struct_abbr = "倒"
+            elif "渡槽" in struct:
+                struct_abbr = "渡"
+            elif struct in {"有压管道", "定向钻", "顶管"}:
+                struct_abbr = "压"
+            return f"{getattr(self, 'name', '')}{struct_abbr}{in_out}"
+        return f"IP{display_ip_no}"
+
 
 def _make_node(
     *,
@@ -43,6 +63,7 @@ def _make_node(
 ):
     return _Node(
         ip_number=ip_no,
+        display_ip_number=ip_no,
         station_MC=float(mc),
         station_BC=float(mc if bc is None else bc),
         station_EC=float(mc if ec is None else ec),
@@ -212,9 +233,9 @@ def test_ip_related_records_suffix_and_duplicate_offset_rules():
     assert rec["bd_ip_before"][1]["x"] == rec["bd_ip_before"][0]["x"] + 6
     assert rec["be_ip_text"][1]["x"] == rec["be_ip_text"][0]["x"] + 6
     assert rec["bf_ip_after"][1]["x"] == rec["bf_ip_after"][0]["x"] + 6
-    assert rec["be_ip_text"][2]["text"] == "IP8 土地坝隧洞进"
-    assert rec["bd_ip_before"][2]["text"] == "IP8 土地坝隧洞进"
-    assert rec["bf_ip_after"][2]["text"] == "IP8 土地坝隧洞进"
+    assert rec["be_ip_text"][2]["text"] == "土地坝隧进"
+    assert rec["bd_ip_before"][2]["text"] == "土地坝隧进"
+    assert rec["bf_ip_after"][2]["text"] == "土地坝隧进"
     assert rec["bd_ip_before"][3]["text"] == "IP3"
     assert rec["bf_ip_after"][3]["text"] == "IP3"
 
@@ -233,8 +254,8 @@ def test_special_angle_warning_contains_near_and_over_threshold():
     message = cad_tools._build_special_angle_warning(nodes, tol_deg=0.01)
     assert "接近0" in message
     assert "超过阈值" in message
-    assert "IP21 甲倒虹吸进" in message
-    assert "IP22 乙有压管道出" in message
+    assert "甲倒进" in message
+    assert "乙压出" in message
 
 
 def test_get_building_display_name_falls_back_to_structure_for_unnamed_open_channel():

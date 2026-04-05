@@ -20,6 +20,8 @@ except ImportError:
 def normalize_section_type_name(section_type: Any) -> str:
     """统一结构/断面类型别名，避免各模块口径差异导致后续识别失败。"""
     text = str(section_type or "").strip()
+    if text.endswith("(连接段)"):
+        text = text[:-5].strip()
     alias_map = {
         "暗渠": "矩形暗涵",
         "矩形暗渠": "矩形暗涵",

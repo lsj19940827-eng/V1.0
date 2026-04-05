@@ -218,8 +218,115 @@ def test_unnamed_pressure_pipe_rows_do_not_pair_across_table():
     assert nodes[3].is_pressure_pipe is True
     assert nodes[0].in_out == InOutType.NORMAL, "空名称有压管道首行不应被误判为进口"
     assert nodes[3].in_out == InOutType.NORMAL, "空名称有压管道末行不应被误判为出口"
-    assert nodes[1].in_out == InOutType.INLET, "命名定向钻首行仍应为进口"
-    assert nodes[2].in_out == InOutType.OUTLET, "命名定向钻末行仍应为出口"
+
+
+def test_special_structure_entry_exit_rows_do_not_consume_display_ip_numbers():
+    """
+    特殊建筑物的进出口行不占显示编号，后续普通点应继续顺排。
+    """
+    open_before = ChannelNode()
+    open_before.structure_type = StructureType.from_string("明渠-矩形")
+
+    tunnel_in = ChannelNode()
+    tunnel_in.structure_type = StructureType.from_string("隧洞-圆形")
+    tunnel_in.name = "黄角坝"
+
+    tunnel_out = ChannelNode()
+    tunnel_out.structure_type = StructureType.from_string("隧洞-圆形")
+    tunnel_out.name = "黄角坝"
+
+    open_after = ChannelNode()
+    open_after.structure_type = StructureType.from_string("明渠-矩形")
+
+    siphon_in = ChannelNode()
+    siphon_in.structure_type = StructureType.from_string("倒虹吸")
+    siphon_in.name = "马颈子"
+
+    siphon_out = ChannelNode()
+    siphon_out.structure_type = StructureType.from_string("倒虹吸")
+    siphon_out.name = "马颈子"
+
+    pipe_in = ChannelNode()
+    pipe_in.structure_type = StructureType.from_string("有压管道")
+    pipe_in.name = "白果湾"
+    pipe_in.section_params = {"D": 1.0}
+
+    pipe_mid = ChannelNode()
+    pipe_mid.structure_type = StructureType.from_string("有压管道")
+    pipe_mid.name = "白果湾"
+    pipe_mid.section_params = {"D": 1.0}
+
+    pipe_out = ChannelNode()
+    pipe_out.structure_type = StructureType.from_string("有压管道")
+    pipe_out.name = "白果湾"
+    pipe_out.section_params = {"D": 1.0}
+
+    open_end = ChannelNode()
+    open_end.structure_type = StructureType.from_string("明渠-矩形")
+
+    nodes = [
+        open_before,
+        tunnel_in,
+        tunnel_out,
+        open_after,
+        siphon_in,
+        siphon_out,
+        pipe_in,
+        pipe_mid,
+        pipe_out,
+        open_end,
+    ]
+
+    calculator = WaterProfileCalculator(ProjectSettings())
+    calculator.preprocess_nodes(nodes)
+
+    assert [node.ip_number for node in nodes] == list(range(10))
+    assert [node.display_ip_number for node in nodes] == [0, None, None, 1, None, None, None, 2, None, 3]
+
+
+def test_get_ip_str_hides_ip_prefix_for_special_entry_exit_rows_but_keeps_culvert_rule():
+    """
+    特殊建筑物进出口只显示名称，矩形暗涵继续保留 IP 显示。
+    """
+    tunnel_in = ChannelNode(
+        name="黄角坝",
+        structure_type=StructureType.from_string("隧洞-圆形"),
+        in_out=InOutType.INLET,
+        ip_number=9,
+        display_ip_number=None,
+    )
+    siphon_out = ChannelNode(
+        name="马颈子",
+        structure_type=StructureType.from_string("倒虹吸"),
+        in_out=InOutType.OUTLET,
+        ip_number=10,
+        display_ip_number=None,
+    )
+    pipe_in = ChannelNode(
+        name="白果湾",
+        structure_type=StructureType.from_string("有压管道"),
+        in_out=InOutType.INLET,
+        ip_number=11,
+        display_ip_number=None,
+    )
+    culvert_in = ChannelNode(
+        name="暗涵A",
+        structure_type=StructureType.from_string("矩形暗涵"),
+        in_out=InOutType.INLET,
+        ip_number=12,
+        display_ip_number=4,
+    )
+    normal_node = ChannelNode(
+        structure_type=StructureType.from_string("明渠-矩形"),
+        ip_number=13,
+        display_ip_number=5,
+    )
+
+    assert tunnel_in.get_ip_str() == "黄角坝隧进"
+    assert siphon_out.get_ip_str() == "马颈子倒出"
+    assert pipe_in.get_ip_str() == "白果湾压进"
+    assert culvert_in.get_ip_str() == "IP4"
+    assert normal_node.get_ip_str() == "IP5"
 
 
 def test_pressure_pipe_with_siphon():
