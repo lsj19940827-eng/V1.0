@@ -29,7 +29,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from version import APP_VERSION, APP_NAME, APP_NAME_EN
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
-UNIVERSAL_PATCH_MIN_VERSION = "1.0.9"
+UNIVERSAL_PATCH_MIN_VERSION = "1.1.9"
+MAX_PATCH_DELETED_COUNT = 100
+MAX_PATCH_TOTAL_COVERAGE = 300
 
 
 def _version_key(v: str) -> tuple:
@@ -60,6 +62,27 @@ def _select_universal_patch_manifest_files(manifest_files, current_version: str)
         selected,
         key=lambda x: _version_key(x.replace("manifest-V", "").replace(".json", "")),
     )
+
+
+def _should_skip_universal_patch(patch_result: dict) -> tuple[bool, str]:
+    """判断通用补丁是否覆盖过重，避免把高风险补丁发给用户。"""
+    changed_count = int((patch_result or {}).get("changed_count", 0) or 0)
+    deleted_count = int((patch_result or {}).get("deleted_count", 0) or 0)
+
+    if deleted_count > MAX_PATCH_DELETED_COUNT:
+        return (
+            True,
+            f"覆盖范围过大：deleted_count={deleted_count}，超过 {MAX_PATCH_DELETED_COUNT}",
+        )
+
+    total_coverage = changed_count + deleted_count
+    if total_coverage > MAX_PATCH_TOTAL_COVERAGE:
+        return (
+            True,
+            f"覆盖范围过大：changed+deleted={total_coverage}，超过 {MAX_PATCH_TOTAL_COVERAGE}",
+        )
+
+    return False, ""
 
 
 def bump_version(level: str) -> str:
@@ -635,19 +658,26 @@ def build(bump: str = None):
         )
 
         if patch_result:
-            patch_path = patch_out
-            patch_info = {
-                "type": "universal",
-                "latest_version": APP_VERSION,
-                "generated_at": new_manifest.get("build_time", ""),
-                "min_version": patch_result["min_version"],
-                "patch_name": patch_name,
-                "size_mb": patch_result["size_mb"],
-                "changed_count": patch_result["changed_count"],
-                "deleted_count": patch_result["deleted_count"],
-            }
-            with open(patch_info_path, "w", encoding="utf-8") as f:
-                json.dump(patch_info, f, ensure_ascii=False, indent=2)
+            should_skip_patch, skip_reason = _should_skip_universal_patch(patch_result)
+            if should_skip_patch:
+                if os.path.exists(patch_out):
+                    os.remove(patch_out)
+                patch_result = None
+                print(f"  [patch] 已跳过补丁，原因是覆盖范围过大：{skip_reason}")
+            else:
+                patch_path = patch_out
+                patch_info = {
+                    "type": "universal",
+                    "latest_version": APP_VERSION,
+                    "generated_at": new_manifest.get("build_time", ""),
+                    "min_version": patch_result["min_version"],
+                    "patch_name": patch_name,
+                    "size_mb": patch_result["size_mb"],
+                    "changed_count": patch_result["changed_count"],
+                    "deleted_count": patch_result["deleted_count"],
+                }
+                with open(patch_info_path, "w", encoding="utf-8") as f:
+                    json.dump(patch_info, f, ensure_ascii=False, indent=2)
         else:
             print("  [patch] 所有旧版本对比均无变化，跳过补丁包生成。")
     else:

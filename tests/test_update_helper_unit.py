@@ -128,3 +128,27 @@ def test_update_helper_expands_failure_window_to_keep_stage_lines_readable(monke
     assert min(stage_heights) >= 15
     assert window.result_stage_label.height() >= 15
     window.close()
+
+
+def test_update_helper_shows_patch_validation_progress_text(monkeypatch):
+    _get_qapp()
+    fake_session = SimpleNamespace(
+        current_version="1.1.9",
+        target_version="1.2.2",
+        work_dir="C:/temp/update-work",
+        log_dir="C:/temp/update-logs",
+    )
+
+    monkeypatch.setattr(
+        update_helper.updater.UpdateSession,
+        "from_file",
+        lambda _path: fake_session,
+    )
+    monkeypatch.setattr(update_helper.UpdateHelperWindow, "_start_worker", lambda self: None)
+
+    window = update_helper.UpdateHelperWindow("dummy-session.json")
+    window._on_stage_changed("validate", "正在校验补丁适用性（2/5）")
+
+    assert "正在校验补丁适用性（2/5）" in window.status_label.text()
+    assert "正在校验补丁适用性（2/5）" in window.detail_text.toPlainText()
+    window.close()

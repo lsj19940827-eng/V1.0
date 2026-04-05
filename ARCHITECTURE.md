@@ -8,6 +8,9 @@
 - `app_渠系计算前端/water_profile/water_profile_dialogs.py`：有压管道配置窗口，负责普通模式的链卡/分段卡，以及 xx管 的整线卡、隧洞分段卡、DXF 导入锚点选择、隧洞参数录入与非隧洞覆盖校验。
 - `app_渠系计算前端/water_profile/cad_tools.py`：纵断面导出与 xx管 中心线高程采样，负责普通模式与 xx管 的导出桩号格式化、mixed route 的隧洞段取底高程、第 5 行断面参数文字，以及统一处理桩号回退与覆盖报错。
 - `app_渠系计算前端/water_profile/formula_dialog.py`：表头说明和双击公式弹窗，负责把计算详情解释给用户看。
+- `updater.py`：自动更新核心，负责版本比较、补丁/全量包选择、安装会话、补丁适用性校验和回滚。
+- `update_helper.py`：独立安装窗口，负责展示安装阶段、补丁校验进度、失败引导和日志入口。
+- `tools/build.py`：构建脚本，负责生成 manifest、通用补丁包，并按补丁覆盖范围决定是否发布补丁。
 - `推求水面线/core/calculator.py`：整表计算总调度，串起预处理、渐变段、水力计算、累计损失和高程递推。
 - `推求水面线/core/hydraulic_calc.py`：水头损失和水位递推核心，负责沿程、弯道、局部损失及水位更新，并消费窗口回写后的承压覆盖结果。
 - `推求水面线/core/pressure_pipe_calc.py`：有压管道专项公式库，提供 FMB 沿程损失和承压弯头局部损失计算。
@@ -38,6 +41,9 @@
 - `panel.py` 打开有压管道窗口时，会先按渠道级别决定是否进入 xx管 整线模式；纯承压整线和夹带隧洞的 mixed route 都进入同一入口，其中整线卡负责 DXF，隧洞段改走参数生成。
 - 命名有压管道组由专项模块先算出总损失，再回写到表3对应出口行。
 - `panel.py`、`cad_tools.py` 和 `multi_siphon_dialog.py` 在导入 `utils.*` 前，会先加载 `推求水面线.utils`，让正式包运行时的顶层 `utils` 固定落到项目自带实现。
+- `tools/build.py` 会先根据 `UNIVERSAL_PATCH_MIN_VERSION` 选出可覆盖的旧版 manifest，再生成通用补丁；如果补丁删除文件过多，或“新增/修改 + 删除”总量过大，会直接跳过补丁，只保留全量包。
+- `tools/release.py` 会读取 `patch-info.json` 决定是否把补丁链接写进正式 `version.json`；没有 `patch-info.json` 时，用户端就只会看到全量包。
+- `updater.py` 读取 `version.json.min_patch_version` 后，只对满足版本下限的本机提供补丁下载；进入补丁安装后，会把“解压补丁包”“校验补丁适用性（x/y）”通过 `stage_callback` 传给 `update_helper.py`。
 
 ## 关键设计决定和原因
 
@@ -63,6 +69,9 @@
 - `pressure_pipe_manager.py` 同时保留旧的单段纵断面兼容读取、`routes.longitudinal_nodes`，以及新的 `routes.profile_segments`，避免旧项目打不开。
 - xx管 导出和中心线高程采样继续按子段 identity 分段，但匿名子段优先使用 `pressure_pipe_row_identity`，避免同一流量段多个空名称子段撞键。
 - 普通模式新增 `station_decimals`，默认 2 位；它只作用于导出链路里的桩号文本，不改表3和说明文字，避免把现有非导出显示一起带偏。
+- 通用补丁不再追求大跨度兼容，当前默认只覆盖 `1.1.9+`；因为更老版本在 `_internal` 目录上的历史差异太大，会把大量已删除文件带入补丁校验，用户体感就是“卡在校验”。
+- 构建阶段新增补丁兜底规则：`deleted_count > 100` 或 `changed_count + deleted_count > 300` 时直接不发布补丁；这样即便后续打包目录再次大变，也不会把高风险补丁放给用户。
+- 补丁安装继续沿用原有 `validate` 阶段，不新增窗口阶段枚举；详细进度通过状态文案显示为“正在解压补丁包”“正在校验补丁适用性（x/y）”，这样改动小，但用户能看见安装并未卡死。
 - `ProjectSettings.format_station()` 继续保留原有 3 位小数口径；普通模式和 xx管 都改为在 `cad_tools.py` 里按各自设置单独格式化，这样能把影响范围收在导出入口。
 - `cad_tools.py` 里的有压管道断面汇总弹窗，现已拆成“展示模型”和“导出模型”两层：界面只显示“流量段主行 + 顶管/定向钻单独行”，确认后再展开回原始分组；这样既能把弹窗行数压到用户真正要看的数量，也能继续复用 `identity / Q / plan_total_length / route_key` 等元数据，保证压力管道特性表仍按流量段稳定汇总。
 - `panel.py` 里的压力管道流量段摘要，现在会把普通有压管道段也纳入 `total_length` 累计；隧洞、定向钻、顶管摘要长度则改为按每组“出口里程MC - 进口里程MC”统计，不再把出口后的普通有压管道首段并进建筑物长度。
