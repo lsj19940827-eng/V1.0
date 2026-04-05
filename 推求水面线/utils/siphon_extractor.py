@@ -1205,7 +1205,7 @@ class SiphonDataExtractor:
                         "radius": 0.0,
                         "angle": 0.0,
                         "source_ip_index": node.ip_number,
-                        "description": f"IP{prev_node.ip_number}→IP{node.ip_number}",
+                        "description": f"{prev_node.get_ip_str()}→{node.get_ip_str()}",
                     })
             
             # 2. 在中间IP点处添加弯管段（不在首尾IP处添加，因为首尾为进出口）
@@ -1221,7 +1221,7 @@ class SiphonDataExtractor:
                         "radius": round(radius, 3),
                         "angle": round(node.turn_angle, 3),
                         "source_ip_index": node.ip_number,
-                        "description": f"IP{node.ip_number}处水平转弯",
+                        "description": f"{node.get_ip_str()}处水平转弯",
                     })
         
         group.plan_segments = plan_segments

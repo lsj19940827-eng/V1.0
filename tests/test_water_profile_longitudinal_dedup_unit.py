@@ -502,7 +502,7 @@ def test_draw_profile_on_msp_dedup_station_text(monkeypatch):
     assert "0.000" not in _texts_at(msp.text_records, x_200, 1.0)
     assert len(_texts_at(msp.text_records, x_100, 47.0)) == 1
     assert len(_texts_at(msp.text_records, x_200, 47.0)) == 1
-    assert any("IP15" in txt for txt in _texts_at(msp.text_records, x_100, 77.0))
+    assert any("忘乡台隧出" in txt for txt in _texts_at(msp.text_records, x_100, 77.0))
     assert _texts_at(msp.text_records, x_200, 77.0) == ["IP20"]
     assert _has_line(
         msp.line_records,
@@ -553,7 +553,7 @@ def test_export_longitudinal_txt_dedup_station_text(local_tmp_path, monkeypatch)
     assert "0.000" not in key(x_200, 1.0)
     assert len(key(x_100, 47.0)) == 1
     assert len(key(x_200, 47.0)) == 1
-    assert any("IP15" in txt for txt in key(x_100, 77.0))
+    assert any("忘乡台隧出" in txt for txt in key(x_100, 77.0))
     assert key(x_200, 77.0) == ["IP20"]
     assert _has_line(pl_rows, (x_100, 0.0), (x_100, short_line_height))
     assert _has_line(pl_rows, (x_200, 0.0), (x_200, line_height))

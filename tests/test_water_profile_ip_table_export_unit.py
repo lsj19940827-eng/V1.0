@@ -168,3 +168,25 @@ def test_write_ip_table_excel_sheet_respects_custom_station_decimals():
     cad_tools._write_ip_table_excel_sheet(ws, [_make_node()], "", {"station_decimals": 3})
 
     assert ws["E3"].value == "0+039.497"
+
+
+def test_compute_ip_preview_data_uses_display_ip_number_after_special_entry_exit_rows():
+    special = _make_node(
+        ip_number=5,
+        display_ip_number=None,
+        name="黄角坝",
+        structure_type=SimpleNamespace(value="隧洞-圆形"),
+        in_out="进",
+    )
+    normal = _make_node(
+        ip_number=6,
+        display_ip_number=5,
+        name="",
+        structure_type=SimpleNamespace(value="明渠-矩形"),
+        in_out="",
+    )
+
+    preview_data, _ = cad_tools._compute_ip_preview_data([special, normal], "", {"station_decimals": 2})
+
+    assert preview_data[0][0] == "黄角坝隧进"
+    assert preview_data[1][0] == "IP5"

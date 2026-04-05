@@ -544,6 +544,56 @@ def test_build_nodes_from_table_reads_source_coordinate_text_without_rounding():
     assert nodes[0].y == 3377745.982674
 
 
+def test_build_nodes_from_table_prefers_ip_cell_metadata_for_special_entry_exit_rows():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.CALCULATOR_AVAILABLE = True
+
+    class _BuildNode:
+        def __init__(self):
+            self.section_params = {}
+            self.is_transition = False
+            self.is_auto_inserted_channel = False
+            self.is_diversion_gate = False
+            self.is_inverted_siphon = False
+            self.is_pressure_pipe = False
+            self.in_out = None
+            self.external_head_loss = None
+
+    module.ChannelNode = _BuildNode
+    module.StructureType = _FakeStructureType
+    module.InOutType = _FakeInOutType
+
+    panel.node_table.setRowCount(1)
+    for col, text in (
+        (0, "1"),
+        (1, "黄角坝"),
+        (2, "隧洞-圆形"),
+        (3, "进"),
+        (4, "黄角坝隧进"),
+        (5, "649606.177086"),
+        (6, "3377745.982674"),
+        (24, "0.014"),
+        (25, "3000"),
+        (26, "5.0"),
+    ):
+        panel.node_table.setItem(0, col, _FakeItem(text))
+
+    panel.node_table.item(0, 4).setData(
+        module.Qt.UserRole,
+        {
+            "_raw_ip_number": 5,
+            "_display_ip_number": None,
+        },
+    )
+
+    nodes = module.WaterProfilePanel._build_nodes_from_table(panel)
+
+    assert len(nodes) == 1
+    assert nodes[0].ip_number == 5
+    assert nodes[0].display_ip_number is None
+
+
 def test_update_table_from_nodes_full_impl_shows_row_level_loss_for_unnamed_pressure_pipe_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)

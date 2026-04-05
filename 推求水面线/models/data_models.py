@@ -28,6 +28,7 @@ class ChannelNode:
     # ========== 自动计算字段 ==========
     in_out: InOutType = InOutType.NORMAL        # 进出口标识（自动判断）
     ip_number: int = 0                          # IP编号（IP0, IP1...）
+    display_ip_number: Optional[int] = None    # 显示用IP编号（特殊建筑进出口可为空）
     
     # ========== 水力输入字段（每行可不同） ==========
     flow: float = 0.0                           # 流量 Q（m³/s）
@@ -118,49 +119,60 @@ class ChannelNode:
     def get_in_out_str(self) -> str:
         """获取进出口标识的字符串表示"""
         return self.in_out.value if self.in_out else ""
+
+    def _uses_name_only_ip_display(self) -> bool:
+        """判断当前节点是否应隐藏显示用 IP 前缀。"""
+        if self.in_out not in (InOutType.INLET, InOutType.OUTLET):
+            return False
+        struct_str = self.get_structure_type_str()
+        if "暗涵" in struct_str:
+            return False
+        return any(
+            key in struct_str
+            for key in ("隧洞", "倒虹吸", "有压管道", "渡槽", "定向钻", "顶管")
+        )
+
+    def get_display_ip_number(self) -> int:
+        """获取用于界面和导出的显示编号。"""
+        if self.display_ip_number is not None:
+            return int(self.display_ip_number)
+        return int(self.ip_number)
+
+    def _get_special_structure_abbr(self) -> str:
+        """获取特殊建筑物进出口的简称。"""
+        struct_str = self.get_structure_type_str()
+        if "隧洞" in struct_str:
+            return "隧"
+        if "倒虹吸" in struct_str:
+            return "倒"
+        if "渡槽" in struct_str:
+            return "渡"
+        if StructureType.is_pressure_pipe_like_str(struct_str):
+            return "压"
+        return ""
+
+    def get_special_io_label(self) -> str:
+        """获取特殊建筑物进出口的名称标签。"""
+        in_out_str = self.get_in_out_str()
+        if in_out_str not in ("进", "出"):
+            return ""
+        name = str(self.name or "").strip()
+        return f"{name}{self._get_special_structure_abbr()}{in_out_str}".strip()
     
     def get_ip_str(self) -> str:
         """
         获取IP编号的字符串表示
         
         逻辑：
-        - 基础部分：IP + 编号
-        - 只有当进出口为"进"或"出"时才添加扩展信息：
-          - 添加 " " + 建筑物名称 + 结构形式缩写 + 进出口
-          - 结构形式缩写：隧洞→"隧"，倒虹吸→"倒"，渡槽→"渡"，其他→""
-        - 中间的行（没有进出口标识）只显示IPxx
+        - 普通节点显示连续的显示用 IP 编号
+        - 特殊建筑物进出口只显示名称，不占显示编号
+        - 矩形暗涵保持原规则，继续显示 IP
         """
-        base = f"IP{self.ip_number}"
-        
-        # 只有当进出口为"进"或"出"时才添加扩展信息
-        if self.name and self.in_out in (InOutType.INLET, InOutType.OUTLET):
-            # 矩形暗涵的IP点不显示进/出后缀
-            struct_str = self.structure_type.value if self.structure_type else ""
-            if "暗涵" in struct_str:
-                return base
-            
-            # 获取结构形式缩写
-            struct_abbr = ""
-            if self.structure_type:
-                if "隧洞" in struct_str or struct_str == "隧洞":
-                    struct_abbr = "隧"
-                elif "倒虹吸" in struct_str or struct_str == "倒虹吸":
-                    struct_abbr = "倒"
-                elif "渡槽" in struct_str or struct_str == "渡槽":
-                    struct_abbr = "渡"
-                elif StructureType.is_pressure_pipe_like_str(struct_str):
-                    struct_abbr = "压"
-            
-            # 获取进出口简写
-            in_out_str = ""
-            if self.in_out == InOutType.INLET:
-                in_out_str = "进"
-            elif self.in_out == InOutType.OUTLET:
-                in_out_str = "出"
-            
-            return f"{base} {self.name}{struct_abbr}{in_out_str}"
-        
-        return base
+        if self._uses_name_only_ip_display():
+            label = self.get_special_io_label()
+            if label:
+                return label
+        return f"IP{self.get_display_ip_number()}"
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（用于导出）"""
@@ -216,6 +228,7 @@ class ChannelNode:
             # ========== 自动计算字段 ==========
             "in_out": self.in_out.value if self.in_out else "",
             "ip_number": self.ip_number,
+            "display_ip_number": self.display_ip_number,
             
             # ========== 水力输入字段 ==========
             "flow": self.flow,
@@ -332,6 +345,8 @@ class ChannelNode:
         in_out_str = d.get("in_out", "")
         node.in_out = InOutType.from_string(in_out_str)
         node.ip_number = d.get("ip_number", 0)
+        display_ip_number = d.get("display_ip_number", None)
+        node.display_ip_number = None if display_ip_number in ("", None) else int(display_ip_number)
         
         # ========== 水力输入字段 ==========
         node.flow = d.get("flow", 0.0)
