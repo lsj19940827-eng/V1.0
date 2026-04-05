@@ -7,6 +7,7 @@
 xx管 现在已经支持“有压管道 / 定向钻 / 顶管”整线里夹带隧洞：用户仍只导入 1 份纵断面 DXF，但这份 DXF 只覆盖非隧洞段；隧洞段改为按“进口底高 + 坡降 i + 起终桩号”自动生成，并与整线 DXF 在导出和计算时按桩号拼接。
 普通纵断面与 xx管 现在都支持单独控制导出桩号小数位：普通模式默认 2 位，且会同步影响普通纵断面、IP 表、合并 DXF 里的 IP 表和 bzzh2 这类导出结果；xx管 继续只影响自己的纵断面桩号。
 表3顶部“转弯半径”现在是一个统一应用入口：导入后默认保留每一行自己的半径，只有点击“应用”才会批量覆盖真实导入行。
+应用内自动更新现在只对近版本提供补丁包；更老版本会直接下载全量包，补丁安装窗口也会显示“正在解压补丁包 / 正在校验补丁适用性（x/y）”，避免用户误以为卡死。
 
 ## 技术架构
 
@@ -14,6 +15,7 @@ xx管 现在已经支持“有压管道 / 定向钻 / 顶管”整线里夹带�
 - 计算内核：Python 纯计算模块，主要代码在 `推求水面线/`、`calc_渠系计算算法内核/`。
 - 专项模块：`倒虹吸水力计算系统/`、`有压管道/` 提供专项计算能力。
 - 自动化验证：`pytest`，测试文件集中在 `tests/`，其中 xx管 整线纵断面会同时覆盖界面、持久化、计算和导出链路。
+- 更新链路：`updater.py`、`update_helper.py`、`tools/build.py`、`tools/release.py` 共同负责版本检查、补丁/全量选择、独立安装窗口、补丁兜底和正式发版。
 - 导出精度：普通模式导出桩号使用 `station_decimals`，xx管 导出桩号使用 `xxpipe_station_decimals`；两者都在导出链路单独格式化，不改主界面的通用桩号显示函数。
 - mixed route 持久化：`PressurePipeManager` 现同时保存 route 级 `longitudinal_nodes` 与 `profile_segments`，用来承接“非隧洞 DXF + 隧洞生成段”的混合整线。
 - 隧洞参数缓存：`PressurePipeManager` 也会保存隧洞段的进口底高、坡降、断面类型和断面参数，保证窗口重开后还能继续编辑。
@@ -40,6 +42,7 @@ xx管 现在已经支持“有压管道 / 定向钻 / 顶管”整线里夹带�
 - 运行本次 xx管 夹带隧洞回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_water_profile_transition_ready_unit.py tests/test_water_profile_combined_dxf_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_persistence_with_long_unit.py tests/test_pressure_pipe_export_longitudinal_nodes_unit.py tests/test_xxpipe_longitudinal_export_unit.py tests/test_xxpipe_axis_elevation_unit.py -q`
 - 运行本次普通纵断面桩号精度回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_text_export_settings_dialog_ui_unit.py tests/test_water_profile_longitudinal_scale_unit.py tests/test_water_profile_ip_table_export_unit.py tests/test_water_profile_bzzh2_export_unit.py tests/test_water_profile_combined_dxf_unit.py tests/test_water_profile_longitudinal_dedup_unit.py tests/test_xxpipe_longitudinal_export_unit.py -q`
 - 运行本次连续承压链回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_config_dialog_sizing_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_preprocessing_unit.py tests/test_external_head_loss_unit.py`
+- 运行更新链路回归：`$env:PYTEST_ADDOPTS='--basetemp=D:\V1.0\.pytest_tmp\update-regression'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py tests/test_updater_install_flow_unit.py tests/test_update_helper_unit.py -q`
 
 ## 搜索记录
 
@@ -69,6 +72,7 @@ xx管 现在已经支持“有压管道 / 定向钻 / 顶管”整线里夹带�
 - 图2“管中心线高程（米）”继续在导出时按当前平面桩号现算；节点 `station_MC` 缺失时只对个别节点按平面累计距离回退，整线都没有有效桩号锚点时直接报错。
 - 普通纵断面导出现在新增 `station_decimals`，默认保留 2 位小数；同一设置会同步影响普通纵断面、IP 表、合并 DXF 里的 IP 表和 bzzh2 的桩号输出，但不会改表3和说明文字的原有显示。
 - 表3顶部“转弯半径”改成“待应用统一值”：导入混合半径时保持空白，点击“自动”只填栏位，点击“应用”才统一覆盖真实导入行。
+- 自动更新补丁策略已收紧到近版本链路：当前只给 `1.1.9+` 提供补丁；如果补丁删除文件过多或总覆盖量过大，构建阶段会直接跳过补丁，只发布全量包。
 
 ## 待办事项
 

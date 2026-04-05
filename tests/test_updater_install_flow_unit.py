@@ -269,3 +269,36 @@ def test_run_update_session_applies_patch_when_missing_file_is_allowed(tmp_path,
     assert result["success"] is True
     assert (app_dir / "keep.txt").read_text(encoding="utf-8") == "new-content"
     assert (app_dir / "new.txt").read_text(encoding="utf-8") == "brand-new"
+
+
+def test_run_update_session_reports_patch_validation_progress(tmp_path, monkeypatch):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "keep.txt").write_text("old-content", encoding="utf-8")
+    (app_dir / f"{updater.APP_NAME_EN}.exe").write_text("binary", encoding="utf-8")
+    zip_path = _make_patch_zip(
+        tmp_path / "patch-update.zip",
+        included_files={
+            "keep.txt": "new-content",
+            "new.txt": "brand-new",
+        },
+        allowed_source_hashes={
+            "keep.txt": [updater._sha256_file(str(app_dir / "keep.txt"))],
+            "new.txt": [updater.PATCH_MISSING_SENTINEL],
+        },
+    )
+    session_path = _write_session(tmp_path, app_dir=app_dir, zip_path=zip_path, is_patch=True)
+    stage_events: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(updater, "_wait_for_process_exit", lambda pid: None)
+
+    result = updater.run_update_session(
+        session_path,
+        stage_callback=lambda key, text: stage_events.append((key, text)),
+    )
+
+    assert result["success"] is True
+    assert ("validate", "校验安装环境") in stage_events
+    assert ("validate", "正在解压补丁包") in stage_events
+    assert ("validate", "正在校验补丁适用性（1/2）") in stage_events
+    assert ("validate", "正在校验补丁适用性（2/2）") in stage_events

@@ -12,39 +12,76 @@ from tools import patch_builder
 
 def test_select_universal_patch_manifest_files_applies_floor():
     manifest_files = [
-        "manifest-V1.0.4.json",
-        "manifest-V1.0.8.3.json",
-        "manifest-V1.0.9.json",
-        "manifest-V1.0.9.1.json",
-        "manifest-V1.1.0.json",
-        "manifest-V1.1.0.1.json",
+        "manifest-V1.1.8.json",
+        "manifest-V1.1.9.json",
+        "manifest-V1.2.0.json",
+        "manifest-V1.2.1.json",
+        "manifest-V1.2.2.json",
+        "manifest-V1.2.2.1.json",
     ]
 
     selected = build._select_universal_patch_manifest_files(
         manifest_files,
-        current_version="1.1.0.1",
+        current_version="1.2.2",
     )
 
     assert selected == [
-        "manifest-V1.0.9.json",
-        "manifest-V1.0.9.1.json",
-        "manifest-V1.1.0.json",
+        "manifest-V1.1.9.json",
+        "manifest-V1.2.0.json",
+        "manifest-V1.2.1.json",
     ]
 
 
 def test_select_universal_patch_manifest_files_excludes_current_and_future():
     manifest_files = [
-        "manifest-V1.0.9.json",
-        "manifest-V1.1.0.1.json",
-        "manifest-V1.1.0.2.json",
+        "manifest-V1.1.8.json",
+        "manifest-V1.1.9.json",
+        "manifest-V1.2.2.json",
+        "manifest-V1.2.3.json",
     ]
 
     selected = build._select_universal_patch_manifest_files(
         manifest_files,
-        current_version="1.1.0.1",
+        current_version="1.2.2",
     )
 
-    assert selected == ["manifest-V1.0.9.json"]
+    assert selected == ["manifest-V1.1.9.json"]
+
+
+def test_should_skip_universal_patch_when_deleted_files_too_many():
+    should_skip, reason = build._should_skip_universal_patch(
+        {
+            "changed_count": 248,
+            "deleted_count": 5358,
+        }
+    )
+
+    assert should_skip is True
+    assert "deleted_count=5358" in reason
+
+
+def test_should_skip_universal_patch_when_total_coverage_too_large():
+    should_skip, reason = build._should_skip_universal_patch(
+        {
+            "changed_count": 250,
+            "deleted_count": 80,
+        }
+    )
+
+    assert should_skip is True
+    assert "changed+deleted=330" in reason
+
+
+def test_should_keep_universal_patch_when_coverage_is_small():
+    should_skip, reason = build._should_skip_universal_patch(
+        {
+            "changed_count": 22,
+            "deleted_count": 0,
+        }
+    )
+
+    assert should_skip is False
+    assert reason == ""
 
 
 def test_resolve_update_helper_icon_file_prefers_shared_shield_icon(monkeypatch):

@@ -1031,7 +1031,11 @@ def _raise_patch_mismatch(message: str):
     )
 
 
-def _validate_patch_prerequisites(session: UpdateSession, patch_manifest: dict):
+def _validate_patch_prerequisites(
+    session: UpdateSession,
+    patch_manifest: dict,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+):
     min_version = (patch_manifest.get("min_version") or "").strip()
     if min_version and compare_versions(session.current_version, min_version) < 0:
         _raise_patch_mismatch(
@@ -1048,9 +1052,15 @@ def _validate_patch_prerequisites(session: UpdateSession, patch_manifest: dict):
             for path in (patch_manifest.get("included_files") or []) + patch_manifest.get("deleted", [])
         }
     )
-    for rel_path in watched_paths:
-        if _should_preserve(rel_path, session.preserve_patterns):
-            continue
+    effective_paths = [
+        rel_path
+        for rel_path in watched_paths
+        if not _should_preserve(rel_path, session.preserve_patterns)
+    ]
+    total_paths = len(effective_paths)
+    for index, rel_path in enumerate(effective_paths, start=1):
+        if progress_callback:
+            progress_callback(index, total_paths)
         allowed_values = allowed_source_hashes.get(rel_path)
         if not isinstance(allowed_values, list) or not allowed_values:
             _raise_patch_mismatch(f"补丁包缺少文件校验信息：{rel_path}")
@@ -1242,10 +1252,19 @@ def run_update_session(
 
         push("validate", "校验安装环境")
         ensure_install_ready(session.download_zip_path, session.is_patch, app_dir=session.app_dir)
+        if session.is_patch:
+            push("validate", "正在解压补丁包")
         extracted_root = _extract_zip(session.download_zip_path, extract_dir)
         if session.is_patch:
             patch_manifest = _load_patch_manifest(extracted_root)
-            _validate_patch_prerequisites(session, patch_manifest)
+            _validate_patch_prerequisites(
+                session,
+                patch_manifest,
+                progress_callback=lambda current, total: push(
+                    "validate",
+                    f"正在校验补丁适用性（{current}/{total}）",
+                ),
+            )
 
         push("backup", "备份当前版本")
         if session.is_patch:
