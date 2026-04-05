@@ -158,6 +158,32 @@ class WaterProfileCalculator:
         if io_value == "进":
             return True
         return self._is_unnamed_pressure_pipe_node(node)
+
+    @staticmethod
+    def _should_skip_display_ip_number(node: ChannelNode) -> bool:
+        """判断节点是否应隐藏显示用 IP 编号。"""
+        if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+            return True
+        struct_str = node.get_structure_type_str() if hasattr(node, "get_structure_type_str") else ""
+        if "暗涵" in struct_str:
+            return False
+        io_value = node.in_out.value if getattr(node, "in_out", None) else ""
+        if io_value not in ("进", "出"):
+            return False
+        return any(
+            key in struct_str
+            for key in ("隧洞", "倒虹吸", "有压管道", "渡槽", "定向钻", "顶管")
+        )
+
+    def _assign_display_ip_numbers(self, nodes: List[ChannelNode]) -> None:
+        """按显示规则为节点重建连续 IP 编号。"""
+        display_counter = 0
+        for node in nodes:
+            if self._should_skip_display_ip_number(node):
+                node.display_ip_number = None
+                continue
+            node.display_ip_number = display_counter
+            display_counter += 1
     
     def preprocess_nodes(self, nodes: List[ChannelNode]) -> None:
         """
@@ -240,8 +266,11 @@ class WaterProfileCalculator:
                 for key, value in lib_params.items():
                     if key not in node.section_params:
                         node.section_params[key] = value
+
+        # 4. 显示用 IP 编号：特殊建筑进出口不占号，其余真实节点连续编号
+        self._assign_display_ip_numbers(nodes)
         
-        # 4. 闸节点去重：连续同名同坐标闸节点，仅首行保留 head_loss_gate，后续行清零
+        # 5. 闸节点去重：连续同名同坐标闸节点，仅首行保留 head_loss_gate，后续行清零
         prev_gate = None
         for node in nodes:
             if not getattr(node, 'is_diversion_gate', False):
@@ -377,10 +406,15 @@ class WaterProfileCalculator:
     @staticmethod
     def _profile_conflict_node_label(node: ChannelNode) -> str:
         """生成冲突报错中的节点标识。"""
-        ip_no = getattr(node, 'ip_number', None)
-        ip_text = f"IP{ip_no}" if ip_no is not None else "IP?"
+        if hasattr(node, "get_ip_str"):
+            ip_text = str(node.get_ip_str() or "").strip() or "IP?"
+        else:
+            ip_no = getattr(node, 'ip_number', None)
+            ip_text = f"IP{ip_no}" if ip_no is not None else "IP?"
         name = str(getattr(node, 'name', '') or '').strip()
-        return f"{ip_text}({name})" if name else ip_text
+        if name and name not in ip_text:
+            return f"{ip_text}({name})"
+        return ip_text
 
     def _validate_real_node_station_conflicts(self, nodes: List[ChannelNode], tol: float = 1e-6) -> None:
         """校验真实节点同桩号高程非零冲突；冲突时抛异常阻断后续导出。"""

@@ -2239,18 +2239,84 @@ def _resolve_xxpipe_profile_elevation(node, sampled_elevation, manager_row=None)
     return bottom_elevation if math.isfinite(bottom_elevation) else sampled_elevation
 
 
+def _get_node_display_ip_number(node):
+    """获取节点的显示用 IP 编号，缺失时回退到内部编号。"""
+    display_no = getattr(node, "display_ip_number", None)
+    if display_no is not None:
+        try:
+            return int(display_no)
+        except (TypeError, ValueError):
+            pass
+    ip_no = getattr(node, "ip_number", None)
+    if ip_no is None:
+        return None
+    try:
+        return int(ip_no)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_special_io_short_label(node):
+    """生成特殊建筑物进出口的紧凑显示文本。"""
+    in_out = _in_out_val(getattr(node, "in_out", None))
+    if in_out not in ("进", "出"):
+        return ""
+    struct_str = _struct_val(getattr(node, "structure_type", None))
+    if "暗涵" in struct_str:
+        return ""
+    struct_abbr = ""
+    if "隧洞" in struct_str:
+        struct_abbr = "隧"
+    elif "倒虹吸" in struct_str:
+        struct_abbr = "倒"
+    elif "渡槽" in struct_str:
+        struct_abbr = "渡"
+    elif struct_str in {"有压管道", "定向钻", "顶管"}:
+        struct_abbr = "压"
+    name = str(getattr(node, "name", "") or "").strip()
+    return f"{name}{struct_abbr}{in_out}".strip()
+
+
+def _should_hide_display_ip_number(node):
+    """判断当前节点是否应隐藏显示用 IP 编号。"""
+    if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+        return True
+    in_out = _in_out_val(getattr(node, "in_out", None))
+    if in_out not in ("进", "出"):
+        return False
+    struct_str = _struct_val(getattr(node, "structure_type", None))
+    if "暗涵" in struct_str:
+        return False
+    return any(
+        key in struct_str
+        for key in ("隧洞", "倒虹吸", "有压管道", "渡槽", "定向钻", "顶管")
+    )
+
+
+def _get_node_ip_display_text(node, station_prefix=""):
+    """统一获取节点在界面和导出中的 IP 显示文本。"""
+    getter = getattr(node, "get_ip_str", None)
+    if callable(getter):
+        try:
+            text = str(getter() or "").strip()
+        except Exception:
+            text = ""
+        if text:
+            if station_prefix and text.startswith("IP"):
+                return f"{station_prefix}{text}"
+            return text
+    if _should_hide_display_ip_number(node):
+        special_label = _build_special_io_short_label(node)
+        if special_label:
+            return special_label
+    display_no = _get_node_display_ip_number(node)
+    if display_no is None:
+        return ""
+    return f"{station_prefix}IP{display_no}"
+
+
 def _build_profile_ip_base_text(node):
-    ip_no = int(getattr(node, "ip_number", 0) or 0)
-    ip_text = f"IP{ip_no}"
-    if _is_special_inout_node(node):
-        merged_name = _merge_building_and_structure_name(
-            getattr(node, "name", ""),
-            _get_special_structure_full_name(getattr(node, "structure_type", None)),
-        )
-        in_out = _in_out_val(getattr(node, "in_out", None))
-        detail = f"{merged_name}{in_out}".strip()
-        return f"{ip_text} {detail}".strip()
-    return ip_text
+    return _get_node_ip_display_text(node)
 
 
 def _iter_profile_ip_nodes(nodes):
@@ -2445,13 +2511,13 @@ def _segment_distance_between(prefix_lengths, prefix_missing, start_index: int, 
 
 def _build_station_resolution_label(node, index: int):
     """生成桩号解析提示标签。"""
-    ip_no = _get_station_node_value(node, "ip_number", None)
-    name = str(_get_station_node_value(node, "name", "") or "").strip()
-    if isinstance(ip_no, (int, float)):
-        base = f"IP{int(ip_no)}"
-    else:
+    base = _get_node_ip_display_text(node)
+    if not base:
         base = f"第{int(index) + 1}个节点"
-    return f"{base} {name}".strip()
+    name = str(_get_station_node_value(node, "name", "") or "").strip()
+    if name and name not in base:
+        return f"{base} {name}".strip()
+    return base
 
 
 def resolve_ordered_node_stations(nodes):
@@ -2677,10 +2743,11 @@ def _build_profile_text_nodes(nodes, station_resolver=None):
         grouped_by_station[station_key].append(node)
 
     def _node_label(node_obj):
-        ip_no = getattr(node_obj, "ip_number", None)
-        ip_label = f"IP{ip_no}" if ip_no is not None else "IP?"
+        ip_label = _get_node_ip_display_text(node_obj) or "IP?"
         name = str(getattr(node_obj, "name", "") or "").strip()
-        return f"{ip_label}({name})" if name else ip_label
+        if name and name not in ip_label:
+            return f"{ip_label}({name})"
+        return ip_label
 
     def _resolve_elev(group_nodes, attr_name, field_label, station_value, tol=1e-6):
         non_zero_values = []
@@ -3046,26 +3113,7 @@ def _ip_table_safe_float(val, default=0.0):
 
 def _format_ip_table_name(node, station_prefix):
     """格式化 IP 点名称，保持与原导出口径一致。"""
-    try:
-        if _in_out_val(node.in_out) in ("进", "出"):
-            struct_abbr = ""
-            struct_str = _struct_val(node.structure_type)
-            if struct_str:
-                if "隧洞" in struct_str:
-                    struct_abbr = "隧"
-                elif "倒虹吸" in struct_str:
-                    struct_abbr = "倒"
-                elif "有压管道" in struct_str:
-                    struct_abbr = "管"
-                elif "渡槽" in struct_str:
-                    struct_abbr = "渡"
-                elif "暗涵" in struct_str:
-                    struct_abbr = "暗"
-            in_out_str = "进" if _in_out_val(node.in_out) == "进" else "出"
-            return f"{node.name}{struct_abbr}{in_out_str}"
-    except Exception:
-        pass
-    return f"{station_prefix}IP{getattr(node, 'ip_number', 0)}"
+    return _get_node_ip_display_text(node, station_prefix)
 
 
 def _format_ip_table_station(value, station_prefix, *, station_decimals=2):

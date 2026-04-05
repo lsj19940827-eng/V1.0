@@ -236,26 +236,13 @@ class ExcelIO:
             普通IP点: {prefix}IP{number}
             结构物进出口: {建筑物名称}{类型缩写}{进/出}
             """
-            try:
-                if node.in_out in (InOutType.INLET, InOutType.OUTLET):
-                    # 获取结构形式缩写
-                    struct_abbr = ""
-                    if node.structure_type:
-                        struct_str = node.structure_type.value
-                        if "隧洞" in struct_str:
-                            struct_abbr = "隧"
-                        elif "倒虹吸" in struct_str:
-                            struct_abbr = "倒"
-                        elif "渡槽" in struct_str:
-                            struct_abbr = "渡"
-                        elif "暗涵" in struct_str:
-                            struct_abbr = "暗"
-                    # 获取进出口简写
-                    in_out_str = "进" if node.in_out == InOutType.INLET else "出"
-                    return f"{node.name}{struct_abbr}{in_out_str}"
-            except Exception:
-                pass
-            return f"{station_prefix}IP{getattr(node, 'ip_number', 0)}"
+            text = node.get_ip_str() if hasattr(node, "get_ip_str") else ""
+            text = str(text or "").strip()
+            if not text:
+                return f"{station_prefix}IP{getattr(node, 'ip_number', 0)}"
+            if text.startswith("IP"):
+                return f"{station_prefix}{text}"
+            return text
         
         def format_station(value):
             """格式化桩号"""
