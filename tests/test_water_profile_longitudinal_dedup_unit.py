@@ -353,6 +353,64 @@ def _sample_placeholder_slope_nodes():
     return [n1, n2, n3, n4]
 
 
+def _sample_rect_culvert_followed_by_special_placeholder_nodes():
+    n1 = _make_node(
+        ip_no=1,
+        mc=0.0,
+        bottom=410.0,
+        top=412.0,
+        water=411.0,
+        structure="明渠-矩形",
+    )
+    n1.slope_i = None
+
+    n2 = _make_node(
+        ip_no=2,
+        mc=50.0,
+        bottom=409.0,
+        top=411.0,
+        water=410.0,
+        structure="矩形暗涵",
+    )
+    n2.slope_i = 1 / 3000
+
+    n3 = _make_node(
+        ip_no=3,
+        mc=60.0,
+        bottom=408.0,
+        top=410.0,
+        water=409.0,
+        structure="矩形暗涵",
+    )
+    n3.slope_i = 1 / 3000
+
+    n4 = _make_node(
+        ip_no=4,
+        mc=61.0,
+        bottom=407.0,
+        top=409.0,
+        water=408.0,
+        structure="倒虹吸",
+        name="陈家湾",
+        in_out="进",
+    )
+    n4.slope_i = None
+
+    n5 = _make_node(
+        ip_no=5,
+        mc=80.0,
+        bottom=406.0,
+        top=408.0,
+        water=407.0,
+        structure="倒虹吸",
+        name="陈家湾",
+        in_out="出",
+    )
+    n5.slope_i = None
+
+    return [n1, n2, n3, n4, n5]
+
+
 def _default_settings():
     return {
         "y_bottom": 1,
@@ -729,6 +787,59 @@ def test_profile_slope_segment_boundaries_draw_short_vlines_in_slope_row(local_t
         x = _scaled_m_to_mm(mc, scale_x)
         assert _has_line(pl_rows, (x, slope_bottom), (x, slope_top))
     assert not _has_line(pl_rows, (merged_inner_x, slope_bottom), (merged_inner_x, slope_top))
+
+
+def test_rect_culvert_boundary_does_not_draw_extra_slope_short_line_before_special_node(local_tmp_path, monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = _sample_rect_culvert_followed_by_special_placeholder_nodes()
+    settings = _default_settings()
+    _, layout, _, line_height, _ = cad_tools._build_profile_row_layout(settings)
+    slope_bottom = layout["slope"]["bottom"]
+    slope_top = layout["slope"]["top"]
+    scale_x = settings["scale_x"]
+    culvert_inner_x = _scaled_m_to_mm(60.0, scale_x)
+    special_boundary_x = _scaled_m_to_mm(61.0, scale_x)
+
+    msp = _DummyMSP()
+    cad_tools._draw_profile_on_msp(msp, nodes, nodes, settings, station_prefix="")
+
+    assert not _has_line(
+        msp.line_records,
+        (culvert_inner_x, slope_bottom),
+        (culvert_inner_x, slope_top),
+    )
+    assert _has_line(
+        msp.line_records,
+        (special_boundary_x, 0.0),
+        (special_boundary_x, line_height),
+    )
+
+    out_file = local_tmp_path / "rect_culvert_special_boundary_profile.txt"
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    cad_tools._export_longitudinal_txt_to_path(_Panel(""), nodes, nodes, settings, str(out_file))
+
+    pl_rows = _parse_pl_cmds(out_file)
+    assert not _has_line(
+        pl_rows,
+        (culvert_inner_x, slope_bottom),
+        (culvert_inner_x, slope_top),
+    )
+    assert _has_line(
+        pl_rows,
+        (special_boundary_x, 0.0),
+        (special_boundary_x, line_height),
+    )
 
 
 def test_profile_text_nodes_filter_transition_and_auto_inserted():

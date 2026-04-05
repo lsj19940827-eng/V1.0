@@ -2856,6 +2856,23 @@ def _is_profile_slope_placeholder_node(node):
     )
 
 
+def _resolve_profile_slope_merge_key(node):
+    """解析坡降分段文字与合并键。"""
+    identity = _get_profile_slope_segment_identity(node)
+    gate_hint = identity or _struct_val(getattr(node, "structure_type", None))
+    if _is_gate_name(gate_hint):
+        return None, None
+
+    if _is_profile_slope_placeholder_node(node):
+        text = "-"
+        return text, ("placeholder", identity, text)
+
+    text = _get_node_slope_text(node)
+    if not text or text == "/":
+        return None, None
+    return text, ("slope", identity, text)
+
+
 def _build_profile_slope_segments(nodes, profile_text_nodes=None):
     """按“当前节点作为区间终点”构建纵断面坡降区间，供 DXF/TXT 共用。"""
     visible_nodes = list(profile_text_nodes) if profile_text_nodes is not None else _build_profile_text_nodes(nodes or [])
@@ -2870,23 +2887,11 @@ def _build_profile_slope_segments(nodes, profile_text_nodes=None):
             prev_merge_key = None
             continue
 
-        identity = _get_profile_slope_segment_identity(node)
-        gate_hint = identity or _struct_val(getattr(node, "structure_type", None))
-        if _is_gate_name(gate_hint):
+        text, merge_key = _resolve_profile_slope_merge_key(node)
+        if merge_key is None:
             prev_visible_mc = current_mc
             prev_merge_key = None
             continue
-
-        if _is_profile_slope_placeholder_node(node):
-            text = "-"
-            merge_key = ("placeholder", identity, text)
-        else:
-            text = _get_node_slope_text(node)
-            if not text or text == "/":
-                prev_visible_mc = current_mc
-                prev_merge_key = None
-                continue
-            merge_key = ("slope", identity, text)
 
         if segments and prev_merge_key == merge_key:
             segments[-1]["end_mc"] = current_mc
@@ -2905,18 +2910,40 @@ def _build_profile_slope_segments(nodes, profile_text_nodes=None):
     return segments
 
 
-def _collect_profile_slope_boundary_mcs(slope_segments, tol=1e-9):
+def _collect_profile_slope_boundary_mcs(nodes, profile_text_nodes=None, tol=1e-9):
     """提取坡降行需要补齐短竖线的区间边界。"""
+    visible_nodes = list(profile_text_nodes) if profile_text_nodes is not None else _build_profile_text_nodes(nodes or [])
     boundary_mcs = []
-    for segment in slope_segments or []:
-        for key in ("start_mc", "end_mc"):
-            try:
-                mc = float(segment.get(key, 0.0) or 0.0)
-            except (TypeError, ValueError, AttributeError):
-                continue
-            if any(abs(mc - prev_mc) <= tol for prev_mc in boundary_mcs):
-                continue
-            boundary_mcs.append(mc)
+
+    def _append_boundary(mc):
+        if any(abs(mc - prev_mc) <= tol for prev_mc in boundary_mcs):
+            return
+        boundary_mcs.append(mc)
+
+    prev_visible_node = None
+    prev_visible_mc = None
+    prev_merge_key = None
+    for node in visible_nodes:
+        current_mc = float(_profile_station_value(node))
+        if prev_visible_node is None:
+            prev_visible_node = node
+            prev_visible_mc = current_mc
+            prev_merge_key = None
+            continue
+
+        _text, current_merge_key = _resolve_profile_slope_merge_key(node)
+        if prev_merge_key != current_merge_key:
+            boundary_mc = prev_visible_mc
+            if _is_special_inout_node(node):
+                boundary_mc = current_mc
+            _append_boundary(boundary_mc)
+
+        prev_visible_node = node
+        prev_visible_mc = current_mc
+        prev_merge_key = current_merge_key
+
+    if prev_visible_node is not None and prev_merge_key is not None:
+        _append_boundary(prev_visible_mc)
     return boundary_mcs
 
 
@@ -7664,7 +7691,7 @@ def _draw_profile_on_msp(
     if "slope" in row_layout:
         slope_top = row_layout["slope"]["top"]
         slope_bottom = row_layout["slope"]["bottom"]
-        for boundary_mc in _collect_profile_slope_boundary_mcs(slope_segments):
+        for boundary_mc in _collect_profile_slope_boundary_mcs(nodes, profile_text_nodes=profile_text_nodes):
             if round(float(boundary_mc), 9) in full_vline_mcs:
                 continue
             msp.add_line(
@@ -8185,7 +8212,7 @@ def _export_longitudinal_txt_to_path(
         if "slope" in row_layout:
             slope_top = row_layout["slope"]["top"]
             slope_bottom = row_layout["slope"]["bottom"]
-            for boundary_mc in _collect_profile_slope_boundary_mcs(slope_segments):
+            for boundary_mc in _collect_profile_slope_boundary_mcs(nodes, profile_text_nodes=profile_text_nodes):
                 if round(float(boundary_mc), 9) in full_vline_mcs:
                     continue
                 lines.append(f"pl {fmt(sx(boundary_mc))},{fmt(slope_bottom)} {fmt(sx(boundary_mc))},{fmt(slope_top)} ")

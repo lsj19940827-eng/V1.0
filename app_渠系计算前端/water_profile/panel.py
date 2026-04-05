@@ -6288,7 +6288,7 @@ class WaterProfilePanel(QWidget):
                 return 0.0
 
         def _read_ip_metadata(row):
-            """读取 IP 单元格保存的原始编号元数据。"""
+            """读取 IP 单元格保存的原始/显示编号元数据。"""
             item = table.item(row, 4)
             if not item:
                 return {}
@@ -6383,8 +6383,14 @@ class WaterProfilePanel(QWidget):
                 _ur = _first_item.data(Qt.UserRole)
                 if isinstance(_ur, dict) and _ur.get('_auto_channel'):
                     node.is_auto_inserted_channel = True
-                    node.x = float(_ur.get('_x', 0.0) or 0.0)
-                    node.y = float(_ur.get('_y', 0.0) or 0.0)
+                    _auto_channel_struct = normalize_section_type_name(
+                        str(_ur.get('_auto_channel_structure_type', '') or '')
+                    )
+                    if _auto_channel_struct and not node.structure_type:
+                        try:
+                            node.structure_type = StructureType.from_string(_auto_channel_struct)
+                        except ValueError:
+                            pass
                     try:
                         node.stat_length = float(_ur.get('_stat_length', 0.0) or 0.0)
                     except (TypeError, ValueError):
@@ -6392,13 +6398,23 @@ class WaterProfilePanel(QWidget):
                 elif _ur == "auto_channel":  # 兼容旧格式
                     node.is_auto_inserted_channel = True
                 # 恢复渐变段详细参数（#10）
-                elif isinstance(_ur, dict) and _ur.get('_transition_data'):
+                if isinstance(_ur, dict) and _ur.get('_transition_data'):
                     td = _ur['_transition_data']
                     node.transition_type = td.get('transition_type', '')
                     node.transition_form = td.get('transition_form', '')
                     node.transition_zeta = td.get('transition_zeta', 0.0)
                     node.transition_theta = td.get('transition_theta', 0.0)
+                    if not node.structure_type:
+                        node.structure_type = StructureType.TRANSITION
+                        node.is_transition = True
                 if isinstance(_ur, dict):
+                    if _ur.get('_aux_coords') or _ur.get('_auto_channel'):
+                        try:
+                            node.x = float(_ur.get('_x', 0.0) or 0.0)
+                            node.y = float(_ur.get('_y', 0.0) or 0.0)
+                        except (TypeError, ValueError):
+                            node.x = 0.0
+                            node.y = 0.0
                     _override = _ur.get("_transition_length_override_m", None)
                     if _override is not None and str(_override).strip() != "":
                         try:
@@ -7116,9 +7132,11 @@ class WaterProfilePanel(QWidget):
                 if _is_auto_ch:
                     payload.update({
                         "_auto_channel": True,
+                        "_auto_channel_structure_type": _st_str,
                         "_x": node.x,
                         "_y": node.y,
                         "_stat_length": float(getattr(node, "stat_length", 0.0) or 0.0),
+                        "_aux_coords": True,
                     })
                 elif _is_trans and (node.transition_type or node.transition_form):
                     # 渐变段详细参数保存到UserRole（#10）
@@ -7136,6 +7154,12 @@ class WaterProfilePanel(QWidget):
                     payload["_transition_rule_downstream_structure_type"] = str(
                         getattr(node, "transition_rule_downstream_structure_type", "") or ""
                     )
+                if _is_trans:
+                    payload.update({
+                        "_x": node.x,
+                        "_y": node.y,
+                        "_aux_coords": True,
+                    })
                 if getattr(node, 'external_head_loss', None) is not None:
                     payload['_external_head_loss'] = getattr(node, 'external_head_loss')
                 elif '_external_head_loss' in payload:
