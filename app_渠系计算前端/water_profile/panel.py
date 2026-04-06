@@ -8335,7 +8335,8 @@ class WaterProfilePanel(QWidget):
             InfoBar.error("错误", f"打开倒虹吸计算窗口失败: {str(e)}",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
-    def _get_pressure_pipe_group_flow_section(self, group) -> str:
+    @staticmethod
+    def _get_pressure_pipe_group_flow_section(group) -> str:
         rows = getattr(group, "rows", None) or []
         for node in rows:
             fs = str(getattr(node, "flow_section", "") or "").strip()
@@ -8343,12 +8344,13 @@ class WaterProfilePanel(QWidget):
                 return fs
         return "-"
 
-    def _build_pressure_pipe_group_identity(self, group) -> str:
+    @classmethod
+    def _build_pressure_pipe_group_identity(cls, group) -> str:
         identity = str(getattr(group, "identity", "") or "").strip()
         if identity:
             return identity
         return make_pressure_pipe_identity(
-            self._get_pressure_pipe_group_flow_section(group),
+            cls._get_pressure_pipe_group_flow_section(group),
             getattr(group, "name", "") or ""
         )
 

@@ -915,6 +915,48 @@ def test_pressure_pipe_calculator_clears_route_profile_segments_when_pure_xxpipe
     assert panel._pressure_pipe_manager.calls[0]["profile_segments"] == []
 
 
+def test_build_pressure_pipe_route_profile_segments_uses_group_identity_without_typeerror():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+
+    route_key = "flow1-route1"
+    group = SimpleNamespace(
+        name="穿路段A",
+        display_name="穿路段A",
+        identity="1::穿路段A",
+        storage_key="flow1-route1-a",
+        route_key=route_key,
+        structure_type="有压管道",
+        segment_start_mc=0.0,
+        segment_end_mc=10.0,
+    )
+    route_nodes = [
+        {
+            "chainage": 0.0,
+            "elevation": 422.0,
+            "turn_type": "NONE",
+            "turn_angle": 0.0,
+            "vertical_curve_radius": 0.0,
+        },
+        {
+            "chainage": 10.0,
+            "elevation": 420.0,
+            "turn_type": "NONE",
+            "turn_angle": 0.0,
+            "vertical_curve_radius": 0.0,
+        },
+    ]
+
+    result = WaterProfilePanel._build_pressure_pipe_route_profile_segments(
+        [group],
+        {route_key: route_nodes},
+    )
+
+    assert route_key in result
+    assert result[route_key][0]["segment_identity"] == "1::穿路段A"
+    assert result[route_key][0]["source_kind"] == "non_tunnel_dxf"
+
+
 def test_mark_section_results_stale_clears_transition_topology_prepared_flag():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
