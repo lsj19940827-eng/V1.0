@@ -1440,6 +1440,30 @@ def test_panel_pressure_pipe_characteristic_summary_includes_plain_pressure_pipe
     assert summary["1"]["jacking_length"] == 200.0
 
 
+def test_is_panel_xxpipe_mode_allows_continuous_xxqu_route_export():
+    panel = SimpleNamespace(
+        calculated_nodes=["node"],
+        _build_settings=lambda: SimpleNamespace(channel_level="支渠"),
+        _prepare_pressure_pipe_dialog_context=lambda nodes, settings=None, show_xxpipe_warning=True: {
+            "xxpipe_route_mode": True
+        },
+    )
+
+    assert cad_tools._is_panel_xxpipe_mode(panel) is True
+
+
+def test_is_panel_xxpipe_mode_keeps_noncontinuous_xxqu_in_standard_export():
+    panel = SimpleNamespace(
+        calculated_nodes=["node"],
+        _build_settings=lambda: SimpleNamespace(channel_level="支渠"),
+        _prepare_pressure_pipe_dialog_context=lambda nodes, settings=None, show_xxpipe_warning=True: {
+            "xxpipe_route_mode": False
+        },
+    )
+
+    assert cad_tools._is_panel_xxpipe_mode(panel) is False
+
+
 @pytest.mark.parametrize(
     ("structure_text", "count_key", "length_key"),
     [

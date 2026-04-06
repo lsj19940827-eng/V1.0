@@ -161,11 +161,31 @@ def test_extract_continuous_pressure_chains_breaks_on_non_chain_structures(break
     assert [chain.end_row_index for chain in chains] == [0, 2]
 
 
-def test_extract_continuous_pressure_chains_returns_empty_for_non_xxpipe_channel_level():
+def test_extract_continuous_pressure_chains_supports_continuous_xxqu_run():
     nodes = [
         _make_node(0, "4", "半兽人", "定向钻", InOutType.INLET),
         _make_node(1, "4", "半兽人", "定向钻", InOutType.OUTLET),
         _make_node(2, "4", "", "有压管道", InOutType.NORMAL),
+    ]
+
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+        nodes,
+        settings=_make_settings(channel_level="支渠"),
+    )
+
+    assert len(chains) == 1
+    assert chains[0].flow_section == "4"
+    assert [member.display_name for member in chains[0].members] == [
+        "半兽人",
+        "流量段4 第3行有压管道",
+    ]
+
+
+def test_extract_continuous_pressure_chains_skips_noncontinuous_xxqu_group():
+    nodes = [
+        _make_node(0, "5", "单独管段", "定向钻", InOutType.INLET),
+        _make_node(1, "5", "单独管段", "定向钻", InOutType.OUTLET),
+        _make_node(2, "5", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
     ]
 
     chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
