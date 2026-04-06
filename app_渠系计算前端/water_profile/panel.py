@@ -1005,8 +1005,9 @@ class WaterProfilePanel(QWidget):
         self._batch_backend.set_info_parent(lambda: self)
         self._batch_backend.hide()
         try:
-            self._batch_backend._clear_input(force=True)
-            self._batch_backend._clear_results()
+            self._batch_backend._clear_input(force=True, clear_shared=False)
+            # 这里只重置嵌入式批量面板自身状态，避免把外部刚算好的共享结果一并清空。
+            self._batch_backend._clear_results(clear_shared=False)
         except Exception:
             pass
         self._section_sync_ready = False
@@ -2413,11 +2414,15 @@ class WaterProfilePanel(QWidget):
 
     @classmethod
     def _is_unnamed_pressure_pipe_row_node(cls, node, channel_level: str | None = None) -> bool:
-        if not cls._is_xxpipe_channel_level_text(channel_level):
-            return False
         if not cls._is_regular_pressure_pipe_node(node):
             return False
-        return not str(getattr(node, "name", "") or "").strip()
+        if str(getattr(node, "name", "") or "").strip():
+            return False
+        if cls._is_xxpipe_channel_level_text(channel_level):
+            return True
+        if str(getattr(node, "pressure_pipe_row_identity", "") or "").strip():
+            return True
+        return bool(cls._get_pressure_pipe_window_override(node))
 
     @classmethod
     def _is_named_pressure_pipe_group_node(cls, node) -> bool:
@@ -8335,7 +8340,8 @@ class WaterProfilePanel(QWidget):
             InfoBar.error("错误", f"打开倒虹吸计算窗口失败: {str(e)}",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
 
-    def _get_pressure_pipe_group_flow_section(self, group) -> str:
+    @staticmethod
+    def _get_pressure_pipe_group_flow_section(group) -> str:
         rows = getattr(group, "rows", None) or []
         for node in rows:
             fs = str(getattr(node, "flow_section", "") or "").strip()
@@ -8343,12 +8349,13 @@ class WaterProfilePanel(QWidget):
                 return fs
         return "-"
 
-    def _build_pressure_pipe_group_identity(self, group) -> str:
+    @classmethod
+    def _build_pressure_pipe_group_identity(cls, group) -> str:
         identity = str(getattr(group, "identity", "") or "").strip()
         if identity:
             return identity
         return make_pressure_pipe_identity(
-            self._get_pressure_pipe_group_flow_section(group),
+            cls._get_pressure_pipe_group_flow_section(group),
             getattr(group, "name", "") or ""
         )
 
@@ -9476,7 +9483,12 @@ class WaterProfilePanel(QWidget):
         pressure_chains = list(self._extract_pressure_pipe_dialog_chains(nodes, settings=settings) or [])
         chain_descriptors = self._build_pressure_pipe_chain_descriptors(pressure_chains)
 
-        xxpipe_route_mode = self._is_xxpipe_channel_level_text(self._get_current_channel_level_text(settings))
+        channel_level = self._get_current_channel_level_text(settings)
+        xxpipe_route_mode = self._should_enable_pressure_pipe_route_mode(
+            channel_level,
+            pipe_groups,
+            pressure_chains,
+        )
         if not xxpipe_route_mode:
             return {
                 "pipe_groups": pipe_groups,
@@ -9505,6 +9517,24 @@ class WaterProfilePanel(QWidget):
             "route_import_targets": route_import_targets,
             "blocked_route_names": [],
         }
+
+    @staticmethod
+    def _is_supported_continuous_pressure_chain(chain) -> bool:
+        """判断当前承压链是否满足连续承压整线入口条件。"""
+        members = list(getattr(chain, "members", []) or [])
+        return len(members) >= 2
+
+    @classmethod
+    def _should_enable_pressure_pipe_route_mode(cls, channel_level: str | None, pipe_groups, pressure_chains) -> bool:
+        """统一判断是否启用连续承压整线入口。"""
+        if cls._is_xxpipe_channel_level_text(channel_level):
+            return True
+        if not any(cls._get_pressure_pipe_group_route_key(group) for group in (pipe_groups or [])):
+            return False
+        return any(
+            cls._is_supported_continuous_pressure_chain(chain)
+            for chain in (pressure_chains or [])
+        )
 
     @staticmethod
     def _find_next_regular_row_index(nodes, start_index: int) -> int:

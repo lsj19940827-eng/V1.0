@@ -302,12 +302,20 @@ class PressurePipeDataExtractor:
 
         返回两类对象：
         1. 原有命名有压管道/定向钻/顶管组；
-        2. xx管渠道级别下的空名称普通“有压管道”匿名段。
+        2. 连续承压整线场景下需要单独计算的空名称有压同类匿名段。
         """
         if not nodes:
             return []
 
         ordered_groups: List[Tuple[int, PressurePipeGroup]] = []
+        continuous_pressure_chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+            nodes,
+            settings=settings,
+        )
+        continuous_route_row_indices = PressurePipeDataExtractor._collect_chain_row_indices(
+            continuous_pressure_chains
+        )
+        is_xxpipe_channel = PressurePipeDataExtractor._is_xxpipe_channel_level(settings)
 
         for group in PressurePipeDataExtractor.extract_pipes(nodes, settings=settings):
             flow_section = PressurePipeDataExtractor._resolve_group_flow_section(group)
@@ -319,44 +327,74 @@ class PressurePipeDataExtractor:
             group.upstream_row_index = group.inlet_row_index
             ordered_groups.append((PressurePipeDataExtractor._group_order_index(group), group))
 
-        if PressurePipeDataExtractor._is_xxpipe_channel_level(settings):
-            for idx, node in enumerate(nodes):
-                if not PressurePipeDataExtractor._is_unnamed_pressure_pipe_like(node):
-                    continue
-                anonymous_group = PressurePipeDataExtractor._build_single_row_pressure_like_group(
-                    nodes,
-                    idx,
-                    settings=settings,
-                )
-                if anonymous_group is None:
-                    continue
-                ordered_groups.append((idx, anonymous_group))
+        for idx, node in enumerate(nodes):
+            if not PressurePipeDataExtractor._is_unnamed_pressure_pipe_like(node):
+                continue
+            if (not is_xxpipe_channel) and idx not in continuous_route_row_indices:
+                continue
+            anonymous_group = PressurePipeDataExtractor._build_single_row_pressure_like_group(
+                nodes,
+                idx,
+                settings=settings,
+            )
+            if anonymous_group is None:
+                continue
+            ordered_groups.append((idx, anonymous_group))
 
         ordered_groups.sort(key=lambda item: item[0])
         groups = [group for _, group in ordered_groups]
 
+        route_contexts = {}
+        if is_xxpipe_channel or continuous_pressure_chains:
+            route_contexts = PressurePipeDataExtractor._build_xxpipe_route_contexts(
+                nodes,
+                groups,
+                chains=continuous_pressure_chains,
+            )
         for group in groups:
+            if PressurePipeDataExtractor._find_route_context_for_group(group, route_contexts) is None:
+                continue
             PressurePipeDataExtractor._apply_default_route_context(group, nodes)
-
-        if PressurePipeDataExtractor._is_xxpipe_channel_level(settings):
-            route_contexts = PressurePipeDataExtractor._build_xxpipe_route_contexts(nodes, groups)
-            for group in groups:
-                PressurePipeDataExtractor._apply_route_context(group, route_contexts)
+            PressurePipeDataExtractor._apply_route_context(group, route_contexts)
 
         return groups
 
     @staticmethod
     def extract_continuous_pressure_chains(nodes: List[ChannelNode], settings=None) -> List[PressurePipeChain]:
         """
-        提取 xx管 渠道级别下的连续承压链。
+        提取连续承压链。
 
         规则：
-        1. 仅在 xx管 渠道级别下启用；
-        2. 命名有压组沿用现有整组识别；
-        3. 空名称有压同类结构、隧洞普通行按单行成员处理；
-        4. 遇到非链结构即断开；若结构本身连续，允许跨流量段延续。
+        1. xx管 继续保留原有整线口径；
+        2. xx渠 只在真正形成连续承压线时返回链；
+        3. 命名有压组沿用现有整组识别；
+        4. 空名称有压同类结构、隧洞普通行按单行成员处理；
+        5. 遇到非链结构即断开；若结构本身连续，允许跨流量段延续。
         """
-        if not nodes or not PressurePipeDataExtractor._is_xxpipe_channel_level(settings):
+        if not nodes:
+            return []
+
+        chains = PressurePipeDataExtractor._build_continuous_pressure_chains(
+            nodes,
+            settings=settings,
+        )
+        if PressurePipeDataExtractor._is_xxpipe_channel_level(settings):
+            return chains
+
+        return [
+            chain
+            for chain in chains
+            if PressurePipeDataExtractor._is_supported_continuous_pressure_chain(chain)
+        ]
+
+    @staticmethod
+    def _build_continuous_pressure_chains(nodes: List[ChannelNode], settings=None) -> List[PressurePipeChain]:
+        """
+        构造完整的连续承压链候选。
+
+        这里先按拓扑连续性识别全部候选，再由上层决定是否对 xx渠 暴露整线模式。
+        """
+        if not nodes:
             return []
 
         named_groups = PressurePipeDataExtractor.extract_pipes(nodes, settings=settings)
@@ -427,6 +465,14 @@ class PressurePipeDataExtractor:
             chains.append(current_chain)
 
         return chains
+
+    @staticmethod
+    def _is_supported_continuous_pressure_chain(chain: Optional[PressurePipeChain]) -> bool:
+        """判断当前承压链是否足以启用连续承压整线。"""
+        if chain is None:
+            return False
+        members = list(getattr(chain, "members", []) or [])
+        return len(members) >= 2
     
     @staticmethod
     def _is_pressure_pipe(node: ChannelNode) -> bool:
@@ -557,14 +603,36 @@ class PressurePipeDataExtractor:
         )
 
     @staticmethod
+    def _collect_chain_row_indices(chains: List[PressurePipeChain]) -> set[int]:
+        """收集连续承压链覆盖的行号。"""
+        row_indices: set[int] = set()
+        for chain in list(chains or []):
+            for member in list(getattr(chain, "members", []) or []):
+                member_rows = [
+                    idx for idx in (getattr(member, "row_indices", []) or [])
+                    if isinstance(idx, int) and idx >= 0
+                ]
+                if member_rows:
+                    row_indices.update(member_rows)
+                    continue
+                start_idx = coerce_row_index(getattr(member, "start_row_index", -1))
+                end_idx = coerce_row_index(getattr(member, "end_row_index", start_idx))
+                if start_idx >= 0 and end_idx >= start_idx:
+                    row_indices.update(range(start_idx, end_idx + 1))
+        return row_indices
+
+    @staticmethod
     def _build_xxpipe_route_contexts(
         nodes: List[ChannelNode],
         groups: List[PressurePipeGroup],
+        chains: Optional[List[PressurePipeChain]] = None,
     ) -> Dict[str, Dict[str, Any]]:
-        """构造 xx管 连续承压整线上下文。"""
+        """构造连续承压整线上下文。"""
         route_contexts: Dict[str, Dict[str, Any]] = {}
         row_to_route_key: Dict[int, str] = {}
         flow_route_seq: Dict[str, int] = defaultdict(int)
+        active_row_indices = PressurePipeDataExtractor._collect_chain_row_indices(chains or [])
+        route_member_keys: Dict[str, List[str]] = defaultdict(list)
         idx = 0
         total_nodes = len(nodes)
 
@@ -582,6 +650,10 @@ class PressurePipeDataExtractor:
                 if not PressurePipeDataExtractor._is_xxpipe_route_candidate(next_node):
                     break
                 end_idx += 1
+
+            if active_row_indices and not any(row_idx in active_row_indices for row_idx in range(start_idx, end_idx + 1)):
+                idx = end_idx + 1
+                continue
 
             flow_key = flow_section or "-"
             flow_route_seq[flow_key] += 1
@@ -615,7 +687,6 @@ class PressurePipeDataExtractor:
                 row_to_route_key[row_idx] = route_key
             idx = end_idx + 1
 
-        route_member_keys: Dict[str, List[str]] = defaultdict(list)
         for group in groups or []:
             candidate_indices = [
                 idx for idx in (getattr(group, "row_indices", []) or []) if isinstance(idx, int) and idx >= 0
@@ -731,8 +802,11 @@ class PressurePipeDataExtractor:
         group.segment_end_mc = segment_end_mc
 
     @staticmethod
-    def _apply_route_context(group: PressurePipeGroup, route_contexts: Dict[str, Dict[str, Any]]):
-        """将整线上下文写入分组。"""
+    def _find_route_context_for_group(
+        group: PressurePipeGroup,
+        route_contexts: Dict[str, Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """按行号范围找到当前分组所属的整线上下文。"""
         row_candidates = [
             idx for idx in (getattr(group, "row_indices", []) or []) if isinstance(idx, int) and idx >= 0
         ]
@@ -741,13 +815,17 @@ class PressurePipeDataExtractor:
             if target_row_index >= 0:
                 row_candidates.append(target_row_index)
 
-        selected_route = None
         for route_context in route_contexts.values():
             route_start = coerce_row_index(route_context.get("route_start_row_index", -1))
             route_end = coerce_row_index(route_context.get("route_end_row_index", -1))
             if any(route_start <= row_idx <= route_end for row_idx in row_candidates):
-                selected_route = route_context
-                break
+                return route_context
+        return None
+
+    @staticmethod
+    def _apply_route_context(group: PressurePipeGroup, route_contexts: Dict[str, Dict[str, Any]]):
+        """将整线上下文写入分组。"""
+        selected_route = PressurePipeDataExtractor._find_route_context_for_group(group, route_contexts)
         if not selected_route:
             return
 

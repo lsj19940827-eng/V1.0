@@ -417,7 +417,7 @@ def test_pressure_pipe_calculator_allows_prepared_topology_without_transition_ro
     assert not any("插入渐变段" in rec["content"] for rec in _FakeInfoBar.records)
 
 
-def test_pressure_pipe_calculator_skips_anonymous_pressure_pipe_rows():
+def test_pressure_pipe_calculator_opens_dialog_for_continuous_xxqu_anonymous_rows():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
     module.CALCULATOR_AVAILABLE = True
@@ -451,6 +451,7 @@ def test_pressure_pipe_calculator_skips_anonymous_pressure_pipe_rows():
 
     panel = _build_minimal_panel(WaterProfilePanel, nodes)
     panel._transition_topology_prepared = True
+    panel._build_settings = lambda: SimpleNamespace(channel_level="支渠")
     opened = []
     saved_dialog = _install_pressure_pipe_dialog_stub(opened)
     _FakeInfoBar.reset()
@@ -462,8 +463,9 @@ def test_pressure_pipe_calculator_skips_anonymous_pressure_pipe_rows():
         else:
             sys.modules["app_渠系计算前端.water_profile.water_profile_dialogs"] = saved_dialog
 
-    assert opened == []
-    assert any("未找到有压管道数据组" in rec["content"] for rec in _FakeInfoBar.records)
+    assert len(opened) == 1
+    assert opened[0]["xxpipe_route_mode"] is True
+    assert len(opened[0]["pipe_groups"]) == 2
 
 
 def test_pressure_pipe_calculator_opens_dialog_for_xxpipe_anonymous_row_segments():
@@ -731,6 +733,68 @@ def test_pressure_pipe_calculator_keeps_tunnel_mixed_xxpipe_routes_available():
     assert not any("夹带隧洞" in rec["content"] for rec in _FakeInfoBar.records)
 
 
+def test_prepare_pressure_pipe_dialog_context_enables_route_mode_for_continuous_xxqu():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._extract_pressure_pipe_dialog_groups = lambda _nodes, settings=None: [
+        SimpleNamespace(
+            route_key="flow7-route1",
+            route_display_name="末端连续整线",
+            route_ip_points=[{"x": 0.0, "y": 0.0}, {"x": 40.0, "y": 0.0}],
+            display_name="穿路段",
+            row_indices=[0, 1],
+            target_row_index=1,
+        )
+    ]
+    panel._extract_pressure_pipe_dialog_chains = lambda _nodes, settings=None: [
+        SimpleNamespace(flow_section="7", start_row_index=0, end_row_index=2, members=[object(), object()])
+    ]
+    panel._build_pressure_pipe_chain_descriptors = lambda chains: [{"flow_section": "7", "member_count": 2}]
+    panel._collect_xxpipe_route_context_map = lambda nodes, pipe_groups: {
+        "flow7-route1": {
+            "display_name": "末端连续整线",
+            "import_anchor_station_mc": 40.0,
+            "targets": [],
+            "nodes": [],
+        }
+    }
+    panel._get_current_channel_level_text = lambda settings=None: "支渠"
+    panel._get_settings_station_prefix = lambda settings=None: ""
+
+    result = WaterProfilePanel._prepare_pressure_pipe_dialog_context(
+        panel,
+        ["stub-node"],
+        settings=SimpleNamespace(channel_level="支渠"),
+    )
+
+    assert result["xxpipe_route_mode"] is True
+    assert "flow7-route1" in result["route_import_targets"]
+
+
+def test_prepare_pressure_pipe_dialog_context_keeps_noncontinuous_xxqu_in_group_mode():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._extract_pressure_pipe_dialog_groups = lambda _nodes, settings=None: [
+        SimpleNamespace(display_name="白马庙", route_key="", route_display_name="")
+    ]
+    panel._extract_pressure_pipe_dialog_chains = lambda _nodes, settings=None: []
+    panel._build_pressure_pipe_chain_descriptors = lambda chains: []
+    panel._collect_xxpipe_route_context_map = lambda nodes, pipe_groups: {}
+    panel._get_current_channel_level_text = lambda settings=None: "支渠"
+    panel._get_settings_station_prefix = lambda settings=None: ""
+
+    result = WaterProfilePanel._prepare_pressure_pipe_dialog_context(
+        panel,
+        ["stub-node"],
+        settings=SimpleNamespace(channel_level="支渠"),
+    )
+
+    assert result["xxpipe_route_mode"] is False
+    assert result["route_import_targets"] == {}
+
+
 def test_pressure_pipe_calculator_clears_route_profile_segments_when_pure_xxpipe_route_recomputed():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -913,6 +977,48 @@ def test_pressure_pipe_calculator_clears_route_profile_segments_when_pure_xxpipe
 
     assert panel._pressure_pipe_manager.calls
     assert panel._pressure_pipe_manager.calls[0]["profile_segments"] == []
+
+
+def test_build_pressure_pipe_route_profile_segments_uses_group_identity_without_typeerror():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+
+    route_key = "flow1-route1"
+    group = SimpleNamespace(
+        name="穿路段A",
+        display_name="穿路段A",
+        identity="1::穿路段A",
+        storage_key="flow1-route1-a",
+        route_key=route_key,
+        structure_type="有压管道",
+        segment_start_mc=0.0,
+        segment_end_mc=10.0,
+    )
+    route_nodes = [
+        {
+            "chainage": 0.0,
+            "elevation": 422.0,
+            "turn_type": "NONE",
+            "turn_angle": 0.0,
+            "vertical_curve_radius": 0.0,
+        },
+        {
+            "chainage": 10.0,
+            "elevation": 420.0,
+            "turn_type": "NONE",
+            "turn_angle": 0.0,
+            "vertical_curve_radius": 0.0,
+        },
+    ]
+
+    result = WaterProfilePanel._build_pressure_pipe_route_profile_segments(
+        [group],
+        {route_key: route_nodes},
+    )
+
+    assert route_key in result
+    assert result[route_key][0]["segment_identity"] == "1::穿路段A"
+    assert result[route_key][0]["source_kind"] == "non_tunnel_dxf"
 
 
 def test_mark_section_results_stale_clears_transition_topology_prepared_flag():

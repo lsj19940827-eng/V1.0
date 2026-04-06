@@ -148,6 +148,95 @@ def test_extract_dialog_pipe_groups_skips_unnamed_regular_pressure_pipe_rows_for
     assert groups == []
 
 
+def test_extract_dialog_pipe_groups_keeps_named_group_without_route_context_for_noncontinuous_xxqu():
+    inlet = _make_node("7", "白马庙", "有压管道", InOutType.INLET, diameter=1.1, flow=0.72)
+    inlet.x = 0.0
+    inlet.y = 0.0
+
+    outlet = _make_node("7", "白马庙", "有压管道", InOutType.OUTLET, diameter=1.1, flow=0.72)
+    outlet.x = 18.0
+    outlet.y = 0.0
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [inlet, outlet],
+        settings=_make_settings("支渠"),
+    )
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group.display_name == "白马庙"
+    assert group.route_key == ""
+    assert group.route_display_name == ""
+    assert group.route_member_keys == []
+    assert group.route_ip_points == []
+
+
+def test_extract_dialog_pipe_groups_assigns_route_context_for_continuous_xxqu_run():
+    upstream = _set_plan_station(
+        _make_node("2", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.8),
+        0.0,
+        0.0,
+        0.0,
+    )
+    upstream.velocity = 0.9
+    upstream.water_depth = 1.3
+    upstream.section_params = {"B": 2.2, "m": 1.5}
+
+    drill_inlet = _set_plan_station(
+        _make_node("2", "穿路段", "定向钻", InOutType.INLET, diameter=1.0, flow=1.8),
+        10.0,
+        10.0,
+        0.0,
+    )
+    drill_outlet = _set_plan_station(
+        _make_node("2", "穿路段", "定向钻", InOutType.OUTLET, diameter=1.0, flow=1.8),
+        30.0,
+        30.0,
+        0.0,
+    )
+    tunnel = _set_plan_station(
+        _make_node("3", "跨段洞身", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        50.0,
+        50.0,
+        2.0,
+    )
+    anonymous = _set_plan_station(
+        _make_node("3", "", "有压管道", InOutType.NORMAL, diameter=1.0, flow=1.8),
+        80.0,
+        80.0,
+        4.0,
+    )
+    anonymous.pressure_pipe_row_identity = "flow3-row5"
+
+    downstream = _set_plan_station(
+        _make_node("3", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.8),
+        110.0,
+        110.0,
+        4.0,
+    )
+    downstream.velocity = 1.1
+    downstream.water_depth = 1.0
+    downstream.section_params = {"B": 2.0, "m": 1.2}
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [upstream, drill_inlet, drill_outlet, tunnel, anonymous, downstream],
+        settings=_make_settings("支渠"),
+    )
+
+    assert [group.display_name for group in groups] == ["穿路段", "流量段3 第5行有压管道"]
+
+    named_group, anonymous_group = groups
+    assert named_group.route_key
+    assert named_group.route_key == anonymous_group.route_key
+    assert named_group.route_start_row_index == 1
+    assert named_group.route_end_row_index == 4
+    assert named_group.route_start_mc == 10.0
+    assert named_group.route_end_mc == 80.0
+    assert anonymous_group.segment_start_mc == 80.0
+    assert anonymous_group.segment_end_mc == 80.0
+    assert "流量段" not in named_group.route_display_name
+
+
 def test_extract_dialog_pipe_groups_builds_fallback_identity_for_unnamed_row():
     upstream = _make_node("5", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=2.0)
     upstream.x = 1.0

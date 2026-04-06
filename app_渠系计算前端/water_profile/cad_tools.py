@@ -4819,7 +4819,32 @@ def _get_panel_channel_level_text(panel):
 
 
 def _is_panel_xxpipe_mode(panel):
-    return _is_xxpipe_channel_level(_get_panel_channel_level_text(panel))
+    if _is_xxpipe_channel_level(_get_panel_channel_level_text(panel)):
+        return True
+
+    prepare_context = getattr(panel, "_prepare_pressure_pipe_dialog_context", None)
+    if not callable(prepare_context):
+        return False
+
+    build_settings = getattr(panel, "_build_settings", None)
+    settings = None
+    if callable(build_settings):
+        try:
+            settings = build_settings()
+        except Exception:
+            settings = None
+
+    nodes = list(getattr(panel, "calculated_nodes", None) or getattr(panel, "nodes", None) or [])
+    try:
+        dialog_context = prepare_context(nodes, settings=settings, show_xxpipe_warning=False)
+    except TypeError:
+        try:
+            dialog_context = prepare_context(nodes, settings=settings)
+        except Exception:
+            return False
+    except Exception:
+        return False
+    return bool((dialog_context or {}).get("xxpipe_route_mode"))
 
 
 def _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=None):

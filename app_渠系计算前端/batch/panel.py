@@ -936,7 +936,8 @@ class BatchPanel(QWidget):
         finally:
             self._undo_group -= 1
 
-    def _clear_input(self, force=False):
+    def _clear_input(self, force=False, clear_shared=True):
+        """清空表1输入，可按需保留共享批量结果。"""
         if self.input_table.rowCount() == 0:
             return
         if not force:
@@ -950,7 +951,7 @@ class BatchPanel(QWidget):
         if not self._loading_sample:
             self._is_sample_data = False
         # 同步清空结果（防止清空输入后仍能导出/查看旧结果）
-        self._clear_results()
+        self._clear_results(clear_shared=clear_shared)
 
     def _copy_to_clipboard(self):
         """复制选中单元格到剪贴板（制表符分隔，可直接粘贴到Excel）"""
@@ -2933,14 +2934,15 @@ class BatchPanel(QWidget):
         self.detail_text.setPlainText("\n".join(detail_lines))
         self.result_notebook.setCurrentIndex(1)
 
-    def _clear_results(self):
+    def _clear_results(self, clear_shared=True):
+        """清空表2结果，可按需保留共享批量结果。"""
         self.result_table.setRowCount(0)
         self.detail_text.clear()
         self.batch_results = []
         self._last_calc_snapshot = None
         self._last_calc_detail = None
         # 同时清除共享数据管理器中的批量结果
-        if SHARED_DATA_AVAILABLE:
+        if clear_shared and SHARED_DATA_AVAILABLE:
             try:
                 get_shared_data_manager().clear_batch_results()
             except Exception:
