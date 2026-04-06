@@ -148,6 +148,29 @@ def test_extract_dialog_pipe_groups_skips_unnamed_regular_pressure_pipe_rows_for
     assert groups == []
 
 
+def test_extract_dialog_pipe_groups_keeps_named_group_without_route_context_for_non_xxpipe():
+    inlet = _make_node("7", "白马庙", "有压管道", InOutType.INLET, diameter=1.1, flow=0.72)
+    inlet.x = 0.0
+    inlet.y = 0.0
+
+    outlet = _make_node("7", "白马庙", "有压管道", InOutType.OUTLET, diameter=1.1, flow=0.72)
+    outlet.x = 18.0
+    outlet.y = 0.0
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [inlet, outlet],
+        settings=_make_settings("支渠"),
+    )
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group.display_name == "白马庙"
+    assert group.route_key == ""
+    assert group.route_display_name == ""
+    assert group.route_member_keys == []
+    assert group.route_ip_points == []
+
+
 def test_extract_dialog_pipe_groups_builds_fallback_identity_for_unnamed_row():
     upstream = _make_node("5", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=2.0)
     upstream.x = 1.0

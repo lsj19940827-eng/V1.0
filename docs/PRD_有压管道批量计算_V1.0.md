@@ -399,13 +399,14 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 
 `_open_pressure_pipe_calculator()` 执行：
 1. 从节点表提取有压管道分组（`PressurePipeDataExtractor.extract_pipes()`）
-2. `xx管` 流量段进入“整线卡 + 隧洞分段卡”混合弹窗；整线仍只导入 1 份 DXF，但只要求覆盖非隧洞区间
-3. 若流量段起点就是隧洞，DXF 第一点评到第一段非隧洞子段起点里程，而不是整线起点
-4. 普通有压段继续使用 DXF 裁切后的纵断面；隧洞段按“进口底高 + 坡降 i + 起终里程”生成理论纵断面，并做交界高差提醒
-5. 对每个管道或链成员执行水头损失计算（`calc_total_head_loss()` 或 `calc_total_head_loss_with_spatial()`）；隧洞成员继续复用既有隧洞计算口径参与承压链累计
-6. 结果回写到节点表的 `head_loss_siphon` 列；隧洞行仍按自身既有规则回写，避免 route 结果重复覆盖
-7. mixed route 的拼接结果持久化到 `PressurePipeManager.routes[route_key].profile_segments`
-8. 更新详细过程文本区
+2. 非 `xx管` 渠道级别继续按“当前有压管道分组”逐组弹窗，不生成整线卡，也不显示整条连续轴线
+3. `xx管` 流量段进入“整线卡 + 隧洞分段卡”混合弹窗；整线仍只导入 1 份 DXF，但只要求覆盖非隧洞区间
+4. 若流量段起点就是隧洞，DXF 第一点评到第一段非隧洞子段起点里程，而不是整线起点
+5. 普通有压段继续使用 DXF 裁切后的纵断面；隧洞段按“进口底高 + 坡降 i + 起终里程”生成理论纵断面，并做交界高差提醒
+6. 对每个管道或链成员执行水头损失计算（`calc_total_head_loss()` 或 `calc_total_head_loss_with_spatial()`）；隧洞成员继续复用既有隧洞计算口径参与承压链累计
+7. 结果回写到节点表的 `head_loss_siphon` 列；隧洞行仍按自身既有规则回写，避免 route 结果重复覆盖
+8. mixed route 的拼接结果持久化到 `PressurePipeManager.routes[route_key].profile_segments`
+9. 更新详细过程文本区
 
 #### 3.8.4 灵敏度分析
 
@@ -557,3 +558,4 @@ $$h_f = f \times L \times \frac{Q_{m^3/h}^m}{d_{mm}^b}$$
 | V2.10 | 2026-04-02 | **设计流速显示精度修正**：压力管道特性表中的“设计流速”在 DXF 与 Excel 中统一按两位小数展示，例如 `0.7954` 显示为 `0.80`；内部计算值与缓存值保持原始精度。 |
 | V2.11 | 2026-04-02 | **xx管 夹带隧洞 mixed route 支持**：取消“夹带隧洞暂不支持”拦截；`xx管` 弹窗改为“整线卡 + 隧洞分段卡”；整线 DXF 只覆盖非隧洞子段，隧洞纵断面按“进口底高 + 坡降 i + 起终里程”生成；新增 `profile_segments` 作为 mixed route 的统一几何真源；纵断面第 4 行隧洞段输出底高，第 5 行输出隧洞断面参数文本。 |
 | V2.11.1 | 2026-04-02 | **mixed route 收口修正**：当整线起点先经过隧洞且首个非隧洞节点没有显式桩号时，DXF 导入会按该节点的回退桩号对齐，不再误回到整线起点；当 mixed route 后续改回纯有压整线时，会显式清空 route 级 `profile_segments`，避免历史隧洞纵断面残留影响导出。 |
+| V2.11.2 | 2026-04-06 | **窗口口径回归修复**：`xx渠` 的有压管道窗口不再误显示整线卡，恢复为只显示当前分组；同时修正开始计算时 route 分段组装误调实例方法导致的 `missing 1 required positional argument: 'group'` 报错。 |

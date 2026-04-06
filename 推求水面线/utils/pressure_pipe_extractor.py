@@ -335,10 +335,12 @@ class PressurePipeDataExtractor:
         ordered_groups.sort(key=lambda item: item[0])
         groups = [group for _, group in ordered_groups]
 
-        for group in groups:
-            PressurePipeDataExtractor._apply_default_route_context(group, nodes)
+        is_xxpipe_channel = PressurePipeDataExtractor._is_xxpipe_channel_level(settings)
+        if is_xxpipe_channel:
+            # 只有 xx管 需要整线卡和 route 级纵断面上下文，xx渠 仍按单组展示。
+            for group in groups:
+                PressurePipeDataExtractor._apply_default_route_context(group, nodes)
 
-        if PressurePipeDataExtractor._is_xxpipe_channel_level(settings):
             route_contexts = PressurePipeDataExtractor._build_xxpipe_route_contexts(nodes, groups)
             for group in groups:
                 PressurePipeDataExtractor._apply_route_context(group, route_contexts)

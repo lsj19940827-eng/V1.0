@@ -5,7 +5,7 @@
 - `main.py`：桌面程序入口，负责启动主界面。
 - `app_渠系计算前端/`：界面层，负责表格编辑、按钮动作、结果展示和导出。
 - `app_渠系计算前端/water_profile/panel.py`：表3水面线页面主控，负责把节点数据和界面单元格互相同步，管理顶部“转弯半径”统一应用入口、普通模式/xx管 的导出精度默认值，以及辅助行往返所需的结构类型/坐标上下文和 IP 单元格 raw/display 元数据。
-- `app_渠系计算前端/water_profile/water_profile_dialogs.py`：有压管道配置窗口，负责普通模式的链卡/分段卡，以及 xx管 的整线卡、隧洞分段卡、DXF 导入锚点选择、隧洞参数录入与非隧洞覆盖校验。
+- `app_渠系计算前端/water_profile/water_profile_dialogs.py`：有压管道配置窗口，负责普通模式的链卡/分段卡，以及 xx管 的整线卡、隧洞分段卡、DXF 导入锚点选择、隧洞参数录入与非隧洞覆盖校验；是否显示整线卡只看分组里有没有 `route_key`。
 - `app_渠系计算前端/water_profile/cad_tools.py`：纵断面导出与 xx管 中心线高程采样，负责普通模式与 xx管 的导出桩号格式化、特殊建筑进出口的显示 IP 文本、mixed route 的隧洞段取底高程、第 5 行断面参数文字，以及统一处理桩号回退、坡降短竖线边界和覆盖报错。
 - `app_渠系计算前端/water_profile/formula_dialog.py`：表头说明和双击公式弹窗，负责把计算详情解释给用户看。
 - `updater.py`：自动更新核心，负责版本比较、补丁/全量包选择、安装会话、补丁适用性校验和回滚。
@@ -17,7 +17,7 @@
 - `推求水面线/managers/pressure_pipe_manager.py`：有压管道结果与纵断面持久化，负责 `pipes` 与 `routes` 两层存储，并兼容保存 mixed route 的 `profile_segments` 和隧洞参数缓存。
 - `推求水面线/models/data_models.py`：节点和项目设置的数据结构定义，统一封装 IP 显示文本与 raw/display 双编号规则。
 - `推求水面线/models/enums.py`：结构类型、进出口标记和相关判断规则。
-- `推求水面线/utils/pressure_pipe_extractor.py`：保留命名组提取入口，同时补齐整线路由和连续承压链提取，把 `xx管` 下连续出现的有压类结构、隧洞和子段范围组织起来。
+- `推求水面线/utils/pressure_pipe_extractor.py`：保留命名组提取入口，同时补齐连续承压链提取；只有 `xx管` 级别才会补整线路由、整线平面点和子段范围，`xx渠` 继续保持单组口径。
 - `推求水面线/utils/pressure_pipe_longitudinal_utils.py`：纵断面裁切与按桩号采样工具，负责把整线纵断面切成子段可用数据。
 - `推求水面线/utils/pressure_pipe_result_helpers.py`：有压管道结果归一化、批量文本拼装和连续承压链总览格式化。
 - `推求水面线/utils/__init__.py`：打包兼容入口，负责把顶层 `utils` 显式指回项目自带工具包，避免正式包运行时被同名包抢占。
@@ -33,7 +33,7 @@
 - `calculator.py` 调用 `hydraulic_calc.py` 计算水头损失和水位，并在需要时结合渐变段处理。
 - `calculator.py` 在检测到节点序列里已有渐变段/连接段时，不再让辅助行参与整套几何重算，而是先只刷新真实节点的转角与桩号基线，再按辅助行现有位置回补连接段桩号。
 - `hydraulic_calc.py` 在 xx管 匿名普通有压管道和连续承压链成员场景下，都会优先识别窗口回写后的覆盖结果，并继续复用 `pressure_pipe_calc.py` 的 FMB 和承压弯头公式。
-- `pressure_pipe_extractor.py` 先给 xx管 有压对象补上 `route_key`、整线范围和子段范围，再同时提取普通有压组与连续承压链，交给 `panel.py` 和 `water_profile_dialogs.py` 使用。
+- `pressure_pipe_extractor.py` 只会给 xx管 有压对象补上 `route_key`、整线范围和子段范围；xx渠 命名组不会再带整线元数据，交给 `water_profile_dialogs.py` 后自然只显示当前分组。
 - `water_profile_dialogs.py` 把整线纵断面按 `route_key` 收集后返回给 `panel.py`；在 xx管 模式下，导入时会自动对齐到首个非隧洞桩号，并直接按非隧洞导出节点校验覆盖范围；隧洞卡片里的参数会同步写进 `PressurePipeManager`。
 - `panel.py` 在计算和导出前调用 `pressure_pipe_longitudinal_utils.py`，纯整线继续按 `route_key` 找整线纵断面再裁切子段；mixed route 则优先使用 route 级 `profile_segments`，并会先从 `PressurePipeManager` 把隧洞缓存参数补回新提取的分组对象。
 - `panel.py` 计算完成后通过 `pressure_pipe_manager.py` 把整线纵断面写入 `routes`，mixed route 额外把分段结果写入 `routes[route_key].profile_segments`，子段结果继续写入 `pipes`。
@@ -58,6 +58,7 @@
 - 匿名普通有压管道段在窗口里使用 `pressure_pipe_row_identity` 作为存储键，界面显示名单独放在 `display_name`，这样空名称行不会互相覆盖。
 - 匿名普通有压管道段一旦应用窗口结果，就把该结果持久化到节点覆盖载荷里，并由 `hydraulic_calc.py` 优先识别，保证静默重算和详情展示继续沿用窗口结果。
 - `xx管` 的连续承压链只负责把连续的有压类结构和隧洞串成一条逻辑链，不改变各成员原有公式；链总损失只是成员损失求和。
+- 整线卡是 `xx管` 专用入口，不是所有命名有压管道的通用展示方式；因此 `route_key` 这类整线元数据只允许在 `xx管` 提取阶段生成，避免 xx渠 弹窗被误带成整线视图。
 - 连续承压链的起点成员若位于流量段首行，只作为锚点参与拓扑连接，不写本行损失，这样可以兼容“首行就是有压管道”的工程表。
 - 结果保存继续按成员颗粒度落盘，链总览只作为批量计算展示数据存在，避免表格回写和持久化时重复计损。
 - 表3列38对 xx管 匿名普通有压管道只是展示值，因此总损失、水位和累计说明里不能再把它当作单独一项重复相加。
