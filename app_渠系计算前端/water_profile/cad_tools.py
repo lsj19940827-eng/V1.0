@@ -2095,13 +2095,34 @@ def _get_xxpipe_structure_display_name(struct_name):
     return text
 
 
-def _get_xxpipe_building_display_name(struct_name, building_name):
-    if not _is_xxpipe_named_structure(struct_name):
-        return ""
-    return _merge_building_and_structure_name(
-        building_name,
-        _get_xxpipe_structure_display_name(struct_name),
-    )
+def _normalize_xxpipe_export_policy(export_policy=None):
+    """整理 xx管 纵断面导出策略，兼容严格模式和宽松模式。"""
+    policy = dict(export_policy or {})
+    fallback_name = str(policy.get("plain_pipe_fallback_name") or "有压管道").strip() or "有压管道"
+    return {
+        "allow_partial_export": bool(policy.get("allow_partial_export")),
+        "show_plain_pipe_name": bool(policy.get("show_plain_pipe_name")),
+        "plain_pipe_fallback_name": fallback_name,
+    }
+
+
+def _get_xxpipe_building_display_name(
+    struct_name,
+    building_name,
+    *,
+    show_plain_pipe_name=False,
+    plain_pipe_fallback_name="有压管道",
+):
+    text = str(struct_name or "").strip()
+    name = str(building_name or "").strip()
+    if _is_xxpipe_named_structure(text):
+        return _merge_building_and_structure_name(
+            name,
+            _get_xxpipe_structure_display_name(text),
+        )
+    if show_plain_pipe_name and text == "有压管道":
+        return name or (str(plain_pipe_fallback_name or "").strip() or "有压管道")
+    return ""
 
 
 def _format_xxpipe_pipe_material_text(row):
@@ -4668,7 +4689,9 @@ def _build_xxpipe_profile_data(
     *,
     station_prefix="",
     manager_config_by_identity=None,
+    export_policy=None,
 ):
+    export_policy = _normalize_xxpipe_export_policy(export_policy)
     raw_visible_nodes = list(_iter_xxpipe_export_nodes(nodes))
     if not raw_visible_nodes:
         raise ValueError("xx管纵断面导出没有可用节点")
@@ -4711,11 +4734,22 @@ def _build_xxpipe_profile_data(
     centerline_points = []
     centerline_records = []
     missing_axis = []
+    warnings = {
+        "allow_partial_export": bool(export_policy.get("allow_partial_export")),
+        "missing_axis_identities": [],
+        "uncovered_stations": [],
+    }
+    missing_axis_seen = set()
     for node in profile_text_nodes:
         station_mc = _profile_station_value(node)
         identity = _make_xxpipe_identity_from_node(node)
         long_nodes = long_map.get(identity) or []
         if not long_nodes:
+            if warnings["allow_partial_export"]:
+                if identity not in missing_axis_seen:
+                    missing_axis_seen.add(identity)
+                    warnings["missing_axis_identities"].append(identity)
+                continue
             missing_axis.append(f"{identity} 缺少轴线纵断面")
             continue
         try:
@@ -4727,6 +4761,13 @@ def _build_xxpipe_profile_data(
                 station_text = ProjectSettings.format_station(station_mc, station_prefix)
             except Exception:
                 station_text = f"{station_mc:.3f}"
+            if warnings["allow_partial_export"]:
+                warnings["uncovered_stations"].append({
+                    "identity": identity,
+                    "station_mc": station_mc,
+                    "station_text": station_text,
+                })
+                continue
             missing_axis.append(f"{identity}@{station_text}")
             continue
         manager_row = manager_map.get(identity) or {}
@@ -4748,6 +4789,8 @@ def _build_xxpipe_profile_data(
             "text": _get_xxpipe_building_display_name(
                 _struct_val(getattr(node, "structure_type", None)),
                 getattr(node, "name", ""),
+                show_plain_pipe_name=bool(export_policy.get("show_plain_pipe_name")),
+                plain_pipe_fallback_name=export_policy.get("plain_pipe_fallback_name", "有压管道"),
             ),
         }
         for node in visible_nodes
@@ -4774,6 +4817,7 @@ def _build_xxpipe_profile_data(
         "centerline_records": centerline_records,
         "building_segments": building_segments,
         "material_segments": material_segments,
+        "warnings": warnings,
     }
 
 
@@ -4859,11 +4903,19 @@ def _build_panel_xxpipe_profile_data(panel, nodes, station_prefix=""):
     rows = _build_xxpipe_identity_rows(nodes)
     longitudinal_nodes = _get_panel_pressure_pipe_longitudinal_nodes_for_export(panel, rows)
     manager_config = _get_panel_xxpipe_manager_config_by_identity(panel, rows)
+    export_policy = _normalize_xxpipe_export_policy()
+    if not _is_xxpipe_channel_level(_get_panel_channel_level_text(panel)):
+        export_policy = _normalize_xxpipe_export_policy({
+            "allow_partial_export": True,
+            "show_plain_pipe_name": True,
+            "plain_pipe_fallback_name": "有压管道",
+        })
     return _build_xxpipe_profile_data(
         nodes,
         longitudinal_nodes,
         station_prefix=station_prefix,
         manager_config_by_identity=manager_config,
+        export_policy=export_policy,
     )
 
 
@@ -4880,6 +4932,71 @@ def _translate_xxpipe_export_error(exc):
     ):
         return "已导入纵断面DXF，但未覆盖整线全部桩号，请重新导入完整纵断面后再导出。"
     return None
+
+
+def _get_xxpipe_profile_warnings(xxpipe_profile_data):
+    """读取 xx管 导出告警元数据。"""
+    if not isinstance(xxpipe_profile_data, dict):
+        return {}
+    warnings = xxpipe_profile_data.get("warnings")
+    return warnings if isinstance(warnings, dict) else {}
+
+
+def _format_xxpipe_centerline_text(value, decimals, *, blank_when_none=False):
+    """格式化 xx管 中心高程文本，宽松模式下允许真正留空。"""
+    if value is None:
+        if blank_when_none:
+            return ""
+        return f"{0:.{decimals}f}"
+    return f"{value:.{decimals}f}"
+
+
+def _build_xxpipe_partial_export_notice(xxpipe_profile_data):
+    """构造连续承压 xx渠 的非阻断提示文案。"""
+    warnings = _get_xxpipe_profile_warnings(xxpipe_profile_data)
+    if not warnings.get("allow_partial_export"):
+        return ""
+
+    missing_axis = [
+        str(identity or "").strip()
+        for identity in (warnings.get("missing_axis_identities") or [])
+        if str(identity or "").strip()
+    ]
+    uncovered_stations = []
+    for item in warnings.get("uncovered_stations") or []:
+        if not isinstance(item, dict):
+            continue
+        identity = str(item.get("identity") or "").strip()
+        station_text = str(item.get("station_text") or "").strip()
+        uncovered_stations.append(f"{identity}@{station_text}" if station_text else identity)
+
+    if not missing_axis and not uncovered_stations:
+        return ""
+
+    detail_lines = []
+    if missing_axis:
+        preview = "；".join(missing_axis[:6])
+        if len(missing_axis) > 6:
+            preview += f" 等{len(missing_axis)}条"
+        detail_lines.append(f"未导入纵断面轴线DXF的整线：{preview}")
+    if uncovered_stations:
+        preview = "；".join(uncovered_stations[:6])
+        if len(uncovered_stations) > 6:
+            preview += f" 等{len(uncovered_stations)}处"
+        detail_lines.append(f"已导入DXF但覆盖不全的桩号：{preview}")
+
+    return (
+        "本次导出已完成，但管中心高程存在空白。"
+        "请到表3有压管道水力计算中导入/补全纵断面轴线DXF后重新导出。\n"
+        + "\n".join(detail_lines)
+    )
+
+
+def _show_xxpipe_partial_export_notice(parent, xxpipe_profile_data):
+    """在成功导出后提示连续承压 xx渠 补齐纵断面轴线。"""
+    notice = _build_xxpipe_partial_export_notice(xxpipe_profile_data)
+    if notice:
+        fluent_info(parent, "提示", notice)
 
 
 def _collect_xxpipe_full_height_boundary_mcs(profile_data):
@@ -7437,10 +7554,7 @@ def _draw_xxpipe_profile_on_msp(
     def sy(elev):
         return _profile_meters_to_paper_mm(elev, scale_y)
 
-    def fmt_elev(value):
-        if value is None:
-            return f"{0:.{elev_decimals}f}"
-        return f"{value:.{elev_decimals}f}"
+    blank_centerline_text = bool(_get_xxpipe_profile_warnings(xxpipe_profile_data).get("allow_partial_export"))
 
     last_mc = _profile_station_value(profile_text_nodes[-1])
     layer_grid = layer_prefix + "表格线框"
@@ -7531,7 +7645,11 @@ def _draw_xxpipe_profile_on_msp(
             for idx, node in enumerate(profile_text_nodes):
                 station_mc = _profile_station_value(node)
                 text_x = sx(station_mc) + first_col_x_offset if idx == 0 else sx(station_mc) - 1
-                text = fmt_elev(centerline_elev_by_station.get(round(station_mc, 9)))
+                text = _format_xxpipe_centerline_text(
+                    centerline_elev_by_station.get(round(station_mc, 9)),
+                    elev_decimals,
+                    blank_when_none=blank_centerline_text,
+                )
                 msp.add_text(text, dxfattribs=text_attr_rot).set_placement((text_x, y_pos))
             continue
 
@@ -7911,6 +8029,7 @@ def export_longitudinal_profile_dxf(panel):
         )
 
         doc.saveas(file_path)
+        _show_xxpipe_partial_export_notice(panel.window(), xxpipe_profile_data)
 
         if fluent_question(panel.window(), "完成",
                 f"上纵断面表格 DXF 已生成（{len(nodes)} 个节点）:\n{file_path}\n\n是否立即打开该文件？"):
@@ -7965,10 +8084,7 @@ def _export_xxpipe_longitudinal_txt_to_path(
     def sy(elev):
         return _profile_meters_to_paper_mm(elev, scale_y)
 
-    def fmt_elev(value):
-        if value is None:
-            return f"{0:.{elev_decimals}f}"
-        return f"{value:.{elev_decimals}f}"
+    blank_centerline_text = bool(_get_xxpipe_profile_warnings(xxpipe_profile_data).get("allow_partial_export"))
 
     lines = []
     s_height = fmt(text_height)
@@ -8056,7 +8172,11 @@ def _export_xxpipe_longitudinal_txt_to_path(
             for idx, node in enumerate(profile_text_nodes):
                 station_mc = _profile_station_value(node)
                 text_x = sx(station_mc) + first_col_x_offset if idx == 0 else sx(station_mc)
-                text = fmt_elev(centerline_elev_by_station.get(round(station_mc, 9)))
+                text = _format_xxpipe_centerline_text(
+                    centerline_elev_by_station.get(round(station_mc, 9)),
+                    elev_decimals,
+                    blank_when_none=blank_centerline_text,
+                )
                 lines.append(f"-text {fmt(text_x)},{fmt(y_pos)} {s_height} {s_rotation} {text} ")
             lines.append("")
             continue
@@ -8082,6 +8202,7 @@ def _export_xxpipe_longitudinal_txt_to_path(
     with open(file_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
+    _show_xxpipe_partial_export_notice(panel.window(), xxpipe_profile_data)
     if fluent_question(panel.window(), "完成", f"上纵断面表格已生成（{len(nodes)} 个节点）：{file_path}"):
         os.startfile(file_path)
 
@@ -9497,6 +9618,7 @@ def export_combined_dxf(panel):
             return
 
         doc.saveas(file_path)
+        _show_xxpipe_partial_export_notice(parent_window, xxpipe_profile_data)
         if fluent_question(
             parent_window,
             "导出完成",

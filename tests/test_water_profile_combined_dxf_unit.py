@@ -635,3 +635,67 @@ def test_export_combined_dxf_translates_incomplete_xxpipe_coverage_error(monkeyp
     assert "已导入纵断面DXF，但未覆盖整线全部桩号" in errors[-1][2]
     assert "请重新导入完整纵断面后再导出" in errors[-1][2]
     assert "@0+080.000" not in errors[-1][2]
+
+
+def test_export_combined_dxf_allows_relaxed_xxqu_blank_centerline_and_shows_guidance(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    panel = _build_panel(name="南干支线", structure_type="有压管道")
+    panel.channel_level_combo = _ComboStub("支渠")
+    infos = []
+    errors = []
+
+    class _ConfigOnlyDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    current_nodes = [
+        SimpleNamespace(
+            station_MC=0.0,
+            bottom_elevation=0.0,
+            top_elevation=0.0,
+            water_level=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=True,
+            name="南干支线",
+            flow_section="1",
+        )
+    ]
+
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda value: value)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **kwargs: infos.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        cad_tools,
+        "_build_panel_xxpipe_profile_data",
+        lambda *_a, **_k: {
+            "profile_text_nodes": current_nodes,
+            "centerline_records": [],
+            "centerline_points": [],
+            "ip_records": [],
+            "building_segments": [],
+            "material_segments": [],
+            "warnings": {
+                "allow_partial_export": True,
+                "missing_axis_identities": ["1::南干支线"],
+                "uncovered_stations": [],
+            },
+        },
+    )
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_compute_ip_preview_data", lambda *_a, **_k: ([["IP1"]], current_nodes))
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
+    assert not errors
+    assert any("导入纵断面轴线DXF" in args[2] for args in infos)
