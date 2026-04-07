@@ -309,6 +309,41 @@ class PressurePipeManager:
         }
         
         self.save_config()
+
+    def set_route_longitudinal_nodes(
+        self,
+        route_key: str,
+        longitudinal_nodes: Optional[List[Dict[str, Any]]],
+        route_display_name: str = "",
+    ):
+        """直接写入整线纵断面，供弹窗导入后即时保存。"""
+        route_key = str(route_key or "").strip()
+        if not route_key:
+            return
+        if "pipes" not in self._config:
+            self._config["pipes"] = {}
+        if "routes" not in self._config:
+            self._config["routes"] = {}
+
+        nodes_payload = list(longitudinal_nodes or [])
+        route_bucket = self._config["routes"].setdefault(route_key, {})
+        route_bucket["display_name"] = str(
+            route_display_name or route_bucket.get("display_name", "") or ""
+        ).strip()
+        route_bucket["longitudinal_nodes"] = nodes_payload
+
+        # 已有关联子段继续保留 route_key/display_name，便于后续导出直接回读整线数据。
+        for row in self._config["pipes"].values():
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("route_key", "") or "").strip() != route_key:
+                continue
+            row["route_key"] = route_key
+            row["route_display_name"] = str(
+                route_display_name or row.get("route_display_name", "") or route_bucket.get("display_name", "")
+            ).strip()
+
+        self.save_config()
     
     def set_result(self, pipe_name: str, total_head_loss: float, 
                    friction_loss: float = 0, total_bend_loss: float = 0,

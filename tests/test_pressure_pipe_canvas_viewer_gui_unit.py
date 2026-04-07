@@ -71,6 +71,12 @@ def _make_longitudinal_nodes():
 
 class _FakeManager:
     def __init__(self, pipe_name: str, nodes, route_key: str = "", route_display_name: str = ""):
+        self._routes = {}
+        if route_key:
+            self._routes[route_key] = {
+                "display_name": route_display_name,
+                "longitudinal_nodes": list(nodes),
+            }
         self._configs = {
             pipe_name: SimpleNamespace(
                 longitudinal_nodes=list(nodes),
@@ -88,6 +94,44 @@ class _FakeManager:
 
     def set_pipe_config(self, pipe_name, config):
         self._configs[pipe_name] = config
+        route_key = str(getattr(config, "route_key", "") or "").strip()
+        if route_key:
+            self._routes.setdefault(route_key, {})
+            self._routes[route_key]["display_name"] = str(
+                getattr(config, "route_display_name", "") or self._routes[route_key].get("display_name", "")
+            ).strip()
+            self._routes[route_key]["longitudinal_nodes"] = list(
+                getattr(config, "longitudinal_nodes", []) or []
+            )
+
+    def set_route_longitudinal_nodes(self, route_key, longitudinal_nodes, route_display_name=""):
+        route_key = str(route_key or "").strip()
+        if not route_key:
+            return
+        self._routes.setdefault(route_key, {})
+        self._routes[route_key]["display_name"] = str(
+            route_display_name or self._routes[route_key].get("display_name", "")
+        ).strip()
+        self._routes[route_key]["longitudinal_nodes"] = list(longitudinal_nodes or [])
+
+    def to_dict(self):
+        return {
+            "pipes": {
+                key: {
+                    "longitudinal_nodes": list(getattr(cfg, "longitudinal_nodes", []) or []),
+                    "route_key": str(getattr(cfg, "route_key", "") or "").strip(),
+                    "route_display_name": str(getattr(cfg, "route_display_name", "") or "").strip(),
+                }
+                for key, cfg in self._configs.items()
+            },
+            "routes": {
+                key: {
+                    "display_name": str(value.get("display_name", "") or "").strip(),
+                    "longitudinal_nodes": list(value.get("longitudinal_nodes", []) or []),
+                }
+                for key, value in self._routes.items()
+            },
+        }
 
     def get_all_pipe_names(self):
         return list(self._configs.keys())
@@ -938,6 +982,139 @@ def test_pressure_pipe_config_dialog_blocks_xxpipe_accept_without_longitudinal_a
     assert dialog.result() != QDialog.Accepted
     assert dialog._route_widgets[route_key]["card"].property("missing_longitudinal_highlight") is True
     assert dialog._route_widgets[route_key]["btn_import"].property("missing_longitudinal_highlight") is True
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_route_import_persists_manager_before_accept(monkeypatch):
+    _get_qapp()
+    route_key, groups, _manager = _make_route_groups()
+    manager = _FakeManager("unused", [])
+    route_nodes = [
+        SimpleNamespace(
+            name="穿路段",
+            flow_section="2",
+            ip_number=1,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value="进"),
+            station_MC=0.0,
+            x=0.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="穿路段",
+            flow_section="2",
+            ip_number=2,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value=""),
+            station_MC=50.0,
+            x=50.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="穿路段",
+            flow_section="2",
+            ip_number=3,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value="出"),
+            station_MC=80.0,
+            x=80.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+        route_import_targets={
+            route_key: {
+                "display_name": "流量段2 整线1",
+                "station_prefix": "",
+                "nodes": route_nodes,
+            }
+        },
+    )
+
+    class _FakePolyline:
+        def get_points(self, format="xyseb"):
+            return [(0.0, 0.0, 0.0, 0.0, 0.0)]
+
+    class _FakeModelSpace:
+        def query(self, _query_text):
+            return [_FakePolyline()]
+
+    class _FakeDoc:
+        def modelspace(self):
+            return _FakeModelSpace()
+
+    class _FakeParser:
+        @staticmethod
+        def parse_longitudinal_profile(_filepath, chainage_offset=0.0):
+            assert chainage_offset == 0.0
+            turn_type = SimpleNamespace(name="NONE")
+            return (
+                [
+                    SimpleNamespace(
+                        chainage=0.0,
+                        elevation=422.0,
+                        vertical_curve_radius=0.0,
+                        turn_type=turn_type,
+                        turn_angle=0.0,
+                        slope_before=0.0,
+                        slope_after=0.0,
+                        arc_center_s=None,
+                        arc_center_z=None,
+                        arc_end_chainage=None,
+                        arc_theta_rad=None,
+                    ),
+                    SimpleNamespace(
+                        chainage=50.0,
+                        elevation=418.0,
+                        vertical_curve_radius=0.0,
+                        turn_type=turn_type,
+                        turn_angle=0.0,
+                        slope_before=0.0,
+                        slope_after=0.0,
+                        arc_center_s=None,
+                        arc_center_z=None,
+                        arc_end_chainage=None,
+                        arc_theta_rad=None,
+                    ),
+                    SimpleNamespace(
+                        chainage=80.0,
+                        elevation=415.0,
+                        vertical_curve_radius=0.0,
+                        turn_type=turn_type,
+                        turn_angle=0.0,
+                        slope_before=0.0,
+                        slope_after=0.0,
+                        arc_center_s=None,
+                        arc_center_z=None,
+                        arc_end_chainage=None,
+                        arc_theta_rad=None,
+                    ),
+                ],
+                "测试导入",
+            )
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *_a, **_k: ("fake.dxf", "DXF")))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_a: None))
+    monkeypatch.setattr(dialog_mod, "fluent_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(readfile=lambda *_a, **_k: _FakeDoc()))
+    monkeypatch.setitem(sys.modules, "dxf_parser", SimpleNamespace(DxfParser=_FakeParser))
+
+    dialog._import_longitudinal_dxf(route_key, groups[0].route_ip_points)
+
+    saved_routes = manager.to_dict().get("routes", {})
+    assert route_key in dialog.get_longitudinal_nodes_dict()
+    assert saved_routes.get(route_key, {}).get("longitudinal_nodes", []) == dialog.get_longitudinal_nodes_dict()[route_key]
 
     dialog.close()
     dialog.deleteLater()

@@ -3369,6 +3369,7 @@ class PressurePipeConfigDialog(QDialog):
                         return
 
             self._longitudinal_data[pipe_name] = long_nodes_dict
+            self._persist_longitudinal_data_for_card(pipe_name)
             self._update_card_data_state(pipe_name, show_data=True)
             fluent_info(self, "导入成功", f"{pipe_label}\n{message}\n变坡点节点: {len(long_nodes)} 个")
 
@@ -3384,7 +3385,53 @@ class PressurePipeConfigDialog(QDialog):
             return
 
         del self._longitudinal_data[pipe_name]
+        self._persist_longitudinal_data_for_card(pipe_name)
         self._update_card_data_state(pipe_name, show_data=False)
+
+    def _persist_longitudinal_data_for_card(self, pipe_name):
+        """把当前卡片的纵断面数据即时同步到持久层。"""
+        if not self._manager:
+            return
+
+        card_key = str(pipe_name or "").strip()
+        nodes_payload = list(self._longitudinal_data.get(card_key, []) or [])
+        route_context = self._route_contexts.get(card_key, {})
+        set_route_longitudinal_nodes = getattr(self._manager, "set_route_longitudinal_nodes", None)
+        if isinstance(route_context, dict) and callable(set_route_longitudinal_nodes):
+            set_route_longitudinal_nodes(
+                card_key,
+                nodes_payload,
+                str(route_context.get("display_name", "") or card_key).strip(),
+            )
+            return
+
+        group = None
+        for item in self._pipe_groups or []:
+            if self._group_storage_key(item) == card_key:
+                group = item
+                break
+        if group is None:
+            return
+
+        try:
+            from managers.pressure_pipe_manager import PressurePipeConfig
+        except Exception:
+            return
+
+        group_key = self._group_storage_key(group)
+        cfg = self._get_manager_group_config(group)
+        if cfg is None:
+            cfg = PressurePipeConfig()
+            cfg.name = self._group_display_name(group)
+            cfg.Q = float(getattr(group, "design_flow", 0.0) or 0.0)
+            cfg.D = float(getattr(group, "diameter", 0.0) or 0.0)
+            cfg.material_key = str(getattr(group, "material_key", "") or "")
+            cfg.ip_points = list(getattr(group, "ip_points", []) or [])
+
+        cfg.route_key = self._group_route_key(group)
+        cfg.route_display_name = self._group_route_display_name(group)
+        cfg.longitudinal_nodes = nodes_payload
+        self._manager.set_pipe_config(group_key, cfg)
 
     def _preview_longitudinal(self, pipe_name):
         """弹出管道预览对话框（含纵断面+平面图双视图）"""

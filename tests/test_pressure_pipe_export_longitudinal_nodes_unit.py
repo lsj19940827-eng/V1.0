@@ -16,6 +16,8 @@ def _load_module(module_name: str, file_path: Path):
 
 
 def _install_panel_import_stubs():
+    root = Path(__file__).resolve().parents[1]
+
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     for name in (
         "QWidget", "QVBoxLayout", "QHBoxLayout", "QLabel", "QGroupBox",
@@ -106,9 +108,9 @@ def _install_panel_import_stubs():
     debug_mod.debug_print = lambda *args, **kwargs: None
     sys.modules["app_渠系计算前端.debug_utils"] = debug_mod
 
-    helper_path = next(Path(".").glob("**/pressure_pipe_result_helpers.py")).resolve()
+    helper_path = next(root.glob("**/pressure_pipe_result_helpers.py")).resolve()
     helper_mod = _load_module("pressure_pipe_result_helpers_longitudinal_nodes_test_mod", helper_path)
-    long_utils_path = next(Path(".").glob("**/pressure_pipe_longitudinal_utils.py")).resolve()
+    long_utils_path = next(root.glob("**/pressure_pipe_longitudinal_utils.py")).resolve()
     long_utils_mod = _load_module("pressure_pipe_longitudinal_utils_test_mod", long_utils_path)
     utils_pkg = sys.modules.setdefault("utils", types.ModuleType("utils"))
     setattr(utils_pkg, "pressure_pipe_result_helpers", helper_mod)
@@ -138,6 +140,7 @@ def _install_panel_import_stubs():
 
 
 def _load_panel_class():
+    root = Path(__file__).resolve().parents[1]
     patched_names = [
         "PySide6",
         "PySide6.QtWidgets",
@@ -162,7 +165,7 @@ def _load_panel_class():
     saved_modules = {name: sys.modules.get(name) for name in patched_names}
     try:
         _install_panel_import_stubs()
-        panel_path = next(Path(".").glob("**/water_profile/panel.py")).resolve()
+        panel_path = next(root.glob("*/water_profile/panel.py")).resolve()
         spec = importlib.util.spec_from_file_location("wp_panel_export_longitudinal_nodes_test", panel_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -183,11 +186,17 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_prefers_identity_match(
             "pipes": {
                 "牛马道": {
                     "name": "牛马道",
-                    "longitudinal_nodes": [{"chainage": 9.0, "elevation": 98.0}],
+                    "longitudinal_nodes": [
+                        {"chainage": 9.0, "elevation": 98.0},
+                        {"chainage": 19.0, "elevation": 96.0},
+                    ],
                 },
                 "1::牛马道": {
                     "name": "牛马道",
-                    "longitudinal_nodes": [{"chainage": 1.0, "elevation": 100.0}],
+                    "longitudinal_nodes": [
+                        {"chainage": 1.0, "elevation": 100.0},
+                        {"chainage": 11.0, "elevation": 97.0},
+                    ],
                 },
             }
         }
@@ -199,7 +208,10 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_prefers_identity_match(
     )
 
     assert result == {
-        "1::牛马道": [{"chainage": 1.0, "elevation": 100.0}],
+        "1::牛马道": [
+            {"chainage": 1.0, "elevation": 100.0},
+            {"chainage": 11.0, "elevation": 97.0},
+        ],
     }
 
 
@@ -211,7 +223,10 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_uses_unique_name_fallba
             "pipes": {
                 "牛马道": {
                     "name": "牛马道",
-                    "longitudinal_nodes": [{"chainage": 2.0, "elevation": 101.5}],
+                    "longitudinal_nodes": [
+                        {"chainage": 2.0, "elevation": 101.5},
+                        {"chainage": 12.0, "elevation": 99.5},
+                    ],
                 }
             }
         }
@@ -223,7 +238,10 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_uses_unique_name_fallba
     )
 
     assert result == {
-        "3::牛马道": [{"chainage": 2.0, "elevation": 101.5}],
+        "3::牛马道": [
+            {"chainage": 2.0, "elevation": 101.5},
+            {"chainage": 12.0, "elevation": 99.5},
+        ],
     }
 
 
@@ -456,3 +474,180 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_route_profile_seg
         {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
         {"chainage": 20.0, "elevation": 419.8, "turn_type": "NONE"},
     ]
+
+
+def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_nodes_when_segment_only_has_one_point():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    route_nodes = [
+        {"chainage": 0.0, "elevation": 100.0, "turn_type": "NONE"},
+        {"chainage": 40.0, "elevation": 96.0, "turn_type": "NONE"},
+        {"chainage": 80.0, "elevation": 92.0, "turn_type": "NONE"},
+    ]
+    group = SimpleNamespace(
+        storage_key="flow2-row6",
+        route_key="flow2-route1",
+        route_display_name="流量段2 整线1",
+        display_name="流量段2 第6行有压管道",
+        name="",
+        identity="flow2-row6",
+        flow_section="2",
+        segment_start_mc=20.0,
+        segment_end_mc=60.0,
+    )
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: None,
+        to_dict=lambda: {
+            "routes": {
+                "flow2-route1": {
+                    "display_name": "流量段2 整线1",
+                    "longitudinal_nodes": route_nodes,
+                    "profile_segments": [
+                        {
+                            "segment_identity": "flow2-row6",
+                            "source_kind": "non_tunnel_dxf",
+                            "start_mc": 20.0,
+                            "end_mc": 60.0,
+                            "longitudinal_nodes": [
+                                {"chainage": 20.0, "elevation": 98.0, "turn_type": "NONE"},
+                            ],
+                        }
+                    ],
+                }
+            }
+        },
+    )
+    panel._build_settings = lambda: object()
+    panel._build_nodes_from_table = lambda: ["stub-node"]
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [group]
+
+    result = WaterProfilePanel.get_pressure_pipe_longitudinal_nodes_for_export(
+        panel,
+        rows=[{"name": "", "flow_section": "2", "identity": "flow2-row6"}],
+    )
+
+    assert list(result) == ["flow2-row6"]
+    assert result["flow2-row6"] == route_nodes
+
+
+def test_get_pressure_pipe_longitudinal_nodes_for_export_adds_group_row_identity_aliases():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    route_nodes = [
+        {"chainage": 0.0, "elevation": 100.0, "turn_type": "NONE"},
+        {"chainage": 40.0, "elevation": 96.0, "turn_type": "NONE"},
+        {"chainage": 80.0, "elevation": 92.0, "turn_type": "NONE"},
+    ]
+    group = SimpleNamespace(
+        storage_key="1::穿路段",
+        route_key="flow1-route1",
+        route_display_name="流量段1 整线1",
+        display_name="穿路段",
+        name="穿路段",
+        identity="1::穿路段",
+        flow_section="1",
+        segment_start_mc=0.0,
+        segment_end_mc=80.0,
+        rows=[
+            SimpleNamespace(
+                flow_section="1",
+                name="",
+                pressure_pipe_row_identity="flow1-row1",
+                section_params={},
+                pressure_pipe_window_override={},
+            ),
+            SimpleNamespace(
+                flow_section="1",
+                name="穿路段",
+                pressure_pipe_row_identity="",
+                section_params={},
+                pressure_pipe_window_override={},
+            ),
+        ],
+    )
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: None,
+        to_dict=lambda: {
+            "routes": {
+                "flow1-route1": {
+                    "display_name": "流量段1 整线1",
+                    "longitudinal_nodes": route_nodes,
+                }
+            }
+        },
+    )
+    panel._build_settings = lambda: object()
+    panel._build_nodes_from_table = lambda: ["stub-node"]
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [group]
+
+    result = WaterProfilePanel.get_pressure_pipe_longitudinal_nodes_for_export(
+        panel,
+        rows=[{"name": "", "flow_section": "1", "identity": "flow1-row1"}],
+    )
+
+    assert list(result) == ["flow1-row1"]
+    assert result["flow1-row1"] == route_nodes
+
+
+def test_get_pressure_pipe_longitudinal_nodes_for_export_keeps_route_nodes_for_cross_flow_boundary_row():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    route_nodes = [
+        {"chainage": 0.0, "elevation": 100.0, "turn_type": "NONE"},
+        {"chainage": 100.0, "elevation": 95.0, "turn_type": "NONE"},
+        {"chainage": 200.0, "elevation": 90.0, "turn_type": "NONE"},
+    ]
+    current_nodes = [
+        SimpleNamespace(
+            flow_section="1",
+            pressure_pipe_row_identity="flow1-row62",
+            is_transition=True,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            flow_section="2",
+            pressure_pipe_row_identity="flow2-row63",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    group = SimpleNamespace(
+        group_mode="unnamed_row_segment",
+        storage_key="flow2-row63",
+        route_key="flow1-route1",
+        route_display_name="遂广连续整线",
+        display_name="流量段2 第63行有压管道",
+        name="",
+        identity="flow2-row63",
+        flow_section="2",
+        segment_start_mc=100.0,
+        segment_end_mc=100.0,
+        target_row_index=1,
+        upstream_row_index=0,
+        route_start_row_index=0,
+    )
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: None,
+        to_dict=lambda: {
+            "routes": {
+                "flow1-route1": {
+                    "display_name": "遂广连续整线",
+                    "longitudinal_nodes": route_nodes,
+                }
+            }
+        },
+    )
+    panel._build_settings = lambda: object()
+    panel._build_nodes_from_table = lambda: current_nodes
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [group]
+
+    result = WaterProfilePanel.get_pressure_pipe_longitudinal_nodes_for_export(
+        panel,
+        rows=[{"name": "", "flow_section": "2", "identity": "flow2-row63"}],
+    )
+
+    assert list(result) == ["flow2-row63"]
+    assert result["flow2-row63"] == route_nodes

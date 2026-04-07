@@ -104,6 +104,62 @@ def test_build_xxpipe_profile_data_rejects_unallowed_structure():
         cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
 
 
+def test_build_xxpipe_profile_data_treats_single_point_longitudinal_nodes_as_missing_axis():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="定向钻", name="穿路段", flow_section="1", in_out="进"),
+        _make_node(ip_no=2, mc=50.0, structure="定向钻", name="穿路段", flow_section="1", in_out="出"),
+    ]
+    long_map = {
+        "1::穿路段": [
+            {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
+        ]
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
+
+    message = str(exc_info.value)
+    assert "缺少轴线纵断面" in message
+    assert "至少需要 2 个纵断面节点" not in message
+
+
+def test_build_xxpipe_profile_data_uses_same_station_identity_candidates_when_representative_identity_misses():
+    named = _make_node(
+        ip_no=1,
+        mc=0.0,
+        structure="定向钻",
+        name="穿路段",
+        flow_section="1",
+        in_out="进",
+    )
+    named.bottom_elevation = 10.0
+    named.top_elevation = 11.0
+    named.water_level = 10.5
+
+    anchor = _make_node(
+        ip_no=2,
+        mc=0.0,
+        structure="有压管道",
+        name="",
+        flow_section="1",
+        row_identity="flow1-row1",
+    )
+
+    data = cad_tools._build_xxpipe_profile_data(
+        [named, anchor],
+        {
+            "flow1-row1": [
+                {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
+                {"chainage": 100.0, "elevation": 90.0, "turn_type": "无"},
+            ]
+        },
+        station_prefix="",
+    )
+
+    assert data["centerline_points"] == [(0.0, pytest.approx(100.0))]
+    assert [record["identity"] for record in data["centerline_records"]] == ["flow1-row1"]
+
+
 def test_make_xxpipe_identity_from_node_prefers_pressure_pipe_row_identity_for_unnamed_segment():
     node = _make_node(
         ip_no=1,

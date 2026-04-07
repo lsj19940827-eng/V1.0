@@ -2495,6 +2495,38 @@ class WaterProfilePanel(QWidget):
             return route_key
         return cls._get_pressure_pipe_group_storage_key(group)
 
+    @classmethod
+    def _collect_pressure_pipe_group_export_identity_aliases(cls, group) -> list[str]:
+        """收集当前分组可用于纵断面导出匹配的稳定身份别名。"""
+        aliases = []
+        seen = set()
+
+        def _append(value) -> None:
+            text = str(value or "").strip()
+            if not text or text in seen:
+                return
+            seen.add(text)
+            aliases.append(text)
+
+        _append(cls._build_pressure_pipe_group_identity(group))
+        _append(cls._get_pressure_pipe_group_storage_key(group))
+
+        for node in list(getattr(group, "rows", []) or []):
+            _append(getattr(node, "pressure_pipe_row_identity", ""))
+        for node in list(getattr(group, "rows", []) or []):
+            override = cls._get_pressure_pipe_window_override(node)
+            if isinstance(override, dict):
+                _append(override.get("identity", ""))
+        for node in list(getattr(group, "rows", []) or []):
+            _append(
+                make_pressure_pipe_identity(
+                    getattr(node, "flow_section", ""),
+                    getattr(node, "name", ""),
+                )
+            )
+
+        return aliases
+
     @staticmethod
     def _normalize_pressure_pipe_profile_segments(profile_segments) -> list[dict]:
         """清洗 route 级分段纵断面数据。"""
@@ -8606,7 +8638,8 @@ class WaterProfilePanel(QWidget):
 
     @staticmethod
     def _has_exportable_pressure_pipe_longitudinal_nodes(value) -> bool:
-        return isinstance(value, list) and len(value) > 0
+        # 单点只够表示边界占位，中心线高程采样至少要两个纵断面点。
+        return isinstance(value, list) and len(value) >= 2
 
     def _index_pressure_pipe_manager_longitudinal_nodes_for_export(self, target_identities=None) -> tuple:
         exact = {}
@@ -8635,7 +8668,13 @@ class WaterProfilePanel(QWidget):
 
             for group in cur_groups or []:
                 identity = self._build_pressure_pipe_group_identity(group)
-                if identity_set and identity not in identity_set:
+                identity_aliases = self._collect_pressure_pipe_group_export_identity_aliases(group)
+                matched_aliases = (
+                    [alias for alias in identity_aliases if alias in identity_set]
+                    if identity_set
+                    else [identity]
+                )
+                if identity_set and not matched_aliases:
                     continue
                 storage_key = self._get_pressure_pipe_group_storage_key(group)
                 config = get_pipe_config(storage_key)
@@ -8661,9 +8700,20 @@ class WaterProfilePanel(QWidget):
                         storage_key=storage_key,
                     )
                     if matched_segment is not None:
-                        longitudinal_nodes = copy.deepcopy(
+                        matched_longitudinal_nodes = copy.deepcopy(
                             matched_segment.get("longitudinal_nodes", []) or []
                         )
+                        source_kind = str(matched_segment.get("source_kind", "") or "").strip()
+                        # 普通子段若只剩单点缓存，优先回退整线 DXF；隧洞生成段继续沿用自己的分段结果。
+                        if self._has_exportable_pressure_pipe_longitudinal_nodes(matched_longitudinal_nodes):
+                            longitudinal_nodes = matched_longitudinal_nodes
+                        elif (
+                            source_kind != "generated_tunnel"
+                            and self._has_exportable_pressure_pipe_longitudinal_nodes(route_longitudinal_nodes)
+                        ):
+                            longitudinal_nodes = copy.deepcopy(route_longitudinal_nodes)
+                        else:
+                            longitudinal_nodes = matched_longitudinal_nodes
                 elif not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes) and route_key:
                     longitudinal_nodes = copy.deepcopy(route_longitudinal_nodes)
                 if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
@@ -8678,6 +8728,14 @@ class WaterProfilePanel(QWidget):
                     and not route_profile_segments
                 ):
                     # xx管整线起点只对应一个桩号点，导出仍需整线纵断面来取起点高程。
+                    longitudinal_nodes = copy.deepcopy(route_longitudinal_nodes)
+                elif (
+                    self._is_pressure_pipe_cross_flow_boundary_group(group, cur_nodes)
+                    and self._has_exportable_pressure_pipe_longitudinal_nodes(route_longitudinal_nodes)
+                    and not route_profile_segments
+                ):
+                    # 连续承压整线跨流量段时，新流量段首个普通行会退化成单点边界；
+                    # 导出仍要继承整线 DXF，不能再按单点范围裁切。
                     longitudinal_nodes = copy.deepcopy(route_longitudinal_nodes)
                 elif (
                     route_key
@@ -8699,14 +8757,20 @@ class WaterProfilePanel(QWidget):
                         continue
 
                 name = self._get_pressure_pipe_group_display_name(group)
-                payload = {
-                    "identity": identity,
+                payload_base = {
                     "flow_section": self._get_pressure_pipe_group_flow_section(group),
                     "name": name,
                     "longitudinal_nodes": longitudinal_nodes,
                 }
-                exact[identity] = payload
-                plain_name_candidates.setdefault(name, []).append(payload)
+                if not matched_aliases:
+                    matched_aliases = [identity]
+                for alias in matched_aliases:
+                    payload = dict(payload_base)
+                    payload["identity"] = alias
+                    exact[alias] = payload
+                primary_payload = dict(payload_base)
+                primary_payload["identity"] = identity
+                plain_name_candidates.setdefault(name, []).append(primary_payload)
 
             if exact or plain_name_candidates:
                 plain_name = {}
@@ -8935,6 +8999,42 @@ class WaterProfilePanel(QWidget):
         pressure_gate_buckets = {"有压管道", "定向钻", "顶管"}
         pressure_started_flow_sections = set()
 
+        def _apply_boundary_water_level_between_flow_sections(current, nxt) -> None:
+            """连续流量段共用同一个切段点水位。"""
+            current_flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
+                getattr(current, "flow_section", "")
+            )
+            next_flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
+                getattr(nxt, "flow_section", "")
+            )
+            if (
+                not current_flow_section_text
+                or not next_flow_section_text
+                or current_flow_section_text == next_flow_section_text
+            ):
+                return
+            current_bucket = self._classify_pressure_pipe_summary_bucket(current)
+            next_bucket = self._classify_pressure_pipe_summary_bucket(nxt)
+            if current_bucket not in pressure_gate_buckets or next_bucket not in pressure_gate_buckets:
+                return
+            boundary_water_level = self._normalize_pressure_pipe_export_number(
+                getattr(nxt, "water_level", None),
+                allow_zero=True,
+            )
+            if boundary_water_level is None:
+                return
+            current_entry = summary_by_flow_section.setdefault(
+                current_flow_section_text,
+                _make_entry(current_flow_section_text),
+            )
+            next_entry = summary_by_flow_section.setdefault(
+                next_flow_section_text,
+                _make_entry(next_flow_section_text),
+            )
+            # 切段点是后一流量段的首点，同时也是前一流量段的终点。
+            current_entry["end_water_level"] = boundary_water_level
+            next_entry["start_water_level"] = boundary_water_level
+
         for node in nodes:
             flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
                 getattr(node, "flow_section", "")
@@ -8947,7 +9047,8 @@ class WaterProfilePanel(QWidget):
                     allow_zero=True,
                 )
                 if water_level is not None:
-                    # 按流量段记录首个有效水位和最后一个有效水位，避免后续导出误用整线首末水位。
+                    # 先按各流量段自己的首末有效水位记默认值；
+                    # 若后续识别到连续切段点，再用边界点水位统一覆盖两侧。
                     if entry["start_water_level"] is None:
                         entry["start_water_level"] = water_level
                     entry["end_water_level"] = water_level
@@ -8998,11 +9099,9 @@ class WaterProfilePanel(QWidget):
             flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
                 getattr(current, "flow_section", "")
             )
-            next_flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
-                getattr(nxt, "flow_section", "")
-            )
             bucket = self._classify_pressure_pipe_summary_bucket(current)
-            if not flow_section_text or flow_section_text != next_flow_section_text:
+            _apply_boundary_water_level_between_flow_sections(current, nxt)
+            if not flow_section_text:
                 continue
             if bucket is None:
                 continue
@@ -9012,6 +9111,8 @@ class WaterProfilePanel(QWidget):
                 continue
             if seg_len <= 0:
                 continue
+            # 跨流量段时，下一流量段首行桩号仍是上一流量段的终点，
+            # 这段边界长度应归入当前行所属的上一流量段。
             entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
             entry["total_length"] = round(entry["total_length"] + seg_len, 6)
 
@@ -9688,6 +9789,41 @@ class WaterProfilePanel(QWidget):
             "calc_steps": "【连续承压链锚点】\n本成员仅用于确定链起点，不生成本行损失。",
         })
         return record
+
+    @classmethod
+    def _is_pressure_pipe_cross_flow_boundary_group(cls, group, nodes) -> bool:
+        """判断跨流量段连续整线在新流量段首行形成的单点边界行。"""
+        if not cls._is_pressure_pipe_row_segment_group(group):
+            return False
+        if not cls._get_pressure_pipe_group_route_key(group):
+            return False
+
+        segment_start = cls._coerce_pressure_pipe_finite_float(getattr(group, "segment_start_mc", None))
+        segment_end = cls._coerce_pressure_pipe_finite_float(getattr(group, "segment_end_mc", None))
+        if segment_start is None or segment_end is None:
+            return False
+        if abs(segment_start - segment_end) > 1e-6:
+            return False
+
+        target_idx = cls._coerce_pressure_pipe_row_index(getattr(group, "target_row_index", -1))
+        upstream_idx = cls._coerce_pressure_pipe_row_index(getattr(group, "upstream_row_index", -1))
+        route_start_idx = cls._coerce_pressure_pipe_row_index(getattr(group, "route_start_row_index", -1))
+        if target_idx < 0 or upstream_idx < 0:
+            return False
+        if route_start_idx >= 0 and target_idx == route_start_idx:
+            return False
+        if not isinstance(nodes, list):
+            return False
+        if target_idx >= len(nodes) or upstream_idx >= len(nodes):
+            return False
+
+        target_flow_section = str(
+            getattr(nodes[target_idx], "flow_section", "") or getattr(group, "flow_section", "") or ""
+        ).strip()
+        upstream_flow_section = str(getattr(nodes[upstream_idx], "flow_section", "") or "").strip()
+        if not target_flow_section or not upstream_flow_section:
+            return False
+        return target_flow_section != upstream_flow_section
 
     def _is_pressure_pipe_route_anchor_group(self, group) -> bool:
         """判断 xx管 整线首行是否应仅作为起点锚点。"""

@@ -2810,6 +2810,7 @@ def _build_profile_text_nodes(nodes, station_resolver=None):
 
         merged = copy.copy(representative)
         merged.station_MC = station_val
+        setattr(merged, "_xxpipe_identity_candidates", _build_xxpipe_identity_candidates_for_nodes(group))
         for attr_name, field_label in field_labels.items():
             setattr(merged, attr_name, _resolve_elev(group, attr_name, field_label, station_val))
         merged_nodes.append(merged)
@@ -3908,6 +3909,11 @@ def _normalize_xxpipe_longitudinal_nodes(longitudinal_nodes):
     return normalized
 
 
+def _has_exportable_xxpipe_longitudinal_nodes(longitudinal_nodes):
+    """判断 xx管 轴线纵断面是否足够用于采样。"""
+    return isinstance(longitudinal_nodes, list) and len(longitudinal_nodes) >= 2
+
+
 def _is_xxpipe_arc_segment_start(node):
     return (
         node["turn_type"] == "ARC"
@@ -4591,6 +4597,112 @@ def _make_xxpipe_identity_from_node(node):
     )
 
 
+def _get_xxpipe_override_identity_from_node(node):
+    """读取节点上的连续承压窗口覆盖 identity。"""
+    override = getattr(node, "pressure_pipe_window_override", {})
+    if not isinstance(override, dict):
+        override = {}
+    if not override:
+        section_params = getattr(node, "section_params", {}) or {}
+        if isinstance(section_params, dict):
+            override = section_params.get("pressure_pipe_window_override", {}) or {}
+            if not isinstance(override, dict):
+                override = {}
+    if not bool(override.get("enabled", False)):
+        return ""
+    return str(override.get("identity", "") or "").strip()
+
+
+def _build_xxpipe_legacy_identity_from_node(node):
+    """返回旧口径的 flow_section + name identity。"""
+    return make_pressure_pipe_identity(
+        getattr(node, "flow_section", ""),
+        getattr(node, "name", ""),
+    )
+
+
+def _append_xxpipe_identity_candidate(candidates, seen, value):
+    """按顺序去重追加 xx管 identity 候选。"""
+    text = str(value or "").strip()
+    if not text or text in seen:
+        return
+    seen.add(text)
+    candidates.append(text)
+
+
+def _build_xxpipe_identity_candidates_for_nodes(nodes):
+    """按优先级收集同桩号节点组的 identity 候选。"""
+    candidates = []
+    seen = set()
+    for node in nodes or []:
+        _append_xxpipe_identity_candidate(
+            candidates,
+            seen,
+            getattr(node, "pressure_pipe_row_identity", ""),
+        )
+    for node in nodes or []:
+        _append_xxpipe_identity_candidate(
+            candidates,
+            seen,
+            _get_xxpipe_override_identity_from_node(node),
+        )
+    for node in nodes or []:
+        _append_xxpipe_identity_candidate(
+            candidates,
+            seen,
+            _build_xxpipe_legacy_identity_from_node(node),
+        )
+    return candidates
+
+
+def _collect_xxpipe_identity_candidates(node):
+    """收集单个导出节点可回退尝试的 identity。"""
+    candidates = []
+    seen = set()
+    _append_xxpipe_identity_candidate(
+        candidates,
+        seen,
+        getattr(node, "pressure_pipe_row_identity", ""),
+    )
+    _append_xxpipe_identity_candidate(
+        candidates,
+        seen,
+        _get_xxpipe_override_identity_from_node(node),
+    )
+    for value in list(getattr(node, "_xxpipe_identity_candidates", []) or []):
+        _append_xxpipe_identity_candidate(candidates, seen, value)
+    _append_xxpipe_identity_candidate(
+        candidates,
+        seen,
+        _build_xxpipe_legacy_identity_from_node(node),
+    )
+    if not candidates:
+        _append_xxpipe_identity_candidate(
+            candidates,
+            seen,
+            _make_xxpipe_identity_from_node(node),
+        )
+    return candidates
+
+
+def _resolve_xxpipe_longitudinal_nodes_for_node(node, long_map):
+    """根据候选 identity 解析当前节点可用的轴线纵断面。"""
+    candidate_identities = _collect_xxpipe_identity_candidates(node)
+    fallback_identity = candidate_identities[0] if candidate_identities else _make_xxpipe_identity_from_node(node)
+    has_candidate_entry = False
+    for identity in candidate_identities:
+        long_nodes = long_map.get(identity) or []
+        if identity in long_map:
+            has_candidate_entry = True
+        if _has_exportable_xxpipe_longitudinal_nodes(long_nodes):
+            return identity, long_nodes, "matched"
+    if has_candidate_entry:
+        return fallback_identity, [], "missing_longitudinal"
+    if long_map:
+        return fallback_identity, [], "identity_mismatch"
+    return fallback_identity, [], "missing_longitudinal"
+
+
 def _build_xxpipe_segment_records(items):
     segments = []
     for item in items:
@@ -4742,15 +4854,18 @@ def _build_xxpipe_profile_data(
     missing_axis_seen = set()
     for node in profile_text_nodes:
         station_mc = _profile_station_value(node)
-        identity = _make_xxpipe_identity_from_node(node)
-        long_nodes = long_map.get(identity) or []
-        if not long_nodes:
+        identity, long_nodes, missing_kind = _resolve_xxpipe_longitudinal_nodes_for_node(node, long_map)
+        # 单点纵断面只代表边界占位，不足以用于中心线高程采样。
+        if not _has_exportable_xxpipe_longitudinal_nodes(long_nodes):
             if warnings["allow_partial_export"]:
                 if identity not in missing_axis_seen:
                     missing_axis_seen.add(identity)
                     warnings["missing_axis_identities"].append(identity)
                 continue
-            missing_axis.append(f"{identity} 缺少轴线纵断面")
+            missing_axis.append({
+                "identity": identity,
+                "kind": missing_kind,
+            })
             continue
         try:
             centerline_elev = sample_xxpipe_centerline_elevation(long_nodes, station_mc)
@@ -4768,7 +4883,10 @@ def _build_xxpipe_profile_data(
                     "station_text": station_text,
                 })
                 continue
-            missing_axis.append(f"{identity}@{station_text}")
+            missing_axis.append({
+                "identity": f"{identity}@{station_text}",
+                "kind": "coverage",
+            })
             continue
         manager_row = manager_map.get(identity) or {}
         profile_elev = _resolve_xxpipe_profile_elevation(node, centerline_elev, manager_row=manager_row)
@@ -4780,7 +4898,39 @@ def _build_xxpipe_profile_data(
         })
 
     if missing_axis:
-        raise ValueError("以下节点缺少可用的 xx管 轴线高程覆盖：\n" + "；".join(missing_axis))
+        identity_mismatch_items = [
+            str(item.get("identity", "") or "").strip()
+            for item in missing_axis
+            if str(item.get("kind", "") or "").strip() == "identity_mismatch"
+            and str(item.get("identity", "") or "").strip()
+        ]
+        coverage_items = [
+            str(item.get("identity", "") or "").strip()
+            for item in missing_axis
+            if str(item.get("kind", "") or "").strip() == "coverage"
+            and str(item.get("identity", "") or "").strip()
+        ]
+        missing_longitudinal_items = [
+            str(item.get("identity", "") or "").strip()
+            for item in missing_axis
+            if str(item.get("kind", "") or "").strip() == "missing_longitudinal"
+            and str(item.get("identity", "") or "").strip()
+        ]
+        if identity_mismatch_items and not missing_longitudinal_items and not coverage_items:
+            raise ValueError(
+                "以下节点未匹配到可用的整线纵断面：\n"
+                + "；".join(identity_mismatch_items)
+            )
+        if coverage_items and not identity_mismatch_items and not missing_longitudinal_items:
+            raise ValueError("以下节点缺少可用的 xx管 轴线高程覆盖：\n" + "；".join(coverage_items))
+        messages = []
+        if missing_longitudinal_items:
+            messages.append("以下节点缺少轴线纵断面：\n" + "；".join(missing_longitudinal_items))
+        if identity_mismatch_items:
+            messages.append("以下节点未匹配到可用的整线纵断面：\n" + "；".join(identity_mismatch_items))
+        if coverage_items:
+            messages.append("以下节点缺少可用的 xx管 轴线高程覆盖：\n" + "；".join(coverage_items))
+        raise ValueError("\n".join(messages))
 
     building_segments = _build_xxpipe_segment_records([
         {
@@ -4924,6 +5074,8 @@ def _translate_xxpipe_export_error(exc):
     message = str(exc or "").strip()
     if not message:
         return None
+    if "未匹配到可用的整线纵断面" in message:
+        return "已导入纵断面DXF，但当前导出节点没有匹配到对应整线，请重新计算后再导出。"
     if "缺少轴线纵断面" in message:
         return "对应整线还没有导入纵断面DXF，请先到表3的有压管道水力计算中导入后再导出。"
     if (
