@@ -2081,6 +2081,12 @@ def _is_xxpipe_allowed_structure(struct_name):
     return text in {"有压管道", "定向钻", "顶管"} or ("隧洞" in text)
 
 
+def _is_tail_pressure_split_core_structure(struct_name):
+    """判断末尾分表场景里是否已经进入真正的有压段。"""
+    text = str(struct_name or "").strip()
+    return text in {"有压管道", "定向钻", "顶管"}
+
+
 def _is_xxpipe_named_structure(struct_name):
     text = str(struct_name or "").strip()
     if not text:
@@ -5151,6 +5157,116 @@ def _show_xxpipe_partial_export_notice(parent, xxpipe_profile_data):
         fluent_info(parent, "提示", notice)
 
 
+_TAIL_PRESSURE_SPLIT_GAP = 20.0
+
+
+def _resolve_tail_pressure_split_context(panel, nodes, station_prefix=""):
+    """识别“前渠道、末尾连续有压段”的双表导出上下文。"""
+    raw_nodes = list(nodes or [])
+    if not raw_nodes:
+        return None
+
+    regular_entries = []
+    for idx, node in enumerate(raw_nodes):
+        struct_name = _struct_val(getattr(node, "structure_type", None))
+        if getattr(node, "is_transition", False):
+            continue
+        if struct_name == "渐变段":
+            continue
+        if getattr(node, "is_auto_inserted_channel", False):
+            continue
+        regular_entries.append((idx, node, struct_name))
+    if len(regular_entries) < 2:
+        return None
+
+    tail_entries = []
+    for entry in reversed(regular_entries):
+        if _is_xxpipe_allowed_structure(entry[2]):
+            tail_entries.append(entry)
+            continue
+        break
+    if not tail_entries:
+        return None
+    tail_entries.reverse()
+
+    if len(tail_entries) == len(regular_entries):
+        return None
+    if not any(_is_tail_pressure_split_core_structure(entry[2]) for entry in tail_entries):
+        return None
+
+    prefix_entries = regular_entries[: len(regular_entries) - len(tail_entries)]
+    if not prefix_entries:
+        return None
+    if any(_is_xxpipe_allowed_structure(entry[2]) for entry in prefix_entries):
+        return None
+
+    first_tail_index = int(tail_entries[0][0])
+    if first_tail_index <= 0:
+        return None
+
+    channel_nodes = raw_nodes[:first_tail_index]
+    channel_valid_nodes = [
+        node
+        for node in channel_nodes
+        if getattr(node, "bottom_elevation", None)
+        or getattr(node, "top_elevation", None)
+        or getattr(node, "water_level", None)
+    ]
+    if not channel_valid_nodes:
+        return None
+
+    tail_nodes = raw_nodes[first_tail_index:]
+    xxpipe_profile_data = _build_panel_xxpipe_profile_data(
+        panel,
+        tail_nodes,
+        station_prefix=station_prefix,
+    )
+    return {
+        "channel_nodes": channel_nodes,
+        "channel_valid_nodes": channel_valid_nodes,
+        "tail_nodes": tail_nodes,
+        "xxpipe_profile_data": xxpipe_profile_data,
+    }
+
+
+def _draw_tail_pressure_split_profile_on_msp(
+    msp,
+    channel_nodes,
+    channel_valid_nodes,
+    tail_nodes,
+    settings,
+    station_prefix,
+    *,
+    xxpipe_profile_data,
+    layer_prefix="",
+):
+    """在同一张图里上下绘制渠道表和末尾有压表。"""
+    channel_width, _channel_height = _draw_profile_on_msp(
+        msp,
+        channel_nodes,
+        channel_valid_nodes,
+        settings,
+        station_prefix,
+        layer_prefix=layer_prefix,
+    )
+    _normalized, _enabled_ids, _row_layout, _total_height, tail_line_height, _boundaries = (
+        _build_xxpipe_profile_row_layout(settings)
+    )
+    tail_offset_y = -(float(_TAIL_PRESSURE_SPLIT_GAP) + float(tail_line_height))
+    tail_msp = _OffsetMSP(msp, 0.0, tail_offset_y)
+    tail_width, _ = _draw_profile_on_msp(
+        tail_msp,
+        tail_nodes,
+        tail_nodes,
+        settings,
+        station_prefix,
+        layer_prefix=layer_prefix,
+        export_mode="xxpipe",
+        xxpipe_profile_data=xxpipe_profile_data,
+    )
+    return max(channel_width, tail_width), float(_TAIL_PRESSURE_SPLIT_GAP) + float(tail_line_height)
+
+
 def _collect_xxpipe_full_height_boundary_mcs(profile_data):
     boundary_mcs = []
 
@@ -8162,23 +8278,48 @@ def export_longitudinal_profile_dxf(panel):
             station_prefix = ""
 
         xxpipe_profile_data = None
+        tail_pressure_split_context = None
         if export_mode == "xxpipe":
             xxpipe_profile_data = _build_panel_xxpipe_profile_data(panel, nodes, station_prefix=station_prefix)
+        else:
+            try:
+                tail_pressure_split_context = _resolve_tail_pressure_split_context(
+                    panel,
+                    nodes,
+                    station_prefix=station_prefix,
+                )
+            except Exception as exc:
+                friendly_message = _translate_xxpipe_export_error(exc)
+                if friendly_message:
+                    fluent_error(panel.window(), "导出失败", friendly_message)
+                    return
+                raise
 
         doc = ezdxf.new("R2010")
         msp = doc.modelspace()
         _setup_profile_dxf_document(doc)
         _ensure_profile_layers(doc)
 
-        _draw_profile_on_msp(
-            msp,
-            nodes,
-            valid_nodes,
-            settings,
-            station_prefix,
-            export_mode=export_mode,
-            xxpipe_profile_data=xxpipe_profile_data,
-        )
+        if tail_pressure_split_context:
+            _draw_tail_pressure_split_profile_on_msp(
+                msp,
+                tail_pressure_split_context["channel_nodes"],
+                tail_pressure_split_context["channel_valid_nodes"],
+                tail_pressure_split_context["tail_nodes"],
+                settings,
+                station_prefix,
+                xxpipe_profile_data=tail_pressure_split_context["xxpipe_profile_data"],
+            )
+        else:
+            _draw_profile_on_msp(
+                msp,
+                nodes,
+                valid_nodes,
+                settings,
+                station_prefix,
+                export_mode=export_mode,
+                xxpipe_profile_data=xxpipe_profile_data,
+            )
 
         doc.saveas(file_path)
         _show_xxpipe_partial_export_notice(panel.window(), xxpipe_profile_data)
@@ -9607,12 +9748,26 @@ def export_combined_dxf(panel):
     profile_valid_nodes = profile_nodes if export_mode == "xxpipe" else valid_nodes
     ip_source_nodes = summary_nodes if export_mode == "xxpipe" else nodes
     xxpipe_profile_data = None
+    tail_pressure_split_context = None
     if export_mode == "xxpipe":
         if not profile_nodes:
             fluent_info(parent_window, "警告", "没有可用于 xx管 纵断面导出的节点数据。")
             return
         try:
             xxpipe_profile_data = _build_panel_xxpipe_profile_data(panel, profile_nodes, station_prefix=station_prefix)
+        except Exception as exc:
+            friendly_message = _translate_xxpipe_export_error(exc)
+            if friendly_message:
+                fluent_error(parent_window, "导出失败", friendly_message)
+                return
+            raise
+    else:
+        try:
+            tail_pressure_split_context = _resolve_tail_pressure_split_context(
+                panel,
+                profile_nodes,
+                station_prefix=station_prefix,
+            )
         except Exception as exc:
             friendly_message = _translate_xxpipe_export_error(exc)
             if friendly_message:
@@ -9677,16 +9832,28 @@ def export_combined_dxf(panel):
 
         # ======== A. 纵断面表格（顶部，原点(0,0)） ========
         try:
-            prof_w, prof_h = _draw_profile_on_msp(
-                msp,
-                profile_nodes,
-                profile_valid_nodes,
-                profile_settings,
-                station_prefix,
-                layer_prefix=_PROF_PREFIX,
-                export_mode=export_mode,
-                xxpipe_profile_data=xxpipe_profile_data,
-            )
+            if tail_pressure_split_context:
+                prof_w, prof_h = _draw_tail_pressure_split_profile_on_msp(
+                    msp,
+                    tail_pressure_split_context["channel_nodes"],
+                    tail_pressure_split_context["channel_valid_nodes"],
+                    tail_pressure_split_context["tail_nodes"],
+                    profile_settings,
+                    station_prefix,
+                    layer_prefix=_PROF_PREFIX,
+                    xxpipe_profile_data=tail_pressure_split_context["xxpipe_profile_data"],
+                )
+            else:
+                prof_w, prof_h = _draw_profile_on_msp(
+                    msp,
+                    profile_nodes,
+                    profile_valid_nodes,
+                    profile_settings,
+                    station_prefix,
+                    layer_prefix=_PROF_PREFIX,
+                    export_mode=export_mode,
+                    xxpipe_profile_data=xxpipe_profile_data,
+                )
         except Exception as exc:
             if export_mode == "xxpipe":
                 friendly_message = _translate_xxpipe_export_error(exc)
@@ -9696,7 +9863,7 @@ def export_combined_dxf(panel):
             raise
 
         # 下方区域起始Y（纵断面底部再向下留间距）
-        below_y = -GAP
+        below_y = -(prof_h + GAP) if tail_pressure_split_context else -GAP
 
         try:
             summary_w, summary_h, drawn_table_count = _draw_section_summary_on_msp(

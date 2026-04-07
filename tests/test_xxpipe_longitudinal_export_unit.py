@@ -178,6 +178,17 @@ def _sample_profile_data():
     return nodes, data
 
 
+def _mixed_tail_nodes():
+    return [
+        _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="明渠1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=50.0, structure="明渠-矩形", name="明渠2", bottom_elevation=409.2),
+        _make_node(ip_no=3, mc=100.0, structure="明渠-矩形", name="明渠3", bottom_elevation=408.4),
+        _make_node(ip_no=4, mc=150.0, structure="有压管道", name="末端压力管", in_out="进", bottom_elevation=407.5),
+        _make_node(ip_no=5, mc=200.0, structure="有压管道", name="末端压力管", bottom_elevation=406.7),
+        _make_node(ip_no=6, mc=250.0, structure="有压管道", name="末端压力管", in_out="出", bottom_elevation=405.9),
+    ]
+
+
 def test_build_xxpipe_profile_row_layout_ignores_oversized_y_line_height():
     settings = {**_scaled_settings(), "y_line_height": 180}
 
@@ -196,6 +207,49 @@ def test_build_xxpipe_profile_row_layout_ignores_oversized_y_line_height():
     assert line_height == total_height
     assert boundaries[-1] == total_height
     assert all(value <= total_height for value in boundaries)
+
+
+def test_resolve_tail_pressure_split_context_returns_channel_and_tail_nodes(monkeypatch):
+    nodes = _mixed_tail_nodes()
+    captured = {}
+
+    def _fake_build_profile_data(panel, part_nodes, station_prefix=""):
+        _ = (panel, station_prefix)
+        captured["tail_nodes"] = list(part_nodes)
+        return {"profile_text_nodes": list(part_nodes)}
+
+    monkeypatch.setattr(
+        cad_tools,
+        "_build_panel_xxpipe_profile_data",
+        _fake_build_profile_data,
+    )
+
+    context = cad_tools._resolve_tail_pressure_split_context(_Panel(""), nodes, station_prefix="")
+
+    assert context is not None
+    assert [node.station_MC for node in context["channel_nodes"]] == pytest.approx([0.0, 50.0, 100.0])
+    assert [node.station_MC for node in context["tail_nodes"]] == pytest.approx([150.0, 200.0, 250.0])
+    assert [node.station_MC for node in captured["tail_nodes"]] == pytest.approx([150.0, 200.0, 250.0])
+
+
+def test_resolve_tail_pressure_split_context_returns_none_when_pressure_not_at_tail(monkeypatch):
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="明渠1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=50.0, structure="有压管道", name="中段压力管", bottom_elevation=409.0),
+        _make_node(ip_no=3, mc=100.0, structure="明渠-矩形", name="明渠2", bottom_elevation=408.0),
+    ]
+    called = {"value": False}
+
+    def _unexpected_build(*_args, **_kwargs):
+        called["value"] = True
+        return {}
+
+    monkeypatch.setattr(cad_tools, "_build_panel_xxpipe_profile_data", _unexpected_build)
+
+    context = cad_tools._resolve_tail_pressure_split_context(_Panel(""), nodes, station_prefix="")
+
+    assert context is None
+    assert called["value"] is False
 
 
 @pytest.fixture
@@ -986,3 +1040,208 @@ def test_export_longitudinal_profile_dxf_shows_guidance_for_relaxed_xxqu(local_t
     assert docs["doc"].saved_path == str(out_file)
     assert not errors
     assert any("导入纵断面轴线DXF" in args[2] for args in infos)
+
+
+def test_draw_tail_pressure_split_profile_on_msp_stacks_channel_and_xxpipe_tables(monkeypatch):
+    calls = []
+
+    def _fake_draw_profile_on_msp(
+        msp,
+        nodes,
+        valid_nodes,
+        settings,
+        station_prefix,
+        layer_prefix="",
+        export_mode=None,
+        xxpipe_profile_data=None,
+    ):
+        _ = (msp, valid_nodes, settings, station_prefix, layer_prefix, xxpipe_profile_data)
+        calls.append(
+            {
+                "nodes": list(nodes),
+                "export_mode": export_mode,
+            }
+        )
+        if export_mode == "xxpipe":
+            return 90.0, 70.0
+        return 120.0, 110.0
+
+    monkeypatch.setattr(cad_tools, "_draw_profile_on_msp", _fake_draw_profile_on_msp)
+
+    width, lower_depth = cad_tools._draw_tail_pressure_split_profile_on_msp(
+        object(),
+        _mixed_tail_nodes()[:3],
+        _mixed_tail_nodes()[:3],
+        _mixed_tail_nodes()[3:],
+        _scaled_settings(),
+        "",
+        xxpipe_profile_data={"profile_text_nodes": _mixed_tail_nodes()[3:]},
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["export_mode"] is None
+    assert calls[1]["export_mode"] == "xxpipe"
+    assert width == pytest.approx(120.0)
+    assert lower_depth == pytest.approx(150.0)
+
+
+def test_export_longitudinal_profile_dxf_uses_tail_pressure_split_helper_in_standard_mode(local_tmp_path, monkeypatch):
+    nodes = _mixed_tail_nodes()
+    out_file = local_tmp_path / "mixed_tail_profile.dxf"
+    docs = {}
+    captured = {}
+    errors = []
+
+    class _Dialog:
+        def __init__(self, *_args, **_kwargs):
+            self.result = {}
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    class _FakeDoc:
+        def __init__(self):
+            self.saved_path = None
+            self._msp = object()
+
+        def modelspace(self):
+            return self._msp
+
+        def saveas(self, path):
+            self.saved_path = path
+
+    def _fake_new(_version):
+        doc = _FakeDoc()
+        docs["doc"] = doc
+        return doc
+
+    panel = SimpleNamespace(
+        calculated_nodes=list(nodes),
+        _text_export_settings={},
+        channel_name_edit=SimpleNamespace(text=lambda: "测试渠"),
+        channel_level_combo=SimpleNamespace(currentText=lambda: "支渠"),
+    )
+    panel.window = lambda: None
+    panel._build_settings = lambda: _ProjSettings("")
+
+    monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(new=_fake_new))
+    monkeypatch.setattr(cad_tools, "MODELS_AVAILABLE", True)
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _Dialog)
+    monkeypatch.setattr(cad_tools, "_setup_profile_dxf_document", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_ensure_profile_layers", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        cad_tools,
+        "_resolve_tail_pressure_split_context",
+        lambda *_a, **_k: {
+            "channel_nodes": nodes[:3],
+            "channel_valid_nodes": nodes[:3],
+            "tail_nodes": nodes[3:],
+            "xxpipe_profile_data": {"profile_text_nodes": nodes[3:]},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_tail_pressure_split_profile_on_msp",
+        lambda *_a, **_k: captured.update({"used_split_helper": True}) or (150.0, 210.0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_profile_on_msp",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("不应回退到单表绘制")),
+    )
+    monkeypatch.setattr(
+        cad_tools.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_a, **_k: (str(out_file), "DXF")),
+    )
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **_k: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+
+    cad_tools.export_longitudinal_profile_dxf(panel)
+
+    assert docs["doc"].saved_path == str(out_file)
+    assert not errors
+    assert captured["used_split_helper"] is True
+
+
+def test_export_longitudinal_profile_dxf_keeps_xxpipe_branch_without_tail_split_detection(local_tmp_path, monkeypatch):
+    nodes = _sample_nodes()
+    out_file = local_tmp_path / "pure_xxpipe_profile.dxf"
+    docs = {}
+    captured = {"tail_split_called": False}
+    errors = []
+
+    class _Dialog:
+        def __init__(self, *_args, **_kwargs):
+            self.result = {}
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    class _FakeDoc:
+        def __init__(self):
+            self.saved_path = None
+            self._msp = object()
+
+        def modelspace(self):
+            return self._msp
+
+        def saveas(self, path):
+            self.saved_path = path
+
+    def _fake_new(_version):
+        doc = _FakeDoc()
+        docs["doc"] = doc
+        return doc
+
+    panel = SimpleNamespace(
+        calculated_nodes=list(nodes),
+        _text_export_settings={},
+        channel_name_edit=SimpleNamespace(text=lambda: "测试渠"),
+        channel_level_combo=SimpleNamespace(currentText=lambda: "支管"),
+    )
+    panel.window = lambda: None
+    panel._build_settings = lambda: _ProjSettings("")
+
+    monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(new=_fake_new))
+    monkeypatch.setattr(cad_tools, "MODELS_AVAILABLE", True)
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "_resolve_xxpipe_export_source_nodes", lambda *_a, **_k: list(nodes))
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _Dialog)
+    monkeypatch.setattr(cad_tools, "_setup_profile_dxf_document", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_ensure_profile_layers", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        cad_tools,
+        "_resolve_tail_pressure_split_context",
+        lambda *_a, **_k: captured.update({"tail_split_called": True}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_build_panel_xxpipe_profile_data",
+        lambda *_a, **_k: captured.update({"xxpipe_nodes": list(_a[1])}) or {"profile_text_nodes": list(nodes)},
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_profile_on_msp",
+        lambda *_a, **_k: captured.update({"draw_export_mode": _k.get("export_mode"), "draw_count": captured.get("draw_count", 0) + 1}) or (120.0, 80.0),
+    )
+    monkeypatch.setattr(
+        cad_tools.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_a, **_k: (str(out_file), "DXF")),
+    )
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **_k: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+
+    cad_tools.export_longitudinal_profile_dxf(panel)
+
+    assert docs["doc"].saved_path == str(out_file)
+    assert not errors
+    assert captured["tail_split_called"] is False
+    assert [node.station_MC for node in captured["xxpipe_nodes"]] == pytest.approx([0.0, 50.0, 100.0])
+    assert captured["draw_export_mode"] == "xxpipe"
+    assert captured["draw_count"] == 1
