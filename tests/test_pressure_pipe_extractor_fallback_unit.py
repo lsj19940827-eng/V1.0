@@ -237,6 +237,54 @@ def test_extract_dialog_pipe_groups_assigns_route_context_for_continuous_xxqu_ru
     assert "流量段" not in named_group.route_display_name
 
 
+def test_extract_dialog_pipe_groups_for_branch_channel_ignores_leading_tunnel_in_route_context():
+    tunnel_1 = _set_plan_station(
+        _make_node("8", "前置隧洞1", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        0.0,
+        0.0,
+        0.0,
+    )
+    tunnel_2 = _set_plan_station(
+        _make_node("8", "前置隧洞2", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        20.0,
+        20.0,
+        0.0,
+    )
+    inlet = _set_plan_station(
+        _make_node("8", "三清庙", "有压管道", InOutType.INLET, diameter=0.8, flow=0.49),
+        40.0,
+        40.0,
+        2.0,
+    )
+    outlet = _set_plan_station(
+        _make_node("8", "三清庙", "有压管道", InOutType.OUTLET, diameter=0.8, flow=0.49),
+        60.0,
+        60.0,
+        2.0,
+    )
+    downstream_tunnel = _set_plan_station(
+        _make_node("8", "后续洞身", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        80.0,
+        80.0,
+        3.0,
+    )
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [tunnel_1, tunnel_2, inlet, outlet, downstream_tunnel],
+        settings=_make_settings("支渠"),
+    )
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group.display_name == "三清庙"
+    assert group.route_start_row_index == 2
+    assert group.route_end_row_index == 4
+    assert group.route_start_mc == 40.0
+    assert group.route_end_mc == 80.0
+    assert group.route_ip_points[0]["x"] == 40.0
+    assert group.route_ip_points[-1]["x"] == 80.0
+
+
 def test_extract_dialog_pipe_groups_builds_fallback_identity_for_unnamed_row():
     upstream = _make_node("5", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=2.0)
     upstream.x = 1.0

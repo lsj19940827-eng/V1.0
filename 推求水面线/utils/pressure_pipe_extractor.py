@@ -350,6 +350,7 @@ class PressurePipeDataExtractor:
                 nodes,
                 groups,
                 chains=continuous_pressure_chains,
+                tighten_to_active_bounds=PressurePipeDataExtractor._should_tighten_branch_pressure_chain(settings),
             )
         for group in groups:
             if PressurePipeDataExtractor._find_route_context_for_group(group, route_contexts) is None:
@@ -439,6 +440,16 @@ class PressurePipeDataExtractor:
                 index = next_index
                 continue
 
+            if (
+                current_chain is None
+                and PressurePipeDataExtractor._should_tighten_branch_pressure_chain(settings)
+                and not PressurePipeDataExtractor._can_start_branch_pressure_chain(member)
+            ):
+                # 支渠连续承压链必须先进入真正的有压段，
+                # 起点前连续出现的隧洞直接忽略，不进入链成员。
+                index = next_index
+                continue
+
             if current_chain is None:
                 if current_chain is not None:
                     chains.append(current_chain)
@@ -473,6 +484,24 @@ class PressurePipeDataExtractor:
             return False
         members = list(getattr(chain, "members", []) or [])
         return len(members) >= 2
+
+    @staticmethod
+    def _can_start_branch_pressure_chain(member: Optional[PressurePipeChainMember]) -> bool:
+        """判断支渠连续承压链是否可以从当前成员起链。"""
+        if member is None:
+            return False
+        structure_type = str(getattr(member, "structure_type", "") or "").strip()
+        return structure_type in {
+            StructureType.PRESSURE_PIPE.value,
+            StructureType.DIRECTIONAL_DRILL.value,
+            StructureType.PIPE_JACKING.value,
+        }
+
+    @staticmethod
+    def _should_tighten_branch_pressure_chain(settings) -> bool:
+        """判断当前是否需要启用支渠前置隧洞收紧规则。"""
+        channel_level = str(getattr(settings, "channel_level", "") or "").strip()
+        return channel_level == "支渠"
     
     @staticmethod
     def _is_pressure_pipe(node: ChannelNode) -> bool:
@@ -626,6 +655,7 @@ class PressurePipeDataExtractor:
         nodes: List[ChannelNode],
         groups: List[PressurePipeGroup],
         chains: Optional[List[PressurePipeChain]] = None,
+        tighten_to_active_bounds: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         """构造连续承压整线上下文。"""
         route_contexts: Dict[str, Dict[str, Any]] = {}
@@ -651,15 +681,27 @@ class PressurePipeDataExtractor:
                     break
                 end_idx += 1
 
-            if active_row_indices and not any(row_idx in active_row_indices for row_idx in range(start_idx, end_idx + 1)):
+            active_indices_in_range = [
+                row_idx for row_idx in range(start_idx, end_idx + 1)
+                if row_idx in active_row_indices
+            ]
+            if active_row_indices and not active_indices_in_range:
                 idx = end_idx + 1
                 continue
+
+            effective_start_idx = start_idx
+            effective_end_idx = end_idx
+            if tighten_to_active_bounds and active_indices_in_range:
+                # 支渠 route 上下文只覆盖收紧后的链成员区间，
+                # 不再把首个真正有压段之前的前置隧洞带进去。
+                effective_start_idx = active_indices_in_range[0]
+                effective_end_idx = active_indices_in_range[-1]
 
             flow_key = flow_section or "-"
             flow_route_seq[flow_key] += 1
             route_no = flow_route_seq[flow_key]
             route_key = f"flow{flow_key}-route{route_no}"
-            route_nodes = nodes[start_idx : end_idx + 1]
+            route_nodes = nodes[effective_start_idx : effective_end_idx + 1]
             route_display_name = PressurePipeDataExtractor._build_xxpipe_route_display_name(
                 route_nodes,
                 flow_key,
@@ -676,14 +718,14 @@ class PressurePipeDataExtractor:
             route_context = {
                 "route_key": route_key,
                 "route_display_name": route_display_name,
-                "route_start_row_index": start_idx,
-                "route_end_row_index": end_idx,
-                "route_start_mc": PressurePipeDataExtractor._resolve_node_station_mc(nodes[start_idx]),
-                "route_end_mc": PressurePipeDataExtractor._resolve_node_station_mc(nodes[end_idx]),
+                "route_start_row_index": effective_start_idx,
+                "route_end_row_index": effective_end_idx,
+                "route_start_mc": PressurePipeDataExtractor._resolve_node_station_mc(nodes[effective_start_idx]),
+                "route_end_mc": PressurePipeDataExtractor._resolve_node_station_mc(nodes[effective_end_idx]),
                 "route_ip_points": route_ip_points,
             }
             route_contexts[route_key] = route_context
-            for row_idx in range(start_idx, end_idx + 1):
+            for row_idx in range(effective_start_idx, effective_end_idx + 1):
                 row_to_route_key[row_idx] = route_key
             idx = end_idx + 1
 
