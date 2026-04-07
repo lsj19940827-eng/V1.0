@@ -360,19 +360,209 @@ class DxfParser:
         return reversed_vertices, reversed_bulges
 
     @staticmethod
-    def _load_longitudinal_polyline_geometry(
+    def _is_preferred_longitudinal_layer(layer_name: str) -> bool:
+        """判断图层名是否命中纵断面优先关键词。"""
+        normalized_name = str(layer_name or "").upper()
+        keywords = ("JQX", "纵剖", "纵断", "纵剖面")
+        return any(keyword in normalized_name for keyword in keywords)
+
+    @staticmethod
+    def _is_local_coordinate_longitudinal_candidate(
+        vertices: List[Tuple[float, float]],
+    ) -> bool:
+        """通过绝对坐标量级区分局部坐标和工程大坐标。"""
+        max_abs_coord = max(
+            max(abs(float(x)), abs(float(y)))
+            for x, y in vertices
+        )
+        return max_abs_coord < 100000.0
+
+    @staticmethod
+    def _compute_longitudinal_polyline_path_length(
+        vertices: List[Tuple[float, float]],
+        bulges: List[float],
+    ) -> float:
+        """计算多段线路径总长，圆弧段按真实弧长计。"""
+        total_length = 0.0
+        for i in range(len(vertices) - 1):
+            p1 = vertices[i]
+            p2 = vertices[i + 1]
+            bulge = float(bulges[i]) if i < len(bulges) else 0.0
+            chord = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+            if abs(bulge) > 1e-8 and chord > 1e-6:
+                angle_rad = 4 * math.atan(abs(bulge))
+                sin_half = math.sin(angle_rad / 2)
+                radius = chord / (2 * sin_half) if sin_half > 1e-8 else chord / 2
+                total_length += radius * angle_rad
+            else:
+                total_length += chord
+        return float(total_length)
+
+    @staticmethod
+    def _is_longitudinal_polyline_closed(
+        polyline,
+        vertices: List[Tuple[float, float]],
+    ) -> bool:
+        """统一判断多段线是否闭合。"""
+        closed_attr = getattr(polyline, "closed", None)
+        if isinstance(closed_attr, bool) and closed_attr:
+            return True
+
+        is_closed_attr = getattr(polyline, "is_closed", None)
+        try:
+            if callable(is_closed_attr):
+                if bool(is_closed_attr()):
+                    return True
+            elif isinstance(is_closed_attr, bool) and is_closed_attr:
+                return True
+        except Exception:
+            pass
+
+        if len(vertices) > 2:
+            start = vertices[0]
+            end = vertices[-1]
+            if math.hypot(end[0] - start[0], end[1] - start[1]) < 1e-6:
+                return True
+        return False
+
+    @staticmethod
+    def _build_longitudinal_profile_candidate(polyline, entity_index: int) -> dict:
+        """提取一个纵断面候选的排序信息和规范化几何。"""
+        vertices, bulges = DxfParser._extract_longitudinal_polyline_vertices(polyline)
+        normalized_vertices, normalized_bulges = (
+            DxfParser._normalize_longitudinal_polyline_direction(vertices, bulges)
+        )
+
+        xs = [float(point[0]) for point in normalized_vertices]
+        ys = [float(point[1]) for point in normalized_vertices]
+        x_span = max(xs) - min(xs)
+        y_span = max(ys) - min(ys)
+        layer_name = str(getattr(polyline.dxf, "layer", "") or "")
+        has_preferred_layer = DxfParser._is_preferred_longitudinal_layer(layer_name)
+        is_local_coordinate = DxfParser._is_local_coordinate_longitudinal_candidate(
+            normalized_vertices
+        )
+        is_closed = DxfParser._is_longitudinal_polyline_closed(polyline, vertices)
+        has_obvious_horizontal_span = x_span >= max(10.0, y_span * 1.5)
+        has_enough_x_span = x_span >= 20.0
+
+        return {
+            "entity_index": int(entity_index),
+            "layer": layer_name,
+            "vertices": normalized_vertices,
+            "bulges": normalized_bulges,
+            "x_span": float(x_span),
+            "y_span": float(y_span),
+            "path_length": DxfParser._compute_longitudinal_polyline_path_length(
+                normalized_vertices,
+                normalized_bulges,
+            ),
+            "vertex_count": len(normalized_vertices),
+            "is_closed": is_closed,
+            "has_preferred_layer": has_preferred_layer,
+            "is_local_coordinate": is_local_coordinate,
+            "has_obvious_horizontal_span": has_obvious_horizontal_span,
+            "has_enough_x_span": has_enough_x_span,
+            "is_eligible": (
+                (not is_closed)
+                and has_obvious_horizontal_span
+                and has_enough_x_span
+            ),
+        }
+
+    @staticmethod
+    def _rank_longitudinal_profile_candidates(candidates: List[dict]) -> Tuple[List[dict], str]:
+        """按统一规则排序纵断面候选。"""
+        comparison_candidates = [item for item in candidates if item["is_eligible"]]
+        comparison_mode = "eligible_only" if comparison_candidates else "fallback_all"
+
+        def primary_sort_key(item: dict) -> tuple:
+            return (
+                0 if item["has_preferred_layer"] else 1,
+                0 if item["is_local_coordinate"] else 1,
+                -item["x_span"],
+                -item["path_length"],
+                -item["vertex_count"],
+                item["entity_index"],
+            )
+
+        def fallback_sort_key(item: dict) -> tuple:
+            return (
+                0 if not item["is_closed"] else 1,
+                0 if item["has_obvious_horizontal_span"] else 1,
+                0 if item["has_enough_x_span"] else 1,
+                0 if item["has_preferred_layer"] else 1,
+                0 if item["is_local_coordinate"] else 1,
+                -item["x_span"],
+                -item["path_length"],
+                -item["vertex_count"],
+                item["entity_index"],
+            )
+
+        comparison_ids = {
+            item["entity_index"]
+            for item in (
+                comparison_candidates if comparison_candidates else candidates
+            )
+        }
+        for candidate in candidates:
+            candidate["is_in_comparison_pool"] = (
+                candidate["entity_index"] in comparison_ids
+            )
+
+        if comparison_mode == "eligible_only":
+            secondary_candidates = [
+                item for item in candidates if not item["is_in_comparison_pool"]
+            ]
+            ranked_candidates = sorted(comparison_candidates, key=primary_sort_key)
+            ranked_candidates.extend(
+                sorted(secondary_candidates, key=fallback_sort_key)
+            )
+            return ranked_candidates, comparison_mode
+
+        return sorted(candidates, key=fallback_sort_key), comparison_mode
+
+    @staticmethod
+    def _needs_longitudinal_profile_confirmation(
+        ranked_candidates: List[dict],
+    ) -> bool:
+        """当头两名非常接近时，给上层一个可确认的提示。"""
+        if len(ranked_candidates) < 2:
+            return False
+
+        first = ranked_candidates[0]
+        second = ranked_candidates[1]
+        if not (first.get("is_in_comparison_pool") and second.get("is_in_comparison_pool")):
+            return False
+        if first["has_preferred_layer"] != second["has_preferred_layer"]:
+            return False
+        if first["is_local_coordinate"] != second["is_local_coordinate"]:
+            return False
+
+        def is_close(left: float, right: float, threshold: float = 0.05) -> bool:
+            base = max(abs(left), abs(right), 1.0)
+            return abs(left - right) / base <= threshold
+
+        return (
+            is_close(first["x_span"], second["x_span"])
+            and is_close(first["path_length"], second["path_length"])
+            and abs(first["vertex_count"] - second["vertex_count"]) <= 1
+        )
+
+    @staticmethod
+    def _select_longitudinal_profile_candidate(
         file_path: str,
-    ) -> Tuple[List[Tuple[float, float]], List[float], str]:
-        """读取并规范化纵断面多段线几何。"""
+    ) -> Tuple[Optional[dict], Optional[dict], str]:
+        """读取、排序并返回已选中的纵断面候选。"""
         try:
             import ezdxf
         except ImportError:
-            return [], [], "错误：未安装ezdxf库，请运行 pip install ezdxf"
+            return None, None, "错误：未安装ezdxf库，请运行 pip install ezdxf"
 
         try:
             doc = ezdxf.readfile(file_path)
         except Exception as e:
-            return [], [], f"错误：无法读取DXF文件 - {str(e)}"
+            return None, None, f"错误：无法读取DXF文件 - {str(e)}"
 
         msp = doc.modelspace()
 
@@ -380,15 +570,85 @@ class DxfParser:
         if not polylines:
             polylines = list(msp.query('POLYLINE'))
         if not polylines:
-            return [], [], "错误：DXF文件中未找到多段线(LWPOLYLINE/POLYLINE)实体"
+            return None, None, "错误：DXF文件中未找到多段线(LWPOLYLINE/POLYLINE)实体"
 
-        try:
-            vertices, bulges = DxfParser._extract_longitudinal_polyline_vertices(polylines[0])
-        except ValueError as exc:
-            return [], [], str(exc)
+        candidates = []
+        last_error = ""
+        for entity_index, polyline in enumerate(polylines):
+            try:
+                candidate = DxfParser._build_longitudinal_profile_candidate(
+                    polyline,
+                    entity_index,
+                )
+            except ValueError as exc:
+                last_error = str(exc)
+                continue
+            candidates.append(candidate)
 
-        vertices, bulges = DxfParser._normalize_longitudinal_polyline_direction(vertices, bulges)
-        return vertices, bulges, ""
+        if not candidates:
+            return None, None, last_error or "错误：未找到可用的纵断面多段线"
+
+        ranked_candidates, comparison_mode = (
+            DxfParser._rank_longitudinal_profile_candidates(candidates)
+        )
+        needs_confirmation = DxfParser._needs_longitudinal_profile_confirmation(
+            ranked_candidates
+        )
+
+        selection = {
+            "selected_rank_index": 0,
+            "selected_entity_index": ranked_candidates[0]["entity_index"],
+            "comparison_mode": comparison_mode,
+            "needs_confirmation": needs_confirmation,
+            "confirmation_rank_indices": [0, 1] if needs_confirmation else [],
+            "candidates": [],
+        }
+
+        for rank_index, candidate in enumerate(ranked_candidates):
+            selection["candidates"].append({
+                "rank_index": rank_index,
+                "entity_index": candidate["entity_index"],
+                "layer": candidate["layer"],
+                "x_span": candidate["x_span"],
+                "y_span": candidate["y_span"],
+                "path_length": candidate["path_length"],
+                "vertex_count": candidate["vertex_count"],
+                "is_closed": candidate["is_closed"],
+                "has_preferred_layer": candidate["has_preferred_layer"],
+                "is_local_coordinate": candidate["is_local_coordinate"],
+                "has_obvious_horizontal_span": candidate["has_obvious_horizontal_span"],
+                "has_enough_x_span": candidate["has_enough_x_span"],
+                "is_eligible": candidate["is_eligible"],
+                "is_in_comparison_pool": candidate["is_in_comparison_pool"],
+            })
+
+        return ranked_candidates[0], selection, ""
+
+    @staticmethod
+    def inspect_longitudinal_profile_candidates(file_path: str) -> Tuple[dict, str]:
+        """返回纵断面候选排序结果，供上层在接近时决定是否需要确认。"""
+        _selected_candidate, selection, error = (
+            DxfParser._select_longitudinal_profile_candidate(file_path)
+        )
+        if selection is None:
+            return {}, error
+        return selection, ""
+
+    @staticmethod
+    def _load_longitudinal_polyline_geometry(
+        file_path: str,
+    ) -> Tuple[List[Tuple[float, float]], List[float], str]:
+        """读取并返回统一选中的纵断面多段线几何。"""
+        selected_candidate, _selection, error = (
+            DxfParser._select_longitudinal_profile_candidate(file_path)
+        )
+        if not selected_candidate:
+            return [], [], error
+        return (
+            list(selected_candidate["vertices"]),
+            list(selected_candidate["bulges"]),
+            "",
+        )
 
     @staticmethod
     def get_longitudinal_profile_start_x(file_path: str) -> float:

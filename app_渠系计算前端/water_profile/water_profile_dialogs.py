@@ -3291,6 +3291,9 @@ class PressurePipeConfigDialog(QDialog):
             return
 
         try:
+            if not self._confirm_longitudinal_dxf_candidate_if_needed(pipe_name, filepath, DxfParser):
+                return
+
             chainage_offset = 0.0
             if ip_points and len(ip_points) > 0:
                 if hasattr(DxfParser, "get_longitudinal_profile_start_x"):
@@ -3375,6 +3378,42 @@ class PressurePipeConfigDialog(QDialog):
 
         except Exception as e:
             QMessageBox.critical(self, "导入失败", str(e))
+
+    def _confirm_longitudinal_dxf_candidate_if_needed(self, pipe_name, filepath, dxf_parser_cls):
+        """当候选过于接近时，先让用户确认是否按推荐项继续导入。"""
+        if not hasattr(dxf_parser_cls, "inspect_longitudinal_profile_candidates"):
+            return True
+
+        selection, error = dxf_parser_cls.inspect_longitudinal_profile_candidates(filepath)
+        if error:
+            raise ValueError(error)
+        if not selection or not selection.get("needs_confirmation"):
+            return True
+
+        candidates = list(selection.get("candidates", []) or [])
+        if len(candidates) < 2:
+            return True
+
+        first = candidates[0]
+        second = candidates[1]
+        pipe_label = self._resolve_pipe_label(pipe_name)
+
+        def _format_candidate(candidate):
+            """格式化候选摘要文本。"""
+            layer_name = str(candidate.get("layer", "") or "未分层")
+            x_span = float(candidate.get("x_span", 0.0) or 0.0)
+            path_length = float(candidate.get("path_length", 0.0) or 0.0)
+            return f"图层={layer_name}，X跨度={x_span:.3f}m，路径长={path_length:.3f}m"
+
+        message = (
+            f"{pipe_label}\n"
+            "检测到两个很接近的纵断面候选，系统准备按推荐候选继续导入。\n\n"
+            f"推荐候选：{_format_candidate(first)}\n"
+            f"备选候选：{_format_candidate(second)}\n\n"
+            "如果这两条线看起来都像纵断面，请先核对推荐候选是否正确。\n"
+            "是否继续按推荐候选导入？"
+        )
+        return fluent_question(self, "纵断面候选确认", message)
 
     def _clear_longitudinal(self, pipe_name):
         """清空纵断面数据"""

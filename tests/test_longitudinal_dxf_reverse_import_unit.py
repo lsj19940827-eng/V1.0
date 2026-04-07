@@ -109,6 +109,61 @@ def _write_reverse_longitudinal_dxf(tmp_path: Path) -> Path:
     return file_path
 
 
+def _write_competing_longitudinal_dxf(tmp_path: Path) -> Path:
+    """生成包含错误首条线与正确纵断面候选的 DXF。"""
+    ezdxf = pytest.importorskip("ezdxf")
+    file_path = tmp_path / "competing_longitudinal.dxf"
+    doc = ezdxf.new("R2010")
+    msp = doc.modelspace()
+
+    # 第一条多段线模拟工程坐标下的错误候选，长度约 31.1m。
+    msp.add_lwpolyline(
+        [
+            (3469672.8, 3469606.5),
+            (3469680.0, 3469635.4),
+            (3469703.9, 3469610.2),
+        ]
+    )
+    # 第二条多段线模拟真正的纵断面，局部坐标且图层命中 JQX。
+    msp.add_lwpolyline(
+        [
+            (308.0, 397.0),
+            (900.0, 380.0),
+            (2049.0966, 329.0),
+        ],
+        dxfattribs={"layer": "JQX"},
+    )
+    doc.saveas(file_path)
+    return file_path
+
+
+def _write_close_ranked_longitudinal_dxf(tmp_path: Path) -> Path:
+    """生成两条非常接近的纵断面候选，验证需要确认标记。"""
+    ezdxf = pytest.importorskip("ezdxf")
+    file_path = tmp_path / "close_ranked_longitudinal.dxf"
+    doc = ezdxf.new("R2010")
+    msp = doc.modelspace()
+
+    msp.add_lwpolyline(
+        [
+            (0.0, 100.0),
+            (52.0, 96.4),
+            (100.0, 92.0),
+        ],
+        dxfattribs={"layer": "JQX"},
+    )
+    msp.add_lwpolyline(
+        [
+            (0.0, 110.0),
+            (51.0, 106.8),
+            (98.2, 103.5),
+        ],
+        dxfattribs={"layer": "纵断"},
+    )
+    doc.saveas(file_path)
+    return file_path
+
+
 def test_dxf_parser_uses_normalized_profile_start_for_reverse_polyline(local_tmp_path):
     """反向纵断面应自动按较小桩号端作为导入起点。"""
     dxf_path = _write_reverse_longitudinal_dxf(local_tmp_path)
@@ -121,6 +176,41 @@ def test_dxf_parser_uses_normalized_profile_start_for_reverse_polyline(local_tmp
 
     assert start_x == pytest.approx(0.0)
     assert [float(node.chainage) for node in nodes] == pytest.approx([0.0, 10.0, 30.0])
+
+
+def test_dxf_parser_prefers_ranked_longitudinal_candidate_over_first_polyline(local_tmp_path):
+    """导入纵断面时应优先选择真正的纵断面候选，而不是盲取首条多段线。"""
+    dxf_path = _write_competing_longitudinal_dxf(local_tmp_path)
+
+    selection, error = DxfParser.inspect_longitudinal_profile_candidates(str(dxf_path))
+    assert error == ""
+    assert selection["selected_rank_index"] == 0
+    assert selection["candidates"][0]["layer"] == "JQX"
+    assert selection["candidates"][0]["x_span"] == pytest.approx(1741.0966)
+
+    start_x = DxfParser.get_longitudinal_profile_start_x(str(dxf_path))
+    nodes, _message = DxfParser.parse_longitudinal_profile(
+        str(dxf_path),
+        chainage_offset=-start_x,
+    )
+
+    assert start_x == pytest.approx(308.0)
+    assert float(nodes[0].chainage) == pytest.approx(0.0)
+    assert float(nodes[-1].chainage) == pytest.approx(1741.0966)
+
+
+def test_dxf_parser_marks_confirmation_when_top_ranked_candidates_are_close(local_tmp_path):
+    """当前两名候选非常接近时，应给出需要确认标记。"""
+    dxf_path = _write_close_ranked_longitudinal_dxf(local_tmp_path)
+
+    selection, error = DxfParser.inspect_longitudinal_profile_candidates(str(dxf_path))
+
+    assert error == ""
+    assert selection["selected_rank_index"] == 0
+    assert selection["needs_confirmation"] is True
+    assert selection["confirmation_rank_indices"] == [0, 1]
+    assert selection["candidates"][0]["layer"] == "JQX"
+    assert selection["candidates"][1]["layer"] == "纵断"
 
 
 def test_pressure_pipe_config_dialog_imports_reverse_longitudinal_dxf(monkeypatch, local_tmp_path):
@@ -167,6 +257,66 @@ def test_pressure_pipe_config_dialog_imports_reverse_longitudinal_dxf(monkeypatc
     imported = dialog.get_longitudinal_nodes_dict()[route_key]
     assert imported[0]["chainage"] == pytest.approx(0.0)
     assert imported[-1]["chainage"] == pytest.approx(30.0)
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_stops_import_when_candidate_confirmation_is_cancelled(monkeypatch):
+    """候选过于接近且用户取消时，不应继续导入。"""
+    _get_qapp()
+    route_key = "flow2-route1"
+    route_nodes = _build_route_nodes()
+    route_points = [
+        {"x": 0.0, "y": 0.0, "turn_angle": 0.0, "station_mc": 0.0},
+        {"x": 10.0, "y": 0.0, "turn_angle": 0.0, "station_mc": 10.0},
+        {"x": 30.0, "y": 0.0, "turn_angle": 0.0, "station_mc": 30.0},
+    ]
+
+    class _FakeParser:
+        @staticmethod
+        def inspect_longitudinal_profile_candidates(_filepath):
+            return ({
+                "needs_confirmation": True,
+                "candidates": [
+                    {"layer": "JQX", "x_span": 100.0, "path_length": 101.0},
+                    {"layer": "纵断", "x_span": 98.5, "path_length": 99.0},
+                ],
+            }, "")
+
+        @staticmethod
+        def get_longitudinal_profile_start_x(_filepath):
+            raise AssertionError("取消后不应继续读取起点 X")
+
+        @staticmethod
+        def parse_longitudinal_profile(_filepath, chainage_offset=0.0):
+            raise AssertionError("取消后不应继续解析纵断面")
+
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=[],
+        manager=_FakeManager(),
+        xxpipe_route_mode=True,
+        route_import_targets={
+            route_key: {
+                "display_name": "流量段2 整线1",
+                "station_prefix": "",
+                "nodes": route_nodes,
+            }
+        },
+    )
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *_args, **_kwargs: ("D:/fake/close-candidates.dxf", "DXF文件 (*.dxf)")),
+    )
+    monkeypatch.setattr(dialog_mod, "fluent_question", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_args, **_kwargs: None))
+    monkeypatch.setitem(sys.modules, "dxf_parser", SimpleNamespace(DxfParser=_FakeParser))
+
+    dialog._import_longitudinal_dxf(route_key, route_points)
+
+    assert dialog.get_longitudinal_nodes_dict() == {}
 
     dialog.close()
     dialog.deleteLater()

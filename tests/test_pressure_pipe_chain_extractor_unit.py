@@ -181,6 +181,31 @@ def test_extract_continuous_pressure_chains_supports_continuous_xxqu_run():
     ]
 
 
+def test_extract_continuous_pressure_chains_for_branch_channel_skips_leading_tunnels():
+    nodes = [
+        _make_node(0, "6", "前置隧洞1", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        _make_node(1, "6", "前置隧洞2", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        _make_node(2, "6", "三清庙", "有压管道", InOutType.INLET),
+        _make_node(3, "6", "三清庙", "有压管道", InOutType.OUTLET),
+        _make_node(4, "6", "后续洞身", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        _make_node(5, "6", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+        nodes,
+        settings=_make_settings(channel_level="支渠"),
+    )
+
+    assert len(chains) == 1
+    chain = chains[0]
+    assert chain.start_row_index == 2
+    assert chain.end_row_index == 4
+    assert [member.display_name for member in chain.members] == [
+        "三清庙",
+        "后续洞身",
+    ]
+
+
 def test_extract_continuous_pressure_chains_skips_noncontinuous_xxqu_group():
     nodes = [
         _make_node(0, "5", "单独管段", "定向钻", InOutType.INLET),
