@@ -8876,6 +8876,22 @@ class WaterProfilePanel(QWidget):
 
     def _build_pressure_pipe_characteristic_export_summary_from_nodes(self, nodes) -> tuple[dict, float | None, float | None]:
         start_water_level, end_water_level = self._get_pressure_pipe_summary_waterline(nodes)
+        settings = None
+        build_settings = getattr(self, "_build_settings", None)
+        if callable(build_settings):
+            try:
+                settings = build_settings()
+            except Exception:
+                settings = None
+        get_current_channel_level = getattr(self, "_get_current_channel_level_text", None)
+        if callable(get_current_channel_level):
+            try:
+                channel_level = str(get_current_channel_level(settings) or "").strip()
+            except Exception:
+                channel_level = str(getattr(settings, "channel_level", "") or "").strip()
+        else:
+            channel_level = str(getattr(settings, "channel_level", "") or "").strip()
+        is_xxpipe_channel = channel_level in XXPIPE_CHANNEL_LEVEL_OPTIONS
 
         def _make_entry(flow_section_text: str) -> dict:
             return {
@@ -8917,6 +8933,8 @@ class WaterProfilePanel(QWidget):
         }
         building_buckets = set(count_map.keys())
         active_building_starts = {}
+        pressure_gate_buckets = {"有压管道", "定向钻", "顶管"}
+        pressure_started_flow_sections = set()
 
         for node in nodes:
             flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
@@ -8925,7 +8943,16 @@ class WaterProfilePanel(QWidget):
             bucket = self._classify_pressure_pipe_summary_bucket(node)
             if flow_section_text and bucket:
                 summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
+            if flow_section_text and bucket in pressure_gate_buckets:
+                pressure_started_flow_sections.add(flow_section_text)
             if not flow_section_text or bucket not in building_buckets:
+                continue
+            # xx渠 只统计进入有压类结构之后再次出现的隧洞；xx管 保持原有整线口径。
+            if (
+                not is_xxpipe_channel
+                and bucket == "隧洞"
+                and flow_section_text not in pressure_started_flow_sections
+            ):
                 continue
 
             in_out_text = self._get_pressure_pipe_summary_in_out_text(node)
