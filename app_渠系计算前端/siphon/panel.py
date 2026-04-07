@@ -3900,20 +3900,32 @@ document.addEventListener("DOMContentLoaded", function(){
             # 计算桩号偏移量：使多段线起点X对齐到进口MC桩号（有平面数据）或归零（无平面数据）
             chainage_offset = 0.0
             try:
-                import ezdxf as _ezdxf
-                _doc = _ezdxf.readfile(filepath)
-                _msp = _doc.modelspace()
-                _polys = list(_msp.query('LWPOLYLINE'))
-                if not _polys:
-                    _polys = list(_msp.query('POLYLINE'))
-                if _polys:
-                    _first_point = list(_polys[0].get_points(format='xyseb'))[0]
-                    x_start = _first_point[0]
-                    if self.plan_feature_points:
-                        mc_inlet = self.plan_feature_points[0].chainage
-                        chainage_offset = mc_inlet - x_start
+                if hasattr(DxfParser, "get_longitudinal_profile_start_x"):
+                    x_start = DxfParser.get_longitudinal_profile_start_x(filepath)
+                else:
+                    import ezdxf as _ezdxf
+
+                    _doc = _ezdxf.readfile(filepath)
+                    _msp = _doc.modelspace()
+                    _polys = list(_msp.query('LWPOLYLINE'))
+                    if not _polys:
+                        _polys = list(_msp.query('POLYLINE'))
+                    if not _polys:
+                        raise ValueError("DXF文件中未找到纵断面数据")
+                    _polyline = _polys[0]
+                    if hasattr(_polyline, 'get_points'):
+                        _first_point = list(_polyline.get_points(format='xyseb'))[0]
+                        x_start = _first_point[0]
+                    elif hasattr(_polyline, 'vertices'):
+                        _first_vertex = list(_polyline.vertices)[0]
+                        x_start = _first_vertex.dxf.location.x
                     else:
-                        chainage_offset = -x_start
+                        raise ValueError("错误：无法解析多段线顶点")
+                if self.plan_feature_points:
+                    mc_inlet = self.plan_feature_points[0].chainage
+                    chainage_offset = mc_inlet - x_start
+                else:
+                    chainage_offset = -x_start
             except Exception:
                 pass
 

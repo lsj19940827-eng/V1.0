@@ -8875,7 +8875,6 @@ class WaterProfilePanel(QWidget):
         return start_water_level, end_water_level
 
     def _build_pressure_pipe_characteristic_export_summary_from_nodes(self, nodes) -> tuple[dict, float | None, float | None]:
-        start_water_level, end_water_level = self._get_pressure_pipe_summary_waterline(nodes)
         settings = None
         build_settings = getattr(self, "_build_settings", None)
         if callable(build_settings):
@@ -8897,8 +8896,8 @@ class WaterProfilePanel(QWidget):
             return {
                 "flow_section": flow_section_text,
                 "total_length": 0.0,
-                "start_water_level": start_water_level,
-                "end_water_level": end_water_level,
+                "start_water_level": None,
+                "end_water_level": None,
                 "tunnel_count": 0,
                 "tunnel_length": 0.0,
                 "directional_drill_count": 0,
@@ -8919,7 +8918,7 @@ class WaterProfilePanel(QWidget):
 
         summary_by_flow_section = {}
         if not nodes:
-            return summary_by_flow_section, start_water_level, end_water_level
+            return summary_by_flow_section, None, None
 
         count_map = {
             "隧洞": "tunnel_count",
@@ -8942,7 +8941,16 @@ class WaterProfilePanel(QWidget):
             )
             bucket = self._classify_pressure_pipe_summary_bucket(node)
             if flow_section_text and bucket:
-                summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
+                entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
+                water_level = self._normalize_pressure_pipe_export_number(
+                    getattr(node, "water_level", None),
+                    allow_zero=True,
+                )
+                if water_level is not None:
+                    # 按流量段记录首个有效水位和最后一个有效水位，避免后续导出误用整线首末水位。
+                    if entry["start_water_level"] is None:
+                        entry["start_water_level"] = water_level
+                    entry["end_water_level"] = water_level
             if flow_section_text and bucket in pressure_gate_buckets:
                 pressure_started_flow_sections.add(flow_section_text)
             if not flow_section_text or bucket not in building_buckets:
@@ -9007,7 +9015,7 @@ class WaterProfilePanel(QWidget):
             entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
             entry["total_length"] = round(entry["total_length"] + seg_len, 6)
 
-        return summary_by_flow_section, start_water_level, end_water_level
+        return summary_by_flow_section, None, None
 
     def get_pressure_pipe_characteristic_export_summary(self, rows=None) -> dict:
         targets = self._collect_pressure_pipe_export_targets(rows)

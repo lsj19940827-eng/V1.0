@@ -3278,7 +3278,6 @@ class PressurePipeConfigDialog(QDialog):
 
         try:
             from dxf_parser import DxfParser
-            import ezdxf
         except ImportError:
             QMessageBox.warning(self, "导入失败", "DXF解析器未加载")
             return
@@ -3294,23 +3293,36 @@ class PressurePipeConfigDialog(QDialog):
         try:
             chainage_offset = 0.0
             if ip_points and len(ip_points) > 0:
-                doc = ezdxf.readfile(filepath)
-                msp = doc.modelspace()
-                polys = list(msp.query('LWPOLYLINE'))
-                if not polys:
-                    polys = list(msp.query('POLYLINE'))
-                if polys:
-                    first_point = list(polys[0].get_points(format='xyseb'))[0]
-                    x_start = first_point[0]
-                    mc_inlet = ip_points[0].get('station_mc', ip_points[0].get('x', 0.0))
-                    if self._xxpipe_route_mode:
-                        resolved_anchor = self._resolve_xxpipe_route_import_anchor_station(
-                            pipe_name,
-                            ip_points,
-                        )
-                        if resolved_anchor is not None:
-                            mc_inlet = resolved_anchor
-                    chainage_offset = mc_inlet - x_start
+                if hasattr(DxfParser, "get_longitudinal_profile_start_x"):
+                    x_start = DxfParser.get_longitudinal_profile_start_x(filepath)
+                else:
+                    import ezdxf
+
+                    doc = ezdxf.readfile(filepath)
+                    msp = doc.modelspace()
+                    polys = list(msp.query('LWPOLYLINE'))
+                    if not polys:
+                        polys = list(msp.query('POLYLINE'))
+                    if not polys:
+                        raise ValueError("DXF文件中未找到纵断面数据")
+                    polyline = polys[0]
+                    if hasattr(polyline, 'get_points'):
+                        first_point = list(polyline.get_points(format='xyseb'))[0]
+                        x_start = first_point[0]
+                    elif hasattr(polyline, 'vertices'):
+                        first_vertex = list(polyline.vertices)[0]
+                        x_start = first_vertex.dxf.location.x
+                    else:
+                        raise ValueError("错误：无法解析多段线顶点")
+                mc_inlet = ip_points[0].get('station_mc', ip_points[0].get('x', 0.0))
+                if self._xxpipe_route_mode:
+                    resolved_anchor = self._resolve_xxpipe_route_import_anchor_station(
+                        pipe_name,
+                        ip_points,
+                    )
+                    if resolved_anchor is not None:
+                        mc_inlet = resolved_anchor
+                chainage_offset = mc_inlet - x_start
 
             long_nodes, message = DxfParser.parse_longitudinal_profile(filepath, chainage_offset=chainage_offset)
 
