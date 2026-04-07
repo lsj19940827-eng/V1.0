@@ -1,7 +1,7 @@
 # 当前进度
 
-- 当前正在做什么：正在把 `codex/sanqing-pressure-pipe-fixes` 和 `codex/tail-pressure-profile-split` 的提交收口到 `master`，已完成业务改动提交、相关测试和第一支分支合并，正在处理文档冲突并做最终复核。
-- 上次停在哪个位置：两个 worktree 里的有效改动都已独立提交；`data/siphon_autosave.json` 明确保留为未提交状态，不纳入本次收口。
+- 当前正在做什么：已将 `codex/sanqing-pressure-pipe-fixes` 和 `codex/tail-pressure-profile-split` 的有效改动提交并合并到 `master`，当前保留主目录自动保存文件，准备结束本次收口。
+- 上次停在哪个位置：两个分支的业务改动都已通过相关测试并并入 `master`；文档冲突已处理完成，临时 worktree 和对应分支也已清理。
 - 近期关键决定和原因：
 - 三清支渠相关修正统一按“候选优选 + 近似候选确认”导入纵断面 DXF，连续承压链从首个真正有压段起算，并在导入或清空整线纵断面后立即同步持久层，避免起点、锚点和主页面导出口径分裂。
 - 连续承压整线导出里，普通有压子段若只剩 1 个纵断面点，继续按边界占位处理并回退整线 DXF；同桩号合并节点也会保留 identity 候选回退重试，避免把已导入整线误报成未导入。
