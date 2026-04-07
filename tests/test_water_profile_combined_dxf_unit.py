@@ -589,6 +589,92 @@ def test_export_combined_dxf_uses_xxpipe_profile_branch_and_current_snapshot(mon
     assert captured["ip_nodes"] is current_nodes
 
 
+def test_export_combined_dxf_pushes_summary_below_tail_pressure_split_profile(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    panel = _build_panel()
+    panel.calculated_nodes = [
+        _ProfileNode(
+            station_MC=0.0,
+            station_BC=0.0,
+            station_EC=0.0,
+            turn_angle=0.0,
+            structure_type=SimpleNamespace(value="明渠-矩形"),
+            name="明渠1",
+            flow_section="1",
+            in_out=None,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=False,
+            bottom_elevation=410.0,
+            top_elevation=411.0,
+            water_level=410.6,
+        ),
+        _ProfileNode(
+            station_MC=100.0,
+            station_BC=100.0,
+            station_EC=100.0,
+            turn_angle=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            name="末端压力管",
+            flow_section="1",
+            in_out=SimpleNamespace(value="进"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=True,
+            bottom_elevation=409.0,
+            top_elevation=0.0,
+            water_level=0.0,
+        ),
+    ]
+    captured = {}
+
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        cad_tools,
+        "_resolve_tail_pressure_split_context",
+        lambda *_a, **_k: {
+            "channel_nodes": panel.calculated_nodes[:1],
+            "channel_valid_nodes": panel.calculated_nodes[:1],
+            "tail_nodes": panel.calculated_nodes[1:],
+            "xxpipe_profile_data": {"profile_text_nodes": panel.calculated_nodes[1:]},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_tail_pressure_split_profile_on_msp",
+        lambda *_a, **_k: (260.0, 280.0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_compute_ip_preview_data",
+        lambda *_a, **_k: ([["IP1"]], []),
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_ip_table_on_msp",
+        lambda _msp, _ox, oy, *_a, **_k: captured.update({"ip_oy": oy}),
+    )
+
+    def _fake_draw_section_summary_on_msp(*args, **kwargs):
+        _ = args
+        captured["below_y"] = kwargs["below_y"]
+        return 320.0, 180.0, 1
+
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", _fake_draw_section_summary_on_msp)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
+    assert captured["below_y"] == -300.0
+    assert captured["ip_oy"] == -300.0
+
+
 def test_export_combined_dxf_translates_missing_xxpipe_longitudinal_error(monkeypatch):
     _patch_common(monkeypatch)
     panel = _build_panel(name="穿路段", structure_type="定向钻")
