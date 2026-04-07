@@ -776,3 +776,213 @@ def test_build_xxpipe_profile_data_uses_distance_fallback_without_any_station_an
 
     assert [record["station_mc"] for record in data["centerline_records"]] == pytest.approx([0.0, 30.0, 60.0])
     assert [record["elevation"] for record in data["centerline_records"]] == pytest.approx([100.0, 97.0, 94.0])
+
+
+def test_build_xxpipe_profile_data_relaxes_missing_axis_for_continuous_xxqu():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="定向钻", name="穿路段", in_out="进"),
+        _make_node(ip_no=2, mc=50.0, structure="定向钻", name="穿路段"),
+        _make_node(ip_no=3, mc=100.0, structure="定向钻", name="穿路段", in_out="出"),
+    ]
+
+    data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        {},
+        station_prefix="",
+        export_policy={
+            "allow_partial_export": True,
+        },
+    )
+
+    assert data["centerline_records"] == []
+    assert data["warnings"]["allow_partial_export"] is True
+    assert data["warnings"]["missing_axis_identities"]
+
+
+def test_export_xxpipe_longitudinal_txt_to_path_shows_guidance_for_relaxed_xxqu(local_tmp_path, monkeypatch):
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="有压管道", name="南干支线", in_out="进"),
+        _make_node(ip_no=2, mc=50.0, structure="有压管道", name="南干支线"),
+        _make_node(ip_no=3, mc=100.0, structure="有压管道", name="南干支线", in_out="出"),
+    ]
+    out_file = local_tmp_path / "relaxed_xxqu_profile.txt"
+    infos = []
+    profile_data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        {},
+        station_prefix="",
+        export_policy={
+            "allow_partial_export": True,
+            "show_plain_pipe_name": True,
+        },
+    )
+
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **_k: infos.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+
+    cad_tools._export_xxpipe_longitudinal_txt_to_path(
+        _Panel(""),
+        nodes,
+        _scaled_settings(),
+        str(out_file),
+        station_prefix="",
+        xxpipe_profile_data=profile_data,
+    )
+
+    assert out_file.exists()
+    assert any("导入纵断面轴线DXF" in args[2] for args in infos)
+
+
+@pytest.mark.parametrize(
+    ("building_name", "expected_text"),
+    [
+        ("南干支线", "南干支线"),
+        ("", "有压管道"),
+    ],
+)
+def test_build_xxpipe_profile_data_uses_relaxed_plain_pipe_building_name_rules(
+    building_name,
+    expected_text,
+):
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="有压管道", name=building_name, in_out="进"),
+        _make_node(ip_no=2, mc=50.0, structure="有压管道", name=building_name),
+        _make_node(ip_no=3, mc=100.0, structure="有压管道", name=building_name, in_out="出"),
+    ]
+
+    data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        {},
+        station_prefix="",
+        export_policy={
+            "allow_partial_export": True,
+            "show_plain_pipe_name": True,
+        },
+    )
+
+    assert [segment["text"] for segment in data["building_segments"]] == [expected_text]
+
+
+def test_draw_profile_on_msp_leaves_centerline_text_blank_when_relaxed_xxqu_axis_missing():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="有压管道", name="南干支线", in_out="进"),
+        _make_node(ip_no=2, mc=50.0, structure="有压管道", name="南干支线"),
+        _make_node(ip_no=3, mc=100.0, structure="有压管道", name="南干支线", in_out="出"),
+    ]
+    profile_data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        {},
+        station_prefix="",
+        export_policy={
+            "allow_partial_export": True,
+            "show_plain_pipe_name": True,
+        },
+    )
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+        export_mode="xxpipe",
+        xxpipe_profile_data=profile_data,
+    )
+
+    _settings, _enabled_ids, row_layout, _total_height, _line_height, _boundaries = cad_tools._build_xxpipe_profile_row_layout(
+        _scaled_settings()
+    )
+    target_y = row_layout["centerline_elev"]["text_y"]
+    row_texts = [
+        rec["text"]
+        for rec in msp.text_records
+        if abs(rec["y"] - target_y) <= 1e-6 and rec["x"] >= 0
+    ]
+
+    assert row_texts == ["", "", ""]
+
+
+def test_export_longitudinal_profile_dxf_shows_guidance_for_relaxed_xxqu(local_tmp_path, monkeypatch):
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="有压管道", name="南干支线", in_out="进"),
+        _make_node(ip_no=2, mc=50.0, structure="有压管道", name="南干支线"),
+        _make_node(ip_no=3, mc=100.0, structure="有压管道", name="南干支线", in_out="出"),
+    ]
+    out_file = local_tmp_path / "relaxed_xxqu_profile.dxf"
+    infos = []
+    errors = []
+    docs = {}
+
+    class _Dialog:
+        def __init__(self, *_args, **_kwargs):
+            self.result = {}
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    class _FakeDoc:
+        def __init__(self):
+            self.saved_path = None
+            self._msp = object()
+
+        def modelspace(self):
+            return self._msp
+
+        def saveas(self, path):
+            self.saved_path = path
+
+    def _fake_new(_version):
+        doc = _FakeDoc()
+        docs["doc"] = doc
+        return doc
+
+    panel = SimpleNamespace(
+        calculated_nodes=list(nodes),
+        _text_export_settings={},
+        channel_name_edit=SimpleNamespace(text=lambda: "测试渠"),
+        channel_level_combo=SimpleNamespace(currentText=lambda: "支渠"),
+    )
+    panel.window = lambda: None
+    panel._build_settings = lambda: _ProjSettings("")
+
+    monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(new=_fake_new))
+    monkeypatch.setattr(cad_tools, "MODELS_AVAILABLE", True)
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "_resolve_xxpipe_export_source_nodes", lambda *_a, **_k: list(nodes))
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _Dialog)
+    monkeypatch.setattr(cad_tools, "_setup_profile_dxf_document", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_ensure_profile_layers", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_draw_profile_on_msp", lambda *_a, **_k: (120.0, 80.0))
+    monkeypatch.setattr(
+        cad_tools,
+        "_build_panel_xxpipe_profile_data",
+        lambda *_a, **_k: {
+            "profile_text_nodes": list(nodes),
+            "centerline_records": [],
+            "centerline_points": [],
+            "ip_records": [],
+            "building_segments": [],
+            "material_segments": [],
+            "warnings": {
+                "allow_partial_export": True,
+                "missing_axis_identities": ["1::南干支线"],
+                "uncovered_stations": [],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        cad_tools.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_a, **_k: (str(out_file), "DXF")),
+    )
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **_k: infos.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **_k: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+
+    cad_tools.export_longitudinal_profile_dxf(panel)
+
+    assert docs["doc"].saved_path == str(out_file)
+    assert not errors
+    assert any("导入纵断面轴线DXF" in args[2] for args in infos)
