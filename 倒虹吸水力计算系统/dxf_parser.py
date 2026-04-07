@@ -313,6 +313,90 @@ class DxfParser:
     # ==================================================================
     # 新增：纵断面多段线解析为变坡点节点表
     # ==================================================================
+
+    @staticmethod
+    def _extract_longitudinal_polyline_vertices(polyline) -> Tuple[List[Tuple[float, float]], List[float]]:
+        """提取纵断面多段线顶点和凸度。"""
+        vertices = []
+        bulges = []
+
+        if hasattr(polyline, 'get_points'):
+            for point in polyline.get_points(format='xyseb'):
+                x, y, start_width, end_width, bulge = point
+                vertices.append((x, y))
+                bulges.append(bulge)
+        elif hasattr(polyline, 'vertices'):
+            for vertex in polyline.vertices:
+                vx = vertex.dxf.location.x
+                vy = vertex.dxf.location.y
+                vb = vertex.dxf.bulge if hasattr(vertex.dxf, 'bulge') else 0.0
+                vertices.append((vx, vy))
+                bulges.append(vb)
+        else:
+            raise ValueError("错误：无法解析多段线顶点")
+
+        if len(vertices) < 2:
+            raise ValueError("错误：多段线顶点数量不足（至少需要2个点）")
+        return vertices, bulges
+
+    @staticmethod
+    def _normalize_longitudinal_polyline_direction(
+        vertices: List[Tuple[float, float]],
+        bulges: List[float],
+    ) -> Tuple[List[Tuple[float, float]], List[float]]:
+        """把纵断面多段线统一成桩号递增方向。"""
+        if len(vertices) < 2:
+            return vertices, bulges
+        if vertices[-1][0] >= vertices[0][0]:
+            return vertices, bulges
+
+        reversed_vertices = list(reversed(vertices))
+        segment_bulges = [
+            float(bulges[i]) if i < len(bulges) else 0.0
+            for i in range(len(vertices) - 1)
+        ]
+        reversed_bulges = [-segment_bulges[i] for i in range(len(segment_bulges) - 1, -1, -1)]
+        reversed_bulges.append(0.0)
+        return reversed_vertices, reversed_bulges
+
+    @staticmethod
+    def _load_longitudinal_polyline_geometry(
+        file_path: str,
+    ) -> Tuple[List[Tuple[float, float]], List[float], str]:
+        """读取并规范化纵断面多段线几何。"""
+        try:
+            import ezdxf
+        except ImportError:
+            return [], [], "错误：未安装ezdxf库，请运行 pip install ezdxf"
+
+        try:
+            doc = ezdxf.readfile(file_path)
+        except Exception as e:
+            return [], [], f"错误：无法读取DXF文件 - {str(e)}"
+
+        msp = doc.modelspace()
+
+        polylines = list(msp.query('LWPOLYLINE'))
+        if not polylines:
+            polylines = list(msp.query('POLYLINE'))
+        if not polylines:
+            return [], [], "错误：DXF文件中未找到多段线(LWPOLYLINE/POLYLINE)实体"
+
+        try:
+            vertices, bulges = DxfParser._extract_longitudinal_polyline_vertices(polylines[0])
+        except ValueError as exc:
+            return [], [], str(exc)
+
+        vertices, bulges = DxfParser._normalize_longitudinal_polyline_direction(vertices, bulges)
+        return vertices, bulges, ""
+
+    @staticmethod
+    def get_longitudinal_profile_start_x(file_path: str) -> float:
+        """返回规范化后的纵断面起点 X，用于计算桩号偏移。"""
+        vertices, _bulges, error = DxfParser._load_longitudinal_polyline_geometry(file_path)
+        if not vertices:
+            raise ValueError(error or "错误：DXF文件中未找到纵断面数据")
+        return float(vertices[0][0])
     
     @staticmethod
     def parse_longitudinal_profile(file_path: str, 
@@ -335,48 +419,9 @@ class DxfParser:
         Returns:
             (变坡点节点列表, 消息)
         """
-        try:
-            import ezdxf
-        except ImportError:
-            return [], "错误：未安装ezdxf库，请运行 pip install ezdxf"
-        
-        try:
-            doc = ezdxf.readfile(file_path)
-        except Exception as e:
-            return [], f"错误：无法读取DXF文件 - {str(e)}"
-        
-        msp = doc.modelspace()
-        
-        # 查找多段线
-        polylines = list(msp.query('LWPOLYLINE'))
-        if not polylines:
-            polylines = list(msp.query('POLYLINE'))
-        if not polylines:
-            return [], "错误：DXF文件中未找到多段线(LWPOLYLINE/POLYLINE)实体"
-        
-        polyline = polylines[0]
-        
-        # 提取顶点和凸度
-        vertices = []
-        bulges = []
-        
-        if hasattr(polyline, 'get_points'):
-            for point in polyline.get_points(format='xyseb'):
-                x, y, start_width, end_width, bulge = point
-                vertices.append((x, y))
-                bulges.append(bulge)
-        elif hasattr(polyline, 'vertices'):
-            for vertex in polyline.vertices:
-                vx = vertex.dxf.location.x
-                vy = vertex.dxf.location.y
-                vb = vertex.dxf.bulge if hasattr(vertex.dxf, 'bulge') else 0.0
-                vertices.append((vx, vy))
-                bulges.append(vb)
-        else:
-            return [], "错误：无法解析多段线顶点"
-        
-        if len(vertices) < 2:
-            return [], "错误：多段线顶点数量不足（至少需要2个点）"
+        vertices, bulges, error = DxfParser._load_longitudinal_polyline_geometry(file_path)
+        if not vertices:
+            return [], error
         
         # 构建变坡点节点表
         nodes = DxfParser._build_longitudinal_nodes(vertices, bulges, chainage_offset)

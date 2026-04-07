@@ -761,6 +761,12 @@ class PressurePipeDataExtractor:
         upstream_node = nodes[upstream_idx] if 0 <= upstream_idx < len(nodes) else None
         if upstream_node is None:
             return target_node
+        # 跨流量段时，匿名普通段的自身范围应从本段首点开始，
+        # 不能把上一流量段尾点到本段首点的边界距离带进来。
+        target_flow_section = str(getattr(target_node, "flow_section", "") or "").strip() if target_node else ""
+        upstream_flow_section = str(getattr(upstream_node, "flow_section", "") or "").strip()
+        if target_flow_section and upstream_flow_section and target_flow_section != upstream_flow_section:
+            return target_node
         if PressurePipeDataExtractor._is_tunnel_structure(upstream_node) and getattr(upstream_node, "in_out", None) == InOutType.NORMAL:
             return target_node
         return upstream_node

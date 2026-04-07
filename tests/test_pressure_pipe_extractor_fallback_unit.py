@@ -258,6 +258,44 @@ def test_extract_dialog_pipe_groups_builds_fallback_identity_for_unnamed_row():
     assert groups[0].identity == "flow5-row2"
 
 
+def test_extract_dialog_pipe_groups_keeps_cross_flow_boundary_out_of_next_flow_section_anonymous_segment():
+    drill_inlet = _set_plan_station(
+        _make_node("1", "穿路段", "定向钻", InOutType.INLET, diameter=1.0, flow=1.8),
+        600.0,
+        10.0,
+        0.0,
+    )
+    drill_outlet = _set_plan_station(
+        _make_node("1", "穿路段", "定向钻", InOutType.OUTLET, diameter=1.0, flow=1.8),
+        700.0,
+        30.0,
+        0.0,
+    )
+    anonymous = _set_plan_station(
+        _make_node("2", "", "有压管道", InOutType.NORMAL, diameter=1.0, flow=1.2),
+        820.0,
+        50.0,
+        0.0,
+    )
+    anonymous.pressure_pipe_row_identity = "flow2-row3"
+    downstream = _set_plan_station(
+        _make_node("2", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.2),
+        960.0,
+        80.0,
+        0.0,
+    )
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [drill_inlet, drill_outlet, anonymous, downstream],
+        settings=_make_settings("支渠"),
+    )
+
+    assert [group.display_name for group in groups] == ["穿路段", "流量段2 第3行有压管道"]
+    anonymous_group = groups[1]
+    assert anonymous_group.segment_start_mc == 820.0
+    assert anonymous_group.segment_end_mc == 820.0
+
+
 def test_extract_dialog_pipe_groups_downstream_reference_stops_at_first_regular_row():
     upstream = _make_node("6", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.6)
     upstream.x = 0.0

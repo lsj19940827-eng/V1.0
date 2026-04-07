@@ -4513,9 +4513,12 @@ def _merge_pressure_pipe_export_rows_by_flow_section(rows, panel=None):
                     base[key] = copy.deepcopy(summary.get(key))
             summary_total_length = _normalize_pressure_pipe_total_length_value(summary.get("total_length"))
 
-        segment_total_length = _sum_pressure_pipe_flow_section_total_length(items)
+        # 主长度优先使用流量段摘要的连续桩号累计值；
+        # 分组范围只作为兜底，避免漏掉“普通段接命名建筑物前”的短段，
+        # 也避免把跨流量段边界误并入下一段。
+        segment_total_length = summary_total_length
         if segment_total_length is None:
-            segment_total_length = summary_total_length
+            segment_total_length = _sum_pressure_pipe_flow_section_total_length(items)
         if segment_total_length is None:
             segment_total_length = _normalize_pressure_pipe_total_length_value(base.get("total_length"))
         if segment_total_length is None:
