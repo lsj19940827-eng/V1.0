@@ -91,3 +91,71 @@ def test_unnamed_pressure_pipe_window_override_drives_losses_and_details():
     assert pressure_pipe.bend_calc_details["source"] == "window_override"
     assert pressure_pipe.bend_calc_details["hw"] == 0.0068
     assert pressure_pipe.transition_calc_details["method"] == "pressure_pipe_window_transition"
+
+
+def test_pressure_pipe_window_override_preserves_chain_prefix_metadata_after_calculation():
+    upstream = _make_open_channel(0.0, 0.85, name="上游明渠")
+
+    pressure_pipe = ChannelNode()
+    pressure_pipe.flow_section = "1"
+    pressure_pipe.name = "大石包"
+    pressure_pipe.structure_type = StructureType.from_string("定向钻")
+    pressure_pipe.in_out = InOutType.INLET
+    pressure_pipe.station_MC = 21.6
+    pressure_pipe.flow = 0.32
+    pressure_pipe.velocity = 0.0
+    pressure_pipe.water_depth = 1.1
+    pressure_pipe.turn_radius = 0.0
+    pressure_pipe.turn_angle = 0.0
+    pressure_pipe.section_params = {
+        "D": 1.0,
+        "pipe_material": "球墨铸铁管",
+        "pressure_pipe_window_override": {
+            "enabled": True,
+            "identity": "1::苟家湾::rows83",
+            "storage_key": "1::苟家湾::rows83",
+            "display_name": "苟家湾（前缀段）",
+            "group_mode": "chain_prefix_member",
+            "data_mode": "链前缀段",
+            "applied_at": "2026-04-08 21:13:14",
+            "calc_steps": "prefix-step",
+            "target_row_index": 1,
+            "upstream_row_index": 0,
+            "Q": 0.32,
+            "D": 1.0,
+            "total_length": 21.6,
+            "pipe_velocity": 0.41,
+            "friction_loss": 0.3188,
+            "total_bend_loss": 0.0,
+            "local_loss": 0.0,
+            "inlet_transition_loss": 0.0,
+            "outlet_transition_loss": 0.0,
+            "total_head_loss": 0.3188,
+            "friction_details": {"method": "gb50288", "hf": 0.3188},
+            "bend_details": {},
+            "local_details": {"method": "chain_prefix_member", "hj": 0.0},
+        },
+    }
+
+    downstream = _make_open_channel(60.0, 0.92, name="下游明渠")
+
+    settings = ProjectSettings()
+    settings.channel_level = "支渠"
+    settings.start_water_level = 100.0
+
+    calc = HydraulicCalculator(settings)
+    for node in (upstream, pressure_pipe, downstream):
+        calc.fill_section_params(node)
+
+    calc.calculate_water_profile([upstream, pressure_pipe, downstream], method="forward")
+
+    override = pressure_pipe.pressure_pipe_window_override
+    assert override["identity"] == "1::苟家湾::rows83"
+    assert override["storage_key"] == "1::苟家湾::rows83"
+    assert override["display_name"] == "苟家湾（前缀段）"
+    assert override["group_mode"] == "chain_prefix_member"
+    assert override["data_mode"] == "链前缀段"
+    assert override["applied_at"] == "2026-04-08 21:13:14"
+    assert override["calc_steps"] == "prefix-step"
+    assert override["target_row_index"] == 1
+    assert override["upstream_row_index"] == 0

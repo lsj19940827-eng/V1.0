@@ -68,6 +68,28 @@ def test_classify_probe_failure_recognizes_channel_pipe_access_denied():
     assert failure_kind == "ipc-access-denied"
 
 
+def test_current_runtime_facts_avoids_blocking_platform_platform(monkeypatch):
+    monkeypatch.setattr(
+        diagnostics.platform,
+        "platform",
+        lambda: (_ for _ in ()).throw(AssertionError("platform.platform should not be called")),
+    )
+    monkeypatch.setattr(
+        diagnostics.sys,
+        "getwindowsversion",
+        lambda: types.SimpleNamespace(
+            major=10,
+            minor=0,
+            build=26100,
+            service_pack_major=0,
+        ),
+    )
+
+    facts = diagnostics._current_runtime_facts()
+
+    assert facts["platform_summary"] == "Windows-11-10.0.26100-SP0"
+
+
 def test_apply_emergency_single_process_mode_merges_flags_without_duplication(monkeypatch):
     monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --foo")
 

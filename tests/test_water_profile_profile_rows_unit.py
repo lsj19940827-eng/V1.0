@@ -3,7 +3,10 @@
 
 from pathlib import Path
 import importlib.util
+import sys
 from types import SimpleNamespace
+
+import pytest
 
 
 def _load_cad_tools():
@@ -77,6 +80,67 @@ def _make_node(
         water_level=431.2,
         slope_i=1 / 2000,
     )
+
+
+class _TextEntity:
+    def __init__(self, msp, text, dxfattribs):
+        self._msp = msp
+        self._text = text
+        self._dxfattribs = dict(dxfattribs or {})
+
+    def set_placement(self, point, align=None):
+        self._msp.text_records.append(
+            {
+                "text": self._text,
+                "x": float(point[0]),
+                "y": float(point[1]),
+                "align": align,
+                "dxfattribs": dict(self._dxfattribs),
+            }
+        )
+        return self
+
+
+class _DummyMSP:
+    def __init__(self):
+        self.text_records = []
+        self.line_records = []
+        self.polyline_records = []
+
+    def add_line(self, start, end, dxfattribs=None):
+        self.line_records.append(
+            {
+                "start": (float(start[0]), float(start[1])),
+                "end": (float(end[0]), float(end[1])),
+                "dxfattribs": dict(dxfattribs or {}),
+            }
+        )
+        return None
+
+    def add_lwpolyline(self, points, dxfattribs=None):
+        self.polyline_records.append(
+            {
+                "points": [(float(x), float(y)) for x, y in points],
+                "dxfattribs": dict(dxfattribs or {}),
+            }
+        )
+        return None
+
+    def add_text(self, text, dxfattribs=None):
+        return _TextEntity(self, text, dxfattribs)
+
+
+def _draw_settings():
+    return {
+        "text_height": 3.5,
+        "rotation": 90,
+        "elev_decimals": 3,
+        "station_decimals": 2,
+        "y_line_height": 120,
+        "scale_x": 2000,
+        "scale_y": 1000,
+        "profile_row_items": cad_tools._default_profile_row_items(),
+    }
 
 
 def test_default_profile_row_items_hides_be_bk_and_keeps_tingzikou_enabled():
@@ -258,9 +322,134 @@ def test_special_angle_warning_contains_near_and_over_threshold():
     assert "乙压出" in message
 
 
+def test_profile_slope_segments_use_boundary_center_when_special_node_shifts_boundary():
+    nodes = [
+        _make_node(ip_no=1, mc=0, structure="明渠-矩形"),
+        _make_node(ip_no=2, mc=50, structure="明渠-矩形"),
+        _make_node(
+            ip_no=3,
+            mc=100,
+            structure="隧洞-圆形",
+            name="猴子山",
+            in_out="进",
+        ),
+    ]
+    nodes[0].slope_i = 1 / 3000
+    nodes[1].slope_i = 1 / 3000
+    nodes[2].slope_i = 1 / 1200
+
+    segments = cad_tools._build_profile_slope_segments(nodes)
+
+    assert segments[0]["start_mc"] == 0.0
+    assert segments[0]["end_mc"] == 50.0
+    assert segments[0]["mid_mc"] == 50.0
+
+
+def test_profile_slope_segments_align_tunnel_segment_with_true_structure_cell():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="明渠-矩形"),
+        _make_node(ip_no=2, mc=80.0, structure="明渠-矩形"),
+        _make_node(ip_no=3, mc=100.0, structure="隧洞-圆形", name="猴子山", in_out="进"),
+        _make_node(ip_no=4, mc=220.0, structure="隧洞-圆形", name="猴子山", in_out="出"),
+        _make_node(ip_no=5, mc=320.0, structure="明渠-矩形"),
+    ]
+    nodes[0].slope_i = 1 / 3000
+    nodes[1].slope_i = 1 / 3000
+    nodes[2].slope_i = 1 / 1200
+    nodes[3].slope_i = 1 / 1200
+    nodes[4].slope_i = 1 / 2000
+
+    segments = cad_tools._build_profile_slope_segments(nodes)
+    tunnel_segment = next(seg for seg in segments if seg["text"] == "1/1200")
+
+    assert tunnel_segment["start_mc"] == pytest.approx(100.0)
+    assert tunnel_segment["end_mc"] == pytest.approx(220.0)
+    assert tunnel_segment["mid_mc"] == pytest.approx(160.0)
+
+
+def test_profile_slope_segments_align_siphon_placeholder_with_true_structure_cell():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="明渠-矩形"),
+        _make_node(ip_no=2, mc=90.0, structure="明渠-矩形"),
+        _make_node(ip_no=3, mc=110.0, structure="倒虹吸", name="桐油寨", in_out="进"),
+        _make_node(ip_no=4, mc=260.0, structure="倒虹吸", name="桐油寨", in_out="出"),
+        _make_node(ip_no=5, mc=360.0, structure="明渠-矩形"),
+    ]
+    nodes[0].slope_i = 1 / 3000
+    nodes[1].slope_i = 1 / 3000
+    nodes[2].slope_i = 1 / 2000
+    nodes[3].slope_i = 1 / 2000
+    nodes[4].slope_i = 1 / 1500
+
+    segments = cad_tools._build_profile_slope_segments(nodes)
+    siphon_segment = next(seg for seg in segments if seg["text"] == "-")
+
+    assert siphon_segment["start_mc"] == pytest.approx(110.0)
+    assert siphon_segment["end_mc"] == pytest.approx(260.0)
+    assert siphon_segment["mid_mc"] == pytest.approx(185.0)
+
+
 def test_get_building_display_name_falls_back_to_structure_for_unnamed_open_channel():
     node = _make_node(ip_no=5, mc=88, structure="明渠-圆形", name="")
 
     display = cad_tools._get_building_display_name(node)
 
     assert display == "明渠-圆形"
+
+
+def test_draw_profile_on_msp_places_slope_text_at_true_boundary_center(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="一支渠"),
+        _make_node(ip_no=2, mc=80.0, structure="明渠-矩形", name="一支渠"),
+        _make_node(ip_no=3, mc=100.0, structure="隧洞-圆拱直墙型", name="过山洞", in_out="进"),
+        _make_node(ip_no=4, mc=220.0, structure="隧洞-圆拱直墙型", name="过山洞", in_out="出"),
+        _make_node(ip_no=5, mc=320.0, structure="倒虹吸", name="桐油寨", in_out="进"),
+        _make_node(ip_no=6, mc=470.0, structure="倒虹吸", name="桐油寨", in_out="出"),
+        _make_node(ip_no=7, mc=560.0, structure="明渠-矩形", name="二支渠"),
+    ]
+    nodes[0].slope_i = 1 / 3000
+    nodes[1].slope_i = 1 / 3000
+    nodes[2].slope_i = 1 / 1200
+    nodes[3].slope_i = 1 / 1200
+    nodes[4].slope_i = 1 / 2000
+    nodes[5].slope_i = 1 / 2000
+    nodes[6].slope_i = 1 / 1500
+    settings = _draw_settings()
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        settings,
+        station_prefix="",
+    )
+
+    _enabled_ids, row_layout, _total_height, _line_height, _boundaries = cad_tools._build_profile_row_layout(settings)
+    slope_y = row_layout["slope"]["text_y"]
+    building_y = row_layout["building_name"]["text_y"]
+    slope_records = [
+        rec
+        for rec in msp.text_records
+        if abs(rec["y"] - slope_y) <= 1e-6
+    ]
+    building_records = [
+        rec
+        for rec in msp.text_records
+        if abs(rec["y"] - building_y) <= 1e-6 and rec["x"] >= 0 and rec["text"] != "建筑物名称"
+    ]
+    slope_by_text = {rec["text"]: rec for rec in slope_records}
+    building_by_text = {rec["text"]: rec for rec in building_records}
+
+    assert slope_by_text["1/1200"]["x"] == pytest.approx(building_by_text["过山洞隧洞"]["x"])
+    assert slope_by_text["-"]["x"] == pytest.approx(building_by_text["桐油寨倒虹吸"]["x"])

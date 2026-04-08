@@ -5,6 +5,8 @@ import os
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "推求水面线"))
 
@@ -110,8 +112,9 @@ def test_extract_dialog_pipe_groups_includes_unnamed_regular_pressure_pipe_rows_
     assert named_group.group_mode == "named_group"
     assert named_group.name == "半兽人"
     assert named_group.display_name == "半兽人"
-    assert named_group.storage_key == "半兽人"
-    assert named_group.identity == "2::半兽人"
+    assert named_group.storage_key == "2::半兽人::rows2-3"
+    assert named_group.identity == "2::半兽人::rows2-3"
+    assert named_group.legacy_identity == "2::半兽人"
 
     anonymous_group = groups[1]
     assert anonymous_group.group_mode == "unnamed_row_segment"
@@ -283,6 +286,60 @@ def test_extract_dialog_pipe_groups_for_branch_channel_ignores_leading_tunnel_in
     assert group.route_end_mc == 80.0
     assert group.route_ip_points[0]["x"] == 40.0
     assert group.route_ip_points[-1]["x"] == 80.0
+    assert group.ip_points[0]["station_mc"] == pytest.approx(40.0)
+    assert group.ip_points[-1]["station_mc"] == pytest.approx(60.0)
+    assert group.route_ip_points[0]["station_mc"] == pytest.approx(40.0)
+    assert group.route_ip_points[-1]["station_mc"] == pytest.approx(80.0)
+
+
+def test_extract_dialog_pipe_groups_for_branch_channel_marks_prefix_segment_metadata():
+    prefix_inlet = _set_plan_station(
+        _make_node("9", "苟家湾", "有压管道", InOutType.INLET, diameter=0.8, flow=0.49),
+        40.0,
+        40.0,
+        2.0,
+    )
+    drill_inlet = _set_plan_station(
+        _make_node("9", "大石包", "定向钻", InOutType.INLET, diameter=0.8, flow=0.49),
+        60.0,
+        60.0,
+        2.0,
+    )
+    drill_outlet = _set_plan_station(
+        _make_node("9", "大石包", "定向钻", InOutType.OUTLET, diameter=0.8, flow=0.49),
+        80.0,
+        80.0,
+        2.0,
+    )
+    main_inlet = _set_plan_station(
+        _make_node("9", "苟家湾", "有压管道", InOutType.INLET, diameter=0.8, flow=0.49),
+        100.0,
+        100.0,
+        3.0,
+    )
+    main_outlet = _set_plan_station(
+        _make_node("9", "苟家湾", "有压管道", InOutType.OUTLET, diameter=0.8, flow=0.49),
+        140.0,
+        140.0,
+        3.0,
+    )
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [prefix_inlet, drill_inlet, drill_outlet, main_inlet, main_outlet],
+        settings=_make_settings("支渠"),
+    )
+
+    assert [group.display_name for group in groups] == [
+        "苟家湾（前缀段）",
+        "大石包",
+        "苟家湾（后段）",
+    ]
+    prefix_group = groups[0]
+    assert prefix_group.member_role == "prefix_segment"
+    assert prefix_group.prefix_target_row_index == 0
+    assert prefix_group.prefix_end_row_index == 1
+    assert prefix_group.is_anchor_member is False
+    assert prefix_group.should_generate_row_loss is True
 
 
 def test_extract_dialog_pipe_groups_builds_fallback_identity_for_unnamed_row():

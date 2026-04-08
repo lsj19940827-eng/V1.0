@@ -2924,10 +2924,13 @@ def _build_profile_slope_segments(nodes, profile_text_nodes=None):
         if segments and prev_merge_key == merge_key:
             segments[-1]["end_mc"] = current_mc
         else:
+            segment_start_mc = prev_visible_mc
+            if _is_special_inout_node(node):
+                segment_start_mc = current_mc
             segments.append(
                 {
                     "text": text,
-                    "start_mc": prev_visible_mc,
+                    "start_mc": segment_start_mc,
                     "end_mc": current_mc,
                 }
             )
@@ -2935,6 +2938,16 @@ def _build_profile_slope_segments(nodes, profile_text_nodes=None):
         prev_visible_mc = current_mc
         prev_merge_key = merge_key
 
+    boundary_mcs = _collect_profile_slope_boundary_mcs(
+        nodes,
+        profile_text_nodes=visible_nodes,
+    )
+    for segment in segments:
+        segment["mid_mc"] = _resolve_segment_mid_mc(
+            segment["start_mc"],
+            segment["end_mc"],
+            boundary_mcs,
+        )
     return segments
 
 
@@ -2961,10 +2974,14 @@ def _collect_profile_slope_boundary_mcs(nodes, profile_text_nodes=None, tol=1e-9
 
         _text, current_merge_key = _resolve_profile_slope_merge_key(node)
         if prev_merge_key != current_merge_key:
-            boundary_mc = prev_visible_mc
-            if _is_special_inout_node(node):
-                boundary_mc = current_mc
-            _append_boundary(boundary_mc)
+            prev_is_special = _is_special_inout_node(prev_visible_node)
+            current_is_special = _is_special_inout_node(node)
+            if prev_is_special:
+                _append_boundary(prev_visible_mc)
+            if current_is_special:
+                _append_boundary(current_mc)
+            if not prev_is_special and not current_is_special:
+                _append_boundary(prev_visible_mc)
 
         prev_visible_node = node
         prev_visible_mc = current_mc
@@ -4546,9 +4563,9 @@ def _merge_pressure_pipe_export_rows_by_flow_section(rows, panel=None):
                     base[key] = copy.deepcopy(summary.get(key))
             summary_total_length = _normalize_pressure_pipe_total_length_value(summary.get("total_length"))
 
-        # 主长度优先使用流量段摘要的连续桩号累计值；
-        # 分组范围只作为兜底，避免漏掉“普通段接命名建筑物前”的短段，
-        # 也避免把跨流量段边界误并入下一段。
+        # 主长度优先使用 panel 摘要里的有压管道边界长度；
+        # 原始分组范围和缓存值只作为旧数据兜底，
+        # 避免把整段渠道累计值重新带回压力管道特性表。
         segment_total_length = summary_total_length
         if segment_total_length is None:
             segment_total_length = _sum_pressure_pipe_flow_section_total_length(items)
@@ -5055,19 +5072,36 @@ def _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=None):
     return list(nodes or [])
 
 
-def _build_panel_xxpipe_profile_data(panel, nodes, station_prefix=""):
-    rows = _build_xxpipe_identity_rows(nodes)
+def _build_panel_xxpipe_profile_data(
+    panel,
+    nodes,
+    station_prefix="",
+    *,
+    lookup_nodes=None,
+    lookup_rows=None,
+    export_policy=None,
+):
+    draw_nodes = list(nodes or [])
+    if lookup_rows is None:
+        row_source_nodes = draw_nodes if lookup_nodes is None else list(lookup_nodes or [])
+        rows = _build_xxpipe_identity_rows(row_source_nodes)
+    else:
+        rows = [row for row in list(lookup_rows or []) if isinstance(row, dict)]
+
     longitudinal_nodes = _get_panel_pressure_pipe_longitudinal_nodes_for_export(panel, rows)
     manager_config = _get_panel_xxpipe_manager_config_by_identity(panel, rows)
-    export_policy = _normalize_xxpipe_export_policy()
-    if not _is_xxpipe_channel_level(_get_panel_channel_level_text(panel)):
-        export_policy = _normalize_xxpipe_export_policy({
-            "allow_partial_export": True,
-            "show_plain_pipe_name": True,
-            "plain_pipe_fallback_name": "有压管道",
-        })
+    if export_policy is None:
+        export_policy = _normalize_xxpipe_export_policy()
+        if not _is_xxpipe_channel_level(_get_panel_channel_level_text(panel)):
+            export_policy = _normalize_xxpipe_export_policy({
+                "allow_partial_export": True,
+                "show_plain_pipe_name": True,
+                "plain_pipe_fallback_name": "有压管道",
+            })
+    else:
+        export_policy = _normalize_xxpipe_export_policy(export_policy)
     return _build_xxpipe_profile_data(
-        nodes,
+        draw_nodes,
         longitudinal_nodes,
         station_prefix=station_prefix,
         manager_config_by_identity=manager_config,
@@ -5181,7 +5215,7 @@ def _resolve_tail_pressure_split_context(panel, nodes, station_prefix=""):
 
     tail_entries = []
     for entry in reversed(regular_entries):
-        if _is_xxpipe_allowed_structure(entry[2]):
+        if _is_tail_pressure_split_core_structure(entry[2]):
             tail_entries.append(entry)
             continue
         break
@@ -5197,7 +5231,9 @@ def _resolve_tail_pressure_split_context(panel, nodes, station_prefix=""):
     prefix_entries = regular_entries[: len(regular_entries) - len(tail_entries)]
     if not prefix_entries:
         return None
-    if any(_is_xxpipe_allowed_structure(entry[2]) for entry in prefix_entries):
+    # 前段出现普通隧洞时，仍允许把末尾真正进入有压管的连续尾段单独拆表；
+    # 只有前段已经出现过真正的有压建筑物时，才认为不是“末尾首次进入有压”场景。
+    if any(_is_tail_pressure_split_core_structure(entry[2]) for entry in prefix_entries):
         return None
 
     first_tail_index = int(tail_entries[0][0])
@@ -5220,6 +5256,7 @@ def _resolve_tail_pressure_split_context(panel, nodes, station_prefix=""):
         panel,
         tail_nodes,
         station_prefix=station_prefix,
+        lookup_nodes=raw_nodes,
     )
     return {
         "channel_nodes": channel_nodes,
@@ -5254,6 +5291,10 @@ def _draw_tail_pressure_split_profile_on_msp(
     )
     tail_offset_y = -(float(_TAIL_PRESSURE_SPLIT_GAP) + float(tail_line_height))
     tail_msp = _OffsetMSP(msp, 0.0, tail_offset_y)
+    tail_profile_text_nodes = list(xxpipe_profile_data.get("profile_text_nodes", []) or [])
+    tail_x_origin_mc = 0.0
+    if tail_profile_text_nodes:
+        tail_x_origin_mc = _profile_station_value(tail_profile_text_nodes[0])
     tail_width, _ = _draw_profile_on_msp(
         tail_msp,
         tail_nodes,
@@ -5263,6 +5304,7 @@ def _draw_tail_pressure_split_profile_on_msp(
         layer_prefix=layer_prefix,
         export_mode="xxpipe",
         xxpipe_profile_data=xxpipe_profile_data,
+        x_origin_mc=tail_x_origin_mc,
     )
     return max(channel_width, tail_width), float(_TAIL_PRESSURE_SPLIT_GAP) + float(tail_line_height)
 
@@ -7787,6 +7829,7 @@ def _draw_xxpipe_profile_on_msp(
     settings,
     station_prefix,
     *,
+    x_origin_mc=0.0,
     xxpipe_profile_data,
     layer_prefix="",
 ):
@@ -7805,6 +7848,7 @@ def _draw_xxpipe_profile_on_msp(
     scale_x = settings.get("scale_x", 1)
     scale_y = settings.get("scale_y", 1)
     first_col_x_offset = text_height + 1.3
+    x_origin_mc = float(x_origin_mc or 0.0)
 
     profile_text_nodes = list(xxpipe_profile_data.get("profile_text_nodes", []) or [])
     if not profile_text_nodes:
@@ -7817,7 +7861,7 @@ def _draw_xxpipe_profile_on_msp(
     material_segments = list(xxpipe_profile_data.get("material_segments", []) or [])
 
     def sx(mc):
-        return _profile_meters_to_paper_mm(mc, scale_x)
+        return _profile_meters_to_paper_mm(float(mc) - x_origin_mc, scale_x)
 
     def sy(elev):
         return _profile_meters_to_paper_mm(elev, scale_y)
@@ -7830,7 +7874,7 @@ def _draw_xxpipe_profile_on_msp(
     layer_centerline = layer_prefix + "管中心线"
 
     for hy in h_line_y_values:
-        msp.add_line((-40, hy), (sx(0), hy), dxfattribs={"layer": layer_grid})
+        msp.add_line((-40, hy), (0.0, hy), dxfattribs={"layer": layer_grid})
     msp.add_line((-40, 0), (-40, line_height), dxfattribs={"layer": layer_grid})
     msp.add_line((0, 0), (0, line_height), dxfattribs={"layer": layer_grid})
 
@@ -7858,7 +7902,7 @@ def _draw_xxpipe_profile_on_msp(
         msp.add_line((sx(station_mc), y0), (sx(station_mc), y1), dxfattribs={"layer": layer_grid})
 
     for hy in h_line_y_values:
-        msp.add_line((sx(0), hy), (sx(last_mc), hy), dxfattribs={"layer": layer_grid})
+        msp.add_line((0.0, hy), (sx(last_mc), hy), dxfattribs={"layer": layer_grid})
 
     if len(centerline_points) >= 2:
         msp.add_lwpolyline(
@@ -7963,6 +8007,7 @@ def _draw_profile_on_msp(
     layer_prefix="",
     export_mode=None,
     xxpipe_profile_data=None,
+    x_origin_mc=0.0,
 ):
     """在 modelspace 上绘制纵断面表格（核心绘图逻辑）。
 
@@ -7976,6 +8021,7 @@ def _draw_profile_on_msp(
             nodes,
             settings,
             station_prefix,
+            x_origin_mc=x_origin_mc,
             xxpipe_profile_data=xxpipe_profile_data,
             layer_prefix=layer_prefix,
         )
@@ -7991,9 +8037,10 @@ def _draw_profile_on_msp(
     scale_y = settings.get("scale_y", 1)
     enabled_row_ids, row_layout, _total_height, line_height, h_line_y_values = _build_profile_row_layout(settings)
     first_col_x_offset = text_height + 1.3
+    x_origin_mc = float(x_origin_mc or 0.0)
 
     def sx(mc):
-        return _profile_meters_to_paper_mm(mc, scale_x)
+        return _profile_meters_to_paper_mm(float(mc) - x_origin_mc, scale_x)
 
     def sy(elev):
         return _profile_meters_to_paper_mm(elev, scale_y)
@@ -8009,7 +8056,7 @@ def _draw_profile_on_msp(
 
     # ======== 1. 表头区域线框 ========
     for hy in h_line_y_values:
-        msp.add_line((-40, hy), (sx(0), hy), dxfattribs={"layer": layer_grid})
+        msp.add_line((-40, hy), (0.0, hy), dxfattribs={"layer": layer_grid})
     msp.add_line((-40, 0), (-40, line_height), dxfattribs={"layer": layer_grid})
     msp.add_line((0, 0), (0, line_height), dxfattribs={"layer": layer_grid})
 
@@ -8060,7 +8107,7 @@ def _draw_profile_on_msp(
 
     # ======== 3. 全宽水平线 ========
     for hy in h_line_y_values:
-        msp.add_line((sx(0), hy), (sx(last_mc), hy), dxfattribs={"layer": layer_grid})
+        msp.add_line((0.0, hy), (sx(last_mc), hy), dxfattribs={"layer": layer_grid})
 
     # ======== 4. 渠底/渠顶/水面折线 ========
     bottom_pts = [(sx(n.station_MC), sy(n.bottom_elevation))
@@ -8150,7 +8197,12 @@ def _draw_profile_on_msp(
 
         if rid == "slope":
             for segment in slope_segments:
-                mid_mc = (segment["start_mc"] + segment["end_mc"]) / 2.0
+                mid_mc = float(
+                    segment.get(
+                        "mid_mc",
+                        (segment["start_mc"] + segment["end_mc"]) / 2.0,
+                    )
+                )
                 msp.add_text(segment["text"], dxfattribs=text_attr_no_rot).set_placement(
                     (sx(mid_mc), y_pos), align=ezdxf.enums.TextEntityAlignment.MIDDLE
                 )
@@ -8301,6 +8353,7 @@ def export_longitudinal_profile_dxf(panel):
         _ensure_profile_layers(doc)
 
         if tail_pressure_split_context:
+            xxpipe_profile_data = tail_pressure_split_context.get("xxpipe_profile_data")
             _draw_tail_pressure_split_profile_on_msp(
                 msp,
                 tail_pressure_split_context["channel_nodes"],
@@ -8696,7 +8749,12 @@ def _export_longitudinal_txt_to_path(
 
             if rid == "slope":
                 for segment in slope_segments:
-                    mid_mc = (segment["start_mc"] + segment["end_mc"]) / 2.0
+                    mid_mc = float(
+                        segment.get(
+                            "mid_mc",
+                            (segment["start_mc"] + segment["end_mc"]) / 2.0,
+                        )
+                    )
                     lines.append(f"-text j mc {fmt(sx(mid_mc))},{fmt(y_pos)} {s_height} 0 {segment['text']} ")
                 lines.append("")
                 continue
@@ -9712,8 +9770,13 @@ def export_combined_dxf(panel):
         fluent_info(parent_window, "警告", "没有数据可导出，请先执行计算")
         return
 
+    xxpipe_profile_nodes = None
     if export_mode == "xxpipe":
-        valid_nodes = list(nodes)
+        xxpipe_profile_nodes = _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=nodes)
+        if not xxpipe_profile_nodes:
+            fluent_info(parent_window, "警告", "没有可用于 xx管 纵断面导出的节点数据。")
+            return
+        valid_nodes = list(xxpipe_profile_nodes)
     else:
         valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
         if not valid_nodes:
@@ -9744,7 +9807,7 @@ def export_combined_dxf(panel):
         station_prefix = ""
     summary_nodes, summary_nodes_source = _resolve_section_summary_source_nodes(panel, fallback_nodes=nodes)
     _record_section_summary_runtime_debug(panel, summary_nodes, summary_nodes_source)
-    profile_nodes = summary_nodes if export_mode == "xxpipe" else nodes
+    profile_nodes = xxpipe_profile_nodes if export_mode == "xxpipe" else nodes
     profile_valid_nodes = profile_nodes if export_mode == "xxpipe" else valid_nodes
     ip_source_nodes = summary_nodes if export_mode == "xxpipe" else nodes
     xxpipe_profile_data = None
@@ -9833,6 +9896,7 @@ def export_combined_dxf(panel):
         # ======== A. 纵断面表格（顶部，原点(0,0)） ========
         try:
             if tail_pressure_split_context:
+                xxpipe_profile_data = tail_pressure_split_context.get("xxpipe_profile_data")
                 prof_w, prof_h = _draw_tail_pressure_split_profile_on_msp(
                     msp,
                     tail_pressure_split_context["channel_nodes"],

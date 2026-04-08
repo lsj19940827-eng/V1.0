@@ -327,6 +327,7 @@ class PressurePipePanel(QWidget):
         self._export_plain_text = ""
         self._batch_worker: _BatchWorker | None = None
         self._initial_sized = False
+        self._initial_help_rendered = False
         self._cases = [self._default_case()]
         self._current_case_idx = 0
         self._all_results = []
@@ -377,6 +378,9 @@ class PressurePipePanel(QWidget):
         if not self._initial_sized:
             self._initial_sized = True
             QTimer.singleShot(0, self._auto_fit_input_width)
+        if not self._initial_help_rendered:
+            # 启动阶段先完成主窗口装配，首次真正显示该页时再渲染帮助内容。
+            QTimer.singleShot(0, self._ensure_initial_help_rendered)
 
     def _auto_fit_input_width(self):
         """根据内容实际 sizeHint 自动设置左侧面板初始宽度"""
@@ -773,11 +777,15 @@ class PressurePipePanel(QWidget):
         t2l.addWidget(self.batch_log)
         self.notebook.addTab(t2, "批量计算日志")
 
-        self._show_initial_help()
-
     # ----------------------------------------------------------------
     # 辅助 UI
     # ----------------------------------------------------------------
+    def _ensure_initial_help_rendered(self):
+        """首次真正显示面板时再补初始帮助，避免阻塞主窗口启动。"""
+        if self._initial_help_rendered:
+            return
+        self._show_initial_help()
+
     def _field(self, lay, label, default=""):
         r = QHBoxLayout()
         l = QLabel(label)
@@ -1272,6 +1280,7 @@ class PressurePipePanel(QWidget):
 
     def _show_initial_help(self):
         """初始帮助页：含 GB 50288-2018 与 GB/T 20203-2017 摘要"""
+        self._initial_help_rendered = True
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         h = HelpPageBuilder("有压管道水力计算", '请输入参数后点击"计算"按钮')
 

@@ -24,6 +24,13 @@ if str(SIPHON_ROOT) not in sys.path:
 import app_渠系计算前端.water_profile.water_profile_dialogs as dialog_mod
 from app_渠系计算前端.water_profile.water_profile_dialogs import PressurePipeConfigDialog
 from dxf_parser import DxfParser
+WATER_PROFILE_ROOT = ROOT / "推求水面线"
+if str(WATER_PROFILE_ROOT) not in sys.path:
+    sys.path.insert(0, str(WATER_PROFILE_ROOT))
+
+from models.data_models import ChannelNode
+from models.enums import InOutType, StructureType
+from utils.pressure_pipe_extractor import PressurePipeDataExtractor
 
 
 @pytest.fixture
@@ -51,6 +58,36 @@ class _FakeManager:
 
     def get_all_pipe_names(self):
         return []
+
+
+def _make_extractor_node(flow_section, name, structure, in_out, diameter=0.8, flow=0.49):
+    """构造用于提取有压组的最小节点。"""
+    node = ChannelNode()
+    node.flow_section = flow_section
+    node.name = name
+    node.structure_type = StructureType.from_string(structure)
+    node.in_out = in_out
+    node.flow = flow
+    node.turn_radius = 0.0
+    node.turn_angle = 0.0
+    node.section_params = {
+        "D": diameter,
+        "in_out_raw": in_out.value if hasattr(in_out, "value") else str(in_out),
+    }
+    return node
+
+
+def _set_station_point(node, station_mc, x, y):
+    """补齐桩号和平面坐标。"""
+    node.station_MC = float(station_mc)
+    node.x = float(x)
+    node.y = float(y)
+    return node
+
+
+def _make_settings(channel_level):
+    """构造最小设置对象。"""
+    return SimpleNamespace(channel_level=channel_level)
 
 
 def _build_route_nodes():
@@ -257,6 +294,159 @@ def test_pressure_pipe_config_dialog_imports_reverse_longitudinal_dxf(monkeypatc
     imported = dialog.get_longitudinal_nodes_dict()[route_key]
     assert imported[0]["chainage"] == pytest.approx(0.0)
     assert imported[-1]["chainage"] == pytest.approx(30.0)
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_non_route_import_uses_station_mc_from_extracted_group_points(monkeypatch):
+    """普通命名有压组导入时，也应优先按项目桩号对齐。"""
+    _get_qapp()
+    inlet = _set_station_point(
+        _make_extractor_node("8", "三清庙", "有压管道", InOutType.INLET),
+        12722.465,
+        3469698.1,
+        100.0,
+    )
+    outlet = _set_station_point(
+        _make_extractor_node("8", "三清庙", "有压管道", InOutType.OUTLET),
+        12762.465,
+        3469738.1,
+        100.0,
+    )
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [inlet, outlet],
+        settings=_make_settings("支渠"),
+    )
+    assert len(groups) == 1
+    group = groups[0]
+
+    class _FakeParser:
+        @staticmethod
+        def get_longitudinal_profile_start_x(_filepath):
+            return 3469698.1
+
+        @staticmethod
+        def parse_longitudinal_profile(_filepath, chainage_offset=0.0):
+            turn_type = SimpleNamespace(name="NONE")
+            base_x_values = [3469698.1, 3469738.1]
+            nodes = [
+                SimpleNamespace(
+                    chainage=base_x + chainage_offset,
+                    elevation=394.5 - index,
+                    vertical_curve_radius=0.0,
+                    turn_type=turn_type,
+                    turn_angle=0.0,
+                    slope_before=0.0,
+                    slope_after=0.0,
+                    arc_center_s=None,
+                    arc_center_z=None,
+                    arc_end_chainage=None,
+                    arc_theta_rad=None,
+                )
+                for index, base_x in enumerate(base_x_values)
+            ]
+            return nodes, "测试导入"
+
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=[],
+        manager=_FakeManager(),
+        xxpipe_route_mode=False,
+    )
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *_args, **_kwargs: ("D:/fake/normal-group-import.dxf", "DXF文件 (*.dxf)")),
+    )
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_args, **_kwargs: None))
+    monkeypatch.setattr(dialog_mod, "fluent_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(dialog_mod, "fluent_question", lambda *_args, **_kwargs: True)
+    monkeypatch.setitem(sys.modules, "dxf_parser", SimpleNamespace(DxfParser=_FakeParser))
+
+    dialog._import_longitudinal_dxf(group.storage_key, group.ip_points)
+
+    imported = dialog.get_longitudinal_nodes_dict()[group.storage_key]
+    assert imported[0]["chainage"] == pytest.approx(12722.465)
+    assert imported[-1]["chainage"] == pytest.approx(12762.465)
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_rejects_non_route_import_when_chainage_stays_in_raw_coordinate_space(monkeypatch):
+    """导入结果若仍停留在原始坐标空间，应直接报错并中止保存。"""
+    _get_qapp()
+
+    class _FakeParser:
+        @staticmethod
+        def get_longitudinal_profile_start_x(_filepath):
+            return 3469698.1
+
+        @staticmethod
+        def parse_longitudinal_profile(_filepath, chainage_offset=0.0):
+            _ = chainage_offset
+            turn_type = SimpleNamespace(name="NONE")
+            nodes = [
+                SimpleNamespace(
+                    chainage=3469698.1,
+                    elevation=394.5,
+                    vertical_curve_radius=0.0,
+                    turn_type=turn_type,
+                    turn_angle=0.0,
+                    slope_before=0.0,
+                    slope_after=0.0,
+                    arc_center_s=None,
+                    arc_center_z=None,
+                    arc_end_chainage=None,
+                    arc_theta_rad=None,
+                ),
+                SimpleNamespace(
+                    chainage=3469738.1,
+                    elevation=393.5,
+                    vertical_curve_radius=0.0,
+                    turn_type=turn_type,
+                    turn_angle=0.0,
+                    slope_before=0.0,
+                    slope_after=0.0,
+                    arc_center_s=None,
+                    arc_center_z=None,
+                    arc_end_chainage=None,
+                    arc_theta_rad=None,
+                ),
+            ]
+            return nodes, "测试导入"
+
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=[],
+        manager=_FakeManager(),
+        xxpipe_route_mode=False,
+    )
+    errors = []
+    ip_points = [
+        {"x": 3469698.1, "y": 100.0, "turn_angle": 0.0, "station_mc": 12722.465},
+        {"x": 3469738.1, "y": 100.0, "turn_angle": 0.0, "station_mc": 12762.465},
+    ]
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *_args, **_kwargs: ("D:/fake/raw-coordinate-import.dxf", "DXF文件 (*.dxf)")),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        staticmethod(lambda *_args: errors.append(_args[2])),
+    )
+    monkeypatch.setattr(dialog_mod, "fluent_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(dialog_mod, "fluent_question", lambda *_args, **_kwargs: True)
+    monkeypatch.setitem(sys.modules, "dxf_parser", SimpleNamespace(DxfParser=_FakeParser))
+
+    dialog._import_longitudinal_dxf("三清庙", ip_points)
+
+    assert errors
+    assert "原始坐标" in errors[0]
+    assert "三清庙" not in dialog.get_longitudinal_nodes_dict()
 
     dialog.close()
     dialog.deleteLater()

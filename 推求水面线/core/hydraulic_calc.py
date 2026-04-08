@@ -132,11 +132,33 @@ class HydraulicCalculator:
         identity = str(value.get("identity", "") or "").strip()
         if not enabled or not identity:
             return {}
+        def _coerce_row_index(raw_value) -> int:
+            """把行号字段规范为整数，缺失时回退到 -1。"""
+            if raw_value is None:
+                return -1
+            if isinstance(raw_value, str) and not raw_value.strip():
+                return -1
+            try:
+                return int(raw_value)
+            except (TypeError, ValueError):
+                return -1
         normalized = {
             "enabled": True,
             "identity": identity,
+            "storage_key": str(value.get("storage_key", "") or identity).strip() or identity,
+            "display_name": str(value.get("display_name", "") or "").strip(),
+            "group_mode": str(value.get("group_mode", "") or "unnamed_row_segment").strip(),
+            "data_mode": str(value.get("data_mode", "") or "").strip(),
+            "applied_at": str(value.get("applied_at", "") or "").strip(),
+            "calc_steps": str(value.get("calc_steps", "") or "").strip(),
+            "target_row_index": _coerce_row_index(value.get("target_row_index", -1)),
+            "upstream_row_index": _coerce_row_index(value.get("upstream_row_index", -1)),
         }
         for field_name in (
+            "Q",
+            "D",
+            "total_length",
+            "pipe_velocity",
             "friction_loss",
             "total_bend_loss",
             "local_loss",
@@ -166,7 +188,11 @@ class HydraulicCalculator:
                 params.get("pressure_pipe_window_override", {})
             )
         if override:
-            setattr(node, "pressure_pipe_window_override", copy.deepcopy(override))
+            normalized_copy = copy.deepcopy(override)
+            setattr(node, "pressure_pipe_window_override", normalized_copy)
+            params = getattr(node, "section_params", None)
+            if isinstance(params, dict):
+                params["pressure_pipe_window_override"] = copy.deepcopy(override)
         return override
 
     def _should_calculate_bend_loss(self, node: Optional[ChannelNode]) -> bool:

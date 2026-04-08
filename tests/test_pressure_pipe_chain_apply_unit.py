@@ -345,6 +345,257 @@ def test_apply_pressure_pipe_member_result_writes_chain_row_override():
     assert panel._pressure_pipe_calc_done["flow2-row4"] is True
 
 
+def test_apply_pressure_pipe_member_result_writes_chain_prefix_override_to_special_inlet_row():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._pressure_pipe_calc_done = {}
+    panel._normalize_pressure_pipe_window_override = lambda payload: dict(payload or {})
+    panel._set_pressure_pipe_window_override = (
+        lambda node, override: (
+            setattr(node, "pressure_pipe_window_override", dict(override or {})),
+            node.section_params.__setitem__("pressure_pipe_window_override", dict(override or {})),
+        )
+    )
+    panel._build_pressure_pipe_window_override_payload = (
+        WaterProfilePanel._build_pressure_pipe_window_override_payload.__get__(panel, WaterProfilePanel)
+    )
+    panel._ensure_pressure_pipe_row_identity = (
+        lambda node, idx: setattr(node, "pressure_pipe_row_identity", f"flow1-row{idx + 1}")
+    )
+
+    node = SimpleNamespace(
+        name="大石包",
+        section_params={},
+        pressure_pipe_window_override={},
+        head_loss_friction=0.0,
+        head_loss_bend=0.0,
+        head_loss_local=0.0,
+        head_loss_siphon=0.0,
+        external_head_loss=None,
+        head_loss_total=0.0,
+        head_loss_reserve=0.0,
+        head_loss_gate=0.0,
+    )
+    group = SimpleNamespace(
+        group_mode="named_group",
+        target_row_index=1,
+        upstream_row_index=0,
+    )
+    record = {
+        "identity": "1::苟家湾::rows83",
+        "display_name": "苟家湾（前缀段）",
+        "storage_key": "1::苟家湾::rows83",
+        "status": "success",
+        "writeback_enabled": True,
+        "group_mode": "chain_prefix_member",
+        "target_row_index": 1,
+        "upstream_row_index": 0,
+        "data_mode": "链前缀段",
+        "Q": 0.32,
+        "D": 1.0,
+        "total_length": 21.6,
+        "pipe_velocity": 0.41,
+        "friction_loss": 0.3188,
+        "total_bend_loss": 0.0,
+        "local_loss": 0.0,
+        "inlet_transition_loss": 0.0,
+        "outlet_transition_loss": 0.0,
+        "total_head_loss": 0.3188,
+        "friction_details": {"method": "gb50288", "hf": 0.3188},
+        "bend_details": {},
+        "local_details": {"method": "chain_prefix_member", "hj": 0.0},
+    }
+
+    changed = WaterProfilePanel._apply_pressure_pipe_member_result(panel, node, group, record)
+
+    assert changed is True
+    assert node.section_params["pressure_pipe_window_override"]["identity"] == "1::苟家湾::rows83"
+    assert node.section_params["pressure_pipe_window_override"]["group_mode"] == "chain_prefix_member"
+    assert abs(node.head_loss_friction - 0.3188) < 1e-9
+    assert abs(node.head_loss_total - 0.3188) < 1e-9
+    assert node.head_loss_siphon == 0.0
+    assert panel._pressure_pipe_calc_done["1::苟家湾::rows83"] is True
+
+
+def test_get_pressure_pipe_display_context_uses_prefix_override_on_special_inlet_row():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._get_current_channel_level_text = lambda settings=None: "支渠"
+
+    node = SimpleNamespace(
+        name="大石包",
+        flow_section="1",
+        structure_type=SimpleNamespace(value="定向钻"),
+        section_params={
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": "1::苟家湾::rows83",
+                "storage_key": "1::苟家湾::rows83",
+                "display_name": "苟家湾（前缀段）",
+                "group_mode": "chain_prefix_member",
+                "data_mode": "链前缀段",
+                "target_row_index": 1,
+                "upstream_row_index": 0,
+                "Q": 0.32,
+                "D": 1.0,
+                "total_length": 21.6,
+                "pipe_velocity": 0.41,
+                "friction_loss": 0.3188,
+                "total_bend_loss": 0.0,
+                "local_loss": 0.0,
+                "inlet_transition_loss": 0.0,
+                "outlet_transition_loss": 0.0,
+                "total_head_loss": 0.3188,
+            }
+        },
+        pressure_pipe_window_override={},
+        head_loss_siphon=0.0,
+        head_loss_friction=0.3188,
+        head_loss_bend=0.0,
+        head_loss_local=0.0,
+        head_loss_total=0.3188,
+        head_loss_reserve=0.0,
+        head_loss_gate=0.0,
+    )
+
+    context = WaterProfilePanel._get_pressure_pipe_display_context(panel, node, row_index=0)
+
+    assert context["display_loss"] == 0.3188
+    assert context["is_row_sum"] is True
+    assert context["formula_term_loss"] == 0.0
+    assert WaterProfilePanel._is_pressure_pipe_display_locked_node(node, "支渠") is True
+
+
+def test_calculate_pressure_chain_prefix_member_result_writes_to_special_inlet_row():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    captured = {}
+    pressure_calc_mod = types.ModuleType("core.pressure_pipe_calc")
+    pressure_calc_mod.PIPE_MATERIALS = {"预应力钢筒混凝土管": {}}
+
+    def _calc_friction_loss(Q_m3s, D_m, L_m, material_key):
+        captured["Q"] = Q_m3s
+        captured["D"] = D_m
+        captured["L"] = L_m
+        captured["material_key"] = material_key
+        return 0.2468, {"hf": 0.2468, "L": L_m}
+
+    pressure_calc_mod.calc_friction_loss = _calc_friction_loss
+    pressure_calc_mod.calc_pipe_velocity = lambda Q_m3s, D_m: 0.4075
+    saved_pressure_calc = sys.modules.get("core.pressure_pipe_calc")
+    sys.modules["core.pressure_pipe_calc"] = pressure_calc_mod
+
+    pressure_common_mod = types.ModuleType("utils.pressure_pipe_common")
+    pressure_common_mod.resolve_pressure_pipe_material = (
+        lambda raw_material_key, _pipe_materials, default_material="": {
+            "canonical_key": raw_material_key or default_material,
+            "display_value": raw_material_key or default_material,
+            "used_default": False,
+        }
+    )
+    saved_pressure_common = sys.modules.get("utils.pressure_pipe_common")
+    sys.modules["utils.pressure_pipe_common"] = pressure_common_mod
+
+    try:
+        nodes = [
+            SimpleNamespace(
+                name="苟家湾",
+                flow=0.32,
+                station_MC=100.0,
+                arc_length=0.0,
+                section_params={},
+            ),
+            SimpleNamespace(
+                name="大石包",
+                flow=0.32,
+                station_MC=120.0,
+                arc_length=0.0,
+                section_params={},
+            ),
+            SimpleNamespace(
+                name="苟家湾",
+                flow=0.32,
+                station_MC=180.0,
+                arc_length=0.0,
+                section_params={"D": 1.0, "pipe_material": "预应力钢筒混凝土管"},
+            ),
+        ]
+        prefix_member = SimpleNamespace(
+            identity="1::苟家湾::rows83",
+            storage_key="1::苟家湾::rows83",
+            display_name="苟家湾（前缀段）",
+            base_display_name="苟家湾",
+            flow_section="1",
+            structure_type="有压管道",
+            member_role="prefix_segment",
+            member_type="named_group",
+            target_row_index=0,
+            prefix_target_row_index=0,
+            prefix_end_row_index=1,
+            group=SimpleNamespace(
+                design_flow=0.32,
+                diameter=0.0,
+                material_key="",
+                route_key="",
+            ),
+        )
+        later_member = SimpleNamespace(
+            identity="1::苟家湾::rows86-115",
+            storage_key="1::苟家湾::rows86-115",
+            display_name="苟家湾（后段）",
+            base_display_name="苟家湾",
+            flow_section="1",
+            structure_type="有压管道",
+            member_role="regular_segment",
+            member_type="named_group",
+            target_row_index=2,
+            group=SimpleNamespace(
+                design_flow=0.32,
+                diameter=1.0,
+                material_key="预应力钢筒混凝土管",
+            ),
+            row_indices=[2],
+            start_row_index=2,
+        )
+
+        record = WaterProfilePanel._calculate_pressure_chain_prefix_member_result(
+            panel,
+            prefix_member,
+            nodes,
+            None,
+            chain_members=[prefix_member, later_member],
+            longitudinal_nodes_dict={},
+            route_profile_segments_by_key={},
+        )
+    finally:
+        if saved_pressure_calc is None:
+            sys.modules.pop("core.pressure_pipe_calc", None)
+        else:
+            sys.modules["core.pressure_pipe_calc"] = saved_pressure_calc
+        if saved_pressure_common is None:
+            sys.modules.pop("utils.pressure_pipe_common", None)
+        else:
+            sys.modules["utils.pressure_pipe_common"] = saved_pressure_common
+
+    assert record["status"] == "success"
+    assert record["writeback_enabled"] is True
+    assert record["group_mode"] == "chain_prefix_member"
+    assert record["target_row_index"] == 1
+    assert record["upstream_row_index"] == 0
+    assert abs(record["total_length"] - 20.0) < 1e-9
+    assert abs(record["friction_loss"] - 0.2468) < 1e-9
+    assert record["D"] == 1.0
+    assert record["material_key"] == "预应力钢筒混凝土管"
+    assert "大石包" in record["note"]
+    assert captured == {
+        "Q": 0.32,
+        "D": 1.0,
+        "L": 20.0,
+        "material_key": "预应力钢筒混凝土管",
+    }
+
+
 def test_apply_pressure_pipe_results_falls_back_to_batch_chain_records():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -563,3 +814,62 @@ def test_build_pressure_pipe_chain_descriptors_uses_global_chain_name_for_cross_
     assert descriptor["display_name"] == "连续承压链1"
     assert descriptor["flow_section"] == "2、3"
     assert descriptor["chain_id"].startswith("chain1-")
+
+
+def test_build_pressure_pipe_chain_summary_hides_total_for_incomplete_chain():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._get_pressure_chain_member_identity = WaterProfilePanel._get_pressure_chain_member_identity
+
+    descriptor = {
+        "chain_id": "chain1-r1-5",
+        "flow_section": "1",
+        "display_name": "连续承压链1",
+        "members": [
+            SimpleNamespace(
+                identity="flow1-row1",
+                display_name="苟家湾（起点锚点）",
+                structure_type="有压管道",
+            ),
+            SimpleNamespace(
+                identity="flow1-row3",
+                display_name="大石包",
+                structure_type="定向钻",
+            ),
+            SimpleNamespace(
+                identity="1::苟家湾::rows4-5",
+                display_name="苟家湾（后段）",
+                structure_type="有压管道",
+            ),
+        ],
+    }
+    record_map = {
+        "flow1-row1": {
+            "identity": "flow1-row1",
+            "status": "success",
+            "writeback_enabled": False,
+            "note": "链起点锚点，本行不写回",
+        },
+        "flow1-row3": {
+            "identity": "flow1-row3",
+            "status": "success",
+            "writeback_enabled": True,
+            "total_head_loss": 0.5743,
+        },
+        "1::苟家湾::rows4-5": {
+            "identity": "1::苟家湾::rows4-5",
+            "status": "failed",
+            "writeback_enabled": False,
+            "error": "缺少有效纵断面",
+        },
+    }
+
+    summary = WaterProfilePanel._build_pressure_pipe_chain_summary(panel, descriptor, record_map)
+
+    assert summary["chain_complete"] is False
+    assert summary["chain_status"] == "incomplete"
+    assert summary["total_head_loss"] is None
+    assert summary["success_count"] == 2
+    assert summary["failed_count"] == 1
+    assert summary["member_results"][0]["display_name"] == "苟家湾（起点锚点）"
+    assert summary["member_results"][2]["error"] == "缺少有效纵断面"

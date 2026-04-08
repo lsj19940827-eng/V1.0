@@ -1418,6 +1418,57 @@ class PressurePipeConfigDialog(QDialog):
         except (ValueError, TypeError):
             return default
 
+    @classmethod
+    def _resolve_ip_point_chainage(cls, point, prefer_station: bool = True):
+        """优先按项目桩号读取平面点链长，缺失时再回退到原始 X。"""
+        if not isinstance(point, dict):
+            return None
+        candidates = ("station_mc", "x") if prefer_station else ("x", "station_mc")
+        for key in candidates:
+            value = cls._safe_float(point.get(key, None), None)
+            if value is not None and math.isfinite(value):
+                return float(value)
+        return None
+
+    @classmethod
+    def _resolve_ip_points_chainage_range(cls, ip_points, prefer_station: bool = True):
+        """提取平面点的起止链长范围。"""
+        values = []
+        for point in list(ip_points or []):
+            chainage = cls._resolve_ip_point_chainage(point, prefer_station=prefer_station)
+            if chainage is None:
+                continue
+            values.append(float(chainage))
+        if len(values) < 2:
+            return None
+        return float(values[0]), float(values[-1])
+
+    @classmethod
+    def _raise_if_import_stays_in_raw_coordinate_space(cls, pipe_label: str, ip_points, long_nodes):
+        """识别导入结果仍停留在原始工程坐标的情况，避免错误数据被保存。"""
+        if not long_nodes:
+            return
+
+        station_range = cls._resolve_ip_points_chainage_range(ip_points, prefer_station=True)
+        raw_x_range = cls._resolve_ip_points_chainage_range(ip_points, prefer_station=False)
+        if station_range is None or raw_x_range is None:
+            return
+
+        station_start, station_end = station_range
+        raw_x_start, raw_x_end = raw_x_range
+        if abs(station_start - raw_x_start) <= 100.0 and abs(station_end - raw_x_end) <= 100.0:
+            return
+
+        long_start = cls._safe_float(getattr(long_nodes[0], "chainage", None), None)
+        long_end = cls._safe_float(getattr(long_nodes[-1], "chainage", None), None)
+        if long_start is None or long_end is None:
+            return
+
+        if abs(long_start - raw_x_start) <= 1.0 and abs(long_end - raw_x_end) <= 1.0:
+            raise ValueError(
+                f"{pipe_label} 导入后的桩号仍停留在原始坐标空间，请检查 DXF 对齐起点后重新导入。"
+            )
+
     @staticmethod
     def _parse_optional_float_text(text: str):
         """把输入框文本解析成浮点数，空字符串返回 None。"""
@@ -3317,7 +3368,9 @@ class PressurePipeConfigDialog(QDialog):
                         x_start = first_vertex.dxf.location.x
                     else:
                         raise ValueError("错误：无法解析多段线顶点")
-                mc_inlet = ip_points[0].get('station_mc', ip_points[0].get('x', 0.0))
+                mc_inlet = self._resolve_ip_point_chainage(ip_points[0], prefer_station=True)
+                if mc_inlet is None:
+                    mc_inlet = self._safe_float(ip_points[0].get('x', 0.0), 0.0)
                 if self._xxpipe_route_mode:
                     resolved_anchor = self._resolve_xxpipe_route_import_anchor_station(
                         pipe_name,
@@ -3332,6 +3385,12 @@ class PressurePipeConfigDialog(QDialog):
             if not long_nodes:
                 QMessageBox.critical(self, "导入失败", message or "DXF文件中未找到纵断面数据")
                 return
+
+            self._raise_if_import_stays_in_raw_coordinate_space(
+                pipe_label,
+                ip_points,
+                long_nodes,
+            )
 
             long_nodes_dict = []
             for node in long_nodes:
@@ -3354,8 +3413,10 @@ class PressurePipeConfigDialog(QDialog):
                 self._validate_xxpipe_route_import_coverage(pipe_name, long_nodes_dict)
 
             if not self._xxpipe_route_mode and ip_points and len(ip_points) >= 2:
-                ip_start = ip_points[0].get('x', 0.0)
-                ip_end = ip_points[-1].get('x', 0.0)
+                expected_range = self._resolve_ip_points_chainage_range(ip_points, prefer_station=True)
+                if expected_range is None:
+                    expected_range = self._resolve_ip_points_chainage_range(ip_points, prefer_station=False)
+                ip_start, ip_end = expected_range if expected_range is not None else (0.0, 0.0)
                 long_start = long_nodes[0].chainage
                 long_end = long_nodes[-1].chainage
 

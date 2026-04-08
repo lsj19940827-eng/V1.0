@@ -131,6 +131,31 @@ def test_pressure_pipe_panel_uses_external_case_strip_and_supports_custom_labels
     _flush_events(4)
 
 
+def test_pressure_pipe_panel_defers_initial_help_render_until_first_show(monkeypatch):
+    _get_qapp()
+    panel_cls = _load_panel_class("pressure_pipe", "PressurePipePanel")
+    calls = []
+
+    def _fake_show_initial_help(self):
+        calls.append("initial-help")
+
+    monkeypatch.setattr(panel_cls, "_show_initial_help", _fake_show_initial_help)
+
+    panel = panel_cls()
+
+    assert calls == []
+
+    panel.resize(1366, 900)
+    panel.show()
+    _flush_events(6)
+
+    assert calls == ["initial-help"]
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
 def test_open_channel_panel_keeps_last_added_chip_visible_and_active_during_incremental_adds():
     _get_qapp()
     panel_cls = _load_panel_class("open_channel", "OpenChannelPanel")

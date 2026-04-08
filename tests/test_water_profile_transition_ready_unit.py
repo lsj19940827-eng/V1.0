@@ -1058,3 +1058,343 @@ def test_refresh_pressure_pipe_controls_treats_prepared_topology_as_ready():
 
     assert panel.btn_pressure_pipe_calc.enabled is True
     assert "请先插入渐变段" not in panel.btn_pressure_pipe_calc.tooltip
+
+
+def test_collect_pending_pressure_pipe_execute_members_allows_completed_prefix_writeback():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    identity = "1::苟家湾::rows83"
+    start_node = SimpleNamespace(
+        name="苟家湾",
+        structure_type=SimpleNamespace(value="有压管道"),
+        section_params={},
+        pressure_pipe_window_override={},
+        head_loss_siphon=0.0,
+    )
+    next_node = SimpleNamespace(
+        name="大石包",
+        structure_type=SimpleNamespace(value="定向钻"),
+        section_params={
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": identity,
+                "storage_key": identity,
+                "display_name": "苟家湾（前缀段）",
+                "group_mode": "chain_prefix_member",
+                "target_row_index": 1,
+                "upstream_row_index": 0,
+                "total_head_loss": 0.3188,
+            }
+        },
+        pressure_pipe_window_override={},
+        head_loss_siphon=0.0,
+    )
+    chain_member = SimpleNamespace(
+        identity=identity,
+        display_name="苟家湾（前缀段）",
+        member_type="named_group",
+        member_role="prefix_segment",
+        structure_type="有压管道",
+        target_row_index=0,
+        prefix_target_row_index=0,
+        prefix_end_row_index=1,
+        should_generate_row_loss=True,
+        is_anchor_member=False,
+    )
+    panel._prepare_pressure_pipe_dialog_context = lambda _nodes, settings=None, show_xxpipe_warning=False: {
+        "pipe_groups": [
+            SimpleNamespace(
+                identity=identity,
+                display_name="苟家湾（前缀段）",
+                group_mode="named_group",
+                target_row_index=1,
+                outlet_row_index=-1,
+            )
+        ],
+        "chain_descriptors": [{"members": [chain_member]}],
+    }
+    panel._pressure_pipe_calc_records = {
+        "records": [
+            {
+                "identity": identity,
+                "status": "success",
+                "writeback_enabled": True,
+                "group_mode": "chain_prefix_member",
+                "target_row_index": 1,
+                "total_head_loss": 0.3188,
+            }
+        ]
+    }
+
+    pending = WaterProfilePanel._collect_pending_pressure_pipe_execute_members(
+        panel,
+        [start_node, next_node],
+        settings=None,
+    )
+
+    assert pending == []
+
+
+def test_collect_pending_pressure_pipe_execute_members_stays_ready_after_silent_recalc_override_reload():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    project_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(project_root / "推求水面线"))
+    from core.hydraulic_calc import HydraulicCalculator
+    from models.data_models import ChannelNode, ProjectSettings
+    from models.enums import StructureType, InOutType
+
+    def _make_open_channel(station_mc: float, velocity: float, name: str) -> ChannelNode:
+        node = ChannelNode()
+        node.name = name
+        node.flow_section = "1"
+        node.structure_type = StructureType.from_string("明渠-梯形")
+        node.station_MC = station_mc
+        node.velocity = velocity
+        node.water_depth = 1.3
+        node.roughness = 0.025
+        node.section_params = {"B": 2.4, "m": 1.5, "h": 1.3}
+        return node
+
+    identity = "1::苟家湾::rows83"
+    upstream = _make_open_channel(0.0, 0.85, "上游明渠")
+    target_node = ChannelNode()
+    target_node.flow_section = "1"
+    target_node.name = "大石包"
+    target_node.structure_type = StructureType.from_string("定向钻")
+    target_node.in_out = InOutType.INLET
+    target_node.station_MC = 21.6
+    target_node.flow = 0.32
+    target_node.velocity = 0.0
+    target_node.water_depth = 1.1
+    target_node.section_params = {
+        "D": 1.0,
+        "pipe_material": "球墨铸铁管",
+        "pressure_pipe_window_override": {
+            "enabled": True,
+            "identity": identity,
+            "storage_key": identity,
+            "display_name": "苟家湾（前缀段）",
+            "group_mode": "chain_prefix_member",
+            "data_mode": "链前缀段",
+            "applied_at": "2026-04-08 21:13:14",
+            "calc_steps": "prefix-step",
+            "target_row_index": 1,
+            "upstream_row_index": 0,
+            "Q": 0.32,
+            "D": 1.0,
+            "total_length": 21.6,
+            "pipe_velocity": 0.41,
+            "friction_loss": 0.3188,
+            "total_bend_loss": 0.0,
+            "local_loss": 0.0,
+            "inlet_transition_loss": 0.0,
+            "outlet_transition_loss": 0.0,
+            "total_head_loss": 0.3188,
+            "friction_details": {"method": "gb50288", "hf": 0.3188},
+            "bend_details": {},
+            "local_details": {"method": "chain_prefix_member", "hj": 0.0},
+        },
+    }
+    downstream = _make_open_channel(60.0, 0.92, "下游明渠")
+
+    settings = ProjectSettings()
+    settings.channel_level = "支渠"
+    settings.start_water_level = 100.0
+    calc = HydraulicCalculator(settings)
+    for node in (upstream, target_node, downstream):
+        calc.fill_section_params(node)
+    calc.calculate_water_profile([upstream, target_node, downstream], method="forward")
+
+    start_node = SimpleNamespace(
+        name="苟家湾",
+        structure_type=SimpleNamespace(value="有压管道"),
+        section_params={},
+        pressure_pipe_window_override={},
+        head_loss_siphon=0.0,
+    )
+    chain_member = SimpleNamespace(
+        identity=identity,
+        display_name="苟家湾（前缀段）",
+        member_type="named_group",
+        member_role="prefix_segment",
+        structure_type="有压管道",
+        target_row_index=0,
+        prefix_target_row_index=0,
+        prefix_end_row_index=1,
+        should_generate_row_loss=True,
+        is_anchor_member=False,
+    )
+    panel._prepare_pressure_pipe_dialog_context = lambda _nodes, settings=None, show_xxpipe_warning=False: {
+        "pipe_groups": [
+            SimpleNamespace(
+                identity=identity,
+                display_name="苟家湾（前缀段）",
+                group_mode="named_group",
+                target_row_index=1,
+                outlet_row_index=-1,
+            )
+        ],
+        "chain_descriptors": [{"members": [chain_member]}],
+    }
+    panel._pressure_pipe_calc_records = {
+        "records": [
+            {
+                "identity": identity,
+                "status": "success",
+                "writeback_enabled": True,
+                "group_mode": "chain_prefix_member",
+                "target_row_index": 1,
+                "total_head_loss": 0.3188,
+            }
+        ]
+    }
+
+    pending = WaterProfilePanel._collect_pending_pressure_pipe_execute_members(
+        panel,
+        [start_node, target_node],
+        settings=None,
+    )
+
+    assert pending == []
+
+
+def test_collect_pending_pressure_pipe_execute_members_blocks_missing_prefix_writeback():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    identity = "1::苟家湾::rows83"
+    start_node = SimpleNamespace(
+        name="苟家湾",
+        structure_type=SimpleNamespace(value="有压管道"),
+        section_params={},
+        pressure_pipe_window_override={},
+        head_loss_siphon=0.0,
+    )
+    next_node = SimpleNamespace(
+        name="大石包",
+        structure_type=SimpleNamespace(value="定向钻"),
+        section_params={},
+        pressure_pipe_window_override={},
+        head_loss_siphon=0.0,
+    )
+    chain_member = SimpleNamespace(
+        identity=identity,
+        display_name="苟家湾（前缀段）",
+        member_type="named_group",
+        member_role="prefix_segment",
+        structure_type="有压管道",
+        target_row_index=0,
+        prefix_target_row_index=0,
+        prefix_end_row_index=1,
+        should_generate_row_loss=True,
+        is_anchor_member=False,
+    )
+    panel._prepare_pressure_pipe_dialog_context = lambda _nodes, settings=None, show_xxpipe_warning=False: {
+        "pipe_groups": [
+            SimpleNamespace(
+                identity=identity,
+                display_name="苟家湾（前缀段）",
+                group_mode="named_group",
+                target_row_index=1,
+                outlet_row_index=-1,
+            )
+        ],
+        "chain_descriptors": [{"members": [chain_member]}],
+    }
+    panel._pressure_pipe_calc_records = {"records": []}
+
+    pending = WaterProfilePanel._collect_pending_pressure_pipe_execute_members(
+        panel,
+        [start_node, next_node],
+        settings=None,
+    )
+
+    assert pending == ["苟家湾（前缀段）"]
+
+
+def test_collect_pending_pressure_pipe_execute_members_allows_completed_named_tunnel_row_override():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    identity = "flow1-row3"
+    start_node = SimpleNamespace(
+        name="上游连接段",
+        structure_type=SimpleNamespace(value="有压管道"),
+        section_params={},
+        pressure_pipe_window_override={},
+        head_loss_siphon=0.0,
+    )
+    tunnel_node = SimpleNamespace(
+        name="唐家湾",
+        structure_type=SimpleNamespace(value="隧洞"),
+        section_params={
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": identity,
+                "storage_key": identity,
+                "display_name": "唐家湾",
+                "group_mode": "chain_tunnel_member",
+                "target_row_index": 1,
+                "upstream_row_index": 0,
+                "total_head_loss": 0.2312,
+            }
+        },
+        pressure_pipe_window_override={},
+        head_loss_siphon=0.0,
+    )
+    chain_member = SimpleNamespace(
+        identity=identity,
+        display_name="唐家湾",
+        member_type="named_group",
+        member_role="special_segment",
+        structure_type="隧洞",
+        target_row_index=1,
+        should_generate_row_loss=True,
+        is_anchor_member=False,
+    )
+    panel._prepare_pressure_pipe_dialog_context = lambda _nodes, settings=None, show_xxpipe_warning=False: {
+        "pipe_groups": [
+            SimpleNamespace(
+                identity=identity,
+                display_name="唐家湾",
+                group_mode="named_group",
+                target_row_index=1,
+                outlet_row_index=1,
+            )
+        ],
+        "chain_descriptors": [{"members": [chain_member]}],
+    }
+    panel._pressure_pipe_calc_records = {
+        "records": [
+            {
+                "identity": identity,
+                "status": "success",
+                "writeback_enabled": True,
+                "group_mode": "chain_tunnel_member",
+                "target_row_index": 1,
+                "total_head_loss": 0.2312,
+            }
+        ]
+    }
+    panel._build_pressure_pipe_execute_record_map = lambda: {
+        identity: {
+            "identity": identity,
+            "status": "success",
+            "writeback_enabled": True,
+            "group_mode": "chain_tunnel_member",
+            "target_row_index": 1,
+            "total_head_loss": 0.2312,
+        }
+    }
+
+    pending = WaterProfilePanel._collect_pending_pressure_pipe_execute_members(
+        panel,
+        [start_node, tunnel_node],
+        settings=None,
+    )
+
+    assert pending == []

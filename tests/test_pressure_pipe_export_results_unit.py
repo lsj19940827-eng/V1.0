@@ -194,6 +194,19 @@ def _install_runtime_pressure_pipe_extractor_stub():
     sys.modules["utils.pressure_pipe_extractor"] = extractor_mod
 
 
+def _restore_runtime_pressure_pipe_extractor_stub(saved_utils, saved_extractor):
+    """恢复运行期 extractor 桩，避免污染后续真实提取器测试。"""
+    if saved_extractor is None:
+        sys.modules.pop("utils.pressure_pipe_extractor", None)
+    else:
+        sys.modules["utils.pressure_pipe_extractor"] = saved_extractor
+
+    if saved_utils is None:
+        sys.modules.pop("utils", None)
+    else:
+        sys.modules["utils"] = saved_utils
+
+
 def _load_panel_class():
     patched_names = [
         "PySide6",
@@ -323,35 +336,40 @@ def test_get_pressure_pipe_export_results_matches_same_name_by_identity_without_
 
 def test_get_pressure_pipe_export_results_uses_table3_current_value_before_calc_records_and_manager():
     WaterProfilePanel = _load_panel_class()
+    saved_utils = sys.modules.get("utils")
+    saved_extractor = sys.modules.get("utils.pressure_pipe_extractor")
     _install_runtime_pressure_pipe_extractor_stub()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
-    panel._pressure_pipe_calc_records = {
-        "records": [
-            {
-                "flow_section": "3",
-                "name": "牛马道",
-                "identity": "3::牛马道",
-                "status": "success",
-                "total_head_loss": 0.111,
-            }
-        ]
-    }
-    panel._pressure_pipe_manager = SimpleNamespace(
-        to_dict=lambda: {
-            "pipes": {
-                "牛马道": {"name": "牛马道", "total_head_loss": 0.222},
-            }
+    try:
+        panel._pressure_pipe_calc_records = {
+            "records": [
+                {
+                    "flow_section": "3",
+                    "name": "牛马道",
+                    "identity": "3::牛马道",
+                    "status": "success",
+                    "total_head_loss": 0.111,
+                }
+            ]
         }
-    )
-    panel._build_settings = lambda: object()
-    panel._build_nodes_from_table = lambda: [
-        SimpleNamespace(name="牛马道", flow_section="3", is_pressure_pipe=True, head_loss_siphon=0.5627),
-    ]
+        panel._pressure_pipe_manager = SimpleNamespace(
+            to_dict=lambda: {
+                "pipes": {
+                    "牛马道": {"name": "牛马道", "total_head_loss": 0.222},
+                }
+            }
+        )
+        panel._build_settings = lambda: object()
+        panel._build_nodes_from_table = lambda: [
+            SimpleNamespace(name="牛马道", flow_section="3", is_pressure_pipe=True, head_loss_siphon=0.5627),
+        ]
 
-    result = WaterProfilePanel.get_pressure_pipe_export_results(
-        panel,
-        rows=[{"name": "牛马道", "flow_section": "3"}],
-    )
+        result = WaterProfilePanel.get_pressure_pipe_export_results(
+            panel,
+            rows=[{"name": "牛马道", "flow_section": "3"}],
+        )
+    finally:
+        _restore_runtime_pressure_pipe_extractor_stub(saved_utils, saved_extractor)
 
     assert result["3::牛马道"]["total_head_loss"] == 0.5627
     assert result["3::牛马道"]["source"] == "table3"
@@ -359,25 +377,72 @@ def test_get_pressure_pipe_export_results_uses_table3_current_value_before_calc_
 
 def test_get_pressure_pipe_export_results_uses_table3_external_head_loss_when_head_loss_siphon_missing():
     WaterProfilePanel = _load_panel_class()
+    saved_utils = sys.modules.get("utils")
+    saved_extractor = sys.modules.get("utils.pressure_pipe_extractor")
     _install_runtime_pressure_pipe_extractor_stub()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
-    panel._pressure_pipe_calc_records = {"records": []}
-    panel._pressure_pipe_manager = SimpleNamespace(to_dict=lambda: {"pipes": {}})
-    panel._build_settings = lambda: object()
-    panel._build_nodes_from_table = lambda: [
-        SimpleNamespace(
-            name="牛马道",
-            flow_section="3",
-            is_pressure_pipe=True,
-            head_loss_siphon=0.0,
-            external_head_loss=0.5627,
-        ),
-    ]
+    try:
+        panel._pressure_pipe_calc_records = {"records": []}
+        panel._pressure_pipe_manager = SimpleNamespace(to_dict=lambda: {"pipes": {}})
+        panel._build_settings = lambda: object()
+        panel._build_nodes_from_table = lambda: [
+            SimpleNamespace(
+                name="牛马道",
+                flow_section="3",
+                is_pressure_pipe=True,
+                head_loss_siphon=0.0,
+                external_head_loss=0.5627,
+            ),
+        ]
 
-    result = WaterProfilePanel.get_pressure_pipe_export_results(
-        panel,
-        rows=[{"name": "牛马道", "flow_section": "3"}],
-    )
+        result = WaterProfilePanel.get_pressure_pipe_export_results(
+            panel,
+            rows=[{"name": "牛马道", "flow_section": "3"}],
+        )
+    finally:
+        _restore_runtime_pressure_pipe_extractor_stub(saved_utils, saved_extractor)
 
     assert result["3::牛马道"]["total_head_loss"] == 0.5627
     assert result["3::牛马道"]["source"] == "table3"
+
+
+def test_get_pressure_pipe_export_results_prefers_row_identity_over_legacy_identity():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._pressure_pipe_calc_records = {
+        "records": [
+            {
+                "flow_section": "1",
+                "name": "同名管道",
+                "identity": "flow1-row3",
+                "status": "success",
+                "total_head_loss": 2.222,
+            }
+        ]
+    }
+    panel._pressure_pipe_manager = SimpleNamespace(
+        to_dict=lambda: {
+            "pipes": {
+                "1::同名管道": {
+                    "name": "同名管道",
+                    "flow_section": "1",
+                    "total_head_loss": 9.999,
+                }
+            }
+        }
+    )
+
+    result = WaterProfilePanel.get_pressure_pipe_export_results(
+        panel,
+        rows=[
+            {
+                "name": "同名管道",
+                "flow_section": "1",
+                "identity": "1::同名管道",
+                "pressure_pipe_row_identity": "flow1-row3",
+            }
+        ],
+    )
+
+    assert result["flow1-row3"]["total_head_loss"] == 2.222
+    assert result["flow1-row3"]["source"] == "calc_records"

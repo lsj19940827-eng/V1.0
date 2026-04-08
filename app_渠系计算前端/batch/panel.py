@@ -2547,13 +2547,8 @@ class BatchPanel(QWidget):
 
         self.input_table.blockSignals(False)
 
-    def _validate_duplicate_buildings(self, input_rows=None):
-        """验证建筑物重名（与原版一致：相邻同名同结构视为同一建筑物，不相邻则为重复）"""
-        if input_rows is None:
-            input_rows = self._get_all_input_data()
-        if not input_rows:
-            return True
-        # 按相邻关系分组
+    def _collect_duplicate_building_groups(self, input_rows):
+        """按相邻关系整理建筑物分组，供重名校验与导入提示共用。"""
         groups = []
         prev_key = None
         for values in input_rows:
@@ -2562,7 +2557,7 @@ class BatchPanel(QWidget):
                 prev_key = None
                 continue
             building_name = str(values[2]).strip()
-            section_type = str(values[3]).strip()
+            section_type = normalize_section_type_name(str(values[3]).strip())
             seq = str(values[0]).strip() or "?"
             segment = str(values[1]).strip() or "?"
             if not building_name or building_name == "-":
@@ -2571,32 +2566,90 @@ class BatchPanel(QWidget):
             if not section_type:
                 prev_key = None
                 continue
-            if "分水" in section_type:
-                continue
             key = (building_name, section_type)
             row_desc = f"序号{seq}(流量段{segment})"
             if key == prev_key and groups:
-                groups[-1][2].append(row_desc)
+                groups[-1]["rows"].append(row_desc)
             else:
-                groups.append((building_name, section_type, [row_desc]))
+                groups.append({
+                    "name": building_name,
+                    "section_type": section_type,
+                    "key": key,
+                    "rows": [row_desc],
+                })
                 prev_key = key
-        # 检查重复
+        return groups
+
+    def _is_allowed_pressure_pipe_chain_duplicate(self, groups, group_idxs):
+        """判断同名普通有压管道是否属于“支渠连续承压链”放开场景。"""
+        try:
+            channel_level = str(self.channel_level_combo.currentText()).strip()
+        except Exception:
+            channel_level = ""
+        if channel_level != "支渠":
+            return False
+        if not group_idxs:
+            return False
+        first_group = groups[group_idxs[0]]
+        if first_group["section_type"] != "有压管道":
+            return False
+        for left_idx, right_idx in zip(group_idxs, group_idxs[1:]):
+            for middle_group in groups[left_idx + 1:right_idx]:
+                if not is_pressure_pipe_like_section_type(middle_group["section_type"]):
+                    return False
+        return True
+
+    def _classify_duplicate_buildings(self, input_rows=None):
+        """按统一口径返回重名结果：真正风险重名与可放开的连续承压链重名。"""
+        if input_rows is None:
+            input_rows = self._get_all_input_data()
+        groups = self._collect_duplicate_building_groups(input_rows) if input_rows else []
+        result = {
+            "groups": groups,
+            "hard_duplicates": {},
+            "allowed_chain_duplicates": {},
+        }
+        if not groups:
+            return result
+
         key_to_groups = {}
-        for i, (name, stype, _) in enumerate(groups):
-            key = (name, stype)
+        for i, group in enumerate(groups):
+            key = group["key"]
+            # 分水类建筑仍沿用旧口径，不参与重名提示，但会作为链路中的拦截节点参与判断。
+            if "分水" in group["section_type"]:
+                continue
             key_to_groups.setdefault(key, []).append(i)
-        duplicates = {k: idxs for k, idxs in key_to_groups.items() if len(idxs) > 1}
+        for key, group_idxs in key_to_groups.items():
+            if len(group_idxs) <= 1:
+                continue
+            if self._is_allowed_pressure_pipe_chain_duplicate(groups, group_idxs):
+                result["allowed_chain_duplicates"][key] = group_idxs
+            else:
+                result["hard_duplicates"][key] = group_idxs
+        return result
+
+    def _format_duplicate_details(self, groups, duplicates):
+        """将重名分桶格式化成统一提示文本。"""
         if not duplicates:
-            return True
-        # 构建提示
+            return []
         dup_details = []
         for (name, stype), group_idxs in duplicates.items():
             locations = []
             for gi in group_idxs:
-                rows_str = "、".join(groups[gi][2])
+                rows_str = "、".join(groups[gi]["rows"])
                 locations.append(rows_str)
             all_locations = " ⟷ ".join(locations)
             dup_details.append(f"  「{name}」({stype}) — 在 {len(group_idxs)} 处出现：{all_locations}")
+        return dup_details
+
+    def _validate_duplicate_buildings(self, input_rows=None):
+        """验证建筑物重名，仅拦截真正风险重名。"""
+        duplicate_buckets = self._classify_duplicate_buildings(input_rows)
+        hard_duplicates = duplicate_buckets["hard_duplicates"]
+        if not hard_duplicates:
+            return True
+        groups = duplicate_buckets["groups"]
+        dup_details = self._format_duplicate_details(groups, hard_duplicates)
         dup_msg = "\n".join(dup_details)
         fluent_info(self, "建筑物重名",
                    f"检测到不同位置的建筑物使用了相同的名称和结构形式：\n\n{dup_msg}\n\n"
@@ -2605,46 +2658,13 @@ class BatchPanel(QWidget):
         return False
 
     def _validate_duplicate_buildings_warn(self):
-        """导入后检查建筑物重名（仅警告提示，不阻止操作，与原版show_warning_only=True一致）"""
-        input_rows = self._get_all_input_data()
-        if not input_rows:
-            return
-        groups = []
-        prev_key = None
-        for values in input_rows:
-            values = self._normalize_row(values, len(INPUT_HEADERS))
-            if not any(str(v).strip() for v in values):
-                prev_key = None
-                continue
-            building_name = str(values[2]).strip()
-            section_type = str(values[3]).strip()
-            seq = str(values[0]).strip() or "?"
-            segment = str(values[1]).strip() or "?"
-            if not building_name or building_name == "-":
-                prev_key = None
-                continue
-            if not section_type:
-                prev_key = None
-                continue
-            if "分水" in section_type:
-                continue
-            key = (building_name, section_type)
-            row_desc = f"序号{seq}(流量段{segment})"
-            if key == prev_key and groups:
-                groups[-1][2].append(row_desc)
-            else:
-                groups.append((building_name, section_type, [row_desc]))
-                prev_key = key
-        key_to_groups = {}
-        for i, (name, stype, _) in enumerate(groups):
-            key = (name, stype)
-            key_to_groups.setdefault(key, []).append(i)
-        duplicates = {k: idxs for k, idxs in key_to_groups.items() if len(idxs) > 1}
-        if not duplicates:
+        """导入后检查建筑物重名，仅提示真正风险重名。"""
+        duplicate_buckets = self._classify_duplicate_buildings()
+        hard_duplicates = duplicate_buckets["hard_duplicates"]
+        if not hard_duplicates:
             return
         dup_details = []
-        for (name, stype), group_idxs in duplicates.items():
-            locations = [" 、".join(groups[gi][2]) for gi in group_idxs]
+        for name, stype in hard_duplicates.keys():
             dup_details.append(f"「{name}」({stype})")
         InfoBar.warning("建筑物重名提示",
                        f"检测到重名建筑物: {', '.join(dup_details)}\n请在批量计算前修改名称以区分。",

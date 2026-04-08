@@ -189,6 +189,14 @@ class _FakeComboBox:
         self.index = index
 
 
+class _FakeTextComboBox:
+    def __init__(self, text):
+        self._text = text
+
+    def currentText(self):
+        return self._text
+
+
 class _FakeInputTable:
     def __init__(self, rows):
         self._rows = rows
@@ -317,6 +325,13 @@ def _make_input_row(module, *, section_type, building_name="穿路段", q="1.2",
     row[7] = n
     row[8] = slope
     row[13] = d
+    return row
+
+
+def _make_duplicate_row(module, *, seq, building_name, section_type, segment="1"):
+    row = _make_input_row(module, section_type=section_type, building_name=building_name)
+    row[0] = str(seq)
+    row[1] = str(segment)
     return row
 
 
@@ -522,6 +537,95 @@ def test_batch_calculate_treats_directional_drill_as_pressure_pipe_like_placehol
     assert captured["lock_state"] is False
     assert "failure_dialog_calls" not in captured
     assert "plain_info_calls" not in captured
+
+
+def test_duplicate_classifier_allows_same_named_pressure_pipe_in_branch_pressurized_chain():
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+    panel.channel_level_combo = _FakeTextComboBox("支渠")
+
+    input_rows = [
+        _make_duplicate_row(module, seq=1, building_name="有压A", section_type="有压管道"),
+        _make_duplicate_row(module, seq=2, building_name="顶管B", section_type="顶管"),
+        _make_duplicate_row(module, seq=3, building_name="定向钻C", section_type="定向钻"),
+        _make_duplicate_row(module, seq=4, building_name="有压A", section_type="有压管道"),
+    ]
+
+    buckets = BatchPanel._classify_duplicate_buildings(panel, input_rows)
+
+    assert list(buckets["hard_duplicates"].keys()) == []
+    assert list(buckets["allowed_chain_duplicates"].keys()) == [("有压A", "有压管道")]
+    assert BatchPanel._validate_duplicate_buildings(panel, input_rows) is True
+
+
+def test_duplicate_classifier_blocks_same_named_pressure_pipe_when_chain_is_broken(monkeypatch):
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+    panel.channel_level_combo = _FakeTextComboBox("支渠")
+    captured = {}
+
+    input_rows = [
+        _make_duplicate_row(module, seq=1, building_name="有压A", section_type="有压管道"),
+        _make_duplicate_row(module, seq=2, building_name="明渠B", section_type="明渠-矩形"),
+        _make_duplicate_row(module, seq=3, building_name="有压A", section_type="有压管道"),
+    ]
+
+    monkeypatch.setattr(
+        module,
+        "fluent_info",
+        lambda _parent, title, content: captured.update({"title": title, "content": content}),
+    )
+
+    buckets = BatchPanel._classify_duplicate_buildings(panel, input_rows)
+
+    assert list(buckets["hard_duplicates"].keys()) == [("有压A", "有压管道")]
+    assert list(buckets["allowed_chain_duplicates"].keys()) == []
+    assert BatchPanel._validate_duplicate_buildings(panel, input_rows) is False
+    assert captured["title"] == "建筑物重名"
+    assert "请修改建筑物名称以区分后重试" in captured["content"]
+
+
+def test_duplicate_classifier_keeps_non_pressure_pipe_duplicates_blocked():
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+    panel.channel_level_combo = _FakeTextComboBox("支渠")
+
+    input_rows = [
+        _make_duplicate_row(module, seq=1, building_name="顶管A", section_type="顶管"),
+        _make_duplicate_row(module, seq=2, building_name="有压B", section_type="有压管道"),
+        _make_duplicate_row(module, seq=3, building_name="顶管A", section_type="顶管"),
+    ]
+
+    buckets = BatchPanel._classify_duplicate_buildings(panel, input_rows)
+
+    assert list(buckets["hard_duplicates"].keys()) == [("顶管A", "顶管")]
+    assert list(buckets["allowed_chain_duplicates"].keys()) == []
+
+
+def test_duplicate_warning_skips_allowed_chain_duplicates(monkeypatch):
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+    panel.channel_level_combo = _FakeTextComboBox("支渠")
+    panel._get_all_input_data = lambda: [
+        _make_duplicate_row(module, seq=1, building_name="有压A", section_type="有压管道"),
+        _make_duplicate_row(module, seq=2, building_name="顶管B", section_type="顶管"),
+        _make_duplicate_row(module, seq=3, building_name="有压A", section_type="有压管道"),
+    ]
+    panel._info_parent = lambda: object()
+    captured = {}
+
+    module.InfoBar = SimpleNamespace(
+        warning=lambda *args, **kwargs: captured.setdefault("warning_calls", []).append((args, kwargs))
+    )
+    module.InfoBarPosition = SimpleNamespace(TOP=1)
+
+    BatchPanel._validate_duplicate_buildings_warn(panel)
+
+    assert "warning_calls" not in captured
 
 
 def test_get_template_path_returns_chating_sample_file():

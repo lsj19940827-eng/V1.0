@@ -589,6 +589,113 @@ def test_export_combined_dxf_uses_xxpipe_profile_branch_and_current_snapshot(mon
     assert captured["ip_nodes"] is current_nodes
 
 
+def test_export_combined_dxf_filters_profile_nodes_before_xxpipe_validation_in_xxqu_route_mode(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    captured = {}
+
+    class _ConfigOnlyDialog:
+        def __init__(self, _parent, nodes, _proj_settings, _auto_name, panel=None, config_only=False):
+            _ = panel
+            captured["dialog_nodes"] = nodes
+            captured["config_only"] = config_only
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    mixed_nodes = [
+        SimpleNamespace(
+            station_MC=0.0,
+            bottom_elevation=410.0,
+            top_elevation=411.0,
+            water_level=410.5,
+            structure_type=SimpleNamespace(value="明渠-圆形"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=False,
+            name="渠道段",
+            flow_section="1",
+        ),
+        SimpleNamespace(
+            station_MC=100.0,
+            bottom_elevation=0.0,
+            top_elevation=0.0,
+            water_level=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=True,
+            name="苟家湾",
+            flow_section="1",
+        ),
+        SimpleNamespace(
+            station_MC=120.0,
+            bottom_elevation=0.0,
+            top_elevation=0.0,
+            water_level=0.0,
+            structure_type=SimpleNamespace(value="定向钻"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=False,
+            name="大石包",
+            flow_section="1",
+        ),
+    ]
+    route_nodes = mixed_nodes[1:]
+
+    panel = _build_panel(name="赛金", structure_type="有压管道")
+    panel.calculated_nodes = list(mixed_nodes)
+    panel.channel_level_combo = _ComboStub("支渠")
+
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda value: value)
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        cad_tools,
+        "_resolve_section_summary_source_nodes",
+        lambda *_a, **_k: (mixed_nodes, "current_table_snapshot"),
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_resolve_xxpipe_export_source_nodes",
+        lambda *_a, **_k: list(route_nodes),
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_build_panel_xxpipe_profile_data",
+        lambda _panel, nodes, **_k: captured.update({"profile_nodes": nodes}) or {"profile_text_nodes": list(nodes)},
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_profile_on_msp",
+        lambda *_a, **kwargs: captured.update({"export_mode": kwargs.get("export_mode")}) or (240.0, 120.0),
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_section_summary_on_msp",
+        lambda *_a, **kwargs: captured.update({"summary_nodes": kwargs.get("nodes")}) or (320.0, 180.0, 1),
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_compute_ip_preview_data",
+        lambda nodes, _station_prefix, _settings=None: ([["IP1"]], nodes),
+    )
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
+    assert captured["config_only"] is True
+    assert captured["dialog_nodes"] is mixed_nodes
+    assert captured["summary_nodes"] is mixed_nodes
+    assert captured["profile_nodes"] == route_nodes
+    assert captured["export_mode"] == "xxpipe"
+
+
 def test_export_combined_dxf_pushes_summary_below_tail_pressure_split_profile(monkeypatch):
     docs = _patch_common(monkeypatch)
     panel = _build_panel()

@@ -72,6 +72,36 @@ def apply_emergency_single_process_mode() -> str:
     return merged
 
 
+def _build_platform_summary() -> str:
+    """Return a lightweight platform summary without touching blocking APIs."""
+    if sys.platform.startswith("win"):
+        try:
+            version = sys.getwindowsversion()
+            release_name = "11" if int(version.build) >= 22000 else "10"
+            service_pack_major = int(getattr(version, "service_pack_major", 0) or 0)
+            return (
+                f"Windows-{release_name}-"
+                f"{version.major}.{version.minor}.{version.build}-SP{service_pack_major}"
+            )
+        except Exception:
+            pass
+
+    try:
+        uname = platform.uname()
+        parts = [
+            str(getattr(uname, "system", "")).strip(),
+            str(getattr(uname, "release", "")).strip(),
+            str(getattr(uname, "version", "")).strip(),
+        ]
+        summary = "-".join(part for part in parts if part)
+        if summary:
+            return summary
+    except Exception:
+        pass
+
+    return sys.platform
+
+
 def _current_runtime_facts() -> dict:
     python_version = sys.version.splitlines()[0].strip()
     windows_build = ""
@@ -83,7 +113,7 @@ def _current_runtime_facts() -> dict:
     facts = {
         "python_executable": sys.executable,
         "python_version": python_version,
-        "platform_summary": platform.platform(),
+        "platform_summary": _build_platform_summary(),
         "windows_build": windows_build,
         "pyside_version": "",
         "qt_webengine_process_path": "",

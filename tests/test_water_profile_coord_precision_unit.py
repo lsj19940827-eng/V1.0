@@ -1335,6 +1335,70 @@ def test_import_from_batch_preserves_explicit_zero_turn_radius_text():
     assert panel.turn_radius_edit.text() == ""
 
 
+def test_import_from_batch_persists_pressure_pipe_row_identity_for_pressure_like_rows():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.SHARED_DATA_AVAILABLE = True
+    module.CALCULATOR_AVAILABLE = True
+    module.QSignalBlocker = lambda *_args, **_kwargs: object()
+    module.InfoBar = SimpleNamespace(
+        success=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+    )
+    module.InfoBarPosition = SimpleNamespace(TOP=1)
+    module.auto_resize_table = lambda *_args, **_kwargs: None
+    module.get_shared_data_manager = lambda: SimpleNamespace(
+        get_batch_results=lambda: [
+            _make_batch_result(
+                section_type="定向钻",
+                building_name="1#定向钻",
+                raw_result={"is_pressure_pipe": True, "pipe_material": "钢管", "in_out_raw": "进"},
+                D=1.4,
+                n=0.0,
+                slope_inv=0,
+            )
+        ]
+    )
+    module.StructureType = _FakeStructureType
+    module.InOutType = _FakeInOutType
+
+    class _BuildNode:
+        def __init__(self):
+            self.section_params = {}
+            self.is_transition = False
+            self.is_auto_inserted_channel = False
+            self.is_diversion_gate = False
+            self.is_inverted_siphon = False
+            self.is_pressure_pipe = False
+            self.in_out = None
+            self.external_head_loss = None
+
+    module.ChannelNode = _BuildNode
+
+    panel._sync_batch_settings = lambda: None
+    panel._clear_nodes = lambda: panel.node_table.setRowCount(0)
+    panel._choose_roughness_value = lambda *_args, **_kwargs: None
+    panel._update_siphon_roughness_overview = lambda *_args, **_kwargs: None
+    panel._update_pressure_pipe_roughness_overview = lambda *_args, **_kwargs: None
+    panel._on_design_flow_changed = lambda: None
+    panel._apply_table1_source_row_lock_flags = lambda: None
+    panel._refresh_pressure_pipe_controls = lambda: None
+    panel._recalculate_geometry = lambda: None
+    panel._calculate_recommended_turn_radius = lambda _nodes: 0.0
+    panel._info_parent = lambda: None
+    panel.design_flow_edit = SimpleNamespace(text=lambda: "5.0", setText=lambda _text: None)
+
+    module.WaterProfilePanel._import_from_batch(panel)
+
+    payload = panel.node_table.item(0, 0).data(module.Qt.UserRole)
+    assert payload[module.PRESSURE_PIPE_ROW_ID_ROLE_KEY] == "flow1-row1"
+
+    nodes = module.WaterProfilePanel._build_nodes_from_table(panel)
+
+    assert len(nodes) == 1
+    assert nodes[0].pressure_pipe_row_identity == "flow1-row1"
+
+
 def test_auto_calc_turn_radius_falls_back_to_unified_default_value():
     module = _load_panel_module()
     panel = _make_basic_panel(module)

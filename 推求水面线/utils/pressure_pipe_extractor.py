@@ -67,6 +67,8 @@ class PressurePipeGroup:
     display_name: str = ""                      # 界面展示名称
     storage_key: str = ""                       # 存储键
     identity: str = ""                          # 稳定身份键
+    legacy_storage_key: str = ""                # 兼容旧版的存储键
+    legacy_identity: str = ""                   # 兼容旧版的身份键
     target_row_index: int = -1                  # 匿名段目标行索引
     upstream_row_index: int = -1                # 匿名段上一普通行索引
     route_key: str = ""                         # 所属整线键
@@ -89,6 +91,11 @@ class PressurePipeGroup:
     has_outlet_transition: bool = True          # 出口侧是否存在渐变段
     inlet_transition_reason: str = ""           # 进口侧无渐变段原因
     outlet_transition_reason: str = ""          # 出口侧无渐变段原因
+    member_role: str = ""                       # 链内角色：anchor / prefix_segment / regular_segment / special_segment
+    is_anchor_member: bool = False              # 是否为流量段起点锚点成员
+    should_generate_row_loss: bool = True       # 是否需要生成本行损失
+    prefix_target_row_index: int = -1           # 前缀段起点行
+    prefix_end_row_index: int = -1              # 前缀段终点边界行（下一特殊承压段进口）
     
     def is_valid(self) -> bool:
         """检查有压管道数据是否有效"""
@@ -164,8 +171,12 @@ class PressurePipeChainMember:
     upstream_row_index: int = -1                # 成员上一普通行
     group: Optional[PressurePipeGroup] = None   # 命名有压组对象
     node: Optional[ChannelNode] = None          # 单行成员原始节点
+    base_display_name: str = ""                 # 未加后缀的原始展示名称
+    member_role: str = ""                       # 链内角色：anchor / regular_segment / special_segment
     is_anchor_member: bool = False              # 是否为流量段起点锚点成员
     should_generate_row_loss: bool = True       # 是否需要生成本行损失
+    prefix_target_row_index: int = -1           # 前缀段起点行
+    prefix_end_row_index: int = -1              # 前缀段终点边界行（下一特殊承压段进口）
 
 
 @dataclass
@@ -211,88 +222,57 @@ class PressurePipeDataExtractor:
         """
         if not nodes:
             return []
-        
-        # 按名称分组，同时记录索引
-        groups_dict: Dict[str, PressurePipeGroup] = {}
-        group_order: List[str] = []  # 记录出现顺序
+
+        result: List[PressurePipeGroup] = []
+        current_group: Optional[PressurePipeGroup] = None
 
         for idx, node in enumerate(nodes):
-            # 检查是否为有压管道
+            if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+                continue
+
             if not PressurePipeDataExtractor._is_pressure_pipe(node):
+                if current_group is not None:
+                    PressurePipeDataExtractor._finalize_named_pressure_group(
+                        current_group,
+                        nodes,
+                        settings=settings,
+                    )
+                    result.append(current_group)
+                    current_group = None
                 continue
-            
-            name = (node.name or "").strip()
+
+            name = str(getattr(node, "name", "") or "").strip()
             if not name:
+                if current_group is not None:
+                    PressurePipeDataExtractor._finalize_named_pressure_group(
+                        current_group,
+                        nodes,
+                        settings=settings,
+                    )
+                    result.append(current_group)
+                    current_group = None
                 continue
-            in_out_raw = PressurePipeDataExtractor._get_in_out_raw(node)
-            group_key = name
-            
-            # 创建或获取分组
-            if group_key not in groups_dict:
-                groups_dict[group_key] = PressurePipeGroup(name=name)
-                group_order.append(group_key)
-            
-            group = groups_dict[group_key]
-            group.rows.append(node)
-            group.row_indices.append(idx)
-            
-            # 识别进口/IP/出口
-            if in_out_raw == "进" or node.in_out == InOutType.INLET:
-                group.inlet_row_index = idx
-                # 从进口行提取管道参数
-                group.design_flow = node.flow if node.flow > 0 else group.design_flow
-                sp = node.section_params or {}
-                group.diameter = sp.get('D', 0) or sp.get('直径D', 0) or group.diameter
-                group.material_key = sp.get('pipe_material', '') or group.material_key
-                group.local_loss_ratio = sp.get('local_loss_ratio', 0.15)
-            elif in_out_raw == "出" or node.in_out == InOutType.OUTLET:
-                group.outlet_row_index = idx
-                # 出口行也可能有参数，作为备用
-                if group.design_flow <= 0:
-                    group.design_flow = node.flow
-                sp = node.section_params or {}
-                if group.diameter <= 0:
-                    group.diameter = sp.get('D', 0) or sp.get('直径D', 0)
-                if not group.material_key:
-                    group.material_key = sp.get('pipe_material', '')
-            elif in_out_raw == "IP":
-                group.ip_row_indices.append(idx)
-        
-        # 处理每个分组，提取参数
-        result = []
-        for group_key in group_order:
-            group = groups_dict[group_key]
-            
-            # 如果没有明确的进出口标记，仅在存在多行时尝试根据位置推断
-            if group.inlet_row_index < 0 and len(group.row_indices) >= 2:
-                group.inlet_row_index = group.row_indices[0]
-                first_node = group.rows[0]
-                group.design_flow = first_node.flow if first_node.flow > 0 else 0
-                sp = first_node.section_params or {}
-                group.diameter = sp.get('D', 0) or sp.get('直径D', 0)
-                group.material_key = sp.get('pipe_material', '')
-            
-            if group.outlet_row_index < 0 and len(group.row_indices) >= 2:
-                group.outlet_row_index = group.row_indices[-1]
-            
-            # 提取IP点信息
-            PressurePipeDataExtractor._extract_ip_points(group)
-            
-            # 计算转角
-            PressurePipeDataExtractor._calc_turn_angles(group)
-            
-            # 计算平面段
-            PressurePipeDataExtractor._calc_plan_segments(group)
-            
-            # 提取上下游渠道节点数据
-            PressurePipeDataExtractor._extract_adjacent_node_data(group, nodes)
-            
-            # 提取渐变段型式（从基础设置）
-            if settings is not None:
-                PressurePipeDataExtractor._extract_transition_forms(group, settings)
-            
-            result.append(group)
-        
+
+            if not PressurePipeDataExtractor._can_append_to_named_pressure_group(current_group, node):
+                if current_group is not None:
+                    PressurePipeDataExtractor._finalize_named_pressure_group(
+                        current_group,
+                        nodes,
+                        settings=settings,
+                    )
+                    result.append(current_group)
+                current_group = PressurePipeGroup(name=name)
+
+            PressurePipeDataExtractor._append_named_pressure_group_row(current_group, node, idx)
+
+        if current_group is not None:
+            PressurePipeDataExtractor._finalize_named_pressure_group(
+                current_group,
+                nodes,
+                settings=settings,
+            )
+            result.append(current_group)
+
         return result
 
     @staticmethod
@@ -318,13 +298,16 @@ class PressurePipeDataExtractor:
         is_xxpipe_channel = PressurePipeDataExtractor._is_xxpipe_channel_level(settings)
 
         for group in PressurePipeDataExtractor.extract_pipes(nodes, settings=settings):
-            flow_section = PressurePipeDataExtractor._resolve_group_flow_section(group)
             group.group_mode = "named_group"
-            group.display_name = group.name or "未命名"
-            group.storage_key = group.name or ""
-            group.identity = make_pressure_pipe_identity(flow_section or "-", group.name or "")
-            group.target_row_index = group.outlet_row_index
-            group.upstream_row_index = group.inlet_row_index
+            group.display_name = group.display_name or group.name or "未命名"
+            group.target_row_index = coerce_row_index(
+                getattr(group, "target_row_index", group.outlet_row_index),
+                group.outlet_row_index,
+            )
+            group.upstream_row_index = coerce_row_index(
+                getattr(group, "upstream_row_index", group.inlet_row_index),
+                group.inlet_row_index,
+            )
             ordered_groups.append((PressurePipeDataExtractor._group_order_index(group), group))
 
         for idx, node in enumerate(nodes):
@@ -345,6 +328,9 @@ class PressurePipeDataExtractor:
         groups = [group for _, group in ordered_groups]
 
         route_contexts = {}
+        chain_member_metadata = PressurePipeDataExtractor._build_chain_member_metadata_map(
+            continuous_pressure_chains
+        )
         if is_xxpipe_channel or continuous_pressure_chains:
             route_contexts = PressurePipeDataExtractor._build_xxpipe_route_contexts(
                 nodes,
@@ -354,9 +340,17 @@ class PressurePipeDataExtractor:
             )
         for group in groups:
             if PressurePipeDataExtractor._find_route_context_for_group(group, route_contexts) is None:
+                PressurePipeDataExtractor._apply_chain_member_metadata_to_group(
+                    group,
+                    chain_member_metadata,
+                )
                 continue
             PressurePipeDataExtractor._apply_default_route_context(group, nodes)
             PressurePipeDataExtractor._apply_route_context(group, route_contexts)
+            PressurePipeDataExtractor._apply_chain_member_metadata_to_group(
+                group,
+                chain_member_metadata,
+            )
 
         return groups
 
@@ -475,6 +469,9 @@ class PressurePipeDataExtractor:
         if current_chain is not None:
             chains.append(current_chain)
 
+        for chain in chains:
+            PressurePipeDataExtractor._post_process_continuous_pressure_chain(chain, settings=settings)
+
         return chains
 
     @staticmethod
@@ -559,6 +556,143 @@ class PressurePipeDataExtractor:
             if flow_section:
                 return flow_section
         return ""
+
+    @staticmethod
+    def _resolve_node_structure_text(node: Optional[ChannelNode]) -> str:
+        """提取节点结构形式文本。"""
+        if node is None:
+            return ""
+        structure_type = getattr(node, "structure_type", None)
+        return str(getattr(structure_type, "value", structure_type) or "").strip()
+
+    @staticmethod
+    def _resolve_group_structure_text(group: Optional[PressurePipeGroup]) -> str:
+        """提取分组首行结构形式文本。"""
+        rows = getattr(group, "rows", []) or []
+        if not rows:
+            return ""
+        return PressurePipeDataExtractor._resolve_node_structure_text(rows[0])
+
+    @staticmethod
+    def _can_append_to_named_pressure_group(
+        group: Optional[PressurePipeGroup],
+        node: Optional[ChannelNode],
+    ) -> bool:
+        """判断当前命名有压行是否仍属于同一连续段。"""
+        if group is None or node is None:
+            return False
+
+        node_name = str(getattr(node, "name", "") or "").strip()
+        if not node_name or node_name != str(getattr(group, "name", "") or "").strip():
+            return False
+
+        if (
+            PressurePipeDataExtractor._resolve_group_structure_text(group)
+            != PressurePipeDataExtractor._resolve_node_structure_text(node)
+        ):
+            return False
+
+        if coerce_row_index(getattr(group, "outlet_row_index", -1)) >= 0:
+            return False
+
+        in_out_raw = PressurePipeDataExtractor._get_in_out_raw(node)
+        if (in_out_raw == "进" or getattr(node, "in_out", None) == InOutType.INLET) and coerce_row_index(
+            getattr(group, "inlet_row_index", -1)
+        ) >= 0:
+            return False
+
+        return True
+
+    @staticmethod
+    def _append_named_pressure_group_row(group: PressurePipeGroup, node: ChannelNode, row_index: int):
+        """向连续命名段追加一行，并同步基础参数。"""
+        group.rows.append(node)
+        group.row_indices.append(row_index)
+
+        in_out_raw = PressurePipeDataExtractor._get_in_out_raw(node)
+        section_params = getattr(node, "section_params", {}) or {}
+
+        if in_out_raw == "进" or getattr(node, "in_out", None) == InOutType.INLET:
+            group.inlet_row_index = row_index
+            group.design_flow = node.flow if node.flow > 0 else group.design_flow
+            group.diameter = section_params.get("D", 0) or section_params.get("直径D", 0) or group.diameter
+            group.material_key = section_params.get("pipe_material", "") or group.material_key
+            group.local_loss_ratio = section_params.get("local_loss_ratio", 0.15)
+            return
+
+        if in_out_raw == "出" or getattr(node, "in_out", None) == InOutType.OUTLET:
+            group.outlet_row_index = row_index
+            if group.design_flow <= 0:
+                group.design_flow = node.flow
+            if group.diameter <= 0:
+                group.diameter = section_params.get("D", 0) or section_params.get("直径D", 0)
+            if not group.material_key:
+                group.material_key = section_params.get("pipe_material", "")
+            return
+
+        if in_out_raw == "IP":
+            group.ip_row_indices.append(row_index)
+
+    @staticmethod
+    def _build_named_group_row_range_key(group: PressurePipeGroup) -> str:
+        """根据表3行号构造连续段范围键。"""
+        row_indices = [idx for idx in (getattr(group, "row_indices", []) or []) if isinstance(idx, int)]
+        if not row_indices:
+            return "rows0"
+        start_row = min(row_indices) + 1
+        end_row = max(row_indices) + 1
+        if start_row == end_row:
+            return f"rows{start_row}"
+        return f"rows{start_row}-{end_row}"
+
+    @staticmethod
+    def _build_named_group_segment_identity(group: PressurePipeGroup) -> str:
+        """构造连续段优先的命名有压身份键。"""
+        flow_section = PressurePipeDataExtractor._resolve_group_flow_section(group) or "-"
+        name = str(getattr(group, "name", "") or "").strip() or "未命名"
+        row_range_key = PressurePipeDataExtractor._build_named_group_row_range_key(group)
+        return f"{flow_section}::{name}::{row_range_key}"
+
+    @staticmethod
+    def _apply_named_group_identity_fields(group: PressurePipeGroup):
+        """为命名有压段写入新旧两套身份字段。"""
+        flow_section = PressurePipeDataExtractor._resolve_group_flow_section(group) or "-"
+        name = str(getattr(group, "name", "") or "").strip()
+        legacy_identity = make_pressure_pipe_identity(flow_section, name or "")
+        segment_identity = PressurePipeDataExtractor._build_named_group_segment_identity(group)
+
+        group.group_mode = "named_group"
+        group.display_name = name or "未命名"
+        group.legacy_storage_key = name or ""
+        group.legacy_identity = legacy_identity
+        group.storage_key = segment_identity
+        group.identity = segment_identity
+        group.target_row_index = coerce_row_index(getattr(group, "outlet_row_index", -1))
+        group.upstream_row_index = coerce_row_index(getattr(group, "inlet_row_index", -1))
+
+    @staticmethod
+    def _finalize_named_pressure_group(group: PressurePipeGroup, nodes: List[ChannelNode], settings=None):
+        """收口连续命名段，补齐推断字段和身份键。"""
+        if group.inlet_row_index < 0 and len(group.row_indices) >= 2:
+            group.inlet_row_index = group.row_indices[0]
+            first_node = group.rows[0]
+            group.design_flow = first_node.flow if first_node.flow > 0 else group.design_flow
+            section_params = getattr(first_node, "section_params", {}) or {}
+            group.diameter = section_params.get("D", 0) or section_params.get("直径D", 0) or group.diameter
+            group.material_key = section_params.get("pipe_material", "") or group.material_key
+
+        if group.outlet_row_index < 0 and len(group.row_indices) >= 2:
+            group.outlet_row_index = group.row_indices[-1]
+
+        PressurePipeDataExtractor._extract_ip_points(group)
+        PressurePipeDataExtractor._calc_turn_angles(group)
+        PressurePipeDataExtractor._calc_plan_segments(group)
+        PressurePipeDataExtractor._extract_adjacent_node_data(group, nodes)
+
+        if settings is not None:
+            PressurePipeDataExtractor._extract_transition_forms(group, settings)
+
+        PressurePipeDataExtractor._apply_named_group_identity_fields(group)
 
     @staticmethod
     def _group_order_index(group: PressurePipeGroup) -> int:
@@ -891,6 +1025,60 @@ class PressurePipeDataExtractor:
         group.route_member_keys = list(selected_route.get("route_member_keys", []) or [])
 
     @staticmethod
+    def _build_chain_member_metadata_map(chains: List[PressurePipeChain]) -> Dict[str, Dict[str, Any]]:
+        """按身份键汇总链成员元数据，供对话框分组复用。"""
+        metadata_map: Dict[str, Dict[str, Any]] = {}
+        for chain in list(chains or []):
+            for member in list(getattr(chain, "members", []) or []):
+                identity = str(getattr(member, "identity", "") or "").strip()
+                storage_key = str(getattr(member, "storage_key", "") or "").strip()
+                metadata = {
+                    "display_name": str(getattr(member, "display_name", "") or "").strip(),
+                    "member_role": str(getattr(member, "member_role", "") or "").strip(),
+                    "is_anchor_member": bool(getattr(member, "is_anchor_member", False)),
+                    "should_generate_row_loss": bool(getattr(member, "should_generate_row_loss", True)),
+                    "prefix_target_row_index": coerce_row_index(
+                        getattr(member, "prefix_target_row_index", -1)
+                    ),
+                    "prefix_end_row_index": coerce_row_index(
+                        getattr(member, "prefix_end_row_index", -1)
+                    ),
+                }
+                for key in (identity, storage_key):
+                    if key:
+                        metadata_map[key] = dict(metadata)
+        return metadata_map
+
+    @staticmethod
+    def _apply_chain_member_metadata_to_group(
+        group: PressurePipeGroup,
+        metadata_map: Dict[str, Dict[str, Any]],
+    ):
+        """把链成员判定结果同步回分组对象。"""
+        identity = str(getattr(group, "identity", "") or "").strip()
+        storage_key = str(getattr(group, "storage_key", "") or "").strip()
+        metadata = metadata_map.get(identity) or metadata_map.get(storage_key)
+        if not metadata:
+            return
+
+        display_name = str(metadata.get("display_name", "") or "").strip()
+        if display_name:
+            group.display_name = display_name
+
+        group.member_role = str(metadata.get("member_role", "") or "").strip()
+        group.is_anchor_member = bool(metadata.get("is_anchor_member", False))
+        group.should_generate_row_loss = bool(metadata.get("should_generate_row_loss", True))
+        group.prefix_target_row_index = coerce_row_index(
+            metadata.get("prefix_target_row_index", -1)
+        )
+        group.prefix_end_row_index = coerce_row_index(
+            metadata.get("prefix_end_row_index", -1)
+        )
+
+        if group.target_row_index < 0 and group.prefix_target_row_index >= 0:
+            group.target_row_index = group.prefix_target_row_index
+
+    @staticmethod
     def _build_pressure_pipe_row_identity(node: ChannelNode, row_index: int) -> str:
         """构造匿名有压管道行稳定标识。"""
         identity = str(getattr(node, "pressure_pipe_row_identity", "") or "").strip()
@@ -969,6 +1157,7 @@ class PressurePipeDataExtractor:
         return {
             "x": float(getattr(node, "x", 0.0) or 0.0),
             "y": float(getattr(node, "y", 0.0) or 0.0),
+            "station_mc": PressurePipeDataExtractor._resolve_node_station_mc(node),
             "turn_radius": float(getattr(node, "turn_radius", 0.0) or 0.0),
             "turn_angle": float(getattr(node, "turn_angle", 0.0) or 0.0),
             "in_out": in_out_text,
@@ -1078,11 +1267,13 @@ class PressurePipeDataExtractor:
         row_indices = [idx for idx in (group.row_indices or []) if isinstance(idx, int)]
         start_row_index = min(row_indices) if row_indices else -1
         end_row_index = max(row_indices) if row_indices else start_row_index
+        display_name = group.display_name or group.name or "未命名"
+        structure_type = PressurePipeDataExtractor._resolve_group_structure_type(group)
         return PressurePipeChainMember(
             member_type="named_group",
-            display_name=group.display_name or group.name or "未命名",
+            display_name=display_name,
             flow_section=PressurePipeDataExtractor._resolve_group_flow_section(group),
-            structure_type=PressurePipeDataExtractor._resolve_group_structure_type(group),
+            structure_type=structure_type,
             row_indices=row_indices,
             start_row_index=start_row_index,
             end_row_index=end_row_index,
@@ -1091,6 +1282,8 @@ class PressurePipeDataExtractor:
             target_row_index=coerce_row_index(getattr(group, "target_row_index", group.outlet_row_index), group.outlet_row_index),
             upstream_row_index=coerce_row_index(getattr(group, "upstream_row_index", group.inlet_row_index), group.inlet_row_index),
             group=group,
+            base_display_name=display_name,
+            member_role=PressurePipeDataExtractor._resolve_chain_member_role(structure_type),
             should_generate_row_loss=True,
         )
 
@@ -1138,8 +1331,248 @@ class PressurePipeDataExtractor:
             upstream_row_index=upstream_index,
             group=group,
             node=node,
+            base_display_name=display_name,
+            member_role=PressurePipeDataExtractor._resolve_chain_member_role(structure_type),
             should_generate_row_loss=True,
         )
+
+    @staticmethod
+    def _resolve_chain_member_role(structure_type: str) -> str:
+        """按结构形式归类链成员角色。"""
+        if str(structure_type or "").strip() == StructureType.PRESSURE_PIPE.value:
+            return "regular_segment"
+        return "special_segment"
+
+    @staticmethod
+    def _get_chain_member_base_display_name(member: Optional[PressurePipeChainMember]) -> str:
+        """返回链成员未加后缀的基础展示名称。"""
+        if member is None:
+            return ""
+        return str(
+            getattr(member, "base_display_name", "")
+            or getattr(member, "display_name", "")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _set_chain_member_display_name(member: Optional[PressurePipeChainMember], display_name: str):
+        """同步更新链成员及其命名分组的展示名称。"""
+        if member is None:
+            return
+        text = str(display_name or "").strip()
+        if not text:
+            return
+        member.display_name = text
+        group = getattr(member, "group", None)
+        if group is not None:
+            group.display_name = text
+
+    @staticmethod
+    def _is_regular_pressure_chain_member(member: Optional[PressurePipeChainMember]) -> bool:
+        """判断链成员是否为普通有压子段。"""
+        if member is None:
+            return False
+        return str(getattr(member, "structure_type", "") or "").strip() == StructureType.PRESSURE_PIPE.value
+
+    @staticmethod
+    def _is_branch_named_pressure_leading_boundary_member(
+        member: Optional[PressurePipeChainMember],
+    ) -> bool:
+        """判断是否为支渠链首那种仅进口的命名普通有压边界行。"""
+        if member is None:
+            return False
+        if member.member_type != "named_group":
+            return False
+        if not PressurePipeDataExtractor._is_regular_pressure_chain_member(member):
+            return False
+
+        group = getattr(member, "group", None)
+        if group is None or group.is_valid():
+            return False
+
+        row_indices = [idx for idx in (getattr(group, "row_indices", []) or []) if isinstance(idx, int)]
+        if len(row_indices) != 1:
+            return False
+
+        first_row = (getattr(group, "rows", []) or [None])[0]
+        in_out_raw = PressurePipeDataExtractor._get_in_out_raw(first_row) if first_row is not None else ""
+        return in_out_raw == "进" or getattr(first_row, "in_out", None) == InOutType.INLET
+
+    @staticmethod
+    def _is_branch_prefix_following_special_member(
+        member: Optional[PressurePipeChainMember],
+    ) -> bool:
+        """判断前缀段后面紧跟的是否为可承接前缀长度的特殊承压段。"""
+        structure_type = str(getattr(member, "structure_type", "") or "").strip()
+        if not structure_type:
+            return False
+        if structure_type in {"定向钻", "顶管"}:
+            return True
+        return "隧洞" in structure_type
+
+    @staticmethod
+    def _should_mark_branch_named_pressure_prefix(
+        chain: Optional[PressurePipeChain],
+        member: Optional[PressurePipeChainMember],
+    ) -> bool:
+        """判断支渠链首命名普通有压是否应改记为前缀段。"""
+        if chain is None or not PressurePipeDataExtractor._is_branch_named_pressure_leading_boundary_member(member):
+            return False
+
+        members = list(getattr(chain, "members", []) or [])
+        if len(members) < 2:
+            return False
+        next_member = members[1]
+        if not PressurePipeDataExtractor._is_branch_prefix_following_special_member(next_member):
+            return False
+
+        base_name = PressurePipeDataExtractor._get_chain_member_base_display_name(member)
+        if not base_name:
+            return False
+
+        for later_member in members[1:]:
+            if not PressurePipeDataExtractor._is_regular_pressure_chain_member(later_member):
+                continue
+            if PressurePipeDataExtractor._get_chain_member_base_display_name(later_member) == base_name:
+                return True
+        return False
+
+    @staticmethod
+    def _should_mark_branch_named_pressure_anchor(
+        chain: Optional[PressurePipeChain],
+        member: Optional[PressurePipeChainMember],
+    ) -> bool:
+        """判断支渠链首命名普通有压是否应降级为起点锚点。"""
+        if chain is None or not PressurePipeDataExtractor._is_branch_named_pressure_leading_boundary_member(member):
+            return False
+
+        base_name = PressurePipeDataExtractor._get_chain_member_base_display_name(member)
+        if not base_name:
+            return False
+
+        for later_member in list(getattr(chain, "members", []) or [])[1:]:
+            if not PressurePipeDataExtractor._is_regular_pressure_chain_member(later_member):
+                continue
+            if PressurePipeDataExtractor._get_chain_member_base_display_name(later_member) == base_name:
+                return True
+        return False
+
+    @staticmethod
+    def _sync_chain_member_metadata_to_group(member: Optional[PressurePipeChainMember]):
+        """把链成员角色与边界信息同步到命名分组对象。"""
+        if member is None:
+            return
+        group = getattr(member, "group", None)
+        if group is None:
+            return
+
+        group.member_role = str(getattr(member, "member_role", "") or "").strip()
+        group.is_anchor_member = bool(getattr(member, "is_anchor_member", False))
+        group.should_generate_row_loss = bool(getattr(member, "should_generate_row_loss", True))
+        group.prefix_target_row_index = coerce_row_index(
+            getattr(member, "prefix_target_row_index", -1)
+        )
+        group.prefix_end_row_index = coerce_row_index(
+            getattr(member, "prefix_end_row_index", -1)
+        )
+        display_name = str(getattr(member, "display_name", "") or "").strip()
+        if display_name:
+            group.display_name = display_name
+        if group.target_row_index < 0 and group.prefix_target_row_index >= 0:
+            group.target_row_index = group.prefix_target_row_index
+
+    @staticmethod
+    def _apply_chain_member_display_labels(chain: Optional[PressurePipeChain]):
+        """为链内成员追加可区分的展示后缀。"""
+        if chain is None:
+            return
+
+        grouped_members: Dict[str, List[PressurePipeChainMember]] = defaultdict(list)
+        for member in list(getattr(chain, "members", []) or []):
+            base_name = PressurePipeDataExtractor._get_chain_member_base_display_name(member)
+            if not base_name:
+                continue
+            grouped_members[base_name].append(member)
+
+        for base_name, members in grouped_members.items():
+            if len(members) == 1:
+                member = members[0]
+                member_role = str(getattr(member, "member_role", "") or "").strip()
+                if member_role == "anchor":
+                    PressurePipeDataExtractor._set_chain_member_display_name(
+                        member, f"{base_name}（起点锚点）"
+                    )
+                elif member_role == "prefix_segment":
+                    PressurePipeDataExtractor._set_chain_member_display_name(
+                        member, f"{base_name}（前缀段）"
+                    )
+                else:
+                    PressurePipeDataExtractor._set_chain_member_display_name(member, base_name)
+                continue
+
+            middle_index = 1
+            for idx, member in enumerate(members):
+                member_role = str(getattr(member, "member_role", "") or "").strip()
+                if member_role == "anchor":
+                    label = f"{base_name}（起点锚点）"
+                elif member_role == "prefix_segment":
+                    label = f"{base_name}（前缀段）"
+                elif idx == len(members) - 1:
+                    label = f"{base_name}（后段）"
+                elif idx == 0:
+                    label = f"{base_name}（前段）"
+                else:
+                    label = f"{base_name}（中段{middle_index}）"
+                    middle_index += 1
+                PressurePipeDataExtractor._set_chain_member_display_name(member, label)
+
+    @staticmethod
+    def _post_process_continuous_pressure_chain(chain: Optional[PressurePipeChain], settings=None):
+        """对连续承压链做链首锚点和重名标签收口。"""
+        if chain is None:
+            return
+        members = list(getattr(chain, "members", []) or [])
+        if not members:
+            return
+
+        first_member = members[0]
+        if (
+            PressurePipeDataExtractor._should_tighten_branch_pressure_chain(settings)
+            and PressurePipeDataExtractor._should_mark_branch_named_pressure_prefix(chain, first_member)
+        ):
+            first_member.is_anchor_member = False
+            first_member.should_generate_row_loss = True
+            first_member.member_role = "prefix_segment"
+            first_member.prefix_target_row_index = coerce_row_index(
+                getattr(first_member, "start_row_index", getattr(first_member, "target_row_index", -1))
+            )
+            first_member.prefix_end_row_index = coerce_row_index(
+                getattr(members[1], "start_row_index", -1)
+            )
+            if first_member.target_row_index < 0 and first_member.prefix_target_row_index >= 0:
+                first_member.target_row_index = first_member.prefix_target_row_index
+        elif (
+            PressurePipeDataExtractor._should_tighten_branch_pressure_chain(settings)
+            and PressurePipeDataExtractor._should_mark_branch_named_pressure_anchor(chain, first_member)
+        ):
+            first_member.is_anchor_member = True
+            first_member.should_generate_row_loss = False
+            first_member.member_role = "anchor"
+
+        for member in members:
+            if getattr(member, "is_anchor_member", False) or not bool(
+                getattr(member, "should_generate_row_loss", True)
+            ):
+                member.member_role = "anchor"
+                continue
+            if not str(getattr(member, "member_role", "") or "").strip():
+                member.member_role = PressurePipeDataExtractor._resolve_chain_member_role(
+                    str(getattr(member, "structure_type", "") or "").strip()
+                )
+
+        PressurePipeDataExtractor._apply_chain_member_display_labels(chain)
+        for member in members:
+            PressurePipeDataExtractor._sync_chain_member_metadata_to_group(member)
 
     @staticmethod
     def _resolve_group_structure_type(group: PressurePipeGroup) -> str:
@@ -1191,14 +1624,8 @@ class PressurePipeDataExtractor:
         for node in group.rows:
             in_out_raw = node.section_params.get('in_out_raw', '') if node.section_params else ''
             
-            point = {
-                'x': node.x,
-                'y': node.y,
-                'turn_radius': node.turn_radius,
-                'turn_angle': 0,  # 稍后计算
-                'in_out': in_out_raw,
-                'name': node.name,
-            }
+            point = PressurePipeDataExtractor._make_plan_point(node, in_out_text=in_out_raw)
+            point['turn_angle'] = 0  # 稍后统一计算
             ip_points.append(point)
         
         group.ip_points = ip_points

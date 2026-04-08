@@ -194,11 +194,18 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
 
         success_count = sum(1 for item in member_results if item.get("status") == "success")
         failed_count = len(member_results) - success_count
+        chain_complete_default = failed_count <= 0
+        chain_complete = _to_bool_or_default(chain.get("chain_complete"), chain_complete_default)
+        chain_status = str(chain.get("chain_status", "") or "").strip().lower()
+        if chain_status not in ("complete", "incomplete"):
+            chain_status = "complete" if chain_complete else "incomplete"
         normalized_chain_summaries.append({
             "chain_id": chain_id,
             "flow_section": flow_section,
             "display_name": display_name,
-            "total_head_loss": _to_float_or_none(chain.get("total_head_loss")),
+            "chain_complete": chain_complete,
+            "chain_status": chain_status,
+            "total_head_loss": _to_float_or_none(chain.get("total_head_loss")) if chain_complete else None,
             "member_count": int(chain.get("member_count", len(member_results)) or len(member_results)),
             "success_count": int(chain.get("success_count", success_count) or success_count),
             "failed_count": int(chain.get("failed_count", failed_count) or failed_count),
@@ -299,17 +306,21 @@ def format_pressure_pipe_chain_summary(chain_summary: Dict[str, Any], precision:
     member_count = int(chain_summary.get("member_count", 0) or 0)
     success_count = int(chain_summary.get("success_count", 0) or 0)
     failed_count = int(chain_summary.get("failed_count", 0) or 0)
+    chain_complete = _to_bool_or_default(chain_summary.get("chain_complete"), failed_count <= 0)
+    chain_status = "已完成" if chain_complete else "未完成"
 
     lines = [
         f"流量段={flow_section}  链路={display_name}",
-        f"链总损失: ΔH={total_head_loss} m",
+        f"整线状态: {chain_status}",
         f"成员统计: 共{member_count}个，成功{success_count}个，失败{failed_count}个",
     ]
+    if chain_complete:
+        lines.insert(2, f"链总损失: ΔH={total_head_loss} m")
 
     for idx, member in enumerate(chain_summary.get("member_results", []) or [], 1):
         structure_type = member.get("structure_type", "") or "-"
         display_text = member.get("display_name", "") or "未命名成员"
-        if not member.get("writeback_enabled", True):
+        if member.get("status") == "success" and not member.get("writeback_enabled", True):
             lines.append(f"成员{idx}: {structure_type} | {display_text} | 锚点")
             continue
         if member.get("status") == "success":
@@ -328,11 +339,11 @@ def format_pressure_pipe_calc_batch_text(batch: Dict[str, Any], precision: int =
     """将批次记录格式化为可追加到 detail_text 的纯文本章节。"""
     normalized = normalize_pressure_pipe_calc_records(batch)
     records = normalized.get("records", [])
-    if not records:
+    chain_summaries = normalized.get("chain_summaries", [])
+    if not records and not chain_summaries:
         return ""
 
     summary = normalized.get("summary", {})
-    chain_summaries = normalized.get("chain_summaries", [])
     ts = normalized.get("last_run_at", "") or "-"
     has_sensitivity = any(rec.get("sensitivity_low_total_head_loss") is not None for rec in records)
     sensitivity_line = (

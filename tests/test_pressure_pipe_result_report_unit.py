@@ -162,3 +162,123 @@ def test_batch_report_includes_chain_summary_and_member_rollup():
     assert "成员1: 有压管道 | 流量段2 第1行有压管道 | 锚点" in txt
     assert "成员2: 隧洞-圆形 | 半兽人 | ΔH=0.2312 m" in txt
     assert "成员3: 有压管道 | 流量段2 第8行有压管道 | ΔH=0.1542 m" in txt
+
+
+def test_batch_report_hides_chain_total_when_chain_is_incomplete():
+    batch = {
+        "last_run_at": "2026-04-08 18:40:17",
+        "chain_summaries": [
+            {
+                "chain_id": "chain-1-1",
+                "flow_section": "1",
+                "display_name": "连续承压链1",
+                "chain_complete": False,
+                "chain_status": "incomplete",
+                "total_head_loss": None,
+                "member_count": 3,
+                "success_count": 2,
+                "failed_count": 1,
+                "member_results": [
+                    {
+                        "display_name": "苟家湾（起点锚点）",
+                        "structure_type": "有压管道",
+                        "status": "success",
+                        "writeback_enabled": False,
+                        "note": "链起点锚点，本行不写回",
+                    },
+                    {
+                        "display_name": "大石包",
+                        "structure_type": "定向钻",
+                        "status": "success",
+                        "writeback_enabled": True,
+                        "total_head_loss": 0.5743,
+                    },
+                    {
+                        "display_name": "苟家湾（后段）",
+                        "structure_type": "有压管道",
+                        "status": "failed",
+                        "writeback_enabled": False,
+                        "error": "苟家湾：至少需要进口和出口两行",
+                    },
+                ],
+            }
+        ],
+        "records": [
+            {
+                "identity": "flow1-row1",
+                "flow_section": "1",
+                "name": "苟家湾（起点锚点）",
+                "status": "success",
+                "writeback_enabled": False,
+                "note": "链起点锚点，本行不写回",
+            },
+            {
+                "identity": "flow1-row3",
+                "flow_section": "1",
+                "name": "大石包",
+                "status": "success",
+                "total_head_loss": 0.5743,
+            },
+            {
+                "identity": "1::苟家湾::rows4-5",
+                "flow_section": "1",
+                "name": "苟家湾（后段）",
+                "status": "failed",
+                "error": "苟家湾：至少需要进口和出口两行",
+            },
+        ],
+    }
+
+    txt = format_pressure_pipe_calc_batch_text(batch, precision=4)
+
+    assert "整线状态: 未完成" in txt
+    assert "链总损失: ΔH=" not in txt
+    assert "成员3: 有压管道 | 苟家湾（后段） | 失败: 苟家湾：至少需要进口和出口两行" in txt
+
+
+def test_batch_report_lists_prefix_segment_as_real_loss_member():
+    batch = {
+        "last_run_at": "2026-04-08 20:18:30",
+        "chain_summaries": [
+            {
+                "chain_id": "chain-1-1",
+                "flow_section": "1",
+                "display_name": "连续承压链1",
+                "chain_complete": True,
+                "chain_status": "complete",
+                "total_head_loss": 5.2167,
+                "member_count": 3,
+                "success_count": 3,
+                "failed_count": 0,
+                "member_results": [
+                    {
+                        "display_name": "苟家湾（前缀段）",
+                        "structure_type": "有压管道",
+                        "status": "success",
+                        "writeback_enabled": True,
+                        "total_head_loss": 0.3188,
+                    },
+                    {
+                        "display_name": "大石包",
+                        "structure_type": "定向钻",
+                        "status": "success",
+                        "writeback_enabled": True,
+                        "total_head_loss": 0.5743,
+                    },
+                    {
+                        "display_name": "苟家湾（后段）",
+                        "structure_type": "有压管道",
+                        "status": "success",
+                        "writeback_enabled": True,
+                        "total_head_loss": 4.3236,
+                    },
+                ],
+            }
+        ],
+        "records": [],
+    }
+
+    txt = format_pressure_pipe_calc_batch_text(batch, precision=4)
+
+    assert "成员1: 有压管道 | 苟家湾（前缀段） | ΔH=0.3188 m" in txt
+    assert "锚点" not in txt
