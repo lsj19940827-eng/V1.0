@@ -721,6 +721,108 @@ def test_pressure_pipe_config_dialog_rejects_route_import_when_station_coverage_
     dialog.deleteLater()
 
 
+def test_pressure_pipe_config_dialog_clears_stale_saved_route_longitudinal_cache_on_load():
+    _get_qapp()
+    route_key, groups, _manager = _make_route_groups(
+        route_key="三清庙",
+        display_name="三清庙",
+        flow_section="1",
+    )
+    stale_nodes = [
+        {
+            "chainage": 0.0,
+            "elevation": 422.0,
+            "vertical_curve_radius": 0.0,
+            "turn_type": "NONE",
+            "turn_angle": 0.0,
+        },
+        {
+            "chainage": 40.0,
+            "elevation": 418.0,
+            "vertical_curve_radius": 0.0,
+            "turn_type": "NONE",
+            "turn_angle": 0.0,
+        },
+    ]
+    manager = _FakeManager(route_key, stale_nodes, route_key=route_key, route_display_name="三清庙")
+    for group in groups:
+        manager.set_pipe_config(
+            group.storage_key,
+            SimpleNamespace(
+                longitudinal_nodes=list(stale_nodes),
+                route_key=route_key,
+                route_display_name="三清庙",
+                turn_n=0.0,
+                turn_R=0.0,
+                force_override=False,
+                radius_applied_at="",
+            ),
+        )
+    route_nodes = [
+        SimpleNamespace(
+            name="三清庙",
+            flow_section="1",
+            ip_number=1,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value="进"),
+            station_MC=0.0,
+            x=0.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="三清庙",
+            flow_section="1",
+            ip_number=2,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value=""),
+            station_MC=50.0,
+            x=50.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            name="三清庙",
+            flow_section="1",
+            ip_number=3,
+            structure_type=SimpleNamespace(value="有压管道"),
+            in_out=SimpleNamespace(value="出"),
+            station_MC=80.0,
+            x=80.0,
+            y=0.0,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+        route_import_targets={
+            route_key: {
+                "display_name": "三清庙",
+                "station_prefix": "",
+                "nodes": route_nodes,
+            }
+        },
+    )
+    dialog.show()
+    _flush_events(6)
+
+    assert route_key not in dialog.get_longitudinal_nodes_dict()
+    assert "重新导入" in dialog._route_widgets[route_key]["hint"].text()
+    saved_routes = manager.to_dict().get("routes", {})
+    assert saved_routes.get(route_key, {}).get("longitudinal_nodes", []) == []
+    saved_pipes = manager.to_dict().get("pipes", {})
+    for group in groups:
+        assert saved_pipes.get(group.storage_key, {}).get("longitudinal_nodes", []) == []
+
+    dialog.close()
+    dialog.deleteLater()
+
+
 def test_pressure_pipe_config_dialog_route_import_coverage_ignores_tunnel_start_segment():
     _get_qapp()
     route_key, groups, manager = _make_mixed_route_groups()

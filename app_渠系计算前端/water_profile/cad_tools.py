@@ -5069,7 +5069,75 @@ def _is_panel_xxpipe_mode(panel):
 
 def _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=None):
     nodes, _source = _resolve_section_summary_source_nodes(panel, fallback_nodes=fallback_nodes)
-    return list(nodes or [])
+    summary_nodes = list(nodes or [])
+    if not summary_nodes:
+        return []
+
+    if _is_xxpipe_channel_level(_get_panel_channel_level_text(panel)):
+        return summary_nodes
+
+    prepare_context = getattr(panel, "_prepare_pressure_pipe_dialog_context", None)
+    if not callable(prepare_context):
+        return summary_nodes
+
+    build_settings = getattr(panel, "_build_settings", None)
+    settings = None
+    if callable(build_settings):
+        try:
+            settings = build_settings()
+        except Exception:
+            settings = None
+
+    try:
+        dialog_context = prepare_context(summary_nodes, settings=settings, show_xxpipe_warning=False)
+    except TypeError:
+        try:
+            dialog_context = prepare_context(summary_nodes, settings=settings)
+        except Exception:
+            return summary_nodes
+    except Exception:
+        return summary_nodes
+
+    if not bool((dialog_context or {}).get("xxpipe_route_mode")):
+        return summary_nodes
+
+    route_import_targets = dict((dialog_context or {}).get("route_import_targets", {}) or {})
+    if not route_import_targets:
+        return []
+
+    row_indices = []
+    node_index_by_identity = {}
+    for idx, node in enumerate(summary_nodes):
+        node_index_by_identity.setdefault(id(node), []).append(idx)
+
+    # 连续承压导出优先使用 route 上下文给出的目标行索引；
+    # 若旧上下文只有 nodes，则再按对象身份回表3快照定位，避免把整张表重新带回 xx管 校验。
+    for payload in route_import_targets.values():
+        if not isinstance(payload, dict):
+            continue
+        for item in list(payload.get("targets", []) or []):
+            if not isinstance(item, dict):
+                continue
+            row_index = item.get("row_index")
+            if isinstance(row_index, int) and 0 <= row_index < len(summary_nodes):
+                row_indices.append(row_index)
+        for node in list(payload.get("nodes", []) or []):
+            row_indices.extend(node_index_by_identity.get(id(node), []))
+
+    filtered_indices = []
+    seen = set()
+    for row_index in sorted(set(row_indices)):
+        if row_index in seen or not (0 <= row_index < len(summary_nodes)):
+            continue
+        node = summary_nodes[row_index]
+        if getattr(node, "is_transition", False):
+            continue
+        if getattr(node, "is_auto_inserted_channel", False):
+            continue
+        seen.add(row_index)
+        filtered_indices.append(row_index)
+
+    return [summary_nodes[row_index] for row_index in filtered_indices]
 
 
 def _build_panel_xxpipe_profile_data(
@@ -5175,11 +5243,11 @@ def _build_xxpipe_partial_export_notice(xxpipe_profile_data):
         preview = "；".join(uncovered_stations[:6])
         if len(uncovered_stations) > 6:
             preview += f" 等{len(uncovered_stations)}处"
-        detail_lines.append(f"已导入DXF但覆盖不全的桩号：{preview}")
+        detail_lines.append(f"已导入DXF但覆盖不全的桩号：{preview}。建议先清空后重新导入同一份纵断面DXF。")
 
     return (
         "本次导出已完成，但管中心高程存在空白。"
-        "请到表3有压管道水力计算中导入/补全纵断面轴线DXF后重新导出。\n"
+        "请到表3有压管道水力计算中导入/补全纵断面轴线DXF；如果提示覆盖不全，请先清空后重新导入，再重新导出。\n"
         + "\n".join(detail_lines)
     )
 

@@ -161,6 +161,39 @@ def _sample_nodes():
     ]
 
 
+def _sample_xxqu_mixed_nodes():
+    open_channel = _make_node(
+        ip_no=1,
+        mc=0.0,
+        structure="明渠-圆形",
+        name="渠道段",
+        bottom_elevation=100.0,
+    )
+    pressure_pipe = _make_node(
+        ip_no=2,
+        mc=100.0,
+        structure="有压管道",
+        name="苟家湾",
+        in_out="进",
+        row_identity="flow1-row2",
+    )
+    auto_inserted = _make_node(
+        ip_no=3,
+        mc=110.0,
+        structure="有压管道",
+        name="自动补点",
+        row_identity="flow1-row3",
+    )
+    auto_inserted.is_auto_inserted_channel = True
+    directional_drill = _make_node(
+        ip_no=4,
+        mc=120.0,
+        structure="定向钻",
+        name="大石包",
+    )
+    return [open_channel, pressure_pipe, auto_inserted, directional_drill], [pressure_pipe, directional_drill]
+
+
 def _scaled_settings():
     return {
         "text_height": 3.5,
@@ -896,6 +929,126 @@ def test_xxpipe_export_entries_open_dialog_in_xxpipe_mode(monkeypatch, func_name
     getattr(cad_tools, func_name)(panel)
 
     assert captured["mode"] == expected_mode
+
+
+@pytest.mark.parametrize(
+    ("func_name", "suffix"),
+    [
+        ("export_longitudinal_profile_txt", ".txt"),
+        ("export_longitudinal_profile_dxf", ".dxf"),
+    ],
+)
+def test_xxpipe_export_entries_use_filtered_route_nodes_in_xxqu_route_mode(
+    local_tmp_path,
+    monkeypatch,
+    func_name,
+    suffix,
+):
+    mixed_nodes, route_nodes = _sample_xxqu_mixed_nodes()
+    out_file = local_tmp_path / f"xxqu_filtered_route{suffix}"
+    captured = {}
+
+    class _Dialog:
+        def __init__(self, *_args, **_kwargs):
+            self.result = {}
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    panel = SimpleNamespace(
+        calculated_nodes=list(mixed_nodes),
+        _text_export_settings={},
+        channel_name_edit=SimpleNamespace(text=lambda: "赛金"),
+        channel_level_combo=SimpleNamespace(currentText=lambda: "支渠"),
+    )
+    panel.window = lambda: None
+    panel._build_nodes_from_table = lambda: list(mixed_nodes)
+    panel._build_settings = lambda: _ProjSettings("")
+    panel._prepare_pressure_pipe_dialog_context = lambda nodes, settings=None, show_xxpipe_warning=False: {
+        "xxpipe_route_mode": True,
+        "route_import_targets": {
+            "flow1-route2": {
+                "nodes": [nodes[3], nodes[2]],
+                "targets": [{"row_index": 3}, {"row_index": 2}],
+            },
+            "flow1-route1": {
+                "nodes": [nodes[1], nodes[1]],
+                "targets": [{"row_index": 1}, {"row_index": 1}],
+            },
+        },
+    }
+
+    monkeypatch.setattr(cad_tools, "MODELS_AVAILABLE", True)
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _Dialog)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        cad_tools.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_a, **_k: (str(out_file), "TXT" if suffix == ".txt" else "DXF")),
+    )
+
+    if func_name == "export_longitudinal_profile_txt":
+        monkeypatch.setattr(
+            cad_tools,
+            "_export_longitudinal_txt_to_path",
+            lambda _panel, nodes, valid_nodes, *_a, **_k: captured.update(
+                {"nodes": list(nodes), "valid_nodes": list(valid_nodes)}
+            ),
+        )
+    else:
+        docs = {}
+
+        class _FakeDoc:
+            def __init__(self):
+                self.saved_path = None
+                self._msp = object()
+
+            def modelspace(self):
+                return self._msp
+
+            def saveas(self, path):
+                self.saved_path = path
+
+        def _fake_new(_version):
+            doc = _FakeDoc()
+            docs["doc"] = doc
+            return doc
+
+        monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(new=_fake_new))
+        monkeypatch.setattr(cad_tools, "_setup_profile_dxf_document", lambda *_a, **_k: None)
+        monkeypatch.setattr(cad_tools, "_ensure_profile_layers", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            cad_tools,
+            "_build_panel_xxpipe_profile_data",
+            lambda _panel, nodes, **_k: captured.update({"nodes": list(nodes)}) or {"profile_text_nodes": list(nodes)},
+        )
+        monkeypatch.setattr(cad_tools, "_draw_profile_on_msp", lambda *_a, **_k: (120.0, 80.0))
+
+    getattr(cad_tools, func_name)(panel)
+
+    assert captured["nodes"] == route_nodes
+    if func_name == "export_longitudinal_profile_txt":
+        assert captured["valid_nodes"] == route_nodes
+
+
+def test_build_xxpipe_partial_export_notice_prompts_clear_then_reimport_for_uncovered_cache():
+    notice = cad_tools._build_xxpipe_partial_export_notice(
+        {
+            "warnings": {
+                "allow_partial_export": True,
+                "missing_axis_identities": [],
+                "uncovered_stations": [
+                    {"identity": "1::三清庙", "station_mc": 80.0, "station_text": "1+000.000"}
+                ],
+            },
+        }
+    )
+
+    assert "清空后重新导入" in notice
+    assert "1::三清庙@1+000.000" in notice
 
 
 def test_build_xxpipe_profile_data_supports_tunnel_structures_with_bottom_elevation_and_section_text():
