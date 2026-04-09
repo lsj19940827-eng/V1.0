@@ -48,6 +48,8 @@ def draw_open_channel_dxf_on_msp(
         _draw_circular(tracked_msp, result, input_params, sf, scale_denom)
     elif stype == 'U形':
         _draw_u_section(tracked_msp, result, input_params, sf, scale_denom)
+    elif stype == '复式梯形':
+        _draw_compound_trapezoid(tracked_msp, result, input_params, sf, scale_denom)
     else:
         _draw_trapezoid(tracked_msp, result, input_params, sf, scale_denom)
 
@@ -273,6 +275,189 @@ def _draw_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
 
     lines.insert(1, f'比例: 1:{scale_denom}')
     _add_text_block(msp, text_x, H*sf + txt_h, lines, txt_h, '参数文字')
+
+
+def _draw_compound_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
+    """绘制复式梯形明渠断面。"""
+    Q = p.get('Q', 0.0)
+    n = p.get('n', 0.014)
+    slope_inv = p.get('slope_inv', 3000.0)
+    m1 = p.get('m1', result.get('m1', 0.0))
+    B1 = p.get('B1', result.get('B1', 0.0))
+    m2 = p.get('m2', result.get('m2', 0.0))
+    B2 = result.get('b_design', p.get('B2', result.get('B2', 0.0)))
+    m3 = p.get('m3', result.get('m3', 0.0))
+    h1 = p.get('h1', result.get('h1', 0.0))
+
+    h = result.get('h_design', 0.0)
+    H = result.get('h_prime', 0.0)
+    h_inc = result.get('h_increased', 0.0)
+    V = result.get('V_design', 0.0)
+    Q_inc = result.get('Q_increased', 0.0)
+    V_inc = result.get('V_increased', 0.0)
+    inc_pct = result.get('increase_percent', 0.0)
+    A = result.get('A_design', 0.0)
+    R = result.get('R_design', 0.0)
+    Fb = result.get('Fb', 0.0)
+
+    if H <= 0:
+        H = (h_inc + 0.3) if h_inc > 0 else h * 1.35
+
+    left_break_x = -(B2 / 2 + m2 * h1)
+    left_platform_x = left_break_x - B1
+    left_top_x = left_platform_x - m1 * max(H - h1, 0.0)
+    right_top_x = B2 / 2 + m3 * H
+    top_w = right_top_x - left_top_x
+
+    char = max(top_w, H, 1.0) * sf
+    txt_h = 3.5
+    arr = txt_h * 0.85
+    gap = char * 0.18
+
+    outline = [
+        (-B2 / 2 * sf, 0),
+        (B2 / 2 * sf, 0),
+        (right_top_x * sf, H * sf),
+        (left_top_x * sf, H * sf),
+        (left_platform_x * sf, h1 * sf),
+        (left_break_x * sf, h1 * sf),
+    ]
+    for i in range(len(outline)):
+        msp.add_line(outline[i], outline[(i + 1) % len(outline)], dxfattribs={'layer': '轮廓线'})
+
+    def _water_edges(depth):
+        if depth <= 0:
+            return None, None
+        if depth <= h1:
+            return -(B2 / 2 + m2 * depth), B2 / 2 + m3 * depth
+        hs = depth - h1
+        return left_platform_x - m1 * hs, B2 / 2 + m3 * depth
+
+    water_left, water_right = _water_edges(h)
+    if water_left is not None:
+        msp.add_line((water_left * sf, h * sf), (water_right * sf, h * sf), dxfattribs={'layer': '设计水位'})
+        msp.add_text(f'▽ 设计水位  h={h:.3f}m', dxfattribs={
+            'layer': '设计水位', 'height': txt_h, 'style': 'FANGSONG',
+            'insert': (0, h * sf + txt_h * 0.5), 'align_point': (0, h * sf + txt_h * 0.5), 'halign': 1,
+        })
+    if h_inc > 0:
+        inc_left, inc_right = _water_edges(h_inc)
+        msp.add_line((inc_left * sf, h_inc * sf), (inc_right * sf, h_inc * sf),
+                     dxfattribs={'layer': '加大水位', 'linetype': 'DASHED'})
+        msp.add_text(f'▽ 加大水位  h={h_inc:.3f}m', dxfattribs={
+            'layer': '加大水位', 'height': txt_h, 'style': 'FANGSONG',
+            'insert': (0, h_inc * sf + txt_h * 0.5), 'align_point': (0, h_inc * sf + txt_h * 0.5), 'halign': 1,
+        })
+
+    _add_dim_h(
+        msp,
+        x1=-B2 / 2 * sf,
+        x2=B2 / 2 * sf,
+        y_line=-(gap * 1.1),
+        y_orig=0,
+        label=f'B2={B2:.3f} m',
+        txt_h=txt_h,
+        arr=arr,
+        layer='尺寸标注',
+    )
+    _add_dim_h(
+        msp,
+        x1=left_platform_x * sf,
+        x2=left_break_x * sf,
+        y_line=(h1 * sf + gap * 0.7),
+        y_orig=h1 * sf,
+        label=f'B1={B1:.3f} m',
+        txt_h=txt_h,
+        arr=arr,
+        layer='尺寸标注',
+    )
+    _add_dim_v(
+        msp,
+        y1=0,
+        y2=h * sf,
+        x_line=(left_top_x * sf - gap * 1.2),
+        x_orig=-B2 / 2 * sf,
+        label=f'h={h:.3f} m',
+        txt_h=txt_h,
+        arr=arr,
+        layer='尺寸标注',
+    )
+    _add_dim_v(
+        msp,
+        y1=0,
+        y2=h1 * sf,
+        x_line=(left_top_x * sf - gap * 2.2),
+        x_orig=left_break_x * sf,
+        label=f'h1={h1:.3f} m',
+        txt_h=txt_h,
+        arr=arr,
+        layer='尺寸标注',
+    )
+    _add_dim_v(
+        msp,
+        y1=0,
+        y2=H * sf,
+        x_line=(right_top_x * sf + gap * 1.2),
+        x_orig=right_top_x * sf,
+        label=f'H={H:.3f} m',
+        txt_h=txt_h,
+        arr=arr,
+        layer='尺寸标注',
+    )
+
+    slope_labels = [
+        ((left_top_x + left_platform_x) * sf / 2, (h1 + max(H - h1, 0.0) * 0.55) * sf, f'1:{m1:g}'),
+        ((left_break_x - B2 / 2) * sf / 2, (h1 * 0.55) * sf, f'1:{m2:g}'),
+        (((B2 / 2) + right_top_x) * sf / 2, (H * 0.55) * sf, f'1:{m3:g}'),
+    ]
+    for x_pos, y_pos, label in slope_labels:
+        msp.add_text(label, dxfattribs={
+            'layer': '参数文字',
+            'height': txt_h,
+            'style': 'FANGSONG',
+            'insert': (x_pos, y_pos),
+            'align_point': (x_pos, y_pos),
+            'halign': 1,
+        })
+
+    text_x = right_top_x * sf + gap * 3.5
+    inc_pct_str = f'{inc_pct:.1f}%' if isinstance(inc_pct, (int, float)) else str(inc_pct)
+    lines = [
+        '【明渠水力计算】',
+        '断面类型: 复式梯形',
+        '',
+        '[输入参数]',
+        f'Q = {Q:.3f} m\u00b3/s',
+        f'n = {n}',
+        f'i = 1/{int(slope_inv)}',
+        '',
+        '[固定几何参数]',
+        f'm1 = {m1}',
+        f'B1 = {B1:.3f} m',
+        f'm2 = {m2}',
+        f'B2 = {B2:.3f} m',
+        f'm3 = {m3}',
+        f'h1 = {h1:.3f} m',
+        '坡比标注: 1:m1 / 1:m2 / 1:m3',
+        '',
+        '[设计流量工况]',
+        f'h = {h:.3f} m',
+        f'A = {A:.3f} m\u00b2',
+        f'R = {R:.3f} m',
+        f'V = {V:.3f} m/s',
+    ]
+    if h_inc > 0:
+        lines += [
+            '',
+            '[加大流量工况]',
+            f'加大比例 = {inc_pct_str}',
+            f'Q\u589e = {Q_inc:.3f} m\u00b3/s',
+            f'h\u589e = {h_inc:.3f} m',
+            f'V\u589e = {V_inc:.3f} m/s',
+            f'Fb = {Fb:.3f} m',
+        ]
+    lines.insert(1, f'比例: 1:{scale_denom}')
+    _add_text_block(msp, text_x, H * sf + txt_h, lines, txt_h, '参数文字')
 
 
 # ============================================================

@@ -95,6 +95,7 @@ except ImportError:
 try:
     from 明渠设计 import (
         quick_calculate as mingqu_calculate,
+        quick_calculate_compound_trapezoidal as mingqu_compound_calculate,
         quick_calculate_circular as circular_calculate,
         quick_calculate_u_section as mingqu_u_calculate
     )
@@ -131,7 +132,7 @@ except ImportError:
 
 # 断面类型列表
 SECTION_TYPES = [
-    "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
+    "明渠-梯形", "明渠-复式梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
     "渡槽-U形", "渡槽-矩形",
     "隧洞-圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
     "矩形暗涵", "倒虹吸", "有压管道", "定向钻", "顶管",
@@ -160,7 +161,19 @@ INPUT_HEADERS = [
     "矩形渡槽深宽比", "倒角角度(°)", "倒角底边(m)", "圆心角(°)",
     "不淤流速", "不冲流速", "转弯半径(m)",
     "管材",
+    "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
 ]
+
+COL_TURN_RADIUS = 20
+COL_PIPE_MATERIAL = 21
+COL_COMPOUND_M1 = 22
+COL_COMPOUND_B1 = 23
+COL_COMPOUND_M2 = 24
+COL_COMPOUND_B2 = 25
+COL_COMPOUND_M3 = 26
+COL_COMPOUND_H1 = 27
+COL_PIPE_LOCAL_LOSS = len(INPUT_HEADERS)
+COL_PIPE_IN_OUT = len(INPUT_HEADERS) + 1
 
 _EXCEL_IMPORTED_ROW_ROLE = getattr(Qt, "UserRole", 0x0100) + 101
 _IMPORTED_RATIO_WARNING_TOLERANCE = 0.01
@@ -223,6 +236,54 @@ _HEADER_TOOLTIPS = {
         "  • β 小（如 1~2）→ 渠道窄而深，水力效率高、占地少\n\n"
         "▶ 适用范围\n"
         "  仅对「明渠-梯形」「明渠-矩形」类型生效"
+    ),
+    "左上坡m1": (
+        "【左上坡 m1】\n\n"
+        "定义：复式梯形左侧上部边坡系数，按 1:m1 输入。\n\n"
+        "▶ 适用范围\n"
+        "  仅对「明渠-复式梯形」类型生效\n\n"
+        "▶ 填写要求\n"
+        "  必填，且不能为负"
+    ),
+    "平台宽B1(m)": (
+        "【平台宽 B1（单位：米）】\n\n"
+        "定义：复式梯形左侧平台的水平宽度。\n\n"
+        "▶ 适用范围\n"
+        "  仅对「明渠-复式梯形」类型生效\n\n"
+        "▶ 填写要求\n"
+        "  必填，且必须大于 0"
+    ),
+    "左下坡m2": (
+        "【左下坡 m2】\n\n"
+        "定义：复式梯形左侧下部边坡系数，按 1:m2 输入。\n\n"
+        "▶ 适用范围\n"
+        "  仅对「明渠-复式梯形」类型生效\n\n"
+        "▶ 填写要求\n"
+        "  必填，且不能为负"
+    ),
+    "渠底宽B2(m)": (
+        "【渠底宽 B2（单位：米）】\n\n"
+        "定义：复式梯形最底部的渠底宽度。\n\n"
+        "▶ 适用范围\n"
+        "  仅对「明渠-复式梯形」类型生效\n\n"
+        "▶ 填写要求\n"
+        "  必填，且必须大于 0"
+    ),
+    "右坡m3": (
+        "【右坡 m3】\n\n"
+        "定义：复式梯形右侧边坡系数，按 1:m3 输入。\n\n"
+        "▶ 适用范围\n"
+        "  仅对「明渠-复式梯形」类型生效\n\n"
+        "▶ 填写要求\n"
+        "  必填，且不能为负"
+    ),
+    "平台高差h1(m)": (
+        "【平台高差 h1（单位：米）】\n\n"
+        "定义：复式梯形平台相对渠底的高差。\n\n"
+        "▶ 适用范围\n"
+        "  仅对「明渠-复式梯形」类型生效\n\n"
+        "▶ 填写要求\n"
+        "  必填，且必须大于 0"
     ),
     "倒角角度(°)": (
         "【倒角角度（单位：度）】\n\n"
@@ -1440,7 +1501,7 @@ class BatchPanel(QWidget):
                         'flow_section': segment, 'building_name': building_name,
                         'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
                         'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.014), 'slope_inv': 0,
-                        'turn_radius': self._sf(values[20], 0.0) if len(values) > 20 else 0.0,
+                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
                     }
                     self.batch_results.append({'input': values, 'result': siphon_result})
                     skip_count += 1
@@ -1457,16 +1518,16 @@ class BatchPanel(QWidget):
                     row_out[3] = section_type; row_out[-1] = "⏭ 占位行(不参与计算)"
                     result_rows.append(row_out)
                     # 读取有压管道专用列（col 21-23）
-                    pipe_material = str(values[21]).strip() if len(values) > 21 else ""
-                    local_loss_ratio = self._sf(values[22], 0.0) if len(values) > 22 else 0.0
-                    in_out_raw = str(values[23]).strip() if len(values) > 23 else ""
+                    pipe_material = str(values[COL_PIPE_MATERIAL]).strip() if len(values) > COL_PIPE_MATERIAL else ""
+                    local_loss_ratio = self._sf(values[COL_PIPE_LOCAL_LOSS], 0.0) if len(values) > COL_PIPE_LOCAL_LOSS else 0.0
+                    in_out_raw = str(values[COL_PIPE_IN_OUT]).strip() if len(values) > COL_PIPE_IN_OUT else ""
                     ppipe_result = {
                         'success': True, 'section_type': section_type, 'is_pressure_pipe': True,
                         'flow_section': segment, 'building_name': building_name,
                         'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
                         'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.0), 'slope_inv': 0,
                         'D': self._sf(values[13], 0.0),  # 直径D用于有压管道同类结构
-                        'turn_radius': self._sf(values[20], 0.0) if len(values) > 20 else 0.0,
+                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
                         'pipe_material': pipe_material,
                         'local_loss_ratio': local_loss_ratio,
                         'in_out_raw': in_out_raw,
@@ -1490,7 +1551,7 @@ class BatchPanel(QWidget):
                         'flow_section': segment, 'building_name': building_name,
                         'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
                         'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.014), 'slope_inv': 0,
-                        'turn_radius': self._sf(values[20], 0.0) if len(values) > 20 else 0.0,
+                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
                     }
                     self.batch_results.append({'input': values, 'result': gate_result})
                     skip_count += 1
@@ -1513,6 +1574,12 @@ class BatchPanel(QWidget):
                 chamfer_angle = self._sf(values[15], 0)
                 chamfer_length = self._sf(values[16], 0)
                 theta_deg = self._sf(values[17], 0)
+                m1 = self._sf(values[COL_COMPOUND_M1], 0)
+                B1 = self._sf(values[COL_COMPOUND_B1], 0)
+                m2 = self._sf(values[COL_COMPOUND_M2], 0)
+                B2 = self._sf(values[COL_COMPOUND_B2], 0)
+                m3 = self._sf(values[COL_COMPOUND_M3], 0)
+                h1 = self._sf(values[COL_COMPOUND_H1], 0)
                 v_min = self._sf(values[18], 0.1)
                 v_max = self._sf(values[19], 100)
 
@@ -1531,6 +1598,7 @@ class BatchPanel(QWidget):
                 result = self._calculate_single(
                     section_type, Q, n, slope_inv, v_min, v_max,
                     m=m, b=b, beta=beta, R=R, D=D,
+                    m1=m1, B1=B1, m2=m2, B2=B2, m3=m3, h1=h1,
                     ducao_depth_ratio=ducao_depth_ratio,
                     chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
                     theta_deg=theta_deg,
@@ -1644,9 +1712,9 @@ class BatchPanel(QWidget):
                         r['slope_inv'] = self._sf(v[8])
                     if 'm' not in r:
                         r['m'] = self._sf(v[9])
-                    r['turn_radius'] = self._sf(v[20], 0.0) if len(v) > 20 else 0.0
+                    r['turn_radius'] = self._sf(v[COL_TURN_RADIUS], 0.0) if len(v) > COL_TURN_RADIUS else 0.0
                     # 保留用户原始填写文本；"0" 也要透传，供表3识别为显式输入而不是空白。
-                    r['turn_radius_text'] = str(v[20]).strip() if len(v) > 20 and v[20] is not None else ""
+                    r['turn_radius_text'] = str(v[COL_TURN_RADIUS]).strip() if len(v) > COL_TURN_RADIUS and v[COL_TURN_RADIUS] is not None else ""
                     results_for_register.append(r)
                 count = shared_data.register_batch_results(results_for_register)
                 if count > 0:
@@ -1660,6 +1728,7 @@ class BatchPanel(QWidget):
     # ================================================================
     def _calculate_single(self, section_type, Q, n, slope_inv, v_min, v_max, *,
                           m=0, b=0, beta=0, R=0, D=0,
+                          m1=0, B1=0, m2=0, B2=0, m3=0, h1=0,
                           ducao_depth_ratio=0, chamfer_angle=0, chamfer_length=0, theta_deg=0,
                           manual_increase_percent=None,
                           preserve_explicit_bottom_width=False,
@@ -1674,6 +1743,14 @@ class BatchPanel(QWidget):
                                     manual_beta=beta if beta > 0 else None,
                                     manual_increase_percent=_inc,
                                     preserve_manual_b=preserve_explicit_bottom_width)
+        elif "明渠-复式梯形" in section_type:
+            if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
+            return mingqu_compound_calculate(
+                Q=Q, m1=m1, B1=B1, m2=m2, B2=B2, m3=m3, h1=h1,
+                n=n, slope_inv=slope_inv,
+                v_min=v_min, v_max=v_max,
+                manual_increase_percent=_inc
+            )
         elif "明渠-矩形" in section_type:
             if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
             return mingqu_calculate(Q=Q, m=0, n=n, slope_inv=slope_inv,
@@ -2006,9 +2083,9 @@ class BatchPanel(QWidget):
         # 有压管道专用参数
         q_val = str(input_vals[6]).strip() if len(input_vals) > 6 and input_vals[6] else ""
         d_val = str(input_vals[13]).strip() if len(input_vals) > 13 and input_vals[13] else ""
-        material = str(input_vals[21]).strip() if len(input_vals) > 21 and input_vals[21] else "未指定"
-        loss_ratio = str(input_vals[22]).strip() if len(input_vals) > 22 and input_vals[22] else ""
-        in_out = str(input_vals[23]).strip() if len(input_vals) > 23 and input_vals[23] else ""
+        material = str(input_vals[COL_PIPE_MATERIAL]).strip() if len(input_vals) > COL_PIPE_MATERIAL and input_vals[COL_PIPE_MATERIAL] else "未指定"
+        loss_ratio = str(input_vals[COL_PIPE_LOCAL_LOSS]).strip() if len(input_vals) > COL_PIPE_LOCAL_LOSS and input_vals[COL_PIPE_LOCAL_LOSS] else ""
+        in_out = str(input_vals[COL_PIPE_IN_OUT]).strip() if len(input_vals) > COL_PIPE_IN_OUT and input_vals[COL_PIPE_IN_OUT] else ""
         o.append("")
         o.append("【管道参数】")
         if q_val:
@@ -2080,6 +2157,44 @@ class BatchPanel(QWidget):
             fb_ok = Fb >= (0.25 * h_i + 0.2 - 0.001) if h_i > 0 else True
             o.append(f"  1. 流速验证: {v_min} ≤ V={V_d:.3f} ≤ {v_max} m/s → {'通过 ✓' if velocity_ok else '未通过 ✗'}")
             o.append(f"  2. 超高验证: Fb={Fb:.3f}m → {'通过 ✓' if fb_ok else '未通过 ✗'}")
+        elif "复式梯形" in section_type:
+            m1 = self._sf(input_vals[COL_COMPOUND_M1], 0)
+            B1 = self._sf(input_vals[COL_COMPOUND_B1], 0)
+            m2 = self._sf(input_vals[COL_COMPOUND_M2], 0)
+            B2 = self._sf(input_vals[COL_COMPOUND_B2], 0)
+            m3 = self._sf(input_vals[COL_COMPOUND_M3], 0)
+            h1 = self._sf(input_vals[COL_COMPOUND_H1], 0)
+            h_d = result.get('h_design', 0)
+            V_d = result.get('V_design', 0)
+            A_d = result.get('A_design', 0)
+            chi_d = result.get('X_design', 0)
+            Rh_d = result.get('R_design', 0)
+            Q_inc = result.get('Q_increased', 0)
+            h_i = result.get('h_increased', 0)
+            V_i = result.get('V_increased', 0)
+            Fb = result.get('Fb', 0)
+            H = result.get('h_prime', 0)
+            inc_pct = result.get('increase_percent', 0)
+            o.append("【一、输入参数】")
+            o.extend(self._channel_info_lines(input_vals))
+            o.append(f"  断面类型 = {section_type}")
+            o.append(f"  Q = {Q:.3f} m³/s,  n = {n},  坡度倒数 = {int(slope_inv)}")
+            o.append(f"  m1 = {m1}, B1 = {B1:.3f} m, m2 = {m2}")
+            o.append(f"  B2 = {B2:.3f} m, m3 = {m3}, h1 = {h1:.3f} m")
+            o.append(f"  不淤流速 = {v_min} m/s,  不冲流速 = {v_max} m/s")
+            o.append("")
+            o.append("【二、设计结果】")
+            o.append(f"  设计方法 = {result.get('design_method', '固定复式梯形断面')}")
+            o.append(f"  设计水深 h = {h_d:.3f} m")
+            o.append(f"  过水面积 A = {A_d:.3f} m²")
+            o.append(f"  湿周 χ = {chi_d:.3f} m")
+            o.append(f"  水力半径 R = {Rh_d:.3f} m")
+            o.append(f"  设计流速 V = {V_d:.3f} m/s")
+            o.append("")
+            o.append("【三、加大流量工况】")
+            o.append(f"  加大比例 = {inc_pct:.1f}%")
+            o.append(f"  Q加大 = {Q_inc:.3f} m³/s, h加大 = {h_i:.3f} m, V加大 = {V_i:.3f} m/s")
+            o.append(f"  Fb = {Fb:.3f} m, H = {H:.3f} m")
         elif "圆形" in section_type:
             D_design = result.get('D_design', result.get('D', 0))
             h_d = result.get('y_d', result.get('h_design', 0))
@@ -2462,6 +2577,9 @@ class BatchPanel(QWidget):
             "ducao_depth_ratio": values[14], "chamfer_angle": values[15],
             "chamfer_length": values[16], "theta": values[17],
             "v_min": values[18], "v_max": values[19],
+            "m1": values[COL_COMPOUND_M1], "B1": values[COL_COMPOUND_B1],
+            "m2": values[COL_COMPOUND_M2], "B2": values[COL_COMPOUND_B2],
+            "m3": values[COL_COMPOUND_M3], "h1": values[COL_COMPOUND_H1],
         }
         dlg = SectionParameterDialog(self, section_type, current_values)
         if dlg.exec() == QDialog.Accepted:
@@ -2483,6 +2601,8 @@ class BatchPanel(QWidget):
         # 清空所有可选参数列(9-17)
         for i in range(9, 18):
             values[i] = ""
+        for i in range(COL_COMPOUND_M1, COL_COMPOUND_H1 + 1):
+            values[i] = ""
         # 根据结构形式更新对应的参数列
         if "明渠-梯形" in section_type or "明渠-矩形" in section_type:
             m_val = params.get('m', "")
@@ -2491,6 +2611,17 @@ class BatchPanel(QWidget):
             values[10] = str(b_val) if b_val != "" else ""
             ratio_val = params.get('b_h_ratio', "")
             values[11] = str(ratio_val) if ratio_val != "" else ""
+        elif "明渠-复式梯形" in section_type:
+            for key, col in (
+                ('m1', COL_COMPOUND_M1),
+                ('B1', COL_COMPOUND_B1),
+                ('m2', COL_COMPOUND_M2),
+                ('B2', COL_COMPOUND_B2),
+                ('m3', COL_COMPOUND_M3),
+                ('h1', COL_COMPOUND_H1),
+            ):
+                val = params.get(key, "")
+                values[col] = str(val) if val != "" else ""
         elif "明渠-圆形" in section_type:
             D_val = params.get('D', "")
             values[13] = str(D_val) if D_val != "" else ""
@@ -2537,7 +2668,7 @@ class BatchPanel(QWidget):
         """将粘贴的断面类型简写映射为有效类型（与原版一致）"""
         raw_type = normalize_section_type_name(raw_type)
         mapping = {
-            "梯形": "明渠-梯形", "矩形": "明渠-矩形", "圆形": "明渠-圆形",
+            "梯形": "明渠-梯形", "复式梯形": "明渠-复式梯形", "矩形": "明渠-矩形", "圆形": "明渠-圆形",
             "明渠U形": "明渠-U形", "U形明渠": "明渠-U形",
             "U形": "渡槽-U形", "U形渡槽": "渡槽-U形", "矩形渡槽": "渡槽-矩形",
             "圆形隧洞": "隧洞-圆形", "圆拱直墙": "隧洞-圆拱直墙型", "圆拱直墙型": "隧洞-圆拱直墙型",
@@ -2587,6 +2718,8 @@ class BatchPanel(QWidget):
 
         for i in range(9, 18):
             self.input_table.setItem(row, i, QTableWidgetItem(""))
+        for i in range(COL_COMPOUND_M1, COL_COMPOUND_H1 + 1):
+            self.input_table.setItem(row, i, QTableWidgetItem(""))
 
         slope_item = self.input_table.item(row, 8)
         if not slope_item or not slope_item.text().strip():
@@ -2594,6 +2727,17 @@ class BatchPanel(QWidget):
 
         if "明渠-梯形" in new_type:
             self.input_table.setItem(row, 9, QTableWidgetItem("1.0"))
+        elif "明渠-复式梯形" in new_type:
+            defaults = {
+                COL_COMPOUND_M1: "1.5",
+                COL_COMPOUND_B1: "2.0",
+                COL_COMPOUND_M2: "1.0",
+                COL_COMPOUND_B2: "3.0",
+                COL_COMPOUND_M3: "1.0",
+                COL_COMPOUND_H1: "1.0",
+            }
+            for col, val in defaults.items():
+                self.input_table.setItem(row, col, QTableWidgetItem(val))
 
         self.input_table.blockSignals(False)
 
@@ -3255,14 +3399,24 @@ class BatchPanel(QWidget):
                 n_val = self.input_table.item(r, 7).text() if self.input_table.item(r, 7) else ""
                 slope_val = self.input_table.item(r, 8).text() if self.input_table.item(r, 8) else ""
                 m_val = self.input_table.item(r, 9).text() if self.input_table.item(r, 9) else ""
-                tr_val = self.input_table.item(r, 20).text() if self.input_table.item(r, 20) else ""
-                input_params_map[seq_key] = (x_val, y_val, q_val, n_val, slope_val, m_val, tr_val)
+                tr_val = self.input_table.item(r, COL_TURN_RADIUS).text() if self.input_table.item(r, COL_TURN_RADIUS) else ""
+                compound_vals = []
+                for col in (
+                    COL_COMPOUND_M1, COL_COMPOUND_B1, COL_COMPOUND_M2,
+                    COL_COMPOUND_B2, COL_COMPOUND_M3, COL_COMPOUND_H1,
+                ):
+                    item = self.input_table.item(r, col)
+                    compound_vals.append(item.text() if item else "")
+                input_params_map[seq_key] = (x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, *compound_vals)
 
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "批量计算结果"
             # 导出表头：在结果表头的结构形式后插入X/Y/Q/n/比降/边坡系数/转弯半径列
-            export_headers = list(RESULT_HEADERS[:4]) + ["X", "Y", "Q(m³/s)", "糙率n", "比降(1/)", "边坡系数m", "转弯半径(m)"] + list(RESULT_HEADERS[4:])
+            export_headers = list(RESULT_HEADERS[:4]) + [
+                "X", "Y", "Q(m³/s)", "糙率n", "比降(1/)", "边坡系数m", "转弯半径(m)",
+                "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
+            ] + list(RESULT_HEADERS[4:])
             # 第1行：标题
             ws['A1'] = "渠系建筑物多流量段批量水力计算系统结果报告"
             ws['A1'].font = Font(size=14, bold=True)
@@ -3292,9 +3446,15 @@ class BatchPanel(QWidget):
                     item = self.result_table.item(r, c)
                     result_vals.append(item.text() if item else "")
                 seq_key = result_vals[0].strip() if result_vals else ""
-                x_val, y_val, q_val, n_val, slope_val, m_val, tr_val = input_params_map.get(seq_key, ("", "", "", "", "", "", ""))
+                x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, m1_val, B1_val, m2_val, B2_val, m3_val, h1_val = input_params_map.get(
+                    seq_key,
+                    ("", "", "", "", "", "", "", "", "", "", "", "", ""),
+                )
                 # 构建导出行：前4列 + X/Y/Q/n/比降/边坡系数/转弯半径 + 后续结果列
-                export_row = result_vals[:4] + [x_val, y_val, q_val, n_val, slope_val, m_val, tr_val] + result_vals[4:]
+                export_row = result_vals[:4] + [
+                    x_val, y_val, q_val, n_val, slope_val, m_val, tr_val,
+                    m1_val, B1_val, m2_val, B2_val, m3_val, h1_val,
+                ] + result_vals[4:]
                 for c, val in enumerate(export_row, 1):
                     ws.cell(row=r+4, column=c, value=val)
             # 自动列宽
@@ -3666,6 +3826,14 @@ class SectionParameterDialog(QDialog):
             self._add_opt_entry(form, "指定底宽 B (m):", "b", "留空自动计算")
             self._add_opt_entry(form, "宽深比 B/h:", "b_h_ratio", "留空自动计算",
                                 "(梯形断面边坡系数必填; 底宽B和宽深比可选)")
+        elif "明渠-复式梯形" in st:
+            self._add_opt_entry(form, "左上坡 m1:", "m1", "必填")
+            self._add_opt_entry(form, "平台宽 B1 (m):", "B1", "必填")
+            self._add_opt_entry(form, "左下坡 m2:", "m2", "必填")
+            self._add_opt_entry(form, "渠底宽 B2 (m):", "B2", "必填")
+            self._add_opt_entry(form, "右坡 m3:", "m3", "必填")
+            self._add_opt_entry(form, "平台高差 h1 (m):", "h1", "必填",
+                                "(复式梯形 6 个几何参数全部固定，不参与自动寻优)")
         elif "明渠-矩形" in st:
             hint_label = QLabel("边坡系数 m = 0 (矩形断面)")
             hint_label.setStyleSheet("color:#555;")
@@ -3715,6 +3883,11 @@ class SectionParameterDialog(QDialog):
             st = self.section_type
             if "明渠-梯形" in st or "明渠-矩形" in st:
                 for k in ['m', 'b', 'b_h_ratio']:
+                    v = cv.get(k, '')
+                    if k in self._entries and v and str(v).strip():
+                        self._entries[k].setText(str(v).strip())
+            elif "明渠-复式梯形" in st:
+                for k in ['m1', 'B1', 'm2', 'B2', 'm3', 'h1']:
                     v = cv.get(k, '')
                     if k in self._entries and v and str(v).strip():
                         self._entries[k].setText(str(v).strip())
@@ -3788,6 +3961,23 @@ class SectionParameterDialog(QDialog):
                 result['m'] = m_val
                 result['b'] = self._get_float('b', "")
                 result['b_h_ratio'] = self._get_float('b_h_ratio', "")
+            elif "明渠-复式梯形" in st:
+                for key, label in (
+                    ('m1', '左上坡 m1'),
+                    ('B1', '平台宽 B1'),
+                    ('m2', '左下坡 m2'),
+                    ('B2', '渠底宽 B2'),
+                    ('m3', '右坡 m3'),
+                    ('h1', '平台高差 h1'),
+                ):
+                    val = self._get_float(key)
+                    if val == "" or val is None:
+                        raise ValueError(f"复式梯形必须填写{label}")
+                    if key in {'B1', 'B2', 'h1'} and val <= 0:
+                        raise ValueError(f"{label}必须大于0")
+                    if key in {'m1', 'm2', 'm3'} and val < 0:
+                        raise ValueError(f"{label}不能为负")
+                    result[key] = val
             elif "明渠-矩形" in st:
                 result['m'] = 0
                 result['b'] = self._get_float('b', "")

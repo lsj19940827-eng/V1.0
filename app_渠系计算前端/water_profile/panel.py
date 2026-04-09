@@ -243,12 +243,14 @@ SOURCE_COORD_Y_ROLE_KEY = "_source_y_text"
 USE_INCREASE_ROLE_KEY = "_use_increase"
 PRESSURE_PIPE_ROW_ID_ROLE_KEY = "_pressure_pipe_row_identity"
 PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY = "_pressure_pipe_window_override"
+COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY = "_compound_trapezoid_params"
 TRANSITION_LENGTH_RULE_STEP_DEFAULT = 1.0
 TRANSITION_LENGTH_RULE_MODE_OPTIONS = (
     ("公式值", "formula"),
     ("向上修约", "step_up"),
     ("固定值", "fixed"),
 )
+COMPOUND_TRAPEZOID_PARAM_KEYS = ("m1", "B1", "m2", "B2", "m3", "h1")
 
 
 def normalize_use_increase_flag(value, default=True):
@@ -266,6 +268,23 @@ def normalize_use_increase_flag(value, default=True):
     if text in {"false", "0", "no", "n", "off"}:
         return False
     return bool(value)
+
+
+def normalize_compound_trapezoid_params(source):
+    """统一整理复式梯形隐藏参数，避免在表格刷新时丢失。"""
+    if not isinstance(source, dict):
+        return {}
+
+    params = {}
+    for key in COMPOUND_TRAPEZOID_PARAM_KEYS:
+        value = source.get(key, None)
+        if value is None or str(value).strip() == "":
+            continue
+        try:
+            params[key] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return params
 
 
 # ================================================================
@@ -6043,6 +6062,7 @@ class WaterProfilePanel(QWidget):
             pipe_material = str(
                 getattr(sr, 'pipe_material', '') or raw_result.get('pipe_material', '')
             ).strip()
+            compound_params = normalize_compound_trapezoid_params(raw_result)
             local_loss_ratio = (
                 getattr(sr, 'local_loss_ratio', 0.0)
                 if getattr(sr, 'local_loss_ratio', None) is not None
@@ -6176,6 +6196,12 @@ class WaterProfilePanel(QWidget):
                     except (ValueError, TypeError):
                         pass
                     first_item.setData(Qt.UserRole, payload)
+            if section_type == "明渠-复式梯形" and compound_params and first_item:
+                payload = first_item.data(Qt.UserRole)
+                if not isinstance(payload, dict):
+                    payload = {}
+                payload[COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY] = copy.deepcopy(compound_params)
+                first_item.setData(Qt.UserRole, payload)
             if h_val and float(h_val) > 0:
                 _item = QTableWidgetItem(f"{float(h_val):.3f}")
                 _item.setTextAlignment(Qt.AlignCenter)
@@ -6672,6 +6698,7 @@ class WaterProfilePanel(QWidget):
             use_increase = True
             from_table1_source = False
             pressure_pipe_row_identity = ""
+            compound_trapezoid_params = {}
             # 恢复自动插入补段标记（通过UserRole存储）
             _first_item = table.item(r, 0)
             if _first_item:
@@ -6771,6 +6798,9 @@ class WaterProfilePanel(QWidget):
                             _ur.get(USE_INCREASE_ROLE_KEY),
                             default=True,
                         )
+                    compound_trapezoid_params = normalize_compound_trapezoid_params(
+                        _ur.get(COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY, {})
+                    )
             if not from_table1_source and not getattr(node, 'is_transition', False) and not getattr(node, 'is_auto_inserted_channel', False):
                 from_table1_source = True
             node.from_table1_source = from_table1_source
@@ -6895,6 +6925,10 @@ class WaterProfilePanel(QWidget):
             node.section_params['R_circle'] = R
             node.section_params['m'] = m_val
             node.section_params['use_increase'] = use_increase
+            if struct_str == "明渠-复式梯形" and compound_trapezoid_params:
+                node.section_params.update(copy.deepcopy(compound_trapezoid_params))
+                if not node.section_params.get('B', 0) and compound_trapezoid_params.get('B2', 0):
+                    node.section_params['B'] = compound_trapezoid_params['B2']
             node.use_increase = use_increase
             if pipe_material:
                 node.section_params['pipe_material'] = pipe_material
@@ -7478,6 +7512,13 @@ class WaterProfilePanel(QWidget):
                     payload[PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY] = copy.deepcopy(override)
                 else:
                     payload.pop(PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY, None)
+                compound_trapezoid_params = {}
+                if _st_str == "明渠-复式梯形":
+                    compound_trapezoid_params = normalize_compound_trapezoid_params(_sp)
+                if compound_trapezoid_params:
+                    payload[COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY] = copy.deepcopy(compound_trapezoid_params)
+                else:
+                    payload.pop(COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY, None)
                 if _is_source_row:
                     payload[SOURCE_COORD_X_ROLE_KEY] = self._normalize_coord_text(vals[5])
                     payload[SOURCE_COORD_Y_ROLE_KEY] = self._normalize_coord_text(vals[6])
@@ -8459,6 +8500,19 @@ class WaterProfilePanel(QWidget):
                     item.setForeground(QColor("#2E7D32"))
                     item.setToolTip("自动插入的明渠连接段，用于计算两个建筑物之间的沿程及弯道水头损失。\n几何列留空因为该行不是真实IP转折点。")
                 self.node_table.setItem(r, c, item)
+            first_item = self.node_table.item(r, 0)
+            if first_item:
+                payload = first_item.data(Qt.UserRole)
+                if not isinstance(payload, dict):
+                    payload = {}
+                compound_trapezoid_params = {}
+                if _st_str == "明渠-复式梯形":
+                    compound_trapezoid_params = normalize_compound_trapezoid_params(
+                        getattr(node, 'section_params', {}) or {}
+                    )
+                if compound_trapezoid_params:
+                    payload[COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY] = copy.deepcopy(compound_trapezoid_params)
+                    first_item.setData(Qt.UserRole, payload)
         auto_resize_table(self.node_table)
 
     def _open_siphon_calculator(self):

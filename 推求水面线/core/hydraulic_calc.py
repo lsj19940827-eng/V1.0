@@ -277,6 +277,86 @@ class HydraulicCalculator:
     def _get_radius(self, params: dict) -> float:
         """从断面参数中获取半径（兼容多种键名）"""
         return params.get('R_circle', params.get('半径', params.get('内半径', params.get('r', 0))))
+
+    def _get_compound_trapezoid_params(self, params: dict) -> dict:
+        """提取复式梯形计算所需参数。"""
+        def _to_float(key: str, fallback: float = 0.0) -> float:
+            value = params.get(key, fallback)
+            if value is None or str(value).strip() == "":
+                return fallback
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return fallback
+
+        B2 = _to_float('B2', 0.0)
+        if B2 <= ZERO_TOLERANCE:
+            B2 = _to_float('B', 0.0)
+        return {
+            'm1': _to_float('m1', 0.0),
+            'B1': _to_float('B1', 0.0),
+            'm2': _to_float('m2', 0.0),
+            'B2': B2,
+            'm3': _to_float('m3', 0.0),
+            'h1': _to_float('h1', 0.0),
+        }
+
+    def _compound_trapezoid_area(self, params: dict, h: float) -> float:
+        """计算复式梯形断面面积。"""
+        shape = self._get_compound_trapezoid_params(params)
+        m1 = shape['m1']
+        B1 = shape['B1']
+        m2 = shape['m2']
+        B2 = shape['B2']
+        m3 = shape['m3']
+        h1 = shape['h1']
+
+        if h <= h1:
+            return B2 * h + 0.5 * (m2 + m3) * h * h
+
+        hs = h - h1
+        A1 = B2 * h1 + 0.5 * (m2 + m3) * h1 * h1
+        W1 = B2 + (m2 + m3) * h1 + B1
+        return A1 + W1 * hs + 0.5 * (m1 + m3) * hs * hs
+
+    def _compound_trapezoid_perimeter(self, params: dict, h: float) -> float:
+        """计算复式梯形湿周。"""
+        shape = self._get_compound_trapezoid_params(params)
+        m1 = shape['m1']
+        B1 = shape['B1']
+        m2 = shape['m2']
+        B2 = shape['B2']
+        m3 = shape['m3']
+        h1 = shape['h1']
+
+        if h <= h1:
+            return B2 + h * math.sqrt(1 + m2 * m2) + h * math.sqrt(1 + m3 * m3)
+
+        hs = h - h1
+        return (
+            B2
+            + h1 * math.sqrt(1 + m2 * m2)
+            + B1
+            + hs * math.sqrt(1 + m1 * m1)
+            + h * math.sqrt(1 + m3 * m3)
+        )
+
+    def _compound_trapezoid_surface_width(self, params: dict, h: float) -> float:
+        """计算复式梯形水面宽度。"""
+        shape = self._get_compound_trapezoid_params(params)
+        m1 = shape['m1']
+        B1 = shape['B1']
+        m2 = shape['m2']
+        B2 = shape['B2']
+        m3 = shape['m3']
+        h1 = shape['h1']
+
+        if h <= h1:
+            return B2 + (m2 + m3) * h
+
+        hs = h - h1
+        W1 = B2 + (m2 + m3) * h1 + B1
+        return W1 + (m1 + m3) * hs
     
     def _circular_area(self, D: float, h: float) -> float:
         """计算圆形断面过水面积"""
@@ -549,6 +629,9 @@ class HydraulicCalculator:
             b = self._get_bottom_width(params)
             m = params.get('边坡', params.get('m', 0))
             return (b + m * h) * h
+
+        elif sv == "明渠-复式梯形":
+            return self._compound_trapezoid_area(params, h)
         
         # 圆形类：明渠-圆形、隧洞-圆形、倒虹吸
         elif sv in ("明渠-圆形", "隧洞-圆形", "倒虹吸"):
@@ -666,6 +749,9 @@ class HydraulicCalculator:
             b = self._get_bottom_width(params)
             m = params.get('边坡', params.get('m', 0))
             return b + 2 * h * math.sqrt(1 + m * m)
+
+        elif sv == "明渠-复式梯形":
+            return self._compound_trapezoid_perimeter(params, h)
         
         # 圆形类：明渠-圆形、隧洞-圆形、倒虹吸
         elif sv in ("明渠-圆形", "隧洞-圆形", "倒虹吸"):
@@ -1270,6 +1356,8 @@ class HydraulicCalculator:
                         B = self._rect_chamfer_surface_width(b, h, ca, cl)
                     else:
                         B = b
+                elif sv_bend == "明渠-复式梯形":
+                    B = self._compound_trapezoid_surface_width(node.section_params, h)
                 else:
                     m = node.section_params.get('m', node.section_params.get('边坡系数', node.section_params.get('边坡', 0)))
                     B = b + 2 * m * h

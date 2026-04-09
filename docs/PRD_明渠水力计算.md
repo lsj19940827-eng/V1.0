@@ -2,14 +2,14 @@
 
 > **版本**: v1.3  
 > **创建日期**: 2026-02-22  
-> **最后更新**: 2026-03-27  
-> **状态**: 已实现（完成度 100%，含 U形）
+> **最后更新**: 2026-04-09  
+> **状态**: 已实现（完成度 100%，含 U形 / 复式梯形）
 
 ---
 
 ## 一、模块概述
 
-明渠水力计算模块是「渠系建筑物水力计算系统」的核心子模块之一，提供 **梯形、矩形、圆形、U形** 四种明渠断面类型的水力设计计算功能。
+明渠水力计算模块是「渠系建筑物水力计算系统」的核心子模块之一，提供 **梯形、复式梯形、矩形、圆形、U形** 五种明渠断面类型的水力设计计算功能。
 
 所有断面类型在架构上处于并列地位，具有统一的调用逻辑和统一的设计接口 `design_channel()`。
 
@@ -23,6 +23,16 @@
 
 - **曼宁公式**：`Q = (1/n) × A × R^(2/3) × i^(1/2)`
 - **岸顶超高（4级、5级渠道）**：`Fb = (1/4) × hb + 0.2`
+
+## 当前实现同步说明（2026-04-09）
+
+- 明渠设计面板已新增 `复式梯形` 断面，参数顺序固定为 `m1=左上坡`、`B1=平台宽`、`m2=左下坡`、`B2=渠底宽`、`m3=右坡`、`h1=平台高差`。
+- `复式梯形` 采用固定几何口径：6 个参数全部人工输入，程序只反算设计水深、加大流量水深、流速、面积、湿周、水力半径、超高等结果。
+- `复式梯形` 不参与附录E寻优，不支持 `β` 宽深比约束，也不支持单一 `B` 自动设计；界面帮助、结果文本、Word 导出和 DXF 导出均已改为固定几何口径。
+- 断面图与 DXF 已补齐 `B1 / B2 / h1` 尺寸标注及 `1:m1 / 1:m2 / 1:m3` 坡比标注。
+- `复式梯形` GUI 断面图预览保持真实比例，默认按真实轮廓与尺寸箭头锚点自动收紧视图范围，不再沿用过大的固定横向留白。
+- `复式梯形` GUI 水域填充改为按真实断面闭合：当水深越过平台时，水域多边形会显式经过左下坡拐点与平台段，避免出现水面斜切跨平台的错误形状。
+- 结果字典继续复用统一键名 `h_design / A_design / X_design / R_design / V_design / Q_increased / h_increased / Fb / h_prime`，并额外回显 `m1 / B1 / m2 / B2 / m3 / h1`，便于批量与下游共享。
 
 ---
 
@@ -66,6 +76,7 @@ app_渠系计算前端/
 ```python
 class SectionType(Enum):
     TRAPEZOIDAL = "trapezoidal"   # 梯形明渠
+    COMPOUND_TRAPEZOIDAL = "compound_trapezoidal"  # 复式梯形明渠
     RECTANGULAR = "rectangular"   # 矩形明渠
     CIRCULAR    = "circular"      # 圆形明渠
     U_SECTION   = "u_section"     # U形明渠（圆弧底+斜直线壁）
@@ -251,7 +262,30 @@ class SectionType(Enum):
 - 当锁定 `B` 能反算出有效水深时，内核保留该 `B` 并继续完成设计/加大流量计算；若 `β` 或流速超出经验/校核范围，通过 `constraint_warnings` 返回警告，不再静默改写为附录E新底宽。
 - 当锁定 `B` 无法反算出有效水深时，返回失败并明确标注“未自动改写”，由批量面板维持失败锁定状态。
 
-#### 4.2.6 矩形明渠 `quick_calculate_rectangular`
+#### 4.2.6 复式梯形明渠 `quick_calculate_compound_trapezoidal`
+
+**参数**：`Q, m1, B1, m2, B2, m3, h1, n, slope_inv, v_min, v_max, manual_increase_percent`
+
+**口径**：
+
+- 参数顺序固定为 `m1=左上坡`、`B1=平台宽`、`m2=左下坡`、`B2=渠底宽`、`m3=右坡`、`h1=平台高差`
+- `B1 / B2 / h1` 必须大于 0；`m1 / m2 / m3` 不得为负
+- 全部几何参数人工固定，不做附录E寻优、不做宽深比 β、不做自动底宽
+
+**分段几何公式**：
+
+- 平台以下：`A = B2·h + 0.5·(m2+m3)·h²`
+- 平台以下：`χ = B2 + h·√(1+m2²) + h·√(1+m3²)`
+- 越过平台：`A = A1 + W1·hs + 0.5·(m1+m3)·hs²`
+- 越过平台：`χ = B2 + h1·√(1+m2²) + B1 + hs·√(1+m1²) + h·√(1+m3²)`
+
+**返回字典 key**：
+
+- 通用结果：`b_design`, `h_design`, `A_design`, `X_design`, `R_design`, `V_design`, `Q_calc`, `Q_increased`, `h_increased`, `V_increased`, `Fb`, `h_prime`
+- 参数回显：`m1`, `B1`, `m2`, `B2`, `m3`, `h1`
+- 状态信息：`success`, `error_message`, `design_method`, `constraint_warnings`
+
+#### 4.2.7 矩形明渠 `quick_calculate_rectangular`
 
 直接调用 `quick_calculate_trapezoidal` 并令 `m=0`。
 
@@ -373,7 +407,7 @@ def quick_calculate(Q, m, n, slope_inv, v_min, v_max, ...) -> Dict[str, Any]:
 QHBoxLayout
 ├── 左侧：QScrollArea（输入面板，宽280~420px）
 │   └── QGroupBox "输入参数"
-│       ├── 断面类型下拉框 (ComboBox: 梯形/矩形/圆形/U形)
+│       ├── 断面类型下拉框 (ComboBox: 梯形/复式梯形/矩形/圆形/U形)
 │       ├── 基础参数区
 │       │   ├── 设计流量 Q (m³/s)
 │       │   ├── 边坡系数 m（梯形可见）
@@ -406,10 +440,11 @@ QHBoxLayout
 
 | 断面类型 | 显示控件 | 隐藏控件 | m值 |
 |---------|---------|---------|-----|
-| 梯形 | m, β, B | D, R/α/θ | 用户输入（默认1.0） |
-| 矩形 | β, B | m, D, R/α/θ | 强制设为0.0 |
+| 梯形 | m, β, B | 复式梯形参数, D, R/α/θ | 用户输入（默认1.0） |
+| 复式梯形 | m1, B1, m2, B2, m3, h1 | m, β, B, D, R/α/θ | 固定几何，不自动寻优 |
+| 矩形 | β, B | m, 复式梯形参数, D, R/α/θ | 强制设为0.0 |
 | 圆形 | D | m, β, B, R/α/θ | — |
-| U形 | R, α, θ | m, β, B, D | — |
+| U形 | R, α, θ | m, β, B, 复式梯形参数, D | — |
 
 ### 5.3 计算结果显示
 
@@ -615,10 +650,11 @@ QHBoxLayout
 
 `app_渠系计算前端/batch/panel.py` 支持明渠所有断面类型的批量输入、计算和结果汇总。
 
-结构类型映射：`明渠-梯形`, `明渠-矩形`, `明渠-圆形`
+结构类型映射：`明渠-梯形`, `明渠-复式梯形`, `明渠-矩形`, `明渠-圆形`
 
 调用引擎：
 - `mingqu_calculate`（梯形/矩形）
+- `mingqu_compound_calculate`（复式梯形）
 - `circular_calculate`（圆形）
 
 ### 8.2 土石方模块跨面板读取
@@ -678,6 +714,11 @@ QHBoxLayout
 quick_calculate_trapezoidal(Q, m, n, slope_inv, v_min, v_max,
                             manual_beta=None, manual_b=None,
                             manual_increase_percent=None) → Dict
+
+# 复式梯形明渠
+quick_calculate_compound_trapezoidal(Q, m1, B1, m2, B2, m3, h1,
+                                     n, slope_inv, v_min, v_max,
+                                     manual_increase_percent=None) → Dict
 
 # 矩形明渠（m=0特例）
 quick_calculate_rectangular(Q, n, slope_inv, v_min, v_max, ...) → Dict
@@ -753,3 +794,4 @@ design_channel(SectionType.U_SECTION,   Q=2.0,  n=0.014, slope_inv=3000, v_min=0
 | v1.1 | 2026-02-25 | 新增U形明渠断面类型。改动点：(1)明渠设计.py新增SectionType.U_SECTION、_u_arc_geometry、calculate_u_depth_for_flow、quick_calculate_u_section；(2)open_channel/panel.py UI/计算/结果显示/DXF/Word全链路；(3)open_channel/dxf_export.py _draw_u_section；(4)batch/panel.py批量计算+示例数据增至46行；(5)structure_type_selector.py明渠分类新增U形；(6)推求水面线全链路支持（enums/data_models/calculator/hydraulic_calc/shared_data_manager/water_profile面板）；(7)新增test21/22/23 U形测试 |
 | v1.2 | 2026-02-25 | 新增“考虑加大流量比例系数”CheckBox控件（`inc_cb`，默认勾选）：不勾选时`manual_increase_percent=0`传入计算内核，简要/详细模式均跳过加大流量工况段落，验证结果仅使用设计流量数据。Bug修复：`quick_calculate_trapezoidal`结果字典新增`result['m'] = m`，修复水面线计算中梯形断面边坡系数丢失问题。涉及文件：明渠设计.py、open_channel/panel.py、batch/panel.py |
 | v1.3 | 2026-03-22 | DXF 多工况导出改造：当前工况固定取左侧工况标签 `_current_case_idx`；新增共享 DXF 范围弹窗（当前 / 勾选 / 全部）；支持多个工况合并导出为 1 个 DXF，自动网格排版并为每个工况追加图层前缀；无效工况自动跳过并汇总提示。涉及文件：open_channel/panel.py、open_channel/dxf_export.py、dxf_common.py、dxf_multi_export.py |
+| v1.4 | 2026-04-09 | 新增复式梯形明渠断面。改动点：(1)明渠设计.py 新增 `SectionType.COMPOUND_TRAPEZOIDAL`、复式梯形分段面积/湿周/水面宽/流量/反算水深与 `quick_calculate_compound_trapezoidal`；(2)open_channel/panel.py 新增 6 个固定参数输入、帮助页、结果文本、断面图与 Word 公式；(3)open_channel/dxf_export.py 新增 `B1 / B2 / h1` 与 `1:m1 / 1:m2 / 1:m3` 标注；(4)batch/panel.py 新增 `明渠-复式梯形` 批量链路；(5)推求水面线最小兼容与相关单元测试补齐。 |

@@ -2,7 +2,7 @@
 """
 明渠水力计算面板 —— QWidget 版本（可嵌入主导航框架）
 
-支持：梯形/矩形/圆形断面
+支持：梯形/复式梯形/矩形/圆形断面
 功能：参数输入、计算、结果显示、断面图、导出Word/TXT/图表
 """
 
@@ -70,10 +70,12 @@ plt.rcParams['axes.unicode_minus'] = False
 # 计算引擎
 from 明渠设计 import (
     quick_calculate as mingqu_calculate,
+    quick_calculate_compound_trapezoidal as mingqu_compound_calculate,
     quick_calculate_circular as circular_calculate,
     quick_calculate_u_section as mingqu_u_calculate,
     _u_arc_geometry,
     calculate_area, calculate_wetted_perimeter, calculate_hydraulic_radius,
+    calculate_compound_trapezoid_water_width,
     get_flow_increase_percent, MAX_BETA,
     PI, MIN_FREEBOARD, MIN_FREE_AREA_PERCENT, MIN_FLOW_FACTOR
 )
@@ -281,7 +283,7 @@ class OpenChannelPanel(QWidget):
         # 断面类型
         r = QHBoxLayout(); r.addWidget(QLabel("断面类型:"))
         self.section_combo = ComboBox()
-        self.section_combo.addItems(["梯形", "矩形", "圆形", "U形"])
+        self.section_combo.addItems(["梯形", "复式梯形", "矩形", "圆形", "U形"])
         self.section_combo.currentTextChanged.connect(self._on_section_type_changed)
         r.addWidget(self.section_combo, 1); fl.addLayout(r)
 
@@ -311,6 +313,22 @@ class OpenChannelPanel(QWidget):
         self.b_lbl, self.b_edit = self._field2(fl, "指定底宽 B (m):", "")
         self.bb_hint = self._hint("(二选一输入，留空则自动计算)")
         fl.addWidget(self.bb_hint)
+
+        self.m1_lbl, self.m1_edit = self._field2(fl, "左上坡 m1:", "")
+        self.B1_lbl, self.B1_edit = self._field2(fl, "平台宽 B1 (m):", "")
+        self.m2_lbl, self.m2_edit = self._field2(fl, "左下坡 m2:", "")
+        self.B2_lbl, self.B2_edit = self._field2(fl, "渠底宽 B2 (m):", "")
+        self.m3_lbl, self.m3_edit = self._field2(fl, "右坡 m3:", "")
+        self.h1_lbl, self.h1_edit = self._field2(fl, "平台高差 h1 (m):", "")
+        self.compound_hint = self._hint("(复式梯形需填写全部 6 个固定几何参数)")
+        for w in (
+            self.m1_lbl, self.m1_edit, self.B1_lbl, self.B1_edit,
+            self.m2_lbl, self.m2_edit, self.B2_lbl, self.B2_edit,
+            self.m3_lbl, self.m3_edit, self.h1_lbl, self.h1_edit,
+            self.compound_hint,
+        ):
+            w.hide()
+        fl.addWidget(self.compound_hint)
 
         self.D_lbl, self.D_edit = self._field2(fl, "指定直径 D (m):", "")
         self.D_hint_lbl = self._hint("(留空则自动计算)")
@@ -406,26 +424,42 @@ class OpenChannelPanel(QWidget):
     def _on_section_type_changed(self, stype):
         _u_widgets = (self.R_lbl, self.R_edit, self.alpha_lbl, self.alpha_edit,
                       self.theta_lbl, self.theta_edit)
+        _compound_widgets = (
+            self.m1_lbl, self.m1_edit, self.B1_lbl, self.B1_edit,
+            self.m2_lbl, self.m2_edit, self.B2_lbl, self.B2_edit,
+            self.m3_lbl, self.m3_edit, self.h1_lbl, self.h1_edit,
+            self.compound_hint,
+        )
         if stype == "矩形":
             self.m_lbl.hide(); self.m_edit.hide()
             self.m_edit.setText("0.0")
             for w in (self.beta_lbl, self.beta_edit, self.b_lbl, self.b_edit, self.bb_hint): w.show()
+            for w in _compound_widgets: w.hide()
             for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.hide()
             for w in _u_widgets: w.hide()
         elif stype == "梯形":
             self.m_lbl.show(); self.m_edit.show()
             self.m_edit.setText("1.0")
             for w in (self.beta_lbl, self.beta_edit, self.b_lbl, self.b_edit, self.bb_hint): w.show()
+            for w in _compound_widgets: w.hide()
+            for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.hide()
+            for w in _u_widgets: w.hide()
+        elif stype == "复式梯形":
+            self.m_lbl.hide(); self.m_edit.hide()
+            for w in (self.beta_lbl, self.beta_edit, self.b_lbl, self.b_edit, self.bb_hint): w.hide()
+            for w in _compound_widgets: w.show()
             for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.hide()
             for w in _u_widgets: w.hide()
         elif stype == "圆形":
             self.m_lbl.hide(); self.m_edit.hide()
             for w in (self.beta_lbl, self.beta_edit, self.b_lbl, self.b_edit, self.bb_hint): w.hide()
+            for w in _compound_widgets: w.hide()
             for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.show()
             for w in _u_widgets: w.hide()
         elif stype == "U形":
             self.m_lbl.hide(); self.m_edit.hide()
             for w in (self.beta_lbl, self.beta_edit, self.b_lbl, self.b_edit, self.bb_hint): w.hide()
+            for w in _compound_widgets: w.hide()
             for w in (self.D_lbl, self.D_edit, self.D_hint_lbl): w.hide()
             for w in _u_widgets: w.show()
 
@@ -537,6 +571,7 @@ class OpenChannelPanel(QWidget):
         h.numbered_list([
             ("矩形断面", "m = 0，附录E自动寻优底宽；可指定宽深比或底宽"),
             ("梯形断面", "用户设定边坡系数 m，附录E自动寻优底宽；可指定宽深比或底宽"),
+            ("复式梯形断面", "输入 m1/B1/m2/B2/m3/h1 共 6 个固定几何参数，程序只反算水深与校核结果"),
             ("圆形明渠", "自动搜索最优直径；可指定直径 D"),
             ("U形明渠", "圆弧底+斜直线壁；输入R、外倾角α、圆心角θ；自动反算水深"),
         ])
@@ -547,11 +582,18 @@ class OpenChannelPanel(QWidget):
                 ["矩形/梯形 — 全部留空", "附录E自动寻优最优底宽 B"],
                 ["矩形/梯形 — 指定宽深比 β", "以 β=B/h 为约束，自动搜索最优 B"],
                 ["矩形/梯形 — 指定底宽 B", "固定 B，反算水深并验算流速"],
+                ["复式梯形 — 输入 m1/B1/m2/B2/m3/h1", "固定几何，反算设计水深和加大流量工况，不做附录E寻优"],
                 ["圆形 — 留空直径 D", "自动搜索满足约束的最小 D"],
                 ["圆形 — 指定直径 D", "固定 D，反算水深并验算流速"],
                 ["U形 — 输入R/α/θ", "固定几何，反算水深并验算流速"],
             ]
         )
+        h.section("复式梯形几何公式")
+        h.formula("A = B_2·h + ((m_2+m_3)/2)·h²", "平台以下面积（h ≤ h_1）")
+        h.formula("χ = B_2 + h·√(1+m_2²) + h·√(1+m_3²)", "平台以下湿周（h ≤ h_1）")
+        h.formula("A = A_1 + W_1·h_s + ((m_1+m_3)/2)·h_s²", "越过平台面积（h > h_1）")
+        h.formula("χ = B_2 + h_1·√(1+m_2²) + B_1 + h_s·√(1+m_1²) + h·√(1+m_3²)", "越过平台湿周（h > h_1）")
+        h.hint("复式梯形参数固定为：m1=左上坡，B1=平台宽，m2=左下坡，B2=渠底宽，m3=右坡，h1=平台高差")
         h.section("U形断面几何公式")
         h.formula("h_0 = R·(1 − cos(θ/2))", "弧区高度")
         h.formula("A = R²·arccos((R−h)/R) − (R−h)·√(2Rh−h²)", "纯弧区面积（h ≤ h_0）")
@@ -620,6 +662,7 @@ class OpenChannelPanel(QWidget):
             'inc_checked': True, 'inc_pct': '',
             'detail_checked': True,
             'beta': '', 'b': '',
+            'm1': '', 'B1': '', 'm2': '', 'B2': '', 'm3': '', 'h1': '',
             'D': '',
             'R': '0.8', 'alpha': '14', 'theta': '152',
         }
@@ -640,6 +683,12 @@ class OpenChannelPanel(QWidget):
         c['detail_checked'] = self.detail_cb.isChecked()
         c['beta'] = self.beta_edit.text()
         c['b'] = self.b_edit.text()
+        c['m1'] = self.m1_edit.text()
+        c['B1'] = self.B1_edit.text()
+        c['m2'] = self.m2_edit.text()
+        c['B2'] = self.B2_edit.text()
+        c['m3'] = self.m3_edit.text()
+        c['h1'] = self.h1_edit.text()
         c['D'] = self.D_edit.text()
         c['R'] = self.R_edit.text()
         c['alpha'] = self.alpha_edit.text()
@@ -668,6 +717,12 @@ class OpenChannelPanel(QWidget):
         self.detail_cb.setChecked(c.get('detail_checked', True))
         self.beta_edit.setText(c.get('beta', ''))
         self.b_edit.setText(c.get('b', ''))
+        self.m1_edit.setText(c.get('m1', ''))
+        self.B1_edit.setText(c.get('B1', ''))
+        self.m2_edit.setText(c.get('m2', ''))
+        self.B2_edit.setText(c.get('B2', ''))
+        self.m3_edit.setText(c.get('m3', ''))
+        self.h1_edit.setText(c.get('h1', ''))
         self.D_edit.setText(c.get('D', ''))
         self.R_edit.setText(c.get('R', '0.8'))
         self.alpha_edit.setText(c.get('alpha', '14'))
@@ -791,7 +846,7 @@ class OpenChannelPanel(QWidget):
         src = self._cases[self._current_case_idx]
         keys = ('section_type', 'm', 'n', 'slope_inv', 'v_min', 'v_max',
                 'inc_checked', 'inc_pct', 'detail_checked',
-                'beta', 'b', 'D', 'R', 'alpha', 'theta')
+                'beta', 'b', 'm1', 'B1', 'm2', 'B2', 'm3', 'h1', 'D', 'R', 'alpha', 'theta')
         for i, case in enumerate(self._cases):
             if i != self._current_case_idx:
                 for k in keys:
@@ -815,7 +870,7 @@ class OpenChannelPanel(QWidget):
         curr = self._cases[self._current_case_idx]
         for k in ('section_type', 'm', 'n', 'slope_inv', 'v_min', 'v_max',
                    'inc_checked', 'inc_pct', 'detail_checked',
-                   'beta', 'b', 'D', 'R', 'alpha', 'theta'):
+                   'beta', 'b', 'm1', 'B1', 'm2', 'B2', 'm3', 'h1', 'D', 'R', 'alpha', 'theta'):
             curr[k] = prev[k]
         self._load_case(self._current_case_idx)
         InfoBar.success(title="已复制", content=f"已从工况{self._current_case_idx}复制参数",
@@ -888,6 +943,28 @@ class OpenChannelPanel(QWidget):
                 v_min=v_min, v_max=v_max,
                 manual_D=manual_D,
                 increase_percent=manual_increase
+            )
+        elif stype == "复式梯形":
+            m1 = _fv('m1', '左上坡 m1', must_positive=False)
+            B1 = _fv('B1', '平台宽 B1')
+            m2 = _fv('m2', '左下坡 m2', must_positive=False)
+            B2 = _fv('B2', '渠底宽 B2')
+            m3 = _fv('m3', '右坡 m3', must_positive=False)
+            h1 = _fv('h1', '平台高差 h1')
+            params = {
+                'Q': Q, 'n': n, 'slope_inv': slope_inv,
+                'v_min': v_min, 'v_max': v_max,
+                'section_type': stype,
+                'm1': m1, 'B1': B1, 'm2': m2, 'B2': B2, 'm3': m3, 'h1': h1,
+                'detail_checked': case.get('detail_checked', True),
+                'manual_increase': manual_increase,
+                'use_increase': use_increase
+            }
+            result = mingqu_compound_calculate(
+                Q=Q, m1=m1, B1=B1, m2=m2, B2=B2, m3=m3, h1=h1,
+                n=n, slope_inv=slope_inv,
+                v_min=v_min, v_max=v_max,
+                manual_increase_percent=manual_increase
             )
         elif stype == "U形":
             R_val = _fv('R', '圆弧半径 R')
@@ -1452,6 +1529,9 @@ class OpenChannelPanel(QWidget):
         if stype == '圆形':
             if detail: self._show_circular_detail(result)
             else: self._show_circular_brief(result)
+        elif stype == '复式梯形':
+            if detail: self._show_compound_trapezoid_detail(result)
+            else: self._show_compound_trapezoid_brief(result)
         elif stype == 'U形':
             if detail: self._show_u_detail(result)
             else: self._show_u_brief(result)
@@ -1867,6 +1947,96 @@ class OpenChannelPanel(QWidget):
             txt = "\n".join(o)
             self._export_plain_text = txt
             self._render_result_html(plain_text_to_formula_html(txt))
+
+    def _build_compound_trapezoid_text(self, result, detail=False):
+        """生成复式梯形明渠结果文本。"""
+        p = self.input_params
+        stype = p.get('section_type', '复式梯形')
+        Q = p['Q']; n = p['n']; slope_inv = p['slope_inv']
+        v_min = p['v_min']; v_max = p['v_max']
+        m1 = p['m1']; B1 = p['B1']; m2 = p['m2']; B2 = p['B2']; m3 = p['m3']; h1 = p['h1']
+        b = result['b_design']; h = result['h_design']
+        V = result['V_design']; A = result['A_design']
+        X = result['X_design']; R = result['R_design']
+        Q_calc = result['Q_calc']
+        inc_pct = result['increase_percent']
+        Q_inc = result['Q_increased']; h_inc = result['h_increased']
+        V_inc = result['V_increased']; Fb = result['Fb']; H = result['h_prime']
+        inc_source = "(指定)" if p.get('manual_increase') else "(自动计算)"
+
+        o = []
+        o.append("=" * 70)
+        o.append(f"              明渠水力计算结果（{stype}断面）")
+        o.append("=" * 70)
+        o.append("")
+        o.append("【一、输入参数】")
+        o.append(f"  断面类型 = {stype}")
+        o.append(f"  Q = {Q:.3f} m³/s, n = {n}, 水力坡降 = 1/{int(slope_inv)}")
+        o.append(f"  不淤流速 = {v_min} m/s, 不冲流速 = {v_max} m/s")
+        o.append("")
+        o.append("【二、固定几何参数】")
+        o.append(f"  左上坡 m1 = {m1}")
+        o.append(f"  平台宽 B1 = {B1:.3f} m")
+        o.append(f"  左下坡 m2 = {m2}")
+        o.append(f"  渠底宽 B2 = {B2:.3f} m")
+        o.append(f"  右坡 m3 = {m3}")
+        o.append(f"  平台高差 h1 = {h1:.3f} m")
+        o.append("")
+        o.append("【三、设计结果】")
+        o.append(f"  采用方法 = {result['design_method']}")
+        o.append(f"  设计水深 h = {h:.3f} m")
+        o.append(f"  过水面积 A = {A:.3f} m²")
+        o.append(f"  湿周 χ = {X:.3f} m")
+        o.append(f"  水力半径 R = {R:.3f} m")
+        o.append(f"  设计流速 V = {V:.3f} m/s")
+        o.append(f"  反算流量 Q校核 = {Q_calc:.3f} m³/s")
+        if detail:
+            water_width = calculate_compound_trapezoid_water_width(b, h, m2, m3, h1, B1, m1)
+            o.append(f"  设计水面宽 = {water_width:.3f} m")
+        o.append("")
+
+        use_increase = p.get('use_increase', True)
+        if use_increase:
+            o.append("【四、加大流量工况】")
+            o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_source}")
+            o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+            if h_inc > 0:
+                o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
+                o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
+                o.append(f"  超高 Fb = {Fb:.3f} m")
+                o.append(f"  渠道高度 H = {H:.3f} m")
+        else:
+            Fb_d = round(0.25 * h + 0.2, 3)
+            H_d = round(h + Fb_d, 3)
+            o.append("【四、渠道尺寸】")
+            o.append(f"  超高 Fb = {Fb_d:.3f} m")
+            o.append(f"  渠道高度 H = {H_d:.3f} m")
+        o.append("")
+        o.append("【五、验证结果】")
+        vel_ok = v_min < V < v_max
+        o.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
+        if use_increase and h_inc > 0:
+            fb_req = 0.25 * h_inc + 0.2
+            fb_ok = Fb >= (fb_req - 0.001)
+            o.append(f"  超高复核: {'✓ 通过' if fb_ok else '✗ 未通过'} (Fb={Fb:.3f}m, 规范要求≥{fb_req:.3f}m)")
+        if result.get('constraint_warnings'):
+            o.append("  约束提示:")
+            for warning in result['constraint_warnings']:
+                o.append(f"    - {warning}")
+        o.append("=" * 70)
+        return "\n".join(o)
+
+    def _show_compound_trapezoid_brief(self, result):
+        """显示复式梯形明渠简要结果。"""
+        txt = self._build_compound_trapezoid_text(result, detail=False)
+        self._export_plain_text = txt
+        self._render_result_html(plain_text_to_formula_html(txt))
+
+    def _show_compound_trapezoid_detail(self, result):
+        """显示复式梯形明渠详细结果。"""
+        txt = self._build_compound_trapezoid_text(result, detail=True)
+        self._export_plain_text = txt
+        self._render_result_html(plain_text_to_formula_html(txt))
 
     # ================================================================
     # 圆形 - 简要结果
@@ -2520,6 +2690,25 @@ class OpenChannelPanel(QWidget):
             Q = self.input_params['Q']
             ax = self.section_fig.add_subplot(111)
             self._draw_circular(ax, D, y_d, V_d, Q, '设计流量')
+        elif stype == '复式梯形':
+            m1 = self.input_params.get('m1', 0)
+            B1 = self.input_params.get('B1', 0)
+            m2 = self.input_params.get('m2', 0)
+            B2 = result.get('b_design', self.input_params.get('B2', 0))
+            m3 = self.input_params.get('m3', 0)
+            h1 = self.input_params.get('h1', 0)
+            h_w = result['h_design']
+            H_ch = result['h_prime'] if result['h_prime'] > 0 else h_w * 1.35
+            V = result['V_design']; Q = self.input_params['Q']
+            h_inc = result['h_increased']; Q_inc = result['Q_increased']; V_inc = result['V_increased']
+            use_inc = self.input_params.get('use_increase', True)
+            if use_inc and h_inc > 0:
+                axes = self.section_fig.subplots(1, 2)
+                self._draw_compound_trapezoid(axes[0], B2, m1, B1, m2, m3, h1, H_ch, V, Q, h_w, "设计流量")
+                self._draw_compound_trapezoid(axes[1], B2, m1, B1, m2, m3, h1, H_ch, V_inc, Q_inc, h_inc, "加大流量")
+            else:
+                ax = self.section_fig.add_subplot(111)
+                self._draw_compound_trapezoid(ax, B2, m1, B1, m2, m3, h1, H_ch, V, Q, h_w, "设计流量")
         elif stype == 'U形':
             R = result['R']; alpha_deg = result['alpha_deg']; theta_deg = result['theta_deg']
             h_w = result['h_design']
@@ -2581,6 +2770,152 @@ class OpenChannelPanel(QWidget):
             ax.text(-tw/2-0.12*tw, h_w/2, f'h={h_w:.2f}m', fontsize=9, color='blue', rotation=90, va='center', ha='right')
         ax.set_xlim(-tw*0.85, tw*0.85)
         ax.set_ylim(-h_ch*0.4, h_ch*1.2)
+        ax.set_aspect('equal')
+        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+    def _compound_trapezoid_geometry(self, B2, m1, B1, m2, m3, h1, h_ch):
+        """生成复式梯形断面的关键轮廓点。"""
+        left_break_x = -(B2 / 2 + m2 * h1)
+        left_platform_x = left_break_x - B1
+        left_top_x = left_platform_x - m1 * max(h_ch - h1, 0.0)
+        right_top_x = B2 / 2 + m3 * h_ch
+        outline_points = [
+            (-B2 / 2, 0.0),
+            (B2 / 2, 0.0),
+            (right_top_x, h_ch),
+            (left_top_x, h_ch),
+            (left_platform_x, h1),
+            (left_break_x, h1),
+        ]
+        return {
+            "bottom_left": outline_points[0],
+            "bottom_right": outline_points[1],
+            "right_top": outline_points[2],
+            "left_top": outline_points[3],
+            "left_platform": outline_points[4],
+            "left_break": outline_points[5],
+            "outline_points": outline_points,
+            "width_ref": max(right_top_x - left_top_x, 1.0),
+        }
+
+    def _compound_trapezoid_water_points(self, geometry, B2, m1, m2, m3, h1, h_w):
+        """按水深生成真实的复式梯形过水轮廓。"""
+        if h_w <= 0:
+            return []
+
+        bottom_left = geometry["bottom_left"]
+        bottom_right = geometry["bottom_right"]
+        left_platform = geometry["left_platform"]
+        left_break = geometry["left_break"]
+
+        if h_w <= h1:
+            left_water = -(B2 / 2 + m2 * h_w)
+            right_water = B2 / 2 + m3 * h_w
+            return [
+                bottom_left,
+                bottom_right,
+                (right_water, h_w),
+                (left_water, h_w),
+            ]
+
+        hs = h_w - h1
+        left_water = left_platform[0] - m1 * hs
+        right_water = B2 / 2 + m3 * h_w
+        return [
+            bottom_left,
+            bottom_right,
+            (right_water, h_w),
+            (left_water, h_w),
+            left_platform,
+            left_break,
+        ]
+
+    def _compound_trapezoid_view_limits(self, geometry, h_ch, h1, h_w):
+        """根据轮廓和尺寸箭头锚点收紧默认视图范围。"""
+        width_ref = geometry["width_ref"]
+        left_top_x = geometry["left_top"][0]
+        right_top_x = geometry["right_top"][0]
+        left_platform_x = geometry["left_platform"][0]
+        left_break_x = geometry["left_break"][0]
+        dim_offset = max(h_ch * 0.12, 0.15)
+
+        x_candidates = [
+            point[0] for point in geometry["outline_points"]
+        ] + [
+            -geometry["bottom_right"][0],
+            geometry["bottom_right"][0],
+            left_platform_x,
+            left_break_x,
+            left_top_x - width_ref * 0.08,
+            right_top_x + width_ref * 0.08,
+        ]
+        if h_w > 0:
+            x_candidates.append(left_top_x - width_ref * 0.18)
+
+        y_candidates = [
+            point[1] for point in geometry["outline_points"]
+        ] + [
+            -dim_offset,
+            h1 + dim_offset * 0.6,
+            h_ch,
+        ]
+        if h_w > 0:
+            y_candidates.append(h_w)
+
+        x_padding = max(width_ref * 0.04, 0.2)
+        y_padding = max(h_ch * 0.08, 0.18)
+        return (
+            min(x_candidates) - x_padding,
+            max(x_candidates) + x_padding,
+            min(y_candidates) - y_padding,
+            max(y_candidates) + y_padding,
+        )
+
+    def _draw_compound_trapezoid(self, ax, B2, m1, B1, m2, m3, h1, h_ch, V, Q, h_w, title):
+        """复式梯形断面图：下坡+平台+上坡+右坡。"""
+        geometry = self._compound_trapezoid_geometry(B2, m1, B1, m2, m3, h1, h_ch)
+        left_top_x = geometry["left_top"][0]
+        left_platform_x = geometry["left_platform"][0]
+        left_break_x = geometry["left_break"][0]
+        right_top_x = geometry["right_top"][0]
+        outline_x = [point[0] for point in geometry["outline_points"]] + [geometry["bottom_left"][0]]
+        outline_y = [point[1] for point in geometry["outline_points"]] + [geometry["bottom_left"][1]]
+        ax.plot(outline_x, outline_y, 'k-', lw=2)
+
+        if h_w > 0:
+            water_points = self._compound_trapezoid_water_points(geometry, B2, m1, m2, m3, h1, h_w)
+            water_x = [point[0] for point in water_points]
+            water_y = [point[1] for point in water_points]
+            left_water = water_points[-1][0] if h_w <= h1 else water_points[3][0]
+            right_water = water_points[2][0]
+            ax.fill(water_x, water_y, color='lightblue', alpha=0.7)
+            ax.plot([left_water, right_water], [h_w, h_w], 'b-', lw=1.5)
+
+        width_ref = geometry["width_ref"]
+        dim_offset = max(h_ch * 0.12, 0.15)
+        ax.annotate('', xy=(B2 / 2, -dim_offset), xytext=(-B2 / 2, -dim_offset),
+                    arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
+        ax.text(0, -dim_offset * 1.55, f'B2={B2:.2f}m', ha='center', fontsize=9, color='gray')
+        ax.annotate('', xy=(left_break_x, h1 + dim_offset * 0.6), xytext=(left_platform_x, h1 + dim_offset * 0.6),
+                    arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
+        ax.text((left_break_x + left_platform_x) / 2, h1 + dim_offset * 1.05, f'B1={B1:.2f}m', ha='center', fontsize=9, color='gray')
+        ax.annotate('', xy=(left_top_x - width_ref * 0.08, h1), xytext=(left_top_x - width_ref * 0.08, 0),
+                    arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
+        ax.text(left_top_x - width_ref * 0.12, h1 / 2, f'h1={h1:.2f}m', fontsize=9, color='purple', rotation=90, va='center', ha='right')
+        ax.annotate('', xy=(right_top_x + width_ref * 0.08, h_ch), xytext=(right_top_x + width_ref * 0.08, 0),
+                    arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
+        ax.text(right_top_x + width_ref * 0.12, h_ch / 2, f'H={h_ch:.2f}m', fontsize=9, color='purple', rotation=90, va='center')
+        if h_w > 0:
+            ax.annotate('', xy=(left_top_x - width_ref * 0.18, h_w), xytext=(left_top_x - width_ref * 0.18, 0),
+                        arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
+            ax.text(left_top_x - width_ref * 0.22, h_w / 2, f'h={h_w:.2f}m', fontsize=9, color='blue', rotation=90, va='center', ha='right')
+        ax.text((left_top_x + left_platform_x) / 2, h1 + max(h_ch - h1, 0.0) * 0.55 + dim_offset * 0.15, f'1:{m1:g}', fontsize=9, color='dimgray')
+        ax.text((left_break_x - B2 / 2) / 2, h1 * 0.5 + dim_offset * 0.1, f'1:{m2:g}', fontsize=9, color='dimgray')
+        ax.text((B2 / 2 + right_top_x) / 2, h_ch * 0.55, f'1:{m3:g}', fontsize=9, color='dimgray')
+        x_min, x_max, y_min, y_max = self._compound_trapezoid_view_limits(geometry, h_ch, h1, h_w)
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
         ax.set_aspect('equal')
         apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
         ax.grid(True, alpha=0.3)
@@ -2943,6 +3278,11 @@ class OpenChannelPanel(QWidget):
         if '梯形' in stypes_used:
             doc_add_formula(doc, r'A = (B + m \cdot h) \cdot h', '梯形过水面积：')
             doc_add_formula(doc, r'\chi = B + 2h\sqrt{1+m^2}', '梯形湿周：')
+        if '复式梯形' in stypes_used:
+            doc_add_formula(doc, r'A = B_2 h + \frac{m_2+m_3}{2} h^2', '复式梯形平台以下面积：')
+            doc_add_formula(doc, r'\chi = B_2 + h\sqrt{1+m_2^2} + h\sqrt{1+m_3^2}', '复式梯形平台以下湿周：')
+            doc_add_formula(doc, r'A = A_1 + W_1 h_s + \frac{m_1+m_3}{2} h_s^2', '复式梯形越平台面积：')
+            doc_add_formula(doc, r'\chi = B_2 + h_1\sqrt{1+m_2^2} + B_1 + h_s\sqrt{1+m_1^2} + h\sqrt{1+m_3^2}', '复式梯形越平台湿周：')
         if '矩形' in stypes_used:
             doc_add_formula(doc, r'A = B \cdot h', '矩形过水面积：')
             doc_add_formula(doc, r'\chi = B + 2h', '矩形湿周：')
