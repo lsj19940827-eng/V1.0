@@ -30,6 +30,7 @@ from enum import Enum
 class SectionType(Enum):
     """明渠断面类型"""
     TRAPEZOIDAL = "trapezoidal"   # 梯形明渠
+    COMPOUND_TRAPEZOIDAL = "compound_trapezoidal"  # 复式梯形明渠
     RECTANGULAR = "rectangular"     # 矩形明渠
     CIRCULAR = "circular"           # 圆形明渠
     U_SECTION = "u_section"         # U形明渠（圆弧底+斜直壁）
@@ -408,6 +409,167 @@ def calculate_hydraulic_radius(b: float, h: float, m: float) -> float:
         return A / X
     else:
         return 0.0
+
+
+def calculate_compound_trapezoid_area(
+    B2: float,
+    h: float,
+    m2: float,
+    m3: float,
+    h1: float,
+    B1: float,
+    m1: float,
+) -> float:
+    """
+    计算复式梯形明渠的过水面积
+
+    参数顺序固定：
+        m1=左上坡，B1=平台宽，m2=左下坡，B2=渠底宽，m3=右坡，h1=平台高差
+    """
+    if h <= 0:
+        return 0.0
+    if h <= h1:
+        return B2 * h + 0.5 * (m2 + m3) * h * h
+
+    hs = h - h1
+    A1 = B2 * h1 + 0.5 * (m2 + m3) * h1 * h1
+    W1 = B2 + (m2 + m3) * h1 + B1
+    return A1 + W1 * hs + 0.5 * (m1 + m3) * hs * hs
+
+
+def calculate_compound_trapezoid_wetted_perimeter(
+    B2: float,
+    h: float,
+    m2: float,
+    m3: float,
+    h1: float,
+    B1: float,
+    m1: float,
+) -> float:
+    """计算复式梯形明渠的湿周。"""
+    if h <= 0:
+        return 0.0
+    if h <= h1:
+        return B2 + h * math.sqrt(1 + m2 * m2) + h * math.sqrt(1 + m3 * m3)
+
+    hs = h - h1
+    return (
+        B2
+        + h1 * math.sqrt(1 + m2 * m2)
+        + B1
+        + hs * math.sqrt(1 + m1 * m1)
+        + h * math.sqrt(1 + m3 * m3)
+    )
+
+
+def calculate_compound_trapezoid_water_width(
+    B2: float,
+    h: float,
+    m2: float,
+    m3: float,
+    h1: float,
+    B1: float,
+    m1: float,
+) -> float:
+    """计算复式梯形明渠在指定水深下的水面宽。"""
+    if h <= 0:
+        return B2
+    if h <= h1:
+        return B2 + (m2 + m3) * h
+
+    hs = h - h1
+    W1 = B2 + (m2 + m3) * h1 + B1
+    return W1 + (m1 + m3) * hs
+
+
+def calculate_compound_trapezoid_hydraulic_radius(
+    B2: float,
+    h: float,
+    m2: float,
+    m3: float,
+    h1: float,
+    B1: float,
+    m1: float,
+) -> float:
+    """计算复式梯形明渠的水力半径。"""
+    A = calculate_compound_trapezoid_area(B2, h, m2, m3, h1, B1, m1)
+    X = calculate_compound_trapezoid_wetted_perimeter(B2, h, m2, m3, h1, B1, m1)
+    if X <= ZERO_TOLERANCE:
+        return 0.0
+    return A / X
+
+
+def calculate_compound_trapezoid_flow_rate(
+    B2: float,
+    h: float,
+    i: float,
+    n: float,
+    m1: float,
+    B1: float,
+    m2: float,
+    m3: float,
+    h1: float,
+) -> float:
+    """计算复式梯形明渠在给定水深下的流量。"""
+    if h <= ZERO_TOLERANCE or i <= ZERO_TOLERANCE or n <= ZERO_TOLERANCE:
+        return 0.0
+
+    A = calculate_compound_trapezoid_area(B2, h, m2, m3, h1, B1, m1)
+    R = calculate_compound_trapezoid_hydraulic_radius(B2, h, m2, m3, h1, B1, m1)
+    if A <= ZERO_TOLERANCE or R <= ZERO_TOLERANCE:
+        return 0.0
+
+    try:
+        return (1.0 / n) * A * (R ** (2.0 / 3.0)) * (i ** 0.5)
+    except Exception:
+        return -1.0
+
+
+def calculate_compound_trapezoid_depth_for_flow(
+    target_Q: float,
+    i: float,
+    n: float,
+    m1: float,
+    B1: float,
+    m2: float,
+    B2: float,
+    m3: float,
+    h1: float,
+) -> float:
+    """在复式梯形几何固定时，按流量反算水深。"""
+    tolerance = 0.0005
+    if (
+        target_Q <= ZERO_TOLERANCE
+        or i <= ZERO_TOLERANCE
+        or n <= ZERO_TOLERANCE
+        or B2 <= ZERO_TOLERANCE
+    ):
+        return -1.0
+
+    h_low = 0.0
+    h_high = max(h1 + 0.5, 0.5)
+    Q_high = calculate_compound_trapezoid_flow_rate(B2, h_high, i, n, m1, B1, m2, m3, h1)
+
+    while 0 <= Q_high < target_Q and h_high < 1000:
+        h_high *= 2.0
+        Q_high = calculate_compound_trapezoid_flow_rate(B2, h_high, i, n, m1, B1, m2, m3, h1)
+
+    if Q_high < target_Q:
+        return -1.0
+
+    for _ in range(MAX_H_ITER):
+        h_mid = (h_low + h_high) / 2.0
+        Q_mid = calculate_compound_trapezoid_flow_rate(B2, h_mid, i, n, m1, B1, m2, m3, h1)
+        if Q_mid < 0:
+            return -1.0
+        if abs(Q_mid - target_Q) <= tolerance * target_Q:
+            return h_mid
+        if Q_mid < target_Q:
+            h_low = h_mid
+        else:
+            h_high = h_mid
+
+    return (h_low + h_high) / 2.0
 
 
 def calculate_flow_rate(b: float, h: float, i: float, n: float, m: float) -> float:
@@ -977,6 +1139,150 @@ def quick_calculate_rectangular(Q: float, n: float, slope_inv: float,
     return quick_calculate_trapezoidal(Q, 0.0, n, slope_inv, v_min, v_max,
                                       manual_beta, manual_b, manual_increase_percent,
                                       preserve_manual_b)
+
+
+def quick_calculate_compound_trapezoidal(
+    Q: float,
+    m1: float,
+    B1: float,
+    m2: float,
+    B2: float,
+    m3: float,
+    h1: float,
+    n: float,
+    slope_inv: float,
+    v_min: float,
+    v_max: float,
+    manual_increase_percent: float = None,
+) -> Dict[str, Any]:
+    """
+    复式梯形明渠快速计算主函数。
+
+    该断面全部几何参数均为人工固定，不做附录E、不做 beta、不做自动底宽。
+    """
+    result = {
+        'success': False,
+        'error_message': '',
+        'design_method': '',
+        'b_design': 0,
+        'h_design': 0,
+        'V_design': 0,
+        'A_design': 0,
+        'X_design': 0,
+        'R_design': 0,
+        'Beta_design': 0,
+        'Q_calc': 0,
+        'increase_percent': 0,
+        'Q_increased': 0,
+        'h_increased': 0,
+        'V_increased': 0,
+        'Fb': 0,
+        'h_prime': 0,
+        'constraint_warnings': [],
+        'm1': m1,
+        'B1': B1,
+        'm2': m2,
+        'B2': B2,
+        'm3': m3,
+        'h1': h1,
+    }
+
+    if Q <= ZERO_TOLERANCE:
+        result['error_message'] = 'Q (流量) 必须大于0'
+        return result
+    if n <= ZERO_TOLERANCE:
+        result['error_message'] = 'n (糙率) 必须大于0'
+        return result
+    if slope_inv <= ZERO_TOLERANCE:
+        result['error_message'] = '坡度倒数必须大于0'
+        return result
+    if v_min >= v_max:
+        result['error_message'] = '不淤流速必须小于不冲流速'
+        return result
+    if B1 <= ZERO_TOLERANCE:
+        result['error_message'] = 'B1 (平台宽) 必须大于0'
+        return result
+    if B2 <= ZERO_TOLERANCE:
+        result['error_message'] = 'B2 (渠底宽) 必须大于0'
+        return result
+    if h1 <= ZERO_TOLERANCE:
+        result['error_message'] = 'h1 (平台高差) 必须大于0'
+        return result
+
+    for key, value in (('m1', m1), ('m2', m2), ('m3', m3)):
+        if value < 0:
+            result['error_message'] = f'{key} 不能为负'
+            return result
+
+    i = 1.0 / slope_inv
+    h_designed = calculate_compound_trapezoid_depth_for_flow(Q, i, n, m1, B1, m2, B2, m3, h1)
+    if h_designed <= 0:
+        result['error_message'] = '固定复式梯形断面无法反算出满足流量的水深'
+        result['design_method'] = '固定复式梯形断面'
+        return result
+
+    h_designed = round(h_designed, 3)
+    A_designed = round(calculate_compound_trapezoid_area(B2, h_designed, m2, m3, h1, B1, m1), 3)
+    X_designed = round(calculate_compound_trapezoid_wetted_perimeter(B2, h_designed, m2, m3, h1, B1, m1), 3)
+    R_designed = round(calculate_compound_trapezoid_hydraulic_radius(B2, h_designed, m2, m3, h1, B1, m1), 3)
+    V_designed = round(calculate_velocity(Q, A_designed), 3)
+    Q_calc = round(calculate_compound_trapezoid_flow_rate(B2, h_designed, i, n, m1, B1, m2, m3, h1), 3)
+    Beta_designed = round(B2 / h_designed, 3) if h_designed > ZERO_TOLERANCE else 0
+
+    result['success'] = True
+    result['design_method'] = '固定复式梯形断面'
+    result['b_design'] = round(B2, 3)
+    result['h_design'] = h_designed
+    result['V_design'] = V_designed
+    result['A_design'] = A_designed
+    result['X_design'] = X_designed
+    result['R_design'] = R_designed
+    result['Beta_design'] = Beta_designed
+    result['Q_calc'] = Q_calc
+
+    warnings = []
+    if V_designed <= v_min:
+        warnings.append(f"设计流速 V={V_designed:.3f} m/s 未大于不淤流速 {v_min:.3f} m/s")
+    elif V_designed >= v_max:
+        warnings.append(f"设计流速 V={V_designed:.3f} m/s 未小于不冲流速 {v_max:.3f} m/s")
+
+    if manual_increase_percent is not None and manual_increase_percent >= 0:
+        increase_percent = manual_increase_percent
+    else:
+        increase_percent = get_flow_increase_percent(Q)
+
+    Q_increased = round(Q * (1 + increase_percent / 100.0), 3)
+    result['increase_percent'] = increase_percent
+    result['Q_increased'] = Q_increased
+
+    h_increased = calculate_compound_trapezoid_depth_for_flow(Q_increased, i, n, m1, B1, m2, B2, m3, h1)
+    if h_increased > 0:
+        h_increased = round(h_increased, 3)
+        A_increased = round(calculate_compound_trapezoid_area(B2, h_increased, m2, m3, h1, B1, m1), 3)
+        X_increased = round(calculate_compound_trapezoid_wetted_perimeter(B2, h_increased, m2, m3, h1, B1, m1), 3)
+        R_increased = round(calculate_compound_trapezoid_hydraulic_radius(B2, h_increased, m2, m3, h1, B1, m1), 3)
+        V_increased = round(calculate_velocity(Q_increased, A_increased), 3)
+        Fb = round(0.25 * h_increased + 0.2, 3)
+        h_prime = round(h_increased + Fb, 3)
+
+        result['h_increased'] = h_increased
+        result['A_increased'] = A_increased
+        result['X_increased'] = X_increased
+        result['R_increased'] = R_increased
+        result['V_increased'] = V_increased
+        result['Fb'] = Fb
+        result['h_prime'] = h_prime
+    else:
+        result['h_increased'] = -1
+        result['A_increased'] = -1
+        result['X_increased'] = -1
+        result['R_increased'] = -1
+        result['V_increased'] = -1
+        result['Fb'] = -1
+        result['h_prime'] = -1
+
+    result['constraint_warnings'] = warnings
+    return result
 
 
 # ============================================================
@@ -1777,6 +2083,16 @@ def design_channel(section_type: SectionType, **kwargs) -> Dict[str, Any]:
             kwargs.get('manual_beta'), kwargs.get('manual_b'),
             kwargs.get('manual_increase_percent'),
             kwargs.get('preserve_manual_b', False)
+        )
+
+    elif section_type == SectionType.COMPOUND_TRAPEZOIDAL:
+        return quick_calculate_compound_trapezoidal(
+            kwargs.get('Q'),
+            kwargs.get('m1'), kwargs.get('B1'), kwargs.get('m2'),
+            kwargs.get('B2'), kwargs.get('m3'), kwargs.get('h1'),
+            kwargs.get('n'), kwargs.get('slope_inv'),
+            kwargs.get('v_min'), kwargs.get('v_max'),
+            kwargs.get('manual_increase_percent'),
         )
 
     else: # TRAPEZOIDAL

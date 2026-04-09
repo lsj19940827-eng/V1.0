@@ -17,6 +17,26 @@ except ImportError:
     StructureType = None
 
 
+COMPOUND_TRAPEZOID_PARAM_KEYS = ("m1", "B1", "m2", "B2", "m3", "h1")
+
+
+def _extract_compound_trapezoid_params(source: Any) -> Dict[str, float]:
+    """提取复式梯形专用参数，统一转为浮点数。"""
+    if not isinstance(source, dict):
+        return {}
+
+    params: Dict[str, float] = {}
+    for key in COMPOUND_TRAPEZOID_PARAM_KEYS:
+        value = source.get(key, None)
+        if value is None or str(value).strip() == "":
+            continue
+        try:
+            params[key] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return params
+
+
 def normalize_section_type_name(section_type: Any) -> str:
     """统一结构/断面类型别名，避免各模块口径差异导致后续识别失败。"""
     text = str(section_type or "").strip()
@@ -26,6 +46,7 @@ def normalize_section_type_name(section_type: Any) -> str:
         "暗渠": "矩形暗涵",
         "矩形暗渠": "矩形暗涵",
         "矩形暗涵": "矩形暗涵",
+        "复式梯形": "明渠-复式梯形",
         "退水闸": "退水闸",
     }
     return alias_map.get(text, text)
@@ -134,6 +155,14 @@ class SectionResult:
     
     def to_node_params(self) -> Dict[str, Any]:
         """转换为推求水面线节点参数格式"""
+        compound_params = {}
+        if self.section_type == "明渠-复式梯形":
+            compound_params = _extract_compound_trapezoid_params(self.raw_result)
+
+        bottom_width = self.B
+        if bottom_width is None and compound_params.get("B2") is not None:
+            bottom_width = compound_params["B2"]
+
         params = {
             'flow': self.Q,
             'roughness': self.n,
@@ -145,7 +174,7 @@ class SectionResult:
             'flow_section': self.flow_section,
             'name': self.building_name,
             'section_params': {
-                'B': self.B,
+                'B': bottom_width,
                 'm': self.m,
                 'D': self.D,
                 'R_circle': self.R,
@@ -162,6 +191,8 @@ class SectionResult:
                 'use_increase': self.use_increase,
             }
         }
+        if compound_params:
+            params['section_params'].update(compound_params)
         # 计算比降
         if self.slope_inv and self.slope_inv > 0:
             params['slope_i'] = 1.0 / self.slope_inv
@@ -340,6 +371,11 @@ class SharedDataManager:
             if "马蹄形" in section_type or 'r' in result:
                 section_result.R = result.get('r', result.get('R_design', None))
                 section_result.h = result.get('h_design', result.get('water_depth', result.get('y_d', None)))
+
+            if section_type == "明渠-复式梯形":
+                compound_params = _extract_compound_trapezoid_params(result)
+                section_result.B = result.get('b_design', compound_params.get('B2', result.get('B', None)))
+                section_result.h = result.get('h_design', result.get('h', result.get('water_depth', None)))
             
             # 提取水力参数（兼容不同断面类型的键名）
             section_result.X = result.get('X_design', result.get('wetted_perimeter',

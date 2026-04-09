@@ -712,6 +712,69 @@ def test_build_nodes_from_table_preserves_explicit_zero_turn_radius_for_pressure
     assert getattr(nodes[1], "turn_radius_is_explicit", False) is True
 
 
+def test_build_nodes_from_table_restores_compound_trapezoid_hidden_params():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.CALCULATOR_AVAILABLE = True
+
+    class _BuildNode:
+        def __init__(self):
+            self.section_params = {}
+            self.is_transition = False
+            self.is_auto_inserted_channel = False
+            self.is_diversion_gate = False
+            self.is_inverted_siphon = False
+            self.is_pressure_pipe = False
+            self.in_out = None
+            self.external_head_loss = None
+
+    module.ChannelNode = _BuildNode
+    module.StructureType = _FakeStructureType
+    module.InOutType = _FakeInOutType
+
+    panel.node_table.setRowCount(1)
+    for col, text in (
+        (0, "1"),
+        (1, ""),
+        (2, "明渠-复式梯形"),
+        (20, "4.8"),
+        (24, "0.015"),
+        (25, "3000"),
+        (26, "4.2"),
+        (27, "2.100"),
+        (28, "10.822"),
+        (29, "11.335"),
+        (30, "0.955"),
+    ):
+        panel.node_table.setItem(0, col, _FakeItem(text))
+    panel.node_table.item(0, 0).setData(
+        module.Qt.UserRole,
+        {
+            "_from_table1_source": True,
+            "_compound_trapezoid_params": {
+                "m1": 0.5,
+                "B1": 3.4,
+                "m2": 1.25,
+                "B2": 4.8,
+                "m3": 1.5,
+                "h1": 1.2,
+            },
+        },
+    )
+
+    nodes = module.WaterProfilePanel._build_nodes_from_table(panel)
+
+    assert len(nodes) == 1
+    assert nodes[0].structure_type.value == "明渠-复式梯形"
+    assert nodes[0].section_params["B"] == 4.8
+    assert nodes[0].section_params["m1"] == 0.5
+    assert nodes[0].section_params["B1"] == 3.4
+    assert nodes[0].section_params["m2"] == 1.25
+    assert nodes[0].section_params["B2"] == 4.8
+    assert nodes[0].section_params["m3"] == 1.5
+    assert nodes[0].section_params["h1"] == 1.2
+
+
 def test_build_nodes_from_table_defaults_blank_turn_radius_to_zero_for_regular_row():
     module = _load_panel_module()
     panel = _make_basic_panel(module)

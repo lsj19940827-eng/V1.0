@@ -17,6 +17,7 @@ class StructureType(Enum):
     """
     # 明渠类型
     MINGQU_TRAPEZOIDAL = "明渠-梯形"
+    MINGQU_COMPOUND_TRAPEZOIDAL = "明渠-复式梯形"
     MINGQU_RECTANGULAR = "明渠-矩形"
     MINGQU_CIRCULAR = "明渠-圆形"
     MINGQU_U = "明渠-U形"
@@ -126,6 +127,7 @@ class StructureType(Enum):
         """获取允许建筑物名称留空的结构类型。"""
         return [
             cls.MINGQU_TRAPEZOIDAL,
+            cls.MINGQU_COMPOUND_TRAPEZOIDAL,
             cls.MINGQU_RECTANGULAR,
             cls.MINGQU_CIRCULAR,
             cls.PRESSURE_PIPE,
