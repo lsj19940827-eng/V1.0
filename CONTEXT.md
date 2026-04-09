@@ -1,7 +1,7 @@
 # 当前进度
 
-- 当前正在做什么：收口本次 4 条本地分支并同步主线记录，`master` 已完成更新链路修复、明渠 `复式梯形` 能力和打包前 Word 导出依赖校验的合并，相关旧分支、旧工作树和远端旧分支也已清理。
-- 上次停在哪个位置：已把 `update-validate-progress`、`update-session-cleanup`、`compound-trapezoid-open-channel`、`fix-word-export-build-deps` 4 条分支全部提交并合入 `master`；最后一步是在主线补 README / ARCHITECTURE / PRD / CONTEXT 的收口记录。
+- 当前正在做什么：`master` 已完成更新链路修复、明渠 `复式梯形` 能力和打包前 Word 导出依赖校验的合并；本轮已补齐主线记录，并在根目录重新完成测试、依赖导入和完整打包核对，当前处于可发版验证通过状态。
+- 上次停在哪个位置：已把 `update-validate-progress`、`update-session-cleanup`、`compound-trapezoid-open-channel`、`fix-word-export-build-deps` 4 条分支全部提交并合入 `master`；最后一步是补齐 README / ARCHITECTURE / 发版指南 / PRD / CONTEXT 的收口记录，并确认安装包重新带回 Word 导出依赖。
 - 近期关键决定和原因：
 - `python-docx / latex2mathml / lxml` 现在作为独立的 Word 导出依赖组进入 `tools/build.py` 打包前校验，缺失时直接终止打包并给出安装命令，避免再把缺件版本发出去。
 - 构建校验与 PyInstaller 现在复用同一套项目搜索路径，先补 `calc_渠系计算算法内核 / 倒虹吸水力计算系统 / 推求水面线` 的导入路径，再做依赖校验，避免把项目内模块误判成缺失。
