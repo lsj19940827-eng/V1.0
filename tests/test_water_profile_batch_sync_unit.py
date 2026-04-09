@@ -412,3 +412,63 @@ def test_load_section_sample_8_triggers_sync_after_loading():
     assert state["synced"] is True
     assert state["switched"] is True
     assert state["marked"] is True
+
+
+def test_load_section_sample_9_triggers_sync_after_loading():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    state = {"loaded": False, "synced": False, "marked": False, "switched": False}
+
+    class _FakeBatchBackend:
+        def _add_sample_data_9(self):
+            state["loaded"] = True
+
+    class _FakeTable:
+        @staticmethod
+        def rowCount():
+            return 1
+
+    panel._batch_backend = _FakeBatchBackend()
+    panel._tab_section_input = object()
+    panel._section_input_table = _FakeTable()
+    panel._sync_batch_settings = lambda: state.__setitem__("synced", True)
+    panel._switch_workspace_tab = lambda _tab: state.__setitem__("switched", True)
+    panel._mark_section_results_stale = lambda _msg: state.__setitem__("marked", True)
+
+    WaterProfilePanel._load_section_sample_9(panel)
+
+    assert state["loaded"] is True
+    assert state["synced"] is True
+    assert state["switched"] is True
+    assert state["marked"] is True
+
+
+def test_load_section_sample_10_triggers_sync_after_loading():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    state = {"loaded": False, "synced": False, "marked": False, "switched": False}
+
+    class _FakeBatchBackend:
+        def _add_sample_data_10(self):
+            state["loaded"] = True
+
+    class _FakeTable:
+        @staticmethod
+        def rowCount():
+            return 1
+
+    panel._batch_backend = _FakeBatchBackend()
+    panel._tab_section_input = object()
+    panel._section_input_table = _FakeTable()
+    panel._sync_batch_settings = lambda: state.__setitem__("synced", True)
+    panel._switch_workspace_tab = lambda _tab: state.__setitem__("switched", True)
+    panel._mark_section_results_stale = lambda _msg: state.__setitem__("marked", True)
+
+    WaterProfilePanel._load_section_sample_10(panel)
+
+    assert state["loaded"] is True
+    assert state["synced"] is True
+    assert state["switched"] is True
+    assert state["marked"] is True

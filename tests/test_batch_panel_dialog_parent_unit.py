@@ -678,3 +678,29 @@ def test_get_template_path_returns_jiangjiaba_sample_file():
     assert template_path.endswith("江家坝支管批量计算用表.xlsx")
     assert sample_path.endswith("江家坝支管批量计算用表.xlsx")
     assert template_path == sample_path
+
+
+def test_get_template_path_returns_saijin_sample_file():
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+
+    template_path = BatchPanel._get_template_path(panel, "saijin")
+    sample_path = BatchPanel._get_sample9_path(panel)
+
+    assert template_path.endswith("赛金支渠批量计算用表.xlsx")
+    assert sample_path.endswith("赛金支渠批量计算用表.xlsx")
+    assert template_path == sample_path
+
+
+def test_get_template_path_returns_suxi_sample_file():
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+
+    template_path = BatchPanel._get_template_path(panel, "suxi")
+    sample_path = BatchPanel._get_sample10_path(panel)
+
+    assert template_path.endswith("苏溪支渠批量计算用表.xlsx")
+    assert sample_path.endswith("苏溪支渠批量计算用表.xlsx")
+    assert template_path == sample_path

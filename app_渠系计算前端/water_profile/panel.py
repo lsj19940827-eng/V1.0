@@ -1517,6 +1517,8 @@ class WaterProfilePanel(QWidget):
         sample_menu.addAction(Action("示例六（合作干渠）", triggered=self._load_section_sample_6))
         sample_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=self._load_section_sample_7))
         sample_menu.addAction(Action("示例八（江家坝支管）", triggered=self._load_section_sample_8))
+        sample_menu.addAction(Action("示例九（赛金支渠）", triggered=self._load_section_sample_9))
+        sample_menu.addAction(Action("示例十（苏溪支渠）", triggered=self._load_section_sample_10))
         self._btn_section_sample = DropDownPushButton("示例数据")
         self._btn_section_sample.setMenu(sample_menu)
         button_row.addWidget(self._btn_section_sample)
@@ -1530,6 +1532,8 @@ class WaterProfilePanel(QWidget):
         template_menu.addAction(Action("示例六（合作干渠）", triggered=lambda: self._open_section_excel_template("hezuo")))
         template_menu.addAction(Action("示例七（甘家沟充水渠）", triggered=lambda: self._open_section_excel_template("ganjiagou")))
         template_menu.addAction(Action("示例八（江家坝支管）", triggered=lambda: self._open_section_excel_template("jiangjiaba")))
+        template_menu.addAction(Action("示例九（赛金支渠）", triggered=lambda: self._open_section_excel_template("saijin")))
+        template_menu.addAction(Action("示例十（苏溪支渠）", triggered=lambda: self._open_section_excel_template("suxi")))
         self._btn_section_template = DropDownPushButton("打开Excel模板")
         self._btn_section_template.setMenu(template_menu)
         button_row.addWidget(self._btn_section_template)
@@ -1914,6 +1918,20 @@ class WaterProfilePanel(QWidget):
 
     def _load_section_sample_8(self):
         self._batch_backend._add_sample_data_8()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _load_section_sample_9(self):
+        self._batch_backend._add_sample_data_9()
+        self._sync_batch_settings()
+        self._switch_workspace_tab(self._tab_section_input)
+        if self._section_input_table and self._section_input_table.rowCount() > 0:
+            self._mark_section_results_stale("状态：表1已更新，请重新执行断面批量计算")
+
+    def _load_section_sample_10(self):
+        self._batch_backend._add_sample_data_10()
         self._sync_batch_settings()
         self._switch_workspace_tab(self._tab_section_input)
         if self._section_input_table and self._section_input_table.rowCount() > 0:
