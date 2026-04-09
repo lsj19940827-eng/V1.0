@@ -99,6 +99,19 @@ class _DummyMSP:
         return _TextEntity(self, text, dxfattribs)
 
 
+def _count_line(records, start, end, tol=1e-6):
+    count = 0
+    for rec in records:
+        if (
+            abs(rec["start"][0] - start[0]) <= tol
+            and abs(rec["start"][1] - start[1]) <= tol
+            and abs(rec["end"][0] - end[0]) <= tol
+            and abs(rec["end"][1] - end[1]) <= tol
+        ):
+            count += 1
+    return count
+
+
 class _ProjSettings:
     def __init__(self, prefix):
         self._prefix = prefix
@@ -225,6 +238,27 @@ def _sample_profile_data():
 def _mixed_tail_nodes():
     return [
         _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="明渠1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=50.0, structure="明渠-矩形", name="明渠2", bottom_elevation=409.2),
+        _make_node(ip_no=3, mc=100.0, structure="明渠-矩形", name="明渠3", bottom_elevation=408.4),
+        _make_node(ip_no=4, mc=150.0, structure="有压管道", name="末端压力管", in_out="进", bottom_elevation=407.5),
+        _make_node(ip_no=5, mc=200.0, structure="有压管道", name="末端压力管", bottom_elevation=406.7),
+        _make_node(ip_no=6, mc=250.0, structure="有压管道", name="末端压力管", in_out="出", bottom_elevation=405.9),
+    ]
+
+
+def _mixed_tail_nodes_with_duplicate_channel_start():
+    duplicate_start = _make_node(
+        ip_no=10,
+        mc=0.0,
+        structure="明渠-矩形",
+        name="明渠起点占位",
+        bottom_elevation=0.0,
+    )
+    duplicate_start.top_elevation = 0.0
+    duplicate_start.water_level = 0.0
+    return [
+        _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="明渠1", bottom_elevation=410.0),
+        duplicate_start,
         _make_node(ip_no=2, mc=50.0, structure="明渠-矩形", name="明渠2", bottom_elevation=409.2),
         _make_node(ip_no=3, mc=100.0, structure="明渠-矩形", name="明渠3", bottom_elevation=408.4),
         _make_node(ip_no=4, mc=150.0, structure="有压管道", name="末端压力管", in_out="进", bottom_elevation=407.5),
@@ -1861,6 +1895,49 @@ def test_draw_tail_pressure_split_profile_on_msp_rebases_lower_table_x_but_keeps
     assert [text for text, _x in lower_station_texts] == ["0+120.00", "0+160.00", "0+200.00"]
     assert [x for _text, x in lower_station_texts] == pytest.approx([4.8, 19.0, 39.0])
     assert crossing_horizontal_lines == []
+
+
+def test_draw_tail_pressure_split_profile_on_msp_keeps_single_upper_start_vline(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = _mixed_tail_nodes_with_duplicate_channel_start()
+    channel_nodes = nodes[:4]
+    channel_valid_nodes = [node for node in channel_nodes if node.bottom_elevation or node.top_elevation or node.water_level]
+    tail_nodes = nodes[4:]
+    xxpipe_profile_data = cad_tools._build_xxpipe_profile_data(
+        tail_nodes,
+        {
+            "1::末端压力管": [
+                {"chainage": 150.0, "elevation": 100.0, "turn_type": "无"},
+                {"chainage": 250.0, "elevation": 90.0, "turn_type": "无"},
+            ]
+        },
+        station_prefix="",
+    )
+    msp = _DummyMSP()
+
+    cad_tools._draw_tail_pressure_split_profile_on_msp(
+        msp,
+        channel_nodes,
+        channel_valid_nodes,
+        tail_nodes,
+        _scaled_settings(),
+        "",
+        xxpipe_profile_data=xxpipe_profile_data,
+    )
+
+    _, row_layout, _, _line_height, _ = cad_tools._build_profile_row_layout(_scaled_settings())
+    short_line_height = row_layout["slope"]["bottom"]
+
+    assert _count_line(msp.line_records, (0.0, 0.0), (0.0, short_line_height)) == 1
 
 
 def test_draw_tail_pressure_split_profile_on_msp_keeps_lower_centerline_text_when_route_profile_loaded(monkeypatch):

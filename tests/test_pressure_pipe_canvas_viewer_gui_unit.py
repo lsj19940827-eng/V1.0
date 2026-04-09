@@ -300,6 +300,24 @@ def test_pressure_pipe_config_dialog_reuses_single_non_modal_viewer(monkeypatch)
     dialog.deleteLater()
 
 
+def test_pressure_pipe_config_dialog_shows_longitudinal_dxf_import_guidance():
+    dialog, group = _make_dialog()
+    widgets = dialog._card_widgets[group.name]
+
+    guidance_label = widgets["import_guidance"]
+    guidance_text = guidance_label.text()
+
+    assert guidance_label.isVisible() is True
+    assert "合格的纵断面 DXF 需要满足：" in guidance_text
+    assert "DXF 文件里有可识别的纵断面管道中心线，建议只保留这一根多段线。" in guidance_text
+    assert "该轴线按 1:1 绘制，其中 Y 为管道中心线的真实高程（米）。" in guidance_text
+    assert "若文件里有多条相近多段线，系统会优先识别更像纵断面的那条，必要时会请你确认。" in guidance_text
+    assert "为提高识别成功率，建议把纵断面放在“纵断”或“纵剖”等清晰图层。" in guidance_text
+
+    dialog.close()
+    dialog.deleteLater()
+
+
 def test_pressure_pipe_config_dialog_groups_cards_by_chain():
     _get_qapp()
     group = _make_group()
@@ -708,7 +726,7 @@ def test_pressure_pipe_config_dialog_rejects_route_import_when_station_coverage_
         },
     )
 
-    with pytest.raises(ValueError, match="未覆盖以下节点桩号"):
+    with pytest.raises(ValueError, match="纵断面范围不够"):
         dialog._validate_xxpipe_route_import_coverage(
             route_key,
             [
@@ -1052,8 +1070,138 @@ def test_pressure_pipe_config_dialog_rejects_xxpipe_import_when_coverage_is_inco
     dialog._import_longitudinal_dxf(route_key, groups[0].route_ip_points)
 
     assert errors
-    assert "未覆盖以下节点桩号" in errors[0]
-    assert "IP2@0+080.000" in errors[0]
+    assert "导入失败：纵断面范围不够" in errors[0]
+    assert "需要覆盖到桩号 80.000 m" in errors[0]
+    assert "当前导入的纵断面只到 50.000 m" in errors[0]
+    assert "允许的 1.0 mm 误差" in errors[0]
+    assert "请在 CAD 中把纵断面末端至少延长到 80.000 m 后重新导入。" in errors[0]
+    assert "未覆盖节点：IP2@0+080.000" in errors[0]
+    assert route_key not in dialog.get_longitudinal_nodes_dict()
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_reports_mm_gap_for_short_longitudinal_profile(monkeypatch):
+    _get_qapp()
+    route_key, groups, _manager = _make_route_groups(
+        route_key="flow1-route-long-gap",
+        display_name="流量段1 整线1",
+        flow_section="1",
+    )
+    long_route_points = [
+        {"x": 0.0, "y": 0.0, "turn_angle": 0.0, "station_mc": 0.0},
+        {"x": 10708.927, "y": 0.0, "turn_angle": 0.0, "station_mc": 10708.927},
+    ]
+    for group in groups:
+        group.route_ip_points = list(long_route_points)
+        group.route_start_mc = 0.0
+        group.route_end_mc = 10708.927
+
+    route_nodes = [
+        SimpleNamespace(
+            ip_number=1,
+            name="起点",
+            flow_section="1",
+            station_MC=0.0,
+            x=0.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            pressure_pipe_row_identity="1::起点",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=173,
+            name="平分",
+            flow_section="1",
+            station_MC=10708.927,
+            x=10708.927,
+            y=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            pressure_pipe_row_identity="1::平分",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=_FakeManager("unused", []),
+        xxpipe_route_mode=True,
+        route_import_targets={
+            route_key: {
+                "display_name": "流量段1 整线1",
+                "station_prefix": "T",
+                "nodes": route_nodes,
+            }
+        },
+    )
+
+    class _FakePolyline:
+        def get_points(self, format="xyseb"):
+            return [(0.0, 0.0, 0.0, 0.0, 0.0)]
+
+    class _FakeModelSpace:
+        def query(self, _query_text):
+            return [_FakePolyline()]
+
+    class _FakeDoc:
+        def modelspace(self):
+            return _FakeModelSpace()
+
+    class _FakeParser:
+        @staticmethod
+        def parse_longitudinal_profile(_filepath, chainage_offset=0.0):
+            assert chainage_offset == pytest.approx(0.0)
+            turn_type = SimpleNamespace(name="NONE")
+            return (
+                [
+                    SimpleNamespace(
+                        chainage=0.0,
+                        elevation=422.0,
+                        vertical_curve_radius=0.0,
+                        turn_type=turn_type,
+                        turn_angle=0.0,
+                        slope_before=0.0,
+                        slope_after=0.0,
+                        arc_center_s=None,
+                        arc_center_z=None,
+                        arc_end_chainage=None,
+                        arc_theta_rad=None,
+                    ),
+                    SimpleNamespace(
+                        chainage=10708.9248,
+                        elevation=418.0,
+                        vertical_curve_radius=0.0,
+                        turn_type=turn_type,
+                        turn_angle=0.0,
+                        slope_before=0.0,
+                        slope_after=0.0,
+                        arc_center_s=None,
+                        arc_center_z=None,
+                        arc_end_chainage=None,
+                        arc_theta_rad=None,
+                    ),
+                ],
+                "测试导入",
+            )
+
+    errors = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *_a, **_k: ("fake.dxf", "DXF")))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_a: errors.append(_a[2])))
+    monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(readfile=lambda *_a, **_k: _FakeDoc()))
+    monkeypatch.setitem(sys.modules, "dxf_parser", SimpleNamespace(DxfParser=_FakeParser))
+
+    dialog._import_longitudinal_dxf(route_key, groups[0].route_ip_points)
+
+    assert errors
+    assert "流量段1 整线1" in errors[0]
+    assert "导入失败：纵断面范围不够" in errors[0]
+    assert "需要覆盖到桩号 10708.927 m" in errors[0]
+    assert "当前导入的纵断面只到 10708.9248 m" in errors[0]
+    assert "当前还差 2.2 mm，已超过程序允许的 1.0 mm 误差。" in errors[0]
+    assert "请在 CAD 中把纵断面末端至少延长到 10708.927 m 后重新导入。" in errors[0]
+    assert "未覆盖节点：IP173@T10+708.927" in errors[0]
     assert route_key not in dialog.get_longitudinal_nodes_dict()
 
     dialog.close()

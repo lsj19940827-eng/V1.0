@@ -516,8 +516,30 @@ def _has_line(records, start, end, tol=1e-6):
     return False
 
 
+def _count_line(records, start, end, tol=1e-6):
+    count = 0
+    for rec in records:
+        if (
+            abs(rec["start"][0] - start[0]) <= tol
+            and abs(rec["start"][1] - start[1]) <= tol
+            and abs(rec["end"][0] - end[0]) <= tol
+            and abs(rec["end"][1] - end[1]) <= tol
+        ):
+            count += 1
+    return count
+
+
 def _scaled_m_to_mm(value_m, scale_denom):
     return float(value_m) * 1000.0 / float(scale_denom)
+
+
+def _sample_start_duplicate_nodes():
+    first = _make_node(ip_no=1, mc=0.0, bottom=410.0, top=412.0, water=411.0)
+    duplicate_1 = _make_node(ip_no=2, mc=0.0, bottom=0.0, top=0.0, water=0.0)
+    duplicate_2 = _make_node(ip_no=3, mc=0.0, bottom=0.0, top=0.0, water=0.0)
+    duplicate_2.is_auto_inserted_channel = True
+    end = _make_node(ip_no=4, mc=100.0, bottom=405.0, top=407.0, water=406.0)
+    return [first, duplicate_1, duplicate_2, end]
 
 
 def test_draw_profile_on_msp_dedup_station_text(monkeypatch):
@@ -565,13 +587,23 @@ def test_draw_profile_on_msp_dedup_station_text(monkeypatch):
     assert _has_line(
         msp.line_records,
         (_scaled_m_to_mm(100.0, scale_x), 0.0),
-        (_scaled_m_to_mm(100.0, scale_x), short_line_height),
+        (_scaled_m_to_mm(100.0, scale_x), line_height),
     )
+    assert _count_line(
+        msp.line_records,
+        (_scaled_m_to_mm(100.0, scale_x), 0.0),
+        (_scaled_m_to_mm(100.0, scale_x), line_height),
+    ) == 1
     assert _has_line(
         msp.line_records,
         (_scaled_m_to_mm(200.0, scale_x), 0.0),
         (_scaled_m_to_mm(200.0, scale_x), line_height),
     )
+    assert _count_line(
+        msp.line_records,
+        (_scaled_m_to_mm(200.0, scale_x), 0.0),
+        (_scaled_m_to_mm(200.0, scale_x), line_height),
+    ) == 1
 
 
 def test_export_longitudinal_txt_dedup_station_text(local_tmp_path, monkeypatch):
@@ -613,8 +645,66 @@ def test_export_longitudinal_txt_dedup_station_text(local_tmp_path, monkeypatch)
     assert len(key(x_200, 47.0)) == 1
     assert any("忘乡台隧出" in txt for txt in key(x_100, 77.0))
     assert key(x_200, 77.0) == ["IP20"]
-    assert _has_line(pl_rows, (x_100, 0.0), (x_100, short_line_height))
+    assert _has_line(pl_rows, (x_100, 0.0), (x_100, line_height))
+    assert _count_line(pl_rows, (x_100, 0.0), (x_100, line_height)) == 1
     assert _has_line(pl_rows, (x_200, 0.0), (x_200, line_height))
+    assert _count_line(pl_rows, (x_200, 0.0), (x_200, line_height)) == 1
+
+
+def test_draw_profile_on_msp_keeps_single_start_vline_when_raw_nodes_repeat_station(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = _sample_start_duplicate_nodes()
+    valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        valid_nodes,
+        _default_settings(),
+        station_prefix="",
+    )
+
+    _, layout, _, _line_height, _ = cad_tools._build_profile_row_layout(_default_settings())
+    short_line_height = layout["slope"]["bottom"]
+    start_line = ((0.0, 0.0), (0.0, short_line_height))
+
+    assert _count_line(msp.line_records, *start_line) == 1
+
+
+def test_export_longitudinal_txt_keeps_single_start_vline_when_raw_nodes_repeat_station(
+    local_tmp_path, monkeypatch
+):
+    nodes = _sample_start_duplicate_nodes()
+    valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
+    out_file = local_tmp_path / "duplicate_start_profile.txt"
+
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+
+    cad_tools._export_longitudinal_txt_to_path(
+        _Panel(""),
+        nodes,
+        valid_nodes,
+        _default_settings(),
+        str(out_file),
+    )
+
+    _, layout, _, _line_height, _ = cad_tools._build_profile_row_layout(_default_settings())
+    short_line_height = layout["slope"]["bottom"]
+    pl_rows = _parse_pl_cmds(out_file)
+
+    assert _count_line(pl_rows, (0.0, 0.0), (0.0, short_line_height)) == 1
 
 
 def test_build_profile_slope_segments_returns_interval_records():
@@ -622,14 +712,21 @@ def test_build_profile_slope_segments_returns_interval_records():
 
     segments = cad_tools._build_profile_slope_segments(nodes)
 
-    assert segments == [
-        {"text": "1/2", "start_mc": 262.321, "end_mc": 287.852},
-        {"text": "1/5", "start_mc": 287.852, "end_mc": 318.787},
-        {"text": "1/15", "start_mc": 318.787, "end_mc": 348.836},
-        {"text": "1/2", "start_mc": 348.836, "end_mc": 358.947},
-        {"text": "1/14", "start_mc": 358.947, "end_mc": 472.834},
-        {"text": "1/20", "start_mc": 472.834, "end_mc": 584.807},
+    expected = [
+        {"text": "1/2", "start_mc": 262.321, "end_mc": 287.852, "mid_mc": 275.0865},
+        {"text": "1/5", "start_mc": 287.852, "end_mc": 318.787, "mid_mc": 303.3195},
+        {"text": "1/15", "start_mc": 318.787, "end_mc": 348.836, "mid_mc": 333.8115},
+        {"text": "1/2", "start_mc": 348.836, "end_mc": 358.947, "mid_mc": 353.8915},
+        {"text": "1/14", "start_mc": 358.947, "end_mc": 472.834, "mid_mc": 415.8905},
+        {"text": "1/20", "start_mc": 472.834, "end_mc": 584.807, "mid_mc": 528.8205},
     ]
+
+    assert len(segments) == len(expected)
+    for actual, target in zip(segments, expected):
+        assert actual["text"] == target["text"]
+        assert actual["start_mc"] == pytest.approx(target["start_mc"])
+        assert actual["end_mc"] == pytest.approx(target["end_mc"])
+        assert actual["mid_mc"] == pytest.approx(target["mid_mc"])
 
 
 def test_profile_slope_segments_use_interval_centers_in_dxf_and_txt(local_tmp_path, monkeypatch):
@@ -716,12 +813,12 @@ def test_profile_slope_placeholder_segments_stay_isolated_from_open_channel(loca
 
     segments = cad_tools._build_profile_slope_segments(nodes)
     assert segments == [
-        {"text": "-", "start_mc": 100.0, "end_mc": 210.0},
-        {"text": "1/50", "start_mc": 210.0, "end_mc": 280.0},
+        {"text": "-", "start_mc": 150.0, "end_mc": 210.0, "mid_mc": 180.0},
+        {"text": "1/50", "start_mc": 210.0, "end_mc": 280.0, "mid_mc": 245.0},
     ]
 
     expected_positions = {
-        "-": [_scaled_m_to_mm((100.0 + 210.0) / 2.0, scale_x)],
+        "-": [_scaled_m_to_mm(180.0, scale_x)],
         "1/50": [_scaled_m_to_mm((210.0 + 280.0) / 2.0, scale_x)],
     }
 

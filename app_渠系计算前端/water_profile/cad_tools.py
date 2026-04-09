@@ -2050,6 +2050,65 @@ def _resolve_profile_vline_top(is_special, is_last_node, short_line_height, line
     return short_line_height
 
 
+def _build_standard_profile_vline_specs(nodes, row_layout, enabled_row_ids, line_height):
+    """按真实导出节点生成标准纵断面的唯一竖线规格。"""
+    if "slope" in row_layout:
+        short_line_height = row_layout["slope"]["bottom"]
+    elif "building_name" in row_layout:
+        short_line_height = row_layout["building_name"]["bottom"]
+    else:
+        short_line_height = line_height
+
+    has_bc_ec_rows = any(rid in row_layout for rid in _BC_ROW_IDS) or any(
+        rid in row_layout for rid in _EC_ROW_IDS
+    )
+    ip_segment_map = {}
+    if has_bc_ec_rows:
+        for node in _iter_profile_ip_nodes(nodes):
+            station_mc = float(getattr(node, "station_MC", 0) or 0.0)
+            station_bc = float(getattr(node, "station_BC", station_mc) or station_mc)
+            station_ec = float(getattr(node, "station_EC", station_mc) or station_mc)
+            if abs(station_bc - station_mc) > 1e-9 or abs(station_ec - station_mc) > 1e-9:
+                ip_segment_map[round(station_mc, 6)] = node
+
+    profile_text_nodes = _build_profile_text_nodes(nodes)
+    full_vline_mcs = set()
+    tall_line_mcs = []
+    vline_specs = []
+
+    for idx, node in enumerate(profile_text_nodes):
+        station_mc = _profile_station_value(node)
+        is_special = _is_special_inout_node(node)
+        if is_special:
+            tall_line_mcs.append(float(station_mc))
+        is_last_node = idx == len(profile_text_nodes) - 1
+        v_top = _resolve_profile_vline_top(
+            is_special=is_special,
+            is_last_node=is_last_node,
+            short_line_height=short_line_height,
+            line_height=line_height,
+        )
+        if v_top > short_line_height + 1e-9:
+            full_vline_mcs.add(round(float(station_mc), 9))
+
+        ip_ref = ip_segment_map.get(round(float(station_mc), 6)) if has_bc_ec_rows else None
+        if ip_ref is not None:
+            segments = _compute_node_vline_segments(ip_ref, row_layout, enabled_row_ids, v_top)
+        else:
+            segments = [(station_mc, 0.0, v_top)]
+
+        for seg_x, seg_y0, seg_y1 in segments:
+            vline_specs.append(
+                {
+                    "x": float(seg_x),
+                    "y0": float(seg_y0),
+                    "y1": float(seg_y1),
+                }
+            )
+
+    return short_line_height, tall_line_mcs, full_vline_mcs, vline_specs
+
+
 def _get_special_structure_full_name(struct_type):
     sv = _struct_val(struct_type)
     for key, full in _SPECIAL_STRUCTURE_FULLNAME_MAP:
@@ -8410,49 +8469,18 @@ def _draw_profile_on_msp(
     msp.add_line((0, 0), (0, line_height), dxfattribs={"layer": layer_grid})
 
     # ======== 2. 节点竖线 ========
-    if "slope" in row_layout:
-        short_line_height = row_layout["slope"]["bottom"]
-    elif "building_name" in row_layout:
-        short_line_height = row_layout["building_name"]["bottom"]
-    else:
-        short_line_height = line_height
-
-    has_bc_ec_rows = any(rid in row_layout for rid in _BC_ROW_IDS) or \
-        any(rid in row_layout for rid in _EC_ROW_IDS)
-    ip_segment_map = {}
-    if has_bc_ec_rows:
-        for n in _iter_profile_ip_nodes(nodes):
-            _mc = float(getattr(n, "station_MC", 0) or 0.0)
-            _bc = float(getattr(n, "station_BC", _mc) or _mc)
-            _ec = float(getattr(n, "station_EC", _mc) or _mc)
-            if abs(_bc - _mc) > 1e-9 or abs(_ec - _mc) > 1e-9:
-                ip_segment_map[round(_mc, 6)] = n
-
-    tall_line_mcs = []
-    full_vline_mcs = set()
-    for idx, node in enumerate(nodes):
-        mc = node.station_MC
-        is_special = _is_special_inout_node(node)
-        if is_special:
-            tall_line_mcs.append(mc)
-        is_last_node = idx == len(nodes) - 1
-        v_top = _resolve_profile_vline_top(
-            is_special=is_special,
-            is_last_node=is_last_node,
-            short_line_height=short_line_height,
-            line_height=line_height,
+    _short_line_height, tall_line_mcs, full_vline_mcs, vline_specs = _build_standard_profile_vline_specs(
+        nodes,
+        row_layout,
+        enabled_row_ids,
+        line_height,
+    )
+    for spec in vline_specs:
+        msp.add_line(
+            (sx(spec["x"]), spec["y0"]),
+            (sx(spec["x"]), spec["y1"]),
+            dxfattribs={"layer": layer_grid},
         )
-        if v_top > short_line_height + 1e-9:
-            full_vline_mcs.add(round(float(mc), 9))
-
-        ip_ref = ip_segment_map.get(round(float(mc), 6)) if has_bc_ec_rows else None
-        if ip_ref is not None:
-            for seg_x, seg_y0, seg_y1 in _compute_node_vline_segments(
-                    ip_ref, row_layout, enabled_row_ids, v_top):
-                msp.add_line((sx(seg_x), seg_y0), (sx(seg_x), seg_y1),
-                             dxfattribs={"layer": layer_grid})
-        else:
-            msp.add_line((sx(mc), 0), (sx(mc), v_top), dxfattribs={"layer": layer_grid})
 
     # ======== 3. 全宽水平线 ========
     for hy in h_line_y_values:
@@ -8999,50 +9027,16 @@ def _export_longitudinal_txt_to_path(
         lines.append("")
 
         # ======== 2. ???? ========
-        if "slope" in row_layout:
-            short_line_height = row_layout["slope"]["bottom"]
-        elif "building_name" in row_layout:
-            short_line_height = row_layout["building_name"]["bottom"]
-        else:
-            short_line_height = line_height
-
-        has_bc_ec_rows = any(rid in row_layout for rid in _BC_ROW_IDS) or \
-            any(rid in row_layout for rid in _EC_ROW_IDS)
-        ip_segment_map = {}
-        if has_bc_ec_rows:
-            for n in _iter_profile_ip_nodes(nodes):
-                _mc = float(getattr(n, "station_MC", 0) or 0.0)
-                _bc = float(getattr(n, "station_BC", _mc) or _mc)
-                _ec = float(getattr(n, "station_EC", _mc) or _mc)
-                if abs(_bc - _mc) > 1e-9 or abs(_ec - _mc) > 1e-9:
-                    ip_segment_map[round(_mc, 6)] = n
-
-        tall_line_mcs = []
-        full_vline_mcs = set()
-        for idx, node in enumerate(nodes):
-            station_mc = float(getattr(node, "station_MC", 0) or 0.0)
-            is_special = _is_special_inout_node(node)
-            if is_special:
-                tall_line_mcs.append(station_mc)
-            is_last_node = idx == len(nodes) - 1
-            v_top_val = _resolve_profile_vline_top(
-                is_special=is_special,
-                is_last_node=is_last_node,
-                short_line_height=short_line_height,
-                line_height=line_height,
+        _short_line_height, tall_line_mcs, full_vline_mcs, vline_specs = _build_standard_profile_vline_specs(
+            nodes,
+            row_layout,
+            enabled_row_ids,
+            line_height,
+        )
+        for spec in vline_specs:
+            lines.append(
+                f"pl {fmt(sx(spec['x']))},{fmt(spec['y0'])} {fmt(sx(spec['x']))},{fmt(spec['y1'])} "
             )
-            if v_top_val > short_line_height + 1e-9:
-                full_vline_mcs.add(round(station_mc, 9))
-
-            ip_ref = ip_segment_map.get(round(station_mc, 6)) if has_bc_ec_rows else None
-            if ip_ref is not None:
-                for seg_x, seg_y0, seg_y1 in _compute_node_vline_segments(
-                        ip_ref, row_layout, enabled_row_ids, v_top_val):
-                    lines.append(f"pl {fmt(sx(seg_x))},{fmt(seg_y0)} {fmt(sx(seg_x))},{fmt(seg_y1)} ")
-            else:
-                station_text = fmt(sx(station_mc))
-                v_top = fmt(v_top_val)
-                lines.append(f"pl {station_text},0 {station_text},{v_top} ")
         lines.append("")
 
         # ======== 3. ????? ========

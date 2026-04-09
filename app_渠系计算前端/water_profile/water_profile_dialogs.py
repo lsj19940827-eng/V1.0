@@ -37,6 +37,17 @@ except ImportError:
     ComboBox = QComboBox
 
 
+def _build_longitudinal_dxf_import_guidance_text() -> str:
+    """返回纵断面 DXF 导入前说明文案。"""
+    return (
+        "合格的纵断面 DXF 需要满足：\n"
+        "1. DXF 文件里有可识别的纵断面管道中心线，建议只保留这一根多段线。\n"
+        "2. 该轴线按 1:1 绘制，其中 Y 为管道中心线的真实高程（米）。\n"
+        "3. 若文件里有多条相近多段线，系统会优先识别更像纵断面的那条，必要时会请你确认。\n"
+        "4. 为提高识别成功率，建议把纵断面放在“纵断”或“纵剖”等清晰图层。"
+    )
+
+
 # ============================================================
 # 正常水深计算（曼宁公式）
 # ============================================================
@@ -1419,17 +1430,128 @@ class PressurePipeConfigDialog(QDialog):
             self._longitudinal_data.pop(route_key, None)
             self._persist_longitudinal_data_for_card(route_key)
 
+    @classmethod
+    def _format_longitudinal_measure(
+        cls,
+        value,
+        min_decimals: int = 3,
+        max_decimals: int = 6,
+    ) -> str:
+        """格式化纵断面桩号数值，保留必要小数位。"""
+        number = cls._safe_float(value, None)
+        if number is None or not math.isfinite(number):
+            return "-"
+        text = f"{float(number):.{max_decimals}f}"
+        if "." not in text:
+            return text
+        integer, fraction = text.split(".", 1)
+        fraction = fraction.rstrip("0")
+        if len(fraction) < min_decimals:
+            fraction = fraction.ljust(min_decimals, "0")
+        return f"{integer}.{fraction}"
+
+    @classmethod
+    def _format_longitudinal_gap_text(cls, gap_m: float) -> str:
+        """把纵断面缺口优先格式化成毫米，必要时补充米值。"""
+        gap_value = max(0.0, cls._safe_float(gap_m, 0.0) or 0.0)
+        gap_mm = gap_value * 1000.0
+        if gap_mm >= 1000.0:
+            return f"{gap_mm:.1f} mm（{gap_value:.3f} m）"
+        return f"{gap_mm:.1f} mm"
+
     @staticmethod
-    def _build_stale_longitudinal_hint_text(missing_targets: List[str]) -> str:
-        """构造旧缓存失效时的界面提示。"""
+    def _format_missing_target_preview_text(item) -> str:
+        """统一格式化未覆盖节点预览文本。"""
+        if isinstance(item, dict):
+            label = str(item.get("label", "") or "").strip()
+            station_text = str(item.get("station_text", "") or "").strip()
+            if label and station_text and station_text != "-":
+                return f"{label}@{station_text}"
+            return label or station_text
+        return str(item or "").strip()
+
+    @classmethod
+    def _build_missing_target_preview(cls, missing_targets, max_items: int = 3) -> str:
+        """生成未覆盖节点的预览文本。"""
+        items = list(missing_targets or [])
         preview_items = [
-            str(item or "").strip()
-            for item in list(missing_targets or [])[:3]
-            if str(item or "").strip()
+            cls._format_missing_target_preview_text(item)
+            for item in items[:max_items]
+            if cls._format_missing_target_preview_text(item)
         ]
         preview = "；".join(preview_items)
-        if len(missing_targets or []) > 3:
-            preview += f" 等{len(missing_targets)}处"
+        if len(items) > max_items:
+            preview += f" 等{len(items)}处"
+        return preview
+
+    @classmethod
+    def _extract_longitudinal_chainage_range(cls, longitudinal_nodes):
+        """提取导入纵断面的起止桩号范围。"""
+        chainages = []
+        for node in list(longitudinal_nodes or []):
+            raw_value = node.get("chainage", None) if isinstance(node, dict) else getattr(node, "chainage", None)
+            chainage = cls._safe_float(raw_value, None)
+            if chainage is None or not math.isfinite(chainage):
+                continue
+            chainages.append(float(chainage))
+        if not chainages:
+            return None, None
+        chainages.sort()
+        return chainages[0], chainages[-1]
+
+    @classmethod
+    def _build_xxpipe_import_coverage_error_message(
+        cls,
+        display_name: str,
+        coverage_state: Dict[str, Any],
+    ) -> str:
+        """生成用户可直接照着修改的纵断面覆盖不足提示。"""
+        missing_targets = list(coverage_state.get("missing_targets", []) or [])
+        preview = cls._build_missing_target_preview(missing_targets)
+        coverage_end = cls._safe_float(coverage_state.get("coverage_end", None), None)
+        coverage_tol = cls._safe_float(coverage_state.get("coverage_tol", None), 1e-3) or 1e-3
+        farthest_target = None
+        farthest_station = None
+        for item in missing_targets:
+            station_value = cls._safe_float(
+                item.get("station_mc", None) if isinstance(item, dict) else None,
+                None,
+            )
+            if station_value is None or not math.isfinite(station_value):
+                continue
+            if farthest_station is None or station_value > farthest_station:
+                farthest_station = float(station_value)
+                farthest_target = item
+
+        lines = []
+        if display_name:
+            lines.append(f"整线：{display_name}")
+        lines.append("导入失败：纵断面范围不够")
+
+        if farthest_station is None or coverage_end is None:
+            lines.append("当前导入的纵断面没有覆盖到全部节点桩号，请在 CAD 中补齐后重新导入。")
+            if preview:
+                lines.append(f"未覆盖节点：{preview}")
+            return "\n".join(lines)
+
+        required_text = cls._format_longitudinal_measure(farthest_station)
+        coverage_end_text = cls._format_longitudinal_measure(coverage_end)
+        gap_text = cls._format_longitudinal_gap_text(farthest_station - coverage_end)
+        tol_mm = coverage_tol * 1000.0
+
+        lines.append(
+            f"这条整线需要覆盖到桩号 {required_text} m，但当前导入的纵断面只到 {coverage_end_text} m。"
+        )
+        lines.append(f"当前还差 {gap_text}，已超过程序允许的 {tol_mm:.1f} mm 误差。")
+        lines.append(f"请在 CAD 中把纵断面末端至少延长到 {required_text} m 后重新导入。")
+        if preview:
+            lines.append(f"未覆盖节点：{preview}")
+        return "\n".join(lines)
+
+    @classmethod
+    def _build_stale_longitudinal_hint_text(cls, missing_targets: List[Any]) -> str:
+        """构造旧缓存失效时的界面提示。"""
+        preview = cls._build_missing_target_preview(missing_targets)
         if preview:
             return (
                 "检测到旧纵断面缓存与当前桩号不一致，请清空后重新导入纵断面DXF。\n"
@@ -2488,6 +2610,16 @@ class PressurePipeConfigDialog(QDialog):
         hint_label.setVisible(False)
         card_lay.addWidget(hint_label)
 
+        import_guidance_label = QLabel(_build_longitudinal_dxf_import_guidance_text())
+        import_guidance_label.setWordWrap(True)
+        import_guidance_label.setStyleSheet(
+            "font-size: 12px; color: #35516B; background: #F5F9FF; "
+            "border: 1px solid #D6E4FF; border-radius: 4px; "
+            "padding: 8px 12px; font-weight: normal;"
+        )
+        import_guidance_label.setObjectName(f"import_guidance_{pipe_name}")
+        card_lay.addWidget(import_guidance_label)
+
         stats_label = QLabel("")
         stats_label.setStyleSheet(
             "font-size: 12px; color: #546E7A; background: #ECEFF1; "
@@ -2580,6 +2712,7 @@ class PressurePipeConfigDialog(QDialog):
         return {
             "hint": hint_label,
             "default_hint_text": hint_text,
+            "import_guidance": import_guidance_label,
             "stats": stats_label,
             "canvas": mini_canvas,
             "expand_btn": expand_btn,
@@ -3331,6 +3464,7 @@ class PressurePipeConfigDialog(QDialog):
             }
 
         from app_渠系计算前端.water_profile.cad_tools import (
+            _XXPIPE_PROFILE_STATION_TOL,
             resolve_xxpipe_profile_station_targets,
             sample_xxpipe_centerline_elevation,
         )
@@ -3349,12 +3483,23 @@ class PressurePipeConfigDialog(QDialog):
             except ValueError as exc:
                 if "超出 xx管轴线高程覆盖范围" not in str(exc):
                     raise
-                missing_targets.append(f"{target.get('label', '-')}@{target.get('station_text', '-')}")
+                missing_targets.append(
+                    {
+                        "label": str(target.get("label", "-") or "-").strip(),
+                        "station_text": str(target.get("station_text", "-") or "-").strip(),
+                        "station_mc": float(station_mc),
+                    }
+                )
+
+        coverage_start, coverage_end = self._extract_longitudinal_chainage_range(longitudinal_nodes)
 
         return {
             "display_name": display_name,
             "station_errors": list(station_errors or []),
             "missing_targets": missing_targets,
+            "coverage_start": coverage_start,
+            "coverage_end": coverage_end,
+            "coverage_tol": float(_XXPIPE_PROFILE_STATION_TOL),
         }
 
     def _validate_xxpipe_route_import_coverage(self, pipe_name: str, longitudinal_nodes):
@@ -3374,8 +3519,7 @@ class PressurePipeConfigDialog(QDialog):
         missing_targets = list(coverage_state.get("missing_targets", []) or [])
         if missing_targets:
             raise ValueError(
-                f"{display_name} 导入的纵断面未覆盖以下节点桩号：\n"
-                + "；".join(missing_targets)
+                self._build_xxpipe_import_coverage_error_message(display_name, coverage_state)
             )
 
     def _import_longitudinal_dxf(self, pipe_name, ip_points):
