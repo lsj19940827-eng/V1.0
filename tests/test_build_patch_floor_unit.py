@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import zipfile
 import tempfile
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -125,6 +126,61 @@ def test_verify_import_groups_include_pressure_pipe_result_helpers():
         "推求水面线.utils.pressure_pipe_result_helpers"
         in verify_groups["推求水面线"]
     )
+
+
+def test_hidden_imports_include_word_export_dependencies():
+    hidden_imports = build.get_hidden_imports()
+
+    assert "docx" in hidden_imports
+    assert "latex2mathml" in hidden_imports
+    assert "lxml" in hidden_imports
+
+
+def test_verify_import_groups_include_word_export_dependencies():
+    verify_groups = build.get_verify_import_groups()
+
+    assert verify_groups["Word导出依赖"] == [
+        "docx",
+        "latex2mathml",
+        "lxml",
+    ]
+
+
+def test_find_missing_imports_reports_missing_modules_by_group():
+    missing = build._find_missing_imports(
+        {
+            "Word导出依赖": ["docx", "latex2mathml", "lxml"],
+            "第三方库": ["pandas"],
+        },
+        importer=lambda name: None if name in {"latex2mathml", "pandas"} else (_ for _ in ()).throw(ModuleNotFoundError(name)),
+    )
+
+    assert missing == {
+        "Word导出依赖": ["docx", "lxml"],
+    }
+
+
+def test_ensure_required_imports_available_exits_with_install_hint(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        build.ensure_required_imports_available(
+            import_groups={"Word导出依赖": ["docx", "latex2mathml", "lxml"]},
+            importer=lambda name: None if name == "latex2mathml" else (_ for _ in ()).throw(ModuleNotFoundError(name)),
+        )
+
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 1
+    assert "Word导出依赖" in captured.out
+    assert "pip install python-docx latex2mathml lxml" in captured.out
+
+
+def test_get_build_search_paths_cover_non_package_module_directories():
+    search_paths = build._get_build_search_paths()
+
+    assert str(Path(build.PROJECT_ROOT)) in search_paths
+    assert str(Path(build.PROJECT_ROOT) / "calc_渠系计算算法内核") in search_paths
+    assert str(Path(build.PROJECT_ROOT) / "倒虹吸水力计算系统") in search_paths
+    assert str(Path(build.PROJECT_ROOT) / "推求水面线") in search_paths
 
 
 def test_build_universal_patch_includes_allowed_source_hashes(tmp_path):
