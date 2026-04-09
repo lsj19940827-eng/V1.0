@@ -260,6 +260,51 @@ def test_build_pressure_pipe_chain_anchor_record_preserves_zero_indices_and_uses
     assert record["total_length"] is None
 
 
+def test_build_pressure_pipe_window_override_payload_keeps_route_context_for_chain_member():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._normalize_pressure_pipe_window_override = lambda payload: dict(payload or {})
+    panel._build_pressure_pipe_group_identity = WaterProfilePanel._build_pressure_pipe_group_identity
+    panel._get_pressure_pipe_group_storage_key = WaterProfilePanel._get_pressure_pipe_group_storage_key
+    panel._get_pressure_pipe_group_display_name = WaterProfilePanel._get_pressure_pipe_group_display_name
+
+    group = SimpleNamespace(
+        identity="flow1-row1",
+        storage_key="flow1-row1",
+        display_name="苟家湾（前缀段）",
+        route_key="flow1-route1",
+        route_display_name="赛金连续整线",
+        target_row_index=0,
+        upstream_row_index=-1,
+    )
+    record = {
+        "identity": "flow1-row1",
+        "storage_key": "flow1-row1",
+        "display_name": "苟家湾（前缀段）",
+        "group_mode": "chain_prefix_member",
+        "data_mode": "链前缀段",
+        "target_row_index": 1,
+        "upstream_row_index": 0,
+        "Q": 0.32,
+        "D": 1.0,
+        "total_length": 21.6,
+        "pipe_velocity": 0.41,
+        "friction_loss": 0.3188,
+        "total_bend_loss": 0.0,
+        "local_loss": 0.0,
+        "inlet_transition_loss": 0.0,
+        "outlet_transition_loss": 0.0,
+        "total_head_loss": 0.3188,
+    }
+
+    payload = WaterProfilePanel._build_pressure_pipe_window_override_payload(panel, group, record)
+
+    assert payload["identity"] == "flow1-row1"
+    assert payload["storage_key"] == "flow1-row1"
+    assert payload["route_key"] == "flow1-route1"
+    assert payload["route_display_name"] == "赛金连续整线"
+
+
 def test_build_pressure_pipe_route_anchor_record_marks_xxpipe_start_row_as_skip():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

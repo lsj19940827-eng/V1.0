@@ -7,9 +7,9 @@
 - `app_渠系计算前端/webengine_diagnostics.py`：启动预检与诊断层，负责收集运行环境摘要、探测 Qt WebEngine 是否可用，并在失败时输出固定格式的诊断信息。
 - `app_渠系计算前端/pressure_pipe/panel.py`：有压管道设计页，负责单次计算、批量扫描、结果预览和导出；其右侧初始帮助页改为首次真正显示页面时再渲染，避免拖慢主窗口启动。
 - `app_渠系计算前端/batch/panel.py`：表1批量计算页面主控，负责 Excel 导入、断面批量计算、导入后重名提示，以及把“支渠连续承压链中的同名普通有压段”从真正风险重名里单独放开。
-- `app_渠系计算前端/water_profile/panel.py`：表3水面线页面主控，负责把节点数据和界面单元格互相同步，管理顶部“转弯半径”统一应用入口、普通模式/xx管 的导出精度默认值，以及辅助行往返所需的结构类型/坐标上下文、IP 单元格 raw/display 元数据、承压行稳定身份落盘、跨流量段边界水位统一、单点子段纵断面的整线回退、连续承压链的“前缀段/锚点/可计算子段/未完成汇总”口径、真实写回成员检查和 route 级纵断面别名 identity 映射。
+- `app_渠系计算前端/water_profile/panel.py`：表3水面线页面主控，负责把节点数据和界面单元格互相同步，管理顶部“转弯半径”统一应用入口、普通模式/xx管 的导出精度默认值，以及辅助行往返所需的结构类型/坐标上下文、IP 单元格 raw/display 元数据、承压行稳定身份落盘、跨流量段边界水位统一、单点子段纵断面的整线回退、连续承压链的“前缀段/锚点/可计算子段/未完成汇总”口径、真实写回成员检查、route 级纵断面别名 identity 映射、窗口 override 的 `route_key / route_display_name` 同步，以及 `route / segment` 正式持久化载荷的生成与保存。
 - `app_渠系计算前端/water_profile/water_profile_dialogs.py`：有压管道配置窗口，负责普通模式的链卡/分段卡，以及连续承压整线的整线卡、隧洞分段卡、DXF 导入锚点选择、隧洞参数录入与非隧洞覆盖校验；整线卡导入纵断面前，会先按解析器返回的候选结果决定是否需要确认，再继续导入，并在成功导入或清空后立刻把 route 级数据同步到持久层。
-- `app_渠系计算前端/water_profile/cad_tools.py`：纵断面导出与 xx管 中心线高程采样，负责普通模式与 xx管 的导出桩号格式化、特殊建筑进出口的显示 IP 文本、mixed route 的隧洞段取底高程、第 5 行断面参数文字，以及连续承压 `xx渠` 的固定 5 项宽松导出、普通渠道末尾有压段的上下分表、空白中心高程提示、单点纵断面过滤、同桩号 identity 候选回退和统一覆盖报错。
+- `app_渠系计算前端/water_profile/cad_tools.py`：纵断面导出与 xx管 中心线高程采样，负责普通模式与 xx管 的导出桩号格式化、特殊建筑进出口的显示 IP 文本、mixed route 的隧洞段取底高程、第 5 行断面参数文字，以及连续承压 `xx渠` 的固定 5 项宽松导出、普通渠道末尾有压段的上下分表、空白中心高程提示、单点纵断面过滤、同桩号 identity 候选回退、普通导出默认使用完整 lookup 节点、统一覆盖报错和尾段双表规划器 `TailPressureSplitPlan`。
 - `倒虹吸水力计算系统/dxf_parser.py`：DXF 解析与平纵断面几何重建，负责纵断面候选自动优选、反向归正，以及在候选非常接近时向上层返回“需要确认”的标记。
 - `app_渠系计算前端/water_profile/formula_dialog.py`：表头说明和双击公式弹窗，负责把计算详情解释给用户看。
 - `updater.py`：自动更新核心，负责版本比较、补丁/全量包选择、安装会话、补丁适用性校验和回滚。
@@ -18,10 +18,10 @@
 - `推求水面线/core/calculator.py`：整表计算总调度，串起预处理、内部 `ip_number` 与显示 `display_ip_number` 分配、渐变段、水力计算、累计损失和高程递推；当表内已存在渐变段/连接段时，会改走“真实节点重算 + 辅助行保位”的安全几何刷新路径。
 - `推求水面线/core/hydraulic_calc.py`：水头损失和水位递推核心，负责沿程、弯道、局部损失及水位更新，并消费窗口回写后的承压覆盖结果。
 - `推求水面线/core/pressure_pipe_calc.py`：有压管道专项公式库，提供 FMB 沿程损失和承压弯头局部损失计算。
-- `推求水面线/managers/pressure_pipe_manager.py`：有压管道结果与纵断面持久化，负责 `pipes` 与 `routes` 两层存储，并兼容保存 mixed route 的 `profile_segments`、隧洞参数缓存，以及整线纵断面的即时写入。
+- `推求水面线/managers/pressure_pipe_manager.py`：有压管道结果与纵断面持久化，负责 `pipes / routes / segments` 三层存储，并兼容保存 mixed route 的 `profile_segments`、隧洞参数缓存，以及整线纵断面的即时写入；连续承压保存按当前整线快照重建，会清掉活动范围内的旧 route / segment / pipe 残留。
 - `推求水面线/models/data_models.py`：节点和项目设置的数据结构定义，统一封装 IP 显示文本与 raw/display 双编号规则。
 - `推求水面线/models/enums.py`：结构类型、进出口标记和相关判断规则。
-- `推求水面线/utils/pressure_pipe_extractor.py`：保留命名组提取入口，同时补齐连续承压链提取；命名有压段现按“连续出现的同名段”分组，并同时保留新连续段身份与旧兼容 identity；`xx管` 保持原有整线口径，`xx渠` 只有在形成连续承压线时才补整线路由、整线平面点和子段范围；其中 `支渠` 连续承压链会从首个真正有压段起链，前置隧洞不再进入 route 上下文，链首单点命名普通有压会优先识别为“起点前缀段”，仅在拿不到有效长度时才回退为起点锚点。
+- `推求水面线/utils/pressure_pipe_extractor.py`：保留命名组提取入口，同时补齐连续承压链提取；命名有压段现按“连续出现的同名段”分组，并同时保留新连续段身份与旧兼容 identity；`xx管` 保持原有整线口径，`xx渠` 只有在形成连续承压线时才补整线路由、整线平面点和子段范围；其中 `支渠` 连续承压链会从首个真正有压段起链，前置隧洞不再进入 route 上下文，链首单点命名普通有压会优先识别为“起点前缀段”，仅在拿不到有效长度时才回退为起点锚点；进入连续承压链后的命名成员统一改写成 `flow-row` 新身份，供写回、保存和导出共用。文件内现在正式输出 `PressureRoute / PressureSegment / PressureResult / ProfileCoverageState`，作为计算、保存、导出的统一领域模型。
 - `推求水面线/utils/pressure_pipe_longitudinal_utils.py`：纵断面裁切与按桩号采样工具，负责把整线纵断面切成子段可用数据。
 - `推求水面线/utils/pressure_pipe_result_helpers.py`：有压管道结果归一化、批量文本拼装和连续承压链总览格式化，并负责把“已完成 / 未完成 / 前缀段 / 起点锚点”翻译成用户看到的结果文案。
 - `推求水面线/utils/__init__.py`：打包兼容入口，负责把顶层 `utils` 显式指回项目自带工具包，避免正式包运行时被同名包抢占。
@@ -42,14 +42,15 @@
 - `water_profile_dialogs.py` 把整线纵断面按 `route_key` 收集后返回给 `panel.py`；在连续承压整线模式下，导入时会先读取 `dxf_parser.py` 的候选排序结果，若前两名过于接近就先弹确认，再自动对齐到首个非隧洞桩号，并直接按非隧洞导出节点校验覆盖范围；导入或清空成功后还会立刻同步到 `PressurePipeManager`，让主页面导出无需等“开始计算”再读到新数据。
 - `dxf_parser.py` 负责把纵断面 DXF 中的多段线先做候选排序，再把选中的同一条几何同时供“起点 X 计算”和“纵断面节点解析”复用，避免偏移计算和节点解析命中不同多段线。
 - `pressure_pipe_extractor.py` 在 `支渠` 模式下，会先收紧连续承压链的起点，再用收紧后的行范围生成 route 上下文；因此整线卡、导入锚点和 route 平面点不会再被前置隧洞拉到错误位置。
-- `panel.py` 在计算和导出前调用 `pressure_pipe_longitudinal_utils.py`，纯整线继续按 `route_key` 找整线纵断面再裁切子段；mixed route 则优先使用 route 级 `profile_segments`，并会先从 `PressurePipeManager` 把隧洞缓存参数补回新提取的分组对象。若普通子段命中的分段纵断面只有 1 个点，则改回整线纵断面；route 级导出映射还会补齐起点前缀段/锚点、单行成员和旧口径 identity；隧洞生成段不回退。
-- `panel.py` 计算完成后通过 `pressure_pipe_manager.py` 把整线纵断面写入 `routes`，mixed route 额外把分段结果写入 `routes[route_key].profile_segments`，子段结果继续写入 `pipes`。
+- `panel.py` 在计算和导出前调用 `pressure_pipe_longitudinal_utils.py`，纯整线继续按 `route_key` 找整线纵断面再裁切子段；mixed route 则优先使用 route 级 `profile_segments`，并会先从 `PressurePipeManager` 把隧洞缓存参数补回新提取的分组对象。若普通子段命中的分段纵断面只有 1 个点，则改回整线纵断面；route 级导出映射还会补齐起点前缀段/锚点、单行成员和旧口径 identity；隧洞生成段不回退。若先命中旧空记录，则继续按 `route_key` 回退整线纵断面，不直接判失败。
+- `panel.py` 计算完成后通过 `pressure_pipe_manager.py` 把整线纵断面写入 `routes`，mixed route 额外把分段结果写入 `routes[route_key].profile_segments`；连续承压正式结果则同时写入 `segments`，`pipes` 只保留兼容镜像；保存前会先清掉当前整线活动范围内的旧快照。
 - `panel.py` 与 `formula_dialog.py` 配合，把 `ChannelNode` 上保存的详情展示为双击弹窗和表头说明。
 - `panel.py` 会先按渠道级别和已保存的匿名段标识判断是否属于连续承压整线里的匿名普通有压管道，再决定列38显示值、窗口卡片、结果回写和静默重算口径，避免前后端各用一套规则。
 - `batch/panel.py` 会先把重名结果拆成“真正风险重名”和“支渠连续承压链允许放开”的两桶，再决定是否拦截正式计算或弹黄色提示，避免只是前后同名普通有压段也被要求改名。
 - `panel.py` 保存 `text_export_settings`，普通模式导出入口、IP 表、合并 DXF 里的 IP 表和 bzzh2 都从这里读取 `station_decimals`；xx管 纵断面继续单独读取 `xxpipe_station_decimals`。
 - `cad_tools.py` 在判断到“不是实际 xx管 渠道级别、但已进入连续承压整线”的 `xx渠` 时，会切到宽松导出策略：固定 5 项表头保持不变，第 4 行中心高程允许留空，并在 TXT / DXF / 合并 DXF 成功后统一提示用户回表3补齐纵断面轴线 DXF。
 - `cad_tools.py` 在普通渠道导出里如果识别到“前半段是渠道、末尾连续进入有压段”，会把图2拆成“上渠道表 + 下有压表”两张纵断面；下方的断面汇总表和 IP 表也会跟着新增的有压子表一起下移，避免重叠。
+- `cad_tools.py` 在连续承压相关导出前，会先用整张表 `full_nodes` 生成尾段分表规划，再决定是否拆成上下双表；这样单独 DXF、TXT 和合并 DXF 使用的是同一套判断结果。
 - `panel.py` 现在会把 IP 列的原始编号和显示编号一并写进单元格 `UserRole`；表格回读优先取元数据，避免“黄角坝隧进”这类无数字文本被误判成 `0`。
 - `cad_tools.py` 在生成纵断面坡降行补线时，会先判断右侧是否已有特殊建筑进/出的整高竖线；若有，就直接跟随该整高竖线，不再在前一个矩形暗涵节点额外补短线。
 - `panel.py` 顶部“转弯半径”栏位不再作为隐式全局兜底，只在用户点击“应用”后批量覆盖真实导入行；行内留空或 `0` 的计算语义始终由该行自己决定。
@@ -93,7 +94,9 @@
 - xx管 图2“管中心线高程（米）”继续只在导出时现算，不回写主表；桩号优先使用 `station_MC`，只有个别节点缺失时才允许按平面累计距离回退。
 - 连续承压 `xx渠` 复用 `xx管` 固定 5 项表头，但只放宽导出时的中心高程缺失处理；这样用户可以先拿到图，再根据软件提示补导或补全纵断面轴线 DXF，而严格 `xx管` 旧口径不受影响。
 - 普通渠道末尾连续进入有压段时，不直接把整张图切到 `xx管` 模式，而是在同一个 DXF 里上下拆成“渠道表 + 有压表”；这样前半段明渠信息不丢，末尾承压段也能稳定复用 5 项固定表头。
-- `pressure_pipe_manager.py` 同时保留旧的单段纵断面兼容读取、`routes.longitudinal_nodes`，以及新的 `routes.profile_segments`，避免旧项目打不开。
+- `pressure_pipe_manager.py` 同时保留旧的单段纵断面兼容读取、`routes.longitudinal_nodes`、`routes.profile_segments` 和新的 `segments` 正式桶，避免旧项目打不开，又能让新导出和新提示统一读同一份分段结果。
+- `pressure_pipe_manager.py` 不再对连续承压快照做 `setdefault + update` 式叠加；当前整线结果是唯一真源，同一活动范围内的旧 route、旧 segment 和兼容 pipe 镜像都会被覆盖清理。
+- DXF 建筑物名称与软件展示名彻底拆开：DXF 只读 `dxf_display_name` 并按整段范围居中，软件里的“前缀段 / 前段 / 后段”继续只停留在 `member_display_name`，避免再次互相污染。
 - xx管 导出和中心线高程采样继续按子段 identity 分段，但匿名子段优先使用 `pressure_pipe_row_identity`，避免同一流量段多个空名称子段撞键。
 - 普通模式新增 `station_decimals`，默认 2 位；它只作用于导出链路里的桩号文本，不改表3和说明文字，避免把现有非导出显示一起带偏。
 - 通用补丁不再追求大跨度兼容，当前默认只覆盖 `1.1.9+`；因为更老版本在 `_internal` 目录上的历史差异太大，会把大量已删除文件带入补丁校验，用户体感就是“卡在校验”。

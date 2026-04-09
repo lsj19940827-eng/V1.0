@@ -50,9 +50,9 @@ def test_xxpipe_rule_helpers_cover_channel_level_and_structure_scope():
 
 def test_xxpipe_building_name_only_marks_named_special_segments():
     assert cad_tools._get_xxpipe_building_display_name("有压管道", "普通管") == ""
-    assert cad_tools._get_xxpipe_building_display_name("定向钻", "穿路段") == "穿路段定向钻"
+    assert cad_tools._get_xxpipe_building_display_name("定向钻", "穿路段") == "穿路段"
     assert cad_tools._get_xxpipe_building_display_name("顶管", "") == "顶管"
-    assert cad_tools._get_xxpipe_building_display_name("隧洞-圆形", "1#洞段") == "1#洞段隧洞-圆形"
+    assert cad_tools._get_xxpipe_building_display_name("隧洞-圆形", "1#洞段") == "1#洞段"
 
 
 def test_xxpipe_pipe_material_text_uses_material_and_dn_only():

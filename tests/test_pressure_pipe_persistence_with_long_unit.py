@@ -331,3 +331,209 @@ def test_set_result_with_empty_route_profile_segments_clears_stale_mixed_route_c
     loaded = manager.get_pipe_config("flow2-row6")
     assert loaded is not None
     assert loaded.profile_segments == []
+
+
+def test_save_pressure_routes_persists_segments_bucket_and_route_profile_state():
+    manager = PressurePipeManager()
+    route_nodes = [
+        {"chainage": 3968.95, "elevation": 405.0, "turn_type": "NONE"},
+        {"chainage": 4693.42, "elevation": 398.5, "turn_type": "NONE"},
+    ]
+    routes = [
+        {
+            "route_key": "flow1-route1",
+            "route_display_name": "赛金连续整线",
+            "channel_level": "支渠",
+            "start_row_index": 72,
+            "end_row_index": 76,
+            "start_mc": 3968.95,
+            "end_mc": 4693.42,
+            "entered_pressurized_at_row": 72,
+            "profile_state": "coverage_missing",
+            "segment_identities": ["flow1-row73", "flow1-row74", "flow1-row76"],
+        }
+    ]
+    segment_results = [
+        {
+            "identity": "flow1-row73",
+            "route_key": "flow1-route1",
+            "base_name": "苟家湾",
+            "member_display_name": "苟家湾（前缀段）",
+            "dxf_display_name": "苟家湾",
+            "structure_type": "有压管道",
+            "member_role": "prefix_segment",
+            "start_row_index": 72,
+            "end_row_index": 72,
+            "target_row_index": 72,
+            "upstream_row_index": 71,
+            "start_mc": 3968.95,
+            "end_mc": 3971.87,
+            "is_pressurized_tail_member": True,
+            "status": "success",
+            "friction_loss": 0.08,
+            "bend_loss": 0.0,
+            "local_loss": 0.0,
+            "total_loss": 0.08,
+            "applied_to_row_index": 73,
+            "note": "前缀段结果已写入下游入口行",
+            "computed_from_profile_source": "route_profile",
+            "longitudinal_nodes": [
+                {"chainage": 3968.95, "elevation": 405.0, "turn_type": "NONE"},
+                {"chainage": 3971.87, "elevation": 404.9, "turn_type": "NONE"},
+            ],
+            "profile_state": "ok",
+        },
+        {
+            "identity": "flow1-row74",
+            "route_key": "flow1-route1",
+            "base_name": "大石包",
+            "member_display_name": "大石包",
+            "dxf_display_name": "大石包",
+            "structure_type": "定向钻",
+            "member_role": "special_segment",
+            "start_row_index": 73,
+            "end_row_index": 74,
+            "target_row_index": 73,
+            "upstream_row_index": 72,
+            "start_mc": 3971.87,
+            "end_mc": 4366.58,
+            "is_pressurized_tail_member": True,
+            "status": "success",
+            "friction_loss": 0.0,
+            "bend_loss": 0.02,
+            "local_loss": 0.01,
+            "total_loss": 0.03,
+            "applied_to_row_index": 73,
+            "note": "",
+            "computed_from_profile_source": "route_profile",
+            "longitudinal_nodes": route_nodes,
+            "profile_state": "ok",
+        },
+    ]
+
+    manager.save_pressure_routes(
+        routes,
+        route_profiles={"flow1-route1": route_nodes},
+        segment_results=segment_results,
+    )
+
+    raw = manager.to_dict()
+    assert raw["routes"]["flow1-route1"]["profile_state"] == "coverage_missing"
+    assert raw["routes"]["flow1-route1"]["entered_pressurized_at_row"] == 72
+    assert raw["routes"]["flow1-route1"]["segment_identities"] == ["flow1-row73", "flow1-row74", "flow1-row76"]
+    assert raw["segments"]["flow1-row73"]["member_display_name"] == "苟家湾（前缀段）"
+    assert raw["segments"]["flow1-row73"]["dxf_display_name"] == "苟家湾"
+    assert raw["segments"]["flow1-row74"]["member_display_name"] == "大石包"
+    assert raw["segments"]["flow1-row74"]["dxf_display_name"] == "大石包"
+
+
+def test_save_pressure_routes_replaces_stale_route_snapshots_in_active_range():
+    manager = PressurePipeManager()
+    manager.from_dict(
+        {
+            "version": "1.0",
+            "last_modified": "",
+            "pipes": {
+                "1::苟家湾::rows83": {
+                    "name": "苟家湾（前缀段）",
+                    "route_key": "pressure-route-1-r83-115",
+                    "route_display_name": "旧整线",
+                    "start_row_index": 72,
+                    "end_row_index": 72,
+                },
+                "1::大石包::rows84-85": {
+                    "name": "大石包",
+                    "route_key": "pressure-route-1-r83-115",
+                    "route_display_name": "旧整线",
+                    "start_row_index": 73,
+                    "end_row_index": 74,
+                },
+            },
+            "routes": {
+                "pressure-route-1-r83-115": {
+                    "display_name": "旧整线",
+                    "start_row_index": 72,
+                    "end_row_index": 75,
+                    "segment_identities": ["1::苟家湾::rows83", "1::大石包::rows84-85"],
+                    "longitudinal_nodes": [],
+                }
+            },
+            "segments": {
+                "1::苟家湾::rows83": {
+                    "identity": "1::苟家湾::rows83",
+                    "route_key": "pressure-route-1-r83-115",
+                    "member_display_name": "苟家湾（前缀段）",
+                    "start_row_index": 72,
+                    "end_row_index": 72,
+                },
+                "1::大石包::rows84-85": {
+                    "identity": "1::大石包::rows84-85",
+                    "route_key": "pressure-route-1-r83-115",
+                    "member_display_name": "大石包",
+                    "start_row_index": 73,
+                    "end_row_index": 74,
+                },
+            },
+        }
+    )
+
+    route_nodes = [
+        {"chainage": 3968.95, "elevation": 405.0, "turn_type": "NONE"},
+        {"chainage": 4693.42, "elevation": 398.5, "turn_type": "NONE"},
+    ]
+    manager.save_pressure_routes(
+        [
+            {
+                "route_key": "flow1-route1",
+                "route_display_name": "赛金连续整线",
+                "channel_level": "支渠",
+                "start_row_index": 72,
+                "end_row_index": 75,
+                "start_mc": 3968.95,
+                "end_mc": 4693.42,
+                "entered_pressurized_at_row": 72,
+                "profile_state": "ok",
+                "segment_identities": ["flow1-row73", "flow1-row74"],
+            }
+        ],
+        route_profiles={"flow1-route1": route_nodes},
+        segment_results=[
+            {
+                "identity": "flow1-row73",
+                "route_key": "flow1-route1",
+                "member_display_name": "苟家湾（前缀段）",
+                "dxf_display_name": "苟家湾",
+                "start_row_index": 72,
+                "end_row_index": 72,
+                "target_row_index": 72,
+                "upstream_row_index": 71,
+                "start_mc": 3968.95,
+                "end_mc": 3971.87,
+                "status": "success",
+                "total_loss": 0.08,
+            },
+            {
+                "identity": "flow1-row74",
+                "route_key": "flow1-route1",
+                "member_display_name": "大石包",
+                "dxf_display_name": "大石包",
+                "start_row_index": 73,
+                "end_row_index": 74,
+                "target_row_index": 73,
+                "upstream_row_index": 72,
+                "start_mc": 3971.87,
+                "end_mc": 4366.58,
+                "status": "success",
+                "total_loss": 0.03,
+            },
+        ],
+    )
+
+    raw = manager.to_dict()
+    assert "pressure-route-1-r83-115" not in raw["routes"]
+    assert "1::苟家湾::rows83" not in raw["segments"]
+    assert "1::大石包::rows84-85" not in raw["segments"]
+    assert "1::苟家湾::rows83" not in raw["pipes"]
+    assert "1::大石包::rows84-85" not in raw["pipes"]
+    assert raw["segments"]["flow1-row73"]["route_key"] == "flow1-route1"
+    assert raw["segments"]["flow1-row74"]["route_key"] == "flow1-route1"

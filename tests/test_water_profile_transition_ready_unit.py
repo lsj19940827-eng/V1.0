@@ -750,6 +750,9 @@ def test_prepare_pressure_pipe_dialog_context_enables_route_mode_for_continuous_
     panel._extract_pressure_pipe_dialog_chains = lambda _nodes, settings=None: [
         SimpleNamespace(flow_section="7", start_row_index=0, end_row_index=2, members=[object(), object()])
     ]
+    panel._extract_pressure_pipe_routes = lambda _nodes, settings=None: [
+        SimpleNamespace(route_key="flow7-route1", route_display_name="末端连续整线")
+    ]
     panel._build_pressure_pipe_chain_descriptors = lambda chains: [{"flow_section": "7", "member_count": 2}]
     panel._collect_xxpipe_route_context_map = lambda nodes, pipe_groups: {
         "flow7-route1": {
@@ -780,6 +783,7 @@ def test_prepare_pressure_pipe_dialog_context_keeps_noncontinuous_xxqu_in_group_
         SimpleNamespace(display_name="白马庙", route_key="", route_display_name="")
     ]
     panel._extract_pressure_pipe_dialog_chains = lambda _nodes, settings=None: []
+    panel._extract_pressure_pipe_routes = lambda _nodes, settings=None: []
     panel._build_pressure_pipe_chain_descriptors = lambda chains: []
     panel._collect_xxpipe_route_context_map = lambda nodes, pipe_groups: {}
     panel._get_current_channel_level_text = lambda settings=None: "支渠"

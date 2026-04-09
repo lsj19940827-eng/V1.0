@@ -8711,6 +8711,10 @@ class WaterProfilePanel(QWidget):
                 "route_end_mc",
                 "target_row_index",
                 "upstream_row_index",
+                "route_key",
+                "route_display_name",
+                "station_text",
+                "node_label",
             ):
                 if key in metadata:
                     target[key] = copy.deepcopy(metadata.get(key))
@@ -8747,6 +8751,8 @@ class WaterProfilePanel(QWidget):
                 "route_end_mc": getattr(group, "route_end_mc", None),
                 "target_row_index": getattr(group, "target_row_index", -1),
                 "upstream_row_index": getattr(group, "upstream_row_index", -1),
+                "route_key": getattr(group, "route_key", ""),
+                "route_display_name": getattr(group, "route_display_name", ""),
                 "identity_aliases": self._collect_pressure_pipe_group_export_identity_aliases(group),
             }
             targets.append(
@@ -8886,8 +8892,46 @@ class WaterProfilePanel(QWidget):
             raw = to_dict() or {}
         except Exception:
             return exact, {}
-        pipes = raw.get("pipes", {}) if isinstance(raw, dict) else {}
+        segments = raw.get("segments", {}) if isinstance(raw, dict) else {}
         identity_set = set(target_identities or [])
+        for key, segment_data in segments.items():
+            row = segment_data if isinstance(segment_data, dict) else {}
+            total_head_loss = self._normalize_pressure_pipe_export_number(
+                row.get("total_loss", row.get("total_head_loss")),
+                allow_zero=True,
+            )
+            pipe_velocity = self._normalize_pressure_pipe_export_number(row.get("pipe_velocity"))
+            total_length = self._normalize_pressure_pipe_export_number(
+                row.get("plan_total_length", row.get("total_length"))
+            )
+            if total_head_loss is None and pipe_velocity is None and total_length is None:
+                continue
+
+            resolved_identity = str(row.get("identity", "") or key or "").strip()
+            if identity_set and resolved_identity not in identity_set:
+                continue
+            name = str(
+                row.get("member_display_name", "")
+                or row.get("base_name", "")
+                or row.get("dxf_display_name", "")
+                or row.get("name", "")
+                or resolved_identity
+            ).strip() or "未命名"
+            payload = {
+                "identity": resolved_identity,
+                "flow_section": str(row.get("flow_section", "") or "").strip(),
+                "name": name,
+                "source": "manager_segment",
+            }
+            if total_head_loss is not None:
+                payload["total_head_loss"] = float(total_head_loss)
+            if pipe_velocity is not None:
+                payload["pipe_velocity"] = float(pipe_velocity)
+            if total_length is not None:
+                payload["total_length"] = float(total_length)
+            exact[resolved_identity] = payload
+            plain_name_candidates.setdefault(name, []).append(payload)
+        pipes = raw.get("pipes", {}) if isinstance(raw, dict) else {}
 
         for key, pipe_data in pipes.items():
             row = pipe_data if isinstance(pipe_data, dict) else {}
@@ -8957,6 +9001,34 @@ class WaterProfilePanel(QWidget):
         # 单点只够表示边界占位，中心线高程采样至少要两个纵断面点。
         return isinstance(value, list) and len(value) >= 2
 
+    def _index_pressure_pipe_manager_route_longitudinal_nodes(self) -> dict:
+        """按 route_key 收集整线纵断面，供导出时做 route 级兜底。"""
+        manager = getattr(self, "_pressure_pipe_manager", None)
+        to_dict = getattr(manager, "to_dict", None)
+        if not callable(to_dict):
+            return {}
+
+        try:
+            raw = to_dict() or {}
+        except Exception:
+            return {}
+
+        routes = raw.get("routes", {}) if isinstance(raw, dict) else {}
+        resolved = {}
+        for route_key, route_data in routes.items():
+            route_key_text = str(route_key or "").strip()
+            if not route_key_text or not isinstance(route_data, dict):
+                continue
+            longitudinal_nodes = copy.deepcopy(route_data.get("longitudinal_nodes", []) or [])
+            if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
+                continue
+            resolved[route_key_text] = {
+                "route_key": route_key_text,
+                "route_display_name": str(route_data.get("display_name", "") or route_key_text).strip(),
+                "longitudinal_nodes": longitudinal_nodes,
+            }
+        return resolved
+
     def _index_pressure_pipe_manager_longitudinal_nodes_for_export(self, target_identities=None) -> tuple:
         exact = {}
         plain_name_candidates = {}
@@ -8973,6 +9045,30 @@ class WaterProfilePanel(QWidget):
             except Exception:
                 raw_manager = {}
             route_buckets = raw_manager.get("routes", {}) if isinstance(raw_manager, dict) else {}
+            segments = raw_manager.get("segments", {}) if isinstance(raw_manager, dict) else {}
+            for key, segment_data in segments.items():
+                row = segment_data if isinstance(segment_data, dict) else {}
+                longitudinal_nodes = copy.deepcopy(row.get("longitudinal_nodes", []) or [])
+                if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
+                    continue
+                resolved_identity = str(row.get("identity", "") or key or "").strip()
+                if identity_set and resolved_identity not in identity_set:
+                    continue
+                name = str(
+                    row.get("member_display_name", "")
+                    or row.get("base_name", "")
+                    or row.get("dxf_display_name", "")
+                    or row.get("name", "")
+                    or resolved_identity
+                ).strip() or "未命名"
+                payload = {
+                    "identity": resolved_identity,
+                    "flow_section": str(row.get("flow_section", "") or "").strip(),
+                    "name": name,
+                    "longitudinal_nodes": longitudinal_nodes,
+                }
+                exact[resolved_identity] = payload
+                plain_name_candidates.setdefault(name, []).append(payload)
 
         if callable(get_pipe_config):
             try:
@@ -9646,6 +9742,7 @@ class WaterProfilePanel(QWidget):
         manager_exact, manager_by_name = self._index_pressure_pipe_manager_longitudinal_nodes_for_export(
             target_identities
         )
+        route_longitudinal_nodes = self._index_pressure_pipe_manager_route_longitudinal_nodes()
 
         resolved = {}
         for target in targets:
@@ -9655,9 +9752,15 @@ class WaterProfilePanel(QWidget):
             result = next((manager_exact.get(candidate) for candidate in candidate_identities if manager_exact.get(candidate) is not None), None)
             if result is None and target_name_counts.get(name, 0) == 1:
                 result = manager_by_name.get(name)
-            if result is None:
-                continue
-            longitudinal_nodes = result.get("longitudinal_nodes")
+            route_key = str(target.get("route_key", "") or "").strip()
+            longitudinal_nodes = list(result.get("longitudinal_nodes", []) or []) if isinstance(result, dict) else []
+            if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes) and route_key:
+                result = route_longitudinal_nodes.get(route_key)
+                longitudinal_nodes = (
+                    list(result.get("longitudinal_nodes", []) or [])
+                    if isinstance(result, dict)
+                    else []
+                )
             if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
                 continue
             resolved[identity] = copy.deepcopy(longitudinal_nodes)
@@ -9697,6 +9800,15 @@ class WaterProfilePanel(QWidget):
         from utils.pressure_pipe_extractor import PressurePipeDataExtractor
 
         extractor = getattr(PressurePipeDataExtractor, "extract_continuous_pressure_chains", None)
+        if callable(extractor):
+            return extractor(nodes, settings=settings)
+        return []
+
+    def _extract_pressure_pipe_routes(self, nodes, settings=None):
+        """提取连续承压整线对象。"""
+        from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+
+        extractor = getattr(PressurePipeDataExtractor, "extract_pressure_routes", None)
         if callable(extractor):
             return extractor(nodes, settings=settings)
         return []
@@ -9813,6 +9925,192 @@ class WaterProfilePanel(QWidget):
                 "end_row_index": end_row_index,
             })
         return descriptors
+
+    @staticmethod
+    def _build_pressure_route_segment_index(pressure_routes) -> tuple[dict, dict]:
+        """按 identity / route_key 索引连续承压整线与子段。"""
+        segment_by_identity = {}
+        route_by_key = {}
+        for route in list(pressure_routes or []):
+            route_key = str(getattr(route, "route_key", "") or "").strip()
+            if route_key:
+                route_by_key[route_key] = route
+            for segment in list(getattr(route, "segments", []) or []):
+                identity = str(getattr(segment, "identity", "") or "").strip()
+                if identity and identity not in segment_by_identity:
+                    segment_by_identity[identity] = segment
+        return route_by_key, segment_by_identity
+
+    @staticmethod
+    def _resolve_pressure_route_profile_state(route_key: str, route_profiles: dict, route_profile_segments_by_key: dict) -> str:
+        """归一化整线纵断面覆盖状态。"""
+        route_nodes = list((route_profiles or {}).get(route_key, []) or [])
+        if isinstance(route_key, str) and route_key and len(route_nodes) >= 2:
+            return "ok"
+        route_segments = list((route_profile_segments_by_key or {}).get(route_key, []) or [])
+        if route_segments:
+            return "ok"
+        return "not_imported"
+
+    @classmethod
+    def _build_pressure_route_payloads(cls, pressure_routes, route_profiles, route_profile_segments_by_key) -> list[dict]:
+        """把 Route 对象翻译成正式保存所需的轻量结构。"""
+        payloads = []
+        for route in list(pressure_routes or []):
+            route_key = str(getattr(route, "route_key", "") or "").strip()
+            if not route_key:
+                continue
+            payloads.append(
+                {
+                    "route_key": route_key,
+                    "route_display_name": str(getattr(route, "route_display_name", "") or route_key).strip(),
+                    "channel_level": str(getattr(route, "channel_level", "") or "").strip(),
+                    "start_row_index": getattr(route, "start_row_index", -1),
+                    "end_row_index": getattr(route, "end_row_index", -1),
+                    "start_mc": getattr(route, "start_mc", 0.0),
+                    "end_mc": getattr(route, "end_mc", 0.0),
+                    "entered_pressurized_at_row": getattr(route, "entered_pressurized_at_row", -1),
+                    "profile_state": cls._resolve_pressure_route_profile_state(
+                        route_key,
+                        route_profiles,
+                        route_profile_segments_by_key,
+                    ),
+                    "segment_identities": [
+                        str(getattr(segment, "identity", "") or "").strip()
+                        for segment in list(getattr(route, "segments", []) or [])
+                        if str(getattr(segment, "identity", "") or "").strip()
+                    ],
+                }
+            )
+        return payloads
+
+    @classmethod
+    def _resolve_pressure_segment_saved_profile(cls, segment_meta, route_profiles, route_profile_segments_by_key) -> tuple[list[dict], str, str]:
+        """为正式 segments 存储解析子段纵断面与覆盖状态。"""
+        if segment_meta is None:
+            return [], "not_imported", ""
+
+        identity = str(getattr(segment_meta, "identity", "") or "").strip()
+        route_key = str(getattr(segment_meta, "route_key", "") or "").strip()
+        route_segments = list((route_profile_segments_by_key or {}).get(route_key, []) or [])
+        for item in route_segments:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("segment_identity", "") or "").strip() != identity:
+                continue
+            long_nodes = copy.deepcopy(item.get("longitudinal_nodes", []) or [])
+            if cls._has_exportable_pressure_pipe_longitudinal_nodes(long_nodes):
+                return long_nodes, "ok", str(item.get("source_kind", "") or "segment_profile").strip() or "segment_profile"
+
+        route_nodes = copy.deepcopy((route_profiles or {}).get(route_key, []) or [])
+        if not route_nodes:
+            return [], "not_imported", ""
+
+        start_mc = cls._coerce_pressure_pipe_finite_float(getattr(segment_meta, "start_mc", None))
+        end_mc = cls._coerce_pressure_pipe_finite_float(getattr(segment_meta, "end_mc", None))
+        if start_mc is None or end_mc is None:
+            if cls._has_exportable_pressure_pipe_longitudinal_nodes(route_nodes):
+                return route_nodes, "ok", "route_profile"
+            return [], "coverage_missing", "route_profile"
+
+        try:
+            from utils.pressure_pipe_longitudinal_utils import clip_longitudinal_nodes_to_range
+
+            clipped_nodes = clip_longitudinal_nodes_to_range(route_nodes, float(start_mc), float(end_mc))
+        except ValueError:
+            return [], "coverage_missing", "route_profile"
+        except Exception:
+            return [], "identity_unmatched", "route_profile"
+
+        if cls._has_exportable_pressure_pipe_longitudinal_nodes(clipped_nodes):
+            return clipped_nodes, "ok", "route_profile"
+        if clipped_nodes:
+            return clipped_nodes, "coverage_missing", "route_profile"
+        return [], "coverage_missing", "route_profile"
+
+    @classmethod
+    def _build_pressure_segment_result_payload(
+        cls,
+        record: dict,
+        segment_meta,
+        route_by_key: dict,
+        route_profiles: dict,
+        route_profile_segments_by_key: dict,
+    ) -> dict:
+        """把本次计算记录翻译成正式保存的 segment 结果。"""
+        identity = str(record.get("identity", "") or "").strip()
+        route_key = str(getattr(segment_meta, "route_key", "") or record.get("route_key", "") or "").strip()
+        route_meta = route_by_key.get(route_key)
+        long_nodes, profile_state, profile_source = cls._resolve_pressure_segment_saved_profile(
+            segment_meta,
+            route_profiles,
+            route_profile_segments_by_key,
+        )
+        if segment_meta is None:
+            base_name = str(record.get("name", "") or record.get("display_name", "") or identity).strip()
+            member_display_name = str(record.get("display_name", "") or base_name).strip() or base_name
+            dxf_display_name = base_name
+            structure_type = str(record.get("structure_type", "") or "").strip()
+            member_role = str(record.get("member_role", "") or "").strip()
+            start_row_index = int(record.get("target_row_index", -1) or -1)
+            end_row_index = start_row_index
+            target_row_index = int(record.get("target_row_index", -1) or -1)
+            upstream_row_index = int(record.get("upstream_row_index", -1) or -1)
+            start_mc = None
+            end_mc = None
+        else:
+            base_name = str(getattr(segment_meta, "base_name", "") or "").strip()
+            member_display_name = str(getattr(segment_meta, "member_display_name", "") or base_name).strip() or base_name
+            dxf_display_name = str(getattr(segment_meta, "dxf_display_name", "") or base_name).strip() or base_name
+            structure_type = str(getattr(segment_meta, "structure_type", "") or "").strip()
+            member_role = str(getattr(segment_meta, "member_role", "") or "").strip()
+            start_row_index = int(getattr(segment_meta, "start_row_index", -1) or -1)
+            end_row_index = int(getattr(segment_meta, "end_row_index", -1) or -1)
+            target_row_index = int(getattr(segment_meta, "target_row_index", -1) or -1)
+            upstream_row_index = int(getattr(segment_meta, "upstream_row_index", -1) or -1)
+            start_mc = getattr(segment_meta, "start_mc", None)
+            end_mc = getattr(segment_meta, "end_mc", None)
+
+        if not long_nodes and record.get("status") == "success":
+            profile_state = profile_state or "not_imported"
+
+        return {
+            "identity": identity,
+            "route_key": route_key,
+            "route_display_name": str(
+                getattr(route_meta, "route_display_name", "")
+                or record.get("route_display_name", "")
+                or route_key
+            ).strip(),
+            "base_name": base_name,
+            "member_display_name": member_display_name,
+            "dxf_display_name": dxf_display_name,
+            "structure_type": structure_type,
+            "member_role": member_role,
+            "start_row_index": start_row_index,
+            "end_row_index": end_row_index,
+            "target_row_index": target_row_index,
+            "upstream_row_index": upstream_row_index,
+            "start_mc": start_mc,
+            "end_mc": end_mc,
+            "is_pressurized_tail_member": True,
+            "status": str(record.get("status", "") or "").strip(),
+            "friction_loss": record.get("friction_loss"),
+            "bend_loss": record.get("total_bend_loss"),
+            "local_loss": record.get("local_loss"),
+            "total_loss": record.get("total_head_loss"),
+            "applied_to_row_index": int(record.get("target_row_index", -1) or -1),
+            "note": str(record.get("note", "") or "").strip(),
+            "computed_from_profile_source": profile_source,
+            "longitudinal_nodes": long_nodes,
+            "profile_state": profile_state,
+            "flow_section": str(record.get("flow_section", "") or "").strip(),
+            "plan_total_length": record.get("total_length"),
+            "pipe_velocity": record.get("pipe_velocity"),
+            "data_mode": str(record.get("data_mode", "") or "").strip(),
+            "material_key": str(record.get("resolved_material_key", "") or record.get("material_key", "") or "").strip(),
+            "D": record.get("D"),
+        }
 
     @staticmethod
     def _get_pressure_pipe_node_structure_text(node) -> str:
@@ -10047,6 +10345,157 @@ class WaterProfilePanel(QWidget):
 
         return route_profile_segments
 
+    @staticmethod
+    def _resolve_pressure_route_profile_state(route_key, route_profiles, route_profile_segments_by_key) -> str:
+        """根据当前整线和分段纵断面情况生成统一覆盖状态。"""
+        from utils.pressure_pipe_extractor import ProfileCoverageState
+
+        route_nodes = list((route_profiles or {}).get(route_key, []) or [])
+        segment_profiles = list((route_profile_segments_by_key or {}).get(route_key, []) or [])
+        if len(route_nodes) >= 2:
+            return ProfileCoverageState.OK
+        if segment_profiles:
+            if any(
+                len(list(segment.get("longitudinal_nodes", []) or [])) >= 2
+                for segment in segment_profiles
+                if isinstance(segment, dict)
+            ):
+                if any(list(segment.get("warnings", []) or []) for segment in segment_profiles if isinstance(segment, dict)):
+                    return ProfileCoverageState.COVERAGE_MISSING
+                return ProfileCoverageState.OK
+            return ProfileCoverageState.COVERAGE_MISSING
+        return ProfileCoverageState.NOT_IMPORTED
+
+    @classmethod
+    def _build_pressure_route_persist_payloads(cls, nodes, settings, route_profiles, route_profile_segments_by_key):
+        """把当前整线识别结果整理成可持久化的 route 载荷。"""
+        from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+
+        pressure_routes = list(
+            PressurePipeDataExtractor.extract_pressure_routes(nodes, settings=settings) or []
+        )
+        payloads = []
+        for route in pressure_routes:
+            segment_identities = [
+                str(getattr(segment, "identity", "") or "").strip()
+                for segment in list(getattr(route, "segments", []) or [])
+                if str(getattr(segment, "identity", "") or "").strip()
+            ]
+            payloads.append({
+                "route_key": str(getattr(route, "route_key", "") or "").strip(),
+                "route_display_name": str(getattr(route, "route_display_name", "") or "").strip(),
+                "channel_level": str(getattr(route, "channel_level", "") or "").strip(),
+                "start_row_index": int(getattr(route, "start_row_index", -1) or -1),
+                "end_row_index": int(getattr(route, "end_row_index", -1) or -1),
+                "start_mc": cls._coerce_pressure_pipe_finite_float(getattr(route, "start_mc", None)),
+                "end_mc": cls._coerce_pressure_pipe_finite_float(getattr(route, "end_mc", None)),
+                "entered_pressurized_at_row": int(getattr(route, "entered_pressurized_at_row", -1) or -1),
+                "profile_state": cls._resolve_pressure_route_profile_state(
+                    str(getattr(route, "route_key", "") or "").strip(),
+                    route_profiles,
+                    route_profile_segments_by_key,
+                ),
+                "segment_identities": segment_identities,
+            })
+        return pressure_routes, payloads
+
+    @classmethod
+    def _resolve_pressure_segment_profile_payload(cls, segment, route_profiles, route_profile_segments_by_key):
+        """优先读取子段纵断面，其次回退整线纵断面。"""
+        route_key = str(getattr(segment, "route_key", "") or "").strip()
+        identity = str(getattr(segment, "identity", "") or "").strip()
+        segment_profiles = list((route_profile_segments_by_key or {}).get(route_key, []) or [])
+        for profile in segment_profiles:
+            if not isinstance(profile, dict):
+                continue
+            if str(profile.get("segment_identity", "") or "").strip() != identity:
+                continue
+            return (
+                copy.deepcopy(profile.get("longitudinal_nodes", []) or []),
+                "segment_profile",
+            )
+        return (
+            copy.deepcopy((route_profiles or {}).get(route_key, []) or []),
+            "route_profile",
+        )
+
+    @classmethod
+    def _build_pressure_segment_persist_payloads(
+        cls,
+        pressure_routes,
+        record_map,
+        route_profiles,
+        route_profile_segments_by_key,
+        route_payloads_by_key,
+    ):
+        """把批量计算结果整理成正式的 segment 持久化载荷。"""
+        from utils.pressure_pipe_extractor import ProfileCoverageState
+
+        payloads = []
+        for route in list(pressure_routes or []):
+            route_key = str(getattr(route, "route_key", "") or "").strip()
+            route_display_name = str(getattr(route, "route_display_name", "") or "").strip()
+            route_profile_state = str(
+                (route_payloads_by_key.get(route_key, {}) or {}).get("profile_state", "")
+                or ProfileCoverageState.NOT_IMPORTED
+            ).strip()
+            for segment in list(getattr(route, "segments", []) or []):
+                identity = str(getattr(segment, "identity", "") or "").strip()
+                if not identity:
+                    continue
+                record = copy.deepcopy(record_map.get(identity) or {})
+                longitudinal_nodes, profile_source = cls._resolve_pressure_segment_profile_payload(
+                    segment,
+                    route_profiles,
+                    route_profile_segments_by_key,
+                )
+                local_loss = record.get("local_loss")
+                if local_loss is None:
+                    local_loss = (
+                        float(record.get("inlet_transition_loss", 0.0) or 0.0)
+                        + float(record.get("outlet_transition_loss", 0.0) or 0.0)
+                    )
+                payloads.append({
+                    "identity": identity,
+                    "route_key": route_key,
+                    "route_display_name": route_display_name,
+                    "base_name": str(getattr(segment, "base_name", "") or "").strip(),
+                    "member_display_name": str(getattr(segment, "member_display_name", "") or "").strip(),
+                    "dxf_display_name": str(getattr(segment, "dxf_display_name", "") or "").strip(),
+                    "structure_type": str(getattr(segment, "structure_type", "") or "").strip(),
+                    "member_role": str(getattr(segment, "member_role", "") or "").strip(),
+                    "start_row_index": int(getattr(segment, "start_row_index", -1) or -1),
+                    "end_row_index": int(getattr(segment, "end_row_index", -1) or -1),
+                    "target_row_index": int(getattr(segment, "target_row_index", -1) or -1),
+                    "upstream_row_index": int(getattr(segment, "upstream_row_index", -1) or -1),
+                    "start_mc": cls._coerce_pressure_pipe_finite_float(getattr(segment, "start_mc", None)),
+                    "end_mc": cls._coerce_pressure_pipe_finite_float(getattr(segment, "end_mc", None)),
+                    "is_pressurized_tail_member": bool(getattr(segment, "is_pressurized_tail_member", False)),
+                    "status": str(record.get("status", "") or "").strip(),
+                    "friction_loss": float(record.get("friction_loss", 0.0) or 0.0),
+                    "bend_loss": float(
+                        record.get("total_bend_loss", record.get("bend_loss", 0.0)) or 0.0
+                    ),
+                    "local_loss": float(local_loss or 0.0),
+                    "total_loss": float(
+                        record.get("total_head_loss", record.get("total_loss", 0.0)) or 0.0
+                    ),
+                    "applied_to_row_index": int(
+                        record.get("target_row_index", getattr(segment, "target_row_index", -1)) or -1
+                    ),
+                    "note": str(record.get("note", "") or "").strip(),
+                    "computed_from_profile_source": str(
+                        record.get("computed_from_profile_source", "") or profile_source
+                    ).strip(),
+                    "longitudinal_nodes": longitudinal_nodes,
+                    "profile_state": (
+                        ProfileCoverageState.OK
+                        if len(longitudinal_nodes) >= 2
+                        else route_profile_state
+                    ),
+                })
+        return payloads
+
     @classmethod
     def _collect_xxpipe_route_context_map(cls, nodes, pipe_groups) -> dict:
         """按整线汇总 xx管 路由信息，识别是否夹带隧洞。"""
@@ -10110,6 +10559,7 @@ class WaterProfilePanel(QWidget):
         """提取并规范化有压管道弹窗上下文。"""
         pipe_groups = list(self._extract_pressure_pipe_dialog_groups(nodes, settings=settings) or [])
         pressure_chains = list(self._extract_pressure_pipe_dialog_chains(nodes, settings=settings) or [])
+        pressure_routes = list(self._extract_pressure_pipe_routes(nodes, settings=settings) or [])
         chain_descriptors = self._build_pressure_pipe_chain_descriptors(pressure_chains)
 
         channel_level = self._get_current_channel_level_text(settings)
@@ -10122,6 +10572,7 @@ class WaterProfilePanel(QWidget):
             return {
                 "pipe_groups": pipe_groups,
                 "chain_descriptors": chain_descriptors,
+                "pressure_routes": pressure_routes,
                 "xxpipe_route_mode": False,
                 "route_import_targets": {},
                 "blocked_route_names": [],
@@ -10142,6 +10593,7 @@ class WaterProfilePanel(QWidget):
         return {
             "pipe_groups": pipe_groups,
             "chain_descriptors": chain_descriptors,
+            "pressure_routes": pressure_routes,
             "xxpipe_route_mode": True,
             "route_import_targets": route_import_targets,
             "blocked_route_names": [],
@@ -10990,6 +11442,11 @@ class WaterProfilePanel(QWidget):
             "identity": str(record.get("identity", "") or self._build_pressure_pipe_group_identity(group)).strip(),
             "storage_key": str(record.get("storage_key", "") or self._get_pressure_pipe_group_storage_key(group)).strip(),
             "display_name": str(record.get("display_name", "") or self._get_pressure_pipe_group_display_name(group)).strip(),
+            "route_key": str(record.get("route_key", "") or self._get_pressure_pipe_group_route_key(group)).strip(),
+            "route_display_name": str(
+                record.get("route_display_name", "")
+                or self._get_pressure_pipe_group_route_display_name(group)
+            ).strip(),
             "group_mode": str(record.get("group_mode", "") or "unnamed_row_segment").strip(),
             "data_mode": str(record.get("data_mode", "") or "").strip(),
             "applied_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -11651,6 +12108,7 @@ class WaterProfilePanel(QWidget):
             )
             pipe_groups = dialog_context["pipe_groups"]
             chain_descriptors = dialog_context["chain_descriptors"]
+            pressure_routes = dialog_context.get("pressure_routes", []) or []
             xxpipe_route_mode = bool(dialog_context.get("xxpipe_route_mode"))
             route_import_targets = dict(dialog_context.get("route_import_targets", {}) or {})
             if not pipe_groups and not chain_descriptors:
@@ -11722,6 +12180,7 @@ class WaterProfilePanel(QWidget):
             )
             pipe_groups = dialog_context["pipe_groups"]
             chain_descriptors = dialog_context["chain_descriptors"]
+            pressure_routes = dialog_context.get("pressure_routes", []) or []
             if not pipe_groups and not chain_descriptors:
                 InfoBar.info("提示", "未找到有压管道数据组",
                             parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
@@ -12047,6 +12506,41 @@ class WaterProfilePanel(QWidget):
             })
             self._pressure_pipe_calc_records = batch_data
             self._pressure_pipe_last_run_at = batch_data.get("last_run_at", "")
+
+            save_pressure_routes = getattr(manager, "save_pressure_routes", None)
+            if callable(save_pressure_routes):
+                try:
+                    pressure_routes, route_payloads = self._build_pressure_route_persist_payloads(
+                        nodes,
+                        settings,
+                        longitudinal_nodes_dict or {},
+                        route_profile_segments_by_key or {},
+                    )
+                    route_payloads_by_key = {
+                        str(route.get("route_key", "") or "").strip(): route
+                        for route in route_payloads
+                        if str(route.get("route_key", "") or "").strip()
+                    }
+                    route_profiles = {
+                        route_key: copy.deepcopy((longitudinal_nodes_dict or {}).get(route_key, []) or [])
+                        for route_key in route_payloads_by_key
+                    }
+                    segment_payloads = self._build_pressure_segment_persist_payloads(
+                        pressure_routes,
+                        record_map,
+                        route_profiles,
+                        route_profile_segments_by_key or {},
+                        route_payloads_by_key,
+                    )
+                    save_pressure_routes(
+                        route_payloads,
+                        route_profiles=route_profiles,
+                        segment_results=segment_payloads,
+                    )
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+
             self._update_pressure_pipe_last_result_button()
 
             # 追加结构化过程到下方详情框 + 弹出汇总对话框（不立即回写）

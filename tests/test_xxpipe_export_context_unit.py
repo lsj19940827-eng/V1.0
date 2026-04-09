@@ -84,7 +84,7 @@ def test_build_xxpipe_profile_data_samples_centerline_and_segments():
         (50.0, pytest.approx(95.0)),
         (100.0, pytest.approx(90.0)),
     ]
-    assert [segment["text"] for segment in data["building_segments"]] == ["穿路段定向钻"]
+    assert [segment["text"] for segment in data["building_segments"]] == ["穿路段"]
     assert [segment["text"] for segment in data["material_segments"]] == ["球墨铸铁管 DN1200"]
 
 
@@ -393,7 +393,7 @@ def test_build_xxpipe_profile_data_breaks_plain_pipe_material_segments_at_direct
 
     data = cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
 
-    assert [segment["text"] for segment in data["building_segments"]] == ["穿路段定向钻"]
+    assert [segment["text"] for segment in data["building_segments"]] == ["穿路段"]
     assert data["material_segments"] == [
         {
             "text": "HDPE管 DN400",

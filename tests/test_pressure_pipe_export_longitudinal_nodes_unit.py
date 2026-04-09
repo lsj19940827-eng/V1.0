@@ -651,3 +651,119 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_keeps_route_nodes_for_c
 
     assert list(result) == ["flow2-row63"]
     assert result["flow2-row63"] == route_nodes
+
+
+def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_bucket_from_row_metadata():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    route_nodes = [
+        {"chainage": 0.0, "elevation": 405.0, "turn_type": "NONE"},
+        {"chainage": 400.0, "elevation": 395.0, "turn_type": "NONE"},
+    ]
+    group = SimpleNamespace(
+        group_mode="unnamed_row_segment",
+        storage_key="flow1-row74",
+        route_key="flow1-route1",
+        route_display_name="赛金连续整线",
+        display_name="大石包定向钻",
+        name="",
+        identity="flow1-row74",
+        flow_section="1",
+        segment_start_mc=3971.87,
+        segment_end_mc=4366.58,
+        target_row_index=1,
+        upstream_row_index=0,
+        rows=[
+            SimpleNamespace(
+                flow_section="1",
+                name="大石包",
+                pressure_pipe_row_identity="flow1-row74",
+                section_params={},
+                pressure_pipe_window_override={},
+            )
+        ],
+    )
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: None,
+        to_dict=lambda: {
+            "routes": {
+                "flow1-route1": {
+                    "display_name": "赛金连续整线",
+                    "longitudinal_nodes": route_nodes,
+                }
+            }
+        },
+    )
+    panel._build_settings = lambda: object()
+    panel._build_nodes_from_table = lambda: ["stub-node-a", "stub-node-b"]
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [group]
+
+    result = WaterProfilePanel.get_pressure_pipe_longitudinal_nodes_for_export(
+        panel,
+        rows=[
+            {
+                "name": "",
+                "flow_section": "1",
+                "identity": "flow1-row73",
+                "route_key": "flow1-route1",
+                "route_display_name": "赛金连续整线",
+                "station_text": "赛支3+968.95",
+                "node_label": "苟家湾压进",
+            }
+        ],
+    )
+
+    assert list(result) == ["flow1-row73"]
+    assert result["flow1-row73"] == route_nodes
+
+
+def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_segments_bucket_by_identity():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    segment_nodes = [
+        {"chainage": 3971.87, "elevation": 403.62, "turn_type": "NONE"},
+        {"chainage": 4366.58, "elevation": 405.58, "turn_type": "NONE"},
+    ]
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: None,
+        to_dict=lambda: {
+            "segments": {
+                "flow1-row74": {
+                    "identity": "flow1-row74",
+                    "route_key": "flow1-route1",
+                    "route_display_name": "赛金连续整线",
+                    "member_display_name": "大石包",
+                    "dxf_display_name": "大石包",
+                    "longitudinal_nodes": segment_nodes,
+                    "profile_state": "ok",
+                }
+            },
+            "routes": {
+                "flow1-route1": {
+                    "display_name": "赛金连续整线",
+                    "longitudinal_nodes": [
+                        {"chainage": 3900.0, "elevation": 406.0, "turn_type": "NONE"},
+                        {"chainage": 4700.0, "elevation": 398.0, "turn_type": "NONE"},
+                    ],
+                }
+            },
+        },
+    )
+
+    result = WaterProfilePanel.get_pressure_pipe_longitudinal_nodes_for_export(
+        panel,
+        rows=[
+            {
+                "name": "大石包",
+                "flow_section": "1",
+                "identity": "flow1-row74",
+                "route_key": "flow1-route1",
+                "route_display_name": "赛金连续整线",
+            }
+        ],
+    )
+
+    assert list(result) == ["flow1-row74"]
+    assert result["flow1-row74"] == segment_nodes

@@ -1,8 +1,8 @@
 # 有压管道 — 综合 PRD
 
-> **版本**: V2.11.20
+> **版本**: V2.11.23
 > **创建日期**: 2026-03-03  
-> **最后更新**: 2026-04-08
+> **最后更新**: 2026-04-09
 > **状态**: 已实现
 
 ---
@@ -187,6 +187,14 @@ if section_type == "有压管道":
 - 若中间被 `明渠 / 闸 / 倒虹吸 / 暗涵 / 分水` 等非连续承压结构断开，则仍视为真正重名，继续拦截。
 - `顶管 / 定向钻 / 隧洞` 这类命名建筑物本身仍要求唯一，不在放开范围内。
 
+#### 3.3.6 赛金支渠连续承压身份与导出口径
+
+- `支渠` 连续承压链里的命名成员，正式身份统一为 `flow{流量段}-row{起始行号}`；旧 `flow_section::name::rowsxx` 只保留被动兼容，不再继续生成。
+- 节点窗口覆盖、链成员写回、`route / segment` 持久化、xx管 纵断面导出，全部使用同一套新身份。
+- 连续承压结果保存改成“当前整线快照覆盖活动范围”，同一整线范围内旧的 `route / segment / pipe` 残留会被一起清掉。
+- xx管 导出查找先按新身份找正式分段；若先撞到没有有效纵断面的旧记录，会继续按 `route_key` 回退整线纵断面。
+- 本次口径的目标，是修掉赛金支渠 `赛支3+968.95 / 405m` 被留空的问题；`IP点名称 / 里程桩号` 的现有视觉排版不在本次改动范围内。
+
 ### 3.4 水头损失计算核心（pressure_pipe_calc.py）
 
 #### 3.4.1 管材参数表
@@ -351,6 +359,9 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 - `支渠` 链首若是“单点、仅进口、后续同链仍有同名普通有压段”的命名普通有压，则优先识别为链起点前缀段：只要到下一段 `定向钻 / 顶管 / 隧洞` 进口之间存在有效长度，就按沿程损失参与计算，并把结果写回下一段特殊承压建筑的进口行。
 - 只有当前缀长度无效、无法裁出可用纵断面或拿不到有效参数时，链首成员才回退为链起点锚点：成员状态记成功，但 `writeback_enabled=False`、`total_head_loss=None`，不单独计损。
 - 同一条连续承压链里若出现重名成员，展示名按出现顺序追加后缀：`前缀段 / 起点锚点 / 前段 / 中段N / 后段`；只改展示，不改稳定身份键。
+- 连续承压正式对象统一拆成四类：`PressureRoute`（整线）、`PressureSegment`（子段）、`PressureResult`（正式结果）、`ProfileCoverageState`（纵断面覆盖状态）。链识别、结果保存、导出与提示都围绕这四类对象运行，不再由不同模块临时拼名字或猜身份。
+- 名称口径正式拆分：`base_name` 只负责业务归属，`member_display_name` 负责软件内展示，`route_display_name` 负责整线卡与提示，`dxf_display_name` 只负责 DXF 建筑物名称行。DXF 不再拼“名称 + 结构类型”，像赛金支渠这类结果会稳定显示为 `苟家湾 / 大石包 / 苟家湾`。
+- 末尾双表判断正式抽成独立规划阶段 `TailPressureSplitPlan`：统一输入整张表 `full_nodes`，统一输出 `channel_nodes / channel_valid_nodes / tail_route / tail_segments / tail_lookup_nodes / tail_export_mode`；单独 DXF、单独 TXT、合并 DXF 三个入口必须共用它，不能再各自裁节点后再判断。
 
 ### 3.6 持久化管理器（pressure_pipe_manager.py）
 
@@ -380,6 +391,9 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 - `clear_all()` — 清空
 - `routes[route_key].longitudinal_nodes` 继续兼容纯普通有压管道整线
 - `routes[route_key].profile_segments` 作为 mixed route 的统一几何真源，优先供计算与导出采样使用
+- `routes[route_key]` 现还会正式保存 `profile_state / entered_pressurized_at_row / segment_identities`
+- `segments[identity]` 作为连续承压正式存储桶，保存 `base_name / member_display_name / dxf_display_name / member_role / start_mc / end_mc / status / friction_loss / bend_loss / local_loss / total_loss / computed_from_profile_source`
+- 旧 `pipes` 保留兼容镜像；新导出、新提示、新回读优先使用 `routes / segments`
 - 普通有压子段若只剩 1 个纵断面点，只视为边界占位；导出时应回退整线 `routes[route_key].longitudinal_nodes`，隧洞生成段除外
 - 整线卡里导入或清空纵断面 DXF 后，需要立即同步到 `routes[route_key].longitudinal_nodes`，不能等到“开始计算”后才落盘
 
@@ -513,6 +527,10 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 - 连续承压整线跨流量段延续时，新流量段首个匿名普通有压行的自身范围可能退化为单点边界；只要该行已挂到整线 `route_key` 且上下游 `flow_section` 发生切换，导出就应直接继承整线 `longitudinal_nodes`，不能再按单点范围裁切
 - 连续承压整线导出在同桩号合并节点后，不能只信任最终代表节点的单一 identity；若代表节点命不中整线纵断面，需要继续按节点组里的稳定 identity 候选重试，优先级为 `pressure_pipe_row_identity` → 当前分组 identity / route 起点锚点 identity → 旧的 `flow_section + name` 口径
 - route 级整线纵断面导出映射除了主 identity，还要同步补齐起点锚点、单行成员和旧口径 identity；只要整线 DXF 已存在，这些别名 identity 也必须能拿到同一份 route 纵断面
+- 赛金支渠这类连续承压 `xx渠` 单点漏配场景中，导出前构造 lookup rows 时还要同时带上 `route_key / route_display_name / station_text / node_label`；若当前行 alias 没命中，但 `routes[route_key].longitudinal_nodes` 可用，则允许按 route 级纵断面兜底，不再把“已导入整线、只漏 1 个点”误判成整线未导入
+- 连续承压 `xx渠` 的末尾双表导出现在统一走 `TailPressureSplitPlan`：上方继续是渠道表，下方固定是 5 项有压表；一旦进入真正承压尾段，后续普通有压、定向钻、顶管、隧洞都归下方有压表，只有进入承压前的前置隧洞才保留在上方渠道表
+- 下方有压表中的建筑物名称只按 `dxf_display_name` 居中绘制一次，居中范围按子段真实 `start_mc / end_mc` 计算，不再按单点或临时文本推断
+- 连续承压 `xx渠` 的宽松提示必须保留真实原因明细：真正没导入 route 纵断面时，继续提示去表3导入/补全；已导入但只是节点未匹配时，提示“已导入纵断面DXF，但有个别节点未匹配，已留空”；已导入但桩号超出覆盖范围时，提示“已导入纵断面DXF，但有个别桩号超出覆盖范围”。提示中优先展示“桩号 + 行标签/建筑物标签 + 整线名”，不再直接展示 `flow1-row73` 这类内部标识
 - IP 点名称中，有压管道进/出口采用"压"缩写（示例：`XX管压进`、`XX管压出`）
 - bzzh2 导出与建筑物名称上平面图均纳入有压管道进/出口识别
 
@@ -645,3 +663,5 @@ $$h_f = f \times L \times \frac{Q_{m^3/h}^m}{d_{mm}^b}$$
 | V2.11.19 | 2026-04-08 | **静默重算元数据保真补修**：源码运行场景下，有压结果写回后如果立刻触发静默重算，`pressure_pipe_window_override` 的 `group_mode / storage_key / display_name / target_row_index` 等元数据也会一起保留，不再被水力计算阶段洗成简化结构；这样表格重建后，“执行计算”不会再把已完成的前缀段、隧洞段或命名链成员误判成未完成。 |
 | V2.11.20 | 2026-04-08 | **连续承压导出共享 resolver 补修**：`支渠` 连续承压场景下，`导出全部DXF`、单独纵断面 DXF、单独 TXT 现在共用同一套 route 节点取数；纵断面部分会先裁成承压 route 节点，再进入 `xx管` 的 5 项导出口径；不再把整张表里的明渠节点带进 `xx管模式仅允许有压管道/定向钻/顶管/隧洞` 的冲突校验。 |
 | V2.11.21 | 2026-04-08 | **旧纵断面缓存兼容清理**：有压管道弹窗载入命名整线时，会先按当前导出桩号校验已保存纵断面；若发现历史缓存覆盖不全，会直接标记为“需要重新导入”并同步清空整线与子段旧副本，避免第一次打开就误把旧缓存当成有效 DXF。`导出全部DXF` 的非阻断提示也改为明确提醒“先清空后重新导入同一份纵断面 DXF”。 |
+| V2.11.22 | 2026-04-09 | **赛金支渠单点漏配与提示改准**：连续承压 `xx渠` 导出前的 lookup rows 现在会补齐 `route_key / route_display_name / station_text / node_label` 等 route 上下文；当单行 alias 没命中但整线 `routes[route_key].longitudinal_nodes` 已导入时，会直接按 route 级纵断面兜底，补齐像 `赛支3+968.95` 这类单点中心高程。宽松提示同时改为区分“未导入整线”“已导入但节点未匹配”“已导入但覆盖范围不足”，不再把单点漏配误说成整线未导入。 |
+| V2.11.23 | 2026-04-09 | **赛金支渠连续承压整线重构**：连续承压正式模型统一为 `PressureRoute / PressureSegment / PressureResult / ProfileCoverageState`；`PressurePipeManager` 新增 `segments` 正式存储桶；DXF 建筑物名称与软件展示名正式拆开；末尾双表判断抽成 `TailPressureSplitPlan` 并在单独 DXF、TXT、合并 DXF 三个入口共用。赛金支渠这类“前明渠、后连续承压”场景下，上方渠道表不再空白，下方有压表固定 5 项表头，建筑物名称稳定按 `苟家湾 / 大石包 / 苟家湾` 居中输出。 |
