@@ -14,6 +14,7 @@
 """
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -21,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from contextlib import contextmanager
 
 # ============================================================
 # 配置区（版本号从 version.py 读取，发版时只需修改 version.py）
@@ -212,12 +214,19 @@ THIRD_PARTY_HIDDEN_IMPORTS = [
     "scipy",
     "scipy.spatial",
     "scipy.optimize",
-    "docx",
-    "latex2mathml",
-    "lxml",
     "seaborn",
     "pypdf",
 ]
+
+WORD_EXPORT_HIDDEN_IMPORTS = [
+    "docx",
+    "latex2mathml",
+    "lxml",
+]
+
+PIP_INSTALL_NAME_OVERRIDES = {
+    "docx": "python-docx",
+}
 
 PRESSURE_PIPE_DESIGN_HIDDEN_IMPORTS = [
     "有压管道设计",
@@ -286,6 +295,7 @@ def get_hidden_imports() -> list[str]:
     return [
         *AUTH_AND_UPDATE_HIDDEN_IMPORTS,
         *THIRD_PARTY_HIDDEN_IMPORTS,
+        *WORD_EXPORT_HIDDEN_IMPORTS,
         *PRESSURE_PIPE_DESIGN_HIDDEN_IMPORTS,
         *CALC_CORE_HIDDEN_IMPORTS,
         *SIPHON_CORE_HIDDEN_IMPORTS,
@@ -318,11 +328,67 @@ def get_verify_import_groups() -> dict[str, list[str]]:
             "scipy",
             "scipy.optimize",
         ],
+        "Word导出依赖": list(WORD_EXPORT_HIDDEN_IMPORTS),
         "土石方计算依赖": [
             "shapely",
             # triangle 缺失时土石方模块会回退到 scipy.Delaunay，这里不阻断打包前校验。
         ],
     }
+
+
+def _find_missing_imports(import_groups: dict[str, list[str]], importer=None) -> dict[str, list[str]]:
+    """返回每个分组里当前环境无法导入的模块列表。"""
+    if importer is None:
+        importer = importlib.import_module
+
+    missing: dict[str, list[str]] = {}
+    for group_name, modules in import_groups.items():
+        group_missing: list[str] = []
+        for module_name in modules:
+            try:
+                importer(module_name)
+            except Exception:
+                group_missing.append(module_name)
+        if group_missing:
+            missing[group_name] = group_missing
+    return missing
+
+
+def _build_install_command(modules: list[str]) -> str:
+    """把模块名转换成用户可直接执行的 pip 安装命令。"""
+    package_names: list[str] = []
+    seen: set[str] = set()
+    for module_name in modules:
+        package_name = PIP_INSTALL_NAME_OVERRIDES.get(module_name, module_name)
+        if package_name in seen:
+            continue
+        seen.add(package_name)
+        package_names.append(package_name)
+    return f"pip install {' '.join(package_names)}"
+
+
+def _build_install_command_for_group(group_name: str, modules: list[str]) -> str:
+    """按分组返回更适合直接执行的安装命令。"""
+    if group_name == "Word导出依赖":
+        return _build_install_command(list(WORD_EXPORT_HIDDEN_IMPORTS))
+    return _build_install_command(modules)
+
+
+def ensure_required_imports_available(import_groups: dict[str, list[str]] | None = None, importer=None):
+    """在打包前校验关键依赖是否可导入，缺失时直接终止。"""
+    if import_groups is None:
+        import_groups = get_verify_import_groups()
+
+    missing_imports = _find_missing_imports(import_groups, importer=importer)
+    if not missing_imports:
+        return
+
+    print("\n[错误] 打包前依赖校验失败，以下模块当前环境无法导入：")
+    for group_name, modules in missing_imports.items():
+        print(f"  - {group_name}: {', '.join(modules)}")
+        print(f"    安装命令: {_build_install_command_for_group(group_name, modules)}")
+    print("  请先补齐依赖后再重新执行打包。")
+    raise SystemExit(1)
 
 # ============================================================
 # 路径（build.py 位于 tools/ 下，项目根目录在上一级）
@@ -343,6 +409,33 @@ UPDATE_HELPER_ICON_FILE = os.path.join(
 LICENSE_MANAGER_ICON_FILE = os.path.join(PROJECT_ROOT, "tools", "license_icon.ico")
 PROJECT_VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
 UPDATE_HELPER_NAME = f"{APP_NAME_EN}Updater"
+
+
+def _get_build_search_paths() -> list[str]:
+    """返回构建和打包前校验共用的模块搜索路径。"""
+    return [
+        PROJECT_ROOT,
+        os.path.join(PROJECT_ROOT, "calc_渠系计算算法内核"),
+        os.path.join(PROJECT_ROOT, "倒虹吸水力计算系统"),
+        os.path.join(PROJECT_ROOT, "推求水面线"),
+    ]
+
+
+@contextmanager
+def _temporary_sys_path(search_paths: list[str]):
+    """临时把项目搜索路径插到 sys.path 前面，供导入校验复用。"""
+    inserted_paths: list[str] = []
+    for path in reversed(search_paths):
+        if path in sys.path:
+            continue
+        sys.path.insert(0, path)
+        inserted_paths.append(path)
+    try:
+        yield
+    finally:
+        for path in inserted_paths:
+            while path in sys.path:
+                sys.path.remove(path)
 
 
 def _project_python() -> str:
@@ -478,6 +571,9 @@ def build(bump: str = None):
     print(f"  Python: {_project_python()}")
     print(f"{'=' * 60}")
 
+    with _temporary_sys_path(_get_build_search_paths()):
+        ensure_required_imports_available()
+
     # 清理 data 目录中的 Excel 临时锁文件
     _clean_excel_temp_files(os.path.join(PROJECT_ROOT, "data"))
 
@@ -506,12 +602,7 @@ def build(bump: str = None):
     # 项目根目录：让 PyInstaller 发现 app_渠系计算前端、土石方计算 等正式包
     # 子目录：calc_渠系计算算法内核、倒虹吸水力计算系统、推求水面线 没有 __init__.py，
     #         代码通过 sys.path.insert() 后以顶层模块名导入（如 from 明渠设计 import ...）
-    search_paths = [
-        PROJECT_ROOT,
-        os.path.join(PROJECT_ROOT, "calc_渠系计算算法内核"),
-        os.path.join(PROJECT_ROOT, "倒虹吸水力计算系统"),
-        os.path.join(PROJECT_ROOT, "推求水面线"),
-    ]
+    search_paths = _get_build_search_paths()
     for p in search_paths:
         args.append(f"--paths={p}")
 
