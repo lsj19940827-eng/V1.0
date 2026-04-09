@@ -139,7 +139,7 @@ class ChannelNode:
         return int(self.ip_number)
 
     def _get_special_structure_abbr(self) -> str:
-        """获取特殊建筑物进出口的简称。"""
+        """获取特殊建筑物进出口的简称或工艺名。"""
         struct_str = self.get_structure_type_str()
         if "隧洞" in struct_str:
             return "隧"
@@ -147,8 +147,15 @@ class ChannelNode:
             return "倒"
         if "渡槽" in struct_str:
             return "渡"
+        # 有压管道同类继续共用承压语义，但展示名称保留各自工艺口径。
+        if "定向钻" in struct_str:
+            return "定向钻"
+        if "顶管" in struct_str:
+            return "顶管"
+        if "有压管道" in struct_str:
+            return "有压管道"
         if StructureType.is_pressure_pipe_like_str(struct_str):
-            return "压"
+            return struct_str
         return ""
 
     def get_special_io_label(self) -> str:

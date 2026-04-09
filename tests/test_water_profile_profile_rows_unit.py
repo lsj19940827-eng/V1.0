@@ -46,8 +46,12 @@ class _Node(SimpleNamespace):
                 struct_abbr = "倒"
             elif "渡槽" in struct:
                 struct_abbr = "渡"
-            elif struct in {"有压管道", "定向钻", "顶管"}:
-                struct_abbr = "压"
+            elif "定向钻" in struct:
+                struct_abbr = "定向钻"
+            elif "顶管" in struct:
+                struct_abbr = "顶管"
+            elif "有压管道" in struct:
+                struct_abbr = "有压管道"
             return f"{getattr(self, 'name', '')}{struct_abbr}{in_out}"
         return f"IP{display_ip_no}"
 
@@ -319,7 +323,7 @@ def test_special_angle_warning_contains_near_and_over_threshold():
     assert "接近0" in message
     assert "超过阈值" in message
     assert "甲倒进" in message
-    assert "乙压出" in message
+    assert "乙有压管道出" in message
 
 
 def test_profile_slope_segments_use_boundary_center_when_special_node_shifts_boundary():
