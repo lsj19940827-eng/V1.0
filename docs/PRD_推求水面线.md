@@ -140,7 +140,7 @@ WaterProfilePanel
 | PySide6 | UI 框架 |
 | qfluentwidgets | Fluent Design 组件 |
 | openpyxl | Excel 导入 / 导出 |
-| python-docx | Word 导出 |
+| python-docx / latex2mathml / lxml | Word 导出 |
 | ezdxf | DXF 导出 |
 
 ---
@@ -553,8 +553,9 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 ### 8.2 导出 Word（工程报告格式）
 
 - 文件名：`{渠道名称}_水面线计算书.docx`
-- 依赖：`python-docx`
+- 依赖：`python-docx`、`latex2mathml`、`lxml`
 - 导出前流程：弹出 `ExportConfirmDialog`，用于填写项目元信息（项目名称、建设单位等）并选择规范引用
+- 运行中的源码环境若缺依赖，可继续沿用界面提示安装；正式发版环境则必须先通过构建校验，缺少上述依赖时不允许继续打包。
 
 章节结构由 `_build_word_report` 组织：
 

@@ -16,7 +16,7 @@
 - `app_渠系计算前端/water_profile/formula_dialog.py`：表头说明和双击公式弹窗，负责把计算详情解释给用户看。
 - `updater.py`：自动更新核心，负责版本比较、补丁/全量包选择、安装会话、旧 `_update_sessions` 残留清理、安装前校验、补丁适用性校验和回滚。
 - `update_helper.py`：独立安装窗口，负责展示安装阶段、`validate` 细分状态、补丁校验进度、旧残留清理失败提示和日志入口。
-- `tools/build.py`：构建脚本，负责生成 manifest、通用补丁包，并按补丁覆盖范围决定是否发布补丁。
+- `tools/build.py`：构建脚本，负责按分组校验关键依赖、单独拦截 Word 导出依赖缺失、生成 manifest、通用补丁包，并按补丁覆盖范围决定是否发布补丁。
 - `推求水面线/core/calculator.py`：整表计算总调度，串起预处理、内部 `ip_number` 与显示 `display_ip_number` 分配、渐变段、水力计算、累计损失和高程递推；当表内已存在渐变段/连接段时，会改走“真实节点重算 + 辅助行保位”的安全几何刷新路径。
 - `推求水面线/core/hydraulic_calc.py`：水头损失和水位递推核心，负责沿程、弯道、局部损失及水位更新，并消费窗口回写后的承压覆盖结果；开放渠道几何口径当前已补齐 `明渠-复式梯形`。
 - `推求水面线/core/pressure_pipe_calc.py`：有压管道专项公式库，提供 FMB 沿程损失和承压弯头局部损失计算。
@@ -64,7 +64,7 @@
 - `panel.py`、`cad_tools.py` 和 `multi_siphon_dialog.py` 在导入 `utils.*` 前，会先加载 `推求水面线.utils`，让正式包运行时的顶层 `utils` 固定落到项目自带实现。
 - `bootstrap.py` 在创建主窗口前会先调用 `webengine_diagnostics.py` 做标准预检；预检阶段现在只采集轻量运行时信息，不再顺手调用可能阻塞的系统摘要接口。
 - `app.py` 启动时会 eager 创建全部面板，但 `pressure_pipe/panel.py` 的初始帮助页渲染已改为延后执行；这样仍保留“页面对象先建好”的兼容口径，同时避免单个结果页把主窗口首次显示卡住。
-- `tools/build.py` 会先根据 `UNIVERSAL_PATCH_MIN_VERSION` 选出可覆盖的旧版 manifest，再生成通用补丁；如果补丁删除文件过多，或“新增/修改 + 删除”总量过大，会直接跳过补丁，只保留全量包。
+- `tools/build.py` 会先按分组校验关键依赖，并复用与 PyInstaller 相同的项目搜索路径；Word 导出依赖缺失时会先直接中止打包，再根据 `UNIVERSAL_PATCH_MIN_VERSION` 选出可覆盖的旧版 manifest 生成通用补丁。如果补丁删除文件过多，或“新增/修改 + 删除”总量过大，会直接跳过补丁，只保留全量包。
 - `tools/release.py` 会读取 `patch-info.json` 决定是否把补丁链接写进正式 `version.json`；没有 `patch-info.json` 时，用户端就只会看到全量包。
 - `updater.py` 读取 `version.json.min_patch_version` 后，只对满足版本下限的本机提供补丁下载；进入安装后，会在 `validate` 阶段先清理旧 `_update_sessions` 残留，再把“检查写入权限 / 统计安装目录大小 / 解压完整安装包或补丁包 / 校验补丁适用性（x/y）”通过 `stage_callback` 传给 `update_helper.py`。
 
