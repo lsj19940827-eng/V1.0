@@ -152,3 +152,27 @@ def test_update_helper_shows_patch_validation_progress_text(monkeypatch):
     assert "正在校验补丁适用性（2/5）" in window.status_label.text()
     assert "正在校验补丁适用性（2/5）" in window.detail_text.toPlainText()
     window.close()
+
+
+def test_update_helper_shows_full_package_validation_progress_text(monkeypatch):
+    _get_qapp()
+    fake_session = SimpleNamespace(
+        current_version="1.2.5",
+        target_version="1.2.6",
+        work_dir="C:/temp/update-work",
+        log_dir="C:/temp/update-logs",
+    )
+
+    monkeypatch.setattr(
+        update_helper.updater.UpdateSession,
+        "from_file",
+        lambda _path: fake_session,
+    )
+    monkeypatch.setattr(update_helper.UpdateHelperWindow, "_start_worker", lambda self: None)
+
+    window = update_helper.UpdateHelperWindow("dummy-session.json")
+    window._on_stage_changed("validate", "正在解压完整安装包（14/120）")
+
+    assert "正在解压完整安装包（14/120）" in window.status_label.text()
+    assert "正在解压完整安装包（14/120）" in window.detail_text.toPlainText()
+    window.close()

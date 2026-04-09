@@ -49,6 +49,7 @@ from repo_config import (
 
 _CHECK_TIMEOUT = 8  # 妫€鏌ユ洿鏂拌秴鏃讹紙绉掞級
 _PROXY_PROBE_TIMEOUT = 5  # 代理探测超时（秒）
+PROGRESS_THROTTLE_SECONDS = 0.5
 
 
 # ============================================================
@@ -680,18 +681,57 @@ def _should_preserve(rel_path: str, patterns: list[str]) -> bool:
     )
 
 
-def _dir_size(path: str, ignored_names: Optional[set[str]] = None) -> int:
+class _ThrottledProgressEmitter:
+    """按固定时间间隔回报进度，避免日志和界面被高频刷新淹没。"""
+
+    def __init__(self, interval_sec: Optional[float] = None):
+        self.interval_sec = PROGRESS_THROTTLE_SECONDS if interval_sec is None else interval_sec
+        self._last_emit_time: Optional[float] = None
+
+    def emit(self, callback: Optional[Callable], *args, force: bool = False):
+        """在允许时触发回调；force=True 时总是回报最后一次状态。"""
+        if callback is None:
+            return
+        now = time.monotonic()
+        if (
+            force
+            or self.interval_sec <= 0
+            or self._last_emit_time is None
+            or now - self._last_emit_time >= self.interval_sec
+        ):
+            callback(*args)
+            self._last_emit_time = now
+
+
+def _dir_size(
+    path: str,
+    ignored_names: Optional[set[str]] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> int:
     ignored_names = ignored_names or set()
     total = 0
+    scanned_files = 0
+    progress_emitter = _ThrottledProgressEmitter()
     for root, dirs, files in os.walk(path):
         dirs[:] = [d for d in dirs if d not in ignored_names]
         for filename in files:
             if filename in ignored_names:
                 continue
+            scanned_files += 1
             try:
                 total += os.path.getsize(os.path.join(root, filename))
             except OSError:
                 pass
+            progress_emitter.emit(
+                progress_callback,
+                f"正在统计安装目录大小（已扫描 {scanned_files} 个文件）",
+            )
+    if scanned_files:
+        progress_emitter.emit(
+            progress_callback,
+            f"正在统计安装目录大小（已扫描 {scanned_files} 个文件）",
+            force=True,
+        )
     return total
 
 
@@ -715,10 +755,19 @@ def is_install_dir_writable(app_dir: Optional[str] = None) -> bool:
         return False
 
 
-def estimate_required_space(zip_path: str, is_patch: bool, app_dir: Optional[str] = None) -> int:
+def estimate_required_space(
+    zip_path: str,
+    is_patch: bool,
+    app_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> int:
     app_dir = app_dir or _get_app_dir()
     zip_size = os.path.getsize(zip_path)
-    app_size = _dir_size(app_dir, ignored_names={INTERNAL_WORK_DIR, "__pycache__"})
+    app_size = _dir_size(
+        app_dir,
+        ignored_names={INTERNAL_WORK_DIR, "__pycache__"},
+        progress_callback=progress_callback,
+    )
     if is_patch:
         return zip_size * 2 + INSTALL_SLACK_BYTES
     return zip_size + app_size + INSTALL_SLACK_BYTES
@@ -728,6 +777,7 @@ def ensure_install_ready(
     zip_path: str,
     is_patch: bool,
     app_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
 ) -> dict:
     app_dir = app_dir or _get_app_dir()
     if not zip_path or not os.path.isfile(zip_path):
@@ -741,7 +791,12 @@ def ensure_install_ready(
             "当前软件目录没有写入权限，请将软件解压到普通目录后再更新。"
         )
 
-    required_bytes = estimate_required_space(zip_path, is_patch, app_dir)
+    required_bytes = estimate_required_space(
+        zip_path,
+        is_patch,
+        app_dir,
+        progress_callback=progress_callback,
+    )
     try:
         free_bytes = shutil.disk_usage(app_dir).free
     except OSError as exc:
@@ -919,12 +974,23 @@ def _copy_tree_contents(src_dir: str, dst_dir: str):
             shutil.copy2(os.path.join(root, filename), os.path.join(target_root, filename))
 
 
-def _extract_zip(zip_path: str, extract_dir: str) -> str:
+def _extract_zip(
+    zip_path: str,
+    extract_dir: str,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> str:
     _clean_dir(extract_dir)
     os.makedirs(extract_dir, exist_ok=True)
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(extract_dir)
+            members = zf.infolist()
+            total_members = len(members)
+            progress_emitter = _ThrottledProgressEmitter()
+            for index, member in enumerate(members, start=1):
+                zf.extract(member, extract_dir)
+                progress_emitter.emit(progress_callback, index, total_members)
+            if total_members:
+                progress_emitter.emit(progress_callback, total_members, total_members, force=True)
     except zipfile.BadZipFile as exc:
         raise UpdateInstallError(
             f"更新包损坏：{zip_path}",
@@ -1251,10 +1317,26 @@ def run_update_session(
         _wait_for_process_exit(session.parent_pid)
 
         push("validate", "校验安装环境")
-        ensure_install_ready(session.download_zip_path, session.is_patch, app_dir=session.app_dir)
+        ensure_install_ready(
+            session.download_zip_path,
+            session.is_patch,
+            app_dir=session.app_dir,
+            progress_callback=lambda text: push("validate", text),
+        )
         if session.is_patch:
             push("validate", "正在解压补丁包")
-        extracted_root = _extract_zip(session.download_zip_path, extract_dir)
+        extracted_root = _extract_zip(
+            session.download_zip_path,
+            extract_dir,
+            progress_callback=lambda current, total: push(
+                "validate",
+                (
+                    f"正在解压补丁包（{current}/{total}）"
+                    if session.is_patch
+                    else f"正在解压完整安装包（{current}/{total}）"
+                ),
+            ),
+        )
         if session.is_patch:
             patch_manifest = _load_patch_manifest(extracted_root)
             _validate_patch_prerequisites(

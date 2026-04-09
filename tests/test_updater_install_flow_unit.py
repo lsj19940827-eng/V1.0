@@ -124,6 +124,35 @@ def test_ensure_install_ready_rejects_low_disk_space(tmp_path, monkeypatch):
         updater.ensure_install_ready(str(zip_path), is_patch=False, app_dir=str(app_dir))
 
 
+def test_ensure_install_ready_reports_directory_scan_progress(tmp_path, monkeypatch):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    for index in range(3):
+        (app_dir / f"file-{index}.txt").write_text(f"payload-{index}", encoding="utf-8")
+    zip_path = _make_full_zip(tmp_path / "update.zip", "9.9.9", {"new.txt": "new" * 1024})
+    progress_messages: list[str] = []
+
+    monkeypatch.setattr(updater, "PROGRESS_THROTTLE_SECONDS", 0)
+    monkeypatch.setattr(updater, "is_install_dir_writable", lambda path=None: True)
+    monkeypatch.setattr(
+        shutil,
+        "disk_usage",
+        lambda _path: shutil._ntuple_diskusage(total=1024**4, used=1024, free=1024**4),
+    )
+
+    result = updater.ensure_install_ready(
+        str(zip_path),
+        is_patch=False,
+        app_dir=str(app_dir),
+        progress_callback=lambda text: progress_messages.append(text),
+    )
+
+    assert result["app_dir"] == str(app_dir)
+    scan_messages = [text for text in progress_messages if text.startswith("正在统计安装目录大小（已扫描 ")]
+    assert len(scan_messages) >= 3
+    assert scan_messages[-1].endswith("3 个文件）")
+
+
 def test_run_update_session_rolls_back_full_install_on_failure(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
     app_dir.mkdir()
@@ -302,3 +331,34 @@ def test_run_update_session_reports_patch_validation_progress(tmp_path, monkeypa
     assert ("validate", "正在解压补丁包") in stage_events
     assert ("validate", "正在校验补丁适用性（1/2）") in stage_events
     assert ("validate", "正在校验补丁适用性（2/2）") in stage_events
+
+
+def test_run_update_session_reports_full_package_validation_progress(tmp_path, monkeypatch):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "old.txt").write_text("old-content", encoding="utf-8")
+    (app_dir / f"{updater.APP_NAME_EN}.exe").write_text("binary", encoding="utf-8")
+    zip_path = _make_full_zip(
+        tmp_path / "full-update.zip",
+        "9.9.9",
+        {
+            "old.txt": "new-content",
+            "new.txt": "brand-new",
+        },
+    )
+    session_path = _write_session(tmp_path, app_dir=app_dir, zip_path=zip_path, is_patch=False)
+    stage_events: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(updater, "PROGRESS_THROTTLE_SECONDS", 0)
+    monkeypatch.setattr(updater, "_wait_for_process_exit", lambda pid: None)
+
+    result = updater.run_update_session(
+        session_path,
+        stage_callback=lambda key, text: stage_events.append((key, text)),
+    )
+
+    assert result["success"] is True
+    assert ("validate", "校验安装环境") in stage_events
+    assert ("validate", "正在统计安装目录大小（已扫描 2 个文件）") in stage_events
+    assert ("validate", "正在解压完整安装包（1/2）") in stage_events
+    assert ("validate", "正在解压完整安装包（2/2）") in stage_events
