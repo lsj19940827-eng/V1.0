@@ -342,6 +342,59 @@ def test_extract_dialog_pipe_groups_for_branch_channel_marks_prefix_segment_meta
     assert prefix_group.should_generate_row_loss is True
 
 
+def test_extract_pressure_routes_keeps_member_labels_separate_from_route_display_name():
+    prefix_inlet = _set_plan_station(
+        _make_node("9", "苟家湾", "有压管道", InOutType.INLET, diameter=0.8, flow=0.49),
+        40.0,
+        40.0,
+        2.0,
+    )
+    drill_inlet = _set_plan_station(
+        _make_node("9", "大石包", "定向钻", InOutType.INLET, diameter=0.8, flow=0.49),
+        60.0,
+        60.0,
+        2.0,
+    )
+    drill_outlet = _set_plan_station(
+        _make_node("9", "大石包", "定向钻", InOutType.OUTLET, diameter=0.8, flow=0.49),
+        80.0,
+        80.0,
+        2.0,
+    )
+    main_inlet = _set_plan_station(
+        _make_node("9", "苟家湾", "有压管道", InOutType.INLET, diameter=0.8, flow=0.49),
+        100.0,
+        100.0,
+        3.0,
+    )
+    main_outlet = _set_plan_station(
+        _make_node("9", "苟家湾", "有压管道", InOutType.OUTLET, diameter=0.8, flow=0.49),
+        140.0,
+        140.0,
+        3.0,
+    )
+
+    routes = PressurePipeDataExtractor.extract_pressure_routes(
+        [prefix_inlet, drill_inlet, drill_outlet, main_inlet, main_outlet],
+        settings=_make_settings("支渠"),
+    )
+
+    assert len(routes) == 1
+    route = routes[0]
+    assert "前缀段" not in route.route_display_name
+    assert "后段" not in route.route_display_name
+    assert [segment.member_display_name for segment in route.segments] == [
+        "苟家湾（前缀段）",
+        "大石包",
+        "苟家湾（后段）",
+    ]
+    assert [segment.dxf_display_name for segment in route.segments] == [
+        "苟家湾",
+        "大石包",
+        "苟家湾",
+    ]
+
+
 def test_extract_dialog_pipe_groups_builds_fallback_identity_for_unnamed_row():
     upstream = _make_node("5", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=2.0)
     upstream.x = 1.0
@@ -361,6 +414,65 @@ def test_extract_dialog_pipe_groups_builds_fallback_identity_for_unnamed_row():
     assert groups[0].display_name == "流量段5 第2行有压管道"
     assert groups[0].storage_key == "flow5-row2"
     assert groups[0].identity == "flow5-row2"
+
+
+def test_extract_dialog_pipe_groups_for_branch_channel_rewrites_named_chain_members_to_row_identities():
+    prefix_inlet = _set_plan_station(
+        _make_node("1", "苟家湾", "有压管道", InOutType.INLET, diameter=0.8, flow=0.49),
+        3968.95,
+        3968.95,
+        0.0,
+    )
+    drill_inlet = _set_plan_station(
+        _make_node("1", "大石包", "定向钻", InOutType.INLET, diameter=0.8, flow=0.49),
+        3971.87,
+        3971.87,
+        2.0,
+    )
+    drill_outlet = _set_plan_station(
+        _make_node("1", "大石包", "定向钻", InOutType.OUTLET, diameter=0.8, flow=0.49),
+        4366.58,
+        4366.58,
+        2.0,
+    )
+    main_inlet = _set_plan_station(
+        _make_node("1", "苟家湾", "有压管道", InOutType.INLET, diameter=0.8, flow=0.49),
+        4366.58,
+        4366.58,
+        3.0,
+    )
+    main_outlet = _set_plan_station(
+        _make_node("1", "苟家湾", "有压管道", InOutType.OUTLET, diameter=0.8, flow=0.49),
+        4693.42,
+        4693.42,
+        3.0,
+    )
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        [prefix_inlet, drill_inlet, drill_outlet, main_inlet, main_outlet],
+        settings=_make_settings("支渠"),
+    )
+
+    assert [group.display_name for group in groups] == [
+        "苟家湾（前缀段）",
+        "大石包",
+        "苟家湾（后段）",
+    ]
+    assert [group.identity for group in groups] == [
+        "flow1-row1",
+        "flow1-row2",
+        "flow1-row4",
+    ]
+    assert [group.storage_key for group in groups] == [
+        "flow1-row1",
+        "flow1-row2",
+        "flow1-row4",
+    ]
+    assert [group.route_key for group in groups] == [
+        "flow1-route1",
+        "flow1-route1",
+        "flow1-route1",
+    ]
 
 
 def test_extract_dialog_pipe_groups_keeps_cross_flow_boundary_out_of_next_flow_section_anonymous_segment():

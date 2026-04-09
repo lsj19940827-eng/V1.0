@@ -2122,10 +2122,7 @@ def _get_xxpipe_building_display_name(
     text = str(struct_name or "").strip()
     name = str(building_name or "").strip()
     if _is_xxpipe_named_structure(text):
-        return _merge_building_and_structure_name(
-            name,
-            _get_xxpipe_structure_display_name(text),
-        )
+        return name or _get_xxpipe_structure_display_name(text)
     if show_plain_pipe_name and text == "有压管道":
         return name or (str(plain_pipe_fallback_name or "").strip() or "有压管道")
     return ""
@@ -4734,11 +4731,7 @@ def _build_xxpipe_segment_records(items):
             continue
         station_mc = float(item.get("station_mc", 0.0) or 0.0)
         identity = str(item.get("identity", "") or "").strip()
-        if (
-            segments
-            and segments[-1]["text"] == text
-            and segments[-1]["identity"] == identity
-        ):
+        if segments and segments[-1]["text"] == text:
             segments[-1]["mcs"].append(station_mc)
             continue
         segments.append({
@@ -4786,7 +4779,6 @@ def _build_xxpipe_material_segment_records(items):
             else:
                 can_merge = (
                     prev.get("merge_mode") == "named_structure"
-                    and prev.get("identity") == identity
                     and prev.get("text") == text
                 )
         if can_merge:
@@ -4825,6 +4817,7 @@ def _build_xxpipe_profile_data(
     station_prefix="",
     manager_config_by_identity=None,
     export_policy=None,
+    warning_context_by_identity=None,
 ):
     export_policy = _normalize_xxpipe_export_policy(export_policy)
     raw_visible_nodes = list(_iter_xxpipe_export_nodes(nodes))
@@ -4872,6 +4865,7 @@ def _build_xxpipe_profile_data(
     warnings = {
         "allow_partial_export": bool(export_policy.get("allow_partial_export")),
         "missing_axis_identities": [],
+        "missing_axis_details": [],
         "uncovered_stations": [],
     }
     missing_axis_seen = set()
@@ -4884,6 +4878,16 @@ def _build_xxpipe_profile_data(
                 if identity not in missing_axis_seen:
                     missing_axis_seen.add(identity)
                     warnings["missing_axis_identities"].append(identity)
+                    warnings["missing_axis_details"].append(
+                        _resolve_xxpipe_warning_context(
+                            node,
+                            identity,
+                            station_mc,
+                            station_prefix,
+                            kind=missing_kind,
+                            warning_context_by_identity=warning_context_by_identity,
+                        )
+                    )
                 continue
             missing_axis.append({
                 "identity": identity,
@@ -4900,11 +4904,17 @@ def _build_xxpipe_profile_data(
             except Exception:
                 station_text = f"{station_mc:.3f}"
             if warnings["allow_partial_export"]:
-                warnings["uncovered_stations"].append({
-                    "identity": identity,
-                    "station_mc": station_mc,
-                    "station_text": station_text,
-                })
+                coverage_item = _resolve_xxpipe_warning_context(
+                    node,
+                    identity,
+                    station_mc,
+                    station_prefix,
+                    kind="coverage",
+                    warning_context_by_identity=warning_context_by_identity,
+                )
+                coverage_item["station_text"] = station_text
+                coverage_item["station_mc"] = station_mc
+                warnings["uncovered_stations"].append(coverage_item)
                 continue
             missing_axis.append({
                 "identity": f"{identity}@{station_text}",
@@ -4995,21 +5005,159 @@ def _build_xxpipe_profile_data(
 
 
 def _build_xxpipe_identity_rows(nodes):
+    return _build_xxpipe_identity_rows_with_context(nodes)
+
+
+def _format_xxpipe_station_text(station_mc, station_prefix):
+    """安全格式化 xx管 提示里使用的桩号文本。"""
+    try:
+        station_value = float(station_mc)
+    except (TypeError, ValueError):
+        return ""
+    if abs(station_value - round(station_value, 2)) <= 1e-9 and abs(station_value - round(station_value, 3)) <= 1e-9:
+        km = int(station_value / 1000)
+        meters = station_value % 1000
+        return f"{station_prefix}{km}+{meters:06.2f}"
+    try:
+        return ProjectSettings.format_station(station_value, station_prefix)
+    except Exception:
+        return f"{station_value:.3f}"
+
+
+def _collect_panel_xxpipe_route_import_targets(panel, nodes):
+    """读取连续承压整线导出所需的 route 上下文。"""
+    prepare_context = getattr(panel, "_prepare_pressure_pipe_dialog_context", None)
+    if not callable(prepare_context):
+        return {}
+
+    build_settings = getattr(panel, "_build_settings", None)
+    settings = None
+    if callable(build_settings):
+        try:
+            settings = build_settings()
+        except Exception:
+            settings = None
+
+    try:
+        dialog_context = prepare_context(nodes, settings=settings, show_xxpipe_warning=False)
+    except TypeError:
+        try:
+            dialog_context = prepare_context(nodes, settings=settings)
+        except Exception:
+            return {}
+    except Exception:
+        return {}
+
+    if not bool((dialog_context or {}).get("xxpipe_route_mode")):
+        return {}
+    route_import_targets = (dialog_context or {}).get("route_import_targets", {}) or {}
+    return route_import_targets if isinstance(route_import_targets, dict) else {}
+
+
+def _build_xxpipe_identity_rows_with_context(nodes, *, route_import_targets=None, station_prefix=""):
     rows = []
     seen = set()
-    for node in _iter_xxpipe_export_nodes(nodes):
+    route_context_by_row = {}
+    for route_key, payload in dict(route_import_targets or {}).items():
+        if not isinstance(payload, dict):
+            continue
+        route_key_text = str(route_key or "").strip()
+        route_display_name = str(payload.get("display_name", "") or route_key_text).strip()
+        route_station_prefix = str(payload.get("station_prefix", "") or station_prefix).strip()
+        for target in list(payload.get("targets", []) or []):
+            if not isinstance(target, dict):
+                continue
+            row_index = target.get("row_index")
+            if not isinstance(row_index, int):
+                continue
+            route_context_by_row.setdefault(
+                row_index,
+                {
+                    "route_key": route_key_text,
+                    "route_display_name": route_display_name,
+                    "node_label": str(target.get("label", "") or "").strip(),
+                    "station_text": _format_xxpipe_station_text(
+                        target.get("station_mc"),
+                        route_station_prefix,
+                    ),
+                },
+            )
+
+    for row_index, node in enumerate(list(nodes or [])):
+        if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+            continue
         identity = _make_xxpipe_identity_from_node(node)
         if identity in seen:
             continue
         seen.add(identity)
-        rows.append(
-            {
-                "name": getattr(node, "name", ""),
-                "flow_section": getattr(node, "flow_section", ""),
-                "identity": identity,
-            }
-        )
+        row = {
+            "name": getattr(node, "name", ""),
+            "flow_section": getattr(node, "flow_section", ""),
+            "identity": identity,
+        }
+        route_context = route_context_by_row.get(row_index) or {}
+        for key in ("route_key", "route_display_name", "node_label", "station_text"):
+            value = str(route_context.get(key, "") or "").strip()
+            if value:
+                row[key] = value
+        rows.append(row)
     return rows
+
+
+def _build_xxpipe_warning_context_by_identity(rows):
+    """按 identity 收集宽松提示所需的只读上下文。"""
+    context = {}
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        identity = str(row.get("identity", "") or "").strip()
+        if not identity:
+            continue
+        context[identity] = {
+            "identity": identity,
+            "station_text": str(row.get("station_text", "") or "").strip(),
+            "node_label": str(row.get("node_label", "") or "").strip(),
+            "route_display_name": str(row.get("route_display_name", "") or "").strip(),
+        }
+    return context
+
+
+def _resolve_xxpipe_warning_context(
+    node,
+    identity,
+    station_mc,
+    station_prefix,
+    *,
+    kind,
+    warning_context_by_identity=None,
+):
+    """拼装宽松导出提示所需的节点上下文。"""
+    context = {}
+    for candidate in [identity, *list(getattr(node, "_xxpipe_identity_candidates", []) or [])]:
+        candidate_text = str(candidate or "").strip()
+        if not candidate_text:
+            continue
+        context = dict((warning_context_by_identity or {}).get(candidate_text) or {})
+        if context:
+            break
+
+    station_text = str(context.get("station_text", "") or "").strip()
+    if not station_text:
+        station_text = _format_xxpipe_station_text(station_mc, station_prefix)
+
+    node_label = str(context.get("node_label", "") or "").strip()
+    if not node_label:
+        node_label = str(_get_node_ip_display_text(node) or "").strip()
+    if not node_label:
+        node_label = str(getattr(node, "name", "") or "").strip()
+
+    return {
+        "identity": str(identity or "").strip(),
+        "kind": str(kind or "").strip(),
+        "station_text": station_text,
+        "node_label": node_label,
+        "route_display_name": str(context.get("route_display_name", "") or "").strip(),
+    }
 
 
 def _get_panel_channel_level_text(panel):
@@ -5151,13 +5299,30 @@ def _build_panel_xxpipe_profile_data(
 ):
     draw_nodes = list(nodes or [])
     if lookup_rows is None:
-        row_source_nodes = draw_nodes if lookup_nodes is None else list(lookup_nodes or [])
-        rows = _build_xxpipe_identity_rows(row_source_nodes)
+        if lookup_nodes is None:
+            row_source_nodes = []
+            build_nodes_from_table = getattr(panel, "_build_nodes_from_table", None)
+            if callable(build_nodes_from_table):
+                try:
+                    row_source_nodes = list(build_nodes_from_table() or [])
+                except Exception:
+                    row_source_nodes = []
+            if not row_source_nodes:
+                row_source_nodes = draw_nodes
+        else:
+            row_source_nodes = list(lookup_nodes or [])
+        route_import_targets = _collect_panel_xxpipe_route_import_targets(panel, row_source_nodes)
+        rows = _build_xxpipe_identity_rows_with_context(
+            row_source_nodes,
+            route_import_targets=route_import_targets,
+            station_prefix=station_prefix,
+        )
     else:
         rows = [row for row in list(lookup_rows or []) if isinstance(row, dict)]
 
     longitudinal_nodes = _get_panel_pressure_pipe_longitudinal_nodes_for_export(panel, rows)
     manager_config = _get_panel_xxpipe_manager_config_by_identity(panel, rows)
+    warning_context_by_identity = _build_xxpipe_warning_context_by_identity(rows)
     if export_policy is None:
         export_policy = _normalize_xxpipe_export_policy()
         if not _is_xxpipe_channel_level(_get_panel_channel_level_text(panel)):
@@ -5174,6 +5339,7 @@ def _build_panel_xxpipe_profile_data(
         station_prefix=station_prefix,
         manager_config_by_identity=manager_config,
         export_policy=export_policy,
+        warning_context_by_identity=warning_context_by_identity,
     )
 
 
@@ -5202,6 +5368,46 @@ def _get_xxpipe_profile_warnings(xxpipe_profile_data):
     return warnings if isinstance(warnings, dict) else {}
 
 
+def _format_xxpipe_partial_warning_item(item):
+    """把 warning 明细转成用户可读文本，优先展示桩号和节点标签。"""
+    identity = str(item.get("identity", "") or "").strip()
+    station_text = str(item.get("station_text", "") or "").strip()
+    node_label = str(item.get("node_label", "") or "").strip()
+    route_display_name = str(item.get("route_display_name", "") or "").strip()
+
+    if station_text and node_label and route_display_name:
+        return f"{station_text}（{node_label}，{route_display_name}）"
+    if station_text and node_label:
+        return f"{station_text}（{node_label}）"
+    if station_text and route_display_name:
+        return f"{station_text}（{route_display_name}）"
+    if station_text and identity:
+        return f"{identity}@{station_text}"
+    if node_label and route_display_name:
+        return f"{node_label}（{route_display_name}）"
+    if node_label:
+        return node_label
+    if route_display_name:
+        return route_display_name
+    return identity
+
+
+def _build_xxpipe_partial_warning_preview(items, unit_suffix):
+    """拼接宽松提示预览文本。"""
+    preview_items = [
+        _format_xxpipe_partial_warning_item(item)
+        for item in list(items or [])
+        if isinstance(item, dict)
+    ]
+    preview_items = [text for text in preview_items if str(text or "").strip()]
+    if not preview_items:
+        return ""
+    preview = "；".join(preview_items[:6])
+    if len(preview_items) > 6:
+        preview += f" 等{len(preview_items)}{unit_suffix}"
+    return preview
+
+
 def _format_xxpipe_centerline_text(value, decimals, *, blank_when_none=False):
     """格式化 xx管 中心高程文本，宽松模式下允许真正留空。"""
     if value is None:
@@ -5222,34 +5428,75 @@ def _build_xxpipe_partial_export_notice(xxpipe_profile_data):
         for identity in (warnings.get("missing_axis_identities") or [])
         if str(identity or "").strip()
     ]
+    missing_axis_details = [
+        item
+        for item in list(warnings.get("missing_axis_details") or [])
+        if isinstance(item, dict)
+    ]
+    if not missing_axis_details and missing_axis:
+        missing_axis_details = [
+            {
+                "identity": identity,
+                "kind": "missing_longitudinal",
+            }
+            for identity in missing_axis
+        ]
     uncovered_stations = []
     for item in warnings.get("uncovered_stations") or []:
         if not isinstance(item, dict):
             continue
-        identity = str(item.get("identity") or "").strip()
-        station_text = str(item.get("station_text") or "").strip()
-        uncovered_stations.append(f"{identity}@{station_text}" if station_text else identity)
+        uncovered_stations.append({
+            "identity": str(item.get("identity") or "").strip(),
+            "station_text": str(item.get("station_text") or "").strip(),
+            "node_label": str(item.get("node_label") or "").strip(),
+            "route_display_name": str(item.get("route_display_name") or "").strip(),
+            "kind": "coverage",
+        })
 
-    if not missing_axis and not uncovered_stations:
+    if not missing_axis_details and not uncovered_stations:
         return ""
 
-    detail_lines = []
-    if missing_axis:
-        preview = "；".join(missing_axis[:6])
-        if len(missing_axis) > 6:
-            preview += f" 等{len(missing_axis)}条"
-        detail_lines.append(f"未导入纵断面轴线DXF的整线：{preview}")
-    if uncovered_stations:
-        preview = "；".join(uncovered_stations[:6])
-        if len(uncovered_stations) > 6:
-            preview += f" 等{len(uncovered_stations)}处"
-        detail_lines.append(f"已导入DXF但覆盖不全的桩号：{preview}。建议先清空后重新导入同一份纵断面DXF。")
+    missing_longitudinal_items = [
+        item
+        for item in missing_axis_details
+        if str(item.get("kind", "") or "").strip() == "missing_longitudinal"
+    ]
+    identity_mismatch_items = [
+        item
+        for item in missing_axis_details
+        if str(item.get("kind", "") or "").strip() == "identity_mismatch"
+    ]
 
-    return (
-        "本次导出已完成，但管中心高程存在空白。"
-        "请到表3有压管道水力计算中导入/补全纵断面轴线DXF；如果提示覆盖不全，请先清空后重新导入，再重新导出。\n"
-        + "\n".join(detail_lines)
-    )
+    detail_lines = []
+    if missing_longitudinal_items:
+        preview = _build_xxpipe_partial_warning_preview(missing_longitudinal_items, "处")
+        if preview:
+            detail_lines.append(f"以下位置还没有可用的纵断面轴线DXF：{preview}")
+    if identity_mismatch_items:
+        preview = _build_xxpipe_partial_warning_preview(identity_mismatch_items, "处")
+        if preview:
+            detail_lines.append(f"已导入纵断面DXF，但以下位置有个别节点未匹配，已留空：{preview}")
+    if uncovered_stations:
+        preview = _build_xxpipe_partial_warning_preview(uncovered_stations, "处")
+        if preview:
+            detail_lines.append(
+                f"已导入纵断面DXF，但以下桩号超出覆盖范围：{preview}。建议先清空后重新导入同一份纵断面DXF。"
+            )
+
+    if missing_longitudinal_items and not identity_mismatch_items and not uncovered_stations:
+        intro = "本次导出已完成，但仍有部分管中心高程留空。请到表3有压管道水力计算中导入纵断面轴线DXF；如果已经导入但仍有缺口，请补全后重新导出。"
+    elif identity_mismatch_items and not missing_longitudinal_items and not uncovered_stations:
+        intro = "本次导出已完成，已导入纵断面DXF，但有个别节点未匹配，已留空。"
+    elif uncovered_stations and not missing_longitudinal_items and not identity_mismatch_items:
+        intro = "本次导出已完成，已导入纵断面DXF，但有个别桩号超出覆盖范围。"
+    else:
+        intro = "本次导出已完成，但管中心高程仍有部分留空。"
+        if missing_longitudinal_items:
+            intro += "请到表3有压管道水力计算中导入/补全纵断面轴线DXF。"
+        elif uncovered_stations:
+            intro += "如果是覆盖不足，请先清空后重新导入同一份纵断面DXF。"
+
+    return intro + ("\n" + "\n".join(detail_lines) if detail_lines else "")
 
 
 def _show_xxpipe_partial_export_notice(parent, xxpipe_profile_data):
@@ -5262,9 +5509,10 @@ def _show_xxpipe_partial_export_notice(parent, xxpipe_profile_data):
 _TAIL_PRESSURE_SPLIT_GAP = 20.0
 
 
-def _resolve_tail_pressure_split_context(panel, nodes, station_prefix=""):
-    """识别“前渠道、末尾连续有压段”的双表导出上下文。"""
-    raw_nodes = list(nodes or [])
+def plan_tail_pressure_split(full_nodes, routes=None):
+    """规划“前渠道、末尾连续承压链”上下双表导出。"""
+    _ = routes
+    raw_nodes = list(full_nodes or [])
     if not raw_nodes:
         return None
 
@@ -5281,30 +5529,27 @@ def _resolve_tail_pressure_split_context(panel, nodes, station_prefix=""):
     if len(regular_entries) < 2:
         return None
 
-    tail_entries = []
-    for entry in reversed(regular_entries):
-        if _is_tail_pressure_split_core_structure(entry[2]):
-            tail_entries.append(entry)
+    first_tail_entry = None
+    for entry_index, entry in enumerate(regular_entries):
+        if not _is_tail_pressure_split_core_structure(entry[2]):
             continue
+        prefix_entries = regular_entries[:entry_index]
+        if not prefix_entries:
+            continue
+        if any(_is_tail_pressure_split_core_structure(prefix_entry[2]) for prefix_entry in prefix_entries):
+            continue
+        tail_entries = regular_entries[entry_index:]
+        if not tail_entries:
+            continue
+        if not all(_is_xxpipe_allowed_structure(tail_entry[2]) for tail_entry in tail_entries):
+            continue
+        first_tail_entry = entry
         break
-    if not tail_entries:
-        return None
-    tail_entries.reverse()
 
-    if len(tail_entries) == len(regular_entries):
-        return None
-    if not any(_is_tail_pressure_split_core_structure(entry[2]) for entry in tail_entries):
+    if first_tail_entry is None:
         return None
 
-    prefix_entries = regular_entries[: len(regular_entries) - len(tail_entries)]
-    if not prefix_entries:
-        return None
-    # 前段出现普通隧洞时，仍允许把末尾真正进入有压管的连续尾段单独拆表；
-    # 只有前段已经出现过真正的有压建筑物时，才认为不是“末尾首次进入有压”场景。
-    if any(_is_tail_pressure_split_core_structure(entry[2]) for entry in prefix_entries):
-        return None
-
-    first_tail_index = int(tail_entries[0][0])
+    first_tail_index = int(first_tail_entry[0])
     if first_tail_index <= 0:
         return None
 
@@ -5320,16 +5565,44 @@ def _resolve_tail_pressure_split_context(panel, nodes, station_prefix=""):
         return None
 
     tail_nodes = raw_nodes[first_tail_index:]
+    return {
+        "raw_nodes": raw_nodes,
+        "channel_nodes": channel_nodes,
+        "channel_valid_nodes": channel_valid_nodes,
+        "tail_route": None,
+        "tail_segments": tail_nodes,
+        "tail_lookup_nodes": raw_nodes,
+        "tail_export_mode": "xxpipe",
+        # 兼容现有调用方
+        "tail_nodes": tail_nodes,
+    }
+
+
+def _resolve_tail_pressure_split_segments(nodes):
+    """识别“前渠道、末尾连续有压段”的分表边界，不做额外取数。"""
+    return plan_tail_pressure_split(nodes)
+
+
+def _resolve_tail_pressure_split_context(panel, nodes, station_prefix=""):
+    """识别“前渠道、末尾连续有压段”的双表导出上下文。"""
+    split_plan = plan_tail_pressure_split(nodes)
+    if not split_plan:
+        return None
+    tail_nodes = split_plan["tail_segments"]
     xxpipe_profile_data = _build_panel_xxpipe_profile_data(
         panel,
         tail_nodes,
         station_prefix=station_prefix,
-        lookup_nodes=raw_nodes,
+        lookup_nodes=split_plan["tail_lookup_nodes"],
     )
     return {
-        "channel_nodes": channel_nodes,
-        "channel_valid_nodes": channel_valid_nodes,
+        "channel_nodes": split_plan["channel_nodes"],
+        "channel_valid_nodes": split_plan["channel_valid_nodes"],
         "tail_nodes": tail_nodes,
+        "tail_route": split_plan.get("tail_route"),
+        "tail_segments": tail_nodes,
+        "tail_lookup_nodes": split_plan.get("tail_lookup_nodes", []),
+        "tail_export_mode": split_plan.get("tail_export_mode", "xxpipe"),
         "xxpipe_profile_data": xxpipe_profile_data,
     }
 
@@ -7845,12 +8118,15 @@ def export_longitudinal_profile_txt(panel):
         fluent_info(panel.window(), "警告", "没有数据可导出")
         return
 
+    tail_pressure_split_needed = False
+
     if export_mode == "xxpipe":
         nodes = _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=nodes)
         if not nodes:
             fluent_info(panel.window(), "警告", "没有可用于 xx管 纵断面导出的节点数据。")
             return
         valid_nodes = list(nodes)
+        tail_pressure_split_needed = _resolve_tail_pressure_split_segments(nodes) is not None
     else:
         valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
         if not valid_nodes:
@@ -7860,7 +8136,7 @@ def export_longitudinal_profile_txt(panel):
     dlg = TextExportSettingsDialog(
         panel.window(),
         panel._text_export_settings,
-        mode=export_mode or "standard",
+        mode="standard" if tail_pressure_split_needed else (export_mode or "standard"),
     )
     if dlg.exec() != QDialog.Accepted or dlg.result is None:
         return
@@ -8329,18 +8605,28 @@ def export_longitudinal_profile_dxf(panel):
         return
 
     export_mode = "xxpipe" if _is_panel_xxpipe_mode(panel) else None
-    nodes = panel.calculated_nodes
-    if not nodes:
+    all_nodes = list(panel.calculated_nodes or [])
+    if not all_nodes:
         fluent_info(panel.window(), "警告", "没有数据可导出")
         return
 
+    tail_pressure_split_needed = False
+    tail_pressure_split_plan = None
+
     if export_mode == "xxpipe":
-        nodes = _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=nodes)
-        if not nodes:
-            fluent_info(panel.window(), "警告", "没有可用于 xx管 纵断面导出的节点数据。")
-            return
-        valid_nodes = list(nodes)
+        tail_pressure_split_plan = plan_tail_pressure_split(all_nodes)
+        tail_pressure_split_needed = tail_pressure_split_plan is not None
+        if tail_pressure_split_needed:
+            nodes = list(all_nodes)
+            valid_nodes = list(nodes)
+        else:
+            nodes = _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=all_nodes)
+            if not nodes:
+                fluent_info(panel.window(), "警告", "没有可用于 xx管 纵断面导出的节点数据。")
+                return
+            valid_nodes = list(nodes)
     else:
+        nodes = list(all_nodes)
         valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
         if not valid_nodes:
             fluent_info(panel.window(), "警告", "没有可用的高程数据，请先执行计算。")
@@ -8350,7 +8636,7 @@ def export_longitudinal_profile_dxf(panel):
     dlg = TextExportSettingsDialog(
         panel.window(),
         panel._text_export_settings,
-        mode=export_mode or "standard",
+        mode="standard" if tail_pressure_split_needed else (export_mode or "standard"),
     )
     if dlg.exec() != QDialog.Accepted or dlg.result is None:
         return
@@ -8386,7 +8672,7 @@ def export_longitudinal_profile_dxf(panel):
             valid_nodes,
             settings,
             file_path,
-            export_mode=export_mode,
+            export_mode=None if tail_pressure_split_needed else export_mode,
         )
         return
 
@@ -8400,12 +8686,31 @@ def export_longitudinal_profile_dxf(panel):
         xxpipe_profile_data = None
         tail_pressure_split_context = None
         if export_mode == "xxpipe":
-            xxpipe_profile_data = _build_panel_xxpipe_profile_data(panel, nodes, station_prefix=station_prefix)
+            if tail_pressure_split_needed:
+                try:
+                    tail_pressure_split_context = _resolve_tail_pressure_split_context(
+                        panel,
+                        all_nodes,
+                        station_prefix=station_prefix,
+                    )
+                except Exception as exc:
+                    friendly_message = _translate_xxpipe_export_error(exc)
+                    if friendly_message:
+                        fluent_error(panel.window(), "导出失败", friendly_message)
+                        return
+                    raise
+            if not tail_pressure_split_context:
+                xxpipe_profile_data = _build_panel_xxpipe_profile_data(
+                    panel,
+                    nodes,
+                    station_prefix=station_prefix,
+                    lookup_nodes=all_nodes,
+                )
         else:
             try:
                 tail_pressure_split_context = _resolve_tail_pressure_split_context(
                     panel,
-                    nodes,
+                    all_nodes,
                     station_prefix=station_prefix,
                 )
             except Exception as exc:
@@ -8480,7 +8785,12 @@ def _export_xxpipe_longitudinal_txt_to_path(
     first_col_x_offset = text_height + 1.3
 
     if xxpipe_profile_data is None:
-        xxpipe_profile_data = _build_panel_xxpipe_profile_data(panel, nodes, station_prefix=station_prefix)
+        xxpipe_profile_data = _build_panel_xxpipe_profile_data(
+            panel,
+            nodes,
+            station_prefix=station_prefix,
+            lookup_nodes=None,
+        )
 
     profile_text_nodes = list(xxpipe_profile_data.get("profile_text_nodes", []) or [])
     if not profile_text_nodes:
@@ -9833,18 +10143,25 @@ def export_combined_dxf(panel):
         return
 
     export_mode = "xxpipe" if _is_panel_xxpipe_mode(panel) else None
-    nodes = panel.calculated_nodes
+    nodes = list(panel.calculated_nodes or [])
     if not nodes:
         fluent_info(parent_window, "警告", "没有数据可导出，请先执行计算")
         return
 
     xxpipe_profile_nodes = None
+    tail_pressure_split_plan = None
     if export_mode == "xxpipe":
-        xxpipe_profile_nodes = _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=nodes)
-        if not xxpipe_profile_nodes:
-            fluent_info(parent_window, "警告", "没有可用于 xx管 纵断面导出的节点数据。")
-            return
-        valid_nodes = list(xxpipe_profile_nodes)
+        summary_nodes, summary_nodes_source = _resolve_section_summary_source_nodes(panel, fallback_nodes=nodes)
+        _record_section_summary_runtime_debug(panel, summary_nodes, summary_nodes_source)
+        tail_pressure_split_plan = plan_tail_pressure_split(summary_nodes)
+        if tail_pressure_split_plan:
+            valid_nodes = list(summary_nodes)
+        else:
+            xxpipe_profile_nodes = _resolve_xxpipe_export_source_nodes(panel, fallback_nodes=summary_nodes)
+            if not xxpipe_profile_nodes:
+                fluent_info(parent_window, "警告", "没有可用于 xx管 纵断面导出的节点数据。")
+                return
+            valid_nodes = list(xxpipe_profile_nodes)
     else:
         valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
         if not valid_nodes:
@@ -9859,7 +10176,7 @@ def export_combined_dxf(panel):
     dlg = TextExportSettingsDialog(
         parent_window,
         panel._text_export_settings,
-        mode=export_mode or "standard",
+        mode="standard" if tail_pressure_split_plan else (export_mode or "standard"),
     )
     if dlg.exec() != QDialog.Accepted or dlg.result is None:
         return
@@ -9873,9 +10190,13 @@ def export_combined_dxf(panel):
     except Exception:
         proj_settings = None
         station_prefix = ""
-    summary_nodes, summary_nodes_source = _resolve_section_summary_source_nodes(panel, fallback_nodes=nodes)
-    _record_section_summary_runtime_debug(panel, summary_nodes, summary_nodes_source)
-    profile_nodes = xxpipe_profile_nodes if export_mode == "xxpipe" else nodes
+    if export_mode == "xxpipe":
+        profile_snapshot_nodes = summary_nodes
+    else:
+        summary_nodes, summary_nodes_source = _resolve_section_summary_source_nodes(panel, fallback_nodes=nodes)
+        _record_section_summary_runtime_debug(panel, summary_nodes, summary_nodes_source)
+        profile_snapshot_nodes = nodes
+    profile_nodes = profile_snapshot_nodes if tail_pressure_split_plan else (xxpipe_profile_nodes if export_mode == "xxpipe" else nodes)
     profile_valid_nodes = profile_nodes if export_mode == "xxpipe" else valid_nodes
     ip_source_nodes = summary_nodes if export_mode == "xxpipe" else nodes
     xxpipe_profile_data = None
@@ -9885,7 +10206,19 @@ def export_combined_dxf(panel):
             fluent_info(parent_window, "警告", "没有可用于 xx管 纵断面导出的节点数据。")
             return
         try:
-            xxpipe_profile_data = _build_panel_xxpipe_profile_data(panel, profile_nodes, station_prefix=station_prefix)
+            if tail_pressure_split_plan:
+                tail_pressure_split_context = _resolve_tail_pressure_split_context(
+                    panel,
+                    profile_snapshot_nodes,
+                    station_prefix=station_prefix,
+                )
+            if not tail_pressure_split_context:
+                xxpipe_profile_data = _build_panel_xxpipe_profile_data(
+                    panel,
+                    profile_nodes,
+                    station_prefix=station_prefix,
+                    lookup_nodes=profile_snapshot_nodes,
+                )
         except Exception as exc:
             friendly_message = _translate_xxpipe_export_error(exc)
             if friendly_message:
@@ -9896,7 +10229,7 @@ def export_combined_dxf(panel):
         try:
             tail_pressure_split_context = _resolve_tail_pressure_split_context(
                 panel,
-                profile_nodes,
+                nodes,
                 station_prefix=station_prefix,
             )
         except Exception as exc:

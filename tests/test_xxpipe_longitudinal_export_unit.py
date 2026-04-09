@@ -491,7 +491,150 @@ def test_build_panel_xxpipe_profile_data_tail_split_lookup_nodes_restore_centerl
     assert any("flow1-row10" in identities for identities in captured_identities)
 
 
-def test_resolve_tail_pressure_split_context_returns_none_when_tail_tunnel_and_pressure_interleave(monkeypatch):
+def test_build_panel_xxpipe_profile_data_uses_panel_table_nodes_as_default_lookup_source():
+    channel_nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="明渠1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=50.0, structure="明渠-矩形", name="明渠2", bottom_elevation=409.2),
+        _make_node(
+            ip_no=3,
+            mc=100.0,
+            structure="隧洞-圆形",
+            name="猴子山隧洞",
+            in_out="出",
+            row_identity="flow1-row10",
+            bottom_elevation=408.8,
+        ),
+    ]
+    tail_nodes = [
+        _make_node(
+            ip_no=4,
+            mc=150.0,
+            structure="有压管道",
+            name="末端压力管",
+            in_out="进",
+            row_identity="flow1-row11",
+            bottom_elevation=407.1,
+        ),
+        _make_node(
+            ip_no=5,
+            mc=200.0,
+            structure="有压管道",
+            name="末端压力管",
+            in_out="出",
+            row_identity="flow1-row12",
+            bottom_elevation=405.9,
+        ),
+    ]
+    all_nodes = channel_nodes + tail_nodes
+    captured_identities = []
+
+    panel = _Panel("")
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支渠")
+    panel._build_nodes_from_table = lambda: list(all_nodes)
+    panel.get_pressure_pipe_longitudinal_nodes_for_export = lambda rows=None: (
+        captured_identities.append([str((row or {}).get("identity", "") or "") for row in (rows or [])])
+        or (
+            {
+                "flow1-row11": [
+                    {"chainage": 100.0, "elevation": 100.0, "turn_type": "无"},
+                    {"chainage": 200.0, "elevation": 90.0, "turn_type": "无"},
+                ],
+                "flow1-row12": [
+                    {"chainage": 100.0, "elevation": 100.0, "turn_type": "无"},
+                    {"chainage": 200.0, "elevation": 90.0, "turn_type": "无"},
+                ],
+            }
+            if any(identity == "flow1-row10" for identity in captured_identities[-1])
+            else {}
+        )
+    )
+    panel._pressure_pipe_manager = SimpleNamespace(to_dict=lambda: {"pipes": {}})
+
+    result = cad_tools._build_panel_xxpipe_profile_data(
+        panel,
+        tail_nodes,
+        station_prefix="",
+    )
+
+    assert [record["identity"] for record in result["centerline_records"]] == ["flow1-row11", "flow1-row12"]
+    assert any("flow1-row10" in identities for identities in captured_identities)
+
+
+def test_build_panel_xxpipe_profile_data_passes_route_metadata_into_lookup_rows(monkeypatch):
+    nodes = [
+        _make_node(
+            ip_no=73,
+            mc=3968.95,
+            structure="有压管道",
+            name="苟家湾",
+            in_out="进",
+            row_identity="flow1-row73",
+        )
+    ]
+    captured = {}
+
+    panel = _Panel("赛支")
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支渠")
+    panel._prepare_pressure_pipe_dialog_context = lambda current_nodes, settings=None, show_xxpipe_warning=False: {
+        "xxpipe_route_mode": True,
+        "route_import_targets": {
+            "flow1-route1": {
+                "display_name": "赛金连续整线",
+                "targets": [
+                    {
+                        "row_index": 0,
+                        "label": "苟家湾压进",
+                        "station_mc": 3968.95,
+                    }
+                ],
+                "nodes": list(current_nodes),
+            }
+        },
+    }
+    panel.get_pressure_pipe_longitudinal_nodes_for_export = lambda rows=None: (
+        captured.setdefault("rows", [dict(row) for row in (rows or [])]) or {}
+    )
+    panel._pressure_pipe_manager = SimpleNamespace(to_dict=lambda: {"pipes": {}})
+
+    monkeypatch.setattr(
+        cad_tools,
+        "_build_xxpipe_profile_data",
+        lambda *_a, **_k: {
+            "profile_text_nodes": list(nodes),
+            "centerline_records": [],
+            "centerline_points": [],
+            "ip_records": [],
+            "building_segments": [],
+            "material_segments": [],
+            "warnings": {
+                "allow_partial_export": True,
+                "missing_axis_identities": [],
+                "uncovered_stations": [],
+            },
+        },
+    )
+
+    cad_tools._build_panel_xxpipe_profile_data(
+        panel,
+        nodes,
+        station_prefix="赛支",
+        lookup_nodes=nodes,
+    )
+
+    assert captured["rows"] == [
+        {
+            "name": "苟家湾",
+            "flow_section": "1",
+            "identity": "flow1-row73",
+            "route_key": "flow1-route1",
+            "route_display_name": "赛金连续整线",
+            "node_label": "苟家湾压进",
+            "station_text": "赛支3+968.95",
+        }
+    ]
+
+
+def test_resolve_tail_pressure_split_context_keeps_post_pressure_tunnel_in_lower_table(monkeypatch):
     nodes = [
         _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="明渠1", bottom_elevation=410.0),
         _make_node(ip_no=2, mc=40.0, structure="隧洞-圆拱直墙型", name="前段隧洞", bottom_elevation=409.5),
@@ -499,18 +642,52 @@ def test_resolve_tail_pressure_split_context_returns_none_when_tail_tunnel_and_p
         _make_node(ip_no=4, mc=120.0, structure="隧洞-圆拱直墙型", name="交错隧洞", bottom_elevation=408.6),
         _make_node(ip_no=5, mc=160.0, structure="顶管", name="压力段2", in_out="出", bottom_elevation=408.1),
     ]
-    called = {"value": False}
+    captured = {}
 
-    def _unexpected_build(*_args, **_kwargs):
-        called["value"] = True
+    def _capture_build(_panel, part_nodes, station_prefix="", **_kwargs):
+        captured["tail_nodes"] = list(part_nodes)
+        captured["station_prefix"] = station_prefix
         return {}
 
-    monkeypatch.setattr(cad_tools, "_build_panel_xxpipe_profile_data", _unexpected_build)
+    monkeypatch.setattr(cad_tools, "_build_panel_xxpipe_profile_data", _capture_build)
 
     context = cad_tools._resolve_tail_pressure_split_context(_Panel(""), nodes, station_prefix="")
 
-    assert context is None
-    assert called["value"] is False
+    assert context is not None
+    assert [node.station_MC for node in context["channel_nodes"]] == pytest.approx([0.0, 40.0])
+    assert [node.station_MC for node in context["tail_nodes"]] == pytest.approx([80.0, 120.0, 160.0])
+    assert [node.station_MC for node in captured["tail_nodes"]] == pytest.approx([80.0, 120.0, 160.0])
+
+
+def test_plan_tail_pressure_split_uses_full_nodes_and_keeps_tunnel_side_correct():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="明渠1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=40.0, structure="隧洞-圆拱直墙型", name="前段隧洞", bottom_elevation=409.5),
+        _make_node(ip_no=3, mc=80.0, structure="有压管道", name="苟家湾", in_out="进", bottom_elevation=409.0),
+        _make_node(ip_no=4, mc=120.0, structure="定向钻", name="大石包", bottom_elevation=408.6),
+        _make_node(ip_no=5, mc=160.0, structure="隧洞-圆拱直墙型", name="后段隧洞", bottom_elevation=408.1),
+        _make_node(ip_no=6, mc=200.0, structure="有压管道", name="苟家湾", in_out="出", bottom_elevation=407.8),
+    ]
+
+    plan = cad_tools.plan_tail_pressure_split(nodes)
+
+    assert plan is not None
+    assert [node.station_MC for node in plan["channel_nodes"]] == pytest.approx([0.0, 40.0])
+    assert [node.station_MC for node in plan["channel_valid_nodes"]] == pytest.approx([0.0, 40.0])
+    assert [node.station_MC for node in plan["tail_nodes"]] == pytest.approx([80.0, 120.0, 160.0, 200.0])
+    assert [node.station_MC for node in plan["tail_lookup_nodes"]] == pytest.approx([0.0, 40.0, 80.0, 120.0, 160.0, 200.0])
+    assert plan["tail_export_mode"] == "xxpipe"
+
+
+def test_plan_tail_pressure_split_returns_none_for_pretrimmed_route_nodes():
+    route_nodes = [
+        _make_node(ip_no=3, mc=80.0, structure="有压管道", name="苟家湾", in_out="进", bottom_elevation=409.0),
+        _make_node(ip_no=4, mc=120.0, structure="定向钻", name="大石包", bottom_elevation=408.6),
+        _make_node(ip_no=5, mc=160.0, structure="隧洞-圆拱直墙型", name="后段隧洞", bottom_elevation=408.1),
+        _make_node(ip_no=6, mc=200.0, structure="有压管道", name="苟家湾", in_out="出", bottom_elevation=407.8),
+    ]
+
+    assert cad_tools.plan_tail_pressure_split(route_nodes) is None
 
 
 @pytest.fixture
@@ -713,7 +890,7 @@ def test_draw_profile_on_msp_in_xxpipe_mode_uses_centerline_polyline_only(monkey
     assert "（千米+米）" in texts
     assert "管中心线高程（米）" in texts
     assert "管材（管径）" in texts
-    assert "穿路段定向钻" in texts
+    assert "穿路段" in texts
     assert "球墨铸铁管 DN1200" in texts
     assert "0+000.00" in texts
     assert "0+050.00" in texts
@@ -743,7 +920,7 @@ def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_
     content = out_file.read_text(encoding="utf-8")
     assert "管中心线高程（米）" in content
     assert "球墨铸铁管 DN1200" in content
-    assert "穿路段定向钻" in content
+    assert "穿路段" in content
     assert "渠底高程" not in content
     assert "设计水位" not in content
     assert "0+000.00" in content
@@ -980,6 +1157,7 @@ def test_xxpipe_export_entries_use_filtered_route_nodes_in_xxqu_route_mode(
 
     monkeypatch.setattr(cad_tools, "MODELS_AVAILABLE", True)
     monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "plan_tail_pressure_split", lambda *_a, **_k: None)
     monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _Dialog)
     monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
     monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
@@ -1051,6 +1229,33 @@ def test_build_xxpipe_partial_export_notice_prompts_clear_then_reimport_for_unco
     assert "1::三清庙@1+000.000" in notice
 
 
+def test_build_xxpipe_partial_export_notice_describes_identity_mismatch_as_partial_blank():
+    notice = cad_tools._build_xxpipe_partial_export_notice(
+        {
+            "warnings": {
+                "allow_partial_export": True,
+                "missing_axis_identities": ["flow1-row73"],
+                "missing_axis_details": [
+                    {
+                        "identity": "flow1-row73",
+                        "kind": "identity_mismatch",
+                        "station_text": "赛支3+968.95",
+                        "node_label": "苟家湾压进",
+                        "route_display_name": "赛金连续整线",
+                    }
+                ],
+                "uncovered_stations": [],
+            },
+        }
+    )
+
+    assert "已导入纵断面DXF" in notice
+    assert "个别节点未匹配" in notice
+    assert "赛支3+968.95" in notice
+    assert "苟家湾压进" in notice
+    assert "flow1-row73" not in notice
+
+
 def test_build_xxpipe_profile_data_supports_tunnel_structures_with_bottom_elevation_and_section_text():
     nodes = [
         _make_node(
@@ -1095,7 +1300,7 @@ def test_build_xxpipe_profile_data_supports_tunnel_structures_with_bottom_elevat
     )
 
     assert [record["elevation"] for record in data["centerline_records"]] == pytest.approx([98.2, 93.7, 89.1])
-    assert [segment["text"] for segment in data["building_segments"]] == ["穿山段隧洞-圆形"]
+    assert [segment["text"] for segment in data["building_segments"]] == ["穿山段"]
     assert [segment["text"] for segment in data["material_segments"]] == ["圆形隧洞 D=2.4m"]
 
 
@@ -1297,6 +1502,130 @@ def test_build_xxpipe_profile_data_uses_relaxed_plain_pipe_building_name_rules(
     )
 
     assert [segment["text"] for segment in data["building_segments"]] == [expected_text]
+
+
+def test_build_xxpipe_profile_data_merges_saijin_building_name_segments_for_centered_labels():
+    nodes = [
+        _make_node(
+            ip_no=73,
+            mc=3968.95,
+            structure="有压管道",
+            name="苟家湾",
+            in_out="进",
+            row_identity="flow1-row73",
+        ),
+        _make_node(
+            ip_no=74,
+            mc=3971.87,
+            structure="定向钻",
+            name="大石包",
+            in_out="进",
+            row_identity="flow1-row74",
+        ),
+        _make_node(
+            ip_no=75,
+            mc=4366.58,
+            structure="定向钻",
+            name="大石包",
+            in_out="出",
+            row_identity="flow1-row75",
+        ),
+        _make_node(
+            ip_no=76,
+            mc=4431.26,
+            structure="有压管道",
+            name="苟家湾",
+            in_out="进",
+            row_identity="flow1-row76",
+        ),
+        _make_node(
+            ip_no=77,
+            mc=4693.42,
+            structure="有压管道",
+            name="苟家湾",
+            in_out="出",
+            row_identity="flow1-row77",
+        ),
+    ]
+
+    data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        {},
+        station_prefix="赛支",
+        export_policy={
+            "allow_partial_export": True,
+            "show_plain_pipe_name": True,
+        },
+    )
+
+    assert [segment["text"] for segment in data["building_segments"]] == [
+        "苟家湾",
+        "大石包",
+        "苟家湾",
+    ]
+    assert data["building_segments"][1]["start_mc"] == pytest.approx(3971.87)
+    assert data["building_segments"][1]["end_mc"] == pytest.approx(4366.58)
+    assert data["building_segments"][1]["mid_mc"] == pytest.approx((3971.87 + 4366.58) / 2.0)
+
+
+def test_build_xxpipe_profile_data_merges_saijin_named_structure_material_segment_once():
+    nodes = [
+        _make_node(
+            ip_no=73,
+            mc=3968.95,
+            structure="有压管道",
+            name="苟家湾",
+            in_out="进",
+            row_identity="flow1-row73",
+        ),
+        _make_node(
+            ip_no=74,
+            mc=3971.87,
+            structure="定向钻",
+            name="大石包",
+            in_out="进",
+            row_identity="flow1-row74",
+        ),
+        _make_node(
+            ip_no=75,
+            mc=4366.58,
+            structure="定向钻",
+            name="大石包",
+            in_out="出",
+            row_identity="flow1-row75",
+        ),
+        _make_node(
+            ip_no=76,
+            mc=4431.26,
+            structure="有压管道",
+            name="苟家湾",
+            in_out="进",
+            row_identity="flow1-row76",
+        ),
+        _make_node(
+            ip_no=77,
+            mc=4693.42,
+            structure="有压管道",
+            name="苟家湾",
+            in_out="出",
+            row_identity="flow1-row77",
+        ),
+    ]
+
+    data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        {},
+        station_prefix="赛支",
+        export_policy={
+            "allow_partial_export": True,
+            "show_plain_pipe_name": True,
+        },
+    )
+
+    assert len(data["material_segments"]) == 3
+    assert data["material_segments"][1]["start_mc"] == pytest.approx(3971.87)
+    assert data["material_segments"][1]["end_mc"] == pytest.approx(4366.58)
+    assert data["material_segments"][1]["mid_mc"] == pytest.approx((3971.87 + 4366.58) / 2.0)
 
 
 def test_draw_profile_on_msp_leaves_centerline_text_blank_when_relaxed_xxqu_axis_missing():
@@ -1664,6 +1993,90 @@ def test_export_longitudinal_profile_dxf_uses_tail_pressure_split_helper_in_stan
     assert docs["doc"].saved_path == str(out_file)
     assert not errors
     assert captured["used_split_helper"] is True
+
+
+def test_export_longitudinal_profile_dxf_prefers_tail_split_for_xxqu_mixed_tail(local_tmp_path, monkeypatch):
+    nodes = _mixed_tail_nodes()
+    out_file = local_tmp_path / "mixed_tail_prefers_split.dxf"
+    docs = {}
+    captured = {"single_profile_called": False}
+
+    class _Dialog:
+        def __init__(self, *_args, **kwargs):
+            captured["mode"] = kwargs.get("mode")
+            self.result = {}
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    class _FakeDoc:
+        def __init__(self):
+            self.saved_path = None
+            self._msp = object()
+
+        def modelspace(self):
+            return self._msp
+
+        def saveas(self, path):
+            self.saved_path = path
+
+    def _fake_new(_version):
+        doc = _FakeDoc()
+        docs["doc"] = doc
+        return doc
+
+    panel = SimpleNamespace(
+        calculated_nodes=list(nodes),
+        _text_export_settings={},
+        channel_name_edit=SimpleNamespace(text=lambda: "赛金"),
+        channel_level_combo=SimpleNamespace(currentText=lambda: "支渠"),
+    )
+    panel.window = lambda: None
+    panel._build_settings = lambda: _ProjSettings("")
+
+    monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(new=_fake_new))
+    monkeypatch.setattr(cad_tools, "MODELS_AVAILABLE", True)
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _Dialog)
+    monkeypatch.setattr(cad_tools, "_setup_profile_dxf_document", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_ensure_profile_layers", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        cad_tools.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_a, **_k: (str(out_file), "DXF")),
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_resolve_tail_pressure_split_context",
+        lambda *_a, **_k: {
+            "channel_nodes": nodes[:3],
+            "channel_valid_nodes": nodes[:3],
+            "tail_nodes": nodes[3:],
+            "xxpipe_profile_data": {"profile_text_nodes": nodes[3:]},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_tail_pressure_split_profile_on_msp",
+        lambda *_a, **_k: captured.update({"tail_split_called": True}) or (260.0, 180.0),
+        raising=False,
+    )
+
+    def _unexpected_draw_profile(*_a, **_k):
+        captured["single_profile_called"] = True
+        return 240.0, 120.0
+
+    monkeypatch.setattr(cad_tools, "_draw_profile_on_msp", _unexpected_draw_profile)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+
+    cad_tools.export_longitudinal_profile_dxf(panel)
+
+    assert docs["doc"].saved_path == str(out_file)
+    assert captured["mode"] == "standard"
+    assert captured["tail_split_called"] is True
+    assert captured["single_profile_called"] is False
 
 
 def test_export_longitudinal_profile_dxf_keeps_xxpipe_branch_without_tail_split_detection(local_tmp_path, monkeypatch):

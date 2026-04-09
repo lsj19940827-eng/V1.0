@@ -589,7 +589,7 @@ def test_export_combined_dxf_uses_xxpipe_profile_branch_and_current_snapshot(mon
     assert captured["ip_nodes"] is current_nodes
 
 
-def test_export_combined_dxf_filters_profile_nodes_before_xxpipe_validation_in_xxqu_route_mode(monkeypatch):
+def test_export_combined_dxf_prefers_tail_split_before_xxpipe_route_export_in_xxqu_mode(monkeypatch):
     docs = _patch_common(monkeypatch)
     captured = {}
 
@@ -598,6 +598,7 @@ def test_export_combined_dxf_filters_profile_nodes_before_xxpipe_validation_in_x
             _ = panel
             captured["dialog_nodes"] = nodes
             captured["config_only"] = config_only
+            captured["dialog_mode"] = "standard"
 
         def exec(self):
             return cad_tools.QDialog.Accepted
@@ -647,6 +648,7 @@ def test_export_combined_dxf_filters_profile_nodes_before_xxpipe_validation_in_x
 
     panel = _build_panel(name="赛金", structure_type="有压管道")
     panel.calculated_nodes = list(mixed_nodes)
+    panel._build_nodes_from_table = lambda: list(mixed_nodes)
     panel.channel_level_combo = _ComboStub("支渠")
 
     monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
@@ -654,23 +656,37 @@ def test_export_combined_dxf_filters_profile_nodes_before_xxpipe_validation_in_x
     monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
     monkeypatch.setattr(
         cad_tools,
-        "_resolve_section_summary_source_nodes",
-        lambda *_a, **_k: (mixed_nodes, "current_table_snapshot"),
+        "TextExportSettingsDialog",
+        type(
+            "_Dialog",
+            (),
+            {
+                "__init__": lambda self, *_a, **kwargs: captured.update({"dialog_mode": kwargs.get("mode")}) or setattr(self, "result", {}),
+                "exec": lambda self: cad_tools.QDialog.Accepted,
+            },
+        ),
     )
     monkeypatch.setattr(
         cad_tools,
-        "_resolve_xxpipe_export_source_nodes",
-        lambda *_a, **_k: list(route_nodes),
-    )
-    monkeypatch.setattr(
-        cad_tools,
-        "_build_panel_xxpipe_profile_data",
-        lambda _panel, nodes, **_k: captured.update({"profile_nodes": nodes}) or {"profile_text_nodes": list(nodes)},
+        "_resolve_tail_pressure_split_context",
+        lambda *_a, **_k: {
+            "channel_nodes": [mixed_nodes[0]],
+            "channel_valid_nodes": [mixed_nodes[0]],
+            "tail_nodes": list(route_nodes),
+            "xxpipe_profile_data": {"profile_text_nodes": list(route_nodes)},
+        },
+        raising=False,
     )
     monkeypatch.setattr(
         cad_tools,
         "_draw_profile_on_msp",
-        lambda *_a, **kwargs: captured.update({"export_mode": kwargs.get("export_mode")}) or (240.0, 120.0),
+        lambda *_a, **_k: captured.update({"single_profile_called": True}) or (240.0, 120.0),
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_tail_pressure_split_profile_on_msp",
+        lambda *_a, **_k: captured.update({"tail_nodes": list(_a[3]), "tail_split_called": True}) or (240.0, 180.0),
+        raising=False,
     )
     monkeypatch.setattr(
         cad_tools,
@@ -690,10 +706,73 @@ def test_export_combined_dxf_filters_profile_nodes_before_xxpipe_validation_in_x
 
     assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
     assert captured["config_only"] is True
-    assert captured["dialog_nodes"] is mixed_nodes
-    assert captured["summary_nodes"] is mixed_nodes
-    assert captured["profile_nodes"] == route_nodes
-    assert captured["export_mode"] == "xxpipe"
+    assert [node.name for node in captured["dialog_nodes"]] == [node.name for node in mixed_nodes]
+    assert [node.name for node in captured["summary_nodes"]] == [node.name for node in mixed_nodes]
+    assert captured["dialog_mode"] == "standard"
+    assert captured["tail_nodes"] == route_nodes
+    assert captured["tail_split_called"] is True
+    assert captured.get("single_profile_called") is not True
+
+
+def test_resolve_xxpipe_export_source_nodes_returns_filtered_route_nodes_in_xxqu_route_mode():
+    mixed_nodes = [
+        SimpleNamespace(
+            station_MC=0.0,
+            structure_type=SimpleNamespace(value="明渠-圆形"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            name="渠道段",
+        ),
+        SimpleNamespace(
+            station_MC=20.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            is_transition=True,
+            is_auto_inserted_channel=False,
+            name="过渡段",
+        ),
+        SimpleNamespace(
+            station_MC=100.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            name="苟家湾",
+        ),
+        SimpleNamespace(
+            station_MC=110.0,
+            structure_type=SimpleNamespace(value="定向钻"),
+            is_transition=False,
+            is_auto_inserted_channel=True,
+            name="自动补点",
+        ),
+        SimpleNamespace(
+            station_MC=120.0,
+            structure_type=SimpleNamespace(value="定向钻"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            name="大石包",
+        ),
+    ]
+    panel = _build_panel(name="赛金", structure_type="有压管道")
+    panel.calculated_nodes = list(mixed_nodes)
+    panel._build_nodes_from_table = lambda: list(mixed_nodes)
+    panel.channel_level_combo = _ComboStub("支渠")
+    panel._prepare_pressure_pipe_dialog_context = lambda nodes, settings=None, show_xxpipe_warning=False: {
+        "xxpipe_route_mode": True,
+        "route_import_targets": {
+            "flow1-route2": {
+                "nodes": [nodes[4], nodes[3]],
+                "targets": [{"row_index": 4}, {"row_index": 3}],
+            },
+            "flow1-route1": {
+                "nodes": [nodes[2], nodes[1], nodes[2]],
+                "targets": [{"row_index": 2}, {"row_index": 1}, {"row_index": 2}],
+            },
+        },
+    }
+
+    resolved = cad_tools._resolve_xxpipe_export_source_nodes(panel, fallback_nodes=panel.calculated_nodes)
+
+    assert resolved == [mixed_nodes[2], mixed_nodes[4]]
 
 
 def test_export_combined_dxf_pushes_summary_below_tail_pressure_split_profile(monkeypatch):
