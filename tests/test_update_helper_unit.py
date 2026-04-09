@@ -152,3 +152,70 @@ def test_update_helper_shows_patch_validation_progress_text(monkeypatch):
     assert "正在校验补丁适用性（2/5）" in window.status_label.text()
     assert "正在校验补丁适用性（2/5）" in window.detail_text.toPlainText()
     window.close()
+
+
+def test_update_helper_shows_cleanup_and_full_package_validate_text(monkeypatch):
+    _get_qapp()
+    fake_session = SimpleNamespace(
+        current_version="1.2.5",
+        target_version="1.2.6",
+        work_dir="C:/temp/update-work",
+        log_dir="C:/temp/update-logs",
+    )
+
+    monkeypatch.setattr(
+        update_helper.updater.UpdateSession,
+        "from_file",
+        lambda _path: fake_session,
+    )
+    monkeypatch.setattr(update_helper.UpdateHelperWindow, "_start_worker", lambda self: None)
+
+    window = update_helper.UpdateHelperWindow("dummy-session.json")
+    window._on_stage_changed("validate", "正在清理上次失败残留")
+    assert "正在清理上次失败残留" in window.status_label.text()
+    assert "正在清理上次失败残留" in window.detail_text.toPlainText()
+
+    window._on_stage_changed("validate", "正在统计安装目录大小（已扫描 12 个文件）")
+    assert "正在统计安装目录大小（已扫描 12 个文件）" in window.status_label.text()
+    assert "正在统计安装目录大小（已扫描 12 个文件）" in window.detail_text.toPlainText()
+
+    window._on_stage_changed("validate", "正在解压完整安装包（14/120）")
+    assert "正在解压完整安装包（14/120）" in window.status_label.text()
+    assert "正在解压完整安装包（14/120）" in window.detail_text.toPlainText()
+    window.close()
+
+
+def test_update_helper_surfaces_stale_session_cleanup_guidance(monkeypatch):
+    _get_qapp()
+    fake_session = SimpleNamespace(
+        current_version="1.2.5",
+        target_version="1.2.6",
+        work_dir="C:/temp/update-work",
+        log_dir="C:/temp/update-logs",
+    )
+
+    monkeypatch.setattr(
+        update_helper.updater.UpdateSession,
+        "from_file",
+        lambda _path: fake_session,
+    )
+    monkeypatch.setattr(update_helper.UpdateHelperWindow, "_start_worker", lambda self: None)
+
+    window = update_helper.UpdateHelperWindow("dummy-session.json")
+    window._on_completed(
+        {
+            "success": False,
+            "rollback_ok": False,
+            "error_code": "stale_session_cleanup_failed",
+            "user_message": "检测到上次失败留下的临时更新文件，但当前无法清理。请关闭软件后重试；如仍失败，请重启电脑后再试。",
+            "retry_mode": None,
+            "error": "无法清理旧更新会话目录：C:/temp/update-work/stale-session",
+            "log_path": "C:/temp/update-logs/install.log",
+        }
+    )
+
+    assert "关闭软件后重试" in window.status_label.text()
+    assert "重启电脑后再试" in window.guidance_body_label.text()
+    assert not window.btn_open_log.isHidden()
+    assert not window.btn_retry.isHidden()
+    window.close()

@@ -471,6 +471,7 @@ def _update_helper_on_completed(self, result: dict):
 
     rollback_ok = result.get("rollback_ok")
     retry_mode = result.get("retry_mode")
+    error_code = result.get("error_code")
     user_message = (result.get("user_message") or "").strip()
     if retry_mode == updater.RETRY_MODE_FULL_PACKAGE:
         self._set_status_text(
@@ -484,6 +485,18 @@ def _update_helper_on_completed(self, result: dict):
         )
         self._set_footer_text("下一步：点击“重新下载完整安装包”继续安装；如需排查，可先查看日志。")
         self.result_stage_label.setText("补丁包不适用，需下载完整安装包")
+    elif error_code == "stale_session_cleanup_failed":
+        stale_message = user_message or (
+            "检测到上次失败留下的临时更新文件，但当前无法清理。"
+            "请关闭软件后重试；如仍失败，请重启电脑后再试。"
+        )
+        self._set_status_text(stale_message, tone="error")
+        self._show_guidance(
+            "请先关闭占用后重试",
+            f"{stale_message}\n如需排查，可先查看日志或打开更新目录。",
+        )
+        self._set_footer_text("请先关闭软件后重试；如仍失败，请重启电脑后再试。")
+        self.result_stage_label.setText("检测到旧更新残留，需先清理后重试")
     else:
         fallback_text = (
             "安装失败，已自动回滚到旧版本。"
