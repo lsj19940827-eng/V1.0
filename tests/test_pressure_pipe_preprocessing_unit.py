@@ -309,22 +309,38 @@ def test_get_ip_str_hides_ip_prefix_for_special_entry_exit_rows_but_keeps_culver
         ip_number=11,
         display_ip_number=None,
     )
+    directional_drill_out = ChannelNode(
+        name="穿路段",
+        structure_type=StructureType.from_string("定向钻"),
+        in_out=InOutType.OUTLET,
+        ip_number=12,
+        display_ip_number=None,
+    )
+    pipe_jacking_in = ChannelNode(
+        name="过沟段",
+        structure_type=StructureType.from_string("顶管"),
+        in_out=InOutType.INLET,
+        ip_number=13,
+        display_ip_number=None,
+    )
     culvert_in = ChannelNode(
         name="暗涵A",
         structure_type=StructureType.from_string("矩形暗涵"),
         in_out=InOutType.INLET,
-        ip_number=12,
+        ip_number=14,
         display_ip_number=4,
     )
     normal_node = ChannelNode(
         structure_type=StructureType.from_string("明渠-矩形"),
-        ip_number=13,
+        ip_number=15,
         display_ip_number=5,
     )
 
     assert tunnel_in.get_ip_str() == "黄角坝隧进"
     assert siphon_out.get_ip_str() == "马颈子倒出"
-    assert pipe_in.get_ip_str() == "白果湾压进"
+    assert pipe_in.get_ip_str() == "白果湾有压管道进"
+    assert directional_drill_out.get_ip_str() == "穿路段定向钻出"
+    assert pipe_jacking_in.get_ip_str() == "过沟段顶管进"
     assert culvert_in.get_ip_str() == "IP4"
     assert normal_node.get_ip_str() == "IP5"
 

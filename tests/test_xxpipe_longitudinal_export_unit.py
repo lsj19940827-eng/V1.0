@@ -583,7 +583,7 @@ def test_build_panel_xxpipe_profile_data_passes_route_metadata_into_lookup_rows(
                 "targets": [
                     {
                         "row_index": 0,
-                        "label": "苟家湾压进",
+                        "label": "苟家湾有压管道进",
                         "station_mc": 3968.95,
                     }
                 ],
@@ -628,7 +628,7 @@ def test_build_panel_xxpipe_profile_data_passes_route_metadata_into_lookup_rows(
             "identity": "flow1-row73",
             "route_key": "flow1-route1",
             "route_display_name": "赛金连续整线",
-            "node_label": "苟家湾压进",
+            "node_label": "苟家湾有压管道进",
             "station_text": "赛支3+968.95",
         }
     ]
@@ -1240,7 +1240,7 @@ def test_build_xxpipe_partial_export_notice_describes_identity_mismatch_as_parti
                         "identity": "flow1-row73",
                         "kind": "identity_mismatch",
                         "station_text": "赛支3+968.95",
-                        "node_label": "苟家湾压进",
+                        "node_label": "苟家湾有压管道进",
                         "route_display_name": "赛金连续整线",
                     }
                 ],
@@ -1252,7 +1252,7 @@ def test_build_xxpipe_partial_export_notice_describes_identity_mismatch_as_parti
     assert "已导入纵断面DXF" in notice
     assert "个别节点未匹配" in notice
     assert "赛支3+968.95" in notice
-    assert "苟家湾压进" in notice
+    assert "苟家湾有压管道进" in notice
     assert "flow1-row73" not in notice
 
 

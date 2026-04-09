@@ -709,7 +709,7 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_buc
                 "route_key": "flow1-route1",
                 "route_display_name": "赛金连续整线",
                 "station_text": "赛支3+968.95",
-                "node_label": "苟家湾压进",
+                "node_label": "苟家湾有压管道进",
             }
         ],
     )

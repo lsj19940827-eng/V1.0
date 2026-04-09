@@ -2295,8 +2295,13 @@ def _build_special_io_short_label(node):
         struct_abbr = "倒"
     elif "渡槽" in struct_str:
         struct_abbr = "渡"
-    elif struct_str in {"有压管道", "定向钻", "顶管"}:
-        struct_abbr = "压"
+    # 有压管道同类继续按同一业务语义处理，但展示时保留各自工艺名称。
+    elif "定向钻" in struct_str:
+        struct_abbr = "定向钻"
+    elif "顶管" in struct_str:
+        struct_abbr = "顶管"
+    elif "有压管道" in struct_str:
+        struct_abbr = "有压管道"
     name = str(getattr(node, "name", "") or "").strip()
     return f"{name}{struct_abbr}{in_out}".strip()
 
