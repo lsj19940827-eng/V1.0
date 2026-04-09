@@ -682,14 +682,14 @@ def _should_preserve(rel_path: str, patterns: list[str]) -> bool:
 
 
 class _ThrottledProgressEmitter:
-    """按固定时间间隔回报进度，避免日志和界面被高频刷新淹没。"""
+    """按固定节流间隔回报进度，避免窗口和日志被高频刷新刷满。"""
 
     def __init__(self, interval_sec: Optional[float] = None):
         self.interval_sec = PROGRESS_THROTTLE_SECONDS if interval_sec is None else interval_sec
         self._last_emit_time: Optional[float] = None
 
     def emit(self, callback: Optional[Callable], *args, force: bool = False):
-        """在允许时触发回调；force=True 时总是回报最后一次状态。"""
+        """满足节流条件时触发回调；结束时可强制回报最后一次。"""
         if callback is None:
             return
         now = time.monotonic()
@@ -786,6 +786,8 @@ def ensure_install_ready(
         raise UpdatePreparationError("更新包无法读取，请重新下载后再试。")
     if not os.path.isdir(app_dir):
         raise UpdatePreparationError("当前安装目录不存在，无法继续安装。")
+    if progress_callback:
+        progress_callback("正在检查写入权限")
     if not is_install_dir_writable(app_dir):
         raise UpdatePreparationError(
             "当前软件目录没有写入权限，请将软件解压到普通目录后再更新。"
@@ -974,6 +976,40 @@ def _copy_tree_contents(src_dir: str, dst_dir: str):
             shutil.copy2(os.path.join(root, filename), os.path.join(target_root, filename))
 
 
+def _cleanup_stale_update_sessions(
+    app_dir: str,
+    current_session_id: str,
+    logger: "_UpdateSessionLogger",
+) -> list[str]:
+    """清理当前会话之外的旧更新残留目录，避免失败残留拖住后续安装。"""
+    session_root = os.path.join(app_dir, INTERNAL_WORK_DIR)
+    if not os.path.isdir(session_root):
+        return []
+
+    cleaned_paths: list[str] = []
+    for name in os.listdir(session_root):
+        if name == current_session_id:
+            continue
+        target = os.path.join(session_root, name)
+        if not os.path.isdir(target):
+            continue
+        try:
+            shutil.rmtree(target)
+            cleaned_paths.append(target)
+            logger.log(f"已清理旧更新会话目录：{target}")
+        except OSError as exc:
+            logger.exception(f"清理旧更新会话目录失败（{target}）", exc)
+            raise UpdateInstallError(
+                f"无法清理旧更新会话目录：{target}",
+                code="stale_session_cleanup_failed",
+                user_message=(
+                    "检测到上次失败留下的临时更新文件，但当前无法清理。"
+                    "请关闭软件后重试；如仍失败，请重启电脑后再试。"
+                ),
+            ) from exc
+    return cleaned_paths
+
+
 def _extract_zip(
     zip_path: str,
     extract_dir: str,
@@ -990,7 +1026,12 @@ def _extract_zip(
                 zf.extract(member, extract_dir)
                 progress_emitter.emit(progress_callback, index, total_members)
             if total_members:
-                progress_emitter.emit(progress_callback, total_members, total_members, force=True)
+                progress_emitter.emit(
+                    progress_callback,
+                    total_members,
+                    total_members,
+                    force=True,
+                )
     except zipfile.BadZipFile as exc:
         raise UpdateInstallError(
             f"更新包损坏：{zip_path}",
@@ -1317,14 +1358,14 @@ def run_update_session(
         _wait_for_process_exit(session.parent_pid)
 
         push("validate", "校验安装环境")
+        push("validate", "正在清理上次失败残留")
+        _cleanup_stale_update_sessions(session.app_dir, session.session_id, logger)
         ensure_install_ready(
             session.download_zip_path,
             session.is_patch,
             app_dir=session.app_dir,
             progress_callback=lambda text: push("validate", text),
         )
-        if session.is_patch:
-            push("validate", "正在解压补丁包")
         extracted_root = _extract_zip(
             session.download_zip_path,
             extract_dir,
