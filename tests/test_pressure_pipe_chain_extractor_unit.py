@@ -164,6 +164,47 @@ def test_extract_continuous_pressure_chains_keeps_same_name_runs_as_distinct_nam
     ]
 
 
+def test_extract_continuous_pressure_chains_splits_named_tail_group_into_row_members_for_xxqu():
+    nodes = [
+        _make_node(0, "2", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.27),
+        _make_node(1, "2", "洞梁村", "有压管道", InOutType.INLET, flow=0.27),
+        _make_node(2, "2", "洞梁村", "有压管道", InOutType.NORMAL, flow=0.27),
+        _make_node(3, "2", "洞梁村", "有压管道", InOutType.OUTLET, flow=0.27),
+        _make_node(4, "2", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.27),
+    ]
+
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+        nodes,
+        settings=_make_settings(channel_level="支渠"),
+    )
+
+    assert len(chains) == 1
+    chain = chains[0]
+    assert chain.start_row_index == 1
+    assert chain.end_row_index == 3
+    assert [member.member_type for member in chain.members] == [
+        "single_row",
+        "single_row",
+        "single_row",
+    ]
+    assert [member.identity for member in chain.members] == [
+        "flow2-row2",
+        "flow2-row3",
+        "flow2-row4",
+    ]
+    assert [member.target_row_index for member in chain.members] == [1, 2, 3]
+    assert [member.upstream_row_index for member in chain.members] == [0, 1, 2]
+    assert [member.base_display_name for member in chain.members] == [
+        "洞梁村",
+        "洞梁村",
+        "洞梁村",
+    ]
+    assert all(getattr(member.group, "group_mode", "") == "named_row_segment" for member in chain.members)
+    assert all(bool(getattr(member, "split_from_named_group", False)) for member in chain.members)
+    assert all(getattr(member.group, "design_flow", 0.0) == pytest.approx(0.27) for member in chain.members)
+    assert all(getattr(member.group, "diameter", 0.0) == pytest.approx(1.0) for member in chain.members)
+
+
 def test_extract_continuous_pressure_chains_for_branch_channel_marks_leading_named_pressure_as_prefix_segment():
     nodes = [
         _make_node(0, "1", "苟家湾", "有压管道", InOutType.INLET),
@@ -249,6 +290,43 @@ def test_extract_continuous_pressure_chains_for_branch_channel_keeps_real_leadin
     ]
     assert chain.members[0].is_anchor_member is False
     assert chain.members[0].should_generate_row_loss is True
+
+
+def test_extract_continuous_pressure_chains_for_branch_tail_named_pressure_group_splits_into_row_members():
+    nodes = [
+        _make_node(0, "1", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+        _make_node(1, "1", "洞梁村", "有压管道", InOutType.INLET),
+        _make_node(2, "1", "洞梁村", "有压管道", InOutType.NORMAL),
+        _make_node(3, "1", "洞梁村", "有压管道", InOutType.OUTLET),
+        _make_node(4, "1", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+        nodes,
+        settings=_make_settings(channel_level="支渠"),
+    )
+
+    assert len(chains) == 1
+    chain = chains[0]
+    assert [member.member_type for member in chain.members] == [
+        "single_row",
+        "single_row",
+        "single_row",
+    ]
+    assert [member.display_name for member in chain.members] == [
+        "洞梁村（前段）",
+        "洞梁村（中段1）",
+        "洞梁村（后段）",
+    ]
+    assert [member.row_indices for member in chain.members] == [[1], [2], [3]]
+    assert [member.target_row_index for member in chain.members] == [1, 2, 3]
+    assert [member.upstream_row_index for member in chain.members] == [0, 1, 2]
+    assert [member.identity for member in chain.members] == [
+        "flow1-row2",
+        "flow1-row3",
+        "flow1-row4",
+    ]
+    assert all(member.group is not None for member in chain.members)
 
 
 def test_extract_continuous_pressure_chains_marks_flow_section_start_single_row_as_anchor():

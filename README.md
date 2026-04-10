@@ -5,6 +5,7 @@
 这是一个本地桌面计算工具，用来处理渠系纵断面、水面线、倒虹吸、有压管道、土石方等工程计算与导出。
 当前版本的明渠模块已经补齐 `复式梯形` 断面，支持在明渠设计面板中直接输入 `m1 / B1 / m2 / B2 / m3 / h1` 六个固定参数完成计算，并把同一断面同步带到批量计算和推求水面线兼容链路。
 当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及连续承压线路的“整线纵断面 + 中心线高程导出 + 整线弹窗”规则。
+`xx渠` 末尾连续承压中的命名 `有压管道 / 定向钻 / 顶管` 现在也改成逐行正式计损：表3里每一行都会显示自己的承压段损失，并直接参与总损失、累计损失和水位递推；整组总损失仍保留在有压管道窗口里供对照。
 xx管 现在已经支持“有压管道 / 定向钻 / 顶管”整线里夹带隧洞：用户仍只导入 1 份纵断面 DXF，但这份 DXF 只覆盖非隧洞段；隧洞段改为按“进口底高 + 坡降 i + 起终桩号”自动生成，并与整线 DXF 在导出和计算时按桩号拼接。
 有压管道窗口现在改成按“连续承压整线”判断：`xx管` 继续支持整线卡；`xx渠` 只有在末端或跨流量段形成连续承压线时才显示整线卡。底层按整线管理，但压力管道特性表、统计摘要和结果回写继续按原来的分段和流量段表达。
 支渠连续承压链现在只从首个真正的有压段开始，前置隧洞不会再被误并进整线卡、route 起点和导入锚点；`xx管` 原有夹带隧洞口径保持不变。
@@ -37,6 +38,7 @@ xx管 现在已经支持“有压管道 / 定向钻 / 顶管”整线里夹带�
 - 导出精度：普通模式导出桩号使用 `station_decimals`，xx管 导出桩号使用 `xxpipe_station_decimals`；两者都在导出链路单独格式化，不改主界面的通用桩号显示函数。
 - mixed route 持久化：`PressurePipeManager` 现同时保存 route 级 `longitudinal_nodes` 与 `profile_segments`，用来承接“非隧洞 DXF + 隧洞生成段”的混合整线。
 - 连续承压正式存储：`PressurePipeManager` 现在同时维护 `pipes / routes / segments` 三层数据；旧入口继续兼容，新导出与回读优先使用 `routes / segments`。
+- 尾段逐行计损：`xx渠` 末尾连续承压中的命名有压段，会先拆成逐段成员，再统一按行回写和递推；窗口汇总仍保留整组结果。
 - 连续承压快照保存：同一整线范围内的旧 `route / segment / pipe` 残留会在保存新结果前先清掉，避免新旧两套记录同时参与导出。
 - 末尾分表规划：`cad_tools.py` 新增统一的尾段分表规划阶段，所有连续承压相关导出都先走这一步，再决定是否生成上下双表。
 - 隧洞参数缓存：`PressurePipeManager` 也会保存隧洞段的进口底高、坡降、断面类型和断面参数，保证窗口重开后还能继续编辑。
@@ -67,6 +69,7 @@ xx管 现在已经支持“有压管道 / 定向钻 / 顶管”整线里夹带�
 - 运行本次赛金支渠重构回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_*unit.py tests/test_xxpipe_*unit.py tests/test_water_profile_combined_dxf_unit.py -q`
 - 运行本次普通纵断面桩号精度回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_text_export_settings_dialog_ui_unit.py tests/test_water_profile_longitudinal_scale_unit.py tests/test_water_profile_ip_table_export_unit.py tests/test_water_profile_bzzh2_export_unit.py tests/test_water_profile_combined_dxf_unit.py tests/test_water_profile_longitudinal_dedup_unit.py tests/test_xxpipe_longitudinal_export_unit.py -q`
 - 运行本次连续承压链回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_config_dialog_sizing_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_preprocessing_unit.py tests/test_external_head_loss_unit.py`
+- 运行本次 xx渠 末尾逐行计损回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_water_profile_transition_ready_unit.py tests/test_external_head_loss_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py -q`
 - 运行本次连续承压整线回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_water_profile_transition_ready_unit.py tests/test_pressurized_dxf_rules_unit.py tests/test_external_head_loss_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_window_override_unit.py tests/test_pressure_pipe_export_longitudinal_nodes_unit.py tests/test_pressure_pipe_persistence_with_long_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py -q`
 - 运行本次三清支渠纵断面/链路回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_longitudinal_dxf_reverse_import_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py -q`
 - 运行本次同名连续承压链回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_batch_panel_dialog_parent_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_pressure_pipe_export_results_unit.py -q`
@@ -111,6 +114,7 @@ xx管 现在已经支持“有压管道 / 定向钻 / 顶管”整线里夹带�
 - 纵断面 DXF 导入现在会先自动筛掉闭合线、工程坐标辅助线和横向展开不足的候选，再按优先规则选中真正的纵断面；当前两名候选非常接近时，导入前会先提醒确认。
 - xx管 夹带隧洞整线现在可以继续进入有压管道窗口：整线卡继续负责 1 份 DXF 导入，隧洞段保留独立分段卡；导入覆盖校验只检查非隧洞桩号，起点若是隧洞则自动对齐到第一段非隧洞桩号。
 - xx渠 在末端或跨流量段形成连续承压线时，也会进入整线底座；非连续场景仍只看当前分组，同时点击“开始计算”时不再因为 identity helper 调用方式错误而报 `group` 参数缺失。
+- `xx渠` 末尾连续承压中的命名 `有压管道 / 定向钻 / 顶管` 现在按逐行正式计损：列38、总损失、累计损失和水位都改用逐段值递推，出口行只保留本段损失，整组总损失继续保留在有压管道窗口汇总里。
 - 连续承压 `xx渠` 的图2导出现在复用 `xx管` 固定 5 项表头；普通有压管道第 1 行优先显示用户名称；缺少或未覆盖完整的纵断面轴线 DXF 时，第 4 行会留空并给出补导提示，但严格 `xx管` 仍保持原来的拦截规则。
 - 普通渠道项目如果只在末尾连续进入有压管道，图2 DXF 现在会在同一个文件里拆成上下两张表：上面继续按渠道表头输出，下面把末尾有压段单独改成 `xx管` 固定 5 项表头；合并 DXF 里的断面汇总表和 IP 表也会一起下移，避免压到新增的有压子表。
 - 连续承压支管在导出时，如果普通子段缓存里只剩 1 个纵断面点，会自动回退整线 DXF；跨流量段时新流量段首个匿名普通行就算只对应单点边界，也会直接继承整线纵断面，不再把“整线已导入”误报成“点不够”。

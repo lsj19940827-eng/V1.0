@@ -615,6 +615,41 @@ def test_update_table_from_nodes_full_impl_shows_row_level_loss_for_unnamed_pres
     assert payload["_pressure_pipe_row_identity"]
 
 
+def test_update_table_from_nodes_full_impl_shows_row_level_loss_for_named_tail_pressure_row_override():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支渠")
+
+    override = {
+        "enabled": True,
+        "identity": "flow1-row1",
+        "storage_key": "flow1-row1",
+        "display_name": "洞梁村（前段）",
+        "group_mode": "chain_row_member",
+        "target_row_index": 0,
+        "upstream_row_index": -1,
+        "total_head_loss": 0.0315,
+    }
+    named_pipe = _make_node(
+        name="洞梁村",
+        structure_type=_FakeStructureType.PRESSURE_PIPE,
+        is_pressure_pipe=True,
+        section_params={"pressure_pipe_window_override": dict(override)},
+        pressure_pipe_window_override=dict(override),
+        head_loss_bend=0.0100,
+        head_loss_friction=0.0215,
+        head_loss_total=0.0315,
+        get_structure_type_str=lambda: "有压管道",
+        get_in_out_str=lambda: "进",
+    )
+
+    module.WaterProfilePanel._update_table_from_nodes_full_impl(panel, [named_pipe])
+
+    assert panel.node_table.item(0, 38).text() == "0.0315"
+    payload = panel.node_table.item(0, 0).data(module.Qt.UserRole)
+    assert payload["_pressure_pipe_row_identity"] == "flow1-row1"
+
+
 def test_build_nodes_from_table_preserves_unnamed_pressure_pipe_display_loss_without_double_counting():
     module = _load_panel_module()
     panel = _make_basic_panel(module)

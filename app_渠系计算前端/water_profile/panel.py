@@ -243,6 +243,7 @@ SOURCE_COORD_Y_ROLE_KEY = "_source_y_text"
 USE_INCREASE_ROLE_KEY = "_use_increase"
 PRESSURE_PIPE_ROW_ID_ROLE_KEY = "_pressure_pipe_row_identity"
 PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY = "_pressure_pipe_window_override"
+PRESSURE_PIPE_NAMED_GROUP_RESULT_ROLE_KEY = "_pressure_pipe_named_group_result"
 COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY = "_compound_trapezoid_params"
 TRANSITION_LENGTH_RULE_STEP_DEFAULT = 1.0
 TRANSITION_LENGTH_RULE_MODE_OPTIONS = (
@@ -2744,6 +2745,40 @@ class WaterProfilePanel(QWidget):
             normalized[dict_field] = copy.deepcopy(dict_value) if isinstance(dict_value, dict) else {}
         return normalized
 
+    @staticmethod
+    def _normalize_pressure_pipe_named_group_result(value) -> dict:
+        """规范化命名承压组隐藏结果元数据。"""
+        if not isinstance(value, dict):
+            return {}
+        identity = str(value.get("identity", "") or "").strip()
+        storage_key = str(value.get("storage_key", "") or identity).strip() or identity
+        display_name = str(value.get("display_name", "") or "").strip()
+        structure_type = str(value.get("structure_type", "") or "").strip()
+        applied_at = str(value.get("applied_at", "") or "").strip()
+        calc_steps = str(value.get("calc_steps", "") or "").strip()
+        target_row_index = WaterProfilePanel._coerce_pressure_pipe_row_index(
+            value.get("target_row_index", -1)
+        )
+        total_head_loss_raw = value.get("total_head_loss", None)
+        total_head_loss = None
+        if total_head_loss_raw is not None and str(total_head_loss_raw).strip() != "":
+            try:
+                total_head_loss = float(total_head_loss_raw)
+            except (TypeError, ValueError):
+                total_head_loss = None
+        if not any((identity, storage_key, display_name, structure_type, applied_at, calc_steps)) and total_head_loss is None:
+            return {}
+        return {
+            "identity": identity,
+            "storage_key": storage_key,
+            "display_name": display_name,
+            "structure_type": structure_type,
+            "total_head_loss": total_head_loss,
+            "applied_at": applied_at,
+            "calc_steps": calc_steps,
+            "target_row_index": target_row_index,
+        }
+
     @classmethod
     def _get_pressure_pipe_window_override(cls, node) -> dict:
         """读取匿名有压管道窗口覆盖。"""
@@ -2760,6 +2795,238 @@ class WaterProfilePanel(QWidget):
         return override
 
     @classmethod
+    def _get_pressure_pipe_named_group_result(cls, node) -> dict:
+        """读取命名承压组隐藏结果元数据。"""
+        result = cls._normalize_pressure_pipe_named_group_result(
+            getattr(node, "pressure_pipe_named_group_result", {})
+        )
+        if not result:
+            section_params = getattr(node, "section_params", {}) or {}
+            result = cls._normalize_pressure_pipe_named_group_result(
+                section_params.get("pressure_pipe_named_group_result", {})
+            )
+        if result:
+            setattr(node, "pressure_pipe_named_group_result", copy.deepcopy(result))
+            section_params = getattr(node, "section_params", None)
+            if isinstance(section_params, dict):
+                section_params["pressure_pipe_named_group_result"] = copy.deepcopy(result)
+        return result
+
+    @classmethod
+    def _set_pressure_pipe_named_group_result(cls, node, result) -> dict:
+        """写入命名承压组隐藏结果元数据。"""
+        normalized = cls._normalize_pressure_pipe_named_group_result(result)
+        setattr(node, "pressure_pipe_named_group_result", copy.deepcopy(normalized))
+        section_params = getattr(node, "section_params", None)
+        if isinstance(section_params, dict):
+            if normalized:
+                section_params["pressure_pipe_named_group_result"] = copy.deepcopy(normalized)
+            else:
+                section_params.pop("pressure_pipe_named_group_result", None)
+        return normalized
+
+    @classmethod
+    def _is_named_pressure_pipe_outlet_with_hidden_result(cls, node) -> bool:
+        """判断是否为带隐藏结果元数据的命名承压组出口行。"""
+        if not cls._is_named_pressure_pipe_group_node(node):
+            return False
+        in_out = getattr(node, "in_out", None)
+        if getattr(in_out, "value", "") != "出":
+            return False
+        return bool(cls._get_pressure_pipe_named_group_result(node))
+
+    @classmethod
+    def _get_named_pressure_pipe_group_total_head_loss(cls, node):
+        """读取命名承压组整组总损失。"""
+        result = cls._get_pressure_pipe_named_group_result(node)
+        if not result:
+            return None
+        return result.get("total_head_loss", None)
+
+    @classmethod
+    def _get_named_pressure_pipe_outlet_display_loss(cls, node) -> float:
+        """计算命名承压组出口行在表3列38的显示值。"""
+        total_head_loss = cls._get_named_pressure_pipe_group_total_head_loss(node)
+        hydraulic_loss = (
+            float(getattr(node, "head_loss_bend", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_local", 0.0) or 0.0)
+        )
+        if hydraulic_loss > 0:
+            setattr(node, "_pressure_pipe_display_loss", hydraulic_loss)
+            return hydraulic_loss
+
+        stored_display = float(getattr(node, "_pressure_pipe_display_loss", 0.0) or 0.0)
+        if stored_display > 0:
+            return stored_display
+
+        siphon_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
+        if siphon_loss > 0 and (
+            total_head_loss is None or abs(siphon_loss - float(total_head_loss)) > 1e-6
+        ):
+            setattr(node, "_pressure_pipe_display_loss", siphon_loss)
+            return siphon_loss
+        return 0.0
+
+    @classmethod
+    def _rebuild_named_pressure_pipe_outlet_total_loss(cls, node) -> float:
+        """按逐行口径重建命名承压组出口行总损失。"""
+        total_loss = (
+            float(getattr(node, "head_loss_bend", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_local", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_reserve", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_gate", 0.0) or 0.0)
+        )
+        node.head_loss_total = total_loss
+        return total_loss
+
+    @classmethod
+    def _build_pressure_pipe_named_group_result_payload(
+        cls,
+        *,
+        node=None,
+        group=None,
+        record: dict | None = None,
+        row_index: int = -1,
+        total_head_loss=None,
+        calc_steps: str = "",
+        applied_at: str = "",
+    ) -> dict:
+        """构造命名承压组隐藏结果元数据。"""
+        record = record or {}
+        identity = str(record.get("identity", "") or "").strip()
+        if not identity and group is not None:
+            identity = cls._build_pressure_pipe_group_identity(group)
+        if not identity and node is not None:
+            identity = make_pressure_pipe_identity(
+                getattr(node, "flow_section", ""),
+                getattr(node, "name", ""),
+            )
+
+        storage_key = str(record.get("storage_key", "") or "").strip()
+        if not storage_key and group is not None:
+            storage_key = cls._get_pressure_pipe_group_storage_key(group)
+        storage_key = storage_key or identity
+
+        display_name = str(record.get("display_name", "") or "").strip()
+        if not display_name and group is not None:
+            display_name = cls._get_pressure_pipe_group_display_name(group)
+        if not display_name and node is not None:
+            display_name = str(getattr(node, "name", "") or "").strip()
+
+        structure_type = str(record.get("structure_type", "") or "").strip()
+        if not structure_type and group is not None:
+            structure_type = cls._get_pressure_pipe_group_structure_text(group)
+        if not structure_type and node is not None:
+            structure_type = cls._get_node_structure_type_text(node)
+
+        if total_head_loss is None:
+            total_head_loss = record.get("total_head_loss", None)
+        if total_head_loss is not None and str(total_head_loss).strip() != "":
+            try:
+                total_head_loss = float(total_head_loss)
+            except (TypeError, ValueError):
+                total_head_loss = None
+        else:
+            total_head_loss = None
+
+        if not applied_at:
+            applied_at = str(record.get("applied_at", "") or "").strip()
+        if not applied_at:
+            applied_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if not calc_steps:
+            calc_steps = str(record.get("calc_steps", "") or "").strip()
+
+        target_row_index = cls._coerce_pressure_pipe_row_index(
+            record.get(
+                "target_row_index",
+                getattr(group, "target_row_index", getattr(group, "outlet_row_index", row_index))
+                if group is not None else row_index,
+            )
+        )
+
+        return cls._normalize_pressure_pipe_named_group_result({
+            "identity": identity,
+            "storage_key": storage_key,
+            "display_name": display_name,
+            "structure_type": structure_type,
+            "total_head_loss": total_head_loss,
+            "applied_at": applied_at,
+            "calc_steps": calc_steps,
+            "target_row_index": target_row_index,
+        })
+
+    @classmethod
+    def _migrate_named_pressure_pipe_outlet_visible_group_loss(
+        cls,
+        node,
+        row_index: int = -1,
+    ) -> bool:
+        """把旧版命名承压组出口行的可见整组损失迁入隐藏元数据。"""
+        if not cls._is_named_pressure_pipe_group_node(node):
+            return False
+        in_out = getattr(node, "in_out", None)
+        if getattr(in_out, "value", "") != "出":
+            return False
+
+        changed = False
+        hidden_result = cls._get_pressure_pipe_named_group_result(node)
+        hidden_total = hidden_result.get("total_head_loss", None) if hidden_result else None
+
+        external_loss = getattr(node, "external_head_loss", None)
+        legacy_total = None
+        if external_loss is not None and str(external_loss).strip() != "":
+            try:
+                legacy_total = float(external_loss)
+            except (TypeError, ValueError):
+                legacy_total = None
+
+        if hidden_total is None:
+            siphon_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
+            if legacy_total is None and siphon_loss > 0:
+                legacy_total = siphon_loss
+            if legacy_total is not None and legacy_total > 0:
+                payload = cls._build_pressure_pipe_named_group_result_payload(
+                    node=node,
+                    row_index=row_index,
+                    total_head_loss=legacy_total,
+                    calc_steps="legacy-visible-migration",
+                )
+                if payload:
+                    cls._set_pressure_pipe_named_group_result(node, payload)
+                    hidden_result = payload
+                    hidden_total = payload.get("total_head_loss", None)
+                    changed = True
+
+        if external_loss is not None:
+            node.external_head_loss = None
+            changed = True
+
+        if hidden_total is not None:
+            siphon_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
+            if siphon_loss > 0 and abs(siphon_loss - float(hidden_total)) <= 1e-6:
+                node.head_loss_siphon = 0.0
+                changed = True
+            stored_display = float(getattr(node, "_pressure_pipe_display_loss", 0.0) or 0.0)
+            if stored_display > 0 and abs(stored_display - float(hidden_total)) <= 1e-6:
+                setattr(node, "_pressure_pipe_display_loss", 0.0)
+                changed = True
+
+        if hidden_result:
+            cls._rebuild_named_pressure_pipe_outlet_total_loss(node)
+        return changed
+
+    @classmethod
+    def _migrate_named_pressure_pipe_group_results(cls, nodes) -> bool:
+        """批量迁移命名承压组旧版出口写回数据。"""
+        changed = False
+        for row_index, node in enumerate(nodes or []):
+            if cls._migrate_named_pressure_pipe_outlet_visible_group_loss(node, row_index=row_index):
+                changed = True
+        return changed
+
+    @classmethod
     def _has_pressure_pipe_window_override(cls, node) -> bool:
         """判断节点是否存在匿名有压管道窗口覆盖。"""
         return bool(cls._get_pressure_pipe_window_override(node))
@@ -2769,6 +3036,7 @@ class WaterProfilePanel(QWidget):
         """返回按 row override 展示/回写的有压结果模式。"""
         return {
             "unnamed_row_segment",
+            "named_row_segment",
             "chain_row_member",
             "chain_tunnel_member",
             "chain_prefix_member",
@@ -2816,6 +3084,14 @@ class WaterProfilePanel(QWidget):
     def _is_pressure_pipe_row_segment_group(group) -> bool:
         """判断窗口分组是否为匿名普通有压管道段。"""
         return str(getattr(group, "group_mode", "") or "").strip() == "unnamed_row_segment"
+
+    @classmethod
+    def _is_pressure_pipe_group_split_to_row_members(cls, group) -> bool:
+        """判断命名有压组是否改为逐段链成员回写。"""
+        if bool(getattr(group, "split_to_row_members", False)):
+            return True
+        split_ids = list(getattr(group, "split_row_member_identities", []) or [])
+        return any(str(identity or "").strip() for identity in split_ids)
 
     @classmethod
     def _set_pressure_pipe_window_override(cls, node, override: dict | None):
@@ -2894,6 +3170,9 @@ class WaterProfilePanel(QWidget):
         if cls._is_regular_pressure_pipe_node(node) and not str(getattr(node, "name", "") or "").strip():
             return 0.0
 
+        if cls._is_named_pressure_pipe_outlet_with_hidden_result(node):
+            return cls._get_named_pressure_pipe_outlet_display_loss(node)
+
         display_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
         external_loss = getattr(node, "external_head_loss", None)
         is_named_outlet = (
@@ -2937,6 +3216,12 @@ class WaterProfilePanel(QWidget):
             setattr(node, "_pressure_pipe_display_loss", 0.0)
             return 0.0
 
+        if cls._is_named_pressure_pipe_outlet_with_hidden_result(node):
+            node.head_loss_siphon = 0.0
+            node.external_head_loss = None
+            setattr(node, "_pressure_pipe_display_loss", numeric_value)
+            return numeric_value
+
         if hasattr(node, "_pressure_pipe_display_loss"):
             setattr(node, "_pressure_pipe_display_loss", 0.0)
         node.head_loss_siphon = numeric_value
@@ -2952,11 +3237,17 @@ class WaterProfilePanel(QWidget):
             channel_level=channel_level,
         )
         is_row_sum = self._is_pressure_pipe_row_override_node(node, channel_level)
+        is_named_group_outlet = self._is_named_pressure_pipe_outlet_with_hidden_result(node)
+        is_display_only = is_row_sum or is_named_group_outlet
         return {
             "channel_level": channel_level,
             "display_loss": display_loss,
             "is_row_sum": is_row_sum,
-            "formula_term_loss": 0.0 if is_row_sum else display_loss,
+            "is_display_only": is_display_only,
+            "display_mode": "named_group_outlet" if is_named_group_outlet else ("row_sum" if is_row_sum else "normal"),
+            "named_group_total_loss": self._get_named_pressure_pipe_group_total_head_loss(node)
+            if is_named_group_outlet else None,
+            "formula_term_loss": 0.0 if is_display_only else display_loss,
         }
 
     @classmethod
@@ -2981,6 +3272,9 @@ class WaterProfilePanel(QWidget):
     @staticmethod
     def _has_named_pressure_pipe_group_result(node) -> bool:
         """判断命名有压组落点是否已经有可用结果。"""
+        hidden_result = WaterProfilePanel._get_pressure_pipe_named_group_result(node)
+        if hidden_result:
+            return True
         total_head_loss = getattr(node, "head_loss_siphon", None)
         if total_head_loss is not None:
             try:
@@ -3039,6 +3333,7 @@ class WaterProfilePanel(QWidget):
         pipe_groups = list(dialog_context.get("pipe_groups", []) or [])
         chain_descriptors = list(dialog_context.get("chain_descriptors", []) or [])
         record_map = self._build_pressure_pipe_execute_record_map()
+        chain_source_lookup = self._build_pressure_chain_source_lookup(chain_descriptors)
 
         chain_member_lookup = {}
         for descriptor in chain_descriptors:
@@ -3054,6 +3349,7 @@ class WaterProfilePanel(QWidget):
             identity = self._build_pressure_pipe_group_identity(group)
             if not identity or identity in handled_identities:
                 continue
+            split_members = list(chain_source_lookup.get(identity, []) or [])
             member = chain_member_lookup.get(identity)
             record = record_map.get(identity, {})
             display_name = (
@@ -3061,6 +3357,10 @@ class WaterProfilePanel(QWidget):
                 if member is not None
                 else ""
             ) or self._get_pressure_pipe_group_display_name(group)
+
+            if split_members or self._is_pressure_pipe_group_split_to_row_members(group):
+                handled_identities.add(identity)
+                continue
 
             if member is not None and self._is_pressure_chain_anchor_member(member):
                 handled_identities.add(identity)
@@ -4586,6 +4886,9 @@ class WaterProfilePanel(QWidget):
             'head_loss_siphon': pressure_pipe_ctx['formula_term_loss'],
             'pressure_pipe_display_loss': pressure_pipe_ctx['display_loss'],
             'pressure_pipe_display_is_row_sum': pressure_pipe_ctx['is_row_sum'],
+            'pressure_pipe_display_is_display_only': pressure_pipe_ctx['is_display_only'],
+            'pressure_pipe_display_mode': pressure_pipe_ctx['display_mode'],
+            'pressure_pipe_named_group_total': pressure_pipe_ctx['named_group_total_loss'],
             'head_loss_total': node.head_loss_total or 0.0,
         }
         from app_渠系计算前端.water_profile.formula_dialog import show_total_loss_dialog
@@ -4614,18 +4917,18 @@ class WaterProfilePanel(QWidget):
                 hj = getattr(n, 'head_loss_local', 0.0) or 0.0
                 hr = getattr(n, 'head_loss_reserve', 0.0) or 0.0
                 hg = getattr(n, 'head_loss_gate', 0.0) or 0.0
-                is_row_sum = self._is_pressure_pipe_row_override_node(n, channel_level)
                 hs = self._get_pressure_pipe_loss_display_value(
                     n,
                     row_index=i,
                     channel_level=channel_level,
                 )
+                pressure_pipe_ctx = self._get_pressure_pipe_display_context(n, i)
                 if hw: parts.append(f"弯道{hw:.4f}")
                 if hf: parts.append(f"沿程{hf:.4f}")
                 if hj: parts.append(f"局部{hj:.4f}")
                 if hr: parts.append(f"预留{hr:.4f}")
                 if hg: parts.append(f"过闸{hg:.4f}")
-                if hs and not is_row_sum:
+                if hs and pressure_pipe_ctx["formula_term_loss"] > 0:
                     parts.append(f"倒虹吸{hs:.4f}")
                 detail = f"（{'＋'.join(parts)}）" if parts else ""
                 lines.append(f"第{i+1}行(普通):  $h_{{\\Sigma}} = {loss:.4f}$ m{detail}，累计 $= {cumulative:.4f}$ m")
@@ -4716,6 +5019,9 @@ class WaterProfilePanel(QWidget):
                 details["h_siphon"] = pressure_pipe_ctx["formula_term_loss"]
                 details["pressure_pipe_display_loss"] = pressure_pipe_ctx["display_loss"]
                 details["pressure_pipe_display_is_row_sum"] = pressure_pipe_ctx["is_row_sum"]
+                details["pressure_pipe_display_is_display_only"] = pressure_pipe_ctx["is_display_only"]
+                details["pressure_pipe_display_mode"] = pressure_pipe_ctx["display_mode"]
+                details["pressure_pipe_named_group_total"] = pressure_pipe_ctx["named_group_total_loss"]
                 details["total_loss"] = round(row_total_loss, 4)
                 details["transition_step_loss"] = round(transition_step_loss, 4)
                 details["step_drop"] = round(row_total_loss + transition_step_loss, 4)
@@ -4743,6 +5049,9 @@ class WaterProfilePanel(QWidget):
             "head_loss_siphon": pressure_pipe_ctx["display_loss"],
             "pressure_pipe_display_loss": pressure_pipe_ctx["display_loss"],
             "pressure_pipe_display_is_row_sum": pressure_pipe_ctx["is_row_sum"],
+            "pressure_pipe_display_is_display_only": pressure_pipe_ctx["is_display_only"],
+            "pressure_pipe_display_mode": pressure_pipe_ctx["display_mode"],
+            "pressure_pipe_named_group_total": pressure_pipe_ctx["named_group_total_loss"],
         }
         from app_渠系计算前端.water_profile.formula_dialog import show_pressure_pipe_loss_dialog
         show_pressure_pipe_loss_dialog(self, node.name or f"行{row_idx+1}", details)
@@ -6471,7 +6780,8 @@ class WaterProfilePanel(QWidget):
             # 已写回损失值（新字段或旧兼容字段）时，保留转弯半径不清空
             ext_loss = getattr(node, 'external_head_loss', None)
             siphon_loss = getattr(node, 'head_loss_siphon', 0.0) or 0.0
-            if (ext_loss is not None and ext_loss > 0) or siphon_loss > 0:
+            named_group_result = self._get_pressure_pipe_named_group_result(node)
+            if (ext_loss is not None and ext_loss > 0) or siphon_loss > 0 or named_group_result:
                 continue
             
             # 清空临时转弯半径
@@ -6775,6 +7085,11 @@ class WaterProfilePanel(QWidget):
                     )
                     if pressure_pipe_window_override:
                         self._set_pressure_pipe_window_override(node, pressure_pipe_window_override)
+                    pressure_pipe_named_group_result = self._normalize_pressure_pipe_named_group_result(
+                        _ur.get(PRESSURE_PIPE_NAMED_GROUP_RESULT_ROLE_KEY, {})
+                    )
+                    if pressure_pipe_named_group_result:
+                        self._set_pressure_pipe_named_group_result(node, pressure_pipe_named_group_result)
                     _ext = _ur.get('_external_head_loss', None)
                     if _ext is not None and str(_ext).strip() != "":
                         try:
@@ -6996,22 +7311,6 @@ class WaterProfilePanel(QWidget):
             # 倒虹吸/有压管道损失 (col 38)
             _hs = _read_float(r, 38)
             self._apply_pressure_pipe_loss_cell_to_node(node, _hs, channel_level=channel_level)
-            if (
-                _hs <= 0
-                and self._is_named_pressure_pipe_group_node(node)
-                and getattr(node, 'in_out', None) is not None
-                and node.in_out.value == "出"
-                and getattr(node, 'external_head_loss', None) is not None
-            ):
-                # 兼容旧数据：历史版本将有压管道损失只存于 external_head_loss
-                try:
-                    _ext_loss = float(node.external_head_loss)
-                except (TypeError, ValueError):
-                    _ext_loss = 0.0
-                if _ext_loss > 0:
-                    node.head_loss_siphon = _ext_loss
-                # 迁移后清空旧字段，避免后续计算重复叠加
-                node.external_head_loss = None
             # 总损失 (col 39)
             _htotal = _read_float(r, 39)
             if _htotal != 0:
@@ -7049,6 +7348,8 @@ class WaterProfilePanel(QWidget):
             # 恢复加大流速（从批量计算导入的加大流量工况流速）
             if r in self._node_velocity_increased:
                 node.velocity_increased = self._node_velocity_increased[r]
+
+            self._migrate_named_pressure_pipe_outlet_visible_group_loss(node, row_index=r)
 
             nodes.append(node)
         self._pressure_turn_radius_fallback_groups = set()
@@ -7483,6 +7784,11 @@ class WaterProfilePanel(QWidget):
                     payload['_external_head_loss'] = getattr(node, 'external_head_loss')
                 elif '_external_head_loss' in payload:
                     payload.pop('_external_head_loss', None)
+                named_group_result = self._get_pressure_pipe_named_group_result(node)
+                if named_group_result:
+                    payload[PRESSURE_PIPE_NAMED_GROUP_RESULT_ROLE_KEY] = copy.deepcopy(named_group_result)
+                else:
+                    payload.pop(PRESSURE_PIPE_NAMED_GROUP_RESULT_ROLE_KEY, None)
                 # 持久化有压管道专用参数（表格无专门列，放在UserRole）
                 _sp = getattr(node, 'section_params', {}) or {}
                 _pm = str(_sp.get('pipe_material', '') or '').strip()
@@ -9899,6 +10205,36 @@ class WaterProfilePanel(QWidget):
         return ""
 
     @staticmethod
+    def _get_pressure_chain_member_source_identity_aliases(member) -> list[str]:
+        """返回逐段链成员对应的原命名组身份键列表。"""
+        aliases = []
+        for candidate in list(getattr(member, "source_identity_aliases", []) or []):
+            candidate_text = str(candidate or "").strip()
+            if candidate_text and candidate_text not in aliases:
+                aliases.append(candidate_text)
+        for candidate in (
+            getattr(member, "parent_group_identity", ""),
+            getattr(member, "parent_group_storage_key", ""),
+        ):
+            candidate_text = str(candidate or "").strip()
+            if candidate_text and candidate_text not in aliases:
+                aliases.append(candidate_text)
+        return aliases
+
+    @classmethod
+    def _build_pressure_chain_source_lookup(cls, chain_descriptors) -> dict[str, list]:
+        """按原命名组身份键索引逐段链成员。"""
+        lookup: dict[str, list] = {}
+        for descriptor in chain_descriptors or []:
+            for member in descriptor.get("members", []) or []:
+                aliases = cls._get_pressure_chain_member_source_identity_aliases(member)
+                if not aliases:
+                    continue
+                for alias in aliases:
+                    lookup.setdefault(alias, []).append(member)
+        return lookup
+
+    @staticmethod
     def _is_pressure_chain_anchor_member(member) -> bool:
         """判断是否为仅用于拓扑定位的链锚点成员。"""
         return bool(getattr(member, "is_anchor_member", False)) or not bool(
@@ -11223,13 +11559,52 @@ class WaterProfilePanel(QWidget):
         }
 
     def _calculate_pressure_chain_single_row_member_result(self, member, nodes, settings) -> dict:
-        """按节点原有规则计算连续承压链中的单行成员。"""
+        """计算连续承压链中的单行成员，逐段承压成员沿用正式承压口径。"""
         structure_type = str(getattr(member, "structure_type", "") or "")
         group_mode = "chain_tunnel_member" if "隧洞" in structure_type else "chain_row_member"
         base_record = self._build_pressure_chain_member_base_record(member, group_mode)
+        member_group = getattr(member, "group", None)
+        member_group_mode = str(getattr(member_group, "group_mode", "") or "").strip()
 
         if self._is_pressure_chain_anchor_member(member):
             return self._build_pressure_chain_anchor_record(member)
+
+        if member_group is not None and member_group_mode in {"named_row_segment", "unnamed_row_segment"}:
+            longitudinal_nodes_dict = getattr(self, "_pressure_pipe_calc_longitudinal_nodes_dict", {}) or {}
+            route_profile_segments_by_key = (
+                getattr(self, "_pressure_pipe_calc_route_profile_segments_by_key", {}) or {}
+            )
+            try:
+                _, pipe_long_nodes, spatial_fallback_reason = self._resolve_pressure_pipe_group_longitudinal_nodes(
+                    member_group,
+                    longitudinal_nodes_dict,
+                    route_profile_segments_by_key=route_profile_segments_by_key,
+                )
+            except Exception as exc:
+                pipe_long_nodes = []
+                spatial_fallback_reason = str(exc)
+
+            record = self._calculate_unnamed_pressure_pipe_group_result(
+                member_group,
+                nodes,
+                pipe_long_nodes,
+                spatial_fallback_reason=spatial_fallback_reason,
+            )
+            record.update({
+                "identity": base_record["identity"],
+                "storage_key": base_record["storage_key"],
+                "display_name": base_record["display_name"],
+                "flow_section": base_record["flow_section"],
+                "name": base_record["name"],
+                "structure_type": base_record["structure_type"],
+                "member_role": base_record["member_role"],
+                "group_mode": group_mode,
+                "target_row_index": base_record["target_row_index"],
+                "upstream_row_index": base_record["upstream_row_index"],
+            })
+            if record.get("status") != "success":
+                record["writeback_enabled"] = False
+            return record
 
         target_idx = self._coerce_pressure_pipe_row_index(getattr(member, "target_row_index", -1))
         upstream_idx = self._coerce_pressure_pipe_row_index(getattr(member, "upstream_row_index", -1))
@@ -11315,7 +11690,7 @@ class WaterProfilePanel(QWidget):
         }
 
     def _calculate_unnamed_pressure_pipe_group_result(self, group, nodes, longitudinal_nodes, spatial_fallback_reason: str = ""):
-        """计算匿名普通有压管道段专项结果。"""
+        """计算逐段承压成员专项结果。"""
         from core.pressure_pipe_calc import (
             PIPE_MATERIALS,
             calc_bend_local_loss,
@@ -11329,13 +11704,15 @@ class WaterProfilePanel(QWidget):
         display_name = self._get_pressure_pipe_group_display_name(group)
         storage_key = self._get_pressure_pipe_group_storage_key(group)
         identity = self._build_pressure_pipe_group_identity(group)
+        group_mode = str(getattr(group, "group_mode", "") or "unnamed_row_segment").strip()
+        segment_label = "逐段承压成员" if group_mode == "named_row_segment" else "匿名有压管道段"
         base_record = {
             "identity": identity,
             "storage_key": storage_key,
             "display_name": display_name,
             "flow_section": flow_section,
             "name": display_name,
-            "group_mode": "unnamed_row_segment",
+            "group_mode": group_mode,
         }
 
         if not group.is_valid():
@@ -11465,7 +11842,7 @@ class WaterProfilePanel(QWidget):
         total_head_loss = friction_loss + bend_loss + local_loss
         note = "；".join([part for part in note_parts if str(part).strip()])
         steps = [
-            "【匿名有压管道段水头损失计算】",
+            f"【{segment_label}水头损失计算】",
             f"对象: {display_name}",
             (
                 f"Q = {Q:.4f} m³/s, D = {D:.4f} m, 管材 = {display_material}"
@@ -11583,6 +11960,7 @@ class WaterProfilePanel(QWidget):
                 node,
                 self._build_pressure_pipe_window_override_payload(group, record),
             )
+            self._set_pressure_pipe_named_group_result(node, None)
             node.head_loss_friction = friction_loss
             node.head_loss_bend = bend_loss
             node.head_loss_local = local_loss
@@ -11604,16 +11982,34 @@ class WaterProfilePanel(QWidget):
                 node.transition_calc_details = copy.deepcopy(record.get("local_details") or {})
         else:
             self._set_pressure_pipe_window_override(node, None)
-            node.head_loss_siphon = float(head_loss)
-            node.external_head_loss = None
-            node.head_loss_total = (
-                (getattr(node, "head_loss_bend", 0.0) or 0.0)
-                + (getattr(node, "head_loss_friction", 0.0) or 0.0)
-                + (getattr(node, "head_loss_local", 0.0) or 0.0)
-                + (getattr(node, "head_loss_reserve", 0.0) or 0.0)
-                + (getattr(node, "head_loss_gate", 0.0) or 0.0)
-                + float(head_loss)
-            )
+            if self._is_named_pressure_pipe_group_node(node):
+                payload = self._build_pressure_pipe_named_group_result_payload(
+                    node=node,
+                    group=group,
+                    record=record,
+                    total_head_loss=head_loss,
+                )
+                self._set_pressure_pipe_named_group_result(node, payload)
+                hidden_total = payload.get("total_head_loss", None)
+                current_siphon_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
+                if hidden_total is not None and abs(current_siphon_loss - float(hidden_total)) <= 1e-6:
+                    node.head_loss_siphon = 0.0
+                node.external_head_loss = None
+                display_loss = self._get_named_pressure_pipe_outlet_display_loss(node)
+                setattr(node, "_pressure_pipe_display_loss", display_loss)
+                self._rebuild_named_pressure_pipe_outlet_total_loss(node)
+            else:
+                self._set_pressure_pipe_named_group_result(node, None)
+                node.head_loss_siphon = float(head_loss)
+                node.external_head_loss = None
+                node.head_loss_total = (
+                    (getattr(node, "head_loss_bend", 0.0) or 0.0)
+                    + (getattr(node, "head_loss_friction", 0.0) or 0.0)
+                    + (getattr(node, "head_loss_local", 0.0) or 0.0)
+                    + (getattr(node, "head_loss_reserve", 0.0) or 0.0)
+                    + (getattr(node, "head_loss_gate", 0.0) or 0.0)
+                    + float(head_loss)
+                )
 
         if identity:
             self._pressure_pipe_calc_done[identity] = True
@@ -12280,16 +12676,23 @@ class WaterProfilePanel(QWidget):
                 pipe_groups,
                 longitudinal_nodes_dict,
             )
+            self._pressure_pipe_calc_longitudinal_nodes_dict = copy.deepcopy(longitudinal_nodes_dict or {})
+            self._pressure_pipe_calc_route_profile_segments_by_key = copy.deepcopy(
+                route_profile_segments_by_key or {}
+            )
             for descriptor in chain_descriptors:
                 for member in descriptor.get("members", []) or []:
                     member_identity = self._get_pressure_chain_member_identity(member)
                     if member_identity:
                         chain_member_lookup[member_identity] = member
+            chain_source_lookup = self._build_pressure_chain_source_lookup(chain_descriptors)
 
             for group in pipe_groups:
                 flow_section = self._get_pressure_pipe_group_flow_section(group)
                 identity = self._build_pressure_pipe_group_identity(group)
                 chain_member = chain_member_lookup.get(identity)
+                split_row_members = list(chain_source_lookup.get(identity, []) or [])
+                is_split_tail_named_group = bool(split_row_members) or self._is_pressure_pipe_group_split_to_row_members(group)
                 pipe_name = (
                     str(getattr(chain_member, "display_name", "") or "").strip()
                     if chain_member is not None
@@ -12466,7 +12869,7 @@ class WaterProfilePanel(QWidget):
                 record = {
                     **base_record,
                     "status": "success",
-                    "writeback_enabled": True,
+                    "writeback_enabled": not is_split_tail_named_group,
                     "Q": group.design_flow,
                     "D": group.diameter,
                     "material_key": display_material,
@@ -12486,6 +12889,11 @@ class WaterProfilePanel(QWidget):
                     "inlet_transition_reason": calc_res.inlet_transition_reason,
                     "outlet_transition_reason": calc_res.outlet_transition_reason,
                 }
+                if is_split_tail_named_group:
+                    summary_only_note = "表3按逐段承压成员回写，本整组结果仅用于窗口汇总"
+                    record["note"] = "；".join(
+                        item for item in [record.get("note", ""), summary_only_note] if item
+                    )
                 if material_key == "球墨铸铁管":
                     fr = calc_res.friction_details or {}
                     main_f = fr.get("f")
@@ -12521,7 +12929,8 @@ class WaterProfilePanel(QWidget):
                             "sensitivity_delta_total_head_loss": low_total_head_loss - float(calc_res.total_head_loss),
                         })
                 records.append(record)
-                results_by_identity[identity] = record
+                if record.get("writeback_enabled", True):
+                    results_by_identity[identity] = record
 
                 # 持久化计算结果，便于后续追溯
                 manager.set_result(
@@ -12560,6 +12969,9 @@ class WaterProfilePanel(QWidget):
                     handled_identities.add(identity)
                     if record.get("status") == "success" and record.get("writeback_enabled", True):
                         results_by_identity[identity] = record
+
+            self._pressure_pipe_calc_longitudinal_nodes_dict = {}
+            self._pressure_pipe_calc_route_profile_segments_by_key = {}
 
             record_map = {
                 str(record.get("identity", "") or "").strip(): record
@@ -13152,12 +13564,15 @@ class WaterProfilePanel(QWidget):
             self.nodes = []
             for nd in nodes_data:
                 self.nodes.append(ChannelNode.from_project_dict(nd))
+            migrated_named_group_result = self._migrate_named_pressure_pipe_group_results(self.nodes)
             
             # 恢复计算结果节点列表
             calc_nodes_data = d.get("calculated_nodes", [])
             self.calculated_nodes = []
             for nd in calc_nodes_data:
                 self.calculated_nodes.append(ChannelNode.from_project_dict(nd))
+            if self._migrate_named_pressure_pipe_group_results(self.calculated_nodes):
+                migrated_named_group_result = True
             
             # 恢复额外缓存数据（key 从字符串转回 int）
             extra = d.get("extra_caches", {})
@@ -13297,6 +13712,8 @@ class WaterProfilePanel(QWidget):
                 self._repair_missing_transition_length_details(self.calculated_nodes)
                 self._repair_missing_transition_loss_details(self.calculated_nodes)
             self._refresh_all_transition_length_presentations(self.calculated_nodes or self.nodes)
+            if migrated_named_group_result and self.node_table.rowCount() > 1:
+                self._recalculate_silent()
 
             # 恢复下游门禁状态（默认锁定）
             state_text = str(merged_section.get("state_text", "")).strip()

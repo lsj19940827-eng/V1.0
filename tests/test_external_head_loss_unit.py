@@ -235,6 +235,71 @@ def test_external_head_loss_zero():
         f"预期: {other_losses:.3f}, 实际: {outlet.head_loss_total:.3f}"
 
 
+def test_named_pressure_pipe_hidden_group_result_prevents_legacy_group_loss_recount():
+    """
+    测试命名承压组已有隐藏结果元数据时，不再把旧版整组损失重复计入出口行总损失
+
+    场景：出口行残留旧版 head_loss_siphon / external_head_loss，
+    同时已经有 pressure_pipe_named_group_result 元数据
+    期望：总水头损失只保留本行逐行口径，不再把整组总损失重复计入
+    """
+    start_channel = ChannelNode()
+    start_channel.structure_type = StructureType.from_string("明渠-梯形")
+    start_channel.flow_section = "渠道1"
+    start_channel.section_params = {"b": 2.0, "m": 1.5, "h": 1.5}
+    start_channel.station_MC = 50.0
+    start_channel.velocity = 1.5
+    start_channel.water_depth = 1.5
+    start_channel.roughness = 0.025
+
+    outlet = ChannelNode()
+    outlet.structure_type = StructureType.from_string("有压管道")
+    outlet.name = "洞梁村"
+    outlet.in_out = InOutType.OUTLET
+    outlet.section_params = {"D": 1.5}
+    outlet.station_MC = 100.0
+    outlet.velocity = 2.0
+    outlet.water_depth = 1.5
+    outlet.flow_section = "渠道1"
+    outlet.head_loss_siphon = 10.4901
+    outlet.external_head_loss = 10.4901
+    outlet.pressure_pipe_named_group_result = {
+        "identity": "渠道1::洞梁村",
+        "storage_key": "渠道1::洞梁村",
+        "display_name": "洞梁村",
+        "structure_type": "有压管道",
+        "total_head_loss": 10.4901,
+        "applied_at": "2026-04-10 12:00:00",
+        "calc_steps": "legacy-migrated",
+        "target_row_index": 1,
+    }
+
+    channel = ChannelNode()
+    channel.structure_type = StructureType.from_string("明渠-梯形")
+    channel.flow_section = "渠道1"
+    channel.section_params = {"b": 2.0, "m": 1.5, "h": 1.5}
+    channel.station_MC = 150.0
+    channel.velocity = 1.5
+    channel.water_depth = 1.5
+    channel.roughness = 0.025
+
+    settings = ProjectSettings()
+    settings.start_water_level = 100.0
+    calc = HydraulicCalculator(settings)
+    calc.calculate_water_profile([start_channel, outlet, channel], method="forward")
+
+    other_losses = (
+        float(outlet.head_loss_friction or 0.0)
+        + float(outlet.head_loss_bend or 0.0)
+        + float(outlet.head_loss_local or 0.0)
+        + float(outlet.head_loss_reserve or 0.0)
+        + float(outlet.head_loss_gate or 0.0)
+    )
+
+    assert abs(outlet.head_loss_total - other_losses) < 0.01
+    assert abs((start_channel.water_level - outlet.water_level) - outlet.head_loss_total) < 0.01
+
+
 def test_multiple_nodes_with_external_loss():
     """
     测试多个节点都有 external_head_loss 的情况
@@ -632,6 +697,78 @@ def test_unnamed_pressure_pipe_window_override_takes_priority():
     assert anonymous_pipe.head_loss_siphon == 0.0
     assert abs(anonymous_pipe.head_loss_total - 0.34) < 1e-9
     assert abs(anonymous_pipe.water_level - (settings.start_water_level - 0.34)) < 1e-9
+
+
+def test_named_pressure_pipe_row_override_takes_priority_in_branch_channel():
+    """
+    测试 xx渠 末尾连续承压的命名行应用逐段窗口结果后，静默重算仍按逐段结果递推。
+    """
+    upstream = ChannelNode()
+    upstream.structure_type = StructureType.from_string("明渠-梯形")
+    upstream.flow_section = "渠道1"
+    upstream.section_params = {"b": 2.0, "m": 1.5, "h": 1.5}
+    upstream.station_MC = 10.0
+    upstream.velocity = 1.2
+    upstream.water_depth = 1.5
+    upstream.roughness = 0.014
+
+    named_pipe = ChannelNode()
+    named_pipe.structure_type = StructureType.from_string("有压管道")
+    named_pipe.name = "洞梁村"
+    named_pipe.is_pressure_pipe = True
+    named_pipe.flow_section = "渠道1"
+    named_pipe.section_params = {
+        "D": 1.0,
+        "pipe_material": "预应力钢筒混凝土管",
+        "pressure_pipe_window_override": {
+            "enabled": True,
+            "identity": "flow渠道1-row2",
+            "display_name": "洞梁村（前段）",
+            "group_mode": "chain_row_member",
+            "friction_loss": 0.21,
+            "total_bend_loss": 0.08,
+            "local_loss": 0.05,
+            "total_head_loss": 0.34,
+        },
+    }
+    named_pipe.pressure_pipe_window_override = dict(
+        named_pipe.section_params["pressure_pipe_window_override"]
+    )
+    named_pipe.external_head_loss = 10.49
+    named_pipe.head_loss_siphon = 10.49
+    named_pipe.flow = 1.6
+    named_pipe.station_MC = 60.0
+    named_pipe.turn_radius = 3.5
+    named_pipe.turn_angle = 45.0
+    named_pipe.water_depth = 1.0
+
+    downstream = ChannelNode()
+    downstream.structure_type = StructureType.from_string("明渠-梯形")
+    downstream.flow_section = "渠道1"
+    downstream.section_params = {"b": 2.0, "m": 1.5, "h": 1.5}
+    downstream.station_MC = 110.0
+    downstream.velocity = 1.1
+    downstream.water_depth = 1.5
+    downstream.roughness = 0.014
+
+    settings = ProjectSettings()
+    settings.channel_level = "支渠"
+    settings.start_water_level = 100.0
+    calc = HydraulicCalculator(settings)
+
+    nodes = [upstream, named_pipe, downstream]
+    for node in nodes:
+        calc.fill_section_params(node)
+
+    calc.calculate_water_profile(nodes, method="forward")
+
+    assert abs(named_pipe.head_loss_friction - 0.21) < 1e-9
+    assert abs(named_pipe.head_loss_bend - 0.08) < 1e-9
+    assert abs(named_pipe.head_loss_local - 0.05) < 1e-9
+    assert named_pipe.head_loss_siphon == 0.0
+    assert named_pipe.external_head_loss in (None, 0.0)
+    assert abs(named_pipe.head_loss_total - 0.34) < 1e-9
+    assert abs(named_pipe.water_level - (settings.start_water_level - 0.34)) < 1e-9
 
 
 if __name__ == "__main__":

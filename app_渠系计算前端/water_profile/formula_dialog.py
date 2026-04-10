@@ -137,10 +137,10 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
     },
     "弯道水头损失": {
         "title": "弯道水头损失计算",
-        "description": "普通渠道按弯道公式计算；xx管渠道级别下的空名称普通有压管道按承压弯头局部损失公式计算",
+        "description": "普通渠道按弯道公式计算；逐段承压成员按承压弯头局部损失公式计算",
         "formula": r"普通渠道: hw = n²·L·v² / R^(4/3) × (3/4)√(B/Rc)  |  有压管道: hj = ξ·V²/(2g)",
         "latex": r"h_w = \frac{n^2 \cdot L \cdot v^2}{R^{4/3}} \times \frac{3}{4}\sqrt{\frac{B}{R_c}},\quad h_j = \xi \cdot \frac{V^2}{2g}",
-        "note": "普通渠道/隧洞使用弯道二次流公式；仅 xx管 渠道级别下的空名称普通有压管道使用承压弯头局部损失系数。双击单元格可查看对应详细过程",
+        "note": "普通渠道/隧洞使用弯道二次流公式；逐段承压成员（含 xx管 空名称普通有压管道，以及 xx渠 末尾连续承压中的命名有压管道/定向钻/顶管）使用承压弯头局部损失系数。双击单元格可查看对应详细过程",
     },
     "渐变段水头损失": {
         "title": "渐变段水头损失计算",
@@ -151,10 +151,10 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
     },
     "沿程水头损失": {
         "title": "沿程水头损失计算",
-        "description": "隧洞等普通行使用底坡法；xx管渠道级别下的空名称普通有压管道使用 FMB 公式计算沿程损失",
+        "description": "隧洞等普通行使用底坡法；逐段承压成员使用 FMB 公式计算沿程损失",
         "formula": r"普通行: hf = i × L_eff  |  有压管道: hf = f × L × Q^m / d^b",
         "latex": r"h_f = i \times L_{eff},\quad h_f = f \times L \times Q^m / d^b",
-        "note": "有效长度 = (里程MC差) - 渐变段长度 - 上行弧长/2 - 本行弧长/2。仅 xx管 渠道级别下的空名称普通有压管道沿用同一长度划分，但沿程损失按 FMB 公式计算。双击单元格可查看详细过程",
+        "note": "有效长度 = (里程MC差) - 渐变段长度 - 上行弧长/2 - 本行弧长/2。逐段承压成员沿用同一长度划分，但沿程损失按 FMB 公式计算。双击单元格可查看详细过程",
     },
     "预留水头损失": {
         "title": "预留水头损失",
@@ -172,10 +172,10 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
     },
     "倒虹吸/有压管道水头损失": {
         "title": "倒虹吸/有压管道水头损失",
-        "description": "命名倒虹吸/有压管道组显示外部回写总损失；xx管渠道级别下的空名称普通有压管道行显示本行承压段总损失",
+        "description": "逐段承压成员在表3按本行损失显示：包含 xx管 渠道级别下的空名称普通有压管道，以及 xx渠 末尾连续承压中的命名有压管道、定向钻、顶管；整组总损失保留在有压管道计算结果汇总中",
         "formula": r"命名组: h_pp = h_group  |  空名称普通有压管道: h_pp = h_f + h_w + h_j",
         "latex": r"h_{pp} = h_{group},\quad h_{pp} = h_f + h_w + h_j",
-        "note": "命名组仍由外部水力模块回写；仅 xx管 渠道级别下的空名称普通有压管道行显示本行沿程损失、承压弯头损失和局部损失之和",
+        "note": "逐段承压成员会在表3显示本行沿程损失、承压弯头损失和局部损失之和：包含 xx管 渠道级别下的空名称普通有压管道，以及 xx渠 末尾连续承压中的命名有压管道、定向钻、顶管；命名整组总损失不再回写到表3出口行",
     },
     "总水头损失": {
         "title": "总水头损失",
@@ -1016,30 +1016,63 @@ def show_transition_loss_dialog(parent, node_name: str, details: Dict[str, Any])
     FormulaDialog(parent, f"{node_name} - 渐变段水头损失计算详情", sections)
 
 
-def _format_pressure_pipe_display_lines(display_loss: float, h_sip: float, is_row_sum: bool) -> str:
+def _format_pressure_pipe_display_lines(
+    display_loss: float,
+    h_sip: float,
+    is_row_sum: bool,
+    *,
+    is_display_only: bool = False,
+    display_mode: str = "normal",
+    named_group_total: float | None = None,
+) -> str:
     """生成有压管道列的展示说明文本。"""
     if is_row_sum:
         return (
             f"有压管道列显示值  $h_{{pp}} = {display_loss:.4f}$ m\n"
             "说明：该值由本行沿程、弯道和局部损失组成，只用于表3该列显示，不重复计入总损失。"
         )
+    if is_display_only and display_mode == "named_group_outlet":
+        lines = [
+            f"表3列38显示值  $h_{{pp,display}} = {display_loss:.4f}$ m",
+            "说明：命名有压管道、定向钻、顶管出口行在表3只显示本行损失，不再把整组总损失重复计入本行总损失。",
+        ]
+        if named_group_total is not None:
+            lines.append(
+                f"整组总损失  $h_{{group}} = {named_group_total:.4f}$ m，请到“有压管道计算结果汇总”查看。"
+            )
+        else:
+            lines.append("整组总损失请到“有压管道计算结果汇总”查看。")
+        return "\n".join(lines)
     return f"倒虹吸/有压管道水头损失  $h_{{sip}} = {h_sip:.4f}$ m"
 
 
-def _format_pressure_pipe_formula_note(display_loss: float, is_row_sum: bool) -> str:
+def _format_pressure_pipe_formula_note(
+    display_loss: float,
+    is_row_sum: bool,
+    *,
+    is_display_only: bool = False,
+    display_mode: str = "normal",
+) -> str:
     """生成总损失/水位公式下方的补充说明。"""
-    if not is_row_sum:
-        return ""
-    return (
-        f"\n列38显示值  $h_{{pp}} = {display_loss:.4f}$ m"
-        "（= 本行沿程 + 弯道 + 局部，仅展示不重复计入）"
-    )
+    if is_row_sum:
+        return (
+            f"\n列38显示值  $h_{{pp}} = {display_loss:.4f}$ m"
+            "（= 本行沿程 + 弯道 + 局部，仅展示不重复计入）"
+        )
+    if is_display_only and display_mode == "named_group_outlet":
+        return (
+            f"\n列38显示值  $h_{{pp,display}} = {display_loss:.4f}$ m"
+            "（命名承压组出口行只作本行显示，不再按整组总损失重复叠加）"
+        )
+    return ""
 
 
 def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
     """倒虹吸/有压管道水头损失详情。"""
     display_loss = details.get("pressure_pipe_display_loss", details.get("head_loss_siphon", 0.0))
     is_row_sum = bool(details.get("pressure_pipe_display_is_row_sum", False))
+    display_mode = str(details.get("pressure_pipe_display_mode", "normal") or "normal")
+    named_group_total = details.get("pressure_pipe_named_group_total", None)
     hf = details.get("head_loss_friction", 0.0)
     hw = details.get("head_loss_bend", 0.0)
     hj = details.get("head_loss_local", 0.0)
@@ -1049,7 +1082,7 @@ def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, An
             {
                 "title": "1. 本行有压管道列显示口径",
                 "formula": r"$h_{pp} = h_f + h_w + h_j$",
-                "content": "仅 xx管 渠道级别下的空名称普通有压管道行按本行承压段显示，不再单独重复计入总损失。",
+                "content": "逐段承压成员会在表3按本行承压段显示，包含 xx管 渠道级别下的空名称普通有压管道，以及 xx渠 末尾连续承压中的命名有压管道、定向钻、顶管；整组总损失仅保留在窗口汇总中。",
             },
             {
                 "title": "2. 本行分项值",
@@ -1066,6 +1099,29 @@ def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, An
             {
                 "title": "4. 计算结果",
                 "formula": f"$h_{{pp}} = {display_loss:.4f} \\ m$",
+            },
+        ]
+    elif display_mode == "named_group_outlet":
+        values = [f"表3列38显示值  $h_{{pp,display}} = {display_loss:.4f}$ m"]
+        if named_group_total is not None:
+            values.append(f"整组总损失  $h_{{group}} = {named_group_total:.4f}$ m")
+        sections = [
+            {
+                "title": "1. 命名承压组出口行显示口径",
+                "formula": r"$h_{pp,display} = h_{row}$",
+                "content": "表3只显示本行损失，不再把命名有压管道、定向钻、顶管整组总损失回写到出口行。",
+            },
+            {
+                "title": "2. 当前显示值",
+                "values": "\n".join(values),
+            },
+            {
+                "title": "3. 说明",
+                "content": "整组总损失请到“有压管道计算结果汇总”查看，表3列38仅用于出口行本行显示。",
+            },
+            {
+                "title": "4. 计算结果",
+                "formula": f"$h_{{pp,display}} = {display_loss:.4f} \\ m$",
             },
         ]
     else:
@@ -1097,22 +1153,26 @@ def show_total_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
     h_sip = details.get('head_loss_siphon', 0)
     pressure_pipe_display_loss = details.get('pressure_pipe_display_loss', h_sip)
     pressure_pipe_display_is_row_sum = bool(details.get('pressure_pipe_display_is_row_sum', False))
+    pressure_pipe_display_is_display_only = bool(details.get('pressure_pipe_display_is_display_only', False))
+    pressure_pipe_display_mode = str(details.get('pressure_pipe_display_mode', 'normal') or 'normal')
+    pressure_pipe_named_group_total = details.get('pressure_pipe_named_group_total', None)
     h_total = details.get('head_loss_total', hw + hj + hf + h_res + h_gate + h_sip)
     sections = [
         {"title": "1. 普通行总水头损失口径",
          "formula": r"$h_{\Sigma,row} = h_w + h_j + h_f + h_{res} + h_{gate} + h_{sip}$",
          "content": "这里解释的是表3普通行自身损失，不含前方单独渐变段行。前方渐变段损失请在渐变段水头损失列单独查看。"
-                    + ("空名称普通有压管道行的列38只是本行承压段显示值，不再作为单独一项重复叠加。" if pressure_pipe_display_is_row_sum else "")},
+                   + ("空名称普通有压管道行的列38只是本行承压段显示值，不再作为单独一项重复叠加。" if pressure_pipe_display_is_row_sum else "")
+                   + ("命名承压组出口行的列38只显示本行损失，整组总损失请到有压管道计算结果汇总查看。" if pressure_pipe_display_mode == "named_group_outlet" else "")},
         {"title": "2. 本普通行各项损失值",
          "values": f"弯道水头损失  $h_w = {hw:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
                    f"沿程水头损失  $h_f = {hf:.4f}$ m\n"
                    f"预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n"
-                   f"{_format_pressure_pipe_display_lines(pressure_pipe_display_loss, h_sip, pressure_pipe_display_is_row_sum)}\n"
+                   f"{_format_pressure_pipe_display_lines(pressure_pipe_display_loss, h_sip, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode, named_group_total=pressure_pipe_named_group_total)}\n"
                    f"───────────────────────\n本普通行总水头损失  $h_{{\\Sigma,row}} = {h_total:.4f}$ m"},
         {"title": "3. 代入公式计算",
          "values": f"$h_{{\\Sigma,row}} = {hw:.4f} + {hj:.4f} + {hf:.4f} + {h_res:.4f} + {h_gate:.4f} + {h_sip:.4f}$\n"
                    f"    $= {h_total:.4f}$ m"
-                   f"{_format_pressure_pipe_formula_note(pressure_pipe_display_loss, pressure_pipe_display_is_row_sum)}"},
+                   f"{_format_pressure_pipe_formula_note(pressure_pipe_display_loss, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode)}"},
         {"title": "4. 计算结果", "formula": f"$h_{{\\Sigma,row}} = {h_total:.4f} \\ m$"},
     ]
     FormulaDialog(parent, f"{node_name} - 总水头损失计算详情", sections)
@@ -1152,6 +1212,9 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
         h_sip = details.get('h_siphon', 0.0)
         pressure_pipe_display_loss = details.get('pressure_pipe_display_loss', h_sip)
         pressure_pipe_display_is_row_sum = bool(details.get('pressure_pipe_display_is_row_sum', False))
+        pressure_pipe_display_is_display_only = bool(details.get('pressure_pipe_display_is_display_only', False))
+        pressure_pipe_display_mode = str(details.get('pressure_pipe_display_mode', 'normal') or 'normal')
+        pressure_pipe_named_group_total = details.get('pressure_pipe_named_group_total', None)
         row_total = details.get('total_loss', hf + hj + hw + h_res + h_gate + h_sip)
         transition_step_loss = details.get('transition_step_loss', details.get('h_tr', 0.0))
         step_drop = details.get('step_drop', row_total + transition_step_loss)
@@ -1170,7 +1233,7 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
              "values": f"沿程水头损失  $h_f = {hf:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
                        f"弯道水头损失  $h_w = {hw:.4f}$ m\n预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n"
                        f"过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n"
-                       f"{_format_pressure_pipe_display_lines(pressure_pipe_display_loss, h_sip, pressure_pipe_display_is_row_sum)}\n"
+                       f"{_format_pressure_pipe_display_lines(pressure_pipe_display_loss, h_sip, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode, named_group_total=pressure_pipe_named_group_total)}\n"
                        f"───────────────────────\n本普通行总水头损失  $h_{{\\Sigma,row}} = {row_total:.4f}$ m"},
             {"title": "3. 本步总落差（用于水位递推）",
              "values": f"上一普通节点水位  $Z_{{i-1}} = {prev:.4f}$ m\n"
