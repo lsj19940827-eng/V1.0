@@ -2847,15 +2847,6 @@ class WaterProfilePanel(QWidget):
     def _get_named_pressure_pipe_outlet_display_loss(cls, node) -> float:
         """计算命名承压组出口行在表3列38的显示值。"""
         total_head_loss = cls._get_named_pressure_pipe_group_total_head_loss(node)
-        hydraulic_loss = (
-            float(getattr(node, "head_loss_bend", 0.0) or 0.0)
-            + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
-            + float(getattr(node, "head_loss_local", 0.0) or 0.0)
-        )
-        if hydraulic_loss > 0:
-            setattr(node, "_pressure_pipe_display_loss", hydraulic_loss)
-            return hydraulic_loss
-
         stored_display = float(getattr(node, "_pressure_pipe_display_loss", 0.0) or 0.0)
         if stored_display > 0:
             return stored_display
@@ -2866,17 +2857,32 @@ class WaterProfilePanel(QWidget):
         ):
             setattr(node, "_pressure_pipe_display_loss", siphon_loss)
             return siphon_loss
+
+        hydraulic_loss = (
+            float(getattr(node, "head_loss_bend", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_local", 0.0) or 0.0)
+        )
+        if hydraulic_loss > 0:
+            setattr(node, "_pressure_pipe_display_loss", hydraulic_loss)
+            return hydraulic_loss
         return 0.0
 
     @classmethod
     def _rebuild_named_pressure_pipe_outlet_total_loss(cls, node) -> float:
         """按逐行口径重建命名承压组出口行总损失。"""
-        total_loss = (
+        hydraulic_loss = (
             float(getattr(node, "head_loss_bend", 0.0) or 0.0)
             + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
             + float(getattr(node, "head_loss_local", 0.0) or 0.0)
+        )
+        display_loss = cls._get_named_pressure_pipe_outlet_display_loss(node)
+        extra_pressure_loss = max(display_loss - hydraulic_loss, 0.0)
+        total_loss = (
+            hydraulic_loss
             + float(getattr(node, "head_loss_reserve", 0.0) or 0.0)
             + float(getattr(node, "head_loss_gate", 0.0) or 0.0)
+            + extra_pressure_loss
         )
         node.head_loss_total = total_loss
         return total_loss

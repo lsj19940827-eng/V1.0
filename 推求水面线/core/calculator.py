@@ -2514,7 +2514,7 @@ class WaterProfileCalculator:
             h_local = node.head_loss_local or 0.0
             h_reserve = getattr(node, 'head_loss_reserve', 0.0) or 0.0
             h_gate = getattr(node, 'head_loss_gate', 0.0) or 0.0
-            h_siphon = getattr(node, 'head_loss_siphon', 0.0) or 0.0
+            h_siphon = self.hyd_calc._resolve_pressure_pipe_formula_term_loss(node)
             
             # 重新计算总水头损失
             # 注：渐变段损失单独显示在渐变段行，不计入节点的总水头损失

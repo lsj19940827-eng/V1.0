@@ -1237,16 +1237,48 @@ class HydraulicCalculator:
         return result.get("total_head_loss", None)
 
     @classmethod
+    def _get_named_pressure_pipe_outlet_display_loss(cls, node: Optional[ChannelNode]) -> float:
+        """读取命名承压出口行真正要参与递推的本段损失。"""
+        if node is None:
+            return 0.0
+
+        stored_display = float(getattr(node, "_pressure_pipe_display_loss", 0.0) or 0.0)
+        if stored_display > ZERO_TOLERANCE:
+            return stored_display
+
+        hidden_total = cls._get_named_pressure_pipe_hidden_total(node)
+        head_loss_siphon = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
+        if hidden_total is not None and head_loss_siphon > ZERO_TOLERANCE:
+            if abs(head_loss_siphon - float(hidden_total)) <= 1e-6:
+                node.head_loss_siphon = 0.0
+                head_loss_siphon = 0.0
+        if head_loss_siphon > ZERO_TOLERANCE:
+            setattr(node, "_pressure_pipe_display_loss", head_loss_siphon)
+            return head_loss_siphon
+
+        hydraulic_loss = (
+            float(getattr(node, "head_loss_bend", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_local", 0.0) or 0.0)
+        )
+        if hydraulic_loss > ZERO_TOLERANCE:
+            setattr(node, "_pressure_pipe_display_loss", hydraulic_loss)
+            return hydraulic_loss
+        return 0.0
+
+    @classmethod
     def _resolve_pressure_pipe_formula_term_loss(cls, node: Optional[ChannelNode]) -> float:
         """解析总损失和水位递推里应计入的承压项。"""
         head_loss_siphon = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
         if not cls._is_named_pressure_pipe_outlet_with_hidden_result(node):
             return head_loss_siphon
-        hidden_total = cls._get_named_pressure_pipe_hidden_total(node)
-        if hidden_total is not None and head_loss_siphon > 0 and abs(head_loss_siphon - float(hidden_total)) <= 1e-6:
-            node.head_loss_siphon = 0.0
-            return 0.0
-        return head_loss_siphon
+        display_loss = cls._get_named_pressure_pipe_outlet_display_loss(node)
+        hydraulic_loss = (
+            float(getattr(node, "head_loss_bend", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_local", 0.0) or 0.0)
+        )
+        return max(display_loss - hydraulic_loss, 0.0)
 
     def calculate_local_loss(self, node: ChannelNode) -> float:
         """
@@ -1702,6 +1734,14 @@ class HydraulicCalculator:
             # 计算总水头损失（不含渐变段损失）
             # 注：总损失包含局部水头损失（hj），以便与水位递推/累计损失一致
             curr_node.head_loss_total = hw + hf + hj + head_loss_reserve + head_loss_gate + head_loss_siphon + external_head_loss
+            if self._is_named_pressure_pipe_outlet_with_hidden_result(curr_node):
+                # 命名承压尾段需要按“本行正式损失”重新扣减水位，
+                # 不能继续沿用隐藏整组结果剥离前的基础项口径。
+                curr_node.water_level = (
+                    prev_regular_node.water_level
+                    - curr_node.head_loss_total
+                    - accumulated_transition_loss
+                )
             
             # 计算渠底高程
             if curr_node.water_depth > 0:
