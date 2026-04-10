@@ -133,9 +133,10 @@ def test_show_pressure_pipe_loss_dialog_supports_row_level_display(monkeypatch):
     text_blob = _build_text_blob(captured["sections"])
 
     assert captured["title"] == "行5 - 倒虹吸/有压管道水头损失详情"
-    assert "空名称普通有压管道行" in text_blob
+    assert "逐段承压成员" in text_blob
+    assert "xx渠 末尾连续承压" in text_blob
     assert "0.0315" in text_blob
-    assert "不再单独重复计入总损失" in text_blob
+    assert "总损失" in text_blob
 
 
 def test_pressure_pipe_loss_column_supports_double_click_detail():
@@ -148,5 +149,6 @@ def test_pressure_pipe_loss_column_formula_mentions_row_level_display():
     module = _load_formula_dialog_module()
     column_info = module.COLUMN_FORMULAS["倒虹吸/有压管道水头损失"]
 
-    assert "空名称普通有压管道行" in column_info["description"]
+    assert "逐段承压成员" in column_info["description"]
+    assert "xx渠 末尾连续承压" in column_info["note"]
     assert "沿程损失" in column_info["note"]

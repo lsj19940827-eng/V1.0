@@ -192,6 +192,7 @@ if section_type == "有压管道":
 
 - `支渠` 连续承压链里的命名成员，正式身份统一为 `flow{流量段}-row{起始行号}`；旧 `flow_section::name::rowsxx` 只保留被动兼容，不再继续生成。
 - 节点窗口覆盖、链成员写回、`route / segment` 持久化、xx管 纵断面导出，全部使用同一套新身份。
+- 若 `xx渠` 末尾连续承压中的命名 `有压管道 / 定向钻 / 顶管` 属于真正尾段，且内部至少有 `进 / 中间 / 出` 三行，则会继续拆成逐行成员；表3按逐段值正式递推，窗口汇总仍保留整组总损失。
 - 连续承压结果保存改成“当前整线快照覆盖活动范围”，同一整线范围内旧的 `route / segment / pipe` 残留会被一起清掉。
 - xx管 导出查找先按新身份找正式分段；若先撞到没有有效纵断面的旧记录，会继续按 `route_key` 回退整线纵断面。
 - 本次口径的目标，是修掉赛金支渠 `赛支3+968.95 / 405m` 被留空的问题；`IP点名称 / 里程桩号` 的现有视觉排版不在本次改动范围内。
@@ -359,6 +360,7 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 - `支渠` 的 `route_start_row_index`、`route_ip_points` 与整线导入锚点，都跟随这条收紧后的链范围生成，不能再落到前置隧洞上。
 - `支渠` 链首若是“单点、仅进口、后续同链仍有同名普通有压段”的命名普通有压，则优先识别为链起点前缀段：只要到下一段 `定向钻 / 顶管 / 隧洞` 进口之间存在有效长度，就按沿程损失参与计算，并把结果写回下一段特殊承压建筑的进口行。
 - 只有当前缀长度无效、无法裁出可用纵断面或拿不到有效参数时，链首成员才回退为链起点锚点：成员状态记成功，但 `writeback_enabled=False`、`total_head_loss=None`，不单独计损。
+- `支渠` 末尾连续承压中的命名 `有压管道 / 定向钻 / 顶管`，若本身是连续尾段且内部有 `进 / 中间 / 出` 三行及以上，则改为按“上一承压/普通行 -> 当前行”拆成逐行成员；表3列38、总损失、累计损失和水位都按这些逐段结果递推，出口行只保留最后一段结果。
 - 同一条连续承压链里若出现重名成员，展示名按出现顺序追加后缀：`前缀段 / 起点锚点 / 前段 / 中段N / 后段`；只改展示，不改稳定身份键。
 - 连续承压正式对象统一拆成四类：`PressureRoute`（整线）、`PressureSegment`（子段）、`PressureResult`（正式结果）、`ProfileCoverageState`（纵断面覆盖状态）。链识别、结果保存、导出与提示都围绕这四类对象运行，不再由不同模块临时拼名字或猜身份。
 - 名称口径正式拆分：`base_name` 只负责业务归属，`member_display_name` 负责软件内展示，`route_display_name` 负责整线卡与提示，`dxf_display_name` 只负责 DXF 建筑物名称行。DXF 不再拼“名称 + 结构类型”，像赛金支渠这类结果会稳定显示为 `苟家湾 / 大石包 / 苟家湾`。
@@ -395,6 +397,7 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 - `routes[route_key]` 现还会正式保存 `profile_state / entered_pressurized_at_row / segment_identities`
 - `segments[identity]` 作为连续承压正式存储桶，保存 `base_name / member_display_name / dxf_display_name / member_role / start_mc / end_mc / status / friction_loss / bend_loss / local_loss / total_loss / computed_from_profile_source`
 - 旧 `pipes` 保留兼容镜像；新导出、新提示、新回读优先使用 `routes / segments`
+- 末尾命名承压尾段若已拆成逐行成员，则 `segments` 保存逐段正式结果；整组总损失只保留在窗口汇总和兼容镜像里，不再要求表3出口行同时保留整组值
 - 普通有压子段若只剩 1 个纵断面点，只视为边界占位；导出时应回退整线 `routes[route_key].longitudinal_nodes`，隧洞生成段除外
 - 整线卡里导入或清空纵断面 DXF 后，需要立即同步到 `routes[route_key].longitudinal_nodes`，不能等到“开始计算”后才落盘
 

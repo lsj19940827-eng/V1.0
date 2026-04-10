@@ -459,10 +459,36 @@ def test_total_loss_dialog_marks_row_level_display_without_duplicate_siphon(monk
 
     text_blob = _build_text_blob(captured["sections"])
 
-    assert "列38只是本行承压段显示值" in text_blob
-    assert "只用于表3该列显示" in text_blob
-    assert "不重复计入总损失" in text_blob
+    assert "空名称普通有压管道行" in text_blob
+    assert "本行承压段显示值" in text_blob
+    assert "不再作为单独一项重复叠加" in text_blob
     assert "倒虹吸/有压管道水头损失  $h_{sip} = 0.0000" not in text_blob
+
+
+def test_pressure_pipe_loss_dialog_for_named_group_outlet_points_group_total_to_summary(monkeypatch):
+    module = _load_formula_dialog_module()
+    captured = _capture_formula_dialog(monkeypatch, module)
+
+    module.show_pressure_pipe_loss_dialog(
+        None,
+        "洞梁村",
+        {
+            "head_loss_bend": 0.0,
+            "head_loss_friction": 0.8286,
+            "head_loss_local": 0.0,
+            "head_loss_siphon": 0.8286,
+            "pressure_pipe_display_loss": 0.8286,
+            "pressure_pipe_display_is_row_sum": False,
+            "pressure_pipe_display_mode": "named_group_outlet",
+            "pressure_pipe_named_group_total": 10.4901,
+        },
+    )
+
+    text_blob = _build_text_blob(captured["sections"])
+
+    assert "表3只显示本行损失" in text_blob
+    assert "整组总损失请到“有压管道计算结果汇总”查看" in text_blob
+    assert "总损失由外部水力计算回写，通常在出口行显示" not in text_blob
 
 
 def test_water_level_dialog_shows_both_row_loss_and_step_drop(monkeypatch):

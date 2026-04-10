@@ -8,7 +8,7 @@
 
 import copy
 import math
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import sys
 import os
 
@@ -176,7 +176,7 @@ class HydraulicCalculator:
         return normalized
 
     def _get_pressure_pipe_window_override(self, node: Optional[ChannelNode]) -> Dict[str, object]:
-        """读取匿名有压管道窗口覆盖结果。"""
+        """读取逐段有压成员窗口覆盖结果。"""
         if node is None:
             return {}
         override = self._normalize_pressure_pipe_window_override(
@@ -194,6 +194,17 @@ class HydraulicCalculator:
             if isinstance(params, dict):
                 params["pressure_pipe_window_override"] = copy.deepcopy(override)
         return override
+
+    @staticmethod
+    def _is_pressure_pipe_row_override_mode(group_mode: str) -> bool:
+        """判断窗口覆盖是否属于逐段正式计损口径。"""
+        return str(group_mode or "").strip() in {
+            "unnamed_row_segment",
+            "named_row_segment",
+            "chain_row_member",
+            "chain_tunnel_member",
+            "chain_prefix_member",
+        }
 
     def _should_calculate_bend_loss(self, node: Optional[ChannelNode]) -> bool:
         """判断当前节点是否需要尝试计算弯道损失。"""
@@ -1158,6 +1169,85 @@ class HydraulicCalculator:
         
         return round(hf, HEAD_LOSS_PRECISION)
     
+    @staticmethod
+    def _get_named_pressure_pipe_group_result(node: Optional[ChannelNode]) -> Dict[str, Any]:
+        """读取命名承压组隐藏结果元数据。"""
+        if node is None:
+            return {}
+        raw_value = getattr(node, "pressure_pipe_named_group_result", {}) or {}
+        if not raw_value and isinstance(getattr(node, "section_params", None), dict):
+            raw_value = node.section_params.get("pressure_pipe_named_group_result", {}) or {}
+        if not isinstance(raw_value, dict):
+            return {}
+
+        identity = str(raw_value.get("identity", "") or "").strip()
+        storage_key = str(raw_value.get("storage_key", "") or identity).strip() or identity
+        display_name = str(raw_value.get("display_name", "") or "").strip()
+        structure_type = str(raw_value.get("structure_type", "") or "").strip()
+        applied_at = str(raw_value.get("applied_at", "") or "").strip()
+        calc_steps = str(raw_value.get("calc_steps", "") or "").strip()
+        target_row_index = raw_value.get("target_row_index", -1)
+        try:
+            target_row_index = int(target_row_index)
+        except (TypeError, ValueError):
+            target_row_index = -1
+
+        total_head_loss = raw_value.get("total_head_loss", None)
+        if total_head_loss is not None and str(total_head_loss).strip() != "":
+            try:
+                total_head_loss = float(total_head_loss)
+            except (TypeError, ValueError):
+                total_head_loss = None
+        else:
+            total_head_loss = None
+
+        if not any((identity, storage_key, display_name, structure_type, applied_at, calc_steps)) and total_head_loss is None:
+            return {}
+        return {
+            "identity": identity,
+            "storage_key": storage_key,
+            "display_name": display_name,
+            "structure_type": structure_type,
+            "total_head_loss": total_head_loss,
+            "applied_at": applied_at,
+            "calc_steps": calc_steps,
+            "target_row_index": target_row_index,
+        }
+
+    @classmethod
+    def _is_named_pressure_pipe_outlet_with_hidden_result(cls, node: Optional[ChannelNode]) -> bool:
+        """判断是否为带隐藏结果元数据的命名承压组出口行。"""
+        if node is None:
+            return False
+        if not StructureType.is_pressure_pipe_like(getattr(node, "structure_type", None)):
+            return False
+        if not str(getattr(node, "name", "") or "").strip():
+            return False
+        in_out = getattr(node, "in_out", None)
+        if getattr(in_out, "value", "") != "出":
+            return False
+        return bool(cls._get_named_pressure_pipe_group_result(node))
+
+    @classmethod
+    def _get_named_pressure_pipe_hidden_total(cls, node: Optional[ChannelNode]) -> Optional[float]:
+        """读取命名承压组整组总损失。"""
+        result = cls._get_named_pressure_pipe_group_result(node)
+        if not result:
+            return None
+        return result.get("total_head_loss", None)
+
+    @classmethod
+    def _resolve_pressure_pipe_formula_term_loss(cls, node: Optional[ChannelNode]) -> float:
+        """解析总损失和水位递推里应计入的承压项。"""
+        head_loss_siphon = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
+        if not cls._is_named_pressure_pipe_outlet_with_hidden_result(node):
+            return head_loss_siphon
+        hidden_total = cls._get_named_pressure_pipe_hidden_total(node)
+        if hidden_total is not None and head_loss_siphon > 0 and abs(head_loss_siphon - float(hidden_total)) <= 1e-6:
+            node.head_loss_siphon = 0.0
+            return 0.0
+        return head_loss_siphon
+
     def calculate_local_loss(self, node: ChannelNode) -> float:
         """
         计算局部水头损失
@@ -1189,6 +1279,8 @@ class HydraulicCalculator:
         if StructureType.is_pressure_pipe_like_str(sv) or getattr(node, 'is_pressure_pipe', False):
             if node.name in self.pressure_pipe_losses:
                 return self.pressure_pipe_losses[node.name]
+            if self._is_named_pressure_pipe_outlet_with_hidden_result(node):
+                return 0.0
             if node.external_head_loss is not None:
                 return node.external_head_loss
             return 0.0
@@ -1523,9 +1615,12 @@ class HydraulicCalculator:
             
             # 计算当前节点的弯道损失（明渠按弧长，有压管道匿名行按承压弯头口径）
             window_override = self._get_pressure_pipe_window_override(curr_node)
+            row_override_mode = self._is_pressure_pipe_row_override_mode(
+                window_override.get("group_mode", "") if window_override else ""
+            )
             if window_override:
                 curr_node.head_loss_bend = float(window_override.get("total_bend_loss", 0.0) or 0.0)
-                if self._is_unnamed_regular_pressure_pipe(curr_node):
+                if row_override_mode or self._is_unnamed_regular_pressure_pipe(curr_node):
                     bend_details = copy.deepcopy(window_override.get("bend_details", {}) or {})
                     if bend_details:
                         bend_details.setdefault('source', 'window_override')
@@ -1584,7 +1679,7 @@ class HydraulicCalculator:
             else:
                 hj = self.calculate_local_loss(curr_node)
             curr_node.head_loss_local = hj
-            if window_override and self._is_unnamed_regular_pressure_pipe(curr_node):
+            if row_override_mode:
                 curr_node.head_loss_siphon = 0.0
                 curr_node.external_head_loss = None
             
@@ -1594,11 +1689,14 @@ class HydraulicCalculator:
             # 获取预留、过闸、倒虹吸损失
             head_loss_reserve = getattr(curr_node, 'head_loss_reserve', 0.0) or 0.0
             head_loss_gate = getattr(curr_node, 'head_loss_gate', 0.0) or 0.0
-            head_loss_siphon = getattr(curr_node, 'head_loss_siphon', 0.0) or 0.0
+            head_loss_siphon = self._resolve_pressure_pipe_formula_term_loss(curr_node)
             
             # 获取外部水头损失（有压管道/倒虹吸）
             external_head_loss = getattr(curr_node, 'external_head_loss', None)
             if external_head_loss is None:
+                external_head_loss = 0.0
+            if self._is_named_pressure_pipe_outlet_with_hidden_result(curr_node):
+                curr_node.external_head_loss = None
                 external_head_loss = 0.0
             
             # 计算总水头损失（不含渐变段损失）
@@ -1686,7 +1784,7 @@ class HydraulicCalculator:
             hw = curr_node.head_loss_bend or 0.0
             h_reserve = getattr(curr_node, 'head_loss_reserve', 0.0) or 0.0
             h_gate = getattr(curr_node, 'head_loss_gate', 0.0) or 0.0
-            h_siphon = getattr(curr_node, 'head_loss_siphon', 0.0) or 0.0
+            h_siphon = self._resolve_pressure_pipe_formula_term_loss(curr_node)
 
             total_drop = hf + hj + hw + h_reserve + h_gate + h_siphon + transition_loss
             curr_node.water_level = prev_regular_node.water_level - total_drop

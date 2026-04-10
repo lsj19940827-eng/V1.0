@@ -626,7 +626,8 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
    - 调用 `calc_total_head_loss()` 或 `calc_total_head_loss_with_spatial()` 计算总水头损失。
    - 可选执行灵敏度分析，例如球墨铸铁管 `f` 上下限对比。
 4. 计算结果回写：
-   - `node.head_loss_siphon`：总水头损失，与倒虹吸共用同一列。
+   - 命名整组结果仍可写入 `node.head_loss_siphon`，与倒虹吸共用同一列。
+   - 若属于 `xx渠` 末尾连续承压中的命名 `有压管道 / 定向钻 / 顶管` 尾段，则先拆成逐行成员，并把逐段结果写入 `pressure_pipe_window_override`；表3列38、总损失、累计损失和水位统一按逐段值递推。
    - 持久化到 `PressurePipeManager`。
    - 详细计算过程追加到 `detail_text`。
 5. 更新有压管道参数芯片 `pressure_pipe_roughness_chips`，展示各管道的管材与 `f / m / b` 系数。
@@ -672,7 +673,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 
 ### DDR-4：有压管道与倒虹吸共用 `head_loss_siphon` 列
 
-有压管道的水头损失回写到 `head_loss_siphon` 字段，也就是表格中的 col 38“倒虹吸水头损失”列。原因是两者同属有压流建筑物，处理逻辑完全一致，都是“外部导入总损失，再参与水位递推”，无需额外新增独立列。
+命名整组有压管道的总损失仍回写到 `head_loss_siphon` 字段，也就是表格中的 col 38“倒虹吸水头损失”列；但 `xx渠` 末尾连续承压中的命名尾段若已拆成逐行成员，则改为通过 `pressure_pipe_window_override` 保存逐段结果，并继续占用同一列做显示。原因是界面列不变，但逐段场景必须避免旧整组值再次干扰总损失和水位递推。
 
 ### DDR-5：有压管道渐变段设置复用倒虹吸设置
 

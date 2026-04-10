@@ -83,6 +83,7 @@ class ChannelNode:
     external_head_loss: Optional[float] = None  # 外部导入的水头损失（倒虹吸/有压管道用）
     pressure_pipe_row_identity: str = ""        # 空名称有压管道行的稳定标识
     pressure_pipe_window_override: Dict[str, Any] = field(default_factory=dict)  # 有压管道窗口专项结果覆盖
+    pressure_pipe_named_group_result: Dict[str, Any] = field(default_factory=dict)  # 命名承压组隐藏结果元数据
     is_diversion_gate: bool = False             # 是否为闸类结构（分水闸/分水口/节制闸/泄水闸等，仅过闸水头损失）
     is_auto_inserted_channel: bool = False      # 是否为自动插入的明渠段（渐变段间连接段，不分配IP编号）
     stat_length: float = 0.0                    # 统计用长度（结构类型汇总用，不参与导出）
@@ -287,6 +288,7 @@ class ChannelNode:
             "external_head_loss": self.external_head_loss,
             "pressure_pipe_row_identity": self.pressure_pipe_row_identity,
             "pressure_pipe_window_override": self.pressure_pipe_window_override,
+            "pressure_pipe_named_group_result": self.pressure_pipe_named_group_result,
             "is_diversion_gate": self.is_diversion_gate,
             "is_auto_inserted_channel": self.is_auto_inserted_channel,
             "stat_length": self.stat_length,
@@ -405,6 +407,7 @@ class ChannelNode:
         node.external_head_loss = d.get("external_head_loss")
         node.pressure_pipe_row_identity = d.get("pressure_pipe_row_identity", "")
         node.pressure_pipe_window_override = d.get("pressure_pipe_window_override", {}) or {}
+        node.pressure_pipe_named_group_result = d.get("pressure_pipe_named_group_result", {}) or {}
         node.is_diversion_gate = d.get("is_diversion_gate", False)
         node.is_auto_inserted_channel = d.get("is_auto_inserted_channel", False)
         node.stat_length = d.get("stat_length", 0.0)
