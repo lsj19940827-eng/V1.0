@@ -1438,66 +1438,44 @@ class PressurePipeConfigDialog(QDialog):
         max_decimals: int = 6,
     ) -> str:
         """格式化纵断面桩号数值，保留必要小数位。"""
-        number = cls._safe_float(value, None)
-        if number is None or not math.isfinite(number):
-            return "-"
-        text = f"{float(number):.{max_decimals}f}"
-        if "." not in text:
-            return text
-        integer, fraction = text.split(".", 1)
-        fraction = fraction.rstrip("0")
-        if len(fraction) < min_decimals:
-            fraction = fraction.ljust(min_decimals, "0")
-        return f"{integer}.{fraction}"
+        from app_渠系计算前端.water_profile import cad_tools
+
+        return cad_tools._format_xxpipe_longitudinal_measure(
+            value,
+            min_decimals=min_decimals,
+            max_decimals=max_decimals,
+        )
 
     @classmethod
     def _format_longitudinal_gap_text(cls, gap_m: float) -> str:
         """把纵断面缺口优先格式化成毫米，必要时补充米值。"""
-        gap_value = max(0.0, cls._safe_float(gap_m, 0.0) or 0.0)
-        gap_mm = gap_value * 1000.0
-        if gap_mm >= 1000.0:
-            return f"{gap_mm:.1f} mm（{gap_value:.3f} m）"
-        return f"{gap_mm:.1f} mm"
+        from app_渠系计算前端.water_profile import cad_tools
+
+        return cad_tools._format_xxpipe_longitudinal_gap_text(gap_m)
 
     @staticmethod
     def _format_missing_target_preview_text(item) -> str:
         """统一格式化未覆盖节点预览文本。"""
-        if isinstance(item, dict):
-            label = str(item.get("label", "") or "").strip()
-            station_text = str(item.get("station_text", "") or "").strip()
-            if label and station_text and station_text != "-":
-                return f"{label}@{station_text}"
-            return label or station_text
-        return str(item or "").strip()
+        from app_渠系计算前端.water_profile import cad_tools
+
+        return cad_tools._format_xxpipe_missing_target_preview_text(item)
 
     @classmethod
     def _build_missing_target_preview(cls, missing_targets, max_items: int = 3) -> str:
         """生成未覆盖节点的预览文本。"""
-        items = list(missing_targets or [])
-        preview_items = [
-            cls._format_missing_target_preview_text(item)
-            for item in items[:max_items]
-            if cls._format_missing_target_preview_text(item)
-        ]
-        preview = "；".join(preview_items)
-        if len(items) > max_items:
-            preview += f" 等{len(items)}处"
-        return preview
+        from app_渠系计算前端.water_profile import cad_tools
+
+        return cad_tools._build_xxpipe_missing_target_preview(
+            missing_targets,
+            max_items=max_items,
+        )
 
     @classmethod
     def _extract_longitudinal_chainage_range(cls, longitudinal_nodes):
         """提取导入纵断面的起止桩号范围。"""
-        chainages = []
-        for node in list(longitudinal_nodes or []):
-            raw_value = node.get("chainage", None) if isinstance(node, dict) else getattr(node, "chainage", None)
-            chainage = cls._safe_float(raw_value, None)
-            if chainage is None or not math.isfinite(chainage):
-                continue
-            chainages.append(float(chainage))
-        if not chainages:
-            return None, None
-        chainages.sort()
-        return chainages[0], chainages[-1]
+        from app_渠系计算前端.water_profile import cad_tools
+
+        return cad_tools._extract_xxpipe_longitudinal_chainage_range(longitudinal_nodes)
 
     @classmethod
     def _build_xxpipe_import_coverage_error_message(
@@ -1506,58 +1484,16 @@ class PressurePipeConfigDialog(QDialog):
         coverage_state: Dict[str, Any],
     ) -> str:
         """生成用户可直接照着修改的纵断面覆盖不足提示。"""
-        missing_targets = list(coverage_state.get("missing_targets", []) or [])
-        preview = cls._build_missing_target_preview(missing_targets)
-        coverage_end = cls._safe_float(coverage_state.get("coverage_end", None), None)
-        coverage_tol = cls._safe_float(coverage_state.get("coverage_tol", None), 1e-3) or 1e-3
-        farthest_target = None
-        farthest_station = None
-        for item in missing_targets:
-            station_value = cls._safe_float(
-                item.get("station_mc", None) if isinstance(item, dict) else None,
-                None,
-            )
-            if station_value is None or not math.isfinite(station_value):
-                continue
-            if farthest_station is None or station_value > farthest_station:
-                farthest_station = float(station_value)
-                farthest_target = item
+        from app_渠系计算前端.water_profile import cad_tools
 
-        lines = []
-        if display_name:
-            lines.append(f"整线：{display_name}")
-        lines.append("导入失败：纵断面范围不够")
-
-        if farthest_station is None or coverage_end is None:
-            lines.append("当前导入的纵断面没有覆盖到全部节点桩号，请在 CAD 中补齐后重新导入。")
-            if preview:
-                lines.append(f"未覆盖节点：{preview}")
-            return "\n".join(lines)
-
-        required_text = cls._format_longitudinal_measure(farthest_station)
-        coverage_end_text = cls._format_longitudinal_measure(coverage_end)
-        gap_text = cls._format_longitudinal_gap_text(farthest_station - coverage_end)
-        tol_mm = coverage_tol * 1000.0
-
-        lines.append(
-            f"这条整线需要覆盖到桩号 {required_text} m，但当前导入的纵断面只到 {coverage_end_text} m。"
-        )
-        lines.append(f"当前还差 {gap_text}，已超过程序允许的 {tol_mm:.1f} mm 误差。")
-        lines.append(f"请在 CAD 中把纵断面末端至少延长到 {required_text} m 后重新导入。")
-        if preview:
-            lines.append(f"未覆盖节点：{preview}")
-        return "\n".join(lines)
+        return cad_tools._build_xxpipe_coverage_error_message(display_name, coverage_state)
 
     @classmethod
     def _build_stale_longitudinal_hint_text(cls, missing_targets: List[Any]) -> str:
         """构造旧缓存失效时的界面提示。"""
-        preview = cls._build_missing_target_preview(missing_targets)
-        if preview:
-            return (
-                "检测到旧纵断面缓存与当前桩号不一致，请清空后重新导入纵断面DXF。\n"
-                f"未覆盖桩号：{preview}"
-            )
-        return "检测到旧纵断面缓存与当前桩号不一致，请清空后重新导入纵断面DXF。"
+        from app_渠系计算前端.water_profile import cad_tools
+
+        return cad_tools._build_xxpipe_stale_longitudinal_hint_text(missing_targets)
 
     def _resolve_last_turn_n(self) -> float:
         n_values = []
@@ -2411,9 +2347,23 @@ class PressurePipeConfigDialog(QDialog):
     def accept(self):
         """开始计算前，先校验 xx管 整线是否已导入纵断面。"""
         missing_route_keys = self._collect_missing_xxpipe_route_keys()
-        if missing_route_keys:
-            self._apply_xxpipe_route_missing_highlights(missing_route_keys)
-            self._focus_missing_xxpipe_route(missing_route_keys[0])
+        incomplete_route_states = self._collect_incomplete_xxpipe_route_states()
+        if missing_route_keys or incomplete_route_states:
+            blocked_route_keys = list(dict.fromkeys(list(incomplete_route_states.keys()) + list(missing_route_keys)))
+            self._apply_xxpipe_route_missing_highlights(blocked_route_keys)
+            self._focus_missing_xxpipe_route(blocked_route_keys[0])
+            if incomplete_route_states:
+                first_route_key = blocked_route_keys[0]
+                coverage_state = incomplete_route_states.get(first_route_key) or {}
+                display_name = str(
+                    coverage_state.get("display_name", "") or self._resolve_pipe_label(first_route_key)
+                ).strip()
+                fluent_error(
+                    self,
+                    "纵断面仍不完整",
+                    self._build_xxpipe_import_coverage_error_message(display_name, coverage_state),
+                )
+                return
             fluent_error(self, "缺少步骤", self._build_missing_xxpipe_route_message(missing_route_keys))
             return
         self._apply_xxpipe_route_missing_highlights([])
@@ -3096,6 +3046,26 @@ class PressurePipeConfigDialog(QDialog):
                 missing.append(route_key)
         return missing
 
+    def _collect_incomplete_xxpipe_route_states(self) -> Dict[str, Dict[str, Any]]:
+        """收集已导入但仍未覆盖完整的整线。"""
+        if not (self._xxpipe_route_mode and self._route_contexts):
+            return {}
+
+        incomplete: Dict[str, Dict[str, Any]] = {}
+        for route_key in self._route_contexts.keys():
+            longitudinal_nodes = list(self._longitudinal_data.get(route_key, []) or [])
+            if not longitudinal_nodes:
+                continue
+            coverage_state = self._collect_xxpipe_route_import_coverage_state(
+                route_key,
+                longitudinal_nodes,
+            )
+            if list(coverage_state.get("station_errors", []) or []) or list(
+                coverage_state.get("missing_targets", []) or []
+            ):
+                incomplete[route_key] = coverage_state
+        return incomplete
+
     def _build_missing_xxpipe_route_message(self, route_keys: List[str]) -> str:
         """构造 xx管 缺少纵断面的统一提示语。"""
         route_names = [self._resolve_pipe_label(route_key) for route_key in route_keys if str(route_key).strip()]
@@ -3447,6 +3417,168 @@ class PressurePipeConfigDialog(QDialog):
             )
         return anchor_station
 
+    def _collect_xxpipe_route_import_anchor_candidates(self, pipe_name: str, ip_points) -> List[float]:
+        """收集整线补导入可尝试的非隧洞起点锚点。"""
+        payload = self._resolve_route_import_payload(pipe_name)
+        route_nodes = list(payload.get("nodes", []) or [])
+        anchors: List[float] = []
+        inside_non_tunnel_segment = False
+
+        for node in route_nodes:
+            if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+                continue
+            if not self._route_node_requires_import_coverage(node):
+                inside_non_tunnel_segment = False
+                continue
+
+            station_mc = self._safe_float(
+                getattr(node, "station_MC", getattr(node, "station_mc", None)),
+                None,
+            )
+            if station_mc is None:
+                continue
+            if not inside_non_tunnel_segment:
+                anchors.append(float(station_mc))
+            inside_non_tunnel_segment = True
+
+        fallback_anchor = self._resolve_xxpipe_route_import_anchor_station(pipe_name, ip_points)
+        if fallback_anchor is not None and not any(
+            abs(float(item) - float(fallback_anchor)) <= 1e-6 for item in anchors
+        ):
+            anchors.insert(0, float(fallback_anchor))
+
+        if not anchors and fallback_anchor is not None:
+            anchors.append(float(fallback_anchor))
+        return anchors
+
+    def _pick_xxpipe_route_import_anchor(
+        self,
+        pipe_name: str,
+        anchor_candidates: List[float],
+        existing_nodes,
+    ) -> float | None:
+        """根据当前未覆盖的首个目标，优先选择最合理的补导入锚点。"""
+        if not anchor_candidates:
+            return None
+        if not existing_nodes:
+            return float(anchor_candidates[0])
+
+        coverage_state = self._collect_xxpipe_route_import_coverage_state(pipe_name, existing_nodes)
+        missing_targets = list(coverage_state.get("missing_targets", []) or [])
+        first_missing_station = self._safe_float(
+            missing_targets[0].get("station_mc", None),
+            None,
+        ) if missing_targets else None
+        if first_missing_station is None:
+            return float(anchor_candidates[0])
+
+        preferred_before = [
+            float(anchor)
+            for anchor in anchor_candidates
+            if float(anchor) <= float(first_missing_station) + 1e-6
+        ]
+        if preferred_before:
+            return max(preferred_before)
+        return min(anchor_candidates, key=lambda item: abs(float(item) - float(first_missing_station)))
+
+    @staticmethod
+    def _convert_imported_longitudinal_nodes(long_nodes) -> List[Dict[str, Any]]:
+        """把解析器返回的纵断面节点统一转成字典列表。"""
+        long_nodes_dict: List[Dict[str, Any]] = []
+        for node in long_nodes or []:
+            long_nodes_dict.append(
+                {
+                    "chainage": node.chainage,
+                    "elevation": node.elevation,
+                    "vertical_curve_radius": node.vertical_curve_radius,
+                    "turn_type": node.turn_type.name if hasattr(node.turn_type, "name") else str(node.turn_type),
+                    "turn_angle": node.turn_angle,
+                    "slope_before": node.slope_before,
+                    "slope_after": node.slope_after,
+                    "arc_center_s": node.arc_center_s,
+                    "arc_center_z": node.arc_center_z,
+                    "arc_end_chainage": node.arc_end_chainage,
+                    "arc_theta_rad": node.arc_theta_rad,
+                }
+            )
+        return long_nodes_dict
+
+    @staticmethod
+    def _merge_longitudinal_nodes(existing_nodes, imported_nodes) -> List[Dict[str, Any]]:
+        """按桩号合并多次导入的纵断面，后导入的同桩号节点覆盖旧节点。"""
+        merged_map: Dict[float, Dict[str, Any]] = {}
+        for nodes in (existing_nodes or [], imported_nodes or []):
+            for raw in list(nodes or []):
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    chainage = float(raw.get("chainage"))
+                except (TypeError, ValueError):
+                    continue
+                merged_map[round(chainage, 6)] = dict(raw)
+
+        merged_nodes = list(merged_map.values())
+        merged_nodes.sort(key=lambda item: float(item.get("chainage", 0.0) or 0.0))
+        return merged_nodes
+
+    @staticmethod
+    def _read_longitudinal_profile_start_x(filepath: str, dxf_parser_cls) -> float:
+        """读取纵断面图原始起点桩号，供自动对齐锚点使用。"""
+        get_start_x = getattr(dxf_parser_cls, "get_longitudinal_profile_start_x", None)
+        if callable(get_start_x):
+            return float(get_start_x(filepath))
+
+        import ezdxf
+
+        doc = ezdxf.readfile(filepath)
+        msp = doc.modelspace()
+        polys = list(msp.query('LWPOLYLINE'))
+        if not polys:
+            polys = list(msp.query('POLYLINE'))
+        if not polys:
+            raise ValueError("DXF文件中未找到纵断面数据")
+
+        polyline = polys[0]
+        if hasattr(polyline, "get_points"):
+            first_point = list(polyline.get_points(format='xyseb'))[0]
+            return float(first_point[0])
+        if hasattr(polyline, "vertices"):
+            first_vertex = list(polyline.vertices)[0]
+            return float(first_vertex.dxf.location.x)
+        raise ValueError("错误：无法解析多段线顶点")
+
+    def _resolve_xxpipe_route_import_result(self, pipe_name: str, filepath: str, dxf_parser_cls, ip_points):
+        """为整线补导入选择最合适的锚点，并返回合并后的纵断面。"""
+        existing_nodes = list(self._longitudinal_data.get(str(pipe_name or "").strip(), []) or [])
+        anchor_candidates = self._collect_xxpipe_route_import_anchor_candidates(pipe_name, ip_points)
+        if not anchor_candidates:
+            anchor_candidates = [0.0]
+        preferred_anchor = self._pick_xxpipe_route_import_anchor(
+            pipe_name,
+            anchor_candidates,
+            existing_nodes,
+        )
+        if preferred_anchor is None:
+            preferred_anchor = float(anchor_candidates[0])
+
+        x_start = self._read_longitudinal_profile_start_x(filepath, dxf_parser_cls)
+        chainage_offset = float(preferred_anchor) - x_start
+        long_nodes, message = dxf_parser_cls.parse_longitudinal_profile(
+            filepath,
+            chainage_offset=chainage_offset,
+        )
+        converted_nodes = self._convert_imported_longitudinal_nodes(long_nodes)
+        merged_nodes = self._merge_longitudinal_nodes(existing_nodes, converted_nodes)
+        coverage_state = self._collect_xxpipe_route_import_coverage_state(pipe_name, merged_nodes)
+        return {
+            "anchor_station": float(preferred_anchor),
+            "chainage_offset": chainage_offset,
+            "message": str(message or "").strip(),
+            "long_nodes": list(long_nodes or []),
+            "merged_nodes": merged_nodes,
+            "coverage_state": coverage_state,
+        }
+
     def _collect_xxpipe_route_import_coverage_state(self, pipe_name: str, longitudinal_nodes) -> Dict[str, Any]:
         """收集 xx管 整线纵断面覆盖情况，供导入校验和旧缓存识别共用。"""
         payload = self._resolve_route_import_payload(pipe_name)
@@ -3528,9 +3660,11 @@ class PressurePipeConfigDialog(QDialog):
         import os
         import sys
         pipe_label = self._resolve_pipe_label(pipe_name)
+        card_key = str(pipe_name or "").strip()
+        route_merge_mode = bool(self._xxpipe_route_mode and card_key in self._route_contexts)
 
         # 已有数据时弹出替换确认
-        if pipe_name in self._longitudinal_data and self._longitudinal_data[pipe_name]:
+        if (not route_merge_mode) and pipe_name in self._longitudinal_data and self._longitudinal_data[pipe_name]:
             if not fluent_question(self, "确认替换",
                                    "当前已有纵断面数据，导入DXF将替换现有数据。\n\n是否继续？"):
                 return
@@ -3557,42 +3691,42 @@ class PressurePipeConfigDialog(QDialog):
             if not self._confirm_longitudinal_dxf_candidate_if_needed(pipe_name, filepath, DxfParser):
                 return
 
-            chainage_offset = 0.0
-            if ip_points and len(ip_points) > 0:
-                if hasattr(DxfParser, "get_longitudinal_profile_start_x"):
-                    x_start = DxfParser.get_longitudinal_profile_start_x(filepath)
-                else:
-                    import ezdxf
+            coverage_state = None
+            merged_nodes = None
+            if route_merge_mode:
+                route_import_result = self._resolve_xxpipe_route_import_result(
+                    pipe_name,
+                    filepath,
+                    DxfParser,
+                    ip_points,
+                )
+                if not route_import_result:
+                    QMessageBox.critical(self, "导入失败", "DXF文件中未找到纵断面数据")
+                    return
+                long_nodes = list(route_import_result.get("long_nodes", []) or [])
+                message = str(route_import_result.get("message", "") or "").strip()
+                merged_nodes = list(route_import_result.get("merged_nodes", []) or [])
+                coverage_state = dict(route_import_result.get("coverage_state", {}) or {})
+            else:
+                chainage_offset = 0.0
+                if ip_points and len(ip_points) > 0:
+                    x_start = self._read_longitudinal_profile_start_x(filepath, DxfParser)
+                    mc_inlet = self._resolve_ip_point_chainage(ip_points[0], prefer_station=True)
+                    if mc_inlet is None:
+                        mc_inlet = self._safe_float(ip_points[0].get('x', 0.0), 0.0)
+                    if self._xxpipe_route_mode:
+                        resolved_anchor = self._resolve_xxpipe_route_import_anchor_station(
+                            pipe_name,
+                            ip_points,
+                        )
+                        if resolved_anchor is not None:
+                            mc_inlet = resolved_anchor
+                    chainage_offset = mc_inlet - x_start
 
-                    doc = ezdxf.readfile(filepath)
-                    msp = doc.modelspace()
-                    polys = list(msp.query('LWPOLYLINE'))
-                    if not polys:
-                        polys = list(msp.query('POLYLINE'))
-                    if not polys:
-                        raise ValueError("DXF文件中未找到纵断面数据")
-                    polyline = polys[0]
-                    if hasattr(polyline, 'get_points'):
-                        first_point = list(polyline.get_points(format='xyseb'))[0]
-                        x_start = first_point[0]
-                    elif hasattr(polyline, 'vertices'):
-                        first_vertex = list(polyline.vertices)[0]
-                        x_start = first_vertex.dxf.location.x
-                    else:
-                        raise ValueError("错误：无法解析多段线顶点")
-                mc_inlet = self._resolve_ip_point_chainage(ip_points[0], prefer_station=True)
-                if mc_inlet is None:
-                    mc_inlet = self._safe_float(ip_points[0].get('x', 0.0), 0.0)
-                if self._xxpipe_route_mode:
-                    resolved_anchor = self._resolve_xxpipe_route_import_anchor_station(
-                        pipe_name,
-                        ip_points,
-                    )
-                    if resolved_anchor is not None:
-                        mc_inlet = resolved_anchor
-                chainage_offset = mc_inlet - x_start
-
-            long_nodes, message = DxfParser.parse_longitudinal_profile(filepath, chainage_offset=chainage_offset)
+                long_nodes, message = DxfParser.parse_longitudinal_profile(
+                    filepath,
+                    chainage_offset=chainage_offset,
+                )
 
             if not long_nodes:
                 QMessageBox.critical(self, "导入失败", message or "DXF文件中未找到纵断面数据")
@@ -3604,25 +3738,35 @@ class PressurePipeConfigDialog(QDialog):
                 long_nodes,
             )
 
-            long_nodes_dict = []
-            for node in long_nodes:
-                node_dict = {
-                    'chainage': node.chainage,
-                    'elevation': node.elevation,
-                    'vertical_curve_radius': node.vertical_curve_radius,
-                    'turn_type': node.turn_type.name if hasattr(node.turn_type, 'name') else str(node.turn_type),
-                    'turn_angle': node.turn_angle,
-                    'slope_before': node.slope_before,
-                    'slope_after': node.slope_after,
-                    'arc_center_s': node.arc_center_s,
-                    'arc_center_z': node.arc_center_z,
-                    'arc_end_chainage': node.arc_end_chainage,
-                    'arc_theta_rad': node.arc_theta_rad,
-                }
-                long_nodes_dict.append(node_dict)
+            if route_merge_mode:
+                display_name = str(
+                    (coverage_state or {}).get("display_name", "") or pipe_label
+                ).strip()
+                station_errors = list((coverage_state or {}).get("station_errors", []) or [])
+                missing_targets = list((coverage_state or {}).get("missing_targets", []) or [])
+                self._longitudinal_data[pipe_name] = list(merged_nodes or [])
+                self._stale_longitudinal_hint_texts.pop(card_key, None)
+                self._update_card_data_state(pipe_name, show_data=True)
+                if station_errors or missing_targets:
+                    fluent_info(
+                        self,
+                        "已导入一部分纵断面",
+                        f"{display_name}\n{message}\n\n"
+                        f"{self._build_xxpipe_import_coverage_error_message(display_name, coverage_state)}\n\n"
+                        "可以继续导入剩余纵断面文件。",
+                    )
+                    return
 
-            if self._xxpipe_route_mode:
-                self._validate_xxpipe_route_import_coverage(pipe_name, long_nodes_dict)
+                self._persist_longitudinal_data_for_card(pipe_name)
+                fluent_info(
+                    self,
+                    "导入成功",
+                    f"{display_name}\n{message}\n"
+                    f"本次导入节点: {len(long_nodes)} 个，累计节点: {len(merged_nodes or [])} 个",
+                )
+                return
+
+            long_nodes_dict = self._convert_imported_longitudinal_nodes(long_nodes)
 
             if not self._xxpipe_route_mode and ip_points and len(ip_points) >= 2:
                 expected_range = self._resolve_ip_points_chainage_range(ip_points, prefer_station=True)
@@ -3645,7 +3789,7 @@ class PressurePipeConfigDialog(QDialog):
                         return
 
             self._longitudinal_data[pipe_name] = long_nodes_dict
-            self._stale_longitudinal_hint_texts.pop(str(pipe_name or "").strip(), None)
+            self._stale_longitudinal_hint_texts.pop(card_key, None)
             self._persist_longitudinal_data_for_card(pipe_name)
             self._update_card_data_state(pipe_name, show_data=True)
             fluent_info(self, "导入成功", f"{pipe_label}\n{message}\n变坡点节点: {len(long_nodes)} 个")

@@ -542,6 +542,14 @@ def _sample_start_duplicate_nodes():
     return [first, duplicate_1, duplicate_2, end]
 
 
+def _sample_hidden_tail_width_nodes():
+    start = _make_node(ip_no=1, mc=0.0, bottom=410.0, top=412.0, water=411.0)
+    end = _make_node(ip_no=2, mc=100.0, bottom=405.0, top=407.0, water=406.0)
+    hidden_tail = _make_node(ip_no=3, mc=0.0, bottom=0.0, top=0.0, water=0.0)
+    hidden_tail.is_auto_inserted_channel = True
+    return [start, end, hidden_tail]
+
+
 def test_draw_profile_on_msp_dedup_station_text(monkeypatch):
     ezdxf_stub = SimpleNamespace(
         enums=SimpleNamespace(
@@ -705,6 +713,67 @@ def test_export_longitudinal_txt_keeps_single_start_vline_when_raw_nodes_repeat_
     pl_rows = _parse_pl_cmds(out_file)
 
     assert _count_line(pl_rows, (0.0, 0.0), (0.0, short_line_height)) == 1
+
+
+def test_draw_profile_on_msp_uses_last_visible_node_for_horizontal_lines(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = _sample_hidden_tail_width_nodes()
+    valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
+    msp = _DummyMSP()
+    settings = _default_settings()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        valid_nodes,
+        settings,
+        station_prefix="",
+    )
+
+    scale_x = settings["scale_x"]
+    _, _, _, _line_height, h_line_y_values = cad_tools._build_profile_row_layout(settings)
+    last_visible_x = _scaled_m_to_mm(100.0, scale_x)
+
+    for hy in h_line_y_values:
+        assert _has_line(msp.line_records, (0.0, hy), (last_visible_x, hy))
+
+
+def test_export_longitudinal_txt_uses_last_visible_node_for_horizontal_lines(
+    local_tmp_path, monkeypatch
+):
+    nodes = _sample_hidden_tail_width_nodes()
+    valid_nodes = [n for n in nodes if n.bottom_elevation or n.top_elevation or n.water_level]
+    out_file = local_tmp_path / "hidden_tail_width_profile.txt"
+    settings = _default_settings()
+
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+
+    cad_tools._export_longitudinal_txt_to_path(
+        _Panel(""),
+        nodes,
+        valid_nodes,
+        settings,
+        str(out_file),
+    )
+
+    pl_rows = _parse_pl_cmds(out_file)
+    scale_x = settings["scale_x"]
+    _, _, _, _line_height, h_line_y_values = cad_tools._build_profile_row_layout(settings)
+    last_visible_x = _scaled_m_to_mm(100.0, scale_x)
+
+    for hy in h_line_y_values:
+        assert _has_line(pl_rows, (0.0, hy), (last_visible_x, hy))
 
 
 def test_build_profile_slope_segments_returns_interval_records():

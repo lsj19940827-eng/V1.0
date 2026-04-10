@@ -351,6 +351,71 @@ def _build_route_level_tail_profile_data():
     return tail_nodes, profile_data
 
 
+def _build_leading_gap_tail_profile_data():
+    tail_nodes = [
+        _make_node(
+            ip_no=3,
+            mc=1950.37,
+            structure="有压管道",
+            name="",
+            flow_section="1",
+            material="球墨铸铁管",
+            diameter=0.6,
+            row_identity="flow1-row3",
+            bottom_elevation=345.674,
+        ),
+        _make_node(
+            ip_no=4,
+            mc=1981.787,
+            structure="有压管道",
+            name="",
+            flow_section="1",
+            material="球墨铸铁管",
+            diameter=0.6,
+            row_identity="flow1-row4",
+            bottom_elevation=345.674,
+        ),
+        _make_node(
+            ip_no=5,
+            mc=2003.336,
+            structure="有压管道",
+            name="",
+            flow_section="1",
+            material="球墨铸铁管",
+            diameter=0.6,
+            row_identity="flow1-row5",
+            bottom_elevation=348.401,
+        ),
+    ]
+    xxpipe_profile_data = {
+        "profile_text_nodes": list(tail_nodes),
+        "ip_records": [],
+        "centerline_points": [
+            (1981.787, 347.0276),
+            (2003.336, 348.4010),
+        ],
+        "centerline_records": [
+            {"identity": "flow1-row4", "station_mc": 1981.787, "elevation": 347.0276},
+            {"identity": "flow1-row5", "station_mc": 2003.336, "elevation": 348.4010},
+        ],
+        "building_segments": [],
+        "material_segments": [],
+        "warnings": {
+            "allow_partial_export": True,
+            "missing_axis_identities": [],
+            "missing_axis_details": [],
+            "uncovered_stations": [
+                {
+                    "identity": "flow1-row3",
+                    "station_mc": 1950.37,
+                    "station_text": "蒲支1+950.37",
+                }
+            ],
+        },
+    }
+    return tail_nodes, xxpipe_profile_data
+
+
 def test_build_xxpipe_profile_row_layout_ignores_oversized_y_line_height():
     settings = {**_scaled_settings(), "y_line_height": 180}
 
@@ -663,7 +728,9 @@ def test_build_panel_xxpipe_profile_data_passes_route_metadata_into_lookup_rows(
             "route_key": "flow1-route1",
             "route_display_name": "赛金连续整线",
             "node_label": "苟家湾有压管道进",
+            "station_mc": 3968.95,
             "station_text": "赛支3+968.95",
+            "is_tunnel": False,
         }
     ]
 
@@ -1024,6 +1091,14 @@ def test_collect_xxpipe_full_height_boundaries_ignores_outer_adjacent_plain_pipe
 
     assert cad_tools._collect_xxpipe_full_height_boundary_mcs(profile_data) == pytest.approx(
         [850.0, 950.0, 1000.0, 1100.0]
+    )
+
+
+def test_collect_xxpipe_full_height_boundaries_use_visible_tail_bounds_when_first_centerline_missing():
+    _tail_nodes, profile_data = _build_leading_gap_tail_profile_data()
+
+    assert cad_tools._collect_xxpipe_full_height_boundary_mcs(profile_data) == pytest.approx(
+        [1950.37, 2003.336]
     )
 
 
@@ -1471,6 +1546,333 @@ def test_build_xxpipe_profile_data_relaxes_missing_axis_for_continuous_xxqu():
     assert data["centerline_records"] == []
     assert data["warnings"]["allow_partial_export"] is True
     assert data["warnings"]["missing_axis_identities"]
+
+
+def test_build_xxpipe_profile_data_reports_detailed_coverage_gap_in_strict_mode():
+    nodes = [
+        _make_node(
+            ip_no=1,
+            mc=0.0,
+            structure="有压管道",
+            name="南干支线",
+            in_out="进",
+            row_identity="flow1-row1",
+        ),
+        _make_node(
+            ip_no=2,
+            mc=80.0,
+            structure="有压管道",
+            name="南干支线",
+            in_out="出",
+            row_identity="flow1-row2",
+        ),
+    ]
+    longitudinal_nodes = [
+        {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+        {"chainage": 50.0, "elevation": 418.0, "turn_type": "NONE"},
+    ]
+
+    with pytest.raises(ValueError, match="导入失败：纵断面范围不够") as exc_info:
+        cad_tools._build_xxpipe_profile_data(
+            nodes,
+            {
+                "flow1-row1": list(longitudinal_nodes),
+                "flow1-row2": list(longitudinal_nodes),
+            },
+            station_prefix="T",
+            warning_context_by_identity={
+                "flow1-row1": {
+                    "identity": "flow1-row1",
+                    "route_display_name": "流量段1 整线1",
+                    "node_label": "IP1",
+                    "station_text": "T0+000.000",
+                },
+                "flow1-row2": {
+                    "identity": "flow1-row2",
+                    "route_display_name": "流量段1 整线1",
+                    "node_label": "IP2",
+                    "station_text": "T0+080.000",
+                },
+            },
+        )
+
+    message = str(exc_info.value)
+    assert "流量段1 整线1" in message
+    assert "导入失败：纵断面范围不够" in message
+    assert "这条整线需要覆盖到桩号 80.000 m" in message
+    assert "当前导入的纵断面只到 50.000 m" in message
+    assert "允许的 1.0 mm 误差" in message
+    assert "未覆盖节点：IP2@T0+080.000" in message
+
+
+def test_build_panel_xxpipe_profile_data_skips_tunnel_missing_axis_warning_in_route_mode():
+    nodes = [
+        _make_node(
+            ip_no=1,
+            mc=0.0,
+            structure="隧洞-圆拱直墙型",
+            name="交错隧洞",
+            row_identity="flow1-row1",
+        ),
+        _make_node(
+            ip_no=2,
+            mc=80.0,
+            structure="有压管道",
+            name="压力段1",
+            in_out="进",
+            row_identity="flow1-row2",
+        ),
+        _make_node(
+            ip_no=3,
+            mc=120.0,
+            structure="顶管",
+            name="压力段2",
+            in_out="出",
+            row_identity="flow1-row3",
+        ),
+    ]
+    longitudinal_nodes = [
+        {"chainage": 80.0, "elevation": 420.0, "turn_type": "NONE"},
+        {"chainage": 120.0, "elevation": 418.0, "turn_type": "NONE"},
+    ]
+    panel = _Panel("T")
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支渠")
+    panel.calculated_nodes = list(nodes)
+    panel._build_nodes_from_table = lambda: list(nodes)
+    panel._prepare_pressure_pipe_dialog_context = lambda *_a, **_k: {
+        "xxpipe_route_mode": True,
+        "route_import_targets": {
+            "flow1-route1": {
+                "display_name": "流量段1 整线1",
+                "station_prefix": "T",
+                "targets": [
+                    {"row_index": 0, "label": "IP1", "station_mc": 0.0},
+                    {"row_index": 1, "label": "IP2", "station_mc": 80.0},
+                    {"row_index": 2, "label": "IP3", "station_mc": 120.0},
+                ],
+                "nodes": list(nodes),
+            }
+        },
+    }
+    panel.get_pressure_pipe_longitudinal_nodes_for_export = lambda rows=None: {
+        "flow1-row2": list(longitudinal_nodes),
+        "flow1-row3": list(longitudinal_nodes),
+    }
+    panel._pressure_pipe_manager = SimpleNamespace(to_dict=lambda: {"pipes": {}})
+
+    data = cad_tools._build_panel_xxpipe_profile_data(panel, nodes, station_prefix="T")
+
+    assert data["warnings"]["missing_axis_identities"] == []
+    assert data["warnings"]["uncovered_stations"] == []
+    assert [record["identity"] for record in data["centerline_records"]] == [
+        "flow1-row2",
+        "flow1-row3",
+    ]
+
+
+def test_build_panel_xxpipe_profile_data_skips_tunnel_identity_mismatch_in_strict_mixed_route():
+    nodes = [
+        _make_node(
+            ip_no=1,
+            mc=0.0,
+            structure="隧洞-圆拱直墙型",
+            name="交错隧洞",
+            row_identity="flow1-row1",
+        ),
+        _make_node(
+            ip_no=2,
+            mc=80.0,
+            structure="有压管道",
+            name="压力段1",
+            in_out="进",
+            row_identity="flow1-row2",
+        ),
+        _make_node(
+            ip_no=3,
+            mc=120.0,
+            structure="顶管",
+            name="压力段2",
+            in_out="出",
+            row_identity="flow1-row3",
+        ),
+    ]
+    longitudinal_nodes = [
+        {"chainage": 80.0, "elevation": 420.0, "turn_type": "NONE"},
+        {"chainage": 120.0, "elevation": 418.0, "turn_type": "NONE"},
+    ]
+    panel = _Panel("T")
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支管")
+    panel.calculated_nodes = list(nodes)
+    panel._build_nodes_from_table = lambda: list(nodes)
+    panel._prepare_pressure_pipe_dialog_context = lambda *_a, **_k: {
+        "xxpipe_route_mode": True,
+        "route_import_targets": {
+            "flow1-route1": {
+                "display_name": "流量段1 整线1",
+                "station_prefix": "T",
+                "targets": [
+                    {"row_index": 0, "label": "IP1", "station_mc": 0.0},
+                    {"row_index": 1, "label": "IP2", "station_mc": 80.0},
+                    {"row_index": 2, "label": "IP3", "station_mc": 120.0},
+                ],
+                "nodes": list(nodes),
+            }
+        },
+    }
+    panel.get_pressure_pipe_longitudinal_nodes_for_export = lambda rows=None: {
+        "flow1-row2": list(longitudinal_nodes),
+        "flow1-row3": list(longitudinal_nodes),
+    }
+    panel._pressure_pipe_manager = SimpleNamespace(to_dict=lambda: {"pipes": {}})
+
+    data = cad_tools._build_panel_xxpipe_profile_data(panel, nodes, station_prefix="T")
+
+    assert data["warnings"]["missing_axis_identities"] == []
+    assert data["warnings"]["uncovered_stations"] == []
+    assert [record["identity"] for record in data["centerline_records"]] == [
+        "flow1-row2",
+        "flow1-row3",
+    ]
+
+
+def test_build_xxpipe_profile_data_skips_same_name_tunnel_identity_checks_without_route_mode():
+    nodes = [
+        _make_node(
+            ip_no=17,
+            mc=2200.0,
+            structure="隧洞-圆拱直墙型",
+            name="罗家湾",
+            row_identity="",
+        ),
+        _make_node(
+            ip_no=18,
+            mc=2300.0,
+            structure="隧洞-圆拱直墙型",
+            name="罗家湾",
+            row_identity="",
+        ),
+        _make_node(
+            ip_no=19,
+            mc=2739.785,
+            structure="有压管道",
+            name="蒲支压力段",
+            in_out="进",
+            row_identity="flow1-row19",
+        ),
+    ]
+    longitudinal_nodes = {
+        "flow1-row19": [
+            {"chainage": 2739.785, "elevation": 348.401, "turn_type": "NONE"},
+            {"chainage": 6526.755, "elevation": 325.770, "turn_type": "NONE"},
+        ]
+    }
+
+    data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        longitudinal_nodes,
+        station_prefix="蒲支",
+        export_policy={"allow_partial_export": False},
+    )
+
+    assert data["warnings"]["missing_axis_identities"] == []
+    assert data["warnings"]["uncovered_stations"] == []
+    assert [record["identity"] for record in data["centerline_records"]] == ["flow1-row19"]
+
+
+def test_build_panel_xxpipe_profile_data_skips_tunnel_identity_mismatch_in_strict_lookup_rows_mode():
+    nodes = [
+        _make_node(
+            ip_no=1,
+            mc=0.0,
+            structure="隧洞-圆拱直墙型",
+            name="罗家湾",
+            flow_section="1",
+            row_identity="",
+        ),
+        _make_node(
+            ip_no=2,
+            mc=20.0,
+            structure="隧洞-圆拱直墙型",
+            name="罗家湾",
+            flow_section="1",
+            row_identity="",
+        ),
+        _make_node(
+            ip_no=3,
+            mc=80.0,
+            structure="有压管道",
+            name="压力段1",
+            in_out="进",
+            row_identity="flow1-row2",
+        ),
+        _make_node(
+            ip_no=4,
+            mc=120.0,
+            structure="顶管",
+            name="压力段2",
+            in_out="出",
+            row_identity="flow1-row3",
+        ),
+    ]
+    longitudinal_nodes = [
+        {"chainage": 80.0, "elevation": 420.0, "turn_type": "NONE"},
+        {"chainage": 120.0, "elevation": 418.0, "turn_type": "NONE"},
+    ]
+    panel = _Panel("T")
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支管")
+    panel.calculated_nodes = list(nodes)
+    panel._build_nodes_from_table = lambda: list(nodes)
+    panel.get_pressure_pipe_longitudinal_nodes_for_export = lambda rows=None: {
+        "flow1-row2": list(longitudinal_nodes),
+        "flow1-row3": list(longitudinal_nodes),
+    }
+    panel._pressure_pipe_manager = SimpleNamespace(to_dict=lambda: {"pipes": {}})
+
+    data = cad_tools._build_panel_xxpipe_profile_data(
+        panel,
+        nodes,
+        station_prefix="T",
+        lookup_rows=[
+            {
+                "name": "罗家湾",
+                "flow_section": "1",
+                "identity": "1::罗家湾",
+                "route_key": "flow1-route1",
+                "route_display_name": "流量段1 整线1",
+                "node_label": "IP1",
+                "station_text": "T0+000.000",
+                "station_mc": 0.0,
+                "is_tunnel_structure": True,
+            },
+            {
+                "name": "压力段1",
+                "flow_section": "1",
+                "identity": "flow1-row2",
+                "route_key": "flow1-route1",
+                "route_display_name": "流量段1 整线1",
+                "node_label": "IP3",
+                "station_text": "T0+080.000",
+                "station_mc": 80.0,
+            },
+            {
+                "name": "压力段2",
+                "flow_section": "1",
+                "identity": "flow1-row3",
+                "route_key": "flow1-route1",
+                "route_display_name": "流量段1 整线1",
+                "node_label": "IP4",
+                "station_text": "T0+120.000",
+                "station_mc": 120.0,
+            },
+        ],
+    )
+
+    assert data["warnings"]["missing_axis_identities"] == []
+    assert data["warnings"]["uncovered_stations"] == []
+    assert [record["identity"] for record in data["centerline_records"]] == [
+        "flow1-row2",
+        "flow1-row3",
+    ]
 
 
 def test_export_xxpipe_longitudinal_txt_to_path_shows_guidance_for_relaxed_xxqu(local_tmp_path, monkeypatch):
@@ -1988,6 +2390,46 @@ def test_draw_tail_pressure_split_profile_on_msp_keeps_lower_centerline_text_whe
     )
     assert [text for text, _x in lower_centerline_texts] == ["100.00", "96.00", "92.00"]
     assert [x for _text, x in lower_centerline_texts] == pytest.approx([4.8, 19.0, 39.0])
+
+
+def test_draw_profile_on_msp_does_not_promote_first_centerline_record_to_full_height_boundary(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    tail_nodes, xxpipe_profile_data = _build_leading_gap_tail_profile_data()
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        tail_nodes,
+        tail_nodes,
+        _scaled_settings(),
+        "",
+        export_mode="xxpipe",
+        xxpipe_profile_data=xxpipe_profile_data,
+        x_origin_mc=1950.37,
+    )
+
+    scale_x = _scaled_settings()["scale_x"]
+    _settings, _enabled_ids, row_layout, _total_height, _line_height, _boundaries = cad_tools._build_xxpipe_profile_row_layout(
+        _scaled_settings()
+    )
+    expected_segment = [
+        (
+            row_layout["pipe_material"]["top"],
+            row_layout["building_name"]["bottom"],
+        )
+    ]
+    x_value = _scaled_m_to_mm(1981.787 - 1950.37, scale_x)
+
+    assert _get_vertical_line_segments_at_x(msp.line_records, x_value) == pytest.approx(expected_segment)
 
 
 def test_export_longitudinal_profile_dxf_uses_tail_pressure_split_helper_in_standard_mode(local_tmp_path, monkeypatch):

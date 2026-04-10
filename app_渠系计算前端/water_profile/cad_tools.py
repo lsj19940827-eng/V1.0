@@ -2884,6 +2884,16 @@ def _build_profile_text_nodes(nodes, station_resolver=None):
     return merged_nodes
 
 
+def _resolve_standard_profile_last_visible_mc(nodes):
+    """返回标准纵断面最后一个可见导出节点桩号，并复用可见节点列表。"""
+    profile_text_nodes = _build_profile_text_nodes(nodes or [])
+    if profile_text_nodes:
+        return _profile_station_value(profile_text_nodes[-1]), profile_text_nodes
+    if nodes:
+        return float(getattr(nodes[-1], "station_MC", 0.0) or 0.0), []
+    return 0.0, []
+
+
 def _resolve_segment_mid_mc(seg_start, seg_end, boundary_mcs, tol=1e-9):
     """根据边界竖线计算段落中心MC；单点段优先取所在单元格几何中心。"""
     bounds = sorted({float(val) for val in boundary_mcs})
@@ -4787,6 +4797,159 @@ def _resolve_xxpipe_longitudinal_nodes_for_node(node, long_map):
     return fallback_identity, [], "missing_longitudinal"
 
 
+def _safe_float(value, default=None):
+    """安全转成浮点数，失败时回退默认值。"""
+    try:
+        if value is None:
+            return default
+        text = str(value).strip()
+        if text == "":
+            return default
+        return float(text)
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_xxpipe_longitudinal_measure(value, min_decimals: int = 3, max_decimals: int = 6) -> str:
+    """格式化纵断面桩号数值，保留必要小数位。"""
+    number = _safe_float(value, None)
+    if number is None or not math.isfinite(number):
+        return "-"
+    text = f"{float(number):.{max_decimals}f}"
+    if "." not in text:
+        return text
+    integer, fraction = text.split(".", 1)
+    fraction = fraction.rstrip("0")
+    if len(fraction) < min_decimals:
+        fraction = fraction.ljust(min_decimals, "0")
+    return f"{integer}.{fraction}"
+
+
+def _format_xxpipe_longitudinal_gap_text(gap_m: float) -> str:
+    """把纵断面缺口优先格式化成毫米，必要时补充米值。"""
+    gap_value = max(0.0, _safe_float(gap_m, 0.0) or 0.0)
+    gap_mm = gap_value * 1000.0
+    if gap_mm >= 1000.0:
+        return f"{gap_mm:.1f} mm（{gap_value:.3f} m）"
+    return f"{gap_mm:.1f} mm"
+
+
+def _format_xxpipe_missing_target_preview_text(item) -> str:
+    """统一格式化未覆盖节点预览文本。"""
+    if isinstance(item, dict):
+        label = str(item.get("label", "") or item.get("node_label", "") or "").strip()
+        station_text = str(item.get("station_text", "") or "").strip()
+        if label and station_text and station_text != "-":
+            return f"{label}@{station_text}"
+        return label or station_text
+    return str(item or "").strip()
+
+
+def _build_xxpipe_missing_target_preview(missing_targets, max_items: int = 3) -> str:
+    """生成未覆盖节点的预览文本。"""
+    items = list(missing_targets or [])
+    preview_items = [
+        _format_xxpipe_missing_target_preview_text(item)
+        for item in items[:max_items]
+        if _format_xxpipe_missing_target_preview_text(item)
+    ]
+    preview = "；".join(preview_items)
+    if len(items) > max_items:
+        preview += f" 等{len(items)}处"
+    return preview
+
+
+def _extract_xxpipe_longitudinal_chainage_range(longitudinal_nodes):
+    """提取导入纵断面的起止桩号范围。"""
+    try:
+        nodes = _normalize_xxpipe_longitudinal_nodes(longitudinal_nodes)
+    except Exception:
+        nodes = []
+    if not nodes:
+        return None, None
+    return nodes[0]["chainage"], nodes[-1]["chainage"]
+
+
+def _build_xxpipe_coverage_error_message(display_name: str, coverage_state: dict) -> str:
+    """生成用户可直接照着修改的纵断面覆盖不足提示。"""
+    missing_targets = list((coverage_state or {}).get("missing_targets", []) or [])
+    preview = _build_xxpipe_missing_target_preview(missing_targets)
+    coverage_end = _safe_float((coverage_state or {}).get("coverage_end", None), None)
+    coverage_tol = _safe_float((coverage_state or {}).get("coverage_tol", None), _XXPIPE_PROFILE_STATION_TOL)
+    coverage_tol = coverage_tol or _XXPIPE_PROFILE_STATION_TOL
+
+    farthest_station = None
+    for item in missing_targets:
+        station_value = _safe_float(item.get("station_mc", None) if isinstance(item, dict) else None, None)
+        if station_value is None or not math.isfinite(station_value):
+            continue
+        if farthest_station is None or station_value > farthest_station:
+            farthest_station = float(station_value)
+
+    lines = []
+    if display_name:
+        lines.append(f"整线：{display_name}")
+    lines.append("导入失败：纵断面范围不够")
+
+    if farthest_station is None or coverage_end is None:
+        lines.append("当前导入的纵断面没有覆盖到全部节点桩号，请在 CAD 中补齐后重新导入。")
+        if preview:
+            lines.append(f"未覆盖节点：{preview}")
+        return "\n".join(lines)
+
+    required_text = _format_xxpipe_longitudinal_measure(farthest_station)
+    coverage_end_text = _format_xxpipe_longitudinal_measure(coverage_end)
+    gap_text = _format_xxpipe_longitudinal_gap_text(farthest_station - coverage_end)
+    tol_mm = coverage_tol * 1000.0
+
+    lines.append(
+        f"这条整线需要覆盖到桩号 {required_text} m，但当前导入的纵断面只到 {coverage_end_text} m。"
+    )
+    lines.append(f"当前还差 {gap_text}，已超过程序允许的 {tol_mm:.1f} mm 误差。")
+    lines.append(f"请在 CAD 中把纵断面末端至少延长到 {required_text} m 后重新导入。")
+    if preview:
+        lines.append(f"未覆盖节点：{preview}")
+    return "\n".join(lines)
+
+
+def _build_xxpipe_stale_longitudinal_hint_text(missing_targets) -> str:
+    """构造旧缓存失效时的界面提示。"""
+    preview = _build_xxpipe_missing_target_preview(missing_targets)
+    if preview:
+        return (
+            "检测到旧纵断面缓存与当前桩号不一致，请清空后重新导入纵断面DXF。\n"
+            f"未覆盖桩号：{preview}"
+        )
+    return "检测到旧纵断面缓存与当前桩号不一致，请清空后重新导入纵断面DXF。"
+
+
+def _should_skip_xxpipe_longitudinal_coverage(
+    node,
+    *,
+    non_tunnel_only: bool = False,
+    warning_context_by_identity=None,
+) -> bool:
+    """判断当前节点是否应跳过纵断面覆盖强校验。"""
+    _ = non_tunnel_only
+    if "隧洞" in _struct_val(getattr(node, "structure_type", None)):
+        return True
+
+    context_map = warning_context_by_identity or {}
+    if not isinstance(context_map, dict) or not context_map:
+        return False
+
+    for identity in _collect_xxpipe_identity_candidates(node):
+        identity_text = str(identity or "").strip()
+        if not identity_text:
+            continue
+        context = context_map.get(identity_text)
+        if not isinstance(context, dict):
+            continue
+        if bool(context.get("is_tunnel")) or bool(context.get("is_tunnel_structure")):
+            return True
+    return False
+
+
 def _build_xxpipe_segment_records(items):
     segments = []
     for item in items:
@@ -4882,6 +5045,7 @@ def _build_xxpipe_profile_data(
     manager_config_by_identity=None,
     export_policy=None,
     warning_context_by_identity=None,
+    non_tunnel_coverage_only: bool = False,
 ):
     export_policy = _normalize_xxpipe_export_policy(export_policy)
     raw_visible_nodes = list(_iter_xxpipe_export_nodes(nodes))
@@ -4935,9 +5099,16 @@ def _build_xxpipe_profile_data(
     missing_axis_seen = set()
     for node in profile_text_nodes:
         station_mc = _profile_station_value(node)
+        skip_longitudinal_validation = _should_skip_xxpipe_longitudinal_coverage(
+            node,
+            non_tunnel_only=non_tunnel_coverage_only,
+            warning_context_by_identity=warning_context_by_identity,
+        )
         identity, long_nodes, missing_kind = _resolve_xxpipe_longitudinal_nodes_for_node(node, long_map)
         # 单点纵断面只代表边界占位，不足以用于中心线高程采样。
         if not _has_exportable_xxpipe_longitudinal_nodes(long_nodes):
+            if skip_longitudinal_validation:
+                continue
             if warnings["allow_partial_export"]:
                 if identity not in missing_axis_seen:
                     missing_axis_seen.add(identity)
@@ -4963,26 +5134,32 @@ def _build_xxpipe_profile_data(
         except ValueError as exc:
             if "超出 xx管轴线高程覆盖范围" not in str(exc):
                 raise
+            if skip_longitudinal_validation:
+                continue
+            coverage_item = _resolve_xxpipe_warning_context(
+                node,
+                identity,
+                station_mc,
+                station_prefix,
+                kind="coverage",
+                warning_context_by_identity=warning_context_by_identity,
+            )
             try:
                 station_text = ProjectSettings.format_station(station_mc, station_prefix)
             except Exception:
                 station_text = f"{station_mc:.3f}"
+            coverage_start, coverage_end = _extract_xxpipe_longitudinal_chainage_range(long_nodes)
+            coverage_item["station_text"] = station_text
+            coverage_item["station_mc"] = station_mc
+            coverage_item["coverage_start"] = coverage_start
+            coverage_item["coverage_end"] = coverage_end
             if warnings["allow_partial_export"]:
-                coverage_item = _resolve_xxpipe_warning_context(
-                    node,
-                    identity,
-                    station_mc,
-                    station_prefix,
-                    kind="coverage",
-                    warning_context_by_identity=warning_context_by_identity,
-                )
-                coverage_item["station_text"] = station_text
-                coverage_item["station_mc"] = station_mc
                 warnings["uncovered_stations"].append(coverage_item)
                 continue
             missing_axis.append({
                 "identity": f"{identity}@{station_text}",
                 "kind": "coverage",
+                "detail": coverage_item,
             })
             continue
         manager_row = manager_map.get(identity) or {}
@@ -5002,10 +5179,9 @@ def _build_xxpipe_profile_data(
             and str(item.get("identity", "") or "").strip()
         ]
         coverage_items = [
-            str(item.get("identity", "") or "").strip()
+            item
             for item in missing_axis
             if str(item.get("kind", "") or "").strip() == "coverage"
-            and str(item.get("identity", "") or "").strip()
         ]
         missing_longitudinal_items = [
             str(item.get("identity", "") or "").strip()
@@ -5019,14 +5195,52 @@ def _build_xxpipe_profile_data(
                 + "；".join(identity_mismatch_items)
             )
         if coverage_items and not identity_mismatch_items and not missing_longitudinal_items:
-            raise ValueError("以下节点缺少可用的 xx管 轴线高程覆盖：\n" + "；".join(coverage_items))
+            coverage_details = [
+                dict(item.get("detail") or {})
+                for item in coverage_items
+                if isinstance(item.get("detail"), dict)
+            ]
+            display_name = ""
+            for detail in coverage_details:
+                display_name = str(detail.get("route_display_name", "") or "").strip()
+                if display_name:
+                    break
+            coverage_end = None
+            if coverage_details:
+                valid_ends = [
+                    _safe_float(detail.get("coverage_end", None), None)
+                    for detail in coverage_details
+                ]
+                valid_ends = [
+                    value for value in valid_ends
+                    if value is not None and math.isfinite(value)
+                ]
+                if valid_ends:
+                    coverage_end = max(valid_ends)
+            raise ValueError(
+                _build_xxpipe_coverage_error_message(
+                    display_name,
+                    {
+                        "missing_targets": coverage_details,
+                        "coverage_end": coverage_end,
+                        "coverage_tol": _XXPIPE_PROFILE_STATION_TOL,
+                    },
+                )
+            )
         messages = []
         if missing_longitudinal_items:
             messages.append("以下节点缺少轴线纵断面：\n" + "；".join(missing_longitudinal_items))
         if identity_mismatch_items:
             messages.append("以下节点未匹配到可用的整线纵断面：\n" + "；".join(identity_mismatch_items))
         if coverage_items:
-            messages.append("以下节点缺少可用的 xx管 轴线高程覆盖：\n" + "；".join(coverage_items))
+            messages.append(
+                "以下节点缺少可用的 xx管 轴线高程覆盖：\n"
+                + "；".join(
+                    str(item.get("identity", "") or "").strip()
+                    for item in coverage_items
+                    if str(item.get("identity", "") or "").strip()
+                )
+            )
         raise ValueError("\n".join(messages))
 
     building_segments = _build_xxpipe_segment_records([
@@ -5118,6 +5332,28 @@ def _collect_panel_xxpipe_route_import_targets(panel, nodes):
     return route_import_targets if isinstance(route_import_targets, dict) else {}
 
 
+def _route_import_targets_require_non_tunnel_coverage(route_import_targets) -> bool:
+    """判断当前整线是否属于“有压 + 隧洞 + 有压”的 mixed route。"""
+    for payload in dict(route_import_targets or {}).values():
+        if not isinstance(payload, dict):
+            continue
+        has_tunnel = False
+        has_non_tunnel = False
+        for node in list(payload.get("nodes", []) or []):
+            if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+                continue
+            struct_name = _struct_val(getattr(node, "structure_type", None))
+            if not _is_xxpipe_allowed_structure(struct_name):
+                continue
+            if "隧洞" in struct_name:
+                has_tunnel = True
+            else:
+                has_non_tunnel = True
+            if has_tunnel and has_non_tunnel:
+                return True
+    return False
+
+
 def _build_xxpipe_identity_rows_with_context(nodes, *, route_import_targets=None, station_prefix=""):
     rows = []
     seen = set()
@@ -5140,6 +5376,7 @@ def _build_xxpipe_identity_rows_with_context(nodes, *, route_import_targets=None
                     "route_key": route_key_text,
                     "route_display_name": route_display_name,
                     "node_label": str(target.get("label", "") or "").strip(),
+                    "station_mc": _safe_float(target.get("station_mc"), None),
                     "station_text": _format_xxpipe_station_text(
                         target.get("station_mc"),
                         route_station_prefix,
@@ -5158,12 +5395,18 @@ def _build_xxpipe_identity_rows_with_context(nodes, *, route_import_targets=None
             "name": getattr(node, "name", ""),
             "flow_section": getattr(node, "flow_section", ""),
             "identity": identity,
+            "is_tunnel": "隧洞" in _struct_val(getattr(node, "structure_type", None)),
         }
         route_context = route_context_by_row.get(row_index) or {}
         for key in ("route_key", "route_display_name", "node_label", "station_text"):
             value = str(route_context.get(key, "") or "").strip()
             if value:
                 row[key] = value
+        station_mc = _safe_float(route_context.get("station_mc", None), None)
+        if station_mc is None:
+            station_mc = _safe_float(getattr(node, "station_MC", None), None)
+        if station_mc is not None:
+            row["station_mc"] = station_mc
         rows.append(row)
     return rows
 
@@ -5182,6 +5425,10 @@ def _build_xxpipe_warning_context_by_identity(rows):
             "station_text": str(row.get("station_text", "") or "").strip(),
             "node_label": str(row.get("node_label", "") or "").strip(),
             "route_display_name": str(row.get("route_display_name", "") or "").strip(),
+            "route_key": str(row.get("route_key", "") or "").strip(),
+            "station_mc": _safe_float(row.get("station_mc"), None),
+            "is_tunnel": bool(row.get("is_tunnel")),
+            "is_tunnel_structure": bool(row.get("is_tunnel_structure")),
         }
     return context
 
@@ -5362,6 +5609,7 @@ def _build_panel_xxpipe_profile_data(
     export_policy=None,
 ):
     draw_nodes = list(nodes or [])
+    route_import_targets = {}
     if lookup_rows is None:
         if lookup_nodes is None:
             row_source_nodes = []
@@ -5387,6 +5635,7 @@ def _build_panel_xxpipe_profile_data(
     longitudinal_nodes = _get_panel_pressure_pipe_longitudinal_nodes_for_export(panel, rows)
     manager_config = _get_panel_xxpipe_manager_config_by_identity(panel, rows)
     warning_context_by_identity = _build_xxpipe_warning_context_by_identity(rows)
+    non_tunnel_coverage_only = _route_import_targets_require_non_tunnel_coverage(route_import_targets)
     if export_policy is None:
         export_policy = _normalize_xxpipe_export_policy()
         if not _is_xxpipe_channel_level(_get_panel_channel_level_text(panel)):
@@ -5404,6 +5653,7 @@ def _build_panel_xxpipe_profile_data(
         manager_config_by_identity=manager_config,
         export_policy=export_policy,
         warning_context_by_identity=warning_context_by_identity,
+        non_tunnel_coverage_only=non_tunnel_coverage_only,
     )
 
 
@@ -5412,8 +5662,10 @@ def _translate_xxpipe_export_error(exc):
     message = str(exc or "").strip()
     if not message:
         return None
+    if "导入失败：纵断面范围不够" in message:
+        return message
     if "未匹配到可用的整线纵断面" in message:
-        return "已导入纵断面DXF，但当前导出节点没有匹配到对应整线，请重新计算后再导出。"
+        return message
     if "缺少轴线纵断面" in message:
         return "对应整线还没有导入纵断面DXF，请先到表3的有压管道水力计算中导入后再导出。"
     if (
@@ -5738,10 +5990,18 @@ def _collect_xxpipe_full_height_boundary_mcs(profile_data):
         _add(segment.get("start_mc"))
         _add(segment.get("end_mc"))
 
-    records = profile_data.get("centerline_records", []) or []
-    if records:
-        _add(records[0].get("station_mc"))
-        _add(records[-1].get("station_mc"))
+    # 首尾整高边界应跟随真实可见表格边界，而不是跟随“首个有效中心线点”。
+    # 在宽松导出里，前一站可能因为覆盖不足而留空；如果这里继续拿
+    # centerline_records[0]，会把下一站误画成整高竖线。
+    profile_text_nodes = list(profile_data.get("profile_text_nodes", []) or [])
+    if profile_text_nodes:
+        _add(_profile_station_value(profile_text_nodes[0]))
+        _add(_profile_station_value(profile_text_nodes[-1]))
+    else:
+        records = profile_data.get("centerline_records", []) or []
+        if records:
+            _add(records[0].get("station_mc"))
+            _add(records[-1].get("station_mc"))
 
     return sorted(boundary_mcs)
 
@@ -8458,7 +8718,7 @@ def _draw_profile_on_msp(
             return f"{0:.{elev_decimals}f}"
         return f"{value:.{elev_decimals}f}"
 
-    last_mc = nodes[-1].station_MC
+    last_visible_mc, profile_text_nodes = _resolve_standard_profile_last_visible_mc(nodes)
     layer_grid = layer_prefix + "表格线框"
     layer_text = layer_prefix + "文字标注"
 
@@ -8484,7 +8744,7 @@ def _draw_profile_on_msp(
 
     # ======== 3. 全宽水平线 ========
     for hy in h_line_y_values:
-        msp.add_line((0.0, hy), (sx(last_mc), hy), dxfattribs={"layer": layer_grid})
+        msp.add_line((0.0, hy), (sx(last_visible_mc), hy), dxfattribs={"layer": layer_grid})
 
     # ======== 4. 渠底/渠顶/水面折线 ========
     bottom_pts = [(sx(n.station_MC), sy(n.bottom_elevation))
@@ -8516,7 +8776,6 @@ def _draw_profile_on_msp(
     building_segments = _merge_segments_across_gates(building_segments)
 
     # ======== 6. 各行文本 ========
-    profile_text_nodes = _build_profile_text_nodes(nodes)
     slope_segments = _build_profile_slope_segments(nodes, profile_text_nodes=profile_text_nodes)
     ip_records = _build_ip_related_row_records(
         nodes,
@@ -8617,7 +8876,7 @@ def _draw_profile_on_msp(
             (header_cx, y_bottom_line), align=ezdxf.enums.TextEntityAlignment.MIDDLE_CENTER
         )
 
-    return 40 + sx(last_mc), line_height
+    return 40 + sx(last_visible_mc), line_height
 
 
 # ================================================================
@@ -9017,6 +9276,7 @@ def _export_longitudinal_txt_to_path(
         lines = []
         s_height = fmt(text_height)
         s_rotation = fmt(rotation)
+        last_visible_mc, profile_text_nodes = _resolve_standard_profile_last_visible_mc(nodes)
 
         # ======== 1. ?????? ========
         for hy in h_line_y_values:
@@ -9040,7 +9300,7 @@ def _export_longitudinal_txt_to_path(
         lines.append("")
 
         # ======== 3. ????? ========
-        last_mc_scaled = fmt(sx(nodes[-1].station_MC))
+        last_mc_scaled = fmt(sx(last_visible_mc))
         for hy in h_line_y_values:
             lines.append(f"pl {fmt(sx(0))},{fmt(hy)} {last_mc_scaled},{fmt(hy)} ")
         lines.append("")
@@ -9060,7 +9320,6 @@ def _export_longitudinal_txt_to_path(
         lines.append("")
 
         # ======== 5. ???? ========
-        profile_text_nodes = _build_profile_text_nodes(nodes)
         ip_records = _build_ip_related_row_records(
             nodes,
             station_prefix,

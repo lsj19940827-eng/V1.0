@@ -1712,6 +1712,7 @@ class PressurePipeDataExtractor:
     def _build_named_tail_row_segment_member(
         nodes: List[ChannelNode],
         parent_group: PressurePipeGroup,
+        parent_member: Optional[PressurePipeChainMember],
         row_index: int,
         settings=None,
     ) -> Optional[PressurePipeChainMember]:
@@ -1736,10 +1737,30 @@ class PressurePipeDataExtractor:
             or getattr(target_node, "name", "")
             or "未命名承压段"
         ).strip()
-        parent_identity = str(getattr(parent_group, "identity", "") or "").strip()
-        parent_storage_key = str(getattr(parent_group, "storage_key", "") or "").strip()
         identity = str(getattr(segment_group, "identity", "") or "").strip()
         storage_key = str(getattr(segment_group, "storage_key", "") or identity).strip() or identity
+        parent_identity = str(
+            getattr(parent_member, "parent_group_identity", "")
+            or getattr(parent_group, "identity", "")
+            or ""
+        ).strip()
+        parent_storage_key = str(
+            getattr(parent_member, "parent_group_storage_key", "")
+            or getattr(parent_group, "storage_key", "")
+            or parent_identity
+        ).strip() or parent_identity
+        source_identity_aliases = []
+        for candidate in (
+            parent_identity,
+            parent_storage_key,
+            *list(getattr(parent_member, "identity_aliases", []) or []),
+            *PressurePipeDataExtractor._collect_named_group_identity_aliases(parent_group),
+            identity,
+            storage_key,
+        ):
+            candidate_text = str(candidate or "").strip()
+            if candidate_text and candidate_text not in source_identity_aliases:
+                source_identity_aliases.append(candidate_text)
         return PressurePipeChainMember(
             member_type="single_row",
             display_name=display_name,
@@ -1759,10 +1780,7 @@ class PressurePipeDataExtractor:
                 PressurePipeDataExtractor._resolve_node_structure_text(target_node)
             ),
             should_generate_row_loss=upstream_index >= 0,
-            source_identity_aliases=[
-                alias for alias in [parent_identity, parent_storage_key]
-                if str(alias or "").strip()
-            ],
+            source_identity_aliases=source_identity_aliases,
             parent_group_identity=parent_identity,
             parent_group_storage_key=parent_storage_key,
             split_from_named_group=True,
@@ -1838,6 +1856,7 @@ class PressurePipeDataExtractor:
                 row_member = PressurePipeDataExtractor._build_named_tail_row_segment_member(
                     nodes,
                     parent_group,
+                    member,
                     row_index,
                     settings=settings,
                 )

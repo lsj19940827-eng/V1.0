@@ -9097,8 +9097,10 @@ class WaterProfilePanel(QWidget):
                 "upstream_row_index",
                 "route_key",
                 "route_display_name",
+                "station_mc",
                 "station_text",
                 "node_label",
+                "is_tunnel",
             ):
                 if key in metadata:
                     target[key] = copy.deepcopy(metadata.get(key))
@@ -9385,6 +9387,29 @@ class WaterProfilePanel(QWidget):
         # 单点只够表示边界占位，中心线高程采样至少要两个纵断面点。
         return isinstance(value, list) and len(value) >= 2
 
+    @classmethod
+    def _pressure_pipe_longitudinal_nodes_cover_station(cls, longitudinal_nodes, station_mc, tol: float = 1e-3) -> bool:
+        """判断当前纵断面是否覆盖指定桩号。"""
+        target_station = cls._coerce_pressure_pipe_finite_float(station_mc)
+        if target_station is None:
+            return cls._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes)
+        if not cls._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
+            return False
+
+        chainages = []
+        for item in list(longitudinal_nodes or []):
+            if not isinstance(item, dict):
+                continue
+            chainage = cls._coerce_pressure_pipe_finite_float(item.get("chainage"))
+            if chainage is None:
+                continue
+            chainages.append(chainage)
+        if len(chainages) < 2:
+            return False
+        start_mc = min(chainages[0], chainages[-1])
+        end_mc = max(chainages[0], chainages[-1])
+        return (start_mc - tol) <= target_station <= (end_mc + tol)
+
     def _index_pressure_pipe_manager_route_longitudinal_nodes(self) -> dict:
         """按 route_key 收集整线纵断面，供导出时做 route 级兜底。"""
         manager = getattr(self, "_pressure_pipe_manager", None)
@@ -9450,6 +9475,8 @@ class WaterProfilePanel(QWidget):
                     "flow_section": str(row.get("flow_section", "") or "").strip(),
                     "name": name,
                     "longitudinal_nodes": longitudinal_nodes,
+                    "route_key": str(row.get("route_key", "") or "").strip(),
+                    "route_display_name": str(row.get("route_display_name", "") or "").strip(),
                 }
                 exact[resolved_identity] = payload
                 plain_name_candidates.setdefault(name, []).append(payload)
@@ -9557,6 +9584,8 @@ class WaterProfilePanel(QWidget):
                     "flow_section": self._get_pressure_pipe_group_flow_section(group),
                     "name": name,
                     "longitudinal_nodes": longitudinal_nodes,
+                    "route_key": route_key,
+                    "route_display_name": str(getattr(group, "route_display_name", "") or "").strip(),
                 }
                 if not matched_aliases:
                     matched_aliases = [identity]
@@ -10137,14 +10166,22 @@ class WaterProfilePanel(QWidget):
             if result is None and target_name_counts.get(name, 0) == 1:
                 result = manager_by_name.get(name)
             route_key = str(target.get("route_key", "") or "").strip()
+            if not route_key and isinstance(result, dict):
+                route_key = str(result.get("route_key", "") or "").strip()
+            station_mc = self._coerce_pressure_pipe_finite_float(target.get("station_mc"))
             longitudinal_nodes = list(result.get("longitudinal_nodes", []) or []) if isinstance(result, dict) else []
-            if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes) and route_key:
-                result = route_longitudinal_nodes.get(route_key)
-                longitudinal_nodes = (
-                    list(result.get("longitudinal_nodes", []) or [])
-                    if isinstance(result, dict)
-                    else []
-                )
+            route_result = route_longitudinal_nodes.get(route_key) if route_key else None
+            route_nodes = (
+                list(route_result.get("longitudinal_nodes", []) or [])
+                if isinstance(route_result, dict)
+                else []
+            )
+            if route_key and (
+                not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes)
+                or not self._pressure_pipe_longitudinal_nodes_cover_station(longitudinal_nodes, station_mc)
+            ):
+                result = route_result
+                longitudinal_nodes = list(route_nodes)
             if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
                 continue
             resolved[identity] = copy.deepcopy(longitudinal_nodes)

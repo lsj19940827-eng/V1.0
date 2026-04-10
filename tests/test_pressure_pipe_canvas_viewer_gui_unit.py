@@ -1208,6 +1208,21 @@ def test_pressure_pipe_config_dialog_reports_mm_gap_for_short_longitudinal_profi
     dialog.deleteLater()
 
 
+def test_pressure_pipe_config_dialog_formats_stale_longitudinal_hint_preview():
+    text = PressurePipeConfigDialog._build_stale_longitudinal_hint_text(
+        [
+            {
+                "label": "IP173",
+                "station_text": "T10+708.927",
+                "station_mc": 10708.927,
+            }
+        ]
+    )
+
+    assert "请清空后重新导入纵断面DXF" in text
+    assert "未覆盖桩号：IP173@T10+708.927" in text
+
+
 def test_pressure_pipe_config_dialog_blocks_xxpipe_accept_without_longitudinal_and_highlights_route(monkeypatch):
     _get_qapp()
     route_key, groups, _manager = _make_route_groups()
@@ -1365,6 +1380,341 @@ def test_pressure_pipe_config_dialog_route_import_persists_manager_before_accept
     saved_routes = manager.to_dict().get("routes", {})
     assert route_key in dialog.get_longitudinal_nodes_dict()
     assert saved_routes.get(route_key, {}).get("longitudinal_nodes", []) == dialog.get_longitudinal_nodes_dict()[route_key]
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_merges_multiple_route_imports_and_uses_best_anchor(monkeypatch):
+    _get_qapp()
+    route_key, groups, manager = _make_mixed_route_groups()
+    route_nodes = [
+        SimpleNamespace(
+            ip_number=1,
+            name="前置隧洞",
+            flow_section="2",
+            station_MC=0.0,
+            x=0.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="隧洞-圆形"),
+            pressure_pipe_row_identity="flow2-row1",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=2,
+            name="穿路段",
+            flow_section="2",
+            station_MC=20.0,
+            x=20.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            pressure_pipe_row_identity="flow2-row2",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=3,
+            name="穿路段",
+            flow_section="2",
+            station_MC=40.0,
+            x=40.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            pressure_pipe_row_identity="flow2-row3",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=4,
+            name="中间隧洞",
+            flow_section="2",
+            station_MC=50.0,
+            x=50.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="隧洞-圆形"),
+            pressure_pipe_row_identity="flow2-row4",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=5,
+            name="穿路段B",
+            flow_section="2",
+            station_MC=60.0,
+            x=60.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="顶管"),
+            pressure_pipe_row_identity="flow2-row5",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=6,
+            name="穿路段B",
+            flow_section="2",
+            station_MC=100.0,
+            x=100.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="顶管"),
+            pressure_pipe_row_identity="flow2-row6",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+        route_import_targets={
+            route_key: {
+                "display_name": "流量段2 整线夹带隧洞",
+                "station_prefix": "",
+                "nodes": route_nodes,
+                "targets": [
+                    {"row_index": idx, "label": f"IP{idx + 1}", "station_mc": node.station_MC}
+                    for idx, node in enumerate(route_nodes)
+                ],
+            }
+        },
+    )
+
+    file_queue = iter([("part-a.dxf", "DXF"), ("part-b.dxf", "DXF")])
+    parser_offsets = []
+    infos = []
+    errors = []
+
+    class _FakeParser:
+        @staticmethod
+        def get_longitudinal_profile_start_x(filepath):
+            return {
+                "part-a.dxf": 5.0,
+                "part-b.dxf": 7.0,
+            }[Path(filepath).name]
+
+        @staticmethod
+        def parse_longitudinal_profile(filepath, chainage_offset=0.0):
+            parser_offsets.append((Path(filepath).name, chainage_offset))
+            turn_type = SimpleNamespace(name="NONE")
+            if Path(filepath).name == "part-a.dxf":
+                base_points = [(5.0, 422.0), (25.0, 418.0)]
+            else:
+                base_points = [(7.0, 416.0), (47.0, 410.0)]
+            return (
+                [
+                    SimpleNamespace(
+                        chainage=chainage + chainage_offset,
+                        elevation=elevation,
+                        vertical_curve_radius=0.0,
+                        turn_type=turn_type,
+                        turn_angle=0.0,
+                        slope_before=0.0,
+                        slope_after=0.0,
+                        arc_center_s=None,
+                        arc_center_z=None,
+                        arc_end_chainage=None,
+                        arc_theta_rad=None,
+                    )
+                    for chainage, elevation in base_points
+                ],
+                "测试导入",
+            )
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *_a, **_k: next(file_queue)),
+    )
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_a: errors.append(_a[2])))
+    monkeypatch.setattr(
+        dialog_mod,
+        "fluent_question",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("整线补导入不应再走替换确认")),
+    )
+    monkeypatch.setattr(dialog_mod, "fluent_info", lambda *_a, **_k: infos.append(_a[2]))
+    monkeypatch.setitem(sys.modules, "dxf_parser", SimpleNamespace(DxfParser=_FakeParser))
+    monkeypatch.setattr(
+        dialog,
+        "_raise_if_import_stays_in_raw_coordinate_space",
+        lambda *_a, **_k: None,
+    )
+
+    dialog._import_longitudinal_dxf(route_key, groups[0].route_ip_points)
+    dialog._import_longitudinal_dxf(route_key, groups[0].route_ip_points)
+
+    assert not errors
+    assert parser_offsets == [
+        ("part-a.dxf", pytest.approx(15.0)),
+        ("part-b.dxf", pytest.approx(53.0)),
+    ]
+    assert route_key in dialog.get_longitudinal_nodes_dict()
+    assert [node["chainage"] for node in dialog.get_longitudinal_nodes_dict()[route_key]] == [20.0, 40.0, 60.0, 100.0]
+    saved_routes = manager.to_dict().get("routes", {})
+    assert [node["chainage"] for node in saved_routes.get(route_key, {}).get("longitudinal_nodes", [])] == [20.0, 40.0, 60.0, 100.0]
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_blocks_accept_for_partial_route_import_with_detailed_gap(monkeypatch):
+    _get_qapp()
+    route_key, groups, manager = _make_mixed_route_groups()
+    route_nodes = [
+        SimpleNamespace(
+            ip_number=1,
+            name="前置隧洞",
+            flow_section="2",
+            station_MC=0.0,
+            x=0.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="隧洞-圆形"),
+            pressure_pipe_row_identity="flow2-row1",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=2,
+            name="穿路段",
+            flow_section="2",
+            station_MC=20.0,
+            x=20.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            pressure_pipe_row_identity="flow2-row2",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=3,
+            name="穿路段",
+            flow_section="2",
+            station_MC=40.0,
+            x=40.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            pressure_pipe_row_identity="flow2-row3",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=4,
+            name="中间隧洞",
+            flow_section="2",
+            station_MC=50.0,
+            x=50.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="隧洞-圆形"),
+            pressure_pipe_row_identity="flow2-row4",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=5,
+            name="穿路段B",
+            flow_section="2",
+            station_MC=60.0,
+            x=60.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="顶管"),
+            pressure_pipe_row_identity="flow2-row5",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+        SimpleNamespace(
+            ip_number=6,
+            name="穿路段B",
+            flow_section="2",
+            station_MC=100.0,
+            x=100.0,
+            y=0.0,
+            structure_type=SimpleNamespace(value="顶管"),
+            pressure_pipe_row_identity="flow2-row6",
+            is_transition=False,
+            is_auto_inserted_channel=False,
+        ),
+    ]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+        route_import_targets={
+            route_key: {
+                "display_name": "流量段2 整线夹带隧洞",
+                "station_prefix": "",
+                "nodes": route_nodes,
+                "targets": [
+                    {"row_index": idx, "label": f"IP{idx + 1}", "station_mc": node.station_MC}
+                    for idx, node in enumerate(route_nodes)
+                ],
+            }
+        },
+    )
+
+    class _FakeParser:
+        @staticmethod
+        def get_longitudinal_profile_start_x(_filepath):
+            return 5.0
+
+        @staticmethod
+        def parse_longitudinal_profile(_filepath, chainage_offset=0.0):
+            turn_type = SimpleNamespace(name="NONE")
+            assert chainage_offset == pytest.approx(15.0)
+            return (
+                [
+                    SimpleNamespace(
+                        chainage=20.0,
+                        elevation=422.0,
+                        vertical_curve_radius=0.0,
+                        turn_type=turn_type,
+                        turn_angle=0.0,
+                        slope_before=0.0,
+                        slope_after=0.0,
+                        arc_center_s=None,
+                        arc_center_z=None,
+                        arc_end_chainage=None,
+                        arc_theta_rad=None,
+                    ),
+                    SimpleNamespace(
+                        chainage=40.0,
+                        elevation=418.0,
+                        vertical_curve_radius=0.0,
+                        turn_type=turn_type,
+                        turn_angle=0.0,
+                        slope_before=0.0,
+                        slope_after=0.0,
+                        arc_center_s=None,
+                        arc_center_z=None,
+                        arc_end_chainage=None,
+                        arc_theta_rad=None,
+                    ),
+                ],
+                "测试导入",
+            )
+
+    errors = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *_a, **_k: ("part-a.dxf", "DXF")))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_a: errors.append(_a[2])))
+    monkeypatch.setattr(dialog_mod, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(dialog_mod, "fluent_error", lambda *_a, **_k: errors.append(_a[2]))
+    monkeypatch.setitem(sys.modules, "dxf_parser", SimpleNamespace(DxfParser=_FakeParser))
+    monkeypatch.setattr(
+        dialog,
+        "_raise_if_import_stays_in_raw_coordinate_space",
+        lambda *_a, **_k: None,
+    )
+
+    dialog._import_longitudinal_dxf(route_key, groups[0].route_ip_points)
+    dialog.accept()
+    _flush_events(4)
+
+    assert errors
+    assert "导入失败：纵断面范围不够" in errors[-1]
+    assert "需要覆盖到桩号 100.000 m" in errors[-1]
+    assert "当前导入的纵断面只到 40.000 m" in errors[-1]
+    assert "未覆盖节点：IP5@0+060.000；IP6@0+100.000" in errors[-1]
+    assert dialog.result() != QDialog.Accepted
+    assert route_key in dialog.get_longitudinal_nodes_dict()
+    assert manager.to_dict().get("routes", {}).get(route_key, {}).get("longitudinal_nodes", []) == []
 
     dialog.close()
     dialog.deleteLater()

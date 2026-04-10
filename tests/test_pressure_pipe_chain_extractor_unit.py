@@ -329,6 +329,82 @@ def test_extract_continuous_pressure_chains_for_branch_tail_named_pressure_group
     assert all(member.group is not None for member in chain.members)
 
 
+def test_extract_dialog_pipe_groups_marks_branch_tail_named_pressure_group_as_split_parent():
+    nodes = [
+        _make_node(0, "1", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+        *[
+            _make_node(
+                row_index,
+                "1",
+                "洞梁村",
+                "有压管道",
+                InOutType.INLET if row_index == 1 else (
+                    InOutType.OUTLET if row_index == 17 else InOutType.NORMAL
+                ),
+                flow=0.27,
+            )
+            for row_index in range(1, 18)
+        ],
+        _make_node(18, "1", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        nodes,
+        settings=_make_settings(channel_level="支渠"),
+    )
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group.identity == "1::洞梁村::rows2-18"
+    assert group.split_to_row_members is True
+    assert group.split_row_member_identities == [
+        f"flow1-row{row_index}"
+        for row_index in range(2, 19)
+    ]
+
+
+def test_extract_dialog_pipe_groups_marks_same_name_long_tail_parent_as_split_parent_after_prefix_rewrite():
+    nodes = [
+        _make_node(0, "1", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+        _make_node(1, "1", "洞梁村", "有压管道", InOutType.INLET, flow=0.27),
+        _make_node(2, "1", "洞梁村", "有压管道", InOutType.OUTLET, flow=0.27),
+        _make_node(3, "1", "穿路段", "定向钻", InOutType.INLET, flow=0.27),
+        _make_node(4, "1", "穿路段", "定向钻", InOutType.OUTLET, flow=0.27),
+        *[
+            _make_node(
+                row_index,
+                "1",
+                "洞梁村",
+                "有压管道",
+                InOutType.INLET if row_index == 5 else (
+                    InOutType.OUTLET if row_index == 21 else InOutType.NORMAL
+                ),
+                flow=0.27,
+            )
+            for row_index in range(5, 22)
+        ],
+        _make_node(22, "1", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        nodes,
+        settings=_make_settings(channel_level="支渠"),
+    )
+
+    assert len(groups) == 3
+    assert groups[0].identity == "flow1-row2"
+
+    tail_group = groups[-1]
+    assert tail_group.row_indices == list(range(5, 22))
+    assert tail_group.identity == "1::洞梁村::rows6-22"
+    assert tail_group.legacy_identity == "1::洞梁村"
+    assert tail_group.split_to_row_members is True
+    assert tail_group.split_row_member_identities == [
+        f"flow1-row{row_index}"
+        for row_index in range(6, 23)
+    ]
+
+
 def test_extract_continuous_pressure_chains_marks_flow_section_start_single_row_as_anchor():
     nodes = [
         _make_node(0, "1", "", "有压管道", InOutType.NORMAL),

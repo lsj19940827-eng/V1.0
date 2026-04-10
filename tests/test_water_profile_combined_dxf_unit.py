@@ -91,6 +91,53 @@ class _FakeDoc:
         self.saved_path = path
 
 
+class _RecordingTextEntity:
+    def __init__(self, msp, text, dxfattribs=None):
+        self._msp = msp
+        self._text = text
+        self._dxfattribs = dict(dxfattribs or {})
+
+    def set_placement(self, point, align=None):
+        self._msp.text_records.append(
+            {
+                "text": self._text,
+                "x": float(point[0]),
+                "y": float(point[1]),
+                "align": align,
+                "dxfattribs": dict(self._dxfattribs),
+            }
+        )
+        return self
+
+
+class _RecordingMSP:
+    def __init__(self):
+        self.line_records = []
+        self.text_records = []
+
+    def add_line(self, start, end, dxfattribs=None, **_kwargs):
+        self.line_records.append(
+            {
+                "start": (float(start[0]), float(start[1])),
+                "end": (float(end[0]), float(end[1])),
+                "dxfattribs": dict(dxfattribs or {}),
+            }
+        )
+        return None
+
+    def add_lwpolyline(self, *_args, **_kwargs):
+        return None
+
+    def add_text(self, text, dxfattribs=None):
+        return _RecordingTextEntity(self, text, dxfattribs)
+
+
+class _RecordingDoc(_FakeDoc):
+    def __init__(self):
+        super().__init__()
+        self._msp = _RecordingMSP()
+
+
 def _build_panel(*, name="N1", structure_type="明渠-矩形"):
     node = SimpleNamespace(
         bottom_elevation=408.5,
@@ -132,6 +179,113 @@ def _patch_common(monkeypatch):
         staticmethod(lambda *_a, **_k: ("C:/tmp/combined_test.dxf", "DXF")),
     )
     return docs
+
+
+def _make_profile_node(
+    *,
+    mc,
+    structure,
+    name,
+    bottom,
+    top,
+    water,
+    ip_no=1,
+    in_out="",
+    is_transition=False,
+    is_auto_inserted_channel=False,
+    flow_section="1",
+    row_identity="",
+):
+    return _ProfileNode(
+        station_MC=float(mc),
+        station_BC=float(mc),
+        station_EC=float(mc),
+        turn_angle=0.0,
+        structure_type=SimpleNamespace(value=structure),
+        name=name,
+        flow_section=flow_section,
+        in_out=SimpleNamespace(value=in_out) if in_out else None,
+        is_transition=bool(is_transition),
+        is_auto_inserted_channel=bool(is_auto_inserted_channel),
+        is_inverted_siphon=False,
+        is_pressure_pipe=structure in {"有压管道", "定向钻", "顶管"},
+        bottom_elevation=float(bottom),
+        top_elevation=float(top),
+        water_level=float(water),
+        ip_number=int(ip_no),
+        slope_i=1 / 3000,
+        pressure_pipe_row_identity=str(row_identity or ""),
+    )
+
+
+def _has_line(records, start, end, layer=None, tol=1e-6):
+    for rec in records:
+        if layer is not None and rec["dxfattribs"].get("layer") != layer:
+            continue
+        if (
+            abs(rec["start"][0] - start[0]) <= tol
+            and abs(rec["start"][1] - start[1]) <= tol
+            and abs(rec["end"][0] - end[0]) <= tol
+            and abs(rec["end"][1] - end[1]) <= tol
+        ):
+            return True
+    return False
+
+
+def _make_strict_mixed_tail_nodes():
+    return [
+        _make_profile_node(
+            ip_no=1,
+            mc=0.0,
+            structure="明渠-矩形",
+            name="前段明渠",
+            bottom=410.0,
+            top=411.0,
+            water=410.5,
+        ),
+        _make_profile_node(
+            ip_no=2,
+            mc=40.0,
+            structure="隧洞-圆拱直墙型",
+            name="前段隧洞",
+            bottom=409.6,
+            top=0.0,
+            water=0.0,
+            row_identity="flow1-row2",
+        ),
+        _make_profile_node(
+            ip_no=3,
+            mc=80.0,
+            structure="有压管道",
+            name="压力段1",
+            bottom=409.0,
+            top=0.0,
+            water=0.0,
+            in_out="进",
+            row_identity="flow1-row3",
+        ),
+        _make_profile_node(
+            ip_no=4,
+            mc=120.0,
+            structure="隧洞-圆拱直墙型",
+            name="交错隧洞",
+            bottom=408.5,
+            top=0.0,
+            water=0.0,
+            row_identity="flow1-row4",
+        ),
+        _make_profile_node(
+            ip_no=5,
+            mc=160.0,
+            structure="顶管",
+            name="压力段2",
+            bottom=408.0,
+            top=0.0,
+            water=0.0,
+            in_out="出",
+            row_identity="flow1-row5",
+        ),
+    ]
 
 
 def test_combined_dxf_stops_when_summary_generation_raises(monkeypatch):
@@ -861,6 +1015,269 @@ def test_export_combined_dxf_pushes_summary_below_tail_pressure_split_profile(mo
     assert captured["ip_oy"] == -300.0
 
 
+def test_export_combined_dxf_tail_split_keeps_upper_channel_horizontal_lines_with_hidden_tail_node(
+    monkeypatch,
+):
+    docs = {}
+
+    def _fake_new(_version):
+        doc = _RecordingDoc()
+        docs["doc"] = doc
+        return doc
+
+    ezdxf_stub = SimpleNamespace(
+        new=_fake_new,
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _AcceptedTextDialog)
+    monkeypatch.setattr(cad_tools, "_setup_profile_dxf_document", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_ensure_profile_layers", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        cad_tools.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_a, **_k: ("C:/tmp/combined_hidden_tail_width.dxf", "DXF")),
+    )
+
+    panel = _build_panel()
+    channel_nodes = [
+        _make_profile_node(
+            ip_no=1,
+            mc=0.0,
+            structure="明渠-矩形",
+            name="明渠起点",
+            bottom=410.0,
+            top=411.0,
+            water=410.5,
+        ),
+        _make_profile_node(
+            ip_no=2,
+            mc=100.0,
+            structure="明渠-矩形",
+            name="明渠终点",
+            bottom=409.0,
+            top=410.0,
+            water=409.5,
+        ),
+        _make_profile_node(
+            ip_no=3,
+            mc=0.0,
+            structure="明渠-矩形",
+            name="隐藏补段",
+            bottom=0.0,
+            top=0.0,
+            water=0.0,
+            is_auto_inserted_channel=True,
+        ),
+    ]
+    tail_nodes = [
+        _make_profile_node(
+            ip_no=4,
+            mc=120.0,
+            structure="有压管道",
+            name="末端压力管",
+            bottom=408.0,
+            top=0.0,
+            water=0.0,
+            in_out="进",
+        ),
+    ]
+    panel.calculated_nodes = channel_nodes + tail_nodes
+
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
+    monkeypatch.setattr(cad_tools, "_compute_ip_preview_data", lambda *_a, **_k: ([["IP1"]], []))
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        cad_tools,
+        "_build_panel_xxpipe_profile_data",
+        lambda *_a, **_k: {
+            "profile_text_nodes": tail_nodes,
+            "centerline_records": [{"station_mc": 120.0, "elevation": 100.0}],
+            "centerline_points": [(120.0, 100.0)],
+            "ip_records": [{"x": 120.0, "text": "IP4"}],
+            "building_segments": [{"mid_mc": 120.0, "text": "末端压力管"}],
+            "material_segments": [{"mid_mc": 120.0, "text": "钢管"}],
+        },
+    )
+
+    cad_tools.export_combined_dxf(panel)
+
+    msp = docs["doc"].modelspace()
+    settings = cad_tools._normalize_text_export_settings({})
+    expected_width = cad_tools._profile_meters_to_paper_mm(100.0, settings["scale_x"])
+    assert docs["doc"].saved_path == "C:/tmp/combined_hidden_tail_width.dxf"
+    assert _has_line(
+        msp.line_records,
+        (0.0, 45.0),
+        (expected_width, 45.0),
+        layer="纵断面_表格线框",
+    )
+
+
+def test_export_combined_dxf_tail_split_allows_strict_mixed_route_with_tunnel_gap(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    panel = _build_panel(name="蒲家湾", structure_type="有压管道")
+    panel.channel_level_combo = _ComboStub("支管")
+    panel.calculated_nodes = _make_strict_mixed_tail_nodes()
+    panel._build_nodes_from_table = lambda: list(panel.calculated_nodes)
+    panel._prepare_pressure_pipe_dialog_context = lambda nodes, settings=None, show_xxpipe_warning=False: {
+        "xxpipe_route_mode": True,
+        "route_import_targets": {
+            "flow1-route1": {
+                "display_name": "蒲家湾整线1",
+                "station_prefix": "",
+                "nodes": list(nodes),
+                "targets": [
+                    {"row_index": 0, "label": "IP1", "station_mc": 0.0},
+                    {"row_index": 1, "label": "IP2", "station_mc": 40.0},
+                    {"row_index": 2, "label": "IP3", "station_mc": 80.0},
+                    {"row_index": 3, "label": "IP4", "station_mc": 120.0},
+                    {"row_index": 4, "label": "IP5", "station_mc": 160.0},
+                ],
+            }
+        },
+    }
+    panel.get_pressure_pipe_longitudinal_nodes_for_export = lambda rows=None: {
+        "flow1-row3": [
+            {"chainage": 80.0, "elevation": 420.0, "turn_type": "NONE"},
+            {"chainage": 160.0, "elevation": 415.0, "turn_type": "NONE"},
+        ],
+        "flow1-row5": [
+            {"chainage": 80.0, "elevation": 420.0, "turn_type": "NONE"},
+            {"chainage": 160.0, "elevation": 415.0, "turn_type": "NONE"},
+        ],
+    }
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda *_a, **_k: None,
+        to_dict=lambda: {"pipes": {}, "routes": {}},
+    )
+    errors = []
+    captured = {}
+
+    class _ConfigOnlyDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda value: value)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: False)
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_compute_ip_preview_data", lambda *_a, **_k: ([["IP1"]], panel.calculated_nodes))
+
+    def _fake_draw_tail_pressure_split_profile_on_msp(
+        _msp,
+        _channel_nodes,
+        _channel_valid_nodes,
+        tail_nodes,
+        _profile_settings,
+        _station_prefix,
+        *,
+        layer_prefix="",
+        xxpipe_profile_data=None,
+    ):
+        _ = layer_prefix
+        captured["tail_nodes"] = list(tail_nodes)
+        captured["profile"] = dict(xxpipe_profile_data or {})
+        return 260.0, 180.0
+
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_tail_pressure_split_profile_on_msp",
+        _fake_draw_tail_pressure_split_profile_on_msp,
+    )
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert not errors
+    assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
+    assert [node.station_MC for node in captured["tail_nodes"]] == [80.0, 120.0, 160.0]
+    assert [node.station_MC for node in captured["profile"]["profile_text_nodes"]] == [80.0, 120.0, 160.0]
+    assert [record["identity"] for record in captured["profile"]["centerline_records"]] == [
+        "flow1-row3",
+        "flow1-row5",
+    ]
+
+
+def test_export_combined_dxf_tail_split_shows_detailed_gap_for_strict_mixed_route(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    panel = _build_panel(name="蒲家湾", structure_type="有压管道")
+    panel.channel_level_combo = _ComboStub("支管")
+    panel.calculated_nodes = _make_strict_mixed_tail_nodes()
+    panel._build_nodes_from_table = lambda: list(panel.calculated_nodes)
+    panel._prepare_pressure_pipe_dialog_context = lambda nodes, settings=None, show_xxpipe_warning=False: {
+        "xxpipe_route_mode": True,
+        "route_import_targets": {
+            "flow1-route1": {
+                "display_name": "蒲家湾整线1",
+                "station_prefix": "",
+                "nodes": list(nodes),
+                "targets": [
+                    {"row_index": 0, "label": "IP1", "station_mc": 0.0},
+                    {"row_index": 1, "label": "IP2", "station_mc": 40.0},
+                    {"row_index": 2, "label": "IP3", "station_mc": 80.0},
+                    {"row_index": 3, "label": "IP4", "station_mc": 120.0},
+                    {"row_index": 4, "label": "IP5", "station_mc": 160.0},
+                ],
+            }
+        },
+    }
+    panel.get_pressure_pipe_longitudinal_nodes_for_export = lambda rows=None: {
+        "flow1-row3": [
+            {"chainage": 80.0, "elevation": 420.0, "turn_type": "NONE"},
+            {"chainage": 120.0, "elevation": 417.0, "turn_type": "NONE"},
+        ],
+        "flow1-row5": [
+            {"chainage": 80.0, "elevation": 420.0, "turn_type": "NONE"},
+            {"chainage": 120.0, "elevation": 417.0, "turn_type": "NONE"},
+        ],
+    }
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda *_a, **_k: None,
+        to_dict=lambda: {"pipes": {}, "routes": {}},
+    )
+    errors = []
+
+    class _ConfigOnlyDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda value: value)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: False)
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_compute_ip_preview_data", lambda *_a, **_k: ([["IP1"]], panel.calculated_nodes))
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert errors
+    assert "doc" not in docs or docs["doc"].saved_path is None
+    assert "蒲家湾整线1" in errors[-1][2]
+    assert "导入失败：纵断面范围不够" in errors[-1][2]
+    assert "需要覆盖到桩号 160.000 m" in errors[-1][2]
+    assert "当前导入的纵断面只到 120.000 m" in errors[-1][2]
+    assert "未覆盖节点：IP5@0+160.000" in errors[-1][2]
+    assert "没有匹配到对应整线" not in errors[-1][2]
+
+
 def test_export_combined_dxf_translates_missing_xxpipe_longitudinal_error(monkeypatch):
     _patch_common(monkeypatch)
     panel = _build_panel(name="穿路段", structure_type="定向钻")
@@ -894,10 +1311,18 @@ def test_export_combined_dxf_translates_missing_xxpipe_longitudinal_error(monkey
     assert "缺少轴线纵断面" not in errors[-1][2]
 
 
-def test_export_combined_dxf_translates_incomplete_xxpipe_coverage_error(monkeypatch):
+def test_export_combined_dxf_shows_detailed_xxpipe_coverage_error(monkeypatch):
     _patch_common(monkeypatch)
     panel = _build_panel(name="穿路段", structure_type="定向钻")
     errors = []
+    detail_message = (
+        "整线：流量段1 整线1\n"
+        "导入失败：纵断面范围不够\n"
+        "这条整线需要覆盖到桩号 80.000 m，但当前导入的纵断面只到 50.000 m。\n"
+        "当前还差 30000.0 mm（30.000 m），已超过程序允许的 1.0 mm 误差。\n"
+        "请在 CAD 中把纵断面末端至少延长到 80.000 m 后重新导入。\n"
+        "未覆盖节点：IP2@0+080.000"
+    )
 
     class _ConfigOnlyDialog:
         def __init__(self, *_args, **_kwargs):
@@ -915,16 +1340,14 @@ def test_export_combined_dxf_translates_incomplete_xxpipe_coverage_error(monkeyp
         cad_tools,
         "_build_panel_xxpipe_profile_data",
         lambda *_a, **_k: (_ for _ in ()).throw(
-            ValueError("以下节点缺少可用的 xx管 轴线高程覆盖：\n1::穿路段@0+080.000")
+            ValueError(detail_message)
         ),
     )
 
     cad_tools.export_combined_dxf(panel)
 
     assert errors
-    assert "已导入纵断面DXF，但未覆盖整线全部桩号" in errors[-1][2]
-    assert "请重新导入完整纵断面后再导出" in errors[-1][2]
-    assert "@0+080.000" not in errors[-1][2]
+    assert errors[-1][2] == detail_message
 
 
 def test_export_combined_dxf_keeps_using_full_route_profile_when_segment_cache_only_has_one_point(monkeypatch):
@@ -1077,6 +1500,121 @@ def test_export_combined_dxf_keeps_using_full_route_profile_when_segment_cache_o
         (50.0, 95.0),
         (100.0, 90.0),
     ]
+
+
+def test_export_combined_dxf_uses_route_profile_when_boundary_segment_misses_row_station(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    errors = []
+    captured = {}
+
+    route_nodes = [
+        {"chainage": 2739.785, "elevation": 348.401, "turn_type": "NONE"},
+        {"chainage": 6526.755, "elevation": 325.770, "turn_type": "NONE"},
+    ]
+    current_nodes = [
+        _ProfileNode(
+            ip_number=19,
+            station_MC=2739.785,
+            station_BC=2739.785,
+            station_EC=2739.785,
+            turn_angle=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            name="蒲支压力段",
+            flow_section="1",
+            in_out=SimpleNamespace(value="进"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=True,
+            bottom_elevation=0.0,
+            top_elevation=0.0,
+            water_level=0.0,
+            section_params={"pipe_material": "球墨铸铁管", "D": 1.2},
+            pressure_pipe_row_identity="flow1-row19",
+        )
+    ]
+    group = SimpleNamespace(
+        storage_key="flow1-row19",
+        route_key="flow1-route2",
+        route_display_name="蒲支整线2",
+        display_name="蒲支压力段",
+        name="蒲支压力段",
+        identity="flow1-row19",
+        flow_section="1",
+        segment_start_mc=2673.115,
+        segment_end_mc=2739.785,
+    )
+
+    panel.calculated_nodes = current_nodes
+    panel._build_nodes_from_table = lambda: current_nodes
+    panel._build_settings = lambda: _Settings()
+    panel._text_export_settings = {}
+    panel._custom_pressurized_pipe_params = {}
+    panel.channel_name_edit = _TextStub("蒲支")
+    panel.channel_level_combo = _ComboStub("支管")
+    panel.window = lambda: panel
+    panel._prepare_pressure_pipe_dialog_context = lambda nodes, settings=None, show_xxpipe_warning=False: {
+        "xxpipe_route_mode": True,
+        "route_import_targets": {
+            "flow1-route2": {
+                "display_name": "蒲支整线2",
+                "station_prefix": "蒲支",
+                "nodes": list(nodes),
+                "targets": [
+                    {"row_index": 0, "label": "flow1-row19", "station_mc": 2739.785},
+                ],
+            }
+        },
+    }
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: SimpleNamespace(
+            longitudinal_nodes=[
+                {"chainage": 2673.115, "elevation": 347.283, "turn_type": "NONE"},
+                {"chainage": 2739.780, "elevation": 348.233, "turn_type": "NONE"},
+            ]
+        ) if key == "flow1-row19" else None,
+        to_dict=lambda: {
+            "routes": {
+                "flow1-route2": {
+                    "display_name": "蒲支整线2",
+                    "longitudinal_nodes": route_nodes,
+                }
+            }
+        },
+    )
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [group]
+
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: False)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda value: value)
+
+    class _ConfigOnlyDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_compute_ip_preview_data", lambda *_a, **_k: ([["IP19"]], current_nodes))
+
+    def _fake_draw_profile_on_msp(*args, **kwargs):
+        captured["profile"] = kwargs.get("xxpipe_profile_data", {})
+        return 240.0, 120.0
+
+    monkeypatch.setattr(cad_tools, "_draw_profile_on_msp", _fake_draw_profile_on_msp)
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert not errors
+    assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
+    assert [record["identity"] for record in captured["profile"]["centerline_records"]] == ["flow1-row19"]
+    assert captured["profile"]["centerline_points"] == [(2739.785, 348.401)]
 
 
 def test_export_combined_dxf_uses_same_station_identity_candidates_when_route_identity_shifts(monkeypatch):
@@ -1298,13 +1836,125 @@ def test_export_combined_dxf_keeps_route_profile_for_cross_flow_boundary_row(mon
     assert [record["identity"] for record in captured["profile"]["centerline_records"]] == ["flow2-row63"]
 
 
+def test_export_combined_dxf_falls_back_to_route_profile_when_segment_misses_boundary_station(monkeypatch):
+    docs = _patch_common(monkeypatch)
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    errors = []
+    captured = {}
+
+    route_nodes = [
+        {"chainage": 2739.785, "elevation": 348.4, "turn_type": "NONE"},
+        {"chainage": 6526.755, "elevation": 325.77, "turn_type": "NONE"},
+    ]
+    current_nodes = [
+        _ProfileNode(
+            ip_number=19,
+            station_MC=2739.785,
+            station_BC=2739.785,
+            station_EC=2739.785,
+            turn_angle=0.0,
+            structure_type=SimpleNamespace(value="有压管道"),
+            name="",
+            flow_section="1",
+            in_out=None,
+            is_transition=False,
+            is_auto_inserted_channel=False,
+            is_inverted_siphon=False,
+            is_pressure_pipe=True,
+            bottom_elevation=0.0,
+            top_elevation=0.0,
+            water_level=0.0,
+            section_params={"pipe_material": "球墨铸铁管", "D": 1.2},
+            pressure_pipe_row_identity="flow1-row19",
+        ),
+    ]
+    group = SimpleNamespace(
+        group_mode="unnamed_row_segment",
+        storage_key="flow1-row19",
+        route_key="flow1-route2",
+        route_display_name="蒲支整线2",
+        display_name="流量段1 第19行有压管道",
+        name="",
+        identity="flow1-row19",
+        flow_section="1",
+        segment_start_mc=2673.115,
+        segment_end_mc=2739.785,
+        target_row_index=0,
+        upstream_row_index=-1,
+        route_start_row_index=0,
+    )
+
+    panel.calculated_nodes = current_nodes
+    panel._build_nodes_from_table = lambda: current_nodes
+    panel._build_settings = lambda: _Settings()
+    panel._text_export_settings = {}
+    panel._custom_pressurized_pipe_params = {}
+    panel.channel_name_edit = _TextStub("蒲支")
+    panel.channel_level_combo = _ComboStub("支管")
+    panel.window = lambda: panel
+    panel._pressure_pipe_manager = SimpleNamespace(
+        get_pipe_config=lambda key: None,
+        to_dict=lambda: {
+            "routes": {
+                "flow1-route2": {
+                    "display_name": "蒲支整线2",
+                    "longitudinal_nodes": route_nodes,
+                    "profile_segments": [
+                        {
+                            "segment_identity": "flow1-row19",
+                            "source_kind": "non_tunnel_dxf",
+                            "start_mc": 2673.115,
+                            "end_mc": 2739.785,
+                            "longitudinal_nodes": [
+                                {"chainage": 2673.115, "elevation": 349.0, "turn_type": "NONE"},
+                                {"chainage": 2700.0, "elevation": 348.8, "turn_type": "NONE"},
+                            ],
+                        }
+                    ],
+                }
+            }
+        },
+    )
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [group]
+
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: False)
+    monkeypatch.setattr(cad_tools, "_safe_qt_parent", lambda value: value)
+
+    class _ConfigOnlyDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    monkeypatch.setattr(cad_tools, "SectionSummaryDialog", _ConfigOnlyDialog)
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_compute_ip_preview_data", lambda *_a, **_k: ([["IP19"]], current_nodes))
+
+    def _fake_draw_profile_on_msp(*args, **kwargs):
+        captured["profile"] = kwargs.get("xxpipe_profile_data", {})
+        return 240.0, 120.0
+
+    monkeypatch.setattr(cad_tools, "_draw_profile_on_msp", _fake_draw_profile_on_msp)
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert not errors
+    assert docs["doc"].saved_path == "C:/tmp/combined_test.dxf"
+    assert [record["identity"] for record in captured["profile"]["centerline_records"]] == ["flow1-row19"]
+
+
 def test_translate_xxpipe_export_error_distinguishes_identity_mismatch_from_missing_import():
     translated = cad_tools._translate_xxpipe_export_error(
         ValueError("以下节点未匹配到可用的整线纵断面：\nflow1-row1")
     )
 
     assert translated is not None
-    assert "已导入纵断面DXF" in translated
+    assert "flow1-row1" in translated
     assert "还没有导入" not in translated
 
 

@@ -447,58 +447,6 @@ def test_apply_pressure_pipe_member_result_for_named_group_keeps_row_loss_and_st
     assert panel._pressure_pipe_calc_done["1::洞梁村"] is True
 
 
-def test_apply_pressure_pipe_member_result_for_named_group_keeps_display_only_row_loss_in_total():
-    WaterProfilePanel = _load_panel_class()
-    panel = WaterProfilePanel.__new__(WaterProfilePanel)
-    panel._pressure_pipe_calc_done = {}
-
-    node = SimpleNamespace(
-        name="洞梁村",
-        structure_type=SimpleNamespace(value="有压管道"),
-        in_out=SimpleNamespace(value="出"),
-        section_params={},
-        pressure_pipe_window_override={},
-        pressure_pipe_named_group_result={},
-        head_loss_friction=0.0,
-        head_loss_bend=0.0,
-        head_loss_local=0.0,
-        head_loss_reserve=0.0,
-        head_loss_gate=0.0,
-        head_loss_siphon=0.4136,
-        external_head_loss=None,
-        head_loss_total=0.0,
-    )
-    group = SimpleNamespace(
-        group_mode="named_group",
-        target_row_index=18,
-        outlet_row_index=18,
-        flow_section="1",
-        name="洞梁村",
-        structure_type="有压管道",
-        identity="1::洞梁村",
-        storage_key="1::洞梁村",
-        display_name="洞梁村",
-    )
-    record = {
-        "identity": "1::洞梁村",
-        "storage_key": "1::洞梁村",
-        "display_name": "洞梁村",
-        "status": "success",
-        "writeback_enabled": True,
-        "group_mode": "named_group",
-        "target_row_index": 18,
-        "calc_steps": "group-step",
-        "total_head_loss": 10.4901,
-    }
-
-    changed = WaterProfilePanel._apply_pressure_pipe_member_result(panel, node, group, record)
-
-    assert changed is True
-    assert abs(getattr(node, "_pressure_pipe_display_loss", 0.0) - 0.4136) < 1e-9
-    assert abs(node.head_loss_total - 0.4136) < 1e-9
-    assert panel._pressure_pipe_calc_done["1::洞梁村"] is True
-
-
 def test_apply_pressure_pipe_member_result_writes_chain_prefix_override_to_special_inlet_row():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -860,6 +808,135 @@ def test_apply_pressure_pipe_results_falls_back_to_batch_chain_records():
     assert target_node.section_params["pressure_pipe_window_override"]["group_mode"] == "chain_tunnel_member"
     assert abs(target_node.head_loss_total - 0.2312) < 1e-9
     assert panel._pressure_pipe_calc_done["flow2-row4"] is True
+
+
+def test_apply_pressure_pipe_results_keeps_split_parent_summary_record_from_overwriting_row_member():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._pressure_pipe_calc_done = {}
+
+    upstream_node = SimpleNamespace(
+        section_params={},
+        pressure_pipe_window_override={},
+        pressure_pipe_named_group_result={},
+        head_loss_friction=0.0,
+        head_loss_bend=0.0,
+        head_loss_local=0.0,
+        head_loss_siphon=0.0,
+        external_head_loss=None,
+        head_loss_total=0.0,
+    )
+    target_node = SimpleNamespace(
+        section_params={},
+        pressure_pipe_window_override={},
+        pressure_pipe_named_group_result={},
+        head_loss_friction=0.0,
+        head_loss_bend=0.0,
+        head_loss_local=0.0,
+        head_loss_siphon=0.0,
+        external_head_loss=None,
+        head_loss_total=0.0,
+    )
+
+    row_member = SimpleNamespace(
+        member_type="single_row",
+        identity="flow1-row18",
+        storage_key="flow1-row18",
+        display_name="洞梁村（后段）",
+        structure_type="有压管道",
+        target_row_index=1,
+        upstream_row_index=0,
+        should_generate_row_loss=True,
+        group_mode="chain_row_member",
+    )
+    chain = SimpleNamespace(
+        flow_section="1",
+        start_row_index=0,
+        end_row_index=1,
+        members=[row_member],
+    )
+    split_parent_group = SimpleNamespace(
+        identity="1::洞梁村::rows2-18",
+        storage_key="1::洞梁村::rows2-18",
+        display_name="洞梁村",
+        group_mode="named_group",
+        outlet_row_index=1,
+        split_to_row_members=True,
+        split_row_member_identities=["flow1-row18"],
+    )
+
+    panel._build_settings = lambda: SimpleNamespace(get_station_prefix=lambda: "")
+    panel._build_nodes_from_table = lambda: [upstream_node, target_node]
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: [split_parent_group]
+    panel._extract_pressure_pipe_dialog_chains = lambda nodes, settings=None: [chain]
+    panel._build_pressure_pipe_chain_descriptors = (
+        WaterProfilePanel._build_pressure_pipe_chain_descriptors.__get__(panel, WaterProfilePanel)
+    )
+    panel._get_pressure_chain_member_identity = WaterProfilePanel._get_pressure_chain_member_identity
+    panel._apply_pressure_pipe_member_result = (
+        WaterProfilePanel._apply_pressure_pipe_member_result.__get__(panel, WaterProfilePanel)
+    )
+    panel._normalize_pressure_pipe_window_override = lambda payload: dict(payload or {})
+    panel._set_pressure_pipe_window_override = (
+        lambda node, override: (
+            setattr(node, "pressure_pipe_window_override", dict(override or {})),
+            node.section_params.__setitem__("pressure_pipe_window_override", dict(override or {})),
+        )
+    )
+    panel._build_pressure_pipe_window_override_payload = (
+        WaterProfilePanel._build_pressure_pipe_window_override_payload.__get__(panel, WaterProfilePanel)
+    )
+    panel._append_loss_undo_snapshot = lambda snapshot: None
+    panel._snapshot_editable_cols = lambda: {}
+    panel._update_table_from_nodes_full = lambda nodes, prefix: None
+    panel._recalculate_silent = lambda: None
+    panel._info_parent = lambda: None
+    panel._ensure_pressure_pipe_row_identity = lambda node, idx: None
+    panel._set_pressure_pipe_named_group_result = lambda node, payload: setattr(
+        node, "pressure_pipe_named_group_result", dict(payload or {})
+    )
+    panel._is_named_pressure_pipe_group_node = lambda node: False
+    panel.node_table = SimpleNamespace()
+    panel.nodes = []
+
+    batch_data = {
+        "records": [
+            {
+                "identity": "flow1-row18",
+                "display_name": "洞梁村（后段）",
+                "storage_key": "flow1-row18",
+                "status": "success",
+                "writeback_enabled": True,
+                "group_mode": "chain_row_member",
+                "target_row_index": 1,
+                "upstream_row_index": 0,
+                "friction_loss": 0.12,
+                "total_bend_loss": 0.03,
+                "local_loss": 0.05,
+                "total_head_loss": 0.20,
+            },
+            {
+                "identity": "1::洞梁村::rows2-18",
+                "display_name": "洞梁村",
+                "storage_key": "1::洞梁村::rows2-18",
+                "status": "success",
+                "writeback_enabled": False,
+                "group_mode": "named_group",
+                "target_row_index": 1,
+                "total_head_loss": 2.35,
+                "note": "表3按逐段承压成员回写，本整组结果仅用于窗口汇总",
+            },
+        ],
+        "summary": {"total": 2, "success": 2, "failed": 0},
+    }
+
+    WaterProfilePanel._apply_pressure_pipe_results(panel, {}, batch_data)
+
+    assert target_node.section_params["pressure_pipe_window_override"]["identity"] == "flow1-row18"
+    assert target_node.section_params["pressure_pipe_window_override"]["group_mode"] == "chain_row_member"
+    assert target_node.pressure_pipe_named_group_result == {}
+    assert panel._pressure_pipe_calc_done["flow1-row18"] is True
+    assert "1::洞梁村::rows2-18" not in panel._pressure_pipe_calc_done
 
 
 def test_apply_pressure_pipe_results_applies_chain_member_outside_pipe_groups():

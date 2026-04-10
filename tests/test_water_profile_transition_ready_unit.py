@@ -1266,6 +1266,238 @@ def test_collect_pending_pressure_pipe_execute_members_stays_ready_after_silent_
     assert pending == []
 
 
+def test_collect_pending_pressure_pipe_execute_members_accepts_real_split_parent_when_only_row_members_have_results():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    project_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(project_root / "推求水面线"))
+    from models.data_models import ChannelNode
+    from models.enums import StructureType, InOutType
+    from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+
+    def _make_node(
+        row_index: int,
+        flow_section: str,
+        name: str,
+        structure_type: str,
+        in_out,
+        flow: float,
+    ) -> ChannelNode:
+        node = ChannelNode()
+        node.flow_section = flow_section
+        node.name = name
+        node.structure_type = StructureType.from_string(structure_type)
+        node.in_out = in_out
+        node.flow = flow
+        node.station_MC = float(row_index * 10)
+        node.x = float(row_index * 10)
+        node.y = 0.0
+        node.arc_length = 0.0
+        node.velocity = 0.8
+        node.water_depth = 1.0
+        node.head_loss_siphon = 0.0
+        node.section_params = {
+            "D": 1.0,
+            "in_out_raw": in_out.value if hasattr(in_out, "value") else str(in_out),
+        }
+        node.pressure_pipe_window_override = {}
+        return node
+
+    nodes = [
+        _make_node(0, "1", "上游明渠", "明渠-梯形", InOutType.NORMAL, 0.0),
+        *[
+            _make_node(
+                row_index,
+                "1",
+                "洞梁村",
+                "有压管道",
+                InOutType.INLET if row_index == 1 else (
+                    InOutType.OUTLET if row_index == 17 else InOutType.NORMAL
+                ),
+                0.27,
+            )
+            for row_index in range(1, 18)
+        ],
+        _make_node(18, "1", "下游明渠", "明渠-梯形", InOutType.NORMAL, 0.0),
+    ]
+
+    settings = SimpleNamespace(channel_level="支渠")
+    pipe_groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(nodes, settings=settings)
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(nodes, settings=settings)
+    chain_descriptors = WaterProfilePanel._build_pressure_pipe_chain_descriptors(panel, chains)
+    source_lookup = WaterProfilePanel._build_pressure_chain_source_lookup(chain_descriptors)
+
+    panel._prepare_pressure_pipe_dialog_context = (
+        lambda _nodes, settings=None, show_xxpipe_warning=False: {
+            "pipe_groups": pipe_groups,
+            "chain_descriptors": chain_descriptors,
+        }
+    )
+    panel._pressure_pipe_calc_records = {"records": []}
+
+    for member in chain_descriptors[0]["members"]:
+        target_row_index = int(getattr(member, "target_row_index", -1))
+        nodes[target_row_index].section_params["pressure_pipe_window_override"] = {
+            "enabled": True,
+            "identity": getattr(member, "identity", ""),
+            "storage_key": getattr(member, "storage_key", ""),
+            "display_name": getattr(member, "display_name", ""),
+            "group_mode": "chain_row_member",
+            "target_row_index": target_row_index,
+            "upstream_row_index": int(getattr(member, "upstream_row_index", -1)),
+            "total_head_loss": 0.1,
+        }
+
+    assert [getattr(member, "identity", "") for member in source_lookup["1::洞梁村::rows2-18"]] == [
+        f"flow1-row{row_index}"
+        for row_index in range(2, 19)
+    ]
+
+    pending = WaterProfilePanel._collect_pending_pressure_pipe_execute_members(
+        panel,
+        nodes,
+        settings=settings,
+    )
+
+    assert pending == []
+
+
+def test_collect_pending_pressure_pipe_execute_members_accepts_real_same_name_long_tail_after_apply():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._pressure_pipe_calc_done = {}
+
+    project_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(project_root / "推求水面线"))
+    from models.data_models import ChannelNode
+    from models.enums import StructureType, InOutType
+    from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+
+    def _make_node(
+        row_index: int,
+        flow_section: str,
+        name: str,
+        structure_type: str,
+        in_out,
+        flow: float,
+    ) -> ChannelNode:
+        node = ChannelNode()
+        node.flow_section = flow_section
+        node.name = name
+        node.structure_type = StructureType.from_string(structure_type)
+        node.in_out = in_out
+        node.flow = flow
+        node.station_MC = float(row_index * 10)
+        node.x = float(row_index * 10)
+        node.y = 0.0
+        node.arc_length = 0.0
+        node.velocity = 0.8
+        node.water_depth = 1.0
+        node.head_loss_friction = 0.0
+        node.head_loss_bend = 0.0
+        node.head_loss_local = 0.0
+        node.head_loss_siphon = 0.0
+        node.head_loss_total = 0.0
+        node.head_loss_reserve = 0.0
+        node.head_loss_gate = 0.0
+        node.external_head_loss = None
+        node.section_params = {
+            "D": 1.0,
+            "in_out_raw": in_out.value if hasattr(in_out, "value") else str(in_out),
+        }
+        node.pressure_pipe_window_override = {}
+        node.pressure_pipe_named_group_result = {}
+        node.pressure_pipe_row_identity = f"flow{flow_section}-row{row_index + 1}"
+        return node
+
+    nodes = [
+        _make_node(0, "1", "上游明渠", "明渠-梯形", InOutType.NORMAL, 0.0),
+        _make_node(1, "1", "洞梁村", "有压管道", InOutType.INLET, 0.27),
+        _make_node(2, "1", "洞梁村", "有压管道", InOutType.OUTLET, 0.27),
+        _make_node(3, "1", "穿路段", "定向钻", InOutType.INLET, 0.27),
+        _make_node(4, "1", "穿路段", "定向钻", InOutType.OUTLET, 0.27),
+        *[
+            _make_node(
+                row_index,
+                "1",
+                "洞梁村",
+                "有压管道",
+                InOutType.INLET if row_index == 5 else (
+                    InOutType.OUTLET if row_index == 21 else InOutType.NORMAL
+                ),
+                0.27,
+            )
+            for row_index in range(5, 22)
+        ],
+        _make_node(22, "1", "下游明渠", "明渠-梯形", InOutType.NORMAL, 0.0),
+    ]
+
+    settings = SimpleNamespace(channel_level="支渠")
+    pipe_groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(nodes, settings=settings)
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(nodes, settings=settings)
+    chain_descriptors = WaterProfilePanel._build_pressure_pipe_chain_descriptors(panel, chains)
+
+    panel._prepare_pressure_pipe_dialog_context = (
+        lambda _nodes, settings=None, show_xxpipe_warning=False: {
+            "pipe_groups": pipe_groups,
+            "chain_descriptors": chain_descriptors,
+        }
+    )
+
+    row_records = []
+    for member in chain_descriptors[0]["members"]:
+        member_type = str(getattr(member, "member_type", "") or "").strip()
+        member_role = str(getattr(member, "member_role", "") or "").strip()
+        structure_type = str(getattr(member, "structure_type", "") or "").strip()
+        record = {
+            "identity": getattr(member, "identity", ""),
+            "storage_key": getattr(member, "storage_key", ""),
+            "display_name": getattr(member, "display_name", ""),
+            "status": "success",
+            "writeback_enabled": True,
+            "data_mode": "链成员模式",
+            "target_row_index": int(getattr(member, "target_row_index", -1)),
+            "upstream_row_index": int(getattr(member, "upstream_row_index", -1)),
+            "Q": 0.27,
+            "D": 1.0,
+            "total_length": 10.0,
+            "pipe_velocity": 0.8,
+            "friction_loss": 0.01,
+            "total_bend_loss": 0.0,
+            "local_loss": 0.0,
+            "inlet_transition_loss": 0.0,
+            "outlet_transition_loss": 0.0,
+            "total_head_loss": 0.01,
+            "friction_details": {},
+            "bend_details": {},
+            "local_details": {},
+        }
+        if member_role == "prefix_segment":
+            record["group_mode"] = "chain_prefix_member"
+        elif member_type == "single_row":
+            record["group_mode"] = "chain_tunnel_member" if "隧洞" in structure_type else "chain_row_member"
+        row_records.append(record)
+        assert WaterProfilePanel._apply_pressure_pipe_member_result(
+            panel,
+            nodes[record["target_row_index"]],
+            member,
+            record,
+        ) is True
+
+    panel._pressure_pipe_calc_records = {"records": row_records}
+
+    pending = WaterProfilePanel._collect_pending_pressure_pipe_execute_members(
+        panel,
+        nodes,
+        settings=settings,
+    )
+
+    assert pending == []
+
+
 def test_collect_pending_pressure_pipe_execute_members_blocks_missing_prefix_writeback():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
