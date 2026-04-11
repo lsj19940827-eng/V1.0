@@ -932,6 +932,33 @@ def _get_vertical_line_segments_at_x(records, x_value, tol=1e-6):
     return segments
 
 
+def _contains_line_segment(segments, expected_segment, tol=1e-6):
+    expected_start, expected_end = expected_segment
+    for start, end in segments:
+        if abs(start - expected_start) <= tol and abs(end - expected_end) <= tol:
+            return True
+    return False
+
+
+def _get_horizontal_line_segments_at_y(records, y_value, tol=1e-6):
+    segments = []
+    for rec in records:
+        x0, y0 = rec["start"]
+        x1, y1 = rec["end"]
+        if abs(y0 - y1) > tol:
+            continue
+        if abs(y0 - y_value) > tol:
+            continue
+        left_x, right_x = sorted((x0, x1))
+        if right_x <= tol:
+            continue
+        if left_x < -tol:
+            continue
+        segments.append((max(0.0, left_x), right_x))
+    segments.sort()
+    return segments
+
+
 def _sample_adjacent_special_profile_data(structure_name):
     nodes = [
         _make_node(
@@ -1025,6 +1052,154 @@ def _sample_adjacent_special_profile_data(structure_name):
     return nodes, profile_data
 
 
+def _build_split_subtable_profile_fixture():
+    raw_nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="隧洞-圆形", name="洞段1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=40.0, structure="隧洞-圆形", name="洞段1", bottom_elevation=409.3),
+        _make_node(
+            ip_no=3,
+            mc=80.0,
+            structure="有压管道",
+            name="压力段1",
+            in_out="进",
+            row_identity="flow1-row3",
+            bottom_elevation=408.9,
+        ),
+        _make_node(
+            ip_no=4,
+            mc=120.0,
+            structure="有压管道",
+            name="压力段1",
+            in_out="出",
+            row_identity="flow1-row4",
+            bottom_elevation=408.1,
+        ),
+        _make_node(ip_no=5, mc=160.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=407.6),
+        _make_node(ip_no=6, mc=220.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=406.8),
+        _make_node(
+            ip_no=7,
+            mc=260.0,
+            structure="顶管",
+            name="压力段2",
+            in_out="进",
+            row_identity="flow1-row7",
+            bottom_elevation=406.2,
+        ),
+        _make_node(
+            ip_no=8,
+            mc=300.0,
+            structure="顶管",
+            name="压力段2",
+            in_out="出",
+            row_identity="flow1-row8",
+            bottom_elevation=405.4,
+        ),
+    ]
+    split_plan = cad_tools._plan_xxpipe_tunnel_split_entries(raw_nodes)
+    xxpipe_nodes = cad_tools._copy_xxpipe_split_nodes(split_plan["xxpipe_entries"])
+    profile_data = cad_tools._build_xxpipe_profile_data(
+        xxpipe_nodes,
+        {
+            "1::压力段1": [
+                {"chainage": 80.0, "elevation": 408.9, "turn_type": "NONE"},
+                {"chainage": 120.0, "elevation": 408.1, "turn_type": "NONE"},
+            ],
+            "1::压力段2": [
+                {"chainage": 260.0, "elevation": 406.2, "turn_type": "NONE"},
+                {"chainage": 300.0, "elevation": 405.4, "turn_type": "NONE"},
+            ],
+        },
+        station_prefix="",
+    )
+    return xxpipe_nodes, split_plan["xxpipe_station_spans"], profile_data
+
+
+def _build_three_subtable_profile_fixture():
+    raw_nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="隧洞-圆形", name="洞段1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=40.0, structure="隧洞-圆形", name="洞段1", bottom_elevation=409.5),
+        _make_node(
+            ip_no=3,
+            mc=80.0,
+            structure="有压管道",
+            name="压力段1",
+            in_out="进",
+            row_identity="flow1-row3",
+            bottom_elevation=409.0,
+        ),
+        _make_node(
+            ip_no=4,
+            mc=120.0,
+            structure="有压管道",
+            name="压力段1",
+            in_out="出",
+            row_identity="flow1-row4",
+            bottom_elevation=408.4,
+        ),
+        _make_node(ip_no=5, mc=160.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=407.8),
+        _make_node(ip_no=6, mc=210.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=407.1),
+        _make_node(
+            ip_no=7,
+            mc=250.0,
+            structure="定向钻",
+            name="压力段2",
+            in_out="进",
+            row_identity="flow1-row7",
+            bottom_elevation=406.6,
+        ),
+        _make_node(
+            ip_no=8,
+            mc=290.0,
+            structure="定向钻",
+            name="压力段2",
+            in_out="出",
+            row_identity="flow1-row8",
+            bottom_elevation=406.0,
+        ),
+        _make_node(ip_no=9, mc=330.0, structure="隧洞-圆形", name="洞段3", bottom_elevation=405.5),
+        _make_node(ip_no=10, mc=380.0, structure="隧洞-圆形", name="洞段3", bottom_elevation=404.7),
+        _make_node(
+            ip_no=11,
+            mc=420.0,
+            structure="有压管道",
+            name="压力段3",
+            in_out="进",
+            row_identity="flow1-row11",
+            bottom_elevation=404.1,
+        ),
+        _make_node(
+            ip_no=12,
+            mc=460.0,
+            structure="有压管道",
+            name="压力段3",
+            in_out="出",
+            row_identity="flow1-row12",
+            bottom_elevation=403.4,
+        ),
+    ]
+    split_plan = cad_tools._plan_xxpipe_tunnel_split_entries(raw_nodes)
+    xxpipe_nodes = cad_tools._copy_xxpipe_split_nodes(split_plan["xxpipe_entries"])
+    profile_data = cad_tools._build_xxpipe_profile_data(
+        xxpipe_nodes,
+        {
+            "1::压力段1": [
+                {"chainage": 80.0, "elevation": 409.0, "turn_type": "NONE"},
+                {"chainage": 120.0, "elevation": 408.4, "turn_type": "NONE"},
+            ],
+            "1::压力段2": [
+                {"chainage": 250.0, "elevation": 406.6, "turn_type": "NONE"},
+                {"chainage": 290.0, "elevation": 406.0, "turn_type": "NONE"},
+            ],
+            "1::压力段3": [
+                {"chainage": 420.0, "elevation": 404.1, "turn_type": "NONE"},
+                {"chainage": 460.0, "elevation": 403.4, "turn_type": "NONE"},
+            ],
+        },
+        station_prefix="",
+    )
+    return xxpipe_nodes, split_plan["xxpipe_station_spans"], profile_data
+
+
 def test_draw_profile_on_msp_in_xxpipe_mode_uses_centerline_polyline_only(monkeypatch):
     ezdxf_stub = SimpleNamespace(
         enums=SimpleNamespace(
@@ -1067,6 +1242,51 @@ def test_draw_profile_on_msp_in_xxpipe_mode_uses_centerline_polyline_only(monkey
     assert "95.000" not in texts
 
 
+def test_draw_profile_on_msp_breaks_xxpipe_subtables_into_two_independent_blocks(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes, station_spans, profile_data = _build_split_subtable_profile_fixture()
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+        export_mode="xxpipe",
+        station_spans=station_spans,
+        xxpipe_profile_data=profile_data,
+    )
+
+    horizontal_segments = _get_horizontal_line_segments_at_y(msp.line_records, 0.0)
+    _settings, _enabled_ids, _row_layout, _total_height, line_height, _boundaries = cad_tools._build_xxpipe_profile_row_layout(
+        _scaled_settings()
+    )
+    full_height_segment = (0.0, float(line_height))
+
+    assert len(horizontal_segments) == 2
+    assert horizontal_segments[0] == pytest.approx((0.0, 20.0))
+    assert horizontal_segments[1] == pytest.approx((40.0, 60.0))
+    assert horizontal_segments[1][0] - horizontal_segments[0][1] == pytest.approx(20.0)
+    assert _contains_line_segment(_get_vertical_line_segments_at_x(msp.line_records, 0.0), full_height_segment)
+    assert _contains_line_segment(_get_vertical_line_segments_at_x(msp.line_records, 20.0), full_height_segment)
+    assert _contains_line_segment(_get_vertical_line_segments_at_x(msp.line_records, 40.0), full_height_segment)
+    assert _contains_line_segment(_get_vertical_line_segments_at_x(msp.line_records, 60.0), full_height_segment)
+    assert [record["points"] for record in msp.polyline_records] == [
+        [(0.0, 408.9), (20.0, 408.1)],
+        [(40.0, 406.2), (60.0, 405.4)],
+    ]
+
+
 def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_tmp_path, monkeypatch):
     nodes, profile_data = _sample_profile_data()
     out_file = local_tmp_path / "xxpipe_longitudinal_profile.txt"
@@ -1104,6 +1324,98 @@ def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_
             (50.0, 90.0),
         ]
     )
+
+
+def test_export_longitudinal_txt_breaks_xxpipe_subtables_into_two_independent_blocks(
+    local_tmp_path,
+    monkeypatch,
+):
+    nodes, station_spans, profile_data = _build_split_subtable_profile_fixture()
+    out_file = local_tmp_path / "xxpipe_split_subtables.txt"
+
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+
+    cad_tools._export_longitudinal_txt_to_path(
+        _Panel(""),
+        nodes,
+        nodes,
+        _scaled_settings(),
+        str(out_file),
+        export_mode="xxpipe",
+        station_spans=station_spans,
+        xxpipe_profile_data=profile_data,
+    )
+
+    horizontal_segments = _get_horizontal_line_segments_at_y(_parse_pl_line_cmds(out_file), 0.0)
+    _settings, _enabled_ids, _row_layout, _total_height, line_height, _boundaries = cad_tools._build_xxpipe_profile_row_layout(
+        _scaled_settings()
+    )
+    full_height_segment = (0.0, float(line_height))
+    vertical_records = _parse_pl_line_cmds(out_file)
+
+    assert len(horizontal_segments) == 2
+    assert horizontal_segments[0] == pytest.approx((0.0, 20.0))
+    assert horizontal_segments[1] == pytest.approx((40.0, 60.0))
+    assert horizontal_segments[1][0] - horizontal_segments[0][1] == pytest.approx(20.0)
+    assert _contains_line_segment(_get_vertical_line_segments_at_x(vertical_records, 0.0), full_height_segment)
+    assert _contains_line_segment(_get_vertical_line_segments_at_x(vertical_records, 20.0), full_height_segment)
+    assert _contains_line_segment(_get_vertical_line_segments_at_x(vertical_records, 40.0), full_height_segment)
+    assert _contains_line_segment(_get_vertical_line_segments_at_x(vertical_records, 60.0), full_height_segment)
+
+
+def test_draw_profile_on_msp_breaks_xxpipe_subtables_into_three_independent_blocks(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes, station_spans, profile_data = _build_three_subtable_profile_fixture()
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+        export_mode="xxpipe",
+        station_spans=station_spans,
+        xxpipe_profile_data=profile_data,
+    )
+
+    horizontal_segments = _get_horizontal_line_segments_at_y(msp.line_records, 0.0)
+    _settings, _enabled_ids, _row_layout, _total_height, line_height, _boundaries = cad_tools._build_xxpipe_profile_row_layout(
+        _scaled_settings()
+    )
+    full_height_segment = (0.0, float(line_height))
+
+    assert len(horizontal_segments) == 3
+    assert horizontal_segments == pytest.approx(
+        [
+            (0.0, 20.0),
+            (40.0, 60.0),
+            (80.0, 100.0),
+        ]
+    )
+    assert horizontal_segments[1][0] - horizontal_segments[0][1] == pytest.approx(20.0)
+    assert horizontal_segments[2][0] - horizontal_segments[1][1] == pytest.approx(20.0)
+    for x_value in (0.0, 20.0, 40.0, 60.0, 80.0, 100.0):
+        assert _contains_line_segment(
+            _get_vertical_line_segments_at_x(msp.line_records, x_value),
+            full_height_segment,
+        )
+    assert [record["points"] for record in msp.polyline_records] == [
+        [(0.0, 409.0), (20.0, 408.4)],
+        [(40.0, 406.6), (60.0, 406.0)],
+        [(80.0, 404.1), (100.0, 403.4)],
+    ]
 
 
 def test_xxpipe_export_respects_custom_centerline_decimal_precision(local_tmp_path, monkeypatch):

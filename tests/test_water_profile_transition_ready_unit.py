@@ -1049,6 +1049,46 @@ def test_mark_section_results_stale_clears_transition_topology_prepared_flag():
     }
 
 
+def test_mark_section_results_stale_keeps_pressure_pipe_button_clickable_for_feedback():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._section_sync_ready = True
+    panel._transition_topology_prepared = True
+    panel._btn_transition = _FakeButton()
+    panel._btn_siphon = _FakeButton()
+    panel._btn_calc = _FakeButton()
+    panel.btn_pressure_pipe_calc = _FakeButton()
+    panel.node_table = _FakeTable(["有压管道"])
+    panel._section_state_label = None
+    panel._section_status_bar = None
+    panel._section_state_icon = None
+
+    WaterProfilePanel._mark_section_results_stale(panel, "状态：表3拓扑已变更", status_kind="warning")
+
+    assert panel._section_sync_ready is False
+    assert panel._btn_transition.enabled is False
+    assert panel._btn_siphon.enabled is False
+    assert panel._btn_calc.enabled is False
+    assert panel.btn_pressure_pipe_calc.enabled is True
+    assert "请先完成断面批量计算并同步到表3" in panel.btn_pressure_pipe_calc.tooltip
+
+
+def test_refresh_pressure_pipe_controls_keeps_button_clickable_when_sync_not_ready():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._section_sync_ready = False
+    panel._transition_topology_prepared = False
+    panel.btn_pressure_pipe_calc = _FakeButton()
+    panel.node_table = _FakeTable(["有压管道", "明渠-梯形"])
+
+    WaterProfilePanel._refresh_pressure_pipe_controls(panel)
+
+    assert panel.btn_pressure_pipe_calc.enabled is True
+    assert "请先完成断面批量计算并同步到表3" in panel.btn_pressure_pipe_calc.tooltip
+
+
 def test_refresh_pressure_pipe_controls_treats_prepared_topology_as_ready():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel

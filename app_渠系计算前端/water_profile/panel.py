@@ -2297,6 +2297,7 @@ class WaterProfilePanel(QWidget):
         self._section_sync_ready = False
         self._transition_topology_prepared = False
         self._set_downstream_actions_enabled(False, state_text=state_text, status_kind=status_kind)
+        self._refresh_pressure_pipe_controls()
 
     def _has_transition_topology_ready(self, nodes=None) -> bool:
         source_nodes = nodes
@@ -8162,7 +8163,7 @@ class WaterProfilePanel(QWidget):
         if btn is None:
             return
         if not getattr(self, "_section_sync_ready", False):
-            btn.setEnabled(False)
+            btn.setEnabled(True)
             btn.setToolTip("已锁定：请先完成断面批量计算并同步到表3")
             return
         table = getattr(self, "node_table", None)
