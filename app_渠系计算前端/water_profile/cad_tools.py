@@ -5916,6 +5916,7 @@ def _show_xxpipe_partial_export_notice(parent, xxpipe_profile_data):
 
 
 _TAIL_PRESSURE_SPLIT_GAP = 20.0
+_XXPIPE_SUBTABLE_GAP = 20.0
 
 
 def _iter_xxpipe_split_regular_entries(full_nodes):
@@ -5967,6 +5968,76 @@ def _build_xxpipe_split_station_spans(entries):
 
     spans.append(_finalize_span(span_start_entry, prev_entry, plot_cursor))
     return spans
+
+
+def _build_xxpipe_subtable_station_spans(station_spans, scale_x):
+    """为 xx管 多子表布局补上固定空隙，保持每段内部比例不变。"""
+    normalized_spans = _normalize_profile_station_spans(station_spans)
+    if len(normalized_spans) <= 1:
+        return normalized_spans
+
+    try:
+        scale_value = float(scale_x)
+    except (TypeError, ValueError):
+        scale_value = 0.0
+    if not math.isfinite(scale_value) or scale_value <= 0:
+        return normalized_spans
+
+    gap_plot_delta = float(_XXPIPE_SUBTABLE_GAP) * scale_value / 1000.0
+    adjusted_spans = []
+    offset = 0.0
+    for idx, span in enumerate(normalized_spans):
+        if idx > 0:
+            offset += gap_plot_delta
+        adjusted_spans.append(
+            {
+                "source_start_mc": span["source_start_mc"],
+                "source_end_mc": span["source_end_mc"],
+                "plot_start_mc": span["plot_start_mc"] + offset,
+                "plot_end_mc": span["plot_end_mc"] + offset,
+            }
+        )
+    return adjusted_spans
+
+
+def _resolve_xxpipe_content_spans(profile_text_nodes, station_spans):
+    """返回下表内容区应绘制的连续子表区间。"""
+    normalized_spans = _normalize_profile_station_spans(station_spans)
+    if normalized_spans:
+        return normalized_spans
+    visible_nodes = list(profile_text_nodes or [])
+    if not visible_nodes:
+        return []
+    return [
+        {
+            "source_start_mc": _profile_station_value(visible_nodes[0]),
+            "source_end_mc": _profile_station_value(visible_nodes[-1]),
+            "plot_start_mc": _profile_station_value(visible_nodes[0]),
+            "plot_end_mc": _profile_station_value(visible_nodes[-1]),
+        }
+    ]
+
+
+def _split_xxpipe_centerline_points(centerline_points, station_spans, tol=1e-9):
+    """按子表区间切开中心线，避免跨空隙连成一条斜线。"""
+    points = list(centerline_points or [])
+    if len(points) < 2:
+        return []
+
+    normalized_spans = _normalize_profile_station_spans(station_spans)
+    if not normalized_spans:
+        return [points]
+
+    point_groups = []
+    for span in normalized_spans:
+        span_points = [
+            (mc, elev)
+            for mc, elev in points
+            if span["source_start_mc"] - tol <= float(mc) <= span["source_end_mc"] + tol
+        ]
+        if len(span_points) >= 2:
+            point_groups.append(span_points)
+    return point_groups
 
 
 def _copy_xxpipe_split_nodes(entries):
@@ -6244,7 +6315,7 @@ def _draw_xxpipe_tunnel_split_profile_on_msp(
     return max(standard_width, xxpipe_width), float(_TAIL_PRESSURE_SPLIT_GAP) + float(xxpipe_line_height)
 
 
-def _collect_xxpipe_full_height_boundary_mcs(profile_data):
+def _collect_xxpipe_full_height_boundary_mcs(profile_data, station_spans=None):
     boundary_mcs = []
 
     def _add(mc):
@@ -6267,6 +6338,12 @@ def _collect_xxpipe_full_height_boundary_mcs(profile_data):
             continue
         _add(segment.get("start_mc"))
         _add(segment.get("end_mc"))
+
+    # 多子表布局下，每个连续有压段的首尾都需要作为整高边界封口；
+    # 否则 gap 两侧会继续沿用旧的半高/中段竖线规则，导致边框缺口。
+    for span in _normalize_profile_station_spans(station_spans):
+        _add(span.get("source_start_mc"))
+        _add(span.get("source_end_mc"))
 
     # 首尾整高边界应跟随真实可见表格边界，而不是跟随“首个有效中心线点”。
     # 在宽松导出里，前一站可能因为覆盖不足而留空；如果这里继续拿
@@ -8864,6 +8941,7 @@ def _draw_xxpipe_profile_on_msp(
     scale_y = settings.get("scale_y", 1)
     first_col_x_offset = text_height + 1.3
     x_origin_mc = float(x_origin_mc or 0.0)
+    draw_station_spans = _build_xxpipe_subtable_station_spans(station_spans, scale_x)
 
     profile_text_nodes = list(xxpipe_profile_data.get("profile_text_nodes", []) or [])
     if not profile_text_nodes:
@@ -8876,7 +8954,7 @@ def _draw_xxpipe_profile_on_msp(
     material_segments = list(xxpipe_profile_data.get("material_segments", []) or [])
 
     def sx(mc):
-        plot_mc = _resolve_profile_plot_station_value(mc, station_spans=station_spans)
+        plot_mc = _resolve_profile_plot_station_value(mc, station_spans=draw_station_spans)
         return _profile_meters_to_paper_mm(float(plot_mc) - x_origin_mc, scale_x)
 
     def sy(elev):
@@ -8899,7 +8977,10 @@ def _draw_xxpipe_profile_on_msp(
     lower_half_top = row_layout["ip_name"]["top"]
     full_height_boundary_mcs = {
         round(float(mc), 9)
-        for mc in _collect_xxpipe_full_height_boundary_mcs(xxpipe_profile_data)
+        for mc in _collect_xxpipe_full_height_boundary_mcs(
+            xxpipe_profile_data,
+            station_spans=draw_station_spans,
+        )
     }
     lower_half_vertical_mcs = {
         round(float(mc), 9)
@@ -8917,12 +8998,18 @@ def _draw_xxpipe_profile_on_msp(
             y0, y1 = bottom_merge_top, top_merge_bottom
         msp.add_line((sx(station_mc), y0), (sx(station_mc), y1), dxfattribs={"layer": layer_grid})
 
+    content_spans = _resolve_xxpipe_content_spans(profile_text_nodes, draw_station_spans)
     for hy in h_line_y_values:
-        msp.add_line((0.0, hy), (sx(last_mc), hy), dxfattribs={"layer": layer_grid})
+        for span in content_spans:
+            msp.add_line(
+                (sx(span["source_start_mc"]), hy),
+                (sx(span["source_end_mc"]), hy),
+                dxfattribs={"layer": layer_grid},
+            )
 
-    if len(centerline_points) >= 2:
+    for point_group in _split_xxpipe_centerline_points(centerline_points, draw_station_spans):
         msp.add_lwpolyline(
-            [(sx(mc), sy(elev)) for mc, elev in centerline_points],
+            [(sx(mc), sy(elev)) for mc, elev in point_group],
             dxfattribs={"layer": layer_centerline},
         )
 
@@ -9552,6 +9639,7 @@ def _build_xxpipe_longitudinal_txt_lines(
     scale_x = settings.get("scale_x", 1)
     scale_y = settings.get("scale_y", 1)
     first_col_x_offset = text_height + 1.3
+    draw_station_spans = _build_xxpipe_subtable_station_spans(station_spans, scale_x)
 
     if xxpipe_profile_data is None:
         xxpipe_profile_data = _build_panel_xxpipe_profile_data(
@@ -9572,7 +9660,7 @@ def _build_xxpipe_longitudinal_txt_lines(
     material_segments = list(xxpipe_profile_data.get("material_segments", []) or [])
 
     def sx(mc):
-        plot_mc = _resolve_profile_plot_station_value(mc, station_spans=station_spans)
+        plot_mc = _resolve_profile_plot_station_value(mc, station_spans=draw_station_spans)
         return _profile_meters_to_paper_mm(plot_mc, scale_x)
 
     def sy(elev):
@@ -9598,7 +9686,10 @@ def _build_xxpipe_longitudinal_txt_lines(
     lower_half_top = row_layout["ip_name"]["top"]
     full_height_boundary_mcs = {
         round(float(mc), 9)
-        for mc in _collect_xxpipe_full_height_boundary_mcs(xxpipe_profile_data)
+        for mc in _collect_xxpipe_full_height_boundary_mcs(
+            xxpipe_profile_data,
+            station_spans=draw_station_spans,
+        )
     }
     lower_half_vertical_mcs = {
         round(float(mc), 9)
@@ -9616,13 +9707,19 @@ def _build_xxpipe_longitudinal_txt_lines(
         lines.append(f"pl {fmt(sx(station_mc))},{fmt(y0)} {fmt(sx(station_mc))},{fmt(y1)} ")
     lines.append("")
 
+    content_spans = _resolve_xxpipe_content_spans(profile_text_nodes, draw_station_spans)
     for hy in h_line_y_values:
-        lines.append(f"pl {fmt(sx(0))},{fmt(hy)} {fmt(sx(last_mc))},{fmt(hy)} ")
+        for span in content_spans:
+            lines.append(
+                f"pl {fmt(sx(span['source_start_mc']))},{fmt(hy)} "
+                f"{fmt(sx(span['source_end_mc']))},{fmt(hy)} "
+            )
     lines.append("")
 
-    for station_mc, elevation in centerline_points:
-        lines.append(f"pl {fmt(sx(station_mc))},{fmt(sy(elevation))}")
-    lines.append("")
+    for point_group in _split_xxpipe_centerline_points(centerline_points, draw_station_spans):
+        for station_mc, elevation in point_group:
+            lines.append(f"pl {fmt(sx(station_mc))},{fmt(sy(elevation))}")
+        lines.append("")
 
     centerline_elev_by_station = {
         round(float(record.get("station_mc", 0.0) or 0.0), 9): record.get("elevation")
