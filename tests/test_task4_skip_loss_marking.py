@@ -105,10 +105,10 @@ def test_open_channel_side_skip_loss_false():
 
 def test_both_sides_pressurized_skip_loss_true():
     """
-    验证两侧都是有压流建筑物时，渐变段标记 skip_loss=True
-    
+    验证有压同类结构相邻时，不再插入渐变段。
+
     场景：有压管道1出口 → 有压管道2进口（不同名）
-    期望：插入的渐变段应标记 skip_loss=True
+    期望：直接相邻，不生成渐变段
     """
     # 创建有压管道1出口节点
     pipe1_outlet = ChannelNode()
@@ -133,17 +133,10 @@ def test_both_sides_pressurized_skip_loss_true():
     nodes = [pipe1_outlet, pipe2_inlet]
     result_nodes = calculator.identify_and_insert_transitions(nodes)
     
-    # 验证结果
-    # 应该有3个节点：有压管道1出口 + 渐变段 + 有压管道2进口
-    assert len(result_nodes) == 3, f"期望3个节点，实际{len(result_nodes)}个"
-    
-    # 第二个节点应该是渐变段
-    transition = result_nodes[1]
-    assert transition.is_transition == True, "第二个节点应该是渐变段"
-    
-    # 渐变段应标记 skip_loss=True（两侧都是有压流建筑物）
-    assert transition.transition_skip_loss == True, \
-        "两侧都是有压流建筑物时，渐变段应标记 transition_skip_loss=True"
+    # 验证结果：保持原始两个节点，不额外插入渐变段
+    assert len(result_nodes) == 2, f"期望2个节点，实际{len(result_nodes)}个"
+    assert not any(getattr(node, "is_transition", False) for node in result_nodes), \
+        "有压同类结构相邻时不应生成渐变段"
 
 
 def test_siphon_side_skip_loss_true():

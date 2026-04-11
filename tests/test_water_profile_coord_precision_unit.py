@@ -1353,6 +1353,126 @@ def test_insert_transitions_defaults_blank_turn_radius_text_to_zero():
             sys.modules[dialog_module_name] = saved_dialog_module
 
 
+def test_insert_transitions_syncs_prepared_nodes_back_to_panel_state():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.CALCULATOR_AVAILABLE = True
+    module.InfoBar = SimpleNamespace(
+        error=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+        info=lambda *args, **kwargs: None,
+        success=lambda *args, **kwargs: None,
+        new=lambda *args, **kwargs: SimpleNamespace(close=lambda: None),
+    )
+    module.InfoBarPosition = SimpleNamespace(TOP=1)
+    module.InfoBarIcon = SimpleNamespace(SUCCESS=object())
+    module.auto_resize_table = lambda *_args, **_kwargs: None
+    module.fluent_question = lambda *_args, **_kwargs: True
+
+    dialog_module_name = "app_渠系计算前端.water_profile.water_profile_dialogs"
+    saved_dialog_module = sys.modules.get(dialog_module_name)
+    dialog_module = types.ModuleType(dialog_module_name)
+
+    class _FakeBatchChannelConfirmDialog:
+        RESULT_CANCELLED = "cancelled"
+        RESULT_TABLE_EDIT = "table_edit"
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return 0
+
+        def get_result(self):
+            return {"mode": "manual", "params": {}}
+
+    class _FakeOpenChannelDialog:
+        def __init__(self, *_args, **_kwargs):
+            self.apply_all_remaining = False
+
+        def exec(self):
+            return 0
+
+        def get_result(self):
+            return None
+
+    dialog_module.BatchChannelConfirmDialog = _FakeBatchChannelConfirmDialog
+    dialog_module.OpenChannelDialog = _FakeOpenChannelDialog
+    dialog_module.OpenChannelParams = type("OpenChannelParams", (), {})
+    sys.modules[dialog_module_name] = dialog_module
+
+    old_nodes = [
+        _make_node(
+            structure_type=_FakeStructureType.PRESSURE_PIPE,
+            is_pressure_pipe=True,
+            get_structure_type_str=lambda: "有压管道",
+            get_in_out_str=lambda: "",
+            get_ip_str=lambda: "IP0",
+        ),
+        _make_node(
+            structure_type=_FakeStructureType.PRESSURE_PIPE,
+            is_pressure_pipe=True,
+            get_structure_type_str=lambda: "有压管道",
+            get_in_out_str=lambda: "",
+            get_ip_str=lambda: "IP1",
+        ),
+    ]
+    prepared_nodes = old_nodes + [
+        _make_node(
+            name="-",
+            structure_type=_FakeStructTypeValue("渐变段"),
+            is_transition=True,
+            transition_type="进口",
+            transition_form="曲线形反弯扭曲面",
+            from_table1_source=False,
+            get_structure_type_str=lambda: "渐变段",
+            get_in_out_str=lambda: "",
+            get_ip_str=lambda: "",
+        )
+    ]
+
+    class _FakeCalculator:
+        def __init__(self, _settings):
+            pass
+
+        def preprocess_nodes(self, _nodes):
+            return None
+
+        def pre_scan_open_channels(self, _nodes):
+            return []
+
+        def prepare_transitions(self, nodes, _callback):
+            assert nodes is old_nodes
+            return prepared_nodes
+
+    module.WaterProfileCalculator = _FakeCalculator
+
+    try:
+        panel.node_table.setRowCount(2)
+        panel._updating_cells = False
+        panel._table_batch_update = _fake_batch_update
+        panel.max_flow_edit = SimpleNamespace(text=lambda: "5.5")
+        panel.design_flow_edit = SimpleNamespace(text=lambda: "5.0")
+        panel._ensure_downstream_ready = lambda _action: True
+        panel._show_transition_length_rules_post_insert_bar = lambda *_args, **_kwargs: None
+        panel._build_settings = lambda: SimpleNamespace(
+            validate=lambda: (True, ""),
+            get_station_prefix=lambda: "",
+        )
+        panel._build_nodes_from_table = lambda: old_nodes
+        panel.nodes = list(old_nodes)
+        panel.calculated_nodes = []
+
+        module.WaterProfilePanel._insert_transitions(panel)
+
+        assert panel.nodes == prepared_nodes
+    finally:
+        if saved_dialog_module is None:
+            sys.modules.pop(dialog_module_name, None)
+        else:
+            sys.modules[dialog_module_name] = saved_dialog_module
+
+
 def test_update_table_from_nodes_full_impl_hides_row_level_pressure_pipe_loss_outside_xxpipe():
     module = _load_panel_module()
     panel = _make_basic_panel(module)

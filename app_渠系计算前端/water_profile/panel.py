@@ -1142,7 +1142,8 @@ class WaterProfilePanel(QWidget):
 
         self.channel_name_edit = LineEdit()
         self.channel_name_edit.setText("南峰寺")
-        self.channel_name_edit.setFixedWidth(84)
+        # 给 5 个汉字名称留出稳定显示空间，利用“级别”前的空白避免截断。
+        self.channel_name_edit.setFixedWidth(112)
         row1_flow.addWidget(_make_field_group("渠道名称:", [self.channel_name_edit], min_w=114))
 
         self.channel_level_combo = ComboBox()
@@ -2410,6 +2411,9 @@ class WaterProfilePanel(QWidget):
     def _should_warn_missing_structure_height(cls, node) -> bool:
         """判断当前节点是否需要纳入“缺少结构总高”提示。"""
         if getattr(node, "is_transition", False):
+            return False
+        # 自动插入补段只是辅助连通行，不应参与结构总高缺失提示。
+        if getattr(node, "is_auto_inserted_channel", False):
             return False
 
         structure_text = cls._get_node_structure_type_text(node)
@@ -5729,6 +5733,36 @@ class WaterProfilePanel(QWidget):
         self._section_sync_ready = sync_ready
         self._set_downstream_actions_enabled(sync_ready, state_text=state_text, status_kind=status_kind)
 
+    @staticmethod
+    def _resolve_loaded_section_gate_state(
+        merged_section,
+        node_row_count: int,
+        *,
+        calculated_node_count: int = 0,
+        result_row_count: int = 0,
+    ) -> tuple[bool, bool]:
+        """兼容旧项目恢复下游门禁状态。"""
+        if int(node_row_count or 0) <= 0:
+            return False, False
+        if not isinstance(merged_section, dict) or not merged_section:
+            return True, True
+
+        state_text = str(merged_section.get("state_text", "") or "").strip()
+        has_restored_results = (
+            int(calculated_node_count or 0) > 0
+            or int(result_row_count or 0) > 0
+        )
+        stale_markers = ("未就绪", "请先", "请重新", "已变更", "已更新", "锁定", "失败", "未生成")
+
+        if "sync_ready" in merged_section:
+            sync_ready = bool(merged_section.get("sync_ready", False))
+            if sync_ready:
+                return True, False
+            if has_restored_results and not any(marker in state_text for marker in stale_markers):
+                return True, True
+            return False, False
+        return True, True
+
     def _restore_node_table(self, snapshot):
         """从快照恢复完整节点表状态"""
         self._updating_cells = True
@@ -8736,6 +8770,8 @@ class WaterProfilePanel(QWidget):
             prefix = settings.get_station_prefix() if settings else ""
             self._update_table_from_nodes_full(prepared_nodes, prefix)
             auto_resize_table(self.node_table)
+            self.calculated_nodes = []
+            self.nodes = list(prepared_nodes or [])
             self._transition_topology_prepared = True
 
             # 统计
@@ -13852,11 +13888,15 @@ class WaterProfilePanel(QWidget):
 
             # 恢复下游门禁状态（默认锁定）
             state_text = str(merged_section.get("state_text", "")).strip()
-            sync_ready = bool(merged_section.get("sync_ready", False))
+            sync_ready, legacy_loaded = self._resolve_loaded_section_gate_state(
+                merged_section,
+                self.node_table.rowCount(),
+                calculated_node_count=len(self.calculated_nodes or []),
+                result_row_count=len(result_rows) if isinstance(result_rows, list) else 0,
+            )
             self._transition_topology_prepared = bool(
                 merged_section.get("transition_topology_prepared", False)
             )
-            legacy_loaded = (not merged_section) and self.node_table.rowCount() > 0
             if sync_ready and self.node_table.rowCount() > 0:
                 self._section_sync_ready = True
                 self._set_downstream_actions_enabled(

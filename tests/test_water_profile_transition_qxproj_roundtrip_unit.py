@@ -289,3 +289,37 @@ def test_qxproj_roundtrip_supports_immediate_export_details_and_table_edit(monke
             assert restored.calculated_nodes[3].head_loss_cumulative == 0.8
         finally:
             restored.deleteLater()
+
+
+def test_qxproj_roundtrip_recovers_successful_gate_when_old_project_saved_false():
+    module = _load_panel_module()
+    with tempfile.TemporaryDirectory(dir=str(ROOT / "tests")) as temp_dir:
+        tmp_path = Path(temp_dir)
+        panel = _build_panel(module)
+        try:
+            panel._settings = _make_settings()
+            panel.calculated_nodes = _make_nodes()
+            panel._update_table_from_nodes_full(panel.calculated_nodes)
+            _prepare_table_snapshot(panel)
+            panel._section_sync_ready = True
+            panel._transition_topology_prepared = True
+            _flush_events()
+
+            state = panel.to_project_dict()
+            state["merged_section"]["sync_ready"] = False
+            state["merged_section"]["state_text"] = "状态：断面全成功，表1+表2已同步到表3"
+
+            qxproj_path = tmp_path / "transition_roundtrip_gate_legacy.qxproj"
+            qxproj_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+            loaded_state = json.loads(qxproj_path.read_text(encoding="utf-8"))
+        finally:
+            panel.deleteLater()
+
+        restored = _build_panel(module)
+        try:
+            restored.from_project_dict(loaded_state, skip_dirty_signal=True)
+            _flush_events()
+
+            assert restored._section_sync_ready is True
+        finally:
+            restored.deleteLater()

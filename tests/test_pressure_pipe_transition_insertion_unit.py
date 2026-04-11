@@ -4,11 +4,10 @@
 
 **Validates: Requirements 2.1, 2.2, 2.4, 2.5, 4.4, 4.5**
 
-测试 _should_insert_open_channel() 函数对有压管道的处理：
+测试 _should_insert_open_channel() 函数对有压同类结构的处理：
 - 测试有压管道出口 → 隧洞进口
 - 测试渡槽出口 → 有压管道进口
-- 测试有压管道 → 有压管道（同名同径）
-- 测试有压管道 → 有压管道（不同名）
+- 测试有压同类结构相邻时不插渐变段
 - 测试有压管道 → 倒虹吸
 """
 
@@ -141,16 +140,9 @@ def test_same_pressure_pipe_same_diameter():
     assert result['need_open_channel'] == False, "同名同径有压管道之间不应插入明渠段"
 
 
-def test_different_pressure_pipes():
+def test_pressure_pipe_like_neighbors_skip_transitions_even_with_different_names():
     """
-    测试有压管道 → 有压管道（不同名）
-    
-    **Validates: Requirement 2.5**
-    
-    验证：
-    - 应插入出口渐变段
-    - 应插入进口渐变段
-    - 两侧都标记 skip_loss=True
+    测试有压同类结构相邻时，不再因为名称不同插入渐变段。
     """
     # 创建第一个有压管道的出口节点
     pipe1_outlet = ChannelNode()
@@ -174,10 +166,9 @@ def test_different_pressure_pipes():
     result = calculator._should_insert_open_channel(pipe1_outlet, pipe2_inlet)
     
     # 验证结果
-    assert result['need_transition_1'] == True, "不同名有压管道之间应插入出口渐变段"
-    assert result['need_transition_2'] == True, "不同名有压管道之间应插入进口渐变段"
-    assert result['skip_loss_transition_1'] == True, "有压管道1侧渐变段应标记 skip_loss=True"
-    assert result['skip_loss_transition_2'] == True, "有压管道2侧渐变段应标记 skip_loss=True"
+    assert result['need_transition_1'] == False, "有压同类结构之间不应插入出口渐变段"
+    assert result['need_transition_2'] == False, "有压同类结构之间不应插入进口渐变段"
+    assert result['need_open_channel'] == False, "有压同类结构之间不应插入连接段"
     assert result['distance'] == 30.0, f"里程差应为 30.0，实际为 {result['distance']}"
 
 
@@ -321,13 +312,9 @@ def test_siphon_to_pressure_pipe():
     assert result['distance'] == 30.0, f"里程差应为 30.0，实际为 {result['distance']}"
 
 
-def test_same_pressure_pipe_different_diameter():
+def test_pressure_pipe_like_neighbors_skip_transitions_even_with_different_diameter():
     """
-    测试有压管道 → 有压管道（同名不同径）
-    
-    验证：
-    - 应插入渐变段（管径不同）
-    - 两侧都标记 skip_loss=True
+    测试有压同类结构相邻时，不再因为管径不同插入渐变段。
     """
     # 创建同一有压管道的出口节点（管径 1.5m）
     pipe_outlet = ChannelNode()
@@ -351,10 +338,59 @@ def test_same_pressure_pipe_different_diameter():
     result = calculator._should_insert_open_channel(pipe_outlet, pipe_inlet)
     
     # 验证结果
-    assert result['need_transition_1'] == True, "同名不同径有压管道之间应插入出口渐变段"
-    assert result['need_transition_2'] == True, "同名不同径有压管道之间应插入进口渐变段"
-    assert result['skip_loss_transition_1'] == True, "有压管道侧渐变段应标记 skip_loss=True"
-    assert result['skip_loss_transition_2'] == True, "有压管道侧渐变段应标记 skip_loss=True"
+    assert result['need_transition_1'] == False, "有压同类结构之间不应插入出口渐变段"
+    assert result['need_transition_2'] == False, "有压同类结构之间不应插入进口渐变段"
+    assert result['need_open_channel'] == False, "有压同类结构之间不应插入连接段"
+
+
+def test_pressure_pipe_to_directional_drill_skips_transitions():
+    """测试有压管道与定向钻相邻时，不插渐变段。"""
+    pipe_outlet = ChannelNode()
+    pipe_outlet.structure_type = StructureType.from_string("有压管道")
+    pipe_outlet.name = "九龙右有压管道"
+    pipe_outlet.in_out = InOutType.OUTLET
+    pipe_outlet.section_params = {"D": 1.5}
+    pipe_outlet.station_MC = 100.0
+
+    drill_inlet = ChannelNode()
+    drill_inlet.structure_type = StructureType.from_string("定向钻")
+    drill_inlet.name = "穿路段"
+    drill_inlet.in_out = InOutType.INLET
+    drill_inlet.section_params = {"D": 1.2}
+    drill_inlet.station_MC = 150.0
+
+    settings = ProjectSettings()
+    calculator = WaterProfileCalculator(settings)
+    result = calculator._should_insert_open_channel(pipe_outlet, drill_inlet)
+
+    assert result["need_transition_1"] == False, "有压管道与定向钻之间不应插入出口渐变段"
+    assert result["need_transition_2"] == False, "有压管道与定向钻之间不应插入进口渐变段"
+    assert result["need_open_channel"] == False, "有压管道与定向钻之间不应插入连接段"
+
+
+def test_pipe_jacking_to_directional_drill_skips_transitions():
+    """测试顶管与定向钻相邻时，不插渐变段。"""
+    pipe_jacking_outlet = ChannelNode()
+    pipe_jacking_outlet.structure_type = StructureType.from_string("顶管")
+    pipe_jacking_outlet.name = "穿通高速顶管"
+    pipe_jacking_outlet.in_out = InOutType.OUTLET
+    pipe_jacking_outlet.section_params = {"D": 1.1}
+    pipe_jacking_outlet.station_MC = 220.0
+
+    drill_inlet = ChannelNode()
+    drill_inlet.structure_type = StructureType.from_string("定向钻")
+    drill_inlet.name = "穿路定向钻"
+    drill_inlet.in_out = InOutType.INLET
+    drill_inlet.section_params = {"D": 0.9}
+    drill_inlet.station_MC = 260.0
+
+    settings = ProjectSettings()
+    calculator = WaterProfileCalculator(settings)
+    result = calculator._should_insert_open_channel(pipe_jacking_outlet, drill_inlet)
+
+    assert result["need_transition_1"] == False, "顶管与定向钻之间不应插入出口渐变段"
+    assert result["need_transition_2"] == False, "顶管与定向钻之间不应插入进口渐变段"
+    assert result["need_open_channel"] == False, "顶管与定向钻之间不应插入连接段"
 
 
 if __name__ == "__main__":
@@ -369,8 +405,8 @@ if __name__ == "__main__":
     test_same_pressure_pipe_same_diameter()
     print("✓ 测试有压管道 → 有压管道（同名同径）")
     
-    test_different_pressure_pipes()
-    print("✓ 测试有压管道 → 有压管道（不同名）")
+    test_pressure_pipe_like_neighbors_skip_transitions_even_with_different_names()
+    print("✓ 测试有压同类结构 → 不同名仍不插渐变段")
     
     test_pressure_pipe_to_siphon()
     print("✓ 测试有压管道 → 倒虹吸")
@@ -384,7 +420,13 @@ if __name__ == "__main__":
     test_siphon_to_pressure_pipe()
     print("✓ 测试倒虹吸 → 有压管道")
     
-    test_same_pressure_pipe_different_diameter()
-    print("✓ 测试有压管道 → 有压管道（同名不同径）")
+    test_pressure_pipe_like_neighbors_skip_transitions_even_with_different_diameter()
+    print("✓ 测试有压同类结构 → 不同径仍不插渐变段")
+
+    test_pressure_pipe_to_directional_drill_skips_transitions()
+    print("✓ 测试有压管道 → 定向钻")
+
+    test_pipe_jacking_to_directional_drill_skips_transitions()
+    print("✓ 测试顶管 → 定向钻")
     
     print("\n所有单元测试通过！")

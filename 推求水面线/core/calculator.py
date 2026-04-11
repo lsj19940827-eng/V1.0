@@ -88,60 +88,27 @@ class WaterProfileCalculator:
             return False
         return not str(getattr(node, "name", "") or "").strip()
 
-    def _is_xxpipe_channel_level(self) -> bool:
-        """判断当前项目是否处于 xx管 渠道级别。"""
-        channel_level = str(getattr(self.settings, "channel_level", "") or "").strip()
-        return channel_level in set(XXPIPE_CHANNEL_LEVEL_OPTIONS)
-
-    def _is_unnamed_regular_pressure_pipe_node(self, node: ChannelNode) -> bool:
-        """判断节点是否为 xx管 模式下的空名称普通有压管道行。"""
-        if not node or not getattr(node, "structure_type", None):
-            return False
-        structure_text = (
-            node.structure_type.value
-            if hasattr(node.structure_type, "value")
-            else str(node.structure_type)
-        )
-        if structure_text != StructureType.PRESSURE_PIPE.value:
-            return False
-        return not str(getattr(node, "name", "") or "").strip()
-
-    def _should_skip_xxpipe_unnamed_pressure_pipe_gap(
+    def _should_skip_pressure_pipe_like_gap(
         self,
         node1: ChannelNode,
         node2: ChannelNode,
     ) -> bool:
         """
-        判断 xx管 匿名普通有压管道相邻缺口是否应直接跳过插段。
+        判断两个相邻节点是否属于同类承压结构，因此应直接跳过插段。
 
-        仅收敛本次问题场景：
-        - 匿名普通有压管道 ↔ 定向钻
-        - 匿名普通有压管道 ↔ 顶管
-        - 匿名普通有压管道 ↔ 匿名普通有压管道
+        当前统一口径：
+        - 有压管道 ↔ 有压管道
+        - 有压管道 ↔ 定向钻
+        - 有压管道 ↔ 顶管
+        - 定向钻 ↔ 顶管
+        - 定向钻 ↔ 定向钻
+        - 顶管 ↔ 顶管
+
+        以上场景都不插渐变段，也不插中间连接段。
         """
-        if not self._is_xxpipe_channel_level():
+        if not node1 or not node2:
             return False
-        if not (self.is_pressure_pipe(node1) and self.is_pressure_pipe(node2)):
-            return False
-
-        node1_is_unnamed_regular = self._is_unnamed_regular_pressure_pipe_node(node1)
-        node2_is_unnamed_regular = self._is_unnamed_regular_pressure_pipe_node(node2)
-        if not (node1_is_unnamed_regular or node2_is_unnamed_regular):
-            return False
-
-        if node1_is_unnamed_regular and node2_is_unnamed_regular:
-            return True
-
-        other_node = node2 if node1_is_unnamed_regular else node1
-        other_structure = (
-            other_node.structure_type.value
-            if getattr(other_node, "structure_type", None) and hasattr(other_node.structure_type, "value")
-            else str(getattr(other_node, "structure_type", "") or "")
-        )
-        return other_structure in {
-            StructureType.DIRECTIONAL_DRILL.value,
-            StructureType.PIPE_JACKING.value,
-        }
+        return self.is_pressure_pipe(node1) and self.is_pressure_pipe(node2)
 
     def _matches_gap_outlet_role(self, node: ChannelNode) -> bool:
         """判断节点在插渐变段阶段是否可临时视为出口边界。"""
@@ -990,9 +957,8 @@ class WaterProfileCalculator:
         1. node1必须是出口，node2必须是进口
         2. 隧洞/渡槽/倒虹吸/有压管道都需要渐变段行；有压流建筑物侧的渐变段为占位行
            （水头损失已含在有压流建筑物水力计算中，通过 skip_loss 标记跳过计算）
-        3. 有压管道 → 有压管道（同名同径）：不插入渐变段
-        4. 有压管道 → 有压管道（不同名）：插入渐变段，两侧都标记 skip_loss=True
-        5. 里程差 > 渐变段之和 时需要插入明渠段
+        3. 有压管道 / 定向钻 / 顶管 相邻时：不插入渐变段，也不插入连接段
+        4. 里程差 > 渐变段之和 时需要插入明渠段
         
         Args:
             node1: 前一节点（应为出口）
@@ -1039,32 +1005,14 @@ class WaterProfileCalculator:
         if self._is_diversion_gate_type(node2.structure_type):
             return result
 
-        # xx管 模式下，匿名普通有压管道紧邻定向钻/顶管/匿名普通有压管道时，
-        # 这些行都按同一段承压占位链路处理，不再额外插入渐变段或补段。
-        if self._should_skip_xxpipe_unnamed_pressure_pipe_gap(node1, node2):
+        # 里程差作为后续判断与调试详情的基础值，提前统一写入。
+        result['distance'] = node2.station_MC - node1.station_MC
+
+        # 有压管道 / 定向钻 / 顶管 本质都按同类承压结构处理，
+        # 相邻时不再额外插入渐变段或连接段。
+        if self._should_skip_pressure_pipe_like_gap(node1, node2):
             return result
-        
-        # 特殊情况：有压管道 → 有压管道
-        # 如果两个节点都是有压管道，需要判断是否属于同一建筑物
-        is_node1_pressure_pipe = self.is_pressure_pipe(node1)
-        is_node2_pressure_pipe = self.is_pressure_pipe(node2)
-        
-        if is_node1_pressure_pipe and is_node2_pressure_pipe:
-            # 获取建筑物名称
-            name1 = node1.name if node1.name else ""
-            name2 = node2.name if node2.name else ""
-            
-            # 获取管径 D
-            diameter1 = node1.section_params.get("D", 0) if node1.section_params else 0
-            diameter2 = node2.section_params.get("D", 0) if node2.section_params else 0
-            
-            # 如果同名且同径，不插入渐变段
-            if name1 == name2 and abs(diameter1 - diameter2) < 0.001:
-                return result
-            
-            # 如果不同名，插入渐变段，两侧都标记 skip_loss=True
-            # （继续执行后续逻辑）
-        
+
         # 判断是否需要渐变段（隧洞/渡槽/倒虹吸/有压管道都需要渐变段行）
         is_node1_tunnel_aqueduct = self._is_tunnel_or_aqueduct(node1.structure_type)
         is_node2_tunnel_aqueduct = self._is_tunnel_or_aqueduct(node2.structure_type)
@@ -1083,9 +1031,6 @@ class WaterProfileCalculator:
         result['skip_loss_transition_1'] = is_node1_pressurized
         result['skip_loss_transition_2'] = is_node2_pressurized
         
-        # 计算里程差
-        result['distance'] = node2.station_MC - node1.station_MC
-
         # 估算渐变段长度
         gap_index = None
         if all_nodes:
@@ -1399,7 +1344,8 @@ class WaterProfileCalculator:
         channel_depth = 0.0
 
         adjacent_channel = downstream_node if transition_type == "出口" else upstream_node
-        if adjacent_channel:
+        # 这里只能读取真正相邻明渠的设计水深，不能把另一侧建筑物水深误当成明渠口径。
+        if adjacent_channel and self._is_any_channel_type(getattr(adjacent_channel, "structure_type", None)):
             channel_depth = float(getattr(adjacent_channel, "water_depth", 0.0) or 0.0)
             if channel_depth <= 0 and getattr(adjacent_channel, "section_params", None):
                 params = adjacent_channel.section_params or {}

@@ -2190,10 +2190,12 @@ def _get_xxpipe_building_display_name(
 ):
     text = str(struct_name or "").strip()
     name = str(building_name or "").strip()
+    if text == "有压管道":
+        # 普通有压段只显示用户明确填写的建筑物名称；
+        # 名称为空时保持留空，不再回退成通用“有压管道”。
+        return name
     if _is_xxpipe_named_structure(text):
         return name or _get_xxpipe_structure_display_name(text)
-    if show_plain_pipe_name and text == "有压管道":
-        return name or (str(plain_pipe_fallback_name or "").strip() or "有压管道")
     return ""
 
 

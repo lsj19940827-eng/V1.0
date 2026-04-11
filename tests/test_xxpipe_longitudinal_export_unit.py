@@ -2293,7 +2293,7 @@ def test_export_xxpipe_longitudinal_txt_to_path_shows_guidance_for_relaxed_xxqu(
     ("building_name", "expected_text"),
     [
         ("南干支线", "南干支线"),
-        ("", "有压管道"),
+        ("", ""),
     ],
 )
 def test_build_xxpipe_profile_data_uses_relaxed_plain_pipe_building_name_rules(
@@ -2316,7 +2316,32 @@ def test_build_xxpipe_profile_data_uses_relaxed_plain_pipe_building_name_rules(
         },
     )
 
-    assert [segment["text"] for segment in data["building_segments"]] == [expected_text]
+    expected_segments = [expected_text] if expected_text else []
+    assert [segment["text"] for segment in data["building_segments"]] == expected_segments
+
+
+def test_build_xxpipe_profile_data_keeps_named_plain_pipe_labels_in_strict_mode():
+    nodes = [
+        _make_node(ip_no=12, mc=0.0, structure="有压管道", name="九龙右", in_out="进", row_identity="flow1-row12"),
+        _make_node(ip_no=16, mc=40.0, structure="有压管道", name="九龙右", in_out="出", row_identity="flow1-row16"),
+        _make_node(ip_no=17, mc=45.0, structure="顶管", name="穿通广高速", in_out="进", row_identity="flow1-row17"),
+        _make_node(ip_no=18, mc=65.0, structure="顶管", name="穿通广高速", in_out="出", row_identity="flow1-row18"),
+        _make_node(ip_no=19, mc=70.0, structure="有压管道", name="九龙水库右", in_out="进", row_identity="flow1-row19"),
+        _make_node(ip_no=22, mc=110.0, structure="有压管道", name="九龙水库右", in_out="出", row_identity="flow1-row22"),
+    ]
+
+    data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        {},
+        station_prefix="",
+        export_policy={"allow_partial_export": True},
+    )
+
+    assert [segment["text"] for segment in data["building_segments"]] == [
+        "九龙右",
+        "穿通广高速",
+        "九龙水库右",
+    ]
 
 
 def test_build_xxpipe_profile_data_merges_saijin_building_name_segments_for_centered_labels():

@@ -48,8 +48,9 @@ def test_xxpipe_rule_helpers_cover_channel_level_and_structure_scope():
     assert not cad_tools._is_xxpipe_allowed_structure("明渠-矩形")
 
 
-def test_xxpipe_building_name_only_marks_named_special_segments():
-    assert cad_tools._get_xxpipe_building_display_name("有压管道", "普通管") == ""
+def test_xxpipe_building_name_keeps_user_name_for_plain_pipe():
+    assert cad_tools._get_xxpipe_building_display_name("有压管道", "普通管") == "普通管"
+    assert cad_tools._get_xxpipe_building_display_name("有压管道", "") == ""
     assert cad_tools._get_xxpipe_building_display_name("定向钻", "穿路段") == "穿路段"
     assert cad_tools._get_xxpipe_building_display_name("顶管", "") == "顶管"
     assert cad_tools._get_xxpipe_building_display_name("隧洞-圆形", "1#洞段") == "1#洞段"

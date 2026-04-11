@@ -261,6 +261,52 @@ def _make_pressure_pipe_nodes():
     return [inlet, outlet]
 
 
+def _load_real_pressure_pipe_test_support():
+    project_root = Path(__file__).resolve().parents[1]
+    module_root = str(project_root / "推求水面线")
+    if module_root not in sys.path:
+        sys.path.insert(0, module_root)
+    from models.data_models import ChannelNode
+    from models.enums import StructureType, InOutType
+    from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+
+    return SimpleNamespace(
+        ChannelNode=ChannelNode,
+        StructureType=StructureType,
+        InOutType=InOutType,
+        PressurePipeDataExtractor=PressurePipeDataExtractor,
+    )
+
+
+def _make_stationed_pressure_node(
+    flow_section,
+    name,
+    structure,
+    in_out,
+    station_mc,
+    x,
+    y,
+    *,
+    diameter=1.2,
+    flow=2.4,
+):
+    support = _load_real_pressure_pipe_test_support()
+    node = support.ChannelNode()
+    node.flow_section = flow_section
+    node.name = name
+    node.structure_type = support.StructureType.from_string(structure)
+    node.in_out = in_out
+    node.flow = flow
+    node.station_MC = float(station_mc)
+    node.x = float(x)
+    node.y = float(y)
+    node.section_params = {
+        "D": diameter,
+        "in_out_raw": getattr(in_out, "value", str(in_out)),
+    }
+    return node
+
+
 def _install_pressure_pipe_dialog_stub(opened):
     dialog_mod = types.ModuleType("app_渠系计算前端.water_profile.water_profile_dialogs")
 
@@ -358,6 +404,34 @@ def test_collect_missing_structure_height_names_keeps_real_tunnel_missing_height
             name="罗家湾",
             structure_type=SimpleNamespace(value="隧洞-圆拱直墙型"),
             is_transition=False,
+            bottom_elevation=351.8,
+            top_elevation=0.0,
+        ),
+    ]
+
+    result = WaterProfilePanel._collect_missing_structure_height_names(nodes)
+
+    assert result == ["罗家湾"]
+
+
+def test_collect_missing_structure_height_names_skips_auto_inserted_helper_rows():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+
+    nodes = [
+        SimpleNamespace(
+            name="-",
+            structure_type=SimpleNamespace(value="明渠-矩形"),
+            is_transition=False,
+            is_auto_inserted_channel=True,
+            bottom_elevation=351.8,
+            top_elevation=0.0,
+        ),
+        SimpleNamespace(
+            name="罗家湾",
+            structure_type=SimpleNamespace(value="隧洞-圆拱直墙型"),
+            is_transition=False,
+            is_auto_inserted_channel=False,
             bottom_elevation=351.8,
             top_elevation=0.0,
         ),
@@ -834,6 +908,67 @@ def test_prepare_pressure_pipe_dialog_context_enables_route_mode_for_continuous_
     assert "flow7-route1" in result["route_import_targets"]
 
 
+def test_prepare_pressure_pipe_dialog_context_counts_route_import_targets_by_pressure_runs():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = _build_minimal_panel(WaterProfilePanel, [])
+    support = _load_real_pressure_pipe_test_support()
+    extractor = support.PressurePipeDataExtractor
+    in_out = support.InOutType
+    settings = SimpleNamespace(channel_level="支管")
+
+    panel._extract_pressure_pipe_dialog_groups = (
+        lambda nodes, settings=None: extractor.extract_dialog_pipe_groups(nodes, settings=settings)
+    )
+    panel._extract_pressure_pipe_dialog_chains = (
+        lambda nodes, settings=None: extractor.extract_continuous_pressure_chains(nodes, settings=settings)
+    )
+    panel._extract_pressure_pipe_routes = (
+        lambda nodes, settings=None: extractor.extract_pressure_routes(nodes, settings=settings)
+    )
+    panel._get_current_channel_level_text = lambda settings=None: "支管"
+    panel._get_settings_station_prefix = lambda settings=None: ""
+
+    leading_tunnel_nodes = [
+        _make_stationed_pressure_node("8", "前置隧洞1", "隧洞-圆形", in_out.NORMAL, 0.0, 0.0, 0.0, flow=0.0),
+        _make_stationed_pressure_node("8", "前置隧洞2", "隧洞-圆形", in_out.NORMAL, 20.0, 20.0, 0.0, flow=0.0),
+        _make_stationed_pressure_node("8", "九龙右支管", "有压管道", in_out.INLET, 40.0, 40.0, 2.0, diameter=0.8, flow=0.49),
+        _make_stationed_pressure_node("8", "九龙右支管", "顶管", in_out.OUTLET, 60.0, 60.0, 2.0, diameter=0.8, flow=0.49),
+        _make_stationed_pressure_node("8", "尾置隧洞", "隧洞-圆形", in_out.NORMAL, 80.0, 80.0, 3.0, flow=0.0),
+    ]
+    leading_result = WaterProfilePanel._prepare_pressure_pipe_dialog_context(
+        panel,
+        leading_tunnel_nodes,
+        settings=settings,
+    )
+
+    assert leading_result["xxpipe_route_mode"] is True
+    assert len(leading_result["route_import_targets"]) == 1
+    assert len(leading_result["pressure_routes"]) == 1
+    assert set(leading_result["route_import_targets"]) == {
+        group.route_key for group in leading_result["pipe_groups"] if getattr(group, "route_key", "")
+    }
+
+    split_route_nodes = [
+        _make_stationed_pressure_node("2", "穿路段", "定向钻", in_out.INLET, 10.0, 10.0, 0.0, diameter=1.0, flow=1.8),
+        _make_stationed_pressure_node("2", "穿路段", "定向钻", in_out.OUTLET, 30.0, 30.0, 0.0, diameter=1.0, flow=1.8),
+        _make_stationed_pressure_node("3", "中间隧洞", "隧洞-圆形", in_out.NORMAL, 50.0, 50.0, 2.0, flow=0.0),
+        _make_stationed_pressure_node("3", "", "有压管道", in_out.NORMAL, 80.0, 80.0, 4.0, diameter=1.0, flow=1.8),
+    ]
+    split_result = WaterProfilePanel._prepare_pressure_pipe_dialog_context(
+        panel,
+        split_route_nodes,
+        settings=settings,
+    )
+
+    assert split_result["xxpipe_route_mode"] is True
+    assert len(split_result["route_import_targets"]) == 2
+    assert len(split_result["pressure_routes"]) == 2
+    assert set(split_result["route_import_targets"]) == {
+        group.route_key for group in split_result["pipe_groups"] if getattr(group, "route_key", "")
+    }
+
+
 def test_prepare_pressure_pipe_dialog_context_keeps_noncontinuous_xxqu_in_group_mode():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -1161,6 +1296,49 @@ def test_refresh_pressure_pipe_controls_treats_prepared_topology_as_ready():
 
     assert panel.btn_pressure_pipe_calc.enabled is True
     assert "请先插入渐变段" not in panel.btn_pressure_pipe_calc.tooltip
+
+
+def test_resolve_loaded_section_gate_state_treats_missing_sync_ready_as_legacy_ready():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+
+    sync_ready, legacy_loaded = WaterProfilePanel._resolve_loaded_section_gate_state(
+        {"state_text": "状态：历史项目"},
+        3,
+    )
+
+    assert sync_ready is True
+    assert legacy_loaded is True
+
+
+def test_resolve_loaded_section_gate_state_recovers_successful_loaded_project_even_if_sync_ready_false():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+
+    sync_ready, legacy_loaded = WaterProfilePanel._resolve_loaded_section_gate_state(
+        {"sync_ready": False, "state_text": "状态：断面全成功，表1+表2已同步到表3"},
+        3,
+        calculated_node_count=3,
+        result_row_count=2,
+    )
+
+    assert sync_ready is True
+    assert legacy_loaded is True
+
+
+def test_resolve_loaded_section_gate_state_keeps_explicit_false_for_stale_loaded_project():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+
+    sync_ready, legacy_loaded = WaterProfilePanel._resolve_loaded_section_gate_state(
+        {"sync_ready": False, "state_text": "状态：表1已更新，请重新执行断面批量计算"},
+        3,
+        calculated_node_count=3,
+        result_row_count=2,
+    )
+
+    assert sync_ready is False
+    assert legacy_loaded is False
 
 
 def test_collect_pending_pressure_pipe_execute_members_allows_completed_prefix_writeback():

@@ -270,13 +270,12 @@ def test_property_6_and_7_pressure_pipe_to_pressure_pipe(pair):
     **Validates: Requirements 2.4, 2.5, 4.4, 4.5**
     
     For any 两个连续的有压管道节点：
-    - 如果它们属于同一建筑物（名称相同）且管径 D 相同，系统不应在两者之间插入渐变段
-    - 如果它们属于不同建筑物（名称不同），系统应在两者之间插入渐变段，且两侧都标记 skip_loss=True
+    - 只要两侧都属于有压同类结构，系统就不应在两者之间插入渐变段
     
     验证点：
     1. 同名同径 → 不插入渐变段
-    2. 不同名 → 插入渐变段，两侧都标记 skip_loss=True
-    3. 同名不同径 → 插入渐变段，两侧都标记 skip_loss=True
+    2. 不同名 → 仍不插入渐变段
+    3. 同名不同径 → 仍不插入渐变段
     """
     outlet, inlet = pair
     
@@ -287,32 +286,15 @@ def test_property_6_and_7_pressure_pipe_to_pressure_pipe(pair):
     # 调用判断函数
     result = calculator._should_insert_open_channel(outlet, inlet)
     
-    # 判断是否同名同径
-    same_name = (outlet.name == inlet.name)
     diameter1 = outlet.section_params.get("D", 0)
     diameter2 = inlet.section_params.get("D", 0)
-    same_diameter = abs(diameter1 - diameter2) < 0.001
-    
-    if same_name and same_diameter:
-        # 验证点 1: 同名同径 → 不插入渐变段
-        assert result['need_transition_1'] == False, \
-            f"同名同径有压管道之间不应插入出口渐变段 (名称:{outlet.name}, 管径:{diameter1})"
-        assert result['need_transition_2'] == False, \
-            f"同名同径有压管道之间不应插入进口渐变段 (名称:{outlet.name}, 管径:{diameter1})"
-        assert result['need_open_channel'] == False, \
-            f"同名同径有压管道之间不应插入明渠段"
-    else:
-        # 验证点 2 & 3: 不同名或不同径 → 插入渐变段
-        assert result['need_transition_1'] == True, \
-            f"不同名或不同径有压管道之间应插入出口渐变段 (名称:{outlet.name}/{inlet.name}, 管径:{diameter1}/{diameter2})"
-        assert result['need_transition_2'] == True, \
-            f"不同名或不同径有压管道之间应插入进口渐变段 (名称:{outlet.name}/{inlet.name}, 管径:{diameter1}/{diameter2})"
-        
-        # 两侧都应标记 skip_loss=True
-        assert result['skip_loss_transition_1'] == True, \
-            f"有压管道侧渐变段应标记 skip_loss=True"
-        assert result['skip_loss_transition_2'] == True, \
-            f"有压管道侧渐变段应标记 skip_loss=True"
+
+    assert result['need_transition_1'] == False, \
+        f"有压同类结构之间不应插入出口渐变段 (名称:{outlet.name}/{inlet.name}, 管径:{diameter1}/{diameter2})"
+    assert result['need_transition_2'] == False, \
+        f"有压同类结构之间不应插入进口渐变段 (名称:{outlet.name}/{inlet.name}, 管径:{diameter1}/{diameter2})"
+    assert result['need_open_channel'] == False, \
+        f"有压同类结构之间不应插入明渠段"
 
 
 if __name__ == "__main__":

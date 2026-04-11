@@ -157,22 +157,15 @@ def test_property_9_open_channel_insertion_condition(data):
     # 计算渐变段长度之和
     total_transition_length = result['transition_length_1'] + result['transition_length_2']
     
-    # 特殊情况：同名同径有压管道不插入渐变段（Property 6）
+    # 特殊情况：有压同类结构相邻时，不插入渐变段
     is_outlet_pressure_pipe = calculator.is_pressure_pipe(outlet)
     is_inlet_pressure_pipe = calculator.is_pressure_pipe(inlet)
     
     if is_outlet_pressure_pipe and is_inlet_pressure_pipe:
-        name1 = outlet.name if outlet.name else ""
-        name2 = inlet.name if inlet.name else ""
-        diameter1 = outlet.section_params.get("D", 0) if outlet.section_params else 0
-        diameter2 = inlet.section_params.get("D", 0) if inlet.section_params else 0
-        
-        if name1 == name2 and abs(diameter1 - diameter2) < 0.001:
-            # 同名同径有压管道不插入渐变段
-            assert result['need_transition_1'] == False
-            assert result['need_transition_2'] == False
-            assert result['need_open_channel'] == False
-            return  # Skip further checks for this case
+        assert result['need_transition_1'] == False
+        assert result['need_transition_2'] == False
+        assert result['need_open_channel'] == False
+        return  # Skip further checks for this case
     
     # 验证点 1 & 2: 明渠段插入条件
     tolerance = 1e-6

@@ -166,7 +166,38 @@ class TestOpenChannelInsertion:
         # 验证有压管道侧渐变段标记 skip_loss=True
         assert result['skip_loss_transition_1'] == True, "有压管道出口侧渐变段应标记 skip_loss=True"
         assert result['skip_loss_transition_2'] == False, "隧洞进口侧渐变段应标记 skip_loss=False"
-    
+
+    def test_gap_transition_length_ignores_non_channel_neighbor_depth(self):
+        """
+        测试：相邻节点不是明渠时，渐变段估长不能误用对侧建筑物水深。
+
+        **Validates: Requirements 6.5**
+        """
+        outlet = ChannelNode()
+        outlet.structure_type = StructureType.from_string("有压管道")
+        outlet.name = "有压管道1"
+        outlet.in_out = InOutType.OUTLET
+        outlet.section_params = {"D": 1.5}
+        outlet.station_MC = 100.0
+        outlet.water_depth = 1.0
+
+        inlet = ChannelNode()
+        inlet.structure_type = StructureType.from_string("隧洞-圆形")
+        inlet.name = "隧洞1"
+        inlet.in_out = InOutType.INLET
+        inlet.section_params = {"D": 2.0}
+        inlet.station_MC = 142.0
+        inlet.water_depth = 2.0
+
+        result = self.calculator._should_insert_open_channel(outlet, inlet)
+
+        assert abs(result["transition_length_1"] - 6.0) < 0.001, \
+            f"有压管道出口渐变段应按自身/参考明渠口径估长 6.0m，实际 {result['transition_length_1']}m"
+        assert abs(result["transition_length_2"] - 10.0) < 0.001, \
+            f"隧洞进口渐变段应按自身/参考明渠口径估长 10.0m，实际 {result['transition_length_2']}m"
+        assert abs(result["available_length"] - 26.0) < 0.001, \
+            f"明渠段可用长度应为 26.0m，实际 {result['available_length']}m"
+
     def test_pressure_pipe_to_aqueduct(self):
         """
         测试：有压管道出口 → 渡槽进口
@@ -293,9 +324,7 @@ class TestOpenChannelInsertion:
     
     def test_pressure_pipe_to_pressure_pipe_different_names(self):
         """
-        测试：有压管道 → 有压管道（不同名称）
-        
-        **Validates: Requirements 6.2, 6.3, 6.6**
+        测试：有压同类结构相邻时，不再因为名称不同插渐变段。
         """
         # 创建有压管道1出口节点
         outlet = ChannelNode()
@@ -318,11 +347,9 @@ class TestOpenChannelInsertion:
         # 调用判断函数
         result = self.calculator._should_insert_open_channel(outlet, inlet)
         
-        # 不同名称的有压管道应插入渐变段，两侧都标记 skip_loss=True
-        assert result['need_transition_1'] == True, "不同名称有压管道之间应插入出口渐变段"
-        assert result['need_transition_2'] == True, "不同名称有压管道之间应插入进口渐变段"
-        assert result['skip_loss_transition_1'] == True, "有压管道出口侧渐变段应标记 skip_loss=True"
-        assert result['skip_loss_transition_2'] == True, "有压管道进口侧渐变段应标记 skip_loss=True"
+        assert result['need_transition_1'] == False, "有压同类结构之间不应插入出口渐变段"
+        assert result['need_transition_2'] == False, "有压同类结构之间不应插入进口渐变段"
+        assert result['need_open_channel'] == False, "有压同类结构之间不应插入连接段"
     
     def test_edge_case_zero_distance(self):
         """
