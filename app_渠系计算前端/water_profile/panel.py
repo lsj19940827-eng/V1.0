@@ -2406,6 +2406,43 @@ class WaterProfilePanel(QWidget):
         value = getattr(struct_type, "value", struct_type)
         return normalize_section_type_name(value)
 
+    @classmethod
+    def _should_warn_missing_structure_height(cls, node) -> bool:
+        """判断当前节点是否需要纳入“缺少结构总高”提示。"""
+        if getattr(node, "is_transition", False):
+            return False
+
+        structure_text = cls._get_node_structure_type_text(node)
+        if not structure_text:
+            return False
+        if "倒虹吸" in structure_text:
+            return False
+        if "闸" in structure_text or "分水" in structure_text:
+            return False
+        if cls._is_pressure_pipe_like_node(node):
+            return False
+
+        bottom_elevation = cls._coerce_pressure_pipe_finite_float(
+            getattr(node, "bottom_elevation", None)
+        )
+        if bottom_elevation is None or bottom_elevation <= 0:
+            return False
+
+        top_elevation = cls._coerce_pressure_pipe_finite_float(
+            getattr(node, "top_elevation", None)
+        )
+        return top_elevation is None or top_elevation <= 0
+
+    @classmethod
+    def _collect_missing_structure_height_names(cls, nodes) -> list[str]:
+        """收集真正需要结构总高但仍缺少渠顶高程的节点名称。"""
+        missing_names = []
+        for node in list(nodes or []):
+            if not cls._should_warn_missing_structure_height(node):
+                continue
+            missing_names.append(str(getattr(node, "name", "") or "未命名"))
+        return missing_names
+
     @staticmethod
     def _is_xxpipe_channel_level_text(channel_level: str | None) -> bool:
         return str(channel_level or "").strip() in XXPIPE_CHANNEL_LEVEL_OPTIONS
@@ -7484,19 +7521,9 @@ class WaterProfilePanel(QWidget):
             # 更新持久摘要面板
             self._update_summary_panel(calculated, total_len, wl_drop, summary)
 
-            # 检查缺少结构高度（渠顶高程无法计算）的节点
-            # 倒虹吸、渐变段、闸类/分水口不需要结构总高，跳过不提示
-            missing_height_names = []
-            for nd in calculated:
-                if getattr(nd, 'is_transition', False):
-                    continue
-                _st = nd.structure_type.value if nd.structure_type else ""
-                if "倒虹吸" in _st:
-                    continue
-                if "闸" in _st or "分水" in _st:
-                    continue
-                if nd.bottom_elevation and nd.bottom_elevation != 0 and (not nd.top_elevation or nd.top_elevation == 0):
-                    missing_height_names.append(nd.name or "未命名")
+            # 检查缺少结构高度（渠顶高程无法计算）的节点。
+            # 承压类节点已有独立导出与展示口径，这里只提示真正依赖结构总高的普通渠道/隧洞节点。
+            missing_height_names = self._collect_missing_structure_height_names(calculated)
 
             msg = f"共{len(calculated)}个节点，总长{total_len:.1f}m，水位落差{wl_drop:.3f}m"
             gate_backfill_notice_lines = self._build_terminal_gate_backfill_notice_lines(calculated)
