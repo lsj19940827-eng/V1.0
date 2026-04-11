@@ -1,12 +1,8 @@
 # 当前进度
 
-- 当前正在做什么：补记“蒲家湾表2纵剖线2边界漏配修复”的阶段记录，收口 mixed route 第二份 DXF 边界与下方 xxpipe 表整高边界。
-- 上次停在哪个位置：上一轮已修好罗家湾与蒲支 `2+739.785` 的导出误判，导出 lookup rows 已透传 route 上下文，但蒲家湾第二份纵剖线起点边界和末尾下方 xxpipe 表整高竖线口径还没统一。
+- 当前正在做什么：把剩余两条分支的有效改动继续收口进 `master`；本步先并入“命名尾段显示损失递推修复”，随后处理 `xx管` 夹带隧洞结构分表导出。
+- 上次停在哪个位置：`master` 已收口蒲家湾 mixed route 第二份 DXF 边界与下方 xxpipe 表整高边界，并已推送到远端；但 `codex/merge-tail-pressure-last-loss`、`codex/xxpipe-tunnel-hydraulic-mode` 两个 worktree 里的未提交改动还没正式并入主干。
 - 近期关键决定和原因：
-- 导入校验继续只负责判断非隧洞目标是否被 DXF 覆盖，不改已经验证通过的连续补导入与自动锚点链路。
-- 导出取数统一为“优先子段，子段不足两点或覆盖不到当前行 `station_mc` 时回退整线 route”，这样首段边界行不会再被整段范围误伤。
-- 隧洞节点只退出导出阶段的 `identity_mismatch / coverage` 强校验；若本身已有可用隧洞 profile / manager 数据，仍继续参与高程取数，避免把旧的隧洞导出能力一起关掉。
-- 导出 lookup rows 持续透传 `station_mc / route_key / route_display_name / node_label / is_tunnel`，让共享导出链路按当前这一行的真实上下文做判断。
-- 第二份纵剖线的起点边界改按当前节点桩号判断是否覆盖，避免 mixed route 后半段首个边界点被前一个有效中心线点误带偏。
-- 末尾/下方 xxpipe 表的首尾整高竖线改按真实可见表格边界判断，不再跟着首个有效中心线点走，避免竖线穿到建筑物名称上边线。
-- 本轮验证已完成：`tests/test_pressure_pipe_export_longitudinal_nodes_unit.py`、`tests/test_xxpipe_longitudinal_export_unit.py`、`tests/test_water_profile_combined_dxf_unit.py` 合计 `91` 通过、`0` 失败；GUI 全量文件与真实工程脚本这次还没重跑。
+- 命名尾段出口行在旧工程恢复和静默重算时，优先把 `_pressure_pipe_display_loss` 当作“本行正式承压损失”；原因是它代表列38里真正的本段值，不能只显示不参与递推。
+- 总损失重建、累计损失和水位递推现在统一共用同一条本行损失口径；原因是要彻底消除“列38有值、列39是 `-`、累计值停在上一行”的错位。
+- 已确认 `codex/merge-tail-pressure-last-loss` 相关测试 `28` 通过、`0` 失败；`codex/xxpipe-tunnel-hydraulic-mode` 相关测试 `139` 通过、`0` 失败，后续按“先提交分支、再合入主干”的方式收口。
