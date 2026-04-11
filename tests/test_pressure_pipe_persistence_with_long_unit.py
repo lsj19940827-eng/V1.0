@@ -537,3 +537,199 @@ def test_save_pressure_routes_replaces_stale_route_snapshots_in_active_range():
     assert "1::大石包::rows84-85" not in raw["pipes"]
     assert raw["segments"]["flow1-row73"]["route_key"] == "flow1-route1"
     assert raw["segments"]["flow1-row74"]["route_key"] == "flow1-route1"
+
+
+def test_save_pressure_routes_preserves_existing_profile_segments_and_tunnel_fallback_fields():
+    manager = PressurePipeManager()
+    profile_segments = [
+        {
+            "segment_identity": "flow9-row3",
+            "structure_type": "隧洞-圆形",
+            "source_kind": "generated_tunnel",
+            "start_mc": 0.0,
+            "end_mc": 60.0,
+            "longitudinal_nodes": [
+                {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+                {"chainage": 60.0, "elevation": 418.8, "turn_type": "NONE"},
+            ],
+            "warnings": [],
+        }
+    ]
+    manager.from_dict(
+        {
+            "version": "1.0",
+            "last_modified": "",
+            "pipes": {
+                "flow9-row3": {
+                    "name": "9#隧洞",
+                    "route_key": "flow9-route1",
+                    "route_display_name": "9号整线",
+                    "segment_geometry_source": "generated_tunnel",
+                    "tunnel_invert_inlet": 416.5,
+                    "tunnel_slope_i": 0.0015,
+                    "tunnel_invert_outlet_check": 416.41,
+                    "tunnel_roughness_n": 0.014,
+                    "tunnel_profile_mode": "水力核算模式",
+                    "tunnel_section_type": "圆形",
+                    "tunnel_section_params": {"D": 2.4},
+                }
+            },
+            "routes": {
+                "flow9-route1": {
+                    "display_name": "9号整线",
+                    "start_row_index": 10,
+                    "end_row_index": 10,
+                    "longitudinal_nodes": [],
+                    "profile_segments": profile_segments,
+                }
+            },
+            "segments": {
+                "flow9-row3": {
+                    "identity": "flow9-row3",
+                    "route_key": "flow9-route1",
+                    "route_display_name": "9号整线",
+                    "segment_geometry_source": "generated_tunnel",
+                    "tunnel_invert_inlet": 416.5,
+                    "tunnel_slope_i": 0.0015,
+                    "tunnel_invert_outlet_check": 416.41,
+                    "tunnel_roughness_n": 0.014,
+                    "tunnel_profile_mode": "水力核算模式",
+                    "tunnel_section_type": "圆形",
+                    "tunnel_section_params": {"D": 2.4},
+                }
+            },
+        }
+    )
+
+    manager.save_pressure_routes(
+        [
+            {
+                "route_key": "flow9-route1",
+                "route_display_name": "9号整线",
+                "channel_level": "干渠",
+                "start_row_index": 10,
+                "end_row_index": 10,
+                "start_mc": 0.0,
+                "end_mc": 60.0,
+                "entered_pressurized_at_row": 10,
+                "profile_state": "ok",
+                "segment_identities": ["flow9-row3"],
+            }
+        ],
+        route_profiles={"flow9-route1": []},
+        segment_results=[
+            {
+                "identity": "flow9-row3",
+                "route_key": "flow9-route1",
+                "route_display_name": "9号整线",
+                "base_name": "9#隧洞",
+                "member_display_name": "9#隧洞",
+                "dxf_display_name": "9#隧洞",
+                "structure_type": "隧洞",
+                "member_role": "tunnel_segment",
+                "start_row_index": 10,
+                "end_row_index": 10,
+                "target_row_index": 10,
+                "upstream_row_index": 9,
+                "applied_to_row_index": 10,
+                "start_mc": 0.0,
+                "end_mc": 60.0,
+                "status": "success",
+                "friction_loss": 0.12,
+                "bend_loss": 0.0,
+                "local_loss": 0.01,
+                "total_loss": 0.13,
+                "computed_from_profile_source": "route_profile",
+                "longitudinal_nodes": [],
+                "profile_state": "ok",
+            }
+        ],
+    )
+
+    raw = manager.to_dict()
+    assert raw["routes"]["flow9-route1"]["profile_segments"] == profile_segments
+    assert raw["segments"]["flow9-row3"]["tunnel_slope_i"] == 0.0015
+    assert raw["segments"]["flow9-row3"]["tunnel_section_type"] == "圆形"
+    assert raw["pipes"]["flow9-row3"]["tunnel_roughness_n"] == 0.014
+    assert raw["pipes"]["flow9-row3"]["tunnel_section_params"] == {"D": 2.4}
+
+    loaded = manager.get_pipe_config("flow9-row3")
+    assert loaded is not None
+    assert loaded.profile_segments == profile_segments
+    assert loaded.tunnel_slope_i == 0.0015
+    assert loaded.tunnel_section_type == "圆形"
+    assert loaded.tunnel_section_params == {"D": 2.4}
+
+
+def test_get_pipe_config_prefers_pipe_bucket_and_falls_back_to_route_and_segment():
+    manager = PressurePipeManager()
+    pipe_longitudinal_nodes = [
+        {"chainage": 5.0, "elevation": 430.0, "turn_type": "NONE"},
+        {"chainage": 35.0, "elevation": 428.0, "turn_type": "NONE"},
+    ]
+    route_profile_segments = [
+        {
+            "segment_identity": "flow8-row2",
+            "structure_type": "隧洞-圆形",
+            "source_kind": "generated_tunnel",
+            "start_mc": 5.0,
+            "end_mc": 35.0,
+            "longitudinal_nodes": [
+                {"chainage": 5.0, "elevation": 429.0, "turn_type": "NONE"},
+                {"chainage": 35.0, "elevation": 427.6, "turn_type": "NONE"},
+            ],
+            "warnings": [],
+        }
+    ]
+    manager.from_dict(
+        {
+            "version": "1.0",
+            "last_modified": "",
+            "pipes": {
+                "flow8-row2": {
+                    "name": "8#隧洞",
+                    "route_key": "flow8-route1",
+                    "route_display_name": "",
+                    "longitudinal_nodes": pipe_longitudinal_nodes,
+                    "profile_segments": [],
+                    "tunnel_slope_i": 0.0022,
+                    "tunnel_section_type": "",
+                    "tunnel_profile_mode": "",
+                    "tunnel_section_params": {},
+                }
+            },
+            "routes": {
+                "flow8-route1": {
+                    "display_name": "8号整线",
+                    "longitudinal_nodes": [],
+                    "profile_segments": route_profile_segments,
+                }
+            },
+            "segments": {
+                "flow8-row2": {
+                    "identity": "flow8-row2",
+                    "route_key": "flow8-route1",
+                    "route_display_name": "8号整线",
+                    "longitudinal_nodes": [],
+                    "segment_geometry_source": "generated_tunnel",
+                    "tunnel_slope_i": 0.0018,
+                    "tunnel_roughness_n": 0.013,
+                    "tunnel_profile_mode": "水力核算模式",
+                    "tunnel_section_type": "圆形",
+                    "tunnel_section_params": {"D": 2.1},
+                }
+            },
+        }
+    )
+
+    loaded = manager.get_pipe_config("flow8-row2")
+    assert loaded is not None
+    assert loaded.route_display_name == "8号整线"
+    assert loaded.longitudinal_nodes == pipe_longitudinal_nodes
+    assert loaded.profile_segments == route_profile_segments
+    assert loaded.tunnel_slope_i == 0.0022
+    assert loaded.tunnel_roughness_n == 0.013
+    assert loaded.tunnel_profile_mode == "水力核算模式"
+    assert loaded.tunnel_section_type == "圆形"
+    assert loaded.tunnel_section_params == {"D": 2.1}
+    assert loaded.segment_geometry_source == "generated_tunnel"

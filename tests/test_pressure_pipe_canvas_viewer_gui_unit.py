@@ -461,6 +461,16 @@ def _make_mixed_route_groups():
         rows=[SimpleNamespace(section_params={"D": 1.0}, turn_radius=0.0, flow_section="2") for _ in range(2)],
         row_indices=[2, 3],
     )
+    tunnel_rows = [
+        SimpleNamespace(
+            section_params={"D": 2.4},
+            turn_radius=0.0,
+            flow_section="2",
+            roughness=0.014,
+            slope_i=0.01,
+        )
+        for _ in range(2)
+    ]
     tunnel_group = SimpleNamespace(
         name="穿山段",
         display_name="穿山段隧洞",
@@ -481,8 +491,9 @@ def _make_mixed_route_groups():
         diameter=2.4,
         material_key="隧洞",
         ip_points=[route_points[0], route_points[1]],
-        rows=[SimpleNamespace(section_params={"D": 2.4}, turn_radius=0.0, flow_section="2") for _ in range(2)],
+        rows=tunnel_rows,
         row_indices=[0, 1],
+        roughness=0.014,
         tunnel_invert_inlet=420.0,
         tunnel_slope_i=0.01,
         tunnel_invert_outlet_check=419.8,
@@ -601,6 +612,10 @@ def test_pressure_pipe_config_dialog_keeps_route_card_and_tunnel_segment_cards_f
 def test_pressure_pipe_config_dialog_accept_persists_tunnel_parameters_for_mixed_xxpipe():
     _get_qapp()
     route_key, groups, manager = _make_mixed_route_groups()
+    groups[0].tunnel_slope_i = None
+    groups[0].tunnel_section_type = ""
+    groups[0].tunnel_section_params = {}
+    groups[0].tunnel_roughness_n = None
     dialog = PressurePipeConfigDialog(
         pipe_groups=groups,
         manager=manager,
@@ -611,13 +626,11 @@ def test_pressure_pipe_config_dialog_accept_persists_tunnel_parameters_for_mixed
     _flush_events(6)
 
     widgets = dialog._card_widgets["flow2-mixed-tunnel"]
-    widgets["tunnel_section_type_combo"].setCurrentText("圆拱直墙型隧洞")
-    _flush_events(2)
-    widgets["tunnel_invert_edit"].setText("421.5")
-    widgets["tunnel_slope_edit"].setText("0.012")
-    widgets["tunnel_outlet_check_edit"].setText("420.3")
-    widgets["tunnel_param_a_edit"].setText("3.2")
-    widgets["tunnel_param_b_edit"].setText("4.5")
+    assert "tunnel_invert_edit" not in widgets
+    assert "tunnel_outlet_check_edit" not in widgets
+    assert "tunnel_section_type_combo" not in widgets
+    assert "tunnel_roughness_edit" not in widgets
+    assert "tunnel_slope_edit" not in widgets
 
     dialog.accept()
     _flush_events(4)
@@ -625,20 +638,101 @@ def test_pressure_pipe_config_dialog_accept_persists_tunnel_parameters_for_mixed
     tunnel_group = groups[0]
     assert dialog.result() == QDialog.Accepted
     assert tunnel_group.segment_geometry_source == "generated_tunnel"
-    assert tunnel_group.tunnel_invert_inlet == pytest.approx(421.5)
-    assert tunnel_group.tunnel_slope_i == pytest.approx(0.012)
-    assert tunnel_group.tunnel_invert_outlet_check == pytest.approx(420.3)
-    assert tunnel_group.tunnel_section_type == "圆拱直墙型隧洞"
-    assert tunnel_group.tunnel_section_params == {"B": 3.2, "H": 4.5}
+    assert tunnel_group.tunnel_slope_i == pytest.approx(0.01)
+    assert tunnel_group.tunnel_roughness_n == pytest.approx(0.014)
+    assert tunnel_group.tunnel_profile_mode == "hydraulic_display"
+    assert tunnel_group.tunnel_section_type == "圆形隧洞"
+    assert tunnel_group.tunnel_section_params == {"D": 2.4}
 
     saved = manager.get_pipe_config("flow2-mixed-tunnel")
     assert saved is not None
     assert saved.segment_geometry_source == "generated_tunnel"
-    assert saved.tunnel_invert_inlet == pytest.approx(421.5)
-    assert saved.tunnel_slope_i == pytest.approx(0.012)
-    assert saved.tunnel_invert_outlet_check == pytest.approx(420.3)
+    assert saved.tunnel_slope_i == pytest.approx(0.01)
+    assert saved.tunnel_roughness_n == pytest.approx(0.014)
+    assert saved.tunnel_profile_mode == "hydraulic_display"
+    assert saved.tunnel_section_type == "圆形隧洞"
+    assert saved.tunnel_section_params == {"D": 2.4}
+
+    label_texts = [label.text() for label in dialog.findChildren(QLabel)]
+    assert any("水力核算模式" in text for text in label_texts)
+    assert any("回表1修改" in text for text in label_texts)
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_shows_readonly_tunnel_summary_for_mixed_xxpipe():
+    _get_qapp()
+    route_key, groups, manager = _make_mixed_route_groups()
+    groups[0].tunnel_slope_i = None
+    groups[0].tunnel_section_type = ""
+    groups[0].tunnel_section_params = {}
+    groups[0].tunnel_roughness_n = None
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+    )
+    dialog._longitudinal_data[route_key] = _make_longitudinal_nodes()
+    dialog.show()
+    _flush_events(6)
+
+    widgets = dialog._card_widgets["flow2-mixed-tunnel"]
+    assert "tunnel_section_type_combo" not in widgets
+    assert "tunnel_roughness_edit" not in widgets
+    assert "tunnel_slope_edit" not in widgets
+    assert widgets["tunnel_summary_section_type_value"].text() == "圆形隧洞"
+    assert "D = 2.400 m" in widgets["tunnel_summary_size_value"].text()
+    assert widgets["tunnel_summary_roughness_value"].text() == "0.014"
+    assert widgets["tunnel_summary_slope_value"].text() == "0.01"
+    assert "回表1修改" in widgets["tunnel_summary_hint_label"].text()
+
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_accept_allows_round_arch_tunnel_without_h():
+    _get_qapp()
+    route_key, groups, manager = _make_mixed_route_groups()
+    tunnel_group = groups[0]
+    tunnel_group.structure_type = "隧洞-圆拱直墙型"
+    tunnel_group.roughness = 0.017
+    tunnel_group.tunnel_slope_i = None
+    tunnel_group.tunnel_section_type = ""
+    tunnel_group.tunnel_section_params = {}
+    tunnel_group.tunnel_roughness_n = None
+    tunnel_group.rows = [
+        SimpleNamespace(
+            section_params={"B": 3.2},
+            turn_radius=0.0,
+            flow_section="2",
+            roughness=0.017,
+            slope_i=0.012,
+        )
+        for _ in range(2)
+    ]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        xxpipe_route_mode=True,
+    )
+    dialog._longitudinal_data[route_key] = _make_longitudinal_nodes()
+    dialog.show()
+    _flush_events(6)
+
+    dialog.accept()
+    _flush_events(4)
+
+    assert dialog.result() == QDialog.Accepted
+    assert tunnel_group.tunnel_section_type == "圆拱直墙型隧洞"
+    assert tunnel_group.tunnel_section_params == {"B": 3.2}
+    assert tunnel_group.tunnel_slope_i == pytest.approx(0.012)
+    assert tunnel_group.tunnel_roughness_n == pytest.approx(0.017)
+
+    saved = manager.get_pipe_config("flow2-mixed-tunnel")
+    assert saved is not None
     assert saved.tunnel_section_type == "圆拱直墙型隧洞"
-    assert saved.tunnel_section_params == {"B": 3.2, "H": 4.5}
+    assert saved.tunnel_section_params == {"B": 3.2}
 
     dialog.close()
     dialog.deleteLater()
@@ -647,6 +741,11 @@ def test_pressure_pipe_config_dialog_accept_persists_tunnel_parameters_for_mixed
 def test_pressure_pipe_config_dialog_rejects_missing_tunnel_parameters_before_accept(monkeypatch):
     _get_qapp()
     route_key, groups, manager = _make_mixed_route_groups()
+    groups[0].tunnel_slope_i = None
+    groups[0].tunnel_roughness_n = None
+    groups[0].roughness = None
+    for row in groups[0].rows:
+        row.roughness = None
     dialog = PressurePipeConfigDialog(
         pipe_groups=groups,
         manager=manager,
@@ -656,8 +755,6 @@ def test_pressure_pipe_config_dialog_rejects_missing_tunnel_parameters_before_ac
     dialog.show()
     _flush_events(6)
 
-    widgets = dialog._card_widgets["flow2-mixed-tunnel"]
-    widgets["tunnel_invert_edit"].setText("")
     errors = []
     monkeypatch.setattr(dialog_mod, "fluent_error", lambda *_args: errors.append(_args[2]))
 
@@ -665,7 +762,8 @@ def test_pressure_pipe_config_dialog_rejects_missing_tunnel_parameters_before_ac
     _flush_events(2)
 
     assert errors
-    assert "进口底高" in errors[0]
+    assert "糙率" in errors[0]
+    assert "回表1" in errors[0]
     assert dialog.result() == 0
 
     dialog.close()

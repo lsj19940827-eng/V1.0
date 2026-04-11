@@ -760,6 +760,73 @@ def test_resolve_tail_pressure_split_context_keeps_post_pressure_tunnel_in_lower
     assert [node.station_MC for node in captured["tail_nodes"]] == pytest.approx([80.0, 120.0, 160.0])
 
 
+def test_plan_xxpipe_tunnel_split_separates_interleaved_tunnel_and_pressure_nodes():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="隧洞-圆拱直墙型", name="洞段1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=40.0, structure="隧洞-圆拱直墙型", name="洞段1", bottom_elevation=409.4),
+        _make_node(ip_no=3, mc=80.0, structure="有压管道", name="压力段1", in_out="进", bottom_elevation=408.9),
+        _make_node(ip_no=4, mc=120.0, structure="有压管道", name="压力段1", in_out="出", bottom_elevation=408.1),
+        _make_node(ip_no=5, mc=160.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=407.7),
+        _make_node(ip_no=6, mc=220.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=406.8),
+        _make_node(ip_no=7, mc=260.0, structure="顶管", name="压力段2", in_out="进", bottom_elevation=406.2),
+        _make_node(ip_no=8, mc=300.0, structure="顶管", name="压力段2", in_out="出", bottom_elevation=405.5),
+    ]
+
+    plan = cad_tools.plan_xxpipe_tunnel_split(nodes)
+
+    assert plan is not None
+    assert [node.station_MC for node in plan["standard_nodes"]] == pytest.approx([0.0, 40.0, 160.0, 220.0])
+    assert [node.station_MC for node in plan["xxpipe_nodes"]] == pytest.approx([80.0, 120.0, 260.0, 300.0])
+    assert plan["standard_station_spans"] == [
+        {"source_start_mc": 0.0, "source_end_mc": 40.0, "plot_start_mc": 0.0, "plot_end_mc": 40.0},
+        {"source_start_mc": 160.0, "source_end_mc": 220.0, "plot_start_mc": 40.0, "plot_end_mc": 100.0},
+    ]
+    assert plan["xxpipe_station_spans"] == [
+        {"source_start_mc": 80.0, "source_end_mc": 120.0, "plot_start_mc": 0.0, "plot_end_mc": 40.0},
+        {"source_start_mc": 260.0, "source_end_mc": 300.0, "plot_start_mc": 40.0, "plot_end_mc": 80.0},
+    ]
+
+
+def test_resolve_profile_plot_station_value_keeps_zero_plot_start_in_split_spans():
+    station_spans = [
+        {"source_start_mc": 80.0, "source_end_mc": 120.0, "plot_start_mc": 0.0, "plot_end_mc": 40.0},
+        {"source_start_mc": 260.0, "source_end_mc": 300.0, "plot_start_mc": 40.0, "plot_end_mc": 80.0},
+    ]
+
+    assert cad_tools._resolve_profile_plot_station_value(80.0, station_spans=station_spans) == pytest.approx(0.0)
+    assert cad_tools._resolve_profile_plot_station_value(120.0, station_spans=station_spans) == pytest.approx(40.0)
+    assert cad_tools._resolve_profile_plot_station_value(260.0, station_spans=station_spans) == pytest.approx(40.0)
+    assert cad_tools._resolve_profile_plot_station_value(300.0, station_spans=station_spans) == pytest.approx(80.0)
+
+
+def test_resolve_xxpipe_tunnel_split_context_uses_full_lookup_nodes_for_pressure_table(monkeypatch):
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="隧洞-圆拱直墙型", name="洞段1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=40.0, structure="隧洞-圆拱直墙型", name="洞段1", bottom_elevation=409.4),
+        _make_node(ip_no=3, mc=80.0, structure="有压管道", name="压力段1", in_out="进", bottom_elevation=408.9),
+        _make_node(ip_no=4, mc=120.0, structure="有压管道", name="压力段1", in_out="出", bottom_elevation=408.1),
+        _make_node(ip_no=5, mc=160.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=407.7),
+        _make_node(ip_no=6, mc=220.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=406.8),
+    ]
+    captured = {}
+
+    def _fake_build_profile_data(panel, part_nodes, station_prefix="", **kwargs):
+        _ = (panel, station_prefix)
+        captured["xxpipe_nodes"] = list(part_nodes)
+        captured["lookup_nodes"] = list(kwargs.get("lookup_nodes") or [])
+        return {"profile_text_nodes": list(part_nodes)}
+
+    monkeypatch.setattr(cad_tools, "_build_panel_xxpipe_profile_data", _fake_build_profile_data)
+
+    context = cad_tools._resolve_xxpipe_tunnel_split_context(_Panel(""), nodes, station_prefix="")
+
+    assert context is not None
+    assert [node.station_MC for node in context["standard_nodes"]] == pytest.approx([0.0, 40.0, 160.0, 220.0])
+    assert [node.station_MC for node in context["xxpipe_nodes"]] == pytest.approx([80.0, 120.0])
+    assert [node.station_MC for node in captured["xxpipe_nodes"]] == pytest.approx([80.0, 120.0])
+    assert [node.station_MC for node in captured["lookup_nodes"]] == pytest.approx([0.0, 40.0, 80.0, 120.0, 160.0, 220.0])
+
+
 def test_plan_tail_pressure_split_uses_full_nodes_and_keeps_tunnel_side_correct():
     nodes = [
         _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="明渠1", bottom_elevation=410.0),
@@ -1417,38 +1484,38 @@ def test_format_xxpipe_profile_section_text_supports_arch_and_horseshoe_tunnel_l
     arch_node = _make_node(
         ip_no=1,
         mc=0.0,
-        structure="隧洞-圆形",
+        structure="隧洞-圆拱直墙型",
         material="隧洞",
         diameter=0.0,
     )
-    arch_node.section_params = {}
+    arch_node.section_params = {"B": 3.6}
     horseshoe_node = _make_node(
         ip_no=1,
         mc=0.0,
-        structure="隧洞-圆形",
+        structure="隧洞-马蹄形Ⅰ型",
         material="隧洞",
         diameter=0.0,
     )
-    horseshoe_node.section_params = {}
+    horseshoe_node.section_params = {"R": 1.8}
 
     arch_text = cad_tools._format_xxpipe_profile_section_text(
         arch_node,
-        "隧洞-圆形",
+        "隧洞-圆拱直墙型",
         {
-            "tunnel_section_type": "圆拱直墙型隧洞",
+            "tunnel_section_type": "圆形隧洞",
             "tunnel_section_params": {"B": 3.2, "H": 4.5},
         },
     )
     horseshoe_text = cad_tools._format_xxpipe_profile_section_text(
         horseshoe_node,
-        "隧洞-圆形",
+        "隧洞-马蹄形Ⅰ型",
         {
-            "tunnel_section_type": "马蹄形Ⅰ型隧洞",
-            "tunnel_section_params": {"R": 1.8},
+            "tunnel_section_type": "圆形隧洞",
+            "tunnel_section_params": {"R": 1.2},
         },
     )
 
-    assert arch_text == "圆拱直墙型隧洞 B/H=3.2/4.5m"
+    assert arch_text == "圆拱直墙型隧洞 B=3.6m"
     assert horseshoe_text == "马蹄形Ⅰ型隧洞 r=1.8m"
 
 
@@ -2596,6 +2663,185 @@ def test_export_longitudinal_profile_dxf_prefers_tail_split_for_xxqu_mixed_tail(
     assert captured["mode"] == "standard"
     assert captured["tail_split_called"] is True
     assert captured["single_profile_called"] is False
+
+
+def test_export_longitudinal_profile_dxf_prefers_xxpipe_tunnel_split_helper_for_mixed_route(local_tmp_path, monkeypatch):
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="隧洞-圆拱直墙型", name="洞段1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=40.0, structure="隧洞-圆拱直墙型", name="洞段1", bottom_elevation=409.4),
+        _make_node(ip_no=3, mc=80.0, structure="有压管道", name="压力段1", in_out="进", bottom_elevation=408.9),
+        _make_node(ip_no=4, mc=120.0, structure="有压管道", name="压力段1", in_out="出", bottom_elevation=408.1),
+        _make_node(ip_no=5, mc=160.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=407.7),
+        _make_node(ip_no=6, mc=220.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=406.8),
+    ]
+    out_file = local_tmp_path / "xxpipe_tunnel_split_profile.dxf"
+    docs = {}
+    captured = {"single_profile_called": False, "tail_split_called": False}
+
+    class _Dialog:
+        def __init__(self, *_args, **kwargs):
+            captured["mode"] = kwargs.get("mode")
+            self.result = {}
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    class _FakeDoc:
+        def __init__(self):
+            self.saved_path = None
+            self._msp = object()
+
+        def modelspace(self):
+            return self._msp
+
+        def saveas(self, path):
+            self.saved_path = path
+
+    def _fake_new(_version):
+        doc = _FakeDoc()
+        docs["doc"] = doc
+        return doc
+
+    panel = SimpleNamespace(
+        calculated_nodes=list(nodes),
+        _text_export_settings={},
+        channel_name_edit=SimpleNamespace(text=lambda: "赛金"),
+        channel_level_combo=SimpleNamespace(currentText=lambda: "支渠"),
+    )
+    panel.window = lambda: None
+    panel._build_settings = lambda: _ProjSettings("")
+
+    monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(new=_fake_new))
+    monkeypatch.setattr(cad_tools, "MODELS_AVAILABLE", True)
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _Dialog)
+    monkeypatch.setattr(cad_tools, "_setup_profile_dxf_document", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_ensure_profile_layers", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        cad_tools.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_a, **_k: (str(out_file), "DXF")),
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_resolve_xxpipe_tunnel_split_context",
+        lambda *_a, **_k: {
+            "standard_nodes": nodes[:2] + nodes[4:],
+            "standard_valid_nodes": nodes[:2] + nodes[4:],
+            "standard_station_spans": [
+                {"source_start_mc": 0.0, "source_end_mc": 40.0, "plot_start_mc": 0.0, "plot_end_mc": 40.0},
+                {"source_start_mc": 160.0, "source_end_mc": 220.0, "plot_start_mc": 40.0, "plot_end_mc": 100.0},
+            ],
+            "xxpipe_nodes": nodes[2:4],
+            "xxpipe_station_spans": [
+                {"source_start_mc": 80.0, "source_end_mc": 120.0, "plot_start_mc": 0.0, "plot_end_mc": 40.0},
+            ],
+            "xxpipe_profile_data": {"profile_text_nodes": nodes[2:4]},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_draw_xxpipe_tunnel_split_profile_on_msp",
+        lambda *_a, **_k: captured.update({"xxpipe_tunnel_split_called": True}) or (240.0, 180.0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_resolve_tail_pressure_split_context",
+        lambda *_a, **_k: captured.update({"tail_split_called": True}) or None,
+        raising=False,
+    )
+
+    def _unexpected_draw_profile(*_a, **_k):
+        captured["single_profile_called"] = True
+        return 240.0, 120.0
+
+    monkeypatch.setattr(cad_tools, "_draw_profile_on_msp", _unexpected_draw_profile)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+
+    cad_tools.export_longitudinal_profile_dxf(panel)
+
+    assert docs["doc"].saved_path == str(out_file)
+    assert captured["mode"] == "standard"
+    assert captured["xxpipe_tunnel_split_called"] is True
+    assert captured["tail_split_called"] is False
+    assert captured["single_profile_called"] is False
+
+
+def test_export_longitudinal_profile_txt_prefers_xxpipe_tunnel_split_helper_for_mixed_route(local_tmp_path, monkeypatch):
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="隧洞-圆拱直墙型", name="洞段1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=40.0, structure="隧洞-圆拱直墙型", name="洞段1", bottom_elevation=409.4),
+        _make_node(ip_no=3, mc=80.0, structure="有压管道", name="压力段1", in_out="进", bottom_elevation=408.9),
+        _make_node(ip_no=4, mc=120.0, structure="有压管道", name="压力段1", in_out="出", bottom_elevation=408.1),
+        _make_node(ip_no=5, mc=160.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=407.7),
+        _make_node(ip_no=6, mc=220.0, structure="隧洞-圆形", name="洞段2", bottom_elevation=406.8),
+    ]
+    out_file = local_tmp_path / "xxpipe_tunnel_split_profile.txt"
+    captured = {"single_txt_called": False}
+
+    class _Dialog:
+        def __init__(self, *_args, **kwargs):
+            captured["mode"] = kwargs.get("mode")
+            self.result = {}
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    panel = SimpleNamespace(
+        calculated_nodes=list(nodes),
+        _text_export_settings={},
+        channel_name_edit=SimpleNamespace(text=lambda: "赛金"),
+        channel_level_combo=SimpleNamespace(currentText=lambda: "支渠"),
+    )
+    panel.window = lambda: None
+    panel._build_settings = lambda: _ProjSettings("")
+
+    monkeypatch.setattr(cad_tools, "MODELS_AVAILABLE", True)
+    monkeypatch.setattr(cad_tools, "_is_panel_xxpipe_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _Dialog)
+    monkeypatch.setattr(
+        cad_tools.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_a, **_k: (str(out_file), "TXT")),
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_resolve_xxpipe_tunnel_split_context",
+        lambda *_a, **_k: {
+            "standard_nodes": nodes[:2] + nodes[4:],
+            "standard_valid_nodes": nodes[:2] + nodes[4:],
+            "standard_station_spans": [
+                {"source_start_mc": 0.0, "source_end_mc": 40.0, "plot_start_mc": 0.0, "plot_end_mc": 40.0},
+                {"source_start_mc": 160.0, "source_end_mc": 220.0, "plot_start_mc": 40.0, "plot_end_mc": 100.0},
+            ],
+            "xxpipe_nodes": nodes[2:4],
+            "xxpipe_station_spans": [
+                {"source_start_mc": 80.0, "source_end_mc": 120.0, "plot_start_mc": 0.0, "plot_end_mc": 40.0},
+            ],
+            "xxpipe_profile_data": {"profile_text_nodes": nodes[2:4]},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_export_xxpipe_tunnel_split_txt_to_path",
+        lambda *_a, **_k: captured.update({"xxpipe_tunnel_split_txt_called": True}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cad_tools,
+        "_export_longitudinal_txt_to_path",
+        lambda *_a, **_k: captured.update({"single_txt_called": True}),
+    )
+
+    cad_tools.export_longitudinal_profile_dxf(panel)
+
+    assert captured["mode"] == "standard"
+    assert captured["xxpipe_tunnel_split_txt_called"] is True
+    assert captured["single_txt_called"] is False
 
 
 def test_export_longitudinal_profile_dxf_keeps_xxpipe_branch_without_tail_split_detection(local_tmp_path, monkeypatch):

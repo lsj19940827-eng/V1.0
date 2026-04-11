@@ -1075,10 +1075,11 @@ class PressurePipeConfigDialog(QDialog):
     }
     _TUNNEL_PARAM_SPECS = {
         "圆形隧洞": (("D", "洞径 D(m)"),),
-        "圆拱直墙型隧洞": (("B", "底宽 B(m)"), ("H", "净高 H(m)")),
+        "圆拱直墙型隧洞": (("B", "底宽 B(m)"),),
         "马蹄形Ⅰ型隧洞": (("R", "内半径 r(m)"),),
         "马蹄形Ⅱ型隧洞": (("R", "内半径 r(m)"),),
     }
+    _TUNNEL_PROFILE_MODE_HYDRAULIC = "hydraulic_display"
 
     def __init__(
         self,
@@ -1119,6 +1120,7 @@ class PressurePipeConfigDialog(QDialog):
         self._route_widgets = {}
         self._radius_configs: Dict[str, Dict[str, Any]] = {}
         self._d_override_payload: Dict[str, float] = {}
+        self._tunnel_payload: Dict[str, Dict[str, Any]] = {}
         self._last_apply_summary: Dict[str, Any] = {}
         self._syncing_radius = False
         self._last_turn_n = 3.0
@@ -1588,9 +1590,9 @@ class PressurePipeConfigDialog(QDialog):
         return value
 
     @classmethod
-    def _normalize_tunnel_section_type(cls, section_type: str, structure_type: str = "") -> str:
-        """把隧洞断面类型统一成界面选项。"""
-        for raw_text in (section_type, structure_type):
+    def _detect_tunnel_section_type(cls, *candidate_texts) -> str:
+        """识别当前分组对应的隧洞断面类型。"""
+        for raw_text in candidate_texts:
             text = str(raw_text or "").strip()
             if not text:
                 continue
@@ -1605,6 +1607,14 @@ class PressurePipeConfigDialog(QDialog):
                 return "马蹄形Ⅰ型隧洞"
             if "马蹄形Ⅱ" in text or "马蹄形II" in text:
                 return "马蹄形Ⅱ型隧洞"
+        return ""
+
+    @classmethod
+    def _normalize_tunnel_section_type(cls, section_type: str, structure_type: str = "") -> str:
+        """把隧洞断面类型统一成界面选项。"""
+        detected = cls._detect_tunnel_section_type(section_type, structure_type)
+        if detected:
+            return detected
         return "圆形隧洞"
 
     @classmethod
@@ -1647,12 +1657,12 @@ class PressurePipeConfigDialog(QDialog):
         return {}
 
     @classmethod
-    def _resolve_tunnel_section_params(cls, group, config=None) -> Dict[str, float]:
-        """汇总隧洞断面参数，优先已存配置，再回退到节点。"""
+    def _resolve_tunnel_section_params(cls, group, config=None, section_type: str = "") -> Dict[str, float]:
+        """汇总隧洞断面参数，优先当前表1/节点，再回退到旧缓存。"""
         sources = [
+            cls._extract_tunnel_section_params_from_rows(group),
             getattr(group, "tunnel_section_params", None),
             getattr(config, "tunnel_section_params", None) if config is not None else None,
-            cls._extract_tunnel_section_params_from_rows(group),
         ]
         resolved: Dict[str, float] = {}
         for params in sources:
@@ -1671,11 +1681,22 @@ class PressurePipeConfigDialog(QDialog):
             )
             if r_circle > 0:
                 resolved["R"] = float(r_circle)
+        normalized_section_type = cls._detect_tunnel_section_type(section_type)
+        if normalized_section_type:
+            allowed_keys = [
+                param_key
+                for param_key, _label_text in cls._TUNNEL_PARAM_SPECS.get(normalized_section_type, ())
+            ]
+            resolved = {
+                key: float(resolved[key])
+                for key in allowed_keys
+                if cls._safe_float(resolved.get(key), 0.0) > 0
+            }
         return resolved
 
     @classmethod
     def _sync_group_tunnel_defaults(cls, group, config=None):
-        """把隧洞参数从既有数据补到分组对象，供本轮计算和导出使用。"""
+        """按表1优先、旧缓存兜底的顺序补齐隧洞参数。"""
         if not cls._group_is_tunnel_segment(group):
             return
 
@@ -1683,43 +1704,70 @@ class PressurePipeConfigDialog(QDialog):
         start_node = (getattr(group, "rows", []) or [None])[0]
         end_node = (getattr(group, "rows", []) or [None])[-1]
 
-        if not str(getattr(group, "segment_geometry_source", "") or "").strip():
-            setattr(group, "segment_geometry_source", "generated_tunnel")
+        segment_source = str(getattr(group, "segment_geometry_source", "") or "").strip()
+        if not segment_source:
+            segment_source = "generated_tunnel"
+        setattr(group, "segment_geometry_source", segment_source)
 
-        if getattr(group, "tunnel_invert_inlet", None) is None:
-            config_value = getattr(config, "tunnel_invert_inlet", None) if config is not None else None
-            if config_value is not None:
-                setattr(group, "tunnel_invert_inlet", config_value)
-            else:
-                inlet_value = cls._safe_float(getattr(start_node, "bottom_elevation", None), 0.0)
-                if inlet_value > 0:
-                    setattr(group, "tunnel_invert_inlet", inlet_value)
+        profile_mode = str(getattr(group, "tunnel_profile_mode", "") or "").strip()
+        if not profile_mode:
+            profile_mode = str(getattr(config, "tunnel_profile_mode", "") or "").strip() if config is not None else ""
+        setattr(group, "tunnel_profile_mode", profile_mode or cls._TUNNEL_PROFILE_MODE_HYDRAULIC)
 
-        if getattr(group, "tunnel_slope_i", None) is None:
-            config_value = getattr(config, "tunnel_slope_i", None) if config is not None else None
-            if config_value is not None:
-                setattr(group, "tunnel_slope_i", config_value)
-            else:
-                slope_value = cls._safe_float(getattr(start_node, "slope_i", None), 0.0)
-                if slope_value > 0:
-                    setattr(group, "tunnel_slope_i", slope_value)
+        inlet_value = cls._safe_float(getattr(start_node, "bottom_elevation", None), 0.0)
+        if inlet_value <= 0:
+            inlet_value = cls._safe_float(getattr(group, "tunnel_invert_inlet", None), 0.0)
+        if inlet_value <= 0:
+            inlet_value = cls._safe_float(getattr(config, "tunnel_invert_inlet", None), 0.0) if config is not None else 0.0
+        setattr(group, "tunnel_invert_inlet", float(inlet_value) if inlet_value > 0 else None)
 
-        if getattr(group, "tunnel_invert_outlet_check", None) is None:
-            config_value = getattr(config, "tunnel_invert_outlet_check", None) if config is not None else None
-            if config_value is not None:
-                setattr(group, "tunnel_invert_outlet_check", config_value)
-            else:
-                outlet_value = cls._safe_float(getattr(end_node, "bottom_elevation", None), 0.0)
-                if outlet_value > 0:
-                    setattr(group, "tunnel_invert_outlet_check", outlet_value)
+        slope_value = cls._safe_float(getattr(start_node, "slope_i", None), 0.0)
+        if slope_value <= 0:
+            slope_value = cls._safe_float(getattr(group, "tunnel_slope_i", None), 0.0)
+        if slope_value <= 0:
+            slope_value = cls._safe_float(getattr(config, "tunnel_slope_i", None), 0.0) if config is not None else 0.0
+        setattr(group, "tunnel_slope_i", float(slope_value) if slope_value > 0 else None)
+
+        outlet_value = cls._safe_float(getattr(end_node, "bottom_elevation", None), 0.0)
+        if outlet_value <= 0:
+            outlet_value = cls._safe_float(getattr(group, "tunnel_invert_outlet_check", None), 0.0)
+        if outlet_value <= 0:
+            outlet_value = cls._safe_float(getattr(config, "tunnel_invert_outlet_check", None), 0.0) if config is not None else 0.0
+        setattr(group, "tunnel_invert_outlet_check", float(outlet_value) if outlet_value > 0 else None)
+
+        roughness_value = cls._safe_float(getattr(group, "roughness", None), 0.0)
+        if roughness_value <= 0:
+            roughness_value = cls._safe_float(getattr(start_node, "roughness", None), 0.0)
+        if roughness_value <= 0:
+            roughness_value = cls._safe_float(getattr(group, "tunnel_roughness_n", None), 0.0)
+        if roughness_value <= 0:
+            roughness_value = cls._safe_float(getattr(config, "tunnel_roughness_n", None), 0.0) if config is not None else 0.0
+        setattr(group, "tunnel_roughness_n", float(roughness_value) if roughness_value > 0 else None)
 
         config_section_type = getattr(config, "tunnel_section_type", "") if config is not None else ""
-        section_type = cls._normalize_tunnel_section_type(
+        detected_section_type = cls._detect_tunnel_section_type(
             getattr(group, "tunnel_section_type", ""),
-            config_section_type or structure_text,
+            structure_text,
         )
+        section_type = detected_section_type or cls._detect_tunnel_section_type(config_section_type)
         setattr(group, "tunnel_section_type", section_type)
-        setattr(group, "tunnel_section_params", cls._resolve_tunnel_section_params(group, config=config))
+        setattr(group, "tunnel_section_params", cls._resolve_tunnel_section_params(group, config=config, section_type=section_type))
+        roughness_n = cls._safe_float(getattr(group, "tunnel_roughness_n", None), 0.0)
+        if roughness_n > 0:
+            setattr(group, "roughness", roughness_n)
+            for node in list(getattr(group, "rows", []) or []):
+                try:
+                    node.roughness = roughness_n
+                except Exception:
+                    continue
+        slope_i = cls._safe_float(getattr(group, "tunnel_slope_i", None), 0.0)
+        if slope_i > 0:
+            for node in list(getattr(group, "rows", []) or []):
+                try:
+                    if cls._safe_float(getattr(node, "slope_i", None), 0.0) <= 0:
+                        node.slope_i = slope_i
+                except Exception:
+                    continue
 
     @staticmethod
     def _fmt_radius(value: float) -> str:
@@ -2716,45 +2764,31 @@ class PressurePipeConfigDialog(QDialog):
         return card
 
     def _update_tunnel_param_panel(self, group):
-        """按隧洞断面类型刷新参数输入区。"""
+        """刷新隧洞摘要区，展示当前从表1读取到的结果。"""
         widgets = self._card_widgets.get(self._group_storage_key(group), {})
-        combo = widgets.get("tunnel_section_type_combo")
-        if combo is None:
+        value_map = {
+            "section_type": widgets.get("tunnel_summary_section_type_value"),
+            "size": widgets.get("tunnel_summary_size_value"),
+            "roughness": widgets.get("tunnel_summary_roughness_value"),
+            "slope": widgets.get("tunnel_summary_slope_value"),
+            "hint": widgets.get("tunnel_summary_hint_label"),
+        }
+        if not any(value_map.values()):
             return
-        section_type = self._normalize_tunnel_section_type(
-            str(combo.currentText() or "").strip(),
-            self._structure_type_text(getattr(group, "structure_type", "")),
-        )
-        params = self._resolve_tunnel_section_params(group)
-        param_specs = self._TUNNEL_PARAM_SPECS.get(section_type, ())
-        slots = [
-            ("tunnel_param_a_label", "tunnel_param_a_edit"),
-            ("tunnel_param_b_label", "tunnel_param_b_edit"),
-        ]
-        for index, (label_key, edit_key) in enumerate(slots):
-            label = widgets.get(label_key)
-            edit = widgets.get(edit_key)
-            if label is None or edit is None:
-                continue
-            if index < len(param_specs):
-                param_key, label_text = param_specs[index]
-                label.setText(label_text)
-                label.setVisible(True)
-                edit.setVisible(True)
-                edit.setPlaceholderText(label_text)
-                if not str(edit.text() or "").strip():
-                    value = self._safe_float(
-                        params.get(param_key, params.get("R_circle" if param_key == "R" else param_key, 0.0)),
-                        0.0,
-                    )
-                    edit.setText(self._fmt_live_value(value, digits=3) if value > 0 else "")
-            else:
-                label.setVisible(False)
-                edit.setVisible(False)
-                edit.clear()
+        snapshot = self._build_tunnel_group_snapshot(group, config=self._get_manager_group_config(group))
+        if value_map["section_type"] is not None:
+            value_map["section_type"].setText(snapshot["section_type_display"])
+        if value_map["size"] is not None:
+            value_map["size"].setText(snapshot["size_text"])
+        if value_map["roughness"] is not None:
+            value_map["roughness"].setText(snapshot["roughness_text"])
+        if value_map["slope"] is not None:
+            value_map["slope"].setText(snapshot["slope_text"])
+        if value_map["hint"] is not None:
+            value_map["hint"].setText(snapshot["hint_text"])
 
     def _create_tunnel_param_panel(self, card_lay, group, card_refs: Dict[str, Any]):
-        """为隧洞子段创建参数录入面板。"""
+        """为隧洞子段创建只读摘要面板。"""
         panel = QFrame()
         panel.setStyleSheet(
             "QFrame { background: #FFF8E1; border: 1px solid #F0C36D; border-radius: 6px; }"
@@ -2763,11 +2797,14 @@ class PressurePipeConfigDialog(QDialog):
         panel_lay.setContentsMargins(10, 8, 10, 8)
         panel_lay.setSpacing(8)
 
-        title = QLabel("隧洞纵断面参数")
+        title = QLabel("隧洞参数摘要")
         title.setStyleSheet("font-size: 12px; color: #8A4F00; font-weight: bold;")
         panel_lay.addWidget(title)
 
-        note = QLabel("隧洞段不走专用 DXF，按“进口底高 + 坡降 i”生成纵断面；出口底高仅作校核。")
+        note = QLabel(
+            "当前按水力核算模式处理：本段隧洞参数直接从表1读取，当前窗口只展示读取结果；"
+            "如需修改，请回表1调整。隧洞底线仍按计算结果反推显示，仅供水力核算，不作施工高程。"
+        )
         note.setWordWrap(True)
         note.setStyleSheet("font-size: 12px; color: #7A5A00;")
         panel_lay.addWidget(note)
@@ -2776,83 +2813,41 @@ class PressurePipeConfigDialog(QDialog):
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
 
-        section_type = self._normalize_tunnel_section_type(
-            getattr(group, "tunnel_section_type", ""),
-            self._structure_type_text(getattr(group, "structure_type", "")),
-        )
-        params = self._resolve_tunnel_section_params(group)
-        invert_inlet = self._safe_float(getattr(group, "tunnel_invert_inlet", None), 0.0)
-        slope_i = self._safe_float(getattr(group, "tunnel_slope_i", None), 0.0)
-        outlet_check = self._safe_float(getattr(group, "tunnel_invert_outlet_check", None), 0.0)
-
-        section_combo = ComboBox()
-        for label, _structure_type in self._TUNNEL_SECTION_OPTIONS:
-            section_combo.addItem(label)
-        try:
-            section_combo.setCurrentText(section_type)
-        except Exception:
-            pass
-
-        invert_edit = LineEdit()
-        invert_edit.setPlaceholderText("例如 420.000")
-        if invert_inlet > 0:
-            invert_edit.setText(self._fmt_live_value(invert_inlet, digits=3))
-
-        slope_edit = LineEdit()
-        slope_edit.setPlaceholderText("例如 0.0015")
-        if slope_i > 0:
-            slope_edit.setText(self._fmt_live_value(slope_i, digits=6))
-
-        outlet_edit = LineEdit()
-        outlet_edit.setPlaceholderText("可不填")
-        if outlet_check > 0:
-            outlet_edit.setText(self._fmt_live_value(outlet_check, digits=3))
-
-        param_a_label = QLabel()
-        param_a_edit = LineEdit()
-        param_b_label = QLabel()
-        param_b_edit = LineEdit()
+        section_type_value = QLabel("读取中")
+        size_value = QLabel("读取中")
+        roughness_value = QLabel("读取中")
+        slope_value = QLabel("读取中")
+        for value_label in (section_type_value, size_value, roughness_value, slope_value):
+            value_label.setStyleSheet("font-size: 12px; color: #37474F;")
+            value_label.setWordWrap(True)
 
         grid.addWidget(QLabel("断面类型："), 0, 0)
-        grid.addWidget(section_combo, 0, 1)
-        grid.addWidget(QLabel("进口底高(m)："), 1, 0)
-        grid.addWidget(invert_edit, 1, 1)
+        grid.addWidget(section_type_value, 0, 1)
+        grid.addWidget(QLabel("断面尺寸："), 0, 2)
+        grid.addWidget(size_value, 0, 3)
+        grid.addWidget(QLabel("糙率 n："), 1, 0)
+        grid.addWidget(roughness_value, 1, 1)
         grid.addWidget(QLabel("坡降 i："), 1, 2)
-        grid.addWidget(slope_edit, 1, 3)
-        grid.addWidget(QLabel("出口底高校核(m)："), 2, 0)
-        grid.addWidget(outlet_edit, 2, 1)
-        grid.addWidget(param_a_label, 3, 0)
-        grid.addWidget(param_a_edit, 3, 1)
-        grid.addWidget(param_b_label, 3, 2)
-        grid.addWidget(param_b_edit, 3, 3)
+        grid.addWidget(slope_value, 1, 3)
         panel_lay.addLayout(grid)
 
-        param_specs = self._TUNNEL_PARAM_SPECS.get(section_type, ())
-        if len(param_specs) > 0:
-            value = self._safe_float(
-                params.get(param_specs[0][0], params.get("R_circle", 0.0)),
-                0.0,
-            )
-            if value > 0:
-                param_a_edit.setText(self._fmt_live_value(value, digits=3))
-        if len(param_specs) > 1:
-            value = self._safe_float(params.get(param_specs[1][0], 0.0), 0.0)
-            if value > 0:
-                param_b_edit.setText(self._fmt_live_value(value, digits=3))
+        hint_label = QLabel("")
+        hint_label.setWordWrap(True)
+        hint_label.setStyleSheet(
+            "font-size: 12px; color: #8A4F00; background: #FFF3CD; "
+            "border: 1px solid #F0C36D; border-radius: 4px; padding: 6px 8px;"
+        )
+        panel_lay.addWidget(hint_label)
 
         card_refs.update(
             {
-                "tunnel_section_type_combo": section_combo,
-                "tunnel_invert_edit": invert_edit,
-                "tunnel_slope_edit": slope_edit,
-                "tunnel_outlet_check_edit": outlet_edit,
-                "tunnel_param_a_label": param_a_label,
-                "tunnel_param_a_edit": param_a_edit,
-                "tunnel_param_b_label": param_b_label,
-                "tunnel_param_b_edit": param_b_edit,
+                "tunnel_summary_section_type_value": section_type_value,
+                "tunnel_summary_size_value": size_value,
+                "tunnel_summary_roughness_value": roughness_value,
+                "tunnel_summary_slope_value": slope_value,
+                "tunnel_summary_hint_label": hint_label,
             }
         )
-        section_combo.currentTextChanged.connect(lambda _txt, g=group: self._update_tunnel_param_panel(g))
         card_lay.addWidget(panel)
         self._update_tunnel_param_panel(group)
 
@@ -3074,83 +3069,101 @@ class PressurePipeConfigDialog(QDialog):
         route_text = "；".join(route_names)
         return f"还差一步：以下整线还没有导入纵断面DXF：{route_text}。请先分别导入后再开始计算。"
 
-    def _collect_tunnel_group_inputs(self, group) -> Dict[str, Any]:
-        """读取隧洞卡片上的输入值。"""
-        widgets = self._card_widgets.get(self._group_storage_key(group), {})
-        section_combo = widgets.get("tunnel_section_type_combo")
-        section_type = ""
-        if section_combo is not None:
-            try:
-                section_type = str(section_combo.currentText() or "").strip()
-            except Exception:
-                section_type = ""
-        section_type = self._normalize_tunnel_section_type(
-            section_type,
-            self._structure_type_text(getattr(group, "structure_type", "")),
-        )
+    @classmethod
+    def _format_tunnel_size_text(cls, section_type: str, section_params: Dict[str, float]) -> str:
+        """把隧洞尺寸参数整理成摘要文本。"""
+        parts = []
+        for param_key, _label_text in cls._TUNNEL_PARAM_SPECS.get(section_type, ()):
+            value = cls._safe_float(section_params.get(param_key), 0.0)
+            if value > 0:
+                parts.append(f"{param_key} = {float(value):.3f} m")
+        return "；".join(parts) if parts else "未填写"
 
-        invert_inlet = self._parse_optional_float_text(
-            widgets.get("tunnel_invert_edit").text() if widgets.get("tunnel_invert_edit") else ""
+    @classmethod
+    def _build_tunnel_group_snapshot(cls, group, config=None) -> Dict[str, Any]:
+        """整理当前隧洞分组的只读摘要与校验结果。"""
+        cls._sync_group_tunnel_defaults(group, config=config)
+        structure_text = cls._structure_type_text(getattr(group, "structure_type", ""))
+        detected_section_type = cls._detect_tunnel_section_type(
+            getattr(group, "tunnel_section_type", ""),
+            structure_text,
         )
-        slope_i = self._parse_optional_float_text(
-            widgets.get("tunnel_slope_edit").text() if widgets.get("tunnel_slope_edit") else ""
+        resolved_section_type = detected_section_type or cls._detect_tunnel_section_type(
+            getattr(config, "tunnel_section_type", "") if config is not None else ""
         )
-        outlet_check = self._parse_optional_float_text(
-            widgets.get("tunnel_outlet_check_edit").text() if widgets.get("tunnel_outlet_check_edit") else ""
-        )
+        section_type = resolved_section_type or ""
+        section_params = cls._resolve_tunnel_section_params(group, config=config, section_type=section_type)
+        roughness_n = cls._safe_float(getattr(group, "tunnel_roughness_n", getattr(group, "roughness", None)), 0.0)
+        slope_i = cls._safe_float(getattr(group, "tunnel_slope_i", None), 0.0)
 
-        section_params: Dict[str, float] = {}
-        param_specs = self._TUNNEL_PARAM_SPECS.get(section_type, ())
-        param_edits = [
-            widgets.get("tunnel_param_a_edit"),
-            widgets.get("tunnel_param_b_edit"),
-        ]
-        for index, (param_key, _label_text) in enumerate(param_specs):
-            edit = param_edits[index] if index < len(param_edits) else None
-            value = self._parse_optional_float_text(edit.text() if edit is not None else "")
-            if value is not None:
-                section_params[param_key] = float(value)
-        if "R" in section_params:
-            section_params["R_circle"] = float(section_params["R"])
+        missing_items: List[str] = []
+        if not section_type:
+            missing_items.append("断面类型")
+        required_params = cls._TUNNEL_PARAM_SPECS.get(section_type, ())
+        normalized_params: Dict[str, float] = {}
+        for param_key, label_text in required_params:
+            value = cls._safe_float(section_params.get(param_key), 0.0)
+            if value > 0:
+                normalized_params[param_key] = float(value)
+            else:
+                missing_items.append(label_text)
+        if roughness_n <= 0:
+            missing_items.append("糙率 n")
+        if slope_i <= 0:
+            missing_items.append("坡降 i")
+
+        hint_text = "参数请回表1修改。"
+        if missing_items:
+            hint_text = f"参数请回表1修改；当前缺少：{'、'.join(missing_items)}。"
 
         return {
+            "display_name": cls._group_display_name(group),
             "section_type": section_type,
-            "invert_inlet": invert_inlet,
-            "slope_i": slope_i,
-            "outlet_check": outlet_check,
-            "section_params": section_params,
+            "section_type_display": section_type or "未填写",
+            "section_params": normalized_params,
+            "size_text": cls._format_tunnel_size_text(section_type, normalized_params),
+            "roughness_n": float(roughness_n) if roughness_n > 0 else None,
+            "roughness_text": cls._fmt_live_value(roughness_n, digits=4) if roughness_n > 0 else "未填写",
+            "slope_i": float(slope_i) if slope_i > 0 else None,
+            "slope_text": cls._fmt_live_value(slope_i, digits=6) if slope_i > 0 else "未填写",
+            "missing_items": missing_items,
+            "hint_text": hint_text,
         }
 
+    @staticmethod
+    def _build_tunnel_group_error_message(snapshot: Dict[str, Any]) -> str:
+        """生成开始计算前的隧洞缺项提示。"""
+        display_name = str(snapshot.get("display_name", "") or "").strip() or "当前隧洞段"
+        missing_items = list(snapshot.get("missing_items", []) or [])
+        if not missing_items:
+            return ""
+        if len(missing_items) == 1:
+            return f"“{display_name}”缺少{missing_items[0]}，参数请回表1修改。"
+        return f"“{display_name}”缺少以下参数：{'、'.join(missing_items)}，参数请回表1修改。"
+
     def _validate_and_persist_tunnel_group_configs(self):
-        """校验隧洞参数并写回分组与缓存。"""
+        """校验隧洞参数，并把表1派生快照写回分组与缓存。"""
         for group in self._pipe_groups or []:
             if not self._group_is_tunnel_segment(group):
                 continue
 
-            payload = self._collect_tunnel_group_inputs(group)
-            display_name = self._group_display_name(group)
-            section_type = payload["section_type"]
-            invert_inlet = payload["invert_inlet"]
-            slope_i = payload["slope_i"]
-            section_params = payload["section_params"]
-
-            if invert_inlet is None:
-                return self._group_storage_key(group), f"“{display_name}”缺少隧洞进口底高。"
-            if slope_i is None or slope_i <= 0:
-                return self._group_storage_key(group), f"“{display_name}”缺少有效坡降 i。"
-
-            required_params = self._TUNNEL_PARAM_SPECS.get(section_type, ())
-            for param_key, label_text in required_params:
-                value = self._safe_float(section_params.get(param_key), 0.0)
-                if value <= 0:
-                    return self._group_storage_key(group), f"“{display_name}”缺少{label_text}。"
+            snapshot = self._build_tunnel_group_snapshot(group, config=self._get_manager_group_config(group))
+            if snapshot["missing_items"]:
+                return self._group_storage_key(group), self._build_tunnel_group_error_message(snapshot)
 
             setattr(group, "segment_geometry_source", "generated_tunnel")
-            setattr(group, "tunnel_invert_inlet", float(invert_inlet))
-            setattr(group, "tunnel_slope_i", float(slope_i))
-            setattr(group, "tunnel_invert_outlet_check", payload["outlet_check"])
-            setattr(group, "tunnel_section_type", section_type)
-            setattr(group, "tunnel_section_params", dict(section_params))
+            setattr(group, "tunnel_slope_i", float(snapshot["slope_i"]))
+            setattr(group, "tunnel_roughness_n", float(snapshot["roughness_n"]))
+            setattr(group, "tunnel_profile_mode", self._TUNNEL_PROFILE_MODE_HYDRAULIC)
+            setattr(group, "tunnel_section_type", snapshot["section_type"])
+            setattr(group, "tunnel_section_params", dict(snapshot["section_params"]))
+            setattr(group, "roughness", float(snapshot["roughness_n"]))
+            for node in list(getattr(group, "rows", []) or []):
+                try:
+                    node.roughness = float(snapshot["roughness_n"])
+                    node.slope_i = float(snapshot["slope_i"])
+                except Exception:
+                    continue
             self._persist_tunnel_group_config(group)
         return None
 
@@ -3179,6 +3192,8 @@ class PressurePipeConfigDialog(QDialog):
         cfg.tunnel_invert_inlet = getattr(group, "tunnel_invert_inlet", None)
         cfg.tunnel_slope_i = getattr(group, "tunnel_slope_i", None)
         cfg.tunnel_invert_outlet_check = getattr(group, "tunnel_invert_outlet_check", None)
+        cfg.tunnel_roughness_n = getattr(group, "tunnel_roughness_n", None)
+        cfg.tunnel_profile_mode = str(getattr(group, "tunnel_profile_mode", "") or "").strip()
         cfg.tunnel_section_type = str(getattr(group, "tunnel_section_type", "") or "").strip()
         cfg.tunnel_section_params = dict(getattr(group, "tunnel_section_params", {}) or {})
         longitudinal_key = cfg.route_key or group_key
@@ -3186,6 +3201,10 @@ class PressurePipeConfigDialog(QDialog):
             self._longitudinal_data.get(longitudinal_key, getattr(cfg, "longitudinal_nodes", []) or [])
         )
         self._manager.set_pipe_config(group_key, cfg)
+
+    def get_tunnel_payload(self) -> Dict[str, Dict[str, Any]]:
+        """兼容旧接口：隧洞参数不再通过弹窗回写主表。"""
+        return {}
 
     def _set_route_missing_longitudinal_highlight(self, route_key: str, highlighted: bool):
         """切换整线卡与导入按钮的高亮状态。"""
@@ -3226,10 +3245,10 @@ class PressurePipeConfigDialog(QDialog):
                 pass
 
     def _focus_tunnel_group_card(self, group_key: str):
-        """滚动到隧洞参数卡，并把焦点落到进口底高输入框。"""
+        """滚动到隧洞参数卡，并尽量把焦点落到提示区域。"""
         widgets = self._card_widgets.get(str(group_key or "").strip(), {})
         card = widgets.get("card")
-        edit = widgets.get("tunnel_invert_edit")
+        edit = widgets.get("tunnel_summary_hint_label")
         if card is not None and self._pipe_scroll_area is not None:
             try:
                 self._pipe_scroll_area.ensureWidgetVisible(card, 0, 80)

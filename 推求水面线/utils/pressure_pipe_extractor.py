@@ -86,6 +86,8 @@ class PressurePipeGroup:
     tunnel_invert_inlet: Optional[float] = None  # 隧洞进口底高
     tunnel_slope_i: Optional[float] = None      # 隧洞坡降 i
     tunnel_invert_outlet_check: Optional[float] = None  # 隧洞出口底高校核值
+    tunnel_roughness_n: Optional[float] = None  # 隧洞糙率 n
+    tunnel_profile_mode: str = ""               # 隧洞纵断面模式
     tunnel_section_type: str = ""               # 隧洞断面类型
     tunnel_section_params: Dict[str, Any] = field(default_factory=dict)  # 隧洞断面参数
     has_inlet_transition: bool = True           # 进口侧是否存在渐变段

@@ -1084,6 +1084,72 @@ def test_apply_pressure_pipe_turn_radius_payload_skips_explicit_zero_rows_withou
     assert panel.node_table.item(0, 7).text() == "0"
 
 
+def test_apply_pressure_pipe_manager_tunnel_config_to_group_prefers_table1_values():
+    module = _load_panel_module()
+    rows = [
+        SimpleNamespace(roughness=None),
+        SimpleNamespace(roughness=None),
+    ]
+    group = SimpleNamespace(
+        structure_type=SimpleNamespace(value="隧洞-圆形"),
+        segment_geometry_source="generated_tunnel",
+        tunnel_slope_i=0.01,
+        tunnel_roughness_n=0.018,
+        tunnel_section_type="圆形隧洞",
+        tunnel_section_params={"D": 2.6},
+        rows=rows,
+    )
+    config = SimpleNamespace(
+        segment_geometry_source="legacy_cache",
+        tunnel_slope_i=0.002,
+        tunnel_roughness_n=0.014,
+        tunnel_section_type="圆拱直墙型隧洞",
+        tunnel_section_params={"B": 3.2},
+        tunnel_profile_mode="hydraulic_display",
+    )
+
+    module.WaterProfilePanel._apply_pressure_pipe_manager_tunnel_config_to_group(group, config)
+
+    assert group.segment_geometry_source == "generated_tunnel"
+    assert group.tunnel_slope_i == 0.01
+    assert group.tunnel_roughness_n == 0.018
+    assert group.tunnel_section_type == "圆形隧洞"
+    assert group.tunnel_section_params == {"D": 2.6}
+    assert group.tunnel_profile_mode == "hydraulic_display"
+    assert rows[0].roughness == 0.018
+    assert rows[1].roughness == 0.018
+
+
+def test_apply_pressure_pipe_dialog_payloads_skips_tunnel_backfill_chain():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel._apply_pressure_pipe_d_override_payload = lambda _groups, _payload: 2
+    panel._apply_pressure_pipe_turn_radius_payload = (
+        lambda _groups, _payload: {"changed_cells": 3, "force_groups": 1, "fill_groups": 2}
+    )
+    panel._apply_pressure_pipe_tunnel_payload = (
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("不应再走隧洞 payload 回写主表"))
+    )
+    lock_calls = []
+    panel._apply_table1_source_row_lock_flags = lambda: lock_calls.append("locked")
+
+    result = module.WaterProfilePanel._apply_pressure_pipe_dialog_payloads(
+        panel,
+        [SimpleNamespace(name="组1")],
+        {"组1": {"turn_R": 15.0}},
+        {"组1": {"diameter": 1.6}},
+    )
+
+    assert result == {
+        "changed_cells": 5,
+        "d_changed": 2,
+        "radius_changed": 3,
+        "force_groups": 1,
+        "fill_groups": 2,
+    }
+    assert lock_calls == ["locked"]
+
+
 def test_insert_transitions_preserves_explicit_zero_turn_radius_text():
     module = _load_panel_module()
     panel = _make_basic_panel(module)

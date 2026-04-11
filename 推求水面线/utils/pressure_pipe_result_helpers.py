@@ -113,6 +113,7 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
             "flow_section": flow_section,
             "name": name,
             "display_name": str(rec.get("display_name", "") or name or ""),
+            "structure_type": str(rec.get("structure_type", "") or "").strip(),
             "storage_key": str(rec.get("storage_key", "") or identity),
             "group_mode": str(rec.get("group_mode", "") or ""),
             "status": status,
@@ -346,16 +347,30 @@ def format_pressure_pipe_calc_batch_text(batch: Dict[str, Any], precision: int =
     summary = normalized.get("summary", {})
     ts = normalized.get("last_run_at", "") or "-"
     has_sensitivity = any(rec.get("sensitivity_low_total_head_loss") is not None for rec in records)
+    has_tunnel_hydraulic_display = any("隧洞" in str(rec.get("structure_type", "") or "") for rec in records)
+    if not has_tunnel_hydraulic_display:
+        for chain_summary in chain_summaries:
+            for member in chain_summary.get("member_results", []) or []:
+                if "隧洞" in str(member.get("structure_type", "") or ""):
+                    has_tunnel_hydraulic_display = True
+                    break
+            if has_tunnel_hydraulic_display:
+                break
     sensitivity_line = (
         "球墨铸铁管 f 上下限对比: 已自动生成"
         "（规范为区间取值：主值223200，下限189900；仅输出对比，不影响主结果回写）"
     ) if has_sensitivity else ""
+    tunnel_mode_line = (
+        "含隧洞水力核算模式：隧洞底线按计算结果反推显示，仅供水力核算，不作施工高程。"
+    ) if has_tunnel_hydraulic_display else ""
     lines = [
         "=" * 80,
         f"【有压管道计算详情】  时间: {ts}",
     ]
     if sensitivity_line:
         lines.append(sensitivity_line)
+    if tunnel_mode_line:
+        lines.append(tunnel_mode_line)
     lines += [
         f"批次汇总: 共{summary.get('total', 0)}条，成功{summary.get('success', 0)}条，失败{summary.get('failed', 0)}条",
         "-" * 80,

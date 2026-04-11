@@ -476,6 +476,43 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_route_profile_seg
     ]
 
 
+def test_build_generated_tunnel_profile_segment_prefers_row_bottom_elevation_without_manual_invert():
+    WaterProfilePanel = _load_panel_class()
+
+    group = SimpleNamespace(
+        segment_start_mc=0.0,
+        segment_end_mc=20.0,
+        tunnel_slope_i=0.012,
+        tunnel_invert_inlet=None,
+        tunnel_invert_outlet_check=None,
+        rows=[
+            SimpleNamespace(bottom_elevation=421.5, water_level=0.0, water_depth=0.0),
+            SimpleNamespace(bottom_elevation=421.2, water_level=0.0, water_depth=0.0),
+            SimpleNamespace(bottom_elevation=420.3, water_level=0.0, water_depth=0.0),
+        ],
+    )
+
+    long_nodes, warnings = WaterProfilePanel._build_generated_tunnel_profile_segment(group)
+
+    assert warnings == []
+    assert long_nodes == [
+        {
+            "chainage": 0.0,
+            "elevation": 421.5,
+            "turn_type": "NONE",
+            "turn_angle": 0.0,
+            "vertical_curve_radius": 0.0,
+        },
+        {
+            "chainage": 20.0,
+            "elevation": 420.3,
+            "turn_type": "NONE",
+            "turn_angle": 0.0,
+            "vertical_curve_radius": 0.0,
+        },
+    ]
+
+
 def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_nodes_when_segment_only_has_one_point():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
