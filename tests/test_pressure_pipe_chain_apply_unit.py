@@ -447,6 +447,58 @@ def test_apply_pressure_pipe_member_result_for_named_group_keeps_row_loss_and_st
     assert panel._pressure_pipe_calc_done["1::洞梁村"] is True
 
 
+def test_apply_pressure_pipe_member_result_for_named_group_keeps_display_only_row_loss_in_total():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._pressure_pipe_calc_done = {}
+
+    node = SimpleNamespace(
+        name="洞梁村",
+        structure_type=SimpleNamespace(value="有压管道"),
+        in_out=SimpleNamespace(value="出"),
+        section_params={},
+        pressure_pipe_window_override={},
+        pressure_pipe_named_group_result={},
+        head_loss_friction=0.0,
+        head_loss_bend=0.0,
+        head_loss_local=0.0,
+        head_loss_reserve=0.0,
+        head_loss_gate=0.0,
+        head_loss_siphon=0.4136,
+        external_head_loss=None,
+        head_loss_total=0.0,
+    )
+    group = SimpleNamespace(
+        group_mode="named_group",
+        target_row_index=18,
+        outlet_row_index=18,
+        flow_section="1",
+        name="洞梁村",
+        structure_type="有压管道",
+        identity="1::洞梁村",
+        storage_key="1::洞梁村",
+        display_name="洞梁村",
+    )
+    record = {
+        "identity": "1::洞梁村",
+        "storage_key": "1::洞梁村",
+        "display_name": "洞梁村",
+        "status": "success",
+        "writeback_enabled": True,
+        "group_mode": "named_group",
+        "target_row_index": 18,
+        "calc_steps": "group-step",
+        "total_head_loss": 10.4901,
+    }
+
+    changed = WaterProfilePanel._apply_pressure_pipe_member_result(panel, node, group, record)
+
+    assert changed is True
+    assert abs(getattr(node, "_pressure_pipe_display_loss", 0.0) - 0.4136) < 1e-9
+    assert abs(node.head_loss_total - 0.4136) < 1e-9
+    assert panel._pressure_pipe_calc_done["1::洞梁村"] is True
+
+
 def test_apply_pressure_pipe_member_result_writes_chain_prefix_override_to_special_inlet_row():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

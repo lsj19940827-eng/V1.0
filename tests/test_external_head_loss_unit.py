@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "推求水面�
 
 from models.data_models import ChannelNode, ProjectSettings
 from models.enums import StructureType, InOutType
+from core.calculator import WaterProfileCalculator
 from core.hydraulic_calc import HydraulicCalculator
 from core.pressure_pipe_calc import calc_bend_local_loss, calc_friction_loss
 
@@ -298,6 +299,106 @@ def test_named_pressure_pipe_hidden_group_result_prevents_legacy_group_loss_reco
 
     assert abs(outlet.head_loss_total - other_losses) < 0.01
     assert abs((start_channel.water_level - outlet.water_level) - outlet.head_loss_total) < 0.01
+
+
+def test_named_pressure_pipe_hidden_result_keeps_display_loss_in_total_refresh():
+    """
+    测试命名承压出口行只剩显示层本段损失时，刷新总损失仍会把它计入
+
+    场景：旧工程恢复后，出口行只剩 pressure_pipe_display_loss，
+    head_loss_siphon 已被清空，但本段损失仍应参与总损失和累计损失。
+    """
+    start_channel = ChannelNode()
+    start_channel.structure_type = StructureType.from_string("明渠-梯形")
+    start_channel.flow_section = "渠道1"
+    start_channel.head_loss_total = 0.0
+    start_channel.head_loss_cumulative = 0.0
+
+    outlet = ChannelNode()
+    outlet.structure_type = StructureType.from_string("有压管道")
+    outlet.name = "洞梁村"
+    outlet.in_out = InOutType.OUTLET
+    outlet.flow_section = "渠道1"
+    outlet.head_loss_siphon = 0.0
+    outlet.head_loss_total = 0.0
+    outlet.head_loss_cumulative = 0.0
+    outlet.pressure_pipe_named_group_result = {
+        "identity": "渠道1::洞梁村",
+        "storage_key": "渠道1::洞梁村",
+        "display_name": "洞梁村",
+        "structure_type": "有压管道",
+        "total_head_loss": 10.4901,
+        "applied_at": "2026-04-10 12:00:00",
+        "calc_steps": "legacy-migrated",
+        "target_row_index": 1,
+    }
+    setattr(outlet, "_pressure_pipe_display_loss", 0.4136)
+
+    nodes = [start_channel, outlet]
+    calculator = WaterProfileCalculator(ProjectSettings())
+
+    calculator._update_total_head_loss(nodes)
+    calculator._calculate_cumulative_head_loss(nodes)
+
+    assert abs(outlet.head_loss_total - 0.4136) < 1e-9
+    assert abs(outlet.head_loss_cumulative - 0.4136) < 1e-9
+
+
+def test_named_pressure_pipe_hidden_result_uses_display_loss_in_water_level_recalc():
+    """
+    测试命名承压出口行只剩显示层本段损失时，水位递推仍会扣减本段损失
+
+    场景：旧工程恢复后，出口行保存了隐藏整组结果和本段显示值，
+    需要在静默重算里继续把本段损失计入总损失、累计损失和水位。
+    """
+    start_channel = ChannelNode()
+    start_channel.structure_type = StructureType.from_string("明渠-梯形")
+    start_channel.flow_section = "渠道1"
+    start_channel.section_params = {"b": 2.0, "m": 1.5, "h": 1.5}
+    start_channel.station_MC = 50.0
+    start_channel.velocity = 1.5
+    start_channel.water_depth = 1.5
+    start_channel.roughness = 0.025
+
+    outlet = ChannelNode()
+    outlet.structure_type = StructureType.from_string("有压管道")
+    outlet.name = "洞梁村"
+    outlet.in_out = InOutType.OUTLET
+    outlet.section_params = {"D": 1.5}
+    outlet.station_MC = 100.0
+    outlet.velocity = 2.0
+    outlet.water_depth = 1.5
+    outlet.flow_section = "渠道1"
+    outlet.head_loss_siphon = 0.0
+    outlet.external_head_loss = None
+    outlet.pressure_pipe_named_group_result = {
+        "identity": "渠道1::洞梁村",
+        "storage_key": "渠道1::洞梁村",
+        "display_name": "洞梁村",
+        "structure_type": "有压管道",
+        "total_head_loss": 10.4901,
+        "applied_at": "2026-04-10 12:00:00",
+        "calc_steps": "legacy-migrated",
+        "target_row_index": 1,
+    }
+    setattr(outlet, "_pressure_pipe_display_loss", 0.4136)
+
+    channel = ChannelNode()
+    channel.structure_type = StructureType.from_string("明渠-梯形")
+    channel.flow_section = "渠道1"
+    channel.section_params = {"b": 2.0, "m": 1.5, "h": 1.5}
+    channel.station_MC = 150.0
+    channel.velocity = 1.5
+    channel.water_depth = 1.5
+    channel.roughness = 0.025
+
+    settings = ProjectSettings()
+    settings.start_water_level = 100.0
+    calc = HydraulicCalculator(settings)
+    calc.calculate_water_profile([start_channel, outlet, channel], method="forward")
+
+    assert abs(outlet.head_loss_total - 0.4136) < 0.01
+    assert abs((start_channel.water_level - outlet.water_level) - 0.4136) < 0.01
 
 
 def test_multiple_nodes_with_external_loss():
