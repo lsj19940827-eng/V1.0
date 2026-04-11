@@ -309,6 +309,65 @@ def _build_minimal_panel(WaterProfilePanel, nodes):
     return panel
 
 
+def test_collect_missing_structure_height_names_skips_pressure_pipe_like_rows_in_mixed_route():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+
+    nodes = [
+        SimpleNamespace(
+            name="-",
+            structure_type=SimpleNamespace(value="有压管道"),
+            is_transition=False,
+            bottom_elevation=352.4,
+            top_elevation=0.0,
+        ),
+        SimpleNamespace(
+            name="罗家湾",
+            structure_type=SimpleNamespace(value="隧洞-圆拱直墙型"),
+            is_transition=False,
+            bottom_elevation=351.8,
+            top_elevation=353.6,
+        ),
+        SimpleNamespace(
+            name="-",
+            structure_type=SimpleNamespace(value="定向钻"),
+            is_transition=False,
+            bottom_elevation=350.1,
+            top_elevation=0.0,
+        ),
+    ]
+
+    result = WaterProfilePanel._collect_missing_structure_height_names(nodes)
+
+    assert result == []
+
+
+def test_collect_missing_structure_height_names_keeps_real_tunnel_missing_height_warning():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+
+    nodes = [
+        SimpleNamespace(
+            name="-",
+            structure_type=SimpleNamespace(value="有压管道"),
+            is_transition=False,
+            bottom_elevation=352.4,
+            top_elevation=0.0,
+        ),
+        SimpleNamespace(
+            name="罗家湾",
+            structure_type=SimpleNamespace(value="隧洞-圆拱直墙型"),
+            is_transition=False,
+            bottom_elevation=351.8,
+            top_elevation=0.0,
+        ),
+    ]
+
+    result = WaterProfilePanel._collect_missing_structure_height_names(nodes)
+
+    assert result == ["罗家湾"]
+
+
 def test_collect_xxpipe_route_context_map_uses_resolved_first_non_tunnel_anchor(monkeypatch):
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
