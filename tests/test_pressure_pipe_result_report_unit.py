@@ -282,3 +282,25 @@ def test_batch_report_lists_prefix_segment_as_real_loss_member():
 
     assert "成员1: 有压管道 | 苟家湾（前缀段） | ΔH=0.3188 m" in txt
     assert "锚点" not in txt
+
+
+def test_batch_report_marks_tunnel_bottom_line_as_hydraulic_display_only():
+    batch = {
+        "last_run_at": "2026-04-10 09:12:00",
+        "records": [
+            {
+                "identity": "flow2-row4",
+                "flow_section": "2",
+                "name": "穿山隧洞",
+                "display_name": "穿山隧洞",
+                "structure_type": "隧洞-圆形",
+                "status": "success",
+                "total_head_loss": 0.2312,
+            }
+        ],
+    }
+
+    txt = format_pressure_pipe_calc_batch_text(batch, precision=4)
+
+    assert "含隧洞水力核算模式" in txt
+    assert "仅供水力核算，不作施工高程" in txt

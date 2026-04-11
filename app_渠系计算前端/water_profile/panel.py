@@ -10258,24 +10258,50 @@ class WaterProfilePanel(QWidget):
         if config is None or not cls._is_pressure_pipe_group_tunnel_segment(group):
             return
 
-        text_fields = ("segment_geometry_source", "tunnel_section_type")
+        text_fields = ("segment_geometry_source", "tunnel_section_type", "tunnel_profile_mode")
         float_fields = (
             "tunnel_invert_inlet",
             "tunnel_slope_i",
             "tunnel_invert_outlet_check",
+            "tunnel_roughness_n",
         )
+        positive_float_fields = {"tunnel_slope_i", "tunnel_roughness_n"}
+
         for field_name in text_fields:
+            current_value = str(getattr(group, field_name, "") or "").strip()
+            if current_value:
+                continue
             value = str(getattr(config, field_name, "") or "").strip()
             if value:
                 setattr(group, field_name, value)
         for field_name in float_fields:
+            current_value = cls._coerce_pressure_pipe_finite_float(getattr(group, field_name, None))
+            if current_value is not None:
+                if field_name in positive_float_fields:
+                    if current_value > 0:
+                        continue
+                else:
+                    continue
             value = getattr(config, field_name, None)
-            if value is not None:
-                setattr(group, field_name, value)
+            config_value = cls._coerce_pressure_pipe_finite_float(value)
+            if config_value is None:
+                continue
+            if field_name in positive_float_fields and config_value <= 0:
+                continue
+            setattr(group, field_name, config_value)
 
+        current_params = getattr(group, "tunnel_section_params", {}) or {}
         params = getattr(config, "tunnel_section_params", {}) or {}
-        if isinstance(params, dict) and params:
+        if (not isinstance(current_params, dict) or not current_params) and isinstance(params, dict) and params:
             setattr(group, "tunnel_section_params", copy.deepcopy(params))
+        roughness_n = cls._coerce_pressure_pipe_finite_float(getattr(group, "tunnel_roughness_n", None))
+        if roughness_n is not None and roughness_n > 0:
+            setattr(group, "roughness", float(roughness_n))
+            for node in list(getattr(group, "rows", []) or []):
+                try:
+                    node.roughness = float(roughness_n)
+                except Exception:
+                    continue
 
     def _hydrate_pressure_pipe_groups_from_manager(self, pipe_groups, manager):
         """把对话框缓存的隧洞参数回填到新提取的分组对象。"""
@@ -10295,13 +10321,51 @@ class WaterProfilePanel(QWidget):
             self._apply_pressure_pipe_manager_tunnel_config_to_group(group, config)
 
     @classmethod
+    def _resolve_tunnel_display_bottom_elevation(cls, node) -> float | None:
+        """优先读取当前节点可用于展示的隧洞底高。"""
+        bottom = cls._coerce_pressure_pipe_finite_float(getattr(node, "bottom_elevation", None))
+        if bottom is not None:
+            return bottom
+        water_level = cls._coerce_pressure_pipe_finite_float(getattr(node, "water_level", None))
+        water_depth = cls._coerce_pressure_pipe_finite_float(getattr(node, "water_depth", None))
+        if water_level is None or water_depth is None:
+            return None
+        return float(water_level - water_depth)
+
+    @classmethod
     def _build_generated_tunnel_profile_segment(cls, group) -> tuple[list[dict], list[str]]:
-        """按进口底高和坡降生成隧洞子段纵断面。"""
+        """按当前水力结果反推底线，必要时兼容旧版底高输入生成隧洞纵断面。"""
         start_mc = cls._coerce_pressure_pipe_finite_float(getattr(group, "segment_start_mc", None))
         end_mc = cls._coerce_pressure_pipe_finite_float(getattr(group, "segment_end_mc", None))
+        if start_mc is None or end_mc is None:
+            return [], ["隧洞参数不完整，无法生成纵断面"]
+
+        rows = list(getattr(group, "rows", []) or [])
+        start_node = rows[0] if rows else None
+        end_node = rows[-1] if rows else None
+        start_bottom = cls._resolve_tunnel_display_bottom_elevation(start_node)
+        end_bottom = cls._resolve_tunnel_display_bottom_elevation(end_node)
+        if start_bottom is not None and end_bottom is not None:
+            return [
+                {
+                    "chainage": float(start_mc),
+                    "elevation": float(start_bottom),
+                    "turn_type": "NONE",
+                    "turn_angle": 0.0,
+                    "vertical_curve_radius": 0.0,
+                },
+                {
+                    "chainage": float(end_mc),
+                    "elevation": float(end_bottom),
+                    "turn_type": "NONE",
+                    "turn_angle": 0.0,
+                    "vertical_curve_radius": 0.0,
+                },
+            ], []
+
         invert_inlet = cls._coerce_pressure_pipe_finite_float(getattr(group, "tunnel_invert_inlet", None))
         slope_i = cls._coerce_pressure_pipe_finite_float(getattr(group, "tunnel_slope_i", None))
-        if start_mc is None or end_mc is None or invert_inlet is None or slope_i is None:
+        if invert_inlet is None or slope_i is None:
             return [], ["隧洞参数不完整，无法生成纵断面"]
 
         outlet_invert = invert_inlet - slope_i * (end_mc - start_mc)

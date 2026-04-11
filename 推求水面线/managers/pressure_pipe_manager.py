@@ -7,6 +7,7 @@
 
 import copy
 import json
+import math
 import os
 from datetime import datetime
 from typing import Dict, Optional, Any, List
@@ -59,6 +60,8 @@ class PressurePipeConfig:
     tunnel_invert_inlet: Optional[float] = None  # 隧洞进口底高
     tunnel_slope_i: Optional[float] = None     # 隧洞坡降 i
     tunnel_invert_outlet_check: Optional[float] = None  # 隧洞出口底高校核值
+    tunnel_roughness_n: Optional[float] = None  # 隧洞糙率 n
+    tunnel_profile_mode: str = ""              # 隧洞纵断面模式
     tunnel_section_type: str = ""              # 隧洞断面类型
     tunnel_section_params: Dict[str, Any] = None  # 隧洞断面参数
     turn_n: float = 0.0                       # n 倍数
@@ -200,6 +203,339 @@ class PressurePipeManager:
                 json.dump(self._config, f, ensure_ascii=False, indent=2)
         except IOError as e:
             print(f"保存有压管道配置失败: {e}")
+
+    @staticmethod
+    def _as_dict(value: Any) -> Dict[str, Any]:
+        """把任意值安全转换成字典。"""
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _resolve_text_value(*values: Any) -> str:
+        """按顺序取第一个非空文本值。"""
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    @staticmethod
+    def _resolve_list_value(*values: Any) -> List[Any]:
+        """按顺序取第一个非空列表。"""
+        for value in values:
+            if isinstance(value, list) and value:
+                return copy.deepcopy(value)
+        return []
+
+    @staticmethod
+    def _resolve_dict_value(*values: Any) -> Dict[str, Any]:
+        """按顺序取第一个非空字典。"""
+        for value in values:
+            if isinstance(value, dict) and value:
+                return copy.deepcopy(value)
+        return {}
+
+    @staticmethod
+    def _coerce_config_float(value: Any) -> Optional[float]:
+        """把配置值安全转换成有限浮点数。"""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        return number
+
+    @classmethod
+    def _resolve_float_value(cls, *values: Any, positive_only: bool = False) -> Optional[float]:
+        """按顺序取第一个有效浮点数。"""
+        for value in values:
+            number = cls._coerce_config_float(value)
+            if number is None:
+                continue
+            if positive_only and number <= 0:
+                continue
+            return number
+        return None
+
+    @staticmethod
+    def _find_route_profile_segment(route_data: Dict[str, Any], identity: str) -> Dict[str, Any]:
+        """从 route 级 profile_segments 里找到当前子段。"""
+        segment_identity = str(identity or "").strip()
+        if not segment_identity:
+            return {}
+        for row in list(PressurePipeManager._as_dict(route_data).get("profile_segments", []) or []):
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("segment_identity", "") or "").strip() == segment_identity:
+                return row
+        return {}
+
+    def _build_pressure_pipe_config_from_sources(
+        self,
+        identity: str,
+        pipe_data: Optional[Dict[str, Any]] = None,
+        segment_data: Optional[Dict[str, Any]] = None,
+    ) -> PressurePipeConfig:
+        """按 pipe 优先、segment/route 兜底的顺序组装配置对象。"""
+        pipe_bucket = self._as_dict(pipe_data)
+        segment_bucket = self._as_dict(segment_data)
+        route_key = self._resolve_text_value(
+            pipe_bucket.get("route_key", ""),
+            segment_bucket.get("route_key", ""),
+        )
+        route_data = self._as_dict(self._config.get("routes", {}).get(route_key, {})) if route_key else {}
+        route_profile_segment = self._find_route_profile_segment(route_data, identity)
+
+        route_display_name = self._resolve_text_value(
+            pipe_bucket.get("route_display_name", ""),
+            segment_bucket.get("route_display_name", ""),
+            route_data.get("display_name", ""),
+        )
+        longitudinal_nodes = self._resolve_list_value(
+            pipe_bucket.get("longitudinal_nodes", []),
+            segment_bucket.get("longitudinal_nodes", []),
+            route_profile_segment.get("longitudinal_nodes", []),
+            route_data.get("longitudinal_nodes", []),
+        )
+        profile_segments = self._resolve_list_value(
+            pipe_bucket.get("profile_segments", []),
+            route_data.get("profile_segments", []),
+        )
+
+        return PressurePipeConfig(
+            name=self._resolve_text_value(
+                pipe_bucket.get("name", ""),
+                pipe_bucket.get("member_display_name", ""),
+                segment_bucket.get("member_display_name", ""),
+                segment_bucket.get("name", ""),
+                identity,
+            ) or identity,
+            base_name=self._resolve_text_value(
+                pipe_bucket.get("base_name", ""),
+                segment_bucket.get("base_name", ""),
+            ),
+            member_display_name=self._resolve_text_value(
+                pipe_bucket.get("member_display_name", ""),
+                segment_bucket.get("member_display_name", ""),
+            ),
+            dxf_display_name=self._resolve_text_value(
+                pipe_bucket.get("dxf_display_name", ""),
+                segment_bucket.get("dxf_display_name", ""),
+            ),
+            member_role=self._resolve_text_value(
+                pipe_bucket.get("member_role", ""),
+                segment_bucket.get("member_role", ""),
+            ),
+            Q=float(self._resolve_float_value(pipe_bucket.get("Q"), segment_bucket.get("Q")) or 0.0),
+            D=float(self._resolve_float_value(pipe_bucket.get("D"), segment_bucket.get("D")) or 0.0),
+            material_key=self._resolve_text_value(
+                pipe_bucket.get("material_key", ""),
+                segment_bucket.get("material_key", ""),
+            ),
+            local_loss_ratio=float(
+                self._resolve_float_value(pipe_bucket.get("local_loss_ratio"), segment_bucket.get("local_loss_ratio"))
+                or 0.15
+            ),
+            inlet_transition_form=self._resolve_text_value(
+                pipe_bucket.get("inlet_transition_form", ""),
+                segment_bucket.get("inlet_transition_form", ""),
+                "反弯扭曲面",
+            ),
+            outlet_transition_form=self._resolve_text_value(
+                pipe_bucket.get("outlet_transition_form", ""),
+                segment_bucket.get("outlet_transition_form", ""),
+                "反弯扭曲面",
+            ),
+            inlet_transition_zeta=float(
+                self._resolve_float_value(
+                    pipe_bucket.get("inlet_transition_zeta"),
+                    segment_bucket.get("inlet_transition_zeta"),
+                )
+                or 0.10
+            ),
+            outlet_transition_zeta=float(
+                self._resolve_float_value(
+                    pipe_bucket.get("outlet_transition_zeta"),
+                    segment_bucket.get("outlet_transition_zeta"),
+                )
+                or 0.20
+            ),
+            upstream_velocity=float(
+                self._resolve_float_value(pipe_bucket.get("upstream_velocity"), segment_bucket.get("upstream_velocity"))
+                or 0.0
+            ),
+            downstream_velocity=float(
+                self._resolve_float_value(
+                    pipe_bucket.get("downstream_velocity"),
+                    segment_bucket.get("downstream_velocity"),
+                )
+                or 0.0
+            ),
+            pipe_velocity=float(
+                self._resolve_float_value(pipe_bucket.get("pipe_velocity"), segment_bucket.get("pipe_velocity"))
+                or 0.0
+            ),
+            ip_points=self._resolve_list_value(
+                pipe_bucket.get("ip_points", []),
+                segment_bucket.get("ip_points", []),
+            ),
+            plan_total_length=float(
+                self._resolve_float_value(
+                    pipe_bucket.get("plan_total_length"),
+                    segment_bucket.get("plan_total_length"),
+                )
+                or 0.0
+            ),
+            longitudinal_nodes=longitudinal_nodes,
+            profile_segments=profile_segments,
+            route_key=route_key,
+            route_display_name=route_display_name,
+            profile_state=self._resolve_text_value(
+                pipe_bucket.get("profile_state", ""),
+                segment_bucket.get("profile_state", ""),
+                route_data.get("profile_state", ""),
+            ),
+            start_row_index=int(
+                self._resolve_float_value(
+                    pipe_bucket.get("start_row_index"),
+                    segment_bucket.get("start_row_index"),
+                )
+                or -1
+            ),
+            end_row_index=int(
+                self._resolve_float_value(
+                    pipe_bucket.get("end_row_index"),
+                    segment_bucket.get("end_row_index"),
+                )
+                or -1
+            ),
+            target_row_index=int(
+                self._resolve_float_value(
+                    pipe_bucket.get("target_row_index"),
+                    segment_bucket.get("target_row_index"),
+                )
+                or -1
+            ),
+            upstream_row_index=int(
+                self._resolve_float_value(
+                    pipe_bucket.get("upstream_row_index"),
+                    segment_bucket.get("upstream_row_index"),
+                )
+                or -1
+            ),
+            applied_to_row_index=int(
+                self._resolve_float_value(
+                    pipe_bucket.get("applied_to_row_index"),
+                    segment_bucket.get("applied_to_row_index"),
+                )
+                or -1
+            ),
+            start_mc=self._resolve_float_value(
+                pipe_bucket.get("start_mc"),
+                segment_bucket.get("start_mc"),
+            ),
+            end_mc=self._resolve_float_value(
+                pipe_bucket.get("end_mc"),
+                segment_bucket.get("end_mc"),
+            ),
+            is_pressurized_tail_member=bool(
+                pipe_bucket.get(
+                    "is_pressurized_tail_member",
+                    segment_bucket.get("is_pressurized_tail_member", False),
+                )
+            ),
+            segment_geometry_source=self._resolve_text_value(
+                pipe_bucket.get("segment_geometry_source", ""),
+                segment_bucket.get("segment_geometry_source", ""),
+                route_profile_segment.get("source_kind", ""),
+            ),
+            tunnel_invert_inlet=self._resolve_float_value(
+                pipe_bucket.get("tunnel_invert_inlet"),
+                segment_bucket.get("tunnel_invert_inlet"),
+                route_profile_segment.get("tunnel_invert_inlet"),
+            ),
+            tunnel_slope_i=self._resolve_float_value(
+                pipe_bucket.get("tunnel_slope_i"),
+                segment_bucket.get("tunnel_slope_i"),
+                route_profile_segment.get("tunnel_slope_i"),
+                positive_only=True,
+            ),
+            tunnel_invert_outlet_check=self._resolve_float_value(
+                pipe_bucket.get("tunnel_invert_outlet_check"),
+                segment_bucket.get("tunnel_invert_outlet_check"),
+                route_profile_segment.get("tunnel_invert_outlet_check"),
+            ),
+            tunnel_roughness_n=self._resolve_float_value(
+                pipe_bucket.get("tunnel_roughness_n"),
+                segment_bucket.get("tunnel_roughness_n"),
+                route_profile_segment.get("tunnel_roughness_n"),
+                positive_only=True,
+            ),
+            tunnel_profile_mode=self._resolve_text_value(
+                pipe_bucket.get("tunnel_profile_mode", ""),
+                segment_bucket.get("tunnel_profile_mode", ""),
+                route_profile_segment.get("tunnel_profile_mode", ""),
+            ),
+            tunnel_section_type=self._resolve_text_value(
+                pipe_bucket.get("tunnel_section_type", ""),
+                segment_bucket.get("tunnel_section_type", ""),
+                route_profile_segment.get("tunnel_section_type", ""),
+            ),
+            tunnel_section_params=self._resolve_dict_value(
+                pipe_bucket.get("tunnel_section_params", {}),
+                segment_bucket.get("tunnel_section_params", {}),
+                route_profile_segment.get("tunnel_section_params", {}),
+            ),
+            turn_n=float(self._resolve_float_value(pipe_bucket.get("turn_n"), segment_bucket.get("turn_n")) or 0.0),
+            turn_R=float(self._resolve_float_value(pipe_bucket.get("turn_R"), segment_bucket.get("turn_R")) or 0.0),
+            force_override=bool(pipe_bucket.get("force_override", segment_bucket.get("force_override", False))),
+            radius_applied_at=self._resolve_text_value(
+                pipe_bucket.get("radius_applied_at", ""),
+                segment_bucket.get("radius_applied_at", ""),
+            ),
+            friction_loss=self._resolve_float_value(
+                pipe_bucket.get("friction_loss"),
+                segment_bucket.get("friction_loss"),
+            ),
+            total_bend_loss=self._resolve_float_value(
+                pipe_bucket.get("total_bend_loss"),
+                segment_bucket.get("bend_loss"),
+                segment_bucket.get("total_bend_loss"),
+            ),
+            local_loss=self._resolve_float_value(
+                pipe_bucket.get("local_loss"),
+                segment_bucket.get("local_loss"),
+            ),
+            inlet_transition_loss=self._resolve_float_value(
+                pipe_bucket.get("inlet_transition_loss"),
+                segment_bucket.get("inlet_transition_loss"),
+            ),
+            outlet_transition_loss=self._resolve_float_value(
+                pipe_bucket.get("outlet_transition_loss"),
+                segment_bucket.get("outlet_transition_loss"),
+            ),
+            total_head_loss=self._resolve_float_value(
+                pipe_bucket.get("total_head_loss"),
+                segment_bucket.get("total_loss"),
+                segment_bucket.get("total_head_loss"),
+            ),
+            calculated_at=self._resolve_text_value(
+                pipe_bucket.get("calculated_at", ""),
+                segment_bucket.get("calculated_at", ""),
+            ),
+            data_mode=self._resolve_text_value(
+                pipe_bucket.get("data_mode", ""),
+                segment_bucket.get("data_mode", ""),
+            ),
+            status=self._resolve_text_value(
+                pipe_bucket.get("status", ""),
+                segment_bucket.get("status", ""),
+            ),
+            computed_from_profile_source=self._resolve_text_value(
+                pipe_bucket.get("computed_from_profile_source", ""),
+                segment_bucket.get("computed_from_profile_source", ""),
+            ),
+        )
     
     def get_pipe_config(self, pipe_name: str) -> Optional[PressurePipeConfig]:
         """
@@ -214,131 +550,18 @@ class PressurePipeManager:
         pipes = self._config.get("pipes", {})
         if pipe_name not in pipes:
             return self.get_segment_config(pipe_name)
-
-        data = pipes[pipe_name]
-        route_key = data.get("route_key", "")
-        route_display_name = data.get("route_display_name", "")
-        longitudinal_nodes = data.get("longitudinal_nodes", [])
-        profile_segments = data.get("profile_segments", [])
-        if (not longitudinal_nodes) and route_key:
-            route_data = self._config.get("routes", {}).get(route_key, {})
-            if isinstance(route_data, dict):
-                route_longitudinal_nodes = route_data.get("longitudinal_nodes", [])
-                if route_longitudinal_nodes:
-                    longitudinal_nodes = route_longitudinal_nodes
-                route_profile_segments = route_data.get("profile_segments", [])
-                if not profile_segments and route_profile_segments:
-                    profile_segments = route_profile_segments
-                if not route_display_name:
-                    route_display_name = route_data.get("display_name", "")
-        return PressurePipeConfig(
-            name=data.get("name", pipe_name),
-            base_name=data.get("base_name", ""),
-            member_display_name=data.get("member_display_name", ""),
-            dxf_display_name=data.get("dxf_display_name", ""),
-            member_role=data.get("member_role", ""),
-            Q=data.get("Q", 0.0),
-            D=data.get("D", 0.0),
-            material_key=data.get("material_key", ""),
-            local_loss_ratio=data.get("local_loss_ratio", 0.15),
-            inlet_transition_form=data.get("inlet_transition_form", "反弯扭曲面"),
-            outlet_transition_form=data.get("outlet_transition_form", "反弯扭曲面"),
-            inlet_transition_zeta=data.get("inlet_transition_zeta", 0.10),
-            outlet_transition_zeta=data.get("outlet_transition_zeta", 0.20),
-            upstream_velocity=data.get("upstream_velocity", 0.0),
-            downstream_velocity=data.get("downstream_velocity", 0.0),
-            pipe_velocity=data.get("pipe_velocity", 0.0),
-            ip_points=data.get("ip_points", []),
-            plan_total_length=data.get("plan_total_length", 0.0),
-            longitudinal_nodes=longitudinal_nodes,
-            profile_segments=profile_segments,
-            route_key=route_key,
-            route_display_name=route_display_name,
-            profile_state=data.get("profile_state", ""),
-            start_row_index=int(data.get("start_row_index", -1) or -1),
-            end_row_index=int(data.get("end_row_index", -1) or -1),
-            target_row_index=int(data.get("target_row_index", -1) or -1),
-            upstream_row_index=int(data.get("upstream_row_index", -1) or -1),
-            applied_to_row_index=int(data.get("applied_to_row_index", -1) or -1),
-            start_mc=data.get("start_mc"),
-            end_mc=data.get("end_mc"),
-            is_pressurized_tail_member=bool(data.get("is_pressurized_tail_member", False)),
-            segment_geometry_source=data.get("segment_geometry_source", ""),
-            tunnel_invert_inlet=data.get("tunnel_invert_inlet"),
-            tunnel_slope_i=data.get("tunnel_slope_i"),
-            tunnel_invert_outlet_check=data.get("tunnel_invert_outlet_check"),
-            tunnel_section_type=data.get("tunnel_section_type", ""),
-            tunnel_section_params=data.get("tunnel_section_params", {}),
-            turn_n=data.get("turn_n", 0.0),
-            turn_R=data.get("turn_R", 0.0),
-            force_override=bool(data.get("force_override", False)),
-            radius_applied_at=data.get("radius_applied_at", ""),
-            friction_loss=data.get("friction_loss"),
-            total_bend_loss=data.get("total_bend_loss"),
-            local_loss=data.get("local_loss"),
-            inlet_transition_loss=data.get("inlet_transition_loss"),
-            outlet_transition_loss=data.get("outlet_transition_loss"),
-            total_head_loss=data.get("total_head_loss"),
-            calculated_at=data.get("calculated_at", ""),
-            data_mode=data.get("data_mode", ""),
-            status=data.get("status", ""),
-            computed_from_profile_source=data.get("computed_from_profile_source", ""),
-        )
+        data = self._as_dict(pipes.get(pipe_name, {}))
+        segment_data = self._as_dict(self._config.get("segments", {}).get(pipe_name, {}))
+        return self._build_pressure_pipe_config_from_sources(pipe_name, data, segment_data)
 
     def get_segment_config(self, identity: str) -> Optional[PressurePipeConfig]:
         """读取正式保存的连续承压分段记录。"""
         segments = self._config.get("segments", {})
         if identity not in segments:
             return None
-
-        data = segments.get(identity, {}) if isinstance(segments.get(identity), dict) else {}
-        route_key = str(data.get("route_key", "") or "").strip()
-        route_data = self._config.get("routes", {}).get(route_key, {}) if route_key else {}
-        route_display_name = str(
-            data.get("route_display_name", "")
-            or route_data.get("display_name", "")
-            or ""
-        ).strip()
-        longitudinal_nodes = list(data.get("longitudinal_nodes", []) or [])
-        if not longitudinal_nodes and isinstance(route_data, dict):
-            longitudinal_nodes = list(route_data.get("longitudinal_nodes", []) or [])
-        profile_segments = list(route_data.get("profile_segments", []) or []) if isinstance(route_data, dict) else []
-
-        return PressurePipeConfig(
-            name=str(data.get("member_display_name", "") or data.get("name", "") or identity).strip() or identity,
-            base_name=str(data.get("base_name", "") or "").strip(),
-            member_display_name=str(data.get("member_display_name", "") or "").strip(),
-            dxf_display_name=str(data.get("dxf_display_name", "") or "").strip(),
-            member_role=str(data.get("member_role", "") or "").strip(),
-            Q=float(data.get("Q", 0.0) or 0.0),
-            D=float(data.get("D", 0.0) or 0.0),
-            material_key=str(data.get("material_key", "") or "").strip(),
-            longitudinal_nodes=longitudinal_nodes,
-            profile_segments=profile_segments,
-            route_key=route_key,
-            route_display_name=route_display_name,
-            profile_state=str(
-                data.get("profile_state", "")
-                or route_data.get("profile_state", "")
-                or ""
-            ).strip(),
-            start_row_index=int(data.get("start_row_index", -1) or -1),
-            end_row_index=int(data.get("end_row_index", -1) or -1),
-            target_row_index=int(data.get("target_row_index", -1) or -1),
-            upstream_row_index=int(data.get("upstream_row_index", -1) or -1),
-            applied_to_row_index=int(data.get("applied_to_row_index", -1) or -1),
-            start_mc=data.get("start_mc"),
-            end_mc=data.get("end_mc"),
-            is_pressurized_tail_member=bool(data.get("is_pressurized_tail_member", False)),
-            friction_loss=data.get("friction_loss"),
-            total_bend_loss=data.get("bend_loss", data.get("total_bend_loss")),
-            local_loss=data.get("local_loss"),
-            total_head_loss=data.get("total_loss", data.get("total_head_loss")),
-            calculated_at=str(data.get("calculated_at", "") or "").strip(),
-            data_mode=str(data.get("data_mode", "") or "").strip(),
-            status=str(data.get("status", "") or "").strip(),
-            computed_from_profile_source=str(data.get("computed_from_profile_source", "") or "").strip(),
-        )
+        data = self._as_dict(segments.get(identity, {}))
+        pipe_data = self._as_dict(self._config.get("pipes", {}).get(identity, {}))
+        return self._build_pressure_pipe_config_from_sources(identity, pipe_data, data)
     
     def set_pipe_config(self, pipe_name: str, config: PressurePipeConfig):
         """
@@ -406,6 +629,8 @@ class PressurePipeManager:
             "tunnel_invert_inlet": config.tunnel_invert_inlet,
             "tunnel_slope_i": config.tunnel_slope_i,
             "tunnel_invert_outlet_check": config.tunnel_invert_outlet_check,
+            "tunnel_roughness_n": config.tunnel_roughness_n,
+            "tunnel_profile_mode": config.tunnel_profile_mode,
             "tunnel_section_type": config.tunnel_section_type,
             "tunnel_section_params": config.tunnel_section_params or {},
             "turn_n": config.turn_n,
@@ -665,6 +890,9 @@ class PressurePipeManager:
         self._ensure_config_sections()
         route_profiles = route_profiles or {}
         save_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        existing_routes = copy.deepcopy(self._config.get("routes", {}))
+        existing_segments = copy.deepcopy(self._config.get("segments", {}))
+        existing_pipes = copy.deepcopy(self._config.get("pipes", {}))
 
         route_payloads = []
         for route in list(routes or []):
@@ -681,6 +909,7 @@ class PressurePipeManager:
                     "end_mc": getattr(route, "end_mc", 0.0),
                     "entered_pressurized_at_row": getattr(route, "entered_pressurized_at_row", -1),
                     "profile_state": getattr(route, "profile_state", ""),
+                    "profile_segments": copy.deepcopy(getattr(route, "profile_segments", None)),
                     "segment_identities": [
                         str(getattr(item, "identity", "") or "").strip()
                         for item in list(getattr(route, "segments", []) or [])
@@ -696,6 +925,12 @@ class PressurePipeManager:
 
         for payload in route_payloads:
             route_key = str(payload.get("route_key", "") or "").strip()
+            existing_route_bucket = self._as_dict(existing_routes.get(route_key, {}))
+            route_profile_segments = payload.get("profile_segments", None)
+            if route_profile_segments is None:
+                route_profile_segments = copy.deepcopy(existing_route_bucket.get("profile_segments", []) or [])
+            else:
+                route_profile_segments = copy.deepcopy(route_profile_segments or [])
             self._config["routes"][route_key] = {
                 "display_name": str(payload.get("route_display_name", "") or route_key).strip(),
                 "channel_level": payload.get("channel_level", ""),
@@ -707,6 +942,7 @@ class PressurePipeManager:
                 "profile_state": str(payload.get("profile_state", "") or "").strip(),
                 "segment_identities": list(payload.get("segment_identities", []) or []),
                 "longitudinal_nodes": list(route_profiles.get(route_key, []) or []),
+                "profile_segments": route_profile_segments,
             }
 
         for segment in list(segment_results or []):
@@ -739,6 +975,14 @@ class PressurePipeManager:
                     "computed_from_profile_source": getattr(segment, "computed_from_profile_source", ""),
                     "profile_state": getattr(segment, "profile_state", ""),
                     "longitudinal_nodes": list(getattr(segment, "longitudinal_nodes", []) or []),
+                    "segment_geometry_source": getattr(segment, "segment_geometry_source", ""),
+                    "tunnel_invert_inlet": getattr(segment, "tunnel_invert_inlet", None),
+                    "tunnel_slope_i": getattr(segment, "tunnel_slope_i", None),
+                    "tunnel_invert_outlet_check": getattr(segment, "tunnel_invert_outlet_check", None),
+                    "tunnel_roughness_n": getattr(segment, "tunnel_roughness_n", None),
+                    "tunnel_profile_mode": getattr(segment, "tunnel_profile_mode", ""),
+                    "tunnel_section_type": getattr(segment, "tunnel_section_type", ""),
+                    "tunnel_section_params": copy.deepcopy(getattr(segment, "tunnel_section_params", {}) or {}),
                 }
             )
             identity = str(payload.get("identity", "") or "").strip()
@@ -746,11 +990,64 @@ class PressurePipeManager:
                 continue
             route_key = str(payload.get("route_key", "") or "").strip()
             route_bucket = self._config["routes"].get(route_key, {}) if route_key else {}
+            existing_pipe_bucket = self._as_dict(existing_pipes.get(identity, {}))
+            existing_segment_bucket = self._as_dict(existing_segments.get(identity, {}))
+            route_profile_segment = self._find_route_profile_segment(route_bucket, identity)
             route_display_name = str(
                 payload.get("route_display_name", "")
                 or route_bucket.get("display_name", "")
                 or ""
             ).strip()
+            segment_geometry_source = self._resolve_text_value(
+                payload.get("segment_geometry_source", ""),
+                existing_pipe_bucket.get("segment_geometry_source", ""),
+                existing_segment_bucket.get("segment_geometry_source", ""),
+                route_profile_segment.get("source_kind", ""),
+            )
+            tunnel_invert_inlet = self._resolve_float_value(
+                payload.get("tunnel_invert_inlet"),
+                existing_pipe_bucket.get("tunnel_invert_inlet"),
+                existing_segment_bucket.get("tunnel_invert_inlet"),
+                route_profile_segment.get("tunnel_invert_inlet"),
+            )
+            tunnel_slope_i = self._resolve_float_value(
+                payload.get("tunnel_slope_i"),
+                existing_pipe_bucket.get("tunnel_slope_i"),
+                existing_segment_bucket.get("tunnel_slope_i"),
+                route_profile_segment.get("tunnel_slope_i"),
+                positive_only=True,
+            )
+            tunnel_invert_outlet_check = self._resolve_float_value(
+                payload.get("tunnel_invert_outlet_check"),
+                existing_pipe_bucket.get("tunnel_invert_outlet_check"),
+                existing_segment_bucket.get("tunnel_invert_outlet_check"),
+                route_profile_segment.get("tunnel_invert_outlet_check"),
+            )
+            tunnel_roughness_n = self._resolve_float_value(
+                payload.get("tunnel_roughness_n"),
+                existing_pipe_bucket.get("tunnel_roughness_n"),
+                existing_segment_bucket.get("tunnel_roughness_n"),
+                route_profile_segment.get("tunnel_roughness_n"),
+                positive_only=True,
+            )
+            tunnel_profile_mode = self._resolve_text_value(
+                payload.get("tunnel_profile_mode", ""),
+                existing_pipe_bucket.get("tunnel_profile_mode", ""),
+                existing_segment_bucket.get("tunnel_profile_mode", ""),
+                route_profile_segment.get("tunnel_profile_mode", ""),
+            )
+            tunnel_section_type = self._resolve_text_value(
+                payload.get("tunnel_section_type", ""),
+                existing_pipe_bucket.get("tunnel_section_type", ""),
+                existing_segment_bucket.get("tunnel_section_type", ""),
+                route_profile_segment.get("tunnel_section_type", ""),
+            )
+            tunnel_section_params = self._resolve_dict_value(
+                payload.get("tunnel_section_params", {}),
+                existing_pipe_bucket.get("tunnel_section_params", {}),
+                existing_segment_bucket.get("tunnel_section_params", {}),
+                route_profile_segment.get("tunnel_section_params", {}),
+            )
             segment_bucket = {
                 "identity": identity,
                 "name": str(
@@ -784,6 +1081,14 @@ class PressurePipeManager:
                 "computed_from_profile_source": str(payload.get("computed_from_profile_source", "") or "").strip(),
                 "profile_state": str(payload.get("profile_state", "") or "").strip(),
                 "longitudinal_nodes": list(payload.get("longitudinal_nodes", []) or []),
+                "segment_geometry_source": segment_geometry_source,
+                "tunnel_invert_inlet": tunnel_invert_inlet,
+                "tunnel_slope_i": tunnel_slope_i,
+                "tunnel_invert_outlet_check": tunnel_invert_outlet_check,
+                "tunnel_roughness_n": tunnel_roughness_n,
+                "tunnel_profile_mode": tunnel_profile_mode,
+                "tunnel_section_type": tunnel_section_type,
+                "tunnel_section_params": tunnel_section_params,
                 "calculated_at": save_at,
             }
             self._config["segments"][identity] = segment_bucket
@@ -812,6 +1117,15 @@ class PressurePipeManager:
                 "profile_state": segment_bucket["profile_state"],
                 "calculated_at": save_at,
                 "longitudinal_nodes": [],
+                "profile_segments": [],
+                "segment_geometry_source": segment_geometry_source,
+                "tunnel_invert_inlet": tunnel_invert_inlet,
+                "tunnel_slope_i": tunnel_slope_i,
+                "tunnel_invert_outlet_check": tunnel_invert_outlet_check,
+                "tunnel_roughness_n": tunnel_roughness_n,
+                "tunnel_profile_mode": tunnel_profile_mode,
+                "tunnel_section_type": tunnel_section_type,
+                "tunnel_section_params": tunnel_section_params,
             }
 
         self.save_config()
