@@ -9998,7 +9998,59 @@ class WaterProfilePanel(QWidget):
         building_buckets = set(count_map.keys())
         active_building_starts = {}
         pressure_gate_buckets = {"有压管道", "定向钻", "顶管"}
-        pressure_started_flow_sections = set()
+        xxqu_total_length_enabled_indexes = set()
+        xxqu_tunnel_enabled_indexes = set()
+
+        def _flush_xxqu_pressure_chain(chain_entries: list[tuple[int, str]]) -> None:
+            """支渠只保留连续有压链里的中间隧洞。"""
+            if not chain_entries:
+                return
+            if not any(bucket in pressure_gate_buckets for _, bucket in chain_entries):
+                return
+
+            has_pressure_before = {}
+            pressure_seen = False
+            for row_index, bucket in chain_entries:
+                has_pressure_before[row_index] = pressure_seen
+                if bucket in pressure_gate_buckets:
+                    pressure_seen = True
+                    xxqu_total_length_enabled_indexes.add(row_index)
+
+            has_pressure_after = {}
+            pressure_seen = False
+            for row_index, bucket in reversed(chain_entries):
+                has_pressure_after[row_index] = pressure_seen
+                if bucket in pressure_gate_buckets:
+                    pressure_seen = True
+
+            for row_index, bucket in chain_entries:
+                if bucket != "隧洞":
+                    continue
+                if not has_pressure_before.get(row_index) or not has_pressure_after.get(row_index):
+                    continue
+                xxqu_tunnel_enabled_indexes.add(row_index)
+                xxqu_total_length_enabled_indexes.add(row_index)
+
+        if not is_xxpipe_channel:
+            current_chain_entries = []
+            current_chain_flow_section = ""
+            for row_index, node in enumerate(nodes):
+                flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
+                    getattr(node, "flow_section", "")
+                )
+                bucket = self._classify_pressure_pipe_summary_bucket(node)
+                if flow_section_text and bucket:
+                    if current_chain_entries and flow_section_text == current_chain_flow_section:
+                        current_chain_entries.append((row_index, bucket))
+                    else:
+                        _flush_xxqu_pressure_chain(current_chain_entries)
+                        current_chain_entries = [(row_index, bucket)]
+                        current_chain_flow_section = flow_section_text
+                    continue
+                _flush_xxqu_pressure_chain(current_chain_entries)
+                current_chain_entries = []
+                current_chain_flow_section = ""
+            _flush_xxqu_pressure_chain(current_chain_entries)
 
         def _apply_boundary_water_level_between_flow_sections(current, nxt) -> None:
             """连续流量段共用同一个切段点水位。"""
@@ -10036,7 +10088,7 @@ class WaterProfilePanel(QWidget):
             current_entry["end_water_level"] = boundary_water_level
             next_entry["start_water_level"] = boundary_water_level
 
-        for node in nodes:
+        for row_index, node in enumerate(nodes):
             flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
                 getattr(node, "flow_section", "")
             )
@@ -10053,15 +10105,13 @@ class WaterProfilePanel(QWidget):
                     if entry["start_water_level"] is None:
                         entry["start_water_level"] = water_level
                     entry["end_water_level"] = water_level
-            if flow_section_text and bucket in pressure_gate_buckets:
-                pressure_started_flow_sections.add(flow_section_text)
             if not flow_section_text or bucket not in building_buckets:
                 continue
-            # xx渠 只统计进入有压类结构之后再次出现的隧洞；xx管 保持原有整线口径。
+            # xx渠 只统计夹在有压类结构中间的隧洞；xx管 保持原有整线口径。
             if (
                 not is_xxpipe_channel
                 and bucket == "隧洞"
-                and flow_section_text not in pressure_started_flow_sections
+                and row_index not in xxqu_tunnel_enabled_indexes
             ):
                 continue
 
@@ -10111,6 +10161,11 @@ class WaterProfilePanel(QWidget):
             except (TypeError, ValueError):
                 continue
             if seg_len <= 0:
+                continue
+            if (
+                not is_xxpipe_channel
+                and idx not in xxqu_total_length_enabled_indexes
+            ):
                 continue
             # 跨流量段时，下一流量段首行桩号仍是上一流量段的终点，
             # 这段边界长度应归入当前行所属的上一流量段。
