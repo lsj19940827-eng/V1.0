@@ -1553,6 +1553,45 @@ def test_panel_pressure_pipe_characteristic_summary_keeps_xxpipe_prefix_tunnel_c
     assert summary["1"]["tunnel_length"] == 120.0
 
 
+def test_panel_pressure_pipe_characteristic_summary_prefers_current_table_snapshot_over_stale_calculated_nodes():
+    old_nodes = [
+        _make_pressure_pipe_summary_node("1", 200.0, 377.659, "有压管道", name="三清庙", in_out_text="进"),
+        _make_pressure_pipe_summary_node("1", 600.0, 374.517, "有压管道", name="三清庙", in_out_text="出"),
+    ]
+    new_nodes = [
+        _make_pressure_pipe_summary_node("1", 0.0, 407.318, "隧洞-圆形", name="前置隧洞", in_out_text="进"),
+        _make_pressure_pipe_summary_node("1", 120.0, 406.8, "隧洞-圆形", name="前置隧洞", in_out_text="出"),
+        _make_pressure_pipe_summary_node("1", 200.0, 377.659, "有压管道", name="三清庙", in_out_text="进"),
+        _make_pressure_pipe_summary_node("1", 600.0, 374.517, "有压管道", name="三清庙", in_out_text="出"),
+    ]
+    dummy_panel = SimpleNamespace(
+        calculated_nodes=old_nodes,
+        nodes=[],
+        _build_nodes_from_table=lambda: new_nodes,
+        _build_settings=lambda: SimpleNamespace(channel_level="支管"),
+    )
+    _bind_pressure_pipe_summary_methods(dummy_panel)
+
+    summary = panel_mod.WaterProfilePanel.get_pressure_pipe_characteristic_export_summary(
+        dummy_panel,
+        rows=[
+            {
+                "name": "三清庙",
+                "flow_section": 1,
+                "identity": "1::三清庙",
+                "segment_start_mc": 200.0,
+                "segment_end_mc": 600.0,
+                "upstream_row_index": 2,
+                "target_row_index": 3,
+            }
+        ],
+    )
+
+    assert summary["1"]["total_length"] == 600.0
+    assert summary["1"]["tunnel_count"] == 1
+    assert summary["1"]["tunnel_length"] == 120.0
+
+
 def test_panel_pressure_pipe_characteristic_summary_falls_back_to_flow_scan_without_boundary_metadata():
     dummy_panel = SimpleNamespace(
         calculated_nodes=[
@@ -1943,6 +1982,47 @@ def test_panel_pressure_pipe_characteristic_summary_keeps_xxpipe_tunnel_counting
     assert summary["8"]["tunnel_length"] == 200.0
 
 
+def test_panel_pressure_pipe_characteristic_summary_keeps_xxpipe_prefix_length_when_transition_breaks_chain():
+    dummy_panel = SimpleNamespace(
+        calculated_nodes=[
+            _make_pressure_pipe_summary_node("1", 0.0, 407.318, "隧洞-圆形", name="前置隧洞", in_out_text="进"),
+            _make_pressure_pipe_summary_node("1", 2738.067, 406.8, "隧洞-圆形", name="前置隧洞", in_out_text="出"),
+            _make_pressure_pipe_summary_node(
+                "1",
+                2738.067,
+                406.7,
+                "渐变段",
+                name="过渡段",
+                is_pressure_pipe=False,
+            ),
+            _make_pressure_pipe_summary_node("1", 2797.49, 377.659, "有压管道", name="九龙右支管", in_out_text="进"),
+            _make_pressure_pipe_summary_node("1", 13153.743, 374.517, "有压管道", name="九龙右支管", in_out_text="出"),
+        ],
+        _build_settings=lambda: SimpleNamespace(channel_level="支管"),
+    )
+    dummy_panel.calculated_nodes[2].is_transition = True
+    _bind_pressure_pipe_summary_methods(dummy_panel)
+
+    summary = panel_mod.WaterProfilePanel.get_pressure_pipe_characteristic_export_summary(
+        dummy_panel,
+        rows=[
+            {
+                "name": "九龙右支管",
+                "flow_section": 1,
+                "identity": "1::九龙右支管",
+                "segment_start_mc": 2797.49,
+                "segment_end_mc": 13153.743,
+                "upstream_row_index": 3,
+                "target_row_index": 4,
+            }
+        ],
+    )
+
+    assert summary["1"]["total_length"] == pytest.approx(13153.743)
+    assert summary["1"]["tunnel_count"] == 1
+    assert summary["1"]["tunnel_length"] == pytest.approx(2738.067)
+
+
 def test_is_panel_xxpipe_mode_allows_continuous_xxqu_route_export():
     panel = SimpleNamespace(
         calculated_nodes=["node"],
@@ -2222,6 +2302,86 @@ def test_merge_pressure_pipe_export_rows_by_flow_section_keeps_xxpipe_prefix_tun
     assert table_rows[0][3] == pytest.approx(0.6)
     assert table_rows[0][7] == 377.659
     assert table_rows[0][8] == 374.517
+
+
+def test_merge_pressure_pipe_export_rows_by_flow_section_passes_resolved_summary_nodes(monkeypatch):
+    rows = [
+        {
+            "name": "九龙右支管",
+            "flow_section": 1,
+            "display_name": "九龙右支管-第一流量段",
+            "pipe_material": "球墨铸铁管",
+            "DN_mm": 700,
+            "structure_kind": "pressure_pipe",
+            "Q": 0.30,
+            "Q_inc": 0.39,
+            "V": 0.78,
+            "total_length": 10356.253,
+            "segment_start_mc": 2797.49,
+            "segment_end_mc": 13153.743,
+            "upstream_row_index": 3,
+            "target_row_index": 4,
+        },
+    ]
+    summary_nodes = [
+        _make_pressure_pipe_summary_node("1", 0.0, 407.318, "隧洞-圆形", name="前置隧洞", in_out_text="进"),
+        _make_pressure_pipe_summary_node("1", 2738.067, 406.8, "隧洞-圆形", name="前置隧洞", in_out_text="出"),
+        _make_pressure_pipe_summary_node("1", 2738.067, 406.7, "渐变段", name="过渡段", is_pressure_pipe=False),
+        _make_pressure_pipe_summary_node("1", 2797.49, 377.659, "有压管道", name="九龙右支管", in_out_text="进"),
+        _make_pressure_pipe_summary_node("1", 13153.743, 374.517, "有压管道", name="九龙右支管", in_out_text="出"),
+    ]
+    summary_nodes[2].is_transition = True
+    captured = {}
+
+    def _fake_get_pressure_pipe_characteristic_export_summary(export_rows=None, nodes=None):
+        captured["rows"] = export_rows
+        captured["nodes"] = nodes
+        if nodes is summary_nodes:
+            return {
+                "1": {
+                    "total_length": 13153.743,
+                    "start_water_level": 377.659,
+                    "end_water_level": 374.517,
+                    "tunnel_count": 1,
+                    "tunnel_length": 2738.067,
+                    "directional_drill_count": 0,
+                    "directional_drill_length": 0.0,
+                    "jacking_count": 0,
+                    "jacking_length": 0.0,
+                }
+            }
+        return {
+            "1": {
+                "total_length": 10356.253,
+                "start_water_level": 377.659,
+                "end_water_level": 374.517,
+                "tunnel_count": 1,
+                "tunnel_length": 2738.067,
+                "directional_drill_count": 0,
+                "directional_drill_length": 0.0,
+                "jacking_count": 0,
+                "jacking_length": 0.0,
+            }
+        }
+
+    monkeypatch.setattr(
+        cad_tools,
+        "_resolve_section_summary_source_nodes",
+        lambda panel, fallback_nodes=None: (summary_nodes, "current_table_snapshot"),
+    )
+    dummy_panel = SimpleNamespace(
+        get_pressure_pipe_characteristic_export_summary=_fake_get_pressure_pipe_characteristic_export_summary,
+    )
+
+    merged = cad_tools._merge_pressure_pipe_export_rows_by_flow_section(rows, panel=dummy_panel)
+    _, _, _, table_rows, _ = summary_mod._dxf_build_pressure_pipe(merged)
+
+    assert captured["nodes"] is summary_nodes
+    assert merged[0]["total_length"] == pytest.approx(13153.743)
+    assert merged[0]["plan_total_length"] == pytest.approx(13153.743)
+    assert table_rows[0][3] == pytest.approx(13.154)
+    assert table_rows[0][9] == 1
+    assert table_rows[0][10] == pytest.approx(2.738)
 
 
 def test_merge_pressure_pipe_export_rows_by_flow_section_uses_filtered_terminal_tunnel_length_for_xxqu():

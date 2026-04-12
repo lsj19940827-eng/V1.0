@@ -4635,14 +4635,23 @@ def _normalize_pressure_pipe_flow_section_key(flow_section):
     return str(flow_section or "").strip()
 
 
-def _resolve_pressure_pipe_characteristic_export_summary(panel, rows=None):
+def _resolve_pressure_pipe_characteristic_export_summary(panel, rows=None, nodes=None):
     getter = getattr(panel, "get_pressure_pipe_characteristic_export_summary", None)
     if not callable(getter):
         return {}
     try:
-        result = getter(rows)
+        if nodes is not None:
+            result = getter(rows, nodes=nodes)
+        else:
+            result = getter(rows)
     except TypeError:
-        result = getter()
+        try:
+            if nodes is not None:
+                result = getter(rows, nodes)
+            else:
+                result = getter(rows)
+        except TypeError:
+            result = getter()
     except Exception:
         return {}
     return result if isinstance(result, dict) else {}
@@ -4652,7 +4661,20 @@ def _merge_pressure_pipe_export_rows_by_flow_section(rows, panel=None):
     if not rows:
         return []
 
-    summary_by_flow_section = _resolve_pressure_pipe_characteristic_export_summary(panel, rows)
+    summary_nodes = None
+    if panel is not None:
+        try:
+            summary_nodes, _ = _resolve_section_summary_source_nodes(panel, fallback_nodes=None)
+        except Exception:
+            summary_nodes = None
+    if not isinstance(summary_nodes, list) or not summary_nodes:
+        summary_nodes = None
+
+    summary_by_flow_section = _resolve_pressure_pipe_characteristic_export_summary(
+        panel,
+        rows,
+        nodes=summary_nodes,
+    )
     grouped_rows = {}
     row_order = []
     for row in rows:
