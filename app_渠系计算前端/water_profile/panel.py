@@ -9961,6 +9961,7 @@ class WaterProfilePanel(QWidget):
             return {
                 "flow_section": flow_section_text,
                 "total_length": 0.0,
+                "prefix_extension_length": 0.0,
                 "start_water_level": None,
                 "end_water_level": None,
                 "tunnel_count": 0,
@@ -10000,8 +10001,9 @@ class WaterProfilePanel(QWidget):
         pressure_gate_buckets = {"有压管道", "定向钻", "顶管"}
         xxqu_total_length_enabled_indexes = set()
         xxqu_tunnel_enabled_indexes = set()
+        xxpipe_boundary_extension_lengths = {}
 
-        def _flush_xxqu_pressure_chain(chain_entries: list[tuple[int, str]]) -> None:
+        def _flush_xxqu_pressure_chain(chain_entries: list[tuple[int, str]], flow_section_text: str) -> None:
             """支渠只保留连续有压链里的中间隧洞。"""
             if not chain_entries:
                 return
@@ -10031,26 +10033,48 @@ class WaterProfilePanel(QWidget):
                 xxqu_tunnel_enabled_indexes.add(row_index)
                 xxqu_total_length_enabled_indexes.add(row_index)
 
-        if not is_xxpipe_channel:
+            if not is_xxpipe_channel or not flow_section_text:
+                return
+            first_pressure_pos = next(
+                (pos for pos, (_, bucket) in enumerate(chain_entries) if bucket in pressure_gate_buckets),
+                None,
+            )
+            if first_pressure_pos in (None, 0):
+                return
+            prefix_entries = chain_entries[:first_pressure_pos]
+            if not prefix_entries or any(bucket != "隧洞" for _, bucket in prefix_entries):
+                return
+            prefix_start_station = _resolve_station_mc(nodes[prefix_entries[0][0]])
+            first_pressure_station = _resolve_station_mc(nodes[chain_entries[first_pressure_pos][0]])
+            if prefix_start_station is None or first_pressure_station is None:
+                return
+            extra_length = first_pressure_station - prefix_start_station
+            if extra_length <= 0:
+                return
+            xxpipe_boundary_extension_lengths[flow_section_text] = round(
+                xxpipe_boundary_extension_lengths.get(flow_section_text, 0.0) + extra_length,
+                6,
+            )
+
+        current_chain_entries = []
+        current_chain_flow_section = ""
+        for row_index, node in enumerate(nodes):
+            flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
+                getattr(node, "flow_section", "")
+            )
+            bucket = self._classify_pressure_pipe_summary_bucket(node)
+            if flow_section_text and bucket:
+                if current_chain_entries and flow_section_text == current_chain_flow_section:
+                    current_chain_entries.append((row_index, bucket))
+                else:
+                    _flush_xxqu_pressure_chain(current_chain_entries, current_chain_flow_section)
+                    current_chain_entries = [(row_index, bucket)]
+                    current_chain_flow_section = flow_section_text
+                continue
+            _flush_xxqu_pressure_chain(current_chain_entries, current_chain_flow_section)
             current_chain_entries = []
             current_chain_flow_section = ""
-            for row_index, node in enumerate(nodes):
-                flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
-                    getattr(node, "flow_section", "")
-                )
-                bucket = self._classify_pressure_pipe_summary_bucket(node)
-                if flow_section_text and bucket:
-                    if current_chain_entries and flow_section_text == current_chain_flow_section:
-                        current_chain_entries.append((row_index, bucket))
-                    else:
-                        _flush_xxqu_pressure_chain(current_chain_entries)
-                        current_chain_entries = [(row_index, bucket)]
-                        current_chain_flow_section = flow_section_text
-                    continue
-                _flush_xxqu_pressure_chain(current_chain_entries)
-                current_chain_entries = []
-                current_chain_flow_section = ""
-            _flush_xxqu_pressure_chain(current_chain_entries)
+        _flush_xxqu_pressure_chain(current_chain_entries, current_chain_flow_section)
 
         def _apply_boundary_water_level_between_flow_sections(current, nxt) -> None:
             """连续流量段共用同一个切段点水位。"""
@@ -10162,15 +10186,25 @@ class WaterProfilePanel(QWidget):
                 continue
             if seg_len <= 0:
                 continue
-            if (
-                not is_xxpipe_channel
-                and idx not in xxqu_total_length_enabled_indexes
-            ):
+            # 主长度统一以“首个真正有压段起、末个真正有压段止”的承压链范围累计；
+            # xx渠 只保留中间隧洞，xx管 额外把前/后置隧洞长度单独补回。
+            if idx not in xxqu_total_length_enabled_indexes:
+                continue
+            current_in_out = self._get_pressure_pipe_summary_in_out_text(current)
+            if current_in_out == "出" and (idx + 1) not in xxqu_total_length_enabled_indexes:
                 continue
             # 跨流量段时，下一流量段首行桩号仍是上一流量段的终点，
             # 这段边界长度应归入当前行所属的上一流量段。
             entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
             entry["total_length"] = round(entry["total_length"] + seg_len, 6)
+
+        if is_xxpipe_channel:
+            for flow_section_text, extra_length in xxpipe_boundary_extension_lengths.items():
+                if extra_length <= 0:
+                    continue
+                entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
+                entry["prefix_extension_length"] = round(entry["prefix_extension_length"] + extra_length, 6)
+                entry["total_length"] = round(entry["total_length"] + extra_length, 6)
 
         return summary_by_flow_section, None, None
 
@@ -10179,6 +10213,22 @@ class WaterProfilePanel(QWidget):
         if not targets:
             return {}
 
+        settings = None
+        build_settings = getattr(self, "_build_settings", None)
+        if callable(build_settings):
+            try:
+                settings = build_settings()
+            except Exception:
+                settings = None
+        get_current_channel_level = getattr(self, "_get_current_channel_level_text", None)
+        if callable(get_current_channel_level):
+            try:
+                channel_level = str(get_current_channel_level(settings) or "").strip()
+            except Exception:
+                channel_level = str(getattr(settings, "channel_level", "") or "").strip()
+        else:
+            channel_level = str(getattr(settings, "channel_level", "") or "").strip()
+        is_xxpipe_channel = channel_level in XXPIPE_CHANNEL_LEVEL_OPTIONS
         nodes = self._get_pressure_pipe_summary_source_nodes()
         boundary_summary_by_flow_section = self._build_pressure_pipe_characteristic_boundary_summary_from_targets(
             nodes,
@@ -10198,7 +10248,25 @@ class WaterProfilePanel(QWidget):
             payload = copy.deepcopy(summary_by_flow_section.get(flow_section_text) or {})
             boundary_payload = boundary_summary_by_flow_section.get(flow_section_text) or {}
             if isinstance(boundary_payload, dict) and boundary_payload:
-                payload.update(copy.deepcopy(boundary_payload))
+                for key in ("start_water_level", "end_water_level"):
+                    if key in boundary_payload:
+                        payload[key] = copy.deepcopy(boundary_payload.get(key))
+                if "total_length" in boundary_payload:
+                    boundary_total_length = self._normalize_pressure_pipe_export_number(
+                        boundary_payload.get("total_length"),
+                        allow_zero=True,
+                    )
+                    if boundary_total_length is not None:
+                        prefix_extension_length = 0.0
+                        if is_xxpipe_channel:
+                            prefix_extension_length = (
+                                self._normalize_pressure_pipe_export_number(
+                                    payload.get("prefix_extension_length"),
+                                    allow_zero=True,
+                                )
+                                or 0.0
+                            )
+                        payload["total_length"] = round(boundary_total_length + prefix_extension_length, 6)
             payload.setdefault("flow_section", flow_section_text)
             payload.setdefault("start_water_level", start_water_level)
             payload.setdefault("end_water_level", end_water_level)
@@ -10208,6 +10276,7 @@ class WaterProfilePanel(QWidget):
             payload.setdefault("directional_drill_length", 0.0)
             payload.setdefault("jacking_count", 0)
             payload.setdefault("jacking_length", 0.0)
+            payload.pop("prefix_extension_length", None)
             resolved[flow_section_text] = payload
         return resolved
 

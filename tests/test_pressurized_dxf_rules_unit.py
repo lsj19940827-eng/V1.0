@@ -1519,7 +1519,7 @@ def test_panel_pressure_pipe_characteristic_summary_merges_tunnel_subtypes_and_a
     assert summary["3"]["jacking_length"] == 150.0
 
 
-def test_panel_pressure_pipe_characteristic_summary_prefers_boundary_metadata_for_length_and_water_levels():
+def test_panel_pressure_pipe_characteristic_summary_keeps_xxpipe_prefix_tunnel_chain_length_with_boundary_water_levels():
     dummy_panel = SimpleNamespace(
         calculated_nodes=[
             _make_pressure_pipe_summary_node("1", 0.0, 407.318, "隧洞-圆形", name="前置隧洞", in_out_text="进"),
@@ -1546,7 +1546,7 @@ def test_panel_pressure_pipe_characteristic_summary_prefers_boundary_metadata_fo
         ],
     )
 
-    assert summary["1"]["total_length"] == 400.0
+    assert summary["1"]["total_length"] == 600.0
     assert summary["1"]["start_water_level"] == 377.659
     assert summary["1"]["end_water_level"] == 374.517
     assert summary["1"]["tunnel_count"] == 1
@@ -1859,7 +1859,7 @@ def test_panel_pressure_pipe_characteristic_summary_skips_terminal_tunnel_after_
     assert summary["7"]["directional_drill_length"] == 80.0
     assert summary["7"]["tunnel_count"] == 0
     assert summary["7"]["tunnel_length"] == 0.0
-    assert summary["7"]["total_length"] == 120.0
+    assert summary["7"]["total_length"] == 80.0
 
 
 def test_panel_pressure_pipe_characteristic_summary_uses_directional_drill_and_jacking_as_xxqu_tunnel_gates():
@@ -1888,6 +1888,39 @@ def test_panel_pressure_pipe_characteristic_summary_uses_directional_drill_and_j
     assert summary["7"]["jacking_count"] == 1
     assert summary["7"]["jacking_length"] == 100.0
     assert summary["7"]["total_length"] == 520.0
+
+
+def test_panel_pressure_pipe_characteristic_summary_xxqu_uses_pressure_chain_boundary_range():
+    dummy_panel = SimpleNamespace(
+        calculated_nodes=[
+            _make_pressure_pipe_summary_node("9", 200.0, 415.0, "有压管道", name="前段管道", in_out_text="进"),
+            _make_pressure_pipe_summary_node("9", 600.0, 412.0, "有压管道", name="前段管道", in_out_text="出"),
+            _make_pressure_pipe_summary_node("9", 620.0, 411.8, "顶管", name="过路顶管", in_out_text="进"),
+            _make_pressure_pipe_summary_node("9", 700.0, 411.1, "顶管", name="过路顶管", in_out_text="出"),
+            _make_pressure_pipe_summary_node("9", 800.0, 410.6, "有压管道", name="后段管道", in_out_text="进"),
+            _make_pressure_pipe_summary_node("9", 1000.0, 409.2, "有压管道", name="后段管道", in_out_text="出"),
+        ],
+        _build_settings=lambda: SimpleNamespace(channel_level="支渠"),
+    )
+    _bind_pressure_pipe_summary_methods(dummy_panel)
+
+    summary = panel_mod.WaterProfilePanel.get_pressure_pipe_characteristic_export_summary(
+        dummy_panel,
+        rows=[
+            {
+                "name": "第九流量段",
+                "flow_section": 9,
+                "segment_start_mc": 200.0,
+                "segment_end_mc": 1000.0,
+                "upstream_row_index": 0,
+                "target_row_index": 5,
+            }
+        ],
+    )
+
+    assert summary["9"]["jacking_count"] == 1
+    assert summary["9"]["jacking_length"] == 80.0
+    assert summary["9"]["total_length"] == 800.0
 
 
 def test_panel_pressure_pipe_characteristic_summary_keeps_xxpipe_tunnel_counting_rule():
@@ -2140,6 +2173,57 @@ def test_merge_pressure_pipe_export_rows_by_flow_section_prefers_pressure_pipe_b
     assert table_rows[0][8] == 374.517
 
 
+def test_merge_pressure_pipe_export_rows_by_flow_section_keeps_xxpipe_prefix_tunnel_gap_length():
+    rows = [
+        {
+            "name": "三清庙",
+            "flow_section": 1,
+            "display_name": "三清庙-第一流量段",
+            "pipe_material": "球墨铸铁管",
+            "DN_mm": 800,
+            "structure_kind": "pressure_pipe",
+            "Q": 0.49,
+            "Q_inc": 0.637,
+            "V": 0.97,
+            "total_length": 8549.0,
+            "segment_start_mc": 200.0,
+            "segment_end_mc": 600.0,
+            "upstream_row_index": 2,
+            "target_row_index": 3,
+        },
+    ]
+    dummy_panel = SimpleNamespace(
+        calculated_nodes=[
+            _make_pressure_pipe_summary_node("1", 0.0, 407.318, "隧洞-圆形", name="前置隧洞", in_out_text="进"),
+            _make_pressure_pipe_summary_node("1", 120.0, 406.8, "隧洞-圆形", name="前置隧洞", in_out_text="出"),
+            _make_pressure_pipe_summary_node("1", 200.0, 377.659, "有压管道", name="三清庙", in_out_text="进"),
+            _make_pressure_pipe_summary_node("1", 600.0, 374.517, "有压管道", name="三清庙", in_out_text="出"),
+        ],
+        _build_settings=lambda: SimpleNamespace(channel_level="支管"),
+    )
+    _bind_pressure_pipe_summary_methods(dummy_panel)
+    setattr(
+        dummy_panel,
+        "get_pressure_pipe_characteristic_export_summary",
+        panel_mod.WaterProfilePanel.get_pressure_pipe_characteristic_export_summary.__get__(
+            dummy_panel,
+            type(dummy_panel),
+        ),
+    )
+
+    merged = cad_tools._merge_pressure_pipe_export_rows_by_flow_section(rows, panel=dummy_panel)
+    _, _, _, table_rows, _ = summary_mod._dxf_build_pressure_pipe(merged)
+
+    assert len(merged) == 1
+    assert merged[0]["total_length"] == 600.0
+    assert merged[0]["plan_total_length"] == 600.0
+    assert merged[0]["start_water_level"] == 377.659
+    assert merged[0]["end_water_level"] == 374.517
+    assert table_rows[0][3] == pytest.approx(0.6)
+    assert table_rows[0][7] == 377.659
+    assert table_rows[0][8] == 374.517
+
+
 def test_merge_pressure_pipe_export_rows_by_flow_section_uses_filtered_terminal_tunnel_length_for_xxqu():
     rows = [
         {
@@ -2178,11 +2262,11 @@ def test_merge_pressure_pipe_export_rows_by_flow_section_uses_filtered_terminal_
     _, _, _, table_rows, _ = summary_mod._dxf_build_pressure_pipe(merged)
 
     assert len(merged) == 1
-    assert merged[0]["total_length"] == 120.0
-    assert merged[0]["plan_total_length"] == 120.0
+    assert merged[0]["total_length"] == 80.0
+    assert merged[0]["plan_total_length"] == 80.0
     assert merged[0]["tunnel_count"] == 0
     assert merged[0]["tunnel_length"] == 0.0
-    assert table_rows[0][3] == pytest.approx(0.12)
+    assert table_rows[0][3] == pytest.approx(0.08)
 
 
 def test_draw_section_summary_on_msp_uses_panel_backfilled_pressure_pipe_total_loss(monkeypatch):
