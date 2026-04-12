@@ -59,7 +59,7 @@ def test_extract_continuous_pressure_chains_keeps_named_group_and_single_rows_in
 
     chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
         nodes,
-        settings=_make_settings(),
+        settings=_make_settings(channel_level="支渠"),
     )
 
     assert len(chains) == 1
@@ -130,7 +130,7 @@ def test_extract_continuous_pressure_chains_keeps_same_name_runs_as_distinct_nam
 
     chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
         nodes,
-        settings=_make_settings(),
+        settings=_make_settings(channel_level="支渠"),
     )
 
     assert len(chains) == 1
@@ -148,14 +148,14 @@ def test_extract_continuous_pressure_chains_keeps_same_name_runs_as_distinct_nam
         "穿路段（后段）",
     ]
     assert [member.storage_key for member in chain.members] == [
-        "2::穿路段::rows1-2",
-        "2::穿路段::rows3-4",
-        "2::穿路段::rows5-6",
+        "flow2-row1",
+        "flow2-row3",
+        "flow2-row5",
     ]
     assert [member.identity for member in chain.members] == [
-        "2::穿路段::rows1-2",
-        "2::穿路段::rows3-4",
-        "2::穿路段::rows5-6",
+        "flow2-row1",
+        "flow2-row3",
+        "flow2-row5",
     ]
     assert [member.group.legacy_identity for member in chain.members] == [
         "2::穿路段",
@@ -329,6 +329,102 @@ def test_extract_continuous_pressure_chains_for_branch_tail_named_pressure_group
     assert all(member.group is not None for member in chain.members)
 
 
+@pytest.mark.parametrize(
+    "channel_level",
+    ["总干管", "分干管", "干管", "支管", "分支管"],
+)
+def test_extract_continuous_pressure_chains_for_all_xxpipe_levels_splits_continuous_named_pressure_members_into_row_members(channel_level):
+    nodes = [
+        _make_node(0, "1", "前置隧洞", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        _make_node(1, "1", "九龙右有压管道", "有压管道", InOutType.INLET, flow=0.27),
+        _make_node(2, "1", "九龙右有压管道", "有压管道", InOutType.OUTLET, flow=0.27),
+        _make_node(3, "1", "穿路段", "定向钻", InOutType.INLET, flow=0.27),
+        _make_node(4, "1", "穿路段", "定向钻", InOutType.OUTLET, flow=0.27),
+        _make_node(5, "1", "穿涵段", "顶管", InOutType.INLET, flow=0.27),
+        _make_node(6, "1", "穿涵段", "顶管", InOutType.OUTLET, flow=0.27),
+        _make_node(7, "1", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
+        nodes,
+        settings=_make_settings(channel_level=channel_level),
+    )
+
+    assert len(chains) == 1
+    chain = chains[0]
+    assert chain.start_row_index == 0
+    assert chain.end_row_index == 6
+    assert [member.member_type for member in chain.members] == [
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+    ]
+    assert [member.display_name for member in chain.members] == [
+        "前置隧洞（起点锚点）",
+        "九龙右有压管道（前段）",
+        "九龙右有压管道（后段）",
+        "穿路段（前段）",
+        "穿路段（后段）",
+        "穿涵段（前段）",
+        "穿涵段（后段）",
+    ]
+    assert [member.identity for member in chain.members] == [
+        "flow1-row1-隧洞_圆形",
+        "flow1-row2",
+        "flow1-row3",
+        "flow1-row4",
+        "flow1-row5",
+        "flow1-row6",
+        "flow1-row7",
+    ]
+    assert [member.target_row_index for member in chain.members] == [0, 1, 2, 3, 4, 5, 6]
+    assert [member.upstream_row_index for member in chain.members] == [-1, 0, 1, 2, 3, 4, 5]
+    assert chain.members[0].member_type == "single_row"
+    assert chain.members[0].is_anchor_member is True
+    assert chain.members[0].should_generate_row_loss is False
+    assert all(getattr(member.group, "group_mode", "") == "named_row_segment" for member in chain.members[1:])
+    assert all(bool(getattr(member, "split_from_named_group", False)) for member in chain.members[1:])
+
+
+@pytest.mark.parametrize(
+    "channel_level",
+    ["总干管", "分干管", "干管", "支管", "分支管"],
+)
+def test_extract_dialog_pipe_groups_marks_all_xxpipe_continuous_named_pressure_groups_as_split_parents(channel_level):
+    nodes = [
+        _make_node(0, "1", "前置隧洞", "隧洞-圆形", InOutType.NORMAL, flow=0.0),
+        _make_node(1, "1", "九龙右有压管道", "有压管道", InOutType.INLET, flow=0.27),
+        _make_node(2, "1", "九龙右有压管道", "有压管道", InOutType.OUTLET, flow=0.27),
+        _make_node(3, "1", "穿路段", "定向钻", InOutType.INLET, flow=0.27),
+        _make_node(4, "1", "穿路段", "定向钻", InOutType.OUTLET, flow=0.27),
+        _make_node(5, "1", "穿涵段", "顶管", InOutType.INLET, flow=0.27),
+        _make_node(6, "1", "穿涵段", "顶管", InOutType.OUTLET, flow=0.27),
+        _make_node(7, "1", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        nodes,
+        settings=_make_settings(channel_level=channel_level),
+    )
+
+    named_groups = [group for group in groups if getattr(group, "group_mode", "") == "named_group"]
+    assert [group.identity for group in named_groups] == [
+        "1::九龙右有压管道::rows2-3",
+        "1::穿路段::rows4-5",
+        "1::穿涵段::rows6-7",
+    ]
+    assert [group.split_to_row_members for group in named_groups] == [True, True, True]
+    assert [group.split_row_member_identities for group in named_groups] == [
+        ["flow1-row2", "flow1-row3"],
+        ["flow1-row4", "flow1-row5"],
+        ["flow1-row6", "flow1-row7"],
+    ]
+
+
 def test_extract_dialog_pipe_groups_marks_branch_tail_named_pressure_group_as_split_parent():
     nodes = [
         _make_node(0, "1", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
@@ -416,7 +512,7 @@ def test_extract_continuous_pressure_chains_marks_flow_section_start_single_row_
 
     chains = PressurePipeDataExtractor.extract_continuous_pressure_chains(
         nodes,
-        settings=_make_settings(),
+        settings=_make_settings(channel_level="支渠"),
     )
 
     assert len(chains) == 2
@@ -455,11 +551,19 @@ def test_extract_continuous_pressure_chains_merges_members_across_flow_sections_
     assert chain.start_row_index == 0
     assert chain.end_row_index == 3
     assert [member.display_name for member in chain.members] == [
-        "穿路段",
+        "穿路段（前段）",
+        "穿路段（后段）",
         "跨段洞身",
         "流量段3 第4行有压管道",
     ]
-    assert [member.flow_section for member in chain.members] == ["2", "3", "3"]
+    assert [member.member_type for member in chain.members] == [
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+    ]
+    assert [member.row_indices for member in chain.members] == [[0], [1], [2], [3]]
+    assert [member.flow_section for member in chain.members] == ["2", "2", "3", "3"]
 
 
 @pytest.mark.parametrize("breaker_structure", ["明渠-梯形", "分水闸", "倒虹吸", "矩形暗涵"])

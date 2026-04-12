@@ -172,7 +172,8 @@ try:
         STRUCTURE_TYPE_OPTIONS, CHANNEL_LEVEL_OPTIONS, XXPIPE_CHANNEL_LEVEL_OPTIONS,
         DEFAULT_ROUGHNESS, DEFAULT_SIPHON_ROUGHNESS, DEFAULT_TURN_RADIUS, DEFAULT_AUTO_TURN_RADIUS, DEFAULT_SIPHON_TURN_RADIUS_N, DEFAULT_GATE_HEAD_LOSS,
         TRANSITION_FORM_OPTIONS, SIPHON_TRANSITION_FORM_OPTIONS,
-        TRANSITION_ZETA_COEFFICIENTS, SIPHON_TRANSITION_ZETA_COEFFICIENTS
+        TRANSITION_ZETA_COEFFICIENTS, SIPHON_TRANSITION_ZETA_COEFFICIENTS,
+        ZERO_TOLERANCE,
     )
 except ImportError:
     STRUCTURE_TYPE_OPTIONS = [
@@ -200,6 +201,7 @@ except ImportError:
         "进口": {"反弯扭曲面": 0.10, "直线扭曲面": 0.20, "1/4圆弧": 0.15, "方头型": 0.30},
         "出口": {"反弯扭曲面": 0.20, "直线扭曲面": 0.40, "1/4圆弧": 0.25, "方头型": 0.75},
     }
+    ZERO_TOLERANCE = 1e-9
 
 # 节点表列定义（与原版Tkinter ALL_COLUMNS保持完全一致的列顺序）
 # 可编辑列索引集合（基础输入0-7 + 水力输入20-26 + 预留/过闸/倒虹吸或有压管道损失36,37,38）
@@ -3205,6 +3207,52 @@ class WaterProfilePanel(QWidget):
         return display_loss
 
     @classmethod
+    def _rebuild_pressure_pipe_row_override_total_loss(
+        cls,
+        node,
+        fallback_display_loss: float | None = None,
+    ) -> float:
+        """把逐行承压覆盖结果同步回正式损失字段。"""
+        override = cls._get_pressure_pipe_window_override(node)
+        row_override_modes = cls._get_pressure_pipe_row_override_group_modes()
+        friction_loss = float(getattr(node, "head_loss_friction", 0.0) or 0.0)
+        bend_loss = float(getattr(node, "head_loss_bend", 0.0) or 0.0)
+        local_loss = float(getattr(node, "head_loss_local", 0.0) or 0.0)
+        display_loss = None
+
+        if override and str(override.get("group_mode", "") or "").strip() in row_override_modes:
+            friction_loss = float(override.get("friction_loss", 0.0) or 0.0)
+            bend_loss = float(override.get("total_bend_loss", 0.0) or 0.0)
+            local_loss = float(override.get("local_loss", 0.0) or 0.0)
+            if local_loss <= ZERO_TOLERANCE:
+                local_loss = (
+                    float(override.get("inlet_transition_loss", 0.0) or 0.0)
+                    + float(override.get("outlet_transition_loss", 0.0) or 0.0)
+                )
+            display_loss = float(override.get("total_head_loss", 0.0) or 0.0)
+            node.head_loss_friction = friction_loss
+            node.head_loss_bend = bend_loss
+            node.head_loss_local = local_loss
+
+        if display_loss is None:
+            try:
+                display_loss = float(fallback_display_loss or 0.0)
+            except (TypeError, ValueError):
+                display_loss = 0.0
+        if display_loss <= ZERO_TOLERANCE:
+            display_loss = max(friction_loss + bend_loss + local_loss, 0.0)
+
+        node.head_loss_siphon = 0.0
+        node.external_head_loss = None
+        setattr(node, "_pressure_pipe_display_loss", display_loss)
+        node.head_loss_total = (
+            display_loss
+            + float(getattr(node, "head_loss_reserve", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_gate", 0.0) or 0.0)
+        )
+        return display_loss
+
+    @classmethod
     def _get_pressure_pipe_loss_display_value(
         cls,
         node,
@@ -3213,7 +3261,11 @@ class WaterProfilePanel(QWidget):
     ) -> float:
         if cls._is_pressure_pipe_row_override_node(node, channel_level):
             cls._ensure_pressure_pipe_row_identity(node, row_index)
-            return cls._get_unnamed_pressure_pipe_row_display_loss(node)
+            display_loss = cls._get_unnamed_pressure_pipe_row_display_loss(node)
+            return cls._rebuild_pressure_pipe_row_override_total_loss(
+                node,
+                fallback_display_loss=display_loss,
+            )
 
         if cls._is_regular_pressure_pipe_node(node) and not str(getattr(node, "name", "") or "").strip():
             return 0.0
@@ -3252,12 +3304,10 @@ class WaterProfilePanel(QWidget):
 
         if cls._is_pressure_pipe_row_override_node(node, channel_level):
             cls._ensure_pressure_pipe_row_identity(node)
-            override = cls._get_pressure_pipe_window_override(node)
-            if override:
-                numeric_value = float(override.get("total_head_loss", numeric_value) or 0.0)
-            node.head_loss_siphon = 0.0
-            setattr(node, "_pressure_pipe_display_loss", numeric_value)
-            return numeric_value
+            return cls._rebuild_pressure_pipe_row_override_total_loss(
+                node,
+                fallback_display_loss=numeric_value,
+            )
 
         if cls._is_regular_pressure_pipe_node(node) and not str(getattr(node, "name", "") or "").strip():
             node.head_loss_siphon = 0.0
@@ -3268,6 +3318,7 @@ class WaterProfilePanel(QWidget):
             node.head_loss_siphon = 0.0
             node.external_head_loss = None
             setattr(node, "_pressure_pipe_display_loss", numeric_value)
+            cls._rebuild_named_pressure_pipe_outlet_total_loss(node)
             return numeric_value
 
         if hasattr(node, "_pressure_pipe_display_loss"):
@@ -3275,6 +3326,14 @@ class WaterProfilePanel(QWidget):
         node.head_loss_siphon = numeric_value
         if numeric_value > 0 and getattr(node, "external_head_loss", None) is not None:
             node.external_head_loss = None
+        node.head_loss_total = (
+            float(getattr(node, "head_loss_bend", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_friction", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_local", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_reserve", 0.0) or 0.0)
+            + float(getattr(node, "head_loss_gate", 0.0) or 0.0)
+            + numeric_value
+        )
         return numeric_value
 
     def _get_pressure_pipe_display_context(self, node, row_index: int | None = None) -> dict:
@@ -10091,7 +10150,6 @@ class WaterProfilePanel(QWidget):
             current_chain_entries = []
             current_chain_flow_section = ""
         _flush_xxqu_pressure_chain(current_chain_entries, current_chain_flow_section)
-
         if is_xxpipe_channel:
             flow_section_groups = {}
             flow_section_order = []

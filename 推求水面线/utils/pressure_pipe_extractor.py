@@ -1888,13 +1888,15 @@ class PressurePipeDataExtractor:
         member: Optional[PressurePipeChainMember],
         settings=None,
     ) -> bool:
-        """判断 xx渠 连续承压尾段中的命名承压组是否要改成逐段成员。"""
+        """判断连续承压链中的命名承压组是否要改成逐段成员。"""
         if member is None or getattr(member, "member_type", "") != "named_group":
             return False
         members = list(getattr(chain, "members", []) or []) if chain is not None else []
-        if not members or members[-1] is not member:
+        channel_level = str(getattr(settings, "channel_level", "") or "").strip()
+        is_xxpipe_channel = channel_level in XXPIPE_CHANNEL_LEVEL_OPTIONS
+        if not members:
             return False
-        if PressurePipeDataExtractor._is_xxpipe_channel_level(settings):
+        if (not is_xxpipe_channel) and members[-1] is not member:
             return False
         if bool(getattr(member, "is_anchor_member", False)) or not bool(
             getattr(member, "should_generate_row_loss", True)
@@ -1909,7 +1911,8 @@ class PressurePipeDataExtractor:
             idx for idx in (getattr(member, "row_indices", []) or [])
             if isinstance(idx, int) and idx >= 0
         ]
-        if len(row_indices) < 3:
+        minimum_row_count = 2 if is_xxpipe_channel else 3
+        if len(row_indices) < minimum_row_count:
             return False
         entered_pressurized_at_row = PressurePipeDataExtractor._resolve_route_entered_pressurized_at_row(chain)
         if entered_pressurized_at_row >= 0 and min(row_indices) < entered_pressurized_at_row:
@@ -1922,7 +1925,7 @@ class PressurePipeDataExtractor:
         nodes: List[ChannelNode],
         settings=None,
     ) -> None:
-        """把 xx渠 连续承压尾段中的命名承压组展开成逐段链成员。"""
+        """把连续承压链中需要逐段回写的命名承压组展开成逐段链成员。"""
         if chain is None:
             return
         original_members = list(getattr(chain, "members", []) or [])

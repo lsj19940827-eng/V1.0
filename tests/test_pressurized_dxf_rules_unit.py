@@ -1614,6 +1614,37 @@ def test_panel_pressure_pipe_characteristic_summary_falls_back_to_flow_scan_with
     assert summary["1"]["end_water_level"] == 374.517
 
 
+@pytest.mark.parametrize("channel_level", ["支管", "干管"])
+def test_panel_pressure_pipe_characteristic_summary_single_flow_xxpipe_without_prefix_keeps_pressure_boundary_water_levels(channel_level):
+    dummy_panel = SimpleNamespace(
+        calculated_nodes=[
+            _make_pressure_pipe_summary_node("1", 200.0, 377.659, "有压管道", name="三清庙", in_out_text="进"),
+            _make_pressure_pipe_summary_node("1", 600.0, 374.517, "有压管道", name="三清庙", in_out_text="出"),
+        ],
+        _build_settings=lambda: SimpleNamespace(channel_level=channel_level),
+    )
+    _bind_pressure_pipe_summary_methods(dummy_panel)
+
+    summary = panel_mod.WaterProfilePanel.get_pressure_pipe_characteristic_export_summary(
+        dummy_panel,
+        rows=[
+            {
+                "name": "三清庙",
+                "flow_section": 1,
+                "identity": "1::三清庙",
+                "segment_start_mc": 200.0,
+                "segment_end_mc": 600.0,
+                "upstream_row_index": 0,
+                "target_row_index": 1,
+            }
+        ],
+    )
+
+    assert summary["1"]["total_length"] == 400.0
+    assert summary["1"]["start_water_level"] == 377.659
+    assert summary["1"]["end_water_level"] == 374.517
+
+
 def test_panel_pressure_pipe_characteristic_summary_includes_plain_pressure_pipe_segments_in_total_length():
     dummy_panel = SimpleNamespace(
         calculated_nodes=[
@@ -2382,8 +2413,6 @@ def test_merge_pressure_pipe_export_rows_by_flow_section_passes_resolved_summary
     assert table_rows[0][3] == pytest.approx(13.154)
     assert table_rows[0][9] == 1
     assert table_rows[0][10] == pytest.approx(2.738)
-
-
 def test_merge_pressure_pipe_export_rows_by_flow_section_uses_filtered_terminal_tunnel_length_for_xxqu():
     rows = [
         {

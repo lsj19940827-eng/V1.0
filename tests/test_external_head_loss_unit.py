@@ -401,6 +401,72 @@ def test_named_pressure_pipe_hidden_result_uses_display_loss_in_water_level_reca
     assert abs((start_channel.water_level - outlet.water_level) - 0.4136) < 0.01
 
 
+def test_branch_xxpipe_row_override_refreshes_total_and_cumulative_losses():
+    """
+    测试支管连续承压链逐行覆盖结果在静默重算时会刷新正式总损失与累计损失。
+    """
+    start_channel = ChannelNode()
+    start_channel.is_transition = False
+    start_channel.structure_type = StructureType.from_string("明渠-梯形")
+    start_channel.flow_section = "渠道1"
+    start_channel.head_loss_total = 0.0
+    start_channel.head_loss_cumulative = 0.0
+
+    pipe_rows = []
+    override_specs = [
+        ("有压管道", 0.21, 0.03, 0.05, 0.29),
+        ("定向钻", 0.18, 0.02, 0.04, 0.24),
+        ("顶管", 0.12, 0.01, 0.03, 0.16),
+    ]
+    for idx, (structure_text, friction_loss, bend_loss, local_loss, total_loss) in enumerate(override_specs, start=1):
+        node = ChannelNode()
+        node.is_transition = False
+        node.structure_type = StructureType.from_string(structure_text)
+        node.name = f"承压段{idx}"
+        node.flow_section = "渠道1"
+        node.section_params = {
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": f"flow1-row{idx + 1}",
+                "group_mode": "chain_row_member",
+                "friction_loss": friction_loss,
+                "total_bend_loss": bend_loss,
+                "local_loss": local_loss,
+                "total_head_loss": total_loss,
+            }
+        }
+        node.pressure_pipe_window_override = dict(node.section_params["pressure_pipe_window_override"])
+        node.head_loss_friction = 0.0
+        node.head_loss_bend = 0.0
+        node.head_loss_local = 0.0
+        node.head_loss_reserve = 0.0
+        node.head_loss_gate = 0.0
+        node.head_loss_siphon = 9.99
+        node.external_head_loss = 9.99
+        node.head_loss_total = 0.0
+        node.head_loss_cumulative = 0.0
+        pipe_rows.append(node)
+
+    nodes = [start_channel, *pipe_rows]
+    calculator = WaterProfileCalculator(ProjectSettings())
+
+    calculator._update_total_head_loss(nodes)
+    calculator._calculate_cumulative_head_loss(nodes)
+
+    assert abs(pipe_rows[0].head_loss_total - 0.29) < 1e-9
+    assert abs(pipe_rows[1].head_loss_total - 0.24) < 1e-9
+    assert abs(pipe_rows[2].head_loss_total - 0.16) < 1e-9
+    assert abs(pipe_rows[0].head_loss_cumulative - 0.29) < 1e-9
+    assert abs(pipe_rows[1].head_loss_cumulative - 0.53) < 1e-9
+    assert abs(pipe_rows[2].head_loss_cumulative - 0.69) < 1e-9
+    assert pipe_rows[0].head_loss_siphon == 0.0
+    assert pipe_rows[1].head_loss_siphon == 0.0
+    assert pipe_rows[2].head_loss_siphon == 0.0
+    assert pipe_rows[0].external_head_loss is None
+    assert pipe_rows[1].external_head_loss is None
+    assert pipe_rows[2].external_head_loss is None
+
+
 def test_multiple_nodes_with_external_loss():
     """
     测试多个节点都有 external_head_loss 的情况

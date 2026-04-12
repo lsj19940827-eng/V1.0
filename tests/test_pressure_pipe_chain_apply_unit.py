@@ -7,6 +7,8 @@ import types
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def _load_module(module_name: str, file_path: Path):
     spec = importlib.util.spec_from_file_location(module_name, file_path)
@@ -388,6 +390,58 @@ def test_apply_pressure_pipe_member_result_writes_chain_row_override():
     assert abs(node.head_loss_total - 0.2312) < 1e-9
     assert node.external_head_loss is None
     assert panel._pressure_pipe_calc_done["flow2-row4"] is True
+
+
+@pytest.mark.parametrize("channel_level", ["支管", "干管"])
+def test_apply_pressure_pipe_loss_cell_syncs_row_override_total_loss_fields(channel_level):
+    WaterProfilePanel = _load_panel_class()
+
+    node = SimpleNamespace(
+        structure_type=SimpleNamespace(value="有压管道"),
+        name="洞梁村",
+        section_params={
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": "flow1-row18",
+                "group_mode": "chain_row_member",
+                "friction_loss": 0.21,
+                "total_bend_loss": 0.03,
+                "local_loss": 0.05,
+                "total_head_loss": 0.29,
+            }
+        },
+        pressure_pipe_window_override={
+            "enabled": True,
+            "identity": "flow1-row18",
+            "group_mode": "chain_row_member",
+            "friction_loss": 0.21,
+            "total_bend_loss": 0.03,
+            "local_loss": 0.05,
+            "total_head_loss": 0.29,
+        },
+        head_loss_friction=0.0,
+        head_loss_bend=0.0,
+        head_loss_local=0.0,
+        head_loss_reserve=0.01,
+        head_loss_gate=0.02,
+        head_loss_siphon=10.49,
+        external_head_loss=10.49,
+        head_loss_total=0.0,
+    )
+
+    display_loss = WaterProfilePanel._apply_pressure_pipe_loss_cell_to_node(
+        node,
+        0.29,
+        channel_level=channel_level,
+    )
+
+    assert abs(display_loss - 0.29) < 1e-9
+    assert abs(node.head_loss_friction - 0.21) < 1e-9
+    assert abs(node.head_loss_bend - 0.03) < 1e-9
+    assert abs(node.head_loss_local - 0.05) < 1e-9
+    assert node.head_loss_siphon == 0.0
+    assert node.external_head_loss is None
+    assert abs(node.head_loss_total - 0.32) < 1e-9
 
 
 def test_apply_pressure_pipe_member_result_for_named_group_keeps_row_loss_and_stores_hidden_meta():

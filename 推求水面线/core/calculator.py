@@ -2453,18 +2453,55 @@ class WaterProfileCalculator:
             # 只处理非渐变段节点
             if node.is_transition:
                 continue
+
+            reserve_loss = float(getattr(node, 'head_loss_reserve', 0.0) or 0.0)
+            gate_loss = float(getattr(node, 'head_loss_gate', 0.0) or 0.0)
+            row_override_display_loss = self._rebuild_pressure_pipe_row_override_total_loss(node)
+            if row_override_display_loss is not None:
+                node.head_loss_total = row_override_display_loss + reserve_loss + gate_loss
+                continue
             
             # 获取各项损失
             h_bend = node.head_loss_bend or 0.0
             h_friction = node.head_loss_friction or 0.0
             h_local = node.head_loss_local or 0.0
-            h_reserve = getattr(node, 'head_loss_reserve', 0.0) or 0.0
-            h_gate = getattr(node, 'head_loss_gate', 0.0) or 0.0
+            h_reserve = reserve_loss
+            h_gate = gate_loss
             h_siphon = self.hyd_calc._resolve_pressure_pipe_formula_term_loss(node)
             
             # 重新计算总水头损失
             # 注：渐变段损失单独显示在渐变段行，不计入节点的总水头损失
             node.head_loss_total = h_bend + h_friction + h_local + h_reserve + h_gate + h_siphon
+
+    def _rebuild_pressure_pipe_row_override_total_loss(self, node: ChannelNode) -> Optional[float]:
+        """把逐行承压覆盖同步回正式损失字段，供静默重算复用。"""
+        window_override = self.hyd_calc._get_pressure_pipe_window_override(node)
+        if not window_override:
+            return None
+        group_mode = str(window_override.get("group_mode", "") or "").strip()
+        if not self.hyd_calc._is_pressure_pipe_row_override_mode(group_mode):
+            return None
+
+        friction_loss = float(window_override.get("friction_loss", 0.0) or 0.0)
+        bend_loss = float(window_override.get("total_bend_loss", 0.0) or 0.0)
+        local_loss = float(window_override.get("local_loss", 0.0) or 0.0)
+        if local_loss <= ZERO_TOLERANCE:
+            local_loss = (
+                float(window_override.get("inlet_transition_loss", 0.0) or 0.0)
+                + float(window_override.get("outlet_transition_loss", 0.0) or 0.0)
+            )
+
+        node.head_loss_friction = friction_loss
+        node.head_loss_bend = bend_loss
+        node.head_loss_local = local_loss
+        node.head_loss_siphon = 0.0
+        node.external_head_loss = None
+
+        display_loss = float(window_override.get("total_head_loss", 0.0) or 0.0)
+        if display_loss <= ZERO_TOLERANCE:
+            display_loss = max(friction_loss + bend_loss + local_loss, 0.0)
+        setattr(node, "_pressure_pipe_display_loss", display_loss)
+        return display_loss
 
     def _calculate_cumulative_head_loss(self, nodes: List[ChannelNode]) -> None:
         """
