@@ -170,6 +170,18 @@ class HydraulicCalculator:
                 normalized[field_name] = float(value.get(field_name, 0.0) or 0.0)
             except (TypeError, ValueError):
                 normalized[field_name] = 0.0
+        manual_total = value.get("manual_total_head_loss", None)
+        if manual_total is not None and str(manual_total).strip() != "":
+            try:
+                normalized["manual_total_head_loss"] = float(manual_total)
+            except (TypeError, ValueError):
+                pass
+        manual_source = str(value.get("manual_override_source", "") or "").strip()
+        if manual_source:
+            normalized["manual_override_source"] = manual_source
+        manual_updated_at = str(value.get("manual_override_updated_at", "") or "").strip()
+        if manual_updated_at:
+            normalized["manual_override_updated_at"] = manual_updated_at
         for detail_field in ("friction_details", "bend_details", "local_details"):
             detail_value = value.get(detail_field, {})
             normalized[detail_field] = copy.deepcopy(detail_value) if isinstance(detail_value, dict) else {}
@@ -205,6 +217,46 @@ class HydraulicCalculator:
             "chain_tunnel_member",
             "chain_prefix_member",
         }
+
+    def _sync_pressure_pipe_row_override_display_loss(
+        self,
+        node: Optional[ChannelNode],
+        window_override: Dict[str, object],
+        row_override_mode: bool,
+    ) -> None:
+        """把逐行承压覆盖结果同步到表3显示损失字段。"""
+        if not window_override or node is None:
+            return
+        if not (row_override_mode or self._is_unnamed_regular_pressure_pipe(node)):
+            return
+
+        manual_override_applied = False
+        display_loss = self._get_pressure_pipe_row_manual_override_loss(window_override)
+        if display_loss is not None:
+            manual_override_applied = True
+        else:
+            display_loss = float(window_override.get("total_head_loss", 0.0) or 0.0)
+        if display_loss <= ZERO_TOLERANCE and not manual_override_applied:
+            display_loss = max(
+                float(window_override.get("friction_loss", 0.0) or 0.0)
+                + float(window_override.get("total_bend_loss", 0.0) or 0.0)
+                + float(window_override.get("local_loss", 0.0) or 0.0),
+                0.0,
+            )
+        setattr(node, "_pressure_pipe_display_loss", display_loss)
+
+    @staticmethod
+    def _get_pressure_pipe_row_manual_override_loss(window_override: Dict[str, object] | None):
+        """读取逐行承压手动采用值。"""
+        if not isinstance(window_override, dict):
+            return None
+        raw_value = window_override.get("manual_total_head_loss", None)
+        if raw_value is None or str(raw_value).strip() == "":
+            return None
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            return None
 
     def _should_calculate_bend_loss(self, node: Optional[ChannelNode]) -> bool:
         """判断当前节点是否需要尝试计算弯道损失。"""
@@ -1714,6 +1766,12 @@ class HydraulicCalculator:
             if row_override_mode:
                 curr_node.head_loss_siphon = 0.0
                 curr_node.external_head_loss = None
+            self._sync_pressure_pipe_row_override_display_loss(
+                curr_node,
+                window_override,
+                row_override_mode,
+            )
+            manual_override_loss = self._get_pressure_pipe_row_manual_override_loss(window_override)
             
             # 计算当前节点水位
             curr_node.water_level = prev_regular_node.water_level - hf - hj - hw - accumulated_transition_loss
@@ -1733,7 +1791,16 @@ class HydraulicCalculator:
             
             # 计算总水头损失（不含渐变段损失）
             # 注：总损失包含局部水头损失（hj），以便与水位递推/累计损失一致
-            curr_node.head_loss_total = hw + hf + hj + head_loss_reserve + head_loss_gate + head_loss_siphon + external_head_loss
+            if row_override_mode and manual_override_loss is not None:
+                row_display_loss = float(getattr(curr_node, "_pressure_pipe_display_loss", manual_override_loss) or manual_override_loss)
+                curr_node.head_loss_total = row_display_loss + head_loss_reserve + head_loss_gate
+                curr_node.water_level = (
+                    prev_regular_node.water_level
+                    - curr_node.head_loss_total
+                    - accumulated_transition_loss
+                )
+            else:
+                curr_node.head_loss_total = hw + hf + hj + head_loss_reserve + head_loss_gate + head_loss_siphon + external_head_loss
             if self._is_named_pressure_pipe_outlet_with_hidden_result(curr_node):
                 # 命名承压尾段需要按“本行正式损失”重新扣减水位，
                 # 不能继续沿用隐藏整组结果剥离前的基础项口径。

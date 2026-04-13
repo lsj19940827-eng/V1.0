@@ -2784,6 +2784,18 @@ class WaterProfilePanel(QWidget):
                 normalized[field_name] = float(value.get(field_name, 0.0) or 0.0)
             except (TypeError, ValueError):
                 normalized[field_name] = 0.0
+        manual_total = value.get("manual_total_head_loss", None)
+        if manual_total is not None and str(manual_total).strip() != "":
+            try:
+                normalized["manual_total_head_loss"] = float(manual_total)
+            except (TypeError, ValueError):
+                pass
+        manual_source = str(value.get("manual_override_source", "") or "").strip()
+        if manual_source:
+            normalized["manual_override_source"] = manual_source
+        manual_updated_at = str(value.get("manual_override_updated_at", "") or "").strip()
+        if manual_updated_at:
+            normalized["manual_override_updated_at"] = manual_updated_at
         for dict_field in ("friction_details", "bend_details", "local_details"):
             dict_value = value.get(dict_field, {})
             normalized[dict_field] = copy.deepcopy(dict_value) if isinstance(dict_value, dict) else {}
@@ -3159,6 +3171,62 @@ class WaterProfilePanel(QWidget):
             section_params.pop("pressure_pipe_window_override", None)
 
     @classmethod
+    def _get_pressure_pipe_row_manual_override_loss(cls, override: dict | None):
+        """读取逐行承压手动采用值。"""
+        if not isinstance(override, dict):
+            return None
+        raw_value = override.get("manual_total_head_loss", None)
+        if raw_value is None or str(raw_value).strip() == "":
+            return None
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _set_pressure_pipe_row_manual_override(
+        cls,
+        node,
+        value,
+        *,
+        clear: bool = False,
+        source: str = "pressure_pipe_loss_dialog",
+        updated_at: str | None = None,
+    ) -> bool:
+        """写入或清空逐行承压手动采用值。"""
+        override = cls._get_pressure_pipe_window_override(node)
+        if not override:
+            return False
+
+        normalized = copy.deepcopy(override)
+        if clear:
+            changed = any(
+                key in normalized
+                for key in ("manual_total_head_loss", "manual_override_source", "manual_override_updated_at")
+            )
+            normalized.pop("manual_total_head_loss", None)
+            normalized.pop("manual_override_source", None)
+            normalized.pop("manual_override_updated_at", None)
+            if changed:
+                cls._set_pressure_pipe_window_override(node, normalized)
+            return changed
+
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            return False
+        if numeric_value < 0:
+            return False
+        if not updated_at:
+            updated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        normalized["manual_total_head_loss"] = numeric_value
+        normalized["manual_override_source"] = str(source or "pressure_pipe_loss_dialog")
+        normalized["manual_override_updated_at"] = str(updated_at or "")
+        cls._set_pressure_pipe_window_override(node, normalized)
+        return True
+
+    @classmethod
     def _is_pressure_pipe_display_locked_node(cls, node, channel_level: str | None = None) -> bool:
         """判断倒虹吸/有压管道损失单元格是否应锁定。"""
         return (
@@ -3170,6 +3238,10 @@ class WaterProfilePanel(QWidget):
     def _get_unnamed_pressure_pipe_row_display_loss(cls, node) -> float:
         override = cls._get_pressure_pipe_window_override(node)
         if override:
+            manual_total = cls._get_pressure_pipe_row_manual_override_loss(override)
+            if manual_total is not None:
+                setattr(node, "_pressure_pipe_display_loss", manual_total)
+                return manual_total
             override_total = float(override.get("total_head_loss", 0.0) or 0.0)
             if override_total > 0:
                 setattr(node, "_pressure_pipe_display_loss", override_total)
@@ -3219,6 +3291,7 @@ class WaterProfilePanel(QWidget):
         bend_loss = float(getattr(node, "head_loss_bend", 0.0) or 0.0)
         local_loss = float(getattr(node, "head_loss_local", 0.0) or 0.0)
         display_loss = None
+        manual_override_applied = False
 
         if override and str(override.get("group_mode", "") or "").strip() in row_override_modes:
             friction_loss = float(override.get("friction_loss", 0.0) or 0.0)
@@ -3229,7 +3302,12 @@ class WaterProfilePanel(QWidget):
                     float(override.get("inlet_transition_loss", 0.0) or 0.0)
                     + float(override.get("outlet_transition_loss", 0.0) or 0.0)
                 )
-            display_loss = float(override.get("total_head_loss", 0.0) or 0.0)
+            manual_total = cls._get_pressure_pipe_row_manual_override_loss(override)
+            if manual_total is not None:
+                display_loss = manual_total
+                manual_override_applied = True
+            else:
+                display_loss = float(override.get("total_head_loss", 0.0) or 0.0)
             node.head_loss_friction = friction_loss
             node.head_loss_bend = bend_loss
             node.head_loss_local = local_loss
@@ -3239,7 +3317,7 @@ class WaterProfilePanel(QWidget):
                 display_loss = float(fallback_display_loss or 0.0)
             except (TypeError, ValueError):
                 display_loss = 0.0
-        if display_loss <= ZERO_TOLERANCE:
+        if display_loss <= ZERO_TOLERANCE and not manual_override_applied:
             display_loss = max(friction_loss + bend_loss + local_loss, 0.0)
 
         node.head_loss_siphon = 0.0
@@ -4209,6 +4287,43 @@ class WaterProfilePanel(QWidget):
         )
         first_item.setData(Qt.UserRole, payload)
 
+    def _persist_pressure_pipe_override_payload_for_row(self, row_idx: int, node=None):
+        """把逐行承压 override 同步回表3行元数据，保证保存/重开不丢。"""
+        table = getattr(self, "node_table", None)
+        if not table or row_idx < 0 or row_idx >= table.rowCount():
+            return
+        first_item = table.item(row_idx, 0)
+        if first_item is None:
+            first_item = QTableWidgetItem("")
+            first_item.setTextAlignment(Qt.AlignCenter)
+            if 0 not in EDITABLE_COLS:
+                first_item.setFlags(first_item.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row_idx, 0, first_item)
+
+        payload = first_item.data(Qt.UserRole)
+        if not isinstance(payload, dict):
+            payload = {}
+
+        node_obj = node
+        if node_obj is None and getattr(self, "calculated_nodes", None) and row_idx < len(self.calculated_nodes):
+            node_obj = self.calculated_nodes[row_idx]
+        if node_obj is None:
+            first_item.setData(Qt.UserRole, payload)
+            return
+
+        current_channel_level = self._get_current_channel_level_text()
+        if self._should_persist_pressure_pipe_row_identity(node_obj, current_channel_level):
+            payload[PRESSURE_PIPE_ROW_ID_ROLE_KEY] = self._ensure_pressure_pipe_row_identity(node_obj, row_idx)
+        else:
+            payload.pop(PRESSURE_PIPE_ROW_ID_ROLE_KEY, None)
+
+        override = self._get_pressure_pipe_window_override(node_obj)
+        if override:
+            payload[PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY] = copy.deepcopy(override)
+        else:
+            payload.pop(PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY, None)
+        first_item.setData(Qt.UserRole, payload)
+
     def _build_transition_length_tooltip(self, details):
         if not isinstance(details, dict):
             return ""
@@ -5148,11 +5263,80 @@ class WaterProfilePanel(QWidget):
         from app_渠系计算前端.water_profile.formula_dialog import show_water_level_dialog
         show_water_level_dialog(self, node.name or f"行{row_idx+1}", details)
 
+    def _apply_pressure_pipe_row_manual_override_change(
+        self,
+        row_idx: int,
+        node,
+        *,
+        manual_value=None,
+        clear: bool = False,
+        mark_dirty: bool = True,
+    ) -> bool:
+        """将锁定逐行承压行的手动采用值写回表3并触发后续递推。"""
+        channel_level = self._get_current_channel_level_text()
+        if not self._is_pressure_pipe_display_locked_node(node, channel_level):
+            return False
+
+        changed = self._set_pressure_pipe_row_manual_override(
+            node,
+            manual_value,
+            clear=clear,
+            source="pressure_pipe_loss_dialog",
+        )
+        if not changed:
+            return False
+
+        display_loss = self._get_pressure_pipe_loss_display_value(
+            node,
+            row_index=row_idx,
+            channel_level=channel_level,
+        )
+
+        if hasattr(self, "_snapshot_editable_cols") and hasattr(self, "_append_loss_undo_snapshot"):
+            self._append_loss_undo_snapshot(self._snapshot_editable_cols())
+
+        table = getattr(self, "node_table", None)
+        old_updating = getattr(self, "_updating_cells", False)
+        self._updating_cells = True
+        try:
+            if table is not None and row_idx >= 0 and row_idx < table.rowCount():
+                item = table.item(row_idx, 38)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if 38 not in EDITABLE_COLS:
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    table.setItem(row_idx, 38, item)
+                item.setText(f"{float(display_loss or 0.0):.4f}")
+                if self._is_pressure_pipe_display_locked_node(node, channel_level):
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self._persist_pressure_pipe_override_payload_for_row(row_idx, node)
+        finally:
+            self._updating_cells = old_updating
+
+        self._apply_pressure_pipe_loss_cell_to_node(
+            node,
+            display_loss,
+            channel_level=channel_level,
+        )
+        self._recalc_downstream(row_idx)
+        self._refresh_pressure_pipe_controls()
+        if mark_dirty and not getattr(self, "_loading_project", False):
+            self.data_changed.emit()
+        return True
+
     def _show_pressure_pipe_loss_details(self, row_idx, node):
         pressure_pipe_ctx = self._get_pressure_pipe_display_context(node, row_idx)
         if not pressure_pipe_ctx["is_row_sum"] and not self._is_named_pressure_pipe_group_node(node):
             fluent_info(self, "提示", "该行没有可查看的有压管道列计算详情")
             return
+        channel_level = self._get_current_channel_level_text()
+        editable_override = self._is_pressure_pipe_display_locked_node(node, channel_level)
+        manual_override_value = None
+        if editable_override:
+            manual_override_value = self._get_pressure_pipe_row_manual_override_loss(
+                self._get_pressure_pipe_window_override(node)
+            )
         details = {
             "head_loss_bend": node.head_loss_bend or 0.0,
             "head_loss_friction": node.head_loss_friction or 0.0,
@@ -5165,7 +5349,35 @@ class WaterProfilePanel(QWidget):
             "pressure_pipe_named_group_total": pressure_pipe_ctx["named_group_total_loss"],
         }
         from app_渠系计算前端.water_profile.formula_dialog import show_pressure_pipe_loss_dialog
-        show_pressure_pipe_loss_dialog(self, node.name or f"行{row_idx+1}", details)
+        try:
+            show_pressure_pipe_loss_dialog(
+                self,
+                node.name or f"行{row_idx+1}",
+                details,
+                editable_override=editable_override,
+                manual_override_value=manual_override_value,
+                on_save_override=(
+                    lambda value: self._apply_pressure_pipe_row_manual_override_change(
+                        row_idx,
+                        node,
+                        manual_value=value,
+                        mark_dirty=True,
+                    )
+                ) if editable_override else None,
+                on_clear_override=(
+                    lambda: self._apply_pressure_pipe_row_manual_override_change(
+                        row_idx,
+                        node,
+                        clear=True,
+                        mark_dirty=True,
+                    )
+                ) if editable_override else None,
+            )
+        except TypeError as exc:
+            message = str(exc)
+            if "unexpected keyword argument" not in message and "positional arguments" not in message:
+                raise
+            show_pressure_pipe_loss_dialog(self, node.name or f"行{row_idx+1}", details)
 
     def _collect_terminal_gate_backfill_records(self, nodes=None):
         """收集末尾闸行高程回推记录。"""
