@@ -114,6 +114,7 @@ class _RecordingMSP:
     def __init__(self):
         self.line_records = []
         self.text_records = []
+        self.polyline_records = []
 
     def add_line(self, start, end, dxfattribs=None, **_kwargs):
         self.line_records.append(
@@ -125,7 +126,13 @@ class _RecordingMSP:
         )
         return None
 
-    def add_lwpolyline(self, *_args, **_kwargs):
+    def add_lwpolyline(self, points, dxfattribs=None, **_kwargs):
+        self.polyline_records.append(
+            {
+                "points": [(float(x), float(y)) for x, y in points],
+                "dxfattribs": dict(dxfattribs or {}),
+            }
+        )
         return None
 
     def add_text(self, text, dxfattribs=None):
@@ -216,6 +223,15 @@ def _make_profile_node(
         slope_i=1 / 3000,
         pressure_pipe_row_identity=str(row_identity or ""),
     )
+
+
+def _polyline_has_x_backtracking(points, tol=1e-9):
+    last_x = None
+    for x_value, _y_value in points:
+        if last_x is not None and float(x_value) < float(last_x) - tol:
+            return True
+        last_x = float(x_value)
+    return False
 
 
 def _has_line(records, start, end, layer=None, tol=1e-6):
@@ -1118,6 +1134,143 @@ def test_export_combined_dxf_tail_split_keeps_upper_channel_horizontal_lines_wit
         (0.0, 45.0),
         (expected_width, 45.0),
         layer="纵断面_表格线框",
+    )
+
+
+def test_export_combined_dxf_tail_split_ignores_midstream_origin_breakpoint_in_upper_profile(
+    monkeypatch,
+):
+    docs = {}
+
+    def _fake_new(_version):
+        doc = _RecordingDoc()
+        docs["doc"] = doc
+        return doc
+
+    ezdxf_stub = SimpleNamespace(
+        new=_fake_new,
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+    monkeypatch.setattr(cad_tools, "TextExportSettingsDialog", _AcceptedTextDialog)
+    monkeypatch.setattr(cad_tools, "_setup_profile_dxf_document", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "_ensure_profile_layers", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        cad_tools.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_a, **_k: ("C:/tmp/combined_tail_split_breakpoint.dxf", "DXF")),
+    )
+
+    panel = _build_panel()
+    channel_nodes = [
+        _make_profile_node(
+            ip_no=1,
+            mc=0.0,
+            structure="明渠-矩形",
+            name="明渠起点",
+            bottom=410.0,
+            top=411.0,
+            water=410.5,
+        ),
+        _make_profile_node(
+            ip_no=2,
+            mc=100.0,
+            structure="明渠-矩形",
+            name="明渠中点",
+            bottom=409.0,
+            top=410.0,
+            water=409.5,
+        ),
+        _make_profile_node(
+            ip_no=3,
+            mc=0.0,
+            structure="渐变段",
+            name="错误断点",
+            bottom=408.6,
+            top=409.6,
+            water=409.1,
+            is_transition=True,
+        ),
+        _make_profile_node(
+            ip_no=4,
+            mc=120.0,
+            structure="明渠-矩形",
+            name="明渠终点",
+            bottom=408.4,
+            top=409.4,
+            water=408.9,
+        ),
+    ]
+    tail_nodes = [
+        _make_profile_node(
+            ip_no=5,
+            mc=150.0,
+            structure="有压管道",
+            name="末端压力管",
+            bottom=408.0,
+            top=0.0,
+            water=0.0,
+            in_out="进",
+        ),
+        _make_profile_node(
+            ip_no=6,
+            mc=180.0,
+            structure="有压管道",
+            name="末端压力管",
+            bottom=407.5,
+            top=0.0,
+            water=0.0,
+            in_out="出",
+        ),
+    ]
+    panel.calculated_nodes = channel_nodes + tail_nodes
+
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "_draw_section_summary_on_msp", lambda *_a, **_k: (320.0, 180.0, 1))
+    monkeypatch.setattr(cad_tools, "_compute_ip_preview_data", lambda *_a, **_k: ([["IP1"]], []))
+    monkeypatch.setattr(cad_tools, "_draw_ip_table_on_msp", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        cad_tools,
+        "_build_panel_xxpipe_profile_data",
+        lambda *_a, **_k: {
+            "profile_text_nodes": tail_nodes,
+            "centerline_records": [
+                {"station_mc": 150.0, "elevation": 100.0},
+                {"station_mc": 180.0, "elevation": 99.0},
+            ],
+            "centerline_points": [(150.0, 100.0), (180.0, 99.0)],
+            "ip_records": [{"x": 150.0, "text": "IP5"}, {"x": 180.0, "text": "IP6"}],
+            "building_segments": [{"mid_mc": 165.0, "text": "末端压力管"}],
+            "material_segments": [{"mid_mc": 165.0, "text": "钢管"}],
+        },
+    )
+
+    cad_tools.export_combined_dxf(panel)
+
+    assert docs["doc"].saved_path == "C:/tmp/combined_tail_split_breakpoint.dxf"
+
+    msp = docs["doc"].modelspace()
+    upper_polylines = {}
+    for record in msp.polyline_records:
+        layer = record["dxfattribs"].get("layer")
+        if layer in {"纵断面_渠底高程线", "纵断面_渠顶高程线", "纵断面_设计水位线"}:
+            upper_polylines.setdefault(layer, []).append(record["points"])
+
+    assert upper_polylines == {
+        "纵断面_渠底高程线": [[(0.0, 410.0), (50.0, 409.0), (60.0, 408.4)]],
+        "纵断面_渠顶高程线": [[(0.0, 411.0), (50.0, 410.0), (60.0, 409.4)]],
+        "纵断面_设计水位线": [[(0.0, 410.5), (50.0, 409.5), (60.0, 408.9)]],
+    }
+    assert all(
+        not _polyline_has_x_backtracking(points)
+        for groups in upper_polylines.values()
+        for points in groups
     )
 
 

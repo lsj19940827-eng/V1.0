@@ -2851,6 +2851,50 @@ def _resolve_profile_plot_station_value(station_mc, station_spans=None, tol=1e-9
     return mc
 
 
+def _build_standard_profile_polyline_segments(points, tol=1e-9):
+    """按绘图 X 坐标整理标准纵断面折线，跳过孤立回退点并按需拆段。"""
+    normalized_points = []
+    for raw_point in list(points or []):
+        try:
+            x_value = float(raw_point[0])
+            y_value = float(raw_point[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not math.isfinite(x_value) or not math.isfinite(y_value):
+            continue
+        normalized_points.append((x_value, y_value))
+
+    if len(normalized_points) < 2:
+        return []
+
+    segments = []
+    current_segment = [normalized_points[0]]
+    index = 1
+    while index < len(normalized_points):
+        current_point = normalized_points[index]
+        previous_x = float(current_segment[-1][0])
+        current_x = float(current_point[0])
+        if current_x >= previous_x - tol:
+            current_segment.append(current_point)
+            index += 1
+            continue
+
+        next_point = normalized_points[index + 1] if index + 1 < len(normalized_points) else None
+        if next_point is not None and float(next_point[0]) >= previous_x - tol:
+            # 中途混入的“回到起点”坏点不应把整条线拉回去，直接跳过即可。
+            index += 1
+            continue
+
+        if len(current_segment) >= 2:
+            segments.append(current_segment)
+        current_segment = [current_point]
+        index += 1
+
+    if len(current_segment) >= 2:
+        segments.append(current_segment)
+    return segments
+
+
 def _profile_text_uses_span_start_offset(item, index):
     """判断当前文字是否位于压缩后新区间起点。"""
     if index == 0:
@@ -9221,19 +9265,16 @@ def _draw_profile_on_msp(
         msp.add_line((0.0, hy), (sx(last_visible_mc), hy), dxfattribs={"layer": layer_grid})
 
     # ======== 4. 渠底/渠顶/水面折线 ========
-    bottom_pts = [(sx(n.station_MC), sy(n.bottom_elevation))
-                  for n in valid_nodes if n.bottom_elevation]
-    top_pts = [(sx(n.station_MC), sy(n.top_elevation))
-               for n in valid_nodes if n.top_elevation]
-    water_pts = [(sx(n.station_MC), sy(n.water_level))
-                 for n in valid_nodes if n.water_level]
+    bottom_pts = [(sx(n.station_MC), sy(n.bottom_elevation)) for n in valid_nodes if n.bottom_elevation]
+    top_pts = [(sx(n.station_MC), sy(n.top_elevation)) for n in valid_nodes if n.top_elevation]
+    water_pts = [(sx(n.station_MC), sy(n.water_level)) for n in valid_nodes if n.water_level]
 
-    if len(bottom_pts) >= 2:
-        msp.add_lwpolyline(bottom_pts, dxfattribs={"layer": layer_prefix + "渠底高程线"})
-    if len(top_pts) >= 2:
-        msp.add_lwpolyline(top_pts, dxfattribs={"layer": layer_prefix + "渠顶高程线"})
-    if len(water_pts) >= 2:
-        msp.add_lwpolyline(water_pts, dxfattribs={"layer": layer_prefix + "设计水位线"})
+    for segment in _build_standard_profile_polyline_segments(bottom_pts):
+        msp.add_lwpolyline(segment, dxfattribs={"layer": layer_prefix + "渠底高程线"})
+    for segment in _build_standard_profile_polyline_segments(top_pts):
+        msp.add_lwpolyline(segment, dxfattribs={"layer": layer_prefix + "渠顶高程线"})
+    for segment in _build_standard_profile_polyline_segments(water_pts):
+        msp.add_lwpolyline(segment, dxfattribs={"layer": layer_prefix + "设计水位线"})
 
     # ======== 5. 建筑物/坡降分段 ========
     building_segments = _build_profile_building_segments(nodes)
@@ -9934,6 +9975,7 @@ def _build_standard_longitudinal_txt_lines(
             return f"{0:.{elev_decimals}f}"
         return f"{value:.{elev_decimals}f}"
 
+    last_visible_mc, profile_text_nodes = _resolve_standard_profile_last_visible_mc(nodes)
     lines = []
     s_height = fmt(text_height)
     s_rotation = fmt(rotation)
@@ -9962,18 +10004,22 @@ def _build_standard_longitudinal_txt_lines(
         lines.append(f"pl {fmt(sx(0))},{fmt(hy)} {last_mc_scaled},{fmt(hy)} ")
     lines.append("")
 
-    for node in valid_nodes:
-        if node.bottom_elevation:
-            lines.append(f"pl {fmt(sx(node.station_MC))},{fmt(sy(node.bottom_elevation))}")
-    lines.append("")
-    for node in valid_nodes:
-        if node.top_elevation:
-            lines.append(f"pl {fmt(sx(node.station_MC))},{fmt(sy(node.top_elevation))}")
-    lines.append("")
-    for node in valid_nodes:
-        if node.water_level:
-            lines.append(f"pl {fmt(sx(node.station_MC))},{fmt(sy(node.water_level))}")
-    lines.append("")
+    bottom_pts = [(sx(node.station_MC), sy(node.bottom_elevation)) for node in valid_nodes if node.bottom_elevation]
+    top_pts = [(sx(node.station_MC), sy(node.top_elevation)) for node in valid_nodes if node.top_elevation]
+    water_pts = [(sx(node.station_MC), sy(node.water_level)) for node in valid_nodes if node.water_level]
+
+    for segment in _build_standard_profile_polyline_segments(bottom_pts):
+        for x_value, y_value in segment:
+            lines.append(f"pl {fmt(x_value)},{fmt(y_value)}")
+        lines.append("")
+    for segment in _build_standard_profile_polyline_segments(top_pts):
+        for x_value, y_value in segment:
+            lines.append(f"pl {fmt(x_value)},{fmt(y_value)}")
+        lines.append("")
+    for segment in _build_standard_profile_polyline_segments(water_pts):
+        for x_value, y_value in segment:
+            lines.append(f"pl {fmt(x_value)},{fmt(y_value)}")
+        lines.append("")
 
     ip_records = _build_ip_related_row_records(
         nodes,

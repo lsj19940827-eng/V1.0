@@ -207,6 +207,39 @@ def _sample_xxqu_mixed_nodes():
     return [open_channel, pressure_pipe, auto_inserted, directional_drill], [pressure_pipe, directional_drill]
 
 
+def _make_standard_profile_node(
+    *,
+    ip_no,
+    mc,
+    bottom,
+    top,
+    water,
+    name="渠道段",
+    structure="明渠-矩形",
+    is_transition=False,
+):
+    return _Node(
+        station_MC=float(mc),
+        station_BC=float(mc),
+        station_EC=float(mc),
+        bottom_elevation=float(bottom),
+        top_elevation=float(top),
+        water_level=float(water),
+        structure_type=SimpleNamespace(value=structure),
+        in_out=None,
+        is_transition=bool(is_transition),
+        is_auto_inserted_channel=False,
+        is_inverted_siphon=False,
+        is_pressure_pipe=False,
+        name=name,
+        flow_section="1",
+        ip_number=int(ip_no),
+        turn_angle=0.0,
+        section_params={},
+        pressure_pipe_row_identity="",
+    )
+
+
 def _scaled_settings():
     return {
         "text_height": 3.5,
@@ -899,8 +932,115 @@ def _parse_pl_line_cmds(path):
     return rows
 
 
+def _parse_polyline_vertex_blocks(lines):
+    pat = re.compile(r"^pl\s+([-\d.eE]+),([-\d.eE]+)\s*$")
+    blocks = []
+    current = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            if current:
+                blocks.append(current)
+                current = []
+            continue
+        match = pat.match(line)
+        if not match:
+            if current:
+                blocks.append(current)
+                current = []
+            continue
+        current.append((float(match.group(1)), float(match.group(2))))
+    if current:
+        blocks.append(current)
+    return blocks
+
+
 def _scaled_m_to_mm(value_m, scale_denom):
     return float(value_m) * 1000.0 / float(scale_denom)
+
+
+def test_draw_profile_on_msp_standard_mode_ignores_midstream_origin_breakpoint(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = [
+        _make_standard_profile_node(ip_no=1, mc=0.0, bottom=410.0, top=411.0, water=410.5, name="起点"),
+        _make_standard_profile_node(ip_no=2, mc=100.0, bottom=409.0, top=410.0, water=409.5, name="中点"),
+        _make_standard_profile_node(
+            ip_no=3,
+            mc=0.0,
+            bottom=408.6,
+            top=409.6,
+            water=409.1,
+            name="错误断点",
+            structure="渐变段",
+            is_transition=True,
+        ),
+        _make_standard_profile_node(ip_no=4, mc=120.0, bottom=408.4, top=409.4, water=408.9, name="终点"),
+    ]
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+    )
+
+    assert msp.polyline_records == [
+        {
+            "layer": "渠底高程线",
+            "points": [(0.0, 410.0), (50.0, 409.0), (60.0, 408.4)],
+        },
+        {
+            "layer": "渠顶高程线",
+            "points": [(0.0, 411.0), (50.0, 410.0), (60.0, 409.4)],
+        },
+        {
+            "layer": "设计水位线",
+            "points": [(0.0, 410.5), (50.0, 409.5), (60.0, 408.9)],
+        },
+    ]
+
+
+def test_build_standard_longitudinal_txt_lines_ignores_midstream_origin_breakpoint():
+    nodes = [
+        _make_standard_profile_node(ip_no=1, mc=0.0, bottom=410.0, top=411.0, water=410.5, name="起点"),
+        _make_standard_profile_node(ip_no=2, mc=100.0, bottom=409.0, top=410.0, water=409.5, name="中点"),
+        _make_standard_profile_node(
+            ip_no=3,
+            mc=0.0,
+            bottom=408.6,
+            top=409.6,
+            water=409.1,
+            name="错误断点",
+            structure="渐变段",
+            is_transition=True,
+        ),
+        _make_standard_profile_node(ip_no=4, mc=120.0, bottom=408.4, top=409.4, water=408.9, name="终点"),
+    ]
+
+    lines = cad_tools._build_standard_longitudinal_txt_lines(
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+    )
+    vertex_blocks = _parse_polyline_vertex_blocks(lines)
+
+    assert vertex_blocks[:3] == [
+        [(0.0, 410.0), (50.0, 409.0), (60.0, 408.4)],
+        [(0.0, 411.0), (50.0, 410.0), (60.0, 409.4)],
+        [(0.0, 410.5), (50.0, 409.5), (60.0, 408.9)],
+    ]
 
 
 def _has_vertical_line_at_x(records, x_value, tol=1e-6):
