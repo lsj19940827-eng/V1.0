@@ -570,10 +570,17 @@ class TransitionLengthOverrideDialog(FormulaDialog):
 
 
 class PressurePipeLossOverrideDialog(FormulaDialog):
-    """在第38列详情弹窗底部提供人工采用值编辑入口。"""
+    """在承压损失详情弹窗底部提供人工采用值编辑入口。"""
 
-    def __init__(self, parent, title: str, sections: List[Dict[str, Any]],
-                 details: Dict[str, Any], on_save_override=None, on_clear_override=None):
+    def __init__(
+        self,
+        parent,
+        title: str,
+        sections: List[Dict[str, Any]],
+        details: Dict[str, Any],
+        on_save_override=None,
+        on_clear_override=None,
+    ):
         self._details = details or {}
         self._on_save_override = on_save_override
         self._on_clear_override = on_clear_override
@@ -595,15 +602,40 @@ class PressurePipeLossOverrideDialog(FormulaDialog):
         wrapper_layout.setContentsMargins(14, 12, 14, 12)
         wrapper_layout.setSpacing(8)
 
-        calc_loss = float(self._details.get("pressure_pipe_calc_loss", self._details.get("head_loss_siphon", 0.0) or 0.0) or 0.0)
-        display_loss = float(self._details.get("pressure_pipe_display_loss", calc_loss) or 0.0)
-        has_manual_override = bool(self._details.get("pressure_pipe_display_has_manual_override", False))
-
-        intro_lines = [f"当前计算值：{calc_loss:.4f} m"]
-        if has_manual_override:
-            intro_lines.append(f"当前采用值：{display_loss:.4f} m")
+        calc_loss = float(
+            self._details.get(
+                "pressure_pipe_calc_loss",
+                self._details.get("head_loss_siphon", 0.0) or 0.0,
+            )
+            or 0.0
+        )
+        display_loss = float(
+            self._details.get("pressure_pipe_display_loss", calc_loss) or 0.0
+        )
+        manual_display_loss = self._details.get("manual_total_head_loss", None)
+        if manual_display_loss is not None and str(manual_display_loss).strip() != "":
+            try:
+                manual_display_loss = float(manual_display_loss)
+            except (TypeError, ValueError):
+                manual_display_loss = None
         else:
-            intro_lines.append("当前采用值：未单独指定，表3显示计算值")
+            manual_display_loss = None
+
+        has_manual_override = bool(
+            self._details.get("pressure_pipe_display_has_manual_override", False)
+        ) or manual_display_loss is not None
+        current_value = (
+            manual_display_loss
+            if manual_display_loss is not None
+            else (display_loss if has_manual_override else calc_loss)
+        )
+        intro_lines = [
+            f"自动计算值：{calc_loss:.4f} m",
+            f"当前采用值：{current_value:.4f} m",
+            "本行采用值会作为表3正式承压损失，联动更新总水头损失、累计总水头损失和后续水位。",
+        ]
+        if has_manual_override:
+            intro_lines.append("当前状态：已手动覆盖自动结果。")
         intro = QLabel("\n".join(intro_lines))
         intro.setWordWrap(True)
         intro.setStyleSheet("font-size: 12px; color: #334155;")
@@ -611,10 +643,9 @@ class PressurePipeLossOverrideDialog(FormulaDialog):
 
         row = QHBoxLayout()
         row.setSpacing(8)
-        row.addWidget(QLabel("采用值(m)"))
-        default_value = display_loss if has_manual_override else calc_loss
-        self._override_edit = QLineEdit(f"{default_value:.4f}")
-        self._override_edit.setPlaceholderText("例如 0.8074")
+        row.addWidget(QLabel("本行采用值(m)"))
+        self._override_edit = QLineEdit(f"{current_value:.4f}")
+        self._override_edit.setPlaceholderText("例如 0.0253")
         row.addWidget(self._override_edit, 1)
         wrapper_layout.addLayout(row)
 
@@ -626,7 +657,7 @@ class PressurePipeLossOverrideDialog(FormulaDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         if callable(self._on_clear_override):
-            clear_btn = PushButton("恢复计算值")
+            clear_btn = PushButton("恢复自动计算")
             clear_btn.clicked.connect(self._handle_clear)
             btn_row.addWidget(clear_btn)
         save_btn = PushButton("保存采用值")
@@ -1176,15 +1207,31 @@ def _format_pressure_pipe_formula_note(
     return ""
 
 
-def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, Any],
-                                   on_save_override=None, on_clear_override=None):
+def show_pressure_pipe_loss_dialog(
+    parent,
+    node_name: str,
+    details: Dict[str, Any],
+    *,
+    editable_override: bool = False,
+    manual_override_value=None,
+    on_save_override=None,
+    on_clear_override=None,
+):
     """倒虹吸/有压管道水头损失详情。"""
+    details = dict(details or {})
+    if manual_override_value is not None and str(manual_override_value).strip() != "":
+        try:
+            details["manual_total_head_loss"] = float(manual_override_value)
+        except (TypeError, ValueError):
+            pass
     display_loss = details.get("pressure_pipe_display_loss", details.get("head_loss_siphon", 0.0))
     calc_loss = details.get("pressure_pipe_calc_loss", details.get("head_loss_siphon", display_loss))
     is_row_sum = bool(details.get("pressure_pipe_display_is_row_sum", False))
     display_mode = str(details.get("pressure_pipe_display_mode", "normal") or "normal")
     named_group_total = details.get("pressure_pipe_named_group_total", None)
     has_manual_override = bool(details.get("pressure_pipe_display_has_manual_override", False))
+    if details.get("manual_total_head_loss", None) not in ("", None):
+        has_manual_override = True
     hf = details.get("head_loss_friction", 0.0)
     hw = details.get("head_loss_bend", 0.0)
     hj = details.get("head_loss_local", 0.0)
@@ -1286,21 +1333,21 @@ def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, An
                 {
                     "title": "4. 当前采用值",
                     "formula": f"$h_{{pp,adopt}} = {display_loss:.4f} \\ m$",
-                    "content": "该值已直接参与表3总损失、累计损失和水位递推。",
+                    "content": "该值已直接参与表3总损失、累计总损失和水位递推。",
                 }
             )
-    title = f"{node_name} - 倒虹吸/有压管道水头损失详情"
-    if callable(on_save_override) or callable(on_clear_override):
+    dialog_title = f"{node_name} - 倒虹吸/有压管道水头损失详情"
+    if editable_override or callable(on_save_override) or callable(on_clear_override):
         PressurePipeLossOverrideDialog(
             parent,
-            title,
+            dialog_title,
             sections,
             details,
             on_save_override=on_save_override,
             on_clear_override=on_clear_override,
         )
-    else:
-        FormulaDialog(parent, title, sections)
+        return
+    FormulaDialog(parent, dialog_title, sections)
 
 
 def show_total_loss_dialog(parent, node_name: str, details: Dict[str, Any]):

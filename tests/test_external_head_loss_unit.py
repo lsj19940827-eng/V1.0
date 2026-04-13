@@ -938,6 +938,135 @@ def test_named_pressure_pipe_row_override_takes_priority_in_branch_channel():
     assert abs(named_pipe.water_level - (settings.start_water_level - 0.34)) < 1e-9
 
 
+def test_branch_middle_named_special_rows_override_updates_display_and_water_level_sequentially():
+    """测试支渠连续承压链中间定向钻/顶管逐行回写后会继续递推水位。"""
+
+    def _make_open_channel(station_mc: float) -> ChannelNode:
+        """构造明渠节点。"""
+        node = ChannelNode()
+        node.structure_type = StructureType.from_string("明渠-梯形")
+        node.flow_section = "渠道1"
+        node.section_params = {"b": 2.0, "m": 1.5, "h": 1.5}
+        node.station_MC = station_mc
+        node.velocity = 1.1
+        node.water_depth = 1.5
+        node.roughness = 0.014
+        return node
+
+    def _make_override_row(
+        station_mc: float,
+        name: str,
+        structure_text: str,
+        identity: str,
+        display_name: str,
+        friction_loss: float,
+        bend_loss: float,
+        local_loss: float,
+        total_loss: float,
+    ) -> ChannelNode:
+        """构造带逐行窗口回写的承压行。"""
+        node = ChannelNode()
+        node.structure_type = StructureType.from_string(structure_text)
+        node.name = name
+        node.is_pressure_pipe = True
+        node.flow_section = "渠道1"
+        node.section_params = {
+            "D": 1.0,
+            "pipe_material": "预应力钢筒混凝土管",
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": identity,
+                "display_name": display_name,
+                "group_mode": "chain_row_member",
+                "friction_loss": friction_loss,
+                "total_bend_loss": bend_loss,
+                "local_loss": local_loss,
+                "total_head_loss": total_loss,
+            },
+        }
+        node.pressure_pipe_window_override = dict(node.section_params["pressure_pipe_window_override"])
+        node.head_loss_siphon = 9.99
+        node.external_head_loss = 9.99
+        node.station_MC = station_mc
+        node.flow = 1.6
+        node.turn_radius = 3.5
+        node.turn_angle = 45.0
+        node.water_depth = 1.0
+        return node
+
+    for structure_text in ("定向钻", "顶管"):
+        upstream = _make_open_channel(10.0)
+        upstream_pipe = _make_override_row(
+            40.0,
+            "苟家湾",
+            "有压管道",
+            "flow渠道1-row2",
+            "苟家湾（前段）",
+            0.06,
+            0.02,
+            0.03,
+            0.11,
+        )
+        middle_first = _make_override_row(
+            60.0,
+            "大石包",
+            structure_text,
+            "flow渠道1-row3",
+            "大石包（前段）",
+            0.12,
+            0.04,
+            0.05,
+            0.21,
+        )
+        middle_second = _make_override_row(
+            80.0,
+            "大石包",
+            structure_text,
+            "flow渠道1-row4",
+            "大石包（后段）",
+            0.14,
+            0.03,
+            0.05,
+            0.22,
+        )
+        downstream_pipe = _make_override_row(
+            100.0,
+            "苟家湾",
+            "有压管道",
+            "flow渠道1-row5",
+            "苟家湾（后段）",
+            0.08,
+            0.02,
+            0.03,
+            0.13,
+        )
+        downstream = _make_open_channel(130.0)
+
+        settings = ProjectSettings()
+        settings.channel_level = "支渠"
+        settings.start_water_level = 100.0
+        calc = HydraulicCalculator(settings)
+
+        nodes = [upstream, upstream_pipe, middle_first, middle_second, downstream_pipe, downstream]
+        for node in nodes:
+            calc.fill_section_params(node)
+
+        calc.calculate_water_profile(nodes, method="forward")
+
+        assert abs(getattr(middle_first, "_pressure_pipe_display_loss", 0.0) - 0.21) < 1e-9, structure_text
+        assert abs(getattr(middle_second, "_pressure_pipe_display_loss", 0.0) - 0.22) < 1e-9, structure_text
+        assert middle_first.head_loss_siphon == 0.0, structure_text
+        assert middle_second.head_loss_siphon == 0.0, structure_text
+        assert middle_first.external_head_loss in (None, 0.0), structure_text
+        assert middle_second.external_head_loss in (None, 0.0), structure_text
+        assert abs(middle_first.head_loss_total - 0.21) < 1e-9, structure_text
+        assert abs(middle_second.head_loss_total - 0.22) < 1e-9, structure_text
+        assert abs(middle_first.water_level - 99.68) < 1e-9, structure_text
+        assert abs(middle_second.water_level - 99.46) < 1e-9, structure_text
+        assert abs(downstream_pipe.water_level - 99.33) < 1e-9, structure_text
+        assert middle_first.water_level > middle_second.water_level > downstream_pipe.water_level, structure_text
+
+
 if __name__ == "__main__":
     # 运行测试
     test_external_head_loss_included_in_total()

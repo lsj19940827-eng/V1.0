@@ -720,7 +720,33 @@ class PressurePipeDataExtractor:
         if chain is None:
             return False
         members = list(getattr(chain, "members", []) or [])
-        return len(members) >= 2
+        logical_unit_counts: Dict[str, int] = {}
+        for member in members:
+            unit_key = ""
+            if bool(getattr(member, "split_from_named_group", False)):
+                for candidate in (
+                    getattr(member, "parent_group_identity", ""),
+                    getattr(member, "parent_group_storage_key", ""),
+                ):
+                    candidate_text = str(candidate or "").strip()
+                    if candidate_text:
+                        unit_key = candidate_text
+                        break
+            if not unit_key:
+                for candidate in (
+                    getattr(member, "identity", ""),
+                    getattr(member, "storage_key", ""),
+                ):
+                    candidate_text = str(candidate or "").strip()
+                    if candidate_text:
+                        unit_key = candidate_text
+                        break
+            if unit_key:
+                logical_unit_counts[unit_key] = logical_unit_counts.get(unit_key, 0) + 1
+
+        if len(logical_unit_counts) >= 2:
+            return True
+        return any(count >= 3 for count in logical_unit_counts.values())
 
     @staticmethod
     def _can_start_branch_pressure_chain(member: Optional[PressurePipeChainMember]) -> bool:
@@ -1826,7 +1852,7 @@ class PressurePipeDataExtractor:
             return None
 
         display_name = str(
-            getattr(parent_group, "display_name", "")
+            getattr(parent_member, "base_display_name", "")
             or getattr(parent_group, "name", "")
             or getattr(target_node, "name", "")
             or "未命名承压段"
@@ -1892,11 +1918,7 @@ class PressurePipeDataExtractor:
         if member is None or getattr(member, "member_type", "") != "named_group":
             return False
         members = list(getattr(chain, "members", []) or []) if chain is not None else []
-        channel_level = str(getattr(settings, "channel_level", "") or "").strip()
-        is_xxpipe_channel = channel_level in XXPIPE_CHANNEL_LEVEL_OPTIONS
         if not members:
-            return False
-        if (not is_xxpipe_channel) and members[-1] is not member:
             return False
         if bool(getattr(member, "is_anchor_member", False)) or not bool(
             getattr(member, "should_generate_row_loss", True)
@@ -1911,7 +1933,9 @@ class PressurePipeDataExtractor:
             idx for idx in (getattr(member, "row_indices", []) or [])
             if isinstance(idx, int) and idx >= 0
         ]
-        minimum_row_count = 2 if is_xxpipe_channel else 3
+        # 统一口径：连续承压链里的命名有压同类结构，只要形成真实两行及以上范围，
+        # 就按逐行成员正式计损；前缀段/锚点仍走各自原口径。
+        minimum_row_count = 2
         if len(row_indices) < minimum_row_count:
             return False
         entered_pressurized_at_row = PressurePipeDataExtractor._resolve_route_entered_pressurized_at_row(chain)
