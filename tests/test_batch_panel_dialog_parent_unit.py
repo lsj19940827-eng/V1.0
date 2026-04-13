@@ -605,6 +605,82 @@ def test_duplicate_classifier_keeps_non_pressure_pipe_duplicates_blocked():
     assert list(buckets["allowed_chain_duplicates"].keys()) == []
 
 
+def test_duplicate_classifier_allows_same_named_tunnel_across_diversion_gate():
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+    panel.channel_level_combo = _FakeTextComboBox("总干渠")
+
+    input_rows = [
+        _make_duplicate_row(module, seq=1, building_name="台儿沟", section_type="隧洞-圆形"),
+        _make_duplicate_row(module, seq=2, building_name="美团沟", section_type="分水闸"),
+        _make_duplicate_row(module, seq=3, building_name="台儿沟", section_type="隧洞-圆形"),
+    ]
+
+    buckets = BatchPanel._classify_duplicate_buildings(panel, input_rows)
+
+    assert list(buckets["hard_duplicates"].keys()) == []
+    assert list(buckets["allowed_chain_duplicates"].keys()) == [("台儿沟", "隧洞-圆形")]
+    assert BatchPanel._validate_duplicate_buildings(panel, input_rows) is True
+
+
+def test_duplicate_classifier_allows_same_named_tunnel_across_all_gate_like_sections():
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    gate_like_sections = ["分水闸", "节制闸", "泄水闸", "退水闸", "分水口"]
+
+    for seq, gate_section in enumerate(gate_like_sections, start=1):
+        panel = BatchPanel.__new__(BatchPanel)
+        panel.channel_level_combo = _FakeTextComboBox("分干渠")
+        input_rows = [
+            _make_duplicate_row(module, seq=seq * 10 + 1, building_name="台儿沟", section_type="隧洞-圆形"),
+            _make_duplicate_row(module, seq=seq * 10 + 2, building_name=f"闸点{seq}", section_type=gate_section),
+            _make_duplicate_row(module, seq=seq * 10 + 3, building_name="台儿沟", section_type="隧洞-圆形"),
+        ]
+
+        buckets = BatchPanel._classify_duplicate_buildings(panel, input_rows)
+
+        assert list(buckets["hard_duplicates"].keys()) == []
+        assert list(buckets["allowed_chain_duplicates"].keys()) == [("台儿沟", "隧洞-圆形")]
+        assert BatchPanel._validate_duplicate_buildings(panel, input_rows) is True
+
+
+def test_duplicate_classifier_blocks_same_named_tunnel_when_non_gate_breaks_chain():
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+    panel.channel_level_combo = _FakeTextComboBox("总干渠")
+
+    input_rows = [
+        _make_duplicate_row(module, seq=1, building_name="台儿沟", section_type="隧洞-圆形"),
+        _make_duplicate_row(module, seq=2, building_name="渠道段", section_type="明渠-矩形"),
+        _make_duplicate_row(module, seq=3, building_name="台儿沟", section_type="隧洞-圆形"),
+    ]
+
+    buckets = BatchPanel._classify_duplicate_buildings(panel, input_rows)
+
+    assert list(buckets["hard_duplicates"].keys()) == [("台儿沟", "隧洞-圆形")]
+    assert list(buckets["allowed_chain_duplicates"].keys()) == []
+
+
+def test_duplicate_classifier_keeps_non_tunnel_duplicates_blocked_across_gate():
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+    panel.channel_level_combo = _FakeTextComboBox("总干渠")
+
+    input_rows = [
+        _make_duplicate_row(module, seq=1, building_name="顶管A", section_type="顶管"),
+        _make_duplicate_row(module, seq=2, building_name="闸点", section_type="节制闸"),
+        _make_duplicate_row(module, seq=3, building_name="顶管A", section_type="顶管"),
+    ]
+
+    buckets = BatchPanel._classify_duplicate_buildings(panel, input_rows)
+
+    assert list(buckets["hard_duplicates"].keys()) == [("顶管A", "顶管")]
+    assert list(buckets["allowed_chain_duplicates"].keys()) == []
+
+
 def test_duplicate_warning_skips_allowed_chain_duplicates(monkeypatch):
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel

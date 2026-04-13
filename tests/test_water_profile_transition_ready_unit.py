@@ -2382,3 +2382,38 @@ def test_collect_pending_pressure_pipe_execute_members_allows_completed_named_ta
     )
 
     assert pending == []
+
+
+def test_collect_pending_pressure_pipe_execute_members_ignores_tunnel_only_chain_without_pressure_pipe_groups():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    tunnel_member = SimpleNamespace(
+        identity="flow1-row3-tunnel",
+        display_name="龙塘隧洞",
+        member_type="single_row",
+        member_role="special_segment",
+        structure_type="隧洞",
+        target_row_index=2,
+        upstream_row_index=1,
+        should_generate_row_loss=True,
+        is_anchor_member=False,
+    )
+    panel._prepare_pressure_pipe_dialog_context = lambda _nodes, settings=None, show_xxpipe_warning=False: {
+        "pipe_groups": [],
+        "chain_descriptors": [{"members": [tunnel_member]}],
+    }
+    panel._build_pressure_pipe_execute_record_map = lambda: {}
+
+    pending = WaterProfilePanel._collect_pending_pressure_pipe_execute_members(
+        panel,
+        [
+            SimpleNamespace(name="上游明渠", structure_type=SimpleNamespace(value="明渠-梯形"), section_params={}),
+            SimpleNamespace(name="下游明渠", structure_type=SimpleNamespace(value="明渠-梯形"), section_params={}),
+            SimpleNamespace(name="龙塘隧洞", structure_type=SimpleNamespace(value="隧洞"), section_params={}),
+        ],
+        settings=None,
+    )
+
+    assert pending == []

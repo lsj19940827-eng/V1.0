@@ -3439,6 +3439,10 @@ class WaterProfilePanel(QWidget):
         )
         pipe_groups = list(dialog_context.get("pipe_groups", []) or [])
         chain_descriptors = list(dialog_context.get("chain_descriptors", []) or [])
+        if not pipe_groups:
+            # 与“有压管道水力计算”按钮入口保持同一口径：
+            # 当前表里没有真正的有压管道同类分组时，不应让隧洞链残留成员单独拦住执行计算。
+            return []
         record_map = self._build_pressure_pipe_execute_record_map()
         chain_source_lookup = self._build_pressure_chain_source_lookup(chain_descriptors)
 

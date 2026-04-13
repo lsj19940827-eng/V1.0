@@ -146,6 +146,17 @@ def is_pressure_pipe_like_section_type(section_type) -> bool:
     """判断结构类型是否按有压管道占位语义处理。"""
     return normalize_section_type_name(section_type) in PRESSURE_PIPE_LIKE_SECTION_TYPES
 
+
+def is_gate_like_section_type(section_type) -> bool:
+    """判断结构类型是否为闸类点状建筑（含分水口）。"""
+    text = normalize_section_type_name(section_type)
+    return "闸" in text or "分水" in text
+
+
+def is_tunnel_section_type(section_type) -> bool:
+    """判断结构类型是否为隧洞。"""
+    return "隧洞" in normalize_section_type_name(section_type)
+
 # 输入表列定义（含X/Y坐标列）
 # 列索引: 0序号, 1流量段, 2建筑物名称, 3结构形式, 4X, 5Y, 6Q, 7糙率n, 8比降,
 #          9边坡系数m, 10底宽B, 11明渠宽深比, 12半径R, 13直径D,
@@ -2793,6 +2804,22 @@ class BatchPanel(QWidget):
                     return False
         return True
 
+    def _is_allowed_tunnel_duplicate_across_gate(self, groups, group_idxs):
+        """判断同名隧洞是否仅被闸类节点打断，仍可视为同一条隧洞。"""
+        if not group_idxs:
+            return False
+        first_group = groups[group_idxs[0]]
+        if not is_tunnel_section_type(first_group["section_type"]):
+            return False
+        for left_idx, right_idx in zip(group_idxs, group_idxs[1:]):
+            middle_groups = groups[left_idx + 1:right_idx]
+            if not middle_groups:
+                return False
+            for middle_group in middle_groups:
+                if not is_gate_like_section_type(middle_group["section_type"]):
+                    return False
+        return True
+
     def _classify_duplicate_buildings(self, input_rows=None):
         """按统一口径返回重名结果：真正风险重名与可放开的连续承压链重名。"""
         if input_rows is None:
@@ -2809,14 +2836,17 @@ class BatchPanel(QWidget):
         key_to_groups = {}
         for i, group in enumerate(groups):
             key = group["key"]
-            # 分水类建筑仍沿用旧口径，不参与重名提示，但会作为链路中的拦截节点参与判断。
-            if "分水" in group["section_type"]:
+            # 闸类点状建筑沿用旧口径：自身不参与重名提示，但会作为链路中的穿透/拦截节点参与判断。
+            if is_gate_like_section_type(group["section_type"]):
                 continue
             key_to_groups.setdefault(key, []).append(i)
         for key, group_idxs in key_to_groups.items():
             if len(group_idxs) <= 1:
                 continue
-            if self._is_allowed_pressure_pipe_chain_duplicate(groups, group_idxs):
+            if (
+                self._is_allowed_pressure_pipe_chain_duplicate(groups, group_idxs)
+                or self._is_allowed_tunnel_duplicate_across_gate(groups, group_idxs)
+            ):
                 result["allowed_chain_duplicates"][key] = group_idxs
             else:
                 result["hard_duplicates"][key] = group_idxs
