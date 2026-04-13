@@ -568,6 +568,120 @@ class TransitionLengthOverrideDialog(FormulaDialog):
                 return
         self.accept()
 
+
+class PressurePipeLossOverrideDialog(FormulaDialog):
+    """在承压损失详情弹窗底部提供本行采用值编辑入口。"""
+
+    def __init__(
+        self,
+        parent,
+        title: str,
+        sections: List[Dict[str, Any]],
+        details: Dict[str, Any],
+        on_save_override=None,
+        on_clear_override=None,
+    ):
+        self._details = details or {}
+        self._on_save_override = on_save_override
+        self._on_clear_override = on_clear_override
+        super().__init__(parent, title, sections, auto_exec=False)
+        self._inject_override_editor()
+        self.exec()
+
+    def _inject_override_editor(self):
+        layout = getattr(self, "_main_layout", None)
+        if layout is None:
+            return
+
+        wrapper = QFrame(self)
+        wrapper.setStyleSheet(
+            "QFrame { background: #F8FAFC; border: 1px solid #E5E7EB; border-radius: 10px; }"
+            "QLineEdit { background: white; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 8px; }"
+        )
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(14, 12, 14, 12)
+        wrapper_layout.setSpacing(8)
+
+        auto_display_loss = float(
+            self._details.get("pressure_pipe_display_loss", self._details.get("head_loss_siphon", 0.0) or 0.0) or 0.0
+        )
+        manual_display_loss = self._details.get("manual_total_head_loss", None)
+        if manual_display_loss is not None and str(manual_display_loss).strip() != "":
+            try:
+                manual_display_loss = float(manual_display_loss)
+            except (TypeError, ValueError):
+                manual_display_loss = None
+        else:
+            manual_display_loss = None
+
+        current_value = manual_display_loss if manual_display_loss is not None else auto_display_loss
+        intro_lines = [
+            f"自动计算值：{auto_display_loss:.4f} m",
+            f"当前采用值：{current_value:.4f} m",
+            "本行采用值会作为表3正式承压损失，联动更新总水头损失、累计总水头损失和后续水位。",
+        ]
+        if manual_display_loss is not None:
+            intro_lines.append("当前状态：已手动覆盖自动结果。")
+        intro = QLabel("\n".join(intro_lines))
+        intro.setWordWrap(True)
+        intro.setStyleSheet("font-size: 12px; color: #334155;")
+        wrapper_layout.addWidget(intro)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(QLabel("本行采用值(m)"))
+        self._override_edit = QLineEdit(f"{current_value:.4f}")
+        self._override_edit.setPlaceholderText("例如 0.0253")
+        row.addWidget(self._override_edit, 1)
+        wrapper_layout.addLayout(row)
+
+        self._error_label = QLabel("")
+        self._error_label.setStyleSheet("color: #C62828; font-size: 12px;")
+        self._error_label.setVisible(False)
+        wrapper_layout.addWidget(self._error_label)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        if callable(self._on_clear_override):
+            clear_btn = PushButton("恢复自动计算")
+            clear_btn.clicked.connect(self._handle_clear)
+            btn_row.addWidget(clear_btn)
+        save_btn = PushButton("保存采用值")
+        save_btn.clicked.connect(self._handle_save)
+        btn_row.addWidget(save_btn)
+        wrapper_layout.addLayout(btn_row)
+
+        layout.insertWidget(max(0, layout.count() - 1), wrapper)
+
+    def _show_error(self, message: str):
+        self._error_label.setText(message)
+        self._error_label.setVisible(bool(message))
+
+    def _handle_save(self):
+        raw_text = self._override_edit.text().strip()
+        try:
+            value = float(raw_text)
+        except (TypeError, ValueError):
+            self._show_error("请输入大于等于 0 的数值。")
+            return
+        if value < 0:
+            self._show_error("请输入大于等于 0 的数值。")
+            return
+        self._show_error("")
+        if callable(self._on_save_override):
+            result = self._on_save_override(value)
+            if result is False:
+                return
+        self.accept()
+
+    def _handle_clear(self):
+        self._show_error("")
+        if callable(self._on_clear_override):
+            result = self._on_clear_override()
+            if result is False:
+                return
+        self.accept()
+
     # ---- HTML 构建 ----
 
     def _build_html(self, sections):
@@ -1067,8 +1181,23 @@ def _format_pressure_pipe_formula_note(
     return ""
 
 
-def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
+def show_pressure_pipe_loss_dialog(
+    parent,
+    node_name: str,
+    details: Dict[str, Any],
+    *,
+    editable_override: bool = False,
+    manual_override_value=None,
+    on_save_override=None,
+    on_clear_override=None,
+):
     """倒虹吸/有压管道水头损失详情。"""
+    details = dict(details or {})
+    if manual_override_value is not None and str(manual_override_value).strip() != "":
+        try:
+            details["manual_total_head_loss"] = float(manual_override_value)
+        except (TypeError, ValueError):
+            pass
     display_loss = details.get("pressure_pipe_display_loss", details.get("head_loss_siphon", 0.0))
     is_row_sum = bool(details.get("pressure_pipe_display_is_row_sum", False))
     display_mode = str(details.get("pressure_pipe_display_mode", "normal") or "normal")
@@ -1140,7 +1269,18 @@ def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, An
                 "formula": f"$h_{{pp}} = {display_loss:.4f} \\ m$",
             },
         ]
-    FormulaDialog(parent, f"{node_name} - 倒虹吸/有压管道水头损失详情", sections)
+    dialog_title = f"{node_name} - 倒虹吸/有压管道水头损失详情"
+    if editable_override and callable(on_save_override):
+        PressurePipeLossOverrideDialog(
+            parent,
+            dialog_title,
+            sections,
+            details,
+            on_save_override=on_save_override,
+            on_clear_override=on_clear_override,
+        )
+        return
+    FormulaDialog(parent, dialog_title, sections)
 
 
 def show_total_loss_dialog(parent, node_name: str, details: Dict[str, Any]):

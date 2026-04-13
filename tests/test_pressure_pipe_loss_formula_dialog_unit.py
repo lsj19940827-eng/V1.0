@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
+import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
@@ -137,6 +138,50 @@ def test_show_pressure_pipe_loss_dialog_supports_row_level_display(monkeypatch):
     assert "xx渠 末尾连续承压" in text_blob
     assert "0.0315" in text_blob
     assert "总损失" in text_blob
+
+
+def test_show_pressure_pipe_loss_dialog_uses_override_dialog_when_locked_row_is_editable(monkeypatch):
+    QApplication.instance() or QApplication([])
+    module = _load_formula_dialog_module()
+    captured = {}
+
+    def _save_override(_value):
+        return None
+
+    def _clear_override():
+        return None
+
+    class _FakeOverrideDialog:
+        def __init__(self, parent, title, sections, details, on_save_override=None, on_clear_override=None):
+            captured["parent"] = parent
+            captured["title"] = title
+            captured["sections"] = sections
+            captured["details"] = details
+            captured["on_save_override"] = on_save_override
+            captured["on_clear_override"] = on_clear_override
+
+    monkeypatch.setattr(module, "PressurePipeLossOverrideDialog", _FakeOverrideDialog, raising=False)
+
+    module.show_pressure_pipe_loss_dialog(
+        None,
+        "行5",
+        {
+            "pressure_pipe_display_is_row_sum": True,
+            "pressure_pipe_display_loss": 0.0253,
+            "head_loss_friction": 0.0253,
+            "head_loss_bend": 0.0,
+            "head_loss_local": 0.0,
+        },
+        editable_override=True,
+        manual_override_value=0.0253,
+        on_save_override=_save_override,
+        on_clear_override=_clear_override,
+    )
+
+    assert captured["title"] == "行5 - 倒虹吸/有压管道水头损失详情"
+    assert captured["details"]["manual_total_head_loss"] == pytest.approx(0.0253)
+    assert captured["on_save_override"] is _save_override
+    assert captured["on_clear_override"] is _clear_override
 
 
 def test_pressure_pipe_loss_column_supports_double_click_detail():

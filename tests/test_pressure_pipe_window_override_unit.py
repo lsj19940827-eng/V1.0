@@ -159,3 +159,51 @@ def test_pressure_pipe_window_override_preserves_chain_prefix_metadata_after_cal
     assert override["calc_steps"] == "prefix-step"
     assert override["target_row_index"] == 1
     assert override["upstream_row_index"] == 0
+
+
+def test_pressure_pipe_window_override_manual_total_head_loss_takes_priority_after_calculation():
+    upstream = _make_open_channel(0.0, 0.85, name="上游明渠")
+
+    pressure_pipe = ChannelNode()
+    pressure_pipe.flow_section = "2"
+    pressure_pipe.structure_type = StructureType.from_string("有压管道")
+    pressure_pipe.in_out = InOutType.NORMAL
+    pressure_pipe.station_MC = 47.0
+    pressure_pipe.flow = 1.55
+    pressure_pipe.velocity = 0.0
+    pressure_pipe.water_depth = 1.4
+    pressure_pipe.turn_radius = 35.0
+    pressure_pipe.turn_angle = 18.0
+    pressure_pipe.section_params = {
+        "D": 1.4,
+        "pipe_material": "球墨铸铁管",
+        "pressure_pipe_window_override": {
+            "enabled": True,
+            "identity": "flow2-row2",
+            "group_mode": "chain_row_member",
+            "friction_loss": 0.0435,
+            "total_bend_loss": 0.0068,
+            "local_loss": 0.0112,
+            "total_head_loss": 0.0615,
+            "manual_total_head_loss": 0.0835,
+            "manual_override_source": "pressure_pipe_loss_dialog",
+            "manual_override_updated_at": "2026-04-13 18:50:00",
+        },
+    }
+
+    downstream = _make_open_channel(80.0, 0.92, name="下游明渠")
+
+    settings = ProjectSettings()
+    settings.channel_level = "干管"
+    settings.start_water_level = 100.0
+
+    calc = HydraulicCalculator(settings)
+    for node in (upstream, pressure_pipe, downstream):
+        calc.fill_section_params(node)
+
+    calc.calculate_water_profile([upstream, pressure_pipe, downstream], method="forward")
+
+    assert abs(getattr(pressure_pipe, "_pressure_pipe_display_loss", 0.0) - 0.0835) < 1e-9
+    assert abs(pressure_pipe.head_loss_total - 0.0835) < 1e-9
+    assert abs(pressure_pipe.water_level - 99.9165) < 1e-9
+    assert pressure_pipe.pressure_pipe_window_override["manual_total_head_loss"] == 0.0835

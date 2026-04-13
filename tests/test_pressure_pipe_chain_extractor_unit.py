@@ -69,21 +69,24 @@ def test_extract_continuous_pressure_chains_keeps_named_group_and_single_rows_in
     assert chain.start_row_index == 0
     assert chain.end_row_index == 5
     assert [member.member_type for member in chain.members] == [
-        "named_group",
         "single_row",
         "single_row",
-        "named_group",
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
     ]
     assert [member.display_name for member in chain.members] == [
-        "半兽人",
+        "半兽人（前段）",
+        "半兽人（后段）",
         "流量段2 第3行有压管道",
         "隧洞段",
-        "饿了么",
+        "饿了么（前段）",
+        "饿了么（后段）",
     ]
-    assert chain.members[1].row_indices == [2]
-    assert chain.members[2].row_indices == [3]
-    assert chain.members[1].should_generate_row_loss is True
+    assert [member.row_indices for member in chain.members] == [[0], [1], [2], [3], [4], [5]]
     assert chain.members[2].should_generate_row_loss is True
+    assert chain.members[3].should_generate_row_loss is True
 
 
 def test_extract_pipes_splits_same_name_runs_into_separate_groups():
@@ -137,30 +140,45 @@ def test_extract_continuous_pressure_chains_keeps_same_name_runs_as_distinct_nam
 
     chain = chains[0]
     assert [member.member_type for member in chain.members] == [
-        "named_group",
-        "named_group",
-        "named_group",
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
     ]
-    assert [member.row_indices for member in chain.members] == [[0, 1], [2, 3], [4, 5]]
+    assert [member.row_indices for member in chain.members] == [[0], [1], [2], [3], [4], [5]]
     assert [member.display_name for member in chain.members] == [
         "穿路段（前段）",
         "穿路段（中段1）",
+        "穿路段（中段2）",
+        "穿路段（中段3）",
+        "穿路段（中段4）",
         "穿路段（后段）",
     ]
     assert [member.storage_key for member in chain.members] == [
         "flow2-row1",
+        "flow2-row2",
         "flow2-row3",
+        "flow2-row4",
         "flow2-row5",
+        "flow2-row6",
     ]
     assert [member.identity for member in chain.members] == [
         "flow2-row1",
+        "flow2-row2",
         "flow2-row3",
+        "flow2-row4",
         "flow2-row5",
+        "flow2-row6",
     ]
-    assert [member.group.legacy_identity for member in chain.members] == [
-        "2::穿路段",
-        "2::穿路段",
-        "2::穿路段",
+    assert [member.parent_group_identity for member in chain.members] == [
+        "2::穿路段::rows1-2",
+        "2::穿路段::rows1-2",
+        "2::穿路段::rows3-4",
+        "2::穿路段::rows3-4",
+        "2::穿路段::rows5-6",
+        "2::穿路段::rows5-6",
     ]
 
 
@@ -224,7 +242,9 @@ def test_extract_continuous_pressure_chains_for_branch_channel_marks_leading_nam
     chain = chains[0]
     assert [member.display_name for member in chain.members] == [
         "苟家湾（前缀段）",
-        "大石包",
+        "大石包（前段）",
+        "大石包（后段）",
+        "苟家湾（中段1）",
         "苟家湾（后段）",
     ]
     assert chain.members[0].member_type == "named_group"
@@ -233,8 +253,20 @@ def test_extract_continuous_pressure_chains_for_branch_channel_marks_leading_nam
     assert chain.members[0].should_generate_row_loss is True
     assert chain.members[0].prefix_target_row_index == 0
     assert chain.members[0].prefix_end_row_index == 1
-    assert chain.members[1].is_anchor_member is False
-    assert chain.members[2].is_anchor_member is False
+    assert [member.member_type for member in chain.members[1:]] == [
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+    ]
+    assert [member.identity for member in chain.members[1:]] == [
+        "flow1-row2",
+        "flow1-row3",
+        "flow1-row4",
+        "flow1-row5",
+    ]
+    assert all(member.is_anchor_member is False for member in chain.members[1:])
+    assert all(getattr(member.group, "group_mode", "") == "named_row_segment" for member in chain.members[1:])
 
 
 def test_extract_continuous_pressure_chains_for_branch_channel_keeps_anchor_when_next_member_is_not_special():
@@ -256,6 +288,7 @@ def test_extract_continuous_pressure_chains_for_branch_channel_keeps_anchor_when
     assert [member.display_name for member in chain.members] == [
         "苟家湾（起点锚点）",
         "流量段1 第2行有压管道",
+        "苟家湾（中段1）",
         "苟家湾（后段）",
     ]
     assert chain.members[0].member_role == "anchor"
@@ -285,11 +318,68 @@ def test_extract_continuous_pressure_chains_for_branch_channel_keeps_real_leadin
     chain = chains[0]
     assert [member.display_name for member in chain.members] == [
         "苟家湾（前段）",
-        "大石包",
+        "苟家湾（中段1）",
+        "大石包（前段）",
+        "大石包（后段）",
+        "苟家湾（中段2）",
         "苟家湾（后段）",
     ]
-    assert chain.members[0].is_anchor_member is False
-    assert chain.members[0].should_generate_row_loss is True
+    assert [member.member_type for member in chain.members] == [
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+        "single_row",
+    ]
+    assert [member.identity for member in chain.members] == [
+        "flow1-row1",
+        "flow1-row2",
+        "flow1-row3",
+        "flow1-row4",
+        "flow1-row5",
+        "flow1-row6",
+    ]
+    assert all(member.is_anchor_member is False for member in chain.members)
+    assert [member.should_generate_row_loss for member in chain.members] == [
+        False,
+        True,
+        True,
+        True,
+        True,
+        True,
+    ]
+
+
+@pytest.mark.parametrize("structure_text", ["定向钻", "顶管"])
+def test_extract_dialog_pipe_groups_marks_branch_middle_named_special_group_as_split_parent(structure_text):
+    nodes = [
+        _make_node(0, "1", "苟家湾", "有压管道", InOutType.INLET),
+        _make_node(1, "1", structure_text + "段", structure_text, InOutType.INLET),
+        _make_node(2, "1", structure_text + "段", structure_text, InOutType.OUTLET),
+        _make_node(3, "1", "苟家湾", "有压管道", InOutType.INLET),
+        _make_node(4, "1", "苟家湾", "有压管道", InOutType.OUTLET),
+        _make_node(5, "1", "下游明渠", "明渠-梯形", InOutType.NORMAL, flow=0.0),
+    ]
+
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(
+        nodes,
+        settings=_make_settings(channel_level="支渠"),
+    )
+
+    special_group = next(group for group in groups if getattr(group, "name", "") == structure_text + "段")
+    tail_group = next(
+        group
+        for group in groups
+        if getattr(group, "name", "") == "苟家湾" and getattr(group, "target_row_index", -1) == 4
+    )
+
+    assert special_group.identity == f"1::{structure_text}段::rows2-3"
+    assert special_group.split_to_row_members is True
+    assert special_group.split_row_member_identities == ["flow1-row2", "flow1-row3"]
+    assert tail_group.identity == "1::苟家湾::rows4-5"
+    assert tail_group.split_to_row_members is True
+    assert tail_group.split_row_member_identities == ["flow1-row4", "flow1-row5"]
 
 
 def test_extract_continuous_pressure_chains_for_branch_tail_named_pressure_group_splits_into_row_members():
@@ -488,7 +578,9 @@ def test_extract_dialog_pipe_groups_marks_same_name_long_tail_parent_as_split_pa
     )
 
     assert len(groups) == 3
-    assert groups[0].identity == "flow1-row2"
+    assert groups[0].identity == "1::洞梁村::rows2-3"
+    assert groups[0].split_to_row_members is True
+    assert groups[0].split_row_member_identities == ["flow1-row2", "flow1-row3"]
 
     tail_group = groups[-1]
     assert tail_group.row_indices == list(range(5, 22))
@@ -599,7 +691,8 @@ def test_extract_continuous_pressure_chains_supports_continuous_xxqu_run():
     assert len(chains) == 1
     assert chains[0].flow_section == "4"
     assert [member.display_name for member in chains[0].members] == [
-        "半兽人",
+        "半兽人（前段）",
+        "半兽人（后段）",
         "流量段4 第3行有压管道",
     ]
 
@@ -624,7 +717,8 @@ def test_extract_continuous_pressure_chains_for_branch_channel_skips_leading_tun
     assert chain.start_row_index == 2
     assert chain.end_row_index == 4
     assert [member.display_name for member in chain.members] == [
-        "三清庙",
+        "三清庙（前段）",
+        "三清庙（后段）",
         "后续洞身",
     ]
 

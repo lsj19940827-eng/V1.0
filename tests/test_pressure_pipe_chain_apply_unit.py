@@ -307,6 +307,79 @@ def test_build_pressure_pipe_window_override_payload_keeps_route_context_for_cha
     assert payload["route_display_name"] == "赛金连续整线"
 
 
+def test_normalize_pressure_pipe_window_override_preserves_manual_override_fields():
+    WaterProfilePanel = _load_panel_class()
+
+    normalized = WaterProfilePanel._normalize_pressure_pipe_window_override(
+        {
+            "enabled": True,
+            "identity": "flow1-row5",
+            "group_mode": "chain_row_member",
+            "friction_loss": 0.21,
+            "total_bend_loss": 0.03,
+            "local_loss": 0.05,
+            "total_head_loss": 0.29,
+            "manual_total_head_loss": 0.41,
+            "manual_override_source": "pressure_pipe_loss_dialog",
+            "manual_override_updated_at": "2026-04-13 18:30:00",
+        }
+    )
+
+    assert normalized["manual_total_head_loss"] == pytest.approx(0.41)
+    assert normalized["manual_override_source"] == "pressure_pipe_loss_dialog"
+    assert normalized["manual_override_updated_at"] == "2026-04-13 18:30:00"
+
+
+def test_set_pressure_pipe_row_manual_override_updates_and_clears_override_payload():
+    WaterProfilePanel = _load_panel_class()
+
+    node = SimpleNamespace(
+        section_params={
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": "flow1-row5",
+                "group_mode": "chain_row_member",
+                "friction_loss": 0.21,
+                "total_bend_loss": 0.03,
+                "local_loss": 0.05,
+                "total_head_loss": 0.29,
+            }
+        },
+        pressure_pipe_window_override={
+            "enabled": True,
+            "identity": "flow1-row5",
+            "group_mode": "chain_row_member",
+            "friction_loss": 0.21,
+            "total_bend_loss": 0.03,
+            "local_loss": 0.05,
+            "total_head_loss": 0.29,
+        },
+    )
+
+    changed = WaterProfilePanel._set_pressure_pipe_row_manual_override(
+        node,
+        0.41,
+        source="pressure_pipe_loss_dialog",
+        updated_at="2026-04-13 18:35:00",
+    )
+
+    assert changed is True
+    assert node.section_params["pressure_pipe_window_override"]["manual_total_head_loss"] == pytest.approx(0.41)
+    assert node.section_params["pressure_pipe_window_override"]["manual_override_source"] == "pressure_pipe_loss_dialog"
+    assert node.section_params["pressure_pipe_window_override"]["manual_override_updated_at"] == "2026-04-13 18:35:00"
+
+    cleared = WaterProfilePanel._set_pressure_pipe_row_manual_override(
+        node,
+        None,
+        clear=True,
+    )
+
+    assert cleared is True
+    assert "manual_total_head_loss" not in node.section_params["pressure_pipe_window_override"]
+    assert "manual_override_source" not in node.section_params["pressure_pipe_window_override"]
+    assert "manual_override_updated_at" not in node.section_params["pressure_pipe_window_override"]
+
+
 def test_build_pressure_pipe_route_anchor_record_marks_xxpipe_start_row_as_skip():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -442,6 +515,127 @@ def test_apply_pressure_pipe_loss_cell_syncs_row_override_total_loss_fields(chan
     assert node.head_loss_siphon == 0.0
     assert node.external_head_loss is None
     assert abs(node.head_loss_total - 0.32) < 1e-9
+
+
+def test_apply_pressure_pipe_loss_cell_to_node_prefers_manual_override_for_locked_row():
+    WaterProfilePanel = _load_panel_class()
+
+    node = SimpleNamespace(
+        structure_type=SimpleNamespace(value="有压管道"),
+        name="洞梁村",
+        section_params={
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": "flow1-row18",
+                "group_mode": "chain_row_member",
+                "friction_loss": 0.21,
+                "total_bend_loss": 0.03,
+                "local_loss": 0.05,
+                "total_head_loss": 0.29,
+                "manual_total_head_loss": 0.41,
+                "manual_override_source": "pressure_pipe_loss_dialog",
+                "manual_override_updated_at": "2026-04-13 18:40:00",
+            }
+        },
+        pressure_pipe_window_override={
+            "enabled": True,
+            "identity": "flow1-row18",
+            "group_mode": "chain_row_member",
+            "friction_loss": 0.21,
+            "total_bend_loss": 0.03,
+            "local_loss": 0.05,
+            "total_head_loss": 0.29,
+            "manual_total_head_loss": 0.41,
+            "manual_override_source": "pressure_pipe_loss_dialog",
+            "manual_override_updated_at": "2026-04-13 18:40:00",
+        },
+        head_loss_friction=0.0,
+        head_loss_bend=0.0,
+        head_loss_local=0.0,
+        head_loss_reserve=0.01,
+        head_loss_gate=0.02,
+        head_loss_siphon=10.49,
+        external_head_loss=10.49,
+        head_loss_total=0.0,
+    )
+
+    display_loss = WaterProfilePanel._apply_pressure_pipe_loss_cell_to_node(
+        node,
+        0.29,
+        channel_level="支渠",
+    )
+
+    assert abs(display_loss - 0.41) < 1e-9
+    assert abs(getattr(node, "_pressure_pipe_display_loss", 0.0) - 0.41) < 1e-9
+    assert abs(node.head_loss_total - 0.44) < 1e-9
+
+
+def test_show_pressure_pipe_loss_details_passes_manual_override_callbacks_for_locked_row():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._get_current_channel_level_text = lambda settings=None: "支渠"
+    panel._get_pressure_pipe_display_context = lambda node, row_index=None: {
+        "display_loss": 0.41,
+        "is_row_sum": True,
+        "is_display_only": True,
+        "display_mode": "normal",
+        "named_group_total_loss": None,
+    }
+
+    node = SimpleNamespace(
+        name="大石包",
+        flow_section="1",
+        structure_type=SimpleNamespace(value="定向钻"),
+        section_params={
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": "flow1-row84",
+                "group_mode": "chain_row_member",
+                "total_head_loss": 0.29,
+                "manual_total_head_loss": 0.41,
+                "manual_override_source": "pressure_pipe_loss_dialog",
+                "manual_override_updated_at": "2026-04-13 18:45:00",
+            }
+        },
+        pressure_pipe_window_override={
+            "enabled": True,
+            "identity": "flow1-row84",
+            "group_mode": "chain_row_member",
+            "total_head_loss": 0.29,
+            "manual_total_head_loss": 0.41,
+            "manual_override_source": "pressure_pipe_loss_dialog",
+            "manual_override_updated_at": "2026-04-13 18:45:00",
+        },
+        head_loss_bend=0.03,
+        head_loss_friction=0.21,
+        head_loss_local=0.05,
+    )
+
+    captured = {}
+    fake_module = types.ModuleType("app_渠系计算前端.water_profile.formula_dialog")
+
+    def _fake_show(parent, node_name, details, **kwargs):
+        captured["parent"] = parent
+        captured["node_name"] = node_name
+        captured["details"] = details
+        captured["kwargs"] = kwargs
+
+    fake_module.show_pressure_pipe_loss_dialog = _fake_show
+    saved_module = sys.modules.get("app_渠系计算前端.water_profile.formula_dialog")
+    sys.modules["app_渠系计算前端.water_profile.formula_dialog"] = fake_module
+    try:
+        WaterProfilePanel._show_pressure_pipe_loss_details(panel, 83, node)
+    finally:
+        if saved_module is None:
+            sys.modules.pop("app_渠系计算前端.water_profile.formula_dialog", None)
+        else:
+            sys.modules["app_渠系计算前端.water_profile.formula_dialog"] = saved_module
+
+    assert captured["node_name"] == "大石包"
+    assert captured["kwargs"]["editable_override"] is True
+    assert captured["kwargs"]["manual_override_value"] == pytest.approx(0.41)
+    assert callable(captured["kwargs"]["on_save_override"])
+    assert callable(captured["kwargs"]["on_clear_override"])
 
 
 def test_apply_pressure_pipe_member_result_for_named_group_keeps_row_loss_and_stores_hidden_meta():
