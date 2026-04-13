@@ -42,6 +42,9 @@ from 隧洞设计 import (
     quick_calculate_circular as _calc_tunnel_circular,
     solve_water_depth_horseshoe,
     calculate_horseshoe_outputs,
+    solve_water_depth_flat_bottom_circular,
+    calculate_flat_bottom_circular_outputs,
+    _build_flat_bottom_circular_geometry as _build_tunnel_flat_bottom_geometry,
     get_flow_increase_percent as _tunnel_inc_pct,
 )
 from 渡槽设计 import quick_calculate_u as _calc_aqueduct_u
@@ -533,6 +536,8 @@ def _classify_structure(node) -> Optional[str]:
 
     # 隧洞细分：圆拱直墙型 / 圆形 / 马蹄形
     if "隧洞" in name or "隧" in name:
+        if "平底圆形" in name:
+            return "tunnel_flat_bottom_circular"
         if "圆形" in name:
             return "tunnel_circular"
         if "马蹄" in name:
@@ -543,6 +548,8 @@ def _classify_structure(node) -> Optional[str]:
         d_val = _to_float(params.get("D", params.get("d", 0.0)), 0.0)
         r_val = _to_float(params.get("R_circle", params.get("R", 0.0)), 0.0)
         b_val = _to_float(params.get("B", params.get("b", 0.0)), 0.0)
+        if d_val > 0 and b_val > 0:
+            return "tunnel_flat_bottom_circular"
         if d_val > 0 and b_val <= 0:
             return "tunnel_circular"
         if r_val > 0 and b_val <= 0:
@@ -625,6 +632,7 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
         "u_channel": {},
         "tunnel_arch": {},
         "tunnel_circular": {},
+        "tunnel_flat_bottom_circular": {},
         "tunnel_horseshoe": {},
         "aqueduct_u": {},
         "aqueduct_rect": {},
@@ -966,6 +974,22 @@ def _default_segments_tunnel_circular():
     slopes = [2000, 2000, 2000, 2000, 2500, 2500, 2500]
     return [{"name": _segment_name(i + 1), "Q": Qs[i], "slope_inv": slopes[i], "n": 0.014}
             for i in range(7)]
+
+def _default_segments_tunnel_flat_bottom_circular():
+    """隧洞（平底圆形）默认参数。"""
+    Qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
+    slopes = [2000, 2000, 2000, 2000, 2500, 2500, 2500]
+    return [
+        {
+            "name": _segment_name(i + 1),
+            "Q": Qs[i],
+            "slope_inv": slopes[i],
+            "n": 0.014,
+            "D": 4.0,
+            "B": 2.0,
+        }
+        for i in range(7)
+    ]
 
 def _default_segments_tunnel_horseshoe():
     """隧洞（马蹄形）默认参数"""
@@ -1500,7 +1524,147 @@ def compute_tunnel_circular(segments: List[Dict],
 
 
 # ============================================================
-# 3c. 隧洞（马蹄形 — 统一断面 + 围岩分类）
+# 3c. 隧洞（平底圆形 — 固定 D/B + 围岩分类）
+# ============================================================
+
+def compute_tunnel_flat_bottom_circular(
+    segments: List[Dict],
+    rock_lining: Dict = None,
+    unified: bool = False,
+) -> Tuple[List[Dict], Dict]:
+    """
+    平底圆形隧洞计算。
+    返回 (rows, tunnel_info)
+      rows: 每个 segment × 3 行（III/IV/V类围岩）
+      tunnel_info: {"D", "B", "H_total"}
+    unified=True: 仅在段内未锁定 D/B 时按最大流量段统一取值。
+    unified=False: 各流量段沿用各自 D/B。
+    """
+    if rock_lining is None:
+        rock_lining = ROCK_LINING_DEFAULT
+
+    override_map = {
+        "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+        "D": "D", "B": "B", "H_total": "H_total", "H1": "H1", "H2": "H2", "V": "V",
+    }
+
+    def _resolve_geometry(seg):
+        D = _first_positive(seg, "D")
+        B = _first_positive(seg, "B")
+        if D is None or B is None or B > D:
+            return None
+        geom = _build_tunnel_flat_bottom_geometry(D, B)
+        return D, B, geom["H_total"]
+
+    def _design_one_seg(seg, D, B, H_total):
+        Q = seg["Q"]
+        slope_inv = seg["slope_inv"]
+        n = seg.get("n", 0.014)
+        slope = 1.0 / slope_inv
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
+        inc_pct = _tunnel_inc_pct(Q) if use_increase else 0.0
+        Q_inc = Q * (1 + inc_pct / 100)
+
+        h_d, ok_d = solve_water_depth_flat_bottom_circular(D, B, n, slope, Q)
+        if use_increase:
+            h_i, ok_i = solve_water_depth_flat_bottom_circular(D, B, n, slope, Q_inc)
+        else:
+            h_i, ok_i = 0.0, False
+
+        V_d = 0.0
+        if ok_d and h_d > 0:
+            out_d = calculate_flat_bottom_circular_outputs(D, B, h_d, n, slope)
+            V_d = out_d["V"]
+
+        seg_rows = []
+        for rc in ROCK_CLASSES:
+            row = {
+                "name": seg["name"],
+                "Q": Q,
+                "Q_inc": round(Q_inc, 3) if use_increase else "",
+                "rock_class": rc,
+                "slope_inv": slope_inv,
+                "n": n,
+                "D": round(D, 2),
+                "B": round(B, 2),
+                "H_total": round(H_total, 2),
+                "t0": rock_lining[rc]["t0"],
+                "t": rock_lining[rc]["t"],
+                "H1": round(h_d, 2) if ok_d else "",
+                "H2": round(h_i, 2) if use_increase and ok_i else "",
+                "V": round(V_d, 2) if V_d > 0 else "",
+                "use_increase": use_increase,
+            }
+            _apply_overrides(row, seg, override_map)
+            seg_rows.append(_blank_increase_fields(row))
+        return seg_rows
+
+    def _empty_rows_for_seg(seg):
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
+        seg_rows = []
+        for rc in ROCK_CLASSES:
+            row = {
+                "name": seg["name"],
+                "Q": seg["Q"],
+                "Q_inc": "",
+                "rock_class": rc,
+                "slope_inv": seg["slope_inv"],
+                "n": seg.get("n", 0.014),
+                "D": "",
+                "B": "",
+                "H_total": "",
+                "t0": rock_lining[rc]["t0"],
+                "t": rock_lining[rc]["t"],
+                "H1": "",
+                "H2": "",
+                "V": "",
+                "use_increase": use_increase,
+            }
+            _apply_overrides(row, seg, override_map)
+            seg_rows.append(_blank_increase_fields(row))
+        return seg_rows
+
+    if unified and _locked_geometry_present(segments, ("D", "B")):
+        unified = False
+
+    if unified:
+        max_seg = max(segments, key=lambda s: s["Q"])
+        geom_max = _resolve_geometry(max_seg)
+        if geom_max is None:
+            empty_info = {"D": 0, "B": 0, "H_total": 0}
+            rows = []
+            for seg in segments:
+                rows.extend(_empty_rows_for_seg(seg))
+            return rows, empty_info
+
+        D, B, H_total = geom_max
+        tunnel_info = {"D": D, "B": B, "H_total": H_total}
+        rows = []
+        for seg in segments:
+            rows.extend(_design_one_seg(seg, D, B, H_total))
+        return rows, tunnel_info
+
+    rows = []
+    first_info = None
+    for seg in segments:
+        geom = _resolve_geometry(seg)
+        if geom is None:
+            rows.extend(_empty_rows_for_seg(seg))
+            continue
+
+        D, B, H_total = geom
+        if first_info is None:
+            first_info = {"D": D, "B": B, "H_total": H_total}
+
+        rows.extend(_design_one_seg(seg, D, B, H_total))
+
+    if first_info is None:
+        first_info = {"D": 0, "B": 0, "H_total": 0}
+    return rows, first_info
+
+
+# ============================================================
+# 3d. 隧洞（马蹄形 — 统一断面 + 围岩分类）
 # ============================================================
 
 def compute_tunnel_horseshoe(segments: List[Dict],
@@ -2437,7 +2601,81 @@ def _write_tunnel_circular(ws, data, styles, gcl, col_offset=0):
 
 
 # ============================================================
-# Sheet 2c: 马蹄形隧洞
+# Sheet 2c: 平底圆形隧洞
+# ============================================================
+
+def _write_tunnel_flat_bottom_circular(ws, data, styles, gcl, col_offset=0):
+    C = col_offset
+    R1 = 1
+
+    headers_full = [
+        ("流量段", None),
+        ("设计流量", "m³/s"),
+        ("加大流量", "m³/s"),
+        ("围岩类型", None),
+        ("1/底坡", None),
+        ("糙率", None),
+        ("直径D", "m"),
+        ("平底宽B", "m"),
+        ("总高H", "m"),
+        ("底板厚t₀", "m"),
+        ("衬砌厚t", "m"),
+        ("设计水深H₁", "m"),
+        ("加大水深H₂", "m"),
+        ("设计流速", "m/s"),
+    ]
+    col_widths_full = [14, 12, 12, 12, 12, 10, 10, 10, 10, 11, 11, 13, 13, 12]
+    rows_full = []
+    for d in data:
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
+            d["rock_class"],
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"],
+            d.get("D", ""), d.get("B", ""), d.get("H_total", ""),
+            d["t0"], d["t"],
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
+        ])
+    headers, col_widths, rows, merge_groups = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+        merge_groups=[([0, 1, 2], 3)] if len(data) >= 3 else None,
+    )
+    NCOLS = len(headers)
+
+    _write_title(ws, R1, C + 1, C + NCOLS, "平底圆形隧洞断面尺寸及水力要素表", styles)
+    for i, (name, unit) in enumerate(headers):
+        _write_header_2row(ws, R1 + 1, R1 + 2, C + 1 + i, name, unit, styles)
+    for i, w in enumerate(col_widths):
+        _set_col_width(ws, C + 1 + i, w, gcl)
+
+    num_segments = len(rows) // 3 if rows else 0
+    merged_cols = {col for cols, _span in merge_groups or [] for col in cols}
+    for si in range(num_segments):
+        base_idx = si * 3
+        r_start = R1 + 3 + base_idx
+        r_end = r_start + 2
+        first_vals = rows[base_idx]
+
+        for cols, _span in merge_groups or []:
+            for col_idx in cols:
+                _merge_vertical(ws, r_start, r_end, C + 1 + col_idx, first_vals[col_idx], styles)
+
+        for j in range(3):
+            r = r_start + j
+            vals = rows[base_idx + j]
+            for ci, v in enumerate(vals):
+                if ci in merged_cols:
+                    continue
+                _sc(ws, r, C + 1 + ci, v, styles)
+
+    return NCOLS
+
+
+# ============================================================
+# Sheet 2d: 马蹄形隧洞
 # ============================================================
 
 def _write_tunnel_horseshoe(ws, data, styles, gcl, col_offset=0, title=None):
@@ -2820,6 +3058,7 @@ def generate_excel(
     tunnel_segs: List[Dict] = None,
     tunnel_arch_segs: List[Dict] = None,
     tunnel_circular_segs: List[Dict] = None,
+    tunnel_flat_bottom_circular_segs: List[Dict] = None,
     tunnel_horseshoe_segs: List[Dict] = None,
     aqueduct_segs: List[Dict] = None,
     aqueduct_u_segs: List[Dict] = None,
@@ -2834,6 +3073,7 @@ def generate_excel(
     table_order: List[str] = None,
     tunnel_unified_arch: bool = False,
     tunnel_unified_circular: bool = False,
+    tunnel_unified_flat_bottom_circular: bool = False,
     tunnel_unified_horseshoe: bool = False,
 ) -> str:
     """
@@ -2870,6 +3110,8 @@ def generate_excel(
         tunnel_arch_segs = _default_segments_tunnel_arch()
     if tunnel_circular_segs is None:
         tunnel_circular_segs = []
+    if tunnel_flat_bottom_circular_segs is None:
+        tunnel_flat_bottom_circular_segs = []
     if tunnel_horseshoe_segs is None:
         tunnel_horseshoe_segs = []
 
@@ -2896,6 +3138,11 @@ def generate_excel(
     d1c = compute_u_channel(u_channel_segs) if u_channel_segs else []
     d2_arch, _ = compute_tunnel(tunnel_arch_segs, rock_lining, unified=tunnel_unified_arch) if tunnel_arch_segs else ([], {})
     d2_circ, _ = compute_tunnel_circular(tunnel_circular_segs, rock_lining, unified=tunnel_unified_circular) if tunnel_circular_segs else ([], {})
+    d2_flat_bottom, _ = compute_tunnel_flat_bottom_circular(
+        tunnel_flat_bottom_circular_segs,
+        rock_lining,
+        unified=tunnel_unified_flat_bottom_circular,
+    ) if tunnel_flat_bottom_circular_segs else ([], {})
     horseshoe_entries = _build_horseshoe_export_entries(
         tunnel_horseshoe_segs,
         rock_lining=rock_lining,
@@ -2916,6 +3163,7 @@ def generate_excel(
         "trap_channel":     ("梯形明渠",          _write_trapezoid_channel,  d1b),
         "tunnel_arch":      ("圆拱直墙型隧洞",    _write_tunnel,             d2_arch),
         "tunnel_circular":  ("圆形隧洞",          _write_tunnel_circular,    d2_circ),
+        "tunnel_flat_bottom_circular": ("平底圆形隧洞", _write_tunnel_flat_bottom_circular, d2_flat_bottom),
         "aqueduct_u":       ("U形渡槽",           _write_aqueduct,           d3_u),
         "aqueduct_rect":    ("矩形渡槽",          _write_aqueduct_rect,      d3_rect),
         "rect_culvert":     ("矩形暗涵",          _write_rect_culvert,       d4),
@@ -2944,7 +3192,7 @@ def generate_excel(
     
     if not table_order:
         table_order = ["rect_channel", "trap_channel", "u_channel",
-                       "tunnel_arch", "tunnel_circular", "tunnel_horseshoe",
+                       "tunnel_arch", "tunnel_circular", "tunnel_flat_bottom_circular", "tunnel_horseshoe",
                        "aqueduct_u", "aqueduct_rect",
                        "rect_culvert", "circular_channel", "siphon", "pressure_pipe"]
     table_order = _expand_horseshoe_table_order(table_order, horseshoe_keys)
@@ -3474,6 +3722,37 @@ def _dxf_build_tunnel_circular(data):
     return title, headers, col_widths, rows, merge
 
 
+def _dxf_build_tunnel_flat_bottom_circular(data):
+    title = "平底圆形隧洞断面尺寸及水力要素表"
+    headers_full = [
+        ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
+        ("围岩类型", None), ("1/底坡", None), ("糙率", None),
+        ("直径D", "m"), ("平底宽B", "m"), ("总高H", "m"),
+        ("底板厚t₀", "m"), ("衬砌厚t", "m"),
+        ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速", "m/s"),
+    ]
+    col_widths_full = _dxf_col_widths([12, 10, 10, 10, 10, 8, 8, 8, 8, 10, 10, 12, 12, 10])
+    rows_full = []
+    for d in data:
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
+            d["rock_class"],
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"],
+            d.get("D", ""), d.get("B", ""), d.get("H_total", ""),
+            d["t0"], d["t"],
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
+        ])
+    headers, col_widths, rows, merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+        merge_groups=[([0, 1, 2], 3)] if len(data) >= 3 else None,
+    )
+    return title, headers, col_widths, rows, merge
+
+
 def _dxf_build_tunnel_horseshoe(data, title=None):
     title = title or "马蹄形隧洞断面尺寸及水力要素表"
     headers_full = [
@@ -3636,6 +3915,7 @@ _DXF_BUILDERS = {
     "u_channel":        _dxf_build_u_channel,
     "tunnel_arch":      _dxf_build_tunnel,
     "tunnel_circular":  _dxf_build_tunnel_circular,
+    "tunnel_flat_bottom_circular": _dxf_build_tunnel_flat_bottom_circular,
     "tunnel_horseshoe": _dxf_build_tunnel_horseshoe,
     "tunnel_horseshoe_1": _dxf_build_tunnel_horseshoe,
     "tunnel_horseshoe_2": _dxf_build_tunnel_horseshoe,
@@ -3659,6 +3939,7 @@ def generate_dxf(
     tunnel_segs: List[Dict] = None,
     tunnel_arch_segs: List[Dict] = None,
     tunnel_circular_segs: List[Dict] = None,
+    tunnel_flat_bottom_circular_segs: List[Dict] = None,
     tunnel_horseshoe_segs: List[Dict] = None,
     aqueduct_segs: List[Dict] = None,
     aqueduct_u_segs: List[Dict] = None,
@@ -3673,6 +3954,7 @@ def generate_dxf(
     table_order: List[str] = None,
     tunnel_unified_arch: bool = False,
     tunnel_unified_circular: bool = False,
+    tunnel_unified_flat_bottom_circular: bool = False,
     tunnel_unified_horseshoe: bool = False,
 ) -> str:
     """
@@ -3698,6 +3980,8 @@ def generate_dxf(
         tunnel_arch_segs = _default_segments_tunnel_arch()
     if tunnel_circular_segs is None:
         tunnel_circular_segs = []
+    if tunnel_flat_bottom_circular_segs is None:
+        tunnel_flat_bottom_circular_segs = []
     if tunnel_horseshoe_segs is None:
         tunnel_horseshoe_segs = []
     if aqueduct_u_segs is None and aqueduct_segs is not None:
@@ -3721,6 +4005,11 @@ def generate_dxf(
     d1c = compute_u_channel(u_channel_segs) if u_channel_segs else []
     d2_arch, _ = compute_tunnel(tunnel_arch_segs, rock_lining, unified=tunnel_unified_arch) if tunnel_arch_segs else ([], {})
     d2_circ, _ = compute_tunnel_circular(tunnel_circular_segs, rock_lining, unified=tunnel_unified_circular) if tunnel_circular_segs else ([], {})
+    d2_flat_bottom, _ = compute_tunnel_flat_bottom_circular(
+        tunnel_flat_bottom_circular_segs,
+        rock_lining,
+        unified=tunnel_unified_flat_bottom_circular,
+    ) if tunnel_flat_bottom_circular_segs else ([], {})
     horseshoe_entries = _build_horseshoe_export_entries(
         tunnel_horseshoe_segs,
         rock_lining=rock_lining,
@@ -3739,6 +4028,7 @@ def generate_dxf(
         "u_channel":        d1c,
         "tunnel_arch":      d2_arch,
         "tunnel_circular":  d2_circ,
+        "tunnel_flat_bottom_circular": d2_flat_bottom,
         "aqueduct_u":       d3_u,
         "aqueduct_rect":    d3_rect,
         "rect_culvert":     d4,
@@ -3755,7 +4045,7 @@ def generate_dxf(
 
     if not table_order:
         table_order = ["rect_channel", "trap_channel", "u_channel",
-                       "tunnel_arch", "tunnel_circular", "tunnel_horseshoe",
+                       "tunnel_arch", "tunnel_circular", "tunnel_flat_bottom_circular", "tunnel_horseshoe",
                        "aqueduct_u", "aqueduct_rect",
                        "rect_culvert", "circular_channel", "siphon", "pressure_pipe"]
     table_order = _expand_horseshoe_table_order(table_order, horseshoe_keys)

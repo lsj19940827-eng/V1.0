@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""隧洞断面 DXF 导出（圆形 / 圆拱直墙型 / 马蹄形）"""
+"""隧洞断面 DXF 导出（圆形 / 平底圆形 / 圆拱直墙型 / 马蹄形）"""
 import math
 from app_渠系计算前端.dxf_common import (
     _add_dim_h,
@@ -13,7 +13,9 @@ from app_渠系计算前端.tunnel.geometry import (
     arch_half_width,
     build_arch_geometry,
     build_arch_outline_polyline,
+    build_flat_bottom_circle_geometry,
     build_standard_horseshoe_geometry,
+    flat_bottom_circle_surface_width,
     standard_horseshoe_half_width,
 )
 
@@ -45,7 +47,9 @@ def draw_tunnel_dxf_on_msp(
     tracked_msp = ensure_tracked_msp(msp, layer_prefix=layer_prefix)
     stype = input_params.get('section_type', '圆形')
     sf = 1000.0 / scale_denom
-    if stype == '圆形':
+    if stype == '平底圆形':
+        _draw_flat_bottom_circ(tracked_msp, result, input_params, sf, scale_denom)
+    elif stype == '圆形':
         _draw_circ(tracked_msp, result, input_params, sf, scale_denom)
     elif stype == '圆拱直墙型':
         _draw_arch(tracked_msp, result, input_params, sf, scale_denom)
@@ -109,6 +113,68 @@ def _draw_circ(msp, result, p, sf=1.0, scale_denom=100):
              '[加大流量]', f'比例={inc_s}', f'Q增={Q_inc:.3f}',
              f'h增={h_inc:.3f} m', f'V增={V_inc:.3f} m/s', f'Fb增={fb_inc:.3f} m']
     _add_text_block(msp, R*sf+gap*3.5, D*sf+th, lines, th, '参数文字')
+
+
+def _draw_flat_bottom_circ(msp, result, p, sf=1.0, scale_denom=100):
+    """绘制平底圆形断面。"""
+    Q = p.get('Q', 0.0); n = p.get('n', 0.014); si = p.get('slope_inv', 3000.0)
+    D = result.get('D', 0.0); B = result.get('B', 0.0)
+    geom = build_flat_bottom_circle_geometry(D, B)
+    H_total = geom['H_total']
+    h_d = result.get('h_design', 0.0); V_d = result.get('V_design', 0.0)
+    A_d = result.get('A_design', 0.0)
+    fb_d = max(0.0, H_total - h_d)
+    Q_inc = result.get('Q_increased', 0.0); h_inc = result.get('h_increased', 0.0)
+    V_inc = result.get('V_increased', 0.0); fb_inc = max(0.0, H_total - h_inc)
+    inc = result.get('increase_percent', 0.0)
+
+    char = max(D, H_total, 1.0) * sf; th = 3.5; ar = th * 0.85; gap = char * 0.20
+    bottom_left = _scale_point(geom['bottom_left'], sf)
+    bottom_right = _scale_point(geom['bottom_right'], sf)
+    msp.add_lwpolyline([bottom_left, bottom_right], dxfattribs={'layer': '轮廓线'})
+    msp.add_arc(
+        _scale_point(geom['top_arc']['center'], sf),
+        geom['top_arc']['radius'] * sf,
+        geom['top_arc']['start_deg'],
+        geom['top_arc']['end_deg'],
+        dxfattribs={'layer': '轮廓线'},
+    )
+    msp.add_line((-D * 0.75 * sf, 0), (D * 0.75 * sf, 0), dxfattribs={'layer': '尺寸标注', 'linetype': 'DASHED'})
+
+    overlap = h_d > 0 and h_inc > 0 and 0 < h_inc < H_total and (h_inc - h_d) * sf < th * 2.0
+    for h_w, layer, lt, lbl in [
+        (h_d, '设计水位', None, f'▽ 设计水位 h={h_d:.3f}m'),
+        (h_inc, '加大水位', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
+    ]:
+        if h_w and 0 < h_w < H_total:
+            water_width = flat_bottom_circle_surface_width(geom, h_w) * sf
+            if water_width <= 1e-9:
+                continue
+            att = {'layer': layer}
+            if lt:
+                att['linetype'] = lt
+            half_width = water_width / 2.0
+            msp.add_line((-half_width, h_w * sf), (half_width, h_w * sf), dxfattribs=att)
+            label_y = h_w * sf + th * 0.5 if lt else (h_w * sf - th * 1.5 if overlap else h_w * sf + th * 0.5)
+            msp.add_text(lbl, dxfattribs={'layer': layer, 'height': th, 'style': 'FANGSONG',
+                'insert': (0, label_y), 'align_point': (0, label_y), 'halign': 1})
+
+    _add_dim_h(msp, geom['bottom_left'][0] * sf, geom['bottom_right'][0] * sf, -(gap * 1.1), 0, f'B={B:.2f} m', th, ar, '尺寸标注')
+    _add_dim_h(msp, -D / 2 * sf, D / 2 * sf, -(gap * 2.0), 0, f'D={D:.2f} m', th, ar, '尺寸标注')
+    if h_d > 0:
+        _add_dim_v(msp, 0, h_d * sf, -(D / 2 * sf + gap * 1.4), -D / 2 * sf, f'h={h_d:.3f} m', th, ar, '尺寸标注')
+    _add_dim_v(msp, 0, H_total * sf, D / 2 * sf + gap * 1.4, D / 2 * sf, f'H={H_total:.3f} m', th, ar, '尺寸标注')
+    if fb_d > 0 and h_d > 0:
+        _add_dim_v(msp, h_d * sf, H_total * sf, D / 2 * sf + gap * 2.3, D / 2 * sf, f'Fb={fb_d:.3f} m', th, ar, '尺寸标注')
+
+    inc_s = f'{inc:.1f}%' if isinstance(inc, (int, float)) else str(inc)
+    lines = ['【隧洞 - 平底圆形】', f'比例: 1:{scale_denom}', '',
+             '[输入参数]', f'Q={Q:.3f} m³/s', f'n={n}', f'i=1/{int(si)}', '',
+             '[断面]', f'D={D:.2f} m', f'B={B:.2f} m', f'H={H_total:.3f} m', f'A总={geom["A_total"]:.3f} m²', '',
+             '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m²', f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m', '',
+             '[加大流量]', f'比例={inc_s}', f'Q增={Q_inc:.3f}', f'h增={h_inc:.3f} m',
+             f'V增={V_inc:.3f} m/s', f'Fb增={fb_inc:.3f} m']
+    _add_text_block(msp, D / 2 * sf + gap * 3.5, H_total * sf + th, lines, th, '参数文字')
 
 
 def _draw_arch(msp, result, p, sf=1.0, scale_denom=100):

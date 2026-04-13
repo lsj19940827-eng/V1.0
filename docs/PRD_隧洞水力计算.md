@@ -1,8 +1,8 @@
 # 隧洞水力计算模块 — 产品需求文档 (PRD)
 
-> **版本**: v1.1  
+> **版本**: v1.3
 > **创建日期**: 2026-02-22  
-> **最后更新**: 2026-03-22  
+> **最后更新**: 2026-04-13  
 > **状态**: 已实现  
 
 ---
@@ -15,13 +15,15 @@
 
 ### 1.2 功能摘要
 
-- 支持 **4种断面类型**：圆形、圆拱直墙型、马蹄形标准Ⅰ型、马蹄形标准Ⅱ型
+- 支持 **5种断面类型**：圆形、平底圆形、圆拱直墙型、马蹄形标准Ⅰ型、马蹄形标准Ⅱ型
 - 基于 **曼宁公式** 进行水力计算
-- 自动搜索满足约束条件的 **最优断面尺寸**
+- 对圆形 / 圆拱直墙型 / 马蹄形自动搜索满足约束条件的 **最优断面尺寸**
+- 对平底圆形固定采用 **直径 D + 平底宽 B** 两输入，程序自动推导 **总高 H_total**
 - 计算 **设计流量** 与 **加大流量** 两种工况
 - 支持 **详细计算过程** 输出（含公式推导）
 - 导出 **DXF断面图**、**Word计算书**
 - 内置 **断面图matplotlib预览**（设计/加大双工况对比）
+- 批量/共享/导入链路统一使用 `隧洞-平底圆形`，表3只允许导入复算，不开放手动新选
 
 ---
 
@@ -42,6 +44,10 @@ app_渠系计算前端/
 
 tests/
   test_tunnel_kernel.py    # 全面测试脚本（1013行，15个测试组）
+  test_tunnel_flat_bottom_circular_kernel_unit.py
+  test_tunnel_flat_bottom_circular_shared_hydraulic_unit.py
+  test_tunnel_flat_bottom_circular_dxf_unit.py
+  test_tunnel_flat_bottom_circular_panel_batch_unit.py
 ```
 
 ---
@@ -68,7 +74,47 @@ A = R² × (θ - sinθ) / 2
 χ = R × θ
 ```
 
-### 3.2 圆拱直墙型断面
+### 3.2 平底圆形断面
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| 最小直径 | 2.0 m | 复用 `MIN_DIAMETER_CIRC` |
+| 用户输入 | `D + B` | `D` 为洞径，`B` 为平底宽 |
+| 校验范围 | `D >= 2.0`，`0 < B ≤ D` | 允许 `B = D`，此时退化为半圆 |
+| 手工模式 | 仅指定尺寸 | 不提供自动寻优，不提供“削底高度”第三参数 |
+| 表3策略 | 仅导入复算 | 不进入表3手动结构选择器 |
+
+**几何定义**:
+- 以直径 `D` 的完整圆为母形；
+- 用一条水平、居中的弦切去下部圆弓，仅保留上部断面；
+- 底边就是这条弦，宽度为 `B`。
+
+记 `R = D / 2`，`y_c = sqrt(R² - (B/2)²)`，则:
+```
+h_cut = R - y_c
+H_total = R + y_c
+θ_cut = 2 × arcsin(B / D)
+A_total = πR² - R² × (θ_cut - sinθ_cut) / 2
+```
+
+**过水面积公式**（复用完整圆弓形面积差）:
+```
+A(h) = A_circle(h_cut + h) - A_circle(h_cut)
+0 ≤ h ≤ H_total
+```
+
+**湿周公式**:
+```
+χ(h) = B + 2R × (arcsin((h - y_c)/R) + arcsin(y_c/R))
+```
+
+**水面宽公式**:
+```
+T(h) = 2 × sqrt(R² - (h - y_c)²)
+0 < h < H_total
+```
+
+### 3.3 圆拱直墙型断面
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
@@ -92,7 +138,7 @@ A = R² × (θ - sinθ) / 2
 2. 最优解附近精细搜索：±0.3m范围内，B步长0.01m，HB比步长0.01
 3. 以最小总面积 `A_total` 为优化目标
 
-### 3.3 马蹄形标准Ⅰ型
+### 3.4 马蹄形标准Ⅰ型
 
 | 参数 | 值 | 常量名 |
 |------|-----|--------|
@@ -105,7 +151,7 @@ A = R² × (θ - sinθ) / 2
 
 适用于地质条件 **较好** 的隧洞。
 
-### 3.4 马蹄形标准Ⅱ型
+### 3.5 马蹄形标准Ⅱ型
 
 | 参数 | 值 | 常量名 |
 |------|-----|--------|
@@ -118,7 +164,7 @@ A = R² × (θ - sinθ) / 2
 
 适用于地质条件 **一般** 的隧洞。
 
-### 3.5 马蹄形断面几何计算（Ⅰ/Ⅱ型通用）
+### 3.6 马蹄形断面几何计算（Ⅰ/Ⅱ型通用）
 
 断面分为 **三段**，底拱段高度 e = R_arch × (1 - cosθ):
 
@@ -239,14 +285,21 @@ V = Q / A       （流速）
 |------|------|--------|------|------|
 | 指定直径 D | `D_edit` | 留空 | ❌ | m，留空自动搜索 |
 
-### 5.3 圆拱直墙型专用参数
+### 5.3 平底圆形断面专用参数
+
+| 参数 | 字段 | 默认值 | 必填 | 说明 |
+|------|------|--------|------|------|
+| 平底圆形直径 D | `flat_bottom_D_edit` | 留空 | ✅ | m，必须 `>= 2.0` |
+| 平底宽 B | `flat_bottom_B_edit` | 留空 | ✅ | m，必须 `> 0` 且 `<= D` |
+
+### 5.4 圆拱直墙型专用参数
 
 | 参数 | 字段 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
 | 拱顶圆心角 | `theta_edit` | 180 | ❌ | 度，90~180 |
 | 指定底宽 B | `B_hs_edit` | 留空 | ❌ | m，留空自动搜索 |
 
-### 5.4 马蹄形专用参数
+### 5.5 马蹄形专用参数
 
 | 参数 | 字段 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
@@ -291,6 +344,14 @@ V = Q / A       （流速）
 |------|------|------|
 | `D` | float | 直径 (m) |
 
+**平底圆形断面专用**:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `D` | float | 洞径 (m) |
+| `B` | float | 平底宽 (m) |
+| `H_total` | float | 程序推导总高 (m) |
+
 **圆拱直墙型专用**:
 
 | 字段 | 类型 | 说明 |
@@ -334,6 +395,7 @@ V = Q / A       （流速）
 
 - 断面类型下拉框（ComboBox）切换时动态显示/隐藏对应参数组:
   - 圆形 → `circ_grp`（指定直径 D）
+  - 平底圆形 → `flat_bottom_grp`（直径 D + 平底宽 B）
   - 圆拱直墙型 → `hs_grp`（圆心角 θ + 指定底宽 B）
   - 马蹄形标准Ⅰ型/Ⅱ型 → `shoe_grp`（指定半径 r）
 - 通用参数始终可见
@@ -352,7 +414,7 @@ V = Q / A       （流速）
 ### 7.4 初始帮助页
 
 通过 `HelpPageBuilder` 构建，包含:
-- 支持断面类型列表（4种，含各自特点说明）
+- 支持断面类型列表（5种，含各自特点说明）
 - 曼宁公式
 - 净空约束条件
 - 加大流量比例规范表
@@ -406,6 +468,7 @@ matplotlib 绘制，1行2列子图:
 
 三种断面类型各有独立绘制方法:
 - `_draw_circular()`: 圆形轮廓 + 弓形水面
+- `_draw_flat_bottom_circle()`: 平底圆形轮廓 + 水平底边 + 圆弧顶 + 分段水面填充
 - `_draw_horseshoe()`: 底板 + 直墙 + 拱部 + 分区水面填充
 - `_draw_horseshoe_std()`: 精确轮廓曲线（100点采样）+ 水面填充
 
@@ -441,6 +504,7 @@ matplotlib 绘制，1行2列子图:
 ### 当前实现同步说明（2026-03-22）
 
 - 圆拱直墙型 DXF 已改为与界面断面图共用同一套几何公式，不再单独手写另一套圆心坐标。
+- 平底圆形 DXF 已改为与界面断面图、表3复算共用同一套共享几何 helper；轮廓固定画成 `1 条水平底边 LWPOLYLINE + 1 条原生 ARC`。
 - 圆拱直墙型轮廓已改为：`1 条 LWPOLYLINE`（底板+直墙） + `1 条 ARC`（拱顶），导出后拱脚与直墙顶严格重合，不再出现断面不闭合。
 - 马蹄形标准Ⅰ型 / Ⅱ型轮廓已改为 `4 条 ARC` 精确拼接，不再使用采样折线逼近。
 - 圆拱直墙型水位线宽度已按真实拱部几何计算；进入拱部后不会再按固定底宽 B 直接画满。
@@ -456,6 +520,13 @@ matplotlib 绘制，1行2列子图:
 - 设计/加大水位线 + 水位文字标注
 - 直径标注、水深标注、净空标注、半径标注
 - 参数文字块（输入参数 + 断面 + 设计/加大工况）
+
+**平底圆形** (`_draw_flat_bottom_circ`):
+- 水平底边（`LWPOLYLINE`）
+- 上部原生圆弧（`ARC`）
+- 设计/加大水位线 + 水位文字标注
+- `D / B / H_total / h / 净空` 标注
+- 参数文字块（统一显示 `D + B + H_total`）
 
 **圆拱直墙型** (`_draw_arch`):
 - 底板 + 左右直墙开放多段线（`LWPOLYLINE`）
@@ -515,6 +586,12 @@ matplotlib 绘制，1行2列子图:
 | `calculate_circular_outputs(D, h, n, slope)` | 圆形全部水力要素 |
 | `solve_water_depth_circular(D, n, slope, Q_target)` | 圆形水深反算 |
 | `quick_calculate_circular(Q, n, slope_inv, ...)` | **圆形一键计算** |
+| `calculate_flat_bottom_circular_area(D, B, h)` | 平底圆形过水面积 |
+| `calculate_flat_bottom_circular_perimeter(D, B, h)` | 平底圆形湿周 |
+| `calculate_flat_bottom_circular_surface_width(D, B, h)` | 平底圆形水面宽 |
+| `calculate_flat_bottom_circular_outputs(D, B, h, n, slope)` | 平底圆形全部水力要素 |
+| `solve_water_depth_flat_bottom_circular(D, B, n, slope, Q_target)` | 平底圆形水深反算 |
+| `quick_calculate_flat_bottom_circular(Q, n, slope_inv, ...)` | **平底圆形一键计算** |
 | `calculate_horseshoe_area(B, H_total, theta_rad, h)` | 圆拱直墙过水面积 |
 | `calculate_horseshoe_perimeter(B, H_total, theta_rad, h)` | 圆拱直墙湿周 |
 | `calculate_horseshoe_total_area(B, H_total, theta_rad)` | 圆拱直墙总面积 |
@@ -533,6 +610,14 @@ quick_calculate_circular(
     Q: float, n: float, slope_inv: float,
     v_min: float, v_max: float,
     manual_D: float = None,
+    manual_increase_percent: float = None
+) -> Dict[str, Any]
+
+quick_calculate_flat_bottom_circular(
+    Q: float, n: float, slope_inv: float,
+    v_min: float, v_max: float,
+    manual_D: float,
+    manual_B: float,
     manual_increase_percent: float = None
 ) -> Dict[str, Any]
 
@@ -606,7 +691,13 @@ DIM_INCREMENT = 0.01             # 尺寸搜索步长
 
 ### 12.1 测试文件
 
-`tests/test_tunnel_kernel.py` — 15个测试组，全面覆盖计算内核。
+- `tests/test_tunnel_kernel.py` — 原有圆形 / 圆拱直墙型 / 马蹄形回归
+- `tests/test_tunnel_flat_bottom_circular_kernel_unit.py` — 平底圆形内核与边界条件
+- `tests/test_tunnel_flat_bottom_circular_shared_hydraulic_unit.py` — 共享结果、表3导入复算与展示兜底
+- `tests/test_tunnel_flat_bottom_circular_dxf_unit.py` — 平底圆形 DXF 轮廓连通性、总高一致性与极小水深边界
+- `tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py` — 单断面页、批量页、参数回填与 Word/TXT 标题链路
+- `tests/test_tunnel_flat_bottom_circular_table3_xxpipe_unit.py` — 表3手工限制与 `xx管` 隧洞摘要链路
+- `tests/test_tunnel_flat_bottom_circle_section_summary_unit.py` — 断面汇总独立分组、标题与配置入口
 
 ### 12.2 测试组清单
 
@@ -695,3 +786,4 @@ from 隧洞设计 import (
 |------|------|----------|
 | 2026-02-22 | v1.0 | 初始版本，完整记录已实现功能 |
 | 2026-02-25 | v1.1 | 新增“考虑加大流量比例系数”CheckBox控件（`inc_cb`，默认勾选）：不勾选时`manual_increase_percent=0`传入计算内核，简要/详细模式均跳过加大流量工况段落，验证结果仅使用设计流量数据。涉及文件：tunnel/panel.py |
+| 2026-04-13 | v1.3 | 完成 `平底圆形` 隧洞断面全链路收口：表1参数弹窗回填与提示文案、单断面多工况与 Word/TXT 标题、DXF 总高一致性、表3手工输入拦截、`xx管` 隧洞摘要、断面汇总独立分组和对应测试全部补齐；表3继续只允许来源带入、不开放手动新选。 |

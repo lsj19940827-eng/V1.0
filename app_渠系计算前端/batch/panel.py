@@ -115,6 +115,7 @@ except ImportError:
 try:
     from 隧洞设计 import (
         quick_calculate_circular as suidong_circular_calculate,
+        quick_calculate_flat_bottom_circular as suidong_flat_bottom_circular_calculate,
         quick_calculate_horseshoe as suidong_horseshoe_calculate,
         quick_calculate_horseshoe_std as suidong_horseshoe_std_calculate
     )
@@ -134,7 +135,7 @@ except ImportError:
 SECTION_TYPES = [
     "明渠-梯形", "明渠-复式梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
     "渡槽-U形", "渡槽-矩形",
-    "隧洞-圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
+    "隧洞-圆形", "隧洞-平底圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
     "矩形暗涵", "倒虹吸", "有压管道", "定向钻", "顶管",
     "分水闸", "分水口", "节制闸", "泄水闸", "退水闸",
 ]
@@ -195,11 +196,12 @@ _HEADER_TOOLTIPS = {
         "【底宽 B（单位：米）】\n\n"
         "定义：渠道或建筑物断面的底部宽度\n\n"
         "▶ 怎么填？\n"
-        "  • 留空 → 程序自动搜索最优底宽\n"
-        "  • 填一个数值 → 固定底宽，由程序推算水深\n\n"
+        "  • 平底圆形隧洞：必须固定填写 D + B，与直径 D 配对输入\n"
+        "  • 其他支持类型：留空可自动搜索，填写则按固定值计算\n\n"
         "▶ 哪些类型用到这个参数？\n"
         "  • 明渠-梯形 / 明渠-矩形：渠道底宽\n"
         "  • 渡槽-矩形：槽宽\n"
+        "  • 隧洞-平底圆形：平底宽 B（必须固定填写 D + B）\n"
         "  • 隧洞-圆拱直墙型：洞宽\n"
         "  • 矩形暗涵：涵洞宽度\n\n"
         "▶ 与「明渠宽深比」的关系\n"
@@ -223,11 +225,12 @@ _HEADER_TOOLTIPS = {
         "【直径 D（单位：米）】\n\n"
         "定义：圆形断面的管径 / 洞径\n\n"
         "▶ 怎么填？\n"
-        "  • 留空 → 程序自动搜索最优直径\n"
-        "  • 填一个数值 → 固定直径进行计算\n\n"
+        "  • 平底圆形隧洞：必须固定填写 D + B，与平底宽 B 配对输入\n"
+        "  • 其他支持类型：留空可自动搜索，填写则按固定值计算\n\n"
         "▶ 哪些类型用到这个参数？\n"
         "  • 明渠-圆形：圆形渠道的管径\n"
         "  • 隧洞-圆形：圆形隧洞的洞径\n\n"
+        "  • 隧洞-平底圆形：洞径 D（必须固定填写 D + B）\n\n"
         "▶ 规范要求\n"
         "  隧洞最小直径一般不小于 2.0m\n\n"
         "▶ 其他类型无需填写\n"
@@ -1807,6 +1810,13 @@ class BatchPanel(QWidget):
                                         depth_width_ratio=dr,
                                         chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
                                         manual_increase_percent=_inc)
+        elif "隧洞-平底圆形" in section_type:
+            if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
+            return suidong_flat_bottom_circular_calculate(Q=Q, n=n, slope_inv=slope_inv,
+                                                          v_min=v_min, v_max=v_max,
+                                                          manual_D=D if D > 0 else None,
+                                                          manual_B=b if b > 0 else None,
+                                                          manual_increase_percent=_inc)
         elif "隧洞-圆形" in section_type:
             if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
             return suidong_circular_calculate(Q=Q, n=n, slope_inv=slope_inv,
@@ -1901,7 +1911,10 @@ class BatchPanel(QWidget):
             H_total_val = result.get('H_total', 0)
 
         elif "隧洞" in section_type:
-            if "圆形" in section_type:
+            if "平底圆形" in section_type:
+                B_val = result.get('B', 0)
+                D_val = result.get('D', result.get('D_design', 0))
+            elif "圆形" in section_type:
                 D_val = result.get('D', result.get('D_design', 0))
             elif "圆拱直墙型" in section_type:
                 B_val = result.get('B', 0)
@@ -1915,7 +1928,9 @@ class BatchPanel(QWidget):
             Q_inc = result.get('Q_increased', result.get('Q_inc', 0))
             h_inc = result.get('h_increased', result.get('y_i', 0))
             V_inc = result.get('V_increased', result.get('V_i', 0))
-            if "圆形" in section_type:
+            if "平底圆形" in section_type:
+                H_total_val = result.get('H_total', 0)
+            elif "圆形" in section_type:
                 H_total_val = result.get('D', result.get('D_design', 0))
             elif "马蹄形" in section_type:
                 r_v = result.get('r', 0)
@@ -2464,7 +2479,15 @@ class BatchPanel(QWidget):
         PI = math.pi
 
         o.append("【二、断面尺寸】")
-        if "圆形" in section_type:
+        if "平底圆形" in section_type:
+            D = result.get('D', 0)
+            B = result.get('B', 0)
+            H = result.get('H_total', 0)
+            o.append(f"  洞径 D = {D:.2f} m")
+            o.append(f"  平底宽 B = {B:.2f} m")
+            o.append(f"  推导总高 H = {H:.2f} m")
+            o.append(f"  断面总面积: A总 = {A_total:.3f} m²")
+        elif "圆形" in section_type:
             D = result.get('D', 0)
             o.append(f"  设计直径: D = {D:.2f} m")
             o.append(f"  断面总面积: A总 = π×D²/4 = {A_total:.3f} m²")
@@ -2646,6 +2669,11 @@ class BatchPanel(QWidget):
             chamfer_length = params.get('chamfer_length', "")
             values[15] = str(chamfer_angle) if chamfer_angle != "" else ""
             values[16] = str(chamfer_length) if chamfer_length != "" else ""
+        elif "隧洞-平底圆形" in section_type:
+            B_val = params.get('B', params.get('b', ""))
+            values[10] = str(B_val) if B_val != "" else ""
+            D_val = params.get('D', "")
+            values[13] = str(D_val) if D_val != "" else ""
         elif "隧洞-圆形" in section_type:
             D_val = params.get('D', "")
             values[13] = str(D_val) if D_val != "" else ""
@@ -2682,6 +2710,7 @@ class BatchPanel(QWidget):
             "梯形": "明渠-梯形", "复式梯形": "明渠-复式梯形", "矩形": "明渠-矩形", "圆形": "明渠-圆形",
             "明渠U形": "明渠-U形", "U形明渠": "明渠-U形",
             "U形": "渡槽-U形", "U形渡槽": "渡槽-U形", "矩形渡槽": "渡槽-矩形",
+            "平底圆形": "隧洞-平底圆形", "平底圆形隧洞": "隧洞-平底圆形", "隧洞平底圆形": "隧洞-平底圆形",
             "圆形隧洞": "隧洞-圆形", "圆拱直墙": "隧洞-圆拱直墙型", "圆拱直墙型": "隧洞-圆拱直墙型",
             "马蹄形Ⅰ型": "隧洞-马蹄形Ⅰ型", "马蹄形Ⅱ型": "隧洞-马蹄形Ⅱ型",
             "马蹄形I型": "隧洞-马蹄形Ⅰ型", "马蹄形II型": "隧洞-马蹄形Ⅱ型",
@@ -3883,6 +3912,10 @@ class SectionParameterDialog(QDialog):
             self._add_opt_entry(form, "倒角角度 (度):", "chamfer_angle", "")
             self._add_opt_entry(form, "倒角底边 (m):", "chamfer_length", "",
                                 "(倒角两者需同时填写或同时留空)")
+        elif "隧洞-平底圆形" in st:
+            self._add_opt_entry(form, "指定直径 D (m):", "D", "必填")
+            self._add_opt_entry(form, "平底宽 B (m):", "B", "必填",
+                                "(平底圆形需同时填写 D 和 B)")
         elif "隧洞-圆形" in st:
             self._add_opt_entry(form, "指定直径 D (m):", "D", "留空自动计算",
                                 "(留空则自动计算)")
@@ -3919,6 +3952,13 @@ class SectionParameterDialog(QDialog):
             elif "明渠-复式梯形" in st:
                 for k in ['m1', 'B1', 'm2', 'B2', 'm3', 'h1']:
                     v = cv.get(k, '')
+                    if k in self._entries and v and str(v).strip():
+                        self._entries[k].setText(str(v).strip())
+            elif "隧洞-平底圆形" in st:
+                for k in ['D', 'B']:
+                    v = cv.get(k, cv.get(k.lower(), ''))
+                    if k == 'B' and (v is None or str(v).strip() == ''):
+                        v = cv.get('b', cv.get('B', ''))
                     if k in self._entries and v and str(v).strip():
                         self._entries[k].setText(str(v).strip())
             elif "明渠-圆形" in st or "隧洞-圆形" in st:
@@ -4020,6 +4060,17 @@ class SectionParameterDialog(QDialog):
                 result['h_b_ratio'] = self._get_float('h_b_ratio', "")
                 result['chamfer_angle'] = self._get_float('chamfer_angle', "")
                 result['chamfer_length'] = self._get_float('chamfer_length', "")
+            elif "隧洞-平底圆形" in st:
+                D_val = self._get_float('D')
+                B_val = self._get_float('B')
+                if D_val == "" or D_val is None or D_val < 2.0:
+                    raise ValueError("平底圆形的直径 D 必须不小于 2.0")
+                if B_val == "" or B_val is None or B_val <= 0:
+                    raise ValueError("平底圆形的平底宽 B 必须大于 0")
+                if B_val > D_val:
+                    raise ValueError("平底圆形的平底宽 B 不能大于直径 D")
+                result['D'] = D_val
+                result['B'] = B_val
             elif "隧洞-圆形" in st:
                 result['D'] = self._get_float('D', "")
             elif "隧洞-圆拱直墙型" in st:

@@ -34,6 +34,7 @@ def test_xxpipe_allowed_structure_options_cover_pipe_rule_baseline():
     expected = {
         "有压管道",
         "隧洞-圆形",
+        "隧洞-平底圆形",
         "隧洞-圆拱直墙型",
         "隧洞-马蹄形Ⅰ型",
         "隧洞-马蹄形Ⅱ型",

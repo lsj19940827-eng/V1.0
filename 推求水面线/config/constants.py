@@ -32,6 +32,7 @@ STRUCTURE_TYPE_OPTIONS = [
     "渡槽-U形",
     "渡槽-矩形",
     "隧洞-圆形",
+    "隧洞-平底圆形",
     "隧洞-圆拱直墙型",
     "隧洞-马蹄形Ⅰ型",
     "隧洞-马蹄形Ⅱ型",
@@ -52,6 +53,7 @@ XXPIPE_ALLOWED_STRUCTURE_KEYWORDS = ("隧洞",)
 XXPIPE_ALLOWED_STRUCTURE_OPTIONS = [
     "有压管道",
     "隧洞-圆形",
+    "隧洞-平底圆形",
     "隧洞-圆拱直墙型",
     "隧洞-马蹄形Ⅰ型",
     "隧洞-马蹄形Ⅱ型",

@@ -47,6 +47,9 @@ def normalize_section_type_name(section_type: Any) -> str:
         "矩形暗渠": "矩形暗涵",
         "矩形暗涵": "矩形暗涵",
         "复式梯形": "明渠-复式梯形",
+        "平底圆形": "隧洞-平底圆形",
+        "平底圆形隧洞": "隧洞-平底圆形",
+        "隧洞平底圆形": "隧洞-平底圆形",
         "退水闸": "退水闸",
     }
     return alias_map.get(text, text)
@@ -81,6 +84,17 @@ def normalize_use_increase_flag(value: Any, default: bool = True) -> bool:
     if text in {"false", "0", "no", "n", "off"}:
         return False
     return bool(value)
+
+
+def _format_metric(value: Any, suffix: str = "m") -> str:
+    """格式化可选数值，空值返回空串。"""
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"{number:.2f}{suffix}"
 
 
 @dataclass
@@ -143,6 +157,20 @@ class SectionResult:
     
     def get_display_info(self) -> str:
         """获取用于显示的参数信息"""
+        if self.section_type == "隧洞-平底圆形":
+            parts = []
+            d_text = _format_metric(self.D)
+            b_text = _format_metric(self.B)
+            h_total_text = _format_metric(self.H_total if self.H_total and self.H_total > 0 else None)
+            if d_text:
+                parts.append(f"D={d_text}")
+            if b_text:
+                parts.append(f"B={b_text}")
+            if h_total_text:
+                parts.append(f"H={h_total_text}")
+            if parts:
+                return ", ".join(parts)
+            return f"Q={self.Q:.2f}m³/s, V={self.V:.2f}m/s"
         if self.section_type in ('梯形', '矩形') or (self.B is not None and self.h is not None):
             m_str = f", m={self.m:.1f}" if self.m else ""
             return f"B={self.B:.2f}m, h={self.h:.2f}m{m_str}"
@@ -347,7 +375,12 @@ class SharedDataManager:
             
             # 提取断面尺寸
             # 梯形、矩形断面（包括明渠、渡槽、隧洞-圆拱直墙型、矩形暗涵等）
-            if section_type in ('梯形', '矩形') or 'b_design' in result or 'B' in result:
+            if section_type == "隧洞-平底圆形":
+                section_result.B = result.get('B', None)
+                section_result.D = result.get('D', None)
+                section_result.h = result.get('h_design', result.get('water_depth', result.get('y_d', None)))
+                section_result.H_total = result.get('H_total', 0)
+            elif section_type in ('梯形', '矩形') or 'b_design' in result or 'B' in result:
                 section_result.B = result.get('b_design', result.get('B', None))
                 section_result.h = result.get('h_design', result.get('h', None))
                 # 梯形边坡系数
@@ -406,6 +439,8 @@ class SharedDataManager:
             elif '明渠-' in section_type and 'h_prime' in result:
                 # 明渠其他子类型（含明渠-U形、明渠-梯形 等）：h_prime
                 section_result.H_total = result.get('h_prime', 0)
+            elif section_type == "隧洞-平底圆形":
+                section_result.H_total = result.get('H_total', 0)
             elif section_type == '圆形' or '圆形' in section_type:
                 # 明渠圆形/隔洞圆形：设计直径 D
                 section_result.H_total = result.get('D', result.get('D_design', 0))

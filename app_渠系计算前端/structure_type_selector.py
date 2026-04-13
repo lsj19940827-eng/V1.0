@@ -39,7 +39,7 @@ STRUCTURE_CATEGORIES = [
         "name": "隧洞",
         "icon": "🚇",
         "color": "#5E35B1",
-        "items": ["隧洞-圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型"],
+        "items": ["隧洞-圆形", "隧洞-平底圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型"],
         "desc": "穿越山体的输水建筑物",
     },
     {
@@ -160,12 +160,20 @@ class StructureTypeSelector(QDialog):
 
     type_selected = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, excluded_items=None):
         super().__init__(parent)
         self.selected_type = ""
         self._category_tabs = []
         self._category_panels = {}
         self._item_cards = {}
+        excluded = {str(item).strip() for item in (excluded_items or set()) if str(item).strip()}
+        self._categories = []
+        for category in STRUCTURE_CATEGORIES:
+            items = [item for item in category["items"] if item not in excluded]
+            if items:
+                new_category = dict(category)
+                new_category["items"] = items
+                self._categories.append(new_category)
         self._init_ui()
 
     def _init_ui(self):
@@ -224,7 +232,7 @@ class StructureTypeSelector(QDialog):
         # 分类标签行
         tab_lay = QHBoxLayout()
         tab_lay.setSpacing(6)
-        for cat in STRUCTURE_CATEGORIES:
+        for cat in self._categories:
             tab = _CategoryTab(cat["name"], cat["icon"], cat["color"], self)
             tab.clicked.connect(lambda checked=False, c=cat["name"]: self._switch_category(c))
             self._category_tabs.append(tab)
@@ -250,7 +258,7 @@ class StructureTypeSelector(QDialog):
         self._cards_layout.setSpacing(0)
 
         # 为每个分类创建一个面板
-        for cat in STRUCTURE_CATEGORIES:
+        for cat in self._categories:
             panel = QWidget()
             grid = QGridLayout(panel)
             grid.setContentsMargins(4, 4, 4, 4)
@@ -310,7 +318,7 @@ class StructureTypeSelector(QDialog):
         main_lay.addLayout(btn_lay)
 
         # 默认选中第一个分类
-        self._switch_category(STRUCTURE_CATEGORIES[0]["name"])
+        self._switch_category(self._categories[0]["name"])
 
     def showEvent(self, event):
         """确保弹窗打开后立即获得焦点，Esc 操作更稳定。"""
@@ -350,7 +358,7 @@ class StructureTypeSelector(QDialog):
         for name, panel in self._category_panels.items():
             panel.setVisible(name == category_name)
         # 更新描述
-        for cat in STRUCTURE_CATEGORIES:
+        for cat in self._categories:
             if cat["name"] == category_name:
                 self._desc_label.setText(cat["desc"])
                 break
@@ -360,7 +368,7 @@ class StructureTypeSelector(QDialog):
         # 重置所有卡片样式
         for name, card in self._item_cards.items():
             cat_color = "#999"
-            for cat in STRUCTURE_CATEGORIES:
+            for cat in self._categories:
                 if name in cat["items"]:
                     cat_color = cat["color"]
                     break
@@ -380,7 +388,7 @@ class StructureTypeSelector(QDialog):
             """)
         # 高亮当前选中
         cat_color = P
-        for cat in STRUCTURE_CATEGORIES:
+        for cat in self._categories:
             if type_name in cat["items"]:
                 cat_color = cat["color"]
                 break
@@ -419,7 +427,7 @@ class StructureTypeSelector(QDialog):
         """高亮当前值并自动切换到对应分类"""
         if not current_type:
             return
-        for cat in STRUCTURE_CATEGORIES:
+        for cat in self._categories:
             if current_type in cat["items"]:
                 self._switch_category(cat["name"])
                 break
@@ -429,7 +437,7 @@ class StructureTypeSelector(QDialog):
             self._btn_ok.setEnabled(True)
             card = self._item_cards[current_type]
             cat_color = P
-            for cat in STRUCTURE_CATEGORIES:
+            for cat in self._categories:
                 if current_type in cat["items"]:
                     cat_color = cat["color"]
                     break

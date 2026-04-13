@@ -21,6 +21,7 @@ from typing import Dict, Any, Tuple
 # ============================================================
 
 PI = 3.14159265358979
+GEOM_TOLERANCE = 1e-9
 
 # 圆形断面
 MIN_DIAMETER_CIRC = 2.0     # 最小直径 (m)
@@ -87,6 +88,39 @@ def get_required_freeboard_height(H_total: float) -> float:
     return MIN_FREEBOARD_HGT_TUNNEL
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    """将数值限制在指定区间内。"""
+    return max(low, min(high, value))
+
+
+def _build_flat_bottom_circular_geometry(D: float, B: float) -> Dict[str, float]:
+    """构造平底圆形隧洞几何参数。"""
+    if D <= 0:
+        raise ValueError("平底圆形断面要求直径 D 大于 0")
+    if B <= 0:
+        raise ValueError("平底圆形断面要求平底宽 B 大于 0")
+    if B > D + GEOM_TOLERANCE:
+        raise ValueError("平底圆形断面要求平底宽 B 不得大于直径 D")
+
+    radius = D / 2.0
+    half_bottom = B / 2.0
+    center_y = math.sqrt(max(radius * radius - half_bottom * half_bottom, 0.0))
+    cut_height = radius - center_y
+    H_total = radius + center_y
+    cut_theta = 2.0 * math.asin(_clamp(B / D, -1.0, 1.0))
+    cut_area = radius * radius * (cut_theta - math.sin(cut_theta)) / 2.0
+    A_total = math.pi * radius * radius - cut_area
+    return {
+        "D": D,
+        "B": B,
+        "radius": radius,
+        "center_y": center_y,
+        "cut_height": cut_height,
+        "H_total": H_total,
+        "A_total": A_total,
+    }
+
+
 # ============================================================
 # 圆形断面计算
 # ============================================================
@@ -149,6 +183,119 @@ def calculate_circular_outputs(D: float, h: float, n: float, slope: float) -> Di
         'freeboard_pct': freeboard_pct,
         'freeboard_hgt': freeboard_hgt
     }
+
+
+def calculate_flat_bottom_circular_area(D: float, B: float, h: float) -> float:
+    """计算平底圆形断面过水面积。"""
+    if D <= 0 or B <= 0 or h <= 0:
+        return 0.0
+    geom = _build_flat_bottom_circular_geometry(D, B)
+    h = _clamp(h, 0.0, geom["H_total"])
+    if h <= GEOM_TOLERANCE:
+        return 0.0
+    full_depth = geom["cut_height"] + h
+    return calculate_circular_area(D, full_depth) - calculate_circular_area(D, geom["cut_height"])
+
+
+def calculate_flat_bottom_circular_perimeter(D: float, B: float, h: float) -> float:
+    """计算平底圆形断面湿周。"""
+    if D <= 0 or B <= 0 or h <= 0:
+        return 0.0
+    geom = _build_flat_bottom_circular_geometry(D, B)
+    h = _clamp(h, 0.0, geom["H_total"])
+    if h <= GEOM_TOLERANCE:
+        return 0.0
+    radius = geom["radius"]
+    center_y = geom["center_y"]
+    start_angle = -math.asin(_clamp(center_y / radius, -1.0, 1.0))
+    water_angle = math.asin(_clamp((h - center_y) / radius, -1.0, 1.0))
+    return B + 2.0 * radius * (water_angle - start_angle)
+
+
+def calculate_flat_bottom_circular_surface_width(D: float, B: float, h: float) -> float:
+    """计算平底圆形断面水面宽。"""
+    if D <= 0 or B <= 0 or h <= 0:
+        return 0.0
+    geom = _build_flat_bottom_circular_geometry(D, B)
+    h = _clamp(h, 0.0, geom["H_total"])
+    if h <= GEOM_TOLERANCE or h >= geom["H_total"] - GEOM_TOLERANCE:
+        return 0.0
+    radius = geom["radius"]
+    return 2.0 * math.sqrt(max(0.0, radius * radius - (h - geom["center_y"]) ** 2))
+
+
+def calculate_flat_bottom_circular_outputs(D: float, B: float, h: float, n: float, slope: float) -> Dict[str, float]:
+    """计算平底圆形断面的主要水力要素。"""
+    geom = _build_flat_bottom_circular_geometry(D, B)
+    h = _clamp(h, 0.0, geom["H_total"])
+    A = calculate_flat_bottom_circular_area(D, B, h)
+    P = calculate_flat_bottom_circular_perimeter(D, B, h)
+    R_hyd = A / P if P > 0 else 0.0
+
+    if R_hyd > 0 and n > 0 and slope >= 0:
+        try:
+            Q_calc = (1 / n) * A * (R_hyd ** (2 / 3)) * (slope ** 0.5)
+        except Exception:
+            Q_calc = 0.0
+    else:
+        Q_calc = 0.0
+
+    V = Q_calc / A if A > 0 else 0.0
+    freeboard_pct = (geom["A_total"] - A) / geom["A_total"] * 100 if geom["A_total"] > 0 else 100.0
+    freeboard_hgt = geom["H_total"] - h
+
+    return {
+        'A': A,
+        'P': P,
+        'R_hyd': R_hyd,
+        'V': V,
+        'Q': Q_calc,
+        'A_total': geom["A_total"],
+        'H_total': geom["H_total"],
+        'freeboard_pct': freeboard_pct,
+        'freeboard_hgt': freeboard_hgt,
+    }
+
+
+def solve_water_depth_flat_bottom_circular(D: float, B: float, n: float, slope: float, Q_target: float) -> Tuple[float, bool]:
+    """求解平底圆形断面对应目标流量的水深。"""
+    if D <= 0 or B <= 0 or n <= 0 or slope < 0 or Q_target <= 0.0000001:
+        return (0.0, True) if Q_target <= 0.0000001 else (0.0, False)
+
+    geom = _build_flat_bottom_circular_geometry(D, B)
+    h_low = 0.00001
+    h_high = geom["H_total"]
+
+    outputs_low = calculate_flat_bottom_circular_outputs(D, B, h_low, n, slope)
+    outputs_high = calculate_flat_bottom_circular_outputs(D, B, h_high * 0.99999, n, slope)
+
+    if Q_target <= outputs_low['Q'] * 1.001:
+        return (h_low, True)
+    if Q_target >= outputs_high['Q'] * 0.999:
+        return (h_high * 0.99999, Q_target <= outputs_high['Q'] * 1.001)
+
+    h_mid = 0.0
+    for _ in range(MAX_ITERATIONS):
+        h_mid = (h_low + h_high) / 2.0
+        if h_mid <= h_low or h_mid >= h_high:
+            break
+
+        outputs = calculate_flat_bottom_circular_outputs(D, B, h_mid, n, slope)
+        Q_mid = outputs['Q']
+
+        if Q_mid > 0 and abs(Q_mid - Q_target) / Q_target < SOLVER_TOLERANCE:
+            return (h_mid, True)
+
+        if Q_mid < Q_target:
+            h_low = h_mid
+        else:
+            h_high = h_mid
+
+    outputs = calculate_flat_bottom_circular_outputs(D, B, h_mid, n, slope)
+    if outputs['Q'] > 0 and abs(outputs['Q'] - Q_target) / Q_target < SOLVER_TOLERANCE * 1.5:
+        return (h_mid, True)
+
+    return (h_mid, False)
 
 
 def solve_water_depth_circular(D: float, n: float, slope: float, Q_target: float) -> Tuple[float, bool]:
@@ -701,6 +848,123 @@ def quick_calculate_horseshoe_std(Q: float, n: float, slope_inv: float,
     result['freeboard_hgt_inc'] = outputs_inc['freeboard_hgt']
     result['A_total'] = outputs_design['A_total']
     
+    return result
+
+
+def quick_calculate_flat_bottom_circular(Q: float, n: float, slope_inv: float,
+                                         v_min: float, v_max: float,
+                                         manual_D: float = None,
+                                         manual_B: float = None,
+                                         manual_increase_percent: float = None) -> Dict[str, Any]:
+    """平底圆形隧洞快速计算。"""
+    result = {
+        'success': False,
+        'error_message': '',
+        'section_type': '平底圆形',
+        'design_method': '',
+        'D': 0,
+        'B': 0,
+        'H_total': 0,
+        'h_design': 0,
+        'V_design': 0,
+        'A_design': 0,
+        'P_design': 0,
+        'R_hyd_design': 0,
+        'Q_calc': 0,
+        'freeboard_pct_design': 0,
+        'freeboard_hgt_design': 0,
+        'increase_percent': 0,
+        'Q_increased': 0,
+        'h_increased': 0,
+        'V_increased': 0,
+        'A_increased': 0,
+        'P_increased': 0,
+        'R_hyd_increased': 0,
+        'freeboard_pct_inc': 0,
+        'freeboard_hgt_inc': 0,
+        'A_total': 0,
+    }
+
+    if Q <= 0 or n <= 0 or slope_inv <= 0:
+        result['error_message'] = '输入参数无效'
+        return result
+    if manual_D is None or manual_B is None:
+        result['error_message'] = '平底圆形断面必须同时输入直径 D 和平底宽 B'
+        return result
+    if manual_D < MIN_DIAMETER_CIRC:
+        result['error_message'] = f'平底圆形断面要求直径 D 不小于 {MIN_DIAMETER_CIRC:.1f} m'
+        return result
+    if manual_B <= 0 or manual_B > manual_D:
+        result['error_message'] = '平底圆形断面要求 0 < B ≤ D，请检查平底宽 B 与直径 D'
+        return result
+
+    try:
+        geom = _build_flat_bottom_circular_geometry(manual_D, manual_B)
+    except ValueError as exc:
+        result['error_message'] = str(exc)
+        return result
+
+    slope = 1.0 / slope_inv
+    if manual_increase_percent is not None and manual_increase_percent >= 0:
+        increase_percent = manual_increase_percent
+    else:
+        increase_percent = get_flow_increase_percent(Q)
+
+    Q_increased = Q * (1 + increase_percent / 100)
+    result['increase_percent'] = increase_percent
+    result['Q_increased'] = Q_increased
+
+    h_design, success_design = solve_water_depth_flat_bottom_circular(manual_D, manual_B, n, slope, Q)
+    if not success_design or h_design >= geom['H_total']:
+        result['error_message'] = (
+            f"计算失败：指定的尺寸 D={manual_D:.3f} m、B={manual_B:.3f} m 无法满足设计流量要求。"
+        )
+        return result
+
+    outputs_design = calculate_flat_bottom_circular_outputs(manual_D, manual_B, h_design, n, slope)
+    if outputs_design['V'] < v_min or outputs_design['V'] > v_max:
+        result['error_message'] = '计算失败：设计流量工况下流速超出允许范围。'
+        return result
+    if outputs_design['freeboard_hgt'] < MIN_FREEBOARD_HGT or outputs_design['freeboard_pct'] < MIN_FREEBOARD_PCT * 100:
+        result['error_message'] = '计算失败：设计流量工况下净空不足。'
+        return result
+
+    h_inc, success_inc = solve_water_depth_flat_bottom_circular(manual_D, manual_B, n, slope, Q_increased)
+    if not success_inc or h_inc >= geom['H_total']:
+        result['error_message'] = '计算失败：加大流量工况下水深超过断面允许高度。'
+        return result
+
+    outputs_inc = calculate_flat_bottom_circular_outputs(manual_D, manual_B, h_inc, n, slope)
+    if outputs_inc['V'] > v_max:
+        result['error_message'] = '计算失败：加大流量工况下流速超出允许范围。'
+        return result
+    if outputs_inc['freeboard_hgt'] < MIN_FREEBOARD_HGT or outputs_inc['freeboard_pct'] < MIN_FREEBOARD_PCT * 100:
+        result['error_message'] = '计算失败：加大流量工况下净空不足。'
+        return result
+
+    result['success'] = True
+    result['design_method'] = (
+        f"平底圆形断面; D={manual_D:.2f}m; B={manual_B:.2f}m; H={geom['H_total']:.2f}m"
+    )
+    result['D'] = manual_D
+    result['B'] = manual_B
+    result['H_total'] = geom['H_total']
+    result['A_total'] = geom['A_total']
+    result['h_design'] = h_design
+    result['V_design'] = outputs_design['V']
+    result['A_design'] = outputs_design['A']
+    result['P_design'] = outputs_design['P']
+    result['R_hyd_design'] = outputs_design['R_hyd']
+    result['Q_calc'] = outputs_design['Q']
+    result['freeboard_pct_design'] = outputs_design['freeboard_pct']
+    result['freeboard_hgt_design'] = outputs_design['freeboard_hgt']
+    result['h_increased'] = h_inc
+    result['V_increased'] = outputs_inc['V']
+    result['A_increased'] = outputs_inc['A']
+    result['P_increased'] = outputs_inc['P']
+    result['R_hyd_increased'] = outputs_inc['R_hyd']
+    result['freeboard_pct_inc'] = outputs_inc['freeboard_pct']
+    result['freeboard_hgt_inc'] = outputs_inc['freeboard_hgt']
     return result
 
 

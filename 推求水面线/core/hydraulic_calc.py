@@ -31,6 +31,19 @@ from core.pressure_pipe_calc import (
 )
 from utils.pressure_pipe_common import resolve_pressure_pipe_material
 
+try:
+    from app_渠系计算前端.tunnel.geometry import (
+        build_flat_bottom_circle_geometry,
+        flat_bottom_circle_area,
+        flat_bottom_circle_perimeter,
+        flat_bottom_circle_surface_width,
+    )
+except Exception:
+    build_flat_bottom_circle_geometry = None
+    flat_bottom_circle_area = None
+    flat_bottom_circle_perimeter = None
+    flat_bottom_circle_surface_width = None
+
 
 class HydraulicCalculator:
     """
@@ -263,6 +276,18 @@ class HydraulicCalculator:
                 node.structure_height = h_prime_u
             return
 
+        if struct_name == "隧洞-平底圆形":
+            H_total = params.get('H_total', 0)
+            if H_total and H_total > 0:
+                node.structure_height = H_total
+                return
+            D = params.get('D', 0)
+            B = params.get('B', 0)
+            geom = self._build_flat_bottom_circle_geom(D, B)
+            if geom is not None:
+                node.structure_height = geom.get('H_total', 0)
+                return
+
         # 明渠-圆形 / 隔洞-圆形: 结构高度 = 直径 D（精确）
         if "圆形" in struct_name:
             D = params.get('D', 0)
@@ -288,6 +313,45 @@ class HydraulicCalculator:
     def _get_radius(self, params: dict) -> float:
         """从断面参数中获取半径（兼容多种键名）"""
         return params.get('R_circle', params.get('半径', params.get('内半径', params.get('r', 0))))
+
+    def _build_flat_bottom_circle_geom(self, D: float, B: float):
+        """构造平底圆形共享几何，异常时返回 None。"""
+        if build_flat_bottom_circle_geometry is None or D <= ZERO_TOLERANCE or B <= ZERO_TOLERANCE:
+            return None
+        try:
+            return build_flat_bottom_circle_geometry(D, B)
+        except Exception:
+            return None
+
+    def _flat_bottom_circle_area(self, D: float, B: float, h: float) -> float:
+        """计算平底圆形面积。"""
+        geom = self._build_flat_bottom_circle_geom(D, B)
+        if geom is None or flat_bottom_circle_area is None:
+            return 0.0
+        try:
+            return float(flat_bottom_circle_area(geom, h))
+        except Exception:
+            return 0.0
+
+    def _flat_bottom_circle_perimeter(self, D: float, B: float, h: float) -> float:
+        """计算平底圆形湿周。"""
+        geom = self._build_flat_bottom_circle_geom(D, B)
+        if geom is None or flat_bottom_circle_perimeter is None:
+            return 0.0
+        try:
+            return float(flat_bottom_circle_perimeter(geom, h))
+        except Exception:
+            return 0.0
+
+    def _flat_bottom_circle_surface_width(self, D: float, B: float, h: float) -> float:
+        """计算平底圆形水面宽。"""
+        geom = self._build_flat_bottom_circle_geom(D, B)
+        if geom is None or flat_bottom_circle_surface_width is None:
+            return 0.0
+        try:
+            return float(flat_bottom_circle_surface_width(geom, h))
+        except Exception:
+            return 0.0
 
     def _get_compound_trapezoid_params(self, params: dict) -> dict:
         """提取复式梯形计算所需参数。"""
@@ -615,7 +679,16 @@ class HydraulicCalculator:
         h = params.get('水深', params.get('h', node.water_depth))
         if h <= 0:
             return 0.0
-        
+
+        if sv == "隧洞-平底圆形":
+            D = self._get_diameter(params)
+            B = self._get_bottom_width(params)
+            if D > ZERO_TOLERANCE and B > ZERO_TOLERANCE:
+                area = self._flat_bottom_circle_area(D, B, h)
+                if area > ZERO_TOLERANCE:
+                    return area
+            return params.get('A', params.get('面积', 0))
+
         # 矩形类：明渠-矩形、渡槽-矩形、矩形暗涵
         if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵"):
             b = self._get_bottom_width(params)
@@ -717,7 +790,16 @@ class HydraulicCalculator:
         h = params.get('水深', params.get('h', node.water_depth))
         if h <= 0:
             return 0.0
-        
+
+        if sv == "隧洞-平底圆形":
+            D = self._get_diameter(params)
+            B = self._get_bottom_width(params)
+            if D > ZERO_TOLERANCE and B > ZERO_TOLERANCE:
+                perimeter = self._flat_bottom_circle_perimeter(D, B, h)
+                if perimeter > ZERO_TOLERANCE:
+                    return perimeter
+            return params.get('X', params.get('湿周', params.get('P', 0)))
+
         # 矩形类：明渠-矩形、渡槽-矩形、矩形暗涵
         if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵"):
             b = self._get_bottom_width(params)
@@ -2246,6 +2328,16 @@ class HydraulicCalculator:
             return 0.0
         
         params = node.section_params
+        sv = node.structure_type.value if node.structure_type else ""
+
+        if sv == "隧洞-平底圆形":
+            D = self._get_diameter(params)
+            B = self._get_bottom_width(params)
+            if D > ZERO_TOLERANCE and B > ZERO_TOLERANCE:
+                width = self._flat_bottom_circle_surface_width(D, B, h)
+                if width >= 0:
+                    return width
+            return 0.0
         
         # 检查是否为圆形断面（有直径参数）
         D = params.get('D', params.get('直径', 0))
@@ -2260,8 +2352,6 @@ class HydraulicCalculator:
                 B = D
             return B
         
-        sv = node.structure_type.value if node.structure_type else ""
-
         # 检查是否只有半径参数（马蹄形隧洞、U形渡槽等）
         R_circle = params.get('R_circle', params.get('半径', params.get('内半径', params.get('r', 0))))
         if R_circle > ZERO_TOLERANCE:

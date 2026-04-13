@@ -4,6 +4,7 @@
 
 这是一个本地桌面计算工具，用来处理渠系纵断面、水面线、倒虹吸、有压管道、土石方等工程计算与导出。
 当前版本的明渠模块已经补齐 `复式梯形` 断面，支持在明渠设计面板中直接输入 `m1 / B1 / m2 / B2 / m3 / h1` 六个固定参数完成计算，并把同一断面同步带到批量计算和推求水面线兼容链路。
+当前版本的隧洞模块已经完整补齐 `平底圆形` 断面：单断面页可直接输入 `直径 D + 平底宽 B` 计算，表1批量、共享结果、表3导入复算、DXF/Word/TXT、`xx管` 隧洞摘要和断面汇总都会同步识别 `D / B / H_total`；表3继续只允许来源带入，不允许手工新建该类型。
 当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及连续承压线路的“整线纵断面 + 中心线高程导出 + 整线弹窗”规则。
 `xx渠` 末尾连续承压中的命名 `有压管道 / 定向钻 / 顶管` 现在也改成逐行正式计损：表3里每一行都会显示自己的承压段损失，并直接参与总损失、累计损失和水位递推；整组总损失仍保留在有压管道窗口里供对照。
 所有 `xx管`（`总干管 / 分干管 / 干管 / 支管 / 分支管`）连续承压链里的命名 `有压管道 / 定向钻 / 顶管`，现在都按逐行成员正式计损，但只覆盖真正进入连续承压链的承压类成员；父命名组继续保留为窗口汇总对象，不再参与表3重复累计。
@@ -36,6 +37,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 前端界面：`PySide6`，主要代码在 `app_渠系计算前端/`。
 - 计算内核：Python 纯计算模块，主要代码在 `推求水面线/`、`calc_渠系计算算法内核/`。
 - 明渠断面：`calc_渠系计算算法内核/明渠设计.py` 统一承接梯形、复式梯形、矩形、圆形、U 形；`app_渠系计算前端/open_channel/` 负责单断面设计页与 DXF/Word 导出；`app_渠系计算前端/batch/panel.py` 负责批量页与 Excel。
+- 隧洞断面：`calc_渠系计算算法内核/隧洞设计.py` 统一承接圆形、平底圆形、圆拱直墙型与马蹄形；`app_渠系计算前端/tunnel/geometry.py` 作为共享几何真源，给隧洞面板绘图、DXF、批量结果和表3复算共用。
 - 专项模块：`倒虹吸水力计算系统/`、`有压管道/` 提供专项计算能力。
 - 自动化验证：`pytest`，测试文件集中在 `tests/`，其中 xx管 整线纵断面会同时覆盖界面、持久化、计算和导出链路。
 - 更新链路：`updater.py`、`update_helper.py`、`tools/build.py`、`tools/release.py` 共同负责版本检查、补丁/全量选择、旧会话残留清理、独立安装窗口、补丁兜底和正式发版；其中 `tools/build.py` 现在还会在打包前按分组校验关键依赖，并单独拦截 Word 导出依赖缺失。
@@ -82,12 +84,14 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 运行更新链路回归：`$env:PYTEST_ADDOPTS='--basetemp=D:\V1.0\.pytest_tmp\update-regression'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py tests/test_updater_install_flow_unit.py tests/test_update_helper_unit.py -q`
 - 运行本次构建依赖回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py -q --basetemp=D:\V1.0\.pytest_tmp\build-plan`
 - 运行本次复式梯形回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_open_channel_compound_trapezoid_kernel_unit.py tests/test_open_channel_compound_trapezoid_panel_unit.py tests/test_open_channel_compound_trapezoid_dxf_unit.py tests/test_batch_compound_trapezoid_unit.py tests/test_compound_trapezoid_type_support_unit.py tests/test_compound_trapezoid_shared_hydraulic_unit.py tests/test_water_profile_coord_precision_unit.py -q`
+- 运行本次平底圆形隧洞收口回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_tunnel_flat_bottom_circular_kernel_unit.py tests/test_tunnel_flat_bottom_circular_shared_hydraulic_unit.py tests/test_tunnel_flat_bottom_circular_dxf_unit.py tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py tests/test_tunnel_flat_bottom_circular_table3_xxpipe_unit.py tests/test_tunnel_flat_bottom_circle_section_summary_unit.py tests/test_tunnel_kernel.py tests/test_tunnel_dxf_export_unit.py tests/test_tunnel_panel_plot_unit.py tests/test_formula_renderer_result_pages_unit.py -q`
 
 ## 搜索记录
 
 - 2026-03-31：本次为现有功能修正和范围收口，未新增外部方案搜索，直接基于仓库现有逻辑与测试完成实现。
 - 2026-04-09：本次为既有明渠体系内新增断面类型，README 已有搜索记录，继续按仓库现有明渠/批量/水面线架构扩展，未重复执行外部方案搜索。
 - 2026-04-10：本次为既有 xx管 夹带隧洞能力调整为“水力核算模式”，README 已有搜索记录，继续基于仓库现有 mixed route 与导出链路实现，未重复执行外部方案搜索。
+- 2026-04-13：本次为既有隧洞体系内新增 `平底圆形` 断面，README 已有搜索记录，继续沿用现有隧洞/批量/表3共享链路扩展，未重复执行外部方案搜索。
 
 ## 已完成功能列表
 
@@ -141,6 +145,8 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 明渠设计面板现已支持 `复式梯形`：输入 `m1 / B1 / m2 / B2 / m3 / h1` 后可直接反算设计水深、加大流量水深、断面图、TXT/Word/DXF 导出。
 - 批量计算现已支持 `明渠-复式梯形`：主表、参数弹窗、Excel 导入导出和结果文本均已补齐 6 个专用参数列。
 - 推求水面线已补上 `明渠-复式梯形` 的最小兼容：能识别类型、保留 6 个参数，并按新几何公式完成开放渠道面积、湿周和水力半径计算。
+- 隧洞设计面板现已支持 `平底圆形`：用户固定输入 `直径 D + 平底宽 B`，程序自动推导 `H_total`，并同步输出断面图、TXT/Word/DXF。
+- 表1批量、共享结果、表3导入复算、工程保存恢复、`xx管` 隧洞摘要和断面汇总现已支持 `隧洞-平底圆形`，统一保留 `D / B / H_total` 口径；表3对该类型只允许来源带入，不允许手工新建。
 
 ## 待办事项
 

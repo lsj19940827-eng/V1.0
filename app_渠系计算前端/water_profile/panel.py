@@ -242,6 +242,7 @@ NODE_TOOLBAR_LAYOUT_PRESET = "balanced"
 
 SOURCE_COORD_X_ROLE_KEY = "_source_x_text"
 SOURCE_COORD_Y_ROLE_KEY = "_source_y_text"
+FLAT_BOTTOM_TUNNEL_SOURCE_ROLE_KEY = "_flat_bottom_tunnel_source_allowed"
 USE_INCREASE_ROLE_KEY = "_use_increase"
 PRESSURE_PIPE_ROW_ID_ROLE_KEY = "_pressure_pipe_row_identity"
 PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY = "_pressure_pipe_window_override"
@@ -3564,6 +3565,52 @@ class WaterProfilePanel(QWidget):
             return False
         return self._is_table1_source_row(row)
 
+    def _is_forbidden_manual_flat_bottom_circle_row(self, row: int, struct_text: str) -> bool:
+        """判断表3当前行是否是被禁止的手工平底圆形输入。"""
+        if normalize_section_type_name(struct_text) != "隧洞-平底圆形":
+            return False
+        return not self._is_flat_bottom_circle_source_row(row)
+
+    @staticmethod
+    def _is_flat_bottom_circle_source_payload(payload) -> bool:
+        """读取平底圆形来源标记，缺失时按不允许处理。"""
+        if not isinstance(payload, dict):
+            return False
+        if FLAT_BOTTOM_TUNNEL_SOURCE_ROLE_KEY in payload:
+            return bool(payload.get(FLAT_BOTTOM_TUNNEL_SOURCE_ROLE_KEY))
+        if "_from_table1_source" in payload:
+            return bool(payload.get("_from_table1_source"))
+        return False
+
+    def _is_flat_bottom_circle_source_row(self, row: int) -> bool:
+        """仅认带显式来源标记的平底圆形行，避免手输/粘贴被误判为合法来源。"""
+        table = self.node_table
+        if not table or row < 0 or row >= table.rowCount():
+            return False
+        first_item = table.item(row, 0)
+        payload = first_item.data(Qt.UserRole) if first_item else None
+        return self._is_flat_bottom_circle_source_payload(payload)
+
+    def _restore_cell_text_from_pre_edit(self, row: int, col: int) -> str:
+        """按编辑前快照恢复单元格内容，并返回恢复后的文本。"""
+        fallback_text = ""
+        if self._pre_edit_cell_value and self._pre_edit_cell_value[:2] == (row, col):
+            fallback_text = str(self._pre_edit_cell_value[2] or "")
+        item = self.node_table.item(row, col)
+        if item is not None:
+            item.setText(fallback_text)
+        return fallback_text
+
+    def _warn_manual_flat_bottom_circle_not_allowed(self):
+        """提示表3不允许手工新建平底圆形。"""
+        InfoBar.warning(
+            "不支持手工新选",
+            "平底圆形仅允许通过表1同步或共享结果导入，表3不允许手工新选。",
+            parent=self._info_parent(),
+            duration=3200,
+            position=InfoBarPosition.TOP,
+        )
+
     def _show_table1_source_lock_hint(self):
         InfoBar.info(
             "来源列已锁定",
@@ -4598,7 +4645,7 @@ class WaterProfilePanel(QWidget):
             item = self.node_table.item(row, col)
             if item:
                 current = item.text()
-            dlg = StructureTypeSelector(self)
+            dlg = StructureTypeSelector(self, excluded_items={"隧洞-平底圆形"})
             dlg.set_current(current)
             result = dlg.exec()
             if result == QDialog.DialogCode.Accepted and dlg.selected_type:
@@ -5493,6 +5540,13 @@ class WaterProfilePanel(QWidget):
                 self._append_loss_undo_snapshot(self._pre_edit_snapshot)
                 self._pre_edit_snapshot = None
 
+            if col == 2:
+                item = self.node_table.item(row, col)
+                struct_text = str(item.text() if item else "").strip()
+                if self._is_forbidden_manual_flat_bottom_circle_row(row, struct_text):
+                    self._restore_cell_text_from_pre_edit(row, col)
+                    self._warn_manual_flat_bottom_circle_not_allowed()
+                    return
             if col == 32:
                 if not self._is_transition_length_editable_cell(row, col):
                     return
@@ -6064,6 +6118,7 @@ class WaterProfilePanel(QWidget):
             if not isinstance(payload, dict):
                 payload = {}
             payload["_from_table1_source"] = bool(_from_table1_source)
+            payload[FLAT_BOTTOM_TUNNEL_SOURCE_ROLE_KEY] = bool(_from_table1_source)
             if _from_table1_source:
                 x_text = ""
                 y_text = ""
@@ -7148,6 +7203,8 @@ class WaterProfilePanel(QWidget):
             in_out_raw = ""
             use_increase = True
             from_table1_source = False
+            explicit_table1_source_flag = False
+            flat_bottom_source_allowed = False
             pressure_pipe_row_identity = ""
             compound_trapezoid_params = {}
             # 恢复自动插入补段标记（通过UserRole存储）
@@ -7217,7 +7274,9 @@ class WaterProfilePanel(QWidget):
                     if isinstance(_loss_details, dict):
                         node.transition_calc_details = copy.deepcopy(_loss_details)
                     if "_from_table1_source" in _ur:
+                        explicit_table1_source_flag = True
                         from_table1_source = bool(_ur.get("_from_table1_source"))
+                    flat_bottom_source_allowed = self._is_flat_bottom_circle_source_payload(_ur)
                     pressure_pipe_row_identity = str(
                         _ur.get(PRESSURE_PIPE_ROW_ID_ROLE_KEY, "") or ""
                     ).strip()
@@ -7257,9 +7316,18 @@ class WaterProfilePanel(QWidget):
                     compound_trapezoid_params = normalize_compound_trapezoid_params(
                         _ur.get(COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY, {})
                     )
-            if not from_table1_source and not getattr(node, 'is_transition', False) and not getattr(node, 'is_auto_inserted_channel', False):
+            if (
+                not explicit_table1_source_flag
+                and not from_table1_source
+                and not getattr(node, 'is_transition', False)
+                and not getattr(node, 'is_auto_inserted_channel', False)
+            ):
                 from_table1_source = True
+            if struct_str == "隧洞-平底圆形":
+                from_table1_source = bool(flat_bottom_source_allowed)
             node.from_table1_source = from_table1_source
+            if struct_str == "隧洞-平底圆形" and not from_table1_source:
+                node.structure_type = None
 
             source_x_text = ""
             source_y_text = ""

@@ -2,7 +2,7 @@
 """
 隧洞水力计算面板 —— QWidget 版本
 
-支持：圆形 / 圆拱直墙型 / 马蹄形标准Ⅰ型 / 马蹄形标准Ⅱ型
+支持：圆形 / 平底圆形 / 圆拱直墙型 / 马蹄形标准Ⅰ型 / 马蹄形标准Ⅱ型
 功能：参数输入、计算、结果显示、断面图、导出Word/TXT/图表
 """
 
@@ -46,6 +46,7 @@ plt.rcParams['axes.unicode_minus'] = False
 
 from 隧洞设计 import (
     quick_calculate_circular,
+    quick_calculate_flat_bottom_circular,
     quick_calculate_horseshoe,
     quick_calculate_horseshoe_std,
     PI, MIN_FREEBOARD_PCT_TUNNEL, MIN_FREEBOARD_HGT_TUNNEL,
@@ -96,7 +97,10 @@ from app_渠系计算前端.plot_title_utils import (
 from app_渠系计算前端.tunnel.geometry import (
     arch_half_width as _arch_half_width,
     build_arch_geometry as _build_arch_geometry,
+    build_flat_bottom_circle_geometry as _build_flat_bottom_circle_geometry,
     build_standard_horseshoe_geometry as _build_standard_horseshoe_geometry,
+    flat_bottom_circle_half_width as _flat_bottom_circle_half_width,
+    flat_bottom_circle_surface_width as _flat_bottom_circle_surface_width,
     sample_arc as _sample_arc,
     standard_horseshoe_half_width as _standard_horseshoe_half_width,
 )
@@ -152,6 +156,8 @@ class TunnelPanel(QWidget):
             'detail_checked': True,
             # 圆形参数
             'D': '',
+            # 平底圆形参数
+            'flat_bottom_D': '', 'flat_bottom_B': '',
             # 圆拱直墙型参数
             'theta_deg': '', 'B_hs': '',
             # 马蹄形参数
@@ -269,7 +275,7 @@ class TunnelPanel(QWidget):
         # 断面类型
         r = QHBoxLayout(); r.addWidget(QLabel("断面类型:"))
         self.section_combo = ComboBox()
-        self.section_combo.addItems(["圆形", "圆拱直墙型", "马蹄形标准Ⅰ型", "马蹄形标准Ⅱ型"])
+        self.section_combo.addItems(["圆形", "平底圆形", "圆拱直墙型", "马蹄形标准Ⅰ型", "马蹄形标准Ⅱ型"])
         self.section_combo.currentTextChanged.connect(self._on_section_type_changed)
         r.addWidget(self.section_combo, 1); fl.addLayout(r)
 
@@ -303,6 +309,16 @@ class TunnelPanel(QWidget):
         self.D_lbl, self.D_edit = self._field2(circ_lay, "指定直径 D (m):", "")
         circ_lay.addWidget(self._hint("(留空则自动计算)"))
         fl.addWidget(self.circ_grp)
+
+        # 平底圆形参数
+        self.flat_bottom_grp = QWidget()
+        flat_bottom_lay = QVBoxLayout(self.flat_bottom_grp); flat_bottom_lay.setContentsMargins(0,0,0,0); flat_bottom_lay.setSpacing(5)
+        flat_bottom_lay.addWidget(self._slbl("【平底圆形参数】"))
+        self.flat_bottom_D_lbl, self.flat_bottom_D_edit = self._field2(flat_bottom_lay, "直径 D (m):", "")
+        self.flat_bottom_B_lbl, self.flat_bottom_B_edit = self._field2(flat_bottom_lay, "平底宽 B (m):", "")
+        flat_bottom_lay.addWidget(self._hint("(平底圆形需同时填写 D 和 B)"))
+        fl.addWidget(self.flat_bottom_grp)
+        self.flat_bottom_grp.hide()
 
         # 圆拱直墙参数
         self.hs_grp = QWidget()
@@ -400,9 +416,11 @@ class TunnelPanel(QWidget):
 
     # ----------------------------------------------------------------
     def _on_section_type_changed(self, stype):
-        self.circ_grp.hide(); self.hs_grp.hide(); self.shoe_grp.hide()
+        self.circ_grp.hide(); self.flat_bottom_grp.hide(); self.hs_grp.hide(); self.shoe_grp.hide()
         if stype == "圆形":
             self.circ_grp.show()
+        elif stype == "平底圆形":
+            self.flat_bottom_grp.show()
         elif stype == "圆拱直墙型":
             self.hs_grp.show()
         else:
@@ -433,6 +451,9 @@ class TunnelPanel(QWidget):
         c['detail_checked'] = self.detail_cb.isChecked()
         # 圆形参数
         c['D'] = self.D_edit.text()
+        # 平底圆形参数
+        c['flat_bottom_D'] = self.flat_bottom_D_edit.text()
+        c['flat_bottom_B'] = self.flat_bottom_B_edit.text()
         # 圆拱直墙型参数
         c['theta_deg'] = self.theta_edit.text()
         c['B_hs'] = self.B_hs_edit.text()
@@ -459,6 +480,9 @@ class TunnelPanel(QWidget):
         self.detail_cb.setChecked(c.get('detail_checked', True))
         # 圆形参数
         self.D_edit.setText(c.get('D', ''))
+        # 平底圆形参数
+        self.flat_bottom_D_edit.setText(c.get('flat_bottom_D', ''))
+        self.flat_bottom_B_edit.setText(c.get('flat_bottom_B', ''))
         # 圆拱直墙型参数
         self.theta_edit.setText(c.get('theta_deg', ''))
         self.B_hs_edit.setText(c.get('B_hs', ''))
@@ -779,6 +803,7 @@ class TunnelPanel(QWidget):
         h.section("支持断面类型")
         h.numbered_list([
             ("圆形断面", "最小直径 2.0m，最小净空高度 0.4m"),
+            ("平底圆形断面", "输入 D 和 B，自动推导总高 H，并按净空约束验算"),
             ("圆拱直墙型", "拱顶圆心角 90~180°，推荐高宽比 1.0~1.5"),
             ("马蹄形标准Ⅰ型", "t=3，底拱半径为3r，适用于地质条件较好的隧洞"),
             ("马蹄形标准Ⅱ型", "t=2，底拱半径为2r，适用于地质条件一般的隧洞"),
@@ -789,6 +814,7 @@ class TunnelPanel(QWidget):
             [
                 ["圆形 — 留空直径 D", "自动搜索满足净空约束的最小直径 D"],
                 ["圆形 — 指定直径 D", "固定 D，反算水深并验算净空和流速"],
+                ["平底圆形 — 指定 D 和 B", "固定输入尺寸，自动推导总高 H 并验算"],
                 ["圆拱直墙型 — 全部留空", "按默认圆心角 180° 自动搜索最优底宽 B"],
                 ["圆拱直墙型 — 指定圆心角 θ", "约束拱形，自动搜索满足约束的最优 B"],
                 ["圆拱直墙型 — 指定底宽 B", "固定 B，自动确定拱高并验算"],
@@ -888,7 +914,19 @@ class TunnelPanel(QWidget):
             'detail_checked': case_dict.get('detail_checked', True),
         }
 
-        if stype == "圆形":
+        if stype == "平底圆形":
+            flat_bottom_D = _required_float('flat_bottom_D', '平底圆形直径 D')
+            flat_bottom_B = _required_float('flat_bottom_B', '平底圆形平底宽 B')
+            input_params['manual_D'] = flat_bottom_D
+            input_params['manual_B'] = flat_bottom_B
+            result = quick_calculate_flat_bottom_circular(
+                Q=Q, n=n, slope_inv=slope_inv,
+                v_min=v_min, v_max=v_max,
+                manual_D=flat_bottom_D,
+                manual_B=flat_bottom_B,
+                manual_increase_percent=manual_increase
+            )
+        elif stype == "圆形":
             d_text = case_dict.get('D', '')
             manual_D = float(d_text) if d_text.strip() else None
             input_params['manual_D'] = manual_D
@@ -994,12 +1032,7 @@ class TunnelPanel(QWidget):
             self.input_params = inp
             stype = inp.get('section_type', '圆形')
             detail = inp.get('detail_checked', True)
-            if stype == "圆形":
-                type_label = "圆形"
-            elif stype == "圆拱直墙型":
-                type_label = "圆拱直墙型"
-            else:
-                type_label = res.get('section_type', '马蹄形')
+            type_label = TunnelPanel._resolve_result_type_label(self, stype, res)
             txt = self._build_result_text(res, type_label, detail, inp)
             all_text_parts.append(header + "\n\n" + txt)
 
@@ -1033,12 +1066,7 @@ class TunnelPanel(QWidget):
             else:
                 self.input_params = inp
                 detail = inp.get('detail_checked', True)
-                if stype == "圆形":
-                    type_label = "圆形"
-                elif stype == "圆拱直墙型":
-                    type_label = "圆拱直墙型"
-                else:
-                    type_label = res.get('section_type', '马蹄形')
+                type_label = TunnelPanel._resolve_result_type_label(self, stype, res)
                 txt = self._build_result_text(res, type_label, detail, inp)
                 plain = header + "\n\n" + txt
                 body_html = plain_text_to_formula_body(txt)
@@ -1068,6 +1096,16 @@ class TunnelPanel(QWidget):
 
     def _display_all_results(self):
         return TunnelPanel._display_all_results_legacy(self)
+
+    def _resolve_result_type_label(self, stype, result):
+        """统一解析结果标题，避免平底圆形落回默认分支。"""
+        if stype == "平底圆形":
+            return "平底圆形"
+        if stype == "圆形":
+            return "圆形"
+        if stype == "圆拱直墙型":
+            return "圆拱直墙型"
+        return result.get('section_type', '马蹄形')
 
     def _build_result_text(self, result, type_label, detail, p):
         """构建单个工况的结果文本（从_show_result提取）"""
@@ -1101,7 +1139,11 @@ class TunnelPanel(QWidget):
             o.append(f"  水力坡降 = 1/{int(slope_inv)}")
             o.append("")
             o.append("【断面尺寸】")
-            if stype == "圆形":
+            if stype == "平底圆形":
+                o.append(f"  直径 D = {result.get('D', 0):.2f} m")
+                o.append(f"  平底宽 B = {result.get('B', 0):.2f} m")
+                o.append(f"  推导总高 H = {result.get('H_total', 0):.2f} m")
+            elif stype == "圆形":
                 o.append(f"  直径 D = {result.get('D', 0):.2f} m")
             elif stype == "圆拱直墙型":
                 o.append(f"  宽度 B = {result.get('B', 0):.2f} m")
@@ -1135,7 +1177,12 @@ class TunnelPanel(QWidget):
             o.append(f"  流速范围: {v_min} ~ {v_max} m/s")
             o.append("")
             o.append("【二、断面尺寸】")
-            if stype == "圆形":
+            if stype == "平底圆形":
+                D = result['D']; B = result['B']; H_total = result['H_total']
+                o.append(f"  直径 D = {D:.2f} m, 平底宽 B = {B:.2f} m")
+                o.append(f"  推导总高 H = {H_total:.2f} m")
+                o.append(f"  断面总面积 A总 = {A_total:.3f} m²")
+            elif stype == "圆形":
                 D = result['D']
                 o.append(f"  直径 D = {D:.2f} m")
                 o.append(f"  断面总面积 A总 = π×D²/4 = {A_total:.3f} m²")
@@ -1183,7 +1230,9 @@ class TunnelPanel(QWidget):
             return
         stype = self.input_params.get('section_type', '圆形')
         detail = self.detail_cb.isChecked()
-        if stype == "圆形":
+        if stype == "平底圆形":
+            self._show_result(result, "平底圆形", detail)
+        elif stype == "圆形":
             self._show_result(result, "圆形", detail)
         elif stype == "圆拱直墙型":
             self._show_result(result, "圆拱直墙型", detail)
@@ -1239,7 +1288,11 @@ class TunnelPanel(QWidget):
             o.append("")
 
             o.append("【断面尺寸】")
-            if stype == "圆形":
+            if stype == "平底圆形":
+                o.append(f"  直径 D = {result.get('D', 0):.2f} m")
+                o.append(f"  平底宽 B = {result.get('B', 0):.2f} m")
+                o.append(f"  推导总高 H = {result.get('H_total', 0):.2f} m")
+            elif stype == "圆形":
                 o.append(f"  直径 D = {result.get('D', 0):.2f} m")
             elif stype == "圆拱直墙型":
                 o.append(f"  宽度 B = {result.get('B', 0):.2f} m")
@@ -1301,7 +1354,21 @@ class TunnelPanel(QWidget):
             o.append("")
 
             # 断面尺寸
-            if stype == "圆形":
+            if stype == "平底圆形":
+                D = result['D']; B = result['B']; H_total = result['H_total']
+                o.append("【二、断面尺寸】")
+                o.append("")
+                o.append("  1. 输入尺寸:")
+                o.append(f"     D = {D:.2f} m")
+                o.append(f"     B = {B:.2f} m")
+                o.append("")
+                o.append("  2. 推导总高:")
+                o.append(f"     H = {H_total:.3f} m")
+                o.append("")
+                o.append("  3. 断面总面积:")
+                o.append(f"     A总 = {A_total:.3f} m²")
+                o.append("")
+            elif stype == "圆形":
                 D = result['D']
                 o.append("【二、断面尺寸】")
                 o.append("")
@@ -1371,6 +1438,13 @@ class TunnelPanel(QWidget):
                     o.append("")
                     o.append(f"  3. 湿周: χ = {P_d:.3f} m")
                     o.append("")
+            elif stype == "平底圆形":
+                o.append("  2. 过水面积计算 (平底圆形):")
+                o.append(f"     A = {A_d:.3f} m²")
+                o.append("")
+                o.append("  3. 湿周计算 (平底圆形):")
+                o.append(f"     χ = {P_d:.3f} m")
+                o.append("")
             elif stype == "圆拱直墙型":
                 B_hs = result['B']; H_hs = result['H_total']
                 theta_deg_hs = result['theta_deg']
@@ -1507,6 +1581,13 @@ class TunnelPanel(QWidget):
                     o.append("")
                     o.append(f"  4. 湿周: χ加大 = {P_inc:.3f} m")
                     o.append("")
+            elif stype == "平底圆形":
+                o.append("  3. 过水面积计算 (平底圆形):")
+                o.append(f"      A加大 = {A_inc:.3f} m²")
+                o.append("")
+                o.append("  4. 湿周计算 (平底圆形):")
+                o.append(f"      χ加大 = {P_inc:.3f} m")
+                o.append("")
             elif stype == "圆拱直墙型":
                 B_hs = result['B']; H_hs = result['H_total']
                 theta_deg_hs = result['theta_deg']
@@ -1651,7 +1732,11 @@ class TunnelPanel(QWidget):
         Q_inc = result['Q_increased']
         axes = self.section_fig.subplots(1, 2)
 
-        if stype == "圆形":
+        if stype == "平底圆形":
+            D = result['D']; B = result['B']
+            self._draw_flat_bottom_circle(axes[0], D, B, result['h_design'], result['V_design'], Q, "设计流量")
+            self._draw_flat_bottom_circle(axes[1], D, B, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
+        elif stype == "圆形":
             D = result['D']
             self._draw_circular(axes[0], D, result['h_design'], result['V_design'], Q, "设计流量")
             self._draw_circular(axes[1], D, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
@@ -1694,7 +1779,10 @@ class TunnelPanel(QWidget):
             Q = inp['Q']
             h_d = res['h_design']
             V_d = res['V_design']
-            if stype == "圆形":
+            if stype == "平底圆形":
+                D = res['D']; B = res['B']
+                self._draw_flat_bottom_circle(ax, D, B, h_d, V_d, Q, title)
+            elif stype == "圆形":
                 D = res['D']
                 self._draw_circular(ax, D, h_d, V_d, Q, title)
             elif stype == "圆拱直墙型":
@@ -1736,6 +1824,36 @@ class TunnelPanel(QWidget):
             ax.annotate('', xy=(-R-0.12*R, h_w), xytext=(-R-0.12*R, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
             ax.text(-R-0.2*R, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
         ax.set_xlim(-R*1.7, R*1.7); ax.set_ylim(-R*0.4, D*1.2)
+        ax.set_aspect('equal'); self._apply_section_plot_title(ax, title, Q, V)
+        ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
+
+    def _draw_flat_bottom_circle(self, ax, D, B, h_w, V, Q, title):
+        """绘制平底圆形断面。"""
+        geom = _build_flat_bottom_circle_geometry(D, B)
+        arc_points = _sample_arc(geom['top_arc'], samples=100)
+        ax.plot([geom['bottom_left'][0], geom['bottom_right'][0]], [0, 0], 'k-', lw=2)
+        ax.plot([point[0] for point in arc_points], [point[1] for point in arc_points], 'k-', lw=2)
+
+        if h_w > 0:
+            water_depth = min(h_w, geom['H_total'])
+            y_samples = np.linspace(0, water_depth, 60)
+            left_x = [-_flat_bottom_circle_half_width(geom, y) for y in y_samples]
+            right_x = [_flat_bottom_circle_half_width(geom, y) for y in y_samples]
+            fill_x = left_x + right_x[::-1]
+            fill_y = list(y_samples) + list(y_samples[::-1])
+            ax.fill(fill_x, fill_y, color='lightblue', alpha=0.7)
+            water_width = _flat_bottom_circle_surface_width(geom, water_depth)
+            if water_width > 0:
+                ax.plot([-water_width / 2.0, water_width / 2.0], [water_depth, water_depth], 'b-', lw=1.5)
+
+        H_total = geom['H_total']
+        ax.annotate('', xy=(B/2, -0.08*H_total), xytext=(-B/2, -0.08*H_total), arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
+        ax.text(0, -0.16*H_total, f'B={B:.2f}m', ha='center', fontsize=9, color='gray')
+        ax.annotate('', xy=(D/2, -0.22*H_total), xytext=(-D/2, -0.22*H_total), arrowprops=dict(arrowstyle='<->', color='gray', lw=1.2))
+        ax.text(0, -0.30*H_total, f'D={D:.2f}m', ha='center', fontsize=8, color='gray')
+        ax.annotate('', xy=(D/2+0.1*D, H_total), xytext=(D/2+0.1*D, 0), arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
+        ax.text(D/2+0.18*D, H_total/2, f'H={H_total:.2f}m', fontsize=8, color='purple', rotation=90, va='center')
+        ax.set_xlim(-D*0.9, D*0.9); ax.set_ylim(-H_total*0.42, H_total*1.2)
         ax.set_aspect('equal'); self._apply_section_plot_title(ax, title, Q, V)
         ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
 
@@ -1951,6 +2069,8 @@ class TunnelPanel(QWidget):
         result = entry.result or {}
         input_params = entry.input_params or {}
         stype = input_params.get('section_type', '圆形')
+        if stype == '平底圆形':
+            return f"隧洞断面_平底圆形_D{result.get('D', 0.0):.2f}_B{result.get('B', 0.0):.2f}.dxf"
         if stype == '圆形':
             return f"隧洞断面_圆形_D{result.get('D', 0.0):.2f}.dxf"
         if stype == '圆拱直墙型':
@@ -2083,12 +2203,7 @@ class TunnelPanel(QWidget):
             res = item['result']
             s = inp.get('section_type', '圆形')
             detail = inp.get('detail_checked', True)
-            if s == "圆形":
-                type_label = "圆形"
-            elif s == "圆拱直墙型":
-                type_label = "圆拱直墙型"
-            else:
-                type_label = res.get('section_type', '马蹄形')
+            type_label = TunnelPanel._resolve_result_type_label(self, s, res)
             txt = self._build_result_text(res, type_label, detail, inp)
             if len(export_results) > 1:
                 doc_add_eng_body(doc, f"【工况: {label}】")

@@ -2250,6 +2250,8 @@ def _normalize_xxpipe_tunnel_section_type(struct_name, manager_row=None):
         text = str(raw_text or "").strip()
         if not text:
             continue
+        if "平底圆形" in text:
+            return "平底圆形隧洞"
         if "圆形" in text:
             return "圆形隧洞"
         if "圆拱直墙" in text or "圆弧直墙" in text:
@@ -2291,7 +2293,21 @@ def _format_xxpipe_profile_section_text(node, struct_name, manager_row=None):
 
     section_name = _normalize_xxpipe_tunnel_section_type(text, manager_row=manager_row)
     params = _collect_xxpipe_tunnel_section_params(node, manager_row=manager_row)
-    fallback_diameter = manager_row.get("D") if isinstance(manager_row, dict) else None
+    fallback_diameter = params.get("D")
+    if fallback_diameter is None and isinstance(manager_row, dict):
+        fallback_diameter = manager_row.get("D")
+
+    if section_name == "平底圆形隧洞":
+        diameter_m = _extract_xxpipe_tunnel_diameter_m(node, fallback_diameter)
+        diameter_text = _format_xxpipe_metric_text(diameter_m) if diameter_m is not None else ""
+        bottom_text = _format_xxpipe_metric_text(params.get("B"))
+        if diameter_text and bottom_text:
+            return f"{section_name} D={diameter_text}m B={bottom_text}m"
+        if diameter_text:
+            return f"{section_name} D={diameter_text}m"
+        if bottom_text:
+            return f"{section_name} B={bottom_text}m"
+        return section_name
 
     if section_name == "圆形隧洞":
         diameter_m = _extract_xxpipe_tunnel_diameter_m(node, fallback_diameter)
@@ -10944,6 +10960,7 @@ def _draw_section_summary_on_msp(
         compute_u_channel,
         compute_tunnel,
         compute_tunnel_circular,
+        compute_tunnel_flat_bottom_circular,
         compute_aqueduct_u,
         compute_aqueduct_rect,
         compute_rect_culvert,
@@ -10955,6 +10972,7 @@ def _draw_section_summary_on_msp(
         _default_segments_u_channel,
         _default_segments_tunnel_arch,
         _default_segments_tunnel_circular,
+        _default_segments_tunnel_flat_bottom_circular,
         _default_segments_tunnel_horseshoe,
         _default_segments_aqueduct_u,
         _default_segments_aqueduct_rect,
@@ -11029,6 +11047,7 @@ def _draw_section_summary_on_msp(
     uc = _make_segs(_default_segments_u_channel, node_defaults.get("u_channel"))
     ta = _make_segs(_default_segments_tunnel_arch, node_defaults.get("tunnel_arch"))
     tc = _make_segs(_default_segments_tunnel_circular, node_defaults.get("tunnel_circular"))
+    tf = _make_segs(_default_segments_tunnel_flat_bottom_circular, node_defaults.get("tunnel_flat_bottom_circular"))
     th = _make_segs(_default_segments_tunnel_horseshoe, node_defaults.get("tunnel_horseshoe"))
     au = _make_segs(_default_segments_aqueduct_u, node_defaults.get("aqueduct_u"))
     ar = _make_segs(_default_segments_aqueduct_rect, node_defaults.get("aqueduct_rect"))
@@ -11091,10 +11110,12 @@ def _draw_section_summary_on_msp(
     _tu = getattr(panel, "_custom_tunnel_unified", {})
     _tu_arch = _tu.get("tunnel_arch", False)
     _tu_circ = _tu.get("tunnel_circular", False)
+    _tu_flat = _tu.get("tunnel_flat_bottom_circular", False)
     _tu_horse = _tu.get("tunnel_horseshoe", False)
     if has_source:
         _tu_arch = False
         _tu_circ = False
+        _tu_flat = False
         _tu_horse = False
 
     d_rc = compute_rect_channel(rc) if rc else []
@@ -11102,6 +11123,7 @@ def _draw_section_summary_on_msp(
     d_uc = compute_u_channel(uc) if uc else []
     d_ta, _ = compute_tunnel(ta, _rock_lining, unified=_tu_arch) if ta else ([], {})
     d_tc, _ = compute_tunnel_circular(tc, _rock_lining, unified=_tu_circ) if tc else ([], {})
+    d_tf, _ = compute_tunnel_flat_bottom_circular(tf, _rock_lining, unified=_tu_flat) if tf else ([], {})
     horseshoe_entries = _build_horseshoe_export_entries(
         th,
         rock_lining=_rock_lining,
@@ -11120,6 +11142,7 @@ def _draw_section_summary_on_msp(
         "u_channel": d_uc,
         "tunnel_arch": d_ta,
         "tunnel_circular": d_tc,
+        "tunnel_flat_bottom_circular": d_tf,
         "aqueduct_u": d_au,
         "aqueduct_rect": d_ar,
         "rect_culvert": d_rv,
@@ -11139,6 +11162,7 @@ def _draw_section_summary_on_msp(
         "u_channel",
         "tunnel_arch",
         "tunnel_circular",
+        "tunnel_flat_bottom_circular",
         "tunnel_horseshoe",
         "aqueduct_u",
         "aqueduct_rect",
@@ -11742,6 +11766,7 @@ class SectionSummaryDialog(QDialog):
             _default_segments_u_channel,
             _default_segments_tunnel_arch,
             _default_segments_tunnel_circular,
+            _default_segments_tunnel_flat_bottom_circular,
             _default_segments_tunnel_horseshoe,
             _default_segments_aqueduct_u,
             _default_segments_aqueduct_rect,
@@ -11764,6 +11789,7 @@ class SectionSummaryDialog(QDialog):
             'u_channel': _default_segments_u_channel,
             'tunnel_arch': _default_segments_tunnel_arch,
             'tunnel_circular': _default_segments_tunnel_circular,
+            'tunnel_flat_bottom_circular': _default_segments_tunnel_flat_bottom_circular,
             'tunnel_horseshoe': _default_segments_tunnel_horseshoe,
             'aqueduct_u': _default_segments_aqueduct_u,
             'aqueduct_rect': _default_segments_aqueduct_rect,
@@ -12489,6 +12515,7 @@ class SectionSummaryDialog(QDialog):
         _tunnel_types = [
             ("tunnel_arch",      "圆拱直墙型"),
             ("tunnel_circular",  "圆形"),
+            ("tunnel_flat_bottom_circular", "平底圆形"),
             ("tunnel_horseshoe", "马蹄形（Ⅰ/Ⅱ型）"),
         ]
         tm_grid = QGridLayout()
@@ -12768,6 +12795,7 @@ class SectionSummaryDialog(QDialog):
             _default_segments_u_channel,
             _default_segments_tunnel_arch,
             _default_segments_tunnel_circular,
+            _default_segments_tunnel_flat_bottom_circular,
             _default_segments_tunnel_horseshoe,
             _default_segments_aqueduct_u,
             _default_segments_aqueduct_rect,
@@ -12886,6 +12914,10 @@ class SectionSummaryDialog(QDialog):
         uc_segs = _make_segs(_default_segments_u_channel, node_defaults.get("u_channel"))
         tn_arch_segs = _make_segs(_default_segments_tunnel_arch, node_defaults.get("tunnel_arch"))
         tn_circ_segs = _make_segs(_default_segments_tunnel_circular, node_defaults.get("tunnel_circular"))
+        tn_flat_segs = _make_segs(
+            _default_segments_tunnel_flat_bottom_circular,
+            node_defaults.get("tunnel_flat_bottom_circular"),
+        )
         tn_horse_segs = _make_segs(_default_segments_tunnel_horseshoe, node_defaults.get("tunnel_horseshoe"))
         aq_u_segs = _make_segs(_default_segments_aqueduct_u, node_defaults.get("aqueduct_u"))
         aq_rect_segs = _make_segs(_default_segments_aqueduct_rect, node_defaults.get("aqueduct_rect"))
@@ -12893,7 +12925,7 @@ class SectionSummaryDialog(QDialog):
         cp_segs = _make_segs(_default_segments_circular_pipe, node_defaults.get("circular_channel"))
 
         if not has_source_data:
-            for segs_list in [rc_segs, tr_segs, uc_segs, tn_arch_segs, tn_circ_segs, tn_horse_segs,
+            for segs_list in [rc_segs, tr_segs, uc_segs, tn_arch_segs, tn_circ_segs, tn_flat_segs, tn_horse_segs,
                               aq_u_segs, aq_rect_segs, rv_segs, cp_segs]:
                 for i, seg in enumerate(segs_list):
                     seg["name"] = _segment_name(i + 1)
@@ -12921,6 +12953,8 @@ class SectionSummaryDialog(QDialog):
                 _table_order.append("tunnel_arch")
             if node_defaults.get("tunnel_circular"):
                 _table_order.append("tunnel_circular")
+            if node_defaults.get("tunnel_flat_bottom_circular"):
+                _table_order.append("tunnel_flat_bottom_circular")
             if node_defaults.get("tunnel_horseshoe"):
                 _table_order.append("tunnel_horseshoe")
             if node_defaults.get("aqueduct_u"):
@@ -12993,6 +13027,7 @@ class SectionSummaryDialog(QDialog):
             u_channel_segs=uc_segs,
             tunnel_arch_segs=tn_arch_segs,
             tunnel_circular_segs=tn_circ_segs,
+            tunnel_flat_bottom_circular_segs=tn_flat_segs,
             tunnel_horseshoe_segs=tn_horse_segs,
             aqueduct_u_segs=aq_u_segs,
             aqueduct_rect_segs=aq_rect_segs,
@@ -13006,6 +13041,7 @@ class SectionSummaryDialog(QDialog):
             table_order=_table_order,
             tunnel_unified_arch=False if has_source_data else tunnel_unified.get("tunnel_arch", False),
             tunnel_unified_circular=False if has_source_data else tunnel_unified.get("tunnel_circular", False),
+            tunnel_unified_flat_bottom_circular=False if has_source_data else tunnel_unified.get("tunnel_flat_bottom_circular", False),
             tunnel_unified_horseshoe=False if has_source_data else tunnel_unified.get("tunnel_horseshoe", False),
         )
 

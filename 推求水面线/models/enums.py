@@ -28,6 +28,7 @@ class StructureType(Enum):
     
     # 隧洞类型
     TUNNEL_CIRCULAR = "隧洞-圆形"
+    TUNNEL_FLAT_BOTTOM_CIRCULAR = "隧洞-平底圆形"
     TUNNEL_ARCH = "隧洞-圆拱直墙型"
     TUNNEL_HORSESHOE_1 = "隧洞-马蹄形Ⅰ型"
     TUNNEL_HORSESHOE_2 = "隧洞-马蹄形Ⅱ型"
@@ -105,7 +106,7 @@ class StructureType(Enum):
         隧洞、倒虹吸、渡槽、矩形暗涵需要标识进口和出口
         """
         return [
-            cls.TUNNEL_CIRCULAR, cls.TUNNEL_ARCH, 
+            cls.TUNNEL_CIRCULAR, cls.TUNNEL_FLAT_BOTTOM_CIRCULAR, cls.TUNNEL_ARCH,
             cls.TUNNEL_HORSESHOE_1, cls.TUNNEL_HORSESHOE_2,
             cls.INVERTED_SIPHON,
             cls.PRESSURE_PIPE,
