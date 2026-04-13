@@ -491,6 +491,92 @@ def test_pressure_pipe_loss_dialog_for_named_group_outlet_points_group_total_to_
     assert "总损失由外部水力计算回写，通常在出口行显示" not in text_blob
 
 
+def test_show_pressure_pipe_loss_details_without_detail_payload_returns_false_and_no_hint(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    _ = app
+
+    panel_module = _load_panel_module()
+    formula_module = importlib.import_module("app_渠系计算前端.water_profile.formula_dialog")
+    info_calls = []
+    dialog_calls = []
+
+    monkeypatch.setattr(panel_module, "fluent_info", lambda *args, **kwargs: info_calls.append((args, kwargs)))
+    monkeypatch.setattr(
+        formula_module,
+        "show_pressure_pipe_loss_dialog",
+        lambda *args, **kwargs: dialog_calls.append((args, kwargs)),
+    )
+
+    panel = _build_panel(panel_module)
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "干渠")
+    node = _make_node(
+        name="1#",
+        structure_type=SimpleNamespace(value="倒虹吸"),
+        is_inverted_siphon=True,
+        in_out=SimpleNamespace(value="出"),
+        head_loss_siphon=0.8074,
+        head_loss_total=0.8074,
+    )
+
+    result = panel_module.WaterProfilePanel._show_pressure_pipe_loss_details(panel, 12, node)
+
+    assert result is False
+    assert info_calls == []
+    assert dialog_calls == []
+
+
+def test_show_pressure_pipe_loss_details_provides_override_callbacks(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    _ = app
+
+    panel_module = _load_panel_module()
+    formula_module = importlib.import_module("app_渠系计算前端.water_profile.formula_dialog")
+    captured = {}
+
+    monkeypatch.setattr(
+        formula_module,
+        "show_pressure_pipe_loss_dialog",
+        lambda *args, **kwargs: captured.update(args=args, kwargs=kwargs),
+    )
+
+    panel = _build_panel(panel_module)
+    panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支渠")
+    node = _make_node(
+        name="洞梁村",
+        structure_type=SimpleNamespace(value="有压管道"),
+        section_params={
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": "flow1-row18",
+                "group_mode": "chain_row_member",
+                "friction_loss": 0.21,
+                "total_bend_loss": 0.03,
+                "local_loss": 0.05,
+                "total_head_loss": 0.29,
+            }
+        },
+        pressure_pipe_window_override={
+            "enabled": True,
+            "identity": "flow1-row18",
+            "group_mode": "chain_row_member",
+            "friction_loss": 0.21,
+            "total_bend_loss": 0.03,
+            "local_loss": 0.05,
+            "total_head_loss": 0.29,
+        },
+        head_loss_friction=0.21,
+        head_loss_bend=0.03,
+        head_loss_local=0.05,
+        head_loss_total=0.29,
+    )
+
+    result = panel_module.WaterProfilePanel._show_pressure_pipe_loss_details(panel, 17, node)
+
+    assert result is True
+    assert callable(captured["kwargs"]["on_save_override"])
+    assert callable(captured["kwargs"]["on_clear_override"])
+
+
 def test_water_level_dialog_shows_both_row_loss_and_step_drop(monkeypatch):
     module = _load_formula_dialog_module()
     captured = _capture_formula_dialog(monkeypatch, module)
