@@ -287,8 +287,25 @@ def test_qxproj_roundtrip_supports_immediate_export_details_and_table_edit(monke
             assert restored.node_table.item(3, 41).text() == "419.200"
             assert restored.calculated_nodes[2].head_loss_total == 0.5
             assert restored.calculated_nodes[3].head_loss_cumulative == 0.8
+
+            edited_state = restored.to_project_dict()
+            assert edited_state["calculated_nodes"][2]["pressure_pipe_loss_override_m"] == 0.5
         finally:
             restored.deleteLater()
+
+        reopened = _build_panel(module)
+        try:
+            reopened.from_project_dict(edited_state, skip_dirty_signal=True)
+            _flush_events()
+
+            assert reopened.calculated_nodes[2].pressure_pipe_loss_override_m == 0.5
+            assert reopened.node_table.item(2, 38).text() == "0.5000"
+            assert reopened.node_table.item(2, 39).text() == "0.5000"
+            assert reopened.node_table.item(2, 40).text() == "0.6000"
+            assert reopened.node_table.item(3, 40).text() == "0.8000"
+            assert reopened.node_table.item(3, 41).text() == "419.200"
+        finally:
+            reopened.deleteLater()
 
 
 def test_qxproj_roundtrip_recovers_successful_gate_when_old_project_saved_false():

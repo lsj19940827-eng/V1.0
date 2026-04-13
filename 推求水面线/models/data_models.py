@@ -84,6 +84,7 @@ class ChannelNode:
     pressure_pipe_row_identity: str = ""        # 空名称有压管道行的稳定标识
     pressure_pipe_window_override: Dict[str, Any] = field(default_factory=dict)  # 有压管道窗口专项结果覆盖
     pressure_pipe_named_group_result: Dict[str, Any] = field(default_factory=dict)  # 命名承压组隐藏结果元数据
+    pressure_pipe_loss_override_m: Optional[float] = None  # 表3 第38列人工采用值（m）
     is_diversion_gate: bool = False             # 是否为闸类结构（分水闸/分水口/节制闸/泄水闸等，仅过闸水头损失）
     is_auto_inserted_channel: bool = False      # 是否为自动插入的明渠段（渐变段间连接段，不分配IP编号）
     stat_length: float = 0.0                    # 统计用长度（结构类型汇总用，不参与导出）
@@ -289,6 +290,7 @@ class ChannelNode:
             "pressure_pipe_row_identity": self.pressure_pipe_row_identity,
             "pressure_pipe_window_override": self.pressure_pipe_window_override,
             "pressure_pipe_named_group_result": self.pressure_pipe_named_group_result,
+            "pressure_pipe_loss_override_m": self.pressure_pipe_loss_override_m,
             "is_diversion_gate": self.is_diversion_gate,
             "is_auto_inserted_channel": self.is_auto_inserted_channel,
             "stat_length": self.stat_length,
@@ -408,6 +410,14 @@ class ChannelNode:
         node.pressure_pipe_row_identity = d.get("pressure_pipe_row_identity", "")
         node.pressure_pipe_window_override = d.get("pressure_pipe_window_override", {}) or {}
         node.pressure_pipe_named_group_result = d.get("pressure_pipe_named_group_result", {}) or {}
+        pressure_pipe_loss_override = d.get("pressure_pipe_loss_override_m", None)
+        if pressure_pipe_loss_override in ("", None):
+            node.pressure_pipe_loss_override_m = None
+        else:
+            try:
+                node.pressure_pipe_loss_override_m = float(pressure_pipe_loss_override)
+            except (TypeError, ValueError):
+                node.pressure_pipe_loss_override_m = None
         node.is_diversion_gate = d.get("is_diversion_gate", False)
         node.is_auto_inserted_channel = d.get("is_auto_inserted_channel", False)
         node.stat_length = d.get("stat_length", 0.0)

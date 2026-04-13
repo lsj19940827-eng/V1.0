@@ -674,6 +674,117 @@ def test_get_pressure_pipe_display_context_uses_prefix_override_on_special_inlet
     assert WaterProfilePanel._is_pressure_pipe_display_locked_node(node, "支渠") is True
 
 
+def test_pressure_pipe_loss_override_takes_priority_over_row_override_display():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._get_current_channel_level_text = lambda settings=None: "支渠"
+
+    node = SimpleNamespace(
+        name="洞梁村",
+        flow_section="1",
+        structure_type=SimpleNamespace(value="有压管道"),
+        section_params={
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": "flow1-row18",
+                "group_mode": "chain_row_member",
+                "friction_loss": 0.21,
+                "total_bend_loss": 0.03,
+                "local_loss": 0.05,
+                "total_head_loss": 0.29,
+            }
+        },
+        pressure_pipe_window_override={
+            "enabled": True,
+            "identity": "flow1-row18",
+            "group_mode": "chain_row_member",
+            "friction_loss": 0.21,
+            "total_bend_loss": 0.03,
+            "local_loss": 0.05,
+            "total_head_loss": 0.29,
+        },
+        head_loss_friction=0.21,
+        head_loss_bend=0.03,
+        head_loss_local=0.05,
+        head_loss_reserve=0.01,
+        head_loss_gate=0.02,
+        head_loss_siphon=0.0,
+        head_loss_total=0.32,
+    )
+
+    WaterProfilePanel._set_pressure_pipe_loss_override(node, 0.77)
+    display_loss = WaterProfilePanel._get_pressure_pipe_loss_display_value(
+        node,
+        row_index=17,
+        channel_level="支渠",
+    )
+    context = WaterProfilePanel._get_pressure_pipe_display_context(panel, node, row_index=17)
+    applied_loss = WaterProfilePanel._apply_pressure_pipe_loss_cell_to_node(
+        node,
+        display_loss,
+        channel_level="支渠",
+    )
+
+    assert WaterProfilePanel._get_pressure_pipe_loss_calculated_value(
+        node,
+        row_index=17,
+        channel_level="支渠",
+    ) == pytest.approx(0.29)
+    assert display_loss == pytest.approx(0.77)
+    assert applied_loss == pytest.approx(0.77)
+    assert context["display_loss"] == pytest.approx(0.77)
+    assert context["formula_term_loss"] == pytest.approx(0.77)
+    assert node.head_loss_total == pytest.approx(0.80)
+
+
+def test_pressure_pipe_loss_override_clear_restores_named_group_outlet_display_rule():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._get_current_channel_level_text = lambda settings=None: "干渠"
+
+    node = SimpleNamespace(
+        name="洞梁村",
+        flow_section="1",
+        structure_type=SimpleNamespace(value="有压管道"),
+        in_out=SimpleNamespace(value="出"),
+        section_params={
+            "pressure_pipe_named_group_result": {
+                "identity": "1::洞梁村",
+                "storage_key": "1::洞梁村",
+                "display_name": "洞梁村",
+                "structure_type": "有压管道",
+                "total_head_loss": 10.4901,
+                "target_row_index": 15,
+            }
+        },
+        pressure_pipe_named_group_result={
+            "identity": "1::洞梁村",
+            "storage_key": "1::洞梁村",
+            "display_name": "洞梁村",
+            "structure_type": "有压管道",
+            "total_head_loss": 10.4901,
+            "target_row_index": 15,
+        },
+        head_loss_friction=0.8286,
+        head_loss_bend=0.0,
+        head_loss_local=0.0,
+        head_loss_reserve=0.0,
+        head_loss_gate=0.0,
+        head_loss_siphon=0.8286,
+        head_loss_total=0.8286,
+    )
+
+    WaterProfilePanel._set_pressure_pipe_loss_override(node, 0.5)
+    override_context = WaterProfilePanel._get_pressure_pipe_display_context(panel, node, row_index=15)
+    WaterProfilePanel._set_pressure_pipe_loss_override(node, None)
+    restored_context = WaterProfilePanel._get_pressure_pipe_display_context(panel, node, row_index=15)
+
+    assert override_context["display_loss"] == pytest.approx(0.5)
+    assert override_context["formula_term_loss"] == pytest.approx(0.5)
+    assert restored_context["display_loss"] == pytest.approx(0.8286)
+    assert restored_context["formula_term_loss"] == pytest.approx(0.0)
+
+
 def test_calculate_pressure_chain_prefix_member_result_writes_to_special_inlet_row():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

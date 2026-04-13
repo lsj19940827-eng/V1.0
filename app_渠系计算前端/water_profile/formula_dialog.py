@@ -568,6 +568,103 @@ class TransitionLengthOverrideDialog(FormulaDialog):
                 return
         self.accept()
 
+
+class PressurePipeLossOverrideDialog(FormulaDialog):
+    """在第38列详情弹窗底部提供人工采用值编辑入口。"""
+
+    def __init__(self, parent, title: str, sections: List[Dict[str, Any]],
+                 details: Dict[str, Any], on_save_override=None, on_clear_override=None):
+        self._details = details or {}
+        self._on_save_override = on_save_override
+        self._on_clear_override = on_clear_override
+        super().__init__(parent, title, sections, auto_exec=False)
+        self._inject_override_editor()
+        self.exec()
+
+    def _inject_override_editor(self):
+        layout = getattr(self, "_main_layout", None)
+        if layout is None:
+            return
+
+        wrapper = QFrame(self)
+        wrapper.setStyleSheet(
+            "QFrame { background: #F8FAFC; border: 1px solid #E5E7EB; border-radius: 10px; }"
+            "QLineEdit { background: white; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 8px; }"
+        )
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(14, 12, 14, 12)
+        wrapper_layout.setSpacing(8)
+
+        calc_loss = float(self._details.get("pressure_pipe_calc_loss", self._details.get("head_loss_siphon", 0.0) or 0.0) or 0.0)
+        display_loss = float(self._details.get("pressure_pipe_display_loss", calc_loss) or 0.0)
+        has_manual_override = bool(self._details.get("pressure_pipe_display_has_manual_override", False))
+
+        intro_lines = [f"当前计算值：{calc_loss:.4f} m"]
+        if has_manual_override:
+            intro_lines.append(f"当前采用值：{display_loss:.4f} m")
+        else:
+            intro_lines.append("当前采用值：未单独指定，表3显示计算值")
+        intro = QLabel("\n".join(intro_lines))
+        intro.setWordWrap(True)
+        intro.setStyleSheet("font-size: 12px; color: #334155;")
+        wrapper_layout.addWidget(intro)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(QLabel("采用值(m)"))
+        default_value = display_loss if has_manual_override else calc_loss
+        self._override_edit = QLineEdit(f"{default_value:.4f}")
+        self._override_edit.setPlaceholderText("例如 0.8074")
+        row.addWidget(self._override_edit, 1)
+        wrapper_layout.addLayout(row)
+
+        self._error_label = QLabel("")
+        self._error_label.setStyleSheet("color: #C62828; font-size: 12px;")
+        self._error_label.setVisible(False)
+        wrapper_layout.addWidget(self._error_label)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        if callable(self._on_clear_override):
+            clear_btn = PushButton("恢复计算值")
+            clear_btn.clicked.connect(self._handle_clear)
+            btn_row.addWidget(clear_btn)
+        save_btn = PushButton("保存采用值")
+        save_btn.clicked.connect(self._handle_save)
+        btn_row.addWidget(save_btn)
+        wrapper_layout.addLayout(btn_row)
+
+        layout.insertWidget(max(0, layout.count() - 1), wrapper)
+
+    def _show_error(self, message: str):
+        self._error_label.setText(message)
+        self._error_label.setVisible(bool(message))
+
+    def _handle_save(self):
+        raw_text = self._override_edit.text().strip()
+        try:
+            value = float(raw_text)
+        except (TypeError, ValueError):
+            self._show_error("请输入大于等于 0 的数值。")
+            return
+        if value < 0:
+            self._show_error("请输入大于等于 0 的数值。")
+            return
+        self._show_error("")
+        if callable(self._on_save_override):
+            result = self._on_save_override(value)
+            if result is False:
+                return
+        self.accept()
+
+    def _handle_clear(self):
+        self._show_error("")
+        if callable(self._on_clear_override):
+            result = self._on_clear_override()
+            if result is False:
+                return
+        self.accept()
+
     # ---- HTML 构建 ----
 
     def _build_html(self, sections):
@@ -1024,8 +1121,14 @@ def _format_pressure_pipe_display_lines(
     is_display_only: bool = False,
     display_mode: str = "normal",
     named_group_total: float | None = None,
+    has_manual_override: bool = False,
 ) -> str:
     """生成有压管道列的展示说明文本。"""
+    if has_manual_override:
+        return (
+            f"表3列38当前采用值  $h_{{pp,adopt}} = {display_loss:.4f}$ m\n"
+            "说明：当前按人工采用值参与本行总损失、累计损失和水位递推。"
+        )
     if is_row_sum:
         return (
             f"有压管道列显示值  $h_{{pp}} = {display_loss:.4f}$ m\n"
@@ -1052,8 +1155,14 @@ def _format_pressure_pipe_formula_note(
     *,
     is_display_only: bool = False,
     display_mode: str = "normal",
+    has_manual_override: bool = False,
 ) -> str:
     """生成总损失/水位公式下方的补充说明。"""
+    if has_manual_override:
+        return (
+            f"\n当前按人工采用值  $h_{{pp,adopt}} = {display_loss:.4f}$ m"
+            " 参与本行总损失和水位递推。"
+        )
     if is_row_sum:
         return (
             f"\n列38显示值  $h_{{pp}} = {display_loss:.4f}$ m"
@@ -1067,17 +1176,29 @@ def _format_pressure_pipe_formula_note(
     return ""
 
 
-def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
+def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, Any],
+                                   on_save_override=None, on_clear_override=None):
     """倒虹吸/有压管道水头损失详情。"""
     display_loss = details.get("pressure_pipe_display_loss", details.get("head_loss_siphon", 0.0))
+    calc_loss = details.get("pressure_pipe_calc_loss", details.get("head_loss_siphon", display_loss))
     is_row_sum = bool(details.get("pressure_pipe_display_is_row_sum", False))
     display_mode = str(details.get("pressure_pipe_display_mode", "normal") or "normal")
     named_group_total = details.get("pressure_pipe_named_group_total", None)
+    has_manual_override = bool(details.get("pressure_pipe_display_has_manual_override", False))
     hf = details.get("head_loss_friction", 0.0)
     hw = details.get("head_loss_bend", 0.0)
     hj = details.get("head_loss_local", 0.0)
 
     if is_row_sum:
+        values = [
+            f"沿程水头损失  $h_f = {hf:.4f}$ m",
+            f"弯道水头损失  $h_w = {hw:.4f}$ m",
+            f"局部水头损失  $h_j = {hj:.4f}$ m",
+            "───────────────────────",
+            f"当前计算值  $h_{{pp,calc}} = {calc_loss:.4f}$ m",
+        ]
+        if has_manual_override:
+            values.append(f"当前采用值  $h_{{pp,adopt}} = {display_loss:.4f}$ m")
         sections = [
             {
                 "title": "1. 本行有压管道列显示口径",
@@ -1086,23 +1207,32 @@ def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, An
             },
             {
                 "title": "2. 本行分项值",
-                "values": f"沿程水头损失  $h_f = {hf:.4f}$ m\n"
-                          f"弯道水头损失  $h_w = {hw:.4f}$ m\n"
-                          f"局部水头损失  $h_j = {hj:.4f}$ m\n"
-                          f"───────────────────────\n表3列38显示值  $h_{{pp}} = {display_loss:.4f}$ m",
+                "values": "\n".join(values),
             },
             {
                 "title": "3. 代入公式计算",
-                "values": f"$h_{{pp}} = {hf:.4f} + {hw:.4f} + {hj:.4f}$\n"
-                          f"    $= {display_loss:.4f}$ m",
+                "values": f"$h_{{pp,calc}} = {hf:.4f} + {hw:.4f} + {hj:.4f}$\n"
+                          f"    $= {calc_loss:.4f}$ m",
             },
             {
                 "title": "4. 计算结果",
-                "formula": f"$h_{{pp}} = {display_loss:.4f} \\ m$",
+                "formula": f"$h_{{pp,calc}} = {calc_loss:.4f} \\ m$",
             },
         ]
+        if has_manual_override:
+            sections.append(
+                {
+                    "title": "5. 当前采用值",
+                    "formula": f"$h_{{pp,adopt}} = {display_loss:.4f} \\ m$",
+                    "content": "该值已直接参与表3总损失、累计损失和水位递推。",
+                }
+            )
     elif display_mode == "named_group_outlet":
-        values = [f"表3列38显示值  $h_{{pp,display}} = {display_loss:.4f}$ m"]
+        values = [f"当前计算值  $h_{{pp,calc}} = {calc_loss:.4f}$ m"]
+        if has_manual_override:
+            values.append(f"当前采用值  $h_{{pp,adopt}} = {display_loss:.4f}$ m")
+        else:
+            values.append(f"表3列38显示值  $h_{{pp,display}} = {display_loss:.4f}$ m")
         if named_group_total is not None:
             values.append(f"整组总损失  $h_{{group}} = {named_group_total:.4f}$ m")
         sections = [
@@ -1121,10 +1251,21 @@ def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, An
             },
             {
                 "title": "4. 计算结果",
-                "formula": f"$h_{{pp,display}} = {display_loss:.4f} \\ m$",
+                "formula": f"$h_{{pp,calc}} = {calc_loss:.4f} \\ m$",
             },
         ]
+        if has_manual_override:
+            sections.append(
+                {
+                    "title": "5. 当前采用值",
+                    "formula": f"$h_{{pp,adopt}} = {display_loss:.4f} \\ m$",
+                    "content": "该值已直接参与表3总损失、累计损失和水位递推。",
+                }
+            )
     else:
+        values = [f"当前计算值  $h_{{pp,calc}} = {calc_loss:.4f}$ m"]
+        if has_manual_override:
+            values.append(f"当前采用值  $h_{{pp,adopt}} = {display_loss:.4f}$ m")
         sections = [
             {
                 "title": "1. 命名组回写口径",
@@ -1133,14 +1274,33 @@ def show_pressure_pipe_loss_dialog(parent, node_name: str, details: Dict[str, An
             },
             {
                 "title": "2. 当前显示值",
-                "values": f"表3列38显示值  $h_{{pp}} = {display_loss:.4f}$ m",
+                "values": "\n".join(values),
             },
             {
                 "title": "3. 计算结果",
-                "formula": f"$h_{{pp}} = {display_loss:.4f} \\ m$",
+                "formula": f"$h_{{pp,calc}} = {calc_loss:.4f} \\ m$",
             },
         ]
-    FormulaDialog(parent, f"{node_name} - 倒虹吸/有压管道水头损失详情", sections)
+        if has_manual_override:
+            sections.append(
+                {
+                    "title": "4. 当前采用值",
+                    "formula": f"$h_{{pp,adopt}} = {display_loss:.4f} \\ m$",
+                    "content": "该值已直接参与表3总损失、累计损失和水位递推。",
+                }
+            )
+    title = f"{node_name} - 倒虹吸/有压管道水头损失详情"
+    if callable(on_save_override) or callable(on_clear_override):
+        PressurePipeLossOverrideDialog(
+            parent,
+            title,
+            sections,
+            details,
+            on_save_override=on_save_override,
+            on_clear_override=on_clear_override,
+        )
+    else:
+        FormulaDialog(parent, title, sections)
 
 
 def show_total_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
@@ -1156,6 +1316,7 @@ def show_total_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
     pressure_pipe_display_is_display_only = bool(details.get('pressure_pipe_display_is_display_only', False))
     pressure_pipe_display_mode = str(details.get('pressure_pipe_display_mode', 'normal') or 'normal')
     pressure_pipe_named_group_total = details.get('pressure_pipe_named_group_total', None)
+    pressure_pipe_display_has_manual_override = bool(details.get('pressure_pipe_display_has_manual_override', False))
     h_total = details.get('head_loss_total', hw + hj + hf + h_res + h_gate + h_sip)
     sections = [
         {"title": "1. 普通行总水头损失口径",
@@ -1167,12 +1328,12 @@ def show_total_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
          "values": f"弯道水头损失  $h_w = {hw:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
                    f"沿程水头损失  $h_f = {hf:.4f}$ m\n"
                    f"预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n"
-                   f"{_format_pressure_pipe_display_lines(pressure_pipe_display_loss, h_sip, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode, named_group_total=pressure_pipe_named_group_total)}\n"
+                   f"{_format_pressure_pipe_display_lines(pressure_pipe_display_loss, h_sip, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode, named_group_total=pressure_pipe_named_group_total, has_manual_override=pressure_pipe_display_has_manual_override)}\n"
                    f"───────────────────────\n本普通行总水头损失  $h_{{\\Sigma,row}} = {h_total:.4f}$ m"},
         {"title": "3. 代入公式计算",
          "values": f"$h_{{\\Sigma,row}} = {hw:.4f} + {hj:.4f} + {hf:.4f} + {h_res:.4f} + {h_gate:.4f} + {h_sip:.4f}$\n"
                    f"    $= {h_total:.4f}$ m"
-                   f"{_format_pressure_pipe_formula_note(pressure_pipe_display_loss, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode)}"},
+                   f"{_format_pressure_pipe_formula_note(pressure_pipe_display_loss, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode, has_manual_override=pressure_pipe_display_has_manual_override)}"},
         {"title": "4. 计算结果", "formula": f"$h_{{\\Sigma,row}} = {h_total:.4f} \\ m$"},
     ]
     FormulaDialog(parent, f"{node_name} - 总水头损失计算详情", sections)
@@ -1215,6 +1376,7 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
         pressure_pipe_display_is_display_only = bool(details.get('pressure_pipe_display_is_display_only', False))
         pressure_pipe_display_mode = str(details.get('pressure_pipe_display_mode', 'normal') or 'normal')
         pressure_pipe_named_group_total = details.get('pressure_pipe_named_group_total', None)
+        pressure_pipe_display_has_manual_override = bool(details.get('pressure_pipe_display_has_manual_override', False))
         row_total = details.get('total_loss', hf + hj + hw + h_res + h_gate + h_sip)
         transition_step_loss = details.get('transition_step_loss', details.get('h_tr', 0.0))
         step_drop = details.get('step_drop', row_total + transition_step_loss)
@@ -1233,7 +1395,7 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
              "values": f"沿程水头损失  $h_f = {hf:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
                        f"弯道水头损失  $h_w = {hw:.4f}$ m\n预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n"
                        f"过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n"
-                       f"{_format_pressure_pipe_display_lines(pressure_pipe_display_loss, h_sip, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode, named_group_total=pressure_pipe_named_group_total)}\n"
+                       f"{_format_pressure_pipe_display_lines(pressure_pipe_display_loss, h_sip, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode, named_group_total=pressure_pipe_named_group_total, has_manual_override=pressure_pipe_display_has_manual_override)}\n"
                        f"───────────────────────\n本普通行总水头损失  $h_{{\\Sigma,row}} = {row_total:.4f}$ m"},
             {"title": "3. 本步总落差（用于水位递推）",
              "values": f"上一普通节点水位  $Z_{{i-1}} = {prev:.4f}$ m\n"
