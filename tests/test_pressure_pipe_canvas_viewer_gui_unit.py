@@ -1,7 +1,9 @@
 """有压管道预览画布双击放大 GUI 单元测试。"""
 
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +25,7 @@ from app_渠系计算前端.water_profile.water_profile_dialogs import (
     PressurePipeConfigDialog,
     SimpleProfileCanvas,
 )
+from 推求水面线.managers.pressure_pipe_manager import PressurePipeConfig, PressurePipeManager
 
 
 def _get_qapp():
@@ -837,7 +840,7 @@ def test_pressure_pipe_config_dialog_rejects_route_import_when_station_coverage_
     dialog.deleteLater()
 
 
-def test_pressure_pipe_config_dialog_clears_stale_saved_route_longitudinal_cache_on_load():
+def test_pressure_pipe_config_dialog_preserves_stale_saved_route_longitudinal_cache_on_load():
     _get_qapp()
     route_key, groups, _manager = _make_route_groups(
         route_key="三清庙",
@@ -927,13 +930,15 @@ def test_pressure_pipe_config_dialog_clears_stale_saved_route_longitudinal_cache
     dialog.show()
     _flush_events(6)
 
-    assert route_key not in dialog.get_longitudinal_nodes_dict()
-    assert "重新导入" in dialog._route_widgets[route_key]["hint"].text()
+    assert route_key in dialog.get_longitudinal_nodes_dict()
+    assert dialog.get_longitudinal_nodes_dict()[route_key] == stale_nodes
+    assert "已保留" in dialog._route_widgets[route_key]["hint"].text()
+    assert "继续补导入" in dialog._route_widgets[route_key]["hint"].text()
     saved_routes = manager.to_dict().get("routes", {})
-    assert saved_routes.get(route_key, {}).get("longitudinal_nodes", []) == []
+    assert saved_routes.get(route_key, {}).get("longitudinal_nodes", []) == stale_nodes
     saved_pipes = manager.to_dict().get("pipes", {})
     for group in groups:
-        assert saved_pipes.get(group.storage_key, {}).get("longitudinal_nodes", []) == []
+        assert saved_pipes.get(group.storage_key, {}).get("longitudinal_nodes", []) == stale_nodes
 
     dialog.close()
     dialog.deleteLater()
@@ -1159,22 +1164,26 @@ def test_pressure_pipe_config_dialog_rejects_xxpipe_import_when_coverage_is_inco
                 "测试导入",
             )
 
-    errors = []
+    infos = []
     monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *_a, **_k: ("fake.dxf", "DXF")))
-    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_a: errors.append(_a[2])))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_a: None))
+    monkeypatch.setattr(dialog_mod, "fluent_info", lambda *_a, **_k: infos.append(_a[2]))
     monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(readfile=lambda *_a, **_k: _FakeDoc()))
     monkeypatch.setitem(sys.modules, "dxf_parser", SimpleNamespace(DxfParser=_FakeParser))
 
     dialog._import_longitudinal_dxf(route_key, groups[0].route_ip_points)
 
-    assert errors
-    assert "导入失败：纵断面范围不够" in errors[0]
-    assert "需要覆盖到桩号 80.000 m" in errors[0]
-    assert "当前导入的纵断面只到 50.000 m" in errors[0]
-    assert "允许的 1.0 mm 误差" in errors[0]
-    assert "请在 CAD 中把纵断面末端至少延长到 80.000 m 后重新导入。" in errors[0]
-    assert "未覆盖节点：IP2@0+080.000" in errors[0]
-    assert route_key not in dialog.get_longitudinal_nodes_dict()
+    assert infos
+    assert "导入失败：纵断面范围不够" in infos[0]
+    assert "需要覆盖到桩号 80.000 m" in infos[0]
+    assert "当前导入的纵断面只到 50.000 m" in infos[0]
+    assert "允许的 1.0 mm 误差" in infos[0]
+    assert "请在 CAD 中把纵断面末端至少延长到 80.000 m 后重新导入。" in infos[0]
+    assert "未覆盖节点：IP2@0+080.000" in infos[0]
+    assert route_key in dialog.get_longitudinal_nodes_dict()
+    assert [node["chainage"] for node in dialog.get_longitudinal_nodes_dict()[route_key]] == [0.0, 50.0]
+    saved_routes = dialog._manager.to_dict().get("routes", {})
+    assert [node["chainage"] for node in saved_routes.get(route_key, {}).get("longitudinal_nodes", [])] == [0.0, 50.0]
 
     dialog.close()
     dialog.deleteLater()
@@ -1284,23 +1293,29 @@ def test_pressure_pipe_config_dialog_reports_mm_gap_for_short_longitudinal_profi
                 "测试导入",
             )
 
-    errors = []
+    infos = []
     monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *_a, **_k: ("fake.dxf", "DXF")))
-    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_a: errors.append(_a[2])))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_a: None))
+    monkeypatch.setattr(dialog_mod, "fluent_info", lambda *_a, **_k: infos.append(_a[2]))
     monkeypatch.setitem(sys.modules, "ezdxf", SimpleNamespace(readfile=lambda *_a, **_k: _FakeDoc()))
     monkeypatch.setitem(sys.modules, "dxf_parser", SimpleNamespace(DxfParser=_FakeParser))
 
     dialog._import_longitudinal_dxf(route_key, groups[0].route_ip_points)
 
-    assert errors
-    assert "流量段1 整线1" in errors[0]
-    assert "导入失败：纵断面范围不够" in errors[0]
-    assert "需要覆盖到桩号 10708.927 m" in errors[0]
-    assert "当前导入的纵断面只到 10708.9248 m" in errors[0]
-    assert "当前还差 2.2 mm，已超过程序允许的 1.0 mm 误差。" in errors[0]
-    assert "请在 CAD 中把纵断面末端至少延长到 10708.927 m 后重新导入。" in errors[0]
-    assert "未覆盖节点：IP173@T10+708.927" in errors[0]
-    assert route_key not in dialog.get_longitudinal_nodes_dict()
+    assert infos
+    assert "流量段1 整线1" in infos[0]
+    assert "导入失败：纵断面范围不够" in infos[0]
+    assert "需要覆盖到桩号 10708.927 m" in infos[0]
+    assert "当前导入的纵断面只到 10708.9248 m" in infos[0]
+    assert "当前还差 2.2 mm，已超过程序允许的 1.0 mm 误差。" in infos[0]
+    assert "请在 CAD 中把纵断面末端至少延长到 10708.927 m 后重新导入。" in infos[0]
+    assert "未覆盖节点：IP173@T10+708.927" in infos[0]
+    assert route_key in dialog.get_longitudinal_nodes_dict()
+    saved_routes = dialog._manager.to_dict().get("routes", {})
+    assert [node["chainage"] for node in saved_routes.get(route_key, {}).get("longitudinal_nodes", [])] == [
+        0.0,
+        pytest.approx(10708.9248),
+    ]
 
     dialog.close()
     dialog.deleteLater()
@@ -1317,7 +1332,8 @@ def test_pressure_pipe_config_dialog_formats_stale_longitudinal_hint_preview():
         ]
     )
 
-    assert "请清空后重新导入纵断面DXF" in text
+    assert "已保留上次导入的纵断面" in text
+    assert "继续补导入纵断面DXF" in text
     assert "未覆盖桩号：IP173@T10+708.927" in text
 
 
@@ -1812,7 +1828,11 @@ def test_pressure_pipe_config_dialog_blocks_accept_for_partial_route_import_with
     assert "未覆盖节点：IP5@0+060.000；IP6@0+100.000" in errors[-1]
     assert dialog.result() != QDialog.Accepted
     assert route_key in dialog.get_longitudinal_nodes_dict()
-    assert manager.to_dict().get("routes", {}).get(route_key, {}).get("longitudinal_nodes", []) == []
+    assert [node["chainage"] for node in dialog.get_longitudinal_nodes_dict()[route_key]] == [20.0, 40.0]
+    assert [node["chainage"] for node in manager.to_dict().get("routes", {}).get(route_key, {}).get("longitudinal_nodes", [])] == [
+        20.0,
+        40.0,
+    ]
 
     dialog.close()
     dialog.deleteLater()
@@ -1907,6 +1927,73 @@ def test_pressure_pipe_config_dialog_does_not_block_non_xxpipe_accept_without_lo
     assert dialog._route_widgets[route_key]["card"].property("missing_longitudinal_highlight") in (False, None)
 
     dialog.close()
+    dialog.deleteLater()
+
+
+def test_pressure_pipe_config_dialog_restores_route_longitudinal_cache_after_pipe_entry_removed():
+    _get_qapp()
+    route_key, groups, _manager = _make_route_groups()
+    case_dir = tempfile.mkdtemp(prefix="ppipe-dialog-restore-")
+    try:
+        manager = PressurePipeManager(str(Path(case_dir) / "demo.qxproj"))
+        route_nodes = _make_longitudinal_nodes()
+
+        for group in groups:
+            cfg = PressurePipeConfig()
+            cfg.name = str(
+                getattr(group, "display_name", "")
+                or getattr(group, "name", "")
+                or getattr(group, "storage_key", "")
+            )
+            cfg.Q = float(getattr(group, "design_flow", 0.0) or 0.0)
+            cfg.D = float(getattr(group, "diameter", 0.0) or 0.0)
+            cfg.material_key = str(getattr(group, "material_key", "") or "")
+            cfg.ip_points = list(getattr(group, "ip_points", []) or [])
+            cfg.route_key = str(getattr(group, "route_key", "") or "")
+            cfg.route_display_name = str(getattr(group, "route_display_name", "") or "")
+            cfg.longitudinal_nodes = list(route_nodes)
+            manager.set_pipe_config(str(getattr(group, "storage_key", "") or ""), cfg)
+
+        for group in groups:
+            manager.remove_pipe(str(getattr(group, "storage_key", "") or ""))
+
+        assert manager.get_pipe_config(groups[0].storage_key) is None
+        assert manager.get_route_config(route_key)["longitudinal_nodes"] == route_nodes
+
+        dialog = PressurePipeConfigDialog(
+            pipe_groups=groups,
+            manager=manager,
+            xxpipe_route_mode=True,
+            route_import_targets={route_key: {"targets": []}},
+        )
+        dialog.show()
+        _flush_events(6)
+
+        loaded = dialog.get_longitudinal_nodes_dict()
+        assert loaded[route_key] == route_nodes
+        assert dialog._route_widgets[route_key]["btn_view_profile"].isEnabled() is True
+        assert dialog._route_widgets[route_key]["stats"].isVisible() is True
+
+        dialog.close()
+        dialog.deleteLater()
+    finally:
+        shutil.rmtree(case_dir, ignore_errors=True)
+
+
+def test_pressure_pipe_config_dialog_close_clears_canvas_viewer_reference():
+    dialog, group = _make_dialog()
+    widgets = dialog._card_widgets[group.name]
+
+    QTest.mouseClick(widgets["btn_preview"], Qt.LeftButton)
+    _flush_events(8)
+
+    assert getattr(dialog, "_canvas_viewer", None) is not None
+
+    dialog.close()
+    _flush_events(8)
+
+    assert getattr(dialog, "_canvas_viewer", None) is None
+
     dialog.deleteLater()
 
 

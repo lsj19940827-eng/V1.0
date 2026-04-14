@@ -1134,9 +1134,10 @@ class PressurePipeConfigDialog(QDialog):
         # 从manager加载已有的纵断面数据
         if self._manager and self._pipe_groups:
             for group in self._pipe_groups:
-                config = self._get_manager_group_config(group)
                 group_key = self._group_storage_key(group)
                 route_key = self._group_route_key(group)
+                self._restore_manager_route_longitudinal_data(route_key)
+                config = self._get_manager_group_config(group)
                 self._sync_group_tunnel_defaults(group, config=config)
                 if config and config.longitudinal_nodes:
                     storage_key = route_key or group_key
@@ -1392,6 +1393,24 @@ class PressurePipeConfigDialog(QDialog):
             return self._manager.get_pipe_config(legacy_name)
         return None
 
+    def _restore_manager_route_longitudinal_data(self, route_key: str):
+        """优先从 route 级缓存恢复整线纵断面，避免 group 入口被清理后重开丢失。"""
+        if not self._manager:
+            return
+        route_key = str(route_key or "").strip()
+        if not route_key or route_key in self._longitudinal_data:
+            return
+        get_route_config = getattr(self._manager, "get_route_config", None)
+        if not callable(get_route_config):
+            return
+        route_config = get_route_config(route_key)
+        if not isinstance(route_config, dict):
+            return
+        longitudinal_nodes = list(route_config.get("longitudinal_nodes", []) or [])
+        if not longitudinal_nodes:
+            return
+        self._longitudinal_data[route_key] = longitudinal_nodes
+
     def _resolve_pipe_label(self, pipe_key: str) -> str:
         """根据键名解析界面展示名称。"""
         widgets = self._lookup_visual_widgets(pipe_key)
@@ -1408,7 +1427,7 @@ class PressurePipeConfigDialog(QDialog):
         return str(pipe_key or "未命名有压管道")
 
     def _cleanup_stale_saved_longitudinal_caches(self):
-        """在弹窗载入时清理已失效的旧纵断面缓存。"""
+        """在弹窗载入时标记覆盖不完整的旧纵断面缓存。"""
         if not (self._xxpipe_route_mode and self._longitudinal_data):
             return
 
@@ -1423,14 +1442,38 @@ class PressurePipeConfigDialog(QDialog):
             )
             missing_targets = list(coverage_state.get("missing_targets", []) or [])
             station_errors = list(coverage_state.get("station_errors", []) or [])
-            if station_errors or not missing_targets:
+            if station_errors or missing_targets:
+                self._stale_longitudinal_hint_texts[route_key] = self._build_xxpipe_incomplete_longitudinal_hint_text(
+                    coverage_state,
+                )
                 continue
 
-            self._stale_longitudinal_hint_texts[route_key] = self._build_stale_longitudinal_hint_text(
-                missing_targets,
-            )
-            self._longitudinal_data.pop(route_key, None)
-            self._persist_longitudinal_data_for_card(route_key)
+            self._stale_longitudinal_hint_texts.pop(route_key, None)
+
+    @classmethod
+    def _build_xxpipe_incomplete_longitudinal_hint_text(
+        cls,
+        coverage_state: Dict[str, Any],
+    ) -> str:
+        """为整线卡片构造“已保留但待补导入”的提示。"""
+        missing_targets = list((coverage_state or {}).get("missing_targets", []) or [])
+        if missing_targets:
+            return cls._build_stale_longitudinal_hint_text(missing_targets)
+        station_errors = list((coverage_state or {}).get("station_errors", []) or [])
+        if station_errors:
+            return "已保留当前导入的纵断面，但当前桩号还无法完成覆盖校验，请检查桩号或继续补导入后再开始计算。"
+        display_name = str((coverage_state or {}).get("display_name", "") or "").strip()
+        if display_name:
+            return f"已保留“{display_name}”当前导入的纵断面，请继续补导入后再开始计算。"
+        return "已保留当前导入的纵断面，请继续补导入后再开始计算。"
+
+    @classmethod
+    def _build_xxpipe_route_hint_text(cls, pipe_name, widgets, hint_text: str) -> str:
+        """统一返回整线/分段卡片当前应展示的提示文案。"""
+        hint = str(hint_text or "").strip()
+        if hint:
+            return hint
+        return str(widgets.get("default_hint_text", "") or "")
 
     @classmethod
     def _format_longitudinal_measure(
@@ -3341,7 +3384,9 @@ class PressurePipeConfigDialog(QDialog):
 
         if show_data and pipe_name in self._longitudinal_data and self._longitudinal_data[pipe_name]:
             nodes = self._longitudinal_data[pipe_name]
-            w['hint'].setVisible(False)
+            hint_text = self._stale_longitudinal_hint_texts.get(str(pipe_name or "").strip(), "")
+            w['hint'].setText(self._build_xxpipe_route_hint_text(pipe_name, w, hint_text))
+            w['hint'].setVisible(bool(hint_text))
             w['stats'].setText(self._compute_stats(nodes))
             w['stats'].setVisible(True)
             w['canvas'].set_nodes(nodes)
@@ -3359,11 +3404,8 @@ class PressurePipeConfigDialog(QDialog):
             show_hint = not has_plan
             if self._xxpipe_route_mode and pipe_name in self._route_widgets:
                 show_hint = True
-            hint_text = self._stale_longitudinal_hint_texts.get(
-                str(pipe_name or "").strip(),
-                str(w.get("default_hint_text", "") or ""),
-            )
-            w['hint'].setText(hint_text)
+            hint_text = self._stale_longitudinal_hint_texts.get(str(pipe_name or "").strip(), "")
+            w['hint'].setText(self._build_xxpipe_route_hint_text(pipe_name, w, hint_text))
             w['hint'].setVisible(show_hint)
             w['stats'].setVisible(False)
             w['expand_btn'].setVisible(False)
@@ -3764,7 +3806,13 @@ class PressurePipeConfigDialog(QDialog):
                 station_errors = list((coverage_state or {}).get("station_errors", []) or [])
                 missing_targets = list((coverage_state or {}).get("missing_targets", []) or [])
                 self._longitudinal_data[pipe_name] = list(merged_nodes or [])
-                self._stale_longitudinal_hint_texts.pop(card_key, None)
+                if station_errors or missing_targets:
+                    self._stale_longitudinal_hint_texts[card_key] = self._build_xxpipe_incomplete_longitudinal_hint_text(
+                        coverage_state,
+                    )
+                else:
+                    self._stale_longitudinal_hint_texts.pop(card_key, None)
+                self._persist_longitudinal_data_for_card(pipe_name)
                 self._update_card_data_state(pipe_name, show_data=True)
                 if station_errors or missing_targets:
                     fluent_info(
@@ -3927,6 +3975,8 @@ class PressurePipeConfigDialog(QDialog):
         viewer = getattr(self, "_canvas_viewer", None)
         if viewer is not None:
             viewer.close()
+            self._canvas_viewer = None
+            self._active_viewer_pipe_name = ""
         super().closeEvent(event)
 
     def _refresh_long_table(self, pipe_name, table):
