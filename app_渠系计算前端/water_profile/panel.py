@@ -3144,8 +3144,11 @@ class WaterProfilePanel(QWidget):
 
     @staticmethod
     def _is_pressure_pipe_row_segment_group(group) -> bool:
-        """判断窗口分组是否为匿名普通有压管道段。"""
-        return str(getattr(group, "group_mode", "") or "").strip() == "unnamed_row_segment"
+        """判断窗口分组是否为逐行承压段。"""
+        return str(getattr(group, "group_mode", "") or "").strip() in {
+            "unnamed_row_segment",
+            "named_row_segment",
+        }
 
     @classmethod
     def _is_pressure_pipe_group_split_to_row_members(cls, group) -> bool:
@@ -10763,6 +10766,10 @@ class WaterProfilePanel(QWidget):
         identity = str(getattr(member, "identity", "") or "").strip()
         if identity:
             return identity
+        if bool(getattr(member, "split_from_named_group", False)) or str(
+            getattr(member, "member_type", "") or ""
+        ).strip() == "single_row":
+            return ""
         group = getattr(member, "group", None)
         if group is not None:
             identity = str(getattr(group, "identity", "") or "").strip()
@@ -10826,10 +10833,37 @@ class WaterProfilePanel(QWidget):
 
         for member in descriptor.get("members", []) or []:
             identity = self._get_pressure_chain_member_identity(member)
-            record = record_map.get(identity, {})
-            status = str(record.get("status", "failed") or "failed").strip().lower()
-            writeback_enabled = bool(record.get("writeback_enabled", True))
-            member_total_head_loss = record.get("total_head_loss")
+            record = record_map.get(identity)
+            display_name = str(
+                getattr(member, "display_name", "") or (record or {}).get("display_name", "") or ""
+            ).strip()
+            structure_type = str(
+                getattr(member, "structure_type", "") or (record or {}).get("structure_type", "") or ""
+            ).strip()
+            member_role = str(
+                getattr(member, "member_role", "") or (record or {}).get("member_role", "") or ""
+            ).strip()
+
+            if record is None:
+                if self._is_pressure_chain_anchor_member(member):
+                    status = "success"
+                    writeback_enabled = False
+                    member_total_head_loss = None
+                    note = "链起点锚点，本行不写回"
+                    error = ""
+                else:
+                    status = "failed"
+                    writeback_enabled = False
+                    member_total_head_loss = None
+                    note = ""
+                    error = f"{display_name or '未命名成员'}: 未匹配到本成员计算记录"
+            else:
+                status = str(record.get("status", "failed") or "failed").strip().lower()
+                writeback_enabled = bool(record.get("writeback_enabled", True))
+                member_total_head_loss = record.get("total_head_loss")
+                note = str(record.get("note", "") or "").strip()
+                error = str(record.get("error", "") or "").strip()
+
             if status == "success":
                 success_count += 1
                 if writeback_enabled and member_total_head_loss is not None:
@@ -10838,20 +10872,14 @@ class WaterProfilePanel(QWidget):
                 failed_count += 1
             member_results.append({
                 "identity": identity,
-                "display_name": str(
-                    getattr(member, "display_name", "") or record.get("display_name", "") or ""
-                ).strip(),
-                "structure_type": str(
-                    getattr(member, "structure_type", "") or record.get("structure_type", "") or ""
-                ).strip(),
-                "member_role": str(
-                    getattr(member, "member_role", "") or record.get("member_role", "") or ""
-                ).strip(),
+                "display_name": display_name,
+                "structure_type": structure_type,
+                "member_role": member_role,
                 "status": status,
                 "writeback_enabled": writeback_enabled,
                 "total_head_loss": member_total_head_loss,
-                "note": str(record.get("note", "") or "").strip(),
-                "error": str(record.get("error", "") or "").strip(),
+                "note": note,
+                "error": error,
             })
 
         chain_complete = failed_count <= 0
@@ -12188,6 +12216,24 @@ class WaterProfilePanel(QWidget):
             "calc_steps": "\n".join(calc_steps),
         }
 
+    @staticmethod
+    def _rewrite_pressure_chain_member_error_header(error_text, display_name: str) -> str:
+        """把逐段成员失败原因的抬头改成当前链成员名称。"""
+        member_name = str(display_name or "").strip() or "未命名成员"
+        text = str(error_text or "").strip()
+        if not text:
+            return f"{member_name}: 计算失败"
+
+        separators = [idx for idx in (text.find(":"), text.find("：")) if idx >= 0]
+        if not separators:
+            return f"{member_name}: {text}"
+
+        separator_index = min(separators)
+        reason = text[separator_index + 1:].strip()
+        if not reason:
+            return f"{member_name}: 计算失败"
+        return f"{member_name}: {reason}"
+
     def _calculate_pressure_chain_single_row_member_result(self, member, nodes, settings) -> dict:
         """计算连续承压链中的单行成员，逐段承压成员沿用正式承压口径。"""
         structure_type = str(getattr(member, "structure_type", "") or "")
@@ -12234,6 +12280,11 @@ class WaterProfilePanel(QWidget):
             })
             if record.get("status") != "success":
                 record["writeback_enabled"] = False
+                if member_group_mode == "named_row_segment":
+                    record["error"] = self._rewrite_pressure_chain_member_error_header(
+                        record.get("error", ""),
+                        base_record["display_name"],
+                    )
             return record
 
         target_idx = self._coerce_pressure_pipe_row_index(getattr(member, "target_row_index", -1))

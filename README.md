@@ -17,6 +17,8 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 同名隧洞如果只是被分水闸、节制闸、泄水闸、退水闸或分水口这类闸点隔开，现在也会继续按同一条隧洞处理，不会再误报成重名建筑物。
 命名有压段现在也改成按“连续出现的同名段”建身份；表1导入到表3时会补齐承压行稳定身份，这样“前段普通有压 + 中间顶管/定向钻 + 后段同名普通有压”会拆成独立子段，导出和回写优先按真实身份匹配。
 赛金支渠这类连续承压链现在补上了“起点前缀段 + 整线完成状态”口径：如果链首普通有压到下一段定向钻/顶管/隧洞进口之间存在真实距离，就按前缀段计入沿程损失，并写回下一段特殊承压建筑的进口行；只有拿不到有效长度时才退回起点锚点。执行计算前也会按真实应写回成员判断，不再误报“还没做有压计算”；同一条末尾连续承压尾段里的整组父卡只保留窗口汇总，不再和逐行正式结果抢同一口径。
+赛金支渠连续承压链现在进一步收口为“父组只做汇总、子成员各算各的”：支渠链里的命名 `有压管道 / 定向钻 / 顶管` 只要真正进入连续承压链，就统一拆成逐行正式成员；父组继续保留原 `rows...` 身份做窗口汇总，中间普通段只会显示自己的结果或自己的缺失诊断，不会再挂到前缀段失败文案。
+连续承压链成员现在也彻底分开了“界面展示名”和“底层校验标签”：界面仍可显示“前缀段 / 前段 / 中段N / 后段”，但底层逐段小分组始终只保留基础名称；如果某个中段真的失败，界面会把失败抬头改成这个中段自己的名字，不会再借到前缀段。
 纵断面 DXF 导入不再盲取文件里的首条多段线，而是按图层名、坐标量级和 X 向展开长度自动优选；如果前两名候选过于接近，导入前会先弹一次确认。
 连续承压 `xx渠` 的纵断面导出现在也复用 `xx管` 固定 5 项表头；如果还没导入或没完全覆盖纵断面轴线 DXF，中心高程会直接留空导出，并在软件里提示回表3补齐后重导。
 普通渠道表继续按当前 `7/扩展项` 配置输出；当图2里同时存在普通渠道段和 `xx管` 段时，导出会按结构拆成上下两张表，TXT 导出保持原样。
@@ -81,6 +83,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 运行本次三清支渠纵断面/链路回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_longitudinal_dxf_reverse_import_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py -q`
 - 运行本次同名连续承压链回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_batch_panel_dialog_parent_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_pressure_pipe_export_results_unit.py -q`
 - 运行本次赛金支渠连续承压链回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_pressure_pipe_export_results_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_water_profile_transition_ready_unit.py tests/test_xxpipe_longitudinal_export_unit.py -q`
+- 运行本次“中段借到前缀失败”回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_external_head_loss_unit.py -q`
 - 运行更新链路回归：`$env:PYTEST_ADDOPTS='--basetemp=D:\V1.0\.pytest_tmp\update-regression'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py tests/test_updater_install_flow_unit.py tests/test_update_helper_unit.py -q`
 - 运行本次构建依赖回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py -q --basetemp=D:\V1.0\.pytest_tmp\build-plan`
 - 运行本次复式梯形回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_open_channel_compound_trapezoid_kernel_unit.py tests/test_open_channel_compound_trapezoid_panel_unit.py tests/test_open_channel_compound_trapezoid_dxf_unit.py tests/test_batch_compound_trapezoid_unit.py tests/test_compound_trapezoid_type_support_unit.py tests/test_compound_trapezoid_shared_hydraulic_unit.py tests/test_water_profile_coord_precision_unit.py -q`
@@ -121,6 +124,8 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 支渠连续承压链里的前后同名普通有压管道现在允许直接通过批量校验；真正被明渠、闸、倒虹吸、暗涵等断开的同名段仍会继续拦截，避免把后续结果串到一起。
 - 命名有压段现在按连续出现的同名段分别建 `identity / storage_key`，并保留旧 `flow_section::name` 兼容别名；表1导入到表3时也会给承压类行补齐稳定身份，后续导出和回写优先按真实身份命中。
 - 赛金支渠这类“普通有压 + 定向钻/顶管 + 同名普通有压”的连续承压链，现在会先判断链首到下一段特殊承压建筑进口之间是否存在真实距离；有长度时生成“前缀段”并把沿程损失写回下一段特殊承压建筑的进口行，无有效长度时才退回“起点锚点”。同链重名成员会自动显示为“前缀段 / 起点锚点 / 前段 / 后段”，整条链未完整成功时也会明确标成“未完成”并隐藏整线总损失。
+- 赛金支渠连续承压链里的命名父组和正式子成员现在彻底分开：父组继续保留 `rows...` 身份做窗口汇总，正式写回和链汇总只认 `flow-row` 成员；中间普通段找不到自己的记录时，会直接提示“未匹配到本成员计算记录”，不再借用前缀段失败原因。
+- 连续承压链里的逐段小分组现在只保留基础名称作为底层校验标签；`苟家湾（中段8）` 这类成员如果失败，失败原因抬头也会同步改成它自己的名字，不会再显示成 `苟家湾（前缀段）: ...`。
 - 赛金支渠 `赛支3+968.95 / 405m` 这类前缀段导出，现在会优先按新身份找分段；若先碰到旧空记录，也会继续按 `route_key` 回退整线纵断面，不再被误判成“已导入 DXF 但未匹配”。
 - xx管 弹窗里的纵断面 DXF 现在会在导入时立即校验整线导出节点是否都被覆盖，覆盖不足会直接拦截，不再“先导入、导出时再发现缺口”。
 - 纵断面 DXF 导入现在会先自动筛掉闭合线、工程坐标辅助线和横向展开不足的候选，再按优先规则选中真正的纵断面；当前两名候选非常接近时，导入前会先提醒确认。
