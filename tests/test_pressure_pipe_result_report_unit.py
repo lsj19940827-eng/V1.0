@@ -284,6 +284,111 @@ def test_batch_report_lists_prefix_segment_as_real_loss_member():
     assert "锚点" not in txt
 
 
+def test_batch_report_uses_missing_record_diagnostic_on_member_itself():
+    batch = {
+        "last_run_at": "2026-04-13 22:02:41",
+        "chain_summaries": [
+            {
+                "chain_id": "chain-1-1",
+                "flow_section": "1",
+                "display_name": "连续承压链1",
+                "chain_complete": False,
+                "chain_status": "incomplete",
+                "total_head_loss": None,
+                "member_count": 2,
+                "success_count": 1,
+                "failed_count": 1,
+                "member_results": [
+                    {
+                        "display_name": "苟家湾（前缀段）",
+                        "structure_type": "有压管道",
+                        "status": "success",
+                        "writeback_enabled": True,
+                        "total_head_loss": 0.0167,
+                    },
+                    {
+                        "display_name": "苟家湾（中段8）",
+                        "structure_type": "有压管道",
+                        "status": "failed",
+                        "writeback_enabled": False,
+                        "error": "苟家湾（中段8）: 未匹配到本成员计算记录",
+                    },
+                ],
+            }
+        ],
+        "records": [
+            {
+                "identity": "flow1-row83",
+                "flow_section": "1",
+                "name": "苟家湾（前缀段）",
+                "status": "success",
+                "total_head_loss": 0.0167,
+            }
+        ],
+    }
+
+    txt = format_pressure_pipe_calc_batch_text(batch, precision=4)
+
+    assert "成员2: 有压管道 | 苟家湾（中段8） | 失败: 苟家湾（中段8）: 未匹配到本成员计算记录" in txt
+    assert "苟家湾（前缀段）: 至少需要进口和出口两行" not in txt
+
+
+def test_batch_report_keeps_failed_member_reason_on_current_member_name():
+    batch = {
+        "last_run_at": "2026-04-13 22:48:35",
+        "chain_summaries": [
+            {
+                "chain_id": "chain-1-1",
+                "flow_section": "1",
+                "display_name": "连续承压链1",
+                "chain_complete": False,
+                "chain_status": "incomplete",
+                "total_head_loss": None,
+                "member_count": 2,
+                "success_count": 1,
+                "failed_count": 1,
+                "member_results": [
+                    {
+                        "display_name": "苟家湾（前缀段）",
+                        "structure_type": "有压管道",
+                        "status": "success",
+                        "writeback_enabled": True,
+                        "total_head_loss": 0.0167,
+                    },
+                    {
+                        "display_name": "苟家湾（中段8）",
+                        "structure_type": "有压管道",
+                        "status": "failed",
+                        "writeback_enabled": False,
+                        "error": "苟家湾（中段8）: 至少需要进口和出口两行, 未识别到出口行（进出口标识='出'）",
+                    },
+                ],
+            }
+        ],
+        "records": [
+            {
+                "identity": "flow1-row83",
+                "flow_section": "1",
+                "name": "苟家湾（前缀段）",
+                "status": "success",
+                "total_head_loss": 0.0167,
+            },
+            {
+                "identity": "flow1-row93",
+                "flow_section": "1",
+                "name": "苟家湾（中段8）",
+                "status": "failed",
+                "error": "苟家湾（中段8）: 至少需要进口和出口两行, 未识别到出口行（进出口标识='出'）",
+            },
+        ],
+    }
+
+    txt = format_pressure_pipe_calc_batch_text(batch, precision=4)
+
+    assert "成员2: 有压管道 | 苟家湾（中段8） | 失败: 苟家湾（中段8）: 至少需要进口和出口两行, 未识别到出口行（进出口标识='出'）" in txt
+    assert "成员2: 有压管道 | 苟家湾（中段8） | 失败: 苟家湾（前缀段）: 至少需要进口和出口两行" not in txt
+
+
 def test_batch_report_marks_tunnel_bottom_line_as_hydraulic_display_only():
     batch = {
         "last_run_at": "2026-04-10 09:12:00",

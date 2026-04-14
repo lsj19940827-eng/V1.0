@@ -185,7 +185,7 @@ def _load_panel_class():
     saved_modules = {name: sys.modules.get(name) for name in patched_names}
     try:
         _install_panel_import_stubs()
-        panel_path = next(Path(".").glob("**/water_profile/panel.py")).resolve()
+        panel_path = Path("app_渠系计算前端/water_profile/panel.py").resolve()
         spec = importlib.util.spec_from_file_location("wp_panel_chain_apply_test", panel_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -1515,3 +1515,136 @@ def test_build_pressure_pipe_chain_summary_hides_total_for_incomplete_chain():
     assert summary["failed_count"] == 1
     assert summary["member_results"][0]["display_name"] == "苟家湾（起点锚点）"
     assert summary["member_results"][2]["error"] == "缺少有效纵断面"
+
+
+def test_is_pressure_pipe_row_segment_group_accepts_named_row_segment():
+    WaterProfilePanel = _load_panel_class()
+
+    assert WaterProfilePanel._is_pressure_pipe_row_segment_group(
+        SimpleNamespace(group_mode="named_row_segment")
+    ) is True
+
+
+def test_named_row_segment_failure_error_header_uses_current_chain_member_name():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._pressure_pipe_calc_longitudinal_nodes_dict = {}
+    panel._pressure_pipe_calc_route_profile_segments_by_key = {}
+    panel._resolve_pressure_pipe_group_longitudinal_nodes = lambda *args, **kwargs: ([], [], "")
+    panel._calculate_unnamed_pressure_pipe_group_result = lambda *args, **kwargs: {
+        "identity": "flow1-row93",
+        "storage_key": "flow1-row93",
+        "display_name": "苟家湾（前缀段）",
+        "flow_section": "1",
+        "name": "苟家湾（前缀段）",
+        "group_mode": "named_row_segment",
+        "status": "failed",
+        "writeback_enabled": False,
+        "error": "苟家湾（前缀段）: 至少需要进口和出口两行, 未识别到出口行（进出口标识='出'）",
+    }
+
+    member = SimpleNamespace(
+        identity="flow1-row93",
+        storage_key="flow1-row93",
+        display_name="苟家湾（中段8）",
+        flow_section="1",
+        structure_type="有压管道",
+        member_role="regular_segment",
+        target_row_index=92,
+        upstream_row_index=91,
+        group=SimpleNamespace(group_mode="named_row_segment"),
+        is_anchor_member=False,
+        should_generate_row_loss=True,
+    )
+
+    record = WaterProfilePanel._calculate_pressure_chain_single_row_member_result(
+        panel,
+        member,
+        [],
+        SimpleNamespace(),
+    )
+
+    assert record["status"] == "failed"
+    assert record["display_name"] == "苟家湾（中段8）"
+    assert record["name"] == "苟家湾（中段8）"
+    assert record["error"] == "苟家湾（中段8）: 至少需要进口和出口两行, 未识别到出口行（进出口标识='出'）"
+    assert "苟家湾（前缀段）" not in record["error"]
+
+
+def test_build_pressure_pipe_chain_summary_keeps_anchor_success_when_record_missing():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._get_pressure_chain_member_identity = WaterProfilePanel._get_pressure_chain_member_identity
+    panel._is_pressure_chain_anchor_member = WaterProfilePanel._is_pressure_chain_anchor_member
+
+    descriptor = {
+        "chain_id": "chain1-r1-1",
+        "flow_section": "1",
+        "display_name": "连续承压链1",
+        "members": [
+            SimpleNamespace(
+                identity="flow1-row1",
+                display_name="苟家湾（起点锚点）",
+                structure_type="有压管道",
+                is_anchor_member=True,
+                should_generate_row_loss=False,
+            ),
+        ],
+    }
+
+    summary = WaterProfilePanel._build_pressure_pipe_chain_summary(panel, descriptor, {})
+
+    assert summary["chain_complete"] is True
+    assert summary["success_count"] == 1
+    assert summary["failed_count"] == 0
+    assert summary["member_results"][0]["status"] == "success"
+    assert summary["member_results"][0]["writeback_enabled"] is False
+    assert summary["member_results"][0]["note"] == "链起点锚点，本行不写回"
+
+
+def test_build_pressure_pipe_chain_summary_marks_missing_member_record_with_own_diagnostic():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._get_pressure_chain_member_identity = WaterProfilePanel._get_pressure_chain_member_identity
+    panel._is_pressure_chain_anchor_member = WaterProfilePanel._is_pressure_chain_anchor_member
+
+    descriptor = {
+        "chain_id": "chain1-r83-95",
+        "flow_section": "1",
+        "display_name": "连续承压链1",
+        "members": [
+            SimpleNamespace(
+                identity="flow1-row83",
+                display_name="苟家湾（前缀段）",
+                structure_type="有压管道",
+                member_role="prefix_segment",
+                is_anchor_member=False,
+                should_generate_row_loss=True,
+            ),
+            SimpleNamespace(
+                identity="flow1-row93",
+                display_name="苟家湾（中段8）",
+                structure_type="有压管道",
+                member_role="regular_segment",
+                is_anchor_member=False,
+                should_generate_row_loss=True,
+            ),
+        ],
+    }
+    record_map = {
+        "flow1-row83": {
+            "identity": "flow1-row83",
+            "status": "success",
+            "writeback_enabled": True,
+            "total_head_loss": 0.0167,
+        }
+    }
+
+    summary = WaterProfilePanel._build_pressure_pipe_chain_summary(panel, descriptor, record_map)
+
+    assert summary["chain_complete"] is False
+    assert summary["success_count"] == 1
+    assert summary["failed_count"] == 1
+    assert summary["member_results"][1]["status"] == "failed"
+    assert summary["member_results"][1]["error"] == "苟家湾（中段8）: 未匹配到本成员计算记录"
+    assert "前缀段" not in summary["member_results"][1]["error"]

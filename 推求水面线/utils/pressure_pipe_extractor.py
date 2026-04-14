@@ -720,29 +720,36 @@ class PressurePipeDataExtractor:
         if chain is None:
             return False
         members = list(getattr(chain, "members", []) or [])
+        if not members:
+            return False
+
         logical_unit_counts: Dict[str, int] = {}
         for member in members:
-            unit_key = ""
             if bool(getattr(member, "split_from_named_group", False)):
+                logical_key = ""
                 for candidate in (
                     getattr(member, "parent_group_identity", ""),
                     getattr(member, "parent_group_storage_key", ""),
+                    getattr(member, "identity", ""),
+                    getattr(member, "storage_key", ""),
                 ):
                     candidate_text = str(candidate or "").strip()
                     if candidate_text:
-                        unit_key = candidate_text
+                        logical_key = candidate_text
                         break
-            if not unit_key:
+            else:
+                logical_key = ""
                 for candidate in (
                     getattr(member, "identity", ""),
                     getattr(member, "storage_key", ""),
                 ):
                     candidate_text = str(candidate or "").strip()
                     if candidate_text:
-                        unit_key = candidate_text
+                        logical_key = candidate_text
                         break
-            if unit_key:
-                logical_unit_counts[unit_key] = logical_unit_counts.get(unit_key, 0) + 1
+            if not logical_key:
+                continue
+            logical_unit_counts[logical_key] = logical_unit_counts.get(logical_key, 0) + 1
 
         if len(logical_unit_counts) >= 2:
             return True
@@ -1390,7 +1397,10 @@ class PressurePipeDataExtractor:
                         getattr(member, "prefix_end_row_index", -1)
                     ),
                 }
-                for key in [identity, storage_key, *identity_aliases]:
+                metadata_keys = [identity, storage_key]
+                if not bool(getattr(member, "split_from_named_group", False)):
+                    metadata_keys.extend(identity_aliases)
+                for key in metadata_keys:
                     if key:
                         metadata_map[key] = dict(metadata)
         return metadata_map
@@ -1735,6 +1745,7 @@ class PressurePipeDataExtractor:
     def _build_named_tail_row_segment_group(
         nodes: List[ChannelNode],
         parent_group: PressurePipeGroup,
+        parent_member: Optional[PressurePipeChainMember],
         target_row_index: int,
         upstream_row_index: int,
         settings=None,
@@ -1747,7 +1758,7 @@ class PressurePipeDataExtractor:
         upstream_node = nodes[upstream_row_index] if 0 <= upstream_row_index < len(nodes) else None
         section_params = getattr(target_node, "section_params", {}) or {}
         display_name = str(
-            getattr(parent_group, "display_name", "")
+            getattr(parent_member, "base_display_name", "")
             or getattr(parent_group, "name", "")
             or getattr(target_node, "name", "")
             or "未命名承压段"
@@ -1844,6 +1855,7 @@ class PressurePipeDataExtractor:
         segment_group = PressurePipeDataExtractor._build_named_tail_row_segment_group(
             nodes,
             parent_group,
+            parent_member,
             row_index,
             upstream_index,
             settings=settings,
@@ -2465,7 +2477,8 @@ class PressurePipeDataExtractor:
             getattr(member, "prefix_end_row_index", -1)
         )
         display_name = str(getattr(member, "display_name", "") or "").strip()
-        if display_name:
+        group_mode = str(getattr(group, "group_mode", "") or "").strip()
+        if display_name and group_mode not in {"named_row_segment", "unnamed_row_segment"}:
             group.display_name = display_name
         if group.target_row_index < 0 and group.prefix_target_row_index >= 0:
             group.target_row_index = group.prefix_target_row_index
@@ -2491,8 +2504,13 @@ class PressurePipeDataExtractor:
                 if candidate_text and candidate_text not in aliases:
                     aliases.append(candidate_text)
             member.identity_aliases = aliases
-            new_identity = PressurePipeDataExtractor._build_pressure_pipe_row_identity_from_flow_section(
-                getattr(member, "flow_section", ""),
+            first_row_node = None
+            group = getattr(member, "group", None)
+            rows = list(getattr(group, "rows", []) or []) if group is not None else []
+            if rows:
+                first_row_node = rows[0]
+            new_identity = PressurePipeDataExtractor._build_pressure_pipe_row_identity(
+                first_row_node,
                 start_row_index,
             )
             member.identity = new_identity
