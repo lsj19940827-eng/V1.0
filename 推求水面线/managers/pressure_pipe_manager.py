@@ -562,6 +562,22 @@ class PressurePipeManager:
         data = self._as_dict(segments.get(identity, {}))
         pipe_data = self._as_dict(self._config.get("pipes", {}).get(identity, {}))
         return self._build_pressure_pipe_config_from_sources(identity, pipe_data, data)
+
+    def get_route_config(self, route_key: str) -> Optional[Dict[str, Any]]:
+        """按整线键读取整线级缓存，供 xx 管配置窗重开时恢复纵断面。"""
+        route_key = str(route_key or "").strip()
+        if not route_key:
+            return None
+        route_bucket = self._as_dict(self._config.get("routes", {}).get(route_key, {}))
+        if not route_bucket:
+            return None
+        return {
+            "route_key": route_key,
+            "display_name": str(route_bucket.get("display_name", "") or route_key).strip(),
+            "longitudinal_nodes": copy.deepcopy(route_bucket.get("longitudinal_nodes", []) or []),
+            "profile_segments": copy.deepcopy(route_bucket.get("profile_segments", []) or []),
+            "profile_state": str(route_bucket.get("profile_state", "") or "").strip(),
+        }
     
     def set_pipe_config(self, pipe_name: str, config: PressurePipeConfig):
         """
@@ -725,18 +741,28 @@ class PressurePipeManager:
             or self._config.get("routes", {}).get(route_key, {}).get("display_name", "")
             or ""
         ).strip()
-        long_nodes_payload = longitudinal_nodes or []
+        has_longitudinal_payload = longitudinal_nodes is not None
+        long_nodes_payload = None if longitudinal_nodes is None else list(longitudinal_nodes or [])
         profile_segments_payload = None if profile_segments is None else list(profile_segments)
         if route_key:
             route_bucket = self._config["routes"].setdefault(route_key, {})
             route_bucket["display_name"] = route_display_name or route_bucket.get("display_name", "")
-            route_bucket["longitudinal_nodes"] = long_nodes_payload
+            if has_longitudinal_payload:
+                route_bucket["longitudinal_nodes"] = long_nodes_payload
             if profile_segments_payload is not None:
                 route_bucket["profile_segments"] = profile_segments_payload
-            pipe_longitudinal_nodes = []
+            pipe_longitudinal_nodes = (
+                []
+                if has_longitudinal_payload
+                else list(existing_row.get("longitudinal_nodes", []) or [])
+            )
             pipe_profile_segments = []
         else:
-            pipe_longitudinal_nodes = long_nodes_payload
+            pipe_longitudinal_nodes = (
+                long_nodes_payload
+                if has_longitudinal_payload
+                else list(existing_row.get("longitudinal_nodes", []) or [])
+            )
             pipe_profile_segments = (
                 profile_segments_payload
                 if profile_segments_payload is not None
@@ -769,7 +795,7 @@ class PressurePipeManager:
                 "computed_from_profile_source": data_mode or self._config["segments"][pipe_name].get("computed_from_profile_source", ""),
                 "calculated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
-            if longitudinal_nodes is not None:
+            if has_longitudinal_payload:
                 self._config["segments"][pipe_name]["longitudinal_nodes"] = list(longitudinal_nodes or [])
         
         self.save_config()
@@ -931,6 +957,11 @@ class PressurePipeManager:
                 route_profile_segments = copy.deepcopy(existing_route_bucket.get("profile_segments", []) or [])
             else:
                 route_profile_segments = copy.deepcopy(route_profile_segments or [])
+            route_profile_payload = route_profiles.get(route_key, None) if route_key in route_profiles else None
+            if route_key in route_profiles and route_profile_payload is not None:
+                route_longitudinal_nodes = copy.deepcopy(route_profile_payload or [])
+            else:
+                route_longitudinal_nodes = copy.deepcopy(existing_route_bucket.get("longitudinal_nodes", []) or [])
             self._config["routes"][route_key] = {
                 "display_name": str(payload.get("route_display_name", "") or route_key).strip(),
                 "channel_level": payload.get("channel_level", ""),
@@ -941,7 +972,7 @@ class PressurePipeManager:
                 "entered_pressurized_at_row": payload.get("entered_pressurized_at_row", -1),
                 "profile_state": str(payload.get("profile_state", "") or "").strip(),
                 "segment_identities": list(payload.get("segment_identities", []) or []),
-                "longitudinal_nodes": list(route_profiles.get(route_key, []) or []),
+                "longitudinal_nodes": route_longitudinal_nodes,
                 "profile_segments": route_profile_segments,
             }
 
@@ -1048,6 +1079,15 @@ class PressurePipeManager:
                 existing_segment_bucket.get("tunnel_section_params", {}),
                 route_profile_segment.get("tunnel_section_params", {}),
             )
+            segment_longitudinal_nodes = payload.get("longitudinal_nodes", None)
+            if segment_longitudinal_nodes:
+                segment_longitudinal_nodes = list(segment_longitudinal_nodes or [])
+            else:
+                segment_longitudinal_nodes = copy.deepcopy(
+                    existing_segment_bucket.get("longitudinal_nodes")
+                    or existing_pipe_bucket.get("longitudinal_nodes")
+                    or []
+                )
             segment_bucket = {
                 "identity": identity,
                 "name": str(
@@ -1080,7 +1120,7 @@ class PressurePipeManager:
                 "note": str(payload.get("note", "") or "").strip(),
                 "computed_from_profile_source": str(payload.get("computed_from_profile_source", "") or "").strip(),
                 "profile_state": str(payload.get("profile_state", "") or "").strip(),
-                "longitudinal_nodes": list(payload.get("longitudinal_nodes", []) or []),
+                "longitudinal_nodes": segment_longitudinal_nodes,
                 "segment_geometry_source": segment_geometry_source,
                 "tunnel_invert_inlet": tunnel_invert_inlet,
                 "tunnel_slope_i": tunnel_slope_i,

@@ -5090,10 +5090,10 @@ def _build_xxpipe_stale_longitudinal_hint_text(missing_targets) -> str:
     preview = _build_xxpipe_missing_target_preview(missing_targets)
     if preview:
         return (
-            "检测到旧纵断面缓存与当前桩号不一致，请清空后重新导入纵断面DXF。\n"
+            "已保留上次导入的纵断面，但当前桩号覆盖还不完整，请继续补导入纵断面DXF。\n"
             f"未覆盖桩号：{preview}"
         )
-    return "检测到旧纵断面缓存与当前桩号不一致，请清空后重新导入纵断面DXF。"
+    return "已保留上次导入的纵断面，但当前桩号覆盖还不完整，请继续补导入纵断面DXF。"
 
 
 def _should_skip_xxpipe_longitudinal_coverage(
@@ -5973,7 +5973,7 @@ def _build_xxpipe_partial_export_notice(xxpipe_profile_data):
         preview = _build_xxpipe_partial_warning_preview(uncovered_stations, "处")
         if preview:
             detail_lines.append(
-                f"已导入纵断面DXF，但以下桩号超出覆盖范围：{preview}。建议先清空后重新导入同一份纵断面DXF。"
+                f"已导入纵断面DXF，但以下桩号超出覆盖范围：{preview}。请继续补导入覆盖不足的纵断面DXF。"
             )
 
     if missing_longitudinal_items and not identity_mismatch_items and not uncovered_stations:
@@ -5987,7 +5987,7 @@ def _build_xxpipe_partial_export_notice(xxpipe_profile_data):
         if missing_longitudinal_items:
             intro += "请到表3有压管道水力计算中导入/补全纵断面轴线DXF。"
         elif uncovered_stations:
-            intro += "如果是覆盖不足，请先清空后重新导入同一份纵断面DXF。"
+            intro += "如果是覆盖不足，请继续补导入覆盖不足的纵断面DXF。"
 
     return intro + ("\n" + "\n".join(detail_lines) if detail_lines else "")
 

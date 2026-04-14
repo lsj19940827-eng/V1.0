@@ -550,6 +550,46 @@ def test_pressure_pipe_calculator_allows_prepared_topology_without_transition_ro
     assert not any("插入渐变段" in rec["content"] for rec in _FakeInfoBar.records)
 
 
+def test_pressure_pipe_calculator_repairs_stale_sync_flags_when_table3_topology_still_valid():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    module.CALCULATOR_AVAILABLE = True
+    module.InfoBar = _FakeInfoBar
+    module.InfoBarPosition = SimpleNamespace(TOP="top")
+    module.QDialog = SimpleNamespace(Accepted=1)
+
+    nodes = _make_pressure_pipe_nodes()
+    nodes.append(
+        SimpleNamespace(
+            is_transition=True,
+            structure_type=SimpleNamespace(value="渐变段"),
+        )
+    )
+    panel = _build_minimal_panel(WaterProfilePanel, nodes)
+    panel._ensure_downstream_ready = WaterProfilePanel._ensure_downstream_ready.__get__(
+        panel,
+        WaterProfilePanel,
+    )
+    panel._section_sync_ready = False
+    panel._transition_topology_prepared = False
+
+    opened = []
+    saved_dialog = _install_pressure_pipe_dialog_stub(opened)
+    _FakeInfoBar.reset()
+    try:
+        WaterProfilePanel._open_pressure_pipe_calculator(panel)
+    finally:
+        if saved_dialog is None:
+            sys.modules.pop("app_渠系计算前端.water_profile.water_profile_dialogs", None)
+        else:
+            sys.modules["app_渠系计算前端.water_profile.water_profile_dialogs"] = saved_dialog
+
+    assert len(opened) == 1
+    assert panel._section_sync_ready is True
+    assert panel._transition_topology_prepared is True
+    assert not any("操作已锁定" in rec["title"] for rec in _FakeInfoBar.records)
+
+
 def test_pressure_pipe_calculator_opens_dialog_for_continuous_xxqu_anonymous_rows():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
@@ -993,7 +1033,7 @@ def test_prepare_pressure_pipe_dialog_context_keeps_noncontinuous_xxqu_in_group_
     assert result["route_import_targets"] == {}
 
 
-def test_pressure_pipe_calculator_clears_route_profile_segments_when_pure_xxpipe_route_recomputed():
+def test_pressure_pipe_calculator_keeps_route_profile_segments_when_pure_xxpipe_route_recomputed():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
     module.CALCULATOR_AVAILABLE = True
@@ -1174,7 +1214,7 @@ def test_pressure_pipe_calculator_clears_route_profile_segments_when_pure_xxpipe
             sys.modules["utils.pressure_pipe_common"] = saved_pressure_common
 
     assert panel._pressure_pipe_manager.calls
-    assert panel._pressure_pipe_manager.calls[0]["profile_segments"] == []
+    assert panel._pressure_pipe_manager.calls[0]["profile_segments"] is None
 
 
 def test_build_pressure_pipe_route_profile_segments_uses_group_identity_without_typeerror():

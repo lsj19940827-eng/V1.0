@@ -1434,6 +1434,141 @@ def test_apply_pressure_pipe_results_applies_chain_member_outside_pipe_groups():
     assert getattr(panel, "_silent_recalc_called", False) is True
 
 
+def test_apply_pressure_pipe_results_clears_stale_failed_row_member_state():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._pressure_pipe_calc_done = {"flow2-row4": True}
+    panel.node_table = SimpleNamespace()
+
+    upstream_node = SimpleNamespace(
+        section_params={},
+        pressure_pipe_window_override={},
+        pressure_pipe_named_group_result={},
+        head_loss_friction=0.0,
+        head_loss_bend=0.0,
+        head_loss_local=0.0,
+        head_loss_siphon=0.0,
+        external_head_loss=None,
+        head_loss_total=0.0,
+    )
+    target_node = SimpleNamespace(
+        section_params={
+            "pressure_pipe_window_override": {
+                "enabled": True,
+                "identity": "flow2-row4",
+                "storage_key": "flow2-row4",
+                "display_name": "半兽人",
+                "group_mode": "chain_tunnel_member",
+                "target_row_index": 1,
+                "upstream_row_index": 0,
+                "total_head_loss": 0.66,
+            },
+            "pressure_pipe_named_group_result": {
+                "identity": "old-group",
+                "storage_key": "old-group",
+                "display_name": "旧整组结果",
+                "total_head_loss": 1.28,
+            },
+        },
+        pressure_pipe_window_override={
+            "enabled": True,
+            "identity": "flow2-row4",
+            "storage_key": "flow2-row4",
+            "display_name": "半兽人",
+            "group_mode": "chain_tunnel_member",
+            "target_row_index": 1,
+            "upstream_row_index": 0,
+            "total_head_loss": 0.66,
+        },
+        pressure_pipe_named_group_result={
+            "identity": "old-group",
+            "storage_key": "old-group",
+            "display_name": "旧整组结果",
+            "total_head_loss": 1.28,
+        },
+        head_loss_friction=0.21,
+        head_loss_bend=0.03,
+        head_loss_local=0.05,
+        head_loss_siphon=0.66,
+        external_head_loss=0.66,
+        head_loss_total=0.95,
+        head_loss_reserve=0.0,
+        head_loss_gate=0.0,
+        _pressure_pipe_display_loss=0.66,
+    )
+    member = SimpleNamespace(
+        identity="flow2-row4",
+        display_name="半兽人",
+        group_mode="chain_tunnel_member",
+        target_row_index=1,
+        upstream_row_index=0,
+    )
+
+    class _Manager:
+        def __init__(self):
+            self.removed = []
+
+        def remove_pipe(self, pipe_name):
+            self.removed.append(pipe_name)
+
+    panel._pressure_pipe_manager = _Manager()
+    panel._build_settings = lambda: SimpleNamespace(get_station_prefix=lambda: "")
+    panel._build_nodes_from_table = lambda: [upstream_node, target_node]
+    panel._extract_pressure_pipe_dialog_groups = lambda nodes, settings=None: []
+    panel._extract_pressure_pipe_dialog_chains = lambda nodes, settings=None: [
+        SimpleNamespace(members=[member])
+    ]
+    panel._build_pressure_pipe_chain_descriptors = lambda chains: [{"members": [member]}]
+    panel._get_pressure_chain_member_identity = lambda group: getattr(group, "identity", "")
+    panel._apply_pressure_pipe_member_result = (
+        WaterProfilePanel._apply_pressure_pipe_member_result.__get__(panel, WaterProfilePanel)
+    )
+    panel._set_pressure_pipe_window_override = (
+        WaterProfilePanel._set_pressure_pipe_window_override.__get__(panel, WaterProfilePanel)
+    )
+    panel._set_pressure_pipe_named_group_result = (
+        WaterProfilePanel._set_pressure_pipe_named_group_result.__get__(panel, WaterProfilePanel)
+    )
+    panel._build_pressure_pipe_window_override_payload = (
+        WaterProfilePanel._build_pressure_pipe_window_override_payload.__get__(panel, WaterProfilePanel)
+    )
+    panel._append_loss_undo_snapshot = lambda snapshot: None
+    panel._snapshot_editable_cols = lambda: {}
+    panel._update_table_from_nodes_full = lambda nodes, prefix: None
+    panel._recalculate_silent = lambda: None
+    panel._info_parent = lambda: None
+    panel._ensure_pressure_pipe_row_identity = lambda node, idx: None
+    panel.nodes = []
+
+    batch_data = {
+        "records": [
+            {
+                "identity": "flow2-row4",
+                "storage_key": "flow2-row4",
+                "display_name": "半兽人",
+                "status": "failed",
+                "writeback_enabled": False,
+                "group_mode": "chain_tunnel_member",
+                "target_row_index": 1,
+                "upstream_row_index": 0,
+                "error": "纵断面缺失",
+            }
+        ],
+        "summary": {"total": 1, "success": 0, "failed": 1},
+    }
+
+    WaterProfilePanel._apply_pressure_pipe_results(panel, {}, batch_data)
+
+    assert target_node.pressure_pipe_window_override == {}
+    assert target_node.section_params.get("pressure_pipe_window_override", {}) == {}
+    assert target_node.pressure_pipe_named_group_result == {}
+    assert target_node.section_params.get("pressure_pipe_named_group_result", {}) == {}
+    assert getattr(target_node, "_pressure_pipe_display_loss", None) == 0.0
+    assert target_node.external_head_loss is None
+    assert panel._pressure_pipe_calc_done.get("flow2-row4") in (None, False)
+    assert panel._pressure_pipe_manager.removed == ["flow2-row4"]
+
+
 def test_build_pressure_pipe_chain_descriptors_uses_global_chain_name_for_cross_section_chain():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

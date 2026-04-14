@@ -962,6 +962,7 @@ class WaterProfilePanel(QWidget):
         self._pressure_pipe_calc_done = {}
         self._pressure_pipe_calc_records = empty_pressure_pipe_calc_records()
         self._pressure_pipe_last_run_at = ""
+        self._pressure_pipe_summary_dialog = None
         self._pressure_turn_radius_fallback_groups = set()
         # 建筑物长度统计缓存
         self._last_building_lengths = []
@@ -6640,6 +6641,7 @@ class WaterProfilePanel(QWidget):
         return siphon_count, pressure_count
 
     def _clear_table3_related_configs(self):
+        self._close_pressure_pipe_summary_dialog(force=True)
         cleared_siphon = 0
         cleared_pressure = 0
         manager = getattr(self, "_siphon_manager", None)
@@ -13133,6 +13135,190 @@ class WaterProfilePanel(QWidget):
 
         """
 
+    def _repair_pressure_pipe_open_state_from_table3(self, nodes=None) -> bool:
+        """按当前表3现场状态修正有压管道打开前的旧门禁标记。"""
+        source_nodes = nodes if isinstance(nodes, list) else []
+        if not source_nodes:
+            build_nodes = getattr(self, "_build_nodes_from_table", None)
+            if callable(build_nodes):
+                try:
+                    source_nodes = build_nodes() or []
+                except Exception:
+                    source_nodes = []
+        if not source_nodes:
+            return False
+
+        has_pressure_pipe = any(
+            self._is_pressure_pipe_like_node(node)
+            for node in source_nodes
+            if getattr(node, "structure_type", None)
+        )
+        if not has_pressure_pipe:
+            return False
+
+        has_transition_rows = any(getattr(node, "is_transition", False) for node in source_nodes)
+        repaired = False
+
+        if has_transition_rows and not bool(getattr(self, "_transition_topology_prepared", False)):
+            self._transition_topology_prepared = True
+            repaired = True
+
+        topology_ready = has_transition_rows or bool(getattr(self, "_transition_topology_prepared", False))
+        if topology_ready and not bool(getattr(self, "_section_sync_ready", False)):
+            self._section_sync_ready = True
+            repaired = True
+
+        if repaired:
+            refresh_controls = getattr(self, "_refresh_pressure_pipe_controls", None)
+            if callable(refresh_controls):
+                try:
+                    refresh_controls()
+                except Exception:
+                    pass
+        return repaired
+
+    def _clear_pressure_pipe_summary_dialog_ref(self, dialog=None):
+        """在汇总窗销毁后清空面板侧引用。"""
+        current = getattr(self, "_pressure_pipe_summary_dialog", None)
+        if dialog is None or current is dialog:
+            self._pressure_pipe_summary_dialog = None
+
+    def _close_pressure_pipe_summary_dialog(self, force: bool = False):
+        """关闭现有的有压管道结果汇总窗，并回收引用。"""
+        dialog = getattr(self, "_pressure_pipe_summary_dialog", None)
+        if dialog is None:
+            return
+        if force and hasattr(dialog, "_confirmed"):
+            dialog._confirmed = True
+        try:
+            dialog.close()
+        except Exception:
+            pass
+        self._clear_pressure_pipe_summary_dialog_ref(dialog)
+
+    def _build_pressure_pipe_apply_target_map(self, cur_groups, chain_descriptors) -> dict:
+        """建立 identity 到当前表3目标节点的映射，供本轮结果清理和写回复用。"""
+        target_map = {}
+
+        for descriptor in chain_descriptors or []:
+            for member in descriptor.get("members", []) or []:
+                identity = self._get_pressure_chain_member_identity(member)
+                if not identity or identity in target_map:
+                    continue
+                target_map[identity] = {
+                    "target_row_index": self._coerce_pressure_pipe_row_index(
+                        getattr(member, "target_row_index", -1)
+                    ),
+                    "storage_key": str(getattr(member, "storage_key", "") or identity).strip() or identity,
+                    "group_mode": str(getattr(member, "group_mode", "") or "").strip(),
+                }
+
+        for group in cur_groups or []:
+            identity = self._build_pressure_pipe_group_identity(group)
+            if not identity or identity in target_map:
+                continue
+            if self._is_pressure_pipe_row_segment_group(group):
+                target_row_index = self._coerce_pressure_pipe_row_index(
+                    getattr(group, "target_row_index", -1)
+                )
+            else:
+                target_row_index = self._coerce_pressure_pipe_row_index(
+                    getattr(group, "outlet_row_index", -1)
+                )
+            target_map[identity] = {
+                "target_row_index": target_row_index,
+                "storage_key": self._get_pressure_pipe_group_storage_key(group),
+                "group_mode": str(getattr(group, "group_mode", "") or "").strip(),
+            }
+
+        return target_map
+
+    def _clear_pressure_pipe_member_result(
+        self,
+        node,
+        *,
+        identity: str = "",
+        storage_keys=None,
+        clear_hydraulic_components: bool = False,
+    ) -> bool:
+        """清理当前节点上一轮残留的有压管道结果。"""
+        changed = False
+
+        if node is not None:
+            if self._get_pressure_pipe_window_override(node):
+                changed = True
+            if self._get_pressure_pipe_named_group_result(node):
+                changed = True
+
+            self._set_pressure_pipe_window_override(node, None)
+            self._set_pressure_pipe_named_group_result(node, None)
+
+            display_loss = getattr(node, "_pressure_pipe_display_loss", 0.0)
+            try:
+                display_loss = float(display_loss or 0.0)
+            except (TypeError, ValueError):
+                display_loss = 0.0
+            if abs(display_loss) > 1e-9:
+                changed = True
+            setattr(node, "_pressure_pipe_display_loss", 0.0)
+
+            if getattr(node, "external_head_loss", None) is not None:
+                changed = True
+            node.external_head_loss = None
+
+            siphon_loss = float(getattr(node, "head_loss_siphon", 0.0) or 0.0)
+            if abs(siphon_loss) > 1e-9:
+                changed = True
+            node.head_loss_siphon = 0.0
+
+            if clear_hydraulic_components:
+                for attr_name in ("head_loss_friction", "head_loss_bend", "head_loss_local"):
+                    current_value = float(getattr(node, attr_name, 0.0) or 0.0)
+                    if abs(current_value) > 1e-9:
+                        changed = True
+                    setattr(node, attr_name, 0.0)
+                for detail_attr in ("friction_calc_details", "bend_calc_details", "transition_calc_details"):
+                    if getattr(node, detail_attr, None):
+                        changed = True
+                    setattr(node, detail_attr, {})
+
+            total_loss = (
+                float(getattr(node, "head_loss_friction", 0.0) or 0.0)
+                + float(getattr(node, "head_loss_bend", 0.0) or 0.0)
+                + float(getattr(node, "head_loss_local", 0.0) or 0.0)
+                + float(getattr(node, "head_loss_reserve", 0.0) or 0.0)
+                + float(getattr(node, "head_loss_gate", 0.0) or 0.0)
+            )
+            current_total = float(getattr(node, "head_loss_total", 0.0) or 0.0)
+            if abs(current_total - total_loss) > 1e-9:
+                changed = True
+            node.head_loss_total = total_loss
+
+        cleanup_keys = set()
+        if identity:
+            cleanup_keys.add(str(identity).strip())
+        for key in list(storage_keys or []):
+            text = str(key or "").strip()
+            if text:
+                cleanup_keys.add(text)
+
+        for key in cleanup_keys:
+            if key in self._pressure_pipe_calc_done:
+                self._pressure_pipe_calc_done.pop(key, None)
+                changed = True
+
+        manager = getattr(self, "_pressure_pipe_manager", None)
+        remove_fn = getattr(manager, "remove_pipe", None)
+        if callable(remove_fn):
+            for key in cleanup_keys:
+                try:
+                    remove_fn(key)
+                    changed = True
+                except Exception:
+                    continue
+
+        return changed
+
     def _apply_pressure_pipe_results(self, results_by_identity: dict, batch_data: dict):
         """将有压管道计算结果回写到表格"""
         try:
@@ -13142,13 +13328,40 @@ class WaterProfilePanel(QWidget):
             cur_chains = self._extract_pressure_pipe_dialog_chains(cur_nodes, settings=settings)
             chain_descriptors = self._build_pressure_pipe_chain_descriptors(cur_chains)
             batch_records = normalize_pressure_pipe_calc_records(batch_data).get("records", [])
+            target_map = self._build_pressure_pipe_apply_target_map(cur_groups, chain_descriptors)
             record_map = {
                 str(record.get("identity", "") or "").strip(): record
                 for record in batch_records
                 if str(record.get("identity", "") or "").strip()
             }
             imported_count = 0
+            cleared_count = 0
             handled_identities = set()
+            row_override_modes = self._get_pressure_pipe_row_override_group_modes()
+
+            for record in batch_records:
+                identity = str(record.get("identity", "") or "").strip()
+                if not identity:
+                    continue
+                target_meta = target_map.get(identity, {})
+                target_idx = self._coerce_pressure_pipe_row_index(
+                    record.get("target_row_index", target_meta.get("target_row_index", -1))
+                )
+                target_node = cur_nodes[target_idx] if 0 <= target_idx < len(cur_nodes) else None
+                group_mode = str(
+                    record.get("group_mode", "") or target_meta.get("group_mode", "") or ""
+                ).strip()
+                storage_keys = [
+                    record.get("storage_key", ""),
+                    target_meta.get("storage_key", ""),
+                ]
+                if self._clear_pressure_pipe_member_result(
+                    target_node,
+                    identity=identity,
+                    storage_keys=storage_keys,
+                    clear_hydraulic_components=group_mode in row_override_modes,
+                ):
+                    cleared_count += 1
 
             for descriptor in chain_descriptors:
                 for member in descriptor.get("members", []) or []:
@@ -13191,7 +13404,7 @@ class WaterProfilePanel(QWidget):
                 if self._apply_pressure_pipe_member_result(cur_nodes[target_idx], group, record):
                     imported_count += 1
 
-            if imported_count > 0:
+            if imported_count > 0 or cleared_count > 0:
                 self._append_loss_undo_snapshot(self._snapshot_editable_cols())
                 _s = self._build_settings()
                 _pfx = _s.get_station_prefix() if _s else ""
@@ -13246,12 +13459,22 @@ class WaterProfilePanel(QWidget):
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
 
+        self._close_pressure_pipe_summary_dialog(force=True)
         dlg = QWidget()
         dlg.setWindowTitle("有压管道计算结果汇总（请确认是否应用）")
         dlg.setMinimumWidth(980)
         dlg.resize(1120, 620)
         dlg.setStyleSheet(DIALOG_STYLE)
         dlg.setWindowFlags(Qt.Window)
+        delete_on_close_attr = getattr(Qt, "WA_DeleteOnClose", None)
+        if delete_on_close_attr is None and hasattr(Qt, "WidgetAttribute"):
+            delete_on_close_attr = getattr(Qt.WidgetAttribute, "WA_DeleteOnClose", None)
+        if delete_on_close_attr is not None:
+            dlg.setAttribute(delete_on_close_attr, True)
+        self._pressure_pipe_summary_dialog = dlg
+        dlg.destroyed.connect(
+            lambda *_args, _dlg=dlg: self._clear_pressure_pipe_summary_dialog_ref(_dlg)
+        )
 
         from PySide6.QtGui import QIcon
         _res_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources")
@@ -13528,6 +13751,9 @@ class WaterProfilePanel(QWidget):
     def _open_pressure_pipe_calculator(self):
         """打开有压管道水力计算窗口"""
         debug_print("[DEBUG] _open_pressure_pipe_calculator 被调用")
+        nodes = self._build_nodes_from_table()
+        self._repair_pressure_pipe_open_state_from_table3(nodes)
+        self._close_pressure_pipe_summary_dialog(force=True)
         if not self._ensure_downstream_ready("有压管道水力计算"):
             return
         if not CALCULATOR_AVAILABLE:
@@ -13536,7 +13762,6 @@ class WaterProfilePanel(QWidget):
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
 
-        nodes = self._build_nodes_from_table()
         if not nodes:
             debug_print("[DEBUG] nodes 为空，返回")
             InfoBar.info("提示", "表格中没有数据，请先导入断面参数",
@@ -13716,7 +13941,7 @@ class WaterProfilePanel(QWidget):
                     for segment in route_profile_segments
                 )
                 if route_key:
-                    persist_profile_segments = route_profile_segments if has_generated_tunnel_profile else []
+                    persist_profile_segments = route_profile_segments if has_generated_tunnel_profile else None
                 else:
                     persist_profile_segments = None
                 route_long_nodes, pipe_long_nodes, spatial_fallback_reason = (
@@ -13760,6 +13985,7 @@ class WaterProfilePanel(QWidget):
                     records.append(record)
                     if record.get("status") == "success" and record.get("writeback_enabled", True):
                         results_by_identity[identity] = record
+                        route_longitudinal_payload = route_long_nodes if route_long_nodes else None
                         manager.set_result(
                             storage_key,
                             total_head_loss=float(record.get("total_head_loss", 0.0) or 0.0),
@@ -13770,7 +13996,7 @@ class WaterProfilePanel(QWidget):
                             pipe_velocity=float(record.get("pipe_velocity", 0.0) or 0.0),
                             plan_total_length=float(record.get("total_length", 0.0) or 0.0),
                             data_mode=str(record.get("data_mode", "") or ""),
-                            longitudinal_nodes=route_long_nodes,
+                            longitudinal_nodes=route_longitudinal_payload,
                             route_key=route_key,
                             route_display_name=route_display_name,
                             profile_segments=persist_profile_segments,
@@ -13940,6 +14166,7 @@ class WaterProfilePanel(QWidget):
                     results_by_identity[identity] = record
 
                 # 持久化计算结果，便于后续追溯
+                route_longitudinal_payload = route_long_nodes if route_long_nodes else None
                 manager.set_result(
                     storage_key,
                     total_head_loss=calc_res.total_head_loss,
@@ -13950,7 +14177,7 @@ class WaterProfilePanel(QWidget):
                     pipe_velocity=calc_res.pipe_velocity,
                     plan_total_length=calc_res.total_length,
                     data_mode=calc_res.data_mode,
-                    longitudinal_nodes=route_long_nodes,
+                    longitudinal_nodes=route_longitudinal_payload,
                     route_key=route_key,
                     route_display_name=route_display_name,
                     profile_segments=persist_profile_segments,
@@ -14013,8 +14240,9 @@ class WaterProfilePanel(QWidget):
                         if str(route.get("route_key", "") or "").strip()
                     }
                     route_profiles = {
-                        route_key: copy.deepcopy((longitudinal_nodes_dict or {}).get(route_key, []) or [])
+                        route_key: copy.deepcopy((longitudinal_nodes_dict or {}).get(route_key))
                         for route_key in route_payloads_by_key
+                        if route_key in (longitudinal_nodes_dict or {})
                     }
                     segment_payloads = self._build_pressure_segment_persist_payloads(
                         pressure_routes,

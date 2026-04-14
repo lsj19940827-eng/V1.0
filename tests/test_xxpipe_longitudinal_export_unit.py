@@ -1840,7 +1840,7 @@ def test_xxpipe_export_entries_use_filtered_route_nodes_in_xxqu_route_mode(
         assert captured["valid_nodes"] == route_nodes
 
 
-def test_build_xxpipe_partial_export_notice_prompts_clear_then_reimport_for_uncovered_cache():
+def test_build_xxpipe_partial_export_notice_prompts_continue_import_for_uncovered_cache():
     notice = cad_tools._build_xxpipe_partial_export_notice(
         {
             "warnings": {
@@ -1853,7 +1853,7 @@ def test_build_xxpipe_partial_export_notice_prompts_clear_then_reimport_for_unco
         }
     )
 
-    assert "清空后重新导入" in notice
+    assert "继续补导入" in notice
     assert "1::三清庙@1+000.000" in notice
 
 

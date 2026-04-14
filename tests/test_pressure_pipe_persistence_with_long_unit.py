@@ -93,6 +93,56 @@ def test_set_result_persists_route_longitudinal_nodes_under_route_key():
         shutil.rmtree(case_dir, ignore_errors=True)
 
 
+def test_set_result_with_none_route_longitudinal_nodes_preserves_existing_route_cache():
+    manager = PressurePipeManager()
+    long_nodes = [
+        {"chainage": 0.0, "elevation": 100.0, "vertical_curve_radius": 0.0, "turn_type": "NONE", "turn_angle": 0.0},
+        {"chainage": 120.0, "elevation": 95.0, "vertical_curve_radius": 0.0, "turn_type": "NONE", "turn_angle": 0.0},
+    ]
+    manager.from_dict(
+        {
+            "version": "1.0",
+            "last_modified": "",
+            "pipes": {
+                "flow2-row4": {
+                    "name": "流量段2 第4行有压管道",
+                    "route_key": "flow2-route1",
+                    "route_display_name": "流量段2 整线1",
+                    "longitudinal_nodes": [],
+                }
+            },
+            "routes": {
+                "flow2-route1": {
+                    "display_name": "流量段2 整线1",
+                    "longitudinal_nodes": long_nodes,
+                }
+            },
+        }
+    )
+
+    manager.set_result(
+        pipe_name="flow2-row4",
+        total_head_loss=0.66,
+        friction_loss=0.55,
+        total_bend_loss=0.05,
+        inlet_transition_loss=0.03,
+        outlet_transition_loss=0.03,
+        pipe_velocity=1.22,
+        plan_total_length=88.0,
+        data_mode="空间模式（平面+纵断面）",
+        longitudinal_nodes=None,
+        route_key="flow2-route1",
+        route_display_name="流量段2 整线1",
+    )
+
+    raw = manager.to_dict()
+    assert raw["routes"]["flow2-route1"]["longitudinal_nodes"] == long_nodes
+
+    loaded = manager.get_pipe_config("flow2-row4")
+    assert loaded is not None
+    assert loaded.longitudinal_nodes == long_nodes
+
+
 def test_get_pipe_config_reads_route_bucket_when_pipe_row_has_no_own_longitudinal_nodes():
     manager = PressurePipeManager()
     long_nodes = [
@@ -661,6 +711,96 @@ def test_save_pressure_routes_preserves_existing_profile_segments_and_tunnel_fal
     assert loaded.tunnel_section_params == {"D": 2.4}
 
 
+def test_save_pressure_routes_without_route_profile_preserves_existing_route_longitudinal_nodes():
+    manager = PressurePipeManager()
+    route_longitudinal_nodes = [
+        {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+        {"chainage": 60.0, "elevation": 418.8, "turn_type": "NONE"},
+    ]
+    manager.from_dict(
+        {
+            "version": "1.0",
+            "last_modified": "",
+            "pipes": {
+                "flow9-row3": {
+                    "name": "9#隧洞",
+                    "route_key": "flow9-route1",
+                    "route_display_name": "9号整线",
+                    "longitudinal_nodes": [],
+                }
+            },
+            "routes": {
+                "flow9-route1": {
+                    "display_name": "9号整线",
+                    "start_row_index": 10,
+                    "end_row_index": 10,
+                    "longitudinal_nodes": route_longitudinal_nodes,
+                    "profile_segments": [],
+                }
+            },
+            "segments": {
+                "flow9-row3": {
+                    "identity": "flow9-row3",
+                    "route_key": "flow9-route1",
+                    "route_display_name": "9号整线",
+                }
+            },
+        }
+    )
+
+    manager.save_pressure_routes(
+        [
+            {
+                "route_key": "flow9-route1",
+                "route_display_name": "9号整线",
+                "channel_level": "干渠",
+                "start_row_index": 10,
+                "end_row_index": 10,
+                "start_mc": 0.0,
+                "end_mc": 60.0,
+                "entered_pressurized_at_row": 10,
+                "profile_state": "ok",
+                "segment_identities": ["flow9-row3"],
+            }
+        ],
+        route_profiles={},
+        segment_results=[
+            {
+                "identity": "flow9-row3",
+                "route_key": "flow9-route1",
+                "route_display_name": "9号整线",
+                "base_name": "9#隧洞",
+                "member_display_name": "9#隧洞",
+                "dxf_display_name": "9#隧洞",
+                "structure_type": "隧洞",
+                "member_role": "tunnel_segment",
+                "start_row_index": 10,
+                "end_row_index": 10,
+                "target_row_index": 10,
+                "upstream_row_index": 9,
+                "applied_to_row_index": 10,
+                "start_mc": 0.0,
+                "end_mc": 60.0,
+                "status": "success",
+                "friction_loss": 0.12,
+                "bend_loss": 0.0,
+                "local_loss": 0.01,
+                "total_loss": 0.13,
+                "computed_from_profile_source": "route_profile",
+                "longitudinal_nodes": [],
+                "profile_state": "ok",
+            }
+        ],
+    )
+
+    raw = manager.to_dict()
+    assert raw["routes"]["flow9-route1"]["longitudinal_nodes"] == route_longitudinal_nodes
+
+    loaded = manager.get_pipe_config("flow9-row3")
+    assert loaded is not None
+    assert loaded.longitudinal_nodes == route_longitudinal_nodes
+
+
 def test_get_pipe_config_prefers_pipe_bucket_and_falls_back_to_route_and_segment():
     manager = PressurePipeManager()
     pipe_longitudinal_nodes = [
@@ -733,3 +873,51 @@ def test_get_pipe_config_prefers_pipe_bucket_and_falls_back_to_route_and_segment
     assert loaded.tunnel_section_type == "圆形"
     assert loaded.tunnel_section_params == {"D": 2.1}
     assert loaded.segment_geometry_source == "generated_tunnel"
+
+
+def test_get_route_config_returns_route_bucket_after_pipe_entry_removed():
+    manager = PressurePipeManager()
+    route_longitudinal_nodes = [
+        {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+        {"chainage": 60.0, "elevation": 418.8, "turn_type": "NONE"},
+    ]
+    manager.from_dict(
+        {
+            "version": "1.0",
+            "last_modified": "",
+            "pipes": {
+                "flow9-row3": {
+                    "name": "9#隧洞",
+                    "route_key": "flow9-route1",
+                    "route_display_name": "9号整线",
+                    "longitudinal_nodes": [],
+                }
+            },
+            "routes": {
+                "flow9-route1": {
+                    "display_name": "9号整线",
+                    "start_row_index": 10,
+                    "end_row_index": 10,
+                    "longitudinal_nodes": route_longitudinal_nodes,
+                    "profile_segments": [{"segment_identity": "flow9-row3"}],
+                    "profile_state": "ok",
+                }
+            },
+            "segments": {
+                "flow9-row3": {
+                    "identity": "flow9-row3",
+                    "route_key": "flow9-route1",
+                    "route_display_name": "9号整线",
+                }
+            },
+        }
+    )
+
+    manager.remove_pipe("flow9-row3")
+
+    snapshot = manager.get_route_config("flow9-route1")
+    assert snapshot is not None
+    assert snapshot["display_name"] == "9号整线"
+    assert snapshot["profile_state"] == "ok"
+    assert snapshot["longitudinal_nodes"] == route_longitudinal_nodes
+    assert snapshot["profile_segments"] == [{"segment_identity": "flow9-row3"}]
