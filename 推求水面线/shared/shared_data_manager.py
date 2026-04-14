@@ -43,9 +43,14 @@ def normalize_section_type_name(section_type: Any) -> str:
     if text.endswith("(连接段)"):
         text = text[:-5].strip()
     alias_map = {
-        "暗渠": "矩形暗涵",
-        "矩形暗渠": "矩形暗涵",
-        "矩形暗涵": "矩形暗涵",
+        "暗渠": "暗涵-矩形",
+        "矩形暗渠": "暗涵-矩形",
+        "矩形暗涵": "暗涵-矩形",
+        "暗涵": "暗涵-矩形",
+        "暗涵-矩形": "暗涵-矩形",
+        "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
+        "暗涵圆拱直墙型": "暗涵-圆拱直墙型",
+        "暗涵-圆拱直墙型": "暗涵-圆拱直墙型",
         "复式梯形": "明渠-复式梯形",
         "平底圆形": "隧洞-平底圆形",
         "平底圆形隧洞": "隧洞-平底圆形",
@@ -168,6 +173,25 @@ class SectionResult:
                 parts.append(f"B={b_text}")
             if h_total_text:
                 parts.append(f"H={h_total_text}")
+            if parts:
+                return ", ".join(parts)
+            return f"Q={self.Q:.2f}m³/s, V={self.V:.2f}m/s"
+        if self.section_type == "暗涵-圆拱直墙型":
+            parts = []
+            b_text = _format_metric(self.B)
+            h_total_text = _format_metric(self.H_total if self.H_total and self.H_total > 0 else None)
+            theta_deg = None
+            if self.raw_result:
+                theta_deg = self.raw_result.get("theta_deg", None)
+            if b_text:
+                parts.append(f"B={b_text}")
+            if h_total_text:
+                parts.append(f"H={h_total_text}")
+            if theta_deg not in (None, ""):
+                try:
+                    parts.append(f"θ={float(theta_deg):.1f}°")
+                except (TypeError, ValueError):
+                    pass
             if parts:
                 return ", ".join(parts)
             return f"Q={self.Q:.2f}m³/s, V={self.V:.2f}m/s"

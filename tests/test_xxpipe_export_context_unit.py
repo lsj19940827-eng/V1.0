@@ -104,6 +104,23 @@ def test_build_xxpipe_profile_data_rejects_unallowed_structure():
         cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
 
 
+@pytest.mark.parametrize("structure", ["暗涵-矩形", "暗涵-圆拱直墙型"])
+def test_build_xxpipe_profile_data_rejects_culvert_family_from_lower_table(structure):
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure=structure, name="暗涵段", flow_section="1"),
+        _make_node(ip_no=2, mc=50.0, structure=structure, name="暗涵段", flow_section="1"),
+    ]
+    long_map = {
+        "1::暗涵段": [
+            {"chainage": 0.0, "elevation": 100.0, "turn_type": "无"},
+            {"chainage": 50.0, "elevation": 99.0, "turn_type": "无"},
+        ]
+    }
+
+    with pytest.raises(ValueError, match=structure):
+        cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
+
+
 def test_build_xxpipe_profile_data_treats_single_point_longitudinal_nodes_as_missing_axis():
     nodes = [
         _make_node(ip_no=1, mc=0.0, structure="定向钻", name="穿路段", flow_section="1", in_out="进"),

@@ -33,8 +33,9 @@ class StructureType(Enum):
     TUNNEL_HORSESHOE_1 = "隧洞-马蹄形Ⅰ型"
     TUNNEL_HORSESHOE_2 = "隧洞-马蹄形Ⅱ型"
     
-    # 矩形暗涵
-    RECT_CULVERT = "矩形暗涵"
+    # 暗涵类型
+    RECT_CULVERT = "暗涵-矩形"
+    CULVERT_ARCH = "暗涵-圆拱直墙型"
     
     # 分水闸/分水口（单行点状结构，标记流量段分界）
     DIVERSION_GATE = "分水闸"
@@ -114,6 +115,7 @@ class StructureType(Enum):
             cls.PIPE_JACKING,
             cls.AQUEDUCT_U, cls.AQUEDUCT_RECT,
             cls.RECT_CULVERT,
+            cls.CULVERT_ARCH,
             # 兼容旧版本
             cls.TUNNEL, cls.AQUEDUCT
         ]
@@ -177,8 +179,20 @@ class StructureType(Enum):
     @classmethod
     def from_string(cls, value: str) -> 'StructureType':
         """从字符串转换为枚举值"""
+        text = str(value or "").strip()
+        alias_map = {
+            "暗涵-矩形": cls.RECT_CULVERT,
+            "矩形暗涵": cls.RECT_CULVERT,
+            "暗渠": cls.RECT_CULVERT,
+            "矩形暗渠": cls.RECT_CULVERT,
+            "暗涵-圆拱直墙型": cls.CULVERT_ARCH,
+            "圆拱直墙型暗涵": cls.CULVERT_ARCH,
+            "暗涵圆拱直墙型": cls.CULVERT_ARCH,
+        }
+        if text in alias_map:
+            return alias_map[text]
         for item in cls:
-            if item.value == value:
+            if item.value == text:
                 return item
         raise ValueError(f"未知的结构形式: {value}")
 

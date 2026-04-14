@@ -46,8 +46,8 @@ STRUCTURE_CATEGORIES = [
         "name": "暗涵",
         "icon": "📦",
         "color": "#6D4C41",
-        "items": ["矩形暗涵"],
-        "desc": "封闭式矩形输水通道",
+        "items": ["暗涵-矩形", "暗涵-圆拱直墙型"],
+        "desc": "封闭式输水暗涵",
     },
     {
         "name": "闸",

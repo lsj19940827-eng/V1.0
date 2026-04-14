@@ -57,6 +57,22 @@ _RACK_BAR_COLORS = [
     QColor(155,  89, 182),
 ]
 
+_OUTLET_SECTION_TYPE_ALIASES = {
+    "暗涵": "暗涵-矩形",
+    "暗渠": "暗涵-矩形",
+    "矩形暗渠": "暗涵-矩形",
+    "矩形暗涵": "暗涵-矩形",
+    "暗涵-矩形": "暗涵-矩形",
+    "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
+    "暗涵-圆拱直墙型": "暗涵-圆拱直墙型",
+}
+
+
+def normalize_outlet_section_type(section_type: str) -> str:
+    """将出口局部阻力弹窗读取到的断面类型归一成标准口径。"""
+    text = str(section_type or "").strip()
+    return _OUTLET_SECTION_TYPE_ALIASES.get(text, text)
+
 
 def _msg(parent, title, text, level="warning"):
     """统一消息提示"""
@@ -247,9 +263,10 @@ class OutletShapeDialog(QDialog):
 
     _SECTION_CATEGORIES = {
         '明渠-梯形': 'trapezoidal', '明渠-矩形': 'rectangular',
-        '渡槽-矩形': 'rectangular', '矩形暗涵': 'rectangular',
+        '渡槽-矩形': 'rectangular', '暗涵-矩形': 'rectangular',
         '明渠-圆形': 'circular', '隧洞-圆形': 'circular',
         '渡槽-U形': 'u_shape', '隧洞-圆拱直墙型': 'arch_wall',
+        '暗涵-圆拱直墙型': 'arch_wall',
         '隧洞-马蹄形Ⅰ型': 'horseshoe', '隧洞-马蹄形Ⅱ型': 'horseshoe',
     }
 
@@ -263,7 +280,7 @@ class OutletShapeDialog(QDialog):
         self.Q, self.v = Q, v
         self.omega_g = Q / v if v > 0 else 0
         self.downstream_params = downstream_params or {}
-        self._ds_type_str = self.downstream_params.get('type', '') or ''
+        self._ds_type_str = normalize_outlet_section_type(self.downstream_params.get('type', '') or '')
         self._build_ui()
 
     def _build_ui(self):

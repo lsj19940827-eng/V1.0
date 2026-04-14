@@ -212,6 +212,11 @@ TRANSITION_PREPARATION_RELEVANT_COLS = set(range(8)) | set(range(20, 27))
 # 第一行（水位起点）锁定的水头损失列：初始水位是用户输入的定值，不受水头损失影响
 FIRST_ROW_LOCKED_LOSS_COLS = {36, 37, 38}
 PRESSURE_PIPE_LIKE_STRUCTURE_TEXTS = {"有压管道", "定向钻", "顶管"}
+CULVERT_FAMILY_TYPE_KEY = "culvert_family_type"
+ARCH_CULVERT_THETA_ROLE_KEY = "_arch_culvert_theta_deg"
+ARCH_CULVERT_SOURCE_ROLE_KEY = "_arch_culvert_source_allowed"
+RECT_CULVERT_FAMILY_TEXT = "暗涵-矩形"
+ARCH_CULVERT_FAMILY_TEXT = "暗涵-圆拱直墙型"
 
 NODE_ALL_HEADERS = [
     # 基础输入列 (0-7) — 对应Tkinter INPUT_COLUMNS
@@ -256,6 +261,48 @@ TRANSITION_LENGTH_RULE_MODE_OPTIONS = (
     ("固定值", "fixed"),
 )
 COMPOUND_TRAPEZOID_PARAM_KEYS = ("m1", "B1", "m2", "B2", "m3", "h1")
+
+
+def normalize_culvert_family_type_name(structure_type) -> str:
+    """统一暗涵家族子类型名称。"""
+    text = normalize_section_type_name(structure_type)
+    if not text:
+        return ""
+    if "暗涵" not in text and "暗渠" not in text and text != "矩形暗涵":
+        return ""
+    if "圆拱直墙" in text or "圆弧直墙" in text:
+        return ARCH_CULVERT_FAMILY_TEXT
+    return RECT_CULVERT_FAMILY_TEXT
+
+
+def resolve_node_effective_structure_type_text(node) -> str:
+    """读取节点的有效结构类型，暗涵优先返回家族子类型。"""
+    section_params = getattr(node, "section_params", None)
+    if isinstance(section_params, dict):
+        normalized_family = normalize_culvert_family_type_name(
+            section_params.get(CULVERT_FAMILY_TYPE_KEY, "")
+        )
+        if normalized_family:
+            return normalized_family
+    getter = getattr(node, "get_structure_type_str", None)
+    if callable(getter):
+        try:
+            text = str(getter() or "").strip()
+            normalized_family = normalize_culvert_family_type_name(text)
+            if normalized_family:
+                return normalized_family
+            if text:
+                return text
+        except Exception:
+            pass
+    struct_type = getattr(node, "structure_type", None)
+    value = getattr(struct_type, "value", struct_type)
+    return str(value or "").strip()
+
+
+for _culvert_option in (RECT_CULVERT_FAMILY_TEXT, ARCH_CULVERT_FAMILY_TEXT):
+    if _culvert_option not in STRUCTURE_TYPE_OPTIONS:
+        STRUCTURE_TYPE_OPTIONS.append(_culvert_option)
 
 
 def normalize_use_increase_flag(value, default=True):
@@ -3740,6 +3787,19 @@ class WaterProfilePanel(QWidget):
             return False
         return not self._is_flat_bottom_circle_source_row(row)
 
+    def _is_forbidden_manual_arch_culvert_row(self, row: int, struct_text: str) -> bool:
+        """判断表3当前行是否是被禁止的手工圆拱直墙型暗涵输入。"""
+        if normalize_section_type_name(struct_text) != ARCH_CULVERT_FAMILY_TEXT:
+            return False
+        return not self._is_arch_culvert_source_row(row)
+
+    def _structure_selector_excluded_items_for_row(self, row: int) -> set[str]:
+        """返回表3当前行打开结构选择器时应隐藏的结构类型。"""
+        excluded_items = {"隧洞-平底圆形"}
+        if not self._is_arch_culvert_source_row(row):
+            excluded_items.add(ARCH_CULVERT_FAMILY_TEXT)
+        return excluded_items
+
     @staticmethod
     def _is_flat_bottom_circle_source_payload(payload) -> bool:
         """读取平底圆形来源标记，缺失时按不允许处理。"""
@@ -3760,6 +3820,27 @@ class WaterProfilePanel(QWidget):
         payload = first_item.data(Qt.UserRole) if first_item else None
         return self._is_flat_bottom_circle_source_payload(payload)
 
+    @staticmethod
+    def _is_arch_culvert_source_payload(payload) -> bool:
+        """读取圆拱直墙型暗涵来源标记，兼容旧带入行。"""
+        if not isinstance(payload, dict):
+            return False
+        if ARCH_CULVERT_SOURCE_ROLE_KEY in payload:
+            return bool(payload.get(ARCH_CULVERT_SOURCE_ROLE_KEY))
+        family_type = normalize_culvert_family_type_name(payload.get(CULVERT_FAMILY_TYPE_KEY, ""))
+        if family_type == ARCH_CULVERT_FAMILY_TEXT and "_from_table1_source" in payload:
+            return bool(payload.get("_from_table1_source"))
+        return False
+
+    def _is_arch_culvert_source_row(self, row: int) -> bool:
+        """仅认带入链路明确标记的圆拱直墙型暗涵行。"""
+        table = self.node_table
+        if not table or row < 0 or row >= table.rowCount():
+            return False
+        first_item = table.item(row, 0)
+        payload = first_item.data(Qt.UserRole) if first_item else None
+        return self._is_arch_culvert_source_payload(payload)
+
     def _restore_cell_text_from_pre_edit(self, row: int, col: int) -> str:
         """按编辑前快照恢复单元格内容，并返回恢复后的文本。"""
         fallback_text = ""
@@ -3775,6 +3856,16 @@ class WaterProfilePanel(QWidget):
         InfoBar.warning(
             "不支持手工新选",
             "平底圆形仅允许通过表1同步或共享结果导入，表3不允许手工新选。",
+            parent=self._info_parent(),
+            duration=3200,
+            position=InfoBarPosition.TOP,
+        )
+
+    def _warn_manual_arch_culvert_not_allowed(self):
+        """提示表3不允许手工新建圆拱直墙型暗涵。"""
+        InfoBar.warning(
+            "不支持手工新选",
+            "暗涵-圆拱直墙型仅允许通过表1同步或共享结果导入，表3不允许手工新选。",
             parent=self._info_parent(),
             duration=3200,
             position=InfoBarPosition.TOP,
@@ -4950,7 +5041,7 @@ class WaterProfilePanel(QWidget):
             item = self.node_table.item(row, col)
             if item:
                 current = item.text()
-            dlg = StructureTypeSelector(self, excluded_items={"隧洞-平底圆形"})
+            dlg = StructureTypeSelector(self, excluded_items=self._structure_selector_excluded_items_for_row(row))
             dlg.set_current(current)
             result = dlg.exec()
             if result == QDialog.DialogCode.Accepted and dlg.selected_type:
@@ -5977,6 +6068,10 @@ class WaterProfilePanel(QWidget):
                     self._restore_cell_text_from_pre_edit(row, col)
                     self._warn_manual_flat_bottom_circle_not_allowed()
                     return
+                if self._is_forbidden_manual_arch_culvert_row(row, struct_text):
+                    self._restore_cell_text_from_pre_edit(row, col)
+                    self._warn_manual_arch_culvert_not_allowed()
+                    return
             if col == 32:
                 if not self._is_transition_length_editable_cell(row, col):
                     return
@@ -6590,6 +6685,10 @@ class WaterProfilePanel(QWidget):
                 payload = {}
             payload["_from_table1_source"] = bool(_from_table1_source)
             payload[FLAT_BOTTOM_TUNNEL_SOURCE_ROLE_KEY] = bool(_from_table1_source)
+            payload[ARCH_CULVERT_SOURCE_ROLE_KEY] = bool(
+                _from_table1_source
+                and normalize_culvert_family_type_name(struct_text_in_data) == ARCH_CULVERT_FAMILY_TEXT
+            )
             if _from_table1_source:
                 x_text = ""
                 y_text = ""
@@ -7019,14 +7118,27 @@ class WaterProfilePanel(QWidget):
             # 兜底：计算引擎返回的简化名（正常流程已在batch注册时修正）
             "圆拱直墙型": "隧洞-圆拱直墙型",
             "马蹄形标准Ⅰ型": "隧洞-马蹄形Ⅰ型", "马蹄形标准Ⅱ型": "隧洞-马蹄形Ⅱ型",
-            "矩形暗涵": "矩形暗涵", "暗渠": "矩形暗涵", "矩形暗渠": "矩形暗涵", "退水闸": "退水闸",
+            "矩形暗涵": RECT_CULVERT_FAMILY_TEXT,
+            "暗渠": RECT_CULVERT_FAMILY_TEXT,
+            "矩形暗渠": RECT_CULVERT_FAMILY_TEXT,
+            "暗涵-矩形": RECT_CULVERT_FAMILY_TEXT,
+            "暗涵-圆拱直墙型": ARCH_CULVERT_FAMILY_TEXT,
+            "退水闸": "退水闸",
         }
 
         for sr in results:
             flow_section = str(getattr(sr, 'flow_section', ''))
             building_name = str(getattr(sr, 'building_name', ''))
-            section_type = normalize_section_type_name(getattr(sr, 'section_type', ''))
+            raw_section_type = str(getattr(sr, 'section_type', '') or '')
+            section_type = normalize_section_type_name(raw_section_type)
+            culvert_family_type = normalize_culvert_family_type_name(raw_section_type or section_type)
             raw_result = getattr(sr, 'raw_result', {}) or {}
+            if (
+                not culvert_family_type
+                and ("暗涵" in section_type or "暗渠" in section_type or section_type == "矩形暗涵")
+                and float(raw_result.get("theta_deg", 0) or 0) > 0
+            ):
+                culvert_family_type = ARCH_CULVERT_FAMILY_TEXT
             x = getattr(sr, 'coord_X', 0)
             y = getattr(sr, 'coord_Y', 0)
             B = getattr(sr, 'B', None) or ""
@@ -7053,7 +7165,9 @@ class WaterProfilePanel(QWidget):
                 default=True,
             )
 
-            if section_type in struct_map:
+            if culvert_family_type:
+                section_type = culvert_family_type
+            elif section_type in struct_map:
                 section_type = struct_map[section_type]
             # 模糊匹配增强
             elif "渡槽-U" in section_type or "U形渡槽" in section_type:
@@ -7067,7 +7181,7 @@ class WaterProfilePanel(QWidget):
             elif "隧洞-马蹄形Ⅱ" in section_type:
                 section_type = "隧洞-马蹄形Ⅱ型"
             elif "暗涵" in section_type or "暗渠" in section_type:
-                section_type = "矩形暗涵"
+                section_type = normalize_culvert_family_type_name(section_type) or RECT_CULVERT_FAMILY_TEXT
 
             # 收集糙率分类（倒虹吸 vs 一般建筑物）
             try:
@@ -7149,6 +7263,14 @@ class WaterProfilePanel(QWidget):
                     payload = {}
                 # use_increase 是自由水面导出链路的重要运行态字段，不能只在有压流参数存在时才落盘。
                 payload[USE_INCREASE_ROLE_KEY] = use_increase
+                if culvert_family_type:
+                    payload[CULVERT_FAMILY_TYPE_KEY] = culvert_family_type
+                    theta_deg = float(raw_result.get("theta_deg", 0) or 0)
+                    if theta_deg > 0:
+                        payload[ARCH_CULVERT_THETA_ROLE_KEY] = theta_deg
+                payload[ARCH_CULVERT_SOURCE_ROLE_KEY] = bool(
+                    culvert_family_type == ARCH_CULVERT_FAMILY_TEXT
+                )
                 # 表1导入到表3时，给承压类行补齐稳定身份，后续导出优先按真实身份匹配。
                 if self._is_pressure_pipe_like_structure_text(section_type):
                     payload[PRESSURE_PIPE_ROW_ID_ROLE_KEY] = self._build_pressure_pipe_row_identity_from_flow_section(
@@ -7650,8 +7772,10 @@ class WaterProfilePanel(QWidget):
             node.name = str(data[1]).strip()
 
             # 结构形式 (col 2)
-            struct_str = normalize_section_type_name(str(data[2]).strip())
-            if struct_str in {"暗渠", "矩形暗渠", "矩形暗涵"}:
+            raw_struct_str = normalize_section_type_name(str(data[2]).strip())
+            culvert_family_type = normalize_culvert_family_type_name(raw_struct_str)
+            struct_str = raw_struct_str
+            if culvert_family_type or struct_str in {"暗渠", "矩形暗渠", "矩形暗涵"}:
                 struct_str = "矩形暗涵"
             if struct_str:
                 try:
@@ -7749,6 +7873,7 @@ class WaterProfilePanel(QWidget):
                         explicit_table1_source_flag = True
                         from_table1_source = bool(_ur.get("_from_table1_source"))
                     flat_bottom_source_allowed = self._is_flat_bottom_circle_source_payload(_ur)
+                    arch_culvert_source_allowed = self._is_arch_culvert_source_payload(_ur)
                     pressure_pipe_row_identity = str(
                         _ur.get(PRESSURE_PIPE_ROW_ID_ROLE_KEY, "") or ""
                     ).strip()
@@ -7775,6 +7900,11 @@ class WaterProfilePanel(QWidget):
                     _pm = str(_ur.get('_pipe_material', '') or '').strip()
                     if _pm:
                         pipe_material = _pm
+                    stored_culvert_family_type = normalize_culvert_family_type_name(
+                        _ur.get(CULVERT_FAMILY_TYPE_KEY, "")
+                    )
+                    if stored_culvert_family_type:
+                        culvert_family_type = stored_culvert_family_type
                     _ior = str(_ur.get('_in_out_raw', '') or '').strip()
                     if _ior:
                         in_out_raw = _ior
@@ -7792,6 +7922,13 @@ class WaterProfilePanel(QWidget):
                     compound_trapezoid_params = normalize_compound_trapezoid_params(
                         _ur.get(COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY, {})
                     )
+                    arch_culvert_theta_deg = self._sf(_ur.get(ARCH_CULVERT_THETA_ROLE_KEY, 0), 0.0)
+                else:
+                    arch_culvert_source_allowed = False
+                    arch_culvert_theta_deg = 0.0
+            else:
+                arch_culvert_source_allowed = False
+                arch_culvert_theta_deg = 0.0
             if (
                 not explicit_table1_source_flag
                 and not from_table1_source
@@ -7804,6 +7941,9 @@ class WaterProfilePanel(QWidget):
             node.from_table1_source = from_table1_source
             if struct_str == "隧洞-平底圆形" and not from_table1_source:
                 node.structure_type = None
+            if culvert_family_type == ARCH_CULVERT_FAMILY_TEXT and not arch_culvert_source_allowed:
+                node.structure_type = None
+                culvert_family_type = ""
 
             source_x_text = ""
             source_y_text = ""
@@ -7925,6 +8065,8 @@ class WaterProfilePanel(QWidget):
             node.section_params['R_circle'] = R
             node.section_params['m'] = m_val
             node.section_params['use_increase'] = use_increase
+            if culvert_family_type:
+                node.section_params[CULVERT_FAMILY_TYPE_KEY] = culvert_family_type
             if struct_str == "明渠-复式梯形" and compound_trapezoid_params:
                 node.section_params.update(copy.deepcopy(compound_trapezoid_params))
                 if not node.section_params.get('B', 0) and compound_trapezoid_params.get('B2', 0):
@@ -8019,6 +8161,8 @@ class WaterProfilePanel(QWidget):
             # 恢复结构高度（用于计算渠顶高程，与Tkinter版 data_table.py 对齐）
             if r in self._node_structure_heights:
                 node.structure_height = self._node_structure_heights[r]
+            if culvert_family_type and node.structure_height > 0:
+                node.section_params['H_total'] = node.structure_height
 
             # 恢复倒角参数（渡槽-矩形精确水力计算用）
             if r in self._node_chamfer_params:
@@ -8029,6 +8173,8 @@ class WaterProfilePanel(QWidget):
             # 恢复明渠-U形圆心角
             if r in self._node_u_params:
                 node.section_params['theta_deg'] = self._node_u_params[r].get('theta_deg', 0)
+            if culvert_family_type == ARCH_CULVERT_FAMILY_TEXT and arch_culvert_theta_deg > 0:
+                node.section_params['theta_deg'] = arch_culvert_theta_deg
 
             # 恢复加大流速（从批量计算导入的加大流量工况流速）
             if r in self._node_velocity_increased:
@@ -8474,6 +8620,9 @@ class WaterProfilePanel(QWidget):
                 _pm = str(_sp.get('pipe_material', '') or '').strip()
                 _ior = str(_sp.get('in_out_raw', '') or '').strip()
                 _llr = _sp.get('local_loss_ratio', None)
+                culvert_family_type = normalize_culvert_family_type_name(
+                    _sp.get(CULVERT_FAMILY_TYPE_KEY, "")
+                )
                 if _pm:
                     payload['_pipe_material'] = _pm
                 if _ior:
@@ -8493,6 +8642,9 @@ class WaterProfilePanel(QWidget):
                     payload[PRESSURE_PIPE_ROW_ID_ROLE_KEY] = self._ensure_pressure_pipe_row_identity(node, r)
                 else:
                     payload.pop(PRESSURE_PIPE_ROW_ID_ROLE_KEY, None)
+                payload[ARCH_CULVERT_SOURCE_ROLE_KEY] = bool(
+                    culvert_family_type == ARCH_CULVERT_FAMILY_TEXT and getattr(node, "from_table1_source", False)
+                )
                 override = self._get_pressure_pipe_window_override(node)
                 if override:
                     payload[PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY] = copy.deepcopy(override)
@@ -8953,7 +9105,7 @@ class WaterProfilePanel(QWidget):
         for node in nodes:
             if not node.structure_type:
                 continue
-            sv = node.structure_type.value
+            sv = resolve_node_effective_structure_type_text(node)
             if "倒虹吸" in sv:
                 continue
             b = node.section_params.get("B", 0)
@@ -9050,7 +9202,7 @@ class WaterProfilePanel(QWidget):
         for node in nodes:
             if not node.structure_type:
                 continue
-            sv = node.structure_type.value
+            sv = resolve_node_effective_structure_type_text(node)
             if "倒虹吸" in sv:
                 continue
             b = node.section_params.get("B", 0)
@@ -10357,23 +10509,15 @@ class WaterProfilePanel(QWidget):
 
     @staticmethod
     def _get_pressure_pipe_summary_structure_type(node) -> str:
-        getter = getattr(node, "get_structure_type_str", None)
-        if callable(getter):
-            try:
-                text = str(getter() or "").strip()
-                if text:
-                    return text
-            except Exception:
-                pass
-        struct_type = getattr(node, "structure_type", None)
-        value = getattr(struct_type, "value", struct_type)
-        return str(value or "").strip()
+        return resolve_node_effective_structure_type_text(node)
 
     @classmethod
     def _classify_pressure_pipe_summary_bucket(cls, node) -> str | None:
         if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
             return None
         structure_text = cls._get_pressure_pipe_summary_structure_type(node)
+        if "暗涵" in structure_text:
+            return None
         if "隧洞" in structure_text:
             return "隧洞"
         if "定向钻" in structure_text:

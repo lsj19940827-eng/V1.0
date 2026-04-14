@@ -14,6 +14,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
 from PySide6.QtWidgets import QApplication, QLabel, QSizePolicy
+from app_渠系计算前端.culvert.dxf_export import draw_culvert_dxf_on_msp
+from app_渠系计算前端.dxf_common import create_measurement_msp
+from 圆拱直墙型暗涵设计 import quick_calculate_arch_culvert
 
 
 def _load_cad_tools():
@@ -75,6 +78,7 @@ def _make_pressure_pipe_summary_node(
     name="",
     in_out_text="",
     is_pressure_pipe=None,
+    section_params=None,
 ):
     """构造压力管道特性表摘要测试节点。"""
     if is_pressure_pipe is None:
@@ -89,6 +93,7 @@ def _make_pressure_pipe_summary_node(
         is_transition=False,
         is_auto_inserted_channel=False,
         is_pressure_pipe=is_pressure_pipe,
+        section_params=dict(section_params or {}),
     )
 
 
@@ -2916,6 +2921,94 @@ def test_write_pressure_pipe_uses_characteristics_headers_and_hidden_metrics():
         "第三流量段", 3.0, 3.75, 1.52, "球墨铸铁管", 1.6, "1.44",
         512.3, 509.7, 2, 1.2, "-", "-", 1, 0.3,
     ]
+
+
+def test_arch_culvert_pressure_pipe_summary_bucket_returns_none():
+    node = _make_pressure_pipe_summary_node(
+        "1",
+        120.0,
+        510.2,
+        "矩形暗涵",
+        section_params={"culvert_family_type": "暗涵-圆拱直墙型"},
+    )
+
+    assert panel_mod.WaterProfilePanel._get_pressure_pipe_summary_structure_type(node) == "暗涵-圆拱直墙型"
+    assert panel_mod.WaterProfilePanel._classify_pressure_pipe_summary_bucket(node) is None
+
+
+def test_arch_culvert_summary_and_dxf_headers_use_culvert_fields():
+    node = _node(
+        structure_type="矩形暗涵",
+        section_params_extra={
+            "culvert_family_type": "暗涵-圆拱直墙型",
+            "B": 2.4,
+            "H_total": 2.8,
+            "theta_deg": 150.0,
+        },
+        h=2.8,
+    )
+
+    assert summary_mod._classify_structure(node) == "rect_culvert_arch"
+
+    rows = summary_mod.compute_rect_culvert_arch([
+        {
+            "name": "第一流量段",
+            "Q": 1.0,
+            "slope_inv": 2000,
+            "n": 0.014,
+            "B": 2.4,
+            "H_total": 2.8,
+            "theta_deg": 150.0,
+            "t0": 0.4,
+            "t": 0.4,
+            "use_increase": False,
+        }
+    ])
+
+    title, headers, _col_widths, table_rows, _merge = summary_mod._dxf_build_rect_culvert_arch(rows)
+    header_names = [name for name, _unit in headers]
+
+    assert title == "圆拱直墙型暗涵断面尺寸及水力要素表"
+    assert "围岩类型" not in header_names
+    assert all("隧洞" not in name for name in [title, *header_names])
+    assert header_names == [
+        "流量段", "设计流量", "1/底坡", "糙率", "底宽B",
+        "直墙高H", "顶拱半径R", "底板厚t₀", "边墙顶拱厚t", "设计水深H₁", "设计流速",
+    ]
+    assert table_rows[0][0] == "第一流量段"
+
+
+def test_arch_culvert_single_dxf_accepts_family_alias():
+    """单项 DXF 导出应同时兼容圆拱直墙型与暗涵家族别名。"""
+    result = quick_calculate_arch_culvert(
+        6.0,
+        0.014,
+        2200.0,
+        0.6,
+        2.8,
+        theta_deg=140.0,
+        manual_B=2.6,
+        manual_increase_percent=20.0,
+    )
+    base_params = {
+        "Q": 6.0,
+        "n": 0.014,
+        "slope_inv": 2200.0,
+        "section_type": "圆拱直墙型",
+        "theta_deg": 140.0,
+    }
+    alias_params = dict(base_params, section_type="暗涵-圆拱直墙型")
+
+    direct_msp = create_measurement_msp()
+    alias_msp = create_measurement_msp()
+
+    direct_size = draw_culvert_dxf_on_msp(direct_msp, result, base_params, scale_denom=100)
+    alias_size = draw_culvert_dxf_on_msp(alias_msp, result, alias_params, scale_denom=100)
+
+    assert direct_size[0] > 0
+    assert direct_size[1] > 0
+    assert alias_size == pytest.approx(direct_size)
+    assert alias_msp.local_bounds() == pytest.approx(direct_msp.local_bounds())
 
 
 def test_compute_rect_channel_adds_tie_rod_height_to_export_H(monkeypatch):

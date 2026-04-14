@@ -131,16 +131,39 @@ try:
 except ImportError:
     RECT_CULVERT_AVAILABLE = False
 
+try:
+    from 圆拱直墙型暗涵设计 import (
+        quick_calculate_arch_culvert as arch_culvert_calculate
+    )
+    ARCH_CULVERT_AVAILABLE = True
+except ImportError:
+    ARCH_CULVERT_AVAILABLE = False
+
 # 断面类型列表
 SECTION_TYPES = [
     "明渠-梯形", "明渠-复式梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
     "渡槽-U形", "渡槽-矩形",
     "隧洞-圆形", "隧洞-平底圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
-    "矩形暗涵", "倒虹吸", "有压管道", "定向钻", "顶管",
+    "暗涵-矩形", "暗涵-圆拱直墙型", "倒虹吸", "有压管道", "定向钻", "顶管",
     "分水闸", "分水口", "节制闸", "泄水闸", "退水闸",
 ]
 
 PRESSURE_PIPE_LIKE_SECTION_TYPES = {"有压管道", "定向钻", "顶管"}
+_PROJECT_SECTION_TYPE_ALIASES = {
+    "暗涵": "暗涵-矩形",
+    "暗渠": "暗涵-矩形",
+    "矩形暗渠": "暗涵-矩形",
+    "矩形暗涵": "暗涵-矩形",
+    "暗涵-矩形": "暗涵-矩形",
+    "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
+    "暗涵-圆拱直墙型": "暗涵-圆拱直墙型",
+}
+
+
+def normalize_project_section_type(section_type):
+    """将项目文件中的旧断面名称统一为当前标准口径。"""
+    text = normalize_section_type_name(section_type)
+    return _PROJECT_SECTION_TYPE_ALIASES.get(text, text)
 
 
 def is_pressure_pipe_like_section_type(section_type) -> bool:
@@ -157,6 +180,16 @@ def is_gate_like_section_type(section_type) -> bool:
 def is_tunnel_section_type(section_type) -> bool:
     """判断结构类型是否为隧洞。"""
     return "隧洞" in normalize_section_type_name(section_type)
+
+
+def is_rect_culvert_section_type(section_type) -> bool:
+    """判断结构类型是否为矩形暗涵（兼容旧值）。"""
+    return normalize_section_type_name(section_type) == "暗涵-矩形"
+
+
+def is_arch_culvert_section_type(section_type) -> bool:
+    """判断结构类型是否为圆拱直墙型暗涵（兼容旧值）。"""
+    return normalize_section_type_name(section_type) == "暗涵-圆拱直墙型"
 
 # 输入表列定义（含X/Y坐标列）
 # 列索引: 0序号, 1流量段, 2建筑物名称, 3结构形式, 4X, 5Y, 6Q, 7糙率n, 8比降,
@@ -203,7 +236,7 @@ _HEADER_TOOLTIPS = {
         "  • 渡槽-矩形：槽宽\n"
         "  • 隧洞-平底圆形：平底宽 B（必须固定填写 D + B）\n"
         "  • 隧洞-圆拱直墙型：洞宽\n"
-        "  • 矩形暗涵：涵洞宽度\n\n"
+        "  • 暗涵-矩形 / 暗涵-圆拱直墙型：涵洞宽度\n\n"
         "▶ 与「明渠宽深比」的关系\n"
         "  明渠类型下，底宽B 与宽深比β 二选一填写，\n"
         "  都留空则程序自动寻优计算"
@@ -218,7 +251,7 @@ _HEADER_TOOLTIPS = {
         "  • 渡槽-U形：底部半圆的半径 R\n"
         "  • 隧洞-马蹄形Ⅰ型 / Ⅱ型：内轮廓基准半径 r\n\n"
         "▶ 其他类型无需填写\n"
-        "  明渠、圆形隧洞、圆拱直墙型、矩形暗涵\n"
+        "  明渠、圆形隧洞、圆拱直墙型、暗涵\n"
         "  等类型不使用此参数"
     ),
     "直径D(m)": (
@@ -1748,6 +1781,7 @@ class BatchPanel(QWidget):
                           preserve_explicit_bottom_width=False,
                           preserve_imported_dimensions=False):
         """根据断面类型调用对应计算引擎"""
+        section_type = normalize_section_type_name(section_type)
         _inc = manual_increase_percent
         if "明渠-梯形" in section_type:
             if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
@@ -1838,7 +1872,14 @@ class BatchPanel(QWidget):
                                                     manual_r=R if R > 0 else None,
                                                     section_type=st,
                                                     manual_increase_percent=_inc)
-        elif "矩形暗涵" in section_type:
+        elif is_arch_culvert_section_type(section_type):
+            if not ARCH_CULVERT_AVAILABLE: return {'success': False, 'error_message': '圆拱直墙型暗涵模块未加载'}
+            return arch_culvert_calculate(Q=Q, n=n, slope_inv=slope_inv,
+                                          v_min=v_min, v_max=v_max,
+                                          manual_B=b if b > 0 else None,
+                                          theta_deg=theta_deg if theta_deg > 0 else None,
+                                          manual_increase_percent=_inc)
+        elif is_rect_culvert_section_type(section_type):
             if not RECT_CULVERT_AVAILABLE: return {'success': False, 'error_message': '矩形暗涵模块未加载'}
             return rect_culvert_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                           v_min=v_min, v_max=v_max,
@@ -1853,6 +1894,7 @@ class BatchPanel(QWidget):
     # ================================================================
     def _extract_result_row(self, seq, segment, building_name, section_type, result, use_increase=True):
         """从计算结果中提取关键数据为一行"""
+        section_type = normalize_section_type_name(section_type)
         def fmt(val, default="-"):
             if val is None or val == 0: return default
             if isinstance(val, (int, float)): return f"{val:.3f}"
@@ -1942,7 +1984,23 @@ class BatchPanel(QWidget):
             Fb_pct_d = result.get('freeboard_pct_design', 0)
             Fb_pct_i = result.get('freeboard_pct_inc', 0)
 
-        elif "矩形暗涵" in section_type:
+        elif is_arch_culvert_section_type(section_type):
+            B_val = result.get('B', 0)
+            h_design = result.get('h_design', 0)
+            V_design = result.get('V_design', 0)
+            A_design = result.get('A_design', 0)
+            R_hyd = result.get('R_hyd_design', 0)
+            chi = result.get('P_design', 0)
+            Q_inc = result.get('Q_increased', 0)
+            h_inc = result.get('h_increased', 0)
+            V_inc = result.get('V_increased', 0)
+            H_total_val = result.get('H_total', 0)
+            Fb_cl_d = result.get('freeboard_hgt_design', 0)
+            Fb_cl_i = result.get('freeboard_hgt_inc', 0)
+            Fb_pct_d = result.get('freeboard_pct_design', 0)
+            Fb_pct_i = result.get('freeboard_pct_inc', 0)
+
+        elif is_rect_culvert_section_type(section_type):
             B_val = result.get('B', 0)
             h_design = result.get('h_design', 0)
             V_design = result.get('V_design', 0)
@@ -2002,7 +2060,7 @@ class BatchPanel(QWidget):
 
     def _gen_detail_body(self, input_vals, result):
         """生成详细报告正文（不含标题头，供Word导出和文本显示共用）"""
-        section_type = str(input_vals[3]).strip()
+        section_type = normalize_section_type_name(str(input_vals[3]).strip())
         try:
             if "倒虹吸" in section_type:
                 return self._fmt_placeholder_report(input_vals, result, "倒虹吸")
@@ -2014,7 +2072,7 @@ class BatchPanel(QWidget):
                 return self._fmt_mingqu_report(input_vals, result)
             elif "渡槽" in section_type:
                 return self._fmt_ducao_report(input_vals, result)
-            elif "隧洞" in section_type or "矩形暗涵" in section_type:
+            elif "隧洞" in section_type or "暗涵" in section_type:
                 return self._fmt_suidong_report(input_vals, result)
             else:
                 return "不支持的断面类型，无法生成详细报告。"
@@ -2455,7 +2513,7 @@ class BatchPanel(QWidget):
         slope_inv = self._sf(input_vals[8])
         v_min = self._sf(input_vals[18], 0.1)
         v_max = self._sf(input_vals[19], 100)
-        section_type = str(input_vals[3]).strip()
+        section_type = normalize_section_type_name(str(input_vals[3]).strip())
         i = 1.0 / slope_inv if slope_inv > 0 else 0
         o = []
         o.append("【一、输入参数】")
@@ -2505,7 +2563,16 @@ class BatchPanel(QWidget):
             o.append(f"  设计半径: R = {r:.2f} m")
             o.append(f"  等效直径: 2R = {2*r:.2f} m")
             o.append(f"  断面总面积: A总 = {A_total:.3f} m²")
-        elif "矩形暗涵" in section_type:
+        elif is_arch_culvert_section_type(section_type):
+            B = result.get('B', 0)
+            H = result.get('H_total', 0)
+            theta_deg = result.get('theta_deg', 0)
+            o.append(f"  设计宽度: B = {B:.2f} m")
+            o.append(f"  设计高度: H = {H:.2f} m")
+            o.append(f"  拱顶圆心角: θ = {theta_deg:.1f}°")
+            o.append(f"  高宽比: H/B = {H/B:.3f}" if B > 0 else "  高宽比: N/A")
+            o.append(f"  断面总面积: A总 = {A_total:.3f} m²")
+        elif is_rect_culvert_section_type(section_type):
             B = result.get('B', 0)
             H = result.get('H', 0)
             BH_ratio = result.get('BH_ratio', 0)
@@ -2568,7 +2635,7 @@ class BatchPanel(QWidget):
         velocity_ok = v_min <= V_design <= v_max
         o.append(f"  1. 流速验证: {v_min} ≤ {V_design:.3f} ≤ {v_max} → {'通过 ✓' if velocity_ok else '未通过 ✗'}")
         min_fb_hgt = 0.4
-        is_culvert = "矩形暗涵" in section_type
+        is_culvert = "暗涵" in section_type
         min_fb_pct = 10.0 if is_culvert else 15.0
         max_fb_pct = 30.0 if is_culvert else None
         fb_hgt_ok = fb_hgt_check >= min_fb_hgt
@@ -2677,7 +2744,7 @@ class BatchPanel(QWidget):
         elif "隧洞-圆形" in section_type:
             D_val = params.get('D', "")
             values[13] = str(D_val) if D_val != "" else ""
-        elif "隧洞-圆拱直墙型" in section_type:
+        elif "隧洞-圆拱直墙型" in section_type or is_arch_culvert_section_type(section_type):
             B_val = params.get('B', "")
             values[10] = str(B_val) if B_val != "" else ""
             theta_val = params.get('theta', "")
@@ -2685,7 +2752,7 @@ class BatchPanel(QWidget):
         elif "隧洞-马蹄形" in section_type:
             r_val = params.get('r', "")
             values[12] = str(r_val) if r_val != "" else ""
-        elif section_type == "矩形暗涵":
+        elif is_rect_culvert_section_type(section_type):
             BH_ratio_val = params.get('BH_ratio_rect', "")
             values[11] = str(BH_ratio_val) if BH_ratio_val != "" else ""
             B_rect_val = params.get('B_rect', "")
@@ -2714,7 +2781,9 @@ class BatchPanel(QWidget):
             "圆形隧洞": "隧洞-圆形", "圆拱直墙": "隧洞-圆拱直墙型", "圆拱直墙型": "隧洞-圆拱直墙型",
             "马蹄形Ⅰ型": "隧洞-马蹄形Ⅰ型", "马蹄形Ⅱ型": "隧洞-马蹄形Ⅱ型",
             "马蹄形I型": "隧洞-马蹄形Ⅰ型", "马蹄形II型": "隧洞-马蹄形Ⅱ型",
-            "暗涵": "矩形暗涵", "暗渠": "矩形暗涵", "矩形暗渠": "矩形暗涵",
+            "暗涵": "暗涵-矩形", "暗涵-矩形": "暗涵-矩形", "暗渠": "暗涵-矩形", "矩形暗渠": "暗涵-矩形",
+            "矩形暗涵": "暗涵-矩形",
+            "暗涵-圆拱直墙型": "暗涵-圆拱直墙型", "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
             "退水闸": "退水闸",
         }
         if raw_type in mapping:
@@ -2736,7 +2805,7 @@ class BatchPanel(QWidget):
 
         self.input_table.blockSignals(True)
 
-        if "明渠" in new_type or new_type == "矩形暗涵":
+        if "明渠" in new_type or is_rect_culvert_section_type(new_type):
             self.input_table.setItem(row, 2, QTableWidgetItem("-"))
             # 明渠-U形额外填充默认值 R=0.8, α=14°, θ=152°
             if new_type == "明渠-U形":
@@ -3711,6 +3780,8 @@ class BatchPanel(QWidget):
             for col in range(self.input_table.columnCount()):
                 item = self.input_table.item(row, col)
                 row_data.append(item.text() if item else "")
+            if len(row_data) > 3:
+                row_data[3] = normalize_project_section_type(row_data[3])
             input_rows.append(row_data)
         
         return {
@@ -3782,6 +3853,8 @@ class BatchPanel(QWidget):
                 for row_idx, row_data in enumerate(input_rows):
                     for col_idx, cell_value in enumerate(row_data):
                         if col_idx < self.input_table.columnCount():
+                            if col_idx == 3:
+                                cell_value = normalize_project_section_type(cell_value)
                             item = QTableWidgetItem(str(cell_value) if cell_value else "")
                             # 序号列和结构形式列居中
                             if col_idx in (0, 3):
@@ -3924,10 +3997,15 @@ class SectionParameterDialog(QDialog):
                                 "(留空则采用180°)")
             self._add_opt_entry(form, "指定底宽 B (m):", "B", "留空自动计算",
                                 "(指定底宽B留空则自动计算)")
+        elif is_arch_culvert_section_type(st):
+            self._add_opt_entry(form, "拱顶圆心角 (度):", "theta", "留空则采用180°",
+                                "(圆拱直墙型暗涵按暗涵净空口径校核)")
+            self._add_opt_entry(form, "指定底宽 B (m):", "B", "留空自动计算",
+                                "(指定底宽B留空则自动计算)")
         elif "隧洞-马蹄形" in st:
             self._add_opt_entry(form, "指定半径 R (m):", "r", "留空自动计算",
                                 "(留空则自动计算)")
-        elif st == "矩形暗涵":
+        elif is_rect_culvert_section_type(st):
             self._add_opt_entry(form, "指定宽深比:", "BH_ratio_rect", "留空自动计算")
             self._add_opt_entry(form, "指定底宽 B (m):", "B_rect", "留空自动计算",
                                 "(二选一输入，留空则自动计算)")
@@ -3974,7 +4052,7 @@ class SectionParameterDialog(QDialog):
                     v = cv.get(k, '')
                     if ek in self._entries and v and str(v).strip():
                         self._entries[ek].setText(str(v).strip())
-            elif "隧洞-圆拱直墙型" in st:
+            elif "隧洞-圆拱直墙型" in st or is_arch_culvert_section_type(st):
                 for k, ek in [('b', 'B'), ('theta', 'theta')]:
                     v = cv.get(k, '')
                     if ek in self._entries and v and str(v).strip():
@@ -3983,7 +4061,7 @@ class SectionParameterDialog(QDialog):
                 v = cv.get('R', '')
                 if 'r' in self._entries and v and str(v).strip():
                     self._entries['r'].setText(str(v).strip())
-            elif st == "矩形暗涵":
+            elif is_rect_culvert_section_type(st):
                 for k, ek in [('b_h_ratio', 'BH_ratio_rect'), ('b', 'B_rect')]:
                     v = cv.get(k, '')
                     if ek in self._entries and v and str(v).strip():
@@ -4073,7 +4151,7 @@ class SectionParameterDialog(QDialog):
                 result['B'] = B_val
             elif "隧洞-圆形" in st:
                 result['D'] = self._get_float('D', "")
-            elif "隧洞-圆拱直墙型" in st:
+            elif "隧洞-圆拱直墙型" in st or is_arch_culvert_section_type(st):
                 theta = self._get_float('theta', "")
                 if isinstance(theta, (int, float)) and (theta < 90 or theta > 180):
                     raise ValueError("圆心角必须在90~180度之间")
@@ -4081,7 +4159,7 @@ class SectionParameterDialog(QDialog):
                 result['B'] = self._get_float('B', "")
             elif "隧洞-马蹄形" in st:
                 result['r'] = self._get_float('r', "")
-            elif st == "矩形暗涵":
+            elif is_rect_culvert_section_type(st):
                 result['BH_ratio_rect'] = self._get_float('BH_ratio_rect', "")
                 result['B_rect'] = self._get_float('B_rect', "")
 

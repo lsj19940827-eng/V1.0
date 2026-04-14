@@ -36,7 +36,8 @@ STRUCTURE_TYPE_OPTIONS = [
     "隧洞-圆拱直墙型",
     "隧洞-马蹄形Ⅰ型",
     "隧洞-马蹄形Ⅱ型",
-    "矩形暗涵",
+    "暗涵-矩形",
+    "暗涵-圆拱直墙型",
     "倒虹吸",
     "有压管道",
     "定向钻",
@@ -142,7 +143,7 @@ GEOMETRY_RESULT_COLUMNS = [
 
 # 水力输入列（用户可编辑/可导入）- 设计流量下的参数
 HYDRAULIC_INPUT_COLUMNS = [
-    {"id": "bottom_width", "text": "底宽\nB", "width": 70, "editable": True, "type": "float"},  # 明渠梯形、明渠矩形、矩形暗涵、隧洞圆拱直墙型、渡槽矩形
+    {"id": "bottom_width", "text": "底宽\nB", "width": 70, "editable": True, "type": "float"},  # 明渠梯形、明渠矩形、暗涵、隧洞圆拱直墙型、渡槽矩形
     {"id": "diameter", "text": "直径\nD", "width": 70, "editable": True, "type": "float"},  # 明渠圆形、隧洞圆形
     {"id": "section_radius", "text": "半径", "width": 60, "editable": True, "type": "float"},  # 渡槽-U形、隧洞-马蹄形Ⅰ型、隧洞-马蹄形Ⅱ型
     {"id": "side_slope", "text": "边坡系数\nm", "width": 80, "editable": True, "type": "float"},
@@ -225,6 +226,8 @@ LOCAL_LOSS_COEFFICIENTS = {
     "隧洞": {"进口": 0.5, "出口": 1.0},
     "渡槽": {"进口": 0.3, "出口": 0.5},
     "倒虹吸": {"进口": 0.0, "出口": 0.0},  # 倒虹吸水损由外部导入
+    "暗涵-矩形": {"进口": 0.5, "出口": 1.0},
+    "暗涵-圆拱直墙型": {"进口": 0.5, "出口": 1.0},
     "矩形暗涵": {"进口": 0.5, "出口": 1.0},
 }
 
@@ -320,6 +323,14 @@ TRANSITION_LENGTH_CONSTRAINTS = {
         "出口": {"depth_multiplier": 6, "description": "下游渠道设计水深的4~6倍（取大值6倍）"},
     },
     "矩形暗涵": {
+        "进口": {"description": "仅基础公式 L=k×|B₁-B₂|"},
+        "出口": {"description": "仅基础公式 L=k×|B₁-B₂|"},
+    },
+    "暗涵-矩形": {
+        "进口": {"description": "仅基础公式 L=k×|B₁-B₂|"},
+        "出口": {"description": "仅基础公式 L=k×|B₁-B₂|"},
+    },
+    "暗涵-圆拱直墙型": {
         "进口": {"description": "仅基础公式 L=k×|B₁-B₂|"},
         "出口": {"description": "仅基础公式 L=k×|B₁-B₂|"},
     },

@@ -52,7 +52,7 @@ def test_register_batch_results_normalizes_rect_culvert_aliases(section_type):
 
     rows = mgr.get_batch_results()
     assert len(rows) == 1
-    assert rows[0].section_type == "矩形暗涵"
+    assert rows[0].section_type == "暗涵-矩形"
     assert rows[0].H_total == pytest.approx(2.2)
 
     mgr.clear_batch_results()

@@ -3,7 +3,7 @@
 渠系建筑物水力计算系统 —— 主入口
 
 侧边导航 + 面板切换框架
-支持模块：明渠设计、渡槽设计、隧洞设计、矩形暗涵设计、倒虹吸设计、有压管道设计、推求水面线
+支持模块：明渠设计、渡槽设计、隧洞设计、暗涵设计、倒虹吸设计、有压管道设计、推求水面线
 """
 
 import os
@@ -34,7 +34,7 @@ _MODULE_TOOLTIPS = {
     "open_channel": "梯形/矩形/圆形明渠",
     "aqueduct": "U形/矩形渡槽",
     "tunnel": "圆形/圆拱直墙/马蹄形",
-    "culvert": "经济最优断面/指定参数",
+    "culvert": "矩形/圆拱直墙型暗涵",
     "siphon": "倒虹吸管水力计算",
     "pressure_pipe": "有压管道水力计算",
     "water_profile": "断面批量计算 + 水面线推求",
@@ -241,7 +241,7 @@ class MainWindow(QMainWindow):
             ),
             PanelDescriptor(
                 key="culvert",
-                title="矩形暗涵设计",
+                title="暗涵设计",
                 nav_order=3,
                 attr_name="culvert_panel",
                 factory=_create_culvert_panel,

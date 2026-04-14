@@ -658,17 +658,16 @@ class WaterProfileCalculator:
             是否需要渐变段
         """
         # node1必须是出口，或者是明渠类型（明渠可能没有进出口标识）
-        is_node1_mingqu = self._is_mingqu_type(node1.structure_type)
-        is_node2_mingqu = self._is_mingqu_type(node2.structure_type)
+        sv1 = self._get_effective_structure_type_value(node1)
+        sv2 = self._get_effective_structure_type_value(node2)
+        is_node1_mingqu = self._is_mingqu_type(sv1)
+        is_node2_mingqu = self._is_mingqu_type(sv2)
         
         # 非明渠类型必须node1为出口
         io1 = node1.in_out.value if node1.in_out else ""
         io2 = node2.in_out.value if node2.in_out else ""
         if not is_node1_mingqu and io1 != "出":
             return False
-        
-        sv1 = node1.structure_type.value if node1.structure_type else ""
-        sv2 = node2.structure_type.value if node2.structure_type else ""
         
         # 规则1: 倒虹吸内部行之间不需要渐变段
         # 但倒虹吸出口→其他结构、其他结构→倒虹吸进口需要渐变段（占位，跳过损失计算）
@@ -680,9 +679,9 @@ class WaterProfileCalculator:
             return False
         
         # 规则1b: 分水闸/分水口不触发渐变段（点状结构，无断面变化）
-        if self._is_diversion_gate_type(node1.structure_type):
+        if self._is_diversion_gate_type(sv1):
             return False
-        if self._is_diversion_gate_type(node2.structure_type):
+        if self._is_diversion_gate_type(sv2):
             return False
         
         # 有效的结构类型（隧洞/渡槽/明渠/矩形暗涵/倒虹吸）
@@ -691,7 +690,7 @@ class WaterProfileCalculator:
             "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
             "渡槽-U形", "渡槽-矩形",
             "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
-            "矩形暗涵", "倒虹吸",
+            "暗涵-矩形", "暗涵-圆拱直墙型", "矩形暗涵", "倒虹吸",
         }
         
         # 检查两个节点是否都是有效类型
@@ -717,8 +716,8 @@ class WaterProfileCalculator:
                 return False
         
         # 规则5(新增): 隧洞/渡槽与明渠之间总是需要渐变段，跳过底宽检查
-        is_node1_tunnel_aqueduct = self._is_tunnel_or_aqueduct(node1.structure_type)
-        is_node2_tunnel_aqueduct = self._is_tunnel_or_aqueduct(node2.structure_type)
+        is_node1_tunnel_aqueduct = self._is_tunnel_or_aqueduct(sv1)
+        is_node2_tunnel_aqueduct = self._is_tunnel_or_aqueduct(sv2)
         
         if (is_node1_tunnel_aqueduct and is_node2_mingqu) or \
            (is_node1_mingqu and is_node2_tunnel_aqueduct):
@@ -736,14 +735,18 @@ class WaterProfileCalculator:
         
         # 规则7(新增): 矩形暗涵与明渠之间需要渐变段
         # 特例：矩形明渠↔矩形暗涵且底宽相同时不需要渐变段
-        is_node1_culvert = self._is_culvert_type(node1.structure_type)
-        is_node2_culvert = self._is_culvert_type(node2.structure_type)
+        is_node1_culvert = self._is_culvert_type(sv1)
+        is_node2_culvert = self._is_culvert_type(sv2)
+
+        # 同属暗涵家族但子类型不同，必须插入渐变段，不能再按“同宽即可跳过”处理。
+        if is_node1_culvert and is_node2_culvert and sv1 != sv2:
+            return True
         
         if (is_node1_culvert and is_node2_mingqu) or \
            (is_node1_mingqu and is_node2_culvert):
             # 矩形明渠↔矩形暗涵：检查底宽是否相同
             mingqu_node = node1 if is_node1_mingqu else node2
-            if mingqu_node.structure_type and mingqu_node.structure_type.value == "明渠-矩形":
+            if self._get_effective_structure_type_value(mingqu_node) == "明渠-矩形":
                 if self._has_same_section_size(node1, node2):
                     return False
             return True
@@ -762,9 +765,40 @@ class WaterProfileCalculator:
         sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
         return {
             "矩形": "明渠-矩形",
+            "暗涵": "矩形暗涵",
             "暗渠": "矩形暗涵",
             "矩形暗渠": "矩形暗涵",
+            "矩形暗涵": "矩形暗涵",
+            "暗涵-矩形": "矩形暗涵",
+            "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
+            "暗涵圆拱直墙型": "暗涵-圆拱直墙型",
         }.get(sv, sv)
+
+    @classmethod
+    def _normalize_culvert_family_type_value(cls, value) -> str:
+        """统一暗涵家族子类型名称。"""
+        text = cls._normalize_structure_type_value(value)
+        if not text:
+            return ""
+        if "暗涵" not in text and "暗渠" not in text and text != "矩形暗涵":
+            return ""
+        if "圆拱直墙" in text or "圆弧直墙" in text:
+            return cls._ARCH_CULVERT_FAMILY_TEXT
+        return cls._RECT_CULVERT_FAMILY_TEXT
+
+    @classmethod
+    def _get_effective_structure_type_value(cls, structure_or_node) -> str:
+        """读取节点的有效结构类型，暗涵优先使用家族子类型。"""
+        node = structure_or_node if hasattr(structure_or_node, "section_params") else None
+        if node is not None:
+            params = getattr(node, "section_params", {}) or {}
+            culvert_family_type = cls._normalize_culvert_family_type_value(
+                params.get(cls._CULVERT_FAMILY_TYPE_KEY, "")
+            )
+            if culvert_family_type:
+                return culvert_family_type
+            structure_or_node = getattr(node, "structure_type", None)
+        return cls._normalize_structure_type_value(structure_or_node)
 
     def _is_mingqu_type(self, structure_type) -> bool:
         """判断是否为明渠类型（使用 .value 字符串比较）"""
@@ -777,7 +811,7 @@ class WaterProfileCalculator:
         """判断是否为隧洞或渡槽类型（使用 .value 字符串比较）"""
         if structure_type is None:
             return False
-        sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
+        sv = self._normalize_structure_type_value(structure_type)
         return "隧洞" in sv or "渡槽" in sv
     
     def _is_diversion_gate_type(self, structure_type) -> bool:
@@ -828,8 +862,8 @@ class WaterProfileCalculator:
         """判断是否为矩形暗涵（使用 .value 字符串比较）"""
         if structure_type is None:
             return False
-        sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
-        return sv == "矩形暗涵"
+        sv = self._normalize_structure_type_value(structure_type)
+        return sv == "矩形暗涵" or "暗涵" in sv
 
     def is_pressurized_flow_structure(self, node: ChannelNode) -> bool:
         """
@@ -1648,8 +1682,8 @@ class WaterProfileCalculator:
         return channel, None   # 无需经济断面选项
     
     def _reference_family_for_gap_type(self, structure_type) -> str:
-        sv = self._normalize_structure_type_value(structure_type)
-        if sv == "矩形暗涵":
+        sv = self._get_effective_structure_type_value(structure_type)
+        if sv == "矩形暗涵" or "暗涵" in sv:
             return "culvert"
         if sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形"):
             return "open_channel"
@@ -1660,7 +1694,7 @@ class WaterProfileCalculator:
 
     def _extract_reference_segment_v2(self, node: ChannelNode) -> Dict[str, Any]:
         sp = node.section_params or {}
-        structure_type = self._normalize_structure_type_value(node.structure_type)
+        structure_type = self._get_effective_structure_type_value(node)
         bottom_width = sp.get("B", 0) or sp.get("D", 0)
         if bottom_width == 0 and structure_type == "明渠-U形":
             bottom_width = sp.get("R_circle", 0)
@@ -1693,8 +1727,8 @@ class WaterProfileCalculator:
         right = right_index
         while right < len(nodes) and self._is_diversion_gate_type(nodes[right].structure_type):
             right += 1
-        left_sv = self._normalize_structure_type_value(nodes[left].structure_type) if left >= 0 else ""
-        right_sv = self._normalize_structure_type_value(nodes[right].structure_type) if right < len(nodes) else ""
+        left_sv = self._get_effective_structure_type_value(nodes[left]) if left >= 0 else ""
+        right_sv = self._get_effective_structure_type_value(nodes[right]) if right < len(nodes) else ""
         return left_sv, right_sv
 
     def _preferred_reference_family_v2(
@@ -1724,7 +1758,7 @@ class WaterProfileCalculator:
 
         candidates: List[Tuple[int, ChannelNode]] = []
         for idx, node in enumerate(nodes):
-            family = self._reference_family_for_gap_type(node.structure_type)
+            family = self._reference_family_for_gap_type(node)
             if family not in {"open_channel", "culvert"}:
                 continue
             if same_section_only and node.flow_section != flow_section:
@@ -1733,7 +1767,7 @@ class WaterProfileCalculator:
 
         candidates.sort(
             key=lambda item: (
-                family_rank.get(self._reference_family_for_gap_type(item[1].structure_type), 99),
+                family_rank.get(self._reference_family_for_gap_type(item[1]), 99),
                 abs(item[0] - gap_index),
                 item[0],
             )
@@ -1818,7 +1852,9 @@ class WaterProfileCalculator:
         
         open_channel.name = params.name
         structure_type = self._normalize_structure_type_value(params.structure_type)
-        open_channel.structure_type = StructureType.from_string(structure_type)
+        culvert_family_type = self._normalize_culvert_family_type_value(params.structure_type)
+        enum_structure_type = culvert_family_type or structure_type
+        open_channel.structure_type = StructureType.from_string(enum_structure_type)
         open_channel.flow_section = params.flow_section if params.flow_section else prev_node.flow_section
         
         # 设置断面参数（区分圆形、U形和非圆形）
@@ -1826,7 +1862,8 @@ class WaterProfileCalculator:
         is_u_section = "U形" in params.structure_type and "明渠" in params.structure_type
         is_circular = "圆形" in structure_type and "U形" not in structure_type
         is_u_section = "U形" in structure_type and "明渠" in structure_type
-        is_culvert = structure_type == "矩形暗涵"
+        is_culvert = self._reference_family_for_gap_type(structure_type) == "culvert"
+        is_arch_culvert = culvert_family_type == self._ARCH_CULVERT_FAMILY_TEXT
         if is_circular:
             # 圆形明渠：bottom_width 实际存储的是直径 D
             open_channel.section_params = {
@@ -1839,6 +1876,10 @@ class WaterProfileCalculator:
                 "H_total": params.structure_height,
                 "m": 0,
             }
+            if culvert_family_type:
+                open_channel.section_params[self._CULVERT_FAMILY_TYPE_KEY] = culvert_family_type
+            if is_arch_culvert and params.theta_deg > 0:
+                open_channel.section_params["theta_deg"] = params.theta_deg
         elif is_u_section:
             # U形明渠：R_circle存圆弧半径，theta_deg存圆心角
             open_channel.section_params = {
@@ -1868,19 +1909,22 @@ class WaterProfileCalculator:
                 if D > 0:
                     self.hyd_calc._fill_circular_section_params(open_channel, D, h)
             elif is_culvert:
-                outputs = calculate_rectangular_outputs(
-                    params.bottom_width,
-                    params.structure_height,
-                    h,
-                    params.roughness,
-                    open_channel.slope_i,
-                )
-                if outputs.get("A", 0) > 0:
-                    open_channel.section_params["A"] = round(outputs["A"], 3)
-                    open_channel.section_params["X"] = round(outputs["P"], 3)
-                    open_channel.section_params["R"] = round(outputs["R_hyd"], 3)
-                    from config.constants import VELOCITY_PRECISION
-                    open_channel.velocity = round(outputs["V"], VELOCITY_PRECISION)
+                if is_arch_culvert:
+                    self.hyd_calc.fill_section_params(open_channel)
+                else:
+                    outputs = calculate_rectangular_outputs(
+                        params.bottom_width,
+                        params.structure_height,
+                        h,
+                        params.roughness,
+                        open_channel.slope_i,
+                    )
+                    if outputs.get("A", 0) > 0:
+                        open_channel.section_params["A"] = round(outputs["A"], 3)
+                        open_channel.section_params["X"] = round(outputs["P"], 3)
+                        open_channel.section_params["R"] = round(outputs["R_hyd"], 3)
+                        from config.constants import VELOCITY_PRECISION
+                        open_channel.velocity = round(outputs["V"], VELOCITY_PRECISION)
             elif is_u_section:
                 # U形断面：复用 hydraulic_calc 的面积/湿周计算
                 self.hyd_calc.fill_section_params(open_channel)
@@ -2673,7 +2717,7 @@ class WaterProfileCalculator:
             name = node.name.strip()
             if (building_runs
                     and building_runs[-1]['name'] == name
-                    and building_runs[-1]['structure_type'] == node.get_structure_type_str()):
+                    and building_runs[-1]['structure_type'] == self._get_effective_structure_type_value(node)):
                 # 延续当前建筑物段落
                 building_runs[-1]['last_idx'] = i
                 building_runs[-1]['node_count'] += 1
@@ -2681,7 +2725,7 @@ class WaterProfileCalculator:
                 # 开始新建筑物段落
                 building_runs.append({
                     'name': name,
-                    'structure_type': node.get_structure_type_str(),
+                    'structure_type': self._get_effective_structure_type_value(node),
                     'first_idx': i,
                     'last_idx': i,
                     'node_count': 1,
@@ -2749,7 +2793,7 @@ class WaterProfileCalculator:
                 if getattr(n, 'is_transition', False):
                     gap_types.add('渐变段')
                 elif n.structure_type:
-                    gap_types.add(n.get_structure_type_str())
+                    gap_types.add(self._get_effective_structure_type_value(n))
             return gap_types, gap_node_count
         
         def _decompose_gap(idx_start, idx_end, gap_start_mc, gap_end_mc, gap_name):
@@ -2780,7 +2824,7 @@ class WaterProfileCalculator:
                 if getattr(n, 'is_transition', False):
                     t = '渐变段'
                 elif n.structure_type:
-                    t = n.get_structure_type_str()
+                    t = self._get_effective_structure_type_value(n)
                 else:
                     t = ''
                 if not t:
@@ -3071,9 +3115,7 @@ class WaterProfileCalculator:
         def _get_effective_type(node) -> str:
             if getattr(node, 'is_transition', False):
                 return "渐变段"
-            if node.structure_type:
-                return node.get_structure_type_str()
-            return ""
+            return WaterProfileCalculator._get_effective_structure_type_value(node)
         
         eff_types = [_get_effective_type(n) for n in nodes]
         
@@ -3219,3 +3261,6 @@ class WaterProfileCalculator:
             'summary_total': summary_total,
             'diff': diff
         }
+    _CULVERT_FAMILY_TYPE_KEY = "culvert_family_type"
+    _RECT_CULVERT_FAMILY_TEXT = "暗涵-矩形"
+    _ARCH_CULVERT_FAMILY_TEXT = "暗涵-圆拱直墙型"

@@ -1374,14 +1374,14 @@ def _format_number(value):
 
 def _get_building_display_name(node):
     """获取纵断面用的建筑物名称显示"""
-    struct_str = node.get_structure_type_str() or ""
+    struct_str = _get_node_structure_text(node)
     if node.is_transition or struct_str == "渐变段":
         return ""
     if getattr(node, "is_auto_inserted_channel", False):
         return ""
     if struct_str.startswith("明渠"):
         return struct_str
-    if struct_str == "矩形暗涵":
+    if _is_culvert_family_structure(struct_str):
         return struct_str
     # 隧洞/倒虹吸/有压管道/渡槽 等特殊建筑物：只有进/出节点参与建筑物名称段的划定；
     # 内部 IP 节点不标注名称，否则 building_segments 会被碎化导致坡降行出现重叠。
@@ -1427,6 +1427,37 @@ def _struct_val(struct_type):
     if struct_type is None:
         return ""
     return struct_type.value if hasattr(struct_type, 'value') else str(struct_type)
+
+
+def _normalize_culvert_family_structure_text(struct_name):
+    """统一暗涵家族结构名称。"""
+    text = str(struct_name or "").strip()
+    if not text:
+        return ""
+    if "暗涵" not in text and "暗渠" not in text and text != "矩形暗涵":
+        return ""
+    if "圆拱直墙" in text or "圆弧直墙" in text:
+        return "暗涵-圆拱直墙型"
+    return "暗涵-矩形"
+
+
+def _get_node_structure_text(node):
+    """读取节点的有效结构类型，暗涵优先返回家族子类型。"""
+    if node is None:
+        return ""
+    params = getattr(node, "section_params", None)
+    if isinstance(params, dict):
+        culvert_family_type = _normalize_culvert_family_structure_text(
+            params.get("culvert_family_type", "")
+        )
+        if culvert_family_type:
+            return culvert_family_type
+    return _struct_val(getattr(node, "structure_type", None))
+
+
+def _is_culvert_family_structure(struct_name):
+    """判断是否属于暗涵家族。"""
+    return bool(_normalize_culvert_family_structure_text(struct_name))
 
 
 def _allows_optional_blank_name(struct_type):
@@ -2149,6 +2180,12 @@ def _is_xxpipe_pressure_structure(struct_name):
 def _is_xxpipe_tunnel_structure(struct_name):
     """判断节点是否属于回到普通渠道表的无压隧洞。"""
     return "隧洞" in str(struct_name or "").strip()
+
+
+def _is_xxpipe_standard_structure(struct_name):
+    """判断节点是否属于 xx管 上方普通表。"""
+    text = str(struct_name or "").strip()
+    return _is_xxpipe_tunnel_structure(text) or _is_culvert_family_structure(text)
 
 
 def _is_tail_pressure_split_core_structure(struct_name):
@@ -3076,7 +3113,7 @@ def _get_profile_slope_segment_identity(node):
     struct_str = _struct_val(getattr(node, "structure_type", None))
     if not struct_str:
         return ""
-    if struct_str.startswith("明渠") or struct_str == "矩形暗涵":
+    if struct_str.startswith("明渠") or _is_culvert_family_structure(struct_str):
         return struct_str
     category = struct_str.split("-")[0]
     raw_name = str(getattr(node, "name", "") or "").strip()
@@ -5519,7 +5556,7 @@ def _route_import_targets_require_non_tunnel_coverage(route_import_targets) -> b
         for node in list(payload.get("nodes", []) or []):
             if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
                 continue
-            struct_name = _struct_val(getattr(node, "structure_type", None))
+            struct_name = _get_node_structure_text(node)
             if not _is_xxpipe_allowed_structure(struct_name):
                 continue
             if "隧洞" in struct_name:
@@ -5572,7 +5609,7 @@ def _build_xxpipe_identity_rows_with_context(nodes, *, route_import_targets=None
             "name": getattr(node, "name", ""),
             "flow_section": getattr(node, "flow_section", ""),
             "identity": identity,
-            "is_tunnel": "隧洞" in _struct_val(getattr(node, "structure_type", None)),
+            "is_tunnel": "隧洞" in _get_node_structure_text(node),
         }
         route_context = route_context_by_row.get(row_index) or {}
         for key in ("route_key", "route_display_name", "node_label", "station_text"):
@@ -6006,7 +6043,7 @@ _XXPIPE_SUBTABLE_GAP = 20.0
 def _iter_xxpipe_split_regular_entries(full_nodes):
     """迭代 xx管 分双表时参与结构分拣的有效节点。"""
     for idx, node in enumerate(list(full_nodes or [])):
-        struct_name = _struct_val(getattr(node, "structure_type", None))
+        struct_name = _get_node_structure_text(node)
         if getattr(node, "is_transition", False):
             continue
         if struct_name == "渐变段":
@@ -6146,8 +6183,8 @@ def _plan_xxpipe_tunnel_split_entries(full_nodes):
     standard_entries = []
     xxpipe_entries = []
     for entry in regular_entries:
-        struct_name = entry["structure_name"]
-        if _is_xxpipe_tunnel_structure(struct_name):
+        struct_name = _get_node_structure_text(entry["node"]) or entry["structure_name"]
+        if _is_xxpipe_standard_structure(struct_name):
             standard_entries.append(entry)
             continue
         if _is_xxpipe_pressure_structure(struct_name):
@@ -12784,6 +12821,10 @@ class SectionSummaryDialog(QDialog):
                 't1': self._read_float(self._culvert_t1, 0.4),
                 't2': self._read_float(self._culvert_t2, 0.4),
             },
+            'rect_culvert_arch': {
+                't0': self._read_float(self._culvert_t0, 0.4),
+                't': self._read_float(self._culvert_t1, 0.4),
+            },
             'rock_lining': self._read_rock_lining(),
         }
 
@@ -12800,6 +12841,7 @@ class SectionSummaryDialog(QDialog):
             _default_segments_aqueduct_u,
             _default_segments_aqueduct_rect,
             _default_segments_rect_culvert,
+            _default_segments_rect_culvert_arch,
             _default_segments_circular_pipe,
             _segment_name,
         )
@@ -12922,11 +12964,12 @@ class SectionSummaryDialog(QDialog):
         aq_u_segs = _make_segs(_default_segments_aqueduct_u, node_defaults.get("aqueduct_u"))
         aq_rect_segs = _make_segs(_default_segments_aqueduct_rect, node_defaults.get("aqueduct_rect"))
         rv_segs = _make_segs(_default_segments_rect_culvert, node_defaults.get("rect_culvert"))
+        rv_arch_segs = _make_segs(_default_segments_rect_culvert_arch, node_defaults.get("rect_culvert_arch"))
         cp_segs = _make_segs(_default_segments_circular_pipe, node_defaults.get("circular_channel"))
 
         if not has_source_data:
             for segs_list in [rc_segs, tr_segs, uc_segs, tn_arch_segs, tn_circ_segs, tn_flat_segs, tn_horse_segs,
-                              aq_u_segs, aq_rect_segs, rv_segs, cp_segs]:
+                              aq_u_segs, aq_rect_segs, rv_segs, rv_arch_segs, cp_segs]:
                 for i, seg in enumerate(segs_list):
                     seg["name"] = _segment_name(i + 1)
 
@@ -12963,6 +13006,8 @@ class SectionSummaryDialog(QDialog):
                 _table_order.append("aqueduct_rect")
             if node_defaults.get("rect_culvert"):
                 _table_order.append("rect_culvert")
+            if node_defaults.get("rect_culvert_arch"):
+                _table_order.append("rect_culvert_arch")
             if node_defaults.get("circular_channel"):
                 _table_order.append("circular_channel")
             if node_defaults.get("siphon"):
@@ -12991,6 +13036,9 @@ class SectionSummaryDialog(QDialog):
             seg['t0'] = struct_t['rect_culvert']['t0']
             seg['t1'] = struct_t['rect_culvert']['t1']
             seg['t2'] = struct_t['rect_culvert']['t2']
+        for seg in rv_arch_segs:
+            seg['t0'] = struct_t['rect_culvert_arch']['t0']
+            seg['t'] = struct_t['rect_culvert_arch']['t']
 
         # 读取隧洞断面设计方式
         tunnel_unified = {}
@@ -13032,6 +13080,7 @@ class SectionSummaryDialog(QDialog):
             aqueduct_u_segs=aq_u_segs,
             aqueduct_rect_segs=aq_rect_segs,
             rect_culvert_segs=rv_segs,
+            rect_culvert_arch_segs=rv_arch_segs,
             circular_pipe_segs=cp_segs,
             siphon_segs=sp_segs,
             siphon_material=siphon_params[0]["pipe_material"] if siphon_params else "球墨铸铁管",

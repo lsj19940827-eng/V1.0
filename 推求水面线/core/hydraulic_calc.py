@@ -58,6 +58,8 @@ class HydraulicCalculator:
     """
 
     _DEFAULT_PRESSURE_PIPE_MATERIAL = "预应力钢筒混凝土管"
+    _CULVERT_FAMILY_TYPE_KEY = "culvert_family_type"
+    _ARCH_CULVERT_FAMILY_TEXT = "暗涵-圆拱直墙型"
     def __init__(self, settings: ProjectSettings):
         """
         初始化水力计算器
@@ -74,6 +76,17 @@ class HydraulicCalculator:
         self.inverted_siphon_losses: Dict[str, float] = {}
         # 有压管道水头损失字典（按名称匹配）
         self.pressure_pipe_losses: Dict[str, float] = {}
+
+    def _get_effective_structure_value(self, node: Optional[ChannelNode]) -> str:
+        """读取节点的有效结构类型，暗涵优先使用家族子类型。"""
+        if node is None:
+            return ""
+        params = getattr(node, "section_params", {}) or {}
+        culvert_family_type = str(params.get(self._CULVERT_FAMILY_TYPE_KEY, "") or "").strip()
+        if culvert_family_type:
+            return culvert_family_type
+        structure_type = getattr(node, "structure_type", None)
+        return structure_type.value if hasattr(structure_type, "value") else str(structure_type or "")
 
     def _resolve_turn_radius(self, node: ChannelNode) -> float:
         """解析当前节点应使用的转弯半径。"""
@@ -318,8 +331,14 @@ class HydraulicCalculator:
         if not node.structure_type:
             return
         
-        struct_name = node.structure_type.value if node.structure_type else ""
+        struct_name = self._get_effective_structure_value(node)
         params = node.section_params or {}
+
+        if struct_name in {"暗涵-矩形", "暗涵-圆拱直墙型"}:
+            H_total = params.get('H_total', params.get('H', 0))
+            if H_total and H_total > 0:
+                node.structure_height = H_total
+            return
         
         # 明渠-U形: 结构高度从 h_prime 获取
         if "明渠-U形" in struct_name:
@@ -365,6 +384,20 @@ class HydraulicCalculator:
     def _get_radius(self, params: dict) -> float:
         """从断面参数中获取半径（兼容多种键名）"""
         return params.get('R_circle', params.get('半径', params.get('内半径', params.get('r', 0))))
+
+    def _get_effective_structure_value(self, node: ChannelNode) -> str:
+        """获取节点的实际结构类型，兼容暗涵家族隐藏口径。"""
+        if node is None:
+            return ""
+        params = getattr(node, "section_params", {}) or {}
+        family_type = str(params.get("culvert_family_type", "") or "").strip()
+        if family_type:
+            return family_type
+        structure_type = getattr(node, "structure_type", None)
+        value = structure_type.value if hasattr(structure_type, "value") else str(structure_type or "")
+        if value in {"暗涵", "暗渠", "矩形暗渠", "矩形暗涵"}:
+            return "暗涵-矩形"
+        return value
 
     def _build_flat_bottom_circle_geom(self, D: float, B: float):
         """构造平底圆形共享几何，异常时返回 None。"""
@@ -726,7 +759,7 @@ class HydraulicCalculator:
         if not structure_type:
             return 0.0
         
-        sv = structure_type.value  # 使用字符串比较避免双路径导入问题
+        sv = self._get_effective_structure_value(node)
         
         h = params.get('水深', params.get('h', node.water_depth))
         if h <= 0:
@@ -741,8 +774,8 @@ class HydraulicCalculator:
                     return area
             return params.get('A', params.get('面积', 0))
 
-        # 矩形类：明渠-矩形、渡槽-矩形、矩形暗涵
-        if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵"):
+        # 矩形类：明渠-矩形、渡槽-矩形、暗涵-矩形
+        if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵", "暗涵-矩形"):
             b = self._get_bottom_width(params)
             if sv == "渡槽-矩形":
                 ca = params.get('chamfer_angle', 0) or 0
@@ -751,8 +784,8 @@ class HydraulicCalculator:
                     return self._rect_chamfer_area(b, h, ca, cl)
             return b * h
 
-        # 隧洞-圆拱直墙型：使用真实圆弧公式（需 H_total 和 theta_deg 参数）
-        elif sv == "隧洞-圆拱直墙型":
+        # 圆拱直墙型：使用真实圆弧公式（需 H_total 和 theta_deg 参数）
+        elif sv in ("隧洞-圆拱直墙型", self._ARCH_CULVERT_FAMILY_TEXT):
             b = self._get_bottom_width(params)
             H_total = params.get('H_total', 0) or 0
             theta_deg = params.get('theta_deg', 0) or 0
@@ -837,7 +870,7 @@ class HydraulicCalculator:
         if not structure_type:
             return 0.0
         
-        sv = structure_type.value
+        sv = self._get_effective_structure_value(node)
         
         h = params.get('水深', params.get('h', node.water_depth))
         if h <= 0:
@@ -852,8 +885,8 @@ class HydraulicCalculator:
                     return perimeter
             return params.get('X', params.get('湿周', params.get('P', 0)))
 
-        # 矩形类：明渠-矩形、渡槽-矩形、矩形暗涵
-        if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵"):
+        # 矩形类：明渠-矩形、渡槽-矩形、暗涵-矩形
+        if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵", "暗涵-矩形"):
             b = self._get_bottom_width(params)
             if sv == "渡槽-矩形":
                 ca = params.get('chamfer_angle', 0) or 0
@@ -862,8 +895,8 @@ class HydraulicCalculator:
                     return self._rect_chamfer_perimeter(b, h, ca, cl)
             return b + 2 * h
 
-        # 隧洞-圆拱直墙型：使用真实圆弧公式
-        elif sv == "隧洞-圆拱直墙型":
+        # 圆拱直墙型：使用真实圆弧公式
+        elif sv in ("隧洞-圆拱直墙型", self._ARCH_CULVERT_FAMILY_TEXT):
             b = self._get_bottom_width(params)
             H_total = params.get('H_total', 0) or 0
             theta_deg = params.get('theta_deg', 0) or 0
@@ -1571,7 +1604,7 @@ class HydraulicCalculator:
         else:
             # 检查是否只有半径参数（马蹄形隧洞、U形渡槽等）
             R_circle = node.section_params.get('R_circle', node.section_params.get('半径', node.section_params.get('内半径', node.section_params.get('r', 0))))
-            sv_bend = node.structure_type.value if node.structure_type else ""
+            sv_bend = self._get_effective_structure_value(node)
             if R_circle > ZERO_TOLERANCE:
                 if "马蹄形" in sv_bend:
                     stype = self._horseshoe_section_type(sv_bend)
@@ -2111,6 +2144,8 @@ class HydraulicCalculator:
             "明渠-矩形",
             "明渠-圆形",
             "明渠-U形",
+            "暗涵-矩形",
+            "暗涵-圆拱直墙型",
             "矩形暗涵",
             "矩形",  # 兼容旧项目中的矩形明渠值
         }
@@ -2222,7 +2257,7 @@ class HydraulicCalculator:
             details["donor_water_depth"] = round(float(donor.water_depth or 0.0), ELEVATION_PRECISION)
             details["donor_structure_height"] = round(float(donor.structure_height or 0.0), ELEVATION_PRECISION)
         else:
-            details["failure_reason"] = "同流量段上游未找到同时具备水深和结构高度的明渠/矩形暗涵参考断面"
+            details["failure_reason"] = "同流量段上游未找到同时具备水深和结构高度的明渠/暗涵参考断面"
 
         if need_bottom:
             water_level = float(getattr(target, "water_level", 0.0) or 0.0)
@@ -2395,7 +2430,7 @@ class HydraulicCalculator:
             return 0.0
         
         params = node.section_params
-        sv = node.structure_type.value if node.structure_type else ""
+        sv = self._get_effective_structure_value(node)
 
         if sv == "隧洞-平底圆形":
             D = self._get_diameter(params)

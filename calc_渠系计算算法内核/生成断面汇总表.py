@@ -48,7 +48,11 @@ from 隧洞设计 import (
     get_flow_increase_percent as _tunnel_inc_pct,
 )
 from 渡槽设计 import quick_calculate_u as _calc_aqueduct_u
-from 矩形暗涵设计 import quick_calculate_rectangular_culvert as _calc_rect_culvert
+from 矩形暗涵设计 import (
+    quick_calculate_rectangular_culvert as _calc_rect_culvert,
+    get_flow_increase_percent_rect as _culvert_inc_pct,
+)
+from 圆拱直墙型暗涵设计 import quick_calculate_arch_culvert as _calc_arch_culvert
 from 有压管道设计 import (
     PIPE_MATERIALS as PRESSURE_PIPE_MATERIALS,
     get_flow_increase_percent as _pressure_pipe_inc_pct,
@@ -88,6 +92,16 @@ ROCK_LINING_DEFAULT = {
     "III类": {"t0": 0.35, "t": 0.30},
     "IV类":  {"t0": 0.40, "t": 0.40},
     "V类":   {"t0": 0.50, "t": 0.50},
+}
+
+_CULVERT_STRUCTURE_TYPE_ALIASES = {
+    "暗涵": "暗涵-矩形",
+    "暗渠": "暗涵-矩形",
+    "矩形暗渠": "暗涵-矩形",
+    "矩形暗涵": "暗涵-矩形",
+    "暗涵-矩形": "暗涵-矩形",
+    "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
+    "暗涵-圆拱直墙型": "暗涵-圆拱直墙型",
 }
 
 # 倒虹吸管道材质 → 糙率
@@ -464,10 +478,19 @@ def _parse_flow_section_index(flow_section: str) -> Optional[int]:
 
 
 def _get_struct_name(node) -> str:
+    def _normalize_culvert_structure_type(value: Any) -> str:
+        """将旧暗涵别名归一为断面汇总使用的标准名称。"""
+        text = str(value or "").strip()
+        return _CULVERT_STRUCTURE_TYPE_ALIASES.get(text, text)
+
+    params = getattr(node, "section_params", {}) or {}
+    culvert_family_type = str(params.get("culvert_family_type", "") or "").strip()
+    if culvert_family_type:
+        return _normalize_culvert_structure_type(culvert_family_type)
     st = getattr(node, "structure_type", None)
     if hasattr(st, "value"):
-        return str(st.value)
-    return str(st or "")
+        return _normalize_culvert_structure_type(st.value)
+    return _normalize_culvert_structure_type(st)
 
 
 def _parse_horseshoe_section_type(value: Any) -> Optional[int]:
@@ -569,6 +592,8 @@ def _classify_structure(node) -> Optional[str]:
         return "aqueduct_rect"
 
     if "暗涵" in name:
+        if "圆拱直墙" in name or "圆弧直墙" in name:
+            return "rect_culvert_arch"
         return "rect_culvert"
 
     # 明渠圆形 / 圆管涵
@@ -637,6 +662,7 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
         "aqueduct_u": {},
         "aqueduct_rect": {},
         "rect_culvert": {},
+        "rect_culvert_arch": {},
         "siphon": {},
         "pressure_pipe": {},
     }
@@ -697,7 +723,9 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
         _assign_if_valid(target, "V", v_val)
 
         h_total = _to_float(getattr(node, "structure_height", 0.0), 0.0)
-        if struct_key not in {"rect_channel", "trap_channel"}:
+        if struct_key == "rect_culvert_arch":
+            _assign_if_valid(target, "H_total", math.ceil(h_total * 100) / 100)
+        elif struct_key not in {"rect_channel", "trap_channel"}:
             _assign_if_valid(target, "H", math.ceil(h_total * 100) / 100)
 
         theta_deg = _to_float(params.get("theta_deg", 0.0), 0.0)
@@ -1018,6 +1046,13 @@ def _default_segments_rect_culvert():
     Qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
     return [{"name": _segment_name(i + 1), "Q": Qs[i], "slope_inv": 2500, "n": 0.014,
              "t0": 0.4, "t1": 0.4, "t2": 0.4} for i in range(7)]
+
+
+def _default_segments_rect_culvert_arch():
+    """圆拱直墙型暗涵默认参数"""
+    Qs = [2.0, 1.3, 0.8, 0.5, 0.4, 0.2, 0.5]
+    return [{"name": _segment_name(i + 1), "Q": Qs[i], "slope_inv": 2500, "n": 0.014,
+             "theta_deg": 150.0, "t0": 0.4, "t": 0.4} for i in range(7)]
 
 def _default_segments_circular_pipe():
     """圆管涵默认参数"""
@@ -2009,6 +2044,118 @@ def compute_rect_culvert(segments: List[Dict]) -> List[Dict]:
     return rows
 
 
+def compute_rect_culvert_arch(segments: List[Dict]) -> List[Dict]:
+    """圆拱直墙型暗涵计算。"""
+    rows = []
+    override_map = {
+        "Q": "Q", "Q_inc": "Q_inc", "slope_inv": "slope_inv", "n": "n",
+        "B": "B", "H_total": "H_total", "H_straight": "H_straight", "R_arch": "R_arch",
+        "theta_deg": "theta_deg", "t0": "t0", "t": "t",
+        "H1": "H1", "H2": "H2", "V": "V",
+    }
+
+    def _resolve_geometry(seg):
+        geom = _derive_tunnel_arch_geometry(
+            b=seg.get("B"),
+            h_total=seg.get("H_total", seg.get("H")),
+            h_straight=seg.get("H_straight"),
+            r_arch=seg.get("R_arch"),
+            theta_deg=seg.get("theta_deg"),
+        )
+        if geom is not None:
+            return geom
+
+        manual_increase_percent = _resolve_manual_increase_percent(seg, True)
+        if manual_increase_percent == 0:
+            manual_increase_percent = None
+
+        res = _calc_arch_culvert(
+            Q=seg["Q"],
+            n=seg.get("n", 0.014),
+            slope_inv=seg["slope_inv"],
+            v_min=V_MIN,
+            v_max=V_MAX,
+            theta_deg=_first_positive(seg, "theta_deg") or 150.0,
+            manual_B=_first_positive(seg, "B"),
+            manual_increase_percent=manual_increase_percent,
+        )
+        if not res.get("success"):
+            return None
+
+        B = res["B"]
+        H_total = res["H_total"]
+        H_straight = res["H_straight"]
+        theta_deg = res.get("theta_deg", 150.0)
+        theta_rad = math.radians(theta_deg)
+        sin_half = math.sin(theta_rad / 2.0)
+        R_arch = (B / 2.0) / sin_half if abs(sin_half) > 1e-9 else B / 2.0
+        return B, H_total, H_straight, R_arch, theta_deg
+
+    for seg in segments:
+        Q = seg["Q"]
+        slope_inv = seg["slope_inv"]
+        n = seg.get("n", 0.014)
+        t0 = seg.get("t0", 0.4)
+        t = seg.get("t", seg.get("t1", 0.4))
+        use_increase = _normalize_use_increase(seg.get("use_increase"), True)
+        geom = _resolve_geometry(seg)
+        if geom is None:
+            row = {
+                "name": seg["name"], "Q": Q, "Q_inc": "", "slope_inv": slope_inv, "n": n,
+                "B": "", "H_straight": "", "R_arch": "", "t0": t0, "t": t,
+                "H1": "", "H2": "", "V": "", "use_increase": use_increase,
+            }
+            _apply_overrides(row, seg, override_map)
+            rows.append(_blank_increase_fields(row))
+            continue
+
+        B, H_total, H_straight, R_arch, theta_deg = geom
+        slope = 1.0 / slope_inv
+        manual_increase_percent = _resolve_manual_increase_percent(seg, use_increase)
+        if use_increase:
+            inc_pct = (
+                manual_increase_percent
+                if manual_increase_percent is not None
+                else _culvert_inc_pct(Q)
+            )
+        else:
+            inc_pct = 0.0
+        Q_inc = Q * (1 + inc_pct / 100.0)
+        theta_rad = math.radians(theta_deg)
+        h_d, ok_d = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q)
+        if use_increase:
+            h_i, ok_i = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q_inc)
+        else:
+            h_i, ok_i = 0.0, False
+
+        V_d = 0.0
+        if ok_d and h_d > 0:
+            out_d = calculate_horseshoe_outputs(B, H_total, theta_rad, h_d, n, slope)
+            V_d = out_d["V"]
+
+        row = {
+            "name": seg["name"],
+            "Q": Q,
+            "Q_inc": round(Q_inc, 3) if use_increase else "",
+            "slope_inv": slope_inv,
+            "n": n,
+            "B": round(B, 2),
+            "H_total": round(H_total, 2),
+            "H_straight": round(H_straight, 2),
+            "R_arch": round(R_arch, 3),
+            "theta_deg": round(theta_deg, 3),
+            "t0": t0,
+            "t": t,
+            "H1": round(h_d, 2) if ok_d else "",
+            "H2": round(h_i, 2) if use_increase and ok_i else "",
+            "V": round(V_d, 2) if V_d > 0 else "",
+            "use_increase": use_increase,
+        }
+        _apply_overrides(row, seg, override_map)
+        rows.append(_blank_increase_fields(row))
+    return rows
+
+
 # ============================================================
 # 5. 圆管涵（无压自由面流）
 # ============================================================
@@ -2933,6 +3080,57 @@ def _write_rect_culvert(ws, data, styles, gcl, col_offset=0):
     return NCOLS
 
 
+def _write_rect_culvert_arch(ws, data, styles, gcl, col_offset=0):
+    C = col_offset
+    R1 = 1
+
+    headers_full = [
+        ("流量段", None),
+        ("设计流量", "m³/s"),
+        ("加大流量", "m³/s"),
+        ("1/底坡", None),
+        ("糙率", None),
+        ("底宽B", "m"),
+        ("直墙高H", "m"),
+        ("顶拱半径R", "m"),
+        ("底板厚t₀", "m"),
+        ("边墙顶拱厚t", "m"),
+        ("设计水深H₁", "m"),
+        ("加大水深H₂", "m"),
+        ("设计流速", "m/s"),
+    ]
+    col_widths_full = [14, 12, 12, 12, 10, 10, 10, 12, 11, 13, 13, 13, 12]
+    rows_full = []
+    for d in data:
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"], d.get("B", ""), d.get("H_straight", ""), d.get("R_arch", ""),
+            d.get("t0", ""), d.get("t", ""),
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
+        ])
+    headers, col_widths, rows, _merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+    )
+    NCOLS = len(headers)
+
+    _write_title(ws, R1, C + 1, C + NCOLS, "圆拱直墙型暗涵断面尺寸及水力要素表", styles)
+    for i, (name, unit) in enumerate(headers):
+        _write_header_2row(ws, R1 + 1, R1 + 2, C + 1 + i, name, unit, styles)
+    for i, w in enumerate(col_widths):
+        _set_col_width(ws, C + 1 + i, w, gcl)
+
+    for ri, vals in enumerate(rows):
+        r = R1 + 3 + ri
+        for ci, v in enumerate(vals):
+            _sc(ws, r, C + 1 + ci, v, styles)
+
+    return NCOLS
+
+
 # ============================================================
 # Sheet 5: 圆形明渠（圆管涵）
 # ============================================================
@@ -3064,6 +3262,7 @@ def generate_excel(
     aqueduct_u_segs: List[Dict] = None,
     aqueduct_rect_segs: List[Dict] = None,
     rect_culvert_segs: List[Dict] = None,
+    rect_culvert_arch_segs: List[Dict] = None,
     circular_pipe_segs: List[Dict] = None,
     siphon_segs: List[Dict] = None,
     siphon_material: str = "球墨铸铁管",
@@ -3125,6 +3324,8 @@ def generate_excel(
 
     if rect_culvert_segs is None:
         rect_culvert_segs = _default_segments_rect_culvert()
+    if rect_culvert_arch_segs is None:
+        rect_culvert_arch_segs = []
     if circular_pipe_segs is None:
         circular_pipe_segs = _default_segments_circular_pipe()
     if siphon_segs is None:
@@ -3151,6 +3352,7 @@ def generate_excel(
     d3_u = compute_aqueduct_u(aqueduct_u_segs) if aqueduct_u_segs else []
     d3_rect = compute_aqueduct_rect(aqueduct_rect_segs) if aqueduct_rect_segs else []
     d4 = compute_rect_culvert(rect_culvert_segs) if rect_culvert_segs else []
+    d4_arch = compute_rect_culvert_arch(rect_culvert_arch_segs) if rect_culvert_arch_segs else []
     d5 = compute_circular_pipe(circular_pipe_segs) if circular_pipe_segs else []
     d6 = compute_siphon(siphon_segs, siphon_material) if siphon_segs else []
     d7 = compute_pressure_pipe(pressure_pipe_segs, pressure_pipe_material) if pressure_pipe_segs else []
@@ -3167,6 +3369,7 @@ def generate_excel(
         "aqueduct_u":       ("U形渡槽",           _write_aqueduct,           d3_u),
         "aqueduct_rect":    ("矩形渡槽",          _write_aqueduct_rect,      d3_rect),
         "rect_culvert":     ("矩形暗涵",          _write_rect_culvert,       d4),
+        "rect_culvert_arch": ("圆拱直墙型暗涵",   _write_rect_culvert_arch,  d4_arch),
         "circular_channel": ("圆形明渠(圆管涵)",   _write_circular_pipe,      d5),
         "siphon":           ("倒虹吸",            _write_siphon,             d6),
         "pressure_pipe":    ("有压管道",          _write_pressure_pipe,      d7),
@@ -3194,7 +3397,7 @@ def generate_excel(
         table_order = ["rect_channel", "trap_channel", "u_channel",
                        "tunnel_arch", "tunnel_circular", "tunnel_flat_bottom_circular", "tunnel_horseshoe",
                        "aqueduct_u", "aqueduct_rect",
-                       "rect_culvert", "circular_channel", "siphon", "pressure_pipe"]
+                       "rect_culvert", "rect_culvert_arch", "circular_channel", "siphon", "pressure_pipe"]
     table_order = _expand_horseshoe_table_order(table_order, horseshoe_keys)
 
     tables = []
@@ -3863,6 +4066,34 @@ def _dxf_build_rect_culvert(data):
     return title, headers, col_widths, rows, None
 
 
+def _dxf_build_rect_culvert_arch(data):
+    title = "圆拱直墙型暗涵断面尺寸及水力要素表"
+    headers_full = [
+        ("流量段", None), ("设计流量", "m³/s"), ("加大流量", "m³/s"),
+        ("1/底坡", None), ("糙率", None), ("底宽B", "m"),
+        ("直墙高H", "m"), ("顶拱半径R", "m"),
+        ("底板厚t₀", "m"), ("边墙顶拱厚t", "m"),
+        ("设计水深H₁", "m"), ("加大水深H₂", "m"), ("设计流速", "m/s"),
+    ]
+    col_widths_full = _dxf_col_widths([12, 10, 10, 10, 8, 8, 8, 10, 10, 12, 12, 12, 10])
+    rows_full = []
+    for d in data:
+        rows_full.append([
+            d["name"], d["Q"], _open_channel_increase_value(d, "Q_inc"),
+            f'1/{d["slope_inv"]:g}' if d.get("slope_inv") else "",
+            d["n"], d.get("B", ""), d.get("H_straight", ""), d.get("R_arch", ""),
+            d.get("t0", ""), d.get("t", ""),
+            d.get("H1", ""), _open_channel_increase_value(d, "H2"), d.get("V", ""),
+        ])
+    headers, col_widths, rows, _merge = _filter_increase_columns(
+        headers_full,
+        col_widths_full,
+        rows_full,
+        include_increase=_open_channel_include_increase_columns(data),
+    )
+    return title, headers, col_widths, rows, None
+
+
 def _dxf_build_circular_pipe(data):
     title = "圆管涵断面尺寸及水力要素表"
     columns = _circular_channel_column_defs(_open_channel_include_increase_columns(data))
@@ -3922,6 +4153,7 @@ _DXF_BUILDERS = {
     "aqueduct_u":       _dxf_build_aqueduct_u,
     "aqueduct_rect":    _dxf_build_aqueduct_rect,
     "rect_culvert":     _dxf_build_rect_culvert,
+    "rect_culvert_arch": _dxf_build_rect_culvert_arch,
     "circular_channel": _dxf_build_circular_pipe,
     "siphon":           _dxf_build_siphon,
     "pressure_pipe":    _dxf_build_pressure_pipe,
@@ -3945,6 +4177,7 @@ def generate_dxf(
     aqueduct_u_segs: List[Dict] = None,
     aqueduct_rect_segs: List[Dict] = None,
     rect_culvert_segs: List[Dict] = None,
+    rect_culvert_arch_segs: List[Dict] = None,
     circular_pipe_segs: List[Dict] = None,
     siphon_segs: List[Dict] = None,
     siphon_material: str = "球墨铸铁管",
@@ -3992,6 +4225,8 @@ def generate_dxf(
         aqueduct_rect_segs = []
     if rect_culvert_segs is None:
         rect_culvert_segs = _default_segments_rect_culvert()
+    if rect_culvert_arch_segs is None:
+        rect_culvert_arch_segs = []
     if circular_pipe_segs is None:
         circular_pipe_segs = _default_segments_circular_pipe()
     if siphon_segs is None:
@@ -4018,6 +4253,7 @@ def generate_dxf(
     d3_u = compute_aqueduct_u(aqueduct_u_segs) if aqueduct_u_segs else []
     d3_rect = compute_aqueduct_rect(aqueduct_rect_segs) if aqueduct_rect_segs else []
     d4 = compute_rect_culvert(rect_culvert_segs) if rect_culvert_segs else []
+    d4_arch = compute_rect_culvert_arch(rect_culvert_arch_segs) if rect_culvert_arch_segs else []
     d5 = compute_circular_pipe(circular_pipe_segs) if circular_pipe_segs else []
     d6 = compute_siphon(siphon_segs, siphon_material) if siphon_segs else []
     d7 = compute_pressure_pipe(pressure_pipe_segs, pressure_pipe_material) if pressure_pipe_segs else []
@@ -4032,6 +4268,7 @@ def generate_dxf(
         "aqueduct_u":       d3_u,
         "aqueduct_rect":    d3_rect,
         "rect_culvert":     d4,
+        "rect_culvert_arch": d4_arch,
         "circular_channel": d5,
         "siphon":           d6,
         "pressure_pipe":    d7,
@@ -4047,7 +4284,7 @@ def generate_dxf(
         table_order = ["rect_channel", "trap_channel", "u_channel",
                        "tunnel_arch", "tunnel_circular", "tunnel_flat_bottom_circular", "tunnel_horseshoe",
                        "aqueduct_u", "aqueduct_rect",
-                       "rect_culvert", "circular_channel", "siphon", "pressure_pipe"]
+                       "rect_culvert", "rect_culvert_arch", "circular_channel", "siphon", "pressure_pipe"]
     table_order = _expand_horseshoe_table_order(table_order, horseshoe_keys)
 
     # 收集有数据的表格

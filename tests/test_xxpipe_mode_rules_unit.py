@@ -44,6 +44,8 @@ def test_xxpipe_allowed_structure_options_cover_pipe_rule_baseline():
 
     assert set(XXPIPE_ALLOWED_STRUCTURE_OPTIONS) == expected
     assert "明渠-矩形" not in XXPIPE_ALLOWED_STRUCTURE_OPTIONS
+    assert "暗涵-矩形" not in XXPIPE_ALLOWED_STRUCTURE_OPTIONS
+    assert "暗涵-圆拱直墙型" not in XXPIPE_ALLOWED_STRUCTURE_OPTIONS
     assert set(XXPIPE_ALLOWED_STRUCTURE_OPTIONS).issubset(STRUCTURE_TYPE_OPTIONS)
 
 
@@ -58,6 +60,12 @@ def test_xxpipe_allowed_structure_options_include_all_tunnel_dropdown_variants()
 
     assert tunnel_options
     assert tunnel_options.issubset(set(XXPIPE_ALLOWED_STRUCTURE_OPTIONS))
+
+
+@pytest.mark.parametrize("structure_type", ["暗涵-矩形", "暗涵-圆拱直墙型"])
+def test_xxpipe_allowed_structure_options_exclude_culvert_family(structure_type):
+    assert structure_type in STRUCTURE_TYPE_OPTIONS
+    assert structure_type not in XXPIPE_ALLOWED_STRUCTURE_OPTIONS
 
 
 def test_cad_tools_xxpipe_helper_contract_is_available():
@@ -75,3 +83,8 @@ def test_cad_tools_xxpipe_helper_contract_is_available():
     assert module._is_xxpipe_channel_level("支管")
     assert module._is_xxpipe_allowed_structure("定向钻")
     assert module._is_xxpipe_named_structure("顶管")
+    assert not module._is_xxpipe_allowed_structure("暗涵-矩形")
+    assert not module._is_xxpipe_allowed_structure("暗涵-圆拱直墙型")
+    assert not module._is_xxpipe_pressure_structure("暗涵-圆拱直墙型")
+    assert not module._is_xxpipe_tunnel_structure("暗涵-圆拱直墙型")
+    assert not module._is_xxpipe_named_structure("暗涵-圆拱直墙型")

@@ -107,20 +107,29 @@ def calculate_normal_depth(Q, B, m, n, i, D=0.0):
     return h
 
 
-TRANSITION_FILLER_TYPES = ["明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", "矩形暗涵"]
+TRANSITION_FILLER_TYPES = ["明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", "暗涵-矩形", "暗涵-圆拱直墙型"]
+MANUAL_TRANSITION_FILLER_TYPES = [item for item in TRANSITION_FILLER_TYPES if item != "暗涵-圆拱直墙型"]
 
 
 def normalize_transition_structure_type(structure_type: str) -> str:
     aliases = {
         "矩形": "明渠-矩形",
-        "暗渠": "矩形暗涵",
-        "矩形暗渠": "矩形暗涵",
+        "暗涵": "暗涵-矩形",
+        "暗渠": "暗涵-矩形",
+        "矩形暗渠": "暗涵-矩形",
+        "矩形暗涵": "暗涵-矩形",
+        "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
+        "暗涵圆拱直墙型": "暗涵-圆拱直墙型",
     }
     return aliases.get(structure_type or "", structure_type or "")
 
 
 def is_transition_culvert_type(structure_type: str) -> bool:
-    return normalize_transition_structure_type(structure_type) == "矩形暗涵"
+    return normalize_transition_structure_type(structure_type) in {"暗涵-矩形", "暗涵-圆拱直墙型"}
+
+
+def is_transition_arch_culvert_type(structure_type: str) -> bool:
+    return normalize_transition_structure_type(structure_type) == "暗涵-圆拱直墙型"
 
 
 def is_transition_u_channel_type(structure_type: str) -> bool:
@@ -151,6 +160,7 @@ def build_transition_fill_params(
     Q: float,
     flow_section: str,
     upstream_channel: Optional[Dict[str, Any]] = None,
+    theta_deg: float = 180.0,
 ) -> Optional[OpenChannelParams]:
     structure_type = normalize_transition_structure_type(structure_type)
     slope_i = 1.0 / slope_inv if slope_inv > 0 else 0.0
@@ -161,7 +171,12 @@ def build_transition_fill_params(
     if is_transition_culvert_type(structure_type):
         if B <= 0 or H <= 0:
             return None
-        h, ok = solve_water_depth_rectangular(B, H, n, slope_i, Q)
+        if is_transition_arch_culvert_type(structure_type):
+            theta_value = (upstream_channel or {}).get("theta_deg", theta_deg) or theta_deg or 180.0
+            h, ok = solve_water_depth_horseshoe(B, H, math.radians(theta_value), n, slope_i, Q)
+        else:
+            theta_value = 0.0
+            h, ok = solve_water_depth_rectangular(B, H, n, slope_i, Q)
         if (not ok or h <= 0) and upstream_channel:
             h = upstream_channel.get("water_depth", 0.0)
         if h <= 0:
@@ -177,6 +192,7 @@ def build_transition_fill_params(
             flow=Q,
             flow_section=flow_section,
             structure_height=H,
+            theta_deg=theta_value,
         )
 
     if B <= 0 and not is_transition_circular_channel_type(structure_type) and not is_transition_u_channel_type(structure_type):
@@ -226,6 +242,7 @@ def build_transition_fill_params(
 
 
 from 矩形暗涵设计 import solve_water_depth_rectangular
+from 隧洞设计 import solve_water_depth_horseshoe
 
 from PySide6.QtGui import (
     QPainter, QPen, QBrush, QPolygonF,
@@ -4157,8 +4174,8 @@ class BuildingLengthDialog(QDialog):
 
     @staticmethod
     def _is_building_type(structure_type: str) -> bool:
-        """判断结构类型是否为建筑物（渡槽/隧洞/倒虹吸）"""
-        return any(kw in structure_type for kw in ('渡槽', '隧洞', '倒虹吸'))
+        """判断结构类型是否为建筑物（渡槽/隧洞/暗涵/倒虹吸）"""
+        return any(kw in structure_type for kw in ('渡槽', '隧洞', '暗涵', '倒虹吸'))
 
     def _load_data(self):
         """加载明细和汇总数据到表格"""
@@ -4597,6 +4614,35 @@ class BatchChannelConfirmDialog(QDialog):
     RESULT_CANCELLED = "cancelled"
 
     STRUCTURE_TYPES = TRANSITION_FILLER_TYPES
+    MANUAL_STRUCTURE_TYPES = MANUAL_TRANSITION_FILLER_TYPES
+
+    @classmethod
+    def _build_structure_type_options(cls, allow_arch_culvert_source: bool = False):
+        """按来源限制补段结构形式选项。"""
+        options = list(cls.MANUAL_STRUCTURE_TYPES)
+        if allow_arch_culvert_source and "暗涵-圆拱直墙型" not in options:
+            options.append("暗涵-圆拱直墙型")
+        return options
+
+    @staticmethod
+    def _set_combo_items(combo, options, current_text=""):
+        """刷新下拉选项，并尽量保留当前值。"""
+        target_text = str(current_text or "").strip()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(list(options))
+        if target_text:
+            target_index = combo.findText(target_text)
+            if target_index >= 0:
+                combo.setCurrentIndex(target_index)
+        combo.blockSignals(False)
+
+    @classmethod
+    def _gap_allows_arch_culvert_source(cls, gap: Dict[str, Any]) -> bool:
+        """仅在带入链路已明确是圆拱直墙型时，保留该选项。"""
+        reference = gap.get("reference_segment") or gap.get("upstream_channel") or {}
+        structure_type = normalize_transition_structure_type(reference.get("structure_type", ""))
+        return structure_type == "暗涵-圆拱直墙型"
 
     def __init__(self, parent, total_count: int, gaps_info: list):
         super().__init__(parent)
@@ -4718,12 +4764,18 @@ class BatchChannelConfirmDialog(QDialog):
 
             # 结构形式 ComboBox
             type_cb = QComboBox()
-            type_cb.addItems(self.STRUCTURE_TYPES)
+            allow_arch_culvert_source = self._gap_allows_arch_culvert_source(gap)
+            type_cb.addItems(self._build_structure_type_options(allow_arch_culvert_source))
             type_cb.setCurrentIndex(0)
             self.param_table.setCellWidget(idx, 4, type_cb)
 
             # B, m, n, 底坡, Q 输入框
-            row_widgets = {'gap': gap, 'type_combo': type_cb, 'entries': {}}
+            row_widgets = {
+                'gap': gap,
+                'type_combo': type_cb,
+                'entries': {},
+                'allow_arch_culvert_source': allow_arch_culvert_source,
+            }
             for c, key in [(5, 'B'), (6, 'H'), (7, 'm'), (8, 'n'), (9, 'slope'), (10, 'Q')]:
                 default_val = ""
                 if key == 'n':
@@ -4919,10 +4971,11 @@ class BatchChannelConfirmDialog(QDialog):
         if not up:
             return
         st = normalize_transition_structure_type(up.get('structure_type', '明渠-梯形'))
-        idx_in_combo = self.STRUCTURE_TYPES.index(st) if st in self.STRUCTURE_TYPES else 0
-        row['type_combo'].blockSignals(True)
-        row['type_combo'].setCurrentIndex(idx_in_combo)
-        row['type_combo'].blockSignals(False)
+        self._set_combo_items(
+            row['type_combo'],
+            self._build_structure_type_options(row.get('allow_arch_culvert_source', False)),
+            current_text=st,
+        )
         self._apply_row_type_mode(row_idx)
 
         entries = row['entries']
@@ -5099,6 +5152,7 @@ class BatchChannelConfirmDialog(QDialog):
                     Q=Q,
                     flow_section=row['gap'].get('flow_section', ''),
                     upstream_channel=upstream,
+                    theta_deg=(upstream or {}).get('theta_deg', 180.0) if is_transition_arch_culvert_type(st) else 180.0,
                 )
                 if params[idx] is None:
                     fluent_info(self, "计算错误", f"第 {idx+1} 处: 无法生成有效的补段参数，请检查 B/H/m/n/底坡")
@@ -5141,6 +5195,15 @@ class OpenChannelDialog(QDialog):
     """
 
     STRUCTURE_TYPES = TRANSITION_FILLER_TYPES
+    MANUAL_STRUCTURE_TYPES = MANUAL_TRANSITION_FILLER_TYPES
+
+    @classmethod
+    def _build_structure_type_options(cls, allow_arch_culvert_source: bool = False):
+        """按来源限制补段结构形式选项。"""
+        options = list(cls.MANUAL_STRUCTURE_TYPES)
+        if allow_arch_culvert_source and "暗涵-圆拱直墙型" not in options:
+            options.append("暗涵-圆拱直墙型")
+        return options
 
     def __init__(self, parent,
                  upstream_channel: Optional[Dict] = None,
@@ -5163,6 +5226,12 @@ class OpenChannelDialog(QDialog):
 
         self._result: Optional[OpenChannelParams] = None
         self.apply_all_remaining = False
+        self._allow_arch_culvert_source = (
+            normalize_transition_structure_type(
+                (self.upstream_channel or {}).get("structure_type", "")
+            )
+            == "暗涵-圆拱直墙型"
+        )
 
         if total_count > 1:
             self.setWindowTitle(f"插入补段 ({current_index}/{total_count})")
@@ -5171,6 +5240,20 @@ class OpenChannelDialog(QDialog):
         self.resize(520, 560)
         self.setMinimumSize(420, 440)
         self._create_ui()
+
+    def _refresh_structure_type_choices(self, current_text=""):
+        """按当前来源模式刷新结构形式选项。"""
+        allow_arch_culvert_source = self._allow_arch_culvert_source and not self.rb_manual.isChecked()
+        options = self._build_structure_type_options(allow_arch_culvert_source)
+        target_text = str(current_text or "").strip()
+        self.type_combo.blockSignals(True)
+        self.type_combo.clear()
+        self.type_combo.addItems(options)
+        if target_text:
+            target_index = self.type_combo.findText(target_text)
+            if target_index >= 0:
+                self.type_combo.setCurrentIndex(target_index)
+        self.type_combo.blockSignals(False)
 
     def _create_ui(self):
         lay = QVBoxLayout(self)
@@ -5230,7 +5313,7 @@ class OpenChannelDialog(QDialog):
         pg.addWidget(QLabel("结构形式:"), 0, 0)
         self.type_combo = QComboBox()
         self.type_combo.setMinimumHeight(_row_h)
-        self.type_combo.addItems(self.STRUCTURE_TYPES)
+        self._refresh_structure_type_choices()
         pg.addWidget(self.type_combo, 0, 1)
 
         pg.addWidget(QLabel("底宽 B(m):"), 1, 0)
@@ -5337,8 +5420,7 @@ class OpenChannelDialog(QDialog):
             return
         st = up.get('structure_type', '明渠-梯形')
         st = normalize_transition_structure_type(st)
-        idx = self.STRUCTURE_TYPES.index(st) if st in self.STRUCTURE_TYPES else 0
-        self.type_combo.setCurrentIndex(idx)
+        self._refresh_structure_type_choices(st)
         # U形明渠使用半径R（arc_radius），其他使用底宽B
         if st == "明渠-U形":
             b_val = up.get('arc_radius', 0)
@@ -5353,6 +5435,8 @@ class OpenChannelDialog(QDialog):
 
     def _on_source_change(self, checked=None):
         is_manual = self.rb_manual.isChecked()
+        current_text = self.type_combo.currentText()
+        self._refresh_structure_type_choices(current_text)
         for w in self._param_widgets:
             w.setEnabled(is_manual)
         if not is_manual and self.upstream_channel:
@@ -5399,6 +5483,7 @@ class OpenChannelDialog(QDialog):
                 Q=Q,
                 flow_section=self.flow_section,
                 upstream_channel=self.upstream_channel,
+                theta_deg=(self.upstream_channel or {}).get('theta_deg', 180.0) if is_transition_arch_culvert_type(st) else 180.0,
             )
             if self._result is None:
                 fluent_info(self, "计算错误", "无法生成有效的补段参数，请检查 B/H/m/n/底坡")

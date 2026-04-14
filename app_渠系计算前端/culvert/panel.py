@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-矩形暗涵水力计算面板 —— QWidget 版本
+暗涵水力计算面板 —— QWidget 版本
 
-支持：矩形暗涵（经济最优断面 / 指定底宽 / 指定宽深比）
+支持：矩形 / 圆拱直墙型
 功能：参数输入、计算、结果显示、断面图、导出Word/TXT/图表
 """
 
@@ -64,6 +64,7 @@ from 矩形暗涵设计 import (
     MIN_FREEBOARD_PCT_RECT, MAX_FREEBOARD_PCT_RECT, MIN_FREEBOARD_HGT_RECT,
     HB_RATIO_LIMIT,
 )
+from 圆拱直墙型暗涵设计 import quick_calculate_arch_culvert
 
 from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPUT_LABEL_STYLE, INPUT_SECTION_STYLE, INPUT_HINT_STYLE
 from app_渠系计算前端.export_utils import (
@@ -93,6 +94,10 @@ from app_渠系计算前端.formula_renderer import (
     HelpPageBuilder
 )
 from app_渠系计算前端.plot_title_utils import apply_flow_velocity_title
+from app_渠系计算前端.tunnel.geometry import (
+    arch_half_width as _arch_half_width,
+    build_arch_geometry as _build_arch_geometry,
+)
 from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
     build_result_nav_bar,
@@ -106,8 +111,56 @@ if WORD_EXPORT_AVAILABLE:
     from docx.shared import Pt, Cm
 
 
+_CULVERT_RECT = "矩形"
+_CULVERT_ARCH = "圆拱直墙型"
+_CULVERT_FULL_NAME_MAP = {
+    _CULVERT_RECT: "暗涵-矩形",
+    _CULVERT_ARCH: "暗涵-圆拱直墙型",
+}
+
+
+def _normalize_culvert_section_type(value):
+    """统一暗涵子类型口径，兼容旧项目里的历史文本。"""
+    text = str(value or "").strip()
+    if text in {"", "矩形", "暗涵", "暗渠", "矩形暗渠", "矩形暗涵", "暗涵-矩形"}:
+        return _CULVERT_RECT
+    if text in {"圆拱直墙型", "圆拱直墙型暗涵", "暗涵圆拱直墙型", "暗涵-圆拱直墙型", "隧洞-圆拱直墙型"}:
+        return _CULVERT_ARCH
+    return _CULVERT_RECT
+
+
+def _culvert_full_name(section_type):
+    """返回用于结果区和导出文案的暗涵全名。"""
+    return _CULVERT_FULL_NAME_MAP.get(_normalize_culvert_section_type(section_type), _CULVERT_FULL_NAME_MAP[_CULVERT_RECT])
+
+
+def _culvert_base_formula_items(section_type, include_optimal=False):
+    """按暗涵子类型返回 Word 计算书基础公式。"""
+    normalized = _normalize_culvert_section_type(section_type)
+    items = [
+        ('曼宁公式：', r'Q = \frac{1}{n} \cdot A \cdot R^{2/3} \cdot i^{1/2}'),
+    ]
+    if normalized == _CULVERT_ARCH:
+        items.extend([
+            ('水力半径：', r'R = \frac{A}{P}'),
+            ('拱顶半径：', r'R_{拱} = \frac{B}{2\sin(\theta/2)}'),
+            ('总高关系：', r'H = H_{直墙} + R_{拱} \cdot (1 - \cos(\theta/2))'),
+            ('拱部面积：', r'A_{拱} = \frac{R_{拱}^{2}}{2} \cdot (\theta - \sin\theta)'),
+        ])
+        return items
+
+    items.extend([
+        ('过水面积：', r'A = B \cdot h'),
+        ('湿周：', r'P = B + 2h'),
+        ('水力半径：', r'R = \frac{A}{P} = \frac{Bh}{B+2h}'),
+    ])
+    if include_optimal:
+        items.append(('优化目标：', r'\min A = B \times H \text{ (经济最优)}'))
+    return items
+
+
 class CulvertPanel(QWidget):
-    """矩形暗涵水力计算面板"""
+    """暗涵水力计算面板。"""
     data_changed = Signal()
 
     def __init__(self, parent=None):
@@ -239,6 +292,14 @@ class CulvertPanel(QWidget):
 
         fl.addWidget(self._sep())
 
+        section_row = QHBoxLayout()
+        section_row.addWidget(QLabel("断面类型:"))
+        self.section_combo = ComboBox()
+        self.section_combo.addItems([_CULVERT_RECT, _CULVERT_ARCH])
+        self.section_combo.currentTextChanged.connect(self._on_section_type_changed)
+        section_row.addWidget(self.section_combo, 1)
+        fl.addLayout(section_row)
+
         # 通用参数
         self.Q_edit = self._field(fl, "设计流量 Q (m³/s):", "5.0")
         self.Q_edit.textChanged.connect(self._on_q_text_changed)
@@ -260,21 +321,37 @@ class CulvertPanel(QWidget):
         fl.addWidget(self.inc_hint)
 
         fl.addWidget(self._sep())
-        fl.addWidget(self._slbl("【可选参数】"))
+        self._optional_title = self._slbl("【可选参数】")
+        fl.addWidget(self._optional_title)
         self.bh_lbl, self.bh_edit = self._field2(fl, "指定宽深比 β:", "")
         self.hb_lbl, self.hb_edit = self._field2(fl, "指定高宽比 H/B:", "")
         self.B_lbl, self.B_edit = self._field2(fl, "指定底宽 B (m):", "")
-        fl.addWidget(self._hint("(β 与 H/B 不可同时填写)"))
-        fl.addWidget(self._hint("(B 可单独填写，也可与 H/B 合用)"))
-        lbl_b1 = QLabel("高宽比H/B、宽高比B/H 建议不超过1.2（超出时提醒，不作强制）")
-        lbl_b1.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: #0066CC;")
-        fl.addWidget(lbl_b1)
-        lbl_b2 = QLabel("留空则自动搜索经济最优断面（B×H 最小）")
-        lbl_b2.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: #0066CC;")
-        fl.addWidget(lbl_b2)
-        lbl_ref = QLabel("参考 GB 50288-2018 第11.2.5条")
-        lbl_ref.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: {T2};")
-        fl.addWidget(lbl_ref)
+        self._rect_hint_ratio = self._hint("(β 与 H/B 不可同时填写)")
+        fl.addWidget(self._rect_hint_ratio)
+        self._rect_hint_bottom = self._hint("(B 可单独填写，也可与 H/B 合用)")
+        fl.addWidget(self._rect_hint_bottom)
+        self._rect_hint_ratio_limit = QLabel("高宽比H/B、宽高比B/H 建议不超过1.2（超出时提醒，不作强制）")
+        self._rect_hint_ratio_limit.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: #0066CC;")
+        fl.addWidget(self._rect_hint_ratio_limit)
+        self._rect_hint_optimal = QLabel("留空则自动搜索经济最优断面（B×H 最小）")
+        self._rect_hint_optimal.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: #0066CC;")
+        fl.addWidget(self._rect_hint_optimal)
+        self._rect_hint_ref = QLabel("参考 GB 50288-2018 第11.2.5条")
+        self._rect_hint_ref.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: {T2};")
+        fl.addWidget(self._rect_hint_ref)
+
+        self.theta_lbl, self.theta_edit = self._field2(fl, "圆心角 θ (度):", "180")
+        self._arch_hint_theta = self._hint("(留空则按 180° 处理)")
+        fl.addWidget(self._arch_hint_theta)
+        self.arch_B_lbl, self.arch_B_edit = self._field2(fl, "指定底宽 B (m):", "")
+        self._arch_hint_bottom = self._hint("(留空则自动搜索圆拱直墙型断面)")
+        fl.addWidget(self._arch_hint_bottom)
+        self.theta_lbl.hide()
+        self.theta_edit.hide()
+        self._arch_hint_theta.hide()
+        self.arch_B_lbl.hide()
+        self.arch_B_edit.hide()
+        self._arch_hint_bottom.hide()
 
         fl.addWidget(self._sep())
         self.detail_cb = CheckBox("输出详细计算过程")
@@ -321,6 +398,34 @@ class CulvertPanel(QWidget):
         self.inc_edit.setVisible(enabled)
         self.inc_hint.setVisible(enabled)
 
+    def _on_section_type_changed(self, section_type):
+        """切换暗涵子类型时同步当前工况，并切换可见输入项。"""
+        is_rect = _normalize_culvert_section_type(section_type) == _CULVERT_RECT
+        rect_widgets = (
+            self.bh_lbl, self.bh_edit,
+            self.hb_lbl, self.hb_edit,
+            self.B_lbl, self.B_edit,
+            self._rect_hint_ratio,
+            self._rect_hint_bottom,
+            self._rect_hint_ratio_limit,
+            self._rect_hint_optimal,
+            self._rect_hint_ref,
+        )
+        arch_widgets = (
+            self.theta_lbl, self.theta_edit,
+            self._arch_hint_theta,
+            self.arch_B_lbl, self.arch_B_edit,
+            self._arch_hint_bottom,
+        )
+        for widget in rect_widgets:
+            widget.setVisible(is_rect)
+        for widget in arch_widgets:
+            widget.setVisible(not is_rect)
+        self._optional_title.setText("【矩形参数】" if is_rect else "【圆拱直墙型参数】")
+        if not self._loading_case and 0 <= self._current_case_idx < len(self._cases):
+            self._cases[self._current_case_idx]['section_type'] = _normalize_culvert_section_type(section_type)
+            self._rebuild_case_tags()
+
     def _build_output(self, parent):
         lay = QVBoxLayout(parent)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -349,7 +454,7 @@ class CulvertPanel(QWidget):
 
     def _show_initial_help(self):
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
-        h = HelpPageBuilder("矩形暗涵水力计算", '请输入参数后点击“计算”按钮')
+        h = HelpPageBuilder("暗涵水力计算", '请输入参数后点击“计算”按钮')
         h.section("断面特点")
         h.bullet_list([
             "高宽比H/B、宽高比B/H 建议不超过1.2（GB 50288-2018 第11.2.5条，超出时计算仍执行，仅给出提醒）",
@@ -436,17 +541,31 @@ class CulvertPanel(QWidget):
     def _default_case():
         return {
             'custom_label': None,
+            'section_type': _CULVERT_RECT,
+            'theta_deg': '180',
             'Q': '5.0', 'n': '0.014', 'slope_inv': '2000',
             'v_min': '0.1', 'v_max': '100.0',
             'inc_checked': True, 'inc_pct': '',
             'detail_checked': True,
             'bh': '', 'hb': '', 'B': '',
+            'arch_B': '',
         }
+
+    @staticmethod
+    def _ensure_case_defaults(case):
+        """补齐旧项目缺失的暗涵家族字段。"""
+        merged = copy.deepcopy(CulvertPanel._default_case())
+        merged.update(case or {})
+        merged['section_type'] = _normalize_culvert_section_type(merged.get('section_type', _CULVERT_RECT))
+        merged['theta_deg'] = str(merged.get('theta_deg', '180') or '180')
+        return merged
 
     def _save_current_case(self):
         if not (0 <= self._current_case_idx < len(self._cases)):
             return
         c = self._cases[self._current_case_idx]
+        c['section_type'] = _normalize_culvert_section_type(self.section_combo.currentText())
+        c['theta_deg'] = self.theta_edit.text()
         c['Q'] = self.Q_edit.text()
         c['n'] = self.n_edit.text()
         c['slope_inv'] = self.slope_edit.text()
@@ -458,12 +577,15 @@ class CulvertPanel(QWidget):
         c['bh'] = self.bh_edit.text()
         c['hb'] = self.hb_edit.text()
         c['B'] = self.B_edit.text()
+        c['arch_B'] = self.arch_B_edit.text()
 
     def _load_case(self, idx):
         if not (0 <= idx < len(self._cases)):
             return
-        c = self._cases[idx]
+        c = self._ensure_case_defaults(self._cases[idx])
+        self._cases[idx] = c
         self._loading_case = True
+        self.section_combo.setCurrentText(_normalize_culvert_section_type(c.get('section_type', _CULVERT_RECT)))
         self.Q_edit.blockSignals(True)
         self.Q_edit.setText(c.get('Q', ''))
         self.Q_edit.blockSignals(False)
@@ -477,7 +599,10 @@ class CulvertPanel(QWidget):
         self.bh_edit.setText(c.get('bh', ''))
         self.hb_edit.setText(c.get('hb', ''))
         self.B_edit.setText(c.get('B', ''))
+        self.theta_edit.setText(c.get('theta_deg', '180'))
+        self.arch_B_edit.setText(c.get('arch_B', ''))
         self._on_inc_toggle(None)
+        self._on_section_type_changed(self.section_combo.currentText())
         self._loading_case = False
 
     def _switch_case(self, idx):
@@ -553,10 +678,15 @@ class CulvertPanel(QWidget):
     def _case_view(self, case, idx):
         q_text = (case.get('Q', '') or '').strip() or '?'
         custom = (case.get('custom_label') or '').strip()
-        label = f"{custom or '矩形暗涵'} · Q={q_text}"
+        section_type = _normalize_culvert_section_type(case.get('section_type', _CULVERT_RECT))
+        family_name = _culvert_full_name(section_type)
+        label = f"{custom or family_name} · Q={q_text}"
+        tooltip_lines = [label, f"断面类型：{section_type}", f"设计流量 Q={q_text} m³/s"]
+        if section_type == _CULVERT_ARCH:
+            tooltip_lines.insert(2, f"圆心角 θ={case.get('theta_deg', '180') or '180'}°")
         return {
             "label": label,
-            "tooltip": f"{label}\n设计流量 Q={q_text} m³/s",
+            "tooltip": "\n".join(tooltip_lines),
         }
 
     def _case_label(self, case, idx):
@@ -564,7 +694,8 @@ class CulvertPanel(QWidget):
 
     def _auto_label(self, case, idx):
         q_text = (case.get('Q', '') or '').strip() or '?'
-        return f"Q{_sub(idx + 1)}={q_text}"
+        section_type = _normalize_culvert_section_type(case.get('section_type', _CULVERT_RECT))
+        return f"{section_type}-Q{_sub(idx + 1)}={q_text}"
 
     def _on_case_renamed(self, idx, new_name):
         if 0 <= idx < len(self._cases):
@@ -645,7 +776,10 @@ class CulvertPanel(QWidget):
             q_text = f"Q={float(q_raw):.3f}"
         except Exception:
             q_text = f"Q={str(q_raw).strip() or '?'}"
-        return "计算失败" if not result.get("success") else f"矩形暗涵 · {q_text}"
+        if not result.get("success"):
+            return "计算失败"
+        section_type = _normalize_culvert_section_type(params.get("section_type", self._cases[case_idx].get("section_type", _CULVERT_RECT)))
+        return f"{_culvert_full_name(section_type)} · {q_text}"
 
     def _build_case_nav_items(self):
         items = []
@@ -679,8 +813,11 @@ class CulvertPanel(QWidget):
         self._save_current_case()
         self._mark_results_dirty()
         src = self._cases[self._current_case_idx]
-        keys = ('n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct',
-                'detail_checked', 'bh', 'hb', 'B')
+        keys = (
+            'section_type', 'theta_deg',
+            'n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct',
+            'detail_checked', 'bh', 'hb', 'B', 'arch_B',
+        )
         for i, case in enumerate(self._cases):
             if i != self._current_case_idx:
                 for k in keys:
@@ -702,8 +839,11 @@ class CulvertPanel(QWidget):
         self._mark_results_dirty()
         prev = self._cases[self._current_case_idx - 1]
         curr = self._cases[self._current_case_idx]
-        for k in ('n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct',
-                   'detail_checked', 'bh', 'hb', 'B'):
+        for k in (
+            'section_type', 'theta_deg',
+            'n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct',
+            'detail_checked', 'bh', 'hb', 'B', 'arch_B',
+        ):
             curr[k] = prev[k]
         self._load_case(self._current_case_idx)
         InfoBar.success(title="已复制", content=f"已从工况{self._current_case_idx}复制参数",
@@ -760,22 +900,35 @@ class CulvertPanel(QWidget):
 
         use_increase = case.get('inc_checked', True)
         manual_increase = _fv_opt('inc_pct') if use_increase else 0
-        manual_B = _fv_opt('B')
-        target_BH_ratio = _fv_opt('bh')
-        target_HB_ratio = _fv_opt('hb')
-
-        if target_BH_ratio and target_HB_ratio:
-            raise ValueError(f"工况{case_num}: 宽深比 β 与高宽比 H/B 不能同时指定")
+        section_type = _normalize_culvert_section_type(case.get('section_type', _CULVERT_RECT))
 
         input_params = {
+            'section_type': section_type,
             'Q': Q, 'n': n, 'slope_inv': slope_inv,
             'v_min': v_min, 'v_max': v_max,
-            'manual_B': manual_B,
-            'target_BH_ratio': target_BH_ratio,
-            'target_HB_ratio': target_HB_ratio,
             'manual_increase': manual_increase,
             'use_increase': use_increase,
         }
+        if section_type == _CULVERT_ARCH:
+            theta_text = (case.get('theta_deg', '') or '').strip()
+            try:
+                theta_deg = float(theta_text) if theta_text else 180.0
+            except ValueError as exc:
+                raise ValueError(f"工况{case_num}: 圆心角 θ 输入无效") from exc
+            if theta_deg <= 0:
+                raise ValueError(f"工况{case_num}: 圆心角 θ 必须大于0")
+            input_params['theta_deg'] = theta_deg
+            input_params['manual_B'] = _fv_opt('arch_B')
+            return input_params
+
+        manual_B = _fv_opt('B')
+        target_BH_ratio = _fv_opt('bh')
+        target_HB_ratio = _fv_opt('hb')
+        if target_BH_ratio and target_HB_ratio:
+            raise ValueError(f"工况{case_num}: 宽深比 β 与高宽比 H/B 不能同时指定")
+        input_params['manual_B'] = manual_B
+        input_params['target_BH_ratio'] = target_BH_ratio
+        input_params['target_HB_ratio'] = target_HB_ratio
         return input_params
 
     def _calculate(self):
@@ -795,19 +948,32 @@ class CulvertPanel(QWidget):
                     q_val = 0.0
                 self._all_results.append((
                     i,
-                    {'Q': q_val},
+                    {
+                        'Q': q_val,
+                        'section_type': _normalize_culvert_section_type(case.get('section_type', _CULVERT_RECT)),
+                        'theta_deg': case.get('theta_deg', '180'),
+                    },
                     {'success': False, 'error_message': msg}
                 ))
                 continue
             try:
-                result = quick_calculate_rectangular_culvert(
-                    Q=params['Q'], n=params['n'], slope_inv=params['slope_inv'],
-                    v_min=params['v_min'], v_max=params['v_max'],
-                    target_BH_ratio=params['target_BH_ratio'],
-                    target_HB_ratio=params['target_HB_ratio'],
-                    manual_B=params['manual_B'],
-                    manual_increase_percent=params['manual_increase'],
-                )
+                if params['section_type'] == _CULVERT_ARCH:
+                    result = quick_calculate_arch_culvert(
+                        Q=params['Q'], n=params['n'], slope_inv=params['slope_inv'],
+                        v_min=params['v_min'], v_max=params['v_max'],
+                        theta_deg=params['theta_deg'],
+                        manual_B=params['manual_B'],
+                        manual_increase_percent=params['manual_increase'],
+                    )
+                else:
+                    result = quick_calculate_rectangular_culvert(
+                        Q=params['Q'], n=params['n'], slope_inv=params['slope_inv'],
+                        v_min=params['v_min'], v_max=params['v_max'],
+                        target_BH_ratio=params['target_BH_ratio'],
+                        target_HB_ratio=params['target_HB_ratio'],
+                        manual_B=params['manual_B'],
+                        manual_increase_percent=params['manual_increase'],
+                    )
                 self._all_results.append((i, params, result))
             except Exception as ex:
                 msg = f"工况{i+1}: 计算出错 - {str(ex)}"
@@ -844,6 +1010,10 @@ class CulvertPanel(QWidget):
         all_plain_parts = []
 
         for case_idx, params, result in self._all_results:
+            section_type = _normalize_culvert_section_type(
+                params.get('section_type', self._cases[case_idx].get('section_type', _CULVERT_RECT))
+            ) if case_idx < len(self._cases) else _normalize_culvert_section_type(params.get('section_type'))
+            family_name = _culvert_full_name(section_type)
             if not result.get('success'):
                 q_raw = params.get('Q', '')
                 try:
@@ -851,7 +1021,7 @@ class CulvertPanel(QWidget):
                 except Exception:
                     q_text = '-'
                 part = (
-                    f"【工况 {case_idx + 1}｜矩形暗涵｜Q = {q_text}】\n\n"
+                    f"【工况 {case_idx + 1}｜{family_name}｜Q = {q_text}】\n\n"
                     f"计算失败："
                     f"{result.get('error_message', '未知错误')}\n"
                 )
@@ -885,6 +1055,10 @@ class CulvertPanel(QWidget):
         all_html_parts = []
 
         for case_idx, params, result in self._all_results:
+            section_type = _normalize_culvert_section_type(
+                params.get('section_type', self._cases[case_idx].get('section_type', _CULVERT_RECT))
+            ) if case_idx < len(self._cases) else _normalize_culvert_section_type(params.get('section_type'))
+            family_name = _culvert_full_name(section_type)
             if not result.get('success'):
                 q_raw = params.get('Q', '')
                 try:
@@ -892,7 +1066,7 @@ class CulvertPanel(QWidget):
                 except Exception:
                     q_text = "-"
                 plain = (
-                    f"【工况 {case_idx + 1}｜矩形暗涵｜Q = {q_text}】\n\n"
+                    f"【工况 {case_idx + 1}｜{family_name}｜Q = {q_text}】\n\n"
                     f"计算失败：\n{result.get('error_message', '未知错误')}\n"
                 )
                 body_text = plain.split("\n\n", 1)[-1]
@@ -952,8 +1126,8 @@ class CulvertPanel(QWidget):
         if n == 1:
             ci, p, r = success_results[0]
             axes = self.section_fig.subplots(1, 2)
-            self._draw_rect(axes[0], r['B'], r['H'], r['h_design'], r['V_design'], p['Q'], "设计流量")
-            self._draw_rect(axes[1], r['B'], r['H'], r['h_increased'], r['V_increased'], r['Q_increased'], "加大流量")
+            self._draw_case_section(axes[0], p, r, r['h_design'], r['V_design'], p['Q'], "设计流量")
+            self._draw_case_section(axes[1], p, r, r['h_increased'], r['V_increased'], r['Q_increased'], "加大流量")
         else:
             ncols = min(n, 3)
             nrows = (n + ncols - 1) // ncols
@@ -961,13 +1135,21 @@ class CulvertPanel(QWidget):
             for idx, (ci, p, r) in enumerate(success_results):
                 row, col = divmod(idx, ncols)
                 ax = axes[row][col]
-                self._draw_rect(ax, r['B'], r['H'], r['h_design'], r['V_design'], p['Q'],
-                                f"工况{ci+1} Q={p['Q']:.2f}")
+                self._draw_case_section(ax, p, r, r['h_design'], r['V_design'], p['Q'], f"工况{ci+1} Q={p['Q']:.2f}")
             for idx in range(n, nrows * ncols):
                 row, col = divmod(idx, ncols)
                 axes[row][col].set_visible(False)
         self.section_fig.tight_layout()
         self.section_canvas.draw()
+
+    def _draw_case_section(self, ax, params, result, h_w, velocity, flow, title):
+        """按暗涵子类型绘制断面图。"""
+        section_type = _normalize_culvert_section_type(params.get('section_type', _CULVERT_RECT))
+        if section_type == _CULVERT_ARCH:
+            theta_rad = math.radians(result.get('theta_deg', params.get('theta_deg', 180.0)))
+            self._draw_arch(ax, result['B'], result['H_total'], theta_rad, h_w, velocity, flow, title)
+            return
+        self._draw_rect(ax, result['B'], result['H'], h_w, velocity, flow, title)
 
     def _update_result_display(self, result):
         """兼容单结果调用"""
@@ -982,14 +1164,221 @@ class CulvertPanel(QWidget):
         )
         load_formula_page(self.result_text, plain_text_to_formula_html(txt))
 
+    def _build_arch_result_text(self, p, result, detail, case_num=None):
+        """构建圆拱直墙型暗涵结果文本。"""
+        Q, n = p['Q'], p['n']
+        slope_inv = p['slope_inv']; i = 1.0 / slope_inv
+        v_min, v_max = p['v_min'], p['v_max']
+        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
+        family_name = _culvert_full_name(_CULVERT_ARCH)
+
+        B = result.get('B', 0.0)
+        H_total = result.get('H_total', 0.0)
+        H_straight = result.get('H_straight', 0.0)
+        theta_deg = result.get('theta_deg', p.get('theta_deg', 180.0))
+        A_total = result.get('A_total', 0.0)
+        HB_ratio = result.get('HB_ratio', H_total / B if B else 0.0)
+
+        h_d = result.get('h_design', 0.0)
+        V_d = result.get('V_design', 0.0)
+        A_d = result.get('A_design', 0.0)
+        P_d = result.get('P_design', 0.0)
+        R_hyd_d = result.get('R_hyd_design', 0.0)
+        fb_pct_d = result.get('freeboard_pct_design', 0.0)
+        fb_hgt_d = result.get('freeboard_hgt_design', 0.0)
+
+        use_increase = p.get('use_increase', True)
+        inc_pct = result.get('increase_percent', 0.0)
+        Q_inc = result.get('Q_increased', 0.0)
+        h_inc = result.get('h_increased', 0.0)
+        V_inc = result.get('V_increased', 0.0)
+        A_inc = result.get('A_increased', 0.0)
+        P_inc = result.get('P_increased', 0.0)
+        R_hyd_inc = result.get('R_hyd_increased', 0.0)
+        fb_pct_inc = result.get('freeboard_pct_inc', 0.0)
+        fb_hgt_inc = result.get('freeboard_hgt_inc', 0.0)
+
+        fb_min_req = result.get('fb_min_required', 0.0)
+        fb_area_val = fb_pct_inc if use_increase else fb_pct_d
+        fb_hgt_val = fb_hgt_inc if use_increase else fb_hgt_d
+        fb_area_ok = MIN_FREEBOARD_PCT_RECT * 100.0 - 0.1 <= fb_area_val <= MAX_FREEBOARD_PCT_RECT * 100.0 + 0.1
+        fb_hgt_ok = fb_hgt_val >= fb_min_req - 1e-3
+        fb_ok = fb_area_ok and fb_hgt_ok
+        vel_ok = v_min <= V_d <= v_max
+
+        o = []
+        if case_num is not None:
+            o.append(f"【工况 {case_num + 1}｜{family_name}｜Q = {Q:.3f} m³/s】")
+            o.append("")
+        o.append("=" * 70)
+        o.append(f"              {family_name}水力计算结果")
+        o.append("=" * 70)
+        o.append("")
+
+        if not detail:
+            o.append("【输入参数】")
+            o.append("")
+            o.append(f"  1. 设计流量:")
+            o.append(f"     Q = {Q:.3f} m³/s")
+            o.append("")
+            o.append(f"  2. 糙率:")
+            o.append(f"     n = {n}")
+            o.append("")
+            o.append(f"  3. 水力坡降:")
+            o.append(f"     = 1/{int(slope_inv)}")
+            o.append("")
+            o.append(f"  4. 不淤流速:")
+            o.append(f"     = {v_min} m/s")
+            o.append("")
+            o.append(f"  5. 不冲流速:")
+            o.append(f"     = {v_max} m/s")
+            o.append("")
+
+            o.append("【断面尺寸】")
+            o.append(f"  宽度 B = {B:.2f} m")
+            o.append(f"  高度 H = {H_total:.2f} m")
+            o.append(f"  拱顶圆心角 θ = {theta_deg:.1f}°")
+            o.append(f"  总面积 A总 = {A_total:.3f} m²")
+            o.append("")
+
+            o.append("【设计流量工况】")
+            o.append(f"  设计水深 h = {h_d:.3f} m")
+            o.append(f"  设计流速 V = {V_d:.3f} m/s")
+            o.append(f"  净空高度 Fb = {fb_hgt_d:.3f} m")
+            o.append(f"  净空比例 = {fb_pct_d:.1f}%")
+            o.append("")
+
+            if use_increase:
+                o.append("【加大流量工况】")
+                o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
+                o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+                o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
+                o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
+                o.append(f"  净空高度 Fb加大 = {fb_hgt_inc:.3f} m")
+                o.append(f"  净空比例 = {fb_pct_inc:.1f}%")
+                o.append("")
+
+            o.append("【验证结果】")
+            o.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
+            o.append(f"  净空要求: 面积 10%~30%，净空高度 ≥ {fb_min_req:.3f} m")
+            o.append(f"  净空验证: {'✓ 通过' if fb_ok else '✗ 需注意'}")
+            o.append("")
+            return "\n".join(o)
+
+        o.append("【一、输入参数】")
+        o.append("")
+        o.append(f"  1. 设计流量:")
+        o.append(f"     Q = {Q:.3f} m³/s")
+        o.append("")
+        o.append(f"  2. 糙率:")
+        o.append(f"     n = {n}")
+        o.append("")
+        o.append(f"  3. 水力坡降:")
+        o.append(f"     = 1/{int(slope_inv)}")
+        o.append("")
+        o.append(f"  4. 不淤流速:")
+        o.append(f"     = {v_min} m/s")
+        o.append("")
+        o.append(f"  5. 不冲流速:")
+        o.append(f"     = {v_max} m/s")
+        o.append("")
+
+        o.append("【二、断面尺寸】")
+        o.append("")
+        o.append("  1. 设计尺寸:")
+        o.append(f"     宽度 B = {B:.2f} m")
+        o.append(f"     总高 H = {H_total:.2f} m")
+        o.append(f"     直墙高 H直 = {H_straight:.3f} m")
+        o.append(f"     拱顶圆心角 θ = {theta_deg:.1f}°")
+        o.append("")
+        o.append("  2. 高宽比计算:")
+        o.append(f"     H/B = {H_total:.2f} / {B:.2f} = {HB_ratio:.3f}")
+        o.append("")
+        o.append("  3. 断面总面积:")
+        o.append(f"     A总 = {A_total:.3f} m²")
+        o.append("")
+
+        o.append("【三、设计流量工况】")
+        o.append("")
+        o.append("  1. 设计水深:")
+        o.append(f"     h = {h_d:.3f} m")
+        o.append("")
+        o.append("  2. 过水面积与湿周:")
+        o.append(f"     A = {A_d:.3f} m²")
+        o.append(f"     χ = {P_d:.3f} m")
+        o.append("")
+        o.append("  3. 水力半径:")
+        o.append(f"     R = A / χ = {A_d:.3f} / {P_d:.3f} = {R_hyd_d:.3f} m")
+        o.append("")
+        o.append("  4. 设计流速:")
+        o.append(f"     V = (1/n) × R^(2/3) × i^(1/2)")
+        o.append(f"       = (1/{n}) × {R_hyd_d:.3f}^(2/3) × {i:.6f}^(1/2)")
+        if R_hyd_d > 0:
+            o.append(f"       = {1/n:.2f} × {R_hyd_d**(2/3):.4f} × {math.sqrt(i):.6f}")
+        o.append(f"       = {V_d:.3f} m/s")
+        o.append("")
+        o.append("  5. 净空情况:")
+        o.append(f"     净空高度 Fb = {fb_hgt_d:.3f} m")
+        o.append(f"     净空比例 = {fb_pct_d:.1f}%")
+        o.append("")
+
+        if use_increase:
+            o.append("【四、加大流量工况】")
+            o.append("")
+            o.append("  1. 加大流量比例:")
+            o.append(f"     = {inc_pct:.1f}% {inc_src}")
+            o.append("")
+            o.append("  2. 加大流量:")
+            o.append(f"     Q加大 = {Q_inc:.3f} m³/s")
+            o.append("")
+            o.append("  3. 加大水深:")
+            o.append(f"     h加大 = {h_inc:.3f} m")
+            o.append("")
+            o.append("  4. 加大流量工况水力要素:")
+            o.append(f"     A加大 = {A_inc:.3f} m²")
+            o.append(f"     χ加大 = {P_inc:.3f} m")
+            o.append(f"     R加大 = {R_hyd_inc:.3f} m")
+            o.append(f"     V加大 = {V_inc:.3f} m/s")
+            o.append("")
+            o.append("  5. 加大流量工况净空:")
+            o.append(f"     净空高度 Fb加大 = {fb_hgt_inc:.3f} m")
+            o.append(f"     净空比例 = {fb_pct_inc:.1f}%")
+            o.append("")
+
+        section_num_fb = "五" if use_increase else "四"
+        section_num_verify = "六" if use_increase else "五"
+        o.append(f"【{section_num_fb}、净空校核】")
+        o.append("")
+        o.append("  按暗涵净空要求校核：")
+        for line in str(result.get('fb_check_details', '')).splitlines():
+            o.append(f"  {line}")
+        o.append("")
+        o.append("  本断面校核结果:")
+        o.append(f"    净空面积比 = {fb_area_val:.1f}%")
+        o.append(f"    要求 10%~30% → {'通过 ✓' if fb_area_ok else '需注意 ✗'}")
+        o.append(f"    净空高度 = {fb_hgt_val:.3f} m")
+        o.append(f"    要求 ≥ {fb_min_req:.3f} m → {'通过 ✓' if fb_hgt_ok else '需注意 ✗'}")
+        o.append("")
+
+        o.append(f"【{section_num_verify}、设计验证】")
+        o.append("")
+        o.append(f"  流速验证: {v_min} ≤ {V_d:.3f} ≤ {v_max} → {'通过 ✓' if vel_ok else '未通过 ✗'}")
+        o.append(f"  净空验证: {'通过 ✓' if fb_ok else '需注意 ✗'}")
+        return "\n".join(o)
+
     def _build_culvert_result_text(self, p, result, detail, case_num=None):
         """构建单个工况的结果文本，case_num 为 None 时不显示工况前缀"""
+        section_type = _normalize_culvert_section_type(p.get('section_type', _CULVERT_RECT))
+        if section_type == _CULVERT_ARCH:
+            return self._build_arch_result_text(p, result, detail, case_num)
+
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']; i = 1.0 / slope_inv
         v_min, v_max = p['v_min'], p['v_max']
         inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
         is_optimal = result.get('is_optimal_section', False)
         target_HB = p.get('target_HB_ratio')
+        family_name = _culvert_full_name(section_type)
 
         B = result['B']; H = result['H']
         h_d = result['h_design']; V_d = result['V_design']
@@ -1019,15 +1408,15 @@ class CulvertPanel(QWidget):
 
         o = []
         if case_num is not None:
-            o.append(f"【工况 {case_num + 1}｜矩形暗涵｜Q = {Q:.3f} m³/s】")
+            o.append(f"【工况 {case_num + 1}｜{family_name}｜Q = {Q:.3f} m³/s】")
             o.append("")
         o.append("=" * 70)
         if is_optimal:
-            o.append("              矩形暗涵水力计算结果（经济最优断面）")
+            o.append(f"              {family_name}水力计算结果（经济最优断面）")
         elif target_HB:
-            o.append(f"              矩形暗涵水力计算结果（指定高宽比 H/B={target_HB:.2f}）")
+            o.append(f"              {family_name}水力计算结果（指定高宽比 H/B={target_HB:.2f}）")
         else:
-            o.append("              矩形暗涵水力计算结果")
+            o.append(f"              {family_name}水力计算结果")
         o.append("=" * 70)
         o.append("")
 
@@ -1365,10 +1754,9 @@ class CulvertPanel(QWidget):
 
         Q = self.input_params['Q']
         Q_inc = result['Q_increased']
-        B = result['B']; H = result['H']
         axes = self.section_fig.subplots(1, 2)
-        self._draw_rect(axes[0], B, H, result['h_design'], result['V_design'], Q, "设计流量")
-        self._draw_rect(axes[1], B, H, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
+        self._draw_case_section(axes[0], self.input_params, result, result['h_design'], result['V_design'], Q, "设计流量")
+        self._draw_case_section(axes[1], self.input_params, result, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
         self.section_fig.tight_layout()
         self.section_canvas.draw()
 
@@ -1401,6 +1789,52 @@ class CulvertPanel(QWidget):
         ax.fill_between([-B/2, B/2], H, H+0.05*H, color='gray', alpha=0.4)
         ax.set_xlim(-B*0.9, B*0.9)
         ax.set_ylim(-H*0.35, H*1.25)
+        ax.set_aspect('equal')
+        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.axhline(y=0, color='brown', lw=3)
+
+    def _draw_arch(self, ax, B, H_total, theta_rad, h_w, V, Q, title):
+        """绘制圆拱直墙型暗涵断面。"""
+        geom = _build_arch_geometry(B, H_total, theta_rad)
+        start_angle = geom['start_angle']
+        end_angle = geom['end_angle']
+        arch_theta = np.linspace(start_angle, end_angle, 101)
+        arch_x = geom['center'][0] + geom['R_arch'] * np.cos(arch_theta)
+        arch_y = geom['center'][1] + geom['R_arch'] * np.sin(arch_theta)
+        H_straight = geom['H_straight']
+        ax.plot([-B/2, -B/2], [0, H_straight], 'k-', lw=2)
+        ax.plot([B/2, B/2], [0, H_straight], 'k-', lw=2)
+        ax.plot([-B/2, B/2], [0, 0], 'k-', lw=2)
+        ax.plot(arch_x, arch_y, 'k-', lw=2)
+        if h_w > 0:
+            if h_w <= H_straight:
+                wx = [-B/2, -B/2, B/2, B/2]
+                wy = [0, h_w, h_w, 0]
+                ax.fill(wx, wy, color='lightblue', alpha=0.7)
+            else:
+                rect_x = [-B/2, -B/2, B/2, B/2]
+                rect_y = [0, H_straight, H_straight, 0]
+                ax.fill(rect_x, rect_y, color='lightblue', alpha=0.7)
+                fill_theta = np.linspace(geom['start_angle'], geom['end_angle'], 101)
+                fill_x = geom['center'][0] + geom['R_arch'] * np.cos(fill_theta)
+                fill_y = geom['center'][1] + geom['R_arch'] * np.sin(fill_theta)
+                mask = fill_y <= h_w + 1e-9
+                if np.any(mask):
+                    arch_fill_x = fill_x[mask]
+                    arch_fill_y = fill_y[mask]
+                    polygon_x = np.concatenate(([-_arch_half_width(geom, h_w)], arch_fill_x, [_arch_half_width(geom, h_w)]))
+                    polygon_y = np.concatenate(([h_w], arch_fill_y, [h_w]))
+                    ax.fill(polygon_x, polygon_y, color='lightblue', alpha=0.7)
+            water_half_width = _arch_half_width(geom, h_w)
+            ax.plot([-water_half_width, water_half_width], [h_w, h_w], 'b-', lw=1.5)
+        ax.annotate('', xy=(B/2, -0.08*H_total), xytext=(-B/2, -0.08*H_total), arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
+        ax.text(0, -0.16*H_total, f'B={B:.2f}m', ha='center', fontsize=9, color='gray')
+        ax.annotate('', xy=(B/2+0.1*B, H_total), xytext=(B/2+0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
+        ax.text(B/2+0.18*B, H_total/2, f'H={H_total:.2f}m', fontsize=8, color='purple', rotation=90, va='center')
+        ax.text(0.04 * B, H_total * 0.98, f'θ={math.degrees(theta_rad):.0f}°', fontsize=9, color='purple')
+        ax.set_xlim(-B*0.9, B*0.9)
+        ax.set_ylim(-H_total*0.3, H_total*1.2)
         ax.set_aspect('equal')
         apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
         ax.grid(True, alpha=0.3)
@@ -1445,7 +1879,7 @@ class CulvertPanel(QWidget):
                 InfoBar.error("导出失败", f"DXF导出失败: {str(e)}", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
 
-        dialog_result = show_multi_case_dxf_dialog(self._info_parent(), "矩形暗涵断面", case_entries, self._current_case_idx)
+        dialog_result = show_multi_case_dxf_dialog(self._info_parent(), "暗涵断面", case_entries, self._current_case_idx)
         if dialog_result is None:
             return
         selected_entries = select_case_entries(case_entries, dialog_result.scope, self._current_case_idx, dialog_result.checked_case_indexes)
@@ -1512,10 +1946,14 @@ class CulvertPanel(QWidget):
 
     def _single_dxf_default_name(self, entry):
         result = entry.result or {}
-        return f"暗渠断面_矩形_B{result.get('B', 0.0):.2f}xH{result.get('H', 0.0):.2f}.dxf"
+        input_params = entry.input_params or {}
+        section_type = _normalize_culvert_section_type(input_params.get('section_type', _CULVERT_RECT))
+        if section_type == _CULVERT_ARCH:
+            return f"暗涵-圆拱直墙型断面_B{result.get('B', 0.0):.2f}xH{result.get('H_total', 0.0):.2f}.dxf"
+        return f"暗涵-矩形断面_B{result.get('B', 0.0):.2f}xH{result.get('H', 0.0):.2f}.dxf"
 
     def _combined_dxf_default_name(self, count):
-        return f"矩形暗涵断面_{count}个工况_合并.dxf"
+        return f"暗涵断面_{count}个工况_合并.dxf"
 
     def _choose_dxf_filepath(self, default_name):
         filepath, _ = QFileDialog.getSaveFileName(self, "保存DXF文件", default_name, "DXF文件 (*.dxf);;所有文件 (*.*)")
@@ -1570,10 +2008,11 @@ class CulvertPanel(QWidget):
             InfoBar.warning("提示", "请先计算。", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP); return
         meta = load_meta()
         channel_name = getattr(self, 'input_params', {}).get('channel_name', '')
-        auto_purpose = build_calc_purpose('culvert', project=meta.project_name, name=channel_name, section_type='矩形')
+        section_name = _culvert_full_name(getattr(self, 'input_params', {}).get('section_type', _CULVERT_RECT))
+        auto_purpose = build_calc_purpose('culvert', project=meta.project_name, name=channel_name, section_type=section_name)
         n_cases = len(self._all_results)
         current_label = self._auto_label(self._cases[self._current_case_idx], self._current_case_idx) if self._cases else '工况1'
-        dlg = ExportConfirmDialog('culvert', '矩形暗涵水力计算书', auto_purpose,
+        dlg = ExportConfirmDialog('culvert', '暗涵水力计算书', auto_purpose,
                                   parent=self._info_parent(),
                                   n_cases=n_cases, current_case_label=current_label)
         from PySide6.QtWidgets import QDialog
@@ -1609,11 +2048,12 @@ class CulvertPanel(QWidget):
 
         n_export = len(export_results)
         first_method = export_results[0][2].get('design_method', '') if export_results else ''
-        desc = f'矩形暗涵水力断面设计计算（{first_method}）' if n_export == 1 else f'矩形暗涵水力断面设计计算（{n_export}个工况）'
+        first_section = _culvert_full_name(export_results[0][1].get('section_type', _CULVERT_RECT)) if export_results else _culvert_full_name(_CULVERT_RECT)
+        desc = f'{first_section}水力断面设计计算（{first_method}）' if n_export == 1 else f'暗涵水力断面设计计算（{n_export}个工况）'
 
         doc = create_engineering_report_doc(
             meta=meta,
-            calc_title='矩形暗涵水力计算书',
+            calc_title='暗涵水力计算书',
             calc_content_desc=desc,
             calc_purpose=purpose,
             references=refs,
@@ -1623,13 +2063,29 @@ class CulvertPanel(QWidget):
 
         # 5. 基础公式
         doc_add_eng_h(doc, '5、基础公式')
-        doc_add_formula(doc, r'Q = \frac{1}{n} \cdot A \cdot R^{2/3} \cdot i^{1/2}', '曼宁公式：')
-        doc_add_formula(doc, r'A = B \cdot h', '过水面积：')
-        doc_add_formula(doc, r'P = B + 2h', '湿周：')
-        doc_add_formula(doc, r'R = \frac{A}{P} = \frac{Bh}{B+2h}', '水力半径：')
-        # 如果任意工况使用经济最优
-        if any(r.get('is_optimal_section') for _, _, r in export_results):
-            doc_add_formula(doc, r'\min A = B \times H \text{ (经济最优)}', '优化目标：')
+        formula_section_types = []
+        for _, params, _ in export_results:
+            section_type = _normalize_culvert_section_type(params.get('section_type', _CULVERT_RECT))
+            if section_type not in formula_section_types:
+                formula_section_types.append(section_type)
+        if not formula_section_types:
+            formula_section_types.append(_CULVERT_RECT)
+
+        has_rect_optimal = any(
+            _normalize_culvert_section_type(params.get('section_type', _CULVERT_RECT)) == _CULVERT_RECT
+            and result.get('is_optimal_section')
+            for _, params, result in export_results
+        )
+        for idx, section_type in enumerate(formula_section_types):
+            if len(formula_section_types) > 1:
+                if idx > 0:
+                    doc_add_eng_body(doc, '')
+                doc_add_eng_body(doc, f'{_culvert_full_name(section_type)}：')
+            for label, formula in _culvert_base_formula_items(
+                section_type,
+                include_optimal=(section_type == _CULVERT_RECT and has_rect_optimal),
+            ):
+                doc_add_formula(doc, formula, label)
 
         # 6. 计算过程
         doc_add_eng_h(doc, '6、计算过程')
@@ -1652,9 +2108,10 @@ class CulvertPanel(QWidget):
 
             if _marker in calc_text:
                 _parts = calc_text.split(_marker, 1)
-                doc_render_calc_text_eng(doc, _parts[0], skip_title_keyword='矩形暗涵水力计算结果')
+                skip_keyword = f"{_culvert_full_name(params.get('section_type', _CULVERT_RECT))}水力计算结果"
+                doc_render_calc_text_eng(doc, _parts[0], skip_title_keyword=skip_keyword)
                 doc_add_table_caption(doc, '表 11.2.5  无压涵洞的净空高度(m)')
-                _H = result.get('H', 0)
+                _H = result.get('H', result.get('H_total', 0))
                 doc_add_styled_table(doc,
                     headers=['进口净高', '圆涵', '拱涵', '矩形涵洞'],
                     data=[['≤3', '≥D/4', '≥D/4', '≥D/6'], ['>3', '≥0.75', '≥0.75', '≥0.5']],
@@ -1665,7 +2122,8 @@ class CulvertPanel(QWidget):
                 doc_add_eng_body(doc, '注：表中D为涵洞内侧高度或者圆涵内径(m)。')
                 doc_render_calc_text_eng(doc, _parts[1])
             else:
-                doc_render_calc_text_eng(doc, calc_text, skip_title_keyword='矩形暗涵水力计算结果')
+                skip_keyword = f"{_culvert_full_name(params.get('section_type', _CULVERT_RECT))}水力计算结果"
+                doc_render_calc_text_eng(doc, calc_text, skip_title_keyword=skip_keyword)
 
         # 7. 断面图
         try:
@@ -1699,7 +2157,7 @@ class CulvertPanel(QWidget):
         cases = data.get('cases')
         if not cases or not isinstance(cases, list):
             return
-        self._cases = cases
+        self._cases = [self._ensure_case_defaults(case) for case in cases]
         self._current_case_idx = min(data.get('current_case_idx', 0), len(self._cases) - 1)
         self._load_case(self._current_case_idx)
         self._rebuild_case_tags()

@@ -820,6 +820,21 @@ def test_plan_xxpipe_tunnel_split_separates_interleaved_tunnel_and_pressure_node
     ]
 
 
+def test_plan_xxpipe_tunnel_split_keeps_arch_culvert_only_in_standard_table():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="暗涵-圆拱直墙型", name="暗涵段1", bottom_elevation=410.0),
+        _make_node(ip_no=2, mc=40.0, structure="暗涵-圆拱直墙型", name="暗涵段1", bottom_elevation=409.4),
+        _make_node(ip_no=3, mc=80.0, structure="有压管道", name="压力段1", in_out="进", bottom_elevation=408.9),
+        _make_node(ip_no=4, mc=120.0, structure="有压管道", name="压力段1", in_out="出", bottom_elevation=408.1),
+    ]
+
+    plan = cad_tools.plan_xxpipe_tunnel_split(nodes)
+
+    assert plan is not None
+    assert [node.station_MC for node in plan["standard_nodes"]] == pytest.approx([0.0, 40.0])
+    assert [node.station_MC for node in plan["xxpipe_nodes"]] == pytest.approx([80.0, 120.0])
+
+
 def test_resolve_profile_plot_station_value_keeps_zero_plot_start_in_split_spans():
     station_spans = [
         {"source_start_mc": 80.0, "source_end_mc": 120.0, "plot_start_mc": 0.0, "plot_end_mc": 40.0},
