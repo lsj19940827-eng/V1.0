@@ -215,12 +215,32 @@ class _FakeButton:
     def __init__(self):
         self.enabled = None
         self.tooltip = ""
+        self.style_sheet = ""
+        self.properties = {}
 
     def setEnabled(self, enabled):
         self.enabled = bool(enabled)
 
     def setToolTip(self, tooltip):
         self.tooltip = str(tooltip)
+
+    def setStyleSheet(self, style_sheet):
+        self.style_sheet = str(style_sheet)
+
+    def styleSheet(self):
+        return self.style_sheet
+
+    def setProperty(self, name, value):
+        self.properties[str(name)] = value
+
+    def property(self, name):
+        return self.properties.get(str(name))
+
+    def style(self):
+        return SimpleNamespace(
+            unpolish=lambda _widget: None,
+            polish=lambda _widget: None,
+        )
 
 
 class _FakeTable:
@@ -1283,7 +1303,7 @@ def test_mark_section_results_stale_clears_transition_topology_prepared_flag():
     }
 
 
-def test_mark_section_results_stale_keeps_pressure_pipe_button_clickable_for_feedback():
+def test_mark_section_results_stale_disables_all_downstream_buttons():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
@@ -1304,37 +1324,62 @@ def test_mark_section_results_stale_keeps_pressure_pipe_button_clickable_for_fee
     assert panel._btn_transition.enabled is False
     assert panel._btn_siphon.enabled is False
     assert panel._btn_calc.enabled is False
-    assert panel.btn_pressure_pipe_calc.enabled is True
-    assert "请先完成断面批量计算并同步到表3" in panel.btn_pressure_pipe_calc.tooltip
+    assert panel.btn_pressure_pipe_calc.enabled is False
+    for btn in (panel._btn_transition, panel._btn_siphon, panel.btn_pressure_pipe_calc, panel._btn_calc):
+        assert btn.styleSheet() == ""
+        assert btn.property("table3_locked_look") is None
 
 
-def test_refresh_pressure_pipe_controls_keeps_button_clickable_when_sync_not_ready():
+def test_refresh_pressure_pipe_controls_keeps_button_disabled_when_sync_not_ready():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
     panel._section_sync_ready = False
     panel._transition_topology_prepared = False
     panel.btn_pressure_pipe_calc = _FakeButton()
+    panel.btn_pressure_pipe_calc.setEnabled(False)
     panel.node_table = _FakeTable(["有压管道", "明渠-梯形"])
 
     WaterProfilePanel._refresh_pressure_pipe_controls(panel)
 
-    assert panel.btn_pressure_pipe_calc.enabled is True
-    assert "请先完成断面批量计算并同步到表3" in panel.btn_pressure_pipe_calc.tooltip
+    assert panel.btn_pressure_pipe_calc.enabled is False
+    assert panel.btn_pressure_pipe_calc.tooltip == ""
 
 
-def test_refresh_pressure_pipe_controls_treats_prepared_topology_as_ready():
+def test_set_downstream_actions_enabled_reenables_buttons_without_custom_style():
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._btn_transition = _FakeButton()
+    panel._btn_siphon = _FakeButton()
+    panel._btn_calc = _FakeButton()
+    panel.btn_pressure_pipe_calc = _FakeButton()
+    panel._section_state_label = None
+    panel._section_status_bar = None
+    panel._section_state_icon = None
+
+    WaterProfilePanel._set_downstream_actions_enabled(panel, False, state_text="状态：表3拓扑已变更")
+    WaterProfilePanel._set_downstream_actions_enabled(panel, True, state_text="状态：断面全成功")
+
+    for btn in (panel._btn_transition, panel._btn_siphon, panel.btn_pressure_pipe_calc, panel._btn_calc):
+        assert btn.enabled is True
+        assert btn.styleSheet() == ""
+        assert btn.property("table3_locked_look") is None
+
+
+def test_refresh_pressure_pipe_controls_treats_prepared_topology_as_ready_without_changing_enabled_state():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
     panel = WaterProfilePanel.__new__(WaterProfilePanel)
     panel._section_sync_ready = True
     panel._transition_topology_prepared = True
     panel.btn_pressure_pipe_calc = _FakeButton()
+    panel.btn_pressure_pipe_calc.setEnabled(False)
     panel.node_table = _FakeTable(["有压管道", "明渠-梯形"])
 
     WaterProfilePanel._refresh_pressure_pipe_controls(panel)
 
-    assert panel.btn_pressure_pipe_calc.enabled is True
+    assert panel.btn_pressure_pipe_calc.enabled is False
     assert "请先插入渐变段" not in panel.btn_pressure_pipe_calc.tooltip
 
 

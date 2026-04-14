@@ -2313,9 +2313,15 @@ class WaterProfilePanel(QWidget):
         return has_transition_rows or bool(getattr(self, "_transition_topology_prepared", False))
 
     def _set_downstream_actions_enabled(self, enabled: bool, state_text: str = "", status_kind: str = ""):
-        for btn in [self._btn_transition, self._btn_siphon, self.btn_pressure_pipe_calc, self._btn_calc]:
-            if btn:
-                btn.setEnabled(enabled)
+        buttons = [
+            getattr(self, "_btn_transition", None),
+            getattr(self, "_btn_siphon", None),
+            getattr(self, "btn_pressure_pipe_calc", None),
+            getattr(self, "_btn_calc", None),
+        ]
+        for btn in buttons:
+            if btn is not None:
+                btn.setEnabled(bool(enabled))
         if state_text:
             final_kind = status_kind
             if not final_kind:
@@ -8825,17 +8831,15 @@ class WaterProfilePanel(QWidget):
         return pairs
 
     def _refresh_pressure_pipe_controls(self):
-        """刷新有压管道按钮提示状态（按钮始终可点击）。"""
+        """刷新有压管道按钮提示状态；启停状态由统一下游门禁控制。"""
         btn = getattr(self, "btn_pressure_pipe_calc", None)
         if btn is None:
             return
         if not getattr(self, "_section_sync_ready", False):
-            btn.setEnabled(True)
-            btn.setToolTip("已锁定：请先完成断面批量计算并同步到表3")
+            btn.setToolTip("")
             return
         table = getattr(self, "node_table", None)
         if table is None:
-            btn.setEnabled(True)
             btn.setToolTip("执行有压管道水力计算并回写到\"倒虹吸/有压管道水头损失\"列")
             return
         has_ppipe = False
@@ -8855,12 +8859,10 @@ class WaterProfilePanel(QWidget):
             if has_named_ppipe_group and has_transition:
                 break
         transition_topology_ready = has_transition or bool(getattr(self, "_transition_topology_prepared", False))
-        # 交互优化：按钮始终保持可点击，具体前置校验在 _open_pressure_pipe_calculator 中处理并提示。
-        btn.setEnabled(True)
         if not has_ppipe:
-            self.btn_pressure_pipe_calc.setToolTip("尚未检测到有压管道同类节点。可先导入数据，点击按钮可查看前置提示")
+            self.btn_pressure_pipe_calc.setToolTip("尚未检测到有压管道同类节点。")
         elif not has_named_ppipe_group:
-            self.btn_pressure_pipe_calc.setToolTip("仅检测到匿名有压管道行；当前渠道级别满足条件时，也可以直接打开有压管道水力计算窗口")
+            self.btn_pressure_pipe_calc.setToolTip("仅检测到匿名有压管道行；当前渠道级别满足条件时可直接打开有压管道水力计算窗口。")
         elif not transition_topology_ready:
             self.btn_pressure_pipe_calc.setToolTip("已检测到有压管道同类结构。请先插入渐变段后再执行有压管道水力计算")
         else:
