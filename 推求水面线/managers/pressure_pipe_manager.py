@@ -13,6 +13,8 @@ from datetime import datetime
 from typing import Dict, Optional, Any, List
 from dataclasses import dataclass
 
+_UNSET = object()
+
 
 @dataclass
 class PressurePipeConfig:
@@ -44,6 +46,7 @@ class PressurePipeConfig:
     
     # 纵断面变坡点节点（从DXF导入，可选）
     longitudinal_nodes: List[Dict[str, Any]] = None
+    raw_profile_polyline: Dict[str, Any] = None      # 导入原始纵断面多段线（route 级事实来源）
     profile_segments: List[Dict[str, Any]] = None      # 整线纵断面分段（混合整线模式）
     route_key: str = ""                        # 所属整线键
     route_display_name: str = ""               # 整线展示名称
@@ -301,6 +304,11 @@ class PressurePipeManager:
             pipe_bucket.get("profile_segments", []),
             route_data.get("profile_segments", []),
         )
+        raw_profile_polyline = self._resolve_dict_value(
+            pipe_bucket.get("raw_profile_polyline", {}),
+            segment_bucket.get("raw_profile_polyline", {}),
+            route_data.get("raw_profile_polyline", {}),
+        )
 
         return PressurePipeConfig(
             name=self._resolve_text_value(
@@ -387,6 +395,7 @@ class PressurePipeManager:
                 or 0.0
             ),
             longitudinal_nodes=longitudinal_nodes,
+            raw_profile_polyline=raw_profile_polyline,
             profile_segments=profile_segments,
             route_key=route_key,
             route_display_name=route_display_name,
@@ -575,6 +584,7 @@ class PressurePipeManager:
             "route_key": route_key,
             "display_name": str(route_bucket.get("display_name", "") or route_key).strip(),
             "longitudinal_nodes": copy.deepcopy(route_bucket.get("longitudinal_nodes", []) or []),
+            "raw_profile_polyline": copy.deepcopy(route_bucket.get("raw_profile_polyline", {}) or {}),
             "profile_segments": copy.deepcopy(route_bucket.get("profile_segments", []) or []),
             "profile_state": str(route_bucket.get("profile_state", "") or "").strip(),
         }
@@ -595,18 +605,25 @@ class PressurePipeManager:
         route_key = str(config.route_key or "").strip()
         route_display_name = str(config.route_display_name or "").strip()
         long_nodes_payload = list(config.longitudinal_nodes or [])
+        raw_profile_polyline_payload = copy.deepcopy(config.raw_profile_polyline)
         profile_segments_payload = list(config.profile_segments or [])
         if route_key:
             route_bucket = self._config["routes"].setdefault(route_key, {})
             route_bucket["display_name"] = route_display_name or route_bucket.get("display_name", "")
             if long_nodes_payload:
                 route_bucket["longitudinal_nodes"] = long_nodes_payload
+            if raw_profile_polyline_payload is not None:
+                if raw_profile_polyline_payload:
+                    route_bucket["raw_profile_polyline"] = raw_profile_polyline_payload
+                else:
+                    route_bucket.pop("raw_profile_polyline", None)
             if profile_segments_payload:
                 route_bucket["profile_segments"] = profile_segments_payload
             pipe_longitudinal_nodes = []
             pipe_profile_segments = []
         else:
             pipe_longitudinal_nodes = long_nodes_payload
+            pipe_raw_profile_polyline = raw_profile_polyline_payload
             pipe_profile_segments = profile_segments_payload
         
         self._config["pipes"][pipe_name] = {
@@ -629,6 +646,7 @@ class PressurePipeManager:
             "ip_points": config.ip_points,
             "plan_total_length": config.plan_total_length,
             "longitudinal_nodes": pipe_longitudinal_nodes,
+            "raw_profile_polyline": pipe_raw_profile_polyline if not route_key else {},
             "profile_segments": pipe_profile_segments,
             "route_key": route_key,
             "route_display_name": route_display_name,
@@ -672,6 +690,7 @@ class PressurePipeManager:
         route_key: str,
         longitudinal_nodes: Optional[List[Dict[str, Any]]],
         route_display_name: str = "",
+        raw_profile_polyline: Any = _UNSET,
     ):
         """直接写入整线纵断面，供弹窗导入后即时保存。"""
         route_key = str(route_key or "").strip()
@@ -685,6 +704,12 @@ class PressurePipeManager:
             route_display_name or route_bucket.get("display_name", "") or ""
         ).strip()
         route_bucket["longitudinal_nodes"] = nodes_payload
+        if raw_profile_polyline is not _UNSET:
+            raw_payload = copy.deepcopy(raw_profile_polyline)
+            if raw_payload:
+                route_bucket["raw_profile_polyline"] = raw_payload
+            else:
+                route_bucket.pop("raw_profile_polyline", None)
 
         # 已有关联子段继续保留 route_key/display_name，便于后续导出直接回读整线数据。
         for row in self._config["pipes"].values():
@@ -962,6 +987,11 @@ class PressurePipeManager:
                 route_longitudinal_nodes = copy.deepcopy(route_profile_payload or [])
             else:
                 route_longitudinal_nodes = copy.deepcopy(existing_route_bucket.get("longitudinal_nodes", []) or [])
+            route_raw_profile_polyline = payload.get("raw_profile_polyline", _UNSET)
+            if route_raw_profile_polyline is _UNSET:
+                route_raw_profile_polyline = copy.deepcopy(existing_route_bucket.get("raw_profile_polyline", {}) or {})
+            else:
+                route_raw_profile_polyline = copy.deepcopy(route_raw_profile_polyline or {})
             self._config["routes"][route_key] = {
                 "display_name": str(payload.get("route_display_name", "") or route_key).strip(),
                 "channel_level": payload.get("channel_level", ""),
@@ -973,6 +1003,7 @@ class PressurePipeManager:
                 "profile_state": str(payload.get("profile_state", "") or "").strip(),
                 "segment_identities": list(payload.get("segment_identities", []) or []),
                 "longitudinal_nodes": route_longitudinal_nodes,
+                "raw_profile_polyline": route_raw_profile_polyline,
                 "profile_segments": route_profile_segments,
             }
 

@@ -768,6 +768,73 @@ def test_build_panel_xxpipe_profile_data_passes_route_metadata_into_lookup_rows(
     ]
 
 
+def test_get_panel_xxpipe_manager_config_by_identity_reads_route_raw_profile_polyline():
+    panel = _Panel("赛支")
+    raw_profile_polyline = [
+        (3968.95, 403.62),
+        (4005.0, 402.8),
+        (4366.58, 405.58),
+    ]
+    panel._pressure_pipe_manager = SimpleNamespace(
+        to_dict=lambda: {
+            "pipes": {},
+            "routes": {
+                "flow1-route1": {
+                    "display_name": "赛金连续整线",
+                    "segment_geometry_source": "route_raw_profile_polyline",
+                    "raw_profile_polyline": list(raw_profile_polyline),
+                }
+            },
+        }
+    )
+
+    result = cad_tools._get_panel_xxpipe_manager_config_by_identity(
+        panel,
+        rows=[
+            {
+                "name": "苟家湾",
+                "flow_section": "1",
+                "identity": "flow1-row73",
+                "route_key": "flow1-route1",
+                "route_display_name": "赛金连续整线",
+            }
+        ],
+    )
+
+    assert list(result) == ["flow1-row73"]
+    assert result["flow1-row73"]["segment_geometry_source"] == "route_raw_profile_polyline"
+    assert result["flow1-row73"]["raw_profile_polyline"] == raw_profile_polyline
+
+
+def test_split_xxpipe_centerline_draw_polylines_preserves_route_raw_profile_bulges():
+    raw_profile_polyline = {
+        "vertices": [
+            (0.0, 100.0),
+            (50.0, 96.0),
+            (100.0, 90.0),
+        ],
+        "bulges": [0.25, -0.1, 0.0],
+        "source_kind": "selected_raw_polyline",
+    }
+    draw_segments = [
+        {
+            "identity": "flow1-row1",
+            "route_key": "flow1-route1",
+            "source_kind": "route_raw_profile_polyline",
+            "start_mc": 0.0,
+            "end_mc": 100.0,
+            "points": list(raw_profile_polyline["vertices"]),
+            "raw_profile_polyline": raw_profile_polyline,
+        }
+    ]
+
+    polylines = cad_tools._split_xxpipe_centerline_draw_polylines(draw_segments, [])
+
+    assert len(polylines) == 1
+    assert polylines[0]["points"] == raw_profile_polyline["vertices"]
+    assert polylines[0]["bulges"] == pytest.approx([0.25, -0.1, 0.0])
+
+
 def test_resolve_tail_pressure_split_context_keeps_post_pressure_tunnel_in_lower_table(monkeypatch):
     nodes = [
         _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="明渠1", bottom_elevation=410.0),
@@ -1397,6 +1464,53 @@ def test_draw_profile_on_msp_in_xxpipe_mode_uses_centerline_polyline_only(monkey
     assert "95.000" not in texts
 
 
+def test_draw_profile_on_msp_prefers_centerline_draw_segments_over_station_sample_points(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes, profile_data = _sample_profile_data()
+    profile_data["centerline_points"] = [
+        (0.0, 100.0),
+        (100.0, 90.0),
+    ]
+    profile_data["centerline_draw_segments"] = [
+        {
+            "identity": "1::穿路段",
+            "route_key": "",
+            "source_kind": "longitudinal_nodes",
+            "start_mc": 0.0,
+            "end_mc": 100.0,
+            "points": [
+                (0.0, 100.0),
+                (40.0, 96.0),
+                (100.0, 90.0),
+            ],
+        }
+    ]
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+        export_mode="xxpipe",
+        xxpipe_profile_data=profile_data,
+    )
+
+    assert [record["points"] for record in msp.polyline_records] == [
+        [(0.0, 100.0), (20.0, 96.0), (50.0, 90.0)],
+    ]
+
+
 def test_draw_profile_on_msp_breaks_xxpipe_subtables_into_two_independent_blocks(monkeypatch):
     ezdxf_stub = SimpleNamespace(
         enums=SimpleNamespace(
@@ -1442,6 +1556,90 @@ def test_draw_profile_on_msp_breaks_xxpipe_subtables_into_two_independent_blocks
     ]
 
 
+def test_draw_profile_on_msp_splits_centerline_draw_segments_at_subtable_gap(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes, station_spans, profile_data = _build_split_subtable_profile_fixture()
+    profile_data["centerline_points"] = [
+        (80.0, 408.9),
+        (300.0, 405.4),
+    ]
+    profile_data["centerline_draw_segments"] = [
+        {
+            "identity": "route::xxpipe",
+            "route_key": "flow1-route1",
+            "source_kind": "route_longitudinal_nodes",
+            "start_mc": 80.0,
+            "end_mc": 300.0,
+            "points": [
+                (80.0, 408.9),
+                (120.0, 408.1),
+                (260.0, 406.2),
+                (300.0, 405.4),
+            ],
+        }
+    ]
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+        export_mode="xxpipe",
+        station_spans=station_spans,
+        xxpipe_profile_data=profile_data,
+    )
+
+    assert [record["points"] for record in msp.polyline_records] == [
+        [(0.0, 408.9), (20.0, 408.1)],
+        [(40.0, 406.2), (60.0, 405.4)],
+    ]
+
+
+def test_split_xxpipe_centerline_draw_segments_clips_route_raw_profile_polyline_without_crossing_gap():
+    station_spans = [
+        {"source_start_mc": 80.0, "source_end_mc": 120.0, "plot_start_mc": 0.0, "plot_end_mc": 40.0},
+        {"source_start_mc": 260.0, "source_end_mc": 300.0, "plot_start_mc": 40.0, "plot_end_mc": 80.0},
+    ]
+    raw_profile_polyline = [
+        (80.0, 408.9),
+        (100.0, 408.5),
+        (120.0, 408.1),
+        (180.0, 407.4),
+        (260.0, 406.2),
+        (280.0, 405.8),
+        (300.0, 405.4),
+    ]
+    point_groups = cad_tools._split_xxpipe_centerline_draw_segments(
+        [
+            {
+                "identity": "flow1-route1",
+                "route_key": "flow1-route1",
+                "source_kind": "route_raw_profile_polyline",
+                "start_mc": 80.0,
+                "end_mc": 300.0,
+                "points": list(raw_profile_polyline),
+            }
+        ],
+        station_spans,
+    )
+
+    assert point_groups == [
+        [(80.0, 408.9), (100.0, 408.5), (120.0, 408.1)],
+        [(260.0, 406.2), (280.0, 405.8), (300.0, 405.4)],
+    ]
+
+
 def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_tmp_path, monkeypatch):
     nodes, profile_data = _sample_profile_data()
     out_file = local_tmp_path / "xxpipe_longitudinal_profile.txt"
@@ -1475,7 +1673,6 @@ def test_export_longitudinal_txt_to_path_in_xxpipe_mode_writes_fixed_rows(local_
     assert _parse_polyline_vertex_cmds(out_file) == pytest.approx(
         [
             (0.0, 100.0),
-            (25.0, 95.0),
             (50.0, 90.0),
         ]
     )

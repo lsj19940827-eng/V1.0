@@ -4169,6 +4169,9 @@ def _normalize_xxpipe_longitudinal_nodes(longitudinal_nodes):
                 "chainage": chainage,
                 "elevation": elevation,
                 "turn_type": str(turn_type or "NONE").strip().upper(),
+                "turn_angle": _xxpipe_longitudinal_node_float(
+                    node, "turn_angle", required=False, default=0.0
+                ) or 0.0,
                 "vertical_curve_radius": _xxpipe_longitudinal_node_float(
                     node, "vertical_curve_radius", required=False, default=0.0
                 ) or 0.0,
@@ -4506,6 +4509,19 @@ def _get_panel_pressure_pipe_longitudinal_nodes_for_export(panel, rows):
     return data if isinstance(data, dict) else {}
 
 
+def _get_panel_pressure_pipe_raw_profile_polylines_for_export(panel, rows):
+    getter = getattr(panel, "get_pressure_pipe_raw_profile_polylines_for_export", None)
+    if not callable(getter):
+        return {}
+    try:
+        data = getter(rows)
+    except TypeError:
+        data = getter()
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _get_panel_xxpipe_manager_config_by_identity(panel, rows):
     manager = getattr(panel, "_pressure_pipe_manager", None)
     to_dict = getattr(manager, "to_dict", None)
@@ -4516,6 +4532,7 @@ def _get_panel_xxpipe_manager_config_by_identity(panel, rows):
     except Exception:
         return {}
     pipes = raw.get("pipes", {}) if isinstance(raw, dict) else {}
+    routes = raw.get("routes", {}) if isinstance(raw, dict) else {}
     targets = {}
     for row in rows or []:
         if not isinstance(row, dict):
@@ -4525,7 +4542,11 @@ def _get_panel_xxpipe_manager_config_by_identity(panel, rows):
             identity = make_pressure_pipe_identity(row.get("flow_section"), row.get("name"))
         name = str(row.get("name", "") or "").strip() or "未命名"
         flow_section = str(row.get("flow_section", "") or "").strip()
-        targets[identity] = {"name": name, "flow_section": flow_section}
+        targets[identity] = {
+            "name": name,
+            "flow_section": flow_section,
+            "route_key": str(row.get("route_key", "") or "").strip(),
+        }
 
     resolved = {}
     for key, pipe_data in pipes.items():
@@ -4550,6 +4571,24 @@ def _get_panel_xxpipe_manager_config_by_identity(panel, rows):
             ):
                 resolved[identity] = copy.deepcopy(pipe_data)
                 break
+    for identity, target in targets.items():
+        route_key = str(target.get("route_key", "") or "").strip()
+        route_data = routes.get(route_key, {}) if route_key else {}
+        if not isinstance(route_data, dict):
+            continue
+        raw_profile_polyline = copy.deepcopy(route_data.get("raw_profile_polyline", {}) or {})
+        if not raw_profile_polyline:
+            continue
+        if identity in resolved:
+            resolved[identity]["raw_profile_polyline"] = raw_profile_polyline
+            resolved[identity]["segment_geometry_source"] = str(
+                resolved[identity].get("segment_geometry_source", "") or "route_raw_profile_polyline"
+            ).strip() or "route_raw_profile_polyline"
+            continue
+        route_payload = copy.deepcopy(route_data)
+        route_payload.setdefault("segment_geometry_source", "route_raw_profile_polyline")
+        route_payload["raw_profile_polyline"] = raw_profile_polyline
+        resolved[identity] = route_payload
     return resolved
 
 
@@ -5249,11 +5288,506 @@ def _build_xxpipe_material_segment_records(items):
     return out
 
 
+def _resolve_xxpipe_draw_route_key(node, identity, warning_context_by_identity=None):
+    """从只读上下文里提取当前画线段所属的 route_key。"""
+    context_map = warning_context_by_identity or {}
+    for candidate in [identity, *list(getattr(node, "_xxpipe_identity_candidates", []) or [])]:
+        candidate_text = str(candidate or "").strip()
+        if not candidate_text:
+            continue
+        context = context_map.get(candidate_text)
+        if not isinstance(context, dict):
+            continue
+        route_key = str(context.get("route_key", "") or "").strip()
+        if route_key:
+            return route_key
+    return ""
+
+
+def _resolve_xxpipe_draw_source_kind(node, identity, manager_config_by_identity=None):
+    """确定当前画线段的来源类型，供后续接口和文档复用。"""
+    manager_row = {}
+    if isinstance(manager_config_by_identity, dict):
+        manager_row = manager_config_by_identity.get(identity) or {}
+    source_kind = str(manager_row.get("segment_geometry_source", "") or "").strip()
+    if not source_kind and manager_row.get("raw_profile_polyline"):
+        source_kind = "route_raw_profile_polyline"
+    if source_kind:
+        return source_kind
+    struct_name = _struct_val(getattr(node, "structure_type", None))
+    if "隧洞" in str(struct_name or "").strip():
+        return "generated_tunnel"
+    return "longitudinal_nodes"
+
+
+def _resolve_xxpipe_raw_profile_polyline_for_identity(
+    identity,
+    route_key,
+    *,
+    raw_profile_polylines_by_route=None,
+    manager_config_by_identity=None,
+):
+    """按 route 优先、identity 兜底读取导入原线几何。"""
+    from utils.pressure_pipe_longitudinal_utils import normalize_raw_profile_polyline
+
+    route_key_text = str(route_key or "").strip()
+    if route_key_text and isinstance(raw_profile_polylines_by_route, dict):
+        normalized_route_raw = normalize_raw_profile_polyline(raw_profile_polylines_by_route.get(route_key_text, {}))
+        if normalized_route_raw:
+            return normalized_route_raw
+
+    manager_row = {}
+    if isinstance(manager_config_by_identity, dict):
+        manager_row = manager_config_by_identity.get(identity) or {}
+    return normalize_raw_profile_polyline(manager_row.get("raw_profile_polyline", {}))
+
+
+def _build_xxpipe_raw_profile_draw_segments(
+    profile_text_nodes,
+    *,
+    raw_profile_polylines_by_route=None,
+    manager_config_by_identity=None,
+    warning_context_by_identity=None,
+):
+    """按 route 裁切导入原线，生成专供画线使用的段。"""
+    from utils.pressure_pipe_longitudinal_utils import clip_raw_profile_polyline_to_range
+
+    groups = {}
+    for node in list(profile_text_nodes or []):
+        station_mc = _profile_station_value(node)
+        identity = _make_xxpipe_identity_from_node(node)
+        route_key = _resolve_xxpipe_draw_route_key(
+            node,
+            identity,
+            warning_context_by_identity=warning_context_by_identity,
+        )
+        raw_profile_polyline = _resolve_xxpipe_raw_profile_polyline_for_identity(
+            identity,
+            route_key,
+            raw_profile_polylines_by_route=raw_profile_polylines_by_route,
+            manager_config_by_identity=manager_config_by_identity,
+        )
+        if not raw_profile_polyline:
+            continue
+
+        group_key = route_key or identity
+        group = groups.get(group_key)
+        if not isinstance(group, dict):
+            groups[group_key] = {
+                "identity": identity,
+                "route_key": str(route_key or "").strip(),
+                "start_mc": float(station_mc),
+                "end_mc": float(station_mc),
+                "raw_profile_polyline": raw_profile_polyline,
+            }
+            continue
+
+        group["start_mc"] = min(float(group["start_mc"]), float(station_mc))
+        group["end_mc"] = max(float(group["end_mc"]), float(station_mc))
+
+    draw_segments = []
+    for group in groups.values():
+        try:
+            clipped_raw_profile = clip_raw_profile_polyline_to_range(
+                group["raw_profile_polyline"],
+                float(group["start_mc"]),
+                float(group["end_mc"]),
+            )
+        except Exception:
+            continue
+        clipped_vertices = list(clipped_raw_profile.get("vertices", []) or [])
+        if len(clipped_vertices) < 2:
+            continue
+        draw_segments.append(
+            {
+                "identity": str(group.get("identity", "") or "").strip(),
+                "route_key": str(group.get("route_key", "") or "").strip(),
+                "source_kind": "route_raw_profile_polyline",
+                "start_mc": float(group["start_mc"]),
+                "end_mc": float(group["end_mc"]),
+                "points": [(float(mc), float(elev)) for mc, elev in clipped_vertices],
+                "raw_profile_polyline": clipped_raw_profile,
+            }
+        )
+    return draw_segments
+
+
+def _append_xxpipe_draw_point(points, station_mc, elevation, tol=_XXPIPE_PROFILE_STATION_TOL):
+    """向画线点列追加点，顺手处理重复桩号。"""
+    station_value = float(station_mc)
+    elevation_value = float(elevation)
+    if points and abs(points[-1][0] - station_value) <= tol:
+        points[-1] = (station_value, elevation_value)
+        return
+    points.append((station_value, elevation_value))
+
+
+def _build_xxpipe_draw_points_from_nodes(longitudinal_nodes):
+    """把工程折点纵断面转换成用于画线的点列，圆弧段会自动加密。"""
+    normalized_nodes = _normalize_xxpipe_longitudinal_nodes(longitudinal_nodes)
+    if len(normalized_nodes) < 2:
+        return []
+
+    draw_points = []
+    for index, current in enumerate(normalized_nodes[:-1]):
+        nxt = normalized_nodes[index + 1]
+        _append_xxpipe_draw_point(draw_points, current["chainage"], current["elevation"])
+        if not _is_xxpipe_arc_segment_start(current):
+            continue
+
+        arc_end_chainage = min(
+            float(current["arc_end_chainage"] or current["chainage"]),
+            float(nxt["chainage"]),
+        )
+        span_length = max(0.0, arc_end_chainage - float(current["chainage"]))
+        arc_theta = abs(float(current.get("arc_theta_rad", 0.0) or 0.0))
+        step_count = max(
+            2,
+            int(
+                math.ceil(
+                    max(
+                        span_length / 5.0,
+                        arc_theta / (math.pi / 18.0) if arc_theta > 0 else 0.0,
+                    )
+                )
+            ),
+        )
+        for step_index in range(1, step_count):
+            station_mc = float(current["chainage"]) + span_length * step_index / step_count
+            elevation = _sample_xxpipe_arc_segment_elevation(current, station_mc)
+            _append_xxpipe_draw_point(draw_points, station_mc, elevation)
+
+    last_node = normalized_nodes[-1]
+    _append_xxpipe_draw_point(draw_points, last_node["chainage"], last_node["elevation"])
+    return draw_points
+
+
+def _split_xxpipe_centerline_draw_segments(centerline_draw_segments, station_spans, tol=1e-9):
+    """把工程折点画线段按子表区间拆开，并在需要时展开圆弧。"""
+    from utils.pressure_pipe_longitudinal_utils import (
+        clip_longitudinal_nodes_to_range,
+        clip_raw_profile_polyline_to_range,
+        normalize_raw_profile_polyline,
+    )
+
+    normalized_spans = _normalize_profile_station_spans(station_spans)
+    point_groups = []
+    for segment in list(centerline_draw_segments or []):
+        if not isinstance(segment, dict):
+            continue
+        segment_nodes = list(segment.get("longitudinal_nodes", []) or [])
+        raw_points = list(segment.get("points", []) or [])
+        raw_profile_polyline = normalize_raw_profile_polyline(segment.get("raw_profile_polyline", {}))
+        prefer_raw_profile = bool(raw_profile_polyline) and (
+            str(segment.get("source_kind", "") or "").strip() == "route_raw_profile_polyline"
+            or not _has_exportable_xxpipe_longitudinal_nodes(segment_nodes)
+        )
+        if not normalized_spans:
+            if prefer_raw_profile:
+                point_groups.append(
+                    [
+                        (float(mc), float(elev))
+                        for mc, elev in list(raw_profile_polyline.get("vertices", []) or [])
+                    ]
+                )
+            elif _has_exportable_xxpipe_longitudinal_nodes(segment_nodes):
+                point_groups.append(_build_xxpipe_draw_points_from_nodes(segment_nodes))
+            elif len(raw_points) >= 2:
+                point_groups.append([(float(x), float(y)) for x, y in raw_points])
+            continue
+
+        for span in normalized_spans:
+            span_start = float(span["source_start_mc"])
+            span_end = float(span["source_end_mc"])
+            if prefer_raw_profile:
+                try:
+                    clipped_raw_profile = clip_raw_profile_polyline_to_range(
+                        raw_profile_polyline,
+                        span_start,
+                        span_end,
+                    )
+                except Exception:
+                    clipped_raw_profile = {}
+                clipped_vertices = list(clipped_raw_profile.get("vertices", []) or [])
+                if len(clipped_vertices) >= 2:
+                    point_groups.append(
+                        [
+                            (float(mc), float(elev))
+                            for mc, elev in clipped_vertices
+                        ]
+                    )
+                    continue
+
+            if _has_exportable_xxpipe_longitudinal_nodes(segment_nodes):
+                try:
+                    clipped_nodes = clip_longitudinal_nodes_to_range(segment_nodes, span_start, span_end)
+                except Exception:
+                    clipped_nodes = []
+                if len(list(clipped_nodes or [])) >= 2:
+                    point_groups.append(_build_xxpipe_draw_points_from_nodes(clipped_nodes))
+                    continue
+
+            span_points = [
+                (float(mc), float(elev))
+                for mc, elev in raw_points
+                if span_start - tol <= float(mc) <= span_end + tol
+            ]
+            if len(span_points) >= 2:
+                point_groups.append(span_points)
+    return point_groups
+
+
+def _split_xxpipe_centerline_draw_polylines(centerline_draw_segments, station_spans, tol=1e-9):
+    """把中心线画线段切成可写 DXF 的多段线，并保留原线 bulge。"""
+    from utils.pressure_pipe_longitudinal_utils import (
+        clip_longitudinal_nodes_to_range,
+        clip_raw_profile_polyline_to_range,
+        normalize_raw_profile_polyline,
+    )
+
+    def _make_polyline(points, bulges=None):
+        normalized_points = [(float(mc), float(elev)) for mc, elev in list(points or [])]
+        if len(normalized_points) < 2:
+            return None
+        raw_bulges = list(bulges or [])
+        normalized_bulges = [
+            float(raw_bulges[index]) if index < len(raw_bulges) else 0.0
+            for index in range(len(normalized_points))
+        ]
+        return {
+            "points": normalized_points,
+            "bulges": normalized_bulges,
+        }
+
+    normalized_spans = _normalize_profile_station_spans(station_spans)
+    polylines = []
+    for segment in list(centerline_draw_segments or []):
+        if not isinstance(segment, dict):
+            continue
+        segment_nodes = list(segment.get("longitudinal_nodes", []) or [])
+        raw_points = list(segment.get("points", []) or [])
+        raw_profile_polyline = normalize_raw_profile_polyline(segment.get("raw_profile_polyline", {}))
+        prefer_raw_profile = bool(raw_profile_polyline) and (
+            str(segment.get("source_kind", "") or "").strip() == "route_raw_profile_polyline"
+            or not _has_exportable_xxpipe_longitudinal_nodes(segment_nodes)
+        )
+        if not normalized_spans:
+            if prefer_raw_profile:
+                polyline = _make_polyline(
+                    raw_profile_polyline.get("vertices", []),
+                    raw_profile_polyline.get("bulges", []),
+                )
+            elif _has_exportable_xxpipe_longitudinal_nodes(segment_nodes):
+                polyline = _make_polyline(_build_xxpipe_draw_points_from_nodes(segment_nodes))
+            else:
+                polyline = _make_polyline(raw_points)
+            if polyline:
+                polylines.append(polyline)
+            continue
+
+        for span in normalized_spans:
+            span_start = float(span["source_start_mc"])
+            span_end = float(span["source_end_mc"])
+            if prefer_raw_profile:
+                try:
+                    clipped_raw_profile = clip_raw_profile_polyline_to_range(
+                        raw_profile_polyline,
+                        span_start,
+                        span_end,
+                    )
+                except Exception:
+                    clipped_raw_profile = {}
+                polyline = _make_polyline(
+                    clipped_raw_profile.get("vertices", []),
+                    clipped_raw_profile.get("bulges", []),
+                )
+                if polyline:
+                    polylines.append(polyline)
+                    continue
+
+            if _has_exportable_xxpipe_longitudinal_nodes(segment_nodes):
+                try:
+                    clipped_nodes = clip_longitudinal_nodes_to_range(segment_nodes, span_start, span_end)
+                except Exception:
+                    clipped_nodes = []
+                if len(list(clipped_nodes or [])) >= 2:
+                    polyline = _make_polyline(_build_xxpipe_draw_points_from_nodes(clipped_nodes))
+                    if polyline:
+                        polylines.append(polyline)
+                        continue
+
+            span_points = [
+                (float(mc), float(elev))
+                for mc, elev in raw_points
+                if span_start - tol <= float(mc) <= span_end + tol
+            ]
+            polyline = _make_polyline(span_points)
+            if polyline:
+                polylines.append(polyline)
+    return polylines
+
+
+def _add_xxpipe_centerline_lwpolyline(msp, draw_points, bulges, *, layer):
+    """写入 xx管 中心线多段线，原线有 bulge 时保留弧段信息。"""
+    normalized_points = [(float(x), float(y)) for x, y in list(draw_points or [])]
+    if len(normalized_points) < 2:
+        return
+    raw_bulges = list(bulges or [])
+    normalized_bulges = [
+        float(raw_bulges[index]) if index < len(raw_bulges) else 0.0
+        for index in range(len(normalized_points))
+    ]
+    if any(abs(value) > 1e-12 for value in normalized_bulges):
+        cad_points = [
+            (x, y, normalized_bulges[index])
+            for index, (x, y) in enumerate(normalized_points)
+        ]
+        msp.add_lwpolyline(cad_points, format="xyb", dxfattribs={"layer": layer})
+        return
+    msp.add_lwpolyline(normalized_points, dxfattribs={"layer": layer})
+
+
+def _build_xxpipe_profile_breakpoint_record(node, *, identity, route_key, source_kind):
+    """把工程折点节点整理成导出数据层可复用的记录。"""
+    return {
+        "identity": str(identity or "").strip(),
+        "route_key": str(route_key or "").strip(),
+        "source_kind": str(source_kind or "").strip(),
+        "chainage": float(node["chainage"]),
+        "elevation": float(node["elevation"]),
+        "turn_type": str(node.get("turn_type", "NONE") or "NONE"),
+        "turn_angle": float(node.get("turn_angle", 0.0) or 0.0),
+        "vertical_curve_radius": float(node.get("vertical_curve_radius", 0.0) or 0.0),
+        "arc_center_s": node.get("arc_center_s"),
+        "arc_center_z": node.get("arc_center_z"),
+        "arc_end_chainage": node.get("arc_end_chainage"),
+        "arc_theta_rad": node.get("arc_theta_rad"),
+    }
+
+
+def _build_xxpipe_draw_segments_and_breakpoints(
+    profile_text_nodes,
+    longitudinal_nodes_by_identity,
+    *,
+    manager_config_by_identity=None,
+    warning_context_by_identity=None,
+):
+    """按连续子段生成画线几何和工程折点记录。"""
+    from utils.pressure_pipe_longitudinal_utils import clip_longitudinal_nodes_to_range
+
+    long_map = longitudinal_nodes_by_identity or {}
+    manager_map = manager_config_by_identity or {}
+    warning_context = warning_context_by_identity or {}
+    centerline_draw_segments = []
+    profile_breakpoint_records = []
+    active_group = None
+
+    def flush_group():
+        nonlocal active_group
+        if not isinstance(active_group, dict):
+            active_group = None
+            return
+
+        source_nodes = list(active_group.get("longitudinal_nodes", []) or [])
+        if not _has_exportable_xxpipe_longitudinal_nodes(source_nodes):
+            active_group = None
+            return
+
+        start_mc = float(active_group["start_mc"])
+        end_mc = float(active_group["end_mc"])
+        try:
+            clipped_nodes = clip_longitudinal_nodes_to_range(source_nodes, start_mc, end_mc)
+        except Exception:
+            clipped_nodes = list(source_nodes)
+
+        if len(list(clipped_nodes or [])) < 2:
+            active_group = None
+            return
+
+        normalized_nodes = _normalize_xxpipe_longitudinal_nodes(clipped_nodes)
+        raw_points = [
+            (float(node["chainage"]), float(node["elevation"]))
+            for node in normalized_nodes
+        ]
+        if len(raw_points) >= 2:
+            centerline_draw_segments.append(
+                {
+                    "identity": active_group["identity"],
+                    "route_key": active_group["route_key"],
+                    "source_kind": active_group["source_kind"],
+                    "start_mc": start_mc,
+                    "end_mc": end_mc,
+                    "points": raw_points,
+                    "longitudinal_nodes": copy.deepcopy(normalized_nodes),
+                }
+            )
+        for node in normalized_nodes:
+            profile_breakpoint_records.append(
+                _build_xxpipe_profile_breakpoint_record(
+                    node,
+                    identity=active_group["identity"],
+                    route_key=active_group["route_key"],
+                    source_kind=active_group["source_kind"],
+                )
+            )
+        active_group = None
+
+    for node in list(profile_text_nodes or []):
+        station_mc = _profile_station_value(node)
+        identity, long_nodes, _missing_kind = _resolve_xxpipe_longitudinal_nodes_for_node(node, long_map)
+        if not _has_exportable_xxpipe_longitudinal_nodes(long_nodes):
+            flush_group()
+            continue
+
+        route_key = _resolve_xxpipe_draw_route_key(
+            node,
+            identity,
+            warning_context_by_identity=warning_context,
+        )
+        source_kind = _resolve_xxpipe_draw_source_kind(
+            node,
+            identity,
+            manager_config_by_identity=manager_map,
+        )
+        force_break = bool(getattr(node, "_structure_split_break_before", False))
+
+        if (
+            active_group is not None
+            and (
+                force_break
+                or (
+                    active_group["identity"] != identity
+                    and source_kind != "route_raw_profile_polyline"
+                )
+                or active_group["route_key"] != route_key
+                or active_group["source_kind"] != source_kind
+            )
+        ):
+            flush_group()
+
+        if active_group is None:
+            active_group = {
+                "identity": identity,
+                "route_key": route_key,
+                "source_kind": source_kind,
+                "start_mc": station_mc,
+                "end_mc": station_mc,
+                "longitudinal_nodes": list(long_nodes or []),
+            }
+            continue
+
+        active_group["end_mc"] = station_mc
+
+    flush_group()
+    return centerline_draw_segments, profile_breakpoint_records
+
+
 def _build_xxpipe_profile_data(
     nodes,
     longitudinal_nodes_by_identity,
     *,
     station_prefix="",
+    raw_profile_polylines_by_route=None,
     manager_config_by_identity=None,
     export_policy=None,
     warning_context_by_identity=None,
@@ -5485,11 +6019,45 @@ def _build_xxpipe_profile_data(
         })
     material_segments = _build_xxpipe_material_segment_records(material_segments)
 
+    legacy_centerline_draw_segments, profile_breakpoint_records = _build_xxpipe_draw_segments_and_breakpoints(
+        profile_text_nodes,
+        long_map,
+        manager_config_by_identity=manager_map,
+        warning_context_by_identity=warning_context_by_identity,
+    )
+    raw_centerline_draw_segments = _build_xxpipe_raw_profile_draw_segments(
+        profile_text_nodes,
+        raw_profile_polylines_by_route=raw_profile_polylines_by_route,
+        manager_config_by_identity=manager_map,
+        warning_context_by_identity=warning_context_by_identity,
+    )
+    raw_route_keys = {
+        str(segment.get("route_key", "") or "").strip()
+        for segment in raw_centerline_draw_segments
+        if str(segment.get("route_key", "") or "").strip()
+    }
+    raw_identities = {
+        str(segment.get("identity", "") or "").strip()
+        for segment in raw_centerline_draw_segments
+        if str(segment.get("identity", "") or "").strip()
+    }
+    centerline_draw_segments = list(raw_centerline_draw_segments)
+    centerline_draw_segments.extend(
+        segment
+        for segment in legacy_centerline_draw_segments
+        if (
+            str(segment.get("route_key", "") or "").strip() not in raw_route_keys
+            and str(segment.get("identity", "") or "").strip() not in raw_identities
+        )
+    )
+
     return {
         "profile_text_nodes": profile_text_nodes,
         "ip_records": ip_records,
         "centerline_points": centerline_points,
         "centerline_records": centerline_records,
+        "centerline_draw_segments": centerline_draw_segments,
+        "profile_breakpoint_records": profile_breakpoint_records,
         "building_segments": building_segments,
         "material_segments": material_segments,
         "warnings": warnings,
@@ -5847,6 +6415,7 @@ def _build_panel_xxpipe_profile_data(
         rows = [row for row in list(lookup_rows or []) if isinstance(row, dict)]
 
     longitudinal_nodes = _get_panel_pressure_pipe_longitudinal_nodes_for_export(panel, rows)
+    raw_profile_polylines = _get_panel_pressure_pipe_raw_profile_polylines_for_export(panel, rows)
     manager_config = _get_panel_xxpipe_manager_config_by_identity(panel, rows)
     warning_context_by_identity = _build_xxpipe_warning_context_by_identity(rows)
     non_tunnel_coverage_only = _route_import_targets_require_non_tunnel_coverage(route_import_targets)
@@ -5864,6 +6433,7 @@ def _build_panel_xxpipe_profile_data(
         draw_nodes,
         longitudinal_nodes,
         station_prefix=station_prefix,
+        raw_profile_polylines_by_route=raw_profile_polylines,
         manager_config_by_identity=manager_config,
         export_policy=export_policy,
         warning_context_by_identity=warning_context_by_identity,
@@ -9070,6 +9640,7 @@ def _draw_xxpipe_profile_on_msp(
 
     centerline_records = list(xxpipe_profile_data.get("centerline_records", []) or [])
     centerline_points = list(xxpipe_profile_data.get("centerline_points", []) or [])
+    centerline_draw_segments = list(xxpipe_profile_data.get("centerline_draw_segments", []) or [])
     ip_records = list(xxpipe_profile_data.get("ip_records", []) or [])
     building_segments = list(xxpipe_profile_data.get("building_segments", []) or [])
     material_segments = list(xxpipe_profile_data.get("material_segments", []) or [])
@@ -9128,11 +9699,24 @@ def _draw_xxpipe_profile_on_msp(
                 dxfattribs={"layer": layer_grid},
             )
 
-    for point_group in _split_xxpipe_centerline_points(centerline_points, draw_station_spans):
-        msp.add_lwpolyline(
-            [(sx(mc), sy(elev)) for mc, elev in point_group],
-            dxfattribs={"layer": layer_centerline},
-        )
+    if centerline_draw_segments:
+        for polyline in _split_xxpipe_centerline_draw_polylines(centerline_draw_segments, draw_station_spans):
+            draw_points = [
+                (sx(station_mc), sy(elevation))
+                for station_mc, elevation in polyline.get("points", [])
+            ]
+            _add_xxpipe_centerline_lwpolyline(
+                msp,
+                draw_points,
+                polyline.get("bulges", []),
+                layer=layer_centerline,
+            )
+    else:
+        for point_group in _split_xxpipe_centerline_points(centerline_points, draw_station_spans):
+            msp.add_lwpolyline(
+                [(sx(mc), sy(elev)) for mc, elev in point_group],
+                dxfattribs={"layer": layer_centerline},
+            )
 
     text_attr_rot = {"layer": layer_text, "height": text_height, "rotation": rotation, "width": 0.7, "style": "Standard"}
     text_attr_no_rot = {"layer": layer_text, "height": text_height, "width": 0.7, "style": "Standard"}
@@ -9773,6 +10357,7 @@ def _build_xxpipe_longitudinal_txt_lines(
 
     centerline_records = list(xxpipe_profile_data.get("centerline_records", []) or [])
     centerline_points = list(xxpipe_profile_data.get("centerline_points", []) or [])
+    centerline_draw_segments = list(xxpipe_profile_data.get("centerline_draw_segments", []) or [])
     ip_records = list(xxpipe_profile_data.get("ip_records", []) or [])
     building_segments = list(xxpipe_profile_data.get("building_segments", []) or [])
     material_segments = list(xxpipe_profile_data.get("material_segments", []) or [])
@@ -9834,10 +10419,16 @@ def _build_xxpipe_longitudinal_txt_lines(
             )
     lines.append("")
 
-    for point_group in _split_xxpipe_centerline_points(centerline_points, draw_station_spans):
-        for station_mc, elevation in point_group:
-            lines.append(f"pl {fmt(sx(station_mc))},{fmt(sy(elevation))}")
-        lines.append("")
+    if centerline_draw_segments:
+        for point_group in _split_xxpipe_centerline_draw_segments(centerline_draw_segments, draw_station_spans):
+            for station_mc, elevation in point_group:
+                lines.append(f"pl {fmt(sx(station_mc))},{fmt(sy(elevation))}")
+            lines.append("")
+    else:
+        for point_group in _split_xxpipe_centerline_points(centerline_points, draw_station_spans):
+            for station_mc, elevation in point_group:
+                lines.append(f"pl {fmt(sx(station_mc))},{fmt(sy(elevation))}")
+            lines.append("")
 
     centerline_elev_by_station = {
         round(float(record.get("station_mc", 0.0) or 0.0), 9): record.get("elevation")

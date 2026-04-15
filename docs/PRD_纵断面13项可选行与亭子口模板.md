@@ -1,8 +1,8 @@
 # PRD：纵断面导出配置（13项可选行、亭子口模板、xx管固定5项）
 
 ## 1. 文档信息
-- 版本：v1.22
-- 更新时间：2026-04-14
+- 版本：v1.24
+- 更新时间：2026-04-15
 - 适用模块：生成纵断面表格类导出入口（TXT / DXF / 合并 DXF）
 - 文档范围：
   - `standard` 模式：13 项底层定义、当前可见 11 项、亭子口模板、可选项工作台
@@ -43,7 +43,7 @@
 - 当前正式入口仍由 `app_渠系计算前端/water_profile/cad_tools.py` 暴露为 `TextExportSettingsDialog`，但活动实现已迁到专用模块 `app_渠系计算前端/water_profile/text_export_settings_dialog.py`。
 - `TextExportSettingsDialog` 当前已经显式区分 `standard | xxpipe` 两种模式；本文统一收敛这两套规则，但会按章节分开描述。
 - `xxpipe` 模式虽然复用同一个弹窗外壳，但右侧固定为 5 项只读展示，不使用普通模式的“已启用 / 可选项 / 模板 / 排序”交互。
-- `xxpipe` mixed route 已支持夹带隧洞：整线卡继续负责唯一一份 DXF 导入，隧洞段会额外显示摘要卡；这些卡片只读取表1/Excel 已有参数做只读摘要和缺项提示，不再作为新增录入口。
+- `xxpipe` mixed route 已支持夹带隧洞：整线卡按有压连续段数组织导入目标；前置/尾置无压隧洞不单独新增导入次数，只有中间无压隧洞切开前后有压段时才新增导入目标。隧洞段会额外显示摘要卡；这些卡片只读取表1/Excel 已有参数做只读摘要和缺项提示，不再作为新增录入口。
 - 暗涵家族标准类型为 `暗涵-矩形` 与 `暗涵-圆拱直墙型`；旧 `矩形暗涵 / 矩形暗渠 / 暗渠` 兼容为 `暗涵-矩形`。暗涵家族只走上方普通渠道表，不进入下方 `xxpipe` 固定 5 项表，也不触发隧洞摘要。
 - `xxpipe` mixed route 的 route 级几何已统一保存为 `profile_segments`：普通有压段来源于整线 DXF 裁切，隧洞段优先来源于计算后反推的展示底线；文档口径不再把旧的“进口底高 + 坡降 i + 起终桩号”兼容链路作为对外承诺。
 - 新实现不再继承旧的单列表/分组版弹窗类；历史 `_SingleList...`、`_GroupedFluent...`、`_Legacy...` 代码仅保留用于兼容阅读、问题定位和旧实现对照。
@@ -807,8 +807,9 @@
 ### 10.7 轴线 DXF 规则
 
 #### 10.7.1 导入对象
-- 用户导入的是“管中心线 / 轴线”纵断面 DXF。
-- mixed route 仍只导入 1 份 DXF，但这份 DXF 只覆盖下方 `xxpipe` 承压段；隧洞和暗涵不再要求用户额外准备 `xxpipe` 轴线 DXF。
+- 用户导入的是“原始轴线”纵断面 DXF。
+- mixed route 的导入次数统一按有压连续段数决定：前置/尾置无压隧洞不单独新增导入次数，只有中间无压隧洞切开前后有压段时才新增导入目标。
+- 当前每个导入目标里的 DXF 会把用户选中的原始轴线另存为 route 级 `raw_profile_polyline`，只供 `centerline_draw_segments` 画线使用；前置无压隧洞等上方结构仍继续走原来的生成线逻辑。
 
 #### 10.7.2 二维 AutoCAD 口径
 - `X = 桩号`
@@ -828,13 +829,17 @@
 
 ### 10.8 数据作用域与绘图规则
 - 导入的轴线纵断面数据只服务 `xxpipe` 导出。
+- route 级 `raw_profile_polyline` 保存用户导入时选中的原始纵断面多段线，且已经套用当次 `chainage_offset`。
+- `centerline_draw_segments` 只按 `raw_profile_polyline` 裁切后保存画线片段，原线含 CAD bulge 时 DXF 输出继续保留 bulge；`profile_breakpoint_records` 只保存基于 `longitudinal_nodes` 的工程折点接口记录。
+- 当前图面按 `centerline_draw_segments` 画线，当前表格文字仍按 `centerline_records` 取值；`profile_breakpoint_records` 先作为接口预留、节点对齐数据和后续 coverage 数据口保留，不再和画线混用。
 - 不回写水面线主表。
 - 不改变现有水力计算字段。
-- 纯承压整线继续复用 `longitudinal_nodes` 持久化字段。
-- mixed route 额外写入 route 级 `profile_segments`，作为“下方承压 DXF + 上方结构生成段”的统一真源。
+- 纯承压整线继续复用 `longitudinal_nodes` 做采样和工程折点事实来源，同时新增 route 级 `raw_profile_polyline` 做画线事实来源。
+- mixed route 额外写入 route 级 `profile_segments`，作为“下方承压 DXF + 上方结构生成段”的统一真源；route 级 `raw_profile_polyline` 仍只保存当前 route 对应的原始承压轴线。
 - 普通渠类模式保持现状。
 - `xxpipe` 模式只绘制“管中心线”纵断面折线。
 - `xxpipe` 模式不绘制 `渠底高程线 / 渠顶高程线 / 设计水位线`。
+- 工程折点指原始轴线上真正用于分段、转折、合并/切分、节点对齐和后续 coverage 判断的关键点；普通连续采样点不算工程折点。
 
 ### 10.8.1 命名定向钻 / 顶管进出口外侧竖线规则
 - 命名的 `定向钻 / 顶管` 进点、出点本身仍保留边界竖线。
@@ -844,8 +849,9 @@
 - 普通 `有压管道` 的管材分段边界，不再自动升级成整高竖线；整高边界只保留真正需要封边的位置。
 
 ### 10.9 实现约束
-- 复用已有 `PressurePipeConfigDialog._import_longitudinal_dxf()` 与 `DxfParser.parse_longitudinal_profile()` 能力。
-- 纯承压整线复用现有 `longitudinal_nodes` 持久化能力；mixed route 追加 `profile_segments` 持久化能力。
+- 复用已有 `PressurePipeConfigDialog._import_longitudinal_dxf()` 与 `DxfParser.parse_longitudinal_profile()` 能力，同时导入阶段通过解析器保存选中原线的 `raw_profile_polyline`。
+- 纯承压整线复用现有 `longitudinal_nodes` 持久化能力，并新增 route 级 `raw_profile_polyline`；mixed route 继续追加 `profile_segments` 持久化能力。
+- `centerline_draw_segments` 与 `profile_breakpoint_records` 必须同时保留，且不能用其中任意一份替代另一份。
 - 单独维护 `xx管` 固定模板，不污染普通渠类可配置行定义。
 - `TextExportSettingsDialog` 需显式区分 `standard | xxpipe` 两种模式，不能再由弹窗内部自行猜测当前是否为 `xx管`。
 - `xxpipe` 模式下保留普通纵断面 `profile_row_items` 快照，不允许把管道固定 5 项回写成通用配置。
@@ -965,6 +971,7 @@
 - 但 `xx管` 专用导出层已经额外收紧为：
   - 普通 `有压管道` 不显示建筑物名称
   - 只显示 `隧洞 / 定向钻 / 顶管`
+- 在 `xxpipe` 导出层里，原始轴线由 `centerline_draw_segments` 画出来，`profile_breakpoint_records` 先作为工程折点接口预留、节点对齐数据和后续 coverage 数据口保留；当前表格文字仍继续走 `centerline_records`。这样图面和数值各走各的，不再抢同一份记录。
 
 因此，本文将两者解释为：
 - 通用层：偏“数据识别 / 特殊建筑物处理”
@@ -1015,7 +1022,10 @@
 - `xxpipe` 模式下弹窗右侧固定展示 5 项，不出现可选项、模板按钮和排序操作。
 - 结构校验允许 `有压管道 / 隧洞 / 定向钻 / 顶管`，其余拦截。
 - 建筑物名称仅在 `隧洞 / 定向钻 / 顶管` 段出现。
-- 管中心线高程按轴线 DXF 插值得到。
+- 图面按 `centerline_draw_segments` 画线；若 route 有 `raw_profile_polyline`，必须优先画导入原线裁切结果，不能回退成平面桩号采样点硬连。
+- 当前“管中心线高程（米）”继续按 `centerline_records` 在平面桩号位置取值。
+- `profile_breakpoint_records` 先作为工程折点接口预留、节点对齐数据和后续 coverage 数据口保留，不直接替代表格文字；两者分开后不能再互相替代。
+- 工程折点只记原始轴线上真正用于分段、转折、节点对齐和后续 coverage 判断的关键点，不把普通采样点算进来。
 - 里程桩号默认保留 2 位小数，并允许用户单独调整；普通模式使用 `station_decimals`，`xxpipe` 使用 `xxpipe_station_decimals`，两者彼此独立。
 - 管中心线高程默认保留 2 位小数，并允许用户单独调整；普通纵断面继续沿用 `elev_decimals`。
 - 导入范围不足时禁止导出。
@@ -1074,10 +1084,18 @@
 - `tests/test_xxpipe_longitudinal_export_unit.py`
   - 校验 `xx管` 的 TXT / DXF 导出入口会以 `mode="xxpipe"` 打开弹窗，并沿用固定模板导出。
   - 校验命名 `定向钻 / 顶管` 进出口外侧紧邻的普通 `有压管道` 节点会保留下半段竖线，且不会继续穿入“建筑物名称”行，同时保留真正的进出口边界线与首尾边框。
+- 校验 `centerline_draw_segments` 负责导入原线画线、`profile_breakpoint_records` 负责工程折点接口，二者分开后仍能稳定导出；真实样例需覆盖“表格 65 个平面桩号取值，但画线仍保留原线裁切点列”的场景。
+- `tests/test_xxpipe_real_sample_unit.py`
+  - 用 `data/九龙右支管纵剖面图.dxf` 做真实回归，确认 route 级 `raw_profile_polyline` 会直接驱动 `纵断面_管中心线` 出图，不再回退成少量平面桩号采样点硬连。
 - `tests/test_water_profile_combined_dxf_unit.py`
   - 校验合并 DXF 在 `xx管` 模式下同样走 `mode="xxpipe"` 与同一套固定模板口径。
 
 ## 14. 变更日志
+- v1.24
+  - 同步 `xx管` 纵断面“导入原线直出”口径：导入时 route 级保存 `raw_profile_polyline`，`centerline_draw_segments` 按原线裁切出图，`centerline_records` 仍只服务平面桩号文字取值。
+  - 补充 `tests/test_xxpipe_real_sample_unit.py`，用九龙右支管真实 DXF 固化“表格仍按采样取值、画线必须保留原线顶点序列”的回归。
+- v1.23
+  - 同步 `xx管` 纵断面原始轴线与工程折点口径，明确 `centerline_draw_segments / profile_breakpoint_records` 的分工，以及当前画线、文字取值和接口预留分离的导出规则。
 - v1.22
   - 同步暗涵家族导出口径：`暗涵-矩形 / 暗涵-圆拱直墙型` 只留在上方普通渠道表，不进入下方 `xxpipe` 固定 5 项表。
   - 明确旧 `矩形暗涵 / 矩形暗渠 / 暗渠` 兼容到 `暗涵-矩形`，`暗涵-圆拱直墙型` 不触发隧洞摘要、不参与下方轴线覆盖校验。

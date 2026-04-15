@@ -921,3 +921,79 @@ def test_get_route_config_returns_route_bucket_after_pipe_entry_removed():
     assert snapshot["profile_state"] == "ok"
     assert snapshot["longitudinal_nodes"] == route_longitudinal_nodes
     assert snapshot["profile_segments"] == [{"segment_identity": "flow9-row3"}]
+
+
+def test_set_route_longitudinal_nodes_persists_route_raw_profile_polyline():
+    manager = PressurePipeManager()
+    route_longitudinal_nodes = [
+        {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+        {"chainage": 60.0, "elevation": 418.8, "turn_type": "NONE"},
+    ]
+    raw_profile_polyline = {
+        "vertices": [(0.0, 420.0), (20.0, 419.4), (60.0, 418.8)],
+        "bulges": [0.0, 0.0, 0.0],
+        "source_kind": "selected_raw_polyline",
+    }
+
+    manager.set_route_longitudinal_nodes(
+        "flow9-route1",
+        route_longitudinal_nodes,
+        "9号整线",
+        raw_profile_polyline=raw_profile_polyline,
+    )
+
+    snapshot = manager.get_route_config("flow9-route1")
+    assert snapshot is not None
+    assert snapshot["raw_profile_polyline"] == raw_profile_polyline
+
+
+def test_save_pressure_routes_preserves_existing_route_raw_profile_polyline():
+    manager = PressurePipeManager()
+    route_longitudinal_nodes = [
+        {"chainage": 0.0, "elevation": 420.0, "turn_type": "NONE"},
+        {"chainage": 60.0, "elevation": 418.8, "turn_type": "NONE"},
+    ]
+    raw_profile_polyline = {
+        "vertices": [(0.0, 420.0), (20.0, 419.4), (60.0, 418.8)],
+        "bulges": [0.0, 0.0, 0.0],
+        "source_kind": "selected_raw_polyline",
+    }
+    manager.from_dict(
+        {
+            "version": "1.0",
+            "last_modified": "",
+            "pipes": {},
+            "routes": {
+                "flow9-route1": {
+                    "display_name": "9号整线",
+                    "longitudinal_nodes": route_longitudinal_nodes,
+                    "raw_profile_polyline": raw_profile_polyline,
+                    "profile_segments": [],
+                    "profile_state": "ok",
+                }
+            },
+            "segments": {},
+        }
+    )
+
+    manager.save_pressure_routes(
+        routes=[
+            {
+                "route_key": "flow9-route1",
+                "route_display_name": "9号整线",
+                "channel_level": "支管",
+                "start_row_index": 0,
+                "end_row_index": 0,
+                "start_mc": 0.0,
+                "end_mc": 60.0,
+                "profile_state": "ok",
+                "segment_identities": [],
+            }
+        ],
+        route_profiles={"flow9-route1": route_longitudinal_nodes},
+        segment_results=[],
+    )
+
+    snapshot = manager.get_route_config("flow9-route1")
+    assert snapshot is not None
+    assert snapshot["raw_profile_polyline"] == raw_profile_polyline

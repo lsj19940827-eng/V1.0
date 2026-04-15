@@ -313,6 +313,44 @@ def test_get_pressure_pipe_longitudinal_nodes_for_export_reads_route_bucket_and_
     assert result["flow2-row6"][-1]["chainage"] == 60.0
 
 
+def test_get_pressure_pipe_raw_profile_polylines_for_export_reads_route_bucket():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    raw_profile_polyline = {
+        "vertices": [(3968.95, 403.62), (4005.0, 402.8), (4366.58, 405.58)],
+        "bulges": [0.0, 0.0, 0.0],
+        "source_kind": "selected_raw_polyline",
+    }
+    panel._pressure_pipe_manager = SimpleNamespace(
+        to_dict=lambda: {
+            "pipes": {},
+            "routes": {
+                "flow1-route1": {
+                    "display_name": "赛金连续整线",
+                    "raw_profile_polyline": raw_profile_polyline,
+                }
+            },
+        }
+    )
+
+    result = WaterProfilePanel.get_pressure_pipe_raw_profile_polylines_for_export(
+        panel,
+        rows=[
+            {
+                "name": "苟家湾",
+                "flow_section": "1",
+                "identity": "flow1-row73",
+                "route_key": "flow1-route1",
+                "route_display_name": "赛金连续整线",
+            }
+        ],
+    )
+
+    assert result == {
+        "flow1-route1": raw_profile_polyline,
+    }
+
+
 def test_get_pressure_pipe_longitudinal_nodes_for_export_falls_back_to_route_bucket_when_storage_key_changes():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

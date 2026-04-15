@@ -64,6 +64,75 @@ def _make_node(
     )
 
 
+def _build_route_raw_profile_fixture():
+    nodes = [
+        _make_node(
+            ip_no=1,
+            mc=100.0,
+            structure="有压管道",
+            name="赛金压力段",
+            flow_section="1",
+            in_out="进",
+            row_identity="flow1-row1",
+        ),
+        _make_node(
+            ip_no=2,
+            mc=120.0,
+            structure="有压管道",
+            name="赛金压力段",
+            flow_section="1",
+            row_identity="flow1-row2",
+        ),
+        _make_node(
+            ip_no=3,
+            mc=140.0,
+            structure="顶管",
+            name="赛金压力段",
+            flow_section="1",
+            in_out="出",
+            row_identity="flow1-row3",
+        ),
+    ]
+    engineering_breakpoints = [
+        {"chainage": 100.0, "elevation": 410.0, "turn_type": "NONE", "turn_angle": 0.0},
+        {"chainage": 120.0, "elevation": 408.8, "turn_type": "FOLD", "turn_angle": 8.0},
+        {"chainage": 140.0, "elevation": 406.2, "turn_type": "NONE", "turn_angle": 0.0},
+    ]
+    long_map = {
+        "flow1-row1": [dict(item) for item in engineering_breakpoints],
+        "flow1-row2": [dict(item) for item in engineering_breakpoints],
+        "flow1-row3": [dict(item) for item in engineering_breakpoints],
+    }
+    raw_profile_polyline = [
+        (95.0, 410.4),
+        (100.0, 410.0),
+        (107.0, 409.4),
+        (128.0, 407.0),
+        (140.0, 406.2),
+        (145.0, 405.8),
+    ]
+    manager_map = {
+        "flow1-row1": {
+            "segment_geometry_source": "route_raw_profile_polyline",
+            "raw_profile_polyline": list(raw_profile_polyline),
+        },
+        "flow1-row2": {
+            "segment_geometry_source": "route_raw_profile_polyline",
+            "raw_profile_polyline": list(raw_profile_polyline),
+        },
+        "flow1-row3": {
+            "segment_geometry_source": "route_raw_profile_polyline",
+            "raw_profile_polyline": list(raw_profile_polyline),
+        },
+    }
+    warning_context = {
+        "flow1-row1": {"identity": "flow1-row1", "route_key": "flow1-route1", "route_display_name": "赛金连续整线"},
+        "flow1-row2": {"identity": "flow1-row2", "route_key": "flow1-route1", "route_display_name": "赛金连续整线"},
+        "flow1-row3": {"identity": "flow1-row3", "route_key": "flow1-route1", "route_display_name": "赛金连续整线"},
+    }
+    return nodes, long_map, manager_map, warning_context, raw_profile_polyline
+
+
 def test_build_xxpipe_profile_data_samples_centerline_and_segments():
     nodes = [
         _make_node(ip_no=1, mc=0.0, structure="定向钻", name="穿路段", flow_section="1", in_out="进"),
@@ -84,8 +153,178 @@ def test_build_xxpipe_profile_data_samples_centerline_and_segments():
         (50.0, pytest.approx(95.0)),
         (100.0, pytest.approx(90.0)),
     ]
+    assert len(data["centerline_draw_segments"]) == 1
+    segment = data["centerline_draw_segments"][0]
+    assert segment["identity"] == "1::穿路段"
+    assert segment["route_key"] == ""
+    assert segment["source_kind"] == "longitudinal_nodes"
+    assert segment["start_mc"] == pytest.approx(0.0)
+    assert segment["end_mc"] == pytest.approx(100.0)
+    assert segment["points"] == [
+        (0.0, pytest.approx(100.0)),
+        (100.0, pytest.approx(90.0)),
+    ]
+    assert data["profile_breakpoint_records"] == [
+        {
+            "identity": "1::穿路段",
+            "route_key": "",
+            "source_kind": "longitudinal_nodes",
+            "chainage": pytest.approx(0.0),
+            "elevation": pytest.approx(100.0),
+            "turn_type": "无",
+            "turn_angle": pytest.approx(0.0),
+            "vertical_curve_radius": pytest.approx(0.0),
+            "arc_center_s": None,
+            "arc_center_z": None,
+            "arc_end_chainage": None,
+            "arc_theta_rad": None,
+        },
+        {
+            "identity": "1::穿路段",
+            "route_key": "",
+            "source_kind": "longitudinal_nodes",
+            "chainage": pytest.approx(100.0),
+            "elevation": pytest.approx(90.0),
+            "turn_type": "无",
+            "turn_angle": pytest.approx(0.0),
+            "vertical_curve_radius": pytest.approx(0.0),
+            "arc_center_s": None,
+            "arc_center_z": None,
+            "arc_end_chainage": None,
+            "arc_theta_rad": None,
+        },
+    ]
     assert [segment["text"] for segment in data["building_segments"]] == ["穿路段"]
     assert [segment["text"] for segment in data["material_segments"]] == ["球墨铸铁管 DN1200"]
+
+
+def test_build_xxpipe_profile_data_keeps_engineering_breakpoints_separate_from_station_sampling():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="定向钻", name="穿路段", flow_section="1", in_out="进"),
+        _make_node(ip_no=2, mc=100.0, structure="定向钻", name="穿路段", flow_section="1", in_out="出"),
+    ]
+    long_map = {
+        "1::穿路段": [
+            {"chainage": 0.0, "elevation": 100.0, "turn_type": "NONE", "turn_angle": 0.0, "vertical_curve_radius": 0.0},
+            {"chainage": 40.0, "elevation": 96.0, "turn_type": "FOLD", "turn_angle": 12.0, "vertical_curve_radius": 0.0},
+            {"chainage": 100.0, "elevation": 90.0, "turn_type": "NONE", "turn_angle": 0.0, "vertical_curve_radius": 0.0},
+        ]
+    }
+
+    data = cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
+
+    assert data["centerline_records"] == [
+        {"identity": "1::穿路段", "station_mc": pytest.approx(0.0), "elevation": pytest.approx(100.0)},
+        {"identity": "1::穿路段", "station_mc": pytest.approx(100.0), "elevation": pytest.approx(90.0)},
+    ]
+    assert len(data["centerline_draw_segments"]) == 1
+    segment = data["centerline_draw_segments"][0]
+    assert segment["identity"] == "1::穿路段"
+    assert segment["route_key"] == ""
+    assert segment["source_kind"] == "longitudinal_nodes"
+    assert segment["start_mc"] == pytest.approx(0.0)
+    assert segment["end_mc"] == pytest.approx(100.0)
+    assert segment["points"] == [
+        (0.0, pytest.approx(100.0)),
+        (40.0, pytest.approx(96.0)),
+        (100.0, pytest.approx(90.0)),
+    ]
+    assert [record["chainage"] for record in data["profile_breakpoint_records"]] == pytest.approx([0.0, 40.0, 100.0])
+    assert data["profile_breakpoint_records"][1]["turn_type"] == "FOLD"
+    assert data["profile_breakpoint_records"][1]["turn_angle"] == pytest.approx(12.0)
+
+
+def test_build_xxpipe_profile_data_keeps_arc_breakpoints_and_geometry_fields():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="定向钻", name="穿路段", flow_section="1", in_out="进"),
+        _make_node(ip_no=2, mc=30.0, structure="定向钻", name="穿路段", flow_section="1", in_out="出"),
+    ]
+    long_map = {
+        "1::穿路段": [
+            {"chainage": 0.0, "elevation": 100.0, "turn_type": "NONE", "turn_angle": 0.0},
+            {
+                "chainage": 10.0,
+                "elevation": 90.0,
+                "turn_type": "ARC",
+                "turn_angle": 18.0,
+                "vertical_curve_radius": 10.0,
+                "arc_center_s": 10.0,
+                "arc_center_z": 100.0,
+                "arc_end_chainage": 20.0,
+                "arc_theta_rad": 1.5707963267948966,
+            },
+            {"chainage": 20.0, "elevation": 100.0, "turn_type": "NONE", "turn_angle": 0.0},
+            {"chainage": 30.0, "elevation": 110.0, "turn_type": "NONE", "turn_angle": 0.0},
+        ]
+    }
+
+    data = cad_tools._build_xxpipe_profile_data(nodes, long_map, station_prefix="")
+
+    assert data["centerline_records"] == [
+        {"identity": "1::穿路段", "station_mc": pytest.approx(0.0), "elevation": pytest.approx(100.0)},
+        {"identity": "1::穿路段", "station_mc": pytest.approx(30.0), "elevation": pytest.approx(110.0)},
+    ]
+    assert len(data["centerline_draw_segments"]) == 1
+    segment = data["centerline_draw_segments"][0]
+    assert segment["identity"] == "1::穿路段"
+    assert segment["route_key"] == ""
+    assert segment["source_kind"] == "longitudinal_nodes"
+    assert segment["start_mc"] == pytest.approx(0.0)
+    assert segment["end_mc"] == pytest.approx(30.0)
+    assert segment["points"][0] == (0.0, pytest.approx(100.0))
+    assert segment["points"][1] == (10.0, pytest.approx(90.0))
+    assert segment["points"][-2] == (20.0, pytest.approx(100.0))
+    assert segment["points"][-1] == (30.0, pytest.approx(110.0))
+    assert len(segment["points"]) >= 4
+    assert [record["chainage"] for record in data["profile_breakpoint_records"]] == pytest.approx(
+        [0.0, 10.0, 20.0, 30.0]
+    )
+    assert data["profile_breakpoint_records"][1] == {
+        "identity": "1::穿路段",
+        "route_key": "",
+        "source_kind": "longitudinal_nodes",
+        "chainage": pytest.approx(10.0),
+        "elevation": pytest.approx(90.0),
+        "turn_type": "ARC",
+        "turn_angle": pytest.approx(18.0),
+        "vertical_curve_radius": pytest.approx(10.0),
+        "arc_center_s": pytest.approx(10.0),
+        "arc_center_z": pytest.approx(100.0),
+        "arc_end_chainage": pytest.approx(20.0),
+        "arc_theta_rad": pytest.approx(1.5707963267948966),
+    }
+
+
+def test_build_xxpipe_profile_data_keeps_station_sampling_and_engineering_breakpoints_when_route_raw_profile_exists():
+    nodes, long_map, manager_map, warning_context, _raw_profile_polyline = _build_route_raw_profile_fixture()
+
+    data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        long_map,
+        station_prefix="",
+        manager_config_by_identity=manager_map,
+        warning_context_by_identity=warning_context,
+    )
+
+    assert data["centerline_records"] == [
+        {"identity": "flow1-row1", "station_mc": pytest.approx(100.0), "elevation": pytest.approx(410.0)},
+        {"identity": "flow1-row2", "station_mc": pytest.approx(120.0), "elevation": pytest.approx(408.8)},
+        {"identity": "flow1-row3", "station_mc": pytest.approx(140.0), "elevation": pytest.approx(406.2)},
+    ]
+    assert len(data["centerline_draw_segments"]) == 1
+    segment = data["centerline_draw_segments"][0]
+    assert segment["route_key"] == "flow1-route1"
+    assert segment["source_kind"] == "route_raw_profile_polyline"
+    assert segment["start_mc"] == pytest.approx(100.0)
+    assert segment["end_mc"] == pytest.approx(140.0)
+    assert segment["points"] == [
+        (100.0, pytest.approx(410.0)),
+        (107.0, pytest.approx(409.4)),
+        (128.0, pytest.approx(407.0)),
+        (140.0, pytest.approx(406.2)),
+    ]
+    assert [record["chainage"] for record in data["profile_breakpoint_records"]] == pytest.approx([100.0, 120.0, 140.0])
+    assert [record["elevation"] for record in data["profile_breakpoint_records"]] == pytest.approx([410.0, 408.8, 406.2])
 
 
 def test_build_xxpipe_profile_data_rejects_unallowed_structure():

@@ -9,6 +9,7 @@
 - PressurePipeConfigDialog: 有压管道计算配置对话框
 """
 
+import copy
 import math
 import datetime
 from collections import Counter
@@ -1129,6 +1130,8 @@ class PressurePipeConfigDialog(QDialog):
 
         # 存储每个管道的纵断面数据 {pipe_name: [LongitudinalNode字典列表]}
         self._longitudinal_data = {}
+        # 存储每条整线导入原线几何 {pipe_name: {vertices, bulges, source_kind}}
+        self._raw_profile_polyline_data: Dict[str, Dict[str, Any]] = {}
         # 记录已识别为失效的旧纵断面缓存提示，便于界面直接提示重新导入
         self._stale_longitudinal_hint_texts: Dict[str, str] = {}
         # 存储每个管道卡片的UI组件引用 {pipe_name: {hint, stats, canvas, expand_btn, table}}
@@ -1415,7 +1418,10 @@ class PressurePipeConfigDialog(QDialog):
         if not self._manager:
             return
         route_key = str(route_key or "").strip()
-        if not route_key or route_key in self._longitudinal_data:
+        if not route_key or (
+            route_key in self._longitudinal_data
+            and route_key in self._raw_profile_polyline_data
+        ):
             return
         get_route_config = getattr(self._manager, "get_route_config", None)
         if not callable(get_route_config):
@@ -1424,9 +1430,11 @@ class PressurePipeConfigDialog(QDialog):
         if not isinstance(route_config, dict):
             return
         longitudinal_nodes = list(route_config.get("longitudinal_nodes", []) or [])
-        if not longitudinal_nodes:
-            return
-        self._longitudinal_data[route_key] = longitudinal_nodes
+        raw_profile_polyline = dict(route_config.get("raw_profile_polyline", {}) or {})
+        if longitudinal_nodes:
+            self._longitudinal_data[route_key] = longitudinal_nodes
+        if raw_profile_polyline:
+            self._raw_profile_polyline_data[route_key] = raw_profile_polyline
 
     def _resolve_pipe_label(self, pipe_key: str) -> str:
         """根据键名解析界面展示名称。"""
@@ -3600,6 +3608,27 @@ class PressurePipeConfigDialog(QDialog):
         return merged_nodes
 
     @staticmethod
+    def _read_imported_raw_profile_polyline(filepath: str, dxf_parser_cls, chainage_offset: float) -> Dict[str, Any]:
+        """读取并标准化已套偏移的导入原线几何。"""
+        from utils.pressure_pipe_longitudinal_utils import normalize_raw_profile_polyline
+
+        get_raw_profile = getattr(dxf_parser_cls, "get_longitudinal_profile_raw_polyline", None)
+        if not callable(get_raw_profile):
+            return {}
+        raw_profile_polyline, _error = get_raw_profile(
+            filepath,
+            chainage_offset=chainage_offset,
+        )
+        return normalize_raw_profile_polyline(raw_profile_polyline)
+
+    @staticmethod
+    def _merge_raw_profile_polylines(existing_raw_profile_polyline, imported_raw_profile_polyline) -> Dict[str, Any]:
+        """按覆盖范围合并多次导入的原线几何。"""
+        from utils.pressure_pipe_longitudinal_utils import merge_raw_profile_polylines
+
+        return merge_raw_profile_polylines(existing_raw_profile_polyline, imported_raw_profile_polyline)
+
+    @staticmethod
     def _read_longitudinal_profile_start_x(filepath: str, dxf_parser_cls) -> float:
         """读取纵断面图原始起点桩号，供自动对齐锚点使用。"""
         get_start_x = getattr(dxf_parser_cls, "get_longitudinal_profile_start_x", None)
@@ -3628,6 +3657,9 @@ class PressurePipeConfigDialog(QDialog):
     def _resolve_xxpipe_route_import_result(self, pipe_name: str, filepath: str, dxf_parser_cls, ip_points):
         """为整线补导入选择最合适的锚点，并返回合并后的纵断面。"""
         existing_nodes = list(self._longitudinal_data.get(str(pipe_name or "").strip(), []) or [])
+        existing_raw_profile_polyline = dict(
+            self._raw_profile_polyline_data.get(str(pipe_name or "").strip(), {}) or {}
+        )
         anchor_candidates = self._collect_xxpipe_route_import_anchor_candidates(pipe_name, ip_points)
         if not anchor_candidates:
             anchor_candidates = [0.0]
@@ -3647,6 +3679,15 @@ class PressurePipeConfigDialog(QDialog):
         )
         converted_nodes = self._convert_imported_longitudinal_nodes(long_nodes)
         merged_nodes = self._merge_longitudinal_nodes(existing_nodes, converted_nodes)
+        imported_raw_profile_polyline = self._read_imported_raw_profile_polyline(
+            filepath,
+            dxf_parser_cls,
+            chainage_offset,
+        )
+        merged_raw_profile_polyline = self._merge_raw_profile_polylines(
+            existing_raw_profile_polyline,
+            imported_raw_profile_polyline,
+        )
         coverage_state = self._collect_xxpipe_route_import_coverage_state(pipe_name, merged_nodes)
         return {
             "anchor_station": float(preferred_anchor),
@@ -3654,6 +3695,8 @@ class PressurePipeConfigDialog(QDialog):
             "message": str(message or "").strip(),
             "long_nodes": list(long_nodes or []),
             "merged_nodes": merged_nodes,
+            "raw_profile_polyline": imported_raw_profile_polyline,
+            "merged_raw_profile_polyline": merged_raw_profile_polyline,
             "coverage_state": coverage_state,
         }
 
@@ -3784,6 +3827,9 @@ class PressurePipeConfigDialog(QDialog):
                 long_nodes = list(route_import_result.get("long_nodes", []) or [])
                 message = str(route_import_result.get("message", "") or "").strip()
                 merged_nodes = list(route_import_result.get("merged_nodes", []) or [])
+                merged_raw_profile_polyline = dict(
+                    route_import_result.get("merged_raw_profile_polyline", {}) or {}
+                )
                 coverage_state = dict(route_import_result.get("coverage_state", {}) or {})
             else:
                 chainage_offset = 0.0
@@ -3805,6 +3851,11 @@ class PressurePipeConfigDialog(QDialog):
                     filepath,
                     chainage_offset=chainage_offset,
                 )
+                raw_profile_polyline = self._read_imported_raw_profile_polyline(
+                    filepath,
+                    DxfParser,
+                    chainage_offset,
+                )
 
             if not long_nodes:
                 QMessageBox.critical(self, "导入失败", message or "DXF文件中未找到纵断面数据")
@@ -3823,6 +3874,10 @@ class PressurePipeConfigDialog(QDialog):
                 station_errors = list((coverage_state or {}).get("station_errors", []) or [])
                 missing_targets = list((coverage_state or {}).get("missing_targets", []) or [])
                 self._longitudinal_data[pipe_name] = list(merged_nodes or [])
+                if merged_raw_profile_polyline:
+                    self._raw_profile_polyline_data[pipe_name] = merged_raw_profile_polyline
+                else:
+                    self._raw_profile_polyline_data.pop(pipe_name, None)
                 if station_errors or missing_targets:
                     self._stale_longitudinal_hint_texts[card_key] = self._build_xxpipe_incomplete_longitudinal_hint_text(
                         coverage_state,
@@ -3873,6 +3928,10 @@ class PressurePipeConfigDialog(QDialog):
                         return
 
             self._longitudinal_data[pipe_name] = long_nodes_dict
+            if raw_profile_polyline:
+                self._raw_profile_polyline_data[pipe_name] = raw_profile_polyline
+            else:
+                self._raw_profile_polyline_data.pop(pipe_name, None)
             self._stale_longitudinal_hint_texts.pop(card_key, None)
             self._persist_longitudinal_data_for_card(pipe_name)
             self._update_card_data_state(pipe_name, show_data=True)
@@ -3919,13 +3978,14 @@ class PressurePipeConfigDialog(QDialog):
 
     def _clear_longitudinal(self, pipe_name):
         """清空纵断面数据"""
-        if pipe_name not in self._longitudinal_data:
+        if pipe_name not in self._longitudinal_data and pipe_name not in self._raw_profile_polyline_data:
             return
 
         if not fluent_question(self, "确认清空", f"确定要清空管道 '{self._resolve_pipe_label(pipe_name)}' 的纵断面数据吗？"):
             return
 
-        del self._longitudinal_data[pipe_name]
+        self._longitudinal_data.pop(pipe_name, None)
+        self._raw_profile_polyline_data.pop(pipe_name, None)
         self._stale_longitudinal_hint_texts.pop(str(pipe_name or "").strip(), None)
         self._persist_longitudinal_data_for_card(pipe_name)
         self._update_card_data_state(pipe_name, show_data=False)
@@ -3937,6 +3997,7 @@ class PressurePipeConfigDialog(QDialog):
 
         card_key = str(pipe_name or "").strip()
         nodes_payload = list(self._longitudinal_data.get(card_key, []) or [])
+        raw_profile_polyline_payload = dict(self._raw_profile_polyline_data.get(card_key, {}) or {})
         route_context = self._route_contexts.get(card_key, {})
         set_route_longitudinal_nodes = getattr(self._manager, "set_route_longitudinal_nodes", None)
         if isinstance(route_context, dict) and callable(set_route_longitudinal_nodes):
@@ -3944,9 +4005,10 @@ class PressurePipeConfigDialog(QDialog):
                 card_key,
                 nodes_payload,
                 str(route_context.get("display_name", "") or card_key).strip(),
+                raw_profile_polyline=raw_profile_polyline_payload,
             )
             for group in list(route_context.get("groups", []) or []):
-                self._persist_longitudinal_data_for_group(group, nodes_payload)
+                self._persist_longitudinal_data_for_group(group, nodes_payload, raw_profile_polyline_payload)
             return
 
         group = None
@@ -3957,9 +4019,9 @@ class PressurePipeConfigDialog(QDialog):
         if group is None:
             return
 
-        self._persist_longitudinal_data_for_group(group, nodes_payload)
+        self._persist_longitudinal_data_for_group(group, nodes_payload, raw_profile_polyline_payload)
 
-    def _persist_longitudinal_data_for_group(self, group, nodes_payload):
+    def _persist_longitudinal_data_for_group(self, group, nodes_payload, raw_profile_polyline_payload=None):
         """把整线或分段纵断面同步回对应子段配置，避免再次回读旧缓存。"""
         if not self._manager:
             return
@@ -3982,6 +4044,7 @@ class PressurePipeConfigDialog(QDialog):
         cfg.route_key = self._group_route_key(group)
         cfg.route_display_name = self._group_route_display_name(group)
         cfg.longitudinal_nodes = list(nodes_payload or [])
+        cfg.raw_profile_polyline = dict(raw_profile_polyline_payload or {})
         self._manager.set_pipe_config(group_key, cfg)
 
     def _preview_longitudinal(self, pipe_name):
@@ -4021,6 +4084,10 @@ class PressurePipeConfigDialog(QDialog):
     def get_longitudinal_nodes_dict(self):
         """获取所有管道的纵断面数据字典"""
         return self._longitudinal_data.copy()
+
+    def get_raw_profile_polyline_dict(self):
+        """获取所有管道的导入原线几何字典。"""
+        return copy.deepcopy(self._raw_profile_polyline_data)
 
 
 class BuildingLengthDialog(QDialog):

@@ -657,6 +657,32 @@ class DxfParser:
         if not vertices:
             raise ValueError(error or "错误：DXF文件中未找到纵断面数据")
         return float(vertices[0][0])
+
+    @staticmethod
+    def get_longitudinal_profile_raw_polyline(
+        file_path: str,
+        chainage_offset: float = 0.0,
+    ) -> Tuple[dict, str]:
+        """返回已套桩号偏移后的原始纵断面多段线几何。"""
+        vertices, bulges, error = DxfParser._load_longitudinal_polyline_geometry(file_path)
+        if not vertices:
+            return {}, error
+
+        shifted_vertices = [
+            (float(x) + float(chainage_offset), float(y))
+            for x, y in list(vertices or [])
+        ]
+        return (
+            {
+                "vertices": shifted_vertices,
+                "bulges": [
+                    float(bulges[index]) if index < len(bulges) else 0.0
+                    for index in range(len(shifted_vertices))
+                ],
+                "source_kind": "selected_raw_polyline",
+            },
+            "",
+        )
     
     @staticmethod
     def parse_longitudinal_profile(file_path: str, 

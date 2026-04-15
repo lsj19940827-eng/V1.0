@@ -10262,6 +10262,34 @@ class WaterProfilePanel(QWidget):
             }
         return resolved
 
+    def _index_pressure_pipe_manager_route_raw_profile_polylines(self) -> dict:
+        """按 route_key 收集导入原线几何。"""
+        manager = getattr(self, "_pressure_pipe_manager", None)
+        to_dict = getattr(manager, "to_dict", None)
+        if not callable(to_dict):
+            return {}
+
+        try:
+            raw = to_dict() or {}
+        except Exception:
+            return {}
+
+        routes = raw.get("routes", {}) if isinstance(raw, dict) else {}
+        resolved = {}
+        for route_key, route_data in routes.items():
+            route_key_text = str(route_key or "").strip()
+            if not route_key_text or not isinstance(route_data, dict):
+                continue
+            raw_profile_polyline = copy.deepcopy(route_data.get("raw_profile_polyline", {}) or {})
+            if not raw_profile_polyline:
+                continue
+            resolved[route_key_text] = {
+                "route_key": route_key_text,
+                "route_display_name": str(route_data.get("display_name", "") or route_key_text).strip(),
+                "raw_profile_polyline": raw_profile_polyline,
+            }
+        return resolved
+
     def _index_pressure_pipe_manager_longitudinal_nodes_for_export(self, target_identities=None) -> tuple:
         exact = {}
         plain_name_candidates = {}
@@ -11185,6 +11213,33 @@ class WaterProfilePanel(QWidget):
             if not self._has_exportable_pressure_pipe_longitudinal_nodes(longitudinal_nodes):
                 continue
             resolved[identity] = copy.deepcopy(longitudinal_nodes)
+        return resolved
+
+    def get_pressure_pipe_raw_profile_polylines_for_export(self, rows=None) -> dict:
+        """返回 xx管 导出直接画线使用的 route 原线几何。"""
+        targets = self._collect_pressure_pipe_export_targets(rows)
+        if not targets:
+            return {}
+
+        route_keys = {
+            str(target.get("route_key", "") or "").strip()
+            for target in targets
+            if str(target.get("route_key", "") or "").strip()
+        }
+        indexed = self._index_pressure_pipe_manager_route_raw_profile_polylines()
+        if not route_keys:
+            return {
+                key: copy.deepcopy(payload.get("raw_profile_polyline", {}) or {})
+                for key, payload in indexed.items()
+            }
+
+        resolved = {}
+        for route_key in route_keys:
+            payload = indexed.get(route_key, {})
+            raw_profile_polyline = copy.deepcopy(payload.get("raw_profile_polyline", {}) or {})
+            if not raw_profile_polyline:
+                continue
+            resolved[route_key] = raw_profile_polyline
         return resolved
 
     @staticmethod

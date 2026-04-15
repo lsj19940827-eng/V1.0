@@ -106,8 +106,11 @@ class _FakeManager:
             self._routes[route_key]["longitudinal_nodes"] = list(
                 getattr(config, "longitudinal_nodes", []) or []
             )
+            raw_profile_polyline = dict(getattr(config, "raw_profile_polyline", {}) or {})
+            if raw_profile_polyline:
+                self._routes[route_key]["raw_profile_polyline"] = raw_profile_polyline
 
-    def set_route_longitudinal_nodes(self, route_key, longitudinal_nodes, route_display_name=""):
+    def set_route_longitudinal_nodes(self, route_key, longitudinal_nodes, route_display_name="", raw_profile_polyline=None):
         route_key = str(route_key or "").strip()
         if not route_key:
             return
@@ -116,6 +119,12 @@ class _FakeManager:
             route_display_name or self._routes[route_key].get("display_name", "")
         ).strip()
         self._routes[route_key]["longitudinal_nodes"] = list(longitudinal_nodes or [])
+        if raw_profile_polyline is not None:
+            raw_payload = dict(raw_profile_polyline or {})
+            if raw_payload:
+                self._routes[route_key]["raw_profile_polyline"] = raw_payload
+            else:
+                self._routes[route_key].pop("raw_profile_polyline", None)
 
     def to_dict(self):
         return {
@@ -131,6 +140,7 @@ class _FakeManager:
                 key: {
                     "display_name": str(value.get("display_name", "") or "").strip(),
                     "longitudinal_nodes": list(value.get("longitudinal_nodes", []) or []),
+                    "raw_profile_polyline": dict(value.get("raw_profile_polyline", {}) or {}),
                 }
                 for key, value in self._routes.items()
             },
