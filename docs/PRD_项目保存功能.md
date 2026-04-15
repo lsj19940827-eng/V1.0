@@ -64,15 +64,15 @@
       "channel_level": "支渠",
       "input_rows": [["1", "第一段", "明渠-梯形", ...], ...]
     },
-    "water_profile": {
-      "version": "1.0",
-      "ui_settings": {
-        "channel_name": "南峰寺",
-        "channel_level": "支渠",
-        "start_water_level": "100.0",
-        "design_flows_text": "5.5,4.2",
-        "max_flows_text": "6.0,4.8",
-        "start_station_text": "0+000.000",
+      "water_profile": {
+        "version": "1.0",
+        "ui_settings": {
+          "channel_name": "南峰寺",
+          "channel_level": "支渠",
+          "start_water_level": "100.0",
+          "design_flows_text": "5.5,4.2",
+          "max_flows_text": "6.0,4.8",
+          "start_station_text": "0+000.000",
         "roughness": "0.014",
         "turn_radius": "300.0",
         "trans_inlet_form": "曲线形反弯扭曲面",
@@ -98,6 +98,8 @@
   }
 }
 ```
+
+> 流量段保存口径：界面虽然改为“共享当前流量段的只读查看组”，且主界面不再显示 `x段` 一类段数提示，但项目文件继续保留 `ui_settings.design_flows_text / max_flows_text` 作为兼容文本缓存，并保留 `project_settings.design_flows / max_flows` 作为结构化真值；不再新增 `current_flow_index` 一类字段，项目重开后主界面统一回到第一流量段展示。
 
 ---
 
@@ -150,6 +152,8 @@ class ProjectManager(QObject):
 新增两个方法：
 - `to_project_dict()` - 序列化所有设置和节点数据
 - `from_project_dict(d)` - 反序列化恢复所有UI控件和数据
+- 基础设置区的设计流量 / 加大流量改为共享当前流量段的只读查看组，主界面只负责查看和切换，不再直接编辑
+- 保存时继续兼容 `design_flows_text / max_flows_text` 与 `ProjectSettings.design_flows / max_flows`
 - 连接关键控件的 `editingFinished` 到 `mark_dirty()`
 
 ### 5. 修改：`推求水面线/models/data_models.py`
@@ -176,6 +180,7 @@ class ProjectManager(QObject):
 ### 步骤 3：实现 WaterProfilePanel 序列化（water_profile/panel.py）
 - 添加 `to_project_dict()` 方法收集所有设置和节点
 - 添加 `from_project_dict()` 方法恢复UI控件和数据
+- 继续同时保存流量段文本缓存与结构化列表，不新增当前流量段索引字段
 
 ### 步骤 4：创建 ProjectManager（新建 project_manager.py）
 - 实现核心的保存/加载/自动保存/最近项目逻辑
@@ -223,32 +228,38 @@ class ProjectManager(QObject):
    - 重启程序，打开保存的项目文件
    - 验证批量计算输入表格数据恢复
    - 验证水面线设置和节点数据恢复
+   - 验证设计流量 / 加大流量恢复为当前流量段视图，而不是旧的整串文本框视图
    - 验证计算结果直接显示无需重算
 
-3. **自动保存测试**
+3. **流量段兼容测试**
+   - 验证旧项目里的 `design_flows_text / max_flows_text` 仍能正确恢复为多流量段
+   - 验证 `ProjectSettings.design_flows / max_flows` 与文本缓存保持一致
+   - 验证批量同步后当前流量段回到第一段，并自动重算加大流量
+
+4. **自动保存测试**
    - 修改数据后等待1分钟，验证 autosave 文件生成
    - 验证状态栏显示自动保存消息
 
-4. **关闭保存测试**
+5. **关闭保存测试**
    - 修改数据后关闭程序，验证弹出保存提示
    - 选择"保存"后验证文件已保存
    - 选择"取消"后验证程序不关闭
 
-5. **标题栏测试**
+6. **标题栏测试**
    - 验证打开项目后标题显示项目名
    - 验证修改数据后标题出现 * 标记
    - 验证保存后 * 标记消失
 
-6. **快捷键测试**
+7. **快捷键测试**
    - 测试 Ctrl+S 保存
    - 测试 Ctrl+O 打开
    - 测试 Ctrl+N 新建
 
-7. **最近项目测试**
+8. **最近项目测试**
    - 保存多个项目，验证最近项目列表更新
    - 从最近项目列表打开文件
    - 验证不存在的文件显示灰色
 
-8. **兼容性测试**
+9. **兼容性测试**
    - 手动删除 .qxproj 文件中的某些字段，验证加载不报错
    - 验证缺失字段使用默认值填充

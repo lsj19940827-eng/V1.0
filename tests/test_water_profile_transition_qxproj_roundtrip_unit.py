@@ -155,8 +155,9 @@ def _prepare_table_snapshot(panel):
         panel.channel_level_combo.setCurrentIndex(idx)
     panel.start_wl_edit.setText("420.000")
     panel.start_station_edit.setText("10+097.309")
-    panel.design_flow_edit.setText("4.8")
-    panel.max_flow_edit.setText("5.0")
+    panel.design_flow_edit.setText("4.8, 3.2, 1.1")
+    panel.max_flow_edit.setText("5.0, 4.0, 1.43")
+    panel._sync_flow_segment_widgets(reset_index=True)
 
     panel._node_structure_heights[0] = 2.1
     panel._node_structure_heights[2] = 2.4
@@ -224,6 +225,11 @@ def test_qxproj_roundtrip_supports_immediate_export_details_and_table_edit(monke
             assert restored.node_table.item(1, 32).text() == "5.000"
             assert restored.calculated_nodes[1].transition_length_override_m == 5.0
             assert restored._length_rule_nudge_seen is True
+            assert restored._flow_segment_current_index == 0
+            assert restored.design_flow_edit.summary_text() == "第一流量段 · 4.8"
+            assert restored.max_flow_edit.summary_text() == "第一流量段 · 5"
+            assert not restored.design_flow_edit._inline_hint_label.isVisible()
+            assert not restored.max_flow_edit._inline_hint_label.isVisible()
             assert len(restored._settings.transition_length_rules) == 1
             assert restored._settings.transition_length_rules[0].rule_mode == "step_up"
 
@@ -340,3 +346,39 @@ def test_qxproj_roundtrip_recovers_successful_gate_when_old_project_saved_false(
             assert restored._section_sync_ready is True
         finally:
             restored.deleteLater()
+
+
+def test_qxproj_load_uses_project_settings_flow_lists_when_ui_text_missing():
+    module = _load_panel_module()
+    settings = _make_settings()
+    settings.design_flow = 4.8
+    settings.max_flow = 5.0
+    settings.design_flows = [4.8, 3.2, 1.1]
+    settings.max_flows = [5.0, 4.0, 1.43]
+
+    state = {
+        "ui_settings": {
+            "channel_name": "合作",
+            "channel_level": "干渠",
+            "start_water_level": "420.000",
+        },
+        "project_settings": settings.to_dict(),
+        "nodes": [],
+        "calculated_nodes": [],
+        "extra_caches": {},
+    }
+
+    restored = _build_panel(module)
+    try:
+        restored.from_project_dict(state, skip_dirty_signal=True)
+        _flush_events()
+
+        assert restored.design_flow_edit.text() == "4.8, 3.2, 1.1"
+        assert restored.max_flow_edit.text() == "5, 4, 1.43"
+        assert restored._flow_segment_current_index == 0
+        assert restored.design_flow_edit.summary_text() == "第一流量段 · 4.8"
+        assert restored.max_flow_edit.summary_text() == "第一流量段 · 5"
+        assert not restored.design_flow_edit._inline_hint_label.isVisible()
+        assert not restored.max_flow_edit._inline_hint_label.isVisible()
+    finally:
+        restored.deleteLater()

@@ -292,7 +292,7 @@ class ProjectManager(QObject):
                 # 清空表格和数据
                 water_profile_panel.nodes.clear()
                 water_profile_panel.calculated_nodes.clear()
-                water_profile_panel._update_table_from_nodes_full()
+                water_profile_panel._update_table_from_nodes_full([])
                 if hasattr(water_profile_panel, "_clear_section_tables"):
                     water_profile_panel._clear_section_tables()
                 water_profile_panel.channel_name_edit.clear()

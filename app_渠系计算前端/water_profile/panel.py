@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
-    QAbstractItemView, QScrollArea, QGridLayout, QFormLayout, QSizePolicy,
+    QAbstractItemView, QGridLayout, QFormLayout, QSizePolicy,
     QDialog, QDialogButtonBox, QToolTip, QCheckBox, QApplication
 )
 from PySide6.QtCore import Qt, QByteArray, Signal, QTimer, QRect, QPoint, QEvent, QObject, QSignalBlocker
@@ -337,6 +337,234 @@ def normalize_compound_trapezoid_params(source):
         except (TypeError, ValueError):
             continue
     return params
+
+
+def parse_flow_values_text(flow_text: str) -> list:
+    """把逗号分隔流量文本解析为浮点列表。"""
+    if not flow_text or not str(flow_text).strip():
+        return []
+    text = str(flow_text).replace("，", ",")
+    values = []
+    for item in text.split(","):
+        piece = str(item or "").strip()
+        if not piece:
+            continue
+        try:
+            values.append(float(piece))
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+def format_flow_value(value) -> str:
+    """统一格式化单个流量值。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"{number:.3f}".rstrip("0").rstrip(".")
+
+
+def format_flow_values_text(values) -> str:
+    """把流量列表格式化为兼容旧链路的逗号文本。"""
+    return ", ".join(format_flow_value(value) for value in list(values or []) if format_flow_value(value))
+
+
+def format_flow_segment_label(index: int) -> str:
+    """把流量段索引转换成展示名称。"""
+    chinese_digits = {
+        1: "一",
+        2: "二",
+        3: "三",
+        4: "四",
+        5: "五",
+        6: "六",
+        7: "七",
+        8: "八",
+        9: "九",
+        10: "十",
+    }
+    order = int(index) + 1
+    label = chinese_digits.get(order, str(order))
+    return f"第{label}流量段"
+
+
+def calculate_max_flow_values(design_flows) -> list:
+    """按设计流量规则计算对应的加大流量。"""
+    max_flows = []
+    for q in list(design_flows or []):
+        try:
+            q_value = float(q)
+        except (TypeError, ValueError):
+            continue
+        if q_value <= 0:
+            max_flows.append(0.0)
+            continue
+        if q_value < 1:
+            pct = 30
+        elif q_value < 5:
+            pct = 25
+        elif q_value < 20:
+            pct = 20
+        elif q_value < 50:
+            pct = 15
+        elif q_value < 100:
+            pct = 10
+        else:
+            pct = 5
+        max_flows.append(round(q_value * (1 + pct / 100), 3))
+    return max_flows
+
+
+class FlowSegmentSelectorField(QWidget):
+    """只读流量段选择控件：主界面只负责查看和切换当前流量段。"""
+
+    editingFinished = Signal()
+    segmentSelected = Signal(int)
+
+    def __init__(self, placeholder_text="未设置流量", parent=None):
+        super().__init__(parent)
+        self._placeholder_text = str(placeholder_text or "未设置流量")
+        self._raw_text = ""
+        self._values = []
+        self._current_index = 0
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self._summary_btn = DropDownPushButton(self._placeholder_text)
+        self._summary_btn.setMinimumWidth(180)
+        self._summary_btn.setFixedHeight(36)
+        self._summary_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._summary_btn.setStyleSheet(
+            """
+            DropDownPushButton {
+                background: #ffffff;
+                border: 1px solid #d7e3f7;
+                border-radius: 8px;
+                padding: 0 12px;
+                text-align: left;
+                font-size: 13px;
+                font-weight: 600;
+                color: #1f4f96;
+            }
+            DropDownPushButton:hover {
+                background: #f7fbff;
+                border-color: #aac3ec;
+            }
+            DropDownPushButton:pressed {
+                background: #eef5ff;
+            }
+            DropDownPushButton:disabled {
+                color: #94a3b8;
+                background: #f8fafc;
+                border-color: #d7dee8;
+            }
+            """
+        )
+        layout.addWidget(self._summary_btn, 1)
+
+        self._inline_hint_label = QLabel("")
+        self._inline_hint_label.setAlignment(Qt.AlignCenter)
+        self._inline_hint_label.setMinimumHeight(24)
+        self._inline_hint_label.setStyleSheet(
+            "QLabel {"
+            "  min-width: 44px;"
+            "  padding: 0 8px;"
+            "  border: 1px solid #d7e3f7;"
+            "  border-radius: 8px;"
+            "  background: #f5f9ff;"
+            "  color: #6d84a3;"
+            "  font-size: 11px;"
+            "}"
+        )
+        self._inline_hint_label.hide()
+        layout.addWidget(self._inline_hint_label, 0, Qt.AlignVCenter)
+
+        self._refresh_menu_and_summary()
+
+    def text(self):
+        """返回兼容旧逻辑的原始流量文本。"""
+        return self._raw_text
+
+    def setText(self, text):
+        """设置原始文本并刷新展示。"""
+        self._raw_text = str(text or "").strip()
+        self._values = parse_flow_values_text(self._raw_text)
+        max_index = max(len(self._values) - 1, 0)
+        self._current_index = min(max(self._current_index, 0), max_index)
+        self._refresh_menu_and_summary()
+
+    def clear(self):
+        """兼容旧逻辑的清空接口。"""
+        self.setText("")
+
+    def setPlaceholderText(self, text):
+        """兼容旧控件占位文案接口。"""
+        self._placeholder_text = str(text or "").strip() or "未设置流量"
+        self._refresh_menu_and_summary()
+
+    def values(self) -> list:
+        """返回当前解析后的流量列表。"""
+        return list(self._values)
+
+    def set_current_segment_index(self, index: int):
+        """切换当前显示的流量段。"""
+        if not self._values:
+            self._current_index = 0
+        else:
+            self._current_index = min(max(int(index), 0), len(self._values) - 1)
+        self._refresh_summary()
+
+    def summary_text(self) -> str:
+        """返回当前摘要文字，供测试和序列化校验使用。"""
+        return self._summary_btn.text()
+
+    def count_text(self) -> str:
+        """兼容旧测试入口：不再对外暴露独立的第二行弱提示。"""
+        return ""
+
+    def _refresh_menu_and_summary(self):
+        """刷新下拉菜单和当前摘要。"""
+        menu = RoundMenu(parent=self)
+        for index, value in enumerate(self._values):
+            label = f"{format_flow_segment_label(index)}：{format_flow_value(value)}"
+            menu.addAction(
+                Action(
+                    label,
+                    triggered=lambda checked=False, idx=index: self._on_segment_action_triggered(idx),
+                )
+            )
+        self._summary_btn.setMenu(menu)
+        self._refresh_summary()
+
+    def _refresh_summary(self):
+        """刷新按钮摘要和字段内轻提示。"""
+        if not self._values:
+            self._summary_btn.setEnabled(False)
+            self._summary_btn.setText(self._placeholder_text)
+            self._summary_btn.setToolTip("")
+            self._inline_hint_label.setText("")
+            self._inline_hint_label.hide()
+            self.updateGeometry()
+            return
+
+        self._summary_btn.setEnabled(True)
+        current_index = min(max(self._current_index, 0), len(self._values) - 1)
+        label = format_flow_segment_label(current_index)
+        value = format_flow_value(self._values[current_index])
+        self._summary_btn.setText(f"{label} · {value}")
+        self._summary_btn.setToolTip(f"{label}：{value} m³/s")
+        # 主界面不再展示“x段”提示，避免首次切换多流量段时触发布局突增。
+        self._inline_hint_label.setText("")
+        self._inline_hint_label.hide()
+        self.updateGeometry()
+
+    def _on_segment_action_triggered(self, index: int):
+        """处理下拉菜单选中的流量段。"""
+        self.set_current_segment_index(index)
+        self.segmentSelected.emit(int(index))
 
 
 # ================================================================
@@ -1087,6 +1315,10 @@ class WaterProfilePanel(QWidget):
         self._section_first_success_switched = False
         self._section_failure_auto_expanded_once = False
         self._section_failure_records = []
+        self._flow_segment_current_index = 0
+        self._design_flow_group_widget = None
+        self._max_flow_group_widget = None
+        self._flow_pair_group_widget = None
         self._settings_group = None
         self._transition_group = None
         self._siphon_pressure_group = None
@@ -1216,18 +1448,28 @@ class WaterProfilePanel(QWidget):
         )
         row1_flow.addWidget(_make_field_group("起始水位(m):", [self.start_wl_edit], min_w=108))
 
-        self.design_flow_edit = LineEdit()
+        self.design_flow_edit = FlowSegmentSelectorField("未设置流量段")
         self.design_flow_edit.setText("")
-        self.design_flow_edit.setMinimumWidth(180)
-        self.design_flow_edit.setPlaceholderText("多段用逗号分隔")
-        row1_flow.addWidget(_make_field_group("设计流量(m³/s):", [self.design_flow_edit], min_w=300))
-        self.design_flow_edit.editingFinished.connect(self._on_design_flow_changed)
+        self.design_flow_edit.setMinimumWidth(196)
+        self.design_flow_edit.setPlaceholderText("未设置流量段")
+        self.design_flow_edit.segmentSelected.connect(self._set_flow_segment_current_index)
+        self._design_flow_group_widget = _make_field_group("设计流量(m³/s):", [self.design_flow_edit], min_w=248)
 
-        self.max_flow_edit = LineEdit()
+        self.max_flow_edit = FlowSegmentSelectorField("自动计算")
         self.max_flow_edit.setText("")
-        self.max_flow_edit.setMinimumWidth(227)
+        self.max_flow_edit.setMinimumWidth(196)
         self.max_flow_edit.setPlaceholderText("自动计算")
-        row1_flow.addWidget(_make_field_group("加大流量(m³/s):", [self.max_flow_edit], min_w=378))
+        self.max_flow_edit.segmentSelected.connect(self._set_flow_segment_current_index)
+        self._max_flow_group_widget = _make_field_group("加大流量(m³/s):", [self.max_flow_edit], min_w=248)
+        self._flow_pair_group_widget = QWidget()
+        flow_pair_lay = QHBoxLayout(self._flow_pair_group_widget)
+        flow_pair_lay.setContentsMargins(0, 0, 0, 0)
+        flow_pair_lay.setSpacing(8)
+        flow_pair_lay.addWidget(self._design_flow_group_widget)
+        flow_pair_lay.addWidget(self._max_flow_group_widget)
+        self._flow_pair_group_widget.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self._flow_pair_group_widget.setMinimumWidth(512)
+        row1_flow.addWidget(self._flow_pair_group_widget)
 
         self.start_station_edit = LineEdit()
         self.start_station_edit.setText("0+000.000")
@@ -1261,6 +1503,8 @@ class WaterProfilePanel(QWidget):
         )
         btn_auto_r.clicked.connect(self._auto_calc_turn_radius)
         turn_r_box.addWidget(btn_auto_r)
+
+        self._sync_flow_segment_widgets(reset_index=True)
         row2_flow.addWidget(_make_field_group("转弯半径(m):", [turn_r_box_w], min_w=230))
 
         self.roughness_edit = LineEdit()
@@ -1423,7 +1667,13 @@ class WaterProfilePanel(QWidget):
 
     def _on_settings_toggled(self, collapsed):
         """折叠/展开设置区时，自动调整splitter分配，让底部图表获得释放的空间"""
-        from PySide6.QtCore import QTimer
+        self._schedule_adjust_splitter_for_settings()
+
+    def _schedule_adjust_splitter_for_settings(self):
+        """延后重算顶部 splitter 高度，兼容控件刚刷新的尺寸变化。"""
+        splitter = getattr(self, "_splitter", None)
+        if splitter is None or splitter.count() <= 0:
+            return
         QTimer.singleShot(0, self._adjust_splitter_for_settings)
         QTimer.singleShot(80, self._adjust_splitter_for_settings)
 
@@ -7370,6 +7620,7 @@ class WaterProfilePanel(QWidget):
                 flow_strs.append(formatted)
             self.design_flow_edit.setText(", ".join(flow_strs))
             self._on_design_flow_changed()
+            self._reset_flow_segment_current_index()
 
         # 检查是否包含倒虹吸
         has_siphon = False
@@ -7614,6 +7865,8 @@ class WaterProfilePanel(QWidget):
                         self.design_flow_edit.setText(flow_segments)
                         if hasattr(self, '_on_design_flow_changed'):
                             self._on_design_flow_changed()
+                        if hasattr(self, '_reset_flow_segment_current_index'):
+                            self._reset_flow_segment_current_index()
         except Exception:
             pass
 
@@ -8909,6 +9162,54 @@ class WaterProfilePanel(QWidget):
         formatted = format_station_display(value)
         self.start_station_edit.setText(formatted)
 
+    def _get_flow_values_from_widget(self, widget) -> list:
+        """兼容旧控件与新控件，统一读取流量列表。"""
+        if widget is None:
+            return []
+        values_getter = getattr(widget, "values", None)
+        if callable(values_getter):
+            try:
+                return list(values_getter())
+            except Exception:
+                pass
+        text_getter = getattr(widget, "text", None)
+        if callable(text_getter):
+            try:
+                return parse_flow_values_text(text_getter())
+            except Exception:
+                return []
+        return []
+
+    def _sync_flow_segment_widgets(self, reset_index: bool = False):
+        """按共享当前段刷新设计流量和加大流量的紧凑摘要。"""
+        if reset_index:
+            self._flow_segment_current_index = 0
+
+        design_values = self._get_flow_values_from_widget(getattr(self, "design_flow_edit", None))
+        max_values = self._get_flow_values_from_widget(getattr(self, "max_flow_edit", None))
+        total_count = max(len(design_values), len(max_values))
+        if total_count <= 0:
+            self._flow_segment_current_index = 0
+        else:
+            self._flow_segment_current_index = min(max(int(self._flow_segment_current_index), 0), total_count - 1)
+
+        for widget in (getattr(self, "design_flow_edit", None), getattr(self, "max_flow_edit", None)):
+            setter = getattr(widget, "set_current_segment_index", None)
+            if callable(setter):
+                setter(self._flow_segment_current_index)
+
+        if self.isVisible():
+            self._schedule_adjust_splitter_for_settings()
+
+    def _set_flow_segment_current_index(self, index: int):
+        """设置共享当前流量段，并同步两个摘要控件。"""
+        self._flow_segment_current_index = max(0, int(index))
+        self._sync_flow_segment_widgets(reset_index=False)
+
+    def _reset_flow_segment_current_index(self):
+        """把当前流量段重置回第一段。"""
+        self._set_flow_segment_current_index(0)
+
     def _refresh_roughness_overview_visibility(self):
         groups = getattr(self, "_siphon_pressure_group", None)
         if groups is None:
@@ -9335,49 +9636,17 @@ class WaterProfilePanel(QWidget):
 
     def _parse_flow_values(self, flow_str):
         """解析流量字符串为浮点数列表，支持逗号分隔的多流量段"""
-        if not flow_str or not flow_str.strip():
-            return []
-        flow_str = flow_str.replace('，', ',')
-        values = []
-        for q_str in flow_str.split(','):
-            q_str = q_str.strip()
-            if q_str:
-                try:
-                    values.append(float(q_str))
-                except ValueError:
-                    continue
-        return values
+        return parse_flow_values_text(flow_str)
 
     def _on_design_flow_changed(self):
         """设计流量变化时自动计算加大流量"""
         design_flows = self._parse_flow_values(self.design_flow_edit.text())
         if not design_flows:
+            self.max_flow_edit.setText("")
+            self._sync_flow_segment_widgets(reset_index=False)
             return
-        max_flows = []
-        for q in design_flows:
-            if q <= 0:
-                max_flows.append(0.0)
-                continue
-            # 根据设计流量计算加大流量百分比（灌排规范）
-            if q < 1:
-                pct = 30
-            elif q < 5:
-                pct = 25
-            elif q < 20:
-                pct = 20
-            elif q < 50:
-                pct = 15
-            elif q < 100:
-                pct = 10
-            else:
-                pct = 5
-            max_flows.append(round(q * (1 + pct / 100), 3))
-        # 格式化输出
-        strs = []
-        for q in max_flows:
-            formatted = f"{q:.3f}".rstrip('0').rstrip('.')
-            strs.append(formatted)
-        self.max_flow_edit.setText(", ".join(strs))
+        self.max_flow_edit.setText(format_flow_values_text(calculate_max_flow_values(design_flows)))
+        self._sync_flow_segment_widgets(reset_index=False)
 
     def _insert_transitions(self):
         """插入渐变段"""
@@ -14741,8 +15010,7 @@ class WaterProfilePanel(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(0, self._adjust_splitter_for_settings)
-        QTimer.singleShot(80, self._adjust_splitter_for_settings)
+        self._schedule_adjust_splitter_for_settings()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -14750,7 +15018,7 @@ class WaterProfilePanel(QWidget):
         width = event.size().width()
         if abs(width - self._last_layout_width) >= 8:
             self._last_layout_width = width
-            QTimer.singleShot(0, self._adjust_splitter_for_settings)
+            self._schedule_adjust_splitter_for_settings()
 
     # ================================================================
     # 项目文件序列化/反序列化（用于 .qxproj 项目保存功能）
@@ -14991,9 +15259,21 @@ class WaterProfilePanel(QWidget):
                 self._load_transition_length_rules(
                     getattr(self._settings, "transition_length_rules", []) or []
                 )
+                design_flows = list(getattr(self._settings, "design_flows", []) or [])
+                if not design_flows and getattr(self._settings, "design_flow", 0) > 0:
+                    design_flows = [float(self._settings.design_flow)]
+                max_flows = list(getattr(self._settings, "max_flows", []) or [])
+                if not max_flows and getattr(self._settings, "max_flow", 0) > 0:
+                    max_flows = [float(self._settings.max_flow)]
+
+                if not self.design_flow_edit.text().strip() and design_flows:
+                    self.design_flow_edit.setText(format_flow_values_text(design_flows))
+                if not self.max_flow_edit.text().strip() and max_flows:
+                    self.max_flow_edit.setText(format_flow_values_text(max_flows))
             else:
                 self._settings = None
                 self._load_transition_length_rules([])
+            self._sync_flow_segment_widgets(reset_index=True)
             
             # 恢复节点列表
             nodes_data = d.get("nodes", [])
