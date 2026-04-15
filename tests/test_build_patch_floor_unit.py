@@ -146,6 +146,12 @@ def test_verify_import_groups_include_word_export_dependencies():
     ]
 
 
+def test_collect_data_packages_include_latex2mathml_runtime_data():
+    collect_data_packages = build.get_collect_data_packages()
+
+    assert "latex2mathml" in collect_data_packages
+
+
 def test_find_missing_imports_reports_missing_modules_by_group():
     missing = build._find_missing_imports(
         {

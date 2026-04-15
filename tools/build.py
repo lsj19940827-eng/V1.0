@@ -336,6 +336,16 @@ def get_verify_import_groups() -> dict[str, list[str]]:
     }
 
 
+def get_collect_data_packages() -> list[str]:
+    """返回需要随安装包一起收集数据文件的第三方包列表。"""
+    return [
+        "ezdxf",
+        "matplotlib",
+        "seaborn",
+        "latex2mathml",
+    ]
+
+
 def _find_missing_imports(import_groups: dict[str, list[str]], importer=None) -> dict[str, list[str]]:
     """返回每个分组里当前环境无法导入的模块列表。"""
     if importer is None:
@@ -629,9 +639,8 @@ def build(bump: str = None):
 
     # ---- 收集第三方包的数据文件（字体/图标/模板等） ----
     # ezdxf 内置字体和 DXF 模板； qfluentwidgets 内置图标和 QSS 样式表
-    args.append("--collect-data=ezdxf")
-    args.append("--collect-data=matplotlib")
-    args.append("--collect-data=seaborn")
+    for package_name in get_collect_data_packages():
+        args.append(f"--collect-data={package_name}")
     args.append("--collect-all=qfluentwidgets")
 
     # ---- 添加资源文件（仅图片/图标/JSON/Excel 等，不包含 .py 源码） ----

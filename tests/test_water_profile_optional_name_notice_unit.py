@@ -200,6 +200,16 @@ class _FakeInfoBar:
         _ = kwargs
         cls.records.append({"level": "info", "title": title, "content": content})
 
+    @classmethod
+    def warning(cls, title, content, **kwargs):
+        _ = kwargs
+        cls.records.append({"level": "warning", "title": title, "content": content})
+
+    @classmethod
+    def error(cls, title, content, **kwargs):
+        _ = kwargs
+        cls.records.append({"level": "error", "title": title, "content": content})
+
 
 def _make_panel(module, channel_level):
     panel = module.WaterProfilePanel.__new__(module.WaterProfilePanel)
@@ -253,3 +263,36 @@ def test_show_optional_blank_name_notice_keeps_open_channel_notice():
     assert len(_FakeInfoBar.records) == 1
     assert "部分建筑物名称为空" in _FakeInfoBar.records[0]["content"]
     assert "第1行（明渠-矩形）" in _FakeInfoBar.records[0]["content"]
+
+
+def test_open_siphon_calculator_blocks_missing_siphon_names_with_clear_notice():
+    module = _load_panel_module()
+    module.InfoBar = _FakeInfoBar
+    module.InfoBarPosition = SimpleNamespace(TOP="TOP")
+    module.CALCULATOR_AVAILABLE = True
+    panel = _make_panel(module, "支渠")
+    panel._ensure_downstream_ready = lambda action_name: True
+    panel._has_transition_topology_ready = lambda nodes: True
+    panel._build_nodes_from_table = lambda: [
+        _make_node("倒虹吸", name=""),
+        _make_node("倒虹吸", name=""),
+        _make_node("倒虹吸", name=""),
+        _make_node("倒虹吸", name=""),
+        _make_node("倒虹吸", name=""),
+        _make_node("倒虹吸", name=""),
+        _make_node("倒虹吸", name=""),
+        _make_node("倒虹吸", name=""),
+        _make_node("倒虹吸", name=""),
+    ]
+    panel._build_settings = lambda: (_ for _ in ()).throw(AssertionError("should stop before building settings"))
+
+    _FakeInfoBar.reset()
+    panel._open_siphon_calculator()
+
+    assert len(_FakeInfoBar.records) == 1
+    assert _FakeInfoBar.records[0]["level"] == "warning"
+    assert "建筑物名称" in _FakeInfoBar.records[0]["content"]
+    assert "倒虹吸水力计算" in _FakeInfoBar.records[0]["content"]
+    assert "第1行" in _FakeInfoBar.records[0]["content"]
+    assert "等9行" in _FakeInfoBar.records[0]["content"]
+    assert "未找到倒虹吸数据组" not in _FakeInfoBar.records[0]["content"]

@@ -50,18 +50,38 @@ _GIST_RAW_URL = (
 _ONLINE_TIMEOUT = 4   # 在线校验超时秒数
 # 未打包（开发/调试时）自动跳过校验；打包为 exe 后自动启用
 _DEV_MODE = not getattr(sys, 'frozen', False)
+_MACHINE_ID_CANDIDATES_CACHE = None
 
 
 # ============================================================
 # 硬件指纹
 # ============================================================
+def _silent_creationflags() -> int:
+    """返回 Windows 下静默拉起控制台命令所需的 creationflags。"""
+    if os.name != "nt":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _run_system_command(command, *, timeout: int) -> bytes:
+    """静默执行系统命令并返回原始输出。"""
+    kwargs = {
+        "timeout": timeout,
+        "stderr": subprocess.DEVNULL,
+    }
+    creationflags = _silent_creationflags()
+    if creationflags:
+        kwargs["creationflags"] = creationflags
+    return subprocess.check_output(command, **kwargs)
+
+
 def _get_physical_macs():
     """获取物理网卡 MAC，过滤虚拟网卡"""
     macs = []
     try:
-        result = subprocess.check_output(
+        result = _run_system_command(
             ["wmic", "nic", "get", "MACAddress,PhysicalAdapter"],
-            timeout=5, stderr=subprocess.DEVNULL
+            timeout=5,
         ).decode("gbk", errors="ignore")
         for line in result.splitlines():
             if "TRUE" in line.upper():
@@ -77,9 +97,9 @@ def _get_physical_macs():
 def _get_disk_serial():
     """获取主硬盘序列号"""
     try:
-        result = subprocess.check_output(
+        result = _run_system_command(
             ["wmic", "diskdrive", "get", "SerialNumber"],
-            timeout=5, stderr=subprocess.DEVNULL
+            timeout=5,
         ).decode("gbk", errors="ignore")
         lines = [
             ln.strip() for ln in result.splitlines()
@@ -95,9 +115,9 @@ def _get_disk_serial():
 def _get_machine_guid():
     """读取 Windows MachineGuid（通常比网卡集合更稳定）"""
     try:
-        result = subprocess.check_output(
+        result = _run_system_command(
             ["reg", "query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"],
-            timeout=5, stderr=subprocess.DEVNULL
+            timeout=5,
         ).decode("gbk", errors="ignore")
         for line in result.splitlines():
             line = line.strip()
@@ -130,13 +150,18 @@ def _get_machine_id_primary():
 
 def get_machine_id_candidates():
     """返回当前设备可接受的机器码候选（主算法 + 兼容旧算法）"""
+    global _MACHINE_ID_CANDIDATES_CACHE
+    if _MACHINE_ID_CANDIDATES_CACHE is not None:
+        return list(_MACHINE_ID_CANDIDATES_CACHE)
+
     ids = []
     primary = _get_machine_id_primary()
     legacy = _get_machine_id_legacy()
     for mid in (primary, legacy):
         if mid and mid not in ids:
             ids.append(mid)
-    return ids
+    _MACHINE_ID_CANDIDATES_CACHE = tuple(ids)
+    return list(_MACHINE_ID_CANDIDATES_CACHE)
 
 
 def get_machine_id():

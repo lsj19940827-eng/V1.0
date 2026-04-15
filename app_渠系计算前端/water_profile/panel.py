@@ -2755,6 +2755,35 @@ class WaterProfilePanel(QWidget):
             missing_names.append(str(getattr(node, "name", "") or "未命名"))
         return missing_names
 
+    @classmethod
+    def _collect_missing_siphon_name_rows(cls, nodes) -> list[int]:
+        """收集倒虹吸结构中缺少建筑物名称的真实表3行号。"""
+        rows = []
+        for idx, node in enumerate(list(nodes or []), start=1):
+            if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+                continue
+            structure_text = cls._get_node_structure_type_text(node)
+            if "倒虹吸" not in structure_text:
+                continue
+            if str(getattr(node, "name", "") or "").strip():
+                continue
+            rows.append(idx)
+        return rows
+
+    @staticmethod
+    def _build_missing_siphon_name_notice(row_indices: list[int]) -> str:
+        """生成倒虹吸名称缺失提示文案。"""
+        if not row_indices:
+            return ""
+        preview = "、".join(f"第{idx}行" for idx in row_indices[:8])
+        if len(row_indices) > 8:
+            preview += f" 等{len(row_indices)}行"
+        return (
+            "检测到倒虹吸行未填写建筑物名称，当前无法识别倒虹吸分组。\n"
+            "请先回到“建筑物名称”列，为同一段倒虹吸填写相同名称后，再执行【倒虹吸水力计算】：\n"
+            f"{preview}"
+        )
+
     @staticmethod
     def _is_xxpipe_channel_level_text(channel_level: str | None) -> bool:
         return str(channel_level or "").strip() in XXPIPE_CHANNEL_LEVEL_OPTIONS
@@ -9958,6 +9987,17 @@ class WaterProfilePanel(QWidget):
             debug_print("[DEBUG] has_siphon = False，返回")
             InfoBar.info("提示", "表格中没有倒虹吸数据，请确保有结构形式为\"倒虹吸\"的行",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+            return
+
+        missing_siphon_name_rows = self._collect_missing_siphon_name_rows(nodes)
+        if missing_siphon_name_rows:
+            InfoBar.warning(
+                "提示",
+                self._build_missing_siphon_name_notice(missing_siphon_name_rows),
+                parent=self._info_parent(),
+                duration=5000,
+                position=InfoBarPosition.TOP,
+            )
             return
 
         debug_print("[DEBUG] 开始导入模块和提取倒虹吸分组")

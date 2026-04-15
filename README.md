@@ -49,7 +49,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 暗涵断面：既有 `calc_渠系计算算法内核/矩形暗涵设计.py` 与 `app_渠系计算前端/culvert/` 继续承接 `暗涵-矩形`；新增 `暗涵-圆拱直墙型` 的文档口径要求复用圆拱几何、分叉暗涵规则，并保留 `B / H_total / theta_deg` 进入共享结果、表3和导出链路。
 - 专项模块：`倒虹吸水力计算系统/`、`有压管道/` 提供专项计算能力。
 - 自动化验证：`pytest`，测试文件集中在 `tests/`，其中 xx管 整线纵断面会同时覆盖界面、持久化、计算和导出链路。
-- 更新链路：`updater.py`、`update_helper.py`、`tools/build.py`、`tools/release.py` 共同负责版本检查、补丁/全量选择、旧会话残留清理、独立安装窗口、补丁兜底和正式发版；其中 `tools/build.py` 现在还会在打包前按分组校验关键依赖，并单独拦截 Word 导出依赖缺失。
+- 更新链路：`updater.py`、`update_helper.py`、`tools/build.py`、`tools/release.py` 共同负责版本检查、补丁/全量选择、旧会话残留清理、独立安装窗口、补丁兜底和正式发版；其中 `tools/build.py` 现在还会在打包前按分组校验关键依赖，并显式收集 `latex2mathml` 这类 Word 导出运行时数据文件，避免安装包启动时因缺资源直接退出。
 - 导出精度：普通模式导出桩号使用 `station_decimals`，xx管 导出桩号使用 `xxpipe_station_decimals`；两者都在导出链路单独格式化，不改主界面的通用桩号显示函数。
 - mixed route 持久化：`PressurePipeManager` 现同时保存 route 级 `longitudinal_nodes`、`raw_profile_polyline` 与 `profile_segments`，用来承接“原线直出 + 平面桩号采样 + 工程折点接口”的混合整线导出。
 - 纵断面绘图与取值分离：`centerline_draw_segments` 只负责导入原线画线，`profile_breakpoint_records` 只负责工程折点接口和覆盖判断；当前表格文字仍继续走 `centerline_records`。
@@ -114,7 +114,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 明渠设计面板已新增“复式梯形”断面，支持 6 个固定几何参数、分段公式、断面图、DXF 和 Word 导出。
 - 批量计算已新增“明渠-复式梯形”，主表、参数弹窗、Excel 导入导出和结果说明全部支持新断面。
 - 推求水面线已补上“明渠-复式梯形”的最小兼容，能保留 `m1/B1/m2/B2/m3/h1` 并按新公式参与水力计算。
-- 构建和发版现在会在进入 PyInstaller 前先校验 Word 导出依赖，缺失 `python-docx / latex2mathml / lxml` 时直接中止并提示安装命令，避免再发出缺件安装包。
+- 构建和发版现在会在进入 PyInstaller 前先校验 Word 导出依赖，缺失 `python-docx / latex2mathml / lxml` 时直接中止并提示安装命令；打包时还会把 `latex2mathml` 的运行时文本资源一并带进安装包，避免主程序启动时因为缺少 `unimathsymbols.txt` 直接退出。
 - 表3普通行、渐变段行、累计损失和水位递推的基础链路已接通。
 - 倒虹吸和命名有压管道组支持外部专项计算后回写总损失。
 - 空名称普通有压管道行现在可在 xx管，以及已形成连续承压整线的 xx渠 场景下，独立显示沿程损失、承压弯头损失和本行承压段总损失。
