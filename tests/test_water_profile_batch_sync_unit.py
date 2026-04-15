@@ -205,13 +205,14 @@ def test_sync_batch_settings_updates_global_and_flow_fields():
     panel.design_flow_edit = _FakeLineEdit("")
     panel.max_flow_edit = _FakeLineEdit("")
 
-    callback_state = {"called": False}
+    callback_state = {"called": False, "reset": False}
 
     def _mark_design_change():
         callback_state["called"] = True
         panel.max_flow_edit.setText("auto-filled")
 
     panel._on_design_flow_changed = _mark_design_change
+    panel._reset_flow_segment_current_index = lambda: callback_state.__setitem__("reset", True)
 
     bp = SimpleNamespace(
         channel_name_edit=_FakeLineEdit("龙塘"),
@@ -231,6 +232,7 @@ def test_sync_batch_settings_updates_global_and_flow_fields():
     assert panel._section_flow_segments_edit.text() == "4.6, 4.0, 3.2"
     assert panel.design_flow_edit.text() == "4.6, 4.0, 3.2"
     assert callback_state["called"] is True
+    assert callback_state["reset"] is True
     assert panel.max_flow_edit.text() == "auto-filled"
 
 

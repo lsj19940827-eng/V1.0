@@ -141,3 +141,56 @@ def test_collapsible_state_persistence_after_reload_and_toggle():
     _assert_no_abnormal_gap(restored)
 
     restored.deleteLater()
+
+
+def test_flow_selector_groups_stay_on_same_row_in_common_width():
+    """常用窗口宽度下，设计流量和加大流量应保持同一行显示。"""
+    panel = _build_panel(width=1400, height=900)
+    try:
+        assert panel._flow_pair_group_widget is not None
+        assert panel._design_flow_group_widget.parentWidget() is panel._flow_pair_group_widget
+        assert panel._max_flow_group_widget.parentWidget() is panel._flow_pair_group_widget
+        assert panel._flow_pair_group_widget.y() == panel.start_wl_edit.parentWidget().y()
+    finally:
+        panel.deleteLater()
+
+
+def test_flow_selector_groups_wrap_together_in_narrow_width():
+    """窗口变窄时，设计流量和加大流量应作为一组一起换行。"""
+    panel = _build_panel(width=1100, height=900)
+    try:
+        assert panel._flow_pair_group_widget is not None
+        assert panel._design_flow_group_widget.parentWidget() is panel._flow_pair_group_widget
+        assert panel._max_flow_group_widget.parentWidget() is panel._flow_pair_group_widget
+        assert panel._flow_pair_group_widget.y() > panel.start_wl_edit.parentWidget().y()
+    finally:
+        panel.deleteLater()
+
+
+def test_first_multi_segment_refresh_keeps_top_layout_stable_without_manual_toggle():
+    """首次从单段切到多段时，也应自动重算顶部高度，不再压缩下方区域。"""
+    panel = _build_panel(width=1360, height=900)
+    stable_panel = _build_panel(width=1360, height=900)
+    try:
+        panel.design_flow_edit.setText("0.1")
+        panel.max_flow_edit.setText("0.13")
+        panel._sync_flow_segment_widgets(reset_index=True)
+        _flush_events()
+
+        panel.design_flow_edit.setText("4.6, 3.2, 2.1, 1.0, 0.4")
+        panel.max_flow_edit.setText("5.75, 4.0, 2.6, 1.25, 0.52")
+        panel._sync_flow_segment_widgets(reset_index=True)
+        _flush_events()
+
+        stable_panel.design_flow_edit.setText("4.6, 3.2, 2.1, 1.0, 0.4")
+        stable_panel.max_flow_edit.setText("5.75, 4.0, 2.6, 1.25, 0.52")
+        stable_panel._sync_flow_segment_widgets(reset_index=True)
+        _flush_events()
+        stable_panel._adjust_splitter_for_settings()
+        _flush_events()
+
+        assert panel.start_station_edit.parentWidget().y() >= stable_panel.start_station_edit.parentWidget().y() - 2
+        assert panel._transition_group.height() >= stable_panel._transition_group.height() - 2
+    finally:
+        panel.deleteLater()
+        stable_panel.deleteLater()
