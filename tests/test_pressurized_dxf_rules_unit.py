@@ -282,6 +282,15 @@ def test_extract_pressurized_param_entities_preserves_locked_material_and_result
     assert pressure_rows[0]["total_head_loss"] == 0.7314
 
 
+def test_compute_siphon_supports_hdpe_manual_default_roughness():
+    rows = summary_mod.compute_siphon([
+        {"name": "第一流量段", "Q": 1.2, "DN_mm": 800, "pipe_material": "HDPE管"}
+    ])
+
+    assert rows[0]["pipe_material"] == "HDPE管"
+    assert rows[0]["n"] == pytest.approx(0.010)
+
+
 def test_merge_pressurized_param_defaults_migrates_legacy_name_cache_to_actual_segments():
     groups = [
         _pressurized_row("同名倒虹吸", 1, "球墨铸铁管", 850),
@@ -3278,6 +3287,41 @@ def test_section_summary_dialog_pressurized_grids_share_header_and_row_columns()
     assert pressure_mat.minimumWidth() == dlg._ui_material_column_width
     assert siphon_dn.minimumWidth() == dlg._ui_dn_column_width
     assert pressure_dn.minimumWidth() == dlg._ui_dn_column_width
+
+    dlg.deleteLater()
+
+
+def test_section_summary_dialog_keeps_imported_siphon_material_editable_with_source_data():
+    _get_qapp()
+    dlg = cad_tools.SectionSummaryDialog(
+        None,
+        [_node(structure_type="倒虹吸", name="老屋基", d=0.85, flow_section="1", is_siphon=True, pipe_material="HDPE管")],
+        None,
+        config_only=True,
+    )
+
+    siphon_mat = dlg._siphon_form_grid.itemAtPosition(1, 1).widget()
+
+    assert "HDPE管" in dlg._SIPHON_MATERIALS
+    assert siphon_mat.currentText() == "HDPE管"
+    assert siphon_mat.isEnabled() is True
+
+    dlg.deleteLater()
+
+
+def test_section_summary_dialog_defaults_missing_siphon_material_to_ball_iron_and_keeps_editable():
+    _get_qapp()
+    dlg = cad_tools.SectionSummaryDialog(
+        None,
+        [_node(structure_type="倒虹吸", name="空材质倒虹吸", d=0.85, flow_section="1", is_siphon=True)],
+        None,
+        config_only=True,
+    )
+
+    siphon_mat = dlg._siphon_form_grid.itemAtPosition(1, 1).widget()
+
+    assert siphon_mat.currentText() == "球墨铸铁管"
+    assert siphon_mat.isEnabled() is True
 
     dlg.deleteLater()
 

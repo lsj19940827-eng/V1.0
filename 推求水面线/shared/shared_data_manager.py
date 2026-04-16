@@ -326,6 +326,7 @@ class SharedDataManager:
                     flow_section=str(result.get('flow_section', '')),
                     building_name=str(result.get('building_name', '')),
                     turn_radius=float(result.get('turn_radius', 0.0) or 0.0),
+                    pipe_material=str(result.get('pipe_material', '') or ''),
                     use_increase=use_increase,
                     raw_result=result
                 )

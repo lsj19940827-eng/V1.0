@@ -51,6 +51,37 @@ def test_pressure_pipe_fields_are_preserved_in_shared_data_manager():
     assert section_params["in_out_raw"] == "进"
 
 
+def test_siphon_pipe_material_is_preserved_in_shared_data_manager():
+    """倒虹吸的管材应被保留并继续写回节点参数。"""
+    manager = SharedDataManager()
+    manager.clear_batch_results()
+
+    payload = [{
+        "success": True,
+        "section_type": "倒虹吸",
+        "is_siphon": True,
+        "flow_section": "1",
+        "building_name": "老屋基",
+        "coord_X": 451333.9116,
+        "coord_Y": 3047880.2791,
+        "Q": 1.55,
+        "n": 0.014,
+        "D": 1.4,
+        "turn_radius": 0.0,
+        "pipe_material": "HDPE管",
+    }]
+
+    count = manager.register_batch_results(payload)
+    assert count == 1
+
+    section = manager.get_batch_results()[0]
+    assert section.pipe_material == "HDPE管"
+
+    node_params = section.to_node_params()
+    section_params = node_params["section_params"]
+    assert section_params["pipe_material"] == "HDPE管"
+
+
 def test_pressure_pipe_like_results_preserve_original_xxpipe_section_type():
     """定向钻/顶管应保留原工艺名，同时继续走有压管道语义。"""
     manager = SharedDataManager()

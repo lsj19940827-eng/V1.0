@@ -106,6 +106,7 @@ _CULVERT_STRUCTURE_TYPE_ALIASES = {
 
 # 倒虹吸管道材质 → 糙率
 SIPHON_MATERIALS = {
+    "HDPE管":       0.010,
     "PCCP管":       0.012,
     "球墨铸铁管":   0.012,
     "钢管":         0.011,

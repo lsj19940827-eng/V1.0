@@ -12880,8 +12880,6 @@ class SectionSummaryDialog(QDialog):
                 sp_row["pipe_material"] if sp_row["pipe_material"] in self._SIPHON_MATERIALS else "球墨铸铁管"
             )
             mat_combo.setFixedWidth(self._ui_material_column_width)
-            if self._has_source_data:
-                mat_combo.setEnabled(False)
             sp_grid.addWidget(mat_combo, row_index, 1, alignment=Qt.AlignLeft | Qt.AlignVCenter)
 
             dn_edit = self._make_fixed_line_edit(self._ui_dn_column_width)
@@ -12897,7 +12895,7 @@ class SectionSummaryDialog(QDialog):
         siphon_lay.addLayout(sp_grid)
 
         dn_note_text = (
-            "（检测到表2/表3结果时，倒虹吸 DN 与相关结果将严格复用当前已确认值，导出阶段不可改写）"
+            "（检测到表2/表3结果时，倒虹吸 DN 将严格复用当前已确认值；管材仍可在导出前调整）"
             if self._has_source_data
             else "（DN 从倒虹吸计算结果自动导入，可在缺少源结果时作为补全参数）"
         )

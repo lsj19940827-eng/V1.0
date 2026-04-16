@@ -539,6 +539,69 @@ def test_batch_calculate_treats_directional_drill_as_pressure_pipe_like_placehol
     assert "plain_info_calls" not in captured
 
 
+def test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row(monkeypatch):
+    module = _load_batch_panel_module()
+    BatchPanel = module.BatchPanel
+    panel = BatchPanel.__new__(BatchPanel)
+    captured = {}
+
+    module.QTableWidgetItem = _FakeResultItem
+    module.QColor = lambda value: value
+    module.Qt = SimpleNamespace(AlignCenter=0x0004)
+    module.InfoBar = SimpleNamespace(
+        warning=lambda *args, **kwargs: None,
+        info=lambda *args, **kwargs: None,
+        success=lambda *args, **kwargs: captured.setdefault("success_calls", []).append((args, kwargs)),
+    )
+    module.InfoBarPosition = SimpleNamespace(TOP=1)
+    module.auto_resize_table = lambda *_args, **_kwargs: None
+    module.SHARED_DATA_AVAILABLE = False
+
+    row = _make_input_row(module, section_type="倒虹吸", n="", slope="", d="1.4")
+    row[module.COL_PIPE_MATERIAL] = "HDPE管"
+    panel._get_all_input_data = lambda: [row]
+    panel._validate_duplicate_buildings = lambda _rows: True
+    panel._clear_results = lambda: panel.result_table.setRowCount(0)
+    panel._normalize_row = lambda values, length: list(values[:length]) + [""] * max(0, length - len(values))
+    panel._sync_common_columns = lambda: None
+    panel._update_lock_state = lambda has_errors: captured.setdefault("lock_state", has_errors)
+    panel._sf = lambda value, default=0.0: float(value) if str(value).strip() else default
+    panel.result_table = _FakeResultTable(len(module.RESULT_HEADERS))
+    panel.result_notebook = _FakeNotebook()
+    panel.detail_text = SimpleNamespace(setPlainText=lambda *_args, **_kwargs: None)
+    panel.detail_cb = _FakeToggle(False)
+    panel.inc_cb = _FakeToggle(False)
+    panel.batch_results = []
+    panel._last_calc_snapshot = None
+    panel._last_calc_detail = False
+
+    monkeypatch.setattr(
+        module,
+        "fluent_batch_result",
+        lambda *args, **kwargs: captured.setdefault("failure_dialog_calls", []).append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        module,
+        "fluent_info",
+        lambda *args, **kwargs: captured.setdefault("plain_info_calls", []).append((args, kwargs)),
+    )
+
+    def _unexpected_calculate_single(*_args, **_kwargs):
+        raise AssertionError("倒虹吸应按占位行处理，不应进入断面求解")
+
+    panel._calculate_single = _unexpected_calculate_single
+
+    BatchPanel._batch_calculate(panel)
+
+    assert len(panel.batch_results) == 1
+    result = panel.batch_results[0]["result"]
+    assert result["is_siphon"] is True
+    assert result["section_type"] == "倒虹吸"
+    assert result["pipe_material"] == "HDPE管"
+    assert "failure_dialog_calls" not in captured
+    assert "plain_info_calls" not in captured
+
+
 def test_duplicate_classifier_allows_same_named_pressure_pipe_in_branch_pressurized_chain():
     module = _load_batch_panel_module()
     BatchPanel = module.BatchPanel

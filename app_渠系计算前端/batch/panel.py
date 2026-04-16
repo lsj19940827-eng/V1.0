@@ -1543,12 +1543,14 @@ class BatchPanel(QWidget):
                     row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
                     row_out[3] = "倒虹吸"; row_out[-1] = "⏭ 占位行(不参与计算)"
                     result_rows.append(row_out)
+                    pipe_material = str(values[COL_PIPE_MATERIAL]).strip() if len(values) > COL_PIPE_MATERIAL else ""
                     siphon_result = {
                         'success': True, 'section_type': '倒虹吸', 'is_siphon': True,
                         'flow_section': segment, 'building_name': building_name,
                         'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
                         'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.014), 'slope_inv': 0,
                         'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
+                        'pipe_material': pipe_material,
                     }
                     self.batch_results.append({'input': values, 'result': siphon_result})
                     skip_count += 1
