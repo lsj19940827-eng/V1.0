@@ -10,6 +10,13 @@ from types import SimpleNamespace
 
 import pytest
 
+ROOT = Path(__file__).resolve().parents[1]
+CALC_ROOT = ROOT / "calc_渠系计算算法内核"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(CALC_ROOT) not in sys.path:
+    sys.path.insert(0, str(CALC_ROOT))
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
