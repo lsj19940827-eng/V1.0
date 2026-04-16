@@ -8473,7 +8473,7 @@ class WaterProfilePanel(QWidget):
         for idx, node in enumerate(nodes, start=1):
             if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
                 continue
-            if not StructureType.allows_empty_name(getattr(node, "structure_type", None)):
+            if not StructureType.warns_on_empty_name(getattr(node, "structure_type", None)):
                 continue
             if str(getattr(node, "name", "") or "").strip():
                 continue
@@ -8492,7 +8492,7 @@ class WaterProfilePanel(QWidget):
             preview += f" 等{len(rows)}行"
         InfoBar.info(
             "提示",
-            f"检测到部分建筑物名称为空，已按结构形式/占位符参与{action_name}，不影响本次处理：\n{preview}",
+            f"检测到部分暗涵未填写建筑物名称，建议补充名称便于识别；本次{action_name}不会中断：\n{preview}",
             parent=self._info_parent(),
             duration=5000,
             position=InfoBarPosition.TOP,

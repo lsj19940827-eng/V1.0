@@ -1467,12 +1467,22 @@ def _allows_optional_blank_name(struct_type):
     return StructureType.allows_empty_name(struct_type)
 
 
+def _warns_optional_blank_name(struct_type):
+    """判断结构名称留空时是否需要轻提示。"""
+    if not MODELS_AVAILABLE:
+        return False
+    checker = getattr(StructureType, "warns_on_empty_name", None)
+    if callable(checker):
+        return checker(struct_type)
+    return False
+
+
 def _collect_optional_blank_name_rows(nodes):
     rows = []
     for idx, node in enumerate(nodes or [], start=1):
         if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
             continue
-        if not _allows_optional_blank_name(getattr(node, "structure_type", None)):
+        if not _warns_optional_blank_name(getattr(node, "structure_type", None)):
             continue
         if str(getattr(node, "name", "") or "").strip():
             continue
@@ -1488,8 +1498,22 @@ def _build_optional_blank_name_notice(nodes, *, action_name):
     if len(rows) > 8:
         preview += f" 等{len(rows)}行"
     return (
-        f"检测到部分建筑物名称为空，已按结构形式/占位符参与{action_name}，不影响本次处理：\n"
+        f"检测到部分暗涵未填写建筑物名称，建议补充名称便于识别；本次{action_name}不会中断：\n"
         f"{preview}"
+    )
+
+
+def _show_optional_blank_name_notice(parent_window, nodes, *, action_name):
+    """在导出前用顶部轻提示提醒暗涵补充名称。"""
+    notice = _build_optional_blank_name_notice(nodes, action_name=action_name)
+    if not notice:
+        return
+    InfoBar.info(
+        "提示",
+        notice,
+        parent=_safe_qt_parent(parent_window),
+        duration=5000,
+        position=InfoBarPosition.TOP,
     )
 
 
@@ -9513,6 +9537,7 @@ def export_longitudinal_profile_txt(panel):
         if not valid_nodes:
             fluent_info(panel.window(), "警告", "没有可用的高程数据，请先执行计算。")
             return
+        _show_optional_blank_name_notice(panel.window(), nodes, action_name="导出")
 
     dlg = TextExportSettingsDialog(
         panel.window(),
@@ -10076,6 +10101,7 @@ def export_longitudinal_profile_dxf(panel):
         if not valid_nodes:
             fluent_info(panel.window(), "警告", "没有可用的高程数据，请先执行计算。")
             return
+        _show_optional_blank_name_notice(panel.window(), nodes, action_name="导出")
 
     # 弹出参数配置对话框（复用 TXT 版设置）
     dlg = TextExportSettingsDialog(
@@ -11926,9 +11952,7 @@ def export_combined_dxf(panel):
             fluent_info(parent_window, "警告", "没有可用的高程数据，请先执行计算。")
             return
 
-        optional_blank_name_notice = _build_optional_blank_name_notice(nodes, action_name="导出")
-        if optional_blank_name_notice:
-            fluent_info(parent_window, "提示", optional_blank_name_notice)
+        _show_optional_blank_name_notice(parent_window, nodes, action_name="导出")
 
     # ---- 1. 纵断面参数设置 ----
     dlg = TextExportSettingsDialog(

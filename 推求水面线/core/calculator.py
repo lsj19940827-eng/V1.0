@@ -2637,8 +2637,8 @@ class WaterProfileCalculator:
 
         if missing_required_name_rows:
             errors.append(
-                "建筑物名称仅以下结构必填：倒虹吸、隧洞、渡槽、矩形暗涵等；"
-                "明渠-矩形/梯形/圆形、有压管道可留空。"
+                "建筑物名称规则：明渠可留空；暗涵建议填写但可留空；"
+                "倒虹吸、隧洞、渡槽等仍需填写。"
             )
             for row_index, struct_name in missing_required_name_rows:
                 errors.append(f"第{row_index}行: {struct_name} 需要填写建筑物名称")

@@ -126,15 +126,29 @@ class StructureType(Enum):
         return structure_type in cls.get_special_structures()
 
     @classmethod
-    def get_optional_name_structures(cls) -> list:
-        """获取允许建筑物名称留空的结构类型。"""
+    def get_silent_optional_name_structures(cls) -> list:
+        """获取允许名称留空且不提示的结构类型。"""
         return [
             cls.MINGQU_TRAPEZOIDAL,
             cls.MINGQU_COMPOUND_TRAPEZOIDAL,
             cls.MINGQU_RECTANGULAR,
             cls.MINGQU_CIRCULAR,
+            cls.MINGQU_U,
             cls.PRESSURE_PIPE,
         ]
+
+    @classmethod
+    def get_warn_optional_name_structures(cls) -> list:
+        """获取允许名称留空但建议补充名称的结构类型。"""
+        return [
+            cls.RECT_CULVERT,
+            cls.CULVERT_ARCH,
+        ]
+
+    @classmethod
+    def get_optional_name_structures(cls) -> list:
+        """获取允许建筑物名称留空的结构类型。"""
+        return cls.get_silent_optional_name_structures() + cls.get_warn_optional_name_structures()
 
     @classmethod
     def allows_empty_name(cls, structure_type) -> bool:
@@ -143,6 +157,14 @@ class StructureType(Enum):
             return False
         value = structure_type.value if hasattr(structure_type, "value") else str(structure_type)
         return value in {item.value for item in cls.get_optional_name_structures()}
+
+    @classmethod
+    def warns_on_empty_name(cls, structure_type) -> bool:
+        """判断结构类型留空时是否只做轻提示。"""
+        if structure_type is None:
+            return False
+        value = structure_type.value if hasattr(structure_type, "value") else str(structure_type)
+        return value in {item.value for item in cls.get_warn_optional_name_structures()}
     
     @classmethod
     def is_diversion_gate(cls, structure_type: 'StructureType') -> bool:

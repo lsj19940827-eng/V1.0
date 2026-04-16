@@ -118,7 +118,21 @@ def _install_panel_import_stubs():
         @staticmethod
         def allows_empty_name(structure_type):
             value = getattr(structure_type, "value", structure_type)
-            return str(value or "").strip() in {"明渠-矩形", "有压管道"}
+            return str(value or "").strip() in {
+                "明渠-梯形",
+                "明渠-复式梯形",
+                "明渠-矩形",
+                "明渠-圆形",
+                "明渠-U形",
+                "有压管道",
+                "暗涵-矩形",
+                "暗涵-圆拱直墙型",
+            }
+
+        @staticmethod
+        def warns_on_empty_name(structure_type):
+            value = getattr(structure_type, "value", structure_type)
+            return str(value or "").strip() in {"暗涵-矩形", "暗涵-圆拱直墙型"}
 
         @staticmethod
         def is_pressure_pipe_like(_value):
@@ -233,7 +247,9 @@ def test_show_optional_blank_name_notice_skips_xxpipe_pressure_pipe_rows():
     module = _load_panel_module()
     module.StructureType = SimpleNamespace(
         allows_empty_name=lambda structure_type: str(getattr(structure_type, "value", structure_type) or "").strip()
-        in {"明渠-矩形", "有压管道"}
+        in {"明渠-矩形", "有压管道", "暗涵-矩形", "暗涵-圆拱直墙型"},
+        warns_on_empty_name=lambda structure_type: str(getattr(structure_type, "value", structure_type) or "").strip()
+        in {"暗涵-矩形", "暗涵-圆拱直墙型"},
     )
     module.InfoBar = _FakeInfoBar
     module.InfoBarPosition = SimpleNamespace(TOP="TOP")
@@ -246,11 +262,13 @@ def test_show_optional_blank_name_notice_skips_xxpipe_pressure_pipe_rows():
     assert _FakeInfoBar.records == []
 
 
-def test_show_optional_blank_name_notice_keeps_open_channel_notice():
+def test_show_optional_blank_name_notice_skips_open_channel_notice():
     module = _load_panel_module()
     module.StructureType = SimpleNamespace(
         allows_empty_name=lambda structure_type: str(getattr(structure_type, "value", structure_type) or "").strip()
-        in {"明渠-矩形", "有压管道"}
+        in {"明渠-矩形", "有压管道", "暗涵-矩形", "暗涵-圆拱直墙型"},
+        warns_on_empty_name=lambda structure_type: str(getattr(structure_type, "value", structure_type) or "").strip()
+        in {"暗涵-矩形", "暗涵-圆拱直墙型"},
     )
     module.InfoBar = _FakeInfoBar
     module.InfoBarPosition = SimpleNamespace(TOP="TOP")
@@ -260,9 +278,28 @@ def test_show_optional_blank_name_notice_keeps_open_channel_notice():
     _FakeInfoBar.reset()
     panel._show_optional_blank_name_notice([node], action_name="计算")
 
+    assert _FakeInfoBar.records == []
+
+
+def test_show_optional_blank_name_notice_warns_for_culvert_rows():
+    module = _load_panel_module()
+    module.StructureType = SimpleNamespace(
+        allows_empty_name=lambda structure_type: str(getattr(structure_type, "value", structure_type) or "").strip()
+        in {"明渠-矩形", "有压管道", "暗涵-矩形", "暗涵-圆拱直墙型"},
+        warns_on_empty_name=lambda structure_type: str(getattr(structure_type, "value", structure_type) or "").strip()
+        in {"暗涵-矩形", "暗涵-圆拱直墙型"},
+    )
+    module.InfoBar = _FakeInfoBar
+    module.InfoBarPosition = SimpleNamespace(TOP="TOP")
+    panel = _make_panel(module, "支渠")
+    node = _make_node("暗涵-圆拱直墙型", name="")
+
+    _FakeInfoBar.reset()
+    panel._show_optional_blank_name_notice([node], action_name="计算")
+
     assert len(_FakeInfoBar.records) == 1
-    assert "部分建筑物名称为空" in _FakeInfoBar.records[0]["content"]
-    assert "第1行（明渠-矩形）" in _FakeInfoBar.records[0]["content"]
+    assert "建议补充名称" in _FakeInfoBar.records[0]["content"]
+    assert "第1行（暗涵-圆拱直墙型）" in _FakeInfoBar.records[0]["content"]
 
 
 def test_open_siphon_calculator_blocks_missing_siphon_names_with_clear_notice():
