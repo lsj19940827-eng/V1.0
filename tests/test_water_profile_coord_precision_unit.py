@@ -312,6 +312,7 @@ def _make_basic_panel(module):
     panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支管")
     panel.turn_radius_edit = _FakeLineEdit("")
     panel.roughness_edit = _FakeLineEdit("")
+    panel.isVisible = lambda: False
     return panel
 
 
@@ -394,6 +395,108 @@ def _make_batch_result(**overrides):
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+def _prepare_panel_for_batch_import(module, panel, results):
+    module.SHARED_DATA_AVAILABLE = True
+    module.CALCULATOR_AVAILABLE = False
+    module.QSignalBlocker = lambda *_args, **_kwargs: object()
+    module.InfoBar = SimpleNamespace(
+        success=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+    )
+    module.InfoBarPosition = SimpleNamespace(TOP=1)
+    module.auto_resize_table = lambda *_args, **_kwargs: None
+    module.get_shared_data_manager = lambda: SimpleNamespace(
+        get_batch_results=lambda: results
+    )
+
+    panel._sync_batch_settings = lambda: None
+    panel._clear_nodes = lambda: panel.node_table.setRowCount(0)
+    panel._update_siphon_roughness_overview = lambda *_args, **_kwargs: None
+    panel._update_pressure_pipe_roughness_overview = lambda *_args, **_kwargs: None
+    panel._on_design_flow_changed = lambda: None
+    panel._apply_table1_source_row_lock_flags = lambda: None
+    panel._refresh_pressure_pipe_controls = lambda: None
+    panel._recalculate_geometry = lambda: None
+    panel._info_parent = lambda: None
+    panel.design_flow_edit = SimpleNamespace(text=lambda: "5.0", setText=lambda _text: None)
+
+
+def _capture_batch_roughness_overviews(panel):
+    captured = SimpleNamespace(siphon_pairs=[], pressure_pipe_pairs=[])
+    panel._update_siphon_roughness_overview = lambda pairs: captured.siphon_pairs.extend(pairs)
+    panel._update_pressure_pipe_roughness_overview = (
+        lambda pairs: captured.pressure_pipe_pairs.extend(pairs)
+    )
+    return captured
+
+
+@contextmanager
+def _patched_qinput_dialog(exec_result, text_value=""):
+    saved_pyside6 = sys.modules.get("PySide6")
+    qtwidgets = sys.modules.get("PySide6.QtWidgets")
+    created_qtwidgets = qtwidgets is None
+    if qtwidgets is None:
+        qtwidgets = types.ModuleType("PySide6.QtWidgets")
+        sys.modules.setdefault("PySide6", types.ModuleType("PySide6"))
+        sys.modules["PySide6.QtWidgets"] = qtwidgets
+    saved_dialog = getattr(qtwidgets, "QInputDialog", None)
+    capture = SimpleNamespace(last_dialog=None)
+
+    class _FakeInputDialog:
+        def __init__(self, parent=None):
+            self.parent = parent
+            self.window_title = ""
+            self.label_text = ""
+            self.combo_items = []
+            self.combo_editable = True
+            self.ok_button_text = ""
+            self.cancel_button_text = ""
+            self.current_text_value = str(text_value)
+            capture.last_dialog = self
+
+        def setWindowTitle(self, text):
+            self.window_title = str(text)
+
+        def setLabelText(self, text):
+            self.label_text = str(text)
+
+        def setComboBoxItems(self, items):
+            self.combo_items = list(items)
+
+        def setComboBoxEditable(self, editable):
+            self.combo_editable = bool(editable)
+
+        def setTextValue(self, value):
+            if not self.current_text_value:
+                self.current_text_value = str(value)
+
+        def textValue(self):
+            return self.current_text_value
+
+        def setOkButtonText(self, text):
+            self.ok_button_text = str(text)
+
+        def setCancelButtonText(self, text):
+            self.cancel_button_text = str(text)
+
+        def exec(self):
+            return exec_result
+
+    qtwidgets.QInputDialog = _FakeInputDialog
+    try:
+        yield capture
+    finally:
+        if saved_dialog is None:
+            if hasattr(qtwidgets, "QInputDialog"):
+                delattr(qtwidgets, "QInputDialog")
+        else:
+            qtwidgets.QInputDialog = saved_dialog
+        if created_qtwidgets:
+            sys.modules.pop("PySide6.QtWidgets", None)
+            if saved_pyside6 is None:
+                sys.modules.pop("PySide6", None)
 
 
 @contextmanager
@@ -852,36 +955,14 @@ def test_build_nodes_from_table_defaults_blank_turn_radius_to_zero_for_regular_r
 def test_import_from_batch_defaults_blank_turn_radius_text_to_zero():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
-    module.SHARED_DATA_AVAILABLE = True
-    module.CALCULATOR_AVAILABLE = False
-    module.QSignalBlocker = lambda *_args, **_kwargs: object()
-    module.InfoBar = SimpleNamespace(
-        success=lambda *args, **kwargs: None,
-        warning=lambda *args, **kwargs: None,
-    )
-    module.InfoBarPosition = SimpleNamespace(TOP=1)
-    module.auto_resize_table = lambda *_args, **_kwargs: None
-    module.get_shared_data_manager = lambda: SimpleNamespace(
-        get_batch_results=lambda: [
-            _make_batch_result(
-                section_type="明渠-矩形",
-                turn_radius=0.0,
-                raw_result={},
-            )
-        ]
-    )
-
-    panel._sync_batch_settings = lambda: None
-    panel._clear_nodes = lambda: panel.node_table.setRowCount(0)
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(
+            section_type="明渠-矩形",
+            turn_radius=0.0,
+            raw_result={},
+        )
+    ])
     panel._choose_roughness_value = lambda *_args, **_kwargs: None
-    panel._update_siphon_roughness_overview = lambda *_args, **_kwargs: None
-    panel._update_pressure_pipe_roughness_overview = lambda *_args, **_kwargs: None
-    panel._on_design_flow_changed = lambda: None
-    panel._apply_table1_source_row_lock_flags = lambda: None
-    panel._refresh_pressure_pipe_controls = lambda: None
-    panel._recalculate_geometry = lambda: None
-    panel._info_parent = lambda: None
-    panel.design_flow_edit = SimpleNamespace(text=lambda: "5.0", setText=lambda _text: None)
 
     module.WaterProfilePanel._import_from_batch(panel)
 
@@ -892,33 +973,11 @@ def test_import_from_batch_defaults_blank_turn_radius_text_to_zero():
 def test_import_from_batch_keeps_turn_radius_entry_blank_for_mixed_positive_values():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
-    module.SHARED_DATA_AVAILABLE = True
-    module.CALCULATOR_AVAILABLE = False
-    module.QSignalBlocker = lambda *_args, **_kwargs: object()
-    module.InfoBar = SimpleNamespace(
-        success=lambda *args, **kwargs: None,
-        warning=lambda *args, **kwargs: None,
-    )
-    module.InfoBarPosition = SimpleNamespace(TOP=1)
-    module.auto_resize_table = lambda *_args, **_kwargs: None
-    module.get_shared_data_manager = lambda: SimpleNamespace(
-        get_batch_results=lambda: [
-            _make_batch_result(section_type="明渠-矩形", turn_radius=30.0, raw_result={"turn_radius_text": "30"}),
-            _make_batch_result(section_type="明渠-矩形", turn_radius=40.0, raw_result={"turn_radius_text": "40"}),
-        ]
-    )
-
-    panel._sync_batch_settings = lambda: None
-    panel._clear_nodes = lambda: panel.node_table.setRowCount(0)
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(section_type="明渠-矩形", turn_radius=30.0, raw_result={"turn_radius_text": "30"}),
+        _make_batch_result(section_type="明渠-矩形", turn_radius=40.0, raw_result={"turn_radius_text": "40"}),
+    ])
     panel._choose_roughness_value = lambda *_args, **_kwargs: None
-    panel._update_siphon_roughness_overview = lambda *_args, **_kwargs: None
-    panel._update_pressure_pipe_roughness_overview = lambda *_args, **_kwargs: None
-    panel._on_design_flow_changed = lambda: None
-    panel._apply_table1_source_row_lock_flags = lambda: None
-    panel._refresh_pressure_pipe_controls = lambda: None
-    panel._recalculate_geometry = lambda: None
-    panel._info_parent = lambda: None
-    panel.design_flow_edit = SimpleNamespace(text=lambda: "5.0", setText=lambda _text: None)
 
     module.WaterProfilePanel._import_from_batch(panel)
 
@@ -930,37 +989,250 @@ def test_import_from_batch_keeps_turn_radius_entry_blank_for_mixed_positive_valu
 def test_import_from_batch_sets_turn_radius_entry_for_uniform_positive_values():
     module = _load_panel_module()
     panel = _make_basic_panel(module)
-    module.SHARED_DATA_AVAILABLE = True
-    module.CALCULATOR_AVAILABLE = False
-    module.QSignalBlocker = lambda *_args, **_kwargs: object()
-    module.InfoBar = SimpleNamespace(
-        success=lambda *args, **kwargs: None,
-        warning=lambda *args, **kwargs: None,
-    )
-    module.InfoBarPosition = SimpleNamespace(TOP=1)
-    module.auto_resize_table = lambda *_args, **_kwargs: None
-    module.get_shared_data_manager = lambda: SimpleNamespace(
-        get_batch_results=lambda: [
-            _make_batch_result(section_type="明渠-矩形", turn_radius=30.0, raw_result={"turn_radius_text": "30"}),
-            _make_batch_result(section_type="明渠-矩形", turn_radius=30.0, raw_result={"turn_radius_text": "30"}),
-        ]
-    )
-
-    panel._sync_batch_settings = lambda: None
-    panel._clear_nodes = lambda: panel.node_table.setRowCount(0)
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(section_type="明渠-矩形", turn_radius=30.0, raw_result={"turn_radius_text": "30"}),
+        _make_batch_result(section_type="明渠-矩形", turn_radius=30.0, raw_result={"turn_radius_text": "30"}),
+    ])
     panel._choose_roughness_value = lambda *_args, **_kwargs: None
-    panel._update_siphon_roughness_overview = lambda *_args, **_kwargs: None
-    panel._update_pressure_pipe_roughness_overview = lambda *_args, **_kwargs: None
-    panel._on_design_flow_changed = lambda: None
-    panel._apply_table1_source_row_lock_flags = lambda: None
-    panel._refresh_pressure_pipe_controls = lambda: None
-    panel._recalculate_geometry = lambda: None
-    panel._info_parent = lambda: None
-    panel.design_flow_edit = SimpleNamespace(text=lambda: "5.0", setText=lambda _text: None)
 
     module.WaterProfilePanel._import_from_batch(panel)
 
     assert panel.turn_radius_edit.text() == "30.0"
+
+
+def test_choose_roughness_value_returns_selected_value_and_sets_chinese_button_text():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+
+    with _patched_qinput_dialog(1, "0.014    （出现 2 次）") as capture:
+        value = module.WaterProfilePanel._choose_roughness_value(
+            panel,
+            [0.012, 0.014, 0.014],
+            "渠道糙率",
+        )
+
+    assert value == 0.014
+    assert capture.last_dialog.window_title == "选择渠道糙率"
+    assert "同步到表3时" in capture.last_dialog.label_text
+    assert "批量计算中" not in capture.last_dialog.label_text
+    assert capture.last_dialog.ok_button_text == "确定"
+    assert capture.last_dialog.cancel_button_text == "取消"
+    assert capture.last_dialog.combo_items == [
+        "0.012    （出现 1 次）",
+        "0.014    （出现 2 次）",
+    ]
+
+
+def test_choose_roughness_value_returns_none_when_dialog_cancelled():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+
+    with _patched_qinput_dialog(0, "0.014    （出现 2 次）"):
+        value = module.WaterProfilePanel._choose_roughness_value(
+            panel,
+            [0.012, 0.014, 0.014],
+            "渠道糙率",
+        )
+
+    assert value is None
+
+
+def test_import_from_batch_applies_confirmed_general_roughness_to_current_import_rows():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel.roughness_edit.setText("0.013")
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(building_name="甲", section_type="明渠-矩形", n=0.012),
+        _make_batch_result(building_name="乙", section_type="明渠-矩形", n=0.014),
+        _make_batch_result(building_name="丙", section_type="倒虹吸", n=0.016),
+    ])
+
+    with _patched_qinput_dialog(1, "0.014    （出现 1 次）"):
+        module.WaterProfilePanel._import_from_batch(panel)
+
+    assert panel.roughness_edit.text() == "0.014"
+    assert panel.node_table.item(0, 24).text() == "0.0140"
+    assert panel.node_table.item(1, 24).text() == "0.0140"
+    assert panel.node_table.item(2, 24).text() == "0.0160"
+
+
+def test_import_from_batch_keeps_general_roughness_rows_unchanged_when_dialog_cancelled():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel.roughness_edit.setText("0.013")
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(building_name="甲", section_type="明渠-矩形", n=0.012),
+        _make_batch_result(building_name="乙", section_type="明渠-矩形", n=0.014),
+    ])
+
+    with _patched_qinput_dialog(0, "0.014    （出现 1 次）"):
+        module.WaterProfilePanel._import_from_batch(panel)
+
+    assert panel.roughness_edit.text() == "0.013"
+    assert panel.node_table.item(0, 24).text() == "0.0120"
+    assert panel.node_table.item(1, 24).text() == "0.0140"
+
+
+def test_import_from_batch_prompts_general_roughness_before_writing_table_rows():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(building_name="甲", section_type="明渠-矩形", n=0.012),
+        _make_batch_result(building_name="乙", section_type="明渠-矩形", n=0.014),
+    ])
+    captured = {}
+
+    def _capture(values, label):
+        captured["values"] = list(values)
+        captured["label"] = label
+        captured["row_count_when_prompted"] = panel.node_table.rowCount()
+        return 0.014
+
+    panel._choose_roughness_value = _capture
+
+    module.WaterProfilePanel._import_from_batch(panel)
+
+    assert captured["label"] == "渠道糙率"
+    assert captured["values"] == [0.012, 0.014]
+    assert captured["row_count_when_prompted"] == 0
+
+
+def test_import_from_batch_only_collects_channel_structure_roughness_candidates():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(building_name="渠道", section_type="明渠-矩形", n=0.014),
+        _make_batch_result(building_name="虹吸", section_type="倒虹吸", n=0.012),
+        _make_batch_result(building_name="管道", section_type="有压管道", n=0.011),
+        _make_batch_result(building_name="闸室", section_type="退水闸", n=0.013),
+        _make_batch_result(building_name="量水建筑", section_type="量水堰", n=0.015),
+    ])
+    captured = {}
+    siphon_pairs = []
+    pressure_pipe_pairs = []
+
+    def _capture(values, label):
+        captured["values"] = list(values)
+        captured["label"] = label
+        return None
+
+    panel._choose_roughness_value = _capture
+    panel._update_siphon_roughness_overview = lambda pairs: siphon_pairs.extend(pairs)
+    panel._update_pressure_pipe_roughness_overview = lambda pairs: pressure_pipe_pairs.extend(pairs)
+
+    module.WaterProfilePanel._import_from_batch(panel)
+
+    assert captured["label"] == "渠道糙率"
+    assert captured["values"] == [0.014]
+    assert siphon_pairs == [("虹吸", 0.012)]
+    assert pressure_pipe_pairs == [("管道", "")]
+
+
+def test_import_from_batch_applies_uniform_general_roughness_without_showing_dialog():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel.roughness_edit.setText("0.013")
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(building_name="甲", section_type="明渠-矩形", n=0.014),
+        _make_batch_result(building_name="乙", section_type="隧洞-圆形", n=0.014),
+    ])
+
+    with _patched_qinput_dialog(1, "0.015    （出现 1 次）") as capture:
+        module.WaterProfilePanel._import_from_batch(panel)
+
+    assert capture.last_dialog is None
+    assert panel.roughness_edit.text() == "0.014"
+    assert panel.node_table.item(0, 24).text() == "0.0140"
+    assert panel.node_table.item(1, 24).text() == "0.0140"
+
+
+def test_import_from_batch_applies_confirmed_channel_roughness_to_whitelist_rows():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel.roughness_edit.setText("0.013")
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(building_name="明渠甲", section_type="明渠-矩形", n=0.012),
+        _make_batch_result(building_name="渡槽甲", section_type="渡槽-U形", n=0.013),
+        _make_batch_result(building_name="暗涵甲", section_type="暗涵-矩形", n=0.015),
+        _make_batch_result(building_name="倒虹吸甲", section_type="倒虹吸", n=0.016),
+    ])
+
+    with _patched_qinput_dialog(1, "0.014    （出现 1 次）"):
+        module.WaterProfilePanel._import_from_batch(panel)
+
+    assert panel.roughness_edit.text() == "0.014"
+    assert panel.node_table.item(0, 24).text() == "0.0140"
+    assert panel.node_table.item(1, 24).text() == "0.0140"
+    assert panel.node_table.item(2, 24).text() == "0.0140"
+    assert panel.node_table.item(3, 24).text() == "0.0160"
+
+
+def test_import_from_batch_keeps_channel_roughness_rows_unchanged_when_dialog_cancelled():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel.roughness_edit.setText("0.013")
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(building_name="明渠甲", section_type="明渠-矩形", n=0.012),
+        _make_batch_result(building_name="隧洞甲", section_type="隧洞-圆形", n=0.014),
+        _make_batch_result(building_name="暗涵甲", section_type="暗涵-矩形", n=0.015),
+    ])
+
+    with _patched_qinput_dialog(0, "0.014    （出现 1 次）"):
+        module.WaterProfilePanel._import_from_batch(panel)
+
+    assert panel.roughness_edit.text() == "0.013"
+    assert panel.node_table.item(0, 24).text() == "0.0120"
+    assert panel.node_table.item(1, 24).text() == "0.0140"
+    assert panel.node_table.item(2, 24).text() == "0.0150"
+
+
+def test_import_from_batch_excludes_siphon_from_channel_candidates_but_keeps_siphon_overview():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel.roughness_edit.setText("0.013")
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(building_name="明渠甲", section_type="明渠-矩形", n=0.012),
+        _make_batch_result(building_name="倒虹吸甲", section_type="倒虹吸", n=0.016),
+    ])
+    captured = _capture_batch_roughness_overviews(panel)
+
+    with _patched_qinput_dialog(1, "0.012    （出现 1 次）") as dialog_capture:
+        module.WaterProfilePanel._import_from_batch(panel)
+
+    assert dialog_capture.last_dialog is None
+    assert panel.roughness_edit.text() == "0.012"
+    assert panel.node_table.item(0, 24).text() == "0.0120"
+    assert panel.node_table.item(1, 24).text() == "0.0160"
+    assert captured.siphon_pairs == [("倒虹吸甲", 0.016)]
+
+
+def test_import_from_batch_excludes_pressure_pipe_gate_and_other_non_channel_structures():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel.roughness_edit.setText("0.013")
+    _prepare_panel_for_batch_import(module, panel, [
+        _make_batch_result(building_name="明渠甲", section_type="明渠-矩形", n=0.012),
+        _make_batch_result(
+            building_name="有压管甲",
+            section_type="有压管道",
+            n=0.020,
+            raw_result={"is_pressure_pipe": True, "pipe_material": "钢管"},
+        ),
+        _make_batch_result(building_name="退水闸甲", section_type="退水闸", n=0.018),
+        _make_batch_result(building_name="跌水甲", section_type="跌水", n=0.017),
+    ])
+    captured = _capture_batch_roughness_overviews(panel)
+
+    with _patched_qinput_dialog(1, "0.012    （出现 1 次）") as dialog_capture:
+        module.WaterProfilePanel._import_from_batch(panel)
+
+    assert dialog_capture.last_dialog is None
+    assert panel.roughness_edit.text() == "0.012"
+    assert panel.node_table.item(0, 24).text() == "0.0120"
+    assert panel.node_table.item(1, 24).text() == "0.0200"
+    assert panel.node_table.item(2, 24).text() == "0.0180"
+    assert panel.node_table.item(3, 24).text() == "0.0170"
+    assert captured.pressure_pipe_pairs == [("有压管甲", "钢管")]
 
 
 def test_update_table_from_nodes_full_impl_preserves_explicit_zero_turn_radius_text():

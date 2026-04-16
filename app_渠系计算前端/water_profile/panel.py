@@ -2686,6 +2686,111 @@ class WaterProfilePanel(QWidget):
                 pass
         return text in PRESSURE_PIPE_LIKE_STRUCTURE_TEXTS
 
+    @staticmethod
+    def _is_channel_roughness_structure_text(struct_text: str) -> bool:
+        """判断结构类型是否应纳入“渠道糙率”候选白名单。"""
+        text = normalize_section_type_name(struct_text)
+        if not text:
+            return False
+        if text.startswith(("明渠-", "渡槽-", "隧洞-")):
+            return True
+        return bool(normalize_culvert_family_type_name(text))
+
+    @staticmethod
+    def _resolve_batch_import_section_type(raw_section_type: str, raw_result: dict | None = None) -> tuple[str, str]:
+        """统一表1批量结果导入到表3前的结构类型名称。"""
+        raw_result = raw_result or {}
+        section_type = normalize_section_type_name(raw_section_type)
+        culvert_family_type = normalize_culvert_family_type_name(raw_section_type or section_type)
+        struct_map = {
+            "梯形": "明渠-梯形", "矩形": "明渠-矩形", "圆形": "明渠-圆形",
+            "U形": "渡槽-U形", "U形渡槽": "渡槽-U形", "隧洞": "隧洞-圆形", "渡槽": "渡槽-U形",
+            # 兜底：计算引擎返回的简化名（正常流程已在batch注册时修正）
+            "圆拱直墙型": "隧洞-圆拱直墙型",
+            "马蹄形标准Ⅰ型": "隧洞-马蹄形Ⅰ型", "马蹄形标准Ⅱ型": "隧洞-马蹄形Ⅱ型",
+            "矩形暗涵": RECT_CULVERT_FAMILY_TEXT,
+            "暗渠": RECT_CULVERT_FAMILY_TEXT,
+            "矩形暗渠": RECT_CULVERT_FAMILY_TEXT,
+            "暗涵-矩形": RECT_CULVERT_FAMILY_TEXT,
+            "暗涵-圆拱直墙型": ARCH_CULVERT_FAMILY_TEXT,
+            "退水闸": "退水闸",
+        }
+        if (
+            not culvert_family_type
+            and ("暗涵" in section_type or "暗渠" in section_type or section_type == "矩形暗涵")
+            and float(raw_result.get("theta_deg", 0) or 0) > 0
+        ):
+            culvert_family_type = ARCH_CULVERT_FAMILY_TEXT
+
+        if culvert_family_type:
+            section_type = culvert_family_type
+        elif section_type in struct_map:
+            section_type = struct_map[section_type]
+        elif "渡槽-U" in section_type or "U形渡槽" in section_type:
+            section_type = "渡槽-U形"
+        elif "渡槽-矩形" in section_type:
+            section_type = "渡槽-矩形"
+        elif "隧洞-圆拱直墙" in section_type:
+            section_type = "隧洞-圆拱直墙型"
+        elif "隧洞-马蹄形Ⅰ" in section_type:
+            section_type = "隧洞-马蹄形Ⅰ型"
+        elif "隧洞-马蹄形Ⅱ" in section_type:
+            section_type = "隧洞-马蹄形Ⅱ型"
+        elif "暗涵" in section_type or "暗渠" in section_type:
+            section_type = normalize_culvert_family_type_name(section_type) or RECT_CULVERT_FAMILY_TEXT
+        return section_type, culvert_family_type
+
+    def _prepare_batch_import_results(self, results):
+        """预扫表1批量结果，先确定渠道糙率候选与各类概览信息。"""
+        prepared_results = []
+        general_roughness_vals = []
+        siphon_roughness_pairs = []
+        pressure_pipe_params_pairs = []
+
+        for sr in results:
+            raw_result = getattr(sr, 'raw_result', {}) or {}
+            section_type, culvert_family_type = self._resolve_batch_import_section_type(
+                str(getattr(sr, 'section_type', '') or ''),
+                raw_result,
+            )
+            building_name = str(getattr(sr, 'building_name', '') or '')
+            pipe_material = str(
+                getattr(sr, 'pipe_material', '') or raw_result.get('pipe_material', '')
+            ).strip()
+            n_val = getattr(sr, 'n', 0) or ""
+            try:
+                roughness_value = float(n_val) if n_val and str(n_val).strip() else 0.0
+            except (ValueError, TypeError):
+                roughness_value = 0.0
+
+            is_channel_roughness_row = False
+            if self._is_pressure_pipe_like_structure_text(section_type) and building_name.strip():
+                pressure_pipe_params_pairs.append((building_name, pipe_material))
+            elif roughness_value > 0:
+                if "倒虹吸" in section_type:
+                    siphon_roughness_pairs.append(
+                        (building_name or f"倒虹吸{len(siphon_roughness_pairs) + 1}", roughness_value)
+                    )
+                elif self._is_channel_roughness_structure_text(section_type):
+                    general_roughness_vals.append(roughness_value)
+                    is_channel_roughness_row = True
+
+            prepared_results.append({
+                "result": sr,
+                "raw_result": raw_result,
+                "section_type": section_type,
+                "culvert_family_type": culvert_family_type,
+                "pipe_material": pipe_material,
+                "is_channel_roughness_row": is_channel_roughness_row,
+            })
+
+        return (
+            prepared_results,
+            general_roughness_vals,
+            siphon_roughness_pairs,
+            pressure_pipe_params_pairs,
+        )
+
     @classmethod
     def _is_pressure_pipe_like_node(cls, node) -> bool:
         if getattr(node, "is_pressure_pipe", False):
@@ -7380,56 +7485,42 @@ class WaterProfilePanel(QWidget):
 
         # 同步批量计算面板中的渠道基础信息
         self._sync_batch_settings()
+        (
+            prepared_results,
+            general_roughness_vals,
+            siphon_roughness_pairs,
+            pressure_pipe_params_pairs,
+        ) = self._prepare_batch_import_results(results)
+        chosen_n = self._choose_roughness_value(general_roughness_vals, "渠道糙率")
+        if chosen_n is not None:
+            self.roughness_edit.setText(f"{chosen_n:.4f}".rstrip('0').rstrip('.'))
 
         self._updating_cells = True
         table_signal_blocker = QSignalBlocker(self.node_table)
         self._clear_nodes()
         imported = 0
         flow_segment_map = {}  # {流量段编号: 设计流量}
-        general_roughness_vals = []   # 收集非倒虹吸行的糙率
-        siphon_roughness_pairs = []   # 收集倒虹吸行的 (名称, 糙率)
-        pressure_pipe_params_pairs = []  # 收集有压管道行的 (名称, 管材名称)
-
-        # 映射结构形式名称（兼容简化名称 → 完整名称）
-        struct_map = {
-            "梯形": "明渠-梯形", "矩形": "明渠-矩形", "圆形": "明渠-圆形",
-            "U形": "渡槽-U形", "U形渡槽": "渡槽-U形", "隧洞": "隧洞-圆形", "渡槽": "渡槽-U形",
-            # 兜底：计算引擎返回的简化名（正常流程已在batch注册时修正）
-            "圆拱直墙型": "隧洞-圆拱直墙型",
-            "马蹄形标准Ⅰ型": "隧洞-马蹄形Ⅰ型", "马蹄形标准Ⅱ型": "隧洞-马蹄形Ⅱ型",
-            "矩形暗涵": RECT_CULVERT_FAMILY_TEXT,
-            "暗渠": RECT_CULVERT_FAMILY_TEXT,
-            "矩形暗渠": RECT_CULVERT_FAMILY_TEXT,
-            "暗涵-矩形": RECT_CULVERT_FAMILY_TEXT,
-            "暗涵-圆拱直墙型": ARCH_CULVERT_FAMILY_TEXT,
-            "退水闸": "退水闸",
-        }
-
-        for sr in results:
+        for prepared in prepared_results:
+            sr = prepared["result"]
             flow_section = str(getattr(sr, 'flow_section', ''))
             building_name = str(getattr(sr, 'building_name', ''))
-            raw_section_type = str(getattr(sr, 'section_type', '') or '')
-            section_type = normalize_section_type_name(raw_section_type)
-            culvert_family_type = normalize_culvert_family_type_name(raw_section_type or section_type)
-            raw_result = getattr(sr, 'raw_result', {}) or {}
-            if (
-                not culvert_family_type
-                and ("暗涵" in section_type or "暗渠" in section_type or section_type == "矩形暗涵")
-                and float(raw_result.get("theta_deg", 0) or 0) > 0
-            ):
-                culvert_family_type = ARCH_CULVERT_FAMILY_TEXT
+            section_type = prepared["section_type"]
+            culvert_family_type = prepared["culvert_family_type"]
+            raw_result = prepared["raw_result"]
             x = getattr(sr, 'coord_X', 0)
             y = getattr(sr, 'coord_Y', 0)
             B = getattr(sr, 'B', None) or ""
             D = getattr(sr, 'D', None) or ""
             R = getattr(sr, 'R', None) or ""
             m_val = getattr(sr, 'm', None) or ""
-            n_val = getattr(sr, 'n', 0) or ""
+            n_val = (
+                chosen_n
+                if prepared["is_channel_roughness_row"] and chosen_n is not None
+                else getattr(sr, 'n', 0) or ""
+            )
             slope_inv = getattr(sr, 'slope_inv', 0) or ""
             Q = getattr(sr, 'Q', 0) or ""
-            pipe_material = str(
-                getattr(sr, 'pipe_material', '') or raw_result.get('pipe_material', '')
-            ).strip()
+            pipe_material = prepared["pipe_material"]
             compound_params = normalize_compound_trapezoid_params(raw_result)
             local_loss_ratio = (
                 getattr(sr, 'local_loss_ratio', 0.0)
@@ -7443,41 +7534,6 @@ class WaterProfilePanel(QWidget):
                 getattr(sr, 'use_increase', raw_result.get('use_increase', raw_result.get('_use_increase', True))),
                 default=True,
             )
-
-            if culvert_family_type:
-                section_type = culvert_family_type
-            elif section_type in struct_map:
-                section_type = struct_map[section_type]
-            # 模糊匹配增强
-            elif "渡槽-U" in section_type or "U形渡槽" in section_type:
-                section_type = "渡槽-U形"
-            elif "渡槽-矩形" in section_type:
-                section_type = "渡槽-矩形"
-            elif "隧洞-圆拱直墙" in section_type:
-                section_type = "隧洞-圆拱直墙型"
-            elif "隧洞-马蹄形Ⅰ" in section_type:
-                section_type = "隧洞-马蹄形Ⅰ型"
-            elif "隧洞-马蹄形Ⅱ" in section_type:
-                section_type = "隧洞-马蹄形Ⅱ型"
-            elif "暗涵" in section_type or "暗渠" in section_type:
-                section_type = normalize_culvert_family_type_name(section_type) or RECT_CULVERT_FAMILY_TEXT
-
-            # 收集糙率分类（倒虹吸 vs 一般建筑物）
-            try:
-                _n_float = float(n_val) if n_val and str(n_val).strip() else 0.0
-            except (ValueError, TypeError):
-                _n_float = 0.0
-            if self._is_pressure_pipe_like_structure_text(section_type) and str(building_name or "").strip():
-                pressure_pipe_params_pairs.append(
-                    (building_name, pipe_material)
-                )
-            elif _n_float > 0:
-                if "倒虹吸" in section_type:
-                    siphon_roughness_pairs.append((building_name or f"倒虹吸{len(siphon_roughness_pairs)+1}", _n_float))
-                else:
-                    # 排除闸类占位行（闸类无糙率意义）
-                    if "闸" not in section_type and "分水" not in section_type:
-                        general_roughness_vals.append(_n_float)
 
             # 收集流量段信息
             try:
@@ -7631,10 +7687,6 @@ class WaterProfilePanel(QWidget):
 
         auto_resize_table(self.node_table)
 
-        # 自动填充渠道糙率——值不一致时弹窗让用户选择
-        chosen_n = self._choose_roughness_value(general_roughness_vals, "渠道糙率")
-        if chosen_n is not None:
-            self.roughness_edit.setText(f"{chosen_n:.4f}".rstrip('0').rstrip('.'))
         # 倒虹吸糙率只读概览（每个倒虹吸独立显示）
         self._update_siphon_roughness_overview(siphon_roughness_pairs)
         self._update_pressure_pipe_roughness_overview(pressure_pipe_params_pairs)
@@ -9374,19 +9426,24 @@ class WaterProfilePanel(QWidget):
             cnt = counter[v]
             options.append(f"{v}    （出现 {cnt} 次）")
         from PySide6.QtWidgets import QInputDialog
-        chosen, ok = QInputDialog.getItem(
-            self, f"选择{label}",
-            f"批量计算中不同建筑物的{label}值不一致，请选择一个作为全局{label}：",
-            options, 0, False)
-        if ok and chosen:
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle(f"选择{label}")
+        dialog.setLabelText(f"同步到表3时，不同建筑物的{label}值不一致，请选择一个用于本次导入及后续计算：")
+        dialog.setComboBoxItems(options)
+        dialog.setComboBoxEditable(False)
+        dialog.setTextValue(options[0])
+        dialog.setOkButtonText("确定")
+        dialog.setCancelButtonText("取消")
+        if dialog.exec():
+            chosen = dialog.textValue() or options[0]
             # 从选项文本中提取数值
             val_str = chosen.split("（")[0].strip()
             try:
                 return float(val_str)
             except ValueError:
                 return unique_vals[0]
-        # 用户取消，取众数
-        return counter.most_common(1)[0][0]
+        # 用户取消，保留现有差异
+        return None
 
     def _fval(self, edit, default=0.0):
         t = edit.text().strip()
