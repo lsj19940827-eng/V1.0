@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 import tempfile
 import urllib.request
@@ -324,3 +323,7 @@ def main():
     )
     print(f"补丁链接：{result['patch_url_direct']}")
     print(f"GitHub Release：{result['release_url']}")
+
+
+if __name__ == "__main__":
+    main()

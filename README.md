@@ -9,6 +9,7 @@
 当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及连续承压线路的“整线纵断面 + 中心线高程导出 + 整线弹窗”规则。
 表3基础设置区里的“设计流量 / 加大流量”现已收口为共享当前流量段的只读查看组：主界面默认只显示当前段（默认第一段）的名称和值，不再展示整串逗号文本，也不再提供“编辑全部”入口；需要改值时，回原始 Excel 来源处理。
 当前口径下，主界面这两个流量字段只负责查看和切换当前流量段；当上游来源刷新设计流量时，系统仍会按最新设计流量整体重算全部加大流量。批量同步后，当前流量段会回到第一段；项目重开后主界面也默认回到第一段显示。
+明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道这 6 个设计面板现在统一支持“按比例 / 按Q加大”二选一输入：保留原“考虑加大流量”开关，默认仍按比例；`按比例` 允许留空并继续自动查表；切到“按Q加大”后，输入的是加大后的总流量，且必须严格大于设计流量。旧工程仍按原比例方式打开；关闭开关只隐藏这组输入，不会清掉上一次内容。结果页、TXT、Word、DXF 会同时写清输入方式、用户输入值和系统换算值。
 当前版本里，`xx管` 纵断面已经把“画线”和“取值”分开：导入时会把用户选中的原始纵断面多段线保存到 route 级 `raw_profile_polyline`，导出时 `centerline_draw_segments` 直接按这条原线裁切后出图；`profile_breakpoint_records` 继续只负责工程折点接口和覆盖判断；当前表格里的“管中心线高程（米）”仍由 `centerline_records` 在平面桩号位置取值。工程折点指原始轴线上真正用于分段、转折和校验的点，不拿普通采样点充数。
 连续承压链里的命名 `有压管道 / 定向钻 / 顶管` 现在统一按逐行正式计损：中间命名承压段也会把每一行的承压损失显示到表3，并直接参与总损失、累计损失和水位递推；父命名组继续只保留在有压管道窗口里做汇总，不再参与表3重复累计。
 对于这类已经锁定的逐行承压行，表3列38仍保持只读；如果需要人工采用值，现在直接双击列38详情，在弹窗底部填写“本行采用值”即可，保存后会联动刷新总损失、累计损失和后续水位，恢复自动计算也走同一入口。
@@ -48,8 +49,9 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 隧洞断面：`calc_渠系计算算法内核/隧洞设计.py` 统一承接圆形、平底圆形、圆拱直墙型与马蹄形；`app_渠系计算前端/tunnel/geometry.py` 作为共享几何真源，给隧洞面板绘图、DXF、批量结果和表3复算共用。
 - 暗涵断面：既有 `calc_渠系计算算法内核/矩形暗涵设计.py` 与 `app_渠系计算前端/culvert/` 继续承接 `暗涵-矩形`；新增 `暗涵-圆拱直墙型` 的文档口径要求复用圆拱几何、分叉暗涵规则，并保留 `B / H_total / theta_deg` 进入共享结果、表3和导出链路。
 - 专项模块：`倒虹吸水力计算系统/`、`有压管道/` 提供专项计算能力。
+- 加大流量输入：`app_渠系计算前端/increase_input_helper.py` 统一负责“按比例 / 按Q加大”的换算、空值规则、灰色提示文案和结果摘要；6 个设计面板都复用这套 helper，并继续把内核输入收口到原有比例参数。
 - 自动化验证：`pytest`，测试文件集中在 `tests/`，其中 xx管 整线纵断面会同时覆盖界面、持久化、计算和导出链路。
-- 更新链路：`updater.py`、`update_helper.py`、`app_渠系计算前端/update_dialog.py`、`update_artifact_rules.py`、`tools/build.py`、`tools/release.py`、`tools/release_snapshot.py` 共同负责版本检查、补丁/全量选择、下载包 checksum、运行时文件排除、旧会话残留清理、补丁落地后目标验收、独立安装窗口、补丁兜底和正式发版；`tools/backfill_patch_release.py` 与 `tools/disable_patch_release.py` 则分别负责“基于快照回补 patch”和“临时撤下高风险 patch 字段”这两类运维动作。
+- 更新链路：`updater.py`、`update_helper.py`、`app_渠系计算前端/update_dialog.py`、`update_artifact_rules.py`、`tools/build.py`、`tools/release.py`、`tools/release_snapshot.py` 共同负责版本检查、补丁/全量选择、下载包 checksum、运行时文件排除、旧会话残留清理、补丁落地后目标验收、独立安装窗口、补丁兜底和正式发版；其中 `tools/build.py` 现在还会在打包前按分组校验关键依赖，并显式收集 `latex2mathml` 这类 Word 导出运行时数据文件，避免安装包启动时因缺资源直接退出；`tools/backfill_patch_release.py` 与 `tools/disable_patch_release.py` 则分别负责“基于快照回补 patch”和“临时撤下高风险 patch 字段”。
 - 导出精度：普通模式导出桩号使用 `station_decimals`，xx管 导出桩号使用 `xxpipe_station_decimals`；两者都在导出链路单独格式化，不改主界面的通用桩号显示函数。
 - mixed route 持久化：`PressurePipeManager` 现同时保存 route 级 `longitudinal_nodes`、`raw_profile_polyline` 与 `profile_segments`，用来承接“原线直出 + 平面桩号采样 + 工程折点接口”的混合整线导出。
 - 纵断面绘图与取值分离：`centerline_draw_segments` 只负责导入原线画线，`profile_breakpoint_records` 只负责工程折点接口和覆盖判断；当前表格文字仍继续走 `centerline_records`。
@@ -75,6 +77,8 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 运行针对性测试：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_external_head_loss_unit.py -q`
 - 运行界面口径测试：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py -q`
 - 运行本次相关回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_external_head_loss_unit.py tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_channel_level_options_unit.py tests/test_pressure_pipe_preprocessing_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py tests/test_water_profile_transition_ready_unit.py -q`
+- 运行“按Q加大输入”面板回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_increase_input_mode_panels_unit.py -q`
+- 运行回补 patch 相关回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_backfill_patch_release_unit.py tests/test_build_patch_floor_unit.py tests/test_updater_versioning_unit.py tests/test_updater_install_flow_unit.py tests/test_release_snapshot_unit.py -q`
 - 运行本次窗口联动回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_window_override_unit.py tests/test_external_head_loss_unit.py tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py tests/test_water_profile_transition_ready_unit.py -q`
 - 运行本次 xx管 整线回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_pressure_pipe_export_longitudinal_nodes_unit.py tests/test_pressure_pipe_persistence_with_long_unit.py tests/test_pressure_pipe_longitudinal_utils_unit.py tests/test_pressure_pipe_spatial_calc_unit.py tests/test_xxpipe_export_context_unit.py tests/test_xxpipe_longitudinal_export_unit.py tests/test_xxpipe_axis_elevation_unit.py tests/test_water_profile_transition_ready_unit.py -q`
 - 运行本次 xx管 弹窗与导出回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_water_profile_transition_ready_unit.py tests/test_pressure_pipe_export_longitudinal_nodes_unit.py tests/test_xxpipe_longitudinal_export_unit.py tests/test_xxpipe_axis_elevation_unit.py -q`
@@ -102,6 +106,8 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 ## 搜索记录
 
 - 2026-04-17：本次为既有在线更新与正式发版链路加固，README 已有搜索记录，继续基于仓库现有更新器、补丁构建和发版脚本实现，未重复执行外部方案搜索。
+- 2026-04-17：本次为既有 6 个设计面板统一支持“按比例 / 按Q加大”输入，README 已有搜索记录，继续基于仓库现有面板、多工况和导出链路实现，未重复执行外部方案搜索。
+- 2026-04-16：本次为既有正式发版链路内补挂 `v1.3.0` 近版本 patch，README 已有搜索记录，继续基于仓库现有 `release.py / updater.py / patch_builder.py` 方案实现，未重复执行外部方案搜索。
 - 2026-04-15：本次为既有表3流量段交互口径的文档同步，README 已有搜索记录，继续基于已确定方案更新说明，未重复执行外部方案搜索。
 - 2026-04-13：本次为既有连续承压链逐行计损规则收口，README 已有搜索记录，继续基于仓库现有计算与回写链路实现，未重复执行外部方案搜索。
 - 2026-04-14：本次为既有矩形暗涵升级为暗涵家族并落地 `暗涵-圆拱直墙型`，README 已有搜索记录，继续基于仓库现有暗涵/隧洞/表3/导出链路实现，未重复执行外部方案搜索。
@@ -113,9 +119,11 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 ## 已完成功能列表
 
 - 明渠设计面板已新增“复式梯形”断面，支持 6 个固定几何参数、分段公式、断面图、DXF 和 Word 导出。
+- 明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道 6 个设计面板已统一支持“按比例 / 按Q加大”二选一输入；`按比例` 可留空自动查表，`按Q加大` 必须输入加大后的总流量且大于设计流量；旧工程默认仍按比例回显，多工况复制、恢复和导出说明会一起带上新模式和值。
 - 批量计算已新增“明渠-复式梯形”，主表、参数弹窗、Excel 导入导出和结果说明全部支持新断面。
 - 推求水面线已补上“明渠-复式梯形”的最小兼容，能保留 `m1/B1/m2/B2/m3/h1` 并按新公式参与水力计算。
 - 构建和发版现在会在进入 PyInstaller 前先校验 Word 导出依赖，缺失 `python-docx / latex2mathml / lxml` 时直接中止并提示安装命令；打包时还会把 `latex2mathml` 的运行时文本资源一并带进安装包，避免主程序启动时因为缺少 `unimathsymbols.txt` 直接退出。
+- 已支持对已发布正式版单独回补 patch：当前通过 `tools/backfill_patch_release.py` 基于 `.release-snapshots/` 中固化的正式包、manifest 和 `version.json` 回补 patch，补挂到现有 GitHub Release，并只补齐 Gist 里的 patch 字段，不再依赖会漂移的本地 `dist`。
 - 表3普通行、渐变段行、累计损失和水位递推的基础链路已接通。
 - 倒虹吸和命名有压管道组支持外部专项计算后回写总损失。
 - 空名称普通有压管道行现在可在 xx管，以及已形成连续承压整线的 xx渠 场景下，独立显示沿程损失、承压弯头损失和本行承压段总损失。

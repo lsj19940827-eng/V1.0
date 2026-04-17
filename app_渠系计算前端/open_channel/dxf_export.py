@@ -7,12 +7,28 @@
 """
 
 import math
+from app_渠系计算前端.increase_input_helper import (
+    INCREASE_MODE_PERCENT,
+    build_increase_summary_lines,
+)
 
 from app_渠系计算前端.dxf_common import (
     add_case_title,
     ensure_tracked_msp,
     setup_section_dxf_document,
 )
+
+
+def _increase_lines(params, result):
+    """生成DXF文字块里的加大流量输入说明。"""
+    return list(build_increase_summary_lines(
+        use_increase=params.get('use_increase', True),
+        mode=params.get('inc_mode', INCREASE_MODE_PERCENT),
+        percent_text=params.get('inc_pct_text', ''),
+        q_increased_text=params.get('inc_q_text', ''),
+        result_increase_percent=result.get('increase_percent', 0.0),
+        result_q_increased=result.get('Q_increased', params.get('Q', 0.0)),
+    ))
 
 
 def export_open_channel_dxf(filepath, result, input_params, scale_denom=100):
@@ -266,8 +282,7 @@ def _draw_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
         lines += [
             '',
             '[加大流量工况]',
-            f'加大比例 = {inc_pct_str}',
-            f'Q\u589e = {Q_inc:.3f} m\u00b3/s',
+            *_increase_lines(input_params, result),
             f'h\u589e = {h_inc:.3f} m',
             f'V\u589e = {V_inc:.3f} m/s',
             f'Fb = {Fb:.3f} m',
@@ -450,8 +465,7 @@ def _draw_compound_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
         lines += [
             '',
             '[加大流量工况]',
-            f'加大比例 = {inc_pct_str}',
-            f'Q\u589e = {Q_inc:.3f} m\u00b3/s',
+            *_increase_lines(input_params, result),
             f'h\u589e = {h_inc:.3f} m',
             f'V\u589e = {V_inc:.3f} m/s',
             f'Fb = {Fb:.3f} m',
@@ -572,8 +586,7 @@ def _draw_circular(msp, result, p, sf=1.0, scale_denom=100):
         lines += [
             '',
             '[加大流量工况]',
-            f'加大比例 = {inc_str}',
-            f'Q\u589e = {Q_inc:.3f} m\u00b3/s',
+            *_increase_lines(input_params, result),
             f'y\u589e = {y_i:.3f} m',
             f'V\u589e = {V_i:.3f} m/s',
             f'Fb\u589e = {FB_i:.3f} m',
@@ -718,8 +731,7 @@ def _draw_u_section(msp, result, p, sf=1.0, scale_denom=100):
         lines += [
             '',
             '[加大工况]',
-            f'加大比例 = {inc_pct_str}',
-            f'Q\u589e = {Q_inc:.3f} m\u00b3/s',
+            *_increase_lines(input_params, result),
             f'h\u589e = {h_inc:.3f} m',
             f'V\u589e = {V_inc:.3f} m/s',
             f'Fb = {Fb:.3f} m',

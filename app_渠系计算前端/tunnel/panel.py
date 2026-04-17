@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea,
-    QPushButton, QApplication,
+    QPushButton, QApplication, QRadioButton, QButtonGroup,
 )
 from PySide6.QtCore import Qt, Signal
 from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
@@ -90,6 +90,14 @@ from app_渠系计算前端.formula_renderer import (
     load_formula_page, make_plain_html,
     HelpPageBuilder
 )
+from app_渠系计算前端.increase_input_helper import (
+    INCREASE_MODE_PERCENT,
+    INCREASE_MODE_Q_INCREASED,
+    build_increase_hint_text,
+    build_increase_summary_lines,
+    normalize_increase_mode,
+    resolve_increase_input,
+)
 from app_渠系计算前端.plot_title_utils import (
     apply_flow_velocity_title,
     format_flow_velocity_metrics,
@@ -141,6 +149,8 @@ class TunnelPanel(QWidget):
         self._init_ui()
         self._setup_result_dirty_tracking()
         self._rebuild_case_tags()
+        # 首次进入时按当前工况同步界面可见性，避免两套加大流量输入同时显示。
+        self._load_case(self._current_case_idx)
 
     # ================================================================
     # 默认工况
@@ -152,7 +162,7 @@ class TunnelPanel(QWidget):
             'section_type': '圆形',
             'Q': '10.0', 'n': '0.014', 'slope_inv': '2000',
             'v_min': '0.1', 'v_max': '100.0',
-            'inc_checked': True, 'inc_pct': '',
+            'inc_checked': True, 'inc_pct': '', 'inc_mode': INCREASE_MODE_PERCENT, 'inc_q_text': '',
             'detail_checked': True,
             # 圆形参数
             'D': '',
@@ -294,9 +304,30 @@ class TunnelPanel(QWidget):
         self.inc_cb.setChecked(True)
         self.inc_cb.stateChanged.connect(self._on_inc_toggle)
         fl.addWidget(self.inc_cb)
-        self.inc_edit = self._field(fl, "流量加大比例 (%):", "")
+        self.inc_mode_row = QWidget()
+        self.inc_mode_row_lay = QHBoxLayout(self.inc_mode_row)
+        self.inc_mode_row_lay.setContentsMargins(0, 0, 0, 0)
+        self.inc_mode_row_lay.setSpacing(10)
+        self.inc_mode_row_lay.addWidget(self._hint("输入方式:"))
+        self.inc_mode_group = QButtonGroup(self)
+        self.inc_mode_percent_rb = QRadioButton("按比例")
+        self.inc_mode_q_rb = QRadioButton("按Q加大")
+        self.inc_mode_group.addButton(self.inc_mode_percent_rb)
+        self.inc_mode_group.addButton(self.inc_mode_q_rb)
+        self.inc_mode_percent_rb.setChecked(True)
+        self.inc_mode_percent_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_q_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_row_lay.addWidget(self.inc_mode_percent_rb)
+        self.inc_mode_row_lay.addWidget(self.inc_mode_q_rb)
+        self.inc_mode_row_lay.addStretch()
+        fl.addWidget(self.inc_mode_row)
+        self.inc_lbl, self.inc_edit = self._field2(fl, "流量加大比例 (%):", "")
+        self.inc_q_lbl, self.inc_q_edit = self._field2(fl, "加大流量 Q加大 (m³/s):", "")
+        self.inc_edit.textChanged.connect(self._refresh_increase_hint)
+        self.inc_q_edit.textChanged.connect(self._refresh_increase_hint)
         self.inc_hint = QLabel("(留空则自动计算)")
         self.inc_hint.setStyleSheet(INPUT_HINT_STYLE)
+        self.inc_derived_hint = self.inc_hint
         fl.addWidget(self.inc_hint)
 
         fl.addWidget(self._sep())
@@ -384,8 +415,37 @@ class TunnelPanel(QWidget):
 
     def _on_inc_toggle(self, _state):
         enabled = self.inc_cb.isChecked()
-        self.inc_edit.setVisible(enabled)
+        is_percent_mode = self._current_increase_mode() == INCREASE_MODE_PERCENT
+        self.inc_mode_row.setVisible(enabled)
+        self.inc_lbl.setVisible(enabled and is_percent_mode)
+        self.inc_edit.setVisible(enabled and is_percent_mode)
+        self.inc_q_lbl.setVisible(enabled and not is_percent_mode)
+        self.inc_q_edit.setVisible(enabled and not is_percent_mode)
         self.inc_hint.setVisible(enabled)
+        self._refresh_increase_hint()
+
+    def _current_increase_mode(self):
+        return INCREASE_MODE_Q_INCREASED if self.inc_mode_q_rb.isChecked() else INCREASE_MODE_PERCENT
+
+    def _set_increase_mode(self, mode):
+        normalized = normalize_increase_mode(mode)
+        if normalized == INCREASE_MODE_Q_INCREASED:
+            self.inc_mode_q_rb.setChecked(True)
+        else:
+            self.inc_mode_percent_rb.setChecked(True)
+        self._on_inc_toggle(None)
+
+    def _on_inc_mode_changed(self, _checked):
+        self._on_inc_toggle(None)
+
+    def _refresh_increase_hint(self):
+        self.inc_hint.setText(build_increase_hint_text(
+            use_increase=self.inc_cb.isChecked(),
+            mode=self._current_increase_mode(),
+            design_q_text=self.Q_edit.text(),
+            percent_text=self.inc_edit.text(),
+            q_increased_text=self.inc_q_edit.text(),
+        ))
 
     # ----------------------------------------------------------------
     def _build_output(self, parent):
@@ -448,6 +508,8 @@ class TunnelPanel(QWidget):
         c['v_max'] = self.vmax_edit.text()
         c['inc_checked'] = self.inc_cb.isChecked()
         c['inc_pct'] = self.inc_edit.text()
+        c['inc_mode'] = self._current_increase_mode()
+        c['inc_q_text'] = self.inc_q_edit.text()
         c['detail_checked'] = self.detail_cb.isChecked()
         # 圆形参数
         c['D'] = self.D_edit.text()
@@ -477,6 +539,8 @@ class TunnelPanel(QWidget):
         self.vmax_edit.setText(c.get('v_max', '100.0'))
         self.inc_cb.setChecked(c.get('inc_checked', True))
         self.inc_edit.setText(c.get('inc_pct', ''))
+        self.inc_q_edit.setText(c.get('inc_q_text', ''))
+        self._set_increase_mode(c.get('inc_mode', INCREASE_MODE_PERCENT))
         self.detail_cb.setChecked(c.get('detail_checked', True))
         # 圆形参数
         self.D_edit.setText(c.get('D', ''))
@@ -660,6 +724,7 @@ class TunnelPanel(QWidget):
             return
         if 0 <= self._current_case_idx < len(self._cases):
             self._cases[self._current_case_idx]['Q'] = text
+        self._refresh_increase_hint()
         self._rebuild_case_tags()
 
     def _setup_result_dirty_tracking(self):
@@ -772,7 +837,7 @@ class TunnelPanel(QWidget):
                     if k not in ('custom_label', 'Q'):
                         c[k] = v
             else:
-                for k in ('n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct', 'detail_checked'):
+                for k in ('n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text', 'detail_checked'):
                     c[k] = src.get(k, c.get(k))
         InfoBar.success(title="已复制", content=f"参数已复制到其余 {n_copied} 个工况",
                         parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
@@ -791,7 +856,7 @@ class TunnelPanel(QWidget):
                 if k not in ('custom_label', 'Q'):
                     cur[k] = v
         else:
-            for k in ('n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct', 'detail_checked'):
+            for k in ('n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text', 'detail_checked'):
                 cur[k] = prev.get(k, cur.get(k))
         self._load_case(self._current_case_idx)
         InfoBar.success(title="已复制", content=f"已从工况{self._current_case_idx}复制参数",
@@ -901,10 +966,16 @@ class TunnelPanel(QWidget):
             raise ValueError("不淤流速必须小于不冲流速")
 
         use_increase = case_dict.get('inc_checked', True)
-        inc_text = case_dict.get('inc_pct', '')
-        manual_increase = float(inc_text) if inc_text.strip() else None
-        if not use_increase:
-            manual_increase = 0
+        increase_resolution = resolve_increase_input(
+            use_increase=use_increase,
+            mode=case_dict.get('inc_mode', INCREASE_MODE_PERCENT),
+            design_q=Q,
+            percent_text=case_dict.get('inc_pct', ''),
+            q_increased_text=case_dict.get('inc_q_text', ''),
+            disabled_percent=0.0,
+        )
+        manual_increase = increase_resolution.manual_increase_percent
+        inc_mode = increase_resolution.mode
 
         input_params = {
             'Q': Q, 'n': n, 'slope_inv': slope_inv,
@@ -912,6 +983,9 @@ class TunnelPanel(QWidget):
             'section_type': stype, 'manual_increase': manual_increase,
             'use_increase': use_increase,
             'detail_checked': case_dict.get('detail_checked', True),
+            'inc_mode': inc_mode,
+            'inc_pct_text': case_dict.get('inc_pct', ''),
+            'inc_q_text': case_dict.get('inc_q_text', ''),
         }
 
         if stype == "平底圆形":
@@ -1002,6 +1076,17 @@ class TunnelPanel(QWidget):
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         out = ["=" * 70, f"  {title}", "=" * 70, "", msg, "", "-" * 70, "请修正后重新计算。", "=" * 70]
         self.result_text.setHtml(make_plain_html("\n".join(out)))
+
+    def _increase_summary_lines(self, params, result):
+        """生成加大流量输入说明。"""
+        return build_increase_summary_lines(
+            use_increase=params.get('use_increase', True),
+            mode=params.get('inc_mode', INCREASE_MODE_PERCENT),
+            percent_text=params.get('inc_pct_text', ''),
+            q_increased_text=params.get('inc_q_text', ''),
+            result_increase_percent=result.get('increase_percent', 0.0),
+            result_q_increased=result.get('Q_increased', params.get('Q', 0.0)),
+        )
 
     # ================================================================
     # 结果显示
@@ -1112,7 +1197,6 @@ class TunnelPanel(QWidget):
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']; i = 1.0 / slope_inv
         v_min, v_max = p['v_min'], p['v_max']
-        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
         stype = p.get('section_type', '圆形')
 
         A_total = result.get('A_total', 0)
@@ -1160,8 +1244,8 @@ class TunnelPanel(QWidget):
             use_increase = p.get('use_increase', True)
             if use_increase:
                 o.append("【加大流量工况】")
-                o.append(f"  加大比例 = {inc_pct:.1f}% {inc_src}")
-                o.append(f"  加大流量 = {Q_inc:.3f} m³/s")
+                for line in self._increase_summary_lines(p, result):
+                    o.append(f"  {line}")
                 o.append(f"  加大水深 = {h_inc:.3f} m, 流速 = {V_inc:.3f} m/s")
                 o.append(f"  净空高度 = {fb_hgt_inc:.3f} m, 净空比例 = {fb_pct_inc:.1f}%")
                 o.append("")
@@ -1206,8 +1290,8 @@ class TunnelPanel(QWidget):
             use_increase = p.get('use_increase', True)
             if use_increase:
                 o.append("【四、加大流量工况】")
-                o.append(f"  加大比例 = {inc_pct:.1f}% {inc_src}")
-                o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+                for line in self._increase_summary_lines(p, result):
+                    o.append(f"  {line}")
                 o.append(f"  水深 h加大 = {h_inc:.3f} m")
                 o.append(f"  过水面积 A加大 = {A_inc:.3f} m², 湿周 χ加大 = {P_inc:.3f} m")
                 o.append(f"  水力半径 R加大 = {R_hyd_inc:.3f} m")
@@ -1244,7 +1328,6 @@ class TunnelPanel(QWidget):
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']; i = 1.0 / slope_inv
         v_min, v_max = p['v_min'], p['v_max']
-        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
         stype = self.input_params.get('section_type', '圆形')
 
         A_total = result.get('A_total', 0)
@@ -1312,8 +1395,8 @@ class TunnelPanel(QWidget):
             use_increase = p.get('use_increase', True)
             if use_increase:
                 o.append("【加大流量工况】")
-                o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
-                o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+                for line in self._increase_summary_lines(p, result):
+                    o.append(f"  {line}")
                 o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
                 o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
                 o.append(f"  净空高度 Fb加大 = {fb_hgt_inc:.3f} m")
@@ -1539,19 +1622,16 @@ class TunnelPanel(QWidget):
             # 加大流量工况
             use_increase = p.get('use_increase', True)
             if use_increase:
-              o.append("【四、加大流量工况计算】")
-              o.append("")
-              o.append(f"  1. 加大流量计算:")
-              o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
-            o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
-            o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
-            o.append(f"           = {Q_inc:.3f} m³/s")
-            o.append("")
-
-            o.append("  2. 加大水深计算:")
-            o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
-            o.append(f"      h加大 = {h_inc:.3f} m")
-            o.append("")
+                o.append("【四、加大流量工况计算】")
+                o.append("")
+                o.append("  1. 加大流量输入说明:")
+                for line in self._increase_summary_lines(p, result):
+                    o.append(f"      {line}")
+                o.append("")
+                o.append("  2. 加大水深计算:")
+                o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
+                o.append(f"      h加大 = {h_inc:.3f} m")
+                o.append("")
 
             # 加大工况过水面积和湿周
             if stype == "圆形":

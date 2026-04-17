@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea,
-    QPushButton, QApplication,
+    QPushButton, QApplication, QRadioButton, QButtonGroup,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
@@ -92,6 +92,14 @@ from app_渠系计算前端.formula_renderer import (
     wrap_with_katex, load_formula_page, make_plain_html,
     HelpPageBuilder
 )
+from app_渠系计算前端.increase_input_helper import (
+    INCREASE_MODE_PERCENT,
+    INCREASE_MODE_Q_INCREASED,
+    build_increase_summary_lines,
+    build_increase_hint_text,
+    normalize_increase_mode,
+    resolve_increase_input,
+)
 from app_渠系计算前端.plot_title_utils import apply_flow_velocity_title
 from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
@@ -131,6 +139,8 @@ class AqueductPanel(QWidget):
         self._init_ui()
         self._setup_result_dirty_tracking()
         self._rebuild_case_tags()
+        # 首次进入时按当前工况同步界面可见性，避免两套加大流量输入同时显示。
+        self._load_case(self._current_case_idx)
 
     # ================================================================
     # UI 构建
@@ -267,9 +277,30 @@ class AqueductPanel(QWidget):
         self.inc_cb.setChecked(True)
         self.inc_cb.stateChanged.connect(self._on_inc_toggle)
         fl.addWidget(self.inc_cb)
-        self.inc_edit = self._field(fl, "流量加大比例 (%):", "")
+        self.inc_mode_row = QWidget()
+        self.inc_mode_row_lay = QHBoxLayout(self.inc_mode_row)
+        self.inc_mode_row_lay.setContentsMargins(0, 0, 0, 0)
+        self.inc_mode_row_lay.setSpacing(10)
+        self.inc_mode_row_lay.addWidget(self._hint("输入方式:"))
+        self.inc_mode_group = QButtonGroup(self)
+        self.inc_mode_percent_rb = QRadioButton("按比例")
+        self.inc_mode_q_rb = QRadioButton("按Q加大")
+        self.inc_mode_group.addButton(self.inc_mode_percent_rb)
+        self.inc_mode_group.addButton(self.inc_mode_q_rb)
+        self.inc_mode_percent_rb.setChecked(True)
+        self.inc_mode_percent_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_q_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_row_lay.addWidget(self.inc_mode_percent_rb)
+        self.inc_mode_row_lay.addWidget(self.inc_mode_q_rb)
+        self.inc_mode_row_lay.addStretch()
+        fl.addWidget(self.inc_mode_row)
+        self.inc_lbl, self.inc_edit = self._field2(fl, "流量加大比例 (%):", "")
+        self.inc_q_lbl, self.inc_q_edit = self._field2(fl, "加大流量 Q加大 (m³/s):", "")
+        self.inc_edit.textChanged.connect(self._refresh_increase_hint)
+        self.inc_q_edit.textChanged.connect(self._refresh_increase_hint)
         self.inc_hint = QLabel("(留空则自动计算)")
         self.inc_hint.setStyleSheet(INPUT_HINT_STYLE)
+        self.inc_derived_hint = self.inc_hint
         fl.addWidget(self.inc_hint)
 
         fl.addWidget(self._sep())
@@ -343,8 +374,48 @@ class AqueductPanel(QWidget):
 
     def _on_inc_toggle(self, _state):
         enabled = self.inc_cb.isChecked()
-        self.inc_edit.setVisible(enabled)
+        is_percent_mode = self._current_increase_mode() == INCREASE_MODE_PERCENT
+        self.inc_mode_row.setVisible(enabled)
+        self.inc_lbl.setVisible(enabled and is_percent_mode)
+        self.inc_edit.setVisible(enabled and is_percent_mode)
+        self.inc_q_lbl.setVisible(enabled and not is_percent_mode)
+        self.inc_q_edit.setVisible(enabled and not is_percent_mode)
         self.inc_hint.setVisible(enabled)
+        self._refresh_increase_hint()
+
+    def _current_increase_mode(self):
+        return INCREASE_MODE_Q_INCREASED if self.inc_mode_q_rb.isChecked() else INCREASE_MODE_PERCENT
+
+    def _set_increase_mode(self, mode):
+        normalized = normalize_increase_mode(mode)
+        if normalized == INCREASE_MODE_Q_INCREASED:
+            self.inc_mode_q_rb.setChecked(True)
+        else:
+            self.inc_mode_percent_rb.setChecked(True)
+        self._on_inc_toggle(None)
+
+    def _on_inc_mode_changed(self, _checked):
+        self._on_inc_toggle(None)
+
+    def _refresh_increase_hint(self):
+        self.inc_hint.setText(build_increase_hint_text(
+            use_increase=self.inc_cb.isChecked(),
+            mode=self._current_increase_mode(),
+            design_q_text=self.Q_edit.text(),
+            percent_text=self.inc_edit.text(),
+            q_increased_text=self.inc_q_edit.text(),
+        ))
+
+    def _get_increase_summary_lines(self, params, result):
+        """生成加大流量输入方式说明。"""
+        return build_increase_summary_lines(
+            use_increase=params.get('use_increase', True),
+            mode=params.get('inc_mode', INCREASE_MODE_PERCENT),
+            percent_text=params.get('inc_pct_text', ''),
+            q_increased_text=params.get('inc_q_text', ''),
+            result_increase_percent=result.get('increase_percent', 0.0),
+            result_q_increased=result.get('Q_increased', params.get('Q', 0.0)),
+        )
 
     # ----------------------------------------------------------------
     # 输出面板
@@ -485,7 +556,7 @@ class AqueductPanel(QWidget):
             'section_type': 'U形',
             'Q': '5.0', 'n': '0.014', 'slope_inv': '3000',
             'v_min': '0.1', 'v_max': '100.0',
-            'inc_checked': True, 'inc_pct': '',
+            'inc_checked': True, 'inc_pct': '', 'inc_mode': INCREASE_MODE_PERCENT, 'inc_q_text': '',
             'detail_checked': True,
             'R': '',
             'ratio': '', 'B': '',
@@ -504,6 +575,8 @@ class AqueductPanel(QWidget):
         c['v_max'] = self.vmax_edit.text()
         c['inc_checked'] = self.inc_cb.isChecked()
         c['inc_pct'] = self.inc_edit.text()
+        c['inc_mode'] = self._current_increase_mode()
+        c['inc_q_text'] = self.inc_q_edit.text()
         c['detail_checked'] = self.detail_cb.isChecked()
         c['R'] = self.R_edit.text()
         c['ratio'] = self.ratio_edit.text()
@@ -529,6 +602,8 @@ class AqueductPanel(QWidget):
         self.vmax_edit.setText(c.get('v_max', '100.0'))
         self.inc_cb.setChecked(c.get('inc_checked', True))
         self.inc_edit.setText(c.get('inc_pct', ''))
+        self.inc_q_edit.setText(c.get('inc_q_text', ''))
+        self._set_increase_mode(c.get('inc_mode', INCREASE_MODE_PERCENT))
         self.detail_cb.setChecked(c.get('detail_checked', True))
         self.R_edit.setText(c.get('R', ''))
         self.ratio_edit.setText(c.get('ratio', ''))
@@ -659,6 +734,7 @@ class AqueductPanel(QWidget):
             return
         if 0 <= self._current_case_idx < len(self._cases):
             self._cases[self._current_case_idx]['Q'] = text
+        self._refresh_increase_hint()
         self._rebuild_case_tags()
 
     def _setup_result_dirty_tracking(self):
@@ -755,7 +831,7 @@ class AqueductPanel(QWidget):
         self._mark_results_dirty()
         src = self._cases[self._current_case_idx]
         keys = ('section_type', 'n', 'slope_inv', 'v_min', 'v_max',
-                'inc_checked', 'inc_pct', 'detail_checked',
+                'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text', 'detail_checked',
                 'R', 'ratio', 'B', 'chamfer_angle', 'chamfer_len')
         for i, case in enumerate(self._cases):
             if i != self._current_case_idx:
@@ -779,7 +855,7 @@ class AqueductPanel(QWidget):
         prev = self._cases[self._current_case_idx - 1]
         curr = self._cases[self._current_case_idx]
         for k in ('section_type', 'n', 'slope_inv', 'v_min', 'v_max',
-                   'inc_checked', 'inc_pct', 'detail_checked',
+                   'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text', 'detail_checked',
                    'R', 'ratio', 'B', 'chamfer_angle', 'chamfer_len'):
             curr[k] = prev[k]
         self._load_case(self._current_case_idx)
@@ -836,7 +912,16 @@ class AqueductPanel(QWidget):
             raise ValueError(f"工况{case_num}: 不淤流速必须小于不冲流速")
 
         use_increase = case.get('inc_checked', True)
-        manual_increase = _fv_opt('inc_pct') if use_increase else 0
+        increase_resolution = resolve_increase_input(
+            use_increase=use_increase,
+            mode=case.get('inc_mode', INCREASE_MODE_PERCENT),
+            design_q=Q,
+            percent_text=case.get('inc_pct', ''),
+            q_increased_text=case.get('inc_q_text', ''),
+            disabled_percent=0.0,
+        )
+        manual_increase = increase_resolution.manual_increase_percent
+        inc_mode = increase_resolution.mode
 
         if stype == "U形":
             manual_R = _fv_opt('R')
@@ -847,7 +932,10 @@ class AqueductPanel(QWidget):
                 'manual_R': manual_R,
                 'detail_checked': case.get('detail_checked', True),
                 'manual_increase': manual_increase,
-                'use_increase': use_increase
+                'use_increase': use_increase,
+                'inc_mode': inc_mode,
+                'inc_pct_text': case.get('inc_pct', ''),
+                'inc_q_text': case.get('inc_q_text', ''),
             }
             result = quick_calculate_u(
                 Q=Q, n=n, slope_inv=slope_inv,
@@ -882,7 +970,10 @@ class AqueductPanel(QWidget):
                 'chamfer_length': chamfer_length,
                 'detail_checked': case.get('detail_checked', True),
                 'manual_increase': manual_increase,
-                'use_increase': use_increase
+                'use_increase': use_increase,
+                'inc_mode': inc_mode,
+                'inc_pct_text': case.get('inc_pct', ''),
+                'inc_q_text': case.get('inc_q_text', ''),
             }
             result = quick_calculate_rect(
                 Q=Q, n=n, slope_inv=slope_inv,
@@ -1194,11 +1285,10 @@ class AqueductPanel(QWidget):
         o.append(f"  水力半径 R水 = {result['R_hyd_design']:.3f} m")
         o.append("")
         use_increase = p.get('use_increase', True)
-        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
+        increase_summary_lines = self._get_increase_summary_lines(p, result)
         if use_increase:
             o.append("【加大流量工况】")
-            o.append(f"  流量加大比例 = {result['increase_percent']:.1f}% {inc_src}")
-            o.append(f"  加大流量 Q加大 = {result['Q_increased']:.3f} m³/s")
+            o.extend([f"  {line}" for line in increase_summary_lines])
             o.append(f"  加大水深 h加大 = {result['h_increased']:.3f} m")
             o.append(f"  加大流速 V加大 = {result['V_increased']:.3f} m/s")
             o.append(f"  超高 Fb = {result['Fb']:.3f} m")
@@ -1252,7 +1342,7 @@ class AqueductPanel(QWidget):
         A_inc = result.get('A_increased', 0); P_inc = result.get('P_increased', 0)
         R_hyd_inc = result.get('R_hyd_increased', 0)
         Fb = result['Fb']
-        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
+        increase_summary_lines = self._get_increase_summary_lines(p, result)
 
         o = []
         o.append("=" * 70)
@@ -1292,8 +1382,8 @@ class AqueductPanel(QWidget):
             o.append("")
         if p.get('manual_increase'):
             _n += 1
-            o.append(f"  {_n}. 指定加大比例:")
-            o.append(f"     = {p['manual_increase']}%")
+            o.append(f"  {_n}. 加大流量输入方式:")
+            o.append(f"     {increase_summary_lines[0]}")
             o.append("")
 
         o.append("【二、断面尺寸】")
@@ -1384,8 +1474,8 @@ class AqueductPanel(QWidget):
         if use_increase:
           o.append("【四、加大流量工况】")
           o.append("")
-          o.append("  1. 加大流量计算:")
-          o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
+          o.append("  1. 输入与换算:")
+          o.extend([f"      {line}" for line in increase_summary_lines])
           o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
           o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
           o.append(f"           = {Q_inc:.3f} m³/s")
@@ -1518,7 +1608,7 @@ class AqueductPanel(QWidget):
         p = self.input_params
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']
-        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
+        increase_summary_lines = self._get_increase_summary_lines(p, result)
 
         o = []
         o.append("=" * 70)
@@ -1569,8 +1659,7 @@ class AqueductPanel(QWidget):
         use_increase = p.get('use_increase', True)
         if use_increase:
             o.append("【加大流量工况】")
-            o.append(f"  流量加大比例 = {result['increase_percent']:.1f}% {inc_src}")
-            o.append(f"  加大流量 Q加大 = {result['Q_increased']:.3f} m³/s")
+            o.extend([f"  {line}" for line in increase_summary_lines])
             o.append(f"  加大水深 h加大 = {result['h_increased']:.3f} m")
             o.append(f"  加大流速 V加大 = {result['V_increased']:.3f} m/s")
             o.append(f"  超高 Fb = {result['Fb']:.3f} m")
@@ -1624,7 +1713,7 @@ class AqueductPanel(QWidget):
         A_inc = result.get('A_increased', 0); P_inc = result.get('P_increased', 0)
         R_hyd_inc = result.get('R_hyd_increased', 0)
         Fb = result['Fb']
-        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
+        increase_summary_lines = self._get_increase_summary_lines(p, result)
         has_chamfer = result.get('has_chamfer', False)
         ratio = result.get('depth_width_ratio', 0)
 
@@ -1680,8 +1769,8 @@ class AqueductPanel(QWidget):
             o.append("")
         if p.get('manual_increase'):
             _n += 1
-            o.append(f"  {_n}. 指定加大比例:")
-            o.append(f"     = {p['manual_increase']}%")
+            o.append(f"  {_n}. 加大流量输入方式:")
+            o.append(f"     {increase_summary_lines[0]}")
             o.append("")
 
         o.append("【二、断面尺寸】")
@@ -1805,8 +1894,8 @@ class AqueductPanel(QWidget):
         if use_increase:
             o.append("【四、加大流量工况】")
             o.append("")
-            o.append("  1. 加大流量计算:")
-            o.append(f"      流量加大比例 = {inc_pct:.1f}% {inc_src}")
+            o.append("  1. 输入与换算:")
+            o.extend([f"      {line}" for line in increase_summary_lines])
             o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
             o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
             o.append(f"           = {Q_inc:.3f} m³/s")

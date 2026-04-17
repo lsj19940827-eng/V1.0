@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """渡槽断面 DXF 导出（U形 / 矩形）"""
 import math
+from app_渠系计算前端.increase_input_helper import (
+    INCREASE_MODE_PERCENT,
+    build_increase_summary_lines,
+)
 from app_渠系计算前端.dxf_common import (
     _add_dim_h,
     _add_dim_v,
@@ -9,6 +13,18 @@ from app_渠系计算前端.dxf_common import (
     ensure_tracked_msp,
     setup_section_dxf_document,
 )
+
+
+def _increase_lines(params, result):
+    """生成DXF文字块里的加大流量输入说明。"""
+    return list(build_increase_summary_lines(
+        use_increase=params.get('use_increase', True),
+        mode=params.get('inc_mode', INCREASE_MODE_PERCENT),
+        percent_text=params.get('inc_pct_text', ''),
+        q_increased_text=params.get('inc_q_text', ''),
+        result_increase_percent=result.get('increase_percent', 0.0),
+        result_q_increased=result.get('Q_increased', params.get('Q', 0.0)),
+    ))
 
 
 def export_aqueduct_dxf(filepath, result, input_params, scale_denom=100):
@@ -91,12 +107,11 @@ def _draw_u(msp, result, p, sf=1.0, scale_denom=100):
         _add_dim_v(msp, R*sf, H*sf, R*sf+gap*1.4, R*sf, f'f={f:.3f} m', th, ar, '尺寸标注')
     _add_dim_v(msp, 0, H*sf, R*sf+gap*2.8, R*sf, f'H={H:.3f} m', th, ar, '尺寸标注')
 
-    inc_s = f'{inc:.1f}%' if isinstance(inc, (int,float)) else str(inc)
     lines = ['【渡槽 - U形】', f'比例: 1:{scale_denom}', '',
              '[输入参数]', f'Q={Q:.3f} m\u00b3/s', f'n={n}', f'i=1/{int(si)}','',
              '[断面尺寸]', f'R={R:.3f} m', f'f={f:.3f} m', f'B={B:.3f} m', f'H={H:.3f} m','',
              '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m\u00b2', f'V={V_d:.3f} m/s','',
-             '[加大流量]', f'比例={inc_s}', f'Q\u589e={Q_inc:.3f}', f'h\u589e={h_inc:.3f} m',
+             '[加大流量]', *_increase_lines(p, result), f'h\u589e={h_inc:.3f} m',
              f'V\u589e={V_inc:.3f} m/s', f'Fb={Fb:.3f} m']
     _add_text_block(msp, R*sf+gap*4, H*sf+th, lines, th, '参数文字')
 
@@ -144,13 +159,12 @@ def _draw_rect(msp, result, p, sf=1.0, scale_denom=100):
     _add_dim_v(msp, 0, h_d*sf, -(B/2*sf+gap*1.4), -B/2*sf, f'h={h_d:.3f} m', th, ar, '尺寸标注')
     _add_dim_v(msp, 0, H*sf,   B/2*sf+gap*1.4, B/2*sf, f'H={H:.3f} m', th, ar, '尺寸标注')
 
-    inc_s = f'{inc:.1f}%' if isinstance(inc, (int,float)) else str(inc)
     lines = ['【渡槽 - 矩形】', f'比例: 1:{scale_denom}', '',
              '[输入参数]', f'Q={Q:.3f} m\u00b3/s', f'n={n}', f'i=1/{int(si)}','',
              '[断面尺寸]', f'B={B:.3f} m', f'H={H:.3f} m']
     if has_ch:
         lines += [f'倒角={ch_ang}\u00b0', f'底边长={ch_len} m']
     lines += ['', '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m\u00b2', f'V={V_d:.3f} m/s',
-              '', '[加大流量]', f'比例={inc_s}', f'Q\u589e={Q_inc:.3f}',
+              '', '[加大流量]', *_increase_lines(p, result),
               f'h\u589e={h_inc:.3f} m', f'V\u589e={V_inc:.3f} m/s', f'Fb={Fb:.3f} m']
     _add_text_block(msp, B/2*sf+gap*3.5, H*sf+th, lines, th, '参数文字')

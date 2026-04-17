@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea,
-    QPushButton, QApplication,
+    QPushButton, QApplication, QRadioButton, QButtonGroup,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QSizePolicy
@@ -92,6 +92,14 @@ from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, plain_text_to_formula_body, wrap_with_katex,
     load_formula_page, make_plain_html,
     HelpPageBuilder
+)
+from app_渠系计算前端.increase_input_helper import (
+    INCREASE_MODE_PERCENT,
+    INCREASE_MODE_Q_INCREASED,
+    build_increase_hint_text,
+    build_increase_summary_lines,
+    normalize_increase_mode,
+    resolve_increase_input,
 )
 from app_渠系计算前端.plot_title_utils import apply_flow_velocity_title
 from app_渠系计算前端.tunnel.geometry import (
@@ -178,6 +186,8 @@ class CulvertPanel(QWidget):
         self._init_ui()
         self._setup_result_dirty_tracking()
         self._rebuild_case_tags()
+        # 首次进入时按当前工况同步界面可见性，避免两套加大流量输入同时显示。
+        self._load_case(self._current_case_idx)
 
     # ================================================================
     # UI 构建
@@ -315,9 +325,30 @@ class CulvertPanel(QWidget):
         self.inc_cb.setChecked(True)
         self.inc_cb.stateChanged.connect(self._on_inc_toggle)
         fl.addWidget(self.inc_cb)
-        self.inc_edit = self._field(fl, "流量加大比例 (%):", "")
+        self.inc_mode_row = QWidget()
+        self.inc_mode_row_lay = QHBoxLayout(self.inc_mode_row)
+        self.inc_mode_row_lay.setContentsMargins(0, 0, 0, 0)
+        self.inc_mode_row_lay.setSpacing(10)
+        self.inc_mode_row_lay.addWidget(self._hint("输入方式:"))
+        self.inc_mode_group = QButtonGroup(self)
+        self.inc_mode_percent_rb = QRadioButton("按比例")
+        self.inc_mode_q_rb = QRadioButton("按Q加大")
+        self.inc_mode_group.addButton(self.inc_mode_percent_rb)
+        self.inc_mode_group.addButton(self.inc_mode_q_rb)
+        self.inc_mode_percent_rb.setChecked(True)
+        self.inc_mode_percent_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_q_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_row_lay.addWidget(self.inc_mode_percent_rb)
+        self.inc_mode_row_lay.addWidget(self.inc_mode_q_rb)
+        self.inc_mode_row_lay.addStretch()
+        fl.addWidget(self.inc_mode_row)
+        self.inc_lbl, self.inc_edit = self._field2(fl, "流量加大比例 (%):", "")
+        self.inc_q_lbl, self.inc_q_edit = self._field2(fl, "加大流量 Q加大 (m³/s):", "")
+        self.inc_edit.textChanged.connect(self._refresh_increase_hint)
+        self.inc_q_edit.textChanged.connect(self._refresh_increase_hint)
         self.inc_hint = QLabel("(留空则自动计算)")
         self.inc_hint.setStyleSheet(INPUT_HINT_STYLE)
+        self.inc_derived_hint = self.inc_hint
         fl.addWidget(self.inc_hint)
 
         fl.addWidget(self._sep())
@@ -395,8 +426,37 @@ class CulvertPanel(QWidget):
 
     def _on_inc_toggle(self, _state):
         enabled = self.inc_cb.isChecked()
-        self.inc_edit.setVisible(enabled)
+        is_percent_mode = self._current_increase_mode() == INCREASE_MODE_PERCENT
+        self.inc_mode_row.setVisible(enabled)
+        self.inc_lbl.setVisible(enabled and is_percent_mode)
+        self.inc_edit.setVisible(enabled and is_percent_mode)
+        self.inc_q_lbl.setVisible(enabled and not is_percent_mode)
+        self.inc_q_edit.setVisible(enabled and not is_percent_mode)
         self.inc_hint.setVisible(enabled)
+        self._refresh_increase_hint()
+
+    def _current_increase_mode(self):
+        return INCREASE_MODE_Q_INCREASED if self.inc_mode_q_rb.isChecked() else INCREASE_MODE_PERCENT
+
+    def _set_increase_mode(self, mode):
+        normalized = normalize_increase_mode(mode)
+        if normalized == INCREASE_MODE_Q_INCREASED:
+            self.inc_mode_q_rb.setChecked(True)
+        else:
+            self.inc_mode_percent_rb.setChecked(True)
+        self._on_inc_toggle(None)
+
+    def _on_inc_mode_changed(self, _checked):
+        self._on_inc_toggle(None)
+
+    def _refresh_increase_hint(self):
+        self.inc_hint.setText(build_increase_hint_text(
+            use_increase=self.inc_cb.isChecked(),
+            mode=self._current_increase_mode(),
+            design_q_text=self.Q_edit.text(),
+            percent_text=self.inc_edit.text(),
+            q_increased_text=self.inc_q_edit.text(),
+        ))
 
     def _on_section_type_changed(self, section_type):
         """切换暗涵子类型时同步当前工况，并切换可见输入项。"""
@@ -545,7 +605,7 @@ class CulvertPanel(QWidget):
             'theta_deg': '180',
             'Q': '5.0', 'n': '0.014', 'slope_inv': '2000',
             'v_min': '0.1', 'v_max': '100.0',
-            'inc_checked': True, 'inc_pct': '',
+            'inc_checked': True, 'inc_pct': '', 'inc_mode': INCREASE_MODE_PERCENT, 'inc_q_text': '',
             'detail_checked': True,
             'bh': '', 'hb': '', 'B': '',
             'arch_B': '',
@@ -573,6 +633,8 @@ class CulvertPanel(QWidget):
         c['v_max'] = self.vmax_edit.text()
         c['inc_checked'] = self.inc_cb.isChecked()
         c['inc_pct'] = self.inc_edit.text()
+        c['inc_mode'] = self._current_increase_mode()
+        c['inc_q_text'] = self.inc_q_edit.text()
         c['detail_checked'] = self.detail_cb.isChecked()
         c['bh'] = self.bh_edit.text()
         c['hb'] = self.hb_edit.text()
@@ -595,6 +657,8 @@ class CulvertPanel(QWidget):
         self.vmax_edit.setText(c.get('v_max', '100.0'))
         self.inc_cb.setChecked(c.get('inc_checked', True))
         self.inc_edit.setText(c.get('inc_pct', ''))
+        self.inc_q_edit.setText(c.get('inc_q_text', ''))
+        self._set_increase_mode(c.get('inc_mode', INCREASE_MODE_PERCENT))
         self.detail_cb.setChecked(c.get('detail_checked', True))
         self.bh_edit.setText(c.get('bh', ''))
         self.hb_edit.setText(c.get('hb', ''))
@@ -716,6 +780,7 @@ class CulvertPanel(QWidget):
             return
         if 0 <= self._current_case_idx < len(self._cases):
             self._cases[self._current_case_idx]['Q'] = text
+        self._refresh_increase_hint()
         self._rebuild_case_tags()
 
     def _setup_result_dirty_tracking(self):
@@ -815,7 +880,7 @@ class CulvertPanel(QWidget):
         src = self._cases[self._current_case_idx]
         keys = (
             'section_type', 'theta_deg',
-            'n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct',
+            'n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text',
             'detail_checked', 'bh', 'hb', 'B', 'arch_B',
         )
         for i, case in enumerate(self._cases):
@@ -841,7 +906,7 @@ class CulvertPanel(QWidget):
         curr = self._cases[self._current_case_idx]
         for k in (
             'section_type', 'theta_deg',
-            'n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct',
+            'n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text',
             'detail_checked', 'bh', 'hb', 'B', 'arch_B',
         ):
             curr[k] = prev[k]
@@ -899,7 +964,16 @@ class CulvertPanel(QWidget):
             raise ValueError(f"工况{case_num}: 不淤流速必须小于不冲流速")
 
         use_increase = case.get('inc_checked', True)
-        manual_increase = _fv_opt('inc_pct') if use_increase else 0
+        increase_resolution = resolve_increase_input(
+            use_increase=use_increase,
+            mode=case.get('inc_mode', INCREASE_MODE_PERCENT),
+            design_q=Q,
+            percent_text=case.get('inc_pct', ''),
+            q_increased_text=case.get('inc_q_text', ''),
+            disabled_percent=0.0,
+        )
+        manual_increase = increase_resolution.manual_increase_percent
+        inc_mode = increase_resolution.mode
         section_type = _normalize_culvert_section_type(case.get('section_type', _CULVERT_RECT))
 
         input_params = {
@@ -908,6 +982,9 @@ class CulvertPanel(QWidget):
             'v_min': v_min, 'v_max': v_max,
             'manual_increase': manual_increase,
             'use_increase': use_increase,
+            'inc_mode': inc_mode,
+            'inc_pct_text': case.get('inc_pct', ''),
+            'inc_q_text': case.get('inc_q_text', ''),
         }
         if section_type == _CULVERT_ARCH:
             theta_text = (case.get('theta_deg', '') or '').strip()
@@ -999,6 +1076,17 @@ class CulvertPanel(QWidget):
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         out = ["=" * 70, f"  {title}", "=" * 70, "", msg, "", "-" * 70, "请修正后重新计算。", "=" * 70]
         self.result_text.setHtml(make_plain_html("\n".join(out)))
+
+    def _increase_summary_lines(self, params, result):
+        """生成加大流量输入说明。"""
+        return build_increase_summary_lines(
+            use_increase=params.get('use_increase', True),
+            mode=params.get('inc_mode', INCREASE_MODE_PERCENT),
+            percent_text=params.get('inc_pct_text', ''),
+            q_increased_text=params.get('inc_q_text', ''),
+            result_increase_percent=result.get('increase_percent', 0.0),
+            result_q_increased=result.get('Q_increased', params.get('Q', 0.0)),
+        )
 
     # ================================================================
     # 结果显示
@@ -1169,7 +1257,6 @@ class CulvertPanel(QWidget):
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']; i = 1.0 / slope_inv
         v_min, v_max = p['v_min'], p['v_max']
-        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
         family_name = _culvert_full_name(_CULVERT_ARCH)
 
         B = result.get('B', 0.0)
@@ -1250,8 +1337,8 @@ class CulvertPanel(QWidget):
 
             if use_increase:
                 o.append("【加大流量工况】")
-                o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
-                o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+                for line in self._increase_summary_lines(p, result):
+                    o.append(f"  {line}")
                 o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
                 o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
                 o.append(f"  净空高度 Fb加大 = {fb_hgt_inc:.3f} m")
@@ -1325,22 +1412,20 @@ class CulvertPanel(QWidget):
         if use_increase:
             o.append("【四、加大流量工况】")
             o.append("")
-            o.append("  1. 加大流量比例:")
-            o.append(f"     = {inc_pct:.1f}% {inc_src}")
+            o.append("  1. 加大流量输入说明:")
+            for line in self._increase_summary_lines(p, result):
+                o.append(f"     {line}")
             o.append("")
-            o.append("  2. 加大流量:")
-            o.append(f"     Q加大 = {Q_inc:.3f} m³/s")
-            o.append("")
-            o.append("  3. 加大水深:")
+            o.append("  2. 加大水深:")
             o.append(f"     h加大 = {h_inc:.3f} m")
             o.append("")
-            o.append("  4. 加大流量工况水力要素:")
+            o.append("  3. 加大流量工况水力要素:")
             o.append(f"     A加大 = {A_inc:.3f} m²")
             o.append(f"     χ加大 = {P_inc:.3f} m")
             o.append(f"     R加大 = {R_hyd_inc:.3f} m")
             o.append(f"     V加大 = {V_inc:.3f} m/s")
             o.append("")
-            o.append("  5. 加大流量工况净空:")
+            o.append("  4. 加大流量工况净空:")
             o.append(f"     净空高度 Fb加大 = {fb_hgt_inc:.3f} m")
             o.append(f"     净空比例 = {fb_pct_inc:.1f}%")
             o.append("")
@@ -1375,7 +1460,6 @@ class CulvertPanel(QWidget):
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']; i = 1.0 / slope_inv
         v_min, v_max = p['v_min'], p['v_max']
-        inc_src = "(指定)" if p.get('manual_increase') else "(自动计算)"
         is_optimal = result.get('is_optimal_section', False)
         target_HB = p.get('target_HB_ratio')
         family_name = _culvert_full_name(section_type)
@@ -1472,8 +1556,8 @@ class CulvertPanel(QWidget):
             use_increase = p.get('use_increase', True)
             if use_increase:
                 o.append("【加大流量工况】")
-                o.append(f"  流量加大比例 = {inc_pct:.1f}% {inc_src}")
-                o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+                for line in self._increase_summary_lines(p, result):
+                    o.append(f"  {line}")
                 o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
                 o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
                 o.append(f"  净空高度 Fb加大 = {fb_hgt_inc:.3f} m")
@@ -1609,16 +1693,11 @@ class CulvertPanel(QWidget):
             if use_increase_val:
                 o.append("【四、加大流量工况】")
                 o.append("")
-                o.append("  1. 加大流量比例:")
-                o.append(f"      = {inc_pct:.1f}% {inc_src}")
+                o.append("  1. 加大流量输入说明:")
+                for line in self._increase_summary_lines(p, result):
+                    o.append(f"      {line}")
                 o.append("")
-                o.append("  2. 加大流量计算:")
-                o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
-                o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
-                o.append(f"           = {Q_inc:.3f} m³/s")
-                o.append("")
-
-                o.append("  3. 加大水深计算:")
+                o.append("  2. 加大水深计算:")
                 o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s 和底宽 B = {B:.2f} m，利用曼宁公式反算水深:")
                 o.append(f"      h加大 = {h_inc:.3f} m")
                 o.append("")
@@ -1627,13 +1706,13 @@ class CulvertPanel(QWidget):
                 chi_inc = B + 2 * h_inc
                 R_inc = A_inc / chi_inc if chi_inc > 0 else 0
 
-                o.append("  4. 加大流量工况过水面积:")
+                o.append("  3. 加大流量工况过水面积:")
                 o.append(f"      A加大 = B × h加大")
                 o.append(f"           = {B:.2f} × {h_inc:.3f}")
                 o.append(f"           = {A_inc:.3f} m²")
                 o.append("")
 
-                o.append("  5. 加大流量工况湿周:")
+                o.append("  4. 加大流量工况湿周:")
                 o.append(f"      χ加大 = B + 2×h加大")
                 o.append(f"           = {B:.2f} + 2×{h_inc:.3f}")
                 o.append(f"           = {B:.2f} + {2 * h_inc:.3f}")

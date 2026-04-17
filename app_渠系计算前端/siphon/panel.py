@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
     QAbstractItemView, QGridLayout, QScrollArea, QSizePolicy,
     QDialog, QDialogButtonBox, QPushButton, QLineEdit as _QLineEdit,
-    QSplitter
+    QSplitter, QRadioButton, QButtonGroup
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QColor, QBrush, QIntValidator, QShortcut, QKeySequence
@@ -57,6 +57,14 @@ from app_渠系计算前端.export_utils import (
 )
 from app_渠系计算前端.report_meta import (
     ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta
+)
+from app_渠系计算前端.increase_input_helper import (
+    INCREASE_MODE_PERCENT,
+    INCREASE_MODE_Q_INCREASED,
+    build_increase_summary_lines,
+    build_increase_hint_text,
+    normalize_increase_mode,
+    resolve_increase_input,
 )
 
 # 计算引擎导入
@@ -635,6 +643,7 @@ class SiphonPanel(QWidget):
         _ll.addWidget(QLabel("设计流量 Q (m³/s):"))
         self.edit_Q = LineEdit(); self.edit_Q.setText("10.0"); self.edit_Q.setFixedWidth(80)
         self.edit_Q.textChanged.connect(self._on_Qv_changed)
+        self.edit_Q.textChanged.connect(self._refresh_increase_hint)
         self.lbl_Q_hint = QLabel("")
         self.lbl_Q_hint.setStyleSheet("color:#0066CC;font-size:12px;")
         _ll.addWidget(_hrow(self.edit_Q, self.lbl_Q_hint))
@@ -739,13 +748,33 @@ class SiphonPanel(QWidget):
         _inc_r = QWidget(); _inc_r_lay = QHBoxLayout(_inc_r)
         _inc_r_lay.setContentsMargins(0, 0, 0, 0); _inc_r_lay.setSpacing(6)
         _inc_r_lay.addWidget(self.inc_cb)
-        _inc_r_lay.addWidget(QLabel("加大比例(%):"))
+        self.inc_mode_group = QButtonGroup(self)
+        self.inc_mode_percent_rb = QRadioButton("按比例")
+        self.inc_mode_q_rb = QRadioButton("按Q加大")
+        self.inc_mode_group.addButton(self.inc_mode_percent_rb)
+        self.inc_mode_group.addButton(self.inc_mode_q_rb)
+        self.inc_mode_percent_rb.setChecked(True)
+        self.inc_mode_percent_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_q_rb.toggled.connect(self._on_inc_mode_changed)
+        _inc_r_lay.addWidget(self.inc_mode_percent_rb)
+        _inc_r_lay.addWidget(self.inc_mode_q_rb)
+        self.lbl_inc_percent = QLabel("加大比例(%):")
+        _inc_r_lay.addWidget(self.lbl_inc_percent)
         self.edit_inc = LineEdit()
         self.edit_inc.setPlaceholderText("留空自动计算")
         self.edit_inc.setFixedWidth(90)
+        self.edit_inc.textChanged.connect(self._refresh_increase_hint)
         _inc_r_lay.addWidget(self.edit_inc)
+        self.lbl_inc_q = QLabel("Q加大(m³/s):")
+        _inc_r_lay.addWidget(self.lbl_inc_q)
+        self.inc_q_edit = LineEdit()
+        self.inc_q_edit.setPlaceholderText("请输入加大后的总流量")
+        self.inc_q_edit.setFixedWidth(100)
+        self.inc_q_edit.textChanged.connect(self._refresh_increase_hint)
+        _inc_r_lay.addWidget(self.inc_q_edit)
         self.lbl_inc_hint = QLabel("(留空则按设计流量自动查表)")
         self.lbl_inc_hint.setStyleSheet("color:#0066CC;font-size:12px;")
+        self.inc_derived_hint = self.lbl_inc_hint
         _inc_r_lay.addWidget(self.lbl_inc_hint)
         _inc_r_lay.addStretch()
         _ml.addWidget(_inc_r)
@@ -2207,6 +2236,8 @@ document.addEventListener("DOMContentLoaded", function(){
             'num_pipes': self.spin_num_pipes.value() if hasattr(self, 'spin_num_pipes') else 1,
             'inc_checked': self.inc_cb.isChecked(),
             'inc_percent': self.edit_inc.text().strip(),
+            'inc_mode': self._current_increase_mode(),
+            'inc_q_text': self.inc_q_edit.text().strip(),
             'v1_inc': self.edit_v1_inc.text().strip(),
             'v2_inc': self.edit_v2_inc.text().strip(),
             'v3_inc': self.edit_v3_inc.text().strip(),
@@ -2316,6 +2347,9 @@ document.addEventListener("DOMContentLoaded", function(){
             self.inc_cb.setChecked(d['inc_checked'])
         if 'inc_percent' in d and d['inc_percent']:
             self.edit_inc.setText(str(d['inc_percent']))
+        if 'inc_q_text' in d and d['inc_q_text']:
+            self.inc_q_edit.setText(str(d['inc_q_text']))
+        self._set_increase_mode(d.get('inc_mode', INCREASE_MODE_PERCENT))
         # 恢复加大流量工况流速参数
         if 'v1_inc' in d and d['v1_inc']:
             self.edit_v1_inc.setText(str(d['v1_inc']))
@@ -2763,7 +2797,13 @@ document.addEventListener("DOMContentLoaded", function(){
     def _on_inc_toggle(self, _state=None):
         """考虑加大流量 CheckBox 切换"""
         enabled = self.inc_cb.isChecked()
-        self.edit_inc.setVisible(enabled)
+        is_percent_mode = self._current_increase_mode() == INCREASE_MODE_PERCENT
+        self.inc_mode_percent_rb.setVisible(enabled)
+        self.inc_mode_q_rb.setVisible(enabled)
+        self.lbl_inc_percent.setVisible(enabled and is_percent_mode)
+        self.edit_inc.setVisible(enabled and is_percent_mode)
+        self.lbl_inc_q.setVisible(enabled and not is_percent_mode)
+        self.inc_q_edit.setVisible(enabled and not is_percent_mode)
         self.lbl_inc_hint.setVisible(enabled)
         # 控制加大流量流速输入框的显示
         self.edit_v1_inc.setVisible(enabled)
@@ -2772,6 +2812,64 @@ document.addEventListener("DOMContentLoaded", function(){
         self.lbl_v3_inc.setVisible(enabled)
         # v2_inc 根据策略显示
         self._update_v2_inc_visibility()
+        self._refresh_increase_hint()
+
+    def _current_increase_mode(self):
+        """返回当前加大流量输入方式。"""
+        return INCREASE_MODE_Q_INCREASED if self.inc_mode_q_rb.isChecked() else INCREASE_MODE_PERCENT
+
+    def _set_increase_mode(self, mode):
+        """恢复加大流量输入方式。"""
+        normalized = normalize_increase_mode(mode)
+        if normalized == INCREASE_MODE_Q_INCREASED:
+            self.inc_mode_q_rb.setChecked(True)
+        else:
+            self.inc_mode_percent_rb.setChecked(True)
+        self._on_inc_toggle()
+
+    def _on_inc_mode_changed(self, _checked):
+        """输入方式切换时刷新界面。"""
+        self._on_inc_toggle()
+
+    def _refresh_increase_hint(self):
+        """刷新加大流量的灰色提示。"""
+        if not hasattr(self, 'lbl_inc_hint'):
+            return
+        self.lbl_inc_hint.setText(build_increase_hint_text(
+            use_increase=self.inc_cb.isChecked(),
+            mode=self._current_increase_mode(),
+            design_q_text=self.edit_Q.text() if hasattr(self, 'edit_Q') else "",
+            percent_text=self.edit_inc.text() if hasattr(self, 'edit_inc') else "",
+            q_increased_text=self.inc_q_edit.text() if hasattr(self, 'inc_q_edit') else "",
+        ))
+
+    def _attach_increase_summary_meta(self, result):
+        """把当前加大流量输入信息附着到计算结果上，供结果与导出统一展示。"""
+        result._inc_use_increase = bool(self.inc_cb.isChecked())
+        result._inc_mode = self._current_increase_mode()
+        result._inc_percent_text = self.edit_inc.text().strip() if hasattr(self, 'edit_inc') else ""
+        result._inc_q_text = self.inc_q_edit.text().strip() if hasattr(self, 'inc_q_edit') else ""
+        return result
+
+    def _increase_summary_lines(self, result):
+        """生成倒虹吸结果区与导出共用的加大流量摘要。"""
+        return build_increase_summary_lines(
+            use_increase=bool(getattr(result, "_inc_use_increase", self.inc_cb.isChecked())),
+            mode=getattr(result, "_inc_mode", self._current_increase_mode()),
+            percent_text=getattr(result, "_inc_percent_text", self.edit_inc.text().strip() if hasattr(self, 'edit_inc') else ""),
+            q_increased_text=getattr(result, "_inc_q_text", self.inc_q_edit.text().strip() if hasattr(self, 'inc_q_edit') else ""),
+            result_increase_percent=getattr(result, "increase_percent", 0.0),
+            result_q_increased=getattr(result, "Q_increased", 0.0),
+        )
+
+    def _format_result_with_increase(self, result, show_steps=False):
+        """在倒虹吸原有结果文本前补充统一的加大流量输入说明。"""
+        formatted = HydraulicCore.format_result(result, show_steps=show_steps)
+        summary_lines = list(self._increase_summary_lines(result))
+        lines = formatted.splitlines()
+        if len(lines) >= 3:
+            return "\n".join(lines[:3] + [""] + summary_lines + [""] + lines[3:])
+        return "\n".join(summary_lines + ["", formatted])
 
     def _update_v2_inc_visibility(self):
         """根据 v2 策略和加大流量勾选状态，控制 v2_inc 输入框显示"""
@@ -4379,22 +4477,26 @@ document.addEventListener("DOMContentLoaded", function(){
             v2_inc_for_engine = None
             v3_inc_for_engine = None
             if self.inc_cb.isChecked():
-                inc_text = self.edit_inc.text().strip()
-                if inc_text:
-                    try:
-                        inc_pct_for_engine = float(inc_text)
-                    except ValueError:
-                        inc_pct_for_engine = None
-                if inc_pct_for_engine is None:
-                    try:
-                        _calc_dir = os.path.join(_pkg_root, 'calc_渠系计算算法内核')
-                        if _calc_dir not in sys.path:
-                            sys.path.insert(0, _calc_dir)
-                        from 明渠设计 import get_flow_increase_percent
-                        inc_pct_for_engine = get_flow_increase_percent(params.Q)
-                    except Exception:
-                        inc_pct_for_engine = 20.0
-                
+                try:
+                    increase_resolution = resolve_increase_input(
+                        use_increase=True,
+                        mode=self._current_increase_mode(),
+                        design_q=params.Q,
+                        percent_text=self.edit_inc.text().strip(),
+                        q_increased_text=self.inc_q_edit.text().strip(),
+                        disabled_percent=0.0,
+                    )
+                except ValueError as exc:
+                    InfoBar.warning(
+                        "参数错误",
+                        str(exc),
+                        parent=self._info_parent(),
+                        duration=5000,
+                        position=InfoBarPosition.TOP,
+                    )
+                    return
+                inc_pct_for_engine = increase_resolution.manual_increase_percent
+
                 # 读取加大流量工况的流速参数
                 v1_inc_text = self.edit_v1_inc.text().strip()
                 v3_inc_text = self.edit_v3_inc.text().strip()
@@ -4451,6 +4553,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 v2_inc=v2_inc_for_engine,
                 v3_inc=v3_inc_for_engine,
             )
+            result = self._attach_increase_summary_meta(result)
             self.calculation_result = result
             self.calculation_result_increased = None  # 单次计算，结果在 result 本身
             self._inc_pct_used = inc_pct_for_engine or 0.0
@@ -4484,10 +4587,10 @@ document.addEventListener("DOMContentLoaded", function(){
 
             # 显示结果（format_result 已内置加大工况展示）
             if not self._suppress_result_display:
-                summary = HydraulicCore.format_result(result, show_steps=False)
+                summary = self._format_result_with_increase(result, show_steps=False)
                 self.summary_text.setPlainText(summary)
                 if verbose and result.calculation_steps:
-                    detail = HydraulicCore.format_result(result, show_steps=True)
+                    detail = self._format_result_with_increase(result, show_steps=True)
                     self.detail_text.setPlainText(detail)
                     self._detail_text_cache = detail
                     self.result_notebook.setCurrentIndex(1)
@@ -4735,6 +4838,7 @@ document.addEventListener("DOMContentLoaded", function(){
                         plan_feature_points=self.plan_feature_points,
                         longitudinal_nodes=long_nodes_for_calc,
                     )
+                    result = self._attach_increase_summary_meta(result)
                     self.calculation_result = result
             except Exception:
                 pass
@@ -4826,6 +4930,9 @@ document.addEventListener("DOMContentLoaded", function(){
             params.append(("出口始端流速 v_out", f"{v_out:.4f} m/s"))
         if v3 > 0:
             params.append(("出口末端流速 v₃", f"{v3:.4f} m/s"))
+        for line in self._increase_summary_lines(r):
+            title, value = line.split(" = ", 1)
+            params.append((title, value))
         doc_add_param_table(doc, params)
 
         # 7. 计算结果

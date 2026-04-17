@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog,
-    QScrollArea, QProgressBar, QPushButton, QLayout,
+    QScrollArea, QProgressBar, QPushButton, QLayout, QRadioButton, QButtonGroup,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QRect, QPoint, QSize, QTimer
 from PySide6.QtGui import QPainter, QPen, QColor
@@ -50,6 +50,14 @@ from app_渠系计算前端.styles import (
 from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, load_formula_page, make_plain_html,
     HelpPageBuilder,
+)
+from app_渠系计算前端.increase_input_helper import (
+    INCREASE_MODE_PERCENT,
+    INCREASE_MODE_Q_INCREASED,
+    build_increase_hint_text,
+    build_increase_summary_lines,
+    normalize_increase_mode,
+    resolve_increase_input,
 )
 from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
 from app_渠系计算前端.result_navigation import (
@@ -338,6 +346,8 @@ class PressurePipePanel(QWidget):
         self._init_ui()
         self._setup_result_dirty_tracking()
         self._rebuild_case_tags()
+        # 首次进入时按当前工况同步界面可见性，避免两套加大流量输入同时显示。
+        self._load_case(self._current_case_idx)
 
     # ================================================================
     # UI 构建
@@ -517,8 +527,31 @@ class PressurePipePanel(QWidget):
         self.inc_cb.setChecked(True)
         self.inc_cb.stateChanged.connect(self._on_inc_toggle)
         fl.addWidget(self.inc_cb)
-        self.inc_edit = self._field(fl, "加大比例 (%):", "")
+        self.inc_mode_row = QWidget()
+        self.inc_mode_row_lay = QHBoxLayout(self.inc_mode_row)
+        self.inc_mode_row_lay.setContentsMargins(0, 0, 0, 0)
+        self.inc_mode_row_lay.setSpacing(10)
+        self.inc_mode_row_lay.addWidget(self._hint("输入方式:"))
+        self.inc_mode_group = QButtonGroup(self)
+        self.inc_mode_percent_rb = QRadioButton("按比例")
+        self.inc_mode_q_rb = QRadioButton("按Q加大")
+        self.inc_mode_group.addButton(self.inc_mode_percent_rb)
+        self.inc_mode_group.addButton(self.inc_mode_q_rb)
+        self.inc_mode_percent_rb.setChecked(True)
+        self.inc_mode_percent_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_q_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_row_lay.addWidget(self.inc_mode_percent_rb)
+        self.inc_mode_row_lay.addWidget(self.inc_mode_q_rb)
+        self.inc_mode_row_lay.addStretch()
+        fl.addWidget(self.inc_mode_row)
+        self.inc_lbl, self.inc_edit = self._field2(fl, "加大比例 (%):", "")
         self.inc_edit.setPlaceholderText("留空则自动计算")
+        self.inc_q_lbl, self.inc_q_edit = self._field2(fl, "加大流量 Q加大 (m³/s):", "")
+        self.inc_edit.textChanged.connect(self._refresh_increase_hint)
+        self.inc_q_edit.textChanged.connect(self._refresh_increase_hint)
+        self.inc_hint = self._hint("(留空则自动计算)")
+        self.inc_derived_hint = self.inc_hint
+        fl.addWidget(self.inc_hint)
 
         fl.addWidget(self._sep())
 
@@ -798,6 +831,18 @@ class PressurePipePanel(QWidget):
         lay.addLayout(r)
         return e
 
+    def _field2(self, lay, label, default=""):
+        r = QHBoxLayout()
+        l = QLabel(label)
+        l.setMinimumWidth(140)
+        l.setStyleSheet(INPUT_LABEL_STYLE)
+        r.addWidget(l)
+        e = LineEdit()
+        e.setText(default)
+        r.addWidget(e, 1)
+        lay.addLayout(r)
+        return l, e
+
     def _slbl(self, t):
         l = QLabel(t)
         l.setStyleSheet(INPUT_SECTION_STYLE)
@@ -822,7 +867,51 @@ class PressurePipePanel(QWidget):
 
     def _on_inc_toggle(self, _state):
         enabled = self.inc_cb.isChecked()
-        self.inc_edit.setVisible(enabled)
+        is_percent_mode = self._current_increase_mode() == INCREASE_MODE_PERCENT
+        self.inc_mode_row.setVisible(enabled)
+        self.inc_lbl.setVisible(enabled and is_percent_mode)
+        self.inc_edit.setVisible(enabled and is_percent_mode)
+        self.inc_q_lbl.setVisible(enabled and not is_percent_mode)
+        self.inc_q_edit.setVisible(enabled and not is_percent_mode)
+        self.inc_hint.setVisible(enabled)
+        self._refresh_increase_hint()
+
+    def _current_increase_mode(self):
+        return INCREASE_MODE_Q_INCREASED if self.inc_mode_q_rb.isChecked() else INCREASE_MODE_PERCENT
+
+    def _set_increase_mode(self, mode):
+        normalized = normalize_increase_mode(mode)
+        if normalized == INCREASE_MODE_Q_INCREASED:
+            self.inc_mode_q_rb.setChecked(True)
+        else:
+            self.inc_mode_percent_rb.setChecked(True)
+        self._on_inc_toggle(None)
+
+    def _on_inc_mode_changed(self, _checked):
+        self._on_inc_toggle(None)
+
+    def _refresh_increase_hint(self):
+        self.inc_hint.setText(build_increase_hint_text(
+            use_increase=self.inc_cb.isChecked(),
+            mode=self._current_increase_mode(),
+            design_q_text=self.Q_edit.text(),
+            percent_text=self.inc_edit.text(),
+            q_increased_text=self.inc_q_edit.text(),
+        ))
+
+    def _increase_summary_lines(self, inp, result):
+        """生成加大流量输入说明。"""
+        rec = getattr(result, "recommended", None)
+        result_q = inp.Q if rec is None else rec.Q_increased
+        result_pct = 0.0 if rec is None else rec.increase_pct
+        return build_increase_summary_lines(
+            use_increase=getattr(inp, "use_increase", True),
+            mode=getattr(inp, "inc_mode", INCREASE_MODE_PERCENT),
+            percent_text=getattr(inp, "inc_pct_text", ""),
+            q_increased_text=getattr(inp, "inc_q_text", ""),
+            result_increase_percent=result_pct,
+            result_q_increased=result_q,
+        )
 
     def _on_unpr_toggle(self, _state):
         self._unpr_container.setVisible(self.batch_unpr_cb.isChecked())
@@ -1012,6 +1101,7 @@ class PressurePipePanel(QWidget):
             'custom_label': None,
             'Q': '0.5', 'material_idx': 0, 'length': '1000',
             'local_ratio': '0.15', 'D': '', 'inc_checked': True, 'inc_pct': '',
+            'inc_mode': INCREASE_MODE_PERCENT, 'inc_q_text': '',
         }
 
     def _save_current_case(self):
@@ -1026,12 +1116,15 @@ class PressurePipePanel(QWidget):
         c['D'] = self.D_edit.text()
         c['inc_checked'] = self.inc_cb.isChecked()
         c['inc_pct'] = self.inc_edit.text()
+        c['inc_mode'] = self._current_increase_mode()
+        c['inc_q_text'] = self.inc_q_edit.text()
 
     def _load_case(self, idx):
         """将指定工况数据加载到UI字段"""
         if not (0 <= idx < len(self._cases)):
             return
         c = self._cases[idx]
+        self._loading_case = True
         self.Q_edit.blockSignals(True)
         self.Q_edit.setText(c.get('Q', ''))
         self.Q_edit.blockSignals(False)
@@ -1041,7 +1134,10 @@ class PressurePipePanel(QWidget):
         self.D_edit.setText(c.get('D', ''))
         self.inc_cb.setChecked(c.get('inc_checked', True))
         self.inc_edit.setText(c.get('inc_pct', ''))
+        self.inc_q_edit.setText(c.get('inc_q_text', ''))
+        self._set_increase_mode(c.get('inc_mode', INCREASE_MODE_PERCENT))
         self._on_inc_toggle(None)
+        self._loading_case = False
 
     def _switch_case(self, idx):
         """切换到指定工况"""
@@ -1129,10 +1225,13 @@ class PressurePipePanel(QWidget):
 
     def _on_q_text_changed(self, text):
         """Q值文本变化时同步更新当前工况数据和标签"""
+        if getattr(self, "_loading_case", False):
+            return
         if not hasattr(self, '_cases'):
             return
         if 0 <= self._current_case_idx < len(self._cases):
             self._cases[self._current_case_idx]['Q'] = text
+        self._refresh_increase_hint()
         self._rebuild_case_tags()
 
     def _setup_result_dirty_tracking(self):
@@ -1247,7 +1346,7 @@ class PressurePipePanel(QWidget):
         self._save_current_case()
         self._mark_results_dirty()
         src = self._cases[self._current_case_idx]
-        keys = ('material_idx', 'length', 'local_ratio', 'D', 'inc_checked', 'inc_pct')
+        keys = ('material_idx', 'length', 'local_ratio', 'D', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text')
         for i, case in enumerate(self._cases):
             if i != self._current_case_idx:
                 for k in keys:
@@ -1271,7 +1370,7 @@ class PressurePipePanel(QWidget):
         self._mark_results_dirty()
         prev = self._cases[self._current_case_idx - 1]
         curr = self._cases[self._current_case_idx]
-        for k in ('material_idx', 'length', 'local_ratio', 'D', 'inc_checked', 'inc_pct'):
+        for k in ('material_idx', 'length', 'local_ratio', 'D', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text'):
             curr[k] = prev[k]
         self._load_case(self._current_case_idx)
         InfoBar.success(title="已复制", content=f"已从工况{self._current_case_idx}复制参数",
@@ -1456,16 +1555,15 @@ class PressurePipePanel(QWidget):
             mat_idx = 0
         mat_key = self._mat_keys[mat_idx]
 
-        manual_pct = None
-        if case.get('inc_checked', True):
-            txt = (case.get('inc_pct', '') or '').strip()
-            if txt:
-                try:
-                    manual_pct = float(txt)
-                except ValueError:
-                    pass
-        else:
-            manual_pct = 0.0
+        increase_resolution = resolve_increase_input(
+            use_increase=case.get('inc_checked', True),
+            mode=case.get('inc_mode', INCREASE_MODE_PERCENT),
+            design_q=Q,
+            percent_text=case.get('inc_pct', ''),
+            q_increased_text=case.get('inc_q_text', ''),
+            disabled_percent=0.0,
+        )
+        manual_pct = increase_resolution.manual_increase_percent
 
         ratio_text = (case.get('local_ratio', '') or '').strip()
         if not ratio_text:
@@ -1487,13 +1585,18 @@ class PressurePipePanel(QWidget):
             if manual_D <= 0:
                 raise ValueError(f"工况{case_num}: 指定管径 D 必须大于 0")
 
-        return PressurePipeInput(
+        parsed = PressurePipeInput(
             Q=Q, material_key=mat_key,
             length_m=length_m,
             manual_increase_percent=manual_pct,
             local_loss_ratio=local_ratio,
             manual_D=manual_D,
         )
+        parsed.inc_mode = increase_resolution.mode
+        parsed.inc_pct_text = case.get('inc_pct', '')
+        parsed.inc_q_text = case.get('inc_q_text', '')
+        parsed.use_increase = case.get('inc_checked', True)
+        return parsed
 
     def _calculate(self):
         self._save_current_case()
@@ -1523,6 +1626,10 @@ class PressurePipePanel(QWidget):
                     Q=q_value,
                     material_key=self._mat_keys[mat_idx],
                     length_m=length_value,
+                    use_increase=case.get('inc_checked', True),
+                    inc_mode=normalize_increase_mode(case.get('inc_mode', INCREASE_MODE_PERCENT)),
+                    inc_pct_text=case.get('inc_pct', ''),
+                    inc_q_text=case.get('inc_q_text', ''),
                 )
                 self._all_results.append((
                     i,
@@ -1557,10 +1664,15 @@ class PressurePipePanel(QWidget):
         # 向后兼容
         _, _, first_result = self._all_results[0]
         self.current_result = first_result
-        self._export_plain_text = "\n\n".join(
-            f"===== 工况{idx+1} =====\n{res.calc_steps}"
-            for idx, _, res in self._all_results
-        )
+        plain_text_parts = []
+        for idx, inp, res in self._all_results:
+            part_lines = [f"===== 工况{idx+1} ====="]
+            if getattr(res, "recommended", None) is not None:
+                part_lines.extend(self._increase_summary_lines(inp, res))
+                part_lines.append("")
+            part_lines.append(res.calc_steps)
+            plain_text_parts.append("\n".join(part_lines))
+        self._export_plain_text = "\n\n".join(plain_text_parts)
 
         # 显示结果
         self._display_all_results()
@@ -1604,10 +1716,18 @@ class PressurePipePanel(QWidget):
         cat_color = {"经济": S, "妥协": W, "兜底": E}.get(
             rec.category if is_manual else result.category, T2)
         badge_text = "指定" if is_manual else result.category
+        increase_summary_html = "".join(
+            f'<div style="font-size:12px;color:#4a5568;line-height:1.6;">{_e(line)}</div>'
+            for line in self._increase_summary_lines(inp, result)
+        )
 
         # 迷你摘要条
         sep_style = f"width:1px;height:28px;background:#e0e0e0;flex-shrink:0;"
         html = case_header + f"""
+        <div style="margin:8px 0 10px;padding:10px 14px;background:#f8fafc;border:1px solid #dbe7f3;
+                    border-radius:8px;font-family:'Microsoft YaHei',sans-serif;">
+            {increase_summary_html}
+        </div>
         <div style="display:flex;gap:15px;margin:8px 0;padding:12px 16px;
                     background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;
                     border:1px solid {cat_color}40;align-items:center;flex-wrap:wrap;
@@ -1983,9 +2103,9 @@ class PressurePipePanel(QWidget):
                 ("管长 L", f"{inp.length_m} m"),
                 ("局部损失比例", str(inp.local_loss_ratio)),
             ]
-            if rec.increase_pct > 0:
-                summary_items.append(("加大流量比例", f"{rec.increase_pct:.1f}%"))
-                summary_items.append(("加大后流量", f"{rec.Q_increased:.4f} m³/s"))
+            for line in self._increase_summary_lines(inp, result):
+                key, _, value = line.partition(" = ")
+                summary_items.append((key, value))
             summary_items += [
                 ("推荐管径 D", f"{rec.D} m ({rec.D*1000:.0f} mm)"),
                 ("推荐类别", display_result_category),

@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """暗涵断面 DXF 导出。"""
 import math
+from app_渠系计算前端.increase_input_helper import (
+    INCREASE_MODE_PERCENT,
+    build_increase_summary_lines,
+)
 from app_渠系计算前端.dxf_common import (
     _add_dim_h,
     _add_dim_v,
@@ -22,6 +26,18 @@ def _normalize_culvert_section_type(value):
     if text in {"圆拱直墙型", "圆拱直墙型暗涵", "暗涵圆拱直墙型", "暗涵-圆拱直墙型", "隧洞-圆拱直墙型"}:
         return "圆拱直墙型"
     return "矩形"
+
+
+def _increase_lines(params, result):
+    """生成DXF文字块里的加大流量输入说明。"""
+    return list(build_increase_summary_lines(
+        use_increase=params.get('use_increase', True),
+        mode=params.get('inc_mode', INCREASE_MODE_PERCENT),
+        percent_text=params.get('inc_pct_text', ''),
+        q_increased_text=params.get('inc_q_text', ''),
+        result_increase_percent=result.get('increase_percent', 0.0),
+        result_q_increased=result.get('Q_increased', params.get('Q', 0.0)),
+    ))
 
 
 def export_culvert_dxf(filepath, result, input_params, scale_denom=100):
@@ -115,7 +131,6 @@ def _draw_rect_culvert(msp, result, p, sf=1.0, scale_denom=100):
                    f'Fb={fb_d:.3f} m', th, ar, '尺寸标注')
 
     # 5. 参数文字
-    inc_s = f'{inc:.1f}%' if isinstance(inc, (int,float)) else str(inc)
     lines = [
         '【暗涵-矩形】',
         f'比例: 1:{scale_denom}',
@@ -138,8 +153,7 @@ def _draw_rect_culvert(msp, result, p, sf=1.0, scale_denom=100):
         f'Fb={fb_d:.3f} m',
         '',
         '[加大流量]',
-        f'比例={inc_s}',
-        f'Q增={Q_inc:.3f} m³/s',
+        *_increase_lines(p, result),
         f'h增={h_inc:.3f} m',
         f'V增={V_inc:.3f} m/s',
         f'Fb增={fb_inc:.3f} m',
@@ -215,7 +229,6 @@ def _draw_arch_culvert(msp, result, p, sf=1.0, scale_denom=100):
         dxfattribs={'layer': '尺寸标注', 'height': th, 'style': 'FANGSONG', 'insert': (th * 0.5, H * sf)},
     )
 
-    inc_s = f'{inc:.1f}%' if isinstance(inc, (int, float)) else str(inc)
     lines = [
         '【暗涵-圆拱直墙型】',
         f'比例: 1:{scale_denom}',
@@ -237,8 +250,7 @@ def _draw_arch_culvert(msp, result, p, sf=1.0, scale_denom=100):
         f'Fb={fb_d:.3f} m',
         '',
         '[加大流量]',
-        f'比例={inc_s}',
-        f'Q增={Q_inc:.3f}',
+        *_increase_lines(p, result),
         f'h增={h_inc:.3f} m',
         f'V增={V_inc:.3f} m/s',
         f'Fb增={fb_inc:.3f} m',

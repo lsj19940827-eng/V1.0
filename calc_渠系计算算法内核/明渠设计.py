@@ -1059,10 +1059,9 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
         else:
             increase_percent = get_flow_increase_percent(Q)
 
+        # 加大流量全程保留高精度参与后续计算，结果展示时再统一格式化
         Q_increased = Q * (1 + increase_percent / 100)
-        Q_increased = round(Q_increased, 3)  # 加大流量保留3位小数
-        
-        # 使用保留3位小数的底宽进行加大水深计算
+
         h_increased = calculate_depth_for_flow(Q_increased, b_designed, i, n, m, h_designed)
 
         result['increase_percent'] = increase_percent
@@ -1251,7 +1250,8 @@ def quick_calculate_compound_trapezoidal(
     else:
         increase_percent = get_flow_increase_percent(Q)
 
-    Q_increased = round(Q * (1 + increase_percent / 100.0), 3)
+    # 加大流量全程保留高精度参与后续计算，结果展示时再统一格式化
+    Q_increased = Q * (1 + increase_percent / 100.0)
     result['increase_percent'] = increase_percent
     result['Q_increased'] = Q_increased
 
@@ -1494,7 +1494,8 @@ def quick_calculate_u_section(Q: float, R: float, alpha_deg: float, theta_deg: f
     else:
         increase_percent = get_flow_increase_percent(Q)
 
-    Q_increased = round(Q * (1.0 + increase_percent / 100.0), 3)
+    # 加大流量全程保留高精度参与后续计算，结果展示时再统一格式化
+    Q_increased = Q * (1.0 + increase_percent / 100.0)
     h_increased = calculate_u_depth_for_flow(Q_increased, R, alpha_deg, theta_deg, n, i)
 
     result['increase_percent'] = increase_percent

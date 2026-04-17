@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """隧洞断面 DXF 导出（圆形 / 平底圆形 / 圆拱直墙型 / 马蹄形）"""
 import math
+from app_渠系计算前端.increase_input_helper import (
+    INCREASE_MODE_PERCENT,
+    build_increase_summary_lines,
+)
 from app_渠系计算前端.dxf_common import (
     _add_dim_h,
     _add_dim_v,
@@ -9,6 +13,18 @@ from app_渠系计算前端.dxf_common import (
     ensure_tracked_msp,
     setup_section_dxf_document,
 )
+
+
+def _increase_lines(params, result):
+    """生成DXF文字块里的加大流量输入说明。"""
+    return list(build_increase_summary_lines(
+        use_increase=params.get('use_increase', True),
+        mode=params.get('inc_mode', INCREASE_MODE_PERCENT),
+        percent_text=params.get('inc_pct_text', ''),
+        q_increased_text=params.get('inc_q_text', ''),
+        result_increase_percent=result.get('increase_percent', 0.0),
+        result_q_increased=result.get('Q_increased', params.get('Q', 0.0)),
+    ))
 from app_渠系计算前端.tunnel.geometry import (
     arch_half_width,
     build_arch_geometry,
@@ -104,13 +120,12 @@ def _draw_circ(msp, result, p, sf=1.0, scale_denom=100):
     msp.add_text(f'R={R:.3f} m', dxfattribs={'layer': '尺寸标注', 'height': th, 'style': 'FANGSONG',
         'insert': (R*sf*0.72, R*sf+R*sf*0.72)})
 
-    inc_s = f'{inc:.1f}%' if isinstance(inc, (int,float)) else str(inc)
     lines = ['【隧洞 - 圆形】', f'比例: 1:{scale_denom}', '',
              '[输入参数]', f'Q={Q:.3f} m³/s', f'n={n}', f'i=1/{int(si)}','',
              '[断面]', f'D={D:.2f} m','',
              '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m²',
-             f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m','',
-             '[加大流量]', f'比例={inc_s}', f'Q增={Q_inc:.3f}',
+              f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m','',
+             '[加大流量]', *_increase_lines(p, result),
              f'h增={h_inc:.3f} m', f'V增={V_inc:.3f} m/s', f'Fb增={fb_inc:.3f} m']
     _add_text_block(msp, R*sf+gap*3.5, D*sf+th, lines, th, '参数文字')
 
@@ -167,12 +182,11 @@ def _draw_flat_bottom_circ(msp, result, p, sf=1.0, scale_denom=100):
     if fb_d > 0 and h_d > 0:
         _add_dim_v(msp, h_d * sf, H_total * sf, D / 2 * sf + gap * 2.3, D / 2 * sf, f'Fb={fb_d:.3f} m', th, ar, '尺寸标注')
 
-    inc_s = f'{inc:.1f}%' if isinstance(inc, (int, float)) else str(inc)
     lines = ['【隧洞 - 平底圆形】', f'比例: 1:{scale_denom}', '',
              '[输入参数]', f'Q={Q:.3f} m³/s', f'n={n}', f'i=1/{int(si)}', '',
              '[断面]', f'D={D:.2f} m', f'B={B:.2f} m', f'H={H_total:.3f} m', f'A总={geom["A_total"]:.3f} m²', '',
              '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m²', f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m', '',
-             '[加大流量]', f'比例={inc_s}', f'Q增={Q_inc:.3f}', f'h增={h_inc:.3f} m',
+             '[加大流量]', *_increase_lines(p, result), f'h增={h_inc:.3f} m',
              f'V增={V_inc:.3f} m/s', f'Fb增={fb_inc:.3f} m']
     _add_text_block(msp, D / 2 * sf + gap * 3.5, H_total * sf + th, lines, th, '参数文字')
 
@@ -228,13 +242,12 @@ def _draw_arch(msp, result, p, sf=1.0, scale_denom=100):
         msp.add_text(f'θ={theta_deg:.0f}°', dxfattribs={'layer': '尺寸标注',
             'height': th, 'style': 'FANGSONG', 'insert': (th*0.5, H*sf)})
 
-    inc_s = f'{inc:.1f}%' if isinstance(inc, (int,float)) else str(inc)
     lines = ['【隧洞 - 圆拱直墙型】', f'比例: 1:{scale_denom}', '',
              '[输入参数]', f'Q={Q:.3f} m³/s', f'n={n}', f'i=1/{int(si)}','',
              '[断面]', f'B={B:.3f} m', f'H={H:.3f} m', f'θ={theta_deg:.0f}°','',
              '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m²',
-             f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m','',
-             '[加大流量]', f'比例={inc_s}', f'Q增={Q_inc:.3f}',
+              f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m','',
+             '[加大流量]', *_increase_lines(p, result),
              f'h增={h_inc:.3f} m', f'V增={V_inc:.3f} m/s', f'Fb增={fb_inc:.3f} m']
     _add_text_block(msp, B/2*sf+gap*3.5, H*sf+th, lines, th, '参数文字')
 
@@ -283,12 +296,11 @@ def _draw_shoe(msp, result, p, sec_type, sf=1.0, scale_denom=100):
     msp.add_text(f'r={r:.3f} m', dxfattribs={'layer': '尺寸标注',
         'height': th, 'style': 'FANGSONG', 'insert': (r*sf*0.72, r*sf+th*0.3)})
 
-    inc_s = f'{inc:.1f}%' if isinstance(inc, (int,float)) else str(inc)
     lines = [f'【隧洞 - 马蹄形{name}】', f'比例: 1:{scale_denom}', '',
              '[输入参数]', f'Q={Q:.3f} m\u00b3/s', f'n={n}', f'i=1/{int(si)}','',
              '[断面]', f'r={r:.3f} m', f'H=2r={2*r:.3f} m','',
              '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m\u00b2',
-             f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m','',
-             '[加大流量]', f'比例={inc_s}', f'Q\u589e={Q_inc:.3f}',
+              f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m','',
+             '[加大流量]', *_increase_lines(p, result),
              f'h\u589e={h_inc:.3f} m', f'V\u589e={V_inc:.3f} m/s', f'Fb\u589e={fb_inc:.3f} m']
     _add_text_block(msp, r*sf+gap*3.5, 2*r*sf+th, lines, th, '参数文字')
