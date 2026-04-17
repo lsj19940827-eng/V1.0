@@ -37,7 +37,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 压力管道特性表里的隧洞统计现在也按渠道级别分流：`xx渠` 只有在同一流量段里被 `有压管道 / 定向钻 / 顶管` 前后夹住的中间隧洞，才会计入主长度、隧洞座数和长度，前置隧洞和末尾隧洞都不再统计；`xx管` 继续按原有整线口径统计，若前段是无压隧洞，则主长度还会把该隧洞及其与首段有压结构之间的空档一起补回。
 普通纵断面与 xx管 现在都支持单独控制导出桩号小数位：普通模式默认 2 位，且会同步影响普通纵断面、IP 表、合并 DXF 里的 IP 表和 bzzh2 这类导出结果；xx管 继续只影响自己的纵断面桩号。
 表3顶部“转弯半径”现在是一个统一应用入口：导入后默认保留每一行自己的半径，只有点击“应用”才会批量覆盖真实导入行。
-应用内自动更新现在只对近版本提供补丁包；更老版本会直接下载全量包。安装前会先自动清理旧 `_update_sessions` 残留，“校验安装环境”也会继续显示“正在清理上次失败残留 / 正在检查写入权限 / 正在统计安装目录大小 / 正在解压完整安装包或补丁包 / 正在校验补丁适用性（x/y）”这些细分状态；如果旧残留清不掉，窗口会直接提示先关闭软件，仍失败再重启电脑。
+应用内自动更新现在按“先验包、再安装、补丁落地后再验收”收口：近版本仍优先补丁，更老版本直接走全量包；`siphon_autosave.json`、`data/autosave/` 和 `*_autosave.qxproj` 这类运行时文件不再参与补丁严格哈希校验，成功安装后也会保留；安装前仍会自动清理旧 `_update_sessions` 残留，窗口会继续显示“正在清理上次失败残留 / 正在校验更新包完整性 / 正在检查写入权限 / 正在统计安装目录大小 / 正在解压完整安装包或补丁包 / 正在校验补丁适用性（x/y）”这些细分状态；如果旧残留清不掉，窗口会直接提示先关闭软件，仍失败再重启电脑。
 
 ## 技术架构
 
@@ -49,7 +49,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 暗涵断面：既有 `calc_渠系计算算法内核/矩形暗涵设计.py` 与 `app_渠系计算前端/culvert/` 继续承接 `暗涵-矩形`；新增 `暗涵-圆拱直墙型` 的文档口径要求复用圆拱几何、分叉暗涵规则，并保留 `B / H_total / theta_deg` 进入共享结果、表3和导出链路。
 - 专项模块：`倒虹吸水力计算系统/`、`有压管道/` 提供专项计算能力。
 - 自动化验证：`pytest`，测试文件集中在 `tests/`，其中 xx管 整线纵断面会同时覆盖界面、持久化、计算和导出链路。
-- 更新链路：`updater.py`、`update_helper.py`、`tools/build.py`、`tools/release.py` 共同负责版本检查、补丁/全量选择、旧会话残留清理、独立安装窗口、补丁兜底和正式发版；其中 `tools/build.py` 现在还会在打包前按分组校验关键依赖，并显式收集 `latex2mathml` 这类 Word 导出运行时数据文件，避免安装包启动时因缺资源直接退出。
+- 更新链路：`updater.py`、`update_helper.py`、`app_渠系计算前端/update_dialog.py`、`update_artifact_rules.py`、`tools/build.py`、`tools/release.py`、`tools/release_snapshot.py` 共同负责版本检查、补丁/全量选择、下载包 checksum、运行时文件排除、旧会话残留清理、补丁落地后目标验收、独立安装窗口、补丁兜底和正式发版；`tools/backfill_patch_release.py` 与 `tools/disable_patch_release.py` 则分别负责“基于快照回补 patch”和“临时撤下高风险 patch 字段”这两类运维动作。
 - 导出精度：普通模式导出桩号使用 `station_decimals`，xx管 导出桩号使用 `xxpipe_station_decimals`；两者都在导出链路单独格式化，不改主界面的通用桩号显示函数。
 - mixed route 持久化：`PressurePipeManager` 现同时保存 route 级 `longitudinal_nodes`、`raw_profile_polyline` 与 `profile_segments`，用来承接“原线直出 + 平面桩号采样 + 工程折点接口”的混合整线导出。
 - 纵断面绘图与取值分离：`centerline_draw_segments` 只负责导入原线画线，`profile_breakpoint_records` 只负责工程折点接口和覆盖判断；当前表格文字仍继续走 `centerline_records`。
@@ -68,7 +68,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 ## 部署方法和命令
 
 当前项目主要作为本地桌面工具使用，日常开发通常不做云端部署。
-正式发版按仓库约定使用 `D:\V1.0\.venv\Scripts\python.exe tools/release.py`，也可通过 `发版工具.bat` 进入标准发版流程；正式打包和发版前会先校验 Word 导出依赖，缺失时直接中止并提示安装命令。
+正式发版按仓库约定使用 `D:\V1.0\.venv\Scripts\python.exe tools/release.py`，也可通过 `发版工具.bat` 进入标准发版流程；正式打包和发版前会先校验 Word 导出依赖，缺失时直接中止并提示安装命令。发版成功后会额外在 `.release-snapshots/` 固化本次正式包、manifest 和 version.json；若线上 patch 需要临时撤下或事后回补，分别使用 `tools/disable_patch_release.py` 与 `tools/backfill_patch_release.py`。
 
 ## 测试方法和常用命令
 
@@ -93,7 +93,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 运行本次同名连续承压链回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_batch_panel_dialog_parent_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_pressure_pipe_export_results_unit.py -q`
 - 运行本次赛金支渠连续承压链回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_pressure_pipe_export_results_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_water_profile_transition_ready_unit.py tests/test_xxpipe_longitudinal_export_unit.py -q`
 - 运行本次“中段借到前缀失败”回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_external_head_loss_unit.py -q`
-- 运行更新链路回归：`$env:PYTEST_ADDOPTS='--basetemp=D:\V1.0\.pytest_tmp\update-regression'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py tests/test_updater_install_flow_unit.py tests/test_update_helper_unit.py -q`
+- 运行更新链路回归：`$env:PYTEST_ADDOPTS='--basetemp=D:\V1.0\.pytest_tmp\update-regression'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py tests/test_updater_install_flow_unit.py tests/test_update_helper_unit.py tests/test_updater_versioning_unit.py tests/test_release_snapshot_unit.py -q`
 - 运行本次构建依赖回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py -q --basetemp=D:\V1.0\.pytest_tmp\build-plan`
 - 运行本次复式梯形回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_open_channel_compound_trapezoid_kernel_unit.py tests/test_open_channel_compound_trapezoid_panel_unit.py tests/test_open_channel_compound_trapezoid_dxf_unit.py tests/test_batch_compound_trapezoid_unit.py tests/test_compound_trapezoid_type_support_unit.py tests/test_compound_trapezoid_shared_hydraulic_unit.py tests/test_water_profile_coord_precision_unit.py -q`
 - 运行本次平底圆形隧洞收口回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_tunnel_flat_bottom_circular_kernel_unit.py tests/test_tunnel_flat_bottom_circular_shared_hydraulic_unit.py tests/test_tunnel_flat_bottom_circular_dxf_unit.py tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py tests/test_tunnel_flat_bottom_circular_table3_xxpipe_unit.py tests/test_tunnel_flat_bottom_circle_section_summary_unit.py tests/test_tunnel_kernel.py tests/test_tunnel_dxf_export_unit.py tests/test_tunnel_panel_plot_unit.py tests/test_formula_renderer_result_pages_unit.py -q`
@@ -101,6 +101,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 
 ## 搜索记录
 
+- 2026-04-17：本次为既有在线更新与正式发版链路加固，README 已有搜索记录，继续基于仓库现有更新器、补丁构建和发版脚本实现，未重复执行外部方案搜索。
 - 2026-04-15：本次为既有表3流量段交互口径的文档同步，README 已有搜索记录，继续基于已确定方案更新说明，未重复执行外部方案搜索。
 - 2026-04-13：本次为既有连续承压链逐行计损规则收口，README 已有搜索记录，继续基于仓库现有计算与回写链路实现，未重复执行外部方案搜索。
 - 2026-04-14：本次为既有矩形暗涵升级为暗涵家族并落地 `暗涵-圆拱直墙型`，README 已有搜索记录，继续基于仓库现有暗涵/隧洞/表3/导出链路实现，未重复执行外部方案搜索。
@@ -160,7 +161,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 图2“管中心线高程（米）”继续在导出时按当前平面桩号现算；节点 `station_MC` 缺失时只对个别节点按平面累计距离回退，整线都没有有效桩号锚点时直接报错。
 - 普通纵断面导出现在新增 `station_decimals`，默认保留 2 位小数；同一设置会同步影响普通纵断面、IP 表、合并 DXF 里的 IP 表和 bzzh2 的桩号输出，但不会改表3和说明文字的原有显示。
 - 表3顶部“转弯半径”改成“待应用统一值”：导入混合半径时保持空白，点击“自动”只填栏位，点击“应用”才统一覆盖真实导入行。
-- 自动更新补丁策略已收紧到近版本链路：当前只给 `1.1.9+` 提供补丁；如果补丁删除文件过多或总覆盖量过大，构建阶段会直接跳过补丁，只发布全量包。安装前会先自动清理旧 `_update_sessions` 残留，“校验安装环境”也会继续显示“正在清理上次失败残留 / 正在检查写入权限 / 正在统计安装目录大小 / 正在解压完整安装包或补丁包 / 正在校验补丁适用性（x/y）”这些细分状态；如果旧残留清不掉，窗口会直接提示先关闭软件，仍失败再重启电脑。
+- 自动更新链路已完成一轮全面加固：补丁仍只覆盖 `1.1.9+` 近版本，但现在会额外排除运行时自动保存文件、给全量包和 patch 增加发布级 checksum、在补丁应用完成后按 `target_files` 再做一次目标版本验收，并把“无需回滚 / 已成功回滚 / 回滚失败”三种结果分开提示。构建阶段除了“删除文件过多 / 覆盖量过大”外，还会在补丁包过大时直接跳过 patch，只发布全量包；正式发版后会额外固化 `.release-snapshots/` 快照，后续回补 patch 不再依赖会漂移的本地 `dist`。
 - 明渠设计面板现已支持 `复式梯形`：输入 `m1 / B1 / m2 / B2 / m3 / h1` 后可直接反算设计水深、加大流量水深、断面图、TXT/Word/DXF 导出。
 - 表3基础设置区的“设计流量 / 加大流量”现已升级为共享当前流量段的只读查看组：主界面默认只显示当前段并支持下拉切换，不再提供“编辑全部”入口；当上游来源刷新设计流量时会整体重算加大流量，批量同步和项目重开后当前段都回到第一段。
 - 批量计算现已支持 `明渠-复式梯形`：主表、参数弹窗、Excel 导入导出和结果文本均已补齐 6 个专用参数列。

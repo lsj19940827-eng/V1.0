@@ -219,3 +219,67 @@ def test_update_helper_surfaces_stale_session_cleanup_guidance(monkeypatch):
     assert not window.btn_open_log.isHidden()
     assert not window.btn_retry.isHidden()
     window.close()
+
+
+def test_update_helper_distinguishes_no_rollback_needed(monkeypatch):
+    _get_qapp()
+    fake_session = SimpleNamespace(
+        current_version="1.2.5",
+        target_version="1.2.6",
+        work_dir="C:/temp/update-work",
+        log_dir="C:/temp/update-logs",
+    )
+
+    monkeypatch.setattr(
+        update_helper.updater.UpdateSession,
+        "from_file",
+        lambda _path: fake_session,
+    )
+    monkeypatch.setattr(update_helper.UpdateHelperWindow, "_start_worker", lambda self: None)
+
+    window = update_helper.UpdateHelperWindow("dummy-session.json")
+    window._on_completed(
+        {
+            "success": False,
+            "rollback_ok": False,
+            "rollback_status": "not_needed",
+            "error_code": "prepare_failed",
+            "user_message": "",
+            "retry_mode": None,
+            "error": "backup not started",
+            "log_path": "C:/temp/update-logs/install.log",
+        }
+    )
+
+    assert "回滚未完成" not in window.status_label.text()
+    assert "回滚未完成" not in window.result_stage_label.text()
+    window.close()
+
+
+def test_update_helper_shows_cleanup_warning_after_success(monkeypatch):
+    _get_qapp()
+    fake_session = SimpleNamespace(
+        current_version="1.2.5",
+        target_version="1.2.6",
+        work_dir="C:/temp/update-work",
+        log_dir="C:/temp/update-logs",
+    )
+
+    monkeypatch.setattr(
+        update_helper.updater.UpdateSession,
+        "from_file",
+        lambda _path: fake_session,
+    )
+    monkeypatch.setattr(update_helper.UpdateHelperWindow, "_start_worker", lambda self: None)
+
+    window = update_helper.UpdateHelperWindow("dummy-session.json")
+    window._on_completed(
+        {
+            "success": True,
+            "cleanup_errors": ["无法删除临时目录：C:/temp/update-work/extract"],
+            "log_path": "C:/temp/update-logs/install.log",
+        }
+    )
+
+    assert "未清理" in window.footer_label.text()
+    window.close()

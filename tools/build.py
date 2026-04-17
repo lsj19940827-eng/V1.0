@@ -28,12 +28,14 @@ from contextlib import contextmanager
 # 配置区（版本号从 version.py 读取，发版时只需修改 version.py）
 # ============================================================
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from update_artifact_rules import is_runtime_artifact
 from version import APP_VERSION, APP_NAME, APP_NAME_EN
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
 UNIVERSAL_PATCH_MIN_VERSION = "1.1.9"
 MAX_PATCH_DELETED_COUNT = 100
 MAX_PATCH_TOTAL_COVERAGE = 300
+MAX_PATCH_SIZE_MB = 64.0
 
 
 def _version_key(v: str) -> tuple:
@@ -70,6 +72,7 @@ def _should_skip_universal_patch(patch_result: dict) -> tuple[bool, str]:
     """判断通用补丁是否覆盖过重，避免把高风险补丁发给用户。"""
     changed_count = int((patch_result or {}).get("changed_count", 0) or 0)
     deleted_count = int((patch_result or {}).get("deleted_count", 0) or 0)
+    size_mb = float((patch_result or {}).get("size_mb", 0) or 0)
 
     if deleted_count > MAX_PATCH_DELETED_COUNT:
         return (
@@ -82,6 +85,12 @@ def _should_skip_universal_patch(patch_result: dict) -> tuple[bool, str]:
         return (
             True,
             f"覆盖范围过大：changed+deleted={total_coverage}，超过 {MAX_PATCH_TOTAL_COVERAGE}",
+        )
+
+    if size_mb > MAX_PATCH_SIZE_MB:
+        return (
+            True,
+            f"补丁包过大：size_mb={size_mb:.2f}，超过 {MAX_PATCH_SIZE_MB:.2f}",
         )
 
     return False, ""
@@ -646,7 +655,7 @@ def build(bump: str = None):
     # ---- 添加资源文件（仅图片/图标/JSON/Excel 等，不包含 .py 源码） ----
     sep = ";"  # Windows 用分号分隔 src;dest
 
-    # 从 data/ 目录逐个添加文件，排除 autosave 子目录和 .qxproj 等运行时产物
+    # 从 data/ 目录逐个添加文件，排除 autosave 子目录和其它运行时产物
     _data_src = os.path.join(PROJECT_ROOT, "data")
     _data_exclude_exts = {".qxproj", ".log"}
     _data_exclude_dirs = {"autosave"}
@@ -660,6 +669,8 @@ def build(bump: str = None):
             if _fname.startswith("~$"):
                 continue
             if os.path.splitext(_fname)[1] in _data_exclude_exts:
+                continue
+            if is_runtime_artifact(f"data/{_fname}"):
                 continue
             args.append(f"--add-data={_fpath}{sep}data")
 

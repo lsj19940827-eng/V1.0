@@ -46,6 +46,7 @@ output/
 # 归档/备份
 _archive/
 V1.00207的备份/
+.release-snapshots/
 
 # 临时文件
 *.tmp

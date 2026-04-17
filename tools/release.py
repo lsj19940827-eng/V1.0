@@ -38,6 +38,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from version import APP_NAME_EN
 from repo_config import GITHUB_OWNER, GITHUB_REPO, GIST_ID, DOWNLOAD_PROXIES
+from tools import release_snapshot
 
 
 def _proxied_url(url: str) -> str:
@@ -124,6 +125,35 @@ def _load_universal_patch(dist_dir: str, version: str) -> dict:
             "size_mb": round(os.path.getsize(fallback) / (1024 * 1024), 2),
         }
     return {}
+
+
+def _build_version_data(version: str, urls: dict, assets: dict, changelog: str) -> dict:
+    """统一构造正式通道 version.json 内容。"""
+    full_size = os.path.getsize(assets["full_zip"]) / (1024 * 1024)
+    download_url_direct = urls.get("download_url", "")
+    version_data = {
+        "latest_version": version,
+        "download_url": download_url_direct,
+        "download_url_direct": download_url_direct,
+        "download_url_proxy": _proxied_url(download_url_direct),
+        "download_sha256": release_snapshot.sha256_file(assets["full_zip"]),
+        "changelog": changelog or f"V{version} 版本发布",
+        "release_date": date.today().isoformat(),
+        "min_version": "1.0.0",
+        "file_size_mb": round(full_size, 1),
+        "channel": "stable",
+    }
+    patch_zip = assets.get("patch_zip", "")
+    if "patch_url" in urls and patch_zip and os.path.exists(patch_zip):
+        patch_url_direct = urls["patch_url"]
+        version_data["patch_url"] = patch_url_direct
+        version_data["patch_url_direct"] = patch_url_direct
+        version_data["patch_url_proxy"] = _proxied_url(patch_url_direct)
+        version_data["patch_size_mb"] = assets.get("patch_size_mb", 0)
+        version_data["min_patch_version"] = assets.get("patch_min_version", "")
+        version_data["patch_base_version"] = assets.get("patch_min_version", "")
+        version_data["patch_sha256"] = release_snapshot.sha256_file(patch_zip)
+    return version_data
 
 
 def _github_api(method: str, url: str, token: str, data=None, raw_body=None,
@@ -224,7 +254,10 @@ def step_build() -> dict:
         print(f"[错误] 找不到全量包: {full_zip}")
         sys.exit(1)
 
-    assets = {"full_zip": full_zip}
+    assets = {
+        "full_zip": full_zip,
+        "manifest_path": os.path.join(dist_dir, f"manifest-V{app_version}.json"),
+    }
     patch_info = _load_universal_patch(dist_dir, app_version)
     if patch_info.get("file_path"):
         assets["patch_zip"] = patch_info["file_path"]
@@ -303,27 +336,7 @@ def step_update_gist(version: str, urls: dict, assets: dict, token: str,
     print("  [步骤 6/6] 更新 GitHub Gist version.json（正式通道）")
     print(f"{'=' * 60}\n")
 
-    full_size = os.path.getsize(assets["full_zip"]) / (1024 * 1024)
-    download_url_direct = urls.get("download_url", "")
-    version_data = {
-        "latest_version": version,
-        "download_url": download_url_direct,
-        "download_url_direct": download_url_direct,
-        "download_url_proxy": _proxied_url(download_url_direct),
-        "changelog": changelog or f"V{version} 版本发布",
-        "release_date": date.today().isoformat(),
-        "min_version": "1.0.0",
-        "file_size_mb": round(full_size, 1),
-        "channel": "stable",
-    }
-    if "patch_url" in urls:
-        patch_url_direct = urls["patch_url"]
-        version_data["patch_url"] = patch_url_direct
-        version_data["patch_url_direct"] = patch_url_direct
-        version_data["patch_url_proxy"] = _proxied_url(patch_url_direct)
-        version_data["patch_size_mb"] = assets.get("patch_size_mb", 0)
-        version_data["min_patch_version"] = assets.get("patch_min_version", "")
-        version_data["patch_base_version"] = assets.get("patch_min_version", "")
+    version_data = _build_version_data(version, urls, assets, changelog)
 
     gist_url = f"https://api.github.com/gists/{gist_id}"
     data = {"files": {"version.json": {"content": json.dumps(version_data, ensure_ascii=False, indent=4)}}}
@@ -379,7 +392,18 @@ def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: 
     step_git_commit_and_tag(tag_name, branch, commit_message)
     release_obj = step_create_release(tag_name, release_name, token, changelog)
     urls = step_upload_assets(release_obj, assets, token)
-    step_update_gist(new_ver, urls, assets, token, changelog, gist_id=GIST_ID)
+    version_data = step_update_gist(new_ver, urls, assets, token, changelog, gist_id=GIST_ID)
+    snapshot_file = release_snapshot.write_release_snapshot(
+        version=new_ver,
+        tag_name=tag_name,
+        full_zip_path=assets["full_zip"],
+        full_download_url=urls.get("download_url", ""),
+        version_data=version_data,
+        manifest_path=assets.get("manifest_path", ""),
+        patch_zip_path=assets.get("patch_zip", ""),
+        patch_download_url=urls.get("patch_url", ""),
+    )
+    print(f"  - 发布快照: {snapshot_file}")
 
     print(f"\n{'=' * 60}")
     print(f"  {tag_name} 正式发布完成")

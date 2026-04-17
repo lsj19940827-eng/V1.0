@@ -24,6 +24,7 @@ def _make_patch_zip(
     included_files: dict[str, str],
     deleted: list[str] | None = None,
     allowed_source_hashes: dict[str, list[str]] | None = None,
+    target_files: dict[str, str] | None = None,
     min_version: str = "1.0.0",
 ) -> Path:
     manifest = {
@@ -33,6 +34,7 @@ def _make_patch_zip(
         "included_files": sorted(included_files.keys()),
         "deleted": deleted or [],
         "allowed_source_hashes": allowed_source_hashes or {},
+        "target_files": target_files or {},
     }
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("patch_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -48,6 +50,8 @@ def _write_session(
     zip_path: Path,
     is_patch: bool,
     session_id: str = "session-001",
+    preserve_patterns: list[str] | None = None,
+    expected_package_sha256: str = "",
 ) -> str:
     log_dir = tmp_path / "logs" / session_id
     session = updater.UpdateSession(
@@ -60,7 +64,8 @@ def _write_session(
         current_version="1.0.0",
         log_dir=str(log_dir),
         cleanup_targets=[],
-        preserve_patterns=["*.lic"],
+        preserve_patterns=list(preserve_patterns or updater.DEFAULT_PRESERVE_PATTERNS),
+        expected_package_sha256=expected_package_sha256,
         parent_pid=0,
         work_dir=str(app_dir / updater.INTERNAL_WORK_DIR / session_id),
     )
@@ -154,6 +159,72 @@ def test_ensure_install_ready_reports_validate_steps(tmp_path, monkeypatch):
     assert scan_messages[-1].endswith("3 个文件）")
 
 
+def test_ensure_install_ready_skips_dir_scan_for_patch(tmp_path, monkeypatch):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    zip_path = _make_patch_zip(
+        tmp_path / "patch-update.zip",
+        included_files={"keep.txt": "new-content"},
+        allowed_source_hashes={"keep.txt": [updater.PATCH_MISSING_SENTINEL]},
+    )
+
+    monkeypatch.setattr(updater, "is_install_dir_writable", lambda path=None: True)
+    monkeypatch.setattr(
+        updater,
+        "_dir_size",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("patch 路径不应扫描整个安装目录")),
+    )
+    monkeypatch.setattr(
+        shutil,
+        "disk_usage",
+        lambda _path: shutil._ntuple_diskusage(total=1024**4, used=1024, free=1024**4),
+    )
+
+    result = updater.ensure_install_ready(
+        str(zip_path),
+        is_patch=True,
+        app_dir=str(app_dir),
+    )
+
+    assert result["required_bytes"] == zip_path.stat().st_size * 2 + updater.INSTALL_SLACK_BYTES
+
+
+def test_default_preserve_patterns_cover_runtime_autosave_files():
+    assert updater._should_preserve(
+        "data/siphon_autosave.json",
+        updater.DEFAULT_PRESERVE_PATTERNS,
+    )
+    assert updater._should_preserve(
+        "_internal/data/autosave/demo.qxproj",
+        updater.DEFAULT_PRESERVE_PATTERNS,
+    )
+
+
+def test_download_update_rejects_checksum_mismatch(tmp_path, monkeypatch):
+    source_zip = tmp_path / "source.zip"
+    source_zip.write_bytes(b"fake-update-package")
+    dest_dir = tmp_path / "downloads"
+    dest_dir.mkdir()
+
+    def fake_download(_url, download_dir, progress_callback=None, cancel_event=None):
+        _ = progress_callback
+        _ = cancel_event
+        target = Path(download_dir) / source_zip.name
+        shutil.copy2(source_zip, target)
+        return str(target)
+
+    monkeypatch.setattr(updater, "_download_from_url", fake_download)
+
+    with pytest.raises(updater.UpdatePreparationError):
+        updater.download_update(
+            "https://example.com/full.zip",
+            dest_dir=str(dest_dir),
+            expected_sha256="0" * 64,
+        )
+
+    assert not (dest_dir / source_zip.name).exists()
+
+
 def test_run_update_session_rolls_back_full_install_on_failure(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
     app_dir.mkdir()
@@ -184,6 +255,38 @@ def test_run_update_session_rolls_back_full_install_on_failure(tmp_path, monkeyp
     assert result["rollback_ok"] is True
     assert (app_dir / "old.txt").read_text(encoding="utf-8") == "old-version"
     assert not (app_dir / "new.txt").exists()
+
+
+def test_run_update_session_preserves_runtime_autosave_files_on_full_install(tmp_path, monkeypatch):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "old.txt").write_text("old-version", encoding="utf-8")
+    (app_dir / f"{updater.APP_NAME_EN}.exe").write_text("binary", encoding="utf-8")
+    autosave_dir = app_dir / "data" / "autosave"
+    autosave_dir.mkdir(parents=True)
+    (app_dir / "data" / "siphon_autosave.json").write_text('{"case":"user"}', encoding="utf-8")
+    (autosave_dir / "draft.qxproj").write_text("user-draft", encoding="utf-8")
+    zip_path = _make_full_zip(
+        tmp_path / "full-update.zip",
+        "9.9.9",
+        {
+            "old.txt": "new-version",
+            "new.txt": "brand-new",
+        },
+    )
+    session_path = _write_session(tmp_path, app_dir=app_dir, zip_path=zip_path, is_patch=False)
+
+    monkeypatch.setattr(updater, "_wait_for_process_exit", lambda pid: None)
+
+    result = updater.run_update_session(session_path)
+
+    assert result["success"] is True
+    assert (app_dir / "old.txt").read_text(encoding="utf-8") == "new-version"
+    assert (app_dir / "new.txt").read_text(encoding="utf-8") == "brand-new"
+    assert (app_dir / "data" / "siphon_autosave.json").read_text(encoding="utf-8") == '{"case":"user"}'
+    assert (app_dir / "data" / "autosave" / "draft.qxproj").read_text(encoding="utf-8") == "user-draft"
+    assert "data/siphon_autosave.json" in result["preserved_files"]
+    assert "data/autosave/draft.qxproj" in result["preserved_files"]
 
 
 def test_run_update_session_rolls_back_patch_install_on_failure(tmp_path, monkeypatch):
@@ -224,6 +327,85 @@ def test_run_update_session_rolls_back_patch_install_on_failure(tmp_path, monkey
     assert (app_dir / "keep.txt").read_text(encoding="utf-8") == "old-content"
     assert not (app_dir / "new.txt").exists()
     assert (app_dir / "obsolete.txt").read_text(encoding="utf-8") == "remove-me"
+
+
+def test_run_update_session_validates_patch_target_files_after_apply(tmp_path, monkeypatch):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "keep.txt").write_text("old-content", encoding="utf-8")
+    (app_dir / f"{updater.APP_NAME_EN}.exe").write_text("binary", encoding="utf-8")
+    zip_path = _make_patch_zip(
+        tmp_path / "patch-update.zip",
+        included_files={
+            "keep.txt": "new-content",
+            "new.txt": "brand-new",
+        },
+        allowed_source_hashes={
+            "keep.txt": [updater._sha256_file(str(app_dir / "keep.txt"))],
+            "new.txt": [updater.PATCH_MISSING_SENTINEL],
+        },
+        target_files={
+            "keep.txt": "sha256-target-will-not-match",
+            "new.txt": updater._sha256_text("brand-new"),
+        },
+    )
+    session_path = _write_session(tmp_path, app_dir=app_dir, zip_path=zip_path, is_patch=True)
+
+    monkeypatch.setattr(updater, "_wait_for_process_exit", lambda pid: None)
+
+    result = updater.run_update_session(session_path)
+
+    assert result["success"] is False
+    assert result["error_code"] == "target_verify_failed"
+    assert result["retry_mode"] == updater.RETRY_MODE_FULL_PACKAGE
+    assert result["rollback_status"] == "completed"
+    assert (app_dir / "keep.txt").read_text(encoding="utf-8") == "old-content"
+    assert not (app_dir / "new.txt").exists()
+
+
+def test_run_update_session_restores_entries_when_full_backup_fails(tmp_path, monkeypatch):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    first_file = app_dir / "first.txt"
+    second_file = app_dir / "second.txt"
+    first_file.write_text("first", encoding="utf-8")
+    second_file.write_text("second", encoding="utf-8")
+    (app_dir / f"{updater.APP_NAME_EN}.exe").write_text("binary", encoding="utf-8")
+    zip_path = _make_full_zip(
+        tmp_path / "full-update.zip",
+        "9.9.9",
+        {
+            "new.txt": "brand-new",
+        },
+    )
+    session_path = _write_session(tmp_path, app_dir=app_dir, zip_path=zip_path, is_patch=False)
+
+    monkeypatch.setattr(updater, "_wait_for_process_exit", lambda pid: None)
+
+    real_move = shutil.move
+    real_listdir = updater.os.listdir
+
+    def ordered_listdir(path):
+        items = real_listdir(path)
+        if Path(path) == app_dir:
+            return sorted(items)
+        return items
+
+    def flaky_move(src, dst, *args, **kwargs):
+        if Path(src) == second_file and Path(dst).name == second_file.name:
+            raise OSError("backup target unavailable")
+        return real_move(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(updater.os, "listdir", ordered_listdir)
+    monkeypatch.setattr(shutil, "move", flaky_move)
+
+    result = updater.run_update_session(session_path)
+
+    assert result["success"] is False
+    assert result["rollback_status"] == "not_needed"
+    assert first_file.read_text(encoding="utf-8") == "first"
+    assert second_file.read_text(encoding="utf-8") == "second"
+    assert not (app_dir / "new.txt").exists()
 
 
 def test_run_update_session_rejects_patch_when_min_version_mismatched(tmp_path, monkeypatch):

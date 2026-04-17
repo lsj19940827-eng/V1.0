@@ -42,6 +42,7 @@ from datetime import datetime
 
 # 确保能导入 version.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from update_artifact_rules import is_runtime_artifact
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
 MISSING_FILE_SENTINEL = "__MISSING__"
@@ -88,6 +89,8 @@ def generate_manifest(dist_folder: str, version: str = "") -> dict:
         for fname in filenames:
             fpath = os.path.join(root, fname)
             rel_path = os.path.relpath(fpath, dist_folder).replace("\\", "/")
+            if is_runtime_artifact(rel_path):
+                continue
             files[rel_path] = _sha256(fpath)
 
     manifest = {

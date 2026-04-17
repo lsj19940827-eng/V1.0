@@ -464,12 +464,18 @@ def _update_helper_on_completed(self, result: dict):
         self._sync_label_height(self._stage_labels["done"], minimum=STAGE_LABEL_MIN_HEIGHT)
         self._set_status_text("安装完成，可以启动新版本。", tone="success")
         self._clear_guidance()
-        self._set_footer_text("旧版本备份和临时文件已经清理。")
+        cleanup_errors = list(result.get("cleanup_errors") or [])
+        if cleanup_errors:
+            self._set_footer_text("更新已完成，但仍有临时文件未清理，可稍后重试删除。")
+            self._append_detail(cleanup_errors[0])
+        else:
+            self._set_footer_text("旧版本备份和临时文件已经清理。")
         self.btn_launch.setVisible(True)
         self._append_detail(f"安装日志：{result.get('log_path', '')}")
         return
 
     rollback_ok = result.get("rollback_ok")
+    rollback_status = result.get("rollback_status")
     retry_mode = result.get("retry_mode")
     error_code = result.get("error_code")
     user_message = (result.get("user_message") or "").strip()
@@ -498,20 +504,22 @@ def _update_helper_on_completed(self, result: dict):
         self._set_footer_text("请先关闭软件后重试；如仍失败，请重启电脑后再试。")
         self.result_stage_label.setText("检测到旧更新残留，需先清理后重试")
     else:
-        fallback_text = (
-            "安装失败，已自动回滚到旧版本。"
-            if rollback_ok
-            else "安装失败，且自动回滚未完成。"
-        )
+        if rollback_status == "not_needed":
+            fallback_text = "安装失败，本次还未开始覆盖旧版本。"
+            result_stage_text = "安装失败，尚未开始覆盖"
+        elif rollback_status == "completed" or rollback_ok:
+            fallback_text = "安装失败，已自动回滚到旧版本。"
+            result_stage_text = "安装失败并回滚"
+        else:
+            fallback_text = "安装失败，且自动回滚未完成。"
+            result_stage_text = "安装失败，回滚未完成"
         self._set_status_text(user_message or fallback_text, tone="error")
         if user_message:
             self._show_guidance("安装未完成", user_message)
         else:
             self._clear_guidance()
         self._set_footer_text("可以查看日志或打开更新目录继续排查。")
-        self.result_stage_label.setText(
-            "安装失败并回滚" if rollback_ok else "安装失败，回滚未完成"
-        )
+        self.result_stage_label.setText(result_stage_text)
     self.result_stage_label.setVisible(True)
     self._sync_label_height(self.result_stage_label, minimum=STAGE_LABEL_MIN_HEIGHT)
     self._append_detail(user_message or "安装未完成，请重新下载后再试。")

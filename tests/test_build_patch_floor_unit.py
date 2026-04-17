@@ -85,6 +85,19 @@ def test_should_keep_universal_patch_when_coverage_is_small():
     assert reason == ""
 
 
+def test_should_skip_universal_patch_when_archive_is_too_large():
+    should_skip, reason = build._should_skip_universal_patch(
+        {
+            "changed_count": 7,
+            "deleted_count": 0,
+            "size_mb": 72.74,
+        }
+    )
+
+    assert should_skip is True
+    assert "size_mb=72.74" in reason
+
+
 def test_resolve_update_helper_icon_file_prefers_shared_shield_icon(monkeypatch):
     project_root = Path(tempfile.mkdtemp(prefix="build-update-helper-icon-"))
     shared_resources = project_root / "app_渠系计算前端" / "resources"
@@ -240,3 +253,17 @@ def test_build_universal_patch_includes_allowed_source_hashes(tmp_path):
         patch_builder.MISSING_FILE_SENTINEL,
         "old-obsolete-hash",
     ]
+
+
+def test_generate_manifest_excludes_runtime_autosave_artifacts(tmp_path):
+    dist_dir = tmp_path / "dist"
+    (dist_dir / "_internal" / "data" / "autosave").mkdir(parents=True)
+    (dist_dir / "_internal" / "data" / "siphon_autosave.json").write_text("{}", encoding="utf-8")
+    (dist_dir / "_internal" / "data" / "autosave" / "draft.qxproj").write_text("draft", encoding="utf-8")
+    (dist_dir / "keep.txt").write_text("keep", encoding="utf-8")
+
+    manifest = patch_builder.generate_manifest(str(dist_dir), version="1.1.0")
+
+    assert "keep.txt" in manifest["files"]
+    assert "_internal/data/siphon_autosave.json" not in manifest["files"]
+    assert "_internal/data/autosave/draft.qxproj" not in manifest["files"]

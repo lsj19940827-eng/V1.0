@@ -46,6 +46,11 @@ from repo_config import (
     GITHUB_VERSION_URL as _GITHUB_VERSION_URL,
     DOWNLOAD_PROXIES as _DOWNLOAD_PROXIES,
 )
+from update_artifact_rules import (
+    DEFAULT_PRESERVE_PATTERNS as DEFAULT_RUNTIME_PRESERVE_PATTERNS,
+    normalize_relative_path,
+    path_matches_patterns,
+)
 
 _CHECK_TIMEOUT = 8  # 妫€鏌ユ洿鏂拌秴鏃讹紙绉掞級
 _PROXY_PROBE_TIMEOUT = 5  # 代理探测超时（秒）
@@ -100,6 +105,8 @@ class UpdateInfo:
         # 优先使用直连地址，由客户端统一决定是否套代理。
         self.download_url: str = data.get("download_url_direct") or data.get("download_url", "")
         self.patch_url: str = data.get("patch_url_direct") or data.get("patch_url", "")
+        self.download_sha256: str = data.get("download_sha256", "")
+        self.patch_sha256: str = data.get("patch_sha256", "")
         self.source: str = data.get("source", "")
         self.channel: str = data.get("channel", "")
         self.changelog: str = data.get("changelog", "")
@@ -267,6 +274,18 @@ _NUM_WORKERS = max(1, min(16, int(os.getenv("UPDATER_DOWNLOAD_WORKERS", "8"))))
 _CHUNK_SIZE = 1024 * 1024  # 1MB per read
 
 
+def _expected_segment_length(start: int, end: int) -> int:
+    """返回分段应下载的总字节数。"""
+    return max(0, end - start + 1)
+
+
+def _segment_content_range_ok(content_range: str, start: int, end: int) -> bool:
+    """判断 Range 响应是否与请求的分段一致。"""
+    if not content_range:
+        return False
+    return content_range.startswith(f"bytes {start}-{end}/")
+
+
 def _download_segment(
     url: str, start: int, end: int, dest_path: str,
     progress_arr: list, seg_idx: int,
@@ -279,6 +298,13 @@ def _download_segment(
     }
     req = urllib.request.Request(url, headers=headers)
     resp = urllib.request.urlopen(req, timeout=120)
+    expected_bytes = _expected_segment_length(start, end)
+    status = getattr(resp, "status", None)
+    if status not in (None, 206):
+        raise IOError(f"Range 响应异常：期望 206，实际 {status}")
+    if status == 206 and not _segment_content_range_ok(resp.headers.get("Content-Range", ""), start, end):
+        raise IOError(f"Range 响应范围不匹配：{resp.headers.get('Content-Range', '')}")
+    downloaded = 0
     with open(dest_path, "r+b") as f:
         f.seek(start)
         while True:
@@ -288,7 +314,12 @@ def _download_segment(
             if not chunk:
                 break
             f.write(chunk)
-            progress_arr[seg_idx] += len(chunk)
+            chunk_size = len(chunk)
+            downloaded += chunk_size
+            progress_arr[seg_idx] += chunk_size
+    resp.close()
+    if downloaded != expected_bytes:
+        raise IOError(f"分段下载字节数不完整：期望 {expected_bytes}，实际 {downloaded}")
 
 
 def _download_from_url(
@@ -387,6 +418,14 @@ def _download_from_url(
     if progress_callback:
         progress_callback(total, total)
 
+    if total > 0 and os.path.getsize(dest_path) != total:
+        actual_size = os.path.getsize(dest_path)
+        try:
+            os.remove(dest_path)
+        except OSError:
+            pass
+        raise IOError(f"下载文件大小不匹配：期望 {total}，实际 {actual_size}")
+
     return dest_path
 
 
@@ -445,6 +484,14 @@ def _resume_segments(
     if progress_callback:
         progress_callback(total, total)
 
+    if total > 0 and os.path.getsize(dest_path) != total:
+        actual_size = os.path.getsize(dest_path)
+        try:
+            os.remove(dest_path)
+        except OSError:
+            pass
+        raise IOError(f"断点续传后的文件大小不匹配：期望 {total}，实际 {actual_size}")
+
     return dest_path
 
 
@@ -489,7 +536,24 @@ def _download_single(
     if progress_callback:
         progress_callback(downloaded, total)
 
+    if total > 0 and downloaded != total:
+        try:
+            os.remove(dest_path)
+        except OSError:
+            pass
+        raise IOError(f"下载文件大小不完整：期望 {total}，实际 {downloaded}")
+
     return dest_path
+
+
+def _verify_package_checksum(zip_path: str, expected_sha256: str):
+    """校验下载包完整性，避免把坏包交给安装流程。"""
+    expected_sha256 = (expected_sha256 or "").strip().lower()
+    if not expected_sha256:
+        return
+    actual_sha256 = _sha256_file(zip_path).lower()
+    if actual_sha256 != expected_sha256:
+        raise UpdatePreparationError("下载的更新包校验失败，请重新下载后再试。")
 
 
 def download_update(
@@ -497,6 +561,7 @@ def download_update(
     dest_dir: Optional[str] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     source: str = "",
+    expected_sha256: str = "",
     cancel_event=None,
 ) -> str:
     """
@@ -509,8 +574,9 @@ def download_update(
     if dest_dir is None:
         dest_dir = tempfile.mkdtemp(prefix="canal_update_")
 
+    download_path = ""
     try:
-        return _download_from_url(url, dest_dir, progress_callback, cancel_event)
+        download_path = _download_from_url(url, dest_dir, progress_callback, cancel_event)
     except InterruptedError:
         raise  # 取消不走代理回退逻辑
     except PartialDownloadError as e:
@@ -532,7 +598,7 @@ def download_update(
             if progress_callback:
                 progress_callback(already, e.total)
             try:
-                return _resume_segments(
+                download_path = _resume_segments(
                     direct_url, e.dest_path, e.segments,
                     e.failed_indices, already, e.total, progress_callback,
                     cancel_event,
@@ -553,7 +619,18 @@ def download_update(
         direct_url = _strip_proxy_prefix(url)
         if direct_url != url:
             print(f"[updater] 代理连接失败，回退直连: {direct_url}")
-            return _download_from_url(direct_url, dest_dir, progress_callback, cancel_event)
+            download_path = _download_from_url(direct_url, dest_dir, progress_callback, cancel_event)
+        else:
+            raise
+    try:
+        _verify_package_checksum(download_path, expected_sha256)
+        return download_path
+    except Exception:
+        try:
+            if download_path and os.path.exists(download_path):
+                os.remove(download_path)
+        except OSError:
+            pass
         raise
 
 # ============================================================
@@ -563,7 +640,7 @@ UPDATE_HELPER_NAME = f"{APP_NAME_EN}Updater"
 UPDATE_HELPER_EXE = f"{UPDATE_HELPER_NAME}.exe"
 UPDATE_FLAG_OPEN_DIALOG = "--show-update-dialog"
 UPDATE_FLAG_FORCE_FULL_PACKAGE = "--force-full-package"
-DEFAULT_PRESERVE_PATTERNS = ["*.lic"]
+DEFAULT_PRESERVE_PATTERNS = list(DEFAULT_RUNTIME_PRESERVE_PATTERNS)
 INSTALL_SLACK_BYTES = 256 * 1024 * 1024
 INTERNAL_WORK_DIR = "_update_sessions"
 PATCH_MISSING_SENTINEL = "__MISSING__"
@@ -604,6 +681,7 @@ class UpdateSession:
     log_dir: str
     cleanup_targets: list[str]
     preserve_patterns: list[str]
+    expected_package_sha256: str = ""
     parent_pid: int = 0
     work_dir: str = ""
     main_script_path: str = ""
@@ -669,16 +747,11 @@ def _with_pythonpath(env: dict[str, str], project_root: str) -> dict[str, str]:
 
 
 def _normalize_relpath(path: str) -> str:
-    return path.replace("\\", "/").lstrip("./")
+    return normalize_relative_path(path)
 
 
 def _should_preserve(rel_path: str, patterns: list[str]) -> bool:
-    normalized = _normalize_relpath(rel_path)
-    name = os.path.basename(normalized)
-    return any(
-        fnmatch.fnmatch(normalized, pattern) or fnmatch.fnmatch(name, pattern)
-        for pattern in patterns
-    )
+    return path_matches_patterns(rel_path, patterns)
 
 
 class _ThrottledProgressEmitter:
@@ -743,6 +816,11 @@ def _sha256_file(path: str) -> str:
     return digest.hexdigest()
 
 
+def _sha256_text(text: str) -> str:
+    """计算文本内容的 SHA256，供补丁目标校验复用。"""
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
 def is_install_dir_writable(app_dir: Optional[str] = None) -> bool:
     app_dir = app_dir or _get_app_dir()
     marker = os.path.join(app_dir, f".update-write-test-{uuid.uuid4().hex}.tmp")
@@ -763,27 +841,43 @@ def estimate_required_space(
 ) -> int:
     app_dir = app_dir or _get_app_dir()
     zip_size = os.path.getsize(zip_path)
+    if is_patch:
+        return zip_size * 2 + INSTALL_SLACK_BYTES
     app_size = _dir_size(
         app_dir,
         ignored_names={INTERNAL_WORK_DIR, "__pycache__"},
         progress_callback=progress_callback,
     )
-    if is_patch:
-        return zip_size * 2 + INSTALL_SLACK_BYTES
     return zip_size + app_size + INSTALL_SLACK_BYTES
+
+
+def ensure_update_package_ready(
+    zip_path: str,
+    expected_sha256: str = "",
+) -> dict:
+    """只校验更新包本身，避免安装前重复扫描整个安装目录。"""
+    if not zip_path or not os.path.isfile(zip_path):
+        raise UpdatePreparationError("未找到已下载的更新包，请重新下载后再试。")
+    if not os.access(zip_path, os.R_OK):
+        raise UpdatePreparationError("更新包无法读取，请重新下载后再试。")
+    _verify_package_checksum(zip_path, expected_sha256)
+    return {
+        "zip_path": zip_path,
+        "zip_size": os.path.getsize(zip_path),
+    }
 
 
 def ensure_install_ready(
     zip_path: str,
     is_patch: bool,
     app_dir: Optional[str] = None,
+    expected_sha256: str = "",
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> dict:
     app_dir = app_dir or _get_app_dir()
-    if not zip_path or not os.path.isfile(zip_path):
-        raise UpdatePreparationError("未找到已下载的更新包，请重新下载后再试。")
-    if not os.access(zip_path, os.R_OK):
-        raise UpdatePreparationError("更新包无法读取，请重新下载后再试。")
+    if progress_callback:
+        progress_callback("正在校验更新包完整性")
+    package_info = ensure_update_package_ready(zip_path, expected_sha256)
     if not os.path.isdir(app_dir):
         raise UpdatePreparationError("当前安装目录不存在，无法继续安装。")
     if progress_callback:
@@ -812,7 +906,7 @@ def ensure_install_ready(
 
     return {
         "app_dir": app_dir,
-        "zip_size": os.path.getsize(zip_path),
+        "zip_size": package_info["zip_size"],
         "required_bytes": required_bytes,
         "free_bytes": free_bytes,
     }
@@ -825,9 +919,10 @@ def create_update_session(
     *,
     current_version: str = APP_VERSION,
     preserve_patterns: Optional[list[str]] = None,
+    expected_package_sha256: str = "",
 ) -> str:
     app_dir = _get_app_dir()
-    ensure_install_ready(zip_path, is_patch, app_dir=app_dir)
+    ensure_update_package_ready(zip_path, expected_package_sha256)
 
     session_id = uuid.uuid4().hex[:12]
     log_dir = os.path.join(_get_update_log_root(), "logs", session_id)
@@ -845,6 +940,7 @@ def create_update_session(
         log_dir=log_dir,
         cleanup_targets=[os.path.abspath(zip_path)],
         preserve_patterns=list(preserve_patterns or DEFAULT_PRESERVE_PATTERNS),
+        expected_package_sha256=expected_package_sha256,
         parent_pid=os.getpid(),
         work_dir=work_dir,
         main_script_path=main_script_path,
@@ -956,6 +1052,63 @@ def _process_exists(pid: int) -> bool:
         return ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == 0x00000102
     finally:
         ctypes.windll.kernel32.CloseHandle(handle)
+
+
+def _collect_lock_probe_paths(session: UpdateSession) -> list[str]:
+    """收集需要确认是否仍被占用的关键安装文件。"""
+    candidates = [
+        session.main_exe_path,
+        os.path.join(session.app_dir, "_internal", "base_library.zip"),
+    ]
+    return [path for path in candidates if path and os.path.exists(path)]
+
+
+def _is_file_locked(path: str) -> bool:
+    """尝试独占打开文件，失败则认为仍被其它进程占用。"""
+    if os.name != "nt":
+        try:
+            with open(path, "rb"):
+                return False
+        except OSError:
+            return True
+
+    import ctypes
+    from ctypes import wintypes
+
+    GENERIC_READ = 0x80000000
+    OPEN_EXISTING = 3
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+    handle = ctypes.windll.kernel32.CreateFileW(
+        wintypes.LPCWSTR(path),
+        GENERIC_READ,
+        0,
+        None,
+        OPEN_EXISTING,
+        0,
+        None,
+    )
+    if handle == INVALID_HANDLE_VALUE:
+        return True
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return False
+
+
+def _ensure_installation_files_unlocked(session: UpdateSession, logger: "_UpdateSessionLogger"):
+    """等待主进程后，再确认关键安装文件没有残留占用。"""
+    locked_paths = [
+        path
+        for path in _collect_lock_probe_paths(session)
+        if _is_file_locked(path)
+    ]
+    if not locked_paths:
+        return
+    logger.log(f"检测到仍被占用的文件：{', '.join(locked_paths)}")
+    locked_names = "、".join(os.path.basename(path) for path in locked_paths[:3])
+    raise UpdateInstallError(
+        f"安装文件仍被占用：{'; '.join(locked_paths)}",
+        code="file_locked",
+        user_message=f"检测到仍有文件被占用（{locked_names}），请关闭相关进程后重试。",
+    )
 
 
 def _clean_dir(path: str):
@@ -1077,12 +1230,26 @@ def _restore_preserved_files(preserve_dir: str, app_dir: str):
 def _move_app_entries_to_backup(session: UpdateSession, backup_dir: str):
     _clean_dir(backup_dir)
     os.makedirs(backup_dir, exist_ok=True)
-    for name in os.listdir(session.app_dir):
-        if name == INTERNAL_WORK_DIR:
-            continue
-        src = os.path.join(session.app_dir, name)
-        dst = os.path.join(backup_dir, name)
-        shutil.move(src, dst)
+    moved_entries: list[tuple[str, str]] = []
+    try:
+        for name in os.listdir(session.app_dir):
+            if name == INTERNAL_WORK_DIR:
+                continue
+            src = os.path.join(session.app_dir, name)
+            dst = os.path.join(backup_dir, name)
+            shutil.move(src, dst)
+            moved_entries.append((src, dst))
+    except OSError as exc:
+        for src, dst in reversed(moved_entries):
+            try:
+                shutil.move(dst, src)
+            except OSError:
+                pass
+        raise UpdateInstallError(
+            f"备份当前版本失败：{exc}",
+            code="backup_failed",
+            user_message="备份旧版本时失败，本次更新尚未开始覆盖，请稍后重试。",
+        ) from exc
 
 
 def _remove_current_installation(session: UpdateSession):
@@ -1116,8 +1283,16 @@ def _load_patch_manifest(extract_root: str) -> dict:
             user_message="补丁包内容不完整，请重新下载完整安装包后再试。",
             retry_mode=RETRY_MODE_FULL_PACKAGE,
         )
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError as exc:
+        raise UpdateInstallError(
+            f"补丁清单格式损坏：{manifest_path}",
+            code="invalid_archive",
+            user_message="补丁包内容不完整，请重新下载完整安装包后再试。",
+            retry_mode=RETRY_MODE_FULL_PACKAGE,
+        ) from exc
 
 
 def _get_current_file_state_hash(app_dir: str, rel_path: str) -> str:
@@ -1248,6 +1423,62 @@ def _apply_patch_update(session: UpdateSession, extract_root: str, patch_manifes
             os.remove(target)
 
 
+def _validate_patch_target_files(
+    session: UpdateSession,
+    patch_manifest: dict,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+):
+    """补丁落地后再做一次目标版本验收，确保最终状态真到位。"""
+    target_files = patch_manifest.get("target_files") or {}
+    if not isinstance(target_files, dict) or not target_files:
+        return
+    included_files = {
+        _normalize_relpath(path)
+        for path in (patch_manifest.get("included_files") or [])
+    }
+    deleted_files = {
+        _normalize_relpath(path)
+        for path in (patch_manifest.get("deleted") or [])
+    }
+    watched_paths = sorted(
+        rel_path
+        for rel_path in included_files.union(deleted_files)
+        if not _should_preserve(rel_path, session.preserve_patterns)
+    )
+
+    total_paths = len(watched_paths)
+    for index, rel_path in enumerate(watched_paths, start=1):
+        if progress_callback:
+            progress_callback(index, total_paths)
+        if rel_path in deleted_files:
+            current_hash = _get_current_file_state_hash(session.app_dir, rel_path)
+            if current_hash != PATCH_MISSING_SENTINEL:
+                raise UpdateInstallError(
+                    f"补丁应用后仍存在应删除文件：{rel_path}",
+                    code="target_verify_failed",
+                    user_message="补丁安装后校验失败，请重新下载完整安装包后再试。",
+                    retry_mode=RETRY_MODE_FULL_PACKAGE,
+                )
+            continue
+
+        expected_hash = (target_files.get(rel_path) or "").strip()
+        if not expected_hash:
+            raise UpdateInstallError(
+                f"补丁包缺少目标文件校验信息：{rel_path}",
+                code="target_verify_failed",
+                user_message="补丁安装后校验失败，请重新下载完整安装包后再试。",
+                retry_mode=RETRY_MODE_FULL_PACKAGE,
+            )
+        current_hash = _get_current_file_state_hash(session.app_dir, rel_path)
+        if current_hash != expected_hash:
+            raise UpdateInstallError(
+                f"补丁应用后目标文件校验失败：{rel_path} -> {current_hash}",
+                code="target_verify_failed",
+                user_message="补丁安装后校验失败，请重新下载完整安装包后再试。",
+                retry_mode=RETRY_MODE_FULL_PACKAGE,
+            )
+
+
 def _rollback_patch(session: UpdateSession, backup_dir: str, patch_backup: dict):
     for rel_path in patch_backup.get("created_files", []):
         target = os.path.join(session.app_dir, rel_path.replace("/", os.sep))
@@ -1272,6 +1503,7 @@ def _success_result(
     log_path: str,
     work_dir: str,
     preserved_files: list[str],
+    cleanup_errors: list[str],
 ) -> dict:
     return {
         "success": True,
@@ -1280,10 +1512,12 @@ def _success_result(
         "user_message": "",
         "retry_mode": None,
         "rollback_ok": None,
+        "rollback_status": "not_needed",
         "log_path": log_path,
         "log_dir": session.log_dir,
         "work_dir": work_dir,
         "preserved_files": preserved_files,
+        "cleanup_errors": cleanup_errors,
     }
 
 
@@ -1293,7 +1527,7 @@ def _failure_result(
     work_dir: str,
     exc: BaseException,
     *,
-    rollback_ok: bool,
+    rollback_status: str,
     rollback_error: Optional[BaseException] = None,
 ) -> dict:
     if rollback_error is not None:
@@ -1319,7 +1553,8 @@ def _failure_result(
         "error_code": error_code,
         "user_message": user_message,
         "retry_mode": retry_mode,
-        "rollback_ok": rollback_ok,
+        "rollback_ok": rollback_status == "completed",
+        "rollback_status": rollback_status,
         "log_path": log_path,
         "log_dir": session.log_dir,
         "work_dir": work_dir,
@@ -1346,6 +1581,7 @@ def run_update_session(
             stage_callback(stage_key, message)
 
     preserved_files: list[str] = []
+    cleanup_errors: list[str] = []
     patch_backup: dict = {}
     patch_manifest: Optional[dict] = None
     backup_ready = False
@@ -1356,6 +1592,7 @@ def run_update_session(
 
         push("wait", "等待主程序退出")
         _wait_for_process_exit(session.parent_pid)
+        _ensure_installation_files_unlocked(session, logger)
 
         push("validate", "校验安装环境")
         push("validate", "正在清理上次失败残留")
@@ -1364,6 +1601,7 @@ def run_update_session(
             session.download_zip_path,
             session.is_patch,
             app_dir=session.app_dir,
+            expected_sha256=session.expected_package_sha256,
             progress_callback=lambda text: push("validate", text),
         )
         extracted_root = _extract_zip(
@@ -1400,6 +1638,14 @@ def run_update_session(
         push("apply", "解压并应用更新")
         if session.is_patch:
             _apply_patch_update(session, extracted_root, patch_manifest or {})
+            _validate_patch_target_files(
+                session,
+                patch_manifest or {},
+                progress_callback=lambda current, total: push(
+                    "apply",
+                    f"正在验收补丁结果（{current}/{total}）",
+                ),
+            )
         else:
             _copy_tree_contents(extracted_root, session.app_dir)
             _restore_preserved_files(preserve_dir, session.app_dir)
@@ -1413,13 +1659,24 @@ def run_update_session(
                     os.remove(target)
             except OSError as exc:
                 logger.exception("清理临时文件失败", exc)
-        _clean_dir(work_dir)
+                cleanup_errors.append(f"临时文件清理失败：{target} -> {exc}")
+        try:
+            _clean_dir(work_dir)
+        except OSError as exc:
+            logger.exception("清理工作目录失败", exc)
+            cleanup_errors.append(f"工作目录清理失败：{work_dir} -> {exc}")
 
         push("done", "安装完成")
-        return _success_result(session, logger.log_path, work_dir, preserved_files)
+        return _success_result(
+            session,
+            logger.log_path,
+            work_dir,
+            preserved_files,
+            cleanup_errors,
+        )
     except Exception as exc:
         logger.exception("安装失败", exc)
-        rollback_ok = False
+        rollback_status = "not_needed"
         rollback_error: Optional[BaseException] = None
         if backup_ready:
             try:
@@ -1428,17 +1685,18 @@ def run_update_session(
                     _rollback_patch(session, backup_dir, patch_backup)
                 else:
                     _restore_full_backup(session, backup_dir)
-                rollback_ok = True
+                rollback_status = "completed"
             except Exception as rollback_exc:
                 logger.exception("回滚失败", rollback_exc)
                 rollback_error = rollback_exc
+                rollback_status = "failed"
 
         return _failure_result(
             session,
             logger.log_path,
             work_dir,
             exc,
-            rollback_ok=rollback_ok,
+            rollback_status=rollback_status,
             rollback_error=rollback_error,
         )
 

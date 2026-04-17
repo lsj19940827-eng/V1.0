@@ -65,6 +65,21 @@ def test_updateinfo_prefers_direct_urls_when_available():
     assert info.patch_url == "https://github.com/example/patch.zip"
 
 
+def test_updateinfo_reads_package_checksums():
+    info = updater.UpdateInfo(
+        {
+            "latest_version": "1.0.9.1",
+            "download_url": "https://example.com/full.zip",
+            "patch_url": "https://example.com/patch.zip",
+            "download_sha256": "full-sha256",
+            "patch_sha256": "patch-sha256",
+        }
+    )
+
+    assert info.download_sha256 == "full-sha256"
+    assert info.patch_sha256 == "patch-sha256"
+
+
 def test_updateinfo_supports_prod_downgrade_offer(monkeypatch):
     monkeypatch.setattr(updater, "APP_VERSION", "1.1.1")
     info = updater.UpdateInfo(

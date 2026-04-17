@@ -52,9 +52,10 @@ class DownloadThread(QThread):
     error = Signal(str)           # 错误信息
     cancelled = Signal()          # 用户取消
 
-    def __init__(self, url: str, parent=None):
+    def __init__(self, url: str, expected_sha256: str = "", parent=None):
         super().__init__(parent)
         self.url = url
+        self.expected_sha256 = expected_sha256
         self._cancel_event = threading.Event()
 
     def cancel(self):
@@ -66,6 +67,7 @@ class DownloadThread(QThread):
             path = download_update(
                 self.url,
                 progress_callback=lambda d, t: self.progress.emit(d, t),
+                expected_sha256=self.expected_sha256,
                 cancel_event=self._cancel_event,
             )
             self.finished.emit(path)
@@ -466,6 +468,7 @@ class UpdateDialog(QDialog):
         if self._is_downgrade:
             self._is_patch = False
             url = info.download_url
+            expected_sha256 = info.download_sha256
             size_text = f"{info.file_size_mb:.1f} MB" if info.file_size_mb else "未知大小"
             label = f"正在下载正式版（降级）({size_text}) ..."
         # 优先下载补丁包（除非已知 patch 失败）
@@ -476,10 +479,12 @@ class UpdateDialog(QDialog):
         ):
             self._is_patch = True
             url = info.patch_url
+            expected_sha256 = info.patch_sha256
             label = f"正在下载增量补丁包 ({info.patch_size_mb:.1f} MB) ..."
         else:
             self._is_patch = False
             url = info.download_url
+            expected_sha256 = info.download_sha256
             label = f"正在下载全量包 ({info.file_size_mb:.1f} MB) ..."
 
         self._btn_download.setEnabled(False)
@@ -495,7 +500,7 @@ class UpdateDialog(QDialog):
         self._status_label.setStyleSheet("color: #1976D2; font-size: 12px;")
         self._dl_start_time = time.monotonic()
 
-        self._download_thread = DownloadThread(url, self)
+        self._download_thread = DownloadThread(url, expected_sha256, self)
         self._download_thread.progress.connect(self._on_download_progress)
         self._download_thread.finished.connect(self._on_download_finished)
         self._download_thread.error.connect(self._on_download_error)
@@ -589,7 +594,9 @@ class UpdateDialog(QDialog):
                 f"正在下载全量包 ({info.file_size_mb:.1f} MB) ..."
             )
             self._download_thread = DownloadThread(
-                self._update_info.download_url, self
+                self._update_info.download_url,
+                self._update_info.download_sha256,
+                self,
             )
             self._download_thread.progress.connect(self._on_download_progress)
             self._download_thread.finished.connect(self._on_download_finished)
@@ -634,10 +641,17 @@ class UpdateDialog(QDialog):
             )
             return False
 
-        from updater import ensure_install_ready, UpdatePreparationError
+        from updater import ensure_update_package_ready, UpdatePreparationError
 
         try:
-            ensure_install_ready(self._zip_path, self._is_patch)
+            expected_sha256 = ""
+            if self._update_info:
+                expected_sha256 = (
+                    self._update_info.patch_sha256
+                    if self._is_patch
+                    else self._update_info.download_sha256
+                )
+            ensure_update_package_ready(self._zip_path, expected_sha256)
         except UpdatePreparationError as exc:
             QMessageBox.warning(self, "暂时无法安装", str(exc))
             return False
@@ -689,11 +703,19 @@ class UpdateDialog(QDialog):
 
         from updater import create_update_session, launch_updater_and_exit
         try:
+            expected_sha256 = ""
+            if self._update_info:
+                expected_sha256 = (
+                    self._update_info.patch_sha256
+                    if self._is_patch
+                    else self._update_info.download_sha256
+                )
             session_path = create_update_session(
                 self._zip_path,
                 is_patch=self._is_patch,
                 target_version=self._update_info.latest_version if self._update_info else APP_VERSION,
                 current_version=APP_VERSION,
+                expected_package_sha256=expected_sha256,
             )
             launch_updater_and_exit(session_path)
         except Exception as e:
