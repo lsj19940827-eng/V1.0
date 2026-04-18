@@ -95,6 +95,7 @@ from app_渠系计算前端.formula_renderer import (
 from app_渠系计算前端.increase_input_helper import (
     INCREASE_MODE_PERCENT,
     INCREASE_MODE_Q_INCREASED,
+    build_increase_formula_lines,
     build_increase_summary_lines,
     build_increase_hint_text,
     normalize_increase_mode,
@@ -1476,9 +1477,12 @@ class AqueductPanel(QWidget):
           o.append("")
           o.append("  1. 输入与换算:")
           o.extend([f"      {line}" for line in increase_summary_lines])
-          o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
-          o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
-          o.append(f"           = {Q_inc:.3f} m³/s")
+          for formula_line in build_increase_formula_lines(
+              design_q=Q,
+              increase_percent=inc_pct,
+              q_increased=Q_inc,
+          ):
+              o.append(f"      {formula_line}")
           o.append("")
           o.append("  2. 加大水深计算:")
           o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")
@@ -1896,9 +1900,12 @@ class AqueductPanel(QWidget):
             o.append("")
             o.append("  1. 输入与换算:")
             o.extend([f"      {line}" for line in increase_summary_lines])
-            o.append(f"      Q加大 = Q × (1 + {inc_pct:.1f}%)")
-            o.append(f"           = {Q:.3f} × {1 + inc_pct/100:.3f}")
-            o.append(f"           = {Q_inc:.3f} m³/s")
+            for formula_line in build_increase_formula_lines(
+                design_q=Q,
+                increase_percent=inc_pct,
+                q_increased=Q_inc,
+            ):
+                o.append(f"      {formula_line}")
             o.append("")
             o.append("  2. 加大水深计算:")
             o.append(f"      根据加大流量 Q加大 = {Q_inc:.3f} m³/s，利用曼宁公式反算水深:")

@@ -2,7 +2,7 @@
 
 > **版本**: V2.12.15
 > **创建日期**: 2026-03-03  
-> **最后更新**: 2026-04-15
+> **最后更新**: 2026-04-17
 > **状态**: 已实现
 
 ---
@@ -38,6 +38,12 @@
 
 **数据结构**：
 - `PressurePipeInput`：`Q, material_key, slope_i, n_unpr, length_m, manual_increase_percent`
+
+### 2.3 当前实现同步（2026-04-17）
+
+- 有压管道面板的加大流量输入已统一支持 `按比例` / `按Q加大` 两种模式，保留原“考虑加大流量”开关。
+- 加大流量链路改为高精度参与后续计算，不再在进入推荐口径和水损计算前先把比例或 `Q加大` 截成短位数。
+- 结果页与导出中的加大比例统一显示为 3 位小数；公式代入中的比例小数 / 倍率统一显示为 5 位。
 - `DiameterCandidate`：`D, V_press, hf_friction_km, hf_local_km, hf_total_km, h_loss_total_m, flags`
 - `RecommendationResult`：`recommended, top_candidates, category, reason, calc_steps`
 - `BatchScanConfig`：`q_values, slope_values, diameter_values, materials, output_dir`

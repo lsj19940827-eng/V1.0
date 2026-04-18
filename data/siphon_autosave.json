@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "saved_at": "2026-04-16 11:32:08",
+  "saved_at": "2026-04-18 11:06:04",
   "data": {
     "Q": 10.0,
     "v_guess": 2.0,
@@ -22,6 +22,8 @@
     "num_pipes": 1,
     "inc_checked": true,
     "inc_percent": "",
+    "inc_mode": "percent",
+    "inc_q_text": "",
     "v1_inc": "",
     "v2_inc": "",
     "v3_inc": "",

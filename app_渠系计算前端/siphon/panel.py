@@ -45,6 +45,7 @@ from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox,
     InfoBar, InfoBarPosition
 )
+from qfluentwidgets.components.widgets.tool_tip import ToolTipFilter
 
 from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, fluent_info, fluent_error, fluent_question
 from app_渠系计算前端.export_utils import (
@@ -66,6 +67,10 @@ from app_渠系计算前端.increase_input_helper import (
     normalize_increase_mode,
     resolve_increase_input,
 )
+
+
+# 倒虹吸面板的问号说明统一使用更快的悬浮提示
+HELP_TOOLTIP_DELAY_MS = 200
 
 # 计算引擎导入
 try:
@@ -596,12 +601,11 @@ class SiphonPanel(QWidget):
         lay.setContentsMargins(4, 2, 4, 2)
         lay.setSpacing(4)
 
-        # ========== Card 1: 全局水力参数 — 三栏布局（新方案，标签上方） ==========
-        # 左栏(管道基础参数) | 中栏(管道运行参数) | 右栏(转弯控制参数)
+        # ========== Card 1: 全局水力参数 — 上方整宽流量条带 + 下方紧凑参数区 ==========
         card1 = QGroupBox("全局水力参数")
-        _c1_lay = QHBoxLayout(card1)
-        _c1_lay.setContentsMargins(8, 4, 8, 4)
-        _c1_lay.setSpacing(0)
+        card1_lay = QVBoxLayout(card1)
+        card1_lay.setContentsMargins(8, 4, 8, 4)
+        card1_lay.setSpacing(4)
 
         def _vsep():
             _s = QFrame(); _s.setFrameShape(QFrame.Shape.VLine); _s.setFrameShadow(QFrame.Shadow.Sunken)
@@ -633,34 +637,133 @@ class SiphonPanel(QWidget):
             _w = QWidget(); _l = QHBoxLayout(_w)
             _l.setContentsMargins(0, 0, 0, 0); _l.setSpacing(1)
             _l.addWidget(QLabel(text)); _l.addWidget(_star(color)); _l.addStretch(); return _w
+        def _make_help_button(tooltip=""):
+            _btn = QPushButton("?")
+            _btn.setFixedSize(18, 18)
+            _btn.setCursor(Qt.PointingHandCursor)
+            _btn.setStyleSheet(
+                "QPushButton { border-radius:9px; border:1.5px solid #aaa; color:#aaa;"
+                " background:transparent; font-size:10px; font-weight:bold; }"
+                "QPushButton:hover { border-color:#1565C0; color:#1565C0; }"
+            )
+            if tooltip:
+                _btn.setToolTip(tooltip)
+                _btn.installEventFilter(ToolTipFilter(_btn, HELP_TOOLTIP_DELAY_MS))
+            return _btn
 
-        # ── 左栏：管道基础参数 ──
-        col_l = QWidget()
-        _ll = QVBoxLayout(col_l)
-        _ll.setContentsMargins(0, 0, 12, 0)
-        _ll.setSpacing(2)
+        # ---- 第一层：整宽流量条带（左窄右宽） ----
+        flow_bar = QFrame()
+        flow_bar.setObjectName("siphonFlowBar")
+        flow_bar.setStyleSheet(
+            "QFrame#siphonFlowBar { background:#F8FAFD; border:1px solid #E2E8F0; border-radius:4px; }"
+        )
+        flow_bar_lay = QHBoxLayout(flow_bar)
+        flow_bar_lay.setContentsMargins(8, 6, 8, 6)
+        flow_bar_lay.setSpacing(8)
 
-        _ll.addWidget(QLabel("设计流量 Q (m³/s):"))
+        self.flow_bar_left = QWidget()
+        self.flow_bar_left.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        flow_left_lay = QVBoxLayout(self.flow_bar_left)
+        flow_left_lay.setContentsMargins(0, 0, 0, 0)
+        flow_left_lay.setSpacing(2)
+
+        flow_left_lay.addWidget(QLabel("设计流量 Q (m³/s):"))
         self.edit_Q = LineEdit(); self.edit_Q.setText("10.0"); self.edit_Q.setFixedWidth(80)
         self.edit_Q.textChanged.connect(self._on_Qv_changed)
         self.edit_Q.textChanged.connect(self._refresh_increase_hint)
         self.lbl_Q_hint = QLabel("")
         self.lbl_Q_hint.setStyleSheet("color:#0066CC;font-size:12px;")
-        _ll.addWidget(_hrow(self.edit_Q, self.lbl_Q_hint))
-        _ll.addSpacing(2)
+        flow_left_lay.addWidget(_hrow(self.edit_Q, self.lbl_Q_hint, protect_height=True))
+        flow_bar_lay.addWidget(self.flow_bar_left, 0)
+        flow_bar_lay.addWidget(_vsep())
+
+        self.flow_bar_right = QWidget()
+        self.flow_bar_right.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        flow_right_lay = QVBoxLayout(self.flow_bar_right)
+        flow_right_lay.setContentsMargins(0, 0, 0, 0)
+        flow_right_lay.setSpacing(2)
+
+        flow_right_top = QWidget()
+        flow_right_top_lay = QHBoxLayout(flow_right_top)
+        flow_right_top_lay.setContentsMargins(0, 0, 0, 0)
+        flow_right_top_lay.setSpacing(6)
+
+        self.inc_cb = CheckBox("考虑加大流量比例系数")
+        self.inc_cb.setChecked(True)
+        self.inc_cb.stateChanged.connect(self._on_inc_toggle)
+        self.inc_cb.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.inc_cb.setMinimumWidth(self.inc_cb.sizeHint().width())
+        flow_right_top_lay.addWidget(self.inc_cb)
+
+        self.inc_mode_group = QButtonGroup(self)
+        self.inc_mode_percent_rb = QRadioButton("按比例")
+        self.inc_mode_q_rb = QRadioButton("按Q加大")
+        self.inc_mode_group.addButton(self.inc_mode_percent_rb)
+        self.inc_mode_group.addButton(self.inc_mode_q_rb)
+        self.inc_mode_percent_rb.setChecked(True)
+        self.inc_mode_percent_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_q_rb.toggled.connect(self._on_inc_mode_changed)
+        self.inc_mode_percent_rb.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.inc_mode_q_rb.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        flow_right_top_lay.addWidget(self.inc_mode_percent_rb)
+        flow_right_top_lay.addWidget(self.inc_mode_q_rb)
+
+        self.lbl_inc_percent = QLabel("比例(%):")
+        flow_right_top_lay.addWidget(self.lbl_inc_percent)
+        self.edit_inc = LineEdit()
+        self.edit_inc.setPlaceholderText("留空自动计算")
+        self.edit_inc.setFixedWidth(90)
+        self.edit_inc.textChanged.connect(self._refresh_increase_hint)
+        flow_right_top_lay.addWidget(self.edit_inc)
+
+        self.lbl_inc_q = QLabel("Q加大:")
+        flow_right_top_lay.addWidget(self.lbl_inc_q)
+        self.inc_q_edit = LineEdit()
+        self.inc_q_edit.setPlaceholderText("输入总流量(m³/s)")
+        self.inc_q_edit.setFixedWidth(110)
+        self.inc_q_edit.textChanged.connect(self._refresh_increase_hint)
+        flow_right_top_lay.addWidget(self.inc_q_edit)
+
+        self.btn_inc_help = _make_help_button("按比例与按Q加大说明")
+        flow_right_top_lay.addWidget(self.btn_inc_help)
+        flow_right_top_lay.addStretch()
+        flow_right_lay.addWidget(flow_right_top)
+
+        self.lbl_inc_compact_hint = QLabel("")
+        self.lbl_inc_compact_hint.setStyleSheet("color:#0066CC;font-size:12px;")
+        self.lbl_inc_compact_hint.setWordWrap(False)
+        flow_right_lay.addWidget(self.lbl_inc_compact_hint)
+        flow_bar_lay.addWidget(self.flow_bar_right, 1)
+
+        # 兼容旧测试与现有调用：完整提示继续保留为内部状态，不再直接占用界面宽度
+        self.lbl_inc_hint = QLabel("")
+        self.inc_derived_hint = self.lbl_inc_hint
+        card1_lay.addWidget(flow_bar)
+
+        # ---- 第二层：紧凑参数区 ----
+        params_row = QWidget()
+        _c1_lay = QHBoxLayout(params_row)
+        _c1_lay.setContentsMargins(0, 0, 0, 0)
+        _c1_lay.setSpacing(0)
+
+        # ── 左栏：管道基础参数 ──
+        col_l = QWidget()
+        _ll = QVBoxLayout(col_l)
+        _ll.setContentsMargins(0, 0, 10, 0)
+        _ll.setSpacing(1)
 
         _ll.addWidget(QLabel("糙率 n:"))
         self.edit_n = LineEdit(); self.edit_n.setText("0.014"); self.edit_n.setFixedWidth(60)
         self.lbl_n_hint = QLabel("")
         self.lbl_n_hint.setStyleSheet("color:#0066CC;font-size:12px;")
         _ll.addWidget(_hrow(self.edit_n, self.lbl_n_hint))
-        _ll.addSpacing(2)
+        _ll.addSpacing(1)
 
         _ll.addWidget(QLabel("管径 D:"))
         self.lbl_D_theory = QLabel("D = --")
         self.lbl_D_theory.setStyleSheet(f"color:{P};font-size:12px;font-weight:bold;")
         _ll.addWidget(self.lbl_D_theory)
-        _ll.addSpacing(2)
+        _ll.addSpacing(1)
 
         _d_container = QWidget()
         _d_vlay = QVBoxLayout(_d_container)
@@ -671,16 +774,12 @@ class SiphonPanel(QWidget):
         self.cb_D_override.setChecked(False)
         self.cb_D_override.stateChanged.connect(self._on_D_override_toggled)
         _d_cb_lay.addWidget(self.cb_D_override)
-        _btn_D_help = QPushButton("?")
-        _btn_D_help.setFixedSize(18, 18)
-        _btn_D_help.setStyleSheet(
-            "QPushButton { border-radius:9px; border:1.5px solid #aaa; color:#aaa;"
-            " background:transparent; font-size:10px; font-weight:bold; }"
-            "QPushButton:hover { border-color:#1565C0; color:#1565C0; }"
+        d_help_tooltip = (
+            "当工程实际管径已由工程师自行确定时，勾选此项并输入实际管径，覆盖自动计算结果。\n"
+            "注：覆盖后平面转弯半径 R=nD 将使用指定值重新计算。"
         )
-        _btn_D_help.setCursor(Qt.PointingHandCursor)
-        _btn_D_help.setToolTip("点击查看说明")
-        _d_cb_lay.addWidget(_btn_D_help)
+        self.btn_D_help = _make_help_button(d_help_tooltip)
+        _d_cb_lay.addWidget(self.btn_D_help)
         self.edit_D_override = LineEdit()
         self.edit_D_override.setPlaceholderText("输入管径(m)")
         self.edit_D_override.setFixedWidth(120)
@@ -688,20 +787,6 @@ class SiphonPanel(QWidget):
         _d_cb_lay.addWidget(self.edit_D_override)
         _d_cb_lay.addStretch()
         _d_vlay.addWidget(_d_cb_row)
-        self.lbl_D_help = QLabel(
-            "当工程实际管径已由工程师自行确定时，勾选此项并输入实际管径，覆盖自动计算结果。\n"
-            "注：覆盖后平面转弯半径 R=nD 将使用指定值重新计算。"
-        )
-        self.lbl_D_help.setWordWrap(True)
-        self.lbl_D_help.setStyleSheet(
-            "QLabel { background:#FFF8E1; border:1px solid #FFB74D; border-radius:4px;"
-            " padding:5px 8px; color:#E65100; font-size:12px; }"
-        )
-        self.lbl_D_help.setVisible(False)
-        _d_vlay.addWidget(self.lbl_D_help)
-        _btn_D_help.clicked.connect(
-            lambda: self.lbl_D_help.setVisible(not self.lbl_D_help.isVisible())
-        )
         _ll.addWidget(_d_container)
         _ll.addStretch()
 
@@ -711,10 +796,20 @@ class SiphonPanel(QWidget):
         # ── 中栏：管道运行参数 ──
         col_m = QWidget()
         _ml = QVBoxLayout(col_m)
-        _ml.setContentsMargins(12, 0, 12, 0)
-        _ml.setSpacing(2)
+        _ml.setContentsMargins(10, 0, 10, 0)
+        _ml.setSpacing(1)
 
-        _ml.addWidget(_lbl_with_star("拟定流速 v (m/s):", "#E53935"))
+        _mid_top = QWidget()
+        _mid_top_lay = QHBoxLayout(_mid_top)
+        _mid_top_lay.setContentsMargins(0, 0, 0, 0)
+        _mid_top_lay.setSpacing(12)
+
+        _mid_left = QWidget()
+        _mid_left_lay = QVBoxLayout(_mid_left)
+        _mid_left_lay.setContentsMargins(0, 0, 0, 0)
+        _mid_left_lay.setSpacing(1)
+
+        _mid_left_lay.addWidget(_lbl_with_star("拟定流速 v (m/s):", "#E53935"))
         self.edit_v = LineEdit(); self.edit_v.setText("2.0"); self.edit_v.setFixedWidth(70)
         self.edit_v.setStyleSheet("LineEdit { border: 2px dashed #E65100; background: #FFF8E1; }")
         self.edit_v.textChanged.connect(self._on_Qv_changed)
@@ -722,10 +817,10 @@ class SiphonPanel(QWidget):
         self.edit_v.editingFinished.connect(self._on_v_confirmed)
         self.lbl_v_hint = QLabel("← 请输入拟定流速")
         self.lbl_v_hint.setStyleSheet("color:#E53935;font-size:12px;font-weight:bold;")
-        _ml.addWidget(_hrow(self.edit_v, self.lbl_v_hint, protect_height=True))
-        _ml.addSpacing(2)
+        _mid_left_lay.addWidget(_hrow(self.edit_v, self.lbl_v_hint, protect_height=True))
+        _mid_left_lay.addSpacing(1)
 
-        _ml.addWidget(_lbl_with_star("管道根数 N (根):", "#E53935"))
+        _mid_left_lay.addWidget(_lbl_with_star("管道根数 N (根):", "#E53935"))
         self.spin_num_pipes = _NumPipesWidget()
         self._apply_np_unconfirmed_style()
         self.spin_num_pipes.valueChanged.connect(self._on_num_pipes_value_changed)
@@ -734,50 +829,33 @@ class SiphonPanel(QWidget):
         self.spin_num_pipes.editingFinished.connect(self._on_num_pipes_confirmed)
         self.lbl_num_pipes_hint = QLabel("← 请确认管道数（建议）")
         self.lbl_num_pipes_hint.setStyleSheet("color:#CC6600;font-size:12px;font-weight:bold;")
-        _ml.addWidget(_hrow(self.spin_num_pipes, self.lbl_num_pipes_hint, protect_height=True))
-        _ml.addSpacing(2)
+        _mid_left_lay.addWidget(_hrow(self.spin_num_pipes, self.lbl_num_pipes_hint, protect_height=True))
+        _mid_left_lay.addSpacing(1)
+        _mid_left_lay.addStretch()
+        _mid_top_lay.addWidget(_mid_left, 3)
+
+        _threshold_box = QWidget()
+        _threshold_box.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        _threshold_lay = QVBoxLayout(_threshold_box)
+        _threshold_lay.setContentsMargins(0, 0, 0, 0)
+        _threshold_lay.setSpacing(1)
+        _threshold_lay.addWidget(QLabel("水损阈值 (m):"))
+        self.edit_threshold = LineEdit()
+        self.edit_threshold.setPlaceholderText("如: 2.0")
+        self.edit_threshold.setFixedWidth(75)
+        _lbl_threshold_hint = QLabel("(超限提醒)")
+        _lbl_threshold_hint.setStyleSheet("color:#FF6600;font-size:12px;")
+        _lbl_threshold_hint.setToolTip("ΔZ 超过此值后，系统会提醒调整参数。")
+        _threshold_lay.addWidget(_hrow(self.edit_threshold, _lbl_threshold_hint, protect_height=True))
+        _threshold_lay.addStretch()
+        _mid_top_lay.addWidget(_threshold_box, 2)
+
+        _ml.addWidget(_mid_top)
+        _ml.addSpacing(1)
 
         self.lbl_calc_target = QLabel("计算目标：计算总水头损失")
         self.lbl_calc_target.setStyleSheet("color:#00796B;font-weight:bold;")
         _ml.addWidget(self.lbl_calc_target)
-        _ml.addSpacing(2)
-
-        self.inc_cb = CheckBox("考虑加大流量比例系数")
-        self.inc_cb.setChecked(True)
-        self.inc_cb.stateChanged.connect(self._on_inc_toggle)
-        _inc_r = QWidget(); _inc_r_lay = QHBoxLayout(_inc_r)
-        _inc_r_lay.setContentsMargins(0, 0, 0, 0); _inc_r_lay.setSpacing(6)
-        _inc_r_lay.addWidget(self.inc_cb)
-        self.inc_mode_group = QButtonGroup(self)
-        self.inc_mode_percent_rb = QRadioButton("按比例")
-        self.inc_mode_q_rb = QRadioButton("按Q加大")
-        self.inc_mode_group.addButton(self.inc_mode_percent_rb)
-        self.inc_mode_group.addButton(self.inc_mode_q_rb)
-        self.inc_mode_percent_rb.setChecked(True)
-        self.inc_mode_percent_rb.toggled.connect(self._on_inc_mode_changed)
-        self.inc_mode_q_rb.toggled.connect(self._on_inc_mode_changed)
-        _inc_r_lay.addWidget(self.inc_mode_percent_rb)
-        _inc_r_lay.addWidget(self.inc_mode_q_rb)
-        self.lbl_inc_percent = QLabel("加大比例(%):")
-        _inc_r_lay.addWidget(self.lbl_inc_percent)
-        self.edit_inc = LineEdit()
-        self.edit_inc.setPlaceholderText("留空自动计算")
-        self.edit_inc.setFixedWidth(90)
-        self.edit_inc.textChanged.connect(self._refresh_increase_hint)
-        _inc_r_lay.addWidget(self.edit_inc)
-        self.lbl_inc_q = QLabel("Q加大(m³/s):")
-        _inc_r_lay.addWidget(self.lbl_inc_q)
-        self.inc_q_edit = LineEdit()
-        self.inc_q_edit.setPlaceholderText("请输入加大后的总流量")
-        self.inc_q_edit.setFixedWidth(100)
-        self.inc_q_edit.textChanged.connect(self._refresh_increase_hint)
-        _inc_r_lay.addWidget(self.inc_q_edit)
-        self.lbl_inc_hint = QLabel("(留空则按设计流量自动查表)")
-        self.lbl_inc_hint.setStyleSheet("color:#0066CC;font-size:12px;")
-        self.inc_derived_hint = self.lbl_inc_hint
-        _inc_r_lay.addWidget(self.lbl_inc_hint)
-        _inc_r_lay.addStretch()
-        _ml.addWidget(_inc_r)
         _ml.addStretch()
 
         _c1_lay.addWidget(col_m, 4)
@@ -786,8 +864,8 @@ class SiphonPanel(QWidget):
         # ── 右栏：转弯控制参数 ──
         col_r = QWidget()
         _rl = QVBoxLayout(col_r)
-        _rl.setContentsMargins(12, 0, 0, 0)
-        _rl.setSpacing(2)
+        _rl.setContentsMargins(10, 0, 0, 0)
+        _rl.setSpacing(1)
 
         _rl.addWidget(_lbl_with_star("平面转弯半径倍数 (R=nD):", "#1565C0"))
         self.edit_turn_n = LineEdit(); self.edit_turn_n.setText("3.0"); self.edit_turn_n.setFixedWidth(50)
@@ -797,7 +875,7 @@ class SiphonPanel(QWidget):
         _lbl_tn_hint = QLabel("(请确认倍数)")
         _lbl_tn_hint.setStyleSheet("color:#FF6600;font-size:12px;")
         _rl.addWidget(_hrow(self.edit_turn_n, _lbl_tn_hint, protect_height=True))
-        _rl.addSpacing(2)
+        _rl.addSpacing(1)
 
         _rl.addWidget(QLabel("平面转弯半径 R (m):"))
         self.edit_turn_R = LineEdit()
@@ -805,26 +883,20 @@ class SiphonPanel(QWidget):
         self.edit_turn_R.setFixedWidth(70)
         self.edit_turn_R.setStyleSheet("LineEdit { border: 1px solid #90CAF9; background: #E3F2FD; }")
         self.edit_turn_R.textChanged.connect(self._on_turn_R_changed)
-        self.lbl_turn_R_status = QLabel("← 可直接输入覆盖（修改R将反推n）")
+        self.lbl_turn_R_status = QLabel("← 可直接覆盖 R")
         self.lbl_turn_R_status.setStyleSheet("color:#888;font-size:12px;")
+        self.lbl_turn_R_status.setToolTip("可直接输入覆盖 R，修改后会自动反推平面转弯半径倍数 n。")
         _rl.addWidget(_hrow(self.edit_turn_R, self.lbl_turn_R_status))
 
         self.lbl_turn_R = QLabel("R = --  (请确认倍数)")
         self.lbl_turn_R.setStyleSheet("color:#1565C0;font-size:12px;")
         self.lbl_turn_R.setWordWrap(True)
         _rl.addWidget(self.lbl_turn_R)
-        _rl.addSpacing(2)
-
-        _rl.addWidget(QLabel("水损阈值 (m):"))
-        self.edit_threshold = LineEdit()
-        self.edit_threshold.setPlaceholderText("如: 2.0")
-        self.edit_threshold.setFixedWidth(75)
-        _lbl_threshold_hint = QLabel("(ΔZ超此值将提醒调整参数)")
-        _lbl_threshold_hint.setStyleSheet("color:#FF6600;font-size:12px;")
-        _rl.addWidget(_hrow(self.edit_threshold, _lbl_threshold_hint))
+        _rl.addSpacing(1)
         _rl.addStretch()
 
         _c1_lay.addWidget(col_r, 3)
+        card1_lay.addWidget(params_row)
 
         lay.addWidget(card1)
 
@@ -2804,7 +2876,11 @@ document.addEventListener("DOMContentLoaded", function(){
         self.edit_inc.setVisible(enabled and is_percent_mode)
         self.lbl_inc_q.setVisible(enabled and not is_percent_mode)
         self.inc_q_edit.setVisible(enabled and not is_percent_mode)
-        self.lbl_inc_hint.setVisible(enabled)
+        if hasattr(self, 'lbl_inc_compact_hint'):
+            self.lbl_inc_compact_hint.setVisible(enabled)
+        if hasattr(self, 'btn_inc_help'):
+            self.btn_inc_help.setVisible(enabled)
+        self.lbl_inc_hint.setVisible(False)
         # 控制加大流量流速输入框的显示
         self.edit_v1_inc.setVisible(enabled)
         self.lbl_v1_inc.setVisible(enabled)
@@ -2831,17 +2907,69 @@ document.addEventListener("DOMContentLoaded", function(){
         """输入方式切换时刷新界面。"""
         self._on_inc_toggle()
 
+    def _build_compact_increase_hint_text(self):
+        """生成界面里直接展示的短提示，避免长文案挤压布局。"""
+        if not self.inc_cb.isChecked():
+            return ""
+
+        raw_q = self.edit_Q.text().strip() if hasattr(self, 'edit_Q') else ""
+        if not raw_q:
+            return "先填写设计流量 Q"
+        try:
+            design_q = float(raw_q)
+        except ValueError:
+            return "设计流量 Q 无效"
+        if design_q <= 0:
+            return "设计流量 Q 必须大于 0"
+
+        if self._current_increase_mode() == INCREASE_MODE_Q_INCREASED:
+            raw_q_inc = self.inc_q_edit.text().strip() if hasattr(self, 'inc_q_edit') else ""
+            if not raw_q_inc:
+                return "请输入 Q加大"
+            try:
+                q_increased = float(raw_q_inc)
+            except ValueError:
+                return "Q加大输入无效"
+            if q_increased <= design_q:
+                return "Q加大必须大于设计流量 Q"
+            return "系统自动换算加大比例"
+
+        raw_percent = self.edit_inc.text().strip() if hasattr(self, 'edit_inc') else ""
+        if not raw_percent:
+            return "留空按规范取值"
+        try:
+            float(raw_percent)
+        except ValueError:
+            return "加大比例输入无效"
+        return "系统自动换算 Q加大"
+
+    def _build_increase_help_tooltip(self, full_hint_text):
+        """生成问号提示里的完整规则说明。"""
+        current_hint = full_hint_text or "未启用加大流量"
+        return "\n".join((
+            f"当前换算：{current_hint}",
+            "",
+            "按比例：可直接输入流量加大比例；留空按规范自动查表。",
+            "按Q加大：输入加大后的总流量，且必须大于设计流量 Q。",
+        ))
+
     def _refresh_increase_hint(self):
         """刷新加大流量的灰色提示。"""
         if not hasattr(self, 'lbl_inc_hint'):
             return
-        self.lbl_inc_hint.setText(build_increase_hint_text(
+        full_hint_text = build_increase_hint_text(
             use_increase=self.inc_cb.isChecked(),
             mode=self._current_increase_mode(),
             design_q_text=self.edit_Q.text() if hasattr(self, 'edit_Q') else "",
             percent_text=self.edit_inc.text() if hasattr(self, 'edit_inc') else "",
             q_increased_text=self.inc_q_edit.text() if hasattr(self, 'inc_q_edit') else "",
-        ))
+        )
+        self.lbl_inc_hint.setText(full_hint_text)
+        if hasattr(self, 'lbl_inc_compact_hint'):
+            self.lbl_inc_compact_hint.setText(self._build_compact_increase_hint_text())
+            self.lbl_inc_compact_hint.setToolTip(self._build_increase_help_tooltip(full_hint_text))
+        if hasattr(self, 'btn_inc_help'):
+            self.btn_inc_help.setToolTip(self._build_increase_help_tooltip(full_hint_text))
 
     def _attach_increase_summary_meta(self, result):
         """把当前加大流量输入信息附着到计算结果上，供结果与导出统一展示。"""

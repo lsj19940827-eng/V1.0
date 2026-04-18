@@ -10,6 +10,7 @@ import math
 from app_渠系计算前端.increase_input_helper import (
     INCREASE_MODE_PERCENT,
     build_increase_summary_lines,
+    format_increase_percent,
 )
 
 from app_渠系计算前端.dxf_common import (
@@ -251,7 +252,7 @@ def _draw_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
 
     # ------ 5. 参数文字块（右侧）------
     text_x = top_w/2*sf + gap * 3.5
-    inc_pct_str = (f'{inc_pct:.1f}%' if isinstance(inc_pct, (int, float))
+    inc_pct_str = (f'{format_increase_percent(inc_pct)}' if isinstance(inc_pct, (int, float))
                    else str(inc_pct))
 
     lines = [
@@ -282,7 +283,7 @@ def _draw_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
         lines += [
             '',
             '[加大流量工况]',
-            *_increase_lines(input_params, result),
+            *_increase_lines(p, result),
             f'h\u589e = {h_inc:.3f} m',
             f'V\u589e = {V_inc:.3f} m/s',
             f'Fb = {Fb:.3f} m',
@@ -436,7 +437,7 @@ def _draw_compound_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
         })
 
     text_x = right_top_x * sf + gap * 3.5
-    inc_pct_str = f'{inc_pct:.1f}%' if isinstance(inc_pct, (int, float)) else str(inc_pct)
+    inc_pct_str = format_increase_percent(inc_pct) if isinstance(inc_pct, (int, float)) else str(inc_pct)
     lines = [
         '【明渠水力计算】',
         '断面类型: 复式梯形',
@@ -465,7 +466,7 @@ def _draw_compound_trapezoid(msp, result, p, sf=1.0, scale_denom=100):
         lines += [
             '',
             '[加大流量工况]',
-            *_increase_lines(input_params, result),
+            *_increase_lines(p, result),
             f'h\u589e = {h_inc:.3f} m',
             f'V\u589e = {V_inc:.3f} m/s',
             f'Fb = {Fb:.3f} m',
@@ -586,7 +587,7 @@ def _draw_circular(msp, result, p, sf=1.0, scale_denom=100):
         lines += [
             '',
             '[加大流量工况]',
-            *_increase_lines(input_params, result),
+            *_increase_lines(p, result),
             f'y\u589e = {y_i:.3f} m',
             f'V\u589e = {V_i:.3f} m/s',
             f'Fb\u589e = {FB_i:.3f} m',
@@ -705,7 +706,7 @@ def _draw_u_section(msp, result, p, sf=1.0, scale_denom=100):
 
     # 参数文字块
     text_x = x_top_r * sf + gap * 3.5
-    inc_pct_str = f'{inc_pct:.1f}%' if isinstance(inc_pct, (int, float)) else str(inc_pct)
+    inc_pct_str = format_increase_percent(inc_pct) if isinstance(inc_pct, (int, float)) else str(inc_pct)
     lines = [
         '【明渠水力计算】',
         f'断面类型: U形',
@@ -731,7 +732,7 @@ def _draw_u_section(msp, result, p, sf=1.0, scale_denom=100):
         lines += [
             '',
             '[加大工况]',
-            *_increase_lines(input_params, result),
+            *_increase_lines(p, result),
             f'h\u589e = {h_inc:.3f} m',
             f'V\u589e = {V_inc:.3f} m/s',
             f'Fb = {Fb:.3f} m',

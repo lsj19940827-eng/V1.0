@@ -125,6 +125,7 @@ from app_渠系计算前端.formula_renderer import (
 from app_渠系计算前端.increase_input_helper import (
     INCREASE_MODE_PERCENT,
     INCREASE_MODE_Q_INCREASED,
+    build_increase_formula_lines,
     build_increase_summary_lines,
     build_increase_hint_text,
     normalize_increase_mode,
@@ -1931,9 +1932,12 @@ class OpenChannelPanel(QWidget):
           o.append("")
           o.append("  1. 输入与换算:")
           o.extend([f"      {line}" for line in increase_summary_lines])
-          o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
-          o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
-          o.append(f"           = {Q_inc:.3f} m³/s")
+          for formula_line in build_increase_formula_lines(
+              design_q=Q,
+              increase_percent=inc_pct,
+              q_increased=Q_inc,
+          ):
+              o.append(f"      {formula_line}")
           o.append("")
 
         if use_increase and h_inc > 0:
@@ -2372,9 +2376,12 @@ class OpenChannelPanel(QWidget):
             o.append("")
             o.append("  1. 输入与换算:")
             o.extend([f"      {line}" for line in self._get_increase_summary_lines(p, result)])
-            o.append(f"      Q加大 = Q × (1 + {inc_pct/100:.2f})")
-            o.append(f"           = {Q:.3f} × {1+inc_pct/100:.2f}")
-            o.append(f"           = {Q_inc:.3f} m³/s")
+            for formula_line in build_increase_formula_lines(
+                design_q=Q,
+                increase_percent=inc_pct,
+                q_increased=Q_inc,
+            ):
+                o.append(f"      {formula_line}")
             o.append("")
             if h_i is not None and h_i > 0 and D > 0:
                 o.append("  2. 加大水深计算:")
@@ -2697,7 +2704,12 @@ class OpenChannelPanel(QWidget):
         if use_inc:
             o.append("【四、加大流量工况】")
             o.extend([f"  {line}" for line in increase_summary_lines])
-            o.append(f"  Q加大 = {Q:.3f}×(1+{inc_pct/100:.2f}) = {Q_inc:.3f} m³/s")
+            for formula_line in build_increase_formula_lines(
+                design_q=Q,
+                increase_percent=inc_pct,
+                q_increased=Q_inc,
+            ):
+                o.append(f"  {formula_line}")
             if h_inc > 0:
                 o.append(f"  h加大 = {h_inc:.3f} m")
                 if A_inc > 0 and X_inc > 0:

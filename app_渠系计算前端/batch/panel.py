@@ -38,6 +38,7 @@ from app_渠系计算前端.export_utils import (
     doc_add_body, doc_add_styled_table, doc_add_table_caption,
     doc_add_param_table, doc_render_calc_text, update_doc_toc_via_com,
 )
+from app_渠系计算前端.increase_input_helper import format_increase_percent
 
 
 def format_station_display(value: float) -> str:
@@ -2234,7 +2235,7 @@ class BatchPanel(QWidget):
             o.append(f"  R_h = {Rh_d:.3f} m,  V = {V_d:.3f} m/s")
             o.append("")
             o.append("【四、加大流量工况】")
-            o.append(f"  加大比例 = {inc_pct:.1f}%,  Q加大 = {Q_inc:.3f} m³/s")
+            o.append(f"  加大比例 = {format_increase_percent(inc_pct)},  Q加大 = {Q_inc:.3f} m³/s")
             o.append(f"  h加大 = {h_i:.3f} m,  V加大 = {V_i:.3f} m/s")
             o.append(f"  Fb = {Fb:.3f} m,  H = {H:.3f} m")
             o.append("")
@@ -2278,7 +2279,7 @@ class BatchPanel(QWidget):
             o.append(f"  设计流速 V = {V_d:.3f} m/s")
             o.append("")
             o.append("【三、加大流量工况】")
-            o.append(f"  加大比例 = {inc_pct:.1f}%")
+            o.append(f"  加大比例 = {format_increase_percent(inc_pct)}")
             o.append(f"  Q加大 = {Q_inc:.3f} m³/s, h加大 = {h_i:.3f} m, V加大 = {V_i:.3f} m/s")
             o.append(f"  Fb = {Fb:.3f} m, H = {H:.3f} m")
         elif "圆形" in section_type:
@@ -2385,7 +2386,7 @@ class BatchPanel(QWidget):
             A_inc = result.get('A_increased', 0)
             Fb = result.get('Fb', 0)
             H = result.get('h_prime', 0)
-            o.append(f"  加大比例 = {inc_pct:.1f}%")
+            o.append(f"  加大比例 = {format_increase_percent(inc_pct)}")
             o.append(f"  1. 加大流量 Q加大 = {Q_inc:.3f} m³/s")
             o.append(f"  2. 加大水深 h加大 = {h_inc:.3f} m")
             o.append(f"  3. 加大流速 V加大 = {V_inc:.3f} m/s")
@@ -2475,7 +2476,7 @@ class BatchPanel(QWidget):
         P_inc = result.get('P_increased', 0)
         R_inc = result.get('R_hyd_increased', 0)
         Fb = result.get('Fb', 0)
-        o.append(f"  加大比例 = {inc_pct:.1f}%")
+        o.append(f"  加大比例 = {format_increase_percent(inc_pct)}")
         o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
         o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
         o.append(f"  加大过水面积 A加大 = {A_inc:.3f} m²")
@@ -2615,7 +2616,7 @@ class BatchPanel(QWidget):
         if use_increase:
             o.append("")
             o.append("【四、加大流量工况】")
-            o.append(f"  加大比例 = {inc_pct:.1f}%")
+            o.append(f"  加大比例 = {format_increase_percent(inc_pct)}")
             o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
             o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
             o.append(f"  加大过水面积 A加大 = {A_inc:.3f} m²")

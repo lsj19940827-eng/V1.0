@@ -1236,11 +1236,11 @@ def _build_process_text(
     _n += 1
     if inp.manual_increase_percent is not None:
         o.append(f"  {_n}. 加大流量比例:")
-        o.append(f"     {inp.manual_increase_percent}% (手动指定)")
+        o.append(f"     {inp.manual_increase_percent:.3f}% (手动指定)")
     else:
         pct = get_flow_increase_percent(inp.Q)
         o.append(f"  {_n}. 加大流量比例:")
-        o.append(f"     {pct}% (自动计算)")
+        o.append(f"     {pct:.3f}% (自动计算)")
     o.append("")
 
     # ---- 二、加大流量计算 ----
@@ -1251,14 +1251,14 @@ def _build_process_text(
     o.append("【二、加大流量计算】")
     o.append("")
     o.append("  1. 加大流量计算:")
-    o.append(f"     加大百分比 P = {pct}%")
-    o.append(f"     Q加大 = Q × (1 + P/100)")
-    o.append(f"          = {inp.Q} × (1 + {pct}/100)")
-    o.append(f"          = {Q_inc:.4f} m\u00b3/s")
+    o.append(f"     加大百分比 P = {pct:.3f}%")
+    o.append(f"     Q加大 = Q × (1 + {pct / 100.0:.5f})")
+    o.append(f"          = {inp.Q:.3f} × {1 + pct / 100.0:.5f}")
+    o.append(f"          = {Q_inc:.3f} m\u00b3/s")
     o.append("")
     o.append("  2. 流量单位换算:")
     o.append(f"     Q' = Q加大 × 3600")
-    o.append(f"        = {Q_inc:.4f} × 3600")
+    o.append(f"        = {Q_inc:.3f} × 3600")
     o.append(f"        = {Q_inc_m3h:.2f} m\u00b3/h")
     o.append("")
 

@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication
 
 
@@ -33,6 +34,15 @@ def _flush_events(rounds=4):
     app = _get_qapp()
     for _ in range(max(1, rounds)):
         app.processEvents()
+
+
+def _find_tooltip_filter(widget):
+    """查找控件上挂载的悬浮提示过滤器。"""
+    for child in widget.children():
+        if hasattr(child, "_tooltipDelay"):
+            return child
+
+    return None
 
 
 def _force_fallback_webview():
@@ -286,4 +296,125 @@ def test_siphon_panel_q_increase_mode_roundtrips_in_project_payload():
     panel.deleteLater()
     restored.close()
     restored.deleteLater()
+    _flush_events(4)
+
+
+def test_siphon_panel_uses_left_narrow_right_wide_flow_bar():
+    panel = _new_panel("siphon", "SiphonPanel")
+
+    assert panel.flow_bar_left.width() < panel.flow_bar_right.width()
+    assert panel.flow_bar_right.width() > panel.flow_bar_left.width() * 1.5
+    assert panel.inc_cb.width() >= panel.inc_cb.sizeHint().width()
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
+def test_siphon_panel_shows_compact_hint_and_full_help_tooltip():
+    panel = _new_panel("siphon", "SiphonPanel")
+
+    assert panel.lbl_inc_compact_hint.isVisible() is True
+    assert panel.lbl_inc_compact_hint.text() == "留空按规范取值"
+    assert "按比例" in panel.btn_inc_help.toolTip()
+    assert "按Q加大" in panel.btn_inc_help.toolTip()
+    assert "设计流量 Q" in panel.btn_inc_help.toolTip()
+    assert _find_tooltip_filter(panel.btn_inc_help)._tooltipDelay == 200
+    assert "工程实际管径已由工程师自行确定" in panel.btn_D_help.toolTip()
+    assert "覆盖自动计算结果" in panel.btn_D_help.toolTip()
+    assert "R=nD" in panel.btn_D_help.toolTip()
+    assert _find_tooltip_filter(panel.btn_D_help)._tooltipDelay == 200
+    panel.btn_D_help.click()
+    _flush_events(2)
+    assert hasattr(panel, "lbl_D_help") is False
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
+def test_siphon_panel_switching_modes_only_shows_matching_input():
+    panel = _new_panel("siphon", "SiphonPanel")
+
+    assert panel.lbl_inc_percent.isVisible() is True
+    assert panel.edit_inc.isVisible() is True
+    assert panel.lbl_inc_q.isVisible() is False
+    assert panel.inc_q_edit.isVisible() is False
+
+    panel.inc_mode_q_rb.setChecked(True)
+    _flush_events(3)
+
+    assert panel.lbl_inc_percent.isVisible() is False
+    assert panel.edit_inc.isVisible() is False
+    assert panel.lbl_inc_q.isVisible() is True
+    assert panel.inc_q_edit.isVisible() is True
+
+    panel.inc_mode_percent_rb.setChecked(True)
+    _flush_events(3)
+
+    assert panel.lbl_inc_percent.isVisible() is True
+    assert panel.edit_inc.isVisible() is True
+    assert panel.lbl_inc_q.isVisible() is False
+    assert panel.inc_q_edit.isVisible() is False
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
+def test_siphon_panel_places_threshold_between_velocity_and_turn_radius_columns():
+    panel = _new_panel("siphon", "SiphonPanel")
+
+    velocity_pos = panel.edit_v.mapTo(panel, QPoint(0, 0))
+    threshold_pos = panel.edit_threshold.mapTo(panel, QPoint(0, 0))
+    turn_n_pos = panel.edit_turn_n.mapTo(panel, QPoint(0, 0))
+
+    assert threshold_pos.x() > velocity_pos.x() + panel.edit_v.width()
+    assert threshold_pos.x() + panel.edit_threshold.width() < turn_n_pos.x()
+    assert abs(threshold_pos.y() - velocity_pos.y()) <= 20
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
+def test_open_channel_detail_output_uses_high_precision_increase_formula_text():
+    panel = _new_panel("open_channel", "OpenChannelPanel")
+
+    panel.Q_edit.setText("5.0")
+    _activate_q_increase_mode(panel, "5.91")
+    panel._save_current_case()
+    saved_case = dict(panel._cases[panel._current_case_idx])
+
+    params, result = panel._parse_and_calc_case(saved_case, 1)
+    panel.input_params = params
+    panel._show_trapezoid_detail(result)
+
+    assert "流量加大比例 = 18.200%" in panel._export_plain_text
+    assert "Q加大 = Q × (1 + 0.18200)" in panel._export_plain_text
+    assert "= 5.000 × 1.18200" in panel._export_plain_text
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
+def test_aqueduct_detail_output_uses_high_precision_increase_formula_text():
+    panel = _new_panel("aqueduct", "AqueductPanel")
+
+    panel.Q_edit.setText("5.0")
+    _activate_q_increase_mode(panel, "5.91")
+    panel._save_current_case()
+    saved_case = dict(panel._cases[panel._current_case_idx])
+
+    params, result = panel._parse_and_calc_case(saved_case, 1)
+    panel.input_params = params
+    panel._show_u_detail(result)
+
+    assert "流量加大比例 = 18.200%" in panel._export_plain_text
+    assert "Q加大 = Q × (1 + 0.18200)" in panel._export_plain_text
+    assert "= 5.000 × 1.18200" in panel._export_plain_text
+
+    panel.close()
+    panel.deleteLater()
     _flush_events(4)
