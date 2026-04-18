@@ -1021,6 +1021,10 @@ class MultiSiphonDialog(QDialog):
                 d['threshold'] = raw['threshold']
             if 'D_override' in raw:
                 d['D_override'] = raw['D_override']
+            if 'v_before_override' in raw:
+                d['v_before_override'] = raw['v_before_override']
+            if 'v_confirmed_before_override' in raw:
+                d['v_confirmed_before_override'] = raw['v_confirmed_before_override']
             if 'v2_strategy' in raw:
                 d['v2_strategy'] = raw['v2_strategy']
             if 'show_detail' in raw:
@@ -1120,6 +1124,8 @@ class MultiSiphonDialog(QDialog):
                 siphon_dict['turn_n'] = data.get('turn_n', 5)
                 siphon_dict['threshold'] = data.get('threshold', '')
                 siphon_dict['D_override'] = data.get('D_override', '')
+                siphon_dict['v_before_override'] = data.get('v_before_override')
+                siphon_dict['v_confirmed_before_override'] = data.get('v_confirmed_before_override', False)
                 siphon_dict['v2_strategy'] = data.get('v2_strategy', '')
                 siphon_dict['show_detail'] = data.get('show_detail', True)
                 siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', True)

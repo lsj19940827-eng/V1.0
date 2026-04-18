@@ -10,6 +10,7 @@
 表3基础设置区里的“设计流量 / 加大流量”现已收口为共享当前流量段的只读查看组：主界面默认只显示当前段（默认第一段）的名称和值，不再展示整串逗号文本，也不再提供“编辑全部”入口；需要改值时，回原始 Excel 来源处理。
 当前口径下，主界面这两个流量字段只负责查看和切换当前流量段；当上游来源刷新设计流量时，系统仍会按最新设计流量整体重算全部加大流量。批量同步后，当前流量段会回到第一段；项目重开后主界面也默认回到第一段显示。
 明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道这 6 个设计面板现在统一支持“按比例 / 按Q加大”二选一输入：保留原“考虑加大流量”开关，默认仍按比例；`按比例` 允许留空并继续自动查表；切到“按Q加大”后，输入的是加大后的总流量，且必须严格大于设计流量。旧工程仍按原比例方式打开；关闭开关只隐藏这组输入，不会清掉上一次内容。结果页、TXT、Word、DXF 会同时写清输入方式、用户输入值和系统换算值。
+当前版本的倒虹吸面板已把 `D` 行收口为“当前输入下的实时结果”：只要 `Q / v / N` 可算就立即显示；普通模式显示 `D设计 + D理论`，多管并联会同时说明“每管Q”；指定管径生效后改为“采用D + 实际流速”，拟定流速框同步切成灰色只读并显示反算流速，取消指定后恢复勾选前的拟定流速和确认态；工况确认态按工况在本次运行内单独记忆，重启后清空。
 当前版本里，`xx管` 纵断面已经把“画线”和“取值”分开：导入时会把用户选中的原始纵断面多段线保存到 route 级 `raw_profile_polyline`，导出时 `centerline_draw_segments` 直接按这条原线裁切后出图；`profile_breakpoint_records` 继续只负责工程折点接口和覆盖判断；当前表格里的“管中心线高程（米）”仍由 `centerline_records` 在平面桩号位置取值。工程折点指原始轴线上真正用于分段、转折和校验的点，不拿普通采样点充数。
 连续承压链里的命名 `有压管道 / 定向钻 / 顶管` 现在统一按逐行正式计损：中间命名承压段也会把每一行的承压损失显示到表3，并直接参与总损失、累计损失和水位递推；父命名组继续只保留在有压管道窗口里做汇总，不再参与表3重复累计。
 对于这类已经锁定的逐行承压行，表3列38仍保持只读；如果需要人工采用值，现在直接双击列38详情，在弹窗底部填写“本行采用值”即可，保存后会联动刷新总损失、累计损失和后续水位，恢复自动计算也走同一入口。
@@ -49,6 +50,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 隧洞断面：`calc_渠系计算算法内核/隧洞设计.py` 统一承接圆形、平底圆形、圆拱直墙型与马蹄形；`app_渠系计算前端/tunnel/geometry.py` 作为共享几何真源，给隧洞面板绘图、DXF、批量结果和表3复算共用。
 - 暗涵断面：既有 `calc_渠系计算算法内核/矩形暗涵设计.py` 与 `app_渠系计算前端/culvert/` 继续承接 `暗涵-矩形`；新增 `暗涵-圆拱直墙型` 的文档口径要求复用圆拱几何、分叉暗涵规则，并保留 `B / H_total / theta_deg` 进入共享结果、表3和导出链路。
 - 专项模块：`倒虹吸水力计算系统/`、`有压管道/` 提供专项计算能力。
+- 倒虹吸交互：`app_渠系计算前端/siphon/panel.py` 统一负责 `D` 实时显示、指定管径生效后的实际流速反算、取消指定后的拟定流速恢复，以及工况内确认态隔离；`app_渠系计算前端/siphon/multi_siphon_dialog.py` 与 `推求水面线/managers/siphon_manager.py` 负责单页/多页配置保存与本次运行内的自动确认衔接。
 - 加大流量输入：`app_渠系计算前端/increase_input_helper.py` 统一负责“按比例 / 按Q加大”的换算、空值规则、灰色提示文案和结果摘要；6 个设计面板都复用这套 helper，并继续把内核输入收口到原有比例参数。
 - 自动化验证：`pytest`，测试文件集中在 `tests/`，其中 xx管 整线纵断面会同时覆盖界面、持久化、计算和导出链路。
 - 更新链路：`updater.py`、`update_helper.py`、`app_渠系计算前端/update_dialog.py`、`update_artifact_rules.py`、`tools/build.py`、`tools/release.py`、`tools/release_snapshot.py` 共同负责版本检查、补丁/全量选择、下载包 checksum、运行时文件排除、旧会话残留清理、补丁落地后目标验收、独立安装窗口、补丁兜底和正式发版；其中 `tools/build.py` 现在还会在打包前按分组校验关键依赖，并显式收集 `latex2mathml` 这类 Word 导出运行时数据文件，避免安装包启动时因缺资源直接退出；`tools/backfill_patch_release.py` 与 `tools/disable_patch_release.py` 则分别负责“基于快照回补 patch”和“临时撤下高风险 patch 字段”。
@@ -102,6 +104,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 运行本次复式梯形回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_open_channel_compound_trapezoid_kernel_unit.py tests/test_open_channel_compound_trapezoid_panel_unit.py tests/test_open_channel_compound_trapezoid_dxf_unit.py tests/test_batch_compound_trapezoid_unit.py tests/test_compound_trapezoid_type_support_unit.py tests/test_compound_trapezoid_shared_hydraulic_unit.py tests/test_water_profile_coord_precision_unit.py -q`
 - 运行本次平底圆形隧洞收口回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_tunnel_flat_bottom_circular_kernel_unit.py tests/test_tunnel_flat_bottom_circular_shared_hydraulic_unit.py tests/test_tunnel_flat_bottom_circular_dxf_unit.py tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py tests/test_tunnel_flat_bottom_circular_table3_xxpipe_unit.py tests/test_tunnel_flat_bottom_circle_section_summary_unit.py tests/test_tunnel_kernel.py tests/test_tunnel_dxf_export_unit.py tests/test_tunnel_panel_plot_unit.py tests/test_formula_renderer_result_pages_unit.py -q`
 - 运行本次暗涵家族扩展回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_culvert_arch_kernel_unit.py tests/test_culvert_arch_shared_hydraulic_unit.py tests/test_culvert_arch_type_support_unit.py tests/test_culvert_arch_panel_batch_unit.py tests/test_transition_reference_culvert_unit.py tests/test_pressurized_dxf_rules_unit.py tests/test_xxpipe_longitudinal_export_unit.py tests/test_shared_data_manager_vmax_alias_unit.py tests/test_xxpipe_export_context_unit.py tests/test_xxpipe_mode_rules_unit.py tests/test_culvert_kernel.py -q`
+- 运行本次倒虹吸 D 显示与指定管径回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_siphon_d_display_override_unit.py tests/test_siphon_unified_auto_confirm.py tests/test_siphon_num_pipes_confirmation_level_unit.py -q`
 
 ## 搜索记录
 
@@ -119,6 +122,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 ## 已完成功能列表
 
 - 明渠设计面板已新增“复式梯形”断面，支持 6 个固定几何参数、分段公式、断面图、DXF 和 Word 导出。
+- 倒虹吸面板已把 `D` 行改成实时显示：普通模式下即时展示 `D设计 / D理论`，多管并联额外展示“每管Q”；指定管径生效后展示“采用D / 实际流速”，拟定流速框切为灰色只读，取消指定后恢复原拟定流速和原确认态；工况确认态按工况在本次运行内分别记忆，重启后清空。
 - 明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道 6 个设计面板已统一支持“按比例 / 按Q加大”二选一输入；`按比例` 可留空自动查表，`按Q加大` 必须输入加大后的总流量且大于设计流量；旧工程默认仍按比例回显，多工况复制、恢复和导出说明会一起带上新模式和值。
 - 批量计算已新增“明渠-复式梯形”，主表、参数弹窗、Excel 导入导出和结果说明全部支持新断面。
 - 推求水面线已补上“明渠-复式梯形”的最小兼容，能保留 `m1/B1/m2/B2/m3/h1` 并按新公式参与水力计算。

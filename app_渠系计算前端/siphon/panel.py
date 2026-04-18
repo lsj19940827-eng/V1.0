@@ -352,6 +352,14 @@ class SiphonPanel(QWidget):
         self._turn_n_user_confirmed = False
         # 管道根数确认标志（用户需Enter/失焦/按钮确认）
         self._num_pipes_user_confirmed = False
+        # 工况级运行期确认态缓存（仅内存，不跨重启）
+        self._case_confirmation_states = {}
+        self._current_case_key = None
+        # 指定管径前的拟定流速备份，用于取消指定时恢复
+        self._v_before_override_text = ""
+        self._v_confirmed_before_override = False
+        self._override_velocity_active = False
+        self._override_restore_ready = False
         self.canvas_viewer = None
 
         # 断面参数缓存（v₂策略=断面参数计算用）
@@ -372,6 +380,7 @@ class SiphonPanel(QWidget):
 
         # 初始化加大流量输入框的可见性（因为 inc_cb 默认勾选）
         self._on_inc_toggle()
+        self._refresh_pipe_design_feedback()
 
         # 工况管理：首次打开时自动创建默认工况
         if self._show_case_management and self.case_manager:
@@ -379,6 +388,8 @@ class SiphonPanel(QWidget):
                 self.case_manager.create_case()
                 if self.case_sidebar:
                     self.case_sidebar.refresh()
+            elif self.case_sidebar and self.case_sidebar.current_case:
+                self._on_case_selected(self.case_sidebar.current_case)
 
         # 启动时尝试加载上次保存的参数
         if not self._disable_autosave_load:
@@ -761,6 +772,7 @@ class SiphonPanel(QWidget):
 
         _ll.addWidget(QLabel("管径 D:"))
         self.lbl_D_theory = QLabel("D = --")
+        self.lbl_D_theory.setWordWrap(True)
         self.lbl_D_theory.setStyleSheet(f"color:{P};font-size:12px;font-weight:bold;")
         _ll.addWidget(self.lbl_D_theory)
         _ll.addSpacing(1)
@@ -784,6 +796,7 @@ class SiphonPanel(QWidget):
         self.edit_D_override.setPlaceholderText("输入管径(m)")
         self.edit_D_override.setFixedWidth(120)
         self.edit_D_override.setVisible(False)
+        self.edit_D_override.textChanged.connect(self._on_D_override_text_changed)
         _d_cb_lay.addWidget(self.edit_D_override)
         _d_cb_lay.addStretch()
         _d_vlay.addWidget(_d_cb_row)
@@ -1728,8 +1741,7 @@ document.addEventListener("DOMContentLoaded", function(){
 
         self._update_canvas()
         self._update_data_status()
-        self._update_D_theory()
-        self._update_turn_R()
+        self._refresh_pipe_design_feedback()
 
     def get_result(self):
         return self.calculation_result
@@ -1809,17 +1821,11 @@ document.addEventListener("DOMContentLoaded", function(){
         n_mult = self._fval(self.edit_turn_n, 0)
         if n_mult <= 0:
             return
-        Q = self._fval(self.edit_Q, 0)
-        v = self._fval(self.edit_v, 0)
-        if Q <= 0 or v <= 0:
+        diameter_ctx = self._get_adopted_diameter_context()
+        if diameter_ctx is None:
             return
-        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
-        Q_single = Q / N
-        D_theory = math.sqrt(4 * Q_single / (math.pi * v))
-        if D_theory <= 0:
-            return
-        D_design = HydraulicCore.round_diameter(D_theory)
-        siphon_radius = round(n_mult * D_design, 2)
+        D_adopted = diameter_ctx['diameter']
+        siphon_radius = round(n_mult * D_adopted, 2)
 
         updated = False
         for seg in self.plan_segments:
@@ -1830,9 +1836,9 @@ document.addEventListener("DOMContentLoaded", function(){
                 seg.radius = siphon_radius
                 if seg.angle > 0:
                     seg.length = round(siphon_radius * math.radians(seg.angle), 3)
-                if seg.angle > 0 and D_theory > 0 and seg.xi_user is None:
+                if seg.angle > 0 and D_adopted > 0 and seg.xi_user is None:
                     seg.xi_calc = CoefficientService.calculate_bend_coeff(
-                        siphon_radius, D_theory, seg.angle, verbose=False)
+                        siphon_radius, D_adopted, seg.angle, verbose=False)
                 updated = True
 
         for fp in self.plan_feature_points:
@@ -2027,6 +2033,8 @@ document.addEventListener("DOMContentLoaded", function(){
             siphon_dict['turn_n'] = data.get('turn_n', 5)
             siphon_dict['threshold'] = data.get('threshold', '')
             siphon_dict['D_override'] = data.get('D_override', '')
+            siphon_dict['v_before_override'] = data.get('v_before_override')
+            siphon_dict['v_confirmed_before_override'] = data.get('v_confirmed_before_override', False)
             siphon_dict['v2_strategy'] = data.get('v2_strategy', '')
             siphon_dict['show_detail'] = data.get('show_detail', True)
             siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', True)
@@ -2143,6 +2151,10 @@ document.addEventListener("DOMContentLoaded", function(){
                 d['threshold'] = raw['threshold']
             if 'D_override' in raw:
                 d['D_override'] = raw['D_override']
+            if 'v_before_override' in raw:
+                d['v_before_override'] = raw['v_before_override']
+            if 'v_confirmed_before_override' in raw:
+                d['v_confirmed_before_override'] = raw['v_confirmed_before_override']
             if 'v2_strategy' in raw:
                 d['v2_strategy'] = raw['v2_strategy']
             if 'show_detail' in raw:
@@ -2290,6 +2302,8 @@ document.addEventListener("DOMContentLoaded", function(){
         d = {
             'Q': self._fval(self.edit_Q),
             'v_guess': self._fval(self.edit_v),
+            'v_before_override': self._parse_optional_float(self._v_before_override_text),
+            'v_confirmed_before_override': bool(self._v_confirmed_before_override),
             'n': self._fval(self.edit_n),
             'turn_n': self._fval(self.edit_turn_n, 5),
             'threshold': self.edit_threshold.text().strip(),
@@ -2344,12 +2358,26 @@ document.addEventListener("DOMContentLoaded", function(){
     def from_dict(self, d):
         """从字典恢复状态（项目加载用）"""
         print(f"[DEBUG SiphonPanel.from_dict] 开始，键: {list(d.keys())[:10]}...")
+        self._v_user_confirmed = False
+        self._num_pipes_user_confirmed = False
+        self._turn_n_user_confirmed = False
+        self._override_velocity_active = False
+        self._override_restore_ready = False
+        self._v_before_override_text = ""
+        self._v_confirmed_before_override = False
+        self.edit_v.setReadOnly(False)
         if 'Q' in d: self.edit_Q.setText(str(d['Q']))
         if 'v_guess' in d:
             self._syncing = True
             self.edit_v.setText(str(d['v_guess']))
             self._syncing = False
-            self._update_v_style()
+        v_before_override = self._parse_optional_float(d.get('v_before_override'))
+        if v_before_override is not None:
+            self._v_before_override_text = str(v_before_override)
+            self._override_restore_ready = True
+        self._v_confirmed_before_override = bool(d.get('v_confirmed_before_override', False))
+        if self._v_confirmed_before_override:
+            self._override_restore_ready = True
         # 兼容Tkinter版key: roughness_n → n
         n_val = d.get('n') or d.get('roughness_n')
         if n_val is not None: self.edit_n.setText(str(n_val))
@@ -2362,11 +2390,12 @@ document.addEventListener("DOMContentLoaded", function(){
             self._update_turn_R()
         threshold_val = d.get('threshold') or d.get('head_loss_threshold')
         if threshold_val is not None: self.edit_threshold.setText(str(threshold_val))
-        if 'D_override' in d:
-            d_val = str(d['D_override']).strip()
-            if d_val:
-                self.cb_D_override.setChecked(True)
-                self.edit_D_override.setText(d_val)
+        d_override_val = str(d.get('D_override', '')).strip()
+        self._syncing = True
+        self.cb_D_override.setChecked(bool(d_override_val))
+        self.edit_D_override.setVisible(bool(d_override_val))
+        self.edit_D_override.setText(d_override_val)
+        self._syncing = False
         if 'num_pipes' in d and hasattr(self, 'spin_num_pipes'):
             self._syncing = True
             self.spin_num_pipes.setValue(int(d['num_pipes']))
@@ -2480,21 +2509,20 @@ document.addEventListener("DOMContentLoaded", function(){
         self._plan_segments_dirty_since_import = False
 
         # 自动确认：如果存在 calculated_at（进程内已计算），跳过所有确认对话框
+        confirmation_state = None
         if 'calculated_at' in d and d['calculated_at']:
-            self._v_user_confirmed = True
-            self._num_pipes_user_confirmed = True
-            self._turn_n_user_confirmed = True
+            confirmation_state = {
+                'v_confirmed': True,
+                'num_pipes_confirmed': True,
+                'turn_n_confirmed': True,
+            }
             print(f"[DEBUG SiphonPanel.from_dict] 检测到 calculated_at={d['calculated_at']}，已自动确认")
-            # 更新UI样式，移除"请确认"提示
-            self._update_v_style()
-            self._update_num_pipes_style()
-            self._update_turn_n_style()
 
         self._refresh_seg_table()
         self._update_canvas()
         self._update_data_status()
-        self._update_D_theory()
-        self._update_turn_R()
+        self._apply_confirmation_state(confirmation_state)
+        self._refresh_pipe_design_feedback()
         print("[DEBUG SiphonPanel.from_dict] 完成")
 
     def to_project_dict(self):
@@ -2604,6 +2632,188 @@ document.addEventListener("DOMContentLoaded", function(){
         )
 
     # ================================================================
+    # 工况确认态与管径显示辅助
+    # ================================================================
+    def _get_case_state_key(self, case) -> str:
+        """返回工况确认态缓存键。"""
+        if case is None:
+            return ""
+        return getattr(case, 'name', str(case))
+
+    def _capture_confirmation_state(self) -> dict:
+        """提取当前面板上的确认状态。"""
+        return {
+            'v_confirmed': bool(self._v_user_confirmed),
+            'num_pipes_confirmed': bool(self._num_pipes_user_confirmed),
+            'turn_n_confirmed': bool(self._turn_n_user_confirmed),
+        }
+
+    def _apply_confirmation_state(self, state=None):
+        """按指定状态恢复确认样式；缺省时全部恢复为未确认。"""
+        state = state or {}
+        self._v_user_confirmed = bool(state.get('v_confirmed', False))
+        self._num_pipes_user_confirmed = bool(state.get('num_pipes_confirmed', False))
+        self._turn_n_user_confirmed = bool(state.get('turn_n_confirmed', False))
+        self._update_v_style()
+        self._update_num_pipes_style()
+        self._update_turn_n_style()
+        self._update_turn_R()
+
+    def _remember_current_case_confirmation_state(self):
+        """在切换工况前，保存当前工况的运行期确认态。"""
+        key = self._current_case_key
+        if key:
+            self._case_confirmation_states[key] = self._capture_confirmation_state()
+
+    def _parse_optional_float(self, value):
+        """把文本安全转为浮点数，失败时返回None。"""
+        if value is None:
+            return None
+        try:
+            text = str(value).strip()
+            if not text:
+                return None
+            return float(text)
+        except (TypeError, ValueError):
+            return None
+
+    def _get_pipe_flow_context(self):
+        """返回当前管道流量上下文。"""
+        Q = self._fval(self.edit_Q, 0)
+        if Q <= 0:
+            return None
+        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
+        return {
+            'Q': Q,
+            'N': N,
+            'Q_single': Q / N,
+        }
+
+    def _get_normal_d_context(self):
+        """返回普通模式下的理论/设计管径。"""
+        pipe_ctx = self._get_pipe_flow_context()
+        if pipe_ctx is None:
+            return None
+        v = self._fval(self.edit_v, 0)
+        if v <= 0:
+            return None
+        D_theory = math.sqrt(4 * pipe_ctx['Q_single'] / (math.pi * v))
+        if D_theory <= 0:
+            return None
+        D_design = HydraulicCore.round_diameter(D_theory) if SIPHON_AVAILABLE else D_theory
+        pipe_ctx.update({
+            'velocity': v,
+            'D_theory': D_theory,
+            'D_design': D_design,
+        })
+        return pipe_ctx
+
+    def _get_effective_d_override(self):
+        """返回当前有效的指定管径。"""
+        if not hasattr(self, 'cb_D_override') or not self.cb_D_override.isChecked():
+            return None
+        D_override = self._parse_optional_float(self.edit_D_override.text())
+        if D_override is None or D_override <= 0:
+            return None
+        return D_override
+
+    def _get_override_d_context(self):
+        """返回指定管径生效时的采用管径与实际流速。"""
+        D_override = self._get_effective_d_override()
+        pipe_ctx = self._get_pipe_flow_context()
+        if D_override is None or pipe_ctx is None:
+            return None
+        area = math.pi * D_override * D_override / 4
+        if area <= 0:
+            return None
+        actual_velocity = pipe_ctx['Q_single'] / area
+        if actual_velocity <= 0:
+            return None
+        pipe_ctx.update({
+            'diameter': D_override,
+            'actual_velocity': actual_velocity,
+        })
+        return pipe_ctx
+
+    def _get_adopted_diameter_context(self):
+        """返回当前用于转弯半径与系数计算的管径。"""
+        override_ctx = self._get_override_d_context()
+        if override_ctx is not None:
+            return {
+                'diameter': override_ctx['diameter'],
+                'label': '采用D',
+                'Q_single': override_ctx['Q_single'],
+                'N': override_ctx['N'],
+            }
+        normal_ctx = self._get_normal_d_context()
+        if normal_ctx is None:
+            return None
+        return {
+            'diameter': normal_ctx['D_design'],
+            'label': 'D设计',
+            'Q_single': normal_ctx['Q_single'],
+            'N': normal_ctx['N'],
+        }
+
+    def _format_normal_d_label(self, ctx: dict) -> str:
+        """格式化普通模式下的D显示。"""
+        if ctx['N'] > 1:
+            return (
+                f"D设计 = {ctx['D_design']:.4f} m\n"
+                f"（D理论 = {ctx['D_theory']:.4f} m；每管Q = {ctx['Q_single']:.3f} m³/s）"
+            )
+        return f"D设计 = {ctx['D_design']:.4f} m\n（D理论 = {ctx['D_theory']:.4f} m）"
+
+    def _format_override_d_label(self, ctx: dict) -> str:
+        """格式化指定管径模式下的D显示。"""
+        if ctx['N'] > 1:
+            return (
+                f"采用D = {ctx['diameter']:.4f} m\n"
+                f"（每管Q = {ctx['Q_single']:.3f} m³/s；实际流速 = {ctx['actual_velocity']:.4f} m/s）"
+            )
+        return f"采用D = {ctx['diameter']:.4f} m\n（实际流速 = {ctx['actual_velocity']:.4f} m/s）"
+
+    def _capture_velocity_before_override(self):
+        """进入指定管径前，备份拟定流速与确认态。"""
+        self._v_before_override_text = self.edit_v.text().strip()
+        self._v_confirmed_before_override = bool(self._v_user_confirmed)
+
+    def _deactivate_override_velocity_mode(self, restore_backup: bool, clear_backup: bool):
+        """退出指定管径流速显示模式。"""
+        self._override_velocity_active = False
+        self.edit_v.setReadOnly(False)
+        if restore_backup and self._override_restore_ready:
+            self._syncing = True
+            self.edit_v.setText(self._v_before_override_text)
+            self._syncing = False
+            self._v_user_confirmed = bool(self._v_confirmed_before_override)
+        self._update_v_style()
+        if clear_backup:
+            self._override_restore_ready = False
+            self._v_before_override_text = ""
+            self._v_confirmed_before_override = False
+
+    def _activate_override_velocity_mode(self, actual_velocity: float):
+        """指定管径生效后，把拟定流速框切换为实际流速显示。"""
+        if not self._override_restore_ready:
+            self._capture_velocity_before_override()
+        self._override_restore_ready = True
+        self._override_velocity_active = True
+        self._syncing = True
+        self.edit_v.setReadOnly(True)
+        self.edit_v.setText(f"{actual_velocity:.4f}")
+        self._syncing = False
+        self._update_v_style()
+
+    def _refresh_pipe_design_feedback(self):
+        """统一刷新D显示、转弯半径和相关系数。"""
+        self._update_D_theory()
+        self._update_turn_R()
+        self._update_plan_bend_radius()
+        self._update_segment_coefficients()
+        self._auto_compute_outlet_xi()
+
+    # ================================================================
     # 拟定流速确认交互（方案D）
     # ================================================================
     def _on_v_edited_by_user(self):
@@ -2622,6 +2832,14 @@ document.addEventListener("DOMContentLoaded", function(){
 
     def _update_v_style(self):
         """根据确认状态动态更新流速输入框样式"""
+        if self._override_velocity_active:
+            self.edit_v.setReadOnly(True)
+            self.edit_v.setStyleSheet(
+                "LineEdit { border: 1px solid #C7CCD1; background: #F3F4F6; color: #666666; }"
+            )
+            self.lbl_v_hint.setText("(按指定管径反算)")
+            self.lbl_v_hint.setStyleSheet("color:#666666;font-size:12px;")
+            return
         if self._v_user_confirmed:
             self.edit_v.setStyleSheet(
                 f"LineEdit {{ border: 1.5px solid {S}; background: #F1F8E9; }}"
@@ -2678,6 +2896,8 @@ document.addEventListener("DOMContentLoaded", function(){
 
     def _validate_v_before_calc(self) -> bool:
         """计算前检查拟定流速是否已确认。返回True=通过，False=拦截"""
+        if self._get_override_d_context() is not None:
+            return True
         if self._v_user_confirmed:
             return True
         # 自动跳转到基本参数Tab
@@ -2834,35 +3054,26 @@ document.addEventListener("DOMContentLoaded", function(){
 
     def _do_Qv_update(self):
         """Q/v变化后的实际更新逻辑"""
-        self._update_turn_R()
-        self._auto_compute_outlet_xi()
-        self._update_D_theory()
-        self._update_plan_bend_radius()
-        self._update_segment_coefficients()
+        self._refresh_pipe_design_feedback()
         # Q变化后，断面参数策略下联动更新v₂
         strategy_text = self.combo_v2_strategy.currentText()
         if "断面" in strategy_text and self._section_B is not None:
             self._recalc_section_v2()
         self._mark_dirty()
-        # Q/v变化后，自动更新出水口局部阻力系数
-        self._auto_compute_outlet_xi()
 
     def _update_D_theory(self):
-        Q = self._fval(self.edit_Q, 0)
-        v = self._fval(self.edit_v, 0)
-        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
-        if Q > 0 and v > 0:
-            Q_single = Q / N
-            D = math.sqrt(4 * Q_single / (math.pi * v))
-            if SIPHON_AVAILABLE:
-                D_design = HydraulicCore.round_diameter(D)
-                if N > 1:
-                    self.lbl_D_theory.setText(
-                        f"D设计 = {D_design:.4f} m（{N}管并联，每管 Q = {Q_single:.3f} m³/s）")
-                else:
-                    self.lbl_D_theory.setText(f"D设计 = {D_design:.4f} m（D理论 = {D:.4f} m）")
-            else:
-                self.lbl_D_theory.setText(f"D = {D:.4f} m")
+        override_ctx = self._get_override_d_context()
+        if override_ctx is not None:
+            self._activate_override_velocity_mode(override_ctx['actual_velocity'])
+            self.lbl_D_theory.setText(self._format_override_d_label(override_ctx))
+            return
+
+        if self._override_velocity_active:
+            self._deactivate_override_velocity_mode(restore_backup=True, clear_backup=False)
+
+        normal_ctx = self._get_normal_d_context()
+        if normal_ctx is not None:
+            self.lbl_D_theory.setText(self._format_normal_d_label(normal_ctx))
         else:
             self.lbl_D_theory.setText("D = --")
 
@@ -3011,24 +3222,36 @@ document.addEventListener("DOMContentLoaded", function(){
 
     def _on_D_override_toggled(self, state):
         """指定管径 CheckBox 切换"""
+        if self._syncing:
+            return
         checked = bool(state)
         self.edit_D_override.setVisible(checked)
-        if not checked:
+        if checked:
+            if not self._override_restore_ready and not self._override_velocity_active:
+                self._capture_velocity_before_override()
+        else:
+            self._syncing = True
             self.edit_D_override.clear()
+            self._syncing = False
+            self._deactivate_override_velocity_mode(restore_backup=self._override_restore_ready, clear_backup=True)
+        self._refresh_pipe_design_feedback()
+        self._mark_dirty()
+
+    def _on_D_override_text_changed(self, _text):
+        """指定管径输入变化后，实时刷新采用值与实际流速。"""
+        if self._syncing:
+            return
+        self._refresh_pipe_design_feedback()
+        self._mark_dirty()
 
     def _update_segment_coefficients(self):
         """Q/v变化后更新结构段系数（弯管/折管）"""
         if not SIPHON_AVAILABLE:
             return
-        Q = self._fval(self.edit_Q, 0)
-        v = self._fval(self.edit_v, 0)
-        if Q <= 0 or v <= 0:
+        diameter_ctx = self._get_adopted_diameter_context()
+        if diameter_ctx is None:
             return
-        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
-        Q_single = Q / N
-        D = math.sqrt(4 * Q_single / (math.pi * v))
-        if D <= 0:
-            return
+        D = diameter_ctx['diameter']
         updated = False
         for seg in self.segments:
             if seg.xi_user is not None:
@@ -3098,25 +3321,20 @@ document.addEventListener("DOMContentLoaded", function(){
         n = self._fval(self.edit_turn_n, 0)
         if n > 0:
             self._siphon_turn_radius_n = n
-        self._update_turn_R()
-        # n变化后更新平面弯管段半径 R = n × D_design
-        self._update_plan_bend_radius()
+        self._refresh_pipe_design_feedback()
 
     def _update_turn_R(self, confirmed=False):
-        Q = self._fval(self.edit_Q, 0)
-        v = self._fval(self.edit_v, 0)
         n_mult = self._fval(self.edit_turn_n, 0)
-        if Q <= 0 or v <= 0:
-            self.lbl_turn_R.setText("R = n × D（请先输入Q和v）")
+        diameter_ctx = self._get_adopted_diameter_context()
+        if diameter_ctx is None:
+            self.lbl_turn_R.setText("R = n × D（请先输入可计算的Q、v、N）")
             return
         if n_mult <= 0:
             self.lbl_turn_R.setText("R = n × D（请输入n值）")
             return
-        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
-        Q_single = Q / N
-        D_theory = math.sqrt(4 * Q_single / (math.pi * v))
-        D_design = HydraulicCore.round_diameter(D_theory)
-        R = round(n_mult * D_design, 2)
+        D_adopted = diameter_ctx['diameter']
+        D_label = diameter_ctx['label']
+        R = round(n_mult * D_adopted, 2)
         # 同步 R 输入框（n 为权威值，以n为准）
         if hasattr(self, 'edit_turn_R') and not self._syncing:
             self._syncing = True
@@ -3129,13 +3347,13 @@ document.addEventListener("DOMContentLoaded", function(){
         has_bends = any(seg.segment_type == SegmentType.BEND for seg in self.plan_segments)
         sync_hint = "，已同步至弯管段" if has_bends else ""
         if confirmed:
-            self.lbl_turn_R.setText(f"D设计={D_design:.2f}m → R={R:.2f}m ✓已参与计算")
+            self.lbl_turn_R.setText(f"{D_label}={D_adopted:.2f}m → R={R:.2f}m ✓已参与计算")
             self.lbl_turn_R.setStyleSheet(f"color:#008800;font-size:12px;")
         elif self._turn_n_user_confirmed:
-            self.lbl_turn_R.setText(f"D设计={D_design:.2f}m → R={n_mult}×{D_design:.2f}={R:.2f}m{sync_hint} ✓已确认")
+            self.lbl_turn_R.setText(f"{D_label}={D_adopted:.2f}m → R={n_mult}×{D_adopted:.2f}={R:.2f}m{sync_hint} ✓已确认")
             self.lbl_turn_R.setStyleSheet(f"color:{S};font-size:12px;")
         else:
-            self.lbl_turn_R.setText(f"D设计={D_design:.2f}m → R={n_mult}×{D_design:.2f}={R:.2f}m{sync_hint}  (请确认倍数)")
+            self.lbl_turn_R.setText(f"{D_label}={D_adopted:.2f}m → R={n_mult}×{D_adopted:.2f}={R:.2f}m{sync_hint}  (请确认倍数)")
             self.lbl_turn_R.setStyleSheet("color:#1565C0;font-size:12px;")
 
     def _on_turn_R_changed(self):
@@ -3145,16 +3363,14 @@ document.addEventListener("DOMContentLoaded", function(){
         R_val = self._fval(self.edit_turn_R, 0)
         if R_val <= 0:
             return
-        Q = self._fval(self.edit_Q, 0)
-        v = self._fval(self.edit_v, 0)
-        if Q <= 0 or v <= 0 or not SIPHON_AVAILABLE:
+        diameter_ctx = self._get_adopted_diameter_context()
+        if diameter_ctx is None or not SIPHON_AVAILABLE:
             return
-        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
-        D_theory = math.sqrt(4 * (Q / N) / (math.pi * v))
-        D_design = HydraulicCore.round_diameter(D_theory)
-        if D_design <= 0:
+        D_adopted = diameter_ctx['diameter']
+        D_label = diameter_ctx['label']
+        if D_adopted <= 0:
             return
-        n_new = round(R_val / D_design, 3)
+        n_new = round(R_val / D_adopted, 3)
         self._syncing = True
         self.edit_turn_n.setText(str(n_new))
         self._syncing = False
@@ -3162,7 +3378,7 @@ document.addEventListener("DOMContentLoaded", function(){
         self._turn_n_user_confirmed = True
         self._update_turn_n_style()
         self.lbl_turn_R.setText(
-            f"D设计={D_design:.2f}m → R={n_new}×{D_design:.2f}={R_val:.2f}m ✓（R反推n）"
+            f"{D_label}={D_adopted:.2f}m → R={n_new}×{D_adopted:.2f}={R_val:.2f}m ✓（R反推n）"
         )
         self.lbl_turn_R.setStyleSheet(f"color:{S};font-size:12px;")
         self.lbl_turn_R_status.setText("← 已反推，n已更新为主值")
@@ -3170,7 +3386,7 @@ document.addEventListener("DOMContentLoaded", function(){
         self.edit_turn_R.setStyleSheet(
             f"LineEdit {{ border: 1.5px solid {S}; background: #F1F8E9; }}"
         )
-        self._update_plan_bend_radius()
+        self._refresh_pipe_design_feedback()
 
     def _on_inlet_type_changed(self, text):
         """渐变段型式→进口系数自动联动"""
@@ -5199,9 +5415,13 @@ document.addEventListener("DOMContentLoaded", function(){
         """切换工况"""
         if self._data_dirty:
             self._do_autosave()
+        self._remember_current_case_confirmation_state()
+        self._apply_confirmation_state()
         try:
             data = self.case_manager.load_case_data(case)
             self.from_dict(data)
+            self._current_case_key = self._get_case_state_key(case)
+            self._apply_confirmation_state(self._case_confirmation_states.get(self._current_case_key))
 
             # 如果没有纵断面数据，自动添加示例
             if not self.longitudinal_nodes or len(self.longitudinal_nodes) == 0:
@@ -5210,7 +5430,10 @@ document.addEventListener("DOMContentLoaded", function(){
             self._data_dirty = False
         except:
             # 新工况或加载失败，添加示例数据
+            self._current_case_key = self._get_case_state_key(case)
             self._add_example_longitudinal()
+            self._apply_confirmation_state(self._case_confirmation_states.get(self._current_case_key))
+            self._refresh_pipe_design_feedback()
             self._data_dirty = False
 
     def _is_example_longitudinal_data(self):
