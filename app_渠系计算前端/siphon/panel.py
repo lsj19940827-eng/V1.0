@@ -71,6 +71,14 @@ from app_渠系计算前端.increase_input_helper import (
 
 # 倒虹吸面板的问号说明统一使用更快的悬浮提示
 HELP_TOOLTIP_DELAY_MS = 200
+NO_WRAP_MARKER = "\u2060"
+
+
+def protect_unit_from_wrapping(text: str) -> str:
+    """给易拆行的单位词加防换行标记，避免 Qt 在斜杠处断开。"""
+    if not text:
+        return text
+    return text.replace("m³/s", f"m³{NO_WRAP_MARKER}/{NO_WRAP_MARKER}s")
 
 # 计算引擎导入
 try:
@@ -361,6 +369,9 @@ class SiphonPanel(QWidget):
         self._override_velocity_active = False
         self._override_restore_ready = False
         self.canvas_viewer = None
+        self._pipe_base_column = None
+        self._pipe_base_column_layout = None
+        self._pipe_base_column_base_min_width = 0
 
         # 断面参数缓存（v₂策略=断面参数计算用）
         self._section_B = None
@@ -762,6 +773,8 @@ class SiphonPanel(QWidget):
         _ll = QVBoxLayout(col_l)
         _ll.setContentsMargins(0, 0, 10, 0)
         _ll.setSpacing(1)
+        self._pipe_base_column = col_l
+        self._pipe_base_column_layout = _ll
 
         _ll.addWidget(QLabel("糙率 n:"))
         self.edit_n = LineEdit(); self.edit_n.setText("0.014"); self.edit_n.setFixedWidth(60)
@@ -802,6 +815,10 @@ class SiphonPanel(QWidget):
         _d_vlay.addWidget(_d_cb_row)
         _ll.addWidget(_d_container)
         _ll.addStretch()
+        self._pipe_base_column_base_min_width = max(
+            col_l.minimumSizeHint().width(),
+            col_l.sizeHint().width(),
+        )
 
         _c1_lay.addWidget(col_l, 3)
         _c1_lay.addWidget(_vsep())
@@ -2677,32 +2694,45 @@ document.addEventListener("DOMContentLoaded", function(){
         except (TypeError, ValueError):
             return None
 
-    def _get_pipe_flow_context(self):
+    def _get_pipe_flow_context(self, num_pipes=None):
         """返回当前管道流量上下文。"""
         Q = self._fval(self.edit_Q, 0)
         if Q <= 0:
             return None
-        N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
+        if num_pipes is None:
+            N = max(1, self.spin_num_pipes.value()) if hasattr(self, 'spin_num_pipes') else 1
+        else:
+            N = max(1, int(num_pipes))
         return {
             'Q': Q,
             'N': N,
             'Q_single': Q / N,
         }
 
-    def _get_normal_d_context(self):
+    def _get_normal_preview_velocity(self):
+        """返回用于普通模式预估宽度的流速值。"""
+        if self._override_restore_ready:
+            preview_v = self._parse_optional_float(self._v_before_override_text)
+            if preview_v is not None and preview_v > 0:
+                return preview_v
+        preview_v = self._fval(self.edit_v, 0)
+        return preview_v if preview_v > 0 else None
+
+    def _get_normal_d_context(self, num_pipes=None, velocity=None):
         """返回普通模式下的理论/设计管径。"""
-        pipe_ctx = self._get_pipe_flow_context()
+        pipe_ctx = self._get_pipe_flow_context(num_pipes=num_pipes)
         if pipe_ctx is None:
             return None
-        v = self._fval(self.edit_v, 0)
-        if v <= 0:
+        if velocity is None:
+            velocity = self._fval(self.edit_v, 0)
+        if velocity is None or velocity <= 0:
             return None
-        D_theory = math.sqrt(4 * pipe_ctx['Q_single'] / (math.pi * v))
+        D_theory = math.sqrt(4 * pipe_ctx['Q_single'] / (math.pi * velocity))
         if D_theory <= 0:
             return None
         D_design = HydraulicCore.round_diameter(D_theory) if SIPHON_AVAILABLE else D_theory
         pipe_ctx.update({
-            'velocity': v,
+            'velocity': velocity,
             'D_theory': D_theory,
             'D_design': D_design,
         })
@@ -2717,10 +2747,10 @@ document.addEventListener("DOMContentLoaded", function(){
             return None
         return D_override
 
-    def _get_override_d_context(self):
+    def _get_override_d_context(self, num_pipes=None, diameter=None):
         """返回指定管径生效时的采用管径与实际流速。"""
-        D_override = self._get_effective_d_override()
-        pipe_ctx = self._get_pipe_flow_context()
+        D_override = diameter if diameter is not None else self._get_effective_d_override()
+        pipe_ctx = self._get_pipe_flow_context(num_pipes=num_pipes)
         if D_override is None or pipe_ctx is None:
             return None
         area = math.pi * D_override * D_override / 4
@@ -2758,7 +2788,7 @@ document.addEventListener("DOMContentLoaded", function(){
     def _format_normal_d_label(self, ctx: dict) -> str:
         """格式化普通模式下的D显示。"""
         if ctx['N'] > 1:
-            return (
+            return protect_unit_from_wrapping(
                 f"D设计 = {ctx['D_design']:.4f} m\n"
                 f"（D理论 = {ctx['D_theory']:.4f} m；每管Q = {ctx['Q_single']:.3f} m³/s）"
             )
@@ -2767,11 +2797,57 @@ document.addEventListener("DOMContentLoaded", function(){
     def _format_override_d_label(self, ctx: dict) -> str:
         """格式化指定管径模式下的D显示。"""
         if ctx['N'] > 1:
-            return (
+            return protect_unit_from_wrapping(
                 f"采用D = {ctx['diameter']:.4f} m\n"
                 f"（每管Q = {ctx['Q_single']:.3f} m³/s；实际流速 = {ctx['actual_velocity']:.4f} m/s）"
             )
         return f"采用D = {ctx['diameter']:.4f} m\n（实际流速 = {ctx['actual_velocity']:.4f} m/s）"
+
+    def _get_pipe_base_preview_override_diameter(self):
+        """返回用于预估左栏最宽态的指定管径值。"""
+        if hasattr(self, 'edit_D_override'):
+            preview_d = self._parse_optional_float(self.edit_D_override.text())
+            if preview_d is not None and preview_d > 0:
+                return preview_d
+
+        normal_multi_ctx = self._get_normal_d_context(num_pipes=2, velocity=self._get_normal_preview_velocity())
+        if normal_multi_ctx is not None:
+            return normal_multi_ctx['D_design']
+
+        normal_single_ctx = self._get_normal_d_context(num_pipes=1, velocity=self._get_normal_preview_velocity())
+        if normal_single_ctx is not None:
+            return normal_single_ctx['D_design']
+
+        return None
+
+    def _build_pipe_base_width_sample_texts(self):
+        """构造左栏宽度预估所需的四类 D 行样本文案。"""
+        sample_texts = []
+        preview_velocity = self._get_normal_preview_velocity()
+
+        normal_single_ctx = self._get_normal_d_context(num_pipes=1, velocity=preview_velocity)
+        if normal_single_ctx is not None:
+            sample_texts.append(self._format_normal_d_label(normal_single_ctx))
+
+        normal_multi_ctx = self._get_normal_d_context(num_pipes=2, velocity=preview_velocity)
+        if normal_multi_ctx is not None:
+            sample_texts.append(self._format_normal_d_label(normal_multi_ctx))
+
+        preview_override_diameter = self._get_pipe_base_preview_override_diameter()
+        if preview_override_diameter is not None:
+            override_single_ctx = self._get_override_d_context(num_pipes=1, diameter=preview_override_diameter)
+            if override_single_ctx is not None:
+                sample_texts.append(self._format_override_d_label(override_single_ctx))
+
+            override_multi_ctx = self._get_override_d_context(num_pipes=2, diameter=preview_override_diameter)
+            if override_multi_ctx is not None:
+                sample_texts.append(self._format_override_d_label(override_multi_ctx))
+
+        current_text = self.lbl_D_theory.text().strip() if self.lbl_D_theory else ""
+        if current_text:
+            sample_texts.append(current_text)
+
+        return sample_texts
 
     def _capture_velocity_before_override(self):
         """进入指定管径前，备份拟定流速与确认态。"""
@@ -2812,6 +2888,35 @@ document.addEventListener("DOMContentLoaded", function(){
         self._update_plan_bend_radius()
         self._update_segment_coefficients()
         self._auto_compute_outlet_xi()
+
+    def _update_pipe_base_column_min_width(self):
+        """按当前支持口径中的最宽态，给左栏保留稳定宽度。"""
+        if not self._pipe_base_column or not self.lbl_D_theory:
+            return
+        sample_texts = self._build_pipe_base_width_sample_texts()
+        lines = []
+        for text in sample_texts:
+            lines.extend(line for line in text.split("\n") if line)
+        if lines:
+            label_metrics = self.lbl_D_theory.fontMetrics()
+            required_label_width = max(label_metrics.horizontalAdvance(line) for line in lines)
+        else:
+            required_label_width = self.lbl_D_theory.minimumSizeHint().width()
+
+        margins = self._pipe_base_column_layout.contentsMargins() if self._pipe_base_column_layout else None
+        horizontal_padding = 0
+        if margins is not None:
+            horizontal_padding = margins.left() + margins.right()
+        # 额外预留少量像素，避免边缘宽度下因取整再次触发换行。
+        required_column_width = required_label_width + horizontal_padding + 6
+        target_min_width = max(self._pipe_base_column_base_min_width, required_column_width)
+        if self._pipe_base_column.minimumWidth() != target_min_width:
+            self._pipe_base_column.setMinimumWidth(target_min_width)
+            self._pipe_base_column.updateGeometry()
+            parent = self._pipe_base_column.parentWidget()
+            if parent and parent.layout():
+                parent.layout().activate()
+            self.updateGeometry()
 
     # ================================================================
     # 拟定流速确认交互（方案D）
@@ -3066,6 +3171,7 @@ document.addEventListener("DOMContentLoaded", function(){
         if override_ctx is not None:
             self._activate_override_velocity_mode(override_ctx['actual_velocity'])
             self.lbl_D_theory.setText(self._format_override_d_label(override_ctx))
+            self._update_pipe_base_column_min_width()
             return
 
         if self._override_velocity_active:
@@ -3076,6 +3182,7 @@ document.addEventListener("DOMContentLoaded", function(){
             self.lbl_D_theory.setText(self._format_normal_d_label(normal_ctx))
         else:
             self.lbl_D_theory.setText("D = --")
+        self._update_pipe_base_column_min_width()
 
     def _on_inc_toggle(self, _state=None):
         """考虑加大流量 CheckBox 切换"""

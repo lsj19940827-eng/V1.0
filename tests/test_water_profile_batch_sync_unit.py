@@ -209,7 +209,7 @@ def test_sync_batch_settings_updates_global_and_flow_fields():
 
     def _mark_design_change():
         callback_state["called"] = True
-        panel.max_flow_edit.setText("auto-filled")
+        panel.max_flow_edit.setText("6, 5, 3.75")
 
     panel._on_design_flow_changed = _mark_design_change
     panel._reset_flow_segment_current_index = lambda: callback_state.__setitem__("reset", True)
@@ -220,6 +220,7 @@ def test_sync_batch_settings_updates_global_and_flow_fields():
         start_wl_edit=_FakeLineEdit("2392.271"),
         start_station_edit=_FakeLineEdit("0+000.000"),
         flow_segments_edit=_FakeLineEdit("4.6, 4.0, 3.2"),
+        _manual_qmax_by_segment={},
     )
     panel._batch_backend = bp
 
@@ -233,7 +234,81 @@ def test_sync_batch_settings_updates_global_and_flow_fields():
     assert panel.design_flow_edit.text() == "4.6, 4.0, 3.2"
     assert callback_state["called"] is True
     assert callback_state["reset"] is True
-    assert panel.max_flow_edit.text() == "auto-filled"
+    assert panel.max_flow_edit.text() == "6, 5, 3.75"
+
+
+def test_sync_batch_settings_uses_manual_qmax_values_when_available():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    panel.channel_name_edit = _FakeLineEdit("默认名")
+    panel.channel_level_combo = _FakeComboBox(["总干渠", "干渠", "支渠"], current="支渠")
+    panel.start_wl_edit = _FakeLineEdit("100.0")
+    panel.start_station_edit = _FakeLineEdit("0+000.000")
+    panel._section_flow_segments_edit = _FakeLineEdit("5.0, 4.0, 3.0")
+    panel.design_flow_edit = _FakeLineEdit("")
+    panel.max_flow_edit = _FakeLineEdit("")
+
+    callback_state = {"called": False, "reset": False}
+
+    def _mark_design_change():
+        callback_state["called"] = True
+        panel.max_flow_edit.setText("6, 5, 3.75")
+
+    panel._on_design_flow_changed = _mark_design_change
+    panel._reset_flow_segment_current_index = lambda: callback_state.__setitem__("reset", True)
+    panel._sync_flow_segment_widgets = lambda reset_index=False: None
+
+    bp = SimpleNamespace(
+        channel_name_edit=_FakeLineEdit("龙塘"),
+        channel_level_combo=_FakeComboBox(["总干渠", "干渠", "支渠"], current="干渠"),
+        start_wl_edit=_FakeLineEdit("2392.271"),
+        start_station_edit=_FakeLineEdit("0+000.000"),
+        flow_segments_edit=_FakeLineEdit("5.0, 4.0, 3.0"),
+        _manual_qmax_by_segment={1: 6.6},
+    )
+    panel._batch_backend = bp
+
+    WaterProfilePanel._sync_batch_settings(panel)
+
+    assert callback_state["called"] is True
+    assert callback_state["reset"] is True
+    assert panel.design_flow_edit.text() == "5.0, 4.0, 3.0"
+    assert panel.max_flow_edit.text() == "6.6, 5, 3.75"
+
+
+def test_sync_batch_settings_only_overrides_segments_with_manual_qmax():
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+
+    panel.channel_name_edit = _FakeLineEdit("默认名")
+    panel.channel_level_combo = _FakeComboBox(["总干渠", "干渠", "支渠"], current="支渠")
+    panel.start_wl_edit = _FakeLineEdit("100.0")
+    panel.start_station_edit = _FakeLineEdit("0+000.000")
+    panel._section_flow_segments_edit = _FakeLineEdit("5.0, 4.0, 3.0")
+    panel.design_flow_edit = _FakeLineEdit("")
+    panel.max_flow_edit = _FakeLineEdit("")
+
+    def _mark_design_change():
+        panel.max_flow_edit.setText("6, 5, 3.75")
+
+    panel._on_design_flow_changed = _mark_design_change
+    panel._reset_flow_segment_current_index = lambda: None
+    panel._sync_flow_segment_widgets = lambda reset_index=False: None
+
+    bp = SimpleNamespace(
+        channel_name_edit=_FakeLineEdit("龙塘"),
+        channel_level_combo=_FakeComboBox(["总干渠", "干渠", "支渠"], current="干渠"),
+        start_wl_edit=_FakeLineEdit("2392.271"),
+        start_station_edit=_FakeLineEdit("0+000.000"),
+        flow_segments_edit=_FakeLineEdit("5.0, 4.0, 3.0"),
+        _manual_qmax_by_segment={2: 4.8},
+    )
+    panel._batch_backend = bp
+
+    WaterProfilePanel._sync_batch_settings(panel)
+
+    assert panel.max_flow_edit.text() == "6, 4.8, 3.75"
 
 
 def test_load_section_sample_triggers_sync_after_loading():

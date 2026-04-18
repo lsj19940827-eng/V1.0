@@ -416,6 +416,24 @@ def calculate_max_flow_values(design_flows) -> list:
     return max_flows
 
 
+def calculate_final_max_flow_values(design_flows, preferred_max_flows=None) -> list:
+    """优先使用已有加大流量，缺失时再按设计流量规则补齐。"""
+    final_max_flows = []
+    preferred_values = list(preferred_max_flows or [])
+    auto_values = calculate_max_flow_values(design_flows)
+    for index, auto_value in enumerate(auto_values):
+        preferred_value = preferred_values[index] if index < len(preferred_values) else None
+        try:
+            preferred_number = float(preferred_value)
+        except (TypeError, ValueError):
+            preferred_number = 0.0
+        if preferred_number > 0:
+            final_max_flows.append(round(preferred_number, 3))
+            continue
+        final_max_flows.append(auto_value)
+    return final_max_flows
+
+
 class FlowSegmentSelectorField(QWidget):
     """只读流量段选择控件：主界面只负责查看和切换当前流量段。"""
 
@@ -7500,6 +7518,7 @@ class WaterProfilePanel(QWidget):
         self._clear_nodes()
         imported = 0
         flow_segment_map = {}  # {流量段编号: 设计流量}
+        max_flow_segment_map = {}  # {流量段编号: 最终加大流量}
         for prepared in prepared_results:
             sr = prepared["result"]
             flow_section = str(getattr(sr, 'flow_section', ''))
@@ -7543,6 +7562,15 @@ class WaterProfilePanel(QWidget):
             q_val = float(Q) if Q and str(Q).strip() else 0.0
             if seg_num not in flow_segment_map and q_val > 0:
                 flow_segment_map[seg_num] = q_val
+            q_max_val = getattr(sr, 'Q_max', 0.0) or 0.0
+            if not q_max_val:
+                q_max_val = raw_result.get('Q_increased', raw_result.get('Q_max', raw_result.get('Q_inc', 0.0))) or 0.0
+            try:
+                q_max_val = float(q_max_val)
+            except (TypeError, ValueError):
+                q_max_val = 0.0
+            if seg_num not in max_flow_segment_map and q_max_val > 0:
+                max_flow_segment_map[seg_num] = q_max_val
 
             x_text = self._normalize_coord_text(raw_result.get("coord_X_text", ""))
             y_text = self._normalize_coord_text(raw_result.get("coord_Y_text", ""))
@@ -7695,13 +7723,15 @@ class WaterProfilePanel(QWidget):
         if flow_segment_map:
             sorted_segs = sorted(flow_segment_map.keys())
             design_flows = [flow_segment_map[s] for s in sorted_segs]
-            flow_strs = []
-            for q in design_flows:
-                formatted = f"{q:.3f}".rstrip('0').rstrip('.')
-                flow_strs.append(formatted)
-            self.design_flow_edit.setText(", ".join(flow_strs))
-            self._on_design_flow_changed()
-            self._reset_flow_segment_current_index()
+            preferred_max_flows = [max_flow_segment_map.get(s, 0.0) for s in sorted_segs]
+            final_max_flow_text = format_flow_values_text(
+                calculate_final_max_flow_values(design_flows, preferred_max_flows)
+            )
+            if hasattr(self, "design_flow_edit") and hasattr(self.design_flow_edit, "setText"):
+                self.design_flow_edit.setText(format_flow_values_text(design_flows))
+            if hasattr(self, "max_flow_edit") and hasattr(self.max_flow_edit, "setText"):
+                self.max_flow_edit.setText(final_max_flow_text)
+                self._sync_flow_segment_widgets(reset_index=True)
 
         # 检查是否包含倒虹吸
         has_siphon = False
@@ -7940,12 +7970,35 @@ class WaterProfilePanel(QWidget):
             if hasattr(bp, 'flow_segments_edit'):
                 flow_segments = bp.flow_segments_edit.text().strip()
                 if flow_segments:
+                    manual_qmax_by_segment = getattr(bp, "_manual_qmax_by_segment", {}) or {}
                     if hasattr(self, '_section_flow_segments_edit') and self._section_flow_segments_edit:
                         self._section_flow_segments_edit.setText(flow_segments)
                     if hasattr(self, 'design_flow_edit') and self.design_flow_edit:
                         self.design_flow_edit.setText(flow_segments)
+                        design_flows = self._parse_flow_values(flow_segments)
                         if hasattr(self, '_on_design_flow_changed'):
                             self._on_design_flow_changed()
+                        elif design_flows and hasattr(self, 'max_flow_edit') and self.max_flow_edit:
+                            self.max_flow_edit.setText(
+                                format_flow_values_text(calculate_final_max_flow_values(design_flows))
+                            )
+                            if hasattr(self, '_sync_flow_segment_widgets'):
+                                self._sync_flow_segment_widgets(reset_index=False)
+                        if manual_qmax_by_segment and design_flows and hasattr(self, 'max_flow_edit') and self.max_flow_edit:
+                            preferred_max_flows = []
+                            for segment_index in range(len(design_flows)):
+                                raw_value = manual_qmax_by_segment.get(segment_index + 1, 0.0)
+                                try:
+                                    preferred_max_flows.append(float(raw_value))
+                                except (TypeError, ValueError):
+                                    preferred_max_flows.append(0.0)
+                            self.max_flow_edit.setText(
+                                format_flow_values_text(
+                                    calculate_final_max_flow_values(design_flows, preferred_max_flows)
+                                )
+                            )
+                            if hasattr(self, '_sync_flow_segment_widgets'):
+                                self._sync_flow_segment_widgets(reset_index=False)
                         if hasattr(self, '_reset_flow_segment_current_index'):
                             self._reset_flow_segment_current_index()
         except Exception:
@@ -9731,7 +9784,9 @@ class WaterProfilePanel(QWidget):
             self.max_flow_edit.setText("")
             self._sync_flow_segment_widgets(reset_index=False)
             return
-        self.max_flow_edit.setText(format_flow_values_text(calculate_max_flow_values(design_flows)))
+        self.max_flow_edit.setText(
+            format_flow_values_text(calculate_final_max_flow_values(design_flows))
+        )
         self._sync_flow_segment_widgets(reset_index=False)
 
     def _insert_transitions(self):

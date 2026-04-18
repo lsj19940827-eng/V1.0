@@ -38,7 +38,10 @@ from app_渠系计算前端.export_utils import (
     doc_add_body, doc_add_styled_table, doc_add_table_caption,
     doc_add_param_table, doc_render_calc_text, update_doc_toc_via_com,
 )
-from app_渠系计算前端.increase_input_helper import format_increase_percent
+from app_渠系计算前端.increase_input_helper import (
+    calculate_increase_percent_from_q,
+    format_increase_percent,
+)
 
 
 def format_station_display(value: float) -> str:
@@ -68,6 +71,153 @@ def parse_station_input(input_str: str) -> float:
         return float(input_str)
     except ValueError:
         return 0.0
+
+
+MANUAL_QMAX_START_COL = 9
+MANUAL_QMAX_LABEL_PATTERN = re.compile(r"^第(?P<segment>[0-9一二三四五六七八九十零〇两]+)流量段Q加大\(m³/s\)$")
+_CHINESE_NUMBER_MAP = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+
+
+def _format_chinese_segment_number(value: int) -> str:
+    """把 1~99 的流量段编号格式化成中文数字。"""
+    if value <= 0:
+        return str(value)
+    if value < 10:
+        reverse = {v: k for k, v in _CHINESE_NUMBER_MAP.items() if v > 0 and k != "两"}
+        return reverse[value]
+    if value == 10:
+        return "十"
+    if value < 20:
+        reverse = {v: k for k, v in _CHINESE_NUMBER_MAP.items() if v > 0 and k != "两"}
+        return "十" + reverse[value - 10]
+    if value < 100:
+        tens, ones = divmod(value, 10)
+        reverse = {v: k for k, v in _CHINESE_NUMBER_MAP.items() if v > 0 and k != "两"}
+        return reverse[tens] + "十" + (reverse[ones] if ones else "")
+    return str(value)
+
+
+def format_manual_qmax_label(segment_index: int) -> str:
+    """生成 Excel 第1行手工 Q加大 列对的标签。"""
+    if segment_index <= 0:
+        raise ValueError("流量段编号必须大于 0")
+    if segment_index <= 20:
+        segment_text = _format_chinese_segment_number(segment_index)
+    else:
+        segment_text = str(segment_index)
+    return f"第{segment_text}流量段Q加大(m³/s)"
+
+
+def _parse_chinese_segment_number(text: str):
+    """把中文数字解析为整数，仅覆盖流量段常用范围。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return int(raw)
+    if raw == "十":
+        return 10
+    if "十" in raw:
+        left, right = raw.split("十", 1)
+        tens = 1 if not left else _CHINESE_NUMBER_MAP.get(left)
+        if tens is None:
+            return None
+        if not right:
+            return tens * 10
+        ones = _CHINESE_NUMBER_MAP.get(right)
+        if ones is None:
+            return None
+        return tens * 10 + ones
+    return _CHINESE_NUMBER_MAP.get(raw)
+
+
+def parse_manual_qmax_label(label: str):
+    """从 Excel 标签里解析流量段编号。"""
+    match = MANUAL_QMAX_LABEL_PATTERN.match(str(label or "").strip())
+    if not match:
+        return None
+    return _parse_chinese_segment_number(match.group("segment"))
+
+
+def _column_index_to_excel_name(column_index: int) -> str:
+    """把列号转换成 Excel 列名，便于提示用户。"""
+    if column_index <= 0:
+        return str(column_index)
+    name = ""
+    current = column_index
+    while current > 0:
+        current, remainder = divmod(current - 1, 26)
+        name = chr(ord("A") + remainder) + name
+    return name
+
+
+def _normalize_manual_qmax_value(raw_value, segment_index: int):
+    """解析手工 Q加大 数值，空白表示该段继续自动计算。"""
+    if raw_value is None:
+        return None
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(f"第{segment_index}段手工Q加大输入无效") from exc
+    if value <= 0:
+        raise ValueError(f"第{segment_index}段手工Q加大必须大于 0")
+    return value
+
+
+def read_manual_qmax_map_from_sheet(ws, info_row: int, start_col: int = MANUAL_QMAX_START_COL) -> dict:
+    """按“标签+值”列对读取 Excel 第1行的手工 Q加大 配置。"""
+    manual_map = {}
+    max_column = max(int(getattr(ws, "max_column", 0) or 0), start_col - 1)
+    if max_column < start_col:
+        return manual_map
+
+    for label_col in range(start_col, max_column + 1, 2):
+        value_col = label_col + 1
+        raw_label = ws.cell(row=info_row, column=label_col).value
+        raw_value = ws.cell(row=info_row, column=value_col).value
+        label_text = str(raw_label).strip() if raw_label is not None else ""
+        pair_index = (label_col - start_col) // 2 + 1
+
+        if label_text:
+            segment_index = parse_manual_qmax_label(label_text)
+            if segment_index is None:
+                if raw_value is not None and str(raw_value).strip():
+                    col_name = _column_index_to_excel_name(label_col)
+                    raise ValueError(f"Excel 第{info_row}行 {col_name} 单元格标签格式无法识别：{label_text}")
+                continue
+        else:
+            if raw_value is None or not str(raw_value).strip():
+                continue
+            segment_index = pair_index
+
+        value = _normalize_manual_qmax_value(raw_value, segment_index)
+        if value is not None:
+            manual_map[segment_index] = value
+    return manual_map
+
+
+def build_manual_qmax_summary_text(manual_qmax_by_segment: dict) -> str:
+    """生成导入成功提示里的手工流量段摘要。"""
+    if not manual_qmax_by_segment:
+        return ""
+    segments = [f"第{segment}段" for segment in sorted(manual_qmax_by_segment)]
+    return f"已识别手工加大流量：{'、'.join(segments)}"
 
 from app_渠系计算前端.structure_type_selector import StructureTypeSelector
 
@@ -473,6 +623,7 @@ class BatchPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.batch_results = []
+        self._manual_qmax_by_segment = {}
         self._detail_text_cache = ""
         self._last_calc_snapshot = None
         self._last_calc_detail = None
@@ -1062,12 +1213,14 @@ class BatchPanel(QWidget):
     def _clear_input(self, force=False, clear_shared=True):
         """清空表1输入，可按需保留共享批量结果。"""
         if self.input_table.rowCount() == 0:
+            self._manual_qmax_by_segment = {}
             return
         if not force:
             if not fluent_question(self._dialog_parent(), "确认", "确定要清空所有输入数据吗?"):
                 return
         self._push_undo_snapshot()
         self.input_table.setRowCount(0)
+        self._manual_qmax_by_segment = {}
         self._last_calc_snapshot = None
         self._last_calc_detail = None
         self._set_excel_import_session_active(False)
@@ -1498,6 +1651,7 @@ class BatchPanel(QWidget):
         # 检查输入数据是否与上次计算时一致，若一致则无需重复计算
         current_snapshot = [[str(cell).strip() if cell is not None else "" for cell in row] for row in input_rows]
         current_snapshot.append(["__inc_cb__", str(self.inc_cb.isChecked())])
+        current_snapshot.append(["__manual_qmax__", self._serialize_manual_qmax_snapshot()])
         if self._last_calc_snapshot is not None and current_snapshot == self._last_calc_snapshot:
             if self.detail_cb.isChecked() and not self._last_calc_detail and self.batch_results:
                 # 从未勾选变为已勾选，且有缓存结果，补充生成详细输出
@@ -1639,6 +1793,10 @@ class BatchPanel(QWidget):
 
                 # 计算分发
                 use_inc = self.inc_cb.isChecked()
+                manual_increase_percent = 0 if not use_inc else None
+                manual_qmax = None
+                if use_inc:
+                    manual_increase_percent, manual_qmax = self._resolve_manual_increase_percent_for_segment(segment, Q)
                 preserve_explicit_bottom_width = self._should_preserve_explicit_bottom_width(
                     section_type, b
                 )
@@ -1652,12 +1810,16 @@ class BatchPanel(QWidget):
                     ducao_depth_ratio=ducao_depth_ratio,
                     chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
                     theta_deg=theta_deg,
-                    manual_increase_percent=0 if not use_inc else None,
+                    manual_increase_percent=manual_increase_percent,
                     preserve_explicit_bottom_width=preserve_explicit_bottom_width,
                     preserve_imported_dimensions=preserve_imported_dimensions,
                 )
                 if result:
                     result['_use_increase'] = use_inc
+                    if manual_qmax is not None and result.get('success'):
+                        result['manual_qmax_from_excel'] = manual_qmax
+                        result['Q_increased'] = manual_qmax
+                        result['Q_inc'] = manual_qmax
 
                 if result and result.get('success'):
                     row_out = self._extract_result_row(seq, segment, building_name, section_type, result,
@@ -3096,6 +3258,33 @@ class BatchPanel(QWidget):
         try: return float(s)
         except ValueError: return default
 
+    def _serialize_manual_qmax_snapshot(self) -> str:
+        """把手工 Q加大 映射规范化成快照文本。"""
+        manual_map = getattr(self, "_manual_qmax_by_segment", {}) or {}
+        return repr(sorted(manual_map.items()))
+
+    def _get_manual_qmax_for_segment(self, segment_value):
+        """按流量段编号获取手工 Q加大。"""
+        try:
+            segment_num = int(str(segment_value).strip())
+        except (TypeError, ValueError):
+            return None, None
+        manual_map = getattr(self, "_manual_qmax_by_segment", {}) or {}
+        return segment_num, manual_map.get(segment_num)
+
+    def _resolve_manual_increase_percent_for_segment(self, segment_value, design_q: float):
+        """把手工 Q加大 反算为现有内核仍可复用的加大比例。"""
+        segment_num, manual_qmax = self._get_manual_qmax_for_segment(segment_value)
+        if segment_num is None or manual_qmax is None:
+            return None, None
+        if manual_qmax < design_q:
+            raise ValueError(
+                f"第{segment_num}段手工Q加大({manual_qmax:.3f})不能小于设计流量 Q({design_q:.3f})"
+            )
+        if math.isclose(manual_qmax, design_q, rel_tol=1e-9, abs_tol=1e-9):
+            return 0.0, manual_qmax
+        return calculate_increase_percent_from_q(design_q, manual_qmax), manual_qmax
+
     def _set_excel_import_session_active(self, active: bool):
         self._excel_import_session_active = bool(active)
 
@@ -3401,6 +3590,9 @@ class BatchPanel(QWidget):
                 self.start_station_edit.setText(formatted_station)
                 info_parts.append(f"起始桩号: {formatted_station}")
 
+            manual_qmax_by_segment = read_manual_qmax_map_from_sheet(ws, info_row)
+            manual_qmax_summary = build_manual_qmax_summary_text(manual_qmax_by_segment)
+
             # 读取数据行（按当前输入表列数读取，兼容新增列如“管材”）
             data_rows = []
             import_col_count = len(INPUT_HEADERS)
@@ -3463,6 +3655,7 @@ class BatchPanel(QWidget):
                     self._add_row(mapped)
                     self._mark_row_as_excel_imported(self.input_table.rowCount() - 1, not is_sample)
                 self._auto_detect_flow_segments()
+                self._manual_qmax_by_segment = dict(manual_qmax_by_segment)
             finally:
                 self._undo_group -= 1
             auto_resize_table(self.input_table)
@@ -3475,6 +3668,8 @@ class BatchPanel(QWidget):
                 info_msg = f"已成功导入 {len(data_rows)} 行数据"
                 if info_parts:
                     info_msg += " | " + ", ".join(info_parts)
+                if manual_qmax_summary:
+                    info_msg += " | " + manual_qmax_summary
                 InfoBar.success("导入成功", info_msg, parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
             # 导入后检查建筑物重名（仅警告，不阻止）
             self._validate_duplicate_buildings_warn()
@@ -3801,6 +3996,10 @@ class BatchPanel(QWidget):
             "detail_checked": self.detail_cb.isChecked(),
             # 输入表格数据（21列 × N行）
             "input_rows": input_rows,
+            # Excel 第1行手工 Q加大 映射（隐藏持久化字段）
+            "manual_qmax_by_segment": {
+                str(segment): value for segment, value in sorted(self._manual_qmax_by_segment.items())
+            },
         }
     
     def from_project_dict(self, d: dict, skip_dirty_signal: bool = False):
@@ -3845,14 +4044,23 @@ class BatchPanel(QWidget):
             # 恢复计算选项
             self.inc_cb.setChecked(d.get("inc_checked", True))
             self.detail_cb.setChecked(d.get("detail_checked", True))
-            
+
+            # 恢复 Excel 第1行手工 Q加大 映射
+            restored_manual_qmax = {}
+            for segment, value in (d.get("manual_qmax_by_segment", {}) or {}).items():
+                try:
+                    restored_manual_qmax[int(segment)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            self._manual_qmax_by_segment = restored_manual_qmax
+
             # 恢复输入表格数据
             input_rows = d.get("input_rows", [])
             if input_rows:
                 # 清空现有数据
                 self.input_table.setRowCount(0)
                 self.input_table.setRowCount(len(input_rows))
-                
+
                 for row_idx, row_data in enumerate(input_rows):
                     for col_idx, cell_value in enumerate(row_data):
                         if col_idx < self.input_table.columnCount():
