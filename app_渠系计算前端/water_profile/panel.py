@@ -8744,7 +8744,7 @@ class WaterProfilePanel(QWidget):
                 return
 
             calculator = WaterProfileCalculator(settings)
-            calculated = calculator.calculate_all(nodes)
+            calculated = self._calculate_all_for_roundtrip_refresh(calculator, nodes)
             self.calculated_nodes = calculated
             self._settings = settings
 
@@ -8761,6 +8761,48 @@ class WaterProfilePanel(QWidget):
         except Exception:
             import traceback
             traceback.print_exc()
+
+    def _collect_roundtrip_turn_preserve_targets(self, nodes):
+        """收集需要在静默重算时保留非零转角的真实节点。"""
+        targets = {}
+        for node in nodes:
+            if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+                continue
+            if getattr(node, "in_out", None) not in (InOutType.INLET, InOutType.OUTLET):
+                continue
+            turn_angle = float(getattr(node, "turn_angle", 0.0) or 0.0)
+            if abs(turn_angle) <= ZERO_TOLERANCE:
+                continue
+            targets[id(node)] = turn_angle
+        return targets
+
+    def _calculate_all_for_roundtrip_refresh(self, calculator, nodes):
+        """按“回写后刷新”口径重算，避免进/出标记把既有转角清零。"""
+        has_auxiliary_nodes = calculator._has_auxiliary_geometry_nodes(nodes)
+        preserved_turn_targets = self._collect_roundtrip_turn_preserve_targets(nodes)
+
+        calculator.preprocess_nodes(nodes)
+        if not has_auxiliary_nodes:
+            nodes = calculator.identify_and_insert_transitions(nodes)
+
+        # 表3回写后的真实节点已带有效转角时，几何刷新前临时放开进/出标记，
+        # 让切线长、弧长和桩号按当前半径重新计算；几何完成后再恢复正式进出口语义。
+        for node in nodes:
+            if id(node) in preserved_turn_targets:
+                node.turn_angle = preserved_turn_targets[id(node)]
+                node.in_out = InOutType.NORMAL
+
+        calculator.calculate_geometry(nodes)
+        calculator.preprocess_nodes(nodes)
+        calculator.calculate_hydraulics(nodes)
+        calculator.calculate_transition_losses(nodes)
+        calculator._update_total_head_loss(nodes)
+        calculator.hyd_calc.recalculate_water_levels_with_transition_losses(nodes)
+        calculator.hyd_calc.apply_siphon_outlet_elevation(nodes)
+        calculator.hyd_calc.apply_terminal_gate_elevation_backfill(nodes)
+        calculator._calculate_cumulative_head_loss(nodes)
+        calculator._validate_real_node_station_conflicts(nodes)
+        return nodes
 
     # ================================================================
     # 结果显示

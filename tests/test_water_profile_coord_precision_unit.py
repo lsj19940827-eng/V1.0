@@ -5,8 +5,11 @@ import importlib.util
 import sys
 import types
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 
 def _install_panel_import_stubs():
@@ -1054,6 +1057,144 @@ def test_import_from_batch_applies_confirmed_general_roughness_to_current_import
     assert panel.node_table.item(0, 24).text() == "0.0140"
     assert panel.node_table.item(1, 24).text() == "0.0140"
     assert panel.node_table.item(2, 24).text() == "0.0160"
+
+
+@pytest.mark.parametrize(
+    ("structure_text", "expected_angle"),
+    [
+        ("矩形暗涵", 31.9694),
+        ("有压管道", 18.5),
+    ],
+)
+def test_recalculate_silent_preserves_existing_nonzero_turn_angle_for_roundtrip_special_rows(
+    structure_text,
+    expected_angle,
+):
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.CALCULATOR_AVAILABLE = True
+    module.InOutType = SimpleNamespace(
+        NORMAL=SimpleNamespace(value=""),
+        INLET=SimpleNamespace(value="进"),
+        OUTLET=SimpleNamespace(value="出"),
+    )
+
+    class _FakeCalculator:
+        """模拟当前静默重算链路最关心的几何覆盖行为。"""
+
+        def __init__(self, settings):
+            self.settings = settings
+            self.hyd_calc = SimpleNamespace(
+                recalculate_water_levels_with_transition_losses=lambda _nodes: None,
+                apply_siphon_outlet_elevation=lambda _nodes: None,
+                apply_terminal_gate_elevation_backfill=lambda _nodes: None,
+            )
+
+        @staticmethod
+        def _has_auxiliary_geometry_nodes(nodes):
+            return any(
+                getattr(node, "is_transition", False)
+                or getattr(node, "is_auto_inserted_channel", False)
+                for node in nodes
+            )
+
+        def preprocess_nodes(self, nodes):
+            for node in nodes:
+                if getattr(node, "preserve_roundtrip_turn", False):
+                    node.in_out = SimpleNamespace(value="进")
+
+        def identify_and_insert_transitions(self, nodes, open_channel_callback=None):
+            return nodes
+
+        def calculate_geometry(self, nodes):
+            for node in nodes:
+                if getattr(node, "is_transition", False) or getattr(
+                    node, "is_auto_inserted_channel", False
+                ):
+                    node.turn_angle = 0.0
+                    node.tangent_length = 0.0
+                    node.arc_length = 0.0
+                    continue
+                if getattr(getattr(node, "in_out", None), "value", "") in ("进", "出"):
+                    node.turn_angle = 0.0
+                    node.tangent_length = 0.0
+                    node.arc_length = 0.0
+                    continue
+                node.tangent_length = round(float(node.turn_radius or 0.0) * 0.1, 6)
+                node.arc_length = round(float(node.turn_radius or 0.0) * 0.2, 6)
+
+        def calculate_hydraulics(self, nodes):
+            return None
+
+        def calculate_transition_losses(self, nodes):
+            return None
+
+        def _update_total_head_loss(self, nodes):
+            return None
+
+        def _calculate_cumulative_head_loss(self, nodes):
+            return None
+
+        def _validate_real_node_station_conflicts(self, nodes):
+            return None
+
+        def calculate_all(self, nodes):
+            self.preprocess_nodes(nodes)
+            self.calculate_geometry(nodes)
+            return nodes
+
+        def get_calculation_summary(self, nodes):
+            return {"总长度": 0.0, "水位落差": 0.0}
+
+        def calculate_building_lengths(self, nodes):
+            return {}
+
+        def calculate_comprehensive_type_summary(self, nodes):
+            return {}
+
+    module.WaterProfileCalculator = _FakeCalculator
+
+    preserved_node = _make_node(
+        name="IP0",
+        structure_type=_FakeStructTypeValue(structure_text),
+        in_out=module.InOutType.INLET,
+        turn_radius=10.0,
+        turn_angle=expected_angle,
+        tangent_length=2.0,
+        arc_length=4.0,
+        preserve_roundtrip_turn=True,
+        get_structure_type_str=lambda: structure_text,
+        get_in_out_str=lambda: "进",
+    )
+    nodes = [
+        _make_node(name="上游", turn_angle=0.0, get_in_out_str=lambda: ""),
+        _make_node(
+            name="-",
+            structure_type=_FakeStructTypeValue("渐变段"),
+            is_transition=True,
+            get_structure_type_str=lambda: "渐变段",
+            get_in_out_str=lambda: "",
+        ),
+        preserved_node,
+        _make_node(name="下游", turn_angle=0.0, get_in_out_str=lambda: ""),
+    ]
+
+    captured = {}
+    panel._build_settings = lambda: SimpleNamespace()
+    panel._build_nodes_from_table = lambda: deepcopy(nodes)
+    panel._display_results = lambda calculated, _settings: captured.setdefault(
+        "nodes", deepcopy(calculated)
+    )
+    panel._generate_detail_report = lambda *args, **kwargs: None
+    panel._update_summary_panel = lambda *args, **kwargs: None
+
+    module.WaterProfilePanel._recalculate_silent(panel)
+
+    result_nodes = captured["nodes"]
+    roundtrip_node = next(node for node in result_nodes if getattr(node, "name", "") == "IP0")
+    assert roundtrip_node.turn_angle == pytest.approx(expected_angle, abs=1e-4)
+    assert roundtrip_node.tangent_length > 0.0
+    assert roundtrip_node.arc_length > 0.0
 
 
 def test_import_from_batch_keeps_general_roughness_rows_unchanged_when_dialog_cancelled():
