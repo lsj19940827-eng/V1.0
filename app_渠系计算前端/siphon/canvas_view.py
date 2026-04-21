@@ -31,6 +31,17 @@ try:
 except ImportError:
     MODELS_AVAILABLE = False
 
+try:
+    from arc_geometry import (
+        arc_midpoint,
+        build_arc_geometry,
+        infer_arc_clockwise,
+        sample_arc_geometry_points,
+    )
+    ARC_GEOMETRY_AVAILABLE = True
+except ImportError:
+    ARC_GEOMETRY_AVAILABLE = False
+
 
 def format_length_m(value: float) -> str:
     """统一长度状态文案显示精度：保留 3 位小数。"""
@@ -44,8 +55,23 @@ def build_plan_footer_info(plan_len: float, ip_count: int, bend_count: int, zoom
     )
 
 
-def build_profile_footer_info(total_len: float, segment_count: int, zoom: float) -> str:
-    return f"总长度: {format_length_m(total_len)} | 结构段: {segment_count} | 缩放: {int(zoom * 100)}%"
+def build_profile_footer_info(
+    total_len: float,
+    segment_count: int,
+    zoom: float,
+    bend_count: int = None,
+    min_elev: float = None,
+) -> str:
+    parts = [
+        f"总长度: {format_length_m(total_len)}",
+        f"结构段: {segment_count}",
+    ]
+    if bend_count is not None:
+        parts.append(f"弯/折管: {bend_count}")
+    if min_elev is not None:
+        parts.append(f"最低高程: {min_elev:.2f}m")
+    parts.append(f"缩放: {int(zoom * 100)}%")
+    return " | ".join(parts)
 
 
 class PipelineCanvas(QWidget):
@@ -152,11 +178,11 @@ class PipelineCanvas(QWidget):
         """返回当前视图内容边界 (min_x, max_x, min_y, max_y)。"""
         view_mode = mode or self._view_mode
         if view_mode == "plan":
-            fp_list = self._get_plan_feature_points_for_draw()
-            if not fp_list or len(fp_list) < 2:
+            path_coords = self._get_plan_path_coords_for_draw()
+            if not path_coords or len(path_coords) < 2:
                 return None
-            xs = [fp.x for fp in fp_list]
-            ys = [fp.y for fp in fp_list]
+            xs = [pt[0] for pt in path_coords]
+            ys = [pt[1] for pt in path_coords]
             return (min(xs), max(xs), min(ys), max(ys))
 
         all_coords = self._get_profile_coords_for_draw()
@@ -311,24 +337,257 @@ class PipelineCanvas(QWidget):
             return []
         return fp_list
 
+    def _get_plan_path_coords_for_draw(self):
+        """按圆弧真源采样平面路径，避免把弧段退化成弦线。"""
+        fp_list = self._get_plan_feature_points_for_draw()
+        if not fp_list or len(fp_list) < 2:
+            return []
+
+        coords = [(fp_list[0].x, fp_list[0].y)]
+        for idx in range(len(fp_list) - 1):
+            start_fp = fp_list[idx]
+            end_fp = fp_list[idx + 1]
+            sampled = []
+            if (ARC_GEOMETRY_AVAILABLE and start_fp.turn_type == TurnType.ARC and
+                    getattr(start_fp, "arc_geometry", None)):
+                sampled = sample_arc_geometry_points(start_fp.arc_geometry)
+            if sampled:
+                for point in sampled[1:]:
+                    if (abs(point[0] - coords[-1][0]) > 1e-6 or
+                            abs(point[1] - coords[-1][1]) > 1e-6):
+                        coords.append(point)
+            else:
+                point = (end_fp.x, end_fp.y)
+                if (abs(point[0] - coords[-1][0]) > 1e-6 or
+                        abs(point[1] - coords[-1][1]) > 1e-6):
+                    coords.append(point)
+        return coords
+
     def _get_profile_pipe_segments(self):
         if not MODELS_AVAILABLE:
             return []
         return [
             s for s in self._segments
-            if s.segment_type not in COMMON_SEGMENT_TYPES and len(s.coordinates) > 0
+            if s.segment_type not in COMMON_SEGMENT_TYPES and (
+                len(s.coordinates) > 0 or getattr(s, "arc_geometry", None)
+            )
         ]
 
+    def _get_profile_coords_from_nodes(self):
+        """优先从纵断面节点真源采样路径，保证竖曲线显示为圆弧。"""
+        if (not ARC_GEOMETRY_AVAILABLE or
+                not self._longitudinal_nodes or len(self._longitudinal_nodes) < 2):
+            return []
+
+        coords = [(
+            self._longitudinal_nodes[0].chainage,
+            self._longitudinal_nodes[0].elevation,
+        )]
+        for idx in range(len(self._longitudinal_nodes) - 1):
+            curr = self._longitudinal_nodes[idx]
+            nxt = self._longitudinal_nodes[idx + 1]
+            sampled = []
+            if (curr.turn_type == TurnType.ARC and curr.vertical_curve_radius > 0 and
+                    curr.arc_center_s is not None and curr.arc_center_z is not None):
+                sweep_rad = curr.arc_theta_rad if curr.arc_theta_rad else math.radians(curr.turn_angle)
+                if abs(sweep_rad) > 1e-9:
+                    center = (curr.arc_center_s, curr.arc_center_z)
+                    start_radius = math.hypot(
+                        curr.chainage - center[0],
+                        curr.elevation - center[1],
+                    )
+                    end_radius = math.hypot(
+                        nxt.chainage - center[0],
+                        nxt.elevation - center[1],
+                    )
+                    radius_tol = max(0.05, curr.vertical_curve_radius * 0.02)
+                    if (abs(start_radius - curr.vertical_curve_radius) > radius_tol or
+                            abs(end_radius - curr.vertical_curve_radius) > radius_tol):
+                        center = None
+                else:
+                    center = None
+                if center is not None:
+                    arc_geometry = build_arc_geometry(
+                        kind="profile",
+                        mode="dxf_segment",
+                        start=(curr.chainage, curr.elevation),
+                        end=(nxt.chainage, nxt.elevation),
+                        center=center,
+                        radius=curr.vertical_curve_radius,
+                        sweep_rad=abs(sweep_rad),
+                        clockwise=infer_arc_clockwise(
+                            (curr.chainage, curr.elevation),
+                            (nxt.chainage, nxt.elevation),
+                            center,
+                            abs(sweep_rad),
+                        ),
+                        start_chainage=curr.chainage,
+                        end_chainage=(
+                            curr.arc_end_chainage
+                            if curr.arc_end_chainage is not None
+                            else nxt.chainage
+                        ),
+                    )
+                    if arc_geometry is not None:
+                        sampled = sample_arc_geometry_points(arc_geometry)
+            if sampled:
+                for point in sampled[1:]:
+                    if (abs(point[0] - coords[-1][0]) > 1e-6 or
+                            abs(point[1] - coords[-1][1]) > 1e-6):
+                        coords.append(point)
+            else:
+                point = (nxt.chainage, nxt.elevation)
+                if (abs(point[0] - coords[-1][0]) > 1e-6 or
+                        abs(point[1] - coords[-1][1]) > 1e-6):
+                    coords.append(point)
+        return coords
+
     def _get_profile_coords_for_draw(self):
+        node_coords = self._get_profile_coords_from_nodes()
+        if node_coords:
+            return node_coords
         all_coords = []
         for seg in self._get_profile_pipe_segments():
-            for c in seg.coordinates:
+            seg_coords = []
+            if ARC_GEOMETRY_AVAILABLE and getattr(seg, "arc_geometry", None):
+                seg_coords = sample_arc_geometry_points(seg.arc_geometry)
+            if not seg_coords:
+                seg_coords = list(seg.coordinates)
+            for c in seg_coords:
                 if not all_coords or (
                     abs(c[0] - all_coords[-1][0]) > 1e-6 or
                     abs(c[1] - all_coords[-1][1]) > 1e-6
                 ):
                     all_coords.append(c)
         return all_coords
+
+    def _get_profile_segment_boundary_coords(self, seg):
+        """返回纵断面结构段的真实边界坐标。"""
+        if seg.coordinates and len(seg.coordinates) >= 2:
+            return tuple(seg.coordinates[0]), tuple(seg.coordinates[-1])
+        if ARC_GEOMETRY_AVAILABLE and getattr(seg, "arc_geometry", None):
+            start = tuple(seg.arc_geometry.get("start", []))
+            end = tuple(seg.arc_geometry.get("end", []))
+            if len(start) == 2 and len(end) == 2:
+                return start, end
+        return None, None
+
+    def _get_profile_turn_anchor(self, seg, start_coord=None, end_coord=None):
+        """返回弯管/折管的标注锚点坐标。"""
+        if (seg.segment_type == SegmentType.BEND and ARC_GEOMETRY_AVAILABLE and
+                getattr(seg, "arc_geometry", None)):
+            mid = arc_midpoint(seg.arc_geometry)
+            if mid is not None:
+                return tuple(mid)
+        if seg.segment_type == SegmentType.FOLD and len(seg.coordinates) >= 3:
+            return tuple(seg.coordinates[1])
+        if start_coord is not None and end_coord is not None:
+            return (
+                (start_coord[0] + end_coord[0]) / 2,
+                (start_coord[1] + end_coord[1]) / 2,
+            )
+        return None
+
+    def _get_profile_marker_specs(self):
+        """构建纵断面转弯标记语义，供绘制与测试共用。"""
+        specs = []
+        for seg in self._get_profile_pipe_segments():
+            if seg.segment_type not in (SegmentType.BEND, SegmentType.FOLD):
+                continue
+            start_coord, end_coord = self._get_profile_segment_boundary_coords(seg)
+            if start_coord is None or end_coord is None:
+                continue
+            anchor_coord = self._get_profile_turn_anchor(seg, start_coord, end_coord)
+            if anchor_coord is None:
+                continue
+
+            if seg.segment_type == SegmentType.BEND:
+                specs.append({
+                    "marker_role": "bend_boundary_start",
+                    "segment_type": seg.segment_type,
+                    "coord": start_coord,
+                    "start_coord": start_coord,
+                    "end_coord": end_coord,
+                    "anchor_coord": anchor_coord,
+                    "elevation": start_coord[1],
+                    "angle_text": None,
+                })
+                specs.append({
+                    "marker_role": "bend_boundary_end",
+                    "segment_type": seg.segment_type,
+                    "coord": end_coord,
+                    "start_coord": start_coord,
+                    "end_coord": end_coord,
+                    "anchor_coord": anchor_coord,
+                    "elevation": end_coord[1],
+                    "angle_text": None,
+                })
+                specs.append({
+                    "marker_role": "bend_anchor",
+                    "segment_type": seg.segment_type,
+                    "coord": anchor_coord,
+                    "start_coord": start_coord,
+                    "end_coord": end_coord,
+                    "anchor_coord": anchor_coord,
+                    "elevation": None,
+                    "angle_text": f"{seg.segment_type.value} {seg.angle:.3f}°",
+                })
+            else:
+                specs.append({
+                    "marker_role": "fold_anchor",
+                    "segment_type": seg.segment_type,
+                    "coord": anchor_coord,
+                    "start_coord": start_coord,
+                    "end_coord": end_coord,
+                    "anchor_coord": anchor_coord,
+                    "elevation": anchor_coord[1],
+                    "angle_text": f"{seg.segment_type.value} {seg.angle:.3f}°",
+                })
+        return specs
+
+    @staticmethod
+    def _normalize_vector(dx, dy):
+        """归一化二维向量，零向量回退为向上。"""
+        length = math.sqrt(dx * dx + dy * dy)
+        if length <= 1e-9:
+            return 0.0, -1.0
+        return dx / length, dy / length
+
+    def _get_profile_turn_label_normal(self, transform, spec):
+        """计算转弯文字朝外摆放的法线方向。"""
+        anchor_x, anchor_y = spec["coord"]
+        start_coord = spec["start_coord"]
+        end_coord = spec["end_coord"]
+        bsx, bsy = transform(anchor_x, anchor_y)
+        sp_prev = transform(start_coord[0], start_coord[1])
+        sp_next = transform(end_coord[0], end_coord[1])
+        v1x, v1y = bsx - sp_prev[0], bsy - sp_prev[1]
+        v2x, v2y = sp_next[0] - bsx, sp_next[1] - bsy
+        v1x, v1y = self._normalize_vector(v1x, v1y)
+        v2x, v2y = self._normalize_vector(v2x, v2y)
+        avg_dx = (v1x + v2x) / 2
+        avg_dy = (v1y + v2y) / 2
+        nx, ny = self._normalize_vector(-avg_dy, avg_dx)
+        if ny > 0:
+            nx, ny = -nx, -ny
+        return nx, ny
+
+    def _build_boundary_elevation_attempts(self, sx, sy, tw, lbl_h, base_offset_y, spec):
+        """为弯管边界高程生成优先摆放位置。"""
+        anchor_coord = spec.get("anchor_coord")
+        prefer_left = bool(anchor_coord and anchor_coord[0] > spec["coord"][0])
+        horiz = -1 if prefer_left else 1
+        side_gap = tw / 2 + 8
+        return [
+            (sx + horiz * side_gap, sy + base_offset_y, "below"),
+            (sx + horiz * side_gap, sy - base_offset_y, "above"),
+            (sx + horiz * (side_gap + 6), sy + base_offset_y + lbl_h, "below"),
+            (sx + horiz * (side_gap + 6), sy - base_offset_y - lbl_h, "above"),
+            (sx, sy + base_offset_y, "below"),
+            (sx, sy - base_offset_y, "above"),
+            (sx, sy + base_offset_y + lbl_h, "below"),
+            (sx, sy - base_offset_y - lbl_h, "above"),
+        ]
 
     def _get_simplified_profile_points(self):
         if not MODELS_AVAILABLE:
@@ -412,47 +671,31 @@ class PipelineCanvas(QWidget):
             occupied_rects.append((screen_pts[-1][0] - 30, screen_pts[-1][1] - 18 - _lbl_h,
                                    screen_pts[-1][0] + 30, screen_pts[-1][1] - 18))
 
-        # 弯折管标记（自适应法线方向标注）
-        for seg in pipe_segs:
-            if seg.segment_type not in (SegmentType.BEND, SegmentType.FOLD):
-                continue
-            if not seg.coordinates or len(seg.coordinates) < 2:
-                continue
-            if seg.segment_type == SegmentType.FOLD and len(seg.coordinates) >= 3:
-                bx, by = seg.coordinates[1]
-            else:
-                bx = (seg.coordinates[0][0] + seg.coordinates[-1][0]) / 2
-                by = (seg.coordinates[0][1] + seg.coordinates[-1][1]) / 2
-            bsx, bsy = transform(bx, by)
+        marker_specs = self._get_profile_marker_specs()
+        turn_specs = [
+            spec for spec in marker_specs
+            if spec["marker_role"] in ("bend_anchor", "fold_anchor")
+        ]
+        boundary_specs = [
+            spec for spec in marker_specs
+            if spec["marker_role"] in ("bend_boundary_start", "bend_boundary_end")
+        ]
 
-            # 绘制弯折点圆圈
+        # 转弯本体橙点（弯管圆弧中点 / 折管折点）与角度标注
+        for spec in turn_specs:
+            bx, by = spec["coord"]
+            bsx, bsy = transform(bx, by)
             p.setPen(QPen(Qt.white, 1))
             p.setBrush(QBrush(self.C_BEND))
             p.drawEllipse(QPointF(bsx, bsy), 5, 5)
 
-            # 自适应标注方向：根据相邻管段方向计算法线偏移
-            sp_prev = transform(seg.coordinates[0][0], seg.coordinates[0][1])
-            sp_next = transform(seg.coordinates[-1][0], seg.coordinates[-1][1])
-            v1x, v1y = bsx - sp_prev[0], bsy - sp_prev[1]
-            v2x, v2y = sp_next[0] - bsx, sp_next[1] - bsy
-            len1 = math.sqrt(v1x * v1x + v1y * v1y) or 1
-            len2 = math.sqrt(v2x * v2x + v2y * v2y) or 1
-            v1x, v1y = v1x / len1, v1y / len1
-            v2x, v2y = v2x / len2, v2y / len2
-            avg_dx = (v1x + v2x) / 2
-            avg_dy = (v1y + v2y) / 2
-            nx, ny = -avg_dy, avg_dx
-            if ny > 0:
-                nx, ny = -nx, -ny
-            n_len = math.sqrt(nx * nx + ny * ny) or 1
-            nx, ny = nx / n_len, ny / n_len
-            angle_text = f"{seg.segment_type.value} {seg.angle:.3f}°"
+            nx, ny = self._get_profile_turn_label_normal(transform, spec)
+            angle_text = spec["angle_text"]
             ft = QFont("Microsoft YaHei", 8)
             p.setFont(ft)
             fm_b = p.fontMetrics()
             atw_b = fm_b.horizontalAdvance(angle_text)
 
-            # 尝试多个偏移和方向避免与管线/标签重叠
             bend_placed = False
             for lbl_off in [22, 36, 50]:
                 for d in [1, -1]:
@@ -486,15 +729,44 @@ class PipelineCanvas(QWidget):
                 occupied_rects.append((atx - atw_b / 2, aty - _lbl_h,
                                        atx + atw_b / 2, aty))
 
-        # 中间直管段分界节点（绿色小圆点）
-        for si, seg in enumerate(pipe_segs):
-            if seg.segment_type in (SegmentType.BEND, SegmentType.FOLD):
-                continue
-            if not seg.coordinates:
-                continue
-            sp = transform(seg.coordinates[0][0], seg.coordinates[0][1])
-            if si == 0:
-                continue
+            # 折管高程跟随同一锚点方向，但优先级低于角度标注。
+            if spec["marker_role"] == "fold_anchor" and spec["elevation"] is not None:
+                fold_text = f"▽{spec['elevation']:.3f}m"
+                p.setFont(QFont("Microsoft YaHei", 8))
+                fm_fold = p.fontMetrics()
+                ftw = fm_fold.horizontalAdvance(fold_text)
+                fold_placed = False
+                for lbl_off in [40, 56, 72]:
+                    ftx = bsx + nx * lbl_off
+                    fty = bsy + ny * lbl_off
+                    rect_f = (ftx - ftw / 2, fty - _lbl_h, ftx + ftw / 2, fty)
+                    overlap = any(
+                        rect_f[0] < dr[2] and rect_f[2] > dr[0] and
+                        rect_f[1] < dr[3] and rect_f[3] > dr[1]
+                        for dr in occupied_rects
+                    )
+                    if not overlap:
+                        overlap = any(
+                            self._line_rect_intersect(lx1, ly1, lx2, ly2, rect_f)
+                            for lx1, ly1, lx2, ly2 in profile_pipe_lines
+                        )
+                    if not overlap:
+                        p.setPen(QPen(self.C_ELEV))
+                        p.drawText(QPointF(ftx - ftw / 2, fty), fold_text)
+                        occupied_rects.append(rect_f)
+                        fold_placed = True
+                        break
+                if not fold_placed:
+                    ftx = bsx + nx * 40
+                    fty = bsy + ny * 40
+                    p.setPen(QPen(self.C_ELEV))
+                    p.drawText(QPointF(ftx - ftw / 2, fty), fold_text)
+                    occupied_rects.append((ftx - ftw / 2, fty - _lbl_h,
+                                           ftx + ftw / 2, fty))
+
+        # 弯管前后边界节点（绿色小圆点）
+        for spec in boundary_specs:
+            sp = transform(spec["coord"][0], spec["coord"][1])
             p.setPen(QPen(Qt.white, 1))
             p.setBrush(QBrush(self.C_NODE))
             p.drawEllipse(QPointF(*sp), 4, 4)
@@ -504,50 +776,60 @@ class PipelineCanvas(QWidget):
 
         # 起点和终点
         if all_coords:
-            elev_labels.append((screen_pts[0][0], screen_pts[0][1], all_coords[0][1], self.C_ELEV))
-            elev_labels.append((screen_pts[-1][0], screen_pts[-1][1], all_coords[-1][1], self.C_ELEV))
+            elev_labels.append({
+                "sx": screen_pts[0][0],
+                "sy": screen_pts[0][1],
+                "elev": all_coords[0][1],
+                "color": self.C_ELEV,
+                "role": "endpoint",
+                "spec": None,
+            })
+            elev_labels.append({
+                "sx": screen_pts[-1][0],
+                "sy": screen_pts[-1][1],
+                "elev": all_coords[-1][1],
+                "color": self.C_ELEV,
+                "role": "endpoint",
+                "spec": None,
+            })
 
-        # 弯/折管转折点
-        for seg in pipe_segs:
-            if seg.segment_type not in (SegmentType.BEND, SegmentType.FOLD):
-                continue
-            if not seg.coordinates or len(seg.coordinates) < 2:
-                continue
-            if seg.segment_type == SegmentType.FOLD and len(seg.coordinates) >= 3:
-                bend_x, bend_y = seg.coordinates[1]
-            else:
-                bend_x = (seg.coordinates[0][0] + seg.coordinates[-1][0]) / 2
-                bend_y = (seg.coordinates[0][1] + seg.coordinates[-1][1]) / 2
-            bsx2, bsy2 = transform(bend_x, bend_y)
-            elev_labels.append((bsx2, bsy2, bend_y, self.C_ELEV))
-
-        # 中间直管段分界点
-        for si, seg in enumerate(pipe_segs):
-            if seg.segment_type in (SegmentType.BEND, SegmentType.FOLD):
-                continue
-            if not seg.coordinates or si == 0:
-                continue
-            sp = transform(seg.coordinates[0][0], seg.coordinates[0][1])
-            elev_labels.append((sp[0], sp[1], seg.coordinates[0][1], self.C_ELEV))
+        # 弯管前后绿点高程
+        for spec in boundary_specs:
+            sp = transform(spec["coord"][0], spec["coord"][1])
+            elev_labels.append({
+                "sx": sp[0],
+                "sy": sp[1],
+                "elev": spec["elevation"],
+                "color": self.C_ELEV,
+                "role": spec["marker_role"],
+                "spec": spec,
+            })
 
         # 最低点（红色高亮）
         if all_coords:
             min_elev_idx = ys.index(min(ys))
             if min_elev_idx != 0 and min_elev_idx != len(all_coords) - 1:
                 sx_low, sy_low = screen_pts[min_elev_idx]
-                elev_labels.append((sx_low, sy_low, min(ys), self.C_ELEV_LOW))
+                elev_labels.append({
+                    "sx": sx_low,
+                    "sy": sy_low,
+                    "elev": min(ys),
+                    "color": self.C_ELEV_LOW,
+                    "role": "lowest",
+                    "spec": None,
+                })
 
         # 按屏幕X坐标排序
-        elev_labels.sort(key=lambda lbl: lbl[0])
+        elev_labels.sort(key=lambda lbl: lbl["sx"])
 
         # 去重（屏幕距离 < 5px 的点只保留一个，优先保留红色标注）
         unique_labels = []
         for lbl in elev_labels:
             duplicate = False
             for j, existing in enumerate(unique_labels):
-                dist = math.sqrt((lbl[0] - existing[0]) ** 2 + (lbl[1] - existing[1]) ** 2)
+                dist = math.sqrt((lbl["sx"] - existing["sx"]) ** 2 + (lbl["sy"] - existing["sy"]) ** 2)
                 if dist < 5:
-                    if lbl[3] == self.C_ELEV_LOW:
+                    if lbl["color"] == self.C_ELEV_LOW:
                         unique_labels[j] = lbl
                     duplicate = True
                     break
@@ -560,22 +842,31 @@ class PipelineCanvas(QWidget):
         font_e = QFont("Microsoft YaHei", 8)
         p.setFont(font_e)
 
-        for sx, sy, elev, color in unique_labels:
+        for label in unique_labels:
+            sx = label["sx"]
+            sy = label["sy"]
+            elev = label["elev"]
+            color = label["color"]
             text = f"▽{elev:.3f}m"
             fm = p.fontMetrics()
             tw = fm.horizontalAdvance(text)
 
             # 尝试多个位置避免重叠（含管线碰撞检测）
-            attempts = [
-                (sx, sy + base_offset_y, 'below'),
-                (sx, sy - base_offset_y, 'above'),
-                (sx, sy + base_offset_y + _lbl_h, 'below'),
-                (sx, sy - base_offset_y - _lbl_h, 'above'),
-                (sx + tw / 2 + 8, sy + base_offset_y, 'below'),
-                (sx - tw / 2 - 8, sy - base_offset_y, 'above'),
-                (sx, sy + base_offset_y + _lbl_h * 2, 'below'),
-                (sx, sy - base_offset_y - _lbl_h * 2, 'above'),
-            ]
+            if label["role"] in ("bend_boundary_start", "bend_boundary_end") and label["spec"] is not None:
+                attempts = self._build_boundary_elevation_attempts(
+                    sx, sy, tw, _lbl_h, base_offset_y, label["spec"]
+                )
+            else:
+                attempts = [
+                    (sx, sy + base_offset_y, 'below'),
+                    (sx, sy - base_offset_y, 'above'),
+                    (sx, sy + base_offset_y + _lbl_h, 'below'),
+                    (sx, sy - base_offset_y - _lbl_h, 'above'),
+                    (sx + tw / 2 + 8, sy + base_offset_y, 'below'),
+                    (sx - tw / 2 - 8, sy - base_offset_y, 'above'),
+                    (sx, sy + base_offset_y + _lbl_h * 2, 'below'),
+                    (sx, sy - base_offset_y - _lbl_h * 2, 'above'),
+                ]
             lx, ly, anchor = sx, sy + base_offset_y, 'below'
             placed = False
             for ax, ay, aa in attempts:
@@ -619,9 +910,13 @@ class PipelineCanvas(QWidget):
         total_len = sum(s.length for s in pipe_segs if s.length > 0)
         bend_cnt = sum(1 for s in pipe_segs if s.segment_type in (SegmentType.BEND, SegmentType.FOLD))
         min_elev = min(ys)
-        info = (f"总长度: {format_length_m(total_len)} | 结构段: {len(pipe_segs)} | "
-                f"弯/折管: {bend_cnt} | 最低高程: {min_elev:.2f}m | "
-                f"缩放: {int(self._zoom * 100)}%")
+        info = build_profile_footer_info(
+            total_len=total_len,
+            segment_count=len(pipe_segs),
+            bend_count=bend_cnt,
+            min_elev=min_elev,
+            zoom=self._zoom,
+        )
         p.setPen(QPen(self.C_INFO))
         p.setFont(QFont("Microsoft YaHei", 9))
         p.drawText(QRectF(0, h - 22, w, 20), Qt.AlignCenter, info)
@@ -638,22 +933,25 @@ class PipelineCanvas(QWidget):
             self._draw_centered_text(p, w, h, "暂无平面数据\n请从推求水面线导入平面管道信息")
             return
 
-        xs = [fp.x for fp in fp_list]
-        ys = [fp.y for fp in fp_list]
+        path_coords = self._get_plan_path_coords_for_draw()
+        xs = [pt[0] for pt in path_coords]
+        ys = [pt[1] for pt in path_coords]
         bounds = (min(xs), max(xs), min(ys), max(ys))
         transform, scale = self._make_transform(
             bounds, w, h, margin=self._resolve_content_margin(w, h, bounds))
         screen_pts = [transform(fp.x, fp.y) for fp in fp_list]
+        path_screen_pts = [transform(pt[0], pt[1]) for pt in path_coords]
 
         # 管道线
         pen = QPen(self.C_PIPE, 3)
         p.setPen(pen)
-        for i in range(len(screen_pts) - 1):
-            p.drawLine(QPointF(*screen_pts[i]), QPointF(*screen_pts[i + 1]))
+        for i in range(len(path_screen_pts) - 1):
+            p.drawLine(QPointF(*path_screen_pts[i]), QPointF(*path_screen_pts[i + 1]))
 
         # 箭头
-        for i in range(len(screen_pts) - 1):
-            self._draw_arrow(p, screen_pts[i], screen_pts[i + 1], self.C_ARROW)
+        arrow_step = max(1, int(math.ceil(max(len(path_screen_pts) - 1, 1) / 10.0)))
+        for i in range(0, len(path_screen_pts) - 1, arrow_step):
+            self._draw_arrow(p, path_screen_pts[i], path_screen_pts[i + 1], self.C_ARROW)
 
         # 预计算转角：当 turn_angle 未设置时从坐标自动计算
         computed_angles = [0.0] * len(fp_list)
@@ -719,9 +1017,9 @@ class PipelineCanvas(QWidget):
             occupied.append((sp[0] - r, sp[1] - r, sp[0] + r, sp[1] + r))
 
         # 管线段用于碰撞检测
-        plan_pipe_lines = [(screen_pts[k][0], screen_pts[k][1],
-                            screen_pts[k + 1][0], screen_pts[k + 1][1])
-                           for k in range(len(screen_pts) - 1)]
+        plan_pipe_lines = [(path_screen_pts[k][0], path_screen_pts[k][1],
+                            path_screen_pts[k + 1][0], path_screen_pts[k + 1][1])
+                           for k in range(len(path_screen_pts) - 1)]
 
         # 收集所有待放置标签: (anchor_x, anchor_y, text, color, font_size)
         pending = []
@@ -729,6 +1027,12 @@ class PipelineCanvas(QWidget):
             is_start = (i == 0)
             is_end = (i == len(fp_list) - 1)
             is_bend = (fp.turn_type != TurnType.NONE and fp.turn_angle != 0) or computed_angles[i] > 0
+            anchor_sp = sp
+            if (is_bend and ARC_GEOMETRY_AVAILABLE and
+                    getattr(fp, "arc_geometry", None) is not None):
+                arc_anchor = arc_midpoint(fp.arc_geometry)
+                if arc_anchor is not None:
+                    anchor_sp = transform(arc_anchor[0], arc_anchor[1])
             if is_start:
                 pending.append((sp[0], sp[1], "进水口", self.C_INLET, 9))
                 pending.append((sp[0], sp[1], f"MC {fp.chainage:.3f}", self.C_ELEV, 8))
@@ -736,9 +1040,9 @@ class PipelineCanvas(QWidget):
                 pending.append((sp[0], sp[1], "出水口", self.C_INLET, 9))
                 pending.append((sp[0], sp[1], f"MC {fp.chainage:.3f}", self.C_ELEV, 8))
             elif is_bend:
-                pending.append((sp[0], sp[1], f"α={computed_angles[i]:.3f}°", self.C_BEND, 8))
+                pending.append((anchor_sp[0], anchor_sp[1], f"α={computed_angles[i]:.3f}°", self.C_BEND, 8))
                 if show_mc_for_bends:
-                    pending.append((sp[0], sp[1], f"MC {fp.chainage:.3f}", self.C_ELEV, 8))
+                    pending.append((anchor_sp[0], anchor_sp[1], f"MC {fp.chainage:.3f}", self.C_ELEV, 8))
 
         for ax, ay, text, color, font_size in pending:
             scaled_fs = max(6, int(font_size * label_scale + 0.5))

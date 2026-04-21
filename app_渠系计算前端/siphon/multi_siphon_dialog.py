@@ -789,16 +789,17 @@ class MultiSiphonDialog(QDialog):
         """为指定倒虹吸创建计算结果回调"""
         def callback(result):
             if result is not None and self.manager and MANAGER_AVAILABLE:
+                head_loss = self._get_export_head_loss(result)
                 self.manager.update_siphon_result(
                     siphon_name,
-                    result.total_head_loss,
+                    head_loss,
                     result.diameter,
                     result.velocity
                 )
                 self.manager.save_config()
                 self._update_time_label()
                 self._update_status(
-                    f"{siphon_name}: 总水头损失 = {result.total_head_loss:.4f} m")
+                    f"{siphon_name}: 总水头损失 = {head_loss:.4f} m")
         return callback
 
     def _create_action_bar(self, parent_lay):
@@ -1295,8 +1296,7 @@ class MultiSiphonDialog(QDialog):
         for name, panel in self.panels.items():
             result = panel.get_result()
             if result is not None:
-                # 优先使用加大流量工况水损，若无则使用设计工况
-                head_loss = result.total_head_loss_inc if result.total_head_loss_inc is not None else result.total_head_loss
+                head_loss = self._get_export_head_loss(result)
                 results[name] = {
                     "head_loss": head_loss,
                     "diameter": result.diameter,
@@ -1304,6 +1304,14 @@ class MultiSiphonDialog(QDialog):
                     "turn_radius": panel.get_plan_bend_radius(),
                 }
         return results
+
+    @staticmethod
+    def _get_export_head_loss(result) -> float:
+        """按批量导出规则获取应展示/回填的总水头损失。"""
+        increase_percent = float(getattr(result, "increase_percent", 0.0) or 0.0)
+        if increase_percent > 0:
+            return float(getattr(result, "total_head_loss_inc", 0.0) or 0.0)
+        return float(getattr(result, "total_head_loss", 0.0) or 0.0)
 
     # ================================================================
     # 汇总对话框
@@ -1382,8 +1390,8 @@ class MultiSiphonDialog(QDialog):
                 item_d.setTextAlignment(Qt.AlignCenter)
                 table.setItem(i, 2, item_d)
 
-                # 水头损失（优先显示加大流量工况，与导出到水面线表格保持一致）
-                head_loss = result.total_head_loss_inc if result.total_head_loss_inc is not None else result.total_head_loss
+                # 水头损失：与批量导出到水面线表格保持一致
+                head_loss = self._get_export_head_loss(result)
                 item_loss = QTableWidgetItem(f"{head_loss:.4f}")
                 item_loss.setTextAlignment(Qt.AlignCenter)
                 table.setItem(i, 3, item_loss)

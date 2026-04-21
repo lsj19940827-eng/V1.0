@@ -67,7 +67,11 @@ def _load_panel_module(folder):
 def _new_panel(folder, class_name):
     _get_qapp()
     module = _load_panel_module(folder)
-    panel = getattr(module, class_name)()
+    panel_cls = getattr(module, class_name)
+    if folder == "siphon" and class_name == "SiphonPanel":
+        panel = panel_cls(show_case_management=False, disable_autosave_load=True)
+    else:
+        panel = panel_cls()
     panel.resize(1400, 900)
     panel.show()
     _flush_events(6)

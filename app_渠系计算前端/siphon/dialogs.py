@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QSizePolicy, QScrollArea, QWidget, QComboBox
 )
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QFont, QColor, QPixmap, QImage
+from PySide6.QtGui import QFont, QFontMetrics, QColor, QPixmap, QImage
 from app_渠系计算前端.webview_compat import create_web_view
 
 from qfluentwidgets import (
@@ -85,6 +85,32 @@ def _msg(parent, title, text, level="warning"):
         InfoBar.warning(title, text, parent=w, duration=3000, position=InfoBarPosition.TOP)
 
 
+def _single_line_result_height(font: QFont, vertical_padding: int = 6, extra_buffer: int = 2) -> int:
+    """按当前字体计算单行结果标签所需的稳定高度。"""
+    metrics = QFontMetrics(font)
+    return metrics.height() + max(0, vertical_padding) * 2 + max(0, extra_buffer)
+
+
+def _stabilize_single_line_result_label(
+    label: QLabel,
+    *,
+    vertical_padding: int = 6,
+    extra_buffer: int = 2,
+) -> None:
+    """让单行结果标签在高缩放下保持固定可视高度。"""
+    label.setWordWrap(False)
+    label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    label.setContentsMargins(0, vertical_padding, 0, vertical_padding)
+    label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    label.setFixedHeight(
+        _single_line_result_height(
+            label.font(),
+            vertical_padding=vertical_padding,
+            extra_buffer=extra_buffer,
+        )
+    )
+
+
 # ============================================================
 # 1. 进水口形状选择对话框
 # ============================================================
@@ -109,6 +135,9 @@ class InletShapeDialog(QDialog):
         title = QLabel("根据表L.1.4-2选择进水口形状")
         title.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
         lay.addWidget(title)
+        note = QLabel("该系数属于进水口构件局部损失，计入 ΔZ2，不替代进口渐变段系数 ξ₁")
+        note.setStyleSheet(f"color:{T2};font-size:11px;")
+        lay.addWidget(note)
 
         # 形状选择
         grp = QGroupBox("进水口形状")
@@ -145,7 +174,7 @@ class InletShapeDialog(QDialog):
         lay.addWidget(grp)
 
         # 系数输入
-        cgrp = QGroupBox("局部阻力系数 ξ")
+        cgrp = QGroupBox("进水口构件局部损失系数 ξ")
         cgl = QGridLayout(cgrp)
         cgl.addWidget(QLabel("系数值:"), 0, 0)
         self.edit_xi = LineEdit()
@@ -272,7 +301,7 @@ class OutletShapeDialog(QDialog):
 
     def __init__(self, parent, segment, Q=10.0, v=2.0, downstream_params=None):
         super().__init__(parent)
-        self.setWindowTitle("出水口局部阻力系数")
+        self.setWindowTitle("出水口构件局部阻力系数")
         self.setMinimumSize(540, 520)
         self.resize(580, 580)
         self.result = None
@@ -297,6 +326,9 @@ class OutletShapeDialog(QDialog):
         tl.addWidget(t2)
         tl.addStretch()
         lay.addLayout(tl)
+        note = QLabel("该系数属于出水口构件局部损失，计入 ΔZ2，不替代出口渐变段系数 ξ₂")
+        note.setStyleSheet(f"color:{T2};font-size:11px;")
+        lay.addWidget(note)
 
         # 管道信息
         grp = QGroupBox("下游断面参数")
@@ -366,7 +398,7 @@ class OutletShapeDialog(QDialog):
         lay.addWidget(rgrp)
 
         # 系数
-        cgrp = QGroupBox("局部阻力系数 ξc")
+        cgrp = QGroupBox("出水口构件局部损失系数 ξc")
         cl = QHBoxLayout(cgrp)
         cl.addWidget(QLabel("系数值:"))
         self.edit_xi = LineEdit()
@@ -686,7 +718,12 @@ class TrashRackConfigDialog(QDialog):
         rl.addLayout(mrow)
         # 结果值（大字突出）
         self.lbl_result = QLabel("--")
-        self.lbl_result.setStyleSheet(f"font-size:20px;font-weight:bold;color:{P};padding:4px 0;")
+        result_font = QFont(self.lbl_result.font())
+        result_font.setPixelSize(20)
+        result_font.setBold(True)
+        self.lbl_result.setFont(result_font)
+        self.lbl_result.setStyleSheet(f"color:{P};")
+        _stabilize_single_line_result_label(self.lbl_result, vertical_padding=6)
         rl.addWidget(self.lbl_result)
         # 公式卡片（独立容器，固定尺寸防止布局抖动）
         self.formula_view = create_web_view()
@@ -1040,7 +1077,7 @@ class TrashRackConfigDialog(QDialog):
                 self.lbl_result.setText("请输入支墩参数")
                 return
         xi = CoefficientService.calculate_trash_rack_xi(params)
-        self.lbl_result.setText(f"\u03bcs = {xi:.4f}")
+        self.lbl_result.setText(f"ξs = {xi:.4f}")
         if not params.manual_mode and params.b1 > 0 and params.s1 > 0:
             formula_label = ("\\text{公式 L.1.4-3：}" if params.has_support and params.b2 > 0 and params.s2 > 0
                              else "\\text{公式 L.1.4-2：}")
@@ -1284,6 +1321,8 @@ class SegmentEditDialog(QDialog):
         self.ed_xi = LineEdit()
         self.ed_xi.setFixedWidth(110)
         self.ed_xi.setStyleSheet("font-size:16px; font-weight:700;")
+        self.ed_xi.textEdited.connect(self._on_xi_edited)
+        self.ed_xi.editingFinished.connect(self._on_xi_editing_finished)
         xi_row.addWidget(self.ed_xi)
         xi_row.addStretch()
         cxl.addLayout(xi_row)
@@ -1432,33 +1471,58 @@ class SegmentEditDialog(QDialog):
 
     # ---- 几何参数变化 ----
     def _on_geom(self, *_):
+        if not self._loading and not self.ed_xi.text().strip():
+            self._user_modified_xi = False
         if not self._loading:
             self._auto_xi()
         self._update_spatial()
         self._update_formula()
 
+    def _on_xi_edited(self, text):
+        """记录局部系数字段是否由用户手工输入。"""
+        if self._loading:
+            return
+        self._user_modified_xi = bool(text.strip())
+        self._update_formula()
+
+    def _on_xi_editing_finished(self):
+        """用户清空手工值后，回退到当前几何对应的自动值。"""
+        if self._loading:
+            return
+        if self.ed_xi.text().strip():
+            self._user_modified_xi = True
+            self._update_formula()
+            return
+        self._user_modified_xi = False
+        self._auto_xi()
+        self._update_formula()
+
+    def _current_auto_xi(self):
+        """按当前输入几何重算自动局部系数。"""
+        t = self.combo_type.currentText()
+        try:
+            if t == SegmentType.BEND.value:
+                r = float(self.ed_radius.text() or 0)
+                a = float(self.ed_angle.text() or 0)
+                if r > 0 and a > 0 and self._D_theory > 0:
+                    return CoefficientService.calculate_bend_coeff(
+                        r, self._D_theory, a, verbose=False
+                    )
+            elif t == SegmentType.FOLD.value:
+                a = float(self.ed_angle.text() or 0)
+                if a > 0:
+                    return CoefficientService.calculate_fold_coeff(a, verbose=False)
+        except ValueError:
+            return None
+        return None
+
     # ---- 自动计算 xi ----
     def _auto_xi(self):
         if self._user_modified_xi:
             return
-        t = self.combo_type.currentText()
-        if t == SegmentType.BEND.value:
-            try:
-                r = float(self.ed_radius.text() or 0)
-                a = float(self.ed_angle.text() or 0)
-                if r > 0 and a > 0 and self._D_theory > 0:
-                    xi = CoefficientService.calculate_bend_coeff(r, self._D_theory, a, verbose=False)
-                    self.ed_xi.setText(f"{xi:.4f}")
-            except ValueError:
-                pass
-        elif t == SegmentType.FOLD.value:
-            try:
-                a = float(self.ed_angle.text() or 0)
-                if a > 0:
-                    xi = CoefficientService.calculate_fold_coeff(a, verbose=False)
-                    self.ed_xi.setText(f"{xi:.4f}")
-            except ValueError:
-                pass
+        xi = self._current_auto_xi()
+        if xi is not None:
+            self.ed_xi.setText(f"{xi:.4f}")
 
     # ---- 更新空间长度 ----
     def _update_spatial(self):
@@ -1658,6 +1722,8 @@ class SegmentEditDialog(QDialog):
                     xi_user = xi_val
                 else:
                     xi_calc = xi_val
+            else:
+                xi_calc = self._current_auto_xi()
 
             se_txt = self.ed_start_elev.text().strip()
             ee_txt = self.ed_end_elev.text().strip()
@@ -1665,7 +1731,9 @@ class SegmentEditDialog(QDialog):
             end_e = float(ee_txt) if ee_txt else None
 
             direction = SegmentDirection.COMMON if is_common_type(st) else (
-                self.segment.direction if self.segment else SegmentDirection.LONGITUDINAL)
+                self.segment.direction if self.segment else (
+                    self._direction if self._direction else SegmentDirection.LONGITUDINAL
+                ))
 
             self.result = StructureSegment(
                 segment_type=st, direction=direction,
@@ -1676,6 +1744,10 @@ class SegmentEditDialog(QDialog):
                 locked=self.segment.locked if self.segment else False,
                 start_elevation=start_e, end_elevation=end_e,
                 source_ip_index=self.segment.source_ip_index if self.segment else None,
+                source_long_node_index=(
+                    self.segment.source_long_node_index if self.segment else None
+                ),
+                arc_geometry=self.segment.arc_geometry if self.segment else None,
             )
             self.accept()
         except ValueError as e:
@@ -1735,6 +1807,7 @@ class InletSectionDialog(QDialog):
         rl.addWidget(QLabel("流速 v₂ = Q / A"))
         self.lbl_result = QLabel("请输入完整参数")
         self.lbl_result.setStyleSheet(f"font-weight:bold;color:{P};")
+        _stabilize_single_line_result_label(self.lbl_result, vertical_padding=5)
         rl.addWidget(self.lbl_result)
         lay.addWidget(rgrp)
 

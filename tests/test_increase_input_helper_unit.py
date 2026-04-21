@@ -29,6 +29,21 @@ def test_percent_mode_blank_keeps_auto_lookup_rule():
     assert result.q_increased_value == pytest.approx(6.0)
 
 
+def test_percent_mode_blank_keeps_user_empty_and_exposes_engine_percent():
+    result = resolve_increase_input(
+        use_increase=True,
+        mode=INCREASE_MODE_PERCENT,
+        design_q=0.51,
+        percent_text="",
+        q_increased_text="",
+        disabled_percent=0.0,
+    )
+
+    assert result.manual_increase_percent is None
+    assert result.engine_increase_percent == pytest.approx(30.0)
+    assert result.q_increased_value == pytest.approx(0.663)
+
+
 def test_q_increased_mode_converts_total_flow_back_to_percent():
     result = resolve_increase_input(
         use_increase=True,
