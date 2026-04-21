@@ -11,7 +11,7 @@ import math
 import os
 from datetime import datetime
 from typing import Dict, Optional, Any, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 _UNSET = object()
 
@@ -27,6 +27,7 @@ class PressurePipeConfig:
     Q: float = 0.0                          # 设计流量 (m³/s)
     D: float = 0.0                          # 管径 (m)
     material_key: str = ""                  # 管材键名
+    wall_thickness_m: Optional[float] = None  # 基础水锤验算壁厚 e(m)
     local_loss_ratio: float = 0.15          # 局部损失比例（简化模式用）
     
     # 渐变段参数
@@ -83,6 +84,7 @@ class PressurePipeConfig:
     data_mode: str = ""                             # 数据模式（平面模式 / 空间模式（平面+纵断面））
     status: str = ""                                # 计算状态
     computed_from_profile_source: str = ""          # 纵断面来源
+    water_hammer_basic: Dict[str, Any] = field(default_factory=dict)  # 基础水锤验算快照
     
     def __post_init__(self):
         if self.ip_points is None:
@@ -340,6 +342,11 @@ class PressurePipeManager:
                 pipe_bucket.get("material_key", ""),
                 segment_bucket.get("material_key", ""),
             ),
+            wall_thickness_m=self._resolve_float_value(
+                pipe_bucket.get("wall_thickness_m"),
+                segment_bucket.get("wall_thickness_m"),
+                positive_only=True,
+            ),
             local_loss_ratio=float(
                 self._resolve_float_value(pipe_bucket.get("local_loss_ratio"), segment_bucket.get("local_loss_ratio"))
                 or 0.15
@@ -544,6 +551,10 @@ class PressurePipeManager:
                 pipe_bucket.get("computed_from_profile_source", ""),
                 segment_bucket.get("computed_from_profile_source", ""),
             ),
+            water_hammer_basic=self._resolve_dict_value(
+                pipe_bucket.get("water_hammer_basic", {}),
+                segment_bucket.get("water_hammer_basic", {}),
+            ),
         )
     
     def get_pipe_config(self, pipe_name: str) -> Optional[PressurePipeConfig]:
@@ -635,6 +646,7 @@ class PressurePipeManager:
             "Q": config.Q,
             "D": config.D,
             "material_key": config.material_key,
+            "wall_thickness_m": config.wall_thickness_m,
             "local_loss_ratio": config.local_loss_ratio,
             "inlet_transition_form": config.inlet_transition_form,
             "outlet_transition_form": config.outlet_transition_form,
@@ -681,6 +693,7 @@ class PressurePipeManager:
             "data_mode": config.data_mode,
             "status": config.status,
             "computed_from_profile_source": config.computed_from_profile_source,
+            "water_hammer_basic": copy.deepcopy(config.water_hammer_basic or {}),
         }
         
         self.save_config()

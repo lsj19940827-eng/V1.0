@@ -1019,7 +1019,7 @@ class PressurePipeConfigDialog(QDialog):
     """有压管道计算配置对话框（在计算前配置参数）"""
 
     _SCREEN_WIDTH_RATIO = 0.88
-    _SCREEN_HEIGHT_RATIO = 0.92
+    _SCREEN_HEIGHT_RATIO = 1.0
     _FALLBACK_MAX_WIDTH = 1200
     _FALLBACK_MAX_HEIGHT = 980
     _WINDOW_CHROME_PADDING = 24
@@ -2012,6 +2012,349 @@ class PressurePipeConfigDialog(QDialog):
         txt = f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
         return txt if txt else ""
 
+    @staticmethod
+    def _format_basic_water_hammer_result_value(value, digits: int = 3) -> str:
+        """格式化基础水锤结果显示值。"""
+        if value is None:
+            return "-"
+        try:
+            return f"{float(value):.{digits}f}"
+        except (TypeError, ValueError):
+            return "-"
+
+    @classmethod
+    def _group_supports_basic_water_hammer(cls, group) -> bool:
+        """判断分组是否适用基础水锤验算。"""
+        structure_text = cls._structure_type_text(getattr(group, "structure_type", ""))
+        if not structure_text:
+            return True
+        return structure_text in {"有压管道", "顶管", "定向钻"}
+
+    @classmethod
+    def _estimate_group_plan_length(cls, group) -> float:
+        """优先从平面点估算分组总长度。"""
+        ip_points = list(getattr(group, "ip_points", []) or [])
+        if len(ip_points) < 2:
+            return 0.0
+        total_length = 0.0
+        for prev_point, next_point in zip(ip_points[:-1], ip_points[1:]):
+            x1 = cls._safe_float((prev_point or {}).get("x"), 0.0)
+            y1 = cls._safe_float((prev_point or {}).get("y"), 0.0)
+            x2 = cls._safe_float((next_point or {}).get("x"), 0.0)
+            y2 = cls._safe_float((next_point or {}).get("y"), 0.0)
+            total_length += math.hypot(x2 - x1, y2 - y1)
+        return total_length
+
+    @classmethod
+    def _resolve_group_water_hammer_head(cls, group):
+        """优先按目标行附近的当前水位预填 Hc。"""
+        rows = list(getattr(group, "rows", []) or [])
+        for node in reversed(rows):
+            water_level = cls._safe_float(getattr(node, "water_level", None), None)
+            if water_level is not None:
+                return float(water_level)
+        return None
+
+    def _build_basic_water_hammer_prefill(self, group, config=None) -> Dict[str, Any]:
+        """整理基础水锤验算的预填输入与历史结果。"""
+        try:
+            from core.pressure_pipe_calc import calc_pipe_velocity, get_water_hammer_elastic_modulus
+        except Exception:
+            calc_pipe_velocity = None
+            get_water_hammer_elastic_modulus = None
+
+        cfg = config or self._get_manager_group_config(group)
+        saved_result = {}
+        if cfg is not None and isinstance(getattr(cfg, "water_hammer_basic", {}), dict):
+            saved_result = copy.deepcopy(getattr(cfg, "water_hammer_basic", {}) or {})
+        saved_inputs = saved_result.get("inputs", {}) if isinstance(saved_result, dict) else {}
+        diameter = self._safe_float(saved_inputs.get("diameter_m"), 0.0)
+        if diameter <= 0:
+            diameter = self._safe_float(getattr(cfg, "D", 0.0) if cfg is not None else 0.0, 0.0)
+        if diameter <= 0:
+            diameter = self._safe_float(getattr(group, "diameter", 0.0), 0.0)
+
+        length_m = self._safe_float(saved_inputs.get("length_m"), 0.0)
+        if length_m <= 0:
+            length_m = self._safe_float(getattr(cfg, "plan_total_length", 0.0) if cfg is not None else 0.0, 0.0)
+        if length_m <= 0:
+            length_m = self._estimate_group_plan_length(group)
+
+        velocity_mps = self._safe_float(saved_inputs.get("velocity_mps"), 0.0)
+        if velocity_mps <= 0:
+            velocity_mps = self._safe_float(getattr(cfg, "pipe_velocity", 0.0) if cfg is not None else 0.0, 0.0)
+        if velocity_mps <= 0 and callable(calc_pipe_velocity) and diameter > 0:
+            velocity_mps = self._safe_float(
+                calc_pipe_velocity(self._safe_float(getattr(group, "design_flow", 0.0), 0.0), diameter),
+                0.0,
+            )
+
+        initial_head_m = saved_inputs.get("initial_head_m", None)
+        if initial_head_m is None:
+            initial_head_m = self._resolve_group_water_hammer_head(group)
+
+        elastic_modulus_pa = self._safe_float(saved_inputs.get("elastic_modulus_pa"), 0.0)
+        if elastic_modulus_pa <= 0 and callable(get_water_hammer_elastic_modulus):
+            elastic_modulus_pa = self._safe_float(
+                get_water_hammer_elastic_modulus(str(getattr(group, "material_key", "") or "").strip()),
+                0.0,
+            )
+
+        wall_thickness_m = self._safe_float(saved_inputs.get("wall_thickness_m"), 0.0)
+        if wall_thickness_m <= 0:
+            wall_thickness_m = self._safe_float(getattr(cfg, "wall_thickness_m", None) if cfg is not None else None, 0.0)
+
+        return {
+            "length_m": length_m,
+            "diameter_m": diameter,
+            "velocity_mps": velocity_mps,
+            "initial_head_m": initial_head_m,
+            "elastic_modulus_pa": elastic_modulus_pa,
+            "wall_thickness_m": wall_thickness_m,
+            "closing_time_s": self._safe_float(saved_inputs.get("closing_time_s"), 0.0),
+            "result": saved_result if isinstance(saved_result, dict) else {},
+        }
+
+    def _read_basic_water_hammer_inputs(self, group) -> Dict[str, Any]:
+        """读取当前卡片上的基础水锤输入。"""
+        widgets = self._card_widgets.get(self._group_storage_key(group), {})
+        if not widgets:
+            return {}
+        return {
+            "length_m": self._safe_float(widgets.get("water_hammer_length_edit").text(), 0.0),
+            "diameter_m": self._safe_float(widgets.get("water_hammer_diameter_edit").text(), 0.0),
+            "wall_thickness_m": self._safe_float(widgets.get("water_hammer_wall_thickness_edit").text(), 0.0),
+            "elastic_modulus_pa": self._safe_float(widgets.get("water_hammer_elastic_modulus_edit").text(), 0.0),
+            "velocity_mps": self._safe_float(widgets.get("water_hammer_velocity_edit").text(), 0.0),
+            "initial_head_m": self._safe_float(widgets.get("water_hammer_head_edit").text(), None),
+            "closing_time_s": self._safe_float(widgets.get("water_hammer_closing_time_edit").text(), 0.0),
+        }
+
+    def _apply_basic_water_hammer_result_to_widgets(self, group, result: Dict[str, Any] | None = None):
+        """把基础水锤结果刷新到卡片显示区。"""
+        widgets = self._card_widgets.get(self._group_storage_key(group), {})
+        if not widgets:
+            return
+        payload = result if isinstance(result, dict) else {}
+        widgets["water_hammer_result"] = copy.deepcopy(payload)
+
+        status_text = str(payload.get("status", "") or "").strip()
+        reason_text = str(payload.get("reason", "") or "").strip()
+        if status_text:
+            widgets["water_hammer_status_label"].setText(
+                f"状态：{status_text}" + (f" | {reason_text}" if reason_text else "")
+            )
+        else:
+            widgets["water_hammer_status_label"].setText("状态：尚未验算")
+
+        widgets["water_hammer_result_a_label"].setText(
+            self._format_basic_water_hammer_result_value(payload.get("a"), digits=3)
+        )
+        widgets["water_hammer_result_mu_label"].setText(
+            self._format_basic_water_hammer_result_value(payload.get("mu"), digits=4)
+        )
+        widgets["water_hammer_result_ratio_label"].setText(
+            self._format_basic_water_hammer_result_value(payload.get("ts_to_mu_ratio"), digits=3)
+        )
+        widgets["water_hammer_result_delta_h_label"].setText(
+            self._format_basic_water_hammer_result_value(payload.get("delta_h"), digits=3)
+        )
+        widgets["water_hammer_result_hmax_label"].setText(
+            self._format_basic_water_hammer_result_value(payload.get("hmax"), digits=3)
+        )
+
+    def _clear_basic_water_hammer_result(self, group):
+        """参数变更后清空当前卡片的基础水锤结果。"""
+        self._apply_basic_water_hammer_result_to_widgets(group, {})
+
+    def _calculate_basic_water_hammer_for_group(self, group):
+        """执行单组基础水锤验算。"""
+        try:
+            from core.pressure_pipe_calc import calc_basic_water_hammer
+        except Exception as exc:
+            fluent_error(self, "基础水锤验算失败", f"加载计算模块失败：{exc}")
+            return
+
+        result = calc_basic_water_hammer(**self._read_basic_water_hammer_inputs(group))
+        self._apply_basic_water_hammer_result_to_widgets(group, result)
+
+    def _build_basic_water_hammer_store_payload(self, group) -> Dict[str, Any]:
+        """构造需要持久化的基础水锤数据。"""
+        widgets = self._card_widgets.get(self._group_storage_key(group), {})
+        if not widgets:
+            return {}
+        inputs = self._read_basic_water_hammer_inputs(group)
+        existing_result = widgets.get("water_hammer_result", {}) if isinstance(widgets.get("water_hammer_result", {}), dict) else {}
+        should_persist = bool(existing_result) or inputs["wall_thickness_m"] > 0 or inputs["closing_time_s"] > 0
+        if not should_persist:
+            return {}
+        payload = copy.deepcopy(existing_result) if existing_result else {}
+        payload["inputs"] = dict(inputs)
+        return payload
+
+    def _persist_basic_water_hammer_configs(self):
+        """把基础水锤输入和结果写回有压管道管理器。"""
+        if not self._manager:
+            return
+        try:
+            from managers.pressure_pipe_manager import PressurePipeConfig
+        except Exception:
+            return
+
+        for group in self._pipe_groups or []:
+            if not self._group_supports_basic_water_hammer(group):
+                continue
+            group_key = self._group_storage_key(group)
+            cfg = self._get_manager_group_config(group)
+            if cfg is None:
+                cfg = PressurePipeConfig()
+                cfg.name = self._group_display_name(group)
+                cfg.Q = float(getattr(group, "design_flow", 0.0) or 0.0)
+                cfg.D = float(getattr(group, "diameter", 0.0) or 0.0)
+                cfg.material_key = str(getattr(group, "material_key", "") or "")
+                cfg.ip_points = list(getattr(group, "ip_points", []) or [])
+
+            payload = self._build_basic_water_hammer_store_payload(group)
+            cfg.route_key = self._group_route_key(group)
+            cfg.route_display_name = self._group_route_display_name(group)
+            if payload:
+                inputs = payload.get("inputs", {}) if isinstance(payload, dict) else {}
+                wall_thickness = self._safe_float(inputs.get("wall_thickness_m"), 0.0)
+                cfg.wall_thickness_m = wall_thickness if wall_thickness > 0 else None
+                cfg.water_hammer_basic = copy.deepcopy(payload)
+            else:
+                cfg.wall_thickness_m = None
+                cfg.water_hammer_basic = {}
+            self._manager.set_pipe_config(group_key, cfg)
+
+    def _create_basic_water_hammer_panel(self, card_lay, group, card_refs: Dict[str, Any]):
+        """在管道卡片中创建基础水锤验算区域。"""
+        prefill = self._build_basic_water_hammer_prefill(group)
+
+        panel = QFrame()
+        panel.setStyleSheet(
+            "QFrame { background: #FFFDF5; border: 1px solid #F3D9A4; border-radius: 6px; }"
+        )
+        panel_lay = QVBoxLayout(panel)
+        panel_lay.setContentsMargins(8, 6, 8, 6)
+        panel_lay.setSpacing(6)
+
+        title = QLabel("基础水锤验算（直接关阀，全关）")
+        title.setStyleSheet("font-size: 12px; color: #8D4E00; font-weight: bold;")
+        panel_lay.addWidget(title)
+
+        hint = QLabel("只做并列校核，不参与主水位和水损递推。")
+        hint.setStyleSheet("font-size: 12px; color: #6D4C41;")
+        panel_lay.addWidget(hint)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+
+        def _make_edit(placeholder: str, text: str = "", width: int = 110):
+            edit = LineEdit()
+            edit.setPlaceholderText(placeholder)
+            edit.setFixedWidth(width)
+            if text:
+                edit.setText(text)
+            return edit
+
+        length_edit = _make_edit("L(m)", self._fmt_live_value(prefill["length_m"], digits=3))
+        diameter_edit = _make_edit("D(m)", self._fmt_live_value(prefill["diameter_m"], digits=3))
+        velocity_edit = _make_edit("v0(m/s)", self._fmt_live_value(prefill["velocity_mps"], digits=4))
+        head_edit = _make_edit(
+            "Hc(m)",
+            "" if prefill["initial_head_m"] is None else self._fmt_live_value(float(prefill["initial_head_m"]), digits=3),
+        )
+        wall_thickness_edit = _make_edit("e(m)", self._fmt_live_value(prefill["wall_thickness_m"], digits=4))
+        elastic_modulus_edit = _make_edit(
+            "E(N/m²)",
+            f"{float(prefill['elastic_modulus_pa']):.6g}" if prefill["elastic_modulus_pa"] > 0 else "",
+            width=140,
+        )
+        closing_time_edit = _make_edit("Ts(s)", self._fmt_live_value(prefill["closing_time_s"], digits=4))
+
+        inputs = [
+            ("L(m)", length_edit),
+            ("D(m)", diameter_edit),
+            ("v0(m/s)", velocity_edit),
+            ("Hc(m)", head_edit),
+            ("e(m)", wall_thickness_edit),
+            ("E(N/m²)", elastic_modulus_edit),
+            ("Ts(s)", closing_time_edit),
+        ]
+        for index, (label_text, edit) in enumerate(inputs):
+            row = index // 4
+            col = (index % 4) * 2
+            grid.addWidget(QLabel(label_text), row, col)
+            grid.addWidget(edit, row, col + 1)
+        panel_lay.addLayout(grid)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        calc_btn = PushButton("验算/刷新")
+        calc_btn.clicked.connect(lambda: self._calculate_basic_water_hammer_for_group(group))
+        status_label = QLabel("状态：尚未验算")
+        status_label.setWordWrap(True)
+        status_label.setStyleSheet("font-size: 12px; color: #546E7A;")
+        action_row.addWidget(calc_btn)
+        action_row.addWidget(status_label, 1)
+        panel_lay.addLayout(action_row)
+
+        result_grid = QGridLayout()
+        result_grid.setHorizontalSpacing(8)
+        result_grid.setVerticalSpacing(2)
+        result_labels = {
+            "water_hammer_result_a_label": QLabel("-"),
+            "water_hammer_result_mu_label": QLabel("-"),
+            "water_hammer_result_ratio_label": QLabel("-"),
+            "water_hammer_result_delta_h_label": QLabel("-"),
+            "water_hammer_result_hmax_label": QLabel("-"),
+        }
+        result_items = [
+            ("a(m/s)", "water_hammer_result_a_label"),
+            ("μ(s)", "water_hammer_result_mu_label"),
+            ("Ts/μ", "water_hammer_result_ratio_label"),
+            ("ΔH(m)", "water_hammer_result_delta_h_label"),
+            ("Hmax(m)", "water_hammer_result_hmax_label"),
+        ]
+        for index, (label_text, key) in enumerate(result_items):
+            row = 0
+            col = (index % 5) * 2
+            result_grid.addWidget(QLabel(label_text), row, col)
+            result_grid.addWidget(result_labels[key], row, col + 1)
+        panel_lay.addLayout(result_grid)
+
+        for edit in (
+            length_edit,
+            diameter_edit,
+            velocity_edit,
+            head_edit,
+            wall_thickness_edit,
+            elastic_modulus_edit,
+            closing_time_edit,
+        ):
+            edit.textEdited.connect(lambda _txt, g=group: self._clear_basic_water_hammer_result(g))
+
+        card_refs.update(
+            {
+                "water_hammer_panel": panel,
+                "water_hammer_length_edit": length_edit,
+                "water_hammer_diameter_edit": diameter_edit,
+                "water_hammer_velocity_edit": velocity_edit,
+                "water_hammer_head_edit": head_edit,
+                "water_hammer_wall_thickness_edit": wall_thickness_edit,
+                "water_hammer_elastic_modulus_edit": elastic_modulus_edit,
+                "water_hammer_closing_time_edit": closing_time_edit,
+                "water_hammer_calc_btn": calc_btn,
+                "water_hammer_status_label": status_label,
+                "water_hammer_result": {},
+            }
+        )
+        card_refs.update(result_labels)
+        card_lay.addWidget(panel)
+        self._apply_basic_water_hammer_result_to_widgets(group, prefill["result"])
+
     def _update_group_apply_button(self, group, dirty: bool):
         widgets = self._card_widgets.get(self._group_storage_key(group), {})
         btn_apply_group = widgets.get("btn_apply_group")
@@ -2489,6 +2832,7 @@ class PressurePipeConfigDialog(QDialog):
             self._focus_tunnel_group_card(group_key)
             fluent_error(self, "隧洞参数不完整", message)
             return
+        self._persist_basic_water_hammer_configs()
         super().accept()
 
     @staticmethod
@@ -2591,6 +2935,17 @@ class PressurePipeConfigDialog(QDialog):
         target_w = max(self.minimumWidth(), target_w)
         target_h = max(self.minimumHeight(), target_h)
         self.resize(target_w, target_h)
+
+        # 首次展示后如果滚动区仍有溢出，再补一轮高度，尽量避免出现多余滚动条。
+        if self._pipe_scroll_area is not None and self._pipe_scroll_widget is not None and target_h < max_h:
+            try:
+                self._pipe_scroll_widget.adjustSize()
+                QApplication.processEvents()
+                overflow = int(self._pipe_scroll_area.verticalScrollBar().maximum() or 0)
+            except Exception:
+                overflow = 0
+            if overflow > 0:
+                self.resize(target_w, min(max_h, target_h + overflow + 24))
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -3045,6 +3400,8 @@ class PressurePipeConfigDialog(QDialog):
             'route_key': route_key,
         }
         self._card_widgets[group_key] = card_refs
+        if self._group_supports_basic_water_hammer(group):
+            self._create_basic_water_hammer_panel(card_lay, group, card_refs)
         if self._group_is_tunnel_segment(group):
             self._create_tunnel_param_panel(card_lay, group, card_refs)
         if route_managed:

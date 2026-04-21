@@ -20,6 +20,7 @@ class IncreaseInputResolution:
 
     mode: str
     manual_increase_percent: Optional[float]
+    engine_increase_percent: float
     q_increased_value: Optional[float]
 
 
@@ -131,6 +132,7 @@ def resolve_increase_input(
         return IncreaseInputResolution(
             mode=normalized_mode,
             manual_increase_percent=disabled_percent,
+            engine_increase_percent=_coerce_float(disabled_percent),
             q_increased_value=design_q,
         )
 
@@ -140,6 +142,7 @@ def resolve_increase_input(
         return IncreaseInputResolution(
             mode=normalized_mode,
             manual_increase_percent=percent,
+            engine_increase_percent=percent,
             q_increased_value=q_increased,
         )
 
@@ -149,12 +152,14 @@ def resolve_increase_input(
         return IncreaseInputResolution(
             mode=normalized_mode,
             manual_increase_percent=None,
+            engine_increase_percent=auto_percent,
             q_increased_value=calculate_q_increased(design_q, auto_percent),
         )
     percent = _parse_float(raw_percent, "流量加大比例")
     return IncreaseInputResolution(
         mode=normalized_mode,
         manual_increase_percent=percent,
+        engine_increase_percent=percent,
         q_increased_value=calculate_q_increased(design_q, percent),
     )
 

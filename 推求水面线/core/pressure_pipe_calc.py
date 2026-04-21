@@ -48,6 +48,30 @@ TRANSITION_FORMS = {
 # 重力加速度
 GRAVITY = 9.81
 
+# 水的体积弹性模量（按 10℃ 固定取值）
+WATER_BULK_MODULUS = 2.025e9
+
+# 基础水锤验算默认弹性模量（来自手册常见材质近似值）
+WATER_HAMMER_ELASTIC_MODULUS = {
+    "钢管": 206.0e9,
+    "钢": 206.0e9,
+    "球墨铸铁管": 108.0e9,
+    "铸铁管": 108.0e9,
+    "铸铁": 108.0e9,
+    "预应力钢筒混凝土管": 20.6e9,
+    "预应力钢筒混凝土管_n014": 20.6e9,
+    "钢筋混凝土管": 20.6e9,
+    "钢筋混凝土": 20.6e9,
+    "玻璃钢夹砂管": 20.6e9,
+    "HDPE管": 1.4e9,
+    "PE": 1.4e9,
+    "PE管": 1.4e9,
+    "聚乙烯": 1.4e9,
+    "PVC": 0.8e9,
+    "PVC管": 0.8e9,
+    "聚氯乙烯": 0.8e9,
+}
+
 
 # ============================================================
 # 3. 计算函数
@@ -68,6 +92,115 @@ def calc_pipe_velocity(Q_m3s: float, D_m: float) -> float:
         return 0.0
     A = math.pi * D_m ** 2 / 4  # 断面积
     return Q_m3s / A
+
+
+def get_water_hammer_elastic_modulus(material_key: str) -> Optional[float]:
+    """返回基础水锤验算的默认管材弹性模量。"""
+    key = str(material_key or "").strip()
+    if not key:
+        return None
+    return WATER_HAMMER_ELASTIC_MODULUS.get(key)
+
+
+def calc_basic_water_hammer(
+    *,
+    length_m: float,
+    diameter_m: float,
+    wall_thickness_m: float,
+    elastic_modulus_pa: float,
+    velocity_mps: float,
+    initial_head_m: Optional[float],
+    closing_time_s: float,
+    water_bulk_modulus_pa: float = WATER_BULK_MODULUS,
+) -> Dict[str, object]:
+    """计算基础直接关阀水锤，只覆盖全关场景。"""
+    inputs = {
+        "length_m": float(length_m or 0.0),
+        "diameter_m": float(diameter_m or 0.0),
+        "wall_thickness_m": float(wall_thickness_m or 0.0),
+        "elastic_modulus_pa": float(elastic_modulus_pa or 0.0),
+        "velocity_mps": float(velocity_mps or 0.0),
+        "initial_head_m": None if initial_head_m is None else float(initial_head_m),
+        "closing_time_s": float(closing_time_s or 0.0),
+        "water_bulk_modulus_pa": float(water_bulk_modulus_pa or 0.0),
+    }
+    result: Dict[str, object] = {
+        "status": "输入缺失",
+        "reason": "",
+        "a": None,
+        "mu": None,
+        "ts_to_mu_ratio": None,
+        "delta_h": None,
+        "hmax": None,
+        "inputs": inputs,
+        "calc_steps": "",
+    }
+
+    missing_items = []
+    if inputs["length_m"] <= 0:
+        missing_items.append("L")
+    if inputs["diameter_m"] <= 0:
+        missing_items.append("D")
+    if inputs["wall_thickness_m"] <= 0:
+        missing_items.append("壁厚 e")
+    if inputs["elastic_modulus_pa"] <= 0:
+        missing_items.append("弹性模量 E")
+    if inputs["velocity_mps"] <= 0:
+        missing_items.append("流速 v0")
+    if inputs["initial_head_m"] is None:
+        missing_items.append("Hc")
+    if inputs["closing_time_s"] <= 0:
+        missing_items.append("关阀时间 Ts")
+    if inputs["water_bulk_modulus_pa"] <= 0:
+        missing_items.append("体积弹性模量 K")
+    if missing_items:
+        result["reason"] = f"缺少必要输入：{'、'.join(missing_items)}"
+        return result
+
+    denominator = 1.0 + (inputs["water_bulk_modulus_pa"] / inputs["elastic_modulus_pa"]) * (
+        inputs["diameter_m"] / inputs["wall_thickness_m"]
+    )
+    if denominator <= 0:
+        result["reason"] = "输入组合无效，无法计算水锤波速"
+        return result
+
+    a = 1425.0 / math.sqrt(denominator)
+    mu = 2.0 * inputs["length_m"] / a if a > 0 else 0.0
+    ts_ratio = inputs["closing_time_s"] / mu if mu > 0 else None
+    steps = [
+        f"a = 1425 / sqrt(1 + (K/E) * (d/e)) = {a:.6f} m/s",
+        f"μ = 2L / a = {mu:.6f} s",
+    ]
+
+    result["a"] = a
+    result["mu"] = mu
+    result["ts_to_mu_ratio"] = ts_ratio
+
+    if mu <= 0:
+        result["reason"] = "水锤相时 μ 无效，无法继续验算"
+        result["calc_steps"] = "\n".join(steps)
+        return result
+
+    if inputs["closing_time_s"] > mu:
+        result["status"] = "不适用"
+        result["reason"] = (
+            f"当前仅支持直接关阀水锤（Ts <= μ）。当前 Ts = {inputs['closing_time_s']:.6f} s，"
+            f"μ = {mu:.6f} s。"
+        )
+        steps.append("Ts > μ，本版不输出 ΔH 与 Hmax。")
+        result["calc_steps"] = "\n".join(steps)
+        return result
+
+    delta_h = a * inputs["velocity_mps"] / GRAVITY
+    hmax = float(inputs["initial_head_m"]) + delta_h
+    steps.append(f"ΔH = a * v0 / g = {delta_h:.6f} m")
+    steps.append(f"Hmax = Hc + ΔH = {hmax:.6f} m")
+
+    result["status"] = "可计算"
+    result["delta_h"] = delta_h
+    result["hmax"] = hmax
+    result["calc_steps"] = "\n".join(steps)
+    return result
 
 
 def calc_friction_loss(Q_m3s: float, D_m: float, L_m: float, material_key: str) -> Tuple[float, Dict]:

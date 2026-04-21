@@ -6,6 +6,12 @@
 
 import math
 from typing import List, Tuple, Optional
+from arc_geometry import (
+    build_arc_geometry,
+    build_plan_arc_geometry_from_context,
+    clone_arc_geometry,
+    reverse_arc_geometry,
+)
 from siphon_models import (
     StructureSegment, SegmentType, SegmentDirection, LongitudinalNode, TurnType,
     InletOutletShape, INLET_SHAPE_COEFFICIENTS, PlanFeaturePoint,
@@ -192,6 +198,7 @@ class DxfParser:
         
         # 计算弧长
         arc_length = radius * angle_rad
+        center = DxfParser._compute_arc_center(p1, p2, bulge)
         
         return StructureSegment(
             segment_type=SegmentType.BEND,
@@ -201,7 +208,19 @@ class DxfParser:
             coordinates=[p1, p2],
             locked=True,
             start_elevation=p1[1],
-            end_elevation=p2[1]
+            end_elevation=p2[1],
+            arc_geometry=build_arc_geometry(
+                kind="profile",
+                mode="dxf_segment",
+                start=p1,
+                end=p2,
+                center=center,
+                radius=radius,
+                sweep_rad=angle_rad,
+                clockwise=(bulge < 0),
+                start_chainage=p1[0],
+                end_chainage=p2[0],
+            ),
         )
     
     @staticmethod
@@ -1029,11 +1048,15 @@ class DxfParser:
                 sin_half = math.sin(angle_rad / 2)
                 radius = chord / (2 * sin_half) if sin_half > 1e-8 else chord / 2
                 arc_length = radius * angle_rad
+                center = DxfParser._compute_arc_center(p1, p2, bulge)
                 seg_infos.append({
                     'type': 'arc', 'p1': p1, 'p2': p2,
                     'chord': chord, 'bulge': bulge,
                     'radius': radius, 'angle_rad': angle_rad,
                     'length': arc_length,
+                    'center': center,
+                    'clockwise': bulge < 0,
+                    'mode': 'dxf_segment',
                 })
             else:
                 # 直线段
@@ -1101,6 +1124,32 @@ class DxfParser:
                 angle_rad = math.radians(float(start.turn_angle))
                 radius = float(start.turn_radius)
                 length = chainage_delta if chainage_delta > 1e-6 else radius * angle_rad
+                arc_geometry = clone_arc_geometry(start.arc_geometry)
+                if arc_geometry is not None:
+                    start_pt = tuple(arc_geometry.get('start', []))
+                    end_pt = tuple(arc_geometry.get('end', []))
+                    if start_pt != p1 or end_pt != p2:
+                        arc_geometry = None
+                if arc_geometry is None:
+                    prev_point = None
+                    if idx > 0:
+                        prev = pts[idx - 1]
+                        prev_point = (float(prev.x), float(prev.y))
+                    next_point = None
+                    if idx + 2 < len(pts):
+                        nxt2 = pts[idx + 2]
+                        next_point = (float(nxt2.x), float(nxt2.y))
+                    arc_geometry = build_plan_arc_geometry_from_context(
+                        start=p1,
+                        end=p2,
+                        radius=radius,
+                        sweep_rad=angle_rad,
+                        start_chainage=float(start.chainage),
+                        end_chainage=float(end.chainage),
+                        prev_point=prev_point,
+                        next_point=next_point,
+                        mode='manual_rebuilt',
+                    )
                 seg_infos.append({
                     'type': 'arc',
                     'p1': p1,
@@ -1112,6 +1161,8 @@ class DxfParser:
                     'dir': DxfParser._get_direction(p1, p2),
                     'azimuth_meas_deg': DxfParser._compute_measurement_azimuth(dx, dy),
                     'source_ip_index': start.ip_index,
+                    'arc_geometry': arc_geometry,
+                    'mode': arc_geometry.get('mode', 'manual_rebuilt') if arc_geometry else 'manual_rebuilt',
                 })
             else:
                 length = chainage_delta if chainage_delta > 1e-6 else chord
@@ -1129,6 +1180,56 @@ class DxfParser:
                 })
 
         return seg_infos
+
+    @staticmethod
+    def _resolve_plan_arc_geometry(
+        si: dict,
+        start_chainage: float,
+        end_chainage: float,
+        prev_point: Optional[Tuple[float, float]] = None,
+        next_point: Optional[Tuple[float, float]] = None,
+    ) -> Optional[dict]:
+        """把平面段信息统一解析成规范化圆弧真源。"""
+        arc_geometry = clone_arc_geometry(si.get('arc_geometry'))
+        if arc_geometry is not None:
+            return build_arc_geometry(
+                kind=arc_geometry.get('kind', 'plan') or 'plan',
+                mode=arc_geometry.get('mode', si.get('mode', 'manual_rebuilt')) or 'manual_rebuilt',
+                start=si['p1'],
+                end=si['p2'],
+                center=arc_geometry.get('center'),
+                radius=arc_geometry.get('radius', si.get('radius', 0.0)),
+                sweep_rad=arc_geometry.get('sweep_rad', si.get('angle_rad', 0.0)),
+                clockwise=arc_geometry.get('clockwise', False),
+                start_chainage=start_chainage,
+                end_chainage=end_chainage,
+            )
+
+        if si.get('center') is not None and si.get('clockwise') is not None:
+            return build_arc_geometry(
+                kind="plan",
+                mode=si.get('mode', 'dxf_segment') or 'dxf_segment',
+                start=si['p1'],
+                end=si['p2'],
+                center=si.get('center'),
+                radius=si.get('radius', 0.0),
+                sweep_rad=si.get('angle_rad', 0.0),
+                clockwise=si.get('clockwise', False),
+                start_chainage=start_chainage,
+                end_chainage=end_chainage,
+            )
+
+        return build_plan_arc_geometry_from_context(
+            start=si['p1'],
+            end=si['p2'],
+            radius=si.get('radius', 0.0),
+            sweep_rad=si.get('angle_rad', 0.0),
+            start_chainage=start_chainage,
+            end_chainage=end_chainage,
+            prev_point=prev_point,
+            next_point=next_point,
+            mode=si.get('mode', 'manual_rebuilt') or 'manual_rebuilt',
+        )
 
     @staticmethod
     def _build_plan_geometry_from_seg_infos(
@@ -1150,11 +1251,21 @@ class DxfParser:
             turn_type = TurnType.NONE
             turn_angle = 0.0
             turn_radius = 0.0
+            arc_geometry = None
 
             if si['type'] == 'arc':
                 turn_type = TurnType.ARC
                 turn_angle = math.degrees(si['angle_rad'])
                 turn_radius = si['radius']
+                prev_point = seg_infos[i - 1]['p1'] if i > 0 else None
+                next_point = seg_infos[i + 1]['p2'] if i + 1 < len(seg_infos) else None
+                arc_geometry = DxfParser._resolve_plan_arc_geometry(
+                    si,
+                    start_chainage=chainage,
+                    end_chainage=chainage + si['length'],
+                    prev_point=prev_point,
+                    next_point=next_point,
+                )
             elif i > 0 and seg_infos[i - 1]['type'] == 'line' and si['type'] == 'line':
                 prev_dir = seg_infos[i - 1]['dir']
                 curr_dir = si['dir']
@@ -1174,6 +1285,7 @@ class DxfParser:
                 turn_angle=DxfParser._round_geometry_value(turn_angle),
                 turn_type=turn_type,
                 ip_index=i,
+                arc_geometry=arc_geometry,
             ))
             chainage += si['length']
 
@@ -1223,6 +1335,10 @@ class DxfParser:
             reversed_si['dir'] = DxfParser._get_direction(p1, p2)
             reversed_si['azimuth_meas_deg'] = DxfParser._compute_measurement_azimuth(dx, dy)
             reversed_si['source_ip_index'] = idx
+            if si.get('type') == 'arc':
+                reversed_si['arc_geometry'] = reverse_arc_geometry(si.get('arc_geometry'))
+                if si.get('clockwise') is not None:
+                    reversed_si['clockwise'] = not bool(si.get('clockwise'))
             reversed_infos.append(reversed_si)
 
         return DxfParser._build_plan_geometry_from_seg_infos(reversed_infos)
@@ -1236,8 +1352,11 @@ class DxfParser:
         """
         segments = []
         temp_straight = []
+        chainage = 0.0
         
         for i, si in enumerate(seg_infos):
+            seg_start_chainage = chainage
+            seg_end_chainage = chainage + si['length']
             if si['type'] == 'arc':
                 # 处理之前累积的直线段
                 if temp_straight:
@@ -1246,6 +1365,8 @@ class DxfParser:
                     temp_straight = []
                 
                 # 弯管段
+                prev_point = seg_infos[i - 1]['p1'] if i > 0 else None
+                next_point = seg_infos[i + 1]['p2'] if i + 1 < len(seg_infos) else None
                 segments.append(StructureSegment(
                     segment_type=SegmentType.BEND,
                     length=DxfParser._round_geometry_value(si['length']),
@@ -1255,10 +1376,18 @@ class DxfParser:
                     locked=True,
                     direction=SegmentDirection.PLAN,
                     source_ip_index=si.get('source_ip_index'),
+                    arc_geometry=DxfParser._resolve_plan_arc_geometry(
+                        si,
+                        start_chainage=seg_start_chainage,
+                        end_chainage=seg_end_chainage,
+                        prev_point=prev_point,
+                        next_point=next_point,
+                    ),
                 ))
             else:
                 # 直线段 — 累积后统一处理折管检测
                 temp_straight.append(si)
+            chainage = seg_end_chainage
         
         # 处理剩余直线段
         if temp_straight:

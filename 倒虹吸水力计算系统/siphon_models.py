@@ -5,9 +5,12 @@
 """
 
 import math
+import uuid
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
+
+from arc_geometry import clone_arc_geometry
 
 
 class SegmentDirection(Enum):
@@ -114,8 +117,8 @@ class GlobalParameters:
     v_pipe_in: float = 0.0              # 进口渐变段末端流速 v₂ (m/s)
     v_channel_out: float = 0.0          # 出口渐变段始端流速 v (m/s)
     v_pipe_out: float = 0.0             # 出口渐变段末端流速 v₃ (m/s)
-    xi_inlet: float = 0.0               # 进口局部阻力系数
-    xi_outlet: float = 0.0              # 出口局部阻力系数
+    xi_inlet: float = 0.0               # 进口渐变段系数 ξ₁（仅用于 ΔZ1）
+    xi_outlet: float = 0.0              # 出口渐变段系数 ξ₂（仅用于 ΔZ3）
     v2_strategy: V2Strategy = V2Strategy.AUTO_PIPE  # v₂ 计算策略（默认自动=管道流速）
     num_pipes: int = 1                  # 管道根数（并联管道数量，默认单管）
 
@@ -141,6 +144,8 @@ class StructureSegment:
     start_elevation: Optional[float] = None  # 起点高程 (m)（仅纵断面直管段使用）
     end_elevation: Optional[float] = None    # 终点高程 (m)（仅纵断面直管段使用）
     source_ip_index: Optional[int] = None    # 关联的IP点索引（仅平面段，用于同步）
+    source_long_node_index: Optional[int] = None  # 关联的纵断面节点索引（仅纵断面段，用于同步）
+    arc_geometry: Optional[dict] = None      # 圆弧几何真源（平面/纵断面圆弧保真显示）
     
     def get_xi(self) -> float:
         """获取局部阻力系数（用户值优先）"""
@@ -204,16 +209,16 @@ class CalculationResult:
     
     # 三段式水头损失（附录L规范）
     loss_inlet: float = 0.0             # 进口渐变段水面落差 ΔZ1 (m)
-    loss_pipe: float = 0.0              # 管身段总水头损失 ΔZ2 (m)
+    loss_pipe: float = 0.0              # 管道段总水头损失 ΔZ2 (m)
     loss_friction: float = 0.0          # 沿程水头损失 hf (m)
-    loss_local: float = 0.0             # 管身局部水头损失 hj (m)
+    loss_local: float = 0.0             # 管道局部水头损失 hj (m)
     loss_outlet: float = 0.0            # 出口渐变段水面落差 ΔZ3 (m)
     total_head_loss: float = 0.0        # 总水面落差 ΔZ = ΔZ1 + ΔZ2 - ΔZ3 (m)
     
     total_length: float = 0.0           # 管道总长度 (m)
-    xi_sum_middle: float = 0.0          # 中间段局部阻力系数和
-    xi_inlet: float = 0.0               # 进口系数
-    xi_outlet: float = 0.0              # 出口系数
+    xi_sum_middle: float = 0.0          # 管道局部损失系数和（保留旧字段名）
+    xi_inlet: float = 0.0               # 进口渐变段系数 ξ₁
+    xi_outlet: float = 0.0              # 出口渐变段系数 ξ₂
     
     # 数据来源与模式说明
     data_mode: str = ""                 # 计算模式/数据来源
@@ -224,7 +229,7 @@ class CalculationResult:
     Q_increased: float = 0.0               # 加大流量 (m³/s)
     velocity_increased: float = 0.0        # 加大流速 (m/s)
     loss_inlet_inc: float = 0.0            # 加大工况进口落差 ΔZ1加大 (m)
-    loss_pipe_inc: float = 0.0             # 加大工况管身损失 ΔZ2加大 (m)
+    loss_pipe_inc: float = 0.0             # 加大工况管道段损失 ΔZ2加大 (m)
     loss_outlet_inc: float = 0.0           # 加大工况出口落差 ΔZ3加大 (m)
     total_head_loss_inc: float = 0.0       # 加大工况总落差 ΔZ加大 (m)
     
@@ -238,6 +243,7 @@ class CalculationResult:
 
     # 详细计算过程（可选输出）
     calculation_steps: List[str] = field(default_factory=list)
+    ignored_manual_overrides: List[str] = field(default_factory=list)  # 本次未采用的手工局部系数提示
 
 
 @dataclass
@@ -324,6 +330,7 @@ class LongitudinalNode:
     arc_center_z: Optional[float] = None  # 竖曲线弧心高程坐标 Zc（仅 ARC 型有效）
     arc_end_chainage: Optional[float] = None  # 竖曲线弧终点桩号（仅 ARC 型有效，供区间重叠检测）
     arc_theta_rad: Optional[float] = None    # 竖曲线圆心角 θ (弧度)（仅 ARC 型有效，供精确弧长计算）
+    node_uid: str = field(default_factory=lambda: uuid.uuid4().hex)  # 节点稳定标识，用于同步手工系数
     
     def to_dict(self) -> dict:
         return {
@@ -338,6 +345,7 @@ class LongitudinalNode:
             "arc_center_z": self.arc_center_z,
             "arc_end_chainage": self.arc_end_chainage,
             "arc_theta_rad": self.arc_theta_rad,
+            "node_uid": self.node_uid,
         }
     
     @staticmethod
@@ -350,7 +358,7 @@ class LongitudinalNode:
         return LongitudinalNode(
             chainage=d.get("chainage", 0.0),
             elevation=d.get("elevation", 0.0),
-            vertical_curve_radius=d.get("vertical_curve_radius", 0.0),
+            vertical_curve_radius=d.get("vertical_curve_radius", d.get("vcr", 0.0)),
             turn_type=tt,
             turn_angle=d.get("turn_angle", 0.0),
             slope_before=d.get("slope_before", 0.0),
@@ -359,6 +367,7 @@ class LongitudinalNode:
             arc_center_z=d.get("arc_center_z", None),
             arc_end_chainage=d.get("arc_end_chainage", None),
             arc_theta_rad=d.get("arc_theta_rad", None),
+            node_uid=d.get("node_uid", "") or uuid.uuid4().hex,
         )
 
 
@@ -378,6 +387,7 @@ class PlanFeaturePoint:
     turn_angle: float = 0.0             # 水平转角 α (度)
     turn_type: TurnType = TurnType.NONE # 转弯类型
     ip_index: int = 0                   # IP编号
+    arc_geometry: Optional[dict] = None # 平面圆弧几何真源（供显示/反向/持久化复用）
     
     @property
     def azimuth_math_rad(self) -> float:
@@ -405,6 +415,7 @@ class PlanFeaturePoint:
             "turn_angle": self.turn_angle,
             "turn_type": self.turn_type.value,
             "ip_index": self.ip_index,
+            "arc_geometry": clone_arc_geometry(self.arc_geometry),
         }
     
     @staticmethod
@@ -423,6 +434,7 @@ class PlanFeaturePoint:
             turn_angle=d.get("turn_angle", 0.0),
             turn_type=tt,
             ip_index=d.get("ip_index", 0),
+            arc_geometry=clone_arc_geometry(d.get("arc_geometry")),
         )
 
 
@@ -518,6 +530,7 @@ class PlanSegment:
     R_h: float = 0.                 # 半径 (m)
     epsilon: int = 1                # +1=左转(CCW), -1=右转(CW)
     theta_0: float = 0.             # BC点极角 atan2(y_BC-Cy, x_BC-Cx)
+    source_ip_index: Optional[int] = None  # 关联的IP点索引（仅 ARC 段有效）
 
 
 @dataclass
@@ -539,6 +552,7 @@ class ProfileSegment:
     Zc: float = 0.                  # 圆心高程坐标 (m)
     eta: int = 1                    # +1/-1，由 z(S1)=Z1 确定
     theta_arc: float = 0.           # 圆心角 θ (rad)
+    source_long_node_index: Optional[int] = None  # 关联的纵断面节点索引（仅 ARC 段有效）
 
 
 @dataclass
@@ -559,3 +573,7 @@ class BendEvent:
     R_h: float = 0.                 # 平面半径（可选，m）
     R_v: float = 0.                 # 纵断半径（可选，m）
     R_3d_mid: float = 0.            # 事件中点曲率半径（可选诊断，m）
+    plan_source_ip_index: Optional[int] = None  # 关联的平面IP点索引
+    long_source_node_index: Optional[int] = None  # 关联的纵断面节点索引
+    plan_source_ip_indices: List[int] = field(default_factory=list)  # 关联的全部平面IP点索引
+    long_source_node_indices: List[int] = field(default_factory=list)  # 关联的全部纵断面节点索引

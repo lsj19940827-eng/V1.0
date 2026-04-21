@@ -447,7 +447,8 @@ class SpatialMerger:
                 g = arc_geom[idx]
                 segs.append(PlanSegment(seg_type='ARC', s_start=g['bc_s'], s_end=g['ec_s'],
                                         center=g['cen'], R_h=g['R_h'],
-                                        epsilon=g['eps'], theta_0=g['th0']))
+                                        epsilon=g['eps'], theta_0=g['th0'],
+                                        source_ip_index=plan_points[idx].ip_index))
                 prev_s, prev_xy, in_arc = s, xy, None
             elif k == 'P' and in_arc is None and s > prev_s + 1e-6:
                 dx, dy = xy[0] - prev_xy[0], xy[1] - prev_xy[1]
@@ -543,7 +544,8 @@ class SpatialMerger:
                 theta_arc = ln.arc_theta_rad if ln.arc_theta_rad else 0.
                 segs.append(ProfileSegment(seg_type='ARC', s_start=ln.chainage, s_end=arc_end,
                                            R_v=R_v, Sc=Sc, Zc=Zc, eta=eta,
-                                           theta_arc=theta_arc))
+                                           theta_arc=theta_arc,
+                                           source_long_node_index=i))
 
                 inside_e = max(0., R_v**2 - (arc_end - Sc)**2)
                 prev_z = Zc + eta * math.sqrt(inside_e)
@@ -747,13 +749,20 @@ class SpatialMerger:
             if sg.seg_type == 'ARC' and sg.R_h > 0:
                 plan_evts.append(BendEvent(s_a=sg.s_start, s_b=sg.s_end,
                                            event_type='PLAN', turn_style=TurnType.ARC,
-                                           R_h=sg.R_h))
+                                           R_h=sg.R_h,
+                                           plan_source_ip_index=sg.source_ip_index,
+                                           plan_source_ip_indices=(
+                                               [sg.source_ip_index]
+                                               if sg.source_ip_index is not None else []
+                                           )))
         # 平面 FOLD 折点事件（零长度，§10.1）
         if plan_points:
             for pp in plan_points:
                 if pp.turn_type == TurnType.FOLD and pp.turn_angle > SpatialMerger.TURN_ANGLE_THRESH:
                     plan_evts.append(BendEvent(s_a=pp.chainage, s_b=pp.chainage,
-                                               event_type='PLAN', turn_style=TurnType.FOLD))
+                                               event_type='PLAN', turn_style=TurnType.FOLD,
+                                               plan_source_ip_index=pp.ip_index,
+                                               plan_source_ip_indices=[pp.ip_index]))
 
         vert_evts = []
         # 纵断 ARC 圆弧事件
@@ -761,13 +770,20 @@ class SpatialMerger:
             if sg.seg_type == 'ARC' and sg.R_v > 0:
                 vert_evts.append(BendEvent(s_a=sg.s_start, s_b=sg.s_end,
                                            event_type='VERTICAL', turn_style=TurnType.ARC,
-                                           R_v=sg.R_v))
+                                           R_v=sg.R_v,
+                                           long_source_node_index=sg.source_long_node_index,
+                                           long_source_node_indices=(
+                                               [sg.source_long_node_index]
+                                               if sg.source_long_node_index is not None else []
+                                           )))
         # 纵断 FOLD 折坡事件（零长度，§10.1）
         if long_nodes:
-            for ln in long_nodes:
+            for idx, ln in enumerate(long_nodes):
                 if ln.turn_type == TurnType.FOLD and ln.turn_angle > SpatialMerger.TURN_ANGLE_THRESH:
                     vert_evts.append(BendEvent(s_a=ln.chainage, s_b=ln.chainage,
-                                               event_type='VERTICAL', turn_style=TurnType.FOLD))
+                                               event_type='VERTICAL', turn_style=TurnType.FOLD,
+                                               long_source_node_index=idx,
+                                               long_source_node_indices=[idx]))
         return plan_evts, vert_evts
 
     @staticmethod
@@ -818,17 +834,43 @@ class SpatialMerger:
                         continue
 
                     etype = 'COMPOSITE' if (in_p and in_v) else ('PLAN' if in_p else 'VERTICAL')
-                    R_h = next((e.R_h for e in plan_arc if e.s_a-1e-9<=s_mid<=e.s_b+1e-9), 0.)
-                    R_v = next((e.R_v for e in vert_arc if e.s_a-1e-9<=s_mid<=e.s_b+1e-9), 0.)
+                    plan_evt = next((e for e in plan_arc if e.s_a-1e-9 <= s_mid <= e.s_b+1e-9), None)
+                    vert_evt = next((e for e in vert_arc if e.s_a-1e-9 <= s_mid <= e.s_b+1e-9), None)
+                    R_h = plan_evt.R_h if plan_evt else 0.
+                    R_v = vert_evt.R_v if vert_evt else 0.
+                    plan_sources = list(plan_evt.plan_source_ip_indices) if plan_evt else []
+                    long_sources = list(vert_evt.long_source_node_indices) if vert_evt else []
 
                     if etype == prev_type and prev_sa is not None:
                         result_evts[-1].s_b = qb
                         result_evts[-1].R_h = result_evts[-1].R_h or R_h
                         result_evts[-1].R_v = result_evts[-1].R_v or R_v
+                        result_evts[-1].plan_source_ip_indices = sorted(set(
+                            result_evts[-1].plan_source_ip_indices + plan_sources
+                        ))
+                        result_evts[-1].long_source_node_indices = sorted(set(
+                            result_evts[-1].long_source_node_indices + long_sources
+                        ))
+                        result_evts[-1].plan_source_ip_index = (
+                            result_evts[-1].plan_source_ip_indices[0]
+                            if len(result_evts[-1].plan_source_ip_indices) == 1 else None
+                        )
+                        result_evts[-1].long_source_node_index = (
+                            result_evts[-1].long_source_node_indices[0]
+                            if len(result_evts[-1].long_source_node_indices) == 1 else None
+                        )
                     else:
                         result_evts.append(BendEvent(s_a=qa, s_b=qb,
                                                      event_type=etype, turn_style=TurnType.ARC,
-                                                     R_h=R_h, R_v=R_v))
+                                                     R_h=R_h, R_v=R_v,
+                                                     plan_source_ip_index=(
+                                                         plan_sources[0] if len(plan_sources) == 1 else None
+                                                     ),
+                                                     long_source_node_index=(
+                                                         long_sources[0] if len(long_sources) == 1 else None
+                                                     ),
+                                                     plan_source_ip_indices=plan_sources,
+                                                     long_source_node_indices=long_sources))
                         prev_type = etype
                         prev_sa   = qa
 
@@ -837,8 +879,10 @@ class SpatialMerger:
             [e.s_a for e in plan_fold] + [e.s_a for e in vert_fold]
         )
         for s in fold_stations:
-            has_p = any(abs(e.s_a - s) <= SpatialMerger.STATION_EPS for e in plan_fold)
-            has_v = any(abs(e.s_a - s) <= SpatialMerger.STATION_EPS for e in vert_fold)
+            plan_fold_evt = next((e for e in plan_fold if abs(e.s_a - s) <= SpatialMerger.STATION_EPS), None)
+            vert_fold_evt = next((e for e in vert_fold if abs(e.s_a - s) <= SpatialMerger.STATION_EPS), None)
+            has_p = plan_fold_evt is not None
+            has_v = vert_fold_evt is not None
             in_p_arc = any(e.s_a - 1e-9 <= s <= e.s_b + 1e-9 for e in plan_arc)
             in_v_arc = any(e.s_a - 1e-9 <= s <= e.s_b + 1e-9 for e in vert_arc)
 
@@ -850,7 +894,23 @@ class SpatialMerger:
                 etype = 'COMPOSITE' if in_p_arc else 'VERTICAL'
 
             result_evts.append(BendEvent(s_a=s, s_b=s,
-                                         event_type=etype, turn_style=TurnType.FOLD))
+                                         event_type=etype, turn_style=TurnType.FOLD,
+                                         plan_source_ip_index=(
+                                             plan_fold_evt.plan_source_ip_index
+                                             if plan_fold_evt else None
+                                         ),
+                                         long_source_node_index=(
+                                             vert_fold_evt.long_source_node_index
+                                             if vert_fold_evt else None
+                                         ),
+                                         plan_source_ip_indices=(
+                                             list(plan_fold_evt.plan_source_ip_indices)
+                                             if plan_fold_evt else []
+                                         ),
+                                         long_source_node_indices=(
+                                             list(vert_fold_evt.long_source_node_indices)
+                                             if vert_fold_evt else []
+                                         )))
 
         # 按开始桩号排序（方便下游查表）
         result_evts.sort(key=lambda e: e.s_a)

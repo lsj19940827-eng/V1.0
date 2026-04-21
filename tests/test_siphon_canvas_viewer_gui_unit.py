@@ -19,8 +19,9 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
 import app_渠系计算前端.siphon.panel as siphon_panel_mod
-from app_渠系计算前端.siphon.canvas_view import PipelineCanvas
-from siphon_models import PlanFeaturePoint, TurnType
+from app_渠系计算前端.siphon.canvas_view import PipelineCanvas, build_profile_footer_info
+from dxf_parser import DxfParser
+from siphon_models import PlanFeaturePoint, SegmentType, TurnType
 
 
 class _FakeWebView(QWidget):
@@ -110,6 +111,10 @@ def _make_panel(monkeypatch):
     panel.show()
     _flush_events(4)
     return panel
+
+
+def _sample_dxf_path() -> str:
+    return str(ROOT / "倒虹吸水力计算系统" / "resources" / "导入纵断面dxf示例.dxf")
 
 
 def test_fit_to_content_resets_navigation_for_vertical_plan_data():
@@ -212,5 +217,37 @@ def test_panel_expand_button_reuses_single_non_modal_viewer_and_inherits_mode(mo
 
     if viewer is not None:
         viewer.close()
+    panel.close()
+    panel.deleteLater()
+
+
+def test_profile_footer_counts_fold_for_rebuilt_longitudinal_segments(monkeypatch):
+    panel = _make_panel(monkeypatch)
+    sample_path = _sample_dxf_path()
+    long_nodes, _msg = DxfParser.parse_longitudinal_profile(sample_path, chainage_offset=0.0)
+    rebuilt_segments = panel._nodes_to_segments(long_nodes)
+
+    canvas = PipelineCanvas()
+    canvas.set_data(
+        segments=rebuilt_segments,
+        longitudinal_nodes=long_nodes,
+        longitudinal_is_example=False,
+    )
+    pipe_segs = canvas._get_profile_pipe_segments()
+    text = build_profile_footer_info(
+        total_len=sum(seg.length for seg in pipe_segs if seg.length > 0),
+        segment_count=len(pipe_segs),
+        bend_count=sum(
+            1 for seg in pipe_segs
+            if seg.segment_type in (SegmentType.BEND, SegmentType.FOLD)
+        ),
+        min_elev=min(y for _, y in canvas._get_profile_coords_for_draw()),
+        zoom=1.0,
+    )
+
+    assert "弯/折管: 6" in text
+    assert "结构段: 11" in text
+
+    canvas.deleteLater()
     panel.close()
     panel.deleteLater()

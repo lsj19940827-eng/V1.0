@@ -21,6 +21,7 @@ import math
 import copy
 import datetime
 import traceback
+import uuid
 
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -91,6 +92,12 @@ try:
     )
     from siphon_hydraulics import HydraulicCore
     from siphon_coefficients import CoefficientService
+    from arc_geometry import (
+        build_arc_geometry,
+        build_profile_arc_geometry_from_context,
+        clone_arc_geometry,
+        infer_arc_clockwise,
+    )
     SIPHON_AVAILABLE = True
 except ImportError as _e:
     print(f"[倒虹吸] 计算引擎加载失败: {_e}")
@@ -220,6 +227,11 @@ SEG_HEADERS = ["序号", "分类", "类型", "方向", "长度(m)", "半径R(m)"
 
 # 纵断面节点表头
 LONG_NODE_HEADERS = ["桩号(m)", "高程(m)", "竖曲线半径(m)", "转弯类型", "转角(°)"]
+LONG_NODE_UID_ROLE = Qt.UserRole + 101
+LONG_NODE_ARC_CENTER_S_ROLE = Qt.UserRole + 102
+LONG_NODE_ARC_CENTER_Z_ROLE = Qt.UserRole + 103
+LONG_NODE_ARC_END_CHAINAGE_ROLE = Qt.UserRole + 104
+LONG_NODE_ARC_THETA_RAD_ROLE = Qt.UserRole + 105
 
 
 class _NumPipesWidget(QWidget):
@@ -964,11 +976,12 @@ class SiphonPanel(QWidget):
         inlet_r1.addWidget(self.lbl_inlet_type_hint)
         btn_inlet_coeff_ref = PushButton("参考系数表")
         btn_inlet_coeff_ref.setMinimumWidth(110)
-        btn_inlet_coeff_ref.setToolTip("查看表L.1.2 倒虹吸渐变段局部损失系数")
+        btn_inlet_coeff_ref.setToolTip("查看表L.1.2 倒虹吸进口渐变段局部损失系数")
         btn_inlet_coeff_ref.clicked.connect(lambda: L12CoeffRefDialog(self).exec())
         inlet_r1.addWidget(btn_inlet_coeff_ref)
-        inlet_r1.addWidget(QLabel("ξ₁:"))
+        inlet_r1.addWidget(QLabel("渐变段系数 ξ₁:"))
         self.edit_xi_inlet = LineEdit(); self.edit_xi_inlet.setText("0.0"); self.edit_xi_inlet.setFixedWidth(80)
+        self.edit_xi_inlet.setToolTip("进口渐变段系数 ξ₁，仅用于 ΔZ1；进水口构件系数请在结构段表中设置")
         inlet_r1.addWidget(self.edit_xi_inlet)
         self.lbl_xi_inlet_hint = QLabel("")
         self.lbl_xi_inlet_hint.setStyleSheet("color:#0066CC;font-size:12px;")
@@ -1073,11 +1086,12 @@ class SiphonPanel(QWidget):
         outlet_r1.addWidget(self.lbl_outlet_type_hint)
         btn_outlet_coeff_ref = PushButton("参考系数表")
         btn_outlet_coeff_ref.setMinimumWidth(110)
-        btn_outlet_coeff_ref.setToolTip("查看表L.1.2 倒虹吸渐变段局部损失系数")
+        btn_outlet_coeff_ref.setToolTip("查看表L.1.2 倒虹吸出口渐变段局部损失系数")
         btn_outlet_coeff_ref.clicked.connect(lambda: L12CoeffRefDialog(self).exec())
         outlet_r1.addWidget(btn_outlet_coeff_ref)
-        outlet_r1.addWidget(QLabel("ξ₂:"))
+        outlet_r1.addWidget(QLabel("渐变段系数 ξ₂:"))
         self.edit_xi_outlet = LineEdit(); self.edit_xi_outlet.setText("0.0"); self.edit_xi_outlet.setFixedWidth(80)
+        self.edit_xi_outlet.setToolTip("出口渐变段系数 ξ₂，仅用于 ΔZ3；出水口构件系数请在结构段表中设置")
         outlet_r1.addWidget(self.edit_xi_outlet)
         self.lbl_xi_outlet_hint = QLabel("")
         self.lbl_xi_outlet_hint.setStyleSheet("color:#0066CC;font-size:12px;")
@@ -1457,7 +1471,7 @@ body{
   <div class="card">
     <div class="card-label"><span class="dot"></span>总水头损失</div>
     $$\Delta Z = \Delta Z_1 + \Delta Z_2 - \Delta Z_3$$
-    <div class="note">ΔZ₁ = 进口渐变段水面落差（进口局部损失 + 流速水头增加）；ΔZ₂ = 管身段总损失（沿程 + 管内局部）；ΔZ₃ = 出口渐变段净回升水头（动能回收，取减号）</div>
+    <div class="note">ΔZ₁ = 进口渐变段水面落差（由 ξ₁ 参与）；ΔZ₂ = 管道段总损失（沿程 + 管道局部，含进出水口构件）；ΔZ₃ = 出口渐变段净回升水头（由 ξ₂ 参与，取减号）</div>
   </div>
 </div>
 
@@ -1519,9 +1533,9 @@ body{
     <div class="note">$\beta_2$：支墩形状系数；$s_2$：支墩厚度；$b_2$：支墩净距</div>
   </div>
   <div class="card">
-    <div class="card-label"><span class="dot"></span>出水口局部阻力系数</div>
+    <div class="card-label"><span class="dot"></span>出水口构件局部阻力系数</div>
     $$\xi_c = \left(1 - \frac{\omega_g}{\omega_q}\right)^2$$
-    <div class="note">$\omega_g$：管道断面积 $= Q/v$；$\omega_q$：下游明渠断面积</div>
+    <div class="note">$\omega_g$：管道断面积 $= Q/v$；$\omega_q$：下游明渠断面积；该系数计入 $\Delta Z_2$，不替代出口渐变段系数 $\xi_2$</div>
   </div>
   <div class="card">
     <div class="card-label"><span class="dot"></span>管道渐变段局部阻力系数</div>
@@ -1548,7 +1562,7 @@ document.addEventListener("DOMContentLoaded", function(){
             "=" * 60, "",
             "操作步骤：",
             "  1. 设置全局参数（设计流量、拟定流速、糙率）",
-            "  2. 设置渐变段型式和局部损失系数",
+            "  2. 设置进口/出口渐变段型式和系数 ξ₁、ξ₂",
             "  3. 设置进出口流速（v₁、v₃）和v₂策略",
             "  4. 管理结构段（通用构件 + 管身段）",
             "  5. 输入纵断面变坡点（手动或导入DXF）",
@@ -1560,7 +1574,7 @@ document.addEventListener("DOMContentLoaded", function(){
             "  4. 双击表格行可编辑该行数据",
             "  5. 使用↑↓按钮可调整顺序（首末行除外）",
             "  6. 表格分三区：通用构件(黄) → 平面段(蓝) → 纵断面段(绿)",
-            "  7. 通用构件：进水口、拦污栅、闸门槽、旁通管、其他、出水口（仅贡献ξ）",
+            "  7. 通用构件：进水口、拦污栅、闸门槽、旁通管、其他、出水口（均计入 ΔZ2 的局部损失）",
             "  8. 管身段：直管、弯管、折管（涉及几何线形和水头损失计算）",
             "  9. 初始纵断面数据为示例（灰色显示），导入DXF或手动添加后将自动替换", "",
             "功能特性：",
@@ -1737,6 +1751,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 self._plan_segments_dirty_since_import = False
             if 'plan_total_length' in kwargs:
                 self.plan_total_length = kwargs['plan_total_length']
+            self._restore_legacy_plan_segment_source_ip_indices()
 
         # 纵断面节点
         if 'longitudinal_nodes' in kwargs:
@@ -1778,6 +1793,8 @@ document.addEventListener("DOMContentLoaded", function(){
     def get_total_head_loss(self):
         """获取总水头损失（便捷方法）"""
         if self.calculation_result:
+            if float(getattr(self.calculation_result, "increase_percent", 0.0) or 0.0) > 0:
+                return self.calculation_result.total_head_loss_inc
             return self.calculation_result.total_head_loss
         return None
 
@@ -1789,7 +1806,7 @@ document.addEventListener("DOMContentLoaded", function(){
             return
         self.plan_segments = []
         for item in plan_data:
-            seg_type_str = item.get("segment_type", "直管")
+            seg_type_str = item.get("segment_type", item.get("type", "直管"))
             seg_type = SegmentType.STRAIGHT
             for st in SegmentType:
                 if st.value == seg_type_str:
@@ -1814,22 +1831,400 @@ document.addEventListener("DOMContentLoaded", function(){
             return
         self.plan_feature_points = []
         for item in fp_data:
-            tt = TurnType.NONE
-            for t in TurnType:
-                if t.value == item.get("turn_type", "无"):
-                    tt = t
-                    break
-            fp = PlanFeaturePoint(
-                chainage=item.get("chainage", 0.0),
-                x=item.get("x", 0.0),
-                y=item.get("y", 0.0),
-                azimuth_meas_deg=item.get("azimuth", 0.0),
-                turn_radius=item.get("turn_radius", 0.0),
-                turn_angle=item.get("turn_angle", 0.0),
-                turn_type=tt,
-                ip_index=item.get("ip_index", 0),
-            )
+            if isinstance(item, PlanFeaturePoint):
+                fp = item
+            else:
+                fp = PlanFeaturePoint.from_dict(item)
             self.plan_feature_points.append(fp)
+
+    @staticmethod
+    def _plan_turn_feature_point_matches_segment(seg, fp):
+        """判断平面弯/折段是否与某个特征点类型和几何一致。"""
+        if seg.direction != SegmentDirection.PLAN:
+            return False
+        if seg.segment_type == SegmentType.BEND:
+            if fp.turn_type != TurnType.ARC or fp.turn_angle <= 0 or fp.turn_radius <= 0:
+                return False
+            return HydraulicCore._segment_matches_event_geometry(
+                seg, TurnType.ARC, fp.turn_radius, fp.turn_angle
+            )
+        if seg.segment_type == SegmentType.FOLD:
+            if fp.turn_type != TurnType.FOLD or fp.turn_angle <= 0:
+                return False
+            return HydraulicCore._segment_matches_event_geometry(
+                seg, TurnType.FOLD, 0.0, fp.turn_angle
+            )
+        return False
+
+    @staticmethod
+    def _resolve_unique_plan_source_ip_assignments(candidate_map):
+        """只返回在全部最大一对一匹配里都唯一确定的平面来源编号。"""
+        if not candidate_map:
+            return {}
+
+        seg_ids = sorted(candidate_map, key=lambda seg_id: (len(candidate_map[seg_id]), seg_id))
+        best_size = -1
+        best_matchings = []
+
+        def _search(pos, used_ip_indices, current_matching):
+            nonlocal best_size, best_matchings
+
+            possible_extra = 0
+            for idx in range(pos, len(seg_ids)):
+                seg_id = seg_ids[idx]
+                if any(ip_index not in used_ip_indices for ip_index in candidate_map[seg_id]):
+                    possible_extra += 1
+            if len(current_matching) + possible_extra < best_size:
+                return
+
+            if pos >= len(seg_ids):
+                current_size = len(current_matching)
+                if current_size > best_size:
+                    best_size = current_size
+                    best_matchings = [dict(current_matching)]
+                elif current_size == best_size:
+                    best_matchings.append(dict(current_matching))
+                return
+
+            seg_id = seg_ids[pos]
+            available_ip_indices = [
+                ip_index for ip_index in candidate_map[seg_id]
+                if ip_index not in used_ip_indices
+            ]
+
+            # 先尝试分配，再保留“本段无法唯一恢复”的分支，由最大匹配规模统一裁决。
+            for ip_index in available_ip_indices:
+                used_ip_indices.add(ip_index)
+                current_matching[seg_id] = ip_index
+                _search(pos + 1, used_ip_indices, current_matching)
+                current_matching.pop(seg_id, None)
+                used_ip_indices.remove(ip_index)
+
+            _search(pos + 1, used_ip_indices, current_matching)
+
+        _search(0, set(), {})
+        if best_size <= 0 or not best_matchings:
+            return {}
+
+        unique_assignments = {}
+        for seg_id in seg_ids:
+            assigned_ip_indices = {
+                matching.get(seg_id) for matching in best_matchings
+            }
+            if len(assigned_ip_indices) == 1:
+                assigned_ip_index = next(iter(assigned_ip_indices))
+                if assigned_ip_index is not None:
+                    unique_assignments[seg_id] = assigned_ip_index
+        return unique_assignments
+
+    def _restore_legacy_plan_segment_source_ip_indices(self):
+        """旧项目兼容：按类型+几何唯一关系为平面弯/折段补回来源编号。"""
+        if not SIPHON_AVAILABLE or not self.plan_feature_points or not self.plan_segments:
+            return
+
+        unresolved_segments = [
+            (idx, seg)
+            for idx, seg in enumerate(self.plan_segments)
+            if seg.direction == SegmentDirection.PLAN
+            and seg.segment_type in (SegmentType.BEND, SegmentType.FOLD)
+            and seg.source_ip_index is None
+        ]
+        if not unresolved_segments:
+            return
+
+        used_ip_indices = {
+            seg.source_ip_index
+            for seg in self.plan_segments
+            if seg.direction == SegmentDirection.PLAN
+            and seg.segment_type in (SegmentType.BEND, SegmentType.FOLD)
+            and seg.source_ip_index is not None
+        }
+
+        candidate_map = {}
+        for seg_index, seg in unresolved_segments:
+            matched_ip_indices = []
+            for fp in self.plan_feature_points:
+                ip_index = getattr(fp, 'ip_index', None)
+                if ip_index is None or ip_index in used_ip_indices:
+                    continue
+                if self._plan_turn_feature_point_matches_segment(seg, fp):
+                    matched_ip_indices.append(ip_index)
+            if matched_ip_indices:
+                candidate_map[seg_index] = sorted(set(matched_ip_indices))
+
+        unique_assignments = self._resolve_unique_plan_source_ip_assignments(candidate_map)
+        for seg_index, ip_index in unique_assignments.items():
+            self.plan_segments[seg_index].source_ip_index = ip_index
+
+    @staticmethod
+    def _copy_segment_runtime_fields(old_seg, new_seg):
+        """复制结构段运行时字段，避免重建后丢掉用户系数和锁定态。"""
+        new_seg.xi_user = old_seg.xi_user
+        new_seg.xi_calc = old_seg.xi_calc
+        new_seg.locked = old_seg.locked
+
+    def _copy_segments_by_type_order(self, old_segments, new_segments, matched_old=None, matched_new=None):
+        """按同类型出现顺序补拷运行时字段，用于旧档兜底迁移。"""
+        matched_old = matched_old or set()
+        matched_new = matched_new or set()
+        old_by_type = {}
+        for idx, seg in enumerate(old_segments):
+            if idx in matched_old:
+                continue
+            old_by_type.setdefault(seg.segment_type, []).append((idx, seg))
+
+        type_offsets = {}
+        for new_idx, new_seg in enumerate(new_segments):
+            if new_idx in matched_new:
+                continue
+            candidates = old_by_type.get(new_seg.segment_type, [])
+            offset = type_offsets.get(new_seg.segment_type, 0)
+            if offset >= len(candidates):
+                continue
+            old_idx, old_seg = candidates[offset]
+            type_offsets[new_seg.segment_type] = offset + 1
+            matched_old.add(old_idx)
+            matched_new.add(new_idx)
+            self._copy_segment_runtime_fields(old_seg, new_seg)
+
+    def _copy_plan_segment_coefficients(self, old_plan_segments, new_plan_segments):
+        """优先按来源点匹配平面段，再按同类型顺序兜底复制运行时字段。"""
+        matched_old = set()
+        matched_new = set()
+        old_lookup = {}
+        for idx, seg in enumerate(old_plan_segments):
+            if seg.segment_type not in (SegmentType.BEND, SegmentType.FOLD):
+                continue
+            if seg.source_ip_index is None:
+                continue
+            old_lookup.setdefault((seg.segment_type, seg.source_ip_index), []).append((idx, seg))
+
+        for new_idx, seg in enumerate(new_plan_segments):
+            if seg.segment_type not in (SegmentType.BEND, SegmentType.FOLD):
+                continue
+            if seg.source_ip_index is None:
+                continue
+            matched = old_lookup.get((seg.segment_type, seg.source_ip_index), [])
+            if len(matched) != 1:
+                continue
+            old_idx, old_seg = matched[0]
+            matched_old.add(old_idx)
+            matched_new.add(new_idx)
+            self._copy_segment_runtime_fields(old_seg, seg)
+
+        self._copy_segments_by_type_order(old_plan_segments, new_plan_segments, matched_old, matched_new)
+
+    @staticmethod
+    def _segment_horizontal_length(seg):
+        """根据空间长度和高差反推纵断面水平投影长度。"""
+        s_elev = seg.start_elevation if seg.start_elevation is not None else 0.0
+        e_elev = seg.end_elevation if seg.end_elevation is not None else 0.0
+        dh = e_elev - s_elev
+        length = float(seg.length or 0.0)
+        if length <= 0:
+            return 0.0
+        return math.sqrt(max(0.0, length ** 2 - dh ** 2))
+
+    def _segment_slope_rad(self, seg):
+        """计算结构段在纵断面上的坡角，用于旧弯管圆弧重建。"""
+        if seg is None:
+            return None
+        s_elev = seg.start_elevation if seg.start_elevation is not None else 0.0
+        e_elev = seg.end_elevation if seg.end_elevation is not None else 0.0
+        dh = e_elev - s_elev
+        ds = self._segment_horizontal_length(seg)
+        if ds <= 1e-9 and abs(dh) <= 1e-9:
+            return None
+        if ds <= 1e-9:
+            return math.pi / 2 if dh > 0 else -math.pi / 2
+        return math.atan2(dh, ds)
+
+    def _infer_legacy_profile_arc_geometry(self, long_segs, index, start_chainage):
+        """按前后坡向为旧弯管段补建圆弧真源。"""
+        seg = long_segs[index]
+        if seg.segment_type != SegmentType.BEND or seg.radius <= 0 or seg.angle <= 0:
+            return None
+        ds = self._segment_horizontal_length(seg)
+        if ds <= 1e-9:
+            return None
+        start_point = (
+            float(start_chainage),
+            float(seg.start_elevation if seg.start_elevation is not None else 0.0),
+        )
+        end_point = (
+            float(start_chainage + ds),
+            float(seg.end_elevation if seg.end_elevation is not None else 0.0),
+        )
+        prev_seg = long_segs[index - 1] if index > 0 else None
+        next_seg = long_segs[index + 1] if index + 1 < len(long_segs) else None
+        slope_before = self._segment_slope_rad(prev_seg)
+        slope_after = self._segment_slope_rad(next_seg)
+        current_slope = self._segment_slope_rad(seg)
+        if slope_before is None:
+            slope_before = current_slope
+        if slope_after is None:
+            slope_after = current_slope
+        if slope_before is None or slope_after is None:
+            return None
+        return build_profile_arc_geometry_from_context(
+            start=start_point,
+            end=end_point,
+            radius=seg.radius,
+            sweep_rad=math.radians(seg.angle),
+            start_chainage=start_point[0],
+            end_chainage=end_point[0],
+            slope_before_rad=slope_before,
+            slope_after_rad=slope_after,
+            mode="manual_rebuilt",
+        )
+
+    def _migrate_legacy_plan_geometry(self):
+        """旧项目兼容：为缺失圆弧真源的平面数据补建规范化几何。"""
+        if not SIPHON_AVAILABLE or len(self.plan_feature_points) < 2:
+            return False
+
+        needs_point_arc = any(
+            fp.turn_type == TurnType.ARC and fp.turn_radius > 0 and not fp.arc_geometry
+            for fp in self.plan_feature_points
+        )
+        needs_segment_rebuild = not self.plan_segments
+        needs_segment_arc = any(
+            seg.direction == SegmentDirection.PLAN and
+            seg.segment_type == SegmentType.BEND and
+            not seg.arc_geometry
+            for seg in self.plan_segments
+        )
+        if not needs_point_arc and not needs_segment_rebuild and not needs_segment_arc:
+            self._restore_legacy_plan_segment_source_ip_indices()
+            return False
+
+        old_plan_segments = list(self.plan_segments)
+        rebuilt_points, rebuilt_segments, total_length = DxfParser.build_plan_geometry_from_feature_points(
+            self.plan_feature_points
+        )
+        if not rebuilt_points:
+            return False
+
+        migrated = False
+        if needs_point_arc:
+            self.plan_feature_points = rebuilt_points
+            migrated = True
+
+        if needs_segment_rebuild:
+            self.plan_segments = rebuilt_segments
+            if total_length > 0:
+                self.plan_total_length = total_length
+            self._copy_plan_segment_coefficients(old_plan_segments, self.plan_segments)
+            migrated = True
+        elif needs_segment_arc:
+            ref_by_type = {}
+            for ref_seg in rebuilt_segments:
+                if ref_seg.segment_type not in (SegmentType.BEND, SegmentType.FOLD):
+                    continue
+                ref_by_type.setdefault(ref_seg.segment_type, []).append(ref_seg)
+
+            type_offsets = {}
+            for seg in self.plan_segments:
+                if seg.segment_type not in (SegmentType.BEND, SegmentType.FOLD):
+                    continue
+                refs = ref_by_type.get(seg.segment_type, [])
+                offset = type_offsets.get(seg.segment_type, 0)
+                if offset >= len(refs):
+                    continue
+                ref_seg = refs[offset]
+                type_offsets[seg.segment_type] = offset + 1
+                if seg.source_ip_index is None and ref_seg.source_ip_index is not None:
+                    seg.source_ip_index = ref_seg.source_ip_index
+                    migrated = True
+                if not seg.arc_geometry and ref_seg.arc_geometry:
+                    seg.arc_geometry = clone_arc_geometry(ref_seg.arc_geometry)
+                    migrated = True
+                if getattr(ref_seg, 'coordinates', None):
+                    seg.coordinates = list(ref_seg.coordinates)
+                if seg.length <= 0 and ref_seg.length > 0:
+                    seg.length = ref_seg.length
+                if seg.radius <= 0 and ref_seg.radius > 0:
+                    seg.radius = ref_seg.radius
+                if seg.angle <= 0 and ref_seg.angle > 0:
+                    seg.angle = ref_seg.angle
+            if total_length > 0 and self.plan_total_length <= 0:
+                self.plan_total_length = total_length
+
+        self._restore_legacy_plan_segment_source_ip_indices()
+        return migrated
+
+    def _migrate_legacy_longitudinal_geometry(self):
+        """旧项目兼容：为缺失节点或圆弧真源的纵断面数据补建规范化几何。"""
+        if not SIPHON_AVAILABLE:
+            return False
+
+        common_segments = [
+            seg for seg in self.segments if seg.direction == SegmentDirection.COMMON
+        ]
+        old_long_segs = [
+            seg for seg in self.segments if seg.direction == SegmentDirection.LONGITUDINAL
+        ]
+        if not old_long_segs and not self.longitudinal_nodes:
+            return False
+
+        migrated = False
+        old_nodes = list(self.longitudinal_nodes)
+        needs_segment_arc = any(
+            seg.segment_type == SegmentType.BEND and not seg.arc_geometry
+            for seg in old_long_segs
+        )
+        needs_segment_coordinates = any(
+            seg.segment_type in (SegmentType.STRAIGHT, SegmentType.BEND, SegmentType.FOLD)
+            and not getattr(seg, 'coordinates', None)
+            for seg in old_long_segs
+        )
+        needs_node_arc = any(
+            node.turn_type == TurnType.ARC and (
+                node.arc_center_s is None or
+                node.arc_center_z is None or
+                node.arc_end_chainage is None or
+                node.arc_theta_rad is None
+            )
+            for node in self.longitudinal_nodes
+        )
+        if old_long_segs and (not self.longitudinal_nodes or needs_segment_arc or needs_node_arc):
+            old_nodes = self._segments_to_nodes(old_long_segs)
+            if not old_nodes:
+                return False
+            self.longitudinal_nodes = old_nodes
+            self._longitudinal_is_example = self._is_example_longitudinal_data()
+            self._refresh_long_table()
+            migrated = True
+
+        if self.longitudinal_nodes and (migrated or needs_segment_arc or needs_segment_coordinates):
+            rebuilt_long_segs = self._nodes_to_segments(self.longitudinal_nodes)
+            if rebuilt_long_segs:
+                matched_old = set()
+                matched_new = set()
+                old_lookup = {}
+                for idx, seg in enumerate(old_long_segs):
+                    key = self._get_long_segment_sync_key(seg, old_nodes)
+                    if key is None:
+                        continue
+                    old_lookup.setdefault(key, []).append((idx, seg))
+                for new_idx, seg in enumerate(rebuilt_long_segs):
+                    key = self._get_long_segment_sync_key(seg, self.longitudinal_nodes)
+                    if key is None:
+                        continue
+                    matched = old_lookup.get(key, [])
+                    if not matched and key[0] == 'uid':
+                        matched = old_lookup.get(('index', key[1], seg.source_long_node_index), [])
+                    if len(matched) != 1:
+                        continue
+                    old_idx, old_seg = matched[0]
+                    matched_old.add(old_idx)
+                    matched_new.add(new_idx)
+                    self._copy_segment_runtime_fields(old_seg, seg)
+                self._copy_segments_by_type_order(old_long_segs, rebuilt_long_segs, matched_old, matched_new)
+                self.segments = common_segments + rebuilt_long_segs
+                migrated = True
+
+        return migrated
 
     def _update_plan_bend_radius(self):
         """根据 n×D 自动更新平面弯管段的半径"""
@@ -2356,13 +2751,7 @@ document.addEventListener("DOMContentLoaded", function(){
 
             # 仅当不是示例数据时才保存纵断面节点
             if not self._longitudinal_is_example:
-                d['longitudinal_nodes'] = [
-                    {'chainage': nd.chainage, 'elevation': nd.elevation,
-                     'vcr': nd.vertical_curve_radius,
-                     'turn_type': nd.turn_type.value if hasattr(nd.turn_type, 'value') else str(nd.turn_type),
-                     'turn_angle': nd.turn_angle}
-                    for nd in self.longitudinal_nodes
-                ]
+                d['longitudinal_nodes'] = [nd.to_dict() for nd in self.longitudinal_nodes]
 
             d['plan_source'] = self._plan_source
         # 保存计算结果
@@ -2382,6 +2771,13 @@ document.addEventListener("DOMContentLoaded", function(){
         self._override_restore_ready = False
         self._v_before_override_text = ""
         self._v_confirmed_before_override = False
+        self.segments = []
+        self.plan_segments = []
+        self.plan_feature_points = []
+        self.plan_total_length = 0.0
+        self.longitudinal_nodes = []
+        self._longitudinal_is_example = False
+        self._plan_source = 'none'
         self.edit_v.setReadOnly(False)
         if 'Q' in d: self.edit_Q.setText(str(d['Q']))
         if 'v_guess' in d:
@@ -2492,30 +2888,24 @@ document.addEventListener("DOMContentLoaded", function(){
             self.plan_feature_points = [
                 PlanFeaturePoint.from_dict(fp) for fp in d['plan_feature_points']
             ]
-        if 'longitudinal_nodes' in d and d['longitudinal_nodes'] and SIPHON_AVAILABLE:
-            self.longitudinal_nodes = []
-            for nd in d['longitudinal_nodes']:
-                tt = TurnType.NONE
-                tt_val = nd.get('turn_type', 'NONE')
-                for t in TurnType:
-                    if t.value == tt_val or t.name == tt_val:
-                        tt = t
-                        break
-                self.longitudinal_nodes.append(LongitudinalNode(
-                    chainage=nd.get('chainage', 0),
-                    elevation=nd.get('elevation', 0),
-                    vertical_curve_radius=nd.get('vcr', 0),
-                    turn_type=tt,
-                    turn_angle=nd.get('turn_angle', 0),
-                ))
-            self._refresh_long_table()
+        self._migrate_legacy_plan_geometry()
+        self._restore_legacy_plan_segment_source_ip_indices()
+        has_saved_longitudinal_nodes = bool(d.get('longitudinal_nodes')) and SIPHON_AVAILABLE
+        if has_saved_longitudinal_nodes:
+            self.longitudinal_nodes = [
+                LongitudinalNode.from_dict(nd) for nd in d['longitudinal_nodes']
+            ]
             # 检测是否为示例数据（与 _add_example_longitudinal 的数据完全一致）
             if self._is_example_longitudinal_data():
                 self._longitudinal_is_example = True
         else:
-            # 没有保存的纵断面数据，添加示例
-            if SIPHON_AVAILABLE:
+            migrated = self._migrate_legacy_longitudinal_geometry()
+            if not migrated and SIPHON_AVAILABLE:
+                # 没有保存的纵断面数据，且无法从旧结构段迁移时，回退到示例
                 self._add_example_longitudinal()
+        if has_saved_longitudinal_nodes:
+            self._migrate_legacy_longitudinal_geometry()
+            self._refresh_long_table()
         # 恢复平面数据来源
         if 'plan_source' in d:
             self._plan_source = d['plan_source']
@@ -2536,7 +2926,7 @@ document.addEventListener("DOMContentLoaded", function(){
             print(f"[DEBUG SiphonPanel.from_dict] 检测到 calculated_at={d['calculated_at']}，已自动确认")
 
         self._refresh_seg_table()
-        self._update_canvas()
+        self._do_update_canvas()
         self._update_data_status()
         self._apply_confirmation_state(confirmation_state)
         self._refresh_pipe_design_feedback()
@@ -2559,6 +2949,12 @@ document.addEventListener("DOMContentLoaded", function(){
             'xi_user': seg.xi_user, 'xi_calc': seg.xi_calc,
             'locked': seg.locked,
         }
+        if getattr(seg, 'coordinates', None):
+            d['coordinates'] = [
+                [float(pt[0]), float(pt[1])]
+                for pt in seg.coordinates
+                if isinstance(pt, (list, tuple)) and len(pt) >= 2
+            ]
         if hasattr(seg, 'custom_label') and seg.custom_label:
             d['custom_label'] = seg.custom_label
         if hasattr(seg, 'inlet_shape') and seg.inlet_shape:
@@ -2571,14 +2967,19 @@ document.addEventListener("DOMContentLoaded", function(){
             d['end_elev'] = seg.end_elevation
         if hasattr(seg, 'source_ip_index') and seg.source_ip_index is not None:
             d['source_ip_index'] = seg.source_ip_index
+        if hasattr(seg, 'source_long_node_index') and seg.source_long_node_index is not None:
+            d['source_long_node_index'] = seg.source_long_node_index
+        if hasattr(seg, 'arc_geometry') and seg.arc_geometry is not None:
+            d['arc_geometry'] = clone_arc_geometry(seg.arc_geometry)
         if hasattr(seg, 'trash_rack_params') and seg.trash_rack_params is not None:
             d['trash_rack_params'] = seg.trash_rack_params.to_dict()
         return d
 
     def _dict_to_seg(self, d):
         st = SegmentType.OTHER
+        seg_type_val = d.get('type', d.get('segment_type', ''))
         for s in SegmentType:
-            if s.value == d.get('type', ''):
+            if s.value == seg_type_val:
                 st = s
                 break
         direction = SegmentDirection.COMMON
@@ -2634,10 +3035,18 @@ document.addEventListener("DOMContentLoaded", function(){
         # 旧数据迁移：闸门槽无系数时补上默认 0.10
         if st == SegmentType.GATE_SLOT and xi_user is None and xi_calc is None:
             xi_user = 0.10
+        coordinates = []
+        for pt in d.get('coordinates', []):
+            if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                try:
+                    coordinates.append((float(pt[0]), float(pt[1])))
+                except (TypeError, ValueError):
+                    continue
         return StructureSegment(
             segment_type=st, direction=direction,
             length=length, radius=d.get('radius', 0), angle=d.get('angle', 0),
             xi_user=xi_user, xi_calc=xi_calc,
+            coordinates=coordinates,
             locked=d.get('locked', False),
             custom_label=d.get('custom_label', ''),
             inlet_shape=inlet_shape,
@@ -2645,6 +3054,8 @@ document.addEventListener("DOMContentLoaded", function(){
             start_elevation=d.get('start_elev'),
             end_elevation=d.get('end_elev'),
             source_ip_index=d.get('source_ip_index'),
+            source_long_node_index=d.get('source_long_node_index'),
+            arc_geometry=clone_arc_geometry(d.get('arc_geometry')),
             trash_rack_params=trash_rack_params,
         )
 
@@ -4114,7 +4525,10 @@ document.addEventListener("DOMContentLoaded", function(){
                 else:
                     item = self.long_table.item(r, c)
                     row.append(item.text() if item else "")
-            rows.append(row)
+            rows.append({
+                "values": row,
+                "node_uid": self._get_long_row_uid(r),
+            })
         return rows
 
     def _restore_long_table(self, snapshot):
@@ -4124,7 +4538,13 @@ document.addEventListener("DOMContentLoaded", function(){
         try:
             self.long_table.setRowCount(0)
             for row_data in snapshot:
-                self._add_long_node(row_data)
+                if isinstance(row_data, dict):
+                    self._add_long_node(
+                        row_data.get("values"),
+                        node_uid=row_data.get("node_uid"),
+                    )
+                else:
+                    self._add_long_node(row_data)
         finally:
             self._long_undo_group -= 1
             self._syncing = old_syncing
@@ -4170,19 +4590,64 @@ document.addEventListener("DOMContentLoaded", function(){
         combo.currentTextChanged.connect(self._on_long_table_edited)
         return combo
 
-    def _add_long_node(self, data=None):
+    def _ensure_long_table_item(self, row, col):
+        """确保纵断面节点表指定单元格存在 item。"""
+        item = self.long_table.item(row, col)
+        if item is None:
+            item = QTableWidgetItem("")
+            self.long_table.setItem(row, col, item)
+        return item
+
+    def _set_long_row_uid(self, row, node_uid):
+        """把稳定节点标识写入纵断面节点表首列。"""
+        item = self._ensure_long_table_item(row, 0)
+        item.setData(LONG_NODE_UID_ROLE, node_uid or uuid.uuid4().hex)
+
+    def _get_long_row_uid(self, row):
+        """读取纵断面节点表行对应的稳定节点标识。"""
+        item = self._ensure_long_table_item(row, 0)
+        node_uid = item.data(LONG_NODE_UID_ROLE)
+        if not node_uid:
+            node_uid = uuid.uuid4().hex
+            item.setData(LONG_NODE_UID_ROLE, node_uid)
+        return node_uid
+
+    def _set_long_row_arc_meta(self, row, node):
+        """把纵断面圆弧隐藏元数据写入表格首列，避免刷新时丢失。"""
+        item = self._ensure_long_table_item(row, 0)
+        item.setData(LONG_NODE_ARC_CENTER_S_ROLE, getattr(node, "arc_center_s", None))
+        item.setData(LONG_NODE_ARC_CENTER_Z_ROLE, getattr(node, "arc_center_z", None))
+        item.setData(LONG_NODE_ARC_END_CHAINAGE_ROLE, getattr(node, "arc_end_chainage", None))
+        item.setData(LONG_NODE_ARC_THETA_RAD_ROLE, getattr(node, "arc_theta_rad", None))
+
+    def _get_long_row_arc_meta(self, row):
+        """读取纵断面表格隐藏保存的圆弧元数据。"""
+        item = self._ensure_long_table_item(row, 0)
+        return {
+            "arc_center_s": item.data(LONG_NODE_ARC_CENTER_S_ROLE),
+            "arc_center_z": item.data(LONG_NODE_ARC_CENTER_Z_ROLE),
+            "arc_end_chainage": item.data(LONG_NODE_ARC_END_CHAINAGE_ROLE),
+            "arc_theta_rad": item.data(LONG_NODE_ARC_THETA_RAD_ROLE),
+        }
+
+    def _add_long_node(self, data=None, node_uid=None):
         self._push_long_undo()
         row = self.long_table.rowCount()
         self.long_table.insertRow(row)
         combo = self._create_turn_type_combo()
         self.long_table.setCellWidget(row, 3, combo)
+        for col in range(self.long_table.columnCount()):
+            if col == 3:
+                continue
+            self._ensure_long_table_item(row, col)
         if data and isinstance(data, (list, tuple)):
             for col, val in enumerate(data):
                 if col == 3:
                     idx = combo.findText(str(val))
                     if idx >= 0: combo.setCurrentIndex(idx)
                 elif col < self.long_table.columnCount():
-                    self.long_table.setItem(row, col, QTableWidgetItem(str(val) if val else ""))
+                    self.long_table.item(row, col).setText(str(val) if val else "")
+        self._set_long_row_uid(row, node_uid)
 
     def _del_long_node(self):
         rows = sorted(set(idx.row() for idx in self.long_table.selectedIndexes()), reverse=True)
@@ -4228,7 +4693,8 @@ document.addEventListener("DOMContentLoaded", function(){
                     tt_str,
                     f"{nd.turn_angle:.3f}" if nd.turn_angle > 0 else "",
                 ]
-                self._add_long_node(data)
+                self._add_long_node(data, node_uid=getattr(nd, "node_uid", None))
+                self._set_long_row_arc_meta(self.long_table.rowCount() - 1, nd)
 
             # 示例数据样式：灰色斜体
             if self._longitudinal_is_example:
@@ -4515,6 +4981,11 @@ document.addEventListener("DOMContentLoaded", function(){
                             dxf_outlet = s
                         else:
                             dxf_pipe.append(s)
+                    rebuilt_long_pipe = self._nodes_to_segments(long_nodes)
+                    for pipe_seg in rebuilt_long_pipe:
+                        pipe_seg.locked = True
+                    if rebuilt_long_pipe:
+                        dxf_pipe = rebuilt_long_pipe
                     # 保留已有进水口的形状和系数设置
                     existing_inlet = next((s for s in self.segments
                                            if s.segment_type == SegmentType.INLET), None)
@@ -4572,12 +5043,19 @@ document.addEventListener("DOMContentLoaded", function(){
             combo = self.long_table.cellWidget(r, 3)
             tt_str = combo.currentText() if combo else "无"
             angle = self._cell_float(self.long_table, r, 4)
+            node_uid = self._get_long_row_uid(r)
+            arc_meta = self._get_long_row_arc_meta(r)
             tt = TurnType.NONE
             if tt_str == "圆弧": tt = TurnType.ARC
             elif tt_str == "折线": tt = TurnType.FOLD
             nodes.append(LongitudinalNode(
                 chainage=chainage, elevation=elevation,
-                vertical_curve_radius=vcr, turn_type=tt, turn_angle=angle))
+                vertical_curve_radius=vcr, turn_type=tt, turn_angle=angle,
+                arc_center_s=arc_meta.get("arc_center_s"),
+                arc_center_z=arc_meta.get("arc_center_z"),
+                arc_end_chainage=arc_meta.get("arc_end_chainage"),
+                arc_theta_rad=arc_meta.get("arc_theta_rad"),
+                node_uid=node_uid))
         # 补全坡角：从相邻节点的高程差推算 slope_before / slope_after
         n = len(nodes)
         for i in range(n):
@@ -4630,6 +5108,7 @@ document.addEventListener("DOMContentLoaded", function(){
         try:
             nodes = self._build_longitudinal_nodes()
             common = [s for s in self.segments if s.direction == SegmentDirection.COMMON]
+            old_long_segs = [s for s in self.segments if s.direction == SegmentDirection.LONGITUDINAL]
             if valid_rows < 2 or len(nodes) < 2:
                 # 节点不足：清空纵断面管身段，保留通用构件
                 self.segments = common
@@ -4638,6 +5117,9 @@ document.addEventListener("DOMContentLoaded", function(){
                 self._update_canvas()
                 return
             new_long_segs = self._nodes_to_segments(nodes)
+            self._copy_long_segment_coefficients(
+                old_long_segs, self.longitudinal_nodes, new_long_segs, nodes
+            )
             self.segments = common + new_long_segs
             self.longitudinal_nodes = nodes
             self._update_segment_coefficients()
@@ -4645,6 +5127,43 @@ document.addEventListener("DOMContentLoaded", function(){
             self._update_canvas()
         finally:
             self._syncing = False
+
+    def _get_long_segment_sync_key(self, seg, nodes):
+        """生成纵断面转弯段同步用匹配键，优先使用稳定节点标识。"""
+        if seg.source_long_node_index is None:
+            return None
+        if seg.segment_type not in (SegmentType.BEND, SegmentType.FOLD):
+            return None
+        idx = seg.source_long_node_index
+        if 0 <= idx < len(nodes):
+            node_uid = getattr(nodes[idx], 'node_uid', '')
+            if node_uid:
+                return ('uid', seg.segment_type, node_uid)
+        return ('index', seg.segment_type, idx)
+
+    def _copy_long_segment_coefficients(self, old_long_segs, old_nodes, new_long_segs, new_nodes):
+        """按来源节点映射复制纵断面转弯段的手工/自动局部系数。"""
+        old_lookup = {}
+        for seg in old_long_segs:
+            key = self._get_long_segment_sync_key(seg, old_nodes)
+            if key is None:
+                continue
+            old_lookup.setdefault(key, []).append(seg)
+
+        for seg in new_long_segs:
+            key = self._get_long_segment_sync_key(seg, new_nodes)
+            if key is None:
+                continue
+            matched = old_lookup.get(key, [])
+            if not matched and key[0] == 'uid':
+                fallback_key = ('index', key[1], seg.source_long_node_index)
+                matched = old_lookup.get(fallback_key, [])
+            if len(matched) != 1:
+                continue
+            old_seg = matched[0]
+            seg.xi_user = old_seg.xi_user
+            seg.xi_calc = old_seg.xi_calc
+            seg.locked = old_seg.locked
 
     def _sync_segments_to_nodes(self):
         """反向同步：从纵断面管身段重建节点表"""
@@ -4685,14 +5204,51 @@ document.addEventListener("DOMContentLoaded", function(){
 
             if curr.turn_type == TurnType.ARC and curr.vertical_curve_radius > 0:
                 # 弧段：从 ARC 节点到下一节点
+                arc_theta_rad = curr.arc_theta_rad if curr.arc_theta_rad else math.radians(curr.turn_angle)
+                arc_length = length
+                arc_end_chainage = (
+                    curr.arc_end_chainage
+                    if curr.arc_end_chainage is not None
+                    else nxt.chainage
+                )
+                arc_geometry = None
+                if (curr.arc_center_s is not None and curr.arc_center_z is not None and
+                        arc_theta_rad and arc_end_chainage is not None):
+                    center = (curr.arc_center_s, curr.arc_center_z)
+                    start_radius = math.hypot(curr.chainage - center[0], curr.elevation - center[1])
+                    end_radius = math.hypot(nxt.chainage - center[0], nxt.elevation - center[1])
+                    radius_tol = max(0.05, curr.vertical_curve_radius * 0.02)
+                    if (abs(start_radius - curr.vertical_curve_radius) <= radius_tol and
+                            abs(end_radius - curr.vertical_curve_radius) <= radius_tol):
+                        arc_length = curr.vertical_curve_radius * abs(arc_theta_rad)
+                        arc_geometry = build_arc_geometry(
+                            kind="profile",
+                            mode="dxf_segment",
+                            start=(curr.chainage, curr.elevation),
+                            end=(nxt.chainage, nxt.elevation),
+                            center=center,
+                            radius=curr.vertical_curve_radius,
+                            sweep_rad=abs(arc_theta_rad),
+                            clockwise=infer_arc_clockwise(
+                                (curr.chainage, curr.elevation),
+                                (nxt.chainage, nxt.elevation),
+                                center,
+                                abs(arc_theta_rad),
+                            ),
+                            start_chainage=curr.chainage,
+                            end_chainage=arc_end_chainage,
+                        )
                 segments.append(StructureSegment(
                     segment_type=SegmentType.BEND,
-                    length=round(length, 4),
+                    length=round(arc_length, 4),
                     radius=curr.vertical_curve_radius,
-                    angle=curr.turn_angle if curr.turn_angle > 0 else 0,
+                    angle=curr.turn_angle if curr.turn_angle > 0 else math.degrees(abs(arc_theta_rad)),
                     start_elevation=curr.elevation,
                     end_elevation=nxt.elevation,
                     direction=SegmentDirection.LONGITUDINAL,
+                    source_long_node_index=i,
+                    coordinates=[(curr.chainage, curr.elevation), (nxt.chainage, nxt.elevation)],
+                    arc_geometry=arc_geometry,
                 ))
                 i += 1
 
@@ -4705,6 +5261,8 @@ document.addEventListener("DOMContentLoaded", function(){
                     start_elevation=curr.elevation,
                     end_elevation=nxt.elevation,
                     direction=SegmentDirection.LONGITUDINAL,
+                    source_long_node_index=i,
+                    coordinates=[(curr.chainage, curr.elevation), (nxt.chainage, nxt.elevation)],
                 ))
                 i += 1
 
@@ -4722,6 +5280,12 @@ document.addEventListener("DOMContentLoaded", function(){
                         start_elevation=curr.elevation,
                         end_elevation=nxt2.elevation,
                         direction=SegmentDirection.LONGITUDINAL,
+                        source_long_node_index=i + 1,
+                        coordinates=[
+                            (curr.chainage, curr.elevation),
+                            (nxt.chainage, nxt.elevation),
+                            (nxt2.chainage, nxt2.elevation),
+                        ],
                     ))
                     i += 2
                 else:
@@ -4733,6 +5297,8 @@ document.addEventListener("DOMContentLoaded", function(){
                         start_elevation=curr.elevation,
                         end_elevation=nxt.elevation,
                         direction=SegmentDirection.LONGITUDINAL,
+                        source_long_node_index=i + 1,
+                        coordinates=[(curr.chainage, curr.elevation), (nxt.chainage, nxt.elevation)],
                     ))
                     i += 1
 
@@ -4744,6 +5310,7 @@ document.addEventListener("DOMContentLoaded", function(){
                     start_elevation=curr.elevation,
                     end_elevation=nxt.elevation,
                     direction=SegmentDirection.LONGITUDINAL,
+                    coordinates=[(curr.chainage, curr.elevation), (nxt.chainage, nxt.elevation)],
                 ))
                 i += 1
         return segments
@@ -4762,7 +5329,7 @@ document.addEventListener("DOMContentLoaded", function(){
         chainage = self.longitudinal_nodes[0].chainage if self.longitudinal_nodes else 0.0
         nodes = []
 
-        for seg in long_segs:
+        for seg_index, seg in enumerate(long_segs):
             s_elev = seg.start_elevation if seg.start_elevation is not None else 0.0
             e_elev = seg.end_elevation if seg.end_elevation is not None else 0.0
             dh = e_elev - s_elev
@@ -4781,7 +5348,21 @@ document.addEventListener("DOMContentLoaded", function(){
                 nodes[-1].turn_type = TurnType.ARC
                 nodes[-1].vertical_curve_radius = seg.radius
                 nodes[-1].turn_angle = seg.angle
-                chainage += ds
+                arc_geometry = clone_arc_geometry(seg.arc_geometry)
+                if arc_geometry is None:
+                    arc_geometry = self._infer_legacy_profile_arc_geometry(long_segs, seg_index, chainage)
+                if arc_geometry is not None:
+                    center = arc_geometry.get('center')
+                    if isinstance(center, list) and len(center) >= 2:
+                        nodes[-1].arc_center_s = center[0]
+                        nodes[-1].arc_center_z = center[1]
+                    nodes[-1].arc_end_chainage = arc_geometry.get('end_chainage')
+                    nodes[-1].arc_theta_rad = arc_geometry.get('sweep_rad')
+                    if nodes[-1].turn_angle <= 0:
+                        nodes[-1].turn_angle = math.degrees(abs(arc_geometry.get('sweep_rad', 0.0)))
+                    chainage = arc_geometry.get('end_chainage', chainage + ds)
+                else:
+                    chainage += ds
                 nodes.append(LongitudinalNode(
                     chainage=round(chainage, 3),
                     elevation=round(e_elev, 3),
@@ -4946,7 +5527,7 @@ document.addEventListener("DOMContentLoaded", function(){
                         position=InfoBarPosition.TOP,
                     )
                     return
-                inc_pct_for_engine = increase_resolution.manual_increase_percent
+                inc_pct_for_engine = increase_resolution.engine_increase_percent
 
                 # 读取加大流量工况的流速参数
                 v1_inc_text = self.edit_v1_inc.text().strip()
@@ -5021,6 +5602,16 @@ document.addEventListener("DOMContentLoaded", function(){
                 InfoBar.warning("流速提示",
                     f"加大流量工况管道流速 {result.velocity_increased:.3f} m/s 超过建议上限 2.5 m/s",
                     parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
+
+            if result.ignored_manual_overrides:
+                ignored_count = len(result.ignored_manual_overrides)
+                InfoBar.warning(
+                    "手工局部系数提示",
+                    f"本次有 {ignored_count} 条手工局部系数未被采用，详细计算过程已说明原因。",
+                    parent=self._info_parent(),
+                    duration=6000,
+                    position=InfoBarPosition.TOP,
+                )
 
             # 水损阈值检查（针对加大流量工况）
             threshold_str = self.edit_threshold.text().strip()
@@ -5396,7 +5987,7 @@ document.addEventListener("DOMContentLoaded", function(){
             ("水力半径 Rh", f"{r.hydraulic_radius:.4f} m"),
             ("谢才系数 C", f"{r.chezy_c:.4f}"),
             ("进口渐变段落差 ΔZ₁", f"{r.loss_inlet:.4f} m"),
-            ("管身段水头损失 ΔZ₂", f"{r.loss_pipe:.4f} m"),
+            ("管道段水头损失 ΔZ₂", f"{r.loss_pipe:.4f} m"),
             ("  其中沿程损失 hf", f"{r.loss_friction:.4f} m"),
             ("  其中局部损失 hj", f"{r.loss_local:.4f} m"),
             ("出口渐变段落差 ΔZ₃", f"{r.loss_outlet:.4f} m"),
@@ -5461,7 +6052,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 ("谢才系数 C", f"{r.chezy_c:.4f}"),
                 ("", ""),
                 ("进口渐变段落差 ΔZ1", f"{r.loss_inlet:.4f} m"),
-                ("管身段水头损失 ΔZ2", f"{r.loss_pipe:.4f} m"),
+                ("管道段水头损失 ΔZ2", f"{r.loss_pipe:.4f} m"),
                 ("  沿程损失 hf", f"{r.loss_friction:.4f} m"),
                 ("  局部损失 hj", f"{r.loss_local:.4f} m"),
                 ("出口渐变段落差 ΔZ3", f"{r.loss_outlet:.4f} m"),
