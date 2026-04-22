@@ -413,6 +413,23 @@ def test_get_building_display_name_falls_back_to_structure_for_unnamed_open_chan
     assert display == "明渠-圆形"
 
 
+@pytest.mark.parametrize(
+    ("structure", "name", "expected"),
+    [
+        ("暗涵-矩形", "莲花", "莲花暗涵"),
+        ("暗涵-圆拱直墙型", "青山", "青山暗涵"),
+        ("暗涵-矩形", "", "暗涵-矩形"),
+        ("暗涵-圆拱直墙型", "", "暗涵-圆拱直墙型"),
+    ],
+)
+def test_get_building_display_name_uses_expected_rule_for_culvert_family(structure, name, expected):
+    node = _make_node(ip_no=6, mc=96, structure=structure, name=name)
+
+    display = cad_tools._get_building_display_name(node)
+
+    assert display == expected
+
+
 def test_draw_profile_on_msp_places_slope_text_at_true_boundary_center(monkeypatch):
     ezdxf_stub = SimpleNamespace(
         enums=SimpleNamespace(
@@ -485,7 +502,7 @@ def test_standard_profile_middle_culvert_ip0_keeps_short_vline_and_aligned_slope
     nodes = [
         _make_node(ip_no=0, mc=0.0, structure="隧洞-圆形", name="大垭口", in_out="进"),
         _make_node(ip_no=1, mc=88.63878, structure="隧洞-圆形", name="大垭口", in_out="出"),
-        _make_node(ip_no=0, mc=98.166893, structure="暗涵-矩形", in_out="进"),
+        _make_node(ip_no=0, mc=98.166893, structure="暗涵-矩形", name="莲花", in_out="进"),
         _make_node(ip_no=2, mc=108.251397, structure="隧洞-圆形", name="蓬莱", in_out="进"),
         _make_node(ip_no=3, mc=200.0, structure="隧洞-圆形", name="蓬莱", in_out="出"),
     ]
@@ -530,7 +547,74 @@ def test_standard_profile_middle_culvert_ip0_keeps_short_vline_and_aligned_slope
     building_xs = sorted(
         rec["x"]
         for rec in msp.text_records
-        if abs(rec["y"] - building_y) <= 1e-6 and rec["text"] in {"大垭口隧洞", "暗涵-矩形", "蓬莱隧洞"}
+        if abs(rec["y"] - building_y) <= 1e-6 and rec["text"] in {"大垭口隧洞", "莲花暗涵", "蓬莱隧洞"}
     )
 
     assert slope_xs == pytest.approx(building_xs)
+
+
+@pytest.mark.parametrize(
+    ("structure", "name", "expected"),
+    [
+        ("暗涵-矩形", "", "暗涵-矩形"),
+        ("暗涵-圆拱直墙型", "", "暗涵-圆拱直墙型"),
+    ],
+)
+def test_draw_profile_on_msp_keeps_structure_text_for_unnamed_culvert(structure, name, expected, monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="上游渠道"),
+        _make_node(ip_no=2, mc=100.0, structure=structure, name=name, in_out="进"),
+        _make_node(ip_no=3, mc=180.0, structure="明渠-矩形", name="下游渠道"),
+    ]
+    settings = _draw_settings()
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        settings,
+        station_prefix="",
+    )
+
+    _enabled_ids, row_layout, _total_height, _line_height, _boundaries = cad_tools._build_profile_row_layout(settings)
+    building_y = row_layout["building_name"]["text_y"]
+    building_texts = {
+        rec["text"]
+        for rec in msp.text_records
+        if abs(rec["y"] - building_y) <= 1e-6 and rec["text"] != "建筑物名称"
+    }
+
+    assert expected in building_texts
+
+
+def test_build_standard_longitudinal_txt_lines_uses_same_culvert_naming_rule():
+    nodes = [
+        _make_node(ip_no=1, mc=0.0, structure="明渠-矩形", name="一支渠"),
+        _make_node(ip_no=2, mc=80.0, structure="暗涵-矩形", name="莲花", in_out="进"),
+        _make_node(ip_no=3, mc=140.0, structure="暗涵-圆拱直墙型", name="", in_out="进"),
+        _make_node(ip_no=4, mc=220.0, structure="明渠-矩形", name="二支渠"),
+    ]
+    settings = _draw_settings()
+
+    lines = cad_tools._build_standard_longitudinal_txt_lines(
+        nodes,
+        nodes,
+        settings,
+        station_prefix="",
+    )
+
+    joined = "\n".join(lines)
+
+    assert "莲花暗涵" in joined
+    assert "暗涵-圆拱直墙型" in joined

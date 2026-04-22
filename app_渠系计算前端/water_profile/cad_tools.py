@@ -1375,6 +1375,7 @@ def _format_number(value):
 def _get_building_display_name(node):
     """获取纵断面用的建筑物名称显示"""
     struct_str = _get_node_structure_text(node)
+    name = str(getattr(node, "name", "") or "").strip()
     if node.is_transition or struct_str == "渐变段":
         return ""
     if getattr(node, "is_auto_inserted_channel", False):
@@ -1382,15 +1383,15 @@ def _get_building_display_name(node):
     if struct_str.startswith("明渠"):
         return struct_str
     if _is_culvert_family_structure(struct_str):
-        return struct_str
+        return f"{name}暗涵" if name else struct_str
     # 隧洞/倒虹吸/有压管道/渡槽 等特殊建筑物：只有进/出节点参与建筑物名称段的划定；
     # 内部 IP 节点不标注名称，否则 building_segments 会被碎化导致坡降行出现重叠。
     if _is_special_structure_sv(getattr(node, "structure_type", None)):
         if _in_out_val(getattr(node, "in_out", None)) not in ("进", "出"):
             return ""
-    if node.name:
+    if name:
         category = struct_str.split("-")[0]
-        return f"{node.name}{category}"
+        return f"{name}{category}"
     return struct_str.split("-")[0] if struct_str else ""
 
 
