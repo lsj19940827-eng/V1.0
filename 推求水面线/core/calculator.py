@@ -267,6 +267,50 @@ class WaterProfileCalculator:
         # 计算桩号
         self.geo_calc.calculate_stations(nodes, self._resolve_station_start(nodes))
 
+    def _collect_special_turn_preserve_targets(
+        self, nodes: List[ChannelNode]
+    ) -> Dict[int, Dict[str, Any]]:
+        """收集需要在几何重算时暂时放开进出口口径的真实特殊节点。"""
+        targets: Dict[int, Dict[str, Any]] = {}
+        for node in nodes:
+            if not self._is_real_profile_node(node):
+                continue
+            in_out = getattr(node, "in_out", None)
+            if in_out not in (InOutType.INLET, InOutType.OUTLET):
+                continue
+            try:
+                turn_angle = float(getattr(node, "turn_angle", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                turn_angle = 0.0
+            if abs(turn_angle) <= ZERO_TOLERANCE:
+                continue
+            targets[id(node)] = {
+                "turn_angle": turn_angle,
+                "in_out": in_out,
+            }
+        return targets
+
+    def _calculate_geometry_preserving_special_turns(
+        self, nodes: List[ChannelNode]
+    ) -> Dict[int, Dict[str, Any]]:
+        """重算几何前临时放开特殊进出口节点，避免既有非零转角被清零。"""
+        targets = self._collect_special_turn_preserve_targets(nodes)
+        for node in nodes:
+            payload = targets.get(id(node))
+            if not payload:
+                continue
+            node.turn_angle = float(payload["turn_angle"])
+            node.in_out = InOutType.NORMAL
+
+        self.calculate_geometry(nodes)
+
+        for node in nodes:
+            payload = targets.get(id(node))
+            if not payload:
+                continue
+            node.in_out = payload["in_out"]
+        return targets
+
     @staticmethod
     def _has_auxiliary_geometry_nodes(nodes: List[ChannelNode]) -> bool:
         """判断当前节点序列中是否已包含辅助拓扑行。"""
@@ -506,9 +550,9 @@ class WaterProfileCalculator:
         # 2. 识别并插入渐变段行和明渠段（仅在尚未插入时执行）
         if not has_auxiliary_nodes:
             nodes = self.identify_and_insert_transitions(nodes, open_channel_callback)
-        
+
         # 3. 几何计算
-        self.calculate_geometry(nodes)
+        self._calculate_geometry_preserving_special_turns(nodes)
         
         # 4. 水力计算（包含渐变段损失计入下游水位）
         self.calculate_hydraulics(nodes)

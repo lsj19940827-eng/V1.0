@@ -10,6 +10,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from 推求水面线.core.calculator import WaterProfileCalculator as RealWaterProfileCalculator
+from 推求水面线.models.data_models import ChannelNode as RealChannelNode
+from 推求水面线.models.data_models import ProjectSettings as RealProjectSettings
+from 推求水面线.models.enums import InOutType as RealInOutType
+from 推求水面线.models.enums import StructureType as RealStructureType
 
 
 def _install_panel_import_stubs():
@@ -369,6 +374,108 @@ def _make_node(**overrides):
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+def _make_real_calculator_node(
+    name,
+    structure_type,
+    x,
+    y,
+    *,
+    in_out=RealInOutType.NORMAL,
+    turn_radius=0.0,
+    turn_angle=0.0,
+    is_transition=False,
+    is_auto_inserted_channel=False,
+):
+    """构造真实计算器可直接使用的最小节点。"""
+    node = RealChannelNode(
+        flow_section="1",
+        name=name,
+        structure_type=structure_type,
+        x=x,
+        y=y,
+        turn_radius=turn_radius,
+        flow=1.0,
+        roughness=0.014,
+        section_params={"B": 2.0, "h": 1.0, "m": 1.0, "D": 1.0},
+    )
+    node.in_out = in_out
+    node.turn_angle = turn_angle
+    node.tangent_length = 2.0 if turn_angle else 0.0
+    node.arc_length = 4.0 if turn_angle else 0.0
+    node.curve_length = 4.0 if turn_angle else 0.0
+    node.is_transition = is_transition
+    node.is_auto_inserted_channel = is_auto_inserted_channel
+    return node
+
+
+def _build_real_special_turn_case(structure_type):
+    """构造会触发特殊节点转角保护的最小真实链路。"""
+    return [
+        _make_real_calculator_node(
+            "上游",
+            RealStructureType.MINGQU_RECTANGULAR,
+            0.0,
+            0.0,
+        ),
+        _make_real_calculator_node(
+            "IP0",
+            structure_type,
+            100.0,
+            0.0,
+            in_out=RealInOutType.INLET,
+            turn_radius=10.0,
+            turn_angle=31.9694,
+        ),
+        _make_real_calculator_node(
+            "下游",
+            RealStructureType.MINGQU_RECTANGULAR,
+            150.0,
+            50.0,
+        ),
+    ]
+
+
+def _build_real_special_turn_case_with_auxiliary_nodes():
+    """构造带辅助行的真实链路，用于保护负向口径。"""
+    return [
+        _make_real_calculator_node(
+            "上游",
+            RealStructureType.MINGQU_RECTANGULAR,
+            0.0,
+            0.0,
+        ),
+        _make_real_calculator_node(
+            "-",
+            RealStructureType.TRANSITION,
+            0.0,
+            0.0,
+            is_transition=True,
+        ),
+        _make_real_calculator_node(
+            "IP0",
+            RealStructureType.PRESSURE_PIPE,
+            100.0,
+            0.0,
+            in_out=RealInOutType.INLET,
+            turn_radius=10.0,
+            turn_angle=31.9694,
+        ),
+        _make_real_calculator_node(
+            "-",
+            RealStructureType.MINGQU_RECTANGULAR,
+            125.0,
+            25.0,
+            is_auto_inserted_channel=True,
+        ),
+        _make_real_calculator_node(
+            "下游",
+            RealStructureType.MINGQU_RECTANGULAR,
+            150.0,
+            50.0,
+        ),
+    ]
 
 
 def _make_batch_result(**overrides):
@@ -1080,7 +1187,7 @@ def test_recalculate_silent_preserves_existing_nonzero_turn_angle_for_roundtrip_
     )
 
     class _FakeCalculator:
-        """模拟当前静默重算链路最关心的几何覆盖行为。"""
+        """模拟静默重算里“特殊节点转角保护”的共享几何链路。"""
 
         def __init__(self, settings):
             self.settings = settings
@@ -1123,6 +1230,26 @@ def test_recalculate_silent_preserves_existing_nonzero_turn_angle_for_roundtrip_
                 node.tangent_length = round(float(node.turn_radius or 0.0) * 0.1, 6)
                 node.arc_length = round(float(node.turn_radius or 0.0) * 0.2, 6)
 
+        def _calculate_geometry_preserving_special_turns(self, nodes):
+            preserved = {}
+            for node in nodes:
+                if not getattr(node, "preserve_roundtrip_turn", False):
+                    continue
+                if getattr(getattr(node, "in_out", None), "value", "") not in ("进", "出"):
+                    continue
+                if float(getattr(node, "turn_angle", 0.0) or 0.0) <= 0.0:
+                    continue
+                preserved[id(node)] = getattr(node, "in_out", None)
+                node.in_out = SimpleNamespace(value="")
+
+            self.calculate_geometry(nodes)
+
+            for node in nodes:
+                original_in_out = preserved.get(id(node))
+                if original_in_out is None:
+                    continue
+                node.in_out = original_in_out
+
         def calculate_hydraulics(self, nodes):
             return None
 
@@ -1140,7 +1267,7 @@ def test_recalculate_silent_preserves_existing_nonzero_turn_angle_for_roundtrip_
 
         def calculate_all(self, nodes):
             self.preprocess_nodes(nodes)
-            self.calculate_geometry(nodes)
+            self._calculate_geometry_preserving_special_turns(nodes)
             return nodes
 
         def get_calculation_summary(self, nodes):
@@ -1195,6 +1322,126 @@ def test_recalculate_silent_preserves_existing_nonzero_turn_angle_for_roundtrip_
     assert roundtrip_node.turn_angle == pytest.approx(expected_angle, abs=1e-4)
     assert roundtrip_node.tangent_length > 0.0
     assert roundtrip_node.arc_length > 0.0
+
+
+@pytest.mark.parametrize(
+    "structure_type",
+    [
+        RealStructureType.INVERTED_SIPHON,
+        RealStructureType.PRESSURE_PIPE,
+    ],
+)
+def test_real_calculate_all_preserves_nonzero_turn_angle_for_special_rows(structure_type):
+    calculator = RealWaterProfileCalculator(
+        RealProjectSettings(
+            channel_name="测",
+            channel_level="干渠",
+            design_flow=1.0,
+            max_flow=1.2,
+        )
+    )
+    nodes = _build_real_special_turn_case(structure_type)
+
+    calculated = calculator.calculate_all(nodes)
+
+    special_node = next(node for node in calculated if getattr(node, "name", "") == "IP0")
+    assert getattr(special_node.in_out, "value", "") == RealInOutType.INLET.value
+    assert special_node.turn_angle > 0.1
+    assert special_node.tangent_length > 0.0
+    assert special_node.arc_length > 0.0
+
+
+def test_calculate_after_roundtrip_refresh_does_not_zero_special_turn_angle_again():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.CALCULATOR_AVAILABLE = True
+
+    class _ExecutionCalculator(RealWaterProfileCalculator):
+        """执行链路测试只关心几何覆盖，不让输入校验提前截断。"""
+
+        def validate_input(self, nodes):
+            return True, []
+
+    module.WaterProfileCalculator = _ExecutionCalculator
+    module.InOutType = RealInOutType
+    module.InfoBar = SimpleNamespace(
+        error=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+        info=lambda *args, **kwargs: None,
+        success=lambda *args, **kwargs: None,
+    )
+    module.InfoBarPosition = SimpleNamespace(TOP=1)
+
+    state = {
+        "nodes": _build_real_special_turn_case(RealStructureType.PRESSURE_PIPE),
+    }
+    panel.node_table.setRowCount(len(state["nodes"]))
+
+    panel._ensure_downstream_ready = lambda _action: True
+    panel._has_transition_topology_ready = lambda _nodes: True
+    panel._collect_pending_pressure_pipe_execute_members = lambda _nodes, settings=None: []
+    panel._show_optional_blank_name_notice = lambda *args, **kwargs: None
+    panel._generate_detail_report = lambda *args, **kwargs: None
+    panel._update_summary_panel = lambda *args, **kwargs: None
+    panel._collect_missing_structure_height_names = lambda _nodes: []
+    panel._build_terminal_gate_backfill_notice_lines = lambda _nodes: []
+    panel._collect_terminal_gate_backfill_records = lambda _nodes: []
+    panel._switch_workspace_tab = lambda *_args, **_kwargs: None
+    panel._switch_to_output_process_tab = lambda *_args, **_kwargs: None
+    panel._info_parent = lambda: None
+    panel.detail_text = SimpleNamespace(setPlainText=lambda *_args, **_kwargs: None)
+    panel._tab_output = object()
+    panel._build_settings = lambda: RealProjectSettings(
+        channel_name="测",
+        channel_level="干渠",
+        design_flow=1.0,
+        max_flow=1.2,
+    )
+    panel._build_nodes_from_table = lambda: deepcopy(state["nodes"])
+
+    captured = []
+
+    def _capture_results(calculated, _settings):
+        snapshot = deepcopy(calculated)
+        state["nodes"] = snapshot
+        captured.append(snapshot)
+
+    panel._display_results = _capture_results
+
+    module.WaterProfilePanel._recalculate_silent(panel)
+    module.WaterProfilePanel._calculate(panel)
+
+    assert len(captured) == 2
+    special_node = next(node for node in state["nodes"] if getattr(node, "name", "") == "IP0")
+    assert special_node.turn_angle > 0.1
+    assert special_node.tangent_length > 0.0
+    assert special_node.arc_length > 0.0
+
+
+def test_real_calculate_all_keeps_auxiliary_rows_zero_after_special_turn_preservation():
+    calculator = RealWaterProfileCalculator(
+        RealProjectSettings(
+            channel_name="测",
+            channel_level="干渠",
+            design_flow=1.0,
+            max_flow=1.2,
+        )
+    )
+    nodes = _build_real_special_turn_case_with_auxiliary_nodes()
+
+    calculated = calculator.calculate_all(nodes)
+
+    transition_node = next(node for node in calculated if getattr(node, "is_transition", False))
+    auto_channel_node = next(
+        node for node in calculated if getattr(node, "is_auto_inserted_channel", False)
+    )
+
+    assert transition_node.turn_angle == 0.0
+    assert transition_node.tangent_length == 0.0
+    assert transition_node.arc_length == 0.0
+    assert auto_channel_node.turn_angle == 0.0
+    assert auto_channel_node.tangent_length == 0.0
+    assert auto_channel_node.arc_length == 0.0
 
 
 def test_import_from_batch_keeps_general_roughness_rows_unchanged_when_dialog_cancelled():
@@ -1419,6 +1666,11 @@ def test_recalculate_geometry_impl_preserves_explicit_zero_turn_radius_for_press
     panel = _make_basic_panel(module)
     module.CALCULATOR_AVAILABLE = True
     module.ProjectSettings = SimpleNamespace(format_station=lambda value, _prefix="": f"{value:.3f}")
+    module.InOutType = SimpleNamespace(
+        NORMAL=SimpleNamespace(value=""),
+        INLET=SimpleNamespace(value="进"),
+        OUTLET=SimpleNamespace(value="出"),
+    )
 
     class _FakeCalculator:
         def __init__(self, _settings):
@@ -1471,6 +1723,82 @@ def test_recalculate_geometry_impl_preserves_explicit_zero_turn_radius_for_press
     module.WaterProfilePanel._recalculate_geometry_impl(panel)
 
     assert panel.node_table.item(1, 7).text() == "0"
+
+
+def test_recalculate_geometry_impl_ignores_stale_in_out_before_geometry_for_special_rows():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.CALCULATOR_AVAILABLE = True
+    module.ProjectSettings = SimpleNamespace(format_station=lambda value, _prefix="": f"{value:.3f}")
+    module.InOutType = SimpleNamespace(
+        NORMAL=SimpleNamespace(value=""),
+        INLET=SimpleNamespace(value="进"),
+        OUTLET=SimpleNamespace(value="出"),
+    )
+
+    class _FakeCalculator:
+        def __init__(self, _settings):
+            pass
+
+        def calculate_geometry(self, nodes):
+            for node in nodes:
+                if getattr(getattr(node, "in_out", None), "value", "") in ("进", "出"):
+                    node.turn_angle = 0.0
+                    node.tangent_length = 0.0
+                    node.arc_length = 0.0
+                    continue
+                node.turn_angle = 18.5
+                node.tangent_length = 1.85
+                node.arc_length = 3.7
+
+        def preprocess_nodes(self, nodes):
+            for node in nodes:
+                if getattr(node, "name", "") == "IP0":
+                    node.in_out = SimpleNamespace(value="进")
+
+    module.WaterProfileCalculator = _FakeCalculator
+
+    panel.node_table.setRowCount(2)
+    panel.node_table.setItem(0, 2, _FakeItem("有压管道"))
+    panel.node_table.setItem(0, 3, _FakeItem("进"))
+    panel.node_table.setItem(0, 7, _FakeItem("10"))
+    panel.node_table.setItem(1, 2, _FakeItem("明渠-矩形"))
+    panel.node_table.setItem(1, 7, _FakeItem("0"))
+
+    special_node = _make_node(
+        name="IP0",
+        structure_type=_FakeStructureType.PRESSURE_PIPE,
+        is_pressure_pipe=True,
+        in_out=SimpleNamespace(value="进"),
+        turn_radius=10.0,
+        get_structure_type_str=lambda: "有压管道",
+        get_in_out_str=lambda: "进",
+        get_ip_str=lambda: "IP0",
+        station_ip=10.0,
+        station_BC=10.0,
+        station_MC=10.0,
+        station_EC=10.0,
+    )
+
+    downstream_node = _make_node(
+        name="下游",
+        turn_radius=0.0,
+        get_structure_type_str=lambda: "明渠-矩形",
+        get_in_out_str=lambda: "",
+        get_ip_str=lambda: "IP1",
+        station_ip=20.0,
+        station_BC=20.0,
+        station_MC=20.0,
+        station_EC=20.0,
+    )
+
+    panel._build_nodes_from_table = lambda: [special_node, downstream_node]
+    panel._build_settings = lambda: SimpleNamespace(get_station_prefix=lambda: "")
+
+    module.WaterProfilePanel._recalculate_geometry_impl(panel)
+
+    assert special_node.turn_angle == pytest.approx(18.5)
+    assert panel.node_table.item(0, 8).text() == "18.5000"
 
 
 def test_apply_pressure_pipe_turn_radius_payload_skips_explicit_zero_rows_without_force_override():
