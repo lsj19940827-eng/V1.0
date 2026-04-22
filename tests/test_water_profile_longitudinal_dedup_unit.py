@@ -411,6 +411,69 @@ def _sample_rect_culvert_followed_by_special_placeholder_nodes():
     return [n1, n2, n3, n4, n5]
 
 
+def _sample_middle_culvert_ip0_between_special_buildings():
+    n1 = _make_node(
+        ip_no=0,
+        mc=0.0,
+        bottom=410.0,
+        top=412.0,
+        water=411.0,
+        structure="隧洞-圆形",
+        name="大垭口",
+        in_out="进",
+    )
+    n1.slope_i = 1 / 4000
+
+    n2 = _make_node(
+        ip_no=1,
+        mc=88.63878,
+        bottom=409.0,
+        top=411.0,
+        water=410.0,
+        structure="隧洞-圆形",
+        name="大垭口",
+        in_out="出",
+    )
+    n2.slope_i = 1 / 4000
+
+    n3 = _make_node(
+        ip_no=0,
+        mc=98.166893,
+        bottom=408.0,
+        top=410.0,
+        water=409.0,
+        structure="暗涵-矩形",
+        in_out="进",
+    )
+    n3.slope_i = 1 / 4000
+
+    n4 = _make_node(
+        ip_no=2,
+        mc=108.251397,
+        bottom=407.0,
+        top=409.0,
+        water=408.0,
+        structure="隧洞-圆形",
+        name="蓬莱",
+        in_out="进",
+    )
+    n4.slope_i = 1 / 4000
+
+    n5 = _make_node(
+        ip_no=3,
+        mc=200.0,
+        bottom=406.0,
+        top=408.0,
+        water=407.0,
+        structure="隧洞-圆形",
+        name="蓬莱",
+        in_out="出",
+    )
+    n5.slope_i = 1 / 4000
+
+    return [n1, n2, n3, n4, n5]
+
+
 def _default_settings():
     return {
         "y_bottom": 1,
@@ -1005,6 +1068,56 @@ def test_rect_culvert_boundary_does_not_draw_extra_slope_short_line_before_speci
         pl_rows,
         (special_boundary_x, 0.0),
         (special_boundary_x, line_height),
+    )
+
+
+def test_middle_culvert_ip0_vline_stops_below_top_rows_in_dxf_and_txt(local_tmp_path, monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = _sample_middle_culvert_ip0_between_special_buildings()
+    settings = _default_settings()
+    _, layout, _, line_height, _ = cad_tools._build_profile_row_layout(settings)
+    short_line_height = layout["slope"]["bottom"]
+    culvert_x = _scaled_m_to_mm(98.166893, settings["scale_x"])
+
+    msp = _DummyMSP()
+    cad_tools._draw_profile_on_msp(msp, nodes, nodes, settings, station_prefix="")
+
+    assert _has_line(
+        msp.line_records,
+        (culvert_x, 0.0),
+        (culvert_x, short_line_height),
+    )
+    assert not _has_line(
+        msp.line_records,
+        (culvert_x, 0.0),
+        (culvert_x, line_height),
+    )
+
+    out_file = local_tmp_path / "middle_culvert_ip0_short_vline.txt"
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+    cad_tools._export_longitudinal_txt_to_path(_Panel(""), nodes, nodes, settings, str(out_file))
+
+    pl_rows = _parse_pl_cmds(out_file)
+    assert _has_line(
+        pl_rows,
+        (culvert_x, 0.0),
+        (culvert_x, short_line_height),
+    )
+    assert not _has_line(
+        pl_rows,
+        (culvert_x, 0.0),
+        (culvert_x, line_height),
     )
 
 

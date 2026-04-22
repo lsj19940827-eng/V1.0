@@ -2098,6 +2098,13 @@ def _is_special_inout_node(node):
     return _in_out_val(getattr(node, "in_out", None)) in ("进", "出")
 
 
+def _is_profile_top_boundary_node(node):
+    """判断节点是否应切开标准纵断面顶部两行。"""
+    if not _is_special_inout_node(node):
+        return False
+    return _should_hide_display_ip_number(node)
+
+
 def _resolve_profile_vline_top(is_special, is_last_node, short_line_height, line_height):
     """普通节点保留顶部合并单元格，末列右边界和特殊进/出节点补齐整高。"""
     if is_special or is_last_node:
@@ -2133,7 +2140,7 @@ def _build_standard_profile_vline_specs(nodes, row_layout, enabled_row_ids, line
 
     for idx, node in enumerate(profile_text_nodes):
         station_mc = _profile_station_value(node)
-        is_special = _is_special_inout_node(node)
+        is_special = _is_profile_top_boundary_node(node)
         if is_special:
             tall_line_mcs.append(float(station_mc))
         is_last_node = idx == len(profile_text_nodes) - 1
@@ -3125,6 +3132,22 @@ def _build_profile_building_segments(nodes):
     return _merge_segments_across_gates(building_segments)
 
 
+def _build_profile_building_span_map(nodes):
+    """按桩号建立建筑物段跨度映射，供纵断面文字与边界共用。"""
+    span_map = {}
+    for _building_name, mc_list in _build_profile_building_segments(nodes):
+        if not mc_list:
+            continue
+        start_mc = float(mc_list[0])
+        end_mc = float(mc_list[-1])
+        for mc in mc_list:
+            span_map[round(float(mc), 9)] = {
+                "start_mc": start_mc,
+                "end_mc": end_mc,
+            }
+    return span_map
+
+
 def _is_gate_name(name):
     """判断建筑物显示名称是否为闸类点状建筑物（分水闸/分水口/节制闸/泄水闸等）"""
     if not name:
@@ -3178,6 +3201,7 @@ def _resolve_profile_slope_merge_key(node):
 def _build_profile_slope_segments(nodes, profile_text_nodes=None):
     """按“当前节点作为区间终点”构建纵断面坡降区间，供 DXF/TXT 共用。"""
     visible_nodes = list(profile_text_nodes) if profile_text_nodes is not None else _build_profile_text_nodes(nodes or [])
+    building_span_map = _build_profile_building_span_map(nodes or [])
     segments = []
     prev_visible_mc = None
     prev_merge_key = None
@@ -3204,7 +3228,11 @@ def _build_profile_slope_segments(nodes, profile_text_nodes=None):
         else:
             segment_start_mc = prev_visible_mc
             if _is_special_inout_node(node):
-                segment_start_mc = current_mc
+                span_info = building_span_map.get(round(current_mc, 9))
+                if span_info is not None:
+                    segment_start_mc = float(span_info["start_mc"])
+                else:
+                    segment_start_mc = current_mc
             segments.append(
                 {
                     "text": text,
@@ -3257,8 +3285,8 @@ def _collect_profile_slope_boundary_mcs(nodes, profile_text_nodes=None, tol=1e-9
 
         _text, current_merge_key = _resolve_profile_slope_merge_key(node)
         if prev_merge_key != current_merge_key:
-            prev_is_special = _is_special_inout_node(prev_visible_node)
-            current_is_special = _is_special_inout_node(node)
+            prev_is_special = _is_profile_top_boundary_node(prev_visible_node)
+            current_is_special = _is_profile_top_boundary_node(node)
             if prev_is_special:
                 _append_boundary(prev_visible_mc)
             if current_is_special:

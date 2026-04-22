@@ -134,6 +134,18 @@ class _DummyMSP:
         return _TextEntity(self, text, dxfattribs)
 
 
+def _has_line(records, start, end, tol=1e-6):
+    for rec in records:
+        if (
+            abs(rec["start"][0] - start[0]) <= tol
+            and abs(rec["start"][1] - start[1]) <= tol
+            and abs(rec["end"][0] - end[0]) <= tol
+            and abs(rec["end"][1] - end[1]) <= tol
+        ):
+            return True
+    return False
+
+
 def _draw_settings():
     return {
         "text_height": 3.5,
@@ -457,3 +469,68 @@ def test_draw_profile_on_msp_places_slope_text_at_true_boundary_center(monkeypat
 
     assert slope_by_text["1/1200"]["x"] == pytest.approx(building_by_text["过山洞隧洞"]["x"])
     assert slope_by_text["-"]["x"] == pytest.approx(building_by_text["桐油寨倒虹吸"]["x"])
+
+
+def test_standard_profile_middle_culvert_ip0_keeps_short_vline_and_aligned_slope(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = [
+        _make_node(ip_no=0, mc=0.0, structure="隧洞-圆形", name="大垭口", in_out="进"),
+        _make_node(ip_no=1, mc=88.63878, structure="隧洞-圆形", name="大垭口", in_out="出"),
+        _make_node(ip_no=0, mc=98.166893, structure="暗涵-矩形", in_out="进"),
+        _make_node(ip_no=2, mc=108.251397, structure="隧洞-圆形", name="蓬莱", in_out="进"),
+        _make_node(ip_no=3, mc=200.0, structure="隧洞-圆形", name="蓬莱", in_out="出"),
+    ]
+    for node in nodes:
+        node.slope_i = 1 / 4000
+
+    settings = _draw_settings()
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        settings,
+        station_prefix="",
+    )
+
+    _enabled_ids, row_layout, _total_height, line_height, _boundaries = cad_tools._build_profile_row_layout(settings)
+    slope_y = row_layout["slope"]["text_y"]
+    building_y = row_layout["building_name"]["text_y"]
+    short_line_height = row_layout["slope"]["bottom"]
+    scale_x = settings["scale_x"]
+    culvert_x = 98.166893 * 1000.0 / scale_x
+
+    assert any(rec["text"] == "IP0" for rec in msp.text_records)
+    assert _has_line(
+        msp.line_records,
+        (culvert_x, 0.0),
+        (culvert_x, short_line_height),
+    )
+    assert not _has_line(
+        msp.line_records,
+        (culvert_x, 0.0),
+        (culvert_x, line_height),
+    )
+
+    slope_xs = sorted(
+        rec["x"]
+        for rec in msp.text_records
+        if abs(rec["y"] - slope_y) <= 1e-6 and rec["text"] == "1/4000"
+    )
+    building_xs = sorted(
+        rec["x"]
+        for rec in msp.text_records
+        if abs(rec["y"] - building_y) <= 1e-6 and rec["text"] in {"大垭口隧洞", "暗涵-矩形", "蓬莱隧洞"}
+    )
+
+    assert slope_xs == pytest.approx(building_xs)
