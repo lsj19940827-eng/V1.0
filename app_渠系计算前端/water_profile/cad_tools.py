@@ -11146,6 +11146,179 @@ def extract_bzzh2_data(panel):
 # 3. 建筑物名称上平面图
 # ================================================================
 
+def _get_building_plan_structure_suffix(struct_text):
+    """将结构形式转换为平面图名称后缀。"""
+    struct_str = str(struct_text or "").strip()
+    if not struct_str:
+        return ""
+    if "隧洞" in struct_str:
+        return "隧洞"
+    if "倒虹吸" in struct_str:
+        return "倒虹吸"
+    if "有压管道" in struct_str:
+        return "有压管道"
+    if "渡槽" in struct_str:
+        return "渡槽"
+    if "暗涵" in struct_str:
+        return "暗涵"
+    return struct_str
+
+
+def _format_building_plan_row_range(row_numbers):
+    """把行号列表格式化为“第12~14行”形式。"""
+    rows = sorted({int(row) for row in row_numbers if isinstance(row, int)})
+    if not rows:
+        return ""
+    if len(rows) == 1:
+        return f"第{rows[0]}行"
+    return f"第{rows[0]}~{rows[-1]}行"
+
+
+def _format_building_plan_issue_label(name, structure_text, row_numbers):
+    """生成建筑物检查项的人类可读标签。"""
+    row_text = _format_building_plan_row_range(row_numbers)
+    struct_text = str(structure_text or "").strip() or "未知结构"
+    if name:
+        return f"{name}（{struct_text}，{row_text}）" if row_text else f"{name}（{struct_text}）"
+    if row_text:
+        return f"{row_text}（{struct_text}）"
+    return f"未命名建筑物（{struct_text}）"
+
+
+def _append_building_plan_issue_lines(lines, title, items):
+    """把同类检查问题追加到提示文本。"""
+    if not items:
+        return
+    lines.append(f"{title}：")
+    lines.extend([f"  - {item}" for item in items])
+
+
+def _build_building_plan_issue_message(
+    *,
+    valid_count,
+    missing_name_items,
+    missing_inout_items,
+    insufficient_coord_items,
+    include_continue_hint,
+):
+    """拼装建筑物名称上平面图导出前的检查提示。"""
+    skipped_count = (
+        len(missing_name_items)
+        + len(missing_inout_items)
+        + len(insufficient_coord_items)
+    )
+    total_count = int(valid_count) + int(skipped_count)
+    lines = [
+        "检测到部分建筑物暂时无法生成上平面图。",
+        "",
+        f"本次共识别 {total_count} 个建筑物，其中可导出 {valid_count} 个，需处理 {skipped_count} 个。",
+        "",
+    ]
+    _append_building_plan_issue_lines(lines, "名称为空", missing_name_items)
+    _append_building_plan_issue_lines(lines, "缺少进/出标记", missing_inout_items)
+    _append_building_plan_issue_lines(lines, "有效坐标点不足 2 个", insufficient_coord_items)
+    if include_continue_hint:
+        lines.extend(["", "是否继续导出可用部分？"])
+    return "\n".join(lines)
+
+
+def _collect_building_plan_export_issues(nodes):
+    """收集建筑物名称上平面图导出检查结果。"""
+    named_building_groups = {}
+    building_order = []
+    missing_name_items = []
+    current_blank_group = None
+    current_blank_rows = []
+
+    def flush_blank_group():
+        nonlocal current_blank_group, current_blank_rows
+        if current_blank_group is None or not current_blank_rows:
+            current_blank_group = None
+            current_blank_rows = []
+            return
+        missing_name_items.append(
+            _format_building_plan_issue_label(
+                "",
+                current_blank_group,
+                current_blank_rows,
+            )
+        )
+        current_blank_group = None
+        current_blank_rows = []
+
+    for row_index, node in enumerate(nodes or [], start=1):
+        if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
+            flush_blank_group()
+            continue
+
+        name = str(getattr(node, "name", "") or "").strip()
+        struct_text = _get_node_structure_text(node) or _struct_val(getattr(node, "structure_type", None))
+        struct_text = str(struct_text or "").strip() or "未知结构"
+
+        if not name:
+            if current_blank_group == struct_text:
+                current_blank_rows.append(row_index)
+            else:
+                flush_blank_group()
+                current_blank_group = struct_text
+                current_blank_rows = [row_index]
+            continue
+
+        flush_blank_group()
+        key = (name, struct_text)
+        if key not in named_building_groups:
+            named_building_groups[key] = []
+            building_order.append(key)
+        named_building_groups[key].append((row_index, node))
+
+    flush_blank_group()
+
+    valid_buildings = []
+    missing_inout_items = []
+    insufficient_coord_items = []
+
+    for key in building_order:
+        name, struct_text = key
+        group_rows = named_building_groups[key]
+        row_numbers = [row_index for row_index, _ in group_rows]
+        group_nodes = [node for _, node in group_rows]
+
+        has_inlet = any(_in_out_val(getattr(node, "in_out", None)) == "进" for node in group_nodes)
+        has_outlet = any(_in_out_val(getattr(node, "in_out", None)) == "出" for node in group_nodes)
+        if not (has_inlet and has_outlet):
+            missing_parts = []
+            if not has_inlet:
+                missing_parts.append("进口")
+            if not has_outlet:
+                missing_parts.append("出口")
+            missing_inout_items.append(
+                f"{_format_building_plan_issue_label(name, struct_text, row_numbers)}：缺少{'、'.join(missing_parts)}"
+            )
+            continue
+
+        coord_nodes = [
+            node
+            for node in group_nodes
+            if getattr(node, "x", None) is not None
+            and getattr(node, "y", None) is not None
+            and (getattr(node, "x", None) != 0 or getattr(node, "y", None) != 0)
+        ]
+        if len(coord_nodes) < 2:
+            insufficient_coord_items.append(
+                f"{_format_building_plan_issue_label(name, struct_text, row_numbers)}：仅 {len(coord_nodes)} 个有效坐标点"
+            )
+            continue
+
+        valid_buildings.append((key, group_nodes, coord_nodes))
+
+    return {
+        "valid_buildings": valid_buildings,
+        "missing_name_items": missing_name_items,
+        "missing_inout_items": missing_inout_items,
+        "insufficient_coord_items": insufficient_coord_items,
+    }
+
+
 def export_building_name_plan(panel):
     """生成「平行于轴线的建筑物名称上平面图」AutoCAD -TEXT 命令
 
@@ -11162,41 +11335,54 @@ def export_building_name_plan(panel):
         return
 
     try:
-        # 按建筑物分组收集所有节点
-        building_groups = {}
-        building_order = []
-        for node in nodes:
-            if node.is_transition or getattr(node, 'is_auto_inserted_channel', False):
-                continue
-            if not node.name:
-                continue
-            key = (node.name, _struct_val(node.structure_type))
-            if key not in building_groups:
-                building_groups[key] = []
-                building_order.append(key)
-            building_groups[key].append(node)
-
-        # 筛选有完整进出口且坐标有效的建筑物
-        valid_buildings = []
-        for key in building_order:
-            group = building_groups[key]
-            has_inlet = any(_in_out_val(n.in_out) == "进" for n in group)
-            has_outlet = any(_in_out_val(n.in_out) == "出" for n in group)
-            if not (has_inlet and has_outlet):
-                continue
-            coord_nodes = [n for n in group
-                           if n.x is not None and n.y is not None and
-                           (n.x != 0 or n.y != 0)]
-            if len(coord_nodes) >= 2:
-                valid_buildings.append((key, group, coord_nodes))
+        check_result = _collect_building_plan_export_issues(nodes)
+        valid_buildings = list(check_result["valid_buildings"])
+        missing_name_items = list(check_result["missing_name_items"])
+        missing_inout_items = list(check_result["missing_inout_items"])
+        insufficient_coord_items = list(check_result["insufficient_coord_items"])
+        skipped_count = (
+            len(missing_name_items)
+            + len(missing_inout_items)
+            + len(insufficient_coord_items)
+        )
 
         if not valid_buildings:
+            if skipped_count:
+                fluent_info(
+                    panel.window(),
+                    "建筑物名称上平面图检查结果",
+                    _build_building_plan_issue_message(
+                        valid_count=0,
+                        missing_name_items=missing_name_items,
+                        missing_inout_items=missing_inout_items,
+                        insufficient_coord_items=insufficient_coord_items,
+                        include_continue_hint=False,
+                    ),
+                )
+                return
             fluent_info(
                 panel.window(), "无可提取数据",
                 "未找到有效的建筑物进出口数据。\n\n"
                 "需要隧洞、倒虹吸、有压管道、渡槽等建筑物同时存在进口和出口，\n"
                 "且节点具有有效的X、Y坐标。")
             return
+
+        if skipped_count:
+            continue_export = fluent_question(
+                panel.window(),
+                "建筑物名称上平面图检查结果",
+                _build_building_plan_issue_message(
+                    valid_count=len(valid_buildings),
+                    missing_name_items=missing_name_items,
+                    missing_inout_items=missing_inout_items,
+                    insufficient_coord_items=insufficient_coord_items,
+                    include_continue_hint=True,
+                ),
+                yes_text="继续导出可用部分",
+                no_text="返回检查",
+            )
+            if not continue_export:
+                return
 
         # 参数设置对话框
         dlg = PlanTextSettingsDialog(panel.window(), panel._plan_text_settings)
@@ -11237,21 +11423,9 @@ def export_building_name_plan(panel):
             inlet_node = next(
                 (n for n in all_nodes if _in_out_val(n.in_out) == "进"),
                 all_nodes[0])
-            struct_name = ""
-            struct_str = _struct_val(inlet_node.structure_type)
-            if struct_str:
-                if "隧洞" in struct_str:
-                    struct_name = "隧洞"
-                elif "倒虹吸" in struct_str:
-                    struct_name = "倒虹吸"
-                elif "有压管道" in struct_str:
-                    struct_name = "有压管道"
-                elif "渡槽" in struct_str:
-                    struct_name = "渡槽"
-                elif "暗涵" in struct_str:
-                    struct_name = "暗涵"
-                else:
-                    struct_name = struct_str
+            struct_name = _get_building_plan_structure_suffix(
+                _get_node_structure_text(inlet_node) or _struct_val(inlet_node.structure_type)
+            )
 
             building_name = f"{inlet_node.name or ''}{struct_name}"
             cmd = (f"-TEXT J MC {text_x},{text_y} "
@@ -11272,9 +11446,12 @@ def export_building_name_plan(panel):
         preview.setStyleSheet(DIALOG_STYLE)
         p_lay = QVBoxLayout(preview)
 
-        p_lay.addWidget(QLabel(
-            f"共 {len(text_commands)} 个建筑物  |  "
-            f"偏移距离: {offset}  |  文字高度: {text_height}"))
+        summary_parts = [f"共 {len(text_commands)} 个建筑物"]
+        if skipped_count:
+            summary_parts.append(f"已跳过 {skipped_count} 个")
+        summary_parts.append(f"偏移距离: {offset}")
+        summary_parts.append(f"文字高度: {text_height}")
+        p_lay.addWidget(QLabel("  |  ".join(summary_parts)))
 
         text_widget = QTextEdit()
         text_widget.setReadOnly(True)

@@ -48,9 +48,12 @@ class _LayoutStub(_BaseWidgetStub):
 
 
 class _LabelStub(_BaseWidgetStub):
+    created_texts = []
+
     def __init__(self, text=""):
         super().__init__()
         self.text = text
+        self.__class__.created_texts.append(text)
 
     def setText(self, text):
         self.text = text
@@ -128,6 +131,7 @@ def _install_cad_tools_import_stubs():
         "QMenu": _make_stub_class("QMenu"),
         "QListWidget": _make_stub_class("QListWidget"),
         "QListWidgetItem": _make_stub_class("QListWidgetItem"),
+        "QLayout": _make_stub_class("QLayout"),
     }.items():
         setattr(qtwidgets, name, cls)
 
@@ -144,6 +148,7 @@ def _install_cad_tools_import_stubs():
     qtcore.QSettings = _make_stub_class("QSettings")
     qtcore.QSize = _make_stub_class("QSize")
     qtcore.QEvent = _make_stub_class("QEvent")
+    qtcore.QTimer = type("QTimer", (), {"singleShot": staticmethod(lambda *args, **kwargs: None)})
 
     qtgui = types.ModuleType("PySide6.QtGui")
     for name in ("QFont", "QShortcut", "QKeySequence", "QDrag", "QColor"):
@@ -174,17 +179,22 @@ def _install_cad_tools_import_stubs():
     qfluent.FluentIcon = _FluentIconStub()
 
     app_pkg = types.ModuleType("app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef")
+    water_profile_pkg = types.ModuleType("app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.water_profile")
     styles_mod = types.ModuleType("app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.styles")
     styles_mod.auto_resize_table = lambda *args, **kwargs: None
     styles_mod.DIALOG_STYLE = ""
     styles_mod.fluent_info = lambda *args, **kwargs: None
     styles_mod.fluent_error = lambda *args, **kwargs: None
     styles_mod.fluent_question = lambda *args, **kwargs: False
+    text_dialog_mod = types.ModuleType("app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.water_profile.text_export_settings_dialog")
+    text_dialog_mod.create_text_export_settings_dialog = lambda *args, **kwargs: None
 
     utils_pkg = types.ModuleType("utils")
     helpers_mod = types.ModuleType("utils.pressure_pipe_result_helpers")
     helpers_mod.make_pressure_pipe_identity = lambda *args, **kwargs: ""
 
+    sys.modules["推求水面线"] = types.ModuleType("推求水面线")
+    sys.modules["推求水面线.utils"] = types.ModuleType("推求水面线.utils")
     models_pkg = types.ModuleType("models")
     data_models_mod = types.ModuleType("models.data_models")
     data_models_mod.ProjectSettings = _ProjectSettingsStub
@@ -199,7 +209,9 @@ def _install_cad_tools_import_stubs():
     sys.modules["PySide6.QtGui"] = qtgui
     sys.modules["qfluentwidgets"] = qfluent
     sys.modules["app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef"] = app_pkg
+    sys.modules["app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.water_profile"] = water_profile_pkg
     sys.modules["app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.styles"] = styles_mod
+    sys.modules["app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.water_profile.text_export_settings_dialog"] = text_dialog_mod
     sys.modules["utils"] = utils_pkg
     sys.modules["utils.pressure_pipe_result_helpers"] = helpers_mod
     sys.modules["models"] = models_pkg
@@ -241,6 +253,11 @@ def _node(*, name, structure_type, in_out, x, y):
     )
 
 
+def _reset_widget_captures():
+    _TextEditStub.captured_html = []
+    _LabelStub.created_texts = []
+
+
 def _build_panel(nodes):
     panel = SimpleNamespace(
         calculated_nodes=nodes,
@@ -251,9 +268,12 @@ def _build_panel(nodes):
 
 
 def test_building_plan_uses_table3_xy_for_command_position_angle_and_offset(monkeypatch):
-    _TextEditStub.captured_html = []
+    _reset_widget_captures()
+    infos = []
+    questions = []
     monkeypatch.setattr(cad_tools, "PlanTextSettingsDialog", _AcceptedPlanDialog)
-    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **kwargs: infos.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *args, **kwargs: questions.append(args) or True)
 
     panel = _build_panel(
         [
@@ -286,9 +306,137 @@ def test_building_plan_uses_table3_xy_for_command_position_angle_and_offset(monk
     assert text_height == pytest.approx(10.0)
     assert angle_deg == pytest.approx(expected_angle)
     assert building_name == "\u674e\u5bb6\u6c9f\u5012\u8679\u5438"
+    assert infos == []
+    assert questions == []
 
 
-def test_building_plan_skips_one_sided_building_and_shows_info(monkeypatch):
+def test_building_plan_partial_missing_name_requires_confirmation_and_can_continue(monkeypatch):
+    _reset_widget_captures()
+    infos = []
+    questions = []
+
+    class _TrackingDialog:
+        def __init__(self, *args, **kwargs):
+            self.result = {"offset": 10.0, "text_height": 10.0}
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    def _record_question(*args, **kwargs):
+        questions.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(cad_tools, "PlanTextSettingsDialog", _TrackingDialog)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **kwargs: infos.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", _record_question)
+
+    panel = _build_panel(
+        [
+            _node(name="\u674e\u5bb6\u6c9f", structure_type="\u5012\u8679\u5438", in_out="\u8fdb", x=80.0, y=150.0),
+            _node(name="\u674e\u5bb6\u6c9f", structure_type="\u5012\u8679\u5438", in_out="\u51fa", x=100.0, y=200.0),
+            _node(name="", structure_type="\u6697\u6db5-\u77e9\u5f62", in_out="\u8fdb", x=10.0, y=20.0),
+            _node(name="", structure_type="\u6697\u6db5-\u77e9\u5f62", in_out="\u51fa", x=20.0, y=30.0),
+        ]
+    )
+
+    cad_tools.export_building_name_plan(panel)
+
+    assert infos == []
+    assert len(questions) == 1
+    assert "\u540d\u79f0\u4e3a\u7a7a" in questions[0][0][2]
+    assert "\u7b2c3~4\u884c\uff08\u6697\u6db5-\u77e9\u5f62\uff09" in questions[0][0][2]
+    assert _TextEditStub.captured_html
+    assert any("\u5df2\u8df3\u8fc7 1 \u4e2a" in text for text in _LabelStub.created_texts)
+    lines = re.findall(r"-TEXT J MC [^<\r\n]+", _TextEditStub.captured_html[-1])
+    assert len(lines) == 1
+    assert "\u674e\u5bb6\u6c9f\u5012\u8679\u5438" in lines[0]
+
+
+def test_building_plan_partial_missing_inout_can_cancel_before_parameter_dialog(monkeypatch):
+    _reset_widget_captures()
+    infos = []
+    questions = []
+    dialog_calls = []
+
+    class _UnexpectedDialog:
+        def __init__(self, *args, **kwargs):
+            dialog_calls.append((args, kwargs))
+            self.result = {"offset": 10.0, "text_height": 10.0}
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    def _record_question(*args, **kwargs):
+        questions.append((args, kwargs))
+        return False
+
+    monkeypatch.setattr(cad_tools, "PlanTextSettingsDialog", _UnexpectedDialog)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **kwargs: infos.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", _record_question)
+
+    panel = _build_panel(
+        [
+            _node(name="\u674e\u5bb6\u6c9f", structure_type="\u5012\u8679\u5438", in_out="\u8fdb", x=80.0, y=150.0),
+            _node(name="\u674e\u5bb6\u6c9f", structure_type="\u5012\u8679\u5438", in_out="\u51fa", x=100.0, y=200.0),
+            _node(name="\u5929\u84dd\u6865", structure_type="\u96a7\u6d1e", in_out="\u8fdb", x=10.0, y=20.0),
+            _node(name="\u5929\u84dd\u6865", structure_type="\u96a7\u6d1e", in_out="", x=15.0, y=25.0),
+        ]
+    )
+
+    cad_tools.export_building_name_plan(panel)
+
+    assert infos == []
+    assert len(questions) == 1
+    assert "\u7f3a\u5c11\u8fdb/\u51fa\u6807\u8bb0" in questions[0][0][2]
+    assert "\u7f3a\u5c11\u51fa\u53e3" in questions[0][0][2]
+    assert "\u5929\u84dd\u6865" in questions[0][0][2]
+    assert _TextEditStub.captured_html == []
+    assert dialog_calls == []
+
+
+def test_building_plan_partial_insufficient_coords_can_continue_and_preview_mentions_skipped_count(monkeypatch):
+    _reset_widget_captures()
+    infos = []
+    questions = []
+
+    class _TrackingDialog:
+        def __init__(self, *args, **kwargs):
+            self.result = {"offset": 10.0, "text_height": 10.0}
+
+        def exec(self):
+            return cad_tools.QDialog.Accepted
+
+    def _record_question(*args, **kwargs):
+        questions.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(cad_tools, "PlanTextSettingsDialog", _TrackingDialog)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *args, **kwargs: infos.append(args))
+    monkeypatch.setattr(cad_tools, "fluent_question", _record_question)
+
+    panel = _build_panel(
+        [
+            _node(name="\u674e\u5bb6\u6c9f", structure_type="\u5012\u8679\u5438", in_out="\u8fdb", x=80.0, y=150.0),
+            _node(name="\u674e\u5bb6\u6c9f", structure_type="\u5012\u8679\u5438", in_out="\u51fa", x=100.0, y=200.0),
+            _node(name="\u83b2\u6eaa", structure_type="\u6697\u6db5-\u77e9\u5f62", in_out="\u8fdb", x=0.0, y=0.0),
+            _node(name="\u83b2\u6eaa", structure_type="\u6697\u6db5-\u77e9\u5f62", in_out="\u51fa", x=20.0, y=0.0),
+        ]
+    )
+
+    cad_tools.export_building_name_plan(panel)
+
+    assert infos == []
+    assert len(questions) == 1
+    assert "\u6709\u6548\u5750\u6807\u70b9\u4e0d\u8db3 2 \u4e2a" in questions[0][0][2]
+    assert "\u4ec5 1 \u4e2a\u6709\u6548\u5750\u6807\u70b9" in questions[0][0][2]
+    assert any("\u5df2\u8df3\u8fc7 1 \u4e2a" in text for text in _LabelStub.created_texts)
+    lines = re.findall(r"-TEXT J MC [^<\r\n]+", _TextEditStub.captured_html[-1])
+    assert len(lines) == 1
+    assert "\u674e\u5bb6\u6c9f\u5012\u8679\u5438" in lines[0]
+
+
+def test_building_plan_all_invalid_shows_grouped_info_details(monkeypatch):
+    _reset_widget_captures()
     infos = []
     dialog_calls = []
 
@@ -305,13 +453,25 @@ def test_building_plan_skips_one_sided_building_and_shows_info(monkeypatch):
 
     panel = _build_panel(
         [
+            _node(name="", structure_type="\u6697\u6db5-\u77e9\u5f62", in_out="\u8fdb", x=10.0, y=20.0),
+            _node(name="", structure_type="\u6697\u6db5-\u77e9\u5f62", in_out="\u51fa", x=20.0, y=30.0),
             _node(name="\u5929\u84dd\u6865", structure_type="\u96a7\u6d1e", in_out="\u8fdb", x=10.0, y=20.0),
             _node(name="\u5929\u84dd\u6865", structure_type="\u96a7\u6d1e", in_out="", x=15.0, y=25.0),
+            _node(name="\u83b2\u6eaa", structure_type="\u6697\u6db5-\u77e9\u5f62", in_out="\u8fdb", x=0.0, y=0.0),
+            _node(name="\u83b2\u6eaa", structure_type="\u6697\u6db5-\u77e9\u5f62", in_out="\u51fa", x=20.0, y=0.0),
         ]
     )
 
     cad_tools.export_building_name_plan(panel)
 
-    assert infos, "one-sided structures should show an info message"
-    assert "\u672a\u627e\u5230\u6709\u6548\u7684\u5efa\u7b51\u7269\u8fdb\u51fa\u53e3\u6570\u636e" in infos[-1][2]
-    assert not dialog_calls, "settings dialog should not open when no valid building exists"
+    assert infos, "all-invalid input should show a detailed info message"
+    message = infos[-1][2]
+    assert "\u540d\u79f0\u4e3a\u7a7a" in message
+    assert "\u7f3a\u5c11\u8fdb/\u51fa\u6807\u8bb0" in message
+    assert "\u6709\u6548\u5750\u6807\u70b9\u4e0d\u8db3 2 \u4e2a" in message
+    assert "\u7b2c1~2\u884c\uff08\u6697\u6db5-\u77e9\u5f62\uff09" in message
+    assert "\u5929\u84dd\u6865" in message
+    assert "\u83b2\u6eaa" in message
+    assert "\u4ec5 1 \u4e2a\u6709\u6548\u5750\u6807\u70b9" in message
+    assert dialog_calls == []
+    assert _TextEditStub.captured_html == []
