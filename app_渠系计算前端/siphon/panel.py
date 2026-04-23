@@ -474,14 +474,15 @@ class SiphonPanel(QWidget):
         # 工具栏
         tb = QHBoxLayout()
         tb.setSpacing(4)
+        toolbar_button_height = 32
 
         self.btn_view_profile = PushButton("纵断面")
-        self.btn_view_profile.setFixedSize(70, 26)
+        self.btn_view_profile.setFixedSize(70, toolbar_button_height)
         self.btn_view_profile.clicked.connect(lambda: self._switch_view("profile"))
         tb.addWidget(self.btn_view_profile)
 
         self.btn_view_plan = PushButton("平面图")
-        self.btn_view_plan.setFixedSize(70, 26)
+        self.btn_view_plan.setFixedSize(70, toolbar_button_height)
         self.btn_view_plan.clicked.connect(lambda: self._switch_view("plan"))
         tb.addWidget(self.btn_view_plan)
 
@@ -505,12 +506,12 @@ class SiphonPanel(QWidget):
         for text, slot in [("＋", "_zoom_in"), ("－", "_zoom_out"),
                            ("适配", "_zoom_fit")]:
             btn = PushButton(text)
-            btn.setFixedHeight(26)
+            btn.setFixedHeight(toolbar_button_height)
             btn.clicked.connect(getattr(self, slot))
             tb.addWidget(btn)
 
         self.btn_view_expand = PushButton("展开")
-        self.btn_view_expand.setFixedHeight(26)
+        self.btn_view_expand.setFixedHeight(toolbar_button_height)
         self.btn_view_expand.clicked.connect(self._open_canvas_viewer)
         tb.addWidget(self.btn_view_expand)
 

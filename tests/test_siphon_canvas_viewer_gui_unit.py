@@ -117,6 +117,24 @@ def _sample_dxf_path() -> str:
     return str(ROOT / "倒虹吸水力计算系统" / "resources" / "导入纵断面dxf示例.dxf")
 
 
+def test_preview_toolbar_buttons_are_tall_enough_for_text(monkeypatch):
+    """预览工具栏按钮高度要能完整显示中文文字。"""
+    panel = _make_panel(monkeypatch)
+    toolbar_texts = ["纵断面", "平面图", "＋", "－", "适配", "展开"]
+
+    for text in toolbar_texts:
+        button = next(
+            (btn for btn in panel.findChildren(QPushButton) if btn.text() == text),
+            None,
+        )
+        assert button is not None
+        required_height = max(32, button.sizeHint().height(), button.minimumSizeHint().height())
+        assert button.height() >= required_height
+
+    panel.close()
+    panel.deleteLater()
+
+
 def test_fit_to_content_resets_navigation_for_vertical_plan_data():
     _get_qapp()
     canvas = PipelineCanvas()

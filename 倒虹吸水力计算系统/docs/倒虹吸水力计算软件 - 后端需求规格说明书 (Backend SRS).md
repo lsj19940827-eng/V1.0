@@ -576,9 +576,10 @@ HydraulicCore.execute_calculation(
 | 分段 | 公式 | 规范引用 |
 |------|------|----------|
 | ΔZ₁ 进口渐变段 | (1 + ξ₁) × (v₂² - v₁²) / (2g) | L.1.2-2 |
-| ΔZ₂ 管道段 | hf + hj | L.1.4-7 |
+| ΔZ₂ 管道段 | hf + hj + (v² - v₂²) / (2g) | L.1.4 |
 | 　hf 沿程损失 | L × v² / (C² × R_h) | — |
 | 　hj 局部损失 | Σξ_local × v² / (2g) | — |
+| 　速度水头差 | (v² - v₂²) / (2g) | L.1.4 |
 | ΔZ₃ 出口渐变段 | (1 - ξ₂) × (v² - v₃²) / (2g) | L.1.3-2 |
 
 ### 5.6 加大流量工况
@@ -597,7 +598,7 @@ HydraulicCore.execute_calculation(
    - v_out加大：= v_inc（加大管道流速）
 4. **重新计算**：ΔZ₁加大、ΔZ₂加大、ΔZ₃加大
 5. **结果记录**：`v1_inc_used`、`v2_inc_used`、`v3_inc_used` 记录实际使用的加大工况流速
-6. **详细计算过程输出**：当 `verbose=True` 时，在保留设计工况“步骤1~3”的基础上，追加独立的“步骤4：加大流量工况水头损失求解”块，完整输出 `Q加大 / v加大 / v₁加大 / v₂加大 / v₃加大 / ΔZ1加大 / hf加大 / hj加大 / ΔZ2加大 / ΔZ3加大 / ΔZ加大` 的采用值与公式代入过程
+6. **详细计算过程输出**：当 `verbose=True` 时，在保留设计工况“步骤1~3”的基础上，追加独立的“步骤4：加大流量工况水头损失求解”块，完整输出 `Q加大 / v加大 / v₁加大 / v₂加大 / v₃加大 / ΔZ1加大 / hf加大 / hj加大 / 速度水头差加大 / ΔZ2加大 / ΔZ3加大 / ΔZ加大` 的采用值与公式代入过程
 
 ### 5.7 结果格式化 `format_result()`
 
@@ -709,4 +710,5 @@ from_dict(d: dict)            # 反序列化（项目加载），v3.0: plan_sour
 | v3.1 | 2026-03-06 | **加大流量工况完善**：`execute_calculation()` 新增 `v1_inc`/`v2_inc`/`v3_inc` 参数，支持用户指定加大工况流速；`CalculationResult` 新增 `v1_inc_used`/`v2_inc_used`/`v3_inc_used` 字段。**v5.0 空间数据模型**：`SpatialNode` 新增解析精确方位角/坡角/切向量字段（`alpha_before_rad`/`T_before`/`theta_3d_node` 等）；新增 `PlanSegment`/`ProfileSegment`/`BendEvent` 三个数据类；`SpatialMergeResult` 新增 `bend_events`/`plan_segments`/`profile_segments` 列表。`LongitudinalNode` 补充 `arc_end_chainage`/`arc_theta_rad` 字段。合并原 `拦污栅需求.md`（已全部覆盖于 `PRD_拦污栅配置.md` v1.3） |
 | v3.4 | 2026-04-20 | **倒虹吸 DXF 圆弧全链路保真**：新增统一 `arc_geometry` 真源，`PlanFeaturePoint / StructureSegment` 都支持持久化；`dxf_parser.py` 在平面 bulge 圆弧和纵断面竖曲线链路里直接生成圆弧真源，并在反向、节点/结构段重建、项目恢复后继续沿用；前端画布与空间链路统一消费真实弧长而不是弦长。**同日补充修正**：旧项目若缺 `longitudinal_nodes / arc_geometry`，加载时允许按前后坡向或平面控制关系自动补建，再进入后续保存链路。 |
 | v3.5 | 2026-04-20 | **倒虹吸系数归属修复**：`xi_inlet / xi_outlet` 正式固定为进口/出口渐变段系数，只参与 ΔZ₁ / ΔZ₃；结构段表中的 `INLET / OUTLET` 系数作为进出水口构件局部损失并入 ΔZ₂；详细过程与结果汇总统一改用“管道段损失”口径，`L.1.6` 固定按减号实现。 |
+| v3.6 | 2026-04-23 | **ΔZ₂ 规范项修复**：管道段水头损失按 L.1.4 增加 `(v² - v₂²) / (2g)` 速度水头差项；设计工况和加大流量工况保持同一公式口径。 |
 

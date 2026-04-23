@@ -6,7 +6,7 @@
 
 水头损失分三部分：
   ΔZ1 - 进口渐变段水面落差
-  ΔZ2 - 管道段总水头损失 (沿程损失 hf + 局部损失 hj)
+  ΔZ2 - 管道段总水头损失 (沿程损失 hf + 局部损失 hj + 速度水头差)
   ΔZ3 - 出口渐变段水面落差
   总水面落差 ΔZ = ΔZ1 + ΔZ2 - ΔZ3
 """
@@ -943,7 +943,7 @@ class HydraulicCore:
         
         # ---------- 3.2 管道段总水头损失 ΔZ2 (公式 L.1.4-7) ----------
         steps.append("【3.2 管道段总水头损失 ΔZ2】")
-        steps.append("  公式 L.1.4-7: ΔZ2 = hf + hj")
+        steps.append("  公式 L.1.4: ΔZ2 = hf + hj + (v² - v₂²) / (2g)")
         steps.append("")
         
         # 沿程损失 hf = L × v² / (C² × R_h)
@@ -963,10 +963,20 @@ class HydraulicCore:
         steps.append(f"    = {h_j:.4f} m")
         steps.append("")
         
-        # ΔZ2 = hf + hj
-        delta_Z2 = h_f + h_j
+        # 进口渐变段末端至管道进口连接段速度水头差
+        velocity_head_delta = (v ** 2 - v_2 ** 2) / (2 * g)
+        steps.append("  连接段速度水头差 = (v² - v₂²) / (2g)")
+        steps.append(f"    = ({v:.4f}² - {v_2:.4f}²) / (2×{g})")
+        steps.append(f"    = {velocity_head_delta:.4f} m")
+        steps.append("")
+
+        # ΔZ2 = hf + hj + 速度水头差
+        delta_Z2 = h_f + h_j + velocity_head_delta
         result.loss_pipe = delta_Z2
-        steps.append(f"  ΔZ2 = hf + hj = {h_f:.4f} + {h_j:.4f} = {delta_Z2:.4f} m")
+        steps.append(
+            f"  ΔZ2 = hf + hj + (v² - v₂²) / (2g) = "
+            f"{h_f:.4f} + {h_j:.4f} + {velocity_head_delta:.4f} = {delta_Z2:.4f} m"
+        )
         steps.append("")
         
         # ---------- 3.3 出口渐变段水面落差 ΔZ3 (公式 L.1.3-2) ----------
@@ -1021,7 +1031,8 @@ class HydraulicCore:
             dZ1_inc = (1 + xi_1) * (v_2_inc_use ** 2 - v_1_inc_use ** 2) / (2 * g)
             h_f_inc = (v_inc ** 2 * L_friction) / (C ** 2 * R_h)
             h_j_inc = xi_sum_middle * v_inc ** 2 / (2 * g)
-            dZ2_inc = h_f_inc + h_j_inc
+            velocity_head_delta_inc = (v_inc ** 2 - v_2_inc_use ** 2) / (2 * g)
+            dZ2_inc = h_f_inc + h_j_inc + velocity_head_delta_inc
             dZ3_inc = (1 - xi_2) * (v_out_inc ** 2 - v_3_inc_use ** 2) / (2 * g)
             
             # 记录结果
@@ -1074,8 +1085,14 @@ class HydraulicCore:
                     f"             = {xi_sum_middle:.4f} × {v_inc:.4f}² / (2×{g})"
                 )
                 steps.append(f"             = {h_j_inc:.4f} m")
+                steps.append("  连接段速度水头差加大 = (v加大² - v₂加大²) / (2g)")
                 steps.append(
-                    f"  ΔZ2加大 = hf加大 + hj加大 = {h_f_inc:.4f} + {h_j_inc:.4f} = {dZ2_inc:.4f} m"
+                    f"             = ({v_inc:.4f}² - {v_2_inc_use:.4f}²) / (2×{g})"
+                )
+                steps.append(f"             = {velocity_head_delta_inc:.4f} m")
+                steps.append(
+                    f"  ΔZ2加大 = hf加大 + hj加大 + (v加大² - v₂加大²) / (2g) = "
+                    f"{h_f_inc:.4f} + {h_j_inc:.4f} + {velocity_head_delta_inc:.4f} = {dZ2_inc:.4f} m"
                 )
                 steps.append("")
                 steps.append("【4.3 出口渐变段水面落差 ΔZ3加大】")
@@ -1126,6 +1143,7 @@ class HydraulicCore:
         else:
             lines.append(f"管内流速 v: {result.velocity:.4f} m/s")
         lines.append(f"进口渐变段始端流速 v₁: {result.velocity_channel_in:.4f} m/s")
+        lines.append(f"进口渐变段末端流速 v₂: {result.velocity_pipe_in:.4f} m/s")
         lines.append(f"出口渐变段末端流速 v₃: {result.velocity_channel_out:.4f} m/s")
         lines.append(f"水力半径: {result.hydraulic_radius:.4f} m")
         lines.append(f"谢才系数: {result.chezy_c:.4f}")
@@ -1139,6 +1157,8 @@ class HydraulicCore:
         lines.append(f"  管道段水头损失 ΔZ2: {result.loss_pipe:.4f} m")
         lines.append(f"    └ 沿程损失 hf: {result.loss_friction:.4f} m")
         lines.append(f"    └ 局部损失 hj: {result.loss_local:.4f} m")
+        velocity_head_delta = result.loss_pipe - result.loss_friction - result.loss_local
+        lines.append(f"    └ 速度水头差 (v²-v₂²)/2g: {velocity_head_delta:.4f} m")
         lines.append(f"  出口渐变段落差 ΔZ3: {result.loss_outlet:.4f} m")
         lines.append(f"  总水面落差 ΔZ: {result.total_head_loss:.4f} m")
         lines.append("-" * 60)
@@ -1154,6 +1174,13 @@ class HydraulicCore:
             lines.append(f"  出口末端流速 v₃加大 = {result.v3_inc_used:.4f} m/s")
             lines.append(f"  进口落差 ΔZ1加大 = {result.loss_inlet_inc:.4f} m")
             lines.append(f"  管道段损失 ΔZ2加大 = {result.loss_pipe_inc:.4f} m")
+            velocity_head_delta_inc = (
+                (result.velocity_increased ** 2 - result.v2_inc_used ** 2)
+                / (2 * HydraulicCore.GRAVITY)
+            )
+            lines.append(
+                f"    └ 速度水头差加大 (v加大²-v₂加大²)/2g = {velocity_head_delta_inc:.4f} m"
+            )
             lines.append(f"  出口落差 ΔZ3加大 = {result.loss_outlet_inc:.4f} m")
             lines.append(f"  总水面落差 ΔZ加大 = {result.total_head_loss_inc:.4f} m")
             lines.append("=" * 60)

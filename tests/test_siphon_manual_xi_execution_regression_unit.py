@@ -927,6 +927,62 @@ def test_execute_calculation_detail_text_distinguishes_gradient_and_endpoint_coe
     assert "管道段水头损失 ΔZ2" in summary_text
 
 
+def test_delta_z2_includes_velocity_head_delta_when_v2_differs_from_pipe_velocity():
+    """当 v2 与管道实际流速不同时，ΔZ2 应包含 L.1.4 的速度水头差项。"""
+    params = _sample_params()
+    params.v_channel_in = 0.8
+    params.v_pipe_in = 1.0
+    params.v2_strategy = V2Strategy.MANUAL
+
+    result = HydraulicCore.execute_calculation(params, [], verbose=True)
+
+    expected_extra = (
+        result.velocity ** 2 - result.velocity_pipe_in ** 2
+    ) / (2 * HydraulicCore.GRAVITY)
+    assert result.loss_pipe == pytest.approx(
+        result.loss_friction + result.loss_local + expected_extra,
+        rel=1e-9,
+    )
+    assert "(v² - v₂²) / (2g)" in "\n".join(result.calculation_steps)
+
+
+def test_delta_z2_increased_flow_includes_velocity_head_delta():
+    """加大流量工况下，ΔZ2加大也应包含速度水头差项。"""
+    params = _sample_params()
+    params.v_channel_in = 0.8
+    params.v_pipe_in = 1.0
+    params.v2_strategy = V2Strategy.MANUAL
+
+    result = HydraulicCore.execute_calculation(
+        params,
+        [],
+        verbose=True,
+        increase_percent=20.0,
+        v1_inc=0.9,
+        v2_inc=1.1,
+        v3_inc=0.7,
+    )
+
+    expected_friction = (
+        result.velocity_increased ** 2
+        * result.total_length
+        / (result.chezy_c ** 2 * result.hydraulic_radius)
+    )
+    expected_local = (
+        result.xi_sum_middle * result.velocity_increased ** 2 / (2 * HydraulicCore.GRAVITY)
+    )
+    expected_extra = (
+        result.velocity_increased ** 2 - result.v2_inc_used ** 2
+    ) / (2 * HydraulicCore.GRAVITY)
+    assert result.loss_pipe_inc == pytest.approx(
+        expected_friction + expected_local + expected_extra,
+        rel=1e-9,
+    )
+    assert "ΔZ2加大 = hf加大 + hj加大 + (v加大² - v₂加大²) / (2g)" in "\n".join(
+        result.calculation_steps
+    )
+
+
 def test_panel_keeps_gradient_coefficients_separate_from_endpoint_component_coefficients(monkeypatch):
     """界面上的 ξ₁/ξ₂ 应保持全局渐变段含义，不被结构段系数覆盖。"""
     _get_qapp()
