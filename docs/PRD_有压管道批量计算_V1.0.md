@@ -1,6 +1,6 @@
 # 有压管道 — 综合 PRD
 
-> **版本**: V2.12.15
+> **版本**: V2.12.17
 > **创建日期**: 2026-03-03  
 > **最后更新**: 2026-04-24
 > **状态**: 已实现
@@ -443,6 +443,7 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,通用} + h_{j,进口} + h_{j,出口}$$
 - `routes[route_key].profile_segments` 作为 mixed route 的统一几何真源，优先供计算与导出采样使用
 - 对 `xx管` 整线与连续承压整线重开场景，`routes[route_key].longitudinal_nodes / profile_segments` 也是纵断面状态的事实来源；只要 route 级缓存仍在，就应优先从这里恢复
 - `routes[route_key]` 现还会正式保存 `profile_state / entered_pressurized_at_row / segment_identities`
+- `routes[route_key].water_hammer_segments` 保存整线级基础水锤验算段，包含稳定 `segment_key`、成员键、代表行、当前输入、验算结果和更新时间；这些结果只用于弹窗内独立校核，不参与表3第38列或水位递推
 - `segments[identity]` 作为连续承压正式存储桶，保存 `base_name / member_display_name / dxf_display_name / member_role / start_mc / end_mc / status / friction_loss / bend_loss / local_loss / total_loss / computed_from_profile_source`
 - 旧 `pipes` 保留兼容镜像；新导出、新提示、新回读优先使用 `routes / segments`
 - `computed_from_profile_source` 只表示纵断面来源（如 `route_profile / segment_profile`），不允许再用 `data_mode` 兜底写入，避免把计算口径和来源字段混在一起
@@ -726,6 +727,7 @@ $$h_f = f \times L \times \frac{Q_{m^3/h}^m}{d_{mm}^b}$$
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| V2.12.17 | 2026-04-24 | **连续有压段水锤入口补齐**：有压管道配置弹窗的整线卡新增“基础水锤验算（按连续有压段）”。`xx管` 与 `xx渠` 都会按连续 `有压管道 / 顶管 / 定向钻` 生成水锤段；中间遇到隧洞或其他非有压管道类即断开，隧洞不计入水锤长度。混合 `D / 管材 / 流量` 不拆段，默认推荐最大 `v0` 的代表行，支持切换代表行、手改参数和批量填写 `e / Ts`。route 级结果保存到 `routes[route_key].water_hammer_segments`，仍只做独立校核，不写入表3损失、水位或累计递推。 |
 | V1.0 | 2026-03-03 | 初始版本（需求确认稿） |
 | V2.0 | 2026-03-06 | **全面重写**：合并 `有压管道/PLAN.md`（V9设计面板实施方案）；整理为独立设计面板（子系统A）+ 水面线集成（子系统B）两部分；数据模型、函数接口、文件结构全部对齐已实现代码；新增空间模式计算（`calc_total_head_loss_with_spatial`）；新增灵敏度分析（球墨铸铁管 f 上下限对比）；新增结果辅助函数说明；新增完整版数据提取器（多行模式：进口+IP点+出口）；新增持久化管理器说明；更新批量计算列结构（22列，仅新增1列"管材"，隐藏参数通过Qt.UserRole传递）；新增CAD导出规则；新增渐变段处理引用；新增测试文件索引（16个）；状态从"待实现"更新为"已实现" |
 | V2.1 | 2026-03-06 | **校验修正**：§3.4.1管材参数表改为键名→展示名双列映射；§3.4.2渐变段ζ值对齐 `constants.py SIPHON_TRANSITION_ZETA_COEFFICIENTS`（直线扭曲面出口0.30→0.40，1/4圆弧进口0.25→0.15/出口0.35→0.25），同步修正 `pressure_pipe_calc.py` 代码；§3.4.4补充4个detail字段；§3.5.2补充 `upstream/downstream_structure_type`；§3.7补充 `sensitivity_enabled`；§3.3.1补充隐藏参数Qt.UserRole传递机制说明；§8测试文件扩展为完整16个 |

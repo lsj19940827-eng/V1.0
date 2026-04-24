@@ -598,6 +598,7 @@ class PressurePipeManager:
             "raw_profile_polyline": copy.deepcopy(route_bucket.get("raw_profile_polyline", {}) or {}),
             "profile_segments": copy.deepcopy(route_bucket.get("profile_segments", []) or []),
             "profile_state": str(route_bucket.get("profile_state", "") or "").strip(),
+            "water_hammer_segments": copy.deepcopy(route_bucket.get("water_hammer_segments", []) or []),
         }
     
     def set_pipe_config(self, pipe_name: str, config: PressurePipeConfig):
@@ -744,6 +745,24 @@ class PressurePipeManager:
                 route_display_name or row.get("route_display_name", "") or route_bucket.get("display_name", "")
             ).strip()
 
+        self.save_config()
+
+    def set_route_water_hammer_segments(
+        self,
+        route_key: str,
+        water_hammer_segments: List[Dict[str, Any]],
+        route_display_name: str = "",
+    ):
+        """保存整线级基础水锤验算段。"""
+        route_key = str(route_key or "").strip()
+        if not route_key:
+            return
+        self._ensure_config_sections()
+        route_bucket = self._config["routes"].setdefault(route_key, {})
+        route_bucket["display_name"] = str(
+            route_display_name or route_bucket.get("display_name", "") or ""
+        ).strip()
+        route_bucket["water_hammer_segments"] = copy.deepcopy(list(water_hammer_segments or []))
         self.save_config()
     
     def set_result(self, pipe_name: str, total_head_loss: float,

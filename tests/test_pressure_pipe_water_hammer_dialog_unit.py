@@ -23,6 +23,7 @@ if str(ROOT / "推求水面线") not in sys.path:
 
 from app_渠系计算前端.water_profile.water_profile_dialogs import PressurePipeConfigDialog  # noqa: E402
 from 推求水面线.managers.pressure_pipe_manager import PressurePipeConfig, PressurePipeManager  # noqa: E402
+from 推求水面线.models.enums import StructureType  # noqa: E402
 
 
 def _get_qapp():
@@ -77,6 +78,69 @@ def _make_manager(project_path: Path, group) -> PressurePipeManager:
     )
     manager.set_pipe_config(group.storage_key, cfg)
     return manager
+
+
+def _make_route_group(
+    key: str,
+    row_index: int,
+    structure_type: str = "有压管道",
+    *,
+    route_key: str = "flow1-route1",
+    start_mc: float = 0.0,
+    end_mc: float = 10.0,
+    diameter: float = 1.0,
+    design_flow: float = 1.0,
+    material_key: str = "钢管",
+    pipe_velocity: float = 1.0,
+):
+    """构造整线水锤测试用分组。"""
+    row = SimpleNamespace(
+        structure_type=StructureType.from_string(structure_type),
+        section_params={"D": diameter, "pipe_material": material_key},
+        flow=design_flow,
+        water_level=100.0 + row_index,
+    )
+    group = SimpleNamespace(
+        name=key,
+        display_name=key,
+        storage_key=key,
+        identity=key,
+        route_key=route_key,
+        route_display_name="测试整线",
+        route_start_row_index=0,
+        route_end_row_index=99,
+        route_start_mc=0.0,
+        route_end_mc=100.0,
+        structure_type=structure_type,
+        rows=[row],
+        row_indices=[row_index],
+        target_row_index=row_index,
+        upstream_row_index=max(row_index - 1, 0),
+        segment_start_mc=start_mc,
+        segment_end_mc=end_mc,
+        group_mode="unnamed_row_segment",
+        design_flow=design_flow,
+        diameter=diameter,
+        material_key=material_key,
+        ip_points=[{"x": start_mc, "y": 0.0}, {"x": end_mc, "y": 0.0}],
+        plan_total_length=max(0.0, end_mc - start_mc),
+    )
+    group.pipe_velocity = pipe_velocity
+    return group
+
+
+def _make_route_dialog(groups, manager=None):
+    """创建整线模式弹窗并刷新事件。"""
+    _get_qapp()
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=groups,
+        manager=manager,
+        pressure_chains=[],
+        xxpipe_route_mode=True,
+    )
+    dialog.show()
+    _flush_events(6)
+    return dialog
 
 
 def _read_float(widget) -> float:
@@ -136,4 +200,221 @@ def test_dialog_prefills_and_persists_basic_water_hammer_inputs_and_results():
         dialog.close()
         dialog_reopen.close()
     finally:
+        shutil.rmtree(case_dir, ignore_errors=True)
+
+
+def test_route_water_hammer_segments_split_at_tunnel_and_keep_pressure_runs_whole():
+    """整线水锤段应按连续有压段生成，并被无压隧洞切断。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, pipe_velocity=0.8),
+        _make_route_group("pipe-b", 1, "定向钻", start_mc=10.0, end_mc=30.0, pipe_velocity=1.2),
+        _make_route_group("tunnel", 2, "隧洞-圆形", start_mc=30.0, end_mc=80.0),
+        _make_route_group("pipe-c", 3, "有压管道", start_mc=80.0, end_mc=120.0, pipe_velocity=0.9),
+        _make_route_group("pipe-d", 4, "顶管", start_mc=120.0, end_mc=150.0, pipe_velocity=1.6),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        segments = dialog._build_route_water_hammer_segments(dialog._route_contexts["flow1-route1"])
+
+        assert [segment["segment_key"] for segment in segments] == [
+            "flow1-route1::pipe-a::pipe-b",
+            "flow1-route1::pipe-c::pipe-d",
+        ]
+        assert [segment["member_keys"] for segment in segments] == [
+            ["pipe-a", "pipe-b"],
+            ["pipe-c", "pipe-d"],
+        ]
+        assert [segment["length_m"] for segment in segments] == pytest.approx([30.0, 70.0])
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_mixed_params_keep_single_segment_and_pick_fastest_representative():
+    """混合参数连续有压段不拆段，默认代表行取最大流速成员。"""
+    groups = [
+        _make_route_group(
+            "pipe-a",
+            0,
+            "有压管道",
+            start_mc=0.0,
+            end_mc=10.0,
+            diameter=0.8,
+            design_flow=0.8,
+            material_key="HDPE管",
+            pipe_velocity=0.9,
+        ),
+        _make_route_group(
+            "pipe-b",
+            1,
+            "有压管道",
+            start_mc=10.0,
+            end_mc=25.0,
+            diameter=0.5,
+            design_flow=0.8,
+            material_key="钢管",
+            pipe_velocity=1.7,
+        ),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        segments = dialog._build_route_water_hammer_segments(dialog._route_contexts["flow1-route1"])
+
+        assert len(segments) == 1
+        segment = segments[0]
+        assert segment["mixed_params"] is True
+        assert segment["selected_representative_key"] == "pipe-b"
+        assert segment["inputs"]["diameter_m"] == pytest.approx(0.5)
+        assert segment["inputs"]["velocity_mps"] == pytest.approx(1.7)
+        assert "D" in segment["param_summary"]
+        assert "管材" in segment["param_summary"]
+    finally:
+        dialog.close()
+
+
+def test_route_only_dialog_shows_water_hammer_segment_panel_without_child_pipe_cards():
+    """route-only 模式下整线卡应直接显示水锤段入口。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0),
+        _make_route_group("pipe-b", 1, "有压管道", start_mc=10.0, end_mc=20.0),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        route_refs = dialog._route_widgets["flow1-route1"]
+        segment_widgets = route_refs["water_hammer_segment_widgets"]
+
+        assert dialog._card_widgets == {}
+        assert len(segment_widgets) == 1
+        assert segment_widgets[0]["segment_key"] == "flow1-route1::pipe-a::pipe-b"
+        assert segment_widgets[0]["water_hammer_calc_btn"].text() == "验算/刷新"
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_bulk_inputs_apply_all_and_same_material_only():
+    """整线水锤段应支持批量填写全部段和同管材段。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, material_key="钢管"),
+        _make_route_group("tunnel-a", 1, "隧洞-圆形", start_mc=10.0, end_mc=20.0),
+        _make_route_group("pipe-b", 2, "有压管道", start_mc=20.0, end_mc=30.0, material_key="HDPE管"),
+        _make_route_group("tunnel-b", 3, "隧洞-圆形", start_mc=30.0, end_mc=40.0),
+        _make_route_group("pipe-c", 4, "有压管道", start_mc=40.0, end_mc=50.0, material_key="钢管"),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        route_refs = dialog._route_widgets["flow1-route1"]
+        segment_widgets = route_refs["water_hammer_segment_widgets"]
+        assert len(segment_widgets) == 3
+
+        route_refs["water_hammer_bulk_e_edit"].setText("0.011")
+        route_refs["water_hammer_bulk_ts_edit"].setText("0.02")
+        QTest.mouseClick(route_refs["water_hammer_bulk_all_btn"], Qt.LeftButton)
+        _flush_events(4)
+
+        for widgets in segment_widgets:
+            assert _read_float(widgets["water_hammer_wall_thickness_edit"]) == pytest.approx(0.011)
+            assert _read_float(widgets["water_hammer_closing_time_edit"]) == pytest.approx(0.02)
+
+        segment_widgets[1]["water_hammer_wall_thickness_edit"].setText("0.017")
+        segment_widgets[1]["water_hammer_closing_time_edit"].setText("0.05")
+        route_refs["water_hammer_bulk_e_edit"].setText("0.022")
+        route_refs["water_hammer_bulk_ts_edit"].setText("0.03")
+        QTest.mouseClick(route_refs["water_hammer_bulk_same_material_btn"], Qt.LeftButton)
+        _flush_events(4)
+
+        assert _read_float(segment_widgets[0]["water_hammer_wall_thickness_edit"]) == pytest.approx(0.022)
+        assert _read_float(segment_widgets[0]["water_hammer_closing_time_edit"]) == pytest.approx(0.03)
+        assert _read_float(segment_widgets[1]["water_hammer_wall_thickness_edit"]) == pytest.approx(0.017)
+        assert _read_float(segment_widgets[1]["water_hammer_closing_time_edit"]) == pytest.approx(0.05)
+        assert _read_float(segment_widgets[2]["water_hammer_wall_thickness_edit"]) == pytest.approx(0.022)
+        assert _read_float(segment_widgets[2]["water_hammer_closing_time_edit"]) == pytest.approx(0.03)
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_calculation_does_not_mutate_table3_loss_chain_fields():
+    """整线水锤验算只做独立校核，不改表3损失和水位字段。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0),
+        _make_route_group("pipe-b", 1, "有压管道", start_mc=10.0, end_mc=20.0),
+    ]
+    for idx, group in enumerate(groups):
+        row = group.rows[0]
+        row.head_loss_total = 1.0 + idx
+        row.head_loss_cumulative = 2.0 + idx
+        row.water_level = 100.0 + idx
+        row.pressure_pipe_window_override = {"total_head_loss": 9.9}
+    before = [
+        (
+            group.rows[0].head_loss_total,
+            group.rows[0].head_loss_cumulative,
+            group.rows[0].water_level,
+            dict(group.rows[0].pressure_pipe_window_override),
+        )
+        for group in groups
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        widgets["water_hammer_wall_thickness_edit"].setText("0.012")
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(6)
+
+        after = [
+            (
+                group.rows[0].head_loss_total,
+                group.rows[0].head_loss_cumulative,
+                group.rows[0].water_level,
+                dict(group.rows[0].pressure_pipe_window_override),
+            )
+            for group in groups
+        ]
+        assert after == before
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_segments_persist_and_restore_from_manager():
+    """route 级水锤结果应随项目保存并在重开弹窗后恢复。"""
+    case_dir = Path(tempfile.mkdtemp(prefix="wh_route_"))
+    project_path = case_dir / "demo.qxproj"
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0),
+        _make_route_group("pipe-b", 1, "有压管道", start_mc=10.0, end_mc=20.0),
+    ]
+
+    try:
+        manager = PressurePipeManager(str(project_path))
+        dialog = _make_route_dialog(groups, manager=manager)
+        route_refs = dialog._route_widgets["flow1-route1"]
+        widgets = route_refs["water_hammer_segment_widgets"][0]
+        widgets["water_hammer_wall_thickness_edit"].setText("0.012")
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(6)
+        dialog._persist_route_water_hammer_segments()
+        _flush_events(2)
+
+        reloaded_manager = PressurePipeManager(str(project_path))
+        snapshot = reloaded_manager.get_route_config("flow1-route1")
+        assert snapshot["water_hammer_segments"][0]["segment_key"] == "flow1-route1::pipe-a::pipe-b"
+        assert snapshot["water_hammer_segments"][0]["inputs"]["wall_thickness_m"] == pytest.approx(0.012)
+        assert snapshot["water_hammer_segments"][0]["inputs"]["closing_time_s"] == pytest.approx(0.01)
+
+        dialog_reopen = _make_route_dialog(groups, manager=reloaded_manager)
+        widgets_reopen = dialog_reopen._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        assert _read_float(widgets_reopen["water_hammer_wall_thickness_edit"]) == pytest.approx(0.012)
+        assert _read_float(widgets_reopen["water_hammer_closing_time_edit"]) == pytest.approx(0.01)
+        assert "可计算" in widgets_reopen["water_hammer_status_label"].text()
+        dialog_reopen.close()
+    finally:
+        try:
+            dialog.close()
+        except Exception:
+            pass
         shutil.rmtree(case_dir, ignore_errors=True)

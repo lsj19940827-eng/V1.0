@@ -1138,6 +1138,8 @@ class PressurePipeConfigDialog(QDialog):
         self._card_widgets = {}
         # 存储每条整线卡片的UI组件引用 {route_key: {...}}
         self._route_widgets = {}
+        # 存储整线级水锤段控件引用 {segment_key: {...}}
+        self._route_water_hammer_segment_widgets: Dict[str, Dict[str, Any]] = {}
         self._radius_configs: Dict[str, Dict[str, Any]] = {}
         self._d_override_payload: Dict[str, float] = {}
         self._tunnel_payload: Dict[str, Dict[str, Any]] = {}
@@ -1363,7 +1365,7 @@ class PressurePipeConfigDialog(QDialog):
     @classmethod
     def _group_is_tunnel_segment(cls, group) -> bool:
         """判断分段是否为隧洞，用于 xx管 整线模式下保留必要卡片。"""
-        return "隧洞" in cls._structure_type_text(getattr(group, "structure_type", ""))
+        return "隧洞" in cls._group_structure_type_text(group)
 
     @classmethod
     def _route_node_requires_import_coverage(cls, node) -> bool:
@@ -2025,10 +2027,26 @@ class PressurePipeConfigDialog(QDialog):
     @classmethod
     def _group_supports_basic_water_hammer(cls, group) -> bool:
         """判断分组是否适用基础水锤验算。"""
-        structure_text = cls._structure_type_text(getattr(group, "structure_type", ""))
+        structure_text = cls._group_structure_type_text(group)
         if not structure_text:
             return True
         return structure_text in {"有压管道", "顶管", "定向钻"}
+
+    @classmethod
+    def _group_structure_type_text(cls, group) -> str:
+        """优先按分组字段，其次按首行节点解析结构类型。"""
+        structure_text = cls._structure_type_text(getattr(group, "structure_type", ""))
+        if structure_text:
+            return structure_text
+        rows = list(getattr(group, "rows", []) or [])
+        if rows:
+            return cls._structure_type_text(getattr(rows[0], "structure_type", ""))
+        return ""
+
+    @classmethod
+    def _group_is_water_hammer_pressure_member(cls, group) -> bool:
+        """判断当前分组是否属于水锤验算可连续合并的有压管道类。"""
+        return cls._group_structure_type_text(group) in {"有压管道", "顶管", "定向钻"}
 
     @classmethod
     def _estimate_group_plan_length(cls, group) -> float:
@@ -2114,6 +2132,603 @@ class PressurePipeConfigDialog(QDialog):
             "closing_time_s": self._safe_float(saved_inputs.get("closing_time_s"), 0.0),
             "result": saved_result if isinstance(saved_result, dict) else {},
         }
+
+    @staticmethod
+    def _group_order_index(group) -> int:
+        """返回分组在表格里的排序位置。"""
+        indices = [
+            int(idx) for idx in (getattr(group, "row_indices", []) or [])
+            if isinstance(idx, int) and idx >= 0
+        ]
+        if indices:
+            return min(indices)
+        return coerce_row_index(getattr(group, "target_row_index", -1), 10**9)
+
+    @staticmethod
+    def _group_row_range(group) -> tuple[int, int]:
+        """返回分组覆盖的行号范围。"""
+        indices = [
+            int(idx) for idx in (getattr(group, "row_indices", []) or [])
+            if isinstance(idx, int) and idx >= 0
+        ]
+        if indices:
+            return min(indices), max(indices)
+        target = coerce_row_index(getattr(group, "target_row_index", -1), -1)
+        return target, target
+
+    @staticmethod
+    def _format_row_range_text(start_row: int, end_row: int) -> str:
+        """把 0 基行号范围格式化成界面文案。"""
+        if start_row < 0 and end_row < 0:
+            return "未定位"
+        if start_row == end_row:
+            return f"第{start_row + 1}行"
+        return f"第{start_row + 1}行 ~ 第{end_row + 1}行"
+
+    def _resolve_route_water_hammer_saved_map(self, route_key: str) -> Dict[str, Dict[str, Any]]:
+        """读取 route 级已保存的水锤段结果。"""
+        if not self._manager:
+            return {}
+        get_route_config = getattr(self._manager, "get_route_config", None)
+        if not callable(get_route_config):
+            return {}
+        route_config = get_route_config(route_key) or {}
+        saved_map: Dict[str, Dict[str, Any]] = {}
+        for item in list(route_config.get("water_hammer_segments", []) or []):
+            if not isinstance(item, dict):
+                continue
+            segment_key = str(item.get("segment_key", "") or "").strip()
+            if segment_key:
+                saved_map[segment_key] = copy.deepcopy(item)
+        return saved_map
+
+    def _resolve_group_water_hammer_length(self, group, config=None) -> float:
+        """解析单个有压成员贡献给水锤段的长度。"""
+        cfg = config or self._get_manager_group_config(group)
+        for value in (
+            getattr(cfg, "plan_total_length", 0.0) if cfg is not None else 0.0,
+            getattr(group, "plan_total_length", 0.0),
+            self._estimate_group_plan_length(group),
+        ):
+            number = self._safe_float(value, 0.0)
+            if number > 0:
+                return float(number)
+        start_mc = self._safe_float(getattr(group, "segment_start_mc", None), None)
+        end_mc = self._safe_float(getattr(group, "segment_end_mc", None), None)
+        if start_mc is not None and end_mc is not None and abs(end_mc - start_mc) > 0:
+            return abs(float(end_mc) - float(start_mc))
+        return 0.0
+
+    @staticmethod
+    def _first_row_section_params(group) -> Dict[str, Any]:
+        """返回分组首行断面参数。"""
+        rows = list(getattr(group, "rows", []) or [])
+        if not rows:
+            return {}
+        params = getattr(rows[0], "section_params", {}) or {}
+        return params if isinstance(params, dict) else {}
+
+    def _build_route_water_hammer_candidate(self, group) -> Dict[str, Any]:
+        """构造整线水锤段的代表行候选。"""
+        try:
+            from core.pressure_pipe_calc import calc_pipe_velocity, get_water_hammer_elastic_modulus
+        except Exception:
+            calc_pipe_velocity = None
+            get_water_hammer_elastic_modulus = None
+
+        cfg = self._get_manager_group_config(group)
+        params = self._first_row_section_params(group)
+        group_key = self._group_storage_key(group)
+        display_name = self._group_display_name(group)
+        diameter = self._safe_float(getattr(cfg, "D", 0.0) if cfg is not None else 0.0, 0.0)
+        if diameter <= 0:
+            diameter = self._safe_float(getattr(group, "diameter", 0.0), 0.0)
+        if diameter <= 0:
+            diameter = self._safe_float(params.get("D", params.get("直径D", 0.0)), 0.0)
+
+        design_flow = self._safe_float(getattr(cfg, "Q", 0.0) if cfg is not None else 0.0, 0.0)
+        if design_flow <= 0:
+            design_flow = self._safe_float(getattr(group, "design_flow", 0.0), 0.0)
+        if design_flow <= 0:
+            rows = list(getattr(group, "rows", []) or [])
+            design_flow = self._safe_float(getattr(rows[0], "flow", 0.0) if rows else 0.0, 0.0)
+
+        material_key = str(getattr(cfg, "material_key", "") if cfg is not None else "").strip()
+        if not material_key:
+            material_key = str(getattr(group, "material_key", "") or "").strip()
+        if not material_key:
+            material_key = str(params.get("pipe_material", "") or "").strip()
+
+        velocity_mps = self._safe_float(getattr(cfg, "pipe_velocity", 0.0) if cfg is not None else 0.0, 0.0)
+        if velocity_mps <= 0:
+            velocity_mps = self._safe_float(getattr(group, "pipe_velocity", 0.0), 0.0)
+        if velocity_mps <= 0 and callable(calc_pipe_velocity) and diameter > 0:
+            velocity_mps = self._safe_float(calc_pipe_velocity(design_flow, diameter), 0.0)
+
+        elastic_modulus_pa = 0.0
+        if callable(get_water_hammer_elastic_modulus):
+            elastic_modulus_pa = self._safe_float(get_water_hammer_elastic_modulus(material_key), 0.0)
+
+        start_row, end_row = self._group_row_range(group)
+        row_text = self._format_row_range_text(start_row, end_row)
+        return {
+            "key": group_key,
+            "label": f"{display_name}（{row_text}，v0={velocity_mps:.3f}m/s）",
+            "display_name": display_name,
+            "row_range": [start_row, end_row],
+            "diameter_m": diameter,
+            "design_flow": design_flow,
+            "material_key": material_key,
+            "velocity_mps": velocity_mps,
+            "initial_head_m": self._resolve_group_water_hammer_head(group),
+            "elastic_modulus_pa": elastic_modulus_pa,
+            "length_m": self._resolve_group_water_hammer_length(group, config=cfg),
+        }
+
+    @staticmethod
+    def _format_unique_number_summary(values: List[float], digits: int = 3) -> str:
+        """格式化去重后的数字范围。"""
+        numbers = sorted({round(float(v), digits) for v in values if v is not None and float(v) > 0})
+        if not numbers:
+            return "-"
+        if len(numbers) == 1:
+            return f"{numbers[0]:.{digits}f}".rstrip("0").rstrip(".")
+        return (
+            f"{numbers[0]:.{digits}f}".rstrip("0").rstrip(".")
+            + " ~ "
+            + f"{numbers[-1]:.{digits}f}".rstrip("0").rstrip(".")
+        )
+
+    @staticmethod
+    def _format_unique_text_summary(values: List[str]) -> str:
+        """格式化去重后的文本集合。"""
+        texts = sorted({str(v or "").strip() for v in values if str(v or "").strip()})
+        if not texts:
+            return "-"
+        return " / ".join(texts[:4]) + (" 等" if len(texts) > 4 else "")
+
+    def _build_route_water_hammer_param_summary(self, candidates: List[Dict[str, Any]]) -> str:
+        """生成整线水锤段参数范围提示。"""
+        return (
+            f"D={self._format_unique_number_summary([c.get('diameter_m') for c in candidates], 3)}m；"
+            f"Q={self._format_unique_number_summary([c.get('design_flow') for c in candidates], 3)}m³/s；"
+            f"管材={self._format_unique_text_summary([c.get('material_key') for c in candidates])}；"
+            f"v0={self._format_unique_number_summary([c.get('velocity_mps') for c in candidates], 3)}m/s"
+        )
+
+    def _build_route_water_hammer_segment(
+        self,
+        route_key: str,
+        groups: List[Any],
+        saved_map: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """把一组连续有压成员整理成一个水锤验算段。"""
+        member_keys = [self._group_storage_key(group) for group in groups]
+        segment_key = f"{route_key}::{member_keys[0]}::{member_keys[-1]}"
+        saved = saved_map.get(segment_key, {})
+        candidates = [self._build_route_water_hammer_candidate(group) for group in groups]
+        candidate_keys = {candidate["key"] for candidate in candidates}
+        saved_rep_key = str(saved.get("selected_representative_key", "") or "").strip()
+        if saved_rep_key not in candidate_keys:
+            selected = max(candidates, key=lambda c: self._safe_float(c.get("velocity_mps"), 0.0))
+            selected_rep_key = selected["key"]
+        else:
+            selected_rep_key = saved_rep_key
+            selected = next(candidate for candidate in candidates if candidate["key"] == selected_rep_key)
+
+        length_m = sum(self._safe_float(candidate.get("length_m"), 0.0) for candidate in candidates)
+        base_inputs = {
+            "length_m": length_m,
+            "diameter_m": self._safe_float(selected.get("diameter_m"), 0.0),
+            "wall_thickness_m": 0.0,
+            "elastic_modulus_pa": self._safe_float(selected.get("elastic_modulus_pa"), 0.0),
+            "velocity_mps": self._safe_float(selected.get("velocity_mps"), 0.0),
+            "initial_head_m": selected.get("initial_head_m"),
+            "closing_time_s": 0.0,
+        }
+        saved_inputs = saved.get("inputs", {}) if isinstance(saved.get("inputs", {}), dict) else {}
+        inputs = dict(base_inputs)
+        for key in base_inputs:
+            if key in saved_inputs and saved_inputs.get(key) is not None:
+                inputs[key] = saved_inputs.get(key)
+
+        start_rows = [self._group_row_range(group)[0] for group in groups]
+        end_rows = [self._group_row_range(group)[1] for group in groups]
+        result = saved.get("result", {}) if isinstance(saved.get("result", {}), dict) else {}
+        if not result and str(saved.get("status", "") or "").strip():
+            result = {key: value for key, value in saved.items() if key != "inputs"}
+
+        unique_d = {round(self._safe_float(c.get("diameter_m"), 0.0), 6) for c in candidates}
+        unique_q = {round(self._safe_float(c.get("design_flow"), 0.0), 6) for c in candidates}
+        unique_material = {str(c.get("material_key", "") or "").strip() for c in candidates}
+        return {
+            "segment_key": segment_key,
+            "route_key": route_key,
+            "member_keys": member_keys,
+            "member_count": len(groups),
+            "display_name": (
+                self._group_display_name(groups[0])
+                if len(groups) == 1
+                else f"{self._group_display_name(groups[0])} ~ {self._group_display_name(groups[-1])}"
+            ),
+            "row_range": [min(start_rows), max(end_rows)],
+            "length_m": length_m,
+            "representative_candidates": candidates,
+            "selected_representative_key": selected_rep_key,
+            "mixed_params": len(unique_d) > 1 or len(unique_q) > 1 or len(unique_material) > 1,
+            "param_summary": self._build_route_water_hammer_param_summary(candidates),
+            "inputs": inputs,
+            "result": result,
+        }
+
+    def _build_route_water_hammer_segments(self, route_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """按整线内连续有压段构造水锤验算段。"""
+        route_key = str(route_context.get("route_key", "") or "").strip()
+        saved_map = self._resolve_route_water_hammer_saved_map(route_key)
+        groups = sorted(list(route_context.get("groups", []) or []), key=self._group_order_index)
+        segments: List[Dict[str, Any]] = []
+        current_run: List[Any] = []
+        for group in groups:
+            if self._group_is_water_hammer_pressure_member(group):
+                current_run.append(group)
+                continue
+            if current_run:
+                segments.append(self._build_route_water_hammer_segment(route_key, current_run, saved_map))
+                current_run = []
+        if current_run:
+            segments.append(self._build_route_water_hammer_segment(route_key, current_run, saved_map))
+        return segments
+
+    @staticmethod
+    def _route_water_hammer_candidate_by_key(
+        candidates: List[Dict[str, Any]],
+        candidate_key: str,
+    ) -> Dict[str, Any]:
+        """按键查找代表行候选。"""
+        for candidate in candidates:
+            if str(candidate.get("key", "") or "").strip() == str(candidate_key or "").strip():
+                return candidate
+        return candidates[0] if candidates else {}
+
+    def _read_route_water_hammer_inputs(self, segment_key: str) -> Dict[str, Any]:
+        """读取整线水锤段当前输入。"""
+        widgets = self._route_water_hammer_segment_widgets.get(segment_key, {})
+        if not widgets:
+            return {}
+        return {
+            "length_m": self._safe_float(widgets["water_hammer_length_edit"].text(), 0.0),
+            "diameter_m": self._safe_float(widgets["water_hammer_diameter_edit"].text(), 0.0),
+            "wall_thickness_m": self._safe_float(widgets["water_hammer_wall_thickness_edit"].text(), 0.0),
+            "elastic_modulus_pa": self._safe_float(widgets["water_hammer_elastic_modulus_edit"].text(), 0.0),
+            "velocity_mps": self._safe_float(widgets["water_hammer_velocity_edit"].text(), 0.0),
+            "initial_head_m": self._safe_float(widgets["water_hammer_head_edit"].text(), None),
+            "closing_time_s": self._safe_float(widgets["water_hammer_closing_time_edit"].text(), 0.0),
+        }
+
+    def _apply_route_water_hammer_result_to_widgets(self, segment_key: str, result: Dict[str, Any] | None = None):
+        """把整线水锤段结果刷新到界面。"""
+        widgets = self._route_water_hammer_segment_widgets.get(segment_key, {})
+        if not widgets:
+            return
+        payload = result if isinstance(result, dict) else {}
+        widgets["water_hammer_result"] = copy.deepcopy(payload)
+        status_text = str(payload.get("status", "") or "").strip()
+        reason_text = str(payload.get("reason", "") or "").strip()
+        if status_text:
+            widgets["water_hammer_status_label"].setText(
+                f"状态：{status_text}" + (f" | {reason_text}" if reason_text else "")
+            )
+        else:
+            widgets["water_hammer_status_label"].setText("状态：尚未验算")
+        widgets["water_hammer_result_a_label"].setText(
+            self._format_basic_water_hammer_result_value(payload.get("a"), digits=3)
+        )
+        widgets["water_hammer_result_mu_label"].setText(
+            self._format_basic_water_hammer_result_value(payload.get("mu"), digits=4)
+        )
+        widgets["water_hammer_result_ratio_label"].setText(
+            self._format_basic_water_hammer_result_value(payload.get("ts_to_mu_ratio"), digits=3)
+        )
+        widgets["water_hammer_result_delta_h_label"].setText(
+            self._format_basic_water_hammer_result_value(payload.get("delta_h"), digits=3)
+        )
+        widgets["water_hammer_result_hmax_label"].setText(
+            self._format_basic_water_hammer_result_value(payload.get("hmax"), digits=3)
+        )
+
+    def _clear_route_water_hammer_result(self, segment_key: str):
+        """整线水锤段参数变更后清空旧结果。"""
+        self._apply_route_water_hammer_result_to_widgets(segment_key, {})
+
+    def _on_route_water_hammer_representative_changed(self, segment_key: str):
+        """切换代表行后刷新预填参数。"""
+        widgets = self._route_water_hammer_segment_widgets.get(segment_key, {})
+        if not widgets:
+            return
+        combo = widgets.get("water_hammer_representative_combo")
+        index = combo.currentIndex() if combo is not None else -1
+        candidate_key = combo.itemData(index) if index >= 0 else ""
+        candidate = self._route_water_hammer_candidate_by_key(
+            widgets.get("representative_candidates", []),
+            str(candidate_key or ""),
+        )
+        if not candidate:
+            return
+        widgets["selected_representative_key"] = str(candidate.get("key", "") or "")
+        widgets["representative_material_key"] = str(candidate.get("material_key", "") or "").strip()
+        widgets["water_hammer_diameter_edit"].setText(self._fmt_live_value(candidate.get("diameter_m", 0.0), digits=3))
+        widgets["water_hammer_velocity_edit"].setText(self._fmt_live_value(candidate.get("velocity_mps", 0.0), digits=4))
+        head_value = candidate.get("initial_head_m")
+        widgets["water_hammer_head_edit"].setText(
+            "" if head_value is None else self._fmt_live_value(float(head_value), digits=3)
+        )
+        elastic = self._safe_float(candidate.get("elastic_modulus_pa"), 0.0)
+        widgets["water_hammer_elastic_modulus_edit"].setText(f"{elastic:.6g}" if elastic > 0 else "")
+        self._clear_route_water_hammer_result(segment_key)
+
+    def _calculate_route_water_hammer_segment(self, segment_key: str):
+        """执行整线水锤段验算。"""
+        try:
+            from core.pressure_pipe_calc import calc_basic_water_hammer
+        except Exception as exc:
+            fluent_error(self, "基础水锤验算失败", f"加载计算模块失败：{exc}")
+            return
+        result = calc_basic_water_hammer(**self._read_route_water_hammer_inputs(segment_key))
+        self._apply_route_water_hammer_result_to_widgets(segment_key, result)
+
+    def _apply_route_water_hammer_bulk_inputs(self, route_key: str, same_material_only: bool = False):
+        """把批量 e/Ts 填到整线水锤段。"""
+        route_refs = self._route_widgets.get(route_key, {})
+        source_e = self._safe_float(route_refs.get("water_hammer_bulk_e_edit").text(), 0.0)
+        source_ts = self._safe_float(route_refs.get("water_hammer_bulk_ts_edit").text(), 0.0)
+        if source_e <= 0 and source_ts <= 0:
+            return
+        segment_widgets = list(route_refs.get("water_hammer_segment_widgets", []) or [])
+        source_material = ""
+        if same_material_only and segment_widgets:
+            first_widgets = segment_widgets[0]
+            source_material = str(first_widgets.get("representative_material_key", "") or "").strip()
+        for widgets in segment_widgets:
+            if same_material_only and source_material:
+                material = str(widgets.get("representative_material_key", "") or "").strip()
+                if material != source_material:
+                    continue
+            if source_e > 0:
+                widgets["water_hammer_wall_thickness_edit"].setText(self._fmt_live_value(source_e, digits=4))
+            if source_ts > 0:
+                widgets["water_hammer_closing_time_edit"].setText(self._fmt_live_value(source_ts, digits=4))
+            self._clear_route_water_hammer_result(widgets["segment_key"])
+
+    def _create_route_water_hammer_segment_card(self, segment: Dict[str, Any]) -> QFrame:
+        """创建整线内单个连续有压段的水锤验算卡片。"""
+        segment_key = str(segment.get("segment_key", "") or "").strip()
+        inputs = segment.get("inputs", {}) if isinstance(segment.get("inputs", {}), dict) else {}
+        candidates = list(segment.get("representative_candidates", []) or [])
+        selected_key = str(segment.get("selected_representative_key", "") or "").strip()
+        selected = self._route_water_hammer_candidate_by_key(candidates, selected_key)
+
+        frame = QFrame()
+        frame.setStyleSheet("QFrame { background: #FFFFFF; border: 1px solid #F3D9A4; border-radius: 6px; }")
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(6)
+
+        row_range = segment.get("row_range", [-1, -1])
+        title_text = (
+            f"{segment.get('display_name', '有压段')} | "
+            f"{self._format_row_range_text(int(row_range[0]), int(row_range[1]))} | "
+            f"{int(segment.get('member_count', 0) or 0)} 个成员"
+        )
+        title = QLabel(title_text)
+        title.setStyleSheet("font-size: 12px; color: #8D4E00; font-weight: bold;")
+        lay.addWidget(title)
+
+        summary = QLabel(str(segment.get("param_summary", "") or ""))
+        summary.setWordWrap(True)
+        summary.setStyleSheet("font-size: 12px; color: #6D4C41;")
+        lay.addWidget(summary)
+        if bool(segment.get("mixed_params")):
+            mixed_hint = QLabel("段内参数不完全一致：本段仍作为一整段验算，可通过代表行或手改参数控制取值。")
+            mixed_hint.setWordWrap(True)
+            mixed_hint.setStyleSheet("font-size: 12px; color: #B26A00;")
+            lay.addWidget(mixed_hint)
+
+        rep_row = QHBoxLayout()
+        rep_row.setSpacing(8)
+        rep_row.addWidget(QLabel("代表行："))
+        representative_combo = ComboBox()
+        representative_combo.setMinimumWidth(360)
+        for candidate in candidates:
+            representative_combo.addItem(str(candidate.get("label", "") or candidate.get("key", "")), candidate.get("key", ""))
+        selected_index = 0
+        for idx in range(representative_combo.count()):
+            if str(representative_combo.itemData(idx) or "") == selected_key:
+                selected_index = idx
+                break
+        if representative_combo.count() > 0:
+            representative_combo.setCurrentIndex(selected_index)
+        rep_row.addWidget(representative_combo, 1)
+        lay.addLayout(rep_row)
+
+        def _make_edit(placeholder: str, value, digits: int = 3, width: int = 110):
+            edit = LineEdit()
+            edit.setPlaceholderText(placeholder)
+            edit.setFixedWidth(width)
+            if value is not None:
+                text = self._fmt_live_value(self._safe_float(value, 0.0), digits=digits)
+                if text:
+                    edit.setText(text)
+            return edit
+
+        length_edit = _make_edit("L(m)", inputs.get("length_m"), digits=3)
+        diameter_edit = _make_edit("D(m)", inputs.get("diameter_m"), digits=3)
+        velocity_edit = _make_edit("v0(m/s)", inputs.get("velocity_mps"), digits=4)
+        head_value = inputs.get("initial_head_m")
+        head_edit = _make_edit("Hc(m)", head_value, digits=3)
+        wall_thickness_edit = _make_edit("e(m)", inputs.get("wall_thickness_m"), digits=4)
+        elastic_modulus_edit = LineEdit()
+        elastic_modulus_edit.setPlaceholderText("E(N/m²)")
+        elastic_modulus_edit.setFixedWidth(140)
+        elastic_value = self._safe_float(inputs.get("elastic_modulus_pa"), 0.0)
+        if elastic_value > 0:
+            elastic_modulus_edit.setText(f"{elastic_value:.6g}")
+        closing_time_edit = _make_edit("Ts(s)", inputs.get("closing_time_s"), digits=4)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        input_items = [
+            ("L(m)", length_edit),
+            ("D(m)", diameter_edit),
+            ("v0(m/s)", velocity_edit),
+            ("Hc(m)", head_edit),
+            ("e(m)", wall_thickness_edit),
+            ("E(N/m²)", elastic_modulus_edit),
+            ("Ts(s)", closing_time_edit),
+        ]
+        for index, (label_text, edit) in enumerate(input_items):
+            row = index // 4
+            col = (index % 4) * 2
+            grid.addWidget(QLabel(label_text), row, col)
+            grid.addWidget(edit, row, col + 1)
+        lay.addLayout(grid)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        calc_btn = PushButton("验算/刷新")
+        status_label = QLabel("状态：尚未验算")
+        status_label.setWordWrap(True)
+        status_label.setStyleSheet("font-size: 12px; color: #546E7A;")
+        action_row.addWidget(calc_btn)
+        action_row.addWidget(status_label, 1)
+        lay.addLayout(action_row)
+
+        result_grid = QGridLayout()
+        result_grid.setHorizontalSpacing(8)
+        result_grid.setVerticalSpacing(2)
+        result_labels = {
+            "water_hammer_result_a_label": QLabel("-"),
+            "water_hammer_result_mu_label": QLabel("-"),
+            "water_hammer_result_ratio_label": QLabel("-"),
+            "water_hammer_result_delta_h_label": QLabel("-"),
+            "water_hammer_result_hmax_label": QLabel("-"),
+        }
+        for index, (label_text, key) in enumerate([
+            ("a(m/s)", "water_hammer_result_a_label"),
+            ("μ(s)", "water_hammer_result_mu_label"),
+            ("Ts/μ", "water_hammer_result_ratio_label"),
+            ("ΔH(m)", "water_hammer_result_delta_h_label"),
+            ("Hmax(m)", "water_hammer_result_hmax_label"),
+        ]):
+            col = (index % 5) * 2
+            result_grid.addWidget(QLabel(label_text), 0, col)
+            result_grid.addWidget(result_labels[key], 0, col + 1)
+        lay.addLayout(result_grid)
+
+        selected_material = str(selected.get("material_key", "") or "").strip()
+        refs = {
+            "segment_key": segment_key,
+            "route_key": str(segment.get("route_key", "") or "").strip(),
+            "member_keys": list(segment.get("member_keys", []) or []),
+            "selected_representative_key": selected_key,
+            "representative_candidates": candidates,
+            "representative_material_key": selected_material,
+            "water_hammer_card": frame,
+            "water_hammer_representative_combo": representative_combo,
+            "water_hammer_length_edit": length_edit,
+            "water_hammer_diameter_edit": diameter_edit,
+            "water_hammer_velocity_edit": velocity_edit,
+            "water_hammer_head_edit": head_edit,
+            "water_hammer_wall_thickness_edit": wall_thickness_edit,
+            "water_hammer_elastic_modulus_edit": elastic_modulus_edit,
+            "water_hammer_closing_time_edit": closing_time_edit,
+            "water_hammer_calc_btn": calc_btn,
+            "water_hammer_status_label": status_label,
+            "water_hammer_result": {},
+        }
+        refs.update(result_labels)
+        self._route_water_hammer_segment_widgets[segment_key] = refs
+
+        representative_combo.currentIndexChanged.connect(
+            lambda _idx, key=segment_key: self._on_route_water_hammer_representative_changed(key)
+        )
+        calc_btn.clicked.connect(lambda _checked=False, key=segment_key: self._calculate_route_water_hammer_segment(key))
+        for edit in (
+            length_edit,
+            diameter_edit,
+            velocity_edit,
+            head_edit,
+            wall_thickness_edit,
+            elastic_modulus_edit,
+            closing_time_edit,
+        ):
+            edit.textEdited.connect(lambda _txt, key=segment_key: self._clear_route_water_hammer_result(key))
+        self._apply_route_water_hammer_result_to_widgets(segment_key, segment.get("result", {}))
+        return frame
+
+    def _create_route_water_hammer_panel(self, card_lay, route_context: Dict[str, Any], route_refs: Dict[str, Any]):
+        """在整线卡内创建按连续有压段拆分的水锤验算区域。"""
+        route_key = str(route_context.get("route_key", "") or "").strip()
+        segments = self._build_route_water_hammer_segments(route_context)
+        route_refs["water_hammer_segments"] = copy.deepcopy(segments)
+        route_refs["water_hammer_segment_widgets"] = []
+        if not segments:
+            return
+
+        panel = QFrame()
+        panel.setStyleSheet("QFrame { background: #FFFDF5; border: 1px solid #F3D9A4; border-radius: 6px; }")
+        panel_lay = QVBoxLayout(panel)
+        panel_lay.setContentsMargins(10, 8, 10, 8)
+        panel_lay.setSpacing(8)
+
+        title = QLabel("基础水锤验算（按连续有压段）")
+        title.setStyleSheet("font-size: 12px; color: #8D4E00; font-weight: bold;")
+        panel_lay.addWidget(title)
+
+        hint = QLabel("只做并列校核，不参与表3水头损失、水位和累计损失递推。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("font-size: 12px; color: #6D4C41;")
+        panel_lay.addWidget(hint)
+
+        bulk_row = QHBoxLayout()
+        bulk_row.setSpacing(8)
+        bulk_row.addWidget(QLabel("批量 e(m)："))
+        bulk_e_edit = LineEdit()
+        bulk_e_edit.setFixedWidth(90)
+        bulk_e_edit.setPlaceholderText("e")
+        bulk_row.addWidget(bulk_e_edit)
+        bulk_row.addWidget(QLabel("Ts(s)："))
+        bulk_ts_edit = LineEdit()
+        bulk_ts_edit.setFixedWidth(90)
+        bulk_ts_edit.setPlaceholderText("Ts")
+        bulk_row.addWidget(bulk_ts_edit)
+        apply_all_btn = PushButton("填到全部")
+        apply_same_btn = PushButton("填到同材质")
+        bulk_row.addWidget(apply_all_btn)
+        bulk_row.addWidget(apply_same_btn)
+        bulk_row.addStretch()
+        panel_lay.addLayout(bulk_row)
+
+        route_refs.update(
+            {
+                "water_hammer_panel": panel,
+                "water_hammer_bulk_e_edit": bulk_e_edit,
+                "water_hammer_bulk_ts_edit": bulk_ts_edit,
+                "water_hammer_bulk_all_btn": apply_all_btn,
+                "water_hammer_bulk_same_material_btn": apply_same_btn,
+            }
+        )
+        apply_all_btn.clicked.connect(lambda _checked=False, key=route_key: self._apply_route_water_hammer_bulk_inputs(key, False))
+        apply_same_btn.clicked.connect(lambda _checked=False, key=route_key: self._apply_route_water_hammer_bulk_inputs(key, True))
+
+        for segment in segments:
+            segment_card = self._create_route_water_hammer_segment_card(segment)
+            panel_lay.addWidget(segment_card)
+            segment_widgets = self._route_water_hammer_segment_widgets.get(segment["segment_key"], {})
+            if segment_widgets:
+                route_refs["water_hammer_segment_widgets"].append(segment_widgets)
+
+        card_lay.addWidget(panel)
 
     def _read_basic_water_hammer_inputs(self, group) -> Dict[str, Any]:
         """读取当前卡片上的基础水锤输入。"""
@@ -2226,6 +2841,48 @@ class PressurePipeConfigDialog(QDialog):
                 cfg.wall_thickness_m = None
                 cfg.water_hammer_basic = {}
             self._manager.set_pipe_config(group_key, cfg)
+
+    def _build_route_water_hammer_store_payload(self, widgets: Dict[str, Any]) -> Dict[str, Any]:
+        """构造整线水锤段持久化数据。"""
+        segment_key = str(widgets.get("segment_key", "") or "").strip()
+        if not segment_key:
+            return {}
+        inputs = self._read_route_water_hammer_inputs(segment_key)
+        result = widgets.get("water_hammer_result", {})
+        payload = {
+            "segment_key": segment_key,
+            "route_key": str(widgets.get("route_key", "") or "").strip(),
+            "member_keys": list(widgets.get("member_keys", []) or []),
+            "selected_representative_key": str(widgets.get("selected_representative_key", "") or "").strip(),
+            "inputs": dict(inputs),
+            "result": copy.deepcopy(result if isinstance(result, dict) else {}),
+            "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        return payload
+
+    def _persist_route_water_hammer_segments(self):
+        """把整线级基础水锤段保存到 route 级配置。"""
+        if not self._manager:
+            return
+        set_route_water_hammer_segments = getattr(self._manager, "set_route_water_hammer_segments", None)
+        if not callable(set_route_water_hammer_segments):
+            return
+        for route_key, route_refs in self._route_widgets.items():
+            segment_widgets = list(route_refs.get("water_hammer_segment_widgets", []) or [])
+            if not segment_widgets:
+                continue
+            payloads = [
+                payload for payload in (
+                    self._build_route_water_hammer_store_payload(widgets)
+                    for widgets in segment_widgets
+                )
+                if payload
+            ]
+            set_route_water_hammer_segments(
+                route_key,
+                payloads,
+                str(route_refs.get("display_name", "") or route_key),
+            )
 
     def _create_basic_water_hammer_panel(self, card_lay, group, card_refs: Dict[str, Any]):
         """在管道卡片中创建基础水锤验算区域。"""
@@ -2833,6 +3490,7 @@ class PressurePipeConfigDialog(QDialog):
             fluent_error(self, "隧洞参数不完整", message)
             return
         self._persist_basic_water_hammer_configs()
+        self._persist_route_water_hammer_segments()
         super().accept()
 
     @staticmethod
@@ -3174,12 +3832,14 @@ class PressurePipeConfigDialog(QDialog):
         card_lay.addWidget(desc_label)
 
         visual_refs = self._add_visual_section(card_lay, route_key, route_ip_points, is_route_card=True)
-        self._route_widgets[route_key] = {
+        route_refs = {
             "card": card,
             "display_name": display_name,
             "route_context": route_context,
             **visual_refs,
         }
+        self._route_widgets[route_key] = route_refs
+        self._create_route_water_hammer_panel(card_lay, route_context, route_refs)
         if route_key in self._longitudinal_data and self._longitudinal_data[route_key]:
             self._update_card_data_state(route_key, show_data=True)
         else:
