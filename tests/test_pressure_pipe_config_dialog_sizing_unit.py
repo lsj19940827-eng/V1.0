@@ -8,7 +8,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QRect
-from PySide6.QtWidgets import QApplication, QScrollArea
+from PySide6.QtWidgets import QApplication, QAbstractButton, QScrollArea
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -100,12 +100,12 @@ def _make_group(name: str = "测试管道"):
     )
 
 
-def test_pressure_pipe_config_dialog_expands_to_content_without_vertical_scrollbar(monkeypatch):
+def test_pressure_pipe_config_dialog_keeps_action_buttons_visible_on_small_screen(monkeypatch):
     _get_qapp()
     monkeypatch.setattr(
         PressurePipeConfigDialog,
         "_available_geometry",
-        lambda self: QRect(0, 0, 1600, 1200),
+        lambda self: QRect(0, 0, 1600, 900),
         raising=False,
     )
 
@@ -122,9 +122,18 @@ def test_pressure_pipe_config_dialog_expands_to_content_without_vertical_scrollb
     scroll = scroll_areas[0]
     vbar = scroll.verticalScrollBar()
 
-    assert dialog.height() > 500
-    assert vbar.maximum() == 0
-    assert not vbar.isVisible()
+    buttons = {button.text(): button for button in dialog.findChildren(QAbstractButton)}
+    assert "取消" in buttons
+    assert "开始计算" in buttons
+
+    max_comfort_height = int(900 * 0.85)
+    assert dialog.height() <= max_comfort_height
+    assert vbar.maximum() > 0
+    for button_text in ("取消", "开始计算"):
+        button = buttons[button_text]
+        bottom_in_dialog = button.mapTo(dialog, button.rect().bottomRight()).y()
+        assert button.isVisible()
+        assert bottom_in_dialog <= dialog.rect().bottom()
 
     dialog.close()
     dialog.deleteLater()

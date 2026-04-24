@@ -148,6 +148,20 @@ def _read_float(widget) -> float:
     return float(str(widget.text() or "0").strip())
 
 
+def _set_route_profile_and_water_levels(dialog, groups, *, centerline_elevation: float, water_level: float):
+    """给整线测试补入纵断面中心线和表3水位。"""
+    route_key = "flow1-route1"
+    start_mc = min(float(getattr(group, "segment_start_mc", 0.0)) for group in groups)
+    end_mc = max(float(getattr(group, "segment_end_mc", 0.0)) for group in groups)
+    dialog._longitudinal_data[route_key] = [
+        {"chainage": start_mc, "elevation": centerline_elevation},
+        {"chainage": end_mc, "elevation": centerline_elevation},
+    ]
+    for group in groups:
+        for row in group.rows:
+            row.water_level = water_level
+
+
 def test_dialog_prefills_and_persists_basic_water_hammer_inputs_and_results():
     """弹窗应能预填、验算、保存并在重开后恢复基础水锤数据。"""
     _get_qapp()
@@ -379,6 +393,86 @@ def test_route_water_hammer_calculation_does_not_mutate_table3_loss_chain_fields
         dialog.close()
 
 
+def test_route_water_hammer_distribution_check_shows_pass_and_detail_rows():
+    """整线水锤验算应按管顶余量判定通过并展示全线采样明细。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, diameter=1.0),
+        _make_route_group("pipe-b", 1, "有压管道", start_mc=10.0, end_mc=20.0, diameter=0.5, pipe_velocity=2.0),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=400.0)
+        widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        widgets["water_hammer_wall_thickness_edit"].setText("0.02")
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(6)
+
+        assert "通过" in widgets["water_hammer_status_label"].text()
+        assert widgets["water_hammer_result_conclusion_label"].text() == "通过"
+        assert widgets["water_hammer_result_exceed_count_label"].text() == "0"
+        assert _read_float(widgets["water_hammer_result_min_margin_label"]) > 0
+
+        assert widgets["water_hammer_detail_table"].isVisible() is False
+        QTest.mouseClick(widgets["water_hammer_detail_btn"], Qt.LeftButton)
+        _flush_events(4)
+        assert widgets["water_hammer_detail_table"].isVisible() is True
+        assert widgets["water_hammer_detail_table"].rowCount() >= 21
+        assert widgets["water_hammer_detail_table"].horizontalHeaderItem(2).text() == "表3水位(m)"
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_distribution_check_marks_failed_when_margin_negative():
+    """整线任一采样点余量为负时应显示不通过。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, diameter=1.0),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=120.0)
+        widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        widgets["water_hammer_wall_thickness_edit"].setText("0.02")
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(6)
+
+        assert "不通过" in widgets["water_hammer_status_label"].text()
+        assert widgets["water_hammer_result_conclusion_label"].text() == "不通过"
+        assert int(widgets["water_hammer_result_exceed_count_label"].text()) > 0
+        assert _read_float(widgets["water_hammer_result_min_margin_label"]) < 0
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_distribution_ignores_manual_representative_d_e_v_edits():
+    """整线分布正式判定应使用成员自身参数，避免手填代表值误导全段。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, diameter=1.0, pipe_velocity=1.0),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=130.0)
+        widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        widgets["water_hammer_diameter_edit"].setText("0.1")
+        widgets["water_hammer_velocity_edit"].setText("0.01")
+        widgets["water_hammer_elastic_modulus_edit"].setText("1e12")
+        widgets["water_hammer_wall_thickness_edit"].setText("0.02")
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(6)
+
+        assert "不通过" in widgets["water_hammer_status_label"].text()
+        assert widgets["water_hammer_diameter_edit"].isReadOnly()
+        assert widgets["water_hammer_velocity_edit"].isReadOnly()
+        assert widgets["water_hammer_elastic_modulus_edit"].isReadOnly()
+    finally:
+        dialog.close()
+
+
 def test_route_water_hammer_segments_persist_and_restore_from_manager():
     """route 级水锤结果应随项目保存并在重开弹窗后恢复。"""
     case_dir = Path(tempfile.mkdtemp(prefix="wh_route_"))
@@ -391,9 +485,10 @@ def test_route_water_hammer_segments_persist_and_restore_from_manager():
     try:
         manager = PressurePipeManager(str(project_path))
         dialog = _make_route_dialog(groups, manager=manager)
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=400.0)
         route_refs = dialog._route_widgets["flow1-route1"]
         widgets = route_refs["water_hammer_segment_widgets"][0]
-        widgets["water_hammer_wall_thickness_edit"].setText("0.012")
+        widgets["water_hammer_wall_thickness_edit"].setText("0.02")
         widgets["water_hammer_closing_time_edit"].setText("0.01")
         QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
         _flush_events(6)
@@ -403,14 +498,17 @@ def test_route_water_hammer_segments_persist_and_restore_from_manager():
         reloaded_manager = PressurePipeManager(str(project_path))
         snapshot = reloaded_manager.get_route_config("flow1-route1")
         assert snapshot["water_hammer_segments"][0]["segment_key"] == "flow1-route1::pipe-a::pipe-b"
-        assert snapshot["water_hammer_segments"][0]["inputs"]["wall_thickness_m"] == pytest.approx(0.012)
+        assert snapshot["water_hammer_segments"][0]["inputs"]["wall_thickness_m"] == pytest.approx(0.02)
         assert snapshot["water_hammer_segments"][0]["inputs"]["closing_time_s"] == pytest.approx(0.01)
+        assert snapshot["water_hammer_segments"][0]["result"]["status"] == "通过"
+        assert snapshot["water_hammer_segments"][0]["result"]["details"] == []
+        assert snapshot["water_hammer_segments"][0]["result"]["sample_count"] > 0
 
         dialog_reopen = _make_route_dialog(groups, manager=reloaded_manager)
         widgets_reopen = dialog_reopen._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
-        assert _read_float(widgets_reopen["water_hammer_wall_thickness_edit"]) == pytest.approx(0.012)
+        assert _read_float(widgets_reopen["water_hammer_wall_thickness_edit"]) == pytest.approx(0.02)
         assert _read_float(widgets_reopen["water_hammer_closing_time_edit"]) == pytest.approx(0.01)
-        assert "可计算" in widgets_reopen["water_hammer_status_label"].text()
+        assert "通过" in widgets_reopen["water_hammer_status_label"].text()
         dialog_reopen.close()
     finally:
         try:

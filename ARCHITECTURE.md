@@ -31,6 +31,7 @@
 - `update_helper.py`：独立安装窗口，负责展示安装阶段、`validate/apply` 细分状态、补丁校验进度、旧残留清理失败提示、回滚结果文案和日志入口。
 - `app_渠系计算前端/update_dialog.py`：更新入口对话框，负责选择补丁或全量包、下载时传递 checksum、安装前仅做轻量包校验，以及在补丁下载失败时自动切回全量包。
 - `tools/build.py`：构建脚本，负责按分组校验关键依赖、单独拦截 Word 导出依赖缺失、显式收集 `latex2mathml` 等运行时数据文件、生成 manifest、剔除运行时自动保存文件、构建通用补丁包，并按补丁覆盖范围和补丁包大小决定是否发布补丁。
+- `tools/document_to_markdown.py`：文档转 Markdown 工具，负责读取 Word、PDF、Excel 文档并输出 Markdown，依赖 `python-docx / docx2txt / pdfplumber / pandas`。
 - `tools/release_snapshot.py`：正式发版快照工具，负责把 `tag / full zip / patch zip / manifest / version.json` 固化到 `.release-snapshots/`，作为后续回补 patch 的唯一基线。
 - `tools/backfill_patch_release.py`：正式补丁回补脚本，负责基于已发布快照重新生成 patch、补挂 Release 资产并补齐 Gist patch 字段。
 - `tools/disable_patch_release.py`：线上补丁熔断脚本，负责只移除 Gist version.json 里的 patch 字段，保留全量包更新链路不动。

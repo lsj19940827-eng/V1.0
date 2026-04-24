@@ -51,7 +51,7 @@ GRAVITY = 9.81
 # 水的体积弹性模量（按 10℃ 固定取值）
 WATER_BULK_MODULUS = 2.025e9
 
-# 基础水锤验算默认弹性模量（来自手册常见材质近似值）
+# 基础水锤验算默认弹性模量（来自手册常见材质近似值，玻璃钢夹砂管补充取 FRPM 纵向弹模参考值）
 WATER_HAMMER_ELASTIC_MODULUS = {
     "钢管": 206.0e9,
     "钢": 206.0e9,
@@ -60,9 +60,10 @@ WATER_HAMMER_ELASTIC_MODULUS = {
     "铸铁": 108.0e9,
     "预应力钢筒混凝土管": 20.6e9,
     "预应力钢筒混凝土管_n014": 20.6e9,
+    "预应力钢筒混凝土管_n015": 20.6e9,
     "钢筋混凝土管": 20.6e9,
     "钢筋混凝土": 20.6e9,
-    "玻璃钢夹砂管": 20.6e9,
+    "玻璃钢夹砂管": 8.728e9,
     "HDPE管": 1.4e9,
     "PE": 1.4e9,
     "PE管": 1.4e9,
@@ -200,6 +201,384 @@ def calc_basic_water_hammer(
     result["delta_h"] = delta_h
     result["hmax"] = hmax
     result["calc_steps"] = "\n".join(steps)
+    return result
+
+
+def _water_hammer_number(value, default=None):
+    """把输入值安全转为有限浮点数。"""
+    if value is None:
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def _water_hammer_first_number(source: Dict[str, object], keys: List[str], default=None):
+    """按多个候选键读取第一个有效数字。"""
+    for key in keys:
+        if key not in source:
+            continue
+        number = _water_hammer_number(source.get(key), None)
+        if number is not None:
+            return number
+    return default
+
+
+def _normalize_water_hammer_line_points(
+    points: List[Dict[str, object]],
+    *,
+    value_keys: List[str],
+    value_label: str,
+) -> Tuple[List[Dict[str, float]], str]:
+    """规范化纵断面或水位线点，返回排序后的桩号-数值列表。"""
+    normalized: List[Dict[str, float]] = []
+    for point in list(points or []):
+        if not isinstance(point, dict):
+            continue
+        station = _water_hammer_first_number(
+            point,
+            ["station_m", "station", "station_mc", "station_MC", "chainage", "s"],
+            None,
+        )
+        value = _water_hammer_first_number(point, value_keys, None)
+        if station is None or value is None:
+            continue
+        normalized.append({"station_m": float(station), value_label: float(value)})
+
+    if len(normalized) < 2:
+        return [], f"缺少可插值的{value_label}数据"
+
+    normalized.sort(key=lambda item: item["station_m"])
+    deduped: List[Dict[str, float]] = []
+    for point in normalized:
+        if deduped and abs(point["station_m"] - deduped[-1]["station_m"]) <= 1e-9:
+            deduped[-1] = point
+        else:
+            deduped.append(point)
+    if len(deduped) < 2:
+        return [], f"缺少可插值的{value_label}数据"
+    return deduped, ""
+
+
+def _interpolate_water_hammer_line(
+    points: List[Dict[str, float]],
+    station_m: float,
+    value_label: str,
+) -> float:
+    """按桩号在线性折线上插值。"""
+    station = float(station_m)
+    tol = 1e-7
+    if station < points[0]["station_m"] - tol or station > points[-1]["station_m"] + tol:
+        raise ValueError("采样点超出数据覆盖范围")
+    for point in points:
+        if abs(point["station_m"] - station) <= tol:
+            return point[value_label]
+    for left, right in zip(points[:-1], points[1:]):
+        left_s = left["station_m"]
+        right_s = right["station_m"]
+        if left_s - tol <= station <= right_s + tol:
+            span = right_s - left_s
+            if abs(span) <= 1e-12:
+                return left[value_label]
+            ratio = (station - left_s) / span
+            return left[value_label] + (right[value_label] - left[value_label]) * ratio
+    raise ValueError("采样点超出数据覆盖范围")
+
+
+def _normalize_water_hammer_members(
+    members: List[Dict[str, object]],
+    *,
+    wall_thickness_m: float,
+    water_bulk_modulus_pa: float,
+) -> Tuple[List[Dict[str, float]], str]:
+    """规范化连续有压段成员并计算每个成员的水锤基础值。"""
+    normalized: List[Dict[str, float]] = []
+    for index, member in enumerate(list(members or [])):
+        if not isinstance(member, dict):
+            continue
+        start_station = _water_hammer_first_number(
+            member,
+            ["start_station_m", "segment_start_m", "start_mc", "segment_start_mc", "start"],
+            None,
+        )
+        end_station = _water_hammer_first_number(
+            member,
+            ["end_station_m", "segment_end_m", "end_mc", "segment_end_mc", "end"],
+            None,
+        )
+        diameter = _water_hammer_first_number(member, ["diameter_m", "D", "diameter"], None)
+        elastic = _water_hammer_first_number(member, ["elastic_modulus_pa", "E"], None)
+        velocity = _water_hammer_first_number(member, ["velocity_mps", "v0", "pipe_velocity"], None)
+        if start_station is None or end_station is None:
+            return [], "缺少成员桩号范围"
+        if diameter is None or diameter <= 0:
+            return [], "缺少有效管径 D"
+        if elastic is None or elastic <= 0:
+            return [], "缺少有效弹性模量 E"
+        if velocity is None or velocity <= 0:
+            return [], "缺少有效流速 v0"
+        length = abs(float(end_station) - float(start_station))
+        if length <= 0:
+            return [], "成员长度必须大于0"
+        denominator = 1.0 + (water_bulk_modulus_pa / float(elastic)) * (float(diameter) / wall_thickness_m)
+        if denominator <= 0:
+            return [], "输入组合无效，无法计算水锤波速"
+        wave_speed = 1425.0 / math.sqrt(denominator)
+        delta_h = wave_speed * float(velocity) / GRAVITY
+        normalized.append(
+            {
+                "key": str(member.get("key", member.get("member_key", f"member-{index + 1}")) or f"member-{index + 1}"),
+                "start_station_m": min(float(start_station), float(end_station)),
+                "end_station_m": max(float(start_station), float(end_station)),
+                "length_m": length,
+                "diameter_m": float(diameter),
+                "elastic_modulus_pa": float(elastic),
+                "velocity_mps": float(velocity),
+                "a": wave_speed,
+                "delta_h": delta_h,
+            }
+        )
+
+    if not normalized:
+        return [], "缺少连续有压段成员"
+    normalized.sort(key=lambda item: (item["start_station_m"], item["end_station_m"]))
+    return normalized, ""
+
+
+def _build_water_hammer_sample_stations(
+    *,
+    members: List[Dict[str, float]],
+    centerline_points: List[Dict[str, float]],
+    water_level_points: List[Dict[str, float]],
+    sample_interval_m: float,
+) -> List[float]:
+    """按1m采样并强制纳入起终点、折点和成员分界点。"""
+    start_station = min(member["start_station_m"] for member in members)
+    end_station = max(member["end_station_m"] for member in members)
+    interval = sample_interval_m if sample_interval_m > 0 else 1.0
+    stations = {round(start_station, 6), round(end_station, 6)}
+    current = start_station
+    guard = 0
+    while current < end_station - 1e-9 and guard < 1000000:
+        stations.add(round(current, 6))
+        current += interval
+        guard += 1
+    for member in members:
+        stations.add(round(member["start_station_m"], 6))
+        stations.add(round(member["end_station_m"], 6))
+    for point in centerline_points:
+        station = point["station_m"]
+        if start_station - 1e-7 <= station <= end_station + 1e-7:
+            stations.add(round(station, 6))
+    for point in water_level_points:
+        station = point["station_m"]
+        if start_station - 1e-7 <= station <= end_station + 1e-7:
+            stations.add(round(station, 6))
+    return sorted(float(station) for station in stations if start_station - 1e-7 <= station <= end_station + 1e-7)
+
+
+def _water_hammer_member_at_station(members: List[Dict[str, float]], station_m: float) -> Dict[str, float]:
+    """返回采样点所在成员，分界点优先归入下游成员。"""
+    station = float(station_m)
+    tol = 1e-7
+    for member in members:
+        if abs(station - member["start_station_m"]) <= tol:
+            return member
+    for index, member in enumerate(members):
+        is_last = index == len(members) - 1
+        if member["start_station_m"] - tol <= station < member["end_station_m"] - tol:
+            return member
+        if is_last and member["start_station_m"] - tol <= station <= member["end_station_m"] + tol:
+            return member
+    return members[-1]
+
+
+def _water_hammer_members_at_station(members: List[Dict[str, float]], station_m: float) -> List[Dict[str, float]]:
+    """返回采样点需要校核的成员，分界点同时校核相邻两侧。"""
+    station = float(station_m)
+    tol = 1e-7
+    matched: List[Dict[str, float]] = []
+    for member in members:
+        if member["start_station_m"] - tol <= station <= member["end_station_m"] + tol:
+            matched.append(member)
+    return matched or [_water_hammer_member_at_station(members, station)]
+
+
+def calc_distributed_water_hammer_check(
+    *,
+    members: List[Dict[str, object]],
+    centerline_nodes: List[Dict[str, object]],
+    water_level_nodes: List[Dict[str, object]],
+    wall_thickness_m: float,
+    closing_time_s: float,
+    sample_interval_m: float = 1.0,
+    water_bulk_modulus_pa: float = WATER_BULK_MODULUS,
+) -> Dict[str, object]:
+    """按连续有压段进行全线水锤附加水头分布校核。"""
+    result: Dict[str, object] = {
+        "status": "数据缺失",
+        "reason": "",
+        "a": None,
+        "a_min": None,
+        "a_max": None,
+        "mu": None,
+        "ts_to_mu_ratio": None,
+        "delta_h": None,
+        "control_member_key": "",
+        "min_margin_m": None,
+        "critical_point": None,
+        "exceed_count": 0,
+        "sample_count": 0,
+        "member_results": [],
+        "details": [],
+        "inputs": {
+            "wall_thickness_m": _water_hammer_number(wall_thickness_m, 0.0),
+            "closing_time_s": _water_hammer_number(closing_time_s, 0.0),
+            "sample_interval_m": _water_hammer_number(sample_interval_m, 1.0),
+        },
+    }
+
+    wall_thickness = _water_hammer_number(wall_thickness_m, 0.0)
+    closing_time = _water_hammer_number(closing_time_s, 0.0)
+    water_bulk_modulus = _water_hammer_number(water_bulk_modulus_pa, 0.0)
+    if wall_thickness <= 0:
+        result["reason"] = "缺少有效壁厚 e"
+        return result
+    if closing_time <= 0:
+        result["reason"] = "缺少有效关阀时间 Ts"
+        return result
+    if water_bulk_modulus <= 0:
+        result["reason"] = "缺少有效水体体积弹性模量 K"
+        return result
+
+    normalized_members, member_error = _normalize_water_hammer_members(
+        members,
+        wall_thickness_m=wall_thickness,
+        water_bulk_modulus_pa=water_bulk_modulus,
+    )
+    if member_error:
+        result["reason"] = member_error
+        return result
+
+    centerline_points, centerline_error = _normalize_water_hammer_line_points(
+        centerline_nodes,
+        value_keys=["elevation_m", "elevation", "centerline_elevation_m", "centerline_elevation", "z"],
+        value_label="centerline_elevation_m",
+    )
+    if centerline_error:
+        result["reason"] = f"缺少纵断面中心线数据：{centerline_error}"
+        return result
+
+    water_level_points, water_level_error = _normalize_water_hammer_line_points(
+        water_level_nodes,
+        value_keys=["water_level_m", "water_level", "level_m", "allowed_head_elevation_m"],
+        value_label="water_level_m",
+    )
+    if water_level_error:
+        result["reason"] = f"缺少表3水位线数据：{water_level_error}"
+        return result
+
+    mu = 2.0 * sum(member["length_m"] / member["a"] for member in normalized_members if member["a"] > 0)
+    ts_ratio = closing_time / mu if mu > 0 else None
+    a_values = [member["a"] for member in normalized_members]
+    control_member = max(normalized_members, key=lambda item: item["delta_h"])
+    member_results = [
+        {
+            "key": member["key"],
+            "start_station_m": member["start_station_m"],
+            "end_station_m": member["end_station_m"],
+            "length_m": member["length_m"],
+            "diameter_m": member["diameter_m"],
+            "velocity_mps": member["velocity_mps"],
+            "a": member["a"],
+            "delta_h": member["delta_h"],
+        }
+        for member in normalized_members
+    ]
+    result.update(
+        {
+            "a": control_member["a"],
+            "a_min": min(a_values),
+            "a_max": max(a_values),
+            "mu": mu,
+            "ts_to_mu_ratio": ts_ratio,
+            "delta_h": control_member["delta_h"],
+            "control_member_key": control_member["key"],
+            "member_results": member_results,
+        }
+    )
+
+    if mu <= 0:
+        result["reason"] = "水锤相时 μ 无效，无法继续验算"
+        return result
+    if closing_time > mu:
+        result["status"] = "不适用"
+        result["reason"] = (
+            f"当前仅支持直接关阀水锤（Ts <= μ）。当前 Ts = {closing_time:.6f} s，μ = {mu:.6f} s。"
+        )
+        return result
+
+    stations = _build_water_hammer_sample_stations(
+        members=normalized_members,
+        centerline_points=centerline_points,
+        water_level_points=water_level_points,
+        sample_interval_m=_water_hammer_number(sample_interval_m, 1.0) or 1.0,
+    )
+    details: List[Dict[str, object]] = []
+    try:
+        for station in stations:
+            centerline_elevation = _interpolate_water_hammer_line(
+                centerline_points,
+                station,
+                "centerline_elevation_m",
+            )
+            water_level = _interpolate_water_hammer_line(
+                water_level_points,
+                station,
+                "water_level_m",
+            )
+            for member in _water_hammer_members_at_station(normalized_members, station):
+                pipe_top = centerline_elevation + member["diameter_m"] / 2.0
+                allowable_delta_h = water_level - pipe_top
+                margin = allowable_delta_h - control_member["delta_h"]
+                details.append(
+                    {
+                        "station_m": station,
+                        "member_key": member["key"],
+                        "centerline_elevation_m": centerline_elevation,
+                        "diameter_m": member["diameter_m"],
+                        "pipe_top_elevation_m": pipe_top,
+                        "water_level_m": water_level,
+                        "allowable_delta_h_m": allowable_delta_h,
+                        "delta_h_m": control_member["delta_h"],
+                        "margin_m": margin,
+                        "status": "通过" if margin >= -1e-9 else "超限",
+                    }
+                )
+    except ValueError as exc:
+        result["reason"] = f"纵断面或表3水位线覆盖不足：{exc}"
+        return result
+
+    if not details:
+        result["reason"] = "没有生成有效采样点"
+        return result
+
+    critical = min(details, key=lambda item: float(item["margin_m"]))
+    exceed_count = sum(1 for item in details if float(item["margin_m"]) < -1e-9)
+    critical_point = dict(critical)
+    result.update(
+        {
+            "status": "通过" if exceed_count == 0 else "不通过",
+            "reason": "",
+            "min_margin_m": float(critical["margin_m"]),
+            "critical_point": critical_point,
+            "exceed_count": exceed_count,
+            "sample_count": len(details),
+            "details": details,
+        }
+    )
     return result
 
 

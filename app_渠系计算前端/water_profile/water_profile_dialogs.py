@@ -1019,7 +1019,7 @@ class PressurePipeConfigDialog(QDialog):
     """有压管道计算配置对话框（在计算前配置参数）"""
 
     _SCREEN_WIDTH_RATIO = 0.88
-    _SCREEN_HEIGHT_RATIO = 1.0
+    _SCREEN_HEIGHT_RATIO = 0.85
     _FALLBACK_MAX_WIDTH = 1200
     _FALLBACK_MAX_HEIGHT = 980
     _WINDOW_CHROME_PADDING = 24
@@ -2251,11 +2251,15 @@ class PressurePipeConfigDialog(QDialog):
 
         start_row, end_row = self._group_row_range(group)
         row_text = self._format_row_range_text(start_row, end_row)
+        start_mc = self._safe_float(getattr(group, "segment_start_mc", None), None)
+        end_mc = self._safe_float(getattr(group, "segment_end_mc", None), None)
         return {
             "key": group_key,
             "label": f"{display_name}（{row_text}，v0={velocity_mps:.3f}m/s）",
             "display_name": display_name,
             "row_range": [start_row, end_row],
+            "start_station_m": start_mc,
+            "end_station_m": end_mc,
             "diameter_m": diameter,
             "design_flow": design_flow,
             "material_key": material_key,
@@ -2390,6 +2394,60 @@ class PressurePipeConfigDialog(QDialog):
                 return candidate
         return candidates[0] if candidates else {}
 
+    def _build_route_water_hammer_distribution_members(self, segment_key: str) -> List[Dict[str, Any]]:
+        """整理整线水锤分布验算的连续有压成员参数。"""
+        widgets = self._route_water_hammer_segment_widgets.get(segment_key, {})
+        members = []
+        for candidate in list(widgets.get("representative_candidates", []) or []):
+            start_station = self._safe_float(candidate.get("start_station_m"), None)
+            end_station = self._safe_float(candidate.get("end_station_m"), None)
+            length_m = self._safe_float(candidate.get("length_m"), 0.0)
+            if start_station is None or end_station is None:
+                if not members:
+                    start_station = 0.0
+                else:
+                    start_station = members[-1]["end_station_m"]
+                end_station = start_station + length_m
+            members.append(
+                {
+                    "key": str(candidate.get("key", "") or ""),
+                    "start_station_m": start_station,
+                    "end_station_m": end_station,
+                    "diameter_m": self._safe_float(candidate.get("diameter_m"), 0.0),
+                    "elastic_modulus_pa": self._safe_float(candidate.get("elastic_modulus_pa"), 0.0),
+                    "velocity_mps": self._safe_float(candidate.get("velocity_mps"), 0.0),
+                }
+            )
+        return members
+
+    def _build_route_water_hammer_water_level_nodes(self, segment_key: str) -> List[Dict[str, float]]:
+        """从表3水位整理整线水锤允许压力线节点。"""
+        widgets = self._route_water_hammer_segment_widgets.get(segment_key, {})
+        member_keys = {str(key or "").strip() for key in list(widgets.get("member_keys", []) or [])}
+        nodes: List[Dict[str, float]] = []
+        for group in self._pipe_groups or []:
+            if self._group_storage_key(group) not in member_keys:
+                continue
+            group_start = self._safe_float(getattr(group, "segment_start_mc", None), None)
+            group_end = self._safe_float(getattr(group, "segment_end_mc", None), None)
+            row_levels = []
+            for row in list(getattr(group, "rows", []) or []):
+                water_level = self._safe_float(getattr(row, "water_level", None), None)
+                if water_level is None:
+                    continue
+                station = self._safe_float(getattr(row, "station_MC", None), None)
+                if station is None:
+                    station = group_end if group_end is not None else group_start
+                if station is not None:
+                    nodes.append({"station_m": float(station), "water_level_m": float(water_level)})
+                    row_levels.append(float(water_level))
+            if row_levels:
+                if group_start is not None:
+                    nodes.append({"station_m": float(group_start), "water_level_m": row_levels[0]})
+                if group_end is not None:
+                    nodes.append({"station_m": float(group_end), "water_level_m": row_levels[-1]})
+        return nodes
+
     def _read_route_water_hammer_inputs(self, segment_key: str) -> Dict[str, Any]:
         """读取整线水锤段当前输入。"""
         widgets = self._route_water_hammer_segment_widgets.get(segment_key, {})
@@ -2404,6 +2462,18 @@ class PressurePipeConfigDialog(QDialog):
             "initial_head_m": self._safe_float(widgets["water_hammer_head_edit"].text(), None),
             "closing_time_s": self._safe_float(widgets["water_hammer_closing_time_edit"].text(), 0.0),
         }
+
+    @staticmethod
+    def _trim_route_water_hammer_result_for_store(result: Dict[str, Any]) -> Dict[str, Any]:
+        """保存整线水锤摘要时去掉1m明细，避免项目文件过大。"""
+        payload = copy.deepcopy(result if isinstance(result, dict) else {})
+        if "details" in payload:
+            payload["details"] = []
+        return payload
+
+    def _format_route_water_hammer_value(self, value, digits: int = 3) -> str:
+        """格式化整线水锤结果值。"""
+        return self._format_basic_water_hammer_result_value(value, digits=digits)
 
     def _apply_route_water_hammer_result_to_widgets(self, segment_key: str, result: Dict[str, Any] | None = None):
         """把整线水锤段结果刷新到界面。"""
@@ -2435,6 +2505,63 @@ class PressurePipeConfigDialog(QDialog):
         widgets["water_hammer_result_hmax_label"].setText(
             self._format_basic_water_hammer_result_value(payload.get("hmax"), digits=3)
         )
+        if widgets.get("water_hammer_result_a_range_label") is not None:
+            a_min = payload.get("a_min")
+            a_max = payload.get("a_max")
+            if a_min is None and payload.get("a") is not None:
+                a_min = a_max = payload.get("a")
+            if a_min is None or a_max is None:
+                a_range_text = "-"
+            elif abs(float(a_min) - float(a_max)) <= 1e-9:
+                a_range_text = self._format_route_water_hammer_value(a_min, digits=3)
+            else:
+                a_range_text = (
+                    f"{self._format_route_water_hammer_value(a_min, digits=3)} ~ "
+                    f"{self._format_route_water_hammer_value(a_max, digits=3)}"
+                )
+            widgets["water_hammer_result_a_range_label"].setText(a_range_text)
+            widgets["water_hammer_result_control_delta_label"].setText(
+                self._format_route_water_hammer_value(payload.get("delta_h"), digits=3)
+            )
+            widgets["water_hammer_result_min_margin_label"].setText(
+                self._format_route_water_hammer_value(payload.get("min_margin_m"), digits=3)
+            )
+            critical = payload.get("critical_point", {}) if isinstance(payload.get("critical_point", {}), dict) else {}
+            widgets["water_hammer_result_critical_station_label"].setText(
+                self._format_route_water_hammer_value(critical.get("station_m"), digits=3)
+            )
+            widgets["water_hammer_result_exceed_count_label"].setText(str(int(payload.get("exceed_count", 0) or 0)))
+            widgets["water_hammer_result_conclusion_label"].setText(status_text or "-")
+            widgets["water_hammer_result_sample_count_label"].setText(str(int(payload.get("sample_count", 0) or 0)))
+            self._refresh_route_water_hammer_detail_table(segment_key, payload)
+
+    def _refresh_route_water_hammer_detail_table(self, segment_key: str, result: Dict[str, Any]):
+        """刷新整线水锤全线分布明细表。"""
+        widgets = self._route_water_hammer_segment_widgets.get(segment_key, {})
+        table = widgets.get("water_hammer_detail_table")
+        if table is None:
+            return
+        details = list(result.get("details", []) or []) if isinstance(result, dict) else []
+        table.setRowCount(len(details))
+        for row_idx, item in enumerate(details):
+            values = [
+                item.get("station_m"),
+                item.get("pipe_top_elevation_m"),
+                item.get("water_level_m"),
+                item.get("allowable_delta_h_m"),
+                item.get("delta_h_m"),
+                item.get("margin_m"),
+                item.get("status", ""),
+            ]
+            for col_idx, value in enumerate(values):
+                if isinstance(value, (int, float)):
+                    text = self._format_route_water_hammer_value(value, digits=3)
+                else:
+                    text = str(value or "")
+                cell = QTableWidgetItem(text)
+                if col_idx == 6 and text == "超限":
+                    cell.setForeground(QColor("#C62828"))
+                table.setItem(row_idx, col_idx, cell)
 
     def _clear_route_water_hammer_result(self, segment_key: str):
         """整线水锤段参数变更后清空旧结果。"""
@@ -2469,11 +2596,22 @@ class PressurePipeConfigDialog(QDialog):
     def _calculate_route_water_hammer_segment(self, segment_key: str):
         """执行整线水锤段验算。"""
         try:
-            from core.pressure_pipe_calc import calc_basic_water_hammer
+            from core.pressure_pipe_calc import calc_distributed_water_hammer_check
         except Exception as exc:
             fluent_error(self, "基础水锤验算失败", f"加载计算模块失败：{exc}")
             return
-        result = calc_basic_water_hammer(**self._read_route_water_hammer_inputs(segment_key))
+        inputs = self._read_route_water_hammer_inputs(segment_key)
+        widgets = self._route_water_hammer_segment_widgets.get(segment_key, {})
+        route_key = str(widgets.get("route_key", "") or "").strip()
+        result = calc_distributed_water_hammer_check(
+            members=self._build_route_water_hammer_distribution_members(segment_key),
+            centerline_nodes=list(self._longitudinal_data.get(route_key, []) or []),
+            water_level_nodes=self._build_route_water_hammer_water_level_nodes(segment_key),
+            wall_thickness_m=inputs.get("wall_thickness_m", 0.0),
+            closing_time_s=inputs.get("closing_time_s", 0.0),
+            sample_interval_m=1.0,
+        )
+        result["inputs"] = dict(inputs)
         self._apply_route_water_hammer_result_to_widgets(segment_key, result)
 
     def _apply_route_water_hammer_bulk_inputs(self, route_key: str, same_material_only: bool = False):
@@ -2564,7 +2702,7 @@ class PressurePipeConfigDialog(QDialog):
         diameter_edit = _make_edit("D(m)", inputs.get("diameter_m"), digits=3)
         velocity_edit = _make_edit("v0(m/s)", inputs.get("velocity_mps"), digits=4)
         head_value = inputs.get("initial_head_m")
-        head_edit = _make_edit("Hc(m)", head_value, digits=3)
+        head_edit = _make_edit("表3水位(m)", head_value, digits=3)
         wall_thickness_edit = _make_edit("e(m)", inputs.get("wall_thickness_m"), digits=4)
         elastic_modulus_edit = LineEdit()
         elastic_modulus_edit.setPlaceholderText("E(N/m²)")
@@ -2573,6 +2711,9 @@ class PressurePipeConfigDialog(QDialog):
         if elastic_value > 0:
             elastic_modulus_edit.setText(f"{elastic_value:.6g}")
         closing_time_edit = _make_edit("Ts(s)", inputs.get("closing_time_s"), digits=4)
+        for readonly_edit in (length_edit, diameter_edit, velocity_edit, head_edit, elastic_modulus_edit):
+            readonly_edit.setReadOnly(True)
+            readonly_edit.setStyleSheet("color: #607D8B; background: #F5F7FA;")
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
@@ -2581,7 +2722,7 @@ class PressurePipeConfigDialog(QDialog):
             ("L(m)", length_edit),
             ("D(m)", diameter_edit),
             ("v0(m/s)", velocity_edit),
-            ("Hc(m)", head_edit),
+            ("表3水位(m)", head_edit),
             ("e(m)", wall_thickness_edit),
             ("E(N/m²)", elastic_modulus_edit),
             ("Ts(s)", closing_time_edit),
@@ -2612,18 +2753,62 @@ class PressurePipeConfigDialog(QDialog):
             "water_hammer_result_ratio_label": QLabel("-"),
             "water_hammer_result_delta_h_label": QLabel("-"),
             "water_hammer_result_hmax_label": QLabel("-"),
+            "water_hammer_result_a_range_label": QLabel("-"),
+            "water_hammer_result_control_delta_label": QLabel("-"),
+            "water_hammer_result_min_margin_label": QLabel("-"),
+            "water_hammer_result_critical_station_label": QLabel("-"),
+            "water_hammer_result_exceed_count_label": QLabel("0"),
+            "water_hammer_result_conclusion_label": QLabel("-"),
+            "water_hammer_result_sample_count_label": QLabel("0"),
         }
         for index, (label_text, key) in enumerate([
-            ("a(m/s)", "water_hammer_result_a_label"),
+            ("a范围(m/s)", "water_hammer_result_a_range_label"),
             ("μ(s)", "water_hammer_result_mu_label"),
             ("Ts/μ", "water_hammer_result_ratio_label"),
-            ("ΔH(m)", "water_hammer_result_delta_h_label"),
-            ("Hmax(m)", "water_hammer_result_hmax_label"),
+            ("控制ΔH(m)", "water_hammer_result_control_delta_label"),
+            ("最小余量(m)", "water_hammer_result_min_margin_label"),
+            ("最危险桩号", "water_hammer_result_critical_station_label"),
+            ("超限点数", "water_hammer_result_exceed_count_label"),
+            ("采样点数", "water_hammer_result_sample_count_label"),
+            ("结论", "water_hammer_result_conclusion_label"),
         ]):
+            row = index // 5
             col = (index % 5) * 2
-            result_grid.addWidget(QLabel(label_text), 0, col)
-            result_grid.addWidget(result_labels[key], 0, col + 1)
+            result_grid.addWidget(QLabel(label_text), row, col)
+            result_grid.addWidget(result_labels[key], row, col + 1)
         lay.addLayout(result_grid)
+
+        detail_btn = PushButton("查看详细分布数据")
+        detail_btn.setCursor(Qt.PointingHandCursor)
+        detail_btn.setStyleSheet(
+            "QPushButton { font-size: 12px; color: #1976D2; background: transparent; "
+            "border: none; text-align: left; padding: 4px 0; }"
+            "QPushButton:hover { color: #1565C0; text-decoration: underline; }"
+        )
+        lay.addWidget(detail_btn)
+
+        detail_table = QTableWidget()
+        detail_table.setColumnCount(7)
+        detail_table.setHorizontalHeaderLabels([
+            "桩号(m)",
+            "管顶高程(m)",
+            "表3水位(m)",
+            "允许ΔH(m)",
+            "采用ΔH(m)",
+            "安全余量(m)",
+            "状态",
+        ])
+        detail_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        detail_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        detail_table.setAlternatingRowColors(True)
+        detail_table.setMaximumHeight(220)
+        detail_table.setVisible(False)
+        lay.addWidget(detail_table)
+
+        def _toggle_detail_table(_checked=False, table=detail_table, button=detail_btn):
+            visible = not table.isVisible()
+            table.setVisible(visible)
+            button.setText("隐藏详细分布数据" if visible else "查看详细分布数据")
 
         selected_material = str(selected.get("material_key", "") or "").strip()
         refs = {
@@ -2644,6 +2829,8 @@ class PressurePipeConfigDialog(QDialog):
             "water_hammer_closing_time_edit": closing_time_edit,
             "water_hammer_calc_btn": calc_btn,
             "water_hammer_status_label": status_label,
+            "water_hammer_detail_btn": detail_btn,
+            "water_hammer_detail_table": detail_table,
             "water_hammer_result": {},
         }
         refs.update(result_labels)
@@ -2653,6 +2840,7 @@ class PressurePipeConfigDialog(QDialog):
             lambda _idx, key=segment_key: self._on_route_water_hammer_representative_changed(key)
         )
         calc_btn.clicked.connect(lambda _checked=False, key=segment_key: self._calculate_route_water_hammer_segment(key))
+        detail_btn.clicked.connect(_toggle_detail_table)
         for edit in (
             length_edit,
             diameter_edit,
@@ -2855,7 +3043,7 @@ class PressurePipeConfigDialog(QDialog):
             "member_keys": list(widgets.get("member_keys", []) or []),
             "selected_representative_key": str(widgets.get("selected_representative_key", "") or "").strip(),
             "inputs": dict(inputs),
-            "result": copy.deepcopy(result if isinstance(result, dict) else {}),
+            "result": self._trim_route_water_hammer_result_for_store(result if isinstance(result, dict) else {}),
             "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         return payload
@@ -2900,7 +3088,7 @@ class PressurePipeConfigDialog(QDialog):
         title.setStyleSheet("font-size: 12px; color: #8D4E00; font-weight: bold;")
         panel_lay.addWidget(title)
 
-        hint = QLabel("只做并列校核，不参与主水位和水损递推。")
+        hint = QLabel("只做基础附加水头计算；缺少整线纵断面时不做通过判定，不参与主水位和水损递推。")
         hint.setStyleSheet("font-size: 12px; color: #6D4C41;")
         panel_lay.addWidget(hint)
 
@@ -3364,8 +3552,8 @@ class PressurePipeConfigDialog(QDialog):
     def _init_ui(self):
         """初始化UI"""
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(14)
+        lay.setContentsMargins(18, 12, 18, 12)
+        lay.setSpacing(10)
 
         # 标题说明
         title = QLabel("有压管道水力计算配置")
@@ -3397,7 +3585,7 @@ class PressurePipeConfigDialog(QDialog):
 
             scroll_widget = QWidget()
             scroll_lay = QVBoxLayout(scroll_widget)
-            scroll_lay.setSpacing(12)
+            scroll_lay.setSpacing(10)
 
             used_group_keys = set()
             for route_context in self._route_contexts.values():
@@ -3594,16 +3782,7 @@ class PressurePipeConfigDialog(QDialog):
         target_h = max(self.minimumHeight(), target_h)
         self.resize(target_w, target_h)
 
-        # 首次展示后如果滚动区仍有溢出，再补一轮高度，尽量避免出现多余滚动条。
-        if self._pipe_scroll_area is not None and self._pipe_scroll_widget is not None and target_h < max_h:
-            try:
-                self._pipe_scroll_widget.adjustSize()
-                QApplication.processEvents()
-                overflow = int(self._pipe_scroll_area.verticalScrollBar().maximum() or 0)
-            except Exception:
-                overflow = 0
-            if overflow > 0:
-                self.resize(target_w, min(max_h, target_h + overflow + 24))
+        # 内容较多时保留中间滚动区，避免弹窗贴满屏幕后挤到底部按钮。
 
     def showEvent(self, event):
         super().showEvent(event)
