@@ -223,7 +223,7 @@ class L12CoeffRefDialog(QDialog):
 
 # 结构段表头
 SEG_HEADERS = ["序号", "分类", "类型", "方向", "长度(m)", "半径R(m)", "角度θ(°)",
-               "起点高程", "终点高程", "空间长度", "局部系数", "锁定"]
+               "起点高程", "终点高程", "实长(m)", "局部系数", "锁定"]
 
 # 纵断面节点表头
 LONG_NODE_HEADERS = ["桩号(m)", "高程(m)", "竖曲线半径(m)", "转弯类型", "转角(°)"]
@@ -1263,7 +1263,7 @@ class SiphonPanel(QWidget):
         info_text = (
             "1. 点击\"导入平面DXF\"可从CAD文件导入平面多段线（工程坐标）\n"
             "2. 点击\"导入纵断面DXF\"可从CAD文件导入纵断面多段线\n"
-            "3. 支持三种计算模式：仅平面 / 仅纵断面 / 平面+纵断面（三维空间合并）\n"
+            "3. 支持三种计算模式：仅平面 / 仅纵断面 / 平面+纵断面（独立叠加）\n"
             "4. 点击\"添加管身段\"手动添加直管/弯管/折管\n"
             "5. 点击\"添加通用构件\"可自定义添加构件（如镇墩、排气阀等）\n"
             "6. 双击表格行可编辑该行数据\n"
@@ -1479,32 +1479,27 @@ body{
 <div class="group">
   <div class="group-header">
     <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-    空间轴线合并算法（平面 + 纵断面 → 三维空间曲线）
+    平面 / 纵断面独立叠加口径
   </div>
   <div class="card">
-    <div class="card-label"><span class="dot"></span>三维单位切向量</div>
-    $$\mathbf{T} = \begin{pmatrix} \cos\beta\,\cos\alpha \\[4pt] \cos\beta\,\sin\alpha \\[4pt] \sin\beta \end{pmatrix}$$
-    <div class="note">α = 数学方位角（正东=0°，逆时针）；β = 纵断面坡角</div>
+    <div class="card-label"><span class="dot"></span>平面局部损失</div>
+    $$\sum \xi_{\text{plan}} = \sum_i \xi_{\text{plan},i}$$
+    <div class="note">平面弯管/折管按平面特征点的转角和半径独立查表</div>
   </div>
   <div class="card">
-    <div class="card-label"><span class="dot"></span>空间转角</div>
-    $$\theta_{3D} = \arccos\!\Big(\mathbf{T}_{\text{before}} \cdot \mathbf{T}_{\text{after}}\Big)$$
+    <div class="card-label"><span class="dot"></span>纵断面局部损失</div>
+    $$\sum \xi_{\text{profile}} = \sum_j \xi_{\text{profile},j}$$
+    <div class="note">纵断面竖向弯管/折管按纵断面节点独立查表</div>
   </div>
   <div class="card">
-    <div class="card-label"><span class="dot"></span>空间长度</div>
-    $$L_{\text{spatial}} = \sum_{i} \sqrt{\Delta s_i^{\,2} + \Delta Z_i^{\,2}}$$
-    <div class="note">Δs = 桩号差（平面弧长参数增量），非 XY 弦长</div>
+    <div class="card-label"><span class="dot"></span>沿程长度来源</div>
+    $$L = \begin{cases} L_{\text{profile}}, & \text{有纵断面实长} \\ L_{\text{plan}}, & \text{无纵断面时取平面总长} \end{cases}$$
+    <div class="note">沿程损失只计算一次，不随平面和纵断面重复叠加</div>
   </div>
   <div class="card">
-    <div class="card-label"><span class="dot"></span>坡角计算</div>
-    $$\beta = \arctan\!\left(\frac{\Delta Z}{\Delta s}\right)$$
-    <div class="note">用桩号差 Δs（弧长参数）替代 XY 弦长，消除圆弧段系统性偏差</div>
-  </div>
-  <div class="card">
-    <div class="card-label"><span class="dot"></span>曲率合成（重叠弯道 · 微分几何）</div>
-    $$\kappa^2 = \frac{1}{R_v^2} + \frac{\cos^4\!\beta}{R_h^2}$$
-    $$R_{3D} = \frac{R_h \, R_v}{\sqrt{R_h^2 + R_v^2 \cos^4\!\beta}}$$
-    <div class="note">极限校核：$R_v \to \infty$ 时 $R_{3D} = R_h/\cos^2\!\beta$；$R_h \to \infty$ 时 $R_{3D} = R_v$</div>
+    <div class="card-label"><span class="dot"></span>管身局部系数</div>
+    $$\sum \xi_{\text{local}} = \sum \xi_{\text{plan}} + \sum \xi_{\text{profile}} + \sum \xi_{\text{common}}$$
+    <div class="note">平面与纵断面不合并成三维复合弯道</div>
   </div>
 </div>
 
@@ -2017,7 +2012,7 @@ document.addEventListener("DOMContentLoaded", function(){
 
     @staticmethod
     def _segment_horizontal_length(seg):
-        """根据空间长度和高差反推纵断面水平投影长度。"""
+        """根据实长和高差反推纵断面水平投影长度。"""
         s_elev = seg.start_elevation if seg.start_elevation is not None else 0.0
         e_elev = seg.end_elevation if seg.end_elevation is not None else 0.0
         dh = e_elev - s_elev
@@ -4168,7 +4163,7 @@ document.addEventListener("DOMContentLoaded", function(){
             start_elev = f"{seg.start_elevation:.3f}" if getattr(seg, 'start_elevation', None) is not None else ""
             end_elev = f"{seg.end_elevation:.3f}" if getattr(seg, 'end_elevation', None) is not None else ""
 
-            # 空间长度显示
+            # 实长显示
             sp_len = getattr(seg, 'spatial_length', 0)
             spatial_display = f"{sp_len:.2f}" if sp_len and sp_len > 0 else ""
 
@@ -4784,7 +4779,7 @@ document.addEventListener("DOMContentLoaded", function(){
         self.btn_reverse_plan.setVisible(should_show)
 
     def _has_real_longitudinal_data(self):
-        """返回当前是否存在可参与空间合并的真实纵断面数据。"""
+        """返回当前是否存在可参与独立叠加计算的真实纵断面数据。"""
         return len(self.longitudinal_nodes) >= 2 and not self._longitudinal_is_example
 
     def _reverse_plan_dxf(self):
@@ -4880,7 +4875,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 turn_info = f"（{', '.join(parts)}）"
             spatial_info = ""
             if self._has_real_longitudinal_data():
-                spatial_info = "\n已检测到纵断面数据，将使用三维空间合并计算"
+                spatial_info = "\n已检测到纵断面数据，将使用平面+纵断面独立叠加计算"
             else:
                 spatial_info = "\n未检测到纵断面数据，将使用平面独立计算模式"
             reverse_hint = "\n若方向相反，可点击“平面反向”纠正首尾。"
@@ -5022,7 +5017,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 node_info += f"（其中转弯 {turns} 个）"
             spatial_info = ""
             if self.plan_feature_points:
-                spatial_info = "\n已检测到平面数据，将使用三维空间合并计算"
+                spatial_info = "\n已检测到平面数据，将使用平面+纵断面独立叠加计算"
             else:
                 spatial_info = "\n未检测到平面数据，将使用纵断面独立计算模式"
             InfoBar.success("导入成功",
@@ -5767,29 +5762,25 @@ document.addEventListener("DOMContentLoaded", function(){
             self._sync_canvas_viewer()
 
     def _update_data_status(self):
-        """更新数据状态标签（含空间合并模式提示，与Tkinter版一致）"""
+        """更新数据状态标签。"""
         has_plan_points = len(self.plan_feature_points) >= 2
         has_plan_segments = len(self.plan_segments) > 0 or self.plan_total_length > 0
         has_long_nodes = self._has_real_longitudinal_data()
 
-        # 空间合并模式判断
         if has_plan_points and has_long_nodes:
-            mode = "模式: 平面+纵断面（空间合并）"
+            mode = "模式: 平面+纵断面（独立叠加）"
             color = "#008800"
         elif has_plan_points and not has_long_nodes:
-            if self._longitudinal_is_example:
-                mode = "模式: 仅平面估算（纵断面为示例数据，可导入DXF替换）"
-            else:
-                mode = "模式: 仅平面估算（未导入纵断面）"
+            mode = "模式: 仅平面（独立计算）"
             color = "#CC6600"
         elif has_long_nodes and not has_plan_points:
-            mode = "模式: 仅纵断面（未检测到平面数据）"
+            mode = "模式: 仅纵断面（独立计算）"
             color = "#CC6600"
         elif has_plan_segments:
-            mode = "模式: 传统模式（仅平面总长度）"
+            mode = "模式: 仅平面（独立计算）"
             color = "#CC6600"
         elif self._longitudinal_is_example:
-            mode = "模式: 纵断面为示例数据，可导入DXF或手动编辑"
+            mode = "模式: 无平面/纵断面数据"
             color = "#CC6600"
         else:
             mode = "模式: 无平面/纵断面数据"

@@ -12700,31 +12700,9 @@ class WaterProfilePanel(QWidget):
 
     @staticmethod
     def _calc_pressure_pipe_segment_spatial_length(group, longitudinal_nodes) -> float:
-        """按窗口专项逻辑计算匿名段空间长度。"""
-        if not longitudinal_nodes:
-            return 0.0
-        try:
-            from core.pressure_pipe_calc import (
-                SPATIAL_AVAILABLE,
-                SpatialMerger,
-                _convert_ip_points_to_plan_features,
-                _convert_long_nodes_dict_to_objects,
-            )
-        except Exception:
-            return 0.0
-        if not SPATIAL_AVAILABLE:
-            return 0.0
-        try:
-            plan_features = _convert_ip_points_to_plan_features(list(getattr(group, "ip_points", []) or []))
-            long_node_objects = _convert_long_nodes_dict_to_objects(list(longitudinal_nodes or []))
-            if len(plan_features) < 2 or len(long_node_objects) < 2:
-                return 0.0
-            spatial_result = SpatialMerger.merge_and_compute(
-                plan_features, long_node_objects, pipe_diameter=float(getattr(group, "diameter", 0.0) or 0.0), verbose=False
-            )
-            return float(getattr(spatial_result, "total_spatial_length", 0.0) or 0.0)
-        except Exception:
-            return 0.0
+        """兼容旧函数名：返回纵断面实长，不再做平纵三维空间合并。"""
+        _ = group
+        return WaterProfilePanel._calc_pressure_pipe_longitudinal_path_length(longitudinal_nodes)
 
     def _build_pressure_chain_member_base_record(self, member, group_mode: str) -> dict:
         """构造连续承压链成员记录骨架。"""
@@ -12865,7 +12843,7 @@ class WaterProfilePanel(QWidget):
 
     @staticmethod
     def _calc_pressure_pipe_longitudinal_path_length(longitudinal_nodes) -> float:
-        """按纵断面节点累计前缀段空间长度。"""
+        """按纵断面节点累计前缀段实长。"""
         total_length = 0.0
         prev_chainage = None
         prev_elevation = None
@@ -12969,7 +12947,7 @@ class WaterProfilePanel(QWidget):
         }
 
     def _resolve_pressure_chain_prefix_length(self, member, nodes, longitudinal_nodes_dict, route_profile_segments_by_key) -> dict:
-        """解析链前缀段长度，优先取纵断面裁切后的空间长度。"""
+        """解析链前缀段长度，优先取纵断面裁切后的实长。"""
         start_idx = self._coerce_pressure_pipe_row_index(
             getattr(member, "prefix_target_row_index", getattr(member, "target_row_index", -1))
         )
@@ -13004,10 +12982,10 @@ class WaterProfilePanel(QWidget):
                 from utils.pressure_pipe_longitudinal_utils import clip_longitudinal_nodes_to_range
 
                 clipped_nodes = clip_longitudinal_nodes_to_range(route_nodes, float(start_mc), float(end_mc))
-                spatial_length = self._calc_pressure_pipe_longitudinal_path_length(clipped_nodes)
-                if spatial_length > 1e-6:
+                profile_length = self._calc_pressure_pipe_longitudinal_path_length(clipped_nodes)
+                if profile_length > 1e-6:
                     return {
-                        "length": float(spatial_length),
+                        "length": float(profile_length),
                         "data_mode": "链前缀段（纵断面）",
                         "note": spatial_note,
                     }
@@ -13398,10 +13376,10 @@ class WaterProfilePanel(QWidget):
         V_pipe = calc_pipe_velocity(Q, D)
 
         length_ctx = self._build_pressure_pipe_effective_length_context(nodes, upstream_idx, target_idx)
-        spatial_length = self._calc_pressure_pipe_segment_spatial_length(group, longitudinal_nodes)
-        total_length = spatial_length if spatial_length > 0 else float(length_ctx.get("effective_length", 0.0) or 0.0)
-        data_mode = "空间模式（平面+纵断面）" if spatial_length > 0 else "段级平面模式"
-        if spatial_fallback_reason and spatial_length <= 0:
+        profile_length = self._calc_pressure_pipe_segment_spatial_length(group, longitudinal_nodes)
+        total_length = profile_length if profile_length > 0 else float(length_ctx.get("effective_length", 0.0) or 0.0)
+        data_mode = "平面+纵断面（独立叠加）" if profile_length > 0 else "仅平面（独立计算）"
+        if spatial_fallback_reason and profile_length <= 0:
             note_parts.append(spatial_fallback_reason)
 
         friction_loss = 0.0
@@ -13411,7 +13389,7 @@ class WaterProfilePanel(QWidget):
             friction_details = {
                 **(friction_details or {}),
                 "method": "pressure_pipe_fmb",
-                "length_source": "spatial" if spatial_length > 0 else "effective_length",
+                "length_source": "longitudinal_profile" if profile_length > 0 else "effective_length",
                 "L_effective": float(length_ctx.get("effective_length", 0.0) or 0.0),
                 "L_mc": float(length_ctx.get("L_mc", 0.0) or 0.0),
                 "L_transition": float(length_ctx.get("transition_length", 0.0) or 0.0),
@@ -13501,7 +13479,7 @@ class WaterProfilePanel(QWidget):
                 if display_material == material_key
                 else f"Q = {Q:.4f} m³/s, D = {D:.4f} m, 管材 = {display_material}（按 {material_key} 计算）"
             ),
-            f"长度 = {total_length:.2f} m（{'空间长度' if spatial_length > 0 else '表3有效长度'}）",
+            f"长度 = {total_length:.2f} m（{'纵断面实长' if profile_length > 0 else '表3有效长度'}）",
             f"沿程损失 hf = {friction_loss:.4f} m",
             f"弯头损失 hw = {bend_loss:.4f} m",
             f"局部损失 hj = {local_loss:.4f} m（进口 {inlet_transition_loss:.4f} m，出口 {outlet_transition_loss:.4f} m）",
@@ -14643,6 +14621,9 @@ class WaterProfilePanel(QWidget):
                             route_key=route_key,
                             route_display_name=route_display_name,
                             profile_segments=persist_profile_segments,
+                            computed_from_profile_source=str(
+                                record.get("computed_from_profile_source", "") or ""
+                            ).strip() or None,
                         )
                     continue
 
@@ -14672,7 +14653,7 @@ class WaterProfilePanel(QWidget):
 
                 try:
                     if pipe_long_nodes:
-                        # 使用空间模式计算
+                        # 使用平面/纵断面独立叠加口径计算
                         calc_res = calc_total_head_loss_with_spatial(
                             name=pipe_name,
                             Q=group.design_flow,
@@ -14692,7 +14673,7 @@ class WaterProfilePanel(QWidget):
                             outlet_transition_reason=group.outlet_transition_reason,
                         )
                     else:
-                        # 使用平面模式计算
+                        # 使用仅平面独立计算口径计算
                         calc_res = calc_total_head_loss(
                             name=pipe_name,
                             Q=group.design_flow,
@@ -14824,6 +14805,9 @@ class WaterProfilePanel(QWidget):
                     route_key=route_key,
                     route_display_name=route_display_name,
                     profile_segments=persist_profile_segments,
+                    computed_from_profile_source=str(
+                        record.get("computed_from_profile_source", "") or ""
+                    ).strip() or None,
                 )
 
             for descriptor in chain_descriptors:

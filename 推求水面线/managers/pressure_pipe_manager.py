@@ -81,7 +81,7 @@ class PressurePipeConfig:
     outlet_transition_loss: Optional[float] = None  # 出口渐变段损失 (m)
     total_head_loss: Optional[float] = None         # 总水头损失 (m)
     calculated_at: str = ""                         # 计算时间
-    data_mode: str = ""                             # 数据模式（平面模式 / 空间模式（平面+纵断面））
+    data_mode: str = ""                             # 数据模式（独立计算 / 独立叠加 / 旧结果兼容）
     status: str = ""                                # 计算状态
     computed_from_profile_source: str = ""          # 纵断面来源
     water_hammer_basic: Dict[str, Any] = field(default_factory=dict)  # 基础水锤验算快照
@@ -746,13 +746,14 @@ class PressurePipeManager:
 
         self.save_config()
     
-    def set_result(self, pipe_name: str, total_head_loss: float, 
+    def set_result(self, pipe_name: str, total_head_loss: float,
                    friction_loss: float = 0, total_bend_loss: float = 0,
                    inlet_transition_loss: float = 0, outlet_transition_loss: float = 0,
                    pipe_velocity: float = 0, plan_total_length: float = 0,
                    data_mode: str = "", longitudinal_nodes: Optional[List[Dict[str, Any]]] = None,
                    route_key: str = "", route_display_name: str = "",
-                   profile_segments: Optional[List[Dict[str, Any]]] = None):
+                   profile_segments: Optional[List[Dict[str, Any]]] = None,
+                   computed_from_profile_source: Optional[str] = None):
         """
         保存计算结果
         
@@ -779,6 +780,10 @@ class PressurePipeManager:
             or self._config.get("routes", {}).get(route_key, {}).get("display_name", "")
             or ""
         ).strip()
+        profile_source_text = (
+            str(computed_from_profile_source or "").strip()
+            if computed_from_profile_source is not None else None
+        )
         has_longitudinal_payload = longitudinal_nodes is not None
         long_nodes_payload = None if longitudinal_nodes is None else list(longitudinal_nodes or [])
         profile_segments_payload = None if profile_segments is None else list(profile_segments)
@@ -822,6 +827,8 @@ class PressurePipeManager:
             "route_display_name": route_display_name,
             "calculated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
+        if profile_source_text is not None:
+            self._config["pipes"][pipe_name]["computed_from_profile_source"] = profile_source_text
         if pipe_name in self._config.get("segments", {}):
             self._config["segments"][pipe_name].update({
                 "status": "success",
@@ -830,9 +837,10 @@ class PressurePipeManager:
                 "total_bend_loss": total_bend_loss,
                 "total_loss": total_head_loss,
                 "total_head_loss": total_head_loss,
-                "computed_from_profile_source": data_mode or self._config["segments"][pipe_name].get("computed_from_profile_source", ""),
                 "calculated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
+            if profile_source_text is not None:
+                self._config["segments"][pipe_name]["computed_from_profile_source"] = profile_source_text
             if has_longitudinal_payload:
                 self._config["segments"][pipe_name]["longitudinal_nodes"] = list(longitudinal_nodes or [])
         

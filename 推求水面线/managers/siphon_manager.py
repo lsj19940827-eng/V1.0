@@ -37,7 +37,7 @@ class SiphonConfig:
     plan_segments: List[Dict[str, Any]] = None    # 平面段列表
     plan_total_length: float = 0.0                # 平面总水平长度 (m)
     
-    # 平面IP特征点（用于三维空间合并计算）
+    # 平面IP特征点（用于平面转弯独立计损）
     plan_feature_points: List[Dict[str, Any]] = None
     
     # 纵断面变坡点节点（从DXF导入）

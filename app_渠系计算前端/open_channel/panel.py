@@ -3135,18 +3135,16 @@ class OpenChannelPanel(QWidget):
     # 清空
     # ================================================================
     def _clear(self):
-        self._cases = [self._default_case()]
-        self._current_case_idx = 0
+        self._save_current_case()
         self._all_results = []
         self._results_dirty = False
         self._has_rendered_results = False
-        self._load_case(0)
         self._rebuild_case_tags()
         self._update_calc_btn_text()
         self._show_initial_help()
         self.section_fig.clear()
         self.section_canvas.draw()
-        self.inc_hint.setText("(留空则自动计算)")
+        self._refresh_increase_hint()
         self.current_result = None
         self._export_plain_text = ""
 

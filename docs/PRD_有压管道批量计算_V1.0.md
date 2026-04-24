@@ -2,7 +2,7 @@
 
 > **版本**: V2.12.15
 > **创建日期**: 2026-03-03  
-> **最后更新**: 2026-04-17
+> **最后更新**: 2026-04-24
 > **状态**: 已实现
 
 ---
@@ -44,6 +44,7 @@
 - 有压管道面板的加大流量输入已统一支持 `按比例` / `按Q加大` 两种模式，保留原“考虑加大流量”开关。
 - 加大流量链路改为高精度参与后续计算，不再在进入推荐口径和水损计算前先把比例或 `Q加大` 截成短位数。
 - 结果页与导出中的加大比例统一显示为 3 位小数；公式代入中的比例小数 / 倍率统一显示为 5 位。
+- 独立设计面板点击【清空】只清除计算结果、结果导航和导出缓存；单次设计输入、加大流量模式、多工况列表、批量计算区和坡度标签保持用户当前输入，不再恢复程序默认值。
 - `DiameterCandidate`：`D, V_press, hf_friction_km, hf_local_km, hf_total_km, h_loss_total_m, flags`
 - `RecommendationResult`：`recommended, top_candidates, category, reason, calc_steps`
 - `BatchScanConfig`：`q_values, slope_values, diameter_values, materials, output_dir`
@@ -120,7 +121,7 @@ $$h_f = f \times L \times \frac{Q^m}{d^b}$$
 ```
 推求水面线/
 ├── core/
-│   ├── pressure_pipe_calc.py          # 水头损失计算核心（沿程 + 弯头 + 渐变段，含空间模式）
+│   ├── pressure_pipe_calc.py          # 水头损失计算核心（沿程 + 平纵独立局损 + 渐变段）
 │   └── pressure_pipe_data.py          # 简版 PressurePipeGroup + DataExtractor（batch面板用）
 ├── managers/
 │   └── pressure_pipe_manager.py       # 持久化管理器（.ppipe.json）
@@ -294,27 +295,35 @@ calc_segment_length(p1, p2) -> float  # m
 | `pipe_velocity` | 管内流速 (m/s) |
 | `friction_loss` | 沿程水头损失 (m) |
 | `bend_losses` / `total_bend_loss` | 各弯头损失列表 / 合计 (m) |
+| `local_loss` / `local_details` | 通用构件局部损失及详情，默认 0；暂不绑定设计面板的 `local_loss_ratio` |
 | `inlet_transition_loss` / `outlet_transition_loss` | 进出口渐变段损失 (m) |
 | `total_head_loss` | 总水头损失 (m) |
-| `data_mode` | 数据模式（平面模式 / 空间模式（平面+纵断面）） |
+| `data_mode` | 数据模式（仅平面独立计算 / 仅纵断面独立计算 / 平面+纵断面独立叠加） |
 | `calc_steps` | 计算过程文本 |
 | `friction_details` | 沿程损失计算详情（Dict） |
 | `bend_details` | 各弯头损失计算详情（List[Dict]） |
 | `inlet_transition_details` | 进口渐变段计算详情（Dict） |
 | `outlet_transition_details` | 出口渐变段计算详情（Dict） |
 
+兼容要求：
+- 旧工程里已保存的 `data_mode` 若仍是“空间模式/空间合并”历史字符串，保存时必须原样保留，不能在未重算时静默改写成新三类。
+- 旧字符串进入汇总表和详情文本时，要额外提示“旧空间合并结果，请按新口径重新计算”，避免把历史结果误当成当前正式口径。
+- 用户重新执行计算后，新结果统一改写为“仅平面（独立计算）/仅纵断面（独立计算）/平面+纵断面（独立叠加）”三类。
+
 **两种计算入口**：
 
 | 函数 | 场景 | 管长来源 | 弯道损失来源 |
 |------|------|----------|-------------|
-| `calc_total_head_loss()` | 仅有平面IP点 | IP点直线距离之和 | IP点转角+转弯半径查表 |
-| `calc_total_head_loss_with_spatial()` | 有平面+纵断面数据 | 空间长度（SpatialMerger） | 空间弯道 θ_3D 查表 |
+| `calc_total_head_loss()` | 仅有平面IP点 | IP点直线距离之和 | IP点转角+转弯半径查表；无半径转角按折管公式 |
+| `calc_total_head_loss_with_spatial()` | 有平面和/或纵断面数据（兼容旧函数名） | 纵断面至少 2 个有效节点且实长 > 0 时取纵断面实长；否则取平面点长度 | 平面弯头/折管与纵断面竖向弯折分别计算后相加 |
+
+两种入口都接受 `common_local_loss: float = 0.0` 与 `common_local_details: Optional[dict] = None`，用于上游明确传入的通用构件局部损失；默认 0 时旧调用结果不变。
 
 **总水头损失公式**：
 
-$$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
+$$\Delta H = h_f + \sum h_{j,弯} + h_{j,通用} + h_{j,进口} + h_{j,出口}$$
 
-**空间模式**调用倒虹吸的 `SpatialMerger.merge_and_compute()` 进行三维空间合并计算，获取空间长度和空间转角。对空间节点遍历查表（ARC型调用 `calculate_bend_coeff`，FOLD型调用 `calculate_fold_coeff`）。
+现行口径不再调用倒虹吸的 `SpatialMerger.merge_and_compute()` 生成空间弯道。`calc_total_head_loss_with_spatial()` 只保留旧调用名以兼容外部调用：平面转弯使用平面 IP 点的转角与半径，平面有转角但半径为 0 时按折管公式计入；纵断面转弯使用纵断面节点的竖向转角与竖曲线半径或折点数据，异常折角 `<0.1°` 或 `>=180°` 不计损；二者局部损失线性相加。纵断面节点先按桩号排序，重复桩号/零长度段不放大长度；纵断面圆弧有明确圆弧参数时按弧长计入沿程实长。沿程损失只算一次，进出口渐变段也只各算一次。
 
 #### 3.4.5 弯头系数查表
 
@@ -436,6 +445,7 @@ $$\Delta H = h_f + \sum h_{j,弯} + h_{j,进口} + h_{j,出口}$$
 - `routes[route_key]` 现还会正式保存 `profile_state / entered_pressurized_at_row / segment_identities`
 - `segments[identity]` 作为连续承压正式存储桶，保存 `base_name / member_display_name / dxf_display_name / member_role / start_mc / end_mc / status / friction_loss / bend_loss / local_loss / total_loss / computed_from_profile_source`
 - 旧 `pipes` 保留兼容镜像；新导出、新提示、新回读优先使用 `routes / segments`
+- `computed_from_profile_source` 只表示纵断面来源（如 `route_profile / segment_profile`），不允许再用 `data_mode` 兜底写入，避免把计算口径和来源字段混在一起
 - `PressurePipeConfigDialog` 重开时，恢复顺序固定为：先按 `route_key` 读取 `routes`，只有 route 级拿不到时才回退 `segments / pipes`
 - 末尾命名承压尾段若已拆成逐行成员，则 `segments` 保存逐段正式结果；整组总损失只保留在窗口汇总和兼容镜像里，不再要求表3出口行同时保留整组值
 - 普通有压子段若只剩 1 个纵断面点，只视为边界占位；导出时应回退整线 `routes[route_key].longitudinal_nodes`，隧洞生成段除外
@@ -635,7 +645,7 @@ $$\theta_i = \arccos\left(\frac{\vec{v}_{in} \cdot \vec{v}_{out}}{|\vec{v}_{in}|
 
 $$L_{total} = \sum_{i=0}^{n-1} \sqrt{(X_{i+1}-X_i)^2 + (Y_{i+1}-Y_i)^2}$$
 
-空间模式下使用 `SpatialMerger` 计算的空间长度（含高程差）。
+若有可用纵断面节点，沿程长度优先取纵断面实长；没有纵断面时，取平面 IP 点坐标长度。平面和纵断面不再合并为空间轴线来计算水损。
 
 ### 6.3 弯管局部损失系数
 
@@ -675,7 +685,7 @@ $$h_f = f \times L \times \frac{Q_{m^3/h}^m}{d_{mm}^b}$$
 | 枚举定义 | `推求水面线/models/enums.py` |
 | 数据模型 | `推求水面线/models/data_models.py` |
 | 倒虹吸系数服务（复用） | `倒虹吸水力计算系统/siphon_coefficients.py` |
-| 空间合并引擎（复用） | `倒虹吸水力计算系统/spatial_merger.py` |
+| 空间合并引擎（兼容/诊断保留） | `倒虹吸水力计算系统/spatial_merger.py` |
 | 共享数据管理 | `推求水面线/shared/shared_data_manager.py` |
 
 ---
@@ -686,7 +696,7 @@ $$h_f = f \times L \times \frac{Q_{m^3/h}^m}{d_{mm}^b}$$
 |------|----------|
 | `tests/test_pressure_pipe_kernel.py` | 有压管道设计内核（V9）单元测试 |
 | `tests/test_pressure_pipe_batch.py` | 批量扫描输出测试 |
-| `tests/test_pressure_pipe_spatial_calc_unit.py` | 空间模式水头损失计算 |
+| `tests/test_pressure_pipe_spatial_calc_unit.py` | 平面/纵断面独立叠加水头损失计算 |
 | `tests/test_pressure_pipe_validation_unit.py` | 数据验证单元测试 |
 | `tests/test_pressure_pipe_validation_property.py` | 数据验证属性测试 |
 | `tests/test_pressure_pipe_data_extraction_unit.py` | 数据提取器单元测试 |

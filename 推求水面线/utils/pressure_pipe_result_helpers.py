@@ -6,6 +6,8 @@
 import copy
 from typing import Any, Dict, List, Optional
 
+LEGACY_SPATIAL_RESULT_NOTE = "旧空间合并结果，请按新口径重新计算"
+
 
 def make_pressure_pipe_identity(flow_section: Any, name: Any) -> str:
     """构造有压管道稳定身份键：流量段+名称。"""
@@ -63,6 +65,26 @@ def _to_row_index_or_default(v: Any, default: int = -1) -> int:
         return int(v)
     except (TypeError, ValueError):
         return default
+
+
+def is_legacy_spatial_mode(data_mode: Any) -> bool:
+    """判断是否为旧空间合并口径的历史结果。"""
+    text = str(data_mode or "").strip()
+    if not text:
+        return False
+    return "空间模式" in text or "空间合并" in text
+
+
+def append_legacy_spatial_result_note(note: Any, data_mode: Any) -> str:
+    """为旧空间合并结果追加重算提示。"""
+    base = str(note or "").strip()
+    if not is_legacy_spatial_mode(data_mode):
+        return base
+    if LEGACY_SPATIAL_RESULT_NOTE in base:
+        return base
+    if not base:
+        return LEGACY_SPATIAL_RESULT_NOTE
+    return f"{base}；{LEGACY_SPATIAL_RESULT_NOTE}"
 
 
 def build_pressure_pipe_transition_note(
@@ -160,6 +182,7 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
                 has_outlet_transition=row["has_outlet_transition"],
                 outlet_transition_reason=row["outlet_transition_reason"],
             )
+        row["note"] = append_legacy_spatial_result_note(row["note"], row["data_mode"])
         normalized_records.append(row)
 
     normalized_chain_summaries: List[Dict[str, Any]] = []
@@ -261,13 +284,18 @@ def format_pressure_pipe_record_detail(record: Dict[str, Any], precision: int = 
             f"L={_fmt_num(record.get('total_length'), precision)} m, "
             f"V={_fmt_num(record.get('pipe_velocity'), precision)} m/s"
         )
-        lines.append(
-            "分项损失: "
-            f"沿程={_fmt_num(record.get('friction_loss'), precision)} m, "
-            f"弯头={_fmt_num(record.get('total_bend_loss'), precision)} m, "
-            f"进口渐变={_fmt_num(record.get('inlet_transition_loss'), precision)} m, "
-            f"出口渐变={_fmt_num(record.get('outlet_transition_loss'), precision)} m"
-        )
+        loss_parts = [
+            f"沿程={_fmt_num(record.get('friction_loss'), precision)} m",
+            f"弯头={_fmt_num(record.get('total_bend_loss'), precision)} m",
+        ]
+        common_local = _to_float_or_none(record.get("local_loss"))
+        if common_local is not None and abs(common_local) > 1e-12:
+            loss_parts.append(f"通用构件={_fmt_num(common_local, precision)} m")
+        loss_parts.extend([
+            f"进口渐变={_fmt_num(record.get('inlet_transition_loss'), precision)} m",
+            f"出口渐变={_fmt_num(record.get('outlet_transition_loss'), precision)} m",
+        ])
+        lines.append("分项损失: " + ", ".join(loss_parts))
         lines.append(f"总损失: ΔH={_fmt_num(record.get('total_head_loss'), precision)} m")
         sens_low_total = _to_float_or_none(record.get("sensitivity_low_total_head_loss"))
         if sens_low_total is not None:

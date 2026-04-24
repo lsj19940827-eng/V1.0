@@ -15,11 +15,10 @@ import math
 from typing import Dict, List, Optional, Tuple
 from siphon_models import (
     GlobalParameters, StructureSegment, CalculationResult, SegmentType, SegmentDirection,
-    PlanFeaturePoint, LongitudinalNode, SpatialMergeResult, TurnType, V2Strategy,
+    PlanFeaturePoint, LongitudinalNode, TurnType, V2Strategy,
     is_common_type, GEOMETRY_DISPLAY_DECIMALS
 )
 from siphon_coefficients import CoefficientService
-from spatial_merger import SpatialMerger
 
 
 class HydraulicCore:
@@ -27,6 +26,7 @@ class HydraulicCore:
     
     # 重力加速度
     GRAVITY = 9.81
+    TURN_ANGLE_THRESH = 0.1
     
     @staticmethod
     def round_diameter(d_theory: float) -> float:
@@ -262,7 +262,7 @@ class HydraulicCore:
             return (
                 None,
                 HydraulicCore._collect_segments_for_source_indices(lookup, source_indices),
-                "因同一空间弯道覆盖多个原始转弯段，无法一一对应，仍按自动值计算。",
+                "因同一合并事件覆盖多个原始转弯段，无法一一对应，仍按自动值计算。",
             )
 
         source_index = source_indices[0] if source_indices else None
@@ -356,6 +356,206 @@ class HydraulicCore:
         steps.append(
             f"    本次采用手工局部系数 ξ={adopted_xi:.4f}，覆盖自动值 ξ={auto_xi:.4f}"
         )
+
+    @staticmethod
+    def _resolve_independent_manual_override(
+        scope: str,
+        source_index: Optional[int],
+        lookup: Dict[int, List[StructureSegment]],
+        fallback_segments: List[StructureSegment],
+        turn_style: TurnType,
+        effective_radius: float,
+        theta_deg: float,
+        adopted_manual_ids: set,
+    ) -> Tuple[Optional[StructureSegment], List[StructureSegment], Optional[str]]:
+        """解析独立平面/纵断面转弯是否能采用对应来源的手工局部系数。"""
+        if source_index is not None:
+            matched_seg, reason = HydraulicCore._match_manual_turn_segment(
+                lookup, source_index
+            )
+            if matched_seg is not None:
+                if id(matched_seg) in adopted_manual_ids:
+                    return None, [], None
+                return matched_seg, [], None
+            if reason is not None:
+                return (
+                    None,
+                    HydraulicCore._collect_segments_for_source_indices(
+                        lookup, [source_index]
+                    ),
+                    reason,
+                )
+
+        legacy_candidates = HydraulicCore._collect_available_legacy_turn_candidates(
+            scope,
+            fallback_segments,
+            turn_style,
+            adopted_manual_ids,
+        )
+        if not legacy_candidates:
+            return None, [], None
+
+        geometry_matches = [
+            seg for seg in legacy_candidates
+            if HydraulicCore._segment_matches_event_geometry(
+                seg, turn_style, effective_radius, theta_deg
+            )
+        ]
+        if len(geometry_matches) == 1:
+            return geometry_matches[0], [], None
+        if len(geometry_matches) > 1 or len(legacy_candidates) > 1:
+            return (
+                None,
+                legacy_candidates,
+                "存在多条手工局部系数，无法一一对应，仍按自动值计算。",
+            )
+        return None, [], None
+
+    @staticmethod
+    def _profile_developed_length(
+        longitudinal_nodes: List[LongitudinalNode],
+    ) -> float:
+        """计算纵断面实长；主路径仅按节点实长累加，不依赖 SpatialMerger。"""
+        if len(longitudinal_nodes or []) < 2:
+            return 0.0
+
+        nodes = sorted(longitudinal_nodes, key=lambda node: node.chainage)
+        length = 0.0
+        for before, after in zip(nodes, nodes[1:]):
+            ds = after.chainage - before.chainage
+            dz = after.elevation - before.elevation
+            if ds > 0:
+                length += math.hypot(ds, dz)
+        return length
+
+    @staticmethod
+    def _plan_axis_length(
+        plan_feature_points: List[PlanFeaturePoint],
+        plan_total_length: float,
+        plan_segments: List[StructureSegment],
+    ) -> float:
+        """计算平面轴线长度，优先使用导入时记录的平面总长。"""
+        if plan_total_length > 0:
+            return plan_total_length
+
+        if len(plan_feature_points or []) >= 2:
+            points = sorted(plan_feature_points, key=lambda point: point.chainage)
+            chainage_span = points[-1].chainage - points[0].chainage
+            if chainage_span > 0:
+                return chainage_span
+
+            coord_length = 0.0
+            for before, after in zip(points, points[1:]):
+                coord_length += math.hypot(after.x - before.x, after.y - before.y)
+            if coord_length > 0:
+                return coord_length
+
+        return sum(
+            seg.length
+            for seg in plan_segments or []
+            if seg.direction == SegmentDirection.PLAN and seg.length > 0
+        )
+
+    @staticmethod
+    def _append_ignored_manual_records(
+        steps: List[str],
+        ignored_records: List[Tuple[str, StructureSegment, str]],
+        ignored_manual_seen: set,
+        ignored_manual_segment_ids: set,
+        ignored_manual_overrides: List[str],
+    ) -> None:
+        """追加未采用手工局部系数的明细，并按来源去重。"""
+        for ignored_scope, ignored_seg, ignored_reason in ignored_records:
+            ignored_key, message = HydraulicCore._build_ignored_manual_entry(
+                ignored_scope, ignored_seg, ignored_reason
+            )
+            steps.append(f"    {message}")
+            if ignored_key not in ignored_manual_seen:
+                ignored_manual_seen.add(ignored_key)
+                ignored_manual_segment_ids.add(id(ignored_seg))
+                ignored_manual_overrides.append(message)
+
+    @staticmethod
+    def _append_independent_turn_loss(
+        steps: List[str],
+        source_label: str,
+        scope: str,
+        item_index: int,
+        segment_type: SegmentType,
+        radius: float,
+        angle_deg: float,
+        source_index: Optional[int],
+        lookup: Dict[int, List[StructureSegment]],
+        manual_segments: List[StructureSegment],
+        adopted_manual_ids: set,
+        ignored_manual_seen: set,
+        ignored_manual_segment_ids: set,
+        ignored_manual_overrides: List[str],
+        diameter: float,
+        direct_segment: Optional[StructureSegment] = None,
+    ) -> float:
+        """计算并记录一个独立平面/纵断面转弯局部损失系数。"""
+        xi_auto, auto_steps = HydraulicCore._calculate_turn_auto_xi(
+            segment_type, radius, angle_deg, diameter
+        )
+        if xi_auto is None:
+            return 0.0
+
+        adopted_xi = xi_auto
+        adopted_seg = None
+        ignored_records: List[Tuple[str, StructureSegment, str]] = []
+        if direct_segment is not None:
+            direct_segment.xi_calc = xi_auto
+            if direct_segment.xi_user is not None:
+                adopted_seg = direct_segment
+                adopted_xi = direct_segment.xi_user
+                adopted_manual_ids.add(id(direct_segment))
+        else:
+            turn_style = TurnType.ARC if segment_type == SegmentType.BEND else TurnType.FOLD
+            adopted_seg, ignored_segments, match_reason = (
+                HydraulicCore._resolve_independent_manual_override(
+                    scope,
+                    source_index,
+                    lookup,
+                    manual_segments,
+                    turn_style,
+                    radius,
+                    angle_deg,
+                    adopted_manual_ids,
+                )
+            )
+            if adopted_seg is not None and adopted_seg.xi_user is not None:
+                adopted_seg.xi_calc = xi_auto
+                adopted_xi = adopted_seg.xi_user
+                adopted_manual_ids.add(id(adopted_seg))
+            elif match_reason:
+                ignored_records.extend(
+                    (scope, seg, match_reason) for seg in ignored_segments
+                )
+
+        turn_name = "弯管" if segment_type == SegmentType.BEND else "折管"
+        if segment_type == SegmentType.BEND:
+            steps.append(
+                f"  {source_label}{turn_name}{item_index}: "
+                f"R={radius:.{GEOMETRY_DISPLAY_DECIMALS}f}m, "
+                f"θ={angle_deg:.{GEOMETRY_DISPLAY_DECIMALS}f}°"
+            )
+        else:
+            steps.append(
+                f"  {source_label}{turn_name}{item_index}: "
+                f"θ={angle_deg:.{GEOMETRY_DISPLAY_DECIMALS}f}°"
+            )
+        steps.append(f"    {auto_steps.replace(chr(10), chr(10) + '    ')}")
+        if adopted_seg is not None and adopted_seg.xi_user is not None:
+            HydraulicCore._append_manual_adoption_step(steps, xi_auto, adopted_xi)
+        HydraulicCore._append_ignored_manual_records(
+            steps,
+            ignored_records,
+            ignored_manual_seen,
+            ignored_manual_segment_ids,
+            ignored_manual_overrides,
+        )
+        return adopted_xi
     
     @staticmethod
     def execute_calculation(global_params: GlobalParameters,
@@ -374,11 +574,10 @@ class HydraulicCore:
         """
         执行核心计算（依据附录L规范）
         
-        支持三种计算模式：
-        A. 三维空间合并模式（优先）：当同时有 plan_feature_points 和 longitudinal_nodes 时
-           使用 SpatialMerger 计算空间长度，并按 bend_events 逐事件查表空间弯道局损
-        B. 平面+纵断面独立模式（退化）：分别计算平面弯道和纵向弯道损失
-        C. 单数据源模式（退化）：仅有平面或仅有纵断面时的简化计算
+        支持三种轴线计算模式：
+        A. 平面+纵断面独立叠加：分别计算平面和纵断面转弯局损后相加
+        B. 仅平面独立计算：按平面特征点计算水平转弯局损
+        C. 仅纵断面独立计算：按纵断面节点计算竖向转弯局损
         
         Args:
             global_params: 全局参数
@@ -387,7 +586,7 @@ class HydraulicCore:
             verbose: 是否输出详细计算过程
             plan_segments: 平面段列表（旧接口，向后兼容）
             plan_total_length: 平面总水平长度 (m)
-            plan_feature_points: 平面IP特征点列表（新接口，用于三维空间合并）
+            plan_feature_points: 平面IP特征点列表
             longitudinal_nodes: 纵断面变坡点列表（新接口，来自DXF导入）
             
         Returns:
@@ -525,8 +724,15 @@ class HydraulicCore:
         # ===== 判断计算模式 =====
         has_plan_points = len(plan_feature_points) >= 2
         has_long_nodes = len(longitudinal_nodes) >= 2
-        has_plan_length = (plan_total_length > 0) or (plan_segments is not None and len(plan_segments) > 0)
-        has_spatial_data = (has_plan_points or has_long_nodes)
+        has_plan_segments = any(
+            seg.direction == SegmentDirection.PLAN for seg in plan_segments
+        )
+        has_long_segments = any(
+            seg.direction == SegmentDirection.LONGITUDINAL for seg in segments
+        )
+        has_plan_source = has_plan_points or plan_total_length > 0 or has_plan_segments
+        has_long_source = has_long_nodes or has_long_segments
+        has_axis_data = has_plan_source or has_long_source
         plan_manual_lookup, long_manual_lookup = HydraulicCore._build_manual_turn_segment_lookups(
             plan_segments, segments
         )
@@ -538,242 +744,173 @@ class HydraulicCore:
         ignored_manual_seen = set()
         ignored_manual_segment_ids = set()
         
-        if has_spatial_data:
-            # ===== 模式A：三维空间合并计算 =====
+        if has_axis_data:
+            # ===== 新口径：平面/纵断面独立计算后叠加 =====
             steps.append("")
-            steps.append("【三维空间合并计算】")
-            
-            spatial_result = SpatialMerger.merge_and_compute(
-                plan_feature_points, longitudinal_nodes,
-                pipe_diameter=D, verbose=verbose
-            )
-            
-            if has_plan_points and has_long_nodes:
-                result.data_mode = "平面+纵断面（空间合并）"
-                result.data_note = "已同时检测到平面与纵断面数据"
-            elif has_plan_points:
-                result.data_mode = "仅平面（空间合并退化）"
-                result.data_note = "未导入纵断面，按平面估算（β=0）"
+            steps.append("【平面/纵断面独立叠加计算】")
+            steps.append("未采用三维空间合并；平面和纵断面转弯局部损失分别计算后相加。")
+
+            if has_plan_source and has_long_source:
+                result.data_mode = "平面+纵断面（独立叠加）"
+                result.data_note = "已同时检测到平面与纵断面来源，局部损失按来源分别计算后相加"
+            elif has_plan_source:
+                result.data_mode = "仅平面（独立计算）"
+                result.data_note = "未检测到纵断面来源，局部损失按平面转弯独立计算"
             else:
-                result.data_mode = "仅纵断面（空间合并退化）"
-                result.data_note = "未检测到平面数据，按纵断面估算（α=常数）"
-            
-            # 添加空间合并的详细步骤
-            if verbose:
-                steps.extend(spatial_result.computation_steps)
-            
-            # 空间弯道损失系数
-            xi_spatial_bends = 0.0
+                result.data_mode = "仅纵断面（独立计算）"
+                result.data_note = "未检测到平面来源，局部损失按纵断面转弯独立计算"
+
+            xi_plan_bends = 0.0
             steps.append("")
-            steps.append("【空间弯道损失系数查表】")
-            counted_events = [
-                ev for ev in spatial_result.bend_events
-                if math.degrees(ev.theta_event) > SpatialMerger.TURN_ANGLE_THRESH
-            ]
-            for ev in counted_events:
-                theta_deg = math.degrees(ev.theta_event)
-                if ev.turn_style == TurnType.ARC and ev.R_eff > 0:
-                    xi_auto, auto_steps = CoefficientService.calculate_bend_coeff(
-                        ev.R_eff, D, theta_deg, verbose=True
-                    )
-                    adopted_xi = xi_auto
-                    adopted_seg = None
-                    ignored_records = []
-                    if ev.event_type == 'PLAN':
-                        adopted_seg, ignored_segments, match_reason = HydraulicCore._resolve_event_manual_override(
-                            ev,
-                            'PLAN',
-                            plan_manual_lookup,
-                            plan_manual_segments,
-                            ev.turn_style,
-                            ev.R_h if ev.R_h > 0 else ev.R_eff,
-                            theta_deg,
-                            adopted_manual_ids,
-                        )
-                        if adopted_seg is not None and adopted_seg.xi_user is not None:
-                            adopted_xi = adopted_seg.xi_user
-                            adopted_manual_ids.add(id(adopted_seg))
-                        elif match_reason:
-                            ignored_records.extend(
-                                ('PLAN', seg, match_reason) for seg in ignored_segments
-                            )
-                    elif ev.event_type == 'VERTICAL':
-                        adopted_seg, ignored_segments, match_reason = HydraulicCore._resolve_event_manual_override(
-                            ev,
-                            'VERTICAL',
-                            long_manual_lookup,
-                            long_manual_segments,
-                            ev.turn_style,
-                            ev.R_v if ev.R_v > 0 else ev.R_eff,
-                            theta_deg,
-                            adopted_manual_ids,
-                        )
-                        if adopted_seg is not None and adopted_seg.xi_user is not None:
-                            adopted_xi = adopted_seg.xi_user
-                            adopted_manual_ids.add(id(adopted_seg))
-                        elif match_reason:
-                            ignored_records.extend(
-                                ('VERTICAL', seg, match_reason) for seg in ignored_segments
-                            )
+            steps.append("平面段（水平转弯，独立计算）：")
+            if has_plan_points:
+                plan_turn_index = 0
+                for point in plan_feature_points:
+                    angle_deg = abs(point.turn_angle or 0.0)
+                    if angle_deg <= HydraulicCore.TURN_ANGLE_THRESH:
+                        continue
+                    if point.turn_type == TurnType.ARC and point.turn_radius > 0:
+                        segment_type = SegmentType.BEND
+                        radius = point.turn_radius
+                    elif point.turn_type == TurnType.FOLD:
+                        segment_type = SegmentType.FOLD
+                        radius = 0.0
                     else:
-                        plan_segs = HydraulicCore._collect_composite_manual_segments(
-                            ev,
-                            'PLAN',
-                            plan_manual_lookup,
-                            plan_manual_segments,
-                            ev.turn_style,
-                            ev.R_h if ev.R_h > 0 else ev.R_eff,
-                            theta_deg,
-                        )
-                        long_segs = HydraulicCore._collect_composite_manual_segments(
-                            ev,
-                            'VERTICAL',
-                            long_manual_lookup,
-                            long_manual_segments,
-                            ev.turn_style,
-                            ev.R_v if ev.R_v > 0 else ev.R_eff,
-                            theta_deg,
-                        )
-                        for plan_seg in plan_segs:
-                            ignored_records.append(
-                                (
-                                    'PLAN',
-                                    plan_seg,
-                                    "因 3D 复合弯道无法一一对应，仍按自动值计算。",
-                                )
-                            )
-                        for long_seg in long_segs:
-                            ignored_records.append(
-                                (
-                                    'VERTICAL',
-                                    long_seg,
-                                    "因 3D 复合弯道无法一一对应，仍按自动值计算。",
-                                )
-                            )
-                    xi_spatial_bends += adopted_xi
-                    steps.append(
-                        f"  s=[{ev.s_a:.{GEOMETRY_DISPLAY_DECIMALS}f},{ev.s_b:.{GEOMETRY_DISPLAY_DECIMALS}f}] 空间弯管: "
-                        f"R_eff={ev.R_eff:.{GEOMETRY_DISPLAY_DECIMALS}f}m, "
-                        f"θ_3D={theta_deg:.{GEOMETRY_DISPLAY_DECIMALS}f}°"
+                        continue
+
+                    plan_turn_index += 1
+                    xi_plan_bends += HydraulicCore._append_independent_turn_loss(
+                        steps,
+                        "平面",
+                        "PLAN",
+                        plan_turn_index,
+                        segment_type,
+                        radius,
+                        angle_deg,
+                        point.ip_index,
+                        plan_manual_lookup,
+                        plan_manual_segments,
+                        adopted_manual_ids,
+                        ignored_manual_seen,
+                        ignored_manual_segment_ids,
+                        ignored_manual_overrides,
+                        D,
                     )
-                    steps.append(f"    {auto_steps.replace(chr(10), chr(10) + '    ')}")
-                    if adopted_seg is not None and adopted_seg.xi_user is not None:
-                        HydraulicCore._append_manual_adoption_step(
-                            steps, xi_auto, adopted_xi
-                        )
-                    for ignored_scope, ignored_seg, ignored_reason in ignored_records:
-                        ignored_key, message = HydraulicCore._build_ignored_manual_entry(
-                            ignored_scope, ignored_seg, ignored_reason
-                        )
-                        steps.append(f"    {message}")
-                        if ignored_key not in ignored_manual_seen:
-                            ignored_manual_seen.add(ignored_key)
-                            ignored_manual_segment_ids.add(id(ignored_seg))
-                            ignored_manual_overrides.append(message)
-                elif ev.turn_style == TurnType.FOLD:
-                    xi_auto, auto_steps = CoefficientService.calculate_fold_coeff(
-                        theta_deg, verbose=True
+            else:
+                plan_turn_segments = [
+                    seg for seg in plan_segments
+                    if seg.segment_type in (SegmentType.BEND, SegmentType.FOLD)
+                ]
+                for j, pseg in enumerate(plan_turn_segments, start=1):
+                    xi_plan_bends += HydraulicCore._append_independent_turn_loss(
+                        steps,
+                        "平面",
+                        "PLAN",
+                        j,
+                        pseg.segment_type,
+                        pseg.radius,
+                        abs(pseg.angle or 0.0),
+                        pseg.source_ip_index,
+                        plan_manual_lookup,
+                        plan_manual_segments,
+                        adopted_manual_ids,
+                        ignored_manual_seen,
+                        ignored_manual_segment_ids,
+                        ignored_manual_overrides,
+                        D,
+                        direct_segment=pseg,
                     )
-                    adopted_xi = xi_auto
-                    adopted_seg = None
-                    ignored_records = []
-                    if ev.event_type == 'PLAN':
-                        adopted_seg, ignored_segments, match_reason = HydraulicCore._resolve_event_manual_override(
-                            ev,
-                            'PLAN',
-                            plan_manual_lookup,
-                            plan_manual_segments,
-                            ev.turn_style,
-                            ev.R_h if ev.R_h > 0 else ev.R_eff,
-                            theta_deg,
-                            adopted_manual_ids,
-                        )
-                        if adopted_seg is not None and adopted_seg.xi_user is not None:
-                            adopted_xi = adopted_seg.xi_user
-                            adopted_manual_ids.add(id(adopted_seg))
-                        elif match_reason:
-                            ignored_records.extend(
-                                ('PLAN', seg, match_reason) for seg in ignored_segments
-                            )
-                    elif ev.event_type == 'VERTICAL':
-                        adopted_seg, ignored_segments, match_reason = HydraulicCore._resolve_event_manual_override(
-                            ev,
-                            'VERTICAL',
-                            long_manual_lookup,
-                            long_manual_segments,
-                            ev.turn_style,
-                            ev.R_v if ev.R_v > 0 else ev.R_eff,
-                            theta_deg,
-                            adopted_manual_ids,
-                        )
-                        if adopted_seg is not None and adopted_seg.xi_user is not None:
-                            adopted_xi = adopted_seg.xi_user
-                            adopted_manual_ids.add(id(adopted_seg))
-                        elif match_reason:
-                            ignored_records.extend(
-                                ('VERTICAL', seg, match_reason) for seg in ignored_segments
-                            )
+            xi_sum_middle += xi_plan_bends
+            steps.append(f"  平面转弯损失系数合计 Σξ_平面 = {xi_plan_bends:.4f}")
+
+            xi_long_turns = 0.0
+            steps.append("")
+            steps.append("纵断面段（竖向转弯，独立计算）：")
+            if has_long_nodes:
+                long_turn_index = 0
+                for node_index, node in enumerate(longitudinal_nodes):
+                    angle_deg = abs(node.turn_angle or 0.0)
+                    if angle_deg <= HydraulicCore.TURN_ANGLE_THRESH:
+                        continue
+                    if node.turn_type == TurnType.ARC and node.vertical_curve_radius > 0:
+                        segment_type = SegmentType.BEND
+                        radius = node.vertical_curve_radius
+                    elif node.turn_type == TurnType.FOLD:
+                        segment_type = SegmentType.FOLD
+                        radius = 0.0
                     else:
-                        plan_segs = HydraulicCore._collect_composite_manual_segments(
-                            ev,
-                            'PLAN',
-                            plan_manual_lookup,
-                            plan_manual_segments,
-                            ev.turn_style,
-                            ev.R_h if ev.R_h > 0 else ev.R_eff,
-                            theta_deg,
-                        )
-                        long_segs = HydraulicCore._collect_composite_manual_segments(
-                            ev,
-                            'VERTICAL',
-                            long_manual_lookup,
-                            long_manual_segments,
-                            ev.turn_style,
-                            ev.R_v if ev.R_v > 0 else ev.R_eff,
-                            theta_deg,
-                        )
-                        for plan_seg in plan_segs:
-                            ignored_records.append(
-                                (
-                                    'PLAN',
-                                    plan_seg,
-                                    "因 3D 复合弯道无法一一对应，仍按自动值计算。",
-                                )
-                            )
-                        for long_seg in long_segs:
-                            ignored_records.append(
-                                (
-                                    'VERTICAL',
-                                    long_seg,
-                                    "因 3D 复合弯道无法一一对应，仍按自动值计算。",
-                                )
-                            )
-                    xi_spatial_bends += adopted_xi
-                    steps.append(
-                        f"  s={ev.s_a:.{GEOMETRY_DISPLAY_DECIMALS}f}m 空间折管: "
-                        f"θ_3D={theta_deg:.{GEOMETRY_DISPLAY_DECIMALS}f}°"
+                        continue
+
+                    long_turn_index += 1
+                    xi_long_turns += HydraulicCore._append_independent_turn_loss(
+                        steps,
+                        "纵断面",
+                        "VERTICAL",
+                        long_turn_index,
+                        segment_type,
+                        radius,
+                        angle_deg,
+                        node_index,
+                        long_manual_lookup,
+                        long_manual_segments,
+                        adopted_manual_ids,
+                        ignored_manual_seen,
+                        ignored_manual_segment_ids,
+                        ignored_manual_overrides,
+                        D,
                     )
-                    steps.append(f"    {auto_steps.replace(chr(10), chr(10) + '    ')}")
-                    if adopted_seg is not None and adopted_seg.xi_user is not None:
-                        HydraulicCore._append_manual_adoption_step(
-                            steps, xi_auto, adopted_xi
-                        )
-                    for ignored_scope, ignored_seg, ignored_reason in ignored_records:
-                        ignored_key, message = HydraulicCore._build_ignored_manual_entry(
-                            ignored_scope, ignored_seg, ignored_reason
-                        )
-                        steps.append(f"    {message}")
-                        if ignored_key not in ignored_manual_seen:
-                            ignored_manual_seen.add(ignored_key)
-                            ignored_manual_segment_ids.add(id(ignored_seg))
-                            ignored_manual_overrides.append(message)
+            else:
+                long_turn_segments = [
+                    seg for seg in segments
+                    if seg.direction == SegmentDirection.LONGITUDINAL
+                    and seg.segment_type in (SegmentType.BEND, SegmentType.FOLD)
+                ]
+                for j, seg in enumerate(long_turn_segments, start=1):
+                    xi_long_turns += HydraulicCore._append_independent_turn_loss(
+                        steps,
+                        "纵断面",
+                        "VERTICAL",
+                        j,
+                        seg.segment_type,
+                        seg.radius,
+                        abs(seg.angle or 0.0),
+                        seg.source_long_node_index,
+                        long_manual_lookup,
+                        long_manual_segments,
+                        adopted_manual_ids,
+                        ignored_manual_seen,
+                        ignored_manual_segment_ids,
+                        ignored_manual_overrides,
+                        D,
+                        direct_segment=seg,
+                    )
+            xi_sum_middle += xi_long_turns
+            steps.append(f"  纵断面转弯损失系数合计 Σξ_纵断面 = {xi_long_turns:.4f}")
 
-            xi_sum_middle += xi_spatial_bends
-            steps.append(f"  空间弯道损失系数合计 Σξ_空间弯 = {xi_spatial_bends:.4f}")
-
-            # 空间长度
-            L_friction = spatial_result.total_spatial_length
-            length_source = "三维空间合并计算"
+            profile_length = HydraulicCore._profile_developed_length(longitudinal_nodes)
+            plan_length = HydraulicCore._plan_axis_length(
+                plan_feature_points,
+                plan_total_length,
+                plan_segments,
+            )
+            legacy_longitudinal_length = sum(
+                seg.spatial_length
+                for seg in segments
+                if seg.direction == SegmentDirection.LONGITUDINAL
+            )
+            if profile_length > 0:
+                L_friction = profile_length
+                length_source = "纵断面实长"
+            elif legacy_longitudinal_length > 0:
+                L_friction = legacy_longitudinal_length
+                length_source = "纵断面段实长之和"
+            elif plan_length > 0:
+                L_friction = plan_length
+                length_source = "平面总长度"
+            else:
+                L_friction = 0.0
+                length_source = "未取得轴线长度"
+            steps.append(f"沿程长度来源：{length_source} = {L_friction:.4f} m")
 
             remaining_legacy_segments = [
                 ('PLAN', seg)
@@ -799,92 +936,6 @@ class HydraulicCore:
                 if ignored_key not in ignored_manual_seen:
                     ignored_manual_seen.add(ignored_key)
                     ignored_manual_overrides.append(message)
-        else:
-            # ===== 模式B：旧模式（向后兼容） =====
-            steps.append("")
-            steps.append("【传统模式（无空间合并数据）】")
-            
-            total_length = sum(
-                seg.spatial_length
-                for seg in segments
-                if seg.direction == SegmentDirection.LONGITUDINAL
-            )
-            
-            result.data_mode = "传统模式（无空间合并数据）"
-            if has_plan_length:
-                result.data_note = "未导入纵断面，沿程长度取平面总长度"
-            else:
-                result.data_note = "平面/纵断面数据不足，结果仅供参考"
-            
-            # 平面弯道损失
-            xi_plan_bends = 0.0
-            if plan_segments:
-                steps.append("")
-                steps.append("平面段（水平转弯）：")
-                for j, pseg in enumerate(plan_segments):
-                    xi_auto, auto_steps = HydraulicCore._calculate_turn_auto_xi(
-                        pseg.segment_type, pseg.radius, pseg.angle, D
-                    )
-                    if xi_auto is None:
-                        continue
-                    pseg.xi_calc = xi_auto
-                    adopted_xi = pseg.xi_user if pseg.xi_user is not None else xi_auto
-                    xi_plan_bends += adopted_xi
-                    if pseg.segment_type == SegmentType.BEND:
-                        steps.append(
-                            f"  平面弯管{j}: R={pseg.radius:.2f}m, θ={pseg.angle:.1f}°"
-                        )
-                    else:
-                        steps.append(f"  平面折管{j}: θ={pseg.angle:.1f}°")
-                    steps.append(f"    {auto_steps.replace(chr(10), chr(10) + '    ')}")
-                    if pseg.xi_user is not None:
-                        HydraulicCore._append_manual_adoption_step(
-                            steps, xi_auto, adopted_xi
-                        )
-                xi_sum_middle += xi_plan_bends
-
-            xi_long_turns = 0.0
-            long_turn_segments = [
-                seg for seg in segments
-                if seg.direction == SegmentDirection.LONGITUDINAL
-                and seg.segment_type in (SegmentType.BEND, SegmentType.FOLD)
-            ]
-            if long_turn_segments:
-                steps.append("")
-                steps.append("纵断面段（竖向转弯）：")
-                for j, seg in enumerate(long_turn_segments):
-                    xi_auto, auto_steps = HydraulicCore._calculate_turn_auto_xi(
-                        seg.segment_type, seg.radius, seg.angle, D
-                    )
-                    if xi_auto is None:
-                        continue
-                    seg.xi_calc = xi_auto
-                    adopted_xi = seg.xi_user if seg.xi_user is not None else xi_auto
-                    xi_long_turns += adopted_xi
-                    if seg.segment_type == SegmentType.BEND:
-                        steps.append(
-                            f"  纵断面弯管{j}: R={seg.radius:.2f}m, θ={seg.angle:.1f}°"
-                        )
-                    else:
-                        steps.append(f"  纵断面折管{j}: θ={seg.angle:.1f}°")
-                    steps.append(f"    {auto_steps.replace(chr(10), chr(10) + '    ')}")
-                    if seg.xi_user is not None:
-                        HydraulicCore._append_manual_adoption_step(
-                            steps, xi_auto, adopted_xi
-                        )
-                xi_sum_middle += xi_long_turns
-            
-            # 确定长度
-            if plan_total_length > 0:
-                L_friction = plan_total_length
-                length_source = "平面总长度(MC出-MC进)"
-            elif total_length > 0:
-                L_friction = total_length
-                length_source = "纵断面空间长度之和"
-            else:
-                L_friction = total_length
-                length_source = "纵断面段水平长度之和"
-        
         # ===== 2.5 通用构件（进水口/出水口/拦污栅/闸门槽等）：计入 ΔZ2 的局部损失 =====
         steps.append("")
         steps.append("【通用构件（计入 ΔZ2 的局部损失）】")
@@ -899,10 +950,11 @@ class HydraulicCore:
                     component_note = "（进水口构件局部损失，计入ΔZ2；不替代 ξ_1）"
                 elif seg.segment_type == SegmentType.OUTLET:
                     component_note = "（出水口构件局部损失，计入ΔZ2；不替代 ξ_2）"
+                elif seg.segment_type == SegmentType.PIPE_TRANSITION:
+                    component_note = "（管内独立变径构件局部损失，计入ΔZ2；不替代 ξ_1/ξ_2）"
                 if seg.length > 0:
-                    L_friction += seg.length
                     steps.append(
-                        f"  {type_name}{i}{component_note}: L={seg.length:.3f}m, ξ={xi:.4f}"
+                        f"  {type_name}{i}{component_note}: L={seg.length:.3f}m（仅展示，不计入沿程长度）, ξ={xi:.4f}"
                     )
                 else:
                     steps.append(f"  {type_name}{i}{component_note}: ξ={xi:.4f}")
@@ -947,7 +999,7 @@ class HydraulicCore:
         steps.append("")
         
         # 沿程损失 hf = L × v² / (C² × R_h)
-        # 使用空间长度（已在步骤2确定为 L_friction）
+        # 使用步骤2确定的沿程长度 L_friction
         h_f = (v ** 2 * L_friction) / (C ** 2 * R_h)
         result.loss_friction = h_f
         steps.append("  沿程损失 hf = L × v² / (C² × R_h)")

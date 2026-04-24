@@ -92,7 +92,8 @@ def test_data_status_shows_plan_only_when_longitudinal_is_example(monkeypatch):
     panel._update_data_status()
 
     status_text = panel.lbl_data_status.text()
-    assert "仅平面估算" in status_text
-    assert "平面+纵断面（空间合并）" not in status_text
+    assert "仅平面（独立计算）" in status_text
+    assert "仅平面估算" not in status_text
+    assert "传统模式" not in status_text
 
     panel.deleteLater()

@@ -282,8 +282,8 @@ def test_execute_calculation_detail_shows_auto_and_adopted_xi_for_plan_bend_over
     assert "0.2000" in detail_text
 
 
-def test_execute_calculation_uses_manual_xi_for_plan_only_spatial_bend_event():
-    """仅平面空间模式下，手工局部系数仍应映射到对应弯道事件。"""
+def test_execute_calculation_uses_manual_xi_for_plan_only_independent_bend_event():
+    """仅平面独立计算时，手工局部系数仍应映射到对应弯道事件。"""
     plan_segment = _make_plan_bend_segment(xi_user=0.2)
     d_out = (
         math.cos(math.radians(plan_segment.angle)),
@@ -523,18 +523,17 @@ def test_execute_calculation_rejects_missing_source_manual_xi_when_geometry_is_a
     assert len(result.ignored_manual_overrides) == 2
 
 
-def test_execute_calculation_keeps_composite_auto_xi_and_records_ignored_manual_overrides():
-    """真实 COMPOSITE 事件应继续走自动值，并记录被忽略的手工值。"""
+def test_execute_calculation_adds_plan_and_longitudinal_manual_xi_without_spatial_merge(monkeypatch):
+    """平面和纵断面同时存在时，应分别采用各自手工值后相加。"""
     plan_points, longitudinal_nodes, plan_segment, long_segment = _make_composite_fold_inputs()
-    spatial_result = SpatialMerger.merge_and_compute(plan_points, longitudinal_nodes, verbose=False)
-    composite_event = next(
-        event
-        for event in spatial_result.bend_events
-        if event.event_type == "COMPOSITE" and event.turn_style == TurnType.FOLD
-    )
-    auto_xi = CoefficientService.calculate_fold_coeff(
-        math.degrees(composite_event.theta_event),
-        verbose=False,
+
+    def _fail_if_spatial_merge_is_called(*_args, **_kwargs):
+        raise AssertionError("倒虹吸水损计算不应再调用三维空间合并")
+
+    monkeypatch.setattr(
+        SpatialMerger,
+        "merge_and_compute",
+        _fail_if_spatial_merge_is_called,
     )
 
     result = HydraulicCore.execute_calculation(
@@ -546,10 +545,40 @@ def test_execute_calculation_keeps_composite_auto_xi_and_records_ignored_manual_
         longitudinal_nodes=longitudinal_nodes,
     )
     ignored_manual_overrides = getattr(result, "ignored_manual_overrides", None)
+    detail_text = "\n".join(result.calculation_steps)
 
-    assert result.xi_sum_middle == pytest.approx(auto_xi, abs=1e-6)
-    assert ignored_manual_overrides is not None
-    assert len(ignored_manual_overrides) >= 2
+    assert result.data_mode == "平面+纵断面（独立叠加）"
+    assert result.xi_sum_middle == pytest.approx(0.2 + 0.3, abs=1e-9)
+    assert ignored_manual_overrides == []
+    assert "未采用三维空间合并" in detail_text
+    assert "平面转弯损失系数合计" in detail_text
+    assert "纵断面转弯损失系数合计" in detail_text
+
+
+def test_execute_calculation_prefers_longitudinal_developed_length_when_both_sources_exist():
+    """平面和纵断面同时存在时，沿程长度应优先取纵断面实长。"""
+    plan_points = [
+        PlanFeaturePoint(chainage=0.0, x=0.0, y=0.0, turn_type=TurnType.NONE),
+        PlanFeaturePoint(chainage=100.0, x=100.0, y=0.0, turn_type=TurnType.NONE),
+    ]
+    longitudinal_nodes = [
+        LongitudinalNode(chainage=0.0, elevation=100.0, turn_type=TurnType.NONE),
+        LongitudinalNode(chainage=100.0, elevation=110.0, turn_type=TurnType.NONE),
+    ]
+
+    result = HydraulicCore.execute_calculation(
+        _sample_params(),
+        [],
+        verbose=True,
+        plan_total_length=100.0,
+        plan_feature_points=plan_points,
+        longitudinal_nodes=longitudinal_nodes,
+    )
+    detail_text = "\n".join(result.calculation_steps)
+
+    assert result.total_length == pytest.approx(math.hypot(100.0, 10.0), abs=1e-6)
+    assert result.data_mode == "平面+纵断面（独立叠加）"
+    assert "沿程长度来源：纵断面实长" in detail_text
 
 
 def test_spatial_merger_keeps_all_source_indices_when_adjacent_arc_events_are_merged():
@@ -677,7 +706,7 @@ def test_panel_warns_once_when_manual_overrides_are_ignored(monkeypatch):
             velocity_pipe_in=1.0,
             velocity_outlet_start=1.0,
             velocity_channel_out=1.0,
-            ignored_manual_overrides=["平面弯管手工局部系数 ξ=0.2000，因 3D 复合弯道无法一一对应，仍按自动值计算。"],
+            ignored_manual_overrides=["平面弯管手工局部系数 ξ=0.2000，旧项目无法唯一恢复来源时回退自动值。"],
         )
 
     monkeypatch.setattr(siphon_panel_mod.HydraulicCore, "execute_calculation", _fake_execute)
@@ -927,6 +956,29 @@ def test_execute_calculation_detail_text_distinguishes_gradient_and_endpoint_coe
     assert "管道段水头损失 ΔZ2" in summary_text
 
 
+def test_execute_calculation_counts_pipe_transition_only_as_delta_z2_local_loss():
+    """管内独立变径构件只计入ΔZ2局损，不增加沿程长度，也不覆盖ξ₁/ξ₂。"""
+    params = _sample_params()
+    transition = StructureSegment(
+        segment_type=SegmentType.PIPE_TRANSITION,
+        direction=SegmentDirection.COMMON,
+        length=8.0,
+        xi_user=0.1250,
+        locked=True,
+    )
+
+    result = HydraulicCore.execute_calculation(params, [transition], verbose=True)
+    expected_local_loss = 0.1250 * result.velocity ** 2 / (2 * HydraulicCore.GRAVITY)
+    steps_text = "\n".join(result.calculation_steps)
+
+    assert result.total_length == pytest.approx(0.0, abs=1e-9)
+    assert result.xi_sum_middle == pytest.approx(0.1250, abs=1e-9)
+    assert result.loss_local == pytest.approx(expected_local_loss, rel=1e-9)
+    assert result.xi_inlet == pytest.approx(params.xi_inlet, abs=1e-9)
+    assert result.xi_outlet == pytest.approx(params.xi_outlet, abs=1e-9)
+    assert "管道渐变段" in steps_text
+
+
 def test_delta_z2_includes_velocity_head_delta_when_v2_differs_from_pipe_velocity():
     """当 v2 与管道实际流速不同时，ΔZ2 应包含 L.1.4 的速度水头差项。"""
     params = _sample_params()
@@ -981,6 +1033,85 @@ def test_delta_z2_increased_flow_includes_velocity_head_delta():
     assert "ΔZ2加大 = hf加大 + hj加大 + (v加大² - v₂加大²) / (2g)" in "\n".join(
         result.calculation_steps
     )
+
+
+@pytest.mark.parametrize(
+    ("plan_segments", "segments", "expected_mode"),
+    [
+        (
+            [
+                StructureSegment(
+                    segment_type=SegmentType.BEND,
+                    direction=SegmentDirection.PLAN,
+                    radius=4.0,
+                    angle=20.0,
+                    length=4.0 * math.radians(20.0),
+                    locked=True,
+                )
+            ],
+            [],
+            "仅平面（独立计算）",
+        ),
+        (
+            [],
+            [
+                StructureSegment(
+                    segment_type=SegmentType.FOLD,
+                    direction=SegmentDirection.LONGITUDINAL,
+                    length=20.0,
+                    angle=12.0,
+                    start_elevation=100.0,
+                    end_elevation=101.0,
+                    locked=True,
+                )
+            ],
+            "仅纵断面（独立计算）",
+        ),
+        (
+            [
+                StructureSegment(
+                    segment_type=SegmentType.BEND,
+                    direction=SegmentDirection.PLAN,
+                    radius=4.0,
+                    angle=20.0,
+                    length=4.0 * math.radians(20.0),
+                    locked=True,
+                )
+            ],
+            [
+                StructureSegment(
+                    segment_type=SegmentType.FOLD,
+                    direction=SegmentDirection.LONGITUDINAL,
+                    length=20.0,
+                    angle=12.0,
+                    start_elevation=100.0,
+                    end_elevation=101.0,
+                    locked=True,
+                )
+            ],
+            "平面+纵断面（独立叠加）",
+        ),
+    ],
+    ids=["legacy_plan_only", "legacy_longitudinal_only", "legacy_plan_and_longitudinal"],
+)
+def test_execute_calculation_maps_legacy_segments_to_new_data_modes(
+    plan_segments,
+    segments,
+    expected_mode,
+):
+    """旧结构段数据也应落入新三类模式，不再显示传统模式。"""
+    result = HydraulicCore.execute_calculation(
+        _sample_params(),
+        segments,
+        verbose=True,
+        plan_segments=plan_segments,
+    )
+
+    detail_text = "\n".join(result.calculation_steps)
+
+    assert result.data_mode == expected_mode
+    assert "传统模式" not in detail_text
+    assert "传统模式" not in result.data_mode
 
 
 def test_panel_keeps_gradient_coefficients_separate_from_endpoint_component_coefficients(monkeypatch):

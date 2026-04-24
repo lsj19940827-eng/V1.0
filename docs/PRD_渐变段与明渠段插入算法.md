@@ -933,7 +933,7 @@ calculate_pressure_pipe(
 ) -> PressurePipeCalcResult
 ```
 
-支持平面模式和空间模式（`calculate_pressure_pipe_spatial`），两种模式的渐变段计算逻辑相同。
+支持仅平面独立计算和平面+纵断面独立叠加（兼容旧 `calculate_pressure_pipe_spatial` 入口名），两种模式的渐变段计算逻辑相同，进出口渐变段不随平面/纵断面重复叠加。
 
 ### 13.6 与水面线推求的衔接
 

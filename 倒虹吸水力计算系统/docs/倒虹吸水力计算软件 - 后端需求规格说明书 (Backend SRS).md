@@ -16,7 +16,7 @@
 | **DXF 解析引擎** | `dxf_parser.py` | 读取CAD文件，转化为结构段数据和纵断面变坡点节点表 |
 | **系数查询服务** | `siphon_coefficients.py` | 内置《附录L》中的查表、插值及公式计算逻辑 |
 | **水力计算核心** | `siphon_hydraulics.py` | 执行设计截面计算、水头损失求解（三段式） |
-| **三维空间合并引擎** | `spatial_merger.py` | 按桩号合并平面(X,Y)和纵断面(S,Z)数据，计算空间长度和空间转角 θ_3D |
+| **空间合并兼容/诊断工具** | `spatial_merger.py` | 保留历史空间节点、诊断和几何辅助能力；不再作为倒虹吸水损主计算路径 |
 
 ---
 
@@ -141,12 +141,12 @@
 
 **方法**：
 - `get_xi()` → float：获取局部阻力系数（用户值优先于计算值）
-- `spatial_length` 属性：计算空间长度（直管段 √(L²+ΔH²)，弯管段 R×θ_rad）
+- `spatial_length` 属性：兼容旧模型的实长字段（直管段 √(L²+ΔH²)，弯管段 R×θ_rad）
 - `elevation_change` 属性：高程差 ΔH (m)
 
 **本次口径补充**：
 - `xi_user` 仍是弯管/折管唯一手工入口；用户清空手工值后，后端应回退到按当前几何重算的 `xi_calc`
-- `source_ip_index / source_long_node_index` 用于在空间事件计算时追踪“这条手工局部系数来自哪一个平面IP点/纵断面节点”；旧项目若能唯一恢复来源，则可自动补回这两个索引，无法唯一恢复时则不强绑到别的弯管
+- `source_ip_index / source_long_node_index` 用于在独立叠加口径下追踪“这条手工局部系数来自哪一个平面IP点/纵断面节点”；旧项目若能唯一恢复来源，则可自动补回这两个索引，无法唯一恢复时则不强绑到别的弯管
 - 纵断面节点额外保留稳定标识 `node_uid`，用于在节点表插入、删除、撤回后继续把同一个转弯段的手工系数映射回去，不能仅依赖行号或索引
 
 ### 2.4 计算结果对象 (CalculationResult)
@@ -198,7 +198,7 @@
 
 支持 `to_dict()` / `from_dict()` 序列化。
 
-### 2.6 三维空间合并数据模型
+### 2.6 空间合并兼容数据模型
 
 #### LongitudinalNode（纵断面变坡点）
 
@@ -232,10 +232,10 @@
 
 角度体系硬隔离：`azimuth_meas_deg`（测量角，UI显示）与 `azimuth_math_rad`（数学角，计算用，正东=0°逆时针）。
 
-#### SpatialNode（三维空间节点）
+#### SpatialNode（三维空间节点，兼容/诊断）
 
 由 SpatialMerger 按桩号合并 PlanFeaturePoint 和 LongitudinalNode 生成。
-用于空间坐标求值、绘图与诊断，不作为空间弯道局损事件清单。
+用于空间坐标求值、绘图与诊断，不作为当前水损计算的局损事件清单。
 
 | 属性名 | 说明 |
 |--------|------|
@@ -315,11 +315,11 @@
 | nodes | List[SpatialNode] |
 | total_spatial_length | 空间总长度 (m) |
 | segment_lengths | 各段空间长度列表 |
-| xi_spatial_bends | 空间弯道损失系数总和（由 HydraulicCore 按 bend_events 计算） |
+| xi_spatial_bends | 兼容旧结果字段；当前水损计算不再由 HydraulicCore 按 bend_events 生成该值 |
 | computation_steps | 计算步骤日志 |
 | has_plan_data / has_longitudinal_data | 数据存在标志 |
 | **v5.0 新增** | |
-| bend_events | List[BendEvent]，弯道事件表（空间局损查表真源） |
+| bend_events | List[BendEvent]，历史空间弯道事件表；当前水损主路径不再使用它查表 |
 | plan_segments | List[PlanSegment]，平面分段序列 |
 | profile_segments | List[ProfileSegment]，纵断面分段序列 |
 
@@ -503,13 +503,13 @@
 
 ## 5. 水力计算核心 (siphon_hydraulics.py)
 
-### 5.1 三种计算模式
+### 5.1 三种轴线计算模式
 
 | 模式 | 触发条件 | 长度来源 | 弯道损失来源 |
 |------|----------|----------|-------------|
-| **A. 三维空间合并** | 有 plan_feature_points 或 longitudinal_nodes (≥2) | 空间长度 √(Δs²+ΔZ²) | 空间弯道 θ_3D 查表 |
-| **B. 传统模式** | 仅有 plan_segments 或 plan_total_length | 平面总长度 | 平面弯道查表 |
-| **C. 单数据源** | 无空间数据 | 纵断面段长度之和 | — |
+| **A. 平面+纵断面（独立叠加）** | 同时有 plan_feature_points 和 longitudinal_nodes (≥2) | 优先纵断面实长 | 平面转弯 + 纵断面竖向转弯分别查表后相加 |
+| **B. 仅平面（独立计算）** | 仅有 plan_feature_points 或 plan_segments | 平面总长度 | 平面弯管/折管查表 |
+| **C. 仅纵断面（独立计算）** | 仅有 longitudinal_nodes (≥2) | 纵断面实长 | 纵断面弯管/折管查表 |
 
 ### 5.2 接口签名
 
@@ -530,12 +530,12 @@ HydraulicCore.execute_calculation(
 ) -> CalculationResult
 ```
 
-### 5.2.1 手工局部系数采用规则（2026-04-20 收口）
+### 5.2.1 手工局部系数采用规则（2026-04-24 收口）
 
 - 弯管/折管统一采用“先算自动值，再决定最终采用值”的链路
-- **PLAN 事件**：若能唯一对应到一个带 `xi_user` 的平面弯管/折管段，则按手工值计算；旧项目若能唯一恢复来源索引，会先自动补回 `source_ip_index` 再参与判定；否则按自动值计算
-- **VERTICAL 事件**：若能唯一对应到一个带 `xi_user` 的纵断面弯管/折管段，则按手工值计算；旧项目若能唯一恢复来源索引，会先自动补回 `source_long_node_index` 再参与判定；否则按自动值计算
-- **COMPOSITE 事件**：继续按自动值计算，不允许直接用手工值覆盖
+- **平面转弯**：若能唯一对应到一个带 `xi_user` 的平面弯管/折管段，则按手工值计算；旧项目若能唯一恢复来源索引，会先自动补回 `source_ip_index` 再参与判定；否则按自动值计算
+- **纵断面转弯**：若能唯一对应到一个带 `xi_user` 的纵断面弯管/折管段，则按手工值计算；旧项目若能唯一恢复来源索引，会先自动补回 `source_long_node_index` 再参与判定；否则按自动值计算
+- 平面与纵断面即使在同一桩号或重叠区间，也不再合并成 `COMPOSITE` 3D 事件参与水损计算，而是分别计算后相加
 - 详细计算过程必须同时保留自动推导过程；若采用了手工值，则追加“最终采用值”说明
 - 若存在未采用的手工值，结果对象需在 `ignored_manual_overrides` 中记录原因，供前端做非阻断提示；其中旧项目无法唯一恢复来源的情况，也必须明确写明原因
 - 纵断面节点表重建结构段时，手工局部系数回填必须优先按 `node_uid` 匹配，再退回旧索引兼容逻辑，避免前面插删节点后手工值静默丢失
@@ -563,8 +563,9 @@ HydraulicCore.execute_calculation(
 
 1. **谢才系数**：C = (1/n) × R_h^(1/6)
 2. **计算模式判断**：
-   - 模式A → 调用 SpatialMerger.merge_and_compute()，按 `bend_events` 逐事件查表计算空间弯道 ξ
-   - 模式B → 遍历 plan_segments 计算平面弯管ξ
+   - 平面+纵断面 → 平面弯管/折管与纵断面弯管/折管分别查表，局部损失系数直接相加
+   - 仅平面 → 遍历平面特征点或 plan_segments 计算平面转弯 ξ
+   - 仅纵断面 → 遍历 longitudinal_nodes 计算竖向转弯 ξ
 3. **通用构件贡献**：遍历 segments 中 direction=COMMON 或 is_common_type 的段，累加ξ和长度；其中 `INLET / OUTLET` 结构段的 `xi_user / xi_calc` 也作为进出水口构件局部损失并入 ΔZ₂
 4. **渐变段系数**：从 global_params 获取 `xi_inlet / xi_outlet`，仅用于 ΔZ₁ / ΔZ₃，不被结构段表中的进出水口系数替代
 
@@ -607,9 +608,9 @@ HydraulicCore.execute_calculation(
 
 ---
 
-## 6. 三维空间合并引擎 (spatial_merger.py)
+## 6. 空间合并兼容/诊断工具 (spatial_merger.py)
 
-详见 `空间轴线合并算法-PRD.md`，此处仅列接口。
+详见 `空间轴线合并算法-PRD.md`，此处仅列历史兼容接口。当前倒虹吸水损计算不再调用该入口生成空间弯道；平面与纵断面局损按来源独立计算后相加。
 
 ### 6.1 入口方法
 
@@ -682,7 +683,7 @@ HydraulicCore.format_result(result, show_steps) -> str
 # 12. 管径取整
 HydraulicCore.round_diameter(d_theory) -> float
 
-# 13. 三维空间合并
+# 13. 空间合并兼容/诊断
 SpatialMerger.merge_and_compute(...) -> SpatialMergeResult
 ```
 

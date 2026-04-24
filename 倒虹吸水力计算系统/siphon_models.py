@@ -158,11 +158,11 @@ class StructureSegment:
     @property
     def spatial_length(self) -> float:
         """
-        计算空间长度（考虑高程差）
+        计算段实长（考虑高程差）
         
         - 纵断面直管段: sqrt(length² + ΔH²)
         - 纵断面弯管段: radius × angle_radians（弧长即空间长度）
-        - 平面段/通用构件: 不参与空间长度计算，返回 0
+        - 平面段/通用构件: 不参与纵断面实长计算，返回 0
         """
         if self.direction in (SegmentDirection.PLAN, SegmentDirection.COMMON):
             return 0.0
@@ -181,7 +181,7 @@ class StructureSegment:
                 return self.radius * math.radians(self.angle)
             return self.length
         
-        # 其他类型（拦污栅等）无空间长度贡献
+        # 其他类型（拦污栅等）无实长贡献
         return 0.0
     
     @property
@@ -308,7 +308,7 @@ class TrashRackParams:
 
 
 # ==============================================================================
-# 三维空间合并计算所需的数据模型
+# 空间合并兼容/诊断所需的数据模型
 # ==============================================================================
 
 @dataclass
@@ -444,7 +444,7 @@ class SpatialNode:
     三维空间节点（合并平面+纵断面后的特征点）
     
     由 SpatialMerger 按桩号合并 PlanFeaturePoint 和 LongitudinalNode 生成。
-    用于坐标求值、绘图和诊断；不是空间弯道局损事件清单。
+    用于坐标求值、绘图和诊断；不是当前水损局部损失事件清单。
     """
     chainage: float = 0.0               # 桩号 (m)
     x: float = 0.0                      # X坐标

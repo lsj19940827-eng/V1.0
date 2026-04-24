@@ -1706,6 +1706,94 @@ def test_named_row_segment_failure_error_header_uses_current_chain_member_name()
     assert "苟家湾（前缀段）" not in record["error"]
 
 
+def test_unnamed_pressure_pipe_group_result_labels_longitudinal_profile_length():
+    """匿名有压段成功汇总时，应使用纵断面实长文案且不引用旧变量。"""
+    WaterProfilePanel = _load_panel_class()
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._get_pressure_pipe_group_flow_section = lambda _group: "1"
+    panel._get_pressure_pipe_group_display_name = lambda group: getattr(group, "name", "匿名段")
+    panel._get_pressure_pipe_group_storage_key = lambda _group: "flow1-row2"
+    panel._build_pressure_pipe_group_identity = lambda _group: "flow1-row2"
+    panel._coerce_pressure_pipe_row_index = lambda value: int(value)
+    panel._find_next_regular_row_index = lambda _nodes, _target_idx: -1
+    panel._build_pressure_pipe_effective_length_context = lambda *_args, **_kwargs: {
+        "effective_length": 100.0,
+        "L_mc": 100.0,
+        "transition_length": 0.0,
+        "arc1_half": 0.0,
+        "arc2_half": 0.0,
+    }
+    panel._get_node_structure_type_text = lambda node: getattr(node, "structure_type", "") if node else ""
+    panel._is_pressure_pipe_like_structure_text = lambda text: text in ("有压管道", "顶管", "定向钻")
+
+    pressure_calc_mod = types.ModuleType("core.pressure_pipe_calc")
+    pressure_calc_mod.PIPE_MATERIALS = {"预应力钢筒混凝土管": {}}
+    pressure_calc_mod.calc_pipe_velocity = lambda Q, D: 1.0
+    pressure_calc_mod.calc_friction_loss = lambda Q, D, L, material_key: (L / 1000.0, {"L": L})
+    pressure_calc_mod.calc_bend_local_loss = lambda D, R, angle, velocity: (0.0, 0.0, {})
+    pressure_calc_mod.calc_transition_loss = lambda *args, **kwargs: (0.0, {})
+    saved_pressure_calc = sys.modules.get("core.pressure_pipe_calc")
+    sys.modules["core.pressure_pipe_calc"] = pressure_calc_mod
+
+    pressure_common_mod = types.ModuleType("utils.pressure_pipe_common")
+    pressure_common_mod.resolve_pressure_pipe_material = (
+        lambda raw_material_key, _pipe_materials, default_material="": {
+            "canonical_key": raw_material_key or default_material,
+            "display_value": raw_material_key or default_material,
+            "used_default": False,
+        }
+    )
+    saved_pressure_common = sys.modules.get("utils.pressure_pipe_common")
+    sys.modules["utils.pressure_pipe_common"] = pressure_common_mod
+
+    try:
+        group = SimpleNamespace(
+            name="匿名有压段",
+            design_flow=1.0,
+            diameter=1.0,
+            material_key="预应力钢筒混凝土管",
+            target_row_index=1,
+            upstream_row_index=0,
+            group_mode="unnamed_row_segment",
+            inlet_transition_zeta=0.0,
+            outlet_transition_zeta=0.0,
+            inlet_transition_form="反弯扭曲面",
+            outlet_transition_form="反弯扭曲面",
+            is_valid=lambda: True,
+            get_validation_message=lambda: "",
+        )
+        nodes = [
+            SimpleNamespace(velocity=0.0, structure_type="有压管道"),
+            SimpleNamespace(turn_angle=0.0, turn_radius=0.0, structure_type="有压管道"),
+        ]
+        longitudinal_nodes = [
+            {"chainage": 0.0, "elevation": 100.0},
+            {"chainage": 100.0, "elevation": 110.0},
+        ]
+
+        record = WaterProfilePanel._calculate_unnamed_pressure_pipe_group_result(
+            panel,
+            group,
+            nodes,
+            longitudinal_nodes,
+        )
+    finally:
+        if saved_pressure_calc is None:
+            sys.modules.pop("core.pressure_pipe_calc", None)
+        else:
+            sys.modules["core.pressure_pipe_calc"] = saved_pressure_calc
+        if saved_pressure_common is None:
+            sys.modules.pop("utils.pressure_pipe_common", None)
+        else:
+            sys.modules["utils.pressure_pipe_common"] = saved_pressure_common
+
+    assert record["status"] == "success"
+    assert record["data_mode"] == "平面+纵断面（独立叠加）"
+    assert record["total_length"] == pytest.approx(100.498756, rel=1e-6)
+    assert "纵断面实长" in record["calc_steps"]
+    assert "空间长度" not in record["calc_steps"]
+
+
 def test_build_pressure_pipe_chain_summary_keeps_anchor_success_when_record_missing():
     WaterProfilePanel = _load_panel_class()
     panel = WaterProfilePanel.__new__(WaterProfilePanel)

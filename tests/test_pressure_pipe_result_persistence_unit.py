@@ -75,3 +75,22 @@ def test_records_preserve_explicit_zero_row_indices():
 
     assert normalized["records"][0]["target_row_index"] == 0
     assert normalized["records"][0]["upstream_row_index"] == 0
+
+
+def test_legacy_spatial_mode_appends_recompute_notice_to_note():
+    raw = {
+        "records": [
+            {
+                "identity": "1::牛马道",
+                "flow_section": "1",
+                "name": "牛马道",
+                "status": "success",
+                "data_mode": "空间模式（平面+纵断面）",
+            }
+        ]
+    }
+
+    normalized = normalize_pressure_pipe_calc_records(raw)
+
+    assert normalized["records"][0]["data_mode"] == "空间模式（平面+纵断面）"
+    assert "旧空间合并结果，请按新口径重新计算" in normalized["records"][0]["note"]

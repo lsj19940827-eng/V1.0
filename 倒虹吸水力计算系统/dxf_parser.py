@@ -960,7 +960,7 @@ class DxfParser:
         """
         解析平面DXF多段线（工程坐标：X=东，Y=北）
         
-        同时生成 PlanFeaturePoint 列表（用于三维空间合并计算）
+        同时生成 PlanFeaturePoint 列表（用于平面转弯独立计损）
         和 StructureSegment 列表（direction=PLAN，用于表格显示和计算）。
         
         坐标约定：

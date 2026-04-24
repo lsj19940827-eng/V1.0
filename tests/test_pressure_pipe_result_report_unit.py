@@ -409,3 +409,52 @@ def test_batch_report_marks_tunnel_bottom_line_as_hydraulic_display_only():
 
     assert "含隧洞水力核算模式" in txt
     assert "仅供水力核算，不作施工高程" in txt
+
+
+def test_batch_report_marks_legacy_spatial_mode_as_recompute_required():
+    batch = {
+        "last_run_at": "2026-04-24 09:12:00",
+        "records": [
+            {
+                "identity": "flow2-row4",
+                "flow_section": "2",
+                "name": "穿山隧洞",
+                "display_name": "穿山隧洞",
+                "structure_type": "有压管道",
+                "status": "success",
+                "data_mode": "空间模式（平面+纵断面）",
+                "total_head_loss": 0.2312,
+            }
+        ],
+    }
+
+    txt = format_pressure_pipe_calc_batch_text(batch, precision=4)
+
+    assert "数据模式=空间模式（平面+纵断面）" in txt
+    assert "旧空间合并结果，请按新口径重新计算" in txt
+
+
+def test_record_detail_includes_common_local_loss_item():
+    txt = format_pressure_pipe_record_detail(
+        {
+            "flow_section": "3",
+            "name": "通用构件局损测试",
+            "status": "success",
+            "data_mode": "平面+纵断面（独立叠加）",
+            "Q": 1.0,
+            "D": 0.8,
+            "material_key": "钢管",
+            "total_length": 100.0,
+            "pipe_velocity": 1.9894,
+            "friction_loss": 0.10,
+            "total_bend_loss": 0.20,
+            "local_loss": 0.12,
+            "inlet_transition_loss": 0.03,
+            "outlet_transition_loss": 0.04,
+            "total_head_loss": 0.49,
+        },
+        precision=4,
+    )
+
+    assert "通用构件=0.1200 m" in txt
+    assert "总损失: ΔH=0.4900 m" in txt

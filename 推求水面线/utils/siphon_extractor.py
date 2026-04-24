@@ -62,7 +62,7 @@ class SiphonGroup:
     plan_segments: List[Dict] = field(default_factory=list)   # 平面段列表
     plan_total_length: float = 0.0              # 平面总水平长度 (MC出 - MC进)
     
-    # ========== 平面IP特征点（用于三维空间合并计算） ==========
+    # ========== 平面IP特征点（用于平面转弯独立计损） ==========
     plan_feature_points: List[Dict] = field(default_factory=list)  # IP点特征信息列表
     
     # ========== 从表格自动提取的额外参数（供倒虹吸计算窗口使用） ==========
@@ -237,7 +237,7 @@ class SiphonDataExtractor:
             # 提取平面段信息
             SiphonDataExtractor._extract_plan_segments(group)
             
-            # 提取平面IP特征点（供三维空间合并使用）
+            # 提取平面IP特征点（供平面转弯独立计损使用）
             SiphonDataExtractor._extract_plan_feature_points(group)
             
             result.append(group)
@@ -1229,7 +1229,7 @@ class SiphonDataExtractor:
     @staticmethod
     def _extract_plan_feature_points(group: SiphonGroup):
         """
-        从倒虹吸分组中提取平面IP特征点信息（供三维空间合并计算使用）
+        从倒虹吸分组中提取平面IP特征点信息（供平面转弯独立计损使用）
         
         每个IP点提取: MC桩号, X, Y, 方位角, 转弯半径, 转角
         """

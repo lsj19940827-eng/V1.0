@@ -122,7 +122,7 @@ def test_import_plan_dxf_success_message_ignores_example_longitudinal(monkeypatc
     success_args, _success_kwargs = _InfoBarSpy.successes[-1]
     message = success_args[1]
     assert "未检测到纵断面数据，将使用平面独立计算模式" in message
-    assert "已检测到纵断面数据，将使用三维空间合并计算" not in message
+    assert "已检测到纵断面数据，将使用平面+纵断面独立叠加计算" not in message
 
     panel.deleteLater()
 
@@ -162,8 +162,9 @@ def test_import_plan_dxf_example_longitudinal_stays_consistent_with_status_and_c
     panel._execute_calculation()
 
     status_text = panel.lbl_data_status.text()
-    assert "仅平面估算" in status_text
-    assert "平面+纵断面（空间合并）" not in status_text
+    assert "仅平面（独立计算）" in status_text
+    assert "仅平面估算" not in status_text
+    assert "传统模式" not in status_text
     assert captured["longitudinal_nodes"] == []
     assert all(
         seg.direction == SegmentDirection.COMMON for seg in captured["segments"]

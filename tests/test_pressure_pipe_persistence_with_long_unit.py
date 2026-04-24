@@ -143,6 +143,43 @@ def test_set_result_with_none_route_longitudinal_nodes_preserves_existing_route_
     assert loaded.longitudinal_nodes == long_nodes
 
 
+def test_set_result_does_not_use_data_mode_as_profile_source_fallback():
+    manager = PressurePipeManager()
+    manager.from_dict(
+        {
+            "version": "1.0",
+            "last_modified": "",
+            "pipes": {
+                "flow2-row4": {
+                    "name": "流量段2 第4行有压管道",
+                }
+            },
+            "routes": {},
+            "segments": {
+                "flow2-row4": {
+                    "identity": "flow2-row4",
+                    "computed_from_profile_source": "route_profile",
+                }
+            },
+        }
+    )
+
+    manager.set_result(
+        pipe_name="flow2-row4",
+        total_head_loss=0.66,
+        friction_loss=0.55,
+        total_bend_loss=0.05,
+        inlet_transition_loss=0.03,
+        outlet_transition_loss=0.03,
+        pipe_velocity=1.22,
+        plan_total_length=88.0,
+        data_mode="空间模式（平面+纵断面）",
+    )
+
+    raw = manager.to_dict()
+    assert raw["segments"]["flow2-row4"]["computed_from_profile_source"] == "route_profile"
+
+
 def test_get_pipe_config_reads_route_bucket_when_pipe_row_has_no_own_longitudinal_nodes():
     manager = PressurePipeManager()
     long_nodes = [

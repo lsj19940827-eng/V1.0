@@ -23,8 +23,8 @@
 - `app_渠系计算前端/siphon/canvas_view.py`：倒虹吸主预览与“大图查看”共用画布，负责平面/纵断面路径绘制、标签锚点、底部统计与缩放；现在会优先按 `arc_geometry` 采样真实圆弧，不再把 DXF 倒圆和竖曲线只画成弦线；即使纵断面仍标记为示例数据，只要节点里有真实圆弧元数据，也继续按圆弧显示。纵断面底部统计与转弯标识统一基于补齐后的纵断面段几何计算，其中绿点只表示弯管前后边界，橙点统一表示转弯本体，弯管锚在圆弧中点，折管锚在折点。
 - `倒虹吸水力计算系统/arc_geometry.py`：倒虹吸圆弧真源工具，负责统一构建、复制、反向、方向推断和采样 `arc_geometry`，供 DXF 解析、节点/结构段重建、持久化和画布绘制复用；现在也提供旧纵断面弯管按前后坡向补建圆弧真源的 helper，供旧工况迁移复用。
 - `倒虹吸水力计算系统/dxf_parser.py`：DXF 解析与平纵断面几何重建，负责纵断面候选自动优选、反向归正，以及在候选非常接近时向上层返回“需要确认”的标记；当前同时提供工程折点节点解析和原始多段线几何读取，供“导入原线直出”复用。平面 bulge 圆弧与纵断面竖曲线现在都会直接生成 `arc_geometry`，并在平面反向、结构段重建时继续沿用。
-- `倒虹吸水力计算系统/siphon_models.py`：倒虹吸数据模型真源，负责结构段、平面特征点、纵断面节点、空间事件和计算结果字段；当前新增了 `source_ip_index / source_long_node_index / ignored_manual_overrides / LongitudinalNode.node_uid`，用来追踪手工局部系数与空间事件的对应关系，并保证纵断面节点表重建时手工值不会因行号变化而丢失；旧项目在唯一可恢复时也会先补回这些来源索引。现在 `PlanFeaturePoint` 与 `StructureSegment` 也把 `arc_geometry` 作为圆弧几何真源持久化。
-- `倒虹吸水力计算系统/siphon_hydraulics.py`：倒虹吸水力计算核心，负责“先算自动值、再决定最终采用值”的局部损失链路；平面/纵断面单独事件可采用手工系数，`COMPOSITE` 3D 事件继续按自动值计算，同时把未采用原因写入详细过程和结果提示；当前明确把 `global_params.xi_inlet / xi_outlet` 只用于进口、出口渐变段公式，把结构段表中的进水口/出水口系数并入 `ΔZ2` 的局部损失，`L.1.6` 总落差固定按减号执行；旧项目如果无法唯一恢复来源，则直接退回自动值并把原因写入 `ignored_manual_overrides`。
+- `倒虹吸水力计算系统/siphon_models.py`：倒虹吸数据模型真源，负责结构段、平面特征点、纵断面节点、历史空间事件和计算结果字段；当前新增了 `source_ip_index / source_long_node_index / ignored_manual_overrides / LongitudinalNode.node_uid`，用来追踪手工局部系数与平面/纵断面原始转弯的对应关系，并保证纵断面节点表重建时手工值不会因行号变化而丢失；旧项目在唯一可恢复时也会先补回这些来源索引。现在 `PlanFeaturePoint` 与 `StructureSegment` 也把 `arc_geometry` 作为圆弧几何真源持久化。
+- `倒虹吸水力计算系统/siphon_hydraulics.py`：倒虹吸水力计算核心，负责“先算自动值、再决定最终采用值”的局部损失链路；当前水损不再把平面和纵断面合并成 3D 空间弯道，而是平面转弯、纵断面竖向转弯分别计损后相加；有纵断面时沿程长度优先取纵断面实长，否则取平面总长；`global_params.xi_inlet / xi_outlet` 只用于进口、出口渐变段公式，结构段表中的进水口/出水口系数并入 `ΔZ2` 的局部损失，`L.1.6` 总落差固定按减号执行；旧项目如果无法唯一恢复来源，则直接退回自动值并把原因写入 `ignored_manual_overrides`。
 - `app_渠系计算前端/water_profile/formula_dialog.py`：表头说明和双击公式弹窗，负责把计算详情解释给用户看；第38列详情弹窗底部支持直接保存人工采用值或恢复自动计算，其中锁定逐行承压行会额外按“本行采用值”口径写回正式承压损失。
 - `update_artifact_rules.py`：更新产物边界规则，负责统一定义哪些路径属于运行时自动保存/用户数据，以及成功安装后哪些文件必须保留。
 - `updater.py`：自动更新核心，负责版本比较、补丁/全量包选择、下载包 checksum、安装会话、旧 `_update_sessions` 残留清理、安装前校验、补丁适用性校验、补丁落地后的 `target_files` 验收、备份失败回收和回滚状态归类。
@@ -39,7 +39,7 @@
 - `推求水面线/shared/shared_data_manager.py`：表1/单断面结果进入表3前的共享结果整理层，负责结构类型归一化、断面参数提取和 `section_params` 落盘；当前会稳定保留 `隧洞-平底圆形` 的 `D / B / H_total`，并把旧 `矩形暗涵 / 矩形暗渠 / 暗渠` 归一为 `暗涵-矩形`，为 `暗涵-圆拱直墙型` 保留 `B / H_total / theta_deg`，缺参数时提示缺项而不是退回矩形。
 - `app_渠系计算前端/structure_type_selector.py`：结构类型选择器，负责分类展示、搜索和高亮；当前支持按入口排除指定结构，用于表3手动选择时隐藏 `隧洞-平底圆形`。
 - `calc_渠系计算算法内核/生成断面汇总表.py`：断面汇总计算底层，负责各类渠道/隧洞/有压结构的默认分段、汇总计算与导出数据组织；当前已补齐平底圆形隧洞独立分组与标题，以及暗涵家族独立标题和分组，`暗涵-圆拱直墙型` 不并入隧洞摘要。
-- `推求水面线/core/pressure_pipe_calc.py`：有压管道专项公式库，提供 FMB 沿程损失、承压弯头局部损失，以及基础水锤验算的直接关阀公式、固定水体弹模常量和常见管材默认弹模。
+- `推求水面线/core/pressure_pipe_calc.py`：有压管道专项公式库，提供 FMB 沿程损失、承压弯头/折管局部损失、平面/纵断面独立叠加水损口径、可选通用构件局部损失入口，以及基础水锤验算的直接关阀公式、固定水体弹模常量和常见管材默认弹模；兼容保留旧函数名 `calc_total_head_loss_with_spatial()`，但内部不再调用三维空间合并生成空间弯道。
 - `推求水面线/managers/pressure_pipe_manager.py`：有压管道结果与纵断面持久化，负责 `pipes / routes / segments` 三层存储，并兼容保存 mixed route 的 `profile_segments`、隧洞水力核算参数缓存（含糙率与模式标记），以及整线纵断面的即时写入；连续承压保存按当前整线快照重建，会清掉活动范围内的旧 route / segment / pipe 残留。对 `xx管` 整线与连续承压整线来说，`routes[route_key].longitudinal_nodes / raw_profile_polyline / profile_segments` 是 route 级事实来源：`longitudinal_nodes` 负责采样与工程折点，`raw_profile_polyline` 负责原线画图，`profile_segments` 负责 mixed route 分段缓存。`pipes / segments` 只负责结果和兼容回读，不是重开弹窗的优先入口。现在内部语义补充为：`None` 表示“保留已有 route 原线/纵断面缓存”，只有显式清空流程才允许把 route 级纵断面写成空列表或空原线；基础水锤验算则通过 `wall_thickness_m + water_hammer_basic` 独立持久化，不进入 `pressure_pipe_window_override`。
 - `推求水面线/models/data_models.py`：节点和项目设置的数据结构定义，统一封装 IP 显示文本与 raw/display 双编号规则，并保存第38列人工采用值等项目恢复所需元数据；流量段保存继续以 `ProjectSettings.design_flows / max_flows` 作为结构化真值，同时兼容项目文件里的 `design_flows_text / max_flows_text` 文本缓存；当前展示段只属于界面状态，项目重开统一回到第一段，不新增保存字段。
 - `推求水面线/models/enums.py`：结构类型、进出口标记和相关判断规则。

@@ -167,7 +167,7 @@
 │   ├── calculator.py              # WaterProfileCalculator 主计算器
 │   ├── geometry_calc.py           # GeometryCalculator 几何计算
 │   ├── hydraulic_calc.py          # HydraulicCalculator 水力计算
-│   ├── pressure_pipe_calc.py      # 有压管道水头损失计算核心（沿程+弯头+渐变段，含空间模式）
+│   ├── pressure_pipe_calc.py      # 有压管道水头损失计算核心（沿程+平纵独立局损+渐变段）
 │   └── pressure_pipe_data.py      # 有压管道简版数据模型与提取器（batch 面板用）
 ├── models/
 │   ├── data_models.py             # ChannelNode, ProjectSettings, OpenChannelParams
@@ -700,7 +700,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 `SiphonDataExtractor` 当前的关键行为如下：
 
 - `_extract_plan_segments()` 用于提取平面弯管段。转角来自 `node.turn_angle`，即 `geometry_calc` 基于坐标 `XY` 自动计算的结果。为过滤浮点噪声，**转角 < 0.1° 时不生成弯管段，视为直线通过**。
-- `_extract_plan_feature_points()` 用于提取空间合并所需的 IP 特征点。同样地，若转角 < 0.1°，则 `turn_type` 记为“无”，不参与空间弯道计算。
+- `_extract_plan_feature_points()` 用于提取平面 IP 特征点。同样地，若转角 < 0.1°，则 `turn_type` 记为“无”，不参与平面转弯局部损失计算。
 - 倒虹吸面板本身若通过 DXF 导入平面段，则角度来自真实几何，不经过 `SiphonDataExtractor`，因此不受该阈值限制。
 - `v₁ / v₃` 与 `v₁加大 / v₃加大` 当前实现采用统一 donor 顺序：`同流量段上游 -> 同流量段下游 -> 跨流量段上游 -> 跨流量段下游`。donor 候选范围已从“仅明渠”扩展到“明渠或暗渠（当前落地为矩形暗涵）”；隧洞不纳入 donor。详细规则见 `PRD_渐变段与明渠段插入算法.md` §12.6。
 
@@ -719,7 +719,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 1. 点击“有压管道水力计算”，调用 `_open_pressure_pipe_calculator()`。
 2. 通过 `PressurePipeDataExtractor.extract_pipes(nodes, settings)` 从节点表提取有压管道分组，支持多行模式（进口 + IP 点 + 出口）。
 3. 对每条有压管道：
-   - 根据是否存在纵断面数据，选择平面模式或空间模式。
+   - 根据是否存在平面和纵断面数据，选择“仅平面独立计算”“仅纵断面独立计算”或“平面+纵断面独立叠加”。
    - 调用 `calc_total_head_loss()` 或 `calc_total_head_loss_with_spatial()` 计算总水头损失。
    - 可选执行灵敏度分析，例如球墨铸铁管 `f` 上下限对比。
 4. 计算结果回写：
@@ -793,7 +793,7 @@ $$H_d = H_u + h_u - h_d - \Delta Z$$
 
 - **坐标计算路径**：`pressure_pipe_extractor._calc_turn_angles`、`siphon_extractor._extract_plan_segments`、`siphon_extractor._extract_plan_feature_points` 都必须在转角 < `0.1°` 时视为直线通过，不生成弯头 / 弯管段，并在计算过程中打印“直线通过，不计弯头损失”的说明。
 - **DXF 导入路径**：倒虹吸面板直接导入平面 / 纵断面 DXF 时，角度来自真实几何，不加阈值，按实际值计算。
-- `0.1°` 阈值与空间模式中已有的 `spatial_turn_angle > 0.1` 规则保持一致。
+- `0.1°` 阈值与平面/纵断面独立计损中的转弯过滤规则保持一致。
 
 ### DDR-7：顶部“转弯半径”栏位是统一应用入口，不是隐式全局兜底
 

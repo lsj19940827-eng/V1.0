@@ -1987,19 +1987,18 @@ class PressurePipePanel(QWidget):
         self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
 
     def _clear(self):
-        self._cases = [self._default_case()]
-        self._current_case_idx = 0
+        self._save_current_case()
         self._all_results = []
         self._last_errors = []
         self._results_dirty = False
         self._has_rendered_results = False
-        self._load_case(0)
         self._rebuild_case_tags()
         self._update_calc_btn_text()
         self.current_result = None
         self._export_plain_text = ""
         self._show_initial_help()
-        InfoBar.success(title="已清空", content="所有工况和计算结果已重置",
+        self._refresh_increase_hint()
+        InfoBar.success(title="已清空", content="计算结果已清空，输入参数已保留",
                         parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
         self.data_changed.emit()
 

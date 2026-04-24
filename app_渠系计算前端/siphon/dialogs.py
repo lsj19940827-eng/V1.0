@@ -1287,13 +1287,13 @@ class SegmentEditDialog(QDialog):
         )
         rl.addWidget(res_lbl)
 
-        # 空间长度卡片
+        # 实长卡片
         self._card_sp = QFrame()
         self._card_sp.setStyleSheet(self._CARD_SS)
         csl = QVBoxLayout(self._card_sp)
         csl.setContentsMargins(12, 10, 12, 10)
         csl.setSpacing(2)
-        self._csl_label = QLabel("空间长度")
+        self._csl_label = QLabel("实长")
         self._csl_label.setStyleSheet(self._LABEL_SS)
         csl.addWidget(self._csl_label)
         val_row = QHBoxLayout()
@@ -1524,7 +1524,7 @@ class SegmentEditDialog(QDialog):
         if xi is not None:
             self.ed_xi.setText(f"{xi:.4f}")
 
-    # ---- 更新空间长度 ----
+    # ---- 更新实长 ----
     def _update_spatial(self):
         t = self.combo_type.currentText()
         try:
@@ -1630,7 +1630,7 @@ class SegmentEditDialog(QDialog):
                 if se is not None and ee is not None and L > 0:
                     dh = ee - se
                     sp = math.sqrt(L ** 2 + dh ** 2)
-                    title = "折管局部阻力系数 + 空间长度"
+                    title = "折管局部阻力系数 + 实长"
                     latex_lines.append(
                         f"L_s = \\sqrt{{L^2 + \\Delta H^2}} = "
                         f"\\sqrt{{{L:.3f}^2 + {dh:.2f}^2}} = {sp:.3f}"
@@ -1638,7 +1638,7 @@ class SegmentEditDialog(QDialog):
             except ValueError:
                 pass
         elif t == SegmentType.STRAIGHT.value:
-            title = "空间长度计算"
+            title = "实长计算"
             try:
                 L = float(self.ed_length.text() or 0)
                 se = float(self.ed_start_elev.text()) if self.ed_start_elev.text().strip() else None
