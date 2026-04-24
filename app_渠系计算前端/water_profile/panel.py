@@ -14084,7 +14084,8 @@ class WaterProfilePanel(QWidget):
         dlg = QWidget()
         dlg.setWindowTitle("有压管道计算结果汇总（请确认是否应用）")
         dlg.setMinimumWidth(980)
-        dlg.resize(1120, 620)
+        dlg.setMinimumHeight(680)
+        dlg.resize(1120, 760)
         dlg.setStyleSheet(DIALOG_STYLE)
         dlg.setWindowFlags(Qt.Window)
         delete_on_close_attr = getattr(Qt, "WA_DeleteOnClose", None)
@@ -14143,20 +14144,57 @@ class WaterProfilePanel(QWidget):
         lbl_summary.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
         lay.addWidget(lbl_summary)
 
+        tabs = QTabWidget()
+        tabs.setObjectName("pressurePipeSummaryTabs")
+        lay.addWidget(tabs, 1)
+
+        result_tab = QWidget()
+        result_lay = QVBoxLayout(result_tab)
+        result_lay.setContentsMargins(0, 0, 0, 0)
+        result_lay.setSpacing(8)
+
+        filter_lay = QHBoxLayout()
+        filter_lay.setContentsMargins(0, 0, 0, 0)
+        filter_lay.setSpacing(8)
+        filter_lay.addWidget(QLabel("搜索"))
+        search_edit = LineEdit()
+        search_edit.setObjectName("pressurePipeSummarySearchEdit")
+        search_edit.setPlaceholderText("输入名称或流量段")
+        search_edit.setClearButtonEnabled(True)
+        filter_lay.addWidget(search_edit, 1)
+        filter_lay.addWidget(QLabel("状态"))
+        status_filter = ComboBox()
+        status_filter.setObjectName("pressurePipeSummaryStatusFilter")
+        status_filter.addItems(["全部", "成功", "失败", "起点"])
+        filter_lay.addWidget(status_filter)
+        filter_lay.addStretch()
+        result_lay.addLayout(filter_lay)
+
+        chain_tab = QWidget()
+        chain_lay = QVBoxLayout(chain_tab)
+        chain_lay.setContentsMargins(0, 0, 0, 0)
+        chain_lay.setSpacing(8)
+
+        detail_tab = QWidget()
+        detail_lay = QVBoxLayout(detail_tab)
+        detail_lay.setContentsMargins(0, 0, 0, 0)
+        detail_lay.setSpacing(8)
+
         chain_summaries = data.get("chain_summaries", []) or []
+        chain_summary_box = QTextEdit()
+        chain_summary_box.setObjectName("pressurePipeSummaryChainText")
+        chain_summary_box.setReadOnly(True)
+        chain_summary_box.setFont(QFont("Consolas", 10))
         if chain_summaries:
-            chain_summary_box = QTextEdit()
-            chain_summary_box.setReadOnly(True)
-            chain_summary_box.setMinimumHeight(150)
-            chain_summary_box.setFont(QFont("Consolas", 10))
             chain_summary_box.setPlainText(
                 "\n\n".join(
                     format_pressure_pipe_chain_summary(item, precision=4)
                     for item in chain_summaries
                 )
             )
-            lay.addWidget(QLabel("连续承压链总览"))
-            lay.addWidget(chain_summary_box)
+        else:
+            chain_summary_box.setPlainText("暂无连续承压链总览")
+        chain_lay.addWidget(chain_summary_box, 1)
 
         headers = [
             "查看", "流量段", "名称", "状态", "数据模式", "总损失(m)", "沿程(m)",
@@ -14164,12 +14202,16 @@ class WaterProfilePanel(QWidget):
             "下限总损失（m）", "Δ总损(m)"
         ]
         table = QTableWidget(len(records), len(headers))
+        table.setObjectName("pressurePipeSummaryTable")
         table.setHorizontalHeaderLabels(headers)
         table.verticalHeader().setVisible(False)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setAlternatingRowColors(True)
         table.setFont(QFont("Microsoft YaHei", 10))
+        table.setMinimumHeight(360)
+        table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        table.setSortingEnabled(False)
         hh = table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -14273,10 +14315,11 @@ class WaterProfilePanel(QWidget):
 
         _set_sensitivity_columns_visible(show_sensitivity)
 
-        preview = QTextEdit()
-        preview.setReadOnly(True)
-        preview.setFont(QFont("Consolas", 10))
-        preview.setMinimumHeight(220)
+        detail_text = QTextEdit()
+        detail_text.setObjectName("pressurePipeSummaryDetailText")
+        detail_text.setReadOnly(True)
+        detail_text.setFont(QFont("Consolas", 10))
+        detail_lay.addWidget(detail_text, 1)
 
         def _fmt(v):
             try:
@@ -14284,18 +14327,53 @@ class WaterProfilePanel(QWidget):
             except (TypeError, ValueError):
                 return "-"
 
-        def _show_record_detail(rec: dict):
-            preview.setPlainText(format_pressure_pipe_record_detail(rec, precision=4))
+        records_by_identity = {
+            str(rec.get("identity", "") or ""): rec
+            for rec in records
+        }
+
+        def _item(text, rec):
+            """创建带记录身份的表格项，便于排序后仍能定位详情。"""
+            item = QTableWidgetItem(text)
+            item.setData(Qt.UserRole, str(rec.get("identity", "") or ""))
+            return item
+
+        def _show_record_detail(rec: dict, switch_to_detail: bool = False):
+            detail_text.setPlainText(format_pressure_pipe_record_detail(rec, precision=4))
             # 与下方过程框保持同步（若未写入则追加，已写入则不重复）
             self._append_pressure_pipe_calc_details(data)
+            if switch_to_detail:
+                tabs.setCurrentWidget(detail_tab)
+
+        def _show_detail_from_row(row: int):
+            """按当前表格行打开对应记录详情。"""
+            item = table.item(row, 2) or table.item(row, 1)
+            if item is None:
+                return
+            rec = records_by_identity.get(str(item.data(Qt.UserRole) or ""))
+            if rec is not None:
+                _show_record_detail(rec, switch_to_detail=True)
+
+        def _apply_table_filter():
+            """只过滤当前表格视图，不改变底部应用范围。"""
+            keyword = search_edit.text().strip().lower()
+            status_choice = status_filter.currentText().strip()
+            for row in range(table.rowCount()):
+                flow_text = table.item(row, 1).text() if table.item(row, 1) else ""
+                name_text = table.item(row, 2).text() if table.item(row, 2) else ""
+                status_text = table.item(row, 3).text() if table.item(row, 3) else ""
+                searchable = f"{flow_text} {name_text}".lower()
+                keyword_ok = (not keyword) or (keyword in searchable)
+                status_ok = status_choice == "全部" or status_text == status_choice
+                table.setRowHidden(row, not (keyword_ok and status_ok))
 
         for i, rec in enumerate(records):
             btn = PushButton("查看详情")
-            btn.clicked.connect(lambda checked=False, r=rec: _show_record_detail(r))
+            btn.clicked.connect(lambda checked=False, r=rec: _show_record_detail(r, switch_to_detail=True))
             table.setCellWidget(i, 0, btn)
 
-            table.setItem(i, 1, QTableWidgetItem(str(rec.get("flow_section", "") or "-")))
-            table.setItem(i, 2, QTableWidgetItem(str(rec.get("name", "") or "未命名")))
+            table.setItem(i, 1, _item(str(rec.get("flow_section", "") or "-"), rec))
+            table.setItem(i, 2, _item(str(rec.get("name", "") or "未命名"), rec))
 
             status_ok = rec.get("status") == "success"
             is_anchor_row = status_ok and not bool(rec.get("writeback_enabled", True))
@@ -14305,31 +14383,39 @@ class WaterProfilePanel(QWidget):
             else:
                 status_text = "成功" if status_ok else "失败"
                 status_color = "#2E7D32" if status_ok else "#C62828"
-            status_item = QTableWidgetItem(status_text)
+            status_item = _item(status_text, rec)
             status_item.setForeground(QColor(status_color))
             table.setItem(i, 3, status_item)
             default_mode = "起点行" if is_anchor_row else ("平面模式" if status_ok else "-")
-            table.setItem(i, 4, QTableWidgetItem(str(rec.get("data_mode", "") or default_mode)))
+            table.setItem(i, 4, _item(str(rec.get("data_mode", "") or default_mode), rec))
 
             if status_ok:
-                table.setItem(i, 5, QTableWidgetItem(_fmt(rec.get("total_head_loss"))))
-                table.setItem(i, 6, QTableWidgetItem(_fmt(rec.get("friction_loss"))))
-                table.setItem(i, 7, QTableWidgetItem(_fmt(rec.get("total_bend_loss"))))
-                table.setItem(i, 8, QTableWidgetItem(_fmt(rec.get("inlet_transition_loss"))))
-                table.setItem(i, 9, QTableWidgetItem(_fmt(rec.get("outlet_transition_loss"))))
+                table.setItem(i, 5, _item(_fmt(rec.get("total_head_loss")), rec))
+                table.setItem(i, 6, _item(_fmt(rec.get("friction_loss")), rec))
+                table.setItem(i, 7, _item(_fmt(rec.get("total_bend_loss")), rec))
+                table.setItem(i, 8, _item(_fmt(rec.get("inlet_transition_loss")), rec))
+                table.setItem(i, 9, _item(_fmt(rec.get("outlet_transition_loss")), rec))
                 note_text = (rec.get("note", "") or "").strip()
-                table.setItem(i, 11, QTableWidgetItem(_fmt(rec.get("sensitivity_low_total_head_loss"))))
-                table.setItem(i, 12, QTableWidgetItem(_fmt(rec.get("sensitivity_delta_total_head_loss"))))
+                table.setItem(i, 11, _item(_fmt(rec.get("sensitivity_low_total_head_loss")), rec))
+                table.setItem(i, 12, _item(_fmt(rec.get("sensitivity_delta_total_head_loss")), rec))
             else:
                 for col in [5, 6, 7, 8, 9, 11, 12]:
-                    table.setItem(i, col, QTableWidgetItem("-"))
+                    table.setItem(i, col, _item("-", rec))
                 note_text = (rec.get("error", "") or "").strip() or "计算失败"
-            table.setItem(i, 10, QTableWidgetItem(note_text))
+            table.setItem(i, 10, _item(note_text, rec))
 
-        lay.addWidget(table, 1)
-        lay.addWidget(compare_card)
-        lay.addWidget(QLabel("计算详情预览（标准深度）"))
-        lay.addWidget(preview, 1)
+        table.cellDoubleClicked.connect(lambda row, _col: _show_detail_from_row(row))
+        table.doubleClicked.connect(lambda index: _show_detail_from_row(index.row()))
+        search_edit.textChanged.connect(lambda _text: _apply_table_filter())
+        status_filter.currentTextChanged.connect(lambda _text: _apply_table_filter())
+        table.setSortingEnabled(True)
+        result_lay.addWidget(table, 1)
+        result_lay.addWidget(compare_card)
+
+        tabs.addTab(result_tab, "结果汇总")
+        tabs.addTab(chain_tab, "连续链总览")
+        tabs.addTab(detail_tab, "计算详情")
+        tabs.setCurrentWidget(result_tab)
 
         if records:
             _show_record_detail(records[0])
@@ -14337,7 +14423,7 @@ class WaterProfilePanel(QWidget):
         btn_lay = QHBoxLayout()
         btn_lay.addStretch()
 
-        btn_apply = PrimaryPushButton("关闭并将总水头损失返回至水面线计算表格")
+        btn_apply = PrimaryPushButton("应用全部成功结果并关闭")
 
         def _apply_and_close():
             if not results_by_identity:
