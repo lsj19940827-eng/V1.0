@@ -142,6 +142,29 @@ except ImportError:
         """兼容精简测试桩，缺少新工具函数时返回空备注。"""
         return ""
 
+try:
+    from utils.pressure_pipe_result_helpers import split_pressure_pipe_records
+except (ImportError, AttributeError):
+    def split_pressure_pipe_records(records):
+        """兼容旧测试桩：按默认回写口径拆分正式、参考和失败记录。"""
+        writeback_records = []
+        reference_records = []
+        failed_records = []
+        for record in records or []:
+            if not isinstance(record, dict):
+                continue
+            if record.get("status") != "success":
+                failed_records.append(record)
+            elif record.get("writeback_enabled", True):
+                writeback_records.append(record)
+            else:
+                reference_records.append(record)
+        return {
+            "writeback": writeback_records,
+            "reference": reference_records,
+            "failed": failed_records,
+        }
+
 # 核心计算引擎
 try:
     from models.data_models import ChannelNode, ProjectSettings, TransitionLengthRule
@@ -14191,6 +14214,27 @@ class WaterProfilePanel(QWidget):
             InfoBar.info("提示", "暂无有压管道计算记录",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
+        record_groups = split_pressure_pipe_records(records)
+        official_records = record_groups.get("writeback", [])
+        reference_records = record_groups.get("reference", [])
+        table_records = [
+            rec for rec in records
+            if not (
+                rec.get("status") == "success"
+                and not rec.get("writeback_enabled", True)
+            )
+        ]
+        official_keys = {
+            str(value or "")
+            for rec in official_records
+            for value in (rec.get("identity"), rec.get("storage_key"))
+            if str(value or "")
+        }
+        apply_results_by_identity = {
+            str(key): value
+            for key, value in (results_by_identity or {}).items()
+            if str(key) in official_keys
+        }
 
         self._close_pressure_pipe_summary_dialog(force=True)
         dlg = QWidget()
@@ -14235,8 +14279,8 @@ class WaterProfilePanel(QWidget):
                 "点击「否」：放弃结果并关闭"
             )
             if reply:
-                if results_by_identity:
-                    self._apply_pressure_pipe_results(results_by_identity, data)
+                if apply_results_by_identity:
+                    self._apply_pressure_pipe_results(apply_results_by_identity, data)
             event.accept()
 
         dlg.closeEvent = _on_close_event
@@ -14249,10 +14293,12 @@ class WaterProfilePanel(QWidget):
         ts = data.get("last_run_at", "") or "-"
         lbl_summary = QLabel(
             f"本次总条数: {summary.get('total', 0)}  |  "
-            f"成功: {summary.get('success', 0)}  |  "
+            f"正式计入: {summary.get('writeback_success', len(official_records))}  |  "
+            f"参考结果: {summary.get('reference_success', len(reference_records))}  |  "
             f"失败: {summary.get('failed', 0)}  |  "
             f"时间: {ts}"
         )
+        lbl_summary.setObjectName("pressurePipeSummaryHeaderLabel")
         lbl_summary.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
         lay.addWidget(lbl_summary)
 
@@ -14277,10 +14323,33 @@ class WaterProfilePanel(QWidget):
         filter_lay.addWidget(QLabel("状态"))
         status_filter = ComboBox()
         status_filter.setObjectName("pressurePipeSummaryStatusFilter")
-        status_filter.addItems(["全部", "成功", "失败", "起点"])
+        status_filter.addItems(["全部", "正式计入", "失败"])
         filter_lay.addWidget(status_filter)
         filter_lay.addStretch()
         result_lay.addLayout(filter_lay)
+
+        reference_tab = QWidget()
+        reference_lay = QVBoxLayout(reference_tab)
+        reference_lay.setContentsMargins(0, 0, 0, 0)
+        reference_lay.setSpacing(8)
+        reference_text = QTextEdit()
+        reference_text.setObjectName("pressurePipeSummaryReferenceText")
+        reference_text.setReadOnly(True)
+        reference_text.setFont(QFont("Consolas", 10))
+        if reference_records:
+            reference_lines = [
+                "参考结果仅供人工复核，不计入表3、连续链总损失或累计水损。"
+            ]
+            if official_records:
+                reference_lines.append("同名整组值与逐段合计可能不同，因为计算范围不同；最终以“正式计入”逐段合计为准。")
+            reference_lines.append("")
+            for idx, rec in enumerate(reference_records, 1):
+                reference_lines.append(f"{idx}. {format_pressure_pipe_record_detail(rec, precision=4)}")
+                reference_lines.append("")
+            reference_text.setPlainText("\n".join(reference_lines).rstrip())
+        else:
+            reference_text.setPlainText("暂无参考结果。")
+        reference_lay.addWidget(reference_text, 1)
 
         chain_tab = QWidget()
         chain_lay = QVBoxLayout(chain_tab)
@@ -14313,7 +14382,7 @@ class WaterProfilePanel(QWidget):
             "弯头(m)", "进口渐变(m)", "出口渐变(m)", "备注",
             "下限总损失（m）", "Δ总损(m)"
         ]
-        table = QTableWidget(len(records), len(headers))
+        table = QTableWidget(len(table_records), len(headers))
         table.setObjectName("pressurePipeSummaryTable")
         table.setHorizontalHeaderLabels(headers)
         table.verticalHeader().setVisible(False)
@@ -14335,7 +14404,7 @@ class WaterProfilePanel(QWidget):
         hh.setSectionResizeMode(12, QHeaderView.ResizeToContents)
 
         has_sensitivity_data = any(
-            rec.get("sensitivity_low_total_head_loss") is not None for rec in records
+            rec.get("sensitivity_low_total_head_loss") is not None for rec in official_records
         )
         show_sensitivity = has_sensitivity_data
 
@@ -14360,7 +14429,7 @@ class WaterProfilePanel(QWidget):
         compare_grid.setSpacing(8)
 
         _compare_items_data = []
-        for rec in records:
+        for rec in official_records:
             if rec.get("status") != "success":
                 continue
             main_val = rec.get("total_head_loss")
@@ -14479,7 +14548,7 @@ class WaterProfilePanel(QWidget):
                 status_ok = status_choice == "全部" or status_text == status_choice
                 table.setRowHidden(row, not (keyword_ok and status_ok))
 
-        for i, rec in enumerate(records):
+        for i, rec in enumerate(table_records):
             btn = PushButton("查看详情")
             btn.clicked.connect(lambda checked=False, r=rec: _show_record_detail(r, switch_to_detail=True))
             table.setCellWidget(i, 0, btn)
@@ -14488,17 +14557,12 @@ class WaterProfilePanel(QWidget):
             table.setItem(i, 2, _item(str(rec.get("name", "") or "未命名"), rec))
 
             status_ok = rec.get("status") == "success"
-            is_anchor_row = status_ok and not bool(rec.get("writeback_enabled", True))
-            if is_anchor_row:
-                status_text = "起点"
-                status_color = "#546E7A"
-            else:
-                status_text = "成功" if status_ok else "失败"
-                status_color = "#2E7D32" if status_ok else "#C62828"
+            status_text = "正式计入" if status_ok else "失败"
+            status_color = "#2E7D32" if status_ok else "#C62828"
             status_item = _item(status_text, rec)
             status_item.setForeground(QColor(status_color))
             table.setItem(i, 3, status_item)
-            default_mode = "起点行" if is_anchor_row else ("平面模式" if status_ok else "-")
+            default_mode = "平面模式" if status_ok else "-"
             table.setItem(i, 4, _item(str(rec.get("data_mode", "") or default_mode), rec))
 
             if status_ok:
@@ -14525,27 +14589,32 @@ class WaterProfilePanel(QWidget):
         result_lay.addWidget(compare_card)
 
         tabs.addTab(result_tab, "结果汇总")
+        tabs.addTab(reference_tab, "参考结果")
         tabs.addTab(chain_tab, "连续链总览")
         tabs.addTab(detail_tab, "计算详情")
         tabs.setCurrentWidget(result_tab)
 
-        if records:
-            _show_record_detail(records[0])
+        if table_records:
+            _show_record_detail(table_records[0])
+        elif reference_records:
+            detail_text.setPlainText(format_pressure_pipe_record_detail(reference_records[0], precision=4))
 
         btn_lay = QHBoxLayout()
         btn_lay.addStretch()
 
-        btn_apply = PrimaryPushButton("应用全部成功结果并关闭")
+        btn_apply = PrimaryPushButton("应用全部正式结果并关闭")
 
         def _apply_and_close():
-            if not results_by_identity:
+            if not apply_results_by_identity:
                 InfoBar.warning("提示", "没有可应用的计算结果",
                                parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
                 return
 
             # 检查是否有成功的计算结果
             has_success = any(
-                rec.get("status") == "success" and rec.get("total_head_loss") is not None
+                rec.get("status") == "success"
+                and rec.get("writeback_enabled", True)
+                and rec.get("total_head_loss") is not None
                 for rec in records
             )
             if not has_success:
@@ -14553,7 +14622,7 @@ class WaterProfilePanel(QWidget):
                                parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
                 return
 
-            self._apply_pressure_pipe_results(results_by_identity, data)
+            self._apply_pressure_pipe_results(apply_results_by_identity, data)
             dlg._confirmed = True
             dlg.close()
 

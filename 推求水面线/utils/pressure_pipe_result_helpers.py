@@ -24,7 +24,13 @@ def empty_pressure_pipe_calc_records() -> Dict[str, Any]:
     """返回空的有压管道计算记录结构。"""
     return {
         "last_run_at": "",
-        "summary": {"total": 0, "success": 0, "failed": 0},
+        "summary": {
+            "total": 0,
+            "success": 0,
+            "failed": 0,
+            "writeback_success": 0,
+            "reference_success": 0,
+        },
         "records": [],
         "chain_summaries": [],
     }
@@ -65,6 +71,55 @@ def _to_row_index_or_default(v: Any, default: int = -1) -> int:
         return int(v)
     except (TypeError, ValueError):
         return default
+
+
+def is_pressure_pipe_writeback_record(record: Dict[str, Any]) -> bool:
+    """判断记录是否为正式计入表3和累计水损的成功结果。"""
+    return record.get("status") == "success" and _to_bool_or_default(
+        record.get("writeback_enabled"), True
+    )
+
+
+def is_pressure_pipe_reference_record(record: Dict[str, Any]) -> bool:
+    """判断记录是否为仅供复核的成功参考结果。"""
+    return record.get("status") == "success" and not _to_bool_or_default(
+        record.get("writeback_enabled"), True
+    )
+
+
+def split_pressure_pipe_records(records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """按正式计入、参考、失败三类拆分有压管道记录。"""
+    writeback: List[Dict[str, Any]] = []
+    reference: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for rec in records or []:
+        if is_pressure_pipe_writeback_record(rec):
+            writeback.append(rec)
+        elif is_pressure_pipe_reference_record(rec):
+            reference.append(rec)
+        else:
+            failed.append(rec)
+    return {"writeback": writeback, "reference": reference, "failed": failed}
+
+
+def _is_anchor_like_reference(record: Dict[str, Any]) -> bool:
+    """识别锚点/起点类参考记录，用于更准确地描述展示口径。"""
+    text = " ".join([
+        str(record.get("name", "") or ""),
+        str(record.get("display_name", "") or ""),
+        str(record.get("note", "") or ""),
+        str(record.get("group_mode", "") or ""),
+    ])
+    return any(key in text for key in ("锚点", "起点", "本行不写回", "不计算本行"))
+
+
+def _reference_display_name(record: Dict[str, Any]) -> str:
+    """生成参考结果在文本报告里的显示名称。"""
+    name = record.get("name", "") or record.get("display_name", "") or "未命名"
+    if "不计入累计" in str(name):
+        return str(name)
+    suffix = "锚点/参考，不计入累计" if _is_anchor_like_reference(record) else "整组参考，不计入累计"
+    return f"{name}（{suffix}）"
 
 
 def is_legacy_spatial_mode(data_mode: Any) -> bool:
@@ -239,9 +294,16 @@ def normalize_pressure_pipe_calc_records(raw: Any) -> Dict[str, Any]:
     total = len(normalized_records)
     success = sum(1 for r in normalized_records if r.get("status") == "success")
     failed = total - success
+    record_groups = split_pressure_pipe_records(normalized_records)
     out["records"] = normalized_records
     out["chain_summaries"] = normalized_chain_summaries
-    out["summary"] = {"total": total, "success": success, "failed": failed}
+    out["summary"] = {
+        "total": total,
+        "success": success,
+        "failed": failed,
+        "writeback_success": len(record_groups["writeback"]),
+        "reference_success": len(record_groups["reference"]),
+    }
     return out
 
 
@@ -259,10 +321,23 @@ def format_pressure_pipe_record_detail(record: Dict[str, Any], precision: int = 
     name = record.get("name", "") or "未命名"
     data_mode = (record.get("data_mode", "") or "").strip()
     mode_suffix = f"  数据模式={data_mode}" if data_mode else ""
+    if is_pressure_pipe_reference_record(record):
+        name = _reference_display_name(record)
     lines = [f"[{status}] 流量段={flow_section}  名称={name}{mode_suffix}"]
 
     if record.get("status") == "success":
-        if not record.get("writeback_enabled", True):
+        if not _to_bool_or_default(record.get("writeback_enabled"), True):
+            lines.append("计入口径: 本值仅供复核，不计入表3和累计水损")
+            loss_parts = [
+                f"沿程={_fmt_num(record.get('friction_loss'), precision)} m",
+                f"弯头={_fmt_num(record.get('total_bend_loss'), precision)} m",
+            ]
+            common_local = _to_float_or_none(record.get("local_loss"))
+            if common_local is not None and abs(common_local) > 1e-12:
+                loss_parts.append(f"通用构件={_fmt_num(common_local, precision)} m")
+            if any(part.split("=")[1].strip() != "- m" for part in loss_parts):
+                lines.append("参考分项: " + ", ".join(loss_parts))
+            lines.append(f"总损失: ΔH={_fmt_num(record.get('total_head_loss'), precision)} m")
             note = (record.get("note", "") or "").strip() or "本行仅作为起点，不计算本行水头损失"
             lines.append(f"说明: {note}")
             steps = (record.get("calc_steps", "") or "").strip()
@@ -271,6 +346,7 @@ def format_pressure_pipe_record_detail(record: Dict[str, Any], precision: int = 
                 lines.append(steps)
             return "\n".join(lines)
 
+        lines.append("计入口径: 本值已计入表3和累计水损")
         material_text = (
             str(record.get("material_key", "") or "").strip()
             or str(record.get("resolved_material_key", "") or "").strip()
@@ -344,7 +420,7 @@ def format_pressure_pipe_chain_summary(chain_summary: Dict[str, Any], precision:
         f"成员统计: 共{member_count}个，成功{success_count}个，失败{failed_count}个",
     ]
     if chain_complete:
-        lines.insert(2, f"链总损失: ΔH={total_head_loss} m")
+        lines.insert(2, f"链总损失: ΔH={total_head_loss} m（正式计入成员之和，参考整组值不参与）")
 
     for idx, member in enumerate(chain_summary.get("member_results", []) or [], 1):
         structure_type = member.get("structure_type", "") or "-"
@@ -374,6 +450,10 @@ def format_pressure_pipe_calc_batch_text(batch: Dict[str, Any], precision: int =
 
     summary = normalized.get("summary", {})
     ts = normalized.get("last_run_at", "") or "-"
+    record_groups = split_pressure_pipe_records(records)
+    writeback_records = record_groups["writeback"]
+    reference_records = record_groups["reference"]
+    failed_records = record_groups["failed"]
     has_sensitivity = any(rec.get("sensitivity_low_total_head_loss") is not None for rec in records)
     has_tunnel_hydraulic_display = any("隧洞" in str(rec.get("structure_type", "") or "") for rec in records)
     if not has_tunnel_hydraulic_display:
@@ -400,9 +480,16 @@ def format_pressure_pipe_calc_batch_text(batch: Dict[str, Any], precision: int =
     if tunnel_mode_line:
         lines.append(tunnel_mode_line)
     lines += [
-        f"批次汇总: 共{summary.get('total', 0)}条，成功{summary.get('success', 0)}条，失败{summary.get('failed', 0)}条",
+        (
+            f"批次汇总: 共{summary.get('total', 0)}条，成功{summary.get('success', 0)}条，"
+            f"失败{summary.get('failed', 0)}条；正式计入{summary.get('writeback_success', 0)}条，"
+            f"参考{summary.get('reference_success', 0)}条"
+        ),
         "-" * 80,
     ]
+    if writeback_records and reference_records:
+        lines.append("同名整组值与逐段合计可能不同，因为计算范围不同；最终以“正式计入”逐段合计为准。")
+        lines.append("-" * 80)
 
     if chain_summaries:
         lines.append("【连续承压链汇总】")
@@ -411,9 +498,23 @@ def format_pressure_pipe_calc_batch_text(batch: Dict[str, Any], precision: int =
             lines.append("")
         lines.append("-" * 80)
 
-    for i, rec in enumerate(records, 1):
-        lines.append(f"{i}. {format_pressure_pipe_record_detail(rec, precision=precision)}")
-        lines.append("")
+    if writeback_records:
+        lines.append("【正式计入结果】")
+        for i, rec in enumerate(writeback_records, 1):
+            lines.append(f"{i}. {format_pressure_pipe_record_detail(rec, precision=precision)}")
+            lines.append("")
+
+    if reference_records:
+        lines.append("【参考结果（不计入表3和累计水损）】")
+        for i, rec in enumerate(reference_records, 1):
+            lines.append(f"{i}. {format_pressure_pipe_record_detail(rec, precision=precision)}")
+            lines.append("")
+
+    if failed_records:
+        lines.append("【失败记录】")
+        for i, rec in enumerate(failed_records, 1):
+            lines.append(f"{i}. {format_pressure_pipe_record_detail(rec, precision=precision)}")
+            lines.append("")
     return "\n".join(lines).rstrip()
 
 

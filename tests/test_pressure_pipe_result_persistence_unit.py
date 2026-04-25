@@ -44,7 +44,13 @@ def test_records_roundtrip_is_stable():
     n2 = normalize_pressure_pipe_calc_records(loaded)
 
     assert n1 == n2
-    assert n2["summary"] == {"total": 2, "success": 1, "failed": 1}
+    assert n2["summary"] == {
+        "total": 2,
+        "success": 1,
+        "failed": 1,
+        "writeback_success": 1,
+        "reference_success": 0,
+    }
     assert n2["records"][0]["total_head_loss"] == 1.234567
     assert n2["records"][0]["data_mode"] == "空间模式（平面+纵断面）"
     assert n2["records"][0]["sensitivity_main_f"] == 223200.0
