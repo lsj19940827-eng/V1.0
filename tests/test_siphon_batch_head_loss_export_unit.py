@@ -372,6 +372,7 @@ def _make_panel(result):
         calculation_result=result,
         get_result=lambda: result,
         get_plan_bend_radius=lambda: 3.0,
+        has_excel_turn_radius_override=lambda: False,
         summary_text=SimpleNamespace(setPlainText=lambda *_args, **_kwargs: None),
         detail_text=SimpleNamespace(setPlainText=lambda *_args, **_kwargs: None),
         result_notebook=SimpleNamespace(setCurrentIndex=lambda *_args, **_kwargs: None),

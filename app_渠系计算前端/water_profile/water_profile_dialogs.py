@@ -2295,10 +2295,15 @@ class PressurePipeConfigDialog(QDialog):
     def _build_route_water_hammer_candidate(self, group) -> Dict[str, Any]:
         """构造整线水锤段的代表行候选。"""
         try:
-            from core.pressure_pipe_calc import calc_pipe_velocity, get_water_hammer_elastic_modulus
+            from core.pressure_pipe_calc import (
+                calc_pipe_velocity,
+                get_water_hammer_elastic_modulus,
+                resolve_water_hammer_material_key,
+            )
         except Exception:
             calc_pipe_velocity = None
             get_water_hammer_elastic_modulus = None
+            resolve_water_hammer_material_key = None
 
         cfg = self._get_manager_group_config(group)
         params = self._first_row_section_params(group)
@@ -2322,6 +2327,9 @@ class PressurePipeConfigDialog(QDialog):
             material_key = str(getattr(group, "material_key", "") or "").strip()
         if not material_key:
             material_key = str(params.get("pipe_material", "") or "").strip()
+        resolved_material_key = material_key
+        if callable(resolve_water_hammer_material_key):
+            resolved_material_key = str(resolve_water_hammer_material_key(material_key) or "").strip() or material_key
 
         velocity_mps = self._safe_float(getattr(cfg, "pipe_velocity", 0.0) if cfg is not None else 0.0, 0.0)
         if velocity_mps <= 0:
@@ -2331,7 +2339,7 @@ class PressurePipeConfigDialog(QDialog):
 
         elastic_modulus_pa = 0.0
         if callable(get_water_hammer_elastic_modulus):
-            elastic_modulus_pa = self._safe_float(get_water_hammer_elastic_modulus(material_key), 0.0)
+            elastic_modulus_pa = self._safe_float(get_water_hammer_elastic_modulus(resolved_material_key), 0.0)
 
         start_row, end_row = self._group_row_range(group)
         row_text = self._format_row_range_text(start_row, end_row)
@@ -2347,6 +2355,7 @@ class PressurePipeConfigDialog(QDialog):
             "diameter_m": diameter,
             "design_flow": design_flow,
             "material_key": material_key,
+            "resolved_material_key": resolved_material_key,
             "velocity_mps": velocity_mps,
             "initial_head_m": self._resolve_group_water_hammer_head(group),
             "elastic_modulus_pa": elastic_modulus_pa,
@@ -2433,7 +2442,10 @@ class PressurePipeConfigDialog(QDialog):
 
         unique_d = {round(self._safe_float(c.get("diameter_m"), 0.0), 6) for c in candidates}
         unique_q = {round(self._safe_float(c.get("design_flow"), 0.0), 6) for c in candidates}
-        unique_material = {str(c.get("material_key", "") or "").strip() for c in candidates}
+        unique_material = {
+            str(c.get("resolved_material_key") or c.get("material_key", "") or "").strip()
+            for c in candidates
+        }
         return {
             "segment_key": segment_key,
             "route_key": route_key,
@@ -2720,6 +2732,11 @@ class PressurePipeConfigDialog(QDialog):
             return
         widgets["selected_representative_key"] = str(candidate.get("key", "") or "")
         widgets["representative_material_key"] = str(candidate.get("material_key", "") or "").strip()
+        widgets["representative_material_group_key"] = str(
+            candidate.get("resolved_material_key")
+            or candidate.get("material_key", "")
+            or ""
+        ).strip()
         widgets["water_hammer_diameter_edit"].setText(self._fmt_live_value(candidate.get("diameter_m", 0.0), digits=3))
         widgets["water_hammer_velocity_edit"].setText(self._fmt_live_value(candidate.get("velocity_mps", 0.0), digits=4))
         head_value = candidate.get("initial_head_m")
@@ -2880,10 +2897,18 @@ class PressurePipeConfigDialog(QDialog):
         source_material = ""
         if same_material_only and segment_widgets:
             first_widgets = segment_widgets[0]
-            source_material = str(first_widgets.get("representative_material_key", "") or "").strip()
+            source_material = str(
+                first_widgets.get("representative_material_group_key")
+                or first_widgets.get("representative_material_key", "")
+                or ""
+            ).strip()
         for widgets in segment_widgets:
             if same_material_only and source_material:
-                material = str(widgets.get("representative_material_key", "") or "").strip()
+                material = str(
+                    widgets.get("representative_material_group_key")
+                    or widgets.get("representative_material_key", "")
+                    or ""
+                ).strip()
                 if material != source_material:
                     continue
             if source_e > 0:
@@ -2921,7 +2946,7 @@ class PressurePipeConfigDialog(QDialog):
         summary.setStyleSheet("font-size: 12px; color: #6D4C41;")
         lay.addWidget(summary)
         if bool(segment.get("mixed_params")):
-            mixed_hint = QLabel("段内参数不完全一致：本段仍作为一整段验算，可通过代表行或手改参数控制取值。")
+            mixed_hint = QLabel("段内参数不完全一致：本段仍按整线验算，E 按各小段管材分别取值；代表行只影响界面参考值。")
             mixed_hint.setWordWrap(True)
             mixed_hint.setStyleSheet("font-size: 12px; color: #B26A00;")
             lay.addWidget(mixed_hint)
@@ -3095,6 +3120,7 @@ class PressurePipeConfigDialog(QDialog):
             button.setText("隐藏详细分布数据" if visible else "查看详细分布数据")
 
         selected_material = str(selected.get("material_key", "") or "").strip()
+        selected_material_group = str(selected.get("resolved_material_key") or selected_material).strip()
         refs = {
             "segment_key": segment_key,
             "route_key": str(segment.get("route_key", "") or "").strip(),
@@ -3103,6 +3129,7 @@ class PressurePipeConfigDialog(QDialog):
             "selected_representative_key": selected_key,
             "representative_candidates": candidates,
             "representative_material_key": selected_material,
+            "representative_material_group_key": selected_material_group,
             "water_hammer_card": frame,
             "water_hammer_representative_combo": representative_combo,
             "water_hammer_length_edit": length_edit,

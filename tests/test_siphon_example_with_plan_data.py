@@ -6,10 +6,10 @@
 """
 import sys
 import os
-import io
 
 # 修复Windows控制台编码问题
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 # 添加项目根目录到路径
 _test_dir = os.path.dirname(os.path.abspath(__file__))

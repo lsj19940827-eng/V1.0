@@ -13,9 +13,20 @@ from 推求水面线.utils.siphon_extractor import SiphonGroup
 
 
 def _install_gui_stubs():
+    patched_names = [
+        "PySide6",
+        "PySide6.QtWidgets",
+        "PySide6.QtCore",
+        "PySide6.QtGui",
+        "qfluentwidgets",
+        "app_渠系计算前端.siphon.panel",
+        "app_渠系计算前端.styles",
+    ]
+    original_modules = {name: sys.modules.get(name) for name in patched_names}
+
     qtwidgets = types.ModuleType("PySide6.QtWidgets")
     for name in (
-        "QDialog", "QVBoxLayout", "QHBoxLayout", "QTabWidget", "QLabel",
+        "QApplication", "QDialog", "QVBoxLayout", "QHBoxLayout", "QTabWidget", "QLabel",
         "QWidget", "QProgressBar", "QTableWidget", "QTableWidgetItem",
         "QHeaderView", "QAbstractItemView", "QCheckBox", "QSizePolicy", "QFrame",
     ):
@@ -59,16 +70,37 @@ def _install_gui_stubs():
     styles_mod.auto_resize_table = lambda *args, **kwargs: None
     sys.modules["app_渠系计算前端.styles"] = styles_mod
 
+    return original_modules
+
+
+def _restore_modules(original_modules):
+    """恢复被桩替换的模块，避免影响其他测试。"""
+    for name, module in original_modules.items():
+        if module is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
+
 
 def _get_dialog_class():
-    _install_gui_stubs()
-    mod = importlib.import_module("app_渠系计算前端.siphon.multi_siphon_dialog")
-    return mod.MultiSiphonDialog
+    original_modules = _install_gui_stubs()
+    sys.modules.pop("app_渠系计算前端.siphon.multi_siphon_dialog", None)
+    try:
+        mod = importlib.import_module("app_渠系计算前端.siphon.multi_siphon_dialog")
+        return mod.MultiSiphonDialog
+    finally:
+        sys.modules.pop("app_渠系计算前端.siphon.multi_siphon_dialog", None)
+        _restore_modules(original_modules)
 
 
 def _get_dialog_module():
-    _install_gui_stubs()
-    return importlib.import_module("app_渠系计算前端.siphon.multi_siphon_dialog")
+    original_modules = _install_gui_stubs()
+    sys.modules.pop("app_渠系计算前端.siphon.multi_siphon_dialog", None)
+    try:
+        return importlib.import_module("app_渠系计算前端.siphon.multi_siphon_dialog")
+    finally:
+        sys.modules.pop("app_渠系计算前端.siphon.multi_siphon_dialog", None)
+        _restore_modules(original_modules)
 
 
 def _fake_dialog(turn_n: float = 0.0):
@@ -105,6 +137,20 @@ def test_zero_increased_velocity_not_injected_into_params():
 
     assert "v_channel_in_inc" not in params
     assert "v_pipe_out_inc" not in params
+
+
+def test_group_diameter_override_maps_to_panel_param_key():
+    MultiSiphonDialog = _get_dialog_class()
+    group = SiphonGroup(
+        name="虹吸C",
+        design_flow=1.0,
+        roughness=0.014,
+        diameter_override=1.6,
+    )
+
+    params = MultiSiphonDialog._build_params_from_group(_fake_dialog(), group)
+
+    assert params["D_override"] == 1.6
 
 
 def test_collect_velocity_source_warning_metadata_covers_new_categories():

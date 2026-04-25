@@ -114,6 +114,7 @@ def _bind_pressure_pipe_summary_methods(dummy_panel):
         "_get_pressure_pipe_summary_waterline",
         "_get_current_channel_level_text",
         "_resolve_pressure_pipe_target_boundary_water_levels",
+        "_iter_pressure_pipe_continuous_flow_boundaries",
     ):
         setattr(
             dummy_panel,
@@ -1695,7 +1696,7 @@ def test_panel_pressure_pipe_characteristic_summary_includes_plain_pressure_pipe
     assert summary["1"]["jacking_length"] == 200.0
 
 
-def test_panel_pressure_pipe_characteristic_summary_uses_boundary_metadata_for_continuous_cross_flow_sections():
+def test_panel_pressure_pipe_characteristic_summary_uses_next_pressure_node_for_continuous_cross_flow_sections():
     dummy_panel = SimpleNamespace(
         calculated_nodes=[
             _make_pressure_pipe_summary_node("1", 100.0, 410.0, "有压管道", name="第一段", in_out_text="进"),
@@ -1730,10 +1731,64 @@ def test_panel_pressure_pipe_characteristic_summary_uses_boundary_metadata_for_c
 
     assert summary["1"]["total_length"] == 300.0
     assert summary["1"]["start_water_level"] == 410.0
-    assert summary["1"]["end_water_level"] == 405.2
+    assert summary["1"]["end_water_level"] == 403.6
     assert summary["2"]["total_length"] == 300.0
-    assert summary["2"]["start_water_level"] == 405.2
+    assert summary["2"]["start_water_level"] == 403.6
     assert summary["2"]["end_water_level"] == 403.6
+
+
+def test_panel_pressure_pipe_characteristic_summary_keeps_shared_boundary_when_metadata_rows_differ():
+    dummy_panel = SimpleNamespace(
+        calculated_nodes=[
+            _make_pressure_pipe_summary_node("1", 0.0, 422.356, "有压管道", name="文家梁", in_out_text="进"),
+            _make_pressure_pipe_summary_node("1", 3003.0, 420.431, "有压管道", name="文家梁", in_out_text="出"),
+            _make_pressure_pipe_summary_node("2", 3008.0, 420.426, "有压管道", name="文家梁", in_out_text="进"),
+            _make_pressure_pipe_summary_node("2", 4997.0, 416.856, "有压管道", name="文家梁", in_out_text="出"),
+            _make_pressure_pipe_summary_node("3", 5003.0, 416.847, "有压管道", name="文家梁", in_out_text="进"),
+            _make_pressure_pipe_summary_node("3", 5746.0, 414.717, "有压管道", name="文家梁", in_out_text="出"),
+        ],
+        _build_settings=lambda: SimpleNamespace(channel_level="支渠"),
+    )
+    _bind_pressure_pipe_summary_methods(dummy_panel)
+
+    summary = panel_mod.WaterProfilePanel.get_pressure_pipe_characteristic_export_summary(
+        dummy_panel,
+        rows=[
+            {
+                "name": "文家梁",
+                "flow_section": 1,
+                "segment_start_mc": 0.0,
+                "segment_end_mc": 3003.0,
+                "upstream_row_index": 0,
+                "target_row_index": 1,
+            },
+            {
+                "name": "文家梁",
+                "flow_section": 2,
+                "segment_start_mc": 3008.0,
+                "segment_end_mc": 4997.0,
+                "upstream_row_index": 2,
+                "target_row_index": 3,
+            },
+            {
+                "name": "文家梁",
+                "flow_section": 3,
+                "segment_start_mc": 5003.0,
+                "segment_end_mc": 5746.0,
+                "upstream_row_index": 4,
+                "target_row_index": 5,
+            },
+        ],
+    )
+
+    assert summary["1"]["start_water_level"] == 422.356
+    assert summary["1"]["end_water_level"] == 420.426
+    assert summary["2"]["start_water_level"] == 420.426
+    assert summary["2"]["end_water_level"] == 416.847
+    assert summary["3"]["start_water_level"] == 416.847
+    assert summary["3"]["end_water_level"] == 414.717
+    assert summary["1"]["end_water_level"] == summary["2"]["start_water_level"]
+    assert summary["2"]["end_water_level"] == summary["3"]["start_water_level"]
 
 
 def test_panel_pressure_pipe_characteristic_summary_uses_boundary_metadata_for_noncontinuous_cross_flow_sections():
@@ -1741,6 +1796,7 @@ def test_panel_pressure_pipe_characteristic_summary_uses_boundary_metadata_for_n
         calculated_nodes=[
             _make_pressure_pipe_summary_node("1", 100.0, 410.0, "有压管道", name="第一段", in_out_text="进"),
             _make_pressure_pipe_summary_node("1", 400.0, 405.2, "有压管道", name="第一段", in_out_text="出"),
+            _make_pressure_pipe_summary_node("", 450.0, 405.0, "明渠", name="断点"),
             _make_pressure_pipe_summary_node("2", 500.0, 404.8, "有压管道", name="第二段", in_out_text="进"),
             _make_pressure_pipe_summary_node("2", 700.0, 403.6, "有压管道", name="第二段", in_out_text="出"),
         ],
@@ -1764,8 +1820,8 @@ def test_panel_pressure_pipe_characteristic_summary_uses_boundary_metadata_for_n
                 "flow_section": 2,
                 "segment_start_mc": 500.0,
                 "segment_end_mc": 700.0,
-                "upstream_row_index": 2,
-                "target_row_index": 3,
+                "upstream_row_index": 3,
+                "target_row_index": 4,
             },
         ],
     )
@@ -2616,17 +2672,26 @@ def test_collect_siphon_missing_velocity_labels_skips_rows_with_valid_velocity()
 def test_pressure_pipe_summary_maps_legacy_material_names_to_fmb():
     rows = summary_mod.compute_pressure_pipe([
         {"name": "PCCP-第一流量段", "Q": 1.0, "DN_mm": 1000, "pipe_material": "PCCP管"},
+        {"name": "PCCP014-第一流量段", "Q": 1.0, "DN_mm": 1000, "pipe_material": "PCCP管0.014"},
+        {"name": "PCCP015-第一流量段", "Q": 1.0, "DN_mm": 1000, "pipe_material": "PCCP管0.015"},
         {"name": "钢筋砼-第一流量段", "Q": 1.0, "DN_mm": 1000, "pipe_material": "钢筋混凝土管"},
     ])
 
     assert rows[0]["friction_params"] == "1312000 / 2 / 5.33"
-    assert rows[1]["friction_params"] == "1312000 / 2 / 5.33"
+    assert rows[1]["friction_params"] == "1516000 / 2 / 5.33"
+    assert rows[2]["friction_params"] == "1749000 / 2 / 5.33"
+    assert rows[3]["friction_params"] == "1312000 / 2 / 5.33"
     assert rows[0]["pipe_material"] == "预应力钢筒混凝土管(n=0.013)"
-    assert rows[1]["pipe_material"] == "预应力钢筒混凝土管(n=0.013)"
+    assert rows[1]["pipe_material"] == "预应力钢筒混凝土管(n=0.014)"
+    assert rows[2]["pipe_material"] == "预应力钢筒混凝土管(n=0.015)"
+    assert rows[3]["pipe_material"] == "预应力钢筒混凝土管(n=0.013)"
 
 
 def test_pressure_pipe_material_helpers_normalize_legacy_names_to_canonical_key_and_display():
     assert summary_mod.normalize_pressure_pipe_material_key("PCCP管") == "预应力钢筒混凝土管"
+    assert summary_mod.normalize_pressure_pipe_material_key("PCCP管0.013") == "预应力钢筒混凝土管"
+    assert summary_mod.normalize_pressure_pipe_material_key("PCCP管0.014") == "预应力钢筒混凝土管_n014"
+    assert summary_mod.normalize_pressure_pipe_material_key("PCCP管0.015") == "预应力钢筒混凝土管_n015"
     assert summary_mod.normalize_pressure_pipe_material_key("钢筋混凝土管") == "预应力钢筒混凝土管"
     assert summary_mod.normalize_pressure_pipe_material_key("PE管") == "HDPE管"
     assert summary_mod.normalize_pressure_pipe_material_key("预应力钢筒混凝土管(n=0.014)") == "预应力钢筒混凝土管_n014"

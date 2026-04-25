@@ -238,6 +238,22 @@ except ImportError:
         return str(section_type or "").strip()
 
 try:
+    from utils.pressure_pipe_common import resolve_pressure_pipe_material
+except ImportError:
+    try:
+        import importlib.util as _importlib_util
+        _pressure_common_path = os.path.join(_water_profile_dir, "utils", "pressure_pipe_common.py")
+        _pressure_common_spec = _importlib_util.spec_from_file_location(
+            "_batch_pressure_pipe_common",
+            _pressure_common_path,
+        )
+        _pressure_common_mod = _importlib_util.module_from_spec(_pressure_common_spec)
+        _pressure_common_spec.loader.exec_module(_pressure_common_mod)
+        resolve_pressure_pipe_material = _pressure_common_mod.resolve_pressure_pipe_material
+    except Exception:
+        resolve_pressure_pipe_material = None
+
+try:
     from config.constants import CHANNEL_LEVEL_OPTIONS
 except ImportError:
     CHANNEL_LEVEL_OPTIONS = ["总干渠", "总干管", "分干渠", "分干管", "干渠", "干管", "支渠", "支管", "分支渠", "分支管", "充水渠", "泄水渠"]
@@ -300,6 +316,15 @@ SECTION_TYPES = [
 ]
 
 PRESSURE_PIPE_LIKE_SECTION_TYPES = {"有压管道", "定向钻", "顶管"}
+_PRESSURE_PIPE_IMPORT_MATERIALS = {
+    "HDPE管": {"name": "HDPE管"},
+    "玻璃钢夹砂管": {"name": "玻璃钢夹砂管"},
+    "球墨铸铁管": {"name": "球墨铸铁管"},
+    "预应力钢筒混凝土管": {"name": "预应力钢筒混凝土管(n=0.013)"},
+    "预应力钢筒混凝土管_n014": {"name": "预应力钢筒混凝土管(n=0.014)"},
+    "预应力钢筒混凝土管_n015": {"name": "预应力钢筒混凝土管(n=0.015)"},
+    "钢管": {"name": "钢管"},
+}
 _PROJECT_SECTION_TYPE_ALIASES = {
     "暗涵": "暗涵-矩形",
     "暗渠": "暗涵-矩形",
@@ -320,6 +345,60 @@ def normalize_project_section_type(section_type):
 def is_pressure_pipe_like_section_type(section_type) -> bool:
     """判断结构类型是否按有压管道占位语义处理。"""
     return normalize_section_type_name(section_type) in PRESSURE_PIPE_LIKE_SECTION_TYPES
+
+
+def _resolve_import_pressure_pipe_material(material_value):
+    """解析导入阶段的有压管道管材，保留 PCCP 错误 n 值提示标记。"""
+    if resolve_pressure_pipe_material is None:
+        return {}
+    return resolve_pressure_pipe_material(
+        material_value,
+        _PRESSURE_PIPE_IMPORT_MATERIALS,
+        default_material="预应力钢筒混凝土管",
+    )
+
+
+def collect_unsupported_pccp_material_warnings(mapped_records):
+    """收集 Excel 导入中不支持的 PCCP 管 n 值，不阻断导入。"""
+    warnings = []
+    for record in mapped_records or []:
+        mapped = list(record.get("mapped") or [])
+        section_type = str(mapped[3]).strip() if len(mapped) > 3 else ""
+        if not is_pressure_pipe_like_section_type(section_type):
+            continue
+        raw_value = str(mapped[COL_PIPE_MATERIAL]).strip() if len(mapped) > COL_PIPE_MATERIAL else ""
+        if not raw_value:
+            continue
+        material_info = _resolve_import_pressure_pipe_material(raw_value)
+        if not material_info.get("unsupported_pccp_roughness"):
+            continue
+        warnings.append({
+            "excel_row": int(record.get("excel_row") or 0),
+            "section_type": section_type,
+            "raw_value": raw_value,
+            "unsupported_pccp_roughness_value": str(
+                material_info.get("unsupported_pccp_roughness_value", "")
+            ),
+        })
+    return warnings
+
+
+def build_unsupported_pccp_material_warning_message(warnings):
+    """生成用户可读的 PCCP 管材 n 值错误提示。"""
+    if not warnings:
+        return ""
+    visible = warnings[:5]
+    items = "、".join(
+        f"第{item['excel_row']}行“{item['raw_value']}”"
+        for item in visible
+    )
+    if len(warnings) > len(visible):
+        items += f"等{len(warnings)}处"
+    return (
+        "Excel 已导入，但以下有压管道管材填写不支持："
+        f"{items}。目前仅支持 PCCP管、PCCP管0.013、PCCP管0.014、PCCP管0.015；"
+        "这些错误项已自动按 PCCP管0.013（预应力钢筒混凝土管 n=0.013）继续计算，不会阻断导入。"
+    )
 
 
 def is_gate_like_section_type(section_type) -> bool:
@@ -548,7 +627,7 @@ _HEADER_TOOLTIPS = {
         "  • HDPE / 高密度聚乙烯\n"
         "  • 玻璃钢 / GRP\n"
         "  • 球墨铸铁 / DI\n"
-        "  • 预应力混凝土 / PCCP\n"
+        "  • 预应力混凝土 / PCCP（可填 PCCP管、PCCP管0.013、PCCP管0.014、PCCP管0.015）\n"
         "  • 钢管 / Steel\n\n"
         "▶ 适用范围\n"
         "  仅对「有压管道」类型生效"
@@ -1704,6 +1783,7 @@ class BatchPanel(QWidget):
                         'flow_section': segment, 'building_name': building_name,
                         'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
                         'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.014), 'slope_inv': 0,
+                        'D': self._sf(values[13], 0.0),  # 倒虹吸直径D用于水面线窗口默认指定管径
                         'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
                         'pipe_material': pipe_material,
                     }
@@ -3595,6 +3675,7 @@ class BatchPanel(QWidget):
 
             # 读取数据行（按当前输入表列数读取，兼容新增列如“管材”）
             data_rows = []
+            data_row_numbers = []
             import_col_count = len(INPUT_HEADERS)
             for row_idx in range(data_start_row, ws.max_row + 1):
                 row_data = []
@@ -3603,6 +3684,7 @@ class BatchPanel(QWidget):
                     row_data.append(str(cv) if cv is not None else "")
                 if any(v.strip() for v in row_data):
                     data_rows.append(row_data)
+                    data_row_numbers.append(row_idx)
             if not data_rows:
                 InfoBar.warning("提示", "Excel文件中没有数据", parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
                 return
@@ -3627,9 +3709,15 @@ class BatchPanel(QWidget):
                     return
             self._push_undo_snapshot()
             self._undo_group += 1
+            mapped_records = []
             try:
                 self._clear_input(force=True)
-                for rd in data_rows:
+                for row_offset, rd in enumerate(data_rows):
+                    excel_row_number = (
+                        data_row_numbers[row_offset]
+                        if row_offset < len(data_row_numbers)
+                        else data_start_row + row_offset
+                    )
                     rd = rd + [""] * len(INPUT_HEADERS)
                     if has_xy_cols:
                         mapped = rd[:len(INPUT_HEADERS)]
@@ -3652,6 +3740,10 @@ class BatchPanel(QWidget):
                     section_type = str(mapped[3]).strip() if len(mapped) > 3 else ""
                     if is_pressure_pipe_like_section_type(section_type):
                         mapped[7] = ""
+                    mapped_records.append({
+                        "excel_row": excel_row_number,
+                        "mapped": mapped,
+                    })
                     self._add_row(mapped)
                     self._mark_row_as_excel_imported(self.input_table.rowCount() - 1, not is_sample)
                 self._auto_detect_flow_segments()
@@ -3671,6 +3763,16 @@ class BatchPanel(QWidget):
                 if manual_qmax_summary:
                     info_msg += " | " + manual_qmax_summary
                 InfoBar.success("导入成功", info_msg, parent=self._info_parent(), duration=4000, position=InfoBarPosition.TOP)
+                pccp_warnings = collect_unsupported_pccp_material_warnings(mapped_records)
+                pccp_warning_msg = build_unsupported_pccp_material_warning_message(pccp_warnings)
+                if pccp_warning_msg:
+                    InfoBar.warning(
+                        "管材填写需注意",
+                        pccp_warning_msg,
+                        parent=self._info_parent(),
+                        duration=8000,
+                        position=InfoBarPosition.TOP,
+                    )
             # 导入后检查建筑物重名（仅警告，不阻止）
             self._validate_duplicate_buildings_warn()
         except Exception as e:

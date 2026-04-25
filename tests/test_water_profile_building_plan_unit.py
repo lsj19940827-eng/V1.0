@@ -220,14 +220,40 @@ def _install_cad_tools_import_stubs():
 
 
 def _load_cad_tools():
-    _install_cad_tools_import_stubs()
-    root = Path(__file__).resolve().parents[1]
-    matches = list(root.glob("*/water_profile/cad_tools.py"))
-    assert matches, "cad_tools.py not found"
-    spec = importlib.util.spec_from_file_location("cad_tools_building_plan_test_mod", matches[0])
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    patched_names = [
+        "PySide6",
+        "PySide6.QtWidgets",
+        "PySide6.QtCore",
+        "PySide6.QtGui",
+        "qfluentwidgets",
+        "app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef",
+        "app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.water_profile",
+        "app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.styles",
+        "app_\u6e20\u7cfb\u8ba1\u7b97\u524d\u7aef.water_profile.text_export_settings_dialog",
+        "utils",
+        "utils.pressure_pipe_result_helpers",
+        "models",
+        "models.data_models",
+        "models.enums",
+        "\u63a8\u6c42\u6c34\u9762\u7ebf",
+        "\u63a8\u6c42\u6c34\u9762\u7ebf.utils",
+    ]
+    saved_modules = {name: sys.modules.get(name) for name in patched_names}
+    try:
+        _install_cad_tools_import_stubs()
+        root = Path(__file__).resolve().parents[1]
+        matches = list(root.glob("*/water_profile/cad_tools.py"))
+        assert matches, "cad_tools.py not found"
+        spec = importlib.util.spec_from_file_location("cad_tools_building_plan_test_mod", matches[0])
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        for name, old_module in saved_modules.items():
+            if old_module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = old_module
 
 
 cad_tools = _load_cad_tools()

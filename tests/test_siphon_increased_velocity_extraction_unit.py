@@ -212,6 +212,35 @@ def test_extract_plan_feature_points_marks_only_middle_excel_turn_radius():
     assert group.plan_feature_points[2]["turn_radius_is_explicit"] is False
 
 
+def test_extract_siphons_carries_excel_diameter_as_override():
+    """倒虹吸自身 D 应作为指定管径传给计算窗口。"""
+    inlet, outlet = _siphon_pair("虹吸A", "A", 1.0)
+    middle = ChannelNode(
+        name="虹吸A",
+        structure_type=StructureType.INVERTED_SIPHON,
+        flow_section="A",
+        flow=1.0,
+    )
+    inlet.section_params["D"] = 1.6
+    middle.section_params["D"] = 1.8
+    outlet.section_params["D"] = 1.7
+
+    group = _extract_one([inlet, middle, outlet])
+
+    assert group.diameter_override == 1.6
+
+
+def test_extract_siphons_ignores_blank_or_zero_diameter_override():
+    """空白或 0 的倒虹吸 D 不应触发指定管径。"""
+    inlet, outlet = _siphon_pair("虹吸A", "A", 1.0)
+    inlet.section_params["D"] = 0.0
+    outlet.section_params["D"] = ""
+
+    group = _extract_one([inlet, outlet])
+
+    assert group.diameter_override is None
+
+
 def test_same_section_upstream_donor_is_reused_for_both_sides():
     siphon_in, siphon_out = _siphon_pair("虹吸A", "A", 1.0)
     nodes = [

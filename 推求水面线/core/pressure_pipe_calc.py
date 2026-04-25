@@ -31,6 +31,7 @@ PIPE_MATERIALS = {
     "球墨铸铁管":       {"f": 2.232e5, "m": 1.852, "b": 4.87, "name": "球墨铸铁管 (f=223200, m=1.852, b=4.87)"},
     "预应力钢筒混凝土管": {"f": 1.312e6, "m": 2.0,  "b": 5.33, "name": "预应力钢筒混凝土管 (n=0.013, f=1312000, m=2.0, b=5.33)"},
     "预应力钢筒混凝土管_n014": {"f": 1.516e6, "m": 2.0, "b": 5.33, "name": "预应力钢筒混凝土管 (n=0.014, f=1516000, m=2.0, b=5.33)"},
+    "预应力钢筒混凝土管_n015": {"f": 1.749e6, "m": 2.0, "b": 5.33, "name": "预应力钢筒混凝土管 (n=0.015, f=1749000, m=2.0, b=5.33)"},
     "钢管":             {"f": 6.25e5,  "m": 1.9,  "b": 5.1,  "name": "钢管 (f=625000, m=1.9, b=5.1)"},
 }
 
@@ -98,9 +99,29 @@ def calc_pipe_velocity(Q_m3s: float, D_m: float) -> float:
     return Q_m3s / A
 
 
+def resolve_water_hammer_material_key(material_key: str) -> str:
+    """返回水击验算用的标准管材 key，未知管材保留原值。"""
+    key = str(material_key or "").strip()
+    if not key:
+        return ""
+    try:
+        from utils.pressure_pipe_common import resolve_pressure_pipe_material
+    except Exception:
+        try:
+            from 推求水面线.utils.pressure_pipe_common import resolve_pressure_pipe_material
+        except Exception:
+            return key
+    material_info = resolve_pressure_pipe_material(key, PIPE_MATERIALS, default_material="")
+    if bool(material_info.get("recognized")) and not bool(material_info.get("used_default")):
+        canonical_key = str(material_info.get("canonical_key", "") or "").strip()
+        if canonical_key:
+            return canonical_key
+    return key
+
+
 def get_water_hammer_elastic_modulus(material_key: str) -> Optional[float]:
     """返回水击验算的默认管材弹性模量。"""
-    key = str(material_key or "").strip()
+    key = resolve_water_hammer_material_key(material_key)
     if not key:
         return None
     return WATER_HAMMER_ELASTIC_MODULUS.get(key)

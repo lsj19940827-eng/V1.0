@@ -223,6 +223,13 @@ class MultiSiphonDialog(QDialog):
             'roughness_n': group.roughness,
             'siphon_name': group.name,
         }
+        _diameter_override = getattr(group, 'diameter_override', None)
+        try:
+            _diameter_override = float(_diameter_override) if _diameter_override is not None else None
+        except (TypeError, ValueError):
+            _diameter_override = None
+        if _diameter_override is not None and _diameter_override > 0:
+            params['D_override'] = _diameter_override
 
         # 渐变段型式
         if group.inlet_transition_form:
@@ -1040,7 +1047,7 @@ class MultiSiphonDialog(QDialog):
 
         加载历史配置后，表格中的关键参数（流量、流速、渐变段型式、
         平面段数据等）应以当前表格数据为准，覆盖历史保存的旧值。
-        保留的历史值（不被覆盖）：v_guess、segments（用户自定义的纵断面管段布置）
+        从水面线进入时不静默恢复历史纵断面，避免旧配置误参与新 Excel 计算。
         """
         print(f"[DEBUG _reapply_table_data] 开始, groups数量: {len(self.siphon_groups)}")
         for group in self.siphon_groups:
@@ -1051,6 +1058,8 @@ class MultiSiphonDialog(QDialog):
             print(f"[DEBUG _reapply_table_data] 调用 panel.set_params() for {group.name}")
             # skip_confirm=True: 窗口初始化期间跳过确认对话框
             panel.set_params(skip_confirm=True, **params)
+            if 'longitudinal_nodes' not in params:
+                panel._clear_longitudinal_geometry_state(refresh=True)
         print("[DEBUG _reapply_table_data] 完成")
 
     def _save_all(self):
@@ -1128,7 +1137,7 @@ class MultiSiphonDialog(QDialog):
                 siphon_dict['v_confirmed_before_override'] = data.get('v_confirmed_before_override', False)
                 siphon_dict['v2_strategy'] = data.get('v2_strategy', '')
                 siphon_dict['show_detail'] = True
-                siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', True)
+                siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', False)
             self.manager.save_config()
             self._update_time_label()
             self._update_status("已保存所有配置")
@@ -1173,10 +1182,15 @@ class MultiSiphonDialog(QDialog):
 
     def _calculate_all(self):
         """计算所有倒虹吸并自动导出水头损失到主表格"""
-        # 方案D预检查：批量计算前确认所有面板流速已输入
+        # 批量计算前确认每个面板都有可用流速来源：已确认拟定流速或有效指定管径
         unconfirmed = []
         for name, panel in self.panels.items():
-            if not panel._v_user_confirmed:
+            has_effective_velocity = (
+                panel._has_effective_velocity_input()
+                if hasattr(panel, '_has_effective_velocity_input')
+                else bool(getattr(panel, '_v_user_confirmed', False))
+            )
+            if not has_effective_velocity:
                 unconfirmed.append(name)
         if unconfirmed:
             # 切换到第一个未确认流速的面板
@@ -1192,8 +1206,8 @@ class MultiSiphonDialog(QDialog):
             first_panel._flash_v_field()
             names_str = "、".join(unconfirmed)
             InfoBar.error(
-                "请先输入拟定流速",
-                f'以下倒虹吸的"拟定流速 v"尚未确认: {names_str}\n请逐个输入流速值后再执行批量计算。',
+                "请确认拟定流速或指定有效管径",
+                f'以下倒虹吸没有可用于计算的流速来源: {names_str}\n请确认拟定流速，或勾选“指定管径”并输入有效管径后再执行批量计算。',
                 parent=self, duration=8000,
                 position=InfoBarPosition.TOP
             )

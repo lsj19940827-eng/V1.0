@@ -597,9 +597,36 @@ def test_batch_calculate_preserves_siphon_pipe_material_on_placeholder_row(monke
     result = panel.batch_results[0]["result"]
     assert result["is_siphon"] is True
     assert result["section_type"] == "倒虹吸"
+    assert result["D"] == 1.4
     assert result["pipe_material"] == "HDPE管"
     assert "failure_dialog_calls" not in captured
     assert "plain_info_calls" not in captured
+
+
+def test_batch_import_builds_warning_for_unsupported_pccp_pressure_pipe_material():
+    module = _load_batch_panel_module()
+
+    pressure_row = _make_input_row(module, section_type="有压管道")
+    pressure_row[module.COL_PIPE_MATERIAL] = "PCCP管0.012"
+    siphon_row = _make_input_row(module, section_type="倒虹吸")
+    siphon_row[module.COL_PIPE_MATERIAL] = "PCCP管0.012"
+    legal_row = _make_input_row(module, section_type="顶管")
+    legal_row[module.COL_PIPE_MATERIAL] = "PCCP管0.014"
+
+    warnings = module.collect_unsupported_pccp_material_warnings([
+        {"excel_row": 189, "mapped": pressure_row},
+        {"excel_row": 190, "mapped": siphon_row},
+        {"excel_row": 191, "mapped": legal_row},
+    ])
+    message = module.build_unsupported_pccp_material_warning_message(warnings)
+
+    assert len(warnings) == 1
+    assert warnings[0]["excel_row"] == 189
+    assert warnings[0]["raw_value"] == "PCCP管0.012"
+    assert "第189行“PCCP管0.012”" in message
+    assert "PCCP管、PCCP管0.013、PCCP管0.014、PCCP管0.015" in message
+    assert "已自动按 PCCP管0.013" in message
+    assert "不会阻断导入" in message
 
 
 def test_duplicate_classifier_allows_same_named_pressure_pipe_in_branch_pressurized_chain():

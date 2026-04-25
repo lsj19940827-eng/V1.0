@@ -373,6 +373,54 @@ def test_multiple_excel_explicit_turn_radii_are_listed_in_prompt(monkeypatch):
     panel.deleteLater()
 
 
+def test_multiple_excel_turn_radii_use_compact_panel_summary(monkeypatch):
+    """主界面只显示 Excel 半径摘要，完整 IP 清单交给明细弹窗。"""
+    panel = _make_panel(monkeypatch)
+    _set_plan_params(panel, _make_multiple_excel_turn_plan_points(), n_value=3.0)
+
+    summary_text = panel.lbl_turn_R.text()
+
+    assert "Excel半径优先：2 个 IP 使用原值" in summary_text
+    assert "n×D=" in summary_text
+    assert "IP2=10" not in summary_text
+    assert "IP3=11.5" not in summary_text
+    assert hasattr(panel, "btn_turn_R_details")
+    assert not panel.btn_turn_R_details.isHidden()
+
+    panel.deleteLater()
+
+
+def test_excel_turn_radius_detail_rows_keep_full_ip_list(monkeypatch):
+    """半径明细数据应完整保留每个 IP 的 Excel 半径和当前状态。"""
+    panel = _make_panel(monkeypatch)
+    _set_plan_params(panel, _make_multiple_excel_turn_plan_points(), n_value=3.0)
+    diameter = panel._get_adopted_diameter_context()["diameter"]
+    proposed_R = round(3.0 * diameter, 2)
+
+    rows = panel._build_excel_turn_radius_detail_rows(proposed_R)
+
+    assert rows == [
+        {
+            "ip": "IP2",
+            "excel_radius": "10 m",
+            "proposed_radius": f"{panel._format_turn_radius_value(proposed_R)} m",
+            "status": "保留 Excel 半径",
+        },
+        {
+            "ip": "IP3",
+            "excel_radius": "11.5 m",
+            "proposed_radius": f"{panel._format_turn_radius_value(proposed_R)} m",
+            "status": "保留 Excel 半径",
+        },
+    ]
+
+    panel._excel_turn_radius_override_confirmed = True
+    rows_after_override = panel._build_excel_turn_radius_detail_rows(proposed_R)
+    assert {row["status"] for row in rows_after_override} == {"已覆盖"}
+
+    panel.deleteLater()
+
+
 def test_excel_explicit_turn_radius_overridden_after_n_confirm(monkeypatch):
     """修改 n 后选择覆盖，Excel 半径才改为当前 n×D。"""
     panel = _make_panel(monkeypatch)
@@ -504,20 +552,58 @@ class _DummyThreshold:
         self._text = value
 
 
+class _DummyParamNotebook:
+    def __init__(self):
+        self.index = None
+
+    def setCurrentIndex(self, value):
+        self.index = value
+
+
+class _DummyVelocityEdit:
+    def __init__(self):
+        self.focused = False
+        self.selected = False
+
+    def setFocus(self):
+        self.focused = True
+
+    def selectAll(self):
+        self.selected = True
+
+
 class _FakeBatchPanel:
-    def __init__(self, num_pipes_confirmed: bool):
-        self._v_user_confirmed = True
+    def __init__(
+        self,
+        num_pipes_confirmed: bool,
+        velocity_confirmed: bool = True,
+        effective_velocity_input: bool | None = None,
+    ):
+        self._v_user_confirmed = velocity_confirmed
+        self._effective_velocity_input = effective_velocity_input
         self._num_pipes_user_confirmed = num_pipes_confirmed
         self._suppress_result_display = False
         self._suppress_num_pipes_warning = False
         self._saved_threshold = None
         self.edit_threshold = _DummyThreshold("2.0")
+        self.params_notebook = _DummyParamNotebook()
+        self.edit_v = _DummyVelocityEdit()
         self._result = object()
         self.executed = 0
+        self.flash_count = 0
 
     def _execute_calculation(self):
         assert self._suppress_num_pipes_warning is True
         self.executed += 1
+
+    def _flash_v_field(self):
+        self.flash_count += 1
+
+    def _has_effective_velocity_input(self):
+        """测试替身：模拟面板是否已有可计算流速来源。"""
+        if self._effective_velocity_input is None:
+            return self._v_user_confirmed
+        return self._effective_velocity_input
 
     def get_result(self):
         return self._result
@@ -575,6 +661,7 @@ class _FakeBatchDialog:
 
 def test_batch_num_pipes_warning_is_once_and_does_not_block(monkeypatch):
     _get_qapp()
+    QApplication.processEvents()
     monkeypatch.setattr(multi_siphon_dialog_mod, "InfoBar", _InfoBarSpy)
     _InfoBarSpy.reset()
 
@@ -595,6 +682,52 @@ def test_batch_num_pipes_warning_is_once_and_does_not_block(monkeypatch):
     assert all(panel._suppress_num_pipes_warning is False for panel in panels.values())
     assert dialog.saved is True
     assert dialog.summary_called is True
+
+
+def test_batch_calculation_accepts_effective_d_override_without_velocity_confirmation(monkeypatch):
+    """有效指定管径已能反算实际流速时，批量计算不应再要求确认拟定流速。"""
+    _get_qapp()
+    monkeypatch.setattr(multi_siphon_dialog_mod, "InfoBar", _InfoBarSpy)
+    _InfoBarSpy.reset()
+
+    panels = {
+        "ExcelD": _FakeBatchPanel(
+            num_pipes_confirmed=True,
+            velocity_confirmed=False,
+            effective_velocity_input=True,
+        )
+    }
+    dialog = _FakeBatchDialog(panels=panels)
+
+    multi_siphon_dialog_mod.MultiSiphonDialog._calculate_all(dialog)
+
+    assert _InfoBarSpy.errors == []
+    assert panels["ExcelD"].executed == 1
+    assert dialog.saved is True
+    assert dialog.summary_called is True
+
+
+def test_batch_calculation_blocks_when_velocity_and_d_override_are_both_invalid(monkeypatch):
+    """取消指定管径且拟定流速未确认时，批量计算仍应拦截。"""
+    _get_qapp()
+    monkeypatch.setattr(multi_siphon_dialog_mod, "InfoBar", _InfoBarSpy)
+    _InfoBarSpy.reset()
+
+    panels = {
+        "NoVelocity": _FakeBatchPanel(
+            num_pipes_confirmed=True,
+            velocity_confirmed=False,
+            effective_velocity_input=False,
+        )
+    }
+    dialog = _FakeBatchDialog(panels=panels)
+
+    multi_siphon_dialog_mod.MultiSiphonDialog._calculate_all(dialog)
+
+    assert panels["NoVelocity"].executed == 0
+    assert len(_InfoBarSpy.errors) == 1
+    error_text = " ".join(str(part) for part in _InfoBarSpy.errors[0][0])
+    assert "请确认拟定流速或指定有效管径" in error_text
 
 
 def test_first_tab_enter_on_velocity_does_not_confirm_num_pipes(monkeypatch):

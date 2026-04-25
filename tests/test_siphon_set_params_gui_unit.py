@@ -53,6 +53,33 @@ def test_set_params_autofills_increased_velocity_fields(monkeypatch):
     panel.deleteLater()
 
 
+def test_set_params_autofills_diameter_override_and_can_cancel(monkeypatch):
+    """表格 D 导入后应自动勾选指定管径，且用户仍可取消。"""
+    _get_qapp()
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
+
+    panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
+    panel.inc_cb.setChecked(False)
+
+    panel.set_params(Q=3.21699, D_override=1.6)
+
+    assert panel.cb_D_override.isChecked() is True
+    assert panel.edit_D_override.isHidden() is False
+    assert float(panel.edit_D_override.text()) == pytest.approx(1.6)
+    assert "采用D = 1.6000 m" in panel.lbl_D_theory.text()
+    assert panel.edit_v.isReadOnly() is True
+    assert panel._has_effective_velocity_input() is True
+
+    panel.cb_D_override.setChecked(False)
+
+    assert panel.cb_D_override.isChecked() is False
+    assert panel.edit_D_override.text() == ""
+    assert panel.edit_v.isReadOnly() is False
+    assert panel._has_effective_velocity_input() is False
+
+    panel.deleteLater()
+
+
 def test_panel_defaults_to_linear_twist_transition(monkeypatch):
     _get_qapp()
     monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)

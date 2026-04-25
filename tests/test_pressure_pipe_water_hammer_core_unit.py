@@ -162,6 +162,9 @@ def test_get_water_hammer_elastic_modulus_supports_known_materials_and_aliases()
     assert get_water_hammer_elastic_modulus("钢管") == pytest.approx(206.0e9)
     assert get_water_hammer_elastic_modulus("球墨铸铁管") == pytest.approx(108.0e9)
     assert get_water_hammer_elastic_modulus("玻璃钢夹砂管") == pytest.approx(8.728e9)
+    assert get_water_hammer_elastic_modulus("PCCP管") == pytest.approx(20.6e9)
+    assert get_water_hammer_elastic_modulus("预应力钢筒混凝土管") == pytest.approx(20.6e9)
+    assert get_water_hammer_elastic_modulus("钢筋混凝土管") == pytest.approx(20.6e9)
     assert get_water_hammer_elastic_modulus("预应力钢筒混凝土管_n015") == pytest.approx(20.6e9)
     assert get_water_hammer_elastic_modulus("PE管") is not None
     assert get_water_hammer_elastic_modulus("未知材质") is None

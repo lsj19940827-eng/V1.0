@@ -120,6 +120,31 @@ def test_extract_pipes_splits_same_name_runs_into_separate_groups():
     ]
 
 
+def test_extract_pipes_splits_same_name_tail_pressure_pipe_by_flow_section():
+    nodes = [
+        _make_node(0, "1", "文家梁", "有压管道", InOutType.NORMAL),
+        _make_node(1, "1", "文家梁", "有压管道", InOutType.NORMAL),
+        _make_node(2, "2", "文家梁", "有压管道", InOutType.NORMAL),
+        _make_node(3, "2", "文家梁", "有压管道", InOutType.NORMAL),
+        _make_node(4, "3", "文家梁", "有压管道", InOutType.NORMAL),
+        _make_node(5, "3", "文家梁", "有压管道", InOutType.NORMAL),
+    ]
+
+    groups = PressurePipeDataExtractor.extract_pipes(nodes, settings=_make_settings())
+
+    assert [group.row_indices for group in groups] == [[0, 1], [2, 3], [4, 5]]
+    assert [group.identity for group in groups] == [
+        "1::文家梁::rows1-2",
+        "2::文家梁::rows3-4",
+        "3::文家梁::rows5-6",
+    ]
+    assert [group.legacy_identity for group in groups] == [
+        "1::文家梁",
+        "2::文家梁",
+        "3::文家梁",
+    ]
+
+
 def test_extract_continuous_pressure_chains_keeps_same_name_runs_as_distinct_named_members():
     nodes = [
         _make_node(0, "2", "穿路段", "有压管道", InOutType.INLET),

@@ -49,7 +49,7 @@ from qfluentwidgets import (
 )
 from qfluentwidgets.components.widgets.tool_tip import ToolTipFilter
 
-from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, fluent_info, fluent_error, fluent_question
+from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, fluent_info, fluent_error, fluent_question, DIALOG_STYLE
 from app_渠系计算前端.export_utils import (
     WORD_EXPORT_AVAILABLE, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_h2,
@@ -913,7 +913,19 @@ class SiphonPanel(QWidget):
         self.lbl_turn_R = QLabel("R = --  (请确认倍数)")
         self.lbl_turn_R.setStyleSheet("color:#1565C0;font-size:12px;")
         self.lbl_turn_R.setWordWrap(True)
-        _rl.addWidget(self.lbl_turn_R)
+        self.lbl_turn_R.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.btn_turn_R_details = PushButton("明细")
+        self.btn_turn_R_details.setFixedWidth(52)
+        self.btn_turn_R_details.setToolTip("查看 Excel/水面线半径完整清单")
+        self.btn_turn_R_details.clicked.connect(self._show_excel_turn_radius_details)
+        self.btn_turn_R_details.hide()
+        _turn_r_row = QWidget()
+        _turn_r_lay = QHBoxLayout(_turn_r_row)
+        _turn_r_lay.setContentsMargins(0, 0, 0, 0)
+        _turn_r_lay.setSpacing(6)
+        _turn_r_lay.addWidget(self.lbl_turn_R, 1)
+        _turn_r_lay.addWidget(self.btn_turn_R_details)
+        _rl.addWidget(_turn_r_row)
         _rl.addSpacing(1)
         _rl.addStretch()
 
@@ -1599,6 +1611,13 @@ document.addEventListener("DOMContentLoaded", function(){
             self.edit_v.setStyleSheet(f"LineEdit {{ border: 1.5px solid orange; }}")
             self.lbl_v_hint.setText("(已从主表导入, 请确认)")
             self.lbl_v_hint.setStyleSheet(f"color:#CC6600;font-size:12px;")
+        if 'D_override' in kwargs:
+            d_override_val = self._parse_optional_float(kwargs.get('D_override'))
+            if d_override_val is not None and d_override_val > 0:
+                if not self.cb_D_override.isChecked():
+                    self.cb_D_override.setChecked(True)
+                self.edit_D_override.setVisible(True)
+                self.edit_D_override.setText(f"{d_override_val:g}")
 
         # 渐变段型式（需在设置系数之前，因为型式变化会触发系数更新）
         if 'inlet_type' in kwargs and SIPHON_AVAILABLE:
@@ -1816,6 +1835,90 @@ document.addEventListener("DOMContentLoaded", function(){
             return f"{float(value):.3f}".rstrip("0").rstrip(".")
         except (TypeError, ValueError):
             return str(value)
+
+    def _set_excel_turn_radius_detail_button(self, visible: bool, proposed_R=None):
+        """控制 Excel 半径明细按钮，并记录当前 n×D 半径。"""
+        self._turn_radius_detail_proposed_R = proposed_R
+        if hasattr(self, "btn_turn_R_details"):
+            self.btn_turn_R_details.setVisible(bool(visible))
+            self.btn_turn_R_details.setEnabled(bool(visible))
+
+    def _build_excel_turn_radius_summary(self, count: int, proposed_R, status_text: str = "未覆盖") -> str:
+        """生成主界面使用的短摘要，避免长 IP 清单挤压布局。"""
+        proposed_text = "--" if proposed_R is None else self._format_turn_radius_value(proposed_R)
+        return f"Excel半径优先：{count} 个 IP 使用原值；n×D={proposed_text}m（{status_text}）"
+
+    def _build_excel_turn_radius_detail_rows(self, proposed_R=None):
+        """生成 Excel 半径明细弹窗的数据行。"""
+        proposed_text = "--" if proposed_R is None else f"{self._format_turn_radius_value(proposed_R)} m"
+        status = "已覆盖" if self.has_excel_turn_radius_override() else "保留 Excel 半径"
+        rows = []
+        for idx, fp in enumerate(self._excel_explicit_turn_points(), start=1):
+            ip_index = getattr(fp, "ip_index", None) or idx
+            radius_text = str(
+                getattr(fp, "turn_radius_text", "")
+                or self._format_turn_radius_value(getattr(fp, "turn_radius", 0.0))
+            ).strip()
+            excel_radius = radius_text if radius_text.lower().endswith("m") else f"{radius_text} m"
+            rows.append(
+                {
+                    "ip": f"IP{ip_index}",
+                    "excel_radius": excel_radius,
+                    "proposed_radius": proposed_text,
+                    "status": status,
+                }
+            )
+        return rows
+
+    def _show_excel_turn_radius_details(self):
+        """打开 Excel/水面线半径完整明细弹窗。"""
+        proposed_R = getattr(self, "_turn_radius_detail_proposed_R", None)
+        diameter_ctx = self._get_adopted_diameter_context()
+        n_mult = self._fval(self.edit_turn_n, 0)
+        if diameter_ctx is not None and n_mult > 0:
+            proposed_R = round(n_mult * diameter_ctx["diameter"], 2)
+
+        rows = self._build_excel_turn_radius_detail_rows(proposed_R)
+        if not rows:
+            InfoBar.info("半径明细", "当前没有 Excel/水面线显式半径。", parent=self._info_parent(), duration=2500)
+            return
+
+        dlg = QDialog(self._info_parent())
+        dlg.setWindowTitle("Excel/水面线半径明细")
+        dlg.resize(560, 360)
+        dlg.setMinimumWidth(520)
+        dlg.setStyleSheet(DIALOG_STYLE)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setSpacing(10)
+
+        status_text = "已覆盖" if self.has_excel_turn_radius_override() else "未覆盖"
+        lbl_summary = QLabel(self._build_excel_turn_radius_summary(len(rows), proposed_R, status_text=status_text))
+        lbl_summary.setWordWrap(True)
+        lbl_summary.setStyleSheet(f"font-size:13px;font-weight:bold;color:{T1};")
+        lay.addWidget(lbl_summary)
+
+        table = QTableWidget(len(rows), 4)
+        table.setHorizontalHeaderLabels(["IP", "Excel/水面线半径", "当前 n×D 半径", "状态"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        for row_idx, row in enumerate(rows):
+            for col_idx, key in enumerate(("ip", "excel_radius", "proposed_radius", "status")):
+                table.setItem(row_idx, col_idx, QTableWidgetItem(row[key]))
+        lay.addWidget(table, 1)
+
+        btn_lay = QHBoxLayout()
+        btn_lay.addStretch()
+        btn_close = PushButton("关闭")
+        btn_close.clicked.connect(dlg.accept)
+        btn_lay.addWidget(btn_close)
+        lay.addLayout(btn_lay)
+        dlg.exec()
 
     def _build_excel_turn_radius_override_message(self, n_mult: float, D_adopted: float, proposed_R: float) -> str:
         """生成覆盖 Excel 显式半径前的确认提示。"""
@@ -2831,6 +2934,7 @@ document.addEventListener("DOMContentLoaded", function(){
             d['plan_total_length'] = self.plan_total_length
             d['plan_feature_points'] = [fp.to_dict() for fp in self.plan_feature_points]
             d['common_defaults_initialized'] = bool(self._common_defaults_initialized)
+            d['longitudinal_is_example'] = bool(self._longitudinal_is_example)
 
             # 仅当存在真实纵断面节点时才保存，空白工况不写空节点字段
             if self._has_real_longitudinal_data():
@@ -2977,17 +3081,18 @@ document.addEventListener("DOMContentLoaded", function(){
         self._migrate_legacy_plan_geometry()
         self._restore_legacy_plan_segment_source_ip_indices()
         has_saved_longitudinal_nodes = bool(d.get('longitudinal_nodes')) and SIPHON_AVAILABLE
+        saved_marks_example = bool(d.get('longitudinal_is_example', False))
         loaded_builtin_example = False
         if has_saved_longitudinal_nodes:
             self.longitudinal_nodes = [
                 LongitudinalNode.from_dict(nd) for nd in d['longitudinal_nodes']
             ]
-            loaded_builtin_example = self._is_builtin_example_longitudinal()
+            loaded_builtin_example = saved_marks_example or self._is_builtin_example_longitudinal()
             if loaded_builtin_example:
                 self._clear_builtin_example_longitudinal()
         else:
             migrated = self._migrate_legacy_longitudinal_geometry()
-            if migrated and self._is_builtin_example_longitudinal():
+            if migrated and (saved_marks_example or self._is_builtin_example_longitudinal()):
                 loaded_builtin_example = True
                 self._clear_builtin_example_longitudinal()
         if has_saved_longitudinal_nodes and not loaded_builtin_example:
@@ -3530,9 +3635,7 @@ document.addEventListener("DOMContentLoaded", function(){
 
     def _validate_v_before_calc(self) -> bool:
         """计算前检查拟定流速是否已确认。返回True=通过，False=拦截"""
-        if self._get_override_d_context() is not None:
-            return True
-        if self._v_user_confirmed:
+        if self._has_effective_velocity_input():
             return True
         # 自动跳转到基本参数Tab
         self.params_notebook.setCurrentIndex(0)
@@ -3549,6 +3652,12 @@ document.addEventListener("DOMContentLoaded", function(){
             position=InfoBarPosition.TOP
         )
         return False
+
+    def _has_effective_velocity_input(self) -> bool:
+        """判断当前面板是否已有可用于计算的流速来源。"""
+        if self._v_user_confirmed:
+            return True
+        return self._get_override_d_context() is not None
 
     # ================================================================
     # 管道根数确认交互
@@ -3986,14 +4095,18 @@ document.addEventListener("DOMContentLoaded", function(){
         n_mult = self._fval(self.edit_turn_n, 0)
         diameter_ctx = self._get_adopted_diameter_context()
         if diameter_ctx is None:
+            self._set_excel_turn_radius_detail_button(False)
             self.lbl_turn_R.setText("R = n × D（请先输入可计算的Q、v、N）")
             return
         if n_mult <= 0:
+            self._set_excel_turn_radius_detail_button(False)
             self.lbl_turn_R.setText("R = n × D（请输入n值）")
             return
         D_adopted = diameter_ctx['diameter']
         D_label = diameter_ctx['label']
         R = round(n_mult * D_adopted, 2)
+        explicit_points = self._excel_explicit_turn_points()
+        self._set_excel_turn_radius_detail_button(bool(explicit_points), R)
         # 同步 R 输入框（n 为权威值，以n为准）
         if hasattr(self, 'edit_turn_R') and not self._syncing:
             self._syncing = True
@@ -4007,16 +4120,10 @@ document.addEventListener("DOMContentLoaded", function(){
         sync_hint = "，已同步至弯管段" if has_bends else ""
         protected_points = self._excel_protected_turn_points()
         if protected_points:
-            summary = "；".join(
-                f"IP{getattr(fp, 'ip_index', i + 1)}={self._format_turn_radius_value(getattr(fp, 'turn_radius', 0.0))}m"
-                for i, fp in enumerate(protected_points)
-            )
             if hasattr(self, 'lbl_turn_R_status') and not self._syncing:
                 self.lbl_turn_R_status.setText("← Excel 半径优先，确认后才覆盖")
                 self.lbl_turn_R_status.setStyleSheet("color:#CC6600;font-size:12px;")
-            self.lbl_turn_R.setText(
-                f"Excel半径优先：{summary}；n×D={R:.2f}m（未覆盖）"
-            )
+            self.lbl_turn_R.setText(self._build_excel_turn_radius_summary(len(protected_points), R))
             self.lbl_turn_R.setStyleSheet("color:#CC6600;font-size:12px;")
             return
         if confirmed:
@@ -5774,9 +5881,8 @@ document.addEventListener("DOMContentLoaded", function(){
             # 同步纵断面节点
             self.longitudinal_nodes = self._build_longitudinal_nodes()
 
-            # 自定义管径
-            D_override_text = self.edit_D_override.text().strip()
-            D_override = float(D_override_text) if D_override_text else None
+            # 自定义管径以复选框当前状态为准
+            D_override = self._get_effective_d_override()
 
             verbose = True
 
@@ -6144,8 +6250,7 @@ document.addEventListener("DOMContentLoaded", function(){
                     else:
                         long_nodes_for_calc = self.longitudinal_nodes
                         segs_for_calc = self.segments
-                    D_override_text = self.edit_D_override.text().strip()
-                    D_override = float(D_override_text) if D_override_text else None
+                    D_override = self._get_effective_d_override()
                     result = HydraulicCore.execute_calculation(
                         params, segs_for_calc,
                         diameter_override=D_override,
@@ -6449,8 +6554,8 @@ document.addEventListener("DOMContentLoaded", function(){
         """判断当前纵断面是否为内置示例资料。"""
         return self._is_example_longitudinal_data()
 
-    def _clear_builtin_example_longitudinal(self):
-        """清理旧工况中误保存的内置示例纵断面。"""
+    def _clear_longitudinal_geometry_state(self, refresh=False):
+        """安全清空纵断面几何，保留通用构件和平面资料。"""
         self.longitudinal_nodes = []
         self._longitudinal_is_example = False
         self.segments = [
@@ -6462,6 +6567,14 @@ document.addEventListener("DOMContentLoaded", function(){
             self._initialize_default_common_segments(refresh=False)
         if hasattr(self, 'long_table'):
             self.long_table.setRowCount(0)
+        if refresh:
+            self._refresh_seg_table()
+            self._update_canvas()
+            self._update_data_status()
+
+    def _clear_builtin_example_longitudinal(self):
+        """清理旧工况中误保存的内置示例纵断面。"""
+        self._clear_longitudinal_geometry_state(refresh=False)
 
     def _add_example_longitudinal(self):
         """

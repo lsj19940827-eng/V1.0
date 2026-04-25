@@ -103,3 +103,23 @@ def test_loading_saved_example_longitudinal_is_treated_as_blank(monkeypatch):
         _assert_blank_longitudinal_state(target_panel)
     finally:
         target_panel.deleteLater()
+
+
+def test_loading_payload_marked_as_example_clears_even_when_nodes_drift(monkeypatch):
+    """只要旧数据标记为示例纵断面，即使节点有漂移也应按空白处理。"""
+    source_panel = _make_panel(monkeypatch)
+    target_panel = _make_panel(monkeypatch)
+
+    try:
+        source_panel._add_example_longitudinal()
+        source_panel._longitudinal_is_example = False
+        legacy_payload = source_panel.to_dict()
+        legacy_payload["longitudinal_is_example"] = True
+        legacy_payload["longitudinal_nodes"][3]["elevation"] += 1.0
+
+        target_panel.from_dict(legacy_payload)
+
+        _assert_blank_longitudinal_state(target_panel)
+    finally:
+        source_panel.deleteLater()
+        target_panel.deleteLater()

@@ -98,6 +98,7 @@ class SiphonGroup:
     # 倒虹吸渐变段局部损失系数（从基础设置读取，表L.1.2）
     siphon_transition_inlet_zeta: float = 0.10   # 倒虹吸进口渐变段局部损失系数
     siphon_transition_outlet_zeta: float = 0.20  # 倒虹吸出口渐变段局部损失系数
+    diameter_override: Optional[float] = None    # Excel/水面线表格显式指定的倒虹吸管径 D
 
     def is_valid(self) -> bool:
         """检查倒虹吸数据是否有效"""
@@ -214,6 +215,7 @@ class SiphonDataExtractor:
             if group.rows:
                 group.design_flow = group.rows[0].flow
                 group.roughness = group.rows[0].roughness if group.rows[0].roughness > 0 else 0.014
+                group.diameter_override = SiphonDataExtractor._extract_group_diameter_override(group)
             
             # 如果没有明确的进出口标记，尝试根据位置推断
             if group.inlet_row_index < 0 and group.row_indices:
@@ -243,6 +245,36 @@ class SiphonDataExtractor:
             result.append(group)
         
         return result
+
+    @staticmethod
+    def _extract_group_diameter_override(group: SiphonGroup) -> Optional[float]:
+        """从倒虹吸自身行提取 Excel/水面线显式指定管径。"""
+        rows = list(group.rows or [])
+        if not rows:
+            return None
+
+        ordered_rows = []
+        if group.inlet_row_index in group.row_indices:
+            inlet_pos = group.row_indices.index(group.inlet_row_index)
+            ordered_rows.append(rows[inlet_pos])
+        ordered_rows.extend(
+            node for node in rows
+            if all(node is not existing for existing in ordered_rows)
+        )
+
+        for node in ordered_rows:
+            params = getattr(node, "section_params", {}) or {}
+            for key in ("D", "直径D", "diameter"):
+                raw_value = params.get(key)
+                if raw_value in ("", None):
+                    continue
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    return value
+        return None
     
     @staticmethod
     def _extract_adjacent_node_data(group: SiphonGroup, nodes: List[ChannelNode]):
@@ -1087,7 +1119,7 @@ class SiphonDataExtractor:
     @staticmethod
     def _normalize_structure_type(structure_type: str) -> str:
         text = str(structure_type or "").strip()
-        if text in {"暗渠", "矩形暗渠", "矩形暗涵"}:
+        if text in {"暗渠", "矩形暗渠", "矩形暗涵", "暗涵-矩形"}:
             return "矩形暗涵"
         return text
 

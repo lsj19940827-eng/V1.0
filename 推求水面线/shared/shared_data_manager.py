@@ -323,6 +323,7 @@ class SharedDataManager:
                     slope_inv=0,
                     coord_X=result.get('coord_X', 0.0),
                     coord_Y=result.get('coord_Y', 0.0),
+                    D=result.get('D', 0.0),
                     flow_section=str(result.get('flow_section', '')),
                     building_name=str(result.get('building_name', '')),
                     turn_radius=float(result.get('turn_radius', 0.0) or 0.0),

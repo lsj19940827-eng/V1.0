@@ -336,6 +336,62 @@ def test_route_water_hammer_mixed_params_keep_single_segment_and_pick_fastest_re
         dialog.close()
 
 
+def test_route_water_hammer_mixed_material_members_use_own_elastic_modulus():
+    """混合管材整线仍按一段验算，但每个成员使用自己的管材 E。"""
+    groups = [
+        _make_route_group(
+            "pipe-pccp",
+            0,
+            "有压管道",
+            start_mc=0.0,
+            end_mc=10.0,
+            diameter=1.0,
+            design_flow=1.0,
+            material_key="PCCP管",
+            pipe_velocity=1.0,
+        ),
+        _make_route_group(
+            "pipe-ductile",
+            1,
+            "有压管道",
+            start_mc=10.0,
+            end_mc=20.0,
+            diameter=1.0,
+            design_flow=1.0,
+            material_key="球墨铸铁管",
+            pipe_velocity=1.2,
+        ),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        segments = dialog._build_route_water_hammer_segments(dialog._route_contexts["flow1-route1"])
+
+        assert len(segments) == 1
+        assert segments[0]["member_keys"] == ["pipe-pccp", "pipe-ductile"]
+        candidates = {candidate["key"]: candidate for candidate in segments[0]["representative_candidates"]}
+        assert candidates["pipe-pccp"]["material_key"] == "PCCP管"
+        assert candidates["pipe-pccp"]["resolved_material_key"] == "预应力钢筒混凝土管"
+        assert candidates["pipe-pccp"]["elastic_modulus_pa"] == pytest.approx(20.6e9)
+        assert candidates["pipe-ductile"]["resolved_material_key"] == "球墨铸铁管"
+        assert candidates["pipe-ductile"]["elastic_modulus_pa"] == pytest.approx(108.0e9)
+
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=400.0)
+        widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        members = dialog._build_route_water_hammer_distribution_members(widgets["segment_key"])
+        assert [member["elastic_modulus_pa"] for member in members] == pytest.approx([20.6e9, 108.0e9])
+
+        widgets["water_hammer_wall_thickness_edit"].setText("0.02")
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+        dialog._calculate_route_water_hammer_segment(widgets["segment_key"])
+        _flush_events(6)
+
+        assert "缺少有效弹性模量 E" not in widgets["water_hammer_status_label"].text()
+        assert widgets["water_hammer_result_sample_count_label"].text() != "0"
+    finally:
+        dialog.close()
+
+
 def test_route_only_dialog_shows_water_hammer_segment_panel_without_child_pipe_cards():
     """route-only 模式下整线卡应直接显示水锤段入口。"""
     groups = [

@@ -859,6 +859,11 @@ class PressurePipeDataExtractor:
         if not node_name or node_name != str(getattr(group, "name", "") or "").strip():
             return False
 
+        group_flow_section = PressurePipeDataExtractor._resolve_group_flow_section(group)
+        node_flow_section = str(getattr(node, "flow_section", "") or "").strip()
+        if group_flow_section and node_flow_section and group_flow_section != node_flow_section:
+            return False
+
         if (
             PressurePipeDataExtractor._resolve_group_structure_text(group)
             != PressurePipeDataExtractor._resolve_node_structure_text(node)

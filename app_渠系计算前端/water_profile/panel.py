@@ -11143,6 +11143,48 @@ class WaterProfilePanel(QWidget):
             return "有压管道"
         return None
 
+    def _iter_pressure_pipe_continuous_flow_boundaries(self, nodes) -> list[dict]:
+        """识别相邻承压行跨流量段时共用的切段水位。"""
+        if not isinstance(nodes, list) or len(nodes) < 2:
+            return []
+        pressure_gate_buckets = {"有压管道", "定向钻", "顶管"}
+        boundaries = []
+        for idx in range(len(nodes) - 1):
+            current = nodes[idx]
+            nxt = nodes[idx + 1]
+            current_flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
+                getattr(current, "flow_section", "")
+            )
+            next_flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
+                getattr(nxt, "flow_section", "")
+            )
+            if (
+                not current_flow_section_text
+                or not next_flow_section_text
+                or current_flow_section_text == next_flow_section_text
+            ):
+                continue
+            current_bucket = self._classify_pressure_pipe_summary_bucket(current)
+            next_bucket = self._classify_pressure_pipe_summary_bucket(nxt)
+            if current_bucket not in pressure_gate_buckets or next_bucket not in pressure_gate_buckets:
+                continue
+            boundary_water_level = self._normalize_pressure_pipe_export_number(
+                getattr(nxt, "water_level", None),
+                allow_zero=True,
+            )
+            if boundary_water_level is None:
+                continue
+            boundaries.append(
+                {
+                    "current_flow_section": current_flow_section_text,
+                    "next_flow_section": next_flow_section_text,
+                    "boundary_water_level": boundary_water_level,
+                    "current_index": idx,
+                    "next_index": idx + 1,
+                }
+            )
+        return boundaries
+
     @staticmethod
     def _get_pressure_pipe_summary_in_out_text(node) -> str:
         """读取摘要统计需要的进出口标记。"""
@@ -11500,42 +11542,6 @@ class WaterProfilePanel(QWidget):
                     6,
                 )
 
-        def _apply_boundary_water_level_between_flow_sections(current, nxt) -> None:
-            """连续流量段共用同一个切段点水位。"""
-            current_flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
-                getattr(current, "flow_section", "")
-            )
-            next_flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
-                getattr(nxt, "flow_section", "")
-            )
-            if (
-                not current_flow_section_text
-                or not next_flow_section_text
-                or current_flow_section_text == next_flow_section_text
-            ):
-                return
-            current_bucket = self._classify_pressure_pipe_summary_bucket(current)
-            next_bucket = self._classify_pressure_pipe_summary_bucket(nxt)
-            if current_bucket not in pressure_gate_buckets or next_bucket not in pressure_gate_buckets:
-                return
-            boundary_water_level = self._normalize_pressure_pipe_export_number(
-                getattr(nxt, "water_level", None),
-                allow_zero=True,
-            )
-            if boundary_water_level is None:
-                return
-            current_entry = summary_by_flow_section.setdefault(
-                current_flow_section_text,
-                _make_entry(current_flow_section_text),
-            )
-            next_entry = summary_by_flow_section.setdefault(
-                next_flow_section_text,
-                _make_entry(next_flow_section_text),
-            )
-            # 切段点是后一流量段的首点，同时也是前一流量段的终点。
-            current_entry["end_water_level"] = boundary_water_level
-            next_entry["start_water_level"] = boundary_water_level
-
         for row_index, node in enumerate(nodes):
             flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
                 getattr(node, "flow_section", "")
@@ -11592,6 +11598,22 @@ class WaterProfilePanel(QWidget):
             entry = summary_by_flow_section.setdefault(flow_section_text, _make_entry(flow_section_text))
             entry[length_map[bucket]] = round(entry[length_map[bucket]] + seg_len, 6)
 
+        for boundary in self._iter_pressure_pipe_continuous_flow_boundaries(nodes):
+            current_flow_section_text = boundary.get("current_flow_section")
+            next_flow_section_text = boundary.get("next_flow_section")
+            boundary_water_level = boundary.get("boundary_water_level")
+            current_entry = summary_by_flow_section.setdefault(
+                current_flow_section_text,
+                _make_entry(current_flow_section_text),
+            )
+            next_entry = summary_by_flow_section.setdefault(
+                next_flow_section_text,
+                _make_entry(next_flow_section_text),
+            )
+            # 切段点取后一流量段首个承压节点水位，并同时保护前后两段。
+            current_entry["end_water_level"] = boundary_water_level
+            next_entry["start_water_level"] = boundary_water_level
+
         for idx in range(len(nodes) - 1):
             current = nodes[idx]
             nxt = nodes[idx + 1]
@@ -11599,7 +11621,6 @@ class WaterProfilePanel(QWidget):
                 getattr(current, "flow_section", "")
             )
             bucket = self._classify_pressure_pipe_summary_bucket(current)
-            _apply_boundary_water_level_between_flow_sections(current, nxt)
             if not flow_section_text:
                 continue
             if bucket is None:
@@ -11665,6 +11686,17 @@ class WaterProfilePanel(QWidget):
             self._build_pressure_pipe_characteristic_export_summary_from_nodes(nodes)
         )
 
+        protected_boundary_water_keys = {}
+        for boundary in self._iter_pressure_pipe_continuous_flow_boundaries(nodes):
+            current_flow_section_text = boundary.get("current_flow_section")
+            next_flow_section_text = boundary.get("next_flow_section")
+            protected_boundary_water_keys.setdefault(current_flow_section_text, set()).add(
+                "end_water_level"
+            )
+            protected_boundary_water_keys.setdefault(next_flow_section_text, set()).add(
+                "start_water_level"
+            )
+
         resolved = {}
         for target in targets:
             flow_section_text = self._normalize_pressure_pipe_summary_flow_section(
@@ -11676,7 +11708,10 @@ class WaterProfilePanel(QWidget):
             boundary_payload = boundary_summary_by_flow_section.get(flow_section_text) or {}
             if isinstance(boundary_payload, dict) and boundary_payload:
                 for key in ("start_water_level", "end_water_level"):
-                    if key in boundary_payload:
+                    if (
+                        key in boundary_payload
+                        and key not in protected_boundary_water_keys.get(flow_section_text, set())
+                    ):
                         payload[key] = copy.deepcopy(boundary_payload.get(key))
                 if "total_length" in boundary_payload:
                     boundary_total_length = self._normalize_pressure_pipe_export_number(
