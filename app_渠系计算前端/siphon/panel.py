@@ -3182,6 +3182,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 'label': '采用D',
                 'Q_single': override_ctx['Q_single'],
                 'N': override_ctx['N'],
+                'actual_velocity': override_ctx['actual_velocity'],
             }
         normal_ctx = self._get_normal_d_context()
         if normal_ctx is None:
@@ -3191,6 +3192,27 @@ document.addEventListener("DOMContentLoaded", function(){
             'label': 'D设计',
             'Q_single': normal_ctx['Q_single'],
             'N': normal_ctx['N'],
+            'velocity': normal_ctx['velocity'],
+        }
+
+    def _get_segment_dialog_diameter_context(self):
+        """返回结构段弹窗使用的每管流量、流速和当前管径。"""
+        diameter_ctx = self._get_adopted_diameter_context()
+        if diameter_ctx is None:
+            return {
+                'Q': self._fval(self.edit_Q, 10),
+                'v': self._fval(self.edit_v, 2),
+                'diameter': None,
+                'diameter_label': None,
+            }
+        velocity = diameter_ctx.get('actual_velocity') or diameter_ctx.get('velocity')
+        if velocity is None or velocity <= 0:
+            velocity = self._fval(self.edit_v, 2)
+        return {
+            'Q': diameter_ctx['Q_single'],
+            'v': velocity,
+            'diameter': diameter_ctx['diameter'],
+            'diameter_label': diameter_ctx['label'],
         }
 
     def _format_normal_d_label(self, ctx: dict) -> str:
@@ -4213,9 +4235,8 @@ document.addEventListener("DOMContentLoaded", function(){
         if not SIPHON_AVAILABLE:
             return
         if DIALOGS_AVAILABLE:
-            Q = self._fval(self.edit_Q, 10)
-            v = self._fval(self.edit_v, 2)
-            dlg = SegmentEditDialog(self, segment=None, Q=Q, v=v)
+            dialog_ctx = self._get_segment_dialog_diameter_context()
+            dlg = SegmentEditDialog(self, segment=None, **dialog_ctx)
             if dlg.exec() == QDialog.Accepted and dlg.result:
                 # 插入到出水口之前
                 insert_idx = len(self.segments)
@@ -4435,10 +4456,9 @@ document.addEventListener("DOMContentLoaded", function(){
 
         # 平面段允许编辑
         if source == 'plan':
-            Q = self._fval(self.edit_Q, 10)
-            v = self._fval(self.edit_v, 2)
-            dlg = SegmentEditDialog(self, segment=seg, Q=Q, v=v,
-                                    direction=SegmentDirection.PLAN)
+            dialog_ctx = self._get_segment_dialog_diameter_context()
+            dlg = SegmentEditDialog(self, segment=seg, direction=SegmentDirection.PLAN,
+                                    **dialog_ctx)
             if dlg.exec() == QDialog.Accepted and dlg.result:
                 try:
                     real_idx = self.plan_segments.index(seg)
@@ -4493,7 +4513,8 @@ document.addEventListener("DOMContentLoaded", function(){
         elif seg.segment_type == SegmentType.OTHER and seg.direction == SegmentDirection.COMMON:
             dlg = CommonSegmentEditDialog(self, seg)
         else:
-            dlg = SegmentEditDialog(self, segment=seg, Q=Q, v=v)
+            dialog_ctx = self._get_segment_dialog_diameter_context()
+            dlg = SegmentEditDialog(self, segment=seg, **dialog_ctx)
 
         if dlg.exec() == QDialog.Accepted and dlg.result:
             # 找到seg在self.segments中的真实索引

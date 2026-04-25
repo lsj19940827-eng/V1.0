@@ -1151,14 +1151,17 @@ class SegmentEditDialog(QDialog):
     _HINT_SS  = "font-size:11px; color:#aaa;"
     _HINT_BLUE_SS = "font-size:11px; color:#1976D2;"
 
-    def __init__(self, parent, segment=None, Q=10.0, v=2.0, direction=None):
+    def __init__(
+            self, parent, segment=None, Q=10.0, v=2.0, direction=None,
+            diameter=None, diameter_label=None):
         super().__init__(parent)
         self.setWindowTitle("编辑结构段")
         self.result = None
         self.segment = segment
         self._direction = direction  # 外部传入的方向（用于区分平面/纵断面）
         self._Q, self._v = Q, v
-        self._D_theory = math.sqrt(4 * Q / (math.pi * v)) if Q > 0 and v > 0 else 0
+        self._current_diameter = self._resolve_current_diameter(Q, v, diameter)
+        self._current_diameter_label = diameter_label or "D设计"
         self._user_modified_xi = False
         self._loading = False
         self._build_ui()
@@ -1432,6 +1435,32 @@ class SegmentEditDialog(QDialog):
         text = f"{num:.{digits}f}".rstrip("0").rstrip(".")
         return text or "0"
 
+    @staticmethod
+    def _resolve_current_diameter(Q, v, diameter):
+        """返回弯管查表使用的当前管径，缺省时按设计管径兜底。"""
+        try:
+            adopted = float(diameter) if diameter is not None else 0.0
+        except (TypeError, ValueError):
+            adopted = 0.0
+        if adopted > 0:
+            return adopted
+        try:
+            flow = float(Q)
+            velocity = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        if flow <= 0 or velocity <= 0:
+            return 0.0
+        d_theory = math.sqrt(4 * flow / (math.pi * velocity))
+        if SIPHON_AVAILABLE:
+            return HydraulicCore.round_diameter(d_theory)
+        return d_theory
+
+    def _diameter_latex_label(self):
+        """返回公式中当前管径的文字标签。"""
+        label = self._current_diameter_label or "D"
+        return f"\\text{{{label}}}"
+
     # ---- 类型切换 ----
     def _on_type(self, *_):
         t = self.combo_type.currentText()
@@ -1504,9 +1533,9 @@ class SegmentEditDialog(QDialog):
             if t == SegmentType.BEND.value:
                 r = float(self.ed_radius.text() or 0)
                 a = float(self.ed_angle.text() or 0)
-                if r > 0 and a > 0 and self._D_theory > 0:
+                if r > 0 and a > 0 and self._current_diameter > 0:
                     return CoefficientService.calculate_bend_coeff(
-                        r, self._D_theory, a, verbose=False
+                        r, self._current_diameter, a, verbose=False
                     )
             elif t == SegmentType.FOLD.value:
                 a = float(self.ed_angle.text() or 0)
@@ -1593,17 +1622,17 @@ class SegmentEditDialog(QDialog):
             try:
                 r = float(self.ed_radius.text() or 0)
                 a = float(self.ed_angle.text() or 0)
-                if r > 0 and a > 0 and self._D_theory > 0:
-                    r_d = r / self._D_theory
+                if r > 0 and a > 0 and self._current_diameter > 0:
+                    r_d = r / self._current_diameter
                     xi_90 = CoefficientService.get_xi_90(r_d)
                     gamma = CoefficientService.get_gamma(a)
                     xi = xi_90 * gamma
                     r_text = self._fmt_precise(r)
-                    d_text = self._fmt_precise(self._D_theory)
+                    d_text = self._fmt_precise(self._current_diameter)
                     a_text = self._fmt_precise(a)
                     r_d_text = self._fmt_precise(r_d)
                     latex_lines = [
-                        f"R/D_0 = R / D = {r_text} / {d_text} = {r_d_text}",
+                        f"R/D_0 = R / {self._diameter_latex_label()} = {r_text} / {d_text} = {r_d_text}",
                         f"\\text{{查表 L.1.4-3：}}\\xi_{{90}} = {xi_90:.4f}",
                         f"\\text{{查表 L.1.4-4：}}\\gamma({a_text}^\\circ) = {gamma:.4f}",
                         f"\\xi = \\xi_{{90}} \\times \\gamma = {xi_90:.4f} \\times {gamma:.4f} = {xi:.4f}",
@@ -1685,8 +1714,13 @@ class SegmentEditDialog(QDialog):
         if seg.xi_user is not None:
             self.ed_xi.setText(f"{seg.xi_user:.4f}")
             self._user_modified_xi = True
-        elif seg.xi_calc is not None:
-            self.ed_xi.setText(f"{seg.xi_calc:.4f}")
+        else:
+            auto_xi = self._current_auto_xi()
+            if auto_xi is not None:
+                self.ed_xi.setText(f"{auto_xi:.4f}")
+                seg.xi_calc = auto_xi
+            elif seg.xi_calc is not None:
+                self.ed_xi.setText(f"{seg.xi_calc:.4f}")
         self._on_type()
         self._update_spatial()
         self._loading = False
