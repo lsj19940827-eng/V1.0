@@ -52,6 +52,7 @@ GRAVITY = 9.81
 WATER_BULK_MODULUS = 2.1e9
 WATER_HAMMER_SOUND_SPEED = 1435.0
 WATER_HAMMER_STATION_TOLERANCE_M = 1e-3
+WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M = 5.0
 
 # 水击验算默认弹性模量（来自手册常见材质近似值，玻璃钢夹砂管补充取 FRPM 纵向弹模参考值）
 WATER_HAMMER_ELASTIC_MODULUS = {
@@ -606,10 +607,10 @@ def _build_water_hammer_sample_stations(
     water_level_points: List[Dict[str, float]],
     sample_interval_m: float,
 ) -> List[float]:
-    """按1m采样并强制纳入起终点、折点和成员分界点。"""
+    """按指定步长采样，并强制纳入起终点、折点和成员分界点。"""
     start_station = min(member["start_station_m"] for member in members)
     end_station = max(member["end_station_m"] for member in members)
-    interval = sample_interval_m if sample_interval_m > 0 else 1.0
+    interval = sample_interval_m if sample_interval_m > 0 else WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M
     stations = {round(start_station, 6), round(end_station, 6)}
     current = start_station
     guard = 0
@@ -665,7 +666,7 @@ def calc_distributed_water_hammer_check(
     water_level_nodes: List[Dict[str, object]],
     wall_thickness_m: float,
     closing_time_s: float,
-    sample_interval_m: float = 1.0,
+    sample_interval_m: float = WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M,
     water_bulk_modulus_pa: float = WATER_BULK_MODULUS,
 ) -> Dict[str, object]:
     """按连续有压段进行全线水锤附加水头分布校核。"""
@@ -700,7 +701,10 @@ def calc_distributed_water_hammer_check(
         "inputs": {
             "wall_thickness_m": _water_hammer_number(wall_thickness_m, 0.0),
             "closing_time_s": _water_hammer_number(closing_time_s, 0.0),
-            "sample_interval_m": _water_hammer_number(sample_interval_m, 1.0),
+            "sample_interval_m": _water_hammer_number(
+                sample_interval_m,
+                WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M,
+            ),
         },
     }
 
@@ -765,7 +769,10 @@ def calc_distributed_water_hammer_check(
         members=normalized_members,
         centerline_points=centerline_points,
         water_level_points=water_level_points,
-        sample_interval_m=_water_hammer_number(sample_interval_m, 1.0) or 1.0,
+        sample_interval_m=(
+            _water_hammer_number(sample_interval_m, WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M)
+            or WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M
+        ),
     )
     details: List[Dict[str, object]] = []
     member_summary: Dict[str, Dict[str, object]] = {

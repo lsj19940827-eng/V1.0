@@ -20,6 +20,7 @@ from managers.pressure_pipe_manager import PressurePipeConfig, PressurePipeManag
 from core.pressure_pipe_calc import (  # noqa: E402
     GRAVITY,
     WATER_BULK_MODULUS,
+    WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M,
     calc_basic_water_hammer,
     calc_distributed_water_hammer_check,
     get_water_hammer_elastic_modulus,
@@ -167,7 +168,7 @@ def test_get_water_hammer_elastic_modulus_supports_known_materials_and_aliases()
 
 
 def test_calc_distributed_water_hammer_check_passes_when_all_points_have_margin():
-    """全线采样点余量均不小于0时应判定通过。"""
+    """默认分布采样应为5m，并保留起终点。"""
     result = calc_distributed_water_hammer_check(
         members=[
             {
@@ -189,18 +190,61 @@ def test_calc_distributed_water_hammer_check_passes_when_all_points_have_margin(
         ],
         wall_thickness_m=0.02,
         closing_time_s=0.01,
-        sample_interval_m=1.0,
     )
 
     expected_a = 1435.0 / math.sqrt(1.0 + (WATER_BULK_MODULUS / 206.0e9) * (1.0 / 0.02))
     expected_delta_h = expected_a / GRAVITY
 
+    assert WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M == pytest.approx(5.0)
     assert result["status"] == "通过"
+    assert result["inputs"]["sample_interval_m"] == pytest.approx(5.0)
     assert result["delta_h"] == pytest.approx(expected_delta_h, rel=1e-6)
-    assert result["sample_count"] == 11
+    assert result["sample_count"] == 3
+    assert [item["station_m"] for item in result["details"]] == pytest.approx([0.0, 5.0, 10.0])
     assert result["exceed_count"] == 0
     assert result["min_margin_m"] == pytest.approx(230.0 - 100.5 - expected_delta_h, rel=1e-6)
     assert result["critical_point"]["station_m"] == pytest.approx(0.0)
+
+
+def test_calc_distributed_water_hammer_check_keeps_breakpoints_with_5m_default():
+    """5m基础采样仍应强制保留纵断面折点、表3水位点和成员分界点。"""
+    result = calc_distributed_water_hammer_check(
+        members=[
+            {
+                "key": "pipe-a",
+                "start_station_m": 0.0,
+                "end_station_m": 10.0,
+                "diameter_m": 1.0,
+                "elastic_modulus_pa": 206.0e9,
+                "velocity_mps": 1.0,
+            },
+            {
+                "key": "pipe-b",
+                "start_station_m": 10.0,
+                "end_station_m": 20.0,
+                "diameter_m": 1.0,
+                "elastic_modulus_pa": 206.0e9,
+                "velocity_mps": 1.0,
+            },
+        ],
+        centerline_nodes=[
+            {"station_m": 0.0, "elevation_m": 100.0},
+            {"station_m": 2.5, "elevation_m": 100.5},
+            {"station_m": 20.0, "elevation_m": 100.0},
+        ],
+        water_level_nodes=[
+            {"station_m": 0.0, "water_level_m": 230.0},
+            {"station_m": 7.5, "water_level_m": 229.5},
+            {"station_m": 20.0, "water_level_m": 230.0},
+        ],
+        wall_thickness_m=0.02,
+        closing_time_s=0.01,
+    )
+
+    stations = sorted({round(float(item["station_m"]), 6) for item in result["details"]})
+    assert result["status"] == "通过"
+    assert result["inputs"]["sample_interval_m"] == pytest.approx(5.0)
+    assert stations == pytest.approx([0.0, 2.5, 5.0, 7.5, 10.0, 15.0, 20.0])
 
 
 def test_calc_distributed_water_hammer_check_fails_at_lowest_margin_point():

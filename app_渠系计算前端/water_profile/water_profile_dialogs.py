@@ -20,7 +20,8 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QGroupBox, QGridLayout, QComboBox, QLineEdit,
     QRadioButton, QButtonGroup, QSplitter, QApplication,
-    QSizePolicy, QTabWidget, QCheckBox, QScrollArea, QFrame, QStackedWidget
+    QSizePolicy, QTabWidget, QCheckBox, QScrollArea, QFrame, QStackedWidget,
+    QFileDialog
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
@@ -28,6 +29,9 @@ from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
 from app_渠系计算前端.styles import auto_resize_table, fluent_info, fluent_error, fluent_question
 from 推求水面线.models.data_models import OpenChannelParams
 from 推求水面线.utils.pressure_pipe_common import coerce_row_index
+
+WATER_HAMMER_DEFAULT_WALL_THICKNESS_M = 0.06
+WATER_HAMMER_DEFAULT_CLOSING_TIME_S = 300.0
 
 try:
     from qfluentwidgets import PushButton, PrimaryPushButton, LineEdit, ComboBox
@@ -1161,6 +1165,7 @@ class PressurePipeConfigDialog(QDialog):
         self._syncing_radius = False
         self._last_turn_n = 3.0
         self._canvas_viewer = None
+        self._water_hammer_principle_dialog = None
         self._active_viewer_pipe_name = ""
         self._pipe_scroll_area = None
         self._pipe_scroll_widget = None
@@ -2194,6 +2199,12 @@ class PressurePipeConfigDialog(QDialog):
         wall_thickness_m = self._safe_float(saved_inputs.get("wall_thickness_m"), 0.0)
         if wall_thickness_m <= 0:
             wall_thickness_m = self._safe_float(getattr(cfg, "wall_thickness_m", None) if cfg is not None else None, 0.0)
+        if wall_thickness_m <= 0:
+            wall_thickness_m = WATER_HAMMER_DEFAULT_WALL_THICKNESS_M
+
+        closing_time_s = self._safe_float(saved_inputs.get("closing_time_s"), 0.0)
+        if closing_time_s <= 0:
+            closing_time_s = WATER_HAMMER_DEFAULT_CLOSING_TIME_S
 
         return {
             "length_m": length_m,
@@ -2202,7 +2213,7 @@ class PressurePipeConfigDialog(QDialog):
             "initial_head_m": initial_head_m,
             "elastic_modulus_pa": elastic_modulus_pa,
             "wall_thickness_m": wall_thickness_m,
-            "closing_time_s": self._safe_float(saved_inputs.get("closing_time_s"), 0.0),
+            "closing_time_s": closing_time_s,
             "result": saved_result if isinstance(saved_result, dict) else {},
         }
 
@@ -2397,17 +2408,22 @@ class PressurePipeConfigDialog(QDialog):
         base_inputs = {
             "length_m": length_m,
             "diameter_m": self._safe_float(selected.get("diameter_m"), 0.0),
-            "wall_thickness_m": 0.0,
+            "wall_thickness_m": WATER_HAMMER_DEFAULT_WALL_THICKNESS_M,
             "elastic_modulus_pa": self._safe_float(selected.get("elastic_modulus_pa"), 0.0),
             "velocity_mps": self._safe_float(selected.get("velocity_mps"), 0.0),
             "initial_head_m": selected.get("initial_head_m"),
-            "closing_time_s": 0.0,
+            "closing_time_s": WATER_HAMMER_DEFAULT_CLOSING_TIME_S,
         }
         saved_inputs = saved.get("inputs", {}) if isinstance(saved.get("inputs", {}), dict) else {}
         inputs = dict(base_inputs)
         for key in base_inputs:
             if key in saved_inputs and saved_inputs.get(key) is not None:
-                inputs[key] = saved_inputs.get(key)
+                if key in {"wall_thickness_m", "closing_time_s"}:
+                    saved_number = self._safe_float(saved_inputs.get(key), 0.0)
+                    if saved_number > 0:
+                        inputs[key] = saved_number
+                else:
+                    inputs[key] = saved_inputs.get(key)
 
         start_rows = [self._group_row_range(group)[0] for group in groups]
         end_rows = [self._group_row_range(group)[1] for group in groups]
@@ -2717,7 +2733,10 @@ class PressurePipeConfigDialog(QDialog):
     def _calculate_route_water_hammer_segment(self, segment_key: str):
         """执行整线水锤段验算。"""
         try:
-            from core.pressure_pipe_calc import calc_distributed_water_hammer_check
+            from core.pressure_pipe_calc import (
+                WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M,
+                calc_distributed_water_hammer_check,
+            )
         except Exception as exc:
             fluent_error(self, "水击验算失败", f"加载计算模块失败：{exc}")
             return
@@ -2745,10 +2764,104 @@ class PressurePipeConfigDialog(QDialog):
             water_level_nodes=water_level_nodes,
             wall_thickness_m=inputs.get("wall_thickness_m", 0.0),
             closing_time_s=inputs.get("closing_time_s", 0.0),
-            sample_interval_m=1.0,
+            sample_interval_m=WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M,
         )
         result["inputs"] = dict(inputs)
         self._apply_route_water_hammer_result_to_widgets(segment_key, result)
+
+    def _collect_route_water_hammer_export_segments(self) -> List[Dict[str, Any]]:
+        """整理当前窗口全部整线水锤段，供 Excel 导出使用。"""
+        segments: List[Dict[str, Any]] = []
+        for route_key, route_refs in self._route_widgets.items():
+            route_name = str(route_refs.get("display_name", "") or route_key)
+            for widgets in list(route_refs.get("water_hammer_segment_widgets", []) or []):
+                segment_key = str(widgets.get("segment_key", "") or "").strip()
+                if not segment_key:
+                    continue
+                result = widgets.get("water_hammer_result", {})
+                segments.append(
+                    {
+                        "route_key": route_key,
+                        "route_name": route_name,
+                        "segment_key": segment_key,
+                        "segment_name": str(widgets.get("segment_name", "") or segment_key),
+                        "inputs": self._read_route_water_hammer_inputs(segment_key),
+                        "result": copy.deepcopy(result if isinstance(result, dict) else {}),
+                    }
+                )
+        return segments
+
+    def _export_route_water_hammer_excel(self):
+        """导出当前窗口全部整线水锤段的已验算明细。"""
+        try:
+            from app_渠系计算前端.water_profile.water_hammer_export import (
+                save_water_hammer_export_workbook,
+                water_hammer_exportable_detail_count,
+            )
+        except Exception as exc:
+            fluent_error(self, "导出失败", f"加载水锤导出模块失败：{exc}")
+            return
+
+        segments = self._collect_route_water_hammer_export_segments()
+        if water_hammer_exportable_detail_count(segments) <= 0:
+            fluent_info(self, "提示", "没有可导出的水锤验算明细，请先完成至少一个水锤段验算。")
+            return
+
+        default_name = f"水锤验算明细_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        filepath, _ = QFileDialog.getSaveFileName(self, "导出水锤验算明细", default_name, "Excel文件 (*.xlsx)")
+        if not filepath:
+            return
+        if not filepath.lower().endswith(".xlsx"):
+            filepath += ".xlsx"
+        try:
+            save_water_hammer_export_workbook(filepath, segments)
+            fluent_info(self, "导出成功", f"水锤验算明细已保存到：{filepath}")
+        except ImportError:
+            fluent_error(self, "缺少依赖", "需要安装 openpyxl 才能导出 Excel。")
+        except Exception as exc:
+            fluent_error(self, "导出失败", str(exc))
+
+    def _show_route_water_hammer_principle(self, route_key: str):
+        """弹出整线水锤验算原理窗口。"""
+        try:
+            from app_渠系计算前端.water_profile.water_hammer_principle import (
+                PressurePipeWaterHammerPrincipleDialog,
+            )
+        except Exception as exc:
+            fluent_error(self, "打开失败", f"加载验算原理窗口失败：{exc}")
+            return
+        route_refs = self._route_widgets.get(route_key, {})
+        segment_widgets = list(route_refs.get("water_hammer_segment_widgets", []) or [])
+        selected = None
+        for widgets in segment_widgets:
+            result = widgets.get("water_hammer_result", {})
+            if isinstance(result, dict) and result.get("details"):
+                selected = widgets
+                break
+        if selected is None and segment_widgets:
+            selected = segment_widgets[0]
+        inputs: Dict[str, Any] = {}
+        result: Dict[str, Any] = {}
+        segment_name = ""
+        if selected:
+            segment_key = str(selected.get("segment_key", "") or "").strip()
+            inputs = self._read_route_water_hammer_inputs(segment_key)
+            existing_result = selected.get("water_hammer_result", {})
+            result = copy.deepcopy(existing_result if isinstance(existing_result, dict) else {})
+            segment_name = str(selected.get("segment_name", "") or segment_key)
+        if self._water_hammer_principle_dialog is not None:
+            try:
+                self._water_hammer_principle_dialog.close()
+            except Exception:
+                pass
+        self._water_hammer_principle_dialog = PressurePipeWaterHammerPrincipleDialog(
+            self,
+            route_name=str(route_refs.get("display_name", "") or route_key),
+            segment_name=segment_name,
+            inputs=inputs,
+            result=result,
+        )
+        self._water_hammer_principle_dialog.show()
 
     def _apply_route_water_hammer_bulk_inputs(self, route_key: str, same_material_only: bool = False):
         """把批量 e/Ts 填到整线水锤段。"""
@@ -2979,6 +3092,7 @@ class PressurePipeConfigDialog(QDialog):
         refs = {
             "segment_key": segment_key,
             "route_key": str(segment.get("route_key", "") or "").strip(),
+            "segment_name": title_text,
             "member_keys": list(segment.get("member_keys", []) or []),
             "selected_representative_key": selected_key,
             "representative_candidates": candidates,
@@ -3049,16 +3163,22 @@ class PressurePipeConfigDialog(QDialog):
         bulk_e_edit = LineEdit()
         bulk_e_edit.setFixedWidth(90)
         bulk_e_edit.setPlaceholderText("e")
+        bulk_e_edit.setText(self._fmt_live_value(WATER_HAMMER_DEFAULT_WALL_THICKNESS_M, digits=4))
         bulk_row.addWidget(bulk_e_edit)
         bulk_row.addWidget(QLabel("启闭时间Ts(s)："))
         bulk_ts_edit = LineEdit()
         bulk_ts_edit.setFixedWidth(90)
         bulk_ts_edit.setPlaceholderText("Ts")
+        bulk_ts_edit.setText(self._fmt_live_value(WATER_HAMMER_DEFAULT_CLOSING_TIME_S, digits=4))
         bulk_row.addWidget(bulk_ts_edit)
         apply_all_btn = PushButton("填到全部")
         apply_same_btn = PushButton("填到同材质")
         bulk_row.addWidget(apply_all_btn)
         bulk_row.addWidget(apply_same_btn)
+        export_excel_btn = PushButton("导出Excel")
+        principle_btn = PushButton("验算原理")
+        bulk_row.addWidget(export_excel_btn)
+        bulk_row.addWidget(principle_btn)
         bulk_row.addStretch()
         panel_lay.addLayout(bulk_row)
 
@@ -3069,10 +3189,14 @@ class PressurePipeConfigDialog(QDialog):
                 "water_hammer_bulk_ts_edit": bulk_ts_edit,
                 "water_hammer_bulk_all_btn": apply_all_btn,
                 "water_hammer_bulk_same_material_btn": apply_same_btn,
+                "water_hammer_export_excel_btn": export_excel_btn,
+                "water_hammer_principle_btn": principle_btn,
             }
         )
         apply_all_btn.clicked.connect(lambda _checked=False, key=route_key: self._apply_route_water_hammer_bulk_inputs(key, False))
         apply_same_btn.clicked.connect(lambda _checked=False, key=route_key: self._apply_route_water_hammer_bulk_inputs(key, True))
+        export_excel_btn.clicked.connect(self._export_route_water_hammer_excel)
+        principle_btn.clicked.connect(lambda _checked=False, key=route_key: self._show_route_water_hammer_principle(key))
 
         for segment in segments:
             segment_card = self._create_route_water_hammer_segment_card(segment)

@@ -25,6 +25,7 @@ from app_渠系计算前端.water_profile.water_profile_dialogs import (  # noqa
     PressurePipeConfigDialog,
     PressurePipeWaterHammerDialog,
 )
+import app_渠系计算前端.water_profile.water_profile_dialogs as dialogs_mod  # noqa: E402
 from 推求水面线.managers.pressure_pipe_manager import PressurePipeConfig, PressurePipeManager  # noqa: E402
 from 推求水面线.models.enums import StructureType  # noqa: E402
 
@@ -183,6 +184,8 @@ def test_dialog_prefills_and_persists_basic_water_hammer_inputs_and_results():
         assert _read_float(widgets["water_hammer_velocity_edit"]) == pytest.approx(1.34)
         assert _read_float(widgets["water_hammer_head_edit"]) == pytest.approx(101.25)
         assert _read_float(widgets["water_hammer_elastic_modulus_edit"]) > 0
+        assert _read_float(widgets["water_hammer_wall_thickness_edit"]) == pytest.approx(0.06)
+        assert _read_float(widgets["water_hammer_closing_time_edit"]) == pytest.approx(300.0)
 
         widgets["water_hammer_wall_thickness_edit"].setText("0.016")
         widgets["water_hammer_head_edit"].setText("102.4")
@@ -348,6 +351,120 @@ def test_route_only_dialog_shows_water_hammer_segment_panel_without_child_pipe_c
         assert len(segment_widgets) == 1
         assert segment_widgets[0]["segment_key"] == "flow1-route1::pipe-a::pipe-b"
         assert segment_widgets[0]["water_hammer_calc_btn"].text() == "验算/刷新"
+        assert _read_float(segment_widgets[0]["water_hammer_wall_thickness_edit"]) == pytest.approx(0.06)
+        assert _read_float(segment_widgets[0]["water_hammer_closing_time_edit"]) == pytest.approx(300.0)
+        assert _read_float(route_refs["water_hammer_bulk_e_edit"]) == pytest.approx(0.06)
+        assert _read_float(route_refs["water_hammer_bulk_ts_edit"]) == pytest.approx(300.0)
+        assert route_refs["water_hammer_export_excel_btn"].text() == "导出Excel"
+        assert route_refs["water_hammer_principle_btn"].text() == "验算原理"
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_principle_dialog_shows_formula_and_current_values():
+    """验算原理窗口应展示离线公式内容，并在有结果时展示当前段代入值。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, diameter=1.0),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        route_refs = dialog._route_widgets["flow1-route1"]
+        widgets = route_refs["water_hammer_segment_widgets"][0]
+
+        dialog._show_route_water_hammer_principle("flow1-route1")
+        _flush_events(4)
+        principle_dialog = dialog._water_hammer_principle_dialog
+        assert "水锤波速" in principle_dialog.html
+        assert r"\mu_s" in principle_dialog.html
+        assert "先验算后可看到当前段代入值" in principle_dialog.html
+        principle_dialog.close()
+
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=400.0)
+        widgets["water_hammer_wall_thickness_edit"].setText("0.02")
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(6)
+
+        dialog._show_route_water_hammer_principle("flow1-route1")
+        _flush_events(4)
+        principle_dialog = dialog._water_hammer_principle_dialog
+        assert "当前段代入示例" in principle_dialog.html
+        assert "ΔH+" in principle_dialog.html
+        assert "Hmax" in principle_dialog.html
+    finally:
+        try:
+            dialog._water_hammer_principle_dialog.close()
+        except Exception:
+            pass
+        dialog.close()
+
+
+def test_route_water_hammer_excel_exports_summary_and_calculated_segment_details(monkeypatch):
+    """Excel应导出全部段汇总，并只为已验算段生成明细Sheet。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0),
+        _make_route_group("tunnel", 1, "隧洞-圆形", start_mc=10.0, end_mc=20.0),
+        _make_route_group("pipe-b", 2, "有压管道", start_mc=20.0, end_mc=30.0),
+    ]
+    export_path = Path(tempfile.mkdtemp(prefix="wh_export_")) / "水锤明细.xlsx"
+
+    dialog = _make_route_dialog(groups)
+    try:
+        monkeypatch.setattr(dialogs_mod, "fluent_info", lambda *args, **kwargs: None)
+        monkeypatch.setattr(dialogs_mod, "fluent_error", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            dialogs_mod.QFileDialog,
+            "getSaveFileName",
+            lambda *args, **kwargs: (str(export_path), "Excel文件 (*.xlsx)"),
+        )
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=400.0)
+        route_refs = dialog._route_widgets["flow1-route1"]
+        first_segment = route_refs["water_hammer_segment_widgets"][0]
+        first_segment["water_hammer_wall_thickness_edit"].setText("0.02")
+        first_segment["water_hammer_closing_time_edit"].setText("0.01")
+        QTest.mouseClick(first_segment["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(6)
+
+        dialog._export_route_water_hammer_excel()
+        _flush_events(2)
+
+        import openpyxl
+
+        workbook = openpyxl.load_workbook(export_path)
+        assert workbook.sheetnames[0] == "汇总"
+        assert len(workbook.sheetnames) == 2
+        summary = workbook["汇总"]
+        assert summary.cell(row=2, column=4).value == "已验算"
+        assert summary.cell(row=3, column=4).value == "未验算"
+        detail = workbook[workbook.sheetnames[1]]
+        assert detail.cell(row=1, column=1).value == "桩号(m)"
+        assert detail.max_row > 1
+    finally:
+        dialog.close()
+        shutil.rmtree(export_path.parent, ignore_errors=True)
+
+
+def test_route_water_hammer_excel_skips_empty_export_without_save_dialog(monkeypatch):
+    """全部水锤段都未验算时不应生成空Excel，也不应弹出保存路径。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0),
+    ]
+    notices = []
+
+    dialog = _make_route_dialog(groups)
+    try:
+        monkeypatch.setattr(dialogs_mod, "fluent_info", lambda _parent, title, content: notices.append((title, content)))
+        monkeypatch.setattr(
+            dialogs_mod.QFileDialog,
+            "getSaveFileName",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("未验算时不应请求保存路径")),
+        )
+
+        dialog._export_route_water_hammer_excel()
+
+        assert notices
+        assert "没有可导出的水锤验算明细" in notices[-1][1]
     finally:
         dialog.close()
 
@@ -508,7 +625,7 @@ def test_route_water_hammer_distribution_check_shows_pass_and_detail_rows():
         QTest.mouseClick(widgets["water_hammer_detail_btn"], Qt.LeftButton)
         _flush_events(4)
         assert widgets["water_hammer_detail_table"].isVisible() is True
-        assert widgets["water_hammer_detail_table"].rowCount() >= 21
+        assert widgets["water_hammer_detail_table"].rowCount() == 6
         assert widgets["water_hammer_detail_table"].horizontalHeaderItem(2).text() == "表3水位(m)"
         assert widgets["water_hammer_detail_table"].horizontalHeaderItem(7).text() == "负ΔH(m)"
         assert widgets["water_hammer_detail_table"].horizontalHeaderItem(8).text() == "负压余量(m)"
