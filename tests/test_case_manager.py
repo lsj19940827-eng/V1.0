@@ -9,13 +9,52 @@ from pathlib import Path
 
 # 设置控制台编码
 if sys.platform == 'win32':
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stdout.reconfigure(encoding='utf-8')
 
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app_渠系计算前端.siphon.case_manager import CaseManager, CaseInfo
+
+
+def test_import_wrapped_parameter_json_as_case():
+    """旧参数备份 JSON 导入后应转换为标准工况文件。"""
+    temp_dir = tempfile.mkdtemp()
+    source_dir = tempfile.mkdtemp()
+    try:
+        source_path = os.path.join(source_dir, "倒虹吸参数_老方案_20260425.json")
+        with open(source_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "version": "1.0",
+                    "saved_at": "2026-04-25 10:00:00",
+                    "data": {
+                        "name": "老方案",
+                        "Q": 1.23,
+                        "v_guess": 2.1,
+                        "segments": [{"type": "直管", "length": 12.0}],
+                        "longitudinal_nodes": [{"station": 0.0, "elevation": 100.0}],
+                    },
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        manager = CaseManager(temp_dir)
+        imported = manager.import_case_file(source_path)
+        loaded = manager.load_case_data(imported)
+
+        assert imported.name == "老方案"
+        assert imported.file_path.endswith("老方案.siphon.json")
+        assert loaded["case_name"] == "老方案"
+        assert loaded["Q"] == 1.23
+        assert loaded["segments"][0]["length"] == 12.0
+        assert loaded["longitudinal_nodes"][0]["elevation"] == 100.0
+        assert "data" not in loaded
+    finally:
+        shutil.rmtree(temp_dir)
+        shutil.rmtree(source_dir)
 
 
 def test_case_manager():

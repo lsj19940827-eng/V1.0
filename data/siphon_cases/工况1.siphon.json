@@ -1,7 +1,7 @@
 {
   "Q": 1.0,
-  "v_guess": 2.0,
-  "v_before_override": null,
+  "v_guess": 0.6366,
+  "v_before_override": 2.0,
   "v_confirmed_before_override": false,
   "n": 0.014,
   "turn_n": 3.0,
@@ -17,11 +17,11 @@
   "v2_strategy": "自动（=管道流速）",
   "name": "",
   "show_detail": true,
-  "D_override": "",
-  "num_pipes": 1,
+  "D_override": "1",
+  "num_pipes": 2,
   "inc_checked": true,
   "inc_percent": "",
-  "inc_mode": "q_increased",
+  "inc_mode": "percent",
   "inc_q_text": "1.1",
   "v1_inc": "",
   "v2_inc": "",
@@ -29,81 +29,6 @@
   "twist_angle_inlet": "",
   "twist_angle_outlet": "",
   "segments": [
-    {
-      "type": "进水口",
-      "direction": "通用",
-      "length": 0.0,
-      "radius": 0.0,
-      "angle": 0.0,
-      "xi_user": null,
-      "xi_calc": 0.225,
-      "locked": true,
-      "inlet_shape": "进口稍微修圆"
-    },
-    {
-      "type": "拦污栅",
-      "direction": "通用",
-      "length": 0.0,
-      "radius": 0.0,
-      "angle": 0.0,
-      "xi_user": null,
-      "xi_calc": 0.2830449170590055,
-      "locked": false,
-      "trash_rack_params": {
-        "alpha": 90.0,
-        "has_support": false,
-        "bar_shape": "矩形",
-        "beta1": 2.42,
-        "s1": 10.0,
-        "b1": 50.0,
-        "support_shape": "矩形",
-        "beta2": 2.42,
-        "s2": 10.0,
-        "b2": 50.0,
-        "manual_mode": false,
-        "manual_xi": 0.0
-      }
-    },
-    {
-      "type": "闸门槽",
-      "direction": "通用",
-      "length": 0.0,
-      "radius": 0.0,
-      "angle": 0.0,
-      "xi_user": 0.1,
-      "xi_calc": null,
-      "locked": false
-    },
-    {
-      "type": "旁通管",
-      "direction": "通用",
-      "length": 0.0,
-      "radius": 0.0,
-      "angle": 0.0,
-      "xi_user": 0.1,
-      "xi_calc": null,
-      "locked": false
-    },
-    {
-      "type": "其他",
-      "direction": "通用",
-      "length": 0.0,
-      "radius": 0.0,
-      "angle": 0.0,
-      "xi_user": 0.1,
-      "xi_calc": null,
-      "locked": false
-    },
-    {
-      "type": "出水口",
-      "direction": "通用",
-      "length": 0.0,
-      "radius": 0.0,
-      "angle": 0.0,
-      "xi_user": null,
-      "xi_calc": 0.16,
-      "locked": true
-    },
     {
       "type": "直管",
       "direction": "纵断面",
@@ -129,11 +54,11 @@
     {
       "type": "弯管",
       "direction": "纵断面",
-      "length": 2.2215,
+      "length": 2.2214,
       "radius": 5.0,
       "angle": 25.456,
       "xi_user": null,
-      "xi_calc": 0.1337106,
+      "xi_calc": 0.1397336,
       "locked": false,
       "coordinates": [
         [
@@ -160,20 +85,20 @@
           95.636
         ],
         "center": [
-          44.133309897878135,
-          91.9990005147823
+          43.968801,
+          92.153546
         ],
         "radius": 5.0,
-        "sweep_rad": 0.44429101438767654,
+        "sweep_rad": 0.444282,
         "clockwise": true,
         "start_chainage": 45.712,
-        "end_chainage": 47.55705191372149
+        "end_chainage": 47.556994
       }
     },
     {
       "type": "折管",
       "direction": "纵断面",
-      "length": 70.5759,
+      "length": 70.5751,
       "radius": 0.0,
       "angle": 13.906,
       "xi_user": null,
@@ -185,11 +110,11 @@
           95.636
         ],
         [
-          74.318,
+          74.317,
           72.633
         ],
         [
-          101.078,
+          101.077,
           49.631
         ]
       ],
@@ -200,19 +125,19 @@
     {
       "type": "弯管",
       "direction": "纵断面",
-      "length": 2.7534,
+      "length": 2.1613,
       "radius": 5.0,
       "angle": 31.954,
       "xi_user": null,
-      "xi_calc": 0.15804735000000003,
+      "xi_calc": 0.1651666,
       "locked": false,
       "coordinates": [
         [
-          101.078,
+          101.077,
           49.631
         ],
         [
-          103.725,
+          103.101,
           48.873
         ]
       ],
@@ -231,11 +156,11 @@
       "locked": false,
       "coordinates": [
         [
-          103.725,
+          103.101,
           48.873
         ],
         [
-          145.728,
+          145.104,
           48.873
         ]
       ],
@@ -249,15 +174,15 @@
       "radius": 5.0,
       "angle": 37.384,
       "xi_user": null,
-      "xi_calc": 0.17311560000000004,
+      "xi_calc": 0.1809136,
       "locked": false,
       "coordinates": [
         [
-          145.728,
+          145.104,
           48.873
         ],
         [
-          148.763,
+          148.139,
           49.9
         ]
       ],
@@ -268,22 +193,22 @@
         "kind": "profile",
         "mode": "dxf_segment",
         "start": [
-          145.728,
+          145.104,
           48.873
         ],
         "end": [
-          148.763,
+          148.139,
           49.9
         ],
         "center": [
-          145.72716037481257,
-          53.872950425681665
+          145.103537,
+          53.873275
         ],
         "radius": 5.0,
-        "sweep_rad": 0.6524738875655601,
+        "sweep_rad": 0.65248,
         "clockwise": false,
-        "start_chainage": 145.728,
-        "end_chainage": 148.7625834389597
+        "start_chainage": 145.104,
+        "end_chainage": 148.139331
       }
     },
     {
@@ -297,11 +222,11 @@
       "locked": false,
       "coordinates": [
         [
-          148.763,
+          148.139,
           49.9
         ],
         [
-          181.484,
+          180.86,
           74.903
         ]
       ],
@@ -311,19 +236,19 @@
     {
       "type": "弯管",
       "direction": "纵断面",
-      "length": 0.9015,
+      "length": 0.9014,
       "radius": 5.0,
       "angle": 10.33,
       "xi_user": null,
-      "xi_calc": 0.065381775,
+      "xi_calc": 0.0683269,
       "locked": false,
       "coordinates": [
         [
-          181.484,
+          180.86,
           74.903
         ],
         [
-          182.246,
+          181.622,
           75.383
         ]
       ],
@@ -334,22 +259,22 @@
         "kind": "profile",
         "mode": "dxf_segment",
         "start": [
-          181.484,
+          180.86,
           74.903
         ],
         "end": [
-          182.246,
+          181.622,
           75.383
         ],
         "center": [
-          184.51965002122404,
-          70.93012009022604
+          183.895979,
+          70.930289
         ],
         "radius": 5.0,
-        "sweep_rad": 0.18029251173101424,
+        "sweep_rad": 0.180288,
         "clockwise": true,
-        "start_chainage": 181.484,
-        "end_chainage": 182.24565708273335
+        "start_chainage": 180.86,
+        "end_chainage": 181.62178
       }
     },
     {
@@ -363,11 +288,11 @@
       "locked": false,
       "coordinates": [
         [
-          182.246,
+          181.622,
           75.383
         ],
         [
-          212.207,
+          211.583,
           90.685
         ]
       ],
@@ -381,15 +306,15 @@
       "radius": 5.0,
       "angle": 10.129,
       "xi_user": null,
-      "xi_calc": 0.0644335575,
+      "xi_calc": 0.06733597,
       "locked": false,
       "coordinates": [
         [
-          212.207,
+          211.583,
           90.685
         ],
         [
-          213.025,
+          212.401,
           91.016
         ]
       ],
@@ -400,22 +325,22 @@
         "kind": "profile",
         "mode": "dxf_segment",
         "start": [
-          212.207,
+          211.583,
           90.685
         ],
         "end": [
-          213.025,
+          212.401,
           91.016
         ],
         "center": [
-          214.48053459387958,
-          86.23235875956493
+          213.856898,
+          86.232137
         ],
         "radius": 5.0,
-        "sweep_rad": 0.17678439993450562,
+        "sweep_rad": 0.176776,
         "clockwise": true,
-        "start_chainage": 212.207,
-        "end_chainage": 213.024595827006
+        "start_chainage": 211.583,
+        "end_chainage": 212.401207
       }
     },
     {
@@ -429,11 +354,11 @@
       "locked": false,
       "coordinates": [
         [
-          213.025,
+          212.401,
           91.016
         ],
         [
-          250.497,
+          249.873,
           102.419
         ]
       ],
@@ -444,192 +369,8 @@
   "plan_segments": [],
   "plan_total_length": 0.0,
   "plan_feature_points": [],
-  "longitudinal_nodes": [
-    {
-      "chainage": 0.0,
-      "elevation": 113.844,
-      "vertical_curve_radius": 0.0,
-      "turn_type": "无",
-      "turn_angle": 0.0,
-      "slope_before": -0.3561213392833496,
-      "slope_after": -0.3561213392833496,
-      "arc_center_s": null,
-      "arc_center_z": null,
-      "arc_end_chainage": null,
-      "arc_theta_rad": null,
-      "node_uid": "a91b3e4585b8483e8c41ed16f93bd1ef"
-    },
-    {
-      "chainage": 45.712,
-      "elevation": 96.84,
-      "vertical_curve_radius": 5.0,
-      "turn_type": "圆弧",
-      "turn_angle": 25.456,
-      "slope_before": -0.3561213392833496,
-      "slope_after": -0.5781829519147658,
-      "arc_center_s": 44.133309897878135,
-      "arc_center_z": 91.9990005147823,
-      "arc_end_chainage": 47.55705191372149,
-      "arc_theta_rad": 0.44429101438767654,
-      "node_uid": "a98f9fde4c114fe2995ccfffe8033d67"
-    },
-    {
-      "chainage": 47.557,
-      "elevation": 95.636,
-      "vertical_curve_radius": 0.0,
-      "turn_type": "无",
-      "turn_angle": 0.0,
-      "slope_before": -0.5781829519147658,
-      "slope_after": -0.7100247866380018,
-      "arc_center_s": null,
-      "arc_center_z": null,
-      "arc_end_chainage": null,
-      "arc_theta_rad": null,
-      "node_uid": "ad17a86401c4492b9227e6ae0e0bd80c"
-    },
-    {
-      "chainage": 74.318,
-      "elevation": 72.633,
-      "vertical_curve_radius": 0.0,
-      "turn_type": "折线",
-      "turn_angle": 13.906,
-      "slope_before": -0.7100247866380018,
-      "slope_after": -0.7100217687443318,
-      "arc_center_s": null,
-      "arc_center_z": null,
-      "arc_end_chainage": null,
-      "arc_theta_rad": null,
-      "node_uid": "79168d711f854714ac020d518dc80d3b"
-    },
-    {
-      "chainage": 101.078,
-      "elevation": 49.631,
-      "vertical_curve_radius": 5.0,
-      "turn_type": "圆弧",
-      "turn_angle": 31.954,
-      "slope_before": -0.7100217687443318,
-      "slope_after": -0.27889831196427795,
-      "arc_center_s": 104.03118590310021,
-      "arc_center_z": 53.64786678384334,
-      "arc_end_chainage": 103.7250610173687,
-      "arc_theta_rad": 0.557702509182268,
-      "node_uid": "a3d02b3292c84e618e55dc4caa6382b8"
-    },
-    {
-      "chainage": 103.725,
-      "elevation": 48.873,
-      "vertical_curve_radius": 0.0,
-      "turn_type": "无",
-      "turn_angle": 0.0,
-      "slope_before": -0.27889831196427795,
-      "slope_after": 0.0,
-      "arc_center_s": null,
-      "arc_center_z": null,
-      "arc_end_chainage": null,
-      "arc_theta_rad": null,
-      "node_uid": "d3dc6ee6caa84daab5c884259849f980"
-    },
-    {
-      "chainage": 145.728,
-      "elevation": 48.873,
-      "vertical_curve_radius": 5.0,
-      "turn_type": "圆弧",
-      "turn_angle": 37.384,
-      "slope_before": 0.0,
-      "slope_after": 0.3262905942653244,
-      "arc_center_s": 145.72716037481257,
-      "arc_center_z": 53.872950425681665,
-      "arc_end_chainage": 148.7625834389597,
-      "arc_theta_rad": 0.6524738875655601,
-      "node_uid": "f91c440e1caf4d2fa5f615b2ad5749c6"
-    },
-    {
-      "chainage": 148.763,
-      "elevation": 49.9,
-      "vertical_curve_radius": 0.0,
-      "turn_type": "无",
-      "turn_angle": 0.0,
-      "slope_before": 0.3262905942653244,
-      "slope_after": 0.6524812601179588,
-      "arc_center_s": null,
-      "arc_center_z": null,
-      "arc_end_chainage": null,
-      "arc_theta_rad": null,
-      "node_uid": "bd08a750fe224f958ae06e4a1e695413"
-    },
-    {
-      "chainage": 181.484,
-      "elevation": 74.903,
-      "vertical_curve_radius": 5.0,
-      "turn_type": "圆弧",
-      "turn_angle": 10.33,
-      "slope_before": 0.6524812601179588,
-      "slope_after": 0.5621303741142842,
-      "arc_center_s": 184.51965002122404,
-      "arc_center_z": 70.93012009022604,
-      "arc_end_chainage": 182.24565708273335,
-      "arc_theta_rad": 0.18029251173101424,
-      "node_uid": "797a43ee29db445c8ffeb3dfc935881c"
-    },
-    {
-      "chainage": 182.246,
-      "elevation": 75.383,
-      "vertical_curve_radius": 0.0,
-      "turn_type": "无",
-      "turn_angle": 0.0,
-      "slope_before": 0.5621303741142842,
-      "slope_after": 0.472195204720682,
-      "arc_center_s": null,
-      "arc_center_z": null,
-      "arc_end_chainage": null,
-      "arc_theta_rad": null,
-      "node_uid": "00294d606b3d4cf69c9869ec0f5de46a"
-    },
-    {
-      "chainage": 212.207,
-      "elevation": 90.685,
-      "vertical_curve_radius": 5.0,
-      "turn_type": "圆弧",
-      "turn_angle": 10.129,
-      "slope_before": 0.472195204720682,
-      "slope_after": 0.3845046723044752,
-      "arc_center_s": 214.48053459387958,
-      "arc_center_z": 86.23235875956493,
-      "arc_end_chainage": 213.024595827006,
-      "arc_theta_rad": 0.17678439993450562,
-      "node_uid": "e81c07fad5f1443fa22b6ef24c835f80"
-    },
-    {
-      "chainage": 213.025,
-      "elevation": 91.016,
-      "vertical_curve_radius": 0.0,
-      "turn_type": "无",
-      "turn_angle": 0.0,
-      "slope_before": 0.3845046723044752,
-      "slope_after": 0.29540366941000223,
-      "arc_center_s": null,
-      "arc_center_z": null,
-      "arc_end_chainage": null,
-      "arc_theta_rad": null,
-      "node_uid": "a16cf0b8aa7e4555aa0b8fd57c173313"
-    },
-    {
-      "chainage": 250.497,
-      "elevation": 102.419,
-      "vertical_curve_radius": 0.0,
-      "turn_type": "无",
-      "turn_angle": 0.0,
-      "slope_before": 0.29540366941000223,
-      "slope_after": 0.29540366941000223,
-      "arc_center_s": null,
-      "arc_center_z": null,
-      "arc_end_chainage": null,
-      "arc_theta_rad": null,
-      "node_uid": "fb8dcb50203a4f65ac18ecc4069e9291"
-    }
-  ],
   "plan_source": "none",
   "case_name": "工况1",
-  "created_time": 1772687830.8235564,
-  "order": 0
+  "created_time": 1777114454.5473723,
+  "order": 1777114454.5473723
 }

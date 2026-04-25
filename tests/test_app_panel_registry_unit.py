@@ -99,7 +99,7 @@ def test_main_window_builds_stack_from_panel_registry(monkeypatch):
         "明渠设计",
         "渡槽设计",
         "隧洞设计",
-        "矩形暗涵设计",
+        "暗涵设计",
         "倒虹吸设计",
         "有压管道设计",
         "推求水面线",
@@ -113,6 +113,7 @@ def test_main_window_builds_stack_from_panel_registry(monkeypatch):
     assert window.siphon_panel is window._panel_registry.get("siphon")
     assert window.pressure_pipe_panel is window._panel_registry.get("pressure_pipe")
     assert window.water_profile_panel is window._panel_registry.get("water_profile")
+    assert window.btn_project.toolTip() == "项目文件：新建/打开/保存整个工程"
 
     window.project_manager._is_dirty = False
     window.deleteLater()

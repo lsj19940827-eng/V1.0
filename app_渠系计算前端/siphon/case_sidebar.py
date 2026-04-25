@@ -43,8 +43,9 @@ class CaseSidebar(QWidget):
         self.btn_new.clicked.connect(self._on_new_case)
         toolbar.addWidget(self.btn_new)
 
-        self.btn_import = PushButton(FluentIcon.FOLDER, "导入")
+        self.btn_import = PushButton(FluentIcon.FOLDER, "导入工况")
         self.btn_import.setFixedHeight(32)
+        self.btn_import.setToolTip("导入完整倒虹吸工况文件，兼容旧版参数JSON")
         self.btn_import.clicked.connect(self._on_import_case)
         toolbar.addWidget(self.btn_import)
 
@@ -108,18 +109,12 @@ class CaseSidebar(QWidget):
     def _on_import_case(self):
         """导入工况"""
         path, _ = QFileDialog.getOpenFileName(
-            self, "导入工况", "", "倒虹吸工况 (*.siphon.json *.json)"
+            self, "导入完整倒虹吸工况文件", "", "倒虹吸工况 (*.siphon.json *.json)"
         )
         if path:
-            import shutil
-            import os
-            fname = os.path.basename(path)
-            if not fname.endswith('.siphon.json'):
-                fname = fname.replace('.json', '.siphon.json')
-            dest = os.path.join(self.manager.cases_dir, fname)
-            shutil.copy(path, dest)
-            self.manager._load_cases()
+            imported_case = self.manager.import_case_file(path)
             self._load_cases()
+            self._select_case_by_path(imported_case.file_path)
             self.case_changed.emit()
 
     def _export_case(self, case: CaseInfo):
@@ -164,7 +159,7 @@ class CaseSidebar(QWidget):
 
         act_rename = Action(FluentIcon.EDIT, "重命名")
         act_copy = Action(FluentIcon.COPY, "复制")
-        act_export = Action(FluentIcon.SHARE, "导出")
+        act_export = Action(FluentIcon.SHARE, "导出工况")
         act_delete = Action(FluentIcon.DELETE, "删除")
 
         menu.addAction(act_rename)
@@ -226,3 +221,13 @@ class CaseSidebar(QWidget):
         """刷新列表"""
         self.manager._load_cases()
         self._load_cases()
+
+    def _select_case_by_path(self, file_path: str):
+        """按文件路径选中新导入的工况。"""
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item and item.case.file_path == file_path:
+                self.list_widget.setCurrentItem(item)
+                self.current_case = item.case
+                self.case_selected.emit(item.case)
+                return

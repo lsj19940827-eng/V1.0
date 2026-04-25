@@ -252,6 +252,8 @@ if section_type == "有压管道":
 
 #### 3.4.2 渐变段型式与ζ值（表L.1.2，与倒虹吸统一）
 
+> 倒虹吸专项规则详见 `docs/PRD_倒虹吸水力计算.md`。本节只说明有压管道复用倒虹吸渐变段系数和弯头/折管系数服务的边界。
+
 `TRANSITION_FORMS` 字典（与 `constants.py SIPHON_TRANSITION_ZETA_COEFFICIENTS` 一致）：
 
 | 渐变段型式 | 进口ζ₁ | 出口ζ₃ | 备注 |

@@ -2,13 +2,19 @@
 """倒虹吸面板默认值与 set_params 自动填入（GUI）单元测试。"""
 
 import os
+import shutil
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
+import pytest
 from PySide6.QtWidgets import QApplication, QWidget
+from qfluentwidgets import PushButton
 
 import app_渠系计算前端.siphon.panel as siphon_panel_mod
+from app_渠系计算前端.siphon.case_manager import CaseManager
+from app_渠系计算前端.siphon.case_sidebar import CaseSidebar
 
 
 class _FakeWebEngineView(QWidget):
@@ -24,6 +30,12 @@ def _fake_web_view_factory(parent=None):
 
 def _get_qapp():
     return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def _disable_siphon_autosave(monkeypatch):
+    """界面单元测试不写运行时自动保存文件。"""
+    monkeypatch.setattr(siphon_panel_mod.SiphonPanel, "_save_autosave", lambda self: None)
 
 
 def test_set_params_autofills_increased_velocity_fields(monkeypatch):
@@ -92,4 +104,31 @@ def test_from_dict_does_not_print_debug_by_default(monkeypatch, capsys):
     assert "[DEBUG SiphonPanel.from_dict]" not in captured.out
 
     panel.deleteLater()
+
+
+def test_operation_bar_has_no_legacy_parameter_import_export_buttons(monkeypatch):
+    """主操作栏不再显示旧的参数导入导出入口。"""
+    _get_qapp()
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
+
+    panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
+    button_texts = {button.text() for button in panel.findChildren(PushButton)}
+
+    assert "导出参数" not in button_texts
+    assert "导入参数" not in button_texts
+    assert "执行计算" in button_texts
+
+    panel.deleteLater()
+
+
+def test_case_sidebar_uses_explicit_case_import_label():
+    """左侧工况入口应明确写成导入工况。"""
+    _get_qapp()
+    temp_dir = tempfile.mkdtemp()
+    try:
+        sidebar = CaseSidebar(CaseManager(temp_dir))
+        assert sidebar.btn_import.text() == "导入工况"
+        sidebar.deleteLater()
+    finally:
+        shutil.rmtree(temp_dir)
 

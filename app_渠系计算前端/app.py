@@ -351,7 +351,7 @@ class MainWindow(QMainWindow):
         nav_lay.addSpacing(4)
 
         self.btn_project = PushButton("📁 项目管理")
-        self.btn_project.setToolTip("新建/打开/保存项目 (Ctrl+N/O/S)")
+        self.btn_project.setToolTip("项目文件：新建/打开/保存整个工程")
         self.btn_project.setFixedHeight(36)
         self.btn_project.setStyleSheet(f"""
             QPushButton {{

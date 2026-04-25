@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
     QAbstractItemView, QGridLayout, QScrollArea, QSizePolicy,
     QDialog, QDialogButtonBox, QPushButton, QLineEdit as _QLineEdit,
-    QSplitter, QRadioButton, QButtonGroup
+    QRadioButton, QButtonGroup
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QColor, QBrush, QIntValidator, QShortcut, QKeySequence
@@ -333,6 +333,7 @@ class SiphonPanel(QWidget):
         # 工况管理
         self.case_manager = None
         self.case_sidebar = None
+        self.case_selector = None
         self._autosave_timer = None
         if self._show_case_management:
             from .case_manager import CaseManager
@@ -409,11 +410,11 @@ class SiphonPanel(QWidget):
         # 工况管理：首次打开时自动创建默认工况
         if self._show_case_management and self.case_manager:
             if not self.case_manager.cases:
-                self.case_manager.create_case()
-                if self.case_sidebar:
-                    self.case_sidebar.refresh()
-            elif self.case_sidebar and self.case_sidebar.current_case:
-                self._on_case_selected(self.case_sidebar.current_case)
+                case = self.case_manager.create_case()
+                if self.case_selector:
+                    self.case_selector.refresh(case)
+            elif self.case_selector and self.case_selector.get_current_case():
+                self._on_case_selected(self.case_selector.get_current_case())
 
         # 启动时尝试加载上次保存的参数
         if not self._disable_autosave_load:
@@ -429,39 +430,12 @@ class SiphonPanel(QWidget):
     # UI 构建
     # ================================================================
     def _init_ui(self):
-        if self._show_case_management and self.case_manager:
-            # 使用分割器布局：左侧工况列表 + 右侧主面板
-            from .case_sidebar import CaseSidebar
-            splitter = QSplitter(Qt.Horizontal, self)
-            main_lay = QVBoxLayout(self)
-            main_lay.setContentsMargins(0, 0, 0, 0)
-            main_lay.addWidget(splitter)
-
-            self.case_sidebar = CaseSidebar(self.case_manager, self)
-            self.case_sidebar.case_selected.connect(self._on_case_selected)
-            self.case_sidebar.case_changed.connect(self._mark_dirty)
-            splitter.addWidget(self.case_sidebar)
-
-            main_panel = QWidget()
-            panel_lay = QVBoxLayout(main_panel)
-            panel_lay.setContentsMargins(6, 4, 6, 4)
-            panel_lay.setSpacing(3)
-            splitter.addWidget(main_panel)
-            splitter.setStretchFactor(0, 0)
-            splitter.setStretchFactor(1, 1)
-            splitter.setSizes([200, 800])
-
-            self._build_canvas_area(panel_lay)
-            self._build_params_area(panel_lay)
-            self._build_operation_bar(panel_lay)
-        else:
-            # 原有布局
-            main_lay = QVBoxLayout(self)
-            main_lay.setContentsMargins(6, 4, 6, 4)
-            main_lay.setSpacing(3)
-            self._build_canvas_area(main_lay)
-            self._build_params_area(main_lay)
-            self._build_operation_bar(main_lay)
+        main_lay = QVBoxLayout(self)
+        main_lay.setContentsMargins(6, 4, 6, 4)
+        main_lay.setSpacing(3)
+        self._build_canvas_area(main_lay)
+        self._build_params_area(main_lay)
+        self._build_operation_bar(main_lay)
 
     # ---- A: 可视化画布 ----
     def _build_canvas_area(self, parent_lay):
@@ -1331,15 +1305,13 @@ class SiphonPanel(QWidget):
         self.edit_name = LineEdit(); self.edit_name.setPlaceholderText("倒虹吸"); self.edit_name.setFixedWidth(100)
         bar.addWidget(self.edit_name)
 
-        btn_export = PushButton("导出参数"); btn_export.setFixedWidth(90)
-        btn_export.setToolTip("将当前所有参数保存为 JSON 文件\n默认文件名：倒虹吸参数_{名称}_{日期}.json")
-        btn_export.clicked.connect(self._export_params)
-        bar.addWidget(btn_export)
-
-        btn_import = PushButton("导入参数"); btn_import.setFixedWidth(90)
-        btn_import.setToolTip("从 JSON 文件恢复参数（由「导出参数」生成）\n注意：会覆盖当前所有参数设置")
-        btn_import.clicked.connect(self._import_params)
-        bar.addWidget(btn_import)
+        if self._show_case_management and self.case_manager:
+            from .case_selector import CaseSelector
+            self.case_selector = CaseSelector(self.case_manager, self)
+            self.case_selector.case_selected.connect(self._on_case_selected)
+            self.case_selector.case_changed.connect(self._mark_dirty)
+            bar.addSpacing(10)
+            bar.addWidget(self.case_selector)
 
         bar.addStretch()
 
@@ -6207,14 +6179,23 @@ document.addEventListener("DOMContentLoaded", function(){
         """执行自动保存"""
         if not self._show_case_management or not self.case_manager:
             return
-        if not self.case_sidebar or not self.case_sidebar.current_case:
+        current_case = self._get_current_case()
+        if not current_case:
             return
         try:
             data = self.to_dict()
-            self.case_manager.save_case_data(self.case_sidebar.current_case, data)
+            self.case_manager.save_case_data(current_case, data)
             self._data_dirty = False
         except:
             pass
+
+    def _get_current_case(self):
+        """获取当前工况，兼容紧凑选择器和旧侧栏。"""
+        if self.case_selector is not None:
+            return self.case_selector.get_current_case()
+        if self.case_sidebar is not None:
+            return self.case_sidebar.current_case
+        return None
 
     def closeEvent(self, event):
         """关闭时保存"""

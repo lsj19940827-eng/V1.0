@@ -59,6 +59,76 @@ class CaseManager:
         self.cases.append(case)
         return case
 
+    def import_case_file(self, source_path: str) -> CaseInfo:
+        """导入工况文件，兼容旧版“导出参数”JSON。"""
+        self._load_cases()
+        data = self._read_import_case_data(source_path)
+        raw_name = data.get('case_name') or data.get('name') or self._name_from_path(source_path)
+        name = self._unique_import_name(self._clean_case_name(raw_name))
+        now = time.time()
+
+        data['case_name'] = name
+        data['created_time'] = now
+        data['order'] = now
+
+        file_path = os.path.join(self.cases_dir, f"{name}.siphon.json")
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        self._load_cases()
+        for case in self.cases:
+            if os.path.abspath(case.file_path) == os.path.abspath(file_path):
+                return case
+        case = CaseInfo(name, file_path, now, now)
+        self.cases.append(case)
+        return case
+
+    def _read_import_case_data(self, source_path: str) -> Dict:
+        """读取导入文件，并把旧参数备份包装拆成工况数据。"""
+        with open(source_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+        if not isinstance(payload, dict):
+            raise ValueError("工况文件格式不正确")
+
+        wrapped_data = payload.get('data')
+        if isinstance(wrapped_data, dict):
+            return dict(wrapped_data)
+        return dict(payload)
+
+    @staticmethod
+    def _name_from_path(source_path: str) -> str:
+        """从文件名推导工况名称。"""
+        fname = os.path.basename(source_path)
+        if fname.endswith('.siphon.json'):
+            return fname[:-len('.siphon.json')]
+        return os.path.splitext(fname)[0]
+
+    @staticmethod
+    def _clean_case_name(name: str) -> str:
+        """清理为可保存的工况名称。"""
+        invalid_chars = '<>:"/\\|?*'
+        cleaned = ''.join(
+            '_' if ch in invalid_chars or ord(ch) < 32 else ch
+            for ch in str(name or '').strip()
+        ).strip(' .')
+        return cleaned or "工况"
+
+    def _unique_import_name(self, base_name: str) -> str:
+        """避免导入工况与现有工况重名。"""
+        existing_names = {case.name for case in self.cases}
+        if base_name not in existing_names and not os.path.exists(
+                os.path.join(self.cases_dir, f"{base_name}.siphon.json")):
+            return base_name
+
+        idx = 1
+        while True:
+            suffix = "_导入" if idx == 1 else f"_导入{idx}"
+            candidate = f"{base_name}{suffix}"
+            if candidate not in existing_names and not os.path.exists(
+                    os.path.join(self.cases_dir, f"{candidate}.siphon.json")):
+                return candidate
+            idx += 1
+
     def _generate_name(self) -> str:
         """生成工况名称"""
         i = 1
