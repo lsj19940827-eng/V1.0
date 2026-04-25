@@ -963,7 +963,7 @@ class MultiSiphonDialog(QDialog):
         PySide6版 SiphonPanel.from_dict() 使用的键名：
           Q, v_guess, n, turn_n, threshold, D_override,
           inlet_type, outlet_type, xi_inlet, xi_outlet,
-          v1, v2, v3, v2_strategy, name, show_detail,
+          v1, v2, v3, v2_strategy, name,
           segments（键'type'）, plan_segments, plan_total_length,
           plan_feature_points, longitudinal_nodes, longitudinal_is_example
         """
@@ -1028,8 +1028,7 @@ class MultiSiphonDialog(QDialog):
                 d['v_confirmed_before_override'] = raw['v_confirmed_before_override']
             if 'v2_strategy' in raw:
                 d['v2_strategy'] = raw['v2_strategy']
-            if 'show_detail' in raw:
-                d['show_detail'] = raw['show_detail']
+            d['show_detail'] = True
             if 'longitudinal_is_example' in raw:
                 d['longitudinal_is_example'] = raw['longitudinal_is_example']
 
@@ -1128,7 +1127,7 @@ class MultiSiphonDialog(QDialog):
                 siphon_dict['v_before_override'] = data.get('v_before_override')
                 siphon_dict['v_confirmed_before_override'] = data.get('v_confirmed_before_override', False)
                 siphon_dict['v2_strategy'] = data.get('v2_strategy', '')
-                siphon_dict['show_detail'] = data.get('show_detail', True)
+                siphon_dict['show_detail'] = True
                 siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', True)
             self.manager.save_config()
             self._update_time_label()

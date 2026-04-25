@@ -59,6 +59,7 @@ def test_panel_auto_percent_mode_passes_lookup_percent_to_engine(monkeypatch):
         show_case_management=False,
         disable_autosave_load=True,
     )
+    panel.from_dict({"show_detail": False})
     panel._suppress_result_display = True
     panel.plan_feature_points = _make_two_plan_points()
     panel._turn_n_user_confirmed = True
@@ -112,6 +113,7 @@ def test_panel_auto_percent_mode_passes_lookup_percent_to_engine(monkeypatch):
     panel._execute_calculation()
 
     assert captured["increase_percent"] == pytest.approx(30.0)
+    assert captured["verbose"] is True
     assert panel.calculation_result is not None
     panel.deleteLater()
 

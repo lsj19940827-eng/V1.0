@@ -139,6 +139,61 @@ def test_num_pipes_unconfirmed_warns_but_not_blocked_and_auto_confirms(monkeypat
     panel.deleteLater()
 
 
+def test_turn_radius_n_enter_confirms_default_and_suppresses_warning(monkeypatch):
+    """默认转弯半径倍数按 Enter 后应视为已确认，并停止提示。"""
+    _get_qapp()
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", lambda parent=None: _FakeWebEngineView(parent))
+    monkeypatch.setattr(siphon_panel_mod, "InfoBar", _InfoBarSpy)
+    _InfoBarSpy.reset()
+
+    panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
+    panel._turn_n_user_confirmed = False
+    panel._update_turn_n_style()
+
+    panel.edit_turn_n.editingFinished.emit()
+    panel._warn_turn_n_if_needed()
+
+    assert panel._turn_n_user_confirmed is True
+    assert _InfoBarSpy.warnings == []
+
+    panel.deleteLater()
+
+
+def test_turn_radius_n_text_change_requires_reconfirm(monkeypatch):
+    """修改转弯半径倍数后，应先回到待确认状态。"""
+    _get_qapp()
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", lambda parent=None: _FakeWebEngineView(parent))
+
+    panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
+    panel._turn_n_user_confirmed = True
+    panel._update_turn_n_style()
+
+    panel.edit_turn_n.setText("4.0")
+
+    assert panel._turn_n_user_confirmed is False
+
+    panel.edit_turn_n.editingFinished.emit()
+
+    assert panel._turn_n_user_confirmed is True
+
+    panel.deleteLater()
+
+
+def test_turn_radius_r_override_keeps_n_confirmed(monkeypatch):
+    """直接输入 R 反推 n 后，应立即保持倍数已确认。"""
+    _get_qapp()
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", lambda parent=None: _FakeWebEngineView(parent))
+
+    panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
+    panel._turn_n_user_confirmed = False
+    panel.edit_turn_R.setText("5.00")
+
+    assert panel._turn_n_user_confirmed is True
+    assert panel.edit_turn_n.text() == "1.923"
+
+    panel.deleteLater()
+
+
 def test_v_confirmation_still_blocks_calculation(monkeypatch):
     _get_qapp()
     monkeypatch.setattr(siphon_panel_mod, "create_web_view", lambda parent=None: _FakeWebEngineView(parent))

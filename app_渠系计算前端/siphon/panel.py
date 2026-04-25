@@ -889,6 +889,7 @@ class SiphonPanel(QWidget):
         self.edit_turn_n.setStyleSheet("LineEdit { border: 1.5px dashed #1565C0; background: #E3F2FD; }")
         self.edit_turn_n.textChanged.connect(self._on_turn_n_edited_by_user)
         self.edit_turn_n.textChanged.connect(self._on_turn_n_changed)
+        self.edit_turn_n.editingFinished.connect(self._on_turn_n_confirmed)
         _lbl_tn_hint = QLabel("(请确认倍数)")
         _lbl_tn_hint.setStyleSheet("color:#FF6600;font-size:12px;")
         _rl.addWidget(_hrow(self.edit_turn_n, _lbl_tn_hint, protect_height=True))
@@ -1328,10 +1329,6 @@ class SiphonPanel(QWidget):
             bar.addWidget(self.case_selector)
 
         bar.addStretch()
-
-        self.detail_cb = CheckBox("输出详细过程")
-        self.detail_cb.setChecked(True)
-        bar.addWidget(self.detail_cb)
 
         btn_calc = PrimaryPushButton("执行计算")
         btn_calc.setFixedWidth(100)
@@ -2430,7 +2427,7 @@ document.addEventListener("DOMContentLoaded", function(){
             siphon_dict['v_before_override'] = data.get('v_before_override')
             siphon_dict['v_confirmed_before_override'] = data.get('v_confirmed_before_override', False)
             siphon_dict['v2_strategy'] = data.get('v2_strategy', '')
-            siphon_dict['show_detail'] = data.get('show_detail', True)
+            siphon_dict['show_detail'] = True
             siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', False)
 
             self.siphon_manager.save_config()
@@ -2552,8 +2549,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 d['v_confirmed_before_override'] = raw['v_confirmed_before_override']
             if 'v2_strategy' in raw:
                 d['v2_strategy'] = raw['v2_strategy']
-            if 'show_detail' in raw:
-                d['show_detail'] = raw['show_detail']
+            d['show_detail'] = True
             if 'longitudinal_is_example' in raw:
                 d['longitudinal_is_example'] = raw['longitudinal_is_example']
             if 'common_defaults_initialized' in raw:
@@ -2644,7 +2640,7 @@ document.addEventListener("DOMContentLoaded", function(){
             siphon_dict['threshold'] = data.get('threshold', '')
             siphon_dict['D_override'] = data.get('D_override', '')
             siphon_dict['v2_strategy'] = data.get('v2_strategy', '')
-            siphon_dict['show_detail'] = data.get('show_detail', True)
+            siphon_dict['show_detail'] = True
             siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', False)
 
             self.siphon_manager.save_config()
@@ -2714,7 +2710,7 @@ document.addEventListener("DOMContentLoaded", function(){
             'v3': self.edit_v3.text().strip(),
             'v2_strategy': self.combo_v2_strategy.currentText(),
             'name': self.edit_name.text().strip(),
-            'show_detail': self.detail_cb.isChecked(),
+            'show_detail': True,
             'D_override': self.edit_D_override.text().strip(),
             'num_pipes': self.spin_num_pipes.value() if hasattr(self, 'spin_num_pipes') else 1,
             'inc_checked': self.inc_cb.isChecked(),
@@ -2843,7 +2839,7 @@ document.addEventListener("DOMContentLoaded", function(){
             if v3_str and v3_str != '0' and v3_str != '0.0':
                 self.edit_v3.setText(v3_str)
         if 'name' in d: self.edit_name.setText(d['name'])
-        if 'show_detail' in d: self.detail_cb.setChecked(d['show_detail'])
+        self.show_detailed_process = True
         if 'inc_checked' in d:
             self.inc_cb.setChecked(d['inc_checked'])
         if 'inc_percent' in d and d['inc_percent']:
@@ -3543,11 +3539,21 @@ document.addEventListener("DOMContentLoaded", function(){
     # 平面转弯半径倍数确认交互（方案B：温和提醒）
     # ================================================================
     def _on_turn_n_edited_by_user(self):
-        """用户手动编辑平面转弯半径倍数时触发"""
+        """用户手动编辑平面转弯半径倍数时，先回到待确认状态。"""
         if self._syncing:
             return
-        self._turn_n_user_confirmed = True
+        self._turn_n_user_confirmed = False
         self._update_turn_n_style()
+
+    def _on_turn_n_confirmed(self):
+        """平面转弯半径倍数按 Enter 或失焦后，视为用户已确认。"""
+        if self._syncing:
+            return
+        n_val = self._fval(self.edit_turn_n, 0)
+        self._turn_n_user_confirmed = n_val > 0
+        self._update_turn_n_style()
+        self._update_turn_R()
+        self._mark_dirty()
 
     def _update_turn_n_style(self):
         """根据确认状态动态更新平面转弯半径倍数输入框样式"""
@@ -3855,6 +3861,8 @@ document.addEventListener("DOMContentLoaded", function(){
         if n > 0:
             self._siphon_turn_radius_n = n
         self._refresh_pipe_design_feedback()
+        if not self._syncing:
+            self._mark_dirty()
 
     def _update_turn_R(self, confirmed=False):
         n_mult = self._fval(self.edit_turn_n, 0)
@@ -5586,7 +5594,7 @@ document.addEventListener("DOMContentLoaded", function(){
             D_override_text = self.edit_D_override.text().strip()
             D_override = float(D_override_text) if D_override_text else None
 
-            verbose = self.detail_cb.isChecked()
+            verbose = True
 
             # 确定加大比例（与其他4个面板保持一致：单次传入引擎）
             inc_pct_for_engine = None
@@ -5716,12 +5724,14 @@ document.addEventListener("DOMContentLoaded", function(){
             if not self._suppress_result_display:
                 summary = self._format_result_with_increase(result, show_steps=False)
                 self.summary_text.setPlainText(summary)
-                if verbose and result.calculation_steps:
+                if result.calculation_steps:
                     detail = self._format_result_with_increase(result, show_steps=True)
                     self.detail_text.setPlainText(detail)
                     self._detail_text_cache = detail
                     self.result_notebook.setCurrentIndex(1)
                 else:
+                    self.detail_text.clear()
+                    self._detail_text_cache = ""
                     self.result_notebook.setCurrentIndex(0)
 
                 self.params_notebook.setCurrentIndex(3)

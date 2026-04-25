@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple
 from siphon_models import (
     GlobalParameters, StructureSegment, CalculationResult, SegmentType, SegmentDirection,
     PlanFeaturePoint, LongitudinalNode, TurnType, V2Strategy,
-    is_common_type, GEOMETRY_DISPLAY_DECIMALS
+    is_common_type, GEOMETRY_DISPLAY_DECIMALS, INLET_SHAPE_COEFFICIENTS
 )
 from siphon_coefficients import CoefficientService
 
@@ -358,6 +358,143 @@ class HydraulicCore:
         )
 
     @staticmethod
+    def _format_xi_value_sum(
+        terms: List[Tuple[str, float]],
+        total: float,
+    ) -> str:
+        """把局部系数明细格式化成可复核的加法展开式。"""
+        if not terms:
+            return f"0.0000 = {total:.4f}"
+        expression = " + ".join(f"{value:.4f}" for _label, value in terms)
+        return f"{expression} = {total:.4f}"
+
+    @staticmethod
+    def _common_component_note(segment_type: SegmentType) -> str:
+        """返回通用构件在ΔZ2中的口径说明。"""
+        if segment_type == SegmentType.INLET:
+            return "（进水口构件局部损失，计入ΔZ2；不替代 ξ_1）"
+        if segment_type == SegmentType.OUTLET:
+            return "（出水口构件局部损失，计入ΔZ2；不替代 ξ_2）"
+        if segment_type == SegmentType.PIPE_TRANSITION:
+            return "（管内独立变径构件局部损失，计入ΔZ2；不替代 ξ_1/ξ_2）"
+        return ""
+
+    @staticmethod
+    def _xi_source_text(seg: StructureSegment, xi: float) -> str:
+        """说明通用构件局部系数采用值来自哪里。"""
+        if seg.xi_user is not None:
+            return f"来自结构段表采用值 ξ={seg.xi_user:.4f}"
+        if seg.xi_calc is not None:
+            return f"来自自动计算值 ξ={seg.xi_calc:.4f}"
+        return f"未提供局部系数，按 ξ={xi:.4f} 计入"
+
+    @staticmethod
+    def _append_inlet_outlet_shape_detail(
+        steps: List[str],
+        seg: StructureSegment,
+        xi: float,
+    ) -> None:
+        """追加进水口/出水口形状系数的查表说明。"""
+        shape = seg.inlet_shape if seg.segment_type == SegmentType.INLET else seg.outlet_shape
+        if shape in INLET_SHAPE_COEFFICIENTS:
+            xi_min, xi_max = INLET_SHAPE_COEFFICIENTS[shape]
+            xi_mid = (xi_min + xi_max) / 2.0
+            steps.append(
+                f"    形状: {shape.value}，表 L.1.4-2 范围 "
+                f"ξ={xi_min:.4f}~{xi_max:.4f}，默认中值 ξ={xi_mid:.4f}"
+            )
+        else:
+            steps.append("    形状: 未记录形状参数")
+        steps.append(f"    取值来源：{HydraulicCore._xi_source_text(seg, xi)}")
+        if seg.xi_user is not None:
+            steps.append(f"    最终采用结构段表值 ξ={xi:.4f}")
+        elif seg.xi_calc is not None:
+            steps.append(f"    最终采用自动/保存值 ξ={xi:.4f}")
+
+    @staticmethod
+    def _append_trash_rack_detail(
+        steps: List[str],
+        seg: StructureSegment,
+        xi: float,
+    ) -> None:
+        """追加拦污栅参数公式和最终采用值说明。"""
+        if seg.trash_rack_params is None:
+            steps.append(f"    取值来源：{HydraulicCore._xi_source_text(seg, xi)}")
+            steps.append("    未记录拦污栅参数，无法展开公式，按当前采用值计入。")
+            return
+
+        calc_xi, detail = CoefficientService.calculate_trash_rack_xi(
+            seg.trash_rack_params,
+            verbose=True,
+        )
+        steps.append("    拦污栅参数计算过程：")
+        for line in detail.splitlines():
+            if line:
+                steps.append(f"      {line}")
+            else:
+                steps.append("")
+        if seg.xi_user is not None:
+            steps.append(
+                f"    最终采用手工值 ξ={xi:.4f}，参数计算值 ξ={calc_xi:.4f}"
+            )
+        elif seg.trash_rack_params.manual_mode:
+            steps.append(f"    最终采用拦污栅参数手动值 ξ={xi:.4f}")
+        elif abs(xi - calc_xi) <= 1e-9:
+            steps.append(f"    最终采用参数计算值 ξ={xi:.4f}")
+        else:
+            steps.append(
+                f"    最终采用结构段保存值 ξ={xi:.4f}，参数计算值 ξ={calc_xi:.4f}"
+            )
+
+    @staticmethod
+    def _append_pipe_transition_detail(
+        steps: List[str],
+        seg: StructureSegment,
+        xi: float,
+    ) -> None:
+        """追加管内独立变径构件的固定系数说明。"""
+        if abs(xi - CoefficientService.PIPE_TRANSITION_CONTRACT) <= 1e-9:
+            steps.append(
+                "    取值来源：管内独立变径收缩固定系数 "
+                f"ξ={CoefficientService.PIPE_TRANSITION_CONTRACT:.4f}"
+            )
+        elif abs(xi - CoefficientService.PIPE_TRANSITION_EXPAND) <= 1e-9:
+            steps.append(
+                "    取值来源：管内独立变径扩散固定系数 "
+                f"ξ={CoefficientService.PIPE_TRANSITION_EXPAND:.4f}"
+            )
+        else:
+            steps.append(f"    取值来源：{HydraulicCore._xi_source_text(seg, xi)}")
+        steps.append(f"    最终采用值 ξ={xi:.4f}")
+
+    @staticmethod
+    def _append_common_component_detail(
+        steps: List[str],
+        seg: StructureSegment,
+        label: str,
+        xi: float,
+    ) -> None:
+        """追加通用构件的逐项取值过程。"""
+        note = HydraulicCore._common_component_note(seg.segment_type)
+        if seg.length > 0:
+            steps.append(
+                f"  {label}{note}: L={seg.length:.3f}m"
+                f"（仅展示，不计入沿程长度）, ξ={xi:.4f}"
+            )
+        else:
+            steps.append(f"  {label}{note}: ξ={xi:.4f}")
+
+        if seg.segment_type in (SegmentType.INLET, SegmentType.OUTLET):
+            HydraulicCore._append_inlet_outlet_shape_detail(steps, seg, xi)
+        elif seg.segment_type == SegmentType.TRASH_RACK:
+            HydraulicCore._append_trash_rack_detail(steps, seg, xi)
+        elif seg.segment_type == SegmentType.PIPE_TRANSITION:
+            HydraulicCore._append_pipe_transition_detail(steps, seg, xi)
+        else:
+            steps.append(f"    取值来源：{HydraulicCore._xi_source_text(seg, xi)}")
+            steps.append("    无更细公式参数时，按该采用值计入。")
+
+    @staticmethod
     def _resolve_independent_manual_override(
         scope: str,
         source_index: Optional[int],
@@ -493,6 +630,7 @@ class HydraulicCore:
         ignored_manual_overrides: List[str],
         diameter: float,
         direct_segment: Optional[StructureSegment] = None,
+        contribution_terms: Optional[List[Tuple[str, float]]] = None,
     ) -> float:
         """计算并记录一个独立平面/纵断面转弯局部损失系数。"""
         xi_auto, auto_steps = HydraulicCore._calculate_turn_auto_xi(
@@ -534,20 +672,28 @@ class HydraulicCore:
                 )
 
         turn_name = "弯管" if segment_type == SegmentType.BEND else "折管"
+        turn_label = f"{source_label}{turn_name}{item_index}"
         if segment_type == SegmentType.BEND:
             steps.append(
-                f"  {source_label}{turn_name}{item_index}: "
+                f"  {turn_label}: "
                 f"R={radius:.{GEOMETRY_DISPLAY_DECIMALS}f}m, "
                 f"θ={angle_deg:.{GEOMETRY_DISPLAY_DECIMALS}f}°"
             )
         else:
             steps.append(
-                f"  {source_label}{turn_name}{item_index}: "
+                f"  {turn_label}: "
                 f"θ={angle_deg:.{GEOMETRY_DISPLAY_DECIMALS}f}°"
             )
         steps.append(f"    {auto_steps.replace(chr(10), chr(10) + '    ')}")
         if adopted_seg is not None and adopted_seg.xi_user is not None:
             HydraulicCore._append_manual_adoption_step(steps, xi_auto, adopted_xi)
+        if contribution_terms is not None:
+            source_note = (
+                "手工采用"
+                if adopted_seg is not None and adopted_seg.xi_user is not None
+                else "自动计算"
+            )
+            contribution_terms.append((f"{turn_label}（{source_note}）", adopted_xi))
         HydraulicCore._append_ignored_manual_records(
             steps,
             ignored_records,
@@ -718,6 +864,12 @@ class HydraulicCore:
         steps.append("局部阻力系数计算：")
         
         xi_sum_middle = 0.0  # 管道局部损失系数和（不含渐变段 ξ1/ξ2，含进出水口构件）
+        xi_plan_bends = 0.0
+        xi_long_turns = 0.0
+        xi_common = 0.0
+        xi_plan_terms: List[Tuple[str, float]] = []
+        xi_long_terms: List[Tuple[str, float]] = []
+        xi_common_terms: List[Tuple[str, float]] = []
         L_friction = 0.0     # 沿程损失计算长度
         length_source = ""
         
@@ -760,7 +912,6 @@ class HydraulicCore:
                 result.data_mode = "仅纵断面（独立计算）"
                 result.data_note = "未检测到平面来源，局部损失按纵断面转弯独立计算"
 
-            xi_plan_bends = 0.0
             steps.append("")
             steps.append("平面段（水平转弯，独立计算）：")
             if has_plan_points:
@@ -795,6 +946,7 @@ class HydraulicCore:
                         ignored_manual_segment_ids,
                         ignored_manual_overrides,
                         D,
+                        contribution_terms=xi_plan_terms,
                     )
             else:
                 plan_turn_segments = [
@@ -819,11 +971,20 @@ class HydraulicCore:
                         ignored_manual_overrides,
                         D,
                         direct_segment=pseg,
+                        contribution_terms=xi_plan_terms,
                     )
             xi_sum_middle += xi_plan_bends
+            if xi_plan_terms:
+                steps.append("  平面转弯损失系数展开：")
+                for label, xi_item in xi_plan_terms:
+                    steps.append(f"    {label}: ξ={xi_item:.4f}")
+                steps.append(
+                    f"  Σξ_平面 = {HydraulicCore._format_xi_value_sum(xi_plan_terms, xi_plan_bends)}"
+                )
+            else:
+                steps.append("  平面转弯损失系数展开：无转弯项，Σξ_平面 = 0.0000")
             steps.append(f"  平面转弯损失系数合计 Σξ_平面 = {xi_plan_bends:.4f}")
 
-            xi_long_turns = 0.0
             steps.append("")
             steps.append("纵断面段（竖向转弯，独立计算）：")
             if has_long_nodes:
@@ -858,6 +1019,7 @@ class HydraulicCore:
                         ignored_manual_segment_ids,
                         ignored_manual_overrides,
                         D,
+                        contribution_terms=xi_long_terms,
                     )
             else:
                 long_turn_segments = [
@@ -883,8 +1045,18 @@ class HydraulicCore:
                         ignored_manual_overrides,
                         D,
                         direct_segment=seg,
+                        contribution_terms=xi_long_terms,
                     )
             xi_sum_middle += xi_long_turns
+            if xi_long_terms:
+                steps.append("  纵断面转弯损失系数展开：")
+                for label, xi_item in xi_long_terms:
+                    steps.append(f"    {label}: ξ={xi_item:.4f}")
+                steps.append(
+                    f"  Σξ_纵断面 = {HydraulicCore._format_xi_value_sum(xi_long_terms, xi_long_turns)}"
+                )
+            else:
+                steps.append("  纵断面转弯损失系数展开：无转弯项，Σξ_纵断面 = 0.0000")
             steps.append(f"  纵断面转弯损失系数合计 Σξ_纵断面 = {xi_long_turns:.4f}")
 
             profile_length = HydraulicCore._profile_developed_length(longitudinal_nodes)
@@ -944,25 +1116,33 @@ class HydraulicCore:
             if seg.direction == SegmentDirection.COMMON or is_common_type(seg.segment_type):
                 xi = seg.get_xi()
                 xi_sum_middle += xi
+                xi_common += xi
                 type_name = seg.segment_type.value
-                component_note = ""
-                if seg.segment_type == SegmentType.INLET:
-                    component_note = "（进水口构件局部损失，计入ΔZ2；不替代 ξ_1）"
-                elif seg.segment_type == SegmentType.OUTLET:
-                    component_note = "（出水口构件局部损失，计入ΔZ2；不替代 ξ_2）"
-                elif seg.segment_type == SegmentType.PIPE_TRANSITION:
-                    component_note = "（管内独立变径构件局部损失，计入ΔZ2；不替代 ξ_1/ξ_2）"
-                if seg.length > 0:
-                    steps.append(
-                        f"  {type_name}{i}{component_note}: L={seg.length:.3f}m（仅展示，不计入沿程长度）, ξ={xi:.4f}"
-                    )
-                else:
-                    steps.append(f"  {type_name}{i}{component_note}: ξ={xi:.4f}")
+                label = f"{type_name}{i}"
+                xi_common_terms.append((label, xi))
+                HydraulicCore._append_common_component_detail(steps, seg, label, xi)
+        if xi_common_terms:
+            steps.append("  通用构件损失系数展开：")
+            for label, xi_item in xi_common_terms:
+                steps.append(f"    {label}: ξ={xi_item:.4f}")
+            steps.append(
+                f"  Σξ_通用 = {HydraulicCore._format_xi_value_sum(xi_common_terms, xi_common)}"
+            )
+        else:
+            steps.append("  通用构件损失系数展开：无通用构件项，Σξ_通用 = 0.0000")
         
         result.total_length = L_friction
         result.xi_sum_middle = xi_sum_middle
         steps.append("")
         steps.append(f"沿程损失计算采用: {length_source} = {L_friction:.4f} m")
+        steps.append("局部损失系数合计展开：")
+        steps.append(f"  Σξ_平面 = {xi_plan_bends:.4f}")
+        steps.append(f"  Σξ_纵断面 = {xi_long_turns:.4f}")
+        steps.append(f"  Σξ_通用 = {xi_common:.4f}")
+        steps.append(
+            f"  Σξ_local = Σξ_平面 + Σξ_纵断面 + Σξ_通用 = "
+            f"{xi_plan_bends:.4f} + {xi_long_turns:.4f} + {xi_common:.4f} = {xi_sum_middle:.4f}"
+        )
         steps.append(f"管道局部损失系数和 Σξ_local = {xi_sum_middle:.4f}")
         
         # 渐变段系数
@@ -1011,6 +1191,7 @@ class HydraulicCore:
         h_j = xi_sum_middle * v ** 2 / (2 * g)
         result.loss_local = h_j
         steps.append("  管道局部损失 hj = Σξ_local × v² / (2g)")
+        steps.append("  其中 Σξ_local 已在步骤2展开，包含平面转弯、纵断面转弯和通用构件。")
         steps.append(f"    = {xi_sum_middle:.4f} × {v:.4f}² / (2×{g})")
         steps.append(f"    = {h_j:.4f} m")
         steps.append("")
@@ -1133,6 +1314,7 @@ class HydraulicCore:
                 )
                 steps.append(f"           = {h_f_inc:.4f} m")
                 steps.append("  管道局部损失 hj加大 = Σξ_local × v加大² / (2g)")
+                steps.append("  Σξ_local 沿用设计工况步骤2的合计值。")
                 steps.append(
                     f"             = {xi_sum_middle:.4f} × {v_inc:.4f}² / (2×{g})"
                 )

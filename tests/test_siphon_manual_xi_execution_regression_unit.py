@@ -28,12 +28,14 @@ from siphon_models import (
     BendEvent,
     GlobalParameters,
     GradientType,
+    InletOutletShape,
     LongitudinalNode,
     PlanFeaturePoint,
     SegmentDirection,
     SegmentType,
     StructureSegment,
     TurnType,
+    TrashRackParams,
     V2Strategy,
 )
 from spatial_merger import SpatialMerger
@@ -977,6 +979,96 @@ def test_execute_calculation_counts_pipe_transition_only_as_delta_z2_local_loss(
     assert result.xi_inlet == pytest.approx(params.xi_inlet, abs=1e-9)
     assert result.xi_outlet == pytest.approx(params.xi_outlet, abs=1e-9)
     assert "管道渐变段" in steps_text
+
+
+def test_detailed_steps_expand_local_xi_components_without_changing_result():
+    """详细过程应展开Σξ_local来源，同时保持水损数值不变。"""
+    plan_segment = _make_plan_bend_segment(xi_user=0.2)
+    trash_params = TrashRackParams(
+        alpha=60.0,
+        has_support=True,
+        s1=12.0,
+        b1=48.0,
+        s2=20.0,
+        b2=120.0,
+    )
+    trash_xi = CoefficientService.calculate_trash_rack_xi(trash_params)
+    segments = [
+        StructureSegment(
+            segment_type=SegmentType.INLET,
+            direction=SegmentDirection.COMMON,
+            xi_user=0.2250,
+            inlet_shape=InletOutletShape.SLIGHTLY_ROUNDED,
+        ),
+        StructureSegment(
+            segment_type=SegmentType.TRASH_RACK,
+            direction=SegmentDirection.COMMON,
+            xi_calc=trash_xi,
+            trash_rack_params=trash_params,
+        ),
+        StructureSegment(
+            segment_type=SegmentType.GATE_SLOT,
+            direction=SegmentDirection.COMMON,
+            xi_user=0.1000,
+        ),
+        StructureSegment(
+            segment_type=SegmentType.PIPE_TRANSITION,
+            direction=SegmentDirection.COMMON,
+            length=3.0,
+            xi_user=CoefficientService.PIPE_TRANSITION_CONTRACT,
+        ),
+        StructureSegment(
+            segment_type=SegmentType.OUTLET,
+            direction=SegmentDirection.COMMON,
+            xi_user=0.1600,
+            outlet_shape=InletOutletShape.SLIGHTLY_ROUNDED,
+        ),
+    ]
+
+    result = HydraulicCore.execute_calculation(
+        _sample_params(),
+        segments,
+        verbose=True,
+        plan_segments=[plan_segment],
+        plan_total_length=plan_segment.length,
+        increase_percent=20.0,
+    )
+
+    expected_xi_sum = (
+        plan_segment.xi_user
+        + 0.2250
+        + trash_xi
+        + 0.1000
+        + CoefficientService.PIPE_TRANSITION_CONTRACT
+        + 0.1600
+    )
+    steps_text = "\n".join(result.calculation_steps)
+
+    assert result.xi_sum_middle == pytest.approx(expected_xi_sum, abs=1e-9)
+    assert result.loss_local == pytest.approx(
+        expected_xi_sum * result.velocity ** 2 / (2 * HydraulicCore.GRAVITY),
+        rel=1e-9,
+    )
+    assert "本次采用手工局部系数 ξ=0.2000，覆盖自动值" in steps_text
+    assert "平面转弯损失系数展开：" in steps_text
+    assert "平面弯管1（手工采用）: ξ=0.2000" in steps_text
+    assert "Σξ_平面 = 0.2000 = 0.2000" in steps_text
+    assert "纵断面转弯损失系数展开：无转弯项，Σξ_纵断面 = 0.0000" in steps_text
+    assert "通用构件损失系数展开：" in steps_text
+    assert "进水口0（进水口构件局部损失，计入ΔZ2；不替代 ξ_1）: ξ=0.2250" in steps_text
+    assert "拦污栅1: ξ=" in steps_text
+    assert "闸门槽2: ξ=0.1000" in steps_text
+    assert "管道渐变段3（管内独立变径构件局部损失，计入ΔZ2；不替代 ξ_1/ξ_2）" in steps_text
+    assert "出水口4（出水口构件局部损失，计入ΔZ2；不替代 ξ_2）: ξ=0.1600" in steps_text
+    assert "形状: 进口稍微修圆，表 L.1.4-2 范围 ξ=0.2000~0.2500" in steps_text
+    assert "栅条项 A = beta1 * (s1/b1)^(4/3)" in steps_text
+    assert "闸门槽" in steps_text and "来自结构段表采用值" in steps_text
+    assert "管道渐变段" in steps_text and "固定系数" in steps_text
+    assert "局部损失系数合计展开：" in steps_text
+    assert "Σξ_通用 =" in steps_text
+    assert "Σξ_local = Σξ_平面 + Σξ_纵断面 + Σξ_通用" in steps_text
+    assert "其中 Σξ_local 已在步骤2展开，包含平面转弯、纵断面转弯和通用构件。" in steps_text
+    assert "Σξ_local 沿用设计工况步骤2的合计值。" in steps_text
 
 
 def test_delta_z2_includes_velocity_head_delta_when_v2_differs_from_pipe_velocity():

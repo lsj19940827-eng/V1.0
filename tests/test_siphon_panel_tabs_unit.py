@@ -59,3 +59,15 @@ def test_top_tabs_hide_longitudinal_nodes_but_keep_edit_entry(monkeypatch):
     assert _find_text_widgets(structure_tab, "编辑纵断面节点")
 
     panel.deleteLater()
+
+
+def test_operation_bar_hides_detail_process_toggle(monkeypatch):
+    """底部操作栏不再提供“输出详细过程”开关。"""
+    _get_qapp()
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
+
+    panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
+
+    assert not _find_text_widgets(panel, "输出详细过程")
+
+    panel.deleteLater()
