@@ -22,6 +22,21 @@ except Exception:  # pragma: no cover - 依赖环境相关
     render_latex_svg = None
 
 
+_INLINE_SYMBOL_REPLACEMENTS = (
+    ("Hmax", "H<sub>max</sub>"),
+    ("Hmin", "H<sub>min</sub>"),
+    ("H_allow", "H<sub>allow</sub>"),
+    ("μ_s", "μ<sub>s</sub>"),
+    ("H0", "H<sub>0</sub>"),
+    ("v0", "v<sub>0</sub>"),
+    ("Ts", "T<sub>s</sub>"),
+    ("ΔH+", "ΔH<sup>+</sup>"),
+    ("ΔH-", "ΔH<sup>-</sup>"),
+    ("M+", "M<sup>+</sup>"),
+    ("M-", "M<sup>-</sup>"),
+)
+
+
 class PressurePipeWaterHammerPrincipleDialog(QDialog):
     """展示当前水锤验算公式、判定流程和可选代入值。"""
 
@@ -187,8 +202,7 @@ def _formula_section(title: str, formulas: List[Tuple[str, str]]) -> str:
     for latex, description in formulas:
         parts.append('<div class="formula-row">')
         parts.append(f'<div class="formula">{_render_formula(latex)}</div>')
-        parts.append(f'<code class="latex-source">{html.escape(latex)}</code>')
-        parts.append(f"<p>{html.escape(description)}</p>")
+        parts.append(f"<p>{_render_inline_symbols(description)}</p>")
         parts.append("</div>")
     parts.append("</section>")
     return "".join(parts)
@@ -238,10 +252,18 @@ def _current_values_block(inputs: Dict[str, Any], result: Dict[str, Any]) -> str
         ("负压余量", result.get("min_negative_margin_m"), "m"),
     ]
     cells = "".join(
-        f"<tr><th>{html.escape(label)}</th><td>{html.escape(_fmt(value))}</td><td>{html.escape(unit)}</td></tr>"
+        f"<tr><th>{_render_inline_symbols(label)}</th><td>{html.escape(_fmt(value))}</td><td>{html.escape(unit)}</td></tr>"
         for label, value, unit in rows
     )
     return f'<section class="card"><h2>当前段代入示例</h2><table>{cells}</table></section>'
+
+
+def _render_inline_symbols(text: str) -> str:
+    """把说明文字中的常见变量标记转为 HTML 上下标。"""
+    rendered = html.escape(str(text))
+    for token, replacement in _INLINE_SYMBOL_REPLACEMENTS:
+        rendered = rendered.replace(html.escape(token), replacement)
+    return rendered
 
 
 def _render_formula(latex: str) -> str:
@@ -249,7 +271,10 @@ def _render_formula(latex: str) -> str:
     if render_latex_svg is None:
         return f"<span>{html.escape(latex)}</span>"
     try:
-        return render_latex_svg(latex, fontsize=18)
+        rendered = render_latex_svg(latex, fontsize=18)
+        if rendered:
+            return rendered
+        return f"<span>{html.escape(latex)}</span>"
     except Exception:
         return f"<span>{html.escape(latex)}</span>"
 
@@ -327,12 +352,6 @@ h1 {
 .formula {
     overflow-x: auto;
     padding: 4px 0;
-}
-.latex-source {
-    display: block;
-    margin: 6px 0;
-    color: #6b7280;
-    white-space: pre-wrap;
 }
 table {
     width: 100%;

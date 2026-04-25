@@ -2815,11 +2815,17 @@ class PressurePipeConfigDialog(QDialog):
             filepath += ".xlsx"
         try:
             save_water_hammer_export_workbook(filepath, segments)
-            fluent_info(self, "导出成功", f"水锤验算明细已保存到：{filepath}")
         except ImportError:
             fluent_error(self, "缺少依赖", "需要安装 openpyxl 才能导出 Excel。")
         except Exception as exc:
             fluent_error(self, "导出失败", str(exc))
+            return
+        try:
+            from app_渠系计算前端.export_utils import ask_open_file
+
+            ask_open_file(filepath, parent=self)
+        except Exception as exc:
+            fluent_info(self, "导出成功", f"水锤验算明细已保存到：{filepath}\n\n打开文件提示失败：{exc}")
 
     def _show_route_water_hammer_principle(self, route_key: str):
         """弹出整线水锤验算原理窗口。"""

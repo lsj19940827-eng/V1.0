@@ -25,6 +25,7 @@ from app_渠系计算前端.water_profile.water_profile_dialogs import (  # noqa
     PressurePipeConfigDialog,
     PressurePipeWaterHammerDialog,
 )
+import app_渠系计算前端.water_profile.water_hammer_principle as principle_mod  # noqa: E402
 import app_渠系计算前端.water_profile.water_profile_dialogs as dialogs_mod  # noqa: E402
 from 推求水面线.managers.pressure_pipe_manager import PressurePipeConfig, PressurePipeManager  # noqa: E402
 from 推求水面线.models.enums import StructureType  # noqa: E402
@@ -376,7 +377,12 @@ def test_route_water_hammer_principle_dialog_shows_formula_and_current_values():
         _flush_events(4)
         principle_dialog = dialog._water_hammer_principle_dialog
         assert "水锤波速" in principle_dialog.html
-        assert r"\mu_s" in principle_dialog.html
+        assert 'class="latex-source"' not in principle_dialog.html
+        assert r"a=\frac{1435}" not in principle_dialog.html
+        assert r"\mu_s=2\sum_i" not in principle_dialog.html
+        assert "记作 μ<sub>s</sub>" in principle_dialog.html
+        assert "H<sub>0</sub> 为初始压强水头" in principle_dialog.html
+        assert "T<sub>s</sub> 不大于水锤相时" in principle_dialog.html
         assert "先验算后可看到当前段代入值" in principle_dialog.html
         principle_dialog.close()
 
@@ -390,14 +396,29 @@ def test_route_water_hammer_principle_dialog_shows_formula_and_current_values():
         _flush_events(4)
         principle_dialog = dialog._water_hammer_principle_dialog
         assert "当前段代入示例" in principle_dialog.html
-        assert "ΔH+" in principle_dialog.html
-        assert "Hmax" in principle_dialog.html
+        assert "ΔH<sup>+</sup>" in principle_dialog.html
+        assert "H<sub>max</sub>" in principle_dialog.html
     finally:
         try:
             dialog._water_hammer_principle_dialog.close()
         except Exception:
             pass
         dialog.close()
+
+
+def test_water_hammer_principle_formula_fallback_shows_source_when_svg_missing(monkeypatch):
+    """公式渲染失败时应显示原公式兜底，不能显示 None。"""
+    monkeypatch.setattr(principle_mod, "render_latex_svg", lambda *args, **kwargs: None)
+
+    html = principle_mod.build_water_hammer_principle_html(
+        route_name="",
+        segment_name="",
+        inputs={},
+        result={},
+    )
+
+    assert "None" not in html
+    assert r"a=\frac{1435}" in html
 
 
 def test_route_water_hammer_excel_exports_summary_and_calculated_segment_details(monkeypatch):
@@ -411,8 +432,11 @@ def test_route_water_hammer_excel_exports_summary_and_calculated_segment_details
 
     dialog = _make_route_dialog(groups)
     try:
+        from app_渠系计算前端 import export_utils as export_utils_mod
+
         monkeypatch.setattr(dialogs_mod, "fluent_info", lambda *args, **kwargs: None)
         monkeypatch.setattr(dialogs_mod, "fluent_error", lambda *args, **kwargs: None)
+        monkeypatch.setattr(export_utils_mod, "ask_open_file", lambda *args, **kwargs: None)
         monkeypatch.setattr(
             dialogs_mod.QFileDialog,
             "getSaveFileName",
@@ -440,6 +464,46 @@ def test_route_water_hammer_excel_exports_summary_and_calculated_segment_details
         detail = workbook[workbook.sheetnames[1]]
         assert detail.cell(row=1, column=1).value == "桩号(m)"
         assert detail.max_row > 1
+    finally:
+        dialog.close()
+        shutil.rmtree(export_path.parent, ignore_errors=True)
+
+
+def test_route_water_hammer_excel_export_offers_open_file_after_save(monkeypatch):
+    """导出水锤Excel成功后应让用户直接打开文件。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0),
+    ]
+    export_path = Path(tempfile.mkdtemp(prefix="wh_export_open_")) / "水锤明细.xlsx"
+    opened_paths = []
+
+    dialog = _make_route_dialog(groups)
+    try:
+        from app_渠系计算前端 import export_utils as export_utils_mod
+
+        monkeypatch.setattr(dialogs_mod, "fluent_info", lambda *args, **kwargs: None)
+        monkeypatch.setattr(dialogs_mod, "fluent_error", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            dialogs_mod.QFileDialog,
+            "getSaveFileName",
+            lambda *args, **kwargs: (str(export_path), "Excel文件 (*.xlsx)"),
+        )
+        monkeypatch.setattr(
+            export_utils_mod,
+            "ask_open_file",
+            lambda filepath, parent=None: opened_paths.append((Path(filepath), parent)),
+        )
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=400.0)
+        widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        widgets["water_hammer_wall_thickness_edit"].setText("0.02")
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(6)
+
+        dialog._export_route_water_hammer_excel()
+        _flush_events(2)
+
+        assert opened_paths == [(export_path, dialog)]
     finally:
         dialog.close()
         shutil.rmtree(export_path.parent, ignore_errors=True)
