@@ -1825,6 +1825,68 @@ def test_apply_pressure_pipe_turn_radius_payload_skips_explicit_zero_rows_withou
     assert panel.node_table.item(0, 7).text() == "0"
 
 
+def test_siphon_result_turn_radius_writeback_preserves_explicit_middle_ip_without_override():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    group = SimpleNamespace(row_indices=[0, 1, 2])
+    node = _make_node(
+        turn_radius=10.0,
+        turn_radius_is_explicit=True,
+        turn_radius_text="10",
+        turn_angle=35.0,
+    )
+
+    should_write = module.WaterProfilePanel._should_write_siphon_turn_radius_result(
+        panel,
+        group,
+        row_position=1,
+        node=node,
+        turn_radius_overrode_excel=False,
+    )
+
+    assert should_write is False
+
+
+def test_siphon_result_turn_radius_writeback_allows_confirmed_override_and_blank_middle_ip():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    group = SimpleNamespace(row_indices=[0, 1, 2])
+    explicit_node = _make_node(
+        turn_radius=10.0,
+        turn_radius_is_explicit=True,
+        turn_radius_text="10",
+        turn_angle=35.0,
+    )
+    blank_node = _make_node(
+        turn_radius=0.0,
+        turn_radius_is_explicit=False,
+        turn_radius_text="",
+        turn_angle=35.0,
+    )
+
+    assert module.WaterProfilePanel._should_write_siphon_turn_radius_result(
+        panel,
+        group,
+        row_position=1,
+        node=explicit_node,
+        turn_radius_overrode_excel=True,
+    ) is True
+    assert module.WaterProfilePanel._should_write_siphon_turn_radius_result(
+        panel,
+        group,
+        row_position=1,
+        node=blank_node,
+        turn_radius_overrode_excel=False,
+    ) is True
+    assert module.WaterProfilePanel._should_write_siphon_turn_radius_result(
+        panel,
+        group,
+        row_position=0,
+        node=blank_node,
+        turn_radius_overrode_excel=True,
+    ) is False
+
+
 def test_apply_pressure_pipe_manager_tunnel_config_to_group_prefers_table1_values():
     module = _load_panel_module()
     rows = [

@@ -7355,6 +7355,27 @@ class WaterProfilePanel(QWidget):
             return True
         return bool(getattr(node, "turn_radius_is_explicit", False))
 
+    def _should_write_siphon_turn_radius_result(
+        self,
+        group,
+        *,
+        row_position: int,
+        node,
+        turn_radius_overrode_excel: bool,
+    ) -> bool:
+        """判断倒虹吸计算结果能否写回某个中间 IP 转弯半径。"""
+        row_indices = list(getattr(group, "row_indices", []) or [])
+        if row_position <= 0 or row_position >= len(row_indices) - 1:
+            return False
+        try:
+            if float(getattr(node, "turn_angle", 0.0) or 0.0) <= 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+        if turn_radius_overrode_excel:
+            return True
+        return not self._node_has_explicit_turn_radius(node)
+
     def _format_node_turn_radius_display_text(self, node, row_index: int) -> str:
         """生成节点回写到表格时的转弯半径文本。"""
         text = str(getattr(node, "turn_radius_text", "") or "").strip()
@@ -10289,11 +10310,13 @@ class WaterProfilePanel(QWidget):
                             diameter = result_data.get("diameter", 0.0)
                             velocity = result_data.get("velocity")
                             turn_radius = result_data.get("turn_radius", 0.0)
+                            turn_radius_overrode_excel = bool(result_data.get("turn_radius_overrode_excel", False))
                         else:
                             head_loss = result_data
                             diameter = 0.0
                             velocity = None
                             turn_radius = 0.0
+                            turn_radius_overrode_excel = False
                         outlet_idx = group.outlet_row_index
                         if 0 <= outlet_idx < len(cur_nodes):
                             _nd = cur_nodes[outlet_idx]
@@ -10322,11 +10345,21 @@ class WaterProfilePanel(QWidget):
                                 if 0 <= row_idx < len(cur_nodes):
                                     cur_nodes[row_idx].velocity = velocity_value
                                     has_velocity_update = True
-                        # 将平面转弯半径写回该倒虹吸所有行（进口+出口）
+                        # 平面转弯半径只写回倒虹吸中间 IP 转弯行；Excel 显式值未确认覆盖时保留。
                         if turn_radius > 0:
-                            for row_idx in group.row_indices:
+                            for row_position, row_idx in enumerate(group.row_indices):
                                 if 0 <= row_idx < len(cur_nodes):
-                                    cur_nodes[row_idx].turn_radius = turn_radius
+                                    node = cur_nodes[row_idx]
+                                    if not _panel._should_write_siphon_turn_radius_result(
+                                        group,
+                                        row_position=row_position,
+                                        node=node,
+                                        turn_radius_overrode_excel=turn_radius_overrode_excel,
+                                    ):
+                                        continue
+                                    node.turn_radius = turn_radius
+                                    node.turn_radius_is_explicit = True
+                                    node.turn_radius_text = f"{float(turn_radius):.2f}"
                                     has_radius_update = True
                 if imported_count > 0 or has_radius_update or has_velocity_update:
                     _panel._append_loss_undo_snapshot(_panel._snapshot_editable_cols())

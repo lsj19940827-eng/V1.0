@@ -388,6 +388,9 @@ class PlanFeaturePoint:
     turn_type: TurnType = TurnType.NONE # 转弯类型
     ip_index: int = 0                   # IP编号
     arc_geometry: Optional[dict] = None # 平面圆弧几何真源（供显示/反向/持久化复用）
+    turn_radius_is_explicit: bool = False  # 半径是否来自 Excel/水面线表格显式填写
+    turn_radius_text: str = ""          # Excel/水面线表格中的原始半径文本
+    turn_radius_source: str = ""        # 半径来源，如 water_profile
     
     @property
     def azimuth_math_rad(self) -> float:
@@ -416,13 +419,16 @@ class PlanFeaturePoint:
             "turn_type": self.turn_type.value,
             "ip_index": self.ip_index,
             "arc_geometry": clone_arc_geometry(self.arc_geometry),
+            "turn_radius_is_explicit": bool(self.turn_radius_is_explicit),
+            "turn_radius_text": self.turn_radius_text or "",
+            "turn_radius_source": self.turn_radius_source or "",
         }
     
     @staticmethod
     def from_dict(d: dict) -> 'PlanFeaturePoint':
         tt = TurnType.NONE
         for t in TurnType:
-            if t.value == d.get("turn_type", "无"):
+            if t.value == d.get("turn_type", "无") or t.name == d.get("turn_type", "无"):
                 tt = t
                 break
         return PlanFeaturePoint(
@@ -435,6 +441,9 @@ class PlanFeaturePoint:
             turn_type=tt,
             ip_index=d.get("ip_index", 0),
             arc_geometry=clone_arc_geometry(d.get("arc_geometry")),
+            turn_radius_is_explicit=bool(d.get("turn_radius_is_explicit", False)),
+            turn_radius_text=str(d.get("turn_radius_text", "") or ""),
+            turn_radius_source=str(d.get("turn_radius_source", "") or ""),
         )
 
 

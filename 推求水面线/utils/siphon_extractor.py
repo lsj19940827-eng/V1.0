@@ -1240,21 +1240,27 @@ class SiphonDataExtractor:
         
         feature_points = []
         for i, node in enumerate(rows):
+            is_middle_ip = 0 < i < len(rows) - 1
             # 确定转弯类型
             # 注意：此处转角来自坐标计算，< 0.1° 视为直线通过（坐标噪声），turn_type 设为"无"
             turn_type = "无"
-            if 0 < i < len(rows) - 1 and node.turn_angle >= 0.1:
+            if is_middle_ip and node.turn_angle >= 0.1:
                 turn_type = "圆弧" if node.turn_radius > 0 else "折线"
+            radius_is_explicit = bool(getattr(node, "turn_radius_is_explicit", False)) if is_middle_ip else False
+            radius_text = str(getattr(node, "turn_radius_text", "") or "").strip() if radius_is_explicit else ""
             
             fp = {
                 "chainage": node.station_MC,
                 "x": node.x,
                 "y": node.y,
                 "azimuth": node.azimuth,  # 测量方位角(度)，PlanFeaturePoint.from_dict 映射到 azimuth_meas_deg
-                "turn_radius": node.turn_radius if (0 < i < len(rows) - 1) else 0.0,
-                "turn_angle": node.turn_angle if (0 < i < len(rows) - 1) else 0.0,
+                "turn_radius": node.turn_radius if is_middle_ip else 0.0,
+                "turn_angle": node.turn_angle if is_middle_ip else 0.0,
                 "turn_type": turn_type,
                 "ip_index": node.ip_number,
+                "turn_radius_is_explicit": radius_is_explicit,
+                "turn_radius_text": radius_text,
+                "turn_radius_source": "water_profile" if radius_is_explicit else "",
             }
             feature_points.append(fp)
         

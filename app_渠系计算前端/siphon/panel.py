@@ -375,6 +375,9 @@ class SiphonPanel(QWidget):
         self._turn_n_user_confirmed = False
         # 管道根数确认标志（用户需Enter/失焦/按钮确认）
         self._num_pipes_user_confirmed = False
+        # Excel/水面线显式平面转弯半径覆盖确认态（本次窗口会话内有效）
+        self._excel_turn_radius_override_confirmed = False
+        self._turn_r_edit_pending_confirmation = False
         # 工况级运行期确认态缓存（仅内存，不跨重启）
         self._case_confirmation_states = {}
         self._current_case_key = None
@@ -901,6 +904,7 @@ class SiphonPanel(QWidget):
         self.edit_turn_R.setFixedWidth(70)
         self.edit_turn_R.setStyleSheet("LineEdit { border: 1px solid #90CAF9; background: #E3F2FD; }")
         self.edit_turn_R.textChanged.connect(self._on_turn_R_changed)
+        self.edit_turn_R.editingFinished.connect(self._on_turn_R_confirmed)
         self.lbl_turn_R_status = QLabel("← 可直接覆盖 R")
         self.lbl_turn_R_status.setStyleSheet("color:#888;font-size:12px;")
         self.lbl_turn_R_status.setToolTip("可直接输入覆盖 R，修改后会自动反推平面转弯半径倍数 n。")
@@ -1710,6 +1714,9 @@ document.addEventListener("DOMContentLoaded", function(){
                         "推求水面线正在传入新的平面数据，是否覆盖？"):
                     _plan_skip = True
         if not _plan_skip:
+            if _plan_incoming:
+                self._excel_turn_radius_override_confirmed = False
+                self._turn_r_edit_pending_confirmation = False
             if 'plan_segments' in kwargs:
                 self._push_plan_undo()
                 data = kwargs['plan_segments']
@@ -1767,6 +1774,93 @@ document.addEventListener("DOMContentLoaded", function(){
             if radii:
                 return max(radii)
         return self._fval(self.edit_turn_R, 0.0)
+
+    def has_excel_turn_radius_override(self) -> bool:
+        """返回本次窗口内是否已确认用 n×D/R 覆盖 Excel 显式半径。"""
+        return bool(getattr(self, "_excel_turn_radius_override_confirmed", False))
+
+    def _is_excel_explicit_plan_turn_point(self, fp) -> bool:
+        """判断平面 IP 点是否为水面线显式填写的中间圆弧半径。"""
+        if not getattr(fp, "turn_radius_is_explicit", False):
+            return False
+        if (getattr(fp, "turn_radius_source", "") or "") != "water_profile":
+            return False
+        if float(getattr(fp, "turn_radius", 0.0) or 0.0) <= 0:
+            return False
+        turn_type = getattr(fp, "turn_type", TurnType.NONE)
+        if isinstance(turn_type, TurnType):
+            is_arc = turn_type == TurnType.ARC
+        else:
+            is_arc = str(turn_type) in (TurnType.ARC.value, TurnType.ARC.name)
+        return is_arc and float(getattr(fp, "turn_angle", 0.0) or 0.0) > 0
+
+    def _excel_explicit_turn_points(self):
+        """列出当前可保护的 Excel 显式平面转弯点。"""
+        if not SIPHON_AVAILABLE:
+            return []
+        return [
+            fp for fp in self.plan_feature_points
+            if self._is_excel_explicit_plan_turn_point(fp)
+        ]
+
+    def _excel_protected_turn_points(self):
+        """列出尚未确认覆盖的 Excel 显式平面转弯点。"""
+        if self.has_excel_turn_radius_override():
+            return []
+        return self._excel_explicit_turn_points()
+
+    @staticmethod
+    def _format_turn_radius_value(value) -> str:
+        """格式化提示里的半径/管径数值。"""
+        try:
+            return f"{float(value):.3f}".rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _build_excel_turn_radius_override_message(self, n_mult: float, D_adopted: float, proposed_R: float) -> str:
+        """生成覆盖 Excel 显式半径前的确认提示。"""
+        points = self._excel_protected_turn_points()
+        lines = []
+        for idx, fp in enumerate(points, start=1):
+            ip_index = getattr(fp, "ip_index", None) or idx
+            radius_value = getattr(fp, "turn_radius_text", "") or self._format_turn_radius_value(getattr(fp, "turn_radius", 0.0))
+            lines.append(f"IP{ip_index}：{radius_value} m")
+        siphon_name = self.edit_name.text().strip() or "当前倒虹吸"
+        radius_lines = "\n".join(lines)
+        return (
+            f"当前倒虹吸“{siphon_name}”已从 Excel/水面线表格读取到平面转弯半径，"
+            "系统将优先使用这些原始值参与计算：\n\n"
+            f"{radius_lines}\n\n"
+            f"你刚确认的平面转弯半径倍数为 n={self._format_turn_radius_value(n_mult)}。\n"
+            f"按当前采用管径 D={self._format_turn_radius_value(D_adopted)} m 计算，"
+            f"新的半径为 R=n×D={self._format_turn_radius_value(proposed_R)} m。\n\n"
+            f"是否用 R={self._format_turn_radius_value(proposed_R)} m 覆盖上述 Excel 半径？\n"
+            "选择“覆盖为 n×D”后，本次倒虹吸计算将使用新半径；\n"
+            "选择“保留 Excel 半径”后，继续使用 Excel 中已填写的原始半径。"
+        )
+
+    def _confirm_excel_turn_radius_override(self, n_mult: float, D_adopted: float, proposed_R: float) -> bool:
+        """在覆盖 Excel 显式半径前询问用户。"""
+        if not self._excel_protected_turn_points():
+            return True
+        message = self._build_excel_turn_radius_override_message(n_mult, D_adopted, proposed_R)
+        confirmed = fluent_question(
+            self._info_parent(),
+            "确认覆盖 Excel 转弯半径",
+            message,
+            yes_text="覆盖为 n×D",
+            no_text="保留 Excel 半径",
+        )
+        if confirmed:
+            self._excel_turn_radius_override_confirmed = True
+        return bool(confirmed)
+
+    def _mark_excel_turn_points_overridden(self):
+        """确认覆盖后清除显式来源标记，避免后续同一会话重复提示。"""
+        for fp in self._excel_explicit_turn_points():
+            fp.turn_radius_is_explicit = False
+            fp.turn_radius_text = ""
+            fp.turn_radius_source = "nD_override"
 
     def get_total_head_loss(self):
         """获取总水头损失（便捷方法）"""
@@ -2204,8 +2298,8 @@ document.addEventListener("DOMContentLoaded", function(){
 
         return migrated
 
-    def _update_plan_bend_radius(self):
-        """根据 n×D 自动更新平面弯管段的半径"""
+    def _update_plan_bend_radius(self, force_override=False, radius_override=None):
+        """根据 n×D 自动更新平面弯管段的半径，保护 Excel 显式半径。"""
         if not SIPHON_AVAILABLE:
             return
         n_mult = self._fval(self.edit_turn_n, 0)
@@ -2215,13 +2309,14 @@ document.addEventListener("DOMContentLoaded", function(){
         if diameter_ctx is None:
             return
         D_adopted = diameter_ctx['diameter']
-        siphon_radius = round(n_mult * D_adopted, 2)
+        siphon_radius = round(float(radius_override), 2) if radius_override is not None else round(n_mult * D_adopted, 2)
+        allow_excel_override = bool(force_override or self.has_excel_turn_radius_override())
 
         updated = False
         for seg in self.plan_segments:
             if seg.segment_type == SegmentType.BEND:
                 # DXF导入的弯管段（locked=True）保留实际半径，不被n×D覆盖
-                if seg.locked:
+                if seg.locked and (self._plan_source == 'dxf' or not allow_excel_override):
                     continue
                 seg.radius = siphon_radius
                 if seg.angle > 0:
@@ -2236,7 +2331,13 @@ document.addEventListener("DOMContentLoaded", function(){
                 # DXF导入的特征点（有实际半径）不覆盖
                 if self._plan_source == 'dxf' and fp.turn_radius > 0:
                     continue
+                # 水面线/Excel 中间 IP 已显式填写的圆弧半径，未确认覆盖前保留原值
+                if self._is_excel_explicit_plan_turn_point(fp) and not allow_excel_override:
+                    continue
                 fp.turn_radius = siphon_radius
+
+        if allow_excel_override:
+            self._mark_excel_turn_points_overridden()
 
         if updated:
             self._refresh_seg_table()
@@ -2749,6 +2850,8 @@ document.addEventListener("DOMContentLoaded", function(){
         self._v_user_confirmed = False
         self._num_pipes_user_confirmed = False
         self._turn_n_user_confirmed = False
+        self._excel_turn_radius_override_confirmed = False
+        self._turn_r_edit_pending_confirmation = False
         self._override_velocity_active = False
         self._override_restore_ready = False
         self._v_before_override_text = ""
@@ -3063,6 +3166,7 @@ document.addEventListener("DOMContentLoaded", function(){
             'v_confirmed': bool(self._v_user_confirmed),
             'num_pipes_confirmed': bool(self._num_pipes_user_confirmed),
             'turn_n_confirmed': bool(self._turn_n_user_confirmed),
+            'excel_turn_radius_override_confirmed': bool(self._excel_turn_radius_override_confirmed),
         }
 
     def _apply_confirmation_state(self, state=None):
@@ -3071,6 +3175,9 @@ document.addEventListener("DOMContentLoaded", function(){
         self._v_user_confirmed = bool(state.get('v_confirmed', False))
         self._num_pipes_user_confirmed = bool(state.get('num_pipes_confirmed', False))
         self._turn_n_user_confirmed = bool(state.get('turn_n_confirmed', False))
+        self._excel_turn_radius_override_confirmed = bool(
+            state.get('excel_turn_radius_override_confirmed', False)
+        )
         self._update_v_style()
         self._update_num_pipes_style()
         self._update_turn_n_style()
@@ -3549,7 +3656,18 @@ document.addEventListener("DOMContentLoaded", function(){
         """平面转弯半径倍数按 Enter 或失焦后，视为用户已确认。"""
         if self._syncing:
             return
+        was_pending = not self._turn_n_user_confirmed
         n_val = self._fval(self.edit_turn_n, 0)
+        if n_val > 0 and was_pending:
+            diameter_ctx = self._get_adopted_diameter_context()
+            if diameter_ctx is not None:
+                D_adopted = diameter_ctx['diameter']
+                proposed_R = round(n_val * D_adopted, 2)
+                if self._excel_protected_turn_points():
+                    if self._confirm_excel_turn_radius_override(n_val, D_adopted, proposed_R):
+                        self._update_plan_bend_radius(force_override=True, radius_override=proposed_R)
+                    else:
+                        self._update_plan_bend_radius()
         self._turn_n_user_confirmed = n_val > 0
         self._update_turn_n_style()
         self._update_turn_R()
@@ -3887,6 +4005,20 @@ document.addEventListener("DOMContentLoaded", function(){
             self.lbl_turn_R_status.setStyleSheet("color:#888;font-size:12px;")
         has_bends = any(seg.segment_type == SegmentType.BEND for seg in self.plan_segments)
         sync_hint = "，已同步至弯管段" if has_bends else ""
+        protected_points = self._excel_protected_turn_points()
+        if protected_points:
+            summary = "；".join(
+                f"IP{getattr(fp, 'ip_index', i + 1)}={self._format_turn_radius_value(getattr(fp, 'turn_radius', 0.0))}m"
+                for i, fp in enumerate(protected_points)
+            )
+            if hasattr(self, 'lbl_turn_R_status') and not self._syncing:
+                self.lbl_turn_R_status.setText("← Excel 半径优先，确认后才覆盖")
+                self.lbl_turn_R_status.setStyleSheet("color:#CC6600;font-size:12px;")
+            self.lbl_turn_R.setText(
+                f"Excel半径优先：{summary}；n×D={R:.2f}m（未覆盖）"
+            )
+            self.lbl_turn_R.setStyleSheet("color:#CC6600;font-size:12px;")
+            return
         if confirmed:
             self.lbl_turn_R.setText(f"{D_label}={D_adopted:.2f}m → R={R:.2f}m ✓已参与计算")
             self.lbl_turn_R.setStyleSheet(f"color:#008800;font-size:12px;")
@@ -3912,6 +4044,19 @@ document.addEventListener("DOMContentLoaded", function(){
         if D_adopted <= 0:
             return
         n_new = round(R_val / D_adopted, 3)
+        if self._excel_protected_turn_points():
+            self._turn_r_edit_pending_confirmation = True
+            self.lbl_turn_R.setText(
+                f"{D_label}={D_adopted:.2f}m → R={R_val:.2f}m，按 Enter/失焦确认是否覆盖 Excel 半径"
+            )
+            self.lbl_turn_R.setStyleSheet("color:#CC6600;font-size:12px;")
+            self.lbl_turn_R_status.setText("← 待确认是否覆盖 Excel 半径")
+            self.lbl_turn_R_status.setStyleSheet("color:#CC6600;font-size:12px;")
+            self.edit_turn_R.setStyleSheet(
+                "LineEdit { border: 1.5px dashed #CC6600; background: #FFF8E1; }"
+            )
+            return
+        self._turn_r_edit_pending_confirmation = False
         self._syncing = True
         self.edit_turn_n.setText(str(n_new))
         self._syncing = False
@@ -3928,6 +4073,45 @@ document.addEventListener("DOMContentLoaded", function(){
             f"LineEdit {{ border: 1.5px solid {S}; background: #F1F8E9; }}"
         )
         self._refresh_pipe_design_feedback()
+
+    def _on_turn_R_confirmed(self):
+        """直接输入 R 后，按 Enter 或失焦时确认是否覆盖 Excel 半径。"""
+        if self._syncing or not self._turn_r_edit_pending_confirmation:
+            return
+        R_val = self._fval(self.edit_turn_R, 0)
+        diameter_ctx = self._get_adopted_diameter_context()
+        if R_val <= 0 or diameter_ctx is None or not SIPHON_AVAILABLE:
+            self._turn_r_edit_pending_confirmation = False
+            return
+        D_adopted = diameter_ctx['diameter']
+        if D_adopted <= 0:
+            self._turn_r_edit_pending_confirmation = False
+            return
+        n_new = round(R_val / D_adopted, 3)
+        if self._excel_protected_turn_points():
+            if not self._confirm_excel_turn_radius_override(n_new, D_adopted, R_val):
+                self._turn_r_edit_pending_confirmation = False
+                self._update_turn_R()
+                return
+        self._syncing = True
+        self.edit_turn_n.setText(str(n_new))
+        self._syncing = False
+        self._siphon_turn_radius_n = n_new
+        self._turn_n_user_confirmed = True
+        self._turn_r_edit_pending_confirmation = False
+        self._update_turn_n_style()
+        self._update_plan_bend_radius(force_override=True, radius_override=R_val)
+        self.lbl_turn_R.setText(
+            f"{diameter_ctx['label']}={D_adopted:.2f}m → R={n_new}×{D_adopted:.2f}={R_val:.2f}m ✓（R反推n）"
+        )
+        self.lbl_turn_R.setStyleSheet(f"color:{S};font-size:12px;")
+        self.lbl_turn_R_status.setText("← 已覆盖，n已更新为主值")
+        self.lbl_turn_R_status.setStyleSheet(f"color:{S};font-size:12px;")
+        self.edit_turn_R.setStyleSheet(
+            f"LineEdit {{ border: 1.5px solid {S}; background: #F1F8E9; }}"
+        )
+        self._refresh_pipe_design_feedback()
+        self._mark_dirty()
 
     def _on_inlet_type_changed(self, text):
         """渐变段型式→进口系数自动联动"""

@@ -3,6 +3,7 @@
 
 import os
 import sys
+import math
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -17,6 +18,8 @@ if str(ROOT) not in sys.path:
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
+
+import pytest
 
 import app_渠系计算前端.siphon.multi_siphon_dialog as multi_siphon_dialog_mod
 import app_渠系计算前端.siphon.panel as siphon_panel_mod
@@ -64,6 +67,119 @@ def _make_two_plan_points():
         siphon_panel_mod.PlanFeaturePoint(chainage=0.0, x=0.0, y=0.0),
         siphon_panel_mod.PlanFeaturePoint(chainage=120.0, x=120.0, y=0.0),
     ]
+
+
+def _make_excel_turn_plan_points(radius=10.0):
+    return [
+        {
+            "chainage": 0.0,
+            "x": 0.0,
+            "y": 0.0,
+            "turn_radius": 0.0,
+            "turn_angle": 0.0,
+            "turn_type": "无",
+            "ip_index": 1,
+            "turn_radius_is_explicit": False,
+            "turn_radius_text": "",
+            "turn_radius_source": "",
+        },
+        {
+            "chainage": 80.0,
+            "x": 80.0,
+            "y": 0.0,
+            "turn_radius": radius,
+            "turn_angle": 35.0,
+            "turn_type": "圆弧",
+            "ip_index": 2,
+            "turn_radius_is_explicit": True,
+            "turn_radius_text": f"{radius:g}",
+            "turn_radius_source": "water_profile",
+        },
+        {
+            "chainage": 160.0,
+            "x": 160.0,
+            "y": 45.0,
+            "turn_radius": 0.0,
+            "turn_angle": 0.0,
+            "turn_type": "无",
+            "ip_index": 3,
+            "turn_radius_is_explicit": False,
+            "turn_radius_text": "",
+            "turn_radius_source": "",
+        },
+    ]
+
+
+def _make_multiple_excel_turn_plan_points():
+    points = _make_excel_turn_plan_points(radius=10.0)
+    points.insert(
+        2,
+        {
+            "chainage": 120.0,
+            "x": 120.0,
+            "y": 20.0,
+            "turn_radius": 11.5,
+            "turn_angle": 28.0,
+            "turn_type": "圆弧",
+            "ip_index": 3,
+            "turn_radius_is_explicit": True,
+            "turn_radius_text": "11.5",
+            "turn_radius_source": "water_profile",
+        },
+    )
+    points[-1]["chainage"] = 200.0
+    points[-1]["x"] = 200.0
+    points[-1]["ip_index"] = 4
+    return points
+
+
+def _make_blank_middle_turn_plan_points():
+    points = _make_excel_turn_plan_points(radius=0.0)
+    points[1].update(
+        {
+            "turn_radius": 0.0,
+            "turn_angle": 35.0,
+            "turn_type": "折线",
+            "turn_radius_is_explicit": False,
+            "turn_radius_text": "",
+            "turn_radius_source": "",
+        }
+    )
+    return points
+
+
+def _make_panel(monkeypatch):
+    _get_qapp()
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", lambda parent=None: _FakeWebEngineView(parent))
+    panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
+    panel._suppress_result_display = True
+    return panel
+
+
+def _set_excel_turn_params(panel, *, radius=10.0, n_value=3.0):
+    panel.set_params(
+        Q=math.pi,
+        v_guess=1.0,
+        roughness_n=0.014,
+        siphon_name="测试倒虹吸",
+        siphon_turn_radius_n=n_value,
+        plan_source="water_profile",
+        plan_total_length=160.0,
+        plan_feature_points=_make_excel_turn_plan_points(radius=radius),
+    )
+
+
+def _set_plan_params(panel, plan_feature_points, *, n_value=3.0):
+    panel.set_params(
+        Q=math.pi,
+        v_guess=1.0,
+        roughness_n=0.014,
+        siphon_name="测试倒虹吸",
+        siphon_turn_radius_n=n_value,
+        plan_source="water_profile",
+        plan_total_length=200.0,
+        plan_feature_points=plan_feature_points,
+    )
 
 
 def _make_group(name: str):
@@ -192,6 +308,161 @@ def test_turn_radius_r_override_keeps_n_confirmed(monkeypatch):
     assert panel.edit_turn_n.text() == "1.923"
 
     panel.deleteLater()
+
+
+def test_excel_explicit_turn_radius_survives_initial_n_sync(monkeypatch):
+    """Excel 已填的中间 IP 半径，打开窗口时不应被默认 n×D 覆盖。"""
+    panel = _make_panel(monkeypatch)
+
+    _set_excel_turn_params(panel, radius=10.0, n_value=3.0)
+
+    assert panel.plan_feature_points[1].turn_radius == 10.0
+
+    panel.deleteLater()
+
+
+def test_excel_explicit_turn_radius_kept_when_n_change_cancelled(monkeypatch):
+    """修改 n 后选择保留 Excel 半径，计算点仍使用 Excel 原值。"""
+    prompts = []
+
+    def _fake_question(_parent, title, message, yes_text=None, no_text=None):
+        prompts.append((title, message, yes_text, no_text))
+        return False
+
+    panel = _make_panel(monkeypatch)
+    monkeypatch.setattr(siphon_panel_mod, "fluent_question", _fake_question)
+    _set_excel_turn_params(panel, radius=10.0, n_value=3.0)
+
+    panel.edit_turn_n.setText("5.0")
+    panel.edit_turn_n.editingFinished.emit()
+
+    assert panel.plan_feature_points[1].turn_radius == 10.0
+    assert prompts
+    prompt_text = prompts[0][1]
+    assert "测试倒虹吸" in prompt_text
+    assert "IP2" in prompt_text
+    assert "10" in prompt_text
+    assert "n=5" in prompt_text
+    assert "D=" in prompt_text
+    assert "R=n×D" in prompt_text
+    assert prompts[0][2] == "覆盖为 n×D"
+    assert prompts[0][3] == "保留 Excel 半径"
+
+    panel.deleteLater()
+
+
+def test_multiple_excel_explicit_turn_radii_are_listed_in_prompt(monkeypatch):
+    """多个中间 IP 都有 Excel 半径时，提示应逐个列出。"""
+    prompts = []
+
+    def _fake_question(_parent, title, message, yes_text=None, no_text=None):
+        prompts.append(message)
+        return False
+
+    panel = _make_panel(monkeypatch)
+    monkeypatch.setattr(siphon_panel_mod, "fluent_question", _fake_question)
+    _set_plan_params(panel, _make_multiple_excel_turn_plan_points(), n_value=3.0)
+
+    panel.edit_turn_n.setText("4.0")
+    panel.edit_turn_n.editingFinished.emit()
+
+    assert prompts
+    assert "IP2" in prompts[0] and "10" in prompts[0]
+    assert "IP3" in prompts[0] and "11.5" in prompts[0]
+
+    panel.deleteLater()
+
+
+def test_excel_explicit_turn_radius_overridden_after_n_confirm(monkeypatch):
+    """修改 n 后选择覆盖，Excel 半径才改为当前 n×D。"""
+    panel = _make_panel(monkeypatch)
+    monkeypatch.setattr(siphon_panel_mod, "fluent_question", lambda *_args, **_kwargs: True)
+    _set_excel_turn_params(panel, radius=10.0, n_value=3.0)
+
+    panel.edit_turn_n.setText("5.0")
+    panel.edit_turn_n.editingFinished.emit()
+
+    diameter = panel._get_adopted_diameter_context()["diameter"]
+    assert panel.plan_feature_points[1].turn_radius == pytest.approx(round(5.0 * diameter, 2))
+    assert panel.has_excel_turn_radius_override() is True
+
+    panel.deleteLater()
+
+
+def test_blank_middle_turn_radius_still_auto_uses_n_times_d(monkeypatch):
+    """未显式填写 Excel 半径的中间转弯点仍按 n×D 自动补算。"""
+    panel = _make_panel(monkeypatch)
+    _set_plan_params(panel, _make_blank_middle_turn_plan_points(), n_value=3.0)
+
+    diameter = panel._get_adopted_diameter_context()["diameter"]
+    assert panel.plan_feature_points[1].turn_radius == pytest.approx(round(3.0 * diameter, 2))
+
+    panel.deleteLater()
+
+
+def test_direct_r_change_requires_confirm_before_overriding_excel_radius(monkeypatch):
+    """直接修改 R 时，Excel 显式半径也不能被绕过覆盖。"""
+    prompts = []
+
+    def _fake_question(_parent, title, message, yes_text=None, no_text=None):
+        prompts.append((title, message, yes_text, no_text))
+        return False
+
+    panel = _make_panel(monkeypatch)
+    monkeypatch.setattr(siphon_panel_mod, "fluent_question", _fake_question)
+    _set_excel_turn_params(panel, radius=10.0, n_value=3.0)
+
+    panel.edit_turn_R.setText("12.00")
+    panel.edit_turn_R.editingFinished.emit()
+
+    assert panel.plan_feature_points[1].turn_radius == 10.0
+    assert prompts
+    assert "R=12" in prompts[0][1]
+
+    panel.deleteLater()
+
+
+def test_direct_r_change_can_override_excel_radius_after_confirm(monkeypatch):
+    """直接修改 R 并确认覆盖后，中间 IP 半径应改为用户输入的 R。"""
+    panel = _make_panel(monkeypatch)
+    monkeypatch.setattr(siphon_panel_mod, "fluent_question", lambda *_args, **_kwargs: True)
+    _set_excel_turn_params(panel, radius=10.0, n_value=3.0)
+
+    panel.edit_turn_R.setText("12.00")
+    panel.edit_turn_R.editingFinished.emit()
+
+    diameter = panel._get_adopted_diameter_context()["diameter"]
+    assert panel.plan_feature_points[1].turn_radius == pytest.approx(12.0)
+    assert float(panel.edit_turn_n.text()) == pytest.approx(round(12.0 / diameter, 3))
+    assert panel.has_excel_turn_radius_override() is True
+
+    panel.deleteLater()
+
+
+def test_plan_feature_point_roundtrips_excel_turn_radius_metadata():
+    """平面特征点保存/恢复时应保留 Excel 半径来源信息。"""
+    point = siphon_panel_mod.PlanFeaturePoint(
+        chainage=80.0,
+        x=80.0,
+        y=0.0,
+        turn_radius=10.0,
+        turn_angle=35.0,
+        turn_type=siphon_panel_mod.TurnType.ARC,
+        ip_index=2,
+        turn_radius_is_explicit=True,
+        turn_radius_text="10",
+        turn_radius_source="water_profile",
+    )
+
+    data = point.to_dict()
+    restored = siphon_panel_mod.PlanFeaturePoint.from_dict(data)
+
+    assert data["turn_radius_is_explicit"] is True
+    assert data["turn_radius_text"] == "10"
+    assert data["turn_radius_source"] == "water_profile"
+    assert restored.turn_radius_is_explicit is True
+    assert restored.turn_radius_text == "10"
+    assert restored.turn_radius_source == "water_profile"
 
 
 def test_v_confirmation_still_blocks_calculation(monkeypatch):

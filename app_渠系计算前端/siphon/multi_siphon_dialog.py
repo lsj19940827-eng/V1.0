@@ -1301,6 +1301,7 @@ class MultiSiphonDialog(QDialog):
                     "diameter": result.diameter,
                     "velocity": result.velocity,
                     "turn_radius": panel.get_plan_bend_radius(),
+                    "turn_radius_overrode_excel": panel.has_excel_turn_radius_override(),
                 }
         return results
 

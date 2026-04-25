@@ -438,10 +438,16 @@ SiphonPanel 继承 QWidget，作为app_渠系计算前端Tab系统中的一个�
 | 数据来源 | 弯管段半径 | 特征点turn_radius |
 |----------|-----------|-------------------|
 | DXF (`locked=True`) | 跳过，保留DXF实际半径 | 跳过 |
-| 推求水面线 (`locked=False`) | 更新为 `n * D_design` | 更新为 `siphon_radius` |
+| 推求水面线空白半径 | 按当前 `n×D` 自动补算 | 更新为 `siphon_radius` |
+| 推求水面线/Excel 显式中间 IP 半径 | 默认保留 Excel 原始值 | 默认保留 Excel 原始值 |
 
 补充要求：
 - DXF 导入的圆弧除了 `radius / angle` 兼容字段外，还必须保留 `arc_geometry` 真源
+- 推求水面线表格中倒虹吸组的中间 IP 转弯行只要“转弯半径”列非空，就记录为显式来源；`0` 也算显式填写，但只有大于 0 的圆弧半径进入覆盖确认提示
+- Excel/水面线显式填写的中间 IP 圆弧半径优先级最高，计算默认使用该原始值，不被窗口里的平面转弯半径倍数 `n` 自动覆盖
+- 用户修改 `n` 后，按 Enter 或输入框失焦时，如果存在 Excel 显式半径，必须弹窗列出倒虹吸名称、IP 编号、Excel 半径、当前 `n`、采用管径 `D` 和拟覆盖的 `R=n×D`；确认按钮为“覆盖为 n×D”，取消按钮为“保留 Excel 半径”
+- 用户直接修改平面转弯半径 `R` 时也执行同一套确认规则；确认后本次窗口会话内继续按新的 `n×D/R` 更新，不再重复提示，取消则继续使用 Excel 原始半径
+- 多标签页结果回写水面线表格时，未确认覆盖不得改写已有显式半径的中间 IP 行；已确认覆盖才允许把新半径写回，空白中间 IP 转弯行仍可自动补写
 - autosave / 工况文件 / 项目保存恢复后，平面图与纵断面都要继续按圆弧显示
 - 旧工况若缺 `longitudinal_nodes` 或缺 `arc_geometry`，加载时要先自动补建，再进入正常显示与保存链路
 - 纵断面 `segments` 在节点/结构段互转、autosave 和项目保存恢复后，直管/折管都要继续保留 `coordinates`；若旧工况已有 `longitudinal_nodes` 但段坐标缺失，加载时要按节点自动补齐
@@ -616,6 +622,7 @@ MultiSiphonDialog(
 3. 收集 GlobalParameters
 4. 同步纵断面节点
 5. 弯管半径倍数未按 Enter/失焦确认时警告（方案B，不阻断）
+   - 若平面数据来自水面线/Excel 且中间 IP 行已有显式圆弧半径，默认采用 Excel 原值；只有用户确认覆盖后，才把 `n×D` 或直接输入的 `R` 写入特征点参与计算
 6. v2校验（非阻断警告）
 7. 调用 `HydraulicCore.execute_calculation()`
 8. 旧项目若能唯一恢复来源索引，先自动补回 `source_ip_index / source_long_node_index` 再继续；若无法唯一恢复，则改按自动值计算，`ignored_manual_overrides` 非空时弹出一次“手工局部系数未采用”的非阻断提示

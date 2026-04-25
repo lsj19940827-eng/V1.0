@@ -171,6 +171,47 @@ def _extract_one(nodes):
     return groups[0]
 
 
+def _siphon_plan_node(ip_number, *, radius=0.0, angle=0.0, explicit=False, text=""):
+    node = ChannelNode(
+        name="虹吸A",
+        structure_type=StructureType.INVERTED_SIPHON,
+        flow_section="A",
+        flow=1.0,
+    )
+    node.station_MC = float(ip_number) * 10.0
+    node.x = float(ip_number) * 100.0
+    node.y = float(ip_number) * 20.0
+    node.azimuth = 30.0
+    node.turn_radius = radius
+    node.turn_angle = angle
+    node.ip_number = ip_number
+    node.turn_radius_is_explicit = explicit
+    node.turn_radius_text = text
+    return node
+
+
+def test_extract_plan_feature_points_marks_only_middle_excel_turn_radius():
+    group = siphon_extractor_mod.SiphonGroup(
+        name="虹吸A",
+        rows=[
+            _siphon_plan_node(1, radius=9.0, angle=20.0, explicit=True, text="9"),
+            _siphon_plan_node(2, radius=10.0, angle=35.0, explicit=True, text="10"),
+            _siphon_plan_node(3, radius=11.0, angle=25.0, explicit=True, text="11"),
+        ],
+    )
+
+    SiphonDataExtractor._extract_plan_feature_points(group)
+
+    assert group.plan_feature_points[0]["turn_radius"] == 0.0
+    assert group.plan_feature_points[0]["turn_radius_is_explicit"] is False
+    assert group.plan_feature_points[1]["turn_radius"] == 10.0
+    assert group.plan_feature_points[1]["turn_radius_is_explicit"] is True
+    assert group.plan_feature_points[1]["turn_radius_text"] == "10"
+    assert group.plan_feature_points[1]["turn_radius_source"] == "water_profile"
+    assert group.plan_feature_points[2]["turn_radius"] == 0.0
+    assert group.plan_feature_points[2]["turn_radius_is_explicit"] is False
+
+
 def test_same_section_upstream_donor_is_reused_for_both_sides():
     siphon_in, siphon_out = _siphon_pair("虹吸A", "A", 1.0)
     nodes = [
