@@ -76,3 +76,20 @@ def test_from_dict_preserves_explicit_none_transition_values(monkeypatch):
 
     panel.deleteLater()
 
+
+def test_from_dict_does_not_print_debug_by_default(monkeypatch, capsys):
+    """默认未开启调试开关时，恢复倒虹吸数据不应污染终端输出。"""
+    _get_qapp()
+    monkeypatch.delenv("APP_DEBUG", raising=False)
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
+
+    panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
+    capsys.readouterr()
+
+    panel.from_dict({"Q": 1.0, "v_guess": 2.0, "calculated_at": "2026-04-25 10:00:00"})
+
+    captured = capsys.readouterr()
+    assert "[DEBUG SiphonPanel.from_dict]" not in captured.out
+
+    panel.deleteLater()
+

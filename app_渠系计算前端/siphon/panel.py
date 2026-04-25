@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QColor, QBrush, QIntValidator, QShortcut, QKeySequence
 from app_渠系计算前端.webview_compat import create_web_view
+from app_渠系计算前端.debug_utils import debug_print
 
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, ComboBox, CheckBox,
@@ -2759,7 +2760,7 @@ document.addEventListener("DOMContentLoaded", function(){
 
     def from_dict(self, d):
         """从字典恢复状态（项目加载用）"""
-        print(f"[DEBUG SiphonPanel.from_dict] 开始，键: {list(d.keys())[:10]}...")
+        debug_print(f"[DEBUG SiphonPanel.from_dict] 开始，键: {list(d.keys())[:10]}...")
         self._v_user_confirmed = False
         self._num_pipes_user_confirmed = False
         self._turn_n_user_confirmed = False
@@ -2919,14 +2920,14 @@ document.addEventListener("DOMContentLoaded", function(){
                 'num_pipes_confirmed': True,
                 'turn_n_confirmed': True,
             }
-            print(f"[DEBUG SiphonPanel.from_dict] 检测到 calculated_at={d['calculated_at']}，已自动确认")
+            debug_print(f"[DEBUG SiphonPanel.from_dict] 检测到 calculated_at={d['calculated_at']}，已自动确认")
 
         self._refresh_seg_table()
         self._do_update_canvas()
         self._update_data_status()
         self._apply_confirmation_state(confirmation_state)
         self._refresh_pipe_design_feedback()
-        print("[DEBUG SiphonPanel.from_dict] 完成")
+        debug_print("[DEBUG SiphonPanel.from_dict] 完成")
 
     def to_project_dict(self):
         """项目保存接口：复用原有 to_dict。"""
