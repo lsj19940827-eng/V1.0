@@ -27,7 +27,7 @@ class PressurePipeConfig:
     Q: float = 0.0                          # 设计流量 (m³/s)
     D: float = 0.0                          # 管径 (m)
     material_key: str = ""                  # 管材键名
-    wall_thickness_m: Optional[float] = None  # 基础水锤验算壁厚 e(m)
+    wall_thickness_m: Optional[float] = None  # 水击验算壁厚 e(m)
     local_loss_ratio: float = 0.15          # 局部损失比例（简化模式用）
     
     # 渐变段参数
@@ -84,7 +84,7 @@ class PressurePipeConfig:
     data_mode: str = ""                             # 数据模式（独立计算 / 独立叠加 / 旧结果兼容）
     status: str = ""                                # 计算状态
     computed_from_profile_source: str = ""          # 纵断面来源
-    water_hammer_basic: Dict[str, Any] = field(default_factory=dict)  # 基础水锤验算快照
+    water_hammer_basic: Dict[str, Any] = field(default_factory=dict)  # 水击验算快照
     
     def __post_init__(self):
         if self.ip_points is None:
@@ -753,7 +753,7 @@ class PressurePipeManager:
         water_hammer_segments: List[Dict[str, Any]],
         route_display_name: str = "",
     ):
-        """保存整线级基础水锤验算段。"""
+        """保存整线级水击验算段。"""
         route_key = str(route_key or "").strip()
         if not route_key:
             return

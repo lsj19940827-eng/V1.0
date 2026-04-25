@@ -38,7 +38,7 @@ def test_calc_basic_water_hammer_returns_expected_values_for_direct_closure():
         closing_time_s=1.0,
     )
 
-    expected_a = 1425.0 / math.sqrt(1.0 + (WATER_BULK_MODULUS / 206.0e9) * (1.2 / 0.014))
+    expected_a = 1435.0 / math.sqrt(1.0 + (WATER_BULK_MODULUS / 206.0e9) * (1.2 / 0.014))
     expected_mu = 2.0 * 1200.0 / expected_a
     expected_delta_h = expected_a * 1.8 / GRAVITY
 
@@ -50,10 +50,15 @@ def test_calc_basic_water_hammer_returns_expected_values_for_direct_closure():
     assert result["delta_h"] == pytest.approx(expected_delta_h, rel=1e-6)
     assert result["hmax"] == pytest.approx(98.5 + expected_delta_h, rel=1e-6)
     assert result["inputs"]["wall_thickness_m"] == pytest.approx(0.014)
+    diagram = result["diagram_type_check"]
+    assert diagram["source"] == "图1-3-3"
+    assert diagram["positive_region"].startswith("V区")
+    assert "直接正水击" in diagram["positive_region"]
+    assert diagram["note"] == "仅作图1-3-3对照，不参与控制值计算"
 
 
-def test_calc_basic_water_hammer_marks_not_applicable_when_ts_exceeds_mu():
-    """关闭时间超过水锤相时应标记为不适用。"""
+def test_calc_basic_water_hammer_returns_indirect_closure_when_ts_exceeds_phase_time():
+    """关闭时间超过水击相时应按线性关阀间接水击计算。"""
     result = calc_basic_water_hammer(
         length_m=200.0,
         diameter_m=1.0,
@@ -64,12 +69,71 @@ def test_calc_basic_water_hammer_marks_not_applicable_when_ts_exceeds_mu():
         closing_time_s=5.0,
     )
 
-    assert result["status"] == "不适用"
-    assert "Ts" in result["reason"]
+    expected_c = 1435.0 / math.sqrt(1.0 + (WATER_BULK_MODULUS / 108.0e9) * (1.0 / 0.012))
+    expected_phase_time = 2.0 * 200.0 / expected_c
+    expected_sigma = 200.0 * 1.6 / (GRAVITY * 88.0 * 5.0)
+    expected_terminal_zeta = expected_sigma / 2.0 * (
+        expected_sigma + math.sqrt(4.0 + expected_sigma ** 2)
+    )
+
+    assert result["status"] == "可计算"
+    assert result["reason"] == ""
     assert result["a"] > 0
-    assert result["mu"] > 0
-    assert result["delta_h"] is None
-    assert result["hmax"] is None
+    assert result["phase_time_s"] == pytest.approx(expected_phase_time, rel=1e-6)
+    assert result["mu"] == pytest.approx(expected_phase_time, rel=1e-6)
+    assert result["sigma"] == pytest.approx(expected_sigma, rel=1e-6)
+    assert result["positive_delta_h"] >= expected_terminal_zeta * 88.0 - 1e-6
+    assert result["delta_h"] == pytest.approx(result["positive_delta_h"], rel=1e-6)
+    assert result["positive_control_type"] in {"第一相正水击", "末相正水击"}
+    assert result["hmax"] == pytest.approx(88.0 + result["positive_delta_h"], rel=1e-6)
+    diagram = result["diagram_type_check"]
+    assert diagram["tau0"] == pytest.approx(1.0)
+    assert diagram["mu_tau0"] == pytest.approx(result["section_mu"], rel=1e-6)
+    assert diagram["sigma"] == pytest.approx(expected_sigma, rel=1e-6)
+    assert diagram["line_sigma"] == pytest.approx(result["section_mu"], rel=1e-6)
+    assert diagram["positive_region"] == "II区：第一相正水击"
+    assert diagram["negative_region"] in {"III区：负末相水击", "IV区：第一相负水击"}
+
+
+def test_calc_basic_water_hammer_reports_diagram_region_for_terminal_positive_control():
+    """末相正水击控制时应给出图1-3-3的I区对照。"""
+    result = calc_basic_water_hammer(
+        length_m=200.0,
+        diameter_m=1.0,
+        wall_thickness_m=0.012,
+        elastic_modulus_pa=108.0e9,
+        velocity_mps=3.0,
+        initial_head_m=50.0,
+        closing_time_s=5.0,
+    )
+
+    assert result["status"] == "可计算"
+    assert result["positive_control_type"] == "末相正水击"
+    assert result["negative_control_type"] in {"第一相负水击", "负末相水击"}
+    assert result["positive_delta_h"] == pytest.approx(result["delta_h"], rel=1e-6)
+    diagram = result["diagram_type_check"]
+    assert diagram["positive_region"] == "I区：末相正水击"
+    assert "不参与控制值计算" in diagram["note"]
+
+
+def test_calc_basic_water_hammer_reports_negative_pressure_risk():
+    """线性开启负水击后最低压强水头小于0时应标记负压风险。"""
+    result = calc_basic_water_hammer(
+        length_m=800.0,
+        diameter_m=1.0,
+        wall_thickness_m=0.02,
+        elastic_modulus_pa=206.0e9,
+        velocity_mps=2.0,
+        initial_head_m=20.0,
+        closing_time_s=0.3,
+    )
+
+    assert result["status"] == "可计算"
+    assert result["negative_delta_h"] > 0
+    assert result["hmin"] == pytest.approx(20.0 - result["negative_delta_h"], rel=1e-6)
+    assert result["negative_margin_m"] == pytest.approx(result["hmin"], rel=1e-6)
+    assert result["negative_pressure_status"] == "有负压风险"
+    assert result["negative_control_type"] in {"直接负水击", "第一相负水击", "负末相水击"}
 
 
 def test_calc_basic_water_hammer_reports_missing_inputs():
@@ -87,7 +151,7 @@ def test_calc_basic_water_hammer_reports_missing_inputs():
     assert result["status"] == "输入缺失"
     assert "壁厚" in result["reason"]
     assert "弹性模量" in result["reason"]
-    assert "Hc" in result["reason"]
+    assert "H0" in result["reason"]
     assert result["a"] is None
     assert result["mu"] is None
 
@@ -128,7 +192,7 @@ def test_calc_distributed_water_hammer_check_passes_when_all_points_have_margin(
         sample_interval_m=1.0,
     )
 
-    expected_a = 1425.0 / math.sqrt(1.0 + (WATER_BULK_MODULUS / 206.0e9) * (1.0 / 0.02))
+    expected_a = 1435.0 / math.sqrt(1.0 + (WATER_BULK_MODULUS / 206.0e9) * (1.0 / 0.02))
     expected_delta_h = expected_a / GRAVITY
 
     assert result["status"] == "通过"
@@ -217,8 +281,8 @@ def test_calc_distributed_water_hammer_check_uses_most_dangerous_member_delta_h(
     assert pipe_b_boundary["pipe_top_elevation_m"] == pytest.approx(100.25)
 
 
-def test_calc_distributed_water_hammer_check_marks_not_applicable_when_ts_exceeds_mu():
-    """关阀时间大于混合段水锤相时时不做通过判定。"""
+def test_calc_distributed_water_hammer_check_handles_indirect_closure_when_ts_exceeds_phase_time():
+    """关阀时间大于水击相时时仍应按线性关阀给出分布判定。"""
     result = calc_distributed_water_hammer_check(
         members=[
             {
@@ -243,9 +307,49 @@ def test_calc_distributed_water_hammer_check_marks_not_applicable_when_ts_exceed
         sample_interval_m=1.0,
     )
 
-    assert result["status"] == "不适用"
-    assert result["details"] == []
-    assert result["min_margin_m"] is None
+    assert result["status"] == "通过"
+    assert result["details"]
+    assert result["phase_time_s"] > 0
+    assert result["positive_delta_h"] == pytest.approx(result["delta_h"], rel=1e-6)
+    assert result["positive_control_type"] in {"第一相正水击", "末相正水击"}
+    assert result["negative_delta_h"] > 0
+    assert result["negative_pressure_risk_count"] == 0
+    diagram = result["diagram_type_check"]
+    assert diagram["source"] == "图1-3-3"
+    assert diagram["positive_region"] in {"I区：末相正水击", "II区：第一相正水击"}
+    assert result["details"][0]["diagram_type_check"]["source"] == "图1-3-3"
+
+
+def test_calc_distributed_water_hammer_check_marks_failed_for_negative_pressure_risk():
+    """任一采样点出现负压风险时整线结论应为不通过。"""
+    result = calc_distributed_water_hammer_check(
+        members=[
+            {
+                "key": "pipe-a",
+                "start_station_m": 0.0,
+                "end_station_m": 10.0,
+                "diameter_m": 1.0,
+                "elastic_modulus_pa": 206.0e9,
+                "velocity_mps": 2.0,
+            }
+        ],
+        centerline_nodes=[
+            {"station_m": 0.0, "elevation_m": 100.0},
+            {"station_m": 10.0, "elevation_m": 100.0},
+        ],
+        water_level_nodes=[
+            {"station_m": 0.0, "water_level_m": 110.0},
+            {"station_m": 10.0, "water_level_m": 110.0},
+        ],
+        wall_thickness_m=0.02,
+        closing_time_s=0.001,
+        sample_interval_m=5.0,
+    )
+
+    assert result["status"] == "不通过"
+    assert result["negative_pressure_risk_count"] > 0
+    assert result["min_negative_margin_m"] < 0
+    assert result["negative_critical_point"]["negative_status"] == "负压风险"
 
 
 def test_calc_distributed_water_hammer_check_reports_missing_profile_data():
@@ -274,6 +378,104 @@ def test_calc_distributed_water_hammer_check_reports_missing_profile_data():
     assert "纵断面" in result["reason"]
 
 
+def test_calc_distributed_water_hammer_check_accepts_millimeter_endpoint_gap():
+    """纵断面端点与成员端点只有毫米内尾差时应夹紧计算。"""
+    route_end = 10501.426
+    imported_end = 10501.4257607283
+    result = calc_distributed_water_hammer_check(
+        members=[
+            {
+                "key": "pipe-a",
+                "start_station_m": 0.0,
+                "end_station_m": route_end,
+                "diameter_m": 0.4,
+                "elastic_modulus_pa": 1.4e9,
+                "velocity_mps": 0.7958,
+            }
+        ],
+        centerline_nodes=[
+            {"station_m": 0.0, "elevation_m": 380.0},
+            {"station_m": imported_end, "elevation_m": 379.0},
+        ],
+        water_level_nodes=[
+            {"station_m": 0.0, "water_level_m": 430.0},
+            {"station_m": imported_end, "water_level_m": 429.0},
+        ],
+        wall_thickness_m=0.1,
+        closing_time_s=60.0,
+        sample_interval_m=5000.0,
+    )
+
+    assert result["status"] != "数据缺失"
+    assert "覆盖不足" not in result["reason"]
+    assert result["sample_count"] > 0
+    end_detail = [item for item in result["details"] if item["station_m"] == pytest.approx(route_end)][0]
+    assert end_detail["centerline_elevation_m"] == pytest.approx(379.0)
+    assert end_detail["water_level_m"] == pytest.approx(429.0)
+
+
+def test_calc_distributed_water_hammer_check_reports_true_endpoint_gap_with_range():
+    """真正超出覆盖容差时应说明采样桩号和覆盖范围。"""
+    result = calc_distributed_water_hammer_check(
+        members=[
+            {
+                "key": "pipe-a",
+                "start_station_m": 0.0,
+                "end_station_m": 10501.428,
+                "diameter_m": 0.4,
+                "elastic_modulus_pa": 1.4e9,
+                "velocity_mps": 0.7958,
+            }
+        ],
+        centerline_nodes=[
+            {"station_m": 0.0, "elevation_m": 380.0},
+            {"station_m": 10501.4257607283, "elevation_m": 379.0},
+        ],
+        water_level_nodes=[
+            {"station_m": 0.0, "water_level_m": 430.0},
+            {"station_m": 10501.4257607283, "water_level_m": 429.0},
+        ],
+        wall_thickness_m=0.1,
+        closing_time_s=60.0,
+        sample_interval_m=5000.0,
+    )
+
+    assert result["status"] == "数据缺失"
+    assert "10501.428" in result["reason"]
+    assert "0.000" in result["reason"]
+    assert "10501.426" in result["reason"]
+
+
+def test_calc_distributed_water_hammer_check_reports_zero_length_member_plainly():
+    """零长度成员应给出面向用户的桩号提示。"""
+    result = calc_distributed_water_hammer_check(
+        members=[
+            {
+                "key": "anchor",
+                "start_station_m": 0.0,
+                "end_station_m": 0.0,
+                "diameter_m": 1.0,
+                "elastic_modulus_pa": 206.0e9,
+                "velocity_mps": 1.0,
+            }
+        ],
+        centerline_nodes=[
+            {"station_m": 0.0, "elevation_m": 100.0},
+            {"station_m": 10.0, "elevation_m": 100.0},
+        ],
+        water_level_nodes=[
+            {"station_m": 0.0, "water_level_m": 230.0},
+            {"station_m": 10.0, "water_level_m": 230.0},
+        ],
+        wall_thickness_m=0.02,
+        closing_time_s=0.01,
+    )
+
+    assert result["status"] == "数据缺失"
+    assert "起终点相同" in result["reason"]
+    assert "成员长度必须大于0" not in result["reason"]
+
+
 def test_calc_distributed_water_hammer_check_checks_upstream_pipe_top_at_boundary():
     """成员分界点应同时校核上游大管径，避免漏掉更高管顶。"""
     result = calc_distributed_water_hammer_check(
@@ -292,7 +494,7 @@ def test_calc_distributed_water_hammer_check_checks_upstream_pipe_top_at_boundar
                 "end_station_m": 20.0,
                 "diameter_m": 1.0,
                 "elastic_modulus_pa": 206.0e9,
-                "velocity_mps": 0.05,
+                "velocity_mps": 0.005,
             },
         ],
         centerline_nodes=[

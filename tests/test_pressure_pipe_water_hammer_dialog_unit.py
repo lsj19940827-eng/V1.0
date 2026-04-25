@@ -21,7 +21,10 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "推求水面线") not in sys.path:
     sys.path.insert(0, str(ROOT / "推求水面线"))
 
-from app_渠系计算前端.water_profile.water_profile_dialogs import PressurePipeConfigDialog  # noqa: E402
+from app_渠系计算前端.water_profile.water_profile_dialogs import (  # noqa: E402
+    PressurePipeConfigDialog,
+    PressurePipeWaterHammerDialog,
+)
 from 推求水面线.managers.pressure_pipe_manager import PressurePipeConfig, PressurePipeManager  # noqa: E402
 from 推求水面线.models.enums import StructureType  # noqa: E402
 
@@ -132,7 +135,7 @@ def _make_route_group(
 def _make_route_dialog(groups, manager=None):
     """创建整线模式弹窗并刷新事件。"""
     _get_qapp()
-    dialog = PressurePipeConfigDialog(
+    dialog = PressurePipeWaterHammerDialog(
         pipe_groups=groups,
         manager=manager,
         pressure_chains=[],
@@ -171,7 +174,7 @@ def test_dialog_prefills_and_persists_basic_water_hammer_inputs_and_results():
 
     try:
         manager = _make_manager(project_path, group)
-        dialog = PressurePipeConfigDialog(pipe_groups=[group], manager=manager)
+        dialog = PressurePipeWaterHammerDialog(pipe_groups=[group], manager=manager)
         dialog.show()
         _flush_events(6)
 
@@ -189,6 +192,10 @@ def test_dialog_prefills_and_persists_basic_water_hammer_inputs_and_results():
 
         assert "可计算" in widgets["water_hammer_status_label"].text()
         assert widgets["water_hammer_result_hmax_label"].text() != "-"
+        assert widgets["water_hammer_result_hmin_label"].text() != "-"
+        assert widgets["water_hammer_result_control_type_label"].text()
+        assert widgets["water_hammer_result_diagram_type_label"].text() != "-"
+        assert "图1-3-3" in widgets["water_hammer_result_diagram_type_label"].text()
 
         dialog.accept()
         _flush_events(2)
@@ -200,7 +207,7 @@ def test_dialog_prefills_and_persists_basic_water_hammer_inputs_and_results():
         assert loaded.water_hammer_basic["status"] == "可计算"
         assert loaded.water_hammer_basic["inputs"]["closing_time_s"] == pytest.approx(0.25)
 
-        dialog_reopen = PressurePipeConfigDialog(pipe_groups=[group], manager=reloaded_manager)
+        dialog_reopen = PressurePipeWaterHammerDialog(pipe_groups=[group], manager=reloaded_manager)
         dialog_reopen.show()
         _flush_events(6)
 
@@ -210,11 +217,49 @@ def test_dialog_prefills_and_persists_basic_water_hammer_inputs_and_results():
         assert _read_float(widgets_reopen["water_hammer_closing_time_edit"]) == pytest.approx(0.25)
         assert "可计算" in widgets_reopen["water_hammer_status_label"].text()
         assert widgets_reopen["water_hammer_result_hmax_label"].text() != "-"
+        assert widgets_reopen["water_hammer_result_hmin_label"].text() != "-"
+        assert widgets_reopen["water_hammer_result_diagram_type_label"].text() != "-"
 
         dialog.close()
         dialog_reopen.close()
     finally:
         shutil.rmtree(case_dir, ignore_errors=True)
+
+
+def test_pressure_pipe_config_dialog_no_longer_shows_water_hammer_panel():
+    """有压管道水力计算窗口不再承载水锤验算入口。"""
+    _get_qapp()
+    group = _make_group()
+
+    dialog = PressurePipeConfigDialog(pipe_groups=[group])
+    try:
+        dialog.show()
+        _flush_events(6)
+
+        widgets = dialog._card_widgets[group.storage_key]
+        assert "water_hammer_panel" not in widgets
+    finally:
+        dialog.close()
+
+
+def test_pressure_pipe_water_hammer_dialog_shows_only_water_hammer_panel():
+    """水锤专用窗口应显示水锤验算区，不显示水力计算的R/D设置区。"""
+    _get_qapp()
+    group = _make_group()
+
+    dialog = PressurePipeWaterHammerDialog(pipe_groups=[group])
+    try:
+        dialog.show()
+        _flush_events(6)
+
+        widgets = dialog._card_widgets[group.storage_key]
+        assert "water_hammer_panel" in widgets
+        assert "turn_n_edit" not in widgets
+        assert widgets["water_hammer_calc_btn"].property("waterHammerAction") is True
+        assert widgets["water_hammer_calc_btn"].cursor().shape() == Qt.PointingHandCursor
+        assert dialog.windowTitle() == "有压管道水锤验算"
+    finally:
+        dialog.close()
 
 
 def test_route_water_hammer_segments_split_at_tunnel_and_keep_pressure_runs_whole():
@@ -303,6 +348,49 @@ def test_route_only_dialog_shows_water_hammer_segment_panel_without_child_pipe_c
         assert len(segment_widgets) == 1
         assert segment_widgets[0]["segment_key"] == "flow1-route1::pipe-a::pipe-b"
         assert segment_widgets[0]["water_hammer_calc_btn"].text() == "验算/刷新"
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_result_layout_stays_stable_after_long_result_text():
+    """验算后的长文本结果不应撑宽水锤窗口内容区。"""
+    groups = [
+        _make_route_group(
+            "pipe-a",
+            0,
+            "有压管道",
+            start_mc=0.0,
+            end_mc=10436.427,
+            diameter=0.4,
+            design_flow=0.1,
+            material_key="HDPE管",
+            pipe_velocity=0.7958,
+        ),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=397.16)
+        widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        widgets["water_hammer_wall_thickness_edit"].setText("0.1")
+        widgets["water_hammer_closing_time_edit"].setText("300")
+        _flush_events(6)
+
+        before_width = dialog._resolve_content_size().width()
+        calc_btn = widgets["water_hammer_calc_btn"]
+        assert calc_btn.text() == "验算/刷新"
+        assert calc_btn.property("waterHammerAction") is True
+        assert calc_btn.cursor().shape() == Qt.PointingHandCursor
+
+        QTest.mouseClick(calc_btn, Qt.LeftButton)
+        _flush_events(8)
+
+        after_width = dialog._resolve_content_size().width()
+        assert after_width <= before_width + 80
+        assert "第一相" in widgets["water_hammer_result_control_type_label"].text()
+        assert "图1-3-3" in widgets["water_hammer_result_diagram_type_label"].text()
+        assert widgets["water_hammer_result_control_type_label"].wordWrap() is True
+        assert widgets["water_hammer_result_diagram_type_label"].wordWrap() is True
     finally:
         dialog.close()
 
@@ -413,6 +501,8 @@ def test_route_water_hammer_distribution_check_shows_pass_and_detail_rows():
         assert widgets["water_hammer_result_conclusion_label"].text() == "通过"
         assert widgets["water_hammer_result_exceed_count_label"].text() == "0"
         assert _read_float(widgets["water_hammer_result_min_margin_label"]) > 0
+        assert widgets["water_hammer_result_diagram_type_label"].text() != "-"
+        assert "图1-3-3" in widgets["water_hammer_result_diagram_type_label"].text()
 
         assert widgets["water_hammer_detail_table"].isVisible() is False
         QTest.mouseClick(widgets["water_hammer_detail_btn"], Qt.LeftButton)
@@ -420,6 +510,60 @@ def test_route_water_hammer_distribution_check_shows_pass_and_detail_rows():
         assert widgets["water_hammer_detail_table"].isVisible() is True
         assert widgets["water_hammer_detail_table"].rowCount() >= 21
         assert widgets["water_hammer_detail_table"].horizontalHeaderItem(2).text() == "表3水位(m)"
+        assert widgets["water_hammer_detail_table"].horizontalHeaderItem(7).text() == "负ΔH(m)"
+        assert widgets["water_hammer_detail_table"].horizontalHeaderItem(8).text() == "负压余量(m)"
+        assert widgets["water_hammer_detail_table"].horizontalHeaderItem(11).text() == "图1-3-3对照"
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_distribution_skips_zero_length_anchor_members():
+    """整线水锤验算应跳过起终点相同的锚点行，继续计算真实管段。"""
+    groups = [
+        _make_route_group("anchor", 0, "有压管道", start_mc=0.0, end_mc=0.0, diameter=1.0),
+        _make_route_group("pipe-a", 1, "有压管道", start_mc=0.0, end_mc=10.0, diameter=1.0),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=400.0)
+        widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        widgets["water_hammer_wall_thickness_edit"].setText("0.02")
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+
+        members = dialog._build_route_water_hammer_distribution_members(widgets["segment_key"])
+        assert [member["key"] for member in members] == ["pipe-a"]
+
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(6)
+
+        assert "成员长度必须大于0" not in widgets["water_hammer_status_label"].text()
+        assert "通过" in widgets["water_hammer_status_label"].text()
+        assert widgets["water_hammer_detail_table"].rowCount() > 0
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_distribution_reports_missing_table3_water_level():
+    """表3水位未生成时应提示先执行计算，不得把0水位当有效压力线。"""
+    groups = [
+        _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, diameter=1.0),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=0.0)
+        widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        widgets["water_hammer_wall_thickness_edit"].setText("0.02")
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(6)
+
+        status_text = widgets["water_hammer_status_label"].text()
+        assert "数据缺失" in status_text
+        assert "缺少表3水位" in status_text
+        assert "采样点超出数据覆盖范围" not in status_text
+        assert widgets["water_hammer_detail_table"].rowCount() == 0
     finally:
         dialog.close()
 
@@ -516,3 +660,132 @@ def test_route_water_hammer_segments_persist_and_restore_from_manager():
         except Exception:
             pass
         shutil.rmtree(case_dir, ignore_errors=True)
+
+
+def test_real_jiangjiaba_route_water_hammer_handles_profile_endpoint_tail_gap():
+    """真实江家坝样例的DXF端点尾差不应导致水击覆盖不足误报。"""
+    excel_path = ROOT / "data" / "江家坝支管批量计算用表.xlsx"
+    dxf_path = ROOT / "data" / "江家坝支管纵剖面中心线.dxf"
+    if not excel_path.exists() or not dxf_path.exists():
+        pytest.skip("缺少江家坝真实样例文件")
+
+    siphon_root = ROOT / "倒虹吸水力计算系统"
+    if str(siphon_root) not in sys.path:
+        sys.path.insert(0, str(siphon_root))
+    try:
+        from app_渠系计算前端.batch.panel import BatchPanel
+        from app_渠系计算前端.water_profile.panel import WaterProfilePanel
+        from dxf_parser import DxfParser
+        from shared.shared_data_manager import get_shared_data_manager
+    except Exception as exc:
+        pytest.skip(f"真实样例依赖不可用：{exc}")
+
+    _get_qapp()
+    shared_data = get_shared_data_manager()
+    shared_data.clear_batch_results()
+    batch = BatchPanel()
+    water_panel = WaterProfilePanel()
+    dialog = None
+    try:
+        batch._do_load_from_filepath(str(excel_path), is_sample=True, sample_title="diag", sample_desc="diag")
+        _flush_events(4)
+        batch._batch_calculate()
+        _flush_events(6)
+        assert len(batch.batch_results) == 130
+
+        water_panel._import_from_batch()
+        _flush_events(8)
+        settings = water_panel._build_settings()
+        context = water_panel._prepare_pressure_pipe_dialog_context(
+            water_panel.nodes,
+            settings=settings,
+            show_xxpipe_warning=False,
+        )
+        route_targets = context.get("route_import_targets") or {}
+        route_key = next(iter(route_targets.keys()))
+        dialog = PressurePipeWaterHammerDialog(
+            pipe_groups=context.get("pipe_groups") or [],
+            pressure_chains=context.get("chain_descriptors") or [],
+            xxpipe_route_mode=bool(context.get("xxpipe_route_mode")),
+            route_import_targets=route_targets,
+        )
+        _flush_events(6)
+        route_refs = dialog._route_widgets[route_key]
+        widgets = route_refs["water_hammer_segment_widgets"][0]
+        route_import_result = dialog._resolve_xxpipe_route_import_result(
+            route_key,
+            str(dxf_path),
+            DxfParser,
+            route_targets[route_key].get("targets") or [],
+        )
+        dialog._longitudinal_data[route_key] = list(route_import_result.get("merged_nodes") or [])
+        longitudinal_nodes_dict = {route_key: list(route_import_result.get("merged_nodes") or [])}
+        route_profile_segments_by_key = WaterProfilePanel._build_pressure_pipe_route_profile_segments(
+            context.get("pipe_groups") or [],
+            longitudinal_nodes_dict,
+        )
+        valid_angle_rows = 0
+        bend_rows = 0
+        fold_rows = 0
+        for group in context.get("pipe_groups") or []:
+            if not WaterProfilePanel._is_pressure_pipe_row_segment_group(group):
+                continue
+            target_idx = WaterProfilePanel._coerce_pressure_pipe_row_index(
+                getattr(group, "target_row_index", -1)
+            )
+            if target_idx < 0 or target_idx >= len(water_panel.nodes):
+                continue
+            target_node = water_panel.nodes[target_idx]
+            turn_angle = float(getattr(target_node, "turn_angle", 0.0) or 0.0)
+            if not (0.1 <= turn_angle < 180.0):
+                continue
+
+            valid_angle_rows += 1
+            _, pipe_long_nodes, fallback_reason = water_panel._resolve_pressure_pipe_group_longitudinal_nodes(
+                group,
+                longitudinal_nodes_dict,
+                route_profile_segments_by_key=route_profile_segments_by_key,
+            )
+            record = water_panel._calculate_unnamed_pressure_pipe_group_result(
+                group,
+                water_panel.nodes,
+                pipe_long_nodes,
+                spatial_fallback_reason=fallback_reason,
+            )
+            assert record["status"] == "success"
+            if float(record.get("total_bend_loss", 0.0) or 0.0) > 0:
+                bend_rows += 1
+            if (record.get("bend_details", {}) or {}).get("method") == "pressure_pipe_fold":
+                fold_rows += 1
+
+        assert valid_angle_rows == 121
+        assert bend_rows == valid_angle_rows
+        assert fold_rows == valid_angle_rows
+        widgets["water_hammer_wall_thickness_edit"].setText("0.1")
+        widgets["water_hammer_closing_time_edit"].setText("60")
+
+        for group in context.get("pipe_groups") or []:
+            for row in getattr(group, "rows", []) or []:
+                row.water_level = 0.0
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(8)
+        missing_status = widgets["water_hammer_status_label"].text()
+        assert "缺少表3水位" in missing_status
+        assert "采样点超出数据覆盖范围" not in missing_status
+
+        for group in context.get("pipe_groups") or []:
+            for row in getattr(group, "rows", []) or []:
+                row.water_level = 1000.0
+        QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
+        _flush_events(8)
+        valid_status = widgets["water_hammer_status_label"].text()
+        assert "采样点超出数据覆盖范围" not in valid_status
+        assert "覆盖不足" not in valid_status
+        assert "缺少表3水位" not in valid_status
+        assert widgets["water_hammer_detail_table"].rowCount() > 0
+    finally:
+        if dialog is not None:
+            dialog.close()
+        water_panel.close()
+        batch.close()
+        shared_data.clear_batch_results()

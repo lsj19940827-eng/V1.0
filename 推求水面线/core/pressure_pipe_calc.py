@@ -48,10 +48,12 @@ TRANSITION_FORMS = {
 # 重力加速度
 GRAVITY = 9.81
 
-# 水的体积弹性模量（按 10℃ 固定取值）
-WATER_BULK_MODULUS = 2.025e9
+# 水的体积弹性模量（按《水力计算手册》水击波速公式取值）
+WATER_BULK_MODULUS = 2.1e9
+WATER_HAMMER_SOUND_SPEED = 1435.0
+WATER_HAMMER_STATION_TOLERANCE_M = 1e-3
 
-# 基础水锤验算默认弹性模量（来自手册常见材质近似值，玻璃钢夹砂管补充取 FRPM 纵向弹模参考值）
+# 水击验算默认弹性模量（来自手册常见材质近似值，玻璃钢夹砂管补充取 FRPM 纵向弹模参考值）
 WATER_HAMMER_ELASTIC_MODULUS = {
     "钢管": 206.0e9,
     "钢": 206.0e9,
@@ -96,11 +98,240 @@ def calc_pipe_velocity(Q_m3s: float, D_m: float) -> float:
 
 
 def get_water_hammer_elastic_modulus(material_key: str) -> Optional[float]:
-    """返回基础水锤验算的默认管材弹性模量。"""
+    """返回水击验算的默认管材弹性模量。"""
     key = str(material_key or "").strip()
     if not key:
         return None
     return WATER_HAMMER_ELASTIC_MODULUS.get(key)
+
+
+def _calc_water_hammer_wave_speed(
+    *,
+    diameter_m: float,
+    wall_thickness_m: float,
+    elastic_modulus_pa: float,
+    water_bulk_modulus_pa: float,
+) -> Optional[float]:
+    """按简单薄壁圆管公式计算水击波速。"""
+    if diameter_m <= 0 or wall_thickness_m <= 0 or elastic_modulus_pa <= 0 or water_bulk_modulus_pa <= 0:
+        return None
+    denominator = 1.0 + (water_bulk_modulus_pa / elastic_modulus_pa) * (diameter_m / wall_thickness_m)
+    if denominator <= 0:
+        return None
+    return WATER_HAMMER_SOUND_SPEED / math.sqrt(denominator)
+
+
+def _solve_water_hammer_root(func, low: float, high: float) -> Optional[float]:
+    """用二分法求水击无量纲方程根。"""
+    f_low = func(low)
+    f_high = func(high)
+    if not (math.isfinite(f_low) and math.isfinite(f_high)):
+        return None
+    if abs(f_low) <= 1e-12:
+        return low
+    if abs(f_high) <= 1e-12:
+        return high
+    if f_low * f_high > 0:
+        return None
+    left = low
+    right = high
+    for _ in range(80):
+        mid = (left + right) / 2.0
+        f_mid = func(mid)
+        if not math.isfinite(f_mid):
+            return None
+        if abs(f_mid) <= 1e-12:
+            return mid
+        if f_low * f_mid <= 0:
+            right = mid
+            f_high = f_mid
+        else:
+            left = mid
+            f_low = f_mid
+    return (left + right) / 2.0
+
+
+def _calc_positive_first_phase_zeta(section_mu: float, opening_ratio: float) -> Optional[float]:
+    """计算线性关阀第一相正水击无量纲压强。"""
+    if section_mu <= 0:
+        return None
+    tau = max(0.0, min(1.0, float(opening_ratio)))
+    if tau <= 1e-12:
+        return 2.0 * section_mu
+
+    high = max(2.0 * section_mu, 1e-9)
+
+    def equation(zeta: float) -> float:
+        return tau * math.sqrt(max(0.0, 1.0 + zeta)) - (1.0 - zeta / (2.0 * section_mu))
+
+    return _solve_water_hammer_root(equation, 0.0, high)
+
+
+def _calc_negative_first_phase_zeta(section_mu: float, opening_ratio: float) -> Optional[float]:
+    """计算线性开阀第一相负水击无量纲压降。"""
+    if section_mu <= 0:
+        return None
+    tau = max(0.0, min(1.0, float(opening_ratio)))
+    if tau <= 1e-12:
+        return 0.0
+
+    high = 1.0 - 1e-12
+
+    def equation(zeta: float) -> float:
+        return tau * math.sqrt(max(0.0, 1.0 - zeta)) - zeta / (2.0 * section_mu)
+
+    return _solve_water_hammer_root(equation, 0.0, high)
+
+
+def _water_hammer_candidate_zeta(candidates: List[Dict[str, float | str]], type_name: str) -> Optional[float]:
+    """按候选名称取无量纲水击压强。"""
+    for item in candidates:
+        if str(item.get("type", "") or "") == type_name:
+            try:
+                return float(item.get("zeta", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _classify_water_hammer_type_by_diagram(
+    *,
+    section_mu: float,
+    sigma: float,
+    phase_time_s: float,
+    closing_time_s: float,
+    positive_control_type: str,
+    negative_control_type: str,
+    positive_candidates: List[Dict[str, float | str]],
+    negative_candidates: List[Dict[str, float | str]],
+    tau0: float = 1.0,
+) -> Dict[str, object]:
+    """生成图1-3-3水击类型判断对照，不参与控制值计算。"""
+    mu_tau0 = section_mu * tau0
+    line_sigma = mu_tau0
+    denominator = 1.0 - 2.0 * mu_tau0
+    curve_sigma = None
+    if abs(denominator) > 1e-12:
+        curve_sigma = 4.0 * mu_tau0 * (1.0 - mu_tau0) / denominator
+
+    positive_type = str(positive_control_type or "")
+    negative_type = str(negative_control_type or "")
+    if closing_time_s <= phase_time_s + 1e-12 or positive_type == "直接正水击":
+        positive_region = "V区：直接正水击"
+    elif phase_time_s > 0 and abs(sigma - line_sigma) <= max(1e-9, abs(line_sigma) * 1e-8):
+        positive_region = "直线：直接水击边界"
+    else:
+        first_zeta = _water_hammer_candidate_zeta(positive_candidates, "第一相正水击")
+        terminal_zeta = _water_hammer_candidate_zeta(positive_candidates, "末相正水击")
+        if (
+            first_zeta is not None
+            and terminal_zeta is not None
+            and abs(first_zeta - terminal_zeta) <= max(1e-9, max(abs(first_zeta), abs(terminal_zeta)) * 1e-8)
+        ):
+            positive_region = "曲线：第一相=末相"
+        elif positive_type == "末相正水击":
+            positive_region = "I区：末相正水击"
+        elif positive_type == "第一相正水击":
+            positive_region = "II区：第一相正水击"
+        elif curve_sigma is not None and curve_sigma > 0 and sigma < curve_sigma:
+            positive_region = "I区：末相正水击"
+        else:
+            positive_region = "II区：第一相正水击"
+
+    if closing_time_s <= phase_time_s + 1e-12 or negative_type == "直接负水击":
+        negative_region = "直接负水击"
+    elif negative_type == "负末相水击":
+        negative_region = "III区：负末相水击"
+    else:
+        negative_region = "IV区：第一相负水击"
+
+    return {
+        "source": "图1-3-3",
+        "tau0": tau0,
+        "mu_tau0": mu_tau0,
+        "sigma": sigma,
+        "line_sigma": line_sigma,
+        "curve_sigma": curve_sigma,
+        "positive_region": positive_region,
+        "negative_region": negative_region,
+        "note": "仅作图1-3-3对照，不参与控制值计算",
+    }
+
+
+def _calc_linear_water_hammer_values(
+    *,
+    length_m: float,
+    wave_speed_mps: float,
+    velocity_mps: float,
+    initial_head_m: float,
+    closing_time_s: float,
+) -> Dict[str, object]:
+    """按手册线性启闭理论计算正水击和负水击控制值。"""
+    phase_time = 2.0 * length_m / wave_speed_mps if wave_speed_mps > 0 else 0.0
+    ts_ratio = closing_time_s / phase_time if phase_time > 0 else None
+    section_mu = wave_speed_mps * velocity_mps / (2.0 * GRAVITY * initial_head_m)
+    sigma = length_m * velocity_mps / (GRAVITY * initial_head_m * closing_time_s)
+    direct_zeta = wave_speed_mps * velocity_mps / (GRAVITY * initial_head_m)
+
+    positive_candidates: List[Dict[str, float | str]] = []
+    if closing_time_s <= phase_time + 1e-12:
+        positive_candidates.append({"type": "直接正水击", "zeta": direct_zeta})
+    else:
+        tau_first = max(0.0, 1.0 - phase_time / closing_time_s)
+        first_zeta = _calc_positive_first_phase_zeta(section_mu, tau_first)
+        if first_zeta is not None:
+            positive_candidates.append({"type": "第一相正水击", "zeta": first_zeta})
+        terminal_zeta = sigma / 2.0 * (sigma + math.sqrt(4.0 + sigma ** 2))
+        positive_candidates.append({"type": "末相正水击", "zeta": terminal_zeta})
+    positive_control = max(positive_candidates, key=lambda item: float(item["zeta"])) if positive_candidates else {}
+    positive_zeta = float(positive_control.get("zeta", 0.0) or 0.0)
+    positive_delta_h = positive_zeta * initial_head_m
+
+    negative_candidates: List[Dict[str, float | str]] = []
+    if closing_time_s <= phase_time + 1e-12:
+        negative_candidates.append({"type": "直接负水击", "zeta": direct_zeta})
+    else:
+        tau_first = min(1.0, phase_time / closing_time_s)
+        first_negative_zeta = _calc_negative_first_phase_zeta(section_mu, tau_first)
+        if first_negative_zeta is not None:
+            negative_candidates.append({"type": "第一相负水击", "zeta": first_negative_zeta})
+        terminal_negative_zeta = sigma / 2.0 * (math.sqrt(4.0 + sigma ** 2) - sigma)
+        negative_candidates.append({"type": "负末相水击", "zeta": terminal_negative_zeta})
+    negative_control = max(negative_candidates, key=lambda item: float(item["zeta"])) if negative_candidates else {}
+    negative_zeta = float(negative_control.get("zeta", 0.0) or 0.0)
+    negative_delta_h = negative_zeta * initial_head_m
+    positive_control_type = str(positive_control.get("type", "") or "")
+    negative_control_type = str(negative_control.get("type", "") or "")
+    diagram_type_check = _classify_water_hammer_type_by_diagram(
+        section_mu=section_mu,
+        sigma=sigma,
+        phase_time_s=phase_time,
+        closing_time_s=closing_time_s,
+        positive_control_type=positive_control_type,
+        negative_control_type=negative_control_type,
+        positive_candidates=positive_candidates,
+        negative_candidates=negative_candidates,
+    )
+
+    return {
+        "phase_time_s": phase_time,
+        "ts_to_mu_ratio": ts_ratio,
+        "section_mu": section_mu,
+        "sigma": sigma,
+        "positive_zeta": positive_zeta,
+        "positive_delta_h": positive_delta_h,
+        "positive_control_type": positive_control_type,
+        "positive_candidates": positive_candidates,
+        "negative_zeta": negative_zeta,
+        "negative_delta_h": negative_delta_h,
+        "negative_control_type": negative_control_type,
+        "negative_candidates": negative_candidates,
+        "diagram_type_check": diagram_type_check,
+        "hmax": initial_head_m + positive_delta_h,
+        "hmin": initial_head_m - negative_delta_h,
+        "negative_margin_m": initial_head_m - negative_delta_h,
+        "negative_pressure_status": "有负压风险" if initial_head_m - negative_delta_h < -1e-9 else "无负压风险",
+    }
 
 
 def calc_basic_water_hammer(
@@ -114,7 +345,7 @@ def calc_basic_water_hammer(
     closing_time_s: float,
     water_bulk_modulus_pa: float = WATER_BULK_MODULUS,
 ) -> Dict[str, object]:
-    """计算基础直接关阀水锤，只覆盖全关场景。"""
+    """计算简单管道线性启闭水击。"""
     inputs = {
         "length_m": float(length_m or 0.0),
         "diameter_m": float(diameter_m or 0.0),
@@ -130,9 +361,22 @@ def calc_basic_water_hammer(
         "reason": "",
         "a": None,
         "mu": None,
+        "phase_time_s": None,
         "ts_to_mu_ratio": None,
+        "section_mu": None,
+        "sigma": None,
         "delta_h": None,
+        "positive_delta_h": None,
+        "positive_control_type": "",
+        "positive_candidates": [],
+        "negative_delta_h": None,
+        "negative_control_type": "",
+        "negative_candidates": [],
+        "diagram_type_check": {},
         "hmax": None,
+        "hmin": None,
+        "negative_margin_m": None,
+        "negative_pressure_status": "",
         "inputs": inputs,
         "calc_steps": "",
     }
@@ -148,58 +392,56 @@ def calc_basic_water_hammer(
         missing_items.append("弹性模量 E")
     if inputs["velocity_mps"] <= 0:
         missing_items.append("流速 v0")
-    if inputs["initial_head_m"] is None:
-        missing_items.append("Hc")
+    if inputs["initial_head_m"] is None or inputs["initial_head_m"] <= 0:
+        missing_items.append("H0")
     if inputs["closing_time_s"] <= 0:
-        missing_items.append("关阀时间 Ts")
+        missing_items.append("启闭时间 Ts")
     if inputs["water_bulk_modulus_pa"] <= 0:
         missing_items.append("体积弹性模量 K")
     if missing_items:
         result["reason"] = f"缺少必要输入：{'、'.join(missing_items)}"
         return result
 
-    denominator = 1.0 + (inputs["water_bulk_modulus_pa"] / inputs["elastic_modulus_pa"]) * (
-        inputs["diameter_m"] / inputs["wall_thickness_m"]
+    a = _calc_water_hammer_wave_speed(
+        diameter_m=inputs["diameter_m"],
+        wall_thickness_m=inputs["wall_thickness_m"],
+        elastic_modulus_pa=inputs["elastic_modulus_pa"],
+        water_bulk_modulus_pa=inputs["water_bulk_modulus_pa"],
     )
-    if denominator <= 0:
+    if a is None or a <= 0:
         result["reason"] = "输入组合无效，无法计算水锤波速"
         return result
 
-    a = 1425.0 / math.sqrt(denominator)
-    mu = 2.0 * inputs["length_m"] / a if a > 0 else 0.0
-    ts_ratio = inputs["closing_time_s"] / mu if mu > 0 else None
+    values = _calc_linear_water_hammer_values(
+        length_m=inputs["length_m"],
+        wave_speed_mps=a,
+        velocity_mps=inputs["velocity_mps"],
+        initial_head_m=float(inputs["initial_head_m"]),
+        closing_time_s=inputs["closing_time_s"],
+    )
     steps = [
-        f"a = 1425 / sqrt(1 + (K/E) * (d/e)) = {a:.6f} m/s",
-        f"μ = 2L / a = {mu:.6f} s",
+        f"c = 1435 / sqrt(1 + (Ew/E) * (D/e)) = {a:.6f} m/s",
+        f"水击相 tr = 2L / c = {values['phase_time_s']:.6f} s",
+        f"断面系数 μ = c * v0 / (2gH0) = {values['section_mu']:.6f}",
+        f"系统系数 σ = L * v0 / (gH0Ts) = {values['sigma']:.6f}",
     ]
 
     result["a"] = a
-    result["mu"] = mu
-    result["ts_to_mu_ratio"] = ts_ratio
-
-    if mu <= 0:
-        result["reason"] = "水锤相时 μ 无效，无法继续验算"
-        result["calc_steps"] = "\n".join(steps)
-        return result
-
-    if inputs["closing_time_s"] > mu:
-        result["status"] = "不适用"
-        result["reason"] = (
-            f"当前仅支持直接关阀水锤（Ts <= μ）。当前 Ts = {inputs['closing_time_s']:.6f} s，"
-            f"μ = {mu:.6f} s。"
+    result["mu"] = values["phase_time_s"]
+    result.update(values)
+    result["delta_h"] = values["positive_delta_h"]
+    steps.append(f"正水击控制：{values['positive_control_type']}，ΔH+ = {values['positive_delta_h']:.6f} m")
+    steps.append(f"负水击控制：{values['negative_control_type']}，ΔH- = {values['negative_delta_h']:.6f} m")
+    steps.append(f"Hmax = H0 + ΔH+ = {values['hmax']:.6f} m")
+    steps.append(f"Hmin = H0 - ΔH- = {values['hmin']:.6f} m")
+    diagram = values.get("diagram_type_check", {}) if isinstance(values.get("diagram_type_check", {}), dict) else {}
+    if diagram:
+        steps.append(
+            "图1-3-3对照："
+            f"正={diagram.get('positive_region', '-')}；负={diagram.get('negative_region', '-')}"
         )
-        steps.append("Ts > μ，本版不输出 ΔH 与 Hmax。")
-        result["calc_steps"] = "\n".join(steps)
-        return result
-
-    delta_h = a * inputs["velocity_mps"] / GRAVITY
-    hmax = float(inputs["initial_head_m"]) + delta_h
-    steps.append(f"ΔH = a * v0 / g = {delta_h:.6f} m")
-    steps.append(f"Hmax = Hc + ΔH = {hmax:.6f} m")
 
     result["status"] = "可计算"
-    result["delta_h"] = delta_h
-    result["hmax"] = hmax
     result["calc_steps"] = "\n".join(steps)
     return result
 
@@ -269,9 +511,12 @@ def _interpolate_water_hammer_line(
 ) -> float:
     """按桩号在线性折线上插值。"""
     station = float(station_m)
-    tol = 1e-7
+    tol = WATER_HAMMER_STATION_TOLERANCE_M
     if station < points[0]["station_m"] - tol or station > points[-1]["station_m"] + tol:
-        raise ValueError("采样点超出数据覆盖范围")
+        raise ValueError(
+            f"采样点 {station:.3f} 超出数据覆盖范围 "
+            f"{points[0]['station_m']:.3f}~{points[-1]['station_m']:.3f}"
+        )
     for point in points:
         if abs(point["station_m"] - station) <= tol:
             return point[value_label]
@@ -284,7 +529,10 @@ def _interpolate_water_hammer_line(
                 return left[value_label]
             ratio = (station - left_s) / span
             return left[value_label] + (right[value_label] - left[value_label]) * ratio
-    raise ValueError("采样点超出数据覆盖范围")
+    raise ValueError(
+        f"采样点 {station:.3f} 超出数据覆盖范围 "
+        f"{points[0]['station_m']:.3f}~{points[-1]['station_m']:.3f}"
+    )
 
 
 def _normalize_water_hammer_members(
@@ -321,12 +569,16 @@ def _normalize_water_hammer_members(
             return [], "缺少有效流速 v0"
         length = abs(float(end_station) - float(start_station))
         if length <= 0:
-            return [], "成员长度必须大于0"
-        denominator = 1.0 + (water_bulk_modulus_pa / float(elastic)) * (float(diameter) / wall_thickness_m)
-        if denominator <= 0:
+            return [], "存在起终点相同的管段，请检查该行桩号或忽略起点锚点"
+        wave_speed = _calc_water_hammer_wave_speed(
+            diameter_m=float(diameter),
+            wall_thickness_m=wall_thickness_m,
+            elastic_modulus_pa=float(elastic),
+            water_bulk_modulus_pa=water_bulk_modulus_pa,
+        )
+        if wave_speed is None or wave_speed <= 0:
             return [], "输入组合无效，无法计算水锤波速"
-        wave_speed = 1425.0 / math.sqrt(denominator)
-        delta_h = wave_speed * float(velocity) / GRAVITY
+        direct_delta_h = wave_speed * float(velocity) / GRAVITY
         normalized.append(
             {
                 "key": str(member.get("key", member.get("member_key", f"member-{index + 1}")) or f"member-{index + 1}"),
@@ -337,7 +589,7 @@ def _normalize_water_hammer_members(
                 "elastic_modulus_pa": float(elastic),
                 "velocity_mps": float(velocity),
                 "a": wave_speed,
-                "delta_h": delta_h,
+                "delta_h": direct_delta_h,
             }
         )
 
@@ -424,8 +676,20 @@ def calc_distributed_water_hammer_check(
         "a_min": None,
         "a_max": None,
         "mu": None,
+        "phase_time_s": None,
         "ts_to_mu_ratio": None,
+        "section_mu": None,
+        "sigma": None,
         "delta_h": None,
+        "positive_delta_h": None,
+        "positive_control_type": "",
+        "negative_delta_h": None,
+        "negative_control_type": "",
+        "negative_margin_m": None,
+        "negative_pressure_risk_count": 0,
+        "min_negative_margin_m": None,
+        "negative_critical_point": None,
+        "diagram_type_check": {},
         "control_member_key": "",
         "min_margin_m": None,
         "critical_point": None,
@@ -447,7 +711,7 @@ def calc_distributed_water_hammer_check(
         result["reason"] = "缺少有效壁厚 e"
         return result
     if closing_time <= 0:
-        result["reason"] = "缺少有效关阀时间 Ts"
+        result["reason"] = "缺少有效启闭时间 Ts"
         return result
     if water_bulk_modulus <= 0:
         result["reason"] = "缺少有效水体体积弹性模量 K"
@@ -480,44 +744,21 @@ def calc_distributed_water_hammer_check(
         result["reason"] = f"缺少表3水位线数据：{water_level_error}"
         return result
 
-    mu = 2.0 * sum(member["length_m"] / member["a"] for member in normalized_members if member["a"] > 0)
-    ts_ratio = closing_time / mu if mu > 0 else None
+    phase_time = 2.0 * sum(member["length_m"] / member["a"] for member in normalized_members if member["a"] > 0)
+    ts_ratio = closing_time / phase_time if phase_time > 0 else None
     a_values = [member["a"] for member in normalized_members]
-    control_member = max(normalized_members, key=lambda item: item["delta_h"])
-    member_results = [
-        {
-            "key": member["key"],
-            "start_station_m": member["start_station_m"],
-            "end_station_m": member["end_station_m"],
-            "length_m": member["length_m"],
-            "diameter_m": member["diameter_m"],
-            "velocity_mps": member["velocity_mps"],
-            "a": member["a"],
-            "delta_h": member["delta_h"],
-        }
-        for member in normalized_members
-    ]
     result.update(
         {
-            "a": control_member["a"],
             "a_min": min(a_values),
             "a_max": max(a_values),
-            "mu": mu,
+            "mu": phase_time,
+            "phase_time_s": phase_time,
             "ts_to_mu_ratio": ts_ratio,
-            "delta_h": control_member["delta_h"],
-            "control_member_key": control_member["key"],
-            "member_results": member_results,
         }
     )
 
-    if mu <= 0:
+    if phase_time <= 0:
         result["reason"] = "水锤相时 μ 无效，无法继续验算"
-        return result
-    if closing_time > mu:
-        result["status"] = "不适用"
-        result["reason"] = (
-            f"当前仅支持直接关阀水锤（Ts <= μ）。当前 Ts = {closing_time:.6f} s，μ = {mu:.6f} s。"
-        )
         return result
 
     stations = _build_water_hammer_sample_stations(
@@ -527,6 +768,23 @@ def calc_distributed_water_hammer_check(
         sample_interval_m=_water_hammer_number(sample_interval_m, 1.0) or 1.0,
     )
     details: List[Dict[str, object]] = []
+    member_summary: Dict[str, Dict[str, object]] = {
+        member["key"]: {
+            "key": member["key"],
+            "start_station_m": member["start_station_m"],
+            "end_station_m": member["end_station_m"],
+            "length_m": member["length_m"],
+            "diameter_m": member["diameter_m"],
+            "velocity_mps": member["velocity_mps"],
+            "a": member["a"],
+            "delta_h": 0.0,
+            "positive_delta_h": 0.0,
+            "positive_control_type": "",
+            "negative_delta_h": 0.0,
+            "negative_control_type": "",
+        }
+        for member in normalized_members
+    }
     try:
         for station in stations:
             centerline_elevation = _interpolate_water_hammer_line(
@@ -541,20 +799,63 @@ def calc_distributed_water_hammer_check(
             )
             for member in _water_hammer_members_at_station(normalized_members, station):
                 pipe_top = centerline_elevation + member["diameter_m"] / 2.0
+                initial_pressure_head = water_level - centerline_elevation
                 allowable_delta_h = water_level - pipe_top
-                margin = allowable_delta_h - control_member["delta_h"]
+                if initial_pressure_head <= 0:
+                    values = {
+                        "positive_delta_h": 0.0,
+                        "positive_control_type": "初始压强水头不足",
+                        "negative_delta_h": 0.0,
+                        "negative_control_type": "初始压强水头不足",
+                        "section_mu": None,
+                        "sigma": None,
+                        "diagram_type_check": {},
+                    }
+                else:
+                    equivalent_length = member["a"] * phase_time / 2.0
+                    values = _calc_linear_water_hammer_values(
+                        length_m=equivalent_length,
+                        wave_speed_mps=member["a"],
+                        velocity_mps=member["velocity_mps"],
+                        initial_head_m=initial_pressure_head,
+                        closing_time_s=closing_time,
+                    )
+                positive_delta_h = float(values["positive_delta_h"])
+                negative_delta_h = float(values["negative_delta_h"])
+                positive_margin = allowable_delta_h - positive_delta_h
+                negative_margin = initial_pressure_head - negative_delta_h
+                summary = member_summary[member["key"]]
+                if positive_delta_h > float(summary["positive_delta_h"]):
+                    summary["delta_h"] = positive_delta_h
+                    summary["positive_delta_h"] = positive_delta_h
+                    summary["positive_control_type"] = str(values["positive_control_type"])
+                if negative_delta_h > float(summary["negative_delta_h"]):
+                    summary["negative_delta_h"] = negative_delta_h
+                    summary["negative_control_type"] = str(values["negative_control_type"])
                 details.append(
                     {
                         "station_m": station,
                         "member_key": member["key"],
                         "centerline_elevation_m": centerline_elevation,
                         "diameter_m": member["diameter_m"],
+                        "a": member["a"],
                         "pipe_top_elevation_m": pipe_top,
                         "water_level_m": water_level,
+                        "initial_pressure_head_m": initial_pressure_head,
                         "allowable_delta_h_m": allowable_delta_h,
-                        "delta_h_m": control_member["delta_h"],
-                        "margin_m": margin,
-                        "status": "通过" if margin >= -1e-9 else "超限",
+                        "delta_h_m": positive_delta_h,
+                        "positive_delta_h_m": positive_delta_h,
+                        "margin_m": positive_margin,
+                        "positive_margin_m": positive_margin,
+                        "negative_delta_h_m": negative_delta_h,
+                        "negative_margin_m": negative_margin,
+                        "section_mu": values.get("section_mu"),
+                        "sigma": values.get("sigma"),
+                        "positive_control_type": values.get("positive_control_type", ""),
+                        "negative_control_type": values.get("negative_control_type", ""),
+                        "diagram_type_check": values.get("diagram_type_check", {}),
+                        "status": "通过" if positive_margin >= -1e-9 else "超限",
+                        "negative_status": "安全" if negative_margin >= -1e-9 else "负压风险",
                     }
                 )
     except ValueError as exc:
@@ -566,16 +867,37 @@ def calc_distributed_water_hammer_check(
         return result
 
     critical = min(details, key=lambda item: float(item["margin_m"]))
+    negative_critical = min(details, key=lambda item: float(item["negative_margin_m"]))
+    positive_control_detail = max(details, key=lambda item: float(item["positive_delta_h_m"]))
+    negative_control_detail = max(details, key=lambda item: float(item["negative_delta_h_m"]))
     exceed_count = sum(1 for item in details if float(item["margin_m"]) < -1e-9)
+    negative_risk_count = sum(1 for item in details if float(item["negative_margin_m"]) < -1e-9)
     critical_point = dict(critical)
+    negative_critical_point = dict(negative_critical)
+    control_member_key = str(positive_control_detail.get("member_key", "") or "")
     result.update(
         {
-            "status": "通过" if exceed_count == 0 else "不通过",
+            "status": "通过" if exceed_count == 0 and negative_risk_count == 0 else "不通过",
             "reason": "",
+            "a": positive_control_detail.get("a"),
+            "section_mu": positive_control_detail.get("section_mu"),
+            "sigma": positive_control_detail.get("sigma"),
+            "delta_h": float(positive_control_detail["positive_delta_h_m"]),
+            "positive_delta_h": float(positive_control_detail["positive_delta_h_m"]),
+            "positive_control_type": str(positive_control_detail.get("positive_control_type", "") or ""),
+            "negative_delta_h": float(negative_control_detail["negative_delta_h_m"]),
+            "negative_control_type": str(negative_control_detail.get("negative_control_type", "") or ""),
+            "negative_margin_m": float(negative_critical["negative_margin_m"]),
+            "min_negative_margin_m": float(negative_critical["negative_margin_m"]),
+            "negative_pressure_risk_count": negative_risk_count,
+            "negative_critical_point": negative_critical_point,
+            "diagram_type_check": dict(positive_control_detail.get("diagram_type_check", {}) or {}),
+            "control_member_key": control_member_key,
             "min_margin_m": float(critical["margin_m"]),
             "critical_point": critical_point,
             "exceed_count": exceed_count,
             "sample_count": len(details),
+            "member_results": list(member_summary.values()),
             "details": details,
         }
     )
@@ -1450,6 +1772,33 @@ def _calc_fold_xi(angle_deg: float) -> float:
     return 0.9457 * sin_half ** 2 + 2.047 * sin_half ** 4
 
 
+def calc_fold_local_loss(turn_angle_deg: float, V_pipe: float) -> Tuple[float, float, Dict]:
+    """按折管公式计算局部损失。"""
+    turn_angle_deg = float(turn_angle_deg or 0.0)
+    V_pipe = float(V_pipe or 0.0)
+    details = {
+        "formula": "ξ = 0.9457 × sin²(θ/2) + 2.047 × sin⁴(θ/2), hj = ξ × V² / (2g)",
+        "turn_type": "FOLD",
+        "turn_angle_deg": turn_angle_deg,
+        "V_m_s": V_pipe,
+    }
+    if turn_angle_deg < 0.1 or turn_angle_deg >= 180:
+        details.update({
+            "xi_bend": 0.0,
+            "hj": 0.0,
+            "error": "转角不在折管局部损失有效范围内",
+        })
+        return 0.0, 0.0, details
+
+    xi = _calc_fold_xi(turn_angle_deg)
+    hj = xi * V_pipe ** 2 / (2 * GRAVITY)
+    details.update({
+        "xi_bend": xi,
+        "hj": hj,
+    })
+    return xi, hj, details
+
+
 def _build_fold_loss_details(
     *,
     turn_angle_deg: float,
@@ -1461,17 +1810,8 @@ def _build_fold_loss_details(
     turn_radius_m: Optional[float] = None,
 ) -> Tuple[float, float, Dict]:
     """按折管公式构造局部损失详情。"""
-    xi = _calc_fold_xi(turn_angle_deg)
-    hj = xi * V_pipe ** 2 / (2 * GRAVITY)
-    details = {
-        "formula": "ξ = 0.9457 × sin²(θ/2) + 2.047 × sin⁴(θ/2), hj = ξ × V² / (2g)",
-        "source": source,
-        "turn_type": "FOLD",
-        "turn_angle_deg": turn_angle_deg,
-        "xi_bend": xi,
-        "V_m_s": V_pipe,
-        "hj": hj,
-    }
+    xi, hj, details = calc_fold_local_loss(turn_angle_deg, V_pipe)
+    details["source"] = source
     if point_index is not None:
         details["point_index"] = point_index
     if node_index is not None:

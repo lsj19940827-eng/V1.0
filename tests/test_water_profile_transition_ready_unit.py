@@ -1313,6 +1313,7 @@ def test_mark_section_results_stale_disables_all_downstream_buttons():
     panel._btn_siphon = _FakeButton()
     panel._btn_calc = _FakeButton()
     panel.btn_pressure_pipe_calc = _FakeButton()
+    panel.btn_pressure_pipe_water_hammer = _FakeButton()
     panel.node_table = _FakeTable(["有压管道"])
     panel._section_state_label = None
     panel._section_status_bar = None
@@ -1325,7 +1326,14 @@ def test_mark_section_results_stale_disables_all_downstream_buttons():
     assert panel._btn_siphon.enabled is False
     assert panel._btn_calc.enabled is False
     assert panel.btn_pressure_pipe_calc.enabled is False
-    for btn in (panel._btn_transition, panel._btn_siphon, panel.btn_pressure_pipe_calc, panel._btn_calc):
+    assert panel.btn_pressure_pipe_water_hammer.enabled is False
+    for btn in (
+        panel._btn_transition,
+        panel._btn_siphon,
+        panel.btn_pressure_pipe_calc,
+        panel._btn_calc,
+        panel.btn_pressure_pipe_water_hammer,
+    ):
         assert btn.styleSheet() == ""
         assert btn.property("table3_locked_look") is None
 
@@ -1354,6 +1362,7 @@ def test_set_downstream_actions_enabled_reenables_buttons_without_custom_style()
     panel._btn_siphon = _FakeButton()
     panel._btn_calc = _FakeButton()
     panel.btn_pressure_pipe_calc = _FakeButton()
+    panel.btn_pressure_pipe_water_hammer = _FakeButton()
     panel._section_state_label = None
     panel._section_status_bar = None
     panel._section_state_icon = None
@@ -1361,7 +1370,13 @@ def test_set_downstream_actions_enabled_reenables_buttons_without_custom_style()
     WaterProfilePanel._set_downstream_actions_enabled(panel, False, state_text="状态：表3拓扑已变更")
     WaterProfilePanel._set_downstream_actions_enabled(panel, True, state_text="状态：断面全成功")
 
-    for btn in (panel._btn_transition, panel._btn_siphon, panel.btn_pressure_pipe_calc, panel._btn_calc):
+    for btn in (
+        panel._btn_transition,
+        panel._btn_siphon,
+        panel.btn_pressure_pipe_calc,
+        panel._btn_calc,
+        panel.btn_pressure_pipe_water_hammer,
+    ):
         assert btn.enabled is True
         assert btn.styleSheet() == ""
         assert btn.property("table3_locked_look") is None
@@ -1381,6 +1396,136 @@ def test_refresh_pressure_pipe_controls_treats_prepared_topology_as_ready_withou
 
     assert panel.btn_pressure_pipe_calc.enabled is False
     assert "请先插入渐变段" not in panel.btn_pressure_pipe_calc.tooltip
+
+
+def _build_water_hammer_button_state_panel(WaterProfilePanel, *, sync_ready=True, pending=None, water_level=0.0):
+    """构造水锤按钮状态测试用面板。"""
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._section_sync_ready = bool(sync_ready)
+    panel._transition_topology_prepared = True
+    panel.btn_pressure_pipe_water_hammer = _FakeButton()
+    panel.node_table = _FakeTable(["有压管道"])
+    panel.calculated_nodes = [
+        SimpleNamespace(
+            structure_type=SimpleNamespace(value="有压管道"),
+            water_level=water_level,
+        )
+    ]
+    panel._build_nodes_from_table = lambda: list(panel.calculated_nodes)
+    panel._build_settings = lambda: None
+    panel._is_pressure_pipe_like_node = lambda node: "有压管道" in str(getattr(getattr(node, "structure_type", ""), "value", ""))
+    panel._collect_pending_pressure_pipe_execute_members = lambda _nodes, settings=None: list(pending or [])
+    return panel
+
+
+def test_refresh_pressure_pipe_water_hammer_controls_requires_section_ready():
+    """表1/表3链路未就绪时，水锤按钮保持灰色。"""
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = _build_water_hammer_button_state_panel(
+        WaterProfilePanel,
+        sync_ready=False,
+        water_level=120.0,
+    )
+
+    WaterProfilePanel._refresh_pressure_pipe_water_hammer_controls(panel)
+
+    assert panel.btn_pressure_pipe_water_hammer.enabled is False
+    assert "断面批量计算" in panel.btn_pressure_pipe_water_hammer.tooltip
+
+
+def test_refresh_pressure_pipe_water_hammer_controls_requires_pressure_pipe_result():
+    """有压管道水力计算未完成时，水锤按钮保持灰色。"""
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = _build_water_hammer_button_state_panel(
+        WaterProfilePanel,
+        pending=["未完成"],
+        water_level=120.0,
+    )
+
+    WaterProfilePanel._refresh_pressure_pipe_water_hammer_controls(panel)
+
+    assert panel.btn_pressure_pipe_water_hammer.enabled is False
+    assert "有压管道水力计算" in panel.btn_pressure_pipe_water_hammer.tooltip
+
+
+def test_refresh_pressure_pipe_water_hammer_controls_requires_table3_water_level():
+    """未执行计算生成有效表3水位时，水锤按钮保持灰色。"""
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = _build_water_hammer_button_state_panel(
+        WaterProfilePanel,
+        pending=[],
+        water_level=0.0,
+    )
+
+    WaterProfilePanel._refresh_pressure_pipe_water_hammer_controls(panel)
+
+    assert panel.btn_pressure_pipe_water_hammer.enabled is False
+    assert "执行计算" in panel.btn_pressure_pipe_water_hammer.tooltip
+
+
+def test_refresh_pressure_pipe_water_hammer_controls_enables_after_water_level_ready():
+    """基础条件满足后，水锤按钮变为可点击。"""
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    panel = _build_water_hammer_button_state_panel(
+        WaterProfilePanel,
+        pending=[],
+        water_level=120.0,
+    )
+
+    WaterProfilePanel._refresh_pressure_pipe_water_hammer_controls(panel)
+
+    assert panel.btn_pressure_pipe_water_hammer.enabled is True
+    assert "水锤验算" in panel.btn_pressure_pipe_water_hammer.tooltip
+
+
+def test_open_pressure_pipe_water_hammer_checker_uses_dedicated_dialog(monkeypatch):
+    """点击新按钮后打开水锤专用窗口。"""
+    module = _load_panel_module()
+    WaterProfilePanel = module.WaterProfilePanel
+    module.CALCULATOR_AVAILABLE = True
+    module.QDialog.Accepted = 1
+
+    dialog_calls = []
+
+    class _FakeWaterHammerDialog:
+        def __init__(self, **kwargs):
+            dialog_calls.append(kwargs)
+
+        def exec(self):
+            return module.QDialog.Accepted
+
+    dialog_mod = types.ModuleType("app_渠系计算前端.water_profile.water_profile_dialogs")
+    dialog_mod.PressurePipeWaterHammerDialog = _FakeWaterHammerDialog
+    monkeypatch.setitem(sys.modules, "app_渠系计算前端.water_profile.water_profile_dialogs", dialog_mod)
+
+    manager = object()
+    pipe_group = SimpleNamespace(storage_key="p1")
+    panel = WaterProfilePanel.__new__(WaterProfilePanel)
+    panel._pressure_pipe_manager = manager
+    panel._resolve_pressure_pipe_water_hammer_button_state = lambda: (True, "执行有压管道水锤验算")
+    panel._collect_pressure_pipe_water_hammer_nodes = lambda: [SimpleNamespace()]
+    panel._build_settings = lambda: SimpleNamespace()
+    panel._prepare_pressure_pipe_dialog_context = lambda nodes, settings=None, show_xxpipe_warning=True: {
+        "pipe_groups": [pipe_group],
+        "chain_descriptors": [],
+        "xxpipe_route_mode": False,
+        "route_import_targets": {"route-a": {"targets": []}},
+    }
+    panel._info_parent = lambda: None
+    panel._refresh_pressure_pipe_controls = lambda: dialog_calls.append({"refreshed": True})
+
+    WaterProfilePanel._open_pressure_pipe_water_hammer_checker(panel)
+
+    assert dialog_calls
+    assert dialog_calls[0]["pipe_groups"] == [pipe_group]
+    assert dialog_calls[0]["manager"] is manager
+    assert dialog_calls[0]["pressure_chains"] == []
+    assert dialog_calls[0]["route_import_targets"] == {"route-a": {"targets": []}}
+    assert dialog_calls[-1] == {"refreshed": True}
 
 
 def test_resolve_loaded_section_gate_state_treats_missing_sync_ready_as_legacy_ready():

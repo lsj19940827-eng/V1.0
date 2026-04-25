@@ -1251,6 +1251,7 @@ class WaterProfilePanel(QWidget):
         self.calculated_nodes = []
         self._settings = None
         self.btn_pressure_pipe_calc = None
+        self.btn_pressure_pipe_water_hammer = None
         self._node_toolbar_layout_preset = NODE_TOOLBAR_LAYOUT_PRESET
         self._pressure_pipe_calc_done = {}
         self._pressure_pipe_calc_records = empty_pressure_pipe_calc_records()
@@ -2070,7 +2071,18 @@ class WaterProfilePanel(QWidget):
         self._btn_calc = PrimaryPushButton("执行计算")
         self._btn_calc.clicked.connect(self._calculate)
         _register_toolbar_button(self._btn_calc, "primary")
-        for w in [self._btn_transition, self._btn_siphon, self.btn_pressure_pipe_calc, self._btn_calc]:
+
+        self.btn_pressure_pipe_water_hammer = PrimaryPushButton("有压管道水锤验算")
+        self.btn_pressure_pipe_water_hammer.clicked.connect(self._open_pressure_pipe_water_hammer_checker)
+        _register_toolbar_button(self.btn_pressure_pipe_water_hammer, "primary_long")
+
+        for w in [
+            self._btn_transition,
+            self._btn_siphon,
+            self.btn_pressure_pipe_calc,
+            self._btn_calc,
+            self.btn_pressure_pipe_water_hammer,
+        ]:
             tb.addWidget(w)
 
         self._btn_table3_clear = PushButton("清空表3")
@@ -2633,6 +2645,7 @@ class WaterProfilePanel(QWidget):
             getattr(self, "_btn_siphon", None),
             getattr(self, "btn_pressure_pipe_calc", None),
             getattr(self, "_btn_calc", None),
+            getattr(self, "btn_pressure_pipe_water_hammer", None),
         ]
         for btn in buttons:
             if btn is not None:
@@ -9442,13 +9455,16 @@ class WaterProfilePanel(QWidget):
         """刷新有压管道按钮提示状态；启停状态由统一下游门禁控制。"""
         btn = getattr(self, "btn_pressure_pipe_calc", None)
         if btn is None:
+            self._refresh_pressure_pipe_water_hammer_controls()
             return
         if not getattr(self, "_section_sync_ready", False):
             btn.setToolTip("")
+            self._refresh_pressure_pipe_water_hammer_controls()
             return
         table = getattr(self, "node_table", None)
         if table is None:
             btn.setToolTip("执行有压管道水力计算并回写到\"倒虹吸/有压管道水头损失\"列")
+            self._refresh_pressure_pipe_water_hammer_controls()
             return
         has_ppipe = False
         has_named_ppipe_group = False
@@ -9475,6 +9491,79 @@ class WaterProfilePanel(QWidget):
             self.btn_pressure_pipe_calc.setToolTip("已检测到有压管道同类结构。请先插入渐变段后再执行有压管道水力计算")
         else:
             self.btn_pressure_pipe_calc.setToolTip("执行有压管道水力计算并回写到\"倒虹吸/有压管道水头损失\"列")
+        self._refresh_pressure_pipe_water_hammer_controls()
+
+    @staticmethod
+    def _is_valid_pressure_pipe_water_hammer_level(value) -> bool:
+        """判断表3节点水位是否可作为水锤验算基础水位。"""
+        try:
+            return float(value) > ZERO_TOLERANCE
+        except (TypeError, ValueError):
+            return False
+
+    def _collect_pressure_pipe_water_hammer_nodes(self):
+        """读取当前可用于水锤验算的表3节点，优先使用最近一次计算结果。"""
+        nodes = list(getattr(self, "calculated_nodes", None) or [])
+        if nodes:
+            return nodes
+        try:
+            return list(self._build_nodes_from_table() or [])
+        except Exception:
+            return []
+
+    def _has_pressure_pipe_like_table_row_for_water_hammer(self) -> bool:
+        """兜底检查表3中是否存在有压管道同类行。"""
+        table = getattr(self, "node_table", None)
+        if table is None:
+            return False
+        for row in range(table.rowCount()):
+            item = table.item(row, 2)
+            text = item.text().strip() if item else ""
+            if self._is_pressure_pipe_like_structure_text(text):
+                return True
+        return False
+
+    def _resolve_pressure_pipe_water_hammer_button_state(self) -> tuple[bool, str]:
+        """返回水锤验算按钮是否可用及对应提示原因。"""
+        if not getattr(self, "_section_sync_ready", False):
+            return False, "请先完成断面批量计算并同步到表3后再进行水锤验算。"
+
+        nodes = self._collect_pressure_pipe_water_hammer_nodes()
+        has_pressure_pipe = any(self._is_pressure_pipe_like_node(node) for node in nodes)
+        if not has_pressure_pipe:
+            has_pressure_pipe = self._has_pressure_pipe_like_table_row_for_water_hammer()
+        if not has_pressure_pipe:
+            return False, "尚未检测到有压管道、定向钻或顶管。"
+
+        try:
+            settings = self._build_settings()
+        except Exception:
+            settings = None
+        try:
+            pending = self._collect_pending_pressure_pipe_execute_members(nodes, settings=settings)
+        except Exception:
+            return False, "请先完成有压管道水力计算并应用成功结果后再进行水锤验算。"
+        if pending:
+            return False, "请先完成有压管道水力计算并应用成功结果后再进行水锤验算。"
+
+        has_water_level = any(
+            self._is_pressure_pipe_like_node(node)
+            and self._is_valid_pressure_pipe_water_hammer_level(getattr(node, "water_level", None))
+            for node in nodes
+        )
+        if not has_water_level:
+            return False, "请先点击【执行计算】生成有效表3水位后再进行水锤验算。"
+
+        return True, "执行有压管道水锤验算"
+
+    def _refresh_pressure_pipe_water_hammer_controls(self):
+        """按前置条件刷新有压管道水锤验算按钮。"""
+        btn = getattr(self, "btn_pressure_pipe_water_hammer", None)
+        if btn is None:
+            return
+        enabled, reason = self._resolve_pressure_pipe_water_hammer_button_state()
+        btn.setEnabled(bool(enabled))
+        btn.setToolTip(reason or "")
 
     def _update_pressure_pipe_last_result_button(self):
         """刷新有压管道计算相关控件状态（计算完成后调用）。"""
@@ -13324,6 +13413,7 @@ class WaterProfilePanel(QWidget):
         from core.pressure_pipe_calc import (
             PIPE_MATERIALS,
             calc_bend_local_loss,
+            calc_fold_local_loss,
             calc_friction_loss,
             calc_pipe_velocity,
             calc_transition_loss,
@@ -13403,21 +13493,43 @@ class WaterProfilePanel(QWidget):
 
         bend_loss = 0.0
         bend_details = {}
+        bend_loss_note = ""
         turn_angle = float(getattr(target_node, "turn_angle", 0.0) or 0.0)
         turn_radius = float(getattr(target_node, "turn_radius", 0.0) or 0.0)
-        if D > 0 and turn_radius > 0 and V_pipe > 0 and 0.1 <= turn_angle < 180:
-            xi_bend, bend_loss, bend_calc_details = calc_bend_local_loss(D, turn_radius, turn_angle, V_pipe)
-            bend_details = {
-                "method": "pressure_pipe_bend",
-                "D_m": D,
-                "turn_radius_m": turn_radius,
-                "turn_angle_deg": turn_angle,
-                "V_m_s": V_pipe,
-                **(bend_calc_details or {}),
-                "xi_bend": xi_bend,
-                "hj": bend_loss,
-                "hw": bend_loss,
-            }
+        if D > 0 and V_pipe > 0 and 0.1 <= turn_angle < 180:
+            if turn_radius > 0:
+                xi_bend, bend_loss, bend_calc_details = calc_bend_local_loss(
+                    D,
+                    turn_radius,
+                    turn_angle,
+                    V_pipe,
+                )
+                bend_details = {
+                    "D_m": D,
+                    "turn_radius_m": turn_radius,
+                    "turn_angle_deg": turn_angle,
+                    "V_m_s": V_pipe,
+                    **(bend_calc_details or {}),
+                    "method": "pressure_pipe_bend",
+                    "xi_bend": xi_bend,
+                    "hj": bend_loss,
+                    "hw": bend_loss,
+                }
+            else:
+                xi_bend, bend_loss, bend_calc_details = calc_fold_local_loss(turn_angle, V_pipe)
+                bend_details = {
+                    "D_m": D,
+                    "turn_radius_m": turn_radius,
+                    "turn_angle_deg": turn_angle,
+                    "V_m_s": V_pipe,
+                    **(bend_calc_details or {}),
+                    "method": "pressure_pipe_fold",
+                    "note": "未设置转弯半径，按折管计算",
+                    "xi_bend": xi_bend,
+                    "hj": bend_loss,
+                    "hw": bend_loss,
+                }
+                bend_loss_note = "（未设置转弯半径，按折管计算）"
 
         inlet_transition_loss = 0.0
         outlet_transition_loss = 0.0
@@ -13481,7 +13593,7 @@ class WaterProfilePanel(QWidget):
             ),
             f"长度 = {total_length:.2f} m（{'纵断面实长' if profile_length > 0 else '表3有效长度'}）",
             f"沿程损失 hf = {friction_loss:.4f} m",
-            f"弯头损失 hw = {bend_loss:.4f} m",
+            f"弯头损失 hw = {bend_loss:.4f} m{bend_loss_note}",
             f"局部损失 hj = {local_loss:.4f} m（进口 {inlet_transition_loss:.4f} m，出口 {outlet_transition_loss:.4f} m）",
             f"总损失 ΔH = {total_head_loss:.4f} m",
         ]
@@ -14989,6 +15101,94 @@ class WaterProfilePanel(QWidget):
             traceback.print_exc()
             InfoBar.error("错误", f"打开有压管道计算窗口失败: {str(e)}",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+
+    def _open_pressure_pipe_water_hammer_checker(self):
+        """打开有压管道水锤验算专用窗口。"""
+        enabled, reason = self._resolve_pressure_pipe_water_hammer_button_state()
+        if not enabled:
+            InfoBar.info(
+                "操作已锁定",
+                reason or "当前条件暂不支持有压管道水锤验算。",
+                parent=self._info_parent(),
+                duration=4500,
+                position=InfoBarPosition.TOP,
+            )
+            self._refresh_pressure_pipe_water_hammer_controls()
+            return
+
+        if not CALCULATOR_AVAILABLE:
+            InfoBar.error(
+                "不可用",
+                "核心计算引擎未加载",
+                parent=self._info_parent(),
+                duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        nodes = self._collect_pressure_pipe_water_hammer_nodes()
+        if not nodes:
+            InfoBar.info(
+                "提示",
+                "表格中没有可用于水锤验算的数据，请先执行计算。",
+                parent=self._info_parent(),
+                duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+            self._refresh_pressure_pipe_water_hammer_controls()
+            return
+
+        try:
+            settings = self._build_settings()
+            dialog_context = self._prepare_pressure_pipe_dialog_context(
+                nodes,
+                settings=settings,
+                show_xxpipe_warning=True,
+            )
+            pipe_groups = dialog_context["pipe_groups"]
+            chain_descriptors = dialog_context["chain_descriptors"]
+            xxpipe_route_mode = bool(dialog_context.get("xxpipe_route_mode"))
+            route_import_targets = dict(dialog_context.get("route_import_targets", {}) or {})
+            if not pipe_groups and not chain_descriptors:
+                if xxpipe_route_mode and dialog_context.get("blocked_route_names"):
+                    return
+                InfoBar.info(
+                    "提示",
+                    "未找到有压管道数据组，无法进行水锤验算。",
+                    parent=self._info_parent(),
+                    duration=3000,
+                    position=InfoBarPosition.TOP,
+                )
+                return
+
+            if self._pressure_pipe_manager is not None:
+                manager = self._pressure_pipe_manager
+            else:
+                from managers.pressure_pipe_manager import PressurePipeManager
+                manager = PressurePipeManager()
+                self._pressure_pipe_manager = manager
+        except Exception as e:
+            InfoBar.error(
+                "错误",
+                f"初始化水锤验算窗口失败: {e}",
+                parent=self._info_parent(),
+                duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        from app_渠系计算前端.water_profile.water_profile_dialogs import PressurePipeWaterHammerDialog
+
+        config_dlg = PressurePipeWaterHammerDialog(
+            parent=self,
+            pipe_groups=pipe_groups,
+            manager=manager,
+            pressure_chains=chain_descriptors,
+            xxpipe_route_mode=xxpipe_route_mode,
+            route_import_targets=route_import_targets,
+        )
+        if config_dlg.exec() == QDialog.Accepted:
+            self._refresh_pressure_pipe_controls()
 
     # ================================================================
     # 导出
