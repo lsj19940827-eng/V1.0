@@ -32,6 +32,7 @@ class SiphonConfig:
     
     # 结构段列表
     segments: List[Dict[str, Any]] = None
+    common_defaults_initialized: bool = False  # 默认通用构件是否已初始化
     
     # 平面段信息（从推求水面线表格自动提取）
     plan_segments: List[Dict[str, Any]] = None    # 平面段列表
@@ -236,7 +237,8 @@ class SiphonManager:
             diameter=data.get("diameter"),
             velocity=data.get("velocity"),
             calculated_at=data.get("calculated_at", ""),
-            num_pipes=data.get("num_pipes", 1)
+            num_pipes=data.get("num_pipes", 1),
+            common_defaults_initialized=data.get("common_defaults_initialized", False),
         )
     
     def set_siphon_config(self, config: SiphonConfig):
@@ -262,6 +264,7 @@ class SiphonManager:
             "v_channel_out": config.v_channel_out,
             "v_pipe_out": config.v_pipe_out,
             "segments": config.segments,
+            "common_defaults_initialized": config.common_defaults_initialized,
             "plan_segments": config.plan_segments,
             "plan_total_length": config.plan_total_length,
             "plan_feature_points": config.plan_feature_points,

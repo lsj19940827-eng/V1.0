@@ -1,88 +1,105 @@
 # -*- coding: utf-8 -*-
-"""测试加载旧数据时自动检测示例数据"""
-import sys
-import os
-from pathlib import Path
+"""倒虹吸旧示例数据识别为空白态的单元测试。"""
 
-if sys.platform == 'win32':
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+import os
+
+import pytest
+from PySide6.QtWidgets import QApplication, QWidget
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from PySide6.QtWidgets import QApplication, QWidget
 import app_渠系计算前端.siphon.panel as siphon_panel_mod
-
-try:
-    from siphon_models import SegmentDirection
-except ImportError:
-    SegmentDirection = siphon_panel_mod.SegmentDirection
 
 
 class _FakeWebEngineView(QWidget):
+    """测试替身：避免无头环境下 QWebEngineView 崩溃。"""
+
     def setHtml(self, *_args, **_kwargs):
         return None
 
 
-siphon_panel_mod.QWebEngineView = _FakeWebEngineView
+def _fake_web_view_factory(parent=None):
+    """返回假的网页视图。"""
+    return _FakeWebEngineView(parent)
 
 
-def test_load_example_data_detection():
-    """测试加载包含示例数据的旧工况时自动检测"""
-    app = QApplication.instance() or QApplication(sys.argv)
-    panel = siphon_panel_mod.SiphonPanel()
-
-    # 添加示例数据
-    panel._add_example_longitudinal()
-    assert panel._longitudinal_is_example == True
-
-    # 模拟保存（示例数据不会被保存）
-    data = panel.to_dict()
-    assert 'longitudinal_nodes' not in data, "示例数据不应被保存"
-
-    # 创建新面板并加载（应自动添加示例数据）
-    panel2 = siphon_panel_mod.SiphonPanel()
-    panel2.from_dict(data)
-    assert panel2._longitudinal_is_example == True, "加载后应自动添加示例数据"
-
-    print("✓ 加载空数据时自动添加示例数据")
+def _get_qapp():
+    """获取或创建 QApplication。"""
+    return QApplication.instance() or QApplication([])
 
 
-def test_load_saved_example_as_real():
-    """测试加载被错误保存为真实数据的示例数据"""
-    app = QApplication.instance() or QApplication(sys.argv)
-    panel = siphon_panel_mod.SiphonPanel()
-
-    # 添加示例数据
-    panel._add_example_longitudinal()
-
-    # 模拟旧bug：强制清除标志并保存
-    panel._longitudinal_is_example = False
-    data = panel.to_dict()
-
-    # 验证示例数据被保存了
-    assert 'longitudinal_nodes' in data, "示例数据应被保存（模拟旧bug）"
-    assert len(data['longitudinal_nodes']) == 13
-
-    # 创建新面板并加载
-    panel2 = siphon_panel_mod.SiphonPanel()
-    panel2.from_dict(data)
-
-    # 验证自动检测为示例数据
-    assert panel2._longitudinal_is_example == True, "应自动检测为示例数据"
-
-    # 验证结构段表隐藏纵断面段
-    display_segs = panel2._get_all_display_segments()
-    display_long = [s for s, source in display_segs if source == 'longitudinal']
-    assert len(display_long) == 0, "示例状态下不应显示纵断面段"
-
-    print("✓ 自动检测并修复被错误保存的示例数据")
+def _make_panel(monkeypatch):
+    """创建关闭自动加载后的倒虹吸面板。"""
+    _get_qapp()
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
+    return siphon_panel_mod.SiphonPanel(
+        show_case_management=False,
+        disable_autosave_load=True,
+    )
 
 
-if __name__ == '__main__':
-    test_load_example_data_detection()
-    test_load_saved_example_as_real()
-    print("\n所有测试通过！")
+def _assert_blank_longitudinal_state(panel):
+    """断言当前被识别为空白而不是已导入真实纵断面。"""
+    panel._update_data_status()
+
+    assert panel.longitudinal_nodes == []
+    assert panel._has_real_longitudinal_data() is False
+    assert "无平面/纵断面数据" in panel.lbl_data_status.text()
+    assert "longitudinal_nodes" not in panel.to_dict()
+    assert all(source != "longitudinal" for _, source in panel._get_all_display_segments())
+
+
+def test_loading_payload_without_longitudinal_nodes_stays_blank(monkeypatch):
+    """旧内置示例工况这类未保存纵断面节点的数据，加载后应保持空白。"""
+    panel = _make_panel(monkeypatch)
+
+    try:
+        panel.from_dict(
+            {
+                "Q": 1.0,
+                "segments": [],
+                "plan_segments": [],
+                "plan_feature_points": [],
+                "plan_total_length": 0.0,
+            }
+        )
+
+        _assert_blank_longitudinal_state(panel)
+    finally:
+        panel.deleteLater()
+
+
+def test_loading_saved_example_longitudinal_is_treated_as_blank(monkeypatch):
+    """旧版被保存下来的示例纵断面数据，重新加载后应被识别为空白。"""
+    target_panel = _make_panel(monkeypatch)
+
+    try:
+        legacy_payload = {
+            "Q": 1.0,
+            "segments": [],
+            "plan_segments": [],
+            "plan_feature_points": [],
+            "plan_total_length": 0.0,
+            "longitudinal_nodes": [
+                {"chainage": 0.0, "elevation": 113.843926, "slope_before": 0.0, "slope_after": -0.356123},
+                {"chainage": 45.712018, "elevation": 96.839824, "turn_type": "圆弧", "vertical_curve_radius": 5.0, "turn_angle": 25.455508, "slope_before": -0.356123, "slope_after": -0.800406, "arc_center_s": 43.968801, "arc_center_z": 92.153546, "arc_end_chainage": 47.556994, "arc_theta_rad": 0.444282},
+                {"chainage": 47.556994, "elevation": 95.635625, "slope_before": -0.800406, "slope_after": -0.800406},
+                {"chainage": 79.544004, "elevation": 62.673827, "turn_type": "折线", "turn_angle": 13.905975, "slope_before": -0.800406, "slope_after": -0.557701},
+                {"chainage": 100.454474, "elevation": 49.630903, "turn_type": "圆弧", "vertical_curve_radius": 5.0, "turn_angle": 31.953888, "slope_before": -0.557701, "slope_after": 0.0, "arc_center_s": 103.100657, "arc_center_z": 53.873275, "arc_end_chainage": 103.100657, "arc_theta_rad": 0.557701},
+                {"chainage": 103.100657, "elevation": 48.873275, "slope_before": -0.0, "slope_after": -0.0},
+                {"chainage": 145.103537, "elevation": 48.873275, "turn_type": "圆弧", "vertical_curve_radius": 5.0, "turn_angle": 37.384346, "slope_before": 0.0, "slope_after": 0.65248, "arc_center_s": 145.103537, "arc_center_z": 53.873275, "arc_end_chainage": 148.139331, "arc_theta_rad": 0.65248},
+                {"chainage": 148.139331, "elevation": 49.900372, "slope_before": 0.65248, "slope_after": 0.65248},
+                {"chainage": 180.860185, "elevation": 74.903192, "turn_type": "圆弧", "vertical_curve_radius": 5.0, "turn_angle": 10.329722, "slope_before": 0.65248, "slope_after": 0.472192, "arc_center_s": 183.895979, "arc_center_z": 70.930289, "arc_end_chainage": 181.62178, "arc_theta_rad": 0.180288},
+                {"chainage": 181.62178, "elevation": 75.383155, "slope_before": 0.472192, "slope_after": 0.472192},
+                {"chainage": 211.582699, "elevation": 90.685004, "turn_type": "圆弧", "vertical_curve_radius": 5.0, "turn_angle": 10.128511, "slope_before": 0.472192, "slope_after": 0.295416, "arc_center_s": 213.856898, "arc_center_z": 86.232137, "arc_end_chainage": 212.401207, "arc_theta_rad": 0.176776},
+                {"chainage": 212.401207, "elevation": 91.015542, "slope_before": 0.295416, "slope_after": 0.295416},
+                {"chainage": 249.872603, "elevation": 102.41888, "slope_before": 0.295416, "slope_after": 0.0},
+            ],
+        }
+
+        target_panel.from_dict(legacy_payload)
+
+        _assert_blank_longitudinal_state(target_panel)
+    finally:
+        target_panel.deleteLater()

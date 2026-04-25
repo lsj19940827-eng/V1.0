@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""倒虹吸示例纵断面数据计算模式单元测试。"""
+"""倒虹吸空白启动态计算模式单元测试。"""
 
 import os
 
@@ -19,70 +19,58 @@ class _FakeWebEngineView(QWidget):
 
 
 def _fake_web_view_factory(parent=None):
+    """返回假的网页视图。"""
     return _FakeWebEngineView(parent)
 
 
 def _get_qapp():
+    """获取或创建 QApplication。"""
     return QApplication.instance() or QApplication([])
 
 
 def _make_two_plan_points():
+    """构造两个人工平面特征点。"""
     return [
         siphon_panel_mod.PlanFeaturePoint(chainage=0.0, x=0.0, y=0.0),
         siphon_panel_mod.PlanFeaturePoint(chainage=100.0, x=100.0, y=0.0),
     ]
 
 
-def test_example_longitudinal_is_ignored_in_calc(monkeypatch):
+def test_blank_longitudinal_state_is_not_counted_as_real_data(monkeypatch):
+    """空白启动态不应被识别成可参与叠加计算的真实纵断面。"""
     _get_qapp()
     monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
 
     panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
-    panel._suppress_result_display = True
-    panel.plan_feature_points = _make_two_plan_points()
-    panel.inc_cb.setChecked(False)
-    monkeypatch.setattr(panel, "_validate_v_before_calc", lambda: True)
-    monkeypatch.setattr(panel, "_validate_num_pipes_before_calc", lambda: True)
-    monkeypatch.setattr(
-        panel,
-        "_get_global_params",
-        lambda: siphon_panel_mod.GlobalParameters(Q=10.0, v_guess=2.0),
-    )
 
-    # 初始状态应为“示例纵断面”
-    assert panel._longitudinal_is_example is True
-    assert any(s.direction != siphon_panel_mod.SegmentDirection.COMMON for s in panel.segments)
-
-    captured = {}
-
-    def _fake_execute(_params, segments, **kwargs):
-        captured["segments"] = segments
-        captured["longitudinal_nodes"] = kwargs.get("longitudinal_nodes", None)
-        return siphon_panel_mod.CalculationResult(
-            diameter=1.0,
-            velocity=1.0,
-            total_head_loss=1.0,
-            velocity_channel_in=1.0,
-            velocity_pipe_in=1.0,
-            velocity_outlet_start=1.0,
-            velocity_channel_out=1.0,
-            increase_percent=0.0,
-        )
-
-    monkeypatch.setattr(siphon_panel_mod.HydraulicCore, "execute_calculation", _fake_execute)
-
-    panel._execute_calculation()
-
-    assert captured["longitudinal_nodes"] == []
-    assert all(
-        s.direction == siphon_panel_mod.SegmentDirection.COMMON
-        for s in captured["segments"]
-    )
+    assert panel.longitudinal_nodes == []
+    assert panel._has_real_longitudinal_data() is False
+    assert "longitudinal" not in [
+        source for _, source in panel._get_all_display_segments()
+    ]
 
     panel.deleteLater()
 
 
-def test_data_status_shows_plan_only_when_longitudinal_is_example(monkeypatch):
+def test_data_status_shows_blank_without_plan_or_longitudinal_data(monkeypatch):
+    """新建空白面板时，状态栏应明确显示没有平面和纵断面数据。"""
+    _get_qapp()
+    monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
+
+    panel = siphon_panel_mod.SiphonPanel(show_case_management=False, disable_autosave_load=True)
+
+    panel._update_data_status()
+
+    status_text = panel.lbl_data_status.text()
+    assert "无平面/纵断面数据" in status_text
+    assert "仅平面（独立计算）" not in status_text
+    assert "仅纵断面（独立计算）" not in status_text
+
+    panel.deleteLater()
+
+
+def test_data_status_shows_plan_only_when_only_plan_data_exists(monkeypatch):
+    """只有平面特征点时，状态栏仍应显示仅平面模式。"""
     _get_qapp()
     monkeypatch.setattr(siphon_panel_mod, "create_web_view", _fake_web_view_factory)
 
@@ -93,7 +81,7 @@ def test_data_status_shows_plan_only_when_longitudinal_is_example(monkeypatch):
 
     status_text = panel.lbl_data_status.text()
     assert "仅平面（独立计算）" in status_text
-    assert "仅平面估算" not in status_text
-    assert "传统模式" not in status_text
+    assert "平面+纵断面（独立叠加）" not in status_text
+    assert "仅纵断面（独立计算）" not in status_text
 
     panel.deleteLater()

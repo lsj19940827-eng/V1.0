@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""倒虹吸平面 DXF 导入提示与示例纵断面口径一致性测试。"""
+"""倒虹吸平面 DXF 导入提示与空白启动口径一致性测试。"""
 
 import os
 import sys
@@ -94,8 +94,8 @@ def _make_panel(monkeypatch):
         show_case_management=False,
         disable_autosave_load=True,
     )
-    assert panel._longitudinal_is_example is True
-    assert len(panel.longitudinal_nodes) >= 2
+    assert panel._longitudinal_is_example is False
+    assert panel.longitudinal_nodes == []
     return panel
 
 
@@ -169,5 +169,6 @@ def test_import_plan_dxf_example_longitudinal_stays_consistent_with_status_and_c
     assert all(
         seg.direction == SegmentDirection.COMMON for seg in captured["segments"]
     )
+    assert len(captured["segments"]) == 7
 
     panel.deleteLater()

@@ -15,6 +15,7 @@ if sys.platform == 'win32':
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app_渠系计算前端.siphon.case_manager import CaseManager, CaseInfo
+from 推求水面线.managers.siphon_manager import SiphonConfig, SiphonManager
 
 
 def test_import_wrapped_parameter_json_as_case():
@@ -55,6 +56,30 @@ def test_import_wrapped_parameter_json_as_case():
     finally:
         shutil.rmtree(temp_dir)
         shutil.rmtree(source_dir)
+
+
+def test_siphon_manager_round_trips_common_defaults_initialized():
+    """倒虹吸持久化管理器应正式保存默认通用构件初始化标记。"""
+    temp_dir = tempfile.mkdtemp()
+    try:
+        project_path = os.path.join(temp_dir, "project.qxproj")
+        manager = SiphonManager(project_path)
+        manager.set_siphon_config(
+            SiphonConfig(
+                name="倒虹吸",
+                Q=1.0,
+                common_defaults_initialized=True,
+                segments=[{"type": "进水口", "direction": "通用"}],
+            )
+        )
+        manager.save_config()
+
+        reloaded = SiphonManager(project_path).get_siphon_config("倒虹吸")
+
+        assert reloaded.common_defaults_initialized is True
+        assert reloaded.segments == [{"type": "进水口", "direction": "通用"}]
+    finally:
+        shutil.rmtree(temp_dir)
 
 
 def test_case_manager():

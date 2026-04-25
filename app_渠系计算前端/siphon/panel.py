@@ -350,7 +350,8 @@ class SiphonPanel(QWidget):
         self.plan_feature_points = []  # 平面IP特征点
         self.plan_total_length = 0.0
         self.longitudinal_nodes = [] # 纵断面变坡点
-        self._longitudinal_is_example = True
+        self._common_defaults_initialized = False  # 是否已完成默认通用构件初始化
+        self._longitudinal_is_example = False
         self._syncing = False
         self._long_undo_stack = []
         self._long_redo_stack = []
@@ -401,7 +402,10 @@ class SiphonPanel(QWidget):
         self._inc_pct_used = 0.0
 
         self._init_ui()
-        self._init_default_segments()
+        self._initialize_default_common_segments(refresh=False)
+        self._refresh_seg_table()
+        self._update_canvas()
+        self._update_data_status()
 
         # 初始化加大流量输入框的可见性（因为 inc_cb 默认勾选）
         self._on_inc_toggle()
@@ -594,12 +598,7 @@ class SiphonPanel(QWidget):
         self._build_segments_tab(t2)
         self.params_notebook.addTab(t2, "结构段信息")
 
-        # Tab3: 纵断面节点
-        t3 = QWidget()
-        self._build_long_nodes_tab(t3)
-        self.params_notebook.addTab(t3, "纵断面节点")
-
-        # Tab4: 计算结果
+        # Tab3: 计算结果
         t4 = QWidget()
         self._build_result_tab(t4)
         self.params_notebook.addTab(t4, "计算结果")
@@ -1177,8 +1176,9 @@ class SiphonPanel(QWidget):
         btn_add_common = PushButton("添加通用构件"); btn_add_common.clicked.connect(self._add_common_segment_dialog)
         btn_add_ptrans = PushButton("管道渐变段"); btn_add_ptrans.clicked.connect(self._add_pipe_transition)
         btn_add_ptrans.setToolTip("插入压力管道渐变段 ξjb（收缩0.05/扩散0.10），双击可切换类型")
-        btn_default = PushButton("默认构件"); btn_default.clicked.connect(self._init_default_segments)
-        for w in [btn_add_pipe, btn_add_common, btn_add_ptrans, btn_default]:
+        btn_edit_nodes = PushButton("编辑纵断面节点"); btn_edit_nodes.clicked.connect(self._toggle_long_nodes_editor)
+        btn_default = PushButton("补齐通用构件"); btn_default.clicked.connect(self._ensure_default_common_segments)
+        for w in [btn_add_pipe, btn_add_common, btn_add_ptrans, btn_edit_nodes, btn_default]:
             tb2.addWidget(w)
 
         # 分隔符
@@ -1220,6 +1220,12 @@ class SiphonPanel(QWidget):
         self.seg_table.doubleClicked.connect(self._on_seg_double_click)
         lay.addWidget(self.seg_table)
 
+        # 纵断面节点编辑入口收进结构段信息页，默认折叠避免打断主流程
+        self.long_nodes_editor_group = QGroupBox("纵断面节点编辑")
+        self.long_nodes_editor_group.setVisible(False)
+        self._build_long_nodes_tab(self.long_nodes_editor_group)
+        lay.addWidget(self.long_nodes_editor_group)
+
         # 颜色图例
         legend_lay = QHBoxLayout()
         legend_lay.setSpacing(12)
@@ -1240,12 +1246,12 @@ class SiphonPanel(QWidget):
             "2. 点击\"导入纵断面DXF\"可从CAD文件导入纵断面多段线\n"
             "3. 支持三种计算模式：仅平面 / 仅纵断面 / 平面+纵断面（独立叠加）\n"
             "4. 点击\"添加管身段\"手动添加直管/弯管/折管\n"
-            "5. 点击\"添加通用构件\"可自定义添加构件（如镇墩、排气阀等）\n"
-            "6. 双击表格行可编辑该行数据\n"
-            "7. 使用↑↓按钮可调整顺序（首末行除外）\n"
-            "8. 表格分三区：通用构件(黄) → 平面段(蓝) → 纵断面段(绿)\n"
-            "9. DXF导入的平面段可手动删除；推求水面线提取的平面段不可删除\n"
-            "10. 初始纵断面数据为示例（灰色显示），导入DXF或手动添加后将自动替换"
+            "5. 启动已显示进水口、拦污栅、闸门槽、旁通管、管道渐变段、其他、出水口，导入任一DXF后可直接参与完整计算\n"
+            "6. 点击\"编辑纵断面节点\"可维护桩号、高程、竖曲线半径、转弯类型和转角\n"
+            "7. 双击表格行可编辑该行数据\n"
+            "8. 使用↑↓按钮可调整顺序（首末行除外）\n"
+            "9. 表格分三区：通用构件(黄) → 平面段(蓝) → 纵断面段(绿)\n"
+            "10. DXF导入的平面段可手动删除；推求水面线提取的平面段不可删除"
         )
         info_lbl = QLabel(info_text)
         info_lbl.setStyleSheet(f"color:{T2};font-size:12px;")
@@ -1295,6 +1301,14 @@ class SiphonPanel(QWidget):
         redo_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         redo_sc.activated.connect(self._redo_long_table)
         lay.addWidget(self.long_table)
+
+    def _toggle_long_nodes_editor(self):
+        """展开或收起结构段页内的纵断面节点编辑区。"""
+        if not hasattr(self, 'long_nodes_editor_group'):
+            return
+        self.long_nodes_editor_group.setVisible(
+            not self.long_nodes_editor_group.isVisible()
+        )
 
     # ---- C: 操作栏 ----
     def _build_operation_bar(self, parent_lay):
@@ -1727,10 +1741,8 @@ document.addEventListener("DOMContentLoaded", function(){
             self.longitudinal_nodes = kwargs['longitudinal_nodes']
             self._longitudinal_is_example = False
             self._refresh_long_table()
-        elif not _plan_skip and _plan_incoming and not self.longitudinal_nodes:
-            # 有平面数据但没有纵断面数据，添加示例
-            if SIPHON_AVAILABLE:
-                self._add_example_longitudinal()
+        if (not _plan_skip and _plan_incoming) or self._has_real_longitudinal_data():
+            self._initialize_default_common_segments(refresh=False)
 
         if 'siphon_name' in kwargs:
             self.edit_name.setText(kwargs['siphon_name'])
@@ -2406,6 +2418,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 velocity=data.get('velocity'),
                 calculated_at='',  # 不保存时间戳，每次打开程序都需要重新确认
                 num_pipes=int(data.get('num_pipes', 1)),
+                common_defaults_initialized=bool(data.get('common_defaults_initialized', False)),
             )
             self.siphon_manager.set_siphon_config(config)
 
@@ -2418,7 +2431,7 @@ document.addEventListener("DOMContentLoaded", function(){
             siphon_dict['v_confirmed_before_override'] = data.get('v_confirmed_before_override', False)
             siphon_dict['v2_strategy'] = data.get('v2_strategy', '')
             siphon_dict['show_detail'] = data.get('show_detail', True)
-            siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', True)
+            siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', False)
 
             self.siphon_manager.save_config()
             print(f"[倒虹吸] 已保存到 SiphonManager: {self.siphon_name}")
@@ -2512,8 +2525,9 @@ document.addEventListener("DOMContentLoaded", function(){
             d['longitudinal_nodes'] = config.longitudinal_nodes
 
         # 管道根数
-        if config.num_pipes:
-            d['num_pipes'] = config.num_pipes
+            if config.num_pipes:
+                d['num_pipes'] = config.num_pipes
+            d['common_defaults_initialized'] = bool(getattr(config, 'common_defaults_initialized', False))
 
         # 自动确认仅依据"进程内"确认态，避免重启后仍自动确认
         if (self.siphon_manager
@@ -2542,6 +2556,8 @@ document.addEventListener("DOMContentLoaded", function(){
                 d['show_detail'] = raw['show_detail']
             if 'longitudinal_is_example' in raw:
                 d['longitudinal_is_example'] = raw['longitudinal_is_example']
+            if 'common_defaults_initialized' in raw:
+                d['common_defaults_initialized'] = raw['common_defaults_initialized']
 
         return d
 
@@ -2629,7 +2645,7 @@ document.addEventListener("DOMContentLoaded", function(){
             siphon_dict['D_override'] = data.get('D_override', '')
             siphon_dict['v2_strategy'] = data.get('v2_strategy', '')
             siphon_dict['show_detail'] = data.get('show_detail', True)
-            siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', True)
+            siphon_dict['longitudinal_is_example'] = data.get('longitudinal_is_example', False)
 
             self.siphon_manager.save_config()
 
@@ -2717,9 +2733,10 @@ document.addEventListener("DOMContentLoaded", function(){
             d['plan_segments'] = [self._seg_to_dict(s) for s in self.plan_segments]
             d['plan_total_length'] = self.plan_total_length
             d['plan_feature_points'] = [fp.to_dict() for fp in self.plan_feature_points]
+            d['common_defaults_initialized'] = bool(self._common_defaults_initialized)
 
-            # 仅当不是示例数据时才保存纵断面节点
-            if not self._longitudinal_is_example:
+            # 仅当存在真实纵断面节点时才保存，空白工况不写空节点字段
+            if self._has_real_longitudinal_data():
                 d['longitudinal_nodes'] = [nd.to_dict() for nd in self.longitudinal_nodes]
 
             d['plan_source'] = self._plan_source
@@ -2745,6 +2762,7 @@ document.addEventListener("DOMContentLoaded", function(){
         self.plan_feature_points = []
         self.plan_total_length = 0.0
         self.longitudinal_nodes = []
+        self._common_defaults_initialized = bool(d.get('common_defaults_initialized', False))
         self._longitudinal_is_example = False
         self._plan_source = 'none'
         self.edit_v.setReadOnly(False)
@@ -2860,19 +2878,20 @@ document.addEventListener("DOMContentLoaded", function(){
         self._migrate_legacy_plan_geometry()
         self._restore_legacy_plan_segment_source_ip_indices()
         has_saved_longitudinal_nodes = bool(d.get('longitudinal_nodes')) and SIPHON_AVAILABLE
+        loaded_builtin_example = False
         if has_saved_longitudinal_nodes:
             self.longitudinal_nodes = [
                 LongitudinalNode.from_dict(nd) for nd in d['longitudinal_nodes']
             ]
-            # 检测是否为示例数据（与 _add_example_longitudinal 的数据完全一致）
-            if self._is_example_longitudinal_data():
-                self._longitudinal_is_example = True
+            loaded_builtin_example = self._is_builtin_example_longitudinal()
+            if loaded_builtin_example:
+                self._clear_builtin_example_longitudinal()
         else:
             migrated = self._migrate_legacy_longitudinal_geometry()
-            if not migrated and SIPHON_AVAILABLE:
-                # 没有保存的纵断面数据，且无法从旧结构段迁移时，回退到示例
-                self._add_example_longitudinal()
-        if has_saved_longitudinal_nodes:
+            if migrated and self._is_builtin_example_longitudinal():
+                loaded_builtin_example = True
+                self._clear_builtin_example_longitudinal()
+        if has_saved_longitudinal_nodes and not loaded_builtin_example:
             self._migrate_legacy_longitudinal_geometry()
             self._refresh_long_table()
         # 恢复平面数据来源
@@ -2883,6 +2902,11 @@ document.addEventListener("DOMContentLoaded", function(){
         else:
             self._plan_source = 'none'
         self._plan_segments_dirty_since_import = False
+
+        if not self._common_defaults_initialized:
+            self._initialize_default_common_segments(refresh=False)
+        elif self.plan_segments or self.plan_feature_points or self._has_real_longitudinal_data():
+            self._initialize_default_common_segments(refresh=False)
 
         # 自动确认：如果存在 calculated_at（进程内已计算），跳过所有确认对话框
         confirmation_state = None
@@ -4041,21 +4065,16 @@ document.addEventListener("DOMContentLoaded", function(){
     # ================================================================
     # 结构段管理
     # ================================================================
-    def _init_default_segments(self):
+    def _build_default_common_segments(self):
+        """构建一套完整的默认通用构件。"""
         if not SIPHON_AVAILABLE:
-            return
-        self._longitudinal_is_example = True
-        # 同步清空纵断面节点（防止残留旧数据）
-        self.longitudinal_nodes.clear()
-        if hasattr(self, 'long_table'):
-            self.long_table.setRowCount(0)
+            return []
         # 进水口默认使用"进口稍微修圆"，系数取中值
         inlet_shape = InletOutletShape.SLIGHTLY_ROUNDED
         inlet_xi = sum(INLET_SHAPE_COEFFICIENTS[inlet_shape]) / 2  # 取范围中值
         # 出水口默认系数：优先用下游断面参数，否则用流量自动推算
         outlet_xi = self._estimate_outlet_xi_fallback()
-        # 创建通用构件
-        self.segments = [
+        return [
             # 通用构件（仅贡献局部阻力系数ξ）
             StructureSegment(segment_type=SegmentType.INLET, locked=True,
                              inlet_shape=inlet_shape, xi_calc=inlet_xi,
@@ -4068,16 +4087,73 @@ document.addEventListener("DOMContentLoaded", function(){
                              direction=SegmentDirection.COMMON),
             StructureSegment(segment_type=SegmentType.BYPASS_PIPE, xi_user=0.1,
                              direction=SegmentDirection.COMMON),
-            # 通用构件
+            StructureSegment(segment_type=SegmentType.PIPE_TRANSITION,
+                             custom_label='收缩',
+                             xi_user=CoefficientService.PIPE_TRANSITION_CONTRACT,
+                             direction=SegmentDirection.COMMON),
             StructureSegment(segment_type=SegmentType.OTHER, xi_user=0.1,
                              direction=SegmentDirection.COMMON),
             StructureSegment(segment_type=SegmentType.OUTLET, locked=True, xi_calc=outlet_xi,
                              direction=SegmentDirection.COMMON),
         ]
-        # 添加纵断面示例数据
-        self._add_example_longitudinal()
-        self._refresh_seg_table()
-        self._update_canvas()
+
+    def _ensure_default_common_segments(self, refresh=True):
+        """补齐默认通用构件，保留用户已有配置和管身数据。"""
+        if not SIPHON_AVAILABLE:
+            return
+        defaults = self._build_default_common_segments()
+        existing_common = [
+            s for s in self.segments
+            if s.direction == SegmentDirection.COMMON or is_common_type(s.segment_type)
+        ]
+        non_common = [
+            s for s in self.segments
+            if not (s.direction == SegmentDirection.COMMON or is_common_type(s.segment_type))
+        ]
+
+        used_ids = set()
+        completed_common = []
+        for default_seg in defaults:
+            matched = None
+            for seg in existing_common:
+                if id(seg) in used_ids:
+                    continue
+                if seg.segment_type == default_seg.segment_type:
+                    matched = seg
+                    break
+            if matched is None:
+                completed_common.append(default_seg)
+            else:
+                matched.direction = SegmentDirection.COMMON
+                completed_common.append(matched)
+                used_ids.add(id(matched))
+
+        # 保留用户额外添加的通用构件，尤其是多个“其他”类自定义项
+        for seg in existing_common:
+            if id(seg) not in used_ids and seg not in completed_common:
+                seg.direction = SegmentDirection.COMMON
+                completed_common.append(seg)
+
+        self.segments = completed_common + non_common
+        self._common_defaults_initialized = True
+        if refresh:
+            self._refresh_seg_table()
+            self._update_canvas()
+            self._update_data_status()
+
+    def _initialize_default_common_segments(self, refresh=True):
+        """首次初始化默认通用构件；已初始化的工况尊重用户删除。"""
+        if not self._common_defaults_initialized:
+            self._ensure_default_common_segments(refresh=refresh)
+            return
+        if refresh:
+            self._refresh_seg_table()
+            self._update_canvas()
+            self._update_data_status()
+
+    def _init_default_segments(self):
+        """兼容旧按钮名：现在只补齐通用构件，不再重置或添加示例纵断面。"""
+        self._ensure_default_common_segments()
 
     def _get_all_display_segments(self):
         """获取用于表格显示的所有段列表（通用构件 + 平面段 + 纵断面段）"""
@@ -4776,6 +4852,18 @@ document.addEventListener("DOMContentLoaded", function(){
         """返回当前是否存在可参与独立叠加计算的真实纵断面数据。"""
         return len(self.longitudinal_nodes) >= 2 and not self._longitudinal_is_example
 
+    def _has_calculation_geometry(self):
+        """判断是否已有平面、纵断面或手工管身段几何。"""
+        if self.plan_segments or self.plan_feature_points or self.plan_total_length > 0:
+            return True
+        if self._has_real_longitudinal_data():
+            return True
+        for seg in self.segments:
+            if seg.direction == SegmentDirection.COMMON or is_common_type(seg.segment_type):
+                continue
+            return True
+        return False
+
     def _reverse_plan_dxf(self):
         """按当前平面特征点反转 DXF 平面方向，并重建平面段。"""
         if self._plan_source != 'dxf' or len(self.plan_feature_points) < 2:
@@ -4850,6 +4938,7 @@ document.addEventListener("DOMContentLoaded", function(){
                 self.plan_total_length = 0.0
             self._plan_source = 'dxf'
             self._plan_segments_dirty_since_import = False
+            self._initialize_default_common_segments(refresh=False)
             # 刷新UI
             self._refresh_seg_table()
             self._update_segment_coefficients()
@@ -4992,9 +5081,11 @@ document.addEventListener("DOMContentLoaded", function(){
                         new_segments.append(outlet_seg)
                     new_segments.extend(dxf_pipe)
                     self.segments = new_segments
-                    self._refresh_seg_table()
             except Exception:
                 pass
+
+            self._initialize_default_common_segments(refresh=False)
+            self._refresh_seg_table()
 
             # DXF导入成功后，强制切换到纵断面视图
             if self.canvas:
@@ -5457,6 +5548,10 @@ document.addEventListener("DOMContentLoaded", function(){
         has_plan_data = len(self.plan_segments) > 0 or len(self.plan_feature_points) > 0
         if self._longitudinal_is_example and len(self.longitudinal_nodes) > 0 and not has_plan_data:
             InfoBar.error("无法计算", "当前纵断面为示例数据，请先导入DXF或手动添加真实数据",
+                         parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            return
+        if not self._has_calculation_geometry():
+            InfoBar.error("无法计算", "请先导入平面 DXF、纵断面 DXF，或手动添加管身段",
                          parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
         # 方案D：计算前验证拟定流速是否已确认
@@ -6107,15 +6202,24 @@ document.addEventListener("DOMContentLoaded", function(){
             self._current_case_key = self._get_case_state_key(case)
             self._apply_confirmation_state(self._case_confirmation_states.get(self._current_case_key))
 
-            # 如果没有纵断面数据，自动添加示例
-            if not self.longitudinal_nodes or len(self.longitudinal_nodes) == 0:
-                self._add_example_longitudinal()
-
             self._data_dirty = False
         except:
-            # 新工况或加载失败，添加示例数据
+            # 新工况或加载失败时保持空白
             self._current_case_key = self._get_case_state_key(case)
-            self._add_example_longitudinal()
+            self.longitudinal_nodes = []
+            self.segments = []
+            self.plan_segments = []
+            self.plan_feature_points = []
+            self.plan_total_length = 0.0
+            self._common_defaults_initialized = False
+            self._longitudinal_is_example = False
+            self._plan_source = 'none'
+            if hasattr(self, 'long_table'):
+                self.long_table.setRowCount(0)
+            self._initialize_default_common_segments(refresh=False)
+            self._refresh_seg_table()
+            self._update_canvas()
+            self._update_data_status()
             self._apply_confirmation_state(self._case_confirmation_states.get(self._current_case_key))
             self._refresh_pipe_design_feedback()
             self._data_dirty = False
@@ -6124,13 +6228,46 @@ document.addEventListener("DOMContentLoaded", function(){
         """检测当前纵断面数据是否为示例数据"""
         if not SIPHON_AVAILABLE or len(self.longitudinal_nodes) != 13:
             return False
-        # 检查第一个和最后一个节点的桩号和高程（示例数据的特征）
-        first = self.longitudinal_nodes[0]
-        last = self.longitudinal_nodes[-1]
-        return (abs(first.chainage - 0.0) < 0.01 and
-                abs(first.elevation - 113.843926) < 0.01 and
-                abs(last.chainage - 249.872603) < 0.01 and
-                abs(last.elevation - 102.418880) < 0.01)
+        # 全节点匹配，避免真实项目碰巧首尾接近示例时被误清空。
+        expected = [
+            (0.000000, 113.843926),
+            (45.712018, 96.839824),
+            (47.556994, 95.635625),
+            (79.544004, 62.673827),
+            (100.454474, 49.630903),
+            (103.100657, 48.873275),
+            (145.103537, 48.873275),
+            (148.139331, 49.900372),
+            (180.860185, 74.903192),
+            (181.621780, 75.383155),
+            (211.582699, 90.685004),
+            (212.401207, 91.015542),
+            (249.872603, 102.418880),
+        ]
+        for node, (chainage, elevation) in zip(self.longitudinal_nodes, expected):
+            if abs(node.chainage - chainage) >= 0.01:
+                return False
+            if abs(node.elevation - elevation) >= 0.01:
+                return False
+        return True
+
+    def _is_builtin_example_longitudinal(self):
+        """判断当前纵断面是否为内置示例资料。"""
+        return self._is_example_longitudinal_data()
+
+    def _clear_builtin_example_longitudinal(self):
+        """清理旧工况中误保存的内置示例纵断面。"""
+        self.longitudinal_nodes = []
+        self._longitudinal_is_example = False
+        self.segments = [
+            seg for seg in self.segments
+            if seg.direction == SegmentDirection.COMMON or is_common_type(seg.segment_type)
+        ]
+        if not self.segments:
+            self._common_defaults_initialized = False
+            self._initialize_default_common_segments(refresh=False)
+        if hasattr(self, 'long_table'):
+            self.long_table.setRowCount(0)
 
     def _add_example_longitudinal(self):
         """
