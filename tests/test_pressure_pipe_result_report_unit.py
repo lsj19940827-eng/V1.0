@@ -59,6 +59,70 @@ def test_batch_report_contains_summary_and_details():
     assert "失败原因: 设计流量无效" in txt
 
 
+def test_batch_report_separates_official_and_reference_results():
+    batch = {
+        "last_run_at": "2026-04-25 12:03:04",
+        "records": [
+            {
+                "identity": "1::磨盘寨::rows17-19",
+                "flow_section": "1",
+                "name": "磨盘寨",
+                "status": "success",
+                "writeback_enabled": False,
+                "data_mode": "平面+纵断面（独立叠加）",
+                "total_head_loss": 1.1231357,
+                "friction_loss": 1.1173,
+                "total_bend_loss": 0.0058,
+                "note": "整组参考结果，不回写表3",
+            },
+            {
+                "identity": "flow1-row17",
+                "flow_section": "1",
+                "name": "磨盘寨（前段）",
+                "status": "success",
+                "writeback_enabled": True,
+                "data_mode": "平面+纵断面（独立叠加）",
+                "total_head_loss": 0.0650,
+                "friction_loss": 0.0650,
+                "total_bend_loss": 0.0,
+            },
+            {
+                "identity": "flow1-row18",
+                "flow_section": "1",
+                "name": "磨盘寨（中段1）",
+                "status": "success",
+                "writeback_enabled": True,
+                "data_mode": "平面+纵断面（独立叠加）",
+                "total_head_loss": 1.1039,
+                "friction_loss": 1.0989,
+                "total_bend_loss": 0.0049,
+            },
+            {
+                "identity": "flow1-row19",
+                "flow_section": "1",
+                "name": "磨盘寨（后段）",
+                "status": "success",
+                "writeback_enabled": True,
+                "data_mode": "平面+纵断面（独立叠加）",
+                "total_head_loss": 0.0184,
+                "friction_loss": 0.0184,
+                "total_bend_loss": 0.0,
+            },
+        ],
+    }
+
+    txt = format_pressure_pipe_calc_batch_text(batch, precision=4)
+
+    assert "正式计入3条，参考1条" in txt
+    assert "【正式计入结果】" in txt
+    assert "【参考结果（不计入表3和累计水损）】" in txt
+    assert "磨盘寨（整组参考，不计入累计）" in txt
+    assert "总损失: ΔH=1.1231 m" in txt
+    assert "本值已计入表3和累计水损" in txt
+    assert "本值仅供复核，不计入表3和累计水损" in txt
+    assert "同名整组值与逐段合计可能不同，因为计算范围不同；最终以“正式计入”逐段合计为准。" in txt
+
+
 def test_build_pressure_pipe_transition_note_merges_both_sides():
     note = build_pressure_pipe_transition_note(
         has_inlet_transition=False,

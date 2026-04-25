@@ -6,7 +6,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QPushButton, QTableWidget, QTabWidget, QTextEdit
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTableWidget, QTabWidget, QTextEdit
 from PySide6.QtTest import QTest
 from PySide6.QtCore import Qt
 from qfluentwidgets import ComboBox, LineEdit
@@ -106,7 +106,7 @@ def _open_large_summary_dialog(panel):
     results_by_identity = {
         rec["identity"]: rec
         for rec in batch_data["records"]
-        if rec["status"] == "success"
+        if rec["status"] == "success" and rec.get("writeback_enabled", True)
     }
     applied = []
     panel._apply_pressure_pipe_results = lambda results, data: applied.append(
@@ -183,7 +183,7 @@ def test_pressure_pipe_summary_dialog_destroys_window_and_clears_panel_reference
         apply_button = next(
             button
             for button in summary_dialog.findChildren(QPushButton)
-            if "应用全部成功结果" in button.text()
+            if "应用全部正式结果" in button.text()
         )
         QTest.mouseClick(apply_button, Qt.LeftButton)
         _flush_events(12)
@@ -213,7 +213,7 @@ def test_pressure_pipe_summary_dialog_uses_tabs_and_gives_table_enough_height():
         table = summary_dialog.findChild(QTableWidget, "pressurePipeSummaryTable")
 
         assert tabs is not None
-        assert _tab_names(tabs) == ["结果汇总", "连续链总览", "计算详情"]
+        assert _tab_names(tabs) == ["结果汇总", "参考结果", "连续链总览", "计算详情"]
         assert table is not None
         row_height = table.rowHeight(0) or 1
         visible_rows = table.viewport().height() / row_height
@@ -237,7 +237,7 @@ def test_pressure_pipe_summary_dialog_detail_button_and_double_click_switch_to_d
         table = summary_dialog.findChild(QTableWidget, "pressurePipeSummaryTable")
         detail_text = summary_dialog.findChild(QTextEdit, "pressurePipeSummaryDetailText")
 
-        detail_button = table.cellWidget(5, 0)
+        detail_button = table.cellWidget(4, 0)
         QTest.mouseClick(detail_button, Qt.LeftButton)
         _flush_events(8)
 
@@ -247,7 +247,7 @@ def test_pressure_pipe_summary_dialog_detail_button_and_double_click_switch_to_d
 
         tabs.setCurrentIndex(0)
         _flush_events(4)
-        table.cellDoubleClicked.emit(8, 2)
+        table.cellDoubleClicked.emit(7, 2)
         _flush_events(8)
 
         assert tabs.tabText(tabs.currentIndex()) == "计算详情"
@@ -274,25 +274,59 @@ def test_pressure_pipe_summary_dialog_filters_only_view_and_apply_all_success_re
         search_edit.setText("第10行")
         _flush_events(8)
         visible_rows = [row for row in range(table.rowCount()) if not table.isRowHidden(row)]
-        assert visible_rows == [9]
+        assert visible_rows == [8]
 
         search_edit.clear()
         status_filter.setCurrentText("失败")
         _flush_events(8)
         visible_rows = [row for row in range(table.rowCount()) if not table.isRowHidden(row)]
-        assert visible_rows == [12]
+        assert visible_rows == [11]
 
         apply_button = next(
             button
             for button in summary_dialog.findChildren(QPushButton)
-            if "应用全部成功结果" in button.text()
+            if "应用全部正式结果" in button.text()
         )
         QTest.mouseClick(apply_button, Qt.LeftButton)
         _flush_events(12)
 
         assert len(applied) == 1
         assert len(applied[0]["results"]) == len(results_by_identity)
-        assert len(applied[0]["results"]) == 131
+        assert len(applied[0]["results"]) == 130
+    finally:
+        _close_summary_windows()
+        panel.close()
+        panel.deleteLater()
+        _flush_events(6)
+
+
+def test_pressure_pipe_summary_dialog_splits_reference_results_from_official_table():
+    _get_qapp()
+    panel = WaterProfilePanel()
+    panel.show()
+    _flush_events(8)
+
+    try:
+        summary_dialog, _applied, _results = _open_large_summary_dialog(panel)
+        header = summary_dialog.findChild(QLabel, "pressurePipeSummaryHeaderLabel")
+        table = summary_dialog.findChild(QTableWidget, "pressurePipeSummaryTable")
+        reference_text = summary_dialog.findChild(QTextEdit, "pressurePipeSummaryReferenceText")
+
+        assert header is not None
+        assert "正式计入: 130" in header.text()
+        assert "参考结果: 1" in header.text()
+        assert "成功 131" not in header.text()
+
+        assert reference_text is not None
+        ref_plain = reference_text.toPlainText()
+        assert "仅供人工复核，不计入表3、连续链总损失或累计水损" in ref_plain
+        assert "本值仅供复核，不计入表3和累计水损" in ref_plain
+        assert "流量段1 第1行有压管道" in ref_plain
+
+        table_names = [table.item(row, 2).text() for row in range(table.rowCount())]
+        assert "流量段1 第1行有压管道" not in table_names
+        assert table_names[0] == "流量段1 第2行有压管道"
+        assert table.rowCount() == 131
     finally:
         _close_summary_windows()
         panel.close()
