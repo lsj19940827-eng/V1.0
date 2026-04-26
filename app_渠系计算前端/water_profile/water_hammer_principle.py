@@ -48,6 +48,7 @@ class PressurePipeWaterHammerPrincipleDialog(QDialog):
         segment_name: str = "",
         inputs: Dict[str, Any] | None = None,
         result: Dict[str, Any] | None = None,
+        members: List[Dict[str, Any]] | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("水锤验算原理")
@@ -60,6 +61,7 @@ class PressurePipeWaterHammerPrincipleDialog(QDialog):
             segment_name=segment_name,
             inputs=inputs or {},
             result=result or {},
+            members=members or [],
         )
 
         layout = QVBoxLayout(self)
@@ -81,6 +83,7 @@ def build_water_hammer_principle_html(
     segment_name: str,
     inputs: Dict[str, Any],
     result: Dict[str, Any],
+    members: List[Dict[str, Any]] | None = None,
 ) -> str:
     """构造水锤验算原理 HTML。"""
     body = [
@@ -166,7 +169,7 @@ def build_water_hammer_principle_html(
             ],
         ),
         _note_block(),
-        _current_values_block(inputs, result),
+        _current_values_block(inputs, result, members or []),
     ]
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -218,31 +221,33 @@ def _note_block() -> str:
     )
 
 
-def _current_values_block(inputs: Dict[str, Any], result: Dict[str, Any]) -> str:
-    """构造当前结果代入示例。"""
+def _current_values_block(inputs: Dict[str, Any], result: Dict[str, Any], members: List[Dict[str, Any]]) -> str:
+    """构造控制采样点代入值。"""
     details = result.get("details", []) if isinstance(result, dict) else []
     if not details:
         return (
-            '<section class="card muted"><h2>当前段代入示例</h2>'
-            "<p>先验算后可看到当前段代入值。</p>"
+            '<section class="card muted"><h2>控制采样点代入值</h2>'
+            "<p>先验算后可看到控制采样点代入值。</p>"
             "</section>"
         )
 
     critical = result.get("critical_point", {}) if isinstance(result.get("critical_point", {}), dict) else {}
+    member_info = _member_info_for_key(members, critical.get("member_key"))
     h0 = critical.get("initial_pressure_head_m", inputs.get("initial_head_m"))
     positive_delta = result.get("positive_delta_h")
     negative_delta = result.get("negative_delta_h")
     hmax = _add_or_blank(h0, positive_delta)
     hmin = _sub_or_blank(h0, negative_delta)
     rows = [
-        ("L", inputs.get("length_m"), "m"),
-        ("D", inputs.get("diameter_m"), "m"),
+        ("所属成员", member_info.get("label", critical.get("member_key", "")), ""),
+        ("桩号", critical.get("station_m"), "m"),
+        ("D", critical.get("diameter_m", member_info.get("diameter_m")), "m"),
+        ("E", member_info.get("elastic_modulus_pa"), "N/m²"),
+        ("v0", critical.get("velocity_mps", member_info.get("velocity_mps")), "m/s"),
         ("e", inputs.get("wall_thickness_m"), "m"),
-        ("E", inputs.get("elastic_modulus_pa"), "N/m²"),
-        ("v0", inputs.get("velocity_mps"), "m/s"),
-        ("H0", h0, "m"),
         ("Ts", inputs.get("closing_time_s"), "s"),
-        ("a", result.get("a"), "m/s"),
+        ("H0", h0, "m"),
+        ("a", critical.get("a", result.get("a")), "m/s"),
         ("μ(s)", result.get("mu"), "s"),
         ("ΔH+", positive_delta, "m"),
         ("ΔH-", negative_delta, "m"),
@@ -255,7 +260,19 @@ def _current_values_block(inputs: Dict[str, Any], result: Dict[str, Any]) -> str
         f"<tr><th>{_render_inline_symbols(label)}</th><td>{html.escape(_fmt(value))}</td><td>{html.escape(unit)}</td></tr>"
         for label, value, unit in rows
     )
-    return f'<section class="card"><h2>当前段代入示例</h2><table>{cells}</table></section>'
+    note = f"<p>{_render_inline_symbols('e 和 Ts 为整线统一输入；μ(s) 为整线相时。')}</p>"
+    return f'<section class="card"><h2>控制采样点代入值</h2>{note}<table>{cells}</table></section>'
+
+
+def _member_info_for_key(members: List[Dict[str, Any]], member_key: Any) -> Dict[str, Any]:
+    """按成员 key 查找原始参数。"""
+    target = str(member_key or "")
+    for member in members or []:
+        if not isinstance(member, dict):
+            continue
+        if str(member.get("key", "") or "") == target:
+            return member
+    return {}
 
 
 def _render_inline_symbols(text: str) -> str:

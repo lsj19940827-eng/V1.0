@@ -1028,6 +1028,7 @@ class PressurePipeConfigDialog(QDialog):
     _FALLBACK_MAX_HEIGHT = 980
     _WINDOW_CHROME_PADDING = 24
     _WATER_HAMMER_MIN_WIDTH = 900
+    _LONGITUDINAL_ELEVATION_ABS_LIMIT_M = 10000.0
     _WATER_HAMMER_ACTION_BUTTON_STYLE = (
         "QPushButton { font-size: 12px; font-weight: bold; color: #FFFFFF; "
         "background: #E86F00; border: 1px solid #C45500; border-radius: 4px; "
@@ -1643,6 +1644,23 @@ class PressurePipeConfigDialog(QDialog):
         """识别导入结果仍停留在原始工程坐标的情况，避免错误数据被保存。"""
         if not long_nodes:
             return
+
+        suspicious_elevations = []
+        for node in list(long_nodes or []):
+            raw_elevation = node.get("elevation") if isinstance(node, dict) else getattr(node, "elevation", None)
+            elevation = cls._safe_float(raw_elevation, None)
+            if elevation is None or not math.isfinite(float(elevation)):
+                continue
+            if abs(float(elevation)) >= cls._LONGITUDINAL_ELEVATION_ABS_LIMIT_M:
+                suspicious_elevations.append(float(elevation))
+
+        if suspicious_elevations:
+            sample_elevation = suspicious_elevations[0]
+            raise ValueError(
+                f"{pipe_label} 导入的纵断面高程包含 {sample_elevation:.3f}m，疑似平面坐标 Y 值，"
+                "不是真实高程。\n"
+                "请导入 X=桩号、Y=管道中心线真实高程（米）的纵断面 DXF。"
+            )
 
         station_range = cls._resolve_ip_points_chainage_range(ip_points, prefer_station=True)
         raw_x_range = cls._resolve_ip_points_chainage_range(ip_points, prefer_station=False)
@@ -2293,7 +2311,7 @@ class PressurePipeConfigDialog(QDialog):
         return params if isinstance(params, dict) else {}
 
     def _build_route_water_hammer_candidate(self, group) -> Dict[str, Any]:
-        """构造整线水锤段的代表行候选。"""
+        """构造整线水锤段的成员参数。"""
         try:
             from core.pressure_pipe_calc import (
                 calc_pipe_velocity,
@@ -2489,11 +2507,113 @@ class PressurePipeConfigDialog(QDialog):
         candidates: List[Dict[str, Any]],
         candidate_key: str,
     ) -> Dict[str, Any]:
-        """按键查找代表行候选。"""
+        """按键查找整线水锤成员。"""
         for candidate in candidates:
             if str(candidate.get("key", "") or "").strip() == str(candidate_key or "").strip():
                 return candidate
         return candidates[0] if candidates else {}
+
+    def _format_route_water_hammer_member_label(self, candidate: Dict[str, Any]) -> str:
+        """格式化整线水锤成员名称。"""
+        display_name = str(candidate.get("display_name", "") or candidate.get("key", "") or "成员").strip()
+        row_range = candidate.get("row_range", [-1, -1])
+        row_text = self._format_route_water_hammer_row_range_text(row_range)
+        return f"{display_name}（{row_text}）" if row_text else display_name
+
+    def _format_route_water_hammer_row_range_text(self, row_range) -> str:
+        """格式化成员行范围，去掉整线摘要里的前缀。"""
+        try:
+            start_row = int(row_range[0])
+            end_row = int(row_range[1])
+            if start_row == end_row:
+                return f"第{start_row + 1}行"
+            text = self._format_row_range_text(start_row, end_row)
+        except Exception:
+            return ""
+        return str(text).replace("范围:", "", 1).strip()
+
+    def _format_route_water_hammer_station_range(self, candidate: Dict[str, Any]) -> str:
+        """格式化成员桩号范围。"""
+        start_station = self._safe_float(candidate.get("start_station_m"), None)
+        end_station = self._safe_float(candidate.get("end_station_m"), None)
+        if start_station is None or end_station is None:
+            return "-"
+        return (
+            f"{self._format_route_water_hammer_value(start_station, digits=3)} ~ "
+            f"{self._format_route_water_hammer_value(end_station, digits=3)}"
+        )
+
+    def _build_route_water_hammer_member_lookup(self, candidates: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """整理成员参数索引，供界面明细、导出和原理窗口共用。"""
+        lookup: Dict[str, Dict[str, Any]] = {}
+        for candidate in candidates:
+            key = str(candidate.get("key", "") or "").strip()
+            if not key:
+                continue
+            row_text = self._format_route_water_hammer_row_range_text(candidate.get("row_range", [-1, -1])) or "-"
+            lookup[key] = {
+                "key": key,
+                "label": self._format_route_water_hammer_member_label(candidate),
+                "display_name": str(candidate.get("display_name", "") or key),
+                "row_range_text": row_text,
+                "station_range_text": self._format_route_water_hammer_station_range(candidate),
+                "length_m": self._safe_float(candidate.get("length_m"), 0.0),
+                "design_flow": self._safe_float(candidate.get("design_flow"), 0.0),
+                "diameter_m": self._safe_float(candidate.get("diameter_m"), 0.0),
+                "material_key": str(candidate.get("material_key", "") or ""),
+                "resolved_material_key": str(candidate.get("resolved_material_key", "") or ""),
+                "elastic_modulus_pa": self._safe_float(candidate.get("elastic_modulus_pa"), 0.0),
+                "velocity_mps": self._safe_float(candidate.get("velocity_mps"), 0.0),
+            }
+        return lookup
+
+    def _create_route_water_hammer_member_table(self, candidates: List[Dict[str, Any]]) -> QTableWidget:
+        """创建整线水锤成员参数表。"""
+        headers = [
+            "序号",
+            "行范围",
+            "桩号范围",
+            "L(m)",
+            "Q(m³/s)",
+            "D(m)",
+            "管材",
+            "E(N/m²)",
+            "v0(m/s)",
+            "计算用途",
+        ]
+        table = QTableWidget()
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setRowCount(len(candidates))
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setMinimumHeight(92)
+        table.setMaximumHeight(max(118, 36 + len(candidates) * 30))
+
+        for row_idx, candidate in enumerate(candidates):
+            row_text = self._format_route_water_hammer_row_range_text(candidate.get("row_range", [-1, -1])) or "-"
+            values = [
+                row_idx + 1,
+                row_text,
+                self._format_route_water_hammer_station_range(candidate),
+                candidate.get("length_m"),
+                candidate.get("design_flow"),
+                candidate.get("diameter_m"),
+                candidate.get("material_key", ""),
+                candidate.get("elastic_modulus_pa"),
+                candidate.get("velocity_mps"),
+                "参与整线水锤验算",
+            ]
+            for col_idx, value in enumerate(values):
+                if isinstance(value, (int, float)) and col_idx != 0:
+                    digits = 6 if col_idx == 7 else 3
+                    text = self._format_route_water_hammer_value(value, digits=digits)
+                else:
+                    text = str(value or "")
+                table.setItem(row_idx, col_idx, QTableWidgetItem(text))
+        return table
 
     def _build_route_water_hammer_distribution_members(self, segment_key: str) -> List[Dict[str, Any]]:
         """整理整线水锤分布验算的连续有压成员参数。"""
@@ -2524,6 +2644,8 @@ class PressurePipeConfigDialog(QDialog):
                     "diameter_m": self._safe_float(candidate.get("diameter_m"), 0.0),
                     "elastic_modulus_pa": self._safe_float(candidate.get("elastic_modulus_pa"), 0.0),
                     "velocity_mps": self._safe_float(candidate.get("velocity_mps"), 0.0),
+                    "design_flow": self._safe_float(candidate.get("design_flow"), 0.0),
+                    "material_key": str(candidate.get("material_key", "") or ""),
                 }
             )
         return members
@@ -2561,14 +2683,23 @@ class PressurePipeConfigDialog(QDialog):
         widgets = self._route_water_hammer_segment_widgets.get(segment_key, {})
         if not widgets:
             return {}
+        legacy_inputs = widgets.get("water_hammer_legacy_inputs", {})
+        legacy_inputs = legacy_inputs if isinstance(legacy_inputs, dict) else {}
+
+        def _read_edit_number(key: str, default=0.0):
+            edit = widgets.get(key)
+            if edit is None:
+                return self._safe_float(default, 0.0)
+            return self._safe_float(edit.text(), 0.0)
+
         return {
-            "length_m": self._safe_float(widgets["water_hammer_length_edit"].text(), 0.0),
-            "diameter_m": self._safe_float(widgets["water_hammer_diameter_edit"].text(), 0.0),
-            "wall_thickness_m": self._safe_float(widgets["water_hammer_wall_thickness_edit"].text(), 0.0),
-            "elastic_modulus_pa": self._safe_float(widgets["water_hammer_elastic_modulus_edit"].text(), 0.0),
-            "velocity_mps": self._safe_float(widgets["water_hammer_velocity_edit"].text(), 0.0),
-            "initial_head_m": self._safe_float(widgets["water_hammer_head_edit"].text(), None),
-            "closing_time_s": self._safe_float(widgets["water_hammer_closing_time_edit"].text(), 0.0),
+            "length_m": _read_edit_number("water_hammer_length_edit", legacy_inputs.get("length_m", 0.0)),
+            "diameter_m": self._safe_float(legacy_inputs.get("diameter_m"), 0.0),
+            "wall_thickness_m": _read_edit_number("water_hammer_wall_thickness_edit", 0.0),
+            "elastic_modulus_pa": self._safe_float(legacy_inputs.get("elastic_modulus_pa"), 0.0),
+            "velocity_mps": self._safe_float(legacy_inputs.get("velocity_mps"), 0.0),
+            "initial_head_m": self._safe_float(legacy_inputs.get("initial_head_m"), None),
+            "closing_time_s": _read_edit_number("water_hammer_closing_time_edit", 0.0),
         }
 
     @staticmethod
@@ -2683,13 +2814,21 @@ class PressurePipeConfigDialog(QDialog):
             return
         details = list(result.get("details", []) or []) if isinstance(result, dict) else []
         table.setRowCount(len(details))
+        member_lookup = widgets.get("water_hammer_member_lookup", {})
+        member_lookup = member_lookup if isinstance(member_lookup, dict) else {}
         for row_idx, item in enumerate(details):
             diagram = item.get("diagram_type_check", {}) if isinstance(item, dict) else {}
             diagram_text = "-"
             if isinstance(diagram, dict) and diagram:
                 diagram_text = str(diagram.get("positive_region", "") or "-")
+            member_key = str(item.get("member_key", "") or "")
+            member_label = str((member_lookup.get(member_key, {}) or {}).get("label", "") or member_key)
             values = [
                 item.get("station_m"),
+                member_label,
+                item.get("diameter_m"),
+                item.get("velocity_mps"),
+                item.get("a"),
                 item.get("pipe_top_elevation_m"),
                 item.get("water_level_m"),
                 item.get("initial_pressure_head_m"),
@@ -2708,7 +2847,7 @@ class PressurePipeConfigDialog(QDialog):
                 else:
                     text = str(value or "")
                 cell = QTableWidgetItem(text)
-                if (col_idx == 9 and text == "超限") or (col_idx == 10 and text == "负压风险"):
+                if (col_idx == 13 and text == "超限") or (col_idx == 14 and text == "负压风险"):
                     cell.setForeground(QColor("#C62828"))
                 table.setItem(row_idx, col_idx, cell)
 
@@ -2717,7 +2856,7 @@ class PressurePipeConfigDialog(QDialog):
         self._apply_route_water_hammer_result_to_widgets(segment_key, {})
 
     def _on_route_water_hammer_representative_changed(self, segment_key: str):
-        """切换代表行后刷新预填参数。"""
+        """兼容旧版参考段切换逻辑。"""
         widgets = self._route_water_hammer_segment_widgets.get(segment_key, {})
         if not widgets:
             return
@@ -2804,6 +2943,11 @@ class PressurePipeConfigDialog(QDialog):
                         "segment_name": str(widgets.get("segment_name", "") or segment_key),
                         "inputs": self._read_route_water_hammer_inputs(segment_key),
                         "result": copy.deepcopy(result if isinstance(result, dict) else {}),
+                        "member_lookup": copy.deepcopy(
+                            widgets.get("water_hammer_member_lookup", {})
+                            if isinstance(widgets.get("water_hammer_member_lookup", {}), dict)
+                            else {}
+                        ),
                     }
                 )
         return segments
@@ -2865,12 +3009,16 @@ class PressurePipeConfigDialog(QDialog):
             selected = segment_widgets[0]
         inputs: Dict[str, Any] = {}
         result: Dict[str, Any] = {}
+        members: List[Dict[str, Any]] = []
         segment_name = ""
         if selected:
             segment_key = str(selected.get("segment_key", "") or "").strip()
             inputs = self._read_route_water_hammer_inputs(segment_key)
             existing_result = selected.get("water_hammer_result", {})
             result = copy.deepcopy(existing_result if isinstance(existing_result, dict) else {})
+            member_lookup = selected.get("water_hammer_member_lookup", {})
+            if isinstance(member_lookup, dict):
+                members = [copy.deepcopy(value) for value in member_lookup.values() if isinstance(value, dict)]
             segment_name = str(selected.get("segment_name", "") or segment_key)
         if self._water_hammer_principle_dialog is not None:
             try:
@@ -2883,6 +3031,7 @@ class PressurePipeConfigDialog(QDialog):
             segment_name=segment_name,
             inputs=inputs,
             result=result,
+            members=members,
         )
         self._water_hammer_principle_dialog.show()
 
@@ -2924,6 +3073,7 @@ class PressurePipeConfigDialog(QDialog):
         candidates = list(segment.get("representative_candidates", []) or [])
         selected_key = str(segment.get("selected_representative_key", "") or "").strip()
         selected = self._route_water_hammer_candidate_by_key(candidates, selected_key)
+        member_lookup = self._build_route_water_hammer_member_lookup(candidates)
 
         frame = QFrame()
         frame.setStyleSheet("QFrame { background: #FFFFFF; border: 1px solid #F3D9A4; border-radius: 6px; }")
@@ -2932,10 +3082,11 @@ class PressurePipeConfigDialog(QDialog):
         lay.setSpacing(6)
 
         row_range = segment.get("row_range", [-1, -1])
+        row_range_text = self._format_route_water_hammer_row_range_text(row_range)
         title_text = (
-            f"{segment.get('display_name', '有压段')} | "
-            f"{self._format_row_range_text(int(row_range[0]), int(row_range[1]))} | "
-            f"{int(segment.get('member_count', 0) or 0)} 个成员"
+            "整线连续有压段 | "
+            f"{row_range_text or '未定位'} | "
+            f"{int(segment.get('member_count', 0) or 0)} 个计算成员"
         )
         title = QLabel(title_text)
         title.setStyleSheet("font-size: 12px; color: #8D4E00; font-weight: bold;")
@@ -2945,28 +3096,13 @@ class PressurePipeConfigDialog(QDialog):
         summary.setWordWrap(True)
         summary.setStyleSheet("font-size: 12px; color: #6D4C41;")
         lay.addWidget(summary)
-        if bool(segment.get("mixed_params")):
-            mixed_hint = QLabel("段内参数不完全一致：本段仍按整线验算，E 按各小段管材分别取值；代表行只影响界面参考值。")
-            mixed_hint.setWordWrap(True)
-            mixed_hint.setStyleSheet("font-size: 12px; color: #B26A00;")
-            lay.addWidget(mixed_hint)
+        hint_label = QLabel("本段按一条连续有压整线验算；下表每个成员使用自己的管径、流量、管材、弹性模量和流速。")
+        hint_label.setWordWrap(True)
+        hint_label.setStyleSheet("font-size: 12px; color: #B26A00;")
+        lay.addWidget(hint_label)
 
-        rep_row = QHBoxLayout()
-        rep_row.setSpacing(8)
-        rep_row.addWidget(QLabel("代表行："))
-        representative_combo = ComboBox()
-        representative_combo.setMinimumWidth(360)
-        for candidate in candidates:
-            representative_combo.addItem(str(candidate.get("label", "") or candidate.get("key", "")), candidate.get("key", ""))
-        selected_index = 0
-        for idx in range(representative_combo.count()):
-            if str(representative_combo.itemData(idx) or "") == selected_key:
-                selected_index = idx
-                break
-        if representative_combo.count() > 0:
-            representative_combo.setCurrentIndex(selected_index)
-        rep_row.addWidget(representative_combo, 1)
-        lay.addLayout(rep_row)
+        member_table = self._create_route_water_hammer_member_table(candidates)
+        lay.addWidget(member_table)
 
         def _make_edit(placeholder: str, value, digits: int = 3, width: int = 110):
             edit = LineEdit()
@@ -2979,19 +3115,9 @@ class PressurePipeConfigDialog(QDialog):
             return edit
 
         length_edit = _make_edit("L(m)", inputs.get("length_m"), digits=3)
-        diameter_edit = _make_edit("D(m)", inputs.get("diameter_m"), digits=3)
-        velocity_edit = _make_edit("v0(m/s)", inputs.get("velocity_mps"), digits=4)
-        head_value = inputs.get("initial_head_m")
-        head_edit = _make_edit("表3水位(m)", head_value, digits=3)
         wall_thickness_edit = _make_edit("e(m)", inputs.get("wall_thickness_m"), digits=4)
-        elastic_modulus_edit = LineEdit()
-        elastic_modulus_edit.setPlaceholderText("E(N/m²)")
-        elastic_modulus_edit.setFixedWidth(140)
-        elastic_value = self._safe_float(inputs.get("elastic_modulus_pa"), 0.0)
-        if elastic_value > 0:
-            elastic_modulus_edit.setText(f"{elastic_value:.6g}")
         closing_time_edit = _make_edit("启闭时间Ts(s)", inputs.get("closing_time_s"), digits=4)
-        for readonly_edit in (length_edit, diameter_edit, velocity_edit, head_edit, elastic_modulus_edit):
+        for readonly_edit in (length_edit,):
             readonly_edit.setReadOnly(True)
             readonly_edit.setStyleSheet("color: #607D8B; background: #F5F7FA;")
 
@@ -3000,16 +3126,12 @@ class PressurePipeConfigDialog(QDialog):
         grid.setVerticalSpacing(4)
         input_items = [
             ("L(m)", length_edit),
-            ("D(m)", diameter_edit),
-            ("v0(m/s)", velocity_edit),
-            ("表3水位(m)", head_edit),
-            ("e(m)", wall_thickness_edit),
-            ("E(N/m²)", elastic_modulus_edit),
+            ("统一壁厚 e(m)", wall_thickness_edit),
             ("启闭时间Ts(s)", closing_time_edit),
         ]
         for index, (label_text, edit) in enumerate(input_items):
-            row = index // 4
-            col = (index % 4) * 2
+            row = 0
+            col = index * 2
             grid.addWidget(QLabel(label_text), row, col)
             grid.addWidget(edit, row, col + 1)
         lay.addLayout(grid)
@@ -3092,9 +3214,13 @@ class PressurePipeConfigDialog(QDialog):
         lay.addWidget(detail_btn)
 
         detail_table = QTableWidget()
-        detail_table.setColumnCount(12)
+        detail_table.setColumnCount(16)
         detail_table.setHorizontalHeaderLabels([
             "桩号(m)",
+            "所属成员",
+            "D(m)",
+            "v0(m/s)",
+            "a(m/s)",
             "管顶高程(m)",
             "表3水位(m)",
             "初始压强(m)",
@@ -3128,16 +3254,16 @@ class PressurePipeConfigDialog(QDialog):
             "member_keys": list(segment.get("member_keys", []) or []),
             "selected_representative_key": selected_key,
             "representative_candidates": candidates,
+            "water_hammer_member_lookup": member_lookup,
             "representative_material_key": selected_material,
             "representative_material_group_key": selected_material_group,
+            "water_hammer_legacy_inputs": dict(inputs),
             "water_hammer_card": frame,
-            "water_hammer_representative_combo": representative_combo,
+            "water_hammer_segment_title_label": title,
+            "water_hammer_segment_hint_label": hint_label,
+            "water_hammer_member_table": member_table,
             "water_hammer_length_edit": length_edit,
-            "water_hammer_diameter_edit": diameter_edit,
-            "water_hammer_velocity_edit": velocity_edit,
-            "water_hammer_head_edit": head_edit,
             "water_hammer_wall_thickness_edit": wall_thickness_edit,
-            "water_hammer_elastic_modulus_edit": elastic_modulus_edit,
             "water_hammer_closing_time_edit": closing_time_edit,
             "water_hammer_calc_btn": calc_btn,
             "water_hammer_status_label": status_label,
@@ -3148,18 +3274,11 @@ class PressurePipeConfigDialog(QDialog):
         refs.update(result_labels)
         self._route_water_hammer_segment_widgets[segment_key] = refs
 
-        representative_combo.currentIndexChanged.connect(
-            lambda _idx, key=segment_key: self._on_route_water_hammer_representative_changed(key)
-        )
         calc_btn.clicked.connect(lambda _checked=False, key=segment_key: self._calculate_route_water_hammer_segment(key))
         detail_btn.clicked.connect(_toggle_detail_table)
         for edit in (
             length_edit,
-            diameter_edit,
-            velocity_edit,
-            head_edit,
             wall_thickness_edit,
-            elastic_modulus_edit,
             closing_time_edit,
         ):
             edit.textEdited.connect(lambda _txt, key=segment_key: self._clear_route_water_hammer_result(key))
@@ -3190,6 +3309,11 @@ class PressurePipeConfigDialog(QDialog):
         hint.setStyleSheet("font-size: 12px; color: #6D4C41;")
         panel_lay.addWidget(hint)
 
+        bulk_hint = QLabel("e 和 Ts 为整线级输入；每个水锤段共用一套。")
+        bulk_hint.setWordWrap(True)
+        bulk_hint.setStyleSheet("font-size: 12px; color: #6D4C41;")
+        panel_lay.addWidget(bulk_hint)
+
         bulk_row = QHBoxLayout()
         bulk_row.setSpacing(8)
         bulk_row.addWidget(QLabel("批量 e(m)："))
@@ -3204,10 +3328,8 @@ class PressurePipeConfigDialog(QDialog):
         bulk_ts_edit.setPlaceholderText("Ts")
         bulk_ts_edit.setText(self._fmt_live_value(WATER_HAMMER_DEFAULT_CLOSING_TIME_S, digits=4))
         bulk_row.addWidget(bulk_ts_edit)
-        apply_all_btn = PushButton("填到全部")
-        apply_same_btn = PushButton("填到同材质")
+        apply_all_btn = PushButton("填到全部水锤段")
         bulk_row.addWidget(apply_all_btn)
-        bulk_row.addWidget(apply_same_btn)
         export_excel_btn = PushButton("导出Excel")
         principle_btn = PushButton("验算原理")
         bulk_row.addWidget(export_excel_btn)
@@ -3218,16 +3340,15 @@ class PressurePipeConfigDialog(QDialog):
         route_refs.update(
             {
                 "water_hammer_panel": panel,
+                "water_hammer_bulk_hint_label": bulk_hint,
                 "water_hammer_bulk_e_edit": bulk_e_edit,
                 "water_hammer_bulk_ts_edit": bulk_ts_edit,
                 "water_hammer_bulk_all_btn": apply_all_btn,
-                "water_hammer_bulk_same_material_btn": apply_same_btn,
                 "water_hammer_export_excel_btn": export_excel_btn,
                 "water_hammer_principle_btn": principle_btn,
             }
         )
         apply_all_btn.clicked.connect(lambda _checked=False, key=route_key: self._apply_route_water_hammer_bulk_inputs(key, False))
-        apply_same_btn.clicked.connect(lambda _checked=False, key=route_key: self._apply_route_water_hammer_bulk_inputs(key, True))
         export_excel_btn.clicked.connect(self._export_route_water_hammer_excel)
         principle_btn.clicked.connect(lambda _checked=False, key=route_key: self._show_route_water_hammer_principle(key))
 
@@ -5260,6 +5381,11 @@ class PressurePipeConfigDialog(QDialog):
         long_nodes, message = dxf_parser_cls.parse_longitudinal_profile(
             filepath,
             chainage_offset=chainage_offset,
+        )
+        self._raise_if_import_stays_in_raw_coordinate_space(
+            self._resolve_pipe_label(pipe_name),
+            ip_points,
+            long_nodes,
         )
         converted_nodes = self._convert_imported_longitudinal_nodes(long_nodes)
         merged_nodes = self._merge_longitudinal_nodes(existing_nodes, converted_nodes)

@@ -24,6 +24,10 @@ SUMMARY_HEADERS = [
 
 DETAIL_COLUMNS = [
     ("桩号(m)", "station_m"),
+    ("所属成员", "member_label"),
+    ("D(m)", "diameter_m"),
+    ("v0(m/s)", "velocity_mps"),
+    ("a(m/s)", "a"),
     ("管顶高程(m)", "pipe_top_elevation_m"),
     ("表3水位(m)", "water_level_m"),
     ("初始压强(m)", "initial_pressure_head_m"),
@@ -70,7 +74,8 @@ def build_water_hammer_export_workbook(segments: List[Dict[str, Any]]):
         )
         used_names.add(sheet_name)
         sheet = workbook.create_sheet(sheet_name)
-        _write_detail_sheet(sheet, details, styles, get_column_letter)
+        member_lookup = segment.get("member_lookup", {}) if isinstance(segment, dict) else {}
+        _write_detail_sheet(sheet, details, styles, get_column_letter, member_lookup=member_lookup)
         detail_index += 1
     return workbook
 
@@ -124,15 +129,25 @@ def _write_summary_sheet(sheet, segments: List[Dict[str, Any]], styles: Dict[str
     _autosize_columns(sheet, get_column_letter)
 
 
-def _write_detail_sheet(sheet, details: List[Dict[str, Any]], styles: Dict[str, Any], get_column_letter) -> None:
+def _write_detail_sheet(
+    sheet,
+    details: List[Dict[str, Any]],
+    styles: Dict[str, Any],
+    get_column_letter,
+    *,
+    member_lookup: Dict[str, Any] | None = None,
+) -> None:
     """写入单个水锤段的采样明细表。"""
     sheet.append([label for label, _key in DETAIL_COLUMNS])
     _style_header_row(sheet, styles)
+    lookup = member_lookup if isinstance(member_lookup, dict) else {}
     for item in details:
         row = []
         for _label, key in DETAIL_COLUMNS:
             value = item.get(key, "") if isinstance(item, dict) else ""
-            if key == "diagram_type_check":
+            if key == "member_label":
+                value = _format_member_label(item, lookup)
+            elif key == "diagram_type_check":
                 value = _format_diagram_text(value)
             else:
                 value = _number_or_blank(value)
@@ -182,6 +197,15 @@ def _format_diagram_text(value: Any) -> str:
     if not isinstance(value, dict) or not value:
         return ""
     return str(value.get("positive_region", "") or value.get("negative_region", "") or "")
+
+
+def _format_member_label(item: Dict[str, Any], member_lookup: Dict[str, Any]) -> str:
+    """按 member_key 生成明细行所属成员名称。"""
+    member_key = str((item or {}).get("member_key", "") or "")
+    info = member_lookup.get(member_key, {}) if isinstance(member_lookup, dict) else {}
+    if isinstance(info, dict):
+        return str(info.get("label", "") or info.get("display_name", "") or member_key)
+    return member_key
 
 
 def _unique_sheet_name(raw_name: str, used_names: set[str]) -> str:

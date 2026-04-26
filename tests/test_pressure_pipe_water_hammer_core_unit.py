@@ -326,6 +326,9 @@ def test_calc_distributed_water_hammer_check_uses_most_dangerous_member_delta_h(
         if item["station_m"] == pytest.approx(10.0) and item["member_key"] == "pipe-b"
     )
     assert pipe_b_boundary["pipe_top_elevation_m"] == pytest.approx(100.25)
+    assert pipe_b_boundary["diameter_m"] == pytest.approx(0.5)
+    assert pipe_b_boundary["velocity_mps"] == pytest.approx(2.0)
+    assert pipe_b_boundary["a"] > 0
 
 
 def test_calc_distributed_water_hammer_check_handles_indirect_closure_when_ts_exceeds_phase_time():

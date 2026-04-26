@@ -866,6 +866,7 @@ def calc_distributed_water_hammer_check(
                         "member_key": member["key"],
                         "centerline_elevation_m": centerline_elevation,
                         "diameter_m": member["diameter_m"],
+                        "velocity_mps": member["velocity_mps"],
                         "a": member["a"],
                         "pipe_top_elevation_m": pipe_top,
                         "water_level_m": water_level,

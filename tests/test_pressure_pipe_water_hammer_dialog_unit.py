@@ -167,6 +167,41 @@ def _set_route_profile_and_water_levels(dialog, groups, *, centerline_elevation:
             row.water_level = water_level
 
 
+def test_longitudinal_import_rejects_plan_coordinate_y_as_elevation():
+    """纵断面导入应拦截明显来自平面坐标的 Y 值。"""
+    nodes = [
+        SimpleNamespace(chainage=14193.795, elevation=3376075.2),
+        SimpleNamespace(chainage=19945.706, elevation=3376021.6),
+    ]
+
+    with pytest.raises(ValueError) as excinfo:
+        PressurePipeConfigDialog._raise_if_import_stays_in_raw_coordinate_space(
+            "文家梁连续整线",
+            [],
+            nodes,
+        )
+
+    message = str(excinfo.value)
+    assert "文家梁连续整线" in message
+    assert "疑似平面坐标 Y 值" in message
+    assert "不是真实高程" in message
+    assert "X=桩号、Y=管道中心线真实高程" in message
+
+
+def test_longitudinal_import_accepts_realistic_centerline_elevation():
+    """合理高程的纵断面节点不应被平面坐标校验拦截。"""
+    nodes = [
+        SimpleNamespace(chainage=14193.795, elevation=422.356),
+        SimpleNamespace(chainage=19945.706, elevation=414.419),
+    ]
+
+    PressurePipeConfigDialog._raise_if_import_stays_in_raw_coordinate_space(
+        "文家梁连续整线",
+        [],
+        nodes,
+    )
+
+
 def test_dialog_prefills_and_persists_basic_water_hammer_inputs_and_results():
     """弹窗应能预填、验算、保存并在重开后恢复基础水锤数据。"""
     _get_qapp()
@@ -293,8 +328,8 @@ def test_route_water_hammer_segments_split_at_tunnel_and_keep_pressure_runs_whol
         dialog.close()
 
 
-def test_route_water_hammer_mixed_params_keep_single_segment_and_pick_fastest_representative():
-    """混合参数连续有压段不拆段，默认代表行取最大流速成员。"""
+def test_route_water_hammer_mixed_params_show_member_table_without_representative_fields():
+    """混合参数连续有压段应通过成员表展示参数，不再显示代表行。"""
     groups = [
         _make_route_group(
             "pipe-a",
@@ -327,11 +362,38 @@ def test_route_water_hammer_mixed_params_keep_single_segment_and_pick_fastest_re
         assert len(segments) == 1
         segment = segments[0]
         assert segment["mixed_params"] is True
-        assert segment["selected_representative_key"] == "pipe-b"
-        assert segment["inputs"]["diameter_m"] == pytest.approx(0.5)
-        assert segment["inputs"]["velocity_mps"] == pytest.approx(1.7)
         assert "D" in segment["param_summary"]
         assert "管材" in segment["param_summary"]
+
+        route_refs = dialog._route_widgets["flow1-route1"]
+        widgets = route_refs["water_hammer_segment_widgets"][0]
+        assert "water_hammer_representative_combo" not in widgets
+        assert "water_hammer_diameter_edit" not in widgets
+        assert "water_hammer_velocity_edit" not in widgets
+        assert "water_hammer_head_edit" not in widgets
+        assert "water_hammer_elastic_modulus_edit" not in widgets
+        assert widgets["water_hammer_segment_title_label"].text() == "整线连续有压段 | 第1行 ~ 第2行 | 2 个计算成员"
+        assert "每个成员使用自己的管径、流量、管材、弹性模量和流速" in (
+            widgets["water_hammer_segment_hint_label"].text()
+        )
+        member_table = widgets["water_hammer_member_table"]
+        assert member_table.rowCount() == 2
+        headers = [member_table.horizontalHeaderItem(i).text() for i in range(member_table.columnCount())]
+        assert headers == [
+            "序号",
+            "行范围",
+            "桩号范围",
+            "L(m)",
+            "Q(m³/s)",
+            "D(m)",
+            "管材",
+            "E(N/m²)",
+            "v0(m/s)",
+            "计算用途",
+        ]
+        assert member_table.item(0, 1).text() == "第1行"
+        assert member_table.item(1, 1).text() == "第2行"
+        assert member_table.item(0, 9).text() == "参与整线水锤验算"
     finally:
         dialog.close()
 
@@ -412,14 +474,17 @@ def test_route_only_dialog_shows_water_hammer_segment_panel_without_child_pipe_c
         assert _read_float(segment_widgets[0]["water_hammer_closing_time_edit"]) == pytest.approx(300.0)
         assert _read_float(route_refs["water_hammer_bulk_e_edit"]) == pytest.approx(0.06)
         assert _read_float(route_refs["water_hammer_bulk_ts_edit"]) == pytest.approx(300.0)
+        assert route_refs["water_hammer_bulk_hint_label"].text() == "e 和 Ts 为整线级输入；每个水锤段共用一套。"
+        assert route_refs["water_hammer_bulk_all_btn"].text() == "填到全部水锤段"
+        assert "water_hammer_bulk_same_material_btn" not in route_refs
         assert route_refs["water_hammer_export_excel_btn"].text() == "导出Excel"
         assert route_refs["water_hammer_principle_btn"].text() == "验算原理"
     finally:
         dialog.close()
 
 
-def test_route_water_hammer_principle_dialog_shows_formula_and_current_values():
-    """验算原理窗口应展示离线公式内容，并在有结果时展示当前段代入值。"""
+def test_route_water_hammer_principle_dialog_shows_formula_and_control_point_values():
+    """验算原理窗口应展示公式，并在有结果时展示控制采样点代入值。"""
     groups = [
         _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, diameter=1.0),
     ]
@@ -439,7 +504,7 @@ def test_route_water_hammer_principle_dialog_shows_formula_and_current_values():
         assert "记作 μ<sub>s</sub>" in principle_dialog.html
         assert "H<sub>0</sub> 为初始压强水头" in principle_dialog.html
         assert "T<sub>s</sub> 不大于水锤相时" in principle_dialog.html
-        assert "先验算后可看到当前段代入值" in principle_dialog.html
+        assert "先验算后可看到控制采样点代入值" in principle_dialog.html
         principle_dialog.close()
 
         _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=400.0)
@@ -451,7 +516,9 @@ def test_route_water_hammer_principle_dialog_shows_formula_and_current_values():
         dialog._show_route_water_hammer_principle("flow1-route1")
         _flush_events(4)
         principle_dialog = dialog._water_hammer_principle_dialog
-        assert "当前段代入示例" in principle_dialog.html
+        assert "控制采样点代入值" in principle_dialog.html
+        assert "整线统一输入" in principle_dialog.html
+        assert "所属成员" in principle_dialog.html
         assert "ΔH<sup>+</sup>" in principle_dialog.html
         assert "H<sub>max</sub>" in principle_dialog.html
     finally:
@@ -519,6 +586,14 @@ def test_route_water_hammer_excel_exports_summary_and_calculated_segment_details
         assert summary.cell(row=3, column=4).value == "未验算"
         detail = workbook[workbook.sheetnames[1]]
         assert detail.cell(row=1, column=1).value == "桩号(m)"
+        assert detail.cell(row=1, column=2).value == "所属成员"
+        assert detail.cell(row=1, column=3).value == "D(m)"
+        assert detail.cell(row=1, column=4).value == "v0(m/s)"
+        assert detail.cell(row=1, column=5).value == "a(m/s)"
+        assert str(detail.cell(row=2, column=2).value or "").startswith("pipe-a")
+        assert detail.cell(row=2, column=3).value == pytest.approx(1.0)
+        assert detail.cell(row=2, column=4).value == pytest.approx(1.0)
+        assert detail.cell(row=2, column=5).value > 0
         assert detail.max_row > 1
     finally:
         dialog.close()
@@ -632,8 +707,8 @@ def test_route_water_hammer_result_layout_stays_stable_after_long_result_text():
         dialog.close()
 
 
-def test_route_water_hammer_bulk_inputs_apply_all_and_same_material_only():
-    """整线水锤段应支持批量填写全部段和同管材段。"""
+def test_route_water_hammer_bulk_inputs_apply_all_segments_without_same_material_button():
+    """整线水锤段只保留全部水锤段批量填写入口。"""
     groups = [
         _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, material_key="钢管"),
         _make_route_group("tunnel-a", 1, "隧洞-圆形", start_mc=10.0, end_mc=20.0),
@@ -647,6 +722,8 @@ def test_route_water_hammer_bulk_inputs_apply_all_and_same_material_only():
         route_refs = dialog._route_widgets["flow1-route1"]
         segment_widgets = route_refs["water_hammer_segment_widgets"]
         assert len(segment_widgets) == 3
+        assert "water_hammer_bulk_same_material_btn" not in route_refs
+        assert route_refs["water_hammer_bulk_all_btn"].text() == "填到全部水锤段"
 
         route_refs["water_hammer_bulk_e_edit"].setText("0.011")
         route_refs["water_hammer_bulk_ts_edit"].setText("0.02")
@@ -656,20 +733,6 @@ def test_route_water_hammer_bulk_inputs_apply_all_and_same_material_only():
         for widgets in segment_widgets:
             assert _read_float(widgets["water_hammer_wall_thickness_edit"]) == pytest.approx(0.011)
             assert _read_float(widgets["water_hammer_closing_time_edit"]) == pytest.approx(0.02)
-
-        segment_widgets[1]["water_hammer_wall_thickness_edit"].setText("0.017")
-        segment_widgets[1]["water_hammer_closing_time_edit"].setText("0.05")
-        route_refs["water_hammer_bulk_e_edit"].setText("0.022")
-        route_refs["water_hammer_bulk_ts_edit"].setText("0.03")
-        QTest.mouseClick(route_refs["water_hammer_bulk_same_material_btn"], Qt.LeftButton)
-        _flush_events(4)
-
-        assert _read_float(segment_widgets[0]["water_hammer_wall_thickness_edit"]) == pytest.approx(0.022)
-        assert _read_float(segment_widgets[0]["water_hammer_closing_time_edit"]) == pytest.approx(0.03)
-        assert _read_float(segment_widgets[1]["water_hammer_wall_thickness_edit"]) == pytest.approx(0.017)
-        assert _read_float(segment_widgets[1]["water_hammer_closing_time_edit"]) == pytest.approx(0.05)
-        assert _read_float(segment_widgets[2]["water_hammer_wall_thickness_edit"]) == pytest.approx(0.022)
-        assert _read_float(segment_widgets[2]["water_hammer_closing_time_edit"]) == pytest.approx(0.03)
     finally:
         dialog.close()
 
@@ -746,10 +809,18 @@ def test_route_water_hammer_distribution_check_shows_pass_and_detail_rows():
         _flush_events(4)
         assert widgets["water_hammer_detail_table"].isVisible() is True
         assert widgets["water_hammer_detail_table"].rowCount() == 6
-        assert widgets["water_hammer_detail_table"].horizontalHeaderItem(2).text() == "表3水位(m)"
-        assert widgets["water_hammer_detail_table"].horizontalHeaderItem(7).text() == "负ΔH(m)"
-        assert widgets["water_hammer_detail_table"].horizontalHeaderItem(8).text() == "负压余量(m)"
-        assert widgets["water_hammer_detail_table"].horizontalHeaderItem(11).text() == "图1-3-3对照"
+        headers = [
+            widgets["water_hammer_detail_table"].horizontalHeaderItem(i).text()
+            for i in range(widgets["water_hammer_detail_table"].columnCount())
+        ]
+        assert headers[:5] == ["桩号(m)", "所属成员", "D(m)", "v0(m/s)", "a(m/s)"]
+        assert headers[11] == "负ΔH(m)"
+        assert headers[12] == "负压余量(m)"
+        assert headers[15] == "图1-3-3对照"
+        assert widgets["water_hammer_detail_table"].item(0, 1).text().startswith("pipe-a")
+        assert _read_float(widgets["water_hammer_detail_table"].item(0, 2)) == pytest.approx(1.0)
+        assert _read_float(widgets["water_hammer_detail_table"].item(0, 3)) == pytest.approx(1.0)
+        assert _read_float(widgets["water_hammer_detail_table"].item(0, 4)) > 0
     finally:
         dialog.close()
 
@@ -828,8 +899,8 @@ def test_route_water_hammer_distribution_check_marks_failed_when_margin_negative
         dialog.close()
 
 
-def test_route_water_hammer_distribution_ignores_manual_representative_d_e_v_edits():
-    """整线分布正式判定应使用成员自身参数，避免手填代表值误导全段。"""
+def test_route_water_hammer_distribution_uses_members_without_single_value_inputs():
+    """整线分布正式判定应使用成员自身参数，不提供单值代表输入。"""
     groups = [
         _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, diameter=1.0, pipe_velocity=1.0),
     ]
@@ -838,18 +909,16 @@ def test_route_water_hammer_distribution_ignores_manual_representative_d_e_v_edi
     try:
         _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=100.0, water_level=130.0)
         widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
-        widgets["water_hammer_diameter_edit"].setText("0.1")
-        widgets["water_hammer_velocity_edit"].setText("0.01")
-        widgets["water_hammer_elastic_modulus_edit"].setText("1e12")
+        assert "water_hammer_diameter_edit" not in widgets
+        assert "water_hammer_velocity_edit" not in widgets
+        assert "water_hammer_elastic_modulus_edit" not in widgets
         widgets["water_hammer_wall_thickness_edit"].setText("0.02")
         widgets["water_hammer_closing_time_edit"].setText("0.01")
         QTest.mouseClick(widgets["water_hammer_calc_btn"], Qt.LeftButton)
         _flush_events(6)
 
         assert "不通过" in widgets["water_hammer_status_label"].text()
-        assert widgets["water_hammer_diameter_edit"].isReadOnly()
-        assert widgets["water_hammer_velocity_edit"].isReadOnly()
-        assert widgets["water_hammer_elastic_modulus_edit"].isReadOnly()
+        assert widgets["water_hammer_result_sample_count_label"].text() != "0"
     finally:
         dialog.close()
 
@@ -897,6 +966,107 @@ def test_route_water_hammer_segments_persist_and_restore_from_manager():
         except Exception:
             pass
         shutil.rmtree(case_dir, ignore_errors=True)
+
+
+def test_real_nanfengsi_tail_route_keeps_three_members_and_rejects_plan_coordinate_profile_if_present():
+    """南峰寺末端有压整线应保留三段参数，并避免缓存平面坐标高程。"""
+    excel_path = ROOT / "data" / "有压管道改名-南峰寺支渠批量计算.xlsx"
+    dxf_path = ROOT / "data" / "南峰寺文家梁有压管道纵断面dxf.dxf"
+    if not excel_path.exists() or not dxf_path.exists():
+        pytest.skip("缺少南峰寺真实样例文件")
+
+    siphon_root = ROOT / "倒虹吸水力计算系统"
+    if str(siphon_root) not in sys.path:
+        sys.path.insert(0, str(siphon_root))
+    try:
+        from app_渠系计算前端.batch.panel import BatchPanel
+        from app_渠系计算前端.water_profile.panel import WaterProfilePanel
+        from dxf_parser import DxfParser
+        from shared.shared_data_manager import get_shared_data_manager
+    except Exception as exc:
+        pytest.skip(f"真实样例依赖不可用：{exc}")
+
+    _get_qapp()
+    shared_data = get_shared_data_manager()
+    shared_data.clear_batch_results()
+    batch = BatchPanel()
+    water_panel = WaterProfilePanel()
+    dialog = None
+    try:
+        batch._do_load_from_filepath(str(excel_path), is_sample=True, sample_title="diag", sample_desc="diag")
+        _flush_events(4)
+        batch._batch_calculate()
+        _flush_events(6)
+        assert len(batch.batch_results) == 222
+
+        water_panel._import_from_batch()
+        _flush_events(8)
+        settings = water_panel._build_settings()
+        context = water_panel._prepare_pressure_pipe_dialog_context(
+            water_panel.nodes,
+            settings=settings,
+            show_xxpipe_warning=False,
+        )
+        route_targets = context.get("route_import_targets") or {}
+        assert len(route_targets) == 1
+        route_key = next(iter(route_targets.keys()))
+
+        dialog = PressurePipeWaterHammerDialog(
+            pipe_groups=context.get("pipe_groups") or [],
+            pressure_chains=context.get("chain_descriptors") or [],
+            xxpipe_route_mode=bool(context.get("xxpipe_route_mode")),
+            route_import_targets=route_targets,
+        )
+        _flush_events(6)
+
+        segments = dialog._build_route_water_hammer_segments(dialog._route_contexts[route_key])
+        assert len(segments) == 1
+        candidates = segments[0]["representative_candidates"]
+        assert len(candidates) == 3
+        assert [candidate["design_flow"] for candidate in candidates] == pytest.approx([2.04, 1.46, 0.65])
+        assert [candidate["diameter_m"] for candidate in candidates] == pytest.approx([1.6, 1.2, 0.8])
+        assert [candidate["material_key"] for candidate in candidates] == [
+            "PCCP管0.014",
+            "球墨铸铁管",
+            "球墨铸铁管",
+        ]
+        assert candidates[0]["resolved_material_key"] == "预应力钢筒混凝土管_n014"
+        assert [candidate["elastic_modulus_pa"] for candidate in candidates] == pytest.approx(
+            [20.6e9, 108.0e9, 108.0e9]
+        )
+        route_refs = dialog._route_widgets[route_key]
+        widgets = route_refs["water_hammer_segment_widgets"][0]
+        assert "water_hammer_representative_combo" not in widgets
+        assert widgets["water_hammer_member_table"].rowCount() == 3
+
+        route_import_result = None
+        try:
+            route_import_result = dialog._resolve_xxpipe_route_import_result(
+                route_key,
+                str(dxf_path),
+                DxfParser,
+                route_targets[route_key].get("targets") or [],
+            )
+        except ValueError as exc:
+            message = str(exc)
+            assert "文家梁连续整线" in message
+            assert "疑似平面坐标 Y 值" in message
+            assert "不是真实高程" in message
+            assert route_key not in dialog._longitudinal_data
+        else:
+            elevations = [
+                float(node.get("elevation", 0.0))
+                for node in list(route_import_result.get("merged_nodes") or [])
+                if isinstance(node, dict)
+            ]
+            assert elevations
+            assert max(abs(value) for value in elevations) < 10000.0
+    finally:
+        if dialog is not None:
+            dialog.close()
+        water_panel.close()
+        batch.close()
+        shared_data.clear_batch_results()
 
 
 def test_real_jiangjiaba_route_water_hammer_handles_profile_endpoint_tail_gap():
