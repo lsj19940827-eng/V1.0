@@ -4835,6 +4835,77 @@ def _normalize_pressure_pipe_flow_section_key(flow_section):
     return str(flow_section or "").strip()
 
 
+def _pressure_pipe_export_material_key(material_value):
+    """将压力管道导出链路中的管材值统一归一为 canonical key。"""
+    try:
+        from calc_渠系计算算法内核.生成断面汇总表 import normalize_pressure_pipe_material_key
+    except Exception:
+        return str(material_value or "").strip()
+    return str(normalize_pressure_pipe_material_key(material_value) or "").strip()
+
+
+def _pressure_pipe_row_material_key(row):
+    """优先按显式 key，再按管材显示值解析压力管道管材。"""
+    if not isinstance(row, dict):
+        return ""
+    for key in ("pipe_material_key", "material_key", "pipe_material", "material"):
+        value = row.get(key)
+        if value in (None, "", "-"):
+            continue
+        material_key = _pressure_pipe_export_material_key(value)
+        if material_key:
+            return material_key
+    return ""
+
+
+def _pressure_pipe_export_material_display(material_key):
+    """按 canonical key 返回压力管道特性表使用的正式管材名称。"""
+    try:
+        from calc_渠系计算算法内核.生成断面汇总表 import get_pressure_pipe_material_display_name
+    except Exception:
+        return str(material_key or "").strip()
+    return str(get_pressure_pipe_material_display_name(material_key) or material_key or "").strip()
+
+
+def _is_explicit_pccp_roughness_material_key(material_key):
+    """判断是否为用户明确填写的 PCCP 非默认 n 值。"""
+    return str(material_key or "").strip() in {
+        "预应力钢筒混凝土管_n014",
+        "预应力钢筒混凝土管_n015",
+    }
+
+
+def _sync_pressure_pipe_flow_section_material(base_row, items):
+    """合并同流量段时优先保留 Excel/表1 明确填写的 PCCP n 值。"""
+    if not isinstance(base_row, dict):
+        return base_row
+
+    selected_key = _pressure_pipe_row_material_key(base_row)
+    if not selected_key:
+        for item in items or []:
+            selected_key = _pressure_pipe_row_material_key(item)
+            if selected_key:
+                break
+
+    if _is_explicit_pccp_roughness_material_key(selected_key):
+        base_row["pipe_material_key"] = selected_key
+        base_row["pipe_material"] = _pressure_pipe_export_material_display(selected_key)
+        return base_row
+
+    if selected_key in ("", "预应力钢筒混凝土管"):
+        for item in items or []:
+            candidate_key = _pressure_pipe_row_material_key(item)
+            if not _is_explicit_pccp_roughness_material_key(candidate_key):
+                continue
+            base_row["pipe_material_key"] = candidate_key
+            base_row["pipe_material"] = _pressure_pipe_export_material_display(candidate_key)
+            return base_row
+
+    if selected_key:
+        base_row["pipe_material_key"] = selected_key
+    return base_row
+
+
 def _resolve_pressure_pipe_characteristic_export_summary(panel, rows=None, nodes=None):
     getter = getattr(panel, "get_pressure_pipe_characteristic_export_summary", None)
     if not callable(getter):
@@ -4927,6 +4998,7 @@ def _merge_pressure_pipe_export_rows_by_flow_section(rows, panel=None):
                     continue
                 base[key] = copy.deepcopy(value)
                 break
+        _sync_pressure_pipe_flow_section_material(base, items)
 
         summary = summary_by_flow_section.get(flow_section_key)
         if summary is None:
@@ -7391,6 +7463,7 @@ def _build_pressurized_segments(qs, overrides_by_idx, params, has_source_data, s
         "total_length",
         "total_head_loss",
         "friction_params",
+        "pipe_material_key",
         "start_water_level",
         "end_water_level",
         "tunnel_count",

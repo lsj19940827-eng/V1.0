@@ -1355,6 +1355,36 @@ def test_merge_pressure_pipe_export_rows_by_flow_section_collapses_rows_and_atta
     assert merged[1]["show_building_characteristics"] is True
 
 
+def test_merge_pressure_pipe_export_rows_by_flow_section_prefers_explicit_pccp_roughness_over_default():
+    rows = [
+        {
+            "name": "默认管材占位",
+            "flow_section": 1,
+            "display_name": "默认管材占位-第一流量段",
+            "pipe_material": "预应力钢筒混凝土管",
+            "DN_mm": 1600,
+            "structure_kind": "pressure_pipe",
+            "Q": 2.04,
+        },
+        {
+            "name": "Excel真实管材",
+            "flow_section": 1,
+            "display_name": "Excel真实管材-第一流量段",
+            "pipe_material": "PCCP管0.014",
+            "DN_mm": 1600,
+            "structure_kind": "pressure_pipe",
+            "Q": 2.04,
+        },
+    ]
+
+    merged = cad_tools._merge_pressure_pipe_export_rows_by_flow_section(rows)
+    computed = summary_mod.compute_pressure_pipe(merged)
+
+    assert merged[0]["pipe_material_key"] == "预应力钢筒混凝土管_n014"
+    assert computed[0]["pipe_material"] == "预应力钢筒混凝土管(n=0.014)"
+    assert computed[0]["friction_params"] == "1516000 / 2 / 5.33"
+
+
 def test_merge_pressure_pipe_export_rows_by_flow_section_prefers_flow_section_summary_total_length():
     rows = [
         {
