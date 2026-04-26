@@ -2088,12 +2088,14 @@ class HydraulicCalculator:
             # 应用公式10.3.6: H_d = H_u + h_u - h_d - ΔZ
             H_d = H_u + h_u - h_d - delta_Z
             H_d = round(H_d, ELEVATION_PRECISION)
+            upstream_top = self._resolve_siphon_boundary_top_elevation(upstream_channel, H_u)
             
             # 保存公式10.3.6计算详情（供双击弹窗展示）
             calc_details = {
                 'H_u': H_u,
                 'h_u': h_u,
                 'h_d': h_d,
+                'upstream_top_elevation': upstream_top,
                 'upstream_wl': upstream_wl,
                 'downstream_wl': downstream_wl,
                 'delta_Z': delta_Z,
@@ -2104,7 +2106,6 @@ class HydraulicCalculator:
             
             # 将 H_d 赋值给倒虹吸出口节点本身（显示在出口行的渠底高程列）
             node.bottom_elevation = H_d
-            node.siphon_outlet_elev_details = calc_details
             
             # 更新下游节点渠底高程（以公式10.3.6为准）
             if downstream_channel.bottom_elevation:
@@ -2114,9 +2115,18 @@ class HydraulicCalculator:
                 downstream_channel.bottom_elevation = H_d
             # 更新渠顶高程
             if downstream_channel.structure_height > 0:
-                downstream_channel.top_elevation = downstream_channel.bottom_elevation + downstream_channel.structure_height
+                downstream_channel.top_elevation = round(
+                    downstream_channel.bottom_elevation + downstream_channel.structure_height,
+                    ELEVATION_PRECISION,
+                )
+
+            downstream_top = self._resolve_siphon_boundary_top_elevation(downstream_channel, H_d)
+            node.top_elevation = downstream_top if downstream_top > ZERO_TOLERANCE else 0.0
+            calc_details['downstream_top_elevation'] = downstream_top
+            calc_details['H_t_outlet'] = node.top_elevation
+            node.siphon_outlet_elev_details = calc_details
             
-            # 【建议4】倒虹吸进口行也显示渠底高程（取上游渠道末端的渠底高程 H_u）
+            # 【建议4】倒虹吸进口行也显示边界高程（取上游渠道末端的渠底/渠顶高程）
             for j in range(i - 1, -1, -1):
                 n = nodes[j]
                 if n.is_transition:
@@ -2125,10 +2135,127 @@ class HydraulicCalculator:
                 io_n = n.in_out.value if n.in_out else ""
                 if sv_n2 == "倒虹吸" and io_n == "进":
                     n.bottom_elevation = round(H_u, ELEVATION_PRECISION)
+                    n.top_elevation = upstream_top if upstream_top > ZERO_TOLERANCE else 0.0
                     break
                 # 如果碰到非倒虹吸节点就停止
                 if sv_n2 != "倒虹吸":
                     break
+
+    def _resolve_siphon_boundary_top_elevation(self, channel_node: ChannelNode, boundary_bottom: float) -> float:
+        """解析倒虹吸进出口边界应显示的渠顶高程。"""
+        top_elevation = self._finite_float_or_none(getattr(channel_node, "top_elevation", None))
+        if top_elevation is not None and top_elevation > ZERO_TOLERANCE:
+            return round(top_elevation, ELEVATION_PRECISION)
+
+        bottom_elevation = self._finite_float_or_none(boundary_bottom)
+        structure_height = self._finite_float_or_none(getattr(channel_node, "structure_height", None))
+        if (
+            bottom_elevation is None
+            or abs(bottom_elevation) <= ZERO_TOLERANCE
+            or structure_height is None
+            or structure_height <= ZERO_TOLERANCE
+        ):
+            return 0.0
+        return round(bottom_elevation + structure_height, ELEVATION_PRECISION)
+
+    @staticmethod
+    def _finite_float_or_none(value: Any) -> Optional[float]:
+        """将数值转为有限浮点数，无法转换时返回空。"""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        return number
+
+    def _is_siphon_profile_row(self, node: Optional[ChannelNode]) -> bool:
+        """判断节点是否属于倒虹吸本体行。"""
+        if node is None or getattr(node, "is_transition", False):
+            return False
+        structure_value = self._get_effective_structure_value(node)
+        return "倒虹吸" in structure_value
+
+    @staticmethod
+    def _node_in_out_value(node: Optional[ChannelNode]) -> str:
+        """读取节点进出口标识文本。"""
+        in_out = getattr(node, "in_out", None)
+        return in_out.value if hasattr(in_out, "value") else str(in_out or "")
+
+    def _apply_one_siphon_water_level_distribution(self, group: List[ChannelNode]) -> None:
+        """对单个连续同名倒虹吸组按桩号线性分布内部水位。"""
+        inlet_idx = next(
+            (idx for idx, node in enumerate(group) if self._node_in_out_value(node) == "进"),
+            None,
+        )
+        outlet_idx = next(
+            (
+                idx
+                for idx in range(len(group) - 1, -1, -1)
+                if self._node_in_out_value(group[idx]) == "出"
+            ),
+            None,
+        )
+        if inlet_idx is None or outlet_idx is None or inlet_idx >= outlet_idx:
+            return
+
+        inlet = group[inlet_idx]
+        outlet = group[outlet_idx]
+        inlet_station = self._finite_float_or_none(getattr(inlet, "station_MC", None))
+        outlet_station = self._finite_float_or_none(getattr(outlet, "station_MC", None))
+        inlet_level = self._finite_float_or_none(getattr(inlet, "water_level", None))
+        outlet_level = self._finite_float_or_none(getattr(outlet, "water_level", None))
+        if (
+            inlet_station is None
+            or outlet_station is None
+            or inlet_level is None
+            or outlet_level is None
+            or abs(inlet_level) <= ZERO_TOLERANCE
+            or abs(outlet_level) <= ZERO_TOLERANCE
+            or outlet_station - inlet_station <= ZERO_TOLERANCE
+        ):
+            return
+
+        total_drop = inlet_level - outlet_level
+        station_span = outlet_station - inlet_station
+        for node in group[inlet_idx + 1:outlet_idx]:
+            current_station = self._finite_float_or_none(getattr(node, "station_MC", None))
+            if current_station is None:
+                continue
+            ratio = (current_station - inlet_station) / station_span
+            ratio = max(0.0, min(1.0, ratio))
+            node.water_level = round(inlet_level - total_drop * ratio, ELEVATION_PRECISION)
+
+    def apply_siphon_linear_water_level_distribution(self, nodes: List[ChannelNode]) -> None:
+        """
+        将倒虹吸内部行水位按倒进/倒出桩号线性分布。
+
+        只更新中间行 water_level，用于表3展示和 DXF/TXT 设计水位线绘制；
+        不修改倒虹吸总水头损失、总损失或累计损失，避免重复扣减。
+        """
+        if not nodes:
+            return
+
+        i = 0
+        while i < len(nodes):
+            node = nodes[i]
+            if not self._is_siphon_profile_row(node):
+                i += 1
+                continue
+
+            group_name = str(getattr(node, "name", "") or "").strip()
+            start_idx = i
+            i += 1
+            while i < len(nodes):
+                next_node = nodes[i]
+                next_name = str(getattr(next_node, "name", "") or "").strip()
+                if not self._is_siphon_profile_row(next_node) or next_name != group_name:
+                    break
+                i += 1
+
+            group = nodes[start_idx:i]
+            if group_name and len(group) >= 2:
+                self._apply_one_siphon_water_level_distribution(group)
 
     @staticmethod
     def _is_terminal_gate_backfill_donor(node: ChannelNode) -> bool:

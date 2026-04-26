@@ -10,6 +10,8 @@ Requirements: 10.4, 10.5
 import sys
 import os
 
+import pytest
+
 # 添加父目录到路径以支持相对导入
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "推求水面线"))
 
@@ -1065,6 +1067,260 @@ def test_branch_middle_named_special_rows_override_updates_display_and_water_lev
         assert abs(middle_second.water_level - 99.46) < 1e-9, structure_text
         assert abs(downstream_pipe.water_level - 99.33) < 1e-9, structure_text
         assert middle_first.water_level > middle_second.water_level > downstream_pipe.water_level, structure_text
+
+
+def _make_siphon_distribution_node(mc, water_level, *, in_out=InOutType.NORMAL, name="卡房院"):
+    """构造倒虹吸水位分布测试节点。"""
+    node = ChannelNode()
+    node.structure_type = StructureType.INVERTED_SIPHON
+    node.name = name
+    node.in_out = in_out
+    node.station_MC = mc
+    node.water_level = water_level
+    node.flow_section = "1"
+    node.is_inverted_siphon = True
+    return node
+
+
+def _make_siphon_boundary_channel(
+    mc,
+    *,
+    bottom,
+    top,
+    water_level,
+    water_depth,
+    structure_height,
+    name="渠道边界",
+):
+    """构造倒虹吸边界高程测试用渠道节点。"""
+    node = ChannelNode()
+    node.structure_type = StructureType.from_string("明渠-矩形")
+    node.name = name
+    node.station_MC = mc
+    node.bottom_elevation = bottom
+    node.top_elevation = top
+    node.water_level = water_level
+    node.water_depth = water_depth
+    node.structure_height = structure_height
+    node.flow_section = "1"
+    return node
+
+
+def test_siphon_inner_water_level_distributes_by_station_without_repeating_total_loss():
+    """倒虹吸中间行水位按桩号线性递减，但水头损失字段不被分摊。"""
+    inlet = _make_siphon_distribution_node(100.0, 431.398, in_out=InOutType.INLET)
+    middle_1 = _make_siphon_distribution_node(150.0, 431.398)
+    middle_2 = _make_siphon_distribution_node(200.0, 431.398)
+    outlet = _make_siphon_distribution_node(250.0, 429.460, in_out=InOutType.OUTLET)
+    outlet.head_loss_siphon = 1.9376
+    outlet.head_loss_total = 1.9376
+    nodes = [inlet, middle_1, middle_2, outlet]
+    original_losses = [
+        (node.head_loss_siphon, node.head_loss_total, node.head_loss_cumulative)
+        for node in nodes
+    ]
+
+    calc = HydraulicCalculator(ProjectSettings())
+    calc.apply_siphon_linear_water_level_distribution(nodes)
+
+    assert inlet.water_level == pytest.approx(431.398)
+    assert middle_1.water_level == pytest.approx(430.752)
+    assert middle_2.water_level == pytest.approx(430.106)
+    assert outlet.water_level == pytest.approx(429.460)
+    assert [
+        (node.head_loss_siphon, node.head_loss_total, node.head_loss_cumulative)
+        for node in nodes
+    ] == original_losses
+
+
+def test_siphon_boundary_top_elevation_matches_adjacent_channel_boundaries():
+    """倒虹吸进出口行渠底、渠顶都取相邻渠道边界断面，中间行保持为空。"""
+    upstream = _make_siphon_boundary_channel(
+        90.0,
+        bottom=427.217,
+        top=429.217,
+        water_level=428.397,
+        water_depth=1.180,
+        structure_height=2.000,
+        name="宋家坝",
+    )
+    inlet = _make_siphon_distribution_node(100.0, 428.393, in_out=InOutType.INLET, name="芦竹湾")
+    middle = _make_siphon_distribution_node(150.0, 428.177, name="芦竹湾")
+    outlet = _make_siphon_distribution_node(200.0, 427.808, in_out=InOutType.OUTLET, name="芦竹湾")
+    downstream = _make_siphon_boundary_channel(
+        210.0,
+        bottom=426.624,
+        top=428.624,
+        water_level=427.804,
+        water_depth=1.180,
+        structure_height=2.000,
+        name="鞍子岩",
+    )
+    outlet.head_loss_siphon = 0.585
+    outlet.head_loss_total = 0.585
+    outlet.head_loss_cumulative = 5.1921
+    nodes = [upstream, inlet, middle, outlet, downstream]
+    loss_and_water_snapshot = [
+        (node.head_loss_siphon, node.head_loss_total, node.head_loss_cumulative, node.water_level)
+        for node in nodes
+    ]
+
+    calc = HydraulicCalculator(ProjectSettings())
+    calc.apply_siphon_outlet_elevation(nodes)
+
+    assert inlet.bottom_elevation == pytest.approx(upstream.bottom_elevation)
+    assert inlet.top_elevation == pytest.approx(upstream.top_elevation)
+    assert outlet.bottom_elevation == pytest.approx(downstream.bottom_elevation)
+    assert outlet.top_elevation == pytest.approx(downstream.top_elevation)
+    assert middle.bottom_elevation == 0.0
+    assert middle.top_elevation == 0.0
+    assert [
+        (node.head_loss_siphon, node.head_loss_total, node.head_loss_cumulative, node.water_level)
+        for node in nodes
+    ] == loss_and_water_snapshot
+
+
+def test_siphon_boundary_top_elevation_uses_structure_height_fallback():
+    """相邻渠道渠顶缺失时，用边界渠底加相邻渠道结构高度补齐倒虹吸边界渠顶。"""
+    upstream = _make_siphon_boundary_channel(
+        0.0,
+        bottom=100.0,
+        top=0.0,
+        water_level=101.0,
+        water_depth=1.0,
+        structure_height=2.0,
+    )
+    inlet = _make_siphon_distribution_node(10.0, 100.9, in_out=InOutType.INLET, name="试验倒虹吸")
+    outlet = _make_siphon_distribution_node(40.0, 100.4, in_out=InOutType.OUTLET, name="试验倒虹吸")
+    downstream = _make_siphon_boundary_channel(
+        50.0,
+        bottom=99.5,
+        top=0.0,
+        water_level=100.5,
+        water_depth=1.0,
+        structure_height=1.5,
+    )
+    nodes = [upstream, inlet, outlet, downstream]
+
+    calc = HydraulicCalculator(ProjectSettings())
+    calc.apply_siphon_outlet_elevation(nodes)
+
+    assert inlet.top_elevation == pytest.approx(102.0)
+    assert outlet.top_elevation == pytest.approx(outlet.bottom_elevation + 1.5)
+
+
+def test_siphon_boundary_top_elevation_stays_blank_without_valid_height_source():
+    """相邻渠道渠顶和结构高度都无效时，不强行生成倒虹吸边界渠顶。"""
+    upstream = _make_siphon_boundary_channel(
+        0.0,
+        bottom=100.0,
+        top=0.0,
+        water_level=101.0,
+        water_depth=1.0,
+        structure_height=0.0,
+    )
+    inlet = _make_siphon_distribution_node(10.0, 100.9, in_out=InOutType.INLET, name="试验倒虹吸")
+    outlet = _make_siphon_distribution_node(40.0, 100.4, in_out=InOutType.OUTLET, name="试验倒虹吸")
+    downstream = _make_siphon_boundary_channel(
+        50.0,
+        bottom=99.5,
+        top=0.0,
+        water_level=100.5,
+        water_depth=1.0,
+        structure_height=0.0,
+    )
+    nodes = [upstream, inlet, outlet, downstream]
+
+    calc = HydraulicCalculator(ProjectSettings())
+    calc.apply_siphon_outlet_elevation(nodes)
+
+    assert inlet.top_elevation == 0.0
+    assert outlet.top_elevation == 0.0
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda nodes: setattr(nodes[-1], "in_out", InOutType.NORMAL),
+        lambda nodes: setattr(nodes[-1], "station_MC", nodes[0].station_MC),
+        lambda nodes: setattr(nodes[0], "station_MC", None),
+        lambda nodes: setattr(nodes[0], "water_level", 0.0),
+        lambda nodes: setattr(nodes[-1], "water_level", None),
+    ],
+)
+def test_siphon_inner_water_level_distribution_skips_invalid_groups(mutate):
+    """倒虹吸缺边界或关键数据无效时保持原水位，避免生成假数据。"""
+    nodes = [
+        _make_siphon_distribution_node(100.0, 431.398, in_out=InOutType.INLET),
+        _make_siphon_distribution_node(150.0, 431.398),
+        _make_siphon_distribution_node(250.0, 429.460, in_out=InOutType.OUTLET),
+    ]
+    mutate(nodes)
+    original_levels = [node.water_level for node in nodes]
+
+    calc = HydraulicCalculator(ProjectSettings())
+    calc.apply_siphon_linear_water_level_distribution(nodes)
+
+    assert [node.water_level for node in nodes] == original_levels
+
+
+def test_calculate_all_runs_siphon_distribution_after_outlet_elevation(monkeypatch):
+    """完整计算链路在出口渠底修正后、末尾闸回推前执行倒虹吸水位分布。"""
+    node = ChannelNode()
+    node.structure_type = StructureType.from_string("明渠-矩形")
+    calls = []
+    calculator = WaterProfileCalculator(ProjectSettings())
+
+    monkeypatch.setattr(calculator, "_has_auxiliary_geometry_nodes", lambda _nodes: False)
+    monkeypatch.setattr(calculator, "preprocess_nodes", lambda _nodes: calls.append("preprocess"))
+    monkeypatch.setattr(
+        calculator,
+        "identify_and_insert_transitions",
+        lambda nodes, _callback: calls.append("insert") or nodes,
+    )
+    monkeypatch.setattr(calculator, "_calculate_geometry_preserving_special_turns", lambda _nodes: calls.append("geometry"))
+    monkeypatch.setattr(calculator, "calculate_hydraulics", lambda _nodes: calls.append("hydraulics"))
+    monkeypatch.setattr(calculator, "calculate_transition_losses", lambda _nodes: calls.append("transition"))
+    monkeypatch.setattr(calculator, "_update_total_head_loss", lambda _nodes: calls.append("total_loss"))
+    monkeypatch.setattr(
+        calculator.hyd_calc,
+        "recalculate_water_levels_with_transition_losses",
+        lambda _nodes: calls.append("recalc"),
+    )
+    monkeypatch.setattr(
+        calculator.hyd_calc,
+        "apply_siphon_outlet_elevation",
+        lambda _nodes: calls.append("outlet_elevation"),
+    )
+    monkeypatch.setattr(
+        calculator.hyd_calc,
+        "apply_siphon_linear_water_level_distribution",
+        lambda _nodes: calls.append("siphon_distribution"),
+    )
+    monkeypatch.setattr(
+        calculator.hyd_calc,
+        "apply_terminal_gate_elevation_backfill",
+        lambda _nodes: calls.append("terminal_gate"),
+    )
+    monkeypatch.setattr(calculator, "_calculate_cumulative_head_loss", lambda _nodes: calls.append("cumulative"))
+    monkeypatch.setattr(calculator, "_validate_real_node_station_conflicts", lambda _nodes: calls.append("validate"))
+
+    calculator.calculate_all([node])
+
+    assert calls == [
+        "preprocess",
+        "insert",
+        "geometry",
+        "hydraulics",
+        "transition",
+        "total_loss",
+        "recalc",
+        "outlet_elevation",
+        "siphon_distribution",
+        "terminal_gate",
+        "cumulative",
+        "validate",
+    ]
 
 
 if __name__ == "__main__":

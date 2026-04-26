@@ -55,7 +55,7 @@ WATER_HAMMER_SOUND_SPEED = 1435.0
 WATER_HAMMER_STATION_TOLERANCE_M = 1e-3
 WATER_HAMMER_DISTRIBUTION_SAMPLE_INTERVAL_M = 5.0
 
-# 水击验算默认弹性模量（来自手册常见材质近似值，玻璃钢夹砂管补充取 FRPM 纵向弹模参考值）
+# 水击验算默认弹性模量（来自手册常见材质近似值，玻璃钢夹砂管按表6玻璃钢复合管取值）
 WATER_HAMMER_ELASTIC_MODULUS = {
     "钢管": 206.0e9,
     "钢": 206.0e9,
@@ -67,7 +67,7 @@ WATER_HAMMER_ELASTIC_MODULUS = {
     "预应力钢筒混凝土管_n015": 20.6e9,
     "钢筋混凝土管": 20.6e9,
     "钢筋混凝土": 20.6e9,
-    "玻璃钢夹砂管": 8.728e9,
+    "玻璃钢夹砂管": 14.7e9,
     "HDPE管": 1.4e9,
     "PE": 1.4e9,
     "PE管": 1.4e9,

@@ -1122,6 +1122,151 @@ def test_draw_profile_on_msp_standard_mode_ignores_midstream_origin_breakpoint(m
     ]
 
 
+def test_draw_profile_on_msp_standard_mode_uses_distributed_siphon_water_levels(monkeypatch):
+    """纵断面三根线绘制时，设计水位线直接使用表3已递减的倒虹吸水位。"""
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = [
+        _make_standard_profile_node(
+            ip_no=1,
+            mc=100.0,
+            bottom=430.224,
+            top=432.031,
+            water=431.398,
+            name="卡房院",
+            structure="倒虹吸",
+        ),
+        _make_standard_profile_node(
+            ip_no=2,
+            mc=150.0,
+            bottom=430.224,
+            top=431.600,
+            water=430.752,
+            name="卡房院",
+            structure="倒虹吸",
+        ),
+        _make_standard_profile_node(
+            ip_no=3,
+            mc=200.0,
+            bottom=429.500,
+            top=431.000,
+            water=430.106,
+            name="卡房院",
+            structure="倒虹吸",
+        ),
+        _make_standard_profile_node(
+            ip_no=4,
+            mc=250.0,
+            bottom=428.276,
+            top=430.200,
+            water=429.460,
+            name="卡房院",
+            structure="倒虹吸",
+        ),
+    ]
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+    )
+
+    water_record = next(record for record in msp.polyline_records if record["layer"] == "设计水位线")
+    assert water_record["points"] == [
+        (50.0, 431.398),
+        (75.0, 430.752),
+        (100.0, 430.106),
+        (125.0, 429.46),
+    ]
+
+
+def test_draw_profile_on_msp_standard_mode_uses_siphon_boundary_top_elevations(monkeypatch):
+    """纵断面渠顶线直接使用表3补齐后的倒虹吸进出口渠顶高程。"""
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes = [
+        _make_standard_profile_node(
+            ip_no=1,
+            mc=90.0,
+            bottom=427.217,
+            top=429.217,
+            water=428.397,
+            name="上游渠道",
+        ),
+        _make_standard_profile_node(
+            ip_no=2,
+            mc=100.0,
+            bottom=427.217,
+            top=429.217,
+            water=428.393,
+            name="芦竹湾",
+            structure="倒虹吸",
+        ),
+        _make_standard_profile_node(
+            ip_no=3,
+            mc=150.0,
+            bottom=0.0,
+            top=0.0,
+            water=428.177,
+            name="芦竹湾",
+            structure="倒虹吸",
+        ),
+        _make_standard_profile_node(
+            ip_no=4,
+            mc=200.0,
+            bottom=426.624,
+            top=428.624,
+            water=427.808,
+            name="芦竹湾",
+            structure="倒虹吸",
+        ),
+        _make_standard_profile_node(
+            ip_no=5,
+            mc=210.0,
+            bottom=426.624,
+            top=428.624,
+            water=427.804,
+            name="下游渠道",
+        ),
+    ]
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+    )
+
+    top_record = next(record for record in msp.polyline_records if record["layer"] == "渠顶高程线")
+    assert top_record["points"] == [
+        (45.0, 429.217),
+        (50.0, 429.217),
+        (100.0, 428.624),
+        (105.0, 428.624),
+    ]
+
+
 def test_build_standard_longitudinal_txt_lines_ignores_midstream_origin_breakpoint():
     nodes = [
         _make_standard_profile_node(ip_no=1, mc=0.0, bottom=410.0, top=411.0, water=410.5, name="起点"),

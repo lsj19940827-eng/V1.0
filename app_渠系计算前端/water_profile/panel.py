@@ -6337,6 +6337,18 @@ class WaterProfilePanel(QWidget):
             from app_渠系计算前端.water_profile.formula_dialog import show_terminal_gate_backfill_top_dialog
             show_terminal_gate_backfill_top_dialog(self, node.name or f"行{row_idx+1}", gate_backfill)
             return
+        struct_text = node.structure_type.value if getattr(node, "structure_type", None) else ""
+        io_text = node.in_out.value if getattr(node, "in_out", None) else ""
+        if struct_text == "倒虹吸" and io_text in ("进", "出") and getattr(node, "top_elevation", 0.0):
+            source = "上游渠道末端" if io_text == "进" else "下游渠道起始"
+            io_label = "进口" if io_text == "进" else "出口"
+            fluent_info(
+                self,
+                "渠顶高程说明",
+                f"倒虹吸{io_label}渠顶高程取自{source}的渠顶高程：\n\n"
+                f"渠顶高程 = {node.top_elevation:.3f} m",
+            )
+            return
         sh = node.structure_height or 0.0
         if sh <= 0:
             fluent_info(self, "提示", "该行没有结构高度数据，无法计算渠顶高程")

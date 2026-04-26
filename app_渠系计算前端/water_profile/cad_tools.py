@@ -1479,11 +1479,12 @@ def _warns_optional_blank_name(struct_type):
 
 
 def _collect_optional_blank_name_rows(nodes):
+    """收集允许名称为空但导出前需要轻提示的节点行。"""
     rows = []
     for idx, node in enumerate(nodes or [], start=1):
         if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
             continue
-        if not _warns_optional_blank_name(getattr(node, "structure_type", None)):
+        if not _allows_optional_blank_name(getattr(node, "structure_type", None)):
             continue
         if str(getattr(node, "name", "") or "").strip():
             continue
@@ -1499,23 +1500,17 @@ def _build_optional_blank_name_notice(nodes, *, action_name):
     if len(rows) > 8:
         preview += f" 等{len(rows)}行"
     return (
-        f"检测到部分暗涵未填写建筑物名称，建议补充名称便于识别；本次{action_name}不会中断：\n"
+        f"检测到部分建筑物名称为空，建议补充名称便于识别；本次{action_name}不会中断：\n"
         f"{preview}"
     )
 
 
 def _show_optional_blank_name_notice(parent_window, nodes, *, action_name):
-    """在导出前用顶部轻提示提醒暗涵补充名称。"""
+    """在导出前用轻提示提醒用户补充可选建筑物名称。"""
     notice = _build_optional_blank_name_notice(nodes, action_name=action_name)
     if not notice:
         return
-    InfoBar.info(
-        "提示",
-        notice,
-        parent=_safe_qt_parent(parent_window),
-        duration=5000,
-        position=InfoBarPosition.TOP,
-    )
+    fluent_info(_safe_qt_parent(parent_window), "提示", notice)
 
 
 def _in_out_val(in_out):

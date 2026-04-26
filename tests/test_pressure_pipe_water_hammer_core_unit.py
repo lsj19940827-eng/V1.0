@@ -161,7 +161,7 @@ def test_get_water_hammer_elastic_modulus_supports_known_materials_and_aliases()
     """默认弹模应覆盖常见承压管材，并对未知材质返回空值。"""
     assert get_water_hammer_elastic_modulus("钢管") == pytest.approx(206.0e9)
     assert get_water_hammer_elastic_modulus("球墨铸铁管") == pytest.approx(108.0e9)
-    assert get_water_hammer_elastic_modulus("玻璃钢夹砂管") == pytest.approx(8.728e9)
+    assert get_water_hammer_elastic_modulus("玻璃钢夹砂管") == pytest.approx(14.7e9)
     assert get_water_hammer_elastic_modulus("PCCP管") == pytest.approx(20.6e9)
     assert get_water_hammer_elastic_modulus("预应力钢筒混凝土管") == pytest.approx(20.6e9)
     assert get_water_hammer_elastic_modulus("钢筋混凝土管") == pytest.approx(20.6e9)

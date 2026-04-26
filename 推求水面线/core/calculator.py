@@ -569,13 +569,16 @@ class WaterProfileCalculator:
         # 8. 应用公式10.3.6计算倒虹吸出口渐变段末端渠底高程
         self.hyd_calc.apply_siphon_outlet_elevation(nodes)
 
-        # 9. 对整表末尾闸行执行高程回推（仅补缺失项）
+        # 9. 倒虹吸内部水位按倒进/倒出桩号线性分布（只影响展示和导出水位线）
+        self.hyd_calc.apply_siphon_linear_water_level_distribution(nodes)
+
+        # 10. 对整表末尾闸行执行高程回推（仅补缺失项）
         self.hyd_calc.apply_terminal_gate_elevation_backfill(nodes)
         
-        # 10. 计算累计总水头损失
+        # 11. 计算累计总水头损失
         self._calculate_cumulative_head_loss(nodes)
 
-        # 11. 导出前约束：真实节点同桩号高程冲突校验
+        # 12. 导出前约束：真实节点同桩号高程冲突校验
         self._validate_real_node_station_conflicts(nodes)
         
         return nodes
