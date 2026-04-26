@@ -31,6 +31,35 @@ def _load_cad_tools():
 cad_tools = _load_cad_tools()
 
 
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        (
+            {"pipe_material": "PCCP管0.014", "DN_mm": 1600},
+            "PCCP管(n=0.014) DN1600",
+        ),
+        (
+            {"pipe_material": "PCCP管 0.015", "DN_mm": 1800},
+            "PCCP管(n=0.015) DN1800",
+        ),
+        (
+            {"pipe_material": "PCCP管(n=0.013)", "DN_mm": 1400},
+            "PCCP管(n=0.013) DN1400",
+        ),
+        (
+            {"pipe_material": "球墨铸铁管", "DN_mm": 1200},
+            "球墨铸铁管 DN1200",
+        ),
+        (
+            {"pipe_material": "PCCP管", "DN_mm": 1000},
+            "PCCP管 DN1000",
+        ),
+    ],
+)
+def test_format_xxpipe_pipe_material_text_formats_pccp_roughness_suffix(row, expected):
+    assert cad_tools._format_xxpipe_pipe_material_text(row) == expected
+
+
 def _load_panel_class():
     helper_path = Path(__file__).with_name("test_pressure_pipe_export_longitudinal_nodes_unit.py")
     spec = importlib.util.spec_from_file_location(

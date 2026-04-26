@@ -2268,15 +2268,26 @@ def _get_xxpipe_building_display_name(
     return ""
 
 
+def _format_xxpipe_pipe_material_display_name(material):
+    """格式化 xx管 纵断面管材显示名，仅把 PCCP 后缀 n 值改成正式括号写法。"""
+    text = str(material or "").strip()
+    if not text:
+        return ""
+    match = re.fullmatch(r"PCCP管\s*(?:\(\s*n\s*=\s*)?(0\.01[345])\s*\)?", text)
+    if not match:
+        return text
+    return f"PCCP管(n={match.group(1)})"
+
+
 def _format_xxpipe_pipe_material_text(row):
     if not isinstance(row, dict):
         return ""
-    material = str(
+    material = _format_xxpipe_pipe_material_display_name(
         row.get("pipe_material")
         or row.get("material")
         or row.get("material_key")
         or ""
-    ).strip() or "球墨铸铁管"
+    ) or "球墨铸铁管"
     dn_mm = _normalize_dn_mm(
         row.get("DN_mm", row.get("dn_mm", row.get("dn", row.get("D", 1500)))),
         1500,
