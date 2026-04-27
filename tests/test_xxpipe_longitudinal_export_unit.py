@@ -1448,6 +1448,91 @@ def _sample_adjacent_special_profile_data(structure_name):
     return nodes, profile_data
 
 
+def _sample_plain_pipe_material_change_profile_data():
+    nodes = [
+        _make_node(
+            ip_no=1,
+            mc=0.0,
+            structure="有压管道",
+            name="",
+            flow_section="1",
+            material="PCCP管0.014",
+            diameter=1.2,
+            row_identity="flow1-row1",
+        ),
+        _make_node(
+            ip_no=2,
+            mc=50.0,
+            structure="有压管道",
+            name="",
+            flow_section="1",
+            material="PCCP管0.014",
+            diameter=1.2,
+            row_identity="flow1-row2",
+        ),
+        _make_node(
+            ip_no=3,
+            mc=100.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            material="球墨铸铁管",
+            diameter=1.2,
+            row_identity="flow2-row3",
+        ),
+        _make_node(
+            ip_no=4,
+            mc=150.0,
+            structure="有压管道",
+            name="",
+            flow_section="2",
+            material="球墨铸铁管",
+            diameter=1.2,
+            row_identity="flow2-row4",
+        ),
+        _make_node(
+            ip_no=5,
+            mc=200.0,
+            structure="有压管道",
+            name="",
+            flow_section="3",
+            material="球墨铸铁管",
+            diameter=1.2,
+            row_identity="flow3-row5",
+        ),
+        _make_node(
+            ip_no=6,
+            mc=250.0,
+            structure="有压管道",
+            name="",
+            flow_section="3",
+            material="球墨铸铁管",
+            diameter=1.2,
+            row_identity="flow3-row6",
+        ),
+    ]
+    long_map = {
+        f"flow{flow}-row{row}": [
+            {"chainage": mc - 1.0, "elevation": 100.0 - mc / 100.0, "turn_type": "无"},
+            {"chainage": mc + 1.0, "elevation": 99.0 - mc / 100.0, "turn_type": "无"},
+        ]
+        for flow, row, mc in [
+            (1, 1, 0.0),
+            (1, 2, 50.0),
+            (2, 3, 100.0),
+            (2, 4, 150.0),
+            (3, 5, 200.0),
+            (3, 6, 250.0),
+        ]
+    }
+    profile_data = cad_tools._build_xxpipe_profile_data(
+        nodes,
+        long_map,
+        station_prefix="",
+    )
+    return nodes, profile_data
+
+
 def _build_split_subtable_profile_fixture():
     raw_nodes = [
         _make_node(ip_no=1, mc=0.0, structure="隧洞-圆形", name="洞段1", bottom_elevation=410.0),
@@ -2084,6 +2169,93 @@ def test_export_longitudinal_txt_keeps_lower_half_vlines_for_outer_adjacent_plai
         assert segments == pytest.approx([(0.0, expected_top)])
     for mc in (850.0, 950.0, 1000.0, 1100.0):
         assert _has_vertical_line_at_x(records, _scaled_m_to_mm(mc, scale_x))
+
+
+def test_draw_profile_on_msp_marks_plain_pipe_material_change_only_in_material_row(monkeypatch):
+    ezdxf_stub = SimpleNamespace(
+        enums=SimpleNamespace(
+            TextEntityAlignment=SimpleNamespace(
+                MIDDLE="MIDDLE",
+                MIDDLE_CENTER="MIDDLE_CENTER",
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "ezdxf", ezdxf_stub)
+
+    nodes, profile_data = _sample_plain_pipe_material_change_profile_data()
+    msp = _DummyMSP()
+
+    cad_tools._draw_profile_on_msp(
+        msp,
+        nodes,
+        nodes,
+        _scaled_settings(),
+        station_prefix="",
+        export_mode="xxpipe",
+        xxpipe_profile_data=profile_data,
+    )
+
+    scale_x = _scaled_settings()["scale_x"]
+    _settings, _enabled_ids, row_layout, _total_height, _line_height, _boundaries = cad_tools._build_xxpipe_profile_row_layout(
+        _scaled_settings()
+    )
+    material_row_segment = (
+        row_layout["pipe_material"]["bottom"],
+        row_layout["pipe_material"]["top"],
+    )
+
+    change_x = _scaled_m_to_mm(100.0, scale_x)
+    same_text_x = _scaled_m_to_mm(200.0, scale_x)
+    assert _contains_line_segment(
+        _get_vertical_line_segments_at_x(msp.line_records, change_x),
+        material_row_segment,
+    )
+    assert not _contains_line_segment(
+        _get_vertical_line_segments_at_x(msp.line_records, same_text_x),
+        material_row_segment,
+    )
+
+
+def test_export_longitudinal_txt_marks_plain_pipe_material_change_only_in_material_row(
+    local_tmp_path, monkeypatch
+):
+    nodes, profile_data = _sample_plain_pipe_material_change_profile_data()
+    out_file = local_tmp_path / "xxpipe_material_change_vline.txt"
+
+    monkeypatch.setattr(cad_tools, "fluent_question", lambda *_a, **_k: False)
+    monkeypatch.setattr(cad_tools, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(cad_tools, "fluent_error", lambda *_a, **_k: None)
+
+    cad_tools._export_longitudinal_txt_to_path(
+        _Panel(""),
+        nodes,
+        nodes,
+        _scaled_settings(),
+        str(out_file),
+        export_mode="xxpipe",
+        xxpipe_profile_data=profile_data,
+    )
+
+    records = _parse_pl_line_cmds(out_file)
+    scale_x = _scaled_settings()["scale_x"]
+    _settings, _enabled_ids, row_layout, _total_height, _line_height, _boundaries = cad_tools._build_xxpipe_profile_row_layout(
+        _scaled_settings()
+    )
+    material_row_segment = (
+        row_layout["pipe_material"]["bottom"],
+        row_layout["pipe_material"]["top"],
+    )
+
+    change_x = _scaled_m_to_mm(100.0, scale_x)
+    same_text_x = _scaled_m_to_mm(200.0, scale_x)
+    assert _contains_line_segment(
+        _get_vertical_line_segments_at_x(records, change_x),
+        material_row_segment,
+    )
+    assert not _contains_line_segment(
+        _get_vertical_line_segments_at_x(records, same_text_x),
+        material_row_segment,
+    )
 
 
 @pytest.mark.parametrize(

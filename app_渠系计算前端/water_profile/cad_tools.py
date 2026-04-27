@@ -7183,6 +7183,36 @@ def _collect_xxpipe_full_height_boundary_mcs(profile_data, station_spans=None):
     return sorted(boundary_mcs)
 
 
+def _collect_xxpipe_material_row_boundary_mcs(profile_data):
+    """收集普通有压段管材（管径）文本变化起点，用于只在管材行补竖线。"""
+    boundary_mcs = []
+
+    def _add(mc):
+        try:
+            value = float(mc)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(value):
+            return
+        if any(abs(value - existing) <= 1e-9 for existing in boundary_mcs):
+            return
+        boundary_mcs.append(value)
+
+    material_segments = list(profile_data.get("material_segments", []) or [])
+    for prev_segment, segment in zip(material_segments, material_segments[1:]):
+        prev_mode = str(prev_segment.get("merge_mode", "") or "").strip()
+        mode = str(segment.get("merge_mode", "") or "").strip()
+        if prev_mode != "plain_pressure_pipe" or mode != "plain_pressure_pipe":
+            continue
+
+        prev_text = str(prev_segment.get("text", "") or "").strip()
+        text = str(segment.get("text", "") or "").strip()
+        if text and prev_text and text != prev_text:
+            _add(segment.get("start_mc"))
+
+    return sorted(boundary_mcs)
+
+
 def _is_xxpipe_plain_pressure_pipe_profile_node(node):
     """判断当前文本节点是否为普通有压管道节点。"""
     return _struct_val(getattr(node, "structure_type", None)) == "有压管道"
@@ -9807,6 +9837,10 @@ def _draw_xxpipe_profile_on_msp(
             station_spans=draw_station_spans,
         )
     }
+    material_row_boundary_mcs = {
+        round(float(mc), 9)
+        for mc in _collect_xxpipe_material_row_boundary_mcs(xxpipe_profile_data)
+    }
     lower_half_vertical_mcs = {
         round(float(mc), 9)
         for mc in _collect_xxpipe_lower_half_vertical_line_mcs(profile_text_nodes)
@@ -9822,6 +9856,14 @@ def _draw_xxpipe_profile_on_msp(
         else:
             y0, y1 = bottom_merge_top, top_merge_bottom
         msp.add_line((sx(station_mc), y0), (sx(station_mc), y1), dxfattribs={"layer": layer_grid})
+
+    material_row = row_layout["pipe_material"]
+    for station_key in sorted(material_row_boundary_mcs - full_height_boundary_mcs):
+        msp.add_line(
+            (sx(station_key), material_row["bottom"]),
+            (sx(station_key), material_row["top"]),
+            dxfattribs={"layer": layer_grid},
+        )
 
     content_spans = _resolve_xxpipe_content_spans(profile_text_nodes, draw_station_spans)
     for hy in h_line_y_values:
@@ -10528,6 +10570,10 @@ def _build_xxpipe_longitudinal_txt_lines(
             station_spans=draw_station_spans,
         )
     }
+    material_row_boundary_mcs = {
+        round(float(mc), 9)
+        for mc in _collect_xxpipe_material_row_boundary_mcs(xxpipe_profile_data)
+    }
     lower_half_vertical_mcs = {
         round(float(mc), 9)
         for mc in _collect_xxpipe_lower_half_vertical_line_mcs(profile_text_nodes)
@@ -10542,6 +10588,14 @@ def _build_xxpipe_longitudinal_txt_lines(
         else:
             y0, y1 = bottom_merge_top, top_merge_bottom
         lines.append(f"pl {fmt(sx(station_mc))},{fmt(y0)} {fmt(sx(station_mc))},{fmt(y1)} ")
+    lines.append("")
+
+    material_row = row_layout["pipe_material"]
+    for station_key in sorted(material_row_boundary_mcs - full_height_boundary_mcs):
+        lines.append(
+            f"pl {fmt(sx(station_key))},{fmt(material_row['bottom'])} "
+            f"{fmt(sx(station_key))},{fmt(material_row['top'])} "
+        )
     lines.append("")
 
     content_spans = _resolve_xxpipe_content_spans(profile_text_nodes, draw_station_spans)
