@@ -276,6 +276,8 @@ PRESSURE_PIPE_ROW_ID_ROLE_KEY = "_pressure_pipe_row_identity"
 PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY = "_pressure_pipe_window_override"
 PRESSURE_PIPE_NAMED_GROUP_RESULT_ROLE_KEY = "_pressure_pipe_named_group_result"
 PRESSURE_PIPE_LOSS_OVERRIDE_ROLE_KEY = "_pressure_pipe_loss_override_m"
+GATE_HEAD_LOSS_USER_SET_ROLE_KEY = "_gate_head_loss_user_set"
+GATE_HEAD_LOSS_USER_SET_PARAM_KEY = "gate_head_loss_user_set"
 COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY = "_compound_trapezoid_params"
 TRANSITION_LENGTH_RULE_STEP_DEFAULT = 1.0
 TRANSITION_LENGTH_RULE_MODE_OPTIONS = (
@@ -3376,6 +3378,89 @@ class WaterProfilePanel(QWidget):
             setattr(node, "_pressure_pipe_display_loss", 0.0)
         return override_value
 
+    @staticmethod
+    def _is_gate_like_structure_text(structure_text) -> bool:
+        """判断结构形式是否属于需要默认过闸损失的闸/分水口。"""
+        text = str(structure_text or "").strip()
+        return bool(text and ("闸" in text or "分水" in text))
+
+    @classmethod
+    def _is_gate_loss_user_set_node(cls, node) -> bool:
+        """判断节点是否已有用户明确设置过闸损失的标记。"""
+        section_params = getattr(node, "section_params", {}) or {}
+        return bool(section_params.get(GATE_HEAD_LOSS_USER_SET_PARAM_KEY, False))
+
+    @classmethod
+    def _set_gate_loss_user_set(cls, node, user_set: bool):
+        """写入或清空过闸损失用户设置标记。"""
+        section_params = getattr(node, "section_params", None)
+        if not isinstance(section_params, dict):
+            section_params = {}
+            setattr(node, "section_params", section_params)
+        if user_set:
+            section_params[GATE_HEAD_LOSS_USER_SET_PARAM_KEY] = True
+        else:
+            section_params.pop(GATE_HEAD_LOSS_USER_SET_PARAM_KEY, None)
+
+    def _get_row_payload(self, row: int) -> dict:
+        """读取表3行首隐藏元数据。"""
+        table = getattr(self, "node_table", None)
+        if not table or row < 0 or row >= table.rowCount():
+            return {}
+        first_item = table.item(row, 0)
+        payload = first_item.data(Qt.UserRole) if first_item else None
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    def _set_row_payload_value(self, row: int, key: str, value):
+        """更新表3行首隐藏元数据。"""
+        table = getattr(self, "node_table", None)
+        if not table or row < 0 or row >= table.rowCount():
+            return
+        first_item = table.item(row, 0)
+        if first_item is None:
+            first_item = QTableWidgetItem("")
+            first_item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 0, first_item)
+        payload = first_item.data(Qt.UserRole)
+        if not isinstance(payload, dict):
+            payload = {}
+        if value in (None, False):
+            payload.pop(key, None)
+        else:
+            payload[key] = value
+        first_item.setData(Qt.UserRole, payload if payload else None)
+
+    def _is_gate_loss_user_set_for_row(self, row: int, node=None) -> bool:
+        """判断表3某行过闸损失是否由用户明确设置。"""
+        payload = self._get_row_payload(row)
+        if GATE_HEAD_LOSS_USER_SET_ROLE_KEY in payload:
+            return bool(payload.get(GATE_HEAD_LOSS_USER_SET_ROLE_KEY))
+        table = getattr(self, "node_table", None)
+        item = table.item(row, 37) if table and 0 <= row < table.rowCount() else None
+        raw_text = str(item.text() if item else "").strip()
+        if raw_text and raw_text != "-":
+            try:
+                return abs(float(raw_text)) <= ZERO_TOLERANCE
+            except (TypeError, ValueError):
+                return False
+        if node is not None:
+            return self._is_gate_loss_user_set_node(node)
+        return False
+
+    def _mark_gate_loss_user_set_for_row(self, row: int, user_set: bool = True):
+        """标记表3某行过闸损失已由用户明确设置。"""
+        self._set_row_payload_value(
+            row,
+            GATE_HEAD_LOSS_USER_SET_ROLE_KEY,
+            True if user_set else None,
+        )
+        for nodes in (
+            getattr(self, "calculated_nodes", None),
+            getattr(self, "nodes", None),
+        ):
+            if nodes and 0 <= row < len(nodes):
+                self._set_gate_loss_user_set(nodes[row], bool(user_set))
+
     @classmethod
     def _get_pressure_pipe_named_group_result(cls, node) -> dict:
         """读取命名承压组隐藏结果元数据。"""
@@ -5120,6 +5205,27 @@ class WaterProfilePanel(QWidget):
         table.editItem(item)
         return True
 
+    def _begin_inline_loss_edit(self, row_idx: int, col_idx: int) -> bool:
+        """进入可手动填写的水头损失单元格编辑。"""
+        table = getattr(self, "node_table", None)
+        if not table or row_idx <= 0 or col_idx not in (36, 37):
+            return False
+        item = table.item(row_idx, col_idx)
+        if item is None:
+            item = QTableWidgetItem("")
+            item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row_idx, col_idx, item)
+            self._apply_table1_source_row_lock_flags()
+        if not (item.flags() & Qt.ItemIsEditable):
+            return False
+        table.setCurrentCell(row_idx, col_idx)
+        table.editItem(item)
+        return True
+
+    def _begin_gate_loss_edit(self, row_idx: int) -> bool:
+        """兼容旧调用：进入过闸水头损失单元格编辑。"""
+        return self._begin_inline_loss_edit(row_idx, 37)
+
     def _show_node_table_context_menu(self, pos):
         table = getattr(self, "node_table", None)
         if not table:
@@ -5493,6 +5599,12 @@ class WaterProfilePanel(QWidget):
 
         # 水头损失/高程列：显示详细计算过程（与原版Tkinter _on_cell_double_click对齐）
         from app_渠系计算前端.water_profile.formula_dialog import DOUBLE_CLICK_COLUMNS
+        if col_name == "预留水头损失":
+            self._begin_inline_loss_edit(row, 36)
+            return
+        if col_name == "过闸水头损失":
+            self._begin_inline_loss_edit(row, 37)
+            return
         if col_name not in DOUBLE_CLICK_COLUMNS:
             return
         if col_name == "渐变段长度L":
@@ -6440,6 +6552,7 @@ class WaterProfilePanel(QWidget):
                 # 可编辑损失列（用户可能手动修改）
                 node.head_loss_reserve = _rf(r, 36)
                 node.head_loss_gate = _rf(r, 37)
+                self._set_gate_loss_user_set(node, self._is_gate_loss_user_set_for_row(r, node))
                 self._apply_pressure_pipe_loss_cell_to_node(node, _rf(r, 38), channel_level=channel_level)
                 # 联动计算列
                 node.head_loss_total = _rf(r, 39) or node.head_loss_total
@@ -6571,7 +6684,10 @@ class WaterProfilePanel(QWidget):
                     )
             # 对于水头损失列（36, 37, 38），触发联动计算
             elif col in (36, 37, 38) and row > 0:
-                if col == 38:
+                if col == 37:
+                    self._mark_gate_loss_user_set_for_row(row, True)
+                    self._recalc_downstream(row)
+                elif col == 38:
                     item = self.node_table.item(row, col)
                     raw_text = str(item.text() if item else "").strip()
                     manual_loss = 0.0
@@ -6701,6 +6817,7 @@ class WaterProfilePanel(QWidget):
                     else:
                         node.head_loss_reserve = _rf(r, 36)
                         node.head_loss_gate = _rf(r, 37)
+                        self._set_gate_loss_user_set(node, self._is_gate_loss_user_set_for_row(r, node))
                         self._apply_pressure_pipe_loss_cell_to_node(node, _rf(r, 38), channel_level=channel_level)
                         node.head_loss_total = _rf(r, 39)
                         node.head_loss_cumulative = _rf(r, 40)
@@ -6770,6 +6887,7 @@ class WaterProfilePanel(QWidget):
                     else:
                         node.head_loss_reserve = _rf(r, 36)
                         node.head_loss_gate = _rf(r, 37)
+                        self._set_gate_loss_user_set(node, self._is_gate_loss_user_set_for_row(r, node))
                         self._apply_pressure_pipe_loss_cell_to_node(node, _rf(r, 38), channel_level=channel_level)
                         node.head_loss_total = _rf(r, 39)
                         node.head_loss_cumulative = _rf(r, 40)
@@ -7086,6 +7204,7 @@ class WaterProfilePanel(QWidget):
                 else:
                     node.head_loss_reserve = _rf(r, 36)
                     node.head_loss_gate = _rf(r, 37)
+                    self._set_gate_loss_user_set(node, self._is_gate_loss_user_set_for_row(r, node))
                     self._apply_pressure_pipe_loss_cell_to_node(node, _rf(r, 38), channel_level=channel_level)
                     node.head_loss_total = _rf(r, 39)
                     node.head_loss_cumulative = _rf(r, 40)
@@ -7108,6 +7227,9 @@ class WaterProfilePanel(QWidget):
         struct_text_in_data = ""
         if isinstance(data, (list, tuple)) and len(data) > 2:
             struct_text_in_data = str(data[2] or "").strip()
+        explicit_gate_loss_text = ""
+        if isinstance(data, (list, tuple)) and len(data) > 37:
+            explicit_gate_loss_text = str(data[37] or "").strip()
         row_is_pressure_pipe = self._is_pressure_pipe_like_structure_text(struct_text_in_data)
         total_cols = len(NODE_ALL_HEADERS)
         for col in range(total_cols):
@@ -7152,6 +7274,8 @@ class WaterProfilePanel(QWidget):
             else:
                 payload.pop(SOURCE_COORD_X_ROLE_KEY, None)
                 payload.pop(SOURCE_COORD_Y_ROLE_KEY, None)
+            if explicit_gate_loss_text in ("", "-"):
+                payload.pop(GATE_HEAD_LOSS_USER_SET_ROLE_KEY, None)
             first_item.setData(Qt.UserRole, payload)
         if not _defer_controls_refresh:
             self._refresh_pressure_pipe_controls()
@@ -8541,11 +8665,6 @@ class WaterProfilePanel(QWidget):
                 node.slope_i = 1.0 / slope_inv
             node.flow = Q
 
-            # 自动填充过闸水头损失
-            if struct_str and ("闸" in struct_str or "分水" in struct_str):
-                if not getattr(node, 'head_loss_gate', 0.0):
-                    node.head_loss_gate = DEFAULT_GATE_HEAD_LOSS
-
             # ===== 水力结果列 (27-31) =====
             _h = _read_float(r, 27)
             if _h > 0:
@@ -8591,8 +8710,14 @@ class WaterProfilePanel(QWidget):
                 node.head_loss_reserve = _hr
             # 过闸损失 (col 37)
             _hg = _read_float(r, 37)
-            if _hg > 0:
+            gate_loss_user_set = self._is_gate_loss_user_set_for_row(r, node)
+            if gate_loss_user_set:
                 node.head_loss_gate = _hg
+                self._set_gate_loss_user_set(node, True)
+            elif _hg > 0:
+                node.head_loss_gate = _hg
+            elif self._is_gate_like_structure_text(struct_str):
+                node.head_loss_gate = DEFAULT_GATE_HEAD_LOSS
             # 倒虹吸/有压管道损失 (col 38)
             _hs = _read_float(r, 38)
             self._apply_pressure_pipe_loss_cell_to_node(node, _hs, channel_level=channel_level)
@@ -9092,6 +9217,10 @@ class WaterProfilePanel(QWidget):
                     payload[PRESSURE_PIPE_LOSS_OVERRIDE_ROLE_KEY] = float(pressure_pipe_loss_override)
                 else:
                     payload.pop(PRESSURE_PIPE_LOSS_OVERRIDE_ROLE_KEY, None)
+                if self._is_gate_loss_user_set_node(node):
+                    payload[GATE_HEAD_LOSS_USER_SET_ROLE_KEY] = True
+                else:
+                    payload.pop(GATE_HEAD_LOSS_USER_SET_ROLE_KEY, None)
                 # 持久化有压管道专用参数（表格无专门列，放在UserRole）
                 _sp = getattr(node, 'section_params', {}) or {}
                 _pm = str(_sp.get('pipe_material', '') or '').strip()

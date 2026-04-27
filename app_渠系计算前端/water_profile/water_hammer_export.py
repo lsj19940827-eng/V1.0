@@ -13,12 +13,21 @@ SUMMARY_HEADERS = [
     "水锤段",
     "验算状态",
     "结论",
-    "超限点数",
+    "允许压力(MPa)",
+    "允许压力水头(m)",
+    "承压基准",
+    "承压超限点数",
     "负压点数",
     "采样点数",
     "最危险桩号(m)",
-    "最小余量(m)",
-    "负压最小余量(m)",
+    "承压余量(m)",
+    "管顶最低余量(m)",
+    "cp",
+    "a0",
+    "GB/T ΔH+(m)",
+    "线性启闭 ΔH+(m)",
+    "控制ΔH+(m)",
+    "控制来源",
     "备注",
 ]
 
@@ -28,27 +37,37 @@ DETAIL_COLUMNS = [
     ("D(m)", "diameter_m"),
     ("v0(m/s)", "velocity_mps"),
     ("a(m/s)", "a"),
+    ("cp", "pipe_coefficient_cp"),
+    ("a0", "reinforcement_ratio_a0"),
     ("管顶高程(m)", "pipe_top_elevation_m"),
-    ("表3水位(m)", "water_level_m"),
-    ("初始压强(m)", "initial_pressure_head_m"),
-    ("允许ΔH(m)", "allowable_delta_h_m"),
-    ("正ΔH(m)", "positive_delta_h_m"),
-    ("正余量(m)", "positive_margin_m"),
+    ("管中心高程(m)", "centerline_elevation_m"),
+    ("管底高程(m)", "pipe_bottom_elevation_m"),
+    ("Hst(m)", "h_st_m"),
+    ("Hmax(m)", "hmax_m"),
+    ("Hmin(m)", "hmin_m"),
+    ("GB/T ΔH+(m)", "gbt_positive_delta_h_m"),
+    ("线性启闭 ΔH+(m)", "linear_positive_delta_h_m"),
+    ("控制ΔH+(m)", "positive_delta_h_m"),
+    ("允许压力水头(m)", "pressure_allow_head_m"),
+    ("管底最大压力水头(m)", "pressure_head_max_m"),
+    ("承压余量(m)", "pressure_margin_m"),
     ("负ΔH(m)", "negative_delta_h_m"),
-    ("负压余量(m)", "negative_margin_m"),
+    ("管顶最低压力水头(m)", "top_min_pressure_head_m"),
+    ("控制来源", "positive_governing_method"),
     ("状态", "status"),
     ("负压状态", "negative_status"),
+    ("分布说明", "distribution_note"),
     ("图1-3-3对照", "diagram_type_check"),
 ]
 
 
 def water_hammer_exportable_detail_count(segments: Iterable[Dict[str, Any]]) -> int:
-    """统计当前可导出的水锤明细段数量。"""
+    """统计当前可导出的水锤处理结果数量。"""
     count = 0
     for segment in segments:
         result = segment.get("result", {}) if isinstance(segment, dict) else {}
         details = result.get("details", []) if isinstance(result, dict) else []
-        if details:
+        if details or _is_water_hammer_exempt_result(result):
             count += 1
     return count
 
@@ -109,24 +128,58 @@ def _write_summary_sheet(sheet, segments: List[Dict[str, Any]], styles: Dict[str
         result = segment.get("result", {}) if isinstance(segment, dict) else {}
         details = result.get("details", []) if isinstance(result, dict) else []
         is_calculated = bool(details)
+        is_exempt = _is_water_hammer_exempt_result(result)
+        is_processed = is_calculated or is_exempt
         critical = result.get("critical_point", {}) if isinstance(result, dict) else {}
         row = [
             index,
             segment.get("route_name", ""),
             segment.get("segment_name", ""),
-            "已验算" if is_calculated else "未验算",
-            result.get("status", "") if is_calculated else "",
+            _format_summary_check_state(is_calculated=is_calculated, is_exempt=is_exempt),
+            result.get("status", "") if is_processed else "",
+            _number_or_blank(result.get("allowable_pressure_mpa")) if is_processed else "",
+            _number_or_blank(result.get("pressure_allow_head_m")) if is_processed else "",
+            result.get("pressure_check_basis_label", result.get("pressure_check_basis", "")) if is_processed else "",
             result.get("exceed_count", 0) if is_calculated else "",
             result.get("negative_pressure_risk_count", 0) if is_calculated else "",
             result.get("sample_count", 0) if is_calculated else "",
             _number_or_blank(critical.get("station_m")) if is_calculated and isinstance(critical, dict) else "",
             _number_or_blank(result.get("min_margin_m")) if is_calculated else "",
             _number_or_blank(result.get("min_negative_margin_m")) if is_calculated else "",
-            result.get("reason", "") if isinstance(result, dict) else "",
+            _number_or_blank(_summary_result_value(result, "pipe_coefficient_cp")) if is_processed else "",
+            _number_or_blank(_summary_result_value(result, "reinforcement_ratio_a0")) if is_processed else "",
+            _number_or_blank(result.get("gbt_positive_delta_h")) if is_calculated else "",
+            _number_or_blank(result.get("linear_positive_delta_h")) if is_calculated else "",
+            _number_or_blank(result.get("positive_delta_h")) if is_calculated else "",
+            result.get("positive_governing_method", "") if is_calculated else "",
+            _summary_reason(result),
         ]
         sheet.append(row)
     _style_body(sheet, styles)
     _autosize_columns(sheet, get_column_letter)
+
+
+def _summary_result_value(result: Dict[str, Any], key: str) -> Any:
+    """从汇总、关键点或成员结果中读取展示值。"""
+    if not isinstance(result, dict):
+        return None
+    value = result.get(key)
+    if value is not None:
+        return value
+    critical = result.get("critical_point", {})
+    if isinstance(critical, dict) and critical.get(key) is not None:
+        return critical.get(key)
+    for member in list(result.get("member_results", []) or []):
+        if isinstance(member, dict) and member.get(key) is not None:
+            return member.get(key)
+    return None
+
+
+def _summary_reason(result: Dict[str, Any]) -> str:
+    """返回导出汇总备注，优先使用状态原因，其次使用cp简化提示。"""
+    if not isinstance(result, dict):
+        return ""
+    return str(result.get("reason", "") or result.get("pipe_coefficient_note", "") or "")
 
 
 def _write_detail_sheet(
@@ -190,6 +243,22 @@ def _number_or_blank(value: Any):
     if isinstance(value, (int, float)):
         return round(float(value), 6)
     return value
+
+
+def _is_water_hammer_exempt_result(result: Any) -> bool:
+    """判断水锤结果是否为规范免验算。"""
+    if not isinstance(result, dict):
+        return False
+    return bool(result.get("is_exempt")) or str(result.get("status", "") or "") == "可不验算"
+
+
+def _format_summary_check_state(*, is_calculated: bool, is_exempt: bool) -> str:
+    """返回汇总表中的处理状态文字。"""
+    if is_calculated:
+        return "已验算"
+    if is_exempt:
+        return "已处理"
+    return "未验算"
 
 
 def _format_diagram_text(value: Any) -> str:

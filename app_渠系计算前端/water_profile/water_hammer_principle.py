@@ -94,8 +94,12 @@ def build_water_hammer_principle_html(
             "1. 水锤波速",
             [
                 (
-                    r"a=\frac{1435}{\sqrt{1+\frac{K}{E}\frac{D}{e}}}",
-                    "按匀质圆形薄壁管近似计算水锤波传播速度。K 为水体体积弹性模量，E 为管材弹性模量，D 为管径，e 为壁厚。",
+                    r"a=\frac{1425}{\sqrt{1+\frac{K}{E}\frac{D}{t}c_p}}",
+                    "按 GB/T 20203-2017 口径计算水锤波传播速度。K 为水体体积弹性模量，E 为管材弹性模量，D 为管径，t 为壁厚，cp 为管材系数。",
+                ),
+                (
+                    r"c_p=1,\qquad c_p=\frac{1}{1+0.95a_0}",
+                    "匀质管取 cp=1；钢筋混凝土管、预应力钢筒混凝土管和 PCCP 管有 a0 时按公式计算 cp，未填 a0 时按 cp=1 简化计算并提示。",
                 )
             ],
         ),
@@ -107,8 +111,8 @@ def build_water_hammer_principle_html(
                     "界面中的 μ(s) 表示水锤相时，即水击波往返传播一次所需时间。为避免和手册中的断面系数 μ 混淆，这里记作 μ_s。",
                 ),
                 (
-                    r"H_0=Z_w-Z_c,\qquad H_{allow}=Z_w-\left(Z_c+\frac{D}{2}\right)",
-                    "H0 为初始压强水头；允许正水击增量按表3水位与管顶高程的差值控制。",
+                    r"H_0=H_{st}-Z_c,\qquad H_{allow}=\frac{P_{allow}}{\rho g}",
+                    "H0 为初始压强水头；默认允许压力 1.0 MPa，按 ρ=1000kg/m³、g=9.81m/s² 换算为 101.9368m 工程水头。",
                 ),
             ],
         ),
@@ -124,6 +128,10 @@ def build_water_hammer_principle_html(
         _formula_section(
             "4. 缓闭正水击候选",
             [
+                (
+                    r"H_i=\frac{2Lv_0}{g(T_t+T_s)}",
+                    "当 Ts 大于水锤相时，GB/T 20203-2017 式(21)给出间接水击压力 Hi。",
+                ),
                 (
                     r"\mu=\frac{a v_0}{2gH_0},\qquad \sigma=\frac{L v_0}{gH_0T_s}",
                     "缓闭时先计算断面系数 μ 和系统系数 σ。这里的 μ 是无量纲断面系数，不是界面中的相时 μ(s)。",
@@ -155,16 +163,20 @@ def build_water_hammer_principle_html(
             "6. 控制值与全线判定",
             [
                 (
-                    r"\Delta H^{+}=H_0\max(\zeta_d,\zeta_1^{+},\zeta_{end}^{+})",
-                    "正水击取候选值中的最大值作为控制附加水头。",
+                    r"H_{max,i}=H_{st,i}+\Delta H_i^{+},\qquad H_{min,i}=H_{st,i}-\Delta H_i^{-}",
+                    "先按图1-3-3判别直接、一相或末相水击，再形成每个采样点的最高、最低压力水头线。",
                 ),
                 (
-                    r"\Delta H^{-}=H_0\max(\zeta_d,\zeta_1^{-},\zeta_{end}^{-})",
-                    "负水击取候选压降中的最大值作为负压校核值。",
+                    r"H_{max,i}-\left(Z_{c,i}-\frac{D_i}{2}\right)\le H_{allow}",
+                    "承压校核按管底执行，承压余量等于允许压力水头减去管底最大压力水头。",
                 ),
                 (
-                    r"M^{+}=H_{allow}-\Delta H^{+},\qquad M^{-}=H_0-\Delta H^{-}",
-                    "M+ 小于 0 表示正水击超限；M- 小于 0 表示有负压风险。任一采样点不满足即整段不通过。",
+                    r"H_{min,i}-\left(Z_{c,i}+\frac{D_i}{2}\right)\ge 0",
+                    "负压和不满管风险按管顶执行；直接水击采用保守同幅分布，一相水击采用近似分布，未采用完整特征线法。",
+                ),
+                (
+                    r"\Delta H^{+}=\max(\Delta H_{GB/T}^{+},\Delta H_{linear}^{+})",
+                    "正水击仍保留 GB/T 复核与线性启闭双重取大；任一采样点承压或管顶负压不满足即整段不通过。",
                 ),
             ],
         ),
@@ -193,7 +205,7 @@ def _scope_block() -> str:
     """构造适用范围说明。"""
     return (
         '<section class="card"><h2>适用范围</h2>'
-        "<p>本窗口只说明当前程序已经实现的线性启闭水锤验算：线性关闭产生正水击，线性开启产生负水击，并按全线采样点做管顶余量和负压余量校核。</p>"
+        "<p>本窗口说明当前程序已经实现的 GB/T 波速、GB/T 正水击复核与线性启闭水锤验算：先判别水击类型，再形成 Hmax/Hmin，最后按管底承压、管顶负压校核。</p>"
         "<p>事故停泵、水锤防护设备、复杂瞬变模拟等不在当前计算范围内。</p>"
         "</section>"
     )
@@ -215,7 +227,7 @@ def _note_block() -> str:
     """构造图形对照和插值说明。"""
     return (
         '<section class="card"><h2>图1-3-3对照与采样</h2>'
-        "<p>图1-3-3 只作为类型对照展示，不参与正式控制值计算；正式值始终由直接、第一相、末相候选值比较得到。</p>"
+        "<p>图1-3-3 用于判别直接水击、一相水击和末相水击；直接水击和一相水击沿线分布为工程近似，不是完整特征线法。</p>"
         "<p>整线分布验算以 5m 为基础步长，同时保留起终点、管段分界点、纵断面折点和表3水位点，避免漏掉关键位置。</p>"
         "</section>"
     )
@@ -236,8 +248,8 @@ def _current_values_block(inputs: Dict[str, Any], result: Dict[str, Any], member
     h0 = critical.get("initial_pressure_head_m", inputs.get("initial_head_m"))
     positive_delta = result.get("positive_delta_h")
     negative_delta = result.get("negative_delta_h")
-    hmax = _add_or_blank(h0, positive_delta)
-    hmin = _sub_or_blank(h0, negative_delta)
+    hmax = critical.get("hmax_m", result.get("hmax"))
+    hmin = critical.get("hmin_m", result.get("hmin"))
     rows = [
         ("所属成员", member_info.get("label", critical.get("member_key", "")), ""),
         ("桩号", critical.get("station_m"), "m"),
@@ -246,21 +258,30 @@ def _current_values_block(inputs: Dict[str, Any], result: Dict[str, Any], member
         ("v0", critical.get("velocity_mps", member_info.get("velocity_mps")), "m/s"),
         ("e", inputs.get("wall_thickness_m"), "m"),
         ("Ts", inputs.get("closing_time_s"), "s"),
+        ("允许压力", inputs.get("allowable_pressure_mpa", result.get("allowable_pressure_mpa")), "MPa"),
+        ("允许压力水头", result.get("pressure_allow_head_m"), "m"),
         ("H0", h0, "m"),
         ("a", critical.get("a", result.get("a")), "m/s"),
+        ("cp", critical.get("pipe_coefficient_cp", result.get("pipe_coefficient_cp")), ""),
+        ("a0", critical.get("reinforcement_ratio_a0", result.get("reinforcement_ratio_a0")), ""),
         ("μ(s)", result.get("mu"), "s"),
+        ("GB/T ΔH+", result.get("gbt_positive_delta_h"), "m"),
+        ("线性启闭 ΔH+", result.get("linear_positive_delta_h"), "m"),
         ("ΔH+", positive_delta, "m"),
+        ("控制来源", result.get("positive_governing_method"), ""),
         ("ΔH-", negative_delta, "m"),
         ("Hmax", hmax, "m"),
         ("Hmin", hmin, "m"),
-        ("最小余量", result.get("min_margin_m"), "m"),
-        ("负压余量", result.get("min_negative_margin_m"), "m"),
+        ("管底最大压力水头", critical.get("pressure_head_max_m"), "m"),
+        ("承压余量", result.get("min_margin_m"), "m"),
+        ("管顶最低压力水头", critical.get("top_min_pressure_head_m"), "m"),
+        ("管顶最低余量", result.get("min_negative_margin_m"), "m"),
     ]
     cells = "".join(
         f"<tr><th>{_render_inline_symbols(label)}</th><td>{html.escape(_fmt(value))}</td><td>{html.escape(unit)}</td></tr>"
         for label, value, unit in rows
     )
-    note = f"<p>{_render_inline_symbols('e 和 Ts 为整线统一输入；μ(s) 为整线相时。')}</p>"
+    note = f"<p>{_render_inline_symbols('e、Ts 和允许压力为整线统一输入；μ(s) 为整线相时。')}</p>"
     return f'<section class="card"><h2>控制采样点代入值</h2>{note}<table>{cells}</table></section>'
 
 

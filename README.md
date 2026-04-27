@@ -7,7 +7,7 @@
 当前版本的隧洞模块已经完整补齐 `平底圆形` 断面：单断面页可直接输入 `直径 D + 平底宽 B` 计算，表1批量、共享结果、表3导入复算、DXF/Word/TXT、`xx管` 隧洞摘要和断面汇总都会同步识别 `D / B / H_total`；表3继续只允许来源带入，不允许手工新建该类型。
 当前版本已把“矩形暗涵设计”升级为“暗涵设计”家族：标准类型为 `暗涵-矩形` 与 `暗涵-圆拱直墙型`，旧 `矩形暗涵 / 矩形暗渠 / 暗渠` 继续兼容到 `暗涵-矩形`；圆拱直墙型暗涵复用圆拱几何，但走暗涵净空、表1/表3、渐变段和导出口径，不走隧洞规则。
 当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及连续承压线路的“整线纵断面 + 中心线高程导出 + 整线弹窗”规则。
-当前版本已把有压管道弹窗里的水击验算升级为“整线末端阀门线性启闭”口径：系统把连续有压段视为一条串联管线，`Ts` 表示末端阀门启闭时间；关闭时计算最大正水击，开启时计算最低压力和负压风险。沿线采样只是检查整条管线各处是否超压或负压，不表示每个采样点都有阀门；结果只在弹窗里并列展示和保存，不参与表3主水位、水头损失和累计损失递推。
+当前版本已把有压管道弹窗里的水击验算收口为“先判别水击类型并形成最高/最低压力水头线，再分别做承压和负压校核”：系统把连续有压段视为一条串联管线，`Ts` 表示末端阀门启闭时间；未免验算时按等价 `L / am / vm` 判别直接水击、一相水击和末相水击，形成 `Hmax / Hmin`。默认允许压力为 `1.0 MPa`，换算为 `101.9368m` 允许压力水头；承压按管底 `Hmax - Zc + D/2` 校核，负压/满管按管顶 `Hmin - Zc - D/2` 校核。水击波速按 GB/T 公式引入管材系数 `cp`，钢筋混凝土管和 PCCP 管有 `a0` 时按公式折算，未填 `a0` 时按 `cp=1` 简化计算并提示。沿线采样只是检查整条管线各处承压或管顶负压风险，不表示每个采样点都有阀门；结果只在弹窗里并列展示和保存，不参与表3主水位、水头损失和累计损失递推。
 表3基础设置区里的“设计流量 / 加大流量”现已收口为共享当前流量段的只读查看组：主界面默认只显示当前段（默认第一段）的名称和值，不再展示整串逗号文本，也不再提供“编辑全部”入口；需要改值时，回原始 Excel 来源处理。
 当前口径下，主界面这两个流量字段只负责查看和切换当前流量段；当上游来源刷新设计流量时，系统仍会按最新设计流量整体重算全部加大流量。批量同步后，当前流量段会回到第一段；项目重开后主界面也默认回到第一段显示。
 现在如果确实需要手工指定某一段“Q加大”，唯一入口是导入 Excel 模板 `导入模板` 页第 1 行右侧那组“标签 + 值”列对；模板先预铺了 20 段，没填的段继续按自动比例，超过 20 段时可按同样格式继续向右扩展。
@@ -65,7 +65,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 更新链路：`updater.py`、`update_helper.py`、`app_渠系计算前端/update_dialog.py`、`update_artifact_rules.py`、`tools/build.py`、`tools/release.py`、`tools/release_snapshot.py` 共同负责版本检查、补丁/全量选择、下载包 checksum、运行时文件排除、旧会话残留清理、补丁落地后目标验收、独立安装窗口、补丁兜底和正式发版；其中 `tools/build.py` 现在还会在打包前按分组校验关键依赖，并显式收集 `latex2mathml` 这类 Word 导出运行时数据文件，避免安装包启动时因缺资源直接退出；`tools/backfill_patch_release.py` 与 `tools/disable_patch_release.py` 则分别负责“基于快照回补 patch”和“临时撤下高风险 patch 字段”。
 - 导出精度：普通模式导出桩号使用 `station_decimals`，xx管 导出桩号使用 `xxpipe_station_decimals`；两者都在导出链路单独格式化，不改主界面的通用桩号显示函数。
 - mixed route 持久化：`PressurePipeManager` 现同时保存 route 级 `longitudinal_nodes`、`raw_profile_polyline` 与 `profile_segments`，用来承接“原线直出 + 平面桩号采样 + 工程折点接口”的混合整线导出。
-- 水击验算：`推求水面线/core/pressure_pipe_calc.py` 现按《水力计算手册》简单管道线性启闭理论计算正水击、负水击、控制类型和负压风险，并额外输出图 1-3-3 水击类型对照。水击波速使用均质薄壁圆管简化式 `a = 1435 / sqrt(1 + (Ew / E) * (D / e))`；该式由通用式在 `K = E·e/r²`、`D = 2r` 条件下化简得到，适合钢管、铸铁管、球墨铸铁管等可近似为均质薄壁圆管的管道，暂未按 PCCP、钢筋混凝土衬砌管、埋藏式钢管等复杂 `K` 分类型计算。整线水锤按末端阀门启闭理解，整线相时按各成员 `L/a` 累加；沿线采样只做安全校核。
+- 水击验算：`推求水面线/core/pressure_pipe_calc.py` 现按 GB/T 20203-2017 波速公式 `a = 1425 / sqrt(1 + (K / E) * (D / t) * cp)` 计算水击波速，默认 `K=2.06×10⁹ Pa`。钢管、铸铁管、球墨铸铁管、玻璃钢夹砂管、HDPE/PE、PVC/PVC-U 等按 `cp=1`；钢筋混凝土管、预应力钢筒混凝土管和 PCCP 管有 `a0` 时按 `cp=1/(1+0.95a0)` 自动折算，未填 `a0` 时按 `cp=1` 简化计算并在状态、步骤和导出备注中提示。整线水锤按末端阀门启闭理解，保留 `Ts >= 40L/a`（整线按 `40×Σ(Li/ai)`）免验算规则；未免验算时新增等价参数 `L=ΣLi`、`am=L/Σ(Li/ai)`、`vm=Σ(Li vi)/L`，用 `ρ=am vm/(2gH0)`、`σ=L vm/(gH0Ts)` 判别图 `1-3-3` 水击类型并形成 `Hmax / Hmin`。默认允许压力为 `1.0 MPa`，换算允许压力水头 `101.9368m`；承压按管底 `Hmax - Zc + D/2 <= h_allow` 校核，负压/满管按管顶 `Hmin - Zc - D/2 >= 0` 校核。直接水击和一相水击当前采用工程近似沿线分布，结果会明确标注。
 - 纵断面绘图与取值分离：`centerline_draw_segments` 只负责导入原线画线，`profile_breakpoint_records` 只负责工程折点接口和覆盖判断；当前表格文字仍继续走 `centerline_records`。
 - 连续承压正式存储：`PressurePipeManager` 现在同时维护 `pipes / routes / segments` 三层数据；旧入口继续兼容，新导出与回读优先使用 `routes / segments`。
 - 尾段逐行计损：`xx渠` 末尾连续承压中的命名有压段，会先拆成逐段成员，再统一按行回写和递推；窗口汇总仍保留整组结果。
@@ -117,7 +117,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 运行本次同名连续承压链回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_batch_panel_dialog_parent_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_pressure_pipe_export_results_unit.py -q`
 - 运行本次赛金支渠连续承压链回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_extractor_fallback_unit.py tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_pressure_pipe_export_results_unit.py tests/test_pressure_pipe_canvas_viewer_gui_unit.py tests/test_water_profile_transition_ready_unit.py tests/test_xxpipe_longitudinal_export_unit.py -q`
 - 运行本次“中段借到前缀失败”回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_external_head_loss_unit.py -q`
-- 运行本次水击验算回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_water_hammer_core_unit.py tests/test_pressure_pipe_water_hammer_dialog_unit.py tests/test_pressure_pipe_persistence_with_long_unit.py -q`
+- 运行本次水击验算回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_water_hammer_core_unit.py tests/test_pressure_pipe_water_hammer_dialog_unit.py tests/test_water_profile_transition_ready_unit.py -q`
 - 运行更新链路回归：`$env:PYTEST_ADDOPTS='--basetemp=D:\V1.0\.pytest_tmp\update-regression'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py tests/test_updater_install_flow_unit.py tests/test_update_helper_unit.py tests/test_updater_versioning_unit.py tests/test_release_snapshot_unit.py -q`
 - 运行本次构建依赖回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py -q --basetemp=D:\V1.0\.pytest_tmp\build-plan`
 - 运行本次复式梯形回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_open_channel_compound_trapezoid_kernel_unit.py tests/test_open_channel_compound_trapezoid_panel_unit.py tests/test_open_channel_compound_trapezoid_dxf_unit.py tests/test_batch_compound_trapezoid_unit.py tests/test_compound_trapezoid_type_support_unit.py tests/test_compound_trapezoid_shared_hydraulic_unit.py tests/test_water_profile_coord_precision_unit.py -q`
@@ -129,6 +129,9 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 
 ## 搜索记录
 
+- 2026-04-27：本次按用户提供的水锤验算判断口径，把整线水锤从旧“表3水位/管顶余量”改为先形成 `Hmax / Hmin`，再按管底承压、管顶负压校核；默认允许压力 `1.0MPa≈101.9368m`，未重复执行外部搜索。
+- 2026-04-27：本次继续基于用户提供的 GB/T 20203-2017 5.1.7 OCR 文档，实现缓闭正水击“GB/T 式(21) + 线性启闭理论”双重取大，并把波速公式中的 `cp/a0` 管材系数接入程序，未重复执行外部搜索。
+- 2026-04-27：本次按用户提供的 GB/T 20203-2017 5.1.7 OCR 文档和表6口径修正水击默认弹模，并实现 `Ts >= 40L/a` 免验算规则，未重复执行外部搜索。
 - 2026-04-26：用户提供管材弹性模量表截图，红框标明玻璃钢复合管 `E=14.7×10⁹ Pa`；本次按该表把 `玻璃钢夹砂管` 水锤默认 `E` 调整为 `14.7×10⁹ Pa`，未重复执行外部搜索。
 - 2026-04-25：本次为既有有压管道结果弹窗口径澄清，README 已有搜索记录，继续基于仓库现有正式/参考记录字段实现，未重复执行外部方案搜索。
 - 2026-04-24：按用户要求联网核对玻璃钢夹砂管水锤弹性模量；天津市再生水管道工程技术规程给出玻璃纤维增强塑料夹砂管相关模量范围较宽，FRPM 管线探测手册给出纵向弹性模量参考值 `8728 MPa`，当时据此把 `玻璃钢夹砂管` 水锤默认 `E` 调整为 `8.728×10⁹ Pa`；后续以 2026-04-26 用户截图口径为准。
@@ -158,7 +161,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 空名称普通有压管道行现在可在 xx管，以及已形成连续承压整线的 xx渠 场景下，独立显示沿程损失、承压弯头损失和本行承压段总损失。
 - 断面汇总弹窗里的有压管道参数现在按“流量段主行 + 顶管/定向钻单独行”显示；普通有压管道同一流量段只显示 1 行，确认后会自动同步到该流量段下全部普通有压管道原始分组。
 - 匿名普通有压管道段的窗口结果会回写到当前行，并在后续静默重算中继续作为主来源，表3列38会锁定避免混改。
-- 有压管道弹窗现已支持线性启闭水击验算：单管卡会预填 `L / D / v0 / H0 / E`，用户补充 `e / 启闭时间 Ts` 后可得到正负水击、余量、控制类型和图1-3-3对照；整线卡按“末端阀门启闭、一条连续有压管线”处理，成员参数表展示每个小段的 `Q / D / 管材 / E / v0`，只把 `e / Ts` 作为整线统一输入，详细分布和 Excel 明细会带出所属成员、`D / v0 / a`。沿线采样点只是安全校核点，不是独立阀门位置；结果可随项目一起保存和重开恢复，但不会进入主水位链。
+- 有压管道弹窗现已支持 GB/T 波速、`cp/a0`、允许压力输入和按 `Hmax/Hmin` 的水锤验算：单管卡和整线卡默认允许压力 `1.0MPa`，界面同步显示换算后的允许压力水头 `101.9368m`。单管卡会预填 `L / D / v0 / H0 / E`，钢筋混凝土管和 PCCP 管可补充 `a0`；未填时仍按 `cp=1` 继续验算并提示，补充后按 `cp=1/(1+0.95a0)` 折算。整线卡按“末端阀门启闭、一条连续有压管线”处理，成员参数表展示每个小段的 `Q / D / 管材 / E / v0 / a0`，只把 `e / Ts / 允许压力` 作为整线统一输入；未免验算时按等价 `L / am / vm` 判别图1-3-3水击类型，明细带出 `Hst / Hmax / Hmin / 管底最大压力水头 / 允许压力水头 / 承压余量 / 管顶最低压力水头`。当 `Ts` 满足 GB/T 20203-2017 5.1.7.4 的免验算条件时，结果直接显示“可不验算”，数值区和明细区不再给出误导性水击增压。沿线采样点只是安全校核点，不是独立阀门位置；结果可随项目一起保存和重开恢复，但不会进入主水位链。
 - 相关双击说明已经补齐，且总损失、水位、累计损失说明不会再把同一笔承压段损失重复展示。
 - 隧洞沿程损失继续保持原有“底坡 × 有效长度”口径，没有被承压管道逻辑带偏。
 - 表3 里只要相邻两边都属于 `有压管道 / 定向钻 / 顶管`，现在都统一按同类承压结构处理：不再插渐变段，也不再插中间连接段；但它们与隧洞相邻时仍会保留原有渐变段。

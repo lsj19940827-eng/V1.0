@@ -222,7 +222,10 @@ class WaterProfileCalculator:
             if node.structure_type and self._is_diversion_gate_sv(node.structure_type):
                 node.is_diversion_gate = True
                 # 若用户未手动设置过闸损失，则自动设为默认值0.1m
-                if node.head_loss_gate == 0.0:
+                gate_loss_user_set = bool(
+                    (getattr(node, "section_params", {}) or {}).get("gate_head_loss_user_set", False)
+                )
+                if node.head_loss_gate == 0.0 and not gate_loss_user_set:
                     from config.constants import DEFAULT_GATE_HEAD_LOSS
                     node.head_loss_gate = DEFAULT_GATE_HEAD_LOSS
             
