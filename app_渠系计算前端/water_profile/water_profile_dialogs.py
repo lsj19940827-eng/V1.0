@@ -2177,17 +2177,83 @@ class PressurePipeConfigDialog(QDialog):
                 return float(water_level)
         return None
 
+    @classmethod
+    def _normalize_water_hammer_use_increase(cls, value, default: bool = True) -> bool:
+        """把不同来源的加大流量开关统一成布尔值。"""
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"0", "false", "否", "不", "不考虑", "未勾选", "no", "n", "off"}:
+            return False
+        if text in {"1", "true", "是", "考虑", "勾选", "yes", "y", "on"}:
+            return True
+        return bool(default)
+
+    @classmethod
+    def _resolve_group_use_increase_for_velocity(cls, group) -> bool:
+        """读取分组当前是否按加大流量计算水锤v0。"""
+        value = getattr(group, "use_increase", None)
+        rows = list(getattr(group, "rows", []) or [])
+        first_row = rows[0] if rows else None
+        params = getattr(first_row, "section_params", {}) or {}
+        if value is None and first_row is not None:
+            value = getattr(first_row, "use_increase", None)
+        if value is None and isinstance(params, dict):
+            value = params.get("use_increase", True)
+        return cls._normalize_water_hammer_use_increase(value, default=True)
+
+    @classmethod
+    def _resolve_group_design_flow_for_velocity(cls, group, config=None) -> float:
+        """读取分组当前设计流量，优先采用表3当前行数据。"""
+        for value in (
+            getattr(group, "design_flow", 0.0),
+            getattr(config, "Q", 0.0) if config is not None else 0.0,
+        ):
+            number = cls._safe_float(value, 0.0)
+            if number > 0:
+                return number
+        rows = list(getattr(group, "rows", []) or [])
+        if rows:
+            number = cls._safe_float(getattr(rows[0], "flow", 0.0), 0.0)
+            if number > 0:
+                return number
+        return 0.0
+
+    @classmethod
+    def _resolve_group_increased_flow_for_velocity(cls, group) -> float:
+        """读取分组当前Q加大，兼容节点和断面参数里的不同字段。"""
+        number = cls._safe_float(getattr(group, "increased_flow", 0.0), 0.0)
+        if number > 0:
+            return number
+        rows = list(getattr(group, "rows", []) or [])
+        first_row = rows[0] if rows else None
+        params = getattr(first_row, "section_params", {}) or {}
+        params = params if isinstance(params, dict) else {}
+        for key in ("Q_increased", "Q_max", "Q_inc", "max_flow", "加大流量", "Q加大"):
+            value = getattr(first_row, key, None) if first_row is not None else None
+            number = cls._safe_float(value, 0.0)
+            if number > 0:
+                return number
+            number = cls._safe_float(params.get(key), 0.0)
+            if number > 0:
+                return number
+        return 0.0
+
     def _build_basic_water_hammer_prefill(self, group, config=None) -> Dict[str, Any]:
         """整理水击验算的预填输入与历史结果。"""
         try:
             from core.pressure_pipe_calc import (
                 calc_pipe_velocity,
                 get_water_hammer_elastic_modulus,
+                resolve_water_hammer_velocity,
                 water_hammer_material_requires_reinforcement_ratio,
             )
         except Exception:
             calc_pipe_velocity = None
             get_water_hammer_elastic_modulus = None
+            resolve_water_hammer_velocity = None
             water_hammer_material_requires_reinforcement_ratio = None
 
         cfg = config or self._get_manager_group_config(group)
@@ -2212,14 +2278,34 @@ class PressurePipeConfigDialog(QDialog):
         if length_m <= 0:
             length_m = self._estimate_group_plan_length(group)
 
-        velocity_mps = self._safe_float(saved_inputs.get("velocity_mps"), 0.0)
-        if velocity_mps <= 0:
-            velocity_mps = self._safe_float(getattr(cfg, "pipe_velocity", 0.0) if cfg is not None else 0.0, 0.0)
-        if velocity_mps <= 0 and callable(calc_pipe_velocity) and diameter > 0:
-            velocity_mps = self._safe_float(
-                calc_pipe_velocity(self._safe_float(getattr(group, "design_flow", 0.0), 0.0), diameter),
-                0.0,
+        design_flow = self._resolve_group_design_flow_for_velocity(group, cfg)
+        increased_flow = self._resolve_group_increased_flow_for_velocity(group)
+        use_increase = self._resolve_group_use_increase_for_velocity(group)
+        saved_velocity = self._safe_float(saved_inputs.get("velocity_mps"), 0.0)
+        cfg_velocity = self._safe_float(getattr(cfg, "pipe_velocity", 0.0) if cfg is not None else 0.0, 0.0)
+        fallback_velocity = saved_velocity if saved_velocity > 0 else cfg_velocity
+        if callable(resolve_water_hammer_velocity):
+            velocity_context = resolve_water_hammer_velocity(
+                design_flow_m3s=design_flow,
+                increased_flow_m3s=increased_flow,
+                use_increase=use_increase,
+                diameter_m=diameter,
+                fallback_velocity_mps=fallback_velocity,
             )
+            velocity_mps = self._safe_float(velocity_context.get("velocity_mps"), 0.0)
+        else:
+            velocity_mps = 0.0
+            if callable(calc_pipe_velocity) and diameter > 0 and design_flow > 0:
+                velocity_mps = self._safe_float(calc_pipe_velocity(design_flow, diameter), 0.0)
+            if velocity_mps <= 0:
+                velocity_mps = fallback_velocity
+            velocity_context = {
+                "velocity_mps": velocity_mps,
+                "flow_m3s": design_flow,
+                "source": "设计流量" if velocity_mps > 0 else "历史流速兜底",
+                "use_increase": use_increase,
+                "warning": "",
+            }
 
         initial_head_m = saved_inputs.get("initial_head_m", None)
         if initial_head_m is None:
@@ -2259,6 +2345,16 @@ class PressurePipeConfigDialog(QDialog):
             if callable(water_hammer_material_requires_reinforcement_ratio)
             else False
         )
+        result_payload = saved_result if isinstance(saved_result, dict) else {}
+        saved_velocity_for_result = self._safe_float(saved_inputs.get("velocity_mps"), 0.0)
+        if (
+            result_payload
+            and saved_velocity_for_result > 0
+            and velocity_mps > 0
+            and abs(saved_velocity_for_result - velocity_mps) > 1e-3
+        ):
+            # 自动工况流速变化后，旧结果不再代表当前输入。
+            result_payload = {}
 
         return {
             "length_m": length_m,
@@ -2272,7 +2368,13 @@ class PressurePipeConfigDialog(QDialog):
             "material_key": material_key,
             "reinforcement_ratio_a0": reinforcement_ratio_a0,
             "requires_reinforcement_ratio_a0": requires_a0,
-            "result": saved_result if isinstance(saved_result, dict) else {},
+            "velocity_flow_m3s": self._safe_float(velocity_context.get("flow_m3s"), 0.0),
+            "velocity_source": str(velocity_context.get("source", "") or ""),
+            "use_increase_for_velocity": bool(velocity_context.get("use_increase", use_increase)),
+            "design_flow_m3s": design_flow,
+            "increased_flow_m3s": increased_flow,
+            "velocity_warning": str(velocity_context.get("warning", "") or ""),
+            "result": result_payload,
         }
 
     @staticmethod
@@ -2357,12 +2459,14 @@ class PressurePipeConfigDialog(QDialog):
                 calc_pipe_velocity,
                 get_water_hammer_elastic_modulus,
                 resolve_water_hammer_material_key,
+                resolve_water_hammer_velocity,
                 water_hammer_material_requires_reinforcement_ratio,
             )
         except Exception:
             calc_pipe_velocity = None
             get_water_hammer_elastic_modulus = None
             resolve_water_hammer_material_key = None
+            resolve_water_hammer_velocity = None
             water_hammer_material_requires_reinforcement_ratio = None
 
         cfg = self._get_manager_group_config(group)
@@ -2391,11 +2495,33 @@ class PressurePipeConfigDialog(QDialog):
         if callable(resolve_water_hammer_material_key):
             resolved_material_key = str(resolve_water_hammer_material_key(material_key) or "").strip() or material_key
 
-        velocity_mps = self._safe_float(getattr(cfg, "pipe_velocity", 0.0) if cfg is not None else 0.0, 0.0)
-        if velocity_mps <= 0:
-            velocity_mps = self._safe_float(getattr(group, "pipe_velocity", 0.0), 0.0)
-        if velocity_mps <= 0 and callable(calc_pipe_velocity) and diameter > 0:
-            velocity_mps = self._safe_float(calc_pipe_velocity(design_flow, diameter), 0.0)
+        increased_flow = self._resolve_group_increased_flow_for_velocity(group)
+        use_increase = self._resolve_group_use_increase_for_velocity(group)
+        fallback_velocity = self._safe_float(getattr(group, "pipe_velocity", 0.0), 0.0)
+        if fallback_velocity <= 0:
+            fallback_velocity = self._safe_float(getattr(cfg, "pipe_velocity", 0.0) if cfg is not None else 0.0, 0.0)
+        if callable(resolve_water_hammer_velocity):
+            velocity_context = resolve_water_hammer_velocity(
+                design_flow_m3s=design_flow,
+                increased_flow_m3s=increased_flow,
+                use_increase=use_increase,
+                diameter_m=diameter,
+                fallback_velocity_mps=fallback_velocity,
+            )
+            velocity_mps = self._safe_float(velocity_context.get("velocity_mps"), 0.0)
+        else:
+            velocity_mps = 0.0
+            if callable(calc_pipe_velocity) and diameter > 0 and design_flow > 0:
+                velocity_mps = self._safe_float(calc_pipe_velocity(design_flow, diameter), 0.0)
+            if velocity_mps <= 0:
+                velocity_mps = fallback_velocity
+            velocity_context = {
+                "velocity_mps": velocity_mps,
+                "flow_m3s": design_flow,
+                "source": "设计流量" if velocity_mps > 0 else "历史流速兜底",
+                "use_increase": use_increase,
+                "warning": "",
+            }
 
         elastic_modulus_pa = 0.0
         if callable(get_water_hammer_elastic_modulus):
@@ -2428,16 +2554,26 @@ class PressurePipeConfigDialog(QDialog):
         end_mc = self._safe_float(getattr(group, "segment_end_mc", None), None)
         return {
             "key": group_key,
-            "label": f"{display_name}（{row_text}，v0={velocity_mps:.3f}m/s）",
+            "label": (
+                f"{display_name}（{row_text}，v0={velocity_mps:.3f}m/s"
+                f"（{str(velocity_context.get('source', '') or '-')}））"
+            ),
             "display_name": display_name,
             "row_range": [start_row, end_row],
             "start_station_m": start_mc,
             "end_station_m": end_mc,
             "diameter_m": diameter,
             "design_flow": design_flow,
+            "design_flow_m3s": design_flow,
+            "increased_flow": increased_flow,
+            "increased_flow_m3s": increased_flow,
             "material_key": material_key,
             "resolved_material_key": resolved_material_key,
             "velocity_mps": velocity_mps,
+            "velocity_flow_m3s": self._safe_float(velocity_context.get("flow_m3s"), 0.0),
+            "velocity_source": str(velocity_context.get("source", "") or ""),
+            "use_increase_for_velocity": bool(velocity_context.get("use_increase", use_increase)),
+            "velocity_warning": str(velocity_context.get("warning", "") or ""),
             "initial_head_m": self._resolve_group_water_hammer_head(group),
             "elastic_modulus_pa": elastic_modulus_pa,
             "reinforcement_ratio_a0": reinforcement_ratio_a0,
@@ -2469,11 +2605,13 @@ class PressurePipeConfigDialog(QDialog):
 
     def _build_route_water_hammer_param_summary(self, candidates: List[Dict[str, Any]]) -> str:
         """生成整线水锤段参数范围提示。"""
+        source_summary = self._format_unique_text_summary([c.get("velocity_source") for c in candidates])
         return (
             f"D={self._format_unique_number_summary([c.get('diameter_m') for c in candidates], 3)}m；"
             f"Q={self._format_unique_number_summary([c.get('design_flow') for c in candidates], 3)}m³/s；"
             f"管材={self._format_unique_text_summary([c.get('material_key') for c in candidates])}；"
             f"v0={self._format_unique_number_summary([c.get('velocity_mps') for c in candidates], 3)}m/s"
+            f"（{source_summary}）"
         )
 
     def _build_route_water_hammer_segment(
@@ -2503,20 +2641,23 @@ class PressurePipeConfigDialog(QDialog):
             "wall_thickness_m": WATER_HAMMER_DEFAULT_WALL_THICKNESS_M,
             "elastic_modulus_pa": self._safe_float(selected.get("elastic_modulus_pa"), 0.0),
             "velocity_mps": self._safe_float(selected.get("velocity_mps"), 0.0),
+            "velocity_flow_m3s": self._safe_float(selected.get("velocity_flow_m3s"), 0.0),
+            "velocity_source": str(selected.get("velocity_source", "") or ""),
+            "use_increase_for_velocity": bool(selected.get("use_increase_for_velocity", True)),
+            "design_flow_m3s": self._safe_float(selected.get("design_flow_m3s", selected.get("design_flow")), 0.0),
+            "increased_flow_m3s": self._safe_float(selected.get("increased_flow_m3s", selected.get("increased_flow")), 0.0),
+            "velocity_warning": str(selected.get("velocity_warning", "") or ""),
             "initial_head_m": selected.get("initial_head_m"),
             "closing_time_s": WATER_HAMMER_DEFAULT_CLOSING_TIME_S,
             "allowable_pressure_mpa": WATER_HAMMER_DEFAULT_ALLOWABLE_PRESSURE_MPA,
         }
         saved_inputs = saved.get("inputs", {}) if isinstance(saved.get("inputs", {}), dict) else {}
         inputs = dict(base_inputs)
-        for key in base_inputs:
+        for key in ("wall_thickness_m", "closing_time_s", "allowable_pressure_mpa"):
             if key in saved_inputs and saved_inputs.get(key) is not None:
-                if key in {"wall_thickness_m", "closing_time_s", "allowable_pressure_mpa"}:
-                    saved_number = self._safe_float(saved_inputs.get(key), 0.0)
-                    if saved_number > 0:
-                        inputs[key] = saved_number
-                else:
-                    inputs[key] = saved_inputs.get(key)
+                saved_number = self._safe_float(saved_inputs.get(key), 0.0)
+                if saved_number > 0:
+                    inputs[key] = saved_number
         saved_member_a0 = saved_inputs.get("member_reinforcement_ratio_a0", {})
         saved_member_a0 = saved_member_a0 if isinstance(saved_member_a0, dict) else {}
         if saved_member_a0:
@@ -2640,6 +2781,15 @@ class PressurePipeConfigDialog(QDialog):
                 "reinforcement_ratio_a0": self._safe_float(candidate.get("reinforcement_ratio_a0"), None),
                 "requires_reinforcement_ratio_a0": bool(candidate.get("requires_reinforcement_ratio_a0")),
                 "velocity_mps": self._safe_float(candidate.get("velocity_mps"), 0.0),
+                "velocity_flow_m3s": self._safe_float(candidate.get("velocity_flow_m3s"), 0.0),
+                "velocity_source": str(candidate.get("velocity_source", "") or ""),
+                "use_increase_for_velocity": bool(candidate.get("use_increase_for_velocity", True)),
+                "design_flow_m3s": self._safe_float(candidate.get("design_flow_m3s", candidate.get("design_flow")), 0.0),
+                "increased_flow_m3s": self._safe_float(
+                    candidate.get("increased_flow_m3s", candidate.get("increased_flow")),
+                    0.0,
+                ),
+                "velocity_warning": str(candidate.get("velocity_warning", "") or ""),
             }
         return lookup
 
@@ -2655,6 +2805,7 @@ class PressurePipeConfigDialog(QDialog):
             "管材",
             "E(N/m²)",
             "v0(m/s)",
+            "流速来源",
             "a0",
             "计算用途",
         ]
@@ -2685,17 +2836,18 @@ class PressurePipeConfigDialog(QDialog):
                 candidate.get("material_key", ""),
                 candidate.get("elastic_modulus_pa"),
                 candidate.get("velocity_mps"),
+                candidate.get("velocity_source", ""),
                 candidate.get("reinforcement_ratio_a0") if candidate.get("requires_reinforcement_ratio_a0") else "-",
                 "参与整线水锤验算",
             ]
             for col_idx, value in enumerate(values):
                 if isinstance(value, (int, float)) and col_idx != 0:
-                    digits = 6 if col_idx in {7, 9} else 3
+                    digits = 6 if col_idx in {7, 10} else 3
                     text = self._format_route_water_hammer_value(value, digits=digits)
                 else:
                     text = str(value or "")
                 cell = QTableWidgetItem(text)
-                if col_idx == 9 and candidate.get("requires_reinforcement_ratio_a0"):
+                if col_idx == 10 and candidate.get("requires_reinforcement_ratio_a0"):
                     cell.setFlags(cell.flags() | Qt.ItemIsEditable)
                 else:
                     cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
@@ -2752,6 +2904,15 @@ class PressurePipeConfigDialog(QDialog):
                     "elastic_modulus_pa": self._safe_float(candidate.get("elastic_modulus_pa"), 0.0),
                     "velocity_mps": self._safe_float(candidate.get("velocity_mps"), 0.0),
                     "design_flow": self._safe_float(candidate.get("design_flow"), 0.0),
+                    "design_flow_m3s": self._safe_float(candidate.get("design_flow_m3s", candidate.get("design_flow")), 0.0),
+                    "increased_flow_m3s": self._safe_float(
+                        candidate.get("increased_flow_m3s", candidate.get("increased_flow")),
+                        0.0,
+                    ),
+                    "velocity_flow_m3s": self._safe_float(candidate.get("velocity_flow_m3s"), 0.0),
+                    "velocity_source": str(candidate.get("velocity_source", "") or ""),
+                    "use_increase_for_velocity": bool(candidate.get("use_increase_for_velocity", True)),
+                    "velocity_warning": str(candidate.get("velocity_warning", "") or ""),
                     "material_key": str(candidate.get("material_key", "") or ""),
                     "reinforcement_ratio_a0": member_a0_map.get(
                         str(candidate.get("key", "") or ""),
@@ -2809,6 +2970,12 @@ class PressurePipeConfigDialog(QDialog):
             "wall_thickness_m": _read_edit_number("water_hammer_wall_thickness_edit", 0.0),
             "elastic_modulus_pa": self._safe_float(legacy_inputs.get("elastic_modulus_pa"), 0.0),
             "velocity_mps": self._safe_float(legacy_inputs.get("velocity_mps"), 0.0),
+            "velocity_flow_m3s": self._safe_float(legacy_inputs.get("velocity_flow_m3s"), 0.0),
+            "velocity_source": str(legacy_inputs.get("velocity_source", "") or ""),
+            "use_increase_for_velocity": bool(legacy_inputs.get("use_increase_for_velocity", True)),
+            "design_flow_m3s": self._safe_float(legacy_inputs.get("design_flow_m3s"), 0.0),
+            "increased_flow_m3s": self._safe_float(legacy_inputs.get("increased_flow_m3s"), 0.0),
+            "velocity_warning": str(legacy_inputs.get("velocity_warning", "") or ""),
             "initial_head_m": self._safe_float(legacy_inputs.get("initial_head_m"), None),
             "closing_time_s": _read_edit_number("water_hammer_closing_time_edit", 0.0),
             "allowable_pressure_mpa": _read_edit_number(
@@ -3029,6 +3196,8 @@ class PressurePipeConfigDialog(QDialog):
                 item.get("negative_status", ""),
                 item.get("distribution_note", ""),
                 diagram_text,
+                item.get("velocity_source", ""),
+                item.get("velocity_flow_m3s"),
             ]
             for col_idx, value in enumerate(values):
                 if isinstance(value, (int, float)):
@@ -3438,7 +3607,7 @@ class PressurePipeConfigDialog(QDialog):
         lay.addWidget(detail_btn)
 
         detail_table = QTableWidget()
-        detail_table.setColumnCount(26)
+        detail_table.setColumnCount(28)
         detail_table.setHorizontalHeaderLabels([
             "桩号(m)",
             "所属成员",
@@ -3466,6 +3635,8 @@ class PressurePipeConfigDialog(QDialog):
             "负压状态",
             "分布说明",
             "图1-3-3对照",
+            "流速来源",
+            "采用流量(m³/s)",
         ])
         detail_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         detail_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -3489,7 +3660,7 @@ class PressurePipeConfigDialog(QDialog):
             "selected_representative_key": selected_key,
             "representative_candidates": candidates,
             "water_hammer_member_lookup": member_lookup,
-            "water_hammer_member_a0_column": 9,
+            "water_hammer_member_a0_column": 10,
             "water_hammer_member_a0_rows": {
                 str(candidate.get("key", "") or ""): row_idx
                 for row_idx, candidate in enumerate(candidates)
@@ -3614,12 +3785,12 @@ class PressurePipeConfigDialog(QDialog):
 
         card_lay.addWidget(panel)
 
-    def _read_basic_water_hammer_inputs(self, group) -> Dict[str, Any]:
+    def _read_basic_water_hammer_inputs(self, group, *, include_metadata: bool = False) -> Dict[str, Any]:
         """读取当前卡片上的水击输入。"""
         widgets = self._card_widgets.get(self._group_storage_key(group), {})
         if not widgets:
             return {}
-        return {
+        inputs = {
             "length_m": self._safe_float(widgets.get("water_hammer_length_edit").text(), 0.0),
             "diameter_m": self._safe_float(widgets.get("water_hammer_diameter_edit").text(), 0.0),
             "wall_thickness_m": self._safe_float(widgets.get("water_hammer_wall_thickness_edit").text(), 0.0),
@@ -3639,6 +3810,20 @@ class PressurePipeConfigDialog(QDialog):
                 None,
             ),
         }
+        if include_metadata:
+            velocity_context = widgets.get("water_hammer_velocity_context", {})
+            velocity_context = velocity_context if isinstance(velocity_context, dict) else {}
+            inputs.update(
+                {
+                    "velocity_flow_m3s": self._safe_float(velocity_context.get("velocity_flow_m3s"), 0.0),
+                    "velocity_source": str(velocity_context.get("velocity_source", "") or ""),
+                    "use_increase_for_velocity": bool(velocity_context.get("use_increase_for_velocity", True)),
+                    "design_flow_m3s": self._safe_float(velocity_context.get("design_flow_m3s"), 0.0),
+                    "increased_flow_m3s": self._safe_float(velocity_context.get("increased_flow_m3s"), 0.0),
+                    "velocity_warning": str(velocity_context.get("velocity_warning", "") or ""),
+                }
+            )
+        return inputs
 
     def _apply_basic_water_hammer_result_to_widgets(self, group, result: Dict[str, Any] | None = None):
         """把水击结果刷新到卡片显示区。"""
@@ -3752,7 +3937,7 @@ class PressurePipeConfigDialog(QDialog):
         widgets = self._card_widgets.get(self._group_storage_key(group), {})
         if not widgets:
             return {}
-        inputs = self._read_basic_water_hammer_inputs(group)
+        inputs = self._read_basic_water_hammer_inputs(group, include_metadata=True)
         existing_result = widgets.get("water_hammer_result", {}) if isinstance(widgets.get("water_hammer_result", {}), dict) else {}
         should_persist = bool(existing_result) or inputs["wall_thickness_m"] > 0 or inputs["closing_time_s"] > 0
         if not should_persist:
@@ -3919,6 +4104,17 @@ class PressurePipeConfigDialog(QDialog):
             grid.addWidget(edit, row, col + 1)
         panel_lay.addLayout(grid)
 
+        velocity_source_text = (
+            f"v0来源：{prefill.get('velocity_source', '-')}"
+            f"；采用流量={self._format_basic_water_hammer_result_value(prefill.get('velocity_flow_m3s'), digits=3)} m³/s"
+        )
+        if str(prefill.get("velocity_warning", "") or "").strip():
+            velocity_source_text += f"；{prefill.get('velocity_warning')}"
+        velocity_source_label = QLabel(velocity_source_text)
+        velocity_source_label.setWordWrap(True)
+        velocity_source_label.setStyleSheet("font-size: 12px; color: #6D4C41;")
+        panel_lay.addWidget(velocity_source_label)
+
         allowable_head_label = QLabel("")
         allowable_head_label.setStyleSheet("font-size: 12px; color: #6D4C41;")
         self._update_water_hammer_allowable_head_label(allowable_pressure_edit, allowable_head_label)
@@ -4020,6 +4216,15 @@ class PressurePipeConfigDialog(QDialog):
                 "water_hammer_allowable_pressure_edit": allowable_pressure_edit,
                 "water_hammer_allowable_head_label": allowable_head_label,
                 "water_hammer_material_key": str(prefill.get("material_key", "") or ""),
+                "water_hammer_velocity_source_label": velocity_source_label,
+                "water_hammer_velocity_context": {
+                    "velocity_flow_m3s": prefill.get("velocity_flow_m3s", 0.0),
+                    "velocity_source": prefill.get("velocity_source", ""),
+                    "use_increase_for_velocity": prefill.get("use_increase_for_velocity", True),
+                    "design_flow_m3s": prefill.get("design_flow_m3s", 0.0),
+                    "increased_flow_m3s": prefill.get("increased_flow_m3s", 0.0),
+                    "velocity_warning": prefill.get("velocity_warning", ""),
+                },
                 "water_hammer_calc_btn": calc_btn,
                 "water_hammer_status_label": status_label,
                 "water_hammer_result": {},

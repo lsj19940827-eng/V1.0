@@ -58,6 +58,8 @@ DETAIL_COLUMNS = [
     ("负压状态", "negative_status"),
     ("分布说明", "distribution_note"),
     ("图1-3-3对照", "diagram_type_check"),
+    ("流速来源", "velocity_source"),
+    ("采用流量(m³/s)", "velocity_flow_m3s"),
 ]
 
 

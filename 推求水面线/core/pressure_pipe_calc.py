@@ -128,6 +128,86 @@ def calc_pipe_velocity(Q_m3s: float, D_m: float) -> float:
     return Q_m3s / A
 
 
+def _positive_finite_number(value, default: float = 0.0) -> float:
+    """把输入安全转换为正有限数，非正数返回默认值。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number) or number <= 0:
+        return default
+    return number
+
+
+def resolve_water_hammer_velocity(
+    *,
+    design_flow_m3s: float,
+    increased_flow_m3s: float,
+    use_increase: bool,
+    diameter_m: float,
+    fallback_velocity_mps: float = 0.0,
+) -> dict:
+    """按当前工况解析水锤验算采用的流量和流速。"""
+    design_flow = _positive_finite_number(design_flow_m3s)
+    increased_flow = _positive_finite_number(increased_flow_m3s)
+    diameter = _positive_finite_number(diameter_m)
+    fallback_velocity = _positive_finite_number(fallback_velocity_mps)
+    use_increase_flag = bool(use_increase)
+    preferred_source = "加大流量" if use_increase_flag else "设计流量"
+    adopted_flow = 0.0
+    source = preferred_source
+    warning = ""
+
+    if use_increase_flag:
+        if increased_flow > 0 and (design_flow <= 0 or increased_flow > design_flow):
+            adopted_flow = increased_flow
+            source = "加大流量"
+        elif design_flow > 0:
+            adopted_flow = design_flow
+            source = "设计流量"
+            warning = "缺少有效Q加大，已按设计流量计算"
+        else:
+            adopted_flow = increased_flow if increased_flow > 0 else 0.0
+    else:
+        if design_flow > 0:
+            adopted_flow = design_flow
+            source = "设计流量"
+
+    if diameter > 0 and adopted_flow > 0:
+        velocity = calc_pipe_velocity(adopted_flow, diameter)
+        if velocity > 0 and math.isfinite(velocity):
+            return {
+                "velocity_mps": float(velocity),
+                "flow_m3s": float(adopted_flow),
+                "source": source,
+                "use_increase": use_increase_flag,
+                "warning": warning,
+            }
+
+    if fallback_velocity > 0:
+        if not warning:
+            warning = "缺少有效管径或流量，已按历史流速兜底"
+        else:
+            warning = f"{warning}；缺少有效管径或流量，已按历史流速兜底"
+        return {
+            "velocity_mps": float(fallback_velocity),
+            "flow_m3s": float(adopted_flow),
+            "source": "历史流速兜底",
+            "use_increase": use_increase_flag,
+            "warning": warning,
+        }
+
+    if not warning:
+        warning = "缺少有效管径或流量，无法自动计算水锤流速"
+    return {
+        "velocity_mps": 0.0,
+        "flow_m3s": float(adopted_flow),
+        "source": source,
+        "use_increase": use_increase_flag,
+        "warning": warning,
+    }
+
+
 def resolve_water_hammer_material_key(material_key: str) -> str:
     """返回水击验算用的标准管材 key，未知管材保留原值。"""
     key = str(material_key or "").strip()
@@ -964,6 +1044,35 @@ def _interpolate_water_hammer_line(
     )
 
 
+def _copy_water_hammer_velocity_metadata(member: Dict[str, object]) -> Dict[str, object]:
+    """复制水锤v0来源追溯字段，供结果展示和导出使用。"""
+    design_flow = _water_hammer_first_number(member, ["design_flow_m3s", "design_flow", "Q"], None)
+    increased_flow = _water_hammer_first_number(
+        member,
+        ["increased_flow_m3s", "increased_flow", "Q_increased", "Q_max", "Q_inc", "max_flow"],
+        None,
+    )
+    velocity_flow = _water_hammer_first_number(member, ["velocity_flow_m3s", "flow_m3s"], None)
+    source = str(member.get("velocity_source", "") or "").strip()
+    warning = str(member.get("velocity_warning", member.get("warning", "")) or "").strip()
+    if "use_increase_for_velocity" in member:
+        use_increase = bool(member.get("use_increase_for_velocity"))
+    elif "use_increase" in member:
+        use_increase = bool(member.get("use_increase"))
+    else:
+        use_increase = None
+    payload: Dict[str, object] = {
+        "design_flow_m3s": float(design_flow) if design_flow is not None else None,
+        "increased_flow_m3s": float(increased_flow) if increased_flow is not None else None,
+        "velocity_flow_m3s": float(velocity_flow) if velocity_flow is not None else None,
+        "velocity_source": source,
+        "velocity_warning": warning,
+    }
+    if use_increase is not None:
+        payload["use_increase_for_velocity"] = use_increase
+    return payload
+
+
 def _normalize_water_hammer_members(
     members: List[Dict[str, object]],
     *,
@@ -1022,26 +1131,26 @@ def _normalize_water_hammer_members(
         if wave_speed is None or wave_speed <= 0:
             return [], "输入组合无效，无法计算水锤波速"
         direct_delta_h = wave_speed * float(velocity) / GRAVITY
-        normalized.append(
-            {
-                "key": str(member.get("key", member.get("member_key", f"member-{index + 1}")) or f"member-{index + 1}"),
-                "start_station_m": min(float(start_station), float(end_station)),
-                "end_station_m": max(float(start_station), float(end_station)),
-                "length_m": length,
-                "diameter_m": float(diameter),
-                "elastic_modulus_pa": float(elastic),
-                "velocity_mps": float(velocity),
-                "material_key": material_key,
-                "resolved_material_key": resolved_material,
-                "pipe_coefficient_cp": float(pipe_cp or 0.0),
-                "reinforcement_ratio_a0": resolved_a0,
-                "requires_reinforcement_ratio_a0": requires_a0,
-                "pipe_coefficient_note": cp_note,
-                "wave_speed_formula_source": WATER_HAMMER_WAVE_SPEED_FORMULA_SOURCE,
-                "a": wave_speed,
-                "delta_h": direct_delta_h,
-            }
-        )
+        normalized_item = {
+            "key": str(member.get("key", member.get("member_key", f"member-{index + 1}")) or f"member-{index + 1}"),
+            "start_station_m": min(float(start_station), float(end_station)),
+            "end_station_m": max(float(start_station), float(end_station)),
+            "length_m": length,
+            "diameter_m": float(diameter),
+            "elastic_modulus_pa": float(elastic),
+            "velocity_mps": float(velocity),
+            "material_key": material_key,
+            "resolved_material_key": resolved_material,
+            "pipe_coefficient_cp": float(pipe_cp or 0.0),
+            "reinforcement_ratio_a0": resolved_a0,
+            "requires_reinforcement_ratio_a0": requires_a0,
+            "pipe_coefficient_note": cp_note,
+            "wave_speed_formula_source": WATER_HAMMER_WAVE_SPEED_FORMULA_SOURCE,
+            "a": wave_speed,
+            "delta_h": direct_delta_h,
+        }
+        normalized_item.update(_copy_water_hammer_velocity_metadata(member))
+        normalized.append(normalized_item)
 
     if not normalized:
         return [], "缺少连续有压段成员"
@@ -1290,6 +1399,7 @@ def calc_distributed_water_hammer_check(
                         "length_m": member["length_m"],
                         "diameter_m": member["diameter_m"],
                         "velocity_mps": member["velocity_mps"],
+                        **_copy_water_hammer_velocity_metadata(member),
                         "a": member["a"],
                         "material_key": member.get("material_key", ""),
                         "resolved_material_key": member.get("resolved_material_key", ""),
@@ -1333,6 +1443,7 @@ def calc_distributed_water_hammer_check(
             "length_m": member["length_m"],
             "diameter_m": member["diameter_m"],
             "velocity_mps": member["velocity_mps"],
+            **_copy_water_hammer_velocity_metadata(member),
             "material_key": member.get("material_key", ""),
             "resolved_material_key": member.get("resolved_material_key", ""),
             "pipe_coefficient_cp": member.get("pipe_coefficient_cp"),
@@ -1457,6 +1568,7 @@ def calc_distributed_water_hammer_check(
                         "centerline_elevation_m": centerline_elevation,
                         "diameter_m": member["diameter_m"],
                         "velocity_mps": member["velocity_mps"],
+                        **_copy_water_hammer_velocity_metadata(member),
                         "a": member["a"],
                         "material_key": member.get("material_key", ""),
                         "resolved_material_key": member.get("resolved_material_key", ""),

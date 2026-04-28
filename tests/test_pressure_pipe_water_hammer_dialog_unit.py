@@ -33,6 +33,7 @@ from app_渠系计算前端.water_profile.water_hammer_export import (  # noqa: 
 import app_渠系计算前端.water_profile.water_profile_dialogs as dialogs_mod  # noqa: E402
 from 推求水面线.managers.pressure_pipe_manager import PressurePipeConfig, PressurePipeManager  # noqa: E402
 from 推求水面线.models.enums import StructureType  # noqa: E402
+from 推求水面线.core.pressure_pipe_calc import calc_pipe_velocity  # noqa: E402
 
 
 def _get_qapp():
@@ -99,14 +100,24 @@ def _make_route_group(
     end_mc: float = 10.0,
     diameter: float = 1.0,
     design_flow: float = 1.0,
+    increased_flow: float = 0.0,
+    use_increase: bool = True,
     material_key: str = "钢管",
     pipe_velocity: float = 1.0,
 ):
     """构造整线水锤测试用分组。"""
     row = SimpleNamespace(
         structure_type=StructureType.from_string(structure_type),
-        section_params={"D": diameter, "pipe_material": material_key},
+        section_params={
+            "D": diameter,
+            "pipe_material": material_key,
+            "use_increase": use_increase,
+            "Q_increased": increased_flow,
+        },
         flow=design_flow,
+        use_increase=use_increase,
+        Q_increased=increased_flow,
+        Q_max=increased_flow,
         water_level=100.0 + row_index,
     )
     group = SimpleNamespace(
@@ -129,6 +140,8 @@ def _make_route_group(
         segment_end_mc=end_mc,
         group_mode="unnamed_row_segment",
         design_flow=design_flow,
+        increased_flow=increased_flow,
+        use_increase=use_increase,
         diameter=diameter,
         material_key=material_key,
         ip_points=[{"x": start_mc, "y": 0.0}, {"x": end_mc, "y": 0.0}],
@@ -232,7 +245,10 @@ def test_dialog_prefills_and_persists_basic_water_hammer_inputs_and_results():
 
         widgets = dialog._card_widgets[group.storage_key]
         assert _read_float(widgets["water_hammer_length_edit"]) == pytest.approx(210.0)
-        assert _read_float(widgets["water_hammer_velocity_edit"]) == pytest.approx(1.34)
+        assert _read_float(widgets["water_hammer_velocity_edit"]) == pytest.approx(
+            calc_pipe_velocity(group.design_flow, group.diameter),
+            abs=1e-4,
+        )
         assert _read_float(widgets["water_hammer_head_edit"]) == pytest.approx(101.25)
         assert _read_float(widgets["water_hammer_elastic_modulus_edit"]) > 0
         assert _read_float(widgets["water_hammer_wall_thickness_edit"]) == pytest.approx(0.06)
@@ -276,6 +292,57 @@ def test_dialog_prefills_and_persists_basic_water_hammer_inputs_and_results():
 
         dialog.close()
         dialog_reopen.close()
+    finally:
+        shutil.rmtree(case_dir, ignore_errors=True)
+
+
+def test_basic_water_hammer_prefill_auto_velocity_overrides_saved_value():
+    """单管水锤重开时应按当前工况自动刷新v0，而不是沿用旧保存值。"""
+    _get_qapp()
+    case_dir = Path(tempfile.mkdtemp(prefix="wh_basic_velocity_"))
+    project_path = case_dir / "demo.qxproj"
+    group = _make_group()
+    group.design_flow = 1.0
+    group.increased_flow = 1.2
+    group.use_increase = True
+    group.diameter = 1.0
+    group.rows[0].section_params["D"] = 1.0
+    try:
+        manager = _make_manager(project_path, group)
+        cfg = manager.get_pipe_config(group.storage_key)
+        cfg.pipe_velocity = 0.5
+        cfg.water_hammer_basic = {
+            "inputs": {
+                "diameter_m": 1.0,
+                "velocity_mps": 0.5,
+                "wall_thickness_m": 0.02,
+                "closing_time_s": 0.2,
+            }
+        }
+        manager.set_pipe_config(group.storage_key, cfg)
+
+        dialog = PressurePipeWaterHammerDialog(pipe_groups=[group], manager=manager)
+        dialog.show()
+        _flush_events(6)
+        widgets = dialog._card_widgets[group.storage_key]
+        assert _read_float(widgets["water_hammer_velocity_edit"]) == pytest.approx(
+            calc_pipe_velocity(1.2, 1.0),
+            abs=1e-4,
+        )
+        dialog.close()
+
+        group.use_increase = False
+        group.rows[0].use_increase = False
+        group.rows[0].section_params["use_increase"] = False
+        dialog_design = PressurePipeWaterHammerDialog(pipe_groups=[group], manager=manager)
+        dialog_design.show()
+        _flush_events(6)
+        widgets_design = dialog_design._card_widgets[group.storage_key]
+        assert _read_float(widgets_design["water_hammer_velocity_edit"]) == pytest.approx(
+            calc_pipe_velocity(1.0, 1.0),
+            abs=1e-4,
+        )
+        dialog_design.close()
     finally:
         shutil.rmtree(case_dir, ignore_errors=True)
 
@@ -488,12 +555,64 @@ def test_route_water_hammer_mixed_params_show_member_table_without_representativ
             "管材",
             "E(N/m²)",
             "v0(m/s)",
+            "流速来源",
             "a0",
             "计算用途",
         ]
         assert member_table.item(0, 1).text() == "第1行"
         assert member_table.item(1, 1).text() == "第2行"
-        assert member_table.item(0, 10).text() == "参与整线水锤验算"
+        assert member_table.item(0, 11).text() == "参与整线水锤验算"
+    finally:
+        dialog.close()
+
+
+def test_route_water_hammer_members_use_increase_velocity_when_enabled():
+    """整线成员应按各自use_increase工况取水锤流速并参与等价速度加权。"""
+    groups = [
+        _make_route_group(
+            "pipe-a",
+            0,
+            "有压管道",
+            start_mc=0.0,
+            end_mc=10.0,
+            diameter=1.0,
+            design_flow=1.0,
+            increased_flow=1.3,
+            use_increase=True,
+            pipe_velocity=0.2,
+        ),
+        _make_route_group(
+            "pipe-b",
+            1,
+            "有压管道",
+            start_mc=10.0,
+            end_mc=30.0,
+            diameter=1.0,
+            design_flow=0.8,
+            increased_flow=1.6,
+            use_increase=False,
+            pipe_velocity=0.2,
+        ),
+    ]
+
+    dialog = _make_route_dialog(groups)
+    try:
+        widgets = dialog._route_widgets["flow1-route1"]["water_hammer_segment_widgets"][0]
+        members = dialog._build_route_water_hammer_distribution_members(widgets["segment_key"])
+
+        expected_a = calc_pipe_velocity(1.3, 1.0)
+        expected_b = calc_pipe_velocity(0.8, 1.0)
+        assert members[0]["velocity_mps"] == pytest.approx(expected_a)
+        assert members[0]["velocity_source"] == "加大流量"
+        assert members[1]["velocity_mps"] == pytest.approx(expected_b)
+        assert members[1]["velocity_source"] == "设计流量"
+
+        _set_route_profile_and_water_levels(dialog, groups, centerline_elevation=90.0, water_level=110.0)
+        widgets["water_hammer_closing_time_edit"].setText("0.01")
+        dialog._calculate_route_water_hammer_segment(widgets["segment_key"])
+        result = widgets["water_hammer_result"]
+        expected_equivalent = (10.0 * expected_a + 20.0 * expected_b) / 30.0
+        assert result["equivalent_velocity_mps"] == pytest.approx(expected_equivalent)
     finally:
         dialog.close()
 
@@ -751,7 +870,10 @@ def test_route_water_hammer_excel_exports_summary_and_calculated_segment_details
         assert detail.cell(row=1, column=22).value == "控制来源"
         assert str(detail.cell(row=2, column=2).value or "").startswith("pipe-a")
         assert detail.cell(row=2, column=3).value == pytest.approx(1.0)
-        assert detail.cell(row=2, column=4).value == pytest.approx(1.0)
+        assert detail.cell(row=2, column=4).value == pytest.approx(calc_pipe_velocity(1.0, 1.0), rel=1e-4)
+        assert detail.cell(row=1, column=27).value == "流速来源"
+        assert detail.cell(row=1, column=28).value == "采用流量(m³/s)"
+        assert detail.cell(row=2, column=27).value == "设计流量"
         assert detail.cell(row=2, column=5).value > 0
         assert detail.cell(row=2, column=6).value == pytest.approx(1.0)
         assert detail.cell(row=2, column=7).value is None
@@ -985,7 +1107,16 @@ def test_route_water_hammer_distribution_check_shows_pass_and_detail_rows():
     """整线水锤验算应按管顶余量判定通过并展示全线采样明细。"""
     groups = [
         _make_route_group("pipe-a", 0, "有压管道", start_mc=0.0, end_mc=10.0, diameter=1.0),
-        _make_route_group("pipe-b", 1, "有压管道", start_mc=10.0, end_mc=20.0, diameter=0.5, pipe_velocity=2.0),
+        _make_route_group(
+            "pipe-b",
+            1,
+            "有压管道",
+            start_mc=10.0,
+            end_mc=20.0,
+            diameter=0.5,
+            design_flow=0.392699,
+            pipe_velocity=2.0,
+        ),
     ]
 
     dialog = _make_route_dialog(groups)
@@ -1026,7 +1157,10 @@ def test_route_water_hammer_distribution_check_shows_pass_and_detail_rows():
         assert headers[25] == "图1-3-3对照"
         assert widgets["water_hammer_detail_table"].item(0, 1).text().startswith("pipe-a")
         assert _read_float(widgets["water_hammer_detail_table"].item(0, 2)) == pytest.approx(1.0)
-        assert _read_float(widgets["water_hammer_detail_table"].item(0, 3)) == pytest.approx(1.0)
+        assert _read_float(widgets["water_hammer_detail_table"].item(0, 3)) == pytest.approx(
+            calc_pipe_velocity(1.0, 1.0),
+            abs=1e-3,
+        )
         assert _read_float(widgets["water_hammer_detail_table"].item(0, 4)) > 0
         assert _read_float(widgets["water_hammer_detail_table"].item(0, 5)) == pytest.approx(1.0)
         assert _read_float(widgets["water_hammer_detail_table"].item(0, 11)) > 0

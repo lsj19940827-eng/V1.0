@@ -42,6 +42,8 @@ class PressurePipeGroup:
     
     # ========== 管道参数 ==========
     design_flow: float = 0.0                    # 设计流量 Q（m³/s）
+    use_increase: bool = True                   # 是否采用加大流量工况
+    increased_flow: float = 0.0                 # 加大流量 Q加大（m³/s）
     diameter: float = 0.0                       # 管径 D（m）
     material_key: str = ""                      # 管材键名
     local_loss_ratio: float = 0.15              # 局部损失比例（简化模式用）
@@ -960,6 +962,7 @@ class PressurePipeDataExtractor:
     @staticmethod
     def _finalize_named_pressure_group(group: PressurePipeGroup, nodes: List[ChannelNode], settings=None):
         """收口连续命名段，补齐推断字段和身份键。"""
+        first_node = group.rows[0] if group.rows else None
         if group.inlet_row_index < 0 and len(group.row_indices) >= 2:
             group.inlet_row_index = group.row_indices[0]
             first_node = group.rows[0]
@@ -971,6 +974,7 @@ class PressurePipeDataExtractor:
         if group.outlet_row_index < 0 and len(group.row_indices) >= 2:
             group.outlet_row_index = group.row_indices[-1]
 
+        PressurePipeDataExtractor._apply_group_water_hammer_flow_context(group, first_node, settings=settings)
         PressurePipeDataExtractor._extract_ip_points(group)
         PressurePipeDataExtractor._calc_turn_angles(group)
         PressurePipeDataExtractor._calc_plan_segments(group)
@@ -1682,6 +1686,7 @@ class PressurePipeDataExtractor:
         if len(ip_points) >= 2:
             PressurePipeDataExtractor._calc_plan_segments(group)
 
+        PressurePipeDataExtractor._apply_group_water_hammer_flow_context(group, node, settings=settings)
         PressurePipeDataExtractor._extract_adjacent_node_data_for_unnamed_segment(group, nodes)
         if settings is not None:
             PressurePipeDataExtractor._extract_transition_forms(group, settings)
@@ -1732,6 +1737,7 @@ class PressurePipeDataExtractor:
         if len(ip_points) >= 2:
             PressurePipeDataExtractor._calc_plan_segments(group)
 
+        PressurePipeDataExtractor._apply_group_water_hammer_flow_context(group, node, settings=settings)
         PressurePipeDataExtractor._extract_adjacent_node_data_for_unnamed_segment(group, nodes)
         if settings is not None:
             PressurePipeDataExtractor._extract_transition_forms(group, settings)
@@ -1839,6 +1845,7 @@ class PressurePipeDataExtractor:
         if len(ip_points) >= 2:
             PressurePipeDataExtractor._calc_plan_segments(group)
 
+        PressurePipeDataExtractor._apply_group_water_hammer_flow_context(group, target_node, settings=settings)
         PressurePipeDataExtractor._extract_adjacent_node_data_for_unnamed_segment(group, nodes)
         if settings is not None:
             PressurePipeDataExtractor._extract_transition_forms(group, settings)
@@ -2197,6 +2204,102 @@ class PressurePipeDataExtractor:
         if math.isnan(number) or math.isinf(number):
             return default
         return number
+
+    @staticmethod
+    def _safe_positive_float(value, default: float = 0.0) -> float:
+        """将任意值安全转成正数，非正数按默认值处理。"""
+        number = PressurePipeDataExtractor._safe_float(value, default=default)
+        return number if number > 0 else default
+
+    @staticmethod
+    def _normalize_use_increase_flag(value, default: bool = True) -> bool:
+        """解析是否考虑加大流量的开关值。"""
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"0", "false", "否", "不", "不考虑", "未勾选", "no", "n", "off"}:
+            return False
+        if text in {"1", "true", "是", "考虑", "勾选", "yes", "y", "on"}:
+            return True
+        return bool(default)
+
+    @staticmethod
+    def _resolve_node_use_increase(node: Optional[ChannelNode], default: bool = True) -> bool:
+        """从节点和断面参数读取加大流量开关。"""
+        if node is None:
+            return bool(default)
+        params = getattr(node, "section_params", {}) or {}
+        value = getattr(node, "use_increase", None)
+        if value is None and isinstance(params, dict):
+            value = params.get("use_increase", default)
+        return PressurePipeDataExtractor._normalize_use_increase_flag(value, default=default)
+
+    @staticmethod
+    def _resolve_node_flow_segment(node: Optional[ChannelNode]) -> int:
+        """解析节点所属流量段编号。"""
+        flow_section = str(getattr(node, "flow_section", "") if node is not None else "").strip()
+        try:
+            segment = int(float(flow_section))
+        except (TypeError, ValueError):
+            segment = 1
+        return max(1, segment)
+
+    @staticmethod
+    def _resolve_node_increased_flow(
+        node: Optional[ChannelNode],
+        settings=None,
+    ) -> float:
+        """从节点结果和项目设置读取当前流量段的Q加大。"""
+        params = getattr(node, "section_params", {}) or {}
+        params = params if isinstance(params, dict) else {}
+        for key in ("Q_increased", "Q_max", "Q_inc", "max_flow", "加大流量", "Q加大"):
+            value = getattr(node, key, None) if node is not None else None
+            number = PressurePipeDataExtractor._safe_positive_float(value, default=0.0)
+            if number > 0:
+                return number
+            number = PressurePipeDataExtractor._safe_positive_float(params.get(key), default=0.0)
+            if number > 0:
+                return number
+        if settings is not None:
+            get_flow_for_segment = getattr(settings, "get_flow_for_segment", None)
+            if callable(get_flow_for_segment):
+                try:
+                    _design_q, max_q = get_flow_for_segment(
+                        PressurePipeDataExtractor._resolve_node_flow_segment(node)
+                    )
+                    number = PressurePipeDataExtractor._safe_positive_float(max_q, default=0.0)
+                    if number > 0:
+                        return number
+                except Exception:
+                    pass
+            max_flows = list(getattr(settings, "max_flows", []) or [])
+            segment = PressurePipeDataExtractor._resolve_node_flow_segment(node)
+            if 1 <= segment <= len(max_flows):
+                number = PressurePipeDataExtractor._safe_positive_float(max_flows[segment - 1], default=0.0)
+                if number > 0:
+                    return number
+            number = PressurePipeDataExtractor._safe_positive_float(getattr(settings, "max_flow", 0.0), default=0.0)
+            if number > 0:
+                return number
+        return 0.0
+
+    @staticmethod
+    def _apply_group_water_hammer_flow_context(
+        group: PressurePipeGroup,
+        node: Optional[ChannelNode],
+        settings=None,
+    ):
+        """给有压分组补齐水锤流速需要的设计/加大流量工况。"""
+        if group is None:
+            return
+        if node is not None:
+            node_flow = PressurePipeDataExtractor._safe_positive_float(getattr(node, "flow", 0.0), default=0.0)
+            if node_flow > 0:
+                group.design_flow = node_flow
+        group.use_increase = PressurePipeDataExtractor._resolve_node_use_increase(node, default=True)
+        group.increased_flow = PressurePipeDataExtractor._resolve_node_increased_flow(node, settings=settings)
 
     @staticmethod
     def _merge_index_min(current, candidate) -> int:
