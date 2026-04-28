@@ -13,40 +13,39 @@ from tools import patch_builder
 
 def test_select_universal_patch_manifest_files_applies_floor():
     manifest_files = [
-        "manifest-V1.1.8.json",
-        "manifest-V1.1.9.json",
-        "manifest-V1.2.0.json",
-        "manifest-V1.2.1.json",
-        "manifest-V1.2.2.json",
-        "manifest-V1.2.2.1.json",
+        "manifest-V1.2.9.json",
+        "manifest-V1.3.0.json",
+        "manifest-V1.3.1.json",
+        "manifest-V1.3.2.json",
+        "manifest-V1.3.3.json",
     ]
 
     selected = build._select_universal_patch_manifest_files(
         manifest_files,
-        current_version="1.2.2",
+        current_version="1.3.3",
     )
 
     assert selected == [
-        "manifest-V1.1.9.json",
-        "manifest-V1.2.0.json",
-        "manifest-V1.2.1.json",
+        "manifest-V1.3.0.json",
+        "manifest-V1.3.1.json",
+        "manifest-V1.3.2.json",
     ]
 
 
 def test_select_universal_patch_manifest_files_excludes_current_and_future():
     manifest_files = [
-        "manifest-V1.1.8.json",
-        "manifest-V1.1.9.json",
-        "manifest-V1.2.2.json",
-        "manifest-V1.2.3.json",
+        "manifest-V1.2.9.json",
+        "manifest-V1.3.0.json",
+        "manifest-V1.3.3.json",
+        "manifest-V1.3.4.json",
     ]
 
     selected = build._select_universal_patch_manifest_files(
         manifest_files,
-        current_version="1.2.2",
+        current_version="1.3.3",
     )
 
-    assert selected == ["manifest-V1.1.9.json"]
+    assert selected == ["manifest-V1.3.0.json"]
 
 
 def test_should_skip_universal_patch_when_deleted_files_too_many():

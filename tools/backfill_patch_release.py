@@ -25,7 +25,7 @@ from repo_config import GIST_ID, GITHUB_OWNER, GITHUB_REPO
 from tools import patch_builder, release, release_snapshot
 from version import APP_NAME_EN, APP_VERSION
 
-DEFAULT_BASE_VERSION = "1.2.9"
+DEFAULT_BASE_VERSION = "1.3.0"
 
 
 def _patch_zip_path(dist_dir: str, target_version: str) -> str:
@@ -301,7 +301,7 @@ def main():
     parser.add_argument(
         "--base-version",
         default=DEFAULT_BASE_VERSION,
-        help="补丁覆盖的旧版本下限，默认 1.2.9",
+        help="补丁覆盖的旧版本下限，默认 1.3.0",
     )
     parser.add_argument(
         "--snapshot-root",

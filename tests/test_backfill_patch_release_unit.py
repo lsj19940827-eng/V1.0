@@ -64,7 +64,7 @@ def _write_snapshot(
 def test_resolve_snapshot_inputs_only_uses_requested_base_version(tmp_path):
     """回补补丁时只应读取指定旧版本和目标版本的快照 manifest。"""
     snapshot_root = tmp_path / "snapshots"
-    for version in ("1.2.7", "1.2.8", "1.2.9", "1.3.0"):
+    for version in ("1.2.8", "1.2.9", "1.3.0", "1.3.4"):
         full_zip = _make_full_zip(
             tmp_path / f"CanalHydraulicCalc-V{version}.zip",
             version,
@@ -79,14 +79,14 @@ def test_resolve_snapshot_inputs_only_uses_requested_base_version(tmp_path):
 
     inputs = backfill_patch_release._resolve_snapshot_inputs(
         snapshot_root=str(snapshot_root),
-        target_version="1.3.0",
-        base_version="1.2.9",
+        target_version="1.3.4",
+        base_version="1.3.0",
         download_dir=str(tmp_path / "download"),
     )
 
-    assert Path(inputs["base_manifest_path"]).as_posix().endswith("v1.2.9/manifest.json")
-    assert Path(inputs["target_manifest_path"]).as_posix().endswith("v1.3.0/manifest.json")
-    assert Path(inputs["full_zip_path"]).name == "CanalHydraulicCalc-V1.3.0.zip"
+    assert Path(inputs["base_manifest_path"]).as_posix().endswith("v1.3.0/manifest.json")
+    assert Path(inputs["target_manifest_path"]).as_posix().endswith("v1.3.4/manifest.json")
+    assert Path(inputs["full_zip_path"]).name == "CanalHydraulicCalc-V1.3.4.zip"
 
 
 def test_prepare_backfill_patch_artifacts_writes_release_compatible_patch_info(tmp_path):
@@ -99,14 +99,14 @@ def test_prepare_backfill_patch_artifacts_writes_release_compatible_patch_info(t
     (target_dir / "keep.txt").write_text("new-content", encoding="utf-8")
     (target_dir / "new.txt").write_text("brand-new", encoding="utf-8")
 
-    new_manifest = patch_builder.generate_manifest(str(target_dir), version="1.3.0")
+    new_manifest = patch_builder.generate_manifest(str(target_dir), version="1.3.4")
     _write_snapshot(
         snapshot_root,
-        version="1.3.0",
+        version="1.3.4",
         manifest_payload=new_manifest,
         full_zip_path=_make_full_zip(
-            dist_dir / "CanalHydraulicCalc-V1.3.0.zip",
-            "1.3.0",
+            dist_dir / "CanalHydraulicCalc-V1.3.4.zip",
+            "1.3.4",
             {
                 "keep.txt": "new-content",
                 "new.txt": "brand-new",
@@ -115,37 +115,37 @@ def test_prepare_backfill_patch_artifacts_writes_release_compatible_patch_info(t
     )
     _write_snapshot(
         snapshot_root,
-        version="1.2.9",
+        version="1.3.0",
         manifest_payload={
-            "version": "1.2.9",
+            "version": "1.3.0",
             "files": {
                 "keep.txt": "old-hash-keep",
             },
         },
         full_zip_path=_make_full_zip(
-            tmp_path / "CanalHydraulicCalc-V1.2.9.zip",
-            "1.2.9",
+            tmp_path / "CanalHydraulicCalc-V1.3.0.zip",
+            "1.3.0",
             {"keep.txt": "old-content"},
         ),
     )
 
     artifacts = backfill_patch_release.prepare_backfill_patch_artifacts(
-        target_version="1.3.0",
-        base_version="1.2.9",
+        target_version="1.3.4",
+        base_version="1.3.0",
         dist_dir=str(dist_dir),
         snapshot_root=str(snapshot_root),
     )
 
-    assert Path(artifacts["patch_zip"]).name == "CanalHydraulicCalc-V1.3.0-patch.zip"
-    assert artifacts["patch_info"]["min_version"] == "1.2.9"
-    assert artifacts["patch_info"]["patch_name"] == "CanalHydraulicCalc-V1.3.0-patch.zip"
+    assert Path(artifacts["patch_zip"]).name == "CanalHydraulicCalc-V1.3.4-patch.zip"
+    assert artifacts["patch_info"]["min_version"] == "1.3.0"
+    assert artifacts["patch_info"]["patch_name"] == "CanalHydraulicCalc-V1.3.4-patch.zip"
     assert artifacts["patch_result"]["deleted_count"] == 0
-    assert artifacts["target_snapshot"]["version"] == "1.3.0"
+    assert artifacts["target_snapshot"]["version"] == "1.3.4"
 
     patch_manifest = json.loads(
         zipfile.ZipFile(artifacts["patch_zip"], "r").read("patch_manifest.json").decode("utf-8")
     )
-    assert patch_manifest["min_version"] == "1.2.9"
+    assert patch_manifest["min_version"] == "1.3.0"
     assert patch_manifest["included_files"] == ["keep.txt", "new.txt"]
     assert patch_manifest["allowed_source_hashes"]["keep.txt"] == ["old-hash-keep"]
     assert patch_manifest["allowed_source_hashes"]["new.txt"] == [
@@ -155,10 +155,10 @@ def test_prepare_backfill_patch_artifacts_writes_release_compatible_patch_info(t
 
 def test_build_backfilled_version_data_preserves_full_package_fields(tmp_path):
     """回补 Gist 时只补补丁字段，不改原有全量包字段。"""
-    patch_zip = tmp_path / "CanalHydraulicCalc-V1.3.0-patch.zip"
+    patch_zip = tmp_path / "CanalHydraulicCalc-V1.3.4-patch.zip"
     patch_zip.write_bytes(b"patch-data")
     existing = {
-        "latest_version": "1.3.0",
+        "latest_version": "1.3.4",
         "download_url": "https://example.com/full.zip",
         "download_url_direct": "https://example.com/full.zip",
         "download_url_proxy": "https://proxy.example/full.zip",
@@ -174,7 +174,7 @@ def test_build_backfilled_version_data_preserves_full_package_fields(tmp_path):
         patch_url_direct="https://github.com/example/patch.zip",
         patch_zip_path=str(patch_zip),
         patch_size_mb=5.4,
-        min_patch_version="1.2.9",
+        min_patch_version="1.3.0",
     )
 
     assert merged["download_url"] == existing["download_url"]
@@ -188,13 +188,13 @@ def test_build_backfilled_version_data_preserves_full_package_fields(tmp_path):
     )
     assert merged["patch_size_mb"] == 5.4
     assert merged["patch_sha256"] == release_snapshot.sha256_file(str(patch_zip))
-    assert merged["min_patch_version"] == "1.2.9"
-    assert merged["patch_base_version"] == "1.2.9"
+    assert merged["min_patch_version"] == "1.3.0"
+    assert merged["patch_base_version"] == "1.3.0"
 
 
 def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, tmp_path):
     """主流程应补挂 patch 资产，并只补齐 Gist 的 patch 字段。"""
-    patch_zip = tmp_path / "CanalHydraulicCalc-V1.3.0-patch.zip"
+    patch_zip = tmp_path / "CanalHydraulicCalc-V1.3.4-patch.zip"
     patch_zip.write_bytes(b"patch-data")
     captured = {
         "deleted_urls": [],
@@ -202,7 +202,7 @@ def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, t
         "uploaded": None,
     }
     existing_version_data = {
-        "latest_version": "1.3.0",
+        "latest_version": "1.3.4",
         "download_url": "https://example.com/full.zip",
         "download_url_direct": "https://example.com/full.zip",
         "download_url_proxy": "https://proxy.example/full.zip",
@@ -221,13 +221,13 @@ def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, t
             "patch_info_path": str(tmp_path / "patch-info.json"),
             "patch_info": {
                 "size_mb": 5.4,
-                "min_version": "1.2.9",
+                "min_version": "1.3.0",
                 "patch_name": patch_zip.name,
             },
             "patch_result": {
                 "changed_count": 7,
                 "deleted_count": 0,
-                "min_version": "1.2.9",
+                "min_version": "1.3.0",
             },
         },
     )
@@ -237,13 +237,13 @@ def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, t
         assert token == "token"
         if method == "GET" and url == "https://api.github.com/user":
             return {"login": "tester"}
-        if method == "GET" and url.endswith("/releases/tags/v1.3.0"):
+        if method == "GET" and url.endswith("/releases/tags/v1.3.4"):
             return {
                 "upload_url": "https://uploads.github.com/repos/example/releases/1/assets{?name,label}",
-                "html_url": "https://github.com/example/release/v1.3.0",
+                "html_url": "https://github.com/example/release/v1.3.4",
                 "assets": [
                     {
-                        "name": "CanalHydraulicCalc-V1.3.0-patch.zip",
+                        "name": "CanalHydraulicCalc-V1.3.4-patch.zip",
                         "id": 101,
                     }
                 ],
@@ -276,8 +276,8 @@ def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, t
     )
 
     result = backfill_patch_release.backfill_patch_release(
-        target_version="1.3.0",
-        base_version="1.2.9",
+        target_version="1.3.4",
+        base_version="1.3.0",
     )
 
     assert captured["deleted_urls"] == [
@@ -294,7 +294,7 @@ def test_backfill_patch_release_updates_existing_release_and_gist(monkeypatch, t
     assert patched_content["download_url"] == existing_version_data["download_url"]
     assert patched_content["patch_url"] == "https://github.com/example/patch.zip"
     assert patched_content["patch_sha256"] == release_snapshot.sha256_file(str(patch_zip))
-    assert patched_content["min_patch_version"] == "1.2.9"
+    assert patched_content["min_patch_version"] == "1.3.0"
     assert result["patch_url_direct"] == "https://github.com/example/patch.zip"
 
 
@@ -303,7 +303,7 @@ def test_backfill_patch_release_stops_before_upload_when_gist_version_mismatched
     tmp_path,
 ):
     """Gist 最新版本不匹配时，应在上传前直接停止。"""
-    patch_zip = tmp_path / "CanalHydraulicCalc-V1.3.0-patch.zip"
+    patch_zip = tmp_path / "CanalHydraulicCalc-V1.3.4-patch.zip"
     patch_zip.write_bytes(b"patch-data")
     calls = {
         "uploaded": False,
@@ -318,13 +318,13 @@ def test_backfill_patch_release_stops_before_upload_when_gist_version_mismatched
             "patch_info_path": str(tmp_path / "patch-info.json"),
             "patch_info": {
                 "size_mb": 5.4,
-                "min_version": "1.2.9",
+                "min_version": "1.3.0",
                 "patch_name": patch_zip.name,
             },
             "patch_result": {
                 "changed_count": 7,
                 "deleted_count": 0,
-                "min_version": "1.2.9",
+                "min_version": "1.3.0",
             },
         },
     )
@@ -340,7 +340,7 @@ def test_backfill_patch_release_stops_before_upload_when_gist_version_mismatched
                     "version.json": {
                         "content": json.dumps(
                             {
-                                "latest_version": "1.3.1",
+                                "latest_version": "1.3.5",
                                 "download_url": "https://example.com/full.zip",
                             },
                             ensure_ascii=False,
@@ -348,7 +348,7 @@ def test_backfill_patch_release_stops_before_upload_when_gist_version_mismatched
                     }
                 }
             }
-        if method == "GET" and url.endswith("/releases/tags/v1.3.0"):
+        if method == "GET" and url.endswith("/releases/tags/v1.3.4"):
             return {
                 "upload_url": "https://uploads.github.com/repos/example/releases/1/assets{?name,label}",
                 "html_url": "https://github.com/example/release/v1.3.0",
@@ -370,10 +370,10 @@ def test_backfill_patch_release_stops_before_upload_when_gist_version_mismatched
 
     with pytest.raises(RuntimeError) as exc_info:
         backfill_patch_release.backfill_patch_release(
-            target_version="1.3.0",
-            base_version="1.2.9",
+            target_version="1.3.4",
+            base_version="1.3.0",
         )
 
-    assert "latest_version=1.3.1" in str(exc_info.value)
+    assert "latest_version=1.3.5" in str(exc_info.value)
     assert calls["deleted"] is False
     assert calls["uploaded"] is False

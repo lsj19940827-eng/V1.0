@@ -20,8 +20,8 @@ def test_strip_patch_fields_removes_patch_related_entries():
         "patch_url_direct": "https://example.com/patch.zip",
         "patch_url_proxy": "https://proxy.example/patch.zip",
         "patch_size_mb": 72.74,
-        "patch_base_version": "1.2.9",
-        "min_patch_version": "1.2.9",
+        "patch_base_version": "1.3.0",
+        "min_patch_version": "1.3.0",
         "patch_sha256": "patch-sha256",
     }
 
@@ -85,7 +85,7 @@ def test_build_version_data_includes_package_checksums(tmp_path):
         "full_zip": str(full_zip),
         "patch_zip": str(patch_zip),
         "patch_size_mb": 72.74,
-        "patch_min_version": "1.2.9",
+        "patch_min_version": "1.3.0",
     }
     urls = {
         "download_url": "https://example.com/full.zip",

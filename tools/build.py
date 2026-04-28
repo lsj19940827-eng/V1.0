@@ -32,7 +32,7 @@ from update_artifact_rules import is_runtime_artifact
 from version import APP_VERSION, APP_NAME, APP_NAME_EN
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
-UNIVERSAL_PATCH_MIN_VERSION = "1.1.9"
+UNIVERSAL_PATCH_MIN_VERSION = "1.3.0"
 MAX_PATCH_DELETED_COUNT = 100
 MAX_PATCH_TOTAL_COVERAGE = 300
 MAX_PATCH_SIZE_MB = 64.0

@@ -133,8 +133,8 @@ def test_update_helper_expands_failure_window_to_keep_stage_lines_readable(monke
 def test_update_helper_shows_patch_validation_progress_text(monkeypatch):
     _get_qapp()
     fake_session = SimpleNamespace(
-        current_version="1.1.9",
-        target_version="1.2.2",
+        current_version="1.3.0",
+        target_version="1.3.4",
         work_dir="C:/temp/update-work",
         log_dir="C:/temp/update-logs",
     )
