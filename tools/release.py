@@ -38,7 +38,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from version import APP_NAME_EN
 from repo_config import GITHUB_OWNER, GITHUB_REPO, GIST_ID, DOWNLOAD_PROXIES
-from tools import release_snapshot
+from tools import patch_policy, release_snapshot
 
 
 def _proxied_url(url: str) -> str:
@@ -113,6 +113,9 @@ def _load_universal_patch(dist_dir: str, version: str) -> dict:
                         "file_path": path,
                         "min_version": min_version,
                         "size_mb": round(os.path.getsize(path) / (1024 * 1024), 2),
+                        "changed_count": patch_info.get("changed_count", 0),
+                        "deleted_count": patch_info.get("deleted_count", 0),
+                        "source_versions": patch_info.get("source_versions", []),
                     }
         except Exception as exc:
             print(f"  [patch] 解析 patch-info.json 失败: {exc}")
@@ -129,7 +132,10 @@ def _load_universal_patch(dist_dir: str, version: str) -> dict:
 
 def _build_version_data(version: str, urls: dict, assets: dict, changelog: str) -> dict:
     """统一构造正式通道 version.json 内容。"""
-    full_size = os.path.getsize(assets["full_zip"]) / (1024 * 1024)
+    full_size = float(
+        assets.get("full_size_mb")
+        or (os.path.getsize(assets["full_zip"]) / (1024 * 1024))
+    )
     download_url_direct = urls.get("download_url", "")
     version_data = {
         "latest_version": version,
@@ -145,6 +151,18 @@ def _build_version_data(version: str, urls: dict, assets: dict, changelog: str) 
     }
     patch_zip = assets.get("patch_zip", "")
     if "patch_url" in urls and patch_zip and os.path.exists(patch_zip):
+        should_skip_patch, skip_reason = patch_policy.should_skip_universal_patch(
+            {
+                "changed_count": assets.get("patch_changed_count", 0),
+                "deleted_count": assets.get("patch_deleted_count", 0),
+                "size_mb": assets.get("patch_size_mb", 0),
+                "source_versions": assets.get("patch_source_versions", []),
+            },
+            full_size_mb=full_size,
+        )
+        if should_skip_patch:
+            print(f"  [patch] 不写入 version.json：{skip_reason}")
+            return version_data
         patch_url_direct = urls["patch_url"]
         version_data["patch_url"] = patch_url_direct
         version_data["patch_url_direct"] = patch_url_direct
@@ -256,6 +274,7 @@ def step_build() -> dict:
 
     assets = {
         "full_zip": full_zip,
+        "full_size_mb": os.path.getsize(full_zip) / (1024 * 1024),
         "manifest_path": os.path.join(dist_dir, f"manifest-V{app_version}.json"),
     }
     patch_info = _load_universal_patch(dist_dir, app_version)
@@ -263,6 +282,9 @@ def step_build() -> dict:
         assets["patch_zip"] = patch_info["file_path"]
         assets["patch_min_version"] = patch_info.get("min_version", "")
         assets["patch_size_mb"] = patch_info.get("size_mb", 0)
+        assets["patch_changed_count"] = patch_info.get("changed_count", 0)
+        assets["patch_deleted_count"] = patch_info.get("deleted_count", 0)
+        assets["patch_source_versions"] = patch_info.get("source_versions", [])
         min_ver = patch_info.get("min_version") or "?"
         print(f"  [patch] 通用补丁包: {os.path.basename(patch_info['file_path'])}")
         print(f"  [patch] 覆盖范围: V{min_ver}+ -> V{app_version} ({patch_info['size_mb']:.2f} MB)")
@@ -326,7 +348,19 @@ def step_upload_assets(release: dict, assets: dict, token: str) -> dict:
     upload_url = release.get("upload_url", "")
     urls = {"download_url": _upload_release_asset(upload_url, assets["full_zip"], token)}
     if "patch_zip" in assets and os.path.exists(assets["patch_zip"]):
-        urls["patch_url"] = _upload_release_asset(upload_url, assets["patch_zip"], token)
+        should_skip_patch, skip_reason = patch_policy.should_skip_universal_patch(
+            {
+                "changed_count": assets.get("patch_changed_count", 0),
+                "deleted_count": assets.get("patch_deleted_count", 0),
+                "size_mb": assets.get("patch_size_mb", 0),
+                "source_versions": assets.get("patch_source_versions", []),
+            },
+            full_size_mb=assets.get("full_size_mb", 0),
+        )
+        if should_skip_patch:
+            print(f"  [patch] 跳过上传通用补丁包：{skip_reason}")
+        else:
+            urls["patch_url"] = _upload_release_asset(upload_url, assets["patch_zip"], token)
     return urls
 
 
@@ -400,7 +434,7 @@ def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: 
         full_download_url=urls.get("download_url", ""),
         version_data=version_data,
         manifest_path=assets.get("manifest_path", ""),
-        patch_zip_path=assets.get("patch_zip", ""),
+        patch_zip_path=assets.get("patch_zip", "") if urls.get("patch_url") else "",
         patch_download_url=urls.get("patch_url", ""),
     )
     print(f"  - 发布快照: {snapshot_file}")

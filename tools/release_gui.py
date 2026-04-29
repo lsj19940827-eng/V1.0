@@ -55,6 +55,7 @@ from version import APP_VERSION, APP_NAME, APP_NAME_EN
 from repo_config import (
     GITHUB_OWNER, GITHUB_REPO, GIST_ID, DOWNLOAD_PROXIES,
 )
+from tools import patch_policy, release_snapshot
 
 # ---- 样式常量 ----
 P = "#1976D2"
@@ -138,6 +139,9 @@ def _load_universal_patch(dist_dir: str, version: str) -> dict:
                         "file_path": path,
                         "min_version": min_version,
                         "size_mb": round(os.path.getsize(path) / (1024 * 1024), 2),
+                        "changed_count": patch_info.get("changed_count", 0),
+                        "deleted_count": patch_info.get("deleted_count", 0),
+                        "source_versions": patch_info.get("source_versions", []),
                     }
         except Exception:
             pass
@@ -250,10 +254,16 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
         patch_zip = ""
         patch_min_version = ""
         patch_size_mb = 0
+        patch_changed_count = 0
+        patch_deleted_count = 0
+        patch_source_versions = []
         if patch_info and patch_info.get("file_path"):
             patch_zip = patch_info["file_path"]
             patch_min_version = patch_info.get("min_version", "")
             patch_size_mb = patch_info.get("size_mb", 0)
+            patch_changed_count = patch_info.get("changed_count", 0)
+            patch_deleted_count = patch_info.get("deleted_count", 0)
+            patch_source_versions = patch_info.get("source_versions", [])
             min_ver = patch_min_version or "?"
             log(f"通用补丁包: V{min_ver}+ -> V{new_ver} ({patch_size_mb:.2f} MB)", S)
 
@@ -315,9 +325,21 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
 
         patch_download_url = ""
         if patch_zip and os.path.exists(patch_zip):
-            log(f"上传通用补丁包 ({patch_size_mb:.2f} MB)...")
-            patch_download_url = _upload_release_asset(upload_url, patch_zip, token, bridge)
-            log(f"补丁包上传完成", S)
+            should_skip_patch, skip_reason = patch_policy.should_skip_universal_patch(
+                {
+                    "changed_count": patch_changed_count,
+                    "deleted_count": patch_deleted_count,
+                    "size_mb": patch_size_mb,
+                    "source_versions": patch_source_versions,
+                },
+                full_size_mb=full_mb,
+            )
+            if should_skip_patch:
+                log(f"跳过通用补丁包：{skip_reason}")
+            else:
+                log(f"上传通用补丁包 ({patch_size_mb:.2f} MB)...")
+                patch_download_url = _upload_release_asset(upload_url, patch_zip, token, bridge)
+                log(f"补丁包上传完成", S)
 
         set_step(5, "done")
 
@@ -328,6 +350,7 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
             "download_url": download_url,
             "download_url_direct": download_url,
             "download_url_proxy": _proxied_url(download_url),
+            "download_sha256": release_snapshot.sha256_file(full_zip),
             "changelog": changelog or f"V{new_ver} 版本发布",
             "release_date": date.today().isoformat(),
             "min_version": "1.0.0",
@@ -342,6 +365,7 @@ def _run_release(level: str, changelog: str, bridge: SignalBridge):
             version_json["min_patch_version"] = patch_min_version
             # 兼容旧客户端（V1.0.6-）
             version_json["patch_base_version"] = patch_min_version
+            version_json["patch_sha256"] = release_snapshot.sha256_file(patch_zip)
 
         gist_url = f"https://api.github.com/gists/{GIST_ID}"
         gist_data = {

@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 import sys
 import zipfile
-import tempfile
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -84,29 +83,41 @@ def test_should_keep_universal_patch_when_coverage_is_small():
     assert reason == ""
 
 
-def test_should_skip_universal_patch_when_archive_is_too_large():
+def test_should_keep_universal_patch_when_archive_over_64mb_but_smaller_than_full_package():
     should_skip, reason = build._should_skip_universal_patch(
         {
             "changed_count": 7,
             "deleted_count": 0,
-            "size_mb": 72.74,
-        }
+            "size_mb": 80.28,
+        },
+        full_size_mb=360.0,
+    )
+
+    assert should_skip is False
+    assert reason == ""
+
+
+def test_should_skip_universal_patch_when_archive_is_close_to_full_package():
+    should_skip, reason = build._should_skip_universal_patch(
+        {
+            "changed_count": 7,
+            "deleted_count": 0,
+            "size_mb": 280.0,
+        },
+        full_size_mb=360.0,
     )
 
     assert should_skip is True
-    assert "size_mb=72.74" in reason
+    assert "完整包" in reason
 
 
 def test_resolve_update_helper_icon_file_prefers_shared_shield_icon(monkeypatch):
-    project_root = Path(tempfile.mkdtemp(prefix="build-update-helper-icon-"))
+    project_root = Path("D:/fake-build-icon")
     shared_resources = project_root / "app_渠系计算前端" / "resources"
-    shared_resources.mkdir(parents=True)
     shield_logo = shared_resources / "license_shield.ico"
-    shield_logo.write_bytes(b"shield-logo")
     helper_logo = shared_resources / "update_helper.ico"
-    helper_logo.write_bytes(b"legacy-helper-logo")
     app_icon = project_root / "icon.ico"
-    app_icon.write_bytes(b"legacy-app-icon")
+    existing_paths = {str(shield_logo), str(helper_logo), str(app_icon)}
 
     monkeypatch.setattr(
         build,
@@ -116,6 +127,7 @@ def test_resolve_update_helper_icon_file_prefers_shared_shield_icon(monkeypatch)
     )
     monkeypatch.setattr(build, "UPDATE_HELPER_ICON_FILE", str(helper_logo))
     monkeypatch.setattr(build, "ICON_FILE", str(app_icon))
+    monkeypatch.setattr(build.os.path, "exists", lambda path: path in existing_paths)
 
     assert build._resolve_update_helper_icon_file() == str(shield_logo)
 
@@ -243,6 +255,8 @@ def test_build_universal_patch_includes_allowed_source_hashes(tmp_path):
     with zipfile.ZipFile(output_path, "r") as zf:
         patch_manifest = json.loads(zf.read("patch_manifest.json").decode("utf-8"))
 
+    assert result["source_versions"] == ["1.0.9", "1.0.9.1"]
+    assert patch_manifest["source_versions"] == ["1.0.9", "1.0.9.1"]
     assert patch_manifest["allowed_source_hashes"]["keep.txt"] == ["old-hash-a", "old-hash-b"]
     assert patch_manifest["allowed_source_hashes"]["new.txt"] == [
         patch_builder.MISSING_FILE_SENTINEL,

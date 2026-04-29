@@ -52,6 +52,9 @@ def _write_session(
     session_id: str = "session-001",
     preserve_patterns: list[str] | None = None,
     expected_package_sha256: str = "",
+    full_download_url: str = "",
+    full_package_sha256: str = "",
+    full_package_size_mb: float = 0,
 ) -> str:
     log_dir = tmp_path / "logs" / session_id
     session = updater.UpdateSession(
@@ -66,6 +69,9 @@ def _write_session(
         cleanup_targets=[],
         preserve_patterns=list(preserve_patterns or updater.DEFAULT_PRESERVE_PATTERNS),
         expected_package_sha256=expected_package_sha256,
+        full_download_url=full_download_url,
+        full_package_sha256=full_package_sha256,
+        full_package_size_mb=full_package_size_mb,
         parent_pid=0,
         work_dir=str(app_dir / updater.INTERNAL_WORK_DIR / session_id),
     )
@@ -91,6 +97,9 @@ def test_create_update_session_writes_metadata(tmp_path, monkeypatch):
         is_patch=False,
         target_version="9.9.9",
         current_version="1.0.0",
+        full_download_url="https://example.com/full.zip",
+        full_package_sha256="f" * 64,
+        full_package_size_mb=128.5,
     )
 
     session = updater.UpdateSession.from_file(session_path)
@@ -98,6 +107,9 @@ def test_create_update_session_writes_metadata(tmp_path, monkeypatch):
     assert session.download_zip_path == str(zip_path)
     assert session.target_version == "9.9.9"
     assert session.current_version == "1.0.0"
+    assert session.full_download_url == "https://example.com/full.zip"
+    assert session.full_package_sha256 == "f" * 64
+    assert session.full_package_size_mb == 128.5
     assert session.cleanup_targets == [str(zip_path)]
     assert session.work_dir.endswith(session.session_id)
 
@@ -459,6 +471,123 @@ def test_run_update_session_rejects_patch_when_file_hash_mismatched(tmp_path, mo
     assert not (app_dir / "new.txt").exists()
 
 
+def test_run_update_session_falls_back_to_full_package_when_patch_mismatched(
+    tmp_path,
+    monkeypatch,
+):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "keep.txt").write_text("tampered", encoding="utf-8")
+    (app_dir / f"{updater.APP_NAME_EN}.exe").write_text("binary", encoding="utf-8")
+    patch_zip = _make_patch_zip(
+        tmp_path / "patch-update.zip",
+        included_files={"keep.txt": "new-content"},
+        allowed_source_hashes={
+            "keep.txt": ["sha256-will-not-match"],
+        },
+    )
+    full_zip = _make_full_zip(
+        tmp_path / "full-update.zip",
+        "9.9.9",
+        {
+            "keep.txt": "full-content",
+            "new.txt": "from-full",
+        },
+    )
+    full_sha256 = updater._sha256_file(str(full_zip))
+    session_path = _write_session(
+        tmp_path,
+        app_dir=app_dir,
+        zip_path=patch_zip,
+        is_patch=True,
+        full_download_url="https://example.com/full-update.zip",
+        full_package_sha256=full_sha256,
+        full_package_size_mb=123.4,
+    )
+    stage_events: list[tuple[str, str]] = []
+
+    def fake_download_update(url, dest_dir=None, progress_callback=None, **kwargs):
+        assert url == "https://example.com/full-update.zip"
+        assert kwargs.get("expected_sha256") == full_sha256
+        target_dir = Path(dest_dir or tmp_path / "download")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / full_zip.name
+        shutil.copy2(full_zip, target)
+        if progress_callback:
+            progress_callback(1, 1)
+        return str(target)
+
+    monkeypatch.setattr(updater, "_wait_for_process_exit", lambda pid: None)
+    monkeypatch.setattr(updater, "download_update", fake_download_update)
+
+    result = updater.run_update_session(
+        session_path,
+        stage_callback=lambda key, text: stage_events.append((key, text)),
+    )
+
+    assert result["success"] is True
+    assert result["session"].is_patch is False
+    assert (app_dir / "keep.txt").read_text(encoding="utf-8") == "full-content"
+    assert (app_dir / "new.txt").read_text(encoding="utf-8") == "from-full"
+    assert any("补丁不适用，正在改用完整安装包" in text for _key, text in stage_events)
+    assert any("正在下载完整安装包" in text for _key, text in stage_events)
+
+
+def test_run_update_session_does_not_fallback_when_patch_rollback_fails(
+    tmp_path,
+    monkeypatch,
+):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "keep.txt").write_text("old-content", encoding="utf-8")
+    (app_dir / f"{updater.APP_NAME_EN}.exe").write_text("binary", encoding="utf-8")
+    patch_zip = _make_patch_zip(
+        tmp_path / "patch-update.zip",
+        included_files={"keep.txt": "new-content"},
+        allowed_source_hashes={
+            "keep.txt": [updater._sha256_file(str(app_dir / "keep.txt"))],
+        },
+    )
+    full_zip = _make_full_zip(
+        tmp_path / "full-update.zip",
+        "9.9.9",
+        {"keep.txt": "full-content"},
+    )
+    session_path = _write_session(
+        tmp_path,
+        app_dir=app_dir,
+        zip_path=patch_zip,
+        is_patch=True,
+        full_download_url="https://example.com/full-update.zip",
+        full_package_sha256=updater._sha256_file(str(full_zip)),
+        full_package_size_mb=123.4,
+    )
+    download_calls: list[str] = []
+    real_apply_patch = updater._apply_patch_update
+
+    def flaky_apply(session, extract_root, patch_manifest):
+        real_apply_patch(session, extract_root, patch_manifest)
+        raise RuntimeError("patch failed after apply")
+
+    def failing_rollback(_session, _backup_dir, _patch_backup):
+        raise RuntimeError("rollback failed")
+
+    def fake_download_update(url, **_kwargs):
+        download_calls.append(url)
+        return str(full_zip)
+
+    monkeypatch.setattr(updater, "_wait_for_process_exit", lambda pid: None)
+    monkeypatch.setattr(updater, "_apply_patch_update", flaky_apply)
+    monkeypatch.setattr(updater, "_rollback_patch", failing_rollback)
+    monkeypatch.setattr(updater, "download_update", fake_download_update)
+
+    result = updater.run_update_session(session_path)
+
+    assert result["success"] is False
+    assert result["error_code"] == "rollback_failed"
+    assert download_calls == []
+
+
 def test_run_update_session_applies_patch_when_missing_file_is_allowed(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
     app_dir.mkdir()
@@ -519,6 +648,40 @@ def test_run_update_session_reports_patch_validation_progress(tmp_path, monkeypa
     assert "正在校验补丁适用性（2/2）" in validate_messages
     assert "正在解压补丁包（1/3）" in validate_messages
     assert "正在解压补丁包（3/3）" in validate_messages
+
+
+def test_run_update_session_reports_patch_hash_progress_inside_large_file(tmp_path, monkeypatch):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    large_file = app_dir / "large.bin"
+    large_file.write_bytes(b"x" * (256 * 1024 + 1))
+    (app_dir / f"{updater.APP_NAME_EN}.exe").write_text("binary", encoding="utf-8")
+    zip_path = _make_patch_zip(
+        tmp_path / "patch-update.zip",
+        included_files={
+            "large.bin": "new-content",
+        },
+        allowed_source_hashes={
+            "large.bin": [updater._sha256_file(str(large_file))],
+        },
+    )
+    session_path = _write_session(tmp_path, app_dir=app_dir, zip_path=zip_path, is_patch=True)
+    stage_events: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(updater, "PROGRESS_THROTTLE_SECONDS", 0)
+    monkeypatch.setattr(updater, "_wait_for_process_exit", lambda pid: None)
+
+    result = updater.run_update_session(
+        session_path,
+        stage_callback=lambda key, text: stage_events.append((key, text)),
+    )
+
+    assert result["success"] is True
+    validate_messages = [text for key, text in stage_events if key == "validate"]
+    assert any(
+        text.startswith("正在校验补丁适用性（1/1，")
+        for text in validate_messages
+    )
 
 
 def test_run_update_session_cleans_stale_update_sessions_before_install(tmp_path, monkeypatch):

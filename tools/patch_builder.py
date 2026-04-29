@@ -251,9 +251,13 @@ def build_universal_patch(
         如果没有任何变化则返回 None
     """
     new_files = new_manifest.get("files", {})
+    source_versions = sorted(
+        [str(old_ver) for old_ver, _old_manifest in old_manifests],
+        key=_version_key,
+    )
     all_changed = set()
     all_deleted = set()
-    min_version = None
+    min_version = source_versions[0] if source_versions else ""
 
     for old_ver, old_manifest in old_manifests:
         diff = diff_manifests(old_manifest, new_manifest)
@@ -263,8 +267,6 @@ def build_universal_patch(
         print(f"  [patch] V{old_ver} 差异: +{len(diff.added)} ~{len(diff.modified)} -{len(diff.deleted)}")
         all_changed.update(diff.changed_files)
         all_deleted.update(diff.deleted)
-        if min_version is None or _version_key(old_ver) < _version_key(min_version):
-            min_version = old_ver
 
     if not all_changed and not all_deleted:
         return None
@@ -286,6 +288,7 @@ def build_universal_patch(
         "type": "universal_patch",
         "version": target_version,
         "min_version": min_version or "",
+        "source_versions": source_versions,
         "build_time": new_manifest.get("build_time", ""),
         "target_files": new_files,
         "deleted": sorted(all_deleted),
@@ -310,6 +313,7 @@ def build_universal_patch(
 
     return {
         "min_version": min_version,
+        "source_versions": source_versions,
         "file_path": output_path,
         "size_mb": round(size_mb, 2),
         "changed_count": len(all_changed),

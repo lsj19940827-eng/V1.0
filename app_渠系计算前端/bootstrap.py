@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Application bootstrap and startup orchestration."""
+"""应用启动编排，负责运行环境、全局样式、图标和主窗口装配。"""
 
 import os
 import sys
+from pathlib import Path
 from typing import Iterable, Optional
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 import updater
@@ -26,9 +27,50 @@ from app_渠系计算前端.webengine_diagnostics import (
 )
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+APP_ICON_FILE = PROJECT_ROOT / "icon.ico"
+SHARED_LOGO_ICON_FILE = PROJECT_ROOT / "app_渠系计算前端" / "resources" / "logo.ico"
+WATER_PROFILE_ICON_FILE = PROJECT_ROOT / "推求水面线" / "resources" / "app_icon.ico"
+APP_USER_MODEL_ID = "CanalHydraulicCalc.App"
+
+
+def _resolve_app_icon_path() -> str:
+    """返回主程序应使用的应用图标路径。"""
+    for candidate in (
+        APP_ICON_FILE,
+        WATER_PROFILE_ICON_FILE,
+        SHARED_LOGO_ICON_FILE,
+    ):
+        if candidate.exists():
+            return str(candidate)
+    return ""
+
+
+def _set_windows_app_user_model_id() -> None:
+    """设置 Windows 任务栏应用标识，减少旧图标缓存和分组异常。"""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            APP_USER_MODEL_ID
+        )
+    except Exception:
+        pass
+
+
+def _apply_application_icon(app: QApplication) -> None:
+    """把统一图标设置到 QApplication，供窗口和弹窗继承。"""
+    icon_path = _resolve_app_icon_path()
+    if icon_path:
+        app.setWindowIcon(QIcon(icon_path))
+
+
 def initialize_runtime_environment() -> None:
-    """Apply process-wide settings before QApplication is created."""
+    """创建 QApplication 前应用进程级设置。"""
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+    _set_windows_app_user_model_id()
     if not QApplication.instance():
         QApplication.setHighDpiScaleFactorRoundingPolicy(
             Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -43,7 +85,7 @@ def _get_dpi_scale(app: QApplication) -> float:
 
 
 def _setup_matplotlib_dpi(app: QApplication) -> None:
-    """Configure Matplotlib once the application object exists."""
+    """在 QApplication 创建后配置 Matplotlib 显示比例。"""
     try:
         import matplotlib
 
@@ -69,12 +111,13 @@ def _setup_matplotlib_dpi(app: QApplication) -> None:
 
 
 def ensure_application(argv: Optional[Iterable[str]] = None) -> QApplication:
-    """Return a styled QApplication instance."""
+    """返回已应用全局样式和图标的 QApplication。"""
     argv_list = list(argv) if argv is not None else sys.argv
     app = QApplication.instance() or QApplication(argv_list)
     app.setStyle("Fusion")
     app.setFont(QFont("Microsoft YaHei", 10))
     app.setStyleSheet(GLOBAL_STYLE)
+    _apply_application_icon(app)
     _setup_matplotlib_dpi(app)
     return app
 

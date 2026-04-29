@@ -83,8 +83,9 @@ def test_build_version_data_includes_package_checksums(tmp_path):
     patch_zip.write_bytes(b"patch-zip")
     assets = {
         "full_zip": str(full_zip),
+        "full_size_mb": 100.0,
         "patch_zip": str(patch_zip),
-        "patch_size_mb": 72.74,
+        "patch_size_mb": 12.74,
         "patch_min_version": "1.3.0",
     }
     urls = {
@@ -97,3 +98,27 @@ def test_build_version_data_includes_package_checksums(tmp_path):
     assert version_data["download_sha256"] == release_snapshot.sha256_file(str(full_zip))
     assert version_data["patch_sha256"] == release_snapshot.sha256_file(str(patch_zip))
     assert version_data["patch_url"] == "https://example.com/patch.zip"
+
+
+def test_build_version_data_omits_patch_when_close_to_full_package(tmp_path):
+    full_zip = tmp_path / "CanalHydraulicCalc-V1.3.4.zip"
+    patch_zip = tmp_path / "CanalHydraulicCalc-V1.3.4-patch.zip"
+    full_zip.write_bytes(b"full-zip")
+    patch_zip.write_bytes(b"patch-zip")
+    assets = {
+        "full_zip": str(full_zip),
+        "full_size_mb": 100.0,
+        "patch_zip": str(patch_zip),
+        "patch_size_mb": 80.28,
+        "patch_min_version": "1.3.0",
+    }
+    urls = {
+        "download_url": "https://example.com/full.zip",
+        "patch_url": "https://example.com/patch.zip",
+    }
+
+    version_data = release._build_version_data("1.3.4", urls, assets, "补丁过大")
+
+    assert version_data["download_url"] == "https://example.com/full.zip"
+    assert "patch_url" not in version_data
+    assert "patch_sha256" not in version_data

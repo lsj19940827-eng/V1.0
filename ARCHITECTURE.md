@@ -5,6 +5,7 @@
 - `main.py`：桌面程序入口，负责启动主界面。
 - `license_checker.py`：启动前授权校验模块，负责读取授权文件、校验签名与机器码、静默执行 Windows 下的 `reg / wmic` 机器码命令，并在同一进程内缓存机器码候选，避免重复拉起控制台子进程。
 - `app_渠系计算前端/`：界面层，负责表格编辑、按钮动作、结果展示和导出。
+- `app_渠系计算前端/bootstrap.py`：应用启动编排层，负责运行环境、WebEngine 预检、全局样式、全局应用图标和 Windows 任务栏应用标识。
 - `app_渠系计算前端/webengine_diagnostics.py`：启动预检与诊断层，负责收集运行环境摘要、探测 Qt WebEngine 是否可用，并在失败时输出固定格式的诊断信息。
 - `app_渠系计算前端/pressure_pipe/panel.py`：有压管道设计页，负责单次计算、批量扫描、结果预览和导出；其右侧初始帮助页改为首次真正显示页面时再渲染，避免拖慢主窗口启动。
 - `app_渠系计算前端/increase_input_helper.py`：6 个设计面板共用的加大流量输入 helper，负责“按比例 / 按Q加大”的换算、空值规则、输入提示、结果摘要和旧工程默认回退到按比例。
@@ -36,6 +37,7 @@
 - `updater.py`：自动更新核心，负责版本比较、补丁/全量包选择、下载包 checksum、安装会话、旧 `_update_sessions` 残留清理、安装前校验、补丁适用性校验、补丁落地后的 `target_files` 验收、备份失败回收和回滚状态归类。
 - `update_helper.py`：独立安装窗口，负责展示安装阶段、`validate/apply` 细分状态、补丁校验进度、旧残留清理失败提示、回滚结果文案和日志入口。
 - `app_渠系计算前端/update_dialog.py`：更新入口对话框，负责选择补丁或全量包、下载时传递 checksum、安装前仅做轻量包校验，以及在补丁下载失败时自动切回全量包。
+- `tools/patch_policy.py`：补丁发布安全策略，负责统一判断补丁大小、删除文件数量和总覆盖量是否超过线上发布阈值。
 - `tools/build.py`：构建脚本，负责按分组校验关键依赖、单独拦截 Word 导出依赖缺失、显式收集 `latex2mathml` 等运行时数据文件、生成 manifest、剔除运行时自动保存文件、构建通用补丁包，并按补丁覆盖范围和补丁包大小决定是否发布补丁。
 - `tools/document_to_markdown.py`：文档转 Markdown 工具，负责读取 Word、PDF、Excel 文档并输出 Markdown，依赖 `python-docx / docx2txt / pdfplumber / pandas`。
 - `tools/release_snapshot.py`：正式发版快照工具，负责把 `tag / full zip / patch zip / manifest / version.json` 固化到 `.release-snapshots/`，作为后续回补 patch 的唯一基线。
@@ -105,12 +107,12 @@
 - `panel.py` 打开“有压管道水力计算”前，会先用当前表3节点检查“现场是否仍有效”；若只是旧的 `_section_sync_ready / _transition_topology_prepared` 没复位，但当前表3和渐变段拓扑仍在，就先把门禁状态修正到内存，再继续打开。
 - 命名有压管道组默认仍由专项模块先算出整组总损失并回写；但 `xx渠` 末尾连续承压中的命名 `有压管道 / 定向钻 / 顶管` 会先拆成逐段成员，表3按逐行结果正式递推，整组总损失只保留在窗口汇总里。
 - `panel.py`、`cad_tools.py` 和 `multi_siphon_dialog.py` 在导入 `utils.*` 前，会先加载 `推求水面线.utils`，让正式包运行时的顶层 `utils` 固定落到项目自带实现。
-- `bootstrap.py` 在创建主窗口前会先调用 `webengine_diagnostics.py` 做标准预检；预检阶段现在只采集轻量运行时信息，不再顺手调用可能阻塞的系统摘要接口。
+- `bootstrap.py` 在创建主窗口前会先调用 `webengine_diagnostics.py` 做标准预检；创建 `QApplication` 后会统一设置多尺寸 `icon.ico`，Windows 下还会设置应用标识，保证标题栏、弹窗和任务栏使用同一套图标；预检阶段现在只采集轻量运行时信息，不再顺手调用可能阻塞的系统摘要接口。
 - `app.py` 启动时会 eager 创建全部面板，但 `pressure_pipe/panel.py` 的初始帮助页渲染已改为延后执行；这样仍保留“页面对象先建好”的兼容口径，同时避免单个结果页把主窗口首次显示卡住。
-- `tools/build.py` 会先按分组校验关键依赖，并复用与 PyInstaller 相同的项目搜索路径；Word 导出依赖缺失时会先直接中止打包，再根据 `UNIVERSAL_PATCH_MIN_VERSION` 选出可覆盖的旧版 manifest 生成通用补丁。如果补丁删除文件过多，或“新增/修改 + 删除”总量过大，会直接跳过补丁，只保留全量包。
-- `tools/release.py` 会读取 `patch-info.json` 决定是否把补丁链接写进正式 `version.json`；没有 `patch-info.json` 时，用户端就只会看到全量包。
-- `tools/backfill_patch_release.py` 不改 `tools/build.py` 的默认补丁门槛；它只面向已发正式版的补救场景，固定读取现有全量包和指定旧版 manifest 重新生成 patch，并在确认 Gist 当前 `latest_version` 仍等于目标版本后，才会补挂 Release 资产和回写 patch 字段。
-- `updater.py` 读取 `version.json.min_patch_version` 后，只对满足版本下限的本机提供补丁下载；进入安装后，会在 `validate` 阶段先清理旧 `_update_sessions` 残留，再把“检查写入权限 / 统计安装目录大小 / 解压完整安装包或补丁包 / 校验补丁适用性（x/y）”通过 `stage_callback` 传给 `update_helper.py`。
+- `tools/build.py` 会先按分组校验关键依赖，并复用与 PyInstaller 相同的项目搜索路径；Word 导出依赖缺失时会先直接中止打包，再根据 `UNIVERSAL_PATCH_MIN_VERSION` 选出可覆盖的旧版 manifest 生成通用补丁。补丁是否发布统一走 `tools/patch_policy.py`，删除文件过多、“新增/修改 + 删除”总量过大或补丁接近完整包时，只保留全量包。
+- `tools/release.py` 会读取 `patch-info.json` 决定是否把补丁链接写进正式 `version.json`，并再次执行补丁安全策略；没有 `patch-info.json` 或补丁不满足策略时，用户端就只会看到全量包。
+- `tools/backfill_patch_release.py` 不改 `tools/build.py` 的默认补丁门槛；它只面向已发正式版的补救场景，会读取 `.release-snapshots/` 中从 `--min-version` 到目标版本前的全部正式快照 manifest 重新生成 patch，并在补丁通过 `tools/patch_policy.py` 安全检查、且确认 Gist 当前 `latest_version` 仍等于目标版本后，才会补挂 Release 资产和回写 patch 字段。
+- `updater.py` 读取 `version.json.min_patch_version` 后，只对满足版本下限的本机提供补丁下载；进入安装后，会在 `validate` 阶段先清理旧 `_update_sessions` 残留，再把“检查写入权限 / 统计安装目录大小 / 解压完整安装包或补丁包 / 校验补丁适用性（x/y）”通过 `stage_callback` 传给 `update_helper.py`。如果补丁失败且回滚安全，`updater.py` 会继续下载并安装会话里记录的完整包。
 
 ## 关键设计决定和原因
 
@@ -180,10 +182,10 @@
 - 普通模式新增 `station_decimals`，默认 2 位；它只作用于导出链路里的桩号文本，不改表3和说明文字，避免把现有非导出显示一起带偏。
 - 通用补丁不再追求大跨度兼容，当前默认只覆盖 `1.3.0+`；因为更老版本在 `_internal` 目录上的历史差异太大，会把大量已删除文件带入补丁校验，用户体感就是“卡在校验”。低于 `1.3.0` 的版本仍保留全量包更新入口，不再提供补丁包。
 - 运行时文件和程序文件必须分开治理：`siphon_autosave.json`、`data/autosave/` 与 `*_autosave.qxproj` 不再进入 manifest、补丁 diff 和严格哈希校验；全量安装成功后也要保留这些文件，避免把用户本地数据当成程序文件覆盖掉。
-- 构建阶段新增补丁兜底规则：`deleted_count > 100`、`changed_count + deleted_count > 300` 或 `size_mb > 64` 时直接不发布补丁；这样即便只有少量大文件变化，也不会把高风险补丁放给用户。
+- 构建、正式发版、发版 GUI 和回补 patch 共用补丁兜底规则：`deleted_count > 100`、`changed_count + deleted_count > 300` 或补丁包接近完整包时直接不发布补丁；这样即便只有少量大文件变化，也不会把高风险补丁放给用户。
 - 下载链路必须先验包、后安装：`version.json` 会带 `download_sha256 / patch_sha256`，客户端下载完成后先校验 checksum，再进入安装；补丁落地后还要按 `target_files` 再做一次目标版本验收。
-- 发版后的 patch 回补不能再依赖会漂移的本地 `dist` 或手工改过的 manifest；一切回补动作都要以 `.release-snapshots/` 中固化下来的正式快照为准。
-- 安装继续沿用原有 `validate` 阶段，不新增窗口阶段枚举；细节通过状态文案显示为“正在清理上次失败残留”“正在检查写入权限”“正在统计安装目录大小”“正在解压完整安装包或补丁包”“正在校验补丁适用性（x/y）”，这样改动小，但用户能看见安装并未卡死。
+- 发版后的 patch 回补不能再依赖会漂移的本地 `dist` 或手工改过的 manifest；一切回补动作都要以 `.release-snapshots/` 中固化下来的正式快照为准，并覆盖 `--min-version` 到目标版本前的全部基线。
+- 安装继续沿用原有 `validate` 阶段，不新增窗口阶段枚举；细节通过状态文案显示为“正在清理上次失败残留”“正在检查写入权限”“正在统计安装目录大小”“正在解压完整安装包或补丁包”“正在校验补丁适用性（x/y）”。补丁适用性校验读取大文件 SHA256 时会继续显示单文件百分比，避免用户把第一个大文件哈希误判为卡死。
 - 旧 `_update_sessions` 残留被视为纯临时目录：安装开始时会自动清理当前会话以外的旧目录；如果清理失败，会直接把原因写入安装日志，并在窗口里提示用户先关闭软件、仍失败再重启电脑。
 - `ProjectSettings.format_station()` 继续保留原有 3 位小数口径；普通模式和 xx管 都改为在 `cad_tools.py` 里按各自设置单独格式化，这样能把影响范围收在导出入口。
 - 6 个设计面板的加大流量输入统一采用“界面层保存模式与原始文本、计算层继续吃比例”的兼容方案；原因是这样能保留老工程 `inc_pct`、保留“比例留空自动查表”，同时避免改动 6 套计算内核和下游导出签名。

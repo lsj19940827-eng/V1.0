@@ -29,13 +29,13 @@ from contextlib import contextmanager
 # ============================================================
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from update_artifact_rules import is_runtime_artifact
+from tools import patch_policy
 from version import APP_VERSION, APP_NAME, APP_NAME_EN
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$")
 UNIVERSAL_PATCH_MIN_VERSION = "1.3.0"
-MAX_PATCH_DELETED_COUNT = 100
-MAX_PATCH_TOTAL_COVERAGE = 300
-MAX_PATCH_SIZE_MB = 64.0
+MAX_PATCH_DELETED_COUNT = patch_policy.MAX_PATCH_DELETED_COUNT
+MAX_PATCH_TOTAL_COVERAGE = patch_policy.MAX_PATCH_TOTAL_COVERAGE
 
 
 def _version_key(v: str) -> tuple:
@@ -68,32 +68,18 @@ def _select_universal_patch_manifest_files(manifest_files, current_version: str)
     )
 
 
-def _should_skip_universal_patch(patch_result: dict) -> tuple[bool, str]:
+def _should_skip_universal_patch(
+    patch_result: dict,
+    *,
+    full_size_mb: float = 0,
+    expected_source_versions: list[str] | None = None,
+) -> tuple[bool, str]:
     """判断通用补丁是否覆盖过重，避免把高风险补丁发给用户。"""
-    changed_count = int((patch_result or {}).get("changed_count", 0) or 0)
-    deleted_count = int((patch_result or {}).get("deleted_count", 0) or 0)
-    size_mb = float((patch_result or {}).get("size_mb", 0) or 0)
-
-    if deleted_count > MAX_PATCH_DELETED_COUNT:
-        return (
-            True,
-            f"覆盖范围过大：deleted_count={deleted_count}，超过 {MAX_PATCH_DELETED_COUNT}",
-        )
-
-    total_coverage = changed_count + deleted_count
-    if total_coverage > MAX_PATCH_TOTAL_COVERAGE:
-        return (
-            True,
-            f"覆盖范围过大：changed+deleted={total_coverage}，超过 {MAX_PATCH_TOTAL_COVERAGE}",
-        )
-
-    if size_mb > MAX_PATCH_SIZE_MB:
-        return (
-            True,
-            f"补丁包过大：size_mb={size_mb:.2f}，超过 {MAX_PATCH_SIZE_MB:.2f}",
-        )
-
-    return False, ""
+    return patch_policy.should_skip_universal_patch(
+        patch_result,
+        full_size_mb=full_size_mb,
+        expected_source_versions=expected_source_versions,
+    )
 
 
 def bump_version(level: str) -> str:
@@ -786,6 +772,7 @@ def build(bump: str = None):
                     "size_mb": patch_result["size_mb"],
                     "changed_count": patch_result["changed_count"],
                     "deleted_count": patch_result["deleted_count"],
+                    "source_versions": patch_result.get("source_versions", []),
                 }
                 with open(patch_info_path, "w", encoding="utf-8") as f:
                     json.dump(patch_info, f, ensure_ascii=False, indent=2)

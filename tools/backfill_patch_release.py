@@ -22,10 +22,11 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, PROJECT_ROOT)
 
 from repo_config import GIST_ID, GITHUB_OWNER, GITHUB_REPO
-from tools import patch_builder, release, release_snapshot
+from tools import patch_builder, patch_policy, release, release_snapshot
 from version import APP_NAME_EN, APP_VERSION
 
-DEFAULT_BASE_VERSION = "1.3.0"
+DEFAULT_MIN_VERSION = "1.3.0"
+DEFAULT_BASE_VERSION = DEFAULT_MIN_VERSION
 
 
 def _patch_zip_path(dist_dir: str, target_version: str) -> str:
@@ -74,29 +75,79 @@ def _ensure_snapshot_file(entry: dict, download_dir: str) -> str:
     return _download_snapshot_asset(entry, download_dir)
 
 
+def _list_snapshot_versions(snapshot_root: str) -> list[str]:
+    """列出本地已有的正式发布快照版本。"""
+    if not os.path.isdir(snapshot_root):
+        return []
+    versions: list[str] = []
+    for name in os.listdir(snapshot_root):
+        if not name.startswith("v"):
+            continue
+        version = name[1:]
+        snapshot_file = os.path.join(snapshot_root, name, "snapshot.json")
+        if os.path.isfile(snapshot_file):
+            versions.append(version)
+    return sorted(versions, key=patch_builder._version_key)
+
+
+def _select_base_snapshot_versions(
+    snapshot_root: str,
+    *,
+    min_version: str,
+    target_version: str,
+) -> list[str]:
+    """选取最低基线到目标版本前的所有正式快照版本。"""
+    min_key = patch_builder._version_key(min_version)
+    target_key = patch_builder._version_key(target_version)
+    selected = [
+        version
+        for version in _list_snapshot_versions(snapshot_root)
+        if min_key <= patch_builder._version_key(version) < target_key
+    ]
+    if not selected:
+        raise FileNotFoundError(
+            f"未找到可用于回补补丁的旧版快照：{min_version} <= version < {target_version}"
+        )
+    return selected
+
+
 def _resolve_snapshot_inputs(
     *,
     snapshot_root: str,
     target_version: str,
-    base_version: str,
+    min_version: str | None = None,
+    base_version: str | None = None,
     download_dir: str,
 ) -> dict:
     """解析回补 patch 所需的快照输入。"""
-    base_snapshot = release_snapshot.load_release_snapshot(base_version, snapshot_root)
+    min_version = min_version or base_version or DEFAULT_MIN_VERSION
+    base_versions = _select_base_snapshot_versions(
+        snapshot_root,
+        min_version=min_version,
+        target_version=target_version,
+    )
+    base_snapshots = []
+    base_manifest_paths = []
+    for version in base_versions:
+        snapshot = release_snapshot.load_release_snapshot(version, snapshot_root)
+        manifest_path = ((snapshot.get("manifest") or {}).get("path") or "").strip()
+        if not os.path.isfile(manifest_path):
+            raise FileNotFoundError(f"未找到旧版快照 manifest：{manifest_path}")
+        base_snapshots.append(snapshot)
+        base_manifest_paths.append((version, manifest_path))
+
     target_snapshot = release_snapshot.load_release_snapshot(target_version, snapshot_root)
-    base_manifest_path = ((base_snapshot.get("manifest") or {}).get("path") or "").strip()
     target_manifest_path = ((target_snapshot.get("manifest") or {}).get("path") or "").strip()
-    if not os.path.isfile(base_manifest_path):
-        raise FileNotFoundError(f"未找到旧版快照 manifest：{base_manifest_path}")
     if not os.path.isfile(target_manifest_path):
         raise FileNotFoundError(f"未找到目标版本快照 manifest：{target_manifest_path}")
     full_zip_path = _ensure_snapshot_file(target_snapshot.get("full_zip") or {}, download_dir)
     return {
-        "base_snapshot": base_snapshot,
+        "base_snapshots": base_snapshots,
         "target_snapshot": target_snapshot,
-        "base_manifest_path": base_manifest_path,
+        "base_manifest_paths": base_manifest_paths,
         "target_manifest_path": target_manifest_path,
         "full_zip_path": full_zip_path,
+        "min_version": min_version,
     }
 
 
@@ -111,6 +162,7 @@ def _build_patch_info(patch_name: str, patch_result: dict) -> dict:
         "size_mb": patch_result.get("size_mb", 0),
         "changed_count": patch_result.get("changed_count", 0),
         "deleted_count": patch_result.get("deleted_count", 0),
+        "source_versions": patch_result.get("source_versions", []),
     }
 
 
@@ -125,11 +177,13 @@ def _write_patch_info(dist_dir: str, patch_info: dict) -> str:
 def prepare_backfill_patch_artifacts(
     *,
     target_version: str = APP_VERSION,
-    base_version: str = DEFAULT_BASE_VERSION,
+    min_version: str | None = None,
+    base_version: str | None = None,
     dist_dir: str | None = None,
     snapshot_root: str | None = None,
 ) -> dict:
     """根据正式快照本地生成回补 patch 包。"""
+    min_version = min_version or base_version or DEFAULT_MIN_VERSION
     dist_dir = dist_dir or os.path.join(PROJECT_ROOT, "dist")
     snapshot_root = snapshot_root or os.path.join(PROJECT_ROOT, release_snapshot.SNAPSHOT_ROOT)
     os.makedirs(dist_dir, exist_ok=True)
@@ -139,27 +193,46 @@ def prepare_backfill_patch_artifacts(
         inputs = _resolve_snapshot_inputs(
             snapshot_root=snapshot_root,
             target_version=target_version,
-            base_version=base_version,
+            min_version=min_version,
             download_dir=tmp_dir,
         )
-        old_manifest = patch_builder.load_manifest(inputs["base_manifest_path"])
+        old_manifests = [
+            (version, patch_builder.load_manifest(manifest_path))
+            for version, manifest_path in inputs["base_manifest_paths"]
+        ]
         new_manifest = patch_builder.load_manifest(inputs["target_manifest_path"])
         extracted_root = _extract_release_zip(inputs["full_zip_path"], tmp_dir)
+        full_size_mb = os.path.getsize(inputs["full_zip_path"]) / (1024 * 1024)
         if os.path.exists(patch_zip_path):
             os.remove(patch_zip_path)
         patch_result = patch_builder.build_universal_patch(
             extracted_root,
-            [(base_version, old_manifest)],
+            old_manifests,
             new_manifest,
             patch_zip_path,
         )
+        if patch_result:
+            patch_result["full_size_mb"] = full_size_mb
 
     if not patch_result:
         raise RuntimeError("指定旧版本与目标版本之间没有差异，未生成补丁包。")
-    if patch_result.get("min_version") != base_version:
+    if patch_result.get("min_version") != min_version:
         raise RuntimeError(
-            f"补丁覆盖范围异常：期望 {base_version}，实际 {patch_result.get('min_version')}"
+            f"补丁覆盖范围异常：期望 {min_version}，实际 {patch_result.get('min_version')}"
         )
+    expected_source_versions = [
+        version
+        for version, _manifest_path in inputs["base_manifest_paths"]
+    ]
+    should_skip_patch, skip_reason = patch_policy.should_skip_universal_patch(
+        patch_result,
+        full_size_mb=patch_result.get("full_size_mb", 0),
+        expected_source_versions=expected_source_versions,
+    )
+    if should_skip_patch:
+        if os.path.exists(patch_zip_path):
+            os.remove(patch_zip_path)
+        raise RuntimeError(f"回补补丁不满足发布安全规则：{skip_reason}")
 
     patch_result["version"] = target_version
     patch_result["build_time"] = new_manifest.get("build_time", "")
@@ -242,17 +315,19 @@ def _save_gist_version_data(token: str, version_data: dict) -> dict:
 def backfill_patch_release(
     *,
     target_version: str = APP_VERSION,
-    base_version: str = DEFAULT_BASE_VERSION,
+    min_version: str | None = None,
+    base_version: str | None = None,
     dist_dir: str | None = None,
     snapshot_root: str | None = None,
 ) -> dict:
     """执行一次基于快照的 patch 回补。"""
+    min_version = min_version or base_version or DEFAULT_MIN_VERSION
     token = release._get_token()
     release._github_api("GET", "https://api.github.com/user", token)
 
     artifacts = prepare_backfill_patch_artifacts(
         target_version=target_version,
-        base_version=base_version,
+        min_version=min_version,
         dist_dir=dist_dir,
         snapshot_root=snapshot_root,
     )
@@ -278,7 +353,7 @@ def backfill_patch_release(
         patch_url_direct=patch_url_direct,
         patch_zip_path=artifacts["patch_zip"],
         patch_size_mb=artifacts["patch_info"]["size_mb"],
-        min_patch_version=base_version,
+        min_patch_version=min_version,
     )
     _save_gist_version_data(token, merged_version_data)
     return {
@@ -299,9 +374,14 @@ def main():
     parser = argparse.ArgumentParser(description="基于正式发布快照回补 patch 资产")
     parser.add_argument("--version", default=APP_VERSION, help="目标正式版本，默认当前 version.py")
     parser.add_argument(
-        "--base-version",
-        default=DEFAULT_BASE_VERSION,
+        "--min-version",
+        default=None,
         help="补丁覆盖的旧版本下限，默认 1.3.0",
+    )
+    parser.add_argument(
+        "--base-version",
+        default=None,
+        help="旧参数别名，等同于 --min-version",
     )
     parser.add_argument(
         "--snapshot-root",
@@ -312,7 +392,7 @@ def main():
 
     result = backfill_patch_release(
         target_version=args.version,
-        base_version=args.base_version,
+        min_version=args.min_version or args.base_version or DEFAULT_MIN_VERSION,
         snapshot_root=args.snapshot_root,
     )
     print(f"已完成 {result['tag_name']} patch 回补")

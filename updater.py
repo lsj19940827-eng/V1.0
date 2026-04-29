@@ -37,7 +37,7 @@ import zipfile
 import uuid
 import subprocess
 import fnmatch
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -682,6 +682,9 @@ class UpdateSession:
     cleanup_targets: list[str]
     preserve_patterns: list[str]
     expected_package_sha256: str = ""
+    full_download_url: str = ""
+    full_package_sha256: str = ""
+    full_package_size_mb: float = 0
     parent_pid: int = 0
     work_dir: str = ""
     main_script_path: str = ""
@@ -703,6 +706,9 @@ class UpdateSession:
     def from_file(cls, session_file: str) -> "UpdateSession":
         with open(session_file, "r", encoding="utf-8") as f:
             payload = json.load(f)
+        payload.setdefault("full_download_url", "")
+        payload.setdefault("full_package_sha256", "")
+        payload.setdefault("full_package_size_mb", 0)
         payload["session_file"] = session_file
         return cls(**payload)
 
@@ -808,12 +814,36 @@ def _dir_size(
     return total
 
 
-def _sha256_file(path: str) -> str:
+def _sha256_file(
+    path: str,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> str:
+    """计算文件 SHA256；需要时按读取字节数回报进度。"""
     digest = hashlib.sha256()
+    try:
+        total_bytes = os.path.getsize(path)
+    except OSError:
+        total_bytes = 0
+    read_bytes = 0
+    progress_emitter = _ThrottledProgressEmitter()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(128 * 1024), b""):
             digest.update(chunk)
+            read_bytes += len(chunk)
+            progress_emitter.emit(progress_callback, read_bytes, total_bytes)
+    if read_bytes:
+        progress_emitter.emit(progress_callback, read_bytes, total_bytes, force=True)
     return digest.hexdigest()
+
+
+def _format_hash_progress_detail(rel_path: str, read_bytes: int, total_bytes: int) -> str:
+    """把单文件哈希读取进度转换成用户能看懂的短文案。"""
+    display_name = os.path.basename(rel_path) or rel_path
+    if total_bytes > 0:
+        percent = min(100, int(read_bytes * 100 / total_bytes))
+        return f"{display_name} {percent}%"
+    read_mb = read_bytes / (1024 * 1024)
+    return f"{display_name} 已读取 {read_mb:.1f} MB"
 
 
 def _sha256_text(text: str) -> str:
@@ -920,6 +950,9 @@ def create_update_session(
     current_version: str = APP_VERSION,
     preserve_patterns: Optional[list[str]] = None,
     expected_package_sha256: str = "",
+    full_download_url: str = "",
+    full_package_sha256: str = "",
+    full_package_size_mb: float = 0,
 ) -> str:
     app_dir = _get_app_dir()
     ensure_update_package_ready(zip_path, expected_package_sha256)
@@ -941,6 +974,9 @@ def create_update_session(
         cleanup_targets=[os.path.abspath(zip_path)],
         preserve_patterns=list(preserve_patterns or DEFAULT_PRESERVE_PATTERNS),
         expected_package_sha256=expected_package_sha256,
+        full_download_url=full_download_url,
+        full_package_sha256=full_package_sha256,
+        full_package_size_mb=full_package_size_mb,
         parent_pid=os.getpid(),
         work_dir=work_dir,
         main_script_path=main_script_path,
@@ -1295,13 +1331,18 @@ def _load_patch_manifest(extract_root: str) -> dict:
         ) from exc
 
 
-def _get_current_file_state_hash(app_dir: str, rel_path: str) -> str:
+def _get_current_file_state_hash(
+    app_dir: str,
+    rel_path: str,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> str:
+    """读取安装目录中单个文件的当前状态哈希。"""
     target = os.path.join(app_dir, rel_path.replace("/", os.sep))
     if os.path.isdir(target):
         return PATCH_DIRECTORY_SENTINEL
     if not os.path.isfile(target):
         return PATCH_MISSING_SENTINEL
-    return _sha256_file(target)
+    return _sha256_file(target, progress_callback=progress_callback)
 
 
 def _raise_patch_mismatch(message: str):
@@ -1316,7 +1357,7 @@ def _raise_patch_mismatch(message: str):
 def _validate_patch_prerequisites(
     session: UpdateSession,
     patch_manifest: dict,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
+    progress_callback: Optional[Callable[..., None]] = None,
 ):
     min_version = (patch_manifest.get("min_version") or "").strip()
     if min_version and compare_versions(session.current_version, min_version) < 0:
@@ -1346,7 +1387,19 @@ def _validate_patch_prerequisites(
         allowed_values = allowed_source_hashes.get(rel_path)
         if not isinstance(allowed_values, list) or not allowed_values:
             _raise_patch_mismatch(f"补丁包缺少文件校验信息：{rel_path}")
-        current_hash = _get_current_file_state_hash(session.app_dir, rel_path)
+        current_hash = _get_current_file_state_hash(
+            session.app_dir,
+            rel_path,
+            progress_callback=(
+                lambda read_bytes, total_bytes, rel_path=rel_path, index=index: progress_callback(
+                    index,
+                    total_paths,
+                    _format_hash_progress_detail(rel_path, read_bytes, total_bytes),
+                )
+                if progress_callback
+                else None
+            ),
+        )
         if current_hash not in allowed_values:
             _raise_patch_mismatch(
                 f"本机文件状态与补丁预期不一致：{rel_path} -> {current_hash}"
@@ -1562,23 +1615,17 @@ def _failure_result(
     }
 
 
-def run_update_session(
-    session_path: str,
-    *,
-    stage_callback: Optional[Callable[[str, str], None]] = None,
+def _run_update_session_once(
+    session: UpdateSession,
+    logger: "_UpdateSessionLogger",
+    work_dir: str,
+    push: Callable[[str, str], None],
 ) -> dict:
-    session = UpdateSession.from_file(session_path)
-    logger = _UpdateSessionLogger(session.log_dir)
-    work_dir = session.work_dir or os.path.join(session.app_dir, INTERNAL_WORK_DIR, session.session_id)
+    """安装一次指定包，可用于补丁包或完整包。"""
     extract_dir = os.path.join(work_dir, "extract")
     backup_dir = os.path.join(work_dir, "backup")
     preserve_dir = os.path.join(work_dir, "preserved")
     session.work_dir = work_dir
-
-    def push(stage_key: str, message: str):
-        logger.log(message)
-        if stage_callback:
-            stage_callback(stage_key, message)
 
     preserved_files: list[str] = []
     cleanup_errors: list[str] = []
@@ -1621,9 +1668,13 @@ def run_update_session(
             _validate_patch_prerequisites(
                 session,
                 patch_manifest,
-                progress_callback=lambda current, total: push(
+                progress_callback=lambda current, total, detail="": push(
                     "validate",
-                    f"正在校验补丁适用性（{current}/{total}）",
+                    (
+                        f"正在校验补丁适用性（{current}/{total}，{detail}）"
+                        if detail
+                        else f"正在校验补丁适用性（{current}/{total}）"
+                    ),
                 ),
             )
 
@@ -1700,5 +1751,97 @@ def run_update_session(
             rollback_error=rollback_error,
         )
 
+
+def _should_auto_fallback_to_full_package(session: UpdateSession, result: dict) -> bool:
+    """判断补丁失败后是否可以继续自动改用完整包。"""
+    if not session.is_patch or result.get("success"):
+        return False
+    if not (session.full_download_url or "").strip():
+        return False
+    if result.get("rollback_status") not in {"not_needed", "completed"}:
+        return False
+    if result.get("error_code") in {"rollback_failed", "stale_session_cleanup_failed"}:
+        return False
+    if result.get("retry_mode") == RETRY_MODE_FULL_PACKAGE:
+        return True
+    return result.get("error_code") in {"apply_failed", "patch_mismatch", "target_verify_failed"}
+
+
+def _download_full_package_for_fallback(
+    session: UpdateSession,
+    work_dir: str,
+    push: Callable[[str, str], None],
+) -> str:
+    """下载补丁失败后的完整安装包兜底包。"""
+    download_dir = os.path.join(work_dir, "download")
+    os.makedirs(download_dir, exist_ok=True)
+
+    def on_progress(downloaded: int, total: int):
+        if total > 0:
+            percent = max(0, min(100, int(downloaded * 100 / total)))
+            push("download", f"正在下载完整安装包（{percent}%）")
+        else:
+            push("download", "正在下载完整安装包")
+
+    return download_update(
+        session.full_download_url,
+        dest_dir=download_dir,
+        progress_callback=on_progress,
+        expected_sha256=session.full_package_sha256,
+    )
+
+
+def _run_full_package_fallback(
+    session: UpdateSession,
+    logger: "_UpdateSessionLogger",
+    push: Callable[[str, str], None],
+) -> dict:
+    """补丁失败后在同一日志中自动下载并安装完整包。"""
+    fallback_session_id = f"{session.session_id}-full"
+    work_dir = os.path.join(session.app_dir, INTERNAL_WORK_DIR, fallback_session_id)
+    try:
+        push("fallback", "补丁不适用，正在改用完整安装包")
+        push("download", "正在下载完整安装包")
+        full_zip_path = _download_full_package_for_fallback(session, work_dir, push)
+        cleanup_targets = list(dict.fromkeys([*session.cleanup_targets, full_zip_path]))
+        full_session = replace(
+            session,
+            session_id=fallback_session_id,
+            download_zip_path=full_zip_path,
+            is_patch=False,
+            expected_package_sha256=session.full_package_sha256,
+            cleanup_targets=cleanup_targets,
+            work_dir=work_dir,
+        )
+        return _run_update_session_once(full_session, logger, work_dir, push)
+    except Exception as exc:
+        logger.exception("完整包兜底失败", exc)
+        return _failure_result(
+            session,
+            logger.log_path,
+            work_dir,
+            exc,
+            rollback_status="not_needed",
+        )
+
+
+def run_update_session(
+    session_path: str,
+    *,
+    stage_callback: Optional[Callable[[str, str], None]] = None,
+) -> dict:
+    session = UpdateSession.from_file(session_path)
+    logger = _UpdateSessionLogger(session.log_dir)
+    work_dir = session.work_dir or os.path.join(session.app_dir, INTERNAL_WORK_DIR, session.session_id)
+
+    def push(stage_key: str, message: str):
+        logger.log(message)
+        if stage_callback:
+            stage_callback(stage_key, message)
+
+    result = _run_update_session_once(session, logger, work_dir, push)
+    if not _should_auto_fallback_to_full_package(session, result):
+        return result
+    return _run_full_package_fallback(session, logger, push)
 
 

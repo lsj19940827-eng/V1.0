@@ -61,10 +61,10 @@ def _write_snapshot(
     return snapshot_path
 
 
-def test_resolve_snapshot_inputs_only_uses_requested_base_version(tmp_path):
-    """回补补丁时只应读取指定旧版本和目标版本的快照 manifest。"""
+def test_resolve_snapshot_inputs_uses_all_versions_from_min_to_before_target(tmp_path):
+    """回补补丁时应读取最低版本到目标版本前的所有快照 manifest。"""
     snapshot_root = tmp_path / "snapshots"
-    for version in ("1.2.8", "1.2.9", "1.3.0", "1.3.4"):
+    for version in ("1.2.8", "1.2.9", "1.3.0", "1.3.1", "1.3.4"):
         full_zip = _make_full_zip(
             tmp_path / f"CanalHydraulicCalc-V{version}.zip",
             version,
@@ -80,11 +80,14 @@ def test_resolve_snapshot_inputs_only_uses_requested_base_version(tmp_path):
     inputs = backfill_patch_release._resolve_snapshot_inputs(
         snapshot_root=str(snapshot_root),
         target_version="1.3.4",
-        base_version="1.3.0",
+        min_version="1.3.0",
         download_dir=str(tmp_path / "download"),
     )
 
-    assert Path(inputs["base_manifest_path"]).as_posix().endswith("v1.3.0/manifest.json")
+    assert [
+        version
+        for version, _manifest_path in inputs["base_manifest_paths"]
+    ] == ["1.3.0", "1.3.1"]
     assert Path(inputs["target_manifest_path"]).as_posix().endswith("v1.3.4/manifest.json")
     assert Path(inputs["full_zip_path"]).name == "CanalHydraulicCalc-V1.3.4.zip"
 
@@ -119,7 +122,7 @@ def test_prepare_backfill_patch_artifacts_writes_release_compatible_patch_info(t
         manifest_payload={
             "version": "1.3.0",
             "files": {
-                "keep.txt": "old-hash-keep",
+                "keep.txt": "old-hash-keep-130",
             },
         },
         full_zip_path=_make_full_zip(
@@ -128,10 +131,26 @@ def test_prepare_backfill_patch_artifacts_writes_release_compatible_patch_info(t
             {"keep.txt": "old-content"},
         ),
     )
+    _write_snapshot(
+        snapshot_root,
+        version="1.3.1",
+        manifest_payload={
+            "version": "1.3.1",
+            "files": {
+                "keep.txt": "old-hash-keep-131",
+                "new.txt": "old-hash-new-131",
+            },
+        },
+        full_zip_path=_make_full_zip(
+            tmp_path / "CanalHydraulicCalc-V1.3.1.zip",
+            "1.3.1",
+            {"keep.txt": "old-content-131", "new.txt": "old-new"},
+        ),
+    )
 
     artifacts = backfill_patch_release.prepare_backfill_patch_artifacts(
         target_version="1.3.4",
-        base_version="1.3.0",
+        min_version="1.3.0",
         dist_dir=str(dist_dir),
         snapshot_root=str(snapshot_root),
     )
@@ -139,6 +158,7 @@ def test_prepare_backfill_patch_artifacts_writes_release_compatible_patch_info(t
     assert Path(artifacts["patch_zip"]).name == "CanalHydraulicCalc-V1.3.4-patch.zip"
     assert artifacts["patch_info"]["min_version"] == "1.3.0"
     assert artifacts["patch_info"]["patch_name"] == "CanalHydraulicCalc-V1.3.4-patch.zip"
+    assert artifacts["patch_info"]["source_versions"] == ["1.3.0", "1.3.1"]
     assert artifacts["patch_result"]["deleted_count"] == 0
     assert artifacts["target_snapshot"]["version"] == "1.3.4"
 
@@ -146,11 +166,78 @@ def test_prepare_backfill_patch_artifacts_writes_release_compatible_patch_info(t
         zipfile.ZipFile(artifacts["patch_zip"], "r").read("patch_manifest.json").decode("utf-8")
     )
     assert patch_manifest["min_version"] == "1.3.0"
+    assert patch_manifest["source_versions"] == ["1.3.0", "1.3.1"]
     assert patch_manifest["included_files"] == ["keep.txt", "new.txt"]
-    assert patch_manifest["allowed_source_hashes"]["keep.txt"] == ["old-hash-keep"]
-    assert patch_manifest["allowed_source_hashes"]["new.txt"] == [
-        patch_builder.MISSING_FILE_SENTINEL
+    assert patch_manifest["allowed_source_hashes"]["keep.txt"] == [
+        "old-hash-keep-130",
+        "old-hash-keep-131",
     ]
+    assert patch_manifest["allowed_source_hashes"]["new.txt"] == [
+        patch_builder.MISSING_FILE_SENTINEL,
+        "old-hash-new-131",
+    ]
+
+
+def test_prepare_backfill_patch_artifacts_rejects_patch_near_full_package(
+    monkeypatch,
+    tmp_path,
+):
+    """回补补丁接近完整包时不允许写入线上通道。"""
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    snapshot_root = tmp_path / "snapshots"
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    (target_dir / "keep.txt").write_text("new-content", encoding="utf-8")
+
+    new_manifest = patch_builder.generate_manifest(str(target_dir), version="1.3.4")
+    _write_snapshot(
+        snapshot_root,
+        version="1.3.4",
+        manifest_payload=new_manifest,
+        full_zip_path=_make_full_zip(
+            dist_dir / "CanalHydraulicCalc-V1.3.4.zip",
+            "1.3.4",
+            {"keep.txt": "new-content"},
+        ),
+    )
+    _write_snapshot(
+        snapshot_root,
+        version="1.3.0",
+        manifest_payload={"version": "1.3.0", "files": {"keep.txt": "old-hash"}},
+        full_zip_path=_make_full_zip(
+            tmp_path / "CanalHydraulicCalc-V1.3.0.zip",
+            "1.3.0",
+            {"keep.txt": "old-content"},
+        ),
+    )
+
+    def oversized_patch(_dist_folder, _old_manifests, _new_manifest, output_path):
+        Path(output_path).write_bytes(b"near-full-patch")
+        return {
+            "min_version": "1.3.0",
+            "file_path": output_path,
+            "size_mb": 80.28,
+            "changed_count": 38,
+            "deleted_count": 15,
+            "source_versions": ["1.3.0"],
+        }
+
+    monkeypatch.setattr(
+        backfill_patch_release.patch_builder,
+        "build_universal_patch",
+        oversized_patch,
+    )
+
+    with pytest.raises(RuntimeError, match="完整包"):
+        backfill_patch_release.prepare_backfill_patch_artifacts(
+            target_version="1.3.4",
+            min_version="1.3.0",
+            dist_dir=str(dist_dir),
+            snapshot_root=str(snapshot_root),
+        )
+
+    assert not (dist_dir / "CanalHydraulicCalc-V1.3.4-patch.zip").exists()
 
 
 def test_build_backfilled_version_data_preserves_full_package_fields(tmp_path):

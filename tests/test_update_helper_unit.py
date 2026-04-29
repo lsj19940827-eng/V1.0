@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
-import tempfile
 from types import SimpleNamespace
 
 from PySide6.QtWidgets import QApplication
@@ -40,17 +39,21 @@ def test_main_shows_hint_when_started_without_session(monkeypatch):
 
 
 def test_resolve_window_icon_path_prefers_shared_shield_icon(monkeypatch):
-    project_root = Path(tempfile.mkdtemp(prefix="update-helper-icon-"))
+    project_root = Path("D:/fake-update-helper")
     shared_resources = project_root / "app_渠系计算前端" / "resources"
-    shared_resources.mkdir(parents=True)
     shield_logo = shared_resources / "license_shield.ico"
-    shield_logo.write_bytes(b"shield-logo")
     helper_logo = shared_resources / "update_helper.ico"
-    helper_logo.write_bytes(b"legacy-helper-logo")
-    (shared_resources / "logo.ico").write_bytes(b"legacy-shared-logo")
-    (project_root / "icon.ico").write_bytes(b"legacy-icon")
+    shared_logo = shared_resources / "logo.ico"
+    app_icon = project_root / "icon.ico"
+    existing_paths = {
+        str(shield_logo),
+        str(helper_logo),
+        str(shared_logo),
+        str(app_icon),
+    }
 
     monkeypatch.setattr(update_helper.updater, "_get_project_root", lambda: str(project_root))
+    monkeypatch.setattr(update_helper.os.path, "exists", lambda path: path in existing_paths)
 
     assert update_helper._resolve_window_icon_path() == str(shield_logo)
 
@@ -151,6 +154,30 @@ def test_update_helper_shows_patch_validation_progress_text(monkeypatch):
 
     assert "正在校验补丁适用性（2/5）" in window.status_label.text()
     assert "正在校验补丁适用性（2/5）" in window.detail_text.toPlainText()
+    window.close()
+
+
+def test_update_helper_shows_patch_to_full_fallback_text(monkeypatch):
+    _get_qapp()
+    fake_session = SimpleNamespace(
+        current_version="1.3.1",
+        target_version="1.3.4",
+        work_dir="C:/temp/update-work",
+        log_dir="C:/temp/update-logs",
+    )
+
+    monkeypatch.setattr(
+        update_helper.updater.UpdateSession,
+        "from_file",
+        lambda _path: fake_session,
+    )
+    monkeypatch.setattr(update_helper.UpdateHelperWindow, "_start_worker", lambda self: None)
+
+    window = update_helper.UpdateHelperWindow("dummy-session.json")
+    window._on_stage_changed("fallback", "补丁不适用，正在改用完整安装包")
+
+    assert "改用完整安装包" in window.status_label.text()
+    assert "改用完整安装包" in window.detail_text.toPlainText()
     window.close()
 
 

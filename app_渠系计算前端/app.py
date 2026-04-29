@@ -29,6 +29,7 @@ from app_渠系计算前端.project_manager import ProjectManager
 from app_渠系计算前端.startup_context import StartupContext
 from app_渠系计算前端.webengine_diagnostics import EMERGENCY_SINGLE_PROCESS_ENV
 from app_渠系计算前端.debug_utils import debug_print
+from app_渠系计算前端.bootstrap import _resolve_app_icon_path
 
 _MODULE_TOOLTIPS = {
     "open_channel": "梯形/矩形/圆形明渠",
@@ -174,13 +175,9 @@ class MainWindow(QMainWindow):
             "推求水面线", "resources", "app_icon.ico"
         )
 
-        # 设置窗口图标（ICO多尺寸优先 → SVG → 旧ICO）
-        _icon_src = (
-            self._ico_logo_path if os.path.exists(self._ico_logo_path)
-            else self._svg_logo_path if os.path.exists(self._svg_logo_path)
-            else self._app_icon_path
-        )
-        if os.path.exists(_icon_src):
+        # 设置窗口图标，保持与 QApplication 和任务栏图标一致。
+        _icon_src = _resolve_app_icon_path()
+        if _icon_src:
             self.setWindowIcon(QIcon(_icon_src))
 
         self._init_ui()

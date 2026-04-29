@@ -716,6 +716,9 @@ class UpdateDialog(QDialog):
                 target_version=self._update_info.latest_version if self._update_info else APP_VERSION,
                 current_version=APP_VERSION,
                 expected_package_sha256=expected_sha256,
+                full_download_url=self._update_info.download_url if self._update_info else "",
+                full_package_sha256=self._update_info.download_sha256 if self._update_info else "",
+                full_package_size_mb=self._update_info.file_size_mb if self._update_info else 0,
             )
             launch_updater_and_exit(session_path)
         except Exception as e:
