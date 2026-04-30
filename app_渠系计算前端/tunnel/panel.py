@@ -20,8 +20,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea, QDialog,
     QPushButton, QApplication, QRadioButton, QButtonGroup,
+    QTableWidget, QTableWidgetItem,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QEvent
 from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
 
 from qfluentwidgets import (
@@ -56,6 +57,7 @@ from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPU
 from app_渠系计算前端.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_formula, doc_render_calc_text, doc_add_figure,
+    doc_add_result_table,
     create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
     doc_render_calc_text_eng, update_doc_toc_via_com,
 )
@@ -84,7 +86,17 @@ from app_渠系计算前端.dxf_multi_export import (
     select_case_entries,
     show_multi_case_dxf_dialog,
 )
-from app_渠系计算前端.tunnel.dxf_export import export_tunnel_dxf, draw_tunnel_dxf_on_msp
+from app_渠系计算前端.tunnel.dxf_export import (
+    export_tunnel_dxf,
+    draw_tunnel_dxf_on_msp,
+    draw_tunnel_comparison_table,
+)
+from app_渠系计算前端.tunnel.comparison import (
+    TUNNEL_COMPARISON_COLUMNS,
+    build_tunnel_comparison_rows,
+    comparison_header_text,
+    format_comparison_cell,
+)
 from app_渠系计算前端.tunnel.clearance_sizing_dialog import HorseshoeClearanceSizingDialog
 from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, plain_text_to_formula_body, wrap_with_katex,
@@ -96,6 +108,8 @@ from app_渠系计算前端.increase_input_helper import (
     INCREASE_MODE_Q_INCREASED,
     build_increase_hint_text,
     build_increase_summary_lines,
+    calculate_q_increased,
+    get_auto_increase_percent,
     normalize_increase_mode,
     resolve_increase_input,
 )
@@ -120,6 +134,11 @@ from app_渠系计算前端.result_navigation import (
     make_case_result_anchor,
     sync_case_result_nav_bar,
     wrap_case_result_block,
+)
+from app_渠系计算前端.result_summary import (
+    build_result_summary_word_items,
+    prepend_result_summary_to_body,
+    prepend_result_summary_to_html,
 )
 if WORD_EXPORT_AVAILABLE:
     from docx import Document as DocxDocument
@@ -481,6 +500,27 @@ class TunnelPanel(QWidget):
         t2l.addWidget(self.section_canvas)
         self.notebook.addTab(t2, "断面图")
 
+        t3 = QWidget(); t3l = QVBoxLayout(t3); t3l.setContentsMargins(5,5,5,5)
+        cmp_grp = QGroupBox("工况对比"); cmp_lay = QVBoxLayout(cmp_grp)
+        self.comparison_hint = QLabel("请先完成计算，系统会在这里汇总各工况的关键水力结果和洞身尺寸。")
+        self.comparison_hint.setWordWrap(True)
+        self.comparison_hint.setStyleSheet("color:#666; font-size:12px;")
+        cmp_lay.addWidget(self.comparison_hint)
+        self.comparison_table = QTableWidget(0, len(TUNNEL_COMPARISON_COLUMNS))
+        self.comparison_table.setHorizontalHeaderLabels(
+            [comparison_header_text(col) for col in TUNNEL_COMPARISON_COLUMNS]
+        )
+        self.comparison_table.verticalHeader().setVisible(False)
+        self.comparison_table.setAlternatingRowColors(True)
+        self.comparison_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.comparison_table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.comparison_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.comparison_table.horizontalHeader().setStretchLastSection(True)
+        self.comparison_table.installEventFilter(self)
+        cmp_lay.addWidget(self.comparison_table)
+        t3l.addWidget(cmp_grp)
+        self.notebook.addTab(t3, "工况对比")
+
         self._show_initial_help()
 
     # ----------------------------------------------------------------
@@ -766,6 +806,7 @@ class TunnelPanel(QWidget):
             return
         if self._has_rendered_results or self._all_results:
             self._results_dirty = True
+            self._clear_comparison_table("参数已变更，请重新计算后查看工况对比。")
 
     def _mark_results_fresh(self):
         self._results_dirty = False
@@ -966,18 +1007,34 @@ class TunnelPanel(QWidget):
             must_positive=True,
             default=180.0,
         )
-        increase_resolution = resolve_increase_input(
-            use_increase=self.inc_cb.isChecked(),
-            mode=self._current_increase_mode(),
-            design_q=Q,
-            percent_text=self.inc_edit.text(),
-            q_increased_text=self.inc_q_edit.text(),
-            disabled_percent=0.0,
-        )
-        q_increased = increase_resolution.q_increased_value
+        use_increase = self.inc_cb.isChecked()
+        increase_mode = self._current_increase_mode()
+        percent_text = self.inc_edit.text()
+        q_increased_text = self.inc_q_edit.text()
+        if use_increase:
+            increase_resolution = resolve_increase_input(
+                use_increase=True,
+                mode=increase_mode,
+                design_q=Q,
+                percent_text=percent_text,
+                q_increased_text=q_increased_text,
+                disabled_percent=0.0,
+            )
+            q_increased = increase_resolution.q_increased_value
+            if increase_resolution.mode == INCREASE_MODE_Q_INCREASED:
+                q_increased_source = "manual_q"
+            elif (percent_text or "").strip():
+                q_increased_source = "manual_percent"
+            else:
+                q_increased_source = "auto_percent"
+        else:
+            auto_percent = get_auto_increase_percent(Q)
+            q_increased = calculate_q_increased(Q, auto_percent)
+            q_increased_source = "auto_when_disabled"
         return {
             "Q_design": Q,
             "Q_increased": q_increased if q_increased is not None else 0.0,
+            "Q_increased_source": q_increased_source,
             "n": n,
             "slope_inv": slope_inv,
             "v_min": v_min,
@@ -1191,10 +1248,12 @@ class TunnelPanel(QWidget):
         if self._all_results:
             self._display_all_results()
             self._update_section_plot_all()
+            self._refresh_comparison_table()
             self.data_changed.emit()
 
     def _show_error(self, title, msg):
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
+        self._clear_comparison_table("当前计算失败，请修正参数后重新计算。")
         out = ["=" * 70, f"  {title}", "=" * 70, "", msg, "", "-" * 70, "请修正后重新计算。", "=" * 70]
         self.result_text.setHtml(make_plain_html("\n".join(out)))
 
@@ -1283,6 +1342,7 @@ class TunnelPanel(QWidget):
                 txt = self._build_result_text(res, type_label, detail, inp)
                 plain = header + "\n\n" + txt
                 body_html = plain_text_to_formula_body(txt)
+                body_html = prepend_result_summary_to_body("tunnel", inp or {}, res, body_html)
             all_text_parts.append(plain)
             all_html_parts.append(
                 wrap_case_result_block(
@@ -1309,6 +1369,94 @@ class TunnelPanel(QWidget):
 
     def _display_all_results(self):
         return TunnelPanel._display_all_results_legacy(self)
+
+    def eventFilter(self, obj, event):
+        """处理工况对比表快捷键，支持全选后复制到 Excel。"""
+        table = getattr(self, "comparison_table", None)
+        if obj is table and event.type() == QEvent.KeyPress:
+            mods = event.modifiers()
+            ctrl_only = bool(mods & Qt.ControlModifier) and not (
+                mods & (Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier)
+            )
+            if ctrl_only and event.key() == Qt.Key_A:
+                table.selectAll()
+                return True
+            if ctrl_only and event.key() == Qt.Key_C:
+                self._copy_comparison_selection_to_clipboard()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _build_comparison_clipboard_text(self):
+        """生成可粘贴到 Excel 的工况对比表文本。"""
+        table = getattr(self, "comparison_table", None)
+        if table is None:
+            return "", 0, 0
+        indexes = table.selectedIndexes()
+        if not indexes:
+            return "", 0, 0
+        rows = sorted({idx.row() for idx in indexes})
+        cols = sorted({idx.column() for idx in indexes})
+        selected = {(idx.row(), idx.column()) for idx in indexes}
+
+        header_cells = []
+        for col in cols:
+            header_item = table.horizontalHeaderItem(col)
+            header_cells.append(header_item.text() if header_item else "")
+
+        lines = ["\t".join(header_cells)]
+        for row in rows:
+            row_cells = []
+            for col in cols:
+                if (row, col) not in selected:
+                    row_cells.append("")
+                    continue
+                item = table.item(row, col)
+                row_cells.append(item.text() if item else "")
+            lines.append("\t".join(row_cells))
+        return "\n".join(lines), len(rows), len(cols)
+
+    def _copy_comparison_selection_to_clipboard(self):
+        """复制工况对比表选区到剪贴板，供 Excel 直接粘贴。"""
+        text, row_count, col_count = self._build_comparison_clipboard_text()
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        InfoBar.success(
+            "已复制",
+            f"已复制 {row_count} 行 × {col_count} 列到剪贴板，可粘贴到 Excel。",
+            parent=self._info_parent(),
+            duration=2000,
+            position=InfoBarPosition.TOP,
+        )
+
+    def _set_comparison_hint(self, text):
+        """更新工况对比表提示。"""
+        if hasattr(self, "comparison_hint"):
+            self.comparison_hint.setText(text)
+
+    def _clear_comparison_table(self, hint="请先完成计算，系统会在这里汇总各工况的关键水力结果和洞身尺寸。"):
+        """清空工况对比表。"""
+        if hasattr(self, "comparison_table"):
+            self.comparison_table.setRowCount(0)
+            self._set_comparison_hint(hint)
+
+    def _refresh_comparison_table(self):
+        """用当前成功工况刷新工况对比表。"""
+        if not hasattr(self, "comparison_table"):
+            return
+        rows = build_tunnel_comparison_rows(getattr(self, "_all_results", []))
+        self.comparison_table.setRowCount(len(rows))
+        for row_idx, row in enumerate(rows):
+            for col_idx, column in enumerate(TUNNEL_COMPARISON_COLUMNS):
+                text = format_comparison_cell(row.get(column.key), column.digits)
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                self.comparison_table.setItem(row_idx, col_idx, item)
+        self.comparison_table.resizeColumnsToContents()
+        if rows:
+            self._set_comparison_hint("已汇总成功计算的工况；周长和断面积按完整洞身几何统计。")
+        else:
+            self._set_comparison_hint("当前没有可汇总的成功工况，请检查计算结果。")
 
     def _resolve_result_type_label(self, stype, result):
         """统一解析结果标题，避免平底圆形落回默认分支。"""
@@ -1973,7 +2121,13 @@ class TunnelPanel(QWidget):
         o.append("=" * 70)
         txt = "\n".join(o)
         self._export_plain_text = txt
-        load_formula_page(self.result_text, plain_text_to_formula_html(txt))
+        html = prepend_result_summary_to_html(
+            "tunnel",
+            getattr(self, "input_params", {}),
+            result,
+            plain_text_to_formula_html(txt),
+        )
+        load_formula_page(self.result_text, html)
 
     # ================================================================
     # 断面图
@@ -2109,7 +2263,11 @@ class TunnelPanel(QWidget):
         ax.text(0, -0.30*H_total, f'D={D:.2f}m', ha='center', fontsize=8, color='gray')
         ax.annotate('', xy=(D/2+0.1*D, H_total), xytext=(D/2+0.1*D, 0), arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
         ax.text(D/2+0.18*D, H_total/2, f'H={H_total:.2f}m', fontsize=8, color='purple', rotation=90, va='center')
-        ax.set_xlim(-D*0.9, D*0.9); ax.set_ylim(-H_total*0.42, H_total*1.2)
+        # 标注水深，和圆形断面保持同一展示口径。
+        if h_w > 0:
+            ax.annotate('', xy=(-D/2-0.10*D, h_w), xytext=(-D/2-0.10*D, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
+            ax.text(-D/2-0.18*D, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
+        ax.set_xlim(-D*0.95, D*0.9); ax.set_ylim(-H_total*0.42, H_total*1.2)
         ax.set_aspect('equal'); self._apply_section_plot_title(ax, title, Q, V)
         ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
 
@@ -2154,7 +2312,11 @@ class TunnelPanel(QWidget):
         if H_straight > 0:
             ax.annotate('', xy=(-B/2-0.1*B, H_straight), xytext=(-B/2-0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='darkgreen', lw=1.2))
             ax.text(-B/2-0.18*B, H_straight/2, f'H直={H_straight:.2f}m', fontsize=8, color='darkgreen', rotation=90, va='center', ha='right')
-        ax.set_xlim(-B*0.9, B*0.9); ax.set_ylim(-H_total*0.3, H_total*1.2)
+        # 水深标注放在 H直 外侧，避免两个竖向尺寸重叠。
+        if h_w > 0:
+            ax.annotate('', xy=(-B/2-0.28*B, h_w), xytext=(-B/2-0.28*B, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
+            ax.text(-B/2-0.36*B, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
+        ax.set_xlim(-B*1.05, B*0.9); ax.set_ylim(-H_total*0.3, H_total*1.2)
         ax.set_aspect('equal'); self._apply_section_plot_title(ax, title, Q, V)
         ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
 
@@ -2204,6 +2366,7 @@ class TunnelPanel(QWidget):
         self._rebuild_case_tags()
         self._update_calc_btn_text()
         self._export_plain_text = ""
+        self._clear_comparison_table()
 
     def _export_dxf(self):
         case_entries = self._build_dxf_export_case_entries()
@@ -2368,6 +2531,7 @@ class TunnelPanel(QWidget):
             entries,
             scale_denom,
             draw_tunnel_dxf_on_msp,
+            draw_summary_table=draw_tunnel_comparison_table,
         )
 
     def _export_report(self):
@@ -2465,6 +2629,10 @@ class TunnelPanel(QWidget):
             txt = self._build_result_text(res, type_label, detail, inp)
             if len(export_results) > 1:
                 doc_add_eng_body(doc, f"【工况: {label}】")
+            summary_items = build_result_summary_word_items("tunnel", inp, res)
+            if summary_items:
+                doc_add_eng_h(doc, '重点结果汇总')
+                doc_add_result_table(doc, summary_items)
             doc_render_calc_text_eng(doc, txt, skip_title_keyword='隧洞水力计算结果')
 
         # 7. 断面图
@@ -2513,12 +2681,15 @@ class TunnelPanel(QWidget):
             try:
                 self._display_all_results()
                 self._update_section_plot_all()
+                self._refresh_comparison_table()
             except Exception:
                 self._all_results = []
                 self.current_result = None
+                self._clear_comparison_table()
                 self._show_initial_help()
         else:
             self.current_result = None
+            self._clear_comparison_table()
             self._show_initial_help()
         if hasattr(self, 'notebook'):
             idx = data.get('notebook_idx')

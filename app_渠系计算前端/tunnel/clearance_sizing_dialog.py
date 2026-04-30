@@ -4,6 +4,7 @@
 import math
 import os
 import sys
+import json
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -49,6 +50,62 @@ try:
 except ImportError:
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+
+
+DEFAULT_TARGET_FREEBOARD_PCT_TEXT = "15.000"
+DEFAULT_HB_RATIO_TEXT = "1.200"
+_PREFS_FILENAME = "tunnel_clearance_sizing_prefs.json"
+
+
+def _get_clearance_sizing_prefs_path():
+    """获取净空反推弹窗偏好文件路径。"""
+    appdata = os.path.join(os.path.expanduser("~"), ".canal_calc")
+    os.makedirs(appdata, exist_ok=True)
+    return os.path.join(appdata, _PREFS_FILENAME)
+
+
+def _load_clearance_sizing_prefs():
+    """读取净空反推弹窗偏好。"""
+    path = _get_clearance_sizing_prefs_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else {}
+    except Exception as exc:
+        print(f"读取净空反推偏好失败: {exc}")
+        return {}
+
+
+def _save_clearance_sizing_prefs(payload):
+    """保存净空反推弹窗偏好。"""
+    try:
+        path = _get_clearance_sizing_prefs_path()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        print(f"保存净空反推偏好失败: {exc}")
+
+
+def _pref_number_text(prefs, key, validator):
+    """读取并校验偏好里的数字文本。"""
+    text = str(prefs.get(key, "") or "").strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return text if validator(value) else None
+
+
+def _same_number(left, right, tol=1e-9):
+    """判断两个上下文数值是否一致。"""
+    try:
+        return abs(float(left) - float(right)) <= tol
+    except (TypeError, ValueError):
+        return False
 
 
 class HorseshoeClearanceSizingDialog(QDialog):
@@ -254,6 +311,7 @@ class HorseshoeClearanceSizingDialog(QDialog):
 
     def _load_context(self):
         """把当前工况载入弹窗。"""
+        prefs = _load_clearance_sizing_prefs()
         q_design = self._context_float("Q_design")
         n = self._context_float("n")
         slope_inv = self._context_float("slope_inv")
@@ -261,16 +319,38 @@ class HorseshoeClearanceSizingDialog(QDialog):
         v_max = self._context_float("v_max")
         q_inc = self._context_float("Q_increased")
         theta = self._context_float("theta_deg", 180.0)
+        q_source = str(self.context.get("Q_increased_source", "") or "")
 
         self._metric_labels["Q_design"].setText(f"{q_design:.3f} m³/s")
         self._metric_labels["n"].setText(f"{n:.4f}")
         self._metric_labels["slope_inv"].setText(f"1/{slope_inv:.0f}")
         self._metric_labels["v_range"].setText(f"{v_min:.3f}~{v_max:.3f} m/s")
 
-        self.q_inc_edit.setText(f"{q_inc:.3f}" if q_inc > 0 else "")
-        self.freeboard_edit.setText("20.000")
-        self.hb_edit.setText("1.200")
-        self.theta_edit.setText(f"{theta:.3f}")
+        q_inc_text = None
+        if self._q_increased_pref_matches_context(prefs, q_design, q_inc, q_source):
+            q_inc_text = _pref_number_text(prefs, "Q_increased", lambda value: value > q_design)
+        freeboard_text = _pref_number_text(
+            prefs,
+            "target_freeboard_pct",
+            lambda value: 15.0 <= value < 100.0,
+        )
+        hb_text = _pref_number_text(prefs, "hb_ratio", lambda value: 1.0 <= value <= 1.5)
+        theta_text = _pref_number_text(prefs, "theta_deg", lambda value: 90.0 <= value <= 180.0)
+
+        self.q_inc_edit.setText(q_inc_text or (f"{q_inc:.3f}" if q_inc > 0 else ""))
+        self.freeboard_edit.setText(freeboard_text or DEFAULT_TARGET_FREEBOARD_PCT_TEXT)
+        self.hb_edit.setText(hb_text or DEFAULT_HB_RATIO_TEXT)
+        self.theta_edit.setText(theta_text or f"{theta:.3f}")
+
+    def _q_increased_pref_matches_context(self, prefs, q_design, q_inc, q_source):
+        """判断历史 Q加大 是否仍属于当前主流程上下文。"""
+        if not isinstance(prefs, dict):
+            return False
+        return (
+            _same_number(prefs.get("Q_design"), q_design)
+            and _same_number(prefs.get("base_Q_increased"), q_inc)
+            and str(prefs.get("Q_increased_source", "") or "") == q_source
+        )
 
     def _context_float(self, key, default=0.0):
         """读取上下文数字。"""
@@ -302,6 +382,7 @@ class HorseshoeClearanceSizingDialog(QDialog):
             self._show_failure(result.get("error_message", "反推失败，请检查输入。"))
             return
 
+        self._save_current_inputs()
         self.result_payload = result
         self.apply_btn.setEnabled(True)
         self.status_label.setObjectName("statusOk")
@@ -324,6 +405,18 @@ class HorseshoeClearanceSizingDialog(QDialog):
             "hb_ratio": self._read_float(self.hb_edit, "高宽比 H/B"),
             "target_freeboard_pct": self._read_float(self.freeboard_edit, "目标净空比例"),
         }
+
+    def _save_current_inputs(self):
+        """保存当前反推输入，供下次打开恢复。"""
+        _save_clearance_sizing_prefs({
+            "Q_increased": self.q_inc_edit.text().strip(),
+            "Q_design": self._context_float("Q_design"),
+            "base_Q_increased": self._context_float("Q_increased"),
+            "Q_increased_source": str(self.context.get("Q_increased_source", "") or ""),
+            "target_freeboard_pct": self.freeboard_edit.text().strip(),
+            "hb_ratio": self.hb_edit.text().strip(),
+            "theta_deg": self.theta_edit.text().strip(),
+        })
 
     def _show_failure(self, message):
         """展示失败信息并禁用采用。"""

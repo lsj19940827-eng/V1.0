@@ -70,7 +70,7 @@ from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPU
 from app_渠系计算前端.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_formula, doc_render_calc_text, doc_add_figure,
-    doc_add_styled_table, doc_add_table_caption, doc_add_body,
+    doc_add_result_table, doc_add_styled_table, doc_add_table_caption, doc_add_body,
     create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
     doc_render_calc_text_eng, update_doc_toc_via_com,
 )
@@ -113,6 +113,11 @@ from app_渠系计算前端.result_navigation import (
     make_case_result_anchor,
     sync_case_result_nav_bar,
     wrap_case_result_block,
+)
+from app_渠系计算前端.result_summary import (
+    build_result_summary_word_items,
+    prepend_result_summary_to_body,
+    prepend_result_summary_to_html,
 )
 if WORD_EXPORT_AVAILABLE:
     from docx import Document as DocxDocument
@@ -1215,6 +1220,7 @@ class CulvertPanel(QWidget):
                     export_txt, flags=_re.DOTALL
                 )
                 body_html = plain_text_to_formula_body(txt)
+                body_html = prepend_result_summary_to_body("culvert", params, result, body_html)
             all_plain_parts.append(plain)
             all_html_parts.append(
                 wrap_case_result_block(
@@ -1290,7 +1296,13 @@ class CulvertPanel(QWidget):
         self._export_plain_text = _re.sub(
             r'\{\{HTML\}\}.*?\{\{/HTML\}\}', '{{NORM_TABLE_11_2_5}}', txt, flags=_re.DOTALL
         )
-        load_formula_page(self.result_text, plain_text_to_formula_html(txt))
+        html = prepend_result_summary_to_html(
+            "culvert",
+            getattr(self, "input_params", {}),
+            result,
+            plain_text_to_formula_html(txt),
+        )
+        load_formula_page(self.result_text, html)
 
     def _build_arch_result_text(self, p, result, detail, case_num=None):
         """构建圆拱直墙型暗涵结果文本。"""
@@ -1968,8 +1980,12 @@ class CulvertPanel(QWidget):
         if H_straight > 1e-9:
             ax.annotate('', xy=(-B/2-0.1*B, H_straight), xytext=(-B/2-0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='teal', lw=1.3))
             ax.text(-B/2-0.18*B, H_straight/2, f'H直={H_straight:.2f}m', fontsize=8, color='teal', rotation=90, va='center', ha='center')
+        # 水深标注放在 H直 外侧，避免两个竖向尺寸重叠。
+        if h_w > 0:
+            ax.annotate('', xy=(-B/2-0.28*B, h_w), xytext=(-B/2-0.28*B, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
+            ax.text(-B/2-0.36*B, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
         ax.text(0.04 * B, H_total * 0.98, f'θ={math.degrees(theta_rad):.0f}°', fontsize=9, color='purple')
-        ax.set_xlim(-B*0.9, B*0.9)
+        ax.set_xlim(-B*1.05, B*0.9)
         ax.set_ylim(-H_total*0.3, H_total*1.2)
         ax.set_aspect('equal')
         apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
@@ -2239,6 +2255,11 @@ class CulvertPanel(QWidget):
             if _multi:
                 section_prefix = f'6.{ri+1}'
                 doc_add_eng_h(doc, f'{section_prefix}、工况{case_idx+1} (Q={params["Q"]:.3f} m³/s)')
+
+            summary_items = build_result_summary_word_items("culvert", params, result)
+            if summary_items:
+                doc_add_eng_h(doc, '重点结果汇总')
+                doc_add_result_table(doc, summary_items)
 
             if _marker in calc_text:
                 _parts = calc_text.split(_marker, 1)

@@ -30,6 +30,13 @@ def _get_qapp():
     return QApplication.instance() or QApplication([])
 
 
+def _local_prefs_path(name):
+    """生成项目内测试偏好路径，避开系统临时目录权限差异。"""
+    base = ROOT / ".pytest_tmp" / "clearance_sizing_dialog"
+    base.mkdir(parents=True, exist_ok=True)
+    return base / name
+
+
 class _DummyCanvas(QWidget):
     """替代 matplotlib Qt 画布，避免离屏测试依赖真实渲染。"""
 
@@ -41,23 +48,145 @@ class _DummyCanvas(QWidget):
         return None
 
 
-def _new_dialog(monkeypatch):
+def _new_dialog(monkeypatch, *, prefs_path=None, context_overrides=None):
     """创建测试弹窗。"""
     dialog_mod = importlib.import_module("app_渠系计算前端.tunnel.clearance_sizing_dialog")
     monkeypatch.setattr(dialog_mod, "FigureCanvas", _DummyCanvas)
+    if prefs_path is None:
+        prefs_path = _local_prefs_path("default.json")
+        if prefs_path.exists():
+            prefs_path.unlink()
+    monkeypatch.setattr(
+        dialog_mod,
+        "_get_clearance_sizing_prefs_path",
+        lambda: str(prefs_path),
+        raising=False,
+    )
     _get_qapp()
-    return dialog_mod.HorseshoeClearanceSizingDialog(
-        None,
-        {
-            "Q_design": 10.0,
-            "Q_increased": 12.0,
-            "n": 0.014,
-            "slope_inv": 3000.0,
-            "v_min": 0.1,
-            "v_max": 3.0,
-            "theta_deg": 120.0,
+    context = {
+        "Q_design": 10.0,
+        "Q_increased": 12.0,
+        "Q_increased_source": "auto_percent",
+        "n": 0.014,
+        "slope_inv": 3000.0,
+        "v_min": 0.1,
+        "v_max": 3.0,
+        "theta_deg": 120.0,
+    }
+    context.update(context_overrides or {})
+    return dialog_mod.HorseshoeClearanceSizingDialog(None, context)
+
+
+def test_clearance_sizing_dialog_uses_15_percent_default(monkeypatch):
+    """无历史偏好时，目标净空比例默认应为15%。"""
+    dialog = _new_dialog(monkeypatch, prefs_path=_local_prefs_path("missing.json"))
+
+    assert dialog.freeboard_edit.text() == "15.000"
+    dialog.close()
+
+
+def test_clearance_sizing_dialog_remembers_last_inputs(monkeypatch):
+    """计算成功后，弹窗应跨实例恢复用户上次输入。"""
+    prefs_path = _local_prefs_path("clearance_sizing_prefs.json")
+    if prefs_path.exists():
+        prefs_path.unlink()
+    dialog = _new_dialog(monkeypatch, prefs_path=prefs_path)
+    dialog.q_inc_edit.setText("12.8")
+    dialog.freeboard_edit.setText("15")
+    dialog.hb_edit.setText("1.1")
+    dialog.theta_edit.setText("120")
+
+    dialog._calculate()
+    dialog.close()
+
+    restored = _new_dialog(monkeypatch, prefs_path=prefs_path)
+    assert restored.q_inc_edit.text() == "12.8"
+    assert restored.freeboard_edit.text() == "15"
+    assert restored.hb_edit.text() == "1.1"
+    assert restored.theta_edit.text() == "120"
+    restored.close()
+
+
+def test_clearance_sizing_dialog_uses_main_flow_when_design_flow_changes(monkeypatch):
+    """主流程设计流量变化后，Q加大应跟随新工况，不沿用旧弹窗输入。"""
+    prefs_path = _local_prefs_path("q_change_prefs.json")
+    if prefs_path.exists():
+        prefs_path.unlink()
+    dialog = _new_dialog(monkeypatch, prefs_path=prefs_path)
+    dialog.q_inc_edit.setText("12.8")
+    dialog.freeboard_edit.setText("15")
+    dialog.hb_edit.setText("1.1")
+    dialog.theta_edit.setText("120")
+    dialog._calculate()
+    dialog.close()
+
+    restored = _new_dialog(
+        monkeypatch,
+        prefs_path=prefs_path,
+        context_overrides={
+            "Q_design": 38.0,
+            "Q_increased": 43.7,
+            "Q_increased_source": "auto_percent",
         },
     )
+
+    assert restored.q_inc_edit.text() == "43.700"
+    assert restored.freeboard_edit.text() == "15"
+    assert restored.hb_edit.text() == "1.1"
+    assert restored.theta_edit.text() == "120"
+    restored.close()
+
+
+def test_clearance_sizing_dialog_restores_q_only_for_same_main_flow_context(monkeypatch):
+    """主流程上下文未变化时，弹窗手改 Q加大 才应恢复。"""
+    prefs_path = _local_prefs_path("same_context_prefs.json")
+    if prefs_path.exists():
+        prefs_path.unlink()
+    dialog = _new_dialog(monkeypatch, prefs_path=prefs_path)
+    dialog.q_inc_edit.setText("12.8")
+    dialog._calculate()
+    dialog.close()
+
+    restored = _new_dialog(monkeypatch, prefs_path=prefs_path)
+
+    assert restored.q_inc_edit.text() == "12.8"
+    restored.close()
+
+
+def test_clearance_sizing_dialog_discards_q_when_main_flow_source_changes(monkeypatch):
+    """主流程加大来源变化后，弹窗应使用主流程 Q加大。"""
+    prefs_path = _local_prefs_path("source_change_prefs.json")
+    if prefs_path.exists():
+        prefs_path.unlink()
+    dialog = _new_dialog(monkeypatch, prefs_path=prefs_path)
+    dialog.q_inc_edit.setText("12.8")
+    dialog._calculate()
+    dialog.close()
+
+    restored = _new_dialog(
+        monkeypatch,
+        prefs_path=prefs_path,
+        context_overrides={
+            "Q_design": 10.0,
+            "Q_increased": 12.5,
+            "Q_increased_source": "manual_percent",
+        },
+    )
+
+    assert restored.q_inc_edit.text() == "12.500"
+    restored.close()
+
+
+def test_clearance_sizing_dialog_ignores_broken_preferences(monkeypatch):
+    """偏好文件损坏时，弹窗应安全回到默认值。"""
+    prefs_path = _local_prefs_path("broken.json")
+    prefs_path.write_text("{bad json", encoding="utf-8")
+
+    dialog = _new_dialog(monkeypatch, prefs_path=prefs_path)
+
+    assert dialog.freeboard_edit.text() == "15.000"
+    assert dialog.hb_edit.text() == "1.200"
+    dialog.close()
 
 
 def test_clearance_sizing_dialog_enables_apply_after_valid_calculation(monkeypatch):

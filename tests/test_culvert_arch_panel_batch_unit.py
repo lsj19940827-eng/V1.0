@@ -360,6 +360,28 @@ def test_culvert_arch_result_text_explains_wall_height_source():
     assert "按用户输入固定" in text
 
 
+def test_culvert_arch_section_plot_marks_water_depth_label():
+    """圆拱直墙型暗涵断面图应标注水深。"""
+    dummy = _CulvertDummy()
+    fig = Figure()
+    ax = fig.subplots()
+
+    CulvertPanel._draw_arch(
+        dummy,
+        ax,
+        B=3.2,
+        H_total=3.6,
+        theta_rad=3.141592653589793,
+        h_w=1.2,
+        V=1.20,
+        Q=5.0,
+        title="设计流量",
+    )
+
+    labels = [text.get_text() for text in ax.texts]
+    assert "h=1.20m" in labels
+
+
 @pytest.mark.parametrize(
     ("params", "result", "required_formula", "forbidden_formula"),
     [
@@ -442,6 +464,7 @@ def test_culvert_word_report_base_formulas_follow_section_subtype(
     monkeypatch.setattr(culvert_panel_mod, "doc_render_calc_text_eng", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(culvert_panel_mod, "doc_add_table_caption", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(culvert_panel_mod, "doc_add_styled_table", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(culvert_panel_mod, "doc_add_result_table", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(culvert_panel_mod, "doc_add_figure", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         culvert_panel_mod,

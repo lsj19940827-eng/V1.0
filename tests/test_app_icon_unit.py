@@ -11,12 +11,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app_渠系计算前端 import bootstrap
+from tools import gen_app_icon
 
 
 REQUIRED_WINDOWS_ICON_SIZES = {
     (16, 16),
+    (20, 20),
     (24, 24),
     (32, 32),
+    (40, 40),
     (48, 48),
     (64, 64),
     (128, 128),
@@ -44,13 +47,53 @@ def test_resolve_app_icon_path_prefers_multisize_root_icon(monkeypatch):
     project_root = Path("D:/fake-project")
     root_icon = project_root / "icon.ico"
     shared_icon = project_root / "app_渠系计算前端" / "resources" / "logo.ico"
-    legacy_icon = project_root / "推求水面线" / "resources" / "app_icon.ico"
-    existing_paths = {root_icon, shared_icon, legacy_icon}
+    existing_paths = {root_icon, shared_icon}
 
     monkeypatch.setattr(Path, "exists", lambda self: self in existing_paths)
     monkeypatch.setattr(bootstrap, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(bootstrap, "APP_ICON_FILE", root_icon)
     monkeypatch.setattr(bootstrap, "SHARED_LOGO_ICON_FILE", shared_icon)
-    monkeypatch.setattr(bootstrap, "WATER_PROFILE_ICON_FILE", legacy_icon)
 
     assert bootstrap._resolve_app_icon_path() == str(root_icon)
+
+
+def test_resolve_app_icon_path_does_not_use_legacy_water_profile_icon(monkeypatch):
+    """启动层不能再回退到推求水面线旧图标。"""
+    project_root = Path("D:/fake-project")
+    root_icon = project_root / "icon.ico"
+    shared_icon = project_root / "app_渠系计算前端" / "resources" / "logo.ico"
+    legacy_icon = project_root / "推求水面线" / "resources" / "app_icon.ico"
+
+    monkeypatch.setattr(Path, "exists", lambda self: self == legacy_icon)
+    monkeypatch.setattr(bootstrap, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(bootstrap, "APP_ICON_FILE", root_icon)
+    monkeypatch.setattr(bootstrap, "SHARED_LOGO_ICON_FILE", shared_icon)
+
+    assert bootstrap._resolve_app_icon_path() == ""
+
+
+def test_generate_app_icon_writes_shared_blue_logo_icons(tmp_path):
+    """图标生成脚本应从新 logo 本体生成根目录和共享资源两份 ICO。"""
+    source_logo = ROOT / "app_渠系计算前端" / "resources" / "logo.png"
+    root_icon = tmp_path / "icon.ico"
+    shared_icon = tmp_path / "app_渠系计算前端" / "resources" / "logo.ico"
+
+    generated = gen_app_icon.generate_icons(
+        source_logo=source_logo,
+        output_paths=[root_icon, shared_icon],
+    )
+
+    assert generated == [root_icon, shared_icon]
+    assert REQUIRED_WINDOWS_ICON_SIZES <= _read_ico_sizes(root_icon)
+    assert REQUIRED_WINDOWS_ICON_SIZES <= _read_ico_sizes(shared_icon)
+
+    preview = Image.open(root_icon).ico.getimage((256, 256)).convert("RGBA")
+    assert preview.getpixel((128, 128))[3] > 0
+    assert preview.getpixel((20, 20))[3] == 0
+
+    expected = Image.open(source_logo).convert("RGBA").resize(
+        (256, 256),
+        Image.Resampling.LANCZOS,
+    )
+    for point in [(30, 30), (70, 70), (128, 20), (20, 128)]:
+        assert preview.getpixel(point) == expected.getpixel(point)

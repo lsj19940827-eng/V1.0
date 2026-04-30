@@ -192,6 +192,7 @@ def test_tunnel_word_export_keeps_flat_bottom_circle_title(monkeypatch, local_tm
     monkeypatch.setattr(tunnel_panel_mod, "doc_add_eng_h", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tunnel_panel_mod, "doc_add_formula", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tunnel_panel_mod, "doc_add_eng_body", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tunnel_panel_mod, "doc_add_result_table", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         tunnel_panel_mod,
         "doc_render_calc_text_eng",

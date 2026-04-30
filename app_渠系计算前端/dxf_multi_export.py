@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Callable, Literal
 
 from PySide6.QtCore import Qt
@@ -291,6 +292,7 @@ def export_combined_case_dxf(
     case_entries: list[DxfExportCaseEntry],
     scale_denom: int,
     draw_case: Callable,
+    draw_summary_table: Callable | None = None,
 ):
     try:
         import ezdxf
@@ -349,6 +351,12 @@ def export_combined_case_dxf(
             scale_denom=scale_denom,
             title=f"工况 {entry.case_idx + 1}｜{entry.label}",
         )
+
+    if draw_summary_table is not None:
+        nrows = int(math.ceil(len(measurements) / ncols))
+        summary_origin_x = 0.0
+        summary_origin_y = -(nrows * cell_height) - 20.0
+        draw_summary_table(doc, msp, case_entries, summary_origin_x, summary_origin_y)
 
     doc.saveas(normalized_path)
     return normalized_path

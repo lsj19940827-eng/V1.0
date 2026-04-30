@@ -148,6 +148,49 @@ def test_draw_horseshoe_waterline_clamps_to_arch_intersections():
     assert r"\mathregular{m/s}" in title
 
 
+def test_draw_horseshoe_marks_water_depth_label():
+    """圆拱直墙型断面图应标注水深。"""
+    dummy = _DrawDummy()
+    fig = Figure()
+    ax = fig.subplots()
+
+    tunnel_panel_mod.TunnelPanel._draw_horseshoe(
+        dummy,
+        ax,
+        B=3.2,
+        H_total=3.6,
+        theta_rad=math.pi,
+        h_w=1.2,
+        V=1.20,
+        Q=5.0,
+        title="工况 1｜圆拱直墙型",
+    )
+
+    labels = [text.get_text() for text in ax.texts]
+    assert "h=1.20m" in labels
+
+
+def test_draw_flat_bottom_circle_marks_water_depth_label():
+    """平底圆形断面图应标注水深。"""
+    dummy = _DrawDummy()
+    fig = Figure()
+    ax = fig.subplots()
+
+    tunnel_panel_mod.TunnelPanel._draw_flat_bottom_circle(
+        dummy,
+        ax,
+        D=3.2,
+        B=2.0,
+        h_w=1.2,
+        V=1.20,
+        Q=5.0,
+        title="工况 1｜平底圆形",
+    )
+
+    labels = [text.get_text() for text in ax.texts]
+    assert "h=1.20m" in labels
+
+
 def test_draw_horseshoe_uses_kernel_consistent_non_180_degree_geometry():
     dummy = _DrawDummy()
     fig = Figure()

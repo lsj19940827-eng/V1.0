@@ -169,11 +169,8 @@ class MainWindow(QMainWindow):
         # 图标路径
         _res_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources")
         self._ico_logo_path = os.path.join(_res_dir, "logo.ico")
+        self._png_logo_path = os.path.join(_res_dir, "logo.png")
         self._svg_logo_path = os.path.join(_res_dir, "logo.svg")
-        self._app_icon_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "推求水面线", "resources", "app_icon.ico"
-        )
 
         # 设置窗口图标，保持与 QApplication 和任务栏图标一致。
         _icon_src = _resolve_app_icon_path()
@@ -301,8 +298,19 @@ class MainWindow(QMainWindow):
         logo_lbl.setObjectName("navBrandLogo")
         logo_lbl.setFixedSize(48, 48)
         logo_lbl.setAlignment(Qt.AlignCenter)
-        # 优先加载 SVG（矢量无损），回退到 ICO
-        _logo_src = self._svg_logo_path if os.path.exists(self._svg_logo_path) else self._app_icon_path
+        # 优先加载共享新 Logo，避免回退到旧模块图标。
+        _logo_src = next(
+            (
+                path for path in (
+                    self._svg_logo_path,
+                    self._png_logo_path,
+                    self._ico_logo_path,
+                    _resolve_app_icon_path(),
+                )
+                if path and os.path.exists(path)
+            ),
+            "",
+        )
         if os.path.exists(_logo_src):
             logo_pix = QIcon(_logo_src).pixmap(QSize(40, 40))
             logo_lbl.setPixmap(logo_pix)

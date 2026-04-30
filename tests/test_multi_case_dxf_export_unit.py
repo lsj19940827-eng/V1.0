@@ -178,3 +178,56 @@ def test_export_combined_case_dxf_applies_grid_offsets_titles_and_prefixed_layer
 
     assert min_x_2 > max_x_1
     assert max_y_3 < min_y_1
+
+
+def test_export_combined_case_dxf_can_append_summary_table(local_tmp_path):
+    """传入汇总表回调时，应在断面图下方追加表格内容。"""
+    path = local_tmp_path / "combined_with_summary.dxf"
+    entries = [
+        _entry(0, "方案A"),
+        _entry(1, "方案B"),
+    ]
+    calls = []
+
+    def _draw_case(msp, result, input_params, scale_denom=100, layer_prefix="", title=""):
+        _ = (input_params, scale_denom, layer_prefix, title)
+        width = float(result["w"])
+        height = float(result["h"])
+        msp.add_lwpolyline(
+            [(0.0, 0.0), (width, 0.0), (width, height), (0.0, height), (0.0, 0.0)],
+            dxfattribs={"layer": "轮廓线"},
+        )
+        return (width, height)
+
+    def _draw_summary_table(doc, msp, valid_entries, origin_x, origin_y):
+        calls.append((doc, list(valid_entries), origin_x, origin_y))
+        msp.add_text(
+            "隧洞多工况参数对比表",
+            dxfattribs={
+                "layer": "参数文字",
+                "height": 5.0,
+                "insert": (origin_x, origin_y),
+            },
+        )
+        return 20.0
+
+    saved_path = dxf_multi_export.export_combined_case_dxf(
+        str(path),
+        entries,
+        scale_denom=100,
+        draw_case=_draw_case,
+        draw_summary_table=_draw_summary_table,
+    )
+
+    assert saved_path == str(path)
+    assert len(calls) == 1
+    assert [entry.label for entry in calls[0][1]] == ["方案A", "方案B"]
+    assert calls[0][3] < 0
+
+    doc = ezdxf.readfile(saved_path)
+    texts = [
+        entity.dxf.text
+        for entity in doc.modelspace()
+        if entity.dxftype() == "TEXT"
+    ]
+    assert "隧洞多工况参数对比表" in texts

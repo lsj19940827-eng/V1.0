@@ -7,6 +7,8 @@ import tempfile
 import types
 from pathlib import Path
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 os.environ.setdefault(
@@ -50,7 +52,7 @@ def _build_row(*, q="1", slope_inv="2.2", b="1.5"):
     return row
 
 
-def _build_rect_aqueduct_row(*, q="1", slope_inv="2000", b="1.5", ratio="0.8"):
+def _build_rect_aqueduct_row(*, q="1", slope_inv="2000", b="1.5", ratio="0.8", tie_rod_height=""):
     row = [""] * len(INPUT_HEADERS)
     row[0] = "1"
     row[1] = "1"
@@ -63,6 +65,25 @@ def _build_rect_aqueduct_row(*, q="1", slope_inv="2000", b="1.5", ratio="0.8"):
     row[14] = ratio
     row[18] = "0.1"
     row[19] = "100"
+    if tie_rod_height != "":
+        row[batch_panel_mod.COL_TIE_ROD_HEIGHT] = tie_rod_height
+    return row
+
+
+def _build_u_aqueduct_row(*, q="1", slope_inv="2000", radius="1.5", tie_rod_height=""):
+    row = [""] * len(INPUT_HEADERS)
+    row[0] = "1"
+    row[1] = "1"
+    row[2] = "测试U形渡槽"
+    row[3] = "渡槽-U形"
+    row[6] = q
+    row[7] = "0.014"
+    row[8] = slope_inv
+    row[12] = radius
+    row[18] = "0.1"
+    row[19] = "100"
+    if tie_rod_height != "":
+        row[batch_panel_mod.COL_TIE_ROD_HEIGHT] = tie_rod_height
     return row
 
 
@@ -449,6 +470,141 @@ def test_rect_aqueduct_import_preserves_bottom_width_and_warns_on_ratio_conflict
     _flush_events(4)
 
 
+def test_u_aqueduct_batch_passes_tie_rod_height(monkeypatch):
+    captured_kwargs = []
+    original_calc = batch_panel_mod.ducao_u_calculate
+
+    def _capture_calc(*args, **kwargs):
+        captured_kwargs.append(dict(kwargs))
+        return original_calc(*args, **kwargs)
+
+    monkeypatch.setattr(batch_panel_mod, "ducao_u_calculate", _capture_calc)
+
+    panel = _prepare_panel(monkeypatch)
+    _set_single_row(panel, _build_u_aqueduct_row(tie_rod_height="0.30"))
+    panel.inc_cb.setChecked(False)
+    panel.detail_cb.setChecked(False)
+
+    panel._batch_calculate()
+    _flush_events(6)
+
+    result = panel.batch_results[0]["result"]
+
+    assert captured_kwargs
+    assert captured_kwargs[0]["tie_rod_height"] == pytest.approx(0.30)
+    assert result["tie_rod_height"] == pytest.approx(0.30)
+    assert result["H_total"] == pytest.approx(result["tie_bottom_height"] + 0.30)
+    assert result["Fb"] == pytest.approx(result["tie_bottom_height"] - result["h_increased"])
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
+def test_u_aqueduct_batch_detail_report_handles_tie_rod_height(monkeypatch):
+    panel = _prepare_panel(monkeypatch)
+    row = _build_u_aqueduct_row(q="5.0", slope_inv="3000", radius="2.4", tie_rod_height="0.30")
+    result = panel._calculate_single(
+        "渡槽-U形",
+        Q=5.0,
+        n=0.014,
+        slope_inv=3000,
+        v_min=0.1,
+        v_max=100.0,
+        R=2.4,
+        tie_rod_height=0.30,
+        manual_increase_percent=0,
+    )
+
+    report = panel._gen_detail_report(row, result)
+
+    assert "生成详细报告时出错" not in report
+    assert "设计拉杆底净距" in report
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
+def test_batch_result_hides_effective_freeboard_when_increase_disabled(monkeypatch):
+    panel = _prepare_panel(monkeypatch)
+    _set_single_row(panel, _build_rect_aqueduct_row(ratio="", tie_rod_height="0.25"))
+    panel.inc_cb.setChecked(False)
+    panel.detail_cb.setChecked(False)
+
+    panel._batch_calculate()
+    _flush_events(6)
+
+    fb_col = batch_panel_mod.RESULT_HEADERS.index("加大有效超高Fb(m)")
+
+    assert panel.result_table.item(0, fb_col).text() == "—"
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
+def test_batch_detail_report_hides_increase_section_when_disabled(monkeypatch):
+    panel = _prepare_panel(monkeypatch)
+    row = _build_rect_aqueduct_row(ratio="", tie_rod_height="0.25")
+    result = panel._calculate_single(
+        "渡槽-矩形",
+        Q=1.0,
+        n=0.014,
+        slope_inv=2000,
+        v_min=0.1,
+        v_max=100.0,
+        b=1.5,
+        tie_rod_height=0.25,
+        manual_increase_percent=0,
+        preserve_imported_dimensions=True,
+    )
+    result["_use_increase"] = False
+
+    report = panel._gen_detail_report(row, result)
+
+    assert "加大流量工况" not in report
+    assert "加大有效超高" not in report
+    assert "设计拉杆底净距" in report
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
+def test_rect_aqueduct_batch_passes_tie_rod_height(monkeypatch):
+    captured_kwargs = []
+    original_calc = batch_panel_mod.ducao_rect_calculate
+
+    def _capture_calc(*args, **kwargs):
+        captured_kwargs.append(dict(kwargs))
+        return original_calc(*args, **kwargs)
+
+    monkeypatch.setattr(batch_panel_mod, "ducao_rect_calculate", _capture_calc)
+
+    panel = _prepare_panel(monkeypatch)
+    _set_single_row(panel, _build_rect_aqueduct_row(ratio="", tie_rod_height="0.25"))
+    panel._set_excel_import_session_active(True)
+    panel._mark_row_as_excel_imported(0, True)
+    panel.inc_cb.setChecked(False)
+    panel.detail_cb.setChecked(False)
+
+    panel._batch_calculate()
+    _flush_events(6)
+
+    result = panel.batch_results[0]["result"]
+
+    assert captured_kwargs
+    assert captured_kwargs[0]["tie_rod_height"] == pytest.approx(0.25)
+    assert result["tie_rod_height"] == pytest.approx(0.25)
+    assert result["H_total"] == pytest.approx(result["tie_bottom_height"] + 0.25)
+    assert result["Fb"] == pytest.approx(result["tie_bottom_height"] - result["h_increased"])
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
 def test_rect_aqueduct_import_preserves_bottom_width_without_warning_when_ratio_missing(monkeypatch):
     captured_kwargs = []
     original_calc = batch_panel_mod.ducao_rect_calculate
@@ -589,3 +745,17 @@ def test_rect_aqueduct_without_import_lock_keeps_ratio_search_behavior(monkeypat
     panel.close()
     panel.deleteLater()
     _flush_events(4)
+
+
+def test_batch_excel_template_contains_tie_rod_height_header():
+    from openpyxl import load_workbook
+
+    template_path = ROOT / "data" / "多流量段批量计算_导入Excel（模板）.xlsx"
+    workbook = load_workbook(template_path, read_only=True, data_only=True)
+    worksheet = workbook.active
+
+    header_values = []
+    for row in worksheet.iter_rows(min_row=1, max_row=8, values_only=True):
+        header_values.extend(str(value).strip() for value in row if value is not None)
+
+    assert "拉杆高度(m)" in header_values

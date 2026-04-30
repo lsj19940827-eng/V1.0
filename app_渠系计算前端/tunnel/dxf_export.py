@@ -6,12 +6,20 @@ from app_渠系计算前端.increase_input_helper import (
     build_increase_summary_lines,
 )
 from app_渠系计算前端.dxf_common import (
+    DXF_TEXT_WIDTH_FACTOR,
     _add_dim_h,
     _add_dim_v,
     _add_text_block,
+    add_centered_dxf_text,
     add_case_title,
+    ensure_section_dxf_layers,
     ensure_tracked_msp,
     setup_section_dxf_document,
+)
+from app_渠系计算前端.tunnel.comparison import (
+    TUNNEL_COMPARISON_COLUMNS,
+    build_tunnel_comparison_rows,
+    format_comparison_cell,
 )
 
 
@@ -75,6 +83,161 @@ def draw_tunnel_dxf_on_msp(
     if title:
         add_case_title(tracked_msp, title)
     return tracked_msp.size()
+
+
+def _comparison_col_width(column_key):
+    """返回 DXF 对比表列宽。"""
+    widths = {
+        "case_name": 42.0,
+        "section_type": 28.0,
+        "Q_design": 22.0,
+        "Q_increased": 22.0,
+        "h_design": 22.0,
+        "V_design": 22.0,
+        "h_increased": 22.0,
+        "V_increased": 22.0,
+        "B": 18.0,
+        "D": 18.0,
+        "r": 18.0,
+        "H_total": 20.0,
+        "H_straight": 24.0,
+        "total_perimeter": 24.0,
+        "total_area": 26.0,
+    }
+    return widths.get(column_key, 22.0)
+
+
+def _comparison_header_lines(column):
+    """生成 DXF 表头分行，单位单独成行避免表头过宽。"""
+    unit = str(column.unit or "")
+    if unit:
+        return [column.title, f"({unit})"]
+    return [column.title]
+
+
+def _dxf_text_weight(text):
+    """估算 DXF 单行文字宽度权重。"""
+    weight = 0.0
+    for char in str(text):
+        code = ord(char)
+        if char.isspace():
+            weight += 0.35
+        elif code > 0x2E80:
+            weight += 1.05
+        elif char.isupper():
+            weight += 0.68
+        else:
+            weight += 0.58
+    return max(weight, 1.0)
+
+
+def _estimate_dxf_text_width(text, height):
+    """估算按默认宽度因子显示后的文字宽度。"""
+    return _dxf_text_weight(text) * float(height) * DXF_TEXT_WIDTH_FACTOR
+
+
+def _comparison_auto_col_width(column, rows, text_h):
+    """按表头和数据内容计算安全列宽。"""
+    min_width = _comparison_col_width(column.key)
+    candidates = [_estimate_dxf_text_width(line, text_h) for line in _comparison_header_lines(column)]
+    for row in rows:
+        candidates.append(
+            _estimate_dxf_text_width(format_comparison_cell(row.get(column.key), column.digits), text_h)
+        )
+    return max(min_width, max(candidates, default=0.0) + text_h * 2.0)
+
+
+def _add_table_text(msp, text, cx, cy, height, layer="参数文字"):
+    """在 DXF 表格单元格中心写入文字。"""
+    add_centered_dxf_text(msp, text, cx, cy, height, layer=layer, style="FANGSONG")
+
+
+def draw_tunnel_comparison_table(doc, msp, case_entries, origin_x=0.0, origin_y=0.0):
+    """绘制隧洞多工况参数对比表，返回表格总高度。"""
+    ensure_section_dxf_layers(doc)
+    rows = build_tunnel_comparison_rows(case_entries)
+    if not rows:
+        return 0.0
+
+    title_h = 9.0
+    header_h = 10.0
+    row_h = 7.0
+    title_text_h = 5.0
+    text_h = 3.2
+    columns = list(TUNNEL_COMPARISON_COLUMNS)
+    widths = [_comparison_auto_col_width(column, rows, text_h) for column in columns]
+    table_w = sum(widths)
+    table_h = title_h + header_h + row_h * len(rows)
+    x_left = float(origin_x)
+    y_top = float(origin_y)
+    y_title_bottom = y_top - title_h
+    y_header_bottom = y_title_bottom - header_h
+    y_bottom = y_top - table_h
+
+    # 外框和横线
+    x_right = x_left + table_w
+    for y in (y_top, y_title_bottom, y_header_bottom, y_bottom):
+        msp.add_line((x_left, y), (x_right, y), dxfattribs={"layer": "参数文字"})
+    msp.add_line((x_left, y_top), (x_left, y_bottom), dxfattribs={"layer": "参数文字"})
+    msp.add_line((x_right, y_top), (x_right, y_bottom), dxfattribs={"layer": "参数文字"})
+
+    # 数据行横线
+    for idx in range(1, len(rows)):
+        y = y_header_bottom - row_h * idx
+        msp.add_line((x_left, y), (x_right, y), dxfattribs={"layer": "参数文字"})
+
+    # 标题
+    _add_table_text(
+        msp,
+        "隧洞多工况参数对比表",
+        x_left + table_w / 2.0,
+        y_top - title_h / 2.0,
+        title_text_h,
+    )
+
+    # 列线和表头
+    x = x_left
+    for col_idx, column in enumerate(columns):
+        width = widths[col_idx]
+        if col_idx > 0:
+            msp.add_line((x, y_title_bottom), (x, y_bottom), dxfattribs={"layer": "参数文字"})
+        header_lines = _comparison_header_lines(column)
+        if len(header_lines) == 1:
+            _add_table_text(
+                msp,
+                header_lines[0],
+                x + width / 2.0,
+                y_title_bottom - header_h / 2.0,
+                text_h,
+            )
+        else:
+            _add_table_text(
+                msp,
+                header_lines[0],
+                x + width / 2.0,
+                y_title_bottom - header_h * 0.35,
+                text_h,
+            )
+            _add_table_text(
+                msp,
+                header_lines[1],
+                x + width / 2.0,
+                y_title_bottom - header_h * 0.70,
+                text_h,
+            )
+        x += width
+
+    # 数据
+    for row_idx, row in enumerate(rows):
+        y_center = y_header_bottom - row_h * row_idx - row_h / 2.0
+        x = x_left
+        for col_idx, column in enumerate(columns):
+            width = widths[col_idx]
+            value = format_comparison_cell(row.get(column.key), column.digits)
+            _add_table_text(msp, value, x + width / 2.0, y_center, text_h)
+            x += width
+
+    return table_h
 
 
 def _scale_point(point, sf):

@@ -457,6 +457,7 @@ def is_arch_culvert_section_type(section_type) -> bool:
 #          20转弯半径（平面弯道，不参与水力计算，透传到推求水面线）
 #          21管材（有压管道专用）
 #          28直墙高度H直（隧洞/暗涵-圆拱直墙型共用，追加列，兼容旧Excel）
+#          29拉杆高度（渡槽专用，拉杆自身尺寸高度，拉杆顶与槽顶齐平，追加列，兼容旧Excel）
 #          注：局部损失比例、进出口标识等有压管道专用参数通过 Qt.UserRole 元数据传递，不占表格列
 INPUT_HEADERS = [
     "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
@@ -467,7 +468,7 @@ INPUT_HEADERS = [
     "不淤流速", "不冲流速", "转弯半径(m)",
     "管材",
     "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
-    "直墙高度H直(m)",
+    "直墙高度H直(m)", "拉杆高度(m)",
 ]
 
 COL_TURN_RADIUS = 20
@@ -479,6 +480,7 @@ COL_COMPOUND_B2 = 25
 COL_COMPOUND_M3 = 26
 COL_COMPOUND_H1 = 27
 COL_ARCH_H_STRAIGHT = 28
+COL_TIE_ROD_HEIGHT = 29
 COL_PIPE_LOCAL_LOSS = len(INPUT_HEADERS)
 COL_PIPE_IN_OUT = len(INPUT_HEADERS) + 1
 
@@ -648,6 +650,19 @@ _HEADER_TOOLTIPS = {
         "▶ 适用范围\n"
         "  对「隧洞-圆拱直墙型」「暗涵-圆拱直墙型」类型生效"
     ),
+    "拉杆高度(m)": (
+        "【拉杆高度（单位：米）】\n\n"
+        "定义：拉杆自身尺寸高度，程序按拉杆顶与槽顶齐平处理\n\n"
+        "▶ 怎么填？\n"
+        "  • 留空或填 0 → 无拉杆，沿用原计算口径\n"
+        "  • 填一个非负数 → 槽身总高 H 包含该拉杆高度\n\n"
+        "▶ 计算关系\n"
+        "  H 为含拉杆的结构总高\n"
+        "  设计工况另校核设计水面到拉杆底净距 ≥ 0.10m\n"
+        "  加大有效超高为加大水面到拉杆底的安全高差\n\n"
+        "▶ 适用范围\n"
+        "  对「渡槽-U形」「渡槽-矩形」类型生效"
+    ),
     "转弯半径(m)": (
         "【转弯半径（单位：米）】\n\n"
         "定义：渠道平面弯道的圆曲线半径\n\n"
@@ -732,7 +747,7 @@ RESULT_HEADERS = [
     "底宽B(m)", "直径D(m)", "半径R(m)",
     "h设计(m)", "V设计(m/s)", "A设计(m²)", "R水力(m)", "湿周χ(m)",
     "Q加大(m³/s)", "h加大(m)", "V加大(m/s)",
-    "超高Fb(m)", "建筑物总高H(m)",
+    "加大有效超高Fb(m)", "建筑物总高H(含拉杆)(m)",
     "设计净空高度(m)", "加大净空高度(m)",
     "设计净空比例(%)", "加大净空比例(%)",
     "状态",
@@ -1904,6 +1919,7 @@ class BatchPanel(QWidget):
                 chamfer_angle = self._sf(values[15], 0)
                 chamfer_length = self._sf(values[16], 0)
                 theta_deg = self._sf(values[17], 0)
+                normalized_section_type = normalize_section_type_name(section_type)
                 manual_H_straight = None
                 h_straight_text = (
                     str(values[COL_ARCH_H_STRAIGHT]).strip()
@@ -1917,8 +1933,21 @@ class BatchPanel(QWidget):
                         raise ValueError("直墙高度 H直 输入无效") from exc
                     if manual_H_straight < 0:
                         raise ValueError("直墙高度 H直 不能为负数")
-                    if normalize_section_type_name(section_type) in {"隧洞-圆拱直墙型", "暗涵-圆拱直墙型"} and b <= 0:
+                    if normalized_section_type in {"隧洞-圆拱直墙型", "暗涵-圆拱直墙型"} and b <= 0:
                         raise ValueError("填写直墙高度 H直 时必须同时填写底宽 B")
+                tie_rod_height = None
+                tie_rod_text = (
+                    str(values[COL_TIE_ROD_HEIGHT]).strip()
+                    if len(values) > COL_TIE_ROD_HEIGHT and values[COL_TIE_ROD_HEIGHT] is not None
+                    else ""
+                )
+                if tie_rod_text and "渡槽" in normalized_section_type:
+                    try:
+                        tie_rod_height = float(tie_rod_text)
+                    except ValueError as exc:
+                        raise ValueError("拉杆高度输入无效") from exc
+                    if tie_rod_height < 0:
+                        raise ValueError("拉杆高度不能为负数")
                 m1 = self._sf(values[COL_COMPOUND_M1], 0)
                 B1 = self._sf(values[COL_COMPOUND_B1], 0)
                 m2 = self._sf(values[COL_COMPOUND_M2], 0)
@@ -1952,6 +1981,7 @@ class BatchPanel(QWidget):
                     chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
                     theta_deg=theta_deg,
                     manual_H_straight=manual_H_straight,
+                    tie_rod_height=tie_rod_height,
                     manual_increase_percent=manual_increase_percent,
                     preserve_explicit_bottom_width=preserve_explicit_bottom_width,
                     preserve_imported_dimensions=preserve_imported_dimensions,
@@ -2085,6 +2115,7 @@ class BatchPanel(QWidget):
                           m1=0, B1=0, m2=0, B2=0, m3=0, h1=0,
                           ducao_depth_ratio=0, chamfer_angle=0, chamfer_length=0, theta_deg=0,
                           manual_H_straight=None,
+                          tie_rod_height=None,
                           manual_increase_percent=None,
                           preserve_explicit_bottom_width=False,
                           preserve_imported_dimensions=False):
@@ -2134,6 +2165,7 @@ class BatchPanel(QWidget):
             return ducao_u_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                      v_min=v_min, v_max=v_max,
                                      manual_R=R if R > 0 else None,
+                                     tie_rod_height=tie_rod_height,
                                      manual_increase_percent=_inc)
         elif "渡槽-矩形" in section_type:
             if not DUCAO_AVAILABLE: return {'success': False, 'error_message': '渡槽计算模块未加载'}
@@ -2144,6 +2176,7 @@ class BatchPanel(QWidget):
                                               depth_width_ratio=dr,
                                               chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
                                               manual_increase_percent=_inc,
+                                              tie_rod_height=tie_rod_height,
                                               manual_B=b if b > 0 else None)
                 return self._annotate_rect_aqueduct_imported_b_result(result, b, ducao_depth_ratio)
             dr = ducao_depth_ratio if ducao_depth_ratio > 0 else 0.8
@@ -2151,6 +2184,7 @@ class BatchPanel(QWidget):
                                         v_min=v_min, v_max=v_max,
                                         depth_width_ratio=dr,
                                         chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
+                                        tie_rod_height=tie_rod_height,
                                         manual_increase_percent=_inc)
         elif "隧洞-平底圆形" in section_type:
             if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
@@ -2328,6 +2362,7 @@ class BatchPanel(QWidget):
 
         if not use_increase:
             Q_inc = h_inc = V_inc = "—"
+            Fb_surcharge = "—"
             Fb_cl_i = Fb_pct_i = "—"
 
         status_text = "✓ 成功"
@@ -2729,23 +2764,57 @@ class BatchPanel(QWidget):
         o.append("")
 
         H_total = result.get('H_total', 0)
+        tie_rod_height = result.get('tie_rod_height', 0) or 0
+        tie_bottom_height = result.get('tie_bottom_height', H_total)
+        effective_control_label = "拉杆底控制高" if tie_rod_height > 0 else "H"
+        hydraulic_H_total = result.get('hydraulic_H_total', tie_bottom_height)
+        use_increase = bool(result.get('_use_increase', True))
+        h_design = result.get('h_design', 0)
+        A_design = result.get('A_design', 0)
+        P_design = result.get('P_design', 0)
+        R_hyd = result.get('R_hyd_design', 0)
+        V_design = result.get('V_design', 0)
+        inc_pct = result.get('increase_percent', 0)
+        Q_inc = result.get('Q_increased', 0)
+        h_inc = result.get('h_increased', 0)
+        V_inc = result.get('V_increased', 0)
+        A_inc = result.get('A_increased', 0)
+        P_inc = result.get('P_increased', 0)
+        R_inc = result.get('R_hyd_increased', 0)
+        Fb = result.get('Fb', 0)
         if "U形" in section_type:
             R_val = result.get('R', 0)
             f = result.get('f', 0)
+            hydraulic_f = result.get('hydraulic_f', max(0, hydraulic_H_total - R_val))
             B = result.get('B', 0)
             f_R = result.get('f_R', 0)
             o.append("【二、断面尺寸】")
             o.append(f"  内半径 R = {R_val:.2f} m")
             o.append(f"  槽宽 B = 2×R = {B:.2f} m")
-            o.append(f"  直段高度 f = {f:.2f} m, f/R = {f_R:.3f}")
-            o.append(f"  槽身总高 H = R + f = {R_val:.2f} + {f:.2f} = {H_total:.2f} m")
+            if tie_rod_height > 0:
+                o.append(f"  水力直段高度 f水力 = {hydraulic_f:.2f} m")
+                o.append(f"  结构直段高度 f = {f:.2f} m, f/R = {f_R:.3f}")
+                o.append(f"  槽身总高 H(含拉杆) = H水力 + 拉杆高度 = {hydraulic_H_total:.2f} + {tie_rod_height:.2f} = {H_total:.2f} m")
+                o.append("  拉杆高度为自身尺寸高度，按拉杆顶与槽顶齐平处理。")
+                o.append(f"  拉杆底控制高 = {tie_bottom_height:.2f} m")
+                o.append(f"  设计拉杆底净距 = {result.get('design_tie_bottom_clearance', tie_bottom_height - h_design):.3f} m")
+            else:
+                o.append(f"  直段高度 f = {f:.2f} m, f/R = {f_R:.3f}")
+                o.append(f"  槽身总高 H = R + f = {R_val:.2f} + {f:.2f} = {H_total:.2f} m")
         else:
             B = result.get('B', 0)
             ratio = result.get('depth_width_ratio', 0)
             o.append("【二、断面尺寸】")
             o.append(f"  槽宽 B = {B:.2f} m")
             o.append(f"  深宽比 = {ratio:.3f}")
-            o.append(f"  槽高 H = B × 深宽比 = {B:.2f} × {ratio:.3f} = {H_total:.2f} m")
+            if tie_rod_height > 0:
+                o.append(f"  水力槽高 H水力 = {hydraulic_H_total:.2f} m")
+                o.append(f"  槽身总高 H(含拉杆) = H水力 + 拉杆高度 = {hydraulic_H_total:.2f} + {tie_rod_height:.2f} = {H_total:.2f} m")
+                o.append("  拉杆高度为自身尺寸高度，按拉杆顶与槽顶齐平处理。")
+                o.append(f"  拉杆底控制高 = {tie_bottom_height:.2f} m")
+                o.append(f"  设计拉杆底净距 = {result.get('design_tie_bottom_clearance', tie_bottom_height - h_design):.3f} m")
+            else:
+                o.append(f"  槽高 H = B × 深宽比 = {B:.2f} × {ratio:.3f} = {H_total:.2f} m")
             if result.get('preserved_manual_b'):
                 o.append("  说明: 已按导入Excel中的底宽 B 锁定计算。")
                 imported_ratio = result.get('imported_depth_width_ratio')
@@ -2761,11 +2830,6 @@ class BatchPanel(QWidget):
 
         o.append("")
         o.append("【三、设计流量工况】")
-        h_design = result.get('h_design', 0)
-        A_design = result.get('A_design', 0)
-        P_design = result.get('P_design', 0)
-        R_hyd = result.get('R_hyd_design', 0)
-        V_design = result.get('V_design', 0)
         o.append(f"  设计水深 h = {h_design:.3f} m")
         o.append(f"  过水面积 A = {A_design:.3f} m²")
         o.append(f"  湿周 P = {P_design:.3f} m")
@@ -2773,25 +2837,18 @@ class BatchPanel(QWidget):
         o.append(f"  设计流速 V = (1/n)×R^(2/3)×i^(1/2) = {V_design:.3f} m/s")
         o.append(f"  流量校核 Q计算 = A×V = {A_design*V_design:.3f} m³/s")
 
-        o.append("")
-        o.append("【四、加大流量工况】")
-        inc_pct = result.get('increase_percent', 0)
-        Q_inc = result.get('Q_increased', 0)
-        h_inc = result.get('h_increased', 0)
-        V_inc = result.get('V_increased', 0)
-        A_inc = result.get('A_increased', 0)
-        P_inc = result.get('P_increased', 0)
-        R_inc = result.get('R_hyd_increased', 0)
-        Fb = result.get('Fb', 0)
-        o.append(f"  加大比例 = {format_increase_percent(inc_pct)}")
-        o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
-        o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
-        o.append(f"  加大过水面积 A加大 = {A_inc:.3f} m²")
-        o.append(f"  加大湿周 P加大 = {P_inc:.3f} m")
-        o.append(f"  加大水力半径 R加大 = {R_inc:.3f} m")
-        o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
-        o.append(f"  流量校核 Q计算 = {A_inc*V_inc:.3f} m³/s")
-        o.append(f"  超高 Fb = H - h加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
+        if use_increase:
+            o.append("")
+            o.append("【四、加大流量工况】")
+            o.append(f"  加大比例 = {format_increase_percent(inc_pct)}")
+            o.append(f"  加大流量 Q加大 = {Q_inc:.3f} m³/s")
+            o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
+            o.append(f"  加大过水面积 A加大 = {A_inc:.3f} m²")
+            o.append(f"  加大湿周 P加大 = {P_inc:.3f} m")
+            o.append(f"  加大水力半径 R加大 = {R_inc:.3f} m")
+            o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
+            o.append(f"  流量校核 Q计算 = {A_inc*V_inc:.3f} m³/s")
+            o.append(f"  加大有效超高 Fb = {effective_control_label} - h加大 = {tie_bottom_height:.2f} - {h_inc:.3f} = {Fb:.3f} m")
 
         o.append("")
         o.append("【五、验证】")
@@ -2801,19 +2858,27 @@ class BatchPanel(QWidget):
         o.append(f"     V = {V_design:.3f} m/s → {'通过 ✓' if velocity_ok else '超出推荐范围 ⚠'}")
 
         o.append(f"  2. 超高验证（规范 9.4.1-2）")
+        design_tie_clearance = result.get('design_tie_bottom_clearance', tie_bottom_height - h_design)
+        design_tie_ok = (tie_rod_height <= 0) or (design_tie_clearance >= 0.10)
         if "U形" in section_type:
             R_val = result.get('R', 0)
-            Fb_design = H_total - h_design
+            Fb_design = result.get('Fb_design', H_total - h_design)
             Fb_design_min = R_val / 5
-            Fb_inc_min = 0.10
-            o.append(f"     设计流量超高: Fb_设计 = {Fb_design:.3f}m ≥ R/5 = {Fb_design_min:.3f}m → {'通过 ✓' if Fb_design >= Fb_design_min else '未通过 ✗'}")
-            o.append(f"     加大流量超高: Fb_加大 = {Fb:.3f}m ≥ {Fb_inc_min:.2f}m → {'通过 ✓' if Fb >= Fb_inc_min else '未通过 ✗'}")
+            o.append(f"     设计槽顶超高: Fb_设计 = {Fb_design:.3f}m ≥ R/5 = {Fb_design_min:.3f}m → {'通过 ✓' if Fb_design >= Fb_design_min else '未通过 ✗'}")
+            if tie_rod_height > 0:
+                o.append(f"     设计拉杆底净距: F拉_设计 = {design_tie_clearance:.3f}m ≥ 0.10m → {'通过 ✓' if design_tie_ok else '未通过 ✗'}")
+            if use_increase:
+                Fb_inc_min = 0.10
+                o.append(f"     加大有效超高: Fb_加大 = {Fb:.3f}m ≥ {Fb_inc_min:.2f}m → {'通过 ✓' if Fb >= Fb_inc_min else '未通过 ✗'}")
         else:
-            Fb_design = H_total - h_design
+            Fb_design = result.get('Fb_design', H_total - h_design)
             Fb_design_min = h_design / 12 + 0.05
-            Fb_inc_min = 0.10
-            o.append(f"     设计流量超高: Fb_设计 = {Fb_design:.3f}m ≥ h/12+0.05 = {Fb_design_min:.3f}m → {'通过 ✓' if Fb_design >= Fb_design_min else '未通过 ✗'}")
-            o.append(f"     加大流量超高: Fb_加大 = {Fb:.3f}m ≥ {Fb_inc_min:.2f}m → {'通过 ✓' if Fb >= Fb_inc_min else '未通过 ✗'}")
+            o.append(f"     设计槽顶超高: Fb_设计 = {Fb_design:.3f}m ≥ h/12+0.05 = {Fb_design_min:.3f}m → {'通过 ✓' if Fb_design >= Fb_design_min else '未通过 ✗'}")
+            if tie_rod_height > 0:
+                o.append(f"     设计拉杆底净距: F拉_设计 = {design_tie_clearance:.3f}m ≥ 0.10m → {'通过 ✓' if design_tie_ok else '未通过 ✗'}")
+            if use_increase:
+                Fb_inc_min = 0.10
+                o.append(f"     加大有效超高: Fb_加大 = {Fb:.3f}m ≥ {Fb_inc_min:.2f}m → {'通过 ✓' if Fb >= Fb_inc_min else '未通过 ✗'}")
         return "\n".join(o)
 
     def _fmt_suidong_report(self, input_vals, result):
@@ -3012,6 +3077,7 @@ class BatchPanel(QWidget):
             "m2": values[COL_COMPOUND_M2], "B2": values[COL_COMPOUND_B2],
             "m3": values[COL_COMPOUND_M3], "h1": values[COL_COMPOUND_H1],
             "H_straight": values[COL_ARCH_H_STRAIGHT] if len(values) > COL_ARCH_H_STRAIGHT else "",
+            "tie_rod_height": values[COL_TIE_ROD_HEIGHT] if len(values) > COL_TIE_ROD_HEIGHT else "",
         }
         dlg = SectionParameterDialog(self, section_type, current_values)
         if dlg.exec() == QDialog.Accepted:
@@ -3036,6 +3102,7 @@ class BatchPanel(QWidget):
         for i in range(COL_COMPOUND_M1, COL_COMPOUND_H1 + 1):
             values[i] = ""
         values[COL_ARCH_H_STRAIGHT] = ""
+        values[COL_TIE_ROD_HEIGHT] = ""
         # 根据结构形式更新对应的参数列
         if "明渠-梯形" in section_type or "明渠-矩形" in section_type:
             m_val = params.get('m', "")
@@ -3061,6 +3128,8 @@ class BatchPanel(QWidget):
         elif "渡槽-U形" in section_type:
             R_val = params.get('R', "")
             values[12] = str(R_val) if R_val != "" else ""
+            tie_val = params.get('tie_rod_height', "")
+            values[COL_TIE_ROD_HEIGHT] = str(tie_val) if tie_val != "" else ""
         elif "渡槽-矩形" in section_type:
             h_b_ratio = params.get('h_b_ratio', "")
             values[14] = str(h_b_ratio) if h_b_ratio != "" else ""
@@ -3068,6 +3137,8 @@ class BatchPanel(QWidget):
             chamfer_length = params.get('chamfer_length', "")
             values[15] = str(chamfer_angle) if chamfer_angle != "" else ""
             values[16] = str(chamfer_length) if chamfer_length != "" else ""
+            tie_val = params.get('tie_rod_height', "")
+            values[COL_TIE_ROD_HEIGHT] = str(tie_val) if tie_val != "" else ""
         elif "隧洞-平底圆形" in section_type:
             B_val = params.get('B', params.get('b', ""))
             values[10] = str(B_val) if B_val != "" else ""
@@ -3925,6 +3996,7 @@ class BatchPanel(QWidget):
                 m_val = self.input_table.item(r, 9).text() if self.input_table.item(r, 9) else ""
                 tr_val = self.input_table.item(r, COL_TURN_RADIUS).text() if self.input_table.item(r, COL_TURN_RADIUS) else ""
                 h_straight_val = self.input_table.item(r, COL_ARCH_H_STRAIGHT).text() if self.input_table.item(r, COL_ARCH_H_STRAIGHT) else ""
+                tie_rod_val = self.input_table.item(r, COL_TIE_ROD_HEIGHT).text() if self.input_table.item(r, COL_TIE_ROD_HEIGHT) else ""
                 compound_vals = []
                 for col in (
                     COL_COMPOUND_M1, COL_COMPOUND_B1, COL_COMPOUND_M2,
@@ -3932,14 +4004,14 @@ class BatchPanel(QWidget):
                 ):
                     item = self.input_table.item(r, col)
                     compound_vals.append(item.text() if item else "")
-                input_params_map[seq_key] = (x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val, *compound_vals)
+                input_params_map[seq_key] = (x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val, tie_rod_val, *compound_vals)
 
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "批量计算结果"
             # 导出表头：在结果表头的结构形式后插入X/Y/Q/n/比降/边坡系数/转弯半径列
             export_headers = list(RESULT_HEADERS[:4]) + [
-                "X", "Y", "Q(m³/s)", "糙率n", "比降(1/)", "边坡系数m", "转弯半径(m)", "直墙高度H直(m)",
+                "X", "Y", "Q(m³/s)", "糙率n", "比降(1/)", "边坡系数m", "转弯半径(m)", "直墙高度H直(m)", "拉杆高度(m)",
                 "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
             ] + list(RESULT_HEADERS[4:])
             # 第1行：标题
@@ -3971,13 +4043,13 @@ class BatchPanel(QWidget):
                     item = self.result_table.item(r, c)
                     result_vals.append(item.text() if item else "")
                 seq_key = result_vals[0].strip() if result_vals else ""
-                x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val, m1_val, B1_val, m2_val, B2_val, m3_val, h1_val = input_params_map.get(
+                x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val, tie_rod_val, m1_val, B1_val, m2_val, B2_val, m3_val, h1_val = input_params_map.get(
                     seq_key,
-                    ("", "", "", "", "", "", "", "", "", "", "", "", "", ""),
+                    ("", "", "", "", "", "", "", "", "", "", "", "", "", "", ""),
                 )
-                # 构建导出行：前4列 + X/Y/Q/n/比降/边坡系数/转弯半径/H直 + 后续结果列
+                # 构建导出行：前4列 + 输入参数列 + 后续结果列
                 export_row = result_vals[:4] + [
-                    x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val,
+                    x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val, tie_rod_val,
                     m1_val, B1_val, m2_val, B2_val, m3_val, h1_val,
                 ] + result_vals[4:]
                 for c, val in enumerate(export_row, 1):
@@ -4124,6 +4196,25 @@ class BatchPanel(QWidget):
                         parts.append(f"H={float(h_total):.2f}")
                     except (TypeError, ValueError):
                         parts.append(f"H={h_total}")
+                dim = ", ".join(parts) if parts else "-"
+            elif "渡槽" in section_for_row and result_for_row.get('success'):
+                h_total = result_for_row.get('H_total', None)
+                tie_rod_height = result_for_row.get('tie_rod_height', 0) or 0
+                parts = []
+                if B_v and B_v != "-":
+                    parts.append(f"B={B_v}")
+                elif R_v and R_v != "-":
+                    parts.append(f"R={R_v}")
+                if h_total not in (None, ""):
+                    try:
+                        parts.append(f"H={float(h_total):.2f}")
+                    except (TypeError, ValueError):
+                        parts.append(f"H={h_total}")
+                if tie_rod_height:
+                    try:
+                        parts.append(f"拉杆={float(tie_rod_height):.2f}")
+                    except (TypeError, ValueError):
+                        parts.append(f"拉杆={tie_rod_height}")
                 dim = ", ".join(parts) if parts else "-"
             elif B_v and B_v != "-":
                 dim = f"B={B_v}"
@@ -4410,12 +4501,16 @@ class SectionParameterDialog(QDialog):
         elif "渡槽-U形" in st:
             self._add_opt_entry(form, "指定内半径 R (m):", "R", "留空自动计算",
                                 "(留空则自动计算)")
+            self._add_opt_entry(form, "拉杆高度 (m):", "tie_rod_height", "留空或0表示无拉杆",
+                                "(拉杆自身尺寸高度，拉杆顶与槽顶齐平)")
         elif "渡槽-矩形" in st:
             self._add_opt_entry(form, "深宽比 H/B:", "h_b_ratio", "推荐0.6~0.8",
                                 "(推荐值0.6~0.8，留空则默认0.8)")
             self._add_opt_entry(form, "倒角角度 (度):", "chamfer_angle", "")
             self._add_opt_entry(form, "倒角底边 (m):", "chamfer_length", "",
                                 "(倒角两者需同时填写或同时留空)")
+            self._add_opt_entry(form, "拉杆高度 (m):", "tie_rod_height", "留空或0表示无拉杆",
+                                "(拉杆自身尺寸高度，拉杆顶与槽顶齐平)")
         elif "隧洞-平底圆形" in st:
             self._add_opt_entry(form, "指定直径 D (m):", "D", "必填")
             self._add_opt_entry(form, "平底宽 B (m):", "B", "必填",
@@ -4482,11 +4577,17 @@ class SectionParameterDialog(QDialog):
                 v = cv.get('R', '')
                 if 'R' in self._entries and v and str(v).strip():
                     self._entries['R'].setText(str(v).strip())
+                tie_v = cv.get('tie_rod_height', '')
+                if 'tie_rod_height' in self._entries and tie_v and str(tie_v).strip():
+                    self._entries['tie_rod_height'].setText(str(tie_v).strip())
             elif "渡槽-矩形" in st:
                 for k, ek in [('ducao_depth_ratio', 'h_b_ratio'), ('chamfer_angle', 'chamfer_angle'), ('chamfer_length', 'chamfer_length')]:
                     v = cv.get(k, '')
                     if ek in self._entries and v and str(v).strip():
                         self._entries[ek].setText(str(v).strip())
+                tie_v = cv.get('tie_rod_height', '')
+                if 'tie_rod_height' in self._entries and tie_v and str(tie_v).strip():
+                    self._entries['tie_rod_height'].setText(str(tie_v).strip())
             elif "隧洞-圆拱直墙型" in st:
                 for k, ek in [('b', 'B'), ('theta', 'theta'), ('H_straight', 'H_straight')]:
                     v = cv.get(k, '')
@@ -4574,10 +4675,18 @@ class SectionParameterDialog(QDialog):
                 result['D'] = self._get_float('D', "")
             elif "渡槽-U形" in st:
                 result['R'] = self._get_float('R', "")
+                tie_rod_height = self._get_float('tie_rod_height', "")
+                if isinstance(tie_rod_height, (int, float)) and tie_rod_height < 0:
+                    raise ValueError("拉杆高度不能为负数")
+                result['tie_rod_height'] = tie_rod_height
             elif "渡槽-矩形" in st:
                 result['h_b_ratio'] = self._get_float('h_b_ratio', "")
                 result['chamfer_angle'] = self._get_float('chamfer_angle', "")
                 result['chamfer_length'] = self._get_float('chamfer_length', "")
+                tie_rod_height = self._get_float('tie_rod_height', "")
+                if isinstance(tie_rod_height, (int, float)) and tie_rod_height < 0:
+                    raise ValueError("拉杆高度不能为负数")
+                result['tie_rod_height'] = tie_rod_height
             elif "隧洞-平底圆形" in st:
                 D_val = self._get_float('D')
                 B_val = self._get_float('B')

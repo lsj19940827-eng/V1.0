@@ -23,6 +23,7 @@ from app_渠系计算前端.batch.panel import (
     BatchPanel,
     COL_ARCH_H_STRAIGHT,
     COL_COMPOUND_H1,
+    COL_TIE_ROD_HEIGHT,
     COL_TURN_RADIUS,
     INPUT_HEADERS,
     SectionParameterDialog,
@@ -99,12 +100,14 @@ def test_tunnel_parse_case_rejects_wall_height_without_bottom_width():
         )
 
 
-def test_batch_input_headers_append_wall_height_column_without_moving_old_columns():
-    """批量输入表应在末尾追加 H直 列，避免旧列错位。"""
+def test_batch_input_headers_keep_wall_height_before_tie_rod_without_moving_old_columns():
+    """批量输入表应保持旧列与 H直 位置，并在后面追加拉杆高度。"""
     assert INPUT_HEADERS[COL_TURN_RADIUS] == "转弯半径(m)"
     assert INPUT_HEADERS[COL_COMPOUND_H1] == "平台高差h1(m)"
     assert INPUT_HEADERS[COL_ARCH_H_STRAIGHT] == "直墙高度H直(m)"
-    assert COL_ARCH_H_STRAIGHT == len(INPUT_HEADERS) - 1
+    assert INPUT_HEADERS[COL_TIE_ROD_HEIGHT] == "拉杆高度(m)"
+    assert COL_ARCH_H_STRAIGHT == COL_COMPOUND_H1 + 1
+    assert COL_TIE_ROD_HEIGHT == len(INPUT_HEADERS) - 1
 
 
 def test_batch_calculate_single_passes_manual_wall_height_to_kernel():

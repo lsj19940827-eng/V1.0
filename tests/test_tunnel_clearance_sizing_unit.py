@@ -14,7 +14,7 @@ sys.path.insert(
     ),
 )
 
-from 隧洞设计 import design_horseshoe_by_freeboard_target
+from 隧洞设计 import design_horseshoe_by_freeboard_target, quick_calculate_horseshoe
 
 
 def _default_kwargs(**overrides):
@@ -46,6 +46,70 @@ def test_clearance_target_sizing_returns_valid_horseshoe_dimensions():
     assert result["Q_calc_increased"] == pytest.approx(12.0, rel=0.001)
     assert result["freeboard_pct_inc"] == pytest.approx(20.0, abs=0.05)
     assert result["freeboard_hgt_inc"] >= 0.4
+
+
+def test_clearance_target_sizing_keeps_minimum_target_after_ui_roundtrip():
+    """目标为15%时，反推结果按界面三位回填后仍应通过主流程校核。"""
+    result = design_horseshoe_by_freeboard_target(
+        **_default_kwargs(
+            Q_increased=43.7,
+            slope_inv=2000.0,
+            v_max=100.0,
+            hb_ratio=1.1,
+            target_freeboard_pct=15.0,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["freeboard_pct_inc"] >= 15.0
+
+    main_result = quick_calculate_horseshoe(
+        10.0,
+        0.014,
+        2000.0,
+        0.1,
+        100.0,
+        manual_B=round(result["B"], 3),
+        manual_H_straight=round(result["H_straight"], 3),
+        theta_deg=round(result["theta_deg"], 3),
+        manual_increase_percent=(43.7 / 10.0 - 1.0) * 100.0,
+    )
+
+    assert main_result["success"] is True
+    assert main_result["freeboard_pct_inc"] >= 15.0
+
+
+def test_clearance_target_sizing_rechecks_exact_three_decimal_adoption_case():
+    """边界工况按界面三位回填后仍应通过固定断面校核。"""
+    result = design_horseshoe_by_freeboard_target(
+        **_default_kwargs(
+            Q_design=1.0,
+            Q_increased=1.3,
+            n=0.017,
+            slope_inv=8000.0,
+            v_max=100.0,
+            hb_ratio=1.1,
+            theta_deg=150.0,
+            target_freeboard_pct=15.0,
+        )
+    )
+
+    assert result["success"] is True
+
+    main_result = quick_calculate_horseshoe(
+        1.0,
+        0.017,
+        8000.0,
+        0.1,
+        100.0,
+        manual_B=float(f"{result['B']:.3f}"),
+        manual_H_straight=float(f"{result['H_straight']:.3f}"),
+        theta_deg=float(f"{result['theta_deg']:.3f}"),
+        manual_increase_percent=30.0,
+    )
+
+    assert main_result["success"] is True
+    assert main_result["freeboard_pct_inc"] >= 15.0
 
 
 @pytest.mark.parametrize(

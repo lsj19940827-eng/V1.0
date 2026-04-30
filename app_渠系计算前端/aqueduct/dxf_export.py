@@ -27,6 +27,45 @@ def _increase_lines(params, result):
     ))
 
 
+def _get_tie_rod_geometry(result, H):
+    """读取拉杆几何信息，返回拉杆自身高度和拉杆底高程。"""
+    try:
+        tie_rod_height = float(result.get('tie_rod_height') or 0.0)
+    except (TypeError, ValueError):
+        tie_rod_height = 0.0
+    if tie_rod_height <= 0:
+        return 0.0, float(H)
+    try:
+        tie_bottom_height = float(result.get('tie_bottom_height'))
+    except (TypeError, ValueError):
+        tie_bottom_height = float(H) - tie_rod_height
+    tie_bottom_height = max(0.0, min(float(H), tie_bottom_height))
+    return tie_rod_height, tie_bottom_height
+
+
+def _draw_tie_rod_band(msp, x_left, x_right, y_bottom, y_top, th):
+    """绘制拉杆自身高度占用带和拉杆底控制线。"""
+    if y_top <= y_bottom:
+        return
+    layer = '拉杆控制'
+    msp.add_lwpolyline(
+        [(x_left, y_bottom), (x_right, y_bottom), (x_right, y_top), (x_left, y_top), (x_left, y_bottom)],
+        dxfattribs={'layer': layer, 'linetype': 'DASHED'},
+    )
+    msp.add_line((x_left, y_bottom), (x_right, y_bottom), dxfattribs={'layer': layer, 'linetype': 'DASHED'})
+    band_h = y_top - y_bottom
+    width = x_right - x_left
+    step = max(th * 3.0, width / 6.0)
+    x = x_left
+    while x < x_right:
+        msp.add_line((x, y_bottom), (min(x + band_h, x_right), y_top), dxfattribs={'layer': layer})
+        x += step
+    msp.add_text(
+        '拉杆底控制线',
+        dxfattribs={'layer': layer, 'height': th, 'style': 'FANGSONG', 'insert': (x_right + th, y_bottom + th * 0.2)},
+    )
+
+
 def export_aqueduct_dxf(filepath, result, input_params, scale_denom=100):
     try:
         import ezdxf
@@ -71,7 +110,11 @@ def _draw_u(msp, result, p, sf=1.0, scale_denom=100):
     A_d = result.get('A_design', 0.0)
     Q_inc = result.get('Q_increased', 0.0); h_inc = result.get('h_increased', 0.0)
     V_inc = result.get('V_increased', 0.0); Fb = result.get('Fb', 0.0)
+    Fb_design = result.get('Fb_design', H - h_d)
     inc = result.get('increase_percent', 0.0)
+    tie_rod_height, tie_bottom_height = _get_tie_rod_geometry(result, H)
+    design_tie_clearance = result.get('design_tie_bottom_clearance', tie_bottom_height - h_d)
+    use_increase = bool(p.get('use_increase', True))
 
     char = max(B, H, 1.0)*sf; th = 3.5; ar = th*0.85; gap = char*0.18
 
@@ -84,13 +127,15 @@ def _draw_u(msp, result, p, sf=1.0, scale_denom=100):
     msp.add_line((-R*sf, R*sf), (-R*sf, H*sf), dxfattribs={'layer': '轮廓线'})
     msp.add_line((R*sf,  R*sf), (R*sf,  H*sf), dxfattribs={'layer': '轮廓线'})
     msp.add_line((-R*sf, H*sf), (R*sf, H*sf),  dxfattribs={'layer': '轮廓线', 'linetype': 'DASHED'})
+    if tie_rod_height > 0:
+        _draw_tie_rod_band(msp, -R*sf, R*sf, tie_bottom_height*sf, H*sf, th)
 
     # 水面线 + 居中标注（重叠时上下错开）
     _olap_u = h_d > 0 and h_inc > 0 and (h_inc - h_d) * sf < th * 2.0
-    for h_w, layer, lt, lbl in [
-        (h_d,  '设计水位',    None,     f'▽ 设计水位 h={h_d:.3f}m'),
-        (h_inc,'加大水位', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
-    ]:
+    water_lines = [(h_d, '设计水位', None, f'▽ 设计水位 h={h_d:.3f}m')]
+    if use_increase:
+        water_lines.append((h_inc, '加大水位', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'))
+    for h_w, layer, lt, lbl in water_lines:
         if h_w and h_w > 0:
             hw = (math.sqrt(max(0, R**2 - (R-h_w)**2)) if h_w <= R else R) * sf
             att = {'layer': layer}
@@ -106,13 +151,24 @@ def _draw_u(msp, result, p, sf=1.0, scale_denom=100):
     if f > 0:
         _add_dim_v(msp, R*sf, H*sf, R*sf+gap*1.4, R*sf, f'f={f:.3f} m', th, ar, '尺寸标注')
     _add_dim_v(msp, 0, H*sf, R*sf+gap*2.8, R*sf, f'H={H:.3f} m', th, ar, '尺寸标注')
+    if tie_rod_height > 0:
+        _add_dim_v(msp, tie_bottom_height*sf, H*sf, R*sf+gap*4.0, R*sf, f'拉杆高度={tie_rod_height:.3f} m', th, ar, '拉杆控制')
+        if h_d > 0:
+            _add_dim_v(msp, h_d*sf, tie_bottom_height*sf, R*sf+gap*5.2, R*sf, f'设计拉杆底净距={design_tie_clearance:.3f} m', th, ar, '拉杆控制')
+        if use_increase and h_inc > 0:
+            _add_dim_v(msp, h_inc*sf, tie_bottom_height*sf, R*sf+gap*6.4, R*sf, f'加大有效超高={Fb:.3f} m', th, ar, '拉杆控制')
 
     lines = ['【渡槽 - U形】', f'比例: 1:{scale_denom}', '',
              '[输入参数]', f'Q={Q:.3f} m\u00b3/s', f'n={n}', f'i=1/{int(si)}','',
-             '[断面尺寸]', f'R={R:.3f} m', f'f={f:.3f} m', f'B={B:.3f} m', f'H={H:.3f} m','',
-             '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m\u00b2', f'V={V_d:.3f} m/s','',
-             '[加大流量]', *_increase_lines(p, result), f'h\u589e={h_inc:.3f} m',
-             f'V\u589e={V_inc:.3f} m/s', f'Fb={Fb:.3f} m']
+             '[断面尺寸]', f'R={R:.3f} m', f'f={f:.3f} m', f'B={B:.3f} m', f'H(含拉杆)={H:.3f} m','',
+             '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m\u00b2', f'V={V_d:.3f} m/s', f'槽顶超高Fb={Fb_design:.3f} m']
+    if tie_rod_height > 0:
+        lines.insert(13, f'拉杆高度={tie_rod_height:.3f} m')
+        lines.insert(14, f'拉杆底高={tie_bottom_height:.3f} m')
+        lines.insert(15, f'设计拉杆底净距={design_tie_clearance:.3f} m')
+    if use_increase:
+        lines += ['', '[加大流量]', *_increase_lines(p, result), f'h\u589e={h_inc:.3f} m',
+                  f'V\u589e={V_inc:.3f} m/s', f'加大有效超高Fb={Fb:.3f} m']
     _add_text_block(msp, R*sf+gap*4, H*sf+th, lines, th, '参数文字')
 
 
@@ -123,9 +179,13 @@ def _draw_rect(msp, result, p, sf=1.0, scale_denom=100):
     A_d = result.get('A_design', 0.0)
     Q_inc = result.get('Q_increased', 0.0); h_inc = result.get('h_increased', 0.0)
     V_inc = result.get('V_increased', 0.0); Fb = result.get('Fb', 0.0)
+    Fb_design = result.get('Fb_design', H - h_d)
     inc = result.get('increase_percent', 0.0)
     has_ch = result.get('has_chamfer', False)
     ch_ang = result.get('chamfer_angle', 0); ch_len = result.get('chamfer_length', 0)
+    tie_rod_height, tie_bottom_height = _get_tie_rod_geometry(result, H)
+    design_tie_clearance = result.get('design_tie_bottom_clearance', tie_bottom_height - h_d)
+    use_increase = bool(p.get('use_increase', True))
 
     char = max(B, H, 1.0)*sf; th = 3.5; ar = th*0.85; gap = char*0.18
 
@@ -141,12 +201,14 @@ def _draw_rect(msp, result, p, sf=1.0, scale_denom=100):
         msp.add_line((-B/2*sf, 0), (-B/2*sf, H*sf), dxfattribs={'layer': '轮廓线'})
         msp.add_line((B/2*sf, 0),  (B/2*sf, H*sf),  dxfattribs={'layer': '轮廓线'})
     msp.add_line((-B/2*sf, H*sf), (B/2*sf, H*sf), dxfattribs={'layer': '轮廓线', 'linetype': 'DASHED'})
+    if tie_rod_height > 0:
+        _draw_tie_rod_band(msp, -B/2*sf, B/2*sf, tie_bottom_height*sf, H*sf, th)
 
     _olap_r = h_d > 0 and h_inc > 0 and (h_inc - h_d) * sf < th * 2.0
-    for h_w, layer, lt, lbl in [
-        (h_d,  '设计水位',    None,     f'▽ 设计水位 h={h_d:.3f}m'),
-        (h_inc,'加大水位', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'),
-    ]:
+    water_lines = [(h_d, '设计水位', None, f'▽ 设计水位 h={h_d:.3f}m')]
+    if use_increase:
+        water_lines.append((h_inc, '加大水位', 'DASHED', f'▽ 加大水位 h={h_inc:.3f}m'))
+    for h_w, layer, lt, lbl in water_lines:
         if h_w and h_w > 0:
             att = {'layer': layer}
             if lt: att['linetype'] = lt
@@ -158,13 +220,24 @@ def _draw_rect(msp, result, p, sf=1.0, scale_denom=100):
     _add_dim_h(msp, -B/2*sf, B/2*sf, -(gap*1.1), 0, f'B={B:.3f} m', th, ar, '尺寸标注')
     _add_dim_v(msp, 0, h_d*sf, -(B/2*sf+gap*1.4), -B/2*sf, f'h={h_d:.3f} m', th, ar, '尺寸标注')
     _add_dim_v(msp, 0, H*sf,   B/2*sf+gap*1.4, B/2*sf, f'H={H:.3f} m', th, ar, '尺寸标注')
+    if tie_rod_height > 0:
+        _add_dim_v(msp, tie_bottom_height*sf, H*sf, B/2*sf+gap*2.8, B/2*sf, f'拉杆高度={tie_rod_height:.3f} m', th, ar, '拉杆控制')
+        if h_d > 0:
+            _add_dim_v(msp, h_d*sf, tie_bottom_height*sf, B/2*sf+gap*4.0, B/2*sf, f'设计拉杆底净距={design_tie_clearance:.3f} m', th, ar, '拉杆控制')
+        if use_increase and h_inc > 0:
+            _add_dim_v(msp, h_inc*sf, tie_bottom_height*sf, B/2*sf+gap*5.2, B/2*sf, f'加大有效超高={Fb:.3f} m', th, ar, '拉杆控制')
 
     lines = ['【渡槽 - 矩形】', f'比例: 1:{scale_denom}', '',
              '[输入参数]', f'Q={Q:.3f} m\u00b3/s', f'n={n}', f'i=1/{int(si)}','',
-             '[断面尺寸]', f'B={B:.3f} m', f'H={H:.3f} m']
+             '[断面尺寸]', f'B={B:.3f} m', f'H(含拉杆)={H:.3f} m']
+    if tie_rod_height > 0:
+        lines += [f'拉杆高度={tie_rod_height:.3f} m', f'拉杆底高={tie_bottom_height:.3f} m',
+                  f'设计拉杆底净距={design_tie_clearance:.3f} m']
     if has_ch:
         lines += [f'倒角={ch_ang}\u00b0', f'底边长={ch_len} m']
     lines += ['', '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m\u00b2', f'V={V_d:.3f} m/s',
-              '', '[加大流量]', *_increase_lines(p, result),
-              f'h\u589e={h_inc:.3f} m', f'V\u589e={V_inc:.3f} m/s', f'Fb={Fb:.3f} m']
+              f'槽顶超高Fb={Fb_design:.3f} m']
+    if use_increase:
+        lines += ['', '[加大流量]', *_increase_lines(p, result),
+                  f'h\u589e={h_inc:.3f} m', f'V\u589e={V_inc:.3f} m/s', f'加大有效超高Fb={Fb:.3f} m']
     _add_text_block(msp, B/2*sf+gap*3.5, H*sf+th, lines, th, '参数文字')

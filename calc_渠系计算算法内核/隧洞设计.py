@@ -55,6 +55,10 @@ MIN_FREEBOARD_HGT = MIN_FREEBOARD_HGT_TUNNEL
 SOLVER_TOLERANCE = 0.0001
 MAX_ITERATIONS = 100
 DIM_INCREMENT = 0.01
+CLEARANCE_SIZING_SCALE_MARGIN = 1.00005  # 净空反推尺寸微放大，抵消求解和三位回填误差
+CLEARANCE_SIZING_RETURN_DIGITS = 3       # 净空反推结果回填精度
+CLEARANCE_SIZING_HEIGHT_STEP = 0.001     # 三位回填后不足时，H直的最小补偿步长
+CLEARANCE_SIZING_MAX_HEIGHT_STEPS = 1000 # 防止异常参数导致补偿循环过长
 
 
 # ============================================================
@@ -91,6 +95,17 @@ def get_required_freeboard_height(H_total: float) -> float:
 def _clamp(value: float, low: float, high: float) -> float:
     """将数值限制在指定区间内。"""
     return max(low, min(high, value))
+
+
+def _round_to_digits(value: float, digits: int) -> float:
+    """按界面文本格式回填精度四舍五入。"""
+    return float(f"{value:.{digits}f}")
+
+
+def _ceil_to_digits(value: float, digits: int) -> float:
+    """按指定小数位向上取整，避免回填时把断面尺寸缩小。"""
+    scale = 10 ** digits
+    return math.ceil((value - 1e-12) * scale) / scale
 
 
 def _build_flat_bottom_circular_geometry(D: float, B: float) -> Dict[str, float]:
@@ -556,6 +571,68 @@ def solve_water_depth_horseshoe(B: float, H_total: float, theta_rad: float,
     return (h_mid, False)
 
 
+def _evaluate_horseshoe_clearance_sizing_candidate(
+        B: float, H_straight: float, theta_deg: float,
+        Q_design: float, Q_increased: float, n: float, slope: float,
+        v_min: float, v_max: float, target_freeboard_pct: float,
+        min_freeboard_pct: float) -> Tuple[Any, str]:
+    """按固定 B/H直 口径复算净空反推候选断面。"""
+    theta_rad = math.radians(theta_deg)
+    try:
+        geom = calculate_horseshoe_arch_geometry(
+            B,
+            theta_rad,
+            H_straight=H_straight,
+        )
+    except ValueError as exc:
+        return None, str(exc)
+
+    H_total = geom['H_total']
+    H_arch = geom['H_arch']
+    if B < MIN_WIDTH_HS or H_total < MIN_HEIGHT_HS:
+        return None, f'反推尺寸低于最小断面要求：B={B:.3f}m，H={H_total:.3f}m。'
+
+    h_design, success_design = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q_design)
+    if not success_design or h_design >= H_total:
+        return None, '反推断面无法满足设计流量，请调整净空比例或高宽比。'
+    outputs_design = calculate_horseshoe_outputs(B, H_total, theta_rad, h_design, n, slope)
+    if outputs_design['V'] < v_min or outputs_design['V'] > v_max:
+        return None, (
+            f"设计流量流速 V={outputs_design['V']:.3f} m/s "
+            f"不在 {v_min}~{v_max} m/s 范围内。"
+        )
+    if (outputs_design['freeboard_hgt'] < MIN_FREEBOARD_HGT_TUNNEL or
+            outputs_design['freeboard_pct'] < min_freeboard_pct):
+        return None, '设计流量工况净空不足，请调整净空比例或高宽比。'
+
+    h_inc, success_inc = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q_increased)
+    if not success_inc or h_inc >= H_total:
+        return None, '反推断面无法满足加大流量，请调整净空比例或高宽比。'
+    outputs_inc = calculate_horseshoe_outputs(B, H_total, theta_rad, h_inc, n, slope)
+    if outputs_inc['V'] > v_max:
+        return None, f"加大流量流速 V={outputs_inc['V']:.3f} m/s 超过 {v_max} m/s。"
+    if outputs_inc['freeboard_hgt'] < MIN_FREEBOARD_HGT_TUNNEL:
+        return None, (
+            f"加大流量净空高度 {outputs_inc['freeboard_hgt']:.3f} m "
+            f"小于 {MIN_FREEBOARD_HGT_TUNNEL:.1f} m。"
+        )
+    if outputs_inc['freeboard_pct'] + GEOM_TOLERANCE < target_freeboard_pct:
+        return None, '反推结果未达到目标净空比例，请调整输入参数。'
+
+    return {
+        'B': B,
+        'H_total': H_total,
+        'H_straight': H_straight,
+        'H_arch': H_arch,
+        'theta_deg': theta_deg,
+        'HB_ratio': H_total / B if B > 0 else 0,
+        'h_design': h_design,
+        'outputs_design': outputs_design,
+        'h_increased': h_inc,
+        'outputs_inc': outputs_inc,
+    }, ''
+
+
 def design_horseshoe_by_freeboard_target(Q_design: float, Q_increased: float,
                                           n: float, slope_inv: float,
                                           v_min: float, v_max: float,
@@ -675,6 +752,8 @@ def design_horseshoe_by_freeboard_target(Q_design: float, Q_increased: float,
         return result
 
     B = ((Q_increased * n) / ((slope ** 0.5) * conveyance_coeff)) ** (3.0 / 8.0)
+    # 反推助手返回的尺寸会以三位小数回填主界面，这里略放大断面，避免边界目标被求解误差压到下限以下。
+    B *= CLEARANCE_SIZING_SCALE_MARGIN
     H_total = hb_ratio * B
     try:
         geom = calculate_horseshoe_arch_geometry(
@@ -729,13 +808,52 @@ def design_horseshoe_by_freeboard_target(Q_design: float, Q_increased: float,
             f"小于 {MIN_FREEBOARD_HGT_TUNNEL:.1f} m。"
         )
         return result
-    if outputs_inc['freeboard_pct'] < target_freeboard_pct - 0.05:
+    if outputs_inc['freeboard_pct'] + GEOM_TOLERANCE < target_freeboard_pct:
         result['error_message'] = '反推结果未达到目标净空比例，请调整输入参数。'
         return result
 
+    theta_return = _round_to_digits(theta_deg, CLEARANCE_SIZING_RETURN_DIGITS)
+    B_return = _ceil_to_digits(B, CLEARANCE_SIZING_RETURN_DIGITS)
+    H_straight_return = _ceil_to_digits(H_straight, CLEARANCE_SIZING_RETURN_DIGITS)
+    safe_candidate = None
+    candidate_error = ''
+    for _ in range(CLEARANCE_SIZING_MAX_HEIGHT_STEPS + 1):
+        safe_candidate, candidate_error = _evaluate_horseshoe_clearance_sizing_candidate(
+            B_return,
+            H_straight_return,
+            theta_return,
+            Q_design,
+            Q_increased,
+            n,
+            slope,
+            v_min,
+            v_max,
+            target_freeboard_pct,
+            min_freeboard_pct,
+        )
+        if safe_candidate:
+            break
+        H_straight_return = _ceil_to_digits(
+            H_straight_return + CLEARANCE_SIZING_HEIGHT_STEP,
+            CLEARANCE_SIZING_RETURN_DIGITS,
+        )
+    if not safe_candidate:
+        result['error_message'] = f'反推结果按三位回填后无法满足校核：{candidate_error}'
+        return result
+
+    B = safe_candidate['B']
+    H_total = safe_candidate['H_total']
+    H_straight = safe_candidate['H_straight']
+    H_arch = safe_candidate['H_arch']
+    theta_deg = safe_candidate['theta_deg']
+    h_design = safe_candidate['h_design']
+    outputs_design = safe_candidate['outputs_design']
+    h_inc = safe_candidate['h_increased']
+    outputs_inc = safe_candidate['outputs_inc']
+
     result['success'] = True
     result['design_method'] = (
-        f'圆拱直墙型; 按Q加大净空比例反推; B={B:.3f}m, '
+        f'圆拱直墙型; 按Q加大净空比例反推并按三位回填校核; B={B:.3f}m, '
         f'H={H_total:.3f}m, H直={H_straight:.3f}m, θ={theta_deg:.3f}°'
     )
     result['B'] = B

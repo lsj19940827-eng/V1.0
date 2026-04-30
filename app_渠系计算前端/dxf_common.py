@@ -11,11 +11,19 @@ BASE_SECTION_LAYER_DEFS = (
     ("轮廓线", 7, 50),
     ("设计水位", 5, 25),
     ("加大水位", 4, 25),
+    ("拉杆控制", 30, 18),
     ("尺寸标注", 2, 18),
     ("参数文字", 3, 18),
 )
 
 DEFAULT_SCALE_OPTIONS = ("1:20", "1:50", "1:100", "1:200", "1:500")
+DXF_TEXT_WIDTH_FACTOR = 0.7
+
+_SUBSCRIPT_MAP = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
+_SUBSCRIPT_CHARS = set("₀₁₂₃₄₅₆₇₈₉")
+_SUPERSCRIPT_MAP = str.maketrans("¹²³⁰⁴⁵⁶⁷⁸⁹", "1230456789")
+_SUPERSCRIPT_CHARS = set("¹²³⁰⁴⁵⁶⁷⁸⁹")
+_SCRIPT_CHARS = _SUBSCRIPT_CHARS | _SUPERSCRIPT_CHARS
 
 
 def _prefixed_layer(name: str, layer_prefix: str = "") -> str:
@@ -28,6 +36,82 @@ def _copy_dxfattribs(dxfattribs=None, *, layer_prefix: str = ""):
     if layer_name:
         attrs["layer"] = _prefixed_layer(layer_name, layer_prefix)
     return attrs
+
+
+def has_dxf_script_chars(text: object) -> bool:
+    """判断文本是否包含 DXF 需要特殊处理的上下标字符。"""
+    if text is None:
+        return False
+    return any(char in _SCRIPT_CHARS for char in str(text))
+
+
+def to_dxf_mtext_script(text: object) -> str:
+    """把 Unicode 上下标转换成 AutoCAD MTEXT 堆叠控制码。"""
+    if text is None:
+        return ""
+    result = []
+    raw_text = str(text)
+    idx = 0
+    while idx < len(raw_text):
+        char = raw_text[idx]
+        if char in _SUBSCRIPT_CHARS:
+            sub_chars = []
+            while idx < len(raw_text) and raw_text[idx] in _SUBSCRIPT_CHARS:
+                sub_chars.append(raw_text[idx].translate(_SUBSCRIPT_MAP))
+                idx += 1
+            result.append("{\\H0.7x;\\S^ " + "".join(sub_chars) + ";}")
+            continue
+        if char in _SUPERSCRIPT_CHARS:
+            sup_chars = []
+            while idx < len(raw_text) and raw_text[idx] in _SUPERSCRIPT_CHARS:
+                sup_chars.append(raw_text[idx].translate(_SUPERSCRIPT_MAP))
+                idx += 1
+            result.append("{\\H0.7x;\\S" + "".join(sup_chars) + "^ ;}")
+            continue
+        result.append(char)
+        idx += 1
+    return "".join(result)
+
+
+def add_centered_dxf_text(
+    msp,
+    text: object,
+    cx: float,
+    cy: float,
+    height: float,
+    layer: str = "参数文字",
+    style: str = "FANGSONG",
+):
+    """在单元格中心写入 DXF 文字，含上下标时使用 MTEXT。"""
+    text = str(text)
+    attrs = {"layer": layer, "char_height": float(height), "style": style}
+    if has_dxf_script_chars(text):
+        draw_msp = msp
+        insert = (float(cx), float(cy))
+        if isinstance(msp, TrackedSectionMsp):
+            draw_msp = msp._msp
+            attrs = _copy_dxfattribs(attrs, layer_prefix=msp.layer_prefix)
+            insert = msp._apply_point(insert)
+            msp._track_text_box(
+                text,
+                {"align_point": (float(cx), float(cy)), "height": float(height), "halign": 1},
+            )
+        entity = draw_msp.add_mtext(to_dxf_mtext_script(text), dxfattribs=attrs)
+        entity.set_location(insert=insert, attachment_point=5)
+        return entity
+    return msp.add_text(
+        text,
+        dxfattribs={
+            "layer": layer,
+            "height": float(height),
+            "width": DXF_TEXT_WIDTH_FACTOR,
+            "style": style,
+            "insert": (float(cx), float(cy)),
+            "align_point": (float(cx), float(cy)),
+            "halign": 1,
+            "valign": 2,
+        },
+    )
 
 
 def _point_tuple(point):
@@ -64,6 +148,11 @@ class _NullTextEntity:
         return self
 
 
+class _NullMTextEntity:
+    def set_location(self, *_args, **_kwargs):
+        return self
+
+
 class _NullDimensionEntity:
     def render(self):
         return self
@@ -84,6 +173,9 @@ class _NullModelspace:
 
     def add_text(self, *_args, **_kwargs):
         return _NullTextEntity()
+
+    def add_mtext(self, *_args, **_kwargs):
+        return _NullMTextEntity()
 
     def add_linear_dim(self, *_args, **_kwargs):
         return _NullDimensionEntity()
@@ -148,9 +240,10 @@ class TrackedSectionMsp:
     def _track_text_box(self, text, dxfattribs=None):
         attrs = dict(dxfattribs or {})
         height = float(attrs.get("height", 3.5) or 3.5)
+        width_factor = float(attrs.get("width", DXF_TEXT_WIDTH_FACTOR) or DXF_TEXT_WIDTH_FACTOR)
         anchor = attrs.get("align_point") or attrs.get("insert") or (0.0, 0.0)
         x, y = _point_tuple(anchor)
-        width = max(len(str(text)), 1) * height * 0.75
+        width = max(len(str(text)), 1) * height * width_factor
         halign = int(attrs.get("halign", 0) or 0)
         if halign == 1:
             x1, x2 = x - width / 2.0, x + width / 2.0
@@ -209,6 +302,7 @@ class TrackedSectionMsp:
 
     def add_text(self, text, dxfattribs=None):
         attrs = _copy_dxfattribs(dxfattribs, layer_prefix=self._layer_prefix)
+        attrs.setdefault("width", DXF_TEXT_WIDTH_FACTOR)
         if "insert" in attrs:
             attrs["insert"] = self._apply_point(attrs["insert"])
         if "align_point" in attrs:
@@ -261,7 +355,10 @@ def _add_layer(doc, name, color, lw):
 def _setup_font_style(doc):
     """Register the shared section-font and dimension styles."""
     if "FANGSONG" not in doc.styles:
-        doc.styles.add("FANGSONG", font="仿宋_GB2312")
+        style = doc.styles.add("FANGSONG", font="仿宋_GB2312")
+    else:
+        style = doc.styles.get("FANGSONG")
+    style.dxf.width = DXF_TEXT_WIDTH_FACTOR
     if "CAD_DIM" not in doc.dimstyles:
         ds = doc.dimstyles.new("CAD_DIM")
         ds.dxf.dimtxsty = "FANGSONG"
@@ -341,6 +438,7 @@ def _add_text_block(msp, x, y_start, lines, txt_h, layer):
                 "layer": layer,
                 "height": height,
                 "style": "FANGSONG",
+                "width": DXF_TEXT_WIDTH_FACTOR,
                 "insert": (x + indent, y_start),
             },
         )

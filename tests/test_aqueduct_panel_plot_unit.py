@@ -72,7 +72,7 @@ class _PlotAllDummy:
         self._cases = cases
         self.calls = []
 
-    def _draw_u_section(self, _ax, R, f, H_total, h_w, V, Q, title):
+    def _draw_u_section(self, _ax, R, f, H_total, h_w, V, Q, title, result=None):
         self.calls.append(
             {
                 "kind": "U形",
@@ -83,6 +83,7 @@ class _PlotAllDummy:
                 "V": V,
                 "Q": Q,
                 "title": title,
+                "result": result,
             }
         )
 
@@ -109,7 +110,7 @@ class _SinglePlotDummy:
         self.titles = []
 
     def _draw_u_section(self, *_args):
-        self.titles.append(_args[-1])
+        self.titles.append(_args[-2])
 
     def _draw_rect_section(self, *_args, **_kwargs):
         self.titles.append(_args[6])
@@ -117,6 +118,10 @@ class _SinglePlotDummy:
 
 class _DrawDummy:
     _apply_section_plot_title = staticmethod(aqueduct_panel_mod.AqueductPanel._apply_section_plot_title)
+
+
+class _PanelParseDummy:
+    pass
 
 
 def test_update_section_plot_all_uses_original_case_numbered_titles_and_h_total():
@@ -216,3 +221,139 @@ def test_draw_u_section_spans_negative_and_positive_x_coordinates():
     assert "工况 1｜U形" in title
     assert r"\mathregular{m^{3}/s}" in title
     assert r"\mathregular{m/s}" in title
+
+
+def test_parse_case_passes_tie_rod_height_to_u_kernel():
+    params, result = aqueduct_panel_mod.AqueductPanel._parse_and_calc_case(
+        _PanelParseDummy(),
+        {
+            "section_type": "U形",
+            "Q": "5.0",
+            "n": "0.014",
+            "slope_inv": "3000",
+            "v_min": "0.1",
+            "v_max": "100.0",
+            "inc_checked": True,
+            "inc_pct": "10",
+            "inc_mode": aqueduct_panel_mod.INCREASE_MODE_PERCENT,
+            "inc_q_text": "",
+            "detail_checked": True,
+            "R": "2.4",
+            "tie_rod_height": "0.35",
+        },
+        1,
+    )
+
+    assert params["tie_rod_height"] == pytest.approx(0.35)
+    assert result["success"] is True
+    assert result["tie_rod_height"] == pytest.approx(0.35)
+    assert result["H_total"] == pytest.approx(result["tie_bottom_height"] + 0.35)
+
+
+def test_parse_case_rejects_invalid_tie_rod_height():
+    with pytest.raises(ValueError, match="拉杆高度输入无效"):
+        aqueduct_panel_mod.AqueductPanel._parse_and_calc_case(
+            _PanelParseDummy(),
+            {
+                "section_type": "U形",
+                "Q": "5.0",
+                "n": "0.014",
+                "slope_inv": "3000",
+                "v_min": "0.1",
+                "v_max": "100.0",
+                "inc_checked": True,
+                "inc_pct": "10",
+                "inc_mode": aqueduct_panel_mod.INCREASE_MODE_PERCENT,
+                "inc_q_text": "",
+                "detail_checked": True,
+                "R": "2.4",
+                "tie_rod_height": "abc",
+            },
+            1,
+        )
+
+
+def test_parse_case_rejects_negative_tie_rod_height_for_rect():
+    with pytest.raises(ValueError, match="拉杆高度不能为负数"):
+        aqueduct_panel_mod.AqueductPanel._parse_and_calc_case(
+            _PanelParseDummy(),
+            {
+                "section_type": "矩形",
+                "Q": "5.0",
+                "n": "0.014",
+                "slope_inv": "3000",
+                "v_min": "0.1",
+                "v_max": "100.0",
+                "inc_checked": False,
+                "inc_pct": "",
+                "inc_mode": aqueduct_panel_mod.INCREASE_MODE_PERCENT,
+                "inc_q_text": "",
+                "detail_checked": True,
+                "ratio": "0.8",
+                "B": "",
+                "chamfer_angle": "",
+                "chamfer_len": "",
+                "tie_rod_height": "-0.01",
+            },
+            1,
+        )
+
+
+def test_default_case_and_copy_keys_include_tie_rod_height():
+    case = aqueduct_panel_mod.AqueductPanel._default_case()
+
+    assert case["tie_rod_height"] == ""
+
+
+def test_draw_u_section_marks_tie_rod_band_and_control_line():
+    dummy = _DrawDummy()
+    fig = Figure()
+    ax = fig.subplots()
+
+    aqueduct_panel_mod.AqueductPanel._draw_u_section(
+        dummy,
+        ax,
+        R=1.4,
+        f=0.95,
+        H_total=2.35,
+        h_w=1.7,
+        V=1.1,
+        Q=5.0,
+        title="加大流量",
+        result={
+            "tie_rod_height": 0.35,
+            "tie_bottom_height": 2.0,
+            "top_clearance": 0.65,
+            "Fb": 0.30,
+        },
+    )
+
+    labels = [text.get_text() for text in ax.texts]
+    assert any("拉杆高度" in label for label in labels)
+    assert any("拉杆底" in label for label in labels)
+
+
+def test_draw_u_design_section_marks_tie_bottom_clearance():
+    dummy = _DrawDummy()
+    fig = Figure()
+    ax = fig.subplots()
+
+    aqueduct_panel_mod.AqueductPanel._draw_u_section(
+        dummy,
+        ax,
+        R=1.4,
+        f=0.95,
+        H_total=2.35,
+        h_w=1.65,
+        V=1.1,
+        Q=5.0,
+        title="设计流量",
+        result={
+            "tie_rod_height": 0.35,
+            "tie_bottom_height": 2.0,
+            "design_tie_bottom_clearance": 0.35,
+        },
+    )
+
+    labels = [text.get_text() for text in ax.texts]
+    assert any("设计净距" in label for label in labels)

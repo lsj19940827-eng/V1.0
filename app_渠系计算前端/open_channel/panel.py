@@ -86,7 +86,7 @@ from app_渠系计算前端.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_h2,
     doc_add_formula, doc_add_styled_table, doc_add_table_caption,
-    doc_render_calc_text, doc_add_figure,
+    doc_render_calc_text, doc_add_figure, doc_add_result_table,
     create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
     doc_render_calc_text_eng, update_doc_toc_via_com, doc_add_table_caption,
 )
@@ -139,6 +139,11 @@ from app_渠系计算前端.result_navigation import (
     make_case_result_anchor,
     sync_case_result_nav_bar,
     wrap_case_result_block,
+)
+from app_渠系计算前端.result_summary import (
+    build_result_summary_word_items,
+    prepend_result_summary_to_body,
+    prepend_result_summary_to_html,
 )
 if WORD_EXPORT_AVAILABLE:
     from docx import Document as DocxDocument
@@ -1230,6 +1235,9 @@ class OpenChannelPanel(QWidget):
                 plain = rendered["plain_text"]
                 raw_plain = plain
                 body_html = rendered["body_html"]
+                body_html = prepend_result_summary_to_body(
+                    "open_channel", params, result, body_html
+                )
                 extra_head = (rendered["extra_head"] or "").strip()
                 nav_label = (
                     label_getter(case_idx)
@@ -1547,6 +1555,13 @@ class OpenChannelPanel(QWidget):
         if self._suppress_result_render:
             OpenChannelPanel._capture_render_output(self, html)
             return
+
+        html = prepend_result_summary_to_html(
+            "open_channel",
+            getattr(self, "input_params", {}),
+            getattr(self, "current_result", {}),
+            html,
+        )
 
         self._scripted_render_token += 1
         token = self._scripted_render_token
@@ -3415,6 +3430,11 @@ class OpenChannelPanel(QWidget):
             self.current_result = result
             self._update_result_display(result)
             calc_text = self._export_plain_text or ''
+
+            summary_items = build_result_summary_word_items("open_channel", params, result)
+            if summary_items:
+                doc_add_eng_h(doc, '重点结果汇总')
+                doc_add_result_table(doc, summary_items)
 
             doc_render_calc_text_eng(doc, calc_text, skip_title_keyword='明渠水力计算结果')
 

@@ -58,6 +58,7 @@ R_STEP = 0.01        # 搜索步长
 TOLERANCE = 0.0001
 MAX_ITERATIONS = 1000
 ZERO_TOL = 1e-9
+TIE_BOTTOM_CLEARANCE_MIN = 0.10  # 有拉杆时水面到拉杆底的最小净距
 
 
 # ============================================================
@@ -349,6 +350,44 @@ def round_up_to_2_decimals(value: float) -> float:
     return math.ceil(value * 100) / 100
 
 
+def _normalize_tie_rod_height(tie_rod_height: float = None) -> Tuple[float, str]:
+    """校验并规范化拉杆自身高度，返回高度和错误信息。"""
+    if tie_rod_height is None:
+        return 0.0, ""
+    try:
+        value = float(tie_rod_height)
+    except (TypeError, ValueError):
+        return 0.0, "拉杆高度必须为数字"
+    if value < 0:
+        return 0.0, "拉杆高度不能为负数"
+    return value, ""
+
+
+def _top_freeboard(hydraulic_height: float, tie_rod_height: float, water_depth: float) -> float:
+    """计算水面到槽顶的超高，设计流量按该口径校核。"""
+    return hydraulic_height + tie_rod_height - water_depth
+
+
+def _required_hydraulic_height(
+    h_design: float,
+    design_freeboard_min: float,
+    h_increased: float,
+    increase_freeboard_min: float,
+    tie_rod_height: float,
+    legacy_required_height: float = None,
+) -> float:
+    """按“设计到槽顶且离拉杆底、加大到拉杆底”口径折算水力槽高。"""
+    if tie_rod_height <= 0 and legacy_required_height is not None:
+        return max(h_design, h_increased, legacy_required_height)
+    design_required = h_design + design_freeboard_min - tie_rod_height
+    increase_required = h_increased + increase_freeboard_min
+    design_tie_required = h_design
+    if tie_rod_height > 0:
+        # 超高包含拉杆高度，但设计水面距拉杆底仍需至少 0.10m。
+        design_tie_required = h_design + TIE_BOTTOM_CLEARANCE_MIN
+    return max(h_design, h_increased, design_required, design_tie_required, increase_required)
+
+
 # ============================================================
 # U形渡槽主计算函数
 # ============================================================
@@ -356,7 +395,8 @@ def round_up_to_2_decimals(value: float) -> float:
 def quick_calculate_u(Q: float, n: float, slope_inv: float,
                       v_min: float, v_max: float,
                       manual_R: float = None,
-                      manual_increase_percent: float = None) -> Dict[str, Any]:
+                      manual_increase_percent: float = None,
+                      tie_rod_height: float = None) -> Dict[str, Any]:
     """
     U形渡槽快速计算主函数
     
@@ -368,6 +408,7 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
         v_max: 不冲流速 (m/s)
         manual_R: 指定内半径 (m)，可选
         manual_increase_percent: 指定加大百分比 (%)，可选
+        tie_rod_height: 拉杆自身尺寸高度，按拉杆顶与槽顶齐平处理 (m)，可选
     
     返回:
         计算结果字典
@@ -404,6 +445,13 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
         'Fb': 0,            # 超高
         'H_total': 0,       # 槽身总高
         'A_total': 0,       # 槽身总面积
+        'tie_rod_height': 0,     # 拉杆自身高度（拉杆顶与槽顶齐平）
+        'tie_bottom_height': 0,  # 拉杆底到槽底高度；无拉杆时等于槽顶高度
+        'top_clearance': 0,      # 水面到槽顶高差
+        'design_tie_bottom_clearance': 0,     # 设计水面到拉杆底净距
+        'increased_tie_bottom_clearance': 0,  # 加大水面到拉杆底净距
+        'hydraulic_H_total': 0,  # 不含拉杆的水力槽高
+        'hydraulic_f': 0,        # 不含拉杆的直段高度
     }
     
     # 输入验证
@@ -419,6 +467,11 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     if v_min >= v_max:
         result['error_message'] = '不淤流速必须小于不冲流速'
         return result
+    tie_rod_height, tie_error = _normalize_tie_rod_height(tie_rod_height)
+    if tie_error:
+        result['error_message'] = tie_error
+        return result
+    result['tie_rod_height'] = tie_rod_height
     
     i = 1.0 / slope_inv
     
@@ -452,21 +505,33 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
         
         # 初拟f/R=0.4
         initial_fR = 0.4
-        f = initial_fR * R
+        f = max(0.0, initial_fR * R - tie_rod_height)
         total_height = f + R
         
         # 计算加大水深
         h_inc = calculate_u_water_depth(Q_increased, R, n, i, f)
-        if h_inc <= 0 and FR_MAX * R > f:
+        max_hydraulic_f = max(0.0, FR_MAX * R - tie_rod_height)
+        if h_inc <= 0 and max_hydraulic_f > f:
             # 初始f/R=0.4不足以通过流量，尝试最大f/R
-            f = FR_MAX * R
+            f = max_hydraulic_f
             total_height = f + R
             h_inc = calculate_u_water_depth(Q_increased, R, n, i, f)
         
         if h_inc > 0:
             # 计算安全超高: max(R/5, 0.1m)
             safety_height = max(R / 5, Fb_inc_min)
-            required_height = h_inc + safety_height
+            h_design_for_height = calculate_u_water_depth(Q, R, n, i, f)
+            if h_design_for_height <= 0:
+                h_design_for_height = h_inc
+            legacy_required_height = h_inc + safety_height
+            required_height = _required_hydraulic_height(
+                h_design_for_height,
+                R / 5,
+                h_inc,
+                Fb_inc_min,
+                tie_rod_height,
+                legacy_required_height,
+            )
             
             # 【规范 9.4.1-2】验证超高：U形断面加大流量时超高不应小于 0.10m
             Fb_min_required = Fb_inc_min
@@ -474,8 +539,8 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
             if required_height <= total_height:
                 # f/R=0.4满足要求
                 total_height = round_up_to_2_decimals(total_height)
-                final_fR = (total_height - R) / R
-                f = final_fR * R
+                final_fR = (total_height + tie_rod_height - R) / R
+                f = total_height - R
                 
                 # 验证超高
                 Fb_check = total_height - h_inc
@@ -493,7 +558,7 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
                 # 【规范 9.4.1-2】验证设计流量工况下的超高：U形断面超高不应小于槽身直径的1/10 (R/5)
                 h_design_check = calculate_u_water_depth(Q, R, n, i, f)
                 if h_design_check > 0:
-                    Fb_design_check = total_height - h_design_check
+                    Fb_design_check = _top_freeboard(total_height, tie_rod_height, h_design_check)
                     Fb_design_min = R / 5
                     if Fb_design_check < Fb_design_min:
                         _design_fb_warning = (
@@ -507,11 +572,11 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
                 required_height_with_freeboard = h_inc + Fb_min_required
                 total_height = max(required_height, required_height_with_freeboard)
                 total_height = round_up_to_2_decimals(total_height)
-                final_fR = (total_height - R) / R
+                final_fR = (total_height + tie_rod_height - R) / R
                 
                 if final_fR < FR_MIN:
                     final_fR = FR_MIN
-                    f = final_fR * R
+                    f = max(0.0, final_fR * R - tie_rod_height)
                     total_height = f + R
                     total_height = round_up_to_2_decimals(total_height)
                     
@@ -530,7 +595,7 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
                     # 【规范 9.4.1-2】验证设计流量工况下的超高
                     h_design_check = calculate_u_water_depth(Q, R, n, i, f)
                     if h_design_check > 0:
-                        Fb_design_check = total_height - h_design_check
+                        Fb_design_check = _top_freeboard(total_height, tie_rod_height, h_design_check)
                         Fb_design_min = R / 5
                         if Fb_design_check < Fb_design_min:
                             _design_fb_warning = (
@@ -538,15 +603,20 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
                             )
                 elif final_fR > FR_MAX:
                     # 先尝试钳位到推荐最大值
-                    clamped_f = FR_MAX * R
+                    clamped_f = max(0.0, FR_MAX * R - tie_rod_height)
                     clamped_total = round_up_to_2_decimals(clamped_f + R)
                     
                     # 检查钳位后是否仍满足全部超高要求
                     h_design_tmp = calculate_u_water_depth(Q, R, n, i, clamped_f)
                     Fb_inc_ok = (clamped_total - h_inc) >= Fb_min_required
-                    Fb_design_ok = (h_design_tmp <= 0) or ((clamped_total - h_design_tmp) >= R / 5)
+                    Fb_design_ok = (h_design_tmp <= 0) or (_top_freeboard(clamped_total, tie_rod_height, h_design_tmp) >= R / 5)
+                    design_tie_ok = (
+                        tie_rod_height <= 0 or
+                        h_design_tmp <= 0 or
+                        (clamped_total - h_design_tmp) >= TIE_BOTTOM_CLEARANCE_MIN
+                    )
                     
-                    if Fb_inc_ok and Fb_design_ok:
+                    if Fb_inc_ok and Fb_design_ok and design_tie_ok:
                         # 钳位后仍满足超高，采用推荐最大值
                         final_fR = FR_MAX
                         f = clamped_f
@@ -559,16 +629,24 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
                             f"为满足规范 9.4.1-2 超高要求而采用。如需降低 f/R，请增大半径 R。"
                         )
                 else:
-                    f = final_fR * R
+                    f = total_height - R
                 
                 # --- 用最终f重新校核设计超高（初始h_inc可能受限于较小f而偏低） ---
                 h_recheck = calculate_u_water_depth(Q, R, n, i, f)
                 if h_recheck > 0:
-                    Fb_recheck = total_height - h_recheck
+                    Fb_recheck = _top_freeboard(total_height, tie_rod_height, h_recheck)
                     Fb_design_min = R / 5
                     if Fb_recheck < Fb_design_min:
-                        total_height = round_up_to_2_decimals(h_recheck + Fb_design_min)
-                        final_fR = (total_height - R) / R
+                        required_recheck = _required_hydraulic_height(
+                            h_recheck,
+                            Fb_design_min,
+                            h_inc,
+                            Fb_min_required,
+                            tie_rod_height,
+                            h_recheck + Fb_design_min,
+                        )
+                        total_height = round_up_to_2_decimals(required_recheck)
+                        final_fR = (total_height + tie_rod_height - R) / R
                         f = total_height - R
                         if final_fR > FR_MAX:
                             _design_fb_warning = (
@@ -592,47 +670,58 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
         while R_current <= R_SEARCH_MAX:
             # 初拟f/R=0.4
             initial_fR = 0.4
-            f_current = initial_fR * R_current
+            f_current = max(0.0, initial_fR * R_current - tie_rod_height)
             total_height_current = f_current + R_current
             
             # 计算加大水深
             h_inc = calculate_u_water_depth(Q_increased, R_current, n, i, f_current)
-            if h_inc <= 0 and FR_MAX * R_current > f_current:
+            max_hydraulic_f = max(0.0, FR_MAX * R_current - tie_rod_height)
+            if h_inc <= 0 and max_hydraulic_f > f_current:
                 # 初始f/R不足，尝试最大f/R
-                f_current = FR_MAX * R_current
+                f_current = max_hydraulic_f
                 total_height_current = f_current + R_current
                 h_inc = calculate_u_water_depth(Q_increased, R_current, n, i, f_current)
             
             if h_inc > 0:
                 # 计算安全超高
                 safety_height = max(R_current / 5, Fb_inc_min)
-                required_height = h_inc + safety_height
+                h_design_for_height = calculate_u_water_depth(Q, R_current, n, i, f_current)
+                if h_design_for_height <= 0:
+                    R_current += R_STEP
+                    continue
                 
                 # 【规范 9.4.1-2】考虑超高需求
-                required_height_with_freeboard = h_inc + Fb_min_required
-                required_height = max(required_height, required_height_with_freeboard)
+                legacy_required_height = h_inc + safety_height
+                required_height = _required_hydraulic_height(
+                    h_design_for_height,
+                    R_current / 5,
+                    h_inc,
+                    Fb_min_required,
+                    tie_rod_height,
+                    legacy_required_height,
+                )
                 
                 if required_height <= total_height_current:
                     final_fR = initial_fR
                     total_height_current = round_up_to_2_decimals(total_height_current)
-                    final_fR = (total_height_current - R_current) / R_current
-                    f_current = final_fR * R_current
+                    final_fR = (total_height_current + tie_rod_height - R_current) / R_current
+                    f_current = total_height_current - R_current
                 else:
                     total_height_current = round_up_to_2_decimals(required_height)
-                    final_fR = (total_height_current - R_current) / R_current
+                    final_fR = (total_height_current + tie_rod_height - R_current) / R_current
                     
                     if final_fR < FR_MIN:
                         final_fR = FR_MIN
-                        f_current = final_fR * R_current
+                        f_current = max(0.0, final_fR * R_current - tie_rod_height)
                         total_height_current = f_current + R_current
                         total_height_current = round_up_to_2_decimals(total_height_current)
                     elif final_fR > FR_MAX:
                         final_fR = FR_MAX
-                        f_current = final_fR * R_current
+                        f_current = max(0.0, final_fR * R_current - tie_rod_height)
                         total_height_current = f_current + R_current
                         total_height_current = round_up_to_2_decimals(total_height_current)
                     else:
-                        f_current = final_fR * R_current
+                        f_current = total_height_current - R_current
                 
                 # 验证超高是否满足（加大流量工况）
                 Fb_check = total_height_current - h_inc
@@ -644,20 +733,28 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
                 # 【规范 9.4.1-2】验证设计流量工况下的超高：U形断面超高不应小于槽身直径的1/10 (R/5)
                 h_design_temp = calculate_u_water_depth(Q, R_current, n, i, f_current)
                 if h_design_temp > 0:
-                    Fb_design_check = total_height_current - h_design_temp
+                    Fb_design_check = _top_freeboard(total_height_current, tie_rod_height, h_design_temp)
                     Fb_design_min = R_current / 5
                     if Fb_design_check < Fb_design_min:
                         # 不满足设计流量工况下的超高要求，跳过此R
                         R_current += R_STEP
                         continue
+                    if (
+                        tie_rod_height > 0 and
+                        total_height_current - h_design_temp < TIE_BOTTOM_CLEARANCE_MIN
+                    ):
+                        # 不满足设计水面到拉杆底净距要求，跳过此R
+                        R_current += R_STEP
+                        continue
                 
                 # 检查H/B比
                 B_current = 2 * R_current
-                actual_HB = total_height_current / B_current if B_current > 0 else 0
+                final_total_height_current = total_height_current + tie_rod_height
+                actual_HB = final_total_height_current / B_current if B_current > 0 else 0
                 
                 if HB_MIN <= actual_HB <= HB_MAX:
                     # 计算总面积
-                    total_area = calculate_u_total_area(total_height_current, R_current)
+                    total_area = calculate_u_total_area(final_total_height_current, R_current)
                     
                     if total_area < best_total_area:
                         best_total_area = total_area
@@ -687,39 +784,54 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     R = best_R
     f = best_f
     B = 2 * R
-    total_height = f + R
-    total_height = round_up_to_2_decimals(total_height)
+    hydraulic_total_height = f + R
+    hydraulic_total_height = round_up_to_2_decimals(hydraulic_total_height)
+    hydraulic_f = hydraulic_total_height - R
+    total_height = round_up_to_2_decimals(hydraulic_total_height + tie_rod_height)
     f = total_height - R
     
     # 设计水深
-    h_design = calculate_u_water_depth(Q, R, n, i, f)
+    h_design = calculate_u_water_depth(Q, R, n, i, hydraulic_f)
     if h_design < 0:
         result['error_message'] = '设计水深计算失败'
         return result
     
     # 加大水深
-    h_increased = calculate_u_water_depth(Q_increased, R, n, i, f)
+    h_increased = calculate_u_water_depth(Q_increased, R, n, i, hydraulic_f)
     if h_increased < 0:
         result['error_message'] = '加大水深计算失败'
         return result
     
     # 水力要素
-    A_design, P_design = calculate_u_hydro_elements(h_design, R, f)
+    A_design, P_design = calculate_u_hydro_elements(h_design, R, hydraulic_f)
     R_hyd_design = A_design / P_design if P_design > 0 else 0
     V_design = Q / A_design if A_design > 0 else 0
     Q_calc = (1/n) * A_design * (R_hyd_design ** (2/3)) * (i ** 0.5) if R_hyd_design > 0 else 0
     
     # 加大流量水力要素
-    A_inc, P_inc = calculate_u_hydro_elements(h_increased, R, f)
+    A_inc, P_inc = calculate_u_hydro_elements(h_increased, R, hydraulic_f)
     V_increased = Q_increased / A_inc if A_inc > 0 else 0
     
-    # 超高（基于加大流量）
-    Fb = total_height - h_increased
+    # 有效安全高差：无拉杆时为水面到槽顶，有拉杆时为水面到拉杆底
+    tie_bottom_height = total_height - tie_rod_height
+    Fb = tie_bottom_height - h_increased
+    top_clearance = total_height - h_increased
     
-    # 【规范 9.4.1-2】验证设计流量工况下的超高：U形断面超高不应小于槽身直径的1/10
+    # 【规范 9.4.1-2】设计流量超高按水面到槽顶校核；加大流量按拉杆底有效净距校核。
     # 槽身直径 = 2R，因此超高不应小于 2R/10 = R/5
     Fb_design = total_height - h_design
     Fb_design_min_required = R / 5  # 设计流量时的最小超高要求
+    design_tie_bottom_clearance = tie_bottom_height - h_design
+    increased_tie_bottom_clearance = Fb
+
+    if tie_rod_height > 0 and design_tie_bottom_clearance + ZERO_TOL < TIE_BOTTOM_CLEARANCE_MIN:
+        result['error_message'] = (
+            f"计算失败：设计流量工况下水面距拉杆底净距不足。\n\n"
+            f"设计水面距拉杆底 = {design_tie_bottom_clearance:.3f} m < {TIE_BOTTOM_CLEARANCE_MIN:.2f} m\n"
+            f"超高正常来讲是包括了拉杆高度的，但是设计流量不仅要满足槽顶规范超高，"
+            f"还要保证设计水面距拉杆底 ≥ {TIE_BOTTOM_CLEARANCE_MIN:.2f}m。"
+        )
+        return result
     
     if Fb_design < Fb_design_min_required:
         if manual_R is not None and manual_R > 0:
@@ -790,6 +902,8 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     result['B'] = B
     result['f_R'] = f / R if R > 0 else 0
     result['H_B'] = total_height / B if B > 0 else 0
+    result['hydraulic_H_total'] = hydraulic_total_height
+    result['hydraulic_f'] = hydraulic_f
     result['h_design'] = h_design
     result['V_design'] = V_design
     result['A_design'] = A_design
@@ -802,9 +916,15 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     result['P_increased'] = P_inc
     result['R_hyd_increased'] = A_inc / P_inc if P_inc > 0 else 0
     result['Fb'] = Fb
+    result['Fb_design'] = Fb_design
     result['H_total'] = total_height
     result['A_total'] = A_total
-    
+    result['tie_rod_height'] = tie_rod_height
+    result['tie_bottom_height'] = tie_bottom_height
+    result['top_clearance'] = top_clearance
+    result['design_tie_bottom_clearance'] = design_tie_bottom_clearance
+    result['increased_tie_bottom_clearance'] = increased_tie_bottom_clearance
+
     return result
 
 
@@ -818,7 +938,8 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
                          chamfer_angle: float = 0,
                          chamfer_length: float = 0,
                          manual_increase_percent: float = None,
-                         manual_B: float = None) -> Dict[str, Any]:
+                         manual_B: float = None,
+                         tie_rod_height: float = None) -> Dict[str, Any]:
     """
     矩形渡槽快速计算主函数
     
@@ -833,6 +954,7 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
         chamfer_length: 倒角底边长 (m)
         manual_increase_percent: 指定加大百分比 (%)，可选
         manual_B: 指定槽宽 (m)，可选
+        tie_rod_height: 拉杆自身尺寸高度，按拉杆顶与槽顶齐平处理 (m)，可选
     
     返回:
         计算结果字典
@@ -869,6 +991,12 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
         # 渡槽尺寸
         'Fb': 0,
         'A_total': 0,
+        'tie_rod_height': 0,
+        'tie_bottom_height': 0,
+        'top_clearance': 0,
+        'design_tie_bottom_clearance': 0,
+        'increased_tie_bottom_clearance': 0,
+        'hydraulic_H_total': 0,
     }
     
     has_chamfer = chamfer_angle > 0 and chamfer_length > 0
@@ -884,6 +1012,11 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
     if slope_inv <= 0:
         result['error_message'] = '坡度倒数必须大于0'
         return result
+    tie_rod_height, tie_error = _normalize_tie_rod_height(tie_rod_height)
+    if tie_error:
+        result['error_message'] = tie_error
+        return result
+    result['tie_rod_height'] = tie_rod_height
     
     i = 1.0 / slope_inv
     
@@ -931,21 +1064,24 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
         h_inc = calculate_rect_water_depth(Q_increased, width, n, i, chamfer_angle, chamfer_length)
         
         if h_design_calc > 0 and h_inc > 0:
-            # 设计流量超高要求: h/12 + 0.05
+            # 设计流量超高按水面到槽顶计；加大流量按拉杆底有效净距计。
             Fb_design_min = h_design_calc / 12 + 0.05
-            H_design_required = h_design_calc + Fb_design_min
+            H_design_required = _required_hydraulic_height(
+                h_design_calc,
+                Fb_design_min,
+                h_inc,
+                Fb_inc_min,
+                tie_rod_height,
+            )
             
-            # 加大流量超高要求: 0.10m
-            H_inc_required = h_inc + Fb_inc_min
-            
-            # 取两者最大值作为总高
-            total_height = max(H_design_required, H_inc_required)
+            # 取控制工况折算后的水力槽高
+            total_height = H_design_required
             total_height = round_up_to_2_decimals(total_height)
             
             best_width = width
             best_height = total_height
             found_solution = True
-            result['depth_width_ratio'] = total_height / width if width > 0 else 0
+            result['depth_width_ratio'] = (total_height + tie_rod_height) / width if width > 0 else 0
         else:
             result['error_message'] = f'指定槽宽 B={manual_B:.2f} m 无法计算水深'
             return result
@@ -963,19 +1099,20 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
             h_inc = calculate_rect_water_depth(Q_increased, width, n, i, chamfer_angle, chamfer_length)
             
             if h_design_calc > 0 and h_inc > 0:
-                # 设计流量超高要求: h/12 + 0.05
+                # 设计流量超高按水面到槽顶计；加大流量按拉杆底有效净距计。
                 Fb_design_min = h_design_calc / 12 + 0.05
-                H_design_required = h_design_calc + Fb_design_min
-                
-                # 加大流量超高要求: 0.10m
-                H_inc_required = h_inc + Fb_inc_min
-                
-                # 取两者最大值作为总高
-                total_height = max(H_design_required, H_inc_required)
+                total_height = _required_hydraulic_height(
+                    h_design_calc,
+                    Fb_design_min,
+                    h_inc,
+                    Fb_inc_min,
+                    tie_rod_height,
+                )
                 total_height = round_up_to_2_decimals(total_height)
+                final_total_height = round_up_to_2_decimals(total_height + tie_rod_height)
                 
                 # 检查是否满足深宽比约束
-                if total_height <= target_height:
+                if final_total_height <= target_height:
                     best_width = width
                     best_height = total_height
                     found_solution = True
@@ -1013,14 +1150,31 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
     
     V_increased = Q_increased / A_inc if A_inc > 0 else 0
     
-    # 超高
-    Fb = best_height - h_increased
+    hydraulic_height = best_height
+    final_height = round_up_to_2_decimals(hydraulic_height + tie_rod_height)
+    tie_bottom_height = final_height - tie_rod_height
+    # 有效安全高差：无拉杆时为水面到槽顶，有拉杆时为水面到拉杆底
+    Fb = tie_bottom_height - h_increased
+    top_clearance = final_height - h_increased
+    Fb_design = final_height - h_design
+    design_tie_bottom_clearance = tie_bottom_height - h_design
+    increased_tie_bottom_clearance = Fb
+
+    if tie_rod_height > 0 and design_tie_bottom_clearance + ZERO_TOL < TIE_BOTTOM_CLEARANCE_MIN:
+        result['error_message'] = (
+            f"计算失败：设计流量工况下水面距拉杆底净距不足。\n\n"
+            f"设计水面距拉杆底 = {design_tie_bottom_clearance:.3f} m < {TIE_BOTTOM_CLEARANCE_MIN:.2f} m\n"
+            f"超高正常来讲是包括了拉杆高度的，但是设计流量不仅要满足槽顶规范超高，"
+            f"还要保证设计水面距拉杆底 ≥ {TIE_BOTTOM_CLEARANCE_MIN:.2f}m。"
+        )
+        return result
     
     # 总面积
-    A_total = best_width * best_height
+    A_total = best_width * final_height
     
     # 设计方法描述
-    actual_ratio = result['depth_width_ratio']
+    actual_ratio = final_height / best_width if best_width > 0 else 0
+    result['depth_width_ratio'] = actual_ratio
     design_method = f'矩形断面; 深宽比={actual_ratio:.2f}'
     if has_chamfer:
         design_method += f'; 倒角角度={chamfer_angle}°, 倒角底边长={chamfer_length}m'
@@ -1048,7 +1202,8 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
     result['warning_message'] = warning_msg
     result['design_method'] = design_method
     result['B'] = best_width
-    result['H_total'] = best_height
+    result['H_total'] = final_height
+    result['hydraulic_H_total'] = hydraulic_height
     result['h_design'] = h_design
     result['V_design'] = V_design
     result['A_design'] = A_design
@@ -1061,7 +1216,13 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
     result['P_increased'] = P_inc
     result['R_hyd_increased'] = A_inc / P_inc if P_inc > 0 else 0
     result['Fb'] = Fb
+    result['Fb_design'] = Fb_design
     result['A_total'] = A_total
+    result['tie_rod_height'] = tie_rod_height
+    result['tie_bottom_height'] = tie_bottom_height
+    result['top_clearance'] = top_clearance
+    result['design_tie_bottom_clearance'] = design_tie_bottom_clearance
+    result['increased_tie_bottom_clearance'] = increased_tie_bottom_clearance
     
     return result
 

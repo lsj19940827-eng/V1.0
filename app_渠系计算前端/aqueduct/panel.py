@@ -70,6 +70,7 @@ from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPU
 from app_渠系计算前端.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_formula, doc_render_calc_text, doc_add_figure,
+    doc_add_result_table,
     create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
     doc_render_calc_text_eng, update_doc_toc_via_com,
 )
@@ -109,6 +110,11 @@ from app_渠系计算前端.result_navigation import (
     make_case_result_anchor,
     sync_case_result_nav_bar,
     wrap_case_result_block,
+)
+from app_渠系计算前端.result_summary import (
+    build_result_summary_word_items,
+    prepend_result_summary_to_body,
+    prepend_result_summary_to_html,
 )
 if WORD_EXPORT_AVAILABLE:
     from docx import Document as DocxDocument
@@ -306,6 +312,8 @@ class AqueductPanel(QWidget):
 
         fl.addWidget(self._sep())
         fl.addWidget(self._slbl("【可选参数】"))
+        self.tie_rod_lbl, self.tie_rod_edit = self._field2(fl, "拉杆高度 (m):", "")
+        fl.addWidget(self._hint("(拉杆自身尺寸高度；按拉杆顶与槽顶齐平，留空或0表示无拉杆)"))
 
         # U形参数
         self.u_section_grp = QWidget()
@@ -559,6 +567,7 @@ class AqueductPanel(QWidget):
             'v_min': '0.1', 'v_max': '100.0',
             'inc_checked': True, 'inc_pct': '', 'inc_mode': INCREASE_MODE_PERCENT, 'inc_q_text': '',
             'detail_checked': True,
+            'tie_rod_height': '',
             'R': '',
             'ratio': '', 'B': '',
             'chamfer_angle': '', 'chamfer_len': '',
@@ -579,6 +588,7 @@ class AqueductPanel(QWidget):
         c['inc_mode'] = self._current_increase_mode()
         c['inc_q_text'] = self.inc_q_edit.text()
         c['detail_checked'] = self.detail_cb.isChecked()
+        c['tie_rod_height'] = self.tie_rod_edit.text()
         c['R'] = self.R_edit.text()
         c['ratio'] = self.ratio_edit.text()
         c['B'] = self.B_edit.text()
@@ -606,6 +616,7 @@ class AqueductPanel(QWidget):
         self.inc_q_edit.setText(c.get('inc_q_text', ''))
         self._set_increase_mode(c.get('inc_mode', INCREASE_MODE_PERCENT))
         self.detail_cb.setChecked(c.get('detail_checked', True))
+        self.tie_rod_edit.setText(c.get('tie_rod_height', ''))
         self.R_edit.setText(c.get('R', ''))
         self.ratio_edit.setText(c.get('ratio', ''))
         self.B_edit.setText(c.get('B', ''))
@@ -833,7 +844,7 @@ class AqueductPanel(QWidget):
         src = self._cases[self._current_case_idx]
         keys = ('section_type', 'n', 'slope_inv', 'v_min', 'v_max',
                 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text', 'detail_checked',
-                'R', 'ratio', 'B', 'chamfer_angle', 'chamfer_len')
+                'tie_rod_height', 'R', 'ratio', 'B', 'chamfer_angle', 'chamfer_len')
         for i, case in enumerate(self._cases):
             if i != self._current_case_idx:
                 for k in keys:
@@ -857,7 +868,7 @@ class AqueductPanel(QWidget):
         curr = self._cases[self._current_case_idx]
         for k in ('section_type', 'n', 'slope_inv', 'v_min', 'v_max',
                    'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text', 'detail_checked',
-                   'R', 'ratio', 'B', 'chamfer_angle', 'chamfer_len'):
+                   'tie_rod_height', 'R', 'ratio', 'B', 'chamfer_angle', 'chamfer_len'):
             curr[k] = prev[k]
         self._load_case(self._current_case_idx)
         InfoBar.success(title="已复制", content=f"已从工况{self._current_case_idx}复制参数",
@@ -903,6 +914,19 @@ class AqueductPanel(QWidget):
             except ValueError:
                 return None
 
+        def _tie_rod_opt():
+            """解析可选拉杆高度，非法输入直接阻止本工况计算。"""
+            t = (case.get('tie_rod_height', '') or '').strip()
+            if not t:
+                return None
+            try:
+                v = float(t)
+            except ValueError:
+                raise ValueError(f"工况{case_num}: 拉杆高度输入无效")
+            if v < 0:
+                raise ValueError(f"工况{case_num}: 拉杆高度不能为负数")
+            return v
+
         stype = case.get('section_type', 'U形')
         Q = _fv('Q', '设计流量 Q')
         n = _fv('n', '糙率 n')
@@ -923,6 +947,7 @@ class AqueductPanel(QWidget):
         )
         manual_increase = increase_resolution.manual_increase_percent
         inc_mode = increase_resolution.mode
+        tie_rod_height = _tie_rod_opt()
 
         if stype == "U形":
             manual_R = _fv_opt('R')
@@ -937,12 +962,14 @@ class AqueductPanel(QWidget):
                 'inc_mode': inc_mode,
                 'inc_pct_text': case.get('inc_pct', ''),
                 'inc_q_text': case.get('inc_q_text', ''),
+                'tie_rod_height': tie_rod_height,
             }
             result = quick_calculate_u(
                 Q=Q, n=n, slope_inv=slope_inv,
                 v_min=v_min, v_max=v_max,
                 manual_R=manual_R,
-                manual_increase_percent=manual_increase
+                manual_increase_percent=manual_increase,
+                tie_rod_height=tie_rod_height,
             )
         else:
             manual_B = _fv_opt('B')
@@ -975,6 +1002,7 @@ class AqueductPanel(QWidget):
                 'inc_mode': inc_mode,
                 'inc_pct_text': case.get('inc_pct', ''),
                 'inc_q_text': case.get('inc_q_text', ''),
+                'tie_rod_height': tie_rod_height,
             }
             result = quick_calculate_rect(
                 Q=Q, n=n, slope_inv=slope_inv,
@@ -983,7 +1011,8 @@ class AqueductPanel(QWidget):
                 chamfer_angle=chamfer_angle,
                 chamfer_length=chamfer_length,
                 manual_increase_percent=manual_increase,
-                manual_B=manual_B
+                manual_B=manual_B,
+                tie_rod_height=tie_rod_height,
             )
         return params, result
 
@@ -1115,7 +1144,12 @@ class AqueductPanel(QWidget):
                         self._panel_key,
                         case_idx,
                         f"工况 {case_idx + 1}",
-                        plain_text_to_formula_body(case_plain),
+                        prepend_result_summary_to_body(
+                            "aqueduct",
+                            params,
+                            result,
+                            plain_text_to_formula_body(case_plain),
+                        ),
                         subtitle=self._case_result_nav_label(case_idx),
                         is_error=not result.get("success"),
                     )
@@ -1177,6 +1211,7 @@ class AqueductPanel(QWidget):
                     result.get('V_design', 0.0),
                     Q,
                     title,
+                    result,
                 )
             else:
                 self._draw_rect_section(
@@ -1215,11 +1250,35 @@ class AqueductPanel(QWidget):
         """统一结果页渲染入口，支持批量收集时抑制中间渲染。"""
         if self._suppress_result_render:
             return
+        html = prepend_result_summary_to_html(
+            "aqueduct",
+            getattr(self, "input_params", {}),
+            getattr(self, "current_result", {}),
+            html,
+        )
         load_formula_page(self.result_text, html)
 
     # ================================================================
     # 结果显示分发
     # ================================================================
+    @staticmethod
+    def _tie_rod_metrics(result):
+        """读取拉杆自身高度、拉杆底控制高和槽顶余量。"""
+        try:
+            tie_rod_height = float(result.get('tie_rod_height') or 0.0)
+        except (TypeError, ValueError):
+            tie_rod_height = 0.0
+        H_total = result.get('H_total', 0.0)
+        try:
+            tie_bottom_height = float(result.get('tie_bottom_height', H_total))
+        except (TypeError, ValueError):
+            tie_bottom_height = float(H_total or 0.0)
+        try:
+            top_clearance = float(result.get('top_clearance', 0.0))
+        except (TypeError, ValueError):
+            top_clearance = 0.0
+        return tie_rod_height, tie_bottom_height, top_clearance
+
     def _update_result_display(self, result):
         if not result['success']:
             self._show_error("计算失败", result.get('error_message', '未知错误'))
@@ -1240,6 +1299,7 @@ class AqueductPanel(QWidget):
         p = self.input_params
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']; i = 1.0 / slope_inv
+        tie_rod_height, tie_bottom_height, _top_clearance = AqueductPanel._tie_rod_metrics(result)
 
         o = []
         o.append("=" * 70)
@@ -1277,7 +1337,11 @@ class AqueductPanel(QWidget):
         o.append(f"  槽宽 B = 2R = {result['B']:.3f} m")
         o.append(f"  f/R = {result['f_R']:.3f}")
         o.append(f"  H/(2R) = {result['H_B']:.3f}")
-        o.append(f"  槽身总高 H = {result['H_total']:.3f} m")
+        o.append(f"  槽身总高 H(含拉杆) = {result['H_total']:.3f} m")
+        if tie_rod_height > 0:
+            o.append(f"  拉杆高度 = {tie_rod_height:.3f} m（拉杆自身尺寸高度）")
+            o.append(f"  拉杆底控制高 = {tie_bottom_height:.3f} m")
+            o.append(f"  设计拉杆底净距 = {result.get('design_tie_bottom_clearance', tie_bottom_height - result['h_design']):.3f} m")
         o.append("")
         o.append("【设计工况】")
         o.append(f"  设计水深 h = {result['h_design']:.3f} m")
@@ -1286,13 +1350,13 @@ class AqueductPanel(QWidget):
         o.append(f"  水力半径 R水 = {result['R_hyd_design']:.3f} m")
         o.append("")
         use_increase = p.get('use_increase', True)
-        increase_summary_lines = self._get_increase_summary_lines(p, result)
+        increase_summary_lines = AqueductPanel._get_increase_summary_lines(self, p, result)
         if use_increase:
             o.append("【加大流量工况】")
             o.extend([f"  {line}" for line in increase_summary_lines])
             o.append(f"  加大水深 h加大 = {result['h_increased']:.3f} m")
             o.append(f"  加大流速 V加大 = {result['V_increased']:.3f} m/s")
-            o.append(f"  超高 Fb = {result['Fb']:.3f} m")
+            o.append(f"  加大有效超高 Fb = {result['Fb']:.3f} m")
             o.append("")
 
         # 警告信息
@@ -1306,16 +1370,24 @@ class AqueductPanel(QWidget):
         vel_ok = 1.0 <= V_d <= 2.5
         o.append(f"  流速验证: V={V_d:.3f}m/s (推荐1.0~2.5) → {'✓ 通过' if vel_ok else '⚠ 超出推荐范围'}")
         R_val = result['R']
-        Fb_design_ok = (result['H_total'] - result['h_design']) >= R_val / 5
+        Fb_design = float(result.get('Fb_design', result['H_total'] - result['h_design']))
+        Fb_design_ok = Fb_design >= R_val / 5
+        tie_rod_height, tie_bottom_height, _top_clearance = AqueductPanel._tie_rod_metrics(result)
+        design_tie_clearance = float(result.get('design_tie_bottom_clearance', tie_bottom_height - result['h_design']))
+        design_tie_ok = (tie_rod_height <= 0) or (design_tie_clearance >= 0.10)
         if use_increase:
             Fb = result['Fb']
             Fb_ok = Fb >= 0.10
-            o.append(f"  超高验证(加大): Fb={Fb:.3f}m ≥ 0.10m → {'✓ 通过' if Fb_ok else '✗ 未通过'}")
-            o.append(f"  超高验证(设计): ≥ R/5={R_val/5:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
-            all_pass = Fb_ok and Fb_design_ok
+            o.append(f"  加大有效超高验证: Fb={Fb:.3f}m ≥ 0.10m → {'✓ 通过' if Fb_ok else '✗ 未通过'}")
+            o.append(f"  槽顶超高验证(设计): Fb={Fb_design:.3f}m ≥ R/5={R_val/5:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
+            if tie_rod_height > 0:
+                o.append(f"  拉杆底净距验证(设计): {design_tie_clearance:.3f}m ≥ 0.10m → {'✓ 通过' if design_tie_ok else '✗ 未通过'}")
+            all_pass = Fb_ok and Fb_design_ok and design_tie_ok
         else:
-            o.append(f"  超高验证(设计): ≥ R/5={R_val/5:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
-            all_pass = vel_ok and Fb_design_ok
+            o.append(f"  槽顶超高验证(设计): Fb={Fb_design:.3f}m ≥ R/5={R_val/5:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
+            if tie_rod_height > 0:
+                o.append(f"  拉杆底净距验证(设计): {design_tie_clearance:.3f}m ≥ 0.10m → {'✓ 通过' if design_tie_ok else '✗ 未通过'}")
+            all_pass = vel_ok and Fb_design_ok and design_tie_ok
         o.append("")
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
@@ -1343,7 +1415,11 @@ class AqueductPanel(QWidget):
         A_inc = result.get('A_increased', 0); P_inc = result.get('P_increased', 0)
         R_hyd_inc = result.get('R_hyd_increased', 0)
         Fb = result['Fb']
-        increase_summary_lines = self._get_increase_summary_lines(p, result)
+        tie_rod_height, tie_bottom_height, _top_clearance = AqueductPanel._tie_rod_metrics(result)
+        effective_control_label = "拉杆底控制高" if tie_rod_height > 0 else "H"
+        hydraulic_H_total = result.get('hydraulic_H_total', tie_bottom_height)
+        hydraulic_f = result.get('hydraulic_f', max(0.0, hydraulic_H_total - R_val))
+        increase_summary_lines = AqueductPanel._get_increase_summary_lines(self, p, result)
 
         o = []
         o.append("=" * 70)
@@ -1398,13 +1474,27 @@ class AqueductPanel(QWidget):
         o.append(f"       = {B:.2f} m")
         o.append("")
         o.append("  3. 直段高度:")
-        o.append(f"     f = {f_val:.2f} m")
+        if tie_rod_height > 0:
+            o.append(f"     水力直段高度 f水力 = {hydraulic_f:.2f} m")
+            o.append(f"     结构直段高度 f = {f_val:.2f} m")
+        else:
+            o.append(f"     f = {f_val:.2f} m")
         o.append(f"     f/R = {f_val:.2f} / {R_val:.2f} = {result['f_R']:.3f}")
         o.append("")
         o.append("  4. 槽身总高计算:")
-        o.append(f"     H = R + f")
-        o.append(f"       = {R_val:.2f} + {f_val:.2f}")
-        o.append(f"       = {H_total:.2f} m")
+        if tie_rod_height > 0:
+            o.append(f"     H水力 = R + f水力")
+            o.append(f"           = {R_val:.2f} + {hydraulic_f:.2f}")
+            o.append(f"           = {hydraulic_H_total:.2f} m")
+            o.append(f"     H = H水力 + 拉杆高度")
+            o.append(f"       = {hydraulic_H_total:.2f} + {tie_rod_height:.2f}")
+            o.append(f"       = {H_total:.2f} m")
+            o.append(f"     拉杆底控制高 = {tie_bottom_height:.2f} m")
+            o.append(f"     拉杆高度为自身尺寸高度，按拉杆顶与槽顶齐平处理")
+        else:
+            o.append(f"     H = R + f")
+            o.append(f"       = {R_val:.2f} + {f_val:.2f}")
+            o.append(f"       = {H_total:.2f} m")
         o.append("")
         o.append("  5. H/B比值计算:")
         H_B_ratio = H_total / B if B > 0 else 0
@@ -1541,8 +1631,14 @@ class AqueductPanel(QWidget):
               o.append(f"      误差 = {abs(A_inc * V_inc - Q_inc) / Q_inc * 100:.2f}%")
           o.append("")
 
-          o.append("  8. 超高计算:")
-          o.append(f"      Fb = H - h加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
+          if tie_rod_height > 0:
+              design_tie_clearance = float(result.get('design_tie_bottom_clearance', tie_bottom_height - h_d))
+              o.append("  8. 设计拉杆底净距计算:")
+              o.append(f"      F拉_设计 = 拉杆底控制高 - h设计 = {tie_bottom_height:.2f} - {h_d:.3f} = {design_tie_clearance:.3f} m")
+              o.append("")
+
+          o.append("  9. 加大有效超高计算:")
+          o.append(f"      Fb = {effective_control_label} - h加大 = {tie_bottom_height:.2f} - {h_inc:.3f} = {Fb:.3f} m")
           o.append("")
 
         # 警告信息
@@ -1572,31 +1668,41 @@ class AqueductPanel(QWidget):
         o.append("")
         o.append(f"  2. 超高验证（规范 9.4.1-2）")
         Fb_design_min = R_val / 5
-        Fb_design = H_total - h_d
+        Fb_design = float(result.get('Fb_design', H_total - h_d))
         fb_design_ok = Fb_design >= Fb_design_min
+        design_tie_clearance = float(result.get('design_tie_bottom_clearance', tie_bottom_height - h_d))
+        design_tie_ok = (tie_rod_height <= 0) or (design_tie_clearance >= 0.10)
         o.append(f"     断面类型: U形")
         o.append(f"     规范要求:")
         o.append(f"       - 设计流量: 超高不应小于槽身直径的1/10 (即2R/10 = R/5 = {Fb_design_min:.3f} m)")
+        if tie_rod_height > 0:
+            o.append(f"       - 有拉杆时: 设计水面距拉杆底不应小于 0.10 m")
         if use_increase:
             o.append(f"       - 加大流量: 超高不应小于 0.10 m")
         o.append(f"")
         o.append(f"     计算结果:")
-        o.append(f"       - 设计流量超高: Fb_设计 = H - h_设计 = {H_total:.2f} - {h_d:.3f} = {Fb_design:.3f} m")
+        o.append(f"       - 设计流量槽顶超高: Fb_设计 = H - h_设计 = {H_total:.2f} - {h_d:.3f} = {Fb_design:.3f} m")
+        if tie_rod_height > 0:
+            o.append(f"       - 设计流量拉杆底净距: F拉_设计 = 拉杆底控制高 - h_设计 = {tie_bottom_height:.2f} - {h_d:.3f} = {design_tie_clearance:.3f} m")
         if use_increase:
             Fb_inc_min = 0.10
             fb_inc_ok = Fb >= Fb_inc_min
-            o.append(f"       - 加大流量超高: Fb_加大 = H - h_加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
+            o.append(f"       - 加大有效超高: Fb_加大 = {effective_control_label} - h_加大 = {tie_bottom_height:.2f} - {h_inc:.3f} = {Fb:.3f} m")
             o.append(f"")
             o.append(f"     验证结果:")
             o.append(f"       - 设计流量: {Fb_design:.3f} {'≥' if fb_design_ok else '<'} {Fb_design_min:.3f} → {'通过 ✓' if fb_design_ok else '未通过 ✗'}")
+            if tie_rod_height > 0:
+                o.append(f"       - 设计拉杆底净距: {design_tie_clearance:.3f} {'≥' if design_tie_ok else '<'} 0.10 → {'通过 ✓' if design_tie_ok else '未通过 ✗'}")
             o.append(f"       - 加大流量: {Fb:.3f} {'≥' if fb_inc_ok else '<'} {Fb_inc_min:.2f} → {'通过 ✓' if fb_inc_ok else '未通过 ✗'}")
-            all_pass = fb_inc_ok and fb_design_ok
+            all_pass = fb_inc_ok and fb_design_ok and design_tie_ok
         else:
             fb_inc_ok = True
             o.append(f"")
             o.append(f"     验证结果:")
             o.append(f"       - 设计流量: {Fb_design:.3f} {'≥' if fb_design_ok else '<'} {Fb_design_min:.3f} → {'通过 ✓' if fb_design_ok else '未通过 ✗'}")
-            all_pass = fb_design_ok
+            if tie_rod_height > 0:
+                o.append(f"       - 设计拉杆底净距: {design_tie_clearance:.3f} {'≥' if design_tie_ok else '<'} 0.10 → {'通过 ✓' if design_tie_ok else '未通过 ✗'}")
+            all_pass = fb_design_ok and design_tie_ok
         o.append("")
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
@@ -1612,7 +1718,8 @@ class AqueductPanel(QWidget):
         p = self.input_params
         Q, n = p['Q'], p['n']
         slope_inv = p['slope_inv']
-        increase_summary_lines = self._get_increase_summary_lines(p, result)
+        increase_summary_lines = AqueductPanel._get_increase_summary_lines(self, p, result)
+        tie_rod_height, tie_bottom_height, _top_clearance = AqueductPanel._tie_rod_metrics(result)
 
         o = []
         o.append("=" * 70)
@@ -1646,7 +1753,11 @@ class AqueductPanel(QWidget):
         o.append("")
         o.append("【断面尺寸】")
         o.append(f"  槽宽 B = {result['B']:.3f} m")
-        o.append(f"  槽身总高 H = {result['H_total']:.3f} m")
+        o.append(f"  槽身总高 H(含拉杆) = {result['H_total']:.3f} m")
+        if tie_rod_height > 0:
+            o.append(f"  拉杆高度 = {tie_rod_height:.3f} m（拉杆自身尺寸高度）")
+            o.append(f"  拉杆底控制高 = {tie_bottom_height:.3f} m")
+            o.append(f"  设计拉杆底净距 = {result.get('design_tie_bottom_clearance', tie_bottom_height - result['h_design']):.3f} m")
         B_val = result['B']; H_val = result['H_total']
         H_B_ratio = H_val / B_val if B_val > 0 else 0
         o.append(f"  H/B = {H_B_ratio:.3f}")
@@ -1666,7 +1777,7 @@ class AqueductPanel(QWidget):
             o.extend([f"  {line}" for line in increase_summary_lines])
             o.append(f"  加大水深 h加大 = {result['h_increased']:.3f} m")
             o.append(f"  加大流速 V加大 = {result['V_increased']:.3f} m/s")
-            o.append(f"  超高 Fb = {result['Fb']:.3f} m")
+            o.append(f"  加大有效超高 Fb = {result['Fb']:.3f} m")
             o.append("")
 
         if result.get('warning_message'):
@@ -1681,16 +1792,22 @@ class AqueductPanel(QWidget):
         Fb = result['Fb']
         h_d = result['h_design']
         Fb_design_min = h_d / 12 + 0.05
-        Fb_design = result['H_total'] - h_d
+        Fb_design = float(result.get('Fb_design', result['H_total'] - h_d))
         Fb_design_ok = Fb_design >= Fb_design_min
+        design_tie_clearance = float(result.get('design_tie_bottom_clearance', tie_bottom_height - h_d))
+        design_tie_ok = (tie_rod_height <= 0) or (design_tie_clearance >= 0.10)
         if use_increase:
             Fb_inc_ok = Fb >= 0.10
-            o.append(f"  超高验证(加大): Fb={Fb:.3f}m ≥ 0.10m → {'✓ 通过' if Fb_inc_ok else '✗ 未通过'}")
-            o.append(f"  超高验证(设计): Fb={Fb_design:.3f}m ≥ h/12+0.05={Fb_design_min:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
-            all_pass = Fb_inc_ok and Fb_design_ok
+            o.append(f"  加大有效超高验证: Fb={Fb:.3f}m ≥ 0.10m → {'✓ 通过' if Fb_inc_ok else '✗ 未通过'}")
+            o.append(f"  槽顶超高验证(设计): Fb={Fb_design:.3f}m ≥ h/12+0.05={Fb_design_min:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
+            if tie_rod_height > 0:
+                o.append(f"  拉杆底净距验证(设计): {design_tie_clearance:.3f}m ≥ 0.10m → {'✓ 通过' if design_tie_ok else '✗ 未通过'}")
+            all_pass = Fb_inc_ok and Fb_design_ok and design_tie_ok
         else:
-            o.append(f"  超高验证(设计): Fb={Fb_design:.3f}m ≥ h/12+0.05={Fb_design_min:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
-            all_pass = Fb_design_ok
+            o.append(f"  槽顶超高验证(设计): Fb={Fb_design:.3f}m ≥ h/12+0.05={Fb_design_min:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
+            if tie_rod_height > 0:
+                o.append(f"  拉杆底净距验证(设计): {design_tie_clearance:.3f}m ≥ 0.10m → {'✓ 通过' if design_tie_ok else '✗ 未通过'}")
+            all_pass = Fb_design_ok and design_tie_ok
         o.append("")
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
@@ -1717,7 +1834,10 @@ class AqueductPanel(QWidget):
         A_inc = result.get('A_increased', 0); P_inc = result.get('P_increased', 0)
         R_hyd_inc = result.get('R_hyd_increased', 0)
         Fb = result['Fb']
-        increase_summary_lines = self._get_increase_summary_lines(p, result)
+        tie_rod_height, tie_bottom_height, _top_clearance = AqueductPanel._tie_rod_metrics(result)
+        effective_control_label = "拉杆底控制高" if tie_rod_height > 0 else "H"
+        hydraulic_H_total = result.get('hydraulic_H_total', tie_bottom_height)
+        increase_summary_lines = AqueductPanel._get_increase_summary_lines(self, p, result)
         has_chamfer = result.get('has_chamfer', False)
         ratio = result.get('depth_width_ratio', 0)
 
@@ -1788,20 +1908,38 @@ class AqueductPanel(QWidget):
         use_increase = p.get('use_increase', True)
         Fb_design_min = h_d / 12 + 0.05
         H_design_required = h_d + Fb_design_min
-        H_inc_required = h_inc + 0.10
+        H_design_tie_required = h_d + tie_rod_height + 0.10 if tie_rod_height > 0 else H_design_required
+        H_inc_required = h_inc + 0.10 + tie_rod_height
 
         o.append("  2. 槽高计算（规范 9.4.1-2）:")
-        o.append(f"     设计流量: H1 = h设计 + (h设计/12 + 0.05)")
+        o.append(f"     设计流量: H1 = h设计 + 槽顶超高")
         o.append(f"              = {h_d:.3f} + ({h_d:.3f}/12 + 0.05)")
         o.append(f"              = {h_d:.3f} + {Fb_design_min:.3f}")
         o.append(f"              = {H_design_required:.3f} m")
+        if tie_rod_height > 0:
+            o.append(f"     设计流量拉杆底净距: H1b = h设计 + 拉杆高度 + 0.10")
+            o.append(f"              = {h_d:.3f} + {tie_rod_height:.3f} + 0.10")
+            o.append(f"              = {H_design_tie_required:.3f} m")
         if use_increase:
-            o.append(f"     加大流量: H2 = h加大 + 0.10")
-            o.append(f"              = {h_inc:.3f} + 0.10")
+            if tie_rod_height > 0:
+                o.append(f"     加大流量: H2 = h加大 + 0.10 + 拉杆高度")
+                o.append(f"              = {h_inc:.3f} + 0.10 + {tie_rod_height:.3f}")
+            else:
+                o.append(f"     加大流量: H2 = h加大 + 0.10")
+                o.append(f"              = {h_inc:.3f} + 0.10")
             o.append(f"              = {H_inc_required:.3f} m")
-            o.append(f"     取最大值: H = max({H_design_required:.3f}, {H_inc_required:.3f})")
-            o.append(f"              = {max(H_design_required, H_inc_required):.3f} m")
-        o.append(f"     向上取整: H = {H_total:.2f} m")
+            values = [H_design_required, H_inc_required]
+            if tie_rod_height > 0:
+                values.append(H_design_tie_required)
+            o.append(f"     取最大值: H = max({', '.join(f'{v:.3f}' for v in values)})")
+            o.append(f"              = {max(values):.3f} m")
+        if tie_rod_height > 0:
+            o.append(f"     水力槽高: H水力 = {hydraulic_H_total:.2f} m")
+            o.append(f"     拉杆高度: {tie_rod_height:.2f} m（拉杆自身尺寸高度）")
+            o.append(f"     槽身总高: H = H水力 + 拉杆高度 = {hydraulic_H_total:.2f} + {tie_rod_height:.2f} = {H_total:.2f} m")
+            o.append(f"     拉杆底控制高 = {tie_bottom_height:.2f} m")
+        else:
+            o.append(f"     向上取整: H = {H_total:.2f} m")
         o.append("")
 
         o.append("  3. H/B比值计算:")
@@ -1980,8 +2118,14 @@ class AqueductPanel(QWidget):
                 o.append(f"      误差 = {abs(A_inc * V_inc - Q_inc) / Q_inc * 100:.2f}%")
             o.append("")
 
-            o.append("  8. 超高计算:")
-            o.append(f"      Fb = H - h加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
+            if tie_rod_height > 0:
+                design_tie_clearance = float(result.get('design_tie_bottom_clearance', tie_bottom_height - h_d))
+                o.append("  8. 设计拉杆底净距计算:")
+                o.append(f"      F拉_设计 = 拉杆底控制高 - h设计 = {tie_bottom_height:.2f} - {h_d:.3f} = {design_tie_clearance:.3f} m")
+                o.append("")
+
+            o.append("  9. 加大有效超高计算:")
+            o.append(f"      Fb = {effective_control_label} - h加大 = {tie_bottom_height:.2f} - {h_inc:.3f} = {Fb:.3f} m")
             o.append("")
 
         if result.get('warning_message'):
@@ -2011,21 +2155,29 @@ class AqueductPanel(QWidget):
 
         o.append(f"  2. 超高验证（规范 9.4.1-2）")
         Fb_design_min2 = h_d / 12 + 0.05
-        Fb_design = H_total - h_d
+        Fb_design = float(result.get('Fb_design', H_total - h_d))
         fb_design_ok = Fb_design >= Fb_design_min2
+        design_tie_clearance = float(result.get('design_tie_bottom_clearance', tie_bottom_height - h_d))
+        design_tie_ok = (tie_rod_height <= 0) or (design_tie_clearance >= 0.10)
         o.append(f"     断面类型: 矩形")
         o.append(f"     规范要求:")
         o.append(f"       - 设计流量: 超高不应小于 h/12 + 0.05 = {h_d:.3f}/12 + 0.05 = {Fb_design_min2:.3f} m")
+        if tie_rod_height > 0:
+            o.append(f"       - 有拉杆时: 设计水面距拉杆底不应小于 0.10 m")
         if use_increase:
             o.append(f"       - 加大流量: 超高不应小于 0.10 m")
         o.append(f"")
         o.append(f"     计算结果:")
-        o.append(f"       - 设计流量超高: Fb_设计 = H - h_设计 = {H_total:.2f} - {h_d:.3f} = {Fb_design:.3f} m")
+        o.append(f"       - 设计流量槽顶超高: Fb_设计 = H - h_设计 = {H_total:.2f} - {h_d:.3f} = {Fb_design:.3f} m")
+        if tie_rod_height > 0:
+            o.append(f"       - 设计流量拉杆底净距: F拉_设计 = 拉杆底控制高 - h_设计 = {tie_bottom_height:.2f} - {h_d:.3f} = {design_tie_clearance:.3f} m")
         if use_increase:
-            o.append(f"       - 加大流量超高: Fb_加大 = H - h_加大 = {H_total:.2f} - {h_inc:.3f} = {Fb:.3f} m")
+            o.append(f"       - 加大有效超高: Fb_加大 = {effective_control_label} - h_加大 = {tie_bottom_height:.2f} - {h_inc:.3f} = {Fb:.3f} m")
         o.append(f"")
         o.append(f"     验证结果:")
         o.append(f"       - 设计流量: {Fb_design:.3f} {'≥' if fb_design_ok else '<'} {Fb_design_min2:.3f} → {'通过 ✓' if fb_design_ok else '未通过 ✗'}")
+        if tie_rod_height > 0:
+            o.append(f"       - 设计拉杆底净距: {design_tie_clearance:.3f} {'≥' if design_tie_ok else '<'} 0.10 → {'通过 ✓' if design_tie_ok else '未通过 ✗'}")
         if use_increase:
             Fb_inc_min = 0.10
             fb_inc_ok = Fb >= Fb_inc_min
@@ -2033,9 +2185,9 @@ class AqueductPanel(QWidget):
         o.append("")
 
         if use_increase:
-            all_pass = fb_inc_ok and fb_design_ok
+            all_pass = fb_inc_ok and fb_design_ok and design_tie_ok
         else:
-            all_pass = fb_design_ok
+            all_pass = fb_design_ok and design_tie_ok
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
         o.append("=" * 70)
@@ -2065,11 +2217,11 @@ class AqueductPanel(QWidget):
             H_total = result['H_total']
             if show_increase:
                 axes = self.section_fig.subplots(1, 2)
-                self._draw_u_section(axes[0], R, f, H_total, h_d, V_d, Q, "设计流量")
-                self._draw_u_section(axes[1], R, f, H_total, h_inc, V_inc, Q_inc, "加大流量")
+                self._draw_u_section(axes[0], R, f, H_total, h_d, V_d, Q, "设计流量", result)
+                self._draw_u_section(axes[1], R, f, H_total, h_inc, V_inc, Q_inc, "加大流量", result)
             else:
                 ax = self.section_fig.add_subplot(111)
-                self._draw_u_section(ax, R, f, H_total, h_d, V_d, Q, "设计流量")
+                self._draw_u_section(ax, R, f, H_total, h_d, V_d, Q, "设计流量", result)
         else:
             B = result['B']; H_total = result['H_total']
             h_d = result['h_design']; V_d = result['V_design']
@@ -2084,8 +2236,11 @@ class AqueductPanel(QWidget):
         self.section_fig.tight_layout()
         self.section_canvas.draw()
 
-    def _draw_u_section(self, ax, R, f, H_total, h_w, V, Q, title):
+    def _draw_u_section(self, ax, R, f, H_total, h_w, V, Q, title, result=None):
         """绘制U形断面"""
+        result = result or {}
+        tie_rod_height = float(result.get('tie_rod_height') or 0.0)
+        tie_bottom_height = float(result.get('tie_bottom_height') or (H_total - tie_rod_height))
         # 半圆底部
         theta = np.linspace(np.pi, 2*np.pi, 50)
         cx = R * np.cos(theta)
@@ -2100,6 +2255,32 @@ class AqueductPanel(QWidget):
         ax.plot([-R, -R], [R, R + f], 'k-', lw=2)
         ax.plot([R, R], [R, R + f], 'k-', lw=2)
         ax.plot([-R, R], [R + f, R + f], 'k--', lw=1)
+
+        if tie_rod_height > 0 and 0 < tie_bottom_height < H_total:
+            ax.fill(
+                [-R, R, R, -R],
+                [tie_bottom_height, tie_bottom_height, H_total, H_total],
+                color='#d8c58a',
+                alpha=0.35,
+                zorder=0,
+            )
+            ax.plot([-R, R], [tie_bottom_height, tie_bottom_height],
+                    color='#d88400', lw=1.4, ls='--')
+            ax.text(0, tie_bottom_height + tie_rod_height * 0.45,
+                    f'拉杆高度={tie_rod_height:.2f}m',
+                    ha='center', va='center', fontsize=8, color='#8a5a00')
+            ax.text(-R * 0.98, tie_bottom_height,
+                    '拉杆底', ha='left', va='bottom', fontsize=8, color='#8a5a00')
+            if h_w > 0 and tie_bottom_height > h_w:
+                if "设计" in str(title):
+                    clearance = float(result.get('design_tie_bottom_clearance', tie_bottom_height - h_w))
+                    clearance_label = "设计净距"
+                else:
+                    clearance = float(result.get('increased_tie_bottom_clearance', result.get('Fb', tie_bottom_height - h_w)))
+                    clearance_label = "加大有效超高"
+                ax.text(R * 0.98, (tie_bottom_height + h_w) / 2,
+                        f'{clearance_label}={clearance:.2f}m',
+                        ha='right', va='center', fontsize=8, color='#8a5a00')
 
         # 绘制水面
         if h_w > 0:
@@ -2161,6 +2342,8 @@ class AqueductPanel(QWidget):
         has_chamfer = result.get('has_chamfer', False) if result else False
         chamfer_angle = result.get('chamfer_angle', 0) if result else 0
         chamfer_length = result.get('chamfer_length', 0) if result else 0
+        tie_rod_height = float(result.get('tie_rod_height') or 0.0) if result else 0.0
+        tie_bottom_height = float(result.get('tie_bottom_height') or (H - tie_rod_height)) if result else H
 
         if has_chamfer and chamfer_angle > 0 and chamfer_length > 0:
             chamfer_height = chamfer_length * math.tan(math.radians(chamfer_angle))
@@ -2204,6 +2387,32 @@ class AqueductPanel(QWidget):
                 wy = [0, h_w, h_w, 0]
                 ax.fill(wx, wy, color='lightblue', alpha=0.7)
                 ax.plot([-B/2, B/2], [h_w, h_w], 'b-', lw=1.5)
+
+        if tie_rod_height > 0 and 0 < tie_bottom_height < H:
+            ax.fill(
+                [-B/2, B/2, B/2, -B/2],
+                [tie_bottom_height, tie_bottom_height, H, H],
+                color='#d8c58a',
+                alpha=0.35,
+                zorder=0,
+            )
+            ax.plot([-B/2, B/2], [tie_bottom_height, tie_bottom_height],
+                    color='#d88400', lw=1.4, ls='--')
+            ax.text(0, tie_bottom_height + tie_rod_height * 0.45,
+                    f'拉杆高度={tie_rod_height:.2f}m',
+                    ha='center', va='center', fontsize=8, color='#8a5a00')
+            ax.text(-B/2 * 0.98, tie_bottom_height,
+                    '拉杆底', ha='left', va='bottom', fontsize=8, color='#8a5a00')
+            if h_w > 0 and tie_bottom_height > h_w:
+                if "设计" in str(title):
+                    clearance = float(result.get('design_tie_bottom_clearance', tie_bottom_height - h_w))
+                    clearance_label = "设计净距"
+                else:
+                    clearance = float(result.get('increased_tie_bottom_clearance', result.get('Fb', tie_bottom_height - h_w)))
+                    clearance_label = "加大有效超高"
+                ax.text(B / 2 * 0.98, (tie_bottom_height + h_w) / 2,
+                        f'{clearance_label}={clearance:.2f}m',
+                        ha='right', va='center', fontsize=8, color='#8a5a00')
 
         # 标注槽宽
         ax.annotate('', xy=(B/2, -0.1*H), xytext=(-B/2, -0.1*H),
@@ -2478,6 +2687,10 @@ class AqueductPanel(QWidget):
             self.current_result = result
             self._update_result_display(result)
             calc_text = self._export_plain_text or ''
+            summary_items = build_result_summary_word_items("aqueduct", params, result)
+            if summary_items:
+                doc_add_eng_h(doc, '重点结果汇总')
+                doc_add_result_table(doc, summary_items)
             doc_render_calc_text_eng(doc, calc_text, skip_title_keyword='渡槽水力计算结果')
 
         # 恢复

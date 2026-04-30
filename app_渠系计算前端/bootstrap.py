@@ -30,7 +30,6 @@ from app_渠系计算前端.webengine_diagnostics import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 APP_ICON_FILE = PROJECT_ROOT / "icon.ico"
 SHARED_LOGO_ICON_FILE = PROJECT_ROOT / "app_渠系计算前端" / "resources" / "logo.ico"
-WATER_PROFILE_ICON_FILE = PROJECT_ROOT / "推求水面线" / "resources" / "app_icon.ico"
 APP_USER_MODEL_ID = "CanalHydraulicCalc.App"
 
 
@@ -38,7 +37,6 @@ def _resolve_app_icon_path() -> str:
     """返回主程序应使用的应用图标路径。"""
     for candidate in (
         APP_ICON_FILE,
-        WATER_PROFILE_ICON_FILE,
         SHARED_LOGO_ICON_FILE,
     ):
         if candidate.exists():

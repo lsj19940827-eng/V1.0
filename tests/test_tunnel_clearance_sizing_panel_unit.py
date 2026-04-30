@@ -99,6 +99,62 @@ def test_clearance_sizing_context_reads_current_case_inputs():
     assert context["theta_deg"] == pytest.approx(120.0)
 
 
+def test_clearance_sizing_context_uses_auto_increase_when_percent_empty():
+    """按比例留空时，弹窗 Q加大 应使用自动查表值。"""
+    panel = _new_tunnel_panel()
+    panel.section_combo.setCurrentText("圆拱直墙型")
+    panel.Q_edit.setText("38")
+    panel.n_edit.setText("0.014")
+    panel.slope_edit.setText("2500")
+    panel.vmin_edit.setText("0.1")
+    panel.vmax_edit.setText("100")
+    panel.inc_cb.setChecked(True)
+    panel.inc_mode_percent_rb.setChecked(True)
+    panel.inc_edit.setText("")
+
+    context = panel._build_clearance_sizing_context()
+
+    assert context["Q_design"] == pytest.approx(38.0)
+    assert context["Q_increased"] == pytest.approx(43.7)
+    assert context["Q_increased_source"] == "auto_percent"
+
+
+def test_clearance_sizing_context_uses_manual_percent():
+    """按比例手填时，弹窗 Q加大 应使用主流程手填比例。"""
+    panel = _new_tunnel_panel()
+    panel.section_combo.setCurrentText("圆拱直墙型")
+    panel.Q_edit.setText("38")
+    panel.n_edit.setText("0.014")
+    panel.slope_edit.setText("2500")
+    panel.vmin_edit.setText("0.1")
+    panel.vmax_edit.setText("100")
+    panel.inc_cb.setChecked(True)
+    panel.inc_mode_percent_rb.setChecked(True)
+    panel.inc_edit.setText("20")
+
+    context = panel._build_clearance_sizing_context()
+
+    assert context["Q_increased"] == pytest.approx(45.6)
+    assert context["Q_increased_source"] == "manual_percent"
+
+
+def test_clearance_sizing_context_uses_auto_when_increase_disabled():
+    """主流程未启用加大流量时，反推弹窗仍应给出自动查表建议值。"""
+    panel = _new_tunnel_panel()
+    panel.section_combo.setCurrentText("圆拱直墙型")
+    panel.Q_edit.setText("38")
+    panel.n_edit.setText("0.014")
+    panel.slope_edit.setText("2500")
+    panel.vmin_edit.setText("0.1")
+    panel.vmax_edit.setText("100")
+    panel.inc_cb.setChecked(False)
+
+    context = panel._build_clearance_sizing_context()
+
+    assert context["Q_increased"] == pytest.approx(43.7)
+    assert context["Q_increased_source"] == "auto_when_disabled"
+
+
 def test_clearance_sizing_apply_fills_arch_inputs_without_calculating():
     """采用弹窗结果只回填 θ、B、H直，并把已有结果标记为过期。"""
     panel = _new_tunnel_panel()
