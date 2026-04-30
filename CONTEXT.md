@@ -2,13 +2,15 @@
 
 ## 正在做什么
 
-- 将 `codex/section-comparison-panels` 的有效改动和主目录断面图/DXF 修复合并进 `master`，并清理不再需要的 worktree 与分支。
+- 已完成 `codex/section-comparison-panels` 有效改动与主目录断面图/DXF 修复合并，当前主干为 `master`。
 
 ## 上次停在哪
 
 - 已新增共享对比框架 `app_渠系计算前端/section_comparison.py`，四类面板已接入右侧“工况对比”页签、DXF 附表和 Word 报告前置对比表。
 - 已修复明渠多工况断面图恢复为带尺寸标注的完整绘图逻辑，并修复断面 DXF 参数文字上标显示。
 - 已修复渡槽左侧输入栏默认宽度不足和长提示文字不换行问题。
+- 已删除不再需要的 `codex/section-comparison-panels` 本地分支和 `.worktrees/section-comparison-panels` worktree。
+- 合并后专项验证 55 个通过、0 个失败。
 
 ## 关键决定
 
@@ -18,3 +20,4 @@
 - 工况对比只复用各面板已有 `all_results`，不重新计算水力结果，且只展示成功工况。
 - 对比表统一拆成“水力结果对比表”和“结构尺寸对比表”；未启用加大流量时，加大流量相关单元格留空。
 - DXF 单工况和多工况都在断面图下方追加两张对比表；Word 报告在逐工况计算过程前先写总体对比。
+- 分支 worktree 中仅保存时间不同的 `data/siphon_autosave.json` 未纳入分支提交，清理 worktree 时一并丢弃。
