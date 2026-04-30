@@ -57,7 +57,7 @@ from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPU
 from app_渠系计算前端.export_utils import (
     WORD_EXPORT_AVAILABLE, add_formula_to_doc, try_convert_formula_line, ask_open_file,
     create_styled_doc, doc_add_h1, doc_add_formula, doc_render_calc_text, doc_add_figure,
-    doc_add_result_table,
+    doc_add_result_table, doc_add_styled_table,
     create_engineering_report_doc, doc_add_eng_h, doc_add_eng_body,
     doc_render_calc_text_eng, update_doc_toc_via_com,
 )
@@ -80,6 +80,7 @@ from app_渠系计算前端.dxf_multi_export import (
     DxfExportCaseEntry,
     choose_scale_denom,
     export_combined_case_dxf,
+    export_single_case_dxf,
     format_empty_export_warning,
     format_export_result_message,
     partition_valid_case_entries,
@@ -93,9 +94,16 @@ from app_渠系计算前端.tunnel.dxf_export import (
 )
 from app_渠系计算前端.tunnel.comparison import (
     TUNNEL_COMPARISON_COLUMNS,
+    TUNNEL_COMPARISON_SPEC,
+    build_tunnel_comparison_tables,
     build_tunnel_comparison_rows,
     comparison_header_text,
     format_comparison_cell,
+)
+from app_渠系计算前端.section_comparison import (
+    add_section_comparison_word_tables,
+    build_table_clipboard_text,
+    fill_comparison_table,
 )
 from app_渠系计算前端.tunnel.clearance_sizing_dialog import HorseshoeClearanceSizingDialog
 from app_渠系计算前端.formula_renderer import (
@@ -506,18 +514,25 @@ class TunnelPanel(QWidget):
         self.comparison_hint.setWordWrap(True)
         self.comparison_hint.setStyleSheet("color:#666; font-size:12px;")
         cmp_lay.addWidget(self.comparison_hint)
-        self.comparison_table = QTableWidget(0, len(TUNNEL_COMPARISON_COLUMNS))
-        self.comparison_table.setHorizontalHeaderLabels(
-            [comparison_header_text(col) for col in TUNNEL_COMPARISON_COLUMNS]
+        cmp_lay.addWidget(QLabel("水力结果对比表"))
+        self.comparison_hydraulic_table = QTableWidget(0, len(TUNNEL_COMPARISON_SPEC.hydraulic_columns))
+        self._configure_comparison_table(self.comparison_hydraulic_table)
+        fill_comparison_table(
+            self.comparison_hydraulic_table,
+            TUNNEL_COMPARISON_SPEC.hydraulic_columns,
+            [],
         )
-        self.comparison_table.verticalHeader().setVisible(False)
-        self.comparison_table.setAlternatingRowColors(True)
-        self.comparison_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.comparison_table.setSelectionMode(QTableWidget.ExtendedSelection)
-        self.comparison_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.comparison_table.horizontalHeader().setStretchLastSection(True)
-        self.comparison_table.installEventFilter(self)
-        cmp_lay.addWidget(self.comparison_table)
+        cmp_lay.addWidget(self.comparison_hydraulic_table)
+        cmp_lay.addWidget(QLabel("结构尺寸对比表"))
+        self.comparison_dimension_table = QTableWidget(0, len(TUNNEL_COMPARISON_SPEC.dimension_columns))
+        self._configure_comparison_table(self.comparison_dimension_table)
+        fill_comparison_table(
+            self.comparison_dimension_table,
+            TUNNEL_COMPARISON_SPEC.dimension_columns,
+            [],
+        )
+        cmp_lay.addWidget(self.comparison_dimension_table)
+        self.comparison_table = self.comparison_hydraulic_table
         t3l.addWidget(cmp_grp)
         self.notebook.addTab(t3, "工况对比")
 
@@ -1370,54 +1385,44 @@ class TunnelPanel(QWidget):
     def _display_all_results(self):
         return TunnelPanel._display_all_results_legacy(self)
 
+    def _configure_comparison_table(self, table):
+        """设置工况对比表的通用交互样式。"""
+        table.verticalHeader().setVisible(False)
+        table.setAlternatingRowColors(True)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.ExtendedSelection)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.installEventFilter(self)
+
     def eventFilter(self, obj, event):
         """处理工况对比表快捷键，支持全选后复制到 Excel。"""
-        table = getattr(self, "comparison_table", None)
-        if obj is table and event.type() == QEvent.KeyPress:
+        tables = {
+            getattr(self, "comparison_hydraulic_table", None),
+            getattr(self, "comparison_dimension_table", None),
+        }
+        if obj in tables and event.type() == QEvent.KeyPress:
             mods = event.modifiers()
             ctrl_only = bool(mods & Qt.ControlModifier) and not (
                 mods & (Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier)
             )
             if ctrl_only and event.key() == Qt.Key_A:
-                table.selectAll()
+                obj.selectAll()
                 return True
             if ctrl_only and event.key() == Qt.Key_C:
-                self._copy_comparison_selection_to_clipboard()
+                self._copy_comparison_selection_to_clipboard(obj)
                 return True
         return super().eventFilter(obj, event)
 
     def _build_comparison_clipboard_text(self):
         """生成可粘贴到 Excel 的工况对比表文本。"""
-        table = getattr(self, "comparison_table", None)
-        if table is None:
-            return "", 0, 0
-        indexes = table.selectedIndexes()
-        if not indexes:
-            return "", 0, 0
-        rows = sorted({idx.row() for idx in indexes})
-        cols = sorted({idx.column() for idx in indexes})
-        selected = {(idx.row(), idx.column()) for idx in indexes}
+        return build_table_clipboard_text(getattr(self, "comparison_table", None))
 
-        header_cells = []
-        for col in cols:
-            header_item = table.horizontalHeaderItem(col)
-            header_cells.append(header_item.text() if header_item else "")
-
-        lines = ["\t".join(header_cells)]
-        for row in rows:
-            row_cells = []
-            for col in cols:
-                if (row, col) not in selected:
-                    row_cells.append("")
-                    continue
-                item = table.item(row, col)
-                row_cells.append(item.text() if item else "")
-            lines.append("\t".join(row_cells))
-        return "\n".join(lines), len(rows), len(cols)
-
-    def _copy_comparison_selection_to_clipboard(self):
+    def _copy_comparison_selection_to_clipboard(self, table=None):
         """复制工况对比表选区到剪贴板，供 Excel 直接粘贴。"""
-        text, row_count, col_count = self._build_comparison_clipboard_text()
+        if table is None:
+            table = getattr(self, "comparison_table", None)
+        text, row_count, col_count = build_table_clipboard_text(table)
         if not text:
             return
         QApplication.clipboard().setText(text)
@@ -1436,24 +1441,30 @@ class TunnelPanel(QWidget):
 
     def _clear_comparison_table(self, hint="请先完成计算，系统会在这里汇总各工况的关键水力结果和洞身尺寸。"):
         """清空工况对比表。"""
-        if hasattr(self, "comparison_table"):
-            self.comparison_table.setRowCount(0)
-            self._set_comparison_hint(hint)
+        for table in (
+            getattr(self, "comparison_hydraulic_table", None),
+            getattr(self, "comparison_dimension_table", None),
+        ):
+            if table is not None:
+                table.setRowCount(0)
+        self._set_comparison_hint(hint)
 
     def _refresh_comparison_table(self):
         """用当前成功工况刷新工况对比表。"""
-        if not hasattr(self, "comparison_table"):
+        if not hasattr(self, "comparison_hydraulic_table"):
             return
-        rows = build_tunnel_comparison_rows(getattr(self, "_all_results", []))
-        self.comparison_table.setRowCount(len(rows))
-        for row_idx, row in enumerate(rows):
-            for col_idx, column in enumerate(TUNNEL_COMPARISON_COLUMNS):
-                text = format_comparison_cell(row.get(column.key), column.digits)
-                item = QTableWidgetItem(text)
-                item.setTextAlignment(Qt.AlignCenter)
-                self.comparison_table.setItem(row_idx, col_idx, item)
-        self.comparison_table.resizeColumnsToContents()
-        if rows:
+        tables = build_tunnel_comparison_tables(getattr(self, "_all_results", []))
+        fill_comparison_table(
+            self.comparison_hydraulic_table,
+            TUNNEL_COMPARISON_SPEC.hydraulic_columns,
+            tables.hydraulic_rows,
+        )
+        fill_comparison_table(
+            self.comparison_dimension_table,
+            TUNNEL_COMPARISON_SPEC.dimension_columns,
+            tables.dimension_rows,
+        )
+        if tables.hydraulic_rows:
             self._set_comparison_hint("已汇总成功计算的工况；周长和断面积按完整洞身几何统计。")
         else:
             self._set_comparison_hint("当前没有可汇总的成功工况，请检查计算结果。")
@@ -2519,7 +2530,13 @@ class TunnelPanel(QWidget):
         filepath = self._choose_dxf_filepath(self._single_dxf_default_name(entry))
         if not filepath:
             return None
-        export_tunnel_dxf(filepath, entry.result or {}, entry.input_params or {}, scale)
+        export_single_case_dxf(
+            filepath,
+            entry,
+            scale,
+            draw_tunnel_dxf_on_msp,
+            draw_summary_table=draw_tunnel_comparison_table,
+        )
         return filepath
 
     def _export_combined_dxf_entries(self, entries, scale_denom):
@@ -2619,6 +2636,13 @@ class TunnelPanel(QWidget):
 
         # 6. 计算过程
         doc_add_eng_h(doc, '6、计算过程')
+        add_section_comparison_word_tables(
+            doc,
+            export_results,
+            TUNNEL_COMPARISON_SPEC,
+            heading_func=doc_add_eng_h,
+            table_func=doc_add_styled_table,
+        )
         for item in export_results:
             label = item['label']
             inp = item['input']

@@ -7,6 +7,15 @@ from dataclasses import dataclass
 import math
 from typing import Any, Iterable
 
+from app_渠系计算前端.section_comparison import (
+    COMMON_HYDRAULIC_COLUMNS,
+    ComparisonTableSpec,
+    build_section_comparison_tables,
+    first_num,
+    has_increase_result,
+    standard_hydraulic_row,
+    use_increase,
+)
 from app_渠系计算前端.tunnel.geometry import (
     build_arch_geometry,
     build_flat_bottom_circle_geometry,
@@ -33,6 +42,20 @@ TUNNEL_COMPARISON_COLUMNS = (
     ComparisonColumn("V_design", "设计流速", "m/s", 3),
     ComparisonColumn("h_increased", "加大水深", "m", 3),
     ComparisonColumn("V_increased", "加大流速", "m/s", 3),
+    ComparisonColumn("B", "底宽 B", "m", 3),
+    ComparisonColumn("D", "直径 D", "m", 3),
+    ComparisonColumn("r", "半径 r", "m", 3),
+    ComparisonColumn("H_total", "洞总高 H", "m", 3),
+    ComparisonColumn("H_straight", "直墙高度 H直", "m", 3),
+    ComparisonColumn("total_perimeter", "洞身周长", "m", 3),
+    ComparisonColumn("total_area", "洞身断面积", "m²", 3),
+)
+
+TUNNEL_HYDRAULIC_COMPARISON_COLUMNS = COMMON_HYDRAULIC_COLUMNS
+
+TUNNEL_DIMENSION_COMPARISON_COLUMNS = (
+    ComparisonColumn("case_name", "工况", "", None),
+    ComparisonColumn("section_type", "断面类型", "", None),
     ComparisonColumn("B", "底宽 B", "m", 3),
     ComparisonColumn("D", "直径 D", "m", 3),
     ComparisonColumn("r", "半径 r", "m", 3),
@@ -248,6 +271,38 @@ def build_tunnel_comparison_rows(entries_or_results: Iterable[Any]) -> list[dict
         }
         rows.append(row)
     return rows
+
+
+def _tunnel_control_margin(params: dict, result: dict) -> tuple[str, Any]:
+    """读取隧洞净空控制余量。"""
+    if use_increase(params) and has_increase_result(result):
+        return "加大净空高度", first_num(result.get("freeboard_hgt_inc"), result.get("freeboard_pct_inc"))
+    return "设计净空高度", first_num(result.get("freeboard_hgt_design"), result.get("freeboard_pct_design"))
+
+
+def _build_tunnel_table_row(case_name: str, params: dict, result: dict) -> tuple[dict[str, Any], dict[str, Any]]:
+    """生成隧洞单个工况的水力和结构对比行。"""
+    stype = _section_type(params, result)
+    margin_type, control_margin = _tunnel_control_margin(params, result)
+    hydraulic = standard_hydraulic_row(case_name, stype, params, result, margin_type, control_margin)
+    dimension = {"case_name": case_name, "section_type": stype}
+    dimension.update(compute_tunnel_total_geometry_metrics(params, result))
+    return hydraulic, dimension
+
+
+TUNNEL_COMPARISON_SPEC = ComparisonTableSpec(
+    panel_key="tunnel",
+    hydraulic_title="隧洞水力结果对比表",
+    dimension_title="隧洞结构尺寸对比表",
+    hydraulic_columns=TUNNEL_HYDRAULIC_COMPARISON_COLUMNS,
+    dimension_columns=TUNNEL_DIMENSION_COMPARISON_COLUMNS,
+    row_builder=_build_tunnel_table_row,
+)
+
+
+def build_tunnel_comparison_tables(entries_or_results: Iterable[Any]):
+    """生成隧洞工况对比两张表。"""
+    return build_section_comparison_tables(entries_or_results, TUNNEL_COMPARISON_SPEC)
 
 
 def format_comparison_cell(value: Any, digits: int | None = 3) -> str:

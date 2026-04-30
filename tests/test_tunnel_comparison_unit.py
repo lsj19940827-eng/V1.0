@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 from app_渠系计算前端.dxf_multi_export import DxfExportCaseEntry
 from app_渠系计算前端.tunnel.comparison import (
+    build_tunnel_comparison_tables,
     build_tunnel_comparison_rows,
     compute_tunnel_total_geometry_metrics,
 )
@@ -133,6 +134,53 @@ def test_build_comparison_rows_outputs_design_and_increase_fields():
     assert rows[1]["Q_increased"] == pytest.approx(9.2)
     assert rows[1]["h_increased"] == pytest.approx(2.25)
     assert rows[1]["H_straight"] == pytest.approx(1.0)
+
+
+def test_build_tunnel_comparison_tables_splits_hydraulic_and_dimension_rows():
+    """隧洞新对比口径应拆成水力结果表和结构尺寸表。"""
+    entries = [
+        DxfExportCaseEntry(
+            case_idx=0,
+            label="圆形",
+            input_params={"section_type": "圆形", "Q": 5.0, "use_increase": False},
+            result={
+                "success": True,
+                "D": 3.0,
+                "h_design": 1.5,
+                "V_design": 1.2,
+                "A_total": math.pi * 1.5 * 1.5,
+            },
+            is_valid=True,
+        ),
+        DxfExportCaseEntry(
+            case_idx=1,
+            label="圆拱",
+            input_params={"section_type": "圆拱直墙型", "Q": 8.0, "use_increase": True},
+            result={
+                "success": True,
+                "B": 4.0,
+                "H_total": 3.0,
+                "H_straight": 1.0,
+                "theta_deg": 180.0,
+                "h_design": 2.0,
+                "V_design": 1.7,
+                "Q_increased": 9.2,
+                "h_increased": 2.25,
+                "V_increased": 1.9,
+                "A_total": 10.28,
+            },
+            is_valid=True,
+        ),
+    ]
+
+    tables = build_tunnel_comparison_tables(entries)
+
+    assert len(tables.hydraulic_rows) == 2
+    assert tables.hydraulic_rows[0]["Q_increased"] == ""
+    assert tables.hydraulic_rows[1]["Q_increased"] == pytest.approx(9.2)
+    assert tables.dimension_rows[0]["D"] == pytest.approx(3.0)
+    assert tables.dimension_rows[1]["B"] == pytest.approx(4.0)
+    assert tables.dimension_rows[1]["total_perimeter"] == pytest.approx(4.0 + 2.0 + math.pi * 2.0)
 
 
 def test_comparison_clipboard_text_includes_headers_and_empty_cells_for_excel():
