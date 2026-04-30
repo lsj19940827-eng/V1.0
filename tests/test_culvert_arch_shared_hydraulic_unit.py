@@ -30,7 +30,10 @@ def test_shared_data_manager_preserves_culvert_arch_hidden_params():
         "R_hyd_design": 0.716,
         "B": 2.6,
         "H_total": 2.18,
+        "H_straight": 0.92,
         "theta_deg": 140.0,
+        "manual_H_straight": 0.92,
+        "used_manual_H_straight": True,
         "V_max": 1.42,
     }
 
@@ -43,11 +46,15 @@ def test_shared_data_manager_preserves_culvert_arch_hidden_params():
     assert result.section_type == "暗涵-圆拱直墙型"
     assert result.B == pytest.approx(2.6)
     assert result.H_total == pytest.approx(2.18)
+    assert result.H_straight == pytest.approx(0.92)
 
     node_params = result.to_node_params()
     section_params = node_params["section_params"]
     assert section_params["B"] == pytest.approx(2.6)
     assert section_params["H_total"] == pytest.approx(2.18)
+    assert section_params["H_straight"] == pytest.approx(0.92)
     assert section_params["theta_deg"] == pytest.approx(140.0)
+    assert section_params["manual_H_straight"] == pytest.approx(0.92)
+    assert section_params["used_manual_H_straight"] is True
 
     manager.clear_batch_results()

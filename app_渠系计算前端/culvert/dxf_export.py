@@ -177,6 +177,7 @@ def _draw_arch_culvert(msp, result, p, sf=1.0, scale_denom=100):
     inc = result.get('increase_percent', 0.0)
 
     geom = build_arch_geometry(B, H, math.radians(theta_deg))
+    Hs = geom['H_straight']
     char = max(B, H, 1.0) * sf
     th = 3.5
     ar = th * 0.85
@@ -222,6 +223,8 @@ def _draw_arch_culvert(msp, result, p, sf=1.0, scale_denom=100):
     _add_dim_h(msp, -B/2*sf, B/2*sf, -(gap*1.1), 0, f'B={B:.3f} m', th, ar, '尺寸标注')
     _add_dim_v(msp, 0, h_d*sf, -(B/2*sf+gap*1.4), -B/2*sf, f'h={h_d:.3f} m', th, ar, '尺寸标注')
     _add_dim_v(msp, 0, H*sf, B/2*sf+gap*1.4, B/2*sf, f'H={H:.3f} m', th, ar, '尺寸标注')
+    if Hs > 1e-9:
+        _add_dim_v(msp, 0, Hs*sf, -(B/2*sf+gap*2.7), -B/2*sf, f'H直={Hs:.3f} m', th, ar, '尺寸标注')
     if fb_d > 0 and h_d > 0:
         _add_dim_v(msp, h_d*sf, H*sf, B/2*sf+gap*2.8, B/2*sf, f'Fb={fb_d:.3f} m', th, ar, '尺寸标注')
     msp.add_text(
@@ -241,6 +244,7 @@ def _draw_arch_culvert(msp, result, p, sf=1.0, scale_denom=100):
         '[断面]',
         f'B={B:.3f} m',
         f'H={H:.3f} m',
+        f'H直={Hs:.3f} m',
         f'θ={theta_deg:.0f}°',
         '',
         '[设计流量]',

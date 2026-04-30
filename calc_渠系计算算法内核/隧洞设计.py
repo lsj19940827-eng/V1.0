@@ -445,6 +445,39 @@ def calculate_horseshoe_total_area(B: float, H_total: float, theta_rad: float) -
     return Area_rect + Area_arch
 
 
+def calculate_horseshoe_arch_geometry(B: float, theta_rad: float,
+                                       H_straight: float = None,
+                                       H_total: float = None) -> Dict[str, float]:
+    """计算圆拱直墙型拱部与直墙几何参数。"""
+    if B <= 0:
+        raise ValueError("圆拱直墙型底宽 B 必须大于 0")
+    if theta_rad <= 0 or theta_rad > PI + 0.001:
+        raise ValueError("圆心角必须在90~180度之间")
+    sin_half = math.sin(theta_rad / 2)
+    if abs(sin_half) < 0.000000001:
+        raise ValueError("圆心角参数无效")
+
+    R_arch = (B / 2) / sin_half
+    H_arch = R_arch * (1 - math.cos(theta_rad / 2))
+    if H_straight is not None:
+        if H_straight < 0:
+            raise ValueError("直墙高度 H直 不能为负数")
+        total_height = H_straight + H_arch
+        straight_height = H_straight
+    elif H_total is not None:
+        total_height = H_total
+        straight_height = max(0, H_total - H_arch)
+    else:
+        raise ValueError("必须提供直墙高度或总高")
+
+    return {
+        "R_arch": R_arch,
+        "H_arch": H_arch,
+        "H_total": total_height,
+        "H_straight": straight_height,
+    }
+
+
 def calculate_horseshoe_outputs(B: float, H_total: float, theta_rad: float, 
                                 h: float, n: float, slope: float) -> Dict[str, float]:
     """计算圆拱直墙型所有水力要素"""
@@ -521,6 +554,213 @@ def solve_water_depth_horseshoe(B: float, H_total: float, theta_rad: float,
         return (h_mid, True)
     
     return (h_mid, False)
+
+
+def design_horseshoe_by_freeboard_target(Q_design: float, Q_increased: float,
+                                          n: float, slope_inv: float,
+                                          v_min: float, v_max: float,
+                                          theta_deg: float, hb_ratio: float,
+                                          target_freeboard_pct: float) -> Dict[str, Any]:
+    """按加大流量目标净空面积比反推圆拱直墙型尺寸。"""
+    result = {
+        'success': False,
+        'error_message': '',
+        'section_type': '圆拱直墙型',
+        'design_method': '',
+        'B': 0,
+        'H_total': 0,
+        'H_straight': 0,
+        'theta_deg': theta_deg,
+        'HB_ratio': hb_ratio,
+        'target_freeboard_pct': target_freeboard_pct,
+        'h_design': 0,
+        'V_design': 0,
+        'A_design': 0,
+        'P_design': 0,
+        'R_hyd_design': 0,
+        'Q_calc': 0,
+        'freeboard_pct_design': 0,
+        'freeboard_hgt_design': 0,
+        'Q_increased': Q_increased,
+        'h_increased': 0,
+        'V_increased': 0,
+        'A_increased': 0,
+        'P_increased': 0,
+        'R_hyd_increased': 0,
+        'Q_calc_increased': 0,
+        'freeboard_pct_inc': 0,
+        'freeboard_hgt_inc': 0,
+        'A_total': 0,
+        'H_arch': 0,
+    }
+
+    if Q_design <= 0:
+        result['error_message'] = '设计流量 Q 必须大于 0。'
+        return result
+    if Q_increased <= 0:
+        result['error_message'] = '加大流量 Q加大 必须大于 0。'
+        return result
+    if Q_increased <= Q_design:
+        result['error_message'] = '加大流量 Q加大 必须大于设计流量 Q。'
+        return result
+    if n <= 0 or slope_inv <= 0:
+        result['error_message'] = '糙率和水力坡降必须为有效正数。'
+        return result
+    if v_min < 0 or v_max <= 0 or v_min > v_max:
+        result['error_message'] = '流速范围无效，请检查不淤流速和不冲流速。'
+        return result
+    if theta_deg < 90 or theta_deg > 180:
+        result['error_message'] = '圆心角必须在90~180度之间。'
+        return result
+    if hb_ratio < HB_RATIO_MIN or hb_ratio > HB_RATIO_MAX:
+        result['error_message'] = (
+            f'高宽比 H/B 必须在 {HB_RATIO_MIN:.1f}~{HB_RATIO_MAX:.1f} 之间。'
+        )
+        return result
+    min_freeboard_pct = MIN_FREEBOARD_PCT_TUNNEL * 100
+    if target_freeboard_pct < min_freeboard_pct or target_freeboard_pct >= 100:
+        result['error_message'] = (
+            f'目标净空比例必须不小于 {min_freeboard_pct:.0f}% 且小于 100%。'
+        )
+        return result
+
+    theta_rad = math.radians(theta_deg)
+    slope = 1.0 / slope_inv
+    unit_B = 1.0
+    unit_H = hb_ratio
+
+    try:
+        geom_unit = calculate_horseshoe_arch_geometry(
+            unit_B,
+            theta_rad,
+            H_total=unit_H,
+        )
+    except ValueError as exc:
+        result['error_message'] = str(exc)
+        return result
+
+    if geom_unit['H_straight'] < -GEOM_TOLERANCE:
+        result['error_message'] = '当前高宽比小于拱部高度要求，无法形成有效直墙断面。'
+        return result
+
+    unit_total_area = calculate_horseshoe_total_area(unit_B, unit_H, theta_rad)
+    target_wet_ratio = 1.0 - target_freeboard_pct / 100.0
+    if unit_total_area <= GEOM_TOLERANCE or target_wet_ratio <= 0:
+        result['error_message'] = '目标净空比例对应的过水面积无效。'
+        return result
+
+    # 在单位断面里先定位目标净空比例对应的水深，再按相似律缩放断面。
+    h_low = 0.0
+    h_high = unit_H
+    for _ in range(MAX_ITERATIONS):
+        h_mid = (h_low + h_high) / 2.0
+        area_mid = calculate_horseshoe_area(unit_B, unit_H, theta_rad, h_mid)
+        wet_ratio_mid = area_mid / unit_total_area if unit_total_area > 0 else 0.0
+        if wet_ratio_mid < target_wet_ratio:
+            h_low = h_mid
+        else:
+            h_high = h_mid
+
+    unit_h = (h_low + h_high) / 2.0
+    unit_A = calculate_horseshoe_area(unit_B, unit_H, theta_rad, unit_h)
+    unit_P = calculate_horseshoe_perimeter(unit_B, unit_H, theta_rad, unit_h)
+    if unit_A <= GEOM_TOLERANCE or unit_P <= GEOM_TOLERANCE:
+        result['error_message'] = '目标净空比例对应的过水断面无效。'
+        return result
+
+    unit_R = unit_A / unit_P
+    conveyance_coeff = unit_A * (unit_R ** (2.0 / 3.0))
+    if conveyance_coeff <= GEOM_TOLERANCE or slope <= 0:
+        result['error_message'] = '当前参数无法形成有效输水能力。'
+        return result
+
+    B = ((Q_increased * n) / ((slope ** 0.5) * conveyance_coeff)) ** (3.0 / 8.0)
+    H_total = hb_ratio * B
+    try:
+        geom = calculate_horseshoe_arch_geometry(
+            B,
+            theta_rad,
+            H_total=H_total,
+        )
+    except ValueError as exc:
+        result['error_message'] = str(exc)
+        return result
+
+    H_straight = geom['H_straight']
+    H_arch = geom['H_arch']
+    if B < MIN_WIDTH_HS or H_total < MIN_HEIGHT_HS:
+        result['error_message'] = (
+            f'反推尺寸低于最小断面要求：B={B:.3f}m，H={H_total:.3f}m。'
+        )
+        return result
+    if H_straight < -GEOM_TOLERANCE:
+        result['error_message'] = '反推结果无法形成有效直墙高度。'
+        return result
+
+    h_design, success_design = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q_design)
+    if not success_design or h_design >= H_total:
+        result['error_message'] = '反推断面无法满足设计流量，请调整净空比例或高宽比。'
+        return result
+    outputs_design = calculate_horseshoe_outputs(B, H_total, theta_rad, h_design, n, slope)
+    if outputs_design['V'] < v_min or outputs_design['V'] > v_max:
+        result['error_message'] = (
+            f"设计流量流速 V={outputs_design['V']:.3f} m/s "
+            f"不在 {v_min}~{v_max} m/s 范围内。"
+        )
+        return result
+    if (outputs_design['freeboard_hgt'] < MIN_FREEBOARD_HGT_TUNNEL or
+            outputs_design['freeboard_pct'] < min_freeboard_pct):
+        result['error_message'] = '设计流量工况净空不足，请调整净空比例或高宽比。'
+        return result
+
+    h_inc, success_inc = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q_increased)
+    if not success_inc or h_inc >= H_total:
+        result['error_message'] = '反推断面无法满足加大流量，请调整净空比例或高宽比。'
+        return result
+    outputs_inc = calculate_horseshoe_outputs(B, H_total, theta_rad, h_inc, n, slope)
+    if outputs_inc['V'] > v_max:
+        result['error_message'] = (
+            f"加大流量流速 V={outputs_inc['V']:.3f} m/s 超过 {v_max} m/s。"
+        )
+        return result
+    if outputs_inc['freeboard_hgt'] < MIN_FREEBOARD_HGT_TUNNEL:
+        result['error_message'] = (
+            f"加大流量净空高度 {outputs_inc['freeboard_hgt']:.3f} m "
+            f"小于 {MIN_FREEBOARD_HGT_TUNNEL:.1f} m。"
+        )
+        return result
+    if outputs_inc['freeboard_pct'] < target_freeboard_pct - 0.05:
+        result['error_message'] = '反推结果未达到目标净空比例，请调整输入参数。'
+        return result
+
+    result['success'] = True
+    result['design_method'] = (
+        f'圆拱直墙型; 按Q加大净空比例反推; B={B:.3f}m, '
+        f'H={H_total:.3f}m, H直={H_straight:.3f}m, θ={theta_deg:.3f}°'
+    )
+    result['B'] = B
+    result['H_total'] = H_total
+    result['H_straight'] = H_straight
+    result['H_arch'] = H_arch
+    result['HB_ratio'] = H_total / B if B > 0 else 0
+    result['h_design'] = h_design
+    result['V_design'] = outputs_design['V']
+    result['A_design'] = outputs_design['A']
+    result['P_design'] = outputs_design['P']
+    result['R_hyd_design'] = outputs_design['R_hyd']
+    result['Q_calc'] = outputs_design['Q']
+    result['freeboard_pct_design'] = outputs_design['freeboard_pct']
+    result['freeboard_hgt_design'] = outputs_design['freeboard_hgt']
+    result['h_increased'] = h_inc
+    result['V_increased'] = outputs_inc['V']
+    result['A_increased'] = outputs_inc['A']
+    result['P_increased'] = outputs_inc['P']
+    result['R_hyd_increased'] = outputs_inc['R_hyd']
+    result['Q_calc_increased'] = outputs_inc['Q']
+    result['freeboard_pct_inc'] = outputs_inc['freeboard_pct']
+    result['freeboard_hgt_inc'] = outputs_inc['freeboard_hgt']
+    result['A_total'] = outputs_design['A_total']
+    return result
 
 
 # ============================================================
@@ -1119,6 +1359,7 @@ def quick_calculate_horseshoe(Q: float, n: float, slope_inv: float,
                                v_min: float, v_max: float,
                                theta_deg: float = 180.0,
                                manual_B: float = None,
+                               manual_H_straight: float = None,
                                manual_increase_percent: float = None) -> Dict[str, Any]:
     """
     圆拱直墙型隧洞快速计算
@@ -1135,6 +1376,8 @@ def quick_calculate_horseshoe(Q: float, n: float, slope_inv: float,
         'B': 0,
         'H_total': 0,
         'H_straight': 0,
+        'manual_H_straight': manual_H_straight,
+        'used_manual_H_straight': manual_H_straight is not None,
         'theta_deg': theta_deg,
         'HB_ratio': 0,
         'h_design': 0,
@@ -1174,6 +1417,102 @@ def quick_calculate_horseshoe(Q: float, n: float, slope_inv: float,
     Q_increased = Q * (1 + increase_percent / 100)
     result['increase_percent'] = increase_percent
     result['Q_increased'] = Q_increased
+
+    if manual_H_straight is not None:
+        if manual_H_straight < 0:
+            result['error_message'] = '直墙高度 H直 不能为负数'
+            return result
+        if manual_B is None or manual_B <= 0:
+            result['error_message'] = '填写直墙高度 H直 时必须同时填写底宽 B'
+            return result
+
+        try:
+            geom = calculate_horseshoe_arch_geometry(
+                manual_B,
+                theta_rad,
+                H_straight=manual_H_straight,
+            )
+        except ValueError as exc:
+            result['error_message'] = str(exc)
+            return result
+
+        B = manual_B
+        H_total = geom['H_total']
+        H_straight = geom['H_straight']
+        h_design, success_design = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q)
+        if not success_design or h_design >= H_total:
+            result['error_message'] = (
+                f"计算失败：固定 B={B:.3f} m、H直={H_straight:.3f} m、θ={theta_deg:.1f}° "
+                "无法满足设计流量。请增大底宽或直墙高度。"
+            )
+            return result
+
+        outputs_design = calculate_horseshoe_outputs(B, H_total, theta_rad, h_design, n, slope)
+        if outputs_design['V'] < v_min or outputs_design['V'] > v_max:
+            result['error_message'] = (
+                f"计算失败：固定断面设计流速 V={outputs_design['V']:.3f} m/s "
+                f"不在 {v_min}~{v_max} m/s 范围内。"
+            )
+            return result
+        if (outputs_design['freeboard_hgt'] < MIN_FREEBOARD_HGT or
+                outputs_design['freeboard_pct'] < MIN_FREEBOARD_PCT * 100):
+            result['error_message'] = (
+                f"计算失败：固定断面设计工况净空不足，净空高度 "
+                f"{outputs_design['freeboard_hgt']:.3f} m，净空比例 "
+                f"{outputs_design['freeboard_pct']:.1f}%。"
+            )
+            return result
+
+        h_inc, success_inc = solve_water_depth_horseshoe(B, H_total, theta_rad, n, slope, Q_increased)
+        if not success_inc or h_inc >= H_total:
+            result['error_message'] = (
+                f"计算失败：固定 B={B:.3f} m、H直={H_straight:.3f} m、θ={theta_deg:.1f}° "
+                "无法满足加大流量。请增大底宽或直墙高度。"
+            )
+            return result
+
+        outputs_inc = calculate_horseshoe_outputs(B, H_total, theta_rad, h_inc, n, slope)
+        if outputs_inc['V'] > v_max:
+            result['error_message'] = (
+                f"计算失败：固定断面加大流量流速 V={outputs_inc['V']:.3f} m/s "
+                f"超过 {v_max} m/s。"
+            )
+            return result
+        if (outputs_inc['freeboard_hgt'] < MIN_FREEBOARD_HGT or
+                outputs_inc['freeboard_pct'] < MIN_FREEBOARD_PCT * 100):
+            result['error_message'] = (
+                f"计算失败：固定断面加大流量净空不足，净空高度 "
+                f"{outputs_inc['freeboard_hgt']:.3f} m，净空比例 "
+                f"{outputs_inc['freeboard_pct']:.1f}%。"
+            )
+            return result
+
+        result['success'] = True
+        result['design_method'] = (
+            f'圆拱直墙型; 固定B={B:.2f}m, H直={H_straight:.2f}m, '
+            f'H={H_total:.2f}m, θ={theta_deg}°'
+        )
+        result['B'] = B
+        result['H_total'] = H_total
+        result['H_straight'] = H_straight
+        result['HB_ratio'] = H_total / B if B > 0 else 0
+        result['h_design'] = h_design
+        result['V_design'] = outputs_design['V']
+        result['A_design'] = outputs_design['A']
+        result['P_design'] = outputs_design['P']
+        result['R_hyd_design'] = outputs_design['R_hyd']
+        result['Q_calc'] = outputs_design['Q']
+        result['freeboard_pct_design'] = outputs_design['freeboard_pct']
+        result['freeboard_hgt_design'] = outputs_design['freeboard_hgt']
+        result['h_increased'] = h_inc
+        result['V_increased'] = outputs_inc['V']
+        result['A_increased'] = outputs_inc['A']
+        result['P_increased'] = outputs_inc['P']
+        result['R_hyd_increased'] = outputs_inc['R_hyd']
+        result['freeboard_pct_inc'] = outputs_inc['freeboard_pct']
+        result['freeboard_hgt_inc'] = outputs_inc['freeboard_hgt']
+        result['A_total'] = outputs_design['A_total']
+        return result
     
     # 搜索最优解
     best_found = False

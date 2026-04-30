@@ -148,9 +148,10 @@ PANEL_CASES = [
             ("text", "slope_edit", "999"),
             ("text", "theta_edit", "135"),
             ("text", "B_hs_edit", "2.60"),
+            ("text", "H_straight_hs_edit", "1.20"),
             ("increase_q", None, "13.00"),
         ],
-        ["section_combo", "Q_edit", "n_edit", "slope_edit", "theta_edit", "B_hs_edit", "inc_q_edit"],
+        ["section_combo", "Q_edit", "n_edit", "slope_edit", "theta_edit", "B_hs_edit", "H_straight_hs_edit", "inc_q_edit"],
     ),
     (
         "culvert",
@@ -162,9 +163,10 @@ PANEL_CASES = [
             ("text", "slope_edit", "666"),
             ("text", "theta_edit", "150"),
             ("text", "arch_B_edit", "2.10"),
+            ("text", "arch_H_straight_edit", "1.20"),
             ("increase_q", None, "8.10"),
         ],
-        ["section_combo", "Q_edit", "n_edit", "slope_edit", "theta_edit", "arch_B_edit", "inc_q_edit"],
+        ["section_combo", "Q_edit", "n_edit", "slope_edit", "theta_edit", "arch_B_edit", "arch_H_straight_edit", "inc_q_edit"],
     ),
     (
         "pressure_pipe",

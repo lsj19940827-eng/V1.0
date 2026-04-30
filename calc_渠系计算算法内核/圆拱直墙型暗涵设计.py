@@ -24,6 +24,7 @@ from 矩形暗涵设计 import (
     get_required_freeboard_height_rect,
 )
 from 隧洞设计 import (
+    calculate_horseshoe_arch_geometry,
     calculate_horseshoe_outputs,
     solve_water_depth_horseshoe,
 )
@@ -48,6 +49,8 @@ def _build_result(theta_deg: float) -> Dict[str, Any]:
         "B": 0.0,
         "H_total": 0.0,
         "H_straight": 0.0,
+        "manual_H_straight": None,
+        "used_manual_H_straight": False,
         "theta_deg": theta_deg,
         "HB_ratio": 0.0,
         "h_design": 0.0,
@@ -76,11 +79,12 @@ def _build_result(theta_deg: float) -> Dict[str, Any]:
 
 def _calc_arch_height(B: float, theta_rad: float) -> float:
     """根据底宽和圆心角计算拱部高度。"""
-    sin_half = math.sin(theta_rad / 2.0)
-    if B <= 0 or abs(sin_half) < 1e-9:
+    if B <= 0:
         return 0.0
-    radius = (B / 2.0) / sin_half
-    return radius * (1.0 - math.cos(theta_rad / 2.0))
+    try:
+        return calculate_horseshoe_arch_geometry(B, theta_rad, H_total=0.0)["H_arch"]
+    except ValueError:
+        return 0.0
 
 
 def _validate_theta(theta_deg: float) -> Optional[str]:
@@ -209,6 +213,59 @@ def _format_fb_details(H_total: float, required_fb: float) -> str:
     return "\n".join(details)
 
 
+def _fill_success_result(
+    result: Dict[str, Any],
+    *,
+    B: float,
+    H_total: float,
+    H_straight: float,
+    theta_deg: float,
+    candidate: Dict[str, Any],
+    fixed_geometry: bool,
+) -> Dict[str, Any]:
+    """把候选断面的水力成果写入统一结果字典。"""
+    outputs_design = candidate["outputs_design"]
+    outputs_inc = candidate["outputs_inc"]
+
+    result["success"] = True
+    if fixed_geometry:
+        result["design_method"] = (
+            f"圆拱直墙型暗涵; 固定B={B:.2f}m, H直={H_straight:.2f}m, "
+            f"H={H_total:.2f}m, θ={theta_deg:.1f}°"
+        )
+    else:
+        result["design_method"] = f"圆拱直墙型暗涵; B={B:.2f}m, H={H_total:.2f}m, θ={theta_deg:.1f}°"
+    result["B"] = B
+    result["H_total"] = H_total
+    result["H_straight"] = H_straight
+    result["HB_ratio"] = H_total / B if B > 0 else 0.0
+    result["h_design"] = candidate["h_design"]
+    result["V_design"] = outputs_design["V"]
+    result["A_design"] = outputs_design["A"]
+    result["P_design"] = outputs_design["P"]
+    result["R_hyd_design"] = outputs_design["R_hyd"]
+    result["Q_calc"] = outputs_design["Q"]
+    result["freeboard_pct_design"] = outputs_design["freeboard_pct"]
+    result["freeboard_hgt_design"] = outputs_design["freeboard_hgt"]
+    result["h_increased"] = candidate["h_inc"]
+    result["V_increased"] = outputs_inc["V"]
+    result["A_increased"] = outputs_inc["A"]
+    result["P_increased"] = outputs_inc["P"]
+    result["R_hyd_increased"] = outputs_inc["R_hyd"]
+    result["freeboard_pct_inc"] = outputs_inc["freeboard_pct"]
+    result["freeboard_hgt_inc"] = outputs_inc["freeboard_hgt"]
+    result["A_total"] = outputs_design["A_total"]
+    result["fb_min_required"] = candidate["required_fb"]
+    result["fb_check_passed"] = (
+        outputs_inc["freeboard_hgt"] >= candidate["required_fb"] - SOLVER_TOLERANCE
+        and MIN_FREEBOARD_PCT_RECT * 100.0 - 0.1
+        <= outputs_inc["freeboard_pct"]
+        <= MAX_FREEBOARD_PCT_RECT * 100.0 + 0.1
+    )
+    result["fb_check_details"] = _format_fb_details(H_total, candidate["required_fb"])
+    return result
+
+
 def quick_calculate_arch_culvert(
     Q: float,
     n: float,
@@ -217,6 +274,7 @@ def quick_calculate_arch_culvert(
     v_max: float,
     theta_deg: float = 180.0,
     manual_B: float = None,
+    manual_H_straight: float = None,
     manual_increase_percent: float = None,
 ) -> Dict[str, Any]:
     """快速计算圆拱直墙型暗涵。"""
@@ -224,6 +282,8 @@ def quick_calculate_arch_culvert(
         theta_deg = 180.0
 
     result = _build_result(theta_deg)
+    result["manual_H_straight"] = manual_H_straight
+    result["used_manual_H_straight"] = manual_H_straight is not None
     if Q <= 0 or n <= 0 or slope_inv <= 0:
         result["error_message"] = "输入参数无效"
         return result
@@ -245,6 +305,53 @@ def quick_calculate_arch_culvert(
     slope = 1.0 / slope_inv
     theta_rad = math.radians(theta_deg)
     use_increase = increase_percent > 0
+
+    if manual_H_straight is not None:
+        if manual_H_straight < 0:
+            result["error_message"] = "直墙高度 H直 不能为负数"
+            return result
+        if manual_B is None or manual_B <= 0:
+            result["error_message"] = "填写直墙高度 H直 时必须同时填写底宽 B"
+            return result
+
+        try:
+            geom = calculate_horseshoe_arch_geometry(
+                manual_B,
+                theta_rad,
+                H_straight=manual_H_straight,
+            )
+        except ValueError as exc:
+            result["error_message"] = str(exc)
+            return result
+
+        fixed_candidate = _check_candidate(
+            manual_B,
+            geom["H_total"],
+            theta_rad,
+            Q,
+            Q_increased,
+            n,
+            slope,
+            v_min,
+            v_max,
+            use_increase,
+        )
+        if fixed_candidate is None:
+            result["error_message"] = (
+                f"计算失败：固定 B={manual_B:.3f} m、H直={manual_H_straight:.3f} m、"
+                f"θ={theta_deg:.1f}° 无法满足设计流量、加大流量、流速或暗涵净空要求。"
+            )
+            return result
+
+        return _fill_success_result(
+            result,
+            B=manual_B,
+            H_total=geom["H_total"],
+            H_straight=geom["H_straight"],
+            theta_deg=theta_deg,
+            candidate=fixed_candidate,
+            fixed_geometry=True,
+        )
 
     if manual_B is not None and manual_B > 0:
         B_start = manual_B
@@ -308,35 +415,12 @@ def quick_calculate_arch_culvert(
 
     arch_height = _calc_arch_height(best_B, theta_rad)
     H_straight = max(0.0, best_H - arch_height)
-    outputs_design = best_candidate["outputs_design"]
-    outputs_inc = best_candidate["outputs_inc"]
-
-    result["success"] = True
-    result["design_method"] = f"圆拱直墙型暗涵; B={best_B:.2f}m, H={best_H:.2f}m, θ={theta_deg:.1f}°"
-    result["B"] = best_B
-    result["H_total"] = best_H
-    result["H_straight"] = H_straight
-    result["HB_ratio"] = best_H / best_B if best_B > 0 else 0.0
-    result["h_design"] = best_candidate["h_design"]
-    result["V_design"] = outputs_design["V"]
-    result["A_design"] = outputs_design["A"]
-    result["P_design"] = outputs_design["P"]
-    result["R_hyd_design"] = outputs_design["R_hyd"]
-    result["Q_calc"] = outputs_design["Q"]
-    result["freeboard_pct_design"] = outputs_design["freeboard_pct"]
-    result["freeboard_hgt_design"] = outputs_design["freeboard_hgt"]
-    result["h_increased"] = best_candidate["h_inc"]
-    result["V_increased"] = outputs_inc["V"]
-    result["A_increased"] = outputs_inc["A"]
-    result["P_increased"] = outputs_inc["P"]
-    result["R_hyd_increased"] = outputs_inc["R_hyd"]
-    result["freeboard_pct_inc"] = outputs_inc["freeboard_pct"]
-    result["freeboard_hgt_inc"] = outputs_inc["freeboard_hgt"]
-    result["A_total"] = outputs_design["A_total"]
-    result["fb_min_required"] = best_candidate["required_fb"]
-    result["fb_check_passed"] = (
-        outputs_inc["freeboard_hgt"] >= best_candidate["required_fb"] - SOLVER_TOLERANCE
-        and MIN_FREEBOARD_PCT_RECT * 100.0 - 0.1 <= outputs_inc["freeboard_pct"] <= MAX_FREEBOARD_PCT_RECT * 100.0 + 0.1
+    return _fill_success_result(
+        result,
+        B=best_B,
+        H_total=best_H,
+        H_straight=H_straight,
+        theta_deg=theta_deg,
+        candidate=best_candidate,
+        fixed_geometry=False,
     )
-    result["fb_check_details"] = _format_fb_details(best_H, best_candidate["required_fb"])
-    return result

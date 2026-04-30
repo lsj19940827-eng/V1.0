@@ -726,6 +726,16 @@ def _extract_segment_defaults_from_nodes(nodes) -> Tuple[Dict[str, Dict[int, Dic
         h_total = _to_float(getattr(node, "structure_height", 0.0), 0.0)
         if struct_key == "rect_culvert_arch":
             _assign_if_valid(target, "H_total", math.ceil(h_total * 100) / 100)
+            if "H_straight" in params:
+                h_straight_val = _to_float(params.get("H_straight"), None)
+                if h_straight_val is not None and h_straight_val >= 0:
+                    target["H_straight"] = h_straight_val
+            if "manual_H_straight" in params:
+                manual_h_straight = _to_float(params.get("manual_H_straight"), None)
+                if manual_h_straight is not None and manual_h_straight >= 0:
+                    target["manual_H_straight"] = manual_h_straight
+            if "used_manual_H_straight" in params:
+                target["used_manual_H_straight"] = bool(params.get("used_manual_H_straight"))
         elif struct_key not in {"rect_channel", "trap_channel"}:
             _assign_if_valid(target, "H", math.ceil(h_total * 100) / 100)
 
@@ -956,7 +966,9 @@ def _derive_tunnel_arch_geometry(
     if B is None and R_arch is not None and abs(sin_half) > 1e-9:
         B = 2.0 * R_arch * sin_half
 
-    if not all(value is not None and value > 0 for value in (B, H_total, H_straight, R_arch)):
+    if not all(value is not None and value > 0 for value in (B, H_total, R_arch)):
+        return None
+    if H_straight is None or H_straight < 0:
         return None
     return float(B), float(H_total), float(H_straight), float(R_arch), float(theta)
 
@@ -2078,6 +2090,7 @@ def compute_rect_culvert_arch(segments: List[Dict]) -> List[Dict]:
             v_max=V_MAX,
             theta_deg=_first_positive(seg, "theta_deg") or 150.0,
             manual_B=_first_positive(seg, "B"),
+            manual_H_straight=seg.get("manual_H_straight", seg.get("H_straight")),
             manual_increase_percent=manual_increase_percent,
         )
         if not res.get("success"):

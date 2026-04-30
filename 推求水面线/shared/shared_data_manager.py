@@ -124,6 +124,7 @@ class SectionResult:
     m: Optional[float] = None       # 边坡系数
     D: Optional[float] = None       # 直径 (m) - 圆形断面
     R: Optional[float] = None       # 半径 (m) - U形断面
+    H_straight: Optional[float] = None  # 直墙高度 (m) - 圆拱直墙型隧洞/暗涵
     
     # 计算结果
     A: float = 0.0           # 过水面积 (m²)
@@ -176,15 +177,18 @@ class SectionResult:
             if parts:
                 return ", ".join(parts)
             return f"Q={self.Q:.2f}m³/s, V={self.V:.2f}m/s"
-        if self.section_type == "暗涵-圆拱直墙型":
+        if self.section_type in {"隧洞-圆拱直墙型", "暗涵-圆拱直墙型"}:
             parts = []
             b_text = _format_metric(self.B)
+            h_straight_text = _format_metric(self.H_straight)
             h_total_text = _format_metric(self.H_total if self.H_total and self.H_total > 0 else None)
             theta_deg = None
             if self.raw_result:
                 theta_deg = self.raw_result.get("theta_deg", None)
             if b_text:
                 parts.append(f"B={b_text}")
+            if h_straight_text:
+                parts.append(f"H直={h_straight_text}")
             if h_total_text:
                 parts.append(f"H={h_total_text}")
             if theta_deg not in (None, ""):
@@ -234,7 +238,10 @@ class SectionResult:
                 'X': self.X,
                 'R': self.R_hydraulic,
                 'H_total': self.H_total if self.H_total and self.H_total > 0 else None,
+                'H_straight': self.H_straight,
                 'theta_deg': self.raw_result.get('theta_deg', None) if self.raw_result else None,
+                'manual_H_straight': self.raw_result.get('manual_H_straight', None) if self.raw_result else None,
+                'used_manual_H_straight': self.raw_result.get('used_manual_H_straight', None) if self.raw_result else None,
                 'chamfer_angle': self.raw_result.get('chamfer_angle', None) if self.raw_result else None,
                 'chamfer_length': self.raw_result.get('chamfer_length', None) if self.raw_result else None,
                 'pipe_material': self.pipe_material or None,
@@ -409,6 +416,8 @@ class SharedDataManager:
             elif section_type in ('梯形', '矩形') or 'b_design' in result or 'B' in result:
                 section_result.B = result.get('b_design', result.get('B', None))
                 section_result.h = result.get('h_design', result.get('h', None))
+                if section_type in {"隧洞-圆拱直墙型", "暗涵-圆拱直墙型"}:
+                    section_result.H_straight = result.get('H_straight', None)
                 # 梯形边坡系数
                 if "梯形" in section_type or section_type == '梯形':
                     section_result.m = result.get('m', 0)

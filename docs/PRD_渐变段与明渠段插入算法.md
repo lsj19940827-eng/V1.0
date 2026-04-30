@@ -98,7 +98,7 @@ valid_type_values = {
 | 矩形明渠 | 底宽不同 | 插入 |
 | 梯形/圆形/U形明渠 | 任意 | **总是插入** |
 
-`暗涵-圆拱直墙型` 的底宽取 `B`，但 donor 自动补段必须同时具备 `H_total / theta_deg`；缺参时保留人工确认。
+`暗涵-圆拱直墙型` 的底宽取 `B`，但 donor 自动补段必须同时具备 `H_total / theta_deg`；缺参时保留人工确认。`隧洞-圆拱直墙型` 还会随来源保留 `H_straight`，用于判断直墙段和拱段水面宽。
 
 ### 2.2 不触发渐变段的结构
 
@@ -208,7 +208,7 @@ $$L = k \times |B_1 - B_2|$$
 | 马蹄形隧洞 | `_horseshoe_std_surface_width()`（精确几何公式，Ⅰ/Ⅱ型） |
 | 渡槽-U形 | $h \leq R$：圆形公式；$h > R$：$B = 2R$ |
 | 明渠-U形 | $h \leq h_0$：圆弧段公式；$h > h_0$：$B = b_{arc} + 2m(h-h_0)$ |
-| 隧洞-圆拱直墙型 | `_arch_tunnel_surface_width()`（直墙+圆拱分段） |
+| 隧洞-圆拱直墙型 | `_arch_tunnel_surface_width()`（直墙+圆拱分段，直墙高度取 `H_straight`） |
 | 暗涵-圆拱直墙型 | 复用圆拱直墙分段水面宽几何，规则归属为暗涵 |
 | 渡槽-矩形（带倒角） | `_rect_chamfer_surface_width()`（倒角区收窄） |
 | 仅有半径R的断面 | $B = 2R$ |

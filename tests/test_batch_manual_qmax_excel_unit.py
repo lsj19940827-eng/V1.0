@@ -124,7 +124,7 @@ def _install_fake_openpyxl(monkeypatch, workbook):
     monkeypatch.setitem(sys.modules, "openpyxl", fake_openpyxl)
 
 
-def _build_import_workbook(*, manual_qmax_by_segment=None, rows=None):
+def _build_import_workbook(*, manual_qmax_by_segment=None, manual_qmax_text=None, rows=None):
     manual_qmax_by_segment = manual_qmax_by_segment or {}
     rows = rows or []
     cells = {
@@ -141,13 +141,17 @@ def _build_import_workbook(*, manual_qmax_by_segment=None, rows=None):
     }
 
     max_column = 20
-    for segment_index in range(1, max(manual_qmax_by_segment.keys(), default=0) + 1):
-        label_col = 9 + (segment_index - 1) * 2
-        value_col = label_col + 1
-        cells[(1, label_col)] = format_manual_qmax_label(segment_index)
-        if segment_index in manual_qmax_by_segment:
-            cells[(1, value_col)] = manual_qmax_by_segment[segment_index]
-        max_column = max(max_column, value_col)
+    if manual_qmax_text is not None:
+        cells[(1, 9)] = "手工Q加大(m³/s，逗号分隔，空位自动)"
+        cells[(1, 10)] = manual_qmax_text
+    else:
+        for segment_index in range(1, max(manual_qmax_by_segment.keys(), default=0) + 1):
+            label_col = 9 + (segment_index - 1) * 2
+            value_col = label_col + 1
+            cells[(1, label_col)] = format_manual_qmax_label(segment_index)
+            if segment_index in manual_qmax_by_segment:
+                cells[(1, value_col)] = manual_qmax_by_segment[segment_index]
+            max_column = max(max_column, value_col)
 
     for row_offset, row_data in enumerate(rows, start=3):
         for col_idx, value in enumerate(row_data, start=1):
@@ -157,6 +161,29 @@ def _build_import_workbook(*, manual_qmax_by_segment=None, rows=None):
 
     sheet = _Sheet(cells, max_row=max(2, len(rows) + 2), max_column=max_column)
     return _Workbook(sheet)
+
+
+def test_read_manual_qmax_map_accepts_single_cell_sequence_and_chinese_comma():
+    cells = {
+        (1, 9): "手工Q加大(m³/s，逗号分隔，空位自动)",
+        (1, 10): "5.5，, 7.25",
+    }
+    sheet = _Sheet(cells, max_row=3, max_column=20)
+
+    result = read_manual_qmax_map_from_sheet(sheet, info_row=1)
+
+    assert result == {1: 5.5, 3: 7.25}
+
+
+def test_read_manual_qmax_map_reports_invalid_single_cell_value():
+    cells = {
+        (1, 9): "手工Q加大(m³/s，逗号分隔，空位自动)",
+        (1, 10): "5.5, abc",
+    }
+    sheet = _Sheet(cells, max_row=3, max_column=20)
+
+    with pytest.raises(ValueError, match="第2段手工Q加大输入无效"):
+        read_manual_qmax_map_from_sheet(sheet, info_row=1)
 
 
 def test_read_manual_qmax_map_preserves_blank_pairs_and_supports_extension():
@@ -174,6 +201,36 @@ def test_read_manual_qmax_map_preserves_blank_pairs_and_supports_extension():
     result = read_manual_qmax_map_from_sheet(sheet, info_row=1)
 
     assert result == {1: 5.5, 3: 7.25, 21: 30.2}
+
+
+def test_excel_import_reads_single_cell_manual_qmax_and_batch_uses_values(monkeypatch):
+    panel = _prepare_panel(monkeypatch)
+    workbook = _build_import_workbook(
+        manual_qmax_text="5.5,,7.25",
+        rows=[
+            _build_row(seq="1", segment="1", name="一号渠段", q="5"),
+            _build_row(seq="2", segment="2", name="二号渠段", q="5"),
+            _build_row(seq="3", segment="3", name="三号渠段", q="5"),
+        ],
+    )
+    _install_fake_openpyxl(monkeypatch, workbook)
+
+    panel._do_load_from_filepath("import.xlsx", is_sample=False)
+    _flush_events(4)
+    panel.inc_cb.setChecked(True)
+    panel.detail_cb.setChecked(False)
+
+    panel._batch_calculate()
+    _flush_events(6)
+
+    assert panel._manual_qmax_by_segment == {1: 5.5, 3: 7.25}
+    assert panel.batch_results[0]["result"]["Q_increased"] == pytest.approx(5.5)
+    assert panel.batch_results[1]["result"]["Q_increased"] == pytest.approx(6.0)
+    assert panel.batch_results[2]["result"]["Q_increased"] == pytest.approx(7.25)
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
 
 
 def test_excel_import_reads_manual_qmax_and_batch_uses_segment_specific_values(monkeypatch):

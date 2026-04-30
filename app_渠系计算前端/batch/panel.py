@@ -74,6 +74,7 @@ def parse_station_input(input_str: str) -> float:
 
 
 MANUAL_QMAX_START_COL = 9
+MANUAL_QMAX_SINGLE_CELL_LABEL = "手工Q加大(m³/s，逗号分隔，空位自动)"
 MANUAL_QMAX_LABEL_PATTERN = re.compile(r"^第(?P<segment>[0-9一二三四五六七八九十零〇两]+)流量段Q加大\(m³/s\)$")
 _CHINESE_NUMBER_MAP = {
     "零": 0,
@@ -180,12 +181,40 @@ def _normalize_manual_qmax_value(raw_value, segment_index: int):
     return value
 
 
+def _is_manual_qmax_single_cell_label(label: str) -> bool:
+    """判断 Excel 第1行是否使用新版单格手工 Q加大 标签。"""
+    text = str(label or "").strip()
+    return bool(text and "手工Q加大" in text and "逗号" in text)
+
+
+def parse_manual_qmax_sequence_text(raw_value) -> dict:
+    """解析新版单格逗号序列，空位表示对应流量段自动计算。"""
+    if raw_value is None:
+        return {}
+    text = str(raw_value).strip()
+    if not text:
+        return {}
+    normalized = text.replace("，", ",")
+    manual_map = {}
+    for index, part in enumerate(normalized.split(","), start=1):
+        value = _normalize_manual_qmax_value(part, index)
+        if value is not None:
+            manual_map[index] = value
+    return manual_map
+
+
 def read_manual_qmax_map_from_sheet(ws, info_row: int, start_col: int = MANUAL_QMAX_START_COL) -> dict:
-    """按“标签+值”列对读取 Excel 第1行的手工 Q加大 配置。"""
+    """读取 Excel 第1行的手工 Q加大 配置，优先支持新版单格输入。"""
     manual_map = {}
     max_column = max(int(getattr(ws, "max_column", 0) or 0), start_col - 1)
     if max_column < start_col:
         return manual_map
+
+    first_label = ws.cell(row=info_row, column=start_col).value
+    if _is_manual_qmax_single_cell_label(first_label):
+        return parse_manual_qmax_sequence_text(
+            ws.cell(row=info_row, column=start_col + 1).value
+        )
 
     for label_col in range(start_col, max_column + 1, 2):
         value_col = label_col + 1
@@ -427,6 +456,7 @@ def is_arch_culvert_section_type(section_type) -> bool:
 #          14矩形渡槽深宽比, 15倒角角度, 16倒角底边, 17圆心角, 18不淤流速, 19不冲流速,
 #          20转弯半径（平面弯道，不参与水力计算，透传到推求水面线）
 #          21管材（有压管道专用）
+#          28直墙高度H直（隧洞/暗涵-圆拱直墙型共用，追加列，兼容旧Excel）
 #          注：局部损失比例、进出口标识等有压管道专用参数通过 Qt.UserRole 元数据传递，不占表格列
 INPUT_HEADERS = [
     "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
@@ -437,6 +467,7 @@ INPUT_HEADERS = [
     "不淤流速", "不冲流速", "转弯半径(m)",
     "管材",
     "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
+    "直墙高度H直(m)",
 ]
 
 COL_TURN_RADIUS = 20
@@ -447,6 +478,7 @@ COL_COMPOUND_M2 = 24
 COL_COMPOUND_B2 = 25
 COL_COMPOUND_M3 = 26
 COL_COMPOUND_H1 = 27
+COL_ARCH_H_STRAIGHT = 28
 COL_PIPE_LOCAL_LOSS = len(INPUT_HEADERS)
 COL_PIPE_IN_OUT = len(INPUT_HEADERS) + 1
 
@@ -590,7 +622,7 @@ _HEADER_TOOLTIPS = {
     ),
     "圆心角(°)": (
         "【圆心角  θ（单位：度）】\n\n"
-        "定义：圆拱直墙型隧洞拱顶圆弧所对应的圆心角\n\n"
+        "定义：圆拱直墙型隧洞/暗涵拱顶圆弧所对应的圆心角\n\n"
         "▶ 怎么填？\n"
         "  • 留空 → 默认按 180° 计算（即半圆拱）\n"
         "  • 填一个数值 → 按此角度确定拱顶形状\n\n"
@@ -599,8 +631,22 @@ _HEADER_TOOLTIPS = {
         "  • θ = 120° → 拱顶弧度较平缓，拱高较低\n"
         "  • θ 越小 → 拱顶越平，直墙段越高\n\n"
         "▶ 适用范围\n"
-        "  仅对「隧洞-圆拱直墙型」类型生效，\n"
-        "  其他隧洞类型（圆形、马蹄形）无需填写"
+        "  对「隧洞-圆拱直墙型」「暗涵-圆拱直墙型」类型生效，\n"
+        "  其他圆形、马蹄形等类型无需填写"
+    ),
+    "直墙高度H直(m)": (
+        "【直墙高度 H直（单位：米）】\n\n"
+        "定义：圆拱直墙型隧洞/暗涵两侧直墙段高度\n\n"
+        "▶ 怎么填？\n"
+        "  • 留空 → 程序按 B + 圆心角自动搜索总高，再推导 H直\n"
+        "  • 填一个非负数 → 按用户输入固定直墙高度\n"
+        "  • 填写 H直 时，必须同时填写底宽 B\n\n"
+        "▶ 计算关系\n"
+        "  R拱 = (B/2) / sin(θ/2)\n"
+        "  H拱 = R拱 × (1 - cos(θ/2))\n"
+        "  H总 = H直 + H拱\n\n"
+        "▶ 适用范围\n"
+        "  对「隧洞-圆拱直墙型」「暗涵-圆拱直墙型」类型生效"
     ),
     "转弯半径(m)": (
         "【转弯半径（单位：米）】\n\n"
@@ -1858,6 +1904,21 @@ class BatchPanel(QWidget):
                 chamfer_angle = self._sf(values[15], 0)
                 chamfer_length = self._sf(values[16], 0)
                 theta_deg = self._sf(values[17], 0)
+                manual_H_straight = None
+                h_straight_text = (
+                    str(values[COL_ARCH_H_STRAIGHT]).strip()
+                    if len(values) > COL_ARCH_H_STRAIGHT and values[COL_ARCH_H_STRAIGHT] is not None
+                    else ""
+                )
+                if h_straight_text:
+                    try:
+                        manual_H_straight = float(h_straight_text)
+                    except ValueError as exc:
+                        raise ValueError("直墙高度 H直 输入无效") from exc
+                    if manual_H_straight < 0:
+                        raise ValueError("直墙高度 H直 不能为负数")
+                    if normalize_section_type_name(section_type) in {"隧洞-圆拱直墙型", "暗涵-圆拱直墙型"} and b <= 0:
+                        raise ValueError("填写直墙高度 H直 时必须同时填写底宽 B")
                 m1 = self._sf(values[COL_COMPOUND_M1], 0)
                 B1 = self._sf(values[COL_COMPOUND_B1], 0)
                 m2 = self._sf(values[COL_COMPOUND_M2], 0)
@@ -1890,6 +1951,7 @@ class BatchPanel(QWidget):
                     ducao_depth_ratio=ducao_depth_ratio,
                     chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
                     theta_deg=theta_deg,
+                    manual_H_straight=manual_H_straight,
                     manual_increase_percent=manual_increase_percent,
                     preserve_explicit_bottom_width=preserve_explicit_bottom_width,
                     preserve_imported_dimensions=preserve_imported_dimensions,
@@ -2022,6 +2084,7 @@ class BatchPanel(QWidget):
                           m=0, b=0, beta=0, R=0, D=0,
                           m1=0, B1=0, m2=0, B2=0, m3=0, h1=0,
                           ducao_depth_ratio=0, chamfer_angle=0, chamfer_length=0, theta_deg=0,
+                          manual_H_straight=None,
                           manual_increase_percent=None,
                           preserve_explicit_bottom_width=False,
                           preserve_imported_dimensions=False):
@@ -2108,6 +2171,7 @@ class BatchPanel(QWidget):
                                                v_min=v_min, v_max=v_max,
                                                manual_B=b if b > 0 else None,
                                                theta_deg=theta_deg if theta_deg > 0 else None,
+                                               manual_H_straight=manual_H_straight,
                                                manual_increase_percent=_inc)
         elif "隧洞-马蹄形" in section_type:
             if not SUIDONG_AVAILABLE: return {'success': False, 'error_message': '隙洞计算模块未加载'}
@@ -2123,6 +2187,7 @@ class BatchPanel(QWidget):
                                           v_min=v_min, v_max=v_max,
                                           manual_B=b if b > 0 else None,
                                           theta_deg=theta_deg if theta_deg > 0 else None,
+                                          manual_H_straight=manual_H_straight,
                                           manual_increase_percent=_inc)
         elif is_rect_culvert_section_type(section_type):
             if not RECT_CULVERT_AVAILABLE: return {'success': False, 'error_message': '矩形暗涵模块未加载'}
@@ -2794,13 +2859,23 @@ class BatchPanel(QWidget):
             D = result.get('D', 0)
             o.append(f"  设计直径: D = {D:.2f} m")
             o.append(f"  断面总面积: A总 = π×D²/4 = {A_total:.3f} m²")
-        elif "圆拱直墙型" in section_type:
+        elif section_type == "隧洞-圆拱直墙型":
             B = result.get('B', 0)
             H = result.get('H_total', 0)
             theta_deg = result.get('theta_deg', 0)
+            theta_rad = math.radians(theta_deg) if theta_deg else 0
+            sin_half = math.sin(theta_rad / 2) if theta_rad else 0
+            R_arch = (B / 2) / sin_half if B > 0 and sin_half > 1e-9 else 0
+            H_arch = R_arch * (1 - math.cos(theta_rad / 2)) if R_arch else 0
+            H_straight = result.get('H_straight', max(0, H - H_arch) if H_arch else 0)
+            source = "按用户输入固定" if result.get('used_manual_H_straight') else "H直 = H总 - H拱"
             o.append(f"  设计宽度: B = {B:.2f} m")
-            o.append(f"  设计高度: H = {H:.2f} m")
+            o.append(f"  设计总高: H总 = {H:.2f} m")
             o.append(f"  拱顶圆心角: θ = {theta_deg:.1f}°")
+            if R_arch:
+                o.append(f"  拱半径: R拱 = (B/2) / sin(θ/2) = {R_arch:.3f} m")
+                o.append(f"  拱高: H拱 = R拱 × (1 - cos(θ/2)) = {H_arch:.3f} m")
+                o.append(f"  直墙高度: H直 = {H_straight:.3f} m（{source}）")
             o.append(f"  高宽比: H/B = {H/B:.3f}" if B > 0 else "  高宽比: N/A")
             o.append(f"  断面总面积: A总 = {A_total:.3f} m²")
         elif "马蹄形" in section_type:
@@ -2812,9 +2887,19 @@ class BatchPanel(QWidget):
             B = result.get('B', 0)
             H = result.get('H_total', 0)
             theta_deg = result.get('theta_deg', 0)
+            theta_rad = math.radians(theta_deg) if theta_deg else 0
+            sin_half = math.sin(theta_rad / 2) if theta_rad else 0
+            R_arch = (B / 2) / sin_half if B > 0 and sin_half > 1e-9 else 0
+            H_arch = R_arch * (1 - math.cos(theta_rad / 2)) if R_arch else 0
+            H_straight = result.get('H_straight', max(0, H - H_arch) if H_arch else 0)
+            source = "按用户输入固定" if result.get('used_manual_H_straight') else "H直 = H总 - H拱"
             o.append(f"  设计宽度: B = {B:.2f} m")
-            o.append(f"  设计高度: H = {H:.2f} m")
+            o.append(f"  设计总高: H总 = {H:.2f} m")
             o.append(f"  拱顶圆心角: θ = {theta_deg:.1f}°")
+            if R_arch:
+                o.append(f"  拱半径: R拱 = (B/2) / sin(θ/2) = {R_arch:.3f} m")
+                o.append(f"  拱高: H拱 = R拱 × (1 - cos(θ/2)) = {H_arch:.3f} m")
+                o.append(f"  直墙高度: H直 = {H_straight:.3f} m（{source}）")
             o.append(f"  高宽比: H/B = {H/B:.3f}" if B > 0 else "  高宽比: N/A")
             o.append(f"  断面总面积: A总 = {A_total:.3f} m²")
         elif is_rect_culvert_section_type(section_type):
@@ -2926,6 +3011,7 @@ class BatchPanel(QWidget):
             "m1": values[COL_COMPOUND_M1], "B1": values[COL_COMPOUND_B1],
             "m2": values[COL_COMPOUND_M2], "B2": values[COL_COMPOUND_B2],
             "m3": values[COL_COMPOUND_M3], "h1": values[COL_COMPOUND_H1],
+            "H_straight": values[COL_ARCH_H_STRAIGHT] if len(values) > COL_ARCH_H_STRAIGHT else "",
         }
         dlg = SectionParameterDialog(self, section_type, current_values)
         if dlg.exec() == QDialog.Accepted:
@@ -2949,6 +3035,7 @@ class BatchPanel(QWidget):
             values[i] = ""
         for i in range(COL_COMPOUND_M1, COL_COMPOUND_H1 + 1):
             values[i] = ""
+        values[COL_ARCH_H_STRAIGHT] = ""
         # 根据结构形式更新对应的参数列
         if "明渠-梯形" in section_type or "明渠-矩形" in section_type:
             m_val = params.get('m', "")
@@ -2989,11 +3076,20 @@ class BatchPanel(QWidget):
         elif "隧洞-圆形" in section_type:
             D_val = params.get('D', "")
             values[13] = str(D_val) if D_val != "" else ""
-        elif "隧洞-圆拱直墙型" in section_type or is_arch_culvert_section_type(section_type):
+        elif "隧洞-圆拱直墙型" in section_type:
             B_val = params.get('B', "")
             values[10] = str(B_val) if B_val != "" else ""
             theta_val = params.get('theta', "")
             values[17] = str(theta_val) if theta_val != "" else ""
+            H_straight_val = params.get('H_straight', "")
+            values[COL_ARCH_H_STRAIGHT] = str(H_straight_val) if H_straight_val != "" else ""
+        elif is_arch_culvert_section_type(section_type):
+            B_val = params.get('B', "")
+            values[10] = str(B_val) if B_val != "" else ""
+            theta_val = params.get('theta', "")
+            values[17] = str(theta_val) if theta_val != "" else ""
+            H_straight_val = params.get('H_straight', "")
+            values[COL_ARCH_H_STRAIGHT] = str(H_straight_val) if H_straight_val != "" else ""
         elif "隧洞-马蹄形" in section_type:
             r_val = params.get('r', "")
             values[12] = str(r_val) if r_val != "" else ""
@@ -3828,6 +3924,7 @@ class BatchPanel(QWidget):
                 slope_val = self.input_table.item(r, 8).text() if self.input_table.item(r, 8) else ""
                 m_val = self.input_table.item(r, 9).text() if self.input_table.item(r, 9) else ""
                 tr_val = self.input_table.item(r, COL_TURN_RADIUS).text() if self.input_table.item(r, COL_TURN_RADIUS) else ""
+                h_straight_val = self.input_table.item(r, COL_ARCH_H_STRAIGHT).text() if self.input_table.item(r, COL_ARCH_H_STRAIGHT) else ""
                 compound_vals = []
                 for col in (
                     COL_COMPOUND_M1, COL_COMPOUND_B1, COL_COMPOUND_M2,
@@ -3835,14 +3932,14 @@ class BatchPanel(QWidget):
                 ):
                     item = self.input_table.item(r, col)
                     compound_vals.append(item.text() if item else "")
-                input_params_map[seq_key] = (x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, *compound_vals)
+                input_params_map[seq_key] = (x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val, *compound_vals)
 
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "批量计算结果"
             # 导出表头：在结果表头的结构形式后插入X/Y/Q/n/比降/边坡系数/转弯半径列
             export_headers = list(RESULT_HEADERS[:4]) + [
-                "X", "Y", "Q(m³/s)", "糙率n", "比降(1/)", "边坡系数m", "转弯半径(m)",
+                "X", "Y", "Q(m³/s)", "糙率n", "比降(1/)", "边坡系数m", "转弯半径(m)", "直墙高度H直(m)",
                 "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
             ] + list(RESULT_HEADERS[4:])
             # 第1行：标题
@@ -3874,13 +3971,13 @@ class BatchPanel(QWidget):
                     item = self.result_table.item(r, c)
                     result_vals.append(item.text() if item else "")
                 seq_key = result_vals[0].strip() if result_vals else ""
-                x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, m1_val, B1_val, m2_val, B2_val, m3_val, h1_val = input_params_map.get(
+                x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val, m1_val, B1_val, m2_val, B2_val, m3_val, h1_val = input_params_map.get(
                     seq_key,
-                    ("", "", "", "", "", "", "", "", "", "", "", "", ""),
+                    ("", "", "", "", "", "", "", "", "", "", "", "", "", ""),
                 )
-                # 构建导出行：前4列 + X/Y/Q/n/比降/边坡系数/转弯半径 + 后续结果列
+                # 构建导出行：前4列 + X/Y/Q/n/比降/边坡系数/转弯半径/H直 + 后续结果列
                 export_row = result_vals[:4] + [
-                    x_val, y_val, q_val, n_val, slope_val, m_val, tr_val,
+                    x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val,
                     m1_val, B1_val, m2_val, B2_val, m3_val, h1_val,
                 ] + result_vals[4:]
                 for c, val in enumerate(export_row, 1):
@@ -4009,7 +4106,26 @@ class BatchPanel(QWidget):
                 rv.append(item.text() if item else "-")
             B_v, D_v, R_v = rv[4], rv[5], rv[6]
             dim = "-"
-            if B_v and B_v != "-":
+            result_for_row = self.batch_results[r]['result'] if r < len(self.batch_results) else {}
+            section_for_row = normalize_section_type_name(rv[3])
+            if section_for_row in {"隧洞-圆拱直墙型", "暗涵-圆拱直墙型"} and result_for_row.get('success'):
+                h_straight = result_for_row.get('H_straight', None)
+                h_total = result_for_row.get('H_total', None)
+                parts = []
+                if B_v and B_v != "-":
+                    parts.append(f"B={B_v}")
+                if h_straight not in (None, ""):
+                    try:
+                        parts.append(f"H直={float(h_straight):.2f}")
+                    except (TypeError, ValueError):
+                        parts.append(f"H直={h_straight}")
+                if h_total not in (None, ""):
+                    try:
+                        parts.append(f"H={float(h_total):.2f}")
+                    except (TypeError, ValueError):
+                        parts.append(f"H={h_total}")
+                dim = ", ".join(parts) if parts else "-"
+            elif B_v and B_v != "-":
                 dim = f"B={B_v}"
             elif D_v and D_v != "-":
                 dim = f"D={D_v}"
@@ -4084,6 +4200,8 @@ class BatchPanel(QWidget):
                 row_data[3] = normalize_project_section_type(row_data[3])
             input_rows.append(row_data)
         
+        manual_qmax_by_segment = getattr(self, "_manual_qmax_by_segment", {}) or {}
+
         return {
             "version": "1.0",
             # 渠道基础信息
@@ -4100,7 +4218,7 @@ class BatchPanel(QWidget):
             "input_rows": input_rows,
             # Excel 第1行手工 Q加大 映射（隐藏持久化字段）
             "manual_qmax_by_segment": {
-                str(segment): value for segment, value in sorted(self._manual_qmax_by_segment.items())
+                str(segment): value for segment, value in sorted(manual_qmax_by_segment.items())
             },
         }
     
@@ -4310,11 +4428,15 @@ class SectionParameterDialog(QDialog):
                                 "(留空则采用180°)")
             self._add_opt_entry(form, "指定底宽 B (m):", "B", "留空自动计算",
                                 "(指定底宽B留空则自动计算)")
+            self._add_opt_entry(form, "直墙高度 H直 (m):", "H_straight", "留空自动计算",
+                                "(填写时需同时填写底宽 B；允许为 0)")
         elif is_arch_culvert_section_type(st):
             self._add_opt_entry(form, "拱顶圆心角 (度):", "theta", "留空则采用180°",
                                 "(圆拱直墙型暗涵按暗涵净空口径校核)")
             self._add_opt_entry(form, "指定底宽 B (m):", "B", "留空自动计算",
                                 "(指定底宽B留空则自动计算)")
+            self._add_opt_entry(form, "直墙高度 H直 (m):", "H_straight", "留空自动计算",
+                                "(填写时需同时填写底宽 B；允许为 0)")
         elif "隧洞-马蹄形" in st:
             self._add_opt_entry(form, "指定半径 R (m):", "r", "留空自动计算",
                                 "(留空则自动计算)")
@@ -4365,8 +4487,13 @@ class SectionParameterDialog(QDialog):
                     v = cv.get(k, '')
                     if ek in self._entries and v and str(v).strip():
                         self._entries[ek].setText(str(v).strip())
-            elif "隧洞-圆拱直墙型" in st or is_arch_culvert_section_type(st):
-                for k, ek in [('b', 'B'), ('theta', 'theta')]:
+            elif "隧洞-圆拱直墙型" in st:
+                for k, ek in [('b', 'B'), ('theta', 'theta'), ('H_straight', 'H_straight')]:
+                    v = cv.get(k, '')
+                    if ek in self._entries and v and str(v).strip():
+                        self._entries[ek].setText(str(v).strip())
+            elif is_arch_culvert_section_type(st):
+                for k, ek in [('b', 'B'), ('theta', 'theta'), ('H_straight', 'H_straight')]:
                     v = cv.get(k, '')
                     if ek in self._entries and v and str(v).strip():
                         self._entries[ek].setText(str(v).strip())
@@ -4464,12 +4591,36 @@ class SectionParameterDialog(QDialog):
                 result['B'] = B_val
             elif "隧洞-圆形" in st:
                 result['D'] = self._get_float('D', "")
-            elif "隧洞-圆拱直墙型" in st or is_arch_culvert_section_type(st):
+            elif "隧洞-圆拱直墙型" in st:
                 theta = self._get_float('theta', "")
                 if isinstance(theta, (int, float)) and (theta < 90 or theta > 180):
                     raise ValueError("圆心角必须在90~180度之间")
                 result['theta'] = theta
-                result['B'] = self._get_float('B', "")
+                B_val = self._get_float('B', "")
+                H_straight = self._get_float('H_straight', "")
+                if isinstance(H_straight, (int, float)) and H_straight < 0:
+                    raise ValueError("直墙高度 H直 不能为负数")
+                if isinstance(H_straight, (int, float)) and (
+                    B_val == "" or B_val is None or not isinstance(B_val, (int, float)) or B_val <= 0
+                ):
+                    raise ValueError("填写直墙高度 H直 时必须同时填写底宽 B")
+                result['B'] = B_val
+                result['H_straight'] = H_straight
+            elif is_arch_culvert_section_type(st):
+                theta = self._get_float('theta', "")
+                if isinstance(theta, (int, float)) and (theta < 90 or theta > 180):
+                    raise ValueError("圆心角必须在90~180度之间")
+                result['theta'] = theta
+                B_val = self._get_float('B', "")
+                H_straight = self._get_float('H_straight', "")
+                if isinstance(H_straight, (int, float)) and H_straight < 0:
+                    raise ValueError("直墙高度 H直 不能为负数")
+                if isinstance(H_straight, (int, float)) and (
+                    B_val == "" or B_val is None or not isinstance(B_val, (int, float)) or B_val <= 0
+                ):
+                    raise ValueError("填写直墙高度 H直 时必须同时填写底宽 B")
+                result['B'] = B_val
+                result['H_straight'] = H_straight
             elif "隧洞-马蹄形" in st:
                 result['r'] = self._get_float('r', "")
             elif is_rect_culvert_section_type(st):

@@ -238,13 +238,15 @@ def _draw_arch(msp, result, p, sf=1.0, scale_denom=100):
     _add_dim_h(msp, -B/2*sf, B/2*sf, -(gap*1.1), 0, f'B={B:.3f} m', th, ar, '尺寸标注')
     _add_dim_v(msp, 0, h_d*sf, -(B/2*sf+gap*1.4), -B/2*sf, f'h={h_d:.3f} m', th, ar, '尺寸标注')
     _add_dim_v(msp, 0, H*sf,   B/2*sf+gap*1.4, B/2*sf, f'H={H:.3f} m', th, ar, '尺寸标注')
+    if Hs >= 0:
+        _add_dim_v(msp, 0, Hs*sf, -(B/2*sf+gap*2.3), -B/2*sf, f'H直={Hs:.3f} m', th, ar, '尺寸标注')
     if Hs > 0:
         msp.add_text(f'θ={theta_deg:.0f}°', dxfattribs={'layer': '尺寸标注',
             'height': th, 'style': 'FANGSONG', 'insert': (th*0.5, H*sf)})
 
     lines = ['【隧洞 - 圆拱直墙型】', f'比例: 1:{scale_denom}', '',
              '[输入参数]', f'Q={Q:.3f} m³/s', f'n={n}', f'i=1/{int(si)}','',
-             '[断面]', f'B={B:.3f} m', f'H={H:.3f} m', f'θ={theta_deg:.0f}°','',
+             '[断面]', f'B={B:.3f} m', f'H直={Hs:.3f} m', f'H={H:.3f} m', f'θ={theta_deg:.0f}°','',
              '[设计流量]', f'h={h_d:.3f} m', f'A={A_d:.3f} m²',
               f'V={V_d:.3f} m/s', f'Fb={fb_d:.3f} m','',
              '[加大流量]', *_increase_lines(p, result),

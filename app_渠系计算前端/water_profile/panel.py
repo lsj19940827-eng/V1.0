@@ -238,6 +238,13 @@ PRESSURE_PIPE_LIKE_STRUCTURE_TEXTS = {"有压管道", "定向钻", "顶管"}
 CULVERT_FAMILY_TYPE_KEY = "culvert_family_type"
 ARCH_CULVERT_THETA_ROLE_KEY = "_arch_culvert_theta_deg"
 ARCH_CULVERT_SOURCE_ROLE_KEY = "_arch_culvert_source_allowed"
+ARCH_CULVERT_H_STRAIGHT_ROLE_KEY = "_arch_culvert_H_straight"
+ARCH_CULVERT_MANUAL_H_STRAIGHT_ROLE_KEY = "_arch_culvert_manual_H_straight"
+ARCH_CULVERT_USED_MANUAL_H_STRAIGHT_ROLE_KEY = "_arch_culvert_used_manual_H_straight"
+TUNNEL_ARCH_THETA_ROLE_KEY = "_tunnel_arch_theta_deg"
+TUNNEL_ARCH_H_STRAIGHT_ROLE_KEY = "_tunnel_arch_H_straight"
+TUNNEL_ARCH_MANUAL_H_STRAIGHT_ROLE_KEY = "_tunnel_arch_manual_H_straight"
+TUNNEL_ARCH_USED_MANUAL_H_STRAIGHT_ROLE_KEY = "_tunnel_arch_used_manual_H_straight"
 RECT_CULVERT_FAMILY_TEXT = "暗涵-矩形"
 ARCH_CULVERT_FAMILY_TEXT = "暗涵-圆拱直墙型"
 
@@ -7824,9 +7831,32 @@ class WaterProfilePanel(QWidget):
                     theta_deg = float(raw_result.get("theta_deg", 0) or 0)
                     if theta_deg > 0:
                         payload[ARCH_CULVERT_THETA_ROLE_KEY] = theta_deg
+                    if culvert_family_type == ARCH_CULVERT_FAMILY_TEXT:
+                        H_straight = raw_result.get("H_straight", getattr(sr, "H_straight", None))
+                        manual_H_straight = raw_result.get("manual_H_straight", None)
+                        used_manual_H_straight = raw_result.get("used_manual_H_straight", None)
+                        if H_straight not in (None, ""):
+                            payload[ARCH_CULVERT_H_STRAIGHT_ROLE_KEY] = H_straight
+                        if manual_H_straight not in (None, ""):
+                            payload[ARCH_CULVERT_MANUAL_H_STRAIGHT_ROLE_KEY] = manual_H_straight
+                        if used_manual_H_straight is not None:
+                            payload[ARCH_CULVERT_USED_MANUAL_H_STRAIGHT_ROLE_KEY] = bool(used_manual_H_straight)
                 payload[ARCH_CULVERT_SOURCE_ROLE_KEY] = bool(
                     culvert_family_type == ARCH_CULVERT_FAMILY_TEXT
                 )
+                if section_type == "隧洞-圆拱直墙型":
+                    theta_deg = float(raw_result.get("theta_deg", 0) or 0)
+                    H_straight = raw_result.get("H_straight", getattr(sr, "H_straight", None))
+                    manual_H_straight = raw_result.get("manual_H_straight", None)
+                    used_manual_H_straight = raw_result.get("used_manual_H_straight", None)
+                    if theta_deg > 0:
+                        payload[TUNNEL_ARCH_THETA_ROLE_KEY] = theta_deg
+                    if H_straight not in (None, ""):
+                        payload[TUNNEL_ARCH_H_STRAIGHT_ROLE_KEY] = H_straight
+                    if manual_H_straight not in (None, ""):
+                        payload[TUNNEL_ARCH_MANUAL_H_STRAIGHT_ROLE_KEY] = manual_H_straight
+                    if used_manual_H_straight is not None:
+                        payload[TUNNEL_ARCH_USED_MANUAL_H_STRAIGHT_ROLE_KEY] = bool(used_manual_H_straight)
                 # 表1导入到表3时，给承压类行补齐稳定身份，后续导出优先按真实身份匹配。
                 if self._is_pressure_pipe_like_structure_text(section_type):
                     payload[PRESSURE_PIPE_ROW_ID_ROLE_KEY] = self._build_pressure_pipe_row_identity_from_flow_section(
@@ -8383,6 +8413,13 @@ class WaterProfilePanel(QWidget):
             from_table1_source = False
             explicit_table1_source_flag = False
             flat_bottom_source_allowed = False
+            arch_culvert_H_straight = None
+            arch_culvert_manual_H_straight = None
+            arch_culvert_used_manual_H_straight = None
+            tunnel_arch_theta_deg = 0.0
+            tunnel_arch_H_straight = None
+            tunnel_arch_manual_H_straight = None
+            tunnel_arch_used_manual_H_straight = None
             pressure_pipe_row_identity = ""
             compound_trapezoid_params = {}
             # 恢复自动插入补段标记（通过UserRole存储）
@@ -8505,12 +8542,39 @@ class WaterProfilePanel(QWidget):
                         _ur.get(COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY, {})
                     )
                     arch_culvert_theta_deg = self._sf(_ur.get(ARCH_CULVERT_THETA_ROLE_KEY, 0), 0.0)
+                    if ARCH_CULVERT_H_STRAIGHT_ROLE_KEY in _ur:
+                        arch_culvert_H_straight = self._sf(_ur.get(ARCH_CULVERT_H_STRAIGHT_ROLE_KEY, 0), 0.0)
+                    if ARCH_CULVERT_MANUAL_H_STRAIGHT_ROLE_KEY in _ur:
+                        arch_culvert_manual_H_straight = self._sf(_ur.get(ARCH_CULVERT_MANUAL_H_STRAIGHT_ROLE_KEY, 0), 0.0)
+                    if ARCH_CULVERT_USED_MANUAL_H_STRAIGHT_ROLE_KEY in _ur:
+                        arch_culvert_used_manual_H_straight = bool(_ur.get(ARCH_CULVERT_USED_MANUAL_H_STRAIGHT_ROLE_KEY))
+                    tunnel_arch_theta_deg = self._sf(_ur.get(TUNNEL_ARCH_THETA_ROLE_KEY, 0), 0.0)
+                    if TUNNEL_ARCH_H_STRAIGHT_ROLE_KEY in _ur:
+                        tunnel_arch_H_straight = self._sf(_ur.get(TUNNEL_ARCH_H_STRAIGHT_ROLE_KEY, 0), 0.0)
+                    if TUNNEL_ARCH_MANUAL_H_STRAIGHT_ROLE_KEY in _ur:
+                        tunnel_arch_manual_H_straight = self._sf(_ur.get(TUNNEL_ARCH_MANUAL_H_STRAIGHT_ROLE_KEY, 0), 0.0)
+                    if TUNNEL_ARCH_USED_MANUAL_H_STRAIGHT_ROLE_KEY in _ur:
+                        tunnel_arch_used_manual_H_straight = bool(_ur.get(TUNNEL_ARCH_USED_MANUAL_H_STRAIGHT_ROLE_KEY))
                 else:
                     arch_culvert_source_allowed = False
                     arch_culvert_theta_deg = 0.0
+                    arch_culvert_H_straight = None
+                    arch_culvert_manual_H_straight = None
+                    arch_culvert_used_manual_H_straight = None
+                    tunnel_arch_theta_deg = 0.0
+                    tunnel_arch_H_straight = None
+                    tunnel_arch_manual_H_straight = None
+                    tunnel_arch_used_manual_H_straight = None
             else:
                 arch_culvert_source_allowed = False
                 arch_culvert_theta_deg = 0.0
+                arch_culvert_H_straight = None
+                arch_culvert_manual_H_straight = None
+                arch_culvert_used_manual_H_straight = None
+                tunnel_arch_theta_deg = 0.0
+                tunnel_arch_H_straight = None
+                tunnel_arch_manual_H_straight = None
+                tunnel_arch_used_manual_H_straight = None
             if (
                 not explicit_table1_source_flag
                 and not from_table1_source
@@ -8746,6 +8810,26 @@ class WaterProfilePanel(QWidget):
                 node.structure_height = self._node_structure_heights[r]
             if culvert_family_type and node.structure_height > 0:
                 node.section_params['H_total'] = node.structure_height
+            if culvert_family_type == ARCH_CULVERT_FAMILY_TEXT:
+                if arch_culvert_theta_deg > 0:
+                    node.section_params['theta_deg'] = arch_culvert_theta_deg
+                if arch_culvert_H_straight is not None:
+                    node.section_params['H_straight'] = arch_culvert_H_straight
+                if arch_culvert_manual_H_straight is not None:
+                    node.section_params['manual_H_straight'] = arch_culvert_manual_H_straight
+                if arch_culvert_used_manual_H_straight is not None:
+                    node.section_params['used_manual_H_straight'] = arch_culvert_used_manual_H_straight
+            if struct_str == "隧洞-圆拱直墙型":
+                if node.structure_height > 0:
+                    node.section_params['H_total'] = node.structure_height
+                if tunnel_arch_theta_deg > 0:
+                    node.section_params['theta_deg'] = tunnel_arch_theta_deg
+                if tunnel_arch_H_straight is not None:
+                    node.section_params['H_straight'] = tunnel_arch_H_straight
+                if tunnel_arch_manual_H_straight is not None:
+                    node.section_params['manual_H_straight'] = tunnel_arch_manual_H_straight
+                if tunnel_arch_used_manual_H_straight is not None:
+                    node.section_params['used_manual_H_straight'] = tunnel_arch_used_manual_H_straight
 
             # 恢复倒角参数（渡槽-矩形精确水力计算用）
             if r in self._node_chamfer_params:
@@ -8756,9 +8840,6 @@ class WaterProfilePanel(QWidget):
             # 恢复明渠-U形圆心角
             if r in self._node_u_params:
                 node.section_params['theta_deg'] = self._node_u_params[r].get('theta_deg', 0)
-            if culvert_family_type == ARCH_CULVERT_FAMILY_TEXT and arch_culvert_theta_deg > 0:
-                node.section_params['theta_deg'] = arch_culvert_theta_deg
-
             # 恢复加大流速（从批量计算导入的加大流量工况流速）
             if r in self._node_velocity_increased:
                 node.velocity_increased = self._node_velocity_increased[r]
@@ -9251,6 +9332,15 @@ class WaterProfilePanel(QWidget):
                 payload[ARCH_CULVERT_SOURCE_ROLE_KEY] = bool(
                     culvert_family_type == ARCH_CULVERT_FAMILY_TEXT and getattr(node, "from_table1_source", False)
                 )
+                if culvert_family_type == ARCH_CULVERT_FAMILY_TEXT:
+                    if _sp.get('theta_deg'):
+                        payload[ARCH_CULVERT_THETA_ROLE_KEY] = _sp.get('theta_deg')
+                    if _sp.get('H_straight') is not None:
+                        payload[ARCH_CULVERT_H_STRAIGHT_ROLE_KEY] = _sp.get('H_straight')
+                    if _sp.get('manual_H_straight') is not None:
+                        payload[ARCH_CULVERT_MANUAL_H_STRAIGHT_ROLE_KEY] = _sp.get('manual_H_straight')
+                    if _sp.get('used_manual_H_straight') is not None:
+                        payload[ARCH_CULVERT_USED_MANUAL_H_STRAIGHT_ROLE_KEY] = bool(_sp.get('used_manual_H_straight'))
                 override = self._get_pressure_pipe_window_override(node)
                 if override:
                     payload[PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY] = copy.deepcopy(override)
@@ -10353,7 +10443,27 @@ class WaterProfilePanel(QWidget):
                     )
                 if compound_trapezoid_params:
                     payload[COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY] = copy.deepcopy(compound_trapezoid_params)
-                    first_item.setData(Qt.UserRole, payload)
+                if _st_str == "隧洞-圆拱直墙型":
+                    section_params = getattr(node, 'section_params', {}) or {}
+                    if section_params.get('theta_deg'):
+                        payload[TUNNEL_ARCH_THETA_ROLE_KEY] = section_params.get('theta_deg')
+                    if section_params.get('H_straight') is not None:
+                        payload[TUNNEL_ARCH_H_STRAIGHT_ROLE_KEY] = section_params.get('H_straight')
+                    if section_params.get('manual_H_straight') is not None:
+                        payload[TUNNEL_ARCH_MANUAL_H_STRAIGHT_ROLE_KEY] = section_params.get('manual_H_straight')
+                    if section_params.get('used_manual_H_straight') is not None:
+                        payload[TUNNEL_ARCH_USED_MANUAL_H_STRAIGHT_ROLE_KEY] = bool(section_params.get('used_manual_H_straight'))
+                section_params = getattr(node, 'section_params', {}) or {}
+                if normalize_culvert_family_type_name(section_params.get(CULVERT_FAMILY_TYPE_KEY, "")) == ARCH_CULVERT_FAMILY_TEXT:
+                    if section_params.get('theta_deg'):
+                        payload[ARCH_CULVERT_THETA_ROLE_KEY] = section_params.get('theta_deg')
+                    if section_params.get('H_straight') is not None:
+                        payload[ARCH_CULVERT_H_STRAIGHT_ROLE_KEY] = section_params.get('H_straight')
+                    if section_params.get('manual_H_straight') is not None:
+                        payload[ARCH_CULVERT_MANUAL_H_STRAIGHT_ROLE_KEY] = section_params.get('manual_H_straight')
+                    if section_params.get('used_manual_H_straight') is not None:
+                        payload[ARCH_CULVERT_USED_MANUAL_H_STRAIGHT_ROLE_KEY] = bool(section_params.get('used_manual_H_straight'))
+                first_item.setData(Qt.UserRole, payload)
         auto_resize_table(self.node_table)
 
     def _open_siphon_calculator(self):

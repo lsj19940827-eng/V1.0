@@ -377,12 +377,18 @@ class CulvertPanel(QWidget):
         self.arch_B_lbl, self.arch_B_edit = self._field2(fl, "指定底宽 B (m):", "")
         self._arch_hint_bottom = self._hint("(留空则自动搜索圆拱直墙型断面)")
         fl.addWidget(self._arch_hint_bottom)
+        self.arch_H_straight_lbl, self.arch_H_straight_edit = self._field2(fl, "直墙高度 H直 (m):", "")
+        self._arch_hint_wall = self._hint("(留空则由程序自动计算；填写时需同时填写底宽 B)")
+        fl.addWidget(self._arch_hint_wall)
         self.theta_lbl.hide()
         self.theta_edit.hide()
         self._arch_hint_theta.hide()
         self.arch_B_lbl.hide()
         self.arch_B_edit.hide()
         self._arch_hint_bottom.hide()
+        self.arch_H_straight_lbl.hide()
+        self.arch_H_straight_edit.hide()
+        self._arch_hint_wall.hide()
 
         fl.addWidget(self._sep())
         self.detail_cb = CheckBox("输出详细计算过程")
@@ -476,6 +482,8 @@ class CulvertPanel(QWidget):
             self._arch_hint_theta,
             self.arch_B_lbl, self.arch_B_edit,
             self._arch_hint_bottom,
+            self.arch_H_straight_lbl, self.arch_H_straight_edit,
+            self._arch_hint_wall,
         )
         for widget in rect_widgets:
             widget.setVisible(is_rect)
@@ -609,6 +617,7 @@ class CulvertPanel(QWidget):
             'detail_checked': True,
             'bh': '', 'hb': '', 'B': '',
             'arch_B': '',
+            'arch_H_straight': '',
         }
 
     @staticmethod
@@ -640,6 +649,7 @@ class CulvertPanel(QWidget):
         c['hb'] = self.hb_edit.text()
         c['B'] = self.B_edit.text()
         c['arch_B'] = self.arch_B_edit.text()
+        c['arch_H_straight'] = self.arch_H_straight_edit.text()
 
     def _load_case(self, idx):
         if not (0 <= idx < len(self._cases)):
@@ -665,6 +675,7 @@ class CulvertPanel(QWidget):
         self.B_edit.setText(c.get('B', ''))
         self.theta_edit.setText(c.get('theta_deg', '180'))
         self.arch_B_edit.setText(c.get('arch_B', ''))
+        self.arch_H_straight_edit.setText(c.get('arch_H_straight', ''))
         self._on_inc_toggle(None)
         self._on_section_type_changed(self.section_combo.currentText())
         self._loading_case = False
@@ -748,6 +759,9 @@ class CulvertPanel(QWidget):
         tooltip_lines = [label, f"断面类型：{section_type}", f"设计流量 Q={q_text} m³/s"]
         if section_type == _CULVERT_ARCH:
             tooltip_lines.insert(2, f"圆心角 θ={case.get('theta_deg', '180') or '180'}°")
+            h_straight = str(case.get('arch_H_straight', '') or '').strip()
+            if h_straight:
+                tooltip_lines.insert(3, f"直墙高度 H直={h_straight}m")
         return {
             "label": label,
             "tooltip": "\n".join(tooltip_lines),
@@ -881,7 +895,7 @@ class CulvertPanel(QWidget):
         keys = (
             'section_type', 'theta_deg',
             'n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text',
-            'detail_checked', 'bh', 'hb', 'B', 'arch_B',
+            'detail_checked', 'bh', 'hb', 'B', 'arch_B', 'arch_H_straight',
         )
         for i, case in enumerate(self._cases):
             if i != self._current_case_idx:
@@ -907,7 +921,7 @@ class CulvertPanel(QWidget):
         for k in (
             'section_type', 'theta_deg',
             'n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text',
-            'detail_checked', 'bh', 'hb', 'B', 'arch_B',
+            'detail_checked', 'bh', 'hb', 'B', 'arch_B', 'arch_H_straight',
         ):
             curr[k] = prev[k]
         self._load_case(self._current_case_idx)
@@ -954,6 +968,19 @@ class CulvertPanel(QWidget):
             except ValueError:
                 return None
 
+        def _fv_opt_labeled(key, label, must_nonnegative=False):
+            """解析可选数字字段，非空但非法时给出明确提示。"""
+            t = (case.get(key, '') or '').strip()
+            if not t:
+                return None
+            try:
+                value = float(t)
+            except ValueError as exc:
+                raise ValueError(f"工况{case_num}: {label}输入无效") from exc
+            if must_nonnegative and value < 0:
+                raise ValueError(f"工况{case_num}: {label}不能为负数")
+            return value
+
         Q = _fv('Q', '设计流量 Q')
         n = _fv('n', '糙率 n')
         slope_inv = _fv('slope_inv', '水力坡降倒数')
@@ -995,7 +1022,12 @@ class CulvertPanel(QWidget):
             if theta_deg <= 0:
                 raise ValueError(f"工况{case_num}: 圆心角 θ 必须大于0")
             input_params['theta_deg'] = theta_deg
-            input_params['manual_B'] = _fv_opt('arch_B')
+            manual_B = _fv_opt('arch_B')
+            manual_H_straight = _fv_opt_labeled('arch_H_straight', '直墙高度 H直', must_nonnegative=True)
+            if manual_H_straight is not None and (manual_B is None or manual_B <= 0):
+                raise ValueError(f"工况{case_num}: 填写直墙高度 H直 时必须同时填写底宽 B")
+            input_params['manual_B'] = manual_B
+            input_params['manual_H_straight'] = manual_H_straight
             return input_params
 
         manual_B = _fv_opt('B')
@@ -1040,6 +1072,7 @@ class CulvertPanel(QWidget):
                         v_min=params['v_min'], v_max=params['v_max'],
                         theta_deg=params['theta_deg'],
                         manual_B=params['manual_B'],
+                        manual_H_straight=params['manual_H_straight'],
                         manual_increase_percent=params['manual_increase'],
                     )
                 else:
@@ -1087,6 +1120,13 @@ class CulvertPanel(QWidget):
             result_increase_percent=result.get('increase_percent', 0.0),
             result_q_increased=result.get('Q_increased', params.get('Q', 0.0)),
         )
+
+    def _safe_increase_summary_lines(self, params, result):
+        """在轻量测试替身上也能生成加大流量说明。"""
+        builder = getattr(self, '_increase_summary_lines', None)
+        if callable(builder):
+            return builder(params, result)
+        return CulvertPanel._increase_summary_lines(self, params, result)
 
     # ================================================================
     # 结果显示
@@ -1265,6 +1305,11 @@ class CulvertPanel(QWidget):
         theta_deg = result.get('theta_deg', p.get('theta_deg', 180.0))
         A_total = result.get('A_total', 0.0)
         HB_ratio = result.get('HB_ratio', H_total / B if B else 0.0)
+        theta_rad = math.radians(theta_deg) if theta_deg else 0.0
+        sin_half = math.sin(theta_rad / 2.0) if theta_rad else 0.0
+        R_arch = (B / 2.0) / sin_half if B > 0 and abs(sin_half) > 1e-9 else 0.0
+        H_arch = R_arch * (1.0 - math.cos(theta_rad / 2.0)) if R_arch else 0.0
+        h_straight_source = "按用户输入固定" if result.get('used_manual_H_straight') else "H直 = H总 - H拱"
 
         h_d = result.get('h_design', 0.0)
         V_d = result.get('V_design', 0.0)
@@ -1324,6 +1369,7 @@ class CulvertPanel(QWidget):
             o.append("【断面尺寸】")
             o.append(f"  宽度 B = {B:.2f} m")
             o.append(f"  高度 H = {H_total:.2f} m")
+            o.append(f"  直墙高 H直 = {H_straight:.3f} m（{h_straight_source}）")
             o.append(f"  拱顶圆心角 θ = {theta_deg:.1f}°")
             o.append(f"  总面积 A总 = {A_total:.3f} m²")
             o.append("")
@@ -1337,7 +1383,7 @@ class CulvertPanel(QWidget):
 
             if use_increase:
                 o.append("【加大流量工况】")
-                for line in self._increase_summary_lines(p, result):
+                for line in CulvertPanel._safe_increase_summary_lines(self, p, result):
                     o.append(f"  {line}")
                 o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
                 o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
@@ -1378,10 +1424,18 @@ class CulvertPanel(QWidget):
         o.append(f"     直墙高 H直 = {H_straight:.3f} m")
         o.append(f"     拱顶圆心角 θ = {theta_deg:.1f}°")
         o.append("")
-        o.append("  2. 高宽比计算:")
+        o.append("  2. 直墙高度来源:")
+        if R_arch:
+            o.append(f"     R拱 = (B/2) / sin(θ/2) = {R_arch:.3f} m")
+            o.append(f"     H拱 = R拱 × (1 - cos(θ/2)) = {H_arch:.3f} m")
+            o.append(f"     H直 = {H_straight:.3f} m（{h_straight_source}）")
+        else:
+            o.append(f"     H直 = {H_straight:.3f} m（{h_straight_source}）")
+        o.append("")
+        o.append("  3. 高宽比计算:")
         o.append(f"     H/B = {H_total:.2f} / {B:.2f} = {HB_ratio:.3f}")
         o.append("")
-        o.append("  3. 断面总面积:")
+        o.append("  4. 断面总面积:")
         o.append(f"     A总 = {A_total:.3f} m²")
         o.append("")
 
@@ -1413,7 +1467,7 @@ class CulvertPanel(QWidget):
             o.append("【四、加大流量工况】")
             o.append("")
             o.append("  1. 加大流量输入说明:")
-            for line in self._increase_summary_lines(p, result):
+            for line in CulvertPanel._safe_increase_summary_lines(self, p, result):
                 o.append(f"     {line}")
             o.append("")
             o.append("  2. 加大水深:")
@@ -1556,7 +1610,7 @@ class CulvertPanel(QWidget):
             use_increase = p.get('use_increase', True)
             if use_increase:
                 o.append("【加大流量工况】")
-                for line in self._increase_summary_lines(p, result):
+                for line in CulvertPanel._safe_increase_summary_lines(self, p, result):
                     o.append(f"  {line}")
                 o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
                 o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
@@ -1694,7 +1748,7 @@ class CulvertPanel(QWidget):
                 o.append("【四、加大流量工况】")
                 o.append("")
                 o.append("  1. 加大流量输入说明:")
-                for line in self._increase_summary_lines(p, result):
+                for line in CulvertPanel._safe_increase_summary_lines(self, p, result):
                     o.append(f"      {line}")
                 o.append("")
                 o.append("  2. 加大水深计算:")
@@ -1911,6 +1965,9 @@ class CulvertPanel(QWidget):
         ax.text(0, -0.16*H_total, f'B={B:.2f}m', ha='center', fontsize=9, color='gray')
         ax.annotate('', xy=(B/2+0.1*B, H_total), xytext=(B/2+0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
         ax.text(B/2+0.18*B, H_total/2, f'H={H_total:.2f}m', fontsize=8, color='purple', rotation=90, va='center')
+        if H_straight > 1e-9:
+            ax.annotate('', xy=(-B/2-0.1*B, H_straight), xytext=(-B/2-0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='teal', lw=1.3))
+            ax.text(-B/2-0.18*B, H_straight/2, f'H直={H_straight:.2f}m', fontsize=8, color='teal', rotation=90, va='center', ha='center')
         ax.text(0.04 * B, H_total * 0.98, f'θ={math.degrees(theta_rad):.0f}°', fontsize=9, color='purple')
         ax.set_xlim(-B*0.9, B*0.9)
         ax.set_ylim(-H_total*0.3, H_total*1.2)

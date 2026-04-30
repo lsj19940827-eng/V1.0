@@ -145,3 +145,47 @@ def test_flat_bottom_circle_display_info_falls_back_gracefully_when_dims_missing
     text = result.get_display_info()
 
     assert text == "Q=5.00m³/s, V=1.20m/s"
+
+
+def test_shared_data_manager_preserves_arch_wall_height_params():
+    """共享数据管理器应保留圆拱直墙型隧洞的 H直 和总高。"""
+    manager = get_shared_data_manager()
+    manager.clear_batch_results()
+
+    payload = {
+        "success": True,
+        "section_type": "隧洞-圆拱直墙型",
+        "Q": 5.0,
+        "n": 0.014,
+        "h_design": 1.2,
+        "A_design": 3.6,
+        "P_design": 5.4,
+        "R_hyd_design": 0.667,
+        "B": 3.0,
+        "H_straight": 1.2,
+        "H_total": 1.609,
+        "theta_deg": 150.0,
+        "manual_H_straight": 1.2,
+        "used_manual_H_straight": True,
+    }
+
+    count = manager.register_batch_results([payload])
+    assert count == 1
+
+    rows = manager.get_batch_results()
+    assert len(rows) == 1
+    result = rows[0]
+    assert result.section_type == "隧洞-圆拱直墙型"
+    assert result.B == pytest.approx(3.0)
+    assert result.H_straight == pytest.approx(1.2)
+    assert result.H_total == pytest.approx(1.609)
+    assert "H直=1.20m" in result.get_display_info()
+
+    section_params = result.to_node_params()["section_params"]
+    assert section_params["B"] == pytest.approx(3.0)
+    assert section_params["H_straight"] == pytest.approx(1.2)
+    assert section_params["H_total"] == pytest.approx(1.609)
+    assert section_params["theta_deg"] == pytest.approx(150.0)
+    assert section_params["used_manual_H_straight"] is True
+
+    manager.clear_batch_results()

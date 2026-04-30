@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
-    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea,
+    QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea, QDialog,
     QPushButton, QApplication, QRadioButton, QButtonGroup,
 )
 from PySide6.QtCore import Qt, Signal
@@ -85,6 +85,7 @@ from app_渠系计算前端.dxf_multi_export import (
     show_multi_case_dxf_dialog,
 )
 from app_渠系计算前端.tunnel.dxf_export import export_tunnel_dxf, draw_tunnel_dxf_on_msp
+from app_渠系计算前端.tunnel.clearance_sizing_dialog import HorseshoeClearanceSizingDialog
 from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, plain_text_to_formula_body, wrap_with_katex,
     load_formula_page, make_plain_html,
@@ -169,7 +170,7 @@ class TunnelPanel(QWidget):
             # 平底圆形参数
             'flat_bottom_D': '', 'flat_bottom_B': '',
             # 圆拱直墙型参数
-            'theta_deg': '', 'B_hs': '',
+            'theta_deg': '', 'B_hs': '', 'H_straight_hs': '',
             # 马蹄形参数
             'r': '',
         }
@@ -359,6 +360,14 @@ class TunnelPanel(QWidget):
         hs_lay.addWidget(self._hint("(留空则采用180°)"))
         self.B_hs_lbl, self.B_hs_edit = self._field2(hs_lay, "指定底宽 B (m):", "")
         hs_lay.addWidget(self._hint("(指定底宽留空则自动计算)"))
+        self.H_straight_hs_lbl, self.H_straight_hs_edit = self._field2(hs_lay, "直墙高度 H直 (m):", "")
+        hs_lay.addWidget(self._hint("(留空则由程序自动计算；填写时需同时填写底宽 B)"))
+        self.clearance_sizing_btn = PrimaryPushButton("按加大流量净空比例反推断面尺寸")
+        self.clearance_sizing_btn.setCursor(Qt.PointingHandCursor)
+        self.clearance_sizing_btn.setMinimumHeight(36)
+        self.clearance_sizing_btn.setToolTip("根据加大流量、目标净空比例和高宽比反推断面尺寸")
+        self.clearance_sizing_btn.clicked.connect(self._open_clearance_sizing_dialog)
+        hs_lay.addWidget(self.clearance_sizing_btn)
         fl.addWidget(self.hs_grp)
         self.hs_grp.hide()
 
@@ -519,6 +528,7 @@ class TunnelPanel(QWidget):
         # 圆拱直墙型参数
         c['theta_deg'] = self.theta_edit.text()
         c['B_hs'] = self.B_hs_edit.text()
+        c['H_straight_hs'] = self.H_straight_hs_edit.text()
         # 马蹄形参数
         c['r'] = self.r_edit.text()
 
@@ -550,6 +560,7 @@ class TunnelPanel(QWidget):
         # 圆拱直墙型参数
         self.theta_edit.setText(c.get('theta_deg', ''))
         self.B_hs_edit.setText(c.get('B_hs', ''))
+        self.H_straight_hs_edit.setText(c.get('H_straight_hs', ''))
         # 马蹄形参数
         self.r_edit.setText(c.get('r', ''))
         self._loading_case = False
@@ -925,6 +936,101 @@ class TunnelPanel(QWidget):
     def _info_parent(self):
         return self
 
+    def _read_current_float(self, edit, label, *, must_positive=True, default=None):
+        """读取当前输入框数值，用于独立助手弹窗。"""
+        text = (edit.text() or "").strip()
+        if not text:
+            if default is not None:
+                return default
+            raise ValueError(f"请输入{label}")
+        try:
+            value = float(text)
+        except ValueError as exc:
+            raise ValueError(f"{label}输入无效") from exc
+        if must_positive and value <= 0:
+            raise ValueError(f"{label}必须大于0")
+        return value
+
+    def _build_clearance_sizing_context(self):
+        """整理圆拱直墙净空反推弹窗所需的当前工况参数。"""
+        Q = self._read_current_float(self.Q_edit, "设计流量 Q")
+        n = self._read_current_float(self.n_edit, "糙率 n")
+        slope_inv = self._read_current_float(self.slope_edit, "水力坡降倒数")
+        v_min = self._read_current_float(self.vmin_edit, "不淤流速", must_positive=False)
+        v_max = self._read_current_float(self.vmax_edit, "不冲流速", must_positive=False)
+        if v_min >= v_max:
+            raise ValueError("不淤流速必须小于不冲流速")
+        theta_deg = self._read_current_float(
+            self.theta_edit,
+            "拱顶圆心角",
+            must_positive=True,
+            default=180.0,
+        )
+        increase_resolution = resolve_increase_input(
+            use_increase=self.inc_cb.isChecked(),
+            mode=self._current_increase_mode(),
+            design_q=Q,
+            percent_text=self.inc_edit.text(),
+            q_increased_text=self.inc_q_edit.text(),
+            disabled_percent=0.0,
+        )
+        q_increased = increase_resolution.q_increased_value
+        return {
+            "Q_design": Q,
+            "Q_increased": q_increased if q_increased is not None else 0.0,
+            "n": n,
+            "slope_inv": slope_inv,
+            "v_min": v_min,
+            "v_max": v_max,
+            "theta_deg": theta_deg,
+        }
+
+    def _open_clearance_sizing_dialog(self):
+        """打开圆拱直墙型按净空反推尺寸弹窗。"""
+        if self.section_combo.currentText() != "圆拱直墙型":
+            InfoBar.warning(
+                title="提示",
+                content="请先将断面类型切换为圆拱直墙型。",
+                parent=self._info_parent(),
+                position=InfoBarPosition.TOP,
+                duration=2500,
+            )
+            return
+        try:
+            context = self._build_clearance_sizing_context()
+        except ValueError as exc:
+            InfoBar.warning(
+                title="输入错误",
+                content=str(exc),
+                parent=self._info_parent(),
+                position=InfoBarPosition.TOP,
+                duration=3500,
+            )
+            return
+        dlg = HorseshoeClearanceSizingDialog(self._info_parent(), context)
+        if dlg.exec() == QDialog.Accepted and dlg.result_payload:
+            self._apply_clearance_sizing_result(dlg.result_payload)
+
+    def _apply_clearance_sizing_result(self, result):
+        """把反推尺寸采用到当前工况，但不触发主计算。"""
+        self.theta_edit.setText(f"{float(result.get('theta_deg', 0.0)):.3f}")
+        self.B_hs_edit.setText(f"{float(result.get('B', 0.0)):.3f}")
+        self.H_straight_hs_edit.setText(f"{float(result.get('H_straight', 0.0)):.3f}")
+        if 0 <= self._current_case_idx < len(self._cases):
+            self._save_current_case()
+        self._mark_results_dirty()
+        try:
+            self.data_changed.emit()
+        except Exception:
+            pass
+        InfoBar.success(
+            title="已采用",
+            content="已回填 θ、B 和 H直。请点击“计算”刷新结果。",
+            parent=self._info_parent(),
+            position=InfoBarPosition.TOP,
+            duration=3000,
+        )
+
     # ================================================================
     # 计算
     # ================================================================
@@ -954,6 +1060,18 @@ class TunnelPanel(QWidget):
                 raise ValueError(f"工况{case_num}: {label}输入无效") from exc
             if must_positive and value <= 0:
                 raise ValueError(f"工况{case_num}: {label}必须大于0")
+            return value
+
+        def _optional_float(key, label, must_nonnegative=False):
+            text = (case_dict.get(key, "") or "").strip()
+            if not text:
+                return None
+            try:
+                value = float(text)
+            except ValueError as exc:
+                raise ValueError(f"工况{case_num}: {label}输入无效") from exc
+            if must_nonnegative and value < 0:
+                raise ValueError(f"工况{case_num}: {label}不能为负数")
             return value
 
         stype = case_dict.get('section_type', '圆形')
@@ -1011,17 +1129,20 @@ class TunnelPanel(QWidget):
                 manual_increase_percent=manual_increase
             )
         elif stype == "圆拱直墙型":
-            theta_text = case_dict.get('theta_deg', '')
-            theta_deg = float(theta_text) if theta_text.strip() else 180
-            b_text = case_dict.get('B_hs', '')
-            manual_B = float(b_text) if b_text.strip() else None
+            theta_deg = _optional_float('theta_deg', '拱顶圆心角') or 180
+            manual_B = _optional_float('B_hs', '指定底宽 B')
+            manual_H_straight = _optional_float('H_straight_hs', '直墙高度 H直', must_nonnegative=True)
+            if manual_H_straight is not None and (manual_B is None or manual_B <= 0):
+                raise ValueError(f"工况{case_num}: 填写直墙高度 H直 时必须同时填写底宽 B")
             input_params['theta_deg'] = theta_deg
             input_params['manual_B'] = manual_B
+            input_params['manual_H_straight'] = manual_H_straight
             result = quick_calculate_horseshoe(
                 Q=Q, n=n, slope_inv=slope_inv,
                 v_min=v_min, v_max=v_max,
                 theta_deg=theta_deg,
                 manual_B=manual_B,
+                manual_H_straight=manual_H_straight,
                 manual_increase_percent=manual_increase
             )
         else:
@@ -1087,6 +1208,13 @@ class TunnelPanel(QWidget):
             result_increase_percent=result.get('increase_percent', 0.0),
             result_q_increased=result.get('Q_increased', params.get('Q', 0.0)),
         )
+
+    def _safe_increase_summary_lines(self, params, result):
+        """兼容轻量测试替身，生成加大流量输入说明。"""
+        builder = getattr(self, '_increase_summary_lines', None)
+        if callable(builder):
+            return builder(params, result)
+        return TunnelPanel._increase_summary_lines(self, params, result)
 
     # ================================================================
     # 结果显示
@@ -1192,6 +1320,32 @@ class TunnelPanel(QWidget):
             return "圆拱直墙型"
         return result.get('section_type', '马蹄形')
 
+    @staticmethod
+    def _horseshoe_arch_metrics(result):
+        """计算圆拱直墙型拱部与直墙高度展示参数。"""
+        B = result.get('B', 0) or 0
+        H_total = result.get('H_total', 0) or 0
+        theta_deg = result.get('theta_deg', 180) or 180
+        try:
+            theta_rad = math.radians(float(theta_deg))
+            sin_half = math.sin(theta_rad / 2)
+            if B <= 0 or sin_half <= 1e-9:
+                return None
+            R_arch = (B / 2) / sin_half
+            H_arch = R_arch * (1 - math.cos(theta_rad / 2))
+            H_straight = result.get('H_straight', None)
+            if H_straight is None:
+                H_straight = max(0, H_total - H_arch)
+            source = "按用户输入固定" if result.get('used_manual_H_straight') else "H直 = H总 - H拱"
+            return {
+                'R_arch': R_arch,
+                'H_arch': H_arch,
+                'H_straight': H_straight,
+                'source': source,
+            }
+        except Exception:
+            return None
+
     def _build_result_text(self, result, type_label, detail, p):
         """构建单个工况的结果文本（从_show_result提取）"""
         Q, n = p['Q'], p['n']
@@ -1232,6 +1386,12 @@ class TunnelPanel(QWidget):
             elif stype == "圆拱直墙型":
                 o.append(f"  宽度 B = {result.get('B', 0):.2f} m")
                 o.append(f"  高度 H = {result.get('H_total', 0):.2f} m")
+                arch_metrics = self._horseshoe_arch_metrics(result)
+                if arch_metrics:
+                    o.append(f"  拱半径 R拱 = {arch_metrics['R_arch']:.3f} m")
+                    o.append(f"  拱高 H拱 = {arch_metrics['H_arch']:.3f} m")
+                    o.append(f"  直墙高度 H直 = {arch_metrics['H_straight']:.3f} m")
+                    o.append(f"  直墙高度来源: {arch_metrics['source']}")
             else:
                 o.append(f"  半径 r = {result.get('r', 0):.2f} m")
             o.append(f"  总面积 A = {A_total:.3f} m²")
@@ -1244,7 +1404,7 @@ class TunnelPanel(QWidget):
             use_increase = p.get('use_increase', True)
             if use_increase:
                 o.append("【加大流量工况】")
-                for line in self._increase_summary_lines(p, result):
+                for line in TunnelPanel._safe_increase_summary_lines(self, p, result):
                     o.append(f"  {line}")
                 o.append(f"  加大水深 = {h_inc:.3f} m, 流速 = {V_inc:.3f} m/s")
                 o.append(f"  净空高度 = {fb_hgt_inc:.3f} m, 净空比例 = {fb_pct_inc:.1f}%")
@@ -1274,6 +1434,12 @@ class TunnelPanel(QWidget):
                 B = result['B']; H_total = result['H_total']
                 o.append(f"  宽度 B = {B:.2f} m, 高度 H = {H_total:.2f} m")
                 o.append(f"  拱顶圆心角 θ = {result['theta_deg']:.1f}°")
+                arch_metrics = self._horseshoe_arch_metrics(result)
+                if arch_metrics:
+                    o.append(f"  拱半径 R拱 = (B/2) / sin(θ/2) = {arch_metrics['R_arch']:.3f} m")
+                    o.append(f"  拱高 H拱 = R拱 × (1 - cos(θ/2)) = {arch_metrics['H_arch']:.3f} m")
+                    o.append(f"  直墙高度 H直 = {arch_metrics['H_straight']:.3f} m")
+                    o.append(f"  直墙高度来源: {arch_metrics['source']}")
                 o.append(f"  断面总面积 A总 = {A_total:.3f} m²")
             else:
                 r_val = result['r']
@@ -1290,7 +1456,7 @@ class TunnelPanel(QWidget):
             use_increase = p.get('use_increase', True)
             if use_increase:
                 o.append("【四、加大流量工况】")
-                for line in self._increase_summary_lines(p, result):
+                for line in TunnelPanel._safe_increase_summary_lines(self, p, result):
                     o.append(f"  {line}")
                 o.append(f"  水深 h加大 = {h_inc:.3f} m")
                 o.append(f"  过水面积 A加大 = {A_inc:.3f} m², 湿周 χ加大 = {P_inc:.3f} m")
@@ -1395,7 +1561,7 @@ class TunnelPanel(QWidget):
             use_increase = p.get('use_increase', True)
             if use_increase:
                 o.append("【加大流量工况】")
-                for line in self._increase_summary_lines(p, result):
+                for line in TunnelPanel._safe_increase_summary_lines(self, p, result):
                     o.append(f"  {line}")
                 o.append(f"  加大水深 h加大 = {h_inc:.3f} m")
                 o.append(f"  加大流速 V加大 = {V_inc:.3f} m/s")
@@ -1466,13 +1632,23 @@ class TunnelPanel(QWidget):
             elif stype == "圆拱直墙型":
                 B = result['B']; H_total = result['H_total']
                 theta_deg = result['theta_deg']
+                arch_metrics = self._horseshoe_arch_metrics(result)
                 o.append("【二、断面尺寸】")
                 o.append("")
                 o.append(f"  1. 设计宽度: B = {B:.2f} m")
                 o.append(f"  2. 设计高度: H = {H_total:.2f} m")
                 o.append(f"  3. 拱顶圆心角: θ = {theta_deg:.1f}°")
-                o.append(f"  4. 高宽比: H/B = {H_total:.2f}/{B:.2f} = {result.get('HB_ratio', 0):.3f}")
-                o.append(f"  5. 断面总面积: A总 = {A_total:.3f} m²")
+                if arch_metrics:
+                    o.append("  4. 直墙高度推导:")
+                    o.append(f"     R拱 = (B/2) / sin(θ/2) = {arch_metrics['R_arch']:.3f} m")
+                    o.append(f"     H拱 = R拱 × (1 - cos(θ/2)) = {arch_metrics['H_arch']:.3f} m")
+                    o.append(f"     H直 = H总 - H拱 = {arch_metrics['H_straight']:.3f} m")
+                    o.append(f"     来源: {arch_metrics['source']}")
+                    next_idx = 5
+                else:
+                    next_idx = 4
+                o.append(f"  {next_idx}. 高宽比: H/B = {H_total:.2f}/{B:.2f} = {result.get('HB_ratio', 0):.3f}")
+                o.append(f"  {next_idx + 1}. 断面总面积: A总 = {A_total:.3f} m²")
                 o.append("")
             else:
                 r_val = result['r']; D_equiv = result['D_equiv']
@@ -1625,7 +1801,7 @@ class TunnelPanel(QWidget):
                 o.append("【四、加大流量工况计算】")
                 o.append("")
                 o.append("  1. 加大流量输入说明:")
-                for line in self._increase_summary_lines(p, result):
+                for line in TunnelPanel._safe_increase_summary_lines(self, p, result):
                     o.append(f"      {line}")
                 o.append("")
                 o.append("  2. 加大水深计算:")
@@ -1975,6 +2151,9 @@ class TunnelPanel(QWidget):
         ax.text(0, -0.16*H_total, f'B={B:.2f}m', ha='center', fontsize=9, color='gray')
         ax.annotate('', xy=(B/2+0.1*B, H_total), xytext=(B/2+0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
         ax.text(B/2+0.18*B, H_total/2, f'H={H_total:.2f}m', fontsize=8, color='purple', rotation=90, va='center')
+        if H_straight > 0:
+            ax.annotate('', xy=(-B/2-0.1*B, H_straight), xytext=(-B/2-0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='darkgreen', lw=1.2))
+            ax.text(-B/2-0.18*B, H_straight/2, f'H直={H_straight:.2f}m', fontsize=8, color='darkgreen', rotation=90, va='center', ha='right')
         ax.set_xlim(-B*0.9, B*0.9); ax.set_ylim(-H_total*0.3, H_total*1.2)
         ax.set_aspect('equal'); self._apply_section_plot_title(ax, title, Q, V)
         ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)

@@ -1,8 +1,8 @@
 # 隧洞水力计算模块 — 产品需求文档 (PRD)
 
-> **版本**: v1.4
+> **版本**: v1.6
 > **创建日期**: 2026-02-22  
-> **最后更新**: 2026-04-23
+> **最后更新**: 2026-04-30
 > **状态**: 已实现  
 
 ---
@@ -19,6 +19,8 @@
 - 基于 **曼宁公式** 进行水力计算
 - 对圆形 / 圆拱直墙型 / 马蹄形自动搜索满足约束条件的 **最优断面尺寸**
 - 对平底圆形固定采用 **直径 D + 平底宽 B** 两输入，程序自动推导 **总高 H_total**
+- 对圆拱直墙型支持可选 **直墙高度 H直**：留空时沿用自动搜索，填写时按 `B + H直 + θ` 固定几何核算
+- 对圆拱直墙型提供 **按加大流量净空比例反推断面尺寸** 弹窗助手：按 `Q加大 / 目标净空比例 / H/B / θ` 反推 `B / H_total / H直`
 - 计算 **设计流量** 与 **加大流量** 两种工况
 - 支持 **详细计算过程** 输出（含公式推导）
 - 导出 **DXF断面图**、**Word计算书**
@@ -41,6 +43,21 @@
 
 - 点击【清空】只清除计算结果、断面图、结果导航和导出缓存；左侧输入参数、加大流量模式与多工况列表保持用户当前输入，不再恢复程序默认值。
 
+### 1.5 当前实现同步（2026-04-29）
+
+- `隧洞-圆拱直墙型` 新增可选 `直墙高度 H直` 输入。留空时继续由程序搜索 `H_total`，再按 `H直 = H_total - H_arch` 推导；填写时必须同时填写底宽 `B`，并按用户输入固定几何核算。
+- 圆拱几何说明统一输出为 `R拱 = (B/2) / sin(θ/2)`、`H拱 = R拱 × (1 - cos(θ/2))`、`H_total = H直 + H拱`。
+- 固定 `H直` 后只校核设计流量、加大流量、流速和净空；若固定断面不满足要求，直接返回失败提示，不自动回退到寻优。
+- 单项面板、批量表1、Excel 模板、共享结果、表3导入复算、DXF 和详细报告均保留 `H直` 来源说明。
+
+### 1.6 当前实现同步（2026-04-30）
+
+- `隧洞-圆拱直墙型` 新增“按加大流量净空比例反推断面尺寸”弹窗入口，入口只在圆拱直墙型参数组内显示，并使用青色主按钮样式。
+- 弹窗只服务当前工况，读取主面板的 `Q / Q加大 / n / 坡降 / 流速范围 / θ` 作为摘要；弹窗内临时修改 `Q加大` 或 `θ` 不会立即影响主面板。
+- 用户输入 `Q加大 / 目标净空比例 / H/B / θ` 后，系统按净空面积比反推 `B / H_total / H直`，再用现有圆拱直墙型水深和输出函数复核。
+- 只有通过最小宽度、最小高度、设计流速、加大流速、加大净空高度 `0.4m` 和净空面积比校核后，才允许点击“采用到当前工况”。
+- 采用结果只回填 `θ / B / H直`，保留 3 位小数，并标记已有结果过期；不自动触发主计算，也不进入批量、Excel 或导出计算书的单独入口。
+
 ---
 
 ## 2. 文件结构
@@ -55,6 +72,7 @@ app_渠系计算前端/
   tunnel/
     __init__.py            # 模块声明
     panel.py               # UI面板 TunnelPanel（1069行）
+    clearance_sizing_dialog.py # 圆拱直墙型按净空反推尺寸弹窗
     geometry.py            # 断面共享几何辅助（预览 / DXF 共用）
     dxf_export.py          # DXF断面图导出（209行）
 
@@ -64,6 +82,9 @@ tests/
   test_tunnel_flat_bottom_circular_shared_hydraulic_unit.py
   test_tunnel_flat_bottom_circular_dxf_unit.py
   test_tunnel_flat_bottom_circular_panel_batch_unit.py
+  test_tunnel_clearance_sizing_unit.py
+  test_tunnel_clearance_sizing_panel_unit.py
+  test_tunnel_clearance_sizing_dialog_unit.py
 ```
 
 ---
@@ -140,21 +161,39 @@ T(h) = 2 × sqrt(R² - (h - y_c)²)
 | 最小宽度 | 1.8 m | `MIN_WIDTH_HS` |
 | 高宽比范围 | 1.0 ~ 1.5 | `HB_RATIO_MIN` / `HB_RATIO_MAX` |
 | 拱顶圆心角 | 90° ~ 180° | 默认 180°（半圆拱） |
+| 直墙高度 H直 | ≥ 0 m | 可选；留空自动推导，填写时必须同时填写 B |
+| 按加大流量净空比例反推断面尺寸 | 当前工况辅助弹窗 | 输入 Q加大、目标净空比例、H/B、θ |
 | 搜索范围(B) | 1.8 ~ 20.0 m | 粗搜索步长 0.1m，精细搜索步长 0.01m |
 
 **几何结构**:
 - 底部矩形：宽 B，高 H_straight
 - 顶部圆拱：拱半径 R_arch = (B/2) / sin(θ/2)，拱高 H_arch = R_arch × (1 - cos(θ/2))
 - 总高 H_total = H_straight + H_arch
+- H_straight 来源：用户未填写时为 `H_total - H_arch`；用户填写时按输入值固定
 
 **过水面积计算**（分段）:
 - h ≤ H_straight: A = B × h
 - h > H_straight: A = 直墙矩形面积 + 拱部过水面积
 
-**搜索优化**:
+**自动搜索优化**（H直 留空）:
 1. 粗搜索：B步长0.1m，HB比步长0.05 → 减少90%搜索次数
 2. 最优解附近精细搜索：±0.3m范围内，B步长0.01m，HB比步长0.01
 3. 以最小总面积 `A_total` 为优化目标
+
+**固定 H直 核算**:
+1. 读取用户输入的 `B / θ / H直`
+2. 计算 `R_arch / H_arch / H_total`
+3. 只进行设计流量、加大流量、流速和净空校核
+4. 校核失败时返回失败原因，不自动改写 `B`、`H直` 或 `H_total`
+
+**按加大流量净空比例反推断面尺寸弹窗**:
+1. 使用当前工况的 `Q_design / n / slope_inv / v_min / v_max` 作为固定背景。
+2. 用户输入 `Q_increased / target_freeboard_pct / hb_ratio / theta_deg`。
+3. `target_freeboard_pct` 表示加大流量下的净空面积比；不得低于隧洞最小净空面积比 `15%`，且必须小于 `100%`。
+4. `H/B` 严格限制为 `1.0~1.5`，`θ` 严格限制为 `90°~180°`；若当前设计流量有效，`Q加大` 必须大于设计流量。
+5. 固定 `H/B` 与 `θ` 后，先在单位断面中求目标净空比例对应的单位水深，再按曼宁相似关系 `Q ∝ B^(8/3)` 反推 `B`。
+6. 反推后用 `solve_water_depth_horseshoe()` 和 `calculate_horseshoe_outputs()` 复核设计流量与加大流量。
+7. 校核失败时只显示失败原因并禁用采用；校核通过后，采用操作只回填 `θ / B / H直`，不自动运行主计算。
 
 ### 3.4 马蹄形标准Ⅰ型
 
@@ -316,6 +355,7 @@ V = Q / A       （流速）
 |------|------|--------|------|------|
 | 拱顶圆心角 | `theta_edit` | 180 | ❌ | 度，90~180 |
 | 指定底宽 B | `B_hs_edit` | 留空 | ❌ | m，留空自动搜索 |
+| 直墙高度 H直 | `H_straight_hs_edit` | 留空 | ❌ | m，留空自动计算；填写时必须同时填写 B，且 `>= 0` |
 
 ### 5.5 马蹄形专用参数
 
@@ -377,6 +417,8 @@ V = Q / A       （流速）
 | `B` | float | 底宽 (m) |
 | `H_total` | float | 总高 (m) |
 | `H_straight` | float | 直墙高度 (m) |
+| `manual_H_straight` | float / None | 用户输入的直墙高度，留空时为 None |
+| `used_manual_H_straight` | bool | 是否按用户输入固定直墙高度 |
 | `theta_deg` | float | 圆心角 (度) |
 | `HB_ratio` | float | 高宽比 H/B |
 
@@ -414,7 +456,7 @@ V = Q / A       （流速）
 - 断面类型下拉框（ComboBox）切换时动态显示/隐藏对应参数组:
   - 圆形 → `circ_grp`（指定直径 D）
   - 平底圆形 → `flat_bottom_grp`（直径 D + 平底宽 B）
-  - 圆拱直墙型 → `hs_grp`（圆心角 θ + 指定底宽 B）
+  - 圆拱直墙型 → `hs_grp`（圆心角 θ + 指定底宽 B + 可选直墙高度 H直）
   - 马蹄形标准Ⅰ型/Ⅱ型 → `shoe_grp`（指定半径 r）
 - 通用参数始终可见
 - 「考虑加大流量比例系数」CheckBox（`inc_cb`，默认勾选）：勾选时显示流量加大比例输入框和动态提示标签，不勾选时隐藏并以 `manual_increase_percent=0` 传入计算内核
@@ -550,7 +592,7 @@ matplotlib 绘制，1行2列子图:
 - 底板 + 左右直墙开放多段线（`LWPOLYLINE`）
 - 拱部原生圆弧（`ARC`）
 - 水位线 + 标注
-- B/h/H/θ 标注
+- B/H直/h/H/θ 标注
 - 参数文字块
 
 **马蹄形** (`_draw_shoe`):
@@ -610,6 +652,7 @@ matplotlib 绘制，1行2列子图:
 | `calculate_flat_bottom_circular_outputs(D, B, h, n, slope)` | 平底圆形全部水力要素 |
 | `solve_water_depth_flat_bottom_circular(D, B, n, slope, Q_target)` | 平底圆形水深反算 |
 | `quick_calculate_flat_bottom_circular(Q, n, slope_inv, ...)` | **平底圆形一键计算** |
+| `calculate_horseshoe_arch_geometry(B, theta_rad, H_straight=None, H_total=None)` | 圆拱直墙拱半径、拱高、总高与直墙高换算 |
 | `calculate_horseshoe_area(B, H_total, theta_rad, h)` | 圆拱直墙过水面积 |
 | `calculate_horseshoe_perimeter(B, H_total, theta_rad, h)` | 圆拱直墙湿周 |
 | `calculate_horseshoe_total_area(B, H_total, theta_rad)` | 圆拱直墙总面积 |
@@ -644,6 +687,7 @@ quick_calculate_horseshoe(
     v_min: float, v_max: float,
     theta_deg: float = 180.0,
     manual_B: float = None,
+    manual_H_straight: float = None,
     manual_increase_percent: float = None
 ) -> Dict[str, Any]
 
@@ -686,6 +730,8 @@ DIM_INCREMENT = 0.01             # 尺寸搜索步长
 | slope_inv ≤ 0 | 弹出错误提示（不触发 ZeroDivisionError） |
 | v_min ≥ v_max | 弹出错误提示 |
 | 圆拱直墙 θ ∉ [90°, 180°] | 返回 success=False + error_message |
+| 圆拱直墙 H直 < 0 | 返回 success=False + error_message |
+| 圆拱直墙填写 H直 但未填写 B | 返回 success=False + error_message |
 | 马蹄形 section_type ∉ {1, 2} | 返回 success=False + error_message |
 | 输入格式错误（非数字） | ValueError 捕获，提示检查必填参数 |
 
@@ -716,6 +762,11 @@ DIM_INCREMENT = 0.01             # 尺寸搜索步长
 - `tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py` — 单断面页、批量页、参数回填与 Word/TXT 标题链路
 - `tests/test_tunnel_flat_bottom_circular_table3_xxpipe_unit.py` — 表3手工限制与 `xx管` 隧洞摘要链路
 - `tests/test_tunnel_flat_bottom_circle_section_summary_unit.py` — 断面汇总独立分组、标题与配置入口
+- `tests/test_tunnel_arch_manual_wall_height_unit.py` — 圆拱直墙型固定 H直 的内核几何、失败边界和自动模式回归
+- `tests/test_tunnel_arch_wall_height_panel_batch_unit.py` — 单项面板、批量列、参数弹窗和 H直 透传回填
+- `tests/test_tunnel_clearance_sizing_unit.py` — 按加大流量净空比例反推断面尺寸内核、输入边界和校核失败
+- `tests/test_tunnel_clearance_sizing_panel_unit.py` — 隧洞面板入口显示、上下文读取和采用回填
+- `tests/test_tunnel_clearance_sizing_dialog_unit.py` — 弹窗计算成功/失败状态与采用按钮启用规则
 
 ### 12.2 测试组清单
 
@@ -734,14 +785,15 @@ DIM_INCREMENT = 0.01             # 尺寸搜索步长
 | 11 | `test_flow_increase` | 加大流量查表 (19个Q值 + 边界) | ~21 |
 | 12 | `test_boundary_conditions` | 异常输入 (Q=0, n=0, slope=0, θ越界, type=3, h>2r等) | ~15 |
 | 13 | `test_outputs_field_validation` | 圆拱/马蹄形 outputs 字段独立验证 | ~60+ |
-| 14 | `test_manual_params` | manual_increase_percent + manual_B/manual_D/manual_r | ~40+ |
+| 14 | `test_manual_params` | manual_increase_percent + manual_B/manual_H_straight/manual_D/manual_r | ~40+ |
 | 15 | `test_consistency_and_misc` | h_d<h_inc 一致性, design_method非空, R_hyd=A/P, V_inc≥V_d | ~20 |
+| 16 | `test_clearance_sizing` | 圆拱直墙按加大流量净空比例反推断面尺寸、弹窗入口和采用回填 | ~14 |
 
 ### 12.3 测试方法
 
 - **独立验算函数**: 测试文件内有 `_circ_area`, `_circ_perim`, `_manning`, `_hs_area`, `_hs_perim`, `_hs_total_area`, `_shoe_elems` 等独立实现，与被测模块交叉验证
 - **精度要求**: 面积/湿周绝对误差 < 0.001, 流量相对误差 < 2%, 水深反算相对误差 < 1%
-- **运行方式**: `python tests/test_tunnel_kernel.py`
+- **运行方式**: `python tests/test_tunnel_kernel.py`；反推助手补充运行 `pytest tests/test_tunnel_clearance_sizing_unit.py tests/test_tunnel_clearance_sizing_panel_unit.py tests/test_tunnel_clearance_sizing_dialog_unit.py`
 
 ---
 
@@ -806,3 +858,5 @@ from 隧洞设计 import (
 | 2026-02-25 | v1.1 | 新增“考虑加大流量比例系数”CheckBox控件（`inc_cb`，默认勾选）：不勾选时`manual_increase_percent=0`传入计算内核，简要/详细模式均跳过加大流量工况段落，验证结果仅使用设计流量数据。涉及文件：tunnel/panel.py |
 | 2026-04-13 | v1.3 | 完成 `平底圆形` 隧洞断面全链路收口：表1参数弹窗回填与提示文案、单断面多工况与 Word/TXT 标题、DXF 总高一致性、表3手工输入拦截、`xx管` 隧洞摘要、断面汇总独立分组和对应测试全部补齐；表3继续只允许来源带入、不开放手动新选。 |
 | 2026-04-14 | v1.4 | 文档口径同步：明确 `暗涵-圆拱直墙型` 不属于隧洞模块，只能复用圆拱直墙几何，不能复用隧洞约束、`xx管` 隧洞摘要或隧洞导出标题。 |
+| 2026-04-29 | v1.5 | `隧洞-圆拱直墙型` 支持可选 `直墙高度 H直`：留空自动推导，填写时按用户输入固定几何；单项、批量、Excel 模板、共享结果、表3和 DXF/报告同步保留来源说明。 |
+| 2026-04-30 | v1.6 | `隧洞-圆拱直墙型` 新增按加大流量目标净空比例反推尺寸弹窗；弹窗只回填当前工况 `θ / B / H直`，不改变主计算、批量、Excel 或导出链路。 |
