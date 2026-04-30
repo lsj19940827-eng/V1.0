@@ -202,6 +202,53 @@ def arch_half_width(geom, h):
     return math.sqrt(max(0.0, geom["R_arch"] ** 2 - dy ** 2))
 
 
+def build_arch_water_fill_polygon(geom, h, samples=80):
+    """构造圆拱直墙型指定水深的水域填充多边形。"""
+    h_clamped = _clamp(h, 0.0, geom["H_total"])
+    if h_clamped <= _EPS:
+        return [], []
+
+    half = geom["B"] / 2.0
+    h_straight = geom["H_straight"]
+    if h_clamped <= h_straight + _EPS:
+        return [-half, -half, half, half], [0.0, h_clamped, h_clamped, 0.0]
+
+    sample_count = max(int(samples), 8)
+    sin_value = _clamp((h_clamped - geom["center_y"]) / geom["R_arch"], -1.0, 1.0)
+    right_angle = math.asin(sin_value)
+    left_angle = math.pi - right_angle
+
+    right_arc_count = max(sample_count // 2, 4)
+    left_arc_count = max(sample_count - right_arc_count, 4)
+    right_step = (right_angle - geom["start_angle"]) / (right_arc_count - 1)
+    left_step = (geom["end_angle"] - left_angle) / (left_arc_count - 1)
+
+    points = [(-half, 0.0), (half, 0.0), (half, h_straight)]
+
+    # 先沿右侧圆拱到水面，再沿水面到左侧，最后沿左侧圆拱和直墙回到底部。
+    for idx in range(1, right_arc_count):
+        angle = geom["start_angle"] + right_step * idx
+        points.append(
+            (
+                geom["R_arch"] * math.cos(angle),
+                geom["center_y"] + geom["R_arch"] * math.sin(angle),
+            )
+        )
+    points.append((-arch_half_width(geom, h_clamped), h_clamped))
+    for idx in range(1, left_arc_count):
+        angle = left_angle + left_step * idx
+        points.append(
+            (
+                geom["R_arch"] * math.cos(angle),
+                geom["center_y"] + geom["R_arch"] * math.sin(angle),
+            )
+        )
+    points.append((-half, h_straight))
+
+    cleaned = dedupe_points(points)
+    return [point[0] for point in cleaned], [point[1] for point in cleaned]
+
+
 def build_standard_horseshoe_geometry(section_type, r):
     """构造标准马蹄形的真实圆弧几何。"""
     if section_type == HORSESHOE_STD_TYPE_1:

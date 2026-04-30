@@ -2,11 +2,13 @@
 """测试圆拱直墙型按净空反推尺寸弹窗本体。"""
 
 import importlib
+import math
 import os
 import sys
 import tempfile
 from pathlib import Path
 
+import pytest
 from PySide6.QtWidgets import QApplication, QWidget
 
 
@@ -81,4 +83,35 @@ def test_clearance_sizing_dialog_keeps_apply_disabled_on_invalid_input(monkeypat
     assert dialog.apply_btn.isEnabled() is False
     assert dialog.result_payload is None
     assert "高宽比" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_clearance_sizing_dialog_preview_fill_follows_arch_wall_outline(monkeypatch):
+    """断面预览水域进入拱部时，填充区域仍应贴到直墙边界。"""
+    dialog = _new_dialog(monkeypatch)
+    result = {
+        "B": 2.988,
+        "H_total": 3.585,
+        "h_increased": 2.623,
+        "theta_deg": 180.0,
+    }
+
+    dialog._draw_preview(result)
+
+    ax = dialog.figure.axes[0]
+    if ax.patches:
+        fill_vertices = ax.patches[0].get_xy()
+    else:
+        fill_vertices = ax.collections[0].get_paths()[0].vertices
+    fill_max_half_width = max(abs(point[0]) for point in fill_vertices)
+    blue_lines = [line for line in ax.lines if line.get_color() == "#0284C7"]
+    waterline_half_width = max(abs(x) for x in blue_lines[0].get_xdata())
+    half_bottom_width = result["B"] / 2.0
+    radius = half_bottom_width / math.sin(math.radians(result["theta_deg"]) / 2.0)
+    h_arch = radius * (1.0 - math.cos(math.radians(result["theta_deg"]) / 2.0))
+    h_straight = result["H_total"] - h_arch
+
+    assert result["h_increased"] > h_straight
+    assert waterline_half_width < half_bottom_width
+    assert fill_max_half_width == pytest.approx(half_bottom_width, abs=1e-6)
     dialog.close()

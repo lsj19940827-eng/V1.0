@@ -38,6 +38,11 @@ from app_渠系计算前端.styles import (
     T2,
     W,
 )
+from app_渠系计算前端.tunnel.geometry import (
+    arch_half_width,
+    build_arch_geometry,
+    build_arch_water_fill_polygon,
+)
 
 try:
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -367,16 +372,15 @@ class HorseshoeClearanceSizingDialog(QDialog):
             self._draw_empty_preview()
             return
 
-        half = B / 2.0
-        radius = (B / 2.0) / math.sin(theta / 2.0)
-        h_arch = radius * (1.0 - math.cos(theta / 2.0))
-        h_straight = max(0.0, H - h_arch)
-        center_y = h_straight - radius * math.cos(theta / 2.0)
-        start = math.pi / 2.0 - theta / 2.0
-        end = math.pi / 2.0 + theta / 2.0
-        arc_t = [start + (end - start) * i / 80 for i in range(81)]
-        arc_x = [radius * math.cos(t) for t in arc_t]
-        arc_y = [center_y + radius * math.sin(t) for t in arc_t]
+        geom = build_arch_geometry(B, H, theta)
+        half = geom["B"] / 2.0
+        h_straight = geom["H_straight"]
+        arc_t = [
+            geom["start_angle"] + (geom["end_angle"] - geom["start_angle"]) * i / 80
+            for i in range(81)
+        ]
+        arc_x = [geom["R_arch"] * math.cos(t) for t in arc_t]
+        arc_y = [geom["center_y"] + geom["R_arch"] * math.sin(t) for t in arc_t]
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
@@ -384,14 +388,10 @@ class HorseshoeClearanceSizingDialog(QDialog):
         ax.plot(arc_x, arc_y, color="#1F2937", linewidth=1.8)
 
         water_y = min(max(h, 0.0), H)
-        water_half = self._half_width(B, H, theta, water_y)
-        ax.fill_between(
-            [-water_half, water_half],
-            [0, 0],
-            [water_y, water_y],
-            color="#BEE3F8",
-            alpha=0.45,
-        )
+        water_half = arch_half_width(geom, water_y)
+        fill_x, fill_y = build_arch_water_fill_polygon(geom, water_y)
+        if fill_x and fill_y:
+            ax.fill(fill_x, fill_y, color="#BEE3F8", alpha=0.45)
         ax.plot([-water_half, water_half], [water_y, water_y], color="#0284C7", linewidth=1.5)
         ax.set_aspect("equal", adjustable="box")
         pad = max(B, H) * 0.12
@@ -399,18 +399,6 @@ class HorseshoeClearanceSizingDialog(QDialog):
         ax.set_ylim(-pad * 0.35, H + pad)
         ax.set_axis_off()
         self.canvas.draw_idle()
-
-    def _half_width(self, B, H, theta, h):
-        """计算指定水深处半宽，用于预览水位线。"""
-        half = B / 2.0
-        radius = (B / 2.0) / math.sin(theta / 2.0)
-        h_arch = radius * (1.0 - math.cos(theta / 2.0))
-        h_straight = max(0.0, H - h_arch)
-        if h <= h_straight:
-            return half
-        center_y = h_straight - radius * math.cos(theta / 2.0)
-        dy = h - center_y
-        return math.sqrt(max(0.0, radius * radius - dy * dy))
 
     def _accept_result(self):
         """采用当前结果并关闭弹窗。"""
