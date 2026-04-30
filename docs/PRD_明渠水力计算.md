@@ -1,6 +1,6 @@
 # 明渠水力计算模块 — 产品需求文档 (PRD)
 
-> **版本**: v1.3  
+> **版本**: v1.5
 > **创建日期**: 2026-02-22  
 > **最后更新**: 2026-04-30
 > **状态**: 已实现（完成度 100%，含 U形 / 复式梯形）
@@ -58,6 +58,13 @@
 - 多工况仍按每个工况独立显示汇总，原有工况快捷导航继续定位到对应工况结果块。
 - Word 报告在每个工况计算过程前新增同口径“重点结果汇总”表；计算公式、DXF、批量计算和既有结果精度不变。
 
+## 当前实现同步说明（2026-04-30，工况对比）
+
+- 明渠设计右侧输出区统一为“计算结果 / 断面图 / 工况对比”三个页签，计算完成后仍默认回到“计算结果”页。
+- “工况对比”只复用已有 `all_results`，不重新计算；只列成功工况，参数变更后清空表格并提示重新计算。
+- 对比表拆为“水力结果对比表”和“结构尺寸对比表”；结构尺寸表展开 `底宽/主宽 B`、`渠道高度 H`、`直径 D`、`半径 R`、`边坡 m`、`圆心角 θ`，并完整展开复式梯形 `m1 / B1 / m2 / B2 / m3 / h1`。
+- 单工况和多工况 DXF 均在断面图下方追加两张对比表；Word 报告在逐工况详细过程前先写两张总体对比表。
+
 ---
 
 ## 二、文件结构
@@ -69,9 +76,11 @@ calc_渠系计算算法内核/
 app_渠系计算前端/
   ├── dxf_common.py            # 断面 DXF 共享图层 / 偏移 / 网格布局工具
   ├── dxf_multi_export.py      # 多工况 DXF 导出弹窗与合并导出工具
+  ├── section_comparison.py     # 四类设计面板工况对比双表共享框架
   └── open_channel/
       ├── __init__.py           # 模块声明
       ├── panel.py              # UI面板（1341行）
+      ├── comparison.py         # 明渠工况对比字段映射
       └── dxf_export.py         # DXF导出（388行）
 ```
 
@@ -80,8 +89,9 @@ app_渠系计算前端/
 | 文件 | 职责 | 依赖 |
 |------|------|------|
 | `明渠设计.py` | 纯计算引擎，无UI依赖 | `math`, `dataclasses`, `typing`, `enum` |
-| `panel.py` | PySide6 UI面板 | `明渠设计.py`, `styles.py`, `export_utils.py`, `formula_renderer.py`, `dxf_export.py` |
-| `dxf_export.py` | DXF断面图导出 | `math`, `ezdxf`（运行时导入） |
+| `panel.py` | PySide6 UI面板 | `明渠设计.py`, `styles.py`, `export_utils.py`, `formula_renderer.py`, `dxf_export.py`, `comparison.py`, `section_comparison.py` |
+| `comparison.py` | 明渠工况对比字段映射 | `section_comparison.py` |
+| `dxf_export.py` | DXF断面图导出 | `math`, `ezdxf`（运行时导入）, `section_comparison.py` |
 
 ### 2.2 共享模块依赖
 
@@ -457,7 +467,8 @@ QHBoxLayout
 │
 └── 右侧：QTabWidget
     ├── Tab "计算结果" — QWebEngineView（KaTeX公式渲染）
-    └── Tab "断面图" — matplotlib Figure + NavigationToolbar
+    ├── Tab "断面图" — matplotlib Figure + NavigationToolbar
+    └── Tab "工况对比" — 水力结果对比表 + 结构尺寸对比表
 ```
 
 ### 5.2 断面类型切换逻辑
@@ -601,6 +612,7 @@ QHBoxLayout
 - 当最终有效工况数大于 1 时，输出 1 个合并 DXF，自动按网格排版：`ncols = ceil(sqrt(n))`、`nrows = ceil(n / ncols)`，按从左到右、从上到下摆放。
 - 合并 DXF 为每个工况附加独立图层前缀，例如 `工况1_轮廓线`、`工况1_设计水位`，并在图内标题显示 `工况 N｜{标签}`。
 - 无效工况定义为：无计算结果、计算失败、或当前面板 `_results_dirty=True`；批量导出时会自动跳过，并在完成后汇总提示。
+- 单工况和多工况 DXF 都会在断面图网格下方追加“水力结果对比表”和“结构尺寸对比表”，表格内容与界面“工况对比”同源。
 
 ### 6.4 图形内容
 
@@ -650,6 +662,9 @@ QHBoxLayout
 │   ├── 水力半径公式
 │   └── 流速公式
 ├── 二、计算过程（纯文本 → styled Word段落）
+│   ├── 工况对比：水力结果对比表
+│   ├── 工况对比：结构尺寸对比表
+│   └── 各工况详细计算过程
 ├── 三、断面方案对比（附录E表格，仅梯形/矩形）
 └── 四、断面图（matplotlib截图嵌入，14cm宽）
 ```
@@ -819,3 +834,4 @@ design_channel(SectionType.U_SECTION,   Q=2.0,  n=0.014, slope_inv=3000, v_min=0
 | v1.2 | 2026-02-25 | 新增“考虑加大流量比例系数”CheckBox控件（`inc_cb`，默认勾选）：不勾选时`manual_increase_percent=0`传入计算内核，简要/详细模式均跳过加大流量工况段落，验证结果仅使用设计流量数据。Bug修复：`quick_calculate_trapezoidal`结果字典新增`result['m'] = m`，修复水面线计算中梯形断面边坡系数丢失问题。涉及文件：明渠设计.py、open_channel/panel.py、batch/panel.py |
 | v1.3 | 2026-03-22 | DXF 多工况导出改造：当前工况固定取左侧工况标签 `_current_case_idx`；新增共享 DXF 范围弹窗（当前 / 勾选 / 全部）；支持多个工况合并导出为 1 个 DXF，自动网格排版并为每个工况追加图层前缀；无效工况自动跳过并汇总提示。涉及文件：open_channel/panel.py、open_channel/dxf_export.py、dxf_common.py、dxf_multi_export.py |
 | v1.4 | 2026-04-09 | 新增复式梯形明渠断面。改动点：(1)明渠设计.py 新增 `SectionType.COMPOUND_TRAPEZOIDAL`、复式梯形分段面积/湿周/水面宽/流量/反算水深与 `quick_calculate_compound_trapezoidal`；(2)open_channel/panel.py 新增 6 个固定参数输入、帮助页、结果文本、断面图与 Word 公式；(3)open_channel/dxf_export.py 新增 `B1 / B2 / h1` 与 `1:m1 / 1:m2 / 1:m3` 标注；(4)batch/panel.py 新增 `明渠-复式梯形` 批量链路；(5)推求水面线最小兼容与相关单元测试补齐。 |
+| v1.5 | 2026-04-30 | 新增明渠“工况对比”双表：界面、单/多工况 DXF 和 Word 报告均输出水力结果对比表与结构尺寸对比表；复式梯形 6 个固定参数在结构尺寸表中完整展开；参数变更后清空旧对比并提示重新计算。 |

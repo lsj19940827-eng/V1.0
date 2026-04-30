@@ -19,6 +19,8 @@ from app_渠系计算前端.dxf_common import (
     ensure_tracked_msp,
     setup_section_dxf_document,
 )
+from app_渠系计算前端.section_comparison import draw_section_comparison_tables
+from app_渠系计算前端.open_channel.comparison import OPEN_CHANNEL_COMPARISON_SPEC
 
 
 def _increase_lines(params, result):
@@ -74,6 +76,19 @@ def draw_open_channel_dxf_on_msp(
     if title:
         add_case_title(tracked_msp, title)
     return tracked_msp.size()
+
+
+def draw_open_channel_comparison_table(doc, msp, case_entries, origin_x=0.0, origin_y=0.0):
+    """绘制明渠工况对比两张附表。"""
+    return draw_section_comparison_tables(
+        doc,
+        msp,
+        case_entries,
+        OPEN_CHANNEL_COMPARISON_SPEC,
+        origin_x,
+        origin_y,
+        overall_title="明渠多工况参数对比表",
+    )
 
 
 # ============================================================

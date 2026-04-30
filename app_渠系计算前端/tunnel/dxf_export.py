@@ -18,9 +18,11 @@ from app_渠系计算前端.dxf_common import (
 )
 from app_渠系计算前端.tunnel.comparison import (
     TUNNEL_COMPARISON_COLUMNS,
+    TUNNEL_COMPARISON_SPEC,
     build_tunnel_comparison_rows,
     format_comparison_cell,
 )
+from app_渠系计算前端.section_comparison import draw_section_comparison_tables
 
 
 def _increase_lines(params, result):
@@ -153,91 +155,16 @@ def _add_table_text(msp, text, cx, cy, height, layer="参数文字"):
 
 
 def draw_tunnel_comparison_table(doc, msp, case_entries, origin_x=0.0, origin_y=0.0):
-    """绘制隧洞多工况参数对比表，返回表格总高度。"""
-    ensure_section_dxf_layers(doc)
-    rows = build_tunnel_comparison_rows(case_entries)
-    if not rows:
-        return 0.0
-
-    title_h = 9.0
-    header_h = 10.0
-    row_h = 7.0
-    title_text_h = 5.0
-    text_h = 3.2
-    columns = list(TUNNEL_COMPARISON_COLUMNS)
-    widths = [_comparison_auto_col_width(column, rows, text_h) for column in columns]
-    table_w = sum(widths)
-    table_h = title_h + header_h + row_h * len(rows)
-    x_left = float(origin_x)
-    y_top = float(origin_y)
-    y_title_bottom = y_top - title_h
-    y_header_bottom = y_title_bottom - header_h
-    y_bottom = y_top - table_h
-
-    # 外框和横线
-    x_right = x_left + table_w
-    for y in (y_top, y_title_bottom, y_header_bottom, y_bottom):
-        msp.add_line((x_left, y), (x_right, y), dxfattribs={"layer": "参数文字"})
-    msp.add_line((x_left, y_top), (x_left, y_bottom), dxfattribs={"layer": "参数文字"})
-    msp.add_line((x_right, y_top), (x_right, y_bottom), dxfattribs={"layer": "参数文字"})
-
-    # 数据行横线
-    for idx in range(1, len(rows)):
-        y = y_header_bottom - row_h * idx
-        msp.add_line((x_left, y), (x_right, y), dxfattribs={"layer": "参数文字"})
-
-    # 标题
-    _add_table_text(
+    """绘制隧洞工况对比两张附表，保留旧入口名称。"""
+    return draw_section_comparison_tables(
+        doc,
         msp,
-        "隧洞多工况参数对比表",
-        x_left + table_w / 2.0,
-        y_top - title_h / 2.0,
-        title_text_h,
+        case_entries,
+        TUNNEL_COMPARISON_SPEC,
+        origin_x,
+        origin_y,
+        overall_title="隧洞多工况参数对比表",
     )
-
-    # 列线和表头
-    x = x_left
-    for col_idx, column in enumerate(columns):
-        width = widths[col_idx]
-        if col_idx > 0:
-            msp.add_line((x, y_title_bottom), (x, y_bottom), dxfattribs={"layer": "参数文字"})
-        header_lines = _comparison_header_lines(column)
-        if len(header_lines) == 1:
-            _add_table_text(
-                msp,
-                header_lines[0],
-                x + width / 2.0,
-                y_title_bottom - header_h / 2.0,
-                text_h,
-            )
-        else:
-            _add_table_text(
-                msp,
-                header_lines[0],
-                x + width / 2.0,
-                y_title_bottom - header_h * 0.35,
-                text_h,
-            )
-            _add_table_text(
-                msp,
-                header_lines[1],
-                x + width / 2.0,
-                y_title_bottom - header_h * 0.70,
-                text_h,
-            )
-        x += width
-
-    # 数据
-    for row_idx, row in enumerate(rows):
-        y_center = y_header_bottom - row_h * row_idx - row_h / 2.0
-        x = x_left
-        for col_idx, column in enumerate(columns):
-            width = widths[col_idx]
-            value = format_comparison_cell(row.get(column.key), column.digits)
-            _add_table_text(msp, value, x + width / 2.0, y_center, text_h)
-            x += width
-
-    return table_h
 
 
 def _scale_point(point, sf):

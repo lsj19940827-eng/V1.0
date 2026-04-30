@@ -13,6 +13,8 @@ from app_渠系计算前端.dxf_common import (
     ensure_tracked_msp,
     setup_section_dxf_document,
 )
+from app_渠系计算前端.section_comparison import draw_section_comparison_tables
+from app_渠系计算前端.culvert.comparison import CULVERT_COMPARISON_SPEC
 from app_渠系计算前端.tunnel.geometry import (
     arch_half_width,
     build_arch_geometry,
@@ -74,6 +76,19 @@ def draw_culvert_dxf_on_msp(
     if title:
         add_case_title(tracked_msp, title)
     return tracked_msp.size()
+
+
+def draw_culvert_comparison_table(doc, msp, case_entries, origin_x=0.0, origin_y=0.0):
+    """绘制暗涵工况对比两张附表。"""
+    return draw_section_comparison_tables(
+        doc,
+        msp,
+        case_entries,
+        CULVERT_COMPARISON_SPEC,
+        origin_x,
+        origin_y,
+        overall_title="暗涵多工况参数对比表",
+    )
 
 
 def _draw_rect_culvert(msp, result, p, sf=1.0, scale_denom=100):

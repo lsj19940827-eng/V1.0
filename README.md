@@ -6,8 +6,8 @@
 当前版本的明渠模块已经补齐 `复式梯形` 断面，支持在明渠设计面板中直接输入 `m1 / B1 / m2 / B2 / m3 / h1` 六个固定参数完成计算，并把同一断面同步带到批量计算和推求水面线兼容链路。
 当前版本的隧洞模块已经完整补齐 `平底圆形` 断面：单断面页可直接输入 `直径 D + 平底宽 B` 计算，表1批量、共享结果、表3导入复算、DXF/Word/TXT、`xx管` 隧洞摘要和断面汇总都会同步识别 `D / B / H_total`；表3继续只允许来源带入，不允许手工新建该类型。
 当前版本的 `隧洞-圆拱直墙型` 支持 `底宽 B + 直墙高度 H直 + 圆心角 θ`：`H直` 留空时沿用自动搜索并说明推导公式，填写时固定几何并同步到单项、表1批量、Excel 模板、表3和导出；隧洞设计面板里还提供“按净空反推尺寸”弹窗，可按 `Q加大 / 目标净空比例 / H/B / θ` 反推当前工况可采用的 `B、H_total、H直`。
-当前版本的隧洞设计面板新增“工况对比”：完成多个工况计算后，可在同一表格里查看不同流量下的水深、流速和洞身关键尺寸；多工况 DXF 导出会在断面图网格下方追加“隧洞多工况参数对比表”，其中周长和断面积固定采用完整洞身几何口径。
-当前版本的 DXF 中文文字宽度因子默认统一为 `0.7`；隧洞多工况参数对比表会按表头和内容自动放宽列宽，DXF 表头里的流量、面积单位使用 CAD MTEXT 上标控制码显示为 `m³/s`、`m²`，避免单位乱码和文字压出单元格。
+当前版本的明渠、渡槽、隧洞、暗涵设计面板统一新增“工况对比”：完成计算后，右侧会用“水力结果对比表 + 结构尺寸对比表”横向汇总成功工况；隧洞原有单表也已拆成双表，周长和断面积继续按完整洞身几何口径统计。
+当前版本的 DXF 中文文字宽度因子默认统一为 `0.7`；四类设计面板的单工况和多工况 DXF 都会在断面图下方追加两张同口径对比表，表头里的流量、面积单位使用 CAD MTEXT 上标控制码显示为 `m³/s`、`m²`，避免单位乱码和文字压出单元格。
 当前版本已把“矩形暗涵设计”升级为“暗涵设计”家族：标准类型为 `暗涵-矩形` 与 `暗涵-圆拱直墙型`，旧 `矩形暗涵 / 矩形暗渠 / 暗渠` 继续兼容到 `暗涵-矩形`；圆拱直墙型暗涵也支持可选 `H直`，留空自动推导，填写时固定几何，但仍走暗涵净空、表1/表3、渐变段和导出口径，不走隧洞规则。
 当前仓库重点包含表3水面线计算、渐变段联动、倒虹吸/有压管道结果回写，以及连续承压线路的“整线纵断面 + 中心线高程导出 + 整线弹窗”规则。
 当前版本已把有压管道弹窗里的水击验算收口为“先判别水击类型并形成最高/最低压力水头线，再分别做承压和负压校核”：系统把连续有压段视为一条串联管线，`Ts` 表示末端阀门启闭时间；未免验算时按等价 `L / am / vm` 判别直接水击、一相水击和末相水击，形成 `Hmax / Hmin`。默认允许压力为 `1.0 MPa`，换算为 `101.9368m` 允许压力水头；承压按管底 `Hmax - Zc + D/2` 校核，负压/满管按管顶 `Hmin - Zc - D/2` 校核。水击波速按 GB/T 公式引入管材系数 `cp`，钢筋混凝土管和 PCCP 管有 `a0` 时按公式折算，未填 `a0` 时按 `cp=1` 简化计算并提示。沿线采样只是检查整条管线各处承压或管顶负压风险，不表示每个采样点都有阀门；结果只在弹窗里并列展示和保存，不参与表3主水位、水头损失和累计损失递推。
@@ -63,10 +63,11 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 计算内核：Python 纯计算模块，主要代码在 `推求水面线/`、`calc_渠系计算算法内核/`。
 - 有压管道结果展示：`推求水面线/utils/pressure_pipe_result_helpers.py` 负责把记录拆成正式计入、参考结果和失败记录；`app_渠系计算前端/water_profile/panel.py` 负责在结果弹窗中分区展示，并只把正式计入记录回写表3。
 - 重点结果汇总：`app_渠系计算前端/result_summary.py` 负责把明渠、渡槽、隧洞、暗涵的计算结果整理成界面顶部汇总卡和 Word 汇总表；四个面板复用同一套数据口径，有压管道不走这个模块。
-- 明渠断面：`calc_渠系计算算法内核/明渠设计.py` 统一承接梯形、复式梯形、矩形、圆形、U 形；`app_渠系计算前端/open_channel/` 负责单断面设计页与 DXF/Word 导出；`app_渠系计算前端/batch/panel.py` 负责批量页与 Excel。
-- 渡槽断面：`calc_渠系计算算法内核/渡槽设计.py` 负责 U 形和矩形渡槽计算，支持可选 `tie_rod_height`；`app_渠系计算前端/aqueduct/` 负责单项输入、多工况、结果说明、断面图和 DXF 导出；`app_渠系计算前端/batch/panel.py` 负责批量 Excel 列和共享结果。
-- 隧洞断面：`calc_渠系计算算法内核/隧洞设计.py` 统一承接圆形、平底圆形、圆拱直墙型与马蹄形；圆拱直墙型支持可选 `manual_H_straight`，留空自动推导，填写后按固定 `H直` 核算，并提供按加大流量目标净空面积比反推 `B / H直 / θ` 的独立内核函数；`app_渠系计算前端/tunnel/geometry.py` 作为共享几何真源，给隧洞面板绘图、DXF、批量结果和表3复算共用；`app_渠系计算前端/tunnel/comparison.py` 负责把多工况结果整理成界面和 DXF 共用的参数对比表。
-- 暗涵断面：既有 `calc_渠系计算算法内核/矩形暗涵设计.py` 与 `app_渠系计算前端/culvert/` 继续承接 `暗涵-矩形`；`暗涵-圆拱直墙型` 复用圆拱几何、分叉暗涵规则，支持可选 `manual_H_straight`，并保留 `B / H_straight / H_total / theta_deg` 进入共享结果、表3和导出链路。
+- 工况对比框架：`app_渠系计算前端/section_comparison.py` 负责四类设计面板的双表列定义、数字格式、成功工况过滤、复制到 Excel、DXF 附表和 Word 对比表输出；各面板只提供自己的字段映射。
+- 明渠断面：`calc_渠系计算算法内核/明渠设计.py` 统一承接梯形、复式梯形、矩形、圆形、U 形；`app_渠系计算前端/open_channel/` 负责单断面设计页、工况对比与 DXF/Word 导出；`app_渠系计算前端/batch/panel.py` 负责批量页与 Excel。
+- 渡槽断面：`calc_渠系计算算法内核/渡槽设计.py` 负责 U 形和矩形渡槽计算，支持可选 `tie_rod_height`；`app_渠系计算前端/aqueduct/` 负责单项输入、多工况、工况对比、结果说明、断面图和 DXF 导出；`app_渠系计算前端/batch/panel.py` 负责批量 Excel 列和共享结果。
+- 隧洞断面：`calc_渠系计算算法内核/隧洞设计.py` 统一承接圆形、平底圆形、圆拱直墙型与马蹄形；圆拱直墙型支持可选 `manual_H_straight`，留空自动推导，填写后按固定 `H直` 核算，并提供按加大流量目标净空面积比反推 `B / H直 / θ` 的独立内核函数；`app_渠系计算前端/tunnel/geometry.py` 作为共享几何真源，给隧洞面板绘图、DXF、批量结果和表3复算共用；`app_渠系计算前端/tunnel/comparison.py` 负责把多工况结果整理成双表对比行。
+- 暗涵断面：既有 `calc_渠系计算算法内核/矩形暗涵设计.py` 与 `app_渠系计算前端/culvert/` 继续承接 `暗涵-矩形`；`暗涵-圆拱直墙型` 复用圆拱几何、分叉暗涵规则，支持可选 `manual_H_straight`，并保留 `B / H_straight / H_total / theta_deg` 进入共享结果、工况对比、表3和导出链路。
 - 专项模块：`倒虹吸水力计算系统/`、`有压管道/` 提供专项计算能力。
 - 倒虹吸交互：`app_渠系计算前端/siphon/panel.py` 统一负责 `D` 实时显示、指定管径生效后的实际流速反算、取消指定后的拟定流速恢复、工况内确认态隔离，以及倒虹吸手工局部系数的保存/恢复、来源索引回填、未采用提示；现在界面上方 `ξ₁ / ξ₂` 明确只表示渐变段系数，结构段表里的进水口/出水口系数只作为构件局部损失进入 `ΔZ2`；旧项目在唯一可恢复时会自动补回 `source_ip_index / source_long_node_index`，无法唯一恢复时会回退自动值并说明原因；`app_渠系计算前端/siphon/multi_siphon_dialog.py` 与 `推求水面线/managers/siphon_manager.py` 负责单页/多页配置保存与本次运行内的自动确认衔接。
 - 加大流量输入：`app_渠系计算前端/increase_input_helper.py` 统一负责“按比例 / 按Q加大”的换算、空值规则、灰色提示文案和结果摘要；6 个设计面板都复用这套 helper，并继续把内核输入收口到原有比例参数。
@@ -106,6 +107,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 
 - 运行针对性测试：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_external_head_loss_unit.py -q`
 - 运行界面口径测试：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py -q`
+- 运行本次四类工况对比回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_tunnel_comparison_unit.py tests/test_tunnel_dxf_export_unit.py tests/test_open_channel_comparison_unit.py tests/test_aqueduct_comparison_unit.py tests/test_culvert_comparison_unit.py tests/test_section_comparison_output_unit.py tests/test_section_comparison_panel_wiring_unit.py tests/test_multi_case_dxf_export_unit.py tests/test_formula_renderer_result_pages_unit.py tests/test_result_summary_unit.py -q`
 - 运行本次相关回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_external_head_loss_unit.py tests/test_pressure_pipe_loss_formula_dialog_unit.py tests/test_channel_level_options_unit.py tests/test_pressure_pipe_preprocessing_unit.py tests/test_water_profile_coord_precision_unit.py tests/test_water_profile_loss_dialog_alignment_unit.py tests/test_water_profile_transition_ready_unit.py -q`
 - 运行“按Q加大输入”面板回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_increase_input_mode_panels_unit.py -q`
 - 运行回补 patch 相关回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_backfill_patch_release_unit.py tests/test_build_patch_floor_unit.py tests/test_updater_versioning_unit.py tests/test_updater_install_flow_unit.py tests/test_release_snapshot_unit.py -q`
@@ -141,6 +143,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 
 ## 搜索记录
 
+- 2026-04-30：本次为明渠、渡槽、隧洞、暗涵统一新增“工况对比”双表，并接入界面、DXF 和 Word；README 已有搜索记录，继续基于仓库现有隧洞对比、结果汇总和导出链路实现，未重复执行 skills.sh 或 GitHub 外部方案搜索。
 - 2026-04-30：本次修复隧洞多工况 DXF 对比表文字溢出和上标单位乱码，README 已有搜索记录，继续基于仓库现有 DXF 字体样式和表格绘制逻辑实现，未重复执行 skills.sh 或 GitHub 外部方案搜索。
 - 2026-04-30：本次为既有隧洞设计面板新增多工况参数对比与 DXF 附表，README 已有搜索记录，继续基于仓库现有隧洞面板、几何 helper 和多工况 DXF 导出实现，未重复执行 skills.sh 或 GitHub 外部方案搜索。
 - 2026-04-30：本次为既有渡槽模块新增拉杆高度口径，README 已有搜索记录，继续基于仓库现有渡槽内核、单项面板、批量 Excel 和 DXF 导出实现，未重复执行 skills.sh 或 GitHub 外部方案搜索。
@@ -175,8 +178,8 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 明渠设计面板已新增“复式梯形”断面，支持 6 个固定几何参数、分段公式、断面图、DXF 和 Word 导出。
 - 隧洞圆拱直墙型已支持可选 `H直`：单项和批量都可填写，留空自动推导，填写后固定几何核算，并在结果和导出里说明来源。
 - 隧洞圆拱直墙型已新增“按净空反推尺寸”弹窗：用户输入 `Q加大 / 目标净空比例 / H/B / θ` 后，系统可反推并校核 `B、H_total、H直`，通过后只回填当前工况的普通参数，不自动触发主计算。
-- 隧洞设计面板已新增“工况对比”页签：单工况显示一行，多工况可横向比较设计/加大水深、流速和洞身尺寸；多工况 DXF 会在断面图后追加同口径参数对比表。
-- DXF 文字默认宽度因子已统一为 `0.7`；隧洞多工况参数对比表会自动适配列宽，并在 DXF 表头中使用 CAD MTEXT 上标控制码显示 `m³/s`、`m²`。
+- 明渠、渡槽、隧洞、暗涵设计面板已统一新增“工况对比”页签：单工况和多工况都会拆成“水力结果对比表”和“结构尺寸对比表”，只列成功工况，参数变更后提示重新计算。
+- DXF 文字默认宽度因子已统一为 `0.7`；四类设计面板的单工况和多工况 DXF 都会在断面图下方追加两张对比表，并在 DXF 表头中使用 CAD MTEXT 上标控制码显示 `m³/s`、`m²`。
 - 暗涵圆拱直墙型已支持可选 `H直`：交互与隧洞对齐，留空自动推导，填写后固定几何核算；校核和导出仍按暗涵规则执行。
 - 倒虹吸面板已把 `D` 行改成实时显示：普通模式下即时展示 `D设计 / D理论`，多管并联额外展示“每管Q”；指定管径生效后展示“采用D / 实际流速”，拟定流速框切为灰色只读，取消指定后恢复原拟定流速和原确认态；工况确认态按工况在本次运行内分别记忆，重启后清空。
 - 明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道 6 个设计面板已统一支持“按比例 / 按Q加大”二选一输入；`按比例` 可留空自动查表，`按Q加大` 必须输入加大后的总流量且大于设计流量；旧工程默认仍按比例回显，多工况复制、恢复和导出说明会一起带上新模式和值。

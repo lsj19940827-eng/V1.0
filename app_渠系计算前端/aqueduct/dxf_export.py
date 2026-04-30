@@ -13,6 +13,8 @@ from app_渠系计算前端.dxf_common import (
     ensure_tracked_msp,
     setup_section_dxf_document,
 )
+from app_渠系计算前端.section_comparison import draw_section_comparison_tables
+from app_渠系计算前端.aqueduct.comparison import AQUEDUCT_COMPARISON_SPEC
 
 
 def _increase_lines(params, result):
@@ -100,6 +102,19 @@ def draw_aqueduct_dxf_on_msp(
     if title:
         add_case_title(tracked_msp, title)
     return tracked_msp.size()
+
+
+def draw_aqueduct_comparison_table(doc, msp, case_entries, origin_x=0.0, origin_y=0.0):
+    """绘制渡槽工况对比两张附表。"""
+    return draw_section_comparison_tables(
+        doc,
+        msp,
+        case_entries,
+        AQUEDUCT_COMPARISON_SPEC,
+        origin_x,
+        origin_y,
+        overall_title="渡槽多工况参数对比表",
+    )
 
 
 def _draw_u(msp, result, p, sf=1.0, scale_denom=100):

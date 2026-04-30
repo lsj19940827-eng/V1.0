@@ -360,3 +360,38 @@ def export_combined_case_dxf(
 
     doc.saveas(normalized_path)
     return normalized_path
+
+
+def export_single_case_dxf(
+    filepath: str,
+    case_entry: DxfExportCaseEntry,
+    scale_denom: int,
+    draw_case: Callable,
+    draw_summary_table: Callable | None = None,
+):
+    """导出单工况 DXF，并可在断面图下方追加对比表。"""
+    try:
+        import ezdxf
+    except ImportError:
+        raise ImportError("需要安装 ezdxf 库: pip install ezdxf")
+
+    normalized_path = filepath if str(filepath).lower().endswith(".dxf") else f"{filepath}.dxf"
+    doc = ezdxf.new("R2010")
+    setup_section_dxf_document(doc, scale_denom=scale_denom)
+    msp = doc.modelspace()
+
+    tracked_msp = TrackedSectionMsp(msp)
+    draw_case(
+        tracked_msp,
+        case_entry.result or {},
+        case_entry.input_params or {},
+        scale_denom=scale_denom,
+        title="",
+    )
+
+    if draw_summary_table is not None:
+        min_x, min_y, _max_x, _max_y = tracked_msp.local_bounds()
+        draw_summary_table(doc, msp, [case_entry], min_x, min_y - 24.0)
+
+    doc.saveas(normalized_path)
+    return normalized_path

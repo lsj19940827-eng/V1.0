@@ -20,8 +20,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea,
     QPushButton, QApplication, QRadioButton, QButtonGroup,
+    QTableWidget,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtWidgets import QSizePolicy
 from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
 
@@ -81,13 +82,27 @@ from app_渠系计算前端.dxf_multi_export import (
     DxfExportCaseEntry,
     choose_scale_denom,
     export_combined_case_dxf,
+    export_single_case_dxf,
     format_empty_export_warning,
     format_export_result_message,
     partition_valid_case_entries,
     select_case_entries,
     show_multi_case_dxf_dialog,
 )
-from app_渠系计算前端.culvert.dxf_export import export_culvert_dxf, draw_culvert_dxf_on_msp
+from app_渠系计算前端.culvert.dxf_export import (
+    export_culvert_dxf,
+    draw_culvert_dxf_on_msp,
+    draw_culvert_comparison_table,
+)
+from app_渠系计算前端.culvert.comparison import (
+    CULVERT_COMPARISON_SPEC,
+    build_culvert_comparison_tables,
+)
+from app_渠系计算前端.section_comparison import (
+    add_section_comparison_word_tables,
+    build_table_clipboard_text,
+    fill_comparison_table,
+)
 from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, plain_text_to_formula_body, wrap_with_katex,
     load_formula_page, make_plain_html,
@@ -523,6 +538,35 @@ class CulvertPanel(QWidget):
         t2l.addWidget(self.section_canvas)
         self.notebook.addTab(t2, "断面图")
 
+        # Tab3: 工况对比
+        t3 = QWidget(); t3l = QVBoxLayout(t3); t3l.setContentsMargins(5, 5, 5, 5)
+        cmp_grp = QGroupBox("工况对比"); cmp_lay = QVBoxLayout(cmp_grp)
+        self.comparison_hint = QLabel("请先完成计算，系统会在这里汇总各工况的关键水力结果和结构尺寸。")
+        self.comparison_hint.setWordWrap(True)
+        self.comparison_hint.setStyleSheet("color:#666; font-size:12px;")
+        cmp_lay.addWidget(self.comparison_hint)
+        cmp_lay.addWidget(QLabel("水力结果对比表"))
+        self.comparison_hydraulic_table = QTableWidget(0, len(CULVERT_COMPARISON_SPEC.hydraulic_columns))
+        self._configure_comparison_table(self.comparison_hydraulic_table)
+        fill_comparison_table(
+            self.comparison_hydraulic_table,
+            CULVERT_COMPARISON_SPEC.hydraulic_columns,
+            [],
+        )
+        cmp_lay.addWidget(self.comparison_hydraulic_table)
+        cmp_lay.addWidget(QLabel("结构尺寸对比表"))
+        self.comparison_dimension_table = QTableWidget(0, len(CULVERT_COMPARISON_SPEC.dimension_columns))
+        self._configure_comparison_table(self.comparison_dimension_table)
+        fill_comparison_table(
+            self.comparison_dimension_table,
+            CULVERT_COMPARISON_SPEC.dimension_columns,
+            [],
+        )
+        cmp_lay.addWidget(self.comparison_dimension_table)
+        self.comparison_table = self.comparison_hydraulic_table
+        t3l.addWidget(cmp_grp)
+        self.notebook.addTab(t3, "工况对比")
+
         self._show_initial_help()
 
     def _show_initial_help(self):
@@ -830,10 +874,89 @@ class CulvertPanel(QWidget):
             return
         if self._has_rendered_results or self._all_results:
             self._results_dirty = True
+            self._clear_comparison_tables("参数已变更，请重新计算后查看工况对比。")
 
     def _mark_results_fresh(self):
         self._results_dirty = False
         self._has_rendered_results = bool(self._all_results)
+
+    def _configure_comparison_table(self, table):
+        """设置工况对比表的通用交互样式。"""
+        table.verticalHeader().setVisible(False)
+        table.setAlternatingRowColors(True)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.ExtendedSelection)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """处理两张对比表的全选和复制快捷键。"""
+        tables = {
+            getattr(self, "comparison_hydraulic_table", None),
+            getattr(self, "comparison_dimension_table", None),
+        }
+        if obj in tables and event.type() == QEvent.KeyPress:
+            mods = event.modifiers()
+            ctrl_only = bool(mods & Qt.ControlModifier) and not (
+                mods & (Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier)
+            )
+            if ctrl_only and event.key() == Qt.Key_A:
+                obj.selectAll()
+                return True
+            if ctrl_only and event.key() == Qt.Key_C:
+                self._copy_comparison_selection_to_clipboard(obj)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _copy_comparison_selection_to_clipboard(self, table):
+        """复制当前对比表选区到剪贴板。"""
+        text, row_count, col_count = build_table_clipboard_text(table)
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        InfoBar.success(
+            "已复制",
+            f"已复制 {row_count} 行 × {col_count} 列到剪贴板，可粘贴到 Excel。",
+            parent=self._info_parent(),
+            duration=2000,
+            position=InfoBarPosition.TOP,
+        )
+
+    def _set_comparison_hint(self, text):
+        """更新工况对比提示。"""
+        if hasattr(self, "comparison_hint"):
+            self.comparison_hint.setText(text)
+
+    def _clear_comparison_tables(self, hint="请先完成计算，系统会在这里汇总各工况的关键水力结果和结构尺寸。"):
+        """清空工况对比两张表。"""
+        for table in (
+            getattr(self, "comparison_hydraulic_table", None),
+            getattr(self, "comparison_dimension_table", None),
+        ):
+            if table is not None:
+                table.setRowCount(0)
+        self._set_comparison_hint(hint)
+
+    def _refresh_comparison_tables(self):
+        """按成功工况刷新暗涵工况对比表。"""
+        if not hasattr(self, "comparison_hydraulic_table"):
+            return
+        tables = build_culvert_comparison_tables(getattr(self, "_all_results", []))
+        fill_comparison_table(
+            self.comparison_hydraulic_table,
+            CULVERT_COMPARISON_SPEC.hydraulic_columns,
+            tables.hydraulic_rows,
+        )
+        fill_comparison_table(
+            self.comparison_dimension_table,
+            CULVERT_COMPARISON_SPEC.dimension_columns,
+            tables.dimension_rows,
+        )
+        if tables.hydraulic_rows:
+            self._set_comparison_hint("已汇总成功计算的工况；圆拱直墙型按暗涵断面口径显示。")
+        else:
+            self._set_comparison_hint("当前没有可汇总的成功工况，请检查计算结果。")
 
     def _show_result_jump_hint(self, stale=False):
         content = (
@@ -1245,6 +1368,9 @@ class CulvertPanel(QWidget):
         self._mark_results_fresh()
         self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
         self._update_section_plot_all()
+        refresh_comparison = getattr(self, "_refresh_comparison_tables", None)
+        if callable(refresh_comparison):
+            refresh_comparison()
 
     def _display_all_results(self):
         return CulvertPanel._display_all_results_legacy(self)
@@ -2007,6 +2133,7 @@ class CulvertPanel(QWidget):
         self._refresh_increase_hint()
         self.current_result = None
         self._export_plain_text = ""
+        self._clear_comparison_tables()
 
     def _export_dxf(self):
         case_entries = self._build_dxf_export_case_entries()
@@ -2118,14 +2245,26 @@ class CulvertPanel(QWidget):
         filepath = self._choose_dxf_filepath(self._single_dxf_default_name(entry))
         if not filepath:
             return None
-        export_culvert_dxf(filepath, entry.result or {}, entry.input_params or {}, scale)
+        export_single_case_dxf(
+            filepath,
+            entry,
+            scale,
+            draw_culvert_dxf_on_msp,
+            draw_summary_table=draw_culvert_comparison_table,
+        )
         return filepath
 
     def _export_combined_dxf_entries(self, entries, scale_denom):
         filepath = self._choose_dxf_filepath(self._combined_dxf_default_name(len(entries)))
         if not filepath:
             return None
-        return export_combined_case_dxf(filepath, entries, scale_denom, draw_culvert_dxf_on_msp)
+        return export_combined_case_dxf(
+            filepath,
+            entries,
+            scale_denom,
+            draw_culvert_dxf_on_msp,
+            draw_summary_table=draw_culvert_comparison_table,
+        )
 
     def _export_report(self):
         if not self.current_result or not self.current_result.get('success'):
@@ -2241,6 +2380,13 @@ class CulvertPanel(QWidget):
         doc_add_eng_h(doc, '6、计算过程')
         _marker = '{{NORM_TABLE_11_2_5}}'
         _multi = n_export > 1
+        add_section_comparison_word_tables(
+            doc,
+            export_results,
+            CULVERT_COMPARISON_SPEC,
+            heading_func=doc_add_eng_h,
+            table_func=doc_add_styled_table,
+        )
 
         for ri, (case_idx, params, result) in enumerate(export_results):
             if not result.get('success'):
