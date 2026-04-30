@@ -20,6 +20,13 @@ class _FakeTextEntity:
         return self
 
 
+class _FakeMTextEntity:
+    """模拟 DXF 多行文本实体的定位接口。"""
+
+    def set_location(self, *_args, **_kwargs):
+        return self
+
+
 class _FakeDimEntity:
     """模拟 DXF 标注实体的渲染接口。"""
 
@@ -33,6 +40,7 @@ class _FakeMsp:
     def __init__(self):
         self.lines = []
         self.texts = []
+        self.mtexts = []
         self.polylines = []
         self.dims = []
 
@@ -45,6 +53,10 @@ class _FakeMsp:
     def add_text(self, text, dxfattribs=None):
         self.texts.append({"text": str(text), "attrs": dict(dxfattribs or {})})
         return _FakeTextEntity()
+
+    def add_mtext(self, text, dxfattribs=None):
+        self.mtexts.append({"text": str(text), "attrs": dict(dxfattribs or {})})
+        return _FakeMTextEntity()
 
     def add_linear_dim(self, *args, **kwargs):
         self.dims.append({"args": args, "kwargs": kwargs})

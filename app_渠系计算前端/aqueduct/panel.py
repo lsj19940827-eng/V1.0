@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QSplitter, QFrame, QTabWidget, QTextEdit, QFileDialog, QScrollArea,
-    QPushButton, QApplication, QRadioButton, QButtonGroup,
+    QPushButton, QApplication, QRadioButton, QButtonGroup, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
@@ -168,15 +168,15 @@ class AqueductPanel(QWidget):
         inp_w = QWidget()
         self._build_input(inp_w)
         scroll.setWidget(inp_w)
-        scroll.setMinimumWidth(280)
-        scroll.setMaximumWidth(420)
+        scroll.setMinimumWidth(340)
+        scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         splitter.addWidget(scroll)
 
         # 右侧输出
         out_w = QWidget()
         self._build_output(out_w)
         splitter.addWidget(out_w)
-        splitter.setSizes([340, 900])
+        splitter.setSizes([430, 900])
 
     # ----------------------------------------------------------------
     # 输入面板
@@ -376,7 +376,11 @@ class AqueductPanel(QWidget):
         l = QLabel(t); l.setStyleSheet(INPUT_SECTION_STYLE); return l
 
     def _hint(self, t):
-        l = QLabel(t); l.setStyleSheet(INPUT_HINT_STYLE); return l
+        l = QLabel(t)
+        l.setStyleSheet(INPUT_HINT_STYLE)
+        l.setWordWrap(True)
+        l.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        return l
 
     def _sep(self):
         f = QFrame(); f.setFrameShape(QFrame.HLine); f.setStyleSheet(f"color:{BD};"); return f

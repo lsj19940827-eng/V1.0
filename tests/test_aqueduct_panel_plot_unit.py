@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from matplotlib.figure import Figure
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QTextEdit
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
@@ -25,6 +26,11 @@ for calc_dir in ROOT.glob("calc_*"):
         sys.path.insert(0, calc_path)
 
 aqueduct_panel_mod = importlib.import_module("app_渠系计算前端.aqueduct.panel")
+
+
+def _get_qapp():
+    """获取测试用 Qt 应用。"""
+    return QApplication.instance() or QApplication([])
 
 
 def _u_result():
@@ -221,6 +227,31 @@ def test_draw_u_section_spans_negative_and_positive_x_coordinates():
     assert "工况 1｜U形" in title
     assert r"\mathregular{m^{3}/s}" in title
     assert r"\mathregular{m/s}" in title
+
+
+def test_aqueduct_input_sidebar_width_and_hints_are_readable(monkeypatch):
+    """渡槽左侧输入栏应有足够默认宽度，长说明文字应自动换行。"""
+    _get_qapp()
+    monkeypatch.setattr(aqueduct_panel_mod, "create_web_view", QTextEdit)
+    panel = aqueduct_panel_mod.AqueductPanel()
+    panel.resize(1400, 900)
+    panel.show()
+
+    scroll_areas = panel.findChildren(QScrollArea)
+    assert scroll_areas
+    input_scroll = scroll_areas[0]
+    assert input_scroll.minimumWidth() >= 340
+    assert input_scroll.maximumWidth() > 10000
+
+    hint_labels = [
+        label
+        for label in panel.findChildren(QLabel)
+        if "拉杆自身尺寸高度" in label.text()
+    ]
+    assert hint_labels
+    assert hint_labels[0].wordWrap() is True
+
+    panel.deleteLater()
 
 
 def test_parse_case_passes_tie_rod_height_to_u_kernel():

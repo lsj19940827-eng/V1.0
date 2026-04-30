@@ -1353,7 +1353,6 @@ class OpenChannelPanel(QWidget):
             self.input_params = p
             self._update_section_plot(r)
             return
-        # 多工况简单网格
         self.section_fig.clear()
         n = len(success_results)
         ncols = min(n, 3)
@@ -1363,34 +1362,83 @@ class OpenChannelPanel(QWidget):
             row, col = divmod(idx_r, ncols)
             ax = axes[row][col]
             stype = p.get('section_type', '梯形')
-            Q = p['Q']
-            if stype in ('梯形', '矩形') and r.get('success'):
-                b = r.get('b_design', 0)
-                h = r.get('h_design', 0)
-                m = p.get('m', 0)
-                ax.set_title(f"工况{ci+1} {stype}\nQ={Q:.2f}", fontsize=9)
-                # 简易梯形/矩形
-                xs = [-b/2 - m*h, -b/2, b/2, b/2 + m*h]
-                ys = [h, 0, 0, h]
-                ax.fill(xs, ys, color='lightblue', alpha=0.5)
-                ax.plot(xs + [xs[0]], ys + [ys[0]], 'b-', lw=1.5)
-                ax.set_aspect('equal')
-                ax.grid(True, alpha=0.3)
-            elif stype == '圆形' and r.get('success'):
-                D = r.get('D_design', 1)
-                ax.set_title(f"工况{ci+1} 圆形\nQ={Q:.2f} D={D:.2f}", fontsize=9)
-                theta_arr = np.linspace(0, 2*np.pi, 100)
-                ax.plot(D/2*np.cos(theta_arr), D/2*np.sin(theta_arr), 'b-', lw=1.5)
-                ax.set_aspect('equal')
-                ax.grid(True, alpha=0.3)
-            else:
-                ax.set_title(f"工况{ci+1} {stype}\nQ={Q:.2f}", fontsize=9)
-                ax.text(0.5, 0.5, stype, ha='center', va='center', transform=ax.transAxes)
+            title = self._multi_case_section_plot_title(ci, stype)
+            self._draw_case_section_plot(ax, p, r, title)
         for idx_r in range(n, nrows * ncols):
             row, col = divmod(idx_r, ncols)
             axes[row][col].set_visible(False)
         self.section_fig.tight_layout()
         self.section_canvas.draw()
+
+    def _multi_case_section_plot_title(self, case_idx, section_type):
+        """生成多工况断面图标题，优先使用用户自定义工况名。"""
+        case = {}
+        cases = getattr(self, "_cases", [])
+        if 0 <= case_idx < len(cases):
+            case = cases[case_idx] or {}
+        custom_label = str(case.get("custom_label") or "").strip()
+        if custom_label:
+            return custom_label
+        return f"工况{case_idx + 1} {section_type}"
+
+    def _draw_case_section_plot(self, ax, params, result, title):
+        """按单个工况类型复用完整断面绘图，确保多工况也保留尺寸标注。"""
+        stype = params.get('section_type', '梯形')
+        Q = float(params.get('Q', 0.0) or 0.0)
+        if stype == '圆形':
+            self._draw_circular(
+                ax,
+                result.get('D_design', 0.0),
+                result.get('y_d', 0.0),
+                result.get('V_d', result.get('V_design', 0.0)),
+                Q,
+                title,
+            )
+        elif stype == '复式梯形':
+            h_w = result.get('h_design', 0.0)
+            h_ch = result.get('h_prime', 0.0) if result.get('h_prime', 0.0) > 0 else h_w * 1.35
+            self._draw_compound_trapezoid(
+                ax,
+                result.get('b_design', params.get('B2', 0.0)),
+                params.get('m1', 0.0),
+                params.get('B1', 0.0),
+                params.get('m2', 0.0),
+                params.get('m3', 0.0),
+                params.get('h1', 0.0),
+                h_ch,
+                result.get('V_design', 0.0),
+                Q,
+                h_w,
+                title,
+            )
+        elif stype == 'U形':
+            h_w = result.get('h_design', 0.0)
+            h_ch = result.get('h_prime', 0.0) if result.get('h_prime', 0.0) > 0 else h_w * 1.35
+            self._draw_u_section(
+                ax,
+                result.get('R', 0.0),
+                result.get('alpha_deg', 0.0),
+                result.get('theta_deg', 0.0),
+                h_w,
+                h_ch,
+                result.get('V_design', 0.0),
+                Q,
+                title,
+            )
+        else:
+            b = result.get('b_design', 0.0)
+            h = result.get('h_design', 0.0)
+            m = params.get('m', 0.0)
+            self._draw_trapezoid(
+                ax,
+                b,
+                h,
+                m,
+                result.get('V_design', 0.0),
+                Q,
+                h,
+                title,
+            )
 
     def _show_error(self, title, msg):
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])

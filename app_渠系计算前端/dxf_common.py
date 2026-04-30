@@ -432,16 +432,33 @@ def _add_text_block(msp, x, y_start, lines, txt_h, layer):
         else:
             height = h_body
             indent = txt_h * 0.5
-        msp.add_text(
-            line,
-            dxfattribs={
-                "layer": layer,
-                "height": height,
-                "style": "FANGSONG",
-                "width": DXF_TEXT_WIDTH_FACTOR,
-                "insert": (x + indent, y_start),
-            },
-        )
+        insert = (x + indent, y_start)
+        if has_dxf_script_chars(line):
+            text_attrs = {"layer": layer, "char_height": height, "style": "FANGSONG"}
+            if isinstance(msp, TrackedSectionMsp):
+                msp._track_text_box(
+                    line,
+                    {"insert": insert, "height": height, "width": DXF_TEXT_WIDTH_FACTOR},
+                )
+                entity = msp._msp.add_mtext(
+                    to_dxf_mtext_script(line),
+                    dxfattribs=_copy_dxfattribs(text_attrs, layer_prefix=msp.layer_prefix),
+                )
+                entity.set_location(insert=msp._apply_point(insert))
+            else:
+                entity = msp.add_mtext(to_dxf_mtext_script(line), dxfattribs=text_attrs)
+                entity.set_location(insert=insert)
+        else:
+            msp.add_text(
+                line,
+                dxfattribs={
+                    "layer": layer,
+                    "height": height,
+                    "style": "FANGSONG",
+                    "width": DXF_TEXT_WIDTH_FACTOR,
+                    "insert": insert,
+                },
+            )
         y_start -= height * 1.5
 
 

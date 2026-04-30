@@ -14,6 +14,7 @@ from app_渠系计算前端.increase_input_helper import (
 )
 
 from app_渠系计算前端.dxf_common import (
+    _add_text_block,
     add_case_title,
     ensure_tracked_msp,
     setup_section_dxf_document,
@@ -126,30 +127,6 @@ def _add_dim_v(msp, y1, y2, x_line, x_orig, label, txt_h, arr, layer):
         dxfattribs={'layer': layer},
     )
     dim.render()
-
-
-def _add_text_block(msp, x, y_start, lines, txt_h, layer):
-    """逐行输出参数文字块（仿宋，正文3.5/节标题5/主标题7mm）"""
-    H_TITLE = txt_h * 2.0          # 7mm：【...】主标题
-    H_SECT  = round(txt_h / 0.7, 1)  # 5mm：[...] 小节标题
-    H_BODY  = txt_h                 # 3.5mm：正文
-    for line in lines:
-        if not line:
-            y_start -= H_BODY * 0.8
-            continue
-        is_main = line.startswith('【')
-        is_sect = line.startswith('[')
-        if is_main:
-            h = H_TITLE; indent = 0
-        elif is_sect:
-            h = H_SECT; indent = 0
-        else:
-            h = H_BODY; indent = txt_h * 0.5
-        msp.add_text(line, dxfattribs={
-            'layer': layer, 'height': h, 'style': 'FANGSONG',
-            'insert': (x + indent, y_start),
-        })
-        y_start -= h * 1.5
 
 
 # ============================================================
