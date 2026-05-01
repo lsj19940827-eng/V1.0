@@ -122,6 +122,9 @@ from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
     build_result_nav_bar,
     build_result_navigation_head,
+    case_result_jump_hint,
+    has_fresh_case_results,
+    is_case_result_stale,
     make_case_result_anchor,
     sync_case_result_nav_bar,
     wrap_case_result_block,
@@ -157,6 +160,8 @@ class AqueductPanel(QWidget):
         self._suppress_result_render = False
         self._panel_key = "aqueduct"
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = False
         self._init_ui()
         self._setup_result_dirty_tracking()
@@ -679,7 +684,15 @@ class AqueductPanel(QWidget):
             self._current_case_idx = idx
             self._load_case(idx)
             self._rebuild_case_tags()
-        self._jump_to_case_result(idx)
+        if has_fresh_case_results(
+            all_results=self._all_results,
+            has_rendered_results=self._has_rendered_results,
+            results_dirty=self._results_dirty,
+            case_idx=idx,
+            stale_case_indexes=getattr(self, "_stale_result_case_indexes", set()),
+            all_results_stale=getattr(self, "_all_results_stale", False),
+        ):
+            self._jump_to_case_result(idx)
 
     def _add_case(self):
         if len(self._cases) >= MAX_CASES:
@@ -691,7 +704,7 @@ class AqueductPanel(QWidget):
         new_case['Q'] = ''
         new_case['custom_label'] = None
         self._cases.append(new_case)
-        self._mark_results_dirty()
+        self._mark_results_dirty(mark_case=False)
         self._current_case_idx = len(self._cases) - 1
         self._load_case(self._current_case_idx)
         self._rebuild_case_tags()
@@ -704,7 +717,7 @@ class AqueductPanel(QWidget):
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
         idx = self._current_case_idx
-        self._mark_results_dirty()
+        self._mark_results_dirty(all_cases=True)
         self._cases.pop(idx)
         if self._current_case_idx >= len(self._cases):
             self._current_case_idx = len(self._cases) - 1
@@ -820,15 +833,50 @@ class AqueductPanel(QWidget):
     def _on_result_inputs_changed(self, *_args):
         self._mark_results_dirty()
 
-    def _mark_results_dirty(self):
+    def _case_result_state_kwargs(self, case_idx):
+        """返回目标工况结果状态判断所需的参数。"""
+        return {
+            "all_results": self._all_results,
+            "has_rendered_results": self._has_rendered_results,
+            "results_dirty": self._results_dirty,
+            "case_idx": case_idx,
+            "stale_case_indexes": getattr(self, "_stale_result_case_indexes", set()),
+            "all_results_stale": getattr(self, "_all_results_stale", False),
+        }
+
+    def _mark_results_dirty(
+        self,
+        case_idx=None,
+        *,
+        all_cases=False,
+        mark_case=True,
+        case_indexes=None,
+    ):
+        """标记旧结果过期；默认只标记当前工况。"""
         if self._loading_case:
             return
         if self._has_rendered_results or self._all_results:
             self._results_dirty = True
+            if not hasattr(self, "_stale_result_case_indexes"):
+                self._stale_result_case_indexes = set()
+            if all_cases:
+                self._all_results_stale = True
+                self._stale_result_case_indexes.clear()
+            elif not getattr(self, "_all_results_stale", False):
+                targets = case_indexes
+                if targets is None and mark_case:
+                    targets = [self._current_case_idx if case_idx is None else case_idx]
+                for target in targets or []:
+                    try:
+                        self._stale_result_case_indexes.add(int(target))
+                    except (TypeError, ValueError):
+                        continue
             self._clear_comparison_tables("参数已变更，请重新计算后查看工况对比。")
 
     def _mark_results_fresh(self):
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = bool(self._all_results)
 
     def _configure_comparison_table(self, table):
@@ -909,14 +957,10 @@ class AqueductPanel(QWidget):
         else:
             self._set_comparison_hint("当前没有可汇总的成功工况，请检查计算结果。")
 
-    def _show_result_jump_hint(self, stale=False):
-        content = (
-            "参数已变更，请先重新计算后查看对应工况结果。"
-            if stale else
-            "当前没有可定位的计算结果，请先完成计算。"
-        )
+    def _show_result_jump_hint(self, stale=False, reason=None):
+        title, content = case_result_jump_hint(stale=stale, reason=reason)
         InfoBar.warning(
-            title="无法定位结果",
+            title=title,
             content=content,
             parent=self._info_parent(),
             position=InfoBarPosition.TOP,
@@ -929,8 +973,9 @@ class AqueductPanel(QWidget):
         return f"工况 {case_idx + 1}"
 
     def _case_result_nav_summary(self, case_idx, params, result):
-        stype = params.get("section_type") or self._cases[case_idx].get("section_type", "U形")
-        q_raw = params.get("Q", self._cases[case_idx].get("Q", ""))
+        case = self._cases[case_idx] if 0 <= case_idx < len(self._cases) else {}
+        stype = params.get("section_type") or case.get("section_type", "U形")
+        q_raw = params.get("Q") if "Q" in params else case.get("Q", "")
         try:
             q_text = f"Q={float(q_raw):.3f}"
         except Exception:
@@ -950,11 +995,17 @@ class AqueductPanel(QWidget):
         return items
 
     def _jump_to_case_result(self, case_idx, *, defer_until_load=False):
-        if not self._all_results or not self._has_rendered_results:
-            self._show_result_jump_hint(stale=False)
-            return False
-        if self._results_dirty:
-            self._show_result_jump_hint(stale=True)
+        if not has_fresh_case_results(**self._case_result_state_kwargs(case_idx)):
+            all_results_stale = getattr(self, "_all_results_stale", False)
+            self._show_result_jump_hint(
+                stale=is_case_result_stale(
+                    case_idx=case_idx,
+                    results_dirty=self._results_dirty,
+                    stale_case_indexes=getattr(self, "_stale_result_case_indexes", set()),
+                    all_results_stale=all_results_stale,
+                ),
+                reason="structure_stale" if all_results_stale else None,
+            )
             return False
         self.notebook.setCurrentIndex(0)
         return scroll_view_to_anchor(
@@ -967,7 +1018,9 @@ class AqueductPanel(QWidget):
 
     def _apply_to_all_cases(self):
         self._save_current_case()
-        self._mark_results_dirty()
+        self._mark_results_dirty(
+            case_indexes=[i for i in range(len(self._cases)) if i != self._current_case_idx]
+        )
         src = self._cases[self._current_case_idx]
         keys = ('section_type', 'n', 'slope_inv', 'v_min', 'v_max',
                 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text', 'detail_checked',
@@ -1343,6 +1396,7 @@ class AqueductPanel(QWidget):
                     title,
                     result,
                 )
+                AqueductPanel._draw_increased_water_level(ax, stype, result, params)
             else:
                 self._draw_rect_section(
                     ax,
@@ -1354,11 +1408,126 @@ class AqueductPanel(QWidget):
                     title,
                     result,
                 )
+                AqueductPanel._draw_increased_water_level(ax, stype, result, params)
         for plot_idx in range(n, nrows * ncols):
             row, col = divmod(plot_idx, ncols)
             axes[row][col].axis('off')
         self.section_fig.tight_layout()
         self.section_canvas.draw()
+
+    @staticmethod
+    def _safe_positive_float(value):
+        """将结果值转为正数浮点值，失败时返回0。"""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return number if number > 0 else 0.0
+
+    @staticmethod
+    def _u_waterline_span(R, h_w):
+        """计算U形断面指定水深处的水面左右边界。"""
+        if R <= 0 or h_w <= 0:
+            return None
+        if h_w <= R:
+            cos_val = max(-1.0, min(1.0, 1 - h_w / R))
+            half_width = R * math.sqrt(max(0.0, 1 - cos_val * cos_val))
+            return -half_width, half_width
+        return -R, R
+
+    @staticmethod
+    def _rect_waterline_span(B, h_w, result):
+        """计算矩形或带倒角矩形指定水深处的水面左右边界。"""
+        if B <= 0 or h_w <= 0:
+            return None
+        has_chamfer = bool(result.get('has_chamfer', False))
+        chamfer_angle = AqueductPanel._safe_positive_float(result.get('chamfer_angle', 0.0))
+        chamfer_length = AqueductPanel._safe_positive_float(result.get('chamfer_length', 0.0))
+        if has_chamfer and chamfer_angle > 0 and chamfer_length > 0:
+            chamfer_height = chamfer_length * math.tan(math.radians(chamfer_angle))
+            if chamfer_height > 0 and h_w <= chamfer_height:
+                offset = chamfer_length * (h_w / chamfer_height)
+                return -B / 2 + offset, B / 2 - offset
+        return -B / 2, B / 2
+
+    @staticmethod
+    def _draw_increased_water_level(ax, section_type, result, params):
+        """在多工况断面图中叠加加大水位线和水深尺寸。"""
+        if not params.get('use_increase', True):
+            return
+        h_inc = AqueductPanel._safe_positive_float(result.get('h_increased'))
+        H_total = AqueductPanel._safe_positive_float(result.get('H_total'))
+        if h_inc <= 0 or H_total <= 0 or h_inc > H_total:
+            return
+
+        if section_type == 'U形':
+            span = AqueductPanel._u_waterline_span(
+                AqueductPanel._safe_positive_float(result.get('R')),
+                h_inc,
+            )
+        else:
+            span = AqueductPanel._rect_waterline_span(
+                AqueductPanel._safe_positive_float(result.get('B')),
+                h_inc,
+                result,
+            )
+        if span is None:
+            return
+
+        left, right = span
+        ax.plot([left, right], [h_inc, h_inc], color='#0066cc', lw=1.4, ls='--', zorder=5)
+
+        # 标注放在线段内侧，避免挤出小图边界。
+        width = max(right - left, 0.1)
+        y_offset = max(H_total * 0.025, 0.04)
+        label_y = h_inc + y_offset
+        va = 'bottom'
+        if label_y > H_total:
+            label_y = h_inc - y_offset
+            va = 'top'
+        ax.text(
+            right - width * 0.03,
+            label_y,
+            f'加大水位 {h_inc:.2f}m',
+            ha='right',
+            va=va,
+            fontsize=8,
+            color='#0066cc',
+        )
+        AqueductPanel._draw_increased_depth_dimension(ax, section_type, result, h_inc, '#0066cc')
+
+    @staticmethod
+    def _draw_increased_depth_dimension(ax, section_type, result, h_inc, color):
+        """绘制加大水深竖向双向尺寸标注。"""
+        if section_type == 'U形':
+            R = AqueductPanel._safe_positive_float(result.get('R'))
+            if R <= 0:
+                return
+            arrow_x = -R * 1.45
+            label_x = -R * 1.58
+        else:
+            B = AqueductPanel._safe_positive_float(result.get('B'))
+            if B <= 0:
+                return
+            arrow_x = -B * 0.75
+            label_x = -B * 0.82
+
+        ax.annotate(
+            '',
+            xy=(arrow_x, h_inc),
+            xytext=(arrow_x, 0),
+            arrowprops=dict(arrowstyle='<->', color=color, lw=1.3),
+        )
+        ax.text(
+            label_x,
+            h_inc / 2,
+            f'h加大={h_inc:.2f}m',
+            ha='right',
+            va='center',
+            fontsize=8,
+            color=color,
+            rotation=90,
+        )
 
     def _show_error(self, title, msg):
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
@@ -2576,6 +2745,8 @@ class AqueductPanel(QWidget):
         self._save_current_case()
         self._all_results = []
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = False
         self._rebuild_case_tags()
         self._update_calc_btn_text()

@@ -319,7 +319,8 @@ def test_open_channel_switching_cases_without_fresh_results_skips_jump_warning(m
     _flush_events(2)
 
     assert panel._results_dirty is True
-    assert scroll_calls == []
+    assert scroll_calls
+    assert scroll_calls[-1][0][1] == "case-result-open-channel-1"
     assert _InfoBarSpy.warnings == []
 
     panel.deleteLater()
@@ -367,12 +368,13 @@ def test_open_channel_result_nav_click_warns_when_results_are_stale(monkeypatch)
     _InfoBarSpy.warnings.clear()
     panel.Q_edit.setText("6")
     _flush_events(2)
-    panel._result_case_nav.chips()[1].click()
+    panel._result_case_nav.chips()[0].click()
     _flush_events(2)
 
     assert panel._results_dirty is True
     assert scroll_calls == []
     assert _InfoBarSpy.warnings
-    assert "重新计算" in _InfoBarSpy.warnings[-1]["content"]
+    assert _InfoBarSpy.warnings[-1]["title"] == "结果已过期"
+    assert "请执行计算后再查看计算结果" in _InfoBarSpy.warnings[-1]["content"]
 
     panel.deleteLater()

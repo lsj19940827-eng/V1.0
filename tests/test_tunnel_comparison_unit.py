@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 from app_渠系计算前端.dxf_multi_export import DxfExportCaseEntry
 from app_渠系计算前端.tunnel.comparison import (
+    TUNNEL_COMPARISON_SPEC,
     build_tunnel_comparison_tables,
     build_tunnel_comparison_rows,
     compute_tunnel_total_geometry_metrics,
@@ -43,6 +44,17 @@ def local_tmp_path():
 def _get_qapp():
     """获取测试用 Qt 应用。"""
     return QApplication.instance() or QApplication([])
+
+
+def test_tunnel_comparison_omits_control_margin_columns():
+    """隧洞工况对比不再展示控制余量摘要列。"""
+    titles = [column.title for column in TUNNEL_COMPARISON_SPEC.hydraulic_columns]
+    keys = [column.key for column in TUNNEL_COMPARISON_SPEC.hydraulic_columns]
+
+    assert "控制余量类型" not in titles
+    assert "控制余量" not in titles
+    assert "margin_type" not in keys
+    assert "control_margin" not in keys
 
 
 def test_arch_metrics_use_total_tunnel_geometry_not_wetted_geometry():
@@ -117,6 +129,10 @@ def test_build_comparison_rows_outputs_design_and_increase_fields():
                 "Q_increased": 9.2,
                 "h_increased": 2.25,
                 "V_increased": 1.9,
+                "freeboard_hgt_design": 1.00,
+                "freeboard_pct_design": 18.0,
+                "freeboard_hgt_inc": 0.75,
+                "freeboard_pct_inc": 15.0,
                 "A_total": 10.28,
             },
             is_valid=True,
@@ -167,6 +183,10 @@ def test_build_tunnel_comparison_tables_splits_hydraulic_and_dimension_rows():
                 "Q_increased": 9.2,
                 "h_increased": 2.25,
                 "V_increased": 1.9,
+                "freeboard_hgt_design": 1.00,
+                "freeboard_pct_design": 18.0,
+                "freeboard_hgt_inc": 0.75,
+                "freeboard_pct_inc": 15.0,
                 "A_total": 10.28,
             },
             is_valid=True,
@@ -178,8 +198,15 @@ def test_build_tunnel_comparison_tables_splits_hydraulic_and_dimension_rows():
     assert len(tables.hydraulic_rows) == 2
     assert tables.hydraulic_rows[0]["Q_increased"] == ""
     assert tables.hydraulic_rows[1]["Q_increased"] == pytest.approx(9.2)
+    assert tables.hydraulic_rows[1]["freeboard_hgt_design"] == pytest.approx(1.00)
+    assert tables.hydraulic_rows[1]["freeboard_pct_design"] == pytest.approx(18.0)
+    assert tables.hydraulic_rows[1]["freeboard_hgt_inc"] == pytest.approx(0.75)
+    assert tables.hydraulic_rows[1]["freeboard_pct_inc"] == pytest.approx(15.0)
     assert tables.dimension_rows[0]["D"] == pytest.approx(3.0)
     assert tables.dimension_rows[1]["B"] == pytest.approx(4.0)
+    assert tables.dimension_rows[1]["theta_deg"] == pytest.approx(180.0)
+    assert tables.dimension_rows[1]["R_arch"] == pytest.approx(2.0)
+    assert tables.dimension_rows[1]["H_arch"] == pytest.approx(2.0)
     assert tables.dimension_rows[1]["total_perimeter"] == pytest.approx(4.0 + 2.0 + math.pi * 2.0)
 
 

@@ -139,6 +139,9 @@ from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
     build_result_nav_bar,
     build_result_navigation_head,
+    case_result_jump_hint,
+    has_fresh_case_results,
+    is_case_result_stale,
     make_case_result_anchor,
     sync_case_result_nav_bar,
     wrap_case_result_block,
@@ -173,6 +176,8 @@ class TunnelPanel(QWidget):
         self._loading_case = False
         self._panel_key = "tunnel"
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = False
         self._init_ui()
         self._setup_result_dirty_tracking()
@@ -627,7 +632,15 @@ class TunnelPanel(QWidget):
             self._load_case(idx)
             self._rebuild_case_tags()
             self._update_calc_btn_text()
-        self._jump_to_case_result(idx)
+        if has_fresh_case_results(
+            all_results=self._all_results,
+            has_rendered_results=self._has_rendered_results,
+            results_dirty=self._results_dirty,
+            case_idx=idx,
+            stale_case_indexes=getattr(self, "_stale_result_case_indexes", set()),
+            all_results_stale=getattr(self, "_all_results_stale", False),
+        ):
+            self._jump_to_case_result(idx)
 
     def _add_case(self):
         if len(self._cases) >= MAX_CASES:
@@ -639,7 +652,7 @@ class TunnelPanel(QWidget):
         new_case['Q'] = ''
         new_case['custom_label'] = None
         self._cases.append(new_case)
-        self._mark_results_dirty()
+        self._mark_results_dirty(mark_case=False)
         self._current_case_idx = len(self._cases) - 1
         self._load_case(self._current_case_idx)
         self._rebuild_case_tags()
@@ -652,7 +665,7 @@ class TunnelPanel(QWidget):
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
         idx = self._current_case_idx
-        self._mark_results_dirty()
+        self._mark_results_dirty(all_cases=True)
         self._cases.pop(idx)
         if self._current_case_idx >= len(self._cases):
             self._current_case_idx = len(self._cases) - 1
@@ -816,25 +829,56 @@ class TunnelPanel(QWidget):
     def _on_result_inputs_changed(self, *_args):
         self._mark_results_dirty()
 
-    def _mark_results_dirty(self):
+    def _case_result_state_kwargs(self, case_idx):
+        """返回目标工况结果状态判断所需的参数。"""
+        return {
+            "all_results": self._all_results,
+            "has_rendered_results": self._has_rendered_results,
+            "results_dirty": self._results_dirty,
+            "case_idx": case_idx,
+            "stale_case_indexes": getattr(self, "_stale_result_case_indexes", set()),
+            "all_results_stale": getattr(self, "_all_results_stale", False),
+        }
+
+    def _mark_results_dirty(
+        self,
+        case_idx=None,
+        *,
+        all_cases=False,
+        mark_case=True,
+        case_indexes=None,
+    ):
+        """标记旧结果过期；默认只标记当前工况。"""
         if self._loading_case:
             return
         if self._has_rendered_results or self._all_results:
             self._results_dirty = True
+            if not hasattr(self, "_stale_result_case_indexes"):
+                self._stale_result_case_indexes = set()
+            if all_cases:
+                self._all_results_stale = True
+                self._stale_result_case_indexes.clear()
+            elif not getattr(self, "_all_results_stale", False):
+                targets = case_indexes
+                if targets is None and mark_case:
+                    targets = [self._current_case_idx if case_idx is None else case_idx]
+                for target in targets or []:
+                    try:
+                        self._stale_result_case_indexes.add(int(target))
+                    except (TypeError, ValueError):
+                        continue
             self._clear_comparison_table("参数已变更，请重新计算后查看工况对比。")
 
     def _mark_results_fresh(self):
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = bool(self._all_results)
 
-    def _show_result_jump_hint(self, stale=False):
-        content = (
-            "参数已变更，请先重新计算后查看对应工况结果。"
-            if stale else
-            "当前没有可定位的计算结果，请先完成计算。"
-        )
+    def _show_result_jump_hint(self, stale=False, reason=None):
+        title, content = case_result_jump_hint(stale=stale, reason=reason)
         InfoBar.warning(
-            title="无法定位结果",
+            title=title,
             content=content,
             parent=self._info_parent(),
             position=InfoBarPosition.TOP,
@@ -872,11 +916,17 @@ class TunnelPanel(QWidget):
         return items
 
     def _jump_to_case_result(self, case_idx, *, defer_until_load=False):
-        if not self._all_results or not self._has_rendered_results:
-            self._show_result_jump_hint(stale=False)
-            return False
-        if self._results_dirty:
-            self._show_result_jump_hint(stale=True)
+        if not has_fresh_case_results(**self._case_result_state_kwargs(case_idx)):
+            all_results_stale = getattr(self, "_all_results_stale", False)
+            self._show_result_jump_hint(
+                stale=is_case_result_stale(
+                    case_idx=case_idx,
+                    results_dirty=self._results_dirty,
+                    stale_case_indexes=getattr(self, "_stale_result_case_indexes", set()),
+                    all_results_stale=all_results_stale,
+                ),
+                reason="structure_stale" if all_results_stale else None,
+            )
             return False
         self.notebook.setCurrentIndex(0)
         return scroll_view_to_anchor(
@@ -889,7 +939,9 @@ class TunnelPanel(QWidget):
 
     def _apply_to_all_cases(self):
         self._save_current_case()
-        self._mark_results_dirty()
+        self._mark_results_dirty(
+            case_indexes=[i for i in range(len(self._cases)) if i != self._current_case_idx]
+        )
         src = self._cases[self._current_case_idx]
         n_copied = len(self._cases) - 1
         if n_copied == 0:
@@ -2143,6 +2195,25 @@ class TunnelPanel(QWidget):
     # ================================================================
     # 断面图
     # ================================================================
+    @staticmethod
+    def _is_valid_plot_depth(value, max_depth=None, include_max=True):
+        """判断水深是否可用于断面图绘制。"""
+        try:
+            depth = float(value)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(depth) or depth <= 0:
+            return False
+        if max_depth is None:
+            return True
+        return depth <= max_depth if include_max else depth < max_depth
+
+    @staticmethod
+    def _should_plot_increase(input_params, result):
+        """判断是否显示加大流量断面图或加大水位线。"""
+        use_increase = bool((input_params or {}).get('use_increase', True))
+        return use_increase and TunnelPanel._is_valid_plot_depth((result or {}).get('h_increased'))
+
     def _update_section_plot(self, result):
         self.section_fig.clear()
         if not result.get('success'):
@@ -2150,26 +2221,44 @@ class TunnelPanel(QWidget):
 
         stype = self.input_params.get('section_type', '圆形')
         Q = self.input_params['Q']
-        Q_inc = result['Q_increased']
-        axes = self.section_fig.subplots(1, 2)
+        show_increase = TunnelPanel._should_plot_increase(self.input_params, result)
+        axes = self.section_fig.subplots(1, 2) if show_increase else [self.section_fig.add_subplot(111)]
+        design_ax = axes[0]
+        increase_ax = axes[1] if show_increase else None
 
         if stype == "平底圆形":
             D = result['D']; B = result['B']
-            self._draw_flat_bottom_circle(axes[0], D, B, result['h_design'], result['V_design'], Q, "设计流量")
-            self._draw_flat_bottom_circle(axes[1], D, B, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
+            self._draw_flat_bottom_circle(design_ax, D, B, result['h_design'], result['V_design'], Q, "设计流量")
+            if show_increase:
+                self._draw_flat_bottom_circle(
+                    increase_ax, D, B, result['h_increased'],
+                    result.get('V_increased', 0.0), result.get('Q_increased', 0.0), "加大流量"
+                )
         elif stype == "圆形":
             D = result['D']
-            self._draw_circular(axes[0], D, result['h_design'], result['V_design'], Q, "设计流量")
-            self._draw_circular(axes[1], D, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
+            self._draw_circular(design_ax, D, result['h_design'], result['V_design'], Q, "设计流量")
+            if show_increase:
+                self._draw_circular(
+                    increase_ax, D, result['h_increased'],
+                    result.get('V_increased', 0.0), result.get('Q_increased', 0.0), "加大流量"
+                )
         elif stype == "圆拱直墙型":
             B = result['B']; H = result['H_total']; theta = math.radians(result['theta_deg'])
-            self._draw_horseshoe(axes[0], B, H, theta, result['h_design'], result['V_design'], Q, "设计流量")
-            self._draw_horseshoe(axes[1], B, H, theta, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
+            self._draw_horseshoe(design_ax, B, H, theta, result['h_design'], result['V_design'], Q, "设计流量")
+            if show_increase:
+                self._draw_horseshoe(
+                    increase_ax, B, H, theta, result['h_increased'],
+                    result.get('V_increased', 0.0), result.get('Q_increased', 0.0), "加大流量"
+                )
         else:
             r_val = result['r']
             sec_int = self.input_params.get('sec_type_int', 1)
-            self._draw_horseshoe_std(axes[0], sec_int, r_val, result['h_design'], result['V_design'], Q, "设计流量")
-            self._draw_horseshoe_std(axes[1], sec_int, r_val, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
+            self._draw_horseshoe_std(design_ax, sec_int, r_val, result['h_design'], result['V_design'], Q, "设计流量")
+            if show_increase:
+                self._draw_horseshoe_std(
+                    increase_ax, sec_int, r_val, result['h_increased'],
+                    result.get('V_increased', 0.0), result.get('Q_increased', 0.0), "加大流量"
+                )
 
         self.section_fig.tight_layout()
         self.section_canvas.draw()
@@ -2213,12 +2302,104 @@ class TunnelPanel(QWidget):
                 r_val = res['r']
                 sec_int = inp.get('sec_type_int', 1)
                 self._draw_horseshoe_std(ax, sec_int, r_val, h_d, V_d, Q, title)
+            if TunnelPanel._should_plot_increase(inp, res):
+                self._draw_increased_waterline(ax, stype, inp, res)
         # 隐藏多余子图
         for idx in range(n, rows * cols):
             r_idx, c_idx = divmod(idx, cols)
             axes[r_idx][c_idx].axis('off')
         self.section_fig.tight_layout()
         self.section_canvas.draw()
+
+    def _draw_increased_waterline(self, ax, section_type, input_params, result):
+        """在多工况断面图上叠加加大水位线。"""
+        h_inc = result.get('h_increased')
+        try:
+            h_inc = float(h_inc)
+        except (TypeError, ValueError):
+            return
+
+        water_half_width = None
+        if section_type == "圆形":
+            D = result.get('D', 0.0)
+            if not TunnelPanel._is_valid_plot_depth(h_inc, D, include_max=False):
+                return
+            radius = D / 2.0
+            offset = h_inc - radius
+            water_half_width = math.sqrt(max(0.0, radius ** 2 - offset ** 2))
+        elif section_type == "平底圆形":
+            D = result.get('D', 0.0)
+            B = result.get('B', 0.0)
+            geom = _build_flat_bottom_circle_geometry(D, B)
+            if not TunnelPanel._is_valid_plot_depth(h_inc, geom['H_total']):
+                return
+            water_half_width = _flat_bottom_circle_surface_width(geom, h_inc) / 2.0
+        elif section_type == "圆拱直墙型":
+            B = result.get('B', 0.0)
+            H_total = result.get('H_total', 0.0)
+            theta_rad = math.radians(result.get('theta_deg', 180.0))
+            if not TunnelPanel._is_valid_plot_depth(h_inc, H_total):
+                return
+            geom = self._horseshoe_plot_geometry(B, H_total, theta_rad)
+            water_half_width = self._horseshoe_plot_half_width(geom, h_inc)
+        else:
+            r_val = result.get('r', 0.0)
+            if not TunnelPanel._is_valid_plot_depth(h_inc, 2 * r_val, include_max=False):
+                return
+            sec_int = input_params.get('sec_type_int', 1)
+            geom = _build_standard_horseshoe_geometry(sec_int, r_val)
+            water_half_width = _standard_horseshoe_half_width(geom, h_inc)
+
+        if water_half_width is None or water_half_width <= 0:
+            return
+        ax.plot(
+            [-water_half_width, water_half_width],
+            [h_inc, h_inc],
+            color='tab:orange',
+            linestyle='--',
+            lw=1.6,
+        )
+        y_min, y_max = ax.get_ylim()
+        y_offset = max((y_max - y_min) * 0.015, 0.03)
+        label_y = h_inc + y_offset
+        va = 'bottom'
+        if label_y > y_max:
+            label_y = h_inc - y_offset
+            va = 'top'
+        ax.text(
+            water_half_width,
+            label_y,
+            f'加大水位 {h_inc:.2f}m',
+            color='tab:orange',
+            fontsize=8,
+            ha='right',
+            va=va,
+        )
+        TunnelPanel._draw_increased_depth_dimension(ax, water_half_width, h_inc, 'tab:orange')
+
+    @staticmethod
+    def _draw_increased_depth_dimension(ax, water_half_width, h_inc, color):
+        """绘制加大水深竖向尺寸标注。"""
+        if water_half_width <= 0 or h_inc <= 0:
+            return
+        x_pos = water_half_width * 0.72
+        text_pad = max(water_half_width * 0.08, 0.04)
+        ax.annotate(
+            '',
+            xy=(x_pos, h_inc),
+            xytext=(x_pos, 0),
+            arrowprops=dict(arrowstyle='<->', color=color, lw=1.4),
+        )
+        ax.text(
+            x_pos + text_pad,
+            h_inc / 2,
+            f'h加大={h_inc:.2f}m',
+            color=color,
+            fontsize=8,
+            rotation=90,
+            va='center',
+            ha='left',
+        )
 
     def _draw_circular(self, ax, D, h_w, V, Q, title):
         R = D / 2
@@ -2373,6 +2554,8 @@ class TunnelPanel(QWidget):
         self.current_result = None
         self._all_results = []
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = False
         self._rebuild_case_tags()
         self._update_calc_btn_text()

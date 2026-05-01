@@ -12,7 +12,6 @@ from app_渠系计算前端.section_comparison import (
     ComparisonTableSpec,
     build_section_comparison_tables,
     first_num,
-    has_increase_result,
     standard_hydraulic_row,
     use_increase,
 )
@@ -45,13 +44,26 @@ TUNNEL_COMPARISON_COLUMNS = (
     ComparisonColumn("B", "底宽 B", "m", 3),
     ComparisonColumn("D", "直径 D", "m", 3),
     ComparisonColumn("r", "半径 r", "m", 3),
+    ComparisonColumn("D_equiv", "等效直径 2r", "m", 3),
     ComparisonColumn("H_total", "洞总高 H", "m", 3),
     ComparisonColumn("H_straight", "直墙高度 H直", "m", 3),
+    ComparisonColumn("theta_deg", "拱顶圆心角 θ", "°", 1),
+    ComparisonColumn("R_arch", "拱半径 R拱", "m", 3),
+    ComparisonColumn("H_arch", "拱高 H拱", "m", 3),
     ComparisonColumn("total_perimeter", "洞身周长", "m", 3),
     ComparisonColumn("total_area", "洞身断面积", "m²", 3),
+    ComparisonColumn("freeboard_hgt_design", "设计净空高度", "m", 3),
+    ComparisonColumn("freeboard_pct_design", "设计净空比例", "%", 1),
+    ComparisonColumn("freeboard_hgt_inc", "加大净空高度", "m", 3),
+    ComparisonColumn("freeboard_pct_inc", "加大净空比例", "%", 1),
 )
 
-TUNNEL_HYDRAULIC_COMPARISON_COLUMNS = COMMON_HYDRAULIC_COLUMNS
+TUNNEL_HYDRAULIC_COMPARISON_COLUMNS = COMMON_HYDRAULIC_COLUMNS + (
+    ComparisonColumn("freeboard_hgt_design", "设计净空高度", "m", 3),
+    ComparisonColumn("freeboard_pct_design", "设计净空比例", "%", 1),
+    ComparisonColumn("freeboard_hgt_inc", "加大净空高度", "m", 3),
+    ComparisonColumn("freeboard_pct_inc", "加大净空比例", "%", 1),
+)
 
 TUNNEL_DIMENSION_COMPARISON_COLUMNS = (
     ComparisonColumn("case_name", "工况", "", None),
@@ -59,8 +71,12 @@ TUNNEL_DIMENSION_COMPARISON_COLUMNS = (
     ComparisonColumn("B", "底宽 B", "m", 3),
     ComparisonColumn("D", "直径 D", "m", 3),
     ComparisonColumn("r", "半径 r", "m", 3),
+    ComparisonColumn("D_equiv", "等效直径 2r", "m", 3),
     ComparisonColumn("H_total", "洞总高 H", "m", 3),
     ComparisonColumn("H_straight", "直墙高度 H直", "m", 3),
+    ComparisonColumn("theta_deg", "拱顶圆心角 θ", "°", 1),
+    ComparisonColumn("R_arch", "拱半径 R拱", "m", 3),
+    ComparisonColumn("H_arch", "拱高 H拱", "m", 3),
     ComparisonColumn("total_perimeter", "洞身周长", "m", 3),
     ComparisonColumn("total_area", "洞身断面积", "m²", 3),
 )
@@ -146,8 +162,12 @@ def compute_tunnel_total_geometry_metrics(params: dict | None, result: dict | No
         "B": "",
         "D": "",
         "r": "",
+        "D_equiv": "",
         "H_total": "",
         "H_straight": "",
+        "theta_deg": "",
+        "R_arch": "",
+        "H_arch": "",
         "total_perimeter": "",
         "total_area": "",
     }
@@ -162,6 +182,7 @@ def compute_tunnel_total_geometry_metrics(params: dict | None, result: dict | No
             {
                 "D": D,
                 "B": B,
+                "D_equiv": D,
                 "H_total": geom["H_total"],
                 "total_perimeter": B + geom["radius"] * geom["major_arc_angle_rad"],
                 "total_area": _result_total_area(result) or geom["A_total"],
@@ -176,6 +197,7 @@ def compute_tunnel_total_geometry_metrics(params: dict | None, result: dict | No
         metrics.update(
             {
                 "D": D,
+                "D_equiv": D,
                 "H_total": D,
                 "total_perimeter": math.pi * D,
                 "total_area": _result_total_area(result) or math.pi * (D / 2.0) ** 2,
@@ -204,6 +226,9 @@ def compute_tunnel_total_geometry_metrics(params: dict | None, result: dict | No
                 "B": B,
                 "H_total": H_total,
                 "H_straight": H_straight,
+                "theta_deg": theta_deg,
+                "R_arch": geom["R_arch"],
+                "H_arch": geom["H_arch"],
                 "total_perimeter": B + 2.0 * H_straight + geom["R_arch"] * geom["theta_rad"],
                 "total_area": total_area,
             }
@@ -215,9 +240,11 @@ def compute_tunnel_total_geometry_metrics(params: dict | None, result: dict | No
         return metrics
     geom = build_standard_horseshoe_geometry(_horseshoe_section_type(params, result, stype), r)
     total_perimeter = sum(float(arc["radius"]) * _arc_span_rad(arc) for arc in geom["arcs"])
+    D_equiv = first_num(result.get("D_equiv"), 2.0 * r)
     metrics.update(
         {
             "r": r,
+            "D_equiv": D_equiv,
             "H_total": 2.0 * r,
             "total_perimeter": total_perimeter,
             "total_area": _result_total_area(result) or _standard_horseshoe_area_from_geometry(geom),
@@ -267,24 +294,28 @@ def build_tunnel_comparison_rows(entries_or_results: Iterable[Any]) -> list[dict
             "V_design": _num(result.get("V_design")) or "",
             "h_increased": _num(result.get("h_increased")) if use_increase else "",
             "V_increased": _num(result.get("V_increased")) if use_increase else "",
+            "freeboard_hgt_design": first_num(result.get("freeboard_hgt_design")) or "",
+            "freeboard_pct_design": first_num(result.get("freeboard_pct_design")) or "",
+            "freeboard_hgt_inc": first_num(result.get("freeboard_hgt_inc")) if use_increase else "",
+            "freeboard_pct_inc": first_num(result.get("freeboard_pct_inc")) if use_increase else "",
             **metrics,
         }
         rows.append(row)
     return rows
 
 
-def _tunnel_control_margin(params: dict, result: dict) -> tuple[str, Any]:
-    """读取隧洞净空控制余量。"""
-    if use_increase(params) and has_increase_result(result):
-        return "加大净空高度", first_num(result.get("freeboard_hgt_inc"), result.get("freeboard_pct_inc"))
-    return "设计净空高度", first_num(result.get("freeboard_hgt_design"), result.get("freeboard_pct_design"))
-
-
 def _build_tunnel_table_row(case_name: str, params: dict, result: dict) -> tuple[dict[str, Any], dict[str, Any]]:
     """生成隧洞单个工况的水力和结构对比行。"""
     stype = _section_type(params, result)
-    margin_type, control_margin = _tunnel_control_margin(params, result)
-    hydraulic = standard_hydraulic_row(case_name, stype, params, result, margin_type, control_margin)
+    hydraulic = standard_hydraulic_row(case_name, stype, params, result)
+    hydraulic.update(
+        {
+            "freeboard_hgt_design": first_num(result.get("freeboard_hgt_design")) or "",
+            "freeboard_pct_design": first_num(result.get("freeboard_pct_design")) or "",
+            "freeboard_hgt_inc": first_num(result.get("freeboard_hgt_inc")) if use_increase(params) else "",
+            "freeboard_pct_inc": first_num(result.get("freeboard_pct_inc")) if use_increase(params) else "",
+        }
+    )
     dimension = {"case_name": case_name, "section_type": stype}
     dimension.update(compute_tunnel_total_geometry_metrics(params, result))
     return hydraulic, dimension

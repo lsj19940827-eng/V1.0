@@ -12,11 +12,22 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app_渠系计算前端.dxf_multi_export import DxfExportCaseEntry
-from app_渠系计算前端.aqueduct.comparison import build_aqueduct_comparison_tables
+from app_渠系计算前端.aqueduct.comparison import AQUEDUCT_COMPARISON_SPEC, build_aqueduct_comparison_tables
+
+
+def test_aqueduct_comparison_omits_control_margin_columns():
+    """渡槽工况对比不再展示控制余量摘要列。"""
+    titles = [column.title for column in AQUEDUCT_COMPARISON_SPEC.hydraulic_columns]
+    keys = [column.key for column in AQUEDUCT_COMPARISON_SPEC.hydraulic_columns]
+
+    assert "控制余量类型" not in titles
+    assert "控制余量" not in titles
+    assert "margin_type" not in keys
+    assert "control_margin" not in keys
 
 
 def test_aqueduct_comparison_keeps_tie_rod_clearance_and_total_height():
-    """有拉杆时应展示含拉杆总高，并用加大有效超高作为控制余量。"""
+    """有拉杆时应展示含拉杆总高和加大有效超高。"""
     entries = [
         DxfExportCaseEntry(
             case_idx=0,
@@ -44,8 +55,9 @@ def test_aqueduct_comparison_keeps_tie_rod_clearance_and_total_height():
 
     tables = build_aqueduct_comparison_tables(entries)
 
-    assert tables.hydraulic_rows[0]["margin_type"] == "加大有效超高"
-    assert tables.hydraulic_rows[0]["control_margin"] == pytest.approx(0.31)
+    assert tables.hydraulic_rows[0]["design_top_freeboard"] == pytest.approx(0.67)
+    assert tables.hydraulic_rows[0]["design_tie_bottom_clearance"] == pytest.approx(0.42)
+    assert tables.hydraulic_rows[0]["increased_effective_freeboard"] == pytest.approx(0.31)
     assert tables.dimension_rows[0]["H_total"] == pytest.approx(2.35)
     assert tables.dimension_rows[0]["tie_rod_height"] == pytest.approx(0.25)
     assert tables.dimension_rows[0]["tie_bottom_height"] == pytest.approx(2.10)
@@ -76,7 +88,9 @@ def test_aqueduct_comparison_maps_rect_chamfer_columns():
     tables = build_aqueduct_comparison_tables(entries)
 
     assert tables.hydraulic_rows[0]["Q_increased"] == ""
-    assert tables.hydraulic_rows[0]["margin_type"] == "设计槽顶超高"
+    assert tables.hydraulic_rows[0]["design_top_freeboard"] == pytest.approx(0.8)
+    assert tables.hydraulic_rows[0]["design_tie_bottom_clearance"] == ""
+    assert tables.hydraulic_rows[0]["increased_effective_freeboard"] == ""
     assert tables.dimension_rows[0]["H_B"] == pytest.approx(0.8)
     assert tables.dimension_rows[0]["chamfer_angle"] == pytest.approx(45.0)
     assert tables.dimension_rows[0]["chamfer_length"] == pytest.approx(0.3)

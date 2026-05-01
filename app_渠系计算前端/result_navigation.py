@@ -289,6 +289,104 @@ def sync_case_result_nav_bar(bar, items, *, title: str = "工况快捷导航"):
         return
 
 
+def _normalize_case_index(value):
+    """把工况序号统一成 int，无法识别时返回 None。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stale_case_index_set(stale_case_indexes):
+    """把过期工况集合统一成 int 集合。"""
+    if stale_case_indexes is None:
+        return None
+    normalized = set()
+    for idx in stale_case_indexes:
+        case_idx = _normalize_case_index(idx)
+        if case_idx is not None:
+            normalized.add(case_idx)
+    return normalized
+
+
+def case_result_exists(all_results, case_idx) -> bool:
+    """判断目标工况是否有已渲染过的结果入口。"""
+    target_idx = _normalize_case_index(case_idx)
+    if target_idx is None:
+        return False
+    for fallback_idx, item in enumerate(all_results or []):
+        item_idx = None
+        if isinstance(item, (tuple, list)) and item:
+            item_idx = _normalize_case_index(item[0])
+        if item_idx is None:
+            item_idx = fallback_idx
+        if item_idx == target_idx:
+            return True
+    return False
+
+
+def is_case_result_stale(
+    *,
+    case_idx,
+    results_dirty,
+    stale_case_indexes=None,
+    all_results_stale=False,
+) -> bool:
+    """判断目标工况结果是否过期。"""
+    if bool(all_results_stale):
+        return True
+    if not bool(results_dirty):
+        return False
+    stale_indexes = _stale_case_index_set(stale_case_indexes)
+    if stale_indexes is None:
+        return bool(results_dirty)
+    target_idx = _normalize_case_index(case_idx)
+    return target_idx in stale_indexes
+
+
+def has_fresh_case_results(
+    *,
+    all_results,
+    has_rendered_results,
+    results_dirty,
+    case_idx=None,
+    stale_case_indexes=None,
+    all_results_stale=False,
+) -> bool:
+    """判断当前结果是否仍可用于自动定位。"""
+    if not bool(all_results) or not bool(has_rendered_results):
+        return False
+    if case_idx is None:
+        return not bool(results_dirty) and not bool(all_results_stale)
+    if not case_result_exists(all_results, case_idx):
+        return False
+    return not is_case_result_stale(
+        case_idx=case_idx,
+        results_dirty=results_dirty,
+        stale_case_indexes=stale_case_indexes,
+        all_results_stale=all_results_stale,
+    )
+
+
+def case_result_jump_hint(*, stale: bool = False, reason: str | None = None):
+    """返回结果导航无法跳转时的统一提示。"""
+    hint_reason = reason or ("case_stale" if stale else "empty")
+    if hint_reason == "structure_stale":
+        return (
+            "结果已失效",
+            "工况已删除，原计算结果与当前工况序号可能不一致。请执行计算后再查看计算结果。",
+        )
+    if hint_reason == "case_stale":
+        return (
+            "结果已过期",
+            "因当前工况参数被修改，致使计算结果过期。请执行计算后再查看计算结果。",
+        )
+    return (
+        "暂无计算结果",
+        "当前没有可定位的计算结果，请先完成计算。",
+    )
+
+
 def make_case_result_anchor(panel_key: str, case_idx: int) -> str:
     """Build a stable HTML anchor id for a case result block."""
     safe_key = re.sub(r"[^a-z0-9_-]+", "-", str(panel_key or "").lower()).strip("-") or "panel"

@@ -629,16 +629,10 @@ def _draw_u_section(msp, result, p, sf=1.0, scale_denom=100):
     arr   = txt_h * 0.85
     gap   = char * 0.18
 
-    # 弧底点集（模型空间，SF缩放）
-    steps = 48
-    arc_pts = []
-    for k in range(steps + 1):
-        ang = _m.pi * 1.5 - half_theta + k * theta_rad / steps
-        arc_pts.append((_m.cos(ang) * R * sf, (R + _m.sin(ang) * R) * sf))
-
-    # 绘制弧底
-    for k in range(len(arc_pts) - 1):
-        msp.add_line(arc_pts[k], arc_pts[k + 1], dxfattribs={'layer': '轮廓线'})
+    # 弧底使用 AutoCAD 原生圆弧，避免 DXF 中变成多段直线。
+    start_deg = 270.0 - theta_deg / 2.0
+    end_deg = 270.0 + theta_deg / 2.0
+    msp.add_arc((0, R * sf), R * sf, start_deg, end_deg, dxfattribs={'layer': '轮廓线'})
 
     # 绘制两侧斜壁
     msp.add_line((x_arc_r * sf, h0 * sf), (x_top_r * sf, H * sf), dxfattribs={'layer': '轮廓线'})

@@ -47,8 +47,6 @@ COMMON_HYDRAULIC_COLUMNS = (
     ComparisonColumn("V_design", "设计流速 V", "m/s", 3),
     ComparisonColumn("h_increased", "加大水深 h加大", "m", 3),
     ComparisonColumn("V_increased", "加大流速 V加大", "m/s", 3),
-    ComparisonColumn("margin_type", "控制余量类型", "", None),
-    ComparisonColumn("control_margin", "控制余量", "m或%", 3),
 )
 
 
@@ -156,8 +154,6 @@ def standard_hydraulic_row(
     section_type: str,
     params: dict,
     result: dict,
-    margin_type: str = "",
-    control_margin: Any = "",
 ) -> dict[str, Any]:
     """生成四类面板通用的水力结果对比行。"""
     return {
@@ -169,8 +165,6 @@ def standard_hydraulic_row(
         "V_design": num(result.get("V_design")) or "",
         "h_increased": increase_value(params, result, "h_increased"),
         "V_increased": increase_value(params, result, "V_increased"),
-        "margin_type": margin_type,
-        "control_margin": control_margin if control_margin is not None else "",
     }
 
 

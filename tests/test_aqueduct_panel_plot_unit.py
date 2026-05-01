@@ -2,6 +2,7 @@
 """Unit tests for aqueduct section-plot titles and plot routing."""
 
 import importlib
+import math
 import os
 import sys
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QTextEdit
 
@@ -126,8 +128,92 @@ class _DrawDummy:
     _apply_section_plot_title = staticmethod(aqueduct_panel_mod.AqueductPanel._apply_section_plot_title)
 
 
+class _RenderPlotAllDummy:
+    _section_plot_title = staticmethod(aqueduct_panel_mod.AqueductPanel._section_plot_title)
+    _apply_section_plot_title = staticmethod(aqueduct_panel_mod.AqueductPanel._apply_section_plot_title)
+    _draw_u_section = aqueduct_panel_mod.AqueductPanel._draw_u_section
+    _draw_rect_section = aqueduct_panel_mod.AqueductPanel._draw_rect_section
+
+    def __init__(self, all_results, cases):
+        self.section_fig = Figure()
+        self.section_canvas = SimpleNamespace(draw=lambda: None)
+        self._all_results = all_results
+        self._cases = cases
+
+
 class _PanelParseDummy:
     pass
+
+
+def _horizontal_dashed_lines_at(ax, y_value):
+    """查找指定高程处的水平虚线。"""
+    matches = []
+    for line in ax.lines:
+        y_data = list(line.get_ydata())
+        if not y_data or line.get_linestyle() != "--":
+            continue
+        if all(abs(float(y) - y_value) < 1e-6 for y in y_data):
+            matches.append(line)
+    return matches
+
+
+def _assert_increased_line(ax, h_increased, expected_left, expected_right):
+    """断言加大水位线按真实断面宽度绘制。"""
+    matches = _horizontal_dashed_lines_at(ax, h_increased)
+    assert len(matches) == 1
+    x_data = list(matches[0].get_xdata())
+    assert x_data[0] == pytest.approx(expected_left)
+    assert x_data[-1] == pytest.approx(expected_right)
+
+    labels = [text.get_text() for text in ax.texts]
+    assert any("加大水位" in label for label in labels)
+
+
+def _vertical_double_arrows_at(ax, height, color):
+    """查找从0到指定水深的同色竖向双向箭头。"""
+    expected_color = to_rgba(color)
+    matches = []
+    for text in ax.texts:
+        if text.get_text() != "":
+            continue
+        arrow = getattr(text, "arrow_patch", None)
+        if arrow is None:
+            continue
+        x0, y0 = text.xy
+        x1, y1 = text.get_position()
+        if abs(float(x0) - float(x1)) > 1e-6:
+            continue
+        if sorted([float(y0), float(y1)]) != pytest.approx([0.0, height]):
+            continue
+        if arrow.get_edgecolor() != pytest.approx(expected_color):
+            continue
+        matches.append(text)
+    return matches
+
+
+def _assert_increased_depth_dimension(ax, h_increased):
+    """断言加大水深尺寸标注完整且避开既有竖向尺寸。"""
+    color = "#0066cc"
+    expected_label = f"h加大={h_increased:.2f}m"
+    labels = [text for text in ax.texts if text.get_text() == expected_label]
+    assert len(labels) == 1
+    label = labels[0]
+    label_x, label_y = label.get_position()
+    assert label_y == pytest.approx(h_increased / 2)
+    assert label.get_color() == color
+    assert label.get_rotation() == pytest.approx(90)
+
+    existing_vertical_labels = [
+        text
+        for text in ax.texts
+        if text.get_text().startswith(("h=", "H="))
+    ]
+    assert existing_vertical_labels
+    for existing in existing_vertical_labels:
+        assert abs(label_x - existing.get_position()[0]) > 1e-6
+
+    arrows = _vertical_double_arrows_at(ax, h_increased, color)
+    assert len(arrows) == 1
 
 
 def test_update_section_plot_all_uses_original_case_numbered_titles_and_h_total():
@@ -171,6 +257,65 @@ def test_update_section_plot_all_prefers_custom_label_and_passes_rect_result_thr
     assert [call["title"] for call in dummy.calls] == ["工况 1｜U形", "北干槽试算"]
     assert dummy.calls[1]["result"] is rect_result
     assert dummy.calls[1]["result"]["has_chamfer"] is True
+
+
+@pytest.mark.parametrize("section_type", ["U形", "矩形", "带倒角矩形"])
+def test_update_section_plot_all_overlays_increased_water_level_when_enabled(section_type):
+    if section_type == "U形":
+        result = _u_result()
+        result["h_increased"] = 0.7
+        expected_half_width = result["R"] * math.sqrt(1 - (1 - result["h_increased"] / result["R"]) ** 2)
+        expected_left, expected_right = -expected_half_width, expected_half_width
+        params = {"section_type": "U形", "Q": 5.0, "use_increase": True}
+        case = {"section_type": "U形"}
+    elif section_type == "带倒角矩形":
+        result = _rect_result(has_chamfer=True)
+        result["h_increased"] = 0.05
+        chamfer_height = result["chamfer_length"] * math.tan(math.radians(result["chamfer_angle"]))
+        offset = result["chamfer_length"] * (result["h_increased"] / chamfer_height)
+        expected_left, expected_right = -result["B"] / 2 + offset, result["B"] / 2 - offset
+        params = {"section_type": "矩形", "Q": 8.0, "use_increase": True}
+        case = {"section_type": "矩形"}
+    else:
+        result = _rect_result()
+        expected_left, expected_right = -result["B"] / 2, result["B"] / 2
+        params = {"section_type": "矩形", "Q": 8.0, "use_increase": True}
+        case = {"section_type": "矩形"}
+
+    dummy = _RenderPlotAllDummy(
+        [
+            (0, params, result),
+            (1, {"section_type": "矩形", "Q": 9.0, "use_increase": False}, _rect_result()),
+        ],
+        [case, {"section_type": "矩形"}],
+    )
+
+    aqueduct_panel_mod.AqueductPanel._update_section_plot_all(dummy)
+
+    _assert_increased_line(dummy.section_fig.axes[0], result["h_increased"], expected_left, expected_right)
+    _assert_increased_depth_dimension(dummy.section_fig.axes[0], result["h_increased"])
+
+
+@pytest.mark.parametrize(
+    ("use_increase", "h_increased"),
+    [(False, 1.45), (True, 0.0), (True, None), (True, "bad")],
+)
+def test_update_section_plot_all_skips_increased_water_level_when_disabled_or_invalid(use_increase, h_increased):
+    result = _u_result()
+    result["h_increased"] = h_increased
+    dummy = _RenderPlotAllDummy(
+        [
+            (0, {"section_type": "U形", "Q": 5.0, "use_increase": use_increase}, result),
+            (1, {"section_type": "矩形", "Q": 9.0, "use_increase": False}, _rect_result()),
+        ],
+        [{"section_type": "U形"}, {"section_type": "矩形"}],
+    )
+
+    aqueduct_panel_mod.AqueductPanel._update_section_plot_all(dummy)
+
+    assert _horizontal_dashed_lines_at(dummy.section_fig.axes[0], 1.45) == []
+    labels = [text.get_text() for text in dummy.section_fig.axes[0].texts]
+    assert not any(label.startswith("h加大=") for label in labels)
 
 
 @pytest.mark.parametrize(

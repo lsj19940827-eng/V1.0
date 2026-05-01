@@ -31,22 +31,16 @@ AQUEDUCT_DIMENSION_COLUMNS = (
     ComparisonColumn("chamfer_length", "倒角边长", "m", 3),
 )
 
+AQUEDUCT_HYDRAULIC_COLUMNS = COMMON_HYDRAULIC_COLUMNS + (
+    ComparisonColumn("design_top_freeboard", "设计槽顶超高", "m", 3),
+    ComparisonColumn("design_tie_bottom_clearance", "设计拉杆底净距", "m", 3),
+    ComparisonColumn("increased_effective_freeboard", "加大有效超高", "m", 3),
+)
+
 
 def _section_type(params: dict, result: dict) -> str:
     """统一读取渡槽断面类型。"""
     return str(params.get("section_type") or result.get("section_type") or "U形").strip() or "U形"
-
-
-def _control_margin(params: dict, result: dict) -> tuple[str, Any]:
-    """读取渡槽控制超高或拉杆净距。"""
-    has_tie = first_num(result.get("tie_rod_height"), params.get("tie_rod_height")) not in (None, 0)
-    if use_increase(params) and has_increase_result(result):
-        if has_tie:
-            return "加大有效超高", first_num(result.get("increased_tie_bottom_clearance"), result.get("Fb"))
-        return "加大槽身超高", first_num(result.get("Fb"))
-    if has_tie:
-        return "设计拉杆底净距", first_num(result.get("design_tie_bottom_clearance"))
-    return "设计槽顶超高", first_num(result.get("Fb_design"), result.get("Fb"))
 
 
 def _dimension_row(case_name: str, stype: str, params: dict, result: dict) -> dict[str, Any]:
@@ -71,12 +65,36 @@ def _dimension_row(case_name: str, stype: str, params: dict, result: dict) -> di
     }
 
 
+def _design_top_freeboard(result: dict) -> Any:
+    """读取或推导设计水面到槽顶的超高。"""
+    explicit = first_num(result.get("Fb_design"))
+    if explicit is not None:
+        return explicit
+    H_total = first_num(result.get("H_total"), result.get("H"))
+    h_design = first_num(result.get("h_design"))
+    if H_total is None or h_design is None:
+        return ""
+    return H_total - h_design
+
+
 def _build_row(case_name: str, params: dict, result: dict) -> tuple[dict[str, Any], dict[str, Any]]:
     """生成渡槽单个工况的两张对比表行。"""
     stype = _section_type(params, result)
-    margin_type, control_margin = _control_margin(params, result)
+    has_tie = first_num(result.get("tie_rod_height"), params.get("tie_rod_height")) not in (None, 0)
+    hydraulic = standard_hydraulic_row(case_name, stype, params, result)
+    hydraulic.update(
+        {
+            "design_top_freeboard": _design_top_freeboard(result),
+            "design_tie_bottom_clearance": first_num(result.get("design_tie_bottom_clearance")) if has_tie else "",
+            "increased_effective_freeboard": (
+                first_num(result.get("increased_tie_bottom_clearance"), result.get("Fb"))
+                if use_increase(params) and has_increase_result(result)
+                else ""
+            ),
+        }
+    )
     return (
-        standard_hydraulic_row(case_name, stype, params, result, margin_type, control_margin),
+        hydraulic,
         _dimension_row(case_name, stype, params, result),
     )
 
@@ -85,7 +103,7 @@ AQUEDUCT_COMPARISON_SPEC = ComparisonTableSpec(
     panel_key="aqueduct",
     hydraulic_title="渡槽水力结果对比表",
     dimension_title="渡槽结构尺寸对比表",
-    hydraulic_columns=COMMON_HYDRAULIC_COLUMNS,
+    hydraulic_columns=AQUEDUCT_HYDRAULIC_COLUMNS,
     dimension_columns=AQUEDUCT_DIMENSION_COLUMNS,
     row_builder=_build_row,
 )

@@ -133,12 +133,8 @@ def _draw_u(msp, result, p, sf=1.0, scale_denom=100):
 
     char = max(B, H, 1.0)*sf; th = 3.5; ar = th*0.85; gap = char*0.18
 
-    # 轮廓：下半圆 + 两侧直墙 + 顶部虚线
-    N = 40
-    for i in range(N):
-        a1 = math.pi + i*math.pi/N; a2 = math.pi + (i+1)*math.pi/N
-        msp.add_line((R*math.cos(a1)*sf, (R+R*math.sin(a1))*sf),
-                     (R*math.cos(a2)*sf, (R+R*math.sin(a2))*sf), dxfattribs={'layer': '轮廓线'})
+    # 轮廓：下半圆使用 AutoCAD 原生圆弧，两侧直墙 + 顶部虚线
+    msp.add_arc((0, R*sf), R*sf, 180, 360, dxfattribs={'layer': '轮廓线'})
     msp.add_line((-R*sf, R*sf), (-R*sf, H*sf), dxfattribs={'layer': '轮廓线'})
     msp.add_line((R*sf,  R*sf), (R*sf,  H*sf), dxfattribs={'layer': '轮廓线'})
     msp.add_line((-R*sf, H*sf), (R*sf, H*sf),  dxfattribs={'layer': '轮廓线', 'linetype': 'DASHED'})

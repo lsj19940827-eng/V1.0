@@ -444,10 +444,10 @@ def _add_text_block(msp, x, y_start, lines, txt_h, layer):
                     to_dxf_mtext_script(line),
                     dxfattribs=_copy_dxfattribs(text_attrs, layer_prefix=msp.layer_prefix),
                 )
-                entity.set_location(insert=msp._apply_point(insert))
+                entity.set_location(insert=msp._apply_point(insert), attachment_point=7)
             else:
                 entity = msp.add_mtext(to_dxf_mtext_script(line), dxfattribs=text_attrs)
-                entity.set_location(insert=insert)
+                entity.set_location(insert=insert, attachment_point=7)
         else:
             msp.add_text(
                 line,

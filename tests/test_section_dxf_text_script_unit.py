@@ -19,35 +19,31 @@ from app_渠系计算前端.open_channel.dxf_export import draw_open_channel_dxf
 from app_渠系计算前端.tunnel.dxf_export import draw_tunnel_dxf_on_msp  # noqa: E402
 
 
-def _draw_and_collect_text(draw_func, result, params):
-    """绘制断面并收集普通文字与多行文字内容。"""
+def _draw_and_collect_entities(draw_func, result, params):
+    """绘制断面并收集普通文字与多行文字实体。"""
     doc = ezdxf.new("R2010")
     setup_section_dxf_document(doc, scale_denom=100)
     msp = doc.modelspace()
 
     draw_func(msp, result, params, scale_denom=100)
 
-    text_values = [
-        entity.dxf.text
-        for entity in msp
-        if entity.dxftype() == "TEXT"
-    ]
-    mtext_values = [
-        entity.text
-        for entity in msp
-        if entity.dxftype() == "MTEXT"
-    ]
-    return text_values, mtext_values
+    text_entities = [entity for entity in msp if entity.dxftype() == "TEXT"]
+    mtext_entities = [entity for entity in msp if entity.dxftype() == "MTEXT"]
+    return text_entities, mtext_entities
 
 
 def _assert_script_units_are_mtext(draw_func, result, params):
-    """断言 m³/s、m² 不再以普通 TEXT 形式写入 DXF。"""
-    text_values, mtext_values = _draw_and_collect_text(draw_func, result, params)
+    """断言 m³/s、m² 不再以普通 TEXT 形式写入 DXF，且不会向下压行。"""
+    text_entities, mtext_entities = _draw_and_collect_entities(draw_func, result, params)
+    text_values = [entity.dxf.text for entity in text_entities]
+    mtext_values = [entity.text for entity in mtext_entities]
 
     assert not any("³" in text or "²" in text for text in text_values)
     joined_mtext = "".join(mtext_values)
     assert "\\S3^" in joined_mtext
     assert "\\S2^" in joined_mtext
+    for entity in mtext_entities:
+        assert entity.dxf.attachment_point == 7
 
 
 def test_aqueduct_single_case_dxf_script_units_use_mtext():

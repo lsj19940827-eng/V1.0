@@ -64,6 +64,9 @@ from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
     build_result_nav_bar,
     build_result_navigation_head,
+    case_result_jump_hint,
+    has_fresh_case_results,
+    is_case_result_stale,
     make_case_result_anchor,
     sync_case_result_nav_bar,
     wrap_case_result_block,
@@ -342,6 +345,8 @@ class PressurePipePanel(QWidget):
         self._last_errors: list[str] = []
         self._panel_key = "pressure-pipe"
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = False
         self._init_ui()
         self._setup_result_dirty_tracking()
@@ -1147,7 +1152,15 @@ class PressurePipePanel(QWidget):
             self._load_case(idx)
             self._rebuild_case_tags()
             self.data_changed.emit()
-        self._jump_to_case_result(idx)
+        if has_fresh_case_results(
+            all_results=self._all_results,
+            has_rendered_results=self._has_rendered_results,
+            results_dirty=self._results_dirty,
+            case_idx=idx,
+            stale_case_indexes=getattr(self, "_stale_result_case_indexes", set()),
+            all_results_stale=getattr(self, "_all_results_stale", False),
+        ):
+            self._jump_to_case_result(idx)
 
     def _add_case(self):
         """添加新工况（从当前工况复制参数，清空Q）"""
@@ -1160,7 +1173,7 @@ class PressurePipePanel(QWidget):
         new_case['Q'] = ''
         new_case['custom_label'] = None
         self._cases.append(new_case)
-        self._mark_results_dirty()
+        self._mark_results_dirty(mark_case=False)
         self._current_case_idx = len(self._cases) - 1
         self._load_case(self._current_case_idx)
         self._rebuild_case_tags()
@@ -1175,7 +1188,7 @@ class PressurePipePanel(QWidget):
                             parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
             return
         idx = self._current_case_idx
-        self._mark_results_dirty()
+        self._mark_results_dirty(all_cases=True)
         self._cases.pop(idx)
         if self._current_case_idx >= len(self._cases):
             self._current_case_idx = len(self._cases) - 1
@@ -1257,24 +1270,55 @@ class PressurePipePanel(QWidget):
     def _on_result_inputs_changed(self, *_args):
         self._mark_results_dirty()
 
-    def _mark_results_dirty(self):
+    def _case_result_state_kwargs(self, case_idx):
+        """返回目标工况结果状态判断所需的参数。"""
+        return {
+            "all_results": self._all_results,
+            "has_rendered_results": self._has_rendered_results,
+            "results_dirty": self._results_dirty,
+            "case_idx": case_idx,
+            "stale_case_indexes": getattr(self, "_stale_result_case_indexes", set()),
+            "all_results_stale": getattr(self, "_all_results_stale", False),
+        }
+
+    def _mark_results_dirty(
+        self,
+        case_idx=None,
+        *,
+        all_cases=False,
+        mark_case=True,
+        case_indexes=None,
+    ):
+        """标记旧结果过期；默认只标记当前工况。"""
         if getattr(self, "_loading_case", False):
             return
         if self._has_rendered_results or self._all_results:
             self._results_dirty = True
+            if not hasattr(self, "_stale_result_case_indexes"):
+                self._stale_result_case_indexes = set()
+            if all_cases:
+                self._all_results_stale = True
+                self._stale_result_case_indexes.clear()
+            elif not getattr(self, "_all_results_stale", False):
+                targets = case_indexes
+                if targets is None and mark_case:
+                    targets = [self._current_case_idx if case_idx is None else case_idx]
+                for target in targets or []:
+                    try:
+                        self._stale_result_case_indexes.add(int(target))
+                    except (TypeError, ValueError):
+                        continue
 
     def _mark_results_fresh(self):
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = bool(self._all_results)
 
-    def _show_result_jump_hint(self, stale=False):
-        content = (
-            "参数已变更，请先重新计算后查看对应工况结果。"
-            if stale else
-            "当前没有可定位的计算结果，请先完成计算。"
-        )
+    def _show_result_jump_hint(self, stale=False, reason=None):
+        title, content = case_result_jump_hint(stale=stale, reason=reason)
         InfoBar.warning(
-            title="无法定位结果",
+            title=title,
             content=content,
             parent=self,
             position=InfoBarPosition.TOP_RIGHT,
@@ -1308,11 +1352,17 @@ class PressurePipePanel(QWidget):
         return items
 
     def _jump_to_case_result(self, case_idx, *, defer_until_load=False):
-        if not self._all_results or not self._has_rendered_results:
-            self._show_result_jump_hint(stale=False)
-            return False
-        if self._results_dirty:
-            self._show_result_jump_hint(stale=True)
+        if not has_fresh_case_results(**self._case_result_state_kwargs(case_idx)):
+            all_results_stale = getattr(self, "_all_results_stale", False)
+            self._show_result_jump_hint(
+                stale=is_case_result_stale(
+                    case_idx=case_idx,
+                    results_dirty=self._results_dirty,
+                    stale_case_indexes=getattr(self, "_stale_result_case_indexes", set()),
+                    all_results_stale=all_results_stale,
+                ),
+                reason="structure_stale" if all_results_stale else None,
+            )
             return False
         self.notebook.setCurrentIndex(0)
         return scroll_view_to_anchor(
@@ -1344,7 +1394,9 @@ class PressurePipePanel(QWidget):
     def _apply_to_all_cases(self):
         """将当前工况的参数（不含Q）复制到所有其他工况"""
         self._save_current_case()
-        self._mark_results_dirty()
+        self._mark_results_dirty(
+            case_indexes=[i for i in range(len(self._cases)) if i != self._current_case_idx]
+        )
         src = self._cases[self._current_case_idx]
         keys = ('material_idx', 'length', 'local_ratio', 'D', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text')
         for i, case in enumerate(self._cases):
@@ -1991,6 +2043,8 @@ class PressurePipePanel(QWidget):
         self._all_results = []
         self._last_errors = []
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = False
         self._rebuild_case_tags()
         self._update_calc_btn_text()

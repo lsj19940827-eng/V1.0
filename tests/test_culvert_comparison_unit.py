@@ -12,11 +12,22 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app_渠系计算前端.dxf_multi_export import DxfExportCaseEntry
-from app_渠系计算前端.culvert.comparison import build_culvert_comparison_tables
+from app_渠系计算前端.culvert.comparison import CULVERT_COMPARISON_SPEC, build_culvert_comparison_tables
+
+
+def test_culvert_comparison_omits_control_margin_columns():
+    """暗涵工况对比不再展示控制余量摘要列。"""
+    titles = [column.title for column in CULVERT_COMPARISON_SPEC.hydraulic_columns]
+    keys = [column.key for column in CULVERT_COMPARISON_SPEC.hydraulic_columns]
+
+    assert "控制余量类型" not in titles
+    assert "控制余量" not in titles
+    assert "margin_type" not in keys
+    assert "control_margin" not in keys
 
 
 def test_culvert_comparison_maps_rect_dimensions_and_design_clearance():
-    """矩形暗涵应展示 B/H 和设计净空控制余量。"""
+    """矩形暗涵应展示 B/H 和设计净空重点结果。"""
     entries = [
         DxfExportCaseEntry(
             case_idx=0,
@@ -40,8 +51,10 @@ def test_culvert_comparison_maps_rect_dimensions_and_design_clearance():
 
     tables = build_culvert_comparison_tables(entries)
 
-    assert tables.hydraulic_rows[0]["margin_type"] == "设计净空高度"
-    assert tables.hydraulic_rows[0]["control_margin"] == pytest.approx(0.60)
+    assert tables.hydraulic_rows[0]["freeboard_hgt_design"] == pytest.approx(0.60)
+    assert tables.hydraulic_rows[0]["freeboard_pct_design"] == pytest.approx(33.3)
+    assert tables.hydraulic_rows[0]["freeboard_hgt_inc"] == ""
+    assert tables.hydraulic_rows[0]["freeboard_pct_inc"] == ""
     assert tables.dimension_rows[0]["B"] == pytest.approx(2.4)
     assert tables.dimension_rows[0]["H"] == pytest.approx(1.8)
     assert tables.dimension_rows[0]["A_total"] == pytest.approx(4.32)
@@ -67,6 +80,8 @@ def test_culvert_comparison_keeps_arch_wall_height_source():
                 "Q_increased": 8.4,
                 "h_increased": 1.72,
                 "V_increased": 1.57,
+                "freeboard_hgt_design": 1.05,
+                "freeboard_pct_design": 40.4,
                 "freeboard_hgt_inc": 0.88,
                 "freeboard_pct_inc": 33.8,
             },
@@ -76,8 +91,12 @@ def test_culvert_comparison_keeps_arch_wall_height_source():
 
     tables = build_culvert_comparison_tables(entries)
 
-    assert tables.hydraulic_rows[0]["margin_type"] == "加大净空高度"
-    assert tables.hydraulic_rows[0]["control_margin"] == pytest.approx(0.88)
+    assert tables.hydraulic_rows[0]["freeboard_hgt_design"] == pytest.approx(1.05)
+    assert tables.hydraulic_rows[0]["freeboard_pct_design"] == pytest.approx(40.4)
+    assert tables.hydraulic_rows[0]["freeboard_hgt_inc"] == pytest.approx(0.88)
+    assert tables.hydraulic_rows[0]["freeboard_pct_inc"] == pytest.approx(33.8)
     assert tables.dimension_rows[0]["H_straight"] == pytest.approx(1.0)
     assert tables.dimension_rows[0]["H_straight_source"] == "手填"
     assert tables.dimension_rows[0]["theta_deg"] == pytest.approx(180.0)
+    assert tables.dimension_rows[0]["R_arch"] == pytest.approx(1.6)
+    assert tables.dimension_rows[0]["H_arch"] == pytest.approx(1.6)

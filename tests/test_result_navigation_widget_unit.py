@@ -130,3 +130,76 @@ def test_case_result_navigation_bar_renders_multiple_items_and_emits_case_idx():
     assert requested == [0, 7]
 
     bar.deleteLater()
+
+
+def test_case_result_state_helpers_distinguish_fresh_stale_and_empty_results():
+    mod = importlib.import_module("app_渠系计算前端.result_navigation")
+
+    assert mod.has_fresh_case_results(
+        all_results=[(0, {"Q": 1.0}, {"success": True})],
+        has_rendered_results=True,
+        results_dirty=False,
+    ) is True
+
+    assert mod.has_fresh_case_results(
+        all_results=[],
+        has_rendered_results=True,
+        results_dirty=False,
+    ) is False
+    assert mod.has_fresh_case_results(
+        all_results=[(0, {"Q": 1.0}, {"success": True})],
+        has_rendered_results=False,
+        results_dirty=False,
+    ) is False
+    assert mod.has_fresh_case_results(
+        all_results=[(0, {"Q": 1.0}, {"success": True})],
+        has_rendered_results=True,
+        results_dirty=True,
+    ) is False
+
+
+def test_case_result_jump_hint_text_explains_stale_results_can_be_recalculated_together():
+    mod = importlib.import_module("app_渠系计算前端.result_navigation")
+
+    stale_title, stale_content = mod.case_result_jump_hint(stale=True)
+    structure_title, structure_content = mod.case_result_jump_hint(reason="structure_stale")
+    empty_title, empty_content = mod.case_result_jump_hint(stale=False)
+
+    assert stale_title == "结果已过期"
+    assert stale_content == "因当前工况参数被修改，致使计算结果过期。请执行计算后再查看计算结果。"
+    assert structure_title == "结果已失效"
+    assert structure_content == "工况已删除，原计算结果与当前工况序号可能不一致。请执行计算后再查看计算结果。"
+    assert empty_title == "暂无计算结果"
+    assert "完成计算" in empty_content
+
+
+def test_case_result_state_helpers_allow_fresh_case_when_another_case_is_stale():
+    mod = importlib.import_module("app_渠系计算前端.result_navigation")
+    all_results = [
+        (0, {"Q": 5.0}, {"success": True}),
+        (1, {"Q": 6.0}, {"success": True}),
+        (2, {"Q": 7.0}, {"success": True}),
+    ]
+
+    assert mod.has_fresh_case_results(
+        all_results=all_results,
+        has_rendered_results=True,
+        results_dirty=True,
+        case_idx=0,
+        stale_case_indexes={1},
+    ) is True
+    assert mod.has_fresh_case_results(
+        all_results=all_results,
+        has_rendered_results=True,
+        results_dirty=True,
+        case_idx=1,
+        stale_case_indexes={1},
+    ) is False
+    assert mod.has_fresh_case_results(
+        all_results=all_results,
+        has_rendered_results=True,
+        results_dirty=True,
+        case_idx=0,
+        stale_case_indexes={1},
+        all_results_stale=True,
+    ) is False

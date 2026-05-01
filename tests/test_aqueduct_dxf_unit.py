@@ -42,6 +42,7 @@ class _FakeMsp:
         self.texts = []
         self.mtexts = []
         self.polylines = []
+        self.arcs = []
         self.dims = []
 
     def add_line(self, start, end, dxfattribs=None):
@@ -49,6 +50,15 @@ class _FakeMsp:
 
     def add_lwpolyline(self, points, dxfattribs=None):
         self.polylines.append({"points": list(points), "attrs": dict(dxfattribs or {})})
+
+    def add_arc(self, center, radius, start_angle, end_angle, dxfattribs=None):
+        self.arcs.append({
+            "center": center,
+            "radius": radius,
+            "start_angle": start_angle,
+            "end_angle": end_angle,
+            "attrs": dict(dxfattribs or {}),
+        })
 
     def add_text(self, text, dxfattribs=None):
         self.texts.append({"text": str(text), "attrs": dict(dxfattribs or {})})

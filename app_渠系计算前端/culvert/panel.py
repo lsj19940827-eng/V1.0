@@ -125,6 +125,9 @@ from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
     build_result_nav_bar,
     build_result_navigation_head,
+    case_result_jump_hint,
+    has_fresh_case_results,
+    is_case_result_stale,
     make_case_result_anchor,
     sync_case_result_nav_bar,
     wrap_case_result_block,
@@ -202,6 +205,8 @@ class CulvertPanel(QWidget):
         self._loading_case = False
         self._panel_key = "culvert"
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = False
         self._init_ui()
         self._setup_result_dirty_tracking()
@@ -735,7 +740,15 @@ class CulvertPanel(QWidget):
             self._current_case_idx = idx
             self._load_case(idx)
             self._rebuild_case_tags()
-        self._jump_to_case_result(idx)
+        if has_fresh_case_results(
+            all_results=self._all_results,
+            has_rendered_results=self._has_rendered_results,
+            results_dirty=self._results_dirty,
+            case_idx=idx,
+            stale_case_indexes=getattr(self, "_stale_result_case_indexes", set()),
+            all_results_stale=getattr(self, "_all_results_stale", False),
+        ):
+            self._jump_to_case_result(idx)
 
     def _add_case(self):
         if len(self._cases) >= MAX_CASES:
@@ -747,7 +760,7 @@ class CulvertPanel(QWidget):
         new_case['Q'] = ''
         new_case['custom_label'] = None
         self._cases.append(new_case)
-        self._mark_results_dirty()
+        self._mark_results_dirty(mark_case=False)
         self._current_case_idx = len(self._cases) - 1
         self._load_case(self._current_case_idx)
         self._rebuild_case_tags()
@@ -760,7 +773,7 @@ class CulvertPanel(QWidget):
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
         idx = self._current_case_idx
-        self._mark_results_dirty()
+        self._mark_results_dirty(all_cases=True)
         self._cases.pop(idx)
         if self._current_case_idx >= len(self._cases):
             self._current_case_idx = len(self._cases) - 1
@@ -869,15 +882,50 @@ class CulvertPanel(QWidget):
     def _on_result_inputs_changed(self, *_args):
         self._mark_results_dirty()
 
-    def _mark_results_dirty(self):
+    def _case_result_state_kwargs(self, case_idx):
+        """返回目标工况结果状态判断所需的参数。"""
+        return {
+            "all_results": self._all_results,
+            "has_rendered_results": self._has_rendered_results,
+            "results_dirty": self._results_dirty,
+            "case_idx": case_idx,
+            "stale_case_indexes": getattr(self, "_stale_result_case_indexes", set()),
+            "all_results_stale": getattr(self, "_all_results_stale", False),
+        }
+
+    def _mark_results_dirty(
+        self,
+        case_idx=None,
+        *,
+        all_cases=False,
+        mark_case=True,
+        case_indexes=None,
+    ):
+        """标记旧结果过期；默认只标记当前工况。"""
         if self._loading_case:
             return
         if self._has_rendered_results or self._all_results:
             self._results_dirty = True
+            if not hasattr(self, "_stale_result_case_indexes"):
+                self._stale_result_case_indexes = set()
+            if all_cases:
+                self._all_results_stale = True
+                self._stale_result_case_indexes.clear()
+            elif not getattr(self, "_all_results_stale", False):
+                targets = case_indexes
+                if targets is None and mark_case:
+                    targets = [self._current_case_idx if case_idx is None else case_idx]
+                for target in targets or []:
+                    try:
+                        self._stale_result_case_indexes.add(int(target))
+                    except (TypeError, ValueError):
+                        continue
             self._clear_comparison_tables("参数已变更，请重新计算后查看工况对比。")
 
     def _mark_results_fresh(self):
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = bool(self._all_results)
 
     def _configure_comparison_table(self, table):
@@ -958,14 +1006,10 @@ class CulvertPanel(QWidget):
         else:
             self._set_comparison_hint("当前没有可汇总的成功工况，请检查计算结果。")
 
-    def _show_result_jump_hint(self, stale=False):
-        content = (
-            "参数已变更，请先重新计算后查看对应工况结果。"
-            if stale else
-            "当前没有可定位的计算结果，请先完成计算。"
-        )
+    def _show_result_jump_hint(self, stale=False, reason=None):
+        title, content = case_result_jump_hint(stale=stale, reason=reason)
         InfoBar.warning(
-            title="无法定位结果",
+            title=title,
             content=content,
             parent=self._info_parent(),
             position=InfoBarPosition.TOP,
@@ -978,14 +1022,17 @@ class CulvertPanel(QWidget):
         return f"工况 {case_idx + 1}"
 
     def _case_result_nav_summary(self, case_idx, params, result):
-        q_raw = params.get("Q", self._cases[case_idx].get("Q", ""))
+        case = self._cases[case_idx] if 0 <= case_idx < len(self._cases) else {}
+        q_raw = params.get("Q") if "Q" in params else case.get("Q", "")
         try:
             q_text = f"Q={float(q_raw):.3f}"
         except Exception:
             q_text = f"Q={str(q_raw).strip() or '?'}"
         if not result.get("success"):
             return "计算失败"
-        section_type = _normalize_culvert_section_type(params.get("section_type", self._cases[case_idx].get("section_type", _CULVERT_RECT)))
+        section_type = _normalize_culvert_section_type(
+            params.get("section_type") or case.get("section_type", _CULVERT_RECT)
+        )
         return f"{_culvert_full_name(section_type)} · {q_text}"
 
     def _build_case_nav_items(self):
@@ -1001,11 +1048,17 @@ class CulvertPanel(QWidget):
         return items
 
     def _jump_to_case_result(self, case_idx, *, defer_until_load=False):
-        if not self._all_results or not self._has_rendered_results:
-            self._show_result_jump_hint(stale=False)
-            return False
-        if self._results_dirty:
-            self._show_result_jump_hint(stale=True)
+        if not has_fresh_case_results(**self._case_result_state_kwargs(case_idx)):
+            all_results_stale = getattr(self, "_all_results_stale", False)
+            self._show_result_jump_hint(
+                stale=is_case_result_stale(
+                    case_idx=case_idx,
+                    results_dirty=self._results_dirty,
+                    stale_case_indexes=getattr(self, "_stale_result_case_indexes", set()),
+                    all_results_stale=all_results_stale,
+                ),
+                reason="structure_stale" if all_results_stale else None,
+            )
             return False
         self.notebook.setCurrentIndex(0)
         return scroll_view_to_anchor(
@@ -1018,7 +1071,9 @@ class CulvertPanel(QWidget):
 
     def _apply_to_all_cases(self):
         self._save_current_case()
-        self._mark_results_dirty()
+        self._mark_results_dirty(
+            case_indexes=[i for i in range(len(self._cases)) if i != self._current_case_idx]
+        )
         src = self._cases[self._current_case_idx]
         keys = (
             'section_type', 'theta_deg',
@@ -1385,9 +1440,13 @@ class CulvertPanel(QWidget):
         n = len(success_results)
         if n == 1:
             ci, p, r = success_results[0]
-            axes = self.section_fig.subplots(1, 2)
-            self._draw_case_section(axes[0], p, r, r['h_design'], r['V_design'], p['Q'], "设计流量")
-            self._draw_case_section(axes[1], p, r, r['h_increased'], r['V_increased'], r['Q_increased'], "加大流量")
+            if CulvertPanel._has_valid_increased_waterline(p, r):
+                axes = self.section_fig.subplots(1, 2)
+                self._draw_case_section(axes[0], p, r, r['h_design'], r['V_design'], p['Q'], "设计流量")
+                self._draw_case_section(axes[1], p, r, r['h_increased'], r['V_increased'], r['Q_increased'], "加大流量")
+            else:
+                ax = self.section_fig.subplots()
+                self._draw_case_section(ax, p, r, r['h_design'], r['V_design'], p['Q'], "设计流量")
         else:
             ncols = min(n, 3)
             nrows = (n + ncols - 1) // ncols
@@ -1396,6 +1455,7 @@ class CulvertPanel(QWidget):
                 row, col = divmod(idx, ncols)
                 ax = axes[row][col]
                 self._draw_case_section(ax, p, r, r['h_design'], r['V_design'], p['Q'], f"工况{ci+1} Q={p['Q']:.2f}")
+                CulvertPanel._draw_increased_waterline(ax, p, r)
             for idx in range(n, nrows * ncols):
                 row, col = divmod(idx, ncols)
                 axes[row][col].set_visible(False)
@@ -1410,6 +1470,83 @@ class CulvertPanel(QWidget):
             self._draw_arch(ax, result['B'], result['H_total'], theta_rad, h_w, velocity, flow, title)
             return
         self._draw_rect(ax, result['B'], result['H'], h_w, velocity, flow, title)
+
+    @staticmethod
+    def _has_valid_increased_waterline(params, result):
+        """判断当前工况是否需要绘制加大水位线。"""
+        if not params.get('use_increase', True):
+            return False
+        try:
+            h_inc = float(result.get('h_increased'))
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(h_inc) or h_inc <= 0:
+            return False
+        section_type = _normalize_culvert_section_type(params.get('section_type', _CULVERT_RECT))
+        height_key = 'H_total' if section_type == _CULVERT_ARCH else 'H'
+        try:
+            section_height = float(result.get(height_key, 0.0))
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(section_height) and h_inc <= section_height + 1e-9
+
+    @staticmethod
+    def _draw_increased_waterline(ax, params, result):
+        """在多工况断面图上叠加加大水位线。"""
+        if not CulvertPanel._has_valid_increased_waterline(params, result):
+            return
+        h_inc = float(result.get('h_increased'))
+        section_type = _normalize_culvert_section_type(params.get('section_type', _CULVERT_RECT))
+        B = float(result.get('B', 0.0))
+        if B <= 0:
+            return
+        if section_type == _CULVERT_ARCH:
+            theta_rad = math.radians(result.get('theta_deg', params.get('theta_deg', 180.0)))
+            geom = _build_arch_geometry(B, result['H_total'], theta_rad)
+            water_half_width = _arch_half_width(geom, h_inc)
+        else:
+            water_half_width = B / 2.0
+        ax.plot(
+            [-water_half_width, water_half_width],
+            [h_inc, h_inc],
+            color='#D14B3F',
+            linestyle='--',
+            lw=1.6,
+        )
+        ax.text(
+            water_half_width,
+            h_inc,
+            f' 加大水位 {h_inc:.2f}m',
+            fontsize=8,
+            color='#D14B3F',
+            va='bottom',
+            ha='left',
+        )
+        CulvertPanel._draw_increased_depth_dimension(ax, water_half_width, h_inc, '#D14B3F')
+
+    @staticmethod
+    def _draw_increased_depth_dimension(ax, water_half_width, h_inc, color):
+        """绘制加大水深竖向尺寸标注。"""
+        if water_half_width <= 0 or h_inc <= 0:
+            return
+        x_pos = water_half_width * 0.72
+        text_pad = max(water_half_width * 0.08, 0.04)
+        ax.annotate(
+            '',
+            xy=(x_pos, h_inc),
+            xytext=(x_pos, 0),
+            arrowprops=dict(arrowstyle='<->', color=color, lw=1.4),
+        )
+        ax.text(
+            x_pos + text_pad,
+            h_inc / 2,
+            f'h加大={h_inc:.2f}m',
+            fontsize=8,
+            color=color,
+            rotation=90,
+            va='center',
+            ha='left',
+        )
 
     def _update_result_display(self, result):
         """兼容单结果调用"""
@@ -2024,10 +2161,14 @@ class CulvertPanel(QWidget):
             self.section_canvas.draw(); return
 
         Q = self.input_params['Q']
-        Q_inc = result['Q_increased']
-        axes = self.section_fig.subplots(1, 2)
-        self._draw_case_section(axes[0], self.input_params, result, result['h_design'], result['V_design'], Q, "设计流量")
-        self._draw_case_section(axes[1], self.input_params, result, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
+        if CulvertPanel._has_valid_increased_waterline(self.input_params, result):
+            Q_inc = result['Q_increased']
+            axes = self.section_fig.subplots(1, 2)
+            self._draw_case_section(axes[0], self.input_params, result, result['h_design'], result['V_design'], Q, "设计流量")
+            self._draw_case_section(axes[1], self.input_params, result, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
+        else:
+            ax = self.section_fig.subplots()
+            self._draw_case_section(ax, self.input_params, result, result['h_design'], result['V_design'], Q, "设计流量")
         self.section_fig.tight_layout()
         self.section_canvas.draw()
 
@@ -2125,6 +2266,8 @@ class CulvertPanel(QWidget):
         self._save_current_case()
         self._all_results = []
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = False
         self._rebuild_case_tags()
         self._update_calc_btn_text()

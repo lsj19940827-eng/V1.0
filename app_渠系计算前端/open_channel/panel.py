@@ -148,6 +148,9 @@ from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
     build_result_nav_bar,
     build_result_navigation_head,
+    case_result_jump_hint,
+    has_fresh_case_results,
+    is_case_result_stale,
     make_case_result_anchor,
     sync_case_result_nav_bar,
     wrap_case_result_block,
@@ -188,6 +191,8 @@ class OpenChannelPanel(QWidget):
         self._suppress_result_render = False
         self._panel_key = "open-channel"
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = False
         self._init_ui()
         self._setup_result_dirty_tracking()
@@ -612,15 +617,50 @@ class OpenChannelPanel(QWidget):
     def _on_result_inputs_changed(self, *_args):
         self._mark_results_dirty()
 
-    def _mark_results_dirty(self):
+    def _case_result_state_kwargs(self, case_idx):
+        """返回目标工况结果状态判断所需的参数。"""
+        return {
+            "all_results": self._all_results,
+            "has_rendered_results": self._has_rendered_results,
+            "results_dirty": self._results_dirty,
+            "case_idx": case_idx,
+            "stale_case_indexes": getattr(self, "_stale_result_case_indexes", set()),
+            "all_results_stale": getattr(self, "_all_results_stale", False),
+        }
+
+    def _mark_results_dirty(
+        self,
+        case_idx=None,
+        *,
+        all_cases=False,
+        mark_case=True,
+        case_indexes=None,
+    ):
+        """标记旧结果过期；默认只标记当前工况。"""
         if self._loading_case:
             return
         if self._has_rendered_results or self._all_results:
             self._results_dirty = True
+            if not hasattr(self, "_stale_result_case_indexes"):
+                self._stale_result_case_indexes = set()
+            if all_cases:
+                self._all_results_stale = True
+                self._stale_result_case_indexes.clear()
+            elif not getattr(self, "_all_results_stale", False):
+                targets = case_indexes
+                if targets is None and mark_case:
+                    targets = [self._current_case_idx if case_idx is None else case_idx]
+                for target in targets or []:
+                    try:
+                        self._stale_result_case_indexes.add(int(target))
+                    except (TypeError, ValueError):
+                        continue
             self._clear_comparison_tables("参数已变更，请重新计算后查看工况对比。")
 
     def _mark_results_fresh(self):
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = bool(self._all_results)
 
     def _configure_comparison_table(self, table):
@@ -701,14 +741,10 @@ class OpenChannelPanel(QWidget):
         else:
             self._set_comparison_hint("当前没有可汇总的成功工况，请检查计算结果。")
 
-    def _show_result_jump_hint(self, stale=False):
-        content = (
-            "参数已变更，请先重新计算后查看对应工况结果。"
-            if stale else
-            "当前没有可定位的计算结果，请先完成计算。"
-        )
+    def _show_result_jump_hint(self, stale=False, reason=None):
+        title, content = case_result_jump_hint(stale=stale, reason=reason)
         InfoBar.warning(
-            title="无法定位结果",
+            title=title,
             content=content,
             parent=self._info_parent(),
             position=InfoBarPosition.TOP,
@@ -721,8 +757,9 @@ class OpenChannelPanel(QWidget):
         return f"工况 {case_idx + 1}"
 
     def _case_result_nav_summary(self, case_idx, params, result):
-        stype = params.get("section_type") or self._cases[case_idx].get("section_type", "梯形")
-        q_raw = params.get("Q", self._cases[case_idx].get("Q", ""))
+        case = self._cases[case_idx] if 0 <= case_idx < len(self._cases) else {}
+        stype = params.get("section_type") or case.get("section_type", "梯形")
+        q_raw = params.get("Q") if "Q" in params else case.get("Q", "")
         try:
             q_text = f"Q={float(q_raw):.3f}"
         except Exception:
@@ -742,11 +779,17 @@ class OpenChannelPanel(QWidget):
         return items
 
     def _jump_to_case_result(self, case_idx, *, defer_until_load=False):
-        if not self._all_results or not self._has_rendered_results:
-            self._show_result_jump_hint(stale=False)
-            return False
-        if self._results_dirty:
-            self._show_result_jump_hint(stale=True)
+        if not has_fresh_case_results(**self._case_result_state_kwargs(case_idx)):
+            all_results_stale = getattr(self, "_all_results_stale", False)
+            self._show_result_jump_hint(
+                stale=is_case_result_stale(
+                    case_idx=case_idx,
+                    results_dirty=self._results_dirty,
+                    stale_case_indexes=getattr(self, "_stale_result_case_indexes", set()),
+                    all_results_stale=all_results_stale,
+                ),
+                reason="structure_stale" if all_results_stale else None,
+            )
             return False
         self.notebook.setCurrentIndex(0)
         return scroll_view_to_anchor(
@@ -936,7 +979,14 @@ class OpenChannelPanel(QWidget):
             self._current_case_idx = idx
             self._load_case(idx)
             self._rebuild_case_tags()
-        if self._all_results and self._has_rendered_results and not self._results_dirty:
+        if has_fresh_case_results(
+            all_results=self._all_results,
+            has_rendered_results=self._has_rendered_results,
+            results_dirty=self._results_dirty,
+            case_idx=idx,
+            stale_case_indexes=getattr(self, "_stale_result_case_indexes", set()),
+            all_results_stale=getattr(self, "_all_results_stale", False),
+        ):
             self._jump_to_case_result(idx)
 
     def _add_case(self):
@@ -945,7 +995,7 @@ class OpenChannelPanel(QWidget):
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
         self._save_current_case()
-        self._mark_results_dirty()
+        self._mark_results_dirty(mark_case=False)
         new_case = copy.deepcopy(self._cases[self._current_case_idx])
         new_case['Q'] = ''
         new_case['custom_label'] = None
@@ -961,7 +1011,7 @@ class OpenChannelPanel(QWidget):
             InfoBar.warning(title="提示", content="至少保留一个工况",
                             parent=self._info_parent(), position=InfoBarPosition.TOP, duration=2000)
             return
-        self._mark_results_dirty()
+        self._mark_results_dirty(all_cases=True)
         idx = self._current_case_idx
         self._cases.pop(idx)
         if self._current_case_idx >= len(self._cases):
@@ -1043,7 +1093,9 @@ class OpenChannelPanel(QWidget):
 
     def _apply_to_all_cases(self):
         self._save_current_case()
-        self._mark_results_dirty()
+        self._mark_results_dirty(
+            case_indexes=[i for i in range(len(self._cases)) if i != self._current_case_idx]
+        )
         src = self._cases[self._current_case_idx]
         keys = ('section_type', 'm', 'n', 'slope_inv', 'v_min', 'v_max',
                 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text', 'detail_checked',
@@ -1508,6 +1560,7 @@ class OpenChannelPanel(QWidget):
         """按单个工况类型复用完整断面绘图，确保多工况也保留尺寸标注。"""
         stype = params.get('section_type', '梯形')
         Q = float(params.get('Q', 0.0) or 0.0)
+        increase_depth, _, _ = OpenChannelPanel._increase_plot_values(params, result)
         if stype == '圆形':
             self._draw_circular(
                 ax,
@@ -1516,6 +1569,9 @@ class OpenChannelPanel(QWidget):
                 result.get('V_d', result.get('V_design', 0.0)),
                 Q,
                 title,
+            )
+            OpenChannelPanel._draw_increase_water_level(
+                self, ax, stype, params, result, increase_depth
             )
         elif stype == '复式梯形':
             h_w = result.get('h_design', 0.0)
@@ -1534,6 +1590,9 @@ class OpenChannelPanel(QWidget):
                 h_w,
                 title,
             )
+            OpenChannelPanel._draw_increase_water_level(
+                self, ax, stype, params, result, increase_depth
+            )
         elif stype == 'U形':
             h_w = result.get('h_design', 0.0)
             h_ch = result.get('h_prime', 0.0) if result.get('h_prime', 0.0) > 0 else h_w * 1.35
@@ -1548,20 +1607,206 @@ class OpenChannelPanel(QWidget):
                 Q,
                 title,
             )
+            OpenChannelPanel._draw_increase_water_level(
+                self, ax, stype, params, result, increase_depth
+            )
         else:
             b = result.get('b_design', 0.0)
             h = result.get('h_design', 0.0)
+            h_ch = result.get('h_prime', 0.0) if increase_depth > 0 and result.get('h_prime', 0.0) > 0 else h
             m = params.get('m', 0.0)
             self._draw_trapezoid(
                 ax,
                 b,
-                h,
+                h_ch,
                 m,
                 result.get('V_design', 0.0),
                 Q,
                 h,
                 title,
             )
+            OpenChannelPanel._draw_increase_water_level(
+                self, ax, stype, params, result, increase_depth
+            )
+
+    @staticmethod
+    def _positive_plot_number(value, default=0.0):
+        """把绘图字段转换为正数，非法值按默认值处理。"""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not math.isfinite(number):
+            return default
+        return number if number > 0 else default
+
+    @staticmethod
+    def _increase_plot_values(params, result):
+        """统一取得加大工况用于断面图的水深、流量和流速。"""
+        if not params.get('use_increase', True):
+            return 0.0, 0.0, 0.0
+        if params.get('section_type') == '圆形':
+            depth = OpenChannelPanel._positive_plot_number(result.get('y_i'))
+            q_inc = OpenChannelPanel._positive_plot_number(
+                result.get('Q_inc', result.get('Q_increased'))
+            )
+            v_inc = OpenChannelPanel._positive_plot_number(
+                result.get('V_i', result.get('V_increased'))
+            )
+        else:
+            depth = OpenChannelPanel._positive_plot_number(result.get('h_increased'))
+            q_inc = OpenChannelPanel._positive_plot_number(result.get('Q_increased'))
+            v_inc = OpenChannelPanel._positive_plot_number(result.get('V_increased'))
+        return depth, q_inc, v_inc
+
+    def _draw_increase_water_level(self, ax, stype, params, result, h_w):
+        """在多工况同图上叠加加大水位线。"""
+        if h_w <= 0:
+            return
+        if stype == '圆形':
+            span = OpenChannelPanel._draw_circular_water_line(
+                self, ax, result.get('D_design', 0.0), h_w, '--'
+            )
+        elif stype == '复式梯形':
+            h_ch = result.get('h_prime', 0.0) if result.get('h_prime', 0.0) > 0 else h_w * 1.35
+            span = OpenChannelPanel._draw_compound_trapezoid_water_line(
+                self,
+                ax,
+                result.get('b_design', params.get('B2', 0.0)),
+                params.get('m1', 0.0),
+                params.get('B1', 0.0),
+                params.get('m2', 0.0),
+                params.get('m3', 0.0),
+                params.get('h1', 0.0),
+                h_ch,
+                h_w,
+                '--',
+            )
+        elif stype == 'U形':
+            span = OpenChannelPanel._draw_u_section_water_line(
+                self,
+                ax,
+                result.get('R', 0.0),
+                result.get('alpha_deg', 0.0),
+                result.get('theta_deg', 0.0),
+                h_w,
+                '--',
+            )
+        else:
+            span = OpenChannelPanel._draw_trapezoid_water_line(
+                self,
+                ax,
+                result.get('b_design', 0.0),
+                params.get('m', 0.0),
+                h_w,
+                '--',
+            )
+        if span:
+            OpenChannelPanel._draw_increase_water_label(self, ax, span[1], h_w)
+            OpenChannelPanel._draw_increase_depth_dimension(self, ax, span[1], h_w)
+
+    def _draw_increase_water_label(self, ax, right_x, h_w):
+        """在加大水位线旁标注加大水深。"""
+        y_min, y_max = ax.get_ylim()
+        y_offset = max((y_max - y_min) * 0.015, 0.03)
+        label_y = h_w + y_offset
+        va = 'bottom'
+        if label_y > y_max:
+            label_y = h_w - y_offset
+            va = 'top'
+        ax.text(
+            right_x,
+            label_y,
+            f'加大水位 {h_w:.2f}m',
+            ha='right',
+            va=va,
+            fontsize=8,
+            color='blue',
+        )
+
+    def _draw_increase_depth_dimension(self, ax, right_x, h_w):
+        """绘制加大水深竖向尺寸箭头，并避开既有断面尺寸标注。"""
+        if h_w <= 0:
+            return
+        x_min, x_max = ax.get_xlim()
+        y_min, y_max = ax.get_ylim()
+        x_span = max(x_max - x_min, 1.0)
+        y_span = max(y_max - y_min, 1.0)
+        arrow_x = max(right_x, x_max) + x_span * 0.06
+        text_x = arrow_x + x_span * 0.035
+        ax.annotate(
+            '',
+            xy=(arrow_x, h_w),
+            xytext=(arrow_x, 0),
+            arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5),
+        )
+        ax.text(
+            text_x,
+            h_w / 2,
+            f'h加大={h_w:.2f}m',
+            fontsize=8,
+            color='blue',
+            rotation=90,
+            va='center',
+            ha='left',
+        )
+        ax.set_xlim(x_min, max(x_max, text_x + x_span * 0.08))
+        ax.set_ylim(min(y_min, -y_span * 0.02), max(y_max, h_w + y_span * 0.04))
+
+    def _draw_trapezoid_water_line(self, ax, b, m, h_w, linestyle='-'):
+        """绘制梯形、矩形断面的水位线。"""
+        b = OpenChannelPanel._positive_plot_number(b)
+        h_w = OpenChannelPanel._positive_plot_number(h_w)
+        if b <= 0 or h_w <= 0:
+            return
+        ww = b + 2 * m * h_w
+        ax.plot([-ww / 2, ww / 2], [h_w, h_w], 'b', lw=1.5, linestyle=linestyle)
+        return -ww / 2, ww / 2
+
+    def _draw_compound_trapezoid_water_line(self, ax, B2, m1, B1, m2, m3, h1, h_ch, h_w, linestyle='-'):
+        """绘制复式梯形断面的水位线。"""
+        h_w = OpenChannelPanel._positive_plot_number(h_w)
+        if h_w <= 0:
+            return
+        geometry = self._compound_trapezoid_geometry(B2, m1, B1, m2, m3, h1, h_ch)
+        water_points = self._compound_trapezoid_water_points(geometry, B2, m1, m2, m3, h1, h_w)
+        if not water_points:
+            return
+        left_water = water_points[-1][0] if h_w <= h1 else water_points[3][0]
+        right_water = water_points[2][0]
+        ax.plot([left_water, right_water], [h_w, h_w], 'b', lw=1.5, linestyle=linestyle)
+        return left_water, right_water
+
+    def _draw_u_section_water_line(self, ax, R, alpha_deg, theta_deg, h_w, linestyle='-'):
+        """绘制 U 形断面的水位线。"""
+        R = OpenChannelPanel._positive_plot_number(R)
+        h_w = OpenChannelPanel._positive_plot_number(h_w)
+        if R <= 0 or h_w <= 0:
+            return
+        theta_rad = math.radians(theta_deg)
+        h0 = R * (1.0 - math.cos(theta_rad / 2.0))
+        if h_w <= h0:
+            half_bw = math.sqrt(max(0.0, R * R - (R - h_w) ** 2))
+        else:
+            m = math.tan(math.radians(alpha_deg))
+            b_arc = 2.0 * R * math.sin(theta_rad / 2.0)
+            half_bw = (b_arc + 2 * m * (h_w - h0)) / 2
+        ax.plot([-half_bw, half_bw], [h_w, h_w], 'b', lw=1.5, linestyle=linestyle)
+        return -half_bw, half_bw
+
+    def _draw_circular_water_line(self, ax, D, y, linestyle='-'):
+        """绘制圆形断面的水位线。"""
+        D = OpenChannelPanel._positive_plot_number(D)
+        y = OpenChannelPanel._positive_plot_number(y)
+        if D <= 0 or y <= 0 or y >= D:
+            return
+        R = D / 2
+        h_off = y - R
+        if abs(h_off) > R:
+            return
+        water_w = math.sqrt(max(0.0, R ** 2 - h_off ** 2))
+        ax.plot([-water_w, water_w], [y, y], 'b', lw=1.5, linestyle=linestyle)
+        return -water_w, water_w
 
     def _show_error(self, title, msg):
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
@@ -2978,8 +3223,14 @@ class OpenChannelPanel(QWidget):
             D = result.get('D_design', 0)
             y_d = result.get('y_d', 0); V_d = result.get('V_d', 0)
             Q = self.input_params['Q']
-            ax = self.section_fig.add_subplot(111)
-            self._draw_circular(ax, D, y_d, V_d, Q, '设计流量')
+            y_i, Q_inc, V_i = OpenChannelPanel._increase_plot_values(self.input_params, result)
+            if y_i > 0:
+                axes = self.section_fig.subplots(1, 2)
+                self._draw_circular(axes[0], D, y_d, V_d, Q, '设计流量')
+                self._draw_circular(axes[1], D, y_i, V_i, Q_inc, '加大流量')
+            else:
+                ax = self.section_fig.add_subplot(111)
+                self._draw_circular(ax, D, y_d, V_d, Q, '设计流量')
         elif stype == '复式梯形':
             m1 = self.input_params.get('m1', 0)
             B1 = self.input_params.get('B1', 0)
@@ -3324,6 +3575,8 @@ class OpenChannelPanel(QWidget):
         self._save_current_case()
         self._all_results = []
         self._results_dirty = False
+        self._stale_result_case_indexes = set()
+        self._all_results_stale = False
         self._has_rendered_results = False
         self._rebuild_case_tags()
         self._update_calc_btn_text()
