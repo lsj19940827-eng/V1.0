@@ -46,6 +46,7 @@ TUNNEL_COMPARISON_COLUMNS = (
     ComparisonColumn("r", "半径 r", "m", 3),
     ComparisonColumn("D_equiv", "等效直径 2r", "m", 3),
     ComparisonColumn("H_total", "洞总高 H", "m", 3),
+    ComparisonColumn("HB_ratio", "高宽比 H/B", "", 3),
     ComparisonColumn("H_straight", "直墙高度 H直", "m", 3),
     ComparisonColumn("theta_deg", "拱顶圆心角 θ", "°", 1),
     ComparisonColumn("R_arch", "拱半径 R拱", "m", 3),
@@ -73,6 +74,7 @@ TUNNEL_DIMENSION_COMPARISON_COLUMNS = (
     ComparisonColumn("r", "半径 r", "m", 3),
     ComparisonColumn("D_equiv", "等效直径 2r", "m", 3),
     ComparisonColumn("H_total", "洞总高 H", "m", 3),
+    ComparisonColumn("HB_ratio", "高宽比 H/B", "", 3),
     ComparisonColumn("H_straight", "直墙高度 H直", "m", 3),
     ComparisonColumn("theta_deg", "拱顶圆心角 θ", "°", 1),
     ComparisonColumn("R_arch", "拱半径 R拱", "m", 3),
@@ -97,6 +99,15 @@ def _positive(value: Any) -> float | None:
     """读取正数，非正数按缺失处理。"""
     number = _num(value)
     return number if number is not None and number > 0 else None
+
+
+def _hb_ratio(height: Any, width: Any) -> float | None:
+    """按总高和宽度计算高宽比。"""
+    H = _positive(height)
+    B = _positive(width)
+    if H is None or B is None:
+        return None
+    return H / B
 
 
 def _section_type(params: dict, result: dict) -> str:
@@ -164,6 +175,7 @@ def compute_tunnel_total_geometry_metrics(params: dict | None, result: dict | No
         "r": "",
         "D_equiv": "",
         "H_total": "",
+        "HB_ratio": "",
         "H_straight": "",
         "theta_deg": "",
         "R_arch": "",
@@ -184,6 +196,7 @@ def compute_tunnel_total_geometry_metrics(params: dict | None, result: dict | No
                 "B": B,
                 "D_equiv": D,
                 "H_total": geom["H_total"],
+                "HB_ratio": _hb_ratio(geom["H_total"], B),
                 "total_perimeter": B + geom["radius"] * geom["major_arc_angle_rad"],
                 "total_area": _result_total_area(result) or geom["A_total"],
             }
@@ -225,6 +238,7 @@ def compute_tunnel_total_geometry_metrics(params: dict | None, result: dict | No
             {
                 "B": B,
                 "H_total": H_total,
+                "HB_ratio": _hb_ratio(H_total, B),
                 "H_straight": H_straight,
                 "theta_deg": theta_deg,
                 "R_arch": geom["R_arch"],

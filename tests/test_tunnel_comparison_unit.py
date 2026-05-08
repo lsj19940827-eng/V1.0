@@ -73,6 +73,7 @@ def test_arch_metrics_use_total_tunnel_geometry_not_wetted_geometry():
 
     assert metrics["B"] == pytest.approx(4.0)
     assert metrics["H_total"] == pytest.approx(3.0)
+    assert metrics["HB_ratio"] == pytest.approx(0.75)
     assert metrics["H_straight"] == pytest.approx(1.0)
     assert metrics["total_perimeter"] == pytest.approx(4.0 + 2.0 + math.pi * 2.0)
     assert metrics["total_area"] == pytest.approx(4.0 + math.pi * 2.0)
@@ -94,6 +95,7 @@ def test_flat_bottom_circle_metrics_include_flat_bottom_and_major_arc():
     assert metrics["D"] == pytest.approx(4.0)
     assert metrics["B"] == pytest.approx(2.0)
     assert metrics["H_total"] == pytest.approx(2.0 + math.sqrt(3.0))
+    assert metrics["HB_ratio"] == pytest.approx((2.0 + math.sqrt(3.0)) / 2.0)
     assert metrics["total_perimeter"] == pytest.approx(2.0 + expected_arc)
     assert metrics["total_area"] > 12.0
 
@@ -207,7 +209,50 @@ def test_build_tunnel_comparison_tables_splits_hydraulic_and_dimension_rows():
     assert tables.dimension_rows[1]["theta_deg"] == pytest.approx(180.0)
     assert tables.dimension_rows[1]["R_arch"] == pytest.approx(2.0)
     assert tables.dimension_rows[1]["H_arch"] == pytest.approx(2.0)
+    assert tables.dimension_rows[1]["HB_ratio"] == pytest.approx(0.75)
     assert tables.dimension_rows[1]["total_perimeter"] == pytest.approx(4.0 + 2.0 + math.pi * 2.0)
+
+
+def test_tunnel_dimension_rows_include_hb_for_arch_and_flat_bottom():
+    """结构尺寸对比表应给能计算 H/B 的隧洞断面补齐高宽比。"""
+    entries = [
+        DxfExportCaseEntry(
+            case_idx=0,
+            label="圆拱",
+            input_params={"section_type": "圆拱直墙型", "Q": 8.0, "use_increase": True},
+            result={
+                "success": True,
+                "B": 4.0,
+                "H_total": 3.0,
+                "HB_ratio": 0.777,
+                "H_straight": 1.0,
+                "theta_deg": 180.0,
+                "h_design": 2.0,
+                "V_design": 1.7,
+            },
+            is_valid=True,
+        ),
+        DxfExportCaseEntry(
+            case_idx=1,
+            label="平底",
+            input_params={"section_type": "平底圆形", "Q": 6.0, "use_increase": False},
+            result={
+                "success": True,
+                "D": 4.0,
+                "B": 2.0,
+                "h_design": 1.4,
+                "V_design": 1.3,
+            },
+            is_valid=True,
+        ),
+    ]
+
+    tables = build_tunnel_comparison_tables(entries)
+    titles = [column.title for column in TUNNEL_COMPARISON_SPEC.dimension_columns]
+
+    assert "高宽比 H/B" in titles
+    assert tables.dimension_rows[0]["HB_ratio"] == pytest.approx(0.75)
+    assert tables.dimension_rows[1]["HB_ratio"] == pytest.approx((2.0 + math.sqrt(3.0)) / 2.0)
 
 
 def test_comparison_clipboard_text_includes_headers_and_empty_cells_for_excel():

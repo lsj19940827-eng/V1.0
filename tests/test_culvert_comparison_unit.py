@@ -57,6 +57,7 @@ def test_culvert_comparison_maps_rect_dimensions_and_design_clearance():
     assert tables.hydraulic_rows[0]["freeboard_pct_inc"] == ""
     assert tables.dimension_rows[0]["B"] == pytest.approx(2.4)
     assert tables.dimension_rows[0]["H"] == pytest.approx(1.8)
+    assert tables.dimension_rows[0]["HB_ratio"] == pytest.approx(0.75)
     assert tables.dimension_rows[0]["A_total"] == pytest.approx(4.32)
 
 
@@ -72,6 +73,7 @@ def test_culvert_comparison_keeps_arch_wall_height_source():
                 "B": 3.2,
                 "H_total": 2.6,
                 "H_straight": 1.0,
+                "HB_ratio": 0.9,
                 "theta_deg": 180.0,
                 "used_manual_H_straight": True,
                 "A_total": 7.1,
@@ -100,3 +102,4 @@ def test_culvert_comparison_keeps_arch_wall_height_source():
     assert tables.dimension_rows[0]["theta_deg"] == pytest.approx(180.0)
     assert tables.dimension_rows[0]["R_arch"] == pytest.approx(1.6)
     assert tables.dimension_rows[0]["H_arch"] == pytest.approx(1.6)
+    assert tables.dimension_rows[0]["HB_ratio"] == pytest.approx(2.6 / 3.2)

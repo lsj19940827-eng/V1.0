@@ -119,6 +119,14 @@ from app_渠系计算前端.section_comparison import (
     build_table_clipboard_text,
     fill_comparison_table,
 )
+from app_渠系计算前端.section_plotting import draw_section
+from app_渠系计算前端.section_shapes import (
+    WaterState,
+    build_circular_shape,
+    build_compound_trapezoid_shape,
+    build_open_channel_u_shape,
+    build_trapezoid_shape,
+)
 from app_渠系计算前端.open_channel.appendix_e_table import (
     appendix_e_probe_script,
     appendix_e_shared_head_html,
@@ -143,7 +151,6 @@ from app_渠系计算前端.increase_input_helper import (
     normalize_increase_mode,
     resolve_increase_input,
 )
-from app_渠系计算前端.plot_title_utils import apply_flow_velocity_title
 from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
     build_result_nav_bar,
@@ -3219,18 +3226,14 @@ class OpenChannelPanel(QWidget):
         if not result['success']:
             self.section_canvas.draw(); return
         stype = self.input_params.get('section_type', '梯形')
+        ax = self.section_fig.add_subplot(111)
         if stype == '圆形':
             D = result.get('D_design', 0)
             y_d = result.get('y_d', 0); V_d = result.get('V_d', 0)
             Q = self.input_params['Q']
-            y_i, Q_inc, V_i = OpenChannelPanel._increase_plot_values(self.input_params, result)
-            if y_i > 0:
-                axes = self.section_fig.subplots(1, 2)
-                self._draw_circular(axes[0], D, y_d, V_d, Q, '设计流量')
-                self._draw_circular(axes[1], D, y_i, V_i, Q_inc, '加大流量')
-            else:
-                ax = self.section_fig.add_subplot(111)
-                self._draw_circular(ax, D, y_d, V_d, Q, '设计流量')
+            y_i, _, _ = OpenChannelPanel._increase_plot_values(self.input_params, result)
+            self._draw_circular(ax, D, y_d, V_d, Q, '设计流量')
+            OpenChannelPanel._draw_increase_water_level(self, ax, stype, self.input_params, result, y_i)
         elif stype == '复式梯形':
             m1 = self.input_params.get('m1', 0)
             B1 = self.input_params.get('B1', 0)
@@ -3241,79 +3244,37 @@ class OpenChannelPanel(QWidget):
             h_w = result['h_design']
             H_ch = result['h_prime'] if result['h_prime'] > 0 else h_w * 1.35
             V = result['V_design']; Q = self.input_params['Q']
-            h_inc = result['h_increased']; Q_inc = result['Q_increased']; V_inc = result['V_increased']
-            use_inc = self.input_params.get('use_increase', True)
-            if use_inc and h_inc > 0:
-                axes = self.section_fig.subplots(1, 2)
-                self._draw_compound_trapezoid(axes[0], B2, m1, B1, m2, m3, h1, H_ch, V, Q, h_w, "设计流量")
-                self._draw_compound_trapezoid(axes[1], B2, m1, B1, m2, m3, h1, H_ch, V_inc, Q_inc, h_inc, "加大流量")
-            else:
-                ax = self.section_fig.add_subplot(111)
-                self._draw_compound_trapezoid(ax, B2, m1, B1, m2, m3, h1, H_ch, V, Q, h_w, "设计流量")
+            h_inc, _, _ = OpenChannelPanel._increase_plot_values(self.input_params, result)
+            self._draw_compound_trapezoid(ax, B2, m1, B1, m2, m3, h1, H_ch, V, Q, h_w, "设计流量")
+            OpenChannelPanel._draw_increase_water_level(self, ax, stype, self.input_params, result, h_inc)
         elif stype == 'U形':
             R = result['R']; alpha_deg = result['alpha_deg']; theta_deg = result['theta_deg']
             h_w = result['h_design']
             H_ch = result['h_prime'] if result['h_prime'] > 0 else h_w * 1.35
             V = result['V_design']; Q = self.input_params['Q']
-            h_inc = result['h_increased']; Q_inc = result['Q_increased']; V_inc = result['V_increased']
-            use_inc = self.input_params.get('use_increase', True)
-            if use_inc and h_inc > 0:
-                axes = self.section_fig.subplots(1, 2)
-                self._draw_u_section(axes[0], R, alpha_deg, theta_deg, h_w, H_ch, V, Q, '设计流量')
-                H_ch2 = result['h_prime'] if result['h_prime'] > 0 else h_inc * 1.35
-                self._draw_u_section(axes[1], R, alpha_deg, theta_deg, h_inc, H_ch2, V_inc, Q_inc, '加大流量')
-            else:
-                ax = self.section_fig.add_subplot(111)
-                self._draw_u_section(ax, R, alpha_deg, theta_deg, h_w, H_ch, V, Q, '设计流量')
+            h_inc, _, _ = OpenChannelPanel._increase_plot_values(self.input_params, result)
+            self._draw_u_section(ax, R, alpha_deg, theta_deg, h_w, H_ch, V, Q, '设计流量')
+            OpenChannelPanel._draw_increase_water_level(self, ax, stype, self.input_params, result, h_inc)
         else:
             b = result['b_design']; h = result['h_design']
             m = self.input_params.get('m', 0); Q = self.input_params['Q']
-            V = result['V_design']; h_inc = result['h_increased']
-            Q_inc = result['Q_increased']; V_inc = result['V_increased']
+            V = result['V_design']; h_inc, _, _ = OpenChannelPanel._increase_plot_values(self.input_params, result)
             h_prime = result['h_prime']
             use_inc = self.input_params.get('use_increase', True)
-            if use_inc:
-                axes = self.section_fig.subplots(1, 2)
-                self._draw_trapezoid(axes[0], b, h, m, V, Q, h, "设计流量")
-                if h_inc > 0:
-                    self._draw_trapezoid(axes[1], b, h_prime, m, V_inc, Q_inc, h_inc, "加大流量")
-                else:
-                    axes[1].set_title("加大流量\n数据不可用")
+            if use_inc and h_inc > 0 and h_prime > 0:
+                H_d = h_prime
             else:
                 Fb_d = 0.25 * h + 0.2
                 H_d = h + Fb_d
-                ax = self.section_fig.add_subplot(111)
-                self._draw_trapezoid(ax, b, H_d, m, V, Q, h, "设计流量")
+            self._draw_trapezoid(ax, b, H_d, m, V, Q, h, "设计流量")
+            OpenChannelPanel._draw_increase_water_level(self, ax, stype, self.input_params, result, h_inc)
         self.section_fig.tight_layout()
         self.section_canvas.draw()
 
     def _draw_trapezoid(self, ax, b, h_ch, m, V, Q, h_w, title):
-        tw = b + 2 * m * h_ch
-        ax.plot([-b/2, b/2], [0, 0], 'k-', lw=2)
-        ax.plot([-b/2, -tw/2], [0, h_ch], 'k-', lw=2)
-        ax.plot([b/2, tw/2], [0, h_ch], 'k-', lw=2)
-        ax.plot([-tw/2, tw/2], [h_ch, h_ch], 'k--', lw=1)
-        if h_w > 0:
-            ww = b + 2 * m * h_w
-            wx = [-b/2, -ww/2, ww/2, b/2]
-            wy = [0, h_w, h_w, 0]
-            ax.fill(wx, wy, color='lightblue', alpha=0.7)
-            ax.plot([-ww/2, ww/2], [h_w, h_w], 'b-', lw=1.5)
-        ax.annotate('', xy=(b/2, -0.1*h_ch), xytext=(-b/2, -0.1*h_ch),
-                     arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text(0, -0.2*h_ch, f'B={b:.2f}m', ha='center', fontsize=9, color='gray')
-        ax.annotate('', xy=(tw/2+0.08*tw, h_ch), xytext=(tw/2+0.08*tw, 0),
-                     arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
-        ax.text(tw/2+0.12*tw, h_ch/2, f'H={h_ch:.2f}m', fontsize=9, color='purple', rotation=90, va='center')
-        if h_w > 0:
-            ax.annotate('', xy=(-tw/2-0.08*tw, h_w), xytext=(-tw/2-0.08*tw, 0),
-                         arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-tw/2-0.12*tw, h_w/2, f'h={h_w:.2f}m', fontsize=9, color='blue', rotation=90, va='center', ha='right')
-        ax.set_xlim(-tw*0.85, tw*0.85)
-        ax.set_ylim(-h_ch*0.4, h_ch*1.2)
-        ax.set_aspect('equal')
-        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
-        ax.grid(True, alpha=0.3)
+        """用共享绘图器绘制梯形或矩形明渠断面。"""
+        shape = build_trapezoid_shape(b, h_ch, m)
+        draw_section(ax, shape, WaterState(depth=h_w, flow=Q, velocity=V), title)
 
     def _compound_trapezoid_geometry(self, B2, m1, B1, m2, m3, h1, h_ch):
         """生成复式梯形断面的关键轮廓点。"""
@@ -3414,159 +3375,19 @@ class OpenChannelPanel(QWidget):
         )
 
     def _draw_compound_trapezoid(self, ax, B2, m1, B1, m2, m3, h1, h_ch, V, Q, h_w, title):
-        """复式梯形断面图：下坡+平台+上坡+右坡。"""
-        geometry = self._compound_trapezoid_geometry(B2, m1, B1, m2, m3, h1, h_ch)
-        left_top_x = geometry["left_top"][0]
-        left_platform_x = geometry["left_platform"][0]
-        left_break_x = geometry["left_break"][0]
-        right_top_x = geometry["right_top"][0]
-        outline_x = [point[0] for point in geometry["outline_points"]] + [geometry["bottom_left"][0]]
-        outline_y = [point[1] for point in geometry["outline_points"]] + [geometry["bottom_left"][1]]
-        ax.plot(outline_x, outline_y, 'k-', lw=2)
-
-        if h_w > 0:
-            water_points = self._compound_trapezoid_water_points(geometry, B2, m1, m2, m3, h1, h_w)
-            water_x = [point[0] for point in water_points]
-            water_y = [point[1] for point in water_points]
-            left_water = water_points[-1][0] if h_w <= h1 else water_points[3][0]
-            right_water = water_points[2][0]
-            ax.fill(water_x, water_y, color='lightblue', alpha=0.7)
-            ax.plot([left_water, right_water], [h_w, h_w], 'b-', lw=1.5)
-
-        width_ref = geometry["width_ref"]
-        dim_offset = max(h_ch * 0.12, 0.15)
-        ax.annotate('', xy=(B2 / 2, -dim_offset), xytext=(-B2 / 2, -dim_offset),
-                    arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text(0, -dim_offset * 1.55, f'B2={B2:.2f}m', ha='center', fontsize=9, color='gray')
-        ax.annotate('', xy=(left_break_x, h1 + dim_offset * 0.6), xytext=(left_platform_x, h1 + dim_offset * 0.6),
-                    arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text((left_break_x + left_platform_x) / 2, h1 + dim_offset * 1.05, f'B1={B1:.2f}m', ha='center', fontsize=9, color='gray')
-        ax.annotate('', xy=(left_top_x - width_ref * 0.08, h1), xytext=(left_top_x - width_ref * 0.08, 0),
-                    arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
-        ax.text(left_top_x - width_ref * 0.12, h1 / 2, f'h1={h1:.2f}m', fontsize=9, color='purple', rotation=90, va='center', ha='right')
-        ax.annotate('', xy=(right_top_x + width_ref * 0.08, h_ch), xytext=(right_top_x + width_ref * 0.08, 0),
-                    arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
-        ax.text(right_top_x + width_ref * 0.12, h_ch / 2, f'H={h_ch:.2f}m', fontsize=9, color='purple', rotation=90, va='center')
-        if h_w > 0:
-            ax.annotate('', xy=(left_top_x - width_ref * 0.18, h_w), xytext=(left_top_x - width_ref * 0.18, 0),
-                        arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(left_top_x - width_ref * 0.22, h_w / 2, f'h={h_w:.2f}m', fontsize=9, color='blue', rotation=90, va='center', ha='right')
-        ax.text((left_top_x + left_platform_x) / 2, h1 + max(h_ch - h1, 0.0) * 0.55 + dim_offset * 0.15, f'1:{m1:g}', fontsize=9, color='dimgray')
-        ax.text((left_break_x - B2 / 2) / 2, h1 * 0.5 + dim_offset * 0.1, f'1:{m2:g}', fontsize=9, color='dimgray')
-        ax.text((B2 / 2 + right_top_x) / 2, h_ch * 0.55, f'1:{m3:g}', fontsize=9, color='dimgray')
-        x_min, x_max, y_min, y_max = self._compound_trapezoid_view_limits(geometry, h_ch, h1, h_w)
-        ax.set_xlim(x_min, x_max)
-        ax.set_ylim(y_min, y_max)
-        ax.set_aspect('equal')
-        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
-        ax.grid(True, alpha=0.3)
-        ax.axhline(y=0, color='brown', lw=3)
+        """用共享绘图器绘制复式梯形明渠断面。"""
+        shape = build_compound_trapezoid_shape(B2, m1, B1, m2, m3, h1, h_ch)
+        draw_section(ax, shape, WaterState(depth=h_w, flow=Q, velocity=V), title)
 
     def _draw_u_section(self, ax, R, alpha_deg, theta_deg, h_w, H_ch, V, Q, title):
-        """U形断面维图：圆弧底 + 斜壁 + 水面填充"""
-        theta_rad = math.radians(theta_deg)
-        m = math.tan(math.radians(alpha_deg))
-        h0 = R * (1.0 - math.cos(theta_rad / 2.0))
-        b_arc = 2.0 * R * math.sin(theta_rad / 2.0)
-
-        # 弧底轮廓
-        half_theta = theta_rad / 2.0
-        arc_angles = np.linspace(math.pi * 3 / 2 - half_theta, math.pi * 3 / 2 + half_theta, 60)
-        arc_x = R * np.cos(arc_angles)
-        arc_y = R + R * np.sin(arc_angles)  # 圆心在 (0, R)
-
-        # 直线段上端
-        x_top_r = b_arc / 2.0 + m * (H_ch - h0)
-        x_top_l = -x_top_r
-        x_arc_r = b_arc / 2.0
-        x_arc_l = -x_arc_r
-
-        outline_x = list(arc_x) + [x_arc_r, x_top_r, x_top_l, x_arc_l] + list(arc_x[:1])
-        outline_y = list(arc_y) + [h0, H_ch, H_ch, h0] + list(arc_y[:1])
-        ax.plot(outline_x[:len(arc_x)], outline_y[:len(arc_y)], 'k-', lw=2)
-        ax.plot([x_arc_r, x_top_r], [h0, H_ch], 'k-', lw=2)
-        ax.plot([x_arc_l, x_top_l], [h0, H_ch], 'k-', lw=2)
-        ax.plot([x_top_l, x_top_r], [H_ch, H_ch], 'k--', lw=1)
-
-        # 水面填充
-        if h_w > 0:
-            from matplotlib.patches import Polygon
-            from matplotlib.collections import PatchCollection
-            if h_w <= h0:
-                # 纯弧区
-                ang_h = math.acos(max(-1.0, min(1.0, (R - h_w) / R)))
-                water_angles = np.linspace(math.pi * 3 / 2 - ang_h, math.pi * 3 / 2 + ang_h, 40)
-                wx = list(R * np.cos(water_angles))
-                wy = list(R + R * np.sin(water_angles))
-                water_pts = list(zip(wx, wy))
-                half_bw = math.sqrt(max(0.0, R * R - (R - h_w) ** 2))
-                water_pts = [(-half_bw, h_w)] + water_pts + [(half_bw, h_w)]
-            else:
-                h_s = h_w - h0
-                bw = b_arc + 2 * m * h_s
-                water_pts = (
-                    list(zip(arc_x, arc_y)) +
-                    [(x_arc_r, h0), (bw / 2, h_w), (-bw / 2, h_w), (x_arc_l, h0)]
-                )
-            poly = Polygon(water_pts, closed=True)
-            pc = PatchCollection([poly], facecolor='lightblue', alpha=0.7, edgecolor='none')
-            ax.add_collection(pc)
-            # 水面线
-            if h_w <= h0:
-                half_bw = math.sqrt(max(0.0, R * R - (R - h_w) ** 2))
-                ax.plot([-half_bw, half_bw], [h_w, h_w], 'b-', lw=1.5)
-            else:
-                h_s = h_w - h0
-                bw = b_arc + 2 * m * h_s
-                ax.plot([-bw / 2, bw / 2], [h_w, h_w], 'b-', lw=1.5)
-
-        max_x = max(abs(x_top_r), R) * 1.3
-        ax.set_xlim(-max_x, max_x)
-        ax.set_ylim(-H_ch * 0.3, H_ch * 1.3)
-        ax.set_aspect('equal')
-        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
-        ax.grid(True, alpha=0.3)
-        ax.axhline(y=0, color='brown', lw=3)
-        # 标注
-        ax.text(0, -H_ch * 0.15, f'R={R:.2f}m, θ={theta_deg:.0f}°', ha='center', fontsize=8, color='gray')
-        if h_w > 0:
-            ax.annotate('', xy=(-x_top_r - 0.08 * x_top_r, h_w), xytext=(-x_top_r - 0.08 * x_top_r, 0),
-                        arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-x_top_r - 0.15 * x_top_r, h_w / 2, f'h={h_w:.2f}m',
-                    ha='right', fontsize=8, color='blue', rotation=90, va='center')
+        """用共享绘图器绘制 U 形明渠断面。"""
+        shape = build_open_channel_u_shape(R, alpha_deg, theta_deg, H_ch)
+        draw_section(ax, shape, WaterState(depth=h_w, flow=Q, velocity=V), title)
 
     def _draw_circular(self, ax, D, y, V, Q, title):
-        R = D / 2
-        theta = np.linspace(0, 2*np.pi, 100)
-        cx = R * np.cos(theta); cy = R + R * np.sin(theta)
-        ax.plot(cx, cy, 'k-', lw=2)
-        if y > 0 and y < D:
-            h_off = y - R
-            if abs(h_off) <= R:
-                half_a = math.acos(h_off / R)
-                water_w = math.sqrt(R**2 - h_off**2)
-                wa = np.linspace(np.pi/2 + half_a, np.pi/2 - half_a + 2*np.pi, 50)
-                wx = R * np.cos(wa); wy = R + R * np.sin(wa)
-                mask = wy <= y + 0.001
-                wxf = wx[mask]; wyf = wy[mask]
-                if len(wxf) > 0:
-                    px = np.concatenate([[water_w], wxf, [-water_w]])
-                    py = np.concatenate([[y], wyf, [y]])
-                    ax.fill(px, py, color='lightblue', alpha=0.7)
-                    ax.plot([-water_w, water_w], [y, y], 'b-', lw=1.5)
-        ax.annotate('', xy=(R, R), xytext=(-R, R),
-                     arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text(0, R+0.15*R, f'D={D:.2f}m', ha='center', fontsize=9, color='gray')
-        if y > 0:
-            ax.annotate('', xy=(-R-0.12*R, y), xytext=(-R-0.12*R, 0),
-                         arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-R-0.2*R, y/2, f'y={y:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
-        ax.set_xlim(-R*1.7, R*1.7)
-        ax.set_ylim(-R*0.4, D*1.2)
-        ax.set_aspect('equal')
-        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
-        ax.grid(True, alpha=0.3)
-        ax.axhline(y=0, color='brown', lw=3)
+        """用共享绘图器绘制圆形明渠断面。"""
+        shape = build_circular_shape(D, water_label="y")
+        draw_section(ax, shape, WaterState(depth=y, flow=Q, velocity=V), title)
 
     # ================================================================
     # 清空

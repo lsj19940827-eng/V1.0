@@ -10,6 +10,10 @@ import re
 from typing import Iterable, List, Sequence
 
 
+_FREEBOARD_HEIGHT_TOL = 1e-3
+_FREEBOARD_PCT_TOL = 0.1
+
+
 @dataclass(frozen=True)
 class SummaryItem:
     """表示汇总卡中的一个指标。"""
@@ -88,6 +92,22 @@ def _fmt_pct(value) -> str:
 def _fmt_ratio(value) -> str:
     """格式化无量纲比值。"""
     return _fmt(value, 3, "")
+
+
+def _height_width_ratio(height, width):
+    """按结构总高和宽度计算 H/B。"""
+    H = _num(height)
+    B = _num(width)
+    if H is None or B is None or B <= 0:
+        return None
+    return H / B
+
+
+def _bool_or_none(value):
+    """读取明确的布尔校核结果。"""
+    if isinstance(value, bool):
+        return value
+    return None
 
 
 def _item(label: str, value: str, status: str = "") -> SummaryItem | None:
@@ -259,12 +279,14 @@ def _tunnel_size_group(params: dict, result: dict) -> SummaryGroup:
         _append(items, "直径 D", _fmt_m(result.get("D")))
         _append(items, "平底宽 B", _fmt_m(result.get("B")))
         _append(items, "总高 H", _fmt_m(result.get("H_total")))
+        _append(items, "高宽比 H/B", _fmt_ratio(_height_width_ratio(result.get("H_total"), result.get("B"))))
     elif stype == "圆形":
         _append(items, "直径 D", _fmt_m(result.get("D")))
     elif stype == "圆拱直墙型":
         r_arch, h_arch = _arch_metrics(result)
         _append(items, "底宽 B", _fmt_m(result.get("B")))
         _append(items, "总高 H", _fmt_m(result.get("H_total")))
+        _append(items, "高宽比 H/B", _fmt_ratio(_height_width_ratio(result.get("H_total"), result.get("B"))))
         _append(items, "直墙高度 H直", _fmt_m(result.get("H_straight")))
         _append(items, "拱半径 R拱", _fmt_m(r_arch))
         _append(items, "拱高 H拱", _fmt_m(h_arch))
@@ -283,6 +305,7 @@ def _culvert_size_group(params: dict, result: dict) -> SummaryGroup:
         r_arch, h_arch = _arch_metrics(result)
         _append(items, "宽度 B", _fmt_m(result.get("B")))
         _append(items, "总高 H", _fmt_m(result.get("H_total")))
+        _append(items, "高宽比 H/B", _fmt_ratio(_height_width_ratio(result.get("H_total"), result.get("B"))))
         _append(items, "直墙高度 H直", _fmt_m(result.get("H_straight")))
         _append(items, "拱顶圆心角 θ", _fmt(result.get("theta_deg"), 1, "°"))
         _append(items, "拱半径 R拱", _fmt_m(r_arch))
@@ -308,16 +331,24 @@ def _status_group(panel_key: str, params: dict, result: dict) -> SummaryGroup:
     if panel_key in {"tunnel", "culvert"}:
         pct_key = "freeboard_pct_inc" if _use_increase(params) and _has_increase_result(result) else "freeboard_pct_design"
         hgt_key = "freeboard_hgt_inc" if _use_increase(params) and _has_increase_result(result) else "freeboard_hgt_design"
-        pct = _num(result.get(pct_key))
-        hgt = _num(result.get(hgt_key))
-        if pct is not None or hgt is not None:
-            min_pct = 15.0 if panel_key == "tunnel" else 10.0
-            max_pct = None if panel_key == "tunnel" else 30.0
-            pct_ok = pct is None or (pct >= min_pct and (max_pct is None or pct <= max_pct))
-            min_hgt = _num(result.get("fb_min_required")) or 0.4
-            hgt_ok = hgt is None or hgt >= min_hgt
-            status = "通过" if pct_ok and hgt_ok else "需注意"
+        kernel_check = _bool_or_none(result.get("fb_check_passed"))
+        if kernel_check is not None:
+            status = "通过" if kernel_check else "需注意"
             _append(items, "净空校核", status, status)
+        else:
+            pct = _num(result.get(pct_key))
+            hgt = _num(result.get(hgt_key))
+            if pct is not None or hgt is not None:
+                min_pct = 15.0 if panel_key == "tunnel" else 10.0
+                max_pct = None if panel_key == "tunnel" else 30.0
+                pct_ok = pct is None or (
+                    pct >= min_pct - _FREEBOARD_PCT_TOL
+                    and (max_pct is None or pct <= max_pct + _FREEBOARD_PCT_TOL)
+                )
+                min_hgt = _num(result.get("fb_min_required")) or 0.4
+                hgt_ok = hgt is None or hgt >= min_hgt - _FREEBOARD_HEIGHT_TOL
+                status = "通过" if pct_ok and hgt_ok else "需注意"
+                _append(items, "净空校核", status, status)
     if panel_key in {"open_channel", "aqueduct"}:
         fb = _num(result.get("Fb"))
         if fb is not None:

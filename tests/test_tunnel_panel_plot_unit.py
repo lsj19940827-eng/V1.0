@@ -77,6 +77,7 @@ class _SinglePlotDummy:
         if section_type == "马蹄形":
             self.input_params["sec_type_int"] = 1
         self.titles = []
+        self.increase_calls = []
 
     def _draw_circular(self, _ax, _D, _h_w, _V, _Q, title):
         self.titles.append(title)
@@ -89,6 +90,9 @@ class _SinglePlotDummy:
 
     def _draw_horseshoe_std(self, _ax, _sec_type, _r, _h_w, _V, _Q, title):
         self.titles.append(title)
+
+    def _draw_increased_waterline(self, *args, **kwargs):
+        self.increase_calls.append((args, kwargs))
 
 
 class _DrawDummy:
@@ -287,6 +291,20 @@ def test_update_section_plot_hides_increased_plot_when_increase_disabled(section
 
     assert dummy.titles == ["设计流量"]
     assert len(dummy.section_fig.axes) == 1
+    assert dummy.increase_calls == []
+
+
+@pytest.mark.parametrize("section_type", ["圆形", "平底圆形", "圆拱直墙型", "马蹄形"])
+def test_update_section_plot_overlays_increased_waterline_when_enabled(section_type):
+    """单工况启用加大流量时，只显示一张叠加图。"""
+    dummy = _SinglePlotDummy(section_type)
+    dummy.input_params["use_increase"] = True
+
+    tunnel_panel_mod.TunnelPanel._update_section_plot(dummy, _single_result(section_type))
+
+    assert dummy.titles == ["设计流量"]
+    assert len(dummy.section_fig.axes) == 1
+    assert len(dummy.increase_calls) == 1
 
 
 def test_draw_horseshoe_waterline_clamps_to_arch_intersections():

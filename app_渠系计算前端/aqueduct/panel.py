@@ -55,7 +55,6 @@ except ImportError:
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
     from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
 from matplotlib.figure import Figure
-import numpy as np
 
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun']
 plt.rcParams['axes.unicode_minus'] = False
@@ -102,6 +101,12 @@ from app_渠系计算前端.section_comparison import (
     add_section_comparison_word_tables,
     build_table_clipboard_text,
     fill_comparison_table,
+)
+from app_渠系计算前端.section_plotting import draw_section
+from app_渠系计算前端.section_shapes import (
+    WaterState,
+    build_aqueduct_u_shape,
+    build_rectangular_shape,
 )
 from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, plain_text_to_formula_body,
@@ -2507,236 +2512,101 @@ class AqueductPanel(QWidget):
         use_increase = bool(self.input_params.get('use_increase', True))
         Q_inc = result.get('Q_increased', 0.0)
         h_inc = result.get('h_increased', 0.0)
-        V_inc = result.get('V_increased', 0.0)
         show_increase = use_increase and Q_inc > 0 and h_inc > 0
+        ax = self.section_fig.add_subplot(111)
 
         if stype == 'U形':
             R = result['R']; f = result['f']
             h_d = result['h_design']; V_d = result['V_design']
             H_total = result['H_total']
-            if show_increase:
-                axes = self.section_fig.subplots(1, 2)
-                self._draw_u_section(axes[0], R, f, H_total, h_d, V_d, Q, "设计流量", result)
-                self._draw_u_section(axes[1], R, f, H_total, h_inc, V_inc, Q_inc, "加大流量", result)
-            else:
-                ax = self.section_fig.add_subplot(111)
-                self._draw_u_section(ax, R, f, H_total, h_d, V_d, Q, "设计流量", result)
+            self._draw_u_section(ax, R, f, H_total, h_d, V_d, Q, "设计流量", result)
         else:
             B = result['B']; H_total = result['H_total']
             h_d = result['h_design']; V_d = result['V_design']
-            if show_increase:
-                axes = self.section_fig.subplots(1, 2)
-                self._draw_rect_section(axes[0], B, H_total, h_d, V_d, Q, "设计流量", result)
-                self._draw_rect_section(axes[1], B, H_total, h_inc, V_inc, Q_inc, "加大流量", result)
-            else:
-                ax = self.section_fig.add_subplot(111)
-                self._draw_rect_section(ax, B, H_total, h_d, V_d, Q, "设计流量", result)
+            self._draw_rect_section(ax, B, H_total, h_d, V_d, Q, "设计流量", result)
+
+        if show_increase:
+            AqueductPanel._draw_increased_water_level(ax, stype, result, self.input_params)
 
         self.section_fig.tight_layout()
         self.section_canvas.draw()
 
-    def _draw_u_section(self, ax, R, f, H_total, h_w, V, Q, title, result=None):
-        """绘制U形断面"""
+    @staticmethod
+    def _draw_tie_rod_overlay(ax, half_width, H_total, h_w, title, result=None):
+        """绘制渡槽拉杆控制区和净距标注。"""
         result = result or {}
-        tie_rod_height = float(result.get('tie_rod_height') or 0.0)
-        tie_bottom_height = float(result.get('tie_bottom_height') or (H_total - tie_rod_height))
-        # 半圆底部
-        theta = np.linspace(np.pi, 2*np.pi, 50)
-        cx = R * np.cos(theta)
-        cy = R * np.sin(theta) + R  # 底部中心在(0, R)
-        # 直段
-        left_wall = [(-R, R), (-R, R + f)]
-        right_wall = [(R, R), (R, R + f)]
-        top = [(-R, R + f), (R, R + f)]
+        half_width = AqueductPanel._safe_positive_float(half_width)
+        H_total = AqueductPanel._safe_positive_float(H_total)
+        h_w = AqueductPanel._safe_positive_float(h_w)
+        tie_rod_height = AqueductPanel._safe_positive_float(result.get('tie_rod_height'))
+        if half_width <= 0 or H_total <= 0 or tie_rod_height <= 0:
+            return
 
-        # 绘制槽壁
-        ax.plot(cx, cy, 'k-', lw=2)
-        ax.plot([-R, -R], [R, R + f], 'k-', lw=2)
-        ax.plot([R, R], [R, R + f], 'k-', lw=2)
-        ax.plot([-R, R], [R + f, R + f], 'k--', lw=1)
+        tie_bottom_height = AqueductPanel._safe_positive_float(result.get('tie_bottom_height'))
+        if tie_bottom_height <= 0:
+            tie_bottom_height = max(H_total - tie_rod_height, 0.0)
+        if not (0 < tie_bottom_height < H_total):
+            return
 
-        if tie_rod_height > 0 and 0 < tie_bottom_height < H_total:
-            ax.fill(
-                [-R, R, R, -R],
-                [tie_bottom_height, tie_bottom_height, H_total, H_total],
-                color='#d8c58a',
-                alpha=0.35,
-                zorder=0,
-            )
-            ax.plot([-R, R], [tie_bottom_height, tie_bottom_height],
-                    color='#d88400', lw=1.4, ls='--')
-            ax.text(0, tie_bottom_height + tie_rod_height * 0.45,
-                    f'拉杆高度={tie_rod_height:.2f}m',
-                    ha='center', va='center', fontsize=8, color='#8a5a00')
-            ax.text(-R * 0.98, tie_bottom_height,
-                    '拉杆底', ha='left', va='bottom', fontsize=8, color='#8a5a00')
-            if h_w > 0 and tie_bottom_height > h_w:
-                if "设计" in str(title):
-                    clearance = float(result.get('design_tie_bottom_clearance', tie_bottom_height - h_w))
-                    clearance_label = "设计净距"
-                else:
-                    clearance = float(result.get('increased_tie_bottom_clearance', result.get('Fb', tie_bottom_height - h_w)))
-                    clearance_label = "加大有效超高"
-                ax.text(R * 0.98, (tie_bottom_height + h_w) / 2,
-                        f'{clearance_label}={clearance:.2f}m',
-                        ha='right', va='center', fontsize=8, color='#8a5a00')
-
-        # 绘制水面
-        if h_w > 0:
-            if h_w <= R:
-                # 水面在半圆内
-                cos_val = max(-1, min(1, 1 - h_w / R))
-                angle = math.acos(cos_val)
-                water_theta = np.linspace(np.pi + (np.pi/2 - angle), 2*np.pi - (np.pi/2 - angle), 50)
-                wx = R * np.cos(water_theta)
-                wy = R * np.sin(water_theta) + R
-                water_w = R * math.sin(angle)
-                wx = np.concatenate([[-water_w], wx, [water_w]])
-                wy = np.concatenate([[h_w], wy, [h_w]])
-                ax.fill(wx, wy, color='lightblue', alpha=0.7)
-                ax.plot([-water_w, water_w], [h_w, h_w], 'b-', lw=1.5)
+        ax.fill(
+            [-half_width, half_width, half_width, -half_width],
+            [tie_bottom_height, tie_bottom_height, H_total, H_total],
+            color='#d8c58a',
+            alpha=0.35,
+            zorder=0,
+        )
+        ax.plot([-half_width, half_width], [tie_bottom_height, tie_bottom_height],
+                color='#d88400', lw=1.4, ls='--')
+        ax.text(0, tie_bottom_height + tie_rod_height * 0.45,
+                f'拉杆高度={tie_rod_height:.2f}m',
+                ha='center', va='center', fontsize=8, color='#8a5a00')
+        ax.text(-half_width * 0.98, tie_bottom_height,
+                '拉杆底', ha='left', va='bottom', fontsize=8, color='#8a5a00')
+        if h_w > 0 and tie_bottom_height > h_w:
+            if "设计" in str(title):
+                raw_clearance = result.get('design_tie_bottom_clearance', tie_bottom_height - h_w)
+                clearance_label = "设计净距"
             else:
-                # 水面在直段
-                # 半圆部分全满
-                water_theta = np.linspace(np.pi, 2*np.pi, 50)
-                wx_bottom = R * np.cos(water_theta)
-                wy_bottom = R * np.sin(water_theta) + R
-                # 加上直段
-                wx = np.concatenate([[-R], wx_bottom, [R, R, -R]])
-                wy = np.concatenate([[h_w], wy_bottom, [R, h_w, h_w]])
-                ax.fill(wx, wy, color='lightblue', alpha=0.7)
-                ax.plot([-R, R], [h_w, h_w], 'b-', lw=1.5)
+                raw_clearance = result.get('increased_tie_bottom_clearance', result.get('Fb', tie_bottom_height - h_w))
+                clearance_label = "加大有效超高"
+            try:
+                clearance = float(raw_clearance)
+            except (TypeError, ValueError):
+                clearance = tie_bottom_height - h_w
+            ax.text(half_width * 0.98, (tie_bottom_height + h_w) / 2,
+                    f'{clearance_label}={clearance:.2f}m',
+                    ha='right', va='center', fontsize=8, color='#8a5a00')
 
-        # 标注槽宽
-        ax.annotate('', xy=(R, -0.15*R), xytext=(-R, -0.15*R),
-                     arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text(0, -0.3*R, f'B={2*R:.2f}m', ha='center', fontsize=9, color='gray')
-
-        # 标注半径 R
-        ax.annotate('', xy=(0, R), xytext=(R*0.7, R*0.3),
-                     arrowprops=dict(arrowstyle='->', color='green', lw=1.2))
-        ax.text(R*0.75, R*0.15, f'R={R:.2f}m', ha='left', fontsize=8, color='green')
-
-        # 标注总高
-        ax.annotate('', xy=(R+0.15*R, R+f), xytext=(R+0.15*R, 0),
-                     arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
-        ax.text(R+0.25*R, (R+f)/2, f'H={H_total:.2f}m', ha='left', fontsize=9, color='purple', rotation=90, va='center')
-
-        # 标注水深
-        if h_w > 0:
-            ax.annotate('', xy=(-R-0.15*R, h_w), xytext=(-R-0.15*R, 0),
-                         arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-R-0.25*R, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=9, color='blue', rotation=90, va='center')
-
-        ax.set_xlim(-R*2.2, R*2.2)
-        ax.set_ylim(-R*0.6, (R+f)*1.2)
-        ax.set_aspect('equal')
-        self._apply_section_plot_title(ax, title, Q, V)
-        ax.grid(True, alpha=0.3)
-        ax.axhline(y=0, color='brown', lw=3)
+    def _draw_u_section(self, ax, R, f, H_total, h_w, V, Q, title, result=None):
+        """用共享绘图器绘制 U 形渡槽断面。"""
+        shape = build_aqueduct_u_shape(R, f, H_total)
+        draw_section(ax, shape, WaterState(depth=h_w, flow=Q, velocity=V), title)
+        AqueductPanel._draw_tie_rod_overlay(ax, R, H_total, h_w, title, result)
 
     def _draw_rect_section(self, ax, B, H_total, h_w, V, Q, title, result=None):
-        """绘制矩形断面（支持倒角）"""
+        """用共享绘图器绘制矩形渡槽断面，保留倒角和拉杆标注。"""
         H = H_total
         has_chamfer = result.get('has_chamfer', False) if result else False
         chamfer_angle = result.get('chamfer_angle', 0) if result else 0
         chamfer_length = result.get('chamfer_length', 0) if result else 0
-        tie_rod_height = float(result.get('tie_rod_height') or 0.0) if result else 0.0
-        tie_bottom_height = float(result.get('tie_bottom_height') or (H - tie_rod_height)) if result else H
+        chamfer_angle = AqueductPanel._safe_positive_float(chamfer_angle)
+        chamfer_length = AqueductPanel._safe_positive_float(chamfer_length)
+
+        title_suffix = "(带倒角)" if has_chamfer and chamfer_angle > 0 else ""
+        shape = build_rectangular_shape(
+            B,
+            H,
+            chamfer_angle=chamfer_angle if has_chamfer else 0.0,
+            chamfer_length=chamfer_length if has_chamfer else 0.0,
+        )
+        draw_section(ax, shape, WaterState(depth=h_w, flow=Q, velocity=V), f'{title}{title_suffix}')
 
         if has_chamfer and chamfer_angle > 0 and chamfer_length > 0:
             chamfer_height = chamfer_length * math.tan(math.radians(chamfer_angle))
-
-            # 绘制带倒角的槽身轮廓
-            ax.plot([-B/2, -B/2], [chamfer_height, H], 'k-', lw=2)
-            ax.plot([B/2, B/2], [chamfer_height, H], 'k-', lw=2)
-            ax.plot([-B/2 + chamfer_length, B/2 - chamfer_length], [0, 0], 'k-', lw=2)
-            ax.plot([-B/2, -B/2 + chamfer_length], [chamfer_height, 0], 'k-', lw=2)
-            ax.plot([B/2 - chamfer_length, B/2], [0, chamfer_height], 'k-', lw=2)
-            ax.plot([-B/2, B/2], [H, H], 'k--', lw=1)
-
-            # 绘制水面
-            if h_w > 0:
-                if h_w <= chamfer_height:
-                    water_x_left = -B/2 + chamfer_length * (h_w / chamfer_height)
-                    water_x_right = B/2 - chamfer_length * (h_w / chamfer_height)
-                    water_x = [water_x_left, -B/2 + chamfer_length, B/2 - chamfer_length, water_x_right]
-                    water_y = [h_w, 0, 0, h_w]
-                    ax.fill(water_x, water_y, color='lightblue', alpha=0.7)
-                    ax.plot([water_x_left, water_x_right], [h_w, h_w], 'b-', lw=1.5)
-                else:
-                    water_x = [-B/2, -B/2 + chamfer_length, B/2 - chamfer_length, B/2, B/2, -B/2]
-                    water_y = [chamfer_height, 0, 0, chamfer_height, h_w, h_w]
-                    ax.fill(water_x, water_y, color='lightblue', alpha=0.7)
-                    ax.plot([-B/2, B/2], [h_w, h_w], 'b-', lw=1.5)
-
-            # 标注倒角角度
             ax.text(-B/2 + chamfer_length/2, chamfer_height/2,
                     f'{chamfer_angle:.0f}°', ha='center', va='center',
                     fontsize=7, color='orange', fontweight='bold')
-        else:
-            # 无倒角，普通矩形
-            ax.plot([-B/2, -B/2], [0, H], 'k-', lw=2)
-            ax.plot([B/2, B/2], [0, H], 'k-', lw=2)
-            ax.plot([-B/2, B/2], [0, 0], 'k-', lw=2)
-            ax.plot([-B/2, B/2], [H, H], 'k--', lw=1)
-
-            if h_w > 0:
-                wx = [-B/2, -B/2, B/2, B/2]
-                wy = [0, h_w, h_w, 0]
-                ax.fill(wx, wy, color='lightblue', alpha=0.7)
-                ax.plot([-B/2, B/2], [h_w, h_w], 'b-', lw=1.5)
-
-        if tie_rod_height > 0 and 0 < tie_bottom_height < H:
-            ax.fill(
-                [-B/2, B/2, B/2, -B/2],
-                [tie_bottom_height, tie_bottom_height, H, H],
-                color='#d8c58a',
-                alpha=0.35,
-                zorder=0,
-            )
-            ax.plot([-B/2, B/2], [tie_bottom_height, tie_bottom_height],
-                    color='#d88400', lw=1.4, ls='--')
-            ax.text(0, tie_bottom_height + tie_rod_height * 0.45,
-                    f'拉杆高度={tie_rod_height:.2f}m',
-                    ha='center', va='center', fontsize=8, color='#8a5a00')
-            ax.text(-B/2 * 0.98, tie_bottom_height,
-                    '拉杆底', ha='left', va='bottom', fontsize=8, color='#8a5a00')
-            if h_w > 0 and tie_bottom_height > h_w:
-                if "设计" in str(title):
-                    clearance = float(result.get('design_tie_bottom_clearance', tie_bottom_height - h_w))
-                    clearance_label = "设计净距"
-                else:
-                    clearance = float(result.get('increased_tie_bottom_clearance', result.get('Fb', tie_bottom_height - h_w)))
-                    clearance_label = "加大有效超高"
-                ax.text(B / 2 * 0.98, (tie_bottom_height + h_w) / 2,
-                        f'{clearance_label}={clearance:.2f}m',
-                        ha='right', va='center', fontsize=8, color='#8a5a00')
-
-        # 标注槽宽
-        ax.annotate('', xy=(B/2, -0.1*H), xytext=(-B/2, -0.1*H),
-                     arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text(0, -0.2*H, f'B={B:.2f}m', ha='center', fontsize=9, color='gray')
-
-        # 标注总高
-        ax.annotate('', xy=(B/2+0.1*B, H), xytext=(B/2+0.1*B, 0),
-                     arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
-        ax.text(B/2+0.15*B, H/2, f'H={H:.2f}m', ha='left', fontsize=9, color='purple', rotation=90, va='center')
-
-        # 标注水深
-        if h_w > 0:
-            ax.annotate('', xy=(-B/2-0.1*B, h_w), xytext=(-B/2-0.1*B, 0),
-                         arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-B/2-0.15*B, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=9, color='blue', rotation=90, va='center')
-
-        ax.set_xlim(-B*0.9, B*0.9)
-        ax.set_ylim(-H*0.35, H*1.2)
-        ax.set_aspect('equal')
-
-        title_suffix = "(带倒角)" if has_chamfer and chamfer_angle > 0 else ""
-        self._apply_section_plot_title(ax, f'{title}{title_suffix}', Q, V)
-        ax.grid(True, alpha=0.3)
-        ax.axhline(y=0, color='brown', lw=3)
+        AqueductPanel._draw_tie_rod_overlay(ax, B / 2, H, h_w, title, result)
 
     # ================================================================
     # 清空

@@ -402,16 +402,48 @@ def test_multi_case_section_plot_skips_increase_water_level_when_disabled_or_inv
 
 
 def test_single_circular_section_plot_uses_increase_depth_fields():
-    """圆形明渠单工况应使用 y_i、Q_inc、V_i 显示加大水位。"""
+    """圆形明渠单工况应在同一张图叠加 y_i 加大水位。"""
     params, result = _circular_case(9.0, 2.60, 1.20)
     dummy = _PlotAllDummy([])
     dummy.input_params = params
 
     open_channel_panel_mod.OpenChannelPanel._update_section_plot(dummy, result)
 
-    assert len(dummy.section_fig.axes) == 2
-    design_ax, increase_ax = dummy.section_fig.axes
-    assert _water_line_levels(design_ax) == [pytest.approx(result["y_d"])]
-    assert _water_line_levels(increase_ax) == [pytest.approx(result["y_i"])]
-    assert "Q=10.80" in increase_ax.get_title()
-    assert "V=1.17" in increase_ax.get_title()
+    assert len(dummy.section_fig.axes) == 1
+    ax = dummy.section_fig.axes[0]
+    levels = _water_line_levels(ax)
+    assert round(result["y_d"], 3) in levels
+    assert round(result["y_i"], 3) in levels
+    labels = [text.get_text() for text in ax.texts]
+    assert any("加大水位" in label for label in labels)
+    assert _increase_depth_label_text(result["y_i"]) in labels
+
+
+@pytest.mark.parametrize(
+    "case_factory",
+    [
+        lambda: _base_trapezoid_case("梯形", 5.0, 1.57),
+        lambda: _base_trapezoid_case("矩形", 6.0, 1.40),
+        lambda: _compound_case(7.0, 1.30),
+        lambda: _u_case(8.0, 1.10, 1.05),
+        lambda: _circular_case(9.0, 2.60, 1.20),
+    ],
+)
+def test_single_section_plot_overlays_increase_water_level_when_enabled(case_factory):
+    """明渠单工况启用加大流量时，应只有一张图并同图叠加加大水位。"""
+    params, result = case_factory()
+    dummy = _PlotAllDummy([])
+    dummy.input_params = params
+
+    open_channel_panel_mod.OpenChannelPanel._update_section_plot(dummy, result)
+
+    assert len(dummy.section_fig.axes) == 1
+    ax = dummy.section_fig.axes[0]
+    design_depth = result.get("y_d", result.get("h_design"))
+    increase_depth = _expected_increase_depth(result)
+    levels = _water_line_levels(ax)
+    assert round(design_depth, 3) in levels
+    assert round(increase_depth, 3) in levels
+    labels = [text.get_text() for text in ax.texts]
+    assert any("加大水位" in label for label in labels)
+    assert _increase_depth_label_text(increase_depth) in labels

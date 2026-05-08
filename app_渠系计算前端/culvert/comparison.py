@@ -79,18 +79,26 @@ def _dimension_row(case_name: str, stype: str, params: dict, result: dict) -> di
     """生成暗涵结构尺寸对比行。"""
     is_arch = stype == "圆拱直墙型"
     R_arch, H_arch = _arch_metrics(params, result) if is_arch else ("", "")
+    B = first_num(result.get("B"), params.get("B"), params.get("arch_B"))
+    H = first_num(result.get("H_total"), result.get("H"))
+    if is_arch and B and H:
+        HB_ratio = H / B
+    else:
+        HB_ratio = first_num(result.get("HB_ratio"), params.get("hb"))
+        if HB_ratio is None and B and H:
+            HB_ratio = H / B
     return {
         "case_name": case_name,
         "section_type": f"暗涵-{stype}",
-        "B": first_num(result.get("B"), params.get("B"), params.get("arch_B")) or "",
-        "H": first_num(result.get("H_total"), result.get("H")) or "",
+        "B": B or "",
+        "H": H or "",
         "H_straight": first_num(result.get("H_straight")) if is_arch else "",
         "H_straight_source": _wall_source(params, result) if is_arch else "",
         "theta_deg": first_num(result.get("theta_deg"), params.get("theta_deg")) if is_arch else "",
         "R_arch": R_arch,
         "H_arch": H_arch,
         "BH_ratio": first_num(result.get("BH_ratio"), params.get("bh")) or "",
-        "HB_ratio": first_num(result.get("HB_ratio"), params.get("hb")) or "",
+        "HB_ratio": HB_ratio or "",
         "A_total": first_num(result.get("A_total")) or "",
     }
 

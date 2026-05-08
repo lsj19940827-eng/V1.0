@@ -23,15 +23,8 @@ import app_渠系计算前端.culvert.panel as culvert_panel_mod
 
 @pytest.fixture
 def local_tmp_path():
-    """在项目目录下创建测试临时目录，避开系统临时目录权限问题。"""
-    base_dir = ROOT / ".pytest_tmp" / "result_summary_unit"
-    base_dir.mkdir(parents=True, exist_ok=True)
-    path = base_dir / "word"
-    path.mkdir(parents=True, exist_ok=True)
-    for child in path.iterdir():
-        if child.is_file():
-            child.unlink()
-    return path
+    """返回虚拟路径；本测试已替换保存动作，不需要真实落盘。"""
+    return Path("unused_result_summary_unit")
 
 
 def _open_channel_case(use_increase=True):
@@ -109,6 +102,29 @@ def _tunnel_case():
     )
 
 
+def _tunnel_flat_bottom_case():
+    """构造隧洞平底圆形摘要用例。"""
+    return (
+        {"Q": 5.0, "section_type": "平底圆形", "use_increase": True},
+        {
+            "success": True,
+            "D": 4.0,
+            "B": 2.0,
+            "H_total": 3.732,
+            "A_total": 12.8,
+            "h_design": 1.5,
+            "V_design": 1.4,
+            "freeboard_hgt_design": 2.232,
+            "freeboard_pct_design": 58.0,
+            "Q_increased": 6.0,
+            "h_increased": 1.8,
+            "V_increased": 1.6,
+            "freeboard_hgt_inc": 1.932,
+            "freeboard_pct_inc": 50.0,
+        },
+    )
+
+
 def _culvert_case():
     """构造暗涵矩形摘要用例。"""
     return (
@@ -128,6 +144,31 @@ def _culvert_case():
             "V_increased": 1.38,
             "freeboard_hgt_inc": 0.6,
             "freeboard_pct_inc": 15.0,
+            "fb_min_required": 0.4,
+        },
+    )
+
+
+def _culvert_arch_case():
+    """构造暗涵圆拱直墙型摘要用例。"""
+    return (
+        {"Q": 5.0, "section_type": "圆拱直墙型", "use_increase": True},
+        {
+            "success": True,
+            "B": 3.2,
+            "H_total": 2.6,
+            "H_straight": 1.0,
+            "theta_deg": 180.0,
+            "A_total": 7.1,
+            "h_design": 1.55,
+            "V_design": 1.46,
+            "freeboard_hgt_design": 1.05,
+            "freeboard_pct_design": 40.4,
+            "Q_increased": 8.4,
+            "h_increased": 1.72,
+            "V_increased": 1.57,
+            "freeboard_hgt_inc": 0.88,
+            "freeboard_pct_inc": 33.8,
             "fb_min_required": 0.4,
         },
     )
@@ -168,6 +209,83 @@ def test_result_summary_hides_missing_increase_group_and_shows_short_note():
     assert "未启用加大流量" in html
     assert "加大水深" not in html
     assert "加大流速" not in html
+
+
+def test_tunnel_summary_shows_hb_when_total_height_and_width_exist():
+    """隧洞结果摘要应在有 H 和 B 时显示高宽比。"""
+    params, result = _tunnel_case()
+
+    html = result_summary.build_result_summary_html("tunnel", params, result)
+    items = result_summary.build_result_summary_word_items("tunnel", params, result)
+
+    assert "高宽比 H/B" in html
+    assert "0.867" in html
+    assert ("结构尺寸 - 高宽比 H/B", "0.867") in items
+
+
+def test_flat_bottom_tunnel_summary_shows_hb_when_total_height_and_width_exist():
+    """平底圆形隧洞也应按总高和平底宽显示高宽比。"""
+    params, result = _tunnel_flat_bottom_case()
+
+    html = result_summary.build_result_summary_html("tunnel", params, result)
+    items = result_summary.build_result_summary_word_items("tunnel", params, result)
+
+    assert "高宽比 H/B" in html
+    assert "1.866" in html
+    assert ("结构尺寸 - 高宽比 H/B", "1.866") in items
+
+
+def test_arch_culvert_summary_shows_hb_when_total_height_and_width_exist():
+    """圆拱直墙型暗涵应按总高和宽度显示高宽比。"""
+    params, result = _culvert_arch_case()
+
+    html = result_summary.build_result_summary_html("culvert", params, result)
+    items = result_summary.build_result_summary_word_items("culvert", params, result)
+
+    assert "高宽比 H/B" in html
+    assert "0.812" in html
+    assert ("结构尺寸 - 高宽比 H/B", "0.812") in items
+
+
+def test_culvert_summary_uses_kernel_freeboard_check_for_boundary_pass():
+    """暗涵净空边界值应优先沿用内核校核结果，避免显示误判。"""
+    params, result = _culvert_case()
+    result.update(
+        {
+            "h_increased": 1.979539081221729,
+            "V_increased": 1.29949317976613,
+            "freeboard_hgt_inc": 0.3999723470054761,
+            "freeboard_pct_inc": 16.809011390353586,
+            "fb_min_required": 0.4,
+            "fb_check_passed": True,
+        }
+    )
+
+    html = result_summary.build_result_summary_html("culvert", params, result)
+    items = result_summary.build_result_summary_word_items("culvert", params, result)
+
+    assert "净空校核" in html
+    assert "通过" in html
+    assert ("校核状态 - 净空校核", "通过") in items
+
+
+def test_culvert_summary_still_warns_when_freeboard_really_fails():
+    """暗涵净空真实不满足时，重点汇总仍应提示需注意。"""
+    params, result = _culvert_case()
+    result.update(
+        {
+            "h_increased": 2.1,
+            "V_increased": 1.3,
+            "freeboard_hgt_inc": 0.2,
+            "freeboard_pct_inc": 8.0,
+            "fb_min_required": 0.4,
+            "fb_check_passed": False,
+        }
+    )
+
+    items = result_summary.build_result_summary_word_items("culvert", params, result)
+
+    assert ("校核状态 - 净空校核", "需注意") in items
 
 
 def test_open_channel_summary_uses_increase_freeboard_when_increase_enabled():
@@ -236,6 +354,7 @@ def test_result_summary_word_items_are_flattened_for_report_table():
     assert ("设计工况 - 设计流量 Q", "5.000 m³/s") in items
     assert ("加大工况 - 加大流量 Q加大", "6.000 m³/s") in items
     assert any(name == "结构尺寸 - 直墙高度 H直" and value == "1.200 m" for name, value in items)
+    assert ("结构尺寸 - 高宽比 H/B", "0.867") in items
 
 
 class _DocStub:
@@ -245,7 +364,7 @@ class _DocStub:
         return None
 
     def save(self, filepath):
-        Path(filepath).write_text("stub", encoding="utf-8")
+        return None
 
 
 def _patch_word_helpers(monkeypatch, module, captured_tables):

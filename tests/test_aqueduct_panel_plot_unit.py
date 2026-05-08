@@ -131,14 +131,16 @@ class _DrawDummy:
 class _RenderPlotAllDummy:
     _section_plot_title = staticmethod(aqueduct_panel_mod.AqueductPanel._section_plot_title)
     _apply_section_plot_title = staticmethod(aqueduct_panel_mod.AqueductPanel._apply_section_plot_title)
+    _update_section_plot = aqueduct_panel_mod.AqueductPanel._update_section_plot
     _draw_u_section = aqueduct_panel_mod.AqueductPanel._draw_u_section
     _draw_rect_section = aqueduct_panel_mod.AqueductPanel._draw_rect_section
 
-    def __init__(self, all_results, cases):
+    def __init__(self, all_results=None, cases=None, input_params=None):
         self.section_fig = Figure()
         self.section_canvas = SimpleNamespace(draw=lambda: None)
-        self._all_results = all_results
-        self._cases = cases
+        self._all_results = all_results or []
+        self._cases = cases or []
+        self.input_params = input_params or {}
 
 
 class _PanelParseDummy:
@@ -335,13 +337,49 @@ def test_update_section_plot_uses_single_subplot_when_increase_disabled(section_
     ("section_type", "result_factory"),
     [("U形", _u_result), ("矩形", _rect_result)],
 )
-def test_update_section_plot_uses_two_subplots_when_increase_enabled(section_type, result_factory):
+def test_update_section_plot_uses_single_subplot_when_increase_enabled(section_type, result_factory):
     dummy = _SinglePlotDummy({"Q": 5.0, "use_increase": True, "section_type": section_type})
 
     aqueduct_panel_mod.AqueductPanel._update_section_plot(dummy, result_factory())
 
-    assert len(dummy.section_fig.axes) == 2
-    assert dummy.titles == ["设计流量", "加大流量"]
+    assert len(dummy.section_fig.axes) == 1
+    assert dummy.titles == ["设计流量"]
+
+
+@pytest.mark.parametrize(
+    ("section_type", "result_factory", "expected_span"),
+    [
+        (
+            "U形",
+            _u_result,
+            lambda result: (
+                -result["R"]
+                if result["h_increased"] > result["R"]
+                else -result["R"] * math.sqrt(1 - (1 - result["h_increased"] / result["R"]) ** 2),
+                result["R"]
+                if result["h_increased"] > result["R"]
+                else result["R"] * math.sqrt(1 - (1 - result["h_increased"] / result["R"]) ** 2),
+            ),
+        ),
+        ("矩形", _rect_result, lambda result: (-result["B"] / 2, result["B"] / 2)),
+    ],
+)
+def test_single_section_plot_overlays_increased_waterline_when_enabled(
+    section_type,
+    result_factory,
+    expected_span,
+):
+    """渡槽单工况启用加大流量时，应同图叠加加大水位。"""
+    result = result_factory()
+    dummy = _RenderPlotAllDummy(input_params={"Q": 5.0, "use_increase": True, "section_type": section_type})
+
+    aqueduct_panel_mod.AqueductPanel._update_section_plot(dummy, result)
+
+    assert len(dummy.section_fig.axes) == 1
+    ax = dummy.section_fig.axes[0]
+    expected_left, expected_right = expected_span(result)
+    _assert_increased_line(ax, result["h_increased"], expected_left, expected_right)
+    _assert_increased_depth_dimension(ax, result["h_increased"])
 
 
 def test_draw_u_section_spans_negative_and_positive_x_coordinates():

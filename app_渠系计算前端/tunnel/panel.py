@@ -125,6 +125,14 @@ from app_渠系计算前端.plot_title_utils import (
     apply_flow_velocity_title,
     format_flow_velocity_metrics,
 )
+from app_渠系计算前端.section_plotting import draw_section
+from app_渠系计算前端.section_shapes import (
+    WaterState,
+    build_arch_wall_shape,
+    build_circular_shape,
+    build_flat_bottom_circle_shape,
+    build_standard_horseshoe_shape,
+)
 from app_渠系计算前端.tunnel.geometry import (
     arch_half_width as _arch_half_width,
     build_arch_geometry as _build_arch_geometry,
@@ -2222,43 +2230,24 @@ class TunnelPanel(QWidget):
         stype = self.input_params.get('section_type', '圆形')
         Q = self.input_params['Q']
         show_increase = TunnelPanel._should_plot_increase(self.input_params, result)
-        axes = self.section_fig.subplots(1, 2) if show_increase else [self.section_fig.add_subplot(111)]
-        design_ax = axes[0]
-        increase_ax = axes[1] if show_increase else None
+        design_ax = self.section_fig.add_subplot(111)
 
         if stype == "平底圆形":
             D = result['D']; B = result['B']
             self._draw_flat_bottom_circle(design_ax, D, B, result['h_design'], result['V_design'], Q, "设计流量")
-            if show_increase:
-                self._draw_flat_bottom_circle(
-                    increase_ax, D, B, result['h_increased'],
-                    result.get('V_increased', 0.0), result.get('Q_increased', 0.0), "加大流量"
-                )
         elif stype == "圆形":
             D = result['D']
             self._draw_circular(design_ax, D, result['h_design'], result['V_design'], Q, "设计流量")
-            if show_increase:
-                self._draw_circular(
-                    increase_ax, D, result['h_increased'],
-                    result.get('V_increased', 0.0), result.get('Q_increased', 0.0), "加大流量"
-                )
         elif stype == "圆拱直墙型":
             B = result['B']; H = result['H_total']; theta = math.radians(result['theta_deg'])
             self._draw_horseshoe(design_ax, B, H, theta, result['h_design'], result['V_design'], Q, "设计流量")
-            if show_increase:
-                self._draw_horseshoe(
-                    increase_ax, B, H, theta, result['h_increased'],
-                    result.get('V_increased', 0.0), result.get('Q_increased', 0.0), "加大流量"
-                )
         else:
             r_val = result['r']
             sec_int = self.input_params.get('sec_type_int', 1)
             self._draw_horseshoe_std(design_ax, sec_int, r_val, result['h_design'], result['V_design'], Q, "设计流量")
-            if show_increase:
-                self._draw_horseshoe_std(
-                    increase_ax, sec_int, r_val, result['h_increased'],
-                    result.get('V_increased', 0.0), result.get('Q_increased', 0.0), "加大流量"
-                )
+
+        if show_increase:
+            self._draw_increased_waterline(design_ax, stype, self.input_params, result)
 
         self.section_fig.tight_layout()
         self.section_canvas.draw()
@@ -2402,146 +2391,23 @@ class TunnelPanel(QWidget):
         )
 
     def _draw_circular(self, ax, D, h_w, V, Q, title):
-        R = D / 2
-        theta = np.linspace(0, 2*np.pi, 100)
-        cx = R * np.cos(theta); cy = R + R * np.sin(theta)
-        ax.plot(cx, cy, 'k-', lw=2)
-        if 0 < h_w < D:
-            h_off = h_w - R
-            if abs(h_off) <= R:
-                half_a = math.acos(max(-1, min(1, h_off / R)))
-                water_w = math.sqrt(max(0, R**2 - h_off**2))
-                wa = np.linspace(np.pi/2 + half_a, np.pi/2 - half_a + 2*np.pi, 50)
-                wx = R * np.cos(wa); wy = R + R * np.sin(wa)
-                mask = wy <= h_w + 0.001
-                wxf = wx[mask]; wyf = wy[mask]
-                if len(wxf) > 0:
-                    px = np.concatenate([[water_w], wxf, [-water_w]])
-                    py = np.concatenate([[h_w], wyf, [h_w]])
-                    ax.fill(px, py, color='lightblue', alpha=0.7)
-                    ax.plot([-water_w, water_w], [h_w, h_w], 'b-', lw=1.5)
-        ax.annotate('', xy=(R, R), xytext=(-R, R), arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text(0, R+0.15*R, f'D={D:.2f}m', ha='center', fontsize=9, color='gray')
-        if h_w > 0:
-            ax.annotate('', xy=(-R-0.12*R, h_w), xytext=(-R-0.12*R, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-R-0.2*R, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
-        ax.set_xlim(-R*1.7, R*1.7); ax.set_ylim(-R*0.4, D*1.2)
-        ax.set_aspect('equal'); self._apply_section_plot_title(ax, title, Q, V)
-        ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
+        shape = build_circular_shape(D, water_label="h")
+        draw_section(ax, shape, WaterState(depth=h_w, flow=Q, velocity=V), title)
 
     def _draw_flat_bottom_circle(self, ax, D, B, h_w, V, Q, title):
         """绘制平底圆形断面。"""
-        geom = _build_flat_bottom_circle_geometry(D, B)
-        arc_points = _sample_arc(geom['top_arc'], samples=100)
-        ax.plot([geom['bottom_left'][0], geom['bottom_right'][0]], [0, 0], 'k-', lw=2)
-        ax.plot([point[0] for point in arc_points], [point[1] for point in arc_points], 'k-', lw=2)
-
-        if h_w > 0:
-            water_depth = min(h_w, geom['H_total'])
-            y_samples = np.linspace(0, water_depth, 60)
-            left_x = [-_flat_bottom_circle_half_width(geom, y) for y in y_samples]
-            right_x = [_flat_bottom_circle_half_width(geom, y) for y in y_samples]
-            fill_x = left_x + right_x[::-1]
-            fill_y = list(y_samples) + list(y_samples[::-1])
-            ax.fill(fill_x, fill_y, color='lightblue', alpha=0.7)
-            water_width = _flat_bottom_circle_surface_width(geom, water_depth)
-            if water_width > 0:
-                ax.plot([-water_width / 2.0, water_width / 2.0], [water_depth, water_depth], 'b-', lw=1.5)
-
-        H_total = geom['H_total']
-        ax.annotate('', xy=(B/2, -0.08*H_total), xytext=(-B/2, -0.08*H_total), arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text(0, -0.16*H_total, f'B={B:.2f}m', ha='center', fontsize=9, color='gray')
-        ax.annotate('', xy=(D/2, -0.22*H_total), xytext=(-D/2, -0.22*H_total), arrowprops=dict(arrowstyle='<->', color='gray', lw=1.2))
-        ax.text(0, -0.30*H_total, f'D={D:.2f}m', ha='center', fontsize=8, color='gray')
-        ax.annotate('', xy=(D/2+0.1*D, H_total), xytext=(D/2+0.1*D, 0), arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
-        ax.text(D/2+0.18*D, H_total/2, f'H={H_total:.2f}m', fontsize=8, color='purple', rotation=90, va='center')
-        # 标注水深，和圆形断面保持同一展示口径。
-        if h_w > 0:
-            ax.annotate('', xy=(-D/2-0.10*D, h_w), xytext=(-D/2-0.10*D, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-D/2-0.18*D, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
-        ax.set_xlim(-D*0.95, D*0.9); ax.set_ylim(-H_total*0.42, H_total*1.2)
-        ax.set_aspect('equal'); self._apply_section_plot_title(ax, title, Q, V)
-        ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
+        shape = build_flat_bottom_circle_shape(D, B)
+        draw_section(ax, shape, WaterState(depth=h_w, flow=Q, velocity=V), title)
 
     def _draw_horseshoe(self, ax, B, H_total, theta_rad, h_w, V, Q, title):
         """绘制圆拱直墙型断面"""
-        geom = self._horseshoe_plot_geometry(B, H_total, theta_rad)
-        R_arch = geom['R_arch']
-        H_straight = geom['H_straight']
-        center_y = geom['center_y']
-        # 拱部
-        start_angle = geom['start_angle']
-        end_angle = geom['end_angle']
-        arch_theta = np.linspace(start_angle, end_angle, 101)
-        arch_x = R_arch * np.cos(arch_theta)
-        arch_y = center_y + R_arch * np.sin(arch_theta)
-        # 直墙
-        ax.plot([-B/2, -B/2], [0, H_straight], 'k-', lw=2)
-        ax.plot([B/2, B/2], [0, H_straight], 'k-', lw=2)
-        ax.plot([-B/2, B/2], [0, 0], 'k-', lw=2)
-        ax.plot(arch_x, arch_y, 'k-', lw=2)
-        # 水面
-        if h_w > 0:
-            if h_w <= H_straight:
-                wx = [-B/2, -B/2, B/2, B/2]
-                wy = [0, h_w, h_w, 0]
-                ax.fill(wx, wy, color='lightblue', alpha=0.7)
-            else:
-                rect_x = [-B/2, -B/2, B/2, B/2]
-                rect_y = [0, min(h_w, H_straight), min(h_w, H_straight), 0]
-                ax.fill(rect_x, rect_y, color='lightblue', alpha=0.7)
-                if h_w > H_straight and h_w <= H_total:
-                    fill_x, fill_y = self._horseshoe_cap_polygon(geom, h_w)
-                    if fill_x is not None and fill_y is not None:
-                        ax.fill(fill_x, fill_y, color='lightblue', alpha=0.7)
-            water_half_width = self._horseshoe_plot_half_width(geom, h_w)
-            ax.plot([-water_half_width, water_half_width], [h_w, h_w], 'b-', lw=1.5)
-        # 标注
-        ax.annotate('', xy=(B/2, -0.08*H_total), xytext=(-B/2, -0.08*H_total), arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text(0, -0.16*H_total, f'B={B:.2f}m', ha='center', fontsize=9, color='gray')
-        ax.annotate('', xy=(B/2+0.1*B, H_total), xytext=(B/2+0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
-        ax.text(B/2+0.18*B, H_total/2, f'H={H_total:.2f}m', fontsize=8, color='purple', rotation=90, va='center')
-        if H_straight > 0:
-            ax.annotate('', xy=(-B/2-0.1*B, H_straight), xytext=(-B/2-0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='darkgreen', lw=1.2))
-            ax.text(-B/2-0.18*B, H_straight/2, f'H直={H_straight:.2f}m', fontsize=8, color='darkgreen', rotation=90, va='center', ha='right')
-        # 水深标注放在 H直 外侧，避免两个竖向尺寸重叠。
-        if h_w > 0:
-            ax.annotate('', xy=(-B/2-0.28*B, h_w), xytext=(-B/2-0.28*B, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-B/2-0.36*B, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
-        ax.set_xlim(-B*1.05, B*0.9); ax.set_ylim(-H_total*0.3, H_total*1.2)
-        ax.set_aspect('equal'); self._apply_section_plot_title(ax, title, Q, V)
-        ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
+        shape = build_arch_wall_shape(B, H_total, theta_rad)
+        draw_section(ax, shape, WaterState(depth=h_w, flow=Q, velocity=V), title)
 
     def _draw_horseshoe_std(self, ax, sec_type, r, h_w, V, Q, title):
         """绘制标准马蹄形断面（真实圆弧预览）"""
-        geom = _build_standard_horseshoe_geometry(sec_type, r)
-        type_name = geom['type_name']
-        for arc in geom['arcs']:
-            points = _sample_arc(arc, samples=80)
-            x_vals = [point[0] for point in points]
-            y_vals = [point[1] for point in points]
-            ax.plot(x_vals, y_vals, 'k-', lw=2)
-
-        if h_w > 0 and h_w < 2 * r:
-            water_half_width = _standard_horseshoe_half_width(geom, h_w)
-            water_heights = np.linspace(0, h_w, 50)
-            wl_x = [-_standard_horseshoe_half_width(geom, h) for h in water_heights]
-            wl_y = list(water_heights)
-            wr_x = [_standard_horseshoe_half_width(geom, h) for h in water_heights]
-            wr_y = list(water_heights)
-            fill_x = wl_x + wr_x[::-1]
-            fill_y = wl_y + wr_y[::-1]
-            ax.fill(fill_x, fill_y, color='lightblue', alpha=0.7)
-            ax.plot([-water_half_width, water_half_width], [h_w, h_w], 'b-', lw=1.5)
-
-        ax.annotate('', xy=(r, r), xytext=(0, r), arrowprops=dict(arrowstyle='->', color='gray', lw=1.5))
-        ax.text(r/2, r+0.15*r, f'r={r:.2f}m', ha='center', fontsize=9, color='gray')
-        if h_w > 0:
-            ax.annotate('', xy=(-r-0.2*r, h_w), xytext=(-r-0.2*r, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-r-0.3*r, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
-        ax.set_xlim(-r*2.2, r*2.2); ax.set_ylim(-r*0.3, 2.3*r)
-        ax.set_aspect('equal'); self._apply_section_plot_title(ax, f'{title} ({type_name})', Q, V)
-        ax.grid(True, alpha=0.3); ax.axhline(y=0, color='brown', lw=3)
+        shape = build_standard_horseshoe_shape(sec_type, r)
+        draw_section(ax, shape, WaterState(depth=h_w, flow=Q, velocity=V), f"{title} ({shape.name})")
 
     # ================================================================
     # 清空 / 导出

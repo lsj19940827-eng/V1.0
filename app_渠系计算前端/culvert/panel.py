@@ -54,7 +54,6 @@ except ImportError:
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
     from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
 from matplotlib.figure import Figure
-import numpy as np
 
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun']
 plt.rcParams['axes.unicode_minus'] = False
@@ -116,7 +115,12 @@ from app_渠系计算前端.increase_input_helper import (
     normalize_increase_mode,
     resolve_increase_input,
 )
-from app_渠系计算前端.plot_title_utils import apply_flow_velocity_title
+from app_渠系计算前端.section_plotting import SectionPlotOptions, draw_section
+from app_渠系计算前端.section_shapes import (
+    WaterState,
+    build_arch_wall_shape,
+    build_rectangular_shape,
+)
 from app_渠系计算前端.tunnel.geometry import (
     arch_half_width as _arch_half_width,
     build_arch_geometry as _build_arch_geometry,
@@ -1440,13 +1444,9 @@ class CulvertPanel(QWidget):
         n = len(success_results)
         if n == 1:
             ci, p, r = success_results[0]
-            if CulvertPanel._has_valid_increased_waterline(p, r):
-                axes = self.section_fig.subplots(1, 2)
-                self._draw_case_section(axes[0], p, r, r['h_design'], r['V_design'], p['Q'], "设计流量")
-                self._draw_case_section(axes[1], p, r, r['h_increased'], r['V_increased'], r['Q_increased'], "加大流量")
-            else:
-                ax = self.section_fig.subplots()
-                self._draw_case_section(ax, p, r, r['h_design'], r['V_design'], p['Q'], "设计流量")
+            ax = self.section_fig.subplots()
+            self._draw_case_section(ax, p, r, r['h_design'], r['V_design'], p['Q'], f"工况{ci+1} Q={p['Q']:.2f}")
+            CulvertPanel._draw_increased_waterline(ax, p, r)
         else:
             ncols = min(n, 3)
             nrows = (n + ncols - 1) // ncols
@@ -2161,103 +2161,27 @@ class CulvertPanel(QWidget):
             self.section_canvas.draw(); return
 
         Q = self.input_params['Q']
-        if CulvertPanel._has_valid_increased_waterline(self.input_params, result):
-            Q_inc = result['Q_increased']
-            axes = self.section_fig.subplots(1, 2)
-            self._draw_case_section(axes[0], self.input_params, result, result['h_design'], result['V_design'], Q, "设计流量")
-            self._draw_case_section(axes[1], self.input_params, result, result['h_increased'], result['V_increased'], Q_inc, "加大流量")
-        else:
-            ax = self.section_fig.subplots()
-            self._draw_case_section(ax, self.input_params, result, result['h_design'], result['V_design'], Q, "设计流量")
+        ax = self.section_fig.subplots()
+        self._draw_case_section(ax, self.input_params, result, result['h_design'], result['V_design'], Q, "设计流量")
+        CulvertPanel._draw_increased_waterline(ax, self.input_params, result)
         self.section_fig.tight_layout()
         self.section_canvas.draw()
 
     def _draw_rect(self, ax, B, H, h_w, V, Q, title):
-        # 绘制涵洞壁
-        ax.plot([-B/2, -B/2], [0, H], 'k-', lw=2)
-        ax.plot([B/2, B/2], [0, H], 'k-', lw=2)
-        ax.plot([-B/2, B/2], [0, 0], 'k-', lw=2)
-        ax.plot([-B/2, B/2], [H, H], 'k-', lw=2)  # 顶部实线（暗涵封闭）
-        # 水面
-        if h_w > 0:
-            wx = [-B/2, -B/2, B/2, B/2]
-            wy = [0, h_w, h_w, 0]
-            ax.fill(wx, wy, color='lightblue', alpha=0.7)
-            ax.plot([-B/2, B/2], [h_w, h_w], 'b-', lw=1.5)
-        # 标注底宽
-        ax.annotate('', xy=(B/2, -0.1*H), xytext=(-B/2, -0.1*H),
-                     arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text(0, -0.2*H, f'B={B:.2f}m', ha='center', fontsize=9, color='gray')
-        # 标注总高
-        ax.annotate('', xy=(B/2+0.08*B, H), xytext=(B/2+0.08*B, 0),
-                     arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
-        ax.text(B/2+0.14*B, H/2, f'H={H:.2f}m', fontsize=9, color='purple', rotation=90, va='center')
-        # 标注水深
-        if h_w > 0:
-            ax.annotate('', xy=(-B/2-0.08*B, h_w), xytext=(-B/2-0.08*B, 0),
-                         arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-B/2-0.14*B, h_w/2, f'h={h_w:.2f}m', fontsize=9, color='blue', rotation=90, va='center', ha='right')
-        # 顶部填充（表示封闭暗涵）
-        ax.fill_between([-B/2, B/2], H, H+0.05*H, color='gray', alpha=0.4)
-        ax.set_xlim(-B*0.9, B*0.9)
-        ax.set_ylim(-H*0.35, H*1.25)
-        ax.set_aspect('equal')
-        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
-        ax.grid(True, alpha=0.3)
-        ax.axhline(y=0, color='brown', lw=3)
+        """绘制矩形暗涵断面。"""
+        shape = build_rectangular_shape(B, H, closed=True)
+        draw_section(
+            ax,
+            shape,
+            WaterState(depth=h_w, flow=Q, velocity=V),
+            title,
+            style=SectionPlotOptions(closed_top_band=True),
+        )
 
     def _draw_arch(self, ax, B, H_total, theta_rad, h_w, V, Q, title):
         """绘制圆拱直墙型暗涵断面。"""
-        geom = _build_arch_geometry(B, H_total, theta_rad)
-        start_angle = geom['start_angle']
-        end_angle = geom['end_angle']
-        arch_theta = np.linspace(start_angle, end_angle, 101)
-        arch_x = geom['center'][0] + geom['R_arch'] * np.cos(arch_theta)
-        arch_y = geom['center'][1] + geom['R_arch'] * np.sin(arch_theta)
-        H_straight = geom['H_straight']
-        ax.plot([-B/2, -B/2], [0, H_straight], 'k-', lw=2)
-        ax.plot([B/2, B/2], [0, H_straight], 'k-', lw=2)
-        ax.plot([-B/2, B/2], [0, 0], 'k-', lw=2)
-        ax.plot(arch_x, arch_y, 'k-', lw=2)
-        if h_w > 0:
-            if h_w <= H_straight:
-                wx = [-B/2, -B/2, B/2, B/2]
-                wy = [0, h_w, h_w, 0]
-                ax.fill(wx, wy, color='lightblue', alpha=0.7)
-            else:
-                rect_x = [-B/2, -B/2, B/2, B/2]
-                rect_y = [0, H_straight, H_straight, 0]
-                ax.fill(rect_x, rect_y, color='lightblue', alpha=0.7)
-                fill_theta = np.linspace(geom['start_angle'], geom['end_angle'], 101)
-                fill_x = geom['center'][0] + geom['R_arch'] * np.cos(fill_theta)
-                fill_y = geom['center'][1] + geom['R_arch'] * np.sin(fill_theta)
-                mask = fill_y <= h_w + 1e-9
-                if np.any(mask):
-                    arch_fill_x = fill_x[mask]
-                    arch_fill_y = fill_y[mask]
-                    polygon_x = np.concatenate(([-_arch_half_width(geom, h_w)], arch_fill_x, [_arch_half_width(geom, h_w)]))
-                    polygon_y = np.concatenate(([h_w], arch_fill_y, [h_w]))
-                    ax.fill(polygon_x, polygon_y, color='lightblue', alpha=0.7)
-            water_half_width = _arch_half_width(geom, h_w)
-            ax.plot([-water_half_width, water_half_width], [h_w, h_w], 'b-', lw=1.5)
-        ax.annotate('', xy=(B/2, -0.08*H_total), xytext=(-B/2, -0.08*H_total), arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-        ax.text(0, -0.16*H_total, f'B={B:.2f}m', ha='center', fontsize=9, color='gray')
-        ax.annotate('', xy=(B/2+0.1*B, H_total), xytext=(B/2+0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='purple', lw=1.5))
-        ax.text(B/2+0.18*B, H_total/2, f'H={H_total:.2f}m', fontsize=8, color='purple', rotation=90, va='center')
-        if H_straight > 1e-9:
-            ax.annotate('', xy=(-B/2-0.1*B, H_straight), xytext=(-B/2-0.1*B, 0), arrowprops=dict(arrowstyle='<->', color='teal', lw=1.3))
-            ax.text(-B/2-0.18*B, H_straight/2, f'H直={H_straight:.2f}m', fontsize=8, color='teal', rotation=90, va='center', ha='center')
-        # 水深标注放在 H直 外侧，避免两个竖向尺寸重叠。
-        if h_w > 0:
-            ax.annotate('', xy=(-B/2-0.28*B, h_w), xytext=(-B/2-0.28*B, 0), arrowprops=dict(arrowstyle='<->', color='blue', lw=1.5))
-            ax.text(-B/2-0.36*B, h_w/2, f'h={h_w:.2f}m', ha='right', fontsize=8, color='blue', rotation=90, va='center')
-        ax.text(0.04 * B, H_total * 0.98, f'θ={math.degrees(theta_rad):.0f}°', fontsize=9, color='purple')
-        ax.set_xlim(-B*1.05, B*0.9)
-        ax.set_ylim(-H_total*0.3, H_total*1.2)
-        ax.set_aspect('equal')
-        apply_flow_velocity_title(ax, title, Q, V, fontsize=10)
-        ax.grid(True, alpha=0.3)
-        ax.axhline(y=0, color='brown', lw=3)
+        shape = build_arch_wall_shape(B, H_total, theta_rad)
+        draw_section(ax, shape, WaterState(depth=h_w, flow=Q, velocity=V), title)
 
     # ================================================================
     # 清空 / 导出
