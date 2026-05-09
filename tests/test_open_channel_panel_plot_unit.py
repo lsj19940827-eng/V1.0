@@ -44,6 +44,7 @@ class _PlotAllDummy:
     _draw_circular = open_channel_panel_mod.OpenChannelPanel._draw_circular
     _draw_compound_trapezoid = open_channel_panel_mod.OpenChannelPanel._draw_compound_trapezoid
     _draw_u_section = open_channel_panel_mod.OpenChannelPanel._draw_u_section
+    _update_section_plot = open_channel_panel_mod.OpenChannelPanel._update_section_plot
     _compound_trapezoid_geometry = (
         open_channel_panel_mod.OpenChannelPanel._compound_trapezoid_geometry
     )
@@ -59,6 +60,67 @@ class _PlotAllDummy:
         self.section_canvas = SimpleNamespace(draw=lambda: None)
         self._all_results = all_results
         self.input_params = {}
+
+
+class _DrawTrackingCanvas:
+    """记录项目恢复清图时的画布绘制次数。"""
+
+    def __init__(self):
+        self.draw_calls = 0
+
+    def draw(self):
+        self.draw_calls += 1
+
+    def update(self):
+        return None
+
+    def repaint(self):
+        return None
+
+
+class _Notebook:
+    """记录项目恢复时页签复位行为。"""
+
+    def __init__(self, current_index=1, count=3):
+        self.index = current_index
+        self._count = count
+        self.set_indexes = []
+
+    def count(self):
+        return self._count
+
+    def currentIndex(self):
+        return self.index
+
+    def setCurrentIndex(self, index):
+        self.index = index
+        self.set_indexes.append(index)
+
+
+def _from_project_dummy():
+    """构造带旧断面图残留的项目恢复替身。"""
+    fig = Figure()
+    axes = fig.subplots(2, 2).ravel()
+    axes[-1].set_visible(False)
+    return SimpleNamespace(
+        section_fig=fig,
+        section_canvas=_DrawTrackingCanvas(),
+        _section_axis_dialogs={axes[0]: object()},
+        _section_plot_layout=object(),
+        _section_plot_layout_case_count=3,
+        _has_rendered_results=True,
+        _results_dirty=True,
+        _all_results_stale=True,
+        _stale_result_case_indexes={0},
+        _load_case=lambda _idx: None,
+        _rebuild_case_tags=lambda: None,
+        _update_calc_btn_text=lambda: None,
+        _display_all_results=lambda: None,
+        _update_section_plot_all=lambda: None,
+        _refresh_comparison_tables=lambda: None,
+        _clear_comparison_tables=lambda: None,
+        _show_initial_help=lambda: None,
+    )
 
 
 def _base_trapezoid_case(section_type, q, h):
@@ -219,6 +281,101 @@ def _increase_depth_label_text(depth):
     return f"h加大={depth:.2f}m"
 
 
+def test_from_project_dict_clears_stale_section_plot_when_open_channel_has_no_results():
+    """明渠加载无计算结果项目时，不应保留上一项目的断面子图。"""
+    dummy = _from_project_dummy()
+
+    open_channel_panel_mod.OpenChannelPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [open_channel_panel_mod.OpenChannelPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": [],
+            "current_result": None,
+            "input_params": {},
+            "result_state": None,
+        },
+    )
+
+    assert dummy._all_results == []
+    assert dummy.current_result is None
+    assert dummy.section_fig.axes == []
+    assert dummy._section_axis_dialogs == {}
+    assert dummy._section_plot_layout is None
+    assert dummy._section_plot_layout_case_count is None
+    assert dummy._has_rendered_results is False
+    assert dummy._results_dirty is False
+    assert dummy._all_results_stale is False
+    assert dummy._stale_result_case_indexes == set()
+
+
+def test_from_project_dict_keeps_open_channel_results_when_section_plot_restore_fails():
+    """明渠项目恢复时，断面图失败不应清空已加载的计算结果。"""
+    dummy = _from_project_dummy()
+    params, result = _base_trapezoid_case("梯形", 5.0, 1.30)
+    all_results = [(0, params, result)]
+    rendered = []
+    compared = []
+    dummy._display_all_results = lambda: rendered.append("display")
+    dummy._refresh_comparison_tables = lambda: compared.append("comparison")
+
+    def fail_plot():
+        raise RuntimeError("plot failed")
+
+    dummy._update_section_plot_all = fail_plot
+
+    open_channel_panel_mod.OpenChannelPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [open_channel_panel_mod.OpenChannelPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": all_results,
+            "current_result": result,
+            "input_params": params,
+            "result_state": None,
+        },
+    )
+
+    assert dummy._all_results == all_results
+    assert dummy.current_result == result
+    assert rendered == ["display"]
+    assert compared == ["comparison"]
+    assert dummy.section_fig.axes == []
+    assert dummy._section_axis_dialogs == {}
+    assert dummy._section_plot_layout is None
+
+
+def test_from_project_dict_schedules_open_channel_section_plot_refresh_after_restoring_tab(monkeypatch):
+    """明渠项目恢复到断面图页后，应安排一次最终宽度重排。"""
+    dummy = _from_project_dummy()
+    dummy.notebook = _Notebook(current_index=1)
+    params, result = _base_trapezoid_case("梯形", 5.0, 1.30)
+    all_results = [(0, params, result)]
+    scheduled = []
+    monkeypatch.setattr(
+        open_channel_panel_mod,
+        "schedule_section_plot_restore_refresh",
+        lambda panel: scheduled.append(panel),
+        raising=False,
+    )
+
+    open_channel_panel_mod.OpenChannelPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [open_channel_panel_mod.OpenChannelPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": all_results,
+            "current_result": result,
+            "input_params": params,
+            "result_state": None,
+            "notebook_idx": 1,
+        },
+    )
+
+    assert dummy.notebook.set_indexes == [1]
+    assert scheduled == [dummy]
+
+
 @pytest.mark.parametrize(
     ("case_factory", "expected_labels"),
     [
@@ -288,6 +445,57 @@ def test_multi_case_section_plot_has_no_simplified_fallback_branch():
     assert "多工况简单网格" not in source
     assert "ax.text(0.5, 0.5, stype" not in source
     assert "_draw_case_section_plot" in source
+
+
+def test_multi_case_section_plot_uses_two_columns_for_many_open_channel_cases():
+    """明渠 10 个成功工况应切到 2 列，并拉高画布交给滚动区。"""
+    all_results = [
+        (idx, params | {"Q": 5.0 + idx}, result)
+        for idx, (params, result) in enumerate(
+            [_base_trapezoid_case("梯形", 5.0 + i, 1.30 + i * 0.01) for i in range(10)]
+        )
+    ]
+    dummy = _PlotAllDummy(all_results)
+
+    open_channel_panel_mod.OpenChannelPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 5
+    assert dummy.section_fig.get_size_inches()[1] >= 18
+    assert len(dummy._section_axis_dialogs) == 10
+
+
+def test_multi_case_section_plot_uses_two_columns_for_five_open_channel_cases():
+    """明渠 5 个成功工况也应固定 2 列，避免 3 列横向裁切。"""
+    all_results = [
+        (idx, params | {"Q": 5.0 + idx}, result)
+        for idx, (params, result) in enumerate(
+            [_base_trapezoid_case("矩形", 5.0 + i, 1.30 + i * 0.01) for i in range(5)]
+        )
+    ]
+    dummy = _PlotAllDummy(all_results)
+
+    open_channel_panel_mod.OpenChannelPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 3
+    assert len(dummy._section_axis_dialogs) == 5
+
+
+def test_single_success_multi_case_open_channel_registers_double_click_dialog():
+    """明渠多工况只剩 1 个成功结果时，也应保留双击放大入口。"""
+    params, result = _base_trapezoid_case("梯形", 5.0, 1.30)
+    dummy = _PlotAllDummy(
+        [
+            (0, params, result),
+            (1, params | {"Q": 6.0}, {"success": False, "error_message": "缺少参数"}),
+        ]
+    )
+
+    open_channel_panel_mod.OpenChannelPanel._update_section_plot_all(dummy)
+
+    assert len(dummy.section_fig.axes) == 1
+    assert len(dummy._section_axis_dialogs) == 1
 
 
 @pytest.mark.parametrize(

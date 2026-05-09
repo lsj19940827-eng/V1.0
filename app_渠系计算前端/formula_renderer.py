@@ -151,6 +151,49 @@ def _e(s):
     return html_mod.escape(str(s))
 
 
+def _find_balanced_brace_end(text, start):
+    """查找从左花括号开始的匹配右花括号位置。"""
+    if start >= len(text) or text[start] != '{':
+        return -1
+    depth = 0
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return idx
+    return -1
+
+
+def _wrap_remaining_chinese_text(latex):
+    """把公式里尚未包裹的连续中文量名转成 mathtext 可渲染文本。"""
+    parts = []
+    idx = 0
+    while idx < len(latex):
+        if latex.startswith('\\text{', idx):
+            end = _find_balanced_brace_end(latex, idx + len('\\text'))
+            if end >= 0:
+                parts.append(latex[idx:end + 1])
+                idx = end + 1
+                continue
+
+        ch = latex[idx]
+        if '\u4e00' <= ch <= '\u9fff':
+            start = idx
+            idx += 1
+            while idx < len(latex) and '\u4e00' <= latex[idx] <= '\u9fff':
+                idx += 1
+            parts.append('\\text{' + latex[start:idx] + '}')
+            continue
+
+        parts.append(ch)
+        idx += 1
+
+    return ''.join(parts)
+
+
 # ============================================================
 # SVG 矢量渲染核心
 # ============================================================
@@ -327,8 +370,10 @@ def text_to_latex(line):
     num_cmp = bool(re.match(r'^\d', s)) and has_cmp
     # Case 5: 短中文变量名 + 比较运算符（如 净空面积 ≥ 15%）
     cn_cmp = bool(re.match(r'^[\u4e00-\u9fff]{1,4}\s*[<>≤≥]', s)) and has_cmp
+    # Case 6: 拉丁变量 + 中文下标，可带中文控制量（如 F拉_设计 = 拉杆底控制高 - h_设计）
+    latin_cn_subscript = bool(re.match(r'^[A-Za-z]{1,4}(?:[\u4e00-\u9fff]+)?(?:_[\u4e00-\u9fff]+)?\s*=', s))
 
-    if not (latin_start or continuation or cn_var or num_cmp or cn_cmp):
+    if not (latin_start or continuation or cn_var or num_cmp or cn_cmp or latin_cn_subscript):
         return None
 
     # 运算符前中文字符太多 → 描述文本而非公式
@@ -342,12 +387,12 @@ def text_to_latex(line):
                 eq_idx = _oi
     pre = s[:eq_idx]
     cn_before = sum(1 for c in pre if '\u4e00' <= c <= '\u9fff')
-    if cn_before > 4:
+    if cn_before > 4 and not latin_cn_subscript:
         return None
 
     # 全行中文字符太多也跳过
     total_cn = sum(1 for c in s if '\u4e00' <= c <= '\u9fff')
-    if total_cn > 8:
+    if total_cn > 8 and not latin_cn_subscript:
         return None
 
     # ------ 开始转换为 LaTeX ------
@@ -372,7 +417,13 @@ def text_to_latex(line):
         lambda m: '\\text{' + m.group(1) + '}_{\\text{' + m.group(2) + '}}',
         latex
     )
-    #    (c) 单字母 + 中文: Q加大, h加大, V加大, h_设计, h_加大
+    #    (c) 单字母 + 中文 + 中文下标: F拉_设计 → F_{\text{拉,设计}}
+    latex = re.sub(
+        r'([A-Za-z])([\u4e00-\u9fff]+)_([\u4e00-\u9fff]+)',
+        lambda m: m.group(1) + '_{\\text{' + m.group(2) + ',' + m.group(3) + '}}',
+        latex
+    )
+    #    (d) 单字母 + 中文: Q加大, h加大, V加大, h_设计, h_加大
     latex = re.sub(
         r'([A-Za-z])_?([\u4e00-\u9fff]+)',
         lambda m: m.group(1) + '_{\\text{' + m.group(2) + '}}',
@@ -400,6 +451,9 @@ def text_to_latex(line):
     latex = latex.replace('≤', ' \\leq ')
     for g_char, g_cmd in _GREEK_MAP.items():
         latex = latex.replace(g_char, g_cmd + ' ')
+
+    # 4b. 剩余中文量名（如 拉杆底控制高）作为文本量显示
+    latex = _wrap_remaining_chinese_text(latex)
 
     # 5. 根号: √(内容) → \sqrt{内容}
     latex = re.sub(r'√\(([^)]+)\)', r'\\sqrt{\1}', latex)
@@ -439,7 +493,7 @@ def text_to_latex(line):
 
 _FORMULA_OPS = ('=', '<', '>', '≤', '≥')
 _EMBEDDED_FORMULA_PATTERNS = (
-    r'[A-Za-z]{1,4}(?:/[A-Za-z]{1,4})?(?:_[\u4e00-\u9fff]+|[\u4e00-\u9fff]{1,4})?\s*(?:=|[<>≤≥])',
+    r'[A-Za-z]{1,4}(?:/[A-Za-z]{1,4})?(?:[\u4e00-\u9fff]{1,4}(?:_[\u4e00-\u9fff]+)?|_[\u4e00-\u9fff]+)?\s*(?:=|[<>≤≥])',
     r'[\u0391-\u03c9]\s*(?:=|[<>≤≥])',
     r'[\u4e00-\u9fff]{1,6}\s*(?:=|[<>≤≥])',
 )
@@ -498,7 +552,7 @@ def _has_safe_formula_boundary(text, start):
         idx -= 1
     if idx < 0:
         return True
-    return text[idx] not in _FORMULA_OPS + ('/', '(', '（')
+    return text[idx] not in _FORMULA_OPS + ('+', '-', '×', '÷', '*', '/', '(', '（')
 
 
 def _find_embedded_formula_start(text):

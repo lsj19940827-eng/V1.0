@@ -8,6 +8,8 @@ import tempfile
 import types
 from pathlib import Path
 
+import pytest
+
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault(
@@ -88,6 +90,49 @@ def test_current_runtime_facts_avoids_blocking_platform_platform(monkeypatch):
     facts = diagnostics._current_runtime_facts()
 
     assert facts["platform_summary"] == "Windows-11-10.0.26100-SP0"
+
+
+def test_windows_platform_wmi_guard_prevents_platform_machine_from_calling_wmi(monkeypatch):
+    if not sys.platform.startswith("win"):
+        pytest.skip("Windows 专用的启动兼容测试")
+
+    import platform as std_platform
+
+    calls = []
+
+    def _blocking_wmi_query(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("platform WMI query should be disabled before pandas import")
+
+    monkeypatch.setattr(
+        std_platform,
+        "_v1_platform_wmi_guard_installed",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(std_platform, "_wmi_query", _blocking_wmi_query, raising=False)
+    monkeypatch.setattr(std_platform, "_uname_cache", None, raising=False)
+
+    bootstrap.ensure_safe_windows_platform_queries()
+
+    assert std_platform.machine()
+    assert calls == []
+
+
+def test_initialize_runtime_environment_installs_platform_wmi_guard(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        bootstrap,
+        "ensure_safe_windows_platform_queries",
+        lambda: calls.append("platform_guard"),
+    )
+    monkeypatch.setattr(bootstrap, "_set_windows_app_user_model_id", lambda: None)
+    monkeypatch.setattr(bootstrap.QApplication, "instance", lambda: object())
+
+    bootstrap.initialize_runtime_environment()
+
+    assert calls == ["platform_guard"]
 
 
 def test_apply_emergency_single_process_mode_merges_flags_without_duplication(monkeypatch):

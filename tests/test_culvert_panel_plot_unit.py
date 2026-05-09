@@ -46,6 +46,68 @@ class _PlotDummy:
         self.input_params = input_params or {}
 
 
+class _DrawTrackingCanvas:
+    """记录项目恢复清图时的画布绘制次数。"""
+
+    def __init__(self):
+        self.draw_calls = 0
+
+    def draw(self):
+        self.draw_calls += 1
+
+    def update(self):
+        return None
+
+    def repaint(self):
+        return None
+
+
+class _Notebook:
+    """记录项目恢复时页签复位行为。"""
+
+    def __init__(self, current_index=1, count=3):
+        self.index = current_index
+        self._count = count
+        self.set_indexes = []
+
+    def count(self):
+        return self._count
+
+    def currentIndex(self):
+        return self.index
+
+    def setCurrentIndex(self, index):
+        self.index = index
+        self.set_indexes.append(index)
+
+
+def _from_project_dummy():
+    """构造带旧断面图残留的项目恢复替身。"""
+    fig = Figure()
+    axes = fig.subplots(2, 2).ravel()
+    axes[-1].set_visible(False)
+    return SimpleNamespace(
+        section_fig=fig,
+        section_canvas=_DrawTrackingCanvas(),
+        _section_axis_dialogs={axes[0]: object()},
+        _section_plot_layout=object(),
+        _section_plot_layout_case_count=3,
+        _has_rendered_results=True,
+        _results_dirty=True,
+        _all_results_stale=True,
+        _stale_result_case_indexes={0},
+        _ensure_case_defaults=culvert_panel_mod.CulvertPanel._ensure_case_defaults,
+        _load_case=lambda _idx: None,
+        _rebuild_case_tags=lambda: None,
+        _update_calc_btn_text=lambda: None,
+        _display_all_results=lambda: None,
+        _update_section_plot_all=lambda: None,
+        _refresh_comparison_tables=lambda: None,
+        _clear_comparison_tables=lambda: None,
+        _show_initial_help=lambda: None,
+    )
+
+
 def _rect_result(*, h_increased=1.60):
     """构造矩形暗涵结果。"""
     return {
@@ -157,6 +219,103 @@ def _polygon_self_intersects(points):
     return False
 
 
+def test_from_project_dict_clears_stale_section_plot_when_culvert_has_no_results():
+    """暗涵加载无计算结果项目时，不应保留上一项目的断面子图。"""
+    dummy = _from_project_dummy()
+
+    culvert_panel_mod.CulvertPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [culvert_panel_mod.CulvertPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": [],
+            "current_result": None,
+            "input_params": {},
+            "result_state": None,
+        },
+    )
+
+    assert dummy._all_results == []
+    assert dummy.current_result is None
+    assert dummy.section_fig.axes == []
+    assert dummy._section_axis_dialogs == {}
+    assert dummy._section_plot_layout is None
+    assert dummy._section_plot_layout_case_count is None
+    assert dummy._has_rendered_results is False
+    assert dummy._results_dirty is False
+    assert dummy._all_results_stale is False
+    assert dummy._stale_result_case_indexes == set()
+
+
+def test_from_project_dict_keeps_culvert_results_when_section_plot_restore_fails():
+    """暗涵项目恢复时，断面图失败不应清空已加载的计算结果。"""
+    dummy = _from_project_dummy()
+    params = {"section_type": "矩形", "Q": 5.0, "use_increase": True}
+    result = _rect_result()
+    all_results = [(0, params, result)]
+    rendered = []
+    compared = []
+    dummy._display_all_results = lambda: rendered.append("display")
+    dummy._refresh_comparison_tables = lambda: compared.append("comparison")
+
+    def fail_plot():
+        raise RuntimeError("plot failed")
+
+    dummy._update_section_plot_all = fail_plot
+
+    culvert_panel_mod.CulvertPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [culvert_panel_mod.CulvertPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": all_results,
+            "current_result": result,
+            "input_params": params,
+            "result_state": None,
+        },
+    )
+
+    assert dummy._all_results == all_results
+    assert dummy.current_result == result
+    assert rendered == ["display"]
+    assert compared == ["comparison"]
+    assert dummy.section_fig.axes == []
+    assert dummy._section_axis_dialogs == {}
+    assert dummy._section_plot_layout is None
+
+
+def test_from_project_dict_schedules_culvert_section_plot_refresh_after_restoring_tab(monkeypatch):
+    """暗涵项目恢复到断面图页后，应安排一次最终宽度重排。"""
+    dummy = _from_project_dummy()
+    dummy.notebook = _Notebook(current_index=1)
+    params = {"section_type": "矩形", "Q": 5.0, "use_increase": True}
+    result = _rect_result()
+    all_results = [(0, params, result)]
+    scheduled = []
+    monkeypatch.setattr(
+        culvert_panel_mod,
+        "schedule_section_plot_restore_refresh",
+        lambda panel: scheduled.append(panel),
+        raising=False,
+    )
+
+    culvert_panel_mod.CulvertPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [culvert_panel_mod.CulvertPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": all_results,
+            "current_result": result,
+            "input_params": params,
+            "result_state": None,
+            "notebook_idx": 1,
+        },
+    )
+
+    assert dummy.notebook.set_indexes == [1]
+    assert scheduled == [dummy]
+
+
 @pytest.mark.parametrize(
     ("params", "result"),
     [
@@ -185,6 +344,41 @@ def test_multi_case_section_plot_overlays_increased_waterline(params, result):
         assert "加大水位" in labels
         assert f"h加大={result['h_increased']:.2f}m" in labels
         assert _has_increased_depth_dimension(ax, result["h_increased"])
+
+
+def test_multi_case_section_plot_uses_two_columns_for_many_culvert_cases():
+    """暗涵 10 个成功工况应切到 2 列，并登记双击放大信息。"""
+    params = {"section_type": "圆拱直墙型", "Q": 7.0, "use_increase": True}
+    dummy = _PlotDummy(
+        all_results=[
+            (idx, params | {"Q": 7.0 + idx}, _arch_result())
+            for idx in range(10)
+        ]
+    )
+
+    culvert_panel_mod.CulvertPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 5
+    assert dummy.section_fig.get_size_inches()[1] >= 18
+    assert len(dummy._section_axis_dialogs) == 10
+
+
+def test_multi_case_section_plot_uses_two_columns_for_five_culvert_cases():
+    """暗涵 5 个成功工况也应固定 2 列。"""
+    params = {"section_type": "圆拱直墙型", "Q": 7.0, "use_increase": True}
+    dummy = _PlotDummy(
+        all_results=[
+            (idx, params | {"Q": 7.0 + idx}, _arch_result())
+            for idx in range(5)
+        ]
+    )
+
+    culvert_panel_mod.CulvertPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 3
+    assert len(dummy._section_axis_dialogs) == 5
 
 
 def test_arch_water_fill_is_single_non_intersecting_polygon_above_wall():
@@ -318,3 +512,4 @@ def test_single_success_result_plot_all_overlays_increased_waterline(params, res
     labels = "\n".join(text.get_text() for text in ax.texts)
     assert "加大水位" in labels
     assert f"h加大={result['h_increased']:.2f}m" in labels
+    assert len(dummy._section_axis_dialogs) == 1

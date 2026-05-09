@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """授权管理图形界面 — qfluentwidgets Win11 Fluent 风格（仅供管理员使用）"""
 import base64, calendar, csv, hashlib, hmac, json, os, sys, urllib.request
+from contextlib import contextmanager
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
@@ -10,12 +11,38 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QMainWindow,
     QStackedWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
-from qfluentwidgets import (
-    BodyLabel, CaptionLabel, CardWidget, ComboBox, ElevatedCardWidget,
-    InfoBar, InfoBarPosition, LineEdit, MessageBox, Pivot,
-    PrimaryPushButton, PushButton, SubtitleLabel, TableWidget,
-    setTheme, Theme,
-)
+
+
+@contextmanager
+def _fast_windows_version_for_darkdetect():
+    """避免 darkdetect 在 Windows 启动时卡住 WMI 系统版本查询。"""
+    if sys.platform != "win32":
+        yield
+        return
+
+    import platform
+
+    original_release = platform.release
+    original_version = platform.version
+    winver = sys.getwindowsversion()
+    release = "10" if winver.major >= 10 else str(winver.major)
+    version = f"{winver.major}.{winver.minor}.{winver.build}"
+    platform.release = lambda: release
+    platform.version = lambda: version
+    try:
+        yield
+    finally:
+        platform.release = original_release
+        platform.version = original_version
+
+
+with _fast_windows_version_for_darkdetect():
+    from qfluentwidgets import (
+        BodyLabel, CaptionLabel, CardWidget, ComboBox, ElevatedCardWidget,
+        InfoBar, InfoBarPosition, LineEdit, MessageBox, Pivot,
+        PrimaryPushButton, PushButton, SubtitleLabel, TableWidget,
+        setTheme, Theme,
+    )
 
 _EXPIRE_OPTIONS = [
     ("永久（不限期）", (0, 0)), ("1 个月", (0, 1)), ("3 个月", (0, 3)),

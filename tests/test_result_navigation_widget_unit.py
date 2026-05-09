@@ -32,6 +32,10 @@ def _flush_events(rounds: int = 3):
         app.processEvents()
 
 
+def _visible_chip_columns(bar, limit=10):
+    return {chip.geometry().x() for chip in bar.chips()[:limit] if chip.isVisible()}
+
+
 def test_case_result_navigation_bar_hides_for_empty_and_single_case_items():
     _get_qapp()
     mod = importlib.import_module("app_渠系计算前端.result_navigation")
@@ -88,11 +92,81 @@ def test_case_result_navigation_bar_shrinks_to_content_height_and_rewraps():
     wrapped_height = narrow_bar.height()
 
     assert wrapped_height == narrow_bar.sizeHint().height()
-    assert wrapped_height > single_row_height
-    assert wrapped_height < 320
+    assert wrapped_height == single_row_height
+    assert wrapped_height < 140
 
     wide_bar.deleteLater()
     narrow_bar.deleteLater()
+
+
+def test_case_result_navigation_bar_compacts_thirty_items_to_two_rows_then_scrolls():
+    _get_qapp()
+    mod = importlib.import_module("app_渠系计算前端.result_navigation")
+    items = [
+        {
+            "case_idx": idx,
+            "label": f"U形 · Q={35 - idx * 0.7:.1f}",
+            "summary": f"U形 · Q={35 - idx * 0.7:.3f}",
+            "is_error": False,
+        }
+        for idx in range(30)
+    ]
+
+    bar = mod.CaseResultNavigationBar()
+    bar.resize(900, 500)
+    bar.set_items(items)
+    bar.show()
+    _flush_events(6)
+
+    collapsed_height = bar.height()
+    assert bar.chip_count() == 30
+    assert bar.chips()[0].text() == "工况1  Q=35.000"
+    assert "U形" not in bar.chips()[0].text()
+    assert bar.can_collapse() is True
+    assert bar.is_expanded() is False
+    assert collapsed_height < 180
+
+    bar.set_expanded(True)
+    _flush_events(6)
+
+    expanded_height = bar.height()
+    assert bar.is_expanded() is True
+    assert expanded_height > collapsed_height
+    assert expanded_height < 280
+    assert bar._chip_scroll.verticalScrollBar().maximum() > 0
+
+    bar.deleteLater()
+
+
+def test_case_result_navigation_bar_resyncs_when_viewport_grows_without_bar_resize():
+    _get_qapp()
+    mod = importlib.import_module("app_渠系计算前端.result_navigation")
+    items = [
+        {
+            "case_idx": idx,
+            "label": f"工况 {idx + 1}",
+            "summary": f"U形 · Q={35 - idx * 0.5:.3f}",
+            "is_error": False,
+        }
+        for idx in range(10)
+    ]
+
+    bar = mod.CaseResultNavigationBar()
+    bar.resize(420, 300)
+    bar.set_items(items)
+    bar.show()
+    _flush_events(6)
+    narrow_host_width = bar._chip_host.width()
+
+    bar._chip_scroll.resize(900, bar._chip_scroll.height())
+    _flush_events(6)
+
+    viewport_width = bar._chip_scroll.viewport().width()
+    assert viewport_width > narrow_host_width
+    assert bar._chip_host.width() >= viewport_width - 4
+    assert len(_visible_chip_columns(bar, limit=6)) >= 3
+
+    bar.deleteLater()
 
 
 def test_case_result_navigation_bar_renders_multiple_items_and_emits_case_idx():
@@ -120,8 +194,10 @@ def test_case_result_navigation_bar_renders_multiple_items_and_emits_case_idx():
 
     assert bar.isVisible() is True
     assert bar.chip_count() == 2
-    assert "圆形" in bar.chips()[0].text()
+    assert bar.chips()[0].text() == "工况1  Q=5.000"
+    assert bar.chips()[0].toolTip() == "工况 1\n圆形 · Q=5.000"
     assert bar.chips()[1].property("resultNavError") is True
+    assert bar.chips()[1].text() == "工况8  计算失败"
     assert "#C62828" in bar.chips()[1].styleSheet()
 
     bar.chips()[0].click()

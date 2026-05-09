@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 
-MAX_CASES = 10
+MAX_CASES = 30
 
 _SUB = "₀₁₂₃₄₅₆₇₈₉"
 

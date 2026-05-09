@@ -103,6 +103,16 @@ from app_渠系计算前端.section_comparison import (
     fill_comparison_table,
 )
 from app_渠系计算前端.section_plotting import draw_section
+from app_渠系计算前端.section_plot_layout import (
+    clear_section_plot_state,
+    configure_section_grid_canvas,
+    connect_section_tab_refresh,
+    connect_section_plot_double_click,
+    create_section_plot_scroll_area,
+    register_section_axis_dialog,
+    reset_section_axis_dialogs,
+    schedule_section_plot_restore_refresh,
+)
 from app_渠系计算前端.section_shapes import (
     WaterState,
     build_aqueduct_u_shape,
@@ -125,9 +135,11 @@ from app_渠系计算前端.increase_input_helper import (
 from app_渠系计算前端.plot_title_utils import apply_flow_velocity_title
 from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
+    apply_case_result_state,
     build_result_nav_bar,
     build_result_navigation_head,
     case_result_jump_hint,
+    collect_case_result_state,
     has_fresh_case_results,
     is_case_result_stale,
     make_case_result_anchor,
@@ -194,6 +206,8 @@ class AqueductPanel(QWidget):
         self._build_input(inp_w)
         scroll.setWidget(inp_w)
         scroll.setMinimumWidth(340)
+        # 宽屏首次布局时限制输入栏宽度，避免挤压右侧断面图区。
+        scroll.setMaximumWidth(420)
         scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         splitter.addWidget(scroll)
 
@@ -481,8 +495,11 @@ class AqueductPanel(QWidget):
         self.section_canvas = FigureCanvas(self.section_fig)
         self.section_toolbar = NavToolbar(self.section_canvas, t2)
         t2l.addWidget(self.section_toolbar)
-        t2l.addWidget(self.section_canvas)
-        self.notebook.addTab(t2, "断面图")
+        self._section_plot_scroll = create_section_plot_scroll_area(self.section_canvas)
+        t2l.addWidget(self._section_plot_scroll)
+        connect_section_plot_double_click(self)
+        section_tab_index = self.notebook.addTab(t2, "断面图")
+        connect_section_tab_refresh(self, section_tab_index)
 
         # Tab3: 工况对比
         t3 = QWidget(); t3l = QVBoxLayout(t3); t3l.setContentsMargins(5, 5, 5, 5)
@@ -1355,14 +1372,16 @@ class AqueductPanel(QWidget):
         self._render_result_html(wrap_with_katex(combined_body, extra_head=combined_head))
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), nav_items)
 
-        self._mark_results_fresh()
-        self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
-        self._update_section_plot_all()
-        refresh_comparison = getattr(self, "_refresh_comparison_tables", None)
-        if callable(refresh_comparison):
-            refresh_comparison()
+        if not getattr(self, "_suppress_project_restore_side_effects", False):
+            self._mark_results_fresh()
+            self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
+            self._update_section_plot_all()
+            refresh_comparison = getattr(self, "_refresh_comparison_tables", None)
+            if callable(refresh_comparison):
+                refresh_comparison()
 
     def _update_section_plot_all(self):
+        reset_section_axis_dialogs(self)
         valid_results = []
         for case_idx, params, result in self._all_results:
             if not result.get('success'):
@@ -1371,17 +1390,53 @@ class AqueductPanel(QWidget):
             valid_results.append((case_idx, case, params, result))
         if not valid_results:
             self.section_fig.clear()
+            configure_section_grid_canvas(self, 1)
             self.section_canvas.draw()
             return
         if len(valid_results) == 1:
-            _, _, params, result = valid_results[0]
+            case_idx, case, params, result = valid_results[0]
             self.input_params = params
+            configure_section_grid_canvas(self, 1)
             self._update_section_plot(result)
+            axes = getattr(self.section_fig, "axes", [])
+            if axes:
+                stype = params.get('section_type', result.get('section_type', 'U形'))
+                title = self._section_plot_title(case_idx, stype, case.get('custom_label'))
+                Q = params.get('Q', 0.0)
+
+                def _draw_one(target_ax, stype=stype, result=result, params=params, Q=Q, title=title):
+                    if stype == 'U形':
+                        self._draw_u_section(
+                            target_ax,
+                            result.get('R', 0.0),
+                            result.get('f', 0.0),
+                            result.get('H_total', 0.0),
+                            result.get('h_design', 0.0),
+                            result.get('V_design', 0.0),
+                            Q,
+                            title,
+                            result,
+                        )
+                    else:
+                        self._draw_rect_section(
+                            target_ax,
+                            result.get('B', 0.0),
+                            result.get('H_total', 0.0),
+                            result.get('h_design', 0.0),
+                            result.get('V_design', 0.0),
+                            Q,
+                            title,
+                            result,
+                        )
+                    AqueductPanel._draw_increased_water_level(target_ax, stype, result, params)
+
+                register_section_axis_dialog(self, axes[0], title, _draw_one)
             return
         self.section_fig.clear()
         n = len(valid_results)
-        ncols = min(n, 3)
-        nrows = (n + ncols - 1) // ncols
+        layout = configure_section_grid_canvas(self, n)
+        ncols = layout.columns
+        nrows = layout.rows
         axes = self.section_fig.subplots(nrows, ncols, squeeze=False)
         for plot_idx, (case_idx, case, params, result) in enumerate(valid_results):
             row, col = divmod(plot_idx, ncols)
@@ -1389,36 +1444,61 @@ class AqueductPanel(QWidget):
             stype = params.get('section_type', result.get('section_type', 'U形'))
             title = self._section_plot_title(case_idx, stype, case.get('custom_label'))
             Q = params.get('Q', 0.0)
-            if stype == 'U形':
-                self._draw_u_section(
-                    ax,
-                    result.get('R', 0.0),
-                    result.get('f', 0.0),
-                    result.get('H_total', 0.0),
-                    result.get('h_design', 0.0),
-                    result.get('V_design', 0.0),
-                    Q,
-                    title,
-                    result,
-                )
-                AqueductPanel._draw_increased_water_level(ax, stype, result, params)
-            else:
-                self._draw_rect_section(
-                    ax,
-                    result.get('B', 0.0),
-                    result.get('H_total', 0.0),
-                    result.get('h_design', 0.0),
-                    result.get('V_design', 0.0),
-                    Q,
-                    title,
-                    result,
-                )
-                AqueductPanel._draw_increased_water_level(ax, stype, result, params)
+            def _draw_one(target_ax, stype=stype, result=result, params=params, Q=Q, title=title):
+                if stype == 'U形':
+                    self._draw_u_section(
+                        target_ax,
+                        result.get('R', 0.0),
+                        result.get('f', 0.0),
+                        result.get('H_total', 0.0),
+                        result.get('h_design', 0.0),
+                        result.get('V_design', 0.0),
+                        Q,
+                        title,
+                        result,
+                    )
+                else:
+                    self._draw_rect_section(
+                        target_ax,
+                        result.get('B', 0.0),
+                        result.get('H_total', 0.0),
+                        result.get('h_design', 0.0),
+                        result.get('V_design', 0.0),
+                        Q,
+                        title,
+                        result,
+                    )
+                AqueductPanel._draw_increased_water_level(target_ax, stype, result, params)
+
+            _draw_one(ax)
+            register_section_axis_dialog(self, ax, title, _draw_one)
         for plot_idx in range(n, nrows * ncols):
             row, col = divmod(plot_idx, ncols)
             axes[row][col].axis('off')
-        self.section_fig.tight_layout()
+        AqueductPanel._apply_section_plot_spacing(self, multi=True)
         self.section_canvas.draw()
+
+    def _apply_section_plot_spacing(self, *, multi=False):
+        """为渡槽断面图保留稳定边距，避免 tight_layout 在长标注下失败。"""
+        try:
+            if multi:
+                self.section_fig.subplots_adjust(
+                    left=0.07,
+                    right=0.94,
+                    top=0.92,
+                    bottom=0.07,
+                    hspace=0.42,
+                    wspace=0.24,
+                )
+            else:
+                self.section_fig.subplots_adjust(
+                    left=0.08,
+                    right=0.92,
+                    top=0.90,
+                    bottom=0.10,
+                )
+        except Exception:
+            pass
 
     @staticmethod
     def _safe_positive_float(value):
@@ -2528,7 +2608,7 @@ class AqueductPanel(QWidget):
         if show_increase:
             AqueductPanel._draw_increased_water_level(ax, stype, result, self.input_params)
 
-        self.section_fig.tight_layout()
+        AqueductPanel._apply_section_plot_spacing(self, multi=False)
         self.section_canvas.draw()
 
     @staticmethod
@@ -2913,6 +2993,7 @@ class AqueductPanel(QWidget):
             'all_results': copy.deepcopy(self._all_results),
             'current_result': copy.deepcopy(self.current_result),
             'input_params': copy.deepcopy(getattr(self, 'input_params', None)),
+            'result_state': collect_case_result_state(self),
             'notebook_idx': self.notebook.currentIndex() if hasattr(self, 'notebook') else 0,
         }
 
@@ -2928,18 +3009,49 @@ class AqueductPanel(QWidget):
         self._all_results = data.get('all_results', []) or []
         self.current_result = data.get('current_result')
         self.input_params = data.get('input_params') or {}
+        result_state = data.get('result_state')
         if self._all_results:
             try:
+                self._suppress_project_restore_side_effects = True
                 self._display_all_results()
             except Exception:
                 self._all_results = []
                 self.current_result = None
+                self._results_dirty = False
+                self._stale_result_case_indexes = set()
+                self._all_results_stale = False
+                self._has_rendered_results = False
+                clear_section_plot_state(self)
+                self._clear_comparison_tables()
                 self._show_initial_help()
+            finally:
+                self._suppress_project_restore_side_effects = False
+            if self._all_results:
+                apply_case_result_state(self, result_state)
+                try:
+                    self._update_section_plot_all()
+                except Exception:
+                    clear_section_plot_state(self)
+                try:
+                    self._refresh_comparison_tables()
+                except Exception:
+                    self._clear_comparison_tables()
         else:
+            self._all_results = []
             self.current_result = None
+            self._results_dirty = False
+            self._stale_result_case_indexes = set()
+            self._all_results_stale = False
+            self._has_rendered_results = False
+            clear_section_plot_state(self)
+            self._clear_comparison_tables()
             self._show_initial_help()
+        if self._all_results:
+            apply_case_result_state(self, result_state)
         if hasattr(self, 'notebook'):
             idx = data.get('notebook_idx')
             if isinstance(idx, int):
                 idx = max(0, min(idx, self.notebook.count() - 1))
                 self.notebook.setCurrentIndex(idx)
+        if self._all_results and hasattr(self, 'notebook'):
+            schedule_section_plot_restore_refresh(self)

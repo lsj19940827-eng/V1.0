@@ -74,6 +74,7 @@ def _prepare_panel(monkeypatch):
 
 def test_batch_panel_supports_compound_trapezoid_dialog_dispatch_and_excel_import(monkeypatch):
     """批量页应支持新类型、参数弹窗、计算分发和 Excel 导入。"""
+    _get_qapp()
     assert "明渠-复式梯形" in SECTION_TYPES
 
     dialog = SectionParameterDialog(None, "明渠-复式梯形", {})

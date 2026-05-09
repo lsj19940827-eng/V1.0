@@ -339,7 +339,13 @@
 2. 流量段：`flow_segments`
 3. 选项：`inc_checked`、`detail_checked`
 4. 输入表：`input_rows`（21列*N行）
-5. 加载后会清空历史计算结果，需重新计算
+5. 手工流量段加大值：`manual_qmax_by_segment`
+6. 批量计算结果：`batch_results`
+7. 结果表显示快照：`result_rows`
+8. 详细过程文本：`detail_text_cache`
+9. 失败锁定状态：`has_batch_errors`
+
+说明：新保存的项目重开后会恢复批量结果、结果表、详细过程和导出锁定状态；若批量结果全部成功，还会重新同步到共享数据管理器，供推求水面线继续导入。旧项目缺少结果字段时仍只恢复输入，结果为空，需要重新计算。
 
 ### B. 推求水面线 `water_profile_panel`
 
@@ -361,7 +367,10 @@
 3. `all_results`：全部工况结果
 4. `current_result`：当前结果
 5. `input_params`：输入参数缓存
-6. `notebook_idx`：当前页签
+6. `result_state`：结果有效性状态，包含 `results_dirty`、`stale_result_case_indexes`、`all_results_stale`、`has_rendered_results`
+7. `notebook_idx`：当前页签
+
+说明：有效结果重开后可继续查看和使用；如果结果在保存前已因参数修改、复制到其他工况或删除工况而过期，重开后仍保留显示，但点击过期结果时继续提示“结果已过期”或“结果已失效”，避免误用旧结果。
 
 ### D. 倒虹吸 `siphon_panel`
 
@@ -380,9 +389,13 @@
 1. `cases`
 2. `current_case_idx`
 3. `last_errors`
-4. `notebook_idx`
+4. `all_results`
+5. `current_result`
+6. `export_plain_text`
+7. `result_state`
+8. `notebook_idx`
 
-说明：加载后结果集合会重置，错误日志可恢复显示。
+说明：新保存的项目重开后会恢复有压管道单项页的结果卡片、工况导航和 Word 导出文本；输入错误或无推荐结果也会按错误卡片恢复。旧项目缺少结果字段时仍按旧逻辑只恢复工况输入和错误日志。
 
 ---
 

@@ -6,13 +6,14 @@ from __future__ import annotations
 import html as html_mod
 import re
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -21,6 +22,41 @@ from PySide6.QtWidgets import (
 
 def _e(value) -> str:
     return html_mod.escape(str(value))
+
+
+def collect_case_result_state(panel) -> dict:
+    """收集多工况结果有效性状态，供项目文件保存。"""
+    stale_indexes = getattr(panel, "_stale_result_case_indexes", set()) or set()
+    normalized_indexes = []
+    for idx in stale_indexes:
+        try:
+            normalized_indexes.append(int(idx))
+        except (TypeError, ValueError):
+            continue
+    return {
+        "results_dirty": bool(getattr(panel, "_results_dirty", False)),
+        "stale_result_case_indexes": sorted(set(normalized_indexes)),
+        "all_results_stale": bool(getattr(panel, "_all_results_stale", False)),
+        "has_rendered_results": bool(getattr(panel, "_has_rendered_results", False)),
+    }
+
+
+def apply_case_result_state(panel, state) -> None:
+    """恢复多工况结果有效性状态，需在结果重新渲染后调用。"""
+    if not isinstance(state, dict):
+        return
+
+    stale_indexes = set()
+    for idx in state.get("stale_result_case_indexes", []) or []:
+        try:
+            stale_indexes.add(int(idx))
+        except (TypeError, ValueError):
+            continue
+
+    panel._results_dirty = bool(state.get("results_dirty", False))
+    panel._stale_result_case_indexes = stale_indexes
+    panel._all_results_stale = bool(state.get("all_results_stale", False))
+    panel._has_rendered_results = bool(state.get("has_rendered_results", False))
 
 
 _CASE_NAV_BAR_SS = """
@@ -55,6 +91,36 @@ _CASE_NAV_CHIP_BASE_SS = (
     "QPushButton:pressed{{background:{pressed};}}"
 )
 
+_CASE_NAV_TOGGLE_SS = (
+    "QPushButton{padding:4px 8px;border:none;background:transparent;"
+    "color:#1565C0;font-size:12px;font-weight:700;text-align:right;}"
+    "QPushButton:hover{color:#0E5DB8;text-decoration:underline;}"
+)
+_CASE_NAV_COLLAPSED_ROWS = 2
+_CASE_NAV_EXPANDED_ROWS = 4
+_Q_TEXT_RE = re.compile(r"Q\s*=\s*([+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?|\?)")
+
+
+def _extract_q_text(*texts) -> str:
+    """从标签或摘要中提取 Q 文本。"""
+    for text in texts:
+        match = _Q_TEXT_RE.search(str(text or ""))
+        if match:
+            return f"Q={match.group(1)}"
+    return ""
+
+
+def _compact_case_nav_text(case_idx: int, label: str, summary: str, *, is_error: bool = False) -> str:
+    """生成结果区紧凑工况标签，避免重复显示断面类型。"""
+    title = f"工况{int(case_idx) + 1}"
+    if is_error:
+        detail = "计算失败"
+    else:
+        detail = _extract_q_text(summary, label)
+        if not detail:
+            detail = str(summary or label or "").strip()
+    return f"{title}  {detail}" if detail else title
+
 
 class CaseResultNavChip(QPushButton):
     """Desktop-native case navigation chip."""
@@ -71,11 +137,16 @@ class CaseResultNavChip(QPushButton):
         self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         summary_text = str(summary or "").strip()
         label_text = str(label or "").strip() or f"工况 {self.case_idx + 1}"
+        display_text = _compact_case_nav_text(
+            self.case_idx,
+            label_text,
+            summary_text,
+            is_error=bool(is_error),
+        )
+        self.setText(display_text)
         if summary_text:
-            self.setText(f"{label_text}  {summary_text}")
             self.setToolTip(f"{label_text}\n{summary_text}")
         else:
-            self.setText(label_text)
             self.setToolTip(label_text)
         if is_error:
             self.setStyleSheet(
@@ -131,7 +202,42 @@ class _CaseNavChipWrap(QWidget):
         super().resizeEvent(event)
         self._relayout()
 
-    def _relayout(self):
+    def row_count_for_width(self, width=None) -> int:
+        """按给定宽度计算标签需要的行数。"""
+        chips = [chip for chip in self._chips if chip is not None]
+        if not chips:
+            return 0
+        spacing = max(0, self._grid.horizontalSpacing())
+        available_width = max(1, int(width or self.contentsRect().width()))
+        current_width = 0
+        row_count = 1
+        for chip in chips:
+            chip_width = max(chip.minimumSizeHint().width(), chip.sizeHint().width())
+            required_width = chip_width if current_width == 0 else chip_width + spacing
+            if current_width > 0 and current_width + required_width > available_width:
+                row_count += 1
+                current_width = chip_width
+            else:
+                current_width = chip_width if current_width == 0 else current_width + required_width
+        return row_count
+
+    def height_for_rows(self, row_count: int) -> int:
+        """按行数估算导航标签区高度。"""
+        chips = [chip for chip in self._chips if chip is not None]
+        chip_height = max((chip.sizeHint().height() for chip in chips), default=34)
+        spacing = max(0, self._grid.verticalSpacing())
+        margins = self._grid.contentsMargins()
+        rows = max(0, int(row_count))
+        if rows <= 0:
+            return margins.top() + margins.bottom()
+        return (
+            margins.top()
+            + margins.bottom()
+            + rows * chip_height
+            + max(0, rows - 1) * spacing
+        )
+
+    def _relayout(self, width=None):
         while self._grid.count():
             self._grid.takeAt(0)
 
@@ -140,12 +246,13 @@ class _CaseNavChipWrap(QWidget):
             return
 
         spacing = max(0, self._grid.horizontalSpacing())
-        available_width = max(1, self.contentsRect().width())
+        available_width = max(1, int(width or self.contentsRect().width()))
         current_width = 0
         row = 0
         column = 0
 
         for chip in self._chips:
+            chip.show()
             chip_width = max(chip.minimumSizeHint().width(), chip.sizeHint().width())
             required_width = chip_width if column == 0 else chip_width + spacing
             if column > 0 and current_width + required_width > available_width:
@@ -171,6 +278,8 @@ class CaseResultNavigationBar(QWidget):
         self._items = []
         self._height_sync_pending = False
         self._syncing_height = False
+        self._expanded = False
+        self._can_collapse = False
         self.setObjectName("codexCaseResultNavBar")
         self.setStyleSheet(_CASE_NAV_BAR_SS)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -193,9 +302,29 @@ class CaseResultNavigationBar(QWidget):
         self._title_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         row.addWidget(self._title_label, 0, Qt.AlignTop)
 
-        self._chip_host = _CaseNavChipWrap(self._card)
-        self._chip_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        row.addWidget(self._chip_host, 1, Qt.AlignTop)
+        self._chip_scroll = QScrollArea(self._card)
+        self._chip_scroll.setWidgetResizable(False)
+        self._chip_scroll.setFrameShape(QFrame.NoFrame)
+        self._chip_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._chip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._chip_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._chip_scroll.setStyleSheet(
+            "QScrollArea{background:transparent;border:none;}"
+            "QScrollArea > QWidget > QWidget{background:transparent;}"
+        )
+        self._chip_scroll.viewport().installEventFilter(self)
+
+        self._chip_host = _CaseNavChipWrap()
+        self._chip_host.setAutoFillBackground(False)
+        self._chip_scroll.setWidget(self._chip_host)
+        row.addWidget(self._chip_scroll, 1, Qt.AlignTop)
+
+        self._toggle_button = QPushButton("展开", self._card)
+        self._toggle_button.setCursor(Qt.PointingHandCursor)
+        self._toggle_button.setStyleSheet(_CASE_NAV_TOGGLE_SS)
+        self._toggle_button.clicked.connect(self._toggle_expanded)
+        self._toggle_button.hide()
+        row.addWidget(self._toggle_button, 0, Qt.AlignTop)
 
         self.hide()
 
@@ -211,6 +340,9 @@ class CaseResultNavigationBar(QWidget):
     def clear_items(self):
         self._items = []
         self._chips = []
+        self._expanded = False
+        self._can_collapse = False
+        self._toggle_button.hide()
         self._chip_host.clear_chips()
         self._reset_height_constraints()
         self.hide()
@@ -241,10 +373,42 @@ class CaseResultNavigationBar(QWidget):
         self.show()
         self._schedule_height_sync()
 
+    def is_expanded(self) -> bool:
+        """返回结果导航是否处于展开状态。"""
+        return bool(self._expanded)
+
+    def can_collapse(self) -> bool:
+        """返回结果导航是否需要折叠。"""
+        return bool(self._can_collapse)
+
+    def set_expanded(self, expanded):
+        """切换结果导航展开状态。"""
+        self._expanded = bool(expanded)
+        self._schedule_height_sync()
+
+    def _toggle_expanded(self):
+        self.set_expanded(not self._expanded)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self._chips and self.isVisible():
             self._schedule_height_sync()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._chips:
+            self._schedule_height_sync()
+            QTimer.singleShot(0, self._schedule_height_sync)
+
+    def eventFilter(self, obj, event):
+        if (
+            obj is self._chip_scroll.viewport()
+            and event.type() in (QEvent.Resize, QEvent.Show)
+            and self._chips
+            and self.isVisible()
+        ):
+            self._schedule_height_sync()
+        return super().eventFilter(obj, event)
 
     def _schedule_height_sync(self):
         if self._height_sync_pending:
@@ -262,7 +426,46 @@ class CaseResultNavigationBar(QWidget):
 
         self._syncing_height = True
         try:
-            self._chip_host._relayout()
+            toggle_was_visible = self._toggle_button.isVisible()
+            self._toggle_button.setVisible(self._can_collapse)
+            self._card.layout().activate()
+            self.layout().activate()
+
+            chip_width = max(1, self._chip_scroll.viewport().width())
+            if chip_width <= 1:
+                margins = self._card.layout().contentsMargins()
+                chip_width = max(
+                    1,
+                    self.width()
+                    - margins.left()
+                    - margins.right()
+                    - self._title_label.sizeHint().width()
+                    - self._toggle_button.sizeHint().width()
+                    - 24,
+                )
+
+            self._chip_host.setFixedWidth(chip_width)
+            self._chip_host._relayout(chip_width)
+            total_rows = self._chip_host.row_count_for_width(chip_width)
+            self._can_collapse = total_rows > _CASE_NAV_COLLAPSED_ROWS
+            if not self._can_collapse:
+                self._expanded = False
+
+            visible_rows = total_rows
+            if self._can_collapse:
+                row_limit = _CASE_NAV_EXPANDED_ROWS if self._expanded else _CASE_NAV_COLLAPSED_ROWS
+                visible_rows = min(total_rows, row_limit)
+
+            content_height = self._chip_host.height_for_rows(total_rows)
+            viewport_height = self._chip_host.height_for_rows(visible_rows)
+            self._chip_host.setFixedSize(chip_width, max(content_height, viewport_height))
+            self._chip_scroll.setFixedHeight(viewport_height)
+            self._chip_scroll.setVerticalScrollBarPolicy(
+                Qt.ScrollBarAsNeeded if total_rows > visible_rows else Qt.ScrollBarAlwaysOff
+            )
+            self._toggle_button.setVisible(self._can_collapse)
+            self._toggle_button.setText("收起" if self._expanded else "展开")
+
             self._card.layout().activate()
             self.layout().activate()
             target_height = max(self.minimumSizeHint().height(), self.sizeHint().height())
@@ -271,12 +474,17 @@ class CaseResultNavigationBar(QWidget):
             if self.minimumHeight() != target_height or self.maximumHeight() != target_height:
                 self.setFixedHeight(target_height)
                 self.updateGeometry()
+            final_viewport_width = max(1, self._chip_scroll.viewport().width())
+            if toggle_was_visible != self._toggle_button.isVisible() or abs(final_viewport_width - chip_width) > 2:
+                self._schedule_height_sync()
         finally:
             self._syncing_height = False
 
     def _reset_height_constraints(self):
         self.setMinimumHeight(0)
         self.setMaximumHeight(16777215)
+        self._chip_scroll.setMinimumHeight(0)
+        self._chip_scroll.setMaximumHeight(16777215)
 
 
 def sync_case_result_nav_bar(bar, items, *, title: str = "工况快捷导航"):
@@ -545,25 +753,20 @@ def build_result_nav_bar(items, title: str = "工况快捷导航", hidden: bool 
 
     nav_cls = "codex-case-nav codex-case-nav--hidden" if hidden else "codex-case-nav"
     parts = [f'<div class="{nav_cls}">', f'<span class="codex-case-nav__title">{_e(title)}</span>']
-    for item in items:
+    for order_idx, item in enumerate(items):
         anchor_id = item["anchor_id"]
         label = item["label"]
         summary = str(item.get("summary", "") or "").strip()
         is_error = bool(item.get("is_error", False))
+        case_idx = item.get("case_idx", order_idx)
+        display_text = _compact_case_nav_text(case_idx, label, summary, is_error=is_error)
         accent = "#C62828" if is_error else "#1565C0"
-        badge_bg = "#FDECEC" if is_error else "#EAF3FF"
-        badge_fg = "#C62828" if is_error else "#1565C0"
         parts.append(
             f'<a class="codex-case-nav__link" href="#{_e(anchor_id)}" '
             f'onclick="return window.codexJumpToCase(\'{_e(anchor_id)}\');" '
             f'style="border-color:{accent};color:{accent};">'
-            f'<span>{_e(label)}</span>'
+            f'<span>{_e(display_text)}</span>'
         )
-        if summary:
-            parts.append(
-                f'<span class="codex-case-nav__badge" style="background:{badge_bg};color:{badge_fg};">'
-                f'{_e(summary)}</span>'
-            )
         parts.append("</a>")
     parts.append("</div>")
     return "".join(parts)

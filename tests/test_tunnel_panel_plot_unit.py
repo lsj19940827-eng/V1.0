@@ -95,6 +95,67 @@ class _SinglePlotDummy:
         self.increase_calls.append((args, kwargs))
 
 
+class _DrawTrackingCanvas:
+    """记录项目恢复清图时的画布绘制次数。"""
+
+    def __init__(self):
+        self.draw_calls = 0
+
+    def draw(self):
+        self.draw_calls += 1
+
+    def update(self):
+        return None
+
+    def repaint(self):
+        return None
+
+
+class _Notebook:
+    """记录项目恢复时页签复位行为。"""
+
+    def __init__(self, current_index=1, count=3):
+        self.index = current_index
+        self._count = count
+        self.set_indexes = []
+
+    def count(self):
+        return self._count
+
+    def currentIndex(self):
+        return self.index
+
+    def setCurrentIndex(self, index):
+        self.index = index
+        self.set_indexes.append(index)
+
+
+def _from_project_dummy():
+    """构造带旧断面图残留的项目恢复替身。"""
+    fig = Figure()
+    axes = fig.subplots(2, 2).ravel()
+    axes[-1].set_visible(False)
+    return SimpleNamespace(
+        section_fig=fig,
+        section_canvas=_DrawTrackingCanvas(),
+        _section_axis_dialogs={axes[0]: object()},
+        _section_plot_layout=object(),
+        _section_plot_layout_case_count=3,
+        _has_rendered_results=True,
+        _results_dirty=True,
+        _all_results_stale=True,
+        _stale_result_case_indexes={0},
+        _load_case=lambda _idx: None,
+        _rebuild_case_tags=lambda: None,
+        _update_calc_btn_text=lambda: None,
+        _display_all_results=lambda: None,
+        _update_section_plot_all=lambda: None,
+        _refresh_comparison_table=lambda: None,
+        _clear_comparison_table=lambda: None,
+        _show_initial_help=lambda: None,
+    )
+
+
 class _DrawDummy:
     _apply_section_plot_title = staticmethod(tunnel_panel_mod.TunnelPanel._apply_section_plot_title)
     _horseshoe_plot_geometry = staticmethod(tunnel_panel_mod.TunnelPanel._horseshoe_plot_geometry)
@@ -139,6 +200,11 @@ def _has_increased_depth_dimension(ax, expected_y):
     return False
 
 
+def _axis_width_px(fig, ax):
+    """返回子图在画布中的像素宽度。"""
+    return ax.get_position().width * fig.get_size_inches()[0] * fig.dpi
+
+
 def _multi_case_item(section_type, h_design, h_increased, use_increase=True):
     """生成多工况断面图测试数据。"""
     result = {
@@ -181,6 +247,103 @@ def _single_result(section_type):
     else:
         result.update({"r": 2.0})
     return result
+
+
+def test_from_project_dict_clears_stale_section_plot_when_tunnel_has_no_results():
+    """隧洞加载无计算结果项目时，不应保留上一项目的断面子图。"""
+    dummy = _from_project_dummy()
+
+    tunnel_panel_mod.TunnelPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [tunnel_panel_mod.TunnelPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": [],
+            "current_result": None,
+            "input_params": {},
+            "result_state": None,
+        },
+    )
+
+    assert dummy._all_results == []
+    assert dummy.current_result is None
+    assert dummy.section_fig.axes == []
+    assert dummy._section_axis_dialogs == {}
+    assert dummy._section_plot_layout is None
+    assert dummy._section_plot_layout_case_count is None
+    assert dummy._has_rendered_results is False
+    assert dummy._results_dirty is False
+    assert dummy._all_results_stale is False
+    assert dummy._stale_result_case_indexes == set()
+
+
+def test_from_project_dict_keeps_tunnel_results_when_section_plot_restore_fails():
+    """隧洞项目恢复时，断面图失败不应清空已加载的计算结果。"""
+    dummy = _from_project_dummy()
+    item = _multi_case_item("圆形", 1.0, 1.5)
+    all_results = [item]
+    rendered = []
+    compared = []
+    dummy._display_all_results = lambda: rendered.append("display")
+    dummy._refresh_comparison_table = lambda: compared.append("comparison")
+
+    def fail_plot():
+        raise RuntimeError("plot failed")
+
+    dummy._update_section_plot_all = fail_plot
+
+    tunnel_panel_mod.TunnelPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [tunnel_panel_mod.TunnelPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": all_results,
+            "current_result": item["result"],
+            "input_params": item["input"],
+            "result_state": None,
+        },
+    )
+
+    assert dummy._all_results == all_results
+    assert dummy.current_result == item["result"]
+    assert rendered == ["display"]
+    assert compared == ["comparison"]
+    assert dummy.section_fig.axes == []
+    assert dummy._section_axis_dialogs == {}
+    assert dummy._section_plot_layout is None
+
+
+def test_from_project_dict_schedules_tunnel_section_plot_refresh_after_restoring_tab(monkeypatch):
+    """隧洞项目恢复到断面图页后，应安排一次最终宽度重排。"""
+    dummy = _from_project_dummy()
+    dummy.notebook = _Notebook(current_index=1)
+    all_results = [
+        _multi_case_item("圆拱直墙型", 2.0 + idx * 0.01, 3.0 + idx * 0.01)
+        for idx in range(10)
+    ]
+    scheduled = []
+    monkeypatch.setattr(
+        tunnel_panel_mod,
+        "schedule_section_plot_restore_refresh",
+        lambda panel: scheduled.append(panel),
+        raising=False,
+    )
+
+    tunnel_panel_mod.TunnelPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [tunnel_panel_mod.TunnelPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": all_results,
+            "current_result": all_results[0]["result"],
+            "input_params": all_results[0]["input"],
+            "result_state": None,
+            "notebook_idx": 1,
+        },
+    )
+
+    assert dummy.notebook.set_indexes == [1]
+    assert scheduled == [dummy]
 
 
 def test_update_section_plot_all_uses_original_case_numbered_titles():
@@ -238,6 +401,76 @@ def test_update_section_plot_all_prefers_custom_label_for_titles():
     tunnel_panel_mod.TunnelPanel._update_section_plot_all(dummy)
 
     assert dummy.titles == ["北干洞试算"]
+
+
+def test_update_section_plot_all_uses_two_columns_for_many_tunnel_cases():
+    """隧洞 10 个成功工况应切到 2 列，并登记双击放大信息。"""
+    dummy = _FullPlotDummy(
+        [
+            _multi_case_item("圆拱直墙型", 2.0 + idx * 0.01, 3.0 + idx * 0.01)
+            for idx in range(10)
+        ]
+    )
+
+    tunnel_panel_mod.TunnelPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 5
+    assert dummy.section_fig.get_size_inches()[1] >= 18
+    assert len(dummy._section_axis_dialogs) == 10
+
+
+def test_update_section_plot_all_keeps_nine_tall_tunnel_cases_readable():
+    """9 个圆拱直墙型隧洞工况应有足够子图宽度，避免右侧大片空白。"""
+    dummy = _FullPlotDummy(
+        [
+            _multi_case_item("圆拱直墙型", 2.0 + idx * 0.01, 3.0 + idx * 0.01)
+            for idx in range(9)
+        ]
+    )
+
+    tunnel_panel_mod.TunnelPanel._update_section_plot_all(dummy)
+
+    visible_axes = [ax for ax in dummy.section_fig.axes if ax.axison]
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 5
+    assert dummy._section_plot_layout.canvas_height_px == 2600
+    assert _axis_width_px(dummy.section_fig, visible_axes[0]) >= 420
+
+
+def test_update_section_plot_all_uses_two_columns_for_five_tunnel_cases():
+    """隧洞 5 个成功工况也应固定 2 列。"""
+    dummy = _FullPlotDummy(
+        [
+            _multi_case_item("圆拱直墙型", 2.0 + idx * 0.01, 3.0 + idx * 0.01)
+            for idx in range(5)
+        ]
+    )
+
+    tunnel_panel_mod.TunnelPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 3
+    assert len(dummy._section_axis_dialogs) == 5
+
+
+def test_single_success_multi_case_tunnel_keeps_double_click_dialog():
+    """隧洞单成功结果仍应走统一循环并保留双击放大入口。"""
+    dummy = _FullPlotDummy(
+        [
+            _multi_case_item("圆形", 1.0, 1.5),
+            {
+                "input": {"section_type": "圆形", "Q": 11.0},
+                "result": {"success": False, "error_message": "缺少参数"},
+                "case": {"section_type": "圆形"},
+            },
+        ]
+    )
+
+    tunnel_panel_mod.TunnelPanel._update_section_plot_all(dummy)
+
+    assert len([ax for ax in dummy.section_fig.axes if ax.axison]) == 1
+    assert len(dummy._section_axis_dialogs) == 1
 
 
 def test_update_section_plot_all_overlays_increased_waterline_for_supported_sections():

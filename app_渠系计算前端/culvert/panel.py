@@ -116,6 +116,16 @@ from app_渠系计算前端.increase_input_helper import (
     resolve_increase_input,
 )
 from app_渠系计算前端.section_plotting import SectionPlotOptions, draw_section
+from app_渠系计算前端.section_plot_layout import (
+    clear_section_plot_state,
+    configure_section_grid_canvas,
+    connect_section_tab_refresh,
+    connect_section_plot_double_click,
+    create_section_plot_scroll_area,
+    register_section_axis_dialog,
+    reset_section_axis_dialogs,
+    schedule_section_plot_restore_refresh,
+)
 from app_渠系计算前端.section_shapes import (
     WaterState,
     build_arch_wall_shape,
@@ -127,9 +137,11 @@ from app_渠系计算前端.tunnel.geometry import (
 )
 from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
+    apply_case_result_state,
     build_result_nav_bar,
     build_result_navigation_head,
     case_result_jump_hint,
+    collect_case_result_state,
     has_fresh_case_results,
     is_case_result_stale,
     make_case_result_anchor,
@@ -544,8 +556,11 @@ class CulvertPanel(QWidget):
         self.section_canvas = FigureCanvas(self.section_fig)
         self.section_toolbar = NavToolbar(self.section_canvas, t2)
         t2l.addWidget(self.section_toolbar)
-        t2l.addWidget(self.section_canvas)
-        self.notebook.addTab(t2, "断面图")
+        self._section_plot_scroll = create_section_plot_scroll_area(self.section_canvas)
+        t2l.addWidget(self._section_plot_scroll)
+        connect_section_plot_double_click(self)
+        section_tab_index = self.notebook.addTab(t2, "断面图")
+        connect_section_tab_refresh(self, section_tab_index)
 
         # Tab3: 工况对比
         t3 = QWidget(); t3l = QVBoxLayout(t3); t3l.setContentsMargins(5, 5, 5, 5)
@@ -1424,12 +1439,13 @@ class CulvertPanel(QWidget):
         load_formula_page(self.result_text, wrap_with_katex(combined_body, extra_head=combined_head))
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), nav_items)
 
-        self._mark_results_fresh()
-        self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
-        self._update_section_plot_all()
-        refresh_comparison = getattr(self, "_refresh_comparison_tables", None)
-        if callable(refresh_comparison):
-            refresh_comparison()
+        if not getattr(self, "_suppress_project_restore_side_effects", False):
+            self._mark_results_fresh()
+            self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
+            self._update_section_plot_all()
+            refresh_comparison = getattr(self, "_refresh_comparison_tables", None)
+            if callable(refresh_comparison):
+                refresh_comparison()
 
     def _display_all_results(self):
         return CulvertPanel._display_all_results_legacy(self)
@@ -1437,25 +1453,41 @@ class CulvertPanel(QWidget):
     def _update_section_plot_all(self):
         """多工况断面图"""
         success_results = [(ci, p, r) for ci, p, r in self._all_results if r.get('success')]
+        reset_section_axis_dialogs(self)
         self.section_fig.clear()
         if not success_results:
+            configure_section_grid_canvas(self, 1)
             self.section_canvas.draw()
             return
         n = len(success_results)
         if n == 1:
             ci, p, r = success_results[0]
+            configure_section_grid_canvas(self, 1)
             ax = self.section_fig.subplots()
-            self._draw_case_section(ax, p, r, r['h_design'], r['V_design'], p['Q'], f"工况{ci+1} Q={p['Q']:.2f}")
-            CulvertPanel._draw_increased_waterline(ax, p, r)
+            title = f"工况{ci+1} Q={p['Q']:.2f}"
+
+            def _draw_one(target_ax, p=p, r=r, title=title):
+                self._draw_case_section(target_ax, p, r, r['h_design'], r['V_design'], p['Q'], title)
+                CulvertPanel._draw_increased_waterline(target_ax, p, r)
+
+            _draw_one(ax)
+            register_section_axis_dialog(self, ax, title, _draw_one)
         else:
-            ncols = min(n, 3)
-            nrows = (n + ncols - 1) // ncols
+            layout = configure_section_grid_canvas(self, n)
+            ncols = layout.columns
+            nrows = layout.rows
             axes = self.section_fig.subplots(nrows, ncols, squeeze=False)
             for idx, (ci, p, r) in enumerate(success_results):
                 row, col = divmod(idx, ncols)
                 ax = axes[row][col]
-                self._draw_case_section(ax, p, r, r['h_design'], r['V_design'], p['Q'], f"工况{ci+1} Q={p['Q']:.2f}")
-                CulvertPanel._draw_increased_waterline(ax, p, r)
+                title = f"工况{ci+1} Q={p['Q']:.2f}"
+
+                def _draw_one(target_ax, p=p, r=r, title=title):
+                    self._draw_case_section(target_ax, p, r, r['h_design'], r['V_design'], p['Q'], title)
+                    CulvertPanel._draw_increased_waterline(target_ax, p, r)
+
+                _draw_one(ax)
+                register_section_axis_dialog(self, ax, title, _draw_one)
             for idx in range(n, nrows * ncols):
                 row, col = divmod(idx, ncols)
                 axes[row][col].set_visible(False)
@@ -2517,6 +2549,7 @@ class CulvertPanel(QWidget):
             'all_results': copy.deepcopy(self._all_results),
             'current_result': copy.deepcopy(self.current_result),
             'input_params': copy.deepcopy(getattr(self, 'input_params', None)),
+            'result_state': collect_case_result_state(self),
             'notebook_idx': self.notebook.currentIndex() if hasattr(self, 'notebook') else 0,
         }
 
@@ -2533,18 +2566,49 @@ class CulvertPanel(QWidget):
         self._all_results = data.get('all_results', []) or []
         self.current_result = data.get('current_result')
         self.input_params = data.get('input_params') or {}
+        result_state = data.get('result_state')
         if self._all_results:
             try:
+                self._suppress_project_restore_side_effects = True
                 self._display_all_results()
             except Exception:
                 self._all_results = []
                 self.current_result = None
+                self._results_dirty = False
+                self._stale_result_case_indexes = set()
+                self._all_results_stale = False
+                self._has_rendered_results = False
+                clear_section_plot_state(self)
+                self._clear_comparison_tables()
                 self._show_initial_help()
+            finally:
+                self._suppress_project_restore_side_effects = False
+            if self._all_results:
+                apply_case_result_state(self, result_state)
+                try:
+                    self._update_section_plot_all()
+                except Exception:
+                    clear_section_plot_state(self)
+                try:
+                    self._refresh_comparison_tables()
+                except Exception:
+                    self._clear_comparison_tables()
         else:
+            self._all_results = []
             self.current_result = None
+            self._results_dirty = False
+            self._stale_result_case_indexes = set()
+            self._all_results_stale = False
+            self._has_rendered_results = False
+            clear_section_plot_state(self)
+            self._clear_comparison_tables()
             self._show_initial_help()
+        if self._all_results:
+            apply_case_result_state(self, result_state)
         if hasattr(self, 'notebook'):
             idx = data.get('notebook_idx')
             if isinstance(idx, int):
                 idx = max(0, min(idx, self.notebook.count() - 1))
                 self.notebook.setCurrentIndex(idx)
+        if self._all_results and hasattr(self, 'notebook'):
+            schedule_section_plot_restore_refresh(self)

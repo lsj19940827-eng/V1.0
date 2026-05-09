@@ -11,6 +11,7 @@ import os
 import math
 import re
 import datetime
+import copy
 
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_pkg_root, "calc_渠系计算算法内核"))
@@ -1779,6 +1780,135 @@ class BatchPanel(QWidget):
         t2l.addWidget(self.detail_text)
         self.result_notebook.addTab(t2, "详细计算过程")
 
+    def _make_calc_snapshot(self, input_rows=None):
+        """生成批量计算输入快照，用于判断结果是否仍可复用。"""
+        if input_rows is None:
+            input_rows = self._get_all_input_data()
+        current_snapshot = [
+            [str(cell).strip() if cell is not None else "" for cell in row]
+            for row in input_rows
+        ]
+        current_snapshot.append(["__inc_cb__", str(self.inc_cb.isChecked())])
+        current_snapshot.append(["__manual_qmax__", self._serialize_manual_qmax_snapshot()])
+        return current_snapshot
+
+    def _normalize_result_row_values(self, row):
+        """把项目文件中的结果行整理成当前结果表列数。"""
+        values = list(row) if isinstance(row, (list, tuple)) else []
+        values = ["" if value is None else str(value) for value in values]
+        if len(values) < len(RESULT_HEADERS):
+            values.extend(["-"] * (len(RESULT_HEADERS) - len(values)))
+        return values[:len(RESULT_HEADERS)]
+
+    def _collect_result_table_rows(self):
+        """收集当前结果表文本，作为项目保存时的显示快照。"""
+        rows = []
+        if not hasattr(self, "result_table"):
+            return rows
+        for row in range(self.result_table.rowCount()):
+            row_data = []
+            for col in range(len(RESULT_HEADERS)):
+                item = self.result_table.item(row, col)
+                row_data.append(item.text() if item else "")
+            rows.append(row_data)
+        return rows
+
+    def _style_result_table_item(self, item, col, value):
+        """给恢复出的结果表状态列套用原有颜色语义。"""
+        item.setTextAlignment(Qt.AlignCenter)
+        if col != len(RESULT_HEADERS) - 1:
+            return
+        value_text = str(value)
+        if "⚠" in value_text or "警告" in value_text:
+            item.setForeground(QColor("#B26A00"))
+        elif "✓" in value_text or "成功" in value_text:
+            item.setForeground(QColor("#2E7D32"))
+        elif "✗" in value_text or "失败" in value_text or "错误" in value_text:
+            item.setForeground(QColor("#C62828"))
+        elif "占位" in value_text:
+            item.setForeground(QColor("#757575"))
+
+    def _restore_result_table_rows(self, result_rows):
+        """按保存的文本快照恢复结果汇总表。"""
+        rows = [self._normalize_result_row_values(row) for row in (result_rows or [])]
+        self.result_table.setRowCount(len(rows))
+        for row_idx, row in enumerate(rows):
+            for col_idx, value in enumerate(row):
+                item = QTableWidgetItem(str(value))
+                self._style_result_table_item(item, col_idx, value)
+                self.result_table.setItem(row_idx, col_idx, item)
+        auto_resize_table(self.result_table)
+        self._sync_common_columns()
+
+    def _result_rows_have_errors(self, result_rows):
+        """判断结果表快照中是否存在失败或错误条目。"""
+        for row in result_rows or []:
+            values = self._normalize_result_row_values(row)
+            status_text = values[-1] if values else ""
+            if "✗" in status_text or "失败" in status_text or "错误" in status_text:
+                return True
+        return False
+
+    def _build_shared_batch_results(self):
+        """补齐共享数据需要的元数据，并返回可注册的批量结果列表。"""
+        results_for_register = []
+        for item in self.batch_results:
+            if not isinstance(item, dict):
+                continue
+            r = item.get('result')
+            v = self._normalize_row(item.get('input', []), len(INPUT_HEADERS))
+            if not isinstance(r, dict):
+                continue
+            # 补充元数据（始终用输入表完整类型名覆盖引擎简化名）。
+            input_section_type = str(v[3]).strip()
+            if input_section_type:
+                r['section_type'] = input_section_type
+            if 'building_name' not in r:
+                r['building_name'] = str(v[2]).strip()
+            if 'flow_section' not in r:
+                r['flow_section'] = str(v[1]).strip()
+            r['coord_X'] = self._sf(v[4], 0.0)
+            r['coord_Y'] = self._sf(v[5], 0.0)
+            r['coord_X_text'] = str(v[4]).strip() if len(v) > 4 and v[4] is not None else ""
+            r['coord_Y_text'] = str(v[5]).strip() if len(v) > 5 and v[5] is not None else ""
+            if 'Q' not in r:
+                r['Q'] = self._sf(v[6])
+            if 'n' not in r:
+                r['n'] = self._sf(v[7], 0.014)
+            if 'slope_inv' not in r:
+                r['slope_inv'] = self._sf(v[8])
+            if 'm' not in r:
+                r['m'] = self._sf(v[9])
+            r['turn_radius'] = self._sf(v[COL_TURN_RADIUS], 0.0) if len(v) > COL_TURN_RADIUS else 0.0
+            # 保留用户原始填写文本；"0" 也要透传，供表3识别为显式输入。
+            r['turn_radius_text'] = (
+                str(v[COL_TURN_RADIUS]).strip()
+                if len(v) > COL_TURN_RADIUS and v[COL_TURN_RADIUS] is not None
+                else ""
+            )
+            results_for_register.append(r)
+        return results_for_register
+
+    def _register_batch_results_to_shared(self, *, show_notice=False):
+        """把成功批量结果同步到共享数据管理器，供水面线模块继续使用。"""
+        if not (SHARED_DATA_AVAILABLE and self.batch_results):
+            return 0
+        try:
+            shared_data = get_shared_data_manager()
+            count = shared_data.register_batch_results(self._build_shared_batch_results())
+            if show_notice and count > 0:
+                InfoBar.info(
+                    "数据共享",
+                    f"已注册 {count} 条结果到共享数据管理器，可在推求水面线模块中导入",
+                    parent=self._info_parent(),
+                    duration=3000,
+                    position=InfoBarPosition.TOP,
+                )
+            return count
+        except Exception as e:
+            print(f"注册批量结果到共享数据管理器失败: {e}")
+            return 0
+
     # ================================================================
     # 批量计算
     # ================================================================
@@ -1789,9 +1919,7 @@ class BatchPanel(QWidget):
             return
 
         # 检查输入数据是否与上次计算时一致，若一致则无需重复计算
-        current_snapshot = [[str(cell).strip() if cell is not None else "" for cell in row] for row in input_rows]
-        current_snapshot.append(["__inc_cb__", str(self.inc_cb.isChecked())])
-        current_snapshot.append(["__manual_qmax__", self._serialize_manual_qmax_snapshot()])
+        current_snapshot = self._make_calc_snapshot(input_rows)
         if self._last_calc_snapshot is not None and current_snapshot == self._last_calc_snapshot:
             if self.detail_cb.isChecked() and not self._last_calc_detail and self.batch_results:
                 # 从未勾选变为已勾选，且有缓存结果，补充生成详细输出
@@ -2067,45 +2195,8 @@ class BatchPanel(QWidget):
         self._last_calc_detail = self.detail_cb.isChecked()
 
         # 注册批量计算结果到共享数据管理器，供推求水面线模块导入（仅全部成功时注册）
-        if SHARED_DATA_AVAILABLE and self.batch_results and fail_count == 0:
-            try:
-                shared_data = get_shared_data_manager()
-                results_for_register = []
-                for item in self.batch_results:
-                    r = item['result']
-                    v = item['input']
-                    # 补充元数据（始终用输入表的完整类型名覆盖引擎简化名，
-                    # 如 "隧洞-马蹄形Ⅰ型" 替代引擎返回的 "马蹄形标准Ⅰ型"）
-                    input_section_type = str(v[3]).strip()
-                    if input_section_type:
-                        r['section_type'] = input_section_type
-                    if 'building_name' not in r:
-                        r['building_name'] = str(v[2]).strip()
-                    if 'flow_section' not in r:
-                        r['flow_section'] = str(v[1]).strip()
-                    # 坐标始终从输入表获取（引擎不返回坐标信息）
-                    r['coord_X'] = self._sf(v[4], 0.0)
-                    r['coord_Y'] = self._sf(v[5], 0.0)
-                    r['coord_X_text'] = str(v[4]).strip() if len(v) > 4 and v[4] is not None else ""
-                    r['coord_Y_text'] = str(v[5]).strip() if len(v) > 5 and v[5] is not None else ""
-                    if 'Q' not in r:
-                        r['Q'] = self._sf(v[6])
-                    if 'n' not in r:
-                        r['n'] = self._sf(v[7], 0.014)
-                    if 'slope_inv' not in r:
-                        r['slope_inv'] = self._sf(v[8])
-                    if 'm' not in r:
-                        r['m'] = self._sf(v[9])
-                    r['turn_radius'] = self._sf(v[COL_TURN_RADIUS], 0.0) if len(v) > COL_TURN_RADIUS else 0.0
-                    # 保留用户原始填写文本；"0" 也要透传，供表3识别为显式输入而不是空白。
-                    r['turn_radius_text'] = str(v[COL_TURN_RADIUS]).strip() if len(v) > COL_TURN_RADIUS and v[COL_TURN_RADIUS] is not None else ""
-                    results_for_register.append(r)
-                count = shared_data.register_batch_results(results_for_register)
-                if count > 0:
-                    InfoBar.info("数据共享", f"已注册 {count} 条结果到共享数据管理器，可在推求水面线模块中导入",
-                                 parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
-            except Exception as e:
-                print(f"注册批量结果到共享数据管理器失败: {e}")
+        if fail_count == 0:
+            self._register_batch_results_to_shared(show_notice=True)
 
     # ================================================================
     # 计算分发
@@ -4292,6 +4383,8 @@ class BatchPanel(QWidget):
             input_rows.append(row_data)
         
         manual_qmax_by_segment = getattr(self, "_manual_qmax_by_segment", {}) or {}
+        result_rows = self._collect_result_table_rows()
+        detail_text_cache = self.detail_text.toPlainText() if hasattr(self, "detail_text") else ""
 
         return {
             "version": "1.0",
@@ -4311,6 +4404,11 @@ class BatchPanel(QWidget):
             "manual_qmax_by_segment": {
                 str(segment): value for segment, value in sorted(manual_qmax_by_segment.items())
             },
+            # 计算结果快照（可选字段，旧项目缺失时仍按原逻辑重新计算）
+            "batch_results": copy.deepcopy(self.batch_results),
+            "result_rows": result_rows,
+            "detail_text_cache": detail_text_cache,
+            "has_batch_errors": self._result_rows_have_errors(result_rows),
         }
     
     def from_project_dict(self, d: dict, skip_dirty_signal: bool = False):
@@ -4383,13 +4481,42 @@ class BatchPanel(QWidget):
                                 item.setTextAlignment(Qt.AlignCenter)
                             self.input_table.setItem(row_idx, col_idx, item)
             
-            # 清空计算结果（需要用户重新计算）
-            self.batch_results = []
-            self._detail_text_cache = ""
-            if hasattr(self, 'result_table'):
-                self.result_table.setRowCount(0)
-            if hasattr(self, 'detail_text'):
-                self.detail_text.clear()
+            has_saved_result_snapshot = any(
+                key in d for key in ("batch_results", "result_rows", "detail_text_cache")
+            )
+            has_nonempty_result_snapshot = bool(
+                d.get("batch_results") or d.get("result_rows") or d.get("detail_text_cache")
+            )
+            if has_saved_result_snapshot and has_nonempty_result_snapshot:
+                # 新项目格式：恢复上次计算现场；失败结果继续保持导出锁定。
+                self.batch_results = copy.deepcopy(d.get("batch_results", []) or [])
+                result_rows = d.get("result_rows", []) or []
+                if hasattr(self, 'result_table'):
+                    self._restore_result_table_rows(result_rows)
+                detail_text_cache = d.get("detail_text_cache", "") or ""
+                self._detail_text_cache = detail_text_cache
+                if hasattr(self, 'detail_text'):
+                    self.detail_text.setPlainText(detail_text_cache)
+                stored_has_errors = d.get("has_batch_errors")
+                computed_has_errors = self._result_rows_have_errors(result_rows)
+                has_errors = bool(stored_has_errors) or computed_has_errors
+                self._update_lock_state(bool(has_errors))
+                if self.batch_results and not has_errors:
+                    self._register_batch_results_to_shared(show_notice=False)
+                # 失败结果只恢复展示和锁定状态，不缓存输入快照，允许用户不改输入直接重算。
+                self._last_calc_snapshot = None if has_errors else self._make_calc_snapshot()
+                self._last_calc_detail = bool(detail_text_cache)
+            else:
+                # 旧项目格式：只恢复输入，结果保持清空，需要用户重新计算。
+                self.batch_results = []
+                self._detail_text_cache = ""
+                self._last_calc_snapshot = None
+                self._last_calc_detail = None
+                if hasattr(self, 'result_table'):
+                    self.result_table.setRowCount(0)
+                if hasattr(self, 'detail_text'):
+                    self.detail_text.clear()
+                self._update_lock_state(False)
             
             # 标记为非示例数据
             self._is_sample_data = False

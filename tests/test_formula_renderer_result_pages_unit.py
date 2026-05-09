@@ -166,6 +166,26 @@ def test_formula_renderer_keeps_design_method_step_as_plain_text_card():
             1,
             ("Fb加大 = H -:", "h加大 = 2.38 - 1.980 = 0.400 m"),
         ),
+        (
+            "F拉_设计 = 拉杆底控制高 - h_设计 = 2.90 - 2.477 = 0.423 m",
+            1,
+            ("F拉_设计 = 拉杆底控制高 -:", "h_设计 = 2.90 - 2.477 = 0.423 m"),
+        ),
+        (
+            "Fb_加大 = 拉杆底控制高 - h_加大 = 2.90 - 2.791 = 0.109 m",
+            1,
+            ("Fb_加大 = 拉杆底控制高 -:", "h_加大 = 2.90 - 2.791 = 0.109 m"),
+        ),
+        (
+            "- 设计流量拉杆底净距: F拉_设计 = 拉杆底控制高 - h_设计 = 2.90 - 2.477 = 0.423 m",
+            1,
+            ("F拉_设计 = 拉杆底控制高 -:", "h_设计 = 2.90 - 2.477 = 0.423 m"),
+        ),
+        (
+            "- 加大有效超高: Fb_加大 = 拉杆底控制高 - h_加大 = 2.90 - 2.791 = 0.109 m",
+            1,
+            ("Fb_加大 = 拉杆底控制高 -:", "h_加大 = 2.90 - 2.791 = 0.109 m"),
+        ),
     ],
 )
 def test_formula_renderer_avoids_fragmenting_embedded_formula_lines(
@@ -179,6 +199,21 @@ def test_formula_renderer_avoids_fragmenting_embedded_formula_lines(
     assert 'class="content-line"' not in body
     for fragment in forbidden_fragments:
         assert fragment not in body
+
+
+def test_formula_renderer_splits_tie_rod_clearance_label_from_formula():
+    text = (
+        "- 设计流量拉杆底净距: "
+        "F拉_设计 = 拉杆底控制高 - h_设计 = 2.90 - 2.477 = 0.423 m"
+    )
+
+    body = renderer.plain_text_to_formula_body(text)
+
+    assert 'class="info-subtitle"' in body
+    assert "- 设计流量拉杆底净距:" in body
+    assert body.count("<svg") == 1
+    assert "•" not in body
+    assert 'class="content-line"' not in body
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@
 """Smoke tests for shared multi-case navigator integration in real panels."""
 
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -170,6 +171,13 @@ PANEL_NAV_THREE_CASE_SCENARIOS = [
     ),
 ]
 
+PANEL_NAV_TEN_CASE_LAYOUT_SCENARIOS = [
+    ("open_channel", "OpenChannelPanel", "open-channel", "矩形"),
+    ("aqueduct", "AqueductPanel", "aqueduct", "U形"),
+    ("culvert", "CulvertPanel", "culvert", "矩形"),
+    ("tunnel", "TunnelPanel", "tunnel", "圆形"),
+]
+
 
 def _make_panel_for_nav_case(module, class_name):
     panel = getattr(module, class_name)()
@@ -190,6 +198,32 @@ def _ensure_case_count(panel, target_count):
 
 def _prime_three_case_results(panel, fake_results):
     panel._all_results = fake_results
+    panel._has_rendered_results = True
+    panel._results_dirty = False
+    panel._stale_result_case_indexes = set()
+    panel._all_results_stale = False
+
+
+def _make_ten_case_results(folder, section_type):
+    q_values = [35.2, 34.7, 34.0, 33.6, 24.2, 24.0, 23.7, 17.5, 14.2, 11.6]
+    if folder == "tunnel":
+        return [
+            {
+                "input": {"section_type": section_type, "Q": q},
+                "result": {"success": True},
+                "case": {"section_type": section_type, "Q": str(q)},
+            }
+            for q in q_values
+        ]
+    return [
+        (idx, {"section_type": section_type, "Q": q}, {"success": True})
+        for idx, q in enumerate(q_values)
+    ]
+
+
+def _prime_ten_case_results(panel, folder, section_type):
+    _ensure_case_count(panel, 10)
+    panel._all_results = _make_ten_case_results(folder, section_type)
     panel._has_rendered_results = True
     panel._results_dirty = False
     panel._stale_result_case_indexes = set()
@@ -220,6 +254,67 @@ def _install_nav_spies(monkeypatch, module):
     monkeypatch.setattr(module, "InfoBar", InfoBarSpy)
     monkeypatch.setattr(module, "scroll_view_to_anchor", _spy_scroll)
     return warnings, scroll_calls
+
+
+def _restore_panel_without_render(module, class_name, saved):
+    panel = _make_panel_for_nav_case(module, class_name)
+    panel._display_all_results = lambda: None
+    if hasattr(panel, "_update_section_plot_all"):
+        panel._update_section_plot_all = lambda: None
+    if hasattr(panel, "_refresh_comparison_table"):
+        panel._refresh_comparison_table = lambda: None
+    if hasattr(panel, "_clear_comparison_table"):
+        panel._clear_comparison_table = lambda: None
+    panel.from_project_dict(saved)
+    _flush_events(4)
+    panel._result_case_nav.set_items(panel._build_case_nav_items())
+    _flush_events(2)
+    return panel
+
+
+@pytest.mark.parametrize(
+    ("folder", "class_name", "fake_results", "expected_rows"),
+    [
+        ("open_channel", "OpenChannelPanel", PANEL_NAV_THREE_CASE_SCENARIOS[0][2], 3),
+        ("aqueduct", "AqueductPanel", PANEL_NAV_THREE_CASE_SCENARIOS[1][2], 3),
+        ("culvert", "CulvertPanel", PANEL_NAV_THREE_CASE_SCENARIOS[2][2], 3),
+        ("tunnel", "TunnelPanel", PANEL_NAV_THREE_CASE_SCENARIOS[3][2], 3),
+    ],
+)
+def test_project_json_roundtrip_restores_comparison_tables(
+    folder, class_name, fake_results, expected_rows
+):
+    """打开 JSON 项目后应恢复已保存工况的两张对比表。"""
+    _get_qapp()
+    module = _load_panel_module(folder)
+
+    panel = _make_panel_for_nav_case(module, class_name)
+    restored = None
+    try:
+        _ensure_case_count(panel, expected_rows)
+        _prime_three_case_results(panel, fake_results)
+        panel.notebook.setCurrentIndex(2)
+        saved = json.loads(json.dumps(panel.to_project_dict(), ensure_ascii=False))
+
+        restored = _make_panel_for_nav_case(module, class_name)
+        restored._display_all_results = lambda: None
+        if hasattr(restored, "_update_section_plot_all"):
+            restored._update_section_plot_all = lambda: None
+        restored.from_project_dict(saved)
+        _flush_events(8)
+
+        assert restored.notebook.currentIndex() == 2
+        assert restored.comparison_table is restored.comparison_hydraulic_table
+        assert restored.comparison_hydraulic_table.rowCount() == expected_rows
+        assert restored.comparison_dimension_table.rowCount() == expected_rows
+        assert restored.comparison_hydraulic_table.item(0, 0).text()
+    finally:
+        panel.close()
+        panel.deleteLater()
+        if restored is not None:
+            restored.close()
+            restored.deleteLater()
+        _flush_events(4)
 
 
 def test_open_channel_panel_places_case_strip_above_input_group_and_refreshes_labels():
@@ -731,4 +826,130 @@ def test_delete_case_marks_all_old_result_nav_stale(
     finally:
         panel.close()
         panel.deleteLater()
+        _flush_events(4)
+
+
+@pytest.mark.parametrize(
+    ("folder", "class_name", "panel_key", "section_type"),
+    PANEL_NAV_TEN_CASE_LAYOUT_SCENARIOS,
+)
+def test_result_case_nav_keeps_multiple_columns_for_ten_cases(
+    monkeypatch, folder, class_name, panel_key, section_type
+):
+    _get_qapp()
+    module = _load_panel_module(folder)
+    warnings, scroll_calls = _install_nav_spies(monkeypatch, module)
+
+    panel = _make_panel_for_nav_case(module, class_name)
+    try:
+        _prime_ten_case_results(panel, folder, section_type)
+        panel._result_case_nav.set_items(panel._build_case_nav_items())
+        _flush_events(8)
+
+        nav = panel._result_case_nav
+        assert nav.chip_count() == 10
+        assert nav._chip_host.width() >= nav._chip_scroll.viewport().width() - 4
+        assert len({chip.geometry().x() for chip in nav.chips()[:6]}) >= 2
+        assert nav.height() < 180
+
+        for case_idx in (0, 4, 9):
+            nav.chips()[case_idx].click()
+            _flush_events(2)
+            assert warnings == []
+            assert scroll_calls[-1][0][1] == f"case-result-{panel_key}-{case_idx}"
+    finally:
+        panel.close()
+        panel.deleteLater()
+        _flush_events(4)
+
+
+@pytest.mark.parametrize(
+    ("folder", "class_name", "fake_results", "expected_anchors"),
+    PANEL_NAV_THREE_CASE_SCENARIOS,
+)
+def test_project_roundtrip_preserves_stale_case_result_state(
+    monkeypatch, folder, class_name, fake_results, expected_anchors
+):
+    _get_qapp()
+    module = _load_panel_module(folder)
+    warnings, scroll_calls = _install_nav_spies(monkeypatch, module)
+
+    panel = _make_panel_for_nav_case(module, class_name)
+    restored = None
+    try:
+        _ensure_case_count(panel, 3)
+        _prime_three_case_results(panel, fake_results)
+        panel._results_dirty = True
+        panel._stale_result_case_indexes = {1}
+        panel._all_results_stale = False
+
+        saved = panel.to_project_dict()
+        assert saved["result_state"]["stale_result_case_indexes"] == [1]
+
+        restored = _restore_panel_without_render(module, class_name, saved)
+
+        assert restored._results_dirty is True
+        assert restored._stale_result_case_indexes == {1}
+        assert restored._all_results_stale is False
+        assert restored._has_rendered_results is True
+
+        restored._result_case_nav.chips()[0].click()
+        _flush_events(2)
+        assert warnings == []
+        assert scroll_calls[-1][0][1] == expected_anchors[0]
+
+        scroll_calls.clear()
+        restored._result_case_nav.chips()[1].click()
+        _flush_events(2)
+        assert scroll_calls == []
+        assert warnings[-1]["title"] == "结果已过期"
+    finally:
+        panel.close()
+        panel.deleteLater()
+        if restored is not None:
+            restored.close()
+            restored.deleteLater()
+        _flush_events(4)
+
+
+@pytest.mark.parametrize(
+    ("folder", "class_name", "fake_results", "expected_anchors"),
+    PANEL_NAV_THREE_CASE_SCENARIOS,
+)
+def test_project_roundtrip_preserves_all_result_stale_state(
+    monkeypatch, folder, class_name, fake_results, expected_anchors
+):
+    _get_qapp()
+    module = _load_panel_module(folder)
+    warnings, scroll_calls = _install_nav_spies(monkeypatch, module)
+
+    panel = _make_panel_for_nav_case(module, class_name)
+    restored = None
+    try:
+        _ensure_case_count(panel, 3)
+        _prime_three_case_results(panel, fake_results)
+        panel._results_dirty = True
+        panel._stale_result_case_indexes = set()
+        panel._all_results_stale = True
+
+        saved = panel.to_project_dict()
+        assert saved["result_state"]["all_results_stale"] is True
+
+        restored = _restore_panel_without_render(module, class_name, saved)
+
+        assert restored._results_dirty is True
+        assert restored._all_results_stale is True
+        assert restored._has_rendered_results is True
+
+        restored._result_case_nav.chips()[0].click()
+        _flush_events(2)
+
+        assert scroll_calls == []
+        assert warnings[-1]["title"] == "结果已失效"
+    finally:
+        panel.close()
+        panel.deleteLater()
+        if restored is not None:
+            restored.close()
+            restored.deleteLater()
         _flush_events(4)

@@ -35,6 +35,17 @@ def _get_qapp():
     return QApplication.instance() or QApplication([])
 
 
+def _process_events(app, rounds=8):
+    """让 Qt 完成当前窗口布局。"""
+    for _ in range(rounds):
+        app.processEvents()
+
+
+def _axis_width_px(fig, ax):
+    """返回子图在画布中的像素宽度。"""
+    return ax.get_position().width * fig.get_size_inches()[0] * fig.dpi
+
+
 def _u_result():
     return {
         "success": True,
@@ -72,6 +83,7 @@ def _rect_result(*, has_chamfer=False, custom_label=None):
 
 class _PlotAllDummy:
     _section_plot_title = staticmethod(aqueduct_panel_mod.AqueductPanel._section_plot_title)
+    _update_section_plot = aqueduct_panel_mod.AqueductPanel._update_section_plot
 
     def __init__(self, all_results, cases):
         self.section_fig = Figure()
@@ -108,6 +120,67 @@ class _PlotAllDummy:
                 "result": result,
             }
         )
+
+
+class _DrawTrackingCanvas:
+    """记录项目恢复清图时的画布绘制次数。"""
+
+    def __init__(self):
+        self.draw_calls = 0
+
+    def draw(self):
+        self.draw_calls += 1
+
+    def update(self):
+        return None
+
+    def repaint(self):
+        return None
+
+
+class _Notebook:
+    """记录项目恢复时页签复位行为。"""
+
+    def __init__(self, current_index=1, count=3):
+        self.index = current_index
+        self._count = count
+        self.set_indexes = []
+
+    def count(self):
+        return self._count
+
+    def currentIndex(self):
+        return self.index
+
+    def setCurrentIndex(self, index):
+        self.index = index
+        self.set_indexes.append(index)
+
+
+def _from_project_dummy():
+    """构造带旧断面图残留的项目恢复替身。"""
+    fig = Figure()
+    axes = fig.subplots(2, 2).ravel()
+    axes[-1].set_visible(False)
+    return SimpleNamespace(
+        section_fig=fig,
+        section_canvas=_DrawTrackingCanvas(),
+        _section_axis_dialogs={axes[0]: object()},
+        _section_plot_layout=object(),
+        _section_plot_layout_case_count=3,
+        _has_rendered_results=True,
+        _results_dirty=True,
+        _all_results_stale=True,
+        _stale_result_case_indexes={0},
+        _load_case=lambda _idx: None,
+        _rebuild_case_tags=lambda: None,
+        _update_calc_btn_text=lambda: None,
+        _display_all_results=lambda: None,
+        _update_section_plot_all=lambda: None,
+        _refresh_comparison_tables=lambda: None,
+        _clear_comparison_tables=lambda: None,
+        _show_initial_help=lambda: None,
+    )
 
 
 class _SinglePlotDummy:
@@ -218,6 +291,103 @@ def _assert_increased_depth_dimension(ax, h_increased):
     assert len(arrows) == 1
 
 
+def test_from_project_dict_clears_stale_section_plot_when_aqueduct_has_no_results():
+    """渡槽加载无计算结果项目时，不应保留上一项目的断面子图。"""
+    dummy = _from_project_dummy()
+
+    aqueduct_panel_mod.AqueductPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [aqueduct_panel_mod.AqueductPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": [],
+            "current_result": None,
+            "input_params": {},
+            "result_state": None,
+        },
+    )
+
+    assert dummy._all_results == []
+    assert dummy.current_result is None
+    assert dummy.section_fig.axes == []
+    assert dummy._section_axis_dialogs == {}
+    assert dummy._section_plot_layout is None
+    assert dummy._section_plot_layout_case_count is None
+    assert dummy._has_rendered_results is False
+    assert dummy._results_dirty is False
+    assert dummy._all_results_stale is False
+    assert dummy._stale_result_case_indexes == set()
+
+
+def test_from_project_dict_keeps_aqueduct_results_when_section_plot_restore_fails():
+    """渡槽项目恢复时，断面图失败不应清空已加载的计算结果。"""
+    dummy = _from_project_dummy()
+    params = {"section_type": "U形", "Q": 5.0}
+    result = _u_result()
+    all_results = [(0, params, result)]
+    rendered = []
+    compared = []
+    dummy._display_all_results = lambda: rendered.append("display")
+    dummy._refresh_comparison_tables = lambda: compared.append("comparison")
+
+    def fail_plot():
+        raise RuntimeError("plot failed")
+
+    dummy._update_section_plot_all = fail_plot
+
+    aqueduct_panel_mod.AqueductPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [aqueduct_panel_mod.AqueductPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": all_results,
+            "current_result": result,
+            "input_params": params,
+            "result_state": None,
+        },
+    )
+
+    assert dummy._all_results == all_results
+    assert dummy.current_result == result
+    assert rendered == ["display"]
+    assert compared == ["comparison"]
+    assert dummy.section_fig.axes == []
+    assert dummy._section_axis_dialogs == {}
+    assert dummy._section_plot_layout is None
+
+
+def test_from_project_dict_schedules_aqueduct_section_plot_refresh_after_restoring_tab(monkeypatch):
+    """渡槽项目恢复到断面图页后，应安排一次最终宽度重排。"""
+    dummy = _from_project_dummy()
+    dummy.notebook = _Notebook(current_index=1)
+    params = {"section_type": "U形", "Q": 5.0}
+    result = _u_result()
+    all_results = [(0, params, result)]
+    scheduled = []
+    monkeypatch.setattr(
+        aqueduct_panel_mod,
+        "schedule_section_plot_restore_refresh",
+        lambda panel: scheduled.append(panel),
+        raising=False,
+    )
+
+    aqueduct_panel_mod.AqueductPanel.from_project_dict(
+        dummy,
+        {
+            "cases": [aqueduct_panel_mod.AqueductPanel._default_case()],
+            "current_case_idx": 0,
+            "all_results": all_results,
+            "current_result": result,
+            "input_params": params,
+            "result_state": None,
+            "notebook_idx": 1,
+        },
+    )
+
+    assert dummy.notebook.set_indexes == [1]
+    assert scheduled == [dummy]
+
+
 def test_update_section_plot_all_uses_original_case_numbered_titles_and_h_total():
     rect_result = _rect_result()
     dummy = _PlotAllDummy(
@@ -259,6 +429,55 @@ def test_update_section_plot_all_prefers_custom_label_and_passes_rect_result_thr
     assert [call["title"] for call in dummy.calls] == ["工况 1｜U形", "北干槽试算"]
     assert dummy.calls[1]["result"] is rect_result
     assert dummy.calls[1]["result"]["has_chamfer"] is True
+
+
+def test_update_section_plot_all_uses_two_columns_for_many_aqueduct_cases():
+    """渡槽 10 个成功工况应切到 2 列，并登记双击放大信息。"""
+    all_results = [
+        (idx, {"section_type": "矩形", "Q": 8.0 + idx}, _rect_result())
+        for idx in range(10)
+    ]
+    dummy = _PlotAllDummy(all_results, [{"section_type": "矩形"} for _ in range(10)])
+
+    aqueduct_panel_mod.AqueductPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 5
+    assert dummy.section_fig.get_size_inches()[1] >= 18
+    assert len(dummy._section_axis_dialogs) == 10
+
+
+def test_update_section_plot_all_uses_two_columns_for_five_aqueduct_cases():
+    """渡槽 5 个成功工况也应固定 2 列。"""
+    all_results = [
+        (idx, {"section_type": "矩形", "Q": 8.0 + idx}, _rect_result())
+        for idx in range(5)
+    ]
+    dummy = _PlotAllDummy(all_results, [{"section_type": "矩形"} for _ in range(5)])
+
+    aqueduct_panel_mod.AqueductPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 3
+    assert len(dummy._section_axis_dialogs) == 5
+
+
+def test_single_success_multi_case_aqueduct_registers_double_click_dialog():
+    """渡槽多工况只剩 1 个成功结果时，也应保留双击放大入口。"""
+    params = {"section_type": "U形", "Q": 5.0}
+    result = _u_result()
+    dummy = _PlotAllDummy(
+        [
+            (0, params, result),
+            (1, {"section_type": "矩形", "Q": 8.0}, {"success": False, "error_message": "缺少参数"}),
+        ],
+        [{"section_type": "U形"}, {"section_type": "矩形"}],
+    )
+
+    aqueduct_panel_mod.AqueductPanel._update_section_plot_all(dummy)
+
+    assert len(dummy.section_fig.axes) == 1
+    assert len(dummy._section_axis_dialogs) == 1
 
 
 @pytest.mark.parametrize("section_type", ["U形", "矩形", "带倒角矩形"])
@@ -414,17 +633,22 @@ def test_draw_u_section_spans_negative_and_positive_x_coordinates():
 
 def test_aqueduct_input_sidebar_width_and_hints_are_readable(monkeypatch):
     """渡槽左侧输入栏应有足够默认宽度，长说明文字应自动换行。"""
-    _get_qapp()
+    app = _get_qapp()
     monkeypatch.setattr(aqueduct_panel_mod, "create_web_view", QTextEdit)
     panel = aqueduct_panel_mod.AqueductPanel()
     panel.resize(1400, 900)
     panel.show()
+    _process_events(app)
 
     scroll_areas = panel.findChildren(QScrollArea)
     assert scroll_areas
-    input_scroll = scroll_areas[0]
+    input_scroll = next(
+        scroll for scroll in scroll_areas
+        if scroll.minimumWidth() >= 340
+    )
     assert input_scroll.minimumWidth() >= 340
-    assert input_scroll.maximumWidth() > 10000
+    assert input_scroll.maximumWidth() == 420
+    assert input_scroll.width() <= 420
 
     hint_labels = [
         label
@@ -433,6 +657,41 @@ def test_aqueduct_input_sidebar_width_and_hints_are_readable(monkeypatch):
     ]
     assert hint_labels
     assert hint_labels[0].wordWrap() is True
+
+    panel.deleteLater()
+
+
+def test_aqueduct_first_section_plot_uses_readable_width_without_dragging(monkeypatch):
+    """宽窗口首次打开渡槽断面图时，不应依赖拖动分隔栏才能变大。"""
+    app = _get_qapp()
+    monkeypatch.setattr(aqueduct_panel_mod, "create_web_view", QTextEdit)
+    panel = aqueduct_panel_mod.AqueductPanel()
+    panel.resize(1800, 1200)
+    panel.show()
+    panel.notebook.setCurrentIndex(1)
+    _process_events(app)
+
+    first = _u_result()
+    second = _u_result()
+    second["h_design"] = 1.15
+    second["h_increased"] = 1.40
+    panel._cases = [{"section_type": "U形"}, {"section_type": "U形"}]
+    panel._all_results = [
+        (0, {"section_type": "U形", "Q": 9.9, "use_increase": True}, first),
+        (1, {"section_type": "U形", "Q": 9.5, "use_increase": True}, second),
+    ]
+
+    aqueduct_panel_mod.AqueductPanel._update_section_plot_all(panel)
+    _process_events(app)
+
+    input_scroll = next(
+        scroll for scroll in panel.findChildren(QScrollArea)
+        if scroll.minimumWidth() >= 340
+    )
+    visible_axes = [ax for ax in panel.section_fig.axes if ax.axison]
+    assert input_scroll.width() <= 420
+    assert panel._section_plot_layout.columns == 2
+    assert _axis_width_px(panel.section_fig, visible_axes[0]) >= 520
 
     panel.deleteLater()
 

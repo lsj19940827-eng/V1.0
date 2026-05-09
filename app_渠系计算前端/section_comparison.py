@@ -111,8 +111,8 @@ def comparison_header_text(column: ComparisonColumn) -> str:
 
 
 def entry_payload(entry: Any, index: int) -> tuple[str, dict, dict, bool]:
-    """从多种工况结果结构中提取统一字段。"""
-    if isinstance(entry, tuple) and len(entry) >= 3:
+    """从多种工况结果结构中提取统一字段，兼容 JSON 恢复后的列表。"""
+    if isinstance(entry, (tuple, list)) and len(entry) >= 3:
         case_idx, params, result = entry[:3]
         label = f"工况{int(case_idx) + 1}"
         valid = bool(result and result.get("success", True))

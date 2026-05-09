@@ -45,6 +45,8 @@ import numpy as np
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun']
 plt.rcParams['axes.unicode_minus'] = False
 
+_TUNNEL_SECTION_ROW_HEIGHT_PX = 520
+
 from 隧洞设计 import (
     quick_calculate_circular,
     quick_calculate_flat_bottom_circular,
@@ -126,6 +128,16 @@ from app_渠系计算前端.plot_title_utils import (
     format_flow_velocity_metrics,
 )
 from app_渠系计算前端.section_plotting import draw_section
+from app_渠系计算前端.section_plot_layout import (
+    clear_section_plot_state,
+    configure_section_grid_canvas,
+    connect_section_tab_refresh,
+    connect_section_plot_double_click,
+    create_section_plot_scroll_area,
+    register_section_axis_dialog,
+    reset_section_axis_dialogs,
+    schedule_section_plot_restore_refresh,
+)
 from app_渠系计算前端.section_shapes import (
     WaterState,
     build_arch_wall_shape,
@@ -145,9 +157,11 @@ from app_渠系计算前端.tunnel.geometry import (
 )
 from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
+    apply_case_result_state,
     build_result_nav_bar,
     build_result_navigation_head,
     case_result_jump_hint,
+    collect_case_result_state,
     has_fresh_case_results,
     is_case_result_stale,
     make_case_result_anchor,
@@ -518,8 +532,11 @@ class TunnelPanel(QWidget):
         self.section_canvas = FigureCanvas(self.section_fig)
         self.section_toolbar = NavToolbar(self.section_canvas, t2)
         t2l.addWidget(self.section_toolbar)
-        t2l.addWidget(self.section_canvas)
-        self.notebook.addTab(t2, "断面图")
+        self._section_plot_scroll = create_section_plot_scroll_area(self.section_canvas)
+        t2l.addWidget(self._section_plot_scroll)
+        connect_section_plot_double_click(self)
+        section_tab_index = self.notebook.addTab(t2, "断面图")
+        connect_section_tab_refresh(self, section_tab_index)
 
         t3 = QWidget(); t3l = QVBoxLayout(t3); t3l.setContentsMargins(5,5,5,5)
         cmp_grp = QGroupBox("工况对比"); cmp_lay = QVBoxLayout(cmp_grp)
@@ -1439,8 +1456,9 @@ class TunnelPanel(QWidget):
         load_formula_page(self.result_text, wrap_with_katex(combined_body, extra_head=combined_head))
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), nav_items)
 
-        self._mark_results_fresh()
-        self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
+        if not getattr(self, "_suppress_project_restore_side_effects", False):
+            self._mark_results_fresh()
+            self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
 
     def _display_all_results(self):
         return TunnelPanel._display_all_results_legacy(self)
@@ -2255,17 +2273,24 @@ class TunnelPanel(QWidget):
     def _update_section_plot_all(self):
         """绘制所有工况的断面图（网格布局）"""
         self.section_fig.clear()
+        reset_section_axis_dialogs(self)
         valid = [
             (case_idx, item)
             for case_idx, item in enumerate(self._all_results)
             if item.get('result', {}).get('success')
         ]
         if not valid:
+            configure_section_grid_canvas(self, 1)
             self.section_canvas.draw()
             return
         n = len(valid)
-        cols = min(n, 3)
-        rows = (n + cols - 1) // cols
+        layout = configure_section_grid_canvas(
+            self,
+            n,
+            row_height_px=_TUNNEL_SECTION_ROW_HEIGHT_PX,
+        )
+        cols = layout.columns
+        rows = layout.rows
         axes = self.section_fig.subplots(rows, cols, squeeze=False)
         for plot_idx, (case_idx, item) in enumerate(valid):
             r_idx, c_idx = divmod(plot_idx, cols)
@@ -2278,21 +2303,34 @@ class TunnelPanel(QWidget):
             Q = inp['Q']
             h_d = res['h_design']
             V_d = res['V_design']
-            if stype == "平底圆形":
-                D = res['D']; B = res['B']
-                self._draw_flat_bottom_circle(ax, D, B, h_d, V_d, Q, title)
-            elif stype == "圆形":
-                D = res['D']
-                self._draw_circular(ax, D, h_d, V_d, Q, title)
-            elif stype == "圆拱直墙型":
-                B = res['B']; H = res['H_total']; theta = math.radians(res['theta_deg'])
-                self._draw_horseshoe(ax, B, H, theta, h_d, V_d, Q, title)
-            else:
-                r_val = res['r']
-                sec_int = inp.get('sec_type_int', 1)
-                self._draw_horseshoe_std(ax, sec_int, r_val, h_d, V_d, Q, title)
-            if TunnelPanel._should_plot_increase(inp, res):
-                self._draw_increased_waterline(ax, stype, inp, res)
+            def _draw_one(
+                target_ax,
+                stype=stype,
+                inp=inp,
+                res=res,
+                Q=Q,
+                h_d=h_d,
+                V_d=V_d,
+                title=title,
+            ):
+                if stype == "平底圆形":
+                    D = res['D']; B = res['B']
+                    self._draw_flat_bottom_circle(target_ax, D, B, h_d, V_d, Q, title)
+                elif stype == "圆形":
+                    D = res['D']
+                    self._draw_circular(target_ax, D, h_d, V_d, Q, title)
+                elif stype == "圆拱直墙型":
+                    B = res['B']; H = res['H_total']; theta = math.radians(res['theta_deg'])
+                    self._draw_horseshoe(target_ax, B, H, theta, h_d, V_d, Q, title)
+                else:
+                    r_val = res['r']
+                    sec_int = inp.get('sec_type_int', 1)
+                    self._draw_horseshoe_std(target_ax, sec_int, r_val, h_d, V_d, Q, title)
+                if TunnelPanel._should_plot_increase(inp, res):
+                    self._draw_increased_waterline(target_ax, stype, inp, res)
+
+            _draw_one(ax)
+            register_section_axis_dialog(self, ax, title, _draw_one)
         # 隐藏多余子图
         for idx in range(n, rows * cols):
             r_idx, c_idx = divmod(idx, cols)
@@ -2732,6 +2770,7 @@ class TunnelPanel(QWidget):
             'all_results': copy.deepcopy(self._all_results),
             'current_result': copy.deepcopy(self.current_result),
             'input_params': copy.deepcopy(getattr(self, 'input_params', None)),
+            'result_state': collect_case_result_state(self),
             'notebook_idx': self.notebook.currentIndex() if hasattr(self, 'notebook') else 0,
         }
 
@@ -2750,22 +2789,49 @@ class TunnelPanel(QWidget):
         self._all_results = data.get('all_results', []) or []
         self.current_result = data.get('current_result')
         self.input_params = data.get('input_params') or {}
+        result_state = data.get('result_state')
         if self._all_results:
             try:
+                self._suppress_project_restore_side_effects = True
                 self._display_all_results()
-                self._update_section_plot_all()
-                self._refresh_comparison_table()
             except Exception:
                 self._all_results = []
                 self.current_result = None
+                self._results_dirty = False
+                self._stale_result_case_indexes = set()
+                self._all_results_stale = False
+                self._has_rendered_results = False
+                clear_section_plot_state(self)
                 self._clear_comparison_table()
                 self._show_initial_help()
+            finally:
+                self._suppress_project_restore_side_effects = False
+            if self._all_results:
+                apply_case_result_state(self, result_state)
+                try:
+                    self._update_section_plot_all()
+                except Exception:
+                    clear_section_plot_state(self)
+                try:
+                    self._refresh_comparison_table()
+                except Exception:
+                    self._clear_comparison_table()
         else:
+            self._all_results = []
             self.current_result = None
+            self._results_dirty = False
+            self._stale_result_case_indexes = set()
+            self._all_results_stale = False
+            self._has_rendered_results = False
+            clear_section_plot_state(self)
             self._clear_comparison_table()
             self._show_initial_help()
+        if self._all_results:
+            apply_case_result_state(self, result_state)
         if hasattr(self, 'notebook'):
             idx = data.get('notebook_idx')
             if isinstance(idx, int):
                 idx = max(0, min(idx, self.notebook.count() - 1))
                 self.notebook.setCurrentIndex(idx)
+        if self._all_results and hasattr(self, 'notebook'):
+            schedule_section_plot_restore_refresh(self)

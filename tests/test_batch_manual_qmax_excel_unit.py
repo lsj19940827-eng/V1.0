@@ -308,3 +308,80 @@ def test_project_roundtrip_preserves_manual_qmax_mapping(monkeypatch):
     restored.close()
     restored.deleteLater()
     _flush_events(4)
+
+
+def test_project_roundtrip_restores_batch_results_table_detail_and_shared_data(monkeypatch):
+    panel = _prepare_panel(monkeypatch)
+    _set_single_row(panel, _build_row(q="5"))
+    panel.detail_cb.setChecked(True)
+    panel._batch_calculate()
+    _flush_events(6)
+
+    assert panel.batch_results
+    assert panel.result_table.rowCount() == 1
+    assert panel.detail_text.toPlainText().strip()
+
+    saved = panel.to_project_dict()
+    if batch_panel_mod.SHARED_DATA_AVAILABLE:
+        batch_panel_mod.get_shared_data_manager().clear_batch_results()
+
+    restored = _prepare_panel(monkeypatch)
+    restored.from_project_dict(saved, skip_dirty_signal=True)
+    _flush_events(4)
+
+    assert restored.batch_results == panel.batch_results
+    assert restored.result_table.rowCount() == panel.result_table.rowCount()
+    assert restored.result_table.item(0, 2).text() == "-"
+    assert restored.detail_text.toPlainText() == panel.detail_text.toPlainText()
+    assert restored._last_calc_snapshot is not None
+    assert restored._btn_export_excel.isEnabled() is True
+    assert restored._btn_export_word.isEnabled() is True
+
+    if batch_panel_mod.SHARED_DATA_AVAILABLE:
+        shared_results = batch_panel_mod.get_shared_data_manager().get_batch_results()
+        assert len(shared_results) == len(restored.batch_results)
+
+    panel.close()
+    panel.deleteLater()
+    restored.close()
+    restored.deleteLater()
+    _flush_events(4)
+
+
+def test_project_roundtrip_restores_failed_batch_export_lock(monkeypatch):
+    panel = _prepare_panel(monkeypatch)
+    _set_single_row(panel, _build_row(q="5"))
+
+    saved = panel.to_project_dict()
+    failed_row = ["-"] * len(batch_panel_mod.RESULT_HEADERS)
+    failed_row[0] = "1"
+    failed_row[1] = "1"
+    failed_row[2] = "失败建筑物"
+    failed_row[3] = "明渠-矩形"
+    failed_row[-1] = "✗ 失败：测试错误"
+    saved.update(
+        {
+            "batch_results": [],
+            "result_rows": [failed_row],
+            "detail_text_cache": "失败详情",
+            "has_batch_errors": True,
+        }
+    )
+
+    restored = _prepare_panel(monkeypatch)
+    restored.from_project_dict(saved, skip_dirty_signal=True)
+    _flush_events(4)
+
+    assert restored.result_table.rowCount() == 1
+    assert "失败" in restored.result_table.item(0, len(batch_panel_mod.RESULT_HEADERS) - 1).text()
+    assert restored.detail_text.toPlainText() == "失败详情"
+    assert restored._btn_export_excel.isEnabled() is False
+    assert restored._btn_export_word.isEnabled() is False
+    assert restored._error_lock_label.isVisible() is True
+    assert restored._last_calc_snapshot is None
+
+    panel.close()
+    panel.deleteLater()
+    restored.close()
+    restored.deleteLater()
+    _flush_events(4)

@@ -277,6 +277,69 @@ def test_pressure_pipe_panel_q_increase_mode_roundtrips_and_drives_manual_percen
     _flush_events(4)
 
 
+def test_pressure_pipe_project_roundtrip_restores_success_result_and_export_text():
+    panel = _new_panel("pressure_pipe", "PressurePipePanel")
+
+    panel.Q_edit.setText("0.5")
+    panel.length_edit.setText("1000")
+    panel.local_ratio_edit.setText("0.15")
+    panel.inc_cb.setChecked(True)
+    panel.inc_edit.setText("")
+    panel._calculate()
+    _flush_events(8)
+
+    assert panel._all_results
+    assert panel.current_result is not None
+    assert panel._export_plain_text.strip()
+
+    saved = panel.to_project_dict()
+    restored = _new_panel("pressure_pipe", "PressurePipePanel")
+    restored.from_project_dict(saved)
+    _flush_events(8)
+
+    assert len(restored._all_results) == len(panel._all_results)
+    assert restored.current_result is not None
+    assert restored.current_result.recommended is not None
+    assert restored._export_plain_text == panel._export_plain_text
+    assert restored._has_rendered_results is True
+
+    panel.close()
+    panel.deleteLater()
+    restored.close()
+    restored.deleteLater()
+    _flush_events(4)
+
+
+def test_pressure_pipe_project_roundtrip_restores_input_error_result_card():
+    panel = _new_panel("pressure_pipe", "PressurePipePanel")
+
+    panel.Q_edit.setText("")
+    panel._calculate()
+    _flush_events(8)
+
+    assert panel._all_results
+    assert panel.current_result is not None
+    assert panel.current_result.recommended is None
+    assert "请输入设计流量 Q" in panel.current_result.reason
+
+    saved = panel.to_project_dict()
+    restored = _new_panel("pressure_pipe", "PressurePipePanel")
+    restored.from_project_dict(saved)
+    _flush_events(8)
+
+    assert len(restored._all_results) == 1
+    assert restored.current_result is not None
+    assert restored.current_result.recommended is None
+    assert "请输入设计流量 Q" in restored.current_result.reason
+    assert "请输入设计流量 Q" in restored._export_plain_text
+
+    panel.close()
+    panel.deleteLater()
+    restored.close()
+    restored.deleteLater()
+    _flush_events(4)
+
+
 def test_siphon_panel_q_increase_mode_roundtrips_in_project_payload():
     panel = _new_panel("siphon", "SiphonPanel")
 

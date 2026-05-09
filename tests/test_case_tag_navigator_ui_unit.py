@@ -123,6 +123,16 @@ def test_case_workbench_strip_exposes_meta_controls_and_remove_state():
     strip.deleteLater()
 
 
+def test_manual_case_limits_are_raised_to_thirty():
+    pressure_pipe = __import__(
+        "app_渠系计算前端.pressure_pipe.panel",
+        fromlist=["MAX_CASES"],
+    )
+
+    assert _CASE_MANAGER.MAX_CASES == 30
+    assert pressure_pipe.MAX_CASES == 30
+
+
 def test_case_workbench_strip_reflows_new_last_chip_without_waiting_for_next_add():
     _get_qapp()
     strip = CaseWorkbenchStrip()

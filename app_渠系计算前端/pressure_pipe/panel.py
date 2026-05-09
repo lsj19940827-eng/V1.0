@@ -8,7 +8,9 @@
 import sys
 import os
 import copy
+import math
 import html as html_mod
+from dataclasses import asdict, fields, is_dataclass
 from types import SimpleNamespace
 
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,7 +39,7 @@ from 有压管道设计 import (
     PIPE_MATERIALS, DEFAULT_DIAMETER_SERIES,
     DEFAULT_Q_RANGE, DEFAULT_SLOPE_DENOMINATORS,
     SPEC_672_TEXT,
-    PressurePipeInput, RecommendationResult,
+    PressurePipeInput, DiameterCandidate, RecommendationResult,
     get_flow_increase_percent, evaluate_single_diameter,
     recommend_diameter, build_detailed_process_text,
     run_batch_scan, BatchScanConfig, BatchScanResult,
@@ -62,9 +64,11 @@ from app_渠系计算前端.increase_input_helper import (
 from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
 from app_渠系计算前端.result_navigation import (
     CaseResultNavigationBar,
+    apply_case_result_state,
     build_result_nav_bar,
     build_result_navigation_head,
     case_result_jump_hint,
+    collect_case_result_state,
     has_fresh_case_results,
     is_case_result_stale,
     make_case_result_anchor,
@@ -261,7 +265,7 @@ class _DashedButton(QPushButton):
 # 工况标签芯片
 # ============================================================
 _SUB = '₀₁₂₃₄₅₆₇₈₉'
-MAX_CASES = 10
+MAX_CASES = 30
 def _sub(n):
     return ''.join(_SUB[int(d)] for d in str(n))
 
@@ -2034,9 +2038,10 @@ class PressurePipePanel(QWidget):
             nav_items = []
         load_formula_page(self.result_view, full_html)
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), nav_items)
-        self.notebook.setCurrentIndex(0)
-        self._mark_results_fresh()
-        self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
+        if not getattr(self, "_suppress_project_restore_side_effects", False):
+            self.notebook.setCurrentIndex(0)
+            self._mark_results_fresh()
+            self._jump_to_case_result(self._current_case_idx, defer_until_load=True)
 
     def _clear(self):
         self._save_current_case()
@@ -2398,18 +2403,205 @@ class PressurePipePanel(QWidget):
         InfoBar.error(title="批量计算失败", content=summary,
                       parent=self, position=InfoBarPosition.TOP_RIGHT, duration=8000)
 
+    @staticmethod
+    def _dataclass_or_object_dict(obj):
+        """把 dataclass 或普通对象转成 JSON 友好的字典。"""
+        if obj is None:
+            return {}
+        if is_dataclass(obj):
+            return PressurePipePanel._json_safe_value(asdict(obj))
+        if isinstance(obj, dict):
+            return PressurePipePanel._json_safe_value(obj)
+        if hasattr(obj, "__dict__"):
+            return PressurePipePanel._json_safe_value(vars(obj))
+        return {}
+
+    @staticmethod
+    def _json_safe_value(value):
+        """递归清理项目保存数据，避免 JSON 严格模式拒绝非有限浮点数。"""
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if is_dataclass(value):
+            return PressurePipePanel._json_safe_value(asdict(value))
+        if isinstance(value, dict):
+            return {
+                copy.deepcopy(key): PressurePipePanel._json_safe_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [PressurePipePanel._json_safe_value(item) for item in value]
+        return copy.deepcopy(value)
+
+    @staticmethod
+    def _filter_dataclass_kwargs(cls, data):
+        """只保留 dataclass 已声明字段，避免动态属性破坏重建。"""
+        if not isinstance(data, dict):
+            return {}
+        names = {field.name for field in fields(cls)}
+        return {key: copy.deepcopy(value) for key, value in data.items() if key in names}
+
+    def _candidate_to_project_dict(self, candidate):
+        """序列化一个管径候选结果。"""
+        if candidate is None:
+            return None
+        return self._dataclass_or_object_dict(candidate)
+
+    def _candidate_from_project_dict(self, data):
+        """从项目数据恢复一个管径候选结果。"""
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            return data
+        try:
+            return DiameterCandidate(**self._filter_dataclass_kwargs(DiameterCandidate, data))
+        except Exception:
+            return SimpleNamespace(**copy.deepcopy(data))
+
+    def _input_to_project_dict(self, inp):
+        """序列化单个有压管道工况输入。"""
+        data = self._dataclass_or_object_dict(inp)
+        for key in ("inc_mode", "inc_pct_text", "inc_q_text", "use_increase"):
+            if hasattr(inp, key):
+                data[key] = copy.deepcopy(getattr(inp, key))
+        return {
+            "class": inp.__class__.__name__ if inp is not None else "",
+            "data": data,
+        }
+
+    def _input_from_project_dict(self, payload):
+        """从项目数据恢复工况输入对象。"""
+        if not isinstance(payload, dict):
+            return SimpleNamespace()
+        data = copy.deepcopy(payload.get("data", {}) or {})
+        class_name = payload.get("class", "")
+        if class_name == "PressurePipeInput":
+            try:
+                inp = PressurePipeInput(**self._filter_dataclass_kwargs(PressurePipeInput, data))
+            except Exception:
+                inp = SimpleNamespace(**data)
+        else:
+            inp = SimpleNamespace(**data)
+        for key in ("inc_mode", "inc_pct_text", "inc_q_text", "use_increase"):
+            if key in data:
+                setattr(inp, key, data[key])
+        if not hasattr(inp, "use_increase"):
+            inp.use_increase = True
+        if not hasattr(inp, "inc_mode"):
+            inp.inc_mode = INCREASE_MODE_PERCENT
+        if not hasattr(inp, "inc_pct_text"):
+            inp.inc_pct_text = ""
+        if not hasattr(inp, "inc_q_text"):
+            inp.inc_q_text = ""
+        return inp
+
+    def _result_to_project_dict(self, result):
+        """序列化一个推荐结果或错误结果。"""
+        if result is None:
+            return None
+        return {
+            "class": result.__class__.__name__,
+            "recommended": self._candidate_to_project_dict(getattr(result, "recommended", None)),
+            "top_candidates": [
+                self._candidate_to_project_dict(candidate)
+                for candidate in (getattr(result, "top_candidates", []) or [])
+            ],
+            "category": getattr(result, "category", ""),
+            "reason": getattr(result, "reason", ""),
+            "calc_steps": getattr(result, "calc_steps", ""),
+            "auto_recommended": self._candidate_to_project_dict(
+                getattr(result, "auto_recommended", None)
+            ),
+        }
+
+    def _result_from_project_dict(self, payload):
+        """从项目数据恢复推荐结果或错误结果。"""
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            return payload
+        recommended = self._candidate_from_project_dict(payload.get("recommended"))
+        top_candidates = [
+            candidate
+            for candidate in (
+                self._candidate_from_project_dict(item)
+                for item in (payload.get("top_candidates", []) or [])
+            )
+            if candidate is not None
+        ]
+        auto_recommended = self._candidate_from_project_dict(payload.get("auto_recommended"))
+        data = {
+            "recommended": recommended,
+            "top_candidates": top_candidates,
+            "category": payload.get("category", ""),
+            "reason": payload.get("reason", ""),
+            "calc_steps": payload.get("calc_steps", ""),
+            "auto_recommended": auto_recommended,
+        }
+        try:
+            return RecommendationResult(**data)
+        except Exception:
+            return SimpleNamespace(**data)
+
+    def _all_results_to_project_list(self):
+        """序列化所有单项工况结果。"""
+        items = []
+        for case_idx, inp, result in self._all_results or []:
+            try:
+                idx = int(case_idx)
+            except (TypeError, ValueError):
+                idx = 0
+            items.append({
+                "case_idx": idx,
+                "input": self._input_to_project_dict(inp),
+                "result": self._result_to_project_dict(result),
+            })
+        return items
+
+    def _all_results_from_project_list(self, payload):
+        """从项目数据恢复所有单项工况结果。"""
+        restored = []
+        for item in payload or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                case_idx = int(item.get("case_idx", 0))
+            except (TypeError, ValueError):
+                case_idx = 0
+            inp = self._input_from_project_dict(item.get("input"))
+            result = self._result_from_project_dict(item.get("result"))
+            if result is None:
+                continue
+            restored.append((case_idx, inp, result))
+        return restored
+
+    def _build_export_plain_text_from_results(self):
+        """根据恢复出的结果重建 Word 导出纯文本。"""
+        plain_text_parts = []
+        for idx, inp, res in self._all_results or []:
+            part_lines = [f"===== 工况{idx + 1} ====="]
+            if getattr(res, "recommended", None) is not None:
+                part_lines.extend(self._increase_summary_lines(inp, res))
+                part_lines.append("")
+            part_lines.append(getattr(res, "calc_steps", "") or getattr(res, "reason", ""))
+            plain_text_parts.append("\n".join(part_lines))
+        return "\n\n".join(plain_text_parts)
+
     # ================================================================
     # 项目保存/加载
     # ================================================================
     def to_project_dict(self):
         """序列化当前状态用于项目保存。"""
         self._save_current_case()
-        return {
+        return self._json_safe_value({
             'cases': copy.deepcopy(self._cases),
             'current_case_idx': int(self._current_case_idx),
             'last_errors': list(self._last_errors),
+            'all_results': self._all_results_to_project_list(),
+            'current_result': self._result_to_project_dict(self.current_result),
+            'export_plain_text': self._export_plain_text,
+            'result_state': collect_case_result_state(self),
             'notebook_idx': self.notebook.currentIndex() if hasattr(self, 'notebook') else 0,
-        }
+        })
 
     def from_project_dict(self, data):
         """从项目数据恢复面板状态。"""
@@ -2426,12 +2618,40 @@ class PressurePipePanel(QWidget):
         if self._current_case_idx < 0 or self._current_case_idx >= len(self._cases):
             self._current_case_idx = 0
 
-        self._all_results = []
+        self._all_results = self._all_results_from_project_list(data.get('all_results', []))
         self.current_result = None
         self._last_errors = list(data.get('last_errors', []) or [])
         self._load_case(self._current_case_idx)
         self._rebuild_case_tags()
         self._update_calc_btn_text()
+
+        if self._all_results:
+            result_state = data.get('result_state')
+            restored_current = self._result_from_project_dict(data.get('current_result'))
+            self.current_result = restored_current or self._all_results[0][2]
+            self._export_plain_text = (
+                data.get('export_plain_text')
+                or self._build_export_plain_text_from_results()
+            )
+            try:
+                self._suppress_project_restore_side_effects = True
+                self._display_all_results()
+            except Exception:
+                self._all_results = []
+                self.current_result = None
+                self._export_plain_text = ""
+                sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
+                self._show_initial_help()
+            finally:
+                self._suppress_project_restore_side_effects = False
+            if self._all_results:
+                apply_case_result_state(self, result_state)
+            if hasattr(self, 'notebook'):
+                tab_idx = data.get('notebook_idx')
+                if isinstance(tab_idx, int):
+                    tab_idx = max(0, min(tab_idx, self.notebook.count() - 1))
+                    self.notebook.setCurrentIndex(tab_idx)
+            return
 
         if self._last_errors:
             err_txt = "部分或全部工况计算失败：\n\n" + "\n".join(self._last_errors)
