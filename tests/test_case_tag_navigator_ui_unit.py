@@ -167,3 +167,35 @@ def test_case_workbench_strip_reflows_new_last_chip_without_waiting_for_next_add
             assert geometries[-1][0] > geometries[-2][0]
 
     strip.deleteLater()
+
+
+def test_case_workbench_strip_prefers_compact_labels_for_three_columns():
+    _get_qapp()
+    strip = CaseWorkbenchStrip()
+    strip.resize(420, 240)
+    strip.show()
+
+    cases = [_make_case(str(idx + 1), f"很长的工况名称-{idx + 1}") for idx in range(6)]
+
+    def _compact_view(case, idx):
+        full_label = _label_for(case)
+        return {
+            "label": full_label,
+            "compact_label": f"{idx + 1}｜Q={case['Q']}",
+            "tooltip": f"{full_label}\n断面类型：{case['section_type']}",
+        }
+
+    strip.sync_cases(cases, 0, _compact_view)
+    _flush_events(6)
+
+    chips = strip.navigator()._chips
+    geometries = [(chip.geometry().x(), chip.geometry().y()) for chip in chips]
+    visible_texts = [chip.text() for chip in chips]
+
+    assert strip.case_labels() == [_label_for(case) for case in cases]
+    assert visible_texts == [f"{idx + 1}｜Q={idx + 1}" for idx in range(6)]
+    assert [geo[1] for geo in geometries[:3]] == [geometries[0][1]] * 3
+    assert geometries[3][1] > geometries[0][1]
+    assert chips[0].toolTip().startswith("很长的工况名称-1")
+
+    strip.deleteLater()

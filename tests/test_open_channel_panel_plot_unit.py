@@ -465,6 +465,22 @@ def test_multi_case_section_plot_uses_two_columns_for_many_open_channel_cases():
     assert len(dummy._section_axis_dialogs) == 10
 
 
+def test_multi_case_section_plot_keeps_open_channel_axes_centered():
+    """明渠宽扁断面不应被顶对齐压到每个网格上沿。"""
+    all_results = [
+        (idx, params | {"Q": 5.0 + idx}, result)
+        for idx, (params, result) in enumerate(
+            [_base_trapezoid_case("梯形", 5.0 + i, 1.30 + i * 0.01) for i in range(6)]
+        )
+    ]
+    dummy = _PlotAllDummy(all_results)
+
+    open_channel_panel_mod.OpenChannelPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.axis_anchor == "C"
+    assert [ax.get_anchor() for ax in dummy.section_fig.axes] == ["C"] * 6
+
+
 def test_multi_case_section_plot_uses_two_columns_for_five_open_channel_cases():
     """明渠 5 个成功工况也应固定 2 列，避免 3 列横向裁切。"""
     all_results = [

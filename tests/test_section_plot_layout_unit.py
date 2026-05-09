@@ -7,12 +7,17 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from app_渠系计算前端 import section_plot_layout as section_plot_layout_mod
 from app_渠系计算前端.section_plot_layout import (
+    SectionGridLayout,
+    SectionGridOptions,
+    apply_section_axis_alignment,
+    apply_section_grid_spacing,
     choose_section_grid_layout,
     clear_section_plot_state,
     configure_section_grid_canvas,
@@ -283,6 +288,91 @@ def test_configure_section_grid_canvas_applies_custom_row_height():
     assert panel.section_fig.get_size_inches()[1] == 26
 
 
+def test_section_grid_options_can_top_align_equal_aspect_axes():
+    """多工况等比例断面图应能把坐标轴顶对齐，减少首屏上方空白。"""
+    panel = SimpleNamespace(section_fig=Figure(dpi=100), section_canvas=_Canvas())
+
+    layout = configure_section_grid_canvas(
+        panel,
+        4,
+        available_width_px=1200,
+        layout_options=SectionGridOptions(axis_anchor="N"),
+    )
+    axes = panel.section_fig.subplots(2, 2).ravel()
+    for ax in axes:
+        ax.set_aspect("equal")
+
+    apply_section_axis_alignment(panel, layout)
+
+    assert layout.axis_anchor == "N"
+    assert [ax.get_anchor() for ax in axes] == ["N"] * 4
+
+
+def test_section_grid_spacing_does_not_change_axis_anchor():
+    """标题安全边距只调整网格边距，不应隐式改变子图锚点。"""
+    fig = Figure(figsize=(12, 8), dpi=100)
+    axes = fig.subplots(2, 2).ravel()
+    for ax in axes:
+        ax.set_aspect("equal")
+
+    panel = SimpleNamespace(section_fig=fig)
+    apply_section_grid_spacing(panel, multi=True)
+
+    assert [ax.get_anchor() for ax in axes] == ["C"] * 4
+
+
+def _assert_first_row_titles_inside_canvas(fig, axes):
+    """断言第一行子图标题完整位于画布范围内。"""
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    renderer = canvas.get_renderer()
+    canvas_height = fig.bbox.height
+    for ax in axes[0]:
+        title_bounds = ax.title.get_window_extent(renderer=renderer)
+        assert title_bounds.y0 >= 0
+        assert title_bounds.y1 <= canvas_height
+
+
+def test_section_grid_spacing_keeps_first_row_titles_visible_without_top_alignment():
+    """非隧洞多工况居中对齐时，第一行工况标记不应被画布顶部裁切。"""
+    fig = Figure(figsize=(12, 10.8), dpi=100)
+    axes = fig.subplots(3, 2, squeeze=False)
+    for idx, ax in enumerate(axes.ravel()):
+        ax.set_xlim(-6, 6)
+        ax.set_ylim(-0.5, 3.0)
+        ax.set_aspect("equal")
+        ax.set_title(f"工况{idx + 1} 梯形\nQ={5 + idx:.2f} m3/s, V=1.20 m/s", fontsize=10)
+    panel = SimpleNamespace(section_fig=fig)
+    layout = SectionGridLayout(2, 3, 1200, 1080, axis_anchor="C")
+
+    apply_section_grid_spacing(panel, multi=True)
+    apply_section_axis_alignment(panel, layout)
+
+    assert [ax.get_anchor() for ax in axes.ravel()] == ["C"] * 6
+    _assert_first_row_titles_inside_canvas(fig, axes)
+
+
+def test_section_grid_spacing_keeps_tunnel_first_row_titles_visible():
+    """隧洞高行高多工况顶对齐后，第一行工况标记也不应被裁切。"""
+    fig = Figure(figsize=(12, 26), dpi=100)
+    axes = fig.subplots(5, 2, squeeze=False)
+    for idx, ax in enumerate(axes.ravel()):
+        ax.set_xlim(-4, 4)
+        ax.set_ylim(-0.5, 6.0)
+        ax.set_aspect("equal")
+        ax.set_title(
+            f"工况 {idx + 1}｜圆拱直墙型\nQ={5 + idx:.2f} m3/s, V=1.20 m/s",
+            fontsize=10,
+        )
+    panel = SimpleNamespace(section_fig=fig)
+    layout = SectionGridLayout(2, 5, 1200, 2600, axis_anchor="N")
+
+    apply_section_grid_spacing(panel, multi=True)
+    apply_section_axis_alignment(panel, layout)
+
+    _assert_first_row_titles_inside_canvas(fig, axes)
+
+
 def test_configure_section_grid_canvas_ignores_temporary_narrow_viewport_when_notebook_is_wide():
     """页签未完成布局时，临时窄 viewport 不应让宽屏多工况误退为单列。"""
     canvas = _Canvas()
@@ -303,6 +393,38 @@ def test_configure_section_grid_canvas_ignores_temporary_narrow_viewport_when_no
     assert layout.columns == 2
     assert layout.rows == 5
     assert layout.canvas_width_px == 1280
+
+
+def test_hidden_section_grid_canvas_prefers_parent_width_over_temporary_wide_viewport():
+    """断面图页隐藏时，即使 viewport 临时超过阈值，也应按父容器宽度预渲染。"""
+    canvas = _Canvas()
+    canvas.width = lambda: 640
+    notebook = _Notebook(1188)
+    notebook.current_index = 0
+    notebook.currentIndex = lambda: notebook.current_index
+    panel = SimpleNamespace(
+        section_fig=Figure(dpi=100),
+        section_canvas=canvas,
+        notebook=notebook,
+    )
+    panel._section_plot_scroll = _Widget(
+        914,
+        parent=notebook,
+        viewport=_Widget(900),
+    )
+    panel._section_plot_tab_index = 1
+
+    layout = configure_section_grid_canvas(
+        panel,
+        9,
+        layout_options=SectionGridOptions(row_height_px=520, axis_anchor="N"),
+    )
+
+    assert layout.columns == 2
+    assert layout.rows == 5
+    assert layout.canvas_width_px == 1188
+    assert layout.canvas_height_px == 2600
+    assert canvas.resized_to == (1188, 2600)
 
 
 def test_configure_section_grid_canvas_does_not_use_outer_window_as_fallback_width():
@@ -429,6 +551,131 @@ def test_section_tab_refresh_remeasures_width_and_restores_two_columns():
 
     assert panel._section_plot_layout.columns == 2
     assert panel._section_plot_layout.rows == 5
+
+
+def test_hidden_result_page_plot_retries_until_visible_width_stabilizes(monkeypatch):
+    """结果页计算后首次打开断面图，若第一次仍读到旧宽度，应继续延迟重排。"""
+    canvas = _Canvas()
+    canvas.width = lambda: 640
+    notebook = _Notebook(900)
+    notebook.current_index = 0
+    notebook.currentIndex = lambda: notebook.current_index
+    viewport = _Widget(900)
+    scroll = _Widget(914, parent=notebook, viewport=viewport)
+    panel = SimpleNamespace(
+        section_fig=Figure(dpi=100),
+        section_canvas=canvas,
+        notebook=notebook,
+        _section_plot_scroll=scroll,
+        _all_results=[object()] * 9,
+    )
+    scheduled = []
+
+    def run_later(delay_ms, callback):
+        scheduled.append((delay_ms, callback))
+
+    monkeypatch.setattr(section_plot_layout_mod, "_run_section_plot_refresh_later", run_later)
+    connect_section_tab_refresh(panel, section_tab_index=1)
+
+    configure_section_grid_canvas(
+        panel,
+        9,
+        layout_options=SectionGridOptions(row_height_px=520, axis_anchor="N"),
+    )
+    assert panel._section_plot_layout.canvas_width_px == 900
+
+    calls = []
+
+    def redraw():
+        calls.append(viewport.width())
+        configure_section_grid_canvas(
+            panel,
+            9,
+            layout_options=SectionGridOptions(row_height_px=520, axis_anchor="N"),
+        )
+
+    panel._update_section_plot_all = redraw
+    notebook.current_index = 1
+    notebook._width = 1188
+    notebook.currentChanged.emit(1)
+
+    assert calls == []
+    assert scheduled and scheduled[-1][0] == 0
+
+    scheduled[-1][1]()
+
+    assert calls == [900]
+    assert panel._section_plot_layout.canvas_width_px == 900
+    assert getattr(panel, "_section_plot_needs_visible_refresh") is True
+    assert len(scheduled) == 2
+
+    scroll._width = 1202
+    viewport._width = 1188
+    scheduled[-1][1]()
+
+    assert calls == [900, 1188]
+    assert panel._section_plot_layout.columns == 2
+    assert panel._section_plot_layout.rows == 5
+    assert panel._section_plot_layout.canvas_width_px == 1188
+    assert panel._section_plot_layout.canvas_height_px == 2600
+    assert getattr(panel, "_section_plot_needs_visible_refresh") is False
+
+
+def test_hidden_result_page_plot_clears_visible_refresh_when_first_width_is_stable(monkeypatch):
+    """隐藏阶段已按真实宽度预渲染时，首次切页不应再完整重画。"""
+    canvas = _Canvas()
+    canvas.width = lambda: 640
+    notebook = _Notebook(1188)
+    notebook.current_index = 0
+    notebook.currentIndex = lambda: notebook.current_index
+    viewport = _Widget(900)
+    scroll = _Widget(914, parent=notebook, viewport=viewport)
+    panel = SimpleNamespace(
+        section_fig=Figure(dpi=100),
+        section_canvas=canvas,
+        notebook=notebook,
+        _section_plot_scroll=scroll,
+        _all_results=[object()] * 6,
+    )
+    scheduled = []
+
+    def run_later(delay_ms, callback):
+        scheduled.append((delay_ms, callback))
+
+    monkeypatch.setattr(section_plot_layout_mod, "_run_section_plot_refresh_later", run_later)
+    connect_section_tab_refresh(panel, section_tab_index=1)
+
+    configure_section_grid_canvas(
+        panel,
+        6,
+        layout_options=SectionGridOptions(row_height_px=520, axis_anchor="N"),
+    )
+    assert panel._section_plot_layout.canvas_width_px == 1188
+    assert getattr(panel, "_section_plot_needs_visible_refresh") is True
+
+    calls = []
+
+    def redraw():
+        calls.append(viewport.width())
+        configure_section_grid_canvas(
+            panel,
+            6,
+            layout_options=SectionGridOptions(row_height_px=520, axis_anchor="N"),
+        )
+
+    panel._update_section_plot_all = redraw
+    notebook.current_index = 1
+    scroll._width = 1202
+    viewport._width = 1188
+    notebook.currentChanged.emit(1)
+
+    assert scheduled == []
+    assert calls == []
+    assert panel._section_plot_layout.columns == 2
+    assert panel._section_plot_layout.rows == 3
+    assert panel._section_plot_layout.canvas_width_px == 1188
+    assert panel._section_plot_layout.canvas_height_px == 1560
+    assert getattr(panel, "_section_plot_needs_visible_refresh") is False
 
 
 def test_section_tab_refresh_from_comparison_uses_visible_viewport_width():

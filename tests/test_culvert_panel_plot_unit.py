@@ -364,6 +364,22 @@ def test_multi_case_section_plot_uses_two_columns_for_many_culvert_cases():
     assert len(dummy._section_axis_dialogs) == 10
 
 
+def test_multi_case_section_plot_keeps_culvert_axes_centered():
+    """暗涵矩形断面不应被顶对齐压到每个网格上沿。"""
+    params = {"section_type": "矩形", "Q": 7.0, "use_increase": True}
+    dummy = _PlotDummy(
+        all_results=[
+            (idx, params | {"Q": 7.0 + idx}, _rect_result())
+            for idx in range(6)
+        ]
+    )
+
+    culvert_panel_mod.CulvertPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.axis_anchor == "C"
+    assert [ax.get_anchor() for ax in dummy.section_fig.axes] == ["C"] * 6
+
+
 def test_multi_case_section_plot_uses_two_columns_for_five_culvert_cases():
     """暗涵 5 个成功工况也应固定 2 列。"""
     params = {"section_type": "圆拱直墙型", "Q": 7.0, "use_increase": True}

@@ -785,6 +785,7 @@ class AqueductPanel(QWidget):
         label = f"{custom or stype} · Q={q_text}"
         return {
             "label": label,
+            "compact_label": f"{idx + 1}｜Q={q_text}",
             "tooltip": f"{label}\n断面类型：{stype}\n设计流量 Q={q_text} m³/s",
         }
 

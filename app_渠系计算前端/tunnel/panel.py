@@ -129,6 +129,9 @@ from app_渠系计算前端.plot_title_utils import (
 )
 from app_渠系计算前端.section_plotting import draw_section
 from app_渠系计算前端.section_plot_layout import (
+    SectionGridOptions,
+    apply_section_axis_alignment,
+    apply_section_grid_spacing,
     clear_section_plot_state,
     configure_section_grid_canvas,
     connect_section_tab_refresh,
@@ -736,6 +739,7 @@ class TunnelPanel(QWidget):
         label = f"{custom or stype} · Q={q_text}"
         return {
             "label": label,
+            "compact_label": f"{idx + 1}｜Q={q_text}",
             "tooltip": f"{label}\n断面类型：{stype}\n设计流量 Q={q_text} m³/s",
         }
 
@@ -2287,7 +2291,10 @@ class TunnelPanel(QWidget):
         layout = configure_section_grid_canvas(
             self,
             n,
-            row_height_px=_TUNNEL_SECTION_ROW_HEIGHT_PX,
+            layout_options=SectionGridOptions(
+                row_height_px=_TUNNEL_SECTION_ROW_HEIGHT_PX,
+                axis_anchor="N",
+            ),
         )
         cols = layout.columns
         rows = layout.rows
@@ -2335,7 +2342,8 @@ class TunnelPanel(QWidget):
         for idx in range(n, rows * cols):
             r_idx, c_idx = divmod(idx, cols)
             axes[r_idx][c_idx].axis('off')
-        self.section_fig.tight_layout()
+        apply_section_grid_spacing(self, multi=True, hspace=0.10)
+        apply_section_axis_alignment(self, layout)
         self.section_canvas.draw()
 
     def _draw_increased_waterline(self, ax, section_type, input_params, result):

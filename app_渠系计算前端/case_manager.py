@@ -33,12 +33,12 @@ def _sub(n):
 
 CASE_TAG_ACTIVE_SS = (
     "QPushButton{background:#F2F7FF;border:1px solid #B8D1EF;border-radius:14px;"
-    "color:#0E5DB8;font-size:12px;font-weight:700;padding:0 14px;text-align:center;}"
+    "color:#0E5DB8;font-size:12px;font-weight:700;padding:0 8px;text-align:center;}"
     "QPushButton:hover{background:#EAF3FF;border-color:#89B2E0;}"
 )
 CASE_TAG_INACTIVE_SS = (
     "QPushButton{background:#FFFFFF;border:1px solid #D7E1ED;border-radius:14px;"
-    "color:#42566F;font-size:12px;font-weight:600;padding:0 14px;text-align:center;}"
+    "color:#42566F;font-size:12px;font-weight:600;padding:0 8px;text-align:center;}"
     "QPushButton:hover{background:#F7FAFD;border-color:#AFC5DD;color:#244C73;}"
 )
 CASE_QUICK_SS = (
@@ -228,12 +228,15 @@ class CaseTagChip(QPushButton):
         super().__init__(label_text, parent)
         self.case_index = index
         self._label_text = ""
+        self._display_label_text = ""
+        self._min_chip_width = 76
+        self._max_chip_width = 184
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setFlat(True)
         self.setFixedHeight(32)
-        self.setMinimumWidth(84)
-        self.setMaximumWidth(184)
+        self.setMinimumWidth(self._min_chip_width)
+        self.setMaximumWidth(self._max_chip_width)
 
         self.set_case_view({"label": label_text})
         self.set_active(active)
@@ -247,11 +250,13 @@ class CaseTagChip(QPushButton):
 
     def set_case_view(self, view):
         label = str(view.get("label", "") or "")
+        display_label = str(view.get("compact_label", "") or label)
         tooltip = str(view.get("tooltip", "") or label)
-        width = self._preferred_width(label)
+        width = self._preferred_width(display_label)
         self._label_text = label
+        self._display_label_text = display_label
         self.setFixedWidth(width)
-        self.setText(self._elided_label(label, width))
+        self.setText(self._elided_label(display_label, width))
         self.setToolTip(tooltip)
         self.updateGeometry()
 
@@ -260,12 +265,12 @@ class CaseTagChip(QPushButton):
 
     def _preferred_width(self, label):
         metrics = QFontMetrics(self.font())
-        natural = metrics.horizontalAdvance(label) + 28
-        return max(self.minimumWidth(), min(self.maximumWidth(), natural))
+        natural = metrics.horizontalAdvance(label) + 18
+        return max(self._min_chip_width, min(self._max_chip_width, natural))
 
     def _elided_label(self, label, width):
         metrics = QFontMetrics(self.font())
-        return metrics.elidedText(label, Qt.ElideRight, max(24, width - 28))
+        return metrics.elidedText(label, Qt.ElideRight, max(24, width - 18))
 
     def mouseDoubleClickEvent(self, event):
         text, ok = RenameDialog.getText(
@@ -424,7 +429,8 @@ class CaseTagNavigator(QWidget):
             label = f"{title} · {subtitle}" if subtitle else title
 
         tooltip = str(view.get("tooltip", "") or label)
-        return {"label": label, "tooltip": tooltip}
+        compact_label = str(view.get("compact_label", "") or "")
+        return {"label": label, "compact_label": compact_label, "tooltip": tooltip}
 
     def _row_count(self, width):
         chips = [chip for chip in self._chips if chip.isVisible()]

@@ -249,6 +249,7 @@ class CulvertPanel(QWidget):
         scroll.setWidget(inp_w)
         # 智能自适应宽度：根据内容 sizeHint 设置，不硬编码最大宽度
         scroll.setMinimumWidth(280)
+        scroll.setMaximumWidth(420)
         scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         splitter.addWidget(scroll)
 
@@ -845,6 +846,7 @@ class CulvertPanel(QWidget):
                 tooltip_lines.insert(3, f"直墙高度 H直={h_straight}m")
         return {
             "label": label,
+            "compact_label": f"{idx + 1}｜Q={q_text}",
             "tooltip": "\n".join(tooltip_lines),
         }
 
@@ -1455,6 +1457,7 @@ class CulvertPanel(QWidget):
         success_results = [(ci, p, r) for ci, p, r in self._all_results if r.get('success')]
         reset_section_axis_dialogs(self)
         self.section_fig.clear()
+        layout = None
         if not success_results:
             configure_section_grid_canvas(self, 1)
             self.section_canvas.draw()

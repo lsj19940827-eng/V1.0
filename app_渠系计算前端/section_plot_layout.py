@@ -12,6 +12,18 @@ _FIG_DPI = 100
 _ROW_HEIGHT_PX = 360
 _MIN_HEIGHT_PX = 600
 _ONE_COLUMN_MAX_WIDTH_PX = 700
+_VISIBLE_REFRESH_RETRY_DELAY_MS = 40
+_VISIBLE_REFRESH_MAX_RETRIES = 5
+_VISIBLE_REFRESH_WIDTH_TOLERANCE_PX = 8
+_VISIBLE_REFRESH_PARENT_GAP_PX = 32
+
+
+@dataclass(frozen=True)
+class SectionGridOptions:
+    """记录多工况断面图的可选展示策略。"""
+
+    row_height_px: int | None = None
+    axis_anchor: str = "C"
 
 
 @dataclass(frozen=True)
@@ -22,6 +34,7 @@ class SectionGridLayout:
     rows: int
     canvas_width_px: int
     canvas_height_px: int
+    axis_anchor: str = "C"
 
 
 @dataclass(frozen=True)
@@ -37,13 +50,17 @@ def choose_section_grid_layout(
     available_width_px: int | None = None,
     *,
     row_height_px: int | None = None,
+    layout_options: SectionGridOptions | None = None,
 ) -> SectionGridLayout:
     """按工况数和可用宽度决定断面图列数、行数和画布高度。"""
+    options = layout_options or SectionGridOptions(row_height_px=row_height_px)
+    effective_row_height = row_height_px if row_height_px is not None else options.row_height_px
     count = max(int(case_count or 0), 1)
     width = int(available_width_px or 0)
     if width <= 0:
         width = _DEFAULT_WIDTH_PX
-    row_height = max(int(row_height_px or _ROW_HEIGHT_PX), _ROW_HEIGHT_PX)
+    row_height = max(int(effective_row_height or _ROW_HEIGHT_PX), _ROW_HEIGHT_PX)
+    axis_anchor = str(options.axis_anchor or "C").strip().upper() or "C"
 
     if count == 1 or width < _ONE_COLUMN_MAX_WIDTH_PX:
         columns = 1
@@ -52,7 +69,7 @@ def choose_section_grid_layout(
 
     rows = (count + columns - 1) // columns
     height = max(_MIN_HEIGHT_PX, rows * row_height)
-    return SectionGridLayout(columns, rows, width, height)
+    return SectionGridLayout(columns, rows, width, height, axis_anchor=axis_anchor)
 
 
 def _read_widget_width(widget) -> int | None:
@@ -165,6 +182,17 @@ def _available_section_width(panel) -> int:
     viewport_width = _read_widget_width(_widget_viewport(scroll))
     scroll_width = _read_widget_width(scroll)
     scroll_visible = _widget_visible(scroll)
+    section_tab_index = getattr(panel, "_section_plot_tab_index", 1)
+    section_visible = _section_tab_is_visible(panel, section_tab_index)
+    best_container_width = _fallback_section_container_width(panel)
+
+    if not section_visible:
+        if best_container_width is not None:
+            return best_container_width
+        if scroll_width is not None:
+            return scroll_width
+        if viewport_width is not None:
+            return viewport_width
 
     # 已经显示的断面图页以 viewport 为准；隐藏页签读到的临时小宽度才允许回退父容器。
     if viewport_width is not None and (
@@ -177,7 +205,6 @@ def _available_section_width(panel) -> int:
         return scroll_width
 
     canvas = getattr(panel, "section_canvas", None)
-    best_container_width = _fallback_section_container_width(panel)
     if best_container_width is not None:
         return best_container_width
 
@@ -266,6 +293,66 @@ def _apply_section_canvas_size(panel, layout: SectionGridLayout) -> None:
             pass
 
 
+def apply_section_axis_alignment(
+    panel,
+    layout: SectionGridLayout | None = None,
+    *,
+    axis_anchor: str | None = None,
+) -> None:
+    """按布局配置调整所有子图在网格单元内的停靠位置。"""
+    anchor = axis_anchor
+    if anchor is None and layout is not None:
+        anchor = layout.axis_anchor
+    if anchor is None:
+        anchor = getattr(panel, "_section_plot_axis_anchor", "C")
+    anchor = str(anchor or "C").strip().upper() or "C"
+
+    fig = getattr(panel, "section_fig", None)
+    axes = getattr(fig, "axes", []) if fig is not None else []
+    for ax in axes:
+        setter = getattr(ax, "set_anchor", None)
+        if callable(setter):
+            try:
+                setter(anchor)
+            except Exception:
+                pass
+
+
+def apply_section_grid_spacing(
+    panel,
+    *,
+    multi: bool = True,
+    hspace: float | None = None,
+    wspace: float | None = None,
+) -> None:
+    """为断面图子图标题预留稳定边距，避免顶对齐后标题被裁切。"""
+    fig = getattr(panel, "section_fig", None)
+    adjust = getattr(fig, "subplots_adjust", None)
+    if not callable(adjust):
+        return
+    try:
+        if multi:
+            effective_hspace = 0.42 if hspace is None else float(hspace)
+            effective_wspace = 0.24 if wspace is None else float(wspace)
+            adjust(
+                left=0.07,
+                right=0.94,
+                top=0.92,
+                bottom=0.07,
+                hspace=effective_hspace,
+                wspace=effective_wspace,
+            )
+        else:
+            adjust(
+                left=0.08,
+                right=0.92,
+                top=0.90,
+                bottom=0.10,
+            )
+    except Exception:
+        pass
+
+
 def _connect_section_scroll_repaint(scroll, canvas) -> None:
     """连接纵向滚动刷新，降低 Qt 滚动缓存导致的残影风险。"""
     if scroll is None or canvas is None:
@@ -332,7 +419,17 @@ def _run_pending_section_resize_refresh(panel) -> None:
     """执行一次由 viewport resize 触发的延迟重排。"""
     setattr(panel, "_section_plot_resize_refresh_pending", False)
     section_tab_index = getattr(panel, "_section_plot_tab_index", 1)
-    refresh_section_plot_when_visible(panel, section_tab_index, force=True)
+    refreshed = refresh_section_plot_when_visible(panel, section_tab_index, force=True)
+    if refreshed and _section_visible_refresh_is_stable(panel):
+        _finish_section_visible_refresh(panel)
+
+
+def _mark_section_plot_needs_visible_refresh_if_hidden(panel) -> None:
+    """隐藏页签内绘图后标记一次可见刷新，避免首次显示沿用临时尺寸。"""
+    section_tab_index = getattr(panel, "_section_plot_tab_index", 1)
+    if not _section_tab_is_visible(panel, section_tab_index):
+        setattr(panel, "_section_plot_needs_visible_refresh", True)
+        setattr(panel, "_section_plot_visible_refresh_retries", 0)
 
 
 def _install_section_viewport_resize_refresh(panel) -> None:
@@ -408,6 +505,130 @@ def refresh_section_plot_when_visible(panel, current_index: int | None = None, *
     return True
 
 
+def _visible_section_widths(panel) -> tuple[int | None, int | None, int | None]:
+    """读取可见断面图的 viewport、滚动区和父容器宽度。"""
+    scroll = getattr(panel, "_section_plot_scroll", None)
+    viewport_width = _read_widget_width(_widget_viewport(scroll))
+    scroll_width = _read_widget_width(scroll)
+    container_width = _fallback_section_container_width(panel)
+    return viewport_width, scroll_width, container_width
+
+
+def _expected_visible_section_width(panel) -> int | None:
+    """判断首次可见刷新应等待的目标宽度。"""
+    viewport_width, scroll_width, container_width = _visible_section_widths(panel)
+    if viewport_width is not None:
+        if (
+            container_width is not None
+            and container_width > viewport_width + _VISIBLE_REFRESH_PARENT_GAP_PX
+        ):
+            return container_width
+        return viewport_width
+    if scroll_width is not None:
+        if (
+            container_width is not None
+            and container_width > scroll_width + _VISIBLE_REFRESH_PARENT_GAP_PX
+        ):
+            return container_width
+        return scroll_width
+    return container_width
+
+
+def _section_visible_refresh_is_stable(panel) -> bool:
+    """判断画布宽度是否已经追上断面图首次可见后的真实区域宽度。"""
+    layout = getattr(panel, "_section_plot_layout", None)
+    layout_width = getattr(layout, "canvas_width_px", None)
+    expected_width = _expected_visible_section_width(panel)
+    if layout_width is None or expected_width is None:
+        return True
+    return int(layout_width) >= int(expected_width) - _VISIBLE_REFRESH_WIDTH_TOLERANCE_PX
+
+
+def _section_visible_viewport_has_caught_up(panel) -> bool:
+    """判断当前 viewport 是否已经追上预渲染画布宽度。"""
+    layout = getattr(panel, "_section_plot_layout", None)
+    layout_width = getattr(layout, "canvas_width_px", None)
+    viewport_width, _, expected_width = _visible_section_widths(panel)
+    if layout_width is None or viewport_width is None:
+        return True
+    target_width = expected_width if expected_width is not None else layout_width
+    required_width = min(int(layout_width), int(target_width))
+    return int(viewport_width) >= required_width - _VISIBLE_REFRESH_WIDTH_TOLERANCE_PX
+
+
+def _section_visible_refresh_is_ready(panel) -> bool:
+    """判断首次可见刷新是否已可直接收口，无需完整重画。"""
+    return _section_visible_refresh_is_stable(panel) and _section_visible_viewport_has_caught_up(panel)
+
+
+def _finish_section_visible_refresh(panel) -> None:
+    """清除断面图首次可见刷新状态。"""
+    setattr(panel, "_section_plot_needs_visible_refresh", False)
+    setattr(panel, "_section_plot_visible_refresh_retries", 0)
+
+
+def _repaint_existing_section_plot(panel) -> None:
+    """复用已预渲染断面图，只刷新滚动区显示。"""
+    _reset_section_horizontal_scroll(panel)
+    _force_section_scroll_repaint(
+        getattr(panel, "_section_plot_scroll", None),
+        getattr(panel, "section_canvas", None),
+    )
+
+
+def _queue_section_tab_refresh(panel, section_tab_index: int, delay_ms: int) -> bool:
+    """安排一次断面图页签延迟刷新，避免同一轮重复排队。"""
+    if getattr(panel, "_section_plot_tab_refresh_pending", False):
+        return True
+    setattr(panel, "_section_plot_tab_refresh_pending", True)
+    _run_section_plot_refresh_later(
+        delay_ms,
+        lambda owner=panel, tab_index=section_tab_index: _run_pending_section_tab_refresh(
+            owner,
+            tab_index,
+        ),
+    )
+    return True
+
+
+def _run_pending_section_tab_refresh(panel, section_tab_index: int) -> None:
+    """执行一次由页签进入触发的延迟重排。"""
+    setattr(panel, "_section_plot_tab_refresh_pending", False)
+    current_index = _current_notebook_index(panel)
+    if int(current_index) != int(section_tab_index):
+        return
+    force = bool(getattr(panel, "_section_plot_needs_visible_refresh", False))
+    if force and _section_visible_refresh_is_stable(panel) and not _section_visible_viewport_has_caught_up(panel):
+        retries = int(getattr(panel, "_section_plot_visible_refresh_retries", 0)) + 1
+        setattr(panel, "_section_plot_visible_refresh_retries", retries)
+        if retries >= _VISIBLE_REFRESH_MAX_RETRIES:
+            _finish_section_visible_refresh(panel)
+            _repaint_existing_section_plot(panel)
+            return
+        _queue_section_tab_refresh(panel, section_tab_index, _VISIBLE_REFRESH_RETRY_DELAY_MS)
+        return
+
+    refreshed = refresh_section_plot_when_visible(panel, current_index, force=force)
+    if not force:
+        return
+    if not refreshed:
+        _finish_section_visible_refresh(panel)
+        return
+
+    if _section_visible_refresh_is_ready(panel):
+        _finish_section_visible_refresh(panel)
+        return
+
+    retries = int(getattr(panel, "_section_plot_visible_refresh_retries", 0)) + 1
+    setattr(panel, "_section_plot_visible_refresh_retries", retries)
+    if retries >= _VISIBLE_REFRESH_MAX_RETRIES:
+        _finish_section_visible_refresh(panel)
+        return
+
+    setattr(panel, "_section_plot_needs_visible_refresh", True)
+    _queue_section_tab_refresh(panel, section_tab_index, _VISIBLE_REFRESH_RETRY_DELAY_MS)
+
+
 def _current_notebook_index(panel) -> int:
     """读取当前页签索引，无法读取时默认断面图页。"""
     notebook = getattr(panel, "notebook", None)
@@ -428,6 +649,20 @@ def _run_section_plot_refresh_later(delay_ms: int, callback: Callable) -> None:
         callback()
         return
     QTimer.singleShot(delay_ms, callback)
+
+
+def _schedule_section_tab_refresh(panel, current_index: int | None) -> bool:
+    """进入断面图页时按需要延迟强制刷新。"""
+    section_tab_index = getattr(panel, "_section_plot_tab_index", 1)
+    if current_index is not None and int(current_index) != int(section_tab_index):
+        return False
+    if getattr(panel, "_section_plot_needs_visible_refresh", False):
+        if _section_visible_refresh_is_ready(panel):
+            _finish_section_visible_refresh(panel)
+            _repaint_existing_section_plot(panel)
+            return True
+        return _queue_section_tab_refresh(panel, section_tab_index, 0)
+    return refresh_section_plot_when_visible(panel, current_index)
 
 
 def schedule_section_plot_restore_refresh(panel) -> bool:
@@ -452,7 +687,7 @@ def connect_section_tab_refresh(panel, section_tab_index: int = 1) -> None:
     if not callable(connector):
         return
     setattr(panel, "_section_plot_tab_index", section_tab_index)
-    connector(lambda index: refresh_section_plot_when_visible(panel, index))
+    connector(lambda index: _schedule_section_tab_refresh(panel, index))
     _install_section_viewport_resize_refresh(panel)
     setattr(panel, "_section_plot_tab_refresh_connected", True)
 
@@ -463,10 +698,16 @@ def configure_section_grid_canvas(
     available_width_px: int | None = None,
     *,
     row_height_px: int | None = None,
+    layout_options: SectionGridOptions | None = None,
 ) -> SectionGridLayout:
     """调整 Matplotlib 画布高度，让多行断面图由滚动区承载。"""
     width = int(available_width_px or _available_section_width(panel))
-    layout = choose_section_grid_layout(case_count, width, row_height_px=row_height_px)
+    layout = choose_section_grid_layout(
+        case_count,
+        width,
+        row_height_px=row_height_px,
+        layout_options=layout_options,
+    )
     canvas = getattr(panel, "section_canvas", None)
 
     _apply_section_canvas_size(panel, layout)
@@ -474,6 +715,8 @@ def configure_section_grid_canvas(
     _force_section_scroll_repaint(getattr(panel, "_section_plot_scroll", None), canvas)
     setattr(panel, "_section_plot_layout", layout)
     setattr(panel, "_section_plot_layout_case_count", max(int(case_count or 0), 1))
+    setattr(panel, "_section_plot_axis_anchor", layout.axis_anchor)
+    _mark_section_plot_needs_visible_refresh_if_hidden(panel)
     return layout
 
 

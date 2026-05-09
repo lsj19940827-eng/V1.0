@@ -121,6 +121,7 @@ from app_渠系计算前端.section_comparison import (
 )
 from app_渠系计算前端.section_plotting import draw_section
 from app_渠系计算前端.section_plot_layout import (
+    apply_section_grid_spacing,
     clear_section_plot_state,
     configure_section_grid_canvas,
     connect_section_tab_refresh,
@@ -1080,6 +1081,7 @@ class OpenChannelPanel(QWidget):
         label = f"{custom or stype} · Q={q_text}"
         return {
             "label": label,
+            "compact_label": f"{idx + 1}｜Q={q_text}",
             "tooltip": f"{label}\n断面类型：{stype}\n设计流量 Q={q_text} m³/s",
         }
 
@@ -1585,7 +1587,7 @@ class OpenChannelPanel(QWidget):
         for idx_r in range(n, nrows * ncols):
             row, col = divmod(idx_r, ncols)
             axes[row][col].set_visible(False)
-        self.section_fig.tight_layout()
+        apply_section_grid_spacing(self, multi=True)
         self.section_canvas.draw()
 
     def _multi_case_section_plot_title(self, case_idx, section_type):

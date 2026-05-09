@@ -447,6 +447,20 @@ def test_update_section_plot_all_uses_two_columns_for_many_aqueduct_cases():
     assert len(dummy._section_axis_dialogs) == 10
 
 
+def test_update_section_plot_all_keeps_aqueduct_axes_centered():
+    """渡槽宽扁断面不应被顶对齐压到每个网格上沿。"""
+    all_results = [
+        (idx, {"section_type": "U形", "Q": 5.0 + idx}, _u_result())
+        for idx in range(6)
+    ]
+    dummy = _PlotAllDummy(all_results, [{"section_type": "U形"} for _ in range(6)])
+
+    aqueduct_panel_mod.AqueductPanel._update_section_plot_all(dummy)
+
+    assert dummy._section_plot_layout.axis_anchor == "C"
+    assert [ax.get_anchor() for ax in dummy.section_fig.axes] == ["C"] * 6
+
+
 def test_update_section_plot_all_uses_two_columns_for_five_aqueduct_cases():
     """渡槽 5 个成功工况也应固定 2 列。"""
     all_results = [
