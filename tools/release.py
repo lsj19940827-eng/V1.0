@@ -408,8 +408,9 @@ def step_git_commit_and_tag(tag_name: str, branch: str, commit_message: str):
         sys.exit(1)
 
     _run(["git", "tag", tag_name])
-    _run(["git", "push", "origin", branch])
-    _run(["git", "push", "origin", tag_name])
+    for remote in ("origin", "gitee"):
+        _run(["git", "push", remote, branch])
+        _run(["git", "push", remote, tag_name])
 
 
 def step_create_release(tag_name: str, release_name: str, token: str, changelog: str) -> dict:

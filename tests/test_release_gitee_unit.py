@@ -93,3 +93,27 @@ def test_build_version_data_includes_mirror_urls(tmp_path):
     assert version_data["download_url_mirrors"] == ["https://gitee.com/example/full.zip"]
     assert version_data["patch_url"] == "https://github.com/example/patch.zip"
     assert version_data["patch_url_mirrors"] == ["https://gitee.com/example/patch.zip"]
+
+
+def test_step_git_commit_and_tag_pushes_gitee_branch_and_tag(monkeypatch):
+    calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode: int = 0):
+            self.returncode = returncode
+
+    def fake_run(cmd, cwd=None, check=False, stdout=None, stderr=None, **kwargs):
+        calls.append(list(cmd))
+        if list(cmd[:4]) == ["git", "rev-parse", "-q", "--verify"]:
+            return Result(returncode=1)
+        return Result()
+
+    monkeypatch.setattr(release.subprocess, "run", fake_run)
+    monkeypatch.setattr(release, "_has_staged_changes", lambda: True)
+
+    release.step_git_commit_and_tag("v1.3.8", "master", "release: v1.3.8")
+
+    assert ["git", "push", "origin", "master"] in calls
+    assert ["git", "push", "origin", "v1.3.8"] in calls
+    assert ["git", "push", "gitee", "master"] in calls
+    assert ["git", "push", "gitee", "v1.3.8"] in calls
