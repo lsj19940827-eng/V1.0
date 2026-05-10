@@ -53,7 +53,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 压力管道特性表里的隧洞统计现在也按渠道级别分流：`xx渠` 只有在同一流量段里被 `有压管道 / 定向钻 / 顶管` 前后夹住的中间隧洞，才会计入主长度、隧洞座数和长度，前置隧洞和末尾隧洞都不再统计；`xx管` 继续按原有整线口径统计，若前段是无压隧洞，则主长度还会把该隧洞及其与首段有压结构之间的空档一起补回。
 普通纵断面与 xx管 现在都支持单独控制导出桩号小数位：普通模式默认 2 位，且会同步影响普通纵断面、IP 表、合并 DXF 里的 IP 表和 bzzh2 这类导出结果；xx管 继续只影响自己的纵断面桩号。
 表3顶部“转弯半径”现在是一个统一应用入口：导入后默认保留每一行自己的半径，只有点击“应用”才会批量覆盖真实导入行。
-应用内自动更新现在按“先验包、再安装、补丁落地后再验收”收口：`V1.3.0` 及以上版本优先补丁；补丁下载、校验或安装失败时，安装助手会自动改用完整安装包继续更新；只有完整包也失败时才显示失败页。补丁发布不再使用固定 64MB 拦截，而是要求补丁明显小于完整包，并继续限制删除文件数和总覆盖文件数；`siphon_autosave.json`、`data/autosave/` 和 `*_autosave.qxproj` 这类运行时文件不再参与补丁严格哈希校验，成功安装后也会保留；安装前仍会自动清理旧 `_update_sessions` 残留，窗口会继续显示“正在清理上次失败残留 / 正在校验更新包完整性 / 正在检查写入权限 / 正在统计安装目录大小 / 正在解压完整安装包或补丁包 / 正在校验补丁适用性（x/y）”这些细分状态，补丁大文件哈希时也会显示单文件百分比；如果旧残留清不掉，窗口会直接提示先关闭软件，仍失败再重启电脑。
+应用内自动更新现在按“先验包、再安装、补丁落地后再验收”收口：`V1.3.0` 及以上版本优先补丁；正式 `version.json` 仍由 GitHub Gist 提供，但发布包会同步上传到 GitHub Release 和 Gitee Release，客户端下载时先用主地址，失败或校验不通过时自动尝试 Gitee 镜像地址；补丁下载、校验或安装失败时，安装助手会自动改用完整安装包继续更新，完整包同样支持镜像地址兜底；只有完整包也失败时才显示失败页。补丁发布不再使用固定 64MB 拦截，而是要求补丁明显小于完整包，并继续限制删除文件数和总覆盖文件数；`siphon_autosave.json`、`data/autosave/` 和 `*_autosave.qxproj` 这类运行时文件不再参与补丁严格哈希校验，成功安装后也会保留；安装前仍会自动清理旧 `_update_sessions` 残留，窗口会继续显示“正在清理上次失败残留 / 正在校验更新包完整性 / 正在检查写入权限 / 正在统计安装目录大小 / 正在解压完整安装包或补丁包 / 正在校验补丁适用性（x/y）”这些细分状态，补丁大文件哈希时也会显示单文件百分比；如果旧残留清不掉，窗口会直接提示先关闭软件，仍失败再重启电脑。
 
 ## 技术架构
 
@@ -75,7 +75,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 倒虹吸交互：`app_渠系计算前端/siphon/panel.py` 统一负责 `D` 实时显示、指定管径生效后的实际流速反算、取消指定后的拟定流速恢复、工况内确认态隔离，以及倒虹吸手工局部系数的保存/恢复、来源索引回填、未采用提示；现在界面上方 `ξ₁ / ξ₂` 明确只表示渐变段系数，结构段表里的进水口/出水口系数只作为构件局部损失进入 `ΔZ2`；旧项目在唯一可恢复时会自动补回 `source_ip_index / source_long_node_index`，无法唯一恢复时会回退自动值并说明原因；`app_渠系计算前端/siphon/multi_siphon_dialog.py` 与 `推求水面线/managers/siphon_manager.py` 负责单页/多页配置保存与本次运行内的自动确认衔接。
 - 加大流量输入：`app_渠系计算前端/increase_input_helper.py` 统一负责“按比例 / 按Q加大”的换算、空值规则、灰色提示文案和结果摘要；6 个设计面板都复用这套 helper，并继续把内核输入收口到原有比例参数。
 - 自动化验证：`pytest`，测试文件集中在 `tests/`，其中 xx管 整线纵断面会同时覆盖界面、持久化、计算和导出链路。
-- 更新链路：`updater.py`、`update_helper.py`、`app_渠系计算前端/update_dialog.py`、`update_artifact_rules.py`、`tools/patch_policy.py`、`tools/build.py`、`tools/release.py`、`tools/release_snapshot.py` 共同负责版本检查、补丁/全量选择、下载包 checksum、运行时文件排除、旧会话残留清理、补丁落地后目标验收、独立安装窗口、补丁兜底和正式发版；其中 `tools/build.py` 现在还会在打包前按分组校验关键依赖，并显式收集 `latex2mathml` 这类 Word 导出运行时数据文件，避免安装包启动时因缺资源直接退出；`tools/patch_policy.py` 统一约束补丁大小和覆盖范围，`tools/backfill_patch_release.py` 与 `tools/disable_patch_release.py` 则分别负责“基于快照回补 patch”和“临时撤下高风险 patch 字段”。
+- 更新链路：`repo_config.py`、`updater.py`、`update_helper.py`、`app_渠系计算前端/update_dialog.py`、`update_artifact_rules.py`、`tools/patch_policy.py`、`tools/build.py`、`tools/release.py`、`tools/release_snapshot.py` 共同负责版本检查、补丁/全量选择、GitHub/Gitee 下载镜像、下载包 checksum、运行时文件排除、旧会话残留清理、补丁落地后目标验收、独立安装窗口、补丁兜底和正式发版；其中 `tools/release.py` 会在正式发版时同步创建 GitHub Release 和 Gitee Release，并把 Gitee 附件地址写入 `download_url_mirrors / patch_url_mirrors`；`tools/build.py` 现在还会在打包前按分组校验关键依赖，并显式收集 `latex2mathml` 这类 Word 导出运行时数据文件，避免安装包启动时因缺资源直接退出；`tools/patch_policy.py` 统一约束补丁大小和覆盖范围，`tools/backfill_patch_release.py` 与 `tools/disable_patch_release.py` 则分别负责“基于快照回补 patch”和“临时撤下高风险 patch 字段”。
 - 导出精度：普通模式导出桩号使用 `station_decimals`，xx管 导出桩号使用 `xxpipe_station_decimals`；两者都在导出链路单独格式化，不改主界面的通用桩号显示函数。
 - mixed route 持久化：`PressurePipeManager` 现同时保存 route 级 `longitudinal_nodes`、`raw_profile_polyline` 与 `profile_segments`，用来承接“原线直出 + 平面桩号采样 + 工程折点接口”的混合整线导出。
 - 水击验算：`推求水面线/core/pressure_pipe_calc.py` 现按 GB/T 20203-2017 波速公式 `a = 1425 / sqrt(1 + (K / E) * (D / t) * cp)` 计算水击波速，默认 `K=2.06×10⁹ Pa`。钢管、铸铁管、球墨铸铁管、玻璃钢夹砂管、HDPE/PE、PVC/PVC-U 等按 `cp=1`；钢筋混凝土管、预应力钢筒混凝土管和 PCCP 管有 `a0` 时按 `cp=1/(1+0.95a0)` 自动折算，未填 `a0` 时按 `cp=1` 简化计算并在状态、步骤和导出备注中提示。整线水锤按末端阀门启闭理解，保留 `Ts >= 40L/a`（整线按 `40×Σ(Li/ai)`）免验算规则；未免验算时新增等价参数 `L=ΣLi`、`am=L/Σ(Li/ai)`、`vm=Σ(Li vi)/L`，用 `ρ=am vm/(2gH0)`、`σ=L vm/(gH0Ts)` 判别图 `1-3-3` 水击类型并形成 `Hmax / Hmin`。默认允许压力为 `1.0 MPa`，换算允许压力水头 `101.9368m`；承压按管底 `Hmax - Zc + D/2 <= h_allow` 校核，负压/满管按管顶 `Hmin - Zc - D/2 >= 0` 校核。直接水击和一相水击当前采用工程近似沿线分布，结果会明确标注。
@@ -104,7 +104,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 ## 部署方法和命令
 
 当前项目主要作为本地桌面工具使用，日常开发通常不做云端部署。
-正式发版按仓库约定使用 `D:\V1.0\.venv\Scripts\python.exe tools/release.py`，也可通过 `发版工具.bat` 进入标准发版流程；正式打包和发版前会先校验 Word 导出依赖，缺失时直接中止并提示安装命令。发版成功后会额外在 `.release-snapshots/` 固化本次正式包、manifest 和 version.json；若线上 patch 需要临时撤下或事后回补，分别使用 `tools/disable_patch_release.py` 与 `tools/backfill_patch_release.py`。
+正式发版按仓库约定使用 `D:\V1.0\.venv\Scripts\python.exe tools/release.py`，也可通过 `发版工具.bat` 进入标准发版流程；正式打包和发版前会先校验 Word 导出依赖，并要求 `.env` 或环境变量同时提供 `GITHUB_TOKEN` 与 `GITEE_TOKEN`。发版成功后会额外在 `.release-snapshots/` 固化本次正式包、manifest 和 version.json；若线上 patch 需要临时撤下或事后回补，分别使用 `tools/disable_patch_release.py` 与 `tools/backfill_patch_release.py`。
 
 ## 测试方法和常用命令
 
@@ -135,6 +135,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 运行本次“中段借到前缀失败”回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_chain_extractor_unit.py tests/test_pressure_pipe_chain_apply_unit.py tests/test_pressure_pipe_result_report_unit.py tests/test_external_head_loss_unit.py -q`
 - 运行本次水击验算回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_pressure_pipe_water_hammer_core_unit.py tests/test_pressure_pipe_water_hammer_dialog_unit.py tests/test_pressure_pipe_water_hammer_velocity_unit.py tests/test_water_profile_transition_ready_unit.py -q`
 - 运行更新链路回归：`$env:PYTEST_ADDOPTS='--basetemp=D:\V1.0\.pytest_tmp\update-regression'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py tests/test_updater_install_flow_unit.py tests/test_update_helper_unit.py tests/test_updater_versioning_unit.py tests/test_release_snapshot_unit.py -q`
+- 运行 Gitee 双源更新回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_release_gitee_unit.py tests/test_updater_versioning_unit.py tests/test_updater_install_flow_unit.py tests/test_release_snapshot_unit.py -q --basetemp=D:\V1.0\.pytest_tmp\gitee-regression`
 - 运行本次构建依赖回归：`D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_build_patch_floor_unit.py -q --basetemp=D:\V1.0\.pytest_tmp\build-plan`
 - 运行本次复式梯形回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_open_channel_compound_trapezoid_kernel_unit.py tests/test_open_channel_compound_trapezoid_panel_unit.py tests/test_open_channel_compound_trapezoid_dxf_unit.py tests/test_batch_compound_trapezoid_unit.py tests/test_compound_trapezoid_type_support_unit.py tests/test_compound_trapezoid_shared_hydraulic_unit.py tests/test_water_profile_coord_precision_unit.py -q`
 - 运行本次平底圆形隧洞收口回归：`$env:PYTHONPATH='D:\V1.0;D:\V1.0\calc_渠系计算算法内核'; D:\V1.0\.venv\Scripts\python.exe -m pytest tests/test_tunnel_flat_bottom_circular_kernel_unit.py tests/test_tunnel_flat_bottom_circular_shared_hydraulic_unit.py tests/test_tunnel_flat_bottom_circular_dxf_unit.py tests/test_tunnel_flat_bottom_circular_panel_batch_unit.py tests/test_tunnel_flat_bottom_circular_table3_xxpipe_unit.py tests/test_tunnel_flat_bottom_circle_section_summary_unit.py tests/test_tunnel_kernel.py tests/test_tunnel_dxf_export_unit.py tests/test_tunnel_panel_plot_unit.py tests/test_formula_renderer_result_pages_unit.py -q`
@@ -147,6 +148,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 
 ## 搜索记录
 
+- 2026-05-10：本次为正式发版新增 Gitee 镜像仓库和 GitHub/Gitee 双下载源；README 已有更新链路记录，继续复用仓库现有更新器、发版脚本和补丁安全策略，只联网核对 Gitee 官方 OpenAPI Release/附件上传接口，未重复执行 skills.sh 或 GitHub 外部方案搜索。
 - 2026-05-08：本次优化明渠、渡槽、隧洞、暗涵多工况界面断面图清晰度，新增默认 2 列、窄窗口 1 列、滚动承载和双击大图；README 已有搜索记录，继续基于现有共享断面图底座和四类面板测试实现，未重复执行 skills.sh 或 GitHub 外部方案搜索。
 - 2026-05-08：本次把明渠、渡槽、隧洞、暗涵的单工况界面断面图统一为“单图叠加加大水位”；README 已有搜索记录，继续基于现有共享断面图底座和四类面板测试实现，未重复执行 skills.sh 或 GitHub 外部方案搜索。
 - 2026-05-07：本次把明渠、渡槽、隧洞、暗涵的界面断面图收口到共享几何与 matplotlib 绘图模块；README 已有搜索记录，继续基于仓库现有四类面板、隧洞几何 helper 和既有断面图测试实现，未重复执行 skills.sh 或 GitHub 外部方案搜索。
@@ -196,6 +198,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 批量计算已新增“明渠-复式梯形”，主表、参数弹窗、Excel 导入导出和结果说明全部支持新断面。
 - 推求水面线已补上“明渠-复式梯形”的最小兼容，能保留 `m1/B1/m2/B2/m3/h1` 并按新公式参与水力计算。
 - 构建和发版现在会在进入 PyInstaller 前先校验 Word 导出依赖，缺失 `python-docx / latex2mathml / lxml` 时直接中止并提示安装命令；打包时还会把 `latex2mathml` 的运行时文本资源一并带进安装包，避免主程序启动时因为缺少 `unimathsymbols.txt` 直接退出。
+- 已支持 GitHub/Gitee 双下载源：正式发版会把同一份全量包和安全补丁包同步上传到 GitHub Release 与 Gitee Release，`version.json` 继续保留旧字段，并额外写入 `download_url_mirrors / patch_url_mirrors` 作为备用下载地址；客户端按同一 SHA256 校验所有来源。
 - 已支持对已发布正式版单独回补 patch：当前通过 `tools/backfill_patch_release.py` 基于 `.release-snapshots/` 中固化的正式包、manifest 和 `version.json` 回补 patch，补挂到现有 GitHub Release，并只补齐 Gist 里的 patch 字段，不再依赖会漂移的本地 `dist`。
 - 表3普通行、渐变段行、累计损失和水位递推的基础链路已接通。
 - 倒虹吸和命名有压管道组支持外部专项计算后回写总损失。
@@ -245,7 +248,7 @@ xx管 夹带隧洞的导出口径已经收口为“按结构拆成上下两张�
 - 图2“管中心线高程（米）”继续在导出时按当前平面桩号现算；节点 `station_MC` 缺失时只对个别节点按平面累计距离回退，整线都没有有效桩号锚点时直接报错。
 - 普通纵断面导出现在新增 `station_decimals`，默认保留 2 位小数；同一设置会同步影响普通纵断面、IP 表、合并 DXF 里的 IP 表和 bzzh2 的桩号输出，但不会改表3和说明文字的原有显示。
 - 表3顶部“转弯半径”改成“待应用统一值”：导入混合半径时保持空白，点击“自动”只填栏位，点击“应用”才统一覆盖真实导入行。
-- 自动更新链路已完成一轮全面加固：补丁现在只覆盖 `1.3.0+` 近版本，更老版本仍可用全量包更新；同时会额外排除运行时自动保存文件、给全量包和 patch 增加发布级 checksum、在补丁应用完成后按 `target_files` 再做一次目标版本验收，并把“无需回滚 / 已成功回滚 / 回滚失败”三种结果分开提示。构建、正式发版、发版 GUI 和回补 patch 都共用补丁安全策略：删除文件过多、总覆盖量过大或补丁接近完整包时直接跳过 patch，只发布全量包；补丁安装失败且回滚安全时，安装助手会自动下载完整包继续安装。补丁适用性校验遇到大文件哈希时会继续显示单文件百分比。正式发版后会额外固化 `.release-snapshots/` 快照，后续回补 patch 不再依赖会漂移的本地 `dist`。
+- 自动更新链路已完成一轮全面加固：补丁现在只覆盖 `1.3.0+` 近版本，更老版本仍可用全量包更新；同时会额外排除运行时自动保存文件、给全量包和 patch 增加发布级 checksum、在补丁应用完成后按 `target_files` 再做一次目标版本验收，并把“无需回滚 / 已成功回滚 / 回滚失败”三种结果分开提示。构建、正式发版和回补 patch 都共用补丁安全策略：删除文件过多、总覆盖量过大或补丁接近完整包时直接跳过 patch，只发布全量包；正式发版会同步 GitHub 与 Gitee 下载镜像，补丁或全量包下载失败时会自动尝试备用地址，补丁安装失败且回滚安全时，安装助手会自动下载完整包继续安装。补丁适用性校验遇到大文件哈希时会继续显示单文件百分比。正式发版后会额外固化 `.release-snapshots/` 快照，后续回补 patch 不再依赖会漂移的本地 `dist`。
 - 明渠设计面板现已支持 `复式梯形`：输入 `m1 / B1 / m2 / B2 / m3 / h1` 后可直接反算设计水深、加大流量水深、断面图、TXT/Word/DXF 导出。
 - 表3基础设置区的“设计流量 / 加大流量”现已升级为共享当前流量段的只读查看组：主界面默认只显示当前段并支持下拉切换，不再提供“编辑全部”入口；当上游来源刷新设计流量时会整体重算加大流量，批量同步和项目重开后当前段都回到第一段。
 - Excel 模板里的手工 `Q加大` 已改为 `J1` 单格逗号输入，空位表示该段自动计算；旧版横向列对格式继续兼容。

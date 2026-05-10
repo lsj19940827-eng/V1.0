@@ -237,6 +237,71 @@ def test_download_update_rejects_checksum_mismatch(tmp_path, monkeypatch):
     assert not (dest_dir / source_zip.name).exists()
 
 
+def test_download_update_tries_mirror_after_primary_failure(tmp_path, monkeypatch):
+    source_zip = tmp_path / "source.zip"
+    source_zip.write_bytes(b"fake-update-package")
+    dest_dir = tmp_path / "downloads"
+    dest_dir.mkdir()
+    calls: list[str] = []
+
+    def fake_download(url, download_dir, progress_callback=None, cancel_event=None):
+        _ = progress_callback
+        _ = cancel_event
+        calls.append(url)
+        if "github.com" in url:
+            raise OSError("primary unavailable")
+        target = Path(download_dir) / source_zip.name
+        shutil.copy2(source_zip, target)
+        return str(target)
+
+    monkeypatch.setattr(updater, "_download_from_url", fake_download)
+
+    result = updater.download_update(
+        [
+            "https://github.com/example/full.zip",
+            "https://gitee.com/example/full.zip",
+        ],
+        dest_dir=str(dest_dir),
+        expected_sha256=updater._sha256_file(str(source_zip)),
+    )
+
+    assert Path(result).read_bytes() == b"fake-update-package"
+    assert calls == [
+        "https://github.com/example/full.zip",
+        "https://gitee.com/example/full.zip",
+    ]
+
+
+def test_download_update_removes_bad_primary_before_using_mirror(tmp_path, monkeypatch):
+    dest_dir = tmp_path / "downloads"
+    dest_dir.mkdir()
+    good_zip = tmp_path / "good.zip"
+    good_zip.write_bytes(b"good-update-package")
+
+    def fake_download(url, download_dir, progress_callback=None, cancel_event=None):
+        _ = progress_callback
+        _ = cancel_event
+        target = Path(download_dir) / "update.zip"
+        if "github.com" in url:
+            target.write_bytes(b"bad-update-package")
+        else:
+            shutil.copy2(good_zip, target)
+        return str(target)
+
+    monkeypatch.setattr(updater, "_download_from_url", fake_download)
+
+    result = updater.download_update(
+        [
+            "https://github.com/example/full.zip",
+            "https://gitee.com/example/full.zip",
+        ],
+        dest_dir=str(dest_dir),
+        expected_sha256=updater._sha256_file(str(good_zip)),
+    )
+
+    assert Path(result).read_bytes() == b"good-update-package"
+
+
 def test_run_update_session_rolls_back_full_install_on_failure(tmp_path, monkeypatch):
     app_dir = tmp_path / "app"
     app_dir.mkdir()

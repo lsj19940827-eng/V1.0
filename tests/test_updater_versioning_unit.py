@@ -65,6 +65,47 @@ def test_updateinfo_prefers_direct_urls_when_available():
     assert info.patch_url == "https://github.com/example/patch.zip"
 
 
+def test_updateinfo_reads_mirror_urls_without_breaking_primary_urls():
+    info = updater.UpdateInfo(
+        {
+            "latest_version": "1.0.9.1",
+            "download_url_direct": "https://github.com/example/full.zip",
+            "download_url_mirrors": [
+                "https://gitee.com/example/full.zip",
+                "https://github.com/example/full.zip",
+            ],
+            "patch_url_direct": "https://github.com/example/patch.zip",
+            "patch_url_mirrors": [
+                "https://gitee.com/example/patch.zip",
+            ],
+        }
+    )
+
+    assert info.download_url == "https://github.com/example/full.zip"
+    assert info.patch_url == "https://github.com/example/patch.zip"
+    assert info.download_urls == [
+        "https://github.com/example/full.zip",
+        "https://gitee.com/example/full.zip",
+    ]
+    assert info.patch_urls == [
+        "https://github.com/example/patch.zip",
+        "https://gitee.com/example/patch.zip",
+    ]
+
+
+def test_updateinfo_keeps_legacy_single_url_shape_when_no_mirrors():
+    info = updater.UpdateInfo(
+        {
+            "latest_version": "1.0.9.1",
+            "download_url": "https://example.com/full.zip",
+            "patch_url": "https://example.com/patch.zip",
+        }
+    )
+
+    assert info.download_urls == ["https://example.com/full.zip"]
+    assert info.patch_urls == ["https://example.com/patch.zip"]
+
+
 def test_updateinfo_reads_package_checksums():
     info = updater.UpdateInfo(
         {

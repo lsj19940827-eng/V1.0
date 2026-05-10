@@ -52,7 +52,7 @@ class DownloadThread(QThread):
     error = Signal(str)           # 错误信息
     cancelled = Signal()          # 用户取消
 
-    def __init__(self, url: str, expected_sha256: str = "", parent=None):
+    def __init__(self, url, expected_sha256: str = "", parent=None):
         super().__init__(parent)
         self.url = url
         self.expected_sha256 = expected_sha256
@@ -467,7 +467,7 @@ class UpdateDialog(QDialog):
         info = self._update_info
         if self._is_downgrade:
             self._is_patch = False
-            url = info.download_url
+            url = info.download_urls
             expected_sha256 = info.download_sha256
             size_text = f"{info.file_size_mb:.1f} MB" if info.file_size_mb else "未知大小"
             label = f"正在下载正式版（降级）({size_text}) ..."
@@ -478,12 +478,12 @@ class UpdateDialog(QDialog):
             and not self._patch_failed
         ):
             self._is_patch = True
-            url = info.patch_url
+            url = info.patch_urls
             expected_sha256 = info.patch_sha256
             label = f"正在下载增量补丁包 ({info.patch_size_mb:.1f} MB) ..."
         else:
             self._is_patch = False
-            url = info.download_url
+            url = info.download_urls
             expected_sha256 = info.download_sha256
             label = f"正在下载全量包 ({info.file_size_mb:.1f} MB) ..."
 
@@ -594,7 +594,7 @@ class UpdateDialog(QDialog):
                 f"正在下载全量包 ({info.file_size_mb:.1f} MB) ..."
             )
             self._download_thread = DownloadThread(
-                self._update_info.download_url,
+                self._update_info.download_urls,
                 self._update_info.download_sha256,
                 self,
             )
@@ -717,6 +717,7 @@ class UpdateDialog(QDialog):
                 current_version=APP_VERSION,
                 expected_package_sha256=expected_sha256,
                 full_download_url=self._update_info.download_url if self._update_info else "",
+                full_download_urls=self._update_info.download_urls if self._update_info else [],
                 full_package_sha256=self._update_info.download_sha256 if self._update_info else "",
                 full_package_size_mb=self._update_info.file_size_mb if self._update_info else 0,
             )

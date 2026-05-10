@@ -2,7 +2,7 @@
 """
 一键正式发版脚本
 
-流程：bump 版本 -> 打包 -> git commit/tag -> 创建 GitHub Release -> 上传 zip -> 更新正式 Gist。
+流程：bump 版本 -> 打包 -> git commit/tag -> 创建 GitHub/Gitee Release -> 上传 zip -> 更新正式 Gist。
 仅支持 master 分支正式发布；不再提供预发布/测试 Gist 通道。
 """
 
@@ -37,7 +37,15 @@ PROJECT_VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe
 sys.path.insert(0, PROJECT_ROOT)
 
 from version import APP_NAME_EN
-from repo_config import GITHUB_OWNER, GITHUB_REPO, GIST_ID, DOWNLOAD_PROXIES
+from repo_config import (
+    GITHUB_OWNER,
+    GITHUB_REPO,
+    GIST_ID,
+    DOWNLOAD_PROXIES,
+    GITEE_OWNER,
+    GITEE_REPO,
+    GITEE_API_BASE,
+)
 from tools import patch_policy, release_snapshot
 
 
@@ -67,6 +75,15 @@ def _get_token() -> str:
     token = os.environ.get("GITHUB_TOKEN", "") or _load_env().get("GITHUB_TOKEN", "")
     if not token:
         print("[错误] 未找到 GITHUB_TOKEN")
+        sys.exit(1)
+    return token
+
+
+def _get_gitee_token() -> str:
+    """读取 Gitee 私人令牌；只允许来自本地环境或 .env。"""
+    token = os.environ.get("GITEE_TOKEN", "") or _load_env().get("GITEE_TOKEN", "")
+    if not token:
+        print("[错误] 未找到 GITEE_TOKEN")
         sys.exit(1)
     return token
 
@@ -142,6 +159,7 @@ def _build_version_data(version: str, urls: dict, assets: dict, changelog: str) 
         "download_url": download_url_direct,
         "download_url_direct": download_url_direct,
         "download_url_proxy": _proxied_url(download_url_direct),
+        "download_url_mirrors": list(urls.get("download_url_mirrors", []) or []),
         "download_sha256": release_snapshot.sha256_file(assets["full_zip"]),
         "changelog": changelog or f"V{version} 版本发布",
         "release_date": date.today().isoformat(),
@@ -167,6 +185,7 @@ def _build_version_data(version: str, urls: dict, assets: dict, changelog: str) 
         version_data["patch_url"] = patch_url_direct
         version_data["patch_url_direct"] = patch_url_direct
         version_data["patch_url_proxy"] = _proxied_url(patch_url_direct)
+        version_data["patch_url_mirrors"] = list(urls.get("patch_url_mirrors", []) or [])
         version_data["patch_size_mb"] = assets.get("patch_size_mb", 0)
         version_data["min_patch_version"] = assets.get("patch_min_version", "")
         version_data["patch_base_version"] = assets.get("patch_min_version", "")
@@ -199,6 +218,54 @@ def _github_api(method: str, url: str, token: str, data=None, raw_body=None,
         raise
 
 
+def _gitee_api(method: str, url: str, token: str, data=None, raw_body=None,
+               content_type: str = "application/x-www-form-urlencoded") -> dict:
+    """调用 Gitee OpenAPI；附件上传用 curl 走 multipart，避免把大包读入内存。"""
+    if content_type == "multipart/form-data":
+        if not data or not data.get("file_path"):
+            raise RuntimeError("Gitee 附件上传缺少 file_path")
+        curl = r"C:\Windows\System32\curl.exe"
+        cmd = [
+            curl, "-sS",
+            "-X", method,
+            "-F", f"access_token={token}",
+            "-F", f"file=@{data['file_path']}",
+            "-o", "-",
+            url,
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"gitee curl upload failed: exit {result.returncode}")
+        payload = result.stdout.decode("utf-8", errors="replace")
+        return json.loads(payload) if payload else {}
+
+    body = None
+    request_url = url
+    if data is not None:
+        form_data = dict(data)
+        form_data["access_token"] = token
+        body = urllib.parse.urlencode(form_data).encode("utf-8")
+    elif raw_body is not None:
+        body = raw_body
+    else:
+        sep = "&" if "?" in request_url else "?"
+        request_url = f"{request_url}{sep}access_token={urllib.parse.quote(token)}"
+
+    req = urllib.request.Request(request_url, data=body, method=method)
+    req.add_header("User-Agent", APP_NAME_EN)
+    if body is not None:
+        req.add_header("Content-Type", content_type)
+
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            payload = resp.read().decode("utf-8")
+            return json.loads(payload) if payload else {}
+    except urllib.error.HTTPError as exc:
+        err_body = exc.read().decode("utf-8", errors="replace")
+        print(f"  [Gitee API 错误] {exc.code}: {err_body[:500]}")
+        raise
+
+
 def _upload_release_asset(upload_url: str, file_path: str, token: str) -> str:
     filename = os.path.basename(file_path)
     size_mb = os.path.getsize(file_path) / (1024 * 1024)
@@ -227,6 +294,29 @@ def _upload_release_asset(upload_url: str, file_path: str, token: str) -> str:
     if not download_url:
         raise RuntimeError(f"upload response missing browser_download_url: {resp}")
 
+    print("  [OK]")
+    return download_url
+
+
+def _upload_gitee_release_asset(release_id: int, file_path: str, token: str) -> str:
+    """上传 Gitee Release 附件并返回浏览器下载地址。"""
+    filename = os.path.basename(file_path)
+    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    url = (
+        f"{GITEE_API_BASE}/repos/{urllib.parse.quote(GITEE_OWNER, safe='')}/"
+        f"{urllib.parse.quote(GITEE_REPO, safe='')}/releases/{release_id}/attach_files"
+    )
+    print(f"  Gitee 上传: {filename} ({size_mb:.1f} MB)")
+    resp = _gitee_api(
+        "POST",
+        url,
+        token,
+        data={"file_path": file_path},
+        content_type="multipart/form-data",
+    )
+    download_url = resp.get("browser_download_url", "")
+    if not download_url:
+        raise RuntimeError(f"gitee upload response missing browser_download_url: {resp}")
     print("  [OK]")
     return download_url
 
@@ -364,6 +454,63 @@ def step_upload_assets(release: dict, assets: dict, token: str) -> dict:
     return urls
 
 
+def step_create_gitee_release_and_upload_assets(
+    tag_name: str,
+    release_name: str,
+    changelog: str,
+    assets: dict,
+    token: str,
+    branch: str = "master",
+) -> dict:
+    """创建 Gitee Release 并上传同一份全量包/补丁包，返回 version.json 的镜像字段。"""
+    print(f"\n{'=' * 60}")
+    print(f"  [Gitee] 创建 Release 并上传发布包 {tag_name}")
+    print(f"{'=' * 60}\n")
+
+    release_url = (
+        f"{GITEE_API_BASE}/repos/{urllib.parse.quote(GITEE_OWNER, safe='')}/"
+        f"{urllib.parse.quote(GITEE_REPO, safe='')}/releases"
+    )
+    release_obj = _gitee_api(
+        "POST",
+        release_url,
+        token,
+        data={
+            "tag_name": tag_name,
+            "name": release_name,
+            "body": changelog or f"{release_name} 版本发布",
+            "prerelease": "false",
+            "target_commitish": branch,
+        },
+    )
+    release_id = release_obj.get("id")
+    if not release_id:
+        raise RuntimeError(f"Gitee Release 创建失败：{release_obj}")
+
+    urls = {
+        "download_url_mirrors": [
+            _upload_gitee_release_asset(int(release_id), assets["full_zip"], token)
+        ]
+    }
+    if "patch_zip" in assets and os.path.exists(assets["patch_zip"]):
+        should_skip_patch, skip_reason = patch_policy.should_skip_universal_patch(
+            {
+                "changed_count": assets.get("patch_changed_count", 0),
+                "deleted_count": assets.get("patch_deleted_count", 0),
+                "size_mb": assets.get("patch_size_mb", 0),
+                "source_versions": assets.get("patch_source_versions", []),
+            },
+            full_size_mb=assets.get("full_size_mb", 0),
+        )
+        if should_skip_patch:
+            print(f"  [patch] Gitee 同步跳过通用补丁包：{skip_reason}")
+        else:
+            urls["patch_url_mirrors"] = [
+                _upload_gitee_release_asset(int(release_id), assets["patch_zip"], token)
+            ]
+    return urls
+
+
 def step_update_gist(version: str, urls: dict, assets: dict, token: str,
                      changelog: str, gist_id: str) -> dict:
     print(f"\n{'=' * 60}")
@@ -382,6 +529,7 @@ def step_update_gist(version: str, urls: dict, assets: dict, token: str,
 
 def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: str = ""):
     token = _get_token()
+    gitee_token = _get_gitee_token()
 
     print("验证 GitHub Token...", end=" ", flush=True)
     try:
@@ -390,6 +538,16 @@ def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: 
     except Exception:
         print("FAIL")
         print("[错误] GitHub Token 无效或网络不可用")
+        sys.exit(1)
+    print()
+
+    print("验证 Gitee Token...", end=" ", flush=True)
+    try:
+        _gitee_api("GET", f"{GITEE_API_BASE}/user", gitee_token)
+        print("OK")
+    except Exception:
+        print("FAIL")
+        print("[错误] Gitee Token 无效或网络不可用")
         sys.exit(1)
     print()
 
@@ -426,6 +584,16 @@ def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: 
     step_git_commit_and_tag(tag_name, branch, commit_message)
     release_obj = step_create_release(tag_name, release_name, token, changelog)
     urls = step_upload_assets(release_obj, assets, token)
+    urls.update(
+        step_create_gitee_release_and_upload_assets(
+            tag_name,
+            release_name,
+            changelog,
+            assets,
+            gitee_token,
+            branch=branch,
+        )
+    )
     version_data = step_update_gist(new_ver, urls, assets, token, changelog, gist_id=GIST_ID)
     snapshot_file = release_snapshot.write_release_snapshot(
         version=new_ver,
@@ -442,6 +610,7 @@ def release(level: str, changelog: str = "", no_bump: bool = False, tag_suffix: 
     print(f"\n{'=' * 60}")
     print(f"  {tag_name} 正式发布完成")
     print("  - GitHub: 已发布")
+    print("  - Gitee: 已同步镜像")
     print("  - Gist通道: prod")
     print(f"{'=' * 60}\n")
 

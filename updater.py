@@ -37,7 +37,7 @@ import zipfile
 import uuid
 import subprocess
 import fnmatch
-from dataclasses import dataclass, asdict, replace
+from dataclasses import dataclass, asdict, replace, field
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -95,6 +95,33 @@ def is_newer(remote_ver: str, local_ver: str = APP_VERSION) -> bool:
     return compare_versions(remote_ver, local_ver) > 0
 
 
+def _coerce_url_list(value) -> list[str]:
+    """把 version.json 中的单个或多个下载地址整理为列表。"""
+    if not value:
+        return []
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        return []
+    urls: list[str] = []
+    for item in items:
+        url = str(item or "").strip()
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _merge_url_candidates(primary: str, mirrors) -> list[str]:
+    """主地址在前，镜像地址在后，去重后供下载重试。"""
+    urls = _coerce_url_list(primary)
+    for url in _coerce_url_list(mirrors):
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
 # ============================================================
 # 妫€鏌ユ洿鏂?# ============================================================
 class UpdateInfo:
@@ -117,6 +144,16 @@ class UpdateInfo:
         self.min_patch_version: str = data.get("min_patch_version", "")
         self.download_url_proxy: str = data.get("download_url_proxy", "")
         self.patch_url_proxy: str = data.get("patch_url_proxy", "")
+        self.download_url_mirrors: list[str] = _coerce_url_list(data.get("download_url_mirrors", []))
+        self.patch_url_mirrors: list[str] = _coerce_url_list(data.get("patch_url_mirrors", []))
+        self.download_urls: list[str] = _merge_url_candidates(
+            self.download_url,
+            self.download_url_mirrors,
+        )
+        self.patch_urls: list[str] = _merge_url_candidates(
+            self.patch_url,
+            self.patch_url_mirrors,
+        )
         self.allow_downgrade: bool = False
         # 兼容旧版 version.json 中的 patch_base_version 字段
         if not self.min_patch_version:
@@ -556,24 +593,14 @@ def _verify_package_checksum(zip_path: str, expected_sha256: str):
         raise UpdatePreparationError("下载的更新包校验失败，请重新下载后再试。")
 
 
-def download_update(
+def _download_update_one_url(
     url: str,
-    dest_dir: Optional[str] = None,
+    dest_dir: str,
     progress_callback: Optional[Callable[[int, int], None]] = None,
-    source: str = "",
     expected_sha256: str = "",
     cancel_event=None,
 ) -> str:
-    """
-    Download update zip to local temp directory.
-    source is kept for backward compatibility and is ignored now.
-    如果代理下载失败，自动去掉代理前缀回退到 GitHub 直连重试。
-    支持 cancel_event (threading.Event) 取消下载。
-    """
-    _ = source
-    if dest_dir is None:
-        dest_dir = tempfile.mkdtemp(prefix="canal_update_")
-
+    """下载单个候选地址，并在成功后校验 checksum。"""
     download_path = ""
     try:
         download_path = _download_from_url(url, dest_dir, progress_callback, cancel_event)
@@ -633,6 +660,49 @@ def download_update(
             pass
         raise
 
+
+def download_update(
+    url: str | list[str] | tuple[str, ...],
+    dest_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    source: str = "",
+    expected_sha256: str = "",
+    cancel_event=None,
+) -> str:
+    """
+    Download update zip to local temp directory.
+    source is kept for backward compatibility and is ignored now.
+    如果代理下载失败，自动去掉代理前缀回退到 GitHub 直连重试。
+    支持 cancel_event (threading.Event) 取消下载。
+    """
+    _ = source
+    if dest_dir is None:
+        dest_dir = tempfile.mkdtemp(prefix="canal_update_")
+
+    candidates = _coerce_url_list(url)
+    if not candidates:
+        raise UpdatePreparationError("没有可用的更新包下载地址。")
+
+    last_error: Optional[BaseException] = None
+    for candidate in candidates:
+        try:
+            return _download_update_one_url(
+                candidate,
+                dest_dir,
+                progress_callback,
+                expected_sha256,
+                cancel_event,
+            )
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            print(f"[updater] 下载源失败，尝试下一个源: {candidate}")
+
+    if last_error:
+        raise last_error
+    raise UpdatePreparationError("所有更新包下载地址都不可用。")
+
 # ============================================================
 # 安装会话 / 独立更新助手
 # ============================================================
@@ -683,6 +753,7 @@ class UpdateSession:
     preserve_patterns: list[str]
     expected_package_sha256: str = ""
     full_download_url: str = ""
+    full_download_urls: list[str] = field(default_factory=list)
     full_package_sha256: str = ""
     full_package_size_mb: float = 0
     parent_pid: int = 0
@@ -707,6 +778,7 @@ class UpdateSession:
         with open(session_file, "r", encoding="utf-8") as f:
             payload = json.load(f)
         payload.setdefault("full_download_url", "")
+        payload.setdefault("full_download_urls", _coerce_url_list(payload.get("full_download_url", "")))
         payload.setdefault("full_package_sha256", "")
         payload.setdefault("full_package_size_mb", 0)
         payload["session_file"] = session_file
@@ -951,6 +1023,7 @@ def create_update_session(
     preserve_patterns: Optional[list[str]] = None,
     expected_package_sha256: str = "",
     full_download_url: str = "",
+    full_download_urls: Optional[list[str]] = None,
     full_package_sha256: str = "",
     full_package_size_mb: float = 0,
 ) -> str:
@@ -975,6 +1048,7 @@ def create_update_session(
         preserve_patterns=list(preserve_patterns or DEFAULT_PRESERVE_PATTERNS),
         expected_package_sha256=expected_package_sha256,
         full_download_url=full_download_url,
+        full_download_urls=list(full_download_urls or _coerce_url_list(full_download_url)),
         full_package_sha256=full_package_sha256,
         full_package_size_mb=full_package_size_mb,
         parent_pid=os.getpid(),
@@ -1756,7 +1830,7 @@ def _should_auto_fallback_to_full_package(session: UpdateSession, result: dict) 
     """判断补丁失败后是否可以继续自动改用完整包。"""
     if not session.is_patch or result.get("success"):
         return False
-    if not (session.full_download_url or "").strip():
+    if not (session.full_download_urls or _coerce_url_list(session.full_download_url)):
         return False
     if result.get("rollback_status") not in {"not_needed", "completed"}:
         return False
@@ -1783,8 +1857,10 @@ def _download_full_package_for_fallback(
         else:
             push("download", "正在下载完整安装包")
 
+    full_url_candidates = session.full_download_urls or _coerce_url_list(session.full_download_url)
+    download_target = full_url_candidates if len(full_url_candidates) != 1 else full_url_candidates[0]
     return download_update(
-        session.full_download_url,
+        download_target,
         dest_dir=download_dir,
         progress_callback=on_progress,
         expected_sha256=session.full_package_sha256,

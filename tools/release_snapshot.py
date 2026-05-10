@@ -17,6 +17,7 @@ PATCH_FIELDS = {
     "patch_url",
     "patch_url_direct",
     "patch_url_proxy",
+    "patch_url_mirrors",
     "patch_size_mb",
     "min_patch_version",
     "patch_base_version",
@@ -87,6 +88,7 @@ def write_release_snapshot(
             "size_bytes": os.path.getsize(full_zip_path),
             "sha256": sha256_file(full_zip_path),
             "download_url": full_download_url,
+            "download_mirrors": list((version_data or {}).get("download_url_mirrors", []) or []),
         },
     }
 
@@ -106,6 +108,7 @@ def write_release_snapshot(
             "size_bytes": os.path.getsize(patch_zip_path),
             "sha256": sha256_file(patch_zip_path),
             "download_url": patch_download_url,
+            "download_mirrors": list((version_data or {}).get("patch_url_mirrors", []) or []),
         }
 
     snapshot_file = os.path.join(version_dir, "snapshot.json")

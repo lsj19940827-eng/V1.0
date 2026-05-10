@@ -46,15 +46,16 @@
 - `倒虹吸水力计算系统/siphon_models.py`：倒虹吸数据模型真源，负责结构段、平面特征点、纵断面节点、历史空间事件和计算结果字段；当前新增了 `source_ip_index / source_long_node_index / ignored_manual_overrides / LongitudinalNode.node_uid`，用来追踪手工局部系数与平面/纵断面原始转弯的对应关系，并保证纵断面节点表重建时手工值不会因行号变化而丢失；旧项目在唯一可恢复时也会先补回这些来源索引。现在 `PlanFeaturePoint` 与 `StructureSegment` 也把 `arc_geometry` 作为圆弧几何真源持久化。
 - `倒虹吸水力计算系统/siphon_hydraulics.py`：倒虹吸水力计算核心，负责“先算自动值、再决定最终采用值”的局部损失链路；当前水损不再把平面和纵断面合并成 3D 空间弯道，而是平面转弯、纵断面竖向转弯分别计损后相加；有纵断面时沿程长度优先取纵断面实长，否则取平面总长；`global_params.xi_inlet / xi_outlet` 只用于进口、出口渐变段公式，结构段表中的进水口/出水口系数并入 `ΔZ2` 的局部损失，`L.1.6` 总落差固定按减号执行；旧项目如果无法唯一恢复来源，则直接退回自动值并把原因写入 `ignored_manual_overrides`。
 - `app_渠系计算前端/water_profile/formula_dialog.py`：表头说明和双击公式弹窗，负责把计算详情解释给用户看；第38列详情弹窗底部支持直接保存人工采用值或恢复自动计算，其中锁定逐行承压行会额外按“本行采用值”口径写回正式承压损失。
+- `repo_config.py`：仓库与更新源集中配置，负责维护 GitHub 源仓库、正式 Gist、Gitee 镜像仓库、Gitee API 地址和下载代理列表；令牌只从本地 `.env` 或环境变量读取。
 - `update_artifact_rules.py`：更新产物边界规则，负责统一定义哪些路径属于运行时自动保存/用户数据，以及成功安装后哪些文件必须保留。
-- `updater.py`：自动更新核心，负责版本比较、补丁/全量包选择、下载包 checksum、安装会话、旧 `_update_sessions` 残留清理、安装前校验、补丁适用性校验、补丁落地后的 `target_files` 验收、备份失败回收和回滚状态归类。
+- `updater.py`：自动更新核心，负责版本比较、补丁/全量包选择、GitHub/Gitee 候选下载地址切换、下载包 checksum、安装会话、旧 `_update_sessions` 残留清理、安装前校验、补丁适用性校验、补丁落地后的 `target_files` 验收、备份失败回收和回滚状态归类。
 - `update_helper.py`：独立安装窗口，负责展示安装阶段、`validate/apply` 细分状态、补丁校验进度、旧残留清理失败提示、回滚结果文案和日志入口。
-- `app_渠系计算前端/update_dialog.py`：更新入口对话框，负责选择补丁或全量包、下载时传递 checksum、安装前仅做轻量包校验，以及在补丁下载失败时自动切回全量包。
+- `app_渠系计算前端/update_dialog.py`：更新入口对话框，负责选择补丁或全量包、把候选下载地址列表和 checksum 交给下载线程、安装前仅做轻量包校验，以及在补丁下载失败时自动切回支持镜像兜底的全量包。
 - `tools/patch_policy.py`：补丁发布安全策略，负责统一判断补丁大小、删除文件数量和总覆盖量是否超过线上发布阈值。
 - `tools/build.py`：构建脚本，负责按分组校验关键依赖、单独拦截 Word 导出依赖缺失、显式收集 `latex2mathml` 等运行时数据文件、生成 manifest、剔除运行时自动保存文件、构建通用补丁包，并按补丁覆盖范围和补丁包大小决定是否发布补丁。
 - `tools/gen_app_icon.py`：应用图标生成脚本，负责从 `app_渠系计算前端/resources/logo.png` 生成仅含蓝色新 Logo 本体的根目录 `icon.ico` 和共享 `resources/logo.ico` 多尺寸 ICO。
 - `tools/document_to_markdown.py`：文档转 Markdown 工具，负责读取 Word、PDF、Excel 文档并输出 Markdown，依赖 `python-docx / docx2txt / pdfplumber / pandas`。
-- `tools/release_snapshot.py`：正式发版快照工具，负责把 `tag / full zip / patch zip / manifest / version.json` 固化到 `.release-snapshots/`，作为后续回补 patch 的唯一基线。
+- `tools/release_snapshot.py`：正式发版快照工具，负责把 `tag / full zip / patch zip / manifest / version.json` 固化到 `.release-snapshots/`，并记录 GitHub 主地址和 Gitee 镜像地址，作为后续回补 patch 的唯一基线。
 - `tools/backfill_patch_release.py`：正式补丁回补脚本，负责基于已发布快照重新生成 patch、补挂 Release 资产并补齐 Gist patch 字段。
 - `tools/disable_patch_release.py`：线上补丁熔断脚本，负责只移除 Gist version.json 里的 patch 字段，保留全量包更新链路不动。
 - `推求水面线/core/calculator.py`：整表计算总调度，串起预处理、内部 `ip_number` 与显示 `display_ip_number` 分配、渐变段、水力计算、累计损失和高程递推；当表内已存在渐变段/连接段时，会改走“真实节点重算 + 辅助行保位”的安全几何刷新路径。当前也负责在静默重算里优先展开 `pressure_pipe_window_override`，把逐行承压覆盖结果正式落回总损失、累计损失和水位递推。这里新增了“特殊节点非零转角保护”共享逻辑：只对真实特殊节点里已有非零转角的 `进/出` 行，在几何重算前临时按普通节点参与计算，算完再恢复正式 `in_out`；`calculate_all()` 与表3静默刷新共用这一口径，渐变段和自动插入连接段仍保持 `0`。
@@ -127,9 +128,9 @@
 - `bootstrap.py` 在创建主窗口前会先调用 `webengine_diagnostics.py` 做标准预检；创建 `QApplication` 后会统一设置由蓝色新 Logo 本体生成的多尺寸 `icon.ico`，Windows 下还会设置应用标识，保证标题栏、弹窗和任务栏使用同一套图标；预检阶段现在只采集轻量运行时信息，不再顺手调用可能阻塞的系统摘要接口。
 - `app.py` 启动时会 eager 创建全部面板，但 `pressure_pipe/panel.py` 的初始帮助页渲染已改为延后执行；这样仍保留“页面对象先建好”的兼容口径，同时避免单个结果页把主窗口首次显示卡住。
 - `tools/build.py` 会先按分组校验关键依赖，并复用与 PyInstaller 相同的项目搜索路径；Word 导出依赖缺失时会先直接中止打包，再根据 `UNIVERSAL_PATCH_MIN_VERSION` 选出可覆盖的旧版 manifest 生成通用补丁。补丁是否发布统一走 `tools/patch_policy.py`，删除文件过多、“新增/修改 + 删除”总量过大或补丁接近完整包时，只保留全量包。
-- `tools/release.py` 会读取 `patch-info.json` 决定是否把补丁链接写进正式 `version.json`，并再次执行补丁安全策略；没有 `patch-info.json` 或补丁不满足策略时，用户端就只会看到全量包。
+- `tools/release.py` 会读取 `patch-info.json` 决定是否把补丁链接写进正式 `version.json`，并再次执行补丁安全策略；正式发版会先要求 `GITHUB_TOKEN / GITEE_TOKEN` 都可用，再把同一份全量包和安全补丁包上传到 GitHub Release 与 Gitee Release，最后把 Gitee 附件地址写入 `download_url_mirrors / patch_url_mirrors`。没有 `patch-info.json` 或补丁不满足策略时，用户端就只会看到全量包及其镜像地址。
 - `tools/backfill_patch_release.py` 不改 `tools/build.py` 的默认补丁门槛；它只面向已发正式版的补救场景，会读取 `.release-snapshots/` 中从 `--min-version` 到目标版本前的全部正式快照 manifest 重新生成 patch，并在补丁通过 `tools/patch_policy.py` 安全检查、且确认 Gist 当前 `latest_version` 仍等于目标版本后，才会补挂 Release 资产和回写 patch 字段。
-- `updater.py` 读取 `version.json.min_patch_version` 后，只对满足版本下限的本机提供补丁下载；进入安装后，会在 `validate` 阶段先清理旧 `_update_sessions` 残留，再把“检查写入权限 / 统计安装目录大小 / 解压完整安装包或补丁包 / 校验补丁适用性（x/y）”通过 `stage_callback` 传给 `update_helper.py`。如果补丁失败且回滚安全，`updater.py` 会继续下载并安装会话里记录的完整包。
+- `updater.py` 读取 `version.json.min_patch_version` 后，只对满足版本下限的本机提供补丁下载；下载时主地址优先，失败或 checksum 不一致时继续尝试 `download_url_mirrors / patch_url_mirrors` 中的备用地址。进入安装后，会在 `validate` 阶段先清理旧 `_update_sessions` 残留，再把“检查写入权限 / 统计安装目录大小 / 解压完整安装包或补丁包 / 校验补丁适用性（x/y）”通过 `stage_callback` 传给 `update_helper.py`。如果补丁失败且回滚安全，`updater.py` 会继续下载并安装会话里记录的完整包候选地址列表。
 
 ## 关键设计决定和原因
 
@@ -206,8 +207,9 @@
 - 普通模式新增 `station_decimals`，默认 2 位；它只作用于导出链路里的桩号文本，不改表3和说明文字，避免把现有非导出显示一起带偏。
 - 通用补丁不再追求大跨度兼容，当前默认只覆盖 `1.3.0+`；因为更老版本在 `_internal` 目录上的历史差异太大，会把大量已删除文件带入补丁校验，用户体感就是“卡在校验”。低于 `1.3.0` 的版本仍保留全量包更新入口，不再提供补丁包。
 - 运行时文件和程序文件必须分开治理：`siphon_autosave.json`、`data/autosave/` 与 `*_autosave.qxproj` 不再进入 manifest、补丁 diff 和严格哈希校验；全量安装成功后也要保留这些文件，避免把用户本地数据当成程序文件覆盖掉。
-- 构建、正式发版、发版 GUI 和回补 patch 共用补丁兜底规则：`deleted_count > 100`、`changed_count + deleted_count > 300` 或补丁包接近完整包时直接不发布补丁；这样即便只有少量大文件变化，也不会把高风险补丁放给用户。
-- 下载链路必须先验包、后安装：`version.json` 会带 `download_sha256 / patch_sha256`，客户端下载完成后先校验 checksum，再进入安装；补丁落地后还要按 `target_files` 再做一次目标版本验收。
+- 构建、正式发版和回补 patch 共用补丁兜底规则：`deleted_count > 100`、`changed_count + deleted_count > 300` 或补丁包接近完整包时直接不发布补丁；这样即便只有少量大文件变化，也不会把高风险补丁放给用户。
+- GitHub 是正式版本清单主入口，Gitee 是同一正式版本的镜像下载源，不是测试通道；所有下载源必须指向同一份 zip，最终一致性由 `download_sha256 / patch_sha256` 校验，而不是信任某个域名。
+- 下载链路必须先验包、后安装：`version.json` 会带 `download_sha256 / patch_sha256`，客户端下载完成后先校验 checksum，再进入安装；任一镜像 checksum 不一致都会丢弃该包并尝试下一个候选地址，补丁落地后还要按 `target_files` 再做一次目标版本验收。
 - 发版后的 patch 回补不能再依赖会漂移的本地 `dist` 或手工改过的 manifest；一切回补动作都要以 `.release-snapshots/` 中固化下来的正式快照为准，并覆盖 `--min-version` 到目标版本前的全部基线。
 - 安装继续沿用原有 `validate` 阶段，不新增窗口阶段枚举；细节通过状态文案显示为“正在清理上次失败残留”“正在检查写入权限”“正在统计安装目录大小”“正在解压完整安装包或补丁包”“正在校验补丁适用性（x/y）”。补丁适用性校验读取大文件 SHA256 时会继续显示单文件百分比，避免用户把第一个大文件哈希误判为卡死。
 - 旧 `_update_sessions` 残留被视为纯临时目录：安装开始时会自动清理当前会话以外的旧目录；如果清理失败，会直接把原因写入安装日志，并在窗口里提示用户先关闭软件、仍失败再重启电脑。

@@ -19,6 +19,7 @@ def test_strip_patch_fields_removes_patch_related_entries():
         "patch_url": "https://example.com/patch.zip",
         "patch_url_direct": "https://example.com/patch.zip",
         "patch_url_proxy": "https://proxy.example/patch.zip",
+        "patch_url_mirrors": ["https://gitee.com/example/patch.zip"],
         "patch_size_mb": 72.74,
         "patch_base_version": "1.3.0",
         "min_patch_version": "1.3.0",
@@ -31,6 +32,7 @@ def test_strip_patch_fields_removes_patch_related_entries():
     assert "patch_url" not in cleaned
     assert "patch_url_direct" not in cleaned
     assert "patch_url_proxy" not in cleaned
+    assert "patch_url_mirrors" not in cleaned
     assert "patch_size_mb" not in cleaned
     assert "patch_base_version" not in cleaned
     assert "min_patch_version" not in cleaned

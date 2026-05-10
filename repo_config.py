@@ -18,6 +18,15 @@ GITHUB_VERSION_URL = (
 )
 
 # ============================================================
+# Gitee（源代码镜像 + 国内备用下载源）
+# GITEE_TOKEN 只从本地 .env 或环境变量读取，不能写入代码。
+# ============================================================
+GITEE_OWNER = "pig-farming-pays-off-as-a-dog"
+GITEE_REPO = "canal-update"
+GITEE_REPO_URL = f"https://gitee.com/{GITEE_OWNER}/{GITEE_REPO}"
+GITEE_API_BASE = "https://gitee.com/api/v5"
+
+# ============================================================
 # GitHub Release 下载代理（国内加速）
 # 按优先级排列，空字符串表示直连 GitHub（兜底）
 # 代理 URL 变换：proxy_prefix + original_github_url
