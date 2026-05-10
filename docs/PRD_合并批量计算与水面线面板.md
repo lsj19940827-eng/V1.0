@@ -349,8 +349,8 @@ flowchart TD
 ### 6. 发布脚本治理：`tools/release.py`（新增）
 
 - `tools/release.py` 已收敛为正式清单：仅允许 `master` 分支正式发布
-- 发布脚本仅更新正式 Gist，不再维护测试 Gist 分流；发布包同步上传到 GitHub Release 与 Gitee Release
-- `version.json` 保持旧下载字段不变，并新增 `download_url_mirrors / patch_url_mirrors` 记录 Gitee 备用下载地址
+- 发布脚本仅更新正式 Gist，不再维护测试 Gist 分流；完整包上传 GitHub Release，100MB 以内补丁包才同步上传 Gitee Release
+- `version.json` 保持旧下载字段不变，并通过 `patch_url_mirrors` 记录 Gitee 补丁备用下载地址；完整包不写入 Gitee 镜像地址
 - `--no-bump` 与 `--tag-suffix` 继续保留，用于正式发布场景
 
 ---
@@ -363,7 +363,7 @@ flowchart TD
 4. **行级元数据丢失风险**：有压管道参数依赖 UserRole，序列化/撤销/复制操作要覆盖。
 5. **加大流速链条风险**：`V加大 → _node_velocity_increased → ChannelNode` 不可断链。
 6. **双写兼容风险**：若写漏旧字段，回滚后可能无法继续项目生产。
-7. **发布通道风险**：当前仅保留正式 Gist 作为清单主入口，Gitee 只是同版本备用下载源，需避免临时包误写正式源或镜像包版本不一致。
+7. **发布通道风险**：当前仅保留正式 Gist 作为清单主入口，Gitee 只是 100MB 以内补丁包备用下载源，需避免临时包误写正式源或镜像包版本不一致。
 8. **人为决策风险**：回滚触发采用人工判断，需保证例会机制和操作记录完整。
 
 ---
@@ -400,7 +400,7 @@ git push -u origin release/v1-stable
 ### 8.3 当前发布通道
 
 - 当前实现仅保留正式发布通道：`master` 发布正式 Release，并更新**正式 Gist**。
-- 正式发布包会同步上传到 GitHub Release 与 Gitee Release；客户端先走现有 GitHub/代理地址，失败或校验不通过时自动尝试 Gitee 镜像。
+- 正式完整包上传到 GitHub Release；100MB 以内补丁包会额外上传到 Gitee Release。客户端补丁下载先走现有 GitHub/代理地址，失败或校验不通过时自动尝试 Gitee 镜像。
 - 用户端检查更新弹窗不再提供测试通道切换，启动静默检查与手动检查统一走正式源。
 - 若本机安装过历史内部构建，正式通道仍允许手动降级安装回正式版。
 
@@ -468,7 +468,7 @@ git push -u origin hotfix/rollback-vX.Y
 | C7 | 有压参数承载 | 校验字段设计 | 不新增列，元数据持续可用 | 增加UserRole约束 |
 | C8 | 统一导出范围 | 校验Excel/Word导出定义 | Excel含4个核心Sheet；Word含两章详细过程 | 补齐导出结构 |
 | C9 | 项目兼容 | 校验保存结构与读取优先级 | 双写+优先读merged_panel+旧版可开 | 增加兼容条款 |
-| C10 | 发布回滚治理 | 校验正式清单、双下载源与回滚条款 | `master` 正式发布、正式 Gist 更新、GitHub/Gitee 下载源一致、可回滚演练 | 补充第八章策略 |
+| C10 | 发布回滚治理 | 校验正式清单、补丁双下载源与回滚条款 | `master` 正式发布、正式 Gist 更新、100MB 以内补丁 GitHub/Gitee 下载源一致、可回滚演练 | 补充第八章策略 |
 
 ### 9.2 验收场景（功能+数据+发布全链路）
 
@@ -481,7 +481,7 @@ git push -u origin hotfix/rollback-vX.Y
 | S5：有压参数链路 | 参数在复制/撤销/保存后不丢失 |
 | S6：统一导出 | Excel四Sheet、Word双章节完整 |
 | S7：双写项目回读 | 新旧版本均可基本打开 |
-| S8：正式更新主入口 | 仅正式 Gist 作为清单主入口，不向用户暴露测试切换，下载包支持 GitHub/Gitee 备用源 |
+| S8：正式更新主入口 | 仅正式 Gist 作为清单主入口，不向用户暴露测试切换，补丁包支持 GitHub/Gitee 备用源 |
 | S9：回滚演练 | revert/tag回退路径可执行 |
 
 ### 9.3 已锁定默认值（决策闭环）
@@ -494,7 +494,7 @@ git push -u origin hotfix/rollback-vX.Y
 - 同步节奏：每周同步候选线
 - 检查更新弹窗：已收敛为正式单通道，不再显示“更新通道”下拉
 - 用户更新入口：所有用户统一检查正式通道；若本机高于正式版，可手动降级安装
-- 下载源策略：GitHub/代理地址优先，Gitee 作为同版本镜像候选；最终以 SHA256 校验确认包一致
+- 下载源策略：GitHub/代理地址优先，Gitee 只作为 100MB 以内补丁包镜像候选；最终以 SHA256 校验确认包一致
 - 降级策略：允许用户从测试构建回退到更低正式版（手动确认后安装）
 - Git 暂存策略：工具默认全量暂存（`git add -A`）
 - 双写周期：至少2个正式版本
@@ -507,12 +507,12 @@ git push -u origin hotfix/rollback-vX.Y
 
 1. `docs/发版与自动更新指南.md`
    - 同步正式清单与双下载源章节
-   - 明确“正式发布仅master，Gitee 只是同版本下载镜像”
+   - 明确“正式发布仅master，Gitee 只是 100MB 以内补丁包下载镜像”
 2. `tools/release.py` 使用说明
    - 更新为 `--no-bump`、`--tag-suffix`、`GITHUB_TOKEN / GITEE_TOKEN` 的正式发布示例
 3. 团队发布规范
    - 固化 `vX.Y-pre-merge-YYYYMMDD` 基线标签规范与回滚演练记录模板
 4. `app_渠系计算前端/update_dialog.py` 与 `updater.py`
-   - 同步“正式清单 + GitHub/Gitee 候选下载源 + 历史内部构建可降级回正式版”交互规则
+   - 同步“正式清单 + GitHub/Gitee 补丁候选下载源 + 历史内部构建可降级回正式版”交互规则
 5. `tools/git_publish_gui.py`
    - 固化“每周同步 master→候选分支”的执行与提醒机制

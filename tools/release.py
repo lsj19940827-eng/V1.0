@@ -2,7 +2,7 @@
 """
 一键正式发版脚本
 
-流程：bump 版本 -> 打包 -> git commit/tag -> 创建 GitHub/Gitee Release -> 上传 zip -> 更新正式 Gist。
+流程：bump 版本 -> 打包 -> git commit/tag -> 创建 GitHub Release -> 上传 zip -> 按需上传 Gitee 补丁镜像 -> 更新正式 Gist。
 仅支持 master 分支正式发布；不再提供预发布/测试 Gist 通道。
 """
 
@@ -34,6 +34,7 @@ _configure_stdio()
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 PROJECT_VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
+GITEE_RELEASE_ATTACHMENT_LIMIT_MB = 100.0
 sys.path.insert(0, PROJECT_ROOT)
 
 from version import APP_NAME_EN
@@ -463,10 +464,39 @@ def step_create_gitee_release_and_upload_assets(
     token: str,
     branch: str = "master",
 ) -> dict:
-    """创建 Gitee Release 并上传同一份全量包/补丁包，返回 version.json 的镜像字段。"""
+    """创建 Gitee Release 并上传合格补丁包，返回 version.json 的镜像字段。"""
     print(f"\n{'=' * 60}")
-    print(f"  [Gitee] 创建 Release 并上传发布包 {tag_name}")
+    print(f"  [Gitee] 检查补丁镜像 {tag_name}")
     print(f"{'=' * 60}\n")
+
+    patch_zip = assets.get("patch_zip", "")
+    if not patch_zip or not os.path.exists(patch_zip):
+        print("  [Gitee] 未生成补丁包，跳过 Gitee 附件上传。")
+        return {}
+
+    patch_size_mb = float(
+        assets.get("patch_size_mb")
+        or (os.path.getsize(patch_zip) / (1024 * 1024))
+    )
+    if patch_size_mb > GITEE_RELEASE_ATTACHMENT_LIMIT_MB:
+        print(
+            "  [Gitee] 跳过补丁包："
+            f"{patch_size_mb:.2f} MB 超过 Gitee 单附件 {GITEE_RELEASE_ATTACHMENT_LIMIT_MB:.0f} MB 限制。"
+        )
+        return {}
+
+    should_skip_patch, skip_reason = patch_policy.should_skip_universal_patch(
+        {
+            "changed_count": assets.get("patch_changed_count", 0),
+            "deleted_count": assets.get("patch_deleted_count", 0),
+            "size_mb": patch_size_mb,
+            "source_versions": assets.get("patch_source_versions", []),
+        },
+        full_size_mb=assets.get("full_size_mb", 0),
+    )
+    if should_skip_patch:
+        print(f"  [Gitee] 跳过补丁包：{skip_reason}")
+        return {}
 
     release_url = (
         f"{GITEE_API_BASE}/repos/{urllib.parse.quote(GITEE_OWNER, safe='')}/"
@@ -488,28 +518,11 @@ def step_create_gitee_release_and_upload_assets(
     if not release_id:
         raise RuntimeError(f"Gitee Release 创建失败：{release_obj}")
 
-    urls = {
-        "download_url_mirrors": [
-            _upload_gitee_release_asset(int(release_id), assets["full_zip"], token)
-        ]
+    return {
+        "patch_url_mirrors": [
+            _upload_gitee_release_asset(int(release_id), patch_zip, token)
+        ],
     }
-    if "patch_zip" in assets and os.path.exists(assets["patch_zip"]):
-        should_skip_patch, skip_reason = patch_policy.should_skip_universal_patch(
-            {
-                "changed_count": assets.get("patch_changed_count", 0),
-                "deleted_count": assets.get("patch_deleted_count", 0),
-                "size_mb": assets.get("patch_size_mb", 0),
-                "source_versions": assets.get("patch_source_versions", []),
-            },
-            full_size_mb=assets.get("full_size_mb", 0),
-        )
-        if should_skip_patch:
-            print(f"  [patch] Gitee 同步跳过通用补丁包：{skip_reason}")
-        else:
-            urls["patch_url_mirrors"] = [
-                _upload_gitee_release_asset(int(release_id), assets["patch_zip"], token)
-            ]
-    return urls
 
 
 def step_update_gist(version: str, urls: dict, assets: dict, token: str,

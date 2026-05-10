@@ -20,7 +20,7 @@ def test_get_gitee_token_requires_local_secret(monkeypatch):
         release._get_gitee_token()
 
 
-def test_upload_gitee_assets_returns_mirror_urls(tmp_path, monkeypatch):
+def test_upload_gitee_assets_uploads_only_patch_when_under_limit(tmp_path, monkeypatch):
     full_zip = tmp_path / "CanalHydraulicCalc-V1.3.8.zip"
     patch_zip = tmp_path / "CanalHydraulicCalc-V1.3.8-patch.zip"
     full_zip.write_bytes(b"full")
@@ -52,9 +52,6 @@ def test_upload_gitee_assets_returns_mirror_urls(tmp_path, monkeypatch):
     )
 
     assert urls == {
-        "download_url_mirrors": [
-            "https://gitee.com/example/releases/download/CanalHydraulicCalc-V1.3.8.zip"
-        ],
         "patch_url_mirrors": [
             "https://gitee.com/example/releases/download/CanalHydraulicCalc-V1.3.8-patch.zip"
         ],
@@ -63,6 +60,37 @@ def test_upload_gitee_assets_returns_mirror_urls(tmp_path, monkeypatch):
     assert calls[0][2]["tag_name"] == "v1.3.8"
     assert calls[0][2]["target_commitish"] == "master"
     assert calls[1][3] == "multipart/form-data"
+    assert calls[1][2]["file_path"] == str(patch_zip)
+
+
+def test_upload_gitee_assets_skips_patch_when_over_100mb(tmp_path, monkeypatch):
+    full_zip = tmp_path / "CanalHydraulicCalc-V1.3.9.zip"
+    patch_zip = tmp_path / "CanalHydraulicCalc-V1.3.9-patch.zip"
+    full_zip.write_bytes(b"full")
+    patch_zip.write_bytes(b"patch")
+    calls: list[tuple[str, str, object, str]] = []
+
+    def fake_api(method, url, token, data=None, raw_body=None, content_type="application/json"):
+        calls.append((method, url, data, content_type))
+        return {"id": 42}
+
+    monkeypatch.setattr(release, "_gitee_api", fake_api)
+
+    urls = release.step_create_gitee_release_and_upload_assets(
+        "v1.3.9",
+        "V1.3.9",
+        "更新说明",
+        {
+            "full_zip": str(full_zip),
+            "patch_zip": str(patch_zip),
+            "patch_size_mb": 100.01,
+            "full_size_mb": 300.0,
+        },
+        "token",
+    )
+
+    assert urls == {}
+    assert calls == []
 
 
 def test_build_version_data_includes_mirror_urls(tmp_path):

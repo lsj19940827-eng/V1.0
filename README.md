@@ -10,7 +10,7 @@
 - 表格化批量输入，支持 Excel 导入、示例数据、模板和工程文件保存。
 - 水面线表、渐变段、连续承压线路、压力管道特性表等联动计算。
 - 断面图、纵断面、DXF、TXT、Excel、Word 等成果导出。
-- 自动更新：优先使用 GitHub 发布包，失败或校验不通过时自动尝试 Gitee 镜像。
+- 自动更新：完整包使用 GitHub 发布包；补丁包在不超过 100MB 时会额外上传到 Gitee 作为备用下载地址。
 
 ## 仓库地址
 
@@ -19,7 +19,7 @@
 | GitHub 主仓库 | <https://github.com/lsj19940827-eng/V1.0> |
 | Gitee 镜像仓库 | <https://gitee.com/pig-farming-pays-off-as-a-dog/canal-update> |
 
-GitHub 和 Gitee 的 `master` 分支保持同步。Gitee 只作为同一正式版本的备用下载源，不作为测试通道。
+GitHub 和 Gitee 的 `master` 分支保持同步。Gitee 只作为同一正式版本的补丁包备用下载源，不作为测试通道，也不承载完整安装包。
 
 ## 本地运行
 
@@ -73,15 +73,15 @@ GITHUB_TOKEN=你的 GitHub Token
 GITEE_TOKEN=你的 Gitee 私人令牌
 ```
 
-正式发版会同步创建 GitHub Release 和 Gitee Release，并把 Gitee 附件地址写入正式 `version.json` 的镜像字段。缺少 `GITEE_TOKEN` 时，发版会提前停止，避免只发布到单一平台。
+正式发版会创建 GitHub Release，并上传完整包和补丁包。Gitee 只在补丁包不超过 100MB 时创建同版本 Release 并上传补丁包；完整安装包不上传 Gitee，避免触发 Gitee 单附件大小限制。
 
 ## 自动更新规则
 
 - GitHub Gist 仍是正式 `version.json` 的主入口。
 - `download_url`、`patch_url` 等旧字段保持兼容。
-- 新版本客户端会读取 `download_url_mirrors` 和 `patch_url_mirrors`。
+- 新版本客户端会读取 `patch_url_mirrors`；当前完整包不写入 Gitee 镜像地址。
 - 下载包必须通过同一个 SHA256 校验；任一来源校验失败都会被丢弃。
-- 补丁下载或安装失败后，会自动回退完整安装包；完整包也支持镜像地址兜底。
+- 补丁下载或安装失败后，会自动回退完整安装包；完整包继续使用 GitHub 地址。
 
 ## 目录说明
 
@@ -111,6 +111,6 @@ GITEE_TOKEN=你的 Gitee 私人令牌
 
 ## 当前状态
 
-- 当前版本号：`1.3.7`
+- 当前版本号：`1.3.8`
 - 当前主分支：`master`
-- 当前更新策略：GitHub 主源 + Gitee 镜像源
+- 当前更新策略：GitHub 完整包 + GitHub/Gitee 补丁包备用源

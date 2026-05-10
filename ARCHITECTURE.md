@@ -128,7 +128,7 @@
 - `bootstrap.py` 在创建主窗口前会先调用 `webengine_diagnostics.py` 做标准预检；创建 `QApplication` 后会统一设置由蓝色新 Logo 本体生成的多尺寸 `icon.ico`，Windows 下还会设置应用标识，保证标题栏、弹窗和任务栏使用同一套图标；预检阶段现在只采集轻量运行时信息，不再顺手调用可能阻塞的系统摘要接口。
 - `app.py` 启动时会 eager 创建全部面板，但 `pressure_pipe/panel.py` 的初始帮助页渲染已改为延后执行；这样仍保留“页面对象先建好”的兼容口径，同时避免单个结果页把主窗口首次显示卡住。
 - `tools/build.py` 会先按分组校验关键依赖，并复用与 PyInstaller 相同的项目搜索路径；Word 导出依赖缺失时会先直接中止打包，再根据 `UNIVERSAL_PATCH_MIN_VERSION` 选出可覆盖的旧版 manifest 生成通用补丁。补丁是否发布统一走 `tools/patch_policy.py`，删除文件过多、“新增/修改 + 删除”总量过大或补丁接近完整包时，只保留全量包。
-- `tools/release.py` 会读取 `patch-info.json` 决定是否把补丁链接写进正式 `version.json`，并再次执行补丁安全策略；正式发版会先要求 `GITHUB_TOKEN / GITEE_TOKEN` 都可用，再把同一份全量包和安全补丁包上传到 GitHub Release 与 Gitee Release，最后把 Gitee 附件地址写入 `download_url_mirrors / patch_url_mirrors`。没有 `patch-info.json` 或补丁不满足策略时，用户端就只会看到全量包及其镜像地址。
+- `tools/release.py` 会读取 `patch-info.json` 决定是否把补丁链接写进正式 `version.json`，并再次执行补丁安全策略；正式发版会把完整包和补丁包上传到 GitHub Release。Gitee 只接收不超过 100MB 的安全补丁包，成功后只把 Gitee 补丁附件地址写入 `patch_url_mirrors`；完整包不上传 Gitee，也不写入 Gitee 全量镜像地址。没有 `patch-info.json`、补丁不满足策略或补丁超过 100MB 时，Gitee 镜像会被跳过，用户端仍可用 GitHub 完整包更新。
 - `tools/backfill_patch_release.py` 不改 `tools/build.py` 的默认补丁门槛；它只面向已发正式版的补救场景，会读取 `.release-snapshots/` 中从 `--min-version` 到目标版本前的全部正式快照 manifest 重新生成 patch，并在补丁通过 `tools/patch_policy.py` 安全检查、且确认 Gist 当前 `latest_version` 仍等于目标版本后，才会补挂 Release 资产和回写 patch 字段。
 - `updater.py` 读取 `version.json.min_patch_version` 后，只对满足版本下限的本机提供补丁下载；下载时主地址优先，失败或 checksum 不一致时继续尝试 `download_url_mirrors / patch_url_mirrors` 中的备用地址。进入安装后，会在 `validate` 阶段先清理旧 `_update_sessions` 残留，再把“检查写入权限 / 统计安装目录大小 / 解压完整安装包或补丁包 / 校验补丁适用性（x/y）”通过 `stage_callback` 传给 `update_helper.py`。如果补丁失败且回滚安全，`updater.py` 会继续下载并安装会话里记录的完整包候选地址列表。
 
@@ -208,7 +208,7 @@
 - 通用补丁不再追求大跨度兼容，当前默认只覆盖 `1.3.0+`；因为更老版本在 `_internal` 目录上的历史差异太大，会把大量已删除文件带入补丁校验，用户体感就是“卡在校验”。低于 `1.3.0` 的版本仍保留全量包更新入口，不再提供补丁包。
 - 运行时文件和程序文件必须分开治理：`siphon_autosave.json`、`data/autosave/` 与 `*_autosave.qxproj` 不再进入 manifest、补丁 diff 和严格哈希校验；全量安装成功后也要保留这些文件，避免把用户本地数据当成程序文件覆盖掉。
 - 构建、正式发版和回补 patch 共用补丁兜底规则：`deleted_count > 100`、`changed_count + deleted_count > 300` 或补丁包接近完整包时直接不发布补丁；这样即便只有少量大文件变化，也不会把高风险补丁放给用户。
-- GitHub 是正式版本清单主入口，Gitee 是同一正式版本的镜像下载源，不是测试通道；所有下载源必须指向同一份 zip，最终一致性由 `download_sha256 / patch_sha256` 校验，而不是信任某个域名。
+- GitHub 是正式版本清单主入口和完整包下载源，Gitee 只作为同一正式版本的补丁包备用下载源，不是测试通道；所有补丁下载源必须指向同一份 zip，最终一致性由 `patch_sha256` 校验，而不是信任某个域名。
 - 下载链路必须先验包、后安装：`version.json` 会带 `download_sha256 / patch_sha256`，客户端下载完成后先校验 checksum，再进入安装；任一镜像 checksum 不一致都会丢弃该包并尝试下一个候选地址，补丁落地后还要按 `target_files` 再做一次目标版本验收。
 - 发版后的 patch 回补不能再依赖会漂移的本地 `dist` 或手工改过的 manifest；一切回补动作都要以 `.release-snapshots/` 中固化下来的正式快照为准，并覆盖 `--min-version` 到目标版本前的全部基线。
 - 安装继续沿用原有 `validate` 阶段，不新增窗口阶段枚举；细节通过状态文案显示为“正在清理上次失败残留”“正在检查写入权限”“正在统计安装目录大小”“正在解压完整安装包或补丁包”“正在校验补丁适用性（x/y）”。补丁适用性校验读取大文件 SHA256 时会继续显示单文件百分比，避免用户把第一个大文件哈希误判为卡死。
