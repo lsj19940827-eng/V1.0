@@ -40,6 +40,7 @@ nul
 
 # 输出文件
 output/
+logs/
 *.dwl
 *.dwl2
 
@@ -77,9 +78,11 @@ data/_test_unified_confirm/
 
 # 用户数据文件（DXF图纸、Excel、项目文件等，仅本地保留）
 /*.dxf
+/*.qxproj
 /*.xlsx
 /*.xlsm
 /*.log
+/*计算成果*/
 data/*.dxf
 data/*.qxproj
 data/*.xlsm
@@ -91,6 +94,8 @@ data/*.docx
 # 授权系统（密钥和台账不进版本库）
 tools/_secret_key.py
 tools/授权台账.csv
+授权管理工具.bat
+授权管理工具.vbs
 *.lic
 .lc
 
