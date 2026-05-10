@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QTableWidget,
 )
 from PySide6.QtCore import Qt, Signal, QEvent
-from PySide6.QtWidgets import QSizePolicy
 from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
 
 from qfluentwidgets import (
@@ -36,6 +35,7 @@ from app_渠系计算前端.case_manager import (
     CaseTagChip as _CaseTagChip,
     DashedButton as _DashedButton,
     MAX_CASES,
+    apply_design_input_sidebar_policy,
     _SUB, _sub,
     CASE_TAG_ACTIVE_SS as _CASE_TAG_ACTIVE_SS,
     CASE_TAG_INACTIVE_SS as _CASE_TAG_INACTIVE_SS,
@@ -122,6 +122,7 @@ from app_渠系计算前端.section_plot_layout import (
     connect_section_tab_refresh,
     connect_section_plot_double_click,
     create_section_plot_scroll_area,
+    finalize_section_grid_layout,
     register_section_axis_dialog,
     reset_section_axis_dialogs,
     schedule_section_plot_restore_refresh,
@@ -247,10 +248,6 @@ class CulvertPanel(QWidget):
         inp_w = QWidget()
         self._build_input(inp_w)
         scroll.setWidget(inp_w)
-        # 智能自适应宽度：根据内容 sizeHint 设置，不硬编码最大宽度
-        scroll.setMinimumWidth(280)
-        scroll.setMaximumWidth(420)
-        scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         splitter.addWidget(scroll)
 
         out_w = QWidget()
@@ -259,9 +256,7 @@ class CulvertPanel(QWidget):
         # 设置 stretch factor：输出区域优先扩展
         splitter.setStretchFactor(0, 0)  # 输入区域不主动扩展
         splitter.setStretchFactor(1, 1)  # 输出区域优先扩展
-        # 初始宽度根据内容自适应
-        preferred_width = inp_w.sizeHint().width() + 20  # 加上边距
-        splitter.setSizes([max(300, min(preferred_width, 500)), 900])
+        apply_design_input_sidebar_policy(scroll, splitter)
 
     def _build_input(self, parent):
         lay = QVBoxLayout(parent)
@@ -754,8 +749,14 @@ class CulvertPanel(QWidget):
         self._on_section_type_changed(self.section_combo.currentText())
         self._loading_case = False
 
+    def _focus_design_flow_input(self):
+        """切换工况后聚焦设计流量，方便直接覆盖输入。"""
+        self.Q_edit.setFocus()
+        self.Q_edit.selectAll()
+
     def _switch_case(self, idx):
-        if idx != self._current_case_idx:
+        switched = idx != self._current_case_idx
+        if switched:
             self._save_current_case()
             self._current_case_idx = idx
             self._load_case(idx)
@@ -769,6 +770,8 @@ class CulvertPanel(QWidget):
             all_results_stale=getattr(self, "_all_results_stale", False),
         ):
             self._jump_to_case_result(idx)
+        if switched:
+            self._focus_design_flow_input()
 
     def _add_case(self):
         if len(self._cases) >= MAX_CASES:
@@ -1465,7 +1468,7 @@ class CulvertPanel(QWidget):
         n = len(success_results)
         if n == 1:
             ci, p, r = success_results[0]
-            configure_section_grid_canvas(self, 1)
+            layout = configure_section_grid_canvas(self, 1)
             ax = self.section_fig.subplots()
             title = f"工况{ci+1} Q={p['Q']:.2f}"
 
@@ -1475,6 +1478,9 @@ class CulvertPanel(QWidget):
 
             _draw_one(ax)
             register_section_axis_dialog(self, ax, title, _draw_one)
+            layout = finalize_section_grid_layout(self, layout, multi=False) or layout
+            self.section_canvas.draw()
+            return
         else:
             layout = configure_section_grid_canvas(self, n)
             ncols = layout.columns
@@ -1494,7 +1500,7 @@ class CulvertPanel(QWidget):
             for idx in range(n, nrows * ncols):
                 row, col = divmod(idx, ncols)
                 axes[row][col].set_visible(False)
-        self.section_fig.tight_layout()
+        layout = finalize_section_grid_layout(self, layout, multi=True) or layout
         self.section_canvas.draw()
 
     def _draw_case_section(self, ax, params, result, h_w, velocity, flow, title):

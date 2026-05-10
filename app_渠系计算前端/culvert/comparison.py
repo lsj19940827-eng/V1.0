@@ -29,6 +29,7 @@ CULVERT_DIMENSION_COLUMNS = (
     ComparisonColumn("H_arch", "拱高 H拱", "m", 3),
     ComparisonColumn("BH_ratio", "宽深比 β", "", 3),
     ComparisonColumn("HB_ratio", "高宽比 H/B", "", 3),
+    ComparisonColumn("total_perimeter", "洞身周长", "m", 3),
     ComparisonColumn("A_total", "断面总面积 A总", "m²", 3),
 )
 
@@ -75,6 +76,29 @@ def _arch_metrics(params: dict, result: dict) -> tuple[Any, Any]:
     return R_arch, H_arch
 
 
+def _total_perimeter(stype: str, params: dict, result: dict, B, H, R_arch, H_arch) -> Any:
+    """按完整内轮廓计算暗涵洞身周长，不使用过水湿周。"""
+    if B is None or B <= 0:
+        return ""
+    if stype == "圆拱直墙型":
+        theta_deg = first_num(result.get("theta_deg"), params.get("theta_deg")) or 180.0
+        theta_rad = math.radians(theta_deg)
+        H_straight = first_num(
+            result.get("H_straight"),
+            params.get("H_straight"),
+            params.get("manual_H_straight"),
+            params.get("arch_H_straight"),
+        )
+        if H_straight is None and H is not None and H_arch != "":
+            H_straight = max(0.0, H - H_arch)
+        if H_straight is None or H_straight < 0 or R_arch in ("", None) or theta_rad <= 0:
+            return ""
+        return B + 2.0 * H_straight + R_arch * theta_rad
+    if H is None or H <= 0:
+        return ""
+    return 2.0 * (B + H)
+
+
 def _dimension_row(case_name: str, stype: str, params: dict, result: dict) -> dict[str, Any]:
     """生成暗涵结构尺寸对比行。"""
     is_arch = stype == "圆拱直墙型"
@@ -87,6 +111,7 @@ def _dimension_row(case_name: str, stype: str, params: dict, result: dict) -> di
         HB_ratio = first_num(result.get("HB_ratio"), params.get("hb"))
         if HB_ratio is None and B and H:
             HB_ratio = H / B
+    total_perimeter = _total_perimeter(stype, params, result, B, H, R_arch, H_arch)
     return {
         "case_name": case_name,
         "section_type": f"暗涵-{stype}",
@@ -99,6 +124,7 @@ def _dimension_row(case_name: str, stype: str, params: dict, result: dict) -> di
         "H_arch": H_arch,
         "BH_ratio": first_num(result.get("BH_ratio"), params.get("bh")) or "",
         "HB_ratio": HB_ratio or "",
+        "total_perimeter": total_perimeter,
         "A_total": first_num(result.get("A_total")) or "",
     }
 

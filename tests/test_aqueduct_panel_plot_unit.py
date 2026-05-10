@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QTextEdit
@@ -44,6 +45,14 @@ def _process_events(app, rounds=8):
 def _axis_width_px(fig, ax):
     """返回子图在画布中的像素宽度。"""
     return ax.get_position().width * fig.get_size_inches()[0] * fig.dpi
+
+
+def _rendered_axis_width_px(fig, ax):
+    """返回等比例调整后的实际子图像素宽度。"""
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    renderer = canvas.get_renderer()
+    return ax.get_window_extent(renderer=renderer).width
 
 
 def _u_result():
@@ -459,6 +468,23 @@ def test_update_section_plot_all_keeps_aqueduct_axes_centered():
 
     assert dummy._section_plot_layout.axis_anchor == "C"
     assert [ax.get_anchor() for ax in dummy.section_fig.axes] == ["C"] * 6
+
+
+def test_update_section_plot_all_keeps_four_u_axes_readable():
+    """渡槽 U 形两行多工况不应因固定行高变成左上角小图。"""
+    all_results = [
+        (idx, {"section_type": "U形", "Q": 5.0 + idx}, _u_result())
+        for idx in range(4)
+    ]
+    dummy = _RenderPlotAllDummy(all_results, [{"section_type": "U形"} for _ in range(4)])
+
+    aqueduct_panel_mod.AqueductPanel._update_section_plot_all(dummy)
+
+    visible_axes = [ax for ax in dummy.section_fig.axes if ax.axison]
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 2
+    assert _rendered_axis_width_px(dummy.section_fig, visible_axes[0]) >= 420
+    assert [ax.get_anchor() for ax in visible_axes] == ["C"] * 4
 
 
 def test_update_section_plot_all_uses_two_columns_for_five_aqueduct_cases():

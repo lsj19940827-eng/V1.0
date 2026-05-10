@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
 
 
 MAX_CASES = 30
+DESIGN_INPUT_SIDEBAR_WIDTH_PX = 420
+DESIGN_OUTPUT_INITIAL_WIDTH_PX = 900
 
 _SUB = "₀₁₂₃₄₅₆₇₈₉"
 
@@ -29,6 +31,28 @@ _SUB = "₀₁₂₃₄₅₆₇₈₉"
 def _sub(n):
     """Convert digits to unicode subscripts, for example 12 -> ₁₂."""
     return "".join(_SUB[int(d)] for d in str(n))
+
+
+def apply_design_input_sidebar_policy(
+    scroll,
+    splitter=None,
+    *,
+    output_width_px: int = DESIGN_OUTPUT_INITIAL_WIDTH_PX,
+) -> None:
+    """统一四个设计面板的输入栏宽度，稳定容纳三枚紧凑工况标签。"""
+    if hasattr(scroll, "setMinimumWidth"):
+        scroll.setMinimumWidth(DESIGN_INPUT_SIDEBAR_WIDTH_PX)
+    if hasattr(scroll, "setMaximumWidth"):
+        scroll.setMaximumWidth(DESIGN_INPUT_SIDEBAR_WIDTH_PX)
+    if hasattr(scroll, "setSizePolicy"):
+        scroll.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+    if splitter is None:
+        return
+    if hasattr(splitter, "setStretchFactor"):
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+    if hasattr(splitter, "setSizes"):
+        splitter.setSizes([DESIGN_INPUT_SIDEBAR_WIDTH_PX, int(output_width_px)])
 
 
 CASE_TAG_ACTIVE_SS = (

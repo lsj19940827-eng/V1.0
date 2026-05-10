@@ -864,6 +864,36 @@ def test_result_case_nav_keeps_multiple_columns_for_ten_cases(
 
 
 @pytest.mark.parametrize(
+    ("folder", "class_name", "fake_results", "expected_anchor"),
+    PANEL_NAV_SCENARIOS,
+)
+def test_left_case_tags_focus_design_flow_after_switching_case(
+    monkeypatch, folder, class_name, fake_results, expected_anchor
+):
+    _get_qapp()
+    module = _load_panel_module(folder)
+    _install_nav_spies(monkeypatch, module)
+
+    panel = _make_panel_for_nav_case(module, class_name)
+    try:
+        panel._switch_case(0)
+        _flush_events(2)
+        panel.inc_edit.setFocus()
+        _flush_events(2)
+
+        panel._switch_case(1)
+        _flush_events(2)
+
+        assert panel._current_case_idx == 1
+        assert QApplication.focusWidget() is panel.Q_edit
+        assert panel.Q_edit.selectedText() == panel.Q_edit.text()
+    finally:
+        panel.close()
+        panel.deleteLater()
+        _flush_events(4)
+
+
+@pytest.mark.parametrize(
     ("folder", "class_name", "fake_results", "expected_anchors"),
     PANEL_NAV_THREE_CASE_SCENARIOS,
 )

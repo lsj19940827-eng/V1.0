@@ -1148,9 +1148,15 @@ class PressurePipePanel(QWidget):
         self._on_inc_toggle(None)
         self._loading_case = False
 
+    def _focus_design_flow_input(self):
+        """切换工况后聚焦设计流量，方便直接覆盖输入。"""
+        self.Q_edit.setFocus()
+        self.Q_edit.selectAll()
+
     def _switch_case(self, idx):
         """切换到指定工况"""
-        if idx != self._current_case_idx:
+        switched = idx != self._current_case_idx
+        if switched:
             self._save_current_case()
             self._current_case_idx = idx
             self._load_case(idx)
@@ -1165,6 +1171,8 @@ class PressurePipePanel(QWidget):
             all_results_stale=getattr(self, "_all_results_stale", False),
         ):
             self._jump_to_case_result(idx)
+        if switched:
+            self._focus_design_flow_input()
 
     def _add_case(self):
         """添加新工况（从当前工况复制参数，清空Q）"""

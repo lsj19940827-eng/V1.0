@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from typing import Callable
 
 
@@ -16,6 +17,9 @@ _VISIBLE_REFRESH_RETRY_DELAY_MS = 40
 _VISIBLE_REFRESH_MAX_RETRIES = 5
 _VISIBLE_REFRESH_WIDTH_TOLERANCE_PX = 8
 _VISIBLE_REFRESH_PARENT_GAP_PX = 32
+_MIN_READABLE_AXIS_WIDTH_PX = 420
+_AXIS_READABILITY_TOLERANCE_PX = 4
+_AXIS_READABILITY_HEIGHT_PADDING_PX = 12
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,19 @@ class SectionGridOptions:
 
     row_height_px: int | None = None
     axis_anchor: str = "C"
+    ensure_axis_readability: bool = True
+    min_axis_width_px: int | None = _MIN_READABLE_AXIS_WIDTH_PX
+    hspace: float | None = None
+    wspace: float | None = None
+
+
+DEFAULT_SECTION_GRID_OPTIONS = SectionGridOptions()
+TUNNEL_SECTION_GRID_OPTIONS = SectionGridOptions(
+    row_height_px=520,
+    axis_anchor="N",
+    ensure_axis_readability=False,
+    hspace=0.10,
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +52,10 @@ class SectionGridLayout:
     canvas_width_px: int
     canvas_height_px: int
     axis_anchor: str = "C"
+    ensure_axis_readability: bool = True
+    min_axis_width_px: int | None = _MIN_READABLE_AXIS_WIDTH_PX
+    hspace: float | None = None
+    wspace: float | None = None
 
 
 @dataclass(frozen=True)
@@ -69,7 +90,17 @@ def choose_section_grid_layout(
 
     rows = (count + columns - 1) // columns
     height = max(_MIN_HEIGHT_PX, rows * row_height)
-    return SectionGridLayout(columns, rows, width, height, axis_anchor=axis_anchor)
+    return SectionGridLayout(
+        columns,
+        rows,
+        width,
+        height,
+        axis_anchor=axis_anchor,
+        ensure_axis_readability=bool(options.ensure_axis_readability),
+        min_axis_width_px=options.min_axis_width_px,
+        hspace=options.hspace,
+        wspace=options.wspace,
+    )
 
 
 def _read_widget_width(widget) -> int | None:
@@ -351,6 +382,145 @@ def apply_section_grid_spacing(
             )
     except Exception:
         pass
+
+
+def _visible_section_axes(fig):
+    """收集当前真正参与显示的断面图坐标轴。"""
+    axes = getattr(fig, "axes", []) if fig is not None else []
+    visible_axes = []
+    for ax in axes:
+        try:
+            if not ax.get_visible() or not getattr(ax, "axison", True):
+                continue
+        except Exception:
+            continue
+        visible_axes.append(ax)
+    return visible_axes
+
+
+def _equal_axis_width_info(fig, ax) -> tuple[float, float, float] | None:
+    """估算等比例约束下子图能获得的实际宽度。"""
+    aspect = getattr(ax, "get_aspect", lambda: "auto")()
+    if str(aspect).lower() == "auto":
+        return None
+    try:
+        x0, x1 = ax.get_xlim()
+        y0, y1 = ax.get_ylim()
+        x_span = abs(float(x1) - float(x0))
+        y_span = abs(float(y1) - float(y0))
+    except Exception:
+        return None
+    if x_span <= 0 or y_span <= 0:
+        return None
+    data_width_height_ratio = x_span / y_span
+    if not math.isfinite(data_width_height_ratio) or data_width_height_ratio <= 0:
+        return None
+
+    subplotspec_getter = getattr(ax, "get_subplotspec", None)
+    if not callable(subplotspec_getter):
+        return None
+    try:
+        slot = subplotspec_getter().get_position(fig)
+    except Exception:
+        return None
+    fig_width_px = float(fig.get_size_inches()[0] * fig.dpi)
+    fig_height_px = float(fig.get_size_inches()[1] * fig.dpi)
+    slot_width_px = float(slot.width * fig_width_px)
+    slot_height_px = float(slot.height * fig_height_px)
+    slot_height_fraction = float(slot.height)
+    if slot_width_px <= 0 or slot_height_px <= 0 or slot_height_fraction <= 0:
+        return None
+
+    current_axis_width_px = min(slot_width_px, slot_height_px * data_width_height_ratio)
+    return current_axis_width_px, slot_width_px, data_width_height_ratio
+
+
+def ensure_section_axes_readable(
+    panel,
+    layout: SectionGridLayout | None = None,
+    *,
+    min_axis_width_px: int = _MIN_READABLE_AXIS_WIDTH_PX,
+) -> SectionGridLayout | None:
+    """按等比例坐标轴的真实宽度补足多工况画布高度。"""
+    fig = getattr(panel, "section_fig", None)
+    if fig is None:
+        return layout
+    current_layout = layout or getattr(panel, "_section_plot_layout", None)
+    if not isinstance(current_layout, SectionGridLayout):
+        return current_layout
+
+    fig_height_px = float(fig.get_size_inches()[1] * fig.dpi)
+    if fig_height_px <= 0:
+        return current_layout
+
+    required_height_px = float(current_layout.canvas_height_px)
+    needs_resize = False
+    target_axis_width_px = max(float(min_axis_width_px), 1.0)
+
+    for ax in _visible_section_axes(fig):
+        info = _equal_axis_width_info(fig, ax)
+        if info is None:
+            continue
+        current_axis_width_px, slot_width_px, _data_width_height_ratio = info
+        effective_target_width_px = min(target_axis_width_px, slot_width_px)
+        if current_axis_width_px >= effective_target_width_px - _AXIS_READABILITY_TOLERANCE_PX:
+            continue
+        if effective_target_width_px <= current_axis_width_px + _AXIS_READABILITY_TOLERANCE_PX:
+            continue
+        # 等比例图宽度受行高限制时，提高整张画布高度即可放大每一行的轴框。
+        candidate_height_px = fig_height_px * effective_target_width_px / max(current_axis_width_px, 1.0)
+        if math.isfinite(candidate_height_px) and candidate_height_px > required_height_px:
+            required_height_px = candidate_height_px
+            needs_resize = True
+
+    if not needs_resize:
+        return current_layout
+
+    new_height_px = int(math.ceil(required_height_px + _AXIS_READABILITY_HEIGHT_PADDING_PX))
+    if new_height_px <= current_layout.canvas_height_px:
+        return current_layout
+    new_layout = replace(current_layout, canvas_height_px=new_height_px)
+    _apply_section_canvas_size(panel, new_layout)
+    setattr(panel, "_section_plot_layout", new_layout)
+    _force_section_scroll_repaint(
+        getattr(panel, "_section_plot_scroll", None),
+        getattr(panel, "section_canvas", None),
+    )
+    return new_layout
+
+
+def finalize_section_grid_layout(
+    panel,
+    layout: SectionGridLayout,
+    *,
+    multi: bool = True,
+    hspace: float | None = None,
+    wspace: float | None = None,
+) -> SectionGridLayout:
+    """统一完成断面图边距、锚点和等比例可读高度校正。"""
+    if not isinstance(layout, SectionGridLayout):
+        return layout
+
+    effective_hspace = layout.hspace if hspace is None else hspace
+    effective_wspace = layout.wspace if wspace is None else wspace
+    apply_section_grid_spacing(
+        panel,
+        multi=multi,
+        hspace=effective_hspace,
+        wspace=effective_wspace,
+    )
+    apply_section_axis_alignment(panel, layout)
+
+    finalized = layout
+    if multi and layout.ensure_axis_readability:
+        min_axis_width = layout.min_axis_width_px or _MIN_READABLE_AXIS_WIDTH_PX
+        finalized = ensure_section_axes_readable(
+            panel,
+            layout,
+            min_axis_width_px=int(min_axis_width),
+        ) or layout
+    setattr(panel, "_section_plot_layout", finalized)
+    return finalized
 
 
 def _connect_section_scroll_repaint(scroll, canvas) -> None:

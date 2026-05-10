@@ -2,6 +2,7 @@
 """暗涵工况对比表数据口径测试。"""
 
 import sys
+import math
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,7 @@ def test_culvert_comparison_maps_rect_dimensions_and_design_clearance():
                 "V_design": 1.38,
                 "freeboard_hgt_design": 0.60,
                 "freeboard_pct_design": 33.3,
+                "P_design": 99.0,
             },
             is_valid=True,
         )
@@ -58,6 +60,8 @@ def test_culvert_comparison_maps_rect_dimensions_and_design_clearance():
     assert tables.dimension_rows[0]["B"] == pytest.approx(2.4)
     assert tables.dimension_rows[0]["H"] == pytest.approx(1.8)
     assert tables.dimension_rows[0]["HB_ratio"] == pytest.approx(0.75)
+    assert tables.dimension_rows[0]["total_perimeter"] == pytest.approx(2.0 * (2.4 + 1.8))
+    assert tables.dimension_rows[0]["total_perimeter"] != pytest.approx(99.0)
     assert tables.dimension_rows[0]["A_total"] == pytest.approx(4.32)
 
 
@@ -86,20 +90,28 @@ def test_culvert_comparison_keeps_arch_wall_height_source():
                 "freeboard_pct_design": 40.4,
                 "freeboard_hgt_inc": 0.88,
                 "freeboard_pct_inc": 33.8,
+                "P_design": 88.0,
             },
             is_valid=True,
         )
     ]
 
     tables = build_culvert_comparison_tables(entries)
+    titles = [column.title for column in CULVERT_COMPARISON_SPEC.dimension_columns]
+    keys = [column.key for column in CULVERT_COMPARISON_SPEC.dimension_columns]
+    expected_perimeter = 3.2 + 2.0 * 1.0 + 1.6 * math.pi
 
     assert tables.hydraulic_rows[0]["freeboard_hgt_design"] == pytest.approx(1.05)
     assert tables.hydraulic_rows[0]["freeboard_pct_design"] == pytest.approx(40.4)
     assert tables.hydraulic_rows[0]["freeboard_hgt_inc"] == pytest.approx(0.88)
     assert tables.hydraulic_rows[0]["freeboard_pct_inc"] == pytest.approx(33.8)
+    assert "洞身周长" in titles
+    assert "total_perimeter" in keys
     assert tables.dimension_rows[0]["H_straight"] == pytest.approx(1.0)
     assert tables.dimension_rows[0]["H_straight_source"] == "手填"
     assert tables.dimension_rows[0]["theta_deg"] == pytest.approx(180.0)
     assert tables.dimension_rows[0]["R_arch"] == pytest.approx(1.6)
     assert tables.dimension_rows[0]["H_arch"] == pytest.approx(1.6)
     assert tables.dimension_rows[0]["HB_ratio"] == pytest.approx(2.6 / 3.2)
+    assert tables.dimension_rows[0]["total_perimeter"] == pytest.approx(expected_perimeter)
+    assert tables.dimension_rows[0]["total_perimeter"] != pytest.approx(88.0)

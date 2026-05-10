@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 """UI regression tests for shared multi-case components."""
 
+import importlib
 import importlib.util
 import os
 import tempfile
 from pathlib import Path
+
+import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
@@ -13,7 +16,7 @@ os.environ.setdefault(
     str(Path(tempfile.gettempdir()) / "codex-mplconfig"),
 )
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QScrollArea, QSizePolicy, QTextEdit
 
 
 def _load_case_manager_module():
@@ -27,6 +30,8 @@ def _load_case_manager_module():
 _CASE_MANAGER = _load_case_manager_module()
 CaseTagNavigator = _CASE_MANAGER.CaseTagNavigator
 CaseWorkbenchStrip = _CASE_MANAGER.CaseWorkbenchStrip
+DESIGN_INPUT_SIDEBAR_WIDTH_PX = _CASE_MANAGER.DESIGN_INPUT_SIDEBAR_WIDTH_PX
+apply_design_input_sidebar_policy = _CASE_MANAGER.apply_design_input_sidebar_policy
 
 
 def _get_qapp():
@@ -56,6 +61,61 @@ def _label_for(case):
 def _view_getter(case, idx):
     label = _label_for(case)
     return {"label": label, "tooltip": f"{label}\n设计流量 Q={case['Q']} m³/s"}
+
+
+def _load_panel_class(folder, class_name):
+    module = importlib.import_module(f"app_渠系计算前端.{folder}.panel")
+    return module, getattr(module, class_name)
+
+
+def test_design_input_sidebar_policy_uses_fixed_unified_width():
+    _get_qapp()
+    scroll = QScrollArea()
+
+    apply_design_input_sidebar_policy(scroll)
+
+    assert DESIGN_INPUT_SIDEBAR_WIDTH_PX == 420
+    assert scroll.minimumWidth() == DESIGN_INPUT_SIDEBAR_WIDTH_PX
+    assert scroll.maximumWidth() == DESIGN_INPUT_SIDEBAR_WIDTH_PX
+    assert scroll.sizePolicy().horizontalPolicy() == QSizePolicy.Fixed
+
+    scroll.deleteLater()
+
+
+@pytest.mark.parametrize(
+    ("folder", "class_name"),
+    [
+        ("open_channel", "OpenChannelPanel"),
+        ("aqueduct", "AqueductPanel"),
+        ("tunnel", "TunnelPanel"),
+        ("culvert", "CulvertPanel"),
+    ],
+)
+def test_four_design_panels_share_input_sidebar_width_policy(monkeypatch, folder, class_name):
+    _get_qapp()
+    module, panel_class = _load_panel_class(folder, class_name)
+    if hasattr(module, "create_web_view"):
+        monkeypatch.setattr(module, "create_web_view", QTextEdit)
+
+    panel = panel_class()
+    panel.resize(1400, 900)
+    panel.show()
+    _flush_events(6)
+
+    try:
+        fixed_input_scrolls = [
+            scroll
+            for scroll in panel.findChildren(QScrollArea)
+            if scroll.minimumWidth() == DESIGN_INPUT_SIDEBAR_WIDTH_PX
+            and scroll.maximumWidth() == DESIGN_INPUT_SIDEBAR_WIDTH_PX
+        ]
+
+        assert fixed_input_scrolls
+        assert all(scroll.width() <= DESIGN_INPUT_SIDEBAR_WIDTH_PX for scroll in fixed_input_scrolls)
+    finally:
+        panel.close()
+        panel.deleteLater()
+        _flush_events(4)
 
 
 def test_case_tag_navigator_collapses_after_three_rows_and_expands_without_internal_scroll():

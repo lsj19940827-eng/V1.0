@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Polygon
 from matplotlib.figure import Figure
 
@@ -30,6 +31,14 @@ for calc_dir in ROOT.glob("calc_*"):
         sys.path.insert(0, calc_path)
 
 culvert_panel_mod = importlib.import_module("app_渠系计算前端.culvert.panel")
+
+
+def _rendered_axis_width_px(fig, ax):
+    """返回等比例调整后的实际子图像素宽度。"""
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    renderer = canvas.get_renderer()
+    return ax.get_window_extent(renderer=renderer).width
 
 
 class _PlotDummy:
@@ -378,6 +387,25 @@ def test_multi_case_section_plot_keeps_culvert_axes_centered():
 
     assert dummy._section_plot_layout.axis_anchor == "C"
     assert [ax.get_anchor() for ax in dummy.section_fig.axes] == ["C"] * 6
+
+
+def test_multi_case_rect_culvert_keeps_four_axes_readable():
+    """暗涵矩形两行多工况不应因固定行高变成左上角小图。"""
+    params = {"section_type": "矩形", "Q": 5.0, "use_increase": True}
+    dummy = _PlotDummy(
+        all_results=[
+            (idx, params | {"Q": 5.0 + idx}, _rect_result(h_increased=1.60 + idx * 0.02))
+            for idx in range(4)
+        ]
+    )
+
+    culvert_panel_mod.CulvertPanel._update_section_plot_all(dummy)
+
+    visible_axes = [ax for ax in dummy.section_fig.axes if ax.axison]
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 2
+    assert _rendered_axis_width_px(dummy.section_fig, visible_axes[0]) >= 420
+    assert [ax.get_anchor() for ax in visible_axes] == ["C"] * 4
 
 
 def test_multi_case_section_plot_uses_two_columns_for_five_culvert_cases():

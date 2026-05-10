@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import html as html_mod
 import re
+from decimal import Decimal, InvalidOperation
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -122,6 +122,45 @@ def _compact_case_nav_text(case_idx: int, label: str, summary: str, *, is_error:
     return f"{title}  {detail}" if detail else title
 
 
+def _normalize_q_value_for_compare(raw: str) -> str:
+    """规范化 Q 数值文本，用于识别只差小数位的重复提示。"""
+    raw = str(raw or "").strip()
+    if raw == "?":
+        return "?"
+    try:
+        value = Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return raw
+    if value == 0:
+        return "0"
+    text = format(value.normalize(), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _tooltip_compare_key(text: str) -> str:
+    """生成 tooltip 去重比较键，忽略 Q 的无意义小数位。"""
+    text = str(text or "").strip()
+    return _Q_TEXT_RE.sub(
+        lambda match: f"Q={_normalize_q_value_for_compare(match.group(1))}",
+        text,
+    )
+
+
+def _case_nav_tooltip_text(label: str, summary: str) -> str:
+    """生成结果导航提示，避免 label 和 summary 重复显示同一 Q 信息。"""
+    label_text = str(label or "").strip()
+    summary_text = str(summary or "").strip()
+    if not summary_text:
+        return label_text
+    if not label_text:
+        return summary_text
+    if _tooltip_compare_key(label_text) == _tooltip_compare_key(summary_text):
+        return summary_text
+    return f"{label_text}\n{summary_text}"
+
+
 class CaseResultNavChip(QPushButton):
     """Desktop-native case navigation chip."""
 
@@ -144,10 +183,7 @@ class CaseResultNavChip(QPushButton):
             is_error=bool(is_error),
         )
         self.setText(display_text)
-        if summary_text:
-            self.setToolTip(f"{label_text}\n{summary_text}")
-        else:
-            self.setToolTip(label_text)
+        self.setToolTip(_case_nav_tooltip_text(label_text, summary_text))
         if is_error:
             self.setStyleSheet(
                 _CASE_NAV_CHIP_BASE_SS.format(
@@ -180,18 +216,14 @@ class _CaseNavChipWrap(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._chips = []
-        self._grid = QGridLayout(self)
-        self._grid.setContentsMargins(0, 0, 0, 0)
-        self._grid.setHorizontalSpacing(8)
-        self._grid.setVerticalSpacing(8)
+        self._horizontal_spacing = 8
+        self._vertical_spacing = 8
+        self.setContentsMargins(0, 0, 0, 0)
 
     def clear_chips(self):
         self._chips = []
-        while self._grid.count():
-            item = self._grid.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.hide()
+        for widget in self.findChildren(CaseResultNavChip):
+            widget.hide()
         self.updateGeometry()
 
     def set_chips(self, chips):
@@ -207,12 +239,12 @@ class _CaseNavChipWrap(QWidget):
         chips = [chip for chip in self._chips if chip is not None]
         if not chips:
             return 0
-        spacing = max(0, self._grid.horizontalSpacing())
+        spacing = max(0, self._horizontal_spacing)
         available_width = max(1, int(width or self.contentsRect().width()))
         current_width = 0
         row_count = 1
         for chip in chips:
-            chip_width = max(chip.minimumSizeHint().width(), chip.sizeHint().width())
+            chip_width = self._chip_width(chip)
             required_width = chip_width if current_width == 0 else chip_width + spacing
             if current_width > 0 and current_width + required_width > available_width:
                 row_count += 1
@@ -225,8 +257,8 @@ class _CaseNavChipWrap(QWidget):
         """按行数估算导航标签区高度。"""
         chips = [chip for chip in self._chips if chip is not None]
         chip_height = max((chip.sizeHint().height() for chip in chips), default=34)
-        spacing = max(0, self._grid.verticalSpacing())
-        margins = self._grid.contentsMargins()
+        spacing = max(0, self._vertical_spacing)
+        margins = self.contentsMargins()
         rows = max(0, int(row_count))
         if rows <= 0:
             return margins.top() + margins.bottom()
@@ -237,32 +269,44 @@ class _CaseNavChipWrap(QWidget):
             + max(0, rows - 1) * spacing
         )
 
-    def _relayout(self, width=None):
-        while self._grid.count():
-            self._grid.takeAt(0)
+    def _chip_width(self, chip) -> int:
+        """返回标签需要的真实宽度，避免布局压缩导致中文边缘被裁切。"""
+        return max(chip.minimumSizeHint().width(), chip.sizeHint().width())
 
+    def _chip_height(self, chip) -> int:
+        """返回标签需要的真实高度。"""
+        return max(chip.minimumSizeHint().height(), chip.sizeHint().height())
+
+    def _relayout(self, width=None):
         if not self._chips:
             self.updateGeometry()
             return
 
-        spacing = max(0, self._grid.horizontalSpacing())
+        h_spacing = max(0, self._horizontal_spacing)
+        v_spacing = max(0, self._vertical_spacing)
+        margins = self.contentsMargins()
         available_width = max(1, int(width or self.contentsRect().width()))
+        row_start_x = margins.left()
+        row_y = margins.top()
+        right_limit = max(row_start_x + 1, available_width - margins.right())
         current_width = 0
-        row = 0
-        column = 0
+        row_height = 0
 
         for chip in self._chips:
             chip.show()
-            chip_width = max(chip.minimumSizeHint().width(), chip.sizeHint().width())
-            required_width = chip_width if column == 0 else chip_width + spacing
-            if column > 0 and current_width + required_width > available_width:
-                row += 1
-                column = 0
+            chip_width = self._chip_width(chip)
+            chip_height = self._chip_height(chip)
+            required_width = chip_width if current_width == 0 else chip_width + h_spacing
+            if current_width > 0 and row_start_x + current_width + required_width > right_limit:
+                row_y += row_height + v_spacing
                 current_width = 0
+                row_height = 0
                 required_width = chip_width
-            self._grid.addWidget(chip, row, column, Qt.AlignLeft | Qt.AlignVCenter)
+
+            x = row_start_x + current_width + (h_spacing if current_width > 0 else 0)
+            chip.setGeometry(x, row_y, chip_width, chip_height)
             current_width += required_width
-            column += 1
+            row_height = max(row_height, chip_height)
 
         self.updateGeometry()
 

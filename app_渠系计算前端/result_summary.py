@@ -9,6 +9,8 @@ import math
 import re
 from typing import Iterable, List, Sequence
 
+from app_渠系计算前端.tunnel.comparison import compute_tunnel_total_geometry_metrics
+
 
 _FREEBOARD_HEIGHT_TOL = 1e-3
 _FREEBOARD_PCT_TOL = 0.1
@@ -47,6 +49,15 @@ def _num(value):
     if not math.isfinite(number):
         return None
     return number
+
+
+def _first_num(*values):
+    """依次读取第一个有效数值。"""
+    for value in values:
+        number = _num(value)
+        if number is not None:
+            return number
+    return None
 
 
 def _has_positive(value) -> bool:
@@ -274,6 +285,7 @@ def _arch_metrics(result: dict) -> tuple[float | None, float | None]:
 def _tunnel_size_group(params: dict, result: dict) -> SummaryGroup:
     """生成隧洞结构尺寸指标组。"""
     stype = str(params.get("section_type", "") or result.get("section_type", "") or "圆形")
+    geometry = compute_tunnel_total_geometry_metrics(params, result)
     items: list[SummaryItem] = []
     if stype == "平底圆形":
         _append(items, "直径 D", _fmt_m(result.get("D")))
@@ -293,8 +305,42 @@ def _tunnel_size_group(params: dict, result: dict) -> SummaryGroup:
     else:
         _append(items, "半径 r", _fmt_m(result.get("r")))
         _append(items, "等效直径 2r", _fmt_m(result.get("D_equiv")))
+    _append(items, "洞身周长", _fmt_m(geometry.get("total_perimeter")))
     _append(items, "断面总面积 A总", _fmt_m2(result.get("A_total")))
     return SummaryGroup("结构尺寸", items)
+
+
+def _culvert_total_perimeter(params: dict, result: dict, stype: str) -> float | None:
+    """按完整内轮廓计算暗涵洞身周长。"""
+    B = _first_num(result.get("B"), params.get("B"), params.get("arch_B"))
+    if B is None or B <= 0:
+        return None
+    if "圆拱直墙" in stype:
+        theta_deg = _first_num(result.get("theta_deg"), params.get("theta_deg")) or 180.0
+        theta_rad = math.radians(theta_deg)
+        if theta_rad <= 0:
+            return None
+        sin_half = math.sin(theta_rad / 2.0)
+        if abs(sin_half) <= 1e-9:
+            return None
+        r_arch = (B / 2.0) / sin_half
+        h_arch = r_arch * (1.0 - math.cos(theta_rad / 2.0))
+        H_straight = _first_num(
+            result.get("H_straight"),
+            params.get("H_straight"),
+            params.get("manual_H_straight"),
+            params.get("arch_H_straight"),
+        )
+        if H_straight is None:
+            H_total = _first_num(result.get("H_total"), result.get("H"), params.get("H_total"), params.get("H"))
+            H_straight = max(0.0, H_total - h_arch) if H_total is not None else None
+        if H_straight is None or H_straight < 0:
+            return None
+        return B + 2.0 * H_straight + r_arch * theta_rad
+    H = _first_num(result.get("H_total"), result.get("H"), params.get("H_total"), params.get("H"))
+    if H is None or H <= 0:
+        return None
+    return 2.0 * (B + H)
 
 
 def _culvert_size_group(params: dict, result: dict) -> SummaryGroup:
@@ -315,6 +361,7 @@ def _culvert_size_group(params: dict, result: dict) -> SummaryGroup:
         _append(items, "高度 H", _fmt_m(result.get("H")))
         _append(items, "宽深比 β", _fmt_ratio(result.get("BH_ratio")))
         _append(items, "高宽比 H/B", _fmt_ratio(result.get("HB_ratio")))
+    _append(items, "洞身周长", _fmt_m(_culvert_total_perimeter(params, result, stype)))
     _append(items, "断面总面积 A总", _fmt_m2(result.get("A_total")))
     return SummaryGroup("结构尺寸", items)
 

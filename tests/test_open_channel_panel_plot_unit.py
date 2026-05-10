@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from matplotlib.colors import to_rgba
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
 
@@ -31,6 +32,14 @@ for calc_dir in ROOT.glob("calc_*"):
         sys.path.insert(0, calc_path)
 
 open_channel_panel_mod = importlib.import_module("app_渠系计算前端.open_channel.panel")
+
+
+def _rendered_axis_width_px(fig, ax):
+    """返回等比例调整后的实际子图像素宽度。"""
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    renderer = canvas.get_renderer()
+    return ax.get_window_extent(renderer=renderer).width
 
 
 class _PlotAllDummy:
@@ -479,6 +488,44 @@ def test_multi_case_section_plot_keeps_open_channel_axes_centered():
 
     assert dummy._section_plot_layout.axis_anchor == "C"
     assert [ax.get_anchor() for ax in dummy.section_fig.axes] == ["C"] * 6
+
+
+def test_multi_case_u_section_plot_keeps_readable_axis_width():
+    """明渠 U 形两行多工况不应因固定行高变成左上角小图。"""
+    all_results = [
+        (idx, params | {"Q": 5.0 + idx}, result)
+        for idx, (params, result) in enumerate(
+            [_u_case(5.0 + i, 1.10 + i * 0.02, 1.25 + i * 0.02) for i in range(4)]
+        )
+    ]
+    dummy = _PlotAllDummy(all_results)
+
+    open_channel_panel_mod.OpenChannelPanel._update_section_plot_all(dummy)
+
+    visible_axes = [ax for ax in dummy.section_fig.axes if ax.axison]
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 2
+    assert _rendered_axis_width_px(dummy.section_fig, visible_axes[0]) >= 420
+    assert [ax.get_anchor() for ax in visible_axes] == ["C"] * 4
+
+
+def test_multi_case_wide_trapezoid_does_not_grow_canvas_when_already_readable():
+    """明渠宽扁梯形已满足宽度时，不应为了校正而无意义拉高画布。"""
+    all_results = [
+        (idx, params | {"Q": 5.0 + idx}, result)
+        for idx, (params, result) in enumerate(
+            [_base_trapezoid_case("梯形", 5.0 + i, 1.30 + i * 0.01) for i in range(4)]
+        )
+    ]
+    dummy = _PlotAllDummy(all_results)
+
+    open_channel_panel_mod.OpenChannelPanel._update_section_plot_all(dummy)
+
+    visible_axes = [ax for ax in dummy.section_fig.axes if ax.axison]
+    assert dummy._section_plot_layout.columns == 2
+    assert dummy._section_plot_layout.rows == 2
+    assert dummy._section_plot_layout.canvas_height_px == 720
+    assert _rendered_axis_width_px(dummy.section_fig, visible_axes[0]) >= 420
 
 
 def test_multi_case_section_plot_uses_two_columns_for_five_open_channel_cases():

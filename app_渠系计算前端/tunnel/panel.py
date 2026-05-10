@@ -45,8 +45,6 @@ import numpy as np
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun']
 plt.rcParams['axes.unicode_minus'] = False
 
-_TUNNEL_SECTION_ROW_HEIGHT_PX = 520
-
 from 隧洞设计 import (
     quick_calculate_circular,
     quick_calculate_flat_bottom_circular,
@@ -71,6 +69,7 @@ from app_渠系计算前端.case_manager import (
     CaseTagChip as _CaseTagChip,
     DashedButton as _DashedButton,
     MAX_CASES,
+    apply_design_input_sidebar_policy,
     _SUB, _sub,
     CASE_TAG_ACTIVE_SS as _CASE_TAG_ACTIVE_SS,
     CASE_TAG_INACTIVE_SS as _CASE_TAG_INACTIVE_SS,
@@ -129,14 +128,13 @@ from app_渠系计算前端.plot_title_utils import (
 )
 from app_渠系计算前端.section_plotting import draw_section
 from app_渠系计算前端.section_plot_layout import (
-    SectionGridOptions,
-    apply_section_axis_alignment,
-    apply_section_grid_spacing,
+    TUNNEL_SECTION_GRID_OPTIONS,
     clear_section_plot_state,
     configure_section_grid_canvas,
     connect_section_tab_refresh,
     connect_section_plot_double_click,
     create_section_plot_scroll_area,
+    finalize_section_grid_layout,
     register_section_axis_dialog,
     reset_section_axis_dialogs,
     schedule_section_plot_restore_refresh,
@@ -249,14 +247,12 @@ class TunnelPanel(QWidget):
         inp_w = QWidget()
         self._build_input(inp_w)
         scroll.setWidget(inp_w)
-        scroll.setMinimumWidth(280)
-        scroll.setMaximumWidth(420)
         splitter.addWidget(scroll)
 
         out_w = QWidget()
         self._build_output(out_w)
         splitter.addWidget(out_w)
-        splitter.setSizes([340, 900])
+        apply_design_input_sidebar_policy(scroll, splitter)
 
     # ----------------------------------------------------------------
     def _build_input(self, parent):
@@ -653,8 +649,14 @@ class TunnelPanel(QWidget):
         self.r_edit.setText(c.get('r', ''))
         self._loading_case = False
 
+    def _focus_design_flow_input(self):
+        """切换工况后聚焦设计流量，方便直接覆盖输入。"""
+        self.Q_edit.setFocus()
+        self.Q_edit.selectAll()
+
     def _switch_case(self, idx):
-        if idx != self._current_case_idx:
+        switched = idx != self._current_case_idx
+        if switched:
             self._save_current_case()
             self._current_case_idx = idx
             self._load_case(idx)
@@ -669,6 +671,8 @@ class TunnelPanel(QWidget):
             all_results_stale=getattr(self, "_all_results_stale", False),
         ):
             self._jump_to_case_result(idx)
+        if switched:
+            self._focus_design_flow_input()
 
     def _add_case(self):
         if len(self._cases) >= MAX_CASES:
@@ -2291,10 +2295,7 @@ class TunnelPanel(QWidget):
         layout = configure_section_grid_canvas(
             self,
             n,
-            layout_options=SectionGridOptions(
-                row_height_px=_TUNNEL_SECTION_ROW_HEIGHT_PX,
-                axis_anchor="N",
-            ),
+            layout_options=TUNNEL_SECTION_GRID_OPTIONS,
         )
         cols = layout.columns
         rows = layout.rows
@@ -2342,8 +2343,7 @@ class TunnelPanel(QWidget):
         for idx in range(n, rows * cols):
             r_idx, c_idx = divmod(idx, cols)
             axes[r_idx][c_idx].axis('off')
-        apply_section_grid_spacing(self, multi=True, hspace=0.10)
-        apply_section_axis_alignment(self, layout)
+        layout = finalize_section_grid_layout(self, layout, multi=True) or layout
         self.section_canvas.draw()
 
     def _draw_increased_waterline(self, ax, section_type, input_params, result):

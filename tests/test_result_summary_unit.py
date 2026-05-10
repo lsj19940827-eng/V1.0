@@ -3,6 +3,7 @@
 
 import os
 import sys
+import math
 from pathlib import Path
 
 import pytest
@@ -179,8 +180,8 @@ def _culvert_arch_case():
     [
         ("open_channel", _open_channel_case, ["底宽 B", "渠道高度 H", "渠道超高"]),
         ("aqueduct", _aqueduct_case, ["内半径 R", "槽身总高 H", "槽顶超高"]),
-        ("tunnel", _tunnel_case, ["直墙高度 H直", "净空比例", "总高 H"]),
-        ("culvert", _culvert_case, ["宽度 B", "净空比例", "高度 H"]),
+        ("tunnel", _tunnel_case, ["直墙高度 H直", "净空比例", "总高 H", "洞身周长"]),
+        ("culvert", _culvert_case, ["宽度 B", "净空比例", "高度 H", "洞身周长"]),
     ],
 )
 def test_result_summary_html_contains_core_and_structure_specific_values(panel_key, case_factory, expected):
@@ -214,37 +215,68 @@ def test_result_summary_hides_missing_increase_group_and_shows_short_note():
 def test_tunnel_summary_shows_hb_when_total_height_and_width_exist():
     """隧洞结果摘要应在有 H 和 B 时显示高宽比。"""
     params, result = _tunnel_case()
+    theta_rad = math.radians(result["theta_deg"])
+    r_arch = (result["B"] / 2.0) / math.sin(theta_rad / 2.0)
+    expected_perimeter = result["B"] + 2.0 * result["H_straight"] + r_arch * theta_rad
 
     html = result_summary.build_result_summary_html("tunnel", params, result)
     items = result_summary.build_result_summary_word_items("tunnel", params, result)
 
     assert "高宽比 H/B" in html
     assert "0.867" in html
+    assert "洞身周长" in html
+    assert f"{expected_perimeter:.3f} m" in html
     assert ("结构尺寸 - 高宽比 H/B", "0.867") in items
+    assert ("结构尺寸 - 洞身周长", f"{expected_perimeter:.3f} m") in items
 
 
 def test_flat_bottom_tunnel_summary_shows_hb_when_total_height_and_width_exist():
     """平底圆形隧洞也应按总高和平底宽显示高宽比。"""
     params, result = _tunnel_flat_bottom_case()
+    radius = result["D"] / 2.0
+    minor_angle = 2.0 * math.asin(result["B"] / (2.0 * radius))
+    expected_perimeter = result["B"] + radius * (math.tau - minor_angle)
 
     html = result_summary.build_result_summary_html("tunnel", params, result)
     items = result_summary.build_result_summary_word_items("tunnel", params, result)
 
     assert "高宽比 H/B" in html
     assert "1.866" in html
+    assert "洞身周长" in html
+    assert f"{expected_perimeter:.3f} m" in html
     assert ("结构尺寸 - 高宽比 H/B", "1.866") in items
+    assert ("结构尺寸 - 洞身周长", f"{expected_perimeter:.3f} m") in items
 
 
 def test_arch_culvert_summary_shows_hb_when_total_height_and_width_exist():
     """圆拱直墙型暗涵应按总高和宽度显示高宽比。"""
     params, result = _culvert_arch_case()
+    theta_rad = math.radians(result["theta_deg"])
+    r_arch = (result["B"] / 2.0) / math.sin(theta_rad / 2.0)
+    expected_perimeter = result["B"] + 2.0 * result["H_straight"] + r_arch * theta_rad
 
     html = result_summary.build_result_summary_html("culvert", params, result)
     items = result_summary.build_result_summary_word_items("culvert", params, result)
 
     assert "高宽比 H/B" in html
     assert "0.812" in html
+    assert "洞身周长" in html
+    assert f"{expected_perimeter:.3f} m" in html
     assert ("结构尺寸 - 高宽比 H/B", "0.812") in items
+    assert ("结构尺寸 - 洞身周长", f"{expected_perimeter:.3f} m") in items
+
+
+def test_rect_culvert_summary_shows_full_inner_perimeter():
+    """矩形暗涵结果摘要应显示完整内轮廓洞身周长。"""
+    params, result = _culvert_case()
+    expected_perimeter = 2.0 * (result["B"] + result["H"])
+
+    html = result_summary.build_result_summary_html("culvert", params, result)
+    items = result_summary.build_result_summary_word_items("culvert", params, result)
+
+    assert "洞身周长" in html
+    assert f"{expected_perimeter:.3f} m" in html
+    assert ("结构尺寸 - 洞身周长", f"{expected_perimeter:.3f} m") in items
 
 
 def test_culvert_summary_uses_kernel_freeboard_check_for_boundary_pass():

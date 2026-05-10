@@ -138,6 +138,45 @@ def test_case_result_navigation_bar_compacts_thirty_items_to_two_rows_then_scrol
     bar.deleteLater()
 
 
+def test_case_result_navigation_bar_keeps_double_digit_failed_labels_unclipped():
+    _get_qapp()
+    mod = importlib.import_module("app_渠系计算前端.result_navigation")
+    items = []
+    for idx in range(13):
+        is_error = idx >= 5
+        items.append(
+            {
+                "case_idx": idx,
+                "label": f"工况 {idx + 1}",
+                "summary": "计算失败" if is_error else "矩形 · Q=7.000",
+                "is_error": is_error,
+            }
+        )
+
+    bar = mod.CaseResultNavigationBar()
+    bar.resize(900, 500)
+    bar.set_items(items)
+    bar.show()
+    _flush_events(6)
+
+    try:
+        host_width = bar._chip_host.width()
+        double_digit_labels = [chip.text() for chip in bar.chips() if chip.case_idx >= 9]
+
+        assert double_digit_labels == [
+            "工况10  计算失败",
+            "工况11  计算失败",
+            "工况12  计算失败",
+            "工况13  计算失败",
+        ]
+        for chip in bar.chips():
+            required_width = max(chip.minimumSizeHint().width(), chip.sizeHint().width())
+            assert chip.width() >= required_width
+            assert chip.geometry().x() + chip.width() <= host_width
+    finally:
+        bar.deleteLater()
+
+
 def test_case_result_navigation_bar_resyncs_when_viewport_grows_without_bar_resize():
     _get_qapp()
     mod = importlib.import_module("app_渠系计算前端.result_navigation")
@@ -206,6 +245,38 @@ def test_case_result_navigation_bar_renders_multiple_items_and_emits_case_idx():
     assert requested == [0, 7]
 
     bar.deleteLater()
+
+
+def test_case_result_nav_chip_deduplicates_equivalent_q_tooltip_lines():
+    _get_qapp()
+    mod = importlib.import_module("app_渠系计算前端.result_navigation")
+
+    duplicate_chip = mod.CaseResultNavChip(
+        4,
+        "梯形 · Q=9",
+        summary="梯形 · Q=9.000",
+    )
+    contextual_chip = mod.CaseResultNavChip(
+        4,
+        "工况 5",
+        summary="梯形 · Q=9.000",
+    )
+    failed_chip = mod.CaseResultNavChip(
+        5,
+        "工况 6",
+        summary="计算失败",
+        is_error=True,
+    )
+
+    try:
+        assert duplicate_chip.text() == "工况5  Q=9.000"
+        assert duplicate_chip.toolTip() == "梯形 · Q=9.000"
+        assert contextual_chip.toolTip() == "工况 5\n梯形 · Q=9.000"
+        assert failed_chip.toolTip() == "工况 6\n计算失败"
+    finally:
+        duplicate_chip.deleteLater()
+        contextual_chip.deleteLater()
+        failed_chip.deleteLater()
 
 
 def test_case_result_state_helpers_distinguish_fresh_stale_and_empty_results():

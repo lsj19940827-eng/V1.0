@@ -23,10 +23,12 @@ from app_渠系计算前端.section_plot_layout import (
     configure_section_grid_canvas,
     connect_section_tab_refresh,
     create_section_plot_scroll_area,
+    finalize_section_grid_layout,
     handle_section_plot_double_click,
     register_section_axis_dialog,
     refresh_section_plot_when_visible,
     schedule_section_plot_restore_refresh,
+    TUNNEL_SECTION_GRID_OPTIONS,
 )
 
 
@@ -306,6 +308,55 @@ def test_section_grid_options_can_top_align_equal_aspect_axes():
 
     assert layout.axis_anchor == "N"
     assert [ax.get_anchor() for ax in axes] == ["N"] * 4
+
+
+def test_finalize_section_grid_layout_applies_spacing_alignment_and_readability():
+    """统一收口函数应同时完成边距、锚点和等比例可读高度校正。"""
+    fig = Figure(figsize=(12, 7.2), dpi=100)
+    axes = fig.subplots(2, 2, squeeze=False)
+    for ax in axes.ravel():
+        ax.set_xlim(-5, 5)
+        ax.set_ylim(-0.5, 1.2)
+        ax.set_aspect("equal")
+    panel = SimpleNamespace(section_fig=fig, section_canvas=_Canvas())
+    layout = SectionGridLayout(
+        2,
+        2,
+        1200,
+        720,
+        axis_anchor="C",
+        ensure_axis_readability=True,
+        min_axis_width_px=420,
+    )
+
+    finalized = finalize_section_grid_layout(panel, layout, multi=True)
+
+    assert finalized.canvas_height_px >= layout.canvas_height_px
+    assert [ax.get_anchor() for ax in axes.ravel()] == ["C"] * 4
+    assert panel._section_plot_layout == finalized
+
+
+def test_tunnel_section_grid_options_keep_special_height_without_readability_growth():
+    """隧洞通过共享配置保留高行高、顶对齐和 9 工况 2600px 画布。"""
+    panel = SimpleNamespace(section_fig=Figure(dpi=100), section_canvas=_Canvas())
+    layout = configure_section_grid_canvas(
+        panel,
+        9,
+        available_width_px=1200,
+        layout_options=TUNNEL_SECTION_GRID_OPTIONS,
+    )
+    axes = panel.section_fig.subplots(5, 2, squeeze=False)
+    for ax in axes.ravel():
+        ax.set_xlim(-4, 4)
+        ax.set_ylim(-0.5, 6.0)
+        ax.set_aspect("equal")
+
+    finalized = finalize_section_grid_layout(panel, layout, multi=True)
+
+    assert finalized.canvas_width_px == 1200
+    assert finalized.canvas_height_px == 2600
+    assert finalized.axis_anchor == "N"
+    assert [ax.get_anchor() for ax in axes.ravel()] == ["N"] * 10
 
 
 def test_section_grid_spacing_does_not_change_axis_anchor():
