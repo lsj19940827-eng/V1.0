@@ -632,13 +632,75 @@ class UpdateDialog(QDialog):
         project_manager = getattr(parent, "project_manager", None)
         return bool(project_manager and getattr(project_manager, "is_dirty", False))
 
-    def _validate_before_install(self) -> bool:
-        if self._is_project_dirty():
+    def _confirm_save_before_install(self) -> bool:
+        """询问用户是否先保存项目再继续安装。"""
+        title = "保存后继续安装"
+        content = (
+            "检测到当前项目还有未保存修改。\n\n"
+            "是否先保存项目，然后继续安装已经下载好的更新包？"
+        )
+        try:
+            from app_渠系计算前端.styles import fluent_question
+
+            return bool(
+                fluent_question(
+                    self,
+                    title,
+                    content,
+                    yes_text="保存并继续安装",
+                    no_text="稍后再说",
+                )
+            )
+        except Exception:
+            box = QMessageBox(self)
+            box.setWindowTitle(title)
+            box.setText(content)
+            box.setIcon(QMessageBox.Question)
+            save_button = box.addButton("保存并继续安装", QMessageBox.AcceptRole)
+            box.addButton("稍后再说", QMessageBox.RejectRole)
+            box.setDefaultButton(save_button)
+            box.exec()
+            return box.clickedButton() is save_button
+
+    def _ensure_project_saved_before_install(self) -> bool:
+        """安装前确保项目已保存，保存成功后继续复用已下载更新包。"""
+        if not self._is_project_dirty():
+            return True
+
+        if not self._confirm_save_before_install():
+            self._status_label.setText("已下载更新包，保存项目后可继续安装")
+            self._status_label.setStyleSheet("color: #E65100; font-size: 12px;")
+            return False
+
+        parent = self.parent()
+        project_manager = getattr(parent, "project_manager", None)
+        if not project_manager or not hasattr(project_manager, "save_project"):
             QMessageBox.warning(
                 self,
-                "请先保存当前项目",
-                "检测到当前项目还有未保存修改。\n\n请先保存项目，再重新点击“立即安装更新”。",
+                "暂时无法安装",
+                "未找到项目保存入口，请先手动保存项目后再安装更新。",
             )
+            return False
+
+        try:
+            saved = bool(project_manager.save_project())
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "保存失败",
+                f"保存项目时出现异常：\n{exc}\n\n已下载更新包仍会保留，请保存后再次点击“立即安装更新”。",
+            )
+            return False
+
+        if not saved:
+            self._status_label.setText("项目尚未保存，已下载更新包仍会保留")
+            self._status_label.setStyleSheet("color: #E65100; font-size: 12px;")
+            return False
+
+        return True
+
+    def _validate_before_install(self) -> bool:
+        if not self._ensure_project_saved_before_install():
             return False
 
         from updater import ensure_update_package_ready, UpdatePreparationError

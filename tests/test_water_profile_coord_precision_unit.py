@@ -651,6 +651,82 @@ def test_update_table_from_nodes_full_impl_keeps_exact_source_coordinate_text():
     assert payload[module.SOURCE_COORD_Y_ROLE_KEY] == "3377745.982674"
 
 
+def test_update_table_from_nodes_full_impl_marks_negative_curve_check_values_red():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+
+    nodes = [
+        _make_node(check_pre_curve=-0.991, check_post_curve=0.0, check_total_length=-0.992),
+        _make_node(check_pre_curve=-0.0004, check_post_curve=0.001, check_total_length=0.0),
+    ]
+
+    module.WaterProfilePanel._update_table_from_nodes_full_impl(panel, nodes)
+
+    assert panel.node_table.item(0, 17).foreground == "#C62828"
+    assert panel.node_table.item(0, 18).foreground is None
+    assert panel.node_table.item(0, 19).foreground == "#C62828"
+    assert panel.node_table.item(1, 17).text() == "-0.000"
+    assert panel.node_table.item(1, 17).foreground is None
+
+
+def test_calculation_completion_notice_warns_once_for_negative_curve_checks():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    panel._info_parent = lambda: None
+    warning_calls = []
+    success_calls = []
+    module.InfoBar = SimpleNamespace(
+        warning=lambda *args, **kwargs: warning_calls.append((args, kwargs)),
+        success=lambda *args, **kwargs: success_calls.append((args, kwargs)),
+    )
+    module.InfoBarPosition = SimpleNamespace(TOP=1)
+
+    nodes = [
+        _make_node(check_pre_curve=-0.991, check_post_curve=0.0, check_total_length=-0.992),
+        _make_node(check_pre_curve=-0.0004, check_post_curve=0.0, check_total_length=0.0),
+    ]
+
+    module.WaterProfilePanel._show_calculation_completion_notice(
+        panel,
+        "共2个节点，总长10.0m，水位落差0.100m",
+        nodes,
+        missing_height_names=[],
+        has_gate_backfill_issue=False,
+    )
+
+    assert len(warning_calls) == 1
+    assert success_calls == []
+    warning_text = " ".join(str(part) for part in warning_calls[0][0])
+    assert "复核长度需复核" in warning_text
+    assert "第1行：复核弯前长度 -0.991、复核总长度 -0.992" in warning_text
+    assert "-0.000" not in warning_text
+
+
+def test_negative_curve_check_notice_limits_long_lists():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+
+    nodes = [
+        _make_node(check_pre_curve=-(idx + 1) * 0.01, check_post_curve=0.0, check_total_length=0.0)
+        for idx in range(6)
+    ]
+
+    notice = module.WaterProfilePanel._format_negative_curve_check_notice(panel, nodes)
+
+    assert "第1行：复核弯前长度 -0.010" in notice
+    assert "第5行：复核弯前长度 -0.050" in notice
+    assert "第6行" not in notice
+    assert "等6处" in notice
+
+
+def test_curve_check_formula_header_mapping_is_preserved():
+    formula_dialog_text = Path("app_渠系计算前端/water_profile/formula_dialog.py").read_text(encoding="utf-8")
+
+    assert '"复核弯前长度"' in formula_dialog_text
+    assert '"复核弯后长度"' in formula_dialog_text
+    assert '"复核总长度"' in formula_dialog_text
+
+
 def test_neighbor_precision_uses_higher_decimal_count_from_source_rows():
     module = _load_panel_module()
     panel = _make_basic_panel(module)

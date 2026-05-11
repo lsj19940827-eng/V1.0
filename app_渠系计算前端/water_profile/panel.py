@@ -270,6 +270,18 @@ NODE_ALL_HEADERS = [
 
 # 导出Excel时使用的表头（与NODE_ALL_HEADERS一致）
 NODE_EXPORT_HEADERS = NODE_ALL_HEADERS
+CURVE_CHECK_COLUMN_LABELS = {
+    17: "复核弯前长度",
+    18: "复核弯后长度",
+    19: "复核总长度",
+}
+CURVE_CHECK_ATTRS = (
+    ("check_pre_curve", "复核弯前长度"),
+    ("check_post_curve", "复核弯后长度"),
+    ("check_total_length", "复核总长度"),
+)
+CURVE_CHECK_NEGATIVE_COLOR = "#C62828"
+CURVE_CHECK_NOTICE_LIMIT = 5
 
 # 节点数据表工具栏布局预设：
 # compact（紧凑）/ balanced（平衡，默认）/ comfortable（宽松）
@@ -8094,6 +8106,7 @@ class WaterProfilePanel(QWidget):
                 item = QTableWidgetItem(str(v))
                 item.setTextAlignment(Qt.AlignCenter)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self._apply_curve_check_item_style(item, c)
                 self.node_table.setItem(r, c, item)
 
         auto_resize_table(self.node_table)
@@ -8985,17 +8998,12 @@ class WaterProfilePanel(QWidget):
                 details.get("status") != "success"
                 for details in self._collect_terminal_gate_backfill_records(calculated)
             )
-            if missing_height_names:
-                msg += f"\n⚠ 以下节点缺少结构总高，渠顶高程未计算: {', '.join(missing_height_names)}"
-                msg += "\n请通过【断面批量计算】并自动同步后获取正确的结构总高。"
-                InfoBar.warning("计算完成（部分渠顶高程缺失）", msg,
-                               parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
-            elif has_gate_backfill_issue:
-                InfoBar.warning("计算完成（末尾闸行回推未完成）", msg,
-                               parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP)
-            else:
-                InfoBar.success("计算完成", msg,
-                               parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            self._show_calculation_completion_notice(
+                msg,
+                calculated,
+                missing_height_names=missing_height_names,
+                has_gate_backfill_issue=has_gate_backfill_issue,
+            )
 
             self._switch_workspace_tab(self._tab_output)
 
@@ -9245,6 +9253,7 @@ class WaterProfilePanel(QWidget):
                 # 分水闸橙色
                 elif getattr(node, 'is_diversion_gate', False):
                     item.setForeground(QColor("#E65100"))
+                self._apply_curve_check_item_style(item, c)
                 self.node_table.setItem(r, c, item)
 
             # 在行首单元格中存储标记（UserRole），供_build_nodes_from_table恢复
@@ -9895,6 +9904,110 @@ class WaterProfilePanel(QWidget):
         if not s: return default
         try: return float(s)
         except ValueError: return default
+
+    def _is_negative_curve_check_display_text(self, text) -> bool:
+        """按表格三位显示值判断复核长度是否为负数。"""
+        try:
+            return float(str(text).strip()) < 0.0
+        except (TypeError, ValueError):
+            return False
+
+    def _apply_curve_check_item_style(self, item, col: int):
+        """把复核长度列中显示为负数的单元格标红。"""
+        if col not in CURVE_CHECK_COLUMN_LABELS:
+            return
+        if item is None or not self._is_negative_curve_check_display_text(item.text()):
+            return
+        item.setForeground(QColor(CURVE_CHECK_NEGATIVE_COLOR))
+
+    def _skip_curve_check_notice_for_node(self, node) -> bool:
+        """判断节点是否不参与复核长度负数提示。"""
+        if getattr(node, "is_transition", False):
+            return True
+        if getattr(node, "is_auto_inserted_channel", False):
+            return True
+        if getattr(node, "is_inverted_siphon", False):
+            return True
+        structure_value = str(getattr(getattr(node, "structure_type", None), "value", "") or "")
+        return structure_value == "倒虹吸"
+
+    def _collect_negative_curve_check_entries(self, nodes):
+        """收集复核长度显示值为负数的行列信息。"""
+        entries = []
+        for row_idx, node in enumerate(nodes or [], start=1):
+            if self._skip_curve_check_notice_for_node(node):
+                continue
+            for attr_name, label in CURVE_CHECK_ATTRS:
+                text = f"{float(getattr(node, attr_name, 0.0) or 0.0):.3f}"
+                if self._is_negative_curve_check_display_text(text):
+                    entries.append({
+                        "row": row_idx,
+                        "label": label,
+                        "value": text,
+                    })
+        return entries
+
+    def _format_negative_curve_check_notice(self, nodes) -> str:
+        """生成复核长度负数的非阻断提示文本。"""
+        entries = self._collect_negative_curve_check_entries(nodes)
+        if not entries:
+            return ""
+
+        grouped_lines = []
+        grouped = {}
+        for entry in entries[:CURVE_CHECK_NOTICE_LIMIT]:
+            grouped.setdefault(entry["row"], []).append(f'{entry["label"]} {entry["value"]}')
+        for row, parts in grouped.items():
+            grouped_lines.append(f"第{row}行：" + "、".join(parts))
+
+        if len(entries) > CURVE_CHECK_NOTICE_LIMIT:
+            grouped_lines.append(f"等{len(entries)}处复核长度为负数")
+
+        return "复核长度存在负数，请复核弯道半径或相邻IP间距：\n" + "\n".join(grouped_lines)
+
+    def _show_calculation_completion_notice(
+        self,
+        msg: str,
+        calculated,
+        *,
+        missing_height_names=None,
+        has_gate_backfill_issue: bool = False,
+    ):
+        """统一显示执行计算完成后的成功或非阻断警告提示。"""
+        final_msg = str(msg or "")
+        missing_height_names = list(missing_height_names or [])
+        if missing_height_names:
+            final_msg += f"\n⚠ 以下节点缺少结构总高，渠顶高程未计算: {', '.join(missing_height_names)}"
+            final_msg += "\n请通过【断面批量计算】并自动同步后获取正确的结构总高。"
+
+        negative_notice = self._format_negative_curve_check_notice(calculated)
+        if negative_notice:
+            final_msg += "\n" + negative_notice
+
+        if missing_height_names:
+            InfoBar.warning(
+                "计算完成（部分渠顶高程缺失）",
+                final_msg,
+                parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP,
+            )
+        elif has_gate_backfill_issue:
+            InfoBar.warning(
+                "计算完成（末尾闸行回推未完成）",
+                final_msg,
+                parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP,
+            )
+        elif negative_notice:
+            InfoBar.warning(
+                "计算完成（复核长度需复核）",
+                final_msg,
+                parent=self._info_parent(), duration=8000, position=InfoBarPosition.TOP,
+            )
+        else:
+            InfoBar.success(
+                "计算完成",
+                final_msg,
+                parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP,
+            )
 
     def _info_parent(self):
         return self
