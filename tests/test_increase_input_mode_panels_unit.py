@@ -102,6 +102,7 @@ def _assert_single_visible_increase_input(panel, *, percent_visible):
         ("tunnel", "TunnelPanel"),
         ("culvert", "CulvertPanel"),
         ("pressure_pipe", "PressurePipePanel"),
+        ("spillway_steep_chute", "SpillwaySteepChutePanel"),
     ],
 )
 def test_panels_only_show_default_percent_increase_input_on_first_open(
@@ -337,6 +338,40 @@ def test_pressure_pipe_project_roundtrip_restores_input_error_result_card():
     panel.deleteLater()
     restored.close()
     restored.deleteLater()
+    _flush_events(4)
+
+
+def test_spillway_steep_chute_panel_q_increase_mode_roundtrips_and_builds_flow_case():
+    panel = _new_panel("spillway_steep_chute", "SpillwaySteepChutePanel")
+
+    panel._input_fields["design_flow"].setText("20.0")
+    _activate_q_increase_mode(panel, "25.0")
+
+    panel._save_current_case()
+    saved_case = dict(panel._cases[panel._current_case_idx])
+
+    assert saved_case["inc_mode"] == "q_increased"
+    assert saved_case["inc_q_text"] == "25.0"
+
+    panel.inc_mode_percent_rb.setChecked(True)
+    panel.inc_edit.setText("15")
+    panel.inc_q_edit.setText("")
+    panel._cases[panel._current_case_idx] = saved_case
+    panel._load_case(panel._current_case_idx)
+    _flush_events(2)
+
+    assert panel.inc_mode_q_rb.isChecked() is True
+    assert panel.inc_q_edit.text() == "25.0"
+    assert panel.inc_derived_hint.text() == "系统换算：流量加大比例 = 25.000%"
+
+    params = panel._collect_inputs()
+
+    assert params["increase_percent"] == pytest.approx(25.0)
+    assert params["Q_increased"] == pytest.approx(25.0)
+    assert {"name": "加大流量", "Q": 25.0} in params["flow_cases"]
+
+    panel.close()
+    panel.deleteLater()
     _flush_events(4)
 
 

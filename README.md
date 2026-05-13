@@ -6,7 +6,7 @@
 
 ## 主要功能
 
-- 明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道等水力计算。
+- 明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道、泄水渠与陡坡等水力计算。
 - 表格化批量输入，支持 Excel 导入、示例数据、模板和工程文件保存。
 - 水面线表、渐变段、连续承压线路、压力管道特性表等联动计算。
 - 断面图、纵断面、DXF、TXT、Excel、Word 等成果导出。
@@ -52,6 +52,12 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pytest tests/test_result_navigation_widget_unit.py tests/test_case_tag_navigator_ui_unit.py tests/test_section_plot_layout_unit.py tests/test_open_channel_panel_plot_unit.py tests/test_aqueduct_panel_plot_unit.py tests/test_culvert_panel_plot_unit.py tests/test_multi_case_panel_smoke_unit.py tests/test_result_summary_unit.py tests/test_culvert_comparison_unit.py -q --basetemp=.pytest_tmp\ui-prd-regression
 ```
 
+泄水渠与陡坡第二版模块：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -q -k spillway_steep_chute --basetemp=.pytest_tmp\spillway-steep-chute-v2 -p no:hypothesispytest
+```
+
 ## 打包与发版
 
 本地打包：
@@ -90,6 +96,7 @@ GITEE_TOKEN=你的 Gitee 私人令牌
 | `main.py` | 程序入口 |
 | `app_渠系计算前端/` | PySide6 桌面界面 |
 | `calc_渠系计算算法内核/` | 主要计算内核 |
+| `app_渠系计算前端/spillway_steep_chute/` | 泄水渠与陡坡正式模块界面、图表和导出 |
 | `推求水面线/` | 水面线、渐变段和表3相关逻辑 |
 | `tools/` | 打包、发版、发布快照和维护脚本 |
 | `tests/` | 单元测试和回归测试 |
@@ -108,6 +115,13 @@ GITEE_TOKEN=你的 Gitee 私人令牌
 ## 搜索记录
 
 - 2026-05-10：为 GitHub/Gitee 双下载源核对 Gitee 官方 OpenAPI Release 与附件上传接口；未重复搜索 skills.sh 或 GitHub 外部方案。
+- 2026-05-12：泄水渠与陡坡模块按本地 PRD、教材 OCR 和项目既有明渠内核完成第一版与第二版实现；README 已有搜索记录，因此未重复访问 skills.sh 或 GitHub 搜索外部方案。
+
+## 已完成功能与待办
+
+- 已完成：明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道和表3水面线的主要计算与导出链路。
+- 已完成：泄水渠与陡坡第二版正式模块，支持矩形/梯形陡槽、熊启钧教学算例、新手/专业模式、三种水面线模式、水面线型识别、上下游衔接、掺气侧墙、水跃消能、出口整流、多流量控制、项目保存恢复、纵断面图和文档/表格导出。
+- 待办：泄水渠与陡坡的表3正式结构类型接入、DXF 导出、扩散陡槽、多级消能、消力槛式和综合式消力池。
 
 ## 当前状态
 

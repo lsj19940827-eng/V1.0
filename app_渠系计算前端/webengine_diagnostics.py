@@ -14,7 +14,8 @@ from pathlib import Path
 
 EMERGENCY_SINGLE_PROCESS_ENV = "CANAL_QTWEBENGINE_FORCE_SINGLE_PROCESS"
 EMERGENCY_SINGLE_PROCESS_FLAGS = ("--single-process", "--disable-gpu")
-PROBE_TIMEOUT_SECONDS = 8
+# WebEngine 首次冷启动在部分 Windows 机器上会接近 8 秒，外层预检要留出余量。
+PROBE_TIMEOUT_SECONDS = 20
 PROBE_CHILD_ARG = "--webengine-probe-child"
 _PROBE_SUCCESS_TOKEN = "WEBENGINE_PROBE_OK"
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Qt WebEngine 兼容层。"""
 
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -32,6 +33,8 @@ class FallbackHtmlView(QTextBrowser):
 
 def create_web_view(parent=None):
     """创建兼容的 HTML 视图。"""
+    if os.environ.get("CODEX_FORCE_QTEXTBROWSER") == "1":
+        return FallbackHtmlView(parent)
     if _QtWebEngineView is not None:
         view = _QtWebEngineView(parent)
         view.supports_scripted_html = True

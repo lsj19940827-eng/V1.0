@@ -305,6 +305,16 @@ class ProjectManager(QObject):
             except Exception:
                 pass
 
+        for _key, panel, label in self._iter_project_panel_entries(
+            create_missing=False,
+            exclude_slots={"water_profile_panel"},
+        ):
+            if panel and hasattr(panel, "reset_to_default"):
+                try:
+                    panel.reset_to_default()
+                except Exception as e:
+                    print(f"[ProjectManager] 重置{label}失败: {e}")
+
     # ----------------------------------------------------------------
     # 打开项目
     # ----------------------------------------------------------------
@@ -531,6 +541,7 @@ class ProjectManager(QObject):
             "culvert_panel": None,
             "siphon_panel": None,
             "pressure_pipe_panel": None,
+            "spillway_steep_chute_panel": None,
             "earthwork_panel": None,
             "siphon_manager_data": None,
             "pressure_pipe_manager_data": None,

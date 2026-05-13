@@ -3,7 +3,7 @@
 渠系建筑物水力计算系统 —— 主入口
 
 侧边导航 + 面板切换框架
-支持模块：明渠设计、渡槽设计、隧洞设计、暗涵设计、倒虹吸设计、有压管道设计、推求水面线
+支持模块：明渠设计、渡槽设计、隧洞设计、暗涵设计、倒虹吸设计、有压管道设计、推求水面线、泄水渠与陡坡
 """
 
 import os
@@ -39,6 +39,7 @@ _MODULE_TOOLTIPS = {
     "siphon": "倒虹吸管水力计算",
     "pressure_pipe": "有压管道水力计算",
     "water_profile": "断面批量计算 + 水面线推求",
+    "spillway_steep_chute": "泄水渠、跌口入口与陡坡水面线试验计算",
 }
 
 
@@ -88,6 +89,12 @@ def _create_water_profile_panel(*, siphon_manager, pressure_pipe_manager):
         siphon_manager=siphon_manager,
         pressure_pipe_manager=pressure_pipe_manager,
     )
+
+
+def _create_spillway_steep_chute_panel():
+    from app_渠系计算前端.spillway_steep_chute import SpillwaySteepChutePanel
+
+    return SpillwaySteepChutePanel()
 
 
 class NavButton(PushButton):
@@ -267,6 +274,14 @@ class MainWindow(QMainWindow):
                     pressure_pipe_manager=self.pressure_pipe_manager,
                 ),
                 project_slot="water_profile_panel",
+            ),
+            PanelDescriptor(
+                key="spillway_steep_chute",
+                title="泄水渠与陡坡",
+                nav_order=7,
+                attr_name="spillway_steep_chute_panel",
+                factory=_create_spillway_steep_chute_panel,
+                project_slot="spillway_steep_chute_panel",
             ),
         ]
         return PanelRegistry(descriptors, self)

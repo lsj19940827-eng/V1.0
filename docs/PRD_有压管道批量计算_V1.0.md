@@ -2,7 +2,7 @@
 
 > **版本**: V2.12.39
 > **创建日期**: 2026-03-03  
-> **最后更新**: 2026-05-09
+> **最后更新**: 2026-05-13
 > **状态**: 已实现
 
 ---
@@ -101,6 +101,7 @@ $$h_f = f \times L \times \frac{Q^m}{d^b}$$
 - 主程序启动前会先执行 `app_渠系计算前端/qfluentwidgets_compat.py`，不再直接依赖系统 `darkdetect` 成功返回；当系统主题探测异常或阻塞时，自动回退为浅色主题，避免 `qfluentwidgets` 导入卡住导致 `main.py` 无法启动。
 - 主程序启动环境初始化会禁用 Python `platform` 模块的 Windows WMI 查询快速路径；当第三方库（例如 `pandas`）在导入阶段读取 `platform.machine()` 时，会直接走系统环境变量和 `getwindowsversion()` 回退，避免 WMI 卡住导致主窗口不出现。
 - `app_渠系计算前端/webengine_diagnostics.py` 的启动预检不再调用 `platform.platform()`；Windows 下改为直接拼装系统版本字段，避免该接口在个别环境阻塞后把 `main.py` 卡在主窗口出现之前。
+- `app_渠系计算前端/webengine_diagnostics.py` 的标准 WebEngine 预检外层超时预算调整为 20 秒；部分 Windows + PySide6 6.11 环境首次创建 WebEngine 会接近 8 秒，原 8 秒预算会误报超时并阻止 `main.py` 继续启动。
 - `app_渠系计算前端/pressure_pipe/panel.py` 的右侧初始帮助页不再在主程序启动时同步渲染，而是延后到用户第一次真正打开“有压管道设计”页面时再加载；这样主窗口可以先出来，不会再被该页面的 Web 帮助内容拖住。
 - `app_渠系计算前端/pressure_pipe/panel.py` 中的结果视图已从“强依赖 `QWebEngineView`”调整为“优先使用 `QWebEngineView`，失败时自动降级为只读 HTML 视图”。
 - 触发降级的典型场景包括 `PySide6.QtWebEngineWidgets` 导入失败、页面文件不足或当前环境缺少 WebEngine 运行条件；降级后主程序仍可打开，有压管道页会显示简化结果视图提示。

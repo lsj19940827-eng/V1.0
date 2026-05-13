@@ -211,6 +211,38 @@ def test_probe_standard_webengine_uses_hidden_child_command_in_frozen_runtime(mo
     ]
 
 
+def test_probe_standard_webengine_default_timeout_allows_slow_first_launch(monkeypatch):
+    """首次加载 WebEngine 偶尔接近 8 秒，默认预检预算要留出余量。"""
+    monkeypatch.setattr(
+        diagnostics,
+        "_current_runtime_facts",
+        lambda: {
+            "python_executable": sys.executable,
+            "python_version": "3.13.3",
+            "platform_summary": "Windows-11-10.0.26100-SP0",
+            "windows_build": "26100",
+            "pyside_version": "6.11.0",
+            "qt_webengine_process_path": r"C:\Python\Lib\site-packages\PySide6\QtWebEngineProcess.exe",
+            "qt_webengine_process_exists": True,
+            "import_error": "",
+            "is_frozen_runtime": False,
+        },
+    )
+
+    calls = {}
+
+    def _fake_run(cmd, **kwargs):
+        calls["timeout"] = kwargs.get("timeout")
+        return types.SimpleNamespace(returncode=0, stdout="WEBENGINE_PROBE_OK\n", stderr="")
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", _fake_run)
+
+    result = diagnostics.probe_standard_webengine()
+
+    assert result.ok is True
+    assert calls["timeout"] >= 15
+
+
 def test_build_startup_context_uses_standard_mode_when_probe_passes(monkeypatch):
     probe_result = _probe_result(ok=True, failure_kind="none", exit_code=0)
 
