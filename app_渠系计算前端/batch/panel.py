@@ -453,17 +453,29 @@ def is_arch_culvert_section_type(section_type) -> bool:
 
 # 输入表列定义（含X/Y坐标列）
 # 列索引: 0序号, 1流量段, 2建筑物名称, 3结构形式, 4X, 5Y, 6Q, 7糙率n, 8比降,
-#          9边坡系数m, 10底宽B, 11明渠宽深比, 12半径R, 13直径D,
-#          14矩形渡槽深宽比, 15倒角角度, 16倒角底边, 17圆心角, 18不淤流速, 19不冲流速,
-#          20转弯半径（平面弯道，不参与水力计算，透传到推求水面线）
-#          21管材（有压管道专用）
-#          28直墙高度H直（隧洞/暗涵-圆拱直墙型共用，追加列，兼容旧Excel）
-#          29拉杆高度（渡槽专用，拉杆自身尺寸高度，拉杆顶与槽顶齐平，追加列，兼容旧Excel）
+#          9边坡系数m, 10底宽B, 11暗涵高宽比H/B, 12暗涵高度H, 13宽深比β,
+#          14半径R, 15直径D, 16矩形渡槽深宽比, 17拉杆高度,
+#          18倒角角度, 19倒角底边, 20圆心角, 21直墙高度H直,
+#          22不淤流速, 23不冲流速,
+#          24转弯半径（平面弯道，不参与水力计算，透传到推求水面线）
+#          25管材（有压管道专用）
+#          26~31为明渠-复式梯形专用几何列
 #          注：局部损失比例、进出口标识等有压管道专用参数通过 Qt.UserRole 元数据传递，不占表格列
 INPUT_HEADERS = [
     "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
     "Q(m³/s)", "糙率n", "比降(1/)",
-    "边坡系数m", "底宽B(m)", "明渠宽深比",
+    "边坡系数m", "底宽B(m)", "暗涵高宽比H/B", "暗涵高度H(m)", "宽深比β",
+    "半径R(m)", "直径D(m)",
+    "矩形渡槽深宽比", "拉杆高度(m)", "倒角角度(°)", "倒角底边(m)", "圆心角(°)", "直墙高度H直(m)",
+    "不淤流速", "不冲流速", "转弯半径(m)",
+    "管材",
+    "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
+]
+
+_INPUT_HEADERS_BEFORE_AE_AF_REORDER = [
+    "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
+    "Q(m³/s)", "糙率n", "比降(1/)",
+    "边坡系数m", "底宽B(m)", "暗涵高宽比H/B", "暗涵高度H(m)", "宽深比β",
     "半径R(m)", "直径D(m)",
     "矩形渡槽深宽比", "倒角角度(°)", "倒角底边(m)", "圆心角(°)",
     "不淤流速", "不冲流速", "转弯半径(m)",
@@ -472,20 +484,57 @@ INPUT_HEADERS = [
     "直墙高度H直(m)", "拉杆高度(m)",
 ]
 
-COL_TURN_RADIUS = 20
-COL_PIPE_MATERIAL = 21
-COL_COMPOUND_M1 = 22
-COL_COMPOUND_B1 = 23
-COL_COMPOUND_M2 = 24
-COL_COMPOUND_B2 = 25
-COL_COMPOUND_M3 = 26
-COL_COMPOUND_H1 = 27
-COL_ARCH_H_STRAIGHT = 28
-COL_TIE_ROD_HEIGHT = 29
+_INPUT_HEADERS_BEFORE_RECT_CULVERT_VISIBLE_COLUMNS = [
+    "序号", "流量段", "建筑物名称", "结构形式", "X", "Y",
+    "Q(m³/s)", "糙率n", "比降(1/)",
+    "边坡系数m", "底宽B(m)", "宽深比β",
+    "半径R(m)", "直径D(m)",
+    "矩形渡槽深宽比", "倒角角度(°)", "倒角底边(m)", "圆心角(°)",
+    "不淤流速", "不冲流速", "转弯半径(m)",
+    "管材",
+    "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
+    "直墙高度H直(m)", "拉杆高度(m)",
+]
+
+COL_SEQ = 0
+COL_SEGMENT = 1
+COL_BUILDING_NAME = 2
+COL_SECTION_TYPE = 3
+COL_X = 4
+COL_Y = 5
+COL_Q = 6
+COL_N = 7
+COL_SLOPE = 8
+COL_M = 9
+COL_B = 10
+COL_RECT_CULVERT_HB_RATIO = 11
+COL_RECT_CULVERT_H = 12
+COL_BETA = 13
+COL_R = 14
+COL_D = 15
+COL_DUCAO_DEPTH_RATIO = 16
+COL_TIE_ROD_HEIGHT = 17
+COL_CHAMFER_ANGLE = 18
+COL_CHAMFER_LENGTH = 19
+COL_THETA = 20
+COL_ARCH_H_STRAIGHT = 21
+COL_V_MIN = 22
+COL_V_MAX = 23
+COL_TURN_RADIUS = 24
+COL_PIPE_MATERIAL = 25
+COL_COMPOUND_M1 = 26
+COL_COMPOUND_B1 = 27
+COL_COMPOUND_M2 = 28
+COL_COMPOUND_B2 = 29
+COL_COMPOUND_M3 = 30
+COL_COMPOUND_H1 = 31
 COL_PIPE_LOCAL_LOSS = len(INPUT_HEADERS)
 COL_PIPE_IN_OUT = len(INPUT_HEADERS) + 1
+_LEGACY_INPUT_HEADER_COUNT_BEFORE_RECT_CULVERT_EXCEL_COLUMNS = len(INPUT_HEADERS) - 2
 
 _EXCEL_IMPORTED_ROW_ROLE = getattr(Qt, "UserRole", 0x0100) + 101
+_RECT_CULVERT_MANUAL_H_ROLE = getattr(Qt, "UserRole", 0x0100) + 102
+_RECT_CULVERT_MANUAL_H_META_KEY = "rect_culvert_manual_H"
 _IMPORTED_RATIO_WARNING_TOLERANCE = 0.01
 
 # 输入表头悬浮提示（与原版一致）
@@ -502,9 +551,29 @@ _HEADER_TOOLTIPS = {
         "  • 隧洞-平底圆形：平底宽 B（必须固定填写 D + B）\n"
         "  • 隧洞-圆拱直墙型：洞宽\n"
         "  • 暗涵-矩形 / 暗涵-圆拱直墙型：涵洞宽度\n\n"
-        "▶ 与「明渠宽深比」的关系\n"
+        "▶ 与「宽深比β」的关系\n"
         "  明渠类型下，底宽B 与宽深比β 二选一填写，\n"
-        "  都留空则程序自动寻优计算"
+        "  暗涵-矩形下，底宽B可单独填写，也可与H或H/B合用"
+    ),
+    "暗涵高宽比H/B": (
+        "【暗涵高宽比 H/B】\n\n"
+        "定义：矩形暗涵洞高 H 与底宽 B 的比值。\n\n"
+        "▶ 怎么填？\n"
+        "  • 仅对暗涵-矩形生效\n"
+        "  • 需同时填写底宽B(m)\n"
+        "  • 与暗涵高度H(m)、宽深比β不可同时填写\n\n"
+        "▶ 计算口径\n"
+        "  程序按 H=(H/B)×B 得到洞高后直接验算"
+    ),
+    "暗涵高度H(m)": (
+        "【暗涵高度 H（单位：米）】\n\n"
+        "定义：矩形暗涵内侧总高度。\n\n"
+        "▶ 怎么填？\n"
+        "  • 仅对暗涵-矩形生效\n"
+        "  • 需同时填写底宽B(m)\n"
+        "  • 与暗涵高宽比H/B、宽深比β不可同时填写\n\n"
+        "▶ 计算口径\n"
+        "  程序固定B和H，只校核水深、流速和净空，不自动改尺寸"
     ),
     "半径R(m)": (
         "【半径 R（单位：米）】\n\n"
@@ -535,19 +604,19 @@ _HEADER_TOOLTIPS = {
         "  梯形/矩形明渠、渡槽、马蹄形隧洞等\n"
         "  不使用此参数"
     ),
-    "明渠宽深比": (
-        "【明渠宽深比  β = B ÷ h】\n\n"
-        "定义：渠道底宽 B 与设计水深 h 的比值\n"
+    "宽深比β": (
+        "【宽深比  β = B ÷ h】\n\n"
+        "定义：底宽 B 与设计水深 h 的比值\n"
         "公式：β = B / h\n\n"
         "▶ 怎么填？\n"
         "  • 留空 → 程序自动寻优，找到最经济的断面尺寸\n"
         "  • 填一个数值 → 固定底宽与水深的比例关系\n"
-        "  • 与「底宽B(m)」二选一填写即可，都留空也行\n\n"
+        "  • 明渠中可与底宽B二选一填写；暗涵-矩形中不可与H或H/B同时填写\n\n"
         "▶ 数值越大越小有什么区别？\n"
         "  • β 大（如 4~8）→ 渠道宽而浅，适合大流量、地形平坦\n"
         "  • β 小（如 1~2）→ 渠道窄而深，水力效率高、占地少\n\n"
         "▶ 适用范围\n"
-        "  仅对「明渠-梯形」「明渠-矩形」类型生效"
+        "  对「明渠-梯形」「明渠-矩形」「暗涵-矩形」类型生效"
     ),
     "左上坡m1": (
         "【左上坡 m1】\n\n"
@@ -741,6 +810,86 @@ _HEADER_TOOLTIPS = {
         "  两者的「深」含义不同，不要混淆"
     ),
 }
+
+
+def _canonical_excel_header(value):
+    """统一 Excel 表头文本，便于兼容旧模板和用户手工表。"""
+    text = str(value or "").strip()
+    return "".join(text.split()).replace("（", "(").replace("）", ")")
+
+
+_EXCEL_HEADER_ALIASES = {
+    "序号": COL_SEQ,
+    "流量段": COL_SEGMENT,
+    "建筑物名称": COL_BUILDING_NAME,
+    "结构形式": COL_SECTION_TYPE,
+    "X": COL_X,
+    "Y": COL_Y,
+    "Q(m³/s)": COL_Q,
+    "Q(m3/s)": COL_Q,
+    "糙率n": COL_N,
+    "比降(1/)": COL_SLOPE,
+    "边坡系数m": COL_M,
+    "底宽B(m)": COL_B,
+    "暗涵高宽比H/B": COL_RECT_CULVERT_HB_RATIO,
+    "暗涵高度H(m)": COL_RECT_CULVERT_H,
+    "宽深比β": COL_BETA,
+    "明渠宽深比": COL_BETA,
+    "半径R(m)": COL_R,
+    "直径D(m)": COL_D,
+    "矩形渡槽深宽比": COL_DUCAO_DEPTH_RATIO,
+    "倒角角度(°)": COL_CHAMFER_ANGLE,
+    "倒角底边(m)": COL_CHAMFER_LENGTH,
+    "圆心角(°)": COL_THETA,
+    "不淤流速": COL_V_MIN,
+    "不冲流速": COL_V_MAX,
+    "转弯半径": COL_TURN_RADIUS,
+    "转弯半径(m)": COL_TURN_RADIUS,
+    "管材": COL_PIPE_MATERIAL,
+    "左上坡m1": COL_COMPOUND_M1,
+    "平台宽B1(m)": COL_COMPOUND_B1,
+    "左下坡m2": COL_COMPOUND_M2,
+    "渠底宽B2(m)": COL_COMPOUND_B2,
+    "右坡m3": COL_COMPOUND_M3,
+    "平台高差h1(m)": COL_COMPOUND_H1,
+    "直墙高度H直(m)": COL_ARCH_H_STRAIGHT,
+    "拉杆高度(m)": COL_TIE_ROD_HEIGHT,
+}
+
+
+def _excel_header_mapping(header_values):
+    """按表头建立 Excel 源列到当前输入表列的映射。"""
+    mapping = {}
+    for src_idx, header in enumerate(header_values):
+        target_idx = _EXCEL_HEADER_ALIASES.get(_canonical_excel_header(header))
+        if target_idx is not None and target_idx not in mapping.values():
+            mapping[src_idx] = target_idx
+    required = {COL_SEQ, COL_SECTION_TYPE, COL_Q}
+    if not required.issubset(set(mapping.values())):
+        return {}
+    return mapping
+
+
+def _map_excel_row_by_headers(row_values, header_mapping):
+    """把 Excel 行按表头映射为当前输入表结构。"""
+    mapped = [""] * len(INPUT_HEADERS)
+    for src_idx, target_idx in header_mapping.items():
+        if src_idx < len(row_values):
+            mapped[target_idx] = row_values[src_idx]
+    return mapped
+
+
+def _map_input_row_by_header_order(row_values, source_headers):
+    """按源表头顺序把一行输入数据重排为当前输入表结构。"""
+    mapped = [""] * len(INPUT_HEADERS)
+    if not source_headers:
+        return mapped
+    for src_idx, header in enumerate(source_headers):
+        target_idx = _EXCEL_HEADER_ALIASES.get(_canonical_excel_header(header))
+        if target_idx is not None and src_idx < len(row_values):
+            mapped[target_idx] = row_values[src_idx]
+    return mapped
+
 
 # 结果表列定义
 RESULT_HEADERS = [
@@ -976,19 +1125,19 @@ class BatchPanel(QWidget):
         # 触发数据变化信号（除非正在加载项目）
         if not getattr(self, '_loading_project', False):
             self.data_changed.emit()
-        if col == 1:
+        if col == COL_SEGMENT:
             # 流量段列被编辑，自动同步Q值
-            seg_item = self.input_table.item(row, 1)
+            seg_item = self.input_table.item(row, COL_SEGMENT)
             if seg_item:
                 try:
                     segment_num = int(seg_item.text().strip())
                     new_Q = self._get_flow_for_segment(segment_num)
                     self.input_table.blockSignals(True)
-                    self.input_table.setItem(row, 6, QTableWidgetItem(str(new_Q)))
+                    self.input_table.setItem(row, COL_Q, QTableWidgetItem(str(new_Q)))
                     self.input_table.blockSignals(False)
                 except (ValueError, TypeError):
                     pass
-        if col == 3:
+        if col == COL_SECTION_TYPE:
             # 结构形式列被编辑，更新糙率n列的可编辑状态
             self._update_roughness_cell_state(row)
 
@@ -998,14 +1147,14 @@ class BatchPanel(QWidget):
 
     def _update_roughness_cell_state(self, row):
         """更新指定行的糙率n列可编辑状态（有压管道同类行禁用）"""
-        section_item = self.input_table.item(row, 3)
+        section_item = self.input_table.item(row, COL_SECTION_TYPE)
         if not section_item:
             return
         section_type = section_item.text().strip()
-        n_item = self.input_table.item(row, 7)
+        n_item = self.input_table.item(row, COL_N)
         if not n_item:
             n_item = QTableWidgetItem("")
-            self.input_table.setItem(row, 7, n_item)
+            self.input_table.setItem(row, COL_N, n_item)
 
         if is_pressure_pipe_like_section_type(section_type):
             # 禁用编辑
@@ -1024,23 +1173,33 @@ class BatchPanel(QWidget):
 
     def _snapshot_table(self):
         rows = []
+        row_meta = []
         for r in range(self.input_table.rowCount()):
             row = []
             for c in range(self.input_table.columnCount()):
                 item = self.input_table.item(r, c)
                 row.append(item.text() if item else "")
             rows.append(row)
-        return rows
+            row_meta.append(self._collect_row_hidden_meta(r, include_excel=True))
+        return {"rows": rows, "row_meta": row_meta}
 
     def _restore_table(self, snapshot):
+        if isinstance(snapshot, dict):
+            rows = snapshot.get("rows", [])
+            row_meta = snapshot.get("row_meta", [])
+        else:
+            rows = snapshot
+            row_meta = []
         self.input_table.blockSignals(True)
-        self.input_table.setRowCount(len(snapshot))
-        for r, row in enumerate(snapshot):
+        self.input_table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
             for c, val in enumerate(row):
                 item = QTableWidgetItem(val)
                 if c == 3:
                     item.setTextAlignment(Qt.AlignCenter)
                 self.input_table.setItem(r, c, item)
+            if r < len(row_meta):
+                self._apply_row_hidden_meta(r, row_meta[r], include_excel=True)
         self.input_table.blockSignals(False)
 
     def _push_undo_snapshot(self):
@@ -1078,8 +1237,8 @@ class BatchPanel(QWidget):
                        parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
 
     def _on_cell_double_clicked(self, row, col):
-        """双击处理：结构形式列弹出选择面板，参数列(6-19)弹出参数设置弹窗（与原版一致）"""
-        if col == 3:
+        """双击处理：结构形式列弹出选择面板，参数列弹出参数设置弹窗。"""
+        if col == COL_SECTION_TYPE:
             # 结构形式列
             current = ""
             item = self.input_table.item(row, col)
@@ -1102,8 +1261,8 @@ class BatchPanel(QWidget):
             # 无论选择还是 Esc 取消，都回到原表格单元格，保持操作连续性
             self.input_table.setCurrentCell(row, col)
             self.input_table.setFocus(Qt.OtherFocusReason)
-        elif 6 <= col <= 19:
-            # 参数列(Q~不冲流速)，打开参数设置弹窗（与原版一致）
+        elif COL_Q <= col <= COL_V_MAX:
+            # 参数列(Q~不冲流速)，打开参数设置弹窗。
             self._open_parameter_dialog_for_row(row)
 
     def _show_table_context_menu(self, pos):
@@ -1142,7 +1301,7 @@ class BatchPanel(QWidget):
             menu.addSeparator()
 
             # 参数设置（仅非闸/倒虹吸/有压管道类型可用）
-            section_item = self.input_table.item(row, 3)
+            section_item = self.input_table.item(row, COL_SECTION_TYPE)
             section_type = section_item.text().strip() if section_item else ""
             act_param = menu.addAction("打开参数设置...")
             if not section_type or "分水" in section_type or "闸" in section_type or "倒虹吸" in section_type or is_pressure_pipe_like_section_type(section_type):
@@ -1157,7 +1316,7 @@ class BatchPanel(QWidget):
         self._undo_group += 1
         new_segment = 1
         if insert_at > 0:
-            prev_seg_item = self.input_table.item(insert_at - 1, 1)
+            prev_seg_item = self.input_table.item(insert_at - 1, COL_SEGMENT)
             if prev_seg_item:
                 try:
                     new_segment = int(prev_seg_item.text().strip())
@@ -1165,18 +1324,18 @@ class BatchPanel(QWidget):
                     new_segment = 1
         new_Q = str(self._get_flow_for_segment(new_segment))
         self.input_table.insertRow(insert_at)
-        self.input_table.setItem(insert_at, 0, QTableWidgetItem(str(insert_at + 1)))
-        self.input_table.setItem(insert_at, 1, QTableWidgetItem(str(new_segment)))
-        self.input_table.setItem(insert_at, 2, QTableWidgetItem("-"))
+        self.input_table.setItem(insert_at, COL_SEQ, QTableWidgetItem(str(insert_at + 1)))
+        self.input_table.setItem(insert_at, COL_SEGMENT, QTableWidgetItem(str(new_segment)))
+        self.input_table.setItem(insert_at, COL_BUILDING_NAME, QTableWidgetItem("-"))
         type_item = QTableWidgetItem("明渠-梯形")
         type_item.setTextAlignment(Qt.AlignCenter)
-        self.input_table.setItem(insert_at, 3, type_item)
-        self.input_table.setItem(insert_at, 6, QTableWidgetItem(new_Q))
-        self.input_table.setItem(insert_at, 7, QTableWidgetItem("0.014"))
-        self.input_table.setItem(insert_at, 8, QTableWidgetItem("3000"))
-        self.input_table.setItem(insert_at, 9, QTableWidgetItem("1.0"))
-        self.input_table.setItem(insert_at, 18, QTableWidgetItem("0.1"))
-        self.input_table.setItem(insert_at, 19, QTableWidgetItem("100"))
+        self.input_table.setItem(insert_at, COL_SECTION_TYPE, type_item)
+        self.input_table.setItem(insert_at, COL_Q, QTableWidgetItem(new_Q))
+        self.input_table.setItem(insert_at, COL_N, QTableWidgetItem("0.014"))
+        self.input_table.setItem(insert_at, COL_SLOPE, QTableWidgetItem("3000"))
+        self.input_table.setItem(insert_at, COL_M, QTableWidgetItem("1.0"))
+        self.input_table.setItem(insert_at, COL_V_MIN, QTableWidgetItem("0.1"))
+        self.input_table.setItem(insert_at, COL_V_MAX, QTableWidgetItem("100"))
         self._undo_group -= 1
         self._renumber()
         self.input_table.selectRow(insert_at)
@@ -1199,7 +1358,7 @@ class BatchPanel(QWidget):
         else:
             # 无数据时填充默认值：流量段编号在上一行基础上递增（与原版一致）
             if row > 0:
-                prev_seg_item = self.input_table.item(row - 1, 1)
+                prev_seg_item = self.input_table.item(row - 1, COL_SEGMENT)
                 try:
                     last_segment = int(prev_seg_item.text().strip()) if prev_seg_item else 1
                 except ValueError:
@@ -1208,18 +1367,18 @@ class BatchPanel(QWidget):
             else:
                 new_segment = 1
             new_Q = str(self._get_flow_for_segment(new_segment))
-            self.input_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
-            self.input_table.setItem(row, 1, QTableWidgetItem(str(new_segment)))
-            self.input_table.setItem(row, 2, QTableWidgetItem("-"))
+            self.input_table.setItem(row, COL_SEQ, QTableWidgetItem(str(row + 1)))
+            self.input_table.setItem(row, COL_SEGMENT, QTableWidgetItem(str(new_segment)))
+            self.input_table.setItem(row, COL_BUILDING_NAME, QTableWidgetItem("-"))
             type_item = QTableWidgetItem("明渠-梯形")
             type_item.setTextAlignment(Qt.AlignCenter)
-            self.input_table.setItem(row, 3, type_item)
-            self.input_table.setItem(row, 6, QTableWidgetItem(new_Q))
-            self.input_table.setItem(row, 7, QTableWidgetItem("0.014"))
-            self.input_table.setItem(row, 8, QTableWidgetItem("3000"))
-            self.input_table.setItem(row, 9, QTableWidgetItem("1.0"))
-            self.input_table.setItem(row, 18, QTableWidgetItem("0.1"))
-            self.input_table.setItem(row, 19, QTableWidgetItem("100"))
+            self.input_table.setItem(row, COL_SECTION_TYPE, type_item)
+            self.input_table.setItem(row, COL_Q, QTableWidgetItem(new_Q))
+            self.input_table.setItem(row, COL_N, QTableWidgetItem("0.014"))
+            self.input_table.setItem(row, COL_SLOPE, QTableWidgetItem("3000"))
+            self.input_table.setItem(row, COL_M, QTableWidgetItem("1.0"))
+            self.input_table.setItem(row, COL_V_MIN, QTableWidgetItem("0.1"))
+            self.input_table.setItem(row, COL_V_MAX, QTableWidgetItem("100"))
 
     def _insert_row(self):
         """插入行 - 在选中行之前插入新行（与原版一致）"""
@@ -1322,7 +1481,7 @@ class BatchPanel(QWidget):
             return
         count = len(rows)
         if count == 1:
-            name_item = self.input_table.item(rows[0], 2)
+            name_item = self.input_table.item(rows[0], COL_BUILDING_NAME)
             name_text = name_item.text() if name_item else ""
             confirm_msg = f"确定要删除行 '{name_text}' 吗?"
         else:
@@ -1346,7 +1505,9 @@ class BatchPanel(QWidget):
         try:
             for r in rows:
                 data = self._get_row_data(r)
+                meta = self._collect_row_hidden_meta(r, include_excel=True)
                 self._add_row(data)
+                self._apply_row_hidden_meta(self.input_table.rowCount() - 1, meta, include_excel=True)
             self._renumber()
         finally:
             self._undo_group -= 1
@@ -1438,11 +1599,11 @@ class BatchPanel(QWidget):
                 if target_col < self.input_table.columnCount():
                     cell_value = val.strip()
                     # 断面类型列(索引3)特殊处理：验证类型有效性（与原版一致）
-                    if target_col == 3 and cell_value:
+                    if target_col == COL_SECTION_TYPE and cell_value:
                         if cell_value not in SECTION_TYPES:
                             invalid_types.append(f"行{target_row + 1}: {cell_value}")
                     item = QTableWidgetItem(cell_value)
-                    if target_col == 3:
+                    if target_col == COL_SECTION_TYPE:
                         item.setTextAlignment(Qt.AlignCenter)
                     self.input_table.setItem(target_row, target_col, item)
             pasted_rows += 1
@@ -1454,7 +1615,7 @@ class BatchPanel(QWidget):
             if target_row >= self.input_table.rowCount():
                 break
             # 断面类型映射（允许用户粘贴简写）
-            type_item = self.input_table.item(target_row, 3)
+            type_item = self.input_table.item(target_row, COL_SECTION_TYPE)
             if type_item:
                 raw_type = type_item.text().strip()
                 if raw_type and raw_type not in SECTION_TYPES:
@@ -1462,9 +1623,9 @@ class BatchPanel(QWidget):
                     if mapped:
                         type_item.setText(mapped)
             # 确保比降有默认值
-            slope_item = self.input_table.item(target_row, 8)
+            slope_item = self.input_table.item(target_row, COL_SLOPE)
             if not slope_item or not slope_item.text().strip():
-                self.input_table.setItem(target_row, 8, QTableWidgetItem("3000"))
+                self.input_table.setItem(target_row, COL_SLOPE, QTableWidgetItem("3000"))
         self.input_table.blockSignals(False)
         # 粘贴后自动检测流量段（与原版一致）
         self._auto_detect_flow_segments()
@@ -1515,7 +1676,11 @@ class BatchPanel(QWidget):
 
     def _renumber(self):
         for r in range(self.input_table.rowCount()):
-            self.input_table.setItem(r, 0, QTableWidgetItem(str(r + 1)))
+            meta = self._collect_row_hidden_meta(r, include_excel=True)
+            item = QTableWidgetItem(str(r + 1))
+            item.setTextAlignment(Qt.AlignCenter)
+            self.input_table.setItem(r, COL_SEQ, item)
+            self._apply_row_hidden_meta(r, meta, include_excel=True)
 
     def _get_row_data(self, row):
         """获取指定行的数据"""
@@ -1531,6 +1696,80 @@ class BatchPanel(QWidget):
         for r in range(self.input_table.rowCount()):
             rows.append(self._get_row_data(r))
         return rows
+
+    def _ensure_row_role_item(self, row_idx: int):
+        """确保序号列存在，用于保存行级隐藏参数。"""
+        if row_idx < 0:
+            return None
+        row_count = getattr(self.input_table, "rowCount", None)
+        if callable(row_count) and row_idx >= row_count():
+            return None
+        get_item = getattr(self.input_table, "item", None)
+        set_item = getattr(self.input_table, "setItem", None)
+        if not callable(get_item):
+            return None
+        item = get_item(row_idx, COL_SEQ)
+        if item is None:
+            if not callable(set_item):
+                return None
+            item = QTableWidgetItem(str(row_idx + 1))
+            item.setTextAlignment(Qt.AlignCenter)
+            set_item(row_idx, COL_SEQ, item)
+        return item
+
+    def _set_rect_culvert_manual_h(self, row_idx: int, value):
+        """保存矩形暗涵固定高度 H 到行级隐藏参数。"""
+        item = self._ensure_row_role_item(row_idx)
+        if item is None:
+            return
+        if value in (None, ""):
+            item.setData(_RECT_CULVERT_MANUAL_H_ROLE, None)
+            return
+        item.setData(_RECT_CULVERT_MANUAL_H_ROLE, float(value))
+
+    def _get_rect_culvert_manual_h(self, row_idx: int):
+        """读取矩形暗涵固定高度 H 的行级隐藏参数。"""
+        if row_idx < 0:
+            return None
+        row_count = getattr(self.input_table, "rowCount", None)
+        if callable(row_count) and row_idx >= row_count():
+            return None
+        get_item = getattr(self.input_table, "item", None)
+        if not callable(get_item):
+            return None
+        item = get_item(row_idx, COL_SEQ)
+        if item is None:
+            return None
+        value = item.data(_RECT_CULVERT_MANUAL_H_ROLE)
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _collect_row_hidden_meta(self, row_idx: int, include_excel: bool = False):
+        """收集行级隐藏参数，供复制、撤销和项目保存恢复。"""
+        meta = {}
+        manual_h = self._get_rect_culvert_manual_h(row_idx)
+        if manual_h is not None:
+            meta[_RECT_CULVERT_MANUAL_H_META_KEY] = manual_h
+        if include_excel:
+            item = self.input_table.item(row_idx, COL_SEQ)
+            if item is not None and item.data(_EXCEL_IMPORTED_ROW_ROLE) is not None:
+                meta["excel_imported"] = bool(item.data(_EXCEL_IMPORTED_ROW_ROLE))
+        return meta
+
+    def _apply_row_hidden_meta(self, row_idx: int, meta, include_excel: bool = False):
+        """恢复行级隐藏参数。"""
+        if not isinstance(meta, dict):
+            return
+        if _RECT_CULVERT_MANUAL_H_META_KEY in meta:
+            self._set_rect_culvert_manual_h(row_idx, meta.get(_RECT_CULVERT_MANUAL_H_META_KEY))
+        if include_excel and "excel_imported" in meta:
+            item = self._ensure_row_role_item(row_idx)
+            if item is not None:
+                item.setData(_EXCEL_IMPORTED_ROW_ROLE, bool(meta.get("excel_imported")))
 
     def _add_sample_data(self):
         """加载示例一：综合演示数据（从 data 目录读取 xlsx 文件）"""
@@ -1790,6 +2029,10 @@ class BatchPanel(QWidget):
         ]
         current_snapshot.append(["__inc_cb__", str(self.inc_cb.isChecked())])
         current_snapshot.append(["__manual_qmax__", self._serialize_manual_qmax_snapshot()])
+        current_snapshot.append([
+            "__row_hidden_meta__",
+            repr([self._collect_row_hidden_meta(r) for r in range(self.input_table.rowCount())]),
+        ])
         return current_snapshot
 
     def _normalize_result_row_values(self, row):
@@ -1951,13 +2194,13 @@ class BatchPanel(QWidget):
 
         for row_idx, values in enumerate(input_rows):
             values = self._normalize_row(values, len(INPUT_HEADERS))
-            section_type = str(values[3]).strip()
+            section_type = str(values[COL_SECTION_TYPE]).strip()
             if not section_type:
                 continue
             total_count += 1
-            seq = str(values[0]).strip()
-            segment = str(values[1]).strip()
-            building_name = str(values[2]).strip()
+            seq = str(values[COL_SEQ]).strip()
+            segment = str(values[COL_SEGMENT]).strip()
+            building_name = str(values[COL_BUILDING_NAME]).strip()
 
             try:
                 # 倒虹吸占位行
@@ -1970,9 +2213,9 @@ class BatchPanel(QWidget):
                     siphon_result = {
                         'success': True, 'section_type': '倒虹吸', 'is_siphon': True,
                         'flow_section': segment, 'building_name': building_name,
-                        'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
-                        'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.014), 'slope_inv': 0,
-                        'D': self._sf(values[13], 0.0),  # 倒虹吸直径D用于水面线窗口默认指定管径
+                        'coord_X': self._sf(values[COL_X], 0.0), 'coord_Y': self._sf(values[COL_Y], 0.0),
+                        'Q': self._sf(values[COL_Q]), 'n': self._sf(values[COL_N], 0.014), 'slope_inv': 0,
+                        'D': self._sf(values[COL_D], 0.0),  # 倒虹吸直径D用于水面线窗口默认指定管径
                         'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
                         'pipe_material': pipe_material,
                     }
@@ -1997,9 +2240,9 @@ class BatchPanel(QWidget):
                     ppipe_result = {
                         'success': True, 'section_type': section_type, 'is_pressure_pipe': True,
                         'flow_section': segment, 'building_name': building_name,
-                        'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
-                        'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.0), 'slope_inv': 0,
-                        'D': self._sf(values[13], 0.0),  # 直径D用于有压管道同类结构
+                        'coord_X': self._sf(values[COL_X], 0.0), 'coord_Y': self._sf(values[COL_Y], 0.0),
+                        'Q': self._sf(values[COL_Q]), 'n': self._sf(values[COL_N], 0.0), 'slope_inv': 0,
+                        'D': self._sf(values[COL_D], 0.0),  # 直径D用于有压管道同类结构
                         'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
                         'pipe_material': pipe_material,
                         'local_loss_ratio': local_loss_ratio,
@@ -2022,8 +2265,8 @@ class BatchPanel(QWidget):
                     gate_result = {
                         'success': True, 'section_type': section_type, 'is_diversion_gate': True,
                         'flow_section': segment, 'building_name': building_name,
-                        'coord_X': self._sf(values[4], 0.0), 'coord_Y': self._sf(values[5], 0.0),
-                        'Q': self._sf(values[6]), 'n': self._sf(values[7], 0.014), 'slope_inv': 0,
+                        'coord_X': self._sf(values[COL_X], 0.0), 'coord_Y': self._sf(values[COL_Y], 0.0),
+                        'Q': self._sf(values[COL_Q]), 'n': self._sf(values[COL_N], 0.014), 'slope_inv': 0,
                         'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
                     }
                     self.batch_results.append({'input': values, 'result': gate_result})
@@ -2035,19 +2278,40 @@ class BatchPanel(QWidget):
                     continue
 
                 # 解析输入参数
-                Q = self._sf(values[6])
-                n = self._sf(values[7], 0.0)
-                slope_inv = self._sf(values[8])
-                m = self._sf(values[9], 0)
-                b = self._sf(values[10], 0)
-                beta = self._sf(values[11], 0)
-                R = self._sf(values[12], 0)
-                D = self._sf(values[13], 0)
-                ducao_depth_ratio = self._sf(values[14], 0)
-                chamfer_angle = self._sf(values[15], 0)
-                chamfer_length = self._sf(values[16], 0)
-                theta_deg = self._sf(values[17], 0)
+                Q = self._sf(values[COL_Q])
+                n = self._sf(values[COL_N], 0.0)
+                slope_inv = self._sf(values[COL_SLOPE])
+                m = self._sf(values[COL_M], 0)
+                b = self._sf(values[COL_B], 0)
+                beta = self._sf(values[COL_BETA], 0)
+                rect_hb_ratio = self._sf(values[COL_RECT_CULVERT_HB_RATIO], 0)
+                R = self._sf(values[COL_R], 0)
+                D = self._sf(values[COL_D], 0)
+                ducao_depth_ratio = self._sf(values[COL_DUCAO_DEPTH_RATIO], 0)
+                chamfer_angle = self._sf(values[COL_CHAMFER_ANGLE], 0)
+                chamfer_length = self._sf(values[COL_CHAMFER_LENGTH], 0)
+                theta_deg = self._sf(values[COL_THETA], 0)
                 normalized_section_type = normalize_section_type_name(section_type)
+                manual_H_rect = None
+                rect_h_text = str(values[COL_RECT_CULVERT_H]).strip() if len(values) > COL_RECT_CULVERT_H else ""
+                if rect_h_text:
+                    try:
+                        manual_H_rect = float(rect_h_text)
+                    except ValueError as exc:
+                        raise ValueError("矩形暗涵指定高度 H 输入无效") from exc
+                else:
+                    manual_H_rect = self._get_rect_culvert_manual_h(row_idx)
+                if is_rect_culvert_section_type(normalized_section_type) and manual_H_rect is not None:
+                    if manual_H_rect <= 0:
+                        raise ValueError("矩形暗涵指定高度 H 必须大于0")
+                    if b <= 0:
+                        raise ValueError("填写高度 H 时必须同时填写底宽 B")
+                    if beta > 0:
+                        raise ValueError("填写高度 H 时不能同时填写宽深比 β")
+                    if rect_hb_ratio > 0:
+                        raise ValueError("填写高度 H 时不能同时填写高宽比 H/B")
+                if is_rect_culvert_section_type(normalized_section_type) and beta > 0 and rect_hb_ratio > 0:
+                    raise ValueError("宽深比 β 与高宽比 H/B 不能同时指定")
                 manual_H_straight = None
                 h_straight_text = (
                     str(values[COL_ARCH_H_STRAIGHT]).strip()
@@ -2082,8 +2346,8 @@ class BatchPanel(QWidget):
                 B2 = self._sf(values[COL_COMPOUND_B2], 0)
                 m3 = self._sf(values[COL_COMPOUND_M3], 0)
                 h1 = self._sf(values[COL_COMPOUND_H1], 0)
-                v_min = self._sf(values[18], 0.1)
-                v_max = self._sf(values[19], 100)
+                v_min = self._sf(values[COL_V_MIN], 0.1)
+                v_max = self._sf(values[COL_V_MAX], 100)
 
                 if Q <= 0: raise ValueError("流量Q必须大于0")
                 if n <= 0: raise ValueError("糙率n必须大于0")
@@ -2109,6 +2373,8 @@ class BatchPanel(QWidget):
                     chamfer_angle=chamfer_angle, chamfer_length=chamfer_length,
                     theta_deg=theta_deg,
                     manual_H_straight=manual_H_straight,
+                    manual_H=manual_H_rect,
+                    target_HB_ratio=rect_hb_ratio if rect_hb_ratio > 0 else None,
                     tie_rod_height=tie_rod_height,
                     manual_increase_percent=manual_increase_percent,
                     preserve_explicit_bottom_width=preserve_explicit_bottom_width,
@@ -2205,6 +2471,9 @@ class BatchPanel(QWidget):
                           m=0, b=0, beta=0, R=0, D=0,
                           m1=0, B1=0, m2=0, B2=0, m3=0, h1=0,
                           ducao_depth_ratio=0, chamfer_angle=0, chamfer_length=0, theta_deg=0,
+                          manual_H=None,
+                          manual_H_rect=None,
+                          target_HB_ratio=None,
                           manual_H_straight=None,
                           tie_rod_height=None,
                           manual_increase_percent=None,
@@ -2316,10 +2585,13 @@ class BatchPanel(QWidget):
                                           manual_increase_percent=_inc)
         elif is_rect_culvert_section_type(section_type):
             if not RECT_CULVERT_AVAILABLE: return {'success': False, 'error_message': '矩形暗涵模块未加载'}
+            fixed_H = manual_H if manual_H is not None else manual_H_rect
             return rect_culvert_calculate(Q=Q, n=n, slope_inv=slope_inv,
                                           v_min=v_min, v_max=v_max,
                                           manual_B=b if b > 0 else None,
+                                          manual_H=fixed_H if fixed_H is not None and fixed_H > 0 else None,
                                           target_BH_ratio=beta if beta > 0 else None,
+                                          target_HB_ratio=target_HB_ratio if target_HB_ratio is not None and target_HB_ratio > 0 else None,
                                           manual_increase_percent=_inc)
         else:
             return {'success': False, 'error_message': f'不支持的断面类型: {section_type}'}
@@ -2602,7 +2874,7 @@ class BatchPanel(QWidget):
             o.append(f"  坐标: X={coord_x}, Y={coord_y}")
         # 有压管道专用参数
         q_val = str(input_vals[6]).strip() if len(input_vals) > 6 and input_vals[6] else ""
-        d_val = str(input_vals[13]).strip() if len(input_vals) > 13 and input_vals[13] else ""
+        d_val = str(input_vals[COL_D]).strip() if len(input_vals) > COL_D and input_vals[COL_D] else ""
         material = str(input_vals[COL_PIPE_MATERIAL]).strip() if len(input_vals) > COL_PIPE_MATERIAL and input_vals[COL_PIPE_MATERIAL] else "未指定"
         loss_ratio = str(input_vals[COL_PIPE_LOCAL_LOSS]).strip() if len(input_vals) > COL_PIPE_LOCAL_LOSS and input_vals[COL_PIPE_LOCAL_LOSS] else ""
         in_out = str(input_vals[COL_PIPE_IN_OUT]).strip() if len(input_vals) > COL_PIPE_IN_OUT and input_vals[COL_PIPE_IN_OUT] else ""
@@ -2625,11 +2897,11 @@ class BatchPanel(QWidget):
 
     def _fmt_mingqu_report(self, input_vals, result):
         """格式化明渠报告（梯形/矩形/圆形，与原版一致）"""
-        Q = self._sf(input_vals[6])
-        n = self._sf(input_vals[7], 0.014)
-        slope_inv = self._sf(input_vals[8])
-        v_min = self._sf(input_vals[18], 0.1)
-        v_max = self._sf(input_vals[19], 100)
+        Q = self._sf(input_vals[COL_Q])
+        n = self._sf(input_vals[COL_N], 0.014)
+        slope_inv = self._sf(input_vals[COL_SLOPE])
+        v_min = self._sf(input_vals[COL_V_MIN], 0.1)
+        v_max = self._sf(input_vals[COL_V_MAX], 100)
         section_type = str(input_vals[3]).strip()
         i = 1.0 / slope_inv if slope_inv > 0 else 0
         o = []
@@ -2771,7 +3043,7 @@ class BatchPanel(QWidget):
             o.append(f"  3. 净空面积验证: PA加大 = {PA_i:.1f}% ≥ 15% → {'通过 ✓' if pa_ok else '未通过 ✗'}")
         else:
             # 梯形/矩形明渠
-            m = float(input_vals[9]) if input_vals[9] else 0
+            m = float(input_vals[COL_M]) if input_vals[COL_M] else 0
             b = result.get('b_design', result.get('B', 0))
             h = result.get('h_design', 0)
             V = result.get('V_design', 0)
@@ -2836,15 +3108,15 @@ class BatchPanel(QWidget):
 
     def _fmt_ducao_report(self, input_vals, result):
         """格式化渡槽报告（U形/矩形，与原版一致）"""
-        Q = self._sf(input_vals[6])
-        n = self._sf(input_vals[7], 0.014)
-        slope_inv = self._sf(input_vals[8])
-        section_type = str(input_vals[3]).strip()
+        Q = self._sf(input_vals[COL_Q])
+        n = self._sf(input_vals[COL_N], 0.014)
+        slope_inv = self._sf(input_vals[COL_SLOPE])
+        section_type = str(input_vals[COL_SECTION_TYPE]).strip()
         i = 1.0 / slope_inv if slope_inv > 0 else 0
         import math
         o = []
-        v_min = self._sf(input_vals[18], 0.1)
-        v_max = self._sf(input_vals[19], 100)
+        v_min = self._sf(input_vals[COL_V_MIN], 0.1)
+        v_max = self._sf(input_vals[COL_V_MAX], 100)
         o.append("【一、输入参数】")
         o.extend(self._channel_info_lines(input_vals))
         o.append(f"  设计流量 Q = {Q:.3f} m³/s")
@@ -2974,12 +3246,12 @@ class BatchPanel(QWidget):
 
     def _fmt_suidong_report(self, input_vals, result):
         """格式化隧洞/矩形暗涵报告（与原版一致）"""
-        Q = self._sf(input_vals[6])
-        n = self._sf(input_vals[7], 0.014)
-        slope_inv = self._sf(input_vals[8])
-        v_min = self._sf(input_vals[18], 0.1)
-        v_max = self._sf(input_vals[19], 100)
-        section_type = normalize_section_type_name(str(input_vals[3]).strip())
+        Q = self._sf(input_vals[COL_Q])
+        n = self._sf(input_vals[COL_N], 0.014)
+        slope_inv = self._sf(input_vals[COL_SLOPE])
+        v_min = self._sf(input_vals[COL_V_MIN], 0.1)
+        v_max = self._sf(input_vals[COL_V_MAX], 100)
+        section_type = normalize_section_type_name(str(input_vals[COL_SECTION_TYPE]).strip())
         i = 1.0 / slope_inv if slope_inv > 0 else 0
         o = []
         o.append("【一、输入参数】")
@@ -3151,24 +3423,31 @@ class BatchPanel(QWidget):
             return
         values = self._get_row_data(row_idx)
         values = self._normalize_row(values, len(INPUT_HEADERS))
-        section_type = str(values[3]).strip()
+        section_type = str(values[COL_SECTION_TYPE]).strip()
         if not section_type or "分水" in section_type or "闸" in section_type or "倒虹吸" in section_type or is_pressure_pipe_like_section_type(section_type):
             InfoBar.info("提示", f"{section_type or '未设置类型'} 无需设置断面参数",
                         parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
             return
-        # 列索引: 6Q,7n,8比降,9m,10B,11宽深比,12R,13D,14渡槽深宽比,15倒角角度,16倒角底边,17圆心角,18不淤,19不冲
+        # 基础列和可选断面列均从当前表结构读取，旧项目在 _normalize_row 中完成补列迁移。
         current_values = {
-            "Q": values[6], "n": values[7], "slope_inv": values[8],
-            "m": values[9], "b": values[10], "b_h_ratio": values[11],
-            "R": values[12], "D": values[13],
-            "ducao_depth_ratio": values[14], "chamfer_angle": values[15],
-            "chamfer_length": values[16], "theta": values[17],
-            "v_min": values[18], "v_max": values[19],
+            "Q": values[COL_Q], "n": values[COL_N], "slope_inv": values[COL_SLOPE],
+            "m": values[COL_M], "b": values[COL_B], "b_h_ratio": values[COL_BETA],
+            "rect_hb_ratio": values[COL_RECT_CULVERT_HB_RATIO],
+            "rect_H": values[COL_RECT_CULVERT_H],
+            "R": values[COL_R], "D": values[COL_D],
+            "ducao_depth_ratio": values[COL_DUCAO_DEPTH_RATIO], "chamfer_angle": values[COL_CHAMFER_ANGLE],
+            "chamfer_length": values[COL_CHAMFER_LENGTH], "theta": values[COL_THETA],
+            "v_min": values[COL_V_MIN], "v_max": values[COL_V_MAX],
             "m1": values[COL_COMPOUND_M1], "B1": values[COL_COMPOUND_B1],
             "m2": values[COL_COMPOUND_M2], "B2": values[COL_COMPOUND_B2],
             "m3": values[COL_COMPOUND_M3], "h1": values[COL_COMPOUND_H1],
             "H_straight": values[COL_ARCH_H_STRAIGHT] if len(values) > COL_ARCH_H_STRAIGHT else "",
             "tie_rod_height": values[COL_TIE_ROD_HEIGHT] if len(values) > COL_TIE_ROD_HEIGHT else "",
+            "H_rect": values[COL_RECT_CULVERT_H] or (
+                self._get_rect_culvert_manual_h(row_idx)
+                if is_rect_culvert_section_type(section_type)
+                else None
+            ),
         }
         dlg = SectionParameterDialog(self, section_type, current_values)
         if dlg.exec() == QDialog.Accepted:
@@ -3182,26 +3461,27 @@ class BatchPanel(QWidget):
         values = self._get_row_data(row_idx)
         values = list(self._normalize_row(values, len(INPUT_HEADERS)))
         # 更新基础参数
-        values[6] = str(params.get('Q', values[6]))
-        values[7] = str(params.get('n', values[7]))
-        values[8] = str(params.get('slope_inv', values[8]))
-        values[18] = str(params.get('v_min', values[18]))
-        values[19] = str(params.get('v_max', values[19]))
-        # 清空所有可选参数列(9-17)
-        for i in range(9, 18):
+        values[COL_Q] = str(params.get('Q', values[COL_Q]))
+        values[COL_N] = str(params.get('n', values[COL_N]))
+        values[COL_SLOPE] = str(params.get('slope_inv', values[COL_SLOPE]))
+        values[COL_V_MIN] = str(params.get('v_min', values[COL_V_MIN]))
+        values[COL_V_MAX] = str(params.get('v_max', values[COL_V_MAX]))
+        # 清空所有可选断面参数列
+        for i in range(COL_M, COL_THETA + 1):
             values[i] = ""
         for i in range(COL_COMPOUND_M1, COL_COMPOUND_H1 + 1):
             values[i] = ""
         values[COL_ARCH_H_STRAIGHT] = ""
         values[COL_TIE_ROD_HEIGHT] = ""
+        rect_meta = {_RECT_CULVERT_MANUAL_H_META_KEY: None}
         # 根据结构形式更新对应的参数列
         if "明渠-梯形" in section_type or "明渠-矩形" in section_type:
             m_val = params.get('m', "")
-            values[9] = str(m_val) if m_val != "" else ""
+            values[COL_M] = str(m_val) if m_val != "" else ""
             b_val = params.get('b', "")
-            values[10] = str(b_val) if b_val != "" else ""
+            values[COL_B] = str(b_val) if b_val != "" else ""
             ratio_val = params.get('b_h_ratio', "")
-            values[11] = str(ratio_val) if ratio_val != "" else ""
+            values[COL_BETA] = str(ratio_val) if ratio_val != "" else ""
         elif "明渠-复式梯形" in section_type:
             for key, col in (
                 ('m1', COL_COMPOUND_M1),
@@ -3215,59 +3495,65 @@ class BatchPanel(QWidget):
                 values[col] = str(val) if val != "" else ""
         elif "明渠-圆形" in section_type:
             D_val = params.get('D', "")
-            values[13] = str(D_val) if D_val != "" else ""
+            values[COL_D] = str(D_val) if D_val != "" else ""
         elif "渡槽-U形" in section_type:
             R_val = params.get('R', "")
-            values[12] = str(R_val) if R_val != "" else ""
+            values[COL_R] = str(R_val) if R_val != "" else ""
             tie_val = params.get('tie_rod_height', "")
             values[COL_TIE_ROD_HEIGHT] = str(tie_val) if tie_val != "" else ""
         elif "渡槽-矩形" in section_type:
             h_b_ratio = params.get('h_b_ratio', "")
-            values[14] = str(h_b_ratio) if h_b_ratio != "" else ""
+            values[COL_DUCAO_DEPTH_RATIO] = str(h_b_ratio) if h_b_ratio != "" else ""
             chamfer_angle = params.get('chamfer_angle', "")
             chamfer_length = params.get('chamfer_length', "")
-            values[15] = str(chamfer_angle) if chamfer_angle != "" else ""
-            values[16] = str(chamfer_length) if chamfer_length != "" else ""
+            values[COL_CHAMFER_ANGLE] = str(chamfer_angle) if chamfer_angle != "" else ""
+            values[COL_CHAMFER_LENGTH] = str(chamfer_length) if chamfer_length != "" else ""
             tie_val = params.get('tie_rod_height', "")
             values[COL_TIE_ROD_HEIGHT] = str(tie_val) if tie_val != "" else ""
         elif "隧洞-平底圆形" in section_type:
             B_val = params.get('B', params.get('b', ""))
-            values[10] = str(B_val) if B_val != "" else ""
+            values[COL_B] = str(B_val) if B_val != "" else ""
             D_val = params.get('D', "")
-            values[13] = str(D_val) if D_val != "" else ""
+            values[COL_D] = str(D_val) if D_val != "" else ""
         elif "隧洞-圆形" in section_type:
             D_val = params.get('D', "")
-            values[13] = str(D_val) if D_val != "" else ""
+            values[COL_D] = str(D_val) if D_val != "" else ""
         elif "隧洞-圆拱直墙型" in section_type:
             B_val = params.get('B', "")
-            values[10] = str(B_val) if B_val != "" else ""
+            values[COL_B] = str(B_val) if B_val != "" else ""
             theta_val = params.get('theta', "")
-            values[17] = str(theta_val) if theta_val != "" else ""
+            values[COL_THETA] = str(theta_val) if theta_val != "" else ""
             H_straight_val = params.get('H_straight', "")
             values[COL_ARCH_H_STRAIGHT] = str(H_straight_val) if H_straight_val != "" else ""
         elif is_arch_culvert_section_type(section_type):
             B_val = params.get('B', "")
-            values[10] = str(B_val) if B_val != "" else ""
+            values[COL_B] = str(B_val) if B_val != "" else ""
             theta_val = params.get('theta', "")
-            values[17] = str(theta_val) if theta_val != "" else ""
+            values[COL_THETA] = str(theta_val) if theta_val != "" else ""
             H_straight_val = params.get('H_straight', "")
             values[COL_ARCH_H_STRAIGHT] = str(H_straight_val) if H_straight_val != "" else ""
         elif "隧洞-马蹄形" in section_type:
             r_val = params.get('r', "")
-            values[12] = str(r_val) if r_val != "" else ""
+            values[COL_R] = str(r_val) if r_val != "" else ""
         elif is_rect_culvert_section_type(section_type):
             BH_ratio_val = params.get('BH_ratio_rect', "")
-            values[11] = str(BH_ratio_val) if BH_ratio_val != "" else ""
+            values[COL_BETA] = str(BH_ratio_val) if BH_ratio_val != "" else ""
+            HB_ratio_val = params.get('HB_ratio_rect', "")
+            values[COL_RECT_CULVERT_HB_RATIO] = str(HB_ratio_val) if HB_ratio_val != "" else ""
             B_rect_val = params.get('B_rect', "")
-            values[10] = str(B_rect_val) if B_rect_val != "" else ""
+            values[COL_B] = str(B_rect_val) if B_rect_val != "" else ""
+            H_rect_val = params.get('H_rect', "")
+            values[COL_RECT_CULVERT_H] = str(H_rect_val) if H_rect_val != "" else ""
+            rect_meta = {_RECT_CULVERT_MANUAL_H_META_KEY: None}
         # 回填到表格
         self.input_table.blockSignals(True)
         for col, val in enumerate(values):
             if col < len(INPUT_HEADERS):
                 item = QTableWidgetItem(str(val) if val else "")
-                if col == 3:
+                if col == COL_SECTION_TYPE:
                     item.setTextAlignment(Qt.AlignCenter)
                 self.input_table.setItem(row_idx, col, item)
+        self._apply_row_hidden_meta(row_idx, rect_meta)
         self.input_table.blockSignals(False)
 
     # ================================================================
@@ -3301,44 +3587,46 @@ class BatchPanel(QWidget):
 
     def _apply_section_type_change(self, row, new_type):
         """结构形式变更后自动填充默认值"""
-        name_item = self.input_table.item(row, 2)
+        name_item = self.input_table.item(row, COL_BUILDING_NAME)
         current_name = name_item.text().strip() if name_item else ""
-        seq_item = self.input_table.item(row, 0)
+        seq_item = self.input_table.item(row, COL_SEQ)
         seq = seq_item.text().strip() if seq_item else str(row + 1)
 
         self.input_table.blockSignals(True)
+        if not is_rect_culvert_section_type(new_type):
+            self._set_rect_culvert_manual_h(row, None)
 
         if "明渠" in new_type or is_rect_culvert_section_type(new_type):
-            self.input_table.setItem(row, 2, QTableWidgetItem("-"))
+            self.input_table.setItem(row, COL_BUILDING_NAME, QTableWidgetItem("-"))
             # 明渠-U形额外填充默认值 R=0.8, α=14°, θ=152°
             if new_type == "明渠-U形":
-                for col, val in [(12, "0.8"), (15, "14"), (17, "152")]:
+                for col, val in [(COL_R, "0.8"), (COL_CHAMFER_ANGLE, "14"), (COL_THETA, "152")]:
                     self.input_table.setItem(row, col, QTableWidgetItem(val))
         elif "分水" in new_type:
             if current_name == "-" or not current_name:
-                self.input_table.setItem(row, 2, QTableWidgetItem(f"分水闸{seq}"))
+                self.input_table.setItem(row, COL_BUILDING_NAME, QTableWidgetItem(f"分水闸{seq}"))
         elif current_name == "-" or not current_name:
-            self.input_table.setItem(row, 2, QTableWidgetItem(f"建筑物{seq}"))
+            self.input_table.setItem(row, COL_BUILDING_NAME, QTableWidgetItem(f"建筑物{seq}"))
 
         if "分水" in new_type:
-            for i in range(8, 18):
+            for i in range(COL_SLOPE, COL_THETA + 1):
                 self.input_table.setItem(row, i, QTableWidgetItem(""))
             self.input_table.blockSignals(False)
             InfoBar.info("提示", f"序号{seq}已设为{new_type}（流量段分界点）\n请确认下一行的流量段编号已正确递增",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
 
-        for i in range(9, 18):
+        for i in range(COL_M, COL_THETA + 1):
             self.input_table.setItem(row, i, QTableWidgetItem(""))
         for i in range(COL_COMPOUND_M1, COL_COMPOUND_H1 + 1):
             self.input_table.setItem(row, i, QTableWidgetItem(""))
 
-        slope_item = self.input_table.item(row, 8)
+        slope_item = self.input_table.item(row, COL_SLOPE)
         if not slope_item or not slope_item.text().strip():
-            self.input_table.setItem(row, 8, QTableWidgetItem("3000"))
+            self.input_table.setItem(row, COL_SLOPE, QTableWidgetItem("3000"))
 
         if "明渠-梯形" in new_type:
-            self.input_table.setItem(row, 9, QTableWidgetItem("1.0"))
+            self.input_table.setItem(row, COL_M, QTableWidgetItem("1.0"))
         elif "明渠-复式梯形" in new_type:
             defaults = {
                 COL_COMPOUND_M1: "1.5",
@@ -3499,8 +3787,8 @@ class BatchPanel(QWidget):
         """自动从表格数据中识别流量段及其对应的流量值，并更新流量设置区域"""
         segment_flow_map = {}
         for r in range(self.input_table.rowCount()):
-            seg_item = self.input_table.item(r, 1)
-            q_item = self.input_table.item(r, 6)
+            seg_item = self.input_table.item(r, COL_SEGMENT)
+            q_item = self.input_table.item(r, COL_Q)
             seg_val = seg_item.text().strip() if seg_item else ""
             q_val = q_item.text().strip() if q_item else ""
             if not seg_val or not q_val:
@@ -3553,14 +3841,14 @@ class BatchPanel(QWidget):
             updated_count = 0
             self.input_table.blockSignals(True)
             for r in range(self.input_table.rowCount()):
-                seg_item = self.input_table.item(r, 1)
+                seg_item = self.input_table.item(r, COL_SEGMENT)
                 seg_val = seg_item.text().strip() if seg_item else ""
                 if not seg_val:
                     continue
                 try:
                     segment = int(seg_val)
                     if 1 <= segment <= len(flow_values):
-                        self.input_table.setItem(r, 6, QTableWidgetItem(str(flow_values[segment - 1])))
+                        self.input_table.setItem(r, COL_Q, QTableWidgetItem(str(flow_values[segment - 1])))
                         updated_count += 1
                 except (ValueError, IndexError):
                     continue
@@ -3686,9 +3974,21 @@ class BatchPanel(QWidget):
 
     def _normalize_row(self, row, length):
         row = list(row) if row else []
+        if length == len(INPUT_HEADERS) and len(row) == _LEGACY_INPUT_HEADER_COUNT_BEFORE_RECT_CULVERT_EXCEL_COLUMNS:
+            # 旧项目中没有“暗涵高宽比H/B”和“暗涵高度H”两列，同时 H直/拉杆高度仍在末尾。
+            row = _map_input_row_by_header_order(row, _INPUT_HEADERS_BEFORE_RECT_CULVERT_VISIBLE_COLUMNS)
         while len(row) < length:
             row.append("")
         return row[:length]
+
+    def _normalize_project_input_row(self, row, source_headers=None):
+        """按项目保存时的表头顺序恢复输入行，兼容旧工程列顺序。"""
+        row = list(row) if row else []
+        if isinstance(source_headers, (list, tuple)) and source_headers:
+            return _map_input_row_by_header_order(row, source_headers)
+        if len(row) == len(_INPUT_HEADERS_BEFORE_AE_AF_REORDER):
+            return _map_input_row_by_header_order(row, _INPUT_HEADERS_BEFORE_AE_AF_REORDER)
+        return self._normalize_row(row, len(INPUT_HEADERS))
 
     def _get_user_prefs_path(self):
         """获取用户偏好配置文件路径（与原版一致）"""
@@ -3931,10 +4231,14 @@ class BatchPanel(QWidget):
             manual_qmax_by_segment = read_manual_qmax_map_from_sheet(ws, info_row)
             manual_qmax_summary = build_manual_qmax_summary_text(manual_qmax_by_segment)
 
+            header_row = data_start_row - 1
+            import_col_count = max(len(INPUT_HEADERS), getattr(ws, "max_column", len(INPUT_HEADERS)) or len(INPUT_HEADERS))
+            header_values = [_read_cell(header_row, col_idx) for col_idx in range(1, import_col_count + 1)]
+            header_mapping = _excel_header_mapping(header_values)
+
             # 读取数据行（按当前输入表列数读取，兼容新增列如“管材”）
             data_rows = []
             data_row_numbers = []
-            import_col_count = len(INPUT_HEADERS)
             for row_idx in range(data_start_row, ws.max_row + 1):
                 row_data = []
                 for col_idx in range(1, import_col_count + 1):
@@ -3950,7 +4254,6 @@ class BatchPanel(QWidget):
             # 自动检测列映射：检查表头行第5列是否含"X"来判断是否有X/Y坐标列
             # 含X/Y列映射（当前22列）：... 20转弯半径, 21管材
             # 无X/Y列映射（旧18/19列模板）：无X/Y时将X/Y置空，并兼容转弯半径/管材缺省
-            header_row = data_start_row - 1
             h4_val = str(ws.cell(row=header_row, column=5).value or "")
             has_xy_cols = "X" in h4_val.upper() or "Q" not in h4_val.upper()
             # 如果第5列表头是"X"或不含"Q"，说明有X/Y列偏移
@@ -3976,24 +4279,42 @@ class BatchPanel(QWidget):
                         if row_offset < len(data_row_numbers)
                         else data_start_row + row_offset
                     )
-                    rd = rd + [""] * len(INPUT_HEADERS)
-                    if has_xy_cols:
-                        mapped = rd[:len(INPUT_HEADERS)]
+                    raw_rd = list(rd)
+                    rd = raw_rd + [""] * len(INPUT_HEADERS)
+                    if header_mapping:
+                        mapped = _map_excel_row_by_headers(raw_rd, header_mapping)
+                    elif has_xy_cols:
+                        mapped = self._normalize_row(raw_rd, len(INPUT_HEADERS))
                     else:
                         # 旧版无X/Y模板映射到新版列：
                         # 0序号,1流量段,2名称,3结构形式,4Q,5n,6比降,7m,8B,9宽深比,10R,11D,12渡槽深宽比,
                         # 13倒角角度,14倒角底边,15圆心角,16不淤,17不冲,18转弯半径(可选),19管材(可选)
-                        mapped = [
-                            rd[0], rd[1], rd[2], rd[3],
-                            "", "",
-                            rd[4], rd[5], rd[6],
-                            rd[7], rd[8], rd[9],
-                            rd[10], rd[11],
-                            rd[12], rd[13], rd[14], rd[15],
-                            rd[16], rd[17],
-                            rd[18] if len(rd) > 18 else "",
-                            rd[19] if len(rd) > 19 else "",
-                        ]
+                        mapped = [""] * len(INPUT_HEADERS)
+                        legacy_no_xy_columns = (
+                            (0, COL_SEQ),
+                            (1, COL_SEGMENT),
+                            (2, COL_BUILDING_NAME),
+                            (3, COL_SECTION_TYPE),
+                            (4, COL_Q),
+                            (5, COL_N),
+                            (6, COL_SLOPE),
+                            (7, COL_M),
+                            (8, COL_B),
+                            (9, COL_BETA),
+                            (10, COL_R),
+                            (11, COL_D),
+                            (12, COL_DUCAO_DEPTH_RATIO),
+                            (13, COL_CHAMFER_ANGLE),
+                            (14, COL_CHAMFER_LENGTH),
+                            (15, COL_THETA),
+                            (16, COL_V_MIN),
+                            (17, COL_V_MAX),
+                            (18, COL_TURN_RADIUS),
+                            (19, COL_PIPE_MATERIAL),
+                        )
+                        for source_col, target_col in legacy_no_xy_columns:
+                            if source_col < len(raw_rd):
+                                mapped[target_col] = raw_rd[source_col]
                     # 有压管道同类行自动忽略糙率n值（索引7）
                     section_type = str(mapped[3]).strip() if len(mapped) > 3 else ""
                     if is_pressure_pipe_like_section_type(section_type):
@@ -4074,35 +4395,47 @@ class BatchPanel(QWidget):
         try:
             # 从输入表获取参数数据，建立映射（以序号为key）
             input_params_map = {}
+            def _input_item_text(row, col):
+                item = self.input_table.item(row, col)
+                return item.text() if item else ""
             for r in range(self.input_table.rowCount()):
-                seq_item = self.input_table.item(r, 0)
+                seq_item = self.input_table.item(r, COL_SEQ)
                 if not seq_item:
                     continue
                 seq_key = seq_item.text().strip()
-                x_val = self.input_table.item(r, 4).text() if self.input_table.item(r, 4) else ""
-                y_val = self.input_table.item(r, 5).text() if self.input_table.item(r, 5) else ""
-                q_val = self.input_table.item(r, 6).text() if self.input_table.item(r, 6) else ""
-                n_val = self.input_table.item(r, 7).text() if self.input_table.item(r, 7) else ""
-                slope_val = self.input_table.item(r, 8).text() if self.input_table.item(r, 8) else ""
-                m_val = self.input_table.item(r, 9).text() if self.input_table.item(r, 9) else ""
-                tr_val = self.input_table.item(r, COL_TURN_RADIUS).text() if self.input_table.item(r, COL_TURN_RADIUS) else ""
-                h_straight_val = self.input_table.item(r, COL_ARCH_H_STRAIGHT).text() if self.input_table.item(r, COL_ARCH_H_STRAIGHT) else ""
-                tie_rod_val = self.input_table.item(r, COL_TIE_ROD_HEIGHT).text() if self.input_table.item(r, COL_TIE_ROD_HEIGHT) else ""
+                x_val = _input_item_text(r, COL_X)
+                y_val = _input_item_text(r, COL_Y)
+                q_val = _input_item_text(r, COL_Q)
+                n_val = _input_item_text(r, COL_N)
+                slope_val = _input_item_text(r, COL_SLOPE)
+                m_val = _input_item_text(r, COL_M)
+                b_val = _input_item_text(r, COL_B)
+                rect_hb_val = _input_item_text(r, COL_RECT_CULVERT_HB_RATIO)
+                rect_h_val = _input_item_text(r, COL_RECT_CULVERT_H)
+                beta_val = _input_item_text(r, COL_BETA)
+                tr_val = _input_item_text(r, COL_TURN_RADIUS)
+                h_straight_val = _input_item_text(r, COL_ARCH_H_STRAIGHT)
+                tie_rod_val = _input_item_text(r, COL_TIE_ROD_HEIGHT)
                 compound_vals = []
                 for col in (
                     COL_COMPOUND_M1, COL_COMPOUND_B1, COL_COMPOUND_M2,
                     COL_COMPOUND_B2, COL_COMPOUND_M3, COL_COMPOUND_H1,
                 ):
-                    item = self.input_table.item(r, col)
-                    compound_vals.append(item.text() if item else "")
-                input_params_map[seq_key] = (x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val, tie_rod_val, *compound_vals)
+                    compound_vals.append(_input_item_text(r, col))
+                input_params_map[seq_key] = (
+                    x_val, y_val, q_val, n_val, slope_val, m_val,
+                    b_val, rect_hb_val, rect_h_val, beta_val,
+                    tr_val, h_straight_val, tie_rod_val, *compound_vals,
+                )
 
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "批量计算结果"
             # 导出表头：在结果表头的结构形式后插入X/Y/Q/n/比降/边坡系数/转弯半径列
             export_headers = list(RESULT_HEADERS[:4]) + [
-                "X", "Y", "Q(m³/s)", "糙率n", "比降(1/)", "边坡系数m", "转弯半径(m)", "直墙高度H直(m)", "拉杆高度(m)",
+                "X", "Y", "Q(m³/s)", "糙率n", "比降(1/)", "边坡系数m",
+                "底宽B(m)", "暗涵高宽比H/B", "暗涵高度H(m)", "宽深比β",
+                "转弯半径(m)", "直墙高度H直(m)", "拉杆高度(m)",
                 "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
             ] + list(RESULT_HEADERS[4:])
             # 第1行：标题
@@ -4134,13 +4467,20 @@ class BatchPanel(QWidget):
                     item = self.result_table.item(r, c)
                     result_vals.append(item.text() if item else "")
                 seq_key = result_vals[0].strip() if result_vals else ""
-                x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val, tie_rod_val, m1_val, B1_val, m2_val, B2_val, m3_val, h1_val = input_params_map.get(
+                (
+                    x_val, y_val, q_val, n_val, slope_val, m_val,
+                    b_val, rect_hb_val, rect_h_val, beta_val,
+                    tr_val, h_straight_val, tie_rod_val,
+                    m1_val, B1_val, m2_val, B2_val, m3_val, h1_val,
+                ) = input_params_map.get(
                     seq_key,
-                    ("", "", "", "", "", "", "", "", "", "", "", "", "", "", ""),
+                    ("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""),
                 )
                 # 构建导出行：前4列 + 输入参数列 + 后续结果列
                 export_row = result_vals[:4] + [
-                    x_val, y_val, q_val, n_val, slope_val, m_val, tr_val, h_straight_val, tie_rod_val,
+                    x_val, y_val, q_val, n_val, slope_val, m_val,
+                    b_val, rect_hb_val, rect_h_val, beta_val,
+                    tr_val, h_straight_val, tie_rod_val,
                     m1_val, B1_val, m2_val, B2_val, m3_val, h1_val,
                 ] + result_vals[4:]
                 for c, val in enumerate(export_row, 1):
@@ -4373,6 +4713,7 @@ class BatchPanel(QWidget):
         """
         # 收集输入表格数据
         input_rows = []
+        input_row_meta = []
         for row in range(self.input_table.rowCount()):
             row_data = []
             for col in range(self.input_table.columnCount()):
@@ -4381,6 +4722,7 @@ class BatchPanel(QWidget):
             if len(row_data) > 3:
                 row_data[3] = normalize_project_section_type(row_data[3])
             input_rows.append(row_data)
+            input_row_meta.append(self._collect_row_hidden_meta(row))
         
         manual_qmax_by_segment = getattr(self, "_manual_qmax_by_segment", {}) or {}
         result_rows = self._collect_result_table_rows()
@@ -4400,6 +4742,10 @@ class BatchPanel(QWidget):
             "detail_checked": self.detail_cb.isChecked(),
             # 输入表格数据（21列 × N行）
             "input_rows": input_rows,
+            # 输入表格列顺序，用于以后调整列位置时安全恢复旧项目。
+            "input_header_order": list(INPUT_HEADERS),
+            # 输入表格行级隐藏参数（不改变 Excel/表格列结构）
+            "input_row_meta": input_row_meta,
             # Excel 第1行手工 Q加大 映射（隐藏持久化字段）
             "manual_qmax_by_segment": {
                 str(segment): value for segment, value in sorted(manual_qmax_by_segment.items())
@@ -4465,21 +4811,39 @@ class BatchPanel(QWidget):
 
             # 恢复输入表格数据
             input_rows = d.get("input_rows", [])
+            input_header_order = d.get("input_header_order")
+            input_row_meta = d.get("input_row_meta", []) or []
             if input_rows:
                 # 清空现有数据
                 self.input_table.setRowCount(0)
                 self.input_table.setRowCount(len(input_rows))
 
                 for row_idx, row_data in enumerate(input_rows):
+                    row_data = self._normalize_project_input_row(row_data, input_header_order)
                     for col_idx, cell_value in enumerate(row_data):
                         if col_idx < self.input_table.columnCount():
-                            if col_idx == 3:
+                            if col_idx == COL_SECTION_TYPE:
                                 cell_value = normalize_project_section_type(cell_value)
                             item = QTableWidgetItem(str(cell_value) if cell_value else "")
                             # 序号列和结构形式列居中
-                            if col_idx in (0, 3):
+                            if col_idx in (COL_SEQ, COL_SECTION_TYPE):
                                 item.setTextAlignment(Qt.AlignCenter)
                             self.input_table.setItem(row_idx, col_idx, item)
+                    if row_idx < len(input_row_meta):
+                        meta = input_row_meta[row_idx]
+                        self._apply_row_hidden_meta(row_idx, meta)
+                        if (
+                            isinstance(meta, dict)
+                            and _RECT_CULVERT_MANUAL_H_META_KEY in meta
+                            and is_rect_culvert_section_type(row_data[COL_SECTION_TYPE])
+                            and not str(row_data[COL_RECT_CULVERT_H]).strip()
+                        ):
+                            self.input_table.setItem(
+                                row_idx,
+                                COL_RECT_CULVERT_H,
+                                QTableWidgetItem(str(meta.get(_RECT_CULVERT_MANUAL_H_META_KEY) or "")),
+                            )
+                            self._set_rect_culvert_manual_h(row_idx, None)
             
             has_saved_result_snapshot = any(
                 key in d for key in ("batch_results", "result_rows", "detail_text_cache")
@@ -4490,6 +4854,12 @@ class BatchPanel(QWidget):
             if has_saved_result_snapshot and has_nonempty_result_snapshot:
                 # 新项目格式：恢复上次计算现场；失败结果继续保持导出锁定。
                 self.batch_results = copy.deepcopy(d.get("batch_results", []) or [])
+                for item_data in self.batch_results:
+                    if isinstance(item_data, dict) and "input" in item_data:
+                        item_data["input"] = self._normalize_project_input_row(
+                            item_data.get("input", []),
+                            input_header_order,
+                        )
                 result_rows = d.get("result_rows", []) or []
                 if hasattr(self, 'result_table'):
                     self._restore_result_table_rows(result_rows)
@@ -4663,9 +5033,14 @@ class SectionParameterDialog(QDialog):
             self._add_opt_entry(form, "指定半径 R (m):", "r", "留空自动计算",
                                 "(留空则自动计算)")
         elif is_rect_culvert_section_type(st):
-            self._add_opt_entry(form, "指定宽深比:", "BH_ratio_rect", "留空自动计算")
+            self._add_opt_entry(form, "指定宽深比 β:", "BH_ratio_rect", "留空自动计算",
+                                "(与H/B不可同时填写)")
+            self._add_opt_entry(form, "指定高宽比 H/B:", "HB_ratio_rect", "留空自动计算",
+                                "(需同时填写底宽 B；不能与H或β同填)")
             self._add_opt_entry(form, "指定底宽 B (m):", "B_rect", "留空自动计算",
-                                "(二选一输入，留空则自动计算)")
+                                "(可单独填写，也可与H或H/B合用)")
+            self._add_opt_entry(form, "指定高度 H (m):", "H_rect", "留空自动计算",
+                                "(填写时需同时填写底宽 B；不能与H/B或β同填)")
         else:
             no_param = QLabel("(无额外参数)")
             no_param.setStyleSheet("color:#424242;")
@@ -4730,8 +5105,15 @@ class SectionParameterDialog(QDialog):
                 if 'r' in self._entries and v and str(v).strip():
                     self._entries['r'].setText(str(v).strip())
             elif is_rect_culvert_section_type(st):
-                for k, ek in [('b_h_ratio', 'BH_ratio_rect'), ('b', 'B_rect')]:
+                for k, ek in [
+                    ('b_h_ratio', 'BH_ratio_rect'),
+                    ('rect_hb_ratio', 'HB_ratio_rect'),
+                    ('b', 'B_rect'),
+                    ('H_rect', 'H_rect'),
+                ]:
                     v = cv.get(k, '')
+                    if k == 'H_rect' and (v is None or str(v).strip() == ''):
+                        v = cv.get('rect_H', cv.get('manual_H_rect', cv.get('manual_H', '')))
                     if ek in self._entries and v and str(v).strip():
                         self._entries[ek].setText(str(v).strip())
         except Exception:
@@ -4860,8 +5242,30 @@ class SectionParameterDialog(QDialog):
             elif "隧洞-马蹄形" in st:
                 result['r'] = self._get_float('r', "")
             elif is_rect_culvert_section_type(st):
-                result['BH_ratio_rect'] = self._get_float('BH_ratio_rect', "")
-                result['B_rect'] = self._get_float('B_rect', "")
+                BH_ratio_val = self._get_float('BH_ratio_rect', "")
+                HB_ratio_val = self._get_float('HB_ratio_rect', "")
+                B_rect_val = self._get_float('B_rect', "")
+                H_rect_val = self._get_float('H_rect', "")
+                if isinstance(BH_ratio_val, (int, float)) and BH_ratio_val > 0 and isinstance(HB_ratio_val, (int, float)) and HB_ratio_val > 0:
+                    raise ValueError("宽深比 β 与高宽比 H/B 不能同时填写")
+                if isinstance(HB_ratio_val, (int, float)):
+                    if HB_ratio_val <= 0:
+                        raise ValueError("指定高宽比 H/B 必须大于0")
+                    if B_rect_val == "" or B_rect_val is None or not isinstance(B_rect_val, (int, float)) or B_rect_val <= 0:
+                        raise ValueError("填写高宽比 H/B 时必须同时填写底宽 B")
+                if isinstance(H_rect_val, (int, float)):
+                    if H_rect_val <= 0:
+                        raise ValueError("指定高度 H 必须大于0")
+                    if B_rect_val == "" or B_rect_val is None or not isinstance(B_rect_val, (int, float)) or B_rect_val <= 0:
+                        raise ValueError("填写高度 H 时必须同时填写底宽 B")
+                    if isinstance(BH_ratio_val, (int, float)) and BH_ratio_val > 0:
+                        raise ValueError("填写高度 H 时不能同时填写宽深比")
+                    if isinstance(HB_ratio_val, (int, float)) and HB_ratio_val > 0:
+                        raise ValueError("填写高度 H 时不能同时填写高宽比 H/B")
+                result['BH_ratio_rect'] = BH_ratio_val
+                result['HB_ratio_rect'] = HB_ratio_val
+                result['B_rect'] = B_rect_val
+                result['H_rect'] = H_rect_val
 
             self.result = result
             self.accept()

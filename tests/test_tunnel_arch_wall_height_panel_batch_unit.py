@@ -100,14 +100,16 @@ def test_tunnel_parse_case_rejects_wall_height_without_bottom_width():
         )
 
 
-def test_batch_input_headers_keep_wall_height_before_tie_rod_without_moving_old_columns():
-    """批量输入表应保持旧列与 H直 位置，并在后面追加拉杆高度。"""
+def test_batch_input_headers_place_wall_height_near_arch_angle():
+    """H直 应靠近圆拱直墙参数，拉杆高度应靠近渡槽参数。"""
+    assert INPUT_HEADERS[COL_TIE_ROD_HEIGHT] == "拉杆高度(m)"
+    assert INPUT_HEADERS[COL_TIE_ROD_HEIGHT - 1] == "矩形渡槽深宽比"
+    assert INPUT_HEADERS[COL_TIE_ROD_HEIGHT + 1] == "倒角角度(°)"
+    assert INPUT_HEADERS[COL_ARCH_H_STRAIGHT] == "直墙高度H直(m)"
+    assert INPUT_HEADERS[COL_ARCH_H_STRAIGHT - 1] == "圆心角(°)"
+    assert INPUT_HEADERS[COL_ARCH_H_STRAIGHT + 1] == "不淤流速"
     assert INPUT_HEADERS[COL_TURN_RADIUS] == "转弯半径(m)"
     assert INPUT_HEADERS[COL_COMPOUND_H1] == "平台高差h1(m)"
-    assert INPUT_HEADERS[COL_ARCH_H_STRAIGHT] == "直墙高度H直(m)"
-    assert INPUT_HEADERS[COL_TIE_ROD_HEIGHT] == "拉杆高度(m)"
-    assert COL_ARCH_H_STRAIGHT == COL_COMPOUND_H1 + 1
-    assert COL_TIE_ROD_HEIGHT == len(INPUT_HEADERS) - 1
 
 
 def test_batch_calculate_single_passes_manual_wall_height_to_kernel():
@@ -156,8 +158,8 @@ def test_batch_panel_update_table_row_writes_back_arch_wall_height():
         "隧洞-圆拱直墙型",
     )
 
-    assert panel.input_table.item(0, 10).text() == "3.0"
-    assert panel.input_table.item(0, 17).text() == "150.0"
+    assert panel.input_table.item(0, INPUT_HEADERS.index("底宽B(m)")).text() == "3.0"
+    assert panel.input_table.item(0, INPUT_HEADERS.index("圆心角(°)")).text() == "150.0"
     assert panel.input_table.item(0, COL_ARCH_H_STRAIGHT).text() == "1.2"
 
 

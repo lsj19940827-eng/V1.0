@@ -2,10 +2,14 @@
 """泄水渠与陡坡文档和表格导出函数。"""
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from docx import Document
 from openpyxl import Workbook
+
+from app_渠系计算前端.export_utils import create_engineering_report_doc
+from app_渠系计算前端.report_meta import load_meta
 
 from .models import normalize_result
 from .principles import build_calculation_principles, display_start_control_source
@@ -46,6 +50,37 @@ def _value(*candidates: Any, default: Any = "") -> Any:
     return default
 
 
+def _word_meta(meta: Any = None) -> Any:
+    """整理 Word 固定格式需要的项目元数据。"""
+    source = meta if meta is not None else load_meta()
+    fields = {
+        "project_name": "",
+        "design_stage": "施工图",
+        "product_level": "三级",
+        "record_number": "",
+        "specialty": "水工",
+        "calculator": "",
+        "checker": "",
+        "reviewer": "",
+        "approver": "",
+        "volume_current": "",
+        "volume_total": "",
+        "basic_info": "",
+        "mandatory_clause": "无",
+        "extra_references": [],
+    }
+    for key in fields:
+        fields[key] = getattr(source, key, fields[key])
+    return SimpleNamespace(**fields)
+
+
+def _word_content_desc(case_count: int) -> str:
+    """生成泄水渠计算书产品内容说明。"""
+    if case_count > 1:
+        return f"泄水渠与陡坡水力设计计算（{case_count}个工况）"
+    return "泄水渠与陡坡水力设计计算"
+
+
 def _display_control_source(value: Any) -> str:
     """把内部起点水深来源转换为中文展示。"""
     return display_start_control_source(value)
@@ -79,6 +114,14 @@ def _append_word_table(document: Document, headers: list[str], rows: list[list[A
         cells = table.add_row().cells
         for idx, value in enumerate(row):
             cells[idx].text = _text(value)
+
+
+def _append_word_paragraph(document: Document, text: Any, style: str | None = None) -> None:
+    """追加段落，兼容模板缺少内置英文样式名的情况。"""
+    try:
+        document.add_paragraph(_text(text), style=style)
+    except KeyError:
+        document.add_paragraph(_text(text))
 
 
 def _profile_row(point: dict[str, Any]) -> list[Any]:
@@ -290,7 +333,7 @@ def _append_result_sections(document: Document, label: str, result: Any, *, mult
     document.add_heading("风险提示", level=base_level)
     if view_data.risks:
         for risk in view_data.risks:
-            document.add_paragraph(_text(risk), style="List Bullet")
+            _append_word_paragraph(document, risk, style="List Bullet")
     else:
         document.add_paragraph("无")
 
@@ -391,9 +434,16 @@ def export_spillway_steep_chute_word(
     output_path = Path(path)
     cases = _result_cases(result)
     multi_case = len(cases) > 1
-    document = Document()
-    document.add_heading("泄水渠与陡坡计算书", level=1)
-    _append_report_meta(document, meta, calc_purpose, references)
+    content_desc = _word_content_desc(len(cases))
+    document = create_engineering_report_doc(
+        meta=_word_meta(meta),
+        calc_title="泄水渠与陡坡计算书",
+        calc_content_desc=content_desc,
+        calc_purpose=calc_purpose,
+        references=list(references or []),
+        calc_program_text=f"渠系建筑物水力计算系统 V1.0\n{content_desc}",
+    )
+    document.add_page_break()
     for case in cases:
         _append_result_sections(document, case["label"], case["result"], multi_case=multi_case)
 

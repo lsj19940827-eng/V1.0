@@ -51,6 +51,26 @@ def test_u_aqueduct_tie_rod_height_reports_effective_freeboard_to_tie_bottom():
     assert tied["H_B"] == pytest.approx(tied["H_total"] / tied["B"])
 
 
+def test_u_aqueduct_rejects_increased_freeboard_below_min_after_final_recalculation():
+    """加大有效超高必须按原始值校核，不能按显示四舍五入后的 0.1m 放行。"""
+    result = quick_calculate_u(
+        Q=17.0,
+        n=0.014,
+        slope_inv=2500,
+        v_min=0.6,
+        v_max=100.0,
+        manual_R=2.35,
+        manual_increase_percent=20.0,
+        tie_rod_height=0.3,
+    )
+
+    assert result["success"] is False
+    assert "加大有效超高" in result["error_message"]
+    assert "0.097" in result["error_message"]
+    assert "0.10" in result["error_message"]
+    assert "四舍五入" not in result["error_message"]
+
+
 def test_u_aqueduct_tie_rod_counts_as_design_freeboard_when_no_increase():
     base = quick_calculate_u(
         Q=5.0,

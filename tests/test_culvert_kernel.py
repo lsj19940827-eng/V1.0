@@ -195,6 +195,59 @@ def test_manual_B():
         check(f"Q一致 B={B_m}", approx(ref_Q(r['B'],r['h_design'],0.014,1/3000),5.0,0.03))
 
 
+def test_manual_fixed_B_H():
+    """同时指定 B 和 H 时应按固定宽高验算，不自动改尺寸。"""
+    r = quick_calculate_rectangular_culvert(
+        17.0, 0.014, 4000, 0.1, 100.0,
+        manual_B=4.2,
+        manual_H=4.1,
+    )
+
+    assert r["success"], r.get("error_message", "")
+    assert close(r["B"], 4.2, 0.001)
+    assert close(r["H"], 4.1, 0.001)
+    assert "指定宽高尺寸" in r["design_method"]
+    assert r["h_increased"] < r["H"]
+    assert r["freeboard_hgt_inc"] >= r["fb_min_required"] - 1e-3
+    assert MIN_FREEBOARD_PCT_RECT * 100 <= r["freeboard_pct_inc"] <= MAX_FREEBOARD_PCT_RECT * 100
+
+
+def test_manual_fixed_B_H_rejects_invalid_combinations_and_constraints():
+    """固定 H 缺少 B、与比例约束混填、或净空不足时应给出明确失败。"""
+    only_h = quick_calculate_rectangular_culvert(
+        17.0, 0.014, 4000, 0.1, 100.0,
+        manual_H=4.1,
+    )
+    assert not only_h["success"]
+    assert "高度 H" in only_h["error_message"] and "底宽 B" in only_h["error_message"]
+
+    conflict_hb = quick_calculate_rectangular_culvert(
+        17.0, 0.014, 4000, 0.1, 100.0,
+        manual_B=4.2,
+        manual_H=4.1,
+        target_HB_ratio=0.9,
+    )
+    assert not conflict_hb["success"]
+    assert "高度 H" in conflict_hb["error_message"] and "H/B" in conflict_hb["error_message"]
+
+    conflict_beta = quick_calculate_rectangular_culvert(
+        17.0, 0.014, 4000, 0.1, 100.0,
+        manual_B=4.2,
+        manual_H=4.1,
+        target_BH_ratio=1.2,
+    )
+    assert not conflict_beta["success"]
+    assert "高度 H" in conflict_beta["error_message"] and "宽深比" in conflict_beta["error_message"]
+
+    low_height = quick_calculate_rectangular_culvert(
+        17.0, 0.014, 4000, 0.1, 100.0,
+        manual_B=4.2,
+        manual_H=3.7,
+    )
+    assert not low_height["success"]
+    assert "固定高度 H" in low_height["error_message"] and "净空" in low_height["error_message"]
+
+
 def test_manual_beta():
     print("\n" + "="*70 + "\n测试9: 手动宽深比 target_BH_ratio\n" + "="*70)
     for beta in [1.0, 1.5, 2.0, 2.5]:

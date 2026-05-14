@@ -3,7 +3,6 @@
 
 import os
 import sys
-import tempfile
 import inspect
 from pathlib import Path
 
@@ -17,7 +16,16 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-from app_渠系计算前端.batch.panel import BatchPanel, COL_ARCH_H_STRAIGHT, INPUT_HEADERS, SECTION_TYPES
+from app_渠系计算前端.batch.panel import (
+    BatchPanel,
+    COL_ARCH_H_STRAIGHT,
+    COL_B,
+    COL_BETA,
+    COL_RECT_CULVERT_H,
+    COL_RECT_CULVERT_HB_RATIO,
+    INPUT_HEADERS,
+    SECTION_TYPES,
+)
 import app_渠系计算前端.batch.panel as batch_panel_mod
 from app_渠系计算前端.culvert.panel import CulvertPanel
 import app_渠系计算前端.culvert.panel as culvert_panel_mod
@@ -47,12 +55,17 @@ class _FakeTable:
 
     def __init__(self):
         self._items = {}
+        self._row_count = 1
 
     def blockSignals(self, _blocked):
         return None
 
+    def rowCount(self):
+        return self._row_count
+
     def setItem(self, row, col, item):
         self._items[(row, col)] = item
+        self._row_count = max(self._row_count, row + 1)
 
     def item(self, row, col):
         return self._items.get((row, col))
@@ -89,20 +102,33 @@ def _build_arch_case(**overrides):
     return case
 
 
+def _build_rect_case(**overrides):
+    """构造矩形暗涵工况字典。"""
+    case = {
+        "section_type": "暗涵-矩形",
+        "Q": "17.0",
+        "n": "0.014",
+        "slope_inv": "4000",
+        "v_min": "0.1",
+        "v_max": "100.0",
+        "inc_checked": True,
+        "inc_pct": "",
+        "inc_q_text": "",
+        "detail_checked": True,
+        "bh": "",
+        "hb": "",
+        "B": "4.2",
+        "H": "4.1",
+    }
+    case.update(overrides)
+    return case
+
+
 
 @pytest.fixture
 def local_tmp_path():
-    """在项目目录下创建临时目录，避开系统临时目录权限问题。"""
-    base_dir = ROOT / ".pytest_tmp" / "culvert_arch_panel_batch_unit"
-    base_dir.mkdir(parents=True, exist_ok=True)
-    temp_dir = Path(tempfile.mkdtemp(dir=base_dir))
-    try:
-        yield temp_dir
-    finally:
-        for child in temp_dir.iterdir():
-            if child.is_file():
-                child.unlink()
-        temp_dir.rmdir()
+    """提供可拼接路径的根目录；测试中不实际落盘。"""
+    return ROOT
 
 
 def test_batch_panel_calculate_single_supports_culvert_arch():
@@ -148,6 +174,35 @@ def test_culvert_parse_case_rejects_wall_height_without_bottom_width():
         )
 
 
+def test_culvert_parse_case_passes_rect_fixed_height_to_kernel():
+    """单项矩形暗涵入口应把固定 H 与 B 一起解析给内核。"""
+    params = CulvertPanel._parse_case(None, _build_rect_case(), 1)
+
+    assert params["manual_B"] == pytest.approx(4.2)
+    assert params["manual_H"] == pytest.approx(4.1)
+
+
+def test_culvert_parse_case_rejects_rect_height_without_bottom_width():
+    """单项矩形暗涵只填写 H 时应提示必须同时填写 B。"""
+    with pytest.raises(ValueError, match="底宽 B"):
+        CulvertPanel._parse_case(
+            None,
+            _build_rect_case(B="", H="4.1"),
+            1,
+        )
+
+
+@pytest.mark.parametrize("extra", [{"bh": "1.2"}, {"hb": "0.9"}])
+def test_culvert_parse_case_rejects_rect_height_with_ratio(extra):
+    """固定 H 不应与宽深比或高宽比混填。"""
+    with pytest.raises(ValueError, match="高度 H"):
+        CulvertPanel._parse_case(
+            None,
+            _build_rect_case(**extra),
+            1,
+        )
+
+
 def test_batch_panel_calculate_single_passes_culvert_arch_manual_wall_height():
     """批量页分发暗涵计算时应支持固定 H直。"""
     panel = BatchPanel.__new__(BatchPanel)
@@ -169,6 +224,61 @@ def test_batch_panel_calculate_single_passes_culvert_arch_manual_wall_height():
     assert result["success"] is True
     assert result["used_manual_H_straight"] is True
     assert result["H_straight"] == pytest.approx(1.2)
+
+
+def test_batch_panel_calculate_single_passes_rect_culvert_manual_height():
+    """批量页分发矩形暗涵计算时应支持固定 H。"""
+    panel = BatchPanel.__new__(BatchPanel)
+
+    result = BatchPanel._calculate_single(
+        panel,
+        "暗涵-矩形",
+        17.0,
+        0.014,
+        4000,
+        0.1,
+        100.0,
+        b=4.2,
+        manual_H=4.1,
+    )
+
+    assert result["success"] is True
+    assert result["B"] == pytest.approx(4.2)
+    assert result["H"] == pytest.approx(4.1)
+    assert "指定宽高尺寸" in result["design_method"]
+
+
+def test_batch_input_headers_include_rect_culvert_visible_size_columns():
+    """矩形暗涵 H/B 与 H 应作为 Excel/批量表可见列紧跟底宽 B。"""
+    assert INPUT_HEADERS[COL_B] == "底宽B(m)"
+    assert INPUT_HEADERS[COL_RECT_CULVERT_HB_RATIO] == "暗涵高宽比H/B"
+    assert INPUT_HEADERS[COL_RECT_CULVERT_H] == "暗涵高度H(m)"
+    assert INPUT_HEADERS[COL_BETA] == "宽深比β"
+    assert COL_RECT_CULVERT_HB_RATIO == COL_B + 1
+    assert COL_RECT_CULVERT_H == COL_B + 2
+    assert COL_BETA == COL_B + 3
+
+
+def test_batch_panel_calculate_single_passes_rect_culvert_hb_ratio():
+    """批量页分发矩形暗涵计算时应支持 Excel/表格中的 H/B。"""
+    panel = BatchPanel.__new__(BatchPanel)
+
+    result = BatchPanel._calculate_single(
+        panel,
+        "暗涵-矩形",
+        17.0,
+        0.014,
+        4000,
+        0.1,
+        100.0,
+        b=4.2,
+        target_HB_ratio=0.97619047619,
+    )
+
+    assert result["success"] is True
+    assert result["B"] == pytest.approx(4.2)
+    assert result["H"] == pytest.approx(4.1, abs=0.02)
+    assert "指定高宽比" in result["design_method"]
 
 
 def test_batch_panel_update_table_row_writes_back_culvert_arch_wall_height():
@@ -194,8 +304,8 @@ def test_batch_panel_update_table_row_writes_back_culvert_arch_wall_height():
         "暗涵-圆拱直墙型",
     )
 
-    assert panel.input_table.item(0, 10).text() == "3.0"
-    assert panel.input_table.item(0, 17).text() == "150.0"
+    assert panel.input_table.item(0, COL_B).text() == "3.0"
+    assert panel.input_table.item(0, batch_panel_mod.COL_THETA).text() == "150.0"
     assert panel.input_table.item(0, COL_ARCH_H_STRAIGHT).text() == "1.2"
 
 
@@ -261,6 +371,130 @@ def test_section_parameter_dialog_accepts_culvert_arch_wall_height(monkeypatch):
     assert dialog.result["B"] == pytest.approx(3.0)
     assert dialog.result["theta"] == pytest.approx(150.0)
     assert dialog.result["H_straight"] == pytest.approx(1.2)
+
+
+def test_section_parameter_dialog_accepts_rect_culvert_fixed_height(monkeypatch):
+    """批量参数弹窗应支持矩形暗涵固定 H。"""
+    dialog = batch_panel_mod.SectionParameterDialog.__new__(batch_panel_mod.SectionParameterDialog)
+    dialog.section_type = "暗涵-矩形"
+    dialog.result = None
+    dialog._entries = {
+        "Q": _FakeEntry("17.0"),
+        "n": _FakeEntry("0.014"),
+        "slope_inv": _FakeEntry("4000"),
+        "v_min": _FakeEntry("0.1"),
+        "v_max": _FakeEntry("100.0"),
+        "BH_ratio_rect": _FakeEntry(""),
+        "HB_ratio_rect": _FakeEntry(""),
+        "B_rect": _FakeEntry("4.2"),
+        "H_rect": _FakeEntry("4.1"),
+    }
+    accepted = []
+    dialog.accept = lambda: accepted.append(True)
+    monkeypatch.setattr(batch_panel_mod, "fluent_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(batch_panel_mod, "fluent_error", lambda *_args, **_kwargs: None)
+
+    batch_panel_mod.SectionParameterDialog._on_confirm(dialog)
+
+    assert accepted == [True]
+    assert dialog.result["B_rect"] == pytest.approx(4.2)
+    assert dialog.result["H_rect"] == pytest.approx(4.1)
+
+
+def test_section_parameter_dialog_accepts_rect_culvert_hb_ratio(monkeypatch):
+    """批量参数弹窗应支持矩形暗涵 B + H/B。"""
+    dialog = batch_panel_mod.SectionParameterDialog.__new__(batch_panel_mod.SectionParameterDialog)
+    dialog.section_type = "暗涵-矩形"
+    dialog.result = None
+    dialog._entries = {
+        "Q": _FakeEntry("17.0"),
+        "n": _FakeEntry("0.014"),
+        "slope_inv": _FakeEntry("4000"),
+        "v_min": _FakeEntry("0.1"),
+        "v_max": _FakeEntry("100.0"),
+        "BH_ratio_rect": _FakeEntry(""),
+        "HB_ratio_rect": _FakeEntry("0.976"),
+        "B_rect": _FakeEntry("4.2"),
+        "H_rect": _FakeEntry(""),
+    }
+    accepted = []
+    dialog.accept = lambda: accepted.append(True)
+    monkeypatch.setattr(batch_panel_mod, "fluent_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(batch_panel_mod, "fluent_error", lambda *_args, **_kwargs: None)
+
+    batch_panel_mod.SectionParameterDialog._on_confirm(dialog)
+
+    assert accepted == [True]
+    assert dialog.result["B_rect"] == pytest.approx(4.2)
+    assert dialog.result["HB_ratio_rect"] == pytest.approx(0.976)
+
+
+@pytest.mark.parametrize(
+    "entries, message",
+    [
+        ({"BH_ratio_rect": "1.2", "HB_ratio_rect": "0.976", "B_rect": "4.2", "H_rect": ""}, "H/B"),
+        ({"BH_ratio_rect": "", "HB_ratio_rect": "0.976", "B_rect": "4.2", "H_rect": "4.1"}, "高度 H"),
+    ],
+)
+def test_section_parameter_dialog_rejects_rect_culvert_ratio_conflicts(monkeypatch, entries, message):
+    """矩形暗涵 H、H/B、β 在批量弹窗中应按规则互斥。"""
+    dialog = batch_panel_mod.SectionParameterDialog.__new__(batch_panel_mod.SectionParameterDialog)
+    dialog.section_type = "暗涵-矩形"
+    dialog.result = None
+    dialog._entries = {
+        "Q": _FakeEntry("17.0"),
+        "n": _FakeEntry("0.014"),
+        "slope_inv": _FakeEntry("4000"),
+        "v_min": _FakeEntry("0.1"),
+        "v_max": _FakeEntry("100.0"),
+        **{key: _FakeEntry(value) for key, value in entries.items()},
+    }
+    errors = []
+    dialog.accept = lambda: None
+    monkeypatch.setattr(batch_panel_mod, "fluent_info", lambda _parent, _title, content: errors.append(content))
+    monkeypatch.setattr(batch_panel_mod, "fluent_error", lambda *_args, **_kwargs: None)
+
+    batch_panel_mod.SectionParameterDialog._on_confirm(dialog)
+
+    assert errors
+    assert message in errors[0]
+
+
+def test_section_parameter_dialog_rejects_rect_height_without_bottom_width(monkeypatch):
+    """批量参数弹窗中矩形暗涵 H 有值时 B 必填。"""
+    dialog = batch_panel_mod.SectionParameterDialog.__new__(batch_panel_mod.SectionParameterDialog)
+    dialog.section_type = "暗涵-矩形"
+    dialog.result = None
+    dialog._entries = {
+        "Q": _FakeEntry("17.0"),
+        "n": _FakeEntry("0.014"),
+        "slope_inv": _FakeEntry("4000"),
+        "v_min": _FakeEntry("0.1"),
+        "v_max": _FakeEntry("100.0"),
+        "BH_ratio_rect": _FakeEntry(""),
+        "HB_ratio_rect": _FakeEntry(""),
+        "B_rect": _FakeEntry(""),
+        "H_rect": _FakeEntry("4.1"),
+    }
+    errors = []
+    dialog.accept = lambda: None
+    monkeypatch.setattr(batch_panel_mod, "fluent_info", lambda _parent, _title, content: errors.append(content))
+    monkeypatch.setattr(batch_panel_mod, "fluent_error", lambda *_args, **_kwargs: None)
+
+    batch_panel_mod.SectionParameterDialog._on_confirm(dialog)
+
+    assert errors
+    assert "底宽 B" in errors[0]
+
+
+def test_batch_panel_rect_culvert_height_row_metadata_roundtrips():
+    """矩形暗涵固定 H 应能作为隐藏行参数保存和读取。"""
+    panel = BatchPanel.__new__(BatchPanel)
+    panel.input_table = _FakeTable()
+
+    BatchPanel._set_rect_culvert_manual_h(panel, 0, 4.1)
+
+    assert BatchPanel._get_rect_culvert_manual_h(panel, 0) == pytest.approx(4.1)
 
 
 def test_section_parameter_dialog_rejects_culvert_arch_wall_height_without_bottom_width(monkeypatch):
@@ -450,13 +684,14 @@ def test_culvert_word_report_base_formulas_follow_section_subtype(
     dummy._all_results = [(0, params, result)]
 
     captured_formulas = []
+    saved_paths = []
 
     class _DocStub:
         def add_page_break(self):
             return None
 
         def save(self, filepath):
-            Path(filepath).write_text("stub", encoding="utf-8")
+            saved_paths.append(Path(filepath))
 
     monkeypatch.setattr(culvert_panel_mod, "create_engineering_report_doc", lambda **_kwargs: _DocStub())
     monkeypatch.setattr(culvert_panel_mod, "doc_add_eng_h", lambda *_args, **_kwargs: None)
@@ -475,6 +710,6 @@ def test_culvert_word_report_base_formulas_follow_section_subtype(
     filepath = local_tmp_path / "culvert-formulas.docx"
     CulvertPanel._build_word_report(dummy, str(filepath))
 
-    assert filepath.exists()
+    assert saved_paths == [filepath]
     assert required_formula in captured_formulas
     assert forbidden_formula not in captured_formulas

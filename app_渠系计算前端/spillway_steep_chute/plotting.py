@@ -6,6 +6,8 @@ from typing import Any
 from matplotlib import rcParams
 from matplotlib.figure import Figure
 
+from app_渠系计算前端.matplotlib_text_layout import apply_single_axis_text_safe_layout
+
 from .models import normalize_result
 
 rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Arial Unicode MS", "DejaVu Sans"]
@@ -88,7 +90,12 @@ def draw_longitudinal_profile(fig: Figure, result: Any) -> Figure:
     if xs:
         ax.margins(x=0.02, y=0.08)
         ax.legend(loc="best")
-    fig.subplots_adjust(left=0.10, right=0.94, top=0.88, bottom=0.14)
+    apply_single_axis_text_safe_layout(
+        fig,
+        ax,
+        base_margins={"left": 0.10, "right": 0.94, "top": 0.88, "bottom": 0.14},
+        padding_px=8.0,
+    )
     return fig
 
 

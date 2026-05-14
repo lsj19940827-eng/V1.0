@@ -394,9 +394,10 @@ class CulvertPanel(QWidget):
         self.bh_lbl, self.bh_edit = self._field2(fl, "指定宽深比 β:", "")
         self.hb_lbl, self.hb_edit = self._field2(fl, "指定高宽比 H/B:", "")
         self.B_lbl, self.B_edit = self._field2(fl, "指定底宽 B (m):", "")
+        self.H_lbl, self.H_edit = self._field2(fl, "指定高度 H (m):", "")
         self._rect_hint_ratio = self._hint("(β 与 H/B 不可同时填写)")
         fl.addWidget(self._rect_hint_ratio)
-        self._rect_hint_bottom = self._hint("(B 可单独填写，也可与 H/B 合用)")
+        self._rect_hint_bottom = self._hint("(H 必须与 B 合用；B 也可单独填写或与 H/B 合用)")
         fl.addWidget(self._rect_hint_bottom)
         self._rect_hint_ratio_limit = QLabel("高宽比H/B、宽高比B/H 建议不超过1.2（超出时提醒，不作强制）")
         self._rect_hint_ratio_limit.setStyleSheet(f"font-family: 'Microsoft YaHei', sans-serif; font-size: 11px; color: #0066CC;")
@@ -508,6 +509,7 @@ class CulvertPanel(QWidget):
             self.bh_lbl, self.bh_edit,
             self.hb_lbl, self.hb_edit,
             self.B_lbl, self.B_edit,
+            self.H_lbl, self.H_edit,
             self._rect_hint_ratio,
             self._rect_hint_bottom,
             self._rect_hint_ratio_limit,
@@ -607,9 +609,10 @@ class CulvertPanel(QWidget):
                 ["指定高宽比 H/B", "以 H=(H/B)×B 为约束，自动搜索最小B"],
                 ["指定底宽 B", "固定B，自动搜索满足约束的H"],
                 ["指定B + 高宽比 H/B", "固定B，H=(H/B)×B，直接验算"],
+                ["指定B + 高度 H", "固定B和H，直接验算流速与净空"],
             ]
         )
-        h.hint("宽深比 β 与高宽比 H/B 不可同时填写（过约束）")
+        h.hint("宽深比 β 与高宽比 H/B 不可同时填写；指定高度 H 时必须同时填写 B，且不能再填写 β 或 H/B")
         h.section("经济最优断面")
         h.text("当底宽和宽深比均留空时，自动搜索总面积 B×H 最小的断面（β 无硬约束）：")
         h.formula("min A = B × H", "优化目标：总截面面积最小")
@@ -684,7 +687,7 @@ class CulvertPanel(QWidget):
             'v_min': '0.1', 'v_max': '100.0',
             'inc_checked': True, 'inc_pct': '', 'inc_mode': INCREASE_MODE_PERCENT, 'inc_q_text': '',
             'detail_checked': True,
-            'bh': '', 'hb': '', 'B': '',
+            'bh': '', 'hb': '', 'B': '', 'H': '',
             'arch_B': '',
             'arch_H_straight': '',
         }
@@ -717,6 +720,7 @@ class CulvertPanel(QWidget):
         c['bh'] = self.bh_edit.text()
         c['hb'] = self.hb_edit.text()
         c['B'] = self.B_edit.text()
+        c['H'] = self.H_edit.text()
         c['arch_B'] = self.arch_B_edit.text()
         c['arch_H_straight'] = self.arch_H_straight_edit.text()
 
@@ -742,6 +746,7 @@ class CulvertPanel(QWidget):
         self.bh_edit.setText(c.get('bh', ''))
         self.hb_edit.setText(c.get('hb', ''))
         self.B_edit.setText(c.get('B', ''))
+        self.H_edit.setText(c.get('H', ''))
         self.theta_edit.setText(c.get('theta_deg', '180'))
         self.arch_B_edit.setText(c.get('arch_B', ''))
         self.arch_H_straight_edit.setText(c.get('arch_H_straight', ''))
@@ -1102,7 +1107,7 @@ class CulvertPanel(QWidget):
         keys = (
             'section_type', 'theta_deg',
             'n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text',
-            'detail_checked', 'bh', 'hb', 'B', 'arch_B', 'arch_H_straight',
+            'detail_checked', 'bh', 'hb', 'B', 'H', 'arch_B', 'arch_H_straight',
         )
         for i, case in enumerate(self._cases):
             if i != self._current_case_idx:
@@ -1128,7 +1133,7 @@ class CulvertPanel(QWidget):
         for k in (
             'section_type', 'theta_deg',
             'n', 'slope_inv', 'v_min', 'v_max', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text',
-            'detail_checked', 'bh', 'hb', 'B', 'arch_B', 'arch_H_straight',
+            'detail_checked', 'bh', 'hb', 'B', 'H', 'arch_B', 'arch_H_straight',
         ):
             curr[k] = prev[k]
         self._load_case(self._current_case_idx)
@@ -1238,11 +1243,22 @@ class CulvertPanel(QWidget):
             return input_params
 
         manual_B = _fv_opt('B')
+        manual_H = _fv_opt_labeled('H', '高度 H', must_nonnegative=False)
         target_BH_ratio = _fv_opt('bh')
         target_HB_ratio = _fv_opt('hb')
         if target_BH_ratio and target_HB_ratio:
             raise ValueError(f"工况{case_num}: 宽深比 β 与高宽比 H/B 不能同时指定")
+        if manual_H is not None:
+            if manual_H <= 0:
+                raise ValueError(f"工况{case_num}: 高度 H 必须大于0")
+            if manual_B is None or manual_B <= 0:
+                raise ValueError(f"工况{case_num}: 填写高度 H 时必须同时填写底宽 B")
+            if target_BH_ratio:
+                raise ValueError(f"工况{case_num}: 填写高度 H 时不能同时填写宽深比 β")
+            if target_HB_ratio:
+                raise ValueError(f"工况{case_num}: 填写高度 H 时不能同时填写高宽比 H/B")
         input_params['manual_B'] = manual_B
+        input_params['manual_H'] = manual_H
         input_params['target_BH_ratio'] = target_BH_ratio
         input_params['target_HB_ratio'] = target_HB_ratio
         return input_params
@@ -1289,6 +1305,7 @@ class CulvertPanel(QWidget):
                         target_BH_ratio=params['target_BH_ratio'],
                         target_HB_ratio=params['target_HB_ratio'],
                         manual_B=params['manual_B'],
+                        manual_H=params['manual_H'],
                         manual_increase_percent=params['manual_increase'],
                     )
                 self._all_results.append((i, params, result))
@@ -1832,6 +1849,8 @@ class CulvertPanel(QWidget):
         v_min, v_max = p['v_min'], p['v_max']
         is_optimal = result.get('is_optimal_section', False)
         target_HB = p.get('target_HB_ratio')
+        manual_H = p.get('manual_H')
+        is_fixed_size = manual_H is not None and p.get('manual_B') is not None
         family_name = _culvert_full_name(section_type)
 
         B = result['B']; H = result['H']
@@ -1867,6 +1886,8 @@ class CulvertPanel(QWidget):
         o.append("=" * 70)
         if is_optimal:
             o.append(f"              {family_name}水力计算结果（经济最优断面）")
+        elif is_fixed_size:
+            o.append(f"              {family_name}水力计算结果（指定宽高尺寸）")
         elif target_HB:
             o.append(f"              {family_name}水力计算结果（指定高宽比 H/B={target_HB:.2f}）")
         else:
@@ -1898,6 +1919,8 @@ class CulvertPanel(QWidget):
             if is_optimal:
                 o.append("  ★ 采用经济最优断面（B×H 最小）")
                 o.append(f"    （B={B:.2f}m，H={H:.2f}m，A={B*H:.3f}m²，β={BH_ratio:.3f}）")
+            elif is_fixed_size:
+                o.append("  ★ 按指定宽高尺寸计算")
             elif target_HB:
                 o.append(f"  ★ 按指定高宽比 H/B={target_HB:.2f} 计算")
             o.append(f"  宽度 B = {B:.2f} m")
@@ -1969,6 +1992,10 @@ class CulvertPanel(QWidget):
                 o.append(f"     实际 β = B/h = {B:.2f}/{h_d:.3f} = {BH_ratio:.3f}")
                 o.append(f"     洞高 H = {H:.2f} m（满足所有净空约束的最小洞高）")
                 o.append(f"     断面面积 A = B×H = {B:.2f}×{H:.2f} = {B*H:.3f} m²（满足约束的最小值）")
+            elif is_fixed_size:
+                o.append("     ★★★ 按指定宽高尺寸计算 ★★★")
+                o.append(f"     固定输入尺寸: B = {B:.2f} m，H = {H:.2f} m")
+                o.append("     程序仅验算流速、水深和净空，不自动调整断面尺寸")
             elif target_HB:
                 o.append(f"     ★★★ 按指定高宽比计算 ★★★")
                 o.append(f"     指定 H/B = {target_HB:.2f}，涵洞高度 H = {target_HB:.2f} × B")

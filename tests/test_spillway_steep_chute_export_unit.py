@@ -214,6 +214,12 @@ def test_export_word_writes_principles_before_summary_profile_checks_and_risks(t
     combined = f"{text}\n{table_text}"
 
     assert "泄水渠与陡坡计算书" in combined
+    assert "工程阶段产品运行卡" in combined
+    assert "强制性标准条文执行情况校审检查表" in combined
+    assert "计算目的" in combined
+    assert "计算依据" in combined
+    assert "基本资料" in combined
+    assert "计算程序" in combined
     assert "熊启钧教学算例" in combined
     assert combined.index("计算原理") < combined.index("结果汇总")
     assert "水面线逐段计算" in combined

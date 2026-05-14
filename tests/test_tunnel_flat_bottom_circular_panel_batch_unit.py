@@ -129,9 +129,9 @@ def _build_flat_bottom_case():
 @pytest.fixture
 def local_tmp_path():
     """在项目目录下创建临时目录，避开系统临时目录权限问题。"""
-    base_dir = ROOT / ".pytest_tmp" / "tunnel_flat_bottom_circle_panel_batch_unit"
+    base_dir = ROOT / ".pytest_tmp"
     base_dir.mkdir(parents=True, exist_ok=True)
-    temp_dir = Path(tempfile.mkdtemp(dir=base_dir))
+    temp_dir = Path(tempfile.mkdtemp(prefix="tunnel_flat_bottom_circle_panel_batch_unit_", dir=base_dir))
     try:
         yield temp_dir
     finally:
@@ -263,7 +263,18 @@ def test_batch_panel_open_parameter_dialog_writes_back_flat_bottom_dimensions(mo
     captured = {}
     panel = BatchPanel.__new__(BatchPanel)
     panel.input_table = SimpleNamespace(rowCount=lambda: 1)
-    panel._get_row_data = lambda _row: [""] * 6 + ["5.0", "0.014", "2000", "", "2.0", "", "", "4.0", "", "", "", "", "0.1", "100"]
+    row_data = [""] * len(INPUT_HEADERS)
+    for header, value in {
+        "Q(m³/s)": "5.0",
+        "糙率n": "0.014",
+        "比降(1/)": "2000",
+        "底宽B(m)": "2.0",
+        "直径D(m)": "4.0",
+        "不淤流速": "0.1",
+        "不冲流速": "100",
+    }.items():
+        row_data[INPUT_HEADERS.index(header)] = value
+    panel._get_row_data = lambda _row: list(row_data)
     panel._normalize_row = lambda values, length: list(values[:length]) + [""] * max(0, length - len(values))
     panel._push_undo_snapshot = lambda: captured.setdefault("undo", True)
     panel._update_table_row = lambda row_idx, params, section_type: captured.update(
@@ -273,9 +284,8 @@ def test_batch_panel_open_parameter_dialog_writes_back_flat_bottom_dimensions(mo
 
     monkeypatch.setattr(batch_panel_mod, "SectionParameterDialog", _DialogStub)
 
-    row_data = panel._get_row_data(0)
     row_data[3] = "隧洞-平底圆形"
-    panel._get_row_data = lambda _row: row_data
+    panel._get_row_data = lambda _row: list(row_data)
 
     BatchPanel._open_parameter_dialog_for_row(panel, 0)
 

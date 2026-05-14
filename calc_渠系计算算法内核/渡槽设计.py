@@ -388,6 +388,14 @@ def _required_hydraulic_height(
     return max(h_design, h_increased, design_required, design_tie_required, increase_required)
 
 
+def _build_increased_freeboard_error(Fb: float) -> str:
+    """生成加大有效超高不足的严格校核错误提示。"""
+    return (
+        f"计算失败：加大有效超高不足。\n\n"
+        f"加大有效超高 Fb = {Fb:.3f} m < {TIE_BOTTOM_CLEARANCE_MIN:.2f} m"
+    )
+
+
 # ============================================================
 # U形渡槽主计算函数
 # ============================================================
@@ -824,6 +832,10 @@ def quick_calculate_u(Q: float, n: float, slope_inv: float,
     design_tie_bottom_clearance = tie_bottom_height - h_design
     increased_tie_bottom_clearance = Fb
 
+    if check_increase and Fb + ZERO_TOL < TIE_BOTTOM_CLEARANCE_MIN:
+        result['error_message'] = _build_increased_freeboard_error(Fb)
+        return result
+
     if tie_rod_height > 0 and design_tie_bottom_clearance + ZERO_TOL < TIE_BOTTOM_CLEARANCE_MIN:
         result['error_message'] = (
             f"计算失败：设计流量工况下水面距拉杆底净距不足。\n\n"
@@ -1159,6 +1171,10 @@ def quick_calculate_rect(Q: float, n: float, slope_inv: float,
     Fb_design = final_height - h_design
     design_tie_bottom_clearance = tie_bottom_height - h_design
     increased_tie_bottom_clearance = Fb
+
+    if check_increase and Fb + ZERO_TOL < TIE_BOTTOM_CLEARANCE_MIN:
+        result['error_message'] = _build_increased_freeboard_error(Fb)
+        return result
 
     if tie_rod_height > 0 and design_tie_bottom_clearance + ZERO_TOL < TIE_BOTTOM_CLEARANCE_MIN:
         result['error_message'] = (

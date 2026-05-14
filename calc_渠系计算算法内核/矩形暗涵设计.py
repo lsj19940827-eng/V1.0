@@ -363,6 +363,7 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
                                          target_HB_ratio: float = None,
                                          target_BH_ratio: float = None,
                                          manual_B: float = None,
+                                         manual_H: float = None,
                                          manual_increase_percent: float = None) -> Dict[str, Any]:
     """
     矩形暗涵快速计算
@@ -376,6 +377,7 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
         target_HB_ratio: 目标高宽比 H/B (可选，指定后程序搜索满足约束的最小 B，H = target_HB_ratio × B)
         target_BH_ratio: 目标宽深比 B/h (可选，优先使用)
         manual_B: 指定底宽 (m) (可选)
+        manual_H: 指定高度 (m) (可选，必须与 manual_B 同时填写，用于固定宽高验算)
         manual_increase_percent: 指定加大流量百分比 (可选)
     
     说明:
@@ -423,7 +425,25 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
 
     # 验证通过后再计算坡度，避免除零崩溃
     slope = 1.0 / slope_inv
-    
+
+    manual_B_valid = manual_B is not None and manual_B > 0
+    manual_H_provided = manual_H is not None
+    manual_H_valid = manual_H is not None and manual_H > 0
+    use_fixed_BH = manual_B_valid and manual_H_valid
+
+    if manual_H_provided and not manual_H_valid:
+        result['error_message'] = '指定高度 H 必须大于0'
+        return result
+    if manual_H_valid and not manual_B_valid:
+        result['error_message'] = '填写高度 H 时必须同时填写底宽 B'
+        return result
+    if use_fixed_BH and target_BH_ratio is not None and target_BH_ratio > 0:
+        result['error_message'] = '指定高度 H 时不能同时填写宽深比 β'
+        return result
+    if use_fixed_BH and target_HB_ratio is not None and target_HB_ratio > 0:
+        result['error_message'] = '指定高度 H 时不能同时填写高宽比 H/B'
+        return result
+
     # 加大流量
     if manual_increase_percent is not None and manual_increase_percent >= 0:
         increase_percent = manual_increase_percent
@@ -436,7 +456,7 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
     
     # 判断是否使用经济最优断面
     # 当同时未指定底宽、宽深比和高宽比时，自动搜索全局经济最优断面（B×H 最小）
-    use_optimal_section = (manual_B is None or manual_B <= 0) and (target_BH_ratio is None or target_BH_ratio <= 0) and (target_HB_ratio is None or target_HB_ratio <= 0)
+    use_optimal_section = (not manual_B_valid) and (not manual_H_valid) and (target_BH_ratio is None or target_BH_ratio <= 0) and (target_HB_ratio is None or target_HB_ratio <= 0)
     
     # 判断是否指定了目标宽深比
     use_target_BH_ratio = target_BH_ratio is not None and target_BH_ratio > 0
@@ -450,6 +470,92 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
     best_H = 0
     best_A_total = 1e99
     best_BH_diff = 1e99  # 宽深比偏差
+
+    if use_fixed_BH:
+        B = float(manual_B)
+        H_trial = float(manual_H)
+        if B < MIN_WIDTH_RECT:
+            result['error_message'] = f"计算失败：指定底宽 B={B:.3f} m 小于最小允许值 {MIN_WIDTH_RECT:.3f} m"
+            return result
+        if H_trial < MIN_HEIGHT_RECT:
+            result['error_message'] = f"计算失败：指定高度 H={H_trial:.3f} m 小于最小允许值 {MIN_HEIGHT_RECT:.3f} m"
+            return result
+
+        h_design, success_design = solve_water_depth_rectangular(B, H_trial, n, slope, Q)
+        if not success_design or h_design >= H_trial:
+            result['error_message'] = (
+                f"计算失败：固定宽高 B={B:.3f} m、H={H_trial:.3f} m 无法通过设计流量。\n\n"
+                "可能原因：固定高度 H 过小，设计水深已接近或超过涵洞高度。"
+            )
+            return result
+
+        outputs_design = calculate_rectangular_outputs(B, H_trial, h_design, n, slope)
+        if outputs_design['V'] < v_min or outputs_design['V'] > v_max:
+            result['error_message'] = (
+                f"计算失败：固定宽高 B={B:.3f} m、H={H_trial:.3f} m 下设计流速 "
+                f"V={outputs_design['V']:.3f} m/s 不满足 {v_min:.3f}~{v_max:.3f} m/s。"
+            )
+            return result
+
+        req_fb_hgt = get_required_freeboard_height_rect(H_trial)
+        if outputs_design['freeboard_hgt'] < req_fb_hgt:
+            result['error_message'] = (
+                f"计算失败：固定高度 H={H_trial:.3f} m 下设计流量净空不足，"
+                f"净空高度 {outputs_design['freeboard_hgt']:.3f} m < 要求 {req_fb_hgt:.3f} m。"
+            )
+            return result
+        if outputs_design['freeboard_pct'] < MIN_FREEBOARD_PCT_RECT * 100:
+            result['error_message'] = (
+                f"计算失败：固定高度 H={H_trial:.3f} m 下设计流量净空比例不足，"
+                f"净空比例 {outputs_design['freeboard_pct']:.1f}% < {MIN_FREEBOARD_PCT_RECT * 100:.1f}%。"
+            )
+            return result
+        if increase_percent == 0 and outputs_design['freeboard_pct'] > MAX_FREEBOARD_PCT_RECT * 100:
+            result['error_message'] = (
+                f"计算失败：固定高度 H={H_trial:.3f} m 下设计流量净空比例过大，"
+                f"净空比例 {outputs_design['freeboard_pct']:.1f}% > {MAX_FREEBOARD_PCT_RECT * 100:.1f}%。"
+            )
+            return result
+
+        if increase_percent > 0:
+            h_inc, success_inc = solve_water_depth_rectangular(B, H_trial, n, slope, Q_increased)
+            if not success_inc or h_inc >= H_trial:
+                result['error_message'] = (
+                    f"计算失败：固定宽高 B={B:.3f} m、H={H_trial:.3f} m 无法通过加大流量。\n\n"
+                    "可能原因：固定高度 H 过小，加大水深已接近或超过涵洞高度。"
+                )
+                return result
+
+            outputs_inc = calculate_rectangular_outputs(B, H_trial, h_inc, n, slope)
+            if outputs_inc['V'] > v_max:
+                result['error_message'] = (
+                    f"计算失败：固定宽高 B={B:.3f} m、H={H_trial:.3f} m 下加大流速 "
+                    f"V={outputs_inc['V']:.3f} m/s 超过不冲流速 {v_max:.3f} m/s。"
+                )
+                return result
+            if outputs_inc['freeboard_hgt'] < req_fb_hgt:
+                result['error_message'] = (
+                    f"计算失败：固定高度 H={H_trial:.3f} m 下加大流量净空不足，"
+                    f"净空高度 {outputs_inc['freeboard_hgt']:.3f} m < 要求 {req_fb_hgt:.3f} m。"
+                )
+                return result
+            if outputs_inc['freeboard_pct'] < MIN_FREEBOARD_PCT_RECT * 100:
+                result['error_message'] = (
+                    f"计算失败：固定高度 H={H_trial:.3f} m 下加大流量净空比例不足，"
+                    f"净空比例 {outputs_inc['freeboard_pct']:.1f}% < {MIN_FREEBOARD_PCT_RECT * 100:.1f}%。"
+                )
+                return result
+            if outputs_inc['freeboard_pct'] > MAX_FREEBOARD_PCT_RECT * 100:
+                result['error_message'] = (
+                    f"计算失败：固定高度 H={H_trial:.3f} m 下加大流量净空比例过大，"
+                    f"净空比例 {outputs_inc['freeboard_pct']:.1f}% > {MAX_FREEBOARD_PCT_RECT * 100:.1f}%。"
+                )
+                return result
+
+        best_B = B
+        best_H = H_trial
+        best_A_total = B * H_trial
+        best_found = True
     
     if manual_B and manual_B > 0:
         B_start = manual_B
@@ -783,6 +889,9 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
     if use_optimal_section:
         result['design_method'] = f'经济最优断面; B={B:.2f}m, H={H:.2f}m'
         result['is_optimal_section'] = True
+    elif use_fixed_BH:
+        result['design_method'] = f'指定宽高尺寸; B={B:.2f}m, H={H:.2f}m'
+        result['is_optimal_section'] = False
     elif use_target_HB_ratio:
         result['design_method'] = f'指定高宽比; B={B:.2f}m, H={H:.2f}m (H/B={target_HB_ratio:.2f})'
         result['is_optimal_section'] = False

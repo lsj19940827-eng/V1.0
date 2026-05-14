@@ -3,6 +3,7 @@
 
 import html
 import os
+import re
 import sys
 from inspect import Parameter, signature
 from pathlib import Path
@@ -89,6 +90,23 @@ _ROOT = Path(__file__).resolve().parents[2]
 _CALC_DIR = _ROOT / "calc_渠系计算算法内核"
 if str(_CALC_DIR) not in sys.path:
     sys.path.insert(0, str(_CALC_DIR))
+
+
+_ENGINEERING_SYMBOL_RE = re.compile(
+    r"(?<![A-Za-z0-9_Α-Ωα-ω])([A-Za-zΑ-Ωα-ω]+)_([A-Za-z0-9\u4e00-\u9fffΔ]+)"
+)
+
+
+def render_principle_inline_html(text: Any) -> str:
+    """渲染计算原理段落文字，把工程符号下标转为安全 HTML。"""
+    escaped = html.escape(str(text or ""))
+
+    def _replace(match: re.Match[str]) -> str:
+        symbol = match.group(1)
+        subscript = match.group(2)
+        return f"{symbol}<sub>{subscript}</sub>"
+
+    return _ENGINEERING_SYMBOL_RE.sub(_replace, escaped)
 
 try:
     from 泄水渠与陡坡设计 import quick_calculate_spillway_steep_chute
@@ -1101,10 +1119,10 @@ class SpillwaySteepChutePanel(QWidget):
         for idx, item in enumerate(principles, start=1):
             step = html.escape(str(item.get("step") or f"步骤{idx}"))
             purpose = html.escape(str(item.get("purpose") or ""))
-            variables = html.escape(str(item.get("variables") or ""))
-            substitution = html.escape(str(item.get("substitution") or ""))
-            result_text = html.escape(str(item.get("result") or ""))
-            explanation = html.escape(str(item.get("explanation") or ""))
+            variables = render_principle_inline_html(item.get("variables") or "")
+            substitution = render_principle_inline_html(item.get("substitution") or "")
+            result_text = render_principle_inline_html(item.get("result") or "")
+            explanation = render_principle_inline_html(item.get("explanation") or "")
             source = html.escape(str(item.get("source") or ""))
             latex = str(item.get("formula") or "")
             body_parts.append(

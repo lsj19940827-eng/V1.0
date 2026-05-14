@@ -67,6 +67,34 @@ def _principle_html(panel):
     return panel.principle_view.toHtml() if hasattr(panel.principle_view, "toHtml") else panel.principle_view.toPlainText()
 
 
+def test_principle_inline_html_renders_engineering_subscripts_and_escapes_html():
+    """计算原理普通说明里的工程符号应显示下标，且先转义 HTML。"""
+    rendered = panel_mod.render_principle_inline_html(
+        "h_s、h_k、h_m、E_s、Q_过流、b_c、H_0、Fr_1、α_e、H_侧墙、L_Δb、h_下游，"
+        "控制水深h_s、建议H_侧墙，<script>alert(1)</script>"
+    )
+
+    for expected in [
+        "h<sub>s</sub>",
+        "h<sub>k</sub>",
+        "h<sub>m</sub>",
+        "E<sub>s</sub>",
+        "Q<sub>过流</sub>",
+        "b<sub>c</sub>",
+        "H<sub>0</sub>",
+        "Fr<sub>1</sub>",
+        "α<sub>e</sub>",
+        "H<sub>侧墙</sub>",
+        "L<sub>Δb</sub>",
+        "h<sub>下游</sub>",
+        "控制水深h<sub>s</sub>",
+        "建议H<sub>侧墙</sub>",
+    ]:
+        assert expected in rendered
+    assert "<script>" not in rendered
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
+
+
 def test_package_exports_spillway_steep_chute_panel():
     """独立包应直接导出面板类，供主界面后续接线。"""
     assert SpillwaySteepChutePanel.__name__ == "SpillwaySteepChutePanel"
@@ -417,6 +445,11 @@ def test_principle_page_sanitizes_internal_prd_sources_and_shows_full_flow():
         assert forbidden not in rendered
     for keyword in ["起点控制水深", "入口过流能力", "掺气水深与侧墙高度", "水跃与消力池"]:
         assert keyword in rendered
+    for forbidden in ["h_s 为", "h_k 为", "h_m 为", "E_s 为", "Q_过流 为", "b_c 为", "H_0 为"]:
+        assert forbidden not in rendered
+    assert rendered.count("vertical-align:sub") >= 7
+    for expected_subscript in [">s</span>", ">k</span>", ">m</span>", ">过流</span>", ">c</span>", ">0</span>"]:
+        assert expected_subscript in rendered
 
     panel.deleteLater()
 
