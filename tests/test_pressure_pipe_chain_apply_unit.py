@@ -1812,6 +1812,29 @@ def test_unnamed_pressure_pipe_group_result_labels_longitudinal_profile_length()
     assert "空间长度" not in record["calc_steps"]
 
 
+def test_pressure_pipe_effective_length_keeps_bend_arcs():
+    """承压链平面长度备用路径应保留MC区间内弧段，只扣除渐变段。"""
+    WaterProfilePanel = _load_panel_class()
+    nodes = [
+        SimpleNamespace(station_MC=100.0, arc_length=20.0, is_transition=False),
+        SimpleNamespace(
+            station_MC=140.0,
+            arc_length=0.0,
+            is_transition=True,
+            transition_length=15.0,
+        ),
+        SimpleNamespace(station_MC=200.0, arc_length=10.0, is_transition=False),
+    ]
+
+    context = WaterProfilePanel._build_pressure_pipe_effective_length_context(nodes, 0, 2)
+
+    assert context["L_mc"] == pytest.approx(100.0)
+    assert context["transition_length"] == pytest.approx(15.0)
+    assert context["arc1_half"] == pytest.approx(10.0)
+    assert context["arc2_half"] == pytest.approx(5.0)
+    assert context["effective_length"] == pytest.approx(85.0)
+
+
 def test_unnamed_pressure_pipe_group_result_uses_fold_loss_when_radius_is_zero():
     """逐行承压段有转角但半径为 0 时，应按折管计算弯头损失。"""
     WaterProfilePanel = _load_panel_class()

@@ -40,6 +40,8 @@ STRUCTURE_TYPE_OPTIONS = [
     "暗涵-圆拱直墙型",
     "倒虹吸",
     "有压管道",
+    "充水渠",
+    "泄水渠与陡坡",
     "定向钻",
     "顶管",
     "分水闸",
@@ -165,7 +167,7 @@ HYDRAULIC_RESULT_COLUMNS = [
 HEAD_LOSS_COLUMNS = [
     {"id": "transition_length", "text": "渐变段长度L", "width": 90},
     {"id": "head_loss_transition", "text": "渐变段水头损失", "width": 110},
-    {"id": "head_loss_bend", "text": "弯道水头损失", "width": 100},
+    {"id": "head_loss_bend", "text": "弯道附加水头损失", "width": 120},
     {"id": "head_loss_friction", "text": "沿程水头损失", "width": 100},
     {"id": "head_loss_reserve", "text": "预留水头损失", "width": 100, "editable": True, "type": "float"},
     {"id": "head_loss_gate", "text": "过闸水头损失", "width": 100, "editable": True, "type": "float"},
@@ -229,6 +231,7 @@ LOCAL_LOSS_COEFFICIENTS = {
     "暗涵-矩形": {"进口": 0.5, "出口": 1.0},
     "暗涵-圆拱直墙型": {"进口": 0.5, "出口": 1.0},
     "矩形暗涵": {"进口": 0.5, "出口": 1.0},
+    "泄水渠与陡坡": {"进口": 0.0, "出口": 0.0},  # 专项内核承担内部水面线计算
 }
 
 # ============================================================

@@ -34,6 +34,9 @@ TARGET_BATCH_INPUT_HEADERS = [
     "矩形渡槽深宽比", "拉杆高度(m)", "倒角角度(°)", "倒角底边(m)", "圆心角(°)", "直墙高度H直(m)",
     "不淤流速", "不冲流速", "转弯半径(m)", "管材",
     "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
+    "泄水渠入口宽度(m)", "泄水渠堰上总水头(m)", "泄水渠入口连接形式", "泄水渠手动流量系数",
+    "泄水渠侧收缩系数", "泄水渠动能修正系数", "泄水渠掺气系数",
+    "泄水渠侧墙安全超高(m)", "泄水渠池深系数", "泄水渠整流长度系数",
 ]
 
 OLD_BATCH_INPUT_HEADERS_BEFORE_AE_AF_REORDER = [
@@ -121,6 +124,32 @@ def _build_u_aqueduct_row(*, q="1", slope_inv="2000", radius="1.5", tie_rod_heig
     row[batch_panel_mod.COL_V_MAX] = "100"
     if tie_rod_height != "":
         row[batch_panel_mod.COL_TIE_ROD_HEIGHT] = tie_rod_height
+    return row
+
+
+def _build_spillway_row(*, building_name="泄槽A", section_type="泄水渠与陡坡", inlet_head="2.8", alpha_profile="1.18"):
+    row = [""] * len(INPUT_HEADERS)
+    row[batch_panel_mod.COL_SEQ] = "1"
+    row[batch_panel_mod.COL_SEGMENT] = "1"
+    row[batch_panel_mod.COL_BUILDING_NAME] = building_name
+    row[batch_panel_mod.COL_SECTION_TYPE] = section_type
+    row[batch_panel_mod.COL_X] = "10"
+    row[batch_panel_mod.COL_Y] = "20"
+    row[batch_panel_mod.COL_Q] = "12"
+    row[batch_panel_mod.COL_N] = "0.014"
+    row[batch_panel_mod.COL_SLOPE] = "18"
+    row[batch_panel_mod.COL_M] = "0.5"
+    row[batch_panel_mod.COL_B] = "2.4"
+    row[batch_panel_mod.COL_SPILLWAY_INLET_WEIR_WIDTH] = "2.1"
+    row[batch_panel_mod.COL_SPILLWAY_INLET_HEAD] = inlet_head
+    row[batch_panel_mod.COL_SPILLWAY_INLET_CONNECTION_TYPE] = "八字墙连接"
+    row[batch_panel_mod.COL_SPILLWAY_WEIR_COEFFICIENT] = ""
+    row[batch_panel_mod.COL_SPILLWAY_CONTRACTION_COEFFICIENT] = "0.96"
+    row[batch_panel_mod.COL_SPILLWAY_ALPHA_PROFILE] = alpha_profile
+    row[batch_panel_mod.COL_SPILLWAY_AERATION_COEFFICIENT] = "1.25"
+    row[batch_panel_mod.COL_SPILLWAY_SIDEWALL_FREEBOARD] = "0.45"
+    row[batch_panel_mod.COL_SPILLWAY_POOL_DEPTH_FACTOR] = "1.12"
+    row[batch_panel_mod.COL_SPILLWAY_OUTLET_RECTIFICATION_FACTOR] = "9.5"
     return row
 
 
@@ -321,6 +350,53 @@ def test_batch_calculate_registers_explicit_zero_turn_radius_text(monkeypatch):
     _flush_events(4)
 
 
+def test_batch_calculate_treats_spillway_alias_as_special_payload(monkeypatch):
+    """Excel 填泄水渠别名时，计算走专项，DXF 显示保留原始名称。"""
+    registered_rows = []
+
+    class _SharedManager:
+        def clear_batch_results(self):
+            return None
+
+        def register_batch_results(self, rows):
+            registered_rows.extend(rows)
+            return len(rows)
+
+    monkeypatch.setattr(batch_panel_mod, "SHARED_DATA_AVAILABLE", True)
+    monkeypatch.setattr(batch_panel_mod, "get_shared_data_manager", lambda: _SharedManager())
+
+    panel = _prepare_panel(monkeypatch)
+    _set_single_row(panel, _build_spillway_row(section_type="充水渠"))
+    panel.inc_cb.setChecked(False)
+    panel.detail_cb.setChecked(False)
+
+    panel._batch_calculate()
+    _flush_events(6)
+
+    result = panel.batch_results[0]["result"]
+
+    assert result["section_type"] == "泄水渠与陡坡"
+    assert result["display_structure_type"] == "充水渠"
+    assert result["is_spillway_steep_chute"] is True
+    assert "spillway_steep_chute" in result
+    assert result["B"] == pytest.approx(2.4)
+    assert result["m"] == pytest.approx(0.5)
+    assert "V_design" not in result
+    assert "A_design" not in result
+    advanced = result["spillway_steep_chute"]["advanced_params"]
+    assert advanced["inlet_head"] == pytest.approx(2.8)
+    assert advanced["alpha_profile"] == pytest.approx(1.18)
+    assert advanced["inlet_connection_type_label"] == "八字墙连接"
+    assert registered_rows[0]["section_type"] == "泄水渠与陡坡"
+    assert registered_rows[0]["display_structure_type"] == "充水渠"
+    assert registered_rows[0]["spillway_steep_chute"]["display_structure_type"] == "充水渠"
+    assert registered_rows[0]["spillway_steep_chute"]["advanced_params"] == advanced
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
 def test_real_excel_import_marks_rows_as_imported(monkeypatch):
     panel = _prepare_panel(monkeypatch)
     _install_fake_openpyxl(monkeypatch)
@@ -367,6 +443,25 @@ def test_real_excel_import_reads_rect_culvert_visible_h_and_hb_columns(monkeypat
     _flush_events(4)
 
 
+def test_real_excel_import_normalizes_spillway_alias_to_spillway(monkeypatch):
+    panel = _prepare_panel(monkeypatch)
+    headers = list(batch_panel_mod.INPUT_HEADERS)
+    row = _build_spillway_row(inlet_head="3.1", alpha_profile="1.22")
+    _install_fake_openpyxl_table(monkeypatch, headers, row)
+
+    panel._do_load_from_filepath("spillway-template.xlsx", is_sample=False)
+    _flush_events(4)
+
+    assert panel.input_table.item(0, batch_panel_mod.COL_SECTION_TYPE).text() == "泄水渠与陡坡"
+    assert panel.input_table.item(0, batch_panel_mod.COL_SPILLWAY_INLET_HEAD).text() == "3.1"
+    assert panel.input_table.item(0, batch_panel_mod.COL_SPILLWAY_ALPHA_PROFILE).text() == "1.22"
+    assert panel.input_table.item(0, batch_panel_mod.COL_SPILLWAY_INLET_CONNECTION_TYPE).text() == "八字墙连接"
+
+    panel.close()
+    panel.deleteLater()
+    _flush_events(4)
+
+
 def test_official_blank_template_contains_rect_culvert_visible_size_columns():
     """正式空模板应包含矩形暗涵 H/B 与 H 明列，且紧跟底宽 B。"""
     openpyxl = pytest.importorskip("openpyxl")
@@ -390,6 +485,8 @@ def test_batch_input_headers_follow_user_friendly_parameter_order():
     assert batch_panel_mod.COL_ARCH_H_STRAIGHT == TARGET_BATCH_INPUT_HEADERS.index("直墙高度H直(m)")
     assert TARGET_BATCH_INPUT_HEADERS.index("矩形渡槽深宽比") < batch_panel_mod.COL_TIE_ROD_HEIGHT < TARGET_BATCH_INPUT_HEADERS.index("倒角角度(°)")
     assert TARGET_BATCH_INPUT_HEADERS.index("圆心角(°)") < batch_panel_mod.COL_ARCH_H_STRAIGHT < TARGET_BATCH_INPUT_HEADERS.index("不淤流速")
+    assert batch_panel_mod.COL_SPILLWAY_INLET_WEIR_WIDTH == TARGET_BATCH_INPUT_HEADERS.index("泄水渠入口宽度(m)")
+    assert batch_panel_mod.COL_SPILLWAY_OUTLET_RECTIFICATION_FACTOR == TARGET_BATCH_INPUT_HEADERS.index("泄水渠整流长度系数")
 
 
 def test_real_excel_import_maps_legacy_mingqu_beta_header_without_shift(monkeypatch):
@@ -1149,7 +1246,7 @@ def test_official_blank_template_guides_cover_all_section_types():
 
 
 def test_official_blank_template_field_lookup_covers_all_input_headers():
-    """字段速查页应逐项解释当前 32 个导入表头。"""
+    """字段速查页应逐项解释当前全部导入表头。"""
     from openpyxl import load_workbook
 
     template_path = ROOT / "data" / "多流量段批量计算_导入Excel（模板）.xlsx"
@@ -1208,7 +1305,7 @@ def test_official_blank_template_import_sheet_formatting_is_consistent():
     assert workbook.active.title == "导入模板"
     assert worksheet.freeze_panes == "E3"
     assert worksheet.sheet_view.showGridLines is False
-    assert worksheet.auto_filter.ref == "A2:AF500"
+    assert worksheet.auto_filter.ref == "A2:AP500"
     assert headers == batch_panel_mod.INPUT_HEADERS
     assert "D3:D500" in {
         str(validation.sqref)
@@ -1272,4 +1369,4 @@ def test_official_blank_template_guide_sheet_formatting_is_consistent():
         for row in range(7, 7 + len(batch_panel_mod.INPUT_HEADERS))
     ]
     assert lookup_fields == list(batch_panel_mod.INPUT_HEADERS)
-    assert lookup.auto_filter.ref == "A6:G38"
+    assert lookup.auto_filter.ref == "A6:G48"

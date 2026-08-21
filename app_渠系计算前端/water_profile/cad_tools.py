@@ -45,6 +45,21 @@ from app_渠系计算前端.styles import (
 
 _XXPIPE_PROFILE_STATION_TOL = 1e-3
 _XXPIPE_PROFILE_GEOMETRY_TOL = 1e-9
+_SPILLWAY_STEEP_CHUTE_DISPLAY_NAMES = {
+    "充水渠",
+    "泄水渠",
+    "陡坡",
+    "泄槽",
+    "陡槽",
+    "泄水渠及陡坡",
+    "泄水渠与陡坡",
+}
+_SPILLWAY_STEEP_CHUTE_DISPLAY_FIELD_KEYS = (
+    "display_structure_type",
+    "source_structure_type",
+    "input_structure_type",
+    "original_structure_type",
+)
 
 # 确保推求水面线模块可用
 _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1372,10 +1387,30 @@ def _format_number(value):
     return f"{value:.15g}"
 
 
+def _get_spillway_steep_chute_display_structure_text(node, fallback):
+    """统一读取泄水渠类纵断面显示名。"""
+    fallback_text = str(fallback or "").strip()
+    params = getattr(node, "section_params", None)
+    payload = {}
+    if isinstance(params, dict):
+        payload = params.get("spillway_steep_chute", {}) or {}
+    if isinstance(payload, dict):
+        for key in _SPILLWAY_STEEP_CHUTE_DISPLAY_FIELD_KEYS:
+            text = str(payload.get(key, "") or "").strip()
+            if text in _SPILLWAY_STEEP_CHUTE_DISPLAY_NAMES:
+                return text
+    if fallback_text in _SPILLWAY_STEEP_CHUTE_DISPLAY_NAMES:
+        return fallback_text
+    return fallback_text
+
+
 def _get_building_display_name(node):
     """获取纵断面用的建筑物名称显示"""
     struct_str = _get_node_structure_text(node)
+    display_struct_str = _get_spillway_steep_chute_display_structure_text(node, struct_str)
     name = str(getattr(node, "name", "") or "").strip()
+    if struct_str in _SPILLWAY_STEEP_CHUTE_DISPLAY_NAMES and name == "-":
+        name = ""
     if node.is_transition or struct_str == "渐变段":
         return ""
     if getattr(node, "is_auto_inserted_channel", False):
@@ -1390,9 +1425,9 @@ def _get_building_display_name(node):
         if _in_out_val(getattr(node, "in_out", None)) not in ("进", "出"):
             return ""
     if name:
-        category = struct_str.split("-")[0]
+        category = display_struct_str.split("-")[0]
         return f"{name}{category}"
-    return struct_str.split("-")[0] if struct_str else ""
+    return display_struct_str.split("-")[0] if display_struct_str else ""
 
 
 def _estimate_text_width(text, text_height):
@@ -1478,13 +1513,14 @@ def _warns_optional_blank_name(struct_type):
     return False
 
 
-def _collect_optional_blank_name_rows(nodes):
+def _collect_optional_blank_name_rows(nodes, *, include_silent=False):
     """收集允许名称为空但导出前需要轻提示的节点行。"""
     rows = []
     for idx, node in enumerate(nodes or [], start=1):
         if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
             continue
-        if not _allows_optional_blank_name(getattr(node, "structure_type", None)):
+        checker = _allows_optional_blank_name if include_silent else _warns_optional_blank_name
+        if not checker(getattr(node, "structure_type", None)):
             continue
         if str(getattr(node, "name", "") or "").strip():
             continue
@@ -1492,8 +1528,8 @@ def _collect_optional_blank_name_rows(nodes):
     return rows
 
 
-def _build_optional_blank_name_notice(nodes, *, action_name):
-    rows = _collect_optional_blank_name_rows(nodes)
+def _build_optional_blank_name_notice(nodes, *, action_name, include_silent=False):
+    rows = _collect_optional_blank_name_rows(nodes, include_silent=include_silent)
     if not rows:
         return ""
     preview = "；".join(f"第{idx}行（{struct_name}）" for idx, struct_name in rows[:8])
@@ -1505,12 +1541,25 @@ def _build_optional_blank_name_notice(nodes, *, action_name):
     )
 
 
-def _show_optional_blank_name_notice(parent_window, nodes, *, action_name):
+def _show_optional_blank_name_notice(parent_window, nodes, *, action_name, include_silent=False, use_infobar=True):
     """在导出前用轻提示提醒用户补充可选建筑物名称。"""
-    notice = _build_optional_blank_name_notice(nodes, action_name=action_name)
+    notice = _build_optional_blank_name_notice(
+        nodes,
+        action_name=action_name,
+        include_silent=include_silent,
+    )
     if not notice:
         return
-    fluent_info(_safe_qt_parent(parent_window), "提示", notice)
+    if not use_infobar:
+        fluent_info(_safe_qt_parent(parent_window), "提示", notice)
+        return
+    InfoBar.info(
+        "提示",
+        notice,
+        parent=_safe_qt_parent(parent_window),
+        duration=5000,
+        position=InfoBarPosition.TOP,
+    )
 
 
 def _in_out_val(in_out):
@@ -12291,7 +12340,13 @@ def export_combined_dxf(panel):
             fluent_info(parent_window, "警告", "没有可用的高程数据，请先执行计算。")
             return
 
-        _show_optional_blank_name_notice(parent_window, nodes, action_name="导出")
+        _show_optional_blank_name_notice(
+            parent_window,
+            nodes,
+            action_name="导出",
+            include_silent=True,
+            use_infobar=False,
+        )
 
     # ---- 1. 纵断面参数设置 ----
     dlg = TextExportSettingsDialog(
@@ -12424,6 +12479,15 @@ def export_combined_dxf(panel):
             doc.layers.new(_IP_LAYER, dxfattribs={"color": 7})     # 白色
 
         GAP = 20.0  # 各区域间距
+        try:
+            project_label = f"{panel.channel_name_edit.text().strip()}{panel.channel_level_combo.currentText()}".strip()
+        except Exception:
+            project_label = ""
+        if project_label and hasattr(msp, "add_text"):
+            msp.add_text(
+                project_label,
+                dxfattribs={"height": 2.8, "layer": _PROF_PREFIX + "文字标注"},
+            ).set_placement((0.0, GAP / 2.0))
 
         # ======== A. 纵断面表格（顶部，原点(0,0)） ========
         try:

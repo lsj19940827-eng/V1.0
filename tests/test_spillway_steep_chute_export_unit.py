@@ -48,7 +48,20 @@ def _assert_no_user_visible_residue(text: str) -> None:
 def _result_payload():
     """构造导出覆盖所需的结果数据。"""
     return {
-        "input_params": {"Q": 12.5, "n": 0.014, "i": 0.02},
+        "input_params": {
+            "Q": 12.5,
+            "n": 0.014,
+            "i": 0.02,
+            "alpha_profile": 1.08,
+            "inlet_connection_type": "扭曲面连接",
+            "inlet_weir_width": 1.0,
+            "inlet_head": 2.2,
+            "contraction_coefficient": 1.0,
+            "aeration_coefficient": 1.2,
+            "sidewall_freeboard_m": 0.4,
+            "pool_depth_factor": 1.10,
+            "outlet_rectification_factor": 10.0,
+        },
         "summary": {
             "工程名称": "熊启钧教学算例",
             "设计流量": "12.50 立方米/秒",
@@ -60,11 +73,21 @@ def _result_payload():
         "hydraulic": {
             "section_type": "trapezoidal",
             "slope_type": "steep",
+            "water_profile_energy_alpha": 1.08,
             "normal": {"area_m2": 5.2, "hydraulic_radius_m": 0.9, "velocity_ms": 3.8},
             "critical": {"area_m2": 6.3, "hydraulic_radius_m": 0.86, "water_top_width_m": 6.2, "velocity_ms": 3.1},
             "start": {"area_m2": 6.3, "hydraulic_radius_m": 0.86, "water_top_width_m": 6.2, "depth_m": 1.749},
         },
         "profile": {"end_depth_m": 0.9, "water_profile_name": "陡坡降水曲线"},
+        "inlet_weir": {
+            "connection_type": "扭曲面连接",
+            "coefficient": 0.465818,
+            "coefficient_source": "GB 50288-2018 附录 N",
+            "coefficient_formula": "0.474-0.018b_c/H_0",
+            "contraction_coefficient": 1.0,
+            "capacity_ratio": 0.337,
+            "message": "入口过流能力不足，应调整跌口宽度、堰上水头或建筑物形式。",
+        },
         "profile_points": [
             {
                 "x": 0.0,
@@ -99,9 +122,13 @@ def _result_payload():
             "recommended_pool_length_m": 9.9,
             "recommended_pool_depth_m": 0.7,
             "recommended_transition_length_m": 18.0,
+            "pool_depth_factor": 1.10,
+            "outlet_rectification": {"length_factor": 10.0},
             "message": "按跃后共轭水深初拟消力池。",
         },
         "aeration_and_sidewall": {
+            "aeration_coefficient": 1.2,
+            "freeboard_m": 0.4,
             "max_aerated_depth_m": 1.36,
             "recommended_sidewall_height_m": 1.8,
             "message": "逐点计算掺气水深和侧墙顶线。",
@@ -166,6 +193,18 @@ def test_export_excel_writes_principles_before_summary_and_result_sheets(tmp_pat
     assert "掺气水深" in principle_blob
     assert "χ=b+2h√(1+m²)" in principle_blob
     assert "R=A/χ" in principle_blob
+    assert "扭曲面连接" in principle_blob
+    assert "流量系数=0.466" in principle_blob
+    assert "侧收缩系数=1.000" in principle_blob
+    assert "水面线动能修正系数=1.080" in principle_blob
+    assert "堰上总水头 H_0=2.200 米" in principle_blob
+    assert "当前支持矩形跌口或等底宽陡坡入口校核" in principle_blob
+    assert "掺气系数=1.200" in principle_blob
+    assert "安全超高=0.400 米" in principle_blob
+    assert "池深系数=1.100" in principle_blob
+    assert "整流长度系数=10.000" in principle_blob
+    assert "GB 50288-2018 附录 N" in principle_blob
+    assert "台堰形入口公式" not in principle_blob
     assert "P=b" not in principle_blob
     _assert_no_user_visible_residue("\n".join(str(cell.value or "") for sheet in workbook.worksheets for row in sheet.iter_rows() for cell in row))
     assert workbook["结果汇总"]["A2"].value == "工程名称"
@@ -218,6 +257,18 @@ def test_export_word_writes_principles_before_summary_profile_checks_and_risks(t
     assert "强制性标准条文执行情况校审检查表" in combined
     assert "计算目的" in combined
     assert "计算依据" in combined
+    assert "扭曲面连接" in combined
+    assert "流量系数=0.466" in combined
+    assert "侧收缩系数=1.000" in combined
+    assert "水面线动能修正系数=1.080" in combined
+    assert "堰上总水头 H_0=2.200 米" in combined
+    assert "当前支持矩形跌口或等底宽陡坡入口校核" in combined
+    assert "掺气系数=1.200" in combined
+    assert "安全超高=0.400 米" in combined
+    assert "池深系数=1.100" in combined
+    assert "整流长度系数=10.000" in combined
+    assert "GB 50288-2018 附录 N" in combined
+    assert "台堰形入口公式" not in combined
     assert "基本资料" in combined
     assert "计算程序" in combined
     assert "熊启钧教学算例" in combined

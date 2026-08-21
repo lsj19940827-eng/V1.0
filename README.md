@@ -6,9 +6,9 @@
 
 ## 主要功能
 
-- 明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道、泄水渠与陡坡等水力计算。
-- 表格化批量输入，支持 Excel 导入、示例数据、模板和工程文件保存。
-- 水面线表、渐变段、连续承压线路、压力管道特性表等联动计算。
+- 明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道、充水渠、泄水渠与陡坡独立模块等水力计算。
+- 表格化批量输入，支持 Excel 导入、示例数据、模板、工程文件保存；结构形式列填写 `充水渠`、`泄水渠`、`陡坡`、`泄槽`、`陡槽`、`泄水渠与陡坡` 时统一按 `泄水渠与陡坡` 专项类型传参，DXF 建筑物名称行保留用户原始填写名。
+- 水面线表、渐变段、连续承压线路、压力管道特性表等联动计算；表3中的充水渠/泄水渠/陡坡连续链由适配层按底坡变化切成固定底坡子段，再逐段调用泄水渠与陡坡专项内核。
 - 断面图、纵断面、DXF、TXT、Excel、Word 等成果导出。
 - 自动更新：完整包使用 GitHub 发布包；补丁包在不超过 100MB 时会额外上传到 Gitee 作为备用下载地址。
 
@@ -58,6 +58,18 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pytest tests -q -k spillway_steep_chute --basetemp=.pytest_tmp\spillway-steep-chute-v2 -p no:hypothesispytest
 ```
 
+表3充水渠变坡专项链回归：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -p no:hypothesispytest tests/test_batch_qiyi_fill_channel_regression.py tests/test_water_profile_spillway_steep_chute_unit.py tests/test_batch_import_dimension_preserve_unit.py -q --basetemp=.pytest_tmp\spillway-chain-target
+```
+
+七一水库充水渠真实 Excel 与“导出全部DXF”回归：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -p no:hypothesispytest tests/test_batch_qiyi_fill_channel_regression.py tests/test_water_profile_combined_dxf_unit.py -q --basetemp=.pytest_tmp\qiyi-dxf
+```
+
 ## 打包与发版
 
 本地打包：
@@ -97,7 +109,7 @@ GITEE_TOKEN=你的 Gitee 私人令牌
 | `app_渠系计算前端/` | PySide6 桌面界面 |
 | `calc_渠系计算算法内核/` | 主要计算内核 |
 | `app_渠系计算前端/spillway_steep_chute/` | 泄水渠与陡坡正式模块界面、图表和导出 |
-| `推求水面线/` | 水面线、渐变段和表3相关逻辑 |
+| `推求水面线/` | 水面线、渐变段、表3正式结构类型、充水渠专项链分段调度和连续承压链路 |
 | `tools/` | 打包、发版、发布快照和维护脚本 |
 | `tests/` | 单元测试和回归测试 |
 | `docs/` | PRD、发版指南和设计说明 |
@@ -120,8 +132,11 @@ GITEE_TOKEN=你的 Gitee 私人令牌
 ## 已完成功能与待办
 
 - 已完成：明渠、渡槽、隧洞、暗涵、倒虹吸、有压管道和表3水面线的主要计算与导出链路。
+- 已完成：表3沿程摩阻长度统一采用完整 MC—MC 水流长度，仅扣除单列渐变段；弧段普通摩阻与弯道二次流附加损失分项累计，公式详情保留半弧长核查信息但不再扣减。
 - 已完成：泄水渠与陡坡第二版正式模块，支持矩形/梯形陡槽、熊启钧教学算例、新手/专业模式、三种水面线模式、水面线型识别、上下游衔接、掺气侧墙、水跃消能、出口整流、多流量控制、项目保存恢复、纵断面图和文档/表格导出。
-- 待办：泄水渠与陡坡的表3正式结构类型接入、DXF 导出、扩散陡槽、多级消能、消力槛式和综合式消力池。
+- 已完成：表1/表3中 `充水渠 / 泄水渠 / 陡坡 / 泄槽 / 陡槽 / 泄水渠与陡坡` 的结构形式别名归一；批量页只传参，表3按连续专项链调用泄水渠与陡坡内核，导出全部 DXF 时建筑物名称行保留用户原始填写名。
+- 已完成：七一水库充水渠真实 Excel 回归，覆盖末尾 4 行专项导入、`100 / 10 / 24.5` 变坡分段、同坡 IP 合并、表3水面线和可打开的“导出全部DXF”文件。
+- 待办：泄水渠与陡坡专项 DXF 成果图、扩散陡槽、多级消能、消力槛式和综合式消力池。
 
 ## 当前状态
 

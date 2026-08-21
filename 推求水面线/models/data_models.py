@@ -63,7 +63,7 @@ class ChannelNode:
     velocity: float = 0.0                       # 流速 v（m/s）
     velocity_increased: float = 0.0             # 加大流速 v_inc（m/s），批量计算的加大流量工况流速
     head_loss_friction: float = 0.0             # 沿程水头损失（m）
-    head_loss_bend: float = 0.0                 # 弯道水头损失（m）
+    head_loss_bend: float = 0.0                 # 本行MC区间弯道附加损失（相邻两个半弯道，m）
     head_loss_local: float = 0.0                # 局部水头损失（m）
     head_loss_reserve: float = 0.0              # 预留水头损失（m），用户可自定义输入
     head_loss_gate: float = 0.0                 # 过闸水头损失（m）
@@ -72,7 +72,7 @@ class ChannelNode:
     head_loss_cumulative: float = 0.0           # 累计总水头损失（m）
     
     # ========== 计算详情（用于双击展示） ==========
-    bend_calc_details: Dict[str, Any] = field(default_factory=dict)      # 弯道损失计算详情
+    bend_calc_details: Dict[str, Any] = field(default_factory=dict)      # 完整弯道核查及本行半弯道分配详情
     friction_calc_details: Dict[str, Any] = field(default_factory=dict)  # 沿程损失计算详情
     siphon_outlet_elev_details: Dict[str, Any] = field(default_factory=dict)  # 倒虹吸出口渠底高程计算详情（公式10.3.6）
     terminal_gate_backfill_details: Dict[str, Any] = field(default_factory=dict)  # 末尾闸行高程回推详情

@@ -110,6 +110,19 @@ def _display_profile_type(value: Any) -> str:
     return mapping.get(text, "未识别" if _contains_latin(text) else str(value or "未识别"))
 
 
+def _display_inlet_connection(value: Any) -> str:
+    """把入口连接形式内部值转换为中文展示。"""
+    mapping = {
+        "warped_surface": "扭曲面连接",
+        "splay_wall": "八字墙连接",
+        "diaphragm_wall": "横隔墙连接",
+        "manual": "手动输入流量系数",
+        "manual_coefficient": "手动输入流量系数",
+    }
+    text = str(value or "")
+    return mapping.get(text.lower(), mapping.get(text, "未提供" if _contains_latin(text) else str(value or "未提供")))
+
+
 def _formula_text(formula: str) -> str:
     """把界面渲染用公式转换为导出用中文可读公式。"""
     formula_map = {
@@ -194,6 +207,28 @@ def build_calculation_principles(result: Any) -> list[dict[str, str]]:
     max_velocity = _summary_value(summary, "最大流速")
     max_froude = _summary_value(summary, "最大弗劳德数")
     profile_name = _display_profile_type(profile.get("water_profile_name") or hydraulic.get("water_profile_name") or data.get("water_profile_type"))
+    inlet_connection = _display_inlet_connection(_value(inlet.get("connection_type"), params.get("inlet_connection_type"), default="未提供"))
+    inlet_mu = _fmt(inlet.get("coefficient"), precision=3)
+    inlet_epsilon = _fmt(inlet.get("contraction_coefficient"), precision=3, default="1.000")
+    inlet_formula = str(inlet.get("coefficient_formula") or "按入口连接形式自动计算")
+    inlet_source = str(inlet.get("coefficient_source") or sources.get("宽顶堰过流能力") or "GB 50288-2018 附录 N")
+    inlet_head = _fmt(_value(inlet.get("head_m"), params.get("inlet_head"), params.get("H0"), default=None), " 米")
+    inlet_scope = str(inlet.get("supported_scope") or "当前支持矩形跌口或等底宽陡坡入口校核")
+    alpha_profile = _fmt(
+        _value(
+            params.get("alpha_profile"),
+            params.get("profile_energy_alpha"),
+            params.get("alpha_e"),
+            hydraulic.get("water_profile_energy_alpha"),
+            profile.get("water_profile_energy_alpha"),
+            default=1.1,
+        ),
+        precision=3,
+    )
+    aeration_coefficient = _fmt(_value(aeration.get("aeration_coefficient"), params.get("aeration_coefficient"), default=1.2), precision=3)
+    freeboard = _fmt(_value(aeration.get("freeboard_m"), params.get("sidewall_freeboard_m"), default=0.4), " 米")
+    pool_factor = _fmt(_value(jump.get("pool_depth_factor"), params.get("pool_depth_factor"), default=1.10), precision=3)
+    rectification_factor = _fmt(_value(rectification.get("length_factor"), params.get("outlet_rectification_factor"), default=10.0), precision=3)
 
     principles = [
         _principle(
@@ -250,18 +285,18 @@ def build_calculation_principles(result: Any) -> list[dict[str, str]]:
             "入口过流能力",
             "检查跌口或等底宽陡坡入口是否具备通过设计流量的能力。",
             r"Q_{\text{过流}}=\varepsilon\mu b_c\sqrt{2g}H_0^{3/2}",
-            "Q_过流 为入口过流能力，ε 为侧收缩系数，μ 为流量系数，b_c 为控制断面宽度，H_0 为计入流速水头的堰上总水头。",
-            f"设计流量 Q={design_flow}，入口能力比={_summary_value(summary, '入口过流能力比')}",
+            "Q_过流 为入口过流能力，ε 为侧收缩系数，μ 为流量系数，b_c 为控制断面宽度，H_0 为计入堰前流速水头的堰上总水头。",
+            f"设计流量 Q={design_flow}，堰上总水头 H_0={inlet_head}，入口连接形式={inlet_connection}，流量系数={inlet_mu}，侧收缩系数={inlet_epsilon}，系数公式={inlet_formula}，入口能力比={_summary_value(summary, '入口过流能力比')}，{inlet_scope}",
             str(inlet.get("message") or "未配置跌口或入口控制参数时，仅保留公式和校核口径，不强行判断。"),
-            "当入口过流能力小于设计流量时，即使陡槽本身能过流，入口也可能成为控制瓶颈，需要调整入口宽度、水头或体型。",
-            sources.get("宽顶堰过流能力", "GB 50288-2018 跌水与陡坡过流能力口径"),
+            f"流量系数来源={inlet_source}；侧收缩系数={inlet_epsilon} 表示按无明显边界收缩或未另行折减处理。当前 H_0 由用户直接输入，本版本不自动由堰前水深和流速水头推导。当入口过流能力小于设计流量时，即使陡槽本身能过流，入口也可能成为控制瓶颈。",
+            inlet_source,
         ),
         _principle(
             "水面线逐段计算",
             "沿陡槽长度逐段推算水深、水位、流速、弗劳德数和水力坡度。",
             r"E_s=h+\alpha_e\frac{v^2}{2g},\quad J=\left(\frac{nQ}{AR^{2/3}}\right)^2,\quad \Delta s=\frac{E_{s,j+1}-E_{s,j}}{i-\overline{J}}",
             "E_s 为断面比能，v 为流速，J 为水力坡度，Δs 为相邻两个试算水深之间的距离，底坡与平均水力坡度的差值决定沿程推进距离。",
-            f"起点水深={start_depth}，末端水深={end_depth}，最大流速={max_velocity}，最大弗劳德数={max_froude}",
+            f"起点水深={start_depth}，末端水深={end_depth}，水面线动能修正系数={alpha_profile}，最大流速={max_velocity}，最大弗劳德数={max_froude}",
             f"水面线类型：{profile_name}",
             "程序从起点水深开始，按能量变化逐段寻找下一个水深位置；每个沿程点再换算成水位、流速和流态，用于纵断面图和表3轻量接口。",
             sources.get("逐段能量方程", "逐段试算法"),
@@ -271,7 +306,7 @@ def build_calculation_principles(result: Any) -> list[dict[str, str]]:
             "估算高速水流掺气后的水深增量，并给出侧墙高度建议。",
             r"h_b=\left(1+\frac{\zeta v}{100}\right)h,\quad H_{\text{侧墙}}=h_b+\Delta h_{\text{壅水}}+F_b",
             "h_b 为掺气水深，ζ 为掺气系数，v 为流速，H_侧墙 为建议侧墙高度，F_b 为安全超高。",
-            f"掺气系数={_fmt(aeration.get('aeration_coefficient'), precision=3)}，最大掺气水深={_summary_value(summary, '最大掺气水深')}，安全超高={_fmt(aeration.get('freeboard_m'), ' 米')}",
+            f"掺气系数={aeration_coefficient}，最大掺气水深={_summary_value(summary, '最大掺气水深')}，安全超高={freeboard}",
             f"建议侧墙高度={_summary_value(summary, '建议侧墙高度')}",
             str(aeration.get("message") or "高流速会夹带空气，使水体体积增大；侧墙顶线需要在清水水深基础上考虑掺气、壅水和安全超高。"),
             sources.get("掺气水深", "GB 50288-2018 附录 N"),
@@ -281,7 +316,7 @@ def build_calculation_principles(result: Any) -> list[dict[str, str]]:
             "用陡槽末端跃前水深和流速估算跃后水深，再与下游控制水深比较，判断消力池需求。",
             r"h_c''=\frac{h_c'}{2}\left(\sqrt{1+8Fr_1^2}-1\right),\quad L_d=4.5h_c'',\quad d_d\geq \lambda h_c''-h_{\text{下游}}",
             "h_c' 为跃前水深，h_c'' 为跃后共轭水深，Fr_1 为跃前弗劳德数，L_d 为池长，d_d 为池深，h_下游 为下游控制水深。",
-            f"跃前水深={_fmt(jump.get('pre_jump_depth_m'), ' 米')}，跃前弗劳德数={_fmt(jump.get('pre_jump_froude'), precision=3)}，控制水深={_fmt(jump.get('control_depth_m'), ' 米')}",
+            f"跃前水深={_fmt(jump.get('pre_jump_depth_m'), ' 米')}，跃前弗劳德数={_fmt(jump.get('pre_jump_froude'), precision=3)}，控制水深={_fmt(jump.get('control_depth_m'), ' 米')}，池深系数={pool_factor}",
             f"跃后共轭水深={_summary_value(summary, '跃后共轭水深')}，建议池长={_summary_value(summary, '建议消力池长度')}，建议池深={_summary_value(summary, '建议消力池深度')}",
             str(jump.get("message") or "若尾水不足，自由水跃可能向下游移动，需要通过消力池或出口防冲措施稳定水跃位置。"),
             sources.get("矩形断面共轭水深") or sources.get("消力池初拟尺寸", "水跃理论"),
@@ -291,7 +326,7 @@ def build_calculation_principles(result: Any) -> list[dict[str, str]]:
             "按出口扩散、跃后水深倍数和最小防冲长度共同确定出口连接段建议长度。",
             r"L_r\geq L_{\Delta b},\quad L_r\geq \eta h_c'',\quad L_r\geq L_{\text{最小}}",
             "L_r 为出口整流段长度，L_Δb 为宽度渐变所需长度，η 为跃后水深倍数控制系数，L_最小 为最小长度。",
-            f"宽度渐变长度={_fmt(rectification.get('width_transition_length_m'), ' 米')}，能量控制长度={_fmt(rectification.get('energy_length_m'), ' 米')}，最小长度={_fmt(rectification.get('minimum_length_m'), ' 米')}",
+            f"宽度渐变长度={_fmt(rectification.get('width_transition_length_m'), ' 米')}，能量控制长度={_fmt(rectification.get('energy_length_m'), ' 米')}，最小长度={_fmt(rectification.get('minimum_length_m'), ' 米')}，整流长度系数={rectification_factor}",
             f"建议出口整流段={_summary_value(summary, '建议出口整流段')}",
             str(rectification.get("message") or "出口段不只看宽度变化，还要兼顾跃后水深和防冲需要，最终取几个控制条件中的较大值。"),
             sources.get("出口整流段", "出口连接段整流布置校核口径"),
@@ -327,6 +362,10 @@ def build_precalculation_principles(params: dict[str, Any]) -> list[dict[str, st
     freeboard = _value(data.get("sidewall_freeboard_m"), default="未提供")
     pool_factor = _value(data.get("pool_depth_factor"), default="未提供")
     rectification_factor = _value(data.get("outlet_rectification_factor"), default="未提供")
+    alpha_profile = _value(data.get("alpha_profile"), data.get("profile_energy_alpha"), data.get("alpha_e"), default="1.1")
+    inlet_connection = _display_inlet_connection(_value(data.get("inlet_connection_type_label"), data.get("inlet_connection_type"), default="扭曲面连接"))
+    inlet_epsilon = _value(data.get("contraction_coefficient"), default="1.0")
+    inlet_head = _value(data.get("inlet_head"), data.get("H0"), default="未提供")
 
     pending = "计算后生成"
     return [
@@ -384,18 +423,18 @@ def build_precalculation_principles(params: dict[str, Any]) -> list[dict[str, st
             "入口过流能力",
             "检查入口是否能通过设计流量。",
             r"Q_{\text{过流}}=\varepsilon\mu b_c\sqrt{2g}H_0^{3/2}",
-            "Q_过流 为入口过流能力，ε 为侧收缩系数，μ 为流量系数，b_c 为控制断面宽度，H_0 为堰上总水头。",
-            f"Q={design_flow}，b={width}",
+            "Q_过流 为入口过流能力，ε 为侧收缩系数，μ 为流量系数，b_c 为控制断面宽度，H_0 为计入堰前流速水头的堰上总水头。",
+            f"Q={design_flow}，b={width}，堰上总水头 H_0={inlet_head}，入口连接形式={inlet_connection}，侧收缩系数={inlet_epsilon}，当前支持矩形跌口或等底宽陡坡入口校核",
             pending,
-            "计算后会给出入口能力与设计流量的比较结果。",
-            "GB 50288-2018 跌水与陡坡过流能力口径",
+            "计算后会按 GB 50288-2018 附录 N 根据入口连接形式自动确定流量系数；选择手动输入时采用用户给定系数。当前 H_0 由用户直接输入，本版本不自动由堰前水深和流速水头推导。",
+            "GB 50288-2018 附录 N",
         ),
         _principle(
             "水面线逐段计算",
             "沿陡槽长度逐段推算水深、水位、流速和弗劳德数。",
             r"E_s=h+\alpha_e\frac{v^2}{2g},\quad J=\left(\frac{nQ}{AR^{2/3}}\right)^2,\quad \Delta s=\frac{E_{s,j+1}-E_{s,j}}{i-\overline{J}}",
             "E_s 为断面比能，v 为流速，J 为水力坡度，Δs 为相邻试算水深之间的距离。",
-            f"L={length}，水面线模式={profile_mode}",
+            f"L={length}，水面线模式={profile_mode}，水面线动能修正系数={alpha_profile}",
             pending,
             "计算后会形成沿程水面线表和纵断面图。",
             "逐段试算法",

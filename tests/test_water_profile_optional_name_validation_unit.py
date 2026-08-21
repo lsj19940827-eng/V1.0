@@ -69,6 +69,19 @@ def test_validate_input_allows_empty_name_for_culvert_variants():
     assert errors == []
 
 
+def test_validate_input_allows_empty_name_for_fill_channel_aliases():
+    calc = WaterProfileCalculator(_make_settings())
+    nodes = [
+        _make_node(StructureType.FILL_CHANNEL, name=""),
+        _make_node(StructureType.from_string("泄水渠与陡坡"), name="", flow_section="1"),
+    ]
+
+    is_valid, errors = calc.validate_input(nodes)
+
+    assert is_valid is True
+    assert errors == []
+
+
 def test_validate_input_blocks_empty_name_for_required_structures():
     calc = WaterProfileCalculator(_make_settings())
     nodes = [

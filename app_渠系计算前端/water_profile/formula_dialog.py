@@ -135,12 +135,12 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
         "latex": r"L_{total} = L_i - T_{i-1} - T_i",
         "note": "若为负数说明两弯道曲线重叠，无法施工",
     },
-    "弯道水头损失": {
-        "title": "弯道水头损失计算",
-        "description": "普通渠道按弯道公式计算；逐段承压成员按承压弯头局部损失公式计算",
-        "formula": r"普通渠道: hw = n²·L·v² / R^(4/3) × (3/4)√(B/Rc)  |  有压管道: hj = ξ·V²/(2g)",
-        "latex": r"h_w = \frac{n^2 \cdot L \cdot v^2}{R^{4/3}} \times \frac{3}{4}\sqrt{\frac{B}{R_c}},\quad h_j = \xi \cdot \frac{V^2}{2g}",
-        "note": "普通渠道/隧洞使用弯道二次流公式；逐段承压成员（含 xx管 空名称普通有压管道，以及 xx渠 末尾连续承压中的命名有压管道/定向钻/顶管）使用承压弯头局部损失系数。双击单元格可查看对应详细过程",
+    "弯道附加水头损失": {
+        "title": "弯道附加水头损失计算",
+        "description": "普通渠道按本行MC区间分配相邻两个半弯道附加损失；逐段承压成员按承压弯头局部损失公式计算",
+        "formula": r"普通渠道: hb,row,i = 1/2·hb,i-1,full + 1/2·hb,i,full  |  有压管道: hj = ξ·V²/(2g)",
+        "latex": r"h_{b,row,i}=\frac{1}{2}h_{b,i-1}^{full}+\frac{1}{2}h_{b,i}^{full},\quad h_j = \xi \cdot \frac{V^2}{2g}",
+        "note": "普通渠道/隧洞的本行范围为上一MC到当前MC：计入上一弯道后半段和当前弯道前半段，两个半弯道分别采用各自参数；弧段普通摩阻仍在沿程损失列。逐段承压成员（含 xx管 空名称普通有压管道，以及 xx渠 末尾连续承压中的命名有压管道/定向钻/顶管）保持承压弯头局部损失口径。双击单元格可查看对应详细过程",
     },
     "渐变段水头损失": {
         "title": "渐变段水头损失计算",
@@ -154,7 +154,7 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
         "description": "隧洞等普通行使用底坡法；逐段承压成员使用 FMB 公式计算沿程损失",
         "formula": r"普通行: hf = i × L_eff  |  有压管道: hf = f × L × Q^m / d^b",
         "latex": r"h_f = i \times L_{eff},\quad h_f = f \times L \times Q^m / d^b",
-        "note": "有效长度 = (里程MC差) - 渐变段长度 - 上行弧长/2 - 本行弧长/2。逐段承压成员沿用同一长度划分，但沿程损失按 FMB 公式计算。双击单元格可查看详细过程",
+        "note": "有效长度 = max(0, 里程MC差 - 渐变段长度)。MC里程差已包含相邻弯道半弧段，弧段参与普通沿程摩阻，不再扣减；逐段承压成员沿用同一长度划分，但沿程损失按 FMB 公式计算。双击单元格可查看详细过程",
     },
     "预留水头损失": {
         "title": "预留水头损失",
@@ -258,11 +258,13 @@ COLUMN_FORMULAS: Dict[str, Dict[str, str]] = {
 
 # 兼容旧表头名称（历史项目/旧版界面）
 COLUMN_FORMULAS["倒虹吸水头损失"] = COLUMN_FORMULAS["倒虹吸/有压管道水头损失"]
+COLUMN_FORMULAS["弯道水头损失"] = COLUMN_FORMULAS["弯道附加水头损失"]
 
 # 需要双击弹窗的列名集合（与Tkinter版_on_cell_double_click对齐）
 DOUBLE_CLICK_COLUMNS = {
     "渐变段长度L",
-    "弯道水头损失", "沿程水头损失", "渐变段水头损失", "倒虹吸/有压管道水头损失",
+    "弯道附加水头损失", "弯道水头损失",
+    "沿程水头损失", "渐变段水头损失", "倒虹吸/有压管道水头损失",
     "总水头损失", "累计总水头损失",
     "水位", "渠底高程", "渠顶高程",
 }
@@ -783,7 +785,7 @@ class PressurePipeLossOverrideDialog(FormulaDialog):
 # ================================================================
 
 def show_bend_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
-    """弯道水头损失计算详情"""
+    """弯道附加水头损失计算详情"""
     method = details.get('method', '')
     if method == 'pressure_pipe_bend':
         D = details.get('D_m', 0)
@@ -809,7 +811,66 @@ def show_bend_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
                        f"    $= {hw:.6f}$ m"},
             {"title": "5. 计算结果", "formula": f"$h_j = {hw:.4f} \\ m$"},
         ]
-        FormulaDialog(parent, f"{node_name} - 弯道水头损失计算详情", sections)
+        FormulaDialog(parent, f"{node_name} - 弯道附加水头损失计算详情", sections)
+        return
+
+    if method == 'open_channel_interval_halves':
+        upstream_details = details.get('upstream_full_details', {}) or {}
+        downstream_details = details.get('downstream_full_details', {}) or {}
+        upstream_full = details.get('upstream_full_loss', 0.0) or 0.0
+        downstream_full = details.get('downstream_full_loss', 0.0) or 0.0
+        upstream_half = details.get('upstream_half_loss', 0.0) or 0.0
+        downstream_half = details.get('downstream_half_loss', 0.0) or 0.0
+        row_loss = details.get('hw', 0.0) or 0.0
+
+        def _component_values(position: str, component_name: str, component: Dict[str, Any],
+                              full_loss: float, half_loss: float) -> str:
+            """格式化一个完整弯道及其半段分配值。"""
+            if not component:
+                return f"{position}没有有效弯道，本侧计入 0.000000 m"
+            display_name = component_name or position
+            return (
+                f"节点  {display_name}\n"
+                f"糙率  $n = {component.get('n', 0):.6f}$\n"
+                f"完整弧长  $L_{{arc}} = {component.get('L', 0):.3f}$ m\n"
+                f"流速  $v = {component.get('v', 0):.4f}$ m/s\n"
+                f"水力半径  $R = {component.get('R', 0):.4f}$ m\n"
+                f"水面宽度  $B = {component.get('B', 0):.3f}$ m\n"
+                f"转弯半径  $R_c = {component.get('Rc', 0):.3f}$ m\n"
+                f"完整弯道附加损失  $h_{{b,full}} = {full_loss:.6f}$ m\n"
+                f"本行采用半段损失  $h_{{b,half}} = {half_loss:.6f}$ m"
+            )
+
+        sections = [
+            {"title": "1. 完整弯道附加损失公式",
+             "formula": r"$h_{b,full}=\frac{n^2L_{arc}v^2}{R^{4/3}}\times\frac{3}{4}\sqrt{\frac{B}{R_c}}$",
+             "content": "规范弯道段总损失中的普通弧段摩阻已进入沿程损失列；这里保留弯曲二次流附加项，并先分别计算相邻两个完整弯道。"},
+            {"title": "2. 本行MC区间分配公式",
+             "formula": r"$h_{b,row,i}=\frac{1}{2}h_{b,i-1}^{full}+\frac{1}{2}h_{b,i}^{full}$",
+             "content": "本行表示上一MC到当前MC，包含上一弯道后半段和当前弯道前半段；两个半弯道分别采用各自的水力参数。"},
+            {"title": "3. 上游弯道后半段",
+             "values": _component_values(
+                 "上游侧",
+                 details.get('upstream_node_name', ''),
+                 upstream_details,
+                 upstream_full,
+                 upstream_half,
+             )},
+            {"title": "4. 当前弯道前半段",
+             "values": _component_values(
+                 "当前侧",
+                 details.get('downstream_node_name', ''),
+                 downstream_details,
+                 downstream_full,
+                 downstream_half,
+             )},
+            {"title": "5. 本行弯道附加损失",
+             "values": f"$h_{{b,row}} = {upstream_half:.6f} + {downstream_half:.6f}$\n    $= {row_loss:.6f}$ m",
+             "formula": f"$h_{{b,row}} = {row_loss:.4f} \\ m$"},
+            {"title": "6. 当前节点完整弯道核查值",
+             "values": f"$h_{{b,current,full}} = {downstream_full:.6f}$ m\n该完整值仅供单个弯道核查；表3本行采用其中前半段，并叠加上一弯道后半段。"},
+        ]
+        FormulaDialog(parent, f"{node_name} - 弯道附加水头损失计算详情", sections)
         return
 
     n = details.get('n', 0)
@@ -820,9 +881,9 @@ def show_bend_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
     B = details.get('B', 0)
     hw = details.get('hw', 0)
     sections = [
-        {"title": "1. 弯道水头损失公式",
+        {"title": "1. 弯道附加水头损失公式",
          "formula": r"$h_w = \frac{n^2 \cdot L \cdot v^2}{R^{4/3}} \times \frac{3}{4} \times \sqrt{\frac{B}{R_c}}$",
-         "content": "其中: $n$=糙率, $L$=弯道长度(弧长), $v$=流速, $R$=水力半径, $B$=水面宽度, $R_c$=转弯半径"},
+         "content": "该式只计算弯道二次流附加项，不是弯道总损失。弧段普通摩阻已计入沿程损失。其中: $n$=糙率, $L$=弯道长度(弧长), $v$=流速, $R$=水力半径, $B$=水面宽度, $R_c$=转弯半径"},
         {"title": "2. 计算参数",
          "values": f"糙率  $n = {n:.6f}$\n弯道长度  $L = {L:.3f}$ m\n流速  $v = {v:.4f}$ m/s\n"
                    f"水力半径  $R = {R:.4f}$ m\n水面宽度  $B = {B:.3f}$ m\n转弯半径  $R_c = {Rc:.3f}$ m"},
@@ -831,7 +892,7 @@ def show_bend_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
                    f"    $= {hw:.6f}$ m"},
         {"title": "4. 计算结果", "formula": f"$h_w = {hw:.4f} \\ m$"},
     ]
-    FormulaDialog(parent, f"{node_name} - 弯道水头损失计算详情", sections)
+    FormulaDialog(parent, f"{node_name} - 弯道附加水头损失计算详情", sections)
 
 
 def show_friction_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
@@ -847,8 +908,11 @@ def show_friction_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
              "formula": r"$h_f = i \times L_{eff}$",
              "content": "其中: $i$=底坡, $L_{eff}$=有效计算长度"},
             {"title": "2. 有效长度计算",
-             "formula": r"$L_{eff} = \Delta S_{MC} - L_{trans} - \frac{L_{arc,1}}{2} - \frac{L_{arc,2}}{2}$",
-             "values": f"有效长度  $L_{{eff}} = {L_eff:.3f}$ m\n(扣除了渐变段长度和上下游弧长的一半)"},
+             "formula": r"$L_{eff} = \max(0,\ \Delta S_{MC} - L_{trans})$",
+             "values": f"MC里程差  $\\Delta S_{{MC}} = {details.get('L_mc', 0):.3f}$ m\n"
+                       f"渐变段长度  $L_{{trans}} = {details.get('L_transition', 0):.3f}$ m\n"
+                       f"有效长度  $L_{{eff}} = {L_eff:.3f}$ m\n"
+                       "上下游弧段已包含在MC里程差内，参与普通沿程摩阻，不再扣减。"},
             {"title": "3. 计算参数",
              "values": f"底坡  $i = {slope_i:.6f}${ratio}\n有效长度  $L_{{eff}} = {L_eff:.3f}$ m"},
             {"title": "4. 代入公式计算",
@@ -866,17 +930,30 @@ def show_friction_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
         m_val = details.get('m', 0)
         b_val = details.get('b', 0)
         material = details.get('pipe_material', details.get('material', ''))
+        length_source = details.get('length_source', 'effective_length')
+        if length_source == 'longitudinal_profile':
+            length_formula = r"$L = L_{profile}$"
+            length_values = (
+                f"纵断面实长  $L_{{profile}} = {L_eff:.3f}$ m\n"
+                f"平面MC里程差（核查）  $\\Delta S_{{MC}} = {details.get('L_mc', 0):.3f}$ m\n"
+                "沿程损失采用纵断面实长；平面弧段不另行扣减。"
+            )
+        else:
+            length_formula = r"$L = \max(0,\ \Delta S_{MC} - L_{trans})$"
+            length_values = (
+                f"MC里程差  $\\Delta S_{{MC}} = {details.get('L_mc', 0):.3f}$ m\n"
+                f"渐变段长度  $L_{{trans}} = {details.get('L_transition', 0):.3f}$ m\n"
+                f"上行半弧长（核查，不扣减）  $L_{{arc,1}}/2 = {details.get('arc1_half', 0):.3f}$ m\n"
+                f"本行半弧长（核查，不扣减）  $L_{{arc,2}}/2 = {details.get('arc2_half', 0):.3f}$ m\n"
+                f"有效长度  $L = {L_eff:.3f}$ m"
+            )
         sections = [
             {"title": "1. 沿程水头损失公式（FMB）",
              "formula": r"$h_f = f \times L \times Q^m / d^b$",
              "content": "xx管渠道级别下的空名称普通有压管道行按承压管道沿程损失公式计算。"},
             {"title": "2. 长度划分",
-             "formula": r"$L = \Delta S_{MC} - L_{trans} - \frac{L_{arc,1}}{2} - \frac{L_{arc,2}}{2}$",
-             "values": f"MC里程差  $\\Delta S_{{MC}} = {details.get('L_mc', 0):.3f}$ m\n"
-                       f"渐变段长度  $L_{{trans}} = {details.get('L_transition', 0):.3f}$ m\n"
-                       f"上行弧长折半  $L_{{arc,1}}/2 = {details.get('arc1_half', 0):.3f}$ m\n"
-                       f"本行弧长折半  $L_{{arc,2}}/2 = {details.get('arc2_half', 0):.3f}$ m\n"
-                       f"有效长度  $L = {L_eff:.3f}$ m"},
+             "formula": length_formula,
+             "values": length_values},
             {"title": "3. 计算参数",
              "values": f"管材  {material}\n管材系数  $f = {f_val:.0f},\\ m = {m_val:.3f},\\ b = {b_val:.3f}$\n"
                        f"流量  $Q = {Q_m3s:.4f}$ m³/s  $= {Q_m3h:.3f}$ m³/h\n"
@@ -1239,7 +1316,7 @@ def show_pressure_pipe_loss_dialog(
     if is_row_sum:
         values = [
             f"沿程水头损失  $h_f = {hf:.4f}$ m",
-            f"弯道水头损失  $h_w = {hw:.4f}$ m",
+            f"弯道附加水头损失  $h_w = {hw:.4f}$ m",
             f"局部水头损失  $h_j = {hj:.4f}$ m",
             "───────────────────────",
             f"当前计算值  $h_{{pp,calc}} = {calc_loss:.4f}$ m",
@@ -1372,7 +1449,7 @@ def show_total_loss_dialog(parent, node_name: str, details: Dict[str, Any]):
                    + ("空名称普通有压管道行的列38只是本行承压段显示值，不再作为单独一项重复叠加。" if pressure_pipe_display_is_row_sum else "")
                    + ("命名承压组出口行的列38只显示本行损失，整组总损失请到有压管道计算结果汇总查看。" if pressure_pipe_display_mode == "named_group_outlet" else "")},
         {"title": "2. 本普通行各项损失值",
-         "values": f"弯道水头损失  $h_w = {hw:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
+         "values": f"弯道附加水头损失  $h_w = {hw:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
                    f"沿程水头损失  $h_f = {hf:.4f}$ m\n"
                    f"预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n"
                    f"{_format_pressure_pipe_display_lines(pressure_pipe_display_loss, h_sip, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode, named_group_total=pressure_pipe_named_group_total, has_manual_override=pressure_pipe_display_has_manual_override)}\n"
@@ -1440,7 +1517,7 @@ def show_water_level_dialog(parent, node_name: str, details: Dict[str, Any]):
              "content": "本页同时展示表3中的本普通行总水头损失，以及用于上一普通节点递推到本行的本步总落差。"},
             {"title": "2. 本普通行总水头损失（对应表3）",
              "values": f"沿程水头损失  $h_f = {hf:.4f}$ m\n局部水头损失  $h_j = {hj:.4f}$ m\n"
-                       f"弯道水头损失  $h_w = {hw:.4f}$ m\n预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n"
+                       f"弯道附加水头损失  $h_w = {hw:.4f}$ m\n预留水头损失  $h_{{res}} = {h_res:.4f}$ m\n"
                        f"过闸水头损失  $h_{{gate}} = {h_gate:.4f}$ m\n"
                        f"{_format_pressure_pipe_display_lines(pressure_pipe_display_loss, h_sip, pressure_pipe_display_is_row_sum, is_display_only=pressure_pipe_display_is_display_only, display_mode=pressure_pipe_display_mode, named_group_total=pressure_pipe_named_group_total, has_manual_override=pressure_pipe_display_has_manual_override)}\n"
                        f"───────────────────────\n本普通行总水头损失  $h_{{\\Sigma,row}} = {row_total:.4f}$ m"},

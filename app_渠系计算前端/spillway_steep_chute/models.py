@@ -18,6 +18,7 @@ class SpillwayInput:
     roughness: float = 0.014
     start_bed_elevation: float = 100.0
     start_depth: float = 1.788
+    alpha_profile: float = 1.1
 
     def to_dict(self) -> dict[str, Any]:
         """转换为项目保存和内核调用使用的字典。"""
@@ -39,6 +40,7 @@ class SpillwayInput:
             "n": self.roughness,
             "start_bed_elevation": self.start_bed_elevation,
             "start_depth": self.start_depth,
+            "alpha_profile": self.alpha_profile,
             "profile_mode": "END_DEPTH_BY_LENGTH",
         }
 

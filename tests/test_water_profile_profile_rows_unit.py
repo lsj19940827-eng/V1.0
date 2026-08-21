@@ -413,6 +413,30 @@ def test_get_building_display_name_falls_back_to_structure_for_unnamed_open_chan
     assert display == "明渠-圆形"
 
 
+@pytest.mark.parametrize("name", ["", "-"])
+def test_get_building_display_name_omits_blank_placeholder_for_spillway_steep_chute(name):
+    """泄水渠与陡坡允许不填建筑物名称，导出时不应把占位横杠拼进图名。"""
+    node = _make_node(ip_no=6, mc=96, structure="泄水渠与陡坡", name=name)
+
+    display = cad_tools._get_building_display_name(node)
+
+    assert display == "泄水渠与陡坡"
+
+
+def test_get_building_display_name_uses_user_input_alias_for_spillway_steep_chute():
+    """专项内核统一计算，DXF 建筑物名称行保留用户填写的结构名。"""
+    node = _make_node(ip_no=6, mc=96, structure="泄水渠与陡坡", name="-")
+    node.section_params = {
+        "spillway_steep_chute": {
+            "display_structure_type": "充水渠",
+        }
+    }
+
+    display = cad_tools._get_building_display_name(node)
+
+    assert display == "充水渠"
+
+
 @pytest.mark.parametrize(
     ("structure", "name", "expected"),
     [

@@ -620,8 +620,8 @@ def _classify_structure(node) -> Optional[str]:
     if "圆形" in name:
         return "circular_channel"
 
-    # 仅写“明渠”时，依据参数判断圆形/梯形/矩形
-    if "明渠" in name:
+    # 仅写“明渠/充水渠/泄水渠”时，依据参数判断圆形/U形/梯形/矩形
+    if "明渠" in name or "充水渠" in name or "泄水渠" in name:
         d_val = _to_float(params.get("D", params.get("R_circle", 0.0)), 0.0)
         if d_val > 0:
             return "circular_channel"

@@ -155,6 +155,40 @@ def test_principle_page_shows_preview_before_calculation():
     panel.deleteLater()
 
 
+def test_principle_page_shows_flow_overview_before_detail_cards():
+    """计算原理页顶部应先展示 11 步路线图，再展示详细原理卡片。"""
+    _app()
+    panel = SpillwaySteepChutePanel()
+
+    rendered = _principle_html(panel)
+
+    assert "计算流程总览" in rendered
+    assert "先算" in rendered
+    assert "得到" in rendered
+    assert "用于下一步" in rendered
+    assert rendered.index("计算流程总览") < rendered.index("计算目的")
+    expected_steps = [
+        "基础断面与水力要素",
+        "正常水深",
+        "临界水深",
+        "坡型判别",
+        "起点控制水深",
+        "入口过流能力",
+        "水面线逐段计算",
+        "掺气水深与侧墙高度",
+        "水跃与消力池",
+        "出口整流段",
+        "规范校核与风险提示",
+    ]
+    previous_pos = -1
+    for step in expected_steps:
+        pos = rendered.index(step, previous_pos + 1)
+        assert pos > previous_pos
+        previous_pos = pos
+
+    panel.deleteLater()
+
+
 def test_principle_preview_uses_loaded_example_inputs_before_calculation():
     """载入教学算例后，未计算的计算原理页也应带入当前输入值。"""
     _app()
@@ -221,6 +255,7 @@ def test_mode_visibility_keeps_manual_flow_cases_hidden_and_shows_auto_hint():
     assert "加密" in panel.auto_flow_hint.text()
     assert "自动" in panel.auto_flow_hint.text()
     assert panel._combo_fields["profile_mode_label"].isHidden()
+    assert panel._input_fields["alpha_profile"].isHidden()
 
     mode = panel._combo_fields["ui_mode_label"]
     mode.setCurrentIndex(mode.findText("专业模式"))
@@ -228,6 +263,135 @@ def test_mode_visibility_keeps_manual_flow_cases_hidden_and_shows_auto_hint():
     assert panel._input_fields["flow_cases_text"].isHidden()
     assert all(widget.isHidden() for widget in panel._input_rows["flow_cases_text"])
     assert not panel._combo_fields["profile_mode_label"].isHidden()
+    assert not panel._input_fields["alpha_profile"].isHidden()
+
+    panel.deleteLater()
+
+
+def test_inlet_connection_defaults_to_standard_formula_and_manual_field_is_professional():
+    """新项目默认按规范连接形式计算，专业模式选择手动时才显示系数输入。"""
+    _app()
+    panel = SpillwaySteepChutePanel()
+
+    assert panel._combo_fields["inlet_connection_type_label"].currentText() == "扭曲面连接"
+    assert all(widget.isHidden() for widget in panel._input_rows["weir_coefficient"])
+
+    mode = panel._combo_fields["ui_mode_label"]
+    mode.setCurrentIndex(mode.findText("专业模式"))
+    connection = panel._combo_fields["inlet_connection_type_label"]
+    connection.setCurrentIndex(connection.findText("手动输入流量系数"))
+    panel._input_fields["weir_coefficient"].setText("0.51")
+    _flush_events()
+
+    assert not any(widget.isHidden() for widget in panel._input_rows["weir_coefficient"])
+    params = panel._collect_inputs()
+    assert params["inlet_connection_type"] == "手动输入流量系数"
+    assert params["weir_coefficient"] == pytest.approx(0.51)
+    assert params["contraction_coefficient"] == pytest.approx(1.0)
+    assert params["alpha_profile"] == pytest.approx(1.1)
+
+    panel.deleteLater()
+
+
+def test_legacy_project_without_alpha_profile_migrates_to_default_and_warns():
+    """旧工程没有水面线动能修正系数时，应迁移为 1.1 并传递风险标记。"""
+    _app()
+    panel = SpillwaySteepChutePanel()
+
+    panel.from_project_dict(
+        {
+            "input_params": {
+                "project_name": "旧水面线工程",
+                "design_flow": 20.0,
+                "inlet_weir_width": 1.0,
+                "inlet_head": 2.2,
+            }
+        }
+    )
+
+    params = panel._collect_inputs()
+
+    assert panel._input_fields["alpha_profile"].text() == "1.1"
+    assert params["alpha_profile"] == pytest.approx(1.1)
+    assert params["legacy_alpha_profile_migrated"] is True
+
+    panel.deleteLater()
+
+
+def test_legacy_project_alpha_alias_is_preserved_as_alpha_profile():
+    """旧工程已有别名字段时，应保存为正式 alpha_profile 字段。"""
+    _app()
+    panel = SpillwaySteepChutePanel()
+
+    panel.from_project_dict(
+        {
+            "input_params": {
+                "project_name": "已有系数工程",
+                "design_flow": 20.0,
+                "profile_energy_alpha": 1.05,
+                "inlet_weir_width": 1.0,
+                "inlet_head": 2.2,
+            }
+        }
+    )
+
+    params = panel._collect_inputs()
+
+    assert panel._input_fields["alpha_profile"].text() == "1.05"
+    assert params["alpha_profile"] == pytest.approx(1.05)
+    assert params["legacy_alpha_profile_migrated"] is False
+
+    panel.deleteLater()
+
+
+def test_legacy_project_without_inlet_connection_migrates_to_warped_surface():
+    """旧工程没有入口连接形式时，应迁移为扭曲面连接，不再沿用隐藏 0.42。"""
+    _app()
+    panel = SpillwaySteepChutePanel()
+
+    panel.from_project_dict(
+        {
+            "input_params": {
+                "project_name": "旧工程",
+                "design_flow": 20.0,
+                "inlet_weir_width": 1.0,
+                "inlet_head": 2.2,
+            }
+        }
+    )
+
+    params = panel._collect_inputs()
+
+    assert panel._combo_fields["inlet_connection_type_label"].currentText() == "扭曲面连接"
+    assert params["inlet_connection_type"] == "扭曲面连接"
+    assert params["legacy_inlet_coefficient_migrated"] is True
+
+    panel.deleteLater()
+
+
+def test_legacy_project_with_manual_weir_coefficient_keeps_manual_value():
+    """旧工程已有手动流量系数时，应按手动值优先恢复。"""
+    _app()
+    panel = SpillwaySteepChutePanel()
+
+    panel.from_project_dict(
+        {
+            "input_params": {
+                "project_name": "已有系数旧工程",
+                "design_flow": 20.0,
+                "inlet_weir_width": 1.0,
+                "inlet_head": 2.2,
+                "weir_coefficient": 0.39,
+            }
+        }
+    )
+
+    params = panel._collect_inputs()
+
+    assert panel._combo_fields["inlet_connection_type_label"].currentText() == "手动输入流量系数"
+    assert params["inlet_connection_type"] == "手动输入流量系数"
+    assert params["weir_coefficient"] == pytest.approx(0.39)
+    assert params["legacy_inlet_coefficient_migrated"] is False
 
     panel.deleteLater()
 
@@ -406,7 +570,20 @@ def test_principle_page_sanitizes_internal_prd_sources_and_shows_full_flow():
     _app()
     panel = SpillwaySteepChutePanel()
     panel.current_result = {
-        "input_params": {"Q": 20.0, "n": 0.014, "i": 0.02},
+        "input_params": {
+            "Q": 20.0,
+            "n": 0.014,
+            "i": 0.02,
+            "alpha_profile": 1.1,
+            "inlet_connection_type": "扭曲面连接",
+            "inlet_weir_width": 1.0,
+            "inlet_head": 2.2,
+            "contraction_coefficient": 1.0,
+            "aeration_coefficient": 1.2,
+            "sidewall_freeboard_m": 0.4,
+            "pool_depth_factor": 1.10,
+            "outlet_rectification_factor": 10.0,
+        },
         "summary": {
             "设计流量": "20.000 立方米/秒",
             "正常水深": "1.084 米",
@@ -417,14 +594,30 @@ def test_principle_page_sanitizes_internal_prd_sources_and_shows_full_flow():
         "hydraulic": {
             "section_type": "trapezoidal",
             "slope_type": "steep",
+            "water_profile_energy_alpha": 1.1,
             "normal": {"area_m2": 5.2, "hydraulic_radius_m": 0.9, "velocity_ms": 3.8},
             "critical": {"area_m2": 6.3, "hydraulic_radius_m": 0.86, "water_top_width_m": 6.2, "velocity_ms": 3.1},
             "start": {"area_m2": 6.3, "hydraulic_radius_m": 0.86, "water_top_width_m": 6.2, "depth_m": 1.749},
         },
         "profile": {"end_depth_m": 1.18, "water_profile_name": "陡坡降水曲线"},
         "start_control": {"source": "manual", "depth_m": 1.749},
+        "inlet_weir": {
+            "connection_type": "扭曲面连接",
+            "coefficient": 0.465818,
+            "coefficient_source": "GB 50288-2018 附录 N",
+            "coefficient_formula": "0.474-0.018b_c/H_0",
+            "contraction_coefficient": 1.0,
+            "capacity_ratio": 0.337,
+            "message": "入口过流能力不足，应调整跌口宽度、堰上水头或建筑物形式。",
+        },
         "aeration_and_sidewall": {"aeration_coefficient": 1.2, "freeboard_m": 0.4},
-        "hydraulic_jump": {"pre_jump_depth_m": 1.18, "pre_jump_froude": 2.4, "control_depth_m": 1.5},
+        "hydraulic_jump": {
+            "pre_jump_depth_m": 1.18,
+            "pre_jump_froude": 2.4,
+            "control_depth_m": 1.5,
+            "pool_depth_factor": 1.10,
+            "outlet_rectification": {"length_factor": 10.0},
+        },
         "formulas": [
             {
                 "name": "出口整流段",
@@ -444,6 +637,18 @@ def test_principle_page_sanitizes_internal_prd_sources_and_shows_full_flow():
     for forbidden in [r"\begin{cases}", r"\end{cases}", r"\frac", r"\quad", r"\text{", "trapezoidal", "manual", "backwater", "control", "wall", "cap"]:
         assert forbidden not in rendered
     for keyword in ["起点控制水深", "入口过流能力", "掺气水深与侧墙高度", "水跃与消力池"]:
+        assert keyword in rendered
+    for keyword in [
+        "扭曲面连接",
+        "流量系数=0.466",
+        "侧收缩系数=1.000",
+        "水面线动能修正系数=1.100",
+        "掺气系数=1.200",
+        "安全超高=0.400 米",
+        "池深系数=1.100",
+        "整流长度系数=10.000",
+        "GB 50288-2018 附录 N",
+    ]:
         assert keyword in rendered
     for forbidden in ["h_s 为", "h_k 为", "h_m 为", "E_s 为", "Q_过流 为", "b_c 为", "H_0 为"]:
         assert forbidden not in rendered

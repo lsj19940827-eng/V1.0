@@ -170,11 +170,52 @@ try:
     from models.data_models import ChannelNode, ProjectSettings, TransitionLengthRule
     from models.enums import StructureType, InOutType
     from core.calculator import WaterProfileCalculator
+    from core.spillway_steep_chute_adapter import (
+        SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS,
+        SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS,
+        SPILLWAY_STEEP_CHUTE_ADVANCED_NUMERIC_KEYS,
+        SPILLWAY_STEEP_CHUTE_PARAM_KEY,
+        SPILLWAY_STEEP_CHUTE_TEXT,
+        is_spillway_steep_chute_value,
+    )
     CALCULATOR_AVAILABLE = True
 except ImportError as _e:
     print(f"[水面线] 核心计算引擎加载失败: {_e}")
     CALCULATOR_AVAILABLE = False
     TransitionLengthRule = None
+    SPILLWAY_STEEP_CHUTE_TEXT = "泄水渠与陡坡"
+    SPILLWAY_STEEP_CHUTE_PARAM_KEY = "spillway_steep_chute"
+    SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS = {
+        "inlet_weir_width": 1.0,
+        "inlet_head": 2.2,
+        "inlet_connection_type_label": "扭曲面连接",
+        "contraction_coefficient": 1.0,
+        "alpha_profile": 1.1,
+        "aeration_coefficient": 1.2,
+        "sidewall_freeboard_m": 0.4,
+        "pool_depth_factor": 1.10,
+        "outlet_rectification_factor": 10.0,
+    }
+    SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS = {
+        "inlet_weir_width": "泄水渠入口宽度(m)",
+        "inlet_head": "泄水渠堰上总水头(m)",
+        "inlet_connection_type_label": "泄水渠入口连接形式",
+        "weir_coefficient": "泄水渠手动流量系数",
+        "contraction_coefficient": "泄水渠侧收缩系数",
+        "alpha_profile": "泄水渠动能修正系数",
+        "aeration_coefficient": "泄水渠掺气系数",
+        "sidewall_freeboard_m": "泄水渠侧墙安全超高(m)",
+        "pool_depth_factor": "泄水渠池深系数",
+        "outlet_rectification_factor": "泄水渠整流长度系数",
+    }
+    SPILLWAY_STEEP_CHUTE_ADVANCED_NUMERIC_KEYS = {
+        key for key in SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS
+        if key != "inlet_connection_type_label"
+    }
+
+    def is_spillway_steep_chute_value(value):
+        text = str(getattr(value, "value", value) or "").strip()
+        return text in {"充水渠", "泄水渠与陡坡", "泄水渠", "陡坡", "泄槽", "陡槽", "泄水渠及陡坡"}
 
 # 共享数据管理器
 try:
@@ -188,6 +229,25 @@ except ImportError:
 
     def normalize_section_type_name(section_type):
         return str(section_type or "").strip()
+
+_SPILLWAY_STEEP_CHUTE_DISPLAY_TYPES = {
+    "充水渠",
+    "泄水渠",
+    "陡坡",
+    "泄槽",
+    "陡槽",
+    "泄水渠及陡坡",
+    "泄水渠与陡坡",
+}
+
+
+def _resolve_spillway_steep_chute_display_structure_type(raw_value, fallback="") -> str:
+    """读取用户填写的泄水渠类结构名，导出显示用，不影响计算归一。"""
+    for value in (raw_value, fallback):
+        text = str(getattr(value, "value", value) or "").strip()
+        if text in _SPILLWAY_STEEP_CHUTE_DISPLAY_TYPES:
+            return text
+    return ""
 
 # 配置常量
 try:
@@ -261,7 +321,7 @@ NODE_ALL_HEADERS = [
     # 水力结果列 (27-31) — 对应Tkinter HYDRAULIC_RESULT_COLUMNS
     "水深h设计", "过水断面面积A", "湿周X", "水力半径R", "流速v设计",
     # 水头损失列 (32-40) — 对应Tkinter HEAD_LOSS_COLUMNS
-    "渐变段长度L", "渐变段水头损失", "弯道水头损失", "沿程水头损失",
+    "渐变段长度L", "渐变段水头损失", "弯道附加水头损失", "沿程水头损失",
     "预留水头损失", "过闸水头损失", "倒虹吸/有压管道水头损失",
     "总水头损失", "累计总水头损失",
     # 高程列 (41-43) — 对应Tkinter ELEVATION_COLUMNS
@@ -295,6 +355,19 @@ PRESSURE_PIPE_ROW_ID_ROLE_KEY = "_pressure_pipe_row_identity"
 PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY = "_pressure_pipe_window_override"
 PRESSURE_PIPE_NAMED_GROUP_RESULT_ROLE_KEY = "_pressure_pipe_named_group_result"
 PRESSURE_PIPE_LOSS_OVERRIDE_ROLE_KEY = "_pressure_pipe_loss_override_m"
+SPILLWAY_STEEP_CHUTE_ROLE_KEY = "_spillway_steep_chute"
+SPILLWAY_STEEP_CHUTE_ADVANCED_FIELD_ORDER = (
+    "inlet_weir_width",
+    "inlet_head",
+    "inlet_connection_type_label",
+    "weir_coefficient",
+    "contraction_coefficient",
+    "alpha_profile",
+    "aeration_coefficient",
+    "sidewall_freeboard_m",
+    "pool_depth_factor",
+    "outlet_rectification_factor",
+)
 GATE_HEAD_LOSS_USER_SET_ROLE_KEY = "_gate_head_loss_user_set"
 GATE_HEAD_LOSS_USER_SET_PARAM_KEY = "gate_head_loss_user_set"
 COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY = "_compound_trapezoid_params"
@@ -2769,6 +2842,8 @@ class WaterProfilePanel(QWidget):
             return False
         if text.startswith(("明渠-", "渡槽-", "隧洞-")):
             return True
+        if is_spillway_steep_chute_value(text):
+            return True
         return bool(normalize_culvert_family_type_name(text))
 
     @staticmethod
@@ -2789,6 +2864,13 @@ class WaterProfilePanel(QWidget):
             "暗涵-矩形": RECT_CULVERT_FAMILY_TEXT,
             "暗涵-圆拱直墙型": ARCH_CULVERT_FAMILY_TEXT,
             "退水闸": "退水闸",
+            "充水渠": "泄水渠与陡坡",
+            "泄水渠": "泄水渠与陡坡",
+            "泄水渠与陡坡": "泄水渠与陡坡",
+            "陡坡": "泄水渠与陡坡",
+            "泄槽": "泄水渠与陡坡",
+            "陡槽": "泄水渠与陡坡",
+            "泄水渠及陡坡": "泄水渠与陡坡",
         }
         if (
             not culvert_family_type
@@ -2813,6 +2895,8 @@ class WaterProfilePanel(QWidget):
             section_type = "隧洞-马蹄形Ⅱ型"
         elif "暗涵" in section_type or "暗渠" in section_type:
             section_type = normalize_culvert_family_type_name(section_type) or RECT_CULVERT_FAMILY_TEXT
+        elif is_spillway_steep_chute_value(section_type):
+            section_type = "泄水渠与陡坡"
         return section_type, culvert_family_type
 
     def _prepare_batch_import_results(self, results):
@@ -5255,6 +5339,11 @@ class WaterProfilePanel(QWidget):
         row = index.row()
         col = index.column()
         table.setCurrentCell(row, col)
+        if self._is_spillway_steep_chute_row(row):
+            menu = RoundMenu(parent=self)
+            menu.addAction(Action("编辑泄水渠与陡坡参数/结果", triggered=lambda: self._show_spillway_steep_chute_details(row)))
+            menu.exec(table.viewport().mapToGlobal(pos))
+            return
         if col != 32 or not self._is_transition_row(row):
             return
 
@@ -5276,6 +5365,220 @@ class WaterProfilePanel(QWidget):
                 )
             )
         menu.exec(table.viewport().mapToGlobal(pos))
+
+    def _is_spillway_steep_chute_row(self, row_idx: int) -> bool:
+        """判断表格行是否为泄水渠与陡坡。"""
+        table = getattr(self, "node_table", None)
+        if not table or row_idx < 0 or row_idx >= table.rowCount():
+            return False
+        item = table.item(row_idx, 2)
+        return bool(item and is_spillway_steep_chute_value(item.text()))
+
+    def _spillway_steep_chute_group_rows(self, row_idx: int):
+        """获取当前泄水渠与陡坡同名组在表3中的行号。"""
+        table = getattr(self, "node_table", None)
+        if not table or row_idx < 0 or row_idx >= table.rowCount():
+            return []
+        name_item = table.item(row_idx, 1)
+        target_name = str(name_item.text() if name_item else "").strip()
+        if not target_name:
+            return [row_idx]
+        rows = []
+        for row in range(table.rowCount()):
+            type_item = table.item(row, 2)
+            row_name_item = table.item(row, 1)
+            if not type_item or not is_spillway_steep_chute_value(type_item.text()):
+                continue
+            if str(row_name_item.text() if row_name_item else "").strip() == target_name:
+                rows.append(row)
+        return rows or [row_idx]
+
+    def _get_spillway_steep_chute_payload_for_row(self, row_idx: int) -> dict:
+        """读取表3某行保存的泄水渠与陡坡隐藏参数。"""
+        table = getattr(self, "node_table", None)
+        if table and 0 <= row_idx < table.rowCount():
+            first_item = table.item(row_idx, 0)
+            row_payload = first_item.data(Qt.UserRole) if first_item else None
+            if isinstance(row_payload, dict) and isinstance(row_payload.get(SPILLWAY_STEEP_CHUTE_ROLE_KEY), dict):
+                return copy.deepcopy(row_payload.get(SPILLWAY_STEEP_CHUTE_ROLE_KEY) or {})
+        nodes = getattr(self, "calculated_nodes", None) or []
+        if 0 <= row_idx < len(nodes):
+            payload = (getattr(nodes[row_idx], "section_params", {}) or {}).get(SPILLWAY_STEEP_CHUTE_PARAM_KEY, {})
+            if isinstance(payload, dict):
+                return copy.deepcopy(payload)
+        return {}
+
+    def _resolve_spillway_steep_chute_advanced_params(self, row_idx: int) -> dict:
+        """合并默认值、Excel 预填值和最近一次计算输入，供详情入口显示。"""
+        payload = self._get_spillway_steep_chute_payload_for_row(row_idx)
+        params = dict(SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS)
+        for container_key in ("input", "inputs", "advanced_params"):
+            container = payload.get(container_key)
+            if isinstance(container, dict):
+                for key in SPILLWAY_STEEP_CHUTE_ADVANCED_FIELD_ORDER:
+                    if key in container and container.get(key) not in (None, ""):
+                        params[key] = container.get(key)
+        return params
+
+    def _write_spillway_steep_chute_payload_to_row(self, row_idx: int, payload: dict):
+        """把泄水渠与陡坡隐藏参数写回表格行。"""
+        table = getattr(self, "node_table", None)
+        if not table or row_idx < 0 or row_idx >= table.rowCount():
+            return
+        first_item = table.item(row_idx, 0)
+        if first_item is None:
+            first_item = QTableWidgetItem("")
+            first_item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row_idx, 0, first_item)
+        row_payload = first_item.data(Qt.UserRole)
+        if not isinstance(row_payload, dict):
+            row_payload = {}
+        row_payload[SPILLWAY_STEEP_CHUTE_ROLE_KEY] = copy.deepcopy(payload)
+        first_item.setData(Qt.UserRole, row_payload)
+
+    def _apply_spillway_steep_chute_advanced_params(self, row_idx: int, advanced_params: dict, *, mark_dirty: bool = True):
+        """保存详情入口修改的泄水渠与陡坡专项参数。"""
+        rows = self._spillway_steep_chute_group_rows(row_idx)
+        for row in rows:
+            payload = self._get_spillway_steep_chute_payload_for_row(row)
+            payload["advanced_params"] = copy.deepcopy(advanced_params)
+            payload["params_dirty"] = True
+            self._write_spillway_steep_chute_payload_to_row(row, payload)
+            for nodes_attr in ("calculated_nodes", "nodes"):
+                nodes = getattr(self, nodes_attr, None)
+                if isinstance(nodes, list) and 0 <= row < len(nodes):
+                    node = nodes[row]
+                    node.section_params[SPILLWAY_STEEP_CHUTE_PARAM_KEY] = copy.deepcopy(payload)
+        if mark_dirty and not getattr(self, "_loading_project", False):
+            self.data_changed.emit()
+
+    @staticmethod
+    def _format_spillway_param_value(value) -> str:
+        """把专项参数值格式化为表单文本。"""
+        if value is None:
+            return ""
+        if isinstance(value, float):
+            return f"{value:.6g}"
+        return str(value)
+
+    def _collect_spillway_steep_chute_form_values(self, editors: dict):
+        """从详情表单读取并校验专项参数。"""
+        values = {}
+        for key in SPILLWAY_STEEP_CHUTE_ADVANCED_FIELD_ORDER:
+            editor = editors.get(key)
+            raw_text = str(editor.text() if editor else "").strip()
+            if not raw_text:
+                if key in SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS:
+                    values[key] = SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS[key]
+                continue
+            if key in SPILLWAY_STEEP_CHUTE_ADVANCED_NUMERIC_KEYS:
+                try:
+                    values[key] = float(raw_text)
+                except (TypeError, ValueError):
+                    label = SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS.get(key, key)
+                    fluent_info(self, "参数格式错误", f"{label} 需要填写数字。")
+                    return None
+            else:
+                values[key] = raw_text
+        return values
+
+    def _build_spillway_steep_chute_result_lines(self, row_idx: int, node, payload: dict):
+        """生成泄水渠与陡坡详情里的结果摘要。"""
+        if not isinstance(payload, dict) or not payload or not payload.get("result"):
+            return ["尚未计算。"]
+
+        input_payload = payload.get("input", {}) if isinstance(payload.get("input"), dict) else {}
+        result = payload.get("result", {}) if isinstance(payload.get("result"), dict) else {}
+        profile = result.get("profile", {}) if isinstance(result.get("profile"), dict) else {}
+        hydraulic = result.get("hydraulic", {}) if isinstance(result.get("hydraulic"), dict) else {}
+        display_point = payload.get("display_point", {}) if isinstance(payload.get("display_point"), dict) else {}
+        risks = payload.get("risks", []) if isinstance(payload.get("risks"), list) else []
+        profile_points = payload.get("profile_points", []) if isinstance(payload.get("profile_points"), list) else []
+
+        lines = []
+        if payload.get("params_dirty"):
+            lines.append("参数已修改，请重新执行表3水面线计算后查看最新结果。")
+            lines.append("")
+        lines.extend([
+            f"建筑物：{getattr(node, 'name', '') or SPILLWAY_STEEP_CHUTE_TEXT}",
+            f"当前行角色：{payload.get('role', '-')}",
+            f"计算长度：{float(payload.get('group_length_m', 0.0) or 0.0):.3f} m",
+            f"入口水位：{float(payload.get('inlet_water_level_m', 0.0) or 0.0):.3f} m",
+            f"出口水位：{float(payload.get('outlet_water_level_m', 0.0) or 0.0):.3f} m",
+            f"总水位降：{float(payload.get('head_loss_total', 0.0) or 0.0):.4f} m",
+            f"设计流量：{float(input_payload.get('Q', 0.0) or 0.0):.3f} m³/s",
+            f"底宽：{float(input_payload.get('b', input_payload.get('B', 0.0)) or 0.0):.3f} m",
+            f"边坡系数：{float(input_payload.get('m', 0.0) or 0.0):.3f}",
+            f"糙率：{float(input_payload.get('n', 0.0) or 0.0):.4f}",
+            f"底坡倒数：{float(input_payload.get('slope_inv', 0.0) or 0.0):.3f}",
+            f"水面线型：{hydraulic.get('water_profile_name') or hydraulic.get('water_profile_type') or profile.get('type') or '-'}",
+            f"末端水深：{float(profile.get('end_depth_m', display_point.get('depth_m', getattr(node, 'water_depth', 0.0))) or 0.0):.3f} m",
+            f"当前行流速：{float(display_point.get('velocity_ms', getattr(node, 'velocity', 0.0)) or 0.0):.3f} m/s",
+            f"沿程采样点：{len(profile_points)} 个",
+        ])
+        if risks:
+            lines.append("")
+            lines.append("风险提示：")
+            lines.extend(f"- {item}" for item in risks)
+        return lines
+
+    def _show_spillway_steep_chute_details(self, row_idx: int):
+        """编辑泄水渠与陡坡表3专项参数，并显示最近一次计算结果。"""
+        nodes = getattr(self, "calculated_nodes", None) or self._build_nodes_from_table()
+        if not nodes or row_idx < 0 or row_idx >= len(nodes):
+            fluent_info(self, "提示", "该行暂未形成可编辑的泄水渠与陡坡数据")
+            return
+        node = nodes[row_idx]
+        payload = (getattr(node, "section_params", {}) or {}).get(SPILLWAY_STEEP_CHUTE_PARAM_KEY, {}) or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        table_payload = self._get_spillway_steep_chute_payload_for_row(row_idx)
+        if table_payload:
+            payload.update(table_payload)
+        advanced_params = self._resolve_spillway_steep_chute_advanced_params(row_idx)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("泄水渠与陡坡参数/结果")
+        dialog.resize(720, 560)
+        layout = QVBoxLayout(dialog)
+
+        tabs = QTabWidget(dialog)
+        param_page = QWidget(tabs)
+        param_layout = QFormLayout(param_page)
+        editors = {}
+        for key in SPILLWAY_STEEP_CHUTE_ADVANCED_FIELD_ORDER:
+            label = SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS.get(key, key)
+            editor = LineEdit(param_page)
+            editor.setText(self._format_spillway_param_value(advanced_params.get(key, "")))
+            if key == "weir_coefficient":
+                editor.setPlaceholderText("仅入口连接形式为“手动输入流量系数”时填写")
+            editors[key] = editor
+            param_layout.addRow(label, editor)
+        tabs.addTab(param_page, "参数")
+
+        result_page = QWidget(tabs)
+        result_layout = QVBoxLayout(result_page)
+        view = QTextEdit(result_page)
+        view.setReadOnly(True)
+        view.setPlainText("\n".join(self._build_spillway_steep_chute_result_lines(row_idx, node, payload)))
+        result_layout.addWidget(view)
+        tabs.addTab(result_page, "结果")
+        layout.addWidget(tabs)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dialog)
+        if buttons.button(QDialogButtonBox.Ok):
+            buttons.button(QDialogButtonBox.Ok).setText("保存参数")
+        if buttons.button(QDialogButtonBox.Cancel):
+            buttons.button(QDialogButtonBox.Cancel).setText("关闭")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() == QDialog.Accepted:
+            new_params = self._collect_spillway_steep_chute_form_values(editors)
+            if new_params is None:
+                return
+            self._apply_spillway_steep_chute_advanced_params(row_idx, new_params, mark_dirty=True)
+            fluent_info(self, "已保存", "泄水渠与陡坡参数已写回同名组，重新计算表3后生效。")
 
     @staticmethod
     def _get_transition_length_update_signature(node):
@@ -5648,7 +5951,7 @@ class WaterProfilePanel(QWidget):
 
         if col_name == "渐变段长度L":
             self._show_transition_length_details(row, node, nodes)
-        elif col_name == "弯道水头损失":
+        elif col_name in ("弯道附加水头损失", "弯道水头损失"):
             self._show_bend_calc_details(row, node)
         elif col_name == "沿程水头损失":
             self._show_friction_calc_details(row, node)
@@ -5924,7 +6227,7 @@ class WaterProfilePanel(QWidget):
         return repaired
 
     def _repair_bend_loss_details_for_row(self, row_idx, source_nodes=None):
-        """按当前节点上下文补建某一行的弯道水头损失详情。"""
+        """按当前节点上下文补建某一行的弯道附加水头损失详情。"""
         nodes = source_nodes if source_nodes is not None else getattr(self, 'calculated_nodes', None)
         details = None
         if nodes and 0 <= row_idx < len(nodes):
@@ -5940,8 +6243,19 @@ class WaterProfilePanel(QWidget):
         if details:
             return details
 
+        prev_node = None
+        for prev_idx in range(row_idx - 1, -1, -1):
+            candidate = nodes[prev_idx]
+            if not getattr(candidate, 'is_transition', False):
+                prev_node = candidate
+                break
+
         existing_loss = float(getattr(node, 'head_loss_bend', 0.0) or 0.0)
-        if existing_loss <= 0 and float(getattr(node, 'arc_length', 0.0) or 0.0) <= 0:
+        has_adjacent_arc = (
+            float(getattr(node, 'arc_length', 0.0) or 0.0) > 0
+            or float(getattr(prev_node, 'arc_length', 0.0) or 0.0) > 0
+        )
+        if existing_loss <= 0 and not has_adjacent_arc:
             return details
 
         try:
@@ -5952,9 +6266,22 @@ class WaterProfilePanel(QWidget):
         try:
             from core.hydraulic_calc import HydraulicCalculator
             hyd_calc = HydraulicCalculator(settings)
-            hyd_calc.calculate_bend_loss(node)
+            structure_type = getattr(node, 'structure_type', None)
+            structure_value = structure_type.value if structure_type else ""
+            is_pressure_bend = (
+                structure_value == StructureType.INVERTED_SIPHON.value
+                or StructureType.is_pressure_pipe_like(structure_type)
+                or getattr(node, 'is_pressure_pipe', False)
+            )
+            if is_pressure_bend:
+                hyd_calc.calculate_bend_loss(node)
+            else:
+                node.head_loss_bend = hyd_calc.calculate_open_channel_interval_bend_loss(
+                    prev_node,
+                    node,
+                )
             details = getattr(node, 'bend_calc_details', None)
-            if details and existing_loss > 0:
+            if details and is_pressure_bend and existing_loss > 0:
                 node.head_loss_bend = existing_loss
                 details['hw'] = existing_loss
             return details
@@ -5968,7 +6295,7 @@ class WaterProfilePanel(QWidget):
             if repaired:
                 details = repaired
         if not details:
-            fluent_info(self, "提示", "该行没有弯道水头损失计算数据")
+            fluent_info(self, "提示", "该行没有弯道附加水头损失计算数据")
             return
         from app_渠系计算前端.water_profile.formula_dialog import show_bend_loss_dialog
         show_bend_loss_dialog(self, node.name or f"行{row_idx+1}", details)
@@ -7838,6 +8165,19 @@ class WaterProfilePanel(QWidget):
                     payload = {}
                 # use_increase 是自由水面导出链路的重要运行态字段，不能只在有压流参数存在时才落盘。
                 payload[USE_INCREASE_ROLE_KEY] = use_increase
+                spillway_payload = raw_result.get(SPILLWAY_STEEP_CHUTE_PARAM_KEY, {})
+                if is_spillway_steep_chute_value(section_type):
+                    spillway_payload = copy.deepcopy(spillway_payload) if isinstance(spillway_payload, dict) else {}
+                    display_structure_type = _resolve_spillway_steep_chute_display_structure_type(
+                        raw_result.get("display_structure_type")
+                        or raw_result.get("input_structure_type")
+                        or getattr(sr, "display_structure_type", ""),
+                        section_type,
+                    )
+                    if display_structure_type:
+                        spillway_payload["display_structure_type"] = display_structure_type
+                    if spillway_payload:
+                        payload[SPILLWAY_STEEP_CHUTE_ROLE_KEY] = spillway_payload
                 if culvert_family_type:
                     payload[CULVERT_FAMILY_TYPE_KEY] = culvert_family_type
                     theta_deg = float(raw_result.get("theta_deg", 0) or 0)
@@ -8399,9 +8739,15 @@ class WaterProfilePanel(QWidget):
             # 结构形式 (col 2)
             raw_struct_str = normalize_section_type_name(str(data[2]).strip())
             culvert_family_type = normalize_culvert_family_type_name(raw_struct_str)
+            spillway_display_structure_type = _resolve_spillway_steep_chute_display_structure_type(
+                raw_struct_str,
+                "",
+            )
             struct_str = raw_struct_str
             if culvert_family_type or struct_str in {"暗渠", "矩形暗渠", "矩形暗涵"}:
                 struct_str = "矩形暗涵"
+            if is_spillway_steep_chute_value(struct_str):
+                struct_str = "泄水渠与陡坡"
             if struct_str:
                 try:
                     node.structure_type = StructureType.from_string(struct_str)
@@ -8435,6 +8781,7 @@ class WaterProfilePanel(QWidget):
             tunnel_arch_used_manual_H_straight = None
             pressure_pipe_row_identity = ""
             compound_trapezoid_params = {}
+            spillway_steep_chute_payload = {}
             # 恢复自动插入补段标记（通过UserRole存储）
             _first_item = table.item(r, 0)
             if _first_item:
@@ -8554,6 +8901,14 @@ class WaterProfilePanel(QWidget):
                     compound_trapezoid_params = normalize_compound_trapezoid_params(
                         _ur.get(COMPOUND_TRAPEZOID_PARAMS_ROLE_KEY, {})
                     )
+                    if isinstance(_ur.get(SPILLWAY_STEEP_CHUTE_ROLE_KEY), dict):
+                        spillway_steep_chute_payload = copy.deepcopy(_ur.get(SPILLWAY_STEEP_CHUTE_ROLE_KEY) or {})
+                        stored_display_structure_type = _resolve_spillway_steep_chute_display_structure_type(
+                            spillway_steep_chute_payload.get("display_structure_type", ""),
+                            "",
+                        )
+                        if stored_display_structure_type:
+                            spillway_display_structure_type = stored_display_structure_type
                     arch_culvert_theta_deg = self._sf(_ur.get(ARCH_CULVERT_THETA_ROLE_KEY, 0), 0.0)
                     if ARCH_CULVERT_H_STRAIGHT_ROLE_KEY in _ur:
                         arch_culvert_H_straight = self._sf(_ur.get(ARCH_CULVERT_H_STRAIGHT_ROLE_KEY, 0), 0.0)
@@ -8737,6 +9092,14 @@ class WaterProfilePanel(QWidget):
                 node.section_params['in_out_raw'] = in_out_raw
             if local_loss_ratio is not None and local_loss_ratio > 0:
                 node.section_params['local_loss_ratio'] = local_loss_ratio
+            if is_spillway_steep_chute_value(struct_str) and spillway_display_structure_type:
+                if not isinstance(spillway_steep_chute_payload, dict):
+                    spillway_steep_chute_payload = {}
+                spillway_steep_chute_payload["display_structure_type"] = spillway_display_structure_type
+            if spillway_steep_chute_payload:
+                if spillway_display_structure_type:
+                    spillway_steep_chute_payload["display_structure_type"] = spillway_display_structure_type
+                node.section_params[SPILLWAY_STEEP_CHUTE_PARAM_KEY] = spillway_steep_chute_payload
             node.roughness = n_val
             if slope_inv > 0:
                 node.slope_i = 1.0 / slope_inv
@@ -9246,13 +9609,15 @@ class WaterProfilePanel(QWidget):
                 # 自动插入补段绿色
                 elif _is_auto_ch:
                     item.setForeground(QColor("#2E7D32"))
-                    item.setToolTip("自动插入的补段，用于计算两个建筑物之间的沿程及弯道水头损失。\n几何列留空因为该行不是真实IP转折点。")
+                    item.setToolTip("自动插入的补段，用于计算两个建筑物之间的沿程摩阻及弯道附加水头损失。\n几何列留空因为该行不是真实IP转折点。")
                 # 倒虹吸蓝色
                 elif getattr(node, 'is_inverted_siphon', False):
                     item.setForeground(QColor("#1565C0"))
                 # 分水闸橙色
                 elif getattr(node, 'is_diversion_gate', False):
                     item.setForeground(QColor("#E65100"))
+                elif is_spillway_steep_chute_value(_st_str):
+                    item.setForeground(QColor("#2E7D32"))
                 self._apply_curve_check_item_style(item, c)
                 self.node_table.setItem(r, c, item)
 
@@ -9355,6 +9720,11 @@ class WaterProfilePanel(QWidget):
                     payload[PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY] = copy.deepcopy(override)
                 else:
                     payload.pop(PRESSURE_PIPE_WINDOW_OVERRIDE_ROLE_KEY, None)
+                spillway_payload = _sp.get(SPILLWAY_STEEP_CHUTE_PARAM_KEY, {})
+                if isinstance(spillway_payload, dict) and spillway_payload:
+                    payload[SPILLWAY_STEEP_CHUTE_ROLE_KEY] = copy.deepcopy(spillway_payload)
+                else:
+                    payload.pop(SPILLWAY_STEEP_CHUTE_ROLE_KEY, None)
                 compound_trapezoid_params = {}
                 if _st_str == "明渠-复式梯形":
                     compound_trapezoid_params = normalize_compound_trapezoid_params(_sp)
@@ -10542,7 +10912,7 @@ class WaterProfilePanel(QWidget):
                     item.setForeground(QColor("#9E9E9E"))
                 elif _is_auto_ch:
                     item.setForeground(QColor("#2E7D32"))
-                    item.setToolTip("自动插入的明渠连接段，用于计算两个建筑物之间的沿程及弯道水头损失。\n几何列留空因为该行不是真实IP转折点。")
+                    item.setToolTip("自动插入的明渠连接段，用于计算两个建筑物之间的沿程摩阻及弯道附加水头损失。\n几何列留空因为该行不是真实IP转折点。")
                 self.node_table.setItem(r, c, item)
             first_item = self.node_table.item(r, 0)
             if first_item:
@@ -13212,7 +13582,7 @@ class WaterProfilePanel(QWidget):
 
     @staticmethod
     def _build_pressure_pipe_effective_length_context(nodes, upstream_idx: int, target_idx: int) -> dict:
-        """复用表3现有口径，计算匿名段有效长度。"""
+        """复用表3现有口径，计算匿名段沿程摩阻长度。"""
         if upstream_idx < 0 or target_idx < 0 or upstream_idx >= len(nodes) or target_idx >= len(nodes):
             return {
                 "L_mc": 0.0,
@@ -13233,7 +13603,8 @@ class WaterProfilePanel(QWidget):
         )
         arc1_half = float(getattr(upstream_node, "arc_length", 0.0) or 0.0) / 2.0
         arc2_half = float(getattr(target_node, "arc_length", 0.0) or 0.0) / 2.0
-        effective_length = max(0.0, L_mc - transition_length - arc1_half - arc2_half)
+        # MC—MC 里程差中的弧段属于管道实长；弯头损失作为附加局部损失另计。
+        effective_length = max(0.0, L_mc - transition_length)
         return {
             "L_mc": L_mc,
             "transition_length": transition_length,
@@ -13935,7 +14306,8 @@ class WaterProfilePanel(QWidget):
                 **(friction_details or {}),
                 "method": "pressure_pipe_fmb",
                 "length_source": "longitudinal_profile" if profile_length > 0 else "effective_length",
-                "L_effective": float(length_ctx.get("effective_length", 0.0) or 0.0),
+                "L_effective": total_length,
+                "L_plan_effective": float(length_ctx.get("effective_length", 0.0) or 0.0),
                 "L_mc": float(length_ctx.get("L_mc", 0.0) or 0.0),
                 "L_transition": float(length_ctx.get("transition_length", 0.0) or 0.0),
                 "arc1_half": float(length_ctx.get("arc1_half", 0.0) or 0.0),

@@ -17,6 +17,7 @@ from calc_渠系计算算法内核.明渠设计 import (
 G = 9.81
 SLOPE_TOLERANCE = 0.005
 DEFAULT_DEPTH_STEP = 0.02
+DEFAULT_PROFILE_ALPHA = 1.1
 
 
 class ChuteSectionType(str, Enum):
@@ -51,6 +52,15 @@ class ChuteStartControlMode(str, Enum):
     MODEL_TEST = "model_test"
 
 
+class InletConnectionType(str, Enum):
+    """跌口或陡坡入口连接形式，用于按规范确定流量系数。"""
+
+    WARPED_SURFACE = "扭曲面连接"
+    SPLAY_WALL = "八字墙连接"
+    DIAPHRAGM_WALL = "横隔墙连接"
+    MANUAL_COEFFICIENT = "手动输入流量系数"
+
+
 @dataclass
 class ChuteInputData:
     """保存一次泄水渠与陡坡计算输入，字段保持 JSON 友好。"""
@@ -71,11 +81,13 @@ class ChuteInputData:
     profile_mode: str = ChuteProfileCalcMode.END_DEPTH_BY_LENGTH.value
     inlet_weir_width: float | None = None
     inlet_head: float | None = None
-    weir_coefficient: float = 0.42
+    inlet_connection_type: str | None = InletConnectionType.WARPED_SURFACE.value
+    weir_coefficient: float | None = None
     contraction_coefficient: float = 1.0
     upstream_straight_length: float | None = None
     downstream_straight_length: float | None = None
     critical_alpha: float = 1.0
+    alpha_profile: float = DEFAULT_PROFILE_ALPHA
 
 
 @dataclass
@@ -136,6 +148,24 @@ def _first_float(data: Dict[str, Any], keys: Tuple[str, ...], default: float = 0
             return _as_float(data, key, default)
     return default
 
+
+def _first_optional_float(data: Dict[str, Any], keys: Tuple[str, ...]) -> float | None:
+    """按候选字段顺序读取第一个有效浮点数；缺失时返回 None。"""
+    for key in keys:
+        if key in data and data.get(key) not in (None, ""):
+            try:
+                return float(data.get(key))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _profile_energy_alpha(data: Dict[str, Any]) -> float:
+    """读取水面线动能修正系数，兼容旧字段名。"""
+    alpha = _first_float(data, ("alpha_profile", "profile_energy_alpha", "alpha_e"), DEFAULT_PROFILE_ALPHA)
+    return alpha if alpha > 0 else DEFAULT_PROFILE_ALPHA
+
+
 def _normalize_section_type(section_type: Any) -> str:
     """统一断面类型名称。"""
     if isinstance(section_type, ChuteSectionType):
@@ -145,11 +175,39 @@ def _normalize_section_type(section_type: Any) -> str:
         return ChuteSectionType.RECTANGULAR.value
     return ChuteSectionType.TRAPEZOIDAL.value
 
+
+def _normalize_inlet_connection_type(value: Any) -> str:
+    """统一入口连接形式名称，兼容旧英文枚举和值。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    mapping = {
+        "warped_surface": InletConnectionType.WARPED_SURFACE.value,
+        "warped": InletConnectionType.WARPED_SURFACE.value,
+        "扭曲面": InletConnectionType.WARPED_SURFACE.value,
+        "扭曲面连接": InletConnectionType.WARPED_SURFACE.value,
+        "splay_wall": InletConnectionType.SPLAY_WALL.value,
+        "splayed_wall": InletConnectionType.SPLAY_WALL.value,
+        "wing_wall": InletConnectionType.SPLAY_WALL.value,
+        "八字墙": InletConnectionType.SPLAY_WALL.value,
+        "八字墙连接": InletConnectionType.SPLAY_WALL.value,
+        "diaphragm_wall": InletConnectionType.DIAPHRAGM_WALL.value,
+        "cross_wall": InletConnectionType.DIAPHRAGM_WALL.value,
+        "横隔墙": InletConnectionType.DIAPHRAGM_WALL.value,
+        "横隔墙连接": InletConnectionType.DIAPHRAGM_WALL.value,
+        "manual": InletConnectionType.MANUAL_COEFFICIENT.value,
+        "manual_coefficient": InletConnectionType.MANUAL_COEFFICIENT.value,
+        "人工流量系数": InletConnectionType.MANUAL_COEFFICIENT.value,
+        "手动输入流量系数": InletConnectionType.MANUAL_COEFFICIENT.value,
+    }
+    return mapping.get(lowered, mapping.get(text, text))
+
 def _top_width(b: float, h: float, m: float) -> float:
     """计算矩形或梯形断面的水面宽。"""
     return b + 2.0 * m * max(h, 0.0)
 
-def _section_metrics(Q: float, b: float, h: float, m: float, n: float) -> Dict[str, float]:
+def _section_metrics(Q: float, b: float, h: float, m: float, n: float, alpha_profile: float = 1.0) -> Dict[str, float]:
     """计算给定水深下的断面水力要素。"""
     area = calculate_area(b, h, m)
     perimeter = calculate_wetted_perimeter(b, h, m)
@@ -158,7 +216,7 @@ def _section_metrics(Q: float, b: float, h: float, m: float, n: float) -> Dict[s
     velocity = Q / area if area > 0 else 0.0
     hydraulic_depth = area / top_width if top_width > 0 else 0.0
     froude = velocity / math.sqrt(G * hydraulic_depth) if hydraulic_depth > 0 else 0.0
-    specific_energy = h + velocity * velocity / (2.0 * G)
+    specific_energy = h + alpha_profile * velocity * velocity / (2.0 * G)
     hydraulic_slope = _hydraulic_slope(Q, area, radius, n)
     return {
         "depth_m": h,
@@ -420,7 +478,13 @@ def _build_error_result(errors: List[str]) -> Dict[str, Any]:
         "hydraulic": {},
         "profile": {"available": False, "status": "unavailable_invalid_input", "points": []},
         "profile_points": [],
-        "inlet_weir": {"passed": None, "capacity_m3s": None, "capacity_ratio": None},
+        "inlet_weir": {
+            "passed": None,
+            "capacity_m3s": None,
+            "capacity_ratio": None,
+            "coefficient": None,
+            "contraction_coefficient": None,
+        },
         "discharge_hint": _discharge_hint(0.0),
         "code_checks": [],
         "checks": [],
@@ -447,11 +511,12 @@ def _build_hydraulic_summary(
     critical_depth: float,
     critical_slope: float,
     start_depth: float,
+    alpha_profile: float,
 ) -> Dict[str, Any]:
     """汇总基础水力计算结果。"""
-    normal_metrics = _section_metrics(Q, b, normal_depth, m, n)
-    critical_metrics = _section_metrics(Q, b, critical_depth, m, n)
-    start_metrics = _section_metrics(Q, b, start_depth, m, n)
+    normal_metrics = _section_metrics(Q, b, normal_depth, m, n, alpha_profile)
+    critical_metrics = _section_metrics(Q, b, critical_depth, m, n, alpha_profile)
+    start_metrics = _section_metrics(Q, b, start_depth, m, n, alpha_profile)
     return {
         "section_type": section_type,
         "normal_depth_m": round(normal_depth, 6),
@@ -465,13 +530,14 @@ def _build_hydraulic_summary(
         "specific_energy_start_m": round(start_metrics["specific_energy_m"], 6),
         "hydraulic_slope_at_normal": round(normal_metrics["hydraulic_slope"], 8),
         "water_top_width_at_critical_m": round(critical_metrics["water_top_width_m"], 6),
+        "water_profile_energy_alpha": round(alpha_profile, 6),
     }
 
 
-def _segment_length(Q: float, b: float, m: float, n: float, i: float, h1: float, h2: float) -> Tuple[float, str]:
+def _segment_length(Q: float, b: float, m: float, n: float, i: float, h1: float, h2: float, alpha_profile: float) -> Tuple[float, str]:
     """按固定水深步长反推相邻两水深间的距离。"""
-    metrics_1 = _section_metrics(Q, b, h1, m, n)
-    metrics_2 = _section_metrics(Q, b, h2, m, n)
+    metrics_1 = _section_metrics(Q, b, h1, m, n, alpha_profile)
+    metrics_2 = _section_metrics(Q, b, h2, m, n, alpha_profile)
     energy_diff = metrics_2["specific_energy_m"] - metrics_1["specific_energy_m"]
     avg_j = (metrics_1["hydraulic_slope"] + metrics_2["hydraulic_slope"]) / 2.0
     denominator = i - avg_j
@@ -493,9 +559,10 @@ def _append_profile_point(
     depth: float,
     start_bed_elevation: float = 0.0,
     start_station: float = 0.0,
+    alpha_profile: float = DEFAULT_PROFILE_ALPHA,
 ) -> None:
     """追加一个水面线计算点。"""
-    metrics = _section_metrics(Q, b, depth, m, n)
+    metrics = _section_metrics(Q, b, depth, m, n, alpha_profile)
     bed_elevation = start_bed_elevation - i * distance
     point = ChuteProfilePoint(
         distance_m=round(distance, 6),
@@ -542,6 +609,7 @@ def _curve_to_depth(
     depth_step: float,
     start_bed_elevation: float,
     start_station: float,
+    alpha_profile: float,
 ) -> Dict[str, Any]:
     """计算从起点水深到目标水深的完整距离曲线。"""
     if start_depth <= end_depth:
@@ -557,10 +625,10 @@ def _curve_to_depth(
         }
     points: List[Dict[str, float]] = []
     distance = 0.0
-    _append_profile_point(points, distance, Q, b, m, n, i, start_depth, start_bed_elevation, start_station)
+    _append_profile_point(points, distance, Q, b, m, n, i, start_depth, start_bed_elevation, start_station, alpha_profile)
     depths = _depth_steps(start_depth, end_depth, depth_step)
     for h1, h2 in zip(depths, depths[1:]):
-        ds, status = _segment_length(Q, b, m, n, i, h1, h2)
+        ds, status = _segment_length(Q, b, m, n, i, h1, h2, alpha_profile)
         if status:
             return {
                 "available": False,
@@ -570,7 +638,7 @@ def _curve_to_depth(
                 "end_depth_m": round(h1, 6),
             }
         distance += ds
-        _append_profile_point(points, distance, Q, b, m, n, i, h2, start_bed_elevation, start_station)
+        _append_profile_point(points, distance, Q, b, m, n, i, h2, start_bed_elevation, start_station, alpha_profile)
     return {
         "available": True,
         "status": "ok",
@@ -593,6 +661,7 @@ def _end_depth_by_length(
     depth_step: float,
     start_bed_elevation: float,
     start_station: float,
+    alpha_profile: float,
 ) -> Dict[str, Any]:
     """已知起点水深和长度时计算末端水深。"""
     if length <= 0:
@@ -610,16 +679,16 @@ def _end_depth_by_length(
         }
     points: List[Dict[str, float]] = []
     distance = 0.0
-    _append_profile_point(points, distance, Q, b, m, n, i, start_depth, start_bed_elevation, start_station)
+    _append_profile_point(points, distance, Q, b, m, n, i, start_depth, start_bed_elevation, start_station, alpha_profile)
     depths = _depth_steps(start_depth, normal_depth, depth_step)
     for h1, h2 in zip(depths, depths[1:]):
-        ds, status = _segment_length(Q, b, m, n, i, h1, h2)
+        ds, status = _segment_length(Q, b, m, n, i, h1, h2, alpha_profile)
         if status:
             return {"available": False, "status": status, "points": points}
         if distance + ds >= length:
             ratio = (length - distance) / ds if ds > 0 else 0.0
             end_depth = h1 + (h2 - h1) * ratio
-            _append_profile_point(points, length, Q, b, m, n, i, end_depth, start_bed_elevation, start_station)
+            _append_profile_point(points, length, Q, b, m, n, i, end_depth, start_bed_elevation, start_station, alpha_profile)
             return {
                 "available": True,
                 "status": "ok",
@@ -629,7 +698,7 @@ def _end_depth_by_length(
                 "end_reason": "reached_length",
             }
         distance += ds
-        _append_profile_point(points, distance, Q, b, m, n, i, h2, start_bed_elevation, start_station)
+        _append_profile_point(points, distance, Q, b, m, n, i, h2, start_bed_elevation, start_station, alpha_profile)
     return {
         "available": True,
         "status": "ok",
@@ -666,6 +735,7 @@ def _profile_result(
             "water_profile_name": profile_type_info["name"],
             "water_profile_message": profile_type_info["message"],
             "start_control": start_control,
+            "water_profile_energy_alpha": _profile_energy_alpha(data),
         }
 
     mode = str(data.get("profile_mode", ChuteProfileCalcMode.END_DEPTH_BY_LENGTH.value)).strip().upper()
@@ -676,21 +746,23 @@ def _profile_result(
     min_target_depth = max(normal_depth, 0.001)
     start_bed_elevation = _first_float(data, ("start_bed_elevation", "start_z", "bed_elevation_start"), 0.0)
     start_station = _first_float(data, ("start_station", "station_start"), 0.0)
+    alpha_profile = _profile_energy_alpha(data)
 
     if mode == ChuteProfileCalcMode.LENGTH_BY_TWO_DEPTHS.value:
         end_depth = _first_float(data, ("end_depth", "target_depth", "h_end"), normal_depth)
         end_depth = max(end_depth, min_target_depth)
-        result = _curve_to_depth(Q, b, m, n, i, start_depth, end_depth, depth_step, start_bed_elevation, start_station)
+        result = _curve_to_depth(Q, b, m, n, i, start_depth, end_depth, depth_step, start_bed_elevation, start_station, alpha_profile)
         result["mode"] = mode
         result["water_profile_type"] = profile_type_info["type"]
         result["profile_type"] = profile_type_info["type"]
         result["water_profile_name"] = profile_type_info["name"]
         result["water_profile_message"] = profile_type_info["message"]
         result["start_control"] = start_control
+        result["water_profile_energy_alpha"] = alpha_profile
         return result
 
     if mode == ChuteProfileCalcMode.FULL_CURVE_TO_NORMAL.value:
-        result = _curve_to_depth(Q, b, m, n, i, start_depth, min_target_depth, depth_step, start_bed_elevation, start_station)
+        result = _curve_to_depth(Q, b, m, n, i, start_depth, min_target_depth, depth_step, start_bed_elevation, start_station, alpha_profile)
         result["mode"] = mode
         if result.get("available"):
             result["end_reason"] = "reached_normal_depth"
@@ -699,39 +771,109 @@ def _profile_result(
         result["water_profile_name"] = profile_type_info["name"]
         result["water_profile_message"] = profile_type_info["message"]
         result["start_control"] = start_control
+        result["water_profile_energy_alpha"] = alpha_profile
         return result
 
-    result = _end_depth_by_length(Q, b, m, n, i, start_depth, normal_depth, params["L"], depth_step, start_bed_elevation, start_station)
+    result = _end_depth_by_length(Q, b, m, n, i, start_depth, normal_depth, params["L"], depth_step, start_bed_elevation, start_station, alpha_profile)
     result["mode"] = ChuteProfileCalcMode.END_DEPTH_BY_LENGTH.value
     result["water_profile_type"] = profile_type_info["type"]
     result["profile_type"] = profile_type_info["type"]
     result["water_profile_name"] = profile_type_info["name"]
     result["water_profile_message"] = profile_type_info["message"]
     result["start_control"] = start_control
+    result["water_profile_energy_alpha"] = alpha_profile
     return result
 
 
+def _inlet_coefficient(data: Dict[str, Any], width: float, head: float) -> Dict[str, Any]:
+    """根据入口连接形式或手动输入确定跌口流量系数。"""
+    connection = _normalize_inlet_connection_type(
+        data.get("inlet_connection_type")
+        or data.get("inlet_connection_type_label")
+        or data.get("inlet_connection")
+        or data.get("connection_type")
+    )
+    manual_mu = _first_optional_float(data, ("weir_coefficient", "inlet_discharge_coefficient", "mu"))
+    if connection == InletConnectionType.MANUAL_COEFFICIENT.value or (not connection and manual_mu is not None):
+        return {
+            "connection_type": InletConnectionType.MANUAL_COEFFICIENT.value,
+            "coefficient": manual_mu,
+            "coefficient_source": "用户手动输入",
+            "coefficient_formula": "手动输入",
+        }
+    if connection == InletConnectionType.WARPED_SURFACE.value:
+        return {
+            "connection_type": connection,
+            "coefficient": 0.474 - 0.018 * width / head,
+            "coefficient_source": "GB 50288-2018 附录 N",
+            "coefficient_formula": "0.474-0.018b_c/H_0",
+        }
+    if connection == InletConnectionType.SPLAY_WALL.value:
+        return {
+            "connection_type": connection,
+            "coefficient": 0.470 - 0.017 * width / head,
+            "coefficient_source": "GB 50288-2018 附录 N",
+            "coefficient_formula": "0.470-0.017b_c/H_0",
+        }
+    if connection == InletConnectionType.DIAPHRAGM_WALL.value:
+        return {
+            "connection_type": connection,
+            "coefficient": 0.402 - 0.008 * width / head,
+            "coefficient_source": "GB 50288-2018 附录 N",
+            "coefficient_formula": "0.402-0.008b_c/H_0",
+        }
+    return {
+        "connection_type": connection,
+        "coefficient": None,
+        "coefficient_source": "",
+        "coefficient_formula": "",
+    }
+
+
 def _inlet_weir(data: Dict[str, Any], Q: float, b: float) -> Dict[str, Any]:
-    """按宽顶堰公式计算跌口或入口过流能力。"""
+    """按 GB 50288-2018 附录 N 的宽顶堰公式计算入口过流能力。"""
     width = _first_float(data, ("inlet_weir_width", "weir_width", "notch_width", "bc"), b)
     head = _first_float(data, ("inlet_head", "H0", "upstream_weir_depth"), 0.0)
-    mu = _first_float(data, ("weir_coefficient", "inlet_discharge_coefficient", "mu"), 0.42)
     epsilon = _first_float(data, ("contraction_coefficient", "inlet_contraction_coefficient", "epsilon"), 1.0)
-    if width <= 0 or head <= 0 or mu <= 0 or epsilon <= 0 or Q <= 0:
-        return {
-            "passed": None,
-            "capacity_m3s": None,
-            "capacity_ratio": None,
-            "message": "未提供完整入口宽顶堰参数，暂不校核过流能力。",
-        }
+    base = {
+        "passed": None,
+        "capacity_m3s": None,
+        "capacity_ratio": None,
+        "width_m": width,
+        "head_m": head,
+        "head_source": "用户直接输入堰上总水头 H0",
+        "head_note": "本版本不自动由堰前水深和流速水头推导 H0。",
+        "contraction_coefficient": epsilon,
+        "supported_scope": "当前支持矩形跌口或等底宽陡坡入口校核",
+        "connection_type": "",
+        "coefficient": None,
+        "coefficient_source": "",
+        "coefficient_formula": "",
+    }
+    if width <= 0 or head <= 0 or epsilon <= 0 or Q <= 0:
+        base["message"] = "未提供完整入口宽顶堰参数，暂不校核过流能力。"
+        return base
+    coefficient = _inlet_coefficient(data, width, head)
+    base.update(coefficient)
+    mu = coefficient.get("coefficient")
+    if mu is None:
+        base["message"] = "入口流量系数缺失，暂不校核过流能力。"
+        return base
+    if mu <= 0:
+        base["message"] = "入口流量系数计算值无效，暂不校核过流能力。"
+        return base
     capacity = epsilon * mu * width * math.sqrt(2.0 * G) * head ** 1.5
     ratio = capacity / Q
-    return {
-        "passed": ratio >= 1.0,
-        "capacity_m3s": round(capacity, 6),
-        "capacity_ratio": round(ratio, 6),
-        "message": "入口过流能力满足设计流量。" if ratio >= 1.0 else "入口过流能力不足，应调整跌口宽度、堰上水头或建筑物形式。",
-    }
+    base.update(
+        {
+            "passed": ratio >= 1.0,
+            "capacity_m3s": round(capacity, 6),
+            "capacity_ratio": round(ratio, 6),
+            "coefficient": round(mu, 6),
+            "message": "入口过流能力满足设计流量。" if ratio >= 1.0 else "入口过流能力不足，应调整跌口宽度、堰上水头或建筑物形式。",
+        }
+    )
+    return base
 
 
 def _discharge_hint(Q: float) -> Dict[str, Any]:
@@ -880,7 +1022,7 @@ def _formula_cards() -> List[Dict[str, str]]:
             "name": "宽顶堰过流能力",
             "latex": r"Q_{\text{cap}}=\varepsilon\mu b_c\sqrt{2g}H_0^{3/2}",
             "expression": r"Q_{\text{cap}}=\varepsilon\mu b_c\sqrt{2g}H_0^{3/2}",
-            "source": "GB 50288-2018 跌水与陡坡过流能力口径",
+            "source": "GB 50288-2018 附录 N",
         },
         {
             "title": "掺气水深",
@@ -933,7 +1075,7 @@ def _build_summary(data: Dict[str, Any], params: Dict[str, float], hydraulic: Di
     max_velocity = max((point.get("velocity_ms", 0.0) for point in points), default=hydraulic.get("start", {}).get("velocity_ms", 0.0))
     max_froude = max((point.get("froude", 0.0) for point in points), default=hydraulic.get("start", {}).get("froude", 0.0))
     slope_label = {"steep": "陡坡", "mild": "缓坡", "critical": "临界坡", "unknown": "未识别"}.get(hydraulic.get("slope_type"), "未识别")
-    return {
+    summary = {
         "工程名称": data.get("project_name") or data.get("structure_name") or "泄水渠与陡坡",
         "设计流量": f"{params['Q']:.3f} 立方米/秒",
         "正常水深": f"{hydraulic['normal_depth_m']:.3f} 米",
@@ -945,8 +1087,18 @@ def _build_summary(data: Dict[str, Any], params: Dict[str, float], hydraulic: Di
         "末端水深": f"{profile.get('end_depth_m', '')} 米" if profile.get("available") else "未计算",
         "最大流速": f"{max_velocity:.3f} 米/秒",
         "最大弗劳德数": f"{max_froude:.3f}",
+        "水面线动能修正系数": f"{float(hydraulic.get('water_profile_energy_alpha', DEFAULT_PROFILE_ALPHA)):.3f}",
         "入口过流能力比": f"{inlet['capacity_ratio']:.3f}" if inlet.get("capacity_ratio") is not None else "未校核",
     }
+    if inlet.get("connection_type"):
+        summary["入口连接形式"] = str(inlet.get("connection_type"))
+    if inlet.get("coefficient") is not None:
+        summary["入口流量系数"] = f"{float(inlet['coefficient']):.3f}"
+    if inlet.get("coefficient_source"):
+        summary["入口流量系数来源"] = str(inlet.get("coefficient_source"))
+    if inlet.get("contraction_coefficient") is not None:
+        summary["入口侧收缩系数"] = f"{float(inlet['contraction_coefficient']):.3f}"
+    return summary
 
 
 def _profile_points_for_view(profile: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1107,6 +1259,9 @@ def _hydraulic_jump_result(data: Dict[str, Any], params: Dict[str, float], hydra
     metrics = _section_metrics(params["Q"], params["b"], h1, params["m"], params["n"])
     froude = metrics["froude"]
     tailwater = _resolve_tailwater_depth(data, params, hydraulic)
+    pool_factor = _first_float(data, ("pool_depth_factor", "stilling_pool_factor"), 1.10)
+    if pool_factor <= 0:
+        pool_factor = 1.10
     base_unavailable = {
         "applicable": False,
         "pre_jump_depth_m": round(h1, 6) if h1 > 0 else None,
@@ -1127,6 +1282,7 @@ def _hydraulic_jump_result(data: Dict[str, Any], params: Dict[str, float], hydra
         "recommended_transition_length_m": None,
         "outlet_rectification_length_m": None,
         "outlet_rectification": {},
+        "pool_depth_factor": round(pool_factor, 6),
     }
     if not profile.get("available") or not points:
         return {
@@ -1145,9 +1301,6 @@ def _hydraulic_jump_result(data: Dict[str, Any], params: Dict[str, float], hydra
     alpha_j = _first_float(data, ("jump_alpha", "energy_dissipation_alpha", "alpha_j"), 1.05)
     h_out_critical = (alpha_j * q_out * q_out / G) ** (1.0 / 3.0) if q_out > 0 else 0.0
     control_depth = max(tailwater, h_out_critical)
-    pool_factor = _first_float(data, ("pool_depth_factor", "stilling_pool_factor"), 1.10)
-    if pool_factor <= 0:
-        pool_factor = 1.10
     pool_length = 4.5 * h2
     calculated_pool_depth = max(0.0, pool_factor * h2 - control_depth)
     tailwater_deficit = max(0.0, h2 - tailwater)
@@ -1185,6 +1338,7 @@ def _hydraulic_jump_result(data: Dict[str, Any], params: Dict[str, float], hydra
         "recommended_transition_length_m": outlet_rectification["recommended_length_m"],
         "outlet_rectification_length_m": outlet_rectification["recommended_length_m"],
         "outlet_rectification": outlet_rectification,
+        "pool_depth_factor": round(pool_factor, 6),
         "message": f"水跃与消力池：{message}",
     }
 
@@ -1213,6 +1367,7 @@ def _flow_case_candidates(raw_cases: Any) -> List[Dict[str, Any]]:
 def _evaluate_multi_flow_cases(data: Dict[str, Any], params: Dict[str, float], flow_cases: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """逐个流量计算消力池控制指标。"""
     cases: List[Dict[str, Any]] = []
+    alpha_profile = _profile_energy_alpha(data)
     for item in flow_cases:
         q_value = float(item["Q"])
         name = str(item["name"])
@@ -1234,6 +1389,7 @@ def _evaluate_multi_flow_cases(data: Dict[str, Any], params: Dict[str, float], f
             critical_depth,
             critical_slope,
             critical_depth,
+            alpha_profile,
         )
         start_control = _resolve_start_control(start_control_data, hydraulic)
         profile = _profile_result(start_control_data, local_params, hydraulic, start_control)
@@ -1409,16 +1565,28 @@ def quick_calculate_spillway_steep_chute(input_data: Dict[str, Any]) -> Dict[str
 
     section_type = _normalize_section_type(data.get("section_type"))
     Q, b, m, i, n = params["Q"], params["b"], params["m"], params["i"], params["n"]
+    alpha_profile = _profile_energy_alpha(data)
+    params["alpha_profile"] = alpha_profile
+    data["alpha_profile"] = alpha_profile
     normal_depth = calculate_depth_for_flow(Q, b, i, n, m)
     critical_depth = _solve_critical_depth(Q, b, m, _as_float(data, "critical_alpha", 1.0))
     if normal_depth <= 0 or critical_depth <= 0:
         return _build_error_result(["正常水深或临界水深求解失败。"])
 
     critical_slope = _critical_slope(Q, b, m, n, critical_depth)
-    provisional_hydraulic = _build_hydraulic_summary(section_type, Q, b, m, i, n, normal_depth, critical_depth, critical_slope, critical_depth)
+    provisional_hydraulic = _build_hydraulic_summary(section_type, Q, b, m, i, n, normal_depth, critical_depth, critical_slope, critical_depth, alpha_profile)
     start_control = _resolve_start_control(data, provisional_hydraulic)
     start_depth = float(start_control.get("depth_m") or critical_depth)
-    hydraulic = _build_hydraulic_summary(section_type, Q, b, m, i, n, normal_depth, critical_depth, critical_slope, start_depth)
+    explicit_bed_elevation = any(
+        _has_value(data, key)
+        for key in ("start_bed_elevation", "start_z", "bed_elevation_start")
+    )
+    start_water_level = _first_optional_float(data, ("start_water_level", "inlet_water_level", "入口水位"))
+    if start_water_level is not None and not explicit_bed_elevation:
+        # 表3联算只知道入口水位，需要用起点控制水深反推起点渠底高程。
+        data["start_bed_elevation"] = start_water_level - start_depth
+        data["bed_elevation_start"] = data["start_bed_elevation"]
+    hydraulic = _build_hydraulic_summary(section_type, Q, b, m, i, n, normal_depth, critical_depth, critical_slope, start_depth, alpha_profile)
     profile_type_info = _water_profile_type(hydraulic["slope_type"], start_depth, normal_depth, critical_depth, data)
     hydraulic["water_profile_type"] = profile_type_info["type"]
     hydraulic["water_profile_name"] = profile_type_info["name"]
@@ -1440,6 +1608,10 @@ def quick_calculate_spillway_steep_chute(input_data: Dict[str, Any]) -> Dict[str
     multi_flow_control = _multi_flow_control(data, params)
     summary = _build_summary(data, params, hydraulic, profile, inlet)
     profile_points = _profile_points_for_view(profile)
+    summary["掺气系数"] = f"{aeration_and_sidewall.get('aeration_coefficient', 1.2):.3f}"
+    summary["侧墙安全超高"] = f"{aeration_and_sidewall.get('freeboard_m', 0.4):.3f} 米"
+    summary["池深系数"] = f"{hydraulic_jump.get('pool_depth_factor', _first_float(data, ('pool_depth_factor', 'stilling_pool_factor'), 1.10)):.3f}"
+    summary["出口整流长度系数"] = f"{_first_float(data, ('outlet_rectification_factor', 'transition_length_factor', 'rectification_length_factor'), 10.0):.3f}"
     if aeration_and_sidewall.get("max_aerated_depth_m", 0.0) > 0:
         summary["最大掺气水深"] = f"{aeration_and_sidewall['max_aerated_depth_m']:.3f} 米"
         summary["建议侧墙高度"] = f"{aeration_and_sidewall['recommended_sidewall_height_m']:.3f} 米"
@@ -1451,6 +1623,10 @@ def quick_calculate_spillway_steep_chute(input_data: Dict[str, Any]) -> Dict[str
     risks = list(warnings)
     if inlet.get("passed") is False:
         risks.append(inlet.get("message") or "入口过流能力不足。")
+    if data.get("legacy_inlet_coefficient_migrated"):
+        risks.append("本版本已按 GB 50288-2018 附录 N 自动计算入口流量系数，旧版隐藏默认 0.42 不再使用。")
+    if data.get("legacy_alpha_profile_migrated"):
+        risks.append("本版本已按计算原理启用水面线动能修正系数 alpha_e=1.1，旧版实际未使用该系数，重算结果可能与旧版略有差异。")
     risks.extend(item["message"] for item in code_checks if item.get("passed") is False)
     if hydraulic_jump.get("applicable") and hydraulic_jump.get("tailwater_judgement") == "尾水不足":
         risks.append("下游尾水不足，应复核水跃位置、消力池和出口防冲。")

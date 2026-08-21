@@ -63,6 +63,13 @@ STRUCTURE_CATEGORIES = [
         "items": ["倒虹吸"],
         "desc": "穿越河流/道路的压力管道",
     },
+    {
+        "name": "泄水渠与陡坡",
+        "icon": "泄",
+        "color": "#2E7D32",
+        "items": ["泄水渠与陡坡"],
+        "desc": "自由水面泄水建筑物",
+    },
 ]
 
 

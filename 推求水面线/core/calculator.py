@@ -25,7 +25,15 @@ from models.enums import StructureType, InOutType
 from config.constants import XXPIPE_CHANNEL_LEVEL_OPTIONS, ZERO_TOLERANCE
 from core.geometry_calc import GeometryCalculator
 from core.hydraulic_calc import HydraulicCalculator
+from core.spillway_steep_chute_adapter import (
+    SPILLWAY_STEEP_CHUTE_TEXT,
+    get_spillway_steep_chute_total_loss,
+    is_spillway_steep_chute_value,
+    prepare_spillway_steep_chute_groups,
+)
 from 矩形暗涵设计 import calculate_rectangular_outputs
+
+FILL_CHANNEL_TEXT = "充水渠"
 
 
 class WaterProfileCalculator:
@@ -556,6 +564,9 @@ class WaterProfileCalculator:
 
         # 3. 几何计算
         self._calculate_geometry_preserving_special_turns(nodes)
+
+        # 3b. 泄水渠与陡坡按连续专项链标记，供表3水面线联算调用专项内核
+        prepare_spillway_steep_chute_groups(nodes)
         
         # 4. 水力计算（包含渐变段损失计入下游水位）
         self.calculate_hydraulics(nodes)
@@ -733,14 +744,15 @@ class WaterProfileCalculator:
             return False
         if self._is_diversion_gate_type(sv2):
             return False
-        
+
         # 有效的结构类型（隧洞/渡槽/明渠/矩形暗涵/倒虹吸）
         valid_type_values = {
             "隧洞-圆形", "隧洞-圆拱直墙型",
             "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
             "渡槽-U形", "渡槽-矩形",
-            "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形",
+            "明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", FILL_CHANNEL_TEXT,
             "暗涵-矩形", "暗涵-圆拱直墙型", "矩形暗涵", "倒虹吸",
+            SPILLWAY_STEEP_CHUTE_TEXT,
         }
         
         # 检查两个节点是否都是有效类型
@@ -782,7 +794,7 @@ class WaterProfileCalculator:
            (is_node1_mingqu and is_node2_siphon):
             # 倒虹吸 ↔ 明渠: 总是需要渐变段，直接返回True
             return True
-        
+
         # 规则7(新增): 矩形暗涵与明渠之间需要渐变段
         # 特例：矩形明渠↔矩形暗涵且底宽相同时不需要渐变段
         is_node1_culvert = self._is_culvert_type(sv1)
@@ -822,6 +834,13 @@ class WaterProfileCalculator:
             "暗涵-矩形": "矩形暗涵",
             "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
             "暗涵圆拱直墙型": "暗涵-圆拱直墙型",
+            "充水渠": SPILLWAY_STEEP_CHUTE_TEXT,
+            "泄水渠": SPILLWAY_STEEP_CHUTE_TEXT,
+            "泄水渠与陡坡": SPILLWAY_STEEP_CHUTE_TEXT,
+            "陡坡": SPILLWAY_STEEP_CHUTE_TEXT,
+            "泄槽": SPILLWAY_STEEP_CHUTE_TEXT,
+            "陡槽": SPILLWAY_STEEP_CHUTE_TEXT,
+            "泄水渠及陡坡": SPILLWAY_STEEP_CHUTE_TEXT,
         }.get(sv, sv)
 
     @classmethod
@@ -854,8 +873,8 @@ class WaterProfileCalculator:
         """判断是否为明渠类型（使用 .value 字符串比较）"""
         if structure_type is None:
             return False
-        sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
-        return sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形")
+        sv = self._normalize_structure_type_value(structure_type)
+        return sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", FILL_CHANNEL_TEXT)
     
     def _is_tunnel_or_aqueduct(self, structure_type) -> bool:
         """判断是否为隧洞或渡槽类型（使用 .value 字符串比较）"""
@@ -868,7 +887,7 @@ class WaterProfileCalculator:
         """判断是否为闸类结构（分水闸/分水口/节制闸/泄水闸等）（使用 .value 字符串比较）"""
         if structure_type is None:
             return False
-        sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
+        sv = self._normalize_structure_type_value(structure_type)
         return "闸" in sv or "分水" in sv
     
     def _find_next_non_gate_idx(self, nodes: List[ChannelNode], start_idx: int):
@@ -886,7 +905,9 @@ class WaterProfileCalculator:
         """
         if structure_type is None:
             return ""
-        sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
+        sv = self._normalize_structure_type_value(structure_type)
+        if is_spillway_steep_chute_value(sv):
+            return SPILLWAY_STEEP_CHUTE_TEXT
         for kw in ("倒虹吸", "隧洞", "渡槽", "暗涵"):
             if kw in sv:
                 return kw
@@ -1653,8 +1674,8 @@ class WaterProfileCalculator:
         """判断是否为任意明渠类型（含旧版'矩形'兼容值）"""
         if structure_type is None:
             return False
-        sv = structure_type.value if hasattr(structure_type, 'value') else str(structure_type)
-        return sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", "矩形")
+        sv = self._normalize_structure_type_value(structure_type)
+        return sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", "矩形", FILL_CHANNEL_TEXT)
 
     def _find_reference_channel_same_section(self, nodes: List[ChannelNode],
                                               gap_index: int) -> Optional[Dict]:
@@ -1674,7 +1695,7 @@ class WaterProfileCalculator:
 
         # 优先级分组（同组内任意一种都算同等优先）
         PRIORITY_GROUPS = [
-            {"明渠-矩形", "矩形"},
+            {"明渠-矩形", "矩形", FILL_CHANNEL_TEXT},
             {"明渠-梯形"},
             {"明渠-圆形"},
             {"明渠-U形"},
@@ -1687,7 +1708,7 @@ class WaterProfileCalculator:
                 continue
             if not self._is_any_channel_type(node.structure_type):
                 continue
-            sv = node.structure_type.value if node.structure_type else ""
+            sv = self._normalize_structure_type_value(node.structure_type)
             for g_idx, group in enumerate(PRIORITY_GROUPS):
                 if sv in group:
                     groups[g_idx].append((idx, node))
@@ -1735,7 +1756,7 @@ class WaterProfileCalculator:
         sv = self._get_effective_structure_type_value(structure_type)
         if sv == "矩形暗涵" or "暗涵" in sv:
             return "culvert"
-        if sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形"):
+        if sv in ("明渠-梯形", "明渠-矩形", "明渠-圆形", "明渠-U形", FILL_CHANNEL_TEXT):
             return "open_channel"
         return ""
 
@@ -2550,6 +2571,11 @@ class WaterProfileCalculator:
 
             reserve_loss = float(getattr(node, 'head_loss_reserve', 0.0) or 0.0)
             gate_loss = float(getattr(node, 'head_loss_gate', 0.0) or 0.0)
+            spillway_loss = get_spillway_steep_chute_total_loss(node)
+            if spillway_loss is not None:
+                node.head_loss_total = spillway_loss
+                continue
+
             row_override_display_loss = self._rebuild_pressure_pipe_row_override_total_loss(node)
             if row_override_display_loss is not None:
                 node.head_loss_total = row_override_display_loss + reserve_loss + gate_loss

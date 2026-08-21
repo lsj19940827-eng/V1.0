@@ -342,6 +342,7 @@ SECTION_TYPES = [
     "渡槽-U形", "渡槽-矩形",
     "隧洞-圆形", "隧洞-平底圆形", "隧洞-圆拱直墙型", "隧洞-马蹄形Ⅰ型", "隧洞-马蹄形Ⅱ型",
     "暗涵-矩形", "暗涵-圆拱直墙型", "倒虹吸", "有压管道", "定向钻", "顶管",
+    "充水渠", "泄水渠与陡坡",
     "分水闸", "分水口", "节制闸", "泄水闸", "退水闸",
 ]
 
@@ -363,6 +364,13 @@ _PROJECT_SECTION_TYPE_ALIASES = {
     "暗涵-矩形": "暗涵-矩形",
     "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
     "暗涵-圆拱直墙型": "暗涵-圆拱直墙型",
+    "充水渠": "泄水渠与陡坡",
+    "泄水渠": "泄水渠与陡坡",
+    "泄水渠与陡坡": "泄水渠与陡坡",
+    "陡坡": "泄水渠与陡坡",
+    "泄槽": "泄水渠与陡坡",
+    "陡槽": "泄水渠与陡坡",
+    "泄水渠及陡坡": "泄水渠与陡坡",
 }
 
 
@@ -375,6 +383,31 @@ def normalize_project_section_type(section_type):
 def is_pressure_pipe_like_section_type(section_type) -> bool:
     """判断结构类型是否按有压管道占位语义处理。"""
     return normalize_section_type_name(section_type) in PRESSURE_PIPE_LIKE_SECTION_TYPES
+
+
+def is_spillway_steep_chute_section_type(section_type) -> bool:
+    """判断结构类型是否为泄水渠与陡坡。"""
+    return normalize_project_section_type(section_type) == "泄水渠与陡坡"
+
+
+def resolve_spillway_steep_chute_display_type(raw_type, fallback="泄水渠与陡坡") -> str:
+    """保留用户填写的泄水渠类结构名，仅把计算口径归一。"""
+    text = str(getattr(raw_type, "value", raw_type) or "").strip()
+    if text.endswith("(连接段)"):
+        text = text[:-5].strip()
+    if _PROJECT_SECTION_TYPE_ALIASES.get(text) == "泄水渠与陡坡":
+        return text
+    fallback_text = str(getattr(fallback, "value", fallback) or "").strip()
+    if fallback_text.endswith("(连接段)"):
+        fallback_text = fallback_text[:-5].strip()
+    if _PROJECT_SECTION_TYPE_ALIASES.get(fallback_text) == "泄水渠与陡坡":
+        return fallback_text
+    return ""
+
+
+def is_fill_channel_section_type(section_type) -> bool:
+    """旧逐行充水渠分支已停用，充水渠类名称统一走专项传参。"""
+    return False
 
 
 def _resolve_import_pressure_pipe_material(material_value):
@@ -470,6 +503,9 @@ INPUT_HEADERS = [
     "不淤流速", "不冲流速", "转弯半径(m)",
     "管材",
     "左上坡m1", "平台宽B1(m)", "左下坡m2", "渠底宽B2(m)", "右坡m3", "平台高差h1(m)",
+    "泄水渠入口宽度(m)", "泄水渠堰上总水头(m)", "泄水渠入口连接形式", "泄水渠手动流量系数",
+    "泄水渠侧收缩系数", "泄水渠动能修正系数", "泄水渠掺气系数",
+    "泄水渠侧墙安全超高(m)", "泄水渠池深系数", "泄水渠整流长度系数",
 ]
 
 _INPUT_HEADERS_BEFORE_AE_AF_REORDER = [
@@ -528,14 +564,48 @@ COL_COMPOUND_M2 = 28
 COL_COMPOUND_B2 = 29
 COL_COMPOUND_M3 = 30
 COL_COMPOUND_H1 = 31
+COL_SPILLWAY_INLET_WEIR_WIDTH = 32
+COL_SPILLWAY_INLET_HEAD = 33
+COL_SPILLWAY_INLET_CONNECTION_TYPE = 34
+COL_SPILLWAY_WEIR_COEFFICIENT = 35
+COL_SPILLWAY_CONTRACTION_COEFFICIENT = 36
+COL_SPILLWAY_ALPHA_PROFILE = 37
+COL_SPILLWAY_AERATION_COEFFICIENT = 38
+COL_SPILLWAY_SIDEWALL_FREEBOARD = 39
+COL_SPILLWAY_POOL_DEPTH_FACTOR = 40
+COL_SPILLWAY_OUTLET_RECTIFICATION_FACTOR = 41
 COL_PIPE_LOCAL_LOSS = len(INPUT_HEADERS)
 COL_PIPE_IN_OUT = len(INPUT_HEADERS) + 1
-_LEGACY_INPUT_HEADER_COUNT_BEFORE_RECT_CULVERT_EXCEL_COLUMNS = len(INPUT_HEADERS) - 2
+_LEGACY_INPUT_HEADER_COUNT_BEFORE_RECT_CULVERT_EXCEL_COLUMNS = len(_INPUT_HEADERS_BEFORE_RECT_CULVERT_VISIBLE_COLUMNS)
 
 _EXCEL_IMPORTED_ROW_ROLE = getattr(Qt, "UserRole", 0x0100) + 101
 _RECT_CULVERT_MANUAL_H_ROLE = getattr(Qt, "UserRole", 0x0100) + 102
 _RECT_CULVERT_MANUAL_H_META_KEY = "rect_culvert_manual_H"
 _IMPORTED_RATIO_WARNING_TOLERANCE = 0.01
+SPILLWAY_STEEP_CHUTE_PARAM_KEY = "spillway_steep_chute"
+SPILLWAY_STEEP_CHUTE_ADVANCED_COLUMN_MAP = (
+    ("inlet_weir_width", COL_SPILLWAY_INLET_WEIR_WIDTH),
+    ("inlet_head", COL_SPILLWAY_INLET_HEAD),
+    ("inlet_connection_type_label", COL_SPILLWAY_INLET_CONNECTION_TYPE),
+    ("weir_coefficient", COL_SPILLWAY_WEIR_COEFFICIENT),
+    ("contraction_coefficient", COL_SPILLWAY_CONTRACTION_COEFFICIENT),
+    ("alpha_profile", COL_SPILLWAY_ALPHA_PROFILE),
+    ("aeration_coefficient", COL_SPILLWAY_AERATION_COEFFICIENT),
+    ("sidewall_freeboard_m", COL_SPILLWAY_SIDEWALL_FREEBOARD),
+    ("pool_depth_factor", COL_SPILLWAY_POOL_DEPTH_FACTOR),
+    ("outlet_rectification_factor", COL_SPILLWAY_OUTLET_RECTIFICATION_FACTOR),
+)
+SPILLWAY_STEEP_CHUTE_ADVANCED_NUMERIC_KEYS = {
+    "inlet_weir_width",
+    "inlet_head",
+    "weir_coefficient",
+    "contraction_coefficient",
+    "alpha_profile",
+    "aeration_coefficient",
+    "sidewall_freeboard_m",
+    "pool_depth_factor",
+    "outlet_rectification_factor",
+}
 
 # 输入表头悬浮提示（与原版一致）
 _HEADER_TOOLTIPS = {
@@ -854,6 +924,16 @@ _EXCEL_HEADER_ALIASES = {
     "平台高差h1(m)": COL_COMPOUND_H1,
     "直墙高度H直(m)": COL_ARCH_H_STRAIGHT,
     "拉杆高度(m)": COL_TIE_ROD_HEIGHT,
+    "泄水渠入口宽度(m)": COL_SPILLWAY_INLET_WEIR_WIDTH,
+    "泄水渠堰上总水头(m)": COL_SPILLWAY_INLET_HEAD,
+    "泄水渠入口连接形式": COL_SPILLWAY_INLET_CONNECTION_TYPE,
+    "泄水渠手动流量系数": COL_SPILLWAY_WEIR_COEFFICIENT,
+    "泄水渠侧收缩系数": COL_SPILLWAY_CONTRACTION_COEFFICIENT,
+    "泄水渠动能修正系数": COL_SPILLWAY_ALPHA_PROFILE,
+    "泄水渠掺气系数": COL_SPILLWAY_AERATION_COEFFICIENT,
+    "泄水渠侧墙安全超高(m)": COL_SPILLWAY_SIDEWALL_FREEBOARD,
+    "泄水渠池深系数": COL_SPILLWAY_POOL_DEPTH_FACTOR,
+    "泄水渠整流长度系数": COL_SPILLWAY_OUTLET_RECTIFICATION_FACTOR,
 }
 
 
@@ -889,6 +969,26 @@ def _map_input_row_by_header_order(row_values, source_headers):
         if target_idx is not None and src_idx < len(row_values):
             mapped[target_idx] = row_values[src_idx]
     return mapped
+
+
+def _extract_spillway_steep_chute_advanced_params(values) -> dict:
+    """从批量输入行提取泄水渠与陡坡专项可选参数。"""
+    values = list(values or [])
+    advanced = {}
+    for key, col in SPILLWAY_STEEP_CHUTE_ADVANCED_COLUMN_MAP:
+        if col >= len(values):
+            continue
+        raw = values[col]
+        if raw is None or str(raw).strip() == "":
+            continue
+        if key in SPILLWAY_STEEP_CHUTE_ADVANCED_NUMERIC_KEYS:
+            try:
+                advanced[key] = float(raw)
+            except (TypeError, ValueError):
+                advanced[key] = str(raw).strip()
+        else:
+            advanced[key] = str(raw).strip()
+    return advanced
 
 
 # 结果表列定义
@@ -1600,7 +1700,10 @@ class BatchPanel(QWidget):
                     cell_value = val.strip()
                     # 断面类型列(索引3)特殊处理：验证类型有效性（与原版一致）
                     if target_col == COL_SECTION_TYPE and cell_value:
-                        if cell_value not in SECTION_TYPES:
+                        mapped_type = self._map_section_type(cell_value)
+                        if mapped_type:
+                            cell_value = mapped_type
+                        elif cell_value not in SECTION_TYPES:
                             invalid_types.append(f"行{target_row + 1}: {cell_value}")
                     item = QTableWidgetItem(cell_value)
                     if target_col == COL_SECTION_TYPE:
@@ -2103,9 +2206,26 @@ class BatchPanel(QWidget):
             if not isinstance(r, dict):
                 continue
             # 补充元数据（始终用输入表完整类型名覆盖引擎简化名）。
-            input_section_type = str(v[3]).strip()
+            raw_input_section_type = str(
+                r.get("display_structure_type")
+                or r.get("input_structure_type")
+                or v[3]
+            ).strip()
+            input_section_type = normalize_project_section_type(str(v[3]).strip())
             if input_section_type:
                 r['section_type'] = input_section_type
+            if is_spillway_steep_chute_section_type(input_section_type):
+                display_structure_type = resolve_spillway_steep_chute_display_type(
+                    raw_input_section_type,
+                    input_section_type,
+                )
+                if display_structure_type:
+                    r["display_structure_type"] = display_structure_type
+                    payload = r.get(SPILLWAY_STEEP_CHUTE_PARAM_KEY, {})
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    payload["display_structure_type"] = display_structure_type
+                    r[SPILLWAY_STEEP_CHUTE_PARAM_KEY] = payload
             if 'building_name' not in r:
                 r['building_name'] = str(v[2]).strip()
             if 'flow_section' not in r:
@@ -2194,7 +2314,12 @@ class BatchPanel(QWidget):
 
         for row_idx, values in enumerate(input_rows):
             values = self._normalize_row(values, len(INPUT_HEADERS))
-            section_type = str(values[COL_SECTION_TYPE]).strip()
+            raw_section_type = str(values[COL_SECTION_TYPE]).strip()
+            section_type = raw_section_type
+            mapped_section_type = self._map_section_type(section_type) if section_type else None
+            if mapped_section_type:
+                section_type = mapped_section_type
+                values[COL_SECTION_TYPE] = mapped_section_type
             if not section_type:
                 continue
             total_count += 1
@@ -2253,6 +2378,50 @@ class BatchPanel(QWidget):
                     if self.detail_cb.isChecked():
                         detail_lines.append(f"【项目 {total_count}】")
                         detail_lines.append(self._gen_detail_report(values, ppipe_result))
+                        detail_lines.append("\n" + "*" * 80 + "\n")
+                    continue
+
+                # 泄水渠与陡坡占位行：表1/表2只透传参数，表3按同名进出口成组正式计算
+                if is_spillway_steep_chute_section_type(section_type):
+                    row_out = ["-"] * len(RESULT_HEADERS)
+                    row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
+                    row_out[3] = "泄水渠与陡坡"; row_out[-1] = "⏭ 表3专项计算"
+                    result_rows.append(row_out)
+                    display_structure_type = resolve_spillway_steep_chute_display_type(
+                        raw_section_type,
+                        section_type,
+                    )
+                    spillway_advanced_params = _extract_spillway_steep_chute_advanced_params(values)
+                    spillway_payload = (
+                        {"display_structure_type": display_structure_type}
+                        if display_structure_type
+                        else {}
+                    )
+                    if spillway_advanced_params:
+                        spillway_payload["advanced_params"] = spillway_advanced_params
+                    spillway_result = {
+                        'success': True,
+                        'section_type': '泄水渠与陡坡',
+                        'display_structure_type': display_structure_type,
+                        'is_spillway_steep_chute': True,
+                        'flow_section': segment,
+                        'building_name': building_name,
+                        'coord_X': self._sf(values[COL_X], 0.0),
+                        'coord_Y': self._sf(values[COL_Y], 0.0),
+                        'Q': self._sf(values[COL_Q]),
+                        'n': self._sf(values[COL_N], 0.014),
+                        'slope_inv': self._sf(values[COL_SLOPE], 0.0),
+                        'm': self._sf(values[COL_M], 0.0),
+                        'b': self._sf(values[COL_B], 0.0),
+                        'B': self._sf(values[COL_B], 0.0),
+                        'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
+                        SPILLWAY_STEEP_CHUTE_PARAM_KEY: spillway_payload,
+                    }
+                    self.batch_results.append({'input': values, 'result': spillway_result})
+                    skip_count += 1
+                    if self.detail_cb.isChecked():
+                        detail_lines.append(f"【项目 {total_count}】")
+                        detail_lines.append(self._gen_detail_report(values, spillway_result))
                         detail_lines.append("\n" + "*" * 80 + "\n")
                     continue
 
@@ -2382,6 +2551,11 @@ class BatchPanel(QWidget):
                 )
                 if result:
                     result['_use_increase'] = use_inc
+                    result['section_type'] = section_type
+                    if is_fill_channel_section_type(section_type):
+                        if b > 0:
+                            result['B'] = b
+                        result['m'] = m
                     if manual_qmax is not None and result.get('success'):
                         result['manual_qmax_from_excel'] = manual_qmax
                         result['Q_increased'] = manual_qmax
@@ -2498,9 +2672,9 @@ class BatchPanel(QWidget):
                 v_min=v_min, v_max=v_max,
                 manual_increase_percent=_inc
             )
-        elif "明渠-矩形" in section_type:
+        elif "明渠-矩形" in section_type or is_fill_channel_section_type(section_type):
             if not MINGQU_AVAILABLE: return {'success': False, 'error_message': '明渠计算模块未加载'}
-            return mingqu_calculate(Q=Q, m=0, n=n, slope_inv=slope_inv,
+            return mingqu_calculate(Q=Q, m=m if is_fill_channel_section_type(section_type) else 0, n=n, slope_inv=slope_inv,
                                     v_min=v_min, v_max=v_max,
                                     manual_b=b if b > 0 else None,
                                     manual_beta=beta if beta > 0 else None,
@@ -2617,7 +2791,7 @@ class BatchPanel(QWidget):
         Fb_surcharge = H_total_val = "-"
         Fb_cl_d = Fb_cl_i = Fb_pct_d = Fb_pct_i = "-"
 
-        if "明渠" in section_type:
+        if "明渠" in section_type or is_fill_channel_section_type(section_type):
             if "圆形" in section_type:
                 D_val = result.get('D_design', result.get('D', 0))
             elif "U形" in section_type:
@@ -2730,7 +2904,7 @@ class BatchPanel(QWidget):
 
         status_text = "✓ 成功"
         if result.get('preserved_manual_b') and result.get('constraint_warnings'):
-            status_text = "⚠ 按显式底宽计算" if "明渠" in section_type else "⚠ 按导入尺寸计算"
+            status_text = "⚠ 按显式底宽计算" if ("明渠" in section_type or is_fill_channel_section_type(section_type)) else "⚠ 按导入尺寸计算"
 
         return [seq, segment, building_name, section_type,
                 fmt(B_val), fmt(D_val), fmt(R_val),
@@ -2776,7 +2950,9 @@ class BatchPanel(QWidget):
                 return self._fmt_pressure_pipe_report(input_vals, result)
             if "分水" in section_type or "闸" in section_type:
                 return self._fmt_diversion_gate_report(input_vals, result)
-            if "明渠" in section_type:
+            if is_spillway_steep_chute_section_type(section_type):
+                return self._fmt_placeholder_report(input_vals, result, "泄水渠与陡坡表3专项")
+            if "明渠" in section_type or is_fill_channel_section_type(section_type):
                 return self._fmt_mingqu_report(input_vals, result)
             elif "渡槽" in section_type:
                 return self._fmt_ducao_report(input_vals, result)
@@ -3573,6 +3749,9 @@ class BatchPanel(QWidget):
             "暗涵": "暗涵-矩形", "暗涵-矩形": "暗涵-矩形", "暗渠": "暗涵-矩形", "矩形暗渠": "暗涵-矩形",
             "矩形暗涵": "暗涵-矩形",
             "暗涵-圆拱直墙型": "暗涵-圆拱直墙型", "圆拱直墙型暗涵": "暗涵-圆拱直墙型",
+            "充水渠": "泄水渠与陡坡", "泄水渠": "泄水渠与陡坡", "泄水渠与陡坡": "泄水渠与陡坡",
+            "陡坡": "泄水渠与陡坡", "泄槽": "泄水渠与陡坡", "陡槽": "泄水渠与陡坡",
+            "泄水渠及陡坡": "泄水渠与陡坡",
             "退水闸": "退水闸",
         }
         if raw_type in mapping:
@@ -3596,7 +3775,7 @@ class BatchPanel(QWidget):
         if not is_rect_culvert_section_type(new_type):
             self._set_rect_culvert_manual_h(row, None)
 
-        if "明渠" in new_type or is_rect_culvert_section_type(new_type):
+        if "明渠" in new_type or is_fill_channel_section_type(new_type) or is_rect_culvert_section_type(new_type):
             self.input_table.setItem(row, COL_BUILDING_NAME, QTableWidgetItem("-"))
             # 明渠-U形额外填充默认值 R=0.8, α=14°, θ=152°
             if new_type == "明渠-U形":
@@ -3935,7 +4114,7 @@ class BatchPanel(QWidget):
     def _should_preserve_explicit_bottom_width(self, section_type: str, b_value: float) -> bool:
         if b_value <= 0:
             return False
-        return "明渠-梯形" in section_type or "明渠-矩形" in section_type
+        return "明渠-梯形" in section_type or "明渠-矩形" in section_type or is_fill_channel_section_type(section_type)
 
     def _should_preserve_imported_dimensions(self, row_idx: int, section_type: str, b_value: float) -> bool:
         if b_value <= 0:
@@ -4164,6 +4343,7 @@ class BatchPanel(QWidget):
             InfoBar.warning("缺少依赖", "需要安装 openpyxl: pip install openpyxl", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
         try:
+            formula_ws = None
             if filepath.lower().endswith('.xls') and not filepath.lower().endswith('.xlsx'):
                 import xlrd
                 _xls_book = xlrd.open_workbook(filepath)
@@ -4184,6 +4364,11 @@ class BatchPanel(QWidget):
             else:
                 wb = openpyxl.load_workbook(filepath, data_only=True)
                 ws = wb.active
+                try:
+                    formula_wb = openpyxl.load_workbook(filepath, data_only=False, read_only=True)
+                    formula_ws = formula_wb[ws.title] if ws.title in formula_wb.sheetnames else formula_wb.active
+                except Exception:
+                    formula_ws = None
             info_parts = []
 
             # 自动判断Excel格式：
@@ -4198,8 +4383,28 @@ class BatchPanel(QWidget):
                 data_start_row = 4
 
             # 读取基础信息行
+            def _simple_numeric_formula_value(r, c):
+                """读取仅包含数字的公式，如 =352.44。"""
+                if formula_ws is None:
+                    return ""
+                try:
+                    raw_formula = formula_ws.cell(row=r, column=c).value
+                except Exception:
+                    return ""
+                text = str(raw_formula or "").strip()
+                if not text.startswith("="):
+                    return ""
+                candidate = text[1:].strip()
+                if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", candidate):
+                    return ""
+                return candidate
+
             def _read_cell(r, c):
                 v = ws.cell(row=r, column=c).value
+                if v is None:
+                    formula_value = _simple_numeric_formula_value(r, c)
+                    if formula_value:
+                        return formula_value
                 return str(v).strip() if v is not None else ""
 
             label_a = _read_cell(info_row, 1)
@@ -4315,8 +4520,12 @@ class BatchPanel(QWidget):
                         for source_col, target_col in legacy_no_xy_columns:
                             if source_col < len(raw_rd):
                                 mapped[target_col] = raw_rd[source_col]
+                    section_type = str(mapped[COL_SECTION_TYPE]).strip() if len(mapped) > COL_SECTION_TYPE else ""
+                    mapped_type = self._map_section_type(section_type) if section_type else None
+                    if mapped_type:
+                        mapped[COL_SECTION_TYPE] = mapped_type
                     # 有压管道同类行自动忽略糙率n值（索引7）
-                    section_type = str(mapped[3]).strip() if len(mapped) > 3 else ""
+                    section_type = str(mapped[COL_SECTION_TYPE]).strip() if len(mapped) > COL_SECTION_TYPE else ""
                     if is_pressure_pipe_like_section_type(section_type):
                         mapped[7] = ""
                     mapped_records.append({

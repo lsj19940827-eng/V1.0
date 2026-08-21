@@ -269,7 +269,7 @@ def test_show_bend_details_lazy_repairs_missing_details(monkeypatch):
         panel._show_bend_calc_details(1, panel.calculated_nodes[1])
 
         assert dialog_calls, "弯道损失已有数值但详情缺失时，双击应先懒补建详情"
-        assert not info_calls, "懒补建成功后不应提示“没有弯道水头损失计算数据”"
+        assert not info_calls, "懒补建成功后不应提示“没有弯道附加水头损失计算数据”"
         details = dialog_calls[0][2]
         assert details.get("hw", 0.0) > 0.0
         assert details.get("L", 0.0) > 0.0

@@ -29,7 +29,30 @@ from core.pressure_pipe_calc import (
     calc_bend_local_loss as calc_pressure_pipe_bend_local_loss,
     calc_friction_loss as calc_pressure_pipe_friction_loss,
 )
+from core.spillway_steep_chute_adapter import (
+    SPILLWAY_STEEP_CHUTE_TEXT,
+    calculate_and_apply_spillway_steep_chute_group,
+    is_spillway_steep_chute_inlet,
+    is_spillway_steep_chute_node,
+)
 from utils.pressure_pipe_common import resolve_pressure_pipe_material
+
+FILL_CHANNEL_TEXT = "充水渠"
+FILL_CHANNEL_ALIASES = {
+    "充水渠",
+    "泄水渠",
+    "泄水渠与陡坡",
+    "陡坡",
+    "泄槽",
+    "陡槽",
+    "泄水渠及陡坡",
+}
+
+
+def _normalize_fill_channel_value(value: str) -> str:
+    """把充水渠/泄水渠类结构别名统一为泄水渠与陡坡。"""
+    text = str(value or "").strip()
+    return SPILLWAY_STEEP_CHUTE_TEXT if text in FILL_CHANNEL_ALIASES else text
 
 try:
     from app_渠系计算前端.tunnel.geometry import (
@@ -86,7 +109,8 @@ class HydraulicCalculator:
         if culvert_family_type:
             return culvert_family_type
         structure_type = getattr(node, "structure_type", None)
-        return structure_type.value if hasattr(structure_type, "value") else str(structure_type or "")
+        value = structure_type.value if hasattr(structure_type, "value") else str(structure_type or "")
+        return _normalize_fill_channel_value(value)
 
     def _resolve_turn_radius(self, node: ChannelNode) -> float:
         """解析当前节点应使用的转弯半径。"""
@@ -135,13 +159,15 @@ class HydraulicCalculator:
         node2: ChannelNode,
         transition_length: float = 0.0,
     ) -> Dict[str, float]:
-        """计算当前两行之间的有效长度及其拆分项。"""
+        """计算当前两行之间的沿程摩阻长度及其核查项。"""
         L_mc = (node2.station_MC or 0.0) - (node1.station_MC or 0.0)
         arc1 = node1.arc_length if node1.arc_length else 0.0
         arc2 = node2.arc_length if node2.arc_length else 0.0
         arc1_half = arc1 / 2.0
         arc2_half = arc2 / 2.0
-        effective_length = max(0.0, L_mc - transition_length - arc1_half - arc2_half)
+        # MC—MC 里程差已包含两端相邻半弧段；弯道项只计二次流附加损失，
+        # 因此普通沿程摩阻保留弧段长度，仅扣除已单列计损的渐变段。
+        effective_length = max(0.0, L_mc - transition_length)
         return {
             "L_mc": L_mc,
             "transition_length": transition_length,
@@ -291,6 +317,24 @@ class HydraulicCalculator:
         if (node.arc_length or 0.0) > ZERO_TOLERANCE:
             return True
         return self._is_unnamed_regular_pressure_pipe(node)
+
+    def _is_distributable_open_channel_bend(self, node: Optional[ChannelNode]) -> bool:
+        """判断节点是否为需要按相邻半弯道分配的普通明流弯道。"""
+        if (
+            node is None
+            or getattr(node, "is_transition", False)
+            or (getattr(node, "arc_length", 0.0) or 0.0) <= ZERO_TOLERANCE
+        ):
+            return False
+        structure_type = getattr(node, "structure_type", None)
+        structure_value = structure_type.value if structure_type else ""
+        if (
+            structure_value == StructureType.INVERTED_SIPHON.value
+            or StructureType.is_pressure_pipe_like(structure_type)
+            or getattr(node, "is_pressure_pipe", False)
+        ):
+            return False
+        return True
     
     def import_inverted_siphon_losses(self, losses: Dict[str, float]) -> None:
         """
@@ -397,7 +441,7 @@ class HydraulicCalculator:
         value = structure_type.value if hasattr(structure_type, "value") else str(structure_type or "")
         if value in {"暗涵", "暗渠", "矩形暗渠", "矩形暗涵"}:
             return "暗涵-矩形"
-        return value
+        return _normalize_fill_channel_value(value)
 
     def _build_flat_bottom_circle_geom(self, D: float, B: float):
         """构造平底圆形共享几何，异常时返回 None。"""
@@ -774,9 +818,12 @@ class HydraulicCalculator:
                     return area
             return params.get('A', params.get('面积', 0))
 
-        # 矩形类：明渠-矩形、渡槽-矩形、暗涵-矩形
-        if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵", "暗涵-矩形"):
+        # 矩形/渠道类：明渠-矩形、充水渠、渡槽-矩形、暗涵-矩形
+        if sv in ("明渠-矩形", FILL_CHANNEL_TEXT, "渡槽-矩形", "矩形暗涵", "暗涵-矩形", SPILLWAY_STEEP_CHUTE_TEXT):
             b = self._get_bottom_width(params)
+            if sv in (FILL_CHANNEL_TEXT, SPILLWAY_STEEP_CHUTE_TEXT):
+                m = params.get('边坡', params.get('m', 0))
+                return (b + m * h) * h
             if sv == "渡槽-矩形":
                 ca = params.get('chamfer_angle', 0) or 0
                 cl = params.get('chamfer_length', 0) or 0
@@ -885,9 +932,12 @@ class HydraulicCalculator:
                     return perimeter
             return params.get('X', params.get('湿周', params.get('P', 0)))
 
-        # 矩形类：明渠-矩形、渡槽-矩形、暗涵-矩形
-        if sv in ("明渠-矩形", "渡槽-矩形", "矩形暗涵", "暗涵-矩形"):
+        # 矩形/渠道类：明渠-矩形、充水渠、渡槽-矩形、暗涵-矩形
+        if sv in ("明渠-矩形", FILL_CHANNEL_TEXT, "渡槽-矩形", "矩形暗涵", "暗涵-矩形", SPILLWAY_STEEP_CHUTE_TEXT):
             b = self._get_bottom_width(params)
+            if sv in (FILL_CHANNEL_TEXT, SPILLWAY_STEEP_CHUTE_TEXT):
+                m = params.get('边坡', params.get('m', 0))
+                return b + 2 * h * math.sqrt(1 + m * m)
             if sv == "渡槽-矩形":
                 ca = params.get('chamfer_angle', 0) or 0
                 cl = params.get('chamfer_length', 0) or 0
@@ -1206,10 +1256,11 @@ class HydraulicCalculator:
         
         hf = slope_i × 有效长度
         
-        有效长度 = (node2.station_MC - node1.station_MC) 
+        有效长度 = (node2.station_MC - node1.station_MC)
                  - 渐变段长度（若两行之间有渐变段）
-                 - node1.arc_length / 2 
-                 - node2.arc_length / 2
+
+        MC—MC 里程差包含相邻弯道的半弧段，弧段参与普通沿程摩阻；
+        弯道公式另计二次流引起的附加损失。
         
         Args:
             node1: 起点
@@ -1509,11 +1560,12 @@ class HydraulicCalculator:
     
     def calculate_bend_loss(self, node: ChannelNode) -> float:
         """
-        计算弯道水头损失
+        计算弯道附加水头损失
         
         公式：h_w = (n² × L × v²) / R^(4/3) × (3/4) × √(B / R_c)
         
-        物理逻辑：弯道总损失 = 基础沿程损失 × 弯道影响修正系数
+        物理逻辑：弯道附加损失 = 弧段基础摩阻量级 × 弯道影响系数。
+        弧段的普通沿程摩阻已由 calculate_friction_loss 计入，本式不代表弯道总损失。
         
         其中：
         - 基本沿程阻力部分：n²·L·v² / R^(4/3) 基于曼宁公式
@@ -1523,7 +1575,7 @@ class HydraulicCalculator:
             node: 渠道节点（包含弯道长度、流速、水力半径、转弯半径等参数）
             
         Returns:
-            弯道水头损失（m）
+            弯道附加水头损失（m）；承压管道分支返回弯头局部损失
         """
         if self._is_unnamed_regular_pressure_pipe(node):
             pipe_params = getattr(node, "section_params", {}) or {}
@@ -1664,22 +1716,88 @@ class HydraulicCalculator:
         if B <= ZERO_TOLERANCE:
             return 0.0
 
-        # 计算弯道水头损失
+        # 计算弯道二次流附加水头损失
         # h_w = (n² × L × v²) / R^(4/3) × (3/4) × √(B / R_c)
         hw = (n ** 2 * L * v ** 2) / (R ** (4.0 / 3.0)) * 0.75 * math.sqrt(B / Rc)
 
         # 保存计算详情（用于双击展示）
         node.bend_calc_details = {
+            'method': 'open_channel_full_bend',
             'n': n,
             'L': L,
             'v': v,
             'R': R,
             'Rc': Rc,
             'B': B,
+            'hw_exact': hw,
             'hw': round(hw, HEAD_LOSS_PRECISION)
         }
 
         return round(hw, HEAD_LOSS_PRECISION)
+
+    def _calculate_open_channel_full_bend_snapshot(
+        self,
+        node: Optional[ChannelNode],
+    ) -> tuple[float, Dict[str, object]]:
+        """只读计算普通明流节点的完整弯道附加损失及详情。"""
+        if not self._is_distributable_open_channel_bend(node):
+            return 0.0, {}
+
+        saved_details = copy.deepcopy(getattr(node, 'bend_calc_details', {}) or {})
+        try:
+            # 避免输入失效并提前返回时误把节点上一次的区间详情当成本次完整弯道详情。
+            node.bend_calc_details = {}
+            full_loss = self.calculate_bend_loss(node)
+            details = copy.deepcopy(getattr(node, 'bend_calc_details', {}) or {})
+        finally:
+            node.bend_calc_details = saved_details
+
+        full_loss_exact = float(details.get('hw_exact', full_loss) or 0.0)
+        details['full_loss_exact'] = full_loss_exact
+        details['full_loss'] = round(full_loss_exact, HEAD_LOSS_PRECISION)
+        return full_loss_exact, details
+
+    def calculate_open_channel_interval_bend_loss(
+        self,
+        upstream_node: Optional[ChannelNode],
+        downstream_node: ChannelNode,
+    ) -> float:
+        """计算上游MC到当前MC区间内两个半弯道的附加损失。"""
+        upstream_full, upstream_details = self._calculate_open_channel_full_bend_snapshot(upstream_node)
+        downstream_full, downstream_details = self._calculate_open_channel_full_bend_snapshot(downstream_node)
+
+        upstream_half = upstream_full / 2.0
+        downstream_half = downstream_full / 2.0
+        row_loss_exact = upstream_half + downstream_half
+        row_loss = round(row_loss_exact, HEAD_LOSS_PRECISION)
+
+        if row_loss_exact <= ZERO_TOLERANCE:
+            downstream_node.bend_calc_details = {}
+            return 0.0
+
+        downstream_node.bend_calc_details = {
+            'method': 'open_channel_interval_halves',
+            'allocation_basis': 'MC_to_MC',
+            'upstream_node_name': str(getattr(upstream_node, 'name', '') or ''),
+            'downstream_node_name': str(getattr(downstream_node, 'name', '') or ''),
+            'upstream_full_loss': round(upstream_full, HEAD_LOSS_PRECISION),
+            'downstream_full_loss': round(downstream_full, HEAD_LOSS_PRECISION),
+            'upstream_half_loss': upstream_half,
+            'downstream_half_loss': downstream_half,
+            'upstream_full_details': upstream_details,
+            'downstream_full_details': downstream_details,
+            # 保留当前节点完整弯道的常用字段，兼容旧项目详情读取和核查入口。
+            'n': downstream_details.get('n', 0.0),
+            'L': downstream_details.get('L', 0.0),
+            'v': downstream_details.get('v', 0.0),
+            'R': downstream_details.get('R', 0.0),
+            'Rc': downstream_details.get('Rc', 0.0),
+            'B': downstream_details.get('B', 0.0),
+            'current_full_loss': round(downstream_full, HEAD_LOSS_PRECISION),
+            'hw_exact': row_loss_exact,
+            'hw': row_loss,
+        }
+        return row_loss
     
     def calculate_water_profile(self, nodes: List[ChannelNode], 
                                 method: str = "backward") -> None:
@@ -1701,6 +1819,37 @@ class HydraulicCalculator:
             self._calculate_forward(nodes)
         else:
             self._calculate_backward(nodes)
+
+    def _estimate_transition_loss_between(
+        self,
+        nodes: List[ChannelNode],
+        prev_regular_idx: int,
+        curr_idx: int,
+        prev_regular_node: ChannelNode,
+        curr_node: ChannelNode,
+    ) -> tuple[float, float]:
+        """估算两个真实节点之间的渐变段损失和长度。"""
+        accumulated_transition_loss = 0.0
+        transition_len_between = 0.0
+        for j in range(prev_regular_idx + 1, curr_idx):
+            if nodes[j].is_transition:
+                transition_loss = self._estimate_transition_loss(prev_regular_node, curr_node)
+                accumulated_transition_loss += transition_loss
+                if nodes[j].transition_length:
+                    transition_len_between += nodes[j].transition_length
+        return accumulated_transition_loss, transition_len_between
+
+    @staticmethod
+    def _actual_transition_loss_between(nodes: List[ChannelNode], prev_regular_idx: int, curr_idx: int) -> float:
+        """读取两个真实节点之间已计算完成的渐变段损失。"""
+        transition_loss = 0.0
+        for j in range(prev_regular_idx + 1, curr_idx):
+            if nodes[j].is_transition:
+                loss = nodes[j].head_loss_transition or 0.0
+                if loss <= 0 and nodes[j].transition_calc_details:
+                    loss = nodes[j].transition_calc_details.get('total', 0.0) or 0.0
+                transition_loss += loss
+        return transition_loss
     
     def _calculate_forward(self, nodes: List[ChannelNode]) -> None:
         """
@@ -1761,10 +1910,13 @@ class HydraulicCalculator:
                 first_regular_node.bottom_elevation = first_regular_node.water_level - first_regular_node.water_depth
                 if first_regular_node.structure_height > 0:
                     first_regular_node.top_elevation = first_regular_node.bottom_elevation + first_regular_node.structure_height
-            # 计算第一个节点的流速和弯道损失
+            # 计算第一个节点的流速；普通明流起点没有上游MC区间，本行弯道分项取0。
             if first_regular_node.velocity <= 0:
                 first_regular_node.velocity = self.calculate_velocity(first_regular_node)
-            if self._should_calculate_bend_loss(first_regular_node):
+            if self._is_distributable_open_channel_bend(first_regular_node):
+                first_regular_node.head_loss_bend = 0.0
+                first_regular_node.bend_calc_details = {}
+            elif self._should_calculate_bend_loss(first_regular_node):
                 existing_bend_loss = first_regular_node.head_loss_bend or 0.0
                 if existing_bend_loss <= ZERO_TOLERANCE or not getattr(first_regular_node, 'bend_calc_details', None):
                     calculated_bend_loss = self.calculate_bend_loss(first_regular_node)
@@ -1778,14 +1930,48 @@ class HydraulicCalculator:
         # 遍历计算水位
         prev_regular_node = first_regular_node
         prev_regular_node_idx = first_regular_node_idx
+        skip_until_idx = -1
+
+        if first_regular_node and is_spillway_steep_chute_inlet(first_regular_node):
+            last_idx = calculate_and_apply_spillway_steep_chute_group(
+                nodes,
+                first_regular_node_idx,
+                first_regular_node.water_level,
+            )
+            prev_regular_node = nodes[last_idx]
+            prev_regular_node_idx = last_idx
+            skip_until_idx = last_idx
         
         for i in range(len(nodes)):
             curr_node = nodes[i]
             
             # 跳过第一个节点（已设置水位）和渐变段
+            if i <= skip_until_idx:
+                continue
             if curr_node == first_regular_node:
                 continue
             if curr_node.is_transition:
+                continue
+
+            if is_spillway_steep_chute_inlet(curr_node):
+                accumulated_transition_loss, _ = self._estimate_transition_loss_between(
+                    nodes,
+                    prev_regular_node_idx,
+                    i,
+                    prev_regular_node,
+                    curr_node,
+                )
+                inlet_water_level = prev_regular_node.water_level - accumulated_transition_loss
+                last_idx = calculate_and_apply_spillway_steep_chute_group(
+                    nodes,
+                    i,
+                    inlet_water_level,
+                )
+                prev_regular_node = nodes[last_idx]
+                prev_regular_node_idx = last_idx
+                skip_until_idx = last_idx
+                continue
+            if is_spillway_steep_chute_node(curr_node):
                 continue
             
             # ===== 闸类型特殊处理（分水闸/分水口/泄水闸/节制闸等） =====
@@ -1812,7 +1998,7 @@ class HydraulicCalculator:
             if curr_node.velocity <= 0:
                 curr_node.velocity = self.calculate_velocity(curr_node)
             
-            # 计算当前节点的弯道损失（明渠按弧长，有压管道匿名行按承压弯头口径）
+            # 计算当前行弯道附加损失：普通明流按相邻两个半弯道分配，承压行保持原口径。
             window_override = self._get_pressure_pipe_window_override(curr_node)
             row_override_mode = self._is_pressure_pipe_row_override_mode(
                 window_override.get("group_mode", "") if window_override else ""
@@ -1831,7 +2017,7 @@ class HydraulicCalculator:
                             'source': 'window_override',
                             'hw': round(curr_node.head_loss_bend, HEAD_LOSS_PRECISION),
                         }
-            elif self._should_calculate_bend_loss(curr_node):
+            elif self._is_unnamed_regular_pressure_pipe(curr_node):
                 existing_bend_loss = curr_node.head_loss_bend or 0.0
                 if existing_bend_loss <= ZERO_TOLERANCE or not getattr(curr_node, 'bend_calc_details', None):
                     calculated_bend_loss = self.calculate_bend_loss(curr_node)
@@ -1841,17 +2027,22 @@ class HydraulicCalculator:
                             curr_node.bend_calc_details['hw'] = round(existing_bend_loss, HEAD_LOSS_PRECISION)
                     else:
                         curr_node.head_loss_bend = calculated_bend_loss
+            else:
+                # 本行代表 prev.MC→curr.MC，分别计入上一弯道后半段和当前弯道前半段。
+                curr_node.head_loss_bend = self.calculate_open_channel_interval_bend_loss(
+                    prev_regular_node,
+                    curr_node,
+                )
             hw = curr_node.head_loss_bend or 0.0
             
             # 查找前一个非渐变段节点到当前节点之间的渐变段损失
-            accumulated_transition_loss = 0.0
-            transition_len_between = 0.0
-            for j in range(prev_regular_node_idx + 1, i):
-                if nodes[j].is_transition:
-                    transition_loss = self._estimate_transition_loss(prev_regular_node, curr_node)
-                    accumulated_transition_loss += transition_loss
-                    if nodes[j].transition_length:
-                        transition_len_between += nodes[j].transition_length
+            accumulated_transition_loss, transition_len_between = self._estimate_transition_loss_between(
+                nodes,
+                prev_regular_node_idx,
+                i,
+                prev_regular_node,
+                curr_node,
+            )
             
             # 计算沿程损失
             if window_override:
@@ -1971,12 +2162,40 @@ class HydraulicCalculator:
 
         prev_regular_node = first_regular_node
         prev_regular_idx = first_regular_idx
+        skip_until_idx = -1
+
+        if is_spillway_steep_chute_inlet(first_regular_node):
+            last_idx = calculate_and_apply_spillway_steep_chute_group(
+                nodes,
+                first_regular_idx,
+                first_regular_node.water_level,
+            )
+            prev_regular_node = nodes[last_idx]
+            prev_regular_idx = last_idx
+            skip_until_idx = last_idx
 
         for i in range(first_regular_idx + 1, len(nodes)):
             curr_node = nodes[i]
 
             # 跳过渐变段行
+            if i <= skip_until_idx:
+                continue
             if curr_node.is_transition:
+                continue
+
+            if is_spillway_steep_chute_inlet(curr_node):
+                transition_loss = self._actual_transition_loss_between(nodes, prev_regular_idx, i)
+                inlet_water_level = prev_regular_node.water_level - transition_loss
+                last_idx = calculate_and_apply_spillway_steep_chute_group(
+                    nodes,
+                    i,
+                    inlet_water_level,
+                )
+                prev_regular_node = nodes[last_idx]
+                prev_regular_idx = last_idx
+                skip_until_idx = last_idx
+                continue
+            if is_spillway_steep_chute_node(curr_node):
                 continue
 
             # 分水闸/分水口：仅考虑过闸损失
@@ -1992,13 +2211,7 @@ class HydraulicCalculator:
                 continue
 
             # 累加上一个常规节点到当前节点之间的渐变段损失
-            transition_loss = 0.0
-            for j in range(prev_regular_idx + 1, i):
-                if nodes[j].is_transition:
-                    loss = nodes[j].head_loss_transition or 0.0
-                    if loss <= 0 and nodes[j].transition_calc_details:
-                        loss = nodes[j].transition_calc_details.get('total', 0.0) or 0.0
-                    transition_loss += loss
+            transition_loss = self._actual_transition_loss_between(nodes, prev_regular_idx, i)
 
             # 读取各项损失（已在前序计算中得到）
             hf = curr_node.head_loss_friction or 0.0

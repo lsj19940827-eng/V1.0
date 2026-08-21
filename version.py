@@ -6,6 +6,6 @@
 发版时只需修改此文件。
 """
 
-APP_VERSION = "1.3.8"
+APP_VERSION = "1.3.9"
 APP_NAME = "渠系水力计算综合系统"
 APP_NAME_EN = "CanalHydraulicCalc"

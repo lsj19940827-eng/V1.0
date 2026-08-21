@@ -9,6 +9,7 @@
 
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
+import copy
 import time
 
 try:
@@ -52,6 +53,13 @@ def normalize_section_type_name(section_type: Any) -> str:
         "暗涵圆拱直墙型": "暗涵-圆拱直墙型",
         "暗涵-圆拱直墙型": "暗涵-圆拱直墙型",
         "复式梯形": "明渠-复式梯形",
+        "充水渠": "泄水渠与陡坡",
+        "泄水渠": "泄水渠与陡坡",
+        "泄水渠与陡坡": "泄水渠与陡坡",
+        "陡坡": "泄水渠与陡坡",
+        "泄槽": "泄水渠与陡坡",
+        "陡槽": "泄水渠与陡坡",
+        "泄水渠及陡坡": "泄水渠与陡坡",
         "平底圆形": "隧洞-平底圆形",
         "平底圆形隧洞": "隧洞-平底圆形",
         "隧洞平底圆形": "隧洞-平底圆形",
@@ -252,6 +260,11 @@ class SectionResult:
         }
         if compound_params:
             params['section_params'].update(compound_params)
+        spillway_payload = {}
+        if isinstance(self.raw_result, dict):
+            spillway_payload = self.raw_result.get('spillway_steep_chute', {}) or {}
+        if isinstance(spillway_payload, dict) and spillway_payload:
+            params['section_params']['spillway_steep_chute'] = copy.deepcopy(spillway_payload)
         # 计算比降
         if self.slope_inv and self.slope_inv > 0:
             params['slope_i'] = 1.0 / self.slope_inv
@@ -380,7 +393,7 @@ class SharedDataManager:
                     use_increase=use_increase,
                     raw_result=result
                 )
-            
+
             section_result = SectionResult(
                 source=source,
                 timestamp=time.time(),
@@ -418,8 +431,8 @@ class SharedDataManager:
                 section_result.h = result.get('h_design', result.get('h', None))
                 if section_type in {"隧洞-圆拱直墙型", "暗涵-圆拱直墙型"}:
                     section_result.H_straight = result.get('H_straight', None)
-                # 梯形边坡系数
-                if "梯形" in section_type or section_type == '梯形':
+                # 梯形和充水渠类断面都需要把边坡系数传到表3。
+                if "梯形" in section_type or section_type in {'梯形', '泄水渠与陡坡'}:
                     section_result.m = result.get('m', 0)
             
             # 圆形断面（明渠-圆形、隧洞-圆形）

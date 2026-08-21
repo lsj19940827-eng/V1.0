@@ -765,6 +765,133 @@ def test_tunnel_friction_loss_still_uses_bottom_slope():
     assert abs(hf - expected) < 1e-6, f"隧洞应保持底坡法。预期 {expected:.6f}，实际 {hf:.6f}"
 
 
+def test_friction_length_keeps_bend_arcs_and_only_deducts_transition():
+    """沿程摩阻应包含MC区间内的弧段，只扣除已单列计损的渐变段。"""
+    upstream = ChannelNode()
+    upstream.station_MC = 100.0
+    upstream.arc_length = 20.0
+    upstream.slope_i = 1.0 / 2000.0
+
+    downstream = ChannelNode()
+    downstream.station_MC = 200.0
+    downstream.arc_length = 10.0
+    downstream.slope_i = 1.0 / 1000.0
+
+    calc = HydraulicCalculator(ProjectSettings())
+    hf = calc.calculate_friction_loss(upstream, downstream, transition_length=15.0)
+
+    assert downstream.friction_calc_details["L_mc"] == pytest.approx(100.0)
+    assert downstream.friction_calc_details["arc1_half"] == pytest.approx(10.0)
+    assert downstream.friction_calc_details["arc2_half"] == pytest.approx(5.0)
+    assert downstream.friction_calc_details["L_effective"] == pytest.approx(85.0)
+    assert hf == pytest.approx(0.085)
+
+
+def test_open_channel_bend_formula_returns_additional_term_not_total_bend_loss():
+    """普通渠道弯道公式应只返回二次流附加项，不重复包含弧段普通摩阻。"""
+    bend = ChannelNode()
+    bend.arc_length = 20.0
+    bend.roughness = 0.014
+    bend.velocity = 2.0
+    bend.water_depth = 1.0
+    bend.turn_radius = 50.0
+    bend.section_params = {"R": 1.0, "B": 2.0, "m": 0.0}
+
+    calc = HydraulicCalculator(ProjectSettings())
+    hw = calc.calculate_bend_loss(bend)
+
+    base_arc_friction = (
+        bend.roughness ** 2
+        * bend.arc_length
+        * bend.velocity ** 2
+        / bend.section_params["R"] ** (4.0 / 3.0)
+    )
+    bend_factor = 0.75 * (bend.section_params["B"] / bend.turn_radius) ** 0.5
+    expected_additional = base_arc_friction * bend_factor
+
+    assert hw == pytest.approx(round(expected_additional, 6))
+    assert hw != pytest.approx(round(base_arc_friction * (1.0 + bend_factor), 6))
+
+
+def test_open_channel_interval_bend_loss_uses_two_adjacent_half_bends():
+    """普通明流本行弯道附加损失应分别采用上、下游完整弯道损失的一半。"""
+    upstream = ChannelNode()
+    upstream.name = "上游弯道"
+    upstream.structure_type = StructureType.from_string("明渠-梯形")
+    upstream.arc_length = 20.0
+    upstream.roughness = 0.014
+    upstream.velocity = 2.0
+    upstream.water_depth = 1.0
+    upstream.turn_radius = 50.0
+    upstream.section_params = {"R": 1.0, "B": 2.0, "m": 0.0}
+
+    downstream = ChannelNode()
+    downstream.name = "当前弯道"
+    downstream.structure_type = StructureType.from_string("隧洞-圆拱直墙型")
+    downstream.arc_length = 12.0
+    downstream.roughness = 0.016
+    downstream.velocity = 1.6
+    downstream.water_depth = 1.2
+    downstream.turn_radius = 30.0
+    downstream.section_params = {"R": 0.8, "B": 2.4, "m": 0.0}
+
+    calc = HydraulicCalculator(ProjectSettings())
+    upstream_full = calc.calculate_bend_loss(upstream)
+    downstream_full = calc.calculate_bend_loss(downstream)
+    row_loss = calc.calculate_open_channel_interval_bend_loss(upstream, downstream)
+
+    expected = round(upstream_full / 2.0 + downstream_full / 2.0, 6)
+    details = downstream.bend_calc_details
+    assert row_loss == pytest.approx(expected, abs=1e-6)
+    assert details["method"] == "open_channel_interval_halves"
+    assert details["allocation_basis"] == "MC_to_MC"
+    assert details["upstream_half_loss"] == pytest.approx(upstream_full / 2.0, abs=1e-6)
+    assert details["downstream_half_loss"] == pytest.approx(downstream_full / 2.0, abs=1e-6)
+    assert details["upstream_full_details"]["Rc"] == pytest.approx(50.0)
+    assert details["downstream_full_details"]["Rc"] == pytest.approx(30.0)
+
+
+def test_forward_profile_stores_interval_bend_loss_on_downstream_row():
+    """表3当前行应保存上一MC到当前MC区间的半弯道分配值。"""
+    def _make_node(name, station, arc_length, turn_radius, velocity):
+        """构造参数完整的普通明渠节点。"""
+        node = ChannelNode()
+        node.name = name
+        node.structure_type = StructureType.from_string("明渠-梯形")
+        node.station_MC = station
+        node.arc_length = arc_length
+        node.turn_radius = turn_radius
+        node.roughness = 0.014
+        node.velocity = velocity
+        node.water_depth = 1.0
+        node.flow = velocity * 2.0
+        node.slope_i = 1.0 / 1000.0
+        node.structure_height = 2.0
+        node.section_params = {"B": 2.0, "m": 0.0, "h": 1.0, "A": 2.0, "X": 4.0, "R": 0.5}
+        return node
+
+    start = _make_node("起点弯道", 0.0, 20.0, 50.0, 2.0)
+    middle = _make_node("中间弯道", 100.0, 10.0, 30.0, 1.8)
+    end = _make_node("终点", 200.0, 0.0, 0.0, 1.6)
+
+    settings = ProjectSettings()
+    settings.start_water_level = 100.0
+    calc = HydraulicCalculator(settings)
+    start_full = calc.calculate_bend_loss(start)
+    middle_full = calc.calculate_bend_loss(middle)
+
+    calc.calculate_water_profile([start, middle, end], method="forward")
+
+    assert start.head_loss_bend == pytest.approx(0.0)
+    assert middle.head_loss_bend == pytest.approx(
+        round(start_full / 2.0 + middle_full / 2.0, 6),
+        abs=1.1e-6,
+    )
+    assert end.head_loss_bend == pytest.approx(round(middle_full / 2.0, 6), abs=1.1e-6)
+    assert middle.bend_calc_details["method"] == "open_channel_interval_halves"
+    assert end.bend_calc_details["downstream_half_loss"] == pytest.approx(0.0)
+
+
 def test_unnamed_pressure_pipe_row_outside_xxpipe_keeps_original_scope():
     """
     测试匿名普通有压管道行的新口径只在 xx管 渠道级别下生效。

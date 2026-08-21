@@ -21,6 +21,7 @@ class StructureType(Enum):
     MINGQU_RECTANGULAR = "明渠-矩形"
     MINGQU_CIRCULAR = "明渠-圆形"
     MINGQU_U = "明渠-U形"
+    FILL_CHANNEL = "充水渠"
     
     # 渡槽类型
     AQUEDUCT_U = "渡槽-U形"
@@ -51,6 +52,9 @@ class StructureType(Enum):
     
     # 有压管道（类似倒虹吸，参与批量计算和水面线推求）
     PRESSURE_PIPE = "有压管道"
+
+    # 泄水渠与陡坡独立模块；充水渠/泄水渠/陡坡类表格链路统一进入该专项内核。
+    SPILLWAY_STEEP_CHUTE = "泄水渠与陡坡"
 
     # xx管专用管道结构
     DIRECTIONAL_DRILL = "定向钻"
@@ -134,7 +138,9 @@ class StructureType(Enum):
             cls.MINGQU_RECTANGULAR,
             cls.MINGQU_CIRCULAR,
             cls.MINGQU_U,
+            cls.FILL_CHANNEL,
             cls.PRESSURE_PIPE,
+            cls.SPILLWAY_STEEP_CHUTE,
         ]
 
     @classmethod
@@ -210,6 +216,13 @@ class StructureType(Enum):
             "暗涵-圆拱直墙型": cls.CULVERT_ARCH,
             "圆拱直墙型暗涵": cls.CULVERT_ARCH,
             "暗涵圆拱直墙型": cls.CULVERT_ARCH,
+            "充水渠": cls.SPILLWAY_STEEP_CHUTE,
+            "泄水渠": cls.SPILLWAY_STEEP_CHUTE,
+            "泄水渠与陡坡": cls.SPILLWAY_STEEP_CHUTE,
+            "陡坡": cls.SPILLWAY_STEEP_CHUTE,
+            "泄槽": cls.SPILLWAY_STEEP_CHUTE,
+            "陡槽": cls.SPILLWAY_STEEP_CHUTE,
+            "泄水渠及陡坡": cls.SPILLWAY_STEEP_CHUTE,
         }
         if text in alias_map:
             return alias_map[text]
