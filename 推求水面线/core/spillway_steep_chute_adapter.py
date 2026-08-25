@@ -10,8 +10,12 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from models.data_models import ChannelNode
-from models.enums import InOutType
+if __package__ and __package__.startswith("推求水面线."):
+    from ..models.data_models import ChannelNode
+    from ..models.enums import InOutType
+else:
+    from models.data_models import ChannelNode
+    from models.enums import InOutType
 
 
 SPILLWAY_STEEP_CHUTE_TEXT = "泄水渠与陡坡"

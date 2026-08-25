@@ -39,6 +39,7 @@
 - `app_渠系计算前端/culvert/panel.py`：暗涵设计页主控，负责 `暗涵-矩形 / 暗涵-圆拱直墙型` 的断面类型切换、输入参数、多工况保存、结果展示、断面图、工况对比以及 Word/TXT/DXF 标题口径；圆拱直墙型支持可选 `H直`，留空自动推导，填写时固定几何核算，但在这里始终走暗涵算法分支，不走隧洞页链路；界面断面图通过共享绘图底座绘制，单工况加大水位在设计图内叠加。
 - `app_渠系计算前端/culvert/dxf_export.py`：暗涵断面 DXF 导出，负责矩形和圆拱直墙型暗涵轮廓、水位线、尺寸标注、参数文字块和工况对比附表。
 - `app_渠系计算前端/water_profile/panel.py`：表3水面线页面主控，负责节点与表格同步、流量段只读查看、辅助行保存恢复、连续承压链、压力管道结果回写和 DXF 导出入口。当前会把批量结果或 Excel 带入的 `充水渠 / 泄水渠 / 陡坡 / 泄槽 / 陡槽 / 泄水渠与陡坡` 统一归一为 `泄水渠与陡坡`，并把专项隐藏参数写入节点 `section_params`，其中 `display_structure_type` 只服务纵断面 DXF 显示；正式水位递推交给 `calculator.py + spillway_steep_chute_adapter.py` 完成连续链分段调度。旧 `矩形暗涵 / 矩形暗渠 / 暗渠` 仍归一为 `暗涵-矩形`，`暗涵-圆拱直墙型` 继续带 `B / H_straight / H_total / theta_deg` 进入表3复算和导出边界判断。
+- `app_渠系计算前端/water_profile/core_engine_diagnostics.py`：水面线核心导入失败诊断层，负责提取异常类型和缺失模块，把版本、运行路径和完整异常写入用户可写日志，并为“插入渐变段”等入口生成简明恢复建议和可复制详情；日志失败本身不得再次阻断面板加载。
 - `app_渠系计算前端/water_profile/panel.py` 的有压管道结果弹窗：把 `writeback_enabled=True` 的正式计入记录放在主表，把 `writeback_enabled=False` 的整组参考值和锚点记录放在“参考结果”页；回写按钮、连续链总览和顶部正式计数只使用正式计入记录。
 - `app_渠系计算前端/water_profile/panel.py` 的充水渠别名链路：从批量结果或 Excel 带入的 `充水渠 / 泄水渠 / 陡坡 / 泄槽 / 陡槽 / 泄水渠与陡坡` 统一归一为 `泄水渠与陡坡`，表3把连续专项链交给适配层分段调用专项内核；允许名称为空，但孤立单行会提示缺少相邻下游节点。
 - `app_渠系计算前端/water_profile/water_profile_dialogs.py`：有压管道配置窗口，负责普通模式的链卡/分段卡，以及连续承压整线的整线卡、隧洞只读摘要、DXF 导入锚点选择和非隧洞覆盖校验；`xx管` 夹带隧洞参数统一从表1/Excel 读取，弹窗只做只读摘要和缺项提示，不再新增弹窗手填入口，圆拱直墙型摘要读取 `B / H直 / θ / H_total`。整线卡导入纵断面前，会先按解析器返回的候选结果决定是否需要确认，再继续导入，并支持在同一次弹窗里连续补导入多份 DXF；完整导入、部分导入和清空都会即时同步 route 级 `longitudinal_nodes + raw_profile_polyline` 到持久层。窗口重开时固定先按 `route_key` 恢复 `routes[route_key].longitudinal_nodes / raw_profile_polyline / profile_segments`，只有 route 级拿不到时才回退 `pipe / segment` 兼容入口。水锤验算由 `PressurePipeWaterHammerDialog` 以 `water_hammer_only` 模式承载；单管和整线卡都提供“允许压力 MPa”输入，默认 `1.0MPa` 并显示换算允许压力水头 `101.9368m`。单管继续使用 `L / D / v0 / H0 / E` 预填，并在钢筋混凝土管或 PCCP 管时可输入 `a0`；整线水锤段按“连续有压线末端阀门启闭”展示，成员参数表列出各小段 `Q / D / 管材 / E / v0 / a0`，整线级输入保留 `L / 统一壁厚 e / 启闭时间 Ts / 允许压力`；未免验算时结果区和明细表显示 `Hst / Hmax / Hmin`、管底承压余量和管顶最低余量。
@@ -59,7 +60,7 @@
 - `update_helper.py`：独立安装窗口，负责展示安装阶段、`validate/apply` 细分状态、补丁校验进度、旧残留清理失败提示、回滚结果文案和日志入口。
 - `app_渠系计算前端/update_dialog.py`：更新入口对话框，负责选择补丁或全量包、把候选下载地址列表和 checksum 交给下载线程、安装前仅做轻量包校验，以及在补丁下载失败时自动切回支持镜像兜底的全量包。
 - `tools/patch_policy.py`：补丁发布安全策略，负责统一判断补丁大小、删除文件数量和总覆盖量是否超过线上发布阈值。
-- `tools/build.py`：构建脚本，负责按分组校验关键依赖、单独拦截 Word 导出依赖缺失、显式收集 `latex2mathml` 等运行时数据文件、生成 manifest、剔除运行时自动保存文件、构建通用补丁包，并按补丁覆盖范围和补丁包大小决定是否发布补丁。
+- `tools/build.py`：构建脚本，负责按分组校验关键依赖、单独拦截 Word 导出依赖缺失、显式收集 `latex2mathml` 等运行时数据文件和完整 `推求水面线` 子模块、生成 manifest、剔除运行时自动保存文件、构建通用补丁包，并按补丁覆盖范围和补丁包大小决定是否发布补丁。
 - `tools/gen_app_icon.py`：应用图标生成脚本，负责从 `app_渠系计算前端/resources/logo.png` 生成仅含蓝色新 Logo 本体的根目录 `icon.ico` 和共享 `resources/logo.ico` 多尺寸 ICO。
 - `tools/document_to_markdown.py`：文档转 Markdown 工具，负责读取 Word、PDF、Excel 文档并输出 Markdown，依赖 `python-docx / docx2txt / pdfplumber / pandas`。
 - `tools/release_snapshot.py`：正式发版快照工具，负责把 `tag / full zip / patch zip / manifest / version.json` 固化到 `.release-snapshots/`，并记录 GitHub 主地址和 Gitee 镜像地址，作为后续回补 patch 的唯一基线。
@@ -135,7 +136,7 @@
 - `panel.py`、`cad_tools.py` 和 `multi_siphon_dialog.py` 在导入 `utils.*` 前，会先加载 `推求水面线.utils`，让正式包运行时的顶层 `utils` 固定落到项目自带实现。
 - `bootstrap.py` 在创建主窗口前会先调用 `webengine_diagnostics.py` 做标准预检；创建 `QApplication` 后会统一设置由蓝色新 Logo 本体生成的多尺寸 `icon.ico`，Windows 下还会设置应用标识，保证标题栏、弹窗和任务栏使用同一套图标；预检阶段现在只采集轻量运行时信息，不再顺手调用可能阻塞的系统摘要接口。
 - `app.py` 启动时会 eager 创建全部面板，但 `pressure_pipe/panel.py` 的初始帮助页渲染已改为延后执行；这样仍保留“页面对象先建好”的兼容口径，同时避免单个结果页把主窗口首次显示卡住。
-- `tools/build.py` 会先按分组校验关键依赖，并复用与 PyInstaller 相同的项目搜索路径；Word 导出依赖缺失时会先直接中止打包，再根据 `UNIVERSAL_PATCH_MIN_VERSION` 选出可覆盖的旧版 manifest 生成通用补丁。补丁是否发布统一走 `tools/patch_policy.py`，删除文件过多、“新增/修改 + 删除”总量过大或补丁接近完整包时，只保留全量包。
+- `tools/build.py` 会先按分组校验关键依赖，并复用与 PyInstaller 相同的项目搜索路径；水面线模块按完整包 `推求水面线` 收集并显式预检关键子模块，避免冻结环境中的顶层 `core` 同名包抢占。Word 导出依赖缺失时会先直接中止打包，再根据 `UNIVERSAL_PATCH_MIN_VERSION` 选出可覆盖的旧版 manifest 生成通用补丁。补丁是否发布统一走 `tools/patch_policy.py`，删除文件过多、“新增/修改 + 删除”总量过大或补丁接近完整包时，只保留全量包。
 - `tools/release.py` 会读取 `patch-info.json` 决定是否把补丁链接写进正式 `version.json`，并再次执行补丁安全策略；正式发版会把完整包和补丁包上传到 GitHub Release。Gitee 只接收不超过 100MB 的安全补丁包，成功后只把 Gitee 补丁附件地址写入 `patch_url_mirrors`；完整包不上传 Gitee，也不写入 Gitee 全量镜像地址。没有 `patch-info.json`、补丁不满足策略或补丁超过 100MB 时，Gitee 镜像会被跳过，用户端仍可用 GitHub 完整包更新。
 - `tools/backfill_patch_release.py` 不改 `tools/build.py` 的默认补丁门槛；它只面向已发正式版的补救场景，会读取 `.release-snapshots/` 中从 `--min-version` 到目标版本前的全部正式快照 manifest 重新生成 patch，并在补丁通过 `tools/patch_policy.py` 安全检查、且确认 Gist 当前 `latest_version` 仍等于目标版本后，才会补挂 Release 资产和回写 patch 字段。
 - `updater.py` 读取 `version.json.min_patch_version` 后，只对满足版本下限的本机提供补丁下载；下载时主地址优先，失败或 checksum 不一致时继续尝试 `download_url_mirrors / patch_url_mirrors` 中的备用地址。进入安装后，会在 `validate` 阶段先清理旧 `_update_sessions` 残留，再把“检查写入权限 / 统计安装目录大小 / 解压完整安装包或补丁包 / 校验补丁适用性（x/y）”通过 `stage_callback` 传给 `update_helper.py`。如果补丁失败且回滚安全，`updater.py` 会继续下载并安装会话里记录的完整包候选地址列表。

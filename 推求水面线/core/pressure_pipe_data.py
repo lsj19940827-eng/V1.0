@@ -12,8 +12,12 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.data_models import ChannelNode
-from models.enums import StructureType, InOutType
+if __package__ and __package__.startswith("推求水面线."):
+    from ..models.data_models import ChannelNode
+    from ..models.enums import StructureType, InOutType
+else:
+    from models.data_models import ChannelNode
+    from models.enums import StructureType, InOutType
 
 
 @dataclass

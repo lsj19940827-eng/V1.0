@@ -20,17 +20,42 @@ _kernel_dir = os.path.join(_repo_root, "calc_渠系计算算法内核")
 if _kernel_dir not in sys.path:
     sys.path.insert(0, _kernel_dir)
 
-from models.data_models import ChannelNode, OpenChannelParams, ProjectSettings
-from models.enums import StructureType, InOutType
-from config.constants import XXPIPE_CHANNEL_LEVEL_OPTIONS, ZERO_TOLERANCE
-from core.geometry_calc import GeometryCalculator
-from core.hydraulic_calc import HydraulicCalculator
-from core.spillway_steep_chute_adapter import (
-    SPILLWAY_STEEP_CHUTE_TEXT,
-    get_spillway_steep_chute_total_loss,
-    is_spillway_steep_chute_value,
-    prepare_spillway_steep_chute_groups,
-)
+if __package__ and __package__.startswith("推求水面线."):
+    from ..models.data_models import ChannelNode, OpenChannelParams, ProjectSettings
+    from ..models.enums import StructureType, InOutType
+    from ..config.constants import (
+        DEFAULT_GATE_HEAD_LOSS,
+        TRANSITION_LENGTH_COEFFICIENTS,
+        VELOCITY_PRECISION,
+        XXPIPE_CHANNEL_LEVEL_OPTIONS,
+        ZERO_TOLERANCE,
+    )
+    from .geometry_calc import GeometryCalculator
+    from .hydraulic_calc import HydraulicCalculator
+    from .spillway_steep_chute_adapter import (
+        SPILLWAY_STEEP_CHUTE_TEXT,
+        get_spillway_steep_chute_total_loss,
+        is_spillway_steep_chute_value,
+        prepare_spillway_steep_chute_groups,
+    )
+else:
+    from models.data_models import ChannelNode, OpenChannelParams, ProjectSettings
+    from models.enums import StructureType, InOutType
+    from config.constants import (
+        DEFAULT_GATE_HEAD_LOSS,
+        TRANSITION_LENGTH_COEFFICIENTS,
+        VELOCITY_PRECISION,
+        XXPIPE_CHANNEL_LEVEL_OPTIONS,
+        ZERO_TOLERANCE,
+    )
+    from core.geometry_calc import GeometryCalculator
+    from core.hydraulic_calc import HydraulicCalculator
+    from core.spillway_steep_chute_adapter import (
+        SPILLWAY_STEEP_CHUTE_TEXT,
+        get_spillway_steep_chute_total_loss,
+        is_spillway_steep_chute_value,
+        prepare_spillway_steep_chute_groups,
+    )
 from 矩形暗涵设计 import calculate_rectangular_outputs
 
 FILL_CHANNEL_TEXT = "充水渠"
@@ -234,7 +259,6 @@ class WaterProfileCalculator:
                     (getattr(node, "section_params", {}) or {}).get("gate_head_loss_user_set", False)
                 )
                 if node.head_loss_gate == 0.0 and not gate_loss_user_set:
-                    from config.constants import DEFAULT_GATE_HEAD_LOSS
                     node.head_loss_gate = DEFAULT_GATE_HEAD_LOSS
             
             # 3. 应用断面参数库中的参数（如果有）
@@ -1355,8 +1379,6 @@ class WaterProfileCalculator:
         Returns:
             估算的渐变段长度(m)
         """
-        from config.constants import TRANSITION_LENGTH_COEFFICIENTS
-
         # 获取特征宽度
         B = self._get_characteristic_width(node)
         if B <= 0:
@@ -1994,7 +2016,6 @@ class WaterProfileCalculator:
                         open_channel.section_params["A"] = round(outputs["A"], 3)
                         open_channel.section_params["X"] = round(outputs["P"], 3)
                         open_channel.section_params["R"] = round(outputs["R_hyd"], 3)
-                        from config.constants import VELOCITY_PRECISION
                         open_channel.velocity = round(outputs["V"], VELOCITY_PRECISION)
             elif is_u_section:
                 # U形断面：复用 hydraulic_calc 的面积/湿周计算
@@ -2013,7 +2034,6 @@ class WaterProfileCalculator:
                 # 计算流速 v = Q / A
                 Q = open_channel.flow
                 if Q > 0 and A > 0:
-                    from config.constants import VELOCITY_PRECISION
                     open_channel.velocity = round(Q / A, VELOCITY_PRECISION)
         
         # 坐标插值

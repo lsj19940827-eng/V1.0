@@ -118,6 +118,11 @@ from app_渠系计算前端.structure_type_selector import StructureTypeSelector
 from app_渠系计算前端.case_manager import FlowLayout as _FlowLayout
 from app_渠系计算前端.batch.panel import BatchPanel, format_station_display, parse_station_input
 from app_渠系计算前端.debug_utils import debug_print
+from app_渠系计算前端.water_profile.core_engine_diagnostics import (
+    build_core_engine_copyable_details,
+    build_core_engine_user_message,
+    record_core_engine_import_failure,
+)
 try:
     from utils.pressure_pipe_result_helpers import (
         make_pressure_pipe_identity,
@@ -166,11 +171,12 @@ except (ImportError, AttributeError):
         }
 
 # 核心计算引擎
+CORE_ENGINE_LOAD_FAILURE = None
 try:
-    from models.data_models import ChannelNode, ProjectSettings, TransitionLengthRule
-    from models.enums import StructureType, InOutType
-    from core.calculator import WaterProfileCalculator
-    from core.spillway_steep_chute_adapter import (
+    from 推求水面线.models.data_models import ChannelNode, ProjectSettings, TransitionLengthRule
+    from 推求水面线.models.enums import StructureType, InOutType
+    from 推求水面线.core.calculator import WaterProfileCalculator
+    from 推求水面线.core.spillway_steep_chute_adapter import (
         SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS,
         SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS,
         SPILLWAY_STEEP_CHUTE_ADVANCED_NUMERIC_KEYS,
@@ -180,7 +186,7 @@ try:
     )
     CALCULATOR_AVAILABLE = True
 except ImportError as _e:
-    print(f"[水面线] 核心计算引擎加载失败: {_e}")
+    CORE_ENGINE_LOAD_FAILURE = record_core_engine_import_failure(_e)
     CALCULATOR_AVAILABLE = False
     TransitionLengthRule = None
     SPILLWAY_STEEP_CHUTE_TEXT = "泄水渠与陡坡"
@@ -4620,7 +4626,9 @@ class WaterProfilePanel(QWidget):
         self._transition_length_rules = self._normalize_transition_length_rule_map(rules)
 
     def _has_customized_transition_length_rules(self) -> bool:
-        normalized_rules = self._normalize_transition_length_rule_map(self._transition_length_rules)
+        normalized_rules = self._normalize_transition_length_rule_map(
+            getattr(self, "_transition_length_rules", {})
+        )
         if (not normalized_rules) and getattr(self, "_settings", None):
             normalized_rules = self._normalize_transition_length_rule_map(
                 getattr(self._settings, "transition_length_rules", []) or []
@@ -5036,7 +5044,9 @@ class WaterProfilePanel(QWidget):
         rule_objects = []
         if TransitionLengthRule is None:
             return rule_objects
-        normalized_rules = self._normalize_transition_length_rule_map(self._transition_length_rules)
+        normalized_rules = self._normalize_transition_length_rule_map(
+            getattr(self, "_transition_length_rules", {})
+        )
         if (not normalized_rules) and getattr(self, "_settings", None):
             normalized_rules = self._normalize_transition_length_rule_map(
                 getattr(self._settings, "transition_length_rules", []) or []
@@ -9260,8 +9270,7 @@ class WaterProfilePanel(QWidget):
         if not self._ensure_downstream_ready("执行计算"):
             return
         if not CALCULATOR_AVAILABLE:
-            InfoBar.error("不可用", "核心计算引擎未加载，无法计算",
-                         parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            self._show_core_engine_unavailable("执行计算")
             return
 
         if self.node_table.rowCount() < 2:
@@ -10382,6 +10391,39 @@ class WaterProfilePanel(QWidget):
     def _info_parent(self):
         return self
 
+    def _show_core_engine_unavailable(self, action_name: str) -> None:
+        """展示可复制的核心引擎加载诊断和完整包修复建议。"""
+        dialog = QDialog(self._info_parent())
+        dialog.setWindowTitle("核心计算引擎未加载")
+        dialog.setModal(True)
+        dialog.resize(760, 480)
+
+        layout = QVBoxLayout(dialog)
+        summary = QLabel(
+            build_core_engine_user_message(
+                CORE_ENGINE_LOAD_FAILURE,
+                action_name=action_name,
+            )
+        )
+        summary.setWordWrap(True)
+        summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(summary)
+
+        detail_label = QLabel("可复制诊断信息：")
+        layout.addWidget(detail_label)
+
+        details = QTextEdit()
+        details.setReadOnly(True)
+        details.setPlainText(
+            build_core_engine_copyable_details(CORE_ENGINE_LOAD_FAILURE)
+        )
+        layout.addWidget(details, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
+
     @contextmanager
     def _table_batch_update(self, table):
         """批量更新表格：屏蔽信号 + 暂停重绘 + 兜底维护 _updating_cells。"""
@@ -10494,8 +10536,7 @@ class WaterProfilePanel(QWidget):
     def _auto_calc_turn_radius(self):
         """根据规范自动计算推荐转弯半径，并弹出详细计算过程"""
         if not CALCULATOR_AVAILABLE:
-            InfoBar.warning("提示", "核心计算引擎未加载",
-                           parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
+            self._show_core_engine_unavailable("自动计算转弯半径")
             return
         nodes = self._build_nodes_from_table()
         if not nodes:
@@ -10662,8 +10703,7 @@ class WaterProfilePanel(QWidget):
         if not self._ensure_downstream_ready("插入渐变段"):
             return
         if not CALCULATOR_AVAILABLE:
-            InfoBar.error("不可用", "核心计算引擎未加载",
-                         parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            self._show_core_engine_unavailable("插入渐变段")
             return
 
         if self.node_table.rowCount() < 2:
@@ -10956,8 +10996,7 @@ class WaterProfilePanel(QWidget):
             return
         if not CALCULATOR_AVAILABLE:
             debug_print("[DEBUG] CALCULATOR_AVAILABLE = False，返回")
-            InfoBar.error("不可用", "核心计算引擎未加载",
-                         parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            self._show_core_engine_unavailable("打开倒虹吸水力计算")
             return
 
         nodes = self._build_nodes_from_table()
@@ -15450,8 +15489,7 @@ class WaterProfilePanel(QWidget):
             return
         if not CALCULATOR_AVAILABLE:
             debug_print("[DEBUG] CALCULATOR_AVAILABLE = False，返回")
-            InfoBar.error("不可用", "核心计算引擎未加载",
-                         parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+            self._show_core_engine_unavailable("打开有压管道水力计算")
             return
 
         if not nodes:
@@ -15990,13 +16028,7 @@ class WaterProfilePanel(QWidget):
             return
 
         if not CALCULATOR_AVAILABLE:
-            InfoBar.error(
-                "不可用",
-                "核心计算引擎未加载",
-                parent=self._info_parent(),
-                duration=5000,
-                position=InfoBarPosition.TOP,
-            )
+            self._show_core_engine_unavailable("打开有压管道水锤验算")
             return
 
         nodes = self._collect_pressure_pipe_water_hammer_nodes()

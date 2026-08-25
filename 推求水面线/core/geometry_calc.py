@@ -14,9 +14,14 @@ import os
 # 添加父目录到路径以支持相对导入
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.data_models import ChannelNode, ProjectSettings
-from models.enums import InOutType, StructureType
-from config.constants import ZERO_TOLERANCE, ANGLE_PRECISION, LENGTH_PRECISION
+if __package__ and __package__.startswith("推求水面线."):
+    from ..models.data_models import ChannelNode, ProjectSettings
+    from ..models.enums import InOutType, StructureType
+    from ..config.constants import ZERO_TOLERANCE, ANGLE_PRECISION, LENGTH_PRECISION
+else:
+    from models.data_models import ChannelNode, ProjectSettings
+    from models.enums import InOutType, StructureType
+    from config.constants import ZERO_TOLERANCE, ANGLE_PRECISION, LENGTH_PRECISION
 
 
 class GeometryCalculator:

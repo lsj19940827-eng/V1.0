@@ -257,6 +257,8 @@ WATER_PROFILE_CORE_HIDDEN_IMPORTS = [
     "core.calculator",
     "core.geometry_calc",
     "core.hydraulic_calc",
+    "core.spillway_steep_chute_adapter",
+    "app_渠系计算前端.water_profile.core_engine_diagnostics",
     "shared",
     "shared.shared_data_manager",
     "shared.k12_images_data",
@@ -270,6 +272,15 @@ WATER_PROFILE_CORE_HIDDEN_IMPORTS = [
 ]
 
 WATER_PROFILE_NAMESPACE_HIDDEN_IMPORTS = [
+    "推求水面线.core",
+    "推求水面线.core.calculator",
+    "推求水面线.core.geometry_calc",
+    "推求水面线.core.hydraulic_calc",
+    "推求水面线.core.pressure_pipe_calc",
+    "推求水面线.core.spillway_steep_chute_adapter",
+    "推求水面线.config",
+    "推求水面线.config.constants",
+    "推求水面线.config.default_data",
     "推求水面线.utils",
     "推求水面线.utils.excel_io",
     "推求水面线.utils.siphon_extractor",
@@ -281,7 +292,16 @@ WATER_PROFILE_NAMESPACE_HIDDEN_IMPORTS = [
     "推求水面线.models.data_models",
     "推求水面线.models.enums",
     "推求水面线.shared",
+    "推求水面线.shared.shared_data_manager",
     "推求水面线.shared.k12_images_data",
+    "推求水面线.managers",
+    "推求水面线.managers.siphon_manager",
+]
+
+COLLECT_SUBMODULE_PACKAGES = [
+    "app_渠系计算前端",
+    "推求水面线",
+    "土石方计算",
 ]
 
 
@@ -625,11 +645,7 @@ def build(bump: str = None):
         args.append(f"--exclude-module={mod}")
 
     # ---- 收集正式 Python 包的子模块（有 __init__.py，编译为字节码） ----
-    collect_submodules = [
-        "app_渠系计算前端",
-        "土石方计算",
-    ]
-    for mod in collect_submodules:
+    for mod in COLLECT_SUBMODULE_PACKAGES:
         args.append(f"--collect-submodules={mod}")
 
     # ---- 收集第三方包的数据文件（字体/图标/模板等） ----

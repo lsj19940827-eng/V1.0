@@ -15,27 +15,50 @@ import os
 # 添加父目录到路径以支持相对导入
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.data_models import ChannelNode, ProjectSettings
-from models.enums import StructureType, InOutType
-from config.constants import (
-    GRAVITY, ZERO_TOLERANCE, VELOCITY_PRECISION, 
-    ELEVATION_PRECISION, HEAD_LOSS_PRECISION, LOCAL_LOSS_COEFFICIENTS,
-    TRANSITION_ZETA_COEFFICIENTS, TRANSITION_TWISTED_ZETA_RANGE,
-    TRANSITION_LENGTH_COEFFICIENTS, TRANSITION_LENGTH_CONSTRAINTS,
-    XXPIPE_CHANNEL_LEVEL_OPTIONS,
-)
-from core.pressure_pipe_calc import (
-    PIPE_MATERIALS,
-    calc_bend_local_loss as calc_pressure_pipe_bend_local_loss,
-    calc_friction_loss as calc_pressure_pipe_friction_loss,
-)
-from core.spillway_steep_chute_adapter import (
-    SPILLWAY_STEEP_CHUTE_TEXT,
-    calculate_and_apply_spillway_steep_chute_group,
-    is_spillway_steep_chute_inlet,
-    is_spillway_steep_chute_node,
-)
-from utils.pressure_pipe_common import resolve_pressure_pipe_material
+if __package__ and __package__.startswith("推求水面线."):
+    from ..models.data_models import ChannelNode, ProjectSettings
+    from ..models.enums import StructureType, InOutType
+    from ..config.constants import (
+        GRAVITY, ZERO_TOLERANCE, VELOCITY_PRECISION,
+        ELEVATION_PRECISION, HEAD_LOSS_PRECISION, LOCAL_LOSS_COEFFICIENTS,
+        TRANSITION_ZETA_COEFFICIENTS, TRANSITION_TWISTED_ZETA_RANGE,
+        TRANSITION_LENGTH_COEFFICIENTS, TRANSITION_LENGTH_CONSTRAINTS,
+        XXPIPE_CHANNEL_LEVEL_OPTIONS,
+    )
+    from .pressure_pipe_calc import (
+        PIPE_MATERIALS,
+        calc_bend_local_loss as calc_pressure_pipe_bend_local_loss,
+        calc_friction_loss as calc_pressure_pipe_friction_loss,
+    )
+    from .spillway_steep_chute_adapter import (
+        SPILLWAY_STEEP_CHUTE_TEXT,
+        calculate_and_apply_spillway_steep_chute_group,
+        is_spillway_steep_chute_inlet,
+        is_spillway_steep_chute_node,
+    )
+    from ..utils.pressure_pipe_common import resolve_pressure_pipe_material
+else:
+    from models.data_models import ChannelNode, ProjectSettings
+    from models.enums import StructureType, InOutType
+    from config.constants import (
+        GRAVITY, ZERO_TOLERANCE, VELOCITY_PRECISION,
+        ELEVATION_PRECISION, HEAD_LOSS_PRECISION, LOCAL_LOSS_COEFFICIENTS,
+        TRANSITION_ZETA_COEFFICIENTS, TRANSITION_TWISTED_ZETA_RANGE,
+        TRANSITION_LENGTH_COEFFICIENTS, TRANSITION_LENGTH_CONSTRAINTS,
+        XXPIPE_CHANNEL_LEVEL_OPTIONS,
+    )
+    from core.pressure_pipe_calc import (
+        PIPE_MATERIALS,
+        calc_bend_local_loss as calc_pressure_pipe_bend_local_loss,
+        calc_friction_loss as calc_pressure_pipe_friction_loss,
+    )
+    from core.spillway_steep_chute_adapter import (
+        SPILLWAY_STEEP_CHUTE_TEXT,
+        calculate_and_apply_spillway_steep_chute_group,
+        is_spillway_steep_chute_inlet,
+        is_spillway_steep_chute_node,
+    )
+    from utils.pressure_pipe_common import resolve_pressure_pipe_material
 
 FILL_CHANNEL_TEXT = "充水渠"
 FILL_CHANNEL_ALIASES = {
@@ -2657,8 +2680,6 @@ class HydraulicCalculator:
         Returns:
             渐变段损失估算值（m）
         """
-        from config.constants import TRANSITION_ZETA_COEFFICIENTS, TRANSITION_LENGTH_COEFFICIENTS, ZERO_TOLERANCE, GRAVITY, HEAD_LOSS_PRECISION
-        
         # 获取流速
         v1 = prev_node.velocity if prev_node.velocity > 0 else 0
         v2 = next_node.velocity if next_node.velocity > 0 else 0

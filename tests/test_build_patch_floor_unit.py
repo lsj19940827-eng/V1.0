@@ -139,6 +139,38 @@ def test_hidden_imports_include_pressure_pipe_result_helpers():
     assert "推求水面线.utils.pressure_pipe_result_helpers" in hidden_imports
 
 
+def test_hidden_imports_include_water_profile_core_diagnostics_and_adapter():
+    """水面线核心适配器和诊断模块必须显式进入正式安装包。"""
+    hidden_imports = build.get_hidden_imports()
+
+    assert "core.spillway_steep_chute_adapter" in hidden_imports
+    assert "推求水面线.core.spillway_steep_chute_adapter" in hidden_imports
+    assert (
+        "app_渠系计算前端.water_profile.core_engine_diagnostics"
+        in hidden_imports
+    )
+
+
+def test_verify_import_groups_include_water_profile_core_diagnostics_and_adapter():
+    """打包前必须真实导入水面线核心适配器和诊断模块。"""
+    verify_groups = build.get_verify_import_groups()
+
+    assert "core.spillway_steep_chute_adapter" in verify_groups["推求水面线"]
+    assert (
+        "推求水面线.core.spillway_steep_chute_adapter"
+        in verify_groups["推求水面线"]
+    )
+    assert (
+        "app_渠系计算前端.water_profile.core_engine_diagnostics"
+        in verify_groups["推求水面线"]
+    )
+
+
+def test_build_collects_full_water_profile_package():
+    """正式包必须整体收集推求水面线命名空间，避免顶层同名包冲突。"""
+    assert "推求水面线" in build.COLLECT_SUBMODULE_PACKAGES
+
+
 def test_verify_import_groups_include_pressure_pipe_result_helpers():
     verify_groups = build.get_verify_import_groups()
 
