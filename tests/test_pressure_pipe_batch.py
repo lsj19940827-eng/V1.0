@@ -8,6 +8,7 @@
 import sys
 import os
 import shutil
+import warnings
 from pathlib import Path
 import uuid
 import numpy as np
@@ -17,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "calc_渠系计
 
 from 有压管道设计 import (
     run_batch_scan, BatchScanConfig, BatchScanResult,
-    DEFAULT_DIAMETER_SERIES,
+    DEFAULT_DIAMETER_SERIES, PLOT_FLOW_UNIT_M3_PER_S,
 )
 
 
@@ -76,14 +77,18 @@ class TestBatchScan:
         assert len(result.logs) > 0
 
     def test_png_generated(self, tmp_output_dir):
-        """如果有图表，应生成子图PNG"""
+        """如果有图表，应生成子图 PNG，且立方米单位不得触发缺字警告。"""
         config = self._small_config(tmp_output_dir)
-        result = run_batch_scan(config)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = run_batch_scan(config)
 
         # PNG 列表可以为空（如果没有满足条件的数据点）
         # 但不应报错
         for png_path in result.generated_pngs:
             assert os.path.exists(png_path)
+        assert PLOT_FLOW_UNIT_M3_PER_S == r"m$^3$/s"
+        assert not any("Glyph 179" in str(item.message) for item in caught)
 
     def test_cancel_stops_early(self, tmp_output_dir):
         """取消标志应使任务提前终止"""

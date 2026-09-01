@@ -21,6 +21,8 @@ from scipy.optimize import fsolve
 
 DUCTILE_IRON_F_LOWER = 1.899e5
 DUCTILE_IRON_F_UPPER = 2.232e5
+# 用数学公式绘制立方米上角标，避免 SimHei 缺少 Unicode ³ 字形。
+PLOT_FLOW_UNIT_M3_PER_S = r"m$^3$/s"
 
 
 PIPE_MATERIALS = {
@@ -891,7 +893,7 @@ def run_batch_scan(
 
                     ax1.set_xlabel("管径 D (m)")
                     ax1.set_ylabel("流速 (m/s)")
-                    ax1.set_title(f"Q = {q_val1:.1f} m$^3$/s")
+                    ax1.set_title(f"Q = {q_val1:.1f} {PLOT_FLOW_UNIT_M3_PER_S}")
                     # 自适应X轴
                     _d_q1 = set(df_unpr_valid[df_unpr_valid["Q_target (m\u00b3/s)"] == q_val1]["D (m)"].tolist())
                     if not q_press_data.empty:
@@ -903,7 +905,11 @@ def run_batch_scan(
                     r1, c1 = divmod(qi1, ncol1)
                     axes1[r1][c1].set_visible(False)
 
-                fig1.suptitle(f"图1: 无压/有压流速与总水损对比 (Q: {q_start1}-{q_end1} m$^3$/s, {mat_name})", fontsize=14)
+                fig1.suptitle(
+                    f"图1: 无压/有压流速与总水损对比 "
+                    f"(Q: {q_start1}-{q_end1} {PLOT_FLOW_UNIT_M3_PER_S}, {mat_name})",
+                    fontsize=14,
+                )
                 fig1.tight_layout(rect=[0, 0, 1, 0.95])
 
                 pdf_name1 = f"图1_流速水损对比_{q_start1}_{q_end1}_{safe_mat}.pdf"
@@ -984,8 +990,12 @@ def run_batch_scan(
                         _setup_adaptive_xaxis(ax_sub1, list(_d_sub1), fontsize=10)
 
                         # 设置标题
-                        fig_sub1.suptitle(f"图1: 无压/有压流速与总水损对比\n目标流量 Q = {q_val1:.1f} m³/s, 管材: {mat_name}",
-                                         fontsize=14, y=0.98)
+                        fig_sub1.suptitle(
+                            f"图1: 无压/有压流速与总水损对比\n"
+                            f"目标流量 Q = {q_val1:.1f} {PLOT_FLOW_UNIT_M3_PER_S}, 管材: {mat_name}",
+                            fontsize=14,
+                            y=0.98,
+                        )
 
                         # 合并图例
                         handles_sub1, labels_sub1 = ax_sub1.get_legend_handles_labels()
@@ -1081,7 +1091,7 @@ def run_batch_scan(
                     ax2.set_ylabel("总水头损失 (m/km)", color=color_hf)
                     ax1.tick_params(axis="y", labelcolor=color_v)
                     ax2.tick_params(axis="y", labelcolor=color_hf)
-                    ax1.set_title(f"Q = {q_val:.1f} m$^3$/s")
+                    ax1.set_title(f"Q = {q_val:.1f} {PLOT_FLOW_UNIT_M3_PER_S}")
                     _setup_adaptive_xaxis(ax1, q_data["D (m)"].tolist())
 
                 # 隐藏多余子图
@@ -1089,7 +1099,11 @@ def run_batch_scan(
                     r, c = divmod(qi, ncol)
                     axes[r][c].set_visible(False)
 
-                fig.suptitle(f"有压管道优选设计点 (Q: {q_start}-{q_end} m$^3$/s, {mat_name})", fontsize=14)
+                fig.suptitle(
+                    f"有压管道优选设计点 "
+                    f"(Q: {q_start}-{q_end} {PLOT_FLOW_UNIT_M3_PER_S}, {mat_name})",
+                    fontsize=14,
+                )
                 fig.tight_layout(rect=[0, 0, 1, 0.95])
 
                 pdf_name = f"图2_优选设计点_{q_start}_{q_end}_{safe_mat}.pdf"
@@ -1167,8 +1181,12 @@ def run_batch_scan(
                         _setup_adaptive_xaxis(ax_sub2, q_data_sub["D (m)"].tolist(), fontsize=10)
 
                         # 设置标题
-                        fig_sub2.suptitle(f"图2: 有压管道优选设计点\n目标流量 Q = {q_val:.1f} m³/s, 管材: {mat_name}",
-                                         fontsize=14, y=0.98)
+                        fig_sub2.suptitle(
+                            f"图2: 有压管道优选设计点\n"
+                            f"目标流量 Q = {q_val:.1f} {PLOT_FLOW_UNIT_M3_PER_S}, 管材: {mat_name}",
+                            fontsize=14,
+                            y=0.98,
+                        )
 
                         # 创建图例
                         handles_sub2 = [
