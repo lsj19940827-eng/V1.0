@@ -19,10 +19,21 @@ from scipy.optimize import fsolve
 # 1. 常量与配置
 # ============================================================
 
+DUCTILE_IRON_F_LOWER = 1.899e5
+DUCTILE_IRON_F_UPPER = 2.232e5
+
+
 PIPE_MATERIALS = {
     "HDPE管":           {"f": 0.948e5, "m": 1.77, "b": 4.77, "name": "HDPE管"},
     "玻璃钢夹砂管":     {"f": 0.948e5, "m": 1.77, "b": 4.77, "name": "玻璃钢夹砂管"},
-    "球墨铸铁管":       {"f": 2.232e5, "m": 1.852, "b": 4.87, "name": "球墨铸铁管"},
+    "球墨铸铁管":       {
+        "f": DUCTILE_IRON_F_UPPER,
+        "f_min": DUCTILE_IRON_F_LOWER,
+        "f_max": DUCTILE_IRON_F_UPPER,
+        "m": 1.852,
+        "b": 4.87,
+        "name": "球墨铸铁管",
+    },
     "预应力钢筒混凝土管": {"f": 1.312e6, "m": 2.0,  "b": 5.33, "name": "预应力钢筒混凝土管(n=0.013)"},
     "预应力钢筒混凝土管_n014": {"f": 1.516e6, "m": 2.0, "b": 5.33, "name": "预应力钢筒混凝土管(n=0.014)"},
     "预应力钢筒混凝土管_n015": {"f": 1.749e6, "m": 2.0, "b": 5.33, "name": "预应力钢筒混凝土管(n=0.015)"},
@@ -119,6 +130,11 @@ class DiameterCandidate:
     h_loss_total_m: float  # 按管长折算总损失 (m)
     increase_pct: float    # 加大流量百分比 (%)
     Q_increased: float     # 加大后流量 (m3/s)
+    # 球墨铸铁管 f 下限对比结果；其他管材保持 None
+    hf_friction_lower_km: Optional[float] = None
+    hf_local_lower_km: Optional[float] = None
+    hf_total_lower_km: Optional[float] = None
+    h_loss_total_lower_m: Optional[float] = None
     # 无压计算结果
     y_unpr: float = float('nan')          # 无压水深 (m)
     v_unpr: float = float('nan')          # 无压流速 (m/s)
@@ -333,6 +349,20 @@ def evaluate_single_diameter(inp: PressurePipeInput, D: float) -> DiameterCandid
     hf_total_km = hf_friction_km + hf_local_km
     h_loss_total_m = hf_total_km * (inp.length_m / 1000.0)
 
+    # 球墨铸铁管的 f 为规范区间，同时给出同一管径下限结果供用户选用。
+    hf_friction_lower_km = None
+    hf_local_lower_km = None
+    hf_total_lower_km = None
+    h_loss_total_lower_m = None
+    f_lower = mat.get("f_min")
+    if f_lower is not None and float(f_lower) < float(f_c):
+        hf_friction_lower_km = (
+            float(f_lower) * (1000.0 * (Q_inc_m3h ** m_c)) / (d_mm ** b_c)
+        )
+        hf_local_lower_km = inp.local_loss_ratio * hf_friction_lower_km
+        hf_total_lower_km = hf_friction_lower_km + hf_local_lower_km
+        h_loss_total_lower_m = hf_total_lower_km * (inp.length_m / 1000.0)
+
     # 分类
     flags = []
     if ECONOMIC_RULE["v_min"] <= V_press <= ECONOMIC_RULE["v_max"] and hf_total_km <= ECONOMIC_RULE["hf_max"]:
@@ -366,6 +396,10 @@ def evaluate_single_diameter(inp: PressurePipeInput, D: float) -> DiameterCandid
         h_loss_total_m=h_loss_total_m,
         increase_pct=pct,
         Q_increased=Q_inc,
+        hf_friction_lower_km=hf_friction_lower_km,
+        hf_local_lower_km=hf_local_lower_km,
+        hf_total_lower_km=hf_total_lower_km,
+        h_loss_total_lower_m=h_loss_total_lower_m,
         y_unpr=y_u,
         v_unpr=v_u,
         y_D_ratio=yD_u,
@@ -684,6 +718,8 @@ def run_batch_scan(
 
                     results_list.append({
                         "管材类型": mat_name,
+                        "f采用值（上限）": mat["f"],
+                        "f下限": mat.get("f_min", ""),
                         "Q_target (m\u00b3/s)": float(Q),
                         "n_unpr": config.n_unpr if _has_unpr else "",
                         "i_unpr_str": slope_labels[si],
@@ -697,6 +733,22 @@ def run_batch_scan(
                         "hf_local_press (m/km)": c.hf_local_km,
                         "hf_total_press (m/km)": c.hf_total_km,
                         "h_loss_total (m)": c.h_loss_total_m,
+                        "hf_press_f下限 (m/km)": (
+                            c.hf_friction_lower_km
+                            if c.hf_friction_lower_km is not None else ""
+                        ),
+                        "hf_local_press_f下限 (m/km)": (
+                            c.hf_local_lower_km
+                            if c.hf_local_lower_km is not None else ""
+                        ),
+                        "hf_total_press_f下限 (m/km)": (
+                            c.hf_total_lower_km
+                            if c.hf_total_lower_km is not None else ""
+                        ),
+                        "h_loss_total_f下限 (m)": (
+                            c.h_loss_total_lower_m
+                            if c.h_loss_total_lower_m is not None else ""
+                        ),
                         "净空高度 (m)": c.clearance_h,
                         "净空面积 (%)": c.clearance_a_pct,
                         "净空高<0.4m": c.flag_clr_h,
@@ -1202,6 +1254,12 @@ def _build_process_text(
     mat = PIPE_MATERIALS[inp.material_key]
     mat_name = mat["name"]
     is_manual = (category == "指定")
+    f_lower = mat.get("f_min")
+    has_f_range = (
+        f_lower is not None
+        and recommended.hf_friction_lower_km is not None
+        and float(f_lower) < float(mat["f"])
+    )
 
     o = []
     o.append("=" * 70)
@@ -1222,7 +1280,13 @@ def _build_process_text(
     o.append("")
     _n += 1
     o.append(f"  {_n}. 管材系数:")
-    o.append(f"     f = {mat['f']}, m = {mat['m']}, b = {mat['b']}")
+    if has_f_range:
+        o.append(
+            f"     f = {float(f_lower):.0f}～{float(mat['f']):.0f}，"
+            f"m = {mat['m']}，b = {mat['b']}（上下限均计算）"
+        )
+    else:
+        o.append(f"     f = {mat['f']}, m = {mat['m']}, b = {mat['b']}")
     o.append("")
     _n += 1
     o.append(f"  {_n}. 管长:")
@@ -1285,25 +1349,69 @@ def _build_process_text(
     o.append(f"       = {recommended.V_press:.4f} m/s")
     o.append("")
     o.append("  4. 沿程水头损失计算:")
-    o.append(f"     hf = f × (1000 × Q'^m) / (d^b)")
-    o.append(f"        = {mat['f']} × (1000 × {Q_inc_m3h:.2f}^{mat['m']}) / ({d_mm:.0f}^{mat['b']})")
-    o.append(f"        = {recommended.hf_friction_km:.4f} m/km")
+    o.append("     hf = f × (1000 × (Q')^{m}) / (d^{b})")
+    if has_f_range:
+        o.append(f"     f 取上限 {float(mat['f']):.0f}:")
+        o.append(
+            f"        = {mat['f']} × (1000 × ({Q_inc_m3h:.2f})^{{{mat['m']}}}) "
+            f"/ (({d_mm:.0f})^{{{mat['b']}}})"
+        )
+        o.append(f"        = {recommended.hf_friction_km:.4f} m/km")
+        o.append(f"     f 取下限 {float(f_lower):.0f}:")
+        o.append(
+            f"        = {float(f_lower):.0f} × (1000 × ({Q_inc_m3h:.2f})^{{{mat['m']}}}) "
+            f"/ (({d_mm:.0f})^{{{mat['b']}}})"
+        )
+        o.append(f"        = {recommended.hf_friction_lower_km:.4f} m/km")
+    else:
+        o.append(
+            f"        = {mat['f']} × (1000 × ({Q_inc_m3h:.2f})^{{{mat['m']}}}) "
+            f"/ (({d_mm:.0f})^{{{mat['b']}}})"
+        )
+        o.append(f"        = {recommended.hf_friction_km:.4f} m/km")
     o.append("")
     o.append("  5. 局部水头损失计算:")
     _ratio = inp.local_loss_ratio
-    o.append(f"     hj = {_ratio} × hf")
-    o.append(f"         = {_ratio} × {recommended.hf_friction_km:.4f}")
-    o.append(f"         = {recommended.hf_local_km:.4f} m/km")
+    if has_f_range:
+        o.append(f"     f 上限: hj = {_ratio} × {recommended.hf_friction_km:.4f}")
+        o.append(f"                  = {recommended.hf_local_km:.4f} m/km")
+        o.append(f"     f 下限: hj = {_ratio} × {recommended.hf_friction_lower_km:.4f}")
+        o.append(f"                  = {recommended.hf_local_lower_km:.4f} m/km")
+    else:
+        o.append(f"     hj = {_ratio} × hf")
+        o.append(f"         = {_ratio} × {recommended.hf_friction_km:.4f}")
+        o.append(f"         = {recommended.hf_local_km:.4f} m/km")
     o.append("")
     o.append("  6. 总水头损失计算:")
-    o.append(f"     hf总 = hf + hj")
-    o.append(f"         = {recommended.hf_friction_km:.4f} + {recommended.hf_local_km:.4f}")
-    o.append(f"         = {recommended.hf_total_km:.4f} m/km")
+    if has_f_range:
+        o.append(
+            f"     f 上限: hf总 = {recommended.hf_friction_km:.4f} "
+            f"+ {recommended.hf_local_km:.4f} = {recommended.hf_total_km:.4f} m/km"
+        )
+        o.append(
+            f"     f 下限: hf总 = {recommended.hf_friction_lower_km:.4f} "
+            f"+ {recommended.hf_local_lower_km:.4f} = {recommended.hf_total_lower_km:.4f} m/km"
+        )
+    else:
+        o.append("     hf总 = hf + hj")
+        o.append(f"         = {recommended.hf_friction_km:.4f} + {recommended.hf_local_km:.4f}")
+        o.append(f"         = {recommended.hf_total_km:.4f} m/km")
     o.append("")
     o.append("  7. 按管长折算总损失:")
-    o.append(f"     H损 = hf总 × (L / 1000)")
-    o.append(f"        = {recommended.hf_total_km:.4f} × ({inp.length_m} / 1000)")
-    o.append(f"        = {recommended.h_loss_total_m:.4f} m")
+    if has_f_range:
+        o.append(
+            f"     f 上限: H损 = {recommended.hf_total_km:.4f} × "
+            f"({inp.length_m} / 1000) = {recommended.h_loss_total_m:.4f} m"
+        )
+        o.append(
+            f"     f 下限: H损 = {recommended.hf_total_lower_km:.4f} × "
+            f"({inp.length_m} / 1000) = {recommended.h_loss_total_lower_m:.4f} m"
+        )
+        o.append("     说明: 推荐与类别判定仍按 f 上限结果，两个区间结果均列出供设计选用。")
+    else:
+        o.append("     H损 = hf总 × (L / 1000)")
+        o.append(f"        = {recommended.hf_total_km:.4f} × ({inp.length_m} / 1000)")
+        o.append(f"        = {recommended.h_loss_total_m:.4f} m")
     o.append("")
 
     # ---- 四、筛选判定 ----
@@ -1346,10 +1454,22 @@ def _build_process_text(
     o.append(f"【五、{section5_label}结果】")
     o.append(f"  {section5_label}: D = {recommended.D} m ({recommended.D * 1000:.0f} mm)")
     o.append(f"  有压流速: V = {recommended.V_press:.4f} m/s")
-    o.append(f"  沿程水损: hf = {recommended.hf_friction_km:.4f} m/km")
-    o.append(f"  局部水损: hj = {recommended.hf_local_km:.4f} m/km")
-    o.append(f"  总水损: hf总 = {recommended.hf_total_km:.4f} m/km")
-    o.append(f"  按管长折算总损失: H损 = {recommended.h_loss_total_m:.4f} m (L={inp.length_m}m)")
+    if has_f_range:
+        o.append(f"  f 上限 {float(mat['f']):.0f}:")
+        o.append(f"    沿程水损: hf = {recommended.hf_friction_km:.4f} m/km")
+        o.append(f"    局部水损: hj = {recommended.hf_local_km:.4f} m/km")
+        o.append(f"    总水损: hf总 = {recommended.hf_total_km:.4f} m/km")
+        o.append(f"    按管长折算总损失: H损 = {recommended.h_loss_total_m:.4f} m")
+        o.append(f"  f 下限 {float(f_lower):.0f}:")
+        o.append(f"    沿程水损: hf = {recommended.hf_friction_lower_km:.4f} m/km")
+        o.append(f"    局部水损: hj = {recommended.hf_local_lower_km:.4f} m/km")
+        o.append(f"    总水损: hf总 = {recommended.hf_total_lower_km:.4f} m/km")
+        o.append(f"    按管长折算总损失: H损 = {recommended.h_loss_total_lower_m:.4f} m")
+    else:
+        o.append(f"  沿程水损: hf = {recommended.hf_friction_km:.4f} m/km")
+        o.append(f"  局部水损: hj = {recommended.hf_local_km:.4f} m/km")
+        o.append(f"  总水损: hf总 = {recommended.hf_total_km:.4f} m/km")
+        o.append(f"  按管长折算总损失: H损 = {recommended.h_loss_total_m:.4f} m (L={inp.length_m}m)")
     o.append(f"  所属类别: {'指定' if is_manual else recommended.category}")
     if recommended.flags:
         o.append(f"  标记: {', '.join(recommended.flags)}")

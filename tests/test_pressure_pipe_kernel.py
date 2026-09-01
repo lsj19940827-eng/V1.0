@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "calc_渠系计
 
 from 有压管道设计 import (
     PIPE_MATERIALS, DEFAULT_DIAMETER_SERIES,
+    DUCTILE_IRON_F_LOWER, DUCTILE_IRON_F_UPPER,
     get_flow_increase_percent,
     evaluate_single_diameter,
     recommend_diameter,
@@ -118,6 +119,30 @@ class TestSingleDiameter:
         c = evaluate_single_diameter(inp, D)
         expected = c.hf_total_km * (2500.0 / 1000.0)
         assert abs(c.h_loss_total_m - expected) < 1e-10
+
+    def test_ductile_iron_lists_upper_and_lower_f_results(self):
+        """球墨铸铁管应在同一管径下同时给出 f 上下限水损。"""
+        inp = self._make_input_no_unpr(Q=1.0, mat="球墨铸铁管", length=2500.0)
+        c = evaluate_single_diameter(inp, 0.8)
+
+        assert PIPE_MATERIALS["球墨铸铁管"]["f"] == DUCTILE_IRON_F_UPPER
+        assert PIPE_MATERIALS["球墨铸铁管"]["f_min"] == DUCTILE_IRON_F_LOWER
+        assert c.hf_friction_lower_km is not None
+        assert c.hf_local_lower_km is not None
+        assert c.hf_total_lower_km is not None
+        assert c.h_loss_total_lower_m is not None
+        assert c.hf_friction_lower_km == pytest.approx(
+            c.hf_friction_km * DUCTILE_IRON_F_LOWER / DUCTILE_IRON_F_UPPER
+        )
+        assert c.hf_total_lower_km < c.hf_total_km
+        assert c.h_loss_total_lower_m == pytest.approx(c.hf_total_lower_km * 2.5)
+
+    def test_other_materials_do_not_emit_f_range_results(self):
+        """非区间 f 管材不应伪造下限结果。"""
+        inp = self._make_input_no_unpr(Q=1.0, mat="钢管")
+        c = evaluate_single_diameter(inp, 0.8)
+        assert c.hf_friction_lower_km is None
+        assert c.hf_total_lower_km is None
 
     def test_manual_increase_percent(self):
         """手动指定加大比例"""
@@ -267,6 +292,17 @@ class TestRecommendation:
         result = recommend_diameter(inp)
         assert result.calc_steps
         assert len(result.calc_steps) > 100
+
+    def test_ductile_iron_calc_steps_show_f_range_and_grouped_exponents(self):
+        """详细过程应列出 f 上下限，并正确分组 Q 的撇号与 m、b 上标。"""
+        inp = PressurePipeInput(Q=0.5, material_key="球墨铸铁管")
+        result = recommend_diameter(inp)
+
+        assert "f 取上限 223200" in result.calc_steps
+        assert "f 取下限 189900" in result.calc_steps
+        assert "(Q')^{m}" in result.calc_steps
+        assert "d^{b}" in result.calc_steps
+        assert "Q'^m" not in result.calc_steps
 
     def test_top_candidates_recommended_first_then_sorted(self):
         """候选展示排序：推荐项固定首位，其余按(类别, hf总)"""

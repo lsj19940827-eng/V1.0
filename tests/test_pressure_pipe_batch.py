@@ -7,8 +7,9 @@
 
 import sys
 import os
-import tempfile
 import shutil
+from pathlib import Path
+import uuid
 import numpy as np
 import pytest
 
@@ -23,9 +24,16 @@ from 有压管道设计 import (
 @pytest.fixture
 def tmp_output_dir():
     """创建临时输出目录，测试后清理"""
-    d = tempfile.mkdtemp(prefix="pipe_batch_test_")
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
+    base_dir = Path(__file__).resolve().parents[1] / ".pytest_pressure_pipe_batch"
+    base_dir.mkdir(exist_ok=True)
+    output_dir = base_dir / f"pipe_batch_test_{uuid.uuid4().hex}"
+    output_dir.mkdir()
+    yield str(output_dir)
+    shutil.rmtree(output_dir, ignore_errors=True)
+    try:
+        base_dir.rmdir()
+    except OSError:
+        pass
 
 
 class TestBatchScan:
@@ -139,6 +147,28 @@ class TestBatchScan:
         # 3种管材 x 1Q x 1slope x 2D = 6行
         assert len(df) == 6
         assert len(df["管材类型"].unique()) == 3
+
+    def test_ductile_iron_csv_contains_f_upper_and_lower_results(self, tmp_output_dir):
+        """球墨铸铁管批量 CSV 应保留兼容主值并追加 f 下限结果列。"""
+        config = BatchScanConfig(
+            q_values=np.array([0.5]),
+            slope_denominators=[],
+            diameter_values=np.array([0.8]),
+            materials=["球墨铸铁管"],
+            output_dir=tmp_output_dir,
+            output_pdf_charts=False,
+            output_merged_pdf=False,
+            output_subplot_png=False,
+        )
+        result = run_batch_scan(config)
+
+        import pandas as pd
+        df = pd.read_csv(result.csv_path)
+        row = df.iloc[0]
+        assert row["f采用值（上限）"] == pytest.approx(223200.0)
+        assert row["f下限"] == pytest.approx(189900.0)
+        assert row["hf_total_press_f下限 (m/km)"] < row["hf_total_press (m/km)"]
+        assert row["h_loss_total_f下限 (m)"] < row["h_loss_total (m)"]
 
     def test_unknown_material_skipped(self, tmp_output_dir):
         """未知管材应被跳过"""

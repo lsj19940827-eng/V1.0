@@ -1532,7 +1532,10 @@ class PressurePipePanel(QWidget):
                 ["铝合金管", "0.861×10⁵", "1.74", "4.74"],
             ]
         )
-        h.hint("球墨铸铁管 f 值在规范中为区间；程序当前计算取上限值 2.232×10⁵。")
+        h.hint(
+            "球墨铸铁管 f 值在规范中为区间；程序同时列出 1.899×10⁵ 与 "
+            "2.232×10⁵ 两组水损。推荐和类别判定仍按上限值，用户可按设计依据取用。"
+        )
 
         h.section("5.1.4.4  管道局部水头损失（式17）")
         h.text("管道局部水头损失应按式(17)计算，规划阶段可按沿程水头损失的 10%~15% 估算。")
@@ -1784,6 +1787,33 @@ class PressurePipePanel(QWidget):
             f'<div style="font-size:12px;color:#4a5568;line-height:1.6;">{_e(line)}</div>'
             for line in self._increase_summary_lines(inp, result)
         )
+        has_f_range = (
+            inp.material_key == "球墨铸铁管"
+            and getattr(rec, "hf_total_lower_km", None) is not None
+            and getattr(rec, "h_loss_total_lower_m", None) is not None
+        )
+        if has_f_range:
+            total_loss_html = (
+                '<div style="font-size:11px;color:#888;">总水损（f 上限 / 下限）</div>'
+                f'<div style="font-size:13px;font-weight:700;color:#1a1a1a;">'
+                f'{rec.hf_total_km:.4f} / {rec.hf_total_lower_km:.4f} m/km</div>'
+            )
+            length_loss_html = (
+                '<div style="font-size:11px;color:#888;">管长折算（f 上限 / 下限）</div>'
+                f'<div style="font-size:13px;font-weight:700;color:#1a1a1a;">'
+                f'{rec.h_loss_total_m:.4f} / {rec.h_loss_total_lower_m:.4f} m</div>'
+            )
+        else:
+            total_loss_html = (
+                '<div style="font-size:11px;color:#888;">总水损</div>'
+                f'<div style="font-size:14px;font-weight:700;color:#1a1a1a;">'
+                f'{rec.hf_total_km:.4f} m/km</div>'
+            )
+            length_loss_html = (
+                '<div style="font-size:11px;color:#888;">管长折算</div>'
+                f'<div style="font-size:14px;font-weight:700;color:#1a1a1a;">'
+                f'{rec.h_loss_total_m:.4f} m</div>'
+            )
 
         # 迷你摘要条
         sep_style = f"width:1px;height:28px;background:#e0e0e0;flex-shrink:0;"
@@ -1814,9 +1844,7 @@ class PressurePipePanel(QWidget):
             </div>
             <div style="{sep_style}"></div>
             <div style="text-align:center;">
-                <div style="font-size:11px;color:#888;">总水损</div>
-                <div style="font-size:14px;font-weight:700;color:#1a1a1a;">
-                    {rec.hf_total_km:.4f} m/km</div>
+                {total_loss_html}
             </div>
             <div style="{sep_style}"></div>
             <div style="text-align:center;">
@@ -1826,10 +1854,16 @@ class PressurePipePanel(QWidget):
             </div>
             <div style="{sep_style}"></div>
             <div style="text-align:center;">
-                <div style="font-size:11px;color:#888;">管长折算</div>
-                <div style="font-size:14px;font-weight:700;color:#1a1a1a;">
-                    {rec.h_loss_total_m:.4f} m</div>
+                {length_loss_html}
             </div>
+        </div>"""
+
+        if has_f_range:
+            html += """
+        <div style="margin:4px 0 8px;padding:8px 12px;background:#eef6ff;
+                    border-left:3px solid #1976d2;border-radius:5px;font-size:12px;color:#3f4f5f;">
+            球墨铸铁管的推荐管径与类别按 f 上限 223200 判定；结果表同时列出
+            f 上限 223200 和 f 下限 189900，用户可按采用的设计依据选取。
         </div>"""
 
         # 自动推荐对比条（仅指定D模式，且自动推荐与指定D不同时）
@@ -1879,7 +1913,26 @@ class PressurePipePanel(QWidget):
                 排序：推荐优先，类别→hf总
             </span>
         </div>"""
-            html += """
+            loss_header_html = """
+                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
+                           font-weight:600;text-align:center;font-size:12px;">hf(m/km)</th>
+                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
+                           font-weight:600;text-align:center;font-size:12px;">hj(m/km)</th>
+                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
+                           font-weight:600;text-align:center;font-size:12px;">hf总(m/km)</th>
+                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
+                           font-weight:600;text-align:center;font-size:12px;">H损(m)</th>"""
+            if has_f_range:
+                loss_header_html = """
+                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
+                           font-weight:600;text-align:center;font-size:12px;">hf<br>上限 / 下限</th>
+                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
+                           font-weight:600;text-align:center;font-size:12px;">hj<br>上限 / 下限</th>
+                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
+                           font-weight:600;text-align:center;font-size:12px;">hf总<br>上限 / 下限</th>
+                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
+                           font-weight:600;text-align:center;font-size:12px;">H损<br>上限 / 下限</th>"""
+            html += f"""
         <table style="width:100%;border-collapse:collapse;font-size:13px;margin:4px 0 12px;">
             <tr style="background:#f8f9fa;">
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
@@ -1890,14 +1943,7 @@ class PressurePipePanel(QWidget):
                            font-weight:600;text-align:center;font-size:12px;">D(mm)</th>
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
                            font-weight:600;text-align:center;font-size:12px;">V(m/s)</th>
-                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">hf(m/km)</th>
-                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">hj(m/km)</th>
-                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">hf总(m/km)</th>
-                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">H损(m)</th>
+                {loss_header_html}
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
                            font-weight:600;text-align:center;font-size:12px;">类别</th>
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
@@ -1928,16 +1974,26 @@ class PressurePipePanel(QWidget):
                                   'padding:2px 8px;border-radius:10px;font-size:11px;'
                                   'font-weight:600;">★ 推荐</span>')
                 td_s = f"padding:7px 8px;text-align:center;border-bottom:1px solid #f0f0f0;{td_extra}"
+                if has_f_range and getattr(c, "hf_total_lower_km", None) is not None:
+                    friction_cell = f"{c.hf_friction_km:.4f}<br>{c.hf_friction_lower_km:.4f}"
+                    local_cell = f"{c.hf_local_km:.4f}<br>{c.hf_local_lower_km:.4f}"
+                    total_cell = f"{c.hf_total_km:.4f}<br>{c.hf_total_lower_km:.4f}"
+                    length_cell = f"{c.h_loss_total_m:.4f}<br>{c.h_loss_total_lower_m:.4f}"
+                else:
+                    friction_cell = f"{c.hf_friction_km:.4f}"
+                    local_cell = f"{c.hf_local_km:.4f}"
+                    total_cell = f"{c.hf_total_km:.4f}"
+                    length_cell = f"{c.h_loss_total_m:.4f}"
                 html += f"""
             <tr style="{row_style}">
                 <td style="{td_s}">{i+1}</td>
                 <td style="{td_s}">{c.D:.3f}</td>
                 <td style="{td_s}">{c.D*1000:.0f}</td>
                 <td style="{td_s}">{c.V_press:.4f}</td>
-                <td style="{td_s}">{c.hf_friction_km:.4f}</td>
-                <td style="{td_s}">{c.hf_local_km:.4f}</td>
-                <td style="{td_s}">{c.hf_total_km:.4f}</td>
-                <td style="{td_s}">{c.h_loss_total_m:.4f}</td>
+                <td style="{td_s}">{friction_cell}</td>
+                <td style="{td_s}">{local_cell}</td>
+                <td style="{td_s}">{total_cell}</td>
+                <td style="{td_s}">{length_cell}</td>
                 <td style="{td_s}color:{cc};font-weight:bold;">{_e(display_cat)}</td>
                 <td style="{td_s}">{badge_html}</td>
             </tr>"""
@@ -2164,7 +2220,15 @@ class PressurePipePanel(QWidget):
             doc_add_eng_h(doc, title)
             summary_items = [
                 ("管材类型", mat_name),
-                ("管材系数", f"f = {mat_info['f']}, m = {mat_info['m']}, b = {mat_info['b']}"),
+                (
+                    "管材系数",
+                    (
+                        f"f = {float(mat_info['f_min']):.0f}～{float(mat_info['f']):.0f}, "
+                        f"m = {mat_info['m']}, b = {mat_info['b']}"
+                        if mat_info.get("f_min") is not None
+                        else f"f = {mat_info['f']}, m = {mat_info['m']}, b = {mat_info['b']}"
+                    ),
+                ),
                 ("设计流量 Q", f"{inp.Q} m³/s"),
                 ("管长 L", f"{inp.length_m} m"),
                 ("局部损失比例", str(inp.local_loss_ratio)),
@@ -2176,11 +2240,22 @@ class PressurePipePanel(QWidget):
                 ("推荐管径 D", f"{rec.D} m ({rec.D*1000:.0f} mm)"),
                 ("推荐类别", display_result_category),
                 ("有压流速 V", f"{rec.V_press:.4f} m/s"),
-                ("沿程水损", f"{rec.hf_friction_km:.4f} m/km"),
-                ("局部水损", f"{rec.hf_local_km:.4f} m/km"),
-                ("总水损", f"{rec.hf_total_km:.4f} m/km"),
-                ("按管长折算总损失", f"{rec.h_loss_total_m:.4f} m"),
             ]
+            if getattr(rec, "hf_total_lower_km", None) is not None:
+                summary_items += [
+                    ("沿程水损（f上限 / 下限）", f"{rec.hf_friction_km:.4f} / {rec.hf_friction_lower_km:.4f} m/km"),
+                    ("局部水损（f上限 / 下限）", f"{rec.hf_local_km:.4f} / {rec.hf_local_lower_km:.4f} m/km"),
+                    ("总水损（f上限 / 下限）", f"{rec.hf_total_km:.4f} / {rec.hf_total_lower_km:.4f} m/km"),
+                    ("按管长折算总损失（f上限 / 下限）", f"{rec.h_loss_total_m:.4f} / {rec.h_loss_total_lower_m:.4f} m"),
+                    ("取值说明", "推荐与类别判定按 f 上限；上下限结果均供设计选用"),
+                ]
+            else:
+                summary_items += [
+                    ("沿程水损", f"{rec.hf_friction_km:.4f} m/km"),
+                    ("局部水损", f"{rec.hf_local_km:.4f} m/km"),
+                    ("总水损", f"{rec.hf_total_km:.4f} m/km"),
+                    ("按管长折算总损失", f"{rec.h_loss_total_m:.4f} m"),
+                ]
             doc_add_result_table(doc, summary_items)
 
             # 候选管径对比表
@@ -2189,17 +2264,34 @@ class PressurePipePanel(QWidget):
                 sec_num = f'8.{ri+1}' if n_cases > 1 else '8'
                 doc_add_eng_h(doc, f'{sec_num}、候选管径对比表')
                 doc_add_eng_body(doc, '排序规则：推荐优先，类别优先级（经济→妥协→兜底），同类别按hf总升序。')
-                headers = ["D(m)", "D(mm)", "V(m/s)", "hf(m/km)", "hj(m/km)",
-                            "hf总(m/km)", "H损(m)", "类别"]
+                has_f_range = getattr(rec, "hf_total_lower_km", None) is not None
+                if has_f_range:
+                    headers = [
+                        "D(m)", "D(mm)", "V(m/s)", "hf上/下(m/km)",
+                        "hj上/下(m/km)", "hf总上/下(m/km)", "H损上/下(m)", "类别",
+                    ]
+                else:
+                    headers = ["D(m)", "D(mm)", "V(m/s)", "hf(m/km)", "hj(m/km)",
+                                "hf总(m/km)", "H损(m)", "类别"]
                 data = []
                 for c in candidates:
                     display_cat = "指定" if "用户指定" in c.flags else c.category
-                    data.append([
-                        f"{c.D:.3f}", f"{c.D*1000:.0f}", f"{c.V_press:.4f}",
-                        f"{c.hf_friction_km:.4f}", f"{c.hf_local_km:.4f}",
-                        f"{c.hf_total_km:.4f}", f"{c.h_loss_total_m:.4f}",
-                        display_cat,
-                    ])
+                    if has_f_range and getattr(c, "hf_total_lower_km", None) is not None:
+                        data.append([
+                            f"{c.D:.3f}", f"{c.D*1000:.0f}", f"{c.V_press:.4f}",
+                            f"{c.hf_friction_km:.4f} / {c.hf_friction_lower_km:.4f}",
+                            f"{c.hf_local_km:.4f} / {c.hf_local_lower_km:.4f}",
+                            f"{c.hf_total_km:.4f} / {c.hf_total_lower_km:.4f}",
+                            f"{c.h_loss_total_m:.4f} / {c.h_loss_total_lower_m:.4f}",
+                            display_cat,
+                        ])
+                    else:
+                        data.append([
+                            f"{c.D:.3f}", f"{c.D*1000:.0f}", f"{c.V_press:.4f}",
+                            f"{c.hf_friction_km:.4f}", f"{c.hf_local_km:.4f}",
+                            f"{c.hf_total_km:.4f}", f"{c.h_loss_total_m:.4f}",
+                            display_cat,
+                        ])
                 doc_add_styled_table(doc, headers, data,
                                       highlight_col=0, highlight_val=f"{rec.D:.3f}",
                                       with_full_border=True)
@@ -2338,6 +2430,12 @@ class PressurePipePanel(QWidget):
         self.batch_status_label.setVisible(True)
         self.batch_status_label.setText("正在准备...")
         self.batch_log.clear()
+        self._last_batch_log_message = ""
+        self._append_batch_log_message("批量计算已启动，正在准备计算任务...")
+        self._append_batch_log_message(
+            f"流量 {len(q_values)} 个，坡度 {len(slope_denoms) if slope_denoms else 0} 个，"
+            f"管材 {len(selected_mats)} 种；输出目录：{output_dir}"
+        )
         self.notebook.setCurrentIndex(1)
 
         # 启动线程
@@ -2351,12 +2449,22 @@ class PressurePipePanel(QWidget):
         if self._batch_worker:
             self._batch_worker.cancel()
             self.batch_status_label.setText("正在取消...")
+            self._append_batch_log_message("已请求取消，正在等待当前步骤结束...")
+
+    def _append_batch_log_message(self, message):
+        """向批量日志追加非重复消息，保证长任务运行中持续可见。"""
+        text = str(message or "").strip()
+        if not text or text == getattr(self, "_last_batch_log_message", ""):
+            return
+        self.batch_log.append(text)
+        self._last_batch_log_message = text
 
     def _on_batch_progress(self, current, total, msg):
         if total > 0:
             self.batch_progress.setMaximum(total)
             self.batch_progress.setValue(current)
         self.batch_status_label.setText(msg)
+        self._append_batch_log_message(msg)
 
     def _on_batch_finished(self, result: BatchScanResult):
         self.batch_btn.setEnabled(True)
@@ -2365,13 +2473,16 @@ class PressurePipePanel(QWidget):
         self.batch_status_label.setText("完成")
 
         for log in result.logs:
-            self.batch_log.append(log)
+            self._append_batch_log_message(log)
 
         if result.csv_path:
-            self.batch_log.append(f"\nCSV 路径: {result.csv_path}")
+            self._append_batch_log_message(f"CSV 路径: {result.csv_path}")
         if result.merged_pdf:
-            self.batch_log.append(f"合并PDF: {result.merged_pdf}")
-        self.batch_log.append(f"\n共生成 {len(result.generated_pdfs)} 个PDF, {len(result.generated_pngs)} 个PNG")
+            self._append_batch_log_message(f"合并PDF: {result.merged_pdf}")
+        self._append_batch_log_message(
+            f"批量计算完成：共生成 {len(result.generated_pdfs)} 个PDF，"
+            f"{len(result.generated_pngs)} 个PNG。"
+        )
 
         InfoBar.success(
             title="批量计算完成",
