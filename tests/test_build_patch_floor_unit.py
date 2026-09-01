@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import sys
 import zipfile
@@ -243,6 +244,31 @@ def test_get_build_search_paths_cover_non_package_module_directories():
     assert str(Path(build.PROJECT_ROOT) / "calc_渠系计算算法内核") in search_paths
     assert str(Path(build.PROJECT_ROOT) / "倒虹吸水力计算系统") in search_paths
     assert str(Path(build.PROJECT_ROOT) / "推求水面线") in search_paths
+
+
+def test_pyinstaller_environment_excludes_codex_native_runtime_paths(monkeypatch):
+    """正式打包不得从 Codex 自带 PDF/图片运行时收集 DLL。"""
+    codex_poppler = (
+        r"C:\Users\tester\.cache\codex-runtimes\codex-primary-runtime"
+        r"\dependencies\native\poppler\Library\bin"
+    )
+    codex_libheif = (
+        r"C:\Users\tester\.cache\codex-runtimes\codex-primary-runtime"
+        r"\dependencies\native\libheif\bin"
+    )
+    project_venv = r"D:\V1.0\.venv\Scripts"
+    system_path = r"C:\Windows\System32"
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join([codex_poppler, system_path, codex_libheif, project_venv]),
+    )
+
+    env = build._get_pyinstaller_environment()
+
+    assert codex_poppler not in env["PATH"]
+    assert codex_libheif not in env["PATH"]
+    assert system_path in env["PATH"]
+    assert project_venv in env["PATH"]
 
 
 def test_build_universal_patch_includes_allowed_source_hashes(tmp_path):

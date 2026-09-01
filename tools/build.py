@@ -470,6 +470,32 @@ def _project_python() -> str:
     return sys.executable
 
 
+def _is_codex_native_runtime_path(path: str) -> bool:
+    """判断 PATH 项是否来自 Codex 工作区依赖，避免其 DLL 污染正式包。"""
+    normalized = (path or "").strip().replace("\\", "/").casefold()
+    normalized = f"/{normalized.strip('/')}/"
+    return "/codex-primary-runtime/dependencies/native/" in normalized
+
+
+def _get_pyinstaller_environment() -> dict[str, str]:
+    """返回隔离过 Codex 原生依赖目录的 PyInstaller 子进程环境。"""
+    env = os.environ.copy()
+    path_entries = env.get("PATH", "").split(os.pathsep)
+    clean_entries = []
+    removed_count = 0
+    for path in path_entries:
+        if not path:
+            continue
+        if _is_codex_native_runtime_path(path):
+            removed_count += 1
+            continue
+        clean_entries.append(path)
+    env["PATH"] = os.pathsep.join(clean_entries)
+    if removed_count:
+        print(f"  [隔离] 已从打包环境排除 {removed_count} 个 Codex 原生依赖目录")
+    return env
+
+
 def _resolve_update_helper_icon_file() -> str:
     for path in (
         SHARED_UPDATE_HELPER_ICON_FILE,
@@ -581,7 +607,11 @@ def _build_update_helper(app_dist_dir: str):
     args.append(UPDATE_HELPER_SCRIPT)
 
     print("\n[helper] 正在构建独立更新助手...\n")
-    result = subprocess.run(args, cwd=PROJECT_ROOT)
+    result = subprocess.run(
+        args,
+        cwd=PROJECT_ROOT,
+        env=_get_pyinstaller_environment(),
+    )
     if result.returncode != 0:
         raise RuntimeError(f"更新助手构建失败，退出码：{result.returncode}")
 
@@ -697,7 +727,11 @@ def build(bump: str = None):
 
     # ---- 执行 ----
     print(f"\n[1/3] 正在打包，请耐心等待（约 3~10 分钟）...\n")
-    result = subprocess.run(args, cwd=PROJECT_ROOT)
+    result = subprocess.run(
+        args,
+        cwd=PROJECT_ROOT,
+        env=_get_pyinstaller_environment(),
+    )
     if result.returncode != 0:
         print(f"\n[错误] 打包失败（退出码: {result.returncode}）")
         sys.exit(1)

@@ -78,6 +78,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe tools\build.py
 ```
 
+构建脚本会自动从 PyInstaller 子进程的 `PATH` 中排除 Codex 自带的 PDF、图片等原生依赖目录，避免把开发工具附带的 ICU、UCRT 等 DLL 误装进正式软件包。发包前仍需从最终 ZIP 重新解压并做一次启动冒烟验证。
+
 正式发版使用项目脚本：
 
 ```powershell
