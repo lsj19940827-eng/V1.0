@@ -378,6 +378,7 @@ class SiphonPanel(QWidget):
         # Excel/水面线显式平面转弯半径覆盖确认态（本次窗口会话内有效）
         self._excel_turn_radius_override_confirmed = False
         self._turn_r_edit_pending_confirmation = False
+        self._turn_r_user_editing = False
         # 工况级运行期确认态缓存（仅内存，不跨重启）
         self._case_confirmation_states = {}
         self._current_case_key = None
@@ -3515,10 +3516,10 @@ document.addEventListener("DOMContentLoaded", function(){
         self._syncing = False
         self._update_v_style()
 
-    def _refresh_pipe_design_feedback(self):
+    def _refresh_pipe_design_feedback(self, *, update_turn_r_editor: bool = True):
         """统一刷新D显示、转弯半径和相关系数。"""
         self._update_D_theory()
-        self._update_turn_R()
+        self._update_turn_R(update_editor=update_turn_r_editor)
         self._update_plan_bend_radius()
         self._update_segment_coefficients()
         self._auto_compute_outlet_xi()
@@ -4091,7 +4092,7 @@ document.addEventListener("DOMContentLoaded", function(){
         if not self._syncing:
             self._mark_dirty()
 
-    def _update_turn_R(self, confirmed=False):
+    def _update_turn_R(self, confirmed=False, *, update_editor: bool = True):
         n_mult = self._fval(self.edit_turn_n, 0)
         diameter_ctx = self._get_adopted_diameter_context()
         if diameter_ctx is None:
@@ -4108,7 +4109,12 @@ document.addEventListener("DOMContentLoaded", function(){
         explicit_points = self._excel_explicit_turn_points()
         self._set_excel_turn_radius_detail_button(bool(explicit_points), R)
         # 同步 R 输入框（n 为权威值，以n为准）
-        if hasattr(self, 'edit_turn_R') and not self._syncing:
+        if (
+            update_editor
+            and hasattr(self, 'edit_turn_R')
+            and not self._syncing
+            and not self._turn_r_user_editing
+        ):
             self._syncing = True
             self.edit_turn_R.setText(f"{R:.2f}")
             self.edit_turn_R.setStyleSheet("LineEdit { border: 1px solid #90CAF9; background: #E3F2FD; }")
@@ -4140,6 +4146,7 @@ document.addEventListener("DOMContentLoaded", function(){
         """用户直接修改 R 値时，反推 n = R / D设计"""
         if self._syncing:
             return
+        self._turn_r_user_editing = True
         R_val = self._fval(self.edit_turn_R, 0)
         if R_val <= 0:
             return
@@ -4179,15 +4186,31 @@ document.addEventListener("DOMContentLoaded", function(){
         self.edit_turn_R.setStyleSheet(
             f"LineEdit {{ border: 1.5px solid {S}; background: #F1F8E9; }}"
         )
-        self._refresh_pipe_design_feedback()
+        # 用户仍在键入时只刷新计算结果，不把“3”提前改写成“3.00”。
+        self._refresh_pipe_design_feedback(update_turn_r_editor=False)
+
+    def _format_turn_R_editor(self, radius: float):
+        """直接输入 R 完成后再统一显示两位小数。"""
+        self._turn_r_user_editing = False
+        self._syncing = True
+        self.edit_turn_R.setText(f"{radius:.2f}")
+        self._syncing = False
 
     def _on_turn_R_confirmed(self):
         """直接输入 R 后，按 Enter 或失焦时确认是否覆盖 Excel 半径。"""
-        if self._syncing or not self._turn_r_edit_pending_confirmation:
+        if self._syncing:
             return
+        self._turn_r_user_editing = False
         R_val = self._fval(self.edit_turn_R, 0)
+        if R_val <= 0:
+            self._turn_r_edit_pending_confirmation = False
+            return
+        if not self._turn_r_edit_pending_confirmation:
+            self._format_turn_R_editor(R_val)
+            self._mark_dirty()
+            return
         diameter_ctx = self._get_adopted_diameter_context()
-        if R_val <= 0 or diameter_ctx is None or not SIPHON_AVAILABLE:
+        if diameter_ctx is None or not SIPHON_AVAILABLE:
             self._turn_r_edit_pending_confirmation = False
             return
         D_adopted = diameter_ctx['diameter']
@@ -4208,6 +4231,7 @@ document.addEventListener("DOMContentLoaded", function(){
         self._turn_r_edit_pending_confirmation = False
         self._update_turn_n_style()
         self._update_plan_bend_radius(force_override=True, radius_override=R_val)
+        self._format_turn_R_editor(R_val)
         self.lbl_turn_R.setText(
             f"{diameter_ctx['label']}={D_adopted:.2f}m → R={n_new}×{D_adopted:.2f}={R_val:.2f}m ✓（R反推n）"
         )

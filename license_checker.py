@@ -96,19 +96,117 @@ def _get_physical_macs():
 
 def _get_disk_serial():
     """获取主硬盘序列号"""
-    try:
-        result = _run_system_command(
-            ["wmic", "diskdrive", "get", "SerialNumber"],
-            timeout=5,
-        ).decode("gbk", errors="ignore")
+    commands = [
+        (["wmic", "diskdrive", "get", "SerialNumber"], "gbk"),
+        ([
+            "powershell", "-NoProfile", "-NonInteractive", "-Command",
+            "Get-CimInstance Win32_DiskDrive | "
+            "Where-Object { $_.SerialNumber } | "
+            "Select-Object -First 1 -ExpandProperty SerialNumber",
+        ], "utf-8"),
+    ]
+    for command, encoding in commands:
+        try:
+            result = _run_system_command(command, timeout=5).decode(
+                encoding,
+                errors="ignore",
+            )
+        except Exception:
+            continue
         lines = [
             ln.strip() for ln in result.splitlines()
             if ln.strip() and "SerialNumber" not in ln
         ]
         if lines:
-            return lines[0]
+            return lines[0].upper()
+    return ""
+
+
+def _extract_smbios_uuid(table: bytes) -> str:
+    """从 SMBIOS 结构表中提取 Type 1 系统 UUID。"""
+    try:
+        import uuid
+
+        offset = 0
+        while offset + 4 <= len(table):
+            structure_type = table[offset]
+            structure_length = table[offset + 1]
+            if structure_length < 4 or offset + structure_length > len(table):
+                break
+            if structure_type == 1 and structure_length >= 24:
+                raw_uuid = table[offset + 8:offset + 24]
+                if raw_uuid not in (bytes(16), bytes([255]) * 16):
+                    return str(uuid.UUID(bytes_le=raw_uuid)).upper()
+                return ""
+            strings_end = table.find(
+                b"\x00\x00",
+                offset + structure_length,
+            )
+            if strings_end < 0:
+                break
+            offset = strings_end + 2
     except Exception:
         pass
+    return ""
+
+
+def _get_smbios_uuid():
+    """通过 Windows 固件表读取 SMBIOS 系统 UUID，不依赖 WMI 权限。"""
+    if os.name != "nt":
+        return ""
+    try:
+        import ctypes
+
+        provider = int.from_bytes(b"RSMB", "big")
+        kernel32 = ctypes.windll.kernel32
+        size = kernel32.GetSystemFirmwareTable(provider, 0, None, 0)
+        if size <= 8:
+            return ""
+        buffer = (ctypes.c_ubyte * size)()
+        actual_size = kernel32.GetSystemFirmwareTable(
+            provider,
+            0,
+            buffer,
+            size,
+        )
+        if actual_size <= 8:
+            return ""
+        return _extract_smbios_uuid(bytes(buffer[:actual_size])[8:])
+    except Exception:
+        return ""
+
+
+def _get_hardware_uuid():
+    """读取主板硬件 UUID，并过滤厂商占位值。"""
+    smbios_uuid = _get_smbios_uuid()
+    if smbios_uuid:
+        return smbios_uuid
+    commands = [
+        (["wmic", "csproduct", "get", "UUID"], "gbk"),
+        ([
+            "powershell", "-NoProfile", "-NonInteractive", "-Command",
+            "Get-CimInstance Win32_ComputerSystemProduct | "
+            "Select-Object -First 1 -ExpandProperty UUID",
+        ], "utf-8"),
+    ]
+    invalid_values = {
+        "", "DEFAULT STRING", "TO BE FILLED BY O.E.M.",
+        "00000000-0000-0000-0000-000000000000",
+        "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+    }
+    for command, encoding in commands:
+        try:
+            result = _run_system_command(command, timeout=5).decode(
+                encoding,
+                errors="ignore",
+            )
+        except Exception:
+            continue
+        for line in result.splitlines():
+            value = line.strip().upper()
+            if value == "UUID" or value in invalid_values:
+                continue
+            return value
     return ""
 
 
@@ -130,34 +228,70 @@ def _get_machine_guid():
     return ""
 
 
-def _get_machine_id_legacy():
-    """旧版机器码算法（保留兼容，避免老授权立即失效）"""
-    macs = _get_physical_macs()
-    disk = _get_disk_serial()
-    hostname = platform.node()
+def _get_machine_id_legacy_from_parts(macs, disk: str, hostname: str) -> str:
+    """按旧版规则从已采集的硬件字段计算机器码。"""
     raw = "|".join(macs) + "||" + disk + "||" + hostname
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _get_machine_id_legacy():
+    """旧版机器码算法（保留兼容，避免老授权立即失效）。"""
+    return _get_machine_id_legacy_from_parts(
+        _get_physical_macs(),
+        _get_disk_serial(),
+        platform.node(),
+    )
+
+
+def _get_machine_id_guid_legacy(guid: str) -> str:
+    """计算 V1.3.10 及以前使用的 MachineGuid 单字段机器码。"""
+    if not guid:
+        return ""
+    raw = f"MGUID||{guid}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _get_machine_id_v2(guid: str, hardware_uuid: str, disk: str) -> str:
+    """组合系统标识与实体硬件字段，避免克隆系统产生相同机器码。"""
+    hardware_parts = []
+    if hardware_uuid:
+        hardware_parts.append(f"UUID={hardware_uuid.upper()}")
+    if disk:
+        hardware_parts.append(f"DISK={disk.upper()}")
+    if not hardware_parts:
+        return _get_machine_id_guid_legacy(guid)
+    raw = "MGUID_HW_V2||" + (guid or "NO_GUID") + "||" + "||".join(hardware_parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _get_machine_id_primary():
-    """新版稳定机器码：优先 MachineGuid，失败时回退旧算法"""
+    """生成当前主机器码，硬件字段缺失时安全回退旧规则。"""
     guid = _get_machine_guid()
-    if guid:
-        raw = f"MGUID||{guid}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    hardware_uuid = _get_hardware_uuid()
+    disk = _get_disk_serial()
+    primary = _get_machine_id_v2(guid, hardware_uuid, disk)
+    if primary:
+        return primary
     return _get_machine_id_legacy()
 
 
 def get_machine_id_candidates():
-    """返回当前设备可接受的机器码候选（主算法 + 兼容旧算法）"""
+    """返回主机器码及两代兼容机器码，且每类硬件只采集一次。"""
     global _MACHINE_ID_CANDIDATES_CACHE
     if _MACHINE_ID_CANDIDATES_CACHE is not None:
         return list(_MACHINE_ID_CANDIDATES_CACHE)
 
+    guid = _get_machine_guid()
+    hardware_uuid = _get_hardware_uuid()
+    disk = _get_disk_serial()
+    macs = _get_physical_macs()
+    hostname = platform.node()
+
     ids = []
-    primary = _get_machine_id_primary()
-    legacy = _get_machine_id_legacy()
-    for mid in (primary, legacy):
+    primary = _get_machine_id_v2(guid, hardware_uuid, disk)
+    guid_legacy = _get_machine_id_guid_legacy(guid)
+    hardware_legacy = _get_machine_id_legacy_from_parts(macs, disk, hostname)
+    for mid in (primary, guid_legacy, hardware_legacy):
         if mid and mid not in ids:
             ids.append(mid)
     _MACHINE_ID_CANDIDATES_CACHE = tuple(ids)
@@ -167,6 +301,11 @@ def get_machine_id_candidates():
 def get_machine_id():
     """生成当前机器码（优先稳定主算法）"""
     return get_machine_id_candidates()[0]
+
+
+def _is_machine_id_accepted(machine_id: str, candidates) -> bool:
+    """判断授权机器码是否属于当前设备的任一兼容候选。"""
+    return bool(machine_id) and machine_id in set(candidates or [])
 
 
 # ============================================================
@@ -319,7 +458,11 @@ def _show_error(msg: str):
             print(f"\n[授权错误] {msg}\n")
 
 
-def _show_activation_dialog(machine_id: str, lic_path: str) -> bool:
+def _show_activation_dialog(
+    machine_id: str,
+    lic_path: str,
+    accepted_machine_ids=None,
+) -> bool:
     """
     未找到授权时弹出激活对话框：
       步骤1 — 复制机器码发给管理员
@@ -327,6 +470,9 @@ def _show_activation_dialog(machine_id: str, lic_path: str) -> bool:
     激活成功 → 保存 license.lic，返回 True
     关闭/退出 → 返回 False
     """
+    accepted_ids = set(accepted_machine_ids or [machine_id])
+    accepted_ids.add(machine_id)
+
     # ── Qt 版本 ──────────────────────────────────────────────
     try:
         from PySide6.QtWidgets import (
@@ -437,7 +583,10 @@ def _show_activation_dialog(machine_id: str, lic_path: str) -> bool:
                 lbl_err.setText("授权码无效（签名不匹配），请联系管理员重新获取")
                 return
             # 验证机器码
-            if lic.get("data", {}).get("machine_id") != machine_id:
+            if not _is_machine_id_accepted(
+                lic.get("data", {}).get("machine_id"),
+                accepted_ids,
+            ):
                 lbl_err.setText("此授权码不适用于本机，请联系管理员重新申请")
                 return
             # 验证过期
@@ -534,7 +683,10 @@ def _show_activation_dialog(machine_id: str, lic_path: str) -> bool:
             if not _verify_hmac(lic.get("data", {}), lic.get("sig", "")):
                 lbl_err.config(text="授权码无效（签名不匹配）")
                 return
-            if lic.get("data", {}).get("machine_id") != machine_id:
+            if not _is_machine_id_accepted(
+                lic.get("data", {}).get("machine_id"),
+                accepted_ids,
+            ):
                 lbl_err.config(text="此授权码不适用于本机")
                 return
             expire = lic.get("data", {}).get("expire", "")
@@ -588,9 +740,12 @@ def check_license() -> bool:
     lic_dir = _get_license_dir()
     lic_path = os.path.join(lic_dir, "license.lic")
 
+    current_ids = get_machine_id_candidates()
+    current_id = current_ids[0]
+
     # 1. 文件存在性 — 未找到时弹出激活对话框
     if not os.path.exists(lic_path):
-        activated = _show_activation_dialog(get_machine_id(), lic_path)
+        activated = _show_activation_dialog(current_id, lic_path, current_ids)
         if not activated:
             return False
         # 激活成功，license.lic 已保存，继续验证
@@ -611,10 +766,8 @@ def check_license() -> bool:
         return False
 
     # 4. 机器码验证
-    current_ids = set(get_machine_id_candidates())
-    current_id = get_machine_id()
     if data.get("machine_id") not in current_ids:
-        activated = _show_activation_dialog(current_id, lic_path)
+        activated = _show_activation_dialog(current_id, lic_path, current_ids)
         if not activated:
             return False
         # 激活成功，重新读取新 license.lic 继续验证
@@ -629,7 +782,6 @@ def check_license() -> bool:
         if not _verify_hmac(data, sig):
             _show_error("授权文件无效（签名校验失败），\n请联系管理员重新获取。")
             return False
-        current_ids = set(get_machine_id_candidates())
         if data.get("machine_id") not in current_ids:
             _show_error("授权机器码不匹配，请重新联系管理员生成授权。")
             return False

@@ -310,6 +310,27 @@ def test_turn_radius_r_override_keeps_n_confirmed(monkeypatch):
     panel.deleteLater()
 
 
+def test_turn_radius_r_keyboard_entry_formats_only_after_confirmation(monkeypatch):
+    """多轮键盘输入 R 均不得被延迟刷新打断，Enter 后再统一格式化。"""
+    panel = _make_panel(monkeypatch)
+
+    for _attempt in range(3):
+        panel.edit_turn_R.selectAll()
+        # 模拟用户刚改过 Q/v 后留下的 200ms 防抖刷新。
+        panel._on_Qv_changed()
+        QTest.keyClicks(panel.edit_turn_R, "3")
+        QTest.qWait(250)
+        assert panel.edit_turn_R.text() == "3"
+
+        QTest.keyClicks(panel.edit_turn_R, "0")
+        assert panel.edit_turn_R.text() == "30"
+
+        QTest.keyClick(panel.edit_turn_R, Qt.Key_Return)
+        assert panel.edit_turn_R.text() == "30.00"
+
+    panel.deleteLater()
+
+
 def test_excel_explicit_turn_radius_survives_initial_n_sync(monkeypatch):
     """Excel 已填的中间 IP 半径，打开窗口时不应被默认 n×D 覆盖。"""
     panel = _make_panel(monkeypatch)
