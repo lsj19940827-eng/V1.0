@@ -70,6 +70,16 @@ def test_classify_probe_failure_recognizes_channel_pipe_access_denied():
     assert failure_kind == "ipc-access-denied"
 
 
+def test_classify_probe_failure_recognizes_plain_windows_access_denied():
+    failure_kind = diagnostics.classify_probe_failure(
+        "",
+        "[123:456:FATAL:x:82] Check failed: . : 拒绝访问。 (0x5)",
+        3,
+    )
+
+    assert failure_kind == "ipc-access-denied"
+
+
 def test_current_runtime_facts_avoids_blocking_platform_platform(monkeypatch):
     monkeypatch.setattr(
         diagnostics.platform,
@@ -282,7 +292,7 @@ def test_build_startup_context_honors_hidden_single_process_switch(monkeypatch):
 
 
 def test_build_startup_context_blocks_and_reports_on_probe_failure(monkeypatch):
-    failing_result = _probe_result()
+    failing_result = _probe_result(failure_kind="unknown")
     dialog_calls = []
     app_calls = []
 
@@ -300,6 +310,29 @@ def test_build_startup_context_blocks_and_reports_on_probe_failure(monkeypatch):
     assert context is None
     assert app_calls == [None]
     assert dialog_calls == [failing_result]
+
+
+def test_build_startup_context_auto_falls_back_on_ipc_access_denied(monkeypatch):
+    failing_result = _probe_result(failure_kind="ipc-access-denied")
+    applied_flags = []
+
+    monkeypatch.setattr(bootstrap, "emergency_single_process_requested", lambda: False)
+    monkeypatch.setattr(bootstrap, "probe_standard_webengine", lambda: failing_result)
+    monkeypatch.setattr(
+        bootstrap,
+        "apply_emergency_single_process_mode",
+        lambda: applied_flags.append("--single-process --disable-gpu") or "--single-process --disable-gpu",
+    )
+
+    context = bootstrap.build_startup_context(update_checks_enabled=False)
+
+    assert context == startup_context_module.StartupContext(
+        webengine_mode="single-process",
+        webengine_probe_result=failing_result,
+        update_checks_enabled=False,
+        is_frozen_runtime=False,
+    )
+    assert applied_flags == ["--single-process --disable-gpu"]
 
 
 def test_bootstrap_run_short_circuits_hidden_webengine_probe_child(monkeypatch):
@@ -354,6 +387,12 @@ def test_bootstrap_run_builds_main_window_and_starts_update_check(monkeypatch):
     call_log = []
 
     class DummyApp:
+        def setQuitOnLastWindowClosed(self, enabled):
+            call_log.append(("app.setQuitOnLastWindowClosed", enabled))
+
+        def processEvents(self):
+            call_log.append("app.processEvents")
+
         def exec(self):
             call_log.append("app.exec")
             return 123
@@ -366,8 +405,18 @@ def test_bootstrap_run_builds_main_window_and_starts_update_check(monkeypatch):
         def prepare_update_prompt(self, *, force_full_package_once=False):
             call_log.append(("prepare_update_prompt", force_full_package_once))
 
-        def show(self):
-            call_log.append("window.show")
+        def showNormal(self):
+            call_log.append("window.showNormal")
+
+        def winId(self):
+            call_log.append("window.winId")
+            return 123
+
+        def raise_(self):
+            call_log.append("window.raise")
+
+        def activateWindow(self):
+            call_log.append("window.activateWindow")
 
         def start_silent_update_check(self):
             call_log.append("window.start_silent_update_check")
@@ -391,6 +440,7 @@ def test_bootstrap_run_builds_main_window_and_starts_update_check(monkeypatch):
         lambda update_checks_enabled=True: startup_context,
     )
     monkeypatch.setattr(bootstrap, "ensure_application", lambda argv=None: DummyApp())
+    monkeypatch.setattr(bootstrap.QCoreApplication, "removePostedEvents", lambda *_args: None)
     monkeypatch.setattr(bootstrap.QTimer, "singleShot", lambda _ms, func: func())
     monkeypatch.setitem(sys.modules, BASE_PACKAGE + ".app", dummy_app_module)
 
@@ -406,9 +456,14 @@ def test_bootstrap_run_builds_main_window_and_starts_update_check(monkeypatch):
     assert compat_calls == ["ensure_qfluentwidgets_compat"]
     assert call_log == [
         "initialize_runtime_environment",
+        ("app.setQuitOnLastWindowClosed", False),
         "window.init",
         ("prepare_update_prompt", True),
-        "window.show",
+        "window.showNormal",
+        "window.winId",
+        "window.raise",
+        "window.activateWindow",
+        "app.processEvents",
         "window.start_silent_update_check",
         "app.exec",
     ]

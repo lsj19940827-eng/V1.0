@@ -83,6 +83,11 @@ def test_main_window_builds_stack_from_panel_registry(monkeypatch):
         "_create_water_profile_panel",
         lambda **kwargs: _DummyPanel("water_profile"),
     )
+    monkeypatch.setattr(
+        app_module,
+        "_create_spillway_steep_chute_panel",
+        lambda: _DummyPanel("spillway_steep_chute"),
+    )
 
     startup_context = startup_context_module.StartupContext(
         webengine_mode="standard",
@@ -103,9 +108,20 @@ def test_main_window_builds_stack_from_panel_registry(monkeypatch):
         "倒虹吸设计",
         "有压管道设计",
         "推求水面线",
+        "泄水渠与陡坡",
     ]
     assert [button.text() for button in window._nav_buttons] == titles
     assert window.stack.count() == len(titles)
+    assert [
+        descriptor.key
+        for descriptor in window._panel_registry.descriptors
+        if window._panel_registry.get_existing(descriptor.key) is not None
+    ] == ["open_channel"]
+
+    window._switch_to(1)
+    assert window._panel_registry.get_existing("aqueduct") is window.aqueduct_panel
+    assert window._panel_registry.get_existing("tunnel") is None
+
     assert window.open_channel_panel is window._panel_registry.get("open_channel")
     assert window.aqueduct_panel is window._panel_registry.get("aqueduct")
     assert window.tunnel_panel is window._panel_registry.get("tunnel")
@@ -113,6 +129,7 @@ def test_main_window_builds_stack_from_panel_registry(monkeypatch):
     assert window.siphon_panel is window._panel_registry.get("siphon")
     assert window.pressure_pipe_panel is window._panel_registry.get("pressure_pipe")
     assert window.water_profile_panel is window._panel_registry.get("water_profile")
+    assert window.spillway_steep_chute_panel is window._panel_registry.get("spillway_steep_chute")
     assert window.btn_project.toolTip() == "项目文件：新建/打开/保存整个工程"
 
     window.project_manager._is_dirty = False

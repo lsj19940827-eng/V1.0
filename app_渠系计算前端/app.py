@@ -43,6 +43,12 @@ _MODULE_TOOLTIPS = {
 }
 
 
+def _startup_trace(message: str):
+    """在显式启用时输出主窗口装配阶段。"""
+    if os.environ.get("CANAL_STARTUP_TRACE", "").strip() == "1":
+        print(f"[StartupTrace] {message}", flush=True)
+
+
 def _create_open_channel_panel():
     from app_渠系计算前端.open_channel.panel import OpenChannelPanel
 
@@ -154,7 +160,12 @@ class MainWindow(QMainWindow):
         self._nav_buttons = []
 
         self._init_runtime_services()
+        _startup_trace("runtime_services_ready")
         self._panel_registry = self._build_panel_registry()
+        self._panel_stack_indexes = {}
+        self._panel_placeholders = {}
+        self._panel_registry.instance_created.connect(self._mount_panel)
+        _startup_trace("panel_registry_ready")
 
         # ---- 根据屏幕分辨率自适应窗口尺寸 ----
         screen = QApplication.primaryScreen()
@@ -185,19 +196,25 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(_icon_src))
 
         self._init_ui()
+        _startup_trace("main_ui_ready")
 
         # ---- 项目管理器初始化 ----
         self._init_project_manager()
+        _startup_trace("project_manager_ready")
         self._update_recent_menu()
+        _startup_trace("recent_menu_ready")
 
         # ---- 快捷键绑定 ----
         self._init_shortcuts()
+        _startup_trace("shortcuts_ready")
 
         # 默认选中第一个
         self._switch_to(0)
+        _startup_trace("initial_panel_selected")
         self.statusBar().showMessage(f"就绪 | 渠系建筑物水力计算系统 V{APP_VERSION}")
 
         self._notify_optional_runtime_degradations()
+        _startup_trace("main_window_constructor_ready")
 
     def __getattr__(self, name):
         panel_registry = self.__dict__.get("_panel_registry")
@@ -483,12 +500,33 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         main_lay.addWidget(self.stack, 1)
 
-        # 第一阶段仍保持即时实例化，但改为通过注册表装配。
-        self._panel_registry.create_all_eagerly()
-        for descriptor in self._panel_registry.descriptors:
-            panel = self._panel_registry.get(descriptor.key)
-            setattr(self, descriptor.attr_name, panel)
-            self.stack.addWidget(panel)
+        # 启动时只创建首屏模块，其余模块保留稳定占位并在首次访问时装配。
+        descriptors = self._panel_registry.descriptors
+        for index, descriptor in enumerate(descriptors):
+            placeholder = QWidget()
+            placeholder.setObjectName(f"panelPlaceholder_{descriptor.key}")
+            self._panel_stack_indexes[descriptor.key] = index
+            self._panel_placeholders[descriptor.key] = placeholder
+            self.stack.addWidget(placeholder)
+
+        if descriptors:
+            self._panel_registry.get(descriptors[0].key)
+
+    def _mount_panel(self, key: str, panel: QWidget):
+        """把首次创建的面板放入对应的固定栈位。"""
+        index = self._panel_stack_indexes.get(key)
+        descriptor = self._panel_registry.descriptor_for_key(key)
+        if index is None or descriptor is None:
+            return
+
+        current = self.stack.widget(index)
+        if current is not panel:
+            if current is not None:
+                self.stack.removeWidget(current)
+                if current is self._panel_placeholders.get(key):
+                    current.deleteLater()
+            self.stack.insertWidget(index, panel)
+        setattr(self, descriptor.attr_name, panel)
 
     # ----------------------------------------------------------------
     # 项目管理
@@ -593,20 +631,36 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _notify_optional_runtime_degradations(self):
-        """提醒当前会话是否显式启用了 WebEngine 应急模式。"""
+        """提醒当前会话是否启用了 WebEngine 兼容模式。"""
         if self.startup_context.webengine_mode != "single-process":
             return
+        probe_result = self.startup_context.webengine_probe_result
+        auto_fallback = bool(
+            probe_result is not None
+            and probe_result.failure_kind == "ipc-access-denied"
+        )
+        if auto_fallback:
+            status_message = "系统已自动启用 Qt WebEngine 兼容模式。"
+            info_title = "已自动启用 WebEngine 兼容模式"
+            info_content = (
+                "检测到 Windows 拒绝了网页组件的多进程通信，"
+                "程序已自动切换为可用的兼容模式。"
+            )
+        else:
+            status_message = "当前会话已手动启用 Qt WebEngine 应急单进程模式。"
+            info_title = "已手动启用 WebEngine 应急模式"
+            info_content = (
+                "当前会话通过环境开关启用了 Qt WebEngine 单进程模式。"
+                f"如标准模式恢复，请移除环境变量 {EMERGENCY_SINGLE_PROCESS_ENV}。"
+            )
         self.statusBar().showMessage(
-            "当前会话已启用 Qt WebEngine 应急单进程模式，仅用于排障。",
+            status_message,
             12000,
         )
         try:
             InfoBar.warning(
-                title="已启用 WebEngine 应急模式",
-                content=(
-                    "当前会话已通过隐藏开关启用 Qt WebEngine 单进程模式。"
-                    f"如标准模式恢复，请移除环境变量 {EMERGENCY_SINGLE_PROCESS_ENV}。"
-                ),
+                title=info_title,
+                content=info_content,
                 orient=Qt.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP_RIGHT,
@@ -662,6 +716,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """关闭窗口前检查项目保存，保存倒虹吸面板状态"""
+        _startup_trace("main_window_close_event")
         debug_print("[DEBUG] MainWindow closeEvent called")
         # 检查项目是否需要保存
         if hasattr(self, 'project_manager'):
@@ -676,7 +731,9 @@ class MainWindow(QMainWindow):
         debug_print("[DEBUG] Proceeding with close")
         self.hide()
         try:
-            self.siphon_panel._save_autosave()
+            siphon_panel = self._panel_registry.get_existing("siphon")
+            if siphon_panel is not None:
+                siphon_panel._save_autosave()
         except Exception:
             pass
         try:
@@ -685,15 +742,24 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         super().closeEvent(event)
+        if event.isAccepted():
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
 
     def _switch_to(self, index: int):
         """切换到指定模块"""
         if index >= self.stack.count():
             return
-        self.stack.setCurrentIndex(index)
+        descriptors = self._panel_registry.descriptors
+        if index < len(descriptors):
+            panel = self._panel_registry.get(descriptors[index].key)
+            self.stack.setCurrentWidget(panel)
+        else:
+            self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self._nav_buttons):
             btn.set_selected(i == index)
-        panel_titles = [descriptor.title for descriptor in self._panel_registry.descriptors]
+        panel_titles = [descriptor.title for descriptor in descriptors]
         if index < len(panel_titles):
             self.statusBar().showMessage(f"当前模块: {panel_titles[index]}", 5000)
 

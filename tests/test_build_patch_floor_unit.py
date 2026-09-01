@@ -271,6 +271,16 @@ def test_pyinstaller_environment_excludes_codex_native_runtime_paths(monkeypatch
     assert project_venv in env["PATH"]
 
 
+def test_pyinstaller_early_wmi_guard_exists_and_disables_platform_query():
+    """自定义运行钩子必须在项目入口前关闭 platform WMI 查询。"""
+    hook_path = Path(build.PYINSTALLER_RUNTIME_WMI_GUARD)
+
+    assert hook_path.is_file()
+    source = hook_path.read_text(encoding="utf-8")
+    assert "_platform._wmi_query = _disabled_wmi_query" in source
+    assert "Windows WMI query disabled before PyInstaller runtime hooks" in source
+
+
 def test_build_universal_patch_includes_allowed_source_hashes(tmp_path):
     dist_dir = tmp_path / "dist"
     dist_dir.mkdir()

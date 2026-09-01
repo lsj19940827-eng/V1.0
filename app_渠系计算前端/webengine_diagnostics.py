@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import platform
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -143,8 +145,12 @@ def _current_runtime_facts() -> dict:
     except Exception:
         pass
 
+    # 标准模式失败后仍要能在本进程设置 Chromium 兼容参数，所以父进程此时
+    # 只检查模块是否存在，不能提前导入 QtWebEngineWidgets。真正导入由探测
+    # 子进程完成，避免兼容参数设置得太晚而失效。
     try:
-        from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
+        if importlib.util.find_spec("PySide6.QtWebEngineWidgets") is None:
+            facts["import_error"] = "PySide6.QtWebEngineWidgets 模块不存在"
     except Exception as exc:
         facts["import_error"] = str(exc)
 
@@ -166,6 +172,8 @@ def classify_probe_failure(stdout: str, stderr: str, exit_code: int | None) -> s
     if "access is denied" in combined and "qwebengineprocess" in combined:
         return "ipc-access-denied"
     if "拒绝访问" in combined and "qwebengineprocess" in combined:
+        return "ipc-access-denied"
+    if "0x5" in combined and ("access is denied" in combined or "拒绝访问" in combined):
         return "ipc-access-denied"
     if exit_code in (None, 0):
         return "unknown"
@@ -277,37 +285,57 @@ def probe_standard_webengine(*, timeout_seconds: int = PROBE_TIMEOUT_SECONDS) ->
     env = os.environ.copy()
     env.pop(EMERGENCY_SINGLE_PROCESS_ENV, None)
 
-    try:
-        completed = subprocess.run(
-            _probe_child_command(facts),
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=timeout_seconds,
-            env=env,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = (exc.stdout or "").strip()
-        stderr = (exc.stderr or "").strip()
-        failure_kind = classify_probe_failure(stdout, stderr, None)
-        if failure_kind == "unknown":
-            failure_kind = "timeout"
-        return WebEngineProbeResult(
-            ok=False,
-            failure_kind=failure_kind,
-            exit_code=None,
-            stdout=stdout,
-            stderr=stderr,
-            probe_timeout=True,
-            **{
-                key: value
-                for key, value in base_kwargs.items()
-                if key not in {"stdout", "stderr", "exit_code"}
-            },
-        )
+    # Chromium 子进程会继承标准输出句柄。如果直接使用 PIPE，即使探测主进程
+    # 已经退出，父进程仍可能等待孤儿 Chromium 进程关闭管道，表现为双击无反应。
+    # 使用临时文件承接输出，避免 communicate() 被继承的 PIPE 拖住。
+    with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(
+        mode="w+b"
+    ) as stderr_file:
+        try:
+            completed = subprocess.run(
+                _probe_child_command(facts),
+                stdout=stdout_file,
+                stderr=stderr_file,
+                timeout=timeout_seconds,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            stdout_file.flush()
+            stderr_file.flush()
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            stdout = stdout_file.read().decode("utf-8", errors="replace").strip()
+            stderr = stderr_file.read().decode("utf-8", errors="replace").strip()
+            failure_kind = classify_probe_failure(stdout, stderr, None)
+            if failure_kind == "unknown":
+                failure_kind = "timeout"
+            return WebEngineProbeResult(
+                ok=False,
+                failure_kind=failure_kind,
+                exit_code=None,
+                stdout=stdout,
+                stderr=stderr,
+                probe_timeout=True,
+                **{
+                    key: value
+                    for key, value in base_kwargs.items()
+                    if key not in {"stdout", "stderr", "exit_code"}
+                },
+            )
 
-    stdout = (completed.stdout or "").strip()
-    stderr = (completed.stderr or "").strip()
+        stdout_value = getattr(completed, "stdout", None)
+        stderr_value = getattr(completed, "stderr", None)
+        if stdout_value is None:
+            stdout_file.flush()
+            stdout_file.seek(0)
+            stdout_value = stdout_file.read().decode("utf-8", errors="replace")
+        if stderr_value is None:
+            stderr_file.flush()
+            stderr_file.seek(0)
+            stderr_value = stderr_file.read().decode("utf-8", errors="replace")
+
+    stdout = str(stdout_value or "").strip()
+    stderr = str(stderr_value or "").strip()
     if completed.returncode == 0 and _PROBE_SUCCESS_TOKEN in stdout:
         return WebEngineProbeResult(
             ok=True,

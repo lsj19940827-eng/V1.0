@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QTimer, Qt
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -218,6 +218,22 @@ def build_startup_context(*, update_checks_enabled: bool = True) -> Optional[Sta
             is_frozen_runtime=is_frozen_runtime,
         )
 
+    if result.failure_kind == "ipc-access-denied":
+        flags = apply_emergency_single_process_mode()
+        try:
+            print(
+                "[Runtime] Qt WebEngine IPC access denied; "
+                f"automatic compatibility mode enabled: {flags}"
+            )
+        except Exception:
+            pass
+        return StartupContext(
+            webengine_mode="single-process",
+            webengine_probe_result=result,
+            update_checks_enabled=update_checks_enabled,
+            is_frozen_runtime=is_frozen_runtime,
+        )
+
     try:
         print(format_probe_report(result))
     except Exception:
@@ -251,18 +267,54 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
         return 2
 
     app = ensure_application(argv_list)
+    # 授权弹窗、诊断弹窗等启动期临时窗口关闭时，Qt 可能提前排入退出事件。
+    # 主窗口关闭由 MainWindow.closeEvent 显式结束进程，因此此处禁用隐式退出，
+    # 并清理主事件循环开始前遗留的 Quit 事件。
+    app.setQuitOnLastWindowClosed(False)
+    QCoreApplication.removePostedEvents(app, QEvent.Type.Quit)
+    trace_enabled = os.environ.get("CANAL_STARTUP_TRACE", "").strip() == "1"
+    if trace_enabled:
+        print("[StartupTrace] application_ready", flush=True)
 
     from app_渠系计算前端.app import MainWindow
 
     open_update_dialog = updater.UPDATE_FLAG_OPEN_DIALOG in argv_list
     force_full_package = updater.UPDATE_FLAG_FORCE_FULL_PACKAGE in argv_list
 
+    if trace_enabled:
+        print("[StartupTrace] main_window_constructor_start", flush=True)
     window = MainWindow(startup_context)
+    if trace_enabled:
+        print("[StartupTrace] main_window_constructor_returned", flush=True)
     if open_update_dialog:
         window.prepare_update_prompt(force_full_package_once=force_full_package)
-    window.show()
+    window.showNormal()
+    native_window_id = int(window.winId())
+    window.raise_()
+    window.activateWindow()
+    app.processEvents()
+    if trace_enabled:
+        geometry = window.frameGeometry()
+        print(
+            "[StartupTrace] window_show_committed "
+            f"visible={window.isVisible()} hidden={window.isHidden()} "
+            f"minimized={window.isMinimized()} win_id={native_window_id} "
+            f"geometry={geometry.x()},{geometry.y()},{geometry.width()},{geometry.height()}",
+            flush=True,
+        )
     if startup_context.update_checks_enabled:
         window.start_silent_update_check()
     if open_update_dialog:
         QTimer.singleShot(300, lambda: window._open_update_dialog())
-    return app.exec()
+    if trace_enabled:
+        print("[StartupTrace] event_loop_enter", flush=True)
+        app.aboutToQuit.connect(
+            lambda: print("[StartupTrace] application_about_to_quit", flush=True)
+        )
+    exit_code = app.exec()
+    if trace_enabled:
+        print(
+            f"[StartupTrace] event_loop_returned exit_code={exit_code}",
+            flush=True,
+        )
+    return exit_code

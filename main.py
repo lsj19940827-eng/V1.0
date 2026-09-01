@@ -22,7 +22,16 @@ def main():
     from app_渠系计算前端.bootstrap import run as bootstrap_run
 
     try:
-        sys.exit(bootstrap_run())
+        exit_code = bootstrap_run()
+        if "--webengine-probe-child" in sys.argv:
+            # 探测进程是一次性的，避免 Qt WebEngine 清理阶段拖住父进程启动。
+            for stream in (sys.stdout, sys.stderr):
+                try:
+                    stream.flush()
+                except Exception:
+                    pass
+            os._exit(int(exit_code))
+        sys.exit(exit_code)
     except Exception as e:
         import traceback
         try:

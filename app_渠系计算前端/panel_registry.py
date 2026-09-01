@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Panel registry used by the main window and project manager."""
 
+import os
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
@@ -49,9 +51,19 @@ class PanelRegistry(QObject):
     def get(self, key: str) -> Any:
         if key not in self._instances:
             descriptor = self._descriptors_by_key[key]
+            trace_enabled = os.environ.get("CANAL_STARTUP_TRACE", "").strip() == "1"
+            started_at = time.perf_counter()
+            if trace_enabled:
+                print(f"[StartupTrace] panel_start key={key}", flush=True)
             instance = descriptor.factory()
             self._instances[key] = instance
             self.instance_created.emit(key, instance)
+            if trace_enabled:
+                elapsed = time.perf_counter() - started_at
+                print(
+                    f"[StartupTrace] panel_ready key={key} elapsed={elapsed:.3f}s",
+                    flush=True,
+                )
         return self._instances[key]
 
     def get_existing(self, key: str) -> Optional[Any]:
@@ -68,6 +80,10 @@ class PanelRegistry(QObject):
 
     def descriptor_for_attr_name(self, attr_name: str) -> Optional[PanelDescriptor]:
         return self._descriptors_by_attr.get(attr_name)
+
+    def descriptor_for_key(self, key: str) -> Optional[PanelDescriptor]:
+        """按稳定键返回面板描述。"""
+        return self._descriptors_by_key.get(key)
 
     def iter_instances(self, *, create_missing: bool = False) -> List[Any]:
         if create_missing:

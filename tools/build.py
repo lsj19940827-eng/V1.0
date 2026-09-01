@@ -433,6 +433,11 @@ UPDATE_HELPER_ICON_FILE = os.path.join(
 )
 LICENSE_MANAGER_ICON_FILE = os.path.join(PROJECT_ROOT, "tools", "license_icon.ico")
 PROJECT_VENV_PYTHON = os.path.join(PROJECT_ROOT, ".venv", "Scripts", "python.exe")
+PYINSTALLER_RUNTIME_WMI_GUARD = os.path.join(
+    PROJECT_ROOT,
+    "tools",
+    "pyinstaller_runtime_wmi_guard.py",
+)
 UPDATE_HELPER_NAME = f"{APP_NAME_EN}Updater"
 
 
@@ -594,6 +599,7 @@ def _build_update_helper(app_dist_dir: str):
         f"--workpath={helper_workdir}",
         f"--specpath={helper_workdir}",
         f"--paths={PROJECT_ROOT}",
+        f"--runtime-hook={PYINSTALLER_RUNTIME_WMI_GUARD}",
         "--hidden-import=PySide6",
         "--hidden-import=PySide6.QtCore",
         "--hidden-import=PySide6.QtGui",
@@ -647,6 +653,7 @@ def build(bump: str = None):
         f"--distpath={DIST_DIR}",           # 输出目录
         f"--workpath={BUILD_DIR}",          # 工作目录
         f"--specpath={BUILD_DIR}",          # spec 文件目录
+        f"--runtime-hook={PYINSTALLER_RUNTIME_WMI_GUARD}",
     ]
 
     # 图标

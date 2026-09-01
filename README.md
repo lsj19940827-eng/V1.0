@@ -78,7 +78,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe tools\build.py
 ```
 
-构建脚本会自动从 PyInstaller 子进程的 `PATH` 中排除 Codex 自带的 PDF、图片等原生依赖目录，避免把开发工具附带的 ICU、UCRT 等 DLL 误装进正式软件包。发包前仍需从最终 ZIP 重新解压并做一次启动冒烟验证。
+构建脚本会自动从 PyInstaller 子进程的 `PATH` 中排除 Codex 自带的 PDF、图片等原生依赖目录，避免把开发工具附带的 ICU、UCRT 等 DLL 误装进正式软件包；同时通过最早期运行钩子关闭 Python `platform` 的 WMI 查询，防止程序在主窗口创建前无界面卡死。Qt WebEngine 标准模式如被 Windows 拒绝多进程通信，启动编排会在父进程尚未导入 WebEngine 时自动切换到单进程兼容模式；主窗口只先创建首屏模块，其余模块在首次点击时加载。启动期临时窗口不得触发应用隐式退出，只有用户真正关闭主窗口时才结束进程。发包前必须从最终 ZIP 重新解压，并以“实际出现可响应主窗口”为启动验收标准，不能只确认进程仍在运行。
 
 正式发版使用项目脚本：
 
