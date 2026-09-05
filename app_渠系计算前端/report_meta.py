@@ -61,6 +61,26 @@ REFERENCES_BASE = {
     ],
 }
 
+# 有压管道产品规格依据按实际成果动态追加，避免未采用某类目录时误列规范。
+PRESSURE_PIPE_PRODUCT_REFERENCES = {
+    "STEEL": ("《水利水电工程压力钢管设计规范》(SL/T 281-2020)",),
+    "PE": (
+        "《给水用聚乙烯（PE）管道系统 第1部分：总则》(GB/T 13663.1-2017)",
+        "《给水用聚乙烯（PE）管道系统 第2部分：管材》(GB/T 13663.2-2018)",
+    ),
+    "DI": (
+        "《水及燃气用球墨铸铁管、管件和附件》(GB/T 13295-2026)",
+        "《球墨铸铁管和管件 水泥砂浆内衬》(GB/T 17457-2019)",
+    ),
+    "PCCP": (
+        "《预应力钢筒混凝土管道技术规范》(SL 702-2015)",
+        "《预应力钢筒混凝土管》(GB/T 19685-2017)",
+    ),
+    "FRPM": (
+        "《玻璃纤维增强塑料夹砂管》(GB/T 21238-2016)",
+    ),
+}
+
 CALC_PURPOSE_TEMPLATE = {
     "open_channel": (
         "为确定{project}{name}{section_type}明渠的水力断面设计参数，进行明渠水力计算，"
@@ -94,7 +114,9 @@ CALC_PURPOSE_TEMPLATE = {
     "pressure_pipe": (
         "为确定{project}{name}有压输水管道的管径及水力参数，进行有压管道水力计算，"
         "验算管道流速及水头损失是否满足《灌溉与排水工程设计标准》(GB 50288-2018)第6.7.2条及"
-        "《管道输水灌溉工程技术规范》(GB/T 20203-2017)第5.1.4~5.1.6条规范要求。"
+        "《管道输水灌溉工程技术规范》(GB/T 20203-2017)第5.1.4~5.1.6条规范要求；"
+        "采用产品规格目录时，按实际管材对应的工程或产品标准确定公称口径及结构参数，"
+        "采购口径与名义计算内径分别记录。"
     ),
 }
 
@@ -408,7 +430,8 @@ class ExportConfirmDialog(QDialog):
                  auto_purpose: str,
                  parent=None,
                  n_cases: int = 1,
-                 current_case_label: str = ""):
+                 current_case_label: str = "",
+                 base_references=None):
         """
         Args:
             module_key: 模块标识，如 'open_channel'
@@ -416,11 +439,16 @@ class ExportConfirmDialog(QDialog):
             auto_purpose: 自动生成的计算目的文字
             n_cases: 工况数量（>1 时显示导出范围选项）
             current_case_label: 当前工况标签文字（用于显示）
+            base_references: 本次计算实际采用的基础依据；留空时使用模块默认值
         """
         super().__init__(parent)
         self.module_key = module_key
         self._n_cases = n_cases
         self._current_case_label = current_case_label
+        self._base_references = list(
+            REFERENCES_BASE.get(module_key, [])
+            if base_references is None else base_references
+        )
         self.setWindowTitle(f"导出计算书 — {calc_title}")
         self.setMinimumSize(560, 420)
         self.setStyleSheet(DIALOG_STYLE)
@@ -481,7 +509,7 @@ class ExportConfirmDialog(QDialog):
         # 计算依据（只读预览）
         grp2 = QGroupBox("计算依据（规范 + 项目参考文献）")
         g2lay = QVBoxLayout(grp2)
-        refs = REFERENCES_BASE.get(self.module_key, []) + self._meta.extra_references
+        refs = self._base_references + self._meta.extra_references
         ref_lbl = QLabel("\n".join(f"{i+1}、{r}" for i, r in enumerate(refs)))
         ref_lbl.setWordWrap(True)
         ref_lbl.setStyleSheet(f"color:{T1}; font-size:12px; padding:4px;")
@@ -517,7 +545,7 @@ class ExportConfirmDialog(QDialog):
         return self._meta
 
     def get_references(self) -> List[str]:
-        return REFERENCES_BASE.get(self.module_key, []) + self._meta.extra_references
+        return self._base_references + self._meta.extra_references
 
     def get_export_scope(self) -> str:
         """返回导出范围: 'current' 或 'all'。单工况时始终返回 'all'。"""

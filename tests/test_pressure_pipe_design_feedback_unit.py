@@ -2,6 +2,7 @@
 """有压管道设计反馈项的界面级轻量回归。"""
 
 from types import SimpleNamespace
+import re
 
 from app_渠系计算前端.pressure_pipe.panel import PressurePipePanel
 
@@ -60,6 +61,9 @@ def test_ductile_iron_result_card_lists_upper_and_lower_values():
         hf_local_lower_km=0.255,
         hf_total_lower_km=1.955,
         h_loss_total_lower_m=3.91,
+        Q_increased=0.65,
+        increase_pct=30.0,
+        product_family=None,
         category="经济",
         flags=[],
     )
@@ -76,9 +80,11 @@ def test_ductile_iron_result_card_lists_upper_and_lower_values():
 
     html = PressurePipePanel._build_result_card_html(panel, 0, inp, result)
 
-    assert "总水损（f 上限 / 下限）" in html
-    assert "2.3000 / 1.9550 m/km" in html
-    assert "管长折算（f 上限 / 下限）" in html
-    assert "4.6000 / 3.9100 m" in html
-    assert "hf<br>上限 / 下限" in html
-    assert "2.0000<br>1.7000" in html
+    text = ' '.join(re.sub(r'<[^>]+>', ' ', html).split())
+    assert "总水损（f 上限 / 下限）" in text
+    assert "2.3000 / 1.9550 m/km" in text
+    assert "全管长水损（f 上限 / 下限）" in text
+    assert "4.6000 / 3.9100 m" in text
+    assert "沿程水损（f 上限 / 下限）" in text
+    assert "2.0000 / 1.7000" in text
+    assert '加大工况总水损' in text

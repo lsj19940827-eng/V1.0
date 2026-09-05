@@ -8,12 +8,35 @@
 
 import math
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import fsolve
+from calc_渠系计算算法内核.unpressurized_comparison import (
+    STANDARD_SLOPES, DEFAULT_CLEARANCE_HEIGHT, DEFAULT_CLEARANCE_AREA,
+    normal_flow, compare_flows, COMPARISON_COLUMNS,
+)
+
+from calc_渠系计算算法内核.pe_pipe_catalog import (
+    PEPipeSpec,
+    get_pe_pipe_spec,
+    get_pe_pipe_specs,
+)
+from calc_渠系计算算法内核.pipe_product_catalog import (
+    PipeProductSpec,
+    get_catalog_family,
+    get_pipe_product_spec,
+    get_pipe_product_specs,
+)
+from calc_渠系计算算法内核.steel_pipe_design import (
+    get_steel_pipe_spec, get_steel_pipe_specs, steel_dimension_process,
+    STEEL_DIAMETER_STEP_MM, STEEL_MAX_INNER_MM,
+)
+from calc_渠系计算算法内核.steel_hydraulic_sizing import (
+    recommend_steel_pipe, steel_hydraulic_requirement, select_steel_outer_diameter, steel_sizing_process,
+)
 
 # ============================================================
 # 1. 常量与配置
@@ -26,8 +49,22 @@ PLOT_FLOW_UNIT_M3_PER_S = r"m$^3$/s"
 
 
 PIPE_MATERIALS = {
-    "HDPE管":           {"f": 0.948e5, "m": 1.77, "b": 4.77, "name": "HDPE管"},
-    "玻璃钢夹砂管":     {"f": 0.948e5, "m": 1.77, "b": 4.77, "name": "玻璃钢夹砂管"},
+    "HDPE管":           {
+        "f": 0.948e5,
+        "m": 1.77,
+        "b": 4.77,
+        # name 作为批量 CSV 等既有外部接口的稳定值；display_name 仅供新界面展示。
+        "name": "HDPE管",
+        "display_name": "聚乙烯（PE）管",
+        "uses_pe_catalog": True,
+    },
+    "玻璃钢夹砂管":     {
+        "f": 0.948e5,
+        "m": 1.77,
+        "b": 4.77,
+        "name": "玻璃钢夹砂管",
+        "catalog_family": "FRPM",
+    },
     "球墨铸铁管":       {
         "f": DUCTILE_IRON_F_UPPER,
         "f_min": DUCTILE_IRON_F_LOWER,
@@ -35,10 +72,32 @@ PIPE_MATERIALS = {
         "m": 1.852,
         "b": 4.87,
         "name": "球墨铸铁管",
+        "catalog_family": "DI",
     },
-    "预应力钢筒混凝土管": {"f": 1.312e6, "m": 2.0,  "b": 5.33, "name": "预应力钢筒混凝土管(n=0.013)"},
-    "预应力钢筒混凝土管_n014": {"f": 1.516e6, "m": 2.0, "b": 5.33, "name": "预应力钢筒混凝土管(n=0.014)"},
-    "预应力钢筒混凝土管_n015": {"f": 1.749e6, "m": 2.0, "b": 5.33, "name": "预应力钢筒混凝土管(n=0.015)"},
+    "预应力钢筒混凝土管": {
+        "f": 1.312e6,
+        "m": 2.0,
+        "b": 5.33,
+        "name": "预应力钢筒混凝土管(n=0.013)",
+        "catalog_family": "PCCP",
+        "hydraulic_preset": "n=0.013",
+    },
+    "预应力钢筒混凝土管_n014": {
+        "f": 1.516e6,
+        "m": 2.0,
+        "b": 5.33,
+        "name": "预应力钢筒混凝土管(n=0.014)",
+        "catalog_family": "PCCP",
+        "hydraulic_preset": "n=0.014",
+    },
+    "预应力钢筒混凝土管_n015": {
+        "f": 1.749e6,
+        "m": 2.0,
+        "b": 5.33,
+        "name": "预应力钢筒混凝土管(n=0.015)",
+        "catalog_family": "PCCP",
+        "hydraulic_preset": "n=0.015",
+    },
     "钢管":             {"f": 6.25e5,  "m": 1.9,  "b": 5.1,  "name": "钢管"},
 }
 
@@ -96,7 +155,7 @@ DEFAULT_DIAMETER_SERIES = np.concatenate([_D_small, _D_medium, _D_large])
 
 # 批量扫描默认参数
 DEFAULT_Q_RANGE = np.round(np.arange(0.1, 2.1, 0.1), 1)
-DEFAULT_SLOPE_DENOMINATORS = [500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000]
+DEFAULT_SLOPE_DENOMINATORS = list(STANDARD_SLOPES)
 DEFAULT_SLOPE_RANGE = [1.0 / d for d in DEFAULT_SLOPE_DENOMINATORS]
 
 # 推荐规则阈值
@@ -119,6 +178,18 @@ class PressurePipeInput:
     manual_increase_percent: Optional[float] = None  # 手动加大比例 (%), None 则自动
     local_loss_ratio: float = 0.15  # 局部损失占沿程损失的比例, 默认 0.15
     manual_D: Optional[float] = None  # 用户指定管径 (m), None 则自动推荐
+    pe_material_grade: str = "PE100"  # PE 材料等级，仅 HDPE管 使用
+    pe_nominal_pressure_mpa: float = 1.0  # 20℃、C=1.25 时的 PE 公称压力
+    manual_nominal_diameter_mm: Optional[float] = None  # PE 指定公称外径 dn (mm)
+    use_product_catalog: bool = True  # 非 PE 目录管材是否按规范表列规格选径
+    manual_product_diameter_mm: Optional[float] = None  # 非 PE 指定产品公称口径 (mm)
+    ductile_iron_class: str = "PREFERRED"  # 球墨铸铁管新版 C 等级或按口径分段的首选压力级
+    pccp_variant: str = "PCCPE"  # PCCP 型式；与历史摩阻参数预设独立
+    steel_dimensions_enabled: bool = False  # 旧接口保留水力内径；新界面显式启用钢管尺寸
+    steel_dimension_basis: str = "outer"  # 新计算仅固定外径；历史内径由界面换算后传入
+    steel_lining_thickness_mm: float = 0.0  # 单侧内衬；不属于钢板壁厚
+    manual_steel_diameter_mm: Optional[float] = None  # 指定钢管公称外径（mm），不强制整百
+    steel_diameter_candidates_mm: Optional[tuple[float, ...]] = None  # 旧字段保留供读取，新单次选径拒绝自定义序列
 
 
 @dataclass
@@ -150,6 +221,34 @@ class DiameterCandidate:
     unpr_notes: str = ""                  # 无压计算备注
     category: str = ""     # "经济" / "妥协" / "兜底"
     flags: List[str] = field(default_factory=list)
+    # PE 规格元数据；D 始终保留为水力计算内径（m），便于兼容既有调用。
+    hydraulic_inner_diameter_mm: Optional[float] = None
+    nominal_outer_diameter_mm: Optional[int] = None
+    nominal_wall_thickness_mm: Optional[float] = None
+    pe_material_grade: Optional[str] = None
+    pe_sdr: Optional[float] = None
+    pe_nominal_pressure_mpa: Optional[float] = None
+    product_standard: Optional[str] = None
+    # 通用产品规格元数据；旧字段继续保留，确保 PE 与历史项目兼容。
+    material_key: Optional[str] = None
+    product_spec_id: Optional[str] = None
+    product_family: Optional[str] = None
+    product_variant: Optional[str] = None
+    nominal_symbol: Optional[str] = None
+    nominal_basis: Optional[str] = None
+    hydraulic_inner_diameter_basis: Optional[str] = None
+    nominal_diameter_mm: Optional[float] = None
+    outer_diameter_mm: Optional[float] = None
+    class_system: Optional[str] = None
+    class_code: Optional[str] = None
+    lining_code: Optional[str] = None
+    lining_thickness_mm: Optional[float] = None
+    minimum_inner_diameter_mm: Optional[float] = None
+    maximum_inner_diameter_mm: Optional[float] = None
+    selected_inner_diameter_tolerance_mm: Optional[float] = None
+    product_standard_references: tuple[str, ...] = field(default_factory=tuple)
+    product_source_locator: Optional[str] = None
+    steel_sizing_trace: Optional[dict] = None  # 保存水力下限、补壁厚和外径上取全过程
 
 
 @dataclass
@@ -168,7 +267,7 @@ class BatchScanConfig:
     """批量扫描配置"""
     q_values: np.ndarray
     slope_denominators: List[int]
-    diameter_values: np.ndarray
+    diameter_values: Optional[np.ndarray]
     materials: List[str]           # 管材键名列表
     n_unpr: float = 0.014
     length_m: float = 1000.0
@@ -176,9 +275,20 @@ class BatchScanConfig:
     output_dir: str = ""
     # ===== 输出选项 (可按需开启/关闭) =====
     output_csv: bool = True           # CSV计算结果：包含所有工况的原始数据，便于后续分析
-    output_pdf_charts: bool = True    # 图表PDF(图1+图2)：流速对比图和优选设计点图
+    output_pdf_charts: bool = True    # 无压能力/充满度/流速对比图与有压优选点图
     output_merged_pdf: bool = True    # 合并PDF：将所有图表合并成一个完整文档
     output_subplot_png: bool = True   # 子图PNG：每个Q值生成独立的高清PNG图片(300DPI)
+    pe_material_grade: str = "PE100"  # PE 批量扫描材料等级
+    pe_nominal_pressure_mpa: float = 1.0  # PE 批量扫描公称压力 (MPa)
+    use_product_catalogs: bool = True  # 非 PE 目录管材是否扫描规范离散规格
+    ductile_iron_class: str = "PREFERRED"  # 球墨铸铁管等级选择
+    pccp_variant: str = "PCCPE"  # PCCP 产品型式
+    steel_dimensions_enabled: bool = False  # 保持旧批量脚本接口兼容
+    steel_dimension_basis: str = "outer"
+    steel_lining_thickness_mm: float = 0.0
+    steel_diameter_candidates_mm: Optional[tuple[float, ...]] = None
+    unpr_clearance_height: Optional[float] = None  # 项目自定净空高度下限
+    unpr_clearance_area: Optional[float] = None  # 项目自定净空面积百分比下限
 
 
 @dataclass
@@ -189,6 +299,8 @@ class BatchScanResult:
     generated_pdfs: List[str] = field(default_factory=list)
     merged_pdf: str = ""
     logs: List[str] = field(default_factory=list)
+    comparison_rows: List[dict] = field(default_factory=list)
+    comparison_csv_path: str = ""
 
 
 # ============================================================
@@ -226,93 +338,58 @@ def _calc_q_max_unpressurized(D: float, n: float, i: float) -> float:
 
 
 def solve_unpressurized(Q: float, D: float, n: float, i: float):
-    """
-    求解圆管无压均匀流 Manning 方程 (与 V9 一致)。
+    """兼容既有元组接口；以括区间求根消除初值依赖，旧净空标记仅作兼容字段。"""
+    r = normal_flow(Q, D, n, i)
+    number = lambda key: float('nan') if r[key] is None else r[key]
+    return (number('depth'), number('velocity'), number('filling'), r['full_capacity'], r['capacity'],
+            number('clearance_height'), number('clearance_area'),
+            r['depth'] is not None and r['clearance_height'] < DEFAULT_CLEARANCE_HEIGHT,
+            r['depth'] is not None and r['clearance_area'] < DEFAULT_CLEARANCE_AREA,
+            f"Q>{r['capacity']:.4f}(Q_max_unpr)" if r['status'] == '能力不足' else r['reason'])
 
-    返回 (y, v, y_D, Q_full, Q_max, clr_h, clr_a_pct, flag_clr_h, flag_clr_a, notes)
-    所有失败情况返回 NaN + 备注字符串。
-    """
-    nan = float('nan')
-    notes = []
 
-    A_full = math.pi * D ** 2 / 4.0
-    R_full = D / 4.0
-    Q_full = (1.0 / n) * A_full * (R_full ** (2.0 / 3.0)) * (i ** 0.5)
-    Q_max = _calc_q_max_unpressurized(D, n, i)
-
-    y, v, y_D = nan, nan, nan
-    clr_h, clr_a_pct = nan, nan
-    flag_clr_h, flag_clr_a = False, False
-
-    if Q > Q_max * 1.001:
-        notes.append(f"Q>{Q_max:.4f}(Q_max_unpr)")
-        return y, v, y_D, Q_full, Q_max, clr_h, clr_a_pct, flag_clr_h, flag_clr_a, "; ".join(notes)
-
-    def manning_eq(y_arr):
-        yt = y_arr[0]
-        if yt <= 1e-7:
-            return -Q
-        y_eff = min(max(yt, 1e-7), D)
-        if abs(y_eff - D) < 1e-6:
-            A_w, P_w = A_full, math.pi * D
-        else:
-            acos_arg = max(-1.0, min(1.0, 1.0 - 2.0 * y_eff / D))
-            theta = 2.0 * math.acos(acos_arg)
-            A_w = (D ** 2 / 8.0) * (theta - math.sin(theta))
-            P_w = (D / 2.0) * theta
-        if A_w < 1e-9 or P_w < 1e-9:
-            return -Q
-        R_h = max(0.0, A_w / P_w)
-        return (1.0 / n) * A_w * (R_h ** (2.0 / 3.0)) * (i ** 0.5) - Q
-
-    y_guess = D * 0.5
-    if Q_full > 1e-9 and Q / Q_full > 0.7:
-        y_guess = D * 0.85
-
+def _validate_hydraulic_number(value: float, label: str, *, allow_zero: bool = False) -> None:
+    """拒绝非有限水力输入，避免无效数值进入规格推荐和成果导出。"""
+    requirement = "大于等于 0" if allow_zero else "大于 0"
     try:
-        y_sol, _, ier, msg = fsolve(manning_eq, [y_guess], full_output=True, xtol=1e-7)
-        if ier != 1 and Q >= 0.98 * Q_full and Q <= Q_max * 1.001:
-            for alt_guess in [D * 0.938, D * 0.99]:
-                y_alt, _, ier_alt, _ = fsolve(manning_eq, [alt_guess], full_output=True, xtol=1e-7)
-                if ier_alt == 1:
-                    y_sol, ier = y_alt, ier_alt
-                    break
-
-        if ier == 1:
-            y = min(D, max(0.0, y_sol[0]))
-            if abs(y - D) < 1e-5:
-                A_w, R_h = A_full, R_full
-            elif y <= 1e-6:
-                A_w, R_h = 0.0, 0.0
-            else:
-                acos_arg = max(-1.0, min(1.0, 1.0 - 2.0 * y / D))
-                theta = 2.0 * math.acos(acos_arg)
-                A_w = (D ** 2 / 8.0) * (theta - math.sin(theta))
-                P_w = (D / 2.0) * theta
-                R_h = A_w / P_w if P_w > 1e-9 else 0.0
-
-            y_D = y / D if D > 0 else 0.0
-            v = Q / A_w if A_w > 1e-9 else nan
-
-            clr_h = D - y
-            if A_full > 1e-9:
-                clr_a_abs = max(0.0, A_full - A_w)
-                clr_a_pct = (clr_a_abs / A_full) * 100.0
-            if not math.isnan(clr_h) and clr_h < 0.4:
-                flag_clr_h = True
-            if not math.isnan(clr_a_pct) and clr_a_pct < 15.0:
-                flag_clr_a = True
-        else:
-            notes.append(f"求解失败:{msg[:30]}")
-    except Exception as e:
-        notes.append(f"求解异常:{str(e)[:30]}")
-
-    return y, v, y_D, Q_full, Q_max, clr_h, clr_a_pct, flag_clr_h, flag_clr_a, "; ".join(notes)
+        valid = (
+            not isinstance(value, (bool, np.bool_)) and math.isfinite(value)
+            and (value >= 0 if allow_zero else value > 0)
+        )
+    except (TypeError, ValueError, OverflowError):
+        valid = False
+    if not valid:
+        raise ValueError(f"{label} 必须{requirement}，且为有限数值，当前为 {value!r}")
 
 
-def evaluate_single_diameter(inp: PressurePipeInput, D: float) -> DiameterCandidate:
+def _validate_pressure_pipe_input(inp: PressurePipeInput) -> None:
+    """统一校验单次与候选评价共用的水力参数。"""
+    _validate_hydraulic_number(inp.Q, "设计流量 Q")
+    _validate_hydraulic_number(inp.length_m, "管长 L")
+    _validate_hydraulic_number(inp.local_loss_ratio, "局部损失比例", allow_zero=True)
+    if inp.manual_increase_percent is not None:
+        _validate_hydraulic_number(inp.manual_increase_percent, "加大流量百分比", allow_zero=True)
+    if inp.slope_i is not None:
+        _validate_hydraulic_number(inp.slope_i, "无压坡度")
+        _validate_hydraulic_number(inp.n_unpr, "无压糙率 n")
+    if inp.manual_D is not None:
+        _validate_hydraulic_number(inp.manual_D, "指定水力内径 D")
+    if inp.material_key == '钢管' and inp.steel_dimensions_enabled:
+        _validate_hydraulic_number(inp.steel_lining_thickness_mm, '单侧内衬厚度', allow_zero=True)
+
+
+def evaluate_single_diameter(
+    inp: PressurePipeInput,
+    D: float,
+    *,
+    pe_spec: Optional[PEPipeSpec] = None,
+    product_spec: Optional[PipeProductSpec] = None,
+) -> DiameterCandidate:
     """
-    对给定管径 D 评价有压管道水力性能。
+    对给定水力计算内径 D 评价有压管道水力性能。
+
+    PE 管由 ``pe_spec`` 携带既有规格；DI、PCCP、FRPM 由 ``product_spec``
+    携带通用产品规格。D 必须等于规格的名义水力内径；无规格对象的旧调用继续有效。
 
     公式:
         V_press = Q / A_full
@@ -322,14 +399,25 @@ def evaluate_single_diameter(inp: PressurePipeInput, D: float) -> DiameterCandid
         hf_total_km = hf_friction_km + hf_local_km
         h_total_m = hf_total_km * (L / 1000)
     """
-    if D <= 0:
-        raise ValueError(f"管径 D 必须大于 0, 当前 D={D}")
-    if inp.Q <= 0:
-        raise ValueError(f"设计流量 Q 必须大于 0, 当前 Q={inp.Q}")
+    _validate_hydraulic_number(D, "管径 D")
+    _validate_pressure_pipe_input(inp)
     if inp.material_key not in PIPE_MATERIALS:
         raise ValueError(f"未知管材: {inp.material_key}")
 
     mat = PIPE_MATERIALS[inp.material_key]
+    if pe_spec is not None and product_spec is not None:
+        raise ValueError("PE 规格与通用产品规格不能同时传入")
+    if pe_spec is not None:
+        if not mat.get("uses_pe_catalog"):
+            raise ValueError("PE 产品规格只能用于聚乙烯（PE）管")
+        if not math.isclose(D, pe_spec.inner_diameter_m, rel_tol=0.0, abs_tol=1e-9):
+            raise ValueError("PE 水力计算内径必须与所选 DN、en 规格一致")
+    if product_spec is not None:
+        expected_family = "STEEL" if inp.material_key == "钢管" else get_catalog_family(inp.material_key)
+        if expected_family != product_spec.family or product_spec.material_key != inp.material_key:
+            raise ValueError("产品规格与当前管材不一致")
+        if not math.isclose(D, product_spec.inner_diameter_m, rel_tol=0.0, abs_tol=1e-9):
+            raise ValueError("水力计算内径必须与所选产品规格一致")
     f_c, m_c, b_c = mat["f"], mat["m"], mat["b"]
 
     A_full = math.pi * D ** 2 / 4.0
@@ -414,32 +502,202 @@ def evaluate_single_diameter(inp: PressurePipeInput, D: float) -> DiameterCandid
         unpr_notes=notes_u,
         category=category,
         flags=flags,
+        hydraulic_inner_diameter_mm=(
+            pe_spec.hydraulic_inner_diameter_mm if pe_spec is not None
+            else product_spec.hydraulic_inner_diameter_mm if product_spec is not None
+            else D * 1000.0
+        ),
+        nominal_outer_diameter_mm=(
+            pe_spec.nominal_outer_diameter_mm if pe_spec is not None else None
+        ),
+        nominal_wall_thickness_mm=(
+            pe_spec.nominal_wall_thickness_mm if pe_spec is not None
+            else product_spec.nominal_wall_thickness_mm if product_spec is not None
+            else None
+        ),
+        pe_material_grade=pe_spec.grade if pe_spec is not None else None,
+        pe_sdr=pe_spec.sdr if pe_spec is not None else None,
+        pe_nominal_pressure_mpa=pe_spec.pn_mpa if pe_spec is not None else None,
+        product_standard=(
+            pe_spec.standard if pe_spec is not None
+            else product_spec.product_standard if product_spec is not None
+            else None
+        ),
+        material_key=inp.material_key,
+        product_spec_id=(
+            f"PE|{pe_spec.grade}|PN{pe_spec.pn_mpa:g}|dn{pe_spec.nominal_outer_diameter_mm}"
+            if pe_spec is not None
+            else product_spec.spec_id if product_spec is not None
+            else None
+        ),
+        product_family=(
+            "PE" if pe_spec is not None
+            else product_spec.family if product_spec is not None
+            else None
+        ),
+        product_variant=product_spec.variant if product_spec is not None else None,
+        nominal_symbol=(
+            "DN" if pe_spec is not None
+            else product_spec.nominal_symbol if product_spec is not None
+            else None
+        ),
+        nominal_basis=(
+            "公称外径" if pe_spec is not None
+            else product_spec.nominal_basis if product_spec is not None
+            else None
+        ),
+        hydraulic_inner_diameter_basis=(
+            "DN-2en 名义换算" if pe_spec is not None
+            else product_spec.hydraulic_inner_diameter_basis
+            if product_spec is not None else None
+        ),
+        nominal_diameter_mm=(
+            float(pe_spec.nominal_outer_diameter_mm) if pe_spec is not None
+            else float(product_spec.nominal_diameter_mm) if product_spec is not None
+            else None
+        ),
+        outer_diameter_mm=(
+            float(pe_spec.nominal_outer_diameter_mm) if pe_spec is not None
+            else product_spec.outer_diameter_mm if product_spec is not None
+            else None
+        ),
+        class_system=(
+            "SDR" if pe_spec is not None
+            else product_spec.class_system if product_spec is not None
+            else None
+        ),
+        class_code=(
+            f"SDR{pe_spec.sdr:g}" if pe_spec is not None
+            else product_spec.class_code if product_spec is not None
+            else None
+        ),
+        lining_code=product_spec.lining_code if product_spec is not None else None,
+        lining_thickness_mm=(
+            product_spec.lining_thickness_mm if product_spec is not None else None
+        ),
+        minimum_inner_diameter_mm=(
+            product_spec.minimum_inner_diameter_mm if product_spec is not None else None
+        ),
+        maximum_inner_diameter_mm=(
+            product_spec.maximum_inner_diameter_mm if product_spec is not None else None
+        ),
+        selected_inner_diameter_tolerance_mm=(
+            product_spec.selected_inner_diameter_tolerance_mm
+            if product_spec is not None else None
+        ),
+        product_standard_references=(
+            (pe_spec.standard,) if pe_spec is not None
+            else product_spec.standard_references if product_spec is not None
+            else ()
+        ),
+        product_source_locator=product_spec.source_locator if product_spec is not None else None,
     )
 
 
 _CAT_ORDER = {"经济": 0, "妥协": 1, "兜底": 2}
 
 
+def _candidate_dimension_key(candidate: DiameterCandidate) -> float:
+    """返回用于造价优先排序的公称产品尺寸，旧结果回退水力内径。"""
+    if candidate.nominal_diameter_mm is not None:
+        return float(candidate.nominal_diameter_mm)
+    if candidate.nominal_outer_diameter_mm is not None:
+        return float(candidate.nominal_outer_diameter_mm)
+    return candidate.D * 1000.0
+
+
+def _candidate_identity(candidate: DiameterCandidate) -> tuple:
+    """返回候选规格稳定标识，材料键参与不同摩阻预设的身份区分。"""
+    if candidate.product_spec_id:
+        return (candidate.material_key, candidate.product_spec_id)
+    if candidate.nominal_outer_diameter_mm is not None:
+        return (
+            "PE",
+            candidate.pe_material_grade,
+            candidate.pe_nominal_pressure_mpa,
+            candidate.pe_sdr,
+            candidate.nominal_outer_diameter_mm,
+        )
+    return ("D", round(candidate.D, 9))
+
+
+def _format_candidate_size(candidate: DiameterCandidate) -> str:
+    """生成推荐原因和日志使用的规格摘要。"""
+    if candidate.product_family == "STEEL":
+        return (
+            f"钢管公称外径DN{candidate.outer_diameter_mm:g}×{candidate.nominal_wall_thickness_mm:g} mm"
+            f"（构造最小壁厚），单侧内衬{candidate.lining_thickness_mm:g} mm，"
+            f"水力内径{candidate.hydraulic_inner_diameter_mm:g} mm"
+        )
+    if candidate.nominal_outer_diameter_mm is not None:
+        return (
+            f"{candidate.pe_material_grade} DN{candidate.nominal_outer_diameter_mm}×"
+            f"{candidate.nominal_wall_thickness_mm:g} mm，SDR{candidate.pe_sdr:g}，"
+            f"PN{candidate.pe_nominal_pressure_mpa:g} MPa，"
+            f"名义计算内径 di={candidate.hydraulic_inner_diameter_mm:g} mm"
+        )
+    if candidate.product_family == "DI":
+        return (
+            f"DN{candidate.nominal_diameter_mm:g}，{candidate.class_code}，"
+            f"DE{candidate.outer_diameter_mm:g}×e{candidate.nominal_wall_thickness_mm:g} mm，"
+            f"水泥砂浆内衬{candidate.lining_thickness_mm:g} mm，"
+            f"名义换算 di={candidate.hydraulic_inner_diameter_mm:g} mm"
+        )
+    if candidate.product_family == "PCCP":
+        return f"{candidate.product_variant} DN={candidate.nominal_diameter_mm:g} mm"
+    if candidate.product_family == "FRPM":
+        return (
+            f"内径系列 DN{candidate.nominal_diameter_mm:g}，"
+            f"名义水力内径 di={candidate.hydraulic_inner_diameter_mm:g} mm"
+        )
+    return f"D={candidate.D:.3f} m"
+
+
 def _auto_recommend(candidates):
     """从 candidates 中按经济→妥协→兜底规则选出自动推荐结果，返回 (rec, category)"""
-    eco = sorted([c for c in candidates if c.category == "经济"], key=lambda c: c.hf_total_km)
-    comp = sorted([c for c in candidates if c.category == "妥协"], key=lambda c: c.hf_total_km)
+    eco = sorted([c for c in candidates if c.category == "经济"], key=_candidate_dimension_key)
+    comp = sorted([c for c in candidates if c.category == "妥协"], key=_candidate_dimension_key)
     if eco:
         return eco[0], "经济"
     if comp:
         return comp[0], "妥协"
-    fb = sorted(candidates, key=lambda c: (abs(c.V_press - 0.9), c.hf_total_km))
+    fb = sorted(
+        candidates,
+        key=lambda c: (abs(c.V_press - 0.9), _candidate_dimension_key(c), c.hf_total_km),
+    )
     if fb:
         return fb[0], "兜底"
     return None, "无可用"
 
 
 def _order_for_display(top: List["DiameterCandidate"], recommended: "DiameterCandidate") -> List["DiameterCandidate"]:
-    """候选展示排序：推荐项固定首位，其余按(类别优先级, hf_total)排序。"""
-    rec_D = recommended.D
-    others = [c for c in top if abs(c.D - rec_D) > 1e-6]
-    others_sorted = sorted(others, key=lambda c: (_CAT_ORDER.get(c.category, 9), c.hf_total_km))
+    """候选展示排序：推荐项固定首位，其余按类别与总水损排序。"""
+    rec_id = _candidate_identity(recommended)
+    others = [c for c in top if _candidate_identity(c) != rec_id]
+    others_sorted = sorted(
+        others,
+        key=lambda c: (_CAT_ORDER.get(c.category, 9), c.hf_total_km),
+    )
     return [recommended] + others_sorted
+
+
+def _steel_specs(config, traces):
+    """批量默认用整百外径，并按本批流量所需的最大外径扩展扫描范围。"""
+    if config.steel_dimension_basis != 'outer':
+        raise ValueError('钢管批量计算只接受公称外径，历史内径请先换算')
+    diameters = config.steel_diameter_candidates_mm
+    if diameters is not None:
+        # 显式批量序列保留旧脚本的扫描能力；新界面不再提供自定义候选输入。
+        return get_steel_pipe_specs(diameters, 'outer', config.steel_lining_thickness_mm)
+    upper = max(3000, max((t['recommended_outer_mm'] for t in traces.values()), default=0) + 400)
+    specs = []
+    for diameter in range(STEEL_DIAMETER_STEP_MM, int(min(upper, STEEL_MAX_INNER_MM)) + 1, STEEL_DIAMETER_STEP_MM):
+        try:
+            specs.append(get_steel_pipe_spec(diameter, 'outer', config.steel_lining_thickness_mm))
+        except ValueError:
+            # 自动扫描不生成内衬占满或超过规范适用范围的尺寸；显式输入仍在上方逐项报错。
+            continue
+    return tuple(specs)
 
 
 def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
@@ -450,52 +708,216 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
     3. 若仍无，按 |V-0.9| 最小 + hf_total 最小 兜底
     返回前 5 候选（获胜类别优先，不足时从其他类别补足）。
 
-    当 inp.manual_D 不为 None 时：
-    - 仍遍历所有标准管径生成候选表
-    - 将指定D强制设为推荐结果（若非标准管径则额外加入候选表）
+    产品目录模式按各材料规范离散规格遍历，并以公称产品尺寸作为造价优先排序，
+    以目录给出的公称内径或名义换算内径完成全部水力计算。
+
+    当用户指定管径时：
+    - PE 使用 manual_nominal_diameter_mm，且只接受所选等级/PN 下的合法 DN；
+    - 旧项目仅有 manual_D 时，将其视为原水力内径，并安全上取到 di 不小于旧值的首个标准规格；
+    - DI/PCCP/FRPM 使用 manual_product_diameter_mm；目录模式下的旧 manual_D 同样安全上取；
+    - 钢管尺寸模式用 manual_steel_diameter_mm；未启用尺寸模式的旧调用继续用 manual_D；
+    - 仍遍历标准候选生成对比表；
     - auto_recommended 存储自动推荐结果供对比
     """
+    if inp.material_key not in PIPE_MATERIALS:
+        return RecommendationResult(
+            recommended=None,
+            top_candidates=[],
+            category="无可用",
+            reason=f"未知管材: {inp.material_key}",
+            calc_steps="无法完成计算",
+        )
+    # 在逐规格扫描之前校验，不能把输入错误吞掉后仍返回推荐结果。
+    _validate_pressure_pipe_input(inp)
+    is_steel = inp.material_key == "钢管" and inp.steel_dimensions_enabled
+    if is_steel:
+        return recommend_steel_pipe(inp, sys.modules[__name__])
     candidates = []
-    for D in DEFAULT_DIAMETER_SERIES:
-        try:
-            c = evaluate_single_diameter(inp, float(D))
-            candidates.append(c)
-        except ValueError:
-            continue
+    material = PIPE_MATERIALS[inp.material_key]
+    is_pe = bool(material.get("uses_pe_catalog"))
+    catalog_family = material.get("catalog_family")
+    uses_product_catalog = bool(catalog_family and inp.use_product_catalog)
+    pe_specs: tuple[PEPipeSpec, ...] = ()
+    product_specs: tuple[PipeProductSpec, ...] = ()
+    if is_pe:
+        pe_specs = get_pe_pipe_specs(inp.pe_material_grade, inp.pe_nominal_pressure_mpa)
+        for spec in pe_specs:
+            try:
+                candidates.append(
+                    evaluate_single_diameter(inp, spec.inner_diameter_m, pe_spec=spec)
+                )
+            except ValueError:
+                continue
+    elif uses_product_catalog:
+        product_specs = get_pipe_product_specs(
+            inp.material_key,
+            ductile_iron_class=inp.ductile_iron_class,
+            pccp_variant=inp.pccp_variant,
+        )
+        for spec in product_specs:
+            try:
+                candidates.append(
+                    evaluate_single_diameter(inp, spec.inner_diameter_m, product_spec=spec)
+                )
+            except ValueError:
+                continue
+    else:
+        for D in DEFAULT_DIAMETER_SERIES:
+            try:
+                candidates.append(evaluate_single_diameter(inp, float(D)))
+            except ValueError:
+                continue
 
     # ---- 用户指定管径模式 ----
-    if inp.manual_D is not None and inp.manual_D > 0:
-        manual_D_val = inp.manual_D
-        # 查找指定D是否已在候选中（浮点容差）
+    requested_pe_dn = inp.manual_nominal_diameter_mm
+    legacy_pe_inner_diameter_m = None
+    requested_product_dn = inp.manual_product_diameter_mm
+    legacy_product_inner_diameter_m = None
+    if is_pe and inp.manual_D is not None:
+        try:
+            legacy_pe_inner_diameter_m = float(inp.manual_D)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("旧版 PE 水力内径 D 必须是数值，单位为 m") from exc
+        if not math.isfinite(legacy_pe_inner_diameter_m) or legacy_pe_inner_diameter_m <= 0:
+            raise ValueError("旧版 PE 水力内径 D 必须是大于 0 的有限数值")
+    if uses_product_catalog and inp.manual_D is not None:
+        try:
+            legacy_product_inner_diameter_m = float(inp.manual_D)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("旧版水力内径 D 必须是数值，单位为 m") from exc
+        if not math.isfinite(legacy_product_inner_diameter_m) or legacy_product_inner_diameter_m <= 0:
+            raise ValueError("旧版水力内径 D 必须是大于 0 的有限数值")
+    has_manual = (
+        (is_pe and (requested_pe_dn is not None or legacy_pe_inner_diameter_m is not None))
+        or (
+            uses_product_catalog
+            and (requested_product_dn is not None or legacy_product_inner_diameter_m is not None)
+        )
+        or (
+            not is_pe and not uses_product_catalog
+            and inp.manual_D is not None and inp.manual_D > 0
+        )
+    )
+    if has_manual:
         manual_candidate = None
-        for c in candidates:
-            if abs(c.D - manual_D_val) < 1e-6:
-                manual_candidate = c
-                break
-        # 若非标准管径，额外评价并加入候选列表
-        if manual_candidate is None:
-            try:
+        if is_pe:
+            if requested_pe_dn is not None:
+                requested_spec = get_pe_pipe_spec(
+                    inp.pe_material_grade,
+                    inp.pe_nominal_pressure_mpa,
+                    requested_pe_dn,
+                )
+                if (
+                    legacy_pe_inner_diameter_m is not None
+                    and requested_spec.inner_diameter_m + 1e-9 < legacy_pe_inner_diameter_m
+                ):
+                    raise ValueError(
+                        f"迁移后的 PE 规格名义内径 {requested_spec.inner_diameter_m:g} m "
+                        f"小于旧项目水力内径 {legacy_pe_inner_diameter_m:g} m"
+                    )
+            else:
+                requested_spec = next(
+                    (
+                        spec for spec in pe_specs
+                        if spec.inner_diameter_m + 1e-9 >= legacy_pe_inner_diameter_m
+                    ),
+                    None,
+                )
+                if requested_spec is None:
+                    raise ValueError(
+                        f"旧项目 PE 水力内径 D={legacy_pe_inner_diameter_m:g} m 超出"
+                        f"所选 {inp.pe_material_grade}、PN {inp.pe_nominal_pressure_mpa:g} MPa "
+                        "标准规格的可迁移范围"
+                    )
+            manual_candidate = next(
+                (
+                    c for c in candidates
+                    if c.nominal_outer_diameter_mm == requested_spec.nominal_outer_diameter_mm
+                ),
+                None,
+            )
+        elif uses_product_catalog:
+            if requested_product_dn is not None:
+                requested_product_spec = get_pipe_product_spec(
+                    inp.material_key,
+                    requested_product_dn,
+                    ductile_iron_class=inp.ductile_iron_class,
+                    pccp_variant=inp.pccp_variant,
+                )
+                if (
+                    legacy_product_inner_diameter_m is not None
+                    and requested_product_spec.inner_diameter_m + 1e-9
+                    < legacy_product_inner_diameter_m
+                ):
+                    raise ValueError(
+                        f"迁移后的产品规格名义内径 {requested_product_spec.inner_diameter_m:g} m "
+                        f"小于旧项目水力内径 {legacy_product_inner_diameter_m:g} m"
+                    )
+            else:
+                requested_product_spec = next(
+                    (
+                        spec for spec in product_specs
+                        if spec.inner_diameter_m + 1e-9 >= legacy_product_inner_diameter_m
+                    ),
+                    None,
+                )
+                if requested_product_spec is None:
+                    raise ValueError(
+                        f"旧项目水力内径 D={legacy_product_inner_diameter_m:g} m "
+                        "超出当前产品目录可迁移范围"
+                    )
+            manual_candidate = next(
+                (
+                    candidate for candidate in candidates
+                    if candidate.product_spec_id == requested_product_spec.spec_id
+                ),
+                None,
+            )
+        else:
+            manual_D_val = float(inp.manual_D)
+            for c in candidates:
+                if abs(c.D - manual_D_val) < 1e-6:
+                    manual_candidate = c
+                    break
+            # 非 PE 保留既有自定义水力内径能力。
+            if manual_candidate is None:
                 manual_candidate = evaluate_single_diameter(inp, manual_D_val)
                 manual_candidate.flags.append("非标准管径")
                 candidates.append(manual_candidate)
-            except ValueError:
-                pass
         if manual_candidate is not None:
-            fallback_sorted = sorted(candidates, key=lambda c: (abs(c.V_press - 0.9), c.hf_total_km))
+            fallback_sorted = sorted(
+                candidates,
+                key=lambda c: (abs(c.V_press - 0.9), _candidate_dimension_key(c), c.hf_total_km),
+            )
             # 自动推荐结果（在追加"用户指定"标记之前调用，避免同对象污染）
             auto_rec, auto_cat = _auto_recommend(candidates)
+            if legacy_pe_inner_diameter_m is not None:
+                manual_candidate.flags.append(
+                    f"旧版水力内径 {legacy_pe_inner_diameter_m:g} m 已安全上取为标准规格"
+                )
+            if legacy_product_inner_diameter_m is not None:
+                manual_candidate.flags.append(
+                    f"旧版水力内径 {legacy_product_inner_diameter_m:g} m 已安全上取为标准规格"
+                )
             manual_candidate.flags.append("用户指定")
             # top: 指定D排首位，其余按原排序补足
             top5 = [manual_candidate]
-            seen_D = {manual_candidate.D}
+            seen_ids = {_candidate_identity(manual_candidate)}
             for c in fallback_sorted:
-                if c.D not in seen_D:
+                identity = _candidate_identity(c)
+                if identity not in seen_ids:
                     top5.append(c)
-                    seen_D.add(c.D)
+                    seen_ids.add(identity)
                     if len(top5) >= 5:
                         break
             top5 = _order_for_display(top5, manual_candidate)
-            reason = (f"用户指定: D={manual_candidate.D:.3f}m, "
+            reason_prefix = (
+                "旧项目规格迁移"
+                if legacy_pe_inner_diameter_m is not None
+                or legacy_product_inner_diameter_m is not None
+                else "用户指定"
+            )
+            reason = (f"{reason_prefix}: {_format_candidate_size(manual_candidate)}, "
                       f"V={manual_candidate.V_press:.3f}m/s, "
                       f"hf_total={manual_candidate.hf_total_km:.4f}m/km "
                       f"({manual_candidate.category})")
@@ -517,19 +939,23 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
         )
 
     # 各类别分组
-    eco = sorted([c for c in candidates if c.category == "经济"], key=lambda c: c.hf_total_km)
-    comp = sorted([c for c in candidates if c.category == "妥协"], key=lambda c: c.hf_total_km)
-    fallback_sorted = sorted(candidates, key=lambda c: (abs(c.V_press - 0.9), c.hf_total_km))
+    eco = sorted([c for c in candidates if c.category == "经济"], key=_candidate_dimension_key)
+    comp = sorted([c for c in candidates if c.category == "妥协"], key=_candidate_dimension_key)
+    fallback_sorted = sorted(
+        candidates,
+        key=lambda c: (abs(c.V_press - 0.9), _candidate_dimension_key(c), c.hf_total_km),
+    )
 
     def _fill_top5(primary, all_sorted):
-        """获胜类别优先，不足5个时从 all_sorted 补足（去重），结果按 (类别优先级, hf_total) 排列"""
+        """获胜类别优先，不足5个时从全体候选补足并按稳定规格去重。"""
         top = list(primary[:5])
         if len(top) < 5:
-            seen_D = {c.D for c in top}
+            seen_ids = {_candidate_identity(c) for c in top}
             for c in all_sorted:
-                if c.D not in seen_D:
+                identity = _candidate_identity(c)
+                if identity not in seen_ids:
                     top.append(c)
-                    seen_D.add(c.D)
+                    seen_ids.add(identity)
                     if len(top) >= 5:
                         break
         return top
@@ -540,7 +966,7 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
     if eco:
         rec = eco[0]
         top5 = _order_for_display(_fill_top5(eco, fallback_sorted), rec)
-        reason = f"经济优先: D={rec.D:.3f}m, V={rec.V_press:.3f}m/s, hf_total={rec.hf_total_km:.4f}m/km"
+        reason = f"经济优先: {_format_candidate_size(rec)}, V={rec.V_press:.3f}m/s, hf_total={rec.hf_total_km:.4f}m/km"
         calc_text = _build_process_text(inp, candidates, rec, "经济")
         return RecommendationResult(
             recommended=rec, top_candidates=top5,
@@ -551,7 +977,7 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
     if comp:
         rec = comp[0]
         top5 = _order_for_display(_fill_top5(comp, fallback_sorted), rec)
-        reason = f"妥协兜底: D={rec.D:.3f}m, V={rec.V_press:.3f}m/s, hf_total={rec.hf_total_km:.4f}m/km"
+        reason = f"妥协兜底: {_format_candidate_size(rec)}, V={rec.V_press:.3f}m/s, hf_total={rec.hf_total_km:.4f}m/km"
         calc_text = _build_process_text(inp, candidates, rec, "妥协")
         return RecommendationResult(
             recommended=rec, top_candidates=top5,
@@ -562,7 +988,7 @@ def recommend_diameter(inp: PressurePipeInput) -> RecommendationResult:
     rec = fallback_sorted[0]
     rec.flags.append("未满足约束")
     top5 = _order_for_display(fallback_sorted[:5], rec)
-    reason = f"就近流速兜底: D={rec.D:.3f}m, V={rec.V_press:.3f}m/s, hf_total={rec.hf_total_km:.4f}m/km (未满足约束)"
+    reason = f"就近流速兜底: {_format_candidate_size(rec)}, V={rec.V_press:.3f}m/s, hf_total={rec.hf_total_km:.4f}m/km (未满足约束)"
     calc_text = _build_process_text(inp, candidates, rec, "兜底")
     return RecommendationResult(
         recommended=rec, top_candidates=top5,
@@ -630,7 +1056,10 @@ def run_batch_scan(
     cancel_flag: Optional[Callable[[], bool]] = None,
 ) -> BatchScanResult:
     """
-    批量扫描：遍历 Q x slope x D x material，生成 CSV + PNG + PDF + 合并 PDF。
+    批量扫描：遍历 Q × 坡度 × 材料规格，生成 CSV、PNG、PDF 和合并 PDF。
+
+    ``diameter_values=None`` 时按材料取规格：PE、DI、PCCP、FRPM 使用各自
+    产品目录，其他管材使用既有通用水力内径序列；显式数组始终保留旧接口行为。
 
     progress_cb(current, total, message): 进度回调
     cancel_flag(): 返回 True 时中止
@@ -642,6 +1071,36 @@ def run_batch_scan(
     import seaborn as sns
     from matplotlib.lines import Line2D
     from matplotlib.ticker import MultipleLocator
+
+    # 输出前整批校验；一条无效输入也不得产生部分有效、部分无效的 CSV。
+    _validate_hydraulic_number(config.length_m, "管长 L")
+    _validate_hydraulic_number(config.local_loss_ratio, "局部损失比例", allow_zero=True)
+    for q_value in config.q_values:
+        _validate_hydraulic_number(q_value, "设计流量 Q")
+    for denominator in config.slope_denominators:
+        _validate_hydraulic_number(denominator, "坡度分母")
+    if config.slope_denominators:
+        _validate_hydraulic_number(config.n_unpr, "无压糙率 n")
+        for value, label in ((config.unpr_clearance_height, "项目净空高度"), (config.unpr_clearance_area, "项目净空面积")):
+            if value is not None:
+                _validate_hydraulic_number(value, label, allow_zero=True)
+        if config.unpr_clearance_area is not None and config.unpr_clearance_area > 100:
+            raise ValueError("项目净空面积不能超过 100%")
+    if config.diameter_values is not None:
+        for diameter in config.diameter_values:
+            _validate_hydraulic_number(diameter, "管径 D")
+    steel_specs = ()
+    steel_traces = {}
+    if "钢管" in config.materials and config.steel_dimensions_enabled:
+        if config.diameter_values is not None:
+            raise ValueError("钢管尺寸模式统一扫描公称外径，不能同时传入旧水力内径序列")
+        _validate_hydraulic_number(config.steel_lining_thickness_mm, '单侧内衬厚度', allow_zero=True)
+        for q_value in config.q_values:
+            q_value = float(q_value)
+            required = steel_hydraulic_requirement(q_value, q_value * (1 + get_flow_increase_percent(q_value) / 100),
+                                                    PIPE_MATERIALS['钢管'], ECONOMIC_RULE, config.local_loss_ratio)
+            steel_traces[q_value], _ = select_steel_outer_diameter(required, config.steel_lining_thickness_mm)
+        steel_specs = _steel_specs(config, steel_traces)
 
     result = BatchScanResult()
     output_dir = config.output_dir
@@ -675,8 +1134,45 @@ def run_batch_scan(
 
     # ---- 阶段1: 计算并保存 CSV ----
     results_list = []
-    total = (len(config.q_values) * len(slope_values)
-             * len(config.diameter_values) * len(config.materials))
+    def _scan_entries_for_material(
+        mat_key: str,
+    ) -> list[tuple[float, Optional[PEPipeSpec], Optional[PipeProductSpec]]]:
+        """按材料返回批量计算的水力内径及可选产品规格。"""
+        if config.diameter_values is not None:
+            # 显式传入管径时保留旧接口语义，便于历史脚本和回归测试继续运行。
+            return [(float(diameter), None, None) for diameter in config.diameter_values]
+        material = PIPE_MATERIALS[mat_key]
+        if mat_key == "钢管" and config.steel_dimensions_enabled:
+            return [(spec.inner_diameter_m, None, spec) for spec in steel_specs]
+        if material.get("uses_pe_catalog"):
+            return [
+                (spec.inner_diameter_m, spec, None)
+                for spec in get_pe_pipe_specs(
+                    config.pe_material_grade,
+                    config.pe_nominal_pressure_mpa,
+                )
+            ]
+        if material.get("catalog_family") and config.use_product_catalogs:
+            return [
+                (spec.inner_diameter_m, None, spec)
+                for spec in get_pipe_product_specs(
+                    mat_key,
+                    ductile_iron_class=config.ductile_iron_class,
+                    pccp_variant=config.pccp_variant,
+                )
+            ]
+        return [(float(diameter), None, None) for diameter in DEFAULT_DIAMETER_SERIES]
+
+    scan_entries_by_material = {
+        mat_key: _scan_entries_for_material(mat_key)
+        for mat_key in config.materials
+        if mat_key in PIPE_MATERIALS
+    }
+    total = (
+        len(config.q_values)
+        * len(slope_values)
+        * sum(len(entries) for entries in scan_entries_by_material.values())
+    )
     count = 0
 
     # 进度条分段: 计算 0-30%, 绘图 30-95%, 合并 95-100%
@@ -692,9 +1188,10 @@ def run_batch_scan(
         mat = PIPE_MATERIALS[mat_key]
         mat_name = mat["name"]
 
+        scan_entries = scan_entries_by_material[mat_key]
         for Q in config.q_values:
             for si, i_val in enumerate(slope_values):
-                for D in config.diameter_values:
+                for D, pe_spec, product_spec in scan_entries:
                     if cancel_flag and cancel_flag():
                         result.logs.append("用户取消")
                         return result
@@ -704,7 +1201,7 @@ def run_batch_scan(
                         progress_cb(
                             int(count / total * _PHASE1_END),
                             _TOTAL_STEPS,
-                            f"计算中 {mat_name} Q={Q:.1f} ({count}/{total})",
+                            f"计算中 {mat_name} Q={Q:g} ({count}/{total})",
                         )
 
                     inp = PressurePipeInput(
@@ -712,11 +1209,36 @@ def run_batch_scan(
                         slope_i=i_val, n_unpr=config.n_unpr,
                         length_m=config.length_m,
                         local_loss_ratio=config.local_loss_ratio,
+                        pe_material_grade=config.pe_material_grade,
+                        pe_nominal_pressure_mpa=config.pe_nominal_pressure_mpa,
+                        use_product_catalog=config.use_product_catalogs,
+                        ductile_iron_class=config.ductile_iron_class,
+                        pccp_variant=config.pccp_variant,
                     )
                     try:
-                        c = evaluate_single_diameter(inp, float(D))
+                        c = evaluate_single_diameter(
+                            inp,
+                            float(D),
+                            pe_spec=pe_spec,
+                            product_spec=product_spec,
+                        )
                     except ValueError:
                         continue
+
+                    if c.product_family == 'STEEL':
+                        c.steel_sizing_trace = dict(steel_traces[float(Q)])
+
+                    if _has_unpr:
+                        comparison = compare_flows(c, float(Q), config.slope_denominators[si], config.n_unpr,
+                                                   config.unpr_clearance_height, config.unpr_clearance_area)
+                        for row in comparison:
+                            # 按同一材料公式还原设计流量损失，加大工况直接采用候选值。
+                            loss_scale = (row['flow'] / (float(Q) * (1 + c.increase_pct / 100))) ** mat['m']
+                            row.update(material=mat.get('display_name', mat_name), specification=_format_candidate_size(c),
+                                       pressure_loss=c.hf_total_km * loss_scale,
+                                       pressure_loss_lower=c.hf_total_lower_km * loss_scale if c.hf_total_lower_km is not None else None,
+                                       category=c.category)
+                        result.comparison_rows.extend(comparison)
 
                     results_list.append({
                         "管材类型": mat_name,
@@ -726,7 +1248,18 @@ def run_batch_scan(
                         "n_unpr": config.n_unpr if _has_unpr else "",
                         "i_unpr_str": slope_labels[si],
                         "i_unpr_val": i_val if i_val is not None else "",
-                        "D (m)": float(D),
+                        # D (m) 为兼容列，语义统一为实际代入公式的水力计算内径。
+                        "D (m)": c.D,
+                        "水力计算内径 di (mm)": c.hydraulic_inner_diameter_mm,
+                        "公称外径 DN (mm)": c.nominal_outer_diameter_mm or "",
+                        "公称壁厚 en (mm)": (
+                            c.nominal_wall_thickness_mm
+                            if c.product_family == "PE" else ""
+                        ),
+                        "PE材料等级": c.pe_material_grade or "",
+                        "PE公称压力 PN (MPa)": c.pe_nominal_pressure_mpa or "",
+                        "PE标准尺寸比 SDR": c.pe_sdr or "",
+                        "产品标准": c.product_standard or "",
                         "y_unpr (m)": c.y_unpr,
                         "v_unpr (m/s)": c.v_unpr,
                         "y/D_unpr": c.y_D_ratio,
@@ -760,10 +1293,43 @@ def run_batch_scan(
                         "加大比例 (%)": c.increase_pct,
                         "分类": c.category,
                         "备注": c.unpr_notes,
+                        # 通用产品字段只在末尾追加，保留既有 CSV 列名与顺序。
+                        "产品族": c.product_family or "",
+                        "产品型式": c.product_variant or "",
+                        "产品规格ID": c.product_spec_id or "",
+                        "公称口径代号": c.nominal_symbol or "",
+                        "公称口径 (mm)": c.nominal_diameter_mm or "",
+                        "口径基准": c.nominal_basis or "",
+                        "产品外径 (mm)": c.outer_diameter_mm or "",
+                        "产品公称壁厚 (mm)": c.nominal_wall_thickness_mm or "",
+                        "水力内径取值依据": c.hydraulic_inner_diameter_basis or "",
+                        "等级体系": c.class_system or "",
+                        "等级代码": c.class_code or "",
+                        "内衬代号": c.lining_code or "",
+                        "内衬厚度 (mm)": c.lining_thickness_mm if c.lining_thickness_mm is not None else "",
+                        "两端最小内径 (mm)": c.minimum_inner_diameter_mm or "",
+                        "两端最大内径 (mm)": c.maximum_inner_diameter_mm or "",
+                        "设计内径允许偏差 (mm)": c.selected_inner_diameter_tolerance_mm or "",
+                        "产品规格依据": "、".join(c.product_standard_references),
+                        "规格表定位": c.product_source_locator or "",
+                        "钢管壁厚选取": c.class_code if c.product_family == "STEEL" else "",
+                        "钢管尺寸计算过程": "；".join(steel_sizing_process(c.steel_sizing_trace) + steel_dimension_process(c)) if c.product_family == "STEEL" else "",
+                        "钢管所需最小水力内径 (mm)": (c.steel_sizing_trace or {}).get('required_hydraulic_inner_mm', ''),
+                        "钢管上取公称外径 DN (mm)": (c.steel_sizing_trace or {}).get('recommended_outer_mm', ''),
+                        "钢管最小推荐档": bool(c.steel_sizing_trace and c.outer_diameter_mm == c.steel_sizing_trace['recommended_outer_mm'] and c.category != '兜底'),
                     })
 
     if progress_cb:
         progress_cb(_PHASE1_END, _TOTAL_STEPS, "计算完成，保存CSV...")
+
+    if result.comparison_rows and config.output_csv:
+        comparison_path = os.path.join(output_dir, "无压输水能力对比明细.csv")
+        pd.DataFrame(result.comparison_rows).reindex(columns=COMPARISON_COLUMNS).rename(columns=COMPARISON_COLUMNS).to_csv(
+            comparison_path, index=False, encoding="utf-8-sig")
+        result.comparison_csv_path = comparison_path
+        result.logs.append(f"同流量无压对比明细已保存: {comparison_path}")
+    if result.comparison_rows:
+        result.logs.append("对比页与专用明细按设计/加大流量分别对齐；原有批量CSV中有压水损仍为加大流量，旧净空标记仅供兼容。")
 
     df = pd.DataFrame(results_list)
     csv_name = "有压管道批量计算结果.csv"
@@ -804,7 +1370,6 @@ def run_batch_scan(
             return result
 
         df_mat = df[df["管材类型"] == mat_name].copy()
-        df_mat["Q_target (m\u00b3/s)"] = df_mat["Q_target (m\u00b3/s)"].round(1)
 
         all_Q = sorted(df_mat["Q_target (m\u00b3/s)"].unique())
         safe_mat = mat_name.replace("(", "_").replace(")", "_").replace("=", "_")
@@ -813,7 +1378,7 @@ def run_batch_scan(
         df_unpr_valid = df_mat.dropna(subset=["v_unpr (m/s)"]).copy()
         df_press_valid = df_mat.dropna(subset=["V_press (m/s)", "hf_total_press (m/km)"]).copy()
 
-        if not df_unpr_valid.empty or not df_press_valid.empty:
+        if not _has_unpr and (not df_unpr_valid.empty or not df_press_valid.empty):
             # 准备坡度分类
             slope_labels_sorted = sorted(
                 [s for s in df_mat["i_unpr_str"].unique()
@@ -832,8 +1397,8 @@ def run_batch_scan(
                     result.logs.append("用户取消（图1）")
                     return result
 
-                q_start1 = f"{qchunk1[0]:.1f}"
-                q_end1 = f"{qchunk1[-1]:.1f}"
+                q_start1 = f"{qchunk1[0]:g}"
+                q_end1 = f"{qchunk1[-1]:g}"
 
                 nq1 = len(qchunk1)
                 ncol1 = min(5, nq1)
@@ -891,9 +1456,9 @@ def run_batch_scan(
                     else:
                         ax2_1.set_yticks([])
 
-                    ax1.set_xlabel("管径 D (m)")
+                    ax1.set_xlabel("水力计算内径 (m)")
                     ax1.set_ylabel("流速 (m/s)")
-                    ax1.set_title(f"Q = {q_val1:.1f} {PLOT_FLOW_UNIT_M3_PER_S}")
+                    ax1.set_title(f"Q = {q_val1:g} {PLOT_FLOW_UNIT_M3_PER_S}")
                     # 自适应X轴
                     _d_q1 = set(df_unpr_valid[df_unpr_valid["Q_target (m\u00b3/s)"] == q_val1]["D (m)"].tolist())
                     if not q_press_data.empty:
@@ -922,7 +1487,7 @@ def run_batch_scan(
                 _chart_count += 1
                 if progress_cb:
                     progress_cb(
-                        _PHASE1_END + int(_chart_count / _chart_total * (_PHASE2_END - _PHASE1_END)),
+                        _PHASE1_END + int(_chart_count / _chart_total * ((900 if _has_unpr else _PHASE2_END) - _PHASE1_END)),
                         _TOTAL_STEPS,
                         f"绘图中 ({_chart_count}/{_chart_total}) {pdf_name1}",
                     )
@@ -938,7 +1503,7 @@ def run_batch_scan(
                         ax_sub1 = fig_sub1.add_subplot(111)
                         ax_sub1_twin = ax_sub1.twinx()
 
-                        ax_sub1.set_xlabel("管径 D (m)", fontsize=12)
+                        ax_sub1.set_xlabel("水力计算内径 (m)", fontsize=12)
 
                         # 绘制无压流速 (按坡度分组)
                         _all_v_sub1 = []
@@ -992,7 +1557,7 @@ def run_batch_scan(
                         # 设置标题
                         fig_sub1.suptitle(
                             f"图1: 无压/有压流速与总水损对比\n"
-                            f"目标流量 Q = {q_val1:.1f} {PLOT_FLOW_UNIT_M3_PER_S}, 管材: {mat_name}",
+                            f"目标流量 Q = {q_val1:g} {PLOT_FLOW_UNIT_M3_PER_S}, 管材: {mat_name}",
                             fontsize=14,
                             y=0.98,
                         )
@@ -1006,7 +1571,7 @@ def run_batch_scan(
 
                         # 保存
                         fig_sub1.tight_layout(rect=[0, 0, 1, 0.93])
-                        png_name1 = f"图1_Q{q_val1:.1f}_{safe_mat}.png"
+                        png_name1 = f"图1_Q{q_val1:g}_{safe_mat}.png"
                         png_path1 = os.path.join(png_dir1, png_name1)
                         actual_png1 = _safe_savefig(fig_sub1, png_path1, dpi=300, bbox_inches='tight', pad_inches=0.1)
                         result.generated_pngs.append(actual_png1)
@@ -1043,8 +1608,8 @@ def run_batch_scan(
                     result.logs.append("用户取消（绘图）")
                     return result
 
-                q_start = f"{qchunk[0]:.1f}"
-                q_end = f"{qchunk[-1]:.1f}"
+                q_start = f"{qchunk[0]:g}"
+                q_end = f"{qchunk[-1]:g}"
 
                 df_chunk = df_cat[df_cat["Q_target (m\u00b3/s)"].isin(qchunk)].copy()
                 if df_chunk.empty:
@@ -1086,12 +1651,12 @@ def run_batch_scan(
 
                     ax1.set_ylim(0.5, 1.8)
                     ax2.set_ylim(0, 5.5)
-                    ax1.set_xlabel("管径 D (m)")
+                    ax1.set_xlabel("水力计算内径 (m)")
                     ax1.set_ylabel("流速 V (m/s)", color=color_v)
                     ax2.set_ylabel("总水头损失 (m/km)", color=color_hf)
                     ax1.tick_params(axis="y", labelcolor=color_v)
                     ax2.tick_params(axis="y", labelcolor=color_hf)
-                    ax1.set_title(f"Q = {q_val:.1f} {PLOT_FLOW_UNIT_M3_PER_S}")
+                    ax1.set_title(f"Q = {q_val:g} {PLOT_FLOW_UNIT_M3_PER_S}")
                     _setup_adaptive_xaxis(ax1, q_data["D (m)"].tolist())
 
                 # 隐藏多余子图
@@ -1116,7 +1681,7 @@ def run_batch_scan(
                 _chart_count += 1
                 if progress_cb:
                     progress_cb(
-                        _PHASE1_END + int(_chart_count / _chart_total * (_PHASE2_END - _PHASE1_END)),
+                        _PHASE1_END + int(_chart_count / _chart_total * ((900 if _has_unpr else _PHASE2_END) - _PHASE1_END)),
                         _TOTAL_STEPS,
                         f"绘图中 ({_chart_count}/{_chart_total}) {pdf_name}",
                     )
@@ -1137,7 +1702,7 @@ def run_batch_scan(
                         ax_sub2 = fig_sub2.add_subplot(111)
                         ax_sub2_twin = ax_sub2.twinx()
 
-                        ax_sub2.set_xlabel("管径 D (m)", fontsize=12)
+                        ax_sub2.set_xlabel("水力计算内径 (m)", fontsize=12)
 
                         # 绘制散点
                         color_v_sub2 = "#1976D2"
@@ -1183,7 +1748,7 @@ def run_batch_scan(
                         # 设置标题
                         fig_sub2.suptitle(
                             f"图2: 有压管道优选设计点\n"
-                            f"目标流量 Q = {q_val:.1f} {PLOT_FLOW_UNIT_M3_PER_S}, 管材: {mat_name}",
+                            f"目标流量 Q = {q_val:g} {PLOT_FLOW_UNIT_M3_PER_S}, 管材: {mat_name}",
                             fontsize=14,
                             y=0.98,
                         )
@@ -1208,13 +1773,18 @@ def run_batch_scan(
 
                         # 保存
                         fig_sub2.tight_layout(rect=[0, 0, 1, 0.93])
-                        png_name = f"图2_Q{q_val:.1f}_{safe_mat}.png"
+                        png_name = f"图2_Q{q_val:g}_{safe_mat}.png"
                         png_path = os.path.join(png_dir, png_name)
                         actual_png2 = _safe_savefig(fig_sub2, png_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
                         result.generated_pngs.append(actual_png2)
                         plt.close(fig_sub2)
 
                 plt.close(fig)
+
+    if _has_unpr:
+        from calc_渠系计算算法内核.unpressurized_plots import export_comparison_charts
+        if not export_comparison_charts(result.comparison_rows, config, result, _safe_savefig, progress_cb, cancel_flag):
+            return result
 
     # ---- 阶段3: 合并 PDF ----
     if progress_cb:
@@ -1270,8 +1840,17 @@ def _build_process_text(
       - auto_rec / auto_cat 为自动推荐结果，用于对比展示
     """
     mat = PIPE_MATERIALS[inp.material_key]
-    mat_name = mat["name"]
+    mat_name = mat.get("display_name", mat["name"])
     is_manual = (category == "指定")
+    is_pe = (
+        recommended.product_family == "PE"
+        or recommended.pe_material_grade is not None
+    )
+    has_generic_product = recommended.product_family in {"DI", "PCCP", "FRPM"}
+    legacy_migration_flags = [
+        flag for flag in recommended.flags
+        if flag.startswith("旧版水力内径")
+    ]
     f_lower = mat.get("f_min")
     has_f_range = (
         f_lower is not None
@@ -1296,6 +1875,34 @@ def _build_process_text(
     o.append(f"  {_n}. 管材类型:")
     o.append(f"     {mat_name}")
     o.append("")
+    if is_pe:
+        _n += 1
+        o.append(f"  {_n}. PE 产品系列:")
+        o.append(
+            f"     {recommended.pe_material_grade}，PN {recommended.pe_nominal_pressure_mpa:g} MPa，"
+            f"SDR {recommended.pe_sdr:g}（20℃、总体使用系数 C=1.25）"
+        )
+        o.append(f"     产品尺寸依据: {recommended.product_standard} 表2、表3")
+        o.append("")
+    elif has_generic_product:
+        _n += 1
+        o.append(f"  {_n}. 产品规格目录:")
+        o.append(f"     {_format_candidate_size(recommended)}")
+        if recommended.product_standard_references:
+            o.append(
+                "     工程/产品依据: "
+                + "、".join(recommended.product_standard_references)
+            )
+        if recommended.product_source_locator:
+            o.append(f"     规格表定位: {recommended.product_source_locator}")
+        if recommended.product_family == "PCCP":
+            o.append("     PCCP 产品型式与本次所选摩阻参数预设相互独立。")
+            o.append("     本结果仅完成规格选径和水力计算，不代替结构、承压与覆土荷载验算。")
+        elif recommended.product_family == "FRPM":
+            o.append("     自动选径仅采用内径系列；端部实际内径应在施工图阶段按供货资料复核。")
+        elif recommended.product_family == "DI":
+            o.append("     水力内径为按 DE、表列公称壁厚及水泥砂浆内衬厚度换算的名义值。")
+        o.append("")
     _n += 1
     o.append(f"  {_n}. 管材系数:")
     if has_f_range:
@@ -1310,7 +1917,24 @@ def _build_process_text(
     o.append(f"  {_n}. 管长:")
     o.append(f"     L = {inp.length_m} m")
     o.append("")
-    if is_manual and inp.manual_D is not None:
+    if is_manual and is_pe:
+        _n += 1
+        o.append(f"  {_n}. 指定 PE 公称外径:")
+        o.append(f"     DN = {recommended.nominal_outer_diameter_mm} mm（规范离散规格）")
+        if legacy_migration_flags:
+            o.append(f"     旧项目迁移: {legacy_migration_flags[0]}")
+        o.append("")
+    elif is_manual and has_generic_product:
+        _n += 1
+        o.append(f"  {_n}. 指定产品公称口径:")
+        o.append(
+            f"     {recommended.nominal_symbol} = {recommended.nominal_diameter_mm:g} mm"
+            "（规范离散规格）"
+        )
+        if legacy_migration_flags:
+            o.append(f"     旧项目迁移: {legacy_migration_flags[0]}")
+        o.append("")
+    elif is_manual and inp.manual_D is not None:
         _n += 1
         o.append(f"  {_n}. 指定管径:")
         o.append(f"     D = {inp.manual_D} m ({inp.manual_D * 1000:.0f} mm)")
@@ -1347,6 +1971,7 @@ def _build_process_text(
     # ---- 三、管径计算 ----
     D = recommended.D
     d_mm = D * 1000
+    d_mm_text = f"{d_mm:g}" if recommended.product_family == "STEEL" else f"{d_mm:.1f}" if is_pe or recommended.product_family == "DI" else f"{d_mm:.0f}"
     A_full = math.pi * D ** 2 / 4.0
 
     section3_title = "【三、指定管径计算】" if is_manual else "【三、推荐管径计算】"
@@ -1354,10 +1979,62 @@ def _build_process_text(
     o.append("")
     step3_label = "指定管径:" if is_manual else "推荐管径:"
     o.append(f"  1. {step3_label}")
-    o.append(f"     D = {D} m ({d_mm:.0f} mm)")
+    if recommended.product_family == "STEEL":
+        o.append(f"     钢管预选尺寸: {_format_candidate_size(recommended)}")
+        o.extend(f"     {line}" for line in steel_sizing_process(recommended.steel_sizing_trace))
+        o.extend(f"     {line}" for line in steel_dimension_process(recommended))
+    elif is_pe:
+        o.append(
+            f"     造价/采购规格: {recommended.pe_material_grade} 给水管，"
+            f"DN{recommended.nominal_outer_diameter_mm}×{recommended.nominal_wall_thickness_mm:g} mm，"
+            f"SDR{recommended.pe_sdr:g}，PN{recommended.pe_nominal_pressure_mpa:g} MPa，"
+            f"{recommended.product_standard}"
+        )
+        o.append("     水力计算采用名义内径:")
+        o.append(
+            f"     di = DN - 2en = {recommended.nominal_outer_diameter_mm} - "
+            f"2×{recommended.nominal_wall_thickness_mm:g} = "
+            f"{recommended.hydraulic_inner_diameter_mm:g} mm = {D:g} m"
+        )
+    elif recommended.product_family == "DI":
+        o.append(
+            f"     造价/采购规格: 球墨铸铁管 DN{recommended.nominal_diameter_mm:g}，"
+            f"{recommended.class_code}，DE{recommended.outer_diameter_mm:g}×"
+            f"e{recommended.nominal_wall_thickness_mm:g} mm，"
+            f"水泥砂浆内衬 {recommended.lining_thickness_mm:g} mm"
+        )
+        o.append("     水力计算采用名义换算内径:")
+        o.append(
+            f"     di = DE - 2(e_nom + e_c) = {recommended.outer_diameter_mm:g} - "
+            f"2×({recommended.nominal_wall_thickness_mm:g} + "
+            f"{recommended.lining_thickness_mm:g}) = "
+            f"{recommended.hydraulic_inner_diameter_mm:g} mm = {D:g} m"
+        )
+    elif recommended.product_family == "PCCP":
+        o.append(
+            f"     造价/采购规格: {recommended.product_variant}，"
+            f"DN={recommended.nominal_diameter_mm:g} mm"
+        )
+        o.append(
+            f"     水力计算采用产品公称内径 DN={recommended.hydraulic_inner_diameter_mm:g} mm"
+        )
+    elif recommended.product_family == "FRPM":
+        o.append(
+            f"     造价/采购规格: 玻璃钢夹砂管内径系列 DN"
+            f"{recommended.nominal_diameter_mm:g}"
+        )
+        o.append(
+            f"     名义水力内径 di={recommended.hydraulic_inner_diameter_mm:g} mm；"
+            f"两端内径允许范围 {recommended.minimum_inner_diameter_mm:g}～"
+            f"{recommended.maximum_inner_diameter_mm:g} mm，"
+            f"相对所选设计值允许偏差 ±{recommended.selected_inner_diameter_tolerance_mm:g} mm"
+        )
+    else:
+        o.append(f"     D = {D} m ({d_mm:.0f} mm)")
     o.append("")
     o.append("  2. 过水面积计算:")
-    o.append(f"     A = π × D² / 4")
+    diameter_symbol = "di" if is_pe or has_generic_product else "D"
+    o.append(f"     A = π × {diameter_symbol}² / 4")
     o.append(f"       = π × {D}² / 4")
     o.append(f"       = {A_full:.6f} m²")
     o.append("")
@@ -1372,19 +2049,19 @@ def _build_process_text(
         o.append(f"     f 取上限 {float(mat['f']):.0f}:")
         o.append(
             f"        = {mat['f']} × (1000 × ({Q_inc_m3h:.2f})^{{{mat['m']}}}) "
-            f"/ (({d_mm:.0f})^{{{mat['b']}}})"
+            f"/ (({d_mm_text})^{{{mat['b']}}})"
         )
         o.append(f"        = {recommended.hf_friction_km:.4f} m/km")
         o.append(f"     f 取下限 {float(f_lower):.0f}:")
         o.append(
             f"        = {float(f_lower):.0f} × (1000 × ({Q_inc_m3h:.2f})^{{{mat['m']}}}) "
-            f"/ (({d_mm:.0f})^{{{mat['b']}}})"
+            f"/ (({d_mm_text})^{{{mat['b']}}})"
         )
         o.append(f"        = {recommended.hf_friction_lower_km:.4f} m/km")
     else:
         o.append(
             f"        = {mat['f']} × (1000 × ({Q_inc_m3h:.2f})^{{{mat['m']}}}) "
-            f"/ (({d_mm:.0f})^{{{mat['b']}}})"
+            f"/ (({d_mm_text})^{{{mat['b']}}})"
         )
         o.append(f"        = {recommended.hf_friction_km:.4f} m/km")
     o.append("")
@@ -1448,29 +2125,66 @@ def _build_process_text(
     o.append("  3. 双规范说明:")
     o.append("     规范依据并列展示：GB 50288-2018 与 GB/T 20203-2017")
     o.append("     当前程序筛选规则仍按 GB 50288-2018 执行")
+    if is_pe:
+        o.append("     PE 的 DN、en、SDR、PN 取自 GB/T 13663.2-2018；水力公式仅代入 di")
+        o.append("     PN 为20℃、C=1.25条件值；工作温度、设计内水压力及水击仍应另行复核")
     o.append("")
     o.append(f"  4. 评价统计:")
     o.append(f"     全部 {len(all_candidates)} 种口径: 经济区 {eco_count} 个, 妥协区 {comp_count} 个, 兜底 {fallback_count} 个")
     o.append("")
     o.append(f"  5. 筛选结论:")
     if is_manual:
-        o.append(f"     用户指定管径: D = {recommended.D} m ({recommended.D * 1000:.0f} mm)")
+        o.append(f"     用户指定规格: {_format_candidate_size(recommended)}")
         o.append(f"     该管径属于「{recommended.category}」区")
         if auto_rec is not None and auto_cat:
-            o.append(f"     自动推荐({auto_cat}区): D = {auto_rec.D} m ({auto_rec.D * 1000:.0f} mm)")
+            o.append(f"     自动推荐({auto_cat}区): {_format_candidate_size(auto_rec)}")
     elif category == "经济":
-        o.append(f"     存在经济区口径，取最小管径: D = {recommended.D} m")
+        o.append(f"     存在经济区口径，取最小合规规格: {_format_candidate_size(recommended)}")
     elif category == "妥协":
-        o.append(f"     无经济区口径，妥协区取最小管径: D = {recommended.D} m")
+        o.append(f"     无经济区口径，妥协区取最小合规规格: {_format_candidate_size(recommended)}")
     else:
-        o.append(f"     无经济区/妥协区口径，按 |V-0.9| 最小 + hf总 最小 兜底选取: D = {recommended.D} m")
+        if recommended.steel_sizing_trace:
+            o.append(f"     整百外径上取后未满足流速下限，仅作参考: {_format_candidate_size(recommended)}")
+        else:
+            o.append(f"     无经济区/妥协区口径，按 |V-0.9| 最小兜底选取: {_format_candidate_size(recommended)}")
         o.append(f"     注意: 未满足经济/妥协约束条件!")
     o.append("")
 
     # ---- 五、结果汇总 ----
     section5_label = "指定管径" if is_manual else "推荐管径"
     o.append(f"【五、{section5_label}结果】")
-    o.append(f"  {section5_label}: D = {recommended.D} m ({recommended.D * 1000:.0f} mm)")
+    # 最终结果优先给出用户选管所需的公称规格，实际水力内径另列，不能取整冒充DN。
+    if is_pe or has_generic_product or recommended.product_family == 'STEEL':
+        nominal_mm = recommended.nominal_outer_diameter_mm if is_pe else recommended.nominal_diameter_mm
+        o.append(f"  1. {section5_label} DN {nominal_mm:g}")
+    if is_pe:
+        o.append(f"  造价/采购规格: {_format_candidate_size(recommended)}")
+        o.append(f"  公称外径: {recommended.nominal_outer_diameter_mm:g} mm")
+        o.append(f"  单侧管壁厚: {recommended.nominal_wall_thickness_mm:g} mm")
+        o.append(f"  产品标准: {recommended.product_standard}")
+        if recommended.nominal_outer_diameter_mm > 400:
+            o.append("  工程提示: DN>400 mm 时，GB/T 20203-2017 建议结合其他管材进行技术经济比较。")
+        o.append("  尺寸边界: di 为按公称尺寸计算的名义内径；制造公差或最小过流面积应另据产品资料复核。")
+    elif recommended.product_family == 'STEEL':
+        o.append(f"  公称外径: {recommended.outer_diameter_mm:g} mm")
+        o.append(f"  构造最小壁厚（单侧）: {recommended.nominal_wall_thickness_mm:g} mm")
+        o.append(f"  单侧内衬厚: {recommended.lining_thickness_mm:g} mm")
+    elif has_generic_product:
+        o.append(f"  管材: {mat_name}")
+        if recommended.product_family == 'DI':
+            o.append(f"  管壁等级: {recommended.class_code}")
+            o.append(f"  插口外径: DE = {recommended.outer_diameter_mm:g} mm")
+            o.append(f"  单侧管壁厚: {recommended.nominal_wall_thickness_mm:g} mm")
+            o.append(f"  单侧内衬厚: {recommended.lining_thickness_mm:g} mm")
+        else:
+            o.append(f"  公称内径: {recommended.nominal_diameter_mm:g} mm")
+            if recommended.product_family == 'PCCP':
+                o.append(f"  产品型式: {recommended.product_variant}")
+    else:
+        o.append(f"  {section5_label}（水力内径）: D = {recommended.D:g} m ({recommended.D * 1000:g} mm)")
+    if is_pe or has_generic_product or recommended.product_family == 'STEEL':
+        o.append("  水力计算内径:")
+        o.append(f"     d_i = {recommended.hydraulic_inner_diameter_mm:g} mm = {recommended.D:g} m")
     o.append(f"  有压流速: V = {recommended.V_press:.4f} m/s")
     if has_f_range:
         o.append(f"  f 上限 {float(mat['f']):.0f}:")
@@ -1496,7 +2210,7 @@ def _build_process_text(
     # ---- 指定模式：自动推荐对比（仅当自动推荐与指定D不同时） ----
     if is_manual and auto_rec is not None and auto_cat and abs(auto_rec.D - recommended.D) > 1e-6:
         o.append("【六、自动推荐对比】")
-        o.append(f"  自动推荐管径: D = {auto_rec.D} m ({auto_rec.D * 1000:.0f} mm)")
+        o.append(f"  自动推荐规格: {_format_candidate_size(auto_rec)}")
         o.append(f"  有压流速: V = {auto_rec.V_press:.4f} m/s")
         o.append(f"  总水损: hf总 = {auto_rec.hf_total_km:.4f} m/km")
         o.append(f"  按管长折算总损失: H损 = {auto_rec.h_loss_total_m:.4f} m")

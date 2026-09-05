@@ -396,7 +396,14 @@ def text_to_latex(line):
         return None
 
     # ------ 开始转换为 LaTeX ------
-    latex = s
+    # 兼容已有计算过程的连写尺寸符号；只匹配完整量名，避免改动函数或单位。
+    diameter_symbols = {'di': 'd_i', 'dn': 'd_n', 'en': 'e_n'}
+    latex = re.sub(
+        r'(?<![A-Za-z\\])(?:di|dn|en)(?![A-Za-z])',
+        lambda m: diameter_symbols[m.group(0)], s,
+    )
+    # 纯文本多字符下标必须整体分组，否则 e_nom 仅有 n 下沉；保留已有分组。
+    latex = re.sub(r'_([A-Za-z0-9]{2,})(?![A-Za-z0-9\u4e00-\u9fff])', r'_{\1}', latex)
     latex = latex.replace('≥', ' \\geq ')
     latex = latex.replace('≤', ' \\leq ')
 
@@ -466,6 +473,8 @@ def text_to_latex(line):
     latex = latex.replace('³', '^{3}')
 
     # 7. 单位处理（在行末）
+    # 毫米可能出现在连续等式中间，需独立排版并保留数值与单位的间距。
+    latex = re.sub(r'(?<=\d)\s*mm\b', r' \\; \\mathrm{mm}', latex)
     latex = re.sub(r'\s+m\^\{3\}/s\s*$', r' \\; \\text{m}^{3}\\text{/s}', latex)
     latex = re.sub(r'\s+m/s\s*$', r' \\; \\text{m/s}', latex)
     latex = re.sub(r'\s+m\^\{2\}\s*$', r' \\; \\text{m}^{2}', latex)

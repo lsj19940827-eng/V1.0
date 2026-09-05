@@ -36,13 +36,30 @@ from qfluentwidgets import (
 )
 
 from 有压管道设计 import (
-    PIPE_MATERIALS, DEFAULT_DIAMETER_SERIES,
+    PIPE_MATERIALS,
     DEFAULT_Q_RANGE, DEFAULT_SLOPE_DENOMINATORS,
     SPEC_672_TEXT,
     PressurePipeInput, DiameterCandidate, RecommendationResult,
     get_flow_increase_percent, evaluate_single_diameter,
     recommend_diameter, build_detailed_process_text,
     run_batch_scan, BatchScanConfig, BatchScanResult,
+)
+from calc_渠系计算算法内核.pe_pipe_catalog import (
+    PE_STANDARD,
+    get_pe_nominal_diameter_guidance,
+    get_pe_pipe_spec,
+    get_pe_pressure_options,
+    get_pe_sdr,
+)
+from calc_渠系计算算法内核.pipe_product_catalog import (
+    DI_PRODUCT_STANDARD,
+    DUCTILE_IRON_CLASS_OPTIONS,
+    FRPM_PRODUCT_STANDARD,
+    PCCP_VARIANTS,
+    format_pipe_product_spec,
+    get_catalog_family,
+    get_pipe_product_spec,
+    get_ductile_iron_specs,
 )
 
 from app_渠系计算前端.styles import (
@@ -52,6 +69,21 @@ from app_渠系计算前端.styles import (
 from app_渠系计算前端.formula_renderer import (
     plain_text_to_formula_html, load_formula_page, make_plain_html,
     HelpPageBuilder,
+)
+from app_渠系计算前端.pressure_pipe.diameter_explanation import (
+    diameter_summary_html as build_diameter_explanation_html, diameter_candidate_row_html,
+    add_diameter_summary_to_word, add_candidate_diameters_to_word,
+)
+from app_渠系计算前端.pressure_pipe.result_details import concise_process_text
+from app_渠系计算前端.pressure_pipe.flow_comparison import (
+    compare_flows, flow_summary_html, velocity_note,
+)
+from app_渠系计算前端.pressure_pipe.slope_controls import SlopeComparisonControls
+from app_渠系计算前端.pressure_pipe.steel_controls import (
+    STEEL_CASE_DEFAULTS, SteelPipeControls, parse_steel_state, normalize_steel_case,
+)
+from app_渠系计算前端.pressure_pipe.steel_sizing_explanation import (
+    steel_sizing_html, add_steel_sizing_to_word, steel_result_heading,
 )
 from app_渠系计算前端.increase_input_helper import (
     INCREASE_MODE_PERCENT,
@@ -82,11 +114,11 @@ from app_渠系计算前端.export_utils import (
     doc_add_styled_table,
 )
 from app_渠系计算前端.report_meta import (
-    ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE, load_meta,
+    ExportConfirmDialog, build_calc_purpose, REFERENCES_BASE,
+    PRESSURE_PIPE_PRODUCT_REFERENCES, load_meta,
 )
 
 from app_渠系计算前端.case_manager import (
-    FlowLayout as _SharedFlowLayout,
     CaseTagNavigator as _CaseTagNavigator,
     CaseWorkbenchStrip as _CaseWorkbenchStrip,
 )
@@ -94,6 +126,231 @@ from app_渠系计算前端.case_manager import (
 
 def _e(s):
     return html_mod.escape(str(s))
+
+
+def _fmt_g(value):
+    """将规格数值格式化为不带多余小数的工程写法。"""
+    return f"{float(value):g}"
+
+
+def _is_pe_candidate(candidate):
+    """判断候选结果是否携带 PE 商品规格。"""
+    return getattr(candidate, "nominal_outer_diameter_mm", None) is not None
+
+
+def _is_product_candidate(candidate):
+    """判断候选结果是否携带统一产品目录元数据。"""
+    return bool(getattr(candidate, "product_family", None))
+
+
+def _material_display_name(material_key):
+    """返回界面与报告使用的友好管材名，同时保留内部兼容键。"""
+    material = PIPE_MATERIALS[material_key]
+    return material.get("display_name", material["name"])
+
+
+PE_WORD_REFERENCES = PRESSURE_PIPE_PRODUCT_REFERENCES["PE"]
+LEGACY_MATERIAL_KEY_ORDER_V1 = (
+    "HDPE管",
+    "玻璃钢夹砂管",
+    "球墨铸铁管",
+    "预应力钢筒混凝土管",
+    "预应力钢筒混凝土管_n014",
+    "预应力钢筒混凝土管_n015",
+    "钢管",
+)
+
+PE_GRADE_TOOLTIP = (
+    "PE80、PE100 表示管材的材料等级，PE100 的材料强度更高。"
+)
+PE_PN_TOOLTIP = (
+    "PN 表示公称压力。选好材料等级和 PN 后，程序会按规范匹配 SDR，无需另填。"
+)
+PE_DN_TOOLTIP = (
+    "填写管子的公称外径，单位为毫米；留空时由程序按规范推荐。\n"
+    "壁厚和计算内径由程序自动确定。"
+)
+
+
+def _build_pe_learning_text(grade, pn_mpa, manual_dn_text="", *, batch=False):
+    """用简短中文说明当前 PE 规格和管径填写方式。"""
+    normalized_grade = str(grade or "PE100").upper()
+    sdr = get_pe_sdr(normalized_grade, pn_mpa)
+    manual_dn = str(manual_dn_text or "").strip()
+    if batch:
+        diameter_mode = "批量计算会按规范推荐满足流速和水损要求的最小管径。"
+    elif manual_dn:
+        try:
+            guidance = get_pe_nominal_diameter_guidance(
+                normalized_grade, pn_mpa, manual_dn
+            )
+        except ValueError:
+            guidance = None
+        if guidance is not None and guidance.is_available:
+            diameter_mode = (
+                f"已指定外径 {manual_dn} mm，程序自动查取壁厚，并按内径计算水损。"
+            )
+        else:
+            diameter_mode = "请填写当前材料和压力下的标准外径，可参考下方提示。"
+    else:
+        diameter_mode = "管径留空时，程序按规范推荐满足流速和水损要求的最小管径。"
+    return (
+        "【选径说明】\n"
+        f"{normalized_grade} 为材料等级，PN {_fmt_g(pn_mpa)} MPa 为公称压力。\n"
+        f"SDR {_fmt_g(sdr)} 已按规范自动匹配，无需填写。\n"
+        f"{diameter_mode}"
+    )
+
+
+def _build_pe_dn_suggestion(grade, pn_mpa, dn_text):
+    """生成指定 PE 公称外径的实时规范校验和相邻规格建议。"""
+    requested_text = str(dn_text or "").strip()
+    if not requested_text:
+        return "", None, "empty"
+    try:
+        guidance = get_pe_nominal_diameter_guidance(
+            grade, pn_mpa, requested_text
+        )
+    except ValueError as exc:
+        return f"[输入提示] {exc}", None, "invalid"
+
+    if guidance.is_available:
+        spec = get_pe_pipe_spec(grade, pn_mpa, guidance.requested_mm)
+        return (
+            f"标准外径 {spec.nominal_outer_diameter_mm} mm；"
+            f"壁厚 {_fmt_g(spec.nominal_wall_thickness_mm)} mm；"
+            f"计算内径 {_fmt_g(spec.hydraulic_inner_diameter_mm)} mm。",
+            None,
+            "valid",
+        )
+
+    nearby_text = "、".join(str(dn) for dn in guidance.nearby_mm)
+    if guidance.upper_mm is not None:
+        action_text = f"可先选大一档的 {guidance.upper_mm} mm，再计算流速和水损。"
+    else:
+        action_text = "当前材料和压力下没有更大的规格，请调整材料等级、压力或管材。"
+    return (
+        f"{_fmt_g(guidance.requested_mm)} mm 不是当前材料和压力下的标准外径。\n"
+        f"附近可选外径：{nearby_text} mm。{action_text}",
+        guidance.upper_mm,
+        "invalid",
+    )
+
+
+def _pressure_pipe_report_references(
+    references, has_pe_product_specs, product_families=(), all_results=None,
+):
+    """优先按结果快照的标准版本列依据，避免将旧结果误标为新版。"""
+    merged = list(references or ())
+    if has_pe_product_specs:
+        merged.extend(PE_WORD_REFERENCES)
+    if all_results is not None:
+        titles = [title for values in PRESSURE_PIPE_PRODUCT_REFERENCES.values() for title in values]
+        titles.extend((
+            "《水及燃气用球墨铸铁管、管件和附件》(GB/T 13295-2019)",
+            "《水利水电工程球墨铸铁管道技术导则》(T/CWHIDA 0002-2018)",
+        ))
+        for _, _, result in all_results:
+            candidate = getattr(result, "recommended", None)
+            if not candidate or not getattr(candidate, "product_family", None):
+                continue
+            saved = getattr(candidate, "product_standard_references", ()) or ()
+            if not saved and getattr(candidate, "product_standard", None):
+                saved = (candidate.product_standard,)
+            for reference in saved:
+                code = reference.replace("—", "-")
+                merged.append(next((title for title in titles if f"({code})" in title), reference))
+        return list(dict.fromkeys(merged))
+    for family in ("DI", "PCCP", "FRPM", "STEEL"):
+        if family in set(product_families or ()):
+            merged.extend(PRESSURE_PIPE_PRODUCT_REFERENCES[family])
+    return list(dict.fromkeys(merged))
+
+
+def _results_have_pe_product_specs(all_results):
+    """仅当结果确实带有 PE 产品尺寸元数据时启用 PE 报告口径。"""
+    return any(
+        _is_pe_candidate(getattr(result, "recommended", None))
+        for _, _, result in all_results
+        if getattr(result, "recommended", None) is not None
+    )
+
+
+def _results_product_families(all_results):
+    """收集成果中实际采用的统一产品目录族。"""
+    return {
+        getattr(result.recommended, "product_family", None)
+        for _, _, result in all_results
+        if getattr(result, "recommended", None) is not None
+        and getattr(result.recommended, "product_family", None)
+    }
+
+
+def _pe_procurement_text(candidate, include_standard=True):
+    """生成可直接用于询价和造价的 PE 管规格文本。"""
+    grade = getattr(candidate, "pe_material_grade", None) or "PE"
+    dn_mm = getattr(candidate, "nominal_outer_diameter_mm", None)
+    wall_mm = getattr(candidate, "nominal_wall_thickness_mm", None)
+    sdr = getattr(candidate, "pe_sdr", None)
+    pn_mpa = getattr(candidate, "pe_nominal_pressure_mpa", None)
+    standard = getattr(candidate, "product_standard", None) or PE_STANDARD
+    text = (
+        f"{grade}给水管，DN{_fmt_g(dn_mm)}×{_fmt_g(wall_mm)} mm，"
+        f"SDR{_fmt_g(sdr)}，PN{_fmt_g(pn_mpa)} MPa"
+    )
+    return f"{text}，{standard}" if include_standard else text
+
+
+def _product_procurement_text(candidate, include_standard=True):
+    """生成 DI、PCCP、FRPM 产品目录候选的工程规格文本。"""
+    if _is_pe_candidate(candidate):
+        return _pe_procurement_text(candidate, include_standard=include_standard)
+    family = getattr(candidate, "product_family", None)
+    dn_mm = getattr(candidate, "nominal_diameter_mm", None)
+    if family == "DI":
+        text = (
+            f"球墨铸铁管 DN{_fmt_g(dn_mm)}，{candidate.class_code}，"
+            f"DE{_fmt_g(candidate.outer_diameter_mm)}×e"
+            f"{_fmt_g(candidate.nominal_wall_thickness_mm)} mm，"
+            f"水泥砂浆内衬 {_fmt_g(candidate.lining_thickness_mm)} mm"
+        )
+    elif family == "PCCP":
+        variant_name = "埋置式" if candidate.product_variant == "PCCPE" else "内衬式"
+        text = (
+            f"{variant_name}预应力钢筒混凝土管 {candidate.product_variant}，"
+            f"DN={_fmt_g(dn_mm)} mm"
+        )
+    elif family == "FRPM":
+        text = f"玻璃钢夹砂管，内径系列 DN{_fmt_g(dn_mm)}"
+    elif family == "STEEL":
+        text = (
+            f"钢管 DN{_fmt_g(candidate.outer_diameter_mm)}×"
+            f"{_fmt_g(candidate.nominal_wall_thickness_mm)} mm（构造最小壁厚），"
+            f"单侧内衬 {_fmt_g(candidate.lining_thickness_mm)} mm"
+        )
+    else:
+        return f"D={candidate.D:g} m"
+    if not include_standard:
+        return text
+    references = tuple(getattr(candidate, "product_standard_references", ()) or ())
+    if not references and getattr(candidate, "product_standard", None):
+        references = (candidate.product_standard,)
+    return text + ("，" + "、".join(references) if references else "")
+
+
+def _frpm_dimension_boundary(candidate):
+    """返回 FRPM 管端内径范围和相对设计内径偏差，其他候选返回空值。"""
+    if getattr(candidate, "product_family", None) != "FRPM":
+        return None
+    minimum_mm = getattr(candidate, "minimum_inner_diameter_mm", None)
+    maximum_mm = getattr(candidate, "maximum_inner_diameter_mm", None)
+    tolerance_mm = getattr(candidate, "selected_inner_diameter_tolerance_mm", None)
+    if minimum_mm is None or maximum_mm is None or tolerance_mm is None:
+        return None
+    return (
+        f"{_fmt_g(minimum_mm)}～{_fmt_g(maximum_mm)} mm",
+        f"±{_fmt_g(tolerance_mm)} mm",
+    )
 
 
 class _FallbackHtmlView(QTextEdit):
@@ -117,23 +374,6 @@ _SPINBTN_SS = """
     QPushButton:hover { background:#e0e8f0; color:#0078d4; }
     QPushButton:pressed { background:#d0dde8; }
 """
-_PRESET_SS = """
-    QPushButton { padding:4px 12px; border:1px solid #d0d0d0; border-radius:14px;
-                  background:#fff; font-size:12px; color:#555; }
-    QPushButton:hover { border-color:#0078d4; color:#0078d4; background:#f0f7ff; }
-"""
-_PRESET_ACTIVE_SS = """
-    QPushButton { padding:4px 12px; border:1px solid #0078d4; border-radius:14px;
-                  background:#0078d4; font-size:12px; color:#fff; }
-    QPushButton:hover { background:#106ebe; }
-"""
-_SLOPE_PRESETS = {
-    "standard": [500, 750, 1000, 1500, 2000, 2500, 3000, 3500, 4000],
-    "sparse":   [500, 1000, 2000, 3000, 4000],
-    "dense":    [250, 500, 750, 1000, 1250, 1500, 1750, 2000, 2500, 3000, 3500, 4000, 5000],
-}
-
-
 class _FlowLayout(QLayout):
     """自动换行流式布局"""
 
@@ -201,23 +441,6 @@ class _FlowLayout(QLayout):
             x = nxt + sp
             line_h = max(line_h, isz.height())
         return y + line_h - rect.y() + m.bottom()
-
-
-class _TagChip(QPushButton):
-    """坡度分母标签芯片 — 点击删除"""
-    removed = Signal(int)
-
-    def __init__(self, value, parent=None):
-        super().__init__(f"1/{value}  ×", parent)
-        self.value = value
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(24)
-        self.setStyleSheet(
-            "QPushButton{background:#e8f4fd;border:none;border-radius:12px;"
-            "color:#0078d4;font-size:12px;font-weight:500;padding:2px 8px 2px 10px;}"
-            "QPushButton:hover{background:#d0eafc;}"
-        )
-        self.clicked.connect(lambda: self.removed.emit(self.value))
 
 
 class _DashedButton(QPushButton):
@@ -513,11 +736,54 @@ class PressurePipePanel(QWidget):
         lbl.setStyleSheet(INPUT_LABEL_STYLE)
         r.addWidget(lbl)
         self.material_combo = ComboBox()
-        mat_display = [(k, v["name"]) for k, v in PIPE_MATERIALS.items()]
+        mat_display = [(k, _material_display_name(k)) for k in PIPE_MATERIALS]
         self._mat_keys = [k for k, _ in mat_display]
         self.material_combo.addItems([n for _, n in mat_display])
+        self.material_combo.currentIndexChanged.connect(self._on_material_changed)
         r.addWidget(self.material_combo, 1)
         fl.addLayout(r)
+
+        # PE 产品规格由材料等级和 PN 共同确定，与水力内径分开输入。
+        self.pe_grade_row = QWidget()
+        pe_grade_lay = QHBoxLayout(self.pe_grade_row)
+        pe_grade_lay.setContentsMargins(0, 0, 0, 0)
+        self.pe_grade_lbl = QLabel("PE 材料等级:")
+        self.pe_grade_lbl.setMinimumWidth(140)
+        self.pe_grade_lbl.setStyleSheet(INPUT_LABEL_STYLE)
+        self.pe_grade_lbl.setToolTip(PE_GRADE_TOOLTIP)
+        pe_grade_lay.addWidget(self.pe_grade_lbl)
+        self.pe_grade_combo = ComboBox()
+        self.pe_grade_combo.addItems(["PE100", "PE80"])
+        self.pe_grade_combo.setToolTip(PE_GRADE_TOOLTIP)
+        self.pe_grade_combo.currentTextChanged.connect(self._on_pe_grade_changed)
+        pe_grade_lay.addWidget(self.pe_grade_combo, 1)
+        fl.addWidget(self.pe_grade_row)
+
+        self.pe_pn_row = QWidget()
+        pe_pn_lay = QHBoxLayout(self.pe_pn_row)
+        pe_pn_lay.setContentsMargins(0, 0, 0, 0)
+        self.pe_pn_lbl = QLabel("公称压力 PN:")
+        self.pe_pn_lbl.setMinimumWidth(140)
+        self.pe_pn_lbl.setStyleSheet(INPUT_LABEL_STYLE)
+        self.pe_pn_lbl.setToolTip(PE_PN_TOOLTIP)
+        pe_pn_lay.addWidget(self.pe_pn_lbl)
+        self.pe_pn_combo = ComboBox()
+        self.pe_pn_combo.setToolTip(PE_PN_TOOLTIP)
+        self.pe_pn_combo.currentIndexChanged.connect(self._refresh_pe_learning_hint)
+        pe_pn_lay.addWidget(self.pe_pn_combo, 1)
+        fl.addWidget(self.pe_pn_row)
+        self.pe_spec_hint = self._hint("")
+        self.pe_spec_hint.setWordWrap(True)
+        self.pe_spec_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.pe_spec_hint.setStyleSheet(
+            f"QLabel {{ font-family:'Microsoft YaHei',sans-serif; font-size:11px; "
+            f"color:{T2}; background:{CARD}; border:1px solid {BD}; "
+            "border-radius:6px; padding:8px; }}"
+        )
+        fl.addWidget(self.pe_spec_hint)
+        self._populate_pe_pn_combo(
+            self.pe_pn_combo, "PE100", preferred=1.0, options_attr="_pe_pn_options"
+        )
 
         # 管长
         fl.addWidget(self._slbl("【管道参数】"))
@@ -527,8 +793,61 @@ class PressurePipePanel(QWidget):
         # 可选参数
         fl.addWidget(self._sep())
         fl.addWidget(self._slbl("【可选参数】"))
-        self.D_edit = self._field(fl, "指定管径 D (m):", "")
+        self.D_lbl, self.D_edit = self._field2(fl, "指定水力内径 D (m):", "")
         self.D_edit.setPlaceholderText("留空则自动推荐经济管径")
+        self.pe_dn_lbl, self.pe_dn_edit = self._field2(fl, "指定 PE 公称外径 DN (mm):", "")
+        self.pe_dn_edit.setPlaceholderText("留空按规范推荐")
+        self.pe_dn_lbl.setToolTip(PE_DN_TOOLTIP)
+        self.pe_dn_edit.setToolTip(PE_DN_TOOLTIP)
+        self.pe_dn_edit.textChanged.connect(self._refresh_pe_learning_hint)
+        self.pe_dn_guidance_row = QWidget()
+        pe_dn_guidance_lay = QHBoxLayout(self.pe_dn_guidance_row)
+        pe_dn_guidance_lay.setContentsMargins(0, 0, 0, 0)
+        pe_dn_guidance_lay.setSpacing(8)
+        self.pe_dn_guidance_hint = self._hint("")
+        self.pe_dn_guidance_hint.setWordWrap(True)
+        pe_dn_guidance_lay.addWidget(self.pe_dn_guidance_hint, 1)
+        self.pe_dn_use_upper_btn = PushButton("")
+        self.pe_dn_use_upper_btn.setMinimumWidth(108)
+        self.pe_dn_use_upper_btn.clicked.connect(self._use_pe_upper_dn_suggestion)
+        pe_dn_guidance_lay.addWidget(self.pe_dn_use_upper_btn)
+        self.pe_dn_guidance_row.hide()
+        fl.addWidget(self.pe_dn_guidance_row)
+        self._pe_upper_dn_suggestion = None
+        self._refresh_pe_learning_hint()
+
+        # 新工况固定按规范选径；旧工况保留原内径，并提供主动迁移入口。
+        self._use_product_catalog = True
+        self.product_catalog_upgrade_btn = PushButton("按规范重新选径")
+        self.product_catalog_upgrade_btn.clicked.connect(self._enable_product_catalog)
+        self.product_catalog_upgrade_btn.hide()
+        fl.addWidget(self.product_catalog_upgrade_btn)
+        self.product_dn_lbl, self.product_dn_edit = self._field2(
+            fl, "指定公称直径 (mm):", ""
+        )
+        self.product_dn_edit.setPlaceholderText("留空按规范推荐")
+        self.product_dn_edit.textChanged.connect(self._refresh_product_catalog_hint)
+
+        self._di_class_options = tuple(DUCTILE_IRON_CLASS_OPTIONS)
+        self.di_class_row, self.di_class_combo = self._combo_field(
+            fl, "球墨铸铁管等级:",
+            ["规范推荐", *DUCTILE_IRON_CLASS_OPTIONS[1:]],
+        )
+        self.di_class_combo.currentIndexChanged.connect(self._refresh_product_catalog_hint)
+        self._pccp_variants = tuple(PCCP_VARIANTS)
+        self.pccp_variant_row, self.pccp_variant_combo = self._combo_field(
+            fl, "PCCP 产品型式:", ["PCCPE（埋置式）", "PCCPL（内衬式）"],
+        )
+        self.pccp_variant_combo.currentIndexChanged.connect(
+            self._refresh_product_catalog_hint
+        )
+        self.product_catalog_hint = self._hint("")
+        self.product_catalog_hint.setWordWrap(True)
+        self.product_catalog_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        fl.addWidget(self.product_catalog_hint)
+        self.steel_controls = SteelPipeControls()
+        self.steel_controls.changed.connect(self._on_result_inputs_changed)
+        fl.addWidget(self.steel_controls)
         fl.addWidget(self._sep())
 
         # 加大流量
@@ -623,103 +942,92 @@ class PressurePipePanel(QWidget):
         self.batch_unpr_cb.stateChanged.connect(self._on_unpr_toggle)
         fl2.addWidget(self.batch_unpr_cb)
 
-        self._unpr_container = QWidget()
-        _unpr_lay = QVBoxLayout(self._unpr_container)
-        _unpr_lay.setContentsMargins(16, 4, 0, 0)
-        _unpr_lay.setSpacing(4)
-        _unpr_lay.addWidget(self._hint(
-            "同时计算同管径无压（重力流）工况，\n"
-            "用于有压/无压流速与水损对比分析"
-        ))
-
-        # -- 坡度分母 标签芯片区 --
-        _unpr_lay.addWidget(self._slbl("坡度分母 (1/i)"))
-
-        # 预设快捷按钮
-        _preset_row = QHBoxLayout()
-        _preset_row.setSpacing(6)
-        self._slope_preset_btns = []
-        for _text, _key in [("标准 9档", "standard"), ("稀疏 5档", "sparse"),
-                             ("密集 13档", "dense"), ("自定义范围", "custom")]:
-            _pb = QPushButton(_text)
-            _pb.setCursor(Qt.PointingHandCursor)
-            _pb.setStyleSheet(_PRESET_SS)
-            _pb.clicked.connect(lambda _, k=_key: self._apply_slope_preset(k))
-            _preset_row.addWidget(_pb)
-            self._slope_preset_btns.append((_key, _pb))
-        _preset_row.addStretch()
-        _unpr_lay.addLayout(_preset_row)
-
-        # 自定义范围生成器（默认隐藏）
-        self._slope_range_gen = QFrame()
-        self._slope_range_gen.setStyleSheet(
-            "QFrame{background:#f8fafc;border:1px solid #e8e8e8;border-radius:6px;}"
-        )
-        self._slope_range_gen.setVisible(False)
-        _rg_lay = QVBoxLayout(self._slope_range_gen)
-        _rg_lay.setContentsMargins(10, 8, 10, 8)
-        _rg_lay.setSpacing(4)
-        _rg_title = QLabel("🔧 自定义范围生成")
-        _rg_title.setStyleSheet(f"font-size:12px;color:#1976D2;font-weight:600;"
-                                 "background:transparent;border:none;")
-        _rg_lay.addWidget(_rg_title)
-        self._rg_start = self._spinbox_row(_rg_lay, "起始", 500,  100, minimum=50, decimals=0)
-        self._rg_end   = self._spinbox_row(_rg_lay, "终止", 4000, 100, minimum=50, decimals=0)
-        self._rg_step  = self._spinbox_row(_rg_lay, "步长", 500,  50,  minimum=50, decimals=0)
-        _rg_btn = PrimaryPushButton("生成并填入 ↓")
-        _rg_btn.setCursor(Qt.PointingHandCursor)
-        _rg_btn.clicked.connect(self._generate_slope_range)
-        _rg_lay.addWidget(_rg_btn)
-        _unpr_lay.addWidget(self._slope_range_gen)
-
-        # 标签芯片容器（FlowLayout）
-        self._slope_values: list = []
-        self._slope_tag_container = QWidget()
-        self._slope_tag_container.setObjectName("slopeTagBox")
-        self._slope_tag_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self._slope_tag_container.setStyleSheet(
-            "#slopeTagBox{background:#fff;border:1px solid #d0d0d0;border-radius:6px;}"
-        )
-        self._slope_tag_flow = _SharedFlowLayout(self._slope_tag_container, spacing=5)
-        self._slope_tag_flow.setContentsMargins(8, 8, 8, 8)
-        _unpr_lay.addWidget(self._slope_tag_container)
-
-        # 手动添加输入行
-        _add_row = QHBoxLayout()
-        self._slope_add_edit = LineEdit()
-        self._slope_add_edit.setPlaceholderText("输入分母，回车添加")
-        self._slope_add_edit.returnPressed.connect(self._add_slope_from_input)
-        _add_row.addWidget(self._slope_add_edit, 1)
-        _clear_slopes_btn = QPushButton("清空全部")
-        _clear_slopes_btn.setCursor(Qt.PointingHandCursor)
-        _clear_slopes_btn.setFixedHeight(24)
-        _clear_slopes_btn.setStyleSheet(
-            "QPushButton{border:1px solid #d0d0d0;border-radius:4px;"
-            "background:#fff;font-size:11px;color:#c42b1c;padding:2px 10px;}"
-            "QPushButton:hover{border-color:#c42b1c;background:#fef0ef;}"
-        )
-        _clear_slopes_btn.clicked.connect(self._clear_all_slopes)
-        _add_row.addWidget(_clear_slopes_btn)
-        _unpr_lay.addLayout(_add_row)
-        _unpr_lay.addWidget(self._hint("点 × 删除 | 输入回车添加 | 预设按钮快速填入"))
-
-        _unpr_lay.addWidget(self._sep())
-        self.batch_n_edit = self._spinbox_row(_unpr_lay, "糙率 n", 0.014, 0.001,
-                                               minimum=0.008, decimals=3)
-        self._unpr_container.setVisible(False)
+        self.slope_controls = SlopeComparisonControls()
+        self._unpr_container = self.slope_controls
+        self.batch_n_edit = self.slope_controls.n_edit
+        self._unpr_container.hide()
+        self.slope_controls.changed.connect(self._mark_comparison_stale)
+        self.batch_unpr_cb.toggled.connect(self._mark_comparison_stale)
         fl2.addWidget(self._unpr_container)
-
-        # 初始化预设状态（标准9档）
-        self._apply_slope_preset("standard")
 
         # 管材多选（默认全选）
         fl2.addWidget(self._slbl("【管材选择】"))
         self._mat_cbs = {}
         for k, v in PIPE_MATERIALS.items():
-            cb_mat = CheckBox(v["name"])
+            cb_mat = CheckBox(v.get("display_name", v["name"]))
             cb_mat.setChecked(True)
             fl2.addWidget(cb_mat)
             self._mat_cbs[k] = cb_mat
+
+        # 批量计算中 PE 候选尺寸同样按选定等级和 PN 的规范目录生成。
+        self.batch_pe_row = QWidget()
+        batch_pe_lay = QVBoxLayout(self.batch_pe_row)
+        batch_pe_lay.setContentsMargins(16, 2, 0, 2)
+        batch_pe_lay.setSpacing(4)
+        batch_grade_line = QHBoxLayout()
+        batch_grade_lbl = QLabel("PE 材料等级:")
+        batch_grade_lbl.setMinimumWidth(120)
+        batch_grade_lbl.setStyleSheet(INPUT_LABEL_STYLE)
+        batch_grade_lbl.setToolTip(PE_GRADE_TOOLTIP)
+        batch_grade_line.addWidget(batch_grade_lbl)
+        self.batch_pe_grade_combo = ComboBox()
+        self.batch_pe_grade_combo.addItems(["PE100", "PE80"])
+        self.batch_pe_grade_combo.setToolTip(PE_GRADE_TOOLTIP)
+        self.batch_pe_grade_combo.currentTextChanged.connect(self._on_batch_pe_grade_changed)
+        batch_grade_line.addWidget(self.batch_pe_grade_combo, 1)
+        batch_pe_lay.addLayout(batch_grade_line)
+        batch_pn_line = QHBoxLayout()
+        batch_pn_lbl = QLabel("公称压力 PN:")
+        batch_pn_lbl.setMinimumWidth(120)
+        batch_pn_lbl.setStyleSheet(INPUT_LABEL_STYLE)
+        batch_pn_lbl.setToolTip(PE_PN_TOOLTIP)
+        batch_pn_line.addWidget(batch_pn_lbl)
+        self.batch_pe_pn_combo = ComboBox()
+        self.batch_pe_pn_combo.setToolTip(PE_PN_TOOLTIP)
+        self.batch_pe_pn_combo.currentIndexChanged.connect(
+            self._refresh_batch_pe_learning_hint
+        )
+        batch_pn_line.addWidget(self.batch_pe_pn_combo, 1)
+        batch_pe_lay.addLayout(batch_pn_line)
+        self.batch_pe_spec_hint = self._hint("")
+        self.batch_pe_spec_hint.setWordWrap(True)
+        self.batch_pe_spec_hint.setToolTip(PE_PN_TOOLTIP)
+        batch_pe_lay.addWidget(self.batch_pe_spec_hint)
+        fl2.addWidget(self.batch_pe_row)
+        self._populate_pe_pn_combo(
+            self.batch_pe_pn_combo, "PE100", preferred=1.0,
+            options_attr="_batch_pe_pn_options",
+        )
+        self._refresh_batch_pe_learning_hint()
+        self._mat_cbs["HDPE管"].stateChanged.connect(self._sync_batch_pe_controls)
+
+        # 批量计算默认对 DI、PCCP、FRPM 使用同一套规范产品目录。
+        self.batch_product_catalog_row = QWidget()
+        batch_catalog_lay = QVBoxLayout(self.batch_product_catalog_row)
+        batch_catalog_lay.setContentsMargins(16, 2, 0, 2)
+        batch_catalog_lay.setSpacing(4)
+        self.batch_di_class_row, self.batch_di_class_combo = self._combo_field(
+            batch_catalog_lay, "球墨铸铁管等级:",
+            ["规范推荐", *DUCTILE_IRON_CLASS_OPTIONS[1:]],
+            label_width=120,
+        )
+        self.batch_pccp_variant_row, self.batch_pccp_variant_combo = self._combo_field(
+            batch_catalog_lay, "PCCP 产品型式:",
+            ["PCCPE（埋置式）", "PCCPL（内衬式）"], label_width=120,
+        )
+        self.batch_product_catalog_hint = self._hint("")
+        self.batch_product_catalog_hint.setWordWrap(True)
+        batch_catalog_lay.addWidget(self.batch_product_catalog_hint)
+        fl2.addWidget(self.batch_product_catalog_row)
+        for material_key, checkbox in self._mat_cbs.items():
+            if get_catalog_family(material_key):
+                checkbox.stateChanged.connect(self._sync_batch_product_catalog_controls)
+        self._sync_batch_product_catalog_controls()
+
+        self.batch_steel_controls = SteelPipeControls(batch=True)
+        fl2.addWidget(self.batch_steel_controls)
+        self._mat_cbs['钢管'].toggled.connect(self.batch_steel_controls.setVisible)
+        self.batch_steel_controls.setVisible(self._mat_cbs['钢管'].isChecked())
 
         fl2.addWidget(self._sep())
 
@@ -731,7 +1039,7 @@ class PressurePipePanel(QWidget):
         fl2.addWidget(self.out_csv_cb)
         self.out_pdf_cb = CheckBox("图表 PDF（流速水损对比 + 优选设计点）")
         self.out_pdf_cb.setChecked(True)
-        self.out_pdf_cb.setToolTip("图1: 各管径的流速与水损对比图\n图2: 优选设计点（经济区/妥协区）分组展示\n按管材分别生成独立PDF文件")
+        self.out_pdf_cb.setToolTip("启用无压对比时：输出默认候选的输水能力、充满度与同流量流速图\n保留有压优选设计点图；全部管径和底坡的完整数据可导出 CSV")
         fl2.addWidget(self.out_pdf_cb)
         self.out_merged_cb = CheckBox("合并 PDF（所有图表合为一个文件）")
         self.out_merged_cb.setChecked(True)
@@ -819,9 +1127,290 @@ class PressurePipePanel(QWidget):
         t2l.addWidget(self.batch_log)
         self.notebook.addTab(t2, "批量计算日志")
 
+        for edit in (self.batch_q_start, self.batch_q_end, self.batch_q_step,
+                     self.batch_length_edit, self.batch_local_ratio_edit):
+            edit.textChanged.connect(self._mark_comparison_stale)
+        for checkbox in self._mat_cbs.values():
+            checkbox.toggled.connect(self._mark_comparison_stale)
+        for combo in (self.batch_pe_grade_combo, self.batch_pe_pn_combo,
+                      self.batch_di_class_combo, self.batch_pccp_variant_combo):
+            combo.currentIndexChanged.connect(self._mark_comparison_stale)
+        for edit in self.batch_steel_controls.findChildren(LineEdit):
+            edit.textChanged.connect(self._mark_comparison_stale)
+
     # ----------------------------------------------------------------
     # 辅助 UI
     # ----------------------------------------------------------------
+    def _current_material_key(self):
+        """返回当前单次计算选中的内部管材键。"""
+        idx = self.material_combo.currentIndex()
+        if 0 <= idx < len(self._mat_keys):
+            return self._mat_keys[idx]
+        return self._mat_keys[0]
+
+    @staticmethod
+    def _set_combo_text(combo, text):
+        """按文本安全设置下拉框，找不到时保持原值。"""
+        idx = combo.findText(str(text))
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def _selected_pe_pn(self, combo, options_attr, default=1.0):
+        """返回 PE PN 下拉框当前对应的数值。"""
+        options = getattr(self, options_attr, ())
+        idx = combo.currentIndex()
+        if 0 <= idx < len(options):
+            return float(options[idx])
+        return float(default)
+
+    def _populate_pe_pn_combo(self, combo, grade, preferred, options_attr):
+        """按 PE 材料等级刷新 PN/SDR 选项。"""
+        options = tuple(get_pe_pressure_options(grade))
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems([
+            f"PN {_fmt_g(pn)} MPa（SDR {_fmt_g(get_pe_sdr(grade, pn))}）"
+            for pn in options
+        ])
+        selected_idx = 0
+        if preferred is not None:
+            for idx, pn in enumerate(options):
+                if abs(float(pn) - float(preferred)) < 1e-9:
+                    selected_idx = idx
+                    break
+        combo.setCurrentIndex(selected_idx)
+        combo.blockSignals(False)
+        setattr(self, options_attr, options)
+
+    def _on_material_changed(self, _index):
+        """切换管材时同步 PE 与其他产品目录输入的可见性。"""
+        self._sync_pe_controls()
+        self._sync_product_catalog_controls()
+
+    def _sync_pe_controls(self):
+        """仅在选中 PE 管时显示等级、PN 和公称外径输入。"""
+        is_pe = self._current_material_key() == "HDPE管"
+        for widget in (
+            self.pe_grade_row,
+            self.pe_pn_row,
+            self.pe_spec_hint,
+            self.pe_dn_lbl,
+            self.pe_dn_edit,
+        ):
+            widget.setVisible(is_pe)
+        if hasattr(self, "pe_dn_guidance_row"):
+            has_dn_text = bool(self.pe_dn_edit.text().strip())
+            self.pe_dn_guidance_row.setVisible(is_pe and has_dn_text)
+        catalog_enabled = (
+            bool(get_catalog_family(self._current_material_key()))
+            and getattr(self, "_use_product_catalog", True)
+        )
+        self.D_lbl.setVisible(not is_pe and not catalog_enabled and self._current_material_key() != "钢管")
+        self.D_edit.setVisible(not is_pe and not catalog_enabled and self._current_material_key() != "钢管")
+        self.D_edit.setEnabled(not is_pe and not catalog_enabled and self._current_material_key() != "钢管")
+        self.pe_dn_edit.setEnabled(is_pe)
+        if is_pe:
+            self._refresh_pe_dn_suggestion()
+
+    def _selected_di_class(self, combo=None):
+        """返回球墨铸铁管等级下拉框的稳定代码。"""
+        target = combo or self.di_class_combo
+        idx = target.currentIndex()
+        if 0 <= idx < len(self._di_class_options):
+            return self._di_class_options[idx]
+        return target.property("legacy_di_class") or "PREFERRED"
+
+    def _selected_pccp_variant(self, combo=None):
+        """返回 PCCP 产品型式下拉框的稳定代码。"""
+        target = combo or self.pccp_variant_combo
+        idx = target.currentIndex()
+        return self._pccp_variants[idx] if 0 <= idx < len(self._pccp_variants) else "PCCPE"
+
+    def _enable_product_catalog(self):
+        """由用户主动将旧工况转入规范选径，保留原内径供迁移校核。"""
+        self._save_current_case()
+        self._use_product_catalog = True
+        self._sync_product_catalog_controls()
+
+    def _sync_product_catalog_controls(self, *_args):
+        """同步 DI、PCCP、FRPM 产品目录控件与历史 D 输入。"""
+        if not hasattr(self, "product_catalog_upgrade_btn"):
+            return
+        material_key = self._current_material_key()
+        family = get_catalog_family(material_key)
+        is_pe = material_key == "HDPE管"
+        enabled = bool(family and self._use_product_catalog)
+        self.product_catalog_upgrade_btn.setVisible(bool(family) and not enabled)
+        self.product_dn_lbl.setVisible(enabled)
+        self.product_dn_edit.setVisible(enabled)
+        self.product_dn_edit.setEnabled(enabled)
+        self.di_class_row.setVisible(enabled and family == "DI")
+        self.pccp_variant_row.setVisible(enabled and family == "PCCP")
+        self.product_catalog_hint.setVisible(enabled)
+        self.D_lbl.setVisible(not is_pe and not enabled)
+        self.D_edit.setVisible(not is_pe and not enabled)
+        self.D_edit.setEnabled(not is_pe and not enabled)
+        if family == "DI":
+            self.product_dn_lbl.setText("指定公称尺寸 DN (mm):")
+        elif family == "PCCP":
+            self.product_dn_lbl.setText("指定公称内径 DN (mm):")
+        elif family == "FRPM":
+            self.product_dn_lbl.setText("指定内径系列 DN (mm):")
+        self._refresh_product_catalog_hint()
+
+        if hasattr(self, 'steel_controls'):
+            is_steel = material_key == '钢管'
+            self.steel_controls.setVisible(is_steel)
+            if is_steel:
+                self.D_lbl.hide()
+                self.D_edit.hide()
+                self.D_edit.setEnabled(False)
+
+    def _refresh_product_catalog_hint(self, *_args):
+        """显示当前产品目录的口径基准、适用边界和指定规格校验。"""
+        if not hasattr(self, "product_catalog_hint"):
+            return
+        material_key = self._current_material_key()
+        family = get_catalog_family(material_key)
+        if not family or not self._use_product_catalog:
+            self.product_catalog_hint.setText("")
+            return
+        di_class = self._selected_di_class()
+        pccp_variant = self._selected_pccp_variant()
+        if family == "DI":
+            text = (
+                f"球墨铸铁管按 {DI_PRODUCT_STANDARD} 选径。"
+                "选“规范推荐”时，等级随管径自动匹配。"
+            )
+            try:
+                get_ductile_iron_specs(di_class)
+            except ValueError as exc:
+                self.product_catalog_hint.setText(text + f"\n[需重新选级] {exc}")
+                return
+        elif family == "PCCP":
+            text = "按所选管型的标准内径选径，管型和摩阻参数可分别选择。"
+        else:
+            text = f"玻璃钢夹砂管按 {FRPM_PRODUCT_STANDARD} 的标准内径选径。"
+        dn_text = self.product_dn_edit.text().strip()
+        if dn_text:
+            try:
+                spec = get_pipe_product_spec(
+                    material_key, dn_text,
+                    ductile_iron_class=di_class, pccp_variant=pccp_variant,
+                )
+                text += f"\n[符合规范] {format_pipe_product_spec(spec)}。"
+            except ValueError as exc:
+                text += f"\n[输入提示] {exc}"
+        else:
+            text += "\n管径留空时，程序按规范推荐满足流速和水损要求的最小管径。"
+        self.product_catalog_hint.setText(text)
+
+    def _on_pe_grade_changed(self, grade):
+        """材料等级变化时保留可兼容的 PN，并刷新 SDR 显示。"""
+        preferred = self._selected_pe_pn(
+            self.pe_pn_combo, "_pe_pn_options", default=1.0
+        )
+        self._populate_pe_pn_combo(
+            self.pe_pn_combo, grade, preferred=preferred, options_attr="_pe_pn_options"
+        )
+        self._refresh_pe_learning_hint()
+
+    def _refresh_pe_learning_hint(self, *_args):
+        """按当前 PE 等级、压力和公称外径输入刷新选径说明。"""
+        if not hasattr(self, "pe_spec_hint"):
+            return
+        grade = self.pe_grade_combo.currentText() or "PE100"
+        pn_mpa = self._selected_pe_pn(
+            self.pe_pn_combo, "_pe_pn_options", default=1.0
+        )
+        manual_dn_text = self.pe_dn_edit.text() if hasattr(self, "pe_dn_edit") else ""
+        self.pe_spec_hint.setText(
+            _build_pe_learning_text(grade, pn_mpa, manual_dn_text)
+        )
+        self._refresh_pe_dn_suggestion()
+
+    def _refresh_pe_dn_suggestion(self):
+        """实时提示当前输入外径是否合规，并给出附近规范公称外径。"""
+        if not hasattr(self, "pe_dn_guidance_row"):
+            return
+        grade = self.pe_grade_combo.currentText() or "PE100"
+        pn_mpa = self._selected_pe_pn(
+            self.pe_pn_combo, "_pe_pn_options", default=1.0
+        )
+        text, upper_dn, state = _build_pe_dn_suggestion(
+            grade, pn_mpa, self.pe_dn_edit.text()
+        )
+        self._pe_upper_dn_suggestion = upper_dn
+        is_pe = self._current_material_key() == "HDPE管"
+        self.pe_dn_guidance_row.setVisible(is_pe and state != "empty")
+        self.pe_dn_guidance_hint.setText(text)
+        if state == "valid":
+            color = "#137333"
+        elif state == "invalid":
+            color = "#A15C00"
+        else:
+            color = T2
+        self.pe_dn_guidance_hint.setStyleSheet(
+            f"font-family:'Microsoft YaHei',sans-serif; font-size:11px; color:{color};"
+        )
+        self.pe_dn_use_upper_btn.setVisible(upper_dn is not None)
+        if upper_dn is not None:
+            self.pe_dn_use_upper_btn.setText(f"采用 {upper_dn} mm")
+            self.pe_dn_use_upper_btn.setToolTip(
+                "仅填入相邻上一级规范外径；仍须重新计算并检查流速和水损。"
+            )
+
+    def _use_pe_upper_dn_suggestion(self):
+        """经用户点击后填入相邻上一级规范公称外径。"""
+        if self._pe_upper_dn_suggestion is None:
+            return
+        self.pe_dn_edit.setText(str(self._pe_upper_dn_suggestion))
+        self.pe_dn_edit.setFocus()
+
+    def _on_batch_pe_grade_changed(self, grade):
+        """批量计算材料等级变化时刷新 PN/SDR 选项。"""
+        preferred = self._selected_pe_pn(
+            self.batch_pe_pn_combo, "_batch_pe_pn_options", default=1.0
+        )
+        self._populate_pe_pn_combo(
+            self.batch_pe_pn_combo,
+            grade,
+            preferred=preferred,
+            options_attr="_batch_pe_pn_options",
+        )
+        self._refresh_batch_pe_learning_hint()
+
+    def _refresh_batch_pe_learning_hint(self, *_args):
+        """刷新批量 PE 规格设置旁的规范说明。"""
+        if not hasattr(self, "batch_pe_spec_hint"):
+            return
+        grade = self.batch_pe_grade_combo.currentText() or "PE100"
+        pn_mpa = self._selected_pe_pn(
+            self.batch_pe_pn_combo, "_batch_pe_pn_options", default=1.0
+        )
+        self.batch_pe_spec_hint.setText(_build_pe_learning_text(grade, pn_mpa, batch=True))
+
+    def _sync_batch_pe_controls(self, *_args):
+        """未选择 PE 批量计算时隐藏其专用规格设置。"""
+        pe_checkbox = self._mat_cbs.get("HDPE管")
+        self.batch_pe_row.setVisible(bool(pe_checkbox and pe_checkbox.isChecked()))
+
+    def _sync_batch_product_catalog_controls(self, *_args):
+        """按批量管材勾选状态显示 DI/PCCP/FRPM 目录设置。"""
+        if not hasattr(self, "batch_product_catalog_row"):
+            return
+        selected_families = {
+            get_catalog_family(key)
+            for key, checkbox in self._mat_cbs.items()
+            if checkbox.isChecked() and get_catalog_family(key)
+        }
+        has_catalog_material = bool(selected_families)
+        enabled = has_catalog_material
+        self.batch_product_catalog_row.setVisible(has_catalog_material)
+        self.batch_di_class_row.setVisible(enabled and "DI" in selected_families)
+        self.batch_pccp_variant_row.setVisible(enabled and "PCCP" in selected_families)
+        self.batch_product_catalog_hint.setText("程序按各管材的规范规格自动选径。")
+
     def _ensure_initial_help_rendered(self):
         """首次真正显示面板时再补初始帮助，避免阻塞主窗口启动。"""
         if self._initial_help_rendered:
@@ -851,6 +1440,21 @@ class PressurePipePanel(QWidget):
         r.addWidget(e, 1)
         lay.addLayout(r)
         return l, e
+
+    def _combo_field(self, lay, label, items, label_width=140):
+        """创建可整体显隐的标签与下拉框行。"""
+        row = QWidget()
+        row_lay = QHBoxLayout(row)
+        row_lay.setContentsMargins(0, 0, 0, 0)
+        field_label = QLabel(label)
+        field_label.setMinimumWidth(label_width)
+        field_label.setStyleSheet(INPUT_LABEL_STYLE)
+        row_lay.addWidget(field_label)
+        combo = ComboBox()
+        combo.addItems(items)
+        row_lay.addWidget(combo, 1)
+        lay.addWidget(row)
+        return row, combo
 
     def _slbl(self, t):
         l = QLabel(t)
@@ -1007,99 +1611,11 @@ class PressurePipePanel(QWidget):
                      f'border-radius:8px;font-size:11px;">+{count - max_show}个</span>')
         self._q_preview.setText(f'将计算 <b>{count}</b> 个Q值：<br>{tags}')
 
-    # ----------------------------------------------------------------
-    # 坡度分母标签管理
-    # ----------------------------------------------------------------
-    def _apply_slope_preset(self, key):
-        """切换坡度预设，更新按钮样式和标签列表"""
-        for k, btn in self._slope_preset_btns:
-            btn.setStyleSheet(_PRESET_ACTIVE_SS if k == key else _PRESET_SS)
-        if key == "custom":
-            self._slope_range_gen.setVisible(True)
-            self._slope_values.clear()
-            self._rebuild_slope_tags()
-            return
-        self._slope_range_gen.setVisible(False)
-        self._slope_values = list(_SLOPE_PRESETS[key])
-        self._rebuild_slope_tags()
-
-    def _rebuild_slope_tags(self):
-        """清空并重建标签芯片区"""
-        layout = self._slope_tag_flow
-        while layout.count():
-            item = layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
-        for val in sorted(self._slope_values):
-            chip = _TagChip(val)
-            chip.removed.connect(self._on_slope_tag_removed)
-            layout.addWidget(chip)
-        self._slope_tag_container.updateGeometry()
-        self._slope_tag_container.update()
-
-    def _on_slope_tag_removed(self, val):
-        if val in self._slope_values:
-            self._slope_values.remove(val)
-        self._rebuild_slope_tags()
-
-    def _add_slope_from_input(self):
-        text = self._slope_add_edit.text().strip()
-        if not text:
-            return
-        try:
-            val = int(text)
-        except ValueError:
-            InfoBar.warning(title="输入无效", content="请输入正整数作为坡度分母",
-                            parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
-            return
-        if val <= 0:
-            InfoBar.warning(title="输入无效", content="坡度分母必须大于 0",
-                            parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
-            return
-        if val in self._slope_values:
-            InfoBar.warning(title="已存在", content=f"1/{val} 已在列表中，无需重复添加",
-                            parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
-            self._slope_add_edit.clear()
-            return
-        self._slope_values.append(val)
-        self._rebuild_slope_tags()
-        self._slope_add_edit.clear()
-
-    def _clear_all_slopes(self):
-        """一键清空所有坡度分母标签"""
-        if not self._slope_values:
-            InfoBar.warning(title="提示", content="坡度列表已为空",
-                            parent=self, position=InfoBarPosition.TOP_RIGHT, duration=1500)
-            return
-        n = len(self._slope_values)
-        self._slope_values.clear()
-        self._rebuild_slope_tags()
-        InfoBar.success(title="已清空", content=f"已清空 {n} 个坡度分母",
-                        parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
-
-    def _generate_slope_range(self):
-        try:
-            start = int(float(self._rg_start.text()))
-            end   = int(float(self._rg_end.text()))
-            step  = int(float(self._rg_step.text()))
-        except ValueError:
-            InfoBar.error(title="参数错误", content="起始/终止/步长输入无效，请输入数字",
-                          parent=self, position=InfoBarPosition.TOP_RIGHT, duration=3000)
-            return
-        if step <= 0:
-            InfoBar.error(title="参数错误", content="步长必须大于 0",
-                          parent=self, position=InfoBarPosition.TOP_RIGHT, duration=3000)
-            return
-        if start > end:
-            InfoBar.error(title="参数错误", content="起始值不能大于终止值",
-                          parent=self, position=InfoBarPosition.TOP_RIGHT, duration=3000)
-            return
-        self._slope_values = list(range(start, end + 1, step))
-        self._rebuild_slope_tags()
-        InfoBar.success(title="已生成", content=f"已填入 {len(self._slope_values)} 个坡度分母",
-                        parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
+    def _mark_comparison_stale(self, *_args):
+        """记录批量输入修改，并保留旧项目快照的过期标记。"""
+        self.data_changed.emit()
+        if getattr(self, '_comparison_rows', None):
+            self._comparison_status = '参数已修改；当前仍为上次计算结果，请重新批量计算更新。'
 
     # ----------------------------------------------------------------
     # 工况管理
@@ -1108,21 +1624,129 @@ class PressurePipePanel(QWidget):
     def _default_case():
         return {
             'custom_label': None,
-            'Q': '0.5', 'material_idx': 0, 'length': '1000',
+            'Q': '0.5', 'material_idx': 0, 'material_key': 'HDPE管', 'length': '1000',
             'local_ratio': '0.15', 'D': '', 'inc_checked': True, 'inc_pct': '',
+            'pe_grade': 'PE100', 'pe_pn_mpa': 1.0, 'pe_dn_mm': '',
+            'catalog_schema_version': 2, 'use_product_catalog': True,
+            'product_dn_mm': '', 'ductile_iron_class': 'PREFERRED',
+            'pccp_variant': 'PCCPE',
             'inc_mode': INCREASE_MODE_PERCENT, 'inc_q_text': '',
+            **STEEL_CASE_DEFAULTS,
         }
+
+    def _normalized_case_data(self, case):
+        """补齐新字段，并保留旧工况的管材索引和水力内径语义。"""
+        defaults = self._default_case()
+        if not isinstance(case, dict):
+            return defaults
+        normalized = copy.deepcopy(case)
+        is_legacy_catalog_case = 'catalog_schema_version' not in normalized
+
+        # material_key 是新稳定标识；旧 material_idx 只按冻结的 V1 顺序解释一次。
+        material_key = normalized.get('material_key')
+        if material_key not in PIPE_MATERIALS:
+            try:
+                legacy_index = int(normalized.get('material_idx', 0))
+            except (TypeError, ValueError):
+                legacy_index = 0
+            if 0 <= legacy_index < len(LEGACY_MATERIAL_KEY_ORDER_V1):
+                material_key = LEGACY_MATERIAL_KEY_ORDER_V1[legacy_index]
+            if material_key not in PIPE_MATERIALS:
+                material_key = self._mat_keys[0]
+        normalized['material_key'] = material_key
+        normalized['material_idx'] = self._mat_keys.index(material_key)
+        if material_key == '钢管':
+            normalized = normalize_steel_case(normalized)
+        if is_legacy_catalog_case:
+            normalized['catalog_schema_version'] = 1
+            normalized['use_product_catalog'] = False
+            legacy_d = normalized.get('D')
+            if get_catalog_family(material_key) and str(legacy_d or '').strip():
+                normalized['legacy_product_manual_D'] = legacy_d
+
+        # 旧项目没有 pe_dn_mm；D 对 PE 表示水力内径，不能直接改解释为公称外径。
+        if 'pe_dn_mm' not in normalized:
+            legacy_d = normalized.get('D')
+            if material_key == 'HDPE管' and str(legacy_d or '').strip():
+                normalized['legacy_pe_manual_D'] = legacy_d
+
+        for key, value in defaults.items():
+            normalized.setdefault(key, copy.deepcopy(value))
+        return normalized
+
+    def _copy_case_parameters(self, source, target):
+        """复制除流量和名称外的工况参数，并正确同步旧 PE 迁移标记。"""
+        source = self._normalized_case_data(source)
+        defaults = self._default_case()
+        for key in (
+            'material_idx', 'material_key', 'length', 'local_ratio', 'D',
+            'pe_grade', 'pe_pn_mpa', 'pe_dn_mm',
+            'catalog_schema_version', 'use_product_catalog', 'product_dn_mm',
+            'ductile_iron_class', 'pccp_variant',
+            'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text',
+            *STEEL_CASE_DEFAULTS,
+        ):
+            target[key] = copy.deepcopy(source.get(key, defaults[key]))
+        if 'legacy_pe_manual_D' in source:
+            target['legacy_pe_manual_D'] = copy.deepcopy(source['legacy_pe_manual_D'])
+        else:
+            target.pop('legacy_pe_manual_D', None)
+        if 'legacy_product_manual_D' in source:
+            target['legacy_product_manual_D'] = copy.deepcopy(
+                source['legacy_product_manual_D']
+            )
+        else:
+            target.pop('legacy_product_manual_D', None)
 
     def _save_current_case(self):
         """将当前UI字段保存到当前工况数据"""
         if not (0 <= self._current_case_idx < len(self._cases)):
             return
         c = self._cases[self._current_case_idx]
+        # 旧项目没有 pe_dn_mm；先保留旧 D 的真实“水力内径”语义，避免本次保存把它静默丢失。
+        legacy_pe_manual_D = c.get('legacy_pe_manual_D')
+        legacy_product_manual_D = c.get('legacy_product_manual_D')
+        if legacy_pe_manual_D is None and 'pe_dn_mm' not in c:
+            try:
+                old_material_idx = int(c.get('material_idx', 0))
+            except (TypeError, ValueError):
+                old_material_idx = 0
+            if 0 <= old_material_idx < len(LEGACY_MATERIAL_KEY_ORDER_V1):
+                if LEGACY_MATERIAL_KEY_ORDER_V1[old_material_idx] == 'HDPE管' and str(c.get('D', '')).strip():
+                    legacy_pe_manual_D = c.get('D')
         c['Q'] = self.Q_edit.text()
         c['material_idx'] = self.material_combo.currentIndex()
+        c['material_key'] = self._current_material_key()
         c['length'] = self.length_edit.text()
         c['local_ratio'] = self.local_ratio_edit.text()
         c['D'] = self.D_edit.text()
+        c['pe_grade'] = self.pe_grade_combo.currentText() or 'PE100'
+        c['pe_pn_mpa'] = self._selected_pe_pn(
+            self.pe_pn_combo, "_pe_pn_options", default=1.0
+        )
+        c['pe_dn_mm'] = self.pe_dn_edit.text()
+        c['catalog_schema_version'] = 2
+        c['use_product_catalog'] = self._use_product_catalog
+        c['product_dn_mm'] = self.product_dn_edit.text()
+        c['ductile_iron_class'] = self._selected_di_class()
+        c['pccp_variant'] = self._selected_pccp_variant()
+        c.update(self.steel_controls.state())
+        if c['material_key'] == '钢管':
+            c['D'] = ''
+        if self._current_material_key() != 'HDPE管' or c['pe_dn_mm'].strip():
+            c.pop('legacy_pe_manual_D', None)
+        elif legacy_pe_manual_D is not None:
+            c['legacy_pe_manual_D'] = legacy_pe_manual_D
+        product_family = get_catalog_family(c['material_key'])
+        if not product_family or c['product_dn_mm'].strip():
+            c.pop('legacy_product_manual_D', None)
+        elif not c['use_product_catalog']:
+            if c['D'].strip():
+                c['legacy_product_manual_D'] = c['D']
+            else:
+                c.pop('legacy_product_manual_D', None)
+        elif legacy_product_manual_D is not None:
+            c['legacy_product_manual_D'] = legacy_product_manual_D
         c['inc_checked'] = self.inc_cb.isChecked()
         c['inc_pct'] = self.inc_edit.text()
         c['inc_mode'] = self._current_increase_mode()
@@ -1132,20 +1756,69 @@ class PressurePipePanel(QWidget):
         """将指定工况数据加载到UI字段"""
         if not (0 <= idx < len(self._cases)):
             return
-        c = self._cases[idx]
+        c = self._normalized_case_data(self._cases[idx])
+        self._cases[idx] = c
         self._loading_case = True
         self.Q_edit.blockSignals(True)
         self.Q_edit.setText(c.get('Q', ''))
         self.Q_edit.blockSignals(False)
-        self.material_combo.setCurrentIndex(c.get('material_idx', 0))
+        self.material_combo.blockSignals(True)
+        material_key = c.get('material_key')
+        if material_key not in PIPE_MATERIALS:
+            try:
+                legacy_index = int(c.get('material_idx', 0))
+            except (TypeError, ValueError):
+                legacy_index = 0
+            material_key = (
+                LEGACY_MATERIAL_KEY_ORDER_V1[legacy_index]
+                if 0 <= legacy_index < len(LEGACY_MATERIAL_KEY_ORDER_V1)
+                else self._mat_keys[0]
+            )
+        if material_key not in PIPE_MATERIALS:
+            material_key = self._mat_keys[0]
+        self.material_combo.setCurrentIndex(self._mat_keys.index(material_key))
+        self.material_combo.blockSignals(False)
+        pe_grade = str(c.get('pe_grade', 'PE100') or 'PE100').upper()
+        if pe_grade not in ("PE100", "PE80"):
+            pe_grade = "PE100"
+        self.pe_grade_combo.blockSignals(True)
+        self._set_combo_text(self.pe_grade_combo, pe_grade)
+        self.pe_grade_combo.blockSignals(False)
+        try:
+            preferred_pn = float(c.get('pe_pn_mpa', 1.0))
+        except (TypeError, ValueError):
+            preferred_pn = 1.0
+        self._populate_pe_pn_combo(
+            self.pe_pn_combo,
+            pe_grade,
+            preferred=preferred_pn,
+            options_attr="_pe_pn_options",
+        )
         self.length_edit.setText(c.get('length', '1000'))
         self.local_ratio_edit.setText(c.get('local_ratio', '0.15'))
         self.D_edit.setText(c.get('D', ''))
+        self.steel_controls.set_state(c)
+        self.pe_dn_edit.setText(c.get('pe_dn_mm', ''))
+        self._use_product_catalog = bool(c.get('use_product_catalog', True))
+        self.product_dn_edit.setText(c.get('product_dn_mm', ''))
+        di_class = str(c.get('ductile_iron_class', 'PREFERRED') or 'PREFERRED').upper()
+        self.di_class_combo.setProperty("legacy_di_class", di_class)
+        if di_class not in self._di_class_options:
+            # 保留旧等级，不静默选成新版首选；用户主动重选后才可重新计算。
+            self.di_class_combo.setCurrentIndex(-1)
+        else:
+            self.di_class_combo.setCurrentIndex(self._di_class_options.index(di_class))
+        pccp_variant = str(c.get('pccp_variant', 'PCCPE') or 'PCCPE').upper()
+        if pccp_variant not in self._pccp_variants:
+            pccp_variant = 'PCCPE'
+        self.pccp_variant_combo.setCurrentIndex(self._pccp_variants.index(pccp_variant))
         self.inc_cb.setChecked(c.get('inc_checked', True))
         self.inc_edit.setText(c.get('inc_pct', ''))
         self.inc_q_edit.setText(c.get('inc_q_text', ''))
         self._set_increase_mode(c.get('inc_mode', INCREASE_MODE_PERCENT))
         self._on_inc_toggle(None)
+        self._sync_pe_controls()
+        self._sync_product_catalog_controls()
         self._loading_case = False
 
     def _focus_design_flow_input(self):
@@ -1349,6 +2022,16 @@ class PressurePipePanel(QWidget):
         q_text = f"Q={inp.Q:g}"
         if rec is None:
             return q_text
+        if _is_pe_candidate(rec):
+            return (
+                f"{q_text} · DN={_fmt_g(rec.nominal_outer_diameter_mm)}mm"
+                f" · di={_fmt_g(rec.hydraulic_inner_diameter_mm)}mm"
+            )
+        if _is_product_candidate(rec):
+            return (
+                f"{q_text} · {rec.nominal_symbol}={_fmt_g(rec.nominal_diameter_mm)}mm"
+                f" · di={_fmt_g(rec.hydraulic_inner_diameter_mm)}mm"
+            )
         return f"{q_text} · D={rec.D*1000:.0f}mm"
 
     def _build_case_nav_items(self):
@@ -1410,11 +2093,9 @@ class PressurePipePanel(QWidget):
             case_indexes=[i for i in range(len(self._cases)) if i != self._current_case_idx]
         )
         src = self._cases[self._current_case_idx]
-        keys = ('material_idx', 'length', 'local_ratio', 'D', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text')
         for i, case in enumerate(self._cases):
             if i != self._current_case_idx:
-                for k in keys:
-                    case[k] = src[k]
+                self._copy_case_parameters(src, case)
         n_copied = len(self._cases) - 1
         if n_copied == 0:
             InfoBar.warning(title="提示", content="当前只有一个工况，无需复制",
@@ -1434,26 +2115,31 @@ class PressurePipePanel(QWidget):
         self._mark_results_dirty()
         prev = self._cases[self._current_case_idx - 1]
         curr = self._cases[self._current_case_idx]
-        for k in ('material_idx', 'length', 'local_ratio', 'D', 'inc_checked', 'inc_pct', 'inc_mode', 'inc_q_text'):
-            curr[k] = prev[k]
+        self._copy_case_parameters(prev, curr)
         self._load_case(self._current_case_idx)
         InfoBar.success(title="已复制", content=f"已从工况{self._current_case_idx}复制参数",
                         parent=self, position=InfoBarPosition.TOP_RIGHT, duration=2000)
         self.data_changed.emit()
 
     def _show_initial_help(self):
-        """初始帮助页：含 GB 50288-2018 与 GB/T 20203-2017 摘要"""
+        """初始帮助页：含水力计算及各类有压管产品规格依据摘要。"""
         self._initial_help_rendered = True
         sync_case_result_nav_bar(getattr(self, "_result_case_nav", None), [])
         h = HelpPageBuilder("有压管道水力计算", '请输入参数后点击"计算"按钮')
 
         h.section("支持功能")
         h.bullet_list([
-            "单次计算：自动推荐经济管径，展示前5候选",
-            "指定管径：可选输入管径D，查看指定管径的水力性能并与自动推荐对比",
+            "单次计算：自动推荐经济管径，展示前5个候选规格",
+            "PE 选型：选好材料等级和公称压力，程序自动匹配壁厚并推荐管径",
+            "指定管径：PE 管填写公称外径，其他管材按输入框标注填写；留空按规范推荐",
             "批量计算：多管材/多工况扫描，生成 CSV + PDF 图表",
         ])
-        h.text("管材支持：HDPE管、玻璃钢夹砂管、球墨铸铁管、预应力钢筒混凝土管、钢管")
+        h.text("管材支持：聚乙烯（PE）管、玻璃钢夹砂管、球墨铸铁管、预应力钢筒混凝土管、钢管")
+        h.hint(
+            "管材选型说明：球墨铸铁管 DN 需由外径、壁厚和内衬换算名义内径；"
+            "PCCPE/PCCPL 与三档摩阻参数预设相互独立；玻璃钢夹砂管只用内径系列自动选型，"
+            "外径系列仅作连接和采购参考。"
+        )
         h.text("推荐规则：经济优先 → 妥协兜底 → 就近流速兜底")
 
         h.divider()
@@ -1577,6 +2263,15 @@ class PressurePipePanel(QWidget):
         h.hint("说明：本程序当前推荐筛选规则仍按 GB 50288-2018 执行；GB/T 20203-2017 条款在此页面按摘要并列展示。")
 
         h.divider()
+        h.section("PE 管怎么选管径")
+        h.text("PE 管按公称外径 DN 选规格。例如 DN630，指公称外径 630 mm。")
+        h.text(
+            "先选材料等级和公称压力。管径留空时，程序按规范推荐满足流速和水损要求的最小管径；"
+            "也可输入已有的标准管径。壁厚由程序查表确定，流速和水损按内径计算。"
+        )
+        h.text("规格依据：GB/T 13663.2—2018《给水用聚乙烯（PE）管道系统 第2部分：管材》。")
+
+        h.divider()
         h.section("加大流量比例规范表")
         h.table(
             ["设计流量 Q (m\u00b3/s)", "加大比例"],
@@ -1604,8 +2299,8 @@ class PressurePipePanel(QWidget):
             Q = float(q_text)
         except ValueError:
             raise ValueError(f"工况{case_num}: 设计流量 Q 输入无效")
-        if Q <= 0:
-            raise ValueError(f"工况{case_num}: Q 必须大于 0")
+        if not math.isfinite(Q) or Q <= 0:
+            raise ValueError(f"工况{case_num}: Q 必须大于 0，且为有限数值")
 
         length_text = (case.get('length', '') or '').strip()
         if not length_text:
@@ -1614,13 +2309,22 @@ class PressurePipePanel(QWidget):
             length_m = float(length_text)
         except ValueError:
             raise ValueError(f"工况{case_num}: 管长 L 输入无效")
-        if length_m <= 0:
-            raise ValueError(f"工况{case_num}: 管长 L 必须大于 0")
+        if not math.isfinite(length_m) or length_m <= 0:
+            raise ValueError(f"工况{case_num}: 管长 L 必须大于 0，且为有限数值")
 
-        mat_idx = case.get('material_idx', 0)
-        if mat_idx < 0 or mat_idx >= len(self._mat_keys):
-            mat_idx = 0
-        mat_key = self._mat_keys[mat_idx]
+        mat_key = case.get('material_key')
+        if mat_key not in PIPE_MATERIALS:
+            try:
+                mat_idx = int(case.get('material_idx', 0))
+            except (TypeError, ValueError):
+                mat_idx = 0
+            mat_key = (
+                LEGACY_MATERIAL_KEY_ORDER_V1[mat_idx]
+                if 0 <= mat_idx < len(LEGACY_MATERIAL_KEY_ORDER_V1)
+                else self._mat_keys[0]
+            )
+        if mat_key not in PIPE_MATERIALS:
+            mat_key = self._mat_keys[0]
 
         increase_resolution = resolve_increase_input(
             use_increase=case.get('inc_checked', True),
@@ -1639,18 +2343,90 @@ class PressurePipePanel(QWidget):
             local_ratio = float(ratio_text)
         except ValueError:
             raise ValueError(f"工况{case_num}: 局部损失比例输入无效")
-        if local_ratio < 0:
-            raise ValueError(f"工况{case_num}: 局部损失比例不能为负数")
+        if not math.isfinite(local_ratio) or local_ratio < 0:
+            raise ValueError(f"工况{case_num}: 局部损失比例不能为负数，且必须为有限数值")
 
-        d_text = (case.get('D', '') or '').strip()
         manual_D = None
-        if d_text:
+        manual_pe_dn = None
+        manual_product_dn = None
+        steel_kwargs = {}
+        use_product_catalog = bool(case.get('use_product_catalog', False))
+        ductile_iron_class = str(
+            case.get('ductile_iron_class', 'PREFERRED') or 'PREFERRED'
+        ).upper()
+        if use_product_catalog and mat_key == "球墨铸铁管":
+            get_ductile_iron_specs(ductile_iron_class)
+        pccp_variant = str(case.get('pccp_variant', 'PCCPE') or 'PCCPE').upper()
+        pe_grade = str(case.get('pe_grade', 'PE100') or 'PE100').upper()
+        try:
+            pe_pn_mpa = float(case.get('pe_pn_mpa', 1.0))
+            get_pe_sdr(pe_grade, pe_pn_mpa)
+        except (TypeError, ValueError) as ex:
+            raise ValueError(f"工况{case_num}: {ex}") from ex
+
+        if mat_key == "HDPE管":
+            dn_text = (case.get('pe_dn_mm', '') or '').strip()
+            if dn_text:
+                try:
+                    manual_pe_dn = float(dn_text)
+                    spec = get_pe_pipe_spec(pe_grade, pe_pn_mpa, manual_pe_dn)
+                except (TypeError, ValueError) as ex:
+                    raise ValueError(
+                        f"工况{case_num}: PE 公称外径 DN 必须取 {PE_STANDARD} "
+                        f"中所选等级/PN 的离散规格；{ex}"
+                    ) from ex
+                manual_pe_dn = float(spec.nominal_outer_diameter_mm)
+            legacy_d_text = case.get('legacy_pe_manual_D')
+            if legacy_d_text is None and 'pe_dn_mm' not in case:
+                legacy_d_text = case.get('D', '')
+            legacy_d_text = str(legacy_d_text or '').strip()
+            if legacy_d_text:
+                try:
+                    manual_D = float(legacy_d_text)
+                except ValueError as ex:
+                    raise ValueError(f"工况{case_num}: 旧版 PE 水力内径 D 输入无效") from ex
+                if not math.isfinite(manual_D) or manual_D <= 0:
+                    raise ValueError(f"工况{case_num}: 旧版 PE 水力内径 D 必须大于 0")
+        elif get_catalog_family(mat_key) and use_product_catalog:
+            dn_text = (case.get('product_dn_mm', '') or '').strip()
+            if dn_text:
+                try:
+                    spec = get_pipe_product_spec(
+                        mat_key, dn_text,
+                        ductile_iron_class=ductile_iron_class,
+                        pccp_variant=pccp_variant,
+                    )
+                except (TypeError, ValueError) as ex:
+                    raise ValueError(
+                        f"工况{case_num}: 指定公称直径不在当前可选规格中；{ex}"
+                    ) from ex
+                manual_product_dn = float(spec.nominal_diameter_mm)
+            legacy_d_text = str(case.get('legacy_product_manual_D') or '').strip()
+            if legacy_d_text:
+                try:
+                    manual_D = float(legacy_d_text)
+                except ValueError as ex:
+                    raise ValueError(
+                        f"工况{case_num}: 旧版产品水力内径 D 输入无效"
+                    ) from ex
+                if not math.isfinite(manual_D) or manual_D <= 0:
+                    raise ValueError(
+                        f"工况{case_num}: 旧版产品水力内径 D 必须大于 0"
+                    )
+        elif mat_key == '钢管':
             try:
-                manual_D = float(d_text)
-            except ValueError:
-                raise ValueError(f"工况{case_num}: 管径 D 输入无效")
-            if manual_D <= 0:
-                raise ValueError(f"工况{case_num}: 指定管径 D 必须大于 0")
+                steel_kwargs = parse_steel_state(case)
+            except ValueError as exc:
+                raise ValueError(f'工况{case_num}: {exc}') from exc
+        else:
+            d_text = (case.get('D', '') or '').strip()
+            if d_text:
+                try:
+                    manual_D = float(d_text)
+                except ValueError as ex:
+                    raise ValueError(f"工况{case_num}: 管径 D 输入无效") from ex
+                if not math.isfinite(manual_D) or manual_D <= 0:
+                    raise ValueError(f"工况{case_num}: 指定管径 D 必须大于 0，且为有限数值")
 
         parsed = PressurePipeInput(
             Q=Q, material_key=mat_key,
@@ -1658,6 +2434,14 @@ class PressurePipePanel(QWidget):
             manual_increase_percent=manual_pct,
             local_loss_ratio=local_ratio,
             manual_D=manual_D,
+            pe_material_grade=pe_grade,
+            pe_nominal_pressure_mpa=pe_pn_mpa,
+            manual_nominal_diameter_mm=manual_pe_dn,
+            use_product_catalog=use_product_catalog,
+            manual_product_diameter_mm=manual_product_dn,
+            ductile_iron_class=ductile_iron_class,
+            pccp_variant=pccp_variant,
+            **steel_kwargs,
         )
         parsed.inc_mode = increase_resolution.mode
         parsed.inc_pct_text = case.get('inc_pct', '')
@@ -1686,12 +2470,22 @@ class PressurePipePanel(QWidget):
                     length_value = float(length_text) if length_text else 0.0
                 except Exception:
                     length_value = 0.0
-                mat_idx = case.get('material_idx', 0)
-                if mat_idx < 0 or mat_idx >= len(self._mat_keys):
-                    mat_idx = 0
+                mat_key = case.get('material_key')
+                if mat_key not in PIPE_MATERIALS:
+                    try:
+                        mat_idx = int(case.get('material_idx', 0))
+                    except (TypeError, ValueError):
+                        mat_idx = 0
+                    mat_key = (
+                        LEGACY_MATERIAL_KEY_ORDER_V1[mat_idx]
+                        if 0 <= mat_idx < len(LEGACY_MATERIAL_KEY_ORDER_V1)
+                        else self._mat_keys[0]
+                    )
+                if mat_key not in PIPE_MATERIALS:
+                    mat_key = self._mat_keys[0]
                 inp = SimpleNamespace(
                     Q=q_value,
-                    material_key=self._mat_keys[mat_idx],
+                    material_key=mat_key,
                     length_m=length_value,
                     use_increase=case.get('inc_checked', True),
                     inc_mode=normalize_increase_mode(case.get('inc_mode', INCREASE_MODE_PERCENT)),
@@ -1746,9 +2540,9 @@ class PressurePipePanel(QWidget):
         self.data_changed.emit()
 
     def _build_result_card_html(self, case_idx, inp, result):
-        """为单个工况构建结果HTML（方案D：分段标题 + 迷你摘要条 + 候选表标题 + 推荐行高亮）"""
+        """按设计/加大工况并列展示结果，保留候选排序及产品尺寸说明。"""
         rec = result.recommended
-        mat_name = PIPE_MATERIALS[inp.material_key]["name"]
+        mat_name = _material_display_name(inp.material_key)
         q_label = f"Q{_sub(case_idx + 1)} = {inp.Q} m³/s"
         subtitle = f"{q_label} · {_e(mat_name)} · L={inp.length_m}m"
 
@@ -1782,81 +2576,83 @@ class PressurePipePanel(QWidget):
         is_manual = (result.category == "指定")
         cat_color = {"经济": S, "妥协": W, "兜底": E}.get(
             rec.category if is_manual else result.category, T2)
-        badge_text = "指定" if is_manual else result.category
         increase_summary_html = "".join(
             f'<div style="font-size:12px;color:#4a5568;line-height:1.6;">{_e(line)}</div>'
             for line in self._increase_summary_lines(inp, result)
         )
+        is_pe = _is_pe_candidate(rec)
+        is_product = _is_product_candidate(rec) and not is_pe
+        legacy_migration_flags = [
+            flag for flag in getattr(rec, "flags", [])
+            if str(flag).startswith("旧版水力内径")
+        ]
+        migration_html = ""
+        if legacy_migration_flags:
+            migration_review_text = (
+                "请按当前工程压力与温度复核 PN 后保存"
+                if is_pe else "请按当前工程压力、结构和供货条件复核后保存"
+            )
+            migration_html = f"""
+        <div style="margin:8px 0;padding:10px 14px;background:#fff8e1;
+                    border:1px solid #ffcc80;border-left:5px solid #ef6c00;border-radius:8px;
+                    font-size:12px;color:#8a4b08;">
+            旧项目规格迁移：{_e(legacy_migration_flags[0])}。{_e(migration_review_text)}。
+        </div>"""
+        frpm_boundary = _frpm_dimension_boundary(rec)
+        if frpm_boundary:
+            frpm_range_text, frpm_tolerance_text = frpm_boundary
+            frpm_boundary_html = f"""
+            <div style="font-size:12px;color:#455a64;margin-top:4px;">
+                管端内直径允许范围 {_e(frpm_range_text)}；相对所选设计内径值允许偏差
+                {_e(frpm_tolerance_text)}。定案时仍须按厂家选定设计内径和实测尺寸复核。</div>"""
+        else:
+            frpm_boundary_html = ""
+        if is_pe:
+            procurement_html = f"""
+        <div style="margin:8px 0 10px;padding:13px 16px;background:#eef8ff;
+                    border:1px solid #90caf9;border-left:5px solid #1565c0;border-radius:8px;
+                    font-family:'Microsoft YaHei',sans-serif;">
+            <div style="font-size:11px;color:#607d8b;margin-bottom:4px;">造价 / 采购规格</div>
+            <div style="font-size:16px;font-weight:800;color:#0d47a1;">
+                {_e(_pe_procurement_text(rec))}</div>
+            <div style="font-size:12px;color:#455a64;margin-top:5px;">
+                水力计算采用名义内径 d<sub>i</sub> = {_fmt_g(rec.hydraulic_inner_diameter_mm)} mm，
+                公称外径 DN 用于造价与采购。</div>
+        </div>"""
+        elif is_product:
+            product_heading = '造价 / 采购规格'
+            if rec.product_family == 'STEEL':
+                product_heading = steel_result_heading(result)
+            procurement_html = f"""
+        <div style="margin:8px 0 10px;padding:13px 16px;background:#eef8ff;
+                    border:1px solid #90caf9;border-left:5px solid #1565c0;border-radius:8px;
+                    font-family:'Microsoft YaHei',sans-serif;">
+            <div style="font-size:11px;color:#607d8b;margin-bottom:4px;">{_e(product_heading)}</div>
+            <div style="font-size:16px;font-weight:800;color:#0d47a1;">
+                {_e(_product_procurement_text(rec))}</div>
+            <div style="font-size:12px;color:#455a64;margin-top:5px;">
+                水力计算采用 {_e(getattr(rec, 'hydraulic_inner_diameter_basis', None) or '计算内径')} d<sub>i</sub> =
+                {_fmt_g(rec.hydraulic_inner_diameter_mm)} mm。</div>
+            {frpm_boundary_html}
+        </div>"""
+        else:
+            procurement_html = ""
         has_f_range = (
             inp.material_key == "球墨铸铁管"
             and getattr(rec, "hf_total_lower_km", None) is not None
             and getattr(rec, "h_loss_total_lower_m", None) is not None
         )
-        if has_f_range:
-            total_loss_html = (
-                '<div style="font-size:11px;color:#888;">总水损（f 上限 / 下限）</div>'
-                f'<div style="font-size:13px;font-weight:700;color:#1a1a1a;">'
-                f'{rec.hf_total_km:.4f} / {rec.hf_total_lower_km:.4f} m/km</div>'
-            )
-            length_loss_html = (
-                '<div style="font-size:11px;color:#888;">管长折算（f 上限 / 下限）</div>'
-                f'<div style="font-size:13px;font-weight:700;color:#1a1a1a;">'
-                f'{rec.h_loss_total_m:.4f} / {rec.h_loss_total_lower_m:.4f} m</div>'
-            )
-        else:
-            total_loss_html = (
-                '<div style="font-size:11px;color:#888;">总水损</div>'
-                f'<div style="font-size:14px;font-weight:700;color:#1a1a1a;">'
-                f'{rec.hf_total_km:.4f} m/km</div>'
-            )
-            length_loss_html = (
-                '<div style="font-size:11px;color:#888;">管长折算</div>'
-                f'<div style="font-size:14px;font-weight:700;color:#1a1a1a;">'
-                f'{rec.h_loss_total_m:.4f} m</div>'
-            )
-
-        # 迷你摘要条
-        sep_style = f"width:1px;height:28px;background:#e0e0e0;flex-shrink:0;"
-        html = case_header + f"""
-        <div style="margin:8px 0 10px;padding:10px 14px;background:#f8fafc;border:1px solid #dbe7f3;
-                    border-radius:8px;font-family:'Microsoft YaHei',sans-serif;">
-            {increase_summary_html}
-        </div>
-        <div style="display:flex;gap:15px;margin:8px 0;padding:12px 16px;
-                    background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border-radius:10px;
-                    border:1px solid {cat_color}40;align-items:center;flex-wrap:wrap;
-                    font-family:'Microsoft YaHei',sans-serif;">
-            <div style="text-align:center;">
-                <div style="font-size:11px;color:#888;">管材</div>
-                <div style="font-size:12px;color:#1a1a1a;">{_e(mat_name).replace('预应力钢筒混凝土管', '预应力<br>钢筒混凝土管').replace('(', '<br>(')}</div>
-            </div>
-            <div style="{sep_style}"></div>
-            <div style="text-align:center;">
-                <div style="font-size:11px;color:#888;">推荐管径</div>
-                <div style="font-size:15px;font-weight:700;color:{cat_color};">
-                    D = {rec.D*1000:.0f} mm</div>
-            </div>
-            <div style="{sep_style}"></div>
-            <div style="text-align:center;">
-                <div style="font-size:11px;color:#888;">有压流速</div>
-                <div style="font-size:15px;font-weight:700;color:{cat_color};">
-                    {rec.V_press:.4f} m/s</div>
-            </div>
-            <div style="{sep_style}"></div>
-            <div style="text-align:center;">
-                {total_loss_html}
-            </div>
-            <div style="{sep_style}"></div>
-            <div style="text-align:center;">
-                <div style="font-size:11px;color:#888;">类别</div>
-                <div style="font-size:13px;font-weight:700;color:{cat_color};">
-                    {_e(badge_text)}</div>
-            </div>
-            <div style="{sep_style}"></div>
-            <div style="text-align:center;">
-                {length_loss_html}
-            </div>
-        </div>"""
+        # 推荐或指定结论集中放在首屏，不再依赖末尾重复的结果汇总。
+        result_label = '指定管径' if is_manual else '参考管径' if result.category == '兜底' else '推荐管径'
+        nominal_mm = rec.nominal_outer_diameter_mm if is_pe else rec.nominal_diameter_mm if is_product else None
+        result_heading = (f'{result_label} DN {_fmt_g(nominal_mm)}' if nominal_mm is not None
+                          else f'{result_label}（水力内径）{rec.D * 1000:g} mm')
+        # 同一指标按设计/加大两列展示，分类与选径仍使用内核的原始结果。
+        flow = compare_flows(inp, rec)
+        loss_condition_label = flow.loss_label
+        html = case_header + migration_html + flow_summary_html(
+            inp, rec, result_heading, mat_name, cat_color,
+        )
 
         if has_f_range:
             html += """
@@ -1868,8 +2664,27 @@ class PressurePipePanel(QWidget):
 
         # 自动推荐对比条（仅指定D模式，且自动推荐与指定D不同时）
         auto_rec = result.auto_recommended
-        if is_manual and auto_rec is not None and abs(auto_rec.D - rec.D) > 1e-6:
+        manual_differs = False
+        if is_manual and auto_rec is not None:
+            if is_pe and _is_pe_candidate(auto_rec):
+                manual_differs = (
+                    auto_rec.nominal_outer_diameter_mm != rec.nominal_outer_diameter_mm
+                )
+            elif is_product and _is_product_candidate(auto_rec):
+                manual_differs = auto_rec.product_spec_id != rec.product_spec_id
+            else:
+                manual_differs = abs(auto_rec.D - rec.D) > 1e-6
+        if manual_differs:
             ac = {"经济": S, "妥协": W, "兜底": E}.get(auto_rec.category, T2)
+            auto_dimension_text = (
+                _pe_procurement_text(auto_rec, include_standard=False)
+                + f"；di={_fmt_g(auto_rec.hydraulic_inner_diameter_mm)} mm"
+                if _is_pe_candidate(auto_rec)
+                else _product_procurement_text(auto_rec, include_standard=False)
+                + f"；di={_fmt_g(auto_rec.hydraulic_inner_diameter_mm)} mm"
+                if _is_product_candidate(auto_rec)
+                else f"D = {auto_rec.D}m ({auto_rec.D*1000:.0f}mm)"
+            )
             html += f"""
         <div style="display:flex;gap:14px;margin:2px 0 6px;padding:8px 18px;
                     background:{CARD};border:1px dashed {ac};border-radius:8px;
@@ -1877,80 +2692,94 @@ class PressurePipePanel(QWidget):
             <span style="background:{ac};color:white;padding:2px 10px;
                          border-radius:10px;font-size:11px;font-weight:bold;">
                 自动推荐({auto_rec.category}区)</span>
-            <span style="font-size:12px;color:{T2};">D = {auto_rec.D}m ({auto_rec.D*1000:.0f}mm)</span>
-            <span style="font-size:12px;color:{T2};">V = {auto_rec.V_press:.4f} m/s</span>
-            <span style="font-size:12px;color:{T2};">hf总 = {auto_rec.hf_total_km:.4f} m/km</span>
-        </div>"""
-
-        # 图例条
-        html += """
-        <div style="display:flex;gap:14px;margin:6px 0 4px;font-size:12px;color:#888;
-                    align-items:center;flex-wrap:wrap;">"""
-        for dot_color, name, desc in [
-            ("#2e7d32", "经济", "V:0.9~1.5"),
-            ("#e67e22", "妥协", "V:0.6~0.9"),
-            ("#c62828", "兜底", "就近流速"),
-        ]:
-            html += f"""
-            <span style="display:inline-flex;align-items:center;gap:4px;">
-                <span style="width:8px;height:8px;border-radius:50%;background:{dot_color};
-                             display:inline-block;"></span> {name} {desc}</span>"""
-        html += f"""
-            <span style="color:#bbb;font-size:11px;margin-left:auto;">
-                hf总 ≤ 5 m/km 为合规</span>
+            <span style="font-size:12px;color:{T2};">{_e(auto_dimension_text)}</span>
+            <span style="font-size:12px;color:{T2};">设计流速 = {auto_rec.V_press:.4f} m/s</span>
+            <span style="font-size:12px;color:{T2};">{loss_condition_label}总水损 = {auto_rec.hf_total_km:.4f} m/km</span>
+            <span style="font-size:12px;color:{T2};">{loss_condition_label}全管长水损 = {auto_rec.h_loss_total_m:.4f} m</span>
         </div>"""
 
         # 候选表
         _CAT_COLORS = {"经济": "#2e7d32", "妥协": "#e67e22", "兜底": "#c62828", "指定": "#1565c0"}
         candidates = result.top_candidates
+        candidate_explanations = []
         if candidates:
             _tbl_title = f"候选管径对比（工况{case_idx+1}：Q = {inp.Q} m³/s）" if _multi else "候选管径对比"
+            pe_table_note = ""
+            if is_pe:
+                pe_table_note = (
+                    f" · {rec.pe_material_grade} / SDR{_fmt_g(rec.pe_sdr)} / "
+                    f"PN{_fmt_g(rec.pe_nominal_pressure_mpa)} MPa · {rec.product_standard or PE_STANDARD}"
+                )
+            elif is_product:
+                pe_table_note = " · " + " / ".join(rec.product_standard_references)
             html += f"""
         <div style="font-size:13px;font-weight:600;color:#555;margin:10px 0 4px;
                     padding-left:4px;border-left:3px solid #90caf9;">
             {_tbl_title}
             <span style="font-size:11px;color:#888;margin-left:8px;font-weight:500;">
-                排序：推荐优先，类别→hf总
+                排序：推荐优先，类别优先，同类别按总水损{_e(pe_table_note)}
             </span>
         </div>"""
-            loss_header_html = """
+            if is_pe:
+                dimension_header_html = """
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">hf(m/km)</th>
+                           font-weight:600;text-align:center;font-size:12px;">公称外径 × 壁厚<br>DN×en(mm)</th>
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">hj(m/km)</th>
+                           font-weight:600;text-align:center;font-size:12px;">材料 / SDR / PN</th>
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">hf总(m/km)</th>
+                           font-weight:600;text-align:center;font-size:12px;">水力内径<br>di(mm)</th>"""
+            elif is_product:
+                dimension_header_html = """
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">H损(m)</th>"""
-            if has_f_range:
-                loss_header_html = """
+                           font-weight:600;text-align:center;font-size:12px;">产品规格</th>
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">hf<br>上限 / 下限</th>
-                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">hj<br>上限 / 下限</th>
-                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">hf总<br>上限 / 下限</th>
-                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">H损<br>上限 / 下限</th>"""
-            html += f"""
-        <table style="width:100%;border-collapse:collapse;font-size:13px;margin:4px 0 12px;">
-            <tr style="background:#f8f9fa;">
-                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">#</th>
+                           font-weight:600;text-align:center;font-size:12px;">水力内径<br>di(mm)</th>"""
+            else:
+                dimension_header_html = """
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
                            font-weight:600;text-align:center;font-size:12px;">D(m)</th>
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">D(mm)</th>
+                           font-weight:600;text-align:center;font-size:12px;">D(mm)</th>"""
+            loss_title = f'{loss_condition_label}总水损'
+            range_note = '<br>f 上限 / 下限' if has_f_range else ''
+            loss_header_html = f'<th style="padding:7px 8px;color:#555;font-size:12px;">{loss_title}{range_note}<br>(m/km)</th>'
+            increased_header_html = ('<th style="padding:7px 8px;color:#555;font-size:12px;">'
+                                     '加大流速<br>(m/s)</th>') if flow.show_increased else ''
+            html += f"""
+        <table class="candidate-comparison" style="width:100%;border-collapse:collapse;font-size:13px;margin:4px 0 12px;">
+            <tr style="background:#f8f9fa;">
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">V(m/s)</th>
+                           font-weight:600;text-align:center;font-size:12px;">#</th>
+                {dimension_header_html}
+                <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
+                           font-weight:600;text-align:center;font-size:12px;">设计流速<br>(m/s)</th>
+                {increased_header_html}
                 {loss_header_html}
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
-                           font-weight:600;text-align:center;font-size:12px;">类别</th>
+                           font-weight:600;text-align:center;font-size:12px;">类别<br>按设计流速</th>
                 <th style="padding:7px 8px;border-bottom:2px solid #e0e0e0;color:#555;
                            font-weight:600;text-align:center;font-size:12px;"></th>
             </tr>"""
             for i, c in enumerate(candidates):
-                is_rec = (rec and abs(c.D - rec.D) < 1e-6)
+                if is_pe and _is_pe_candidate(c):
+                    is_rec = (
+                        rec is not None
+                        and c.nominal_outer_diameter_mm == rec.nominal_outer_diameter_mm
+                    )
+                    dimension_cells_html = f"""
+                <td style="{{td_s}}">DN{_fmt_g(c.nominal_outer_diameter_mm)}×{_fmt_g(c.nominal_wall_thickness_mm)}</td>
+                <td style="{{td_s}}">{_e(c.pe_material_grade)} / SDR{_fmt_g(c.pe_sdr)}<br>PN{_fmt_g(c.pe_nominal_pressure_mpa)} MPa</td>
+                <td style="{{td_s}}">{_fmt_g(c.hydraulic_inner_diameter_mm)}</td>"""
+                elif is_product and _is_product_candidate(c):
+                    is_rec = bool(rec and c.product_spec_id == rec.product_spec_id)
+                    dimension_cells_html = f"""
+                <td style="{{td_s}}">{_e(c.nominal_symbol)} {_fmt_g(c.nominal_diameter_mm)}</td>
+                <td style="{{td_s}}">{_fmt_g(c.hydraulic_inner_diameter_mm)}</td>"""
+                else:
+                    is_rec = bool(rec and abs(c.D - rec.D) < 1e-6)
+                    dimension_cells_html = f"""
+                <td style="{{td_s}}">{c.D:.3f}</td>
+                <td style="{{td_s}}">{c.D*1000:.0f}</td>"""
                 is_user = "用户指定" in c.flags
                 if is_rec:
                     row_style = ("background:linear-gradient(135deg,#e8f5e9,#f1f8e9);"
@@ -1970,34 +2799,55 @@ class PressurePipePanel(QWidget):
                                   'padding:2px 8px;border-radius:10px;font-size:11px;'
                                   'font-weight:600;">★ 指定</span>')
                 elif is_rec:
-                    badge_html = ('<span style="display:inline-block;background:#2e7d32;color:#fff;'
+                    is_steel_reference = c.product_family == 'STEEL' and c.category == '兜底'
+                    badge_color = '#c62828' if is_steel_reference else '#2e7d32'
+                    badge_label = '参考' if is_steel_reference else '推荐'
+                    badge_html = (f'<span style="display:inline-block;background:{badge_color};color:#fff;'
                                   'padding:2px 8px;border-radius:10px;font-size:11px;'
-                                  'font-weight:600;">★ 推荐</span>')
+                                  f'font-weight:600;">★ {badge_label}</span>')
                 td_s = f"padding:7px 8px;text-align:center;border-bottom:1px solid #f0f0f0;{td_extra}"
                 if has_f_range and getattr(c, "hf_total_lower_km", None) is not None:
-                    friction_cell = f"{c.hf_friction_km:.4f}<br>{c.hf_friction_lower_km:.4f}"
-                    local_cell = f"{c.hf_local_km:.4f}<br>{c.hf_local_lower_km:.4f}"
                     total_cell = f"{c.hf_total_km:.4f}<br>{c.hf_total_lower_km:.4f}"
-                    length_cell = f"{c.h_loss_total_m:.4f}<br>{c.h_loss_total_lower_m:.4f}"
                 else:
-                    friction_cell = f"{c.hf_friction_km:.4f}"
-                    local_cell = f"{c.hf_local_km:.4f}"
                     total_cell = f"{c.hf_total_km:.4f}"
-                    length_cell = f"{c.h_loss_total_m:.4f}"
+                candidate_flow = compare_flows(inp, c)
+                increased_cell_html = ''
+                if flow.show_increased:
+                    value = candidate_flow.loss_velocity
+                    value_text = '—' if value is None else f'{value:.4f}'
+                    velocity_status, velocity_color = velocity_note(value)
+                    increased_cell_html = (f'<td style="{td_s}color:{velocity_color};" '
+                                           f'title="{_e(velocity_status)}">{value_text}</td>')
+                dimension_cells_html = dimension_cells_html.format(td_s=td_s)
                 html += f"""
             <tr style="{row_style}">
                 <td style="{td_s}">{i+1}</td>
-                <td style="{td_s}">{c.D:.3f}</td>
-                <td style="{td_s}">{c.D*1000:.0f}</td>
+                {dimension_cells_html}
                 <td style="{td_s}">{c.V_press:.4f}</td>
-                <td style="{td_s}">{friction_cell}</td>
-                <td style="{td_s}">{local_cell}</td>
+                {increased_cell_html}
                 <td style="{td_s}">{total_cell}</td>
-                <td style="{td_s}">{length_cell}</td>
                 <td style="{td_s}color:{cc};font-weight:bold;">{_e(display_cat)}</td>
                 <td style="{td_s}">{badge_html}</td>
             </tr>"""
+                # 当前规格已在尺寸说明中完整代入，其他候选各保留一次。
+                if not is_rec:
+                    candidate_explanations.append(diameter_candidate_row_html(c, 1))
             html += "\n        </table>"
+
+        # 先完成横向比较，再按推荐规格、流量取值、选径依据和逐档换算查看细节。
+        html += procurement_html + f"""
+        <div style="margin:8px 0 10px;padding:10px 14px;background:#f8fafc;border:1px solid #dbe7f3;
+                    border-radius:8px;font-family:'Microsoft YaHei',sans-serif;">
+            {increase_summary_html}
+        </div>"""
+        html += steel_sizing_html(rec) + build_diameter_explanation_html(rec)
+        if any(candidate_explanations):
+            html += (
+                '<div style="font-size:14px;font-weight:700;color:#34495e;margin:14px 0 8px;">'
+                '其他候选的壁厚与内径换算（按对比表顺序，当前规格见上文）</div>'
+                '<table class="candidate-dimensions" style="width:100%;border-collapse:collapse;">'
+                + ''.join(candidate_explanations) + '</table>'
+            )
 
         return html
 
@@ -2015,7 +2865,13 @@ class PressurePipePanel(QWidget):
             fg, bg = _NAV_CAT_COLORS.get(cat, ("#999", "#f5f5f5"))
             q_text = f"Q{_sub(case_idx + 1)}={inp.Q}"
             if rec:
-                summary = f"D={rec.D*1000:.0f}mm {cat}"
+                if _is_pe_candidate(rec):
+                    summary = (
+                        f"DN={_fmt_g(rec.nominal_outer_diameter_mm)}mm "
+                        f"di={_fmt_g(rec.hydraulic_inner_diameter_mm)}mm {cat}"
+                    )
+                else:
+                    summary = f"D={rec.D*1000:.0f}mm {cat}"
             else:
                 summary = "无结果"
             btns.append(
@@ -2057,7 +2913,7 @@ class PressurePipePanel(QWidget):
                                   f'border-radius:0 8px 8px 0;font-size:15px;'
                                   f'font-weight:700;color:#1565c0;">'
                                   f'{_dtitle}</h3>')
-                    full_html += plain_text_to_formula_html(result.calc_steps)
+                    full_html += plain_text_to_formula_html(concise_process_text(result))
 
         load_formula_page(self.result_view, full_html)
         self.notebook.setCurrentIndex(0)
@@ -2076,7 +2932,7 @@ class PressurePipePanel(QWidget):
                     f'background:#fafafa;border-left:4px solid #1565c0;'
                     f'border-radius:0 8px 8px 0;font-size:15px;'
                     f'font-weight:700;color:#1565c0;">{title}</h3>'
-                    f'{plain_text_to_formula_html(result.calc_steps)}'
+                    f'{plain_text_to_formula_html(concise_process_text(result))}'
                 )
             parts.append(
                 wrap_case_result_block(
@@ -2143,8 +2999,20 @@ class PressurePipePanel(QWidget):
                 parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
             return
         meta = load_meta()
+        has_pe_product_specs = _results_have_pe_product_specs(self._all_results)
+        product_families = _results_product_families(self._all_results)
+        base_references = _pressure_pipe_report_references(
+            REFERENCES_BASE.get('pressure_pipe', []), has_pe_product_specs, product_families,
+            all_results=self._all_results,
+        )
         auto_purpose = build_calc_purpose('pressure_pipe', project=meta.project_name)
-        dlg = ExportConfirmDialog('pressure_pipe', '有压管道水力计算书', auto_purpose, parent=self._info_parent())
+        dlg = ExportConfirmDialog(
+            'pressure_pipe',
+            '有压管道水力计算书',
+            auto_purpose,
+            parent=self._info_parent(),
+            base_references=base_references,
+        )
         from PySide6.QtWidgets import QDialog
         if dlg.exec() != QDialog.Accepted:
             return
@@ -2170,11 +3038,16 @@ class PressurePipePanel(QWidget):
         """构建Word报告文档（工程产品运行卡格式），支持多工况"""
         meta = getattr(self, '_word_export_meta', load_meta())
         purpose = getattr(self, '_word_export_purpose', '')
-        refs = getattr(self, '_word_export_refs', REFERENCES_BASE.get('pressure_pipe', []))
+        refs = list(getattr(self, '_word_export_refs', REFERENCES_BASE.get('pressure_pipe', [])))
+        has_pe_product_specs = _results_have_pe_product_specs(self._all_results)
+        product_families = _results_product_families(self._all_results)
+        refs = _pressure_pipe_report_references(
+            refs, has_pe_product_specs, product_families, all_results=self._all_results,
+        )
 
         # 取第一个工况的管材名作为封面描述
         _, first_inp, _ = self._all_results[0]
-        first_mat_name = PIPE_MATERIALS[first_inp.material_key]["name"]
+        first_mat_name = _material_display_name(first_inp.material_key)
         n_cases = len(self._all_results)
         desc = f'有压管道水力计算（{first_mat_name}）' if n_cases == 1 else f'有压管道水力计算（{n_cases}个工况）'
 
@@ -2194,7 +3067,30 @@ class PressurePipePanel(QWidget):
         doc_add_formula(doc, r'h_f = f \times \frac{L \times Q^m}{d^b}', '沿程水头损失公式：')
         doc_add_formula(doc, r'h_j = \zeta \times \frac{v^2}{2g}', '局部水头损失规范公式（GB/T 20203 式(17)）：')
         doc_add_formula(doc, r'h_j = \xi_j \times h_f', '局部水头损失（按沿程损失比例简化）：')
-        doc_add_formula(doc, r'V = \frac{4Q}{\pi D^2}', '管道流速公式：')
+        doc_add_formula(doc, r'V = \frac{4Q}{\pi D^2}', '管道流速公式（D 取所选规格的公称内径或换算内径）：')
+        if has_pe_product_specs:
+            doc_add_formula(doc, r'd_i = \mathrm{DN} - 2e_n', 'PE 管名义计算内径：')
+            doc_add_eng_body(
+                doc,
+                f'PE 管产品规格按 {PE_STANDARD} 输出材料等级、DN×en、SDR 和 PN；'
+                '造价采用公称外径 DN 规格，流速与水头损失采用名义计算内径 di。'
+            )
+        if "DI" in product_families:
+            doc_add_formula(doc, r'd_i = DE - 2(e_{\mathrm{nom}}+e_c)', '球墨铸铁管名义计算内径：')
+            doc_add_eng_body(
+                doc,
+                '球墨铸铁管按各结果记录的产品标准版本、DN、插口外径 DE、公称壁厚及水泥砂浆内衬厚度换算名义内径；实际供货尺寸仍须复核。'
+            )
+        if "PCCP" in product_families:
+            doc_add_eng_body(
+                doc,
+                'PCCP 按产品型式和公称内径 DN 选径；PCCPE/PCCPL 型式与水力摩阻预设分别记录，结构、压力等级和配筋不由本水力模块确定。'
+            )
+        if "FRPM" in product_families:
+            doc_add_eng_body(
+                doc,
+                '玻璃钢夹砂管按 GB/T 21238—2016 内径系列进行水力选径；外径系列仅作连接和采购参考，不在缺少厂家壁厚时反算内径。'
+            )
         doc_add_eng_body(doc, '经济流速范围：0.9 m/s ≤ V ≤ 1.5 m/s。')
         doc_add_eng_body(doc, 'GB/T 20203-2017 第5.1.4.4：规划阶段局部损失可按沿程损失的10%~15%估算（程序默认局部损失比例为0.15，可手动调整）。')
         doc_add_eng_body(doc, 'GB/T 20203-2017 第5.1.5.2：允许设计流速要求包括最小流速0.3m/s（施肥施药工况0.6m/s）以及自压系统不宜大于2.5m/s、机压系统不宜大于2.0m/s。')
@@ -2213,13 +3109,66 @@ class PressurePipePanel(QWidget):
                 continue
             display_result_category = "指定" if result.category == "指定" else result.category
             mat_key = inp.material_key
-            mat_name = PIPE_MATERIALS[mat_key]["name"]
+            mat_name = _material_display_name(mat_key)
             mat_info = PIPE_MATERIALS[mat_key]
+            is_pe = _is_pe_candidate(rec)
+            is_product = _is_product_candidate(rec) and not is_pe
             section_prefix = f'7.{ri+1}' if n_cases > 1 else '7'
             title = f'{section_prefix}、工况{case_idx+1} 计算结果汇总' if n_cases > 1 else '7、计算结果汇总'
             doc_add_eng_h(doc, title)
-            summary_items = [
-                ("管材类型", mat_name),
+            summary_items = [("管材类型", mat_name)]
+            if is_pe or is_product:
+                nominal_mm = rec.nominal_outer_diameter_mm if is_pe else rec.nominal_diameter_mm
+                summary_items.append((
+                    "指定管径" if result.category == "指定" else "推荐管径",
+                    f"DN {_fmt_g(nominal_mm)}",
+                ))
+            if is_pe:
+                summary_items += [
+                    ("造价 / 采购规格", _pe_procurement_text(rec)),
+                    ("公称外径 DN", f"{_fmt_g(rec.nominal_outer_diameter_mm)} mm"),
+                    ("公称壁厚", f"{_fmt_g(rec.nominal_wall_thickness_mm)} mm"),
+                    ("名义计算内径 di", f"{_fmt_g(rec.hydraulic_inner_diameter_mm)} mm"),
+                    ("PE 材料 / 压力", f"{rec.pe_material_grade}，SDR{_fmt_g(rec.pe_sdr)}，PN{_fmt_g(rec.pe_nominal_pressure_mpa)} MPa"),
+                    ("产品标准", rec.product_standard or PE_STANDARD),
+                ]
+                legacy_flags = [
+                    flag for flag in getattr(rec, "flags", [])
+                    if str(flag).startswith("旧版水力内径")
+                ]
+                if legacy_flags:
+                    summary_items.append(("旧项目规格迁移", legacy_flags[0]))
+            elif is_product:
+                summary_items += [
+                    (steel_result_heading(result) if rec.product_family == 'STEEL' else "造价 / 采购规格", _product_procurement_text(rec)),
+                    (
+                        rec.nominal_basis if rec.product_family == 'STEEL' else f"公称直径 {rec.nominal_symbol}",
+                        f"{_fmt_g(rec.nominal_diameter_mm)} mm（{rec.nominal_basis}）",
+                    ),
+                    (
+                        "水力计算内径 di",
+                        f"{_fmt_g(rec.hydraulic_inner_diameter_mm)} mm",
+                    ),
+                    (
+                        "水力内径取值依据",
+                        rec.hydraulic_inner_diameter_basis or "目录名义内径",
+                    ),
+                    ("产品标准", "、".join(rec.product_standard_references)),
+                ]
+                frpm_boundary = _frpm_dimension_boundary(rec)
+                if frpm_boundary:
+                    frpm_range_text, frpm_tolerance_text = frpm_boundary
+                    summary_items += [
+                        ("管端内直径允许范围", frpm_range_text),
+                        ("相对所选设计内径值允许偏差", frpm_tolerance_text),
+                    ]
+                legacy_flags = [
+                    flag for flag in getattr(rec, "flags", [])
+                    if str(flag).startswith("旧版水力内径")
+                ]
+                if legacy_flags:
+                    summary_items.append(("旧项目规格迁移", legacy_flags[0]))
+            summary_items += [
                 (
                     "管材系数",
                     (
@@ -2236,8 +3185,9 @@ class PressurePipePanel(QWidget):
             for line in self._increase_summary_lines(inp, result):
                 key, _, value = line.partition(" = ")
                 summary_items.append((key, value))
+            if not is_pe and not is_product:
+                summary_items.append(("推荐管径 D", f"{rec.D} m ({rec.D*1000:.0f} mm)"))
             summary_items += [
-                ("推荐管径 D", f"{rec.D} m ({rec.D*1000:.0f} mm)"),
                 ("推荐类别", display_result_category),
                 ("有压流速 V", f"{rec.V_press:.4f} m/s"),
             ]
@@ -2257,15 +3207,28 @@ class PressurePipePanel(QWidget):
                     ("按管长折算总损失", f"{rec.h_loss_total_m:.4f} m"),
                 ]
             doc_add_result_table(doc, summary_items)
+            add_steel_sizing_to_word(doc, rec)
+            add_diameter_summary_to_word(doc, rec)
 
             # 候选管径对比表
             candidates = result.top_candidates
             if candidates:
                 sec_num = f'8.{ri+1}' if n_cases > 1 else '8'
                 doc_add_eng_h(doc, f'{sec_num}、候选管径对比表')
-                doc_add_eng_body(doc, '排序规则：推荐优先，类别优先级（经济→妥协→兜底），同类别按hf总升序。')
+                doc_add_eng_body(doc, '排序规则：推荐优先，类别优先级（经济→妥协→兜底），同类别按总水头损失升序。')
                 has_f_range = getattr(rec, "hf_total_lower_km", None) is not None
-                if has_f_range:
+                if is_pe:
+                    headers = [
+                        "公称外径×壁厚 DN×en(mm)", "材料/SDR/PN", "水力内径 di(mm)",
+                        "V(m/s)", "hf(m/km)", "hj(m/km)", "hf总(m/km)", "H损(m)", "类别",
+                    ]
+                elif is_product:
+                    loss_headers = (
+                        ["hf上/下(m/km)", "hj上/下(m/km)", "hf总上/下(m/km)", "H损上/下(m)"]
+                        if has_f_range else ["hf(m/km)", "hj(m/km)", "hf总(m/km)", "H损(m)"]
+                    )
+                    headers = ["产品规格", "水力内径 di(mm)", "V(m/s)", *loss_headers, "类别"]
+                elif has_f_range:
                     headers = [
                         "D(m)", "D(mm)", "V(m/s)", "hf上/下(m/km)",
                         "hj上/下(m/km)", "hf总上/下(m/km)", "H损上/下(m)", "类别",
@@ -2276,7 +3239,33 @@ class PressurePipePanel(QWidget):
                 data = []
                 for c in candidates:
                     display_cat = "指定" if "用户指定" in c.flags else c.category
-                    if has_f_range and getattr(c, "hf_total_lower_km", None) is not None:
+                    if is_pe and _is_pe_candidate(c):
+                        data.append([
+                            f"DN{_fmt_g(c.nominal_outer_diameter_mm)}×{_fmt_g(c.nominal_wall_thickness_mm)}",
+                            f"{c.pe_material_grade}/SDR{_fmt_g(c.pe_sdr)}/PN{_fmt_g(c.pe_nominal_pressure_mpa)}",
+                            _fmt_g(c.hydraulic_inner_diameter_mm),
+                            f"{c.V_press:.4f}", f"{c.hf_friction_km:.4f}",
+                            f"{c.hf_local_km:.4f}", f"{c.hf_total_km:.4f}",
+                            f"{c.h_loss_total_m:.4f}", display_cat,
+                        ])
+                    elif is_product and _is_product_candidate(c):
+                        product_losses = [
+                            f"{c.hf_friction_km:.4f}", f"{c.hf_local_km:.4f}",
+                            f"{c.hf_total_km:.4f}", f"{c.h_loss_total_m:.4f}",
+                        ]
+                        if has_f_range and getattr(c, "hf_total_lower_km", None) is not None:
+                            product_losses = [
+                                f"{c.hf_friction_km:.4f} / {c.hf_friction_lower_km:.4f}",
+                                f"{c.hf_local_km:.4f} / {c.hf_local_lower_km:.4f}",
+                                f"{c.hf_total_km:.4f} / {c.hf_total_lower_km:.4f}",
+                                f"{c.h_loss_total_m:.4f} / {c.h_loss_total_lower_m:.4f}",
+                            ]
+                        data.append([
+                            _product_procurement_text(c, include_standard=False),
+                            _fmt_g(c.hydraulic_inner_diameter_mm), f"{c.V_press:.4f}",
+                            *product_losses, display_cat,
+                        ])
+                    elif has_f_range and getattr(c, "hf_total_lower_km", None) is not None:
                         data.append([
                             f"{c.D:.3f}", f"{c.D*1000:.0f}", f"{c.V_press:.4f}",
                             f"{c.hf_friction_km:.4f} / {c.hf_friction_lower_km:.4f}",
@@ -2292,9 +3281,15 @@ class PressurePipePanel(QWidget):
                             f"{c.hf_total_km:.4f}", f"{c.h_loss_total_m:.4f}",
                             display_cat,
                         ])
+                highlight_value = (
+                    f"DN{_fmt_g(rec.nominal_outer_diameter_mm)}×{_fmt_g(rec.nominal_wall_thickness_mm)}"
+                    if is_pe else _product_procurement_text(rec, include_standard=False)
+                    if is_product else f"{rec.D:.3f}"
+                )
                 doc_add_styled_table(doc, headers, data,
-                                      highlight_col=0, highlight_val=f"{rec.D:.3f}",
+                                      highlight_col=0, highlight_val=highlight_value,
                                       with_full_border=True)
+                add_candidate_diameters_to_word(doc, candidates)
 
         doc.save(filepath)
 
@@ -2330,17 +3325,12 @@ class PressurePipePanel(QWidget):
                             parent=self, position=InfoBarPosition.TOP_RIGHT, duration=4000)
             return
 
-        # 选择输出目录
-        output_dir = QFileDialog.getExistingDirectory(self, "选择输出目录", "")
-        if not output_dir:
-            return
-
         # 解析 Q 范围（从 SpinBox 读取）
         try:
             q_start = float(self.batch_q_start.text().strip())
             q_end   = float(self.batch_q_end.text().strip())
             q_step  = float(self.batch_q_step.text().strip())
-            if q_step <= 0 or q_start > q_end:
+            if not all(math.isfinite(value) for value in (q_start, q_end, q_step)) or q_start <= 0 or q_step <= 0 or q_start > q_end:
                 raise ValueError("参数无效")
             import numpy as np
             q_values = np.round(np.arange(q_start, q_end + q_step * 0.5, q_step), 2)
@@ -2349,27 +3339,21 @@ class PressurePipePanel(QWidget):
                           parent=self, position=InfoBarPosition.TOP_RIGHT, duration=4000)
             return
 
-        # 解析无压对比参数（从标签芯片列表读取）
+        # 先检查完整自定义输入，不能悄悄使用有效子集。
+        height_limit, area_limit = None, None
         if self.batch_unpr_cb.isChecked():
-            slope_denoms = sorted(self._slope_values)
-            if not slope_denoms:
-                InfoBar.error(title="参数错误", content="请至少添加一个坡度分母",
-                              parent=self, position=InfoBarPosition.TOP_RIGHT, duration=4000)
-                return
-            n_text = self.batch_n_edit.text().strip()
-            if not n_text:
-                InfoBar.error(title="参数错误", content="请输入糙率 n",
-                              parent=self, position=InfoBarPosition.TOP_RIGHT, duration=4000)
-                return
             try:
-                n_unpr = float(n_text)
-            except ValueError:
-                InfoBar.error(title="参数错误", content="糙率 n 输入无效",
+                slope_denoms = self.slope_controls.values()
+                height_limit, area_limit = self.slope_controls.criteria()
+                n_unpr = float(self.batch_n_edit.text().strip())
+                if not math.isfinite(n_unpr) or n_unpr <= 0:
+                    raise ValueError("无压糙率必须为正有限数")
+            except ValueError as exc:
+                InfoBar.error(title="无压对比参数错误", content=str(exc),
                               parent=self, position=InfoBarPosition.TOP_RIGHT, duration=4000)
                 return
         else:
-            slope_denoms = []
-            n_unpr = 0.0
+            slope_denoms, n_unpr = [], 0.0
 
         # 管长
         bl_text = self.batch_length_edit.text().strip()
@@ -2379,7 +3363,7 @@ class PressurePipePanel(QWidget):
             return
         try:
             length_m = float(bl_text)
-            if length_m <= 0:
+            if not math.isfinite(length_m) or length_m <= 0:
                 raise ValueError
         except ValueError:
             InfoBar.error(title="参数错误", content="管长 L 输入无效",
@@ -2400,17 +3384,44 @@ class PressurePipePanel(QWidget):
             return
         try:
             local_ratio = float(lr_text)
-            if local_ratio < 0:
+            if not math.isfinite(local_ratio) or local_ratio < 0:
                 raise ValueError
         except ValueError:
             InfoBar.error(title="参数错误", content="局部损失比例输入无效",
                           parent=self, position=InfoBarPosition.TOP_RIGHT, duration=4000)
             return
 
+        pe_grade = self.batch_pe_grade_combo.currentText() or "PE100"
+        pe_pn_mpa = self._selected_pe_pn(
+            self.batch_pe_pn_combo, "_batch_pe_pn_options", default=1.0
+        )
+        try:
+            get_pe_sdr(pe_grade, pe_pn_mpa)
+        except ValueError as ex:
+            InfoBar.error(title="PE 规格错误", content=str(ex),
+                          parent=self, position=InfoBarPosition.TOP_RIGHT, duration=4000)
+            return
+
+        steel_kwargs = {}
+        if '钢管' in selected_mats:
+            try:
+                steel_kwargs = parse_steel_state(self.batch_steel_controls.state(), batch=True)
+            except ValueError as exc:
+                InfoBar.error(title='钢管尺寸错误', content=str(exc), parent=self,
+                              position=InfoBarPosition.TOP_RIGHT, duration=5000)
+                return
+        # 选择输出目录
+        output_dir = QFileDialog.getExistingDirectory(self, "选择输出目录", "")
+        if not output_dir:
+            return
+
         config = BatchScanConfig(
             q_values=q_values,
             slope_denominators=slope_denoms,
-            diameter_values=DEFAULT_DIAMETER_SERIES,
+            unpr_clearance_height=height_limit,
+            unpr_clearance_area=area_limit,
+            # None 表示由内核按管材选用目录；关闭产品目录时，非 PE 回退默认内径序列。
+            diameter_values=None,
             materials=selected_mats,
             n_unpr=n_unpr,
             length_m=length_m,
@@ -2420,6 +3431,12 @@ class PressurePipePanel(QWidget):
             output_pdf_charts=self.out_pdf_cb.isChecked(),
             output_merged_pdf=self.out_merged_cb.isChecked(),
             output_subplot_png=self.out_png_cb.isChecked(),
+            pe_material_grade=pe_grade,
+            pe_nominal_pressure_mpa=pe_pn_mpa,
+            use_product_catalogs=True,
+            ductile_iron_class=self._selected_di_class(self.batch_di_class_combo),
+            pccp_variant=self._selected_pccp_variant(self.batch_pccp_variant_combo),
+            **steel_kwargs,
         )
 
         # 切换UI
@@ -2436,9 +3453,31 @@ class PressurePipePanel(QWidget):
             f"流量 {len(q_values)} 个，坡度 {len(slope_denoms) if slope_denoms else 0} 个，"
             f"管材 {len(selected_mats)} 种；输出目录：{output_dir}"
         )
+        if "HDPE管" in selected_mats:
+            self._append_batch_log_message(
+                f"PE 规格：{pe_grade}，PN{_fmt_g(pe_pn_mpa)} MPa（"
+                f"SDR{_fmt_g(get_pe_sdr(pe_grade, pe_pn_mpa))}），{PE_STANDARD}"
+            )
+        selected_families = {
+            get_catalog_family(key) for key in selected_mats if get_catalog_family(key)
+        }
+        if selected_families:
+            details = []
+            if "DI" in selected_families:
+                details.append(
+                    f"球墨铸铁管等级：{self.batch_di_class_combo.currentText()}"
+                )
+            if "PCCP" in selected_families:
+                details.append(
+                    f"PCCP={self._selected_pccp_variant(self.batch_pccp_variant_combo)}"
+                )
+            if "FRPM" in selected_families:
+                details.append("玻璃钢夹砂管：标准内径")
+            self._append_batch_log_message("管材规格：" + "，".join(details))
         self.notebook.setCurrentIndex(1)
 
         # 启动线程
+        self._batch_comparison_inputs = self._comparison_input_state()
         self._batch_worker = _BatchWorker(config, self)
         self._batch_worker.progress.connect(self._on_batch_progress)
         self._batch_worker.finished.connect(self._on_batch_finished)
@@ -2472,6 +3511,20 @@ class PressurePipePanel(QWidget):
         self.batch_progress.setVisible(False)
         self.batch_status_label.setText("完成")
 
+        if any("用户取消" in log for log in result.logs):
+            self.batch_status_label.setText("已取消")
+            self._append_batch_log_message("批量计算已取消；保留上次完成的结果。")
+            return
+        self._comparison_rows = result.comparison_rows
+        self._comparison_status = ''
+        self._comparison_view_state = {}
+        self.notebook.setCurrentIndex(1)
+        if result.comparison_rows:
+            if getattr(self, '_batch_comparison_inputs', None) != self._comparison_input_state():
+                self._mark_comparison_stale()
+        if result.comparison_csv_path:
+            self._append_batch_log_message(f"无压对比明细: {result.comparison_csv_path}")
+
         for log in result.logs:
             self._append_batch_log_message(log)
 
@@ -2479,6 +3532,10 @@ class PressurePipePanel(QWidget):
             self._append_batch_log_message(f"CSV 路径: {result.csv_path}")
         if result.merged_pdf:
             self._append_batch_log_message(f"合并PDF: {result.merged_pdf}")
+        for path in result.generated_pdfs:
+            self._append_batch_log_message(f"图表 PDF: {path}")
+        for path in result.generated_pngs:
+            self._append_batch_log_message(f"子图 PNG: {path}")
         self._append_batch_log_message(
             f"批量计算完成：共生成 {len(result.generated_pdfs)} 个PDF，"
             f"{len(result.generated_pngs)} 个PNG。"
@@ -2486,7 +3543,7 @@ class PressurePipePanel(QWidget):
 
         InfoBar.success(
             title="批量计算完成",
-            content=f"CSV + {len(result.generated_pdfs)} PDF 已输出",
+            content=f"已完成；生成 {len(result.generated_pdfs)} PDF、{len(result.generated_pngs)} PNG",
             parent=self,
             position=InfoBarPosition.TOP_RIGHT,
             duration=5000,
@@ -2708,6 +3765,26 @@ class PressurePipePanel(QWidget):
     # ================================================================
     # 项目保存/加载
     # ================================================================
+    def _comparison_input_state(self):
+        """提取影响批量结果的输入，用于保存和识别计算期间的编辑。"""
+        return {
+            'enabled': self.batch_unpr_cb.isChecked(), 'inputs': self.slope_controls.state(),
+            'flow_range': [self.batch_q_start.text(), self.batch_q_end.text(), self.batch_q_step.text()],
+            'length': self.batch_length_edit.text(), 'local_ratio': self.batch_local_ratio_edit.text(),
+            'materials': [key for key, checkbox in self._mat_cbs.items() if checkbox.isChecked()],
+            'pe_grade': self.batch_pe_grade_combo.currentText(), 'pe_pn': self.batch_pe_pn_combo.currentText(),
+            'di_class': self.batch_di_class_combo.currentText(), 'pccp': self.batch_pccp_variant_combo.currentText(),
+            'steel': self.batch_steel_controls.state(),
+        }
+
+    def _comparison_project_state(self):
+        """保存无压输入与结果快照，兼容尚未构造批量区的调用者。"""
+        if not hasattr(self, 'slope_controls'):
+            return {}
+        return {**self._comparison_input_state(), 'rows': getattr(self, '_comparison_rows', []),
+                'status': getattr(self, '_comparison_status', ''),
+                'view': getattr(self, '_comparison_view_state', {})}
+
     def to_project_dict(self):
         """序列化当前状态用于项目保存。"""
         self._save_current_case()
@@ -2720,15 +3797,38 @@ class PressurePipePanel(QWidget):
             'export_plain_text': self._export_plain_text,
             'result_state': collect_case_result_state(self),
             'notebook_idx': self.notebook.currentIndex() if hasattr(self, 'notebook') else 0,
+            'steel_batch': self.batch_steel_controls.state() if hasattr(self, 'batch_steel_controls') else dict(STEEL_CASE_DEFAULTS),
+            'unpressurized_comparison': self._comparison_project_state(),
         })
 
     def from_project_dict(self, data):
         """从项目数据恢复面板状态。"""
         if not isinstance(data, dict):
             return
+        self.batch_steel_controls.set_state(data.get('steel_batch') or STEEL_CASE_DEFAULTS)
+        comparison = data.get('unpressurized_comparison') or {}
+        self.slope_controls.set_state(comparison.get('inputs'))
+        self.batch_unpr_cb.setChecked(bool(comparison.get('enabled', False)))
+        for edit, value in zip((self.batch_q_start, self.batch_q_end, self.batch_q_step), comparison.get('flow_range', [])):
+            edit.setText(str(value))
+        if 'length' in comparison:
+            self.batch_length_edit.setText(str(comparison['length']))
+        if 'local_ratio' in comparison:
+            self.batch_local_ratio_edit.setText(str(comparison['local_ratio']))
+        if 'materials' in comparison:
+            for key, checkbox in self._mat_cbs.items():
+                checkbox.setChecked(key in comparison['materials'])
+        for key, combo in (('pe_grade', self.batch_pe_grade_combo), ('pe_pn', self.batch_pe_pn_combo),
+                           ('di_class', self.batch_di_class_combo), ('pccp', self.batch_pccp_variant_combo)):
+            if key in comparison:
+                self._set_combo_text(combo, comparison[key])
+        # 保留旧项目快照供兼容存档，不再构造已移除的结果页面。
+        self._comparison_rows = copy.deepcopy(comparison.get('rows') or [])
+        self._comparison_status = comparison.get('status') or ''
+        self._comparison_view_state = copy.deepcopy(comparison.get('view') or {})
         cases = data.get('cases')
         if isinstance(cases, list) and cases:
-            self._cases = cases
+            self._cases = [self._normalized_case_data(case) for case in cases]
         else:
             self._cases = [self._default_case()]
 
@@ -2765,6 +3865,12 @@ class PressurePipePanel(QWidget):
                 self._suppress_project_restore_side_effects = False
             if self._all_results:
                 apply_case_result_state(self, result_state)
+                # 历史钢管结果仍可查看，重算前不得误标成新的最小外径计算成果。
+                old_steel_indexes = [index for index, inp, saved in self._all_results
+                                     if inp.material_key == '钢管'
+                                     and not getattr(saved.recommended, 'steel_sizing_trace', None)]
+                if old_steel_indexes:
+                    self._mark_results_dirty(case_indexes=old_steel_indexes)
             if hasattr(self, 'notebook'):
                 tab_idx = data.get('notebook_idx')
                 if isinstance(tab_idx, int):

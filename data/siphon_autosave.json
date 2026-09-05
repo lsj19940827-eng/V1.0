@@ -1,13 +1,13 @@
 {
   "version": "1.0",
-  "saved_at": "2026-05-13 10:14:26",
+  "saved_at": "2026-09-05 22:55:35",
   "data": {
     "Q": 5.0,
     "v_guess": 5.2613,
     "v_before_override": 2.0,
     "v_confirmed_before_override": true,
     "n": 0.014,
-    "turn_n": 3.0,
+    "turn_n": 7.273,
     "threshold": "",
     "inlet_type": "直线扭曲面",
     "outlet_type": "直线扭曲面",

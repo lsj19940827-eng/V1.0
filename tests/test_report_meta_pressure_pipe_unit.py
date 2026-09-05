@@ -3,8 +3,8 @@
 report_meta 配置单元测试（有压管道模块）
 
 校验：
-1) REFERENCES_BASE['pressure_pipe'] 同时包含 GB 50288 与 GB/T 20203
-2) CALC_PURPOSE_TEMPLATE['pressure_pipe'] 使用双规范并列表述
+1) REFERENCES_BASE['pressure_pipe'] 只保留所有管材通用的水力设计规范
+2) CALC_PURPOSE_TEMPLATE['pressure_pipe'] 保持管材中立，专项标准由实际成果动态追加
 """
 
 import ast
@@ -25,15 +25,20 @@ def _read_dict_literal(var_name: str):
     raise AssertionError(f"未找到变量: {var_name}")
 
 
-def test_pressure_pipe_references_include_dual_standards():
+def test_pressure_pipe_base_references_only_include_common_hydraulic_standards():
     references_base = _read_dict_literal("REFERENCES_BASE")
     pressure_refs = references_base["pressure_pipe"]
     assert "《灌溉与排水工程设计标准》(GB 50288-2018)" in pressure_refs
     assert "《管道输水灌溉工程技术规范》(GB/T 20203-2017)" in pressure_refs
+    assert all("GB/T 13663" not in reference for reference in pressure_refs)
 
 
-def test_pressure_pipe_calc_purpose_mentions_dual_standards():
+def test_pressure_pipe_calc_purpose_is_material_neutral_and_separates_diameter_bases():
     calc_purpose_template = _read_dict_literal("CALC_PURPOSE_TEMPLATE")
     purpose = calc_purpose_template["pressure_pipe"]
     assert "GB 50288-2018" in purpose
     assert "GB/T 20203-2017" in purpose
+    assert "GB/T 13663" not in purpose
+    assert "实际管材对应的工程或产品标准" in purpose
+    assert "采购口径" in purpose
+    assert "名义计算内径" in purpose

@@ -1,0 +1,163 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e3]: 工况 1有压管道 · Q=2
+  - generic [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - generic [ref=f1e6]: 推荐管径 DN 1400
+      - generic [ref=f1e7]: 经济 · 按设计流速分类
+    - generic [ref=f1e8]: 球墨铸铁管 · 水力内径 1412.6 mm · 管长 1000 m
+    - table "设计与加大工况对比" [ref=f1e10]:
+      - rowgroup [ref=f1e11]:
+        - row [ref=f1e12]:
+          - columnheader "计算指标" [ref=f1e13]
+          - columnheader "设计工况 经济流速分类依据" [ref=f1e14]:
+            - text: 设计工况
+            - generic [ref=f1e15]: 经济流速分类依据
+          - columnheader "加大工况 · 25.000% 水损筛选依据" [ref=f1e16]:
+            - text: 加大工况 · 25.000%
+            - generic [ref=f1e17]: 水损筛选依据
+      - rowgroup [ref=f1e18]:
+        - row [ref=f1e19]:
+          - rowheader "流量" [ref=f1e20]
+          - cell "2.000 m³/s" [ref=f1e21]
+          - cell "2.500 m³/s" [ref=f1e22]
+        - row [ref=f1e23]:
+          - rowheader "流速" [ref=f1e24]
+          - cell "1.2761 m/s 处于经济流速区间" [ref=f1e25]:
+            - text: 1.2761 m/s
+            - generic [ref=f1e26]: 处于经济流速区间
+          - cell "1.5952 m/s 高于经济流速上限" [ref=f1e27]:
+            - text: 1.5952 m/s
+            - generic [ref=f1e28]: 高于经济流速上限
+        - row [ref=f1e29]:
+          - rowheader "沿程水损（f 上限 / 下限）" [ref=f1e30]
+          - cell "1.4187 / 1.2070 m/km" [ref=f1e31]
+          - cell "2.1447 / 1.8247 m/km" [ref=f1e32]
+        - row [ref=f1e33]:
+          - rowheader "局部水损（f 上限 / 下限）" [ref=f1e34]
+          - cell "0.2128 / 0.1811 m/km" [ref=f1e35]
+          - cell "0.3217 / 0.2737 m/km" [ref=f1e36]
+        - row [ref=f1e37]:
+          - rowheader "总水损（f 上限 / 下限）" [ref=f1e38]
+          - cell "1.6315 / 1.3881 m/km" [ref=f1e39]
+          - cell "2.4664 / 2.0984 m/km" [ref=f1e40]
+        - row [ref=f1e41]:
+          - rowheader "全管长水损（f 上限 / 下限）" [ref=f1e42]
+          - cell "1.6315 / 1.3881 m" [ref=f1e43]
+          - cell "2.4664 / 2.0984 m" [ref=f1e44]
+    - generic [ref=f1e45]:
+      - generic [ref=f1e46]: 经济流速区间：0.9～1.5 m/s
+      - generic [ref=f1e47]: 加大工况总水损上限：5 m/km
+  - generic [ref=f1e48]: 球墨铸铁管的推荐管径与类别按 f 上限 223200 判定；结果表同时列出 f 上限 223200 和 f 下限 189900，用户可按采用的设计依据选取。
+  - generic [ref=f1e49]: 候选管径对比 排序：推荐优先，类别优先，同类别按总水损 · GB/T 13295—2026 / GB/T 17457—2019
+  - table [ref=f1e50]:
+    - rowgroup [ref=f1e51]:
+      - row [ref=f1e52]:
+        - columnheader "#" [ref=f1e53]
+        - columnheader "产品规格" [ref=f1e54]
+        - columnheader "水力内径 di(mm)" [ref=f1e55]: 水力内径di(mm)
+        - columnheader "设计流速 (m/s)" [ref=f1e56]: 设计流速(m/s)
+        - columnheader "加大流速 (m/s)" [ref=f1e57]: 加大流速(m/s)
+        - columnheader "加大工况总水损 f 上限 / 下限 (m/km)" [ref=f1e58]: 加大工况总水损f 上限 / 下限(m/km)
+        - columnheader "类别 按设计流速" [ref=f1e59]: 类别按设计流速
+        - columnheader [ref=f1e60]
+      - row [ref=f1e61]:
+        - cell "1" [ref=f1e62]
+        - cell "DN 1400" [ref=f1e63]
+        - cell "1412.6" [ref=f1e64]
+        - cell "1.2761" [ref=f1e65]
+        - cell "1.5952" [ref=f1e66]
+        - cell "2.4664 2.0984" [ref=f1e67]: 2.46642.0984
+        - cell "经济" [ref=f1e68]
+        - cell "★ 推荐" [ref=f1e69]
+      - row [ref=f1e71]:
+        - cell "2" [ref=f1e72]
+        - cell "DN 1600" [ref=f1e73]
+        - cell "1614.6" [ref=f1e74]
+        - cell "0.9768" [ref=f1e75]
+        - cell "1.2210" [ref=f1e76]
+        - cell "1.2864 1.0945" [ref=f1e77]: 1.28641.0945
+        - cell "经济" [ref=f1e78]
+        - cell [ref=f1e79]
+      - row [ref=f1e80]:
+        - cell "3" [ref=f1e81]
+        - cell "DN 1500" [ref=f1e82]
+        - cell "1513.6" [ref=f1e83]
+        - cell "1.1115" [ref=f1e84]
+        - cell "1.3894" [ref=f1e85]
+        - cell "1.7620 1.4991" [ref=f1e86]: 1.76201.4991
+        - cell "经济" [ref=f1e87]
+        - cell [ref=f1e88]
+      - row [ref=f1e89]:
+        - cell "4" [ref=f1e90]
+        - cell "DN 2000" [ref=f1e91]
+        - cell "2020.4" [ref=f1e92]
+        - cell "0.6238" [ref=f1e93]
+        - cell "0.7798" [ref=f1e94]
+        - cell "0.4317 0.3673" [ref=f1e95]: 0.43170.3673
+        - cell "妥协" [ref=f1e96]
+        - cell [ref=f1e97]
+      - row [ref=f1e98]:
+        - cell "5" [ref=f1e99]
+        - cell "DN 1800" [ref=f1e100]
+        - cell "1817.6" [ref=f1e101]
+        - cell "0.7708" [ref=f1e102]
+        - cell "0.9635" [ref=f1e103]
+        - cell "0.7226 0.6148" [ref=f1e104]: 0.72260.6148
+        - cell "妥协" [ref=f1e105]
+        - cell [ref=f1e106]
+  - generic [ref=f1e107]:
+    - generic [ref=f1e108]: 造价 / 采购规格（产品目录口径）
+    - generic [ref=f1e109]: 球墨铸铁管 DN1400，C25，DE1462×e15.7 mm，水泥砂浆内衬 9 mm，GB/T 13295—2026、GB/T 17457—2019
+    - generic [ref=f1e110]:
+      - text: 水力计算采用 DE-2(e_nom+e_c) 名义换算 d
+      - subscript [ref=f1e111]: i
+      - text: = 1412.6 mm。
+  - generic [ref=f1e112]:
+    - generic [ref=f1e113]: 输入方式 = 按比例（自动查表）
+    - generic [ref=f1e114]: 用户输入 = 未填写，按规范自动查表
+    - generic [ref=f1e115]: 系统换算 = 流量加大比例 = 25.000% ，Q加大 = 2.500 m³/s
+  - generic [ref=f1e116]:
+    - generic [ref=f1e117]: 公称直径、壁厚与水力内径
+    - generic [ref=f1e118]:
+      - generic "公称尺寸 DN 1400 mm" [ref=f1e119]:
+        - generic [ref=f1e120]: 公称尺寸 DN
+        - strong [ref=f1e121]: 1400 mm
+      - generic "插口外径 DE 1462 mm" [ref=f1e122]:
+        - generic [ref=f1e123]: 插口外径 DE
+        - strong [ref=f1e124]: 1462 mm
+      - generic "单侧管壁厚 15.7 mm" [ref=f1e125]:
+        - generic [ref=f1e126]: 单侧管壁厚
+        - strong [ref=f1e127]: 15.7 mm
+      - generic "单侧内衬厚 9 mm" [ref=f1e128]:
+        - generic [ref=f1e129]: 单侧内衬厚
+        - strong [ref=f1e130]: 9 mm
+      - generic "水力内径 1412.6 mm" [ref=f1e131]:
+        - generic [ref=f1e132]: 水力内径
+        - strong [ref=f1e133]: 1412.6 mm
+    - generic [ref=f1e134]: 球墨铸铁管的 DN 是规格名称。按该口径和等级查得插口外径、管壁厚及内衬厚，再从外径扣除两侧管壁和内衬。
+    - generic "水力内径 = 插口外径 − 2 ×（单侧管壁厚 + 单侧内衬厚）" [ref=f1e135]
+    - generic "1462 − 2 × (15.7 + 9) = 1412.6 mm" [ref=f1e158]
+    - generic [ref=f1e192]: 取值依据：GB/T 13295—2026 4.2.2.2、表16、表C.1；GB/T 17457—2019 5.1、表1
+  - generic [ref=f1e193]: 其他候选的壁厚与内径换算（按对比表顺序，当前规格见上文）
+  - table [ref=f1e194]:
+    - rowgroup [ref=f1e195]:
+      - row [ref=f1e196]:
+        - cell "DN1600 · 单侧管壁 17.7 mm；单侧内衬 9 mm 1668 − 2 × (17.7 + 9) = 1614.6 mm" [ref=f1e197]:
+          - generic [ref=f1e198]:
+            - generic [ref=f1e199]: DN1600 · 单侧管壁 17.7 mm；单侧内衬 9 mm
+            - generic "1668 − 2 × (17.7 + 9) = 1614.6 mm" [ref=f1e200]
+      - row [ref=f1e234]:
+        - cell "DN1500 · 单侧管壁 16.7 mm；单侧内衬 9 mm 1565 − 2 × (16.7 + 9) = 1513.6 mm" [ref=f1e235]:
+          - generic [ref=f1e236]:
+            - generic [ref=f1e237]: DN1500 · 单侧管壁 16.7 mm；单侧内衬 9 mm
+            - generic "1565 − 2 × (16.7 + 9) = 1513.6 mm" [ref=f1e238]
+      - row [ref=f1e272]:
+        - cell "DN2000 · 单侧管壁 21.8 mm；单侧内衬 9 mm 2082 − 2 × (21.8 + 9) = 2020.4 mm" [ref=f1e273]:
+          - generic [ref=f1e274]:
+            - generic [ref=f1e275]: DN2000 · 单侧管壁 21.8 mm；单侧内衬 9 mm
+            - generic "2082 − 2 × (21.8 + 9) = 2020.4 mm" [ref=f1e276]
+      - row [ref=f1e310]:
+        - cell "DN1800 · 单侧管壁 19.7 mm；单侧内衬 9 mm 1875 − 2 × (19.7 + 9) = 1817.6 mm" [ref=f1e311]:
+          - generic [ref=f1e312]:
+            - generic [ref=f1e313]: DN1800 · 单侧管壁 19.7 mm；单侧内衬 9 mm
+            - generic "1875 − 2 × (19.7 + 9) = 1817.6 mm" [ref=f1e314]

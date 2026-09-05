@@ -1,0 +1,162 @@
+- generic [ref=f3e2]:
+  - generic [ref=f3e3]: 工况 1有压管道 · Q=2
+  - generic [ref=f3e4]:
+    - generic [ref=f3e5]:
+      - generic [ref=f3e6]: 推荐管径 DN 1600
+      - generic [ref=f3e7]: 经济 · 按设计流速分类
+    - generic [ref=f3e8]: 聚乙烯（PE）管 · 水力内径 1411.8 mm · 管长 1000 m
+    - table "设计与加大工况对比" [ref=f3e10]:
+      - rowgroup [ref=f3e11]:
+        - row [ref=f3e12]:
+          - columnheader "计算指标" [ref=f3e13]
+          - columnheader "设计工况 经济流速分类依据" [ref=f3e14]:
+            - text: 设计工况
+            - generic [ref=f3e15]: 经济流速分类依据
+          - columnheader "加大工况 · 25.000% 水损筛选依据" [ref=f3e16]:
+            - text: 加大工况 · 25.000%
+            - generic [ref=f3e17]: 水损筛选依据
+      - rowgroup [ref=f3e18]:
+        - row [ref=f3e19]:
+          - rowheader "流量" [ref=f3e20]
+          - cell "2.000 m³/s" [ref=f3e21]
+          - cell "2.500 m³/s" [ref=f3e22]
+        - row [ref=f3e23]:
+          - rowheader "流速" [ref=f3e24]
+          - cell "1.2776 m/s 处于经济流速区间" [ref=f3e25]:
+            - text: 1.2776 m/s
+            - generic [ref=f3e26]: 处于经济流速区间
+          - cell "1.5970 m/s 高于经济流速上限" [ref=f3e27]:
+            - text: 1.5970 m/s
+            - generic [ref=f3e28]: 高于经济流速上限
+        - row [ref=f3e29]:
+          - rowheader "沿程水损" [ref=f3e30]
+          - cell "0.6024 m/km" [ref=f3e31]
+          - cell "0.8941 m/km" [ref=f3e32]
+        - row [ref=f3e33]:
+          - rowheader "局部水损" [ref=f3e34]
+          - cell "0.0904 m/km" [ref=f3e35]
+          - cell "0.1341 m/km" [ref=f3e36]
+        - row [ref=f3e37]:
+          - rowheader "总水损" [ref=f3e38]
+          - cell "0.6927 m/km" [ref=f3e39]
+          - cell "1.0282 m/km" [ref=f3e40]
+        - row [ref=f3e41]:
+          - rowheader "全管长水损" [ref=f3e42]
+          - cell "0.6927 m" [ref=f3e43]
+          - cell "1.0282 m" [ref=f3e44]
+    - generic [ref=f3e45]:
+      - generic [ref=f3e46]: 经济流速区间：0.9～1.5 m/s
+      - generic [ref=f3e47]: 加大工况总水损上限：5 m/km
+  - generic [ref=f3e48]: 候选管径对比 排序：推荐优先，类别优先，同类别按总水损 · PE100 / SDR17 / PN1 MPa · GB/T 13663.2—2018
+  - table [ref=f3e49]:
+    - rowgroup [ref=f3e50]:
+      - row [ref=f3e51]:
+        - columnheader "#" [ref=f3e52]
+        - columnheader "公称外径 × 壁厚 DN×en(mm)" [ref=f3e53]: 公称外径 × 壁厚DN×en(mm)
+        - columnheader "材料 / SDR / PN" [ref=f3e54]
+        - columnheader "水力内径 di(mm)" [ref=f3e55]: 水力内径di(mm)
+        - columnheader "设计流速 (m/s)" [ref=f3e56]: 设计流速(m/s)
+        - columnheader "加大流速 (m/s)" [ref=f3e57]: 加大流速(m/s)
+        - columnheader "加大工况总水损 (m/km)" [ref=f3e58]: 加大工况总水损(m/km)
+        - columnheader "类别 按设计流速" [ref=f3e59]: 类别按设计流速
+        - columnheader [ref=f3e60]
+      - row [ref=f3e61]:
+        - cell "1" [ref=f3e62]
+        - cell "DN1600×94.1" [ref=f3e63]
+        - cell "PE100 / SDR17 PN1 MPa" [ref=f3e64]: PE100 / SDR17PN1 MPa
+        - cell "1411.8" [ref=f3e65]
+        - cell "1.2776" [ref=f3e66]
+        - cell "1.5970" [ref=f3e67]
+        - cell "1.0282" [ref=f3e68]
+        - cell "经济" [ref=f3e69]
+        - cell "★ 推荐" [ref=f3e70]
+      - row [ref=f3e72]:
+        - cell "2" [ref=f3e73]
+        - cell "DN1800×105.9" [ref=f3e74]
+        - cell "PE100 / SDR17 PN1 MPa" [ref=f3e75]: PE100 / SDR17PN1 MPa
+        - cell "1588.2" [ref=f3e76]
+        - cell "1.0096" [ref=f3e77]
+        - cell "1.2619" [ref=f3e78]
+        - cell "0.5864" [ref=f3e79]
+        - cell "经济" [ref=f3e80]
+        - cell [ref=f3e81]
+      - row [ref=f3e82]:
+        - cell "3" [ref=f3e83]
+        - cell "DN2000×117.6" [ref=f3e84]
+        - cell "PE100 / SDR17 PN1 MPa" [ref=f3e85]: PE100 / SDR17PN1 MPa
+        - cell "1764.8" [ref=f3e86]
+        - cell "0.8176" [ref=f3e87]
+        - cell "1.0220" [ref=f3e88]
+        - cell "0.3546" [ref=f3e89]
+        - cell "妥协" [ref=f3e90]
+        - cell [ref=f3e91]
+      - row [ref=f3e92]:
+        - cell "4" [ref=f3e93]
+        - cell "DN1400×82.4" [ref=f3e94]
+        - cell "PE100 / SDR17 PN1 MPa" [ref=f3e95]: PE100 / SDR17PN1 MPa
+        - cell "1235.2" [ref=f3e96]
+        - cell "1.6690" [ref=f3e97]
+        - cell "2.0863" [ref=f3e98]
+        - cell "1.9450" [ref=f3e99]
+        - cell "兜底" [ref=f3e100]
+        - cell [ref=f3e101]
+      - row [ref=f3e102]:
+        - cell "5" [ref=f3e103]
+        - cell "DN1200×67.9" [ref=f3e104]
+        - cell "PE100 / SDR17 PN1 MPa" [ref=f3e105]: PE100 / SDR17PN1 MPa
+        - cell "1064.2" [ref=f3e106]
+        - cell "2.2485" [ref=f3e107]
+        - cell "2.8106" [ref=f3e108]
+        - cell "3.9593" [ref=f3e109]
+        - cell "兜底" [ref=f3e110]
+        - cell [ref=f3e111]
+  - generic [ref=f3e112]:
+    - generic [ref=f3e113]: 造价 / 采购规格（公称外径口径）
+    - generic [ref=f3e114]: PE100给水管，DN1600×94.1 mm，SDR17，PN1 MPa，GB/T 13663.2—2018
+    - generic [ref=f3e115]:
+      - text: 水力计算采用名义内径 d
+      - subscript [ref=f3e116]: i
+      - text: = 1411.8 mm， 与造价用公称外径 DN 分开。
+  - generic [ref=f3e117]:
+    - generic [ref=f3e118]: 输入方式 = 按比例（自动查表）
+    - generic [ref=f3e119]: 用户输入 = 未填写，按规范自动查表
+    - generic [ref=f3e120]: 系统换算 = 流量加大比例 = 25.000% ，Q加大 = 2.500 m³/s
+  - generic [ref=f3e121]:
+    - generic [ref=f3e122]: 公称直径、壁厚与水力内径
+    - generic [ref=f3e123]:
+      - generic "公称外径 DN 1600 mm" [ref=f3e124]:
+        - generic [ref=f3e125]: 公称外径 DN
+        - strong [ref=f3e126]: 1600 mm
+      - generic "单侧壁厚 94.1 mm" [ref=f3e127]:
+        - generic [ref=f3e128]: 单侧壁厚
+        - strong [ref=f3e129]: 94.1 mm
+      - generic "水力内径 1411.8 mm" [ref=f3e130]:
+        - generic [ref=f3e131]: 水力内径
+        - strong [ref=f3e132]: 1411.8 mm
+    - generic [ref=f3e133]: PE 管的 DN 表示公称外径；单侧壁厚指一侧管壁的厚度。水流通过中间的净空，两侧管壁各扣一次。
+    - generic "水力内径 = 公称外径 − 2 × 单侧壁厚" [ref=f3e134]
+    - generic "1600 − 2 × 94.1 = 1411.8 mm" [ref=f3e150]
+    - generic [ref=f3e180]: 取值依据：GB/T 13663.2—2018 表3；公称外径对应行、所选 SDR 对应列的表列壁厚。壁厚直接查表，不用外径除以 SDR 替代表值。
+  - generic [ref=f3e181]: 其他候选的壁厚与内径换算（按对比表顺序，当前规格见上文）
+  - table [ref=f3e182]:
+    - rowgroup [ref=f3e183]:
+      - row [ref=f3e184]:
+        - cell "DN1800 · 单侧壁厚 105.9 mm 1800 − 2 × 105.9 = 1588.2 mm" [ref=f3e185]:
+          - generic [ref=f3e186]:
+            - generic [ref=f3e187]: DN1800 · 单侧壁厚 105.9 mm
+            - generic "1800 − 2 × 105.9 = 1588.2 mm" [ref=f3e188]
+      - row [ref=f3e219]:
+        - cell "DN2000 · 单侧壁厚 117.6 mm 2000 − 2 × 117.6 = 1764.8 mm" [ref=f3e220]:
+          - generic [ref=f3e221]:
+            - generic [ref=f3e222]: DN2000 · 单侧壁厚 117.6 mm
+            - generic "2000 − 2 × 117.6 = 1764.8 mm" [ref=f3e223]
+      - row [ref=f3e254]:
+        - cell "DN1400 · 单侧壁厚 82.4 mm 1400 − 2 × 82.4 = 1235.2 mm" [ref=f3e255]:
+          - generic [ref=f3e256]:
+            - generic [ref=f3e257]: DN1400 · 单侧壁厚 82.4 mm
+            - generic "1400 − 2 × 82.4 = 1235.2 mm" [ref=f3e258]
+      - row [ref=f3e288]:
+        - cell "DN1200 · 单侧壁厚 67.9 mm 1200 − 2 × 67.9 = 1064.2 mm" [ref=f3e289]:
+          - generic [ref=f3e290]:
+            - generic [ref=f3e291]: DN1200 · 单侧壁厚 67.9 mm
+            - generic "1200 − 2 × 67.9 = 1064.2 mm" [ref=f3e292]

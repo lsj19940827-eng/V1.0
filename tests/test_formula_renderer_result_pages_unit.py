@@ -144,6 +144,41 @@ def test_formula_renderer_keeps_design_method_step_as_plain_text_card():
 
 
 @pytest.mark.parametrize(
+    ("text", "tokens"),
+    [
+        ("di = DE - 2(e_nom + e_c) = 842 - 2×(9.6 + 6) = 810.8 mm = 0.8108 m",
+         ["d_i", "e_{nom}", "e_c", r"810.8 \; \mathrm{mm}"]),
+        ("di = dn - 2en = 800 - 2×47.4 = 705.2 mm", ["d_i", "d_n", "2e_n"]),
+        ("Q_out = Q_in + Q_10", ["Q_{out}", "Q_{in}", "Q_{10}"]),
+        (r"d_i = DE - 2(e_{\mathrm{nom}} + e_c)", [r"e_{\mathrm{nom}}", "d_i"]),
+    ],
+)
+def test_engineering_subscripts_render_as_complete_groups(text, tokens):
+    """覆盖截图、PE连写、多字母及数字下标，并保护已有LaTeX分组。"""
+    latex = renderer.text_to_latex(text)
+    for token in tokens:
+        assert token in latex
+    assert renderer.render_latex_svg(latex) is not None
+    assert '<svg' in renderer.plain_text_to_formula_body(text)
+
+
+def test_nom_subscript_glyphs_share_the_same_lower_baseline():
+    """检查实际排版坐标，防止只有n下沉而om仍按正文显示的截图问题复发。"""
+    from matplotlib.mathtext import MathTextParser
+
+    latex = renderer.text_to_latex('di = DE - 2(e_nom + e_c)')
+    with renderer.matplotlib.rc_context(renderer._MATH_RC):
+        glyphs = MathTextParser('path').parse('$' + latex + '$').glyphs
+    # 此公式中的n、o、m各出现一次，必须使用同一字号及同一下标基线。
+    suffix = [glyph for glyph in glyphs if chr(glyph[2]) in 'nom']
+    assert len(suffix) == 3
+    assert len({(glyph[1], glyph[4]) for glyph in suffix}) == 1
+    base_e = next(glyph for glyph in glyphs if chr(glyph[2]) == 'e')
+    assert suffix[0][1] < base_e[1]
+    assert suffix[0][4] < base_e[4]
+
+
+@pytest.mark.parametrize(
     ("text", "expected_svg", "forbidden_fragments"),
     [
         (

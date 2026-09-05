@@ -225,6 +225,8 @@ PIP_INSTALL_NAME_OVERRIDES = {
 
 PRESSURE_PIPE_DESIGN_HIDDEN_IMPORTS = [
     "有压管道设计",
+    "calc_渠系计算算法内核.pe_pipe_catalog",
+    "calc_渠系计算算法内核.pipe_product_catalog",
 ]
 
 CALC_CORE_HIDDEN_IMPORTS = [

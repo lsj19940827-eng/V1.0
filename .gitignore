@@ -103,3 +103,10 @@ tools/授权台账.csv
 .env
 Microsoft/
 .tmp_pytest/
+
+# GitHub 账户恢复码仅保留在本地
+/github-recovery-codes.txt
+/.release-work-140/
+
+# 本地规范原件与 OCR 资料不纳入发布
+/docs/规范资料/

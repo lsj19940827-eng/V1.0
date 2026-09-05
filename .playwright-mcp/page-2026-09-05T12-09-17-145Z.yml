@@ -1,0 +1,116 @@
+- generic "鏈夊帇绠￠亾缁撴灉椤垫牱寮忛瑙堬紝璁捐涓庡姞澶у伐鍐靛苟鍒楀睍绀�" [ref=e2]:
+  - generic [ref=e3]:
+    - strong [ref=e4]: 璁＄畻缁撴灉璇︽儏
+    - generic [ref=e5]: 宸ュ喌 1 路 鏈夊帇绠￠亾
+  - generic [ref=e6]:
+    - generic [ref=e7]:
+      - heading "鎺ㄨ崘绠″緞 DN 1400" [level=2] [ref=e8]
+      - generic [ref=e9]: 缁忔祹 路 鎸夎璁℃祦閫熷垎绫�
+    - generic [ref=e10]: 鍩嬬疆寮忛搴斿姏閽㈢瓛娣峰嚌鍦熺 PCCPE 路 姘村姏鍐呭緞 1400 mm 路 绠￠暱 1000 m
+    - table "鍚屼竴绠″緞涓嬬殑涓ょ娴侀噺宸ュ喌" [ref=e11]:
+      - row [ref=e12]:
+        - columnheader "璁＄畻鎸囨爣" [ref=e13]
+        - columnheader "璁捐宸ュ喌 缁忔祹娴侀€熷垎绫讳緷鎹�" [ref=e14]:
+          - text: 璁捐宸ュ喌
+          - generic [ref=e15]: 缁忔祹娴侀€熷垎绫讳緷鎹�
+        - columnheader "鍔犲ぇ宸ュ喌 路 25% 姘存崯绛涢€変緷鎹�" [ref=e16]:
+          - text: 鍔犲ぇ宸ュ喌 路 25%
+          - generic [ref=e17]: 姘存崯绛涢€変緷鎹�
+      - row [ref=e18]:
+        - rowheader "娴侀噺" [ref=e19]
+        - cell "2.000 m鲁/s" [ref=e20]:
+          - generic [ref=e21]: "2.000"
+          - generic [ref=e22]: m鲁/s
+        - cell "2.500 m鲁/s" [ref=e23]:
+          - generic [ref=e24]: "2.500"
+          - generic [ref=e25]: m鲁/s
+      - row [ref=e26]:
+        - rowheader "娴侀€�" [ref=e27]
+        - cell "1.2992 m/s 澶勪簬缁忔祹娴侀€熷尯闂�" [ref=e28]:
+          - generic [ref=e29]: "1.2992"
+          - generic [ref=e30]: m/s
+          - generic [ref=e31]: 澶勪簬缁忔祹娴侀€熷尯闂�
+        - cell "1.6240 m/s 楂樹簬缁忔祹娴侀€熶笂闄�" [ref=e32]:
+          - generic [ref=e33]: "1.6240"
+          - generic [ref=e34]: m/s
+          - generic [ref=e35]: 楂樹簬缁忔祹娴侀€熶笂闄�
+      - row [ref=e36]:
+        - rowheader "娌跨▼姘存崯" [ref=e37]
+        - cell "1.1581 m/km" [ref=e38]:
+          - text: "1.1581"
+          - generic [ref=e39]: m/km
+        - cell "1.8095 m/km" [ref=e40]:
+          - text: "1.8095"
+          - generic [ref=e41]: m/km
+      - row [ref=e42]:
+        - rowheader "灞€閮ㄦ按鎹�" [ref=e43]
+        - cell "0.1737 m/km" [ref=e44]:
+          - text: "0.1737"
+          - generic [ref=e45]: m/km
+        - cell "0.2714 m/km" [ref=e46]:
+          - text: "0.2714"
+          - generic [ref=e47]: m/km
+      - row [ref=e48]:
+        - rowheader "鎬绘按鎹�" [ref=e49]
+        - cell "1.3318 m/km" [ref=e50]:
+          - generic [ref=e51]: "1.3318"
+          - generic [ref=e52]: m/km
+        - cell "2.0809 m/km" [ref=e53]:
+          - generic [ref=e54]: "2.0809"
+          - generic [ref=e55]: m/km
+      - row [ref=e56]:
+        - rowheader "鍏ㄧ闀挎按鎹�" [ref=e57]
+        - cell "1.3318 m" [ref=e58]:
+          - text: "1.3318"
+          - generic [ref=e59]: m
+        - cell "2.0809 m" [ref=e60]:
+          - text: "2.0809"
+          - generic [ref=e61]: m
+    - generic [ref=e62]:
+      - generic [ref=e63]: 缁忔祹娴侀€熷尯闂达細0.9锝�1.5 m/s
+      - generic [ref=e64]: 鍔犲ぇ宸ュ喌鎬绘按鎹熶笂闄愶細5 m/km
+    - heading "鍊欓€夌寰勫姣�" [level=3] [ref=e65]
+    - generic [ref=e66]: 鍚屼竴绠″緞骞跺垪鏄剧ず涓ょ娴侀€燂紝姘存崯鎸夊姞澶у伐鍐垫瘮杈�
+    - table "鍊欓€夌寰勭殑璁捐娴侀€熴€佸姞澶ф祦閫熷拰鍔犲ぇ姘存崯" [ref=e68]:
+      - rowgroup [ref=e69]:
+        - row [ref=e70]:
+          - columnheader "浜у搧瑙勬牸" [ref=e71]
+          - columnheader "璁捐娴侀€� m/s" [ref=e72]: 璁捐娴侀€�m/s
+          - columnheader "鍔犲ぇ娴侀€� m/s" [ref=e73]: 鍔犲ぇ娴侀€�m/s
+          - columnheader "鍔犲ぇ鎬绘按鎹� m/km" [ref=e74]: 鍔犲ぇ鎬绘按鎹�m/km
+          - columnheader "绫诲埆 鎸夎璁℃祦閫�" [ref=e75]: 绫诲埆鎸夎璁℃祦閫�
+      - rowgroup [ref=e76]:
+        - row [ref=e77]:
+          - cell "DN 1400 鎺ㄨ崘" [ref=e78]
+          - cell "1.2992" [ref=e79]
+          - cell "1.6240" [ref=e80]
+          - cell "2.0809" [ref=e81]
+          - cell "缁忔祹" [ref=e82]
+        - row [ref=e83]:
+          - cell "DN 1600" [ref=e84]
+          - cell "0.9947" [ref=e85]
+          - cell "1.2434" [ref=e86]
+          - cell "1.0213" [ref=e87]
+          - cell "缁忔祹" [ref=e88]
+        - row [ref=e89]:
+          - cell "DN 2000" [ref=e90]
+          - cell "0.6366" [ref=e91]
+          - cell "0.7958" [ref=e92]
+          - cell "0.3109" [ref=e93]
+          - cell "濡ュ崗" [ref=e94]
+        - row [ref=e95]:
+          - cell "DN 1800" [ref=e96]
+          - cell "0.7860" [ref=e97]
+          - cell "0.9824" [ref=e98]
+          - cell "0.5451" [ref=e99]
+          - cell "濡ュ崗" [ref=e100]
+        - row [ref=e101]:
+          - cell "DN 2200" [ref=e102]
+          - cell "0.5261" [ref=e103]
+          - cell "0.6577" [ref=e104]
+          - cell "0.1871" [ref=e105]
+          - cell "鍏滃簳" [ref=e106]
+    - generic [ref=e107]:
+      - generic [ref=e108]: 绠℃潗鍙傛暟锛歯 = 0.013
+      - generic [ref=e109]: 灞€閮ㄦ崯澶辨瘮渚嬶細0.15
+      - generic [ref=e110]: 浜у搧鍨嬪紡锛歅CCPE锛堝煁缃紡锛�
