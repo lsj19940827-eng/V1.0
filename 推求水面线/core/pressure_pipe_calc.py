@@ -2450,6 +2450,8 @@ def _normalize_longitudinal_nodes_for_calc(longitudinal_nodes: List[Dict]) -> Li
 
 def _calc_longitudinal_segment_length(start: Dict, end: Dict) -> float:
     """计算纵断面相邻节点之间的有效实长。"""
+    if start.get('profile_gap_after'):
+        return 0.0
     start_chainage = _to_float(start.get("chainage"))
     end_chainage = _to_float(end.get("chainage"))
     ds = end_chainage - start_chainage

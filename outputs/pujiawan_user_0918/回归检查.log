@@ -1,0 +1,72 @@
+=== pytest_final.log ===
+........................................................................ [ 47%]
+........................................................................ [ 94%]
+........                                                                 [100%]
+152 passed, 87 warnings in 4.03s
+
+
+=== pytest_supplement.log ===
+.................................................................        [100%]
+65 passed in 1.61s
+
+
+=== pytest_extractor.log ===
+.......FF.F........                                                      [100%]
+================================== FAILURES ===================================
+_ test_extract_dialog_pipe_groups_for_branch_channel_marks_prefix_segment_metadata _
+tests\test_pressure_pipe_extractor_fallback_unit.py:336: in test_extract_dialog_pipe_groups_for_branch_channel_marks_prefix_segment_metadata
+    assert [group.display_name for group in groups] == [
+E   AssertionError: assert ['苟家湾（前缀段）', '大石包', '苟家湾'] == ['苟家湾（前缀段）', '大石包', '苟家湾（后段）']
+E     
+E     At index 2 diff: '苟家湾' != '苟家湾（后段）'
+E     Use -v to get more diff
+_ test_extract_pressure_routes_keeps_member_labels_separate_from_route_display_name _
+tests\test_pressure_pipe_extractor_fallback_unit.py:390: in test_extract_pressure_routes_keeps_member_labels_separate_from_route_display_name
+    assert [segment.member_display_name for segment in route.segments] == [
+E   AssertionError: assert ['苟家湾（前缀段）', '大石包', '苟家湾'] == ['苟家湾（前缀段）', '大石包', '苟家湾（后段）']
+E     
+E     At index 2 diff: '苟家湾' != '苟家湾（后段）'
+E     Use -v to get more diff
+_ test_extract_dialog_pipe_groups_for_branch_channel_rewrites_named_chain_members_to_row_identities _
+tests\test_pressure_pipe_extractor_fallback_unit.py:460: in test_extract_dialog_pipe_groups_for_branch_channel_rewrites_named_chain_members_to_row_identities
+    assert [group.display_name for group in groups] == [
+E   AssertionError: assert ['苟家湾（前缀段）', '大石包', '苟家湾'] == ['苟家湾（前缀段）', '大石包', '苟家湾（后段）']
+E     
+E     At index 2 diff: '苟家湾' != '苟家湾（后段）'
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_pressure_pipe_extractor_fallback_unit.py::test_extract_dialog_pipe_groups_for_branch_channel_marks_prefix_segment_metadata
+FAILED tests/test_pressure_pipe_extractor_fallback_unit.py::test_extract_pressure_routes_keeps_member_labels_separate_from_route_display_name
+FAILED tests/test_pressure_pipe_extractor_fallback_unit.py::test_extract_dialog_pipe_groups_for_branch_channel_rewrites_named_chain_members_to_row_identities
+3 failed, 16 passed in 1.41s
+
+
+=== pytest_baseline.log ===
+.......FF.F........                                                      [100%]
+================================== FAILURES ===================================
+_ test_extract_dialog_pipe_groups_for_branch_channel_marks_prefix_segment_metadata _
+tests\test_pressure_pipe_extractor_fallback_unit.py:336: in test_extract_dialog_pipe_groups_for_branch_channel_marks_prefix_segment_metadata
+    assert [group.display_name for group in groups] == [
+E   AssertionError: assert ['苟家湾（前缀段）', '大石包', '苟家湾'] == ['苟家湾（前缀段）', '大石包', '苟家湾（后段）']
+E     
+E     At index 2 diff: '苟家湾' != '苟家湾（后段）'
+E     Use -v to get more diff
+_ test_extract_pressure_routes_keeps_member_labels_separate_from_route_display_name _
+tests\test_pressure_pipe_extractor_fallback_unit.py:390: in test_extract_pressure_routes_keeps_member_labels_separate_from_route_display_name
+    assert [segment.member_display_name for segment in route.segments] == [
+E   AssertionError: assert ['苟家湾（前缀段）', '大石包', '苟家湾'] == ['苟家湾（前缀段）', '大石包', '苟家湾（后段）']
+E     
+E     At index 2 diff: '苟家湾' != '苟家湾（后段）'
+E     Use -v to get more diff
+_ test_extract_dialog_pipe_groups_for_branch_channel_rewrites_named_chain_members_to_row_identities _
+tests\test_pressure_pipe_extractor_fallback_unit.py:460: in test_extract_dialog_pipe_groups_for_branch_channel_rewrites_named_chain_members_to_row_identities
+    assert [group.display_name for group in groups] == [
+E   AssertionError: assert ['苟家湾（前缀段）', '大石包', '苟家湾'] == ['苟家湾（前缀段）', '大石包', '苟家湾（后段）']
+E     
+E     At index 2 diff: '苟家湾' != '苟家湾（后段）'
+E     Use -v to get more diff
+=========================== short test summary info ===========================
+FAILED tests/test_pressure_pipe_extractor_fallback_unit.py::test_extract_dialog_pipe_groups_for_branch_channel_marks_prefix_segment_metadata
+FAILED tests/test_pressure_pipe_extractor_fallback_unit.py::test_extract_pressure_routes_keeps_member_labels_separate_from_route_display_name
+FAILED tests/test_pressure_pipe_extractor_fallback_unit.py::test_extract_dialog_pipe_groups_for_branch_channel_rewrites_named_chain_members_to_row_identities
+3 failed, 16 passed in 0.33s

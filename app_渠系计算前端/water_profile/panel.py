@@ -14407,8 +14407,21 @@ class WaterProfilePanel(QWidget):
 
         upstream_node = nodes[upstream_idx] if 0 <= upstream_idx < len(nodes) else None
         upstream_structure = self._get_node_structure_type_text(upstream_node)
+        # 同一整线内的隧洞接点沿用连续承压链规则，不重复添加进出口局部损失。
+        route_key = self._get_pressure_pipe_group_route_key(group)
+        route_start = self._coerce_pressure_pipe_row_index(getattr(group, "route_start_row_index", -1))
+        route_end = self._coerce_pressure_pipe_row_index(getattr(group, "route_end_row_index", -1))
+        inlet_is_internal_tunnel = bool(
+            route_key and route_start <= upstream_idx <= route_end and "隧洞" in upstream_structure
+        )
+        downstream_structure = self._get_node_structure_type_text(next_regular_node)
+        outlet_is_internal_tunnel = bool(
+            route_key and route_start <= next_regular_idx <= route_end and "隧洞" in downstream_structure
+        )
         if (
             upstream_node is not None
+            and bool(getattr(group, "has_inlet_transition", True))
+            and not inlet_is_internal_tunnel
             and not self._is_pressure_pipe_like_structure_text(upstream_structure)
             and float(getattr(upstream_node, "velocity", 0.0) or 0.0) > 0
             and float(getattr(group, "inlet_transition_zeta", 0.0) or 0.0) > 0
@@ -14426,9 +14439,10 @@ class WaterProfilePanel(QWidget):
                 "reference_structure": upstream_structure,
             }
 
-        downstream_structure = self._get_node_structure_type_text(next_regular_node)
         if (
             next_regular_node is not None
+            and bool(getattr(group, "has_outlet_transition", True))
+            and not outlet_is_internal_tunnel
             and not self._is_pressure_pipe_like_structure_text(downstream_structure)
             and float(getattr(next_regular_node, "velocity", 0.0) or 0.0) > 0
             and float(getattr(group, "outlet_transition_zeta", 0.0) or 0.0) > 0
@@ -14482,6 +14496,10 @@ class WaterProfilePanel(QWidget):
             "inlet_transition_loss": inlet_transition_loss,
             "outlet_transition_loss": outlet_transition_loss,
             "total_head_loss": total_head_loss,
+            "has_inlet_transition": bool(getattr(group, "has_inlet_transition", True)) and not inlet_is_internal_tunnel,
+            "has_outlet_transition": bool(getattr(group, "has_outlet_transition", True)) and not outlet_is_internal_tunnel,
+            "inlet_transition_reason": "连续承压链内部隧洞衔接" if inlet_is_internal_tunnel else str(getattr(group, "inlet_transition_reason", "") or ""),
+            "outlet_transition_reason": "连续承压链内部隧洞衔接" if outlet_is_internal_tunnel else str(getattr(group, "outlet_transition_reason", "") or ""),
             "friction_details": friction_details,
             "bend_details": bend_details,
             "local_details": local_details,

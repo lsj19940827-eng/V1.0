@@ -421,6 +421,41 @@ def _resolve_import_pressure_pipe_material(material_value):
     )
 
 
+def collect_missing_import_pipe_materials(mapped_records):
+    """管道类必须显式填写管材；隧洞、明渠及纯序号占位行不参与检查。"""
+    missing = []
+    for record in mapped_records or []:
+        row = list(record.get("mapped") or [])
+        structure = str(row[COL_SECTION_TYPE] or "").strip() if len(row) > COL_SECTION_TYPE else ""
+        material = str(row[COL_PIPE_MATERIAL] or "").strip() if len(row) > COL_PIPE_MATERIAL else ""
+        if is_pressure_pipe_like_section_type(structure) and not material:
+            missing.append({
+                "excel_row": record["excel_row"],
+                "sequence": str(row[COL_SEQ] or "").strip(),
+                "section_type": structure,
+            })
+    return missing
+
+
+def build_missing_import_pipe_material_message(missing, filepath, sheet_name, material_column, limit=None):
+    """同时说明定位、缺失原因、导入状态和用户下一步操作。"""
+    visible = missing if limit is None else missing[:limit]
+    lines = [f"文件：{os.path.basename(filepath)}", f"发现 {len(missing)} 处管材漏填："]
+    for item in visible:
+        sequence = f"序号 {item['sequence']}，" if item['sequence'] else ""
+        cell = f"，单元格 {material_column}{item['excel_row']}" if material_column else ""
+        lines.append(f"Excel 第 {item['excel_row']} 行（{sequence}{item['section_type']}）{cell}")
+    if len(visible) < len(missing):
+        lines.append(f"另有 {len(missing) - len(visible)} 处，请点击“查看全部缺失位置”。")
+    if not material_column:
+        lines.append("此文件未识别到“管材”列，请先补充该列及实际管材。")
+    lines.extend([
+        "管材影响水头损失计算，请填写实际管材。",
+        "请修改上述 Excel 的“管材”列并保存，再点击【导入Excel】重新选择此文件。",
+    ])
+    return "\n".join(lines)
+
+
 def collect_unsupported_pccp_material_warnings(mapped_records):
     """收集 Excel 导入中不支持的 PCCP 管 n 值，不阻断导入。"""
     warnings = []
@@ -4334,6 +4369,32 @@ class BatchPanel(QWidget):
         self._save_user_prefs()
         self._do_load_from_filepath(filepath)
 
+    def _show_missing_import_pipe_material_warning(self, missing, filepath, sheet_name, material_column):
+        """缺管材时常驻提示；大量缺项可展开完整列表，方便返回原文件修正。"""
+        previous = getattr(self, "_missing_material_import_bar", None)
+        if previous is not None:
+            previous.close()
+        message = build_missing_import_pipe_material_message(missing, filepath, sheet_name, material_column, limit=5)
+        bar = InfoBar.warning(
+            "导入未完成：请先补齐管材", message,
+            orient=Qt.Vertical, isClosable=True, duration=-1,
+            parent=self._info_parent(), position=InfoBarPosition.TOP,
+        )
+        self._missing_material_import_bar = bar
+        if bar is not None:
+            def clear_closed_warning():
+                if getattr(self, "_missing_material_import_bar", None) is bar:
+                    self._missing_material_import_bar = None
+            bar.destroyed.connect(clear_closed_warning)
+            bar.contentLabel.setWordWrap(True)
+            bar.contentLabel.setMaximumWidth(max(320, min(760, self._info_parent().width() - 80)))
+            if len(missing) > 5:
+                button = PushButton("查看全部缺失位置", bar)
+                detail = build_missing_import_pipe_material_message(missing, filepath, sheet_name, material_column)
+                button.clicked.connect(lambda: fluent_info(self._dialog_parent(), "管材缺失位置", detail))
+                bar.addWidget(button)
+            bar.adjustSize()
+
     def _do_load_from_filepath(self, filepath, is_sample=False,
                                 sample_title="示例数据", sample_desc=""):
         """内部方法：从指定路径加载xlsx/xls数据到表格（支持普通导入和示例加载）"""
@@ -4342,6 +4403,7 @@ class BatchPanel(QWidget):
         except ImportError:
             InfoBar.warning("缺少依赖", "需要安装 openpyxl: pip install openpyxl", parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
             return
+        wb = formula_wb = None
         try:
             formula_ws = None
             if filepath.lower().endswith('.xls') and not filepath.lower().endswith('.xlsx'):
@@ -4407,32 +4469,6 @@ class BatchPanel(QWidget):
                         return formula_value
                 return str(v).strip() if v is not None else ""
 
-            label_a = _read_cell(info_row, 1)
-            val_b = _read_cell(info_row, 2)
-            if "渠道名称" in label_a and val_b:
-                self.channel_name_edit.setText(val_b)
-                info_parts.append(f"渠道名称: {val_b}")
-
-            label_c = _read_cell(info_row, 3)
-            val_d = _read_cell(info_row, 4)
-            if ("渠道级别" in label_c or "渠道类型" in label_c) and val_d:
-                idx = self.channel_level_combo.findText(val_d)
-                if idx >= 0: self.channel_level_combo.setCurrentIndex(idx)
-                info_parts.append(f"渠道类型: {val_d}")
-
-            label_e = _read_cell(info_row, 5)
-            val_f = _read_cell(info_row, 6)
-            if "水位" in label_e and val_f:
-                self.start_wl_edit.setText(val_f)
-                info_parts.append(f"起始水位: {val_f}")
-
-            val_h = _read_cell(info_row, 8)
-            if val_h:
-                station_value = parse_station_input(val_h)
-                formatted_station = format_station_display(station_value)
-                self.start_station_edit.setText(formatted_station)
-                info_parts.append(f"起始桩号: {formatted_station}")
-
             manual_qmax_by_segment = read_manual_qmax_map_from_sheet(ws, info_row)
             manual_qmax_summary = build_manual_qmax_summary_text(manual_qmax_by_segment)
 
@@ -4467,72 +4503,120 @@ class BatchPanel(QWidget):
                 h7_val = str(ws.cell(row=header_row, column=7).value or "")
                 has_xy_cols = "Q" in h7_val.upper() or "流量" in h7_val
 
+            mapped_records = []
+            for row_offset, rd in enumerate(data_rows):
+                excel_row_number = (
+                    data_row_numbers[row_offset]
+                    if row_offset < len(data_row_numbers)
+                    else data_start_row + row_offset
+                )
+                raw_rd = list(rd)
+                rd = raw_rd + [""] * len(INPUT_HEADERS)
+                if header_mapping:
+                    mapped = _map_excel_row_by_headers(raw_rd, header_mapping)
+                elif has_xy_cols:
+                    mapped = self._normalize_row(raw_rd, len(INPUT_HEADERS))
+                else:
+                    # 旧版无X/Y模板映射到新版列：
+                    # 0序号,1流量段,2名称,3结构形式,4Q,5n,6比降,7m,8B,9宽深比,10R,11D,12渡槽深宽比,
+                    # 13倒角角度,14倒角底边,15圆心角,16不淤,17不冲,18转弯半径(可选),19管材(可选)
+                    mapped = [""] * len(INPUT_HEADERS)
+                    legacy_no_xy_columns = (
+                        (0, COL_SEQ),
+                        (1, COL_SEGMENT),
+                        (2, COL_BUILDING_NAME),
+                        (3, COL_SECTION_TYPE),
+                        (4, COL_Q),
+                        (5, COL_N),
+                        (6, COL_SLOPE),
+                        (7, COL_M),
+                        (8, COL_B),
+                        (9, COL_BETA),
+                        (10, COL_R),
+                        (11, COL_D),
+                        (12, COL_DUCAO_DEPTH_RATIO),
+                        (13, COL_CHAMFER_ANGLE),
+                        (14, COL_CHAMFER_LENGTH),
+                        (15, COL_THETA),
+                        (16, COL_V_MIN),
+                        (17, COL_V_MAX),
+                        (18, COL_TURN_RADIUS),
+                        (19, COL_PIPE_MATERIAL),
+                    )
+                    for source_col, target_col in legacy_no_xy_columns:
+                        if source_col < len(raw_rd):
+                            mapped[target_col] = raw_rd[source_col]
+                section_type = str(mapped[COL_SECTION_TYPE]).strip() if len(mapped) > COL_SECTION_TYPE else ""
+                mapped_type = self._map_section_type(section_type) if section_type else None
+                if mapped_type:
+                    mapped[COL_SECTION_TYPE] = mapped_type
+                # 有压管道同类行自动忽略糙率n值（索引7）
+                section_type = str(mapped[COL_SECTION_TYPE]).strip() if len(mapped) > COL_SECTION_TYPE else ""
+                if is_pressure_pipe_like_section_type(section_type):
+                    mapped[7] = ""
+                mapped_records.append({
+                    "excel_row": excel_row_number,
+                    "mapped": mapped,
+                })
+            missing_materials = collect_missing_import_pipe_materials(mapped_records)
+            if missing_materials:
+                material_source_col = next((src for src, dst in header_mapping.items() if dst == COL_PIPE_MATERIAL), None)
+                if not header_mapping:
+                    material_source_col = COL_PIPE_MATERIAL if has_xy_cols else 19
+                material_column = ""
+                if material_source_col is not None:
+                    # 使用实际源列定位，兼容列重排和旧版无坐标模板。
+                    number = material_source_col + 1
+                    while number:
+                        number, remainder = divmod(number - 1, 26)
+                        material_column = chr(65 + remainder) + material_column
+                self._show_missing_import_pipe_material_warning(
+                    missing_materials, filepath, getattr(ws, "title", "第一个工作表"), material_column,
+                )
+                return
+
             if self.input_table.rowCount() > 0 and not self._is_sample_data:
                 if not fluent_question(self._dialog_parent(), "确认覆盖",
                         f"当前表格已有 {self.input_table.rowCount()} 行数据，\n"
                         f"导入将覆盖全部现有数据。\n\n确定继续吗？",
                         yes_text="覆盖导入", no_text="取消"):
                     return
+            label_a = _read_cell(info_row, 1)
+            val_b = _read_cell(info_row, 2)
+            if "渠道名称" in label_a and val_b:
+                self.channel_name_edit.setText(val_b)
+                info_parts.append(f"渠道名称: {val_b}")
+
+            label_c = _read_cell(info_row, 3)
+            val_d = _read_cell(info_row, 4)
+            if ("渠道级别" in label_c or "渠道类型" in label_c) and val_d:
+                idx = self.channel_level_combo.findText(val_d)
+                if idx >= 0: self.channel_level_combo.setCurrentIndex(idx)
+                info_parts.append(f"渠道类型: {val_d}")
+
+            label_e = _read_cell(info_row, 5)
+            val_f = _read_cell(info_row, 6)
+            if "水位" in label_e and val_f:
+                self.start_wl_edit.setText(val_f)
+                info_parts.append(f"起始水位: {val_f}")
+
+            val_h = _read_cell(info_row, 8)
+            if val_h:
+                station_value = parse_station_input(val_h)
+                formatted_station = format_station_display(station_value)
+                self.start_station_edit.setText(formatted_station)
+                info_parts.append(f"起始桩号: {formatted_station}")
+
+            previous_warning = getattr(self, "_missing_material_import_bar", None)
+            if previous_warning is not None:
+                previous_warning.close()
+                self._missing_material_import_bar = None
             self._push_undo_snapshot()
             self._undo_group += 1
-            mapped_records = []
             try:
                 self._clear_input(force=True)
-                for row_offset, rd in enumerate(data_rows):
-                    excel_row_number = (
-                        data_row_numbers[row_offset]
-                        if row_offset < len(data_row_numbers)
-                        else data_start_row + row_offset
-                    )
-                    raw_rd = list(rd)
-                    rd = raw_rd + [""] * len(INPUT_HEADERS)
-                    if header_mapping:
-                        mapped = _map_excel_row_by_headers(raw_rd, header_mapping)
-                    elif has_xy_cols:
-                        mapped = self._normalize_row(raw_rd, len(INPUT_HEADERS))
-                    else:
-                        # 旧版无X/Y模板映射到新版列：
-                        # 0序号,1流量段,2名称,3结构形式,4Q,5n,6比降,7m,8B,9宽深比,10R,11D,12渡槽深宽比,
-                        # 13倒角角度,14倒角底边,15圆心角,16不淤,17不冲,18转弯半径(可选),19管材(可选)
-                        mapped = [""] * len(INPUT_HEADERS)
-                        legacy_no_xy_columns = (
-                            (0, COL_SEQ),
-                            (1, COL_SEGMENT),
-                            (2, COL_BUILDING_NAME),
-                            (3, COL_SECTION_TYPE),
-                            (4, COL_Q),
-                            (5, COL_N),
-                            (6, COL_SLOPE),
-                            (7, COL_M),
-                            (8, COL_B),
-                            (9, COL_BETA),
-                            (10, COL_R),
-                            (11, COL_D),
-                            (12, COL_DUCAO_DEPTH_RATIO),
-                            (13, COL_CHAMFER_ANGLE),
-                            (14, COL_CHAMFER_LENGTH),
-                            (15, COL_THETA),
-                            (16, COL_V_MIN),
-                            (17, COL_V_MAX),
-                            (18, COL_TURN_RADIUS),
-                            (19, COL_PIPE_MATERIAL),
-                        )
-                        for source_col, target_col in legacy_no_xy_columns:
-                            if source_col < len(raw_rd):
-                                mapped[target_col] = raw_rd[source_col]
-                    section_type = str(mapped[COL_SECTION_TYPE]).strip() if len(mapped) > COL_SECTION_TYPE else ""
-                    mapped_type = self._map_section_type(section_type) if section_type else None
-                    if mapped_type:
-                        mapped[COL_SECTION_TYPE] = mapped_type
-                    # 有压管道同类行自动忽略糙率n值（索引7）
-                    section_type = str(mapped[COL_SECTION_TYPE]).strip() if len(mapped) > COL_SECTION_TYPE else ""
-                    if is_pressure_pipe_like_section_type(section_type):
-                        mapped[7] = ""
-                    mapped_records.append({
-                        "excel_row": excel_row_number,
-                        "mapped": mapped,
-                    })
-                    self._add_row(mapped)
+                for record in mapped_records:
+                    self._add_row(record["mapped"])
                     self._mark_row_as_excel_imported(self.input_table.rowCount() - 1, not is_sample)
                 self._auto_detect_flow_segments()
                 self._manual_qmax_by_segment = dict(manual_qmax_by_segment)
@@ -4565,6 +4649,12 @@ class BatchPanel(QWidget):
             self._validate_duplicate_buildings_warn()
         except Exception as e:
             InfoBar.error("导入失败", str(e), parent=self._info_parent(), duration=5000, position=InfoBarPosition.TOP)
+        finally:
+            for workbook in (formula_wb, wb):
+                close = getattr(workbook, "close", None)
+                if callable(close):
+                    close()
+
 
     # ================================================================
     # 导出

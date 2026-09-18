@@ -43,7 +43,6 @@ from app_渠系计算前端.styles import (
     fluent_info, fluent_error, fluent_question,
 )
 
-_XXPIPE_PROFILE_STATION_TOL = 1e-3
 _XXPIPE_PROFILE_GEOMETRY_TOL = 1e-9
 _SPILLWAY_STEEP_CHUTE_DISPLAY_NAMES = {
     "充水渠",
@@ -79,6 +78,9 @@ except ImportError:
     MODELS_AVAILABLE = False
 
 from utils.pressure_pipe_result_helpers import make_pressure_pipe_identity
+from utils.pressure_pipe_longitudinal_utils import LONGITUDINAL_STATION_TOL, longitudinal_node_match_tolerance
+
+_XXPIPE_PROFILE_STATION_TOL = LONGITUDINAL_STATION_TOL
 
 try:
     from config.constants import (
@@ -2972,7 +2974,7 @@ def _normalize_profile_station_spans(station_spans=None):
     return normalized
 
 
-def _resolve_profile_plot_station_value(station_mc, station_spans=None, tol=1e-9):
+def _resolve_profile_plot_station_value(station_mc, station_spans=None, tol=_XXPIPE_PROFILE_STATION_TOL):
     """将原始桩号映射为压缩后的绘图桩号。"""
     try:
         mc = float(station_mc)
@@ -2986,6 +2988,7 @@ def _resolve_profile_plot_station_value(station_mc, station_spans=None, tol=1e-9
         end_mc = span["source_end_mc"]
         if mc < start_mc - tol or mc > end_mc + tol:
             continue
+        # 与纵断面覆盖/裁切共用端点容差，避免洞口微差退回未压缩桩号。
         clamped_mc = min(max(mc, start_mc), end_mc)
         return span["plot_start_mc"] + (clamped_mc - start_mc)
     return mc
@@ -4274,6 +4277,7 @@ def _normalize_xxpipe_longitudinal_nodes(longitudinal_nodes):
         normalized.append(
             {
                 "index": idx,
+                "profile_gap_after": bool(_xxpipe_longitudinal_node_get(node, "profile_gap_after", False)),
                 "chainage": chainage,
                 "elevation": elevation,
                 "turn_type": str(turn_type or "NONE").strip().upper(),
@@ -4345,8 +4349,8 @@ def sample_xxpipe_centerline_elevation(longitudinal_nodes, station_mc):
     station_value = _xxpipe_longitudinal_node_float({"station_mc": station_mc}, "station_mc")
     tol = _XXPIPE_PROFILE_STATION_TOL
 
-    for node in nodes:
-        if abs(node["chainage"] - station_value) <= tol:
+    for index, node in enumerate(nodes):
+        if abs(node["chainage"] - station_value) <= longitudinal_node_match_tolerance(nodes, index):
             return node["elevation"]
 
     coverage_start = nodes[0]["chainage"]
@@ -4359,15 +4363,17 @@ def sample_xxpipe_centerline_elevation(longitudinal_nodes, station_mc):
 
     for idx, current in enumerate(nodes[:-1]):
         nxt = nodes[idx + 1]
+        if current.get('profile_gap_after'):
+            continue
         segment_start = current["chainage"]
         if _is_xxpipe_arc_segment_start(current):
             segment_end = current["arc_end_chainage"]
-            if segment_start - tol <= station_value <= segment_end + tol:
+            if segment_start - 1e-3 <= station_value <= segment_end + 1e-3:
                 return _sample_xxpipe_arc_segment_elevation(current, station_value)
             continue
 
         segment_end = nxt["chainage"]
-        if segment_start - tol <= station_value <= segment_end + tol:
+        if segment_start - 1e-3 <= station_value <= segment_end + 1e-3:
             ds = segment_end - segment_start
             if abs(ds) <= _XXPIPE_PROFILE_GEOMETRY_TOL:
                 return current["elevation"]
@@ -5320,7 +5326,7 @@ def _build_xxpipe_coverage_error_message(display_name: str, coverage_state: dict
         lines.append(f"整线：{display_name}")
     lines.append("导入失败：纵断面范围不够")
 
-    if farthest_station is None or coverage_end is None:
+    if farthest_station is None or coverage_end is None or farthest_station <= coverage_end + coverage_tol:
         lines.append("当前导入的纵断面没有覆盖到全部节点桩号，请在 CAD 中补齐后重新导入。")
         if preview:
             lines.append(f"未覆盖节点：{preview}")
@@ -5346,10 +5352,10 @@ def _build_xxpipe_stale_longitudinal_hint_text(missing_targets) -> str:
     preview = _build_xxpipe_missing_target_preview(missing_targets)
     if preview:
         return (
-            "已保留上次导入的纵断面，但当前桩号覆盖还不完整，请继续补导入纵断面DXF。\n"
+            "已保留上次导入的纵断面，但当前桩号覆盖还不完整，请将全部有压段放在同一份DXF中重新导入。\n"
             f"未覆盖桩号：{preview}"
         )
-    return "已保留上次导入的纵断面，但当前桩号覆盖还不完整，请继续补导入纵断面DXF。"
+    return "已保留上次导入的纵断面，但当前桩号覆盖还不完整，请将全部有压段放在同一份DXF中重新导入。"
 
 
 def _should_skip_xxpipe_longitudinal_coverage(
@@ -5575,20 +5581,21 @@ def _build_xxpipe_raw_profile_draw_segments(
             )
         except Exception:
             continue
-        clipped_vertices = list(clipped_raw_profile.get("vertices", []) or [])
-        if len(clipped_vertices) < 2:
-            continue
-        draw_segments.append(
-            {
-                "identity": str(group.get("identity", "") or "").strip(),
-                "route_key": str(group.get("route_key", "") or "").strip(),
-                "source_kind": "route_raw_profile_polyline",
-                "start_mc": float(group["start_mc"]),
-                "end_mc": float(group["end_mc"]),
-                "points": [(float(mc), float(elev)) for mc, elev in clipped_vertices],
-                "raw_profile_polyline": clipped_raw_profile,
-            }
-        )
+        for part in clipped_raw_profile.get('parts', [clipped_raw_profile]):
+            clipped_vertices = list(part.get("vertices", []) or [])
+            if len(clipped_vertices) < 2:
+                continue
+            draw_segments.append(
+                {
+                    "identity": str(group.get("identity", "") or "").strip(),
+                    "route_key": str(group.get("route_key", "") or "").strip(),
+                    "source_kind": "route_raw_profile_polyline",
+                    "start_mc": float(clipped_vertices[0][0]),
+                    "end_mc": float(clipped_vertices[-1][0]),
+                    "points": [(float(mc), float(elev)) for mc, elev in clipped_vertices],
+                    "raw_profile_polyline": part,
+                }
+            )
     return draw_segments
 
 
@@ -6760,7 +6767,7 @@ def _build_xxpipe_partial_export_notice(xxpipe_profile_data):
         preview = _build_xxpipe_partial_warning_preview(uncovered_stations, "处")
         if preview:
             detail_lines.append(
-                f"已导入纵断面DXF，但以下桩号超出覆盖范围：{preview}。请继续补导入覆盖不足的纵断面DXF。"
+                f"已导入纵断面DXF，但以下桩号超出覆盖范围：{preview}。请将全部有压段放在同一份DXF中重新导入。"
             )
 
     if missing_longitudinal_items and not identity_mismatch_items and not uncovered_stations:
@@ -6774,7 +6781,7 @@ def _build_xxpipe_partial_export_notice(xxpipe_profile_data):
         if missing_longitudinal_items:
             intro += "请到表3有压管道水力计算中导入/补全纵断面轴线DXF。"
         elif uncovered_stations:
-            intro += "如果是覆盖不足，请继续补导入覆盖不足的纵断面DXF。"
+            intro += "如果是覆盖不足，请将全部有压段放在同一份DXF中重新导入。"
 
     return intro + ("\n" + "\n".join(detail_lines) if detail_lines else "")
 
@@ -6830,7 +6837,7 @@ def _build_xxpipe_split_station_spans(entries):
         }
 
     for entry in normalized_entries[1:]:
-        if entry["source_index"] != prev_entry["source_index"] + 1:
+        if entry.get("force_break_before", False) or entry["source_index"] != prev_entry["source_index"] + 1:
             span = _finalize_span(span_start_entry, prev_entry, plot_cursor)
             spans.append(span)
             plot_cursor = span["plot_end_mc"]
@@ -6917,7 +6924,7 @@ def _copy_xxpipe_split_nodes(entries):
     prev_source_index = None
     for entry in list(entries or []):
         node_copy = copy.copy(entry["node"])
-        force_break = prev_source_index is not None and entry["source_index"] != prev_source_index + 1
+        force_break = bool(entry.get("force_break_before", False)) or (prev_source_index is not None and entry["source_index"] != prev_source_index + 1)
         setattr(node_copy, "_structure_split_break_before", force_break)
         copied_nodes.append(node_copy)
         prev_source_index = entry["source_index"]
@@ -6944,6 +6951,28 @@ def _plan_xxpipe_tunnel_split_entries(full_nodes):
 
     if not standard_entries or not xxpipe_entries:
         return None
+
+    # 洞口由隧洞行提供位置；下表自动延伸到洞口，无需用户重复录入管道端点。
+    from utils.pressure_pipe_tunnel import iter_internal_tunnel_boundaries, make_pipe_portal_node
+    raw_nodes = list(full_nodes or [])
+    for inlet, outlet, before, after in iter_internal_tunnel_boundaries(raw_nodes):
+        for portal_idx, pipe_idx, break_before in ((inlet, before, False), (outlet, after, True)):
+            portal, pipe = raw_nodes[portal_idx], raw_nodes[pipe_idx]
+            if str(getattr(pipe, "name", "") or "").strip():
+                continue
+            if abs(_profile_station_value(portal) - _profile_station_value(pipe)) <= 1e-6:
+                continue
+            pipe_endpoint = make_pipe_portal_node(pipe, portal)
+            identity_source = portal if not break_before else pipe
+            pipe_endpoint.pressure_pipe_row_identity = _make_xxpipe_identity_from_node(identity_source)
+            pipe_endpoint._xxpipe_identity_candidates = _collect_xxpipe_identity_candidates(pipe)
+            xxpipe_entries.append({
+                "source_index": portal_idx,
+                "node": pipe_endpoint,
+                "structure_name": _get_node_structure_text(pipe),
+                "force_break_before": break_before,
+            })
+    xxpipe_entries.sort(key=lambda entry: entry["source_index"])
 
     return {
         "raw_nodes": list(full_nodes or []),
@@ -12479,16 +12508,6 @@ def export_combined_dxf(panel):
             doc.layers.new(_IP_LAYER, dxfattribs={"color": 7})     # 白色
 
         GAP = 20.0  # 各区域间距
-        try:
-            project_label = f"{panel.channel_name_edit.text().strip()}{panel.channel_level_combo.currentText()}".strip()
-        except Exception:
-            project_label = ""
-        if project_label and hasattr(msp, "add_text"):
-            msp.add_text(
-                project_label,
-                dxfattribs={"height": 2.8, "layer": _PROF_PREFIX + "文字标注"},
-            ).set_placement((0.0, GAP / 2.0))
-
         # ======== A. 纵断面表格（顶部，原点(0,0)） ========
         try:
             if xxpipe_tunnel_split_context:
@@ -14179,4 +14198,3 @@ def open_section_summary_table(panel):
         import traceback; traceback.print_exc()
         fluent_error(panel.window(), "打开失败",
                      f"断面汇总表生成器打开失败：\n{str(e)}")
-

@@ -1,0 +1,33 @@
+
+[1;33m📢 Tips:[0m QFluentWidgets Pro is now released. Click [1;96mhttps://qfluentwidgets.com/pages/pro[0m to learn more about it.
+
+NOTICE 示例一 | 已加载综合演示数据（含明渠/隧洞/渡槽/暗涵/倒虹吸/有压管道/分水闸）（59 行）
+STAGE import
+NOTICE 蒲家湾实测 | 已加载（77 行）
+INPUTS 77 EXPECTED 49
+NOTICE 批量计算完成 | 总计: 49条 | 成功: 2条 | 失败: 0条 | 跳过: 47条 (倒虹吸/有压管道〔含定向钻、顶管〕/闸类占位行不参与断面计算)
+NOTICE 数据共享 | 已注册 49 条结果到共享数据管理器，可在推求水面线模块中导入
+NOTICE 导入成功 | 已导入 49 个节点，已自动填充流量。转弯半径按各行导入值保留；如需统一，请在顶部填写后点击“应用”。请依次点击【插入渐变段】→【有压管道水力计算】→【执行计算】
+BATCH_RESULTS 49
+WATER_INPUTS 49
+NODES 49 READY True
+ROUTES ['flow1-route1'] GROUPS 47
+IMPORT_ROUTE flow1-route1 CONTEXT_KEYS ['route_key', 'display_name', 'ip_points', 'route_start_row_index', 'route_end_row_index', 'route_start_mc', 'route_end_mc', 'groups']
+NOTICE 导入成功 | 流量段1 整线1
+已导入2段纵断面，共42个节点；段间空档保留。
+本次导入节点: 42 个，已完整替换原纵断面。
+COVERAGE {"display_name": "流量段1 整线1", "station_errors": [], "missing_targets": [], "coverage_start": 0.0, "coverage_end": 6110.256012720754, "coverage_tol": 0.01}
+DIALOG_ACCEPTED True
+NOTICE 有压管道计算完成 | 已完成 49 条计算并回写 47 条到"倒虹吸/有压管道水头损失"列。
+RECORDS 49 FAIL []
+NOTICE 计算完成 | 共49个节点，总长6110.2m，水位落差4.330m
+CALCULATED 49
+STAGE export
+EXPORTED True
+DXF_AUDIT 0 ENTITIES 1181
+AXIS_VERIFIED [15, 34] NO_BACKTRACK True
+SPLIT_SPANS [{'source_start_mc': 0.0, 'source_end_mc': 789.1829856156841, 'plot_start_mc': 0.0, 'plot_end_mc': 789.1829856156841}, {'source_start_mc': 2672.8826955748514, 'source_end_mc': 6110.238448121026, 'plot_start_mc': 789.1829856156841, 'plot_end_mc': 4226.538738161858}]
+NOTICE 示例一 | 已加载综合演示数据（含明渠/隧洞/渡槽/暗涵/倒虹吸/有压管道/分水闸）（59 行）
+PROJECT_RELOAD 49 ROUTES 1
+PORTAL_LOSS_VERIFIED 0.18582482848666798 TUNNEL_LOSS 0.94185
+DONE

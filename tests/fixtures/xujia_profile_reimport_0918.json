@@ -1,0 +1,1531 @@
+{
+  "description": "徐家0918实际错误成果、清空后成果及原始折线独立插值。旧节点回归输入由错误高程表采样重建，不代表恢复了当时的完整配置缓存。清空后成果仍有9列受变坡点简化影响，以source_elevation_text作为最终基准。",
+  "sources": {
+    "徐家.dxf": "7281ff1065d4a86f8e7dac1e5e89c8fafc0077fa1e0e3b1e52ef9c512c484374",
+    "徐家分支管_全部表格0918.dxf": "9b0c6ed599c2a015bc63f19251be7948d60439f3fe420e06bea770d82dc58c6c",
+    "徐家分支管_全部表格.dxf": "9d9a9d868d5915f0f09f6efc3a34254958db6372af3ceb0d30042a62d6a6e2ad"
+  },
+  "source_vertices_xyb": [
+    [
+      2.01e-14,
+      328.88,
+      0.0
+    ],
+    [
+      42.45624695043082,
+      328.88,
+      0.0
+    ],
+    [
+      79.0716934533557,
+      322.5213844958879,
+      0.0
+    ],
+    [
+      185.1727248012321,
+      321.3740292350948,
+      0.0
+    ],
+    [
+      207.0793561965693,
+      318.4916081452928,
+      0.0
+    ],
+    [
+      216.7056107473327,
+      318.4916081452928,
+      0.0
+    ],
+    [
+      302.3987709089415,
+      340.2372403565049,
+      0.0
+    ],
+    [
+      354.8382855777163,
+      340.2372403565049,
+      0.0
+    ],
+    [
+      442.7035280511482,
+      331.9588555862382,
+      0.0
+    ],
+    [
+      465.3291825816268,
+      324.74962870555,
+      0.0
+    ],
+    [
+      754.8291108956328,
+      321.4010981164128,
+      0.0
+    ],
+    [
+      819.7515015484532,
+      318.4916081452928,
+      0.0
+    ],
+    [
+      870.3157744202763,
+      319.4916081452928,
+      0.0
+    ],
+    [
+      992.6511326531181,
+      317.9053619835712,
+      0.0
+    ],
+    [
+      1059.635976660298,
+      315.4916081452928,
+      0.0
+    ],
+    [
+      1107.028595991433,
+      318.5669107554667,
+      0.0
+    ],
+    [
+      1249.496319863363,
+      323.5321601653658,
+      0.0
+    ],
+    [
+      1317.339367675712,
+      323.5321601653658,
+      0.0
+    ],
+    [
+      1407.344249626855,
+      318.4142207769863,
+      0.0
+    ],
+    [
+      1449.889630377409,
+      318.2195791924559,
+      0.0
+    ],
+    [
+      1654.418228868162,
+      317.9269636218622,
+      0.0
+    ],
+    [
+      1733.005841090693,
+      321.4916081452928,
+      0.0
+    ],
+    [
+      1868.815212685499,
+      320.7248176523671,
+      0.0
+    ],
+    [
+      2072.544863414136,
+      319.0483966261335,
+      0.0
+    ],
+    [
+      2334.156264603022,
+      316.3724503038637,
+      0.0
+    ],
+    [
+      2394.582004356664,
+      334.5715391460061,
+      0.0
+    ],
+    [
+      2406.796287601581,
+      339.9916081452928,
+      0.0
+    ],
+    [
+      2423.112144006882,
+      340.4916081452928,
+      0.0
+    ],
+    [
+      2464.952287646826,
+      313.5637942400016,
+      0.0
+    ],
+    [
+      2463.369246950373,
+      313.5637942400016,
+      0.0
+    ],
+    [
+      2516.417974869837,
+      313.5637942400016,
+      0.0
+    ],
+    [
+      2584.37379664206,
+      335.4916081452928,
+      0.0
+    ],
+    [
+      2585.983246950433,
+      334.5485173511505,
+      0.0
+    ],
+    [
+      2597.137236895738,
+      335.4916081452928,
+      0.0
+    ],
+    [
+      2613.018901359639,
+      323.050527822338,
+      0.0
+    ],
+    [
+      2715.942052155035,
+      323.050527822338,
+      0.0
+    ],
+    [
+      2793.163850028184,
+      314.1428144118935,
+      0.0
+    ],
+    [
+      2834.021800983581,
+      317.1096240110882,
+      0.0
+    ],
+    [
+      3013.05865675211,
+      318.4916081452928,
+      0.0
+    ],
+    [
+      3099.66787221341,
+      325.1543812482804,
+      0.0
+    ],
+    [
+      3170.485865968513,
+      324.1721321922913,
+      0.0
+    ],
+    [
+      3202.121786647127,
+      317.0247174791247,
+      0.0
+    ],
+    [
+      3427.175109859789,
+      317.0247174791247,
+      0.0
+    ],
+    [
+      3468.688500119606,
+      325.5420359588414,
+      0.0
+    ],
+    [
+      3546.419813929941,
+      329.7144782278873,
+      0.0
+    ],
+    [
+      3594.817777910037,
+      328.3151233434863,
+      0.0
+    ],
+    [
+      3623.751244042418,
+      328.3151233434863,
+      0.0
+    ],
+    [
+      3659.980028479593,
+      322.7186298464611,
+      0.0
+    ],
+    [
+      3706.155685946113,
+      322.7186298464611,
+      0.0
+    ],
+    [
+      3722.243365828181,
+      315.0744930693135,
+      0.0
+    ],
+    [
+      3805.594744988834,
+      315.0744930693135,
+      0.0
+    ],
+    [
+      3849.13653735281,
+      329.5495273648947,
+      0.0
+    ],
+    [
+      3876.71053510136,
+      329.5495273648947,
+      0.0
+    ],
+    [
+      3902.733682696591,
+      319.2174415906146,
+      0.0
+    ],
+    [
+      3960.182498682058,
+      319.2174415906146,
+      0.0
+    ],
+    [
+      4046.129385092645,
+      336.9012459666654,
+      0.0
+    ],
+    [
+      4080.083213754231,
+      341.4226778597757,
+      0.0
+    ],
+    [
+      4169.847700160463,
+      341.4226778597757,
+      0.0
+    ],
+    [
+      4222.483592073084,
+      321.4916081452928,
+      0.0
+    ],
+    [
+      4280.657149085426,
+      321.0537633887678,
+      0.0
+    ],
+    [
+      4304.061000300688,
+      330.9289560216665,
+      0.0
+    ],
+    [
+      4343.370822085883,
+      331.5831002393924,
+      0.0
+    ],
+    [
+      4407.341810645303,
+      317.3722007471323,
+      0.0
+    ],
+    [
+      4509.203898859327,
+      322.2172419620864,
+      0.0
+    ],
+    [
+      4597.255450956407,
+      331.5259969356656,
+      0.0
+    ],
+    [
+      4663.491894470062,
+      332.908456655331,
+      0.0
+    ],
+    [
+      4819.192618727451,
+      333.446493219696,
+      0.0
+    ],
+    [
+      4859.477856286336,
+      336.7374434230104,
+      0.0
+    ],
+    [
+      5094.376899813884,
+      336.7374434230104,
+      0.0
+    ],
+    [
+      5181.702722268994,
+      333.8550178325921,
+      0.0
+    ],
+    [
+      5216.62324695033,
+      332.1570461631007,
+      0.0
+    ],
+    [
+      5416.075294890325,
+      321.5701680678129,
+      0.0
+    ],
+    [
+      5675.938603670569,
+      322.6043124088272,
+      0.0
+    ],
+    [
+      5823.836000904907,
+      328.2052940597013,
+      0.0
+    ],
+    [
+      5913.987139213365,
+      332.2497531474754,
+      0.0
+    ],
+    [
+      5934.203489019535,
+      337.6054031007178,
+      0.0
+    ],
+    [
+      6131.835817427258,
+      337.6054031007178,
+      0.0
+    ],
+    [
+      6196.040698354016,
+      332.8620297565311,
+      0.0
+    ],
+    [
+      6291.156270318315,
+      328.6728871572949,
+      0.0
+    ],
+    [
+      6491.17668011412,
+      331.6188060260564,
+      0.0
+    ],
+    [
+      6560.908447354566,
+      320.3707545344904,
+      0.0
+    ],
+    [
+      6617.003852921538,
+      320.3707545344904,
+      0.0
+    ],
+    [
+      6696.882285812404,
+      333.301525679063,
+      0.0
+    ],
+    [
+      6773.373482434312,
+      333.301525679063,
+      0.0
+    ],
+    [
+      6779.669664804242,
+      328.5952493065223,
+      0.0
+    ],
+    [
+      6808.091818766436,
+      328.4916081452928,
+      0.0
+    ],
+    [
+      6943.828935415135,
+      336.4916081452928,
+      0.0
+    ],
+    [
+      6986.638617823948,
+      336.6590347095579,
+      0.0
+    ],
+    [
+      7023.328227883554,
+      341.276118758712,
+      0.0
+    ],
+    [
+      7072.795452815364,
+      341.0991249551251,
+      0.0
+    ],
+    [
+      7105.126707636053,
+      336.4916081452928,
+      0.0
+    ],
+    [
+      7234.241561173229,
+      336.5149513768218,
+      0.0
+    ],
+    [
+      7262.894817167893,
+      331.5000579009019,
+      0.0
+    ],
+    [
+      7283.603439352009,
+      330.9204116474092,
+      0.0
+    ],
+    [
+      7328.64261884056,
+      337.8450371586904,
+      0.0
+    ],
+    [
+      7408.916170463199,
+      336.515242276825,
+      0.0
+    ],
+    [
+      7475.962366456981,
+      318.4439891219325,
+      0.0
+    ],
+    [
+      7523.417808737024,
+      316.4335468012094,
+      0.0
+    ],
+    [
+      7680.879868790507,
+      314.4252351565473,
+      0.0
+    ],
+    [
+      7939.213956815423,
+      313.5208280017786,
+      0.0
+    ],
+    [
+      8019.19665174128,
+      307.4916081452928,
+      0.0
+    ],
+    [
+      8068.812072384288,
+      315.5943577546813,
+      0.0
+    ],
+    [
+      8126.472480577882,
+      315.4916081452928,
+      0.0
+    ],
+    [
+      8259.824363643536,
+      313.2774939798936,
+      0.0
+    ],
+    [
+      8389.02924695029,
+      312.3747011154145,
+      0.0
+    ],
+    [
+      8421.916126256343,
+      316.2413685457967,
+      0.0
+    ],
+    [
+      8480.33564509591,
+      315.4916081452928,
+      0.0
+    ],
+    [
+      8493.084223815473,
+      321.4916081452928,
+      0.0
+    ],
+    [
+      8537.332353212405,
+      321.5636860789917,
+      0.0
+    ],
+    [
+      8551.706149867037,
+      317.3540790012293,
+      0.0
+    ],
+    [
+      8600.099015996093,
+      317.4968308164924,
+      0.0
+    ],
+    [
+      8677.789123133058,
+      328.547534512002,
+      0.0
+    ],
+    [
+      8729.026515035308,
+      328.7840306699462,
+      0.0
+    ],
+    [
+      8784.271500768606,
+      323.2225198923796,
+      0.0
+    ],
+    [
+      8844.445952925482,
+      323.2225198923796,
+      0.0
+    ],
+    [
+      8914.671501624282,
+      332.3180215606652,
+      0.0
+    ],
+    [
+      9010.186896340107,
+      332.3180215606652,
+      0.0
+    ],
+    [
+      9122.515049659414,
+      333.8539614995196,
+      0.0
+    ],
+    [
+      9137.705637122039,
+      329.3664641367458,
+      0.0
+    ],
+    [
+      9207.022854640849,
+      328.701422171779,
+      0.0
+    ],
+    [
+      9436.19580434123,
+      328.6291498873569,
+      0.0
+    ],
+    [
+      9457.10415663151,
+      334.9212649638019,
+      0.0
+    ],
+    [
+      9509.666075346177,
+      334.9212649638019,
+      0.0
+    ],
+    [
+      9561.296702306834,
+      331.390154354386,
+      0.0
+    ],
+    [
+      9593.182333910721,
+      331.390154354386,
+      0.0
+    ],
+    [
+      9644.101461922051,
+      319.6951077372022,
+      0.0
+    ],
+    [
+      9660.219652842847,
+      319.4341695598513,
+      0.0
+    ],
+    [
+      9678.282218749519,
+      322.3122224720381,
+      0.0
+    ],
+    [
+      9741.195427609258,
+      322.3122224720381,
+      0.0
+    ],
+    [
+      9758.731391568435,
+      318.5444860547967,
+      0.0
+    ],
+    [
+      9850.574428930411,
+      315.4845705117285,
+      0.0
+    ],
+    [
+      10000.40236886276,
+      315.4747316400707,
+      0.0
+    ],
+    [
+      10043.78328439558,
+      317.7291743924096,
+      0.0
+    ],
+    [
+      10136.91273306834,
+      319.7043538639508,
+      0.0
+    ],
+    [
+      10207.00182759331,
+      324.1738658338971,
+      0.0
+    ],
+    [
+      10248.66094410687,
+      322.6856688732468,
+      0.0
+    ],
+    [
+      10379.93097893591,
+      326.077832561098,
+      0.0
+    ],
+    [
+      10421.63658349973,
+      330.8148213640042,
+      0.0
+    ],
+    [
+      10596.747849131,
+      328.544221052546,
+      0.0
+    ],
+    [
+      10686.63594384061,
+      328.631456850674,
+      0.0
+    ],
+    [
+      10911.75779351406,
+      325.518987311162,
+      0.0
+    ],
+    [
+      10975.16830674815,
+      324.8685240294971,
+      0.0
+    ],
+    [
+      11000.35723233537,
+      330.5090872301906,
+      0.0
+    ],
+    [
+      11035.01865381177,
+      333.0904302309453,
+      0.0
+    ]
+  ],
+  "columns": [
+    {
+      "station_label": "徐分支0+000.00",
+      "station_m": 0.0,
+      "bad_elevation_text": "328.88",
+      "good_elevation_text": "328.88",
+      "source_elevation_text": "328.88"
+    },
+    {
+      "station_label": "徐分支0+059.77",
+      "station_m": 59.765,
+      "bad_elevation_text": "341.94",
+      "good_elevation_text": "325.87",
+      "source_elevation_text": "325.87"
+    },
+    {
+      "station_label": "徐分支0+186.74",
+      "station_m": 186.742,
+      "bad_elevation_text": "351.88",
+      "good_elevation_text": "321.17",
+      "source_elevation_text": "321.17"
+    },
+    {
+      "station_label": "徐分支0+354.84",
+      "station_m": 354.844,
+      "bad_elevation_text": "340.36",
+      "good_elevation_text": "340.24",
+      "source_elevation_text": "340.24"
+    },
+    {
+      "station_label": "徐分支0+442.71",
+      "station_m": 442.706,
+      "bad_elevation_text": "331.96",
+      "good_elevation_text": "331.96",
+      "source_elevation_text": "331.96"
+    },
+    {
+      "station_label": "徐分支0+552.98",
+      "station_m": 552.975,
+      "bad_elevation_text": "380.06",
+      "good_elevation_text": "323.74",
+      "source_elevation_text": "323.74"
+    },
+    {
+      "station_label": "徐分支0+754.83",
+      "station_m": 754.831,
+      "bad_elevation_text": "321.42",
+      "good_elevation_text": "321.40",
+      "source_elevation_text": "321.40"
+    },
+    {
+      "station_label": "徐分支0+864.46",
+      "station_m": 864.458,
+      "bad_elevation_text": "379.25",
+      "good_elevation_text": "319.38",
+      "source_elevation_text": "319.38"
+    },
+    {
+      "station_label": "徐分支0+992.65",
+      "station_m": 992.654,
+      "bad_elevation_text": "317.91",
+      "good_elevation_text": "317.91",
+      "source_elevation_text": "317.91"
+    },
+    {
+      "station_label": "徐分支1+245.68",
+      "station_m": 1245.677,
+      "bad_elevation_text": "329.80",
+      "good_elevation_text": "323.40",
+      "source_elevation_text": "323.40"
+    },
+    {
+      "station_label": "徐分支1+263.38",
+      "station_m": 1263.375,
+      "bad_elevation_text": "339.88",
+      "good_elevation_text": "323.53",
+      "source_elevation_text": "323.53"
+    },
+    {
+      "station_label": "徐分支1+317.34",
+      "station_m": 1317.339,
+      "bad_elevation_text": "323.53",
+      "good_elevation_text": "323.53",
+      "source_elevation_text": "323.53"
+    },
+    {
+      "station_label": "徐分支1+407.34",
+      "station_m": 1407.343,
+      "bad_elevation_text": "318.41",
+      "good_elevation_text": "318.41",
+      "source_elevation_text": "318.41"
+    },
+    {
+      "station_label": "徐分支1+449.89",
+      "station_m": 1449.8899999999999,
+      "bad_elevation_text": "327.85",
+      "good_elevation_text": "318.33",
+      "source_elevation_text": "318.22"
+    },
+    {
+      "station_label": "徐分支1+528.77",
+      "station_m": 1528.7730000000001,
+      "bad_elevation_text": "384.90",
+      "good_elevation_text": "318.17",
+      "source_elevation_text": "318.11"
+    },
+    {
+      "station_label": "徐分支1+595.67",
+      "station_m": 1595.674,
+      "bad_elevation_text": "354.23",
+      "good_elevation_text": "318.04",
+      "source_elevation_text": "318.01"
+    },
+    {
+      "station_label": "徐分支1+645.78",
+      "station_m": 1645.775,
+      "bad_elevation_text": "387.02",
+      "good_elevation_text": "317.94",
+      "source_elevation_text": "317.94"
+    },
+    {
+      "station_label": "徐分支1+671.82",
+      "station_m": 1671.817,
+      "bad_elevation_text": "346.49",
+      "good_elevation_text": "318.72",
+      "source_elevation_text": "318.72"
+    },
+    {
+      "station_label": "徐分支1+733.02",
+      "station_m": 1733.017,
+      "bad_elevation_text": "321.50",
+      "good_elevation_text": "321.49",
+      "source_elevation_text": "321.49"
+    },
+    {
+      "station_label": "徐分支1+868.82",
+      "station_m": 1868.8229999999999,
+      "bad_elevation_text": "341.66",
+      "good_elevation_text": "320.34",
+      "source_elevation_text": "320.72"
+    },
+    {
+      "station_label": "徐分支1+973.01",
+      "station_m": 1973.01,
+      "bad_elevation_text": "375.11",
+      "good_elevation_text": "319.45",
+      "source_elevation_text": "319.87"
+    },
+    {
+      "station_label": "徐分支2+072.56",
+      "station_m": 2072.562,
+      "bad_elevation_text": "367.28",
+      "good_elevation_text": "318.60",
+      "source_elevation_text": "319.05"
+    },
+    {
+      "station_label": "徐分支2+180.14",
+      "station_m": 2180.138,
+      "bad_elevation_text": "357.88",
+      "good_elevation_text": "317.68",
+      "source_elevation_text": "317.95"
+    },
+    {
+      "station_label": "徐分支2+477.39",
+      "station_m": 2477.394,
+      "bad_elevation_text": "330.53",
+      "good_elevation_text": "313.56",
+      "source_elevation_text": "313.56"
+    },
+    {
+      "station_label": "徐分支2+584.39",
+      "station_m": 2584.385,
+      "bad_elevation_text": "335.49",
+      "good_elevation_text": "335.49",
+      "source_elevation_text": "335.49"
+    },
+    {
+      "station_label": "徐分支2+597.14",
+      "station_m": 2597.145,
+      "bad_elevation_text": "335.49",
+      "good_elevation_text": "335.49",
+      "source_elevation_text": "335.49"
+    },
+    {
+      "station_label": "徐分支2+613.03",
+      "station_m": 2613.026,
+      "bad_elevation_text": "323.05",
+      "good_elevation_text": "323.05",
+      "source_elevation_text": "323.05"
+    },
+    {
+      "station_label": "徐分支2+644.41",
+      "station_m": 2644.408,
+      "bad_elevation_text": "331.60",
+      "good_elevation_text": "323.05",
+      "source_elevation_text": "323.05"
+    },
+    {
+      "station_label": "徐分支2+715.95",
+      "station_m": 2715.948,
+      "bad_elevation_text": "323.05",
+      "good_elevation_text": "323.05",
+      "source_elevation_text": "323.05"
+    },
+    {
+      "station_label": "徐分支2+793.17",
+      "station_m": 2793.1710000000003,
+      "bad_elevation_text": "314.15",
+      "good_elevation_text": "314.14",
+      "source_elevation_text": "314.14"
+    },
+    {
+      "station_label": "徐分支2+834.03",
+      "station_m": 2834.027,
+      "bad_elevation_text": "317.11",
+      "good_elevation_text": "317.11",
+      "source_elevation_text": "317.11"
+    },
+    {
+      "station_label": "徐分支3+013.02",
+      "station_m": 3013.02,
+      "bad_elevation_text": "318.53",
+      "good_elevation_text": "318.49",
+      "source_elevation_text": "318.49"
+    },
+    {
+      "station_label": "徐分支3+099.68",
+      "station_m": 3099.676,
+      "bad_elevation_text": "325.23",
+      "good_elevation_text": "325.15",
+      "source_elevation_text": "325.15"
+    },
+    {
+      "station_label": "徐分支3+170.50",
+      "station_m": 3170.498,
+      "bad_elevation_text": "324.42",
+      "good_elevation_text": "324.17",
+      "source_elevation_text": "324.17"
+    },
+    {
+      "station_label": "徐分支3+283.15",
+      "station_m": 3283.1530000000002,
+      "bad_elevation_text": "317.02",
+      "good_elevation_text": "317.02",
+      "source_elevation_text": "317.02"
+    },
+    {
+      "station_label": "徐分支3+396.43",
+      "station_m": 3396.43,
+      "bad_elevation_text": "317.02",
+      "good_elevation_text": "317.02",
+      "source_elevation_text": "317.02"
+    },
+    {
+      "station_label": "徐分支3+427.18",
+      "station_m": 3427.177,
+      "bad_elevation_text": "317.03",
+      "good_elevation_text": "317.03",
+      "source_elevation_text": "317.03"
+    },
+    {
+      "station_label": "徐分支3+468.69",
+      "station_m": 3468.694,
+      "bad_elevation_text": "325.54",
+      "good_elevation_text": "325.54",
+      "source_elevation_text": "325.54"
+    },
+    {
+      "station_label": "徐分支3+546.43",
+      "station_m": 3546.428,
+      "bad_elevation_text": "329.71",
+      "good_elevation_text": "329.71",
+      "source_elevation_text": "329.71"
+    },
+    {
+      "station_label": "徐分支3+594.82",
+      "station_m": 3594.82,
+      "bad_elevation_text": "328.32",
+      "good_elevation_text": "328.32",
+      "source_elevation_text": "328.32"
+    },
+    {
+      "station_label": "徐分支3+659.99",
+      "station_m": 3659.989,
+      "bad_elevation_text": "322.82",
+      "good_elevation_text": "322.72",
+      "source_elevation_text": "322.72"
+    },
+    {
+      "station_label": "徐分支3+849.14",
+      "station_m": 3849.14,
+      "bad_elevation_text": "329.56",
+      "good_elevation_text": "329.55",
+      "source_elevation_text": "329.55"
+    },
+    {
+      "station_label": "徐分支4+046.14",
+      "station_m": 4046.135,
+      "bad_elevation_text": "336.90",
+      "good_elevation_text": "336.90",
+      "source_elevation_text": "336.90"
+    },
+    {
+      "station_label": "徐分支4+206.16",
+      "station_m": 4206.165,
+      "bad_elevation_text": "343.31",
+      "good_elevation_text": "327.67",
+      "source_elevation_text": "327.67"
+    },
+    {
+      "station_label": "徐分支4+343.38",
+      "station_m": 4343.375,
+      "bad_elevation_text": "331.58",
+      "good_elevation_text": "331.58",
+      "source_elevation_text": "331.58"
+    },
+    {
+      "station_label": "徐分支4+509.21",
+      "station_m": 4509.211,
+      "bad_elevation_text": "322.22",
+      "good_elevation_text": "322.22",
+      "source_elevation_text": "322.22"
+    },
+    {
+      "station_label": "徐分支4+663.49",
+      "station_m": 4663.491,
+      "bad_elevation_text": "332.91",
+      "good_elevation_text": "332.91",
+      "source_elevation_text": "332.91"
+    },
+    {
+      "station_label": "徐分支4+759.50",
+      "station_m": 4759.498,
+      "bad_elevation_text": "333.24",
+      "good_elevation_text": "333.24",
+      "source_elevation_text": "333.24"
+    },
+    {
+      "station_label": "徐分支4+819.19",
+      "station_m": 4819.193,
+      "bad_elevation_text": "333.45",
+      "good_elevation_text": "333.45",
+      "source_elevation_text": "333.45"
+    },
+    {
+      "station_label": "徐分支4+853.86",
+      "station_m": 4853.861,
+      "bad_elevation_text": "336.28",
+      "good_elevation_text": "336.28",
+      "source_elevation_text": "336.28"
+    },
+    {
+      "station_label": "徐分支4+859.48",
+      "station_m": 4859.481,
+      "bad_elevation_text": "336.74",
+      "good_elevation_text": "336.74",
+      "source_elevation_text": "336.74"
+    },
+    {
+      "station_label": "徐分支5+094.37",
+      "station_m": 5094.371,
+      "bad_elevation_text": "336.74",
+      "good_elevation_text": "336.74",
+      "source_elevation_text": "336.74"
+    },
+    {
+      "station_label": "徐分支5+149.62",
+      "station_m": 5149.617,
+      "bad_elevation_text": "334.91",
+      "good_elevation_text": "334.91",
+      "source_elevation_text": "334.91"
+    },
+    {
+      "station_label": "徐分支5+181.70",
+      "station_m": 5181.7,
+      "bad_elevation_text": "333.86",
+      "good_elevation_text": "333.86",
+      "source_elevation_text": "333.86"
+    },
+    {
+      "station_label": "徐分支5+416.08",
+      "station_m": 5416.0779999999995,
+      "bad_elevation_text": "321.57",
+      "good_elevation_text": "321.57",
+      "source_elevation_text": "321.57"
+    },
+    {
+      "station_label": "徐分支5+544.30",
+      "station_m": 5544.303,
+      "bad_elevation_text": "354.46",
+      "good_elevation_text": "322.08",
+      "source_elevation_text": "322.08"
+    },
+    {
+      "station_label": "徐分支5+675.94",
+      "station_m": 5675.942,
+      "bad_elevation_text": "322.60",
+      "good_elevation_text": "322.60",
+      "source_elevation_text": "322.60"
+    },
+    {
+      "station_label": "徐分支5+823.84",
+      "station_m": 5823.838,
+      "bad_elevation_text": "328.60",
+      "good_elevation_text": "328.60",
+      "source_elevation_text": "328.21"
+    },
+    {
+      "station_label": "徐分支5+913.99",
+      "station_m": 5913.988,
+      "bad_elevation_text": "332.25",
+      "good_elevation_text": "332.25",
+      "source_elevation_text": "332.25"
+    },
+    {
+      "station_label": "徐分支6+004.03",
+      "station_m": 6004.028,
+      "bad_elevation_text": "347.20",
+      "good_elevation_text": "337.61",
+      "source_elevation_text": "337.61"
+    },
+    {
+      "station_label": "徐分支6+131.83",
+      "station_m": 6131.831,
+      "bad_elevation_text": "337.61",
+      "good_elevation_text": "337.61",
+      "source_elevation_text": "337.61"
+    },
+    {
+      "station_label": "徐分支6+221.03",
+      "station_m": 6221.027,
+      "bad_elevation_text": "331.76",
+      "good_elevation_text": "331.76",
+      "source_elevation_text": "331.76"
+    },
+    {
+      "station_label": "徐分支6+291.16",
+      "station_m": 6291.157,
+      "bad_elevation_text": "328.67",
+      "good_elevation_text": "328.67",
+      "source_elevation_text": "328.67"
+    },
+    {
+      "station_label": "徐分支6+333.20",
+      "station_m": 6333.204,
+      "bad_elevation_text": "329.29",
+      "good_elevation_text": "329.29",
+      "source_elevation_text": "329.29"
+    },
+    {
+      "station_label": "徐分支6+411.26",
+      "station_m": 6411.261,
+      "bad_elevation_text": "330.44",
+      "good_elevation_text": "330.44",
+      "source_elevation_text": "330.44"
+    },
+    {
+      "station_label": "徐分支6+490.86",
+      "station_m": 6490.858,
+      "bad_elevation_text": "331.61",
+      "good_elevation_text": "331.61",
+      "source_elevation_text": "331.61"
+    },
+    {
+      "station_label": "徐分支6+560.91",
+      "station_m": 6560.91,
+      "bad_elevation_text": "320.37",
+      "good_elevation_text": "320.37",
+      "source_elevation_text": "320.37"
+    },
+    {
+      "station_label": "徐分支6+617.00",
+      "station_m": 6617.004,
+      "bad_elevation_text": "320.37",
+      "good_elevation_text": "320.37",
+      "source_elevation_text": "320.37"
+    },
+    {
+      "station_label": "徐分支6+696.89",
+      "station_m": 6696.889,
+      "bad_elevation_text": "333.30",
+      "good_elevation_text": "333.30",
+      "source_elevation_text": "333.30"
+    },
+    {
+      "station_label": "徐分支6+739.29",
+      "station_m": 6739.292,
+      "bad_elevation_text": "333.30",
+      "good_elevation_text": "333.30",
+      "source_elevation_text": "333.30"
+    },
+    {
+      "station_label": "徐分支6+943.83",
+      "station_m": 6943.83,
+      "bad_elevation_text": "336.49",
+      "good_elevation_text": "336.49",
+      "source_elevation_text": "336.49"
+    },
+    {
+      "station_label": "徐分支7+023.33",
+      "station_m": 7023.326,
+      "bad_elevation_text": "341.28",
+      "good_elevation_text": "341.28",
+      "source_elevation_text": "341.28"
+    },
+    {
+      "station_label": "徐分支7+178.36",
+      "station_m": 7178.362,
+      "bad_elevation_text": "362.77",
+      "good_elevation_text": "336.50",
+      "source_elevation_text": "336.50"
+    },
+    {
+      "station_label": "徐分支7+234.19",
+      "station_m": 7234.185,
+      "bad_elevation_text": "336.54",
+      "good_elevation_text": "336.51",
+      "source_elevation_text": "336.51"
+    },
+    {
+      "station_label": "徐分支7+271.71",
+      "station_m": 7271.711,
+      "bad_elevation_text": "330.47",
+      "good_elevation_text": "331.25",
+      "source_elevation_text": "331.25"
+    },
+    {
+      "station_label": "徐分支7+475.95",
+      "station_m": 7475.955,
+      "bad_elevation_text": "318.45",
+      "good_elevation_text": "318.45",
+      "source_elevation_text": "318.45"
+    },
+    {
+      "station_label": "徐分支7+485.95",
+      "station_m": 7485.946,
+      "bad_elevation_text": "318.02",
+      "good_elevation_text": "318.02",
+      "source_elevation_text": "318.02"
+    },
+    {
+      "station_label": "徐分支7+680.88",
+      "station_m": 7680.881,
+      "bad_elevation_text": "314.43",
+      "good_elevation_text": "314.43",
+      "source_elevation_text": "314.43"
+    },
+    {
+      "station_label": "徐分支7+806.58",
+      "station_m": 7806.576,
+      "bad_elevation_text": "313.99",
+      "good_elevation_text": "313.99",
+      "source_elevation_text": "313.99"
+    },
+    {
+      "station_label": "徐分支7+939.21",
+      "station_m": 7939.211,
+      "bad_elevation_text": "313.52",
+      "good_elevation_text": "313.52",
+      "source_elevation_text": "313.52"
+    },
+    {
+      "station_label": "徐分支8+068.81",
+      "station_m": 8068.815,
+      "bad_elevation_text": "315.59",
+      "good_elevation_text": "315.59",
+      "source_elevation_text": "315.59"
+    },
+    {
+      "station_label": "徐分支8+184.49",
+      "station_m": 8184.493,
+      "bad_elevation_text": "314.53",
+      "good_elevation_text": "314.53",
+      "source_elevation_text": "314.53"
+    },
+    {
+      "station_label": "徐分支8+259.82",
+      "station_m": 8259.822,
+      "bad_elevation_text": "313.28",
+      "good_elevation_text": "313.28",
+      "source_elevation_text": "313.28"
+    },
+    {
+      "station_label": "徐分支8+421.91",
+      "station_m": 8421.913,
+      "bad_elevation_text": "316.24",
+      "good_elevation_text": "316.24",
+      "source_elevation_text": "316.24"
+    },
+    {
+      "station_label": "徐分支8+447.93",
+      "station_m": 8447.933,
+      "bad_elevation_text": "315.91",
+      "good_elevation_text": "315.91",
+      "source_elevation_text": "315.91"
+    },
+    {
+      "station_label": "徐分支8+508.21",
+      "station_m": 8508.214,
+      "bad_elevation_text": "321.52",
+      "good_elevation_text": "321.52",
+      "source_elevation_text": "321.52"
+    },
+    {
+      "station_label": "徐分支8+574.25",
+      "station_m": 8574.248,
+      "bad_elevation_text": "317.42",
+      "good_elevation_text": "317.42",
+      "source_elevation_text": "317.42"
+    },
+    {
+      "station_label": "徐分支8+784.27",
+      "station_m": 8784.274,
+      "bad_elevation_text": "323.22",
+      "good_elevation_text": "323.22",
+      "source_elevation_text": "323.22"
+    },
+    {
+      "station_label": "徐分支8+844.44",
+      "station_m": 8844.445,
+      "bad_elevation_text": "323.22",
+      "good_elevation_text": "323.22",
+      "source_elevation_text": "323.22"
+    },
+    {
+      "station_label": "徐分支8+914.67",
+      "station_m": 8914.67,
+      "bad_elevation_text": "332.32",
+      "good_elevation_text": "332.32",
+      "source_elevation_text": "332.32"
+    },
+    {
+      "station_label": "徐分支9+010.18",
+      "station_m": 9010.18,
+      "bad_elevation_text": "332.32",
+      "good_elevation_text": "332.32",
+      "source_elevation_text": "332.32"
+    },
+    {
+      "station_label": "徐分支9+122.51",
+      "station_m": 9122.507,
+      "bad_elevation_text": "333.85",
+      "good_elevation_text": "333.85",
+      "source_elevation_text": "333.85"
+    },
+    {
+      "station_label": "徐分支9+207.00",
+      "station_m": 9206.998,
+      "bad_elevation_text": "328.70",
+      "good_elevation_text": "328.70",
+      "source_elevation_text": "328.70"
+    },
+    {
+      "station_label": "徐分支9+293.54",
+      "station_m": 9293.541,
+      "bad_elevation_text": "328.67",
+      "good_elevation_text": "328.67",
+      "source_elevation_text": "328.67"
+    },
+    {
+      "station_label": "徐分支9+370.41",
+      "station_m": 9370.408,
+      "bad_elevation_text": "328.65",
+      "good_elevation_text": "328.65",
+      "source_elevation_text": "328.65"
+    },
+    {
+      "station_label": "徐分支9+407.79",
+      "station_m": 9407.786,
+      "bad_elevation_text": "328.64",
+      "good_elevation_text": "328.64",
+      "source_elevation_text": "328.64"
+    },
+    {
+      "station_label": "徐分支9+457.09",
+      "station_m": 9457.09,
+      "bad_elevation_text": "334.92",
+      "good_elevation_text": "334.92",
+      "source_elevation_text": "334.92"
+    },
+    {
+      "station_label": "徐分支9+488.64",
+      "station_m": 9488.639,
+      "bad_elevation_text": "334.92",
+      "good_elevation_text": "334.92",
+      "source_elevation_text": "334.92"
+    },
+    {
+      "station_label": "徐分支9+509.66",
+      "station_m": 9509.659,
+      "bad_elevation_text": "334.92",
+      "good_elevation_text": "334.92",
+      "source_elevation_text": "334.92"
+    },
+    {
+      "station_label": "徐分支9+538.52",
+      "station_m": 9538.519,
+      "bad_elevation_text": "332.95",
+      "good_elevation_text": "332.95",
+      "source_elevation_text": "332.95"
+    },
+    {
+      "station_label": "徐分支9+561.29",
+      "station_m": 9561.293,
+      "bad_elevation_text": "331.39",
+      "good_elevation_text": "331.39",
+      "source_elevation_text": "331.39"
+    },
+    {
+      "station_label": "徐分支9+593.18",
+      "station_m": 9593.182,
+      "bad_elevation_text": "331.39",
+      "good_elevation_text": "331.39",
+      "source_elevation_text": "331.39"
+    },
+    {
+      "station_label": "徐分支9+741.19",
+      "station_m": 9741.194,
+      "bad_elevation_text": "322.31",
+      "good_elevation_text": "322.31",
+      "source_elevation_text": "322.31"
+    },
+    {
+      "station_label": "徐分支9+850.57",
+      "station_m": 9850.572,
+      "bad_elevation_text": "315.48",
+      "good_elevation_text": "315.48",
+      "source_elevation_text": "315.48"
+    },
+    {
+      "station_label": "徐分支9+940.07",
+      "station_m": 9940.072,
+      "bad_elevation_text": "315.48",
+      "good_elevation_text": "315.48",
+      "source_elevation_text": "315.48"
+    },
+    {
+      "station_label": "徐分支10+043.78",
+      "station_m": 10043.781,
+      "bad_elevation_text": "317.73",
+      "good_elevation_text": "317.73",
+      "source_elevation_text": "317.73"
+    },
+    {
+      "station_label": "徐分支10+136.91",
+      "station_m": 10136.914,
+      "bad_elevation_text": "319.70",
+      "good_elevation_text": "319.70",
+      "source_elevation_text": "319.70"
+    },
+    {
+      "station_label": "徐分支10+248.66",
+      "station_m": 10248.664,
+      "bad_elevation_text": "322.69",
+      "good_elevation_text": "322.69",
+      "source_elevation_text": "322.69"
+    },
+    {
+      "station_label": "徐分支10+312.91",
+      "station_m": 10312.905,
+      "bad_elevation_text": "324.35",
+      "good_elevation_text": "324.35",
+      "source_elevation_text": "324.35"
+    },
+    {
+      "station_label": "徐分支10+379.93",
+      "station_m": 10379.928,
+      "bad_elevation_text": "326.08",
+      "good_elevation_text": "326.08",
+      "source_elevation_text": "326.08"
+    },
+    {
+      "station_label": "徐分支10+596.74",
+      "station_m": 10596.742,
+      "bad_elevation_text": "328.54",
+      "good_elevation_text": "328.54",
+      "source_elevation_text": "328.54"
+    },
+    {
+      "station_label": "徐分支10+686.64",
+      "station_m": 10686.635,
+      "bad_elevation_text": "328.63",
+      "good_elevation_text": "328.63",
+      "source_elevation_text": "328.63"
+    },
+    {
+      "station_label": "徐分支10+911.75",
+      "station_m": 10911.755,
+      "bad_elevation_text": "325.70",
+      "good_elevation_text": "325.70",
+      "source_elevation_text": "325.52"
+    },
+    {
+      "station_label": "徐分支11+035.02",
+      "station_m": 11035.017,
+      "bad_elevation_text": "333.09",
+      "good_elevation_text": "333.09",
+      "source_elevation_text": "333.09"
+    }
+  ],
+  "station_basis": "由导出列X位置还原毫米级桩号：本例横向比例1:2000，非首列文字X=桩号/2-1；首列桩号为0。"
+}

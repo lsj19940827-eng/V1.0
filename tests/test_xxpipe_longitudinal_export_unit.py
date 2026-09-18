@@ -2411,7 +2411,7 @@ def test_build_xxpipe_partial_export_notice_prompts_continue_import_for_uncovere
         }
     )
 
-    assert "继续补导入" in notice
+    assert "同一份DXF中重新导入" in notice
     assert "1::三清庙@1+000.000" in notice
 
 
@@ -2678,7 +2678,7 @@ def test_build_xxpipe_profile_data_reports_detailed_coverage_gap_in_strict_mode(
     assert "导入失败：纵断面范围不够" in message
     assert "这条整线需要覆盖到桩号 80.000 m" in message
     assert "当前导入的纵断面只到 50.000 m" in message
-    assert "允许的 1.0 mm 误差" in message
+    assert "允许的 10.0 mm 误差" in message
     assert "未覆盖节点：IP2@T0+080.000" in message
 
 
@@ -3957,3 +3957,36 @@ def test_export_longitudinal_profile_dxf_keeps_xxpipe_branch_without_tail_split_
     assert [node.station_MC for node in captured["xxpipe_nodes"]] == pytest.approx([0.0, 50.0, 100.0])
     assert captured["draw_export_mode"] == "xxpipe"
     assert captured["draw_count"] == 1
+
+
+def test_implicit_tunnel_portals_extend_anonymous_pipe_spans_without_input_rows():
+    nodes = [
+        _make_node(ip_no=1, mc=0, structure="有压管道", name="", row_identity="flow1-row1"),
+        _make_node(ip_no=2, mc=60, structure="有压管道", name="", row_identity="flow1-row2"),
+        _make_node(ip_no=3, mc=100, structure="隧洞-圆形", name="罗家湾", in_out="进", row_identity="flow1-row3"),
+        _make_node(ip_no=4, mc=300, structure="隧洞-圆形", name="罗家湾", in_out="出"),
+        _make_node(ip_no=5, mc=340, structure="有压管道", name="", row_identity="flow1-row5"),
+        _make_node(ip_no=6, mc=400, structure="有压管道", name="", row_identity="flow1-row6"),
+    ]
+    plan = cad_tools._plan_xxpipe_tunnel_split_entries(nodes)
+    draw_nodes = cad_tools._copy_xxpipe_split_nodes(plan["xxpipe_entries"])
+    assert [n.station_MC for n in draw_nodes] == [0, 60, 100, 300, 340, 400]
+    assert [(s["source_start_mc"], s["source_end_mc"]) for s in plan["xxpipe_station_spans"]] == [(0, 100), (300, 400)]
+    assert [n._structure_split_break_before for n in draw_nodes] == [False, False, False, True, False, False]
+    assert draw_nodes[2].pressure_pipe_row_identity == "flow1-row3"
+    assert draw_nodes[3].pressure_pipe_row_identity == "flow1-row5"
+    assert len(nodes) == 6
+    assert "隧洞" in cad_tools._get_node_structure_text(nodes[2])
+    assert [n.station_MC for n in nodes] == [0, 60, 100, 300, 340, 400]
+
+
+def test_split_station_mapping_accepts_submillimetre_dxf_portal_difference():
+    spans = [
+        {"source_start_mc": 0, "source_end_mc": 789.415462551, "plot_start_mc": 0, "plot_end_mc": 789.415462551},
+        {"source_start_mc": 2673.114822830, "source_end_mc": 6460.085568077, "plot_start_mc": 829.415462551, "plot_end_mc": 4616.386207798},
+    ]
+    # 真实蒲家湾 DXF 第二条原线的起点，比表格洞口桩号小约 0.17 毫米。
+    assert cad_tools._resolve_profile_plot_station_value(2673.114648578, spans) == pytest.approx(829.415462551)
+    assert cad_tools._resolve_profile_plot_station_value(789.415546419, spans) == pytest.approx(789.415462551)
+    assert cad_tools._resolve_profile_plot_station_value(2800, spans) > 829.415462551
+    assert cad_tools._resolve_profile_plot_station_value(2000, spans) == 2000

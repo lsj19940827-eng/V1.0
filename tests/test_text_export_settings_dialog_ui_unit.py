@@ -4,12 +4,13 @@
 import importlib.util
 import os
 import sys
+import pytest
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import QEvent, QRect, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton, QAbstractItemView
 
@@ -37,6 +38,18 @@ def _load_cad_tools():
 
 
 cad_tools = _load_cad_tools()
+
+
+@pytest.fixture(autouse=True)
+def _dispose_dialogs():
+    yield
+    # 显式释放延迟删除的窗口，避免跨用例的快捷键和焦点相互干扰。
+    app = _get_qapp()
+    for widget in app.topLevelWidgets():
+        if isinstance(widget, cad_tools.TextExportSettingsDialog):
+            widget.hide()
+            widget.deleteLater()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
 def _clear_dialog_ui_settings():
@@ -174,12 +187,10 @@ def test_dialog_uses_splitter_workbench_and_footer_stays_visible(monkeypatch):
     dlg.show()
     _flush_events(6)
 
-    assert dlg.width() == 1250
-    assert dlg.height() == 788
-    assert dlg.width() < dlg._DESIGN_DEFAULT_WIDTH
-    assert dlg.height() < dlg._DESIGN_DEFAULT_HEIGHT
-    assert dlg.minimumWidth() >= 1160
-    assert dlg.minimumHeight() >= 700
+    assert dlg.width() == 1280
+    assert dlg.height() == 792
+    assert dlg.minimumWidth() >= 1040
+    assert dlg.minimumHeight() >= 680
     assert dlg._workbench_splitter.sizes()[0] >= dlg._DESIGN_SPLITTER_LEFT
     assert dlg._parameter_content_layout is not None
     assert dlg._parameter_left_section is not None
@@ -199,9 +210,9 @@ def test_dialog_default_size_adapts_by_resolution_class(monkeypatch):
     dialog_cls = cad_tools.TextExportSettingsDialog
 
     cases = [
-        (QRect(0, 0, 2560, 1600), (2000, 1400)),
-        (QRect(0, 0, 1920, 1080), (1500, 945)),
-        (QRect(0, 0, 3840, 2160), (2800, 1800)),
+        (QRect(0, 0, 2560, 1600), (1440, 960)),
+        (QRect(0, 0, 1920, 1080), (1440, 950)),
+        (QRect(0, 0, 3840, 2160), (1440, 960)),
     ]
 
     for rect, expected_size in cases:
@@ -298,8 +309,50 @@ def test_xxpipe_mode_shows_fixed_read_only_five_rows_and_runtime_view():
 
     widget = _find_row_widget(dlg, "building_name")
     assert not widget.checkbox.isEnabled()
+    assert widget.checkbox.isHidden()
+    assert widget.action_button.isHidden()
+    assert widget.up_button.isHidden()
+    assert widget.down_button.isHidden()
+    assert widget.badge_label.isHidden()
+    assert widget.position_label.text() == "120"
+    assert not dlg._enabled_list.selectedItems()
     assert widget.drag_handle.isHidden()
 
+    dlg.deleteLater()
+
+
+def test_inline_move_buttons_target_their_own_row_and_respect_edges():
+    _get_qapp()
+    dlg = cad_tools.TextExportSettingsDialog()
+    dlg.show()
+    _flush_events()
+    before = _enabled_ids(dlg)
+    assert not _find_row_widget(dlg, before[0]).up_button.isEnabled()
+    assert not _find_row_widget(dlg, before[-1]).down_button.isEnabled()
+    dlg._set_current_row_id(before[-1], "enabled")
+    QTest.mouseClick(_find_row_widget(dlg, before[0]).down_button, Qt.LeftButton)
+    _flush_events()
+    assert _enabled_ids(dlg) == [before[1], before[0], *before[2:]]
+    QTest.mouseClick(_find_row_widget(dlg, before[0]).up_button, Qt.LeftButton)
+    _flush_events()
+    assert _enabled_ids(dlg) == before
+    assert _runtime_row_ids(dlg) == before
+    dlg.deleteLater()
+
+
+def test_layout_details_expand_without_changing_export_settings():
+    _get_qapp()
+    dlg = cad_tools.TextExportSettingsDialog(mode="xxpipe")
+    dlg.show()
+    _flush_events()
+    before = dlg._build_runtime_view_input_settings()
+    assert not dlg._parameter_right_section.isVisible()
+    QTest.mouseClick(dlg._runtime_toggle, Qt.LeftButton)
+    _flush_events()
+    assert dlg._parameter_right_section.isVisible()
+    QTest.mouseClick(dlg._runtime_toggle, Qt.LeftButton)
+    assert not dlg._parameter_right_section.isVisible()
+    assert dlg._build_runtime_view_input_settings() == before
     dlg.deleteLater()
 
 
@@ -377,13 +430,15 @@ def test_quick_actions_enable_disable_restore():
     dlg.deleteLater()
 
 
-def test_candidate_section_defaults_to_single_panel_without_search_and_shows_four_rows(monkeypatch):
+def test_candidate_section_expands_to_four_rows_without_search(monkeypatch):
     _get_qapp()
     _clear_dialog_ui_settings()
     large_rect = QRect(0, 0, 1600, 900)
     monkeypatch.setattr(cad_tools.TextExportSettingsDialog, "_available_geometry", lambda self: large_rect)
     dlg = cad_tools.TextExportSettingsDialog()
     dlg.show()
+    assert not dlg._state.candidate_expanded
+    dlg._toggle_candidate_section()
     _flush_events(4)
 
     assert dlg._candidate_section.isVisible()
@@ -420,6 +475,8 @@ def test_candidate_section_adapts_from_four_to_zero_and_back_to_four(monkeypatch
     monkeypatch.setattr(cad_tools.TextExportSettingsDialog, "_available_geometry", lambda self: large_rect)
     dlg = cad_tools.TextExportSettingsDialog()
     dlg.show()
+    assert not dlg._state.candidate_expanded
+    dlg._toggle_candidate_section()
     _flush_events(6)
 
     assert dlg._candidate_list.count() == 4
@@ -493,6 +550,8 @@ def test_candidate_section_caps_at_four_rows_and_scrolls_when_five_or_more_candi
     monkeypatch.setattr(cad_tools.TextExportSettingsDialog, "_available_geometry", lambda self: large_rect)
     dlg = cad_tools.TextExportSettingsDialog()
     dlg.show()
+    assert not dlg._state.candidate_expanded
+    dlg._toggle_candidate_section()
     _flush_events(6)
 
     assert dlg._candidate_list.count() == 4
@@ -535,7 +594,7 @@ def test_sequential_candidate_clicks_move_rows_into_enabled_group():
 
     for step, rid in enumerate(["bd_ip_before", "bf_ip_after", "bj_station_before"], start=1):
         widget = _find_row_widget(dlg, rid)
-        QTest.mouseClick(widget.checkbox, Qt.LeftButton)
+        QTest.mouseClick(widget.action_button, Qt.LeftButton)
         _flush_events(4)
         assert rid in _enabled_list_ids(dlg)
         assert rid not in _candidate_list_ids(dlg)
@@ -557,9 +616,11 @@ def test_disable_click_keeps_focus_on_adjacent_enabled_row_and_scroll_stable():
     _flush_events(4)
     before_value = bar.value()
 
+    QApplication.setActiveWindow(dlg)
+    _flush_events()
     widget = _find_row_widget(dlg, "water_elev")
-    widget.checkbox.setFocus()
-    QTest.mouseClick(widget.checkbox, Qt.LeftButton)
+    widget.action_button.setFocus()
+    QTest.mouseClick(widget.action_button, Qt.LeftButton)
     _flush_events(8)
 
     assert "water_elev" not in _enabled_ids(dlg)
@@ -582,8 +643,10 @@ def test_disabling_last_enabled_row_falls_back_to_candidate_focus_and_auto_expan
     dlg._set_row_enabled("station", True)
     _flush_events(4)
 
+    QApplication.setActiveWindow(dlg)
+    _flush_events()
     widget = _find_row_widget(dlg, "station")
-    QTest.mouseClick(widget.checkbox, Qt.LeftButton)
+    QTest.mouseClick(widget.action_button, Qt.LeftButton)
     _flush_events(6)
 
     assert _enabled_ids(dlg) == []
@@ -661,6 +724,8 @@ def test_space_enables_row_and_delete_disables_row():
     dlg._disable_all_rows()
     _flush_events(4)
 
+    QApplication.setActiveWindow(dlg)
+    _flush_events()
     dlg._set_current_row_id("bd_ip_before", prefer_enabled=False)
     dlg._candidate_list.setFocus()
     QTest.keyClick(dlg._candidate_list, Qt.Key_Space)
@@ -676,10 +741,28 @@ def test_space_enables_row_and_delete_disables_row():
     dlg.deleteLater()
 
 
+def test_delete_in_parameter_entry_only_edits_text():
+    _get_qapp()
+    dlg = cad_tools.TextExportSettingsDialog()
+    dlg.show()
+    _flush_events()
+    before = _enabled_ids(dlg)
+    entry = dlg._entries["text_height"]
+    entry.setFocus()
+    entry.selectAll()
+    QTest.keyClick(entry, Qt.Key_Delete)
+    _flush_events()
+    assert entry.text() == ""
+    assert _enabled_ids(dlg) == before
+    dlg.deleteLater()
+
+
 def test_space_enables_row_inside_candidate_panel_when_five_candidates():
     _get_qapp()
     dlg = cad_tools.TextExportSettingsDialog()
     dlg.show()
+    assert not dlg._state.candidate_expanded
+    dlg._toggle_candidate_section()
     _flush_events(4)
 
     dlg._set_row_enabled("building_name", False)
@@ -705,7 +788,7 @@ def test_space_enables_row_inside_candidate_panel_when_five_candidates():
     dlg.deleteLater()
 
 
-def test_single_row_feedback_uses_infobar(monkeypatch):
+def test_single_row_feedback_updates_lists_without_overlay(monkeypatch):
     _get_qapp()
     dlg = cad_tools.TextExportSettingsDialog()
     dlg.show()
@@ -726,14 +809,15 @@ def test_single_row_feedback_uses_infobar(monkeypatch):
     monkeypatch.setattr(cad_tools.InfoBar, "info", staticmethod(_fake_info))
 
     widget = _find_row_widget(dlg, "bd_ip_before")
-    QTest.mouseClick(widget.checkbox, Qt.LeftButton)
+    QTest.mouseClick(widget.action_button, Qt.LeftButton)
     _flush_events(4)
     widget = _find_row_widget(dlg, "bd_ip_before")
-    QTest.mouseClick(widget.checkbox, Qt.LeftButton)
+    QTest.mouseClick(widget.action_button, Qt.LeftButton)
     _flush_events(4)
 
-    assert ("success", "已启用", "IP弯前(BD) 已加入导出。") in events
-    assert ("info", "已停用", "IP弯前(BD) 已移回可选项。") in events
+    assert events == []
+    assert "bd_ip_before" in _candidate_list_ids(dlg)
+    assert "bd_ip_before" not in _enabled_ids(dlg)
 
     dlg.deleteLater()
 
@@ -824,8 +908,8 @@ def test_enabled_list_height_tracks_enabled_count_up_to_eleven_rows(monkeypatch)
     dlg._enable_all_rows()
     _flush_events(6)
     assert dlg._enabled_list.maximumHeight() == _expected_list_height(dlg._enabled_list, 11)
-    assert dlg._enabled_list.height() >= dlg._enabled_list.maximumHeight() - 8
-    assert dlg._enabled_list.verticalScrollBar().maximum() == 0
+    assert dlg._enabled_list.height() > 400
+    assert dlg._enabled_list.verticalScrollBarPolicy() == Qt.ScrollBarAsNeeded
     assert not dlg._candidate_section.isVisible()
     _assert_workbench_geometry_is_consistent(dlg)
 

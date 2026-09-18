@@ -1370,3 +1370,84 @@ def test_official_blank_template_guide_sheet_formatting_is_consistent():
     ]
     assert lookup_fields == list(batch_panel_mod.INPUT_HEADERS)
     assert lookup.auto_filter.ref == "A6:G48"
+
+
+@pytest.mark.parametrize("structure", ["有压管道", "定向钻", "顶管"])
+def test_missing_pipe_material_blocks_import_before_any_data_change(monkeypatch, tmp_path, structure):
+    import openpyxl
+    panel = _prepare_panel(monkeypatch)
+    _set_single_row(panel, _build_row())
+    panel.channel_name_edit.setText("现有工程")
+    panel.start_wl_edit.setText("123.45")
+    panel.batch_results = [{"existing": True}]
+    panel._manual_qmax_by_segment = {"1": 2.0}
+    panel._is_sample_data = False
+    before = [[panel.input_table.item(r,c).text() if panel.input_table.item(r,c) else "" for c in range(panel.input_table.columnCount())] for r in range(panel.input_table.rowCount())]
+    captured = []
+    monkeypatch.setattr(panel, "_show_missing_import_pipe_material_warning", lambda *args: captured.append(args))
+    monkeypatch.setattr(batch_panel_mod, "fluent_question", lambda *a, **k: pytest.fail("缺项时不应先询问覆盖"))
+    source = tmp_path / "缺管材.xlsx"
+    book = openpyxl.Workbook(); sheet = book.active; sheet.title = "导入模板"
+    sheet.append(["渠道名称", "新工程", "渠道级别", "支管", "起始水位", 999])
+    # 列重排，确保定位使用实际源列而非固定管材列。
+    sheet.append(["序号", "管材", "结构形式", "Q(m³/s)"])
+    sheet.cell(19,1,"17"); sheet.cell(19,2,"  "); sheet.cell(19,3,structure); sheet.cell(19,4,0.3)
+    sheet.cell(20,1,"18"); sheet.cell(20,3,"隧洞-圆形"); sheet.cell(20,4,0.3)
+    book.save(source); book.close()
+    panel._do_load_from_filepath(str(source))
+    assert len(captured) == 1
+    missing, path, title, column = captured[0]
+    assert missing == [{"excel_row": 19, "sequence": "17", "section_type": structure}]
+    assert (title,column) == ("导入模板", "B")
+    message = batch_panel_mod.build_missing_import_pipe_material_message(missing,path,title,column)
+    assert all(text in message for text in ("缺管材.xlsx", "第 19 行", "序号 17", "B19", "保存", "【导入Excel】"))
+    after = [[panel.input_table.item(r,c).text() if panel.input_table.item(r,c) else "" for c in range(panel.input_table.columnCount())] for r in range(panel.input_table.rowCount())]
+    assert before == after
+    assert panel.channel_name_edit.text() == "现有工程"
+    assert panel.start_wl_edit.text() == "123.45"
+    assert panel.batch_results == [{"existing": True}]
+    assert panel._manual_qmax_by_segment == {"1": 2.0}
+    # 补好同一文件再导入，走正式成功路径。
+    monkeypatch.setattr(batch_panel_mod, "fluent_question", lambda *a, **k: True)
+    book = openpyxl.load_workbook(source); book.active['B19'] = "球墨铸铁管"; book.save(source); book.close()
+    panel._do_load_from_filepath(str(source))
+    assert len(captured) == 1
+    assert panel.channel_name_edit.text() == "新工程"
+    assert panel.input_table.item(0,batch_panel_mod.COL_PIPE_MATERIAL).text() == "球墨铸铁管"
+    panel.close()
+
+
+def test_missing_material_message_keeps_full_list_available():
+    missing = [{"excel_row": i+3, "sequence": str(i+1), "section_type": "有压管道"} for i in range(20)]
+    preview = batch_panel_mod.build_missing_import_pipe_material_message(missing, "样表.xlsx", "导入模板", "", limit=5)
+    full = batch_panel_mod.build_missing_import_pipe_material_message(missing, "样表.xlsx", "导入模板", "")
+    assert "另有 15 处" in preview and "查看全部缺失位置" in preview
+    assert "未识别到“管材”列" in preview
+    assert "第 22 行" in full and "序号 20" in full
+
+
+def test_missing_material_infobar_is_persistent_and_closes_on_success(monkeypatch):
+    import openpyxl
+    panel = _prepare_panel(monkeypatch)
+    notices=[]
+    # _prepare_panel 屏蔽默认通知；此处用可检查的提示对象核验常驻和替换行为。
+    class Bar:
+        contentLabel=types.SimpleNamespace(setWordWrap=lambda x:None,setMaximumWidth=lambda x:None)
+        destroyed=types.SimpleNamespace(connect=lambda cb:None)
+        closed=False
+        def close(self): self.closed=True
+        def adjustSize(self): pass
+    def warning(title, content, **kwargs):
+        notices.append((title,content,kwargs)); return Bar()
+    monkeypatch.setattr(batch_panel_mod.InfoBar,"warning",warning)
+    panel._show_missing_import_pipe_material_warning([{"excel_row":19,"sequence":"17","section_type":"有压管道"}],"测试.xlsx","导入模板","V")
+    bar=panel._missing_material_import_bar
+    assert notices[0][2]["duration"] == -1
+    assert notices[0][2]["isClosable"] is True
+    assert "V19" in notices[0][1]
+    _install_fake_openpyxl(monkeypatch)
+    panel._is_sample_data=True
+    panel._do_load_from_filepath("已补齐.xlsx")
+    assert bar.closed
+    assert panel._missing_material_import_bar is None
+    panel.close()

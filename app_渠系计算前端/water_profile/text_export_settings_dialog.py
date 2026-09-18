@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QSettings, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QDrag, QKeySequence, QShortcut
+from PySide6.QtGui import QDrag, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -115,7 +115,7 @@ class AutoHeightListWidget(QListWidget):
 
     def setItemWidget(self, item, widget):
         widget_hint = widget.sizeHint()
-        row_height = max(36, widget_hint.height() + 4, widget.minimumSizeHint().height() + 4)
+        row_height = max(36, widget.minimumHeight(), widget_hint.height() + 4, widget.minimumSizeHint().height() + 4)
         item.setSizeHint(QSize(0, row_height))
         super().setItemWidget(item, widget)
         self._invalidate_height_cache()
@@ -163,8 +163,9 @@ class AutoHeightListWidget(QListWidget):
             total += self._row_height(row)
         if not clamp_to_count and row_count > actual_row_count:
             total += self._default_row_height() * (row_count - actual_row_count)
-        if row_count > 1:
-            total += self.spacing() * (row_count - 1)
+        if row_count > 0:
+            # QListView 的 spacing 同时作用于每行上下两侧。
+            total += self.spacing() * row_count * 2
         if row_count > 0:
             total += 16 + row_count * 2
         return max(0, total)
@@ -294,6 +295,10 @@ class AutoHeightListWidget(QListWidget):
 
     def keyPressEvent(self, event):
         rid = self.current_row_id()
+        if rid and self._allow_reorder and event.key() == Qt.Key_Delete:
+            self.toggleRequested.emit(rid)
+            event.accept()
+            return
         if rid and event.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
             self.toggleRequested.emit(rid)
             event.accept()
@@ -412,7 +417,9 @@ class FluentProfileRowItemWidget(QWidget):
 
         self.checkbox = CheckBox("")
         self.checkbox.setFixedWidth(36)
-        layout.addWidget(self.checkbox, 0, Qt.AlignTop)
+        # 保留勾选状态接口，实际操作使用带文字的大按钮。
+        self.checkbox.setParent(self)
+        self.checkbox.hide()
 
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
@@ -440,6 +447,27 @@ class FluentProfileRowItemWidget(QWidget):
         text_col.addWidget(self.subtitle_label)
         layout.addLayout(text_col, 1)
 
+        self.position_label = QLabel()
+        self.position_label.setFixedWidth(68)
+        self.position_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.position_label.setStyleSheet("color:#536779; font-size:13px;")
+        self.position_label.hide()
+        layout.addWidget(self.position_label)
+
+        self.up_button = PushButton("↑")
+        self.down_button = PushButton("↓")
+        for button, tip in ((self.up_button, "上移一行"), (self.down_button, "下移一行")):
+            button.setFixedSize(34, 34)
+            button.setToolTip(tip)
+            button.setAccessibleName(tip)
+            button.setVisible(bool(enabled))
+            layout.addWidget(button)
+        self.action_button = PushButton("移除" if enabled else "添加")
+        self.action_button.setFixedSize(64, 34)
+        self.action_button.setAccessibleName(f"{'移除' if enabled else '添加'}{title}")
+        self.action_button.clicked.connect(self.checkbox.toggle)
+        layout.addWidget(self.action_button)
+
         self.drag_handle = FluentProfileDragHandle(self)
         self.drag_handle.dragRequested.connect(self.dragRequested)
         layout.addWidget(self.drag_handle, 0, Qt.AlignVCenter)
@@ -449,6 +477,7 @@ class FluentProfileRowItemWidget(QWidget):
 
         self.set_content(title, subtitle, enabled, recommended)
         self.set_selected(False)
+        self.setMinimumHeight(58)
 
     def set_content(self, title, subtitle, enabled, recommended=False):
         self._enabled = bool(enabled)
@@ -457,7 +486,7 @@ class FluentProfileRowItemWidget(QWidget):
         self.subtitle_label.setText(subtitle)
         self.checkbox.setChecked(bool(enabled))
         self.drag_handle.setVisible(bool(enabled))
-        self.badge_label.setVisible(self._recommended)
+        self.badge_label.hide()
         self._apply_visual_state()
 
     def set_selected(self, selected):
@@ -486,29 +515,29 @@ class FluentProfileRowItemWidget(QWidget):
         if self._selected:
             title_style = (
                 "color:#173A63; "
-                f"font-size:{'13px' if self._display_variant == 'quick_add' else '12px'}; font-weight:600;"
+                "font-size:14px; font-weight:600;"
             )
             subtitle_style = (
                 "color:#43617E; "
-                f"font-size:{'11px' if self._display_variant == 'quick_add' else '10px'};"
+                "font-size:12px;"
             )
         elif self._enabled:
             title_style = (
                 "color:#24384D; "
-                f"font-size:{'13px' if self._display_variant == 'quick_add' else '12px'}; font-weight:600;"
+                "font-size:14px; font-weight:600;"
             )
             subtitle_style = (
                 "color:#5C6E81; "
-                f"font-size:{'11px' if self._display_variant == 'quick_add' else '10px'};"
+                "font-size:12px;"
             )
         else:
             title_style = (
                 "color:#2F4457; "
-                f"font-size:{'13px' if self._display_variant == 'quick_add' else '12px'}; font-weight:500;"
+                "font-size:14px; font-weight:500;"
             )
             subtitle_style = (
                 "color:#697B8D; "
-                f"font-size:{'11px' if self._display_variant == 'quick_add' else '10px'};"
+                "font-size:12px;"
             )
 
         self.title_label.setStyleSheet(title_style)
@@ -575,10 +604,10 @@ def create_text_export_settings_dialog(api_module):
                 "recommended_row_ids": frozenset(xxpipe_row_visible_order),
                 "runtime_view_builder": compute_xxpipe_runtime_advanced_parameter_view,
                 "read_only_rows": True,
-                "toolbar_title": "纵断面行内容",
-                "toolbar_hint": "固定模板，仅展示管道纵断面导出的 5 项。",
-                "enabled_title": "固定 5 项",
-                "enabled_hint": "这里显示 xx管 纵断面导出的固定内容，顺序和启停均已锁定。",
+                "toolbar_title": "管道导出预览",
+                "toolbar_hint": "固定输出以下 5 行，无需勾选。文字格式与比例可在左侧调整。",
+                "enabled_title": "导出顺序",
+                "enabled_hint": "",
                 "candidate_title": "可选项",
                 "empty_runtime_hint": "当前按 xx管 固定模板展示全部 5 项。",
                 "subtitle_enabled": "固定项",
@@ -602,7 +631,7 @@ def create_text_export_settings_dialog(api_module):
             "recommended_row_ids": frozenset(recommended_row_ids),
             "runtime_view_builder": compute_runtime_advanced_parameter_view,
             "read_only_rows": False,
-            "toolbar_title": "纵断面行内容工作台",
+            "toolbar_title": "导出内容",
             "toolbar_hint": "",
             "enabled_title": "已启用",
             "enabled_hint": "",
@@ -702,7 +731,7 @@ def create_text_export_settings_dialog(api_module):
             ordered_row_ids=None,
             enabled_row_ids=None,
             candidate_query="",
-            candidate_expanded=True,
+            candidate_expanded=False,
             active_list_role="enabled",
             selected_row_id="",
         ):
@@ -979,18 +1008,18 @@ def create_text_export_settings_dialog(api_module):
     class TextExportSettingsDialog(QDialog):
         _UI_SETTINGS_ORG = "SichuanShuifa"
         _UI_SETTINGS_APP = "HydroCalc"
-        _UI_SIZE_W_KEY = "water_profile/text_export_dialog_width"
-        _UI_SIZE_H_KEY = "water_profile/text_export_dialog_height"
-        _DESIGN_MIN_WIDTH = 1160
-        _DESIGN_MIN_HEIGHT = 700
-        _DESIGN_DEFAULT_WIDTH = 2000
-        _DESIGN_DEFAULT_HEIGHT = 1400
-        _DEFAULT_WIDTH_RATIO = 2000 / 2560
-        _DEFAULT_HEIGHT_RATIO = 1400 / 1600
-        _DEFAULT_MAX_WIDTH = 2800
-        _DEFAULT_MAX_HEIGHT = 1800
+        _UI_SIZE_W_KEY = "water_profile/text_export_dialog_v2_width"
+        _UI_SIZE_H_KEY = "water_profile/text_export_dialog_v2_height"
+        _DESIGN_MIN_WIDTH = 1040
+        _DESIGN_MIN_HEIGHT = 680
+        _DESIGN_DEFAULT_WIDTH = 1200
+        _DESIGN_DEFAULT_HEIGHT = 820
+        _DEFAULT_WIDTH_RATIO = 0.8
+        _DEFAULT_HEIGHT_RATIO = 0.88
+        _DEFAULT_MAX_WIDTH = 1440
+        _DEFAULT_MAX_HEIGHT = 960
         _MIN_SCREEN_MARGIN = 24
-        _DESIGN_SPLITTER_LEFT = 460
+        _DESIGN_SPLITTER_LEFT = 360
         _ENABLED_VISIBLE_ROW_LIMIT = 11
         _CANDIDATE_VISIBLE_ROW_LIMIT = 4
         _ICON_COLLAPSED = None
@@ -1007,6 +1036,7 @@ def create_text_export_settings_dialog(api_module):
                 )
 
             self.setWindowTitle("纵断面文字导出设置")
+            self.setFont(QFont("Microsoft YaHei UI", 10))
             self._ui_settings = QSettings(self._UI_SETTINGS_ORG, self._UI_SETTINGS_APP)
             self._mode_spec = _resolve_mode_spec(mode)
             self._standard_defaults = normalize_dialog_defaults(
@@ -1120,6 +1150,19 @@ def create_text_export_settings_dialog(api_module):
                 }
                 """
             )
+            # 覆盖全局的大字号和多层卡片边框，保持此窗口的阅读层级一致。
+            self.setStyleSheet(self.styleSheet() + """
+                QDialog { background: #f5f7fa; }
+                QLabel { font-family: 'Microsoft YaHei UI'; font-size: 13px; color: #263747; }
+                QLabel#profileHeading { font-size: 16px; font-weight: 600; color: #182d40; }
+                QFrame#profileWorkbenchPanel { background: white; border: 1px solid #e0e5eb; border-radius: 10px; }
+                QFrame#profileSectionCard, QFrame#profileToolbarCard { background: transparent; border: none; }
+                QFrame#profileStickyFooter { background: transparent; border: none; }
+                QListView { background: white; border: none; padding: 0px; }
+                QListView::item { padding: 0px; margin: 0px; border: none; }
+                QListView::item:selected, QListView::item:hover { background: transparent; border: none; }
+                QFrame#profileRuntimeMetricCard { background: #f5f7fa; border: none; border-radius: 6px; }
+            """)
             self._init_ui()
 
         def _available_geometry(self):
@@ -1241,6 +1284,8 @@ def create_text_export_settings_dialog(api_module):
             self._btn_ok.clicked.connect(self._on_confirm)
             btn_row.addWidget(self._btn_cancel)
             btn_row.addWidget(self._btn_ok)
+            for button in (self._btn_reset, self._btn_cancel, self._btn_ok):
+                button.setMinimumSize(84, 36)
             root.addWidget(footer, 0)
 
             QShortcut(QKeySequence(Qt.Key_Escape), self, self.reject)
@@ -1249,15 +1294,14 @@ def create_text_export_settings_dialog(api_module):
             QShortcut(QKeySequence("Ctrl+Down"), self, lambda: self._move_selected_row(1))
             QShortcut(QKeySequence("Ctrl+Home"), self, lambda: self._move_selected_row_to_edge(True))
             QShortcut(QKeySequence("Ctrl+End"), self, lambda: self._move_selected_row_to_edge(False))
-            QShortcut(QKeySequence(Qt.Key_Delete), self, self._disable_selected_row)
 
             self._render()
 
         def _build_parameter_card(self):
             pane = QFrame(self)
             pane.setObjectName("profileWorkbenchPanel")
-            pane.setMinimumWidth(340)
-            pane.setMaximumWidth(620)
+            pane.setMinimumWidth(300)
+            pane.setMaximumWidth(460)
 
             pane_lay = QVBoxLayout(pane)
             pane_lay.setContentsMargins(0, 0, 0, 0)
@@ -1270,6 +1314,7 @@ def create_text_export_settings_dialog(api_module):
             self._body_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
             self._body_content_widget = QWidget(self)
+            self._body_content_widget.setStyleSheet("background: white;")
             self._parameter_content_layout = QVBoxLayout(self._body_content_widget)
             self._parameter_content_layout.setSizeConstraint(QLayout.SetMinAndMaxSize)
             self._parameter_content_layout.setContentsMargins(8, 8, 8, 8)
@@ -1278,7 +1323,15 @@ def create_text_export_settings_dialog(api_module):
             self._parameter_left_section = self._build_basic_parameter_section()
             self._parameter_right_section = self._build_runtime_section()
             self._parameter_content_layout.addWidget(self._parameter_left_section, 0)
+            self._runtime_toggle = PushButton("查看布局明细")
+            self._runtime_toggle.setCheckable(True)
+            self._runtime_toggle.toggled.connect(self._parameter_right_section.setVisible)
+            self._runtime_toggle.toggled.connect(
+                lambda checked: self._runtime_toggle.setText("收起布局明细" if checked else "查看布局明细")
+            )
+            self._parameter_content_layout.addWidget(self._runtime_toggle)
             self._parameter_content_layout.addWidget(self._parameter_right_section, 0)
+            self._parameter_right_section.hide()
             self._parameter_content_layout.addStretch(1)
 
             self._body_scroll.setWidget(self._body_content_widget)
@@ -1296,11 +1349,15 @@ def create_text_export_settings_dialog(api_module):
 
             self._toolbar_card = self._build_toolbar_card()
             self._enabled_section = self._build_enabled_section()
+            self._enabled_section.layout().setAlignment(Qt.AlignTop)
             self._candidate_section = self._build_candidate_section()
             pane_lay.addWidget(self._toolbar_card, 0)
-            pane_lay.addWidget(self._enabled_section, 0)
+            pane_lay.addWidget(self._enabled_section, 0 if self._mode_spec["read_only_rows"] else 1)
             pane_lay.addWidget(self._candidate_section, 0)
-            pane_lay.addStretch(1)
+            self._preview_summary = self._make_wrap_caption("")
+            pane_lay.addWidget(self._preview_summary)
+            if self._mode_spec["read_only_rows"]:
+                pane_lay.addStretch(1)
             return pane
 
         def _build_basic_parameter_section(self):
@@ -1310,14 +1367,16 @@ def create_text_export_settings_dialog(api_module):
             lay.setContentsMargins(12, 12, 12, 12)
             lay.setSpacing(8)
 
-            lay.addWidget(BodyLabel("基础参数"))
+            heading = BodyLabel("文字与图纸")
+            heading.setObjectName("profileHeading")
+            lay.addWidget(heading)
             lay.addWidget(
-                self._make_wrap_caption("这些设置会和项目配置一起保存，用于控制文字字高、旋转和纵断面比例。")
+                self._make_wrap_caption("设置随项目保存。比例填写分母，例如 1:1000 填 1000。")
             )
 
             basic_form = QGridLayout()
             basic_form.setHorizontalSpacing(8)
-            basic_form.setVerticalSpacing(8)
+            basic_form.setVerticalSpacing(16)
             basic_form.setColumnStretch(0, 0)
             basic_form.setColumnStretch(1, 0)
             basic_form.setColumnStretch(2, 1)
@@ -1333,9 +1392,9 @@ def create_text_export_settings_dialog(api_module):
             lay.setContentsMargins(12, 12, 12, 12)
             lay.setSpacing(8)
 
-            lay.addWidget(BodyLabel("启用行实时参数"))
+            lay.addWidget(BodyLabel("布局明细 · 自动计算"))
             lay.addWidget(
-                self._make_wrap_caption("这里只镜像当前已启用的行。顺序、启停和拖拽一改，左侧实时参数就立即同步。")
+                self._make_wrap_caption("坐标随导出顺序更新。")
             )
 
             metrics = QFrame(self)
@@ -1386,6 +1445,7 @@ def create_text_export_settings_dialog(api_module):
             lay.addWidget(self._runtime_rows_widget)
 
             self._runtime_summary_label = self._make_wrap_caption("")
+            self._runtime_summary_label.hide()
             lay.addWidget(self._runtime_summary_label)
             return section
 
@@ -1396,7 +1456,9 @@ def create_text_export_settings_dialog(api_module):
             lay.setContentsMargins(12, 10, 12, 10)
             lay.setSpacing(8)
 
-            lay.addWidget(BodyLabel(self._mode_spec["toolbar_title"]))
+            heading = BodyLabel(self._mode_spec["toolbar_title"])
+            heading.setObjectName("profileHeading")
+            lay.addWidget(heading)
             if self._mode_spec["toolbar_hint"]:
                 lay.addWidget(self._make_wrap_caption(self._mode_spec["toolbar_hint"]))
 
@@ -1404,20 +1466,22 @@ def create_text_export_settings_dialog(api_module):
                 action_row = QHBoxLayout()
                 action_row.setContentsMargins(0, 0, 0, 0)
                 action_row.setSpacing(6)
-                btn_preset = PushButton("应用亭子口二期顶建/可研阶段模板")
+                btn_preset = PushButton("亭子口模板")
+                btn_preset.setToolTip("应用亭子口二期顶建 / 可研阶段模板")
                 btn_preset.clicked.connect(self._apply_tingzikou_preset)
                 btn_restore = PushButton("恢复推荐")
                 btn_restore.clicked.connect(self._restore_recommended_rows)
-                btn_enable_all = PushButton("全启用")
-                btn_enable_all.clicked.connect(self._enable_all_rows)
-                btn_disable_all = PushButton("全停用")
-                btn_disable_all.clicked.connect(self._disable_all_rows)
+                btn_more = PushButton("更多操作")
+                self._batch_menu = QMenu(self)
+                self._batch_menu.addAction("全部添加", self._enable_all_rows)
+                self._batch_menu.addAction("全部移除", self._disable_all_rows)
+                btn_more.clicked.connect(lambda: self._batch_menu.popup(btn_more.mapToGlobal(QPoint(0, btn_more.height()))))
                 action_row.addWidget(btn_preset)
                 action_row.addWidget(btn_restore)
-                action_row.addWidget(btn_enable_all)
-                action_row.addWidget(btn_disable_all)
+                action_row.addWidget(btn_more)
                 action_row.addStretch(1)
                 lay.addLayout(action_row)
+                lay.addWidget(self._make_wrap_caption("逐行添加或移除；用行内箭头或拖动右侧手柄调整顺序。"))
             return card
 
         def _build_enabled_section(self):
@@ -1427,27 +1491,18 @@ def create_text_export_settings_dialog(api_module):
             lay.setContentsMargins(12, 12, 12, 12)
             lay.setSpacing(8)
 
-            header = QHBoxLayout()
+            header_widget = QWidget(self)
+            header_widget.setFixedHeight(24)
+            header = QHBoxLayout(header_widget)
             header.setContentsMargins(0, 0, 0, 0)
             header.setSpacing(8)
             header.addWidget(BodyLabel(self._mode_spec["enabled_title"]))
             self._enabled_caption_label = CaptionLabel("")
             header.addWidget(self._enabled_caption_label)
             header.addStretch(1)
-            if not self._mode_spec["read_only_rows"]:
-                btn_up = PushButton("上移")
-                btn_up.clicked.connect(lambda: self._move_selected_row(-1))
-                btn_down = PushButton("下移")
-                btn_down.clicked.connect(lambda: self._move_selected_row(1))
-                btn_top = PushButton("置顶")
-                btn_top.clicked.connect(lambda: self._move_selected_row_to_edge(True))
-                btn_bottom = PushButton("置底")
-                btn_bottom.clicked.connect(lambda: self._move_selected_row_to_edge(False))
-                header.addWidget(btn_up)
-                header.addWidget(btn_down)
-                header.addWidget(btn_top)
-                header.addWidget(btn_bottom)
-            lay.addLayout(header)
+            if self._mode_spec["read_only_rows"]:
+                header.addWidget(CaptionLabel("文字 Y 坐标"))
+            lay.addWidget(header_widget)
 
             if self._mode_spec["enabled_hint"]:
                 lay.addWidget(self._make_wrap_caption(self._mode_spec["enabled_hint"]))
@@ -1458,6 +1513,9 @@ def create_text_export_settings_dialog(api_module):
                 parent=self,
             )
             self._enabled_list.setSpacing(4)
+            if self._mode_spec["read_only_rows"]:
+                self._enabled_list.setSelectionMode(QAbstractItemView.NoSelection)
+                self._enabled_list.setFocusPolicy(Qt.NoFocus)
             self._enabled_list.setMinimumHeight(0)
             self._enabled_list.enabledRowDropped.connect(self._on_enabled_row_dropped)
             self._enabled_list.toggleRequested.connect(
@@ -1491,9 +1549,7 @@ def create_text_export_settings_dialog(api_module):
             self._candidate_caption_label = CaptionLabel("")
             header.addWidget(self._candidate_caption_label)
             header.addStretch(1)
-            self._candidate_toggle_btn = ToolButton(self)
-            if self._ICON_COLLAPSED is not None:
-                self._candidate_toggle_btn.setIcon(self._ICON_COLLAPSED)
+            self._candidate_toggle_btn = PushButton("收起", self)
             self._candidate_toggle_btn.clicked.connect(self._toggle_candidate_section)
             header.addWidget(self._candidate_toggle_btn)
             lay.addLayout(header)
@@ -1524,14 +1580,24 @@ def create_text_export_settings_dialog(api_module):
             return section
 
         def _add_entry_row(self, layout, row, label, key, hint):
-            layout.addWidget(QLabel(f"{label}:"), row, 0)
+            short_labels = {
+                "rotation": "旋转角度（°）", "scale_x": "水平比例  1 :",
+                "scale_y": "垂直比例  1 :", "xxpipe_centerline_elev_decimals": "管中心高程小数位",
+                "xxpipe_station_decimals": "桩号小数位", "station_decimals": "桩号小数位",
+            }
+            field_label = QLabel(short_labels.get(key, label))
+            field_label.setToolTip(hint)
+            layout.addWidget(field_label, row, 0)
             entry = LineEdit()
             entry.setText(self._state.parameter_texts.get(key, ""))
-            entry.setMinimumWidth(144)
-            entry.setMaximumWidth(196)
+            entry.setMinimumWidth(90)
+            entry.setMaximumWidth(132)
+            entry.setMinimumHeight(36)
+            entry.setAccessibleName(label)
+            entry.setToolTip(hint)
+            field_label.setBuddy(entry)
             entry.textChanged.connect(lambda text, field=key: self._on_parameter_text_changed(field, text))
             layout.addWidget(entry, row, 1)
-            layout.addWidget(self._make_wrap_caption(hint) if hint else CaptionLabel(""), row, 2)
             self._entries[key] = entry
 
         def _candidate_all_row_ids(self):
@@ -1582,9 +1648,7 @@ def create_text_export_settings_dialog(api_module):
             title = row_def["label"]
             if enabled and order_index is not None:
                 title = f"{order_index + 1:02d}. {title}"
-            subtitle_parts = [
-                self._mode_spec["subtitle_enabled"] if enabled else self._mode_spec["subtitle_disabled"]
-            ]
+            subtitle_parts = []
             hint = str(row_def.get("hint", "") or "").strip()
             if hint:
                 subtitle_parts.append(hint)
@@ -1601,14 +1665,18 @@ def create_text_export_settings_dialog(api_module):
                 display_variant=display_variant,
             )
             widget.checkbox.stateChanged.connect(
-                lambda _state, row_id=rid: self._on_row_widget_checkbox_changed(row_id)
+                lambda _state, row_id=rid: self._on_row_widget_checkbox_changed(row_id), Qt.QueuedConnection
             )
             widget.clicked.connect(
                 lambda row_id=rid, role=("enabled" if enabled else "candidate"): self._set_current_row_id(row_id, role)
             )
             widget.doubleClicked.connect(
-                lambda row_id=rid: self._toggle_current_row(row_id, show_feedback=True)
+                lambda row_id=rid: self._toggle_current_row(row_id, show_feedback=True), Qt.QueuedConnection
             )
+            widget.up_button.clicked.connect(lambda _checked=False, row_id=rid: self._move_row_directly(row_id, -1), Qt.QueuedConnection)
+            widget.down_button.clicked.connect(lambda _checked=False, row_id=rid: self._move_row_directly(row_id, 1), Qt.QueuedConnection)
+            widget.up_button.setEnabled(enabled and order_index is not None and order_index > 0)
+            widget.down_button.setEnabled(enabled and order_index is not None and order_index < len(self._state.enabled_row_ids) - 1)
             if enabled:
                 widget.drag_handle.dragRequested.connect(
                     lambda row_id=rid: self._enabled_list.start_drag_for_row_id(row_id)
@@ -1616,7 +1684,22 @@ def create_text_export_settings_dialog(api_module):
             if self._mode_spec["read_only_rows"]:
                 widget.checkbox.setEnabled(False)
                 widget.drag_handle.hide()
+                widget.action_button.hide()
+                widget.up_button.hide()
+                widget.down_button.hide()
+                widget.position_label.show()
+                widget.setMinimumHeight(72)
+                widget.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                widget.setStyleSheet("QWidget#profileRowItemFluent { background:#f7f9fc; border:none; border-radius:6px; }")
+            else:
+                widget.setToolTip(subtitle)
+                widget.subtitle_label.hide()
+                widget.setMinimumHeight(44)
             return widget
+
+        def _move_row_directly(self, rid, delta):
+            self._set_current_row_id(rid, "enabled", scroll_to_current=False)
+            self._move_selected_row(delta)
 
         def _on_row_widget_checkbox_changed(self, rid):
             if self._row_updating:
@@ -1675,6 +1758,15 @@ def create_text_export_settings_dialog(api_module):
                 return
             runtime = self._state.runtime_view(self._defaults)
             enabled_rows = list(runtime.get("enabled_runtime_rows") or [])
+            for row in enabled_rows:
+                widget = self._row_widgets.get(row["id"])
+                if widget is not None:
+                    widget.position_label.setText(format_number(row["text_y"]))
+            if hasattr(self, "_preview_summary"):
+                self._preview_summary.setText(
+                    f"共 {len(enabled_rows)} 行 · 内容总高 {format_number(runtime['total_height'])}"
+                    f" · 竖线高度 {format_number(runtime['line_height'])}"
+                )
             self._runtime_row_labels = {}
             self._clear_layout_widgets(self._runtime_rows_layout)
 
@@ -1773,9 +1865,7 @@ def create_text_export_settings_dialog(api_module):
             if self._candidate_body is not None:
                 self._candidate_body.setVisible(candidate_visible)
             if self._candidate_toggle_btn is not None:
-                icon = self._ICON_EXPANDED if candidate_visible else self._ICON_COLLAPSED
-                if icon is not None:
-                    self._candidate_toggle_btn.setIcon(icon)
+                self._candidate_toggle_btn.setText("收起" if candidate_visible else "展开")
             self._refresh_section_labels()
             self._sync_current_selection(scroll_to_current=scroll_to_current)
             self._sync_auto_height_lists()
@@ -1945,6 +2035,9 @@ def create_text_export_settings_dialog(api_module):
             self._update_row_widget_selection()
 
         def _update_row_widget_selection(self):
+            if self._mode_spec["read_only_rows"]:
+                self._enabled_list.clearSelection()
+                return
             current_rid = self._selected_row_id()
             for rid, widget in self._row_widgets.items():
                 if widget is not None:
@@ -2002,48 +2095,15 @@ def create_text_export_settings_dialog(api_module):
             self._focus_active_row_list()
             self._restore_body_scroll_value(body_scroll_value)
             self._ensure_active_selection_visible()
-            app = QApplication.instance()
-            if app is not None:
-                app.processEvents()
-                self._restore_body_scroll_value(body_scroll_value)
-                self._ensure_active_selection_visible()
             QTimer.singleShot(
                 0,
+                self,
                 lambda state=body_scroll_value: (
                     self._restore_body_scroll_value(state),
                     self._ensure_active_selection_visible(),
                 ),
             )
-            QTimer.singleShot(
-                0,
-                lambda state=body_scroll_value: QTimer.singleShot(
-                    0,
-                    lambda nested_state=state: (
-                        self._restore_body_scroll_value(nested_state),
-                        self._ensure_active_selection_visible(),
-                    ),
-                ),
-            )
-            if show_feedback:
-                row_label = self._mode_spec["row_def_map"][rid]["label"]
-                info_bar = _info_bar()
-                info_bar_position = _info_bar_position()
-                if enabled:
-                    info_bar.success(
-                        "已启用",
-                        f"{row_label} 已加入导出。",
-                        parent=self,
-                        position=info_bar_position.TOP_RIGHT,
-                        duration=1200,
-                    )
-                else:
-                    info_bar.info(
-                        "已停用",
-                        f"{row_label} 已移回可选项。",
-                        parent=self,
-                        position=info_bar_position.TOP_RIGHT,
-                        duration=1200,
-                    )
+            # 列表与底部计数就是即时反馈，连续操作时不再弹出遮挡内容的通知。
 
         def _toggle_current_row(self, rid=None, *, show_feedback=False):
             rid = str(rid or self._selected_row_id() or "").strip()

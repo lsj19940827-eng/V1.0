@@ -20,6 +20,7 @@ from models.data_models import ChannelNode
 from models.enums import StructureType, InOutType
 from core.pressure_pipe_calc import calc_turn_angle, calc_segment_length
 from config.constants import XXPIPE_CHANNEL_LEVEL_OPTIONS
+from utils.pressure_pipe_tunnel import iter_internal_tunnel_boundaries, make_pipe_portal_node
 from utils.pressure_pipe_common import coerce_row_index
 from utils.pressure_pipe_result_helpers import make_pressure_pipe_identity
 
@@ -398,6 +399,26 @@ class PressurePipeDataExtractor:
             if anonymous_group is None:
                 continue
             ordered_groups.append((idx, anonymous_group))
+
+        # 隧洞进口同时是前一管段的终点；该段损失记到现有洞口行，不要求 Excel 重复端点。
+        for inlet, outlet, before, after in iter_internal_tunnel_boundaries(nodes):
+            if not PressurePipeDataExtractor._is_unnamed_pressure_pipe_like(nodes[before]):
+                continue
+            if (not is_xxpipe_channel) and before not in continuous_route_row_indices:
+                continue
+            if abs(PressurePipeDataExtractor._resolve_node_station_mc(nodes[inlet]) -
+                   PressurePipeDataExtractor._resolve_node_station_mc(nodes[before])) <= 1e-6:
+                continue
+            portal_pipe = make_pipe_portal_node(nodes[before], nodes[inlet])
+            temporary_nodes = list(nodes)
+            temporary_nodes[inlet] = portal_pipe
+            group = PressurePipeDataExtractor._build_unnamed_row_group(temporary_nodes, inlet, settings=settings)
+            group.display_name = f"{nodes[inlet].name or '隧洞'}进口前管段"
+            group.has_inlet_transition = False
+            group.has_outlet_transition = False
+            group.inlet_transition_reason = NO_TRANSITION_REASON
+            group.outlet_transition_reason = NO_TRANSITION_REASON
+            ordered_groups.append((inlet, group))
 
         ordered_groups.sort(key=lambda item: item[0])
         groups = [group for _, group in ordered_groups]
@@ -1136,7 +1157,7 @@ class PressurePipeDataExtractor:
         chains: Optional[List[PressurePipeChain]] = None,
         tighten_to_active_bounds: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
-        """构造按“有压连续段”切分后的整线上下文。"""
+        """构造整线导入上下文，中间隧洞留在同一条整线内。"""
         route_contexts: Dict[str, Dict[str, Any]] = {}
         flow_route_seq: Dict[str, int] = defaultdict(int)
         group_row_index_map: Dict[int, List[PressurePipeGroup]] = defaultdict(list)
@@ -1157,11 +1178,14 @@ class PressurePipeDataExtractor:
             flow_section = str(getattr(node, "flow_section", "") or "").strip()
             start_idx = idx
             end_idx = idx
-            while end_idx + 1 < total_nodes:
-                next_node = nodes[end_idx + 1]
-                if not PressurePipeDataExtractor._is_pressure_route_node(next_node):
+            scan_idx = idx + 1
+            while scan_idx < total_nodes:
+                next_node = nodes[scan_idx]
+                if PressurePipeDataExtractor._is_pressure_route_node(next_node):
+                    end_idx = scan_idx
+                elif not PressurePipeDataExtractor._is_tunnel_structure(next_node):
                     break
-                end_idx += 1
+                scan_idx += 1
 
             flow_key = flow_section or "-"
             flow_route_seq[flow_key] += 1

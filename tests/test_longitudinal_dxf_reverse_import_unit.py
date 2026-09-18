@@ -2,6 +2,8 @@
 """反向纵断面 DXF 导入回归测试。"""
 
 import os
+import copy
+import json
 import shutil
 import sys
 import tempfile
@@ -31,6 +33,280 @@ if str(WATER_PROFILE_ROOT) not in sys.path:
 from models.data_models import ChannelNode
 from models.enums import InOutType, StructureType
 from utils.pressure_pipe_extractor import PressurePipeDataExtractor
+
+
+@pytest.mark.parametrize("use_recorded_sample", [False, True], ids=["second-station", "xujia-0918-all-114"])
+def test_route_reimport_matches_clear_reimport_and_persisted_dxf(monkeypatch, local_tmp_path, use_recorded_sample):
+    """真实解析、整线持久化和DXF文字应与清空后重导一致。"""
+    import ezdxf
+    from managers.pressure_pipe_manager import PressurePipeManager
+    from app_渠系计算前端.water_profile import cad_tools
+
+    _get_qapp()
+    source = ROOT / "工程资料" / "徐家" / "原始图纸" / "徐家.dxf"
+    if not source.exists():
+        source = local_tmp_path / "profile.dxf"
+        doc = ezdxf.new()
+        doc.modelspace().add_lwpolyline([
+            (0.0, 328.88), (42.45624695043082, 328.88),
+            (79.0716934533557, 322.5213844958879), (100.0, 322.0),
+        ])
+        doc.saveas(source)
+
+    route_key = "flow2-route1"
+    stale = [
+        {"chainage": 0.0, "elevation": 328.88},
+        {"chainage": 59.77, "elevation": 341.94},
+        {"chainage": 100.0, "elevation": 322.0},
+    ]
+    station_values = [0.0, 59.77]
+    if use_recorded_sample:
+        # 保存实际成果作为预期值；污染输入仅由错误表采样重建，不冒充历史缓存。
+        fixture = json.loads((ROOT / "tests/fixtures/xujia_profile_reimport_0918.json").read_text(encoding="utf-8"))
+        columns = fixture["columns"]
+        assert len(columns) == 114
+        assert sum(c["bad_elevation_text"] != c["good_elevation_text"] for c in columns) == 32
+        source = local_tmp_path / "xujia-source.dxf"
+        doc = ezdxf.new()
+        doc.modelspace().add_lwpolyline(fixture["source_vertices_xyb"], format="xyb")
+        doc.saveas(source)
+        station_values = [c["station_m"] for c in columns]
+        stale = [{"chainage": c["station_m"], "elevation": float(c["bad_elevation_text"])} for c in columns]
+
+        # 对照旧实现：只覆盖同桩号会完整保留错误表的114列取值。
+        parsed, _ = DxfParser.parse_longitudinal_profile(str(source))
+        imported = PressurePipeConfigDialog._convert_imported_longitudinal_nodes(parsed)
+        assert len(imported) == 144
+        # 还原旧解析器只保留大于0.5°折点的行为，独立验证清空后版本也有9列偏差。
+        legacy_imported = [imported[0]] + [n for n in imported[1:-1] if n["turn_type"] != "NONE"] + [imported[-1]]
+        assert len(legacy_imported) == 138
+        assert [f'{cad_tools.sample_xxpipe_centerline_elevation(legacy_imported, s):.2f}' for s in station_values] == [
+            c["good_elevation_text"] for c in columns
+        ]
+        legacy_map = {round(n["chainage"], 6): n for n in stale + legacy_imported}
+        legacy = sorted(legacy_map.values(), key=lambda n: n["chainage"])
+        assert [f'{cad_tools.sample_xxpipe_centerline_elevation(legacy, s):.2f}' for s in station_values] == [
+            c["bad_elevation_text"] for c in columns
+        ]
+        # 按原始折线逐段插值作为独立基准，不复用程序的节点采样器。
+        vertices = fixture["source_vertices_xyb"]
+        assert all(bulge == 0.0 for _, _, bulge in vertices)
+        for column in columns:
+            station = column["station_m"]
+            start, end = next(
+                (a, b) for a, b in zip(vertices, vertices[1:])
+                if a[0] - 1e-9 <= station <= b[0] + 1e-9
+            )
+            elevation = start[1] + (end[1] - start[1]) * (station - start[0]) / (end[0] - start[0])
+            assert f"{elevation:.2f}" == column["source_elevation_text"]
+        assert sum(c["source_elevation_text"] != c["good_elevation_text"] for c in columns) == 9
+    manager = PressurePipeManager(str(local_tmp_path / "route.qxproj"))
+    manager.set_route_longitudinal_nodes(route_key, stale, "徐家分支管")
+    route_nodes = [
+        _set_station_point(
+            _make_extractor_node("2", "徐家分支管", "有压管道", InOutType.NORMAL), s, s, 0.0,
+        )
+        for s in station_values
+    ]
+    for index, node in enumerate(route_nodes):
+        node.pressure_pipe_row_identity = f"flow2-row{index + 1}"
+    points = [{"x": n.station_MC, "y": 0.0, "station_mc": n.station_MC} for n in route_nodes]
+    dialog = PressurePipeConfigDialog(
+        pipe_groups=[], manager=manager, xxpipe_route_mode=True,
+        route_import_targets={route_key: {"display_name": "徐家分支管", "nodes": route_nodes}},
+    )
+    dialog._route_contexts[route_key] = {"display_name": "徐家分支管", "groups": []}
+    dialog._restore_manager_route_longitudinal_data(route_key)
+    assert dialog._longitudinal_data[route_key] == stale
+    errors = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(lambda *_a, **_k: (str(source), "DXF")))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *_a: errors.append(_a[2])))
+    monkeypatch.setattr(dialog_mod, "fluent_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(dialog_mod, "fluent_question", lambda *_a, **_k: True)
+    try:
+        dialog._import_longitudinal_dxf(route_key, points)
+        assert errors == []
+        direct = copy.deepcopy(dialog._longitudinal_data[route_key])
+        reloaded = PressurePipeManager(str(local_tmp_path / "route.qxproj"))
+        saved = reloaded.get_route_config(route_key)
+        assert saved["longitudinal_nodes"] == direct
+        assert round(cad_tools.sample_xxpipe_centerline_elevation(direct, 59.77), 2) == 325.87
+
+        dialog._clear_longitudinal(route_key)
+        dialog._import_longitudinal_dxf(route_key, points)
+        assert errors == []
+        assert dialog._longitudinal_data[route_key] == direct
+        reloaded_after_clear = PressurePipeManager(str(local_tmp_path / "route.qxproj"))
+        assert reloaded_after_clear.get_route_config(route_key)["raw_profile_polyline"] == saved["raw_profile_polyline"]
+
+        profile = cad_tools._build_xxpipe_profile_data(
+            route_nodes, {node.pressure_pipe_row_identity: direct for node in route_nodes},
+            station_prefix="徐分支",
+        )
+        doc = ezdxf.new()
+        cad_tools._draw_xxpipe_profile_on_msp(
+            doc.modelspace(), route_nodes,
+            {"text_height": 3.5, "rotation": 90, "scale_x": 1000, "scale_y": 100,
+             "xxpipe_centerline_elev_decimals": 2, "xxpipe_station_decimals": 2},
+            "徐分支", xxpipe_profile_data=profile,
+        )
+        output = local_tmp_path / "reimport.dxf"
+        doc.saveas(output)
+        texts = [e.dxf.text for e in ezdxf.readfile(output).modelspace().query("TEXT")]
+        assert "328.88" in texts
+        assert "325.87" in texts
+        assert "341.94" not in texts
+        if use_recorded_sample:
+            expected = [c["source_elevation_text"] for c in columns]
+            assert [f'{cad_tools.sample_xxpipe_centerline_elevation(direct, s):.2f}' for s in station_values] == expected
+            exported = sorted(
+                (float(e.dxf.insert.x), e.dxf.text)
+                for e in ezdxf.readfile(output).modelspace().query("TEXT")
+                if abs(e.dxf.insert.y - 21.0) < 1e-6
+            )
+            assert [text for _, text in exported] == expected
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_small_slope_change_preserves_elevation_without_adding_bend_loss():
+    """小于0.5°的变坡仍须保留高程，但不新增折管计损节点。"""
+    from app_渠系计算前端.water_profile.cad_tools import sample_xxpipe_centerline_elevation
+
+    parsed = DxfParser._build_longitudinal_nodes([(0.0, 100.0), (100.0, 100.4), (200.0, 100.0)], [0.0] * 3, 0.0)
+    nodes = PressurePipeConfigDialog._convert_imported_longitudinal_nodes(parsed)
+    assert len(nodes) == 3
+    assert all(n["turn_type"] == "NONE" and n["turn_angle"] == 0.0 for n in nodes)
+    assert sample_xxpipe_centerline_elevation(nodes, 100.0) == pytest.approx(100.4)
+    assert sample_xxpipe_centerline_elevation(nodes, 150.0) == pytest.approx(100.2)
+
+
+def test_one_dxf_imports_pressure_parts_with_tunnel_gap_and_replaces_previous_file(monkeypatch, local_tmp_path):
+    """一份DXF导入前后有压段，隧洞留空；再次导入不得残留前一份数据。"""
+    import ezdxf
+    from managers.pressure_pipe_manager import PressurePipeManager
+    from utils.pressure_pipe_longitudinal_utils import sample_longitudinal_elevation, clip_longitudinal_nodes_to_range
+    from core.pressure_pipe_calc import _calc_longitudinal_segment_length
+    from app_渠系计算前端.water_profile import cad_tools
+
+    _get_qapp()
+    path = local_tmp_path / 'parts.dxf'
+    doc = ezdxf.new()
+    doc.layers.new('纵断')
+    # 反向绘制后段且实体顺序倒置，仍应整体平移15米并保持中间空档。
+    doc.modelspace().add_lwpolyline([(85, 90), (45, 95)], dxfattribs={'layer': '纵断'})
+    doc.modelspace().add_lwpolyline([(5, 100), (25, 98)], dxfattribs={'layer': '纵断'})
+    doc.saveas(path)
+    key = 'flow2-route1'
+    manager = PressurePipeManager(str(local_tmp_path / 'mixed.qxproj'))
+    manager.set_route_longitudinal_nodes(key, [{'chainage': -20, 'elevation': 999}, {'chainage': 200, 'elevation': 999}], '测试整线')
+    route_nodes = []
+    definitions = [
+        (20, '顶管', '前段', InOutType.INLET), (40, '顶管', '前段', InOutType.OUTLET),
+        (40, '隧洞-圆形', '洞段', InOutType.INLET), (60, '隧洞-圆形', '洞段', InOutType.OUTLET),
+        (60, '顶管', '后段', InOutType.INLET), (100, '顶管', '后段', InOutType.OUTLET),
+    ]
+    for index, (station, structure, name, in_out) in enumerate(definitions):
+        node = _set_station_point(_make_extractor_node('2', name, structure, in_out), station, station, 0)
+        node.pressure_pipe_row_identity = f'flow2-row{index + 1}'
+        route_nodes.append(node)
+    groups = PressurePipeDataExtractor.extract_dialog_pipe_groups(route_nodes, settings=_make_settings('干管'))
+    assert {g.route_key for g in groups} == {key}
+    assert all(g.route_start_row_index == 0 and g.route_end_row_index == 5 for g in groups)
+    dialog = PressurePipeConfigDialog(pipe_groups=groups, manager=manager, xxpipe_route_mode=True,
+        route_import_targets={key: {'display_name': '测试整线', 'nodes': route_nodes, 'import_anchor_station_mc': 20.0}})
+    assert len(dialog._route_widgets) == 1
+    dialog._restore_manager_route_longitudinal_data(key)
+    errors = []
+    monkeypatch.setattr(QFileDialog, 'getOpenFileName', staticmethod(lambda *_a, **_k: (str(path), 'DXF')))
+    monkeypatch.setattr(QMessageBox, 'critical', staticmethod(lambda *_a: errors.append(_a[2])))
+    monkeypatch.setattr(dialog_mod, 'fluent_info', lambda *_a, **_k: None)
+    points = [{'station_mc': n.station_MC, 'x': n.x, 'y': n.y} for n in route_nodes]
+    try:
+        dialog._import_longitudinal_dxf(key, points)
+        assert errors == []
+        imported = dialog._longitudinal_data[key]
+        assert [n['chainage'] for n in imported] == [20, 40, 60, 100]
+        assert imported[1]['profile_gap_after']
+        assert sum(_calc_longitudinal_segment_length(a, b) for a, b in zip(imported, imported[1:])) == pytest.approx((20**2 + 2**2)**0.5 + (40**2 + 5**2)**0.5)
+        assert sample_longitudinal_elevation(imported, 30) == pytest.approx(99)
+        assert cad_tools.sample_xxpipe_centerline_elevation(imported, 80) == pytest.approx(92.5)
+        for sample in [sample_longitudinal_elevation, cad_tools.sample_xxpipe_centerline_elevation]:
+            with pytest.raises(ValueError):
+                sample(imported, 50)
+        with pytest.raises(ValueError, match='空档'):
+            clip_longitudinal_nodes_to_range(imported, 30, 70)
+        assert not dialog._collect_xxpipe_route_import_coverage_state(key, imported)['missing_targets']
+
+        saved = PressurePipeManager(str(local_tmp_path / 'mixed.qxproj')).get_route_config(key)
+        assert saved['longitudinal_nodes'] == imported
+        assert len(saved['raw_profile_polyline']['parts']) == 2
+        pressure_nodes = [n for n in route_nodes if '隧洞' not in n.get_structure_type_str()]
+        profile = cad_tools._build_xxpipe_profile_data(pressure_nodes,
+            {n.pressure_pipe_row_identity: imported for n in pressure_nodes},
+            raw_profile_polylines_by_route={key: saved['raw_profile_polyline']},
+            warning_context_by_identity={n.pressure_pipe_row_identity: {'route_key': key} for n in pressure_nodes})
+        assert [(p['start_mc'], p['end_mc']) for p in profile['centerline_draw_segments']] == [(20, 40), (60, 100)]
+        output = ezdxf.new()
+        cad_tools._draw_xxpipe_profile_on_msp(output.modelspace(), pressure_nodes,
+            {'text_height': 3.5, 'rotation': 90, 'scale_x': 1000, 'scale_y': 1000}, '', xxpipe_profile_data=profile)
+        assert len(list(output.modelspace().query('LWPOLYLINE'))) == 2
+
+        # 重开真实整线卡片后仍保留分段结构，预览渲染也能跳过空档。
+        reopened = PressurePipeConfigDialog(pipe_groups=groups,
+            manager=PressurePipeManager(str(local_tmp_path / 'mixed.qxproj')), xxpipe_route_mode=True,
+            route_import_targets={key: {'display_name': '测试整线', 'nodes': route_nodes, 'import_anchor_station_mc': 20.0}})
+        try:
+            assert reopened._longitudinal_data[key] == imported
+            assert len(reopened._raw_profile_polyline_data[key]['parts']) == 2
+            canvas = reopened._route_widgets[key]['canvas']
+            canvas.set_view_mode('profile')
+            assert not canvas.grab().isNull()
+        finally:
+            reopened.close()
+            reopened.deleteLater()
+
+        # 空档若落在有压子段内部，必须报告缺失，不能仅凭两端已覆盖而通过。
+        dialog._route_contexts[key]['groups'] = [SimpleNamespace(segment_start_mc=30, segment_end_mc=70, structure_type='有压管道', display_name='跨空档管段')]
+        assert dialog._collect_xxpipe_route_import_coverage_state(key, imported)['missing_targets']
+        dialog._route_contexts[key]['groups'] = groups
+
+        # 改为较短单段文件后，旧后段和原线parts必须一同消失。
+        short = ezdxf.new()
+        short.modelspace().add_lwpolyline([(5, 80), (15, 79)])
+        short.saveas(path)
+        dialog._import_longitudinal_dxf(key, points)
+        assert errors == []
+        assert [n['chainage'] for n in dialog._longitudinal_data[key]] == [20, 30]
+        current = manager.get_route_config(key)
+        assert 'parts' not in current['raw_profile_polyline']
+        assert len(current['longitudinal_nodes']) == 2
+        assert dialog._collect_xxpipe_route_import_coverage_state(key, current['longitudinal_nodes'])['missing_targets']
+
+        # 后续文件读取失败，不能清掉刚才有效导入的数据。
+        before = copy.deepcopy(current)
+        path.write_text('invalid DXF', encoding='utf-8')
+        dialog._import_longitudinal_dxf(key, points)
+        assert errors
+        assert manager.get_route_config(key) == before
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_disconnected_profile_rejects_overlapping_axes(local_tmp_path):
+    """前后段必须共用桩号坐标，重叠候选不得按多段轴线混入。"""
+    import ezdxf
+
+    doc = ezdxf.new()
+    doc.layers.new('纵断')
+    doc.modelspace().add_lwpolyline([(0, 100), (100, 90)], dxfattribs={'layer': '纵断'})
+    doc.modelspace().add_lwpolyline([(50, 90), (150, 80)], dxfattribs={'layer': '纵断'})
+    path = local_tmp_path / 'overlap.dxf'
+    doc.saveas(path)
+    with pytest.raises(ValueError, match='重叠'):
+        DxfParser.get_longitudinal_profile_parts(str(path))
 
 
 @pytest.fixture

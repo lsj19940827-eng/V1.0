@@ -322,9 +322,9 @@ def test_pressure_pipe_config_dialog_shows_longitudinal_dxf_import_guidance():
 
     assert guidance_label.isVisible() is True
     assert "合格的纵断面 DXF 需要满足：" in guidance_text
-    assert "DXF 文件里有可识别的纵断面管道中心线，建议只保留这一根多段线。" in guidance_text
+    assert "每次导入完整替换当前纵断面" in guidance_text
     assert "该轴线按 1:1 绘制，其中 Y 为管道中心线的真实高程（米）。" in guidance_text
-    assert "若文件里有多条相近多段线，系统会优先识别更像纵断面的那条，必要时会请你确认。" in guidance_text
+    assert "前后有压段可画为同一桩号坐标系中的多条多段线，隧洞段留空" in guidance_text
     assert "为提高识别成功率，建议把纵断面放在“纵断”或“纵剖”等清晰图层。" in guidance_text
 
     dialog.close()
@@ -943,7 +943,7 @@ def test_pressure_pipe_config_dialog_preserves_stale_saved_route_longitudinal_ca
     assert route_key in dialog.get_longitudinal_nodes_dict()
     assert dialog.get_longitudinal_nodes_dict()[route_key] == stale_nodes
     assert "已保留" in dialog._route_widgets[route_key]["hint"].text()
-    assert "继续补导入" in dialog._route_widgets[route_key]["hint"].text()
+    assert "同一份DXF中重新导入" in dialog._route_widgets[route_key]["hint"].text()
     saved_routes = manager.to_dict().get("routes", {})
     assert saved_routes.get(route_key, {}).get("longitudinal_nodes", []) == stale_nodes
     saved_pipes = manager.to_dict().get("pipes", {})
@@ -1187,7 +1187,7 @@ def test_pressure_pipe_config_dialog_rejects_xxpipe_import_when_coverage_is_inco
     assert "导入失败：纵断面范围不够" in infos[0]
     assert "需要覆盖到桩号 80.000 m" in infos[0]
     assert "当前导入的纵断面只到 50.000 m" in infos[0]
-    assert "允许的 1.0 mm 误差" in infos[0]
+    assert "允许的 10.0 mm 误差" in infos[0]
     assert "请在 CAD 中把纵断面末端至少延长到 80.000 m 后重新导入。" in infos[0]
     assert "未覆盖节点：IP2@0+080.000" in infos[0]
     assert route_key in dialog.get_longitudinal_nodes_dict()
@@ -1287,7 +1287,7 @@ def test_pressure_pipe_config_dialog_reports_mm_gap_for_short_longitudinal_profi
                         arc_theta_rad=None,
                     ),
                     SimpleNamespace(
-                        chainage=10708.9248,
+                        chainage=10708.9148,
                         elevation=418.0,
                         vertical_curve_radius=0.0,
                         turn_type=turn_type,
@@ -1316,15 +1316,15 @@ def test_pressure_pipe_config_dialog_reports_mm_gap_for_short_longitudinal_profi
     assert "流量段1 整线1" in infos[0]
     assert "导入失败：纵断面范围不够" in infos[0]
     assert "需要覆盖到桩号 10708.927 m" in infos[0]
-    assert "当前导入的纵断面只到 10708.9248 m" in infos[0]
-    assert "当前还差 2.2 mm，已超过程序允许的 1.0 mm 误差。" in infos[0]
+    assert "当前导入的纵断面只到 10708.9148 m" in infos[0]
+    assert "当前还差 12.2 mm，已超过程序允许的 10.0 mm 误差。" in infos[0]
     assert "请在 CAD 中把纵断面末端至少延长到 10708.927 m 后重新导入。" in infos[0]
     assert "未覆盖节点：IP173@T10+708.927" in infos[0]
     assert route_key in dialog.get_longitudinal_nodes_dict()
     saved_routes = dialog._manager.to_dict().get("routes", {})
     assert [node["chainage"] for node in saved_routes.get(route_key, {}).get("longitudinal_nodes", [])] == [
         0.0,
-        pytest.approx(10708.9248),
+        pytest.approx(10708.9148),
     ]
 
     dialog.close()
@@ -1343,7 +1343,7 @@ def test_pressure_pipe_config_dialog_formats_stale_longitudinal_hint_preview():
     )
 
     assert "已保留上次导入的纵断面" in text
-    assert "继续补导入纵断面DXF" in text
+    assert "同一份DXF中重新导入" in text
     assert "未覆盖桩号：IP173@T10+708.927" in text
 
 
@@ -1509,7 +1509,7 @@ def test_pressure_pipe_config_dialog_route_import_persists_manager_before_accept
     dialog.deleteLater()
 
 
-def test_pressure_pipe_config_dialog_merges_multiple_route_imports_and_uses_best_anchor(monkeypatch):
+def test_pressure_pipe_config_dialog_replaces_route_and_keeps_first_anchor(monkeypatch):
     _get_qapp()
     route_key, groups, manager = _make_mixed_route_groups()
     route_nodes = [
@@ -1669,12 +1669,12 @@ def test_pressure_pipe_config_dialog_merges_multiple_route_imports_and_uses_best
     assert not errors
     assert parser_offsets == [
         ("part-a.dxf", pytest.approx(15.0)),
-        ("part-b.dxf", pytest.approx(53.0)),
+        ("part-b.dxf", pytest.approx(13.0)),
     ]
     assert route_key in dialog.get_longitudinal_nodes_dict()
-    assert [node["chainage"] for node in dialog.get_longitudinal_nodes_dict()[route_key]] == [20.0, 40.0, 60.0, 100.0]
+    assert [node["chainage"] for node in dialog.get_longitudinal_nodes_dict()[route_key]] == [20.0, 60.0]
     saved_routes = manager.to_dict().get("routes", {})
-    assert [node["chainage"] for node in saved_routes.get(route_key, {}).get("longitudinal_nodes", [])] == [20.0, 40.0, 60.0, 100.0]
+    assert [node["chainage"] for node in saved_routes.get(route_key, {}).get("longitudinal_nodes", [])] == [20.0, 60.0]
 
     dialog.close()
     dialog.deleteLater()

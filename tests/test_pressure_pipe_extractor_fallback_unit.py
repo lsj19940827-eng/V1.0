@@ -231,14 +231,14 @@ def test_extract_dialog_pipe_groups_assigns_route_context_for_continuous_xxqu_ru
     named_group, anonymous_group = groups
     assert named_group.route_key
     assert anonymous_group.route_key
-    assert named_group.route_key != anonymous_group.route_key
+    assert named_group.route_key == anonymous_group.route_key
     assert named_group.route_start_row_index == 1
-    assert named_group.route_end_row_index == 2
+    assert named_group.route_end_row_index == 4
     assert named_group.route_start_mc == 10.0
-    assert named_group.route_end_mc == 30.0
-    assert anonymous_group.route_start_row_index == 4
+    assert named_group.route_end_mc == 80.0
+    assert anonymous_group.route_start_row_index == 1
     assert anonymous_group.route_end_row_index == 4
-    assert anonymous_group.route_start_mc == 80.0
+    assert anonymous_group.route_start_mc == 10.0
     assert anonymous_group.route_end_mc == 80.0
     assert anonymous_group.segment_start_mc == 80.0
     assert anonymous_group.segment_end_mc == 80.0
@@ -336,7 +336,7 @@ def test_extract_dialog_pipe_groups_for_branch_channel_marks_prefix_segment_meta
     assert [group.display_name for group in groups] == [
         "苟家湾（前缀段）",
         "大石包",
-        "苟家湾（后段）",
+        "苟家湾",
     ]
     prefix_group = groups[0]
     assert prefix_group.member_role == "prefix_segment"
@@ -390,7 +390,7 @@ def test_extract_pressure_routes_keeps_member_labels_separate_from_route_display
     assert [segment.member_display_name for segment in route.segments] == [
         "苟家湾（前缀段）",
         "大石包",
-        "苟家湾（后段）",
+        "苟家湾",
     ]
     assert [segment.dxf_display_name for segment in route.segments] == [
         "苟家湾",
@@ -420,7 +420,7 @@ def test_extract_dialog_pipe_groups_builds_fallback_identity_for_unnamed_row():
     assert groups[0].identity == "flow5-row2"
 
 
-def test_extract_dialog_pipe_groups_for_branch_channel_rewrites_named_chain_members_to_row_identities():
+def test_extract_dialog_pipe_groups_for_branch_channel_preserves_split_parent_identities():
     prefix_inlet = _set_plan_station(
         _make_node("1", "苟家湾", "有压管道", InOutType.INLET, diameter=0.8, flow=0.49),
         3968.95,
@@ -460,18 +460,19 @@ def test_extract_dialog_pipe_groups_for_branch_channel_rewrites_named_chain_memb
     assert [group.display_name for group in groups] == [
         "苟家湾（前缀段）",
         "大石包",
-        "苟家湾（后段）",
+        "苟家湾",
     ]
     assert [group.identity for group in groups] == [
         "flow1-row1",
-        "flow1-row2",
-        "flow1-row4",
+        "1::大石包::rows2-3",
+        "1::苟家湾::rows4-5",
     ]
     assert [group.storage_key for group in groups] == [
         "flow1-row1",
-        "flow1-row2",
-        "flow1-row4",
+        "1::大石包::rows2-3",
+        "1::苟家湾::rows4-5",
     ]
+    assert all(group.split_to_row_members for group in groups[1:])
     assert [group.route_key for group in groups] == [
         "flow1-route1",
         "flow1-route1",
@@ -660,22 +661,22 @@ def test_extract_dialog_pipe_groups_assigns_shared_route_context_for_mixed_xxpip
     named_group, anonymous_group = groups
     assert named_group.route_key
     assert anonymous_group.route_key
-    assert named_group.route_key != anonymous_group.route_key
+    assert named_group.route_key == anonymous_group.route_key
     assert named_group.route_start_row_index == 1
-    assert named_group.route_end_row_index == 2
+    assert named_group.route_end_row_index == 5
     assert named_group.route_start_mc == 10.0
-    assert named_group.route_end_mc == 30.0
+    assert named_group.route_end_mc == 100.0
     assert named_group.segment_start_mc == 10.0
     assert named_group.segment_end_mc == 30.0
-    assert anonymous_group.route_start_row_index == 5
+    assert anonymous_group.route_start_row_index == 1
     assert anonymous_group.route_end_row_index == 5
-    assert anonymous_group.route_start_mc == 100.0
+    assert anonymous_group.route_start_mc == 10.0
     assert anonymous_group.route_end_mc == 100.0
     assert anonymous_group.segment_start_mc == 80.0
     assert anonymous_group.segment_end_mc == 100.0
     assert len(named_group.route_ip_points) >= 2
     assert named_group.route_ip_points[0]["x"] == 10.0
-    assert named_group.route_ip_points[-1]["x"] == 30.0
+    assert named_group.route_ip_points[-1]["x"] == 100.0
 
 
 def test_extract_dialog_pipe_groups_ignores_leading_tunnel_when_assigning_route_context():
@@ -721,7 +722,7 @@ def test_extract_dialog_pipe_groups_ignores_leading_tunnel_when_assigning_route_
     assert group.route_ip_points[-1]["x"] == 60.0
 
 
-def test_extract_dialog_pipe_groups_splits_route_when_tunnel_interrupts_pressure_run():
+def test_extract_dialog_pipe_groups_keeps_one_import_route_across_middle_tunnel():
     upstream = _set_plan_station(
         _make_node("2", "上游明渠", "明渠-梯形", InOutType.NORMAL, flow=1.8),
         0.0,
@@ -778,14 +779,14 @@ def test_extract_dialog_pipe_groups_splits_route_when_tunnel_interrupts_pressure
     named_group, anonymous_group = groups
     assert named_group.route_key
     assert anonymous_group.route_key
-    assert named_group.route_key != anonymous_group.route_key
+    assert named_group.route_key == anonymous_group.route_key
     assert named_group.route_start_row_index == 1
-    assert named_group.route_end_row_index == 2
+    assert named_group.route_end_row_index == 4
     assert named_group.route_start_mc == 10.0
-    assert named_group.route_end_mc == 30.0
-    assert anonymous_group.route_start_row_index == 4
+    assert named_group.route_end_mc == 80.0
+    assert anonymous_group.route_start_row_index == 1
     assert anonymous_group.route_end_row_index == 4
-    assert anonymous_group.route_start_mc == 80.0
+    assert anonymous_group.route_start_mc == 10.0
     assert anonymous_group.route_end_mc == 80.0
     assert anonymous_group.segment_start_mc == 80.0
     assert anonymous_group.segment_end_mc == 80.0

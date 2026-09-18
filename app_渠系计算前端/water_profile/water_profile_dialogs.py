@@ -54,9 +54,9 @@ def _build_longitudinal_dxf_import_guidance_text() -> str:
     """返回纵断面 DXF 导入前说明文案。"""
     return (
         "合格的纵断面 DXF 需要满足：\n"
-        "1. DXF 文件里有可识别的纵断面管道中心线，建议只保留这一根多段线。\n"
+        "1. 每次导入完整替换当前纵断面，请在一份 DXF 中保留本整线所需的管道中心线。\n"
         "2. 该轴线按 1:1 绘制，其中 Y 为管道中心线的真实高程（米）。\n"
-        "3. 若文件里有多条相近多段线，系统会优先识别更像纵断面的那条，必要时会请你确认。\n"
+        "3. 夹带隧洞时，前后有压段可画为同一桩号坐标系中的多条多段线，隧洞段留空。\n"
         "4. 为提高识别成功率，建议把纵断面放在“纵断”或“纵剖”等清晰图层。"
     )
 
@@ -453,7 +453,7 @@ class SimpleProfileCanvas(QWidget):
 
         pipe_lines = [(screen_pts[k][0], screen_pts[k][1],
                        screen_pts[k + 1][0], screen_pts[k + 1][1])
-                      for k in range(len(screen_pts) - 1)]
+                      for k in range(len(screen_pts) - 1) if not nodes[k].get('profile_gap_after')]
 
         occupied_rects = []
         _lbl_h = 14
@@ -463,10 +463,14 @@ class SimpleProfileCanvas(QWidget):
         pen = QPen(self.C_PIPE, 3)
         p.setPen(pen)
         for i in range(len(screen_pts) - 1):
+            if nodes[i].get('profile_gap_after'):
+                continue
             p.drawLine(QPointF(*screen_pts[i]), QPointF(*screen_pts[i + 1]))
 
         # 方向箭头
         for i in range(len(screen_pts) - 1):
+            if nodes[i].get('profile_gap_after'):
+                continue
             self._draw_arrow(p, screen_pts[i], screen_pts[i + 1], self.C_ARROW)
 
         # 起止标记
@@ -1510,17 +1514,17 @@ class PressurePipeConfigDialog(QDialog):
         cls,
         coverage_state: Dict[str, Any],
     ) -> str:
-        """为整线卡片构造“已保留但待补导入”的提示。"""
+        """为整线卡片构造覆盖不足、需重新导入完整文件的提示。"""
         missing_targets = list((coverage_state or {}).get("missing_targets", []) or [])
         if missing_targets:
             return cls._build_stale_longitudinal_hint_text(missing_targets)
         station_errors = list((coverage_state or {}).get("station_errors", []) or [])
         if station_errors:
-            return "已保留当前导入的纵断面，但当前桩号还无法完成覆盖校验，请检查桩号或继续补导入后再开始计算。"
+            return "当前导入的纵断面无法完成覆盖校验，请检查桩号后重新导入完整文件。"
         display_name = str((coverage_state or {}).get("display_name", "") or "").strip()
         if display_name:
-            return f"已保留“{display_name}”当前导入的纵断面，请继续补导入后再开始计算。"
-        return "已保留当前导入的纵断面，请继续补导入后再开始计算。"
+            return f"“{display_name}”当前纵断面覆盖不足，请将全部有压段放在同一份DXF中重新导入。"
+        return "当前纵断面覆盖不足，请将全部有压段放在同一份DXF中重新导入。"
 
     @classmethod
     def _build_xxpipe_route_hint_text(cls, pipe_name, widgets, hint_text: str) -> str:
@@ -5768,70 +5772,6 @@ class PressurePipeConfigDialog(QDialog):
             )
         return anchor_station
 
-    def _collect_xxpipe_route_import_anchor_candidates(self, pipe_name: str, ip_points) -> List[float]:
-        """收集整线补导入可尝试的非隧洞起点锚点。"""
-        payload = self._resolve_route_import_payload(pipe_name)
-        route_nodes = list(payload.get("nodes", []) or [])
-        anchors: List[float] = []
-        inside_non_tunnel_segment = False
-
-        for node in route_nodes:
-            if getattr(node, "is_transition", False) or getattr(node, "is_auto_inserted_channel", False):
-                continue
-            if not self._route_node_requires_import_coverage(node):
-                inside_non_tunnel_segment = False
-                continue
-
-            station_mc = self._safe_float(
-                getattr(node, "station_MC", getattr(node, "station_mc", None)),
-                None,
-            )
-            if station_mc is None:
-                continue
-            if not inside_non_tunnel_segment:
-                anchors.append(float(station_mc))
-            inside_non_tunnel_segment = True
-
-        fallback_anchor = self._resolve_xxpipe_route_import_anchor_station(pipe_name, ip_points)
-        if fallback_anchor is not None and not any(
-            abs(float(item) - float(fallback_anchor)) <= 1e-6 for item in anchors
-        ):
-            anchors.insert(0, float(fallback_anchor))
-
-        if not anchors and fallback_anchor is not None:
-            anchors.append(float(fallback_anchor))
-        return anchors
-
-    def _pick_xxpipe_route_import_anchor(
-        self,
-        pipe_name: str,
-        anchor_candidates: List[float],
-        existing_nodes,
-    ) -> float | None:
-        """根据当前未覆盖的首个目标，优先选择最合理的补导入锚点。"""
-        if not anchor_candidates:
-            return None
-        if not existing_nodes:
-            return float(anchor_candidates[0])
-
-        coverage_state = self._collect_xxpipe_route_import_coverage_state(pipe_name, existing_nodes)
-        missing_targets = list(coverage_state.get("missing_targets", []) or [])
-        first_missing_station = self._safe_float(
-            missing_targets[0].get("station_mc", None),
-            None,
-        ) if missing_targets else None
-        if first_missing_station is None:
-            return float(anchor_candidates[0])
-
-        preferred_before = [
-            float(anchor)
-            for anchor in anchor_candidates
-            if float(anchor) <= float(first_missing_station) + 1e-6
-        ]
-        if preferred_before:
-            return max(preferred_before)
-        return min(anchor_candidates, key=lambda item: abs(float(item) - float(first_missing_station)))
-
     @staticmethod
     def _convert_imported_longitudinal_nodes(long_nodes) -> List[Dict[str, Any]]:
         """把解析器返回的纵断面节点统一转成字典列表。"""
@@ -5855,24 +5795,6 @@ class PressurePipeConfigDialog(QDialog):
         return long_nodes_dict
 
     @staticmethod
-    def _merge_longitudinal_nodes(existing_nodes, imported_nodes) -> List[Dict[str, Any]]:
-        """按桩号合并多次导入的纵断面，后导入的同桩号节点覆盖旧节点。"""
-        merged_map: Dict[float, Dict[str, Any]] = {}
-        for nodes in (existing_nodes or [], imported_nodes or []):
-            for raw in list(nodes or []):
-                if not isinstance(raw, dict):
-                    continue
-                try:
-                    chainage = float(raw.get("chainage"))
-                except (TypeError, ValueError):
-                    continue
-                merged_map[round(chainage, 6)] = dict(raw)
-
-        merged_nodes = list(merged_map.values())
-        merged_nodes.sort(key=lambda item: float(item.get("chainage", 0.0) or 0.0))
-        return merged_nodes
-
-    @staticmethod
     def _read_imported_raw_profile_polyline(filepath: str, dxf_parser_cls, chainage_offset: float) -> Dict[str, Any]:
         """读取并标准化已套偏移的导入原线几何。"""
         from utils.pressure_pipe_longitudinal_utils import normalize_raw_profile_polyline
@@ -5885,13 +5807,6 @@ class PressurePipeConfigDialog(QDialog):
             chainage_offset=chainage_offset,
         )
         return normalize_raw_profile_polyline(raw_profile_polyline)
-
-    @staticmethod
-    def _merge_raw_profile_polylines(existing_raw_profile_polyline, imported_raw_profile_polyline) -> Dict[str, Any]:
-        """按覆盖范围合并多次导入的原线几何。"""
-        from utils.pressure_pipe_longitudinal_utils import merge_raw_profile_polylines
-
-        return merge_raw_profile_polylines(existing_raw_profile_polyline, imported_raw_profile_polyline)
 
     @staticmethod
     def _read_longitudinal_profile_start_x(filepath: str, dxf_parser_cls) -> float:
@@ -5920,21 +5835,35 @@ class PressurePipeConfigDialog(QDialog):
         raise ValueError("错误：无法解析多段线顶点")
 
     def _resolve_xxpipe_route_import_result(self, pipe_name: str, filepath: str, dxf_parser_cls, ip_points):
-        """为整线补导入选择最合适的锚点，并返回合并后的纵断面。"""
-        existing_nodes = list(self._longitudinal_data.get(str(pipe_name or "").strip(), []) or [])
-        existing_raw_profile_polyline = dict(
-            self._raw_profile_polyline_data.get(str(pipe_name or "").strip(), {}) or {}
-        )
-        anchor_candidates = self._collect_xxpipe_route_import_anchor_candidates(pipe_name, ip_points)
-        if not anchor_candidates:
-            anchor_candidates = [0.0]
-        preferred_anchor = self._pick_xxpipe_route_import_anchor(
-            pipe_name,
-            anchor_candidates,
-            existing_nodes,
-        )
+        """以本次文件完整替换整线，锚点不受已有缓存及缺口影响。"""
+        preferred_anchor = self._resolve_xxpipe_route_import_anchor_station(pipe_name, ip_points)
         if preferred_anchor is None:
-            preferred_anchor = float(anchor_candidates[0])
+            preferred_anchor = 0.0
+
+        parts = self._read_route_profile_parts(pipe_name, filepath, dxf_parser_cls)
+        if parts:
+            chainage_offset = preferred_anchor - float(parts[0]['vertices'][0][0])
+            long_nodes, converted_nodes, shifted_parts = [], [], []
+            for index, part in enumerate(parts):
+                parsed = dxf_parser_cls._build_longitudinal_nodes(part['vertices'], part['bulges'], chainage_offset)
+                converted = self._convert_imported_longitudinal_nodes(parsed)
+                if index < len(parts) - 1:
+                    converted[-1]['profile_gap_after'] = True
+                converted_nodes.extend(converted)
+                long_nodes.extend(parsed)
+                shifted_parts.append({
+                    **part, 'vertices': [(float(x) + chainage_offset, float(y)) for x, y in part['vertices']],
+                })
+            from utils.pressure_pipe_longitudinal_utils import normalize_raw_profile_polyline
+            raw = normalize_raw_profile_polyline({'parts': shifted_parts})
+            self._raise_if_import_stays_in_raw_coordinate_space(self._resolve_pipe_label(pipe_name), ip_points, long_nodes)
+            return {
+                'anchor_station': preferred_anchor, 'chainage_offset': chainage_offset,
+                'message': f'已导入{len(parts)}段纵断面，共{len(converted_nodes)}个节点；段间空档保留。',
+                'long_nodes': long_nodes, 'merged_nodes': converted_nodes,
+                'raw_profile_polyline': raw, 'merged_raw_profile_polyline': raw,
+                'coverage_state': self._collect_xxpipe_route_import_coverage_state(pipe_name, converted_nodes),
+            }
 
         x_start = self._read_longitudinal_profile_start_x(filepath, dxf_parser_cls)
         chainage_offset = float(preferred_anchor) - x_start
@@ -5948,16 +5877,13 @@ class PressurePipeConfigDialog(QDialog):
             long_nodes,
         )
         converted_nodes = self._convert_imported_longitudinal_nodes(long_nodes)
-        merged_nodes = self._merge_longitudinal_nodes(existing_nodes, converted_nodes)
+        merged_nodes = converted_nodes
         imported_raw_profile_polyline = self._read_imported_raw_profile_polyline(
             filepath,
             dxf_parser_cls,
             chainage_offset,
         )
-        merged_raw_profile_polyline = self._merge_raw_profile_polylines(
-            existing_raw_profile_polyline,
-            imported_raw_profile_polyline,
-        )
+        merged_raw_profile_polyline = imported_raw_profile_polyline
         coverage_state = self._collect_xxpipe_route_import_coverage_state(pipe_name, merged_nodes)
         return {
             "anchor_station": float(preferred_anchor),
@@ -6016,6 +5942,23 @@ class PressurePipeConfigDialog(QDialog):
 
         coverage_start, coverage_end = self._extract_longitudinal_chainage_range(longitudinal_nodes)
 
+        # 有压子段的两个端点均覆盖时，也不能跨过文件中的轴线空档。
+        ordered = sorted(longitudinal_nodes or [], key=lambda n: n['chainage'])
+        gaps = [(a['chainage'], b['chainage']) for a, b in zip(ordered, ordered[1:]) if a.get('profile_gap_after')]
+        for group in self._route_contexts.get(str(pipe_name).strip(), {}).get('groups', []):
+            if self._group_is_tunnel_segment(group):
+                continue
+            start = self._safe_float(getattr(group, 'segment_start_mc', None), None)
+            end = self._safe_float(getattr(group, 'segment_end_mc', None), None)
+            if start is None or end is None:
+                continue
+            for gap_start, gap_end in gaps:
+                left, right = max(start, gap_start), min(end, gap_end)
+                if right > left + _XXPIPE_PROFILE_STATION_TOL:
+                    station = (left + right) / 2.0
+                    missing_targets.append({'label': self._group_display_name(group), 'station_mc': station,
+                                            'station_text': f'{station:.3f} m（有压段轴线空档）'})
+
         return {
             "display_name": display_name,
             "station_errors": list(station_errors or []),
@@ -6052,10 +5995,10 @@ class PressurePipeConfigDialog(QDialog):
         import sys
         pipe_label = self._resolve_pipe_label(pipe_name)
         card_key = str(pipe_name or "").strip()
-        route_merge_mode = bool(self._xxpipe_route_mode and card_key in self._route_contexts)
+        route_import_mode = bool(self._xxpipe_route_mode and card_key in self._route_contexts)
 
         # 已有数据时弹出替换确认
-        if (not route_merge_mode) and pipe_name in self._longitudinal_data and self._longitudinal_data[pipe_name]:
+        if (not route_import_mode) and pipe_name in self._longitudinal_data and self._longitudinal_data[pipe_name]:
             if not fluent_question(self, "确认替换",
                                    "当前已有纵断面数据，导入DXF将替换现有数据。\n\n是否继续？"):
                 return
@@ -6084,7 +6027,7 @@ class PressurePipeConfigDialog(QDialog):
 
             coverage_state = None
             merged_nodes = None
-            if route_merge_mode:
+            if route_import_mode:
                 route_import_result = self._resolve_xxpipe_route_import_result(
                     pipe_name,
                     filepath,
@@ -6137,7 +6080,7 @@ class PressurePipeConfigDialog(QDialog):
                 long_nodes,
             )
 
-            if route_merge_mode:
+            if route_import_mode:
                 display_name = str(
                     (coverage_state or {}).get("display_name", "") or pipe_label
                 ).strip()
@@ -6162,7 +6105,7 @@ class PressurePipeConfigDialog(QDialog):
                         "已导入一部分纵断面",
                         f"{display_name}\n{message}\n\n"
                         f"{self._build_xxpipe_import_coverage_error_message(display_name, coverage_state)}\n\n"
-                        "可以继续导入剩余纵断面文件。",
+                        "请将全部有压段放在同一份DXF中重新导入；每次导入会完整替换当前纵断面。",
                     )
                     return
 
@@ -6171,7 +6114,7 @@ class PressurePipeConfigDialog(QDialog):
                     self,
                     "导入成功",
                     f"{display_name}\n{message}\n"
-                    f"本次导入节点: {len(long_nodes)} 个，累计节点: {len(merged_nodes or [])} 个",
+                    f"本次导入节点: {len(long_nodes)} 个，已完整替换原纵断面。",
                 )
                 return
 
@@ -6210,8 +6153,19 @@ class PressurePipeConfigDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "导入失败", str(e))
 
+    def _read_route_profile_parts(self, pipe_name, filepath, dxf_parser_cls):
+        """仅夹带隧洞的整线接受同文件内按桩号分开的多条轴线。"""
+        if not self._xxpipe_route_mode:
+            return []
+        nodes = self._resolve_route_import_payload(pipe_name).get('nodes', [])
+        has_tunnel = any('隧洞' in str(getattr(getattr(n, 'structure_type', None), 'value', '')) for n in nodes)
+        reader = getattr(dxf_parser_cls, 'get_longitudinal_profile_parts', None)
+        return reader(filepath) if has_tunnel and callable(reader) else []
+
     def _confirm_longitudinal_dxf_candidate_if_needed(self, pipe_name, filepath, dxf_parser_cls):
         """当候选过于接近时，先让用户确认是否按推荐项继续导入。"""
+        if self._read_route_profile_parts(pipe_name, filepath, dxf_parser_cls):
+            return True
         if not hasattr(dxf_parser_cls, "inspect_longitudinal_profile_candidates"):
             return True
 

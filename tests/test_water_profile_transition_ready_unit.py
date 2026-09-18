@@ -968,7 +968,7 @@ def test_prepare_pressure_pipe_dialog_context_enables_route_mode_for_continuous_
     assert "flow7-route1" in result["route_import_targets"]
 
 
-def test_prepare_pressure_pipe_dialog_context_counts_route_import_targets_by_pressure_runs():
+def test_prepare_pressure_pipe_dialog_context_shares_route_import_across_internal_tunnel():
     module = _load_panel_module()
     WaterProfilePanel = module.WaterProfilePanel
     panel = _build_minimal_panel(WaterProfilePanel, [])
@@ -1022,8 +1022,8 @@ def test_prepare_pressure_pipe_dialog_context_counts_route_import_targets_by_pre
     )
 
     assert split_result["xxpipe_route_mode"] is True
-    assert len(split_result["route_import_targets"]) == 2
-    assert len(split_result["pressure_routes"]) == 2
+    assert len(split_result["route_import_targets"]) == 1
+    assert len(split_result["pressure_routes"]) == 1
     assert set(split_result["route_import_targets"]) == {
         group.route_key for group in split_result["pipe_groups"] if getattr(group, "route_key", "")
     }

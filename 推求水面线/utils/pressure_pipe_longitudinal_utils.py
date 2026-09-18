@@ -15,8 +15,19 @@ import copy
 import math
 from typing import Any, Dict, List, Tuple
 
-_LONGITUDINAL_STATION_TOL = 1e-3
+# 平面坐标常以厘米录入，桩号与 DXF 端点允许 1 厘米舍入差；真实空档仍拒绝跨越。
+LONGITUDINAL_STATION_TOL = 1e-2
+_LONGITUDINAL_STATION_TOL = LONGITUDINAL_STATION_TOL
 _LONGITUDINAL_GEOMETRY_TOL = 1e-9
+
+
+def longitudinal_node_match_tolerance(nodes, index):
+    """端点容差只作用于多段线首尾和空档两侧，内部采样仍保持毫米精度。"""
+    is_endpoint = index == 0 or index == len(nodes) - 1
+    is_gap_edge = bool(nodes[index].get("profile_gap_after")) or (
+        index > 0 and bool(nodes[index - 1].get("profile_gap_after"))
+    )
+    return LONGITUDINAL_STATION_TOL if is_endpoint or is_gap_edge else 1e-3
 
 
 def normalize_longitudinal_nodes(longitudinal_nodes) -> List[Dict[str, Any]]:
@@ -62,6 +73,20 @@ def _normalize_raw_polyline_direction(
 
 def normalize_raw_profile_polyline(raw_profile_polyline) -> Dict[str, Any]:
     """把导入原线几何整理成统一结构。"""
+    if isinstance(raw_profile_polyline, dict) and raw_profile_polyline.get('parts'):
+        parts = [normalize_raw_profile_polyline(p) for p in raw_profile_polyline['parts']]
+        parts = [p for p in parts if p]
+        if not parts:
+            return {}
+        parts.sort(key=lambda p: p['vertices'][0][0])
+        if len(parts) == 1:
+            return parts[0]
+        return {
+            'parts': parts,
+            'vertices': [v for p in parts for v in p['vertices']],
+            'bulges': [b for p in parts for b in p['bulges']],
+            'source_kind': 'selected_raw_polyline',
+        }
     vertices_source = []
     bulges_source = []
     source_kind = "selected_raw_polyline"
@@ -111,7 +136,7 @@ def normalize_raw_profile_polyline(raw_profile_polyline) -> Dict[str, Any]:
 def _same_raw_profile_point(
     left: Tuple[float, float],
     right: Tuple[float, float],
-    tol: float = _LONGITUDINAL_STATION_TOL,
+    tol: float = 1e-3,
 ) -> bool:
     """判断两个原线点是否可视为同一点。"""
     return (
@@ -212,6 +237,17 @@ def _compute_clipped_arc_bulge(
 def clip_raw_profile_polyline_to_range(raw_profile_polyline, start_mc: float, end_mc: float) -> Dict[str, Any]:
     """按桩号裁切导入原线，并尽量保留 bulge。"""
     normalized = normalize_raw_profile_polyline(raw_profile_polyline)
+    if normalized.get('parts'):
+        start_value, end_value = sorted((float(start_mc), float(end_mc)))
+        parts = []
+        for part in normalized['parts']:
+            left = max(start_value, part['vertices'][0][0])
+            right = min(end_value, part['vertices'][-1][0])
+            if right > left + _LONGITUDINAL_GEOMETRY_TOL:
+                parts.append(clip_raw_profile_polyline_to_range(part, left, right))
+        if not parts:
+            raise ValueError('原始纵断面多段线覆盖范围不足')
+        return normalize_raw_profile_polyline({'parts': parts})
     vertices = list(normalized.get("vertices", []) or [])
     bulges = list(normalized.get("bulges", []) or [])
     if len(vertices) < 2:
@@ -396,8 +432,8 @@ def sample_longitudinal_elevation(longitudinal_nodes, station_mc: float) -> floa
     station_value = float(station_mc)
     tol = _LONGITUDINAL_STATION_TOL
 
-    for node in nodes:
-        if abs(node["chainage"] - station_value) <= tol:
+    for index, node in enumerate(nodes):
+        if abs(node["chainage"] - station_value) <= longitudinal_node_match_tolerance(nodes, index):
             return node["elevation"]
 
     coverage_start = nodes[0]["chainage"]
@@ -410,15 +446,17 @@ def sample_longitudinal_elevation(longitudinal_nodes, station_mc: float) -> floa
 
     for index, current in enumerate(nodes[:-1]):
         nxt = nodes[index + 1]
+        if current.get('profile_gap_after'):
+            continue
         segment_start = current["chainage"]
         if _is_arc_segment_start(current):
             segment_end = float(current.get("arc_end_chainage", segment_start) or segment_start)
-            if segment_start - tol <= station_value <= segment_end + tol:
+            if segment_start - 1e-3 <= station_value <= segment_end + 1e-3:
                 return _sample_arc_segment_elevation(current, station_value)
             continue
 
         segment_end = nxt["chainage"]
-        if segment_start - tol <= station_value <= segment_end + tol:
+        if segment_start - 1e-3 <= station_value <= segment_end + 1e-3:
             ds = segment_end - segment_start
             if abs(ds) <= _LONGITUDINAL_GEOMETRY_TOL:
                 return current["elevation"]
@@ -455,8 +493,8 @@ def _build_boundary_node(base_node: Dict[str, Any], station_mc: float, *, keep_a
 def _clone_boundary_node(nodes: List[Dict[str, Any]], station_mc: float, *, is_start: bool) -> Dict[str, Any]:
     """生成起止裁切边界点。"""
     tol = _LONGITUDINAL_STATION_TOL
-    for node in nodes:
-        if abs(node["chainage"] - station_mc) <= tol:
+    for index, node in enumerate(nodes):
+        if abs(node["chainage"] - station_mc) <= longitudinal_node_match_tolerance(nodes, index):
             return copy.deepcopy(node)
 
     sampled_elevation = sample_longitudinal_elevation(nodes, station_mc)
@@ -520,6 +558,13 @@ def clip_longitudinal_nodes_to_range(longitudinal_nodes, start_mc: float, end_mc
     end_value = float(end_mc)
     if end_value < start_value:
         start_value, end_value = end_value, start_value
+
+    for current, nxt in zip(nodes, nodes[1:]):
+        if current.get('profile_gap_after') and (
+            start_value < nxt['chainage'] - _LONGITUDINAL_STATION_TOL
+            and end_value > current['chainage'] + _LONGITUDINAL_STATION_TOL
+        ):
+            raise ValueError('纵断面覆盖不足，子段穿过未提供轴线的空档')
 
     coverage_start = nodes[0]["chainage"]
     coverage_end = nodes[-1]["chainage"]

@@ -56,6 +56,7 @@ else:
         is_spillway_steep_chute_value,
         prepare_spillway_steep_chute_groups,
     )
+from utils.pressure_pipe_tunnel import iter_internal_tunnel_boundaries
 from 矩形暗涵设计 import calculate_rectangular_outputs
 
 FILL_CHANNEL_TEXT = "充水渠"
@@ -125,6 +126,7 @@ class WaterProfileCalculator:
         self,
         node1: ChannelNode,
         node2: ChannelNode,
+        all_nodes=None,
     ) -> bool:
         """
         判断两个相邻节点是否属于同类承压结构，因此应直接跳过插段。
@@ -141,7 +143,14 @@ class WaterProfileCalculator:
         """
         if not node1 or not node2:
             return False
-        return self.is_pressure_pipe(node1) and self.is_pressure_pipe(node2)
+        if self.is_pressure_pipe(node1) and self.is_pressure_pipe(node2):
+            return True
+        for inlet, outlet, before, after in iter_internal_tunnel_boundaries(all_nodes):
+            if (node1 is all_nodes[before] and node2 is all_nodes[inlet] and not str(node1.name or "").strip()) or (
+                node1 is all_nodes[outlet] and node2 is all_nodes[after] and not str(node2.name or "").strip()
+            ):
+                return True
+        return False
 
     def _matches_gap_outlet_role(self, node: ChannelNode) -> bool:
         """判断节点在插渐变段阶段是否可临时视为出口边界。"""
@@ -1139,7 +1148,7 @@ class WaterProfileCalculator:
 
         # 有压管道 / 定向钻 / 顶管 本质都按同类承压结构处理，
         # 相邻时不再额外插入渐变段或连接段。
-        if self._should_skip_pressure_pipe_like_gap(node1, node2):
+        if self._should_skip_pressure_pipe_like_gap(node1, node2, all_nodes):
             return result
 
         # 判断是否需要渐变段（隧洞/渡槽/倒虹吸/有压管道都需要渐变段行）

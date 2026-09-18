@@ -190,6 +190,8 @@ def _install_cad_tools_import_stubs():
     text_dialog_mod.create_text_export_settings_dialog = lambda *args, **kwargs: None
 
     utils_pkg = types.ModuleType("utils")
+    # 保留真实工具包路径，让 CAD 工具新增的纯计算依赖正常导入。
+    utils_pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "推求水面线" / "utils")]
     helpers_mod = types.ModuleType("utils.pressure_pipe_result_helpers")
     helpers_mod.make_pressure_pipe_identity = lambda *args, **kwargs: ""
 

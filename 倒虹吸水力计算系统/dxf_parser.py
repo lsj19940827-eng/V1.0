@@ -670,6 +670,38 @@ class DxfParser:
         )
 
     @staticmethod
+    def get_longitudinal_profile_parts(file_path: str) -> List[dict]:
+        """读取同一桩号坐标系内的分段纵断面，供夹带隧洞的整线导入。"""
+        import ezdxf
+
+        doc = ezdxf.readfile(file_path)
+        polylines = list(doc.modelspace().query('LWPOLYLINE POLYLINE'))
+        candidates = []
+        for index, polyline in enumerate(polylines):
+            try:
+                candidate = DxfParser._build_longitudinal_profile_candidate(polyline, index)
+            except ValueError:
+                continue
+            if not candidate['is_closed'] and candidate['is_local_coordinate'] and candidate['x_span'] > 1e-6:
+                candidates.append(candidate)
+        preferred = [c for c in candidates if c['has_preferred_layer']]
+        candidates = preferred or candidates
+        if len(candidates) < 2:
+            return []
+        candidates.sort(key=lambda c: c['vertices'][0][0])
+        for candidate in candidates:
+            if any(b[0] < a[0] - 1e-6 for a, b in zip(candidate['vertices'], candidate['vertices'][1:])):
+                raise ValueError('纵断面桩号不能往返，请检查多段线的X坐标。')
+        for left, right in zip(candidates, candidates[1:]):
+            gap = right['vertices'][0][0] - left['vertices'][-1][0]
+            if gap < -1e-3 or (abs(gap) <= 1e-3 and abs(right['vertices'][0][1] - left['vertices'][-1][1]) > 1e-3):
+                raise ValueError("多条纵断面多段线的桩号范围重叠。请只保留本整线的前后有压段，并在同一桩号坐标系中绘制。")
+        return [
+            {'vertices': c['vertices'], 'bulges': c['bulges'], 'source_kind': 'selected_raw_polyline'}
+            for c in candidates
+        ]
+
+    @staticmethod
     def get_longitudinal_profile_start_x(file_path: str) -> float:
         """返回规范化后的纵断面起点 X，用于计算桩号偏移。"""
         vertices, _bulges, error = DxfParser._load_longitudinal_polyline_geometry(file_path)
@@ -830,16 +862,18 @@ class DxfParser:
             seg = segments_info[i]
             
             if seg['type'] == 'line':
-                # 线→线：坡角差 > 0.5° → 折点
+                # 线→线：保留真实变坡几何，0.5°阈值仅用于折管计损分类。
                 if i + 1 < len(segments_info) and segments_info[i + 1]['type'] == 'line':
                     slope1 = seg['slope_angle']
                     slope2 = segments_info[i + 1]['slope_angle']
                     angle_diff = abs(math.degrees(slope2 - slope1))
-                    if angle_diff > 0.5:
+                    if angle_diff > 1e-9:
                         px, py = seg['p2']
+                        is_fold = angle_diff > 0.5
                         nodes.append(LongitudinalNode(
                             chainage=px + chainage_offset, elevation=py,
-                            turn_type=TurnType.FOLD, turn_angle=angle_diff,
+                            turn_type=TurnType.FOLD if is_fold else TurnType.NONE,
+                            turn_angle=angle_diff if is_fold else 0.0,
                             slope_before=slope1, slope_after=slope2,
                         ))
                 # 线→弧：弧起点切线 = 弧的 slope_start（已由弧心公式精确计算）
