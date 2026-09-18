@@ -1,0 +1,8 @@
+{
+  "helper_sha256": "2ea502ed61bf819bf308807548d086f044a3cc4b92ad4cc548c126b80d93f9d4",
+  "source": "output/CanalHydraulicCalc-V1.3.11-急用.zip",
+  "patch_source_hash_accepted": true,
+  "clean_path_help_exit_code": 0,
+  "repair_zip_bytes": 46063345,
+  "user_machine_verified": false
+}

@@ -128,6 +128,136 @@ def test_mixed_gap_prefers_open_channel_before_cross_section_culvert():
     assert ref["section_family"] == "open_channel"
 
 
+@pytest.mark.parametrize("culvert_on_left", [True, False])
+def test_adjacent_culvert_precedes_remote_steep_open_channel(culvert_on_left):
+    calc = WaterProfileCalculator(ProjectSettings())
+    culvert = _make_node(
+        "暗涵-矩形", flow_section="1", station=260.7, name="相邻暗涵",
+        B=1.6, H_total=1.6, water_depth=1.006, slope_i=1 / 2000,
+    )
+    tunnel = _make_node("隧洞-圆拱直墙型", flow_section="1", station=373.7, name="隧洞", B=1.8)
+    remote = _make_node(
+        "明渠-矩形", flow_section="1", station=4795, name="末尾陡坡",
+        B=1.6, water_depth=0.114, slope_i=1 / 3.5,
+    )
+    nodes = ([culvert, tunnel] if culvert_on_left else [tunnel, culvert]) + [remote]
+    ref = calc._find_reference_segment_same_section_v2(nodes, 0, 0, 1)
+    assert ref["source_name"] == "相邻暗涵"
+    assert ref["structure_type"] in {"暗涵-矩形", "矩形暗涵"}
+    assert ref["slope_inv"] == 2000
+    params = calc._build_open_channel_params_from_reference(ref, "1", 1.5)
+    assert params.structure_type == ref["structure_type"]
+    assert params.slope_inv == 2000
+
+
+def _make_tunnel_and_steep_channels():
+    tunnel = _make_node("隧洞-圆拱直墙型", flow_section="1", station=0, name="附近隧洞", B=1.8, slope_i=1/2000)
+    siphon = _make_node("倒虹吸", flow_section="1", station=10, name="倒虹吸")
+    channel = _make_node("明渠-矩形", flow_section="1", station=1000, name="末尾陡坡", B=1.6, water_depth=0.114, slope_i=1/3.5)
+    for node in (tunnel, siphon, channel):
+        node.flow = 1.5
+    return [tunnel, siphon, channel]
+
+
+def test_steep_channels_borrow_tunnel_slope_keep_open_shape_and_recompute_depth():
+    calc = WaterProfileCalculator(ProjectSettings())
+    nodes = _make_tunnel_and_steep_channels()
+    nodes[-1].section_params['h'] = 0.114
+    ref = calc._find_reference_segment_same_section_v2(nodes, 0, 0, 1)
+    assert ref['structure_type'] == '明渠-矩形'
+    assert ref['bottom_width'] == 1.6
+    assert ref['slope_inv'] == 2000
+    assert ref['slope_borrowed_from_tunnel'] is True
+    assert ref['slope_source_name'] == '附近隧洞'
+    assert 1.0 < ref['water_depth'] < 1.02
+    assert ref['reference_froude'] < 1
+    assert nodes[-1].slope_i == 1/3.5
+    assert nodes[-1].section_params['h'] == 0.114
+    assert nodes[-1].water_depth == 0.114
+
+
+def test_suitable_open_channel_precedes_nearer_tunnel_and_skips_nearer_steep_channel():
+    calc = WaterProfileCalculator(ProjectSettings())
+    nodes = _make_tunnel_and_steep_channels()
+    mild = _make_node('明渠-梯形', flow_section='1', station=2000, name='缓坡明渠', B=2.0, m=1.0, water_depth=1.0, slope_i=1/1500)
+    mild.flow = 1.5
+    nodes.append(mild)
+    ref = calc._find_reference_segment_same_section_v2(nodes, 0, 0, 1)
+    assert ref['source_name'] == '缓坡明渠'
+    assert ref['slope_inv'] == 1500
+    assert not ref['slope_borrowed_from_tunnel']
+
+
+@pytest.mark.parametrize('froude', [0.999, 1.0, 1.001])
+def test_froude_boundary_excludes_critical_and_supercritical_sources(froude):
+    calc = WaterProfileCalculator(ProjectSettings())
+    nodes = _make_tunnel_and_steep_channels()
+    channel = nodes[-1]
+    channel.slope_i = 1/1500
+    channel.water_depth = (channel.flow**2 / (9.81 * 1.6**2 * froude**2)) ** (1/3)
+    assert calc._reference_froude(channel) == pytest.approx(froude)
+    ref = calc._find_reference_segment_same_section_v2(nodes, 0, 0, 1)
+    assert ref['slope_borrowed_from_tunnel'] == (froude >= 1.0)
+
+
+def test_no_valid_slope_or_no_open_geometry_requires_manual_input():
+    calc = WaterProfileCalculator(ProjectSettings())
+    nodes = _make_tunnel_and_steep_channels()
+    nodes[0].slope_i = 1/3.5
+    assert calc._find_reference_segment_same_section_v2(nodes, 0, 0, 1) is None
+    nodes[0].slope_i = 1/2000
+    assert calc._find_reference_segment_same_section_v2(nodes[:2], 0, 0, 1) is None
+
+
+def test_short_gap_merged_transition_also_uses_tunnel_fallback_slope():
+    calc = WaterProfileCalculator(ProjectSettings())
+    nodes = _make_tunnel_and_steep_channels()
+    nodes[0].in_out = InOutType.OUTLET
+    nodes[1].in_out = InOutType.INLET
+    nodes[0].water_depth = 0.891
+    nodes[0].section_params.update(H_total=2.0, theta_deg=180)
+    nodes[0].x, nodes[1].x, nodes[2].x = 100, 110, 1100
+    layout = calc._should_insert_open_channel(nodes[0], nodes[1], nodes)
+    assert layout['use_merged_transition']
+    assert layout['available_length'] == 0
+    inserted = calc.identify_and_insert_transitions(nodes)
+    merged = inserted[1]
+    assert merged.is_transition
+    assert merged.slope_i == 1/2000
+    assert merged.transition_length <= 10
+
+
+def test_cross_section_open_reference_is_recomputed_at_target_flow():
+    calc = WaterProfileCalculator(ProjectSettings())
+    nodes = _make_tunnel_and_steep_channels()
+    channel = nodes[-1]
+    channel.flow_section = '2'
+    channel.flow = 0.5
+    channel.slope_i = 1/1500
+    channel.water_depth = 1.0
+    ref = calc._find_reference_segment_cross_section_v2(nodes, 0, 0, 1)
+    assert ref['flow'] == 1.5
+    assert ref['flow_section'] == '1'
+    assert ref['reference_source_flow_section'] == '2'
+    assert ref['reference_froude'] < 1
+
+
+@pytest.mark.parametrize('culvert_type', ['暗涵-矩形', '暗涵-圆拱直墙型'])
+@pytest.mark.parametrize('structure_type', ['倒虹吸', '隧洞-圆拱直墙型'])
+def test_adjacent_culvert_family_is_preserved_even_with_available_mild_channel(culvert_type, structure_type):
+    calc = WaterProfileCalculator(ProjectSettings())
+    culvert = _make_node(culvert_type, flow_section='1', station=0, name='相邻暗涵', B=1.8, H_total=2.5, theta_deg=180, slope_i=1/2000)
+    structure = _make_node(structure_type, flow_section='1', station=10, name='建筑物', B=1.8)
+    channel = _make_node('明渠-矩形', flow_section='1', station=20, name='缓坡明渠', B=2.0)
+    ref = calc._find_reference_segment_same_section_v2([culvert, structure, channel], 0, 0, 1)
+    assert ref['section_family'] == 'culvert'
+    assert ref['slope_inv'] == 2000
+    assert ('圆拱直墙型' in ref['structure_type']) == ('圆拱直墙型' in culvert_type)
+    if '圆拱直墙型' in culvert_type:
+        assert ref['theta_deg'] == 180
+        assert ref['structure_height'] == 2.5
+
+
 @pytest.mark.parametrize("structure_type", ["矩形暗涵", "暗涵-矩形"])
 def test_create_open_channel_node_supports_rect_culvert(structure_type):
     calc = WaterProfileCalculator(ProjectSettings())

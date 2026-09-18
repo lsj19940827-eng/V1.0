@@ -6,6 +6,7 @@
 """
 
 from typing import Any, Dict, List, Optional, Tuple
+import copy
 import math
 import sys
 import os
@@ -25,6 +26,7 @@ if __package__ and __package__.startswith("推求水面线."):
     from ..models.enums import StructureType, InOutType
     from ..config.constants import (
         DEFAULT_GATE_HEAD_LOSS,
+        GRAVITY,
         TRANSITION_LENGTH_COEFFICIENTS,
         VELOCITY_PRECISION,
         XXPIPE_CHANNEL_LEVEL_OPTIONS,
@@ -43,6 +45,7 @@ else:
     from models.enums import StructureType, InOutType
     from config.constants import (
         DEFAULT_GATE_HEAD_LOSS,
+        GRAVITY,
         TRANSITION_LENGTH_COEFFICIENTS,
         VELOCITY_PRECISION,
         XXPIPE_CHANNEL_LEVEL_OPTIONS,
@@ -1817,65 +1820,6 @@ class WaterProfileCalculator:
             "source_name": node.name,
         }
 
-    def _resolve_gap_real_structures_v2(
-        self,
-        nodes: List[ChannelNode],
-        left_index: int,
-        right_index: int,
-    ) -> Tuple[str, str]:
-        left = left_index
-        while left >= 0 and self._is_diversion_gate_type(nodes[left].structure_type):
-            left -= 1
-        right = right_index
-        while right < len(nodes) and self._is_diversion_gate_type(nodes[right].structure_type):
-            right += 1
-        left_sv = self._get_effective_structure_type_value(nodes[left]) if left >= 0 else ""
-        right_sv = self._get_effective_structure_type_value(nodes[right]) if right < len(nodes) else ""
-        return left_sv, right_sv
-
-    def _preferred_reference_family_v2(
-        self,
-        nodes: List[ChannelNode],
-        left_index: int,
-        right_index: int,
-    ) -> str:
-        left_sv, right_sv = self._resolve_gap_real_structures_v2(nodes, left_index, right_index)
-        left_family = self._reference_family_for_gap_type(left_sv)
-        right_family = self._reference_family_for_gap_type(right_sv)
-        if left_family == "culvert" and right_family == "culvert":
-            return "culvert"
-        return "open_channel"
-
-    def _collect_reference_candidates_v2(
-        self,
-        nodes: List[ChannelNode],
-        gap_index: int,
-        preferred_family: str,
-        same_section_only: bool,
-    ) -> List[Tuple[int, ChannelNode]]:
-        flow_section = nodes[gap_index].flow_section if 0 <= gap_index < len(nodes) else None
-        family_rank = {"open_channel": 0, "culvert": 1}
-        if preferred_family == "culvert":
-            family_rank = {"culvert": 0, "open_channel": 1}
-
-        candidates: List[Tuple[int, ChannelNode]] = []
-        for idx, node in enumerate(nodes):
-            family = self._reference_family_for_gap_type(node)
-            if family not in {"open_channel", "culvert"}:
-                continue
-            if same_section_only and node.flow_section != flow_section:
-                continue
-            candidates.append((idx, node))
-
-        candidates.sort(
-            key=lambda item: (
-                family_rank.get(self._reference_family_for_gap_type(item[1]), 99),
-                abs(item[0] - gap_index),
-                item[0],
-            )
-        )
-        return candidates
-
     def _find_reference_segment_same_section_v2(
         self,
         nodes: List[ChannelNode],
@@ -1883,16 +1827,112 @@ class WaterProfileCalculator:
         left_index: int,
         right_index: int,
     ) -> Optional[Dict]:
-        preferred_family = self._preferred_reference_family_v2(nodes, left_index, right_index)
-        candidates = self._collect_reference_candidates_v2(
-            nodes,
-            gap_index,
-            preferred_family,
-            same_section_only=True,
-        )
-        if not candidates:
+        return self._find_connection_reference(nodes, gap_index, left_index, right_index, True)
+
+    def _reference_froude(self, node: ChannelNode) -> Optional[float]:
+        """按实际断面的水力深度判别流态，缺少数据时不认定为缓流。"""
+        if not math.isfinite(node.flow) or node.flow <= 0:
             return None
-        return self._extract_reference_segment_v2(candidates[0][1])
+        area = self.hyd_calc.get_cross_section_area(node)
+        width = self.hyd_calc.get_water_surface_width(node)
+        if not all(math.isfinite(v) and v > 0 for v in (area, width)):
+            return None
+        return node.flow / area / math.sqrt(GRAVITY * area / width)
+
+    def _open_reference_with_slope(self, template, slope_node, target):
+        """明渠只借坡降，按目标流量重算水深并复核缓流，不继承隧洞形式。"""
+        from 明渠设计 import (
+            calculate_depth_for_flow, calculate_u_depth_for_flow,
+            calculate_water_depth_y_circular,
+        )
+
+        node = copy.deepcopy(template)
+        node.flow = target.flow
+        node.slope_i = slope_node.slope_i
+        if not all(math.isfinite(v) and v > 0 for v in (node.flow, node.slope_i, node.roughness)):
+            return None
+        sv = self._get_effective_structure_type_value(node)
+        sp = node.section_params
+        if sv == "明渠-圆形":
+            h = calculate_water_depth_y_circular(
+                sp.get("D", 0), node.flow * node.roughness / math.sqrt(node.slope_i)
+            )[0]
+        elif sv == "明渠-U形":
+            h = calculate_u_depth_for_flow(
+                node.flow, sp.get("R_circle", 0), math.degrees(math.atan(sp.get("m", 0))),
+                sp.get("theta_deg", 0), node.roughness, node.slope_i,
+            )
+        else:
+            h = calculate_depth_for_flow(
+                node.flow, sp.get("B", 0), node.slope_i, node.roughness, sp.get("m", 0),
+            )
+        if not math.isfinite(h) or h <= 0:
+            return None
+        node.water_depth = h
+        # 几何方法兼容旧 h 字段，覆盖它以免读到陡坡工况的旧水深。
+        sp["h"] = sp["水深"] = h
+        froude = self._reference_froude(node)
+        if froude is None or froude >= 1.0 - 1e-12:
+            return None
+        ref = self._extract_reference_segment_v2(node)
+        ref.update(
+            flow=target.flow, flow_section=target.flow_section, structure_height=0.0,
+            reference_source_flow_section=template.flow_section,
+            slope_source_name=slope_node.name,
+            slope_source_type=self._get_effective_structure_type_value(slope_node),
+            slope_source_flow_section=slope_node.flow_section,
+            reference_froude=froude,
+            slope_borrowed_from_tunnel="隧洞" in self._get_effective_structure_type_value(slope_node),
+        )
+        return ref
+
+    def _find_connection_reference(self, nodes, gap_index, left_index, right_index, same_section):
+        """相邻暗涵延续原型；普通连接段先用缓流明渠，再借附近隧洞坡降。"""
+        if not 0 <= gap_index < len(nodes):
+            return None
+        target = nodes[gap_index]
+        left, right = left_index, right_index
+        while left >= 0 and self._is_diversion_gate_type(nodes[left].structure_type):
+            left -= 1
+        while right < len(nodes) and self._is_diversion_gate_type(nodes[right].structure_type):
+            right += 1
+        adjacent = [i for i in (left, right) if 0 <= i < len(nodes)]
+        center = sum(nodes[i].station_MC for i in adjacent) / len(adjacent) if adjacent else 0
+        use_station = len(adjacent) == 2 and nodes[adjacent[0]].station_MC != nodes[adjacent[1]].station_MC
+
+        def distance(item):
+            i, node = item
+            return (abs(node.station_MC - center) if use_station else abs(i - gap_index), abs(i - gap_index), i)
+
+        candidates = sorted(
+            [(i, node) for i, node in enumerate(nodes)
+             if (node.flow_section == target.flow_section) == same_section
+             and not node.is_transition and not node.is_auto_inserted_channel],
+            key=distance,
+        )
+        # 仅在连接处实际存在暗涵时延续暗涵，不从远处暗涵改变普通连接段的形式。
+        for i, node in candidates:
+            if i in adjacent and self._reference_family_for_gap_type(node) == "culvert":
+                return self._extract_reference_segment_v2(node)
+
+        channels = [(i, node) for i, node in candidates if self._reference_family_for_gap_type(node) == "open_channel"]
+        for _, node in channels:
+            froude = self._reference_froude(node)
+            if froude is not None and froude < 1.0 - 1e-12:
+                ref = self._open_reference_with_slope(node, node, target)
+                if ref:
+                    return ref
+
+        # 没有合适明渠坡降时，仍用已有明渠的断面尺寸，只替换为邻近隧洞坡降。
+        # 缺少明渠断面或换坡后仍为急流时不编造参数，交给补段窗口人工填写。
+        tunnels = [node for _, node in candidates if "隧洞" in self._get_effective_structure_type_value(node)
+                   and math.isfinite(node.slope_i) and node.slope_i > 0]
+        for tunnel in tunnels:
+            for _, template in channels:
+                ref = self._open_reference_with_slope(template, tunnel, target)
+                if ref:
+                    return ref
+        return None
 
     def _find_reference_segment_cross_section_v2(
         self,
@@ -1901,18 +1941,7 @@ class WaterProfileCalculator:
         left_index: int,
         right_index: int,
     ) -> Optional[Dict]:
-        preferred_family = self._preferred_reference_family_v2(nodes, left_index, right_index)
-        candidates = self._collect_reference_candidates_v2(
-            nodes,
-            gap_index,
-            preferred_family,
-            same_section_only=False,
-        )
-        same_flow_section = nodes[gap_index].flow_section if 0 <= gap_index < len(nodes) else None
-        for idx, node in candidates:
-            if node.flow_section != same_flow_section:
-                return self._extract_reference_segment_v2(node)
-        return None
+        return self._find_connection_reference(nodes, gap_index, left_index, right_index, False)
 
     def _build_open_channel_params_from_reference(
         self,
@@ -2318,7 +2347,8 @@ class WaterProfileCalculator:
                         )
                         self._append_effective_transition(deferred_nodes, merged)
                 elif gate_check['need_transition_2'] and gate_check['distance'] > 0:
-                    us_ch = self._find_nearest_upstream_channel(nodes, i + 1)
+                    us_ch = (self._find_reference_segment_same_section_v2(nodes, i + 1, i, i + 1)
+                             or self._find_reference_segment_cross_section_v2(nodes, i + 1, i, i + 1))
                     merged = self._create_merged_transition_node(
                         current_node, next_node, gate_check['distance'], "进口")
                     merged.flow_section = next_node.flow_section
@@ -2388,7 +2418,8 @@ class WaterProfileCalculator:
                         )
                         self._append_effective_transition(new_nodes, merged)
                 elif gate_check['need_transition_1'] and gate_check['distance'] > 0:
-                    us_ch = self._find_nearest_upstream_channel(nodes, i)
+                    us_ch = (self._find_reference_segment_same_section_v2(nodes, i, i, i + 1)
+                             or self._find_reference_segment_cross_section_v2(nodes, i, i, i + 1))
                     merged = self._create_merged_transition_node(
                         current_node, next_node, gate_check['distance'], "出口")
                     merged.transition_skip_loss = gate_check.get('skip_loss_transition_1', False)
@@ -2505,8 +2536,9 @@ class WaterProfileCalculator:
                         check_result.get('skip_loss_transition_1', False) or
                         check_result.get('skip_loss_transition_2', False)
                     )
-                    # 从最近上游明渠继承底坡
-                    us_ch = self._find_nearest_upstream_channel(nodes, i)
+                    # 合并渐变段与普通连接段采用同一套坡降推荐，排除远处急流明渠。
+                    us_ch = (self._find_reference_segment_same_section_v2(nodes, i, i, i + 1)
+                             or self._find_reference_segment_cross_section_v2(nodes, i, i, i + 1))
                     if us_ch:
                         us_sinv = us_ch.get('slope_inv', 0)
                         merged_transition.slope_i = 1.0 / us_sinv if us_sinv > 0 else 0

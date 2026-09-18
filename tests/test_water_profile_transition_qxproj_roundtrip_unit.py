@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 import openpyxl
+import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
@@ -58,6 +59,34 @@ def _set_cell(table, row, col, text):
         item = QTableWidgetItem("")
         table.setItem(row, col, item)
     item.setText(str(text))
+
+
+@pytest.mark.parametrize("full_refresh", [True, False])
+def test_table_refresh_preserves_fractional_slope_denominators(full_refresh):
+    module = _load_panel_module()
+    panel = _build_panel(module)
+    nodes = _make_nodes()
+    denominators = [3.5, 1.6, 285.7142857142857, 2000]
+    for node, denominator in zip(nodes, denominators):
+        node.slope_i = 1.0 / denominator
+    try:
+        if full_refresh:
+            panel._update_table_from_nodes_full(nodes)
+        else:
+            panel._update_table_from_nodes(nodes)
+        for row, (node, denominator) in enumerate(zip(nodes, denominators)):
+            if node.is_transition and not full_refresh:
+                continue
+            assert float(panel.node_table.item(row, 25).text()) == pytest.approx(denominator, rel=1e-14)
+        # 真实节点须经表格回读后仍保留原底坡，不能在下一次计算时被改成整数分母。
+        reloaded = panel._build_nodes_from_table()
+        for node in reloaded:
+            source = next(n for n in nodes if n.name == node.name)
+            if not node.is_transition:
+                assert node.slope_i == pytest.approx(source.slope_i, rel=1e-14)
+    finally:
+        panel.deleteLater()
+        _flush_events()
 
 
 def _make_nodes():

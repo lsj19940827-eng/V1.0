@@ -9540,7 +9540,7 @@ class WaterProfilePanel(QWidget):
                 vals[22] = f"{_Rc:.3f}" if _Rc else ""
                 vals[23] = f"{_m:.2f}" if _m else ""
                 vals[24] = f"{node.roughness:.4f}" if node.roughness else ""
-                vals[25] = f"{1.0/node.slope_i:.0f}" if node.slope_i and node.slope_i > 0 else ""
+                vals[25] = str(1.0 / node.slope_i) if node.slope_i and node.slope_i > 0 else ""
                 vals[26] = f"{node.flow:.3f}" if node.flow else ""
 
                 # 水力结果列 (27-31)
@@ -9578,7 +9578,7 @@ class WaterProfilePanel(QWidget):
             if _is_trans:
                 # 写入糙率/底坡/流量，确保通过表格读写循环不丢失
                 vals[24] = f"{node.roughness:.4f}" if node.roughness else ""
-                vals[25] = f"{1.0/node.slope_i:.0f}" if node.slope_i and node.slope_i > 0 else ""
+                vals[25] = str(1.0 / node.slope_i) if node.slope_i and node.slope_i > 0 else ""
                 vals[26] = f"{node.flow:.3f}" if node.flow else ""
                 vals[32] = f"{getattr(node, 'transition_length', 0):.3f}" if getattr(node, 'transition_length', None) else "-"
                 vals[33] = f"{node.head_loss_transition:.4f}" if node.head_loss_transition else "-"
@@ -10936,7 +10936,7 @@ class WaterProfilePanel(QWidget):
                 vals[22] = f"{node.section_params.get('R_circle', '')}" if node.section_params.get('R_circle') else ""
                 vals[23] = f"{node.section_params.get('m', '')}" if node.section_params.get('m') else ""
                 vals[24] = f"{node.roughness}" if node.roughness else ""
-                vals[25] = f"{1.0/node.slope_i:.0f}" if node.slope_i and node.slope_i > 0 else ""
+                vals[25] = str(1.0 / node.slope_i) if node.slope_i and node.slope_i > 0 else ""
                 vals[26] = f"{node.flow}" if node.flow else ""
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(str(v))

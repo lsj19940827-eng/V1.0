@@ -3015,8 +3015,16 @@ class HydraulicCalculator:
 
         返回纯数据，供 UI 或其他链路按需展示。
         """
-        upstream_structure_type = str(upstream_structure_type or "").strip()
-        downstream_structure_type = str(downstream_structure_type or "").strip()
+        def normalize_rule_structure(value):
+            # 旧工程的结构别名与当前节点类型按同一枚举匹配，未知名称保留原文。
+            text = str(value or "").strip()
+            try:
+                return StructureType.from_string(text).value
+            except ValueError:
+                return text
+
+        upstream_structure_type = normalize_rule_structure(upstream_structure_type)
+        downstream_structure_type = normalize_rule_structure(downstream_structure_type)
         transition_type = str(transition_type or "").strip()
 
         candidates = []
@@ -3025,9 +3033,9 @@ class HydraulicCalculator:
             if not rule:
                 continue
 
-            if str(getattr(rule, 'upstream_structure_type', '') or '').strip() != upstream_structure_type:
+            if normalize_rule_structure(getattr(rule, 'upstream_structure_type', '')) != upstream_structure_type:
                 continue
-            if str(getattr(rule, 'downstream_structure_type', '') or '').strip() != downstream_structure_type:
+            if normalize_rule_structure(getattr(rule, 'downstream_structure_type', '')) != downstream_structure_type:
                 continue
             if str(getattr(rule, 'transition_type', '') or '').strip() != transition_type:
                 continue

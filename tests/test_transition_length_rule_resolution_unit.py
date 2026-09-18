@@ -188,11 +188,11 @@ def test_same_structure_pair_inlet_and_outlet_rules_apply_independently():
     assert inlet_details["source"] == "rule:step_up"
     assert inlet_details["actual_length"] == 10.0
     assert inlet_details["upstream_structure_type"] == "明渠-梯形"
-    assert inlet_details["downstream_structure_type"] == "矩形暗涵"
+    assert inlet_details["downstream_structure_type"] == "暗涵-矩形"
 
     assert outlet_details["source"] == "rule:fixed"
     assert outlet_details["actual_length"] == 14.0
-    assert outlet_details["upstream_structure_type"] == "矩形暗涵"
+    assert outlet_details["upstream_structure_type"] == "暗涵-矩形"
     assert outlet_details["downstream_structure_type"] == "明渠-梯形"
 
 

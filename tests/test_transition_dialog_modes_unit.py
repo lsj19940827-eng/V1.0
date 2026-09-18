@@ -17,11 +17,49 @@ from app_渠系计算前端.water_profile.water_profile_dialogs import (
     BatchChannelConfirmDialog,
     OpenChannelDialog,
     describe_transition_gap_source,
+    build_transition_fill_params,
 )
 
 
 def _get_qapp():
     return QApplication.instance() or QApplication([])
+
+
+@pytest.mark.parametrize("slope_inv", [3.5, 1.6, 285.7142857142857, 2000])
+def test_recommended_slope_survives_both_dialogs_without_rounding(slope_inv):
+    app = _get_qapp()
+    reference = {
+        "structure_type": "明渠-矩形", "flow_section": "1",
+        "bottom_width": 1.6, "water_depth": 0.114,
+        "roughness": 0.014, "slope_inv": slope_inv,
+        "side_slope": 0.0, "flow": 1.5,
+    }
+    gap = {
+        "prev_name": "暗涵出口", "prev_struct": "暗涵-矩形",
+        "next_name": "隧洞进口", "next_struct": "隧洞-圆拱直墙型",
+        "available_length": 113.0, "flow": 1.5, "flow_section": "1",
+        "reference_segment": reference, "has_reference": True,
+    }
+    batch = BatchChannelConfirmDialog(None, 1, [gap])
+    single = OpenChannelDialog(
+        None, upstream_channel=reference, available_length=113.0,
+        prev_structure=gap["prev_struct"], next_structure=gap["next_struct"],
+        flow_section="1", flow=1.5,
+    )
+    try:
+        # 从推荐预填到实际提交均须保留小数，避免修改补段水损。
+        row, col = batch._row_widgets[0]["entries"]["slope"]
+        assert float(batch.param_table.item(row, col).text()) == slope_inv
+        assert float(single.edit_slope.text()) == slope_inv
+        batch.rb_table.setChecked(True)
+        batch._on_ok()
+        single._on_apply_all()
+        assert batch.get_result()["params"][0].slope_inv == slope_inv
+        assert single.get_result().slope_inv == slope_inv
+    finally:
+        batch.deleteLater()
+        single.deleteLater()
+        app.processEvents()
 
 
 def test_describe_transition_gap_source_distinguishes_scope_and_family():
@@ -44,6 +82,24 @@ def test_describe_transition_gap_source_distinguishes_scope_and_family():
     assert describe_transition_gap_source(same_section_culvert) == "自动推荐-同段暗渠"
     assert describe_transition_gap_source(cross_section_open_channel) == "自动推荐-跨段明渠"
     assert describe_transition_gap_source(missing_gap) == "需手动填写"
+    assert describe_transition_gap_source({
+        'reference_segment': {'slope_borrowed_from_tunnel': True, 'slope_source_name': '铜鼓寨'},
+    }) == '明渠，坡降取附近隧洞'
+
+
+def test_u_channel_tunnel_slope_fallback_preserves_geometry_and_recomputes_depth():
+    from 明渠设计 import calculate_u_depth_for_flow
+    import math
+    reference = {'slope_borrowed_from_tunnel': True, 'theta_deg': 180, 'structure_height': 0}
+    params = build_transition_fill_params(
+        structure_type='明渠-U形', B=0.4, m=0.5, H=0, n=0.014,
+        slope_inv=2000, Q=1.5, flow_section='1', upstream_channel=reference,
+    )
+    expected = calculate_u_depth_for_flow(1.5, 0.4, math.degrees(math.atan(0.5)), 180, 0.014, 1/2000)
+    assert params.water_depth == pytest.approx(expected)
+    assert params.side_slope == 0.5
+    assert params.arc_radius == 0.4
+    assert params.theta_deg == 180
 
 
 def test_batch_dialog_adds_status_source_column():

@@ -1,0 +1,60 @@
+{
+  "source": "D:\\V1.0\\蒋家沟、鲜店水库充水渠批量计算用表.xlsx",
+  "source_sha256": "5e2f9efd82ccf07dfd88b614119375b87eda772f6cdcae17cb20236f1c55ce9f",
+  "project": "D:\\V1.0\\outputs\\jiangjiagou_confirmed_20260918\\蒋家沟充水渠_五处暗涵补段已确认.qxproj",
+  "confirmed_fillers": [
+    {
+      "upstream": "-(暗涵-矩形)",
+      "downstream": "铜鼓寨(隧洞-圆拱直墙型)",
+      "available_length": 107.939,
+      "structure": "暗涵-矩形",
+      "slope_denominator": 2000,
+      "bottom_width": 1.6,
+      "roughness": 0.014
+    },
+    {
+      "upstream": "铜鼓寨(隧洞-圆拱直墙型)",
+      "downstream": "蒋家沟(倒虹吸)",
+      "available_length": 8.374000000000006,
+      "structure": "暗涵-矩形",
+      "slope_denominator": 2000,
+      "bottom_width": 1.6,
+      "roughness": 0.014
+    },
+    {
+      "upstream": "蒋家沟(倒虹吸)",
+      "downstream": "百草坪(隧洞-圆拱直墙型)",
+      "available_length": 8.739999999999688,
+      "structure": "暗涵-矩形",
+      "slope_denominator": 2000,
+      "bottom_width": 1.6,
+      "roughness": 0.014
+    },
+    {
+      "upstream": "百草坪(隧洞-圆拱直墙型)",
+      "downstream": "董家(倒虹吸)",
+      "available_length": 8.347999999999484,
+      "structure": "暗涵-矩形",
+      "slope_denominator": 2000,
+      "bottom_width": 1.6,
+      "roughness": 0.014
+    },
+    {
+      "upstream": "董家(倒虹吸)",
+      "downstream": "春陈(隧洞-圆拱直墙型)",
+      "available_length": 8.744999999999797,
+      "structure": "暗涵-矩形",
+      "slope_denominator": 2000,
+      "bottom_width": 1.6,
+      "roughness": 0.014
+    }
+  ],
+  "original_rows_preserved": 21,
+  "original_steep_slope_denominators": [
+    3.5,
+    1.6,
+    5
+  ],
+  "project_reload_verified": true,
+  "status": "补段参数已保存，未执行倒虹吸水力计算及最终水面线计算"
+}

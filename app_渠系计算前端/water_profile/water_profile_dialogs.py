@@ -157,9 +157,12 @@ def describe_transition_gap_source(gap: Dict[str, Any]) -> str:
     reference = gap.get("reference_segment") or gap.get("upstream_channel")
     if not reference:
         return "需手动填写"
+    if reference.get("slope_borrowed_from_tunnel"):
+        return "明渠，坡降取附近隧洞"
     structure_type = normalize_transition_structure_type(reference.get("structure_type", ""))
     family_label = "暗渠" if is_transition_culvert_type(structure_type) else "明渠"
-    scope_label = "同段" if reference.get("flow_section") == gap.get("flow_section") else "跨段"
+    source_section = reference.get("reference_source_flow_section", reference.get("flow_section"))
+    scope_label = "同段" if source_section == gap.get("flow_section") else "跨段"
     return f"自动推荐-{scope_label}{family_label}"
 
 
@@ -216,8 +219,15 @@ def build_transition_fill_params(
 
     D_param = B if is_transition_circular_channel_type(structure_type) else 0.0
     B_param = 0.0 if is_transition_circular_channel_type(structure_type) or is_transition_u_channel_type(structure_type) else B
-    side_slope = m if structure_type == "明渠-梯形" else 0.0
-    h = calculate_normal_depth(Q, B_param, side_slope, n, slope_i, D=D_param)
+    side_slope = m if structure_type in ("明渠-梯形", "明渠-U形") else 0.0
+    if is_transition_u_channel_type(structure_type) and (upstream_channel or {}).get('slope_borrowed_from_tunnel'):
+        from 明渠设计 import calculate_u_depth_for_flow
+        h = calculate_u_depth_for_flow(
+            Q, B, math.degrees(math.atan(side_slope)),
+            upstream_channel.get('theta_deg', 0), n, slope_i,
+        )
+    else:
+        h = calculate_normal_depth(Q, B_param, side_slope, n, slope_i, D=D_param)
     if h <= 0 and upstream_channel:
         h = upstream_channel.get("water_depth", 0.0)
     if h <= 0:
@@ -230,7 +240,7 @@ def build_transition_fill_params(
             structure_type=structure_type,
             bottom_width=0.0,
             water_depth=h,
-            side_slope=0.0,
+            side_slope=side_slope,
             roughness=n,
             slope_inv=slope_inv,
             flow=Q,
@@ -7094,6 +7104,12 @@ class BatchChannelConfirmDialog(QDialog):
             item_status.setFlags(item_status.flags() & ~Qt.ItemIsEditable)
             item_status.setTextAlignment(Qt.AlignCenter)
             item_status.setToolTip(status_text)
+            reference = gap.get("reference_segment") or gap.get("upstream_channel") or {}
+            if reference.get("slope_borrowed_from_tunnel"):
+                item_status.setToolTip(
+                    f"明渠坡降无可用缓流参考，采用附近隧洞“{reference.get('slope_source_name', '')}”的"
+                    f"坡降 1/{reference.get('slope_inv', '')}；保留明渠断面形式并重新计算水深。"
+                )
             if status_text == "需手动填写":
                 item_status.setForeground(QColor("#CC6600"))
             else:
@@ -7288,7 +7304,7 @@ class BatchChannelConfirmDialog(QDialog):
         self._set_cell(entries['H'][0], entries['H'][1], f"{up.get('structure_height', 0):.2f}" if is_transition_culvert_type(st) and up.get('structure_height', 0) > 0 else "")
         self._set_cell(entries['m'][0], entries['m'][1], "" if is_transition_culvert_type(st) else f"{up.get('side_slope', 0)}")
         self._set_cell(entries['n'][0], entries['n'][1], f"{up.get('roughness', 0.014)}")
-        self._set_cell(entries['slope'][0], entries['slope'][1], f"{up.get('slope_inv', 3000):.0f}")
+        self._set_cell(entries['slope'][0], entries['slope'][1], str(up.get('slope_inv', 3000)))
         self._set_cell(entries['Q'][0], entries['Q'][1], f"{row['gap']['flow']:.3f}")
 
     def _fill_all_recommended(self):
@@ -7421,7 +7437,7 @@ class BatchChannelConfirmDialog(QDialog):
                 st = normalize_transition_structure_type(row['type_combo'].currentText())
                 B = self._get_cell_val(entries['B'][0], entries['B'][1])
                 H = self._get_cell_val(entries['H'][0], entries['H'][1])
-                m = self._get_cell_val(entries['m'][0], entries['m'][1]) if st == "明渠-梯形" else 0.0
+                m = self._get_cell_val(entries['m'][0], entries['m'][1]) if st in ("明渠-梯形", "明渠-U形") else 0.0
                 n = self._get_cell_val(entries['n'][0], entries['n'][1], 0.014)
                 si = self._get_cell_val(entries['slope'][0], entries['slope'][1], 3000)
                 Q = self._get_cell_val(entries['Q'][0], entries['Q'][1])
@@ -7590,7 +7606,9 @@ class OpenChannelDialog(QDialog):
                 extra_label = f"H={up.get('structure_height', 0):.2f}m"
             else:
                 extra_label = f"m={up.get('side_slope', 0)}"
-            info = f"  → {st_type}  {b_label}  {extra_label}  n={up.get('roughness', 0.014)}  底坡1/{up.get('slope_inv', 3000):.0f}"
+            info = f"  → {st_type}  {b_label}  {extra_label}  n={up.get('roughness', 0.014)}  底坡1/{up.get('slope_inv', 3000)}"
+            if up.get('slope_borrowed_from_tunnel'):
+                info += f"\n  坡降取附近隧洞：{up.get('slope_source_name', '')}，保持明渠形式"
             lbl_info = QLabel(info)
             lbl_info.setStyleSheet("color: green; margin-left: 20px;")
             src_lay.addWidget(lbl_info)
@@ -7730,7 +7748,7 @@ class OpenChannelDialog(QDialog):
         self.edit_H.setText(f"{up.get('structure_height', 0):.2f}" if is_transition_culvert_type(st) and up.get('structure_height', 0) > 0 else "")
         self.edit_m.setText("" if is_transition_culvert_type(st) else f"{up.get('side_slope', 0)}")
         self.edit_n.setText(f"{up.get('roughness', 0.014)}")
-        self.edit_slope.setText(f"{up.get('slope_inv', 3000):.0f}")
+        self.edit_slope.setText(str(up.get('slope_inv', 3000)))
         self._update_type_mode()
 
     def _on_source_change(self, checked=None):
@@ -7755,7 +7773,7 @@ class OpenChannelDialog(QDialog):
             st = normalize_transition_structure_type(self.type_combo.currentText())
             B = float(self.edit_B.text() or 0)
             H = float(self.edit_H.text() or 0)
-            m = float(self.edit_m.text() or 0) if st == "明渠-梯形" else 0.0
+            m = float(self.edit_m.text() or 0) if st in ("明渠-梯形", "明渠-U形") else 0.0
             n = float(self.edit_n.text() or 0.014)
             si = float(self.edit_slope.text() or 3000)
             Q = float(self.edit_Q.text() or 0)

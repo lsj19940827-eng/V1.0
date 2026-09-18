@@ -1411,7 +1411,12 @@ def _get_building_display_name(node):
     struct_str = _get_node_structure_text(node)
     display_struct_str = _get_spillway_steep_chute_display_structure_text(node, struct_str)
     name = str(getattr(node, "name", "") or "").strip()
-    if struct_str in _SPILLWAY_STEEP_CHUTE_DISPLAY_NAMES and name == "-":
+    # 明渠、暗涵及泄水渠类的单独横杠仅作空名称占位，不改节点原始名称。
+    if name == "-" and (
+        struct_str.startswith("明渠")
+        or _is_culvert_family_structure(struct_str)
+        or struct_str in _SPILLWAY_STEEP_CHUTE_DISPLAY_NAMES
+    ):
         name = ""
     if node.is_transition or struct_str == "渐变段":
         return ""
