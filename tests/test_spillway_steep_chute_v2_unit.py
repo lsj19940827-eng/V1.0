@@ -208,18 +208,19 @@ def test_manual_or_actual_control_depth_overrides_start_depth_and_records_source
         )
     )
 
-    first_point = _first_profile_point(result)
     start_control = result.get("start_control") or result.get("profile", {}).get("start_control") or {}
 
     assert result["success"] is True
-    assert first_point["depth_m"] == pytest.approx(2.1, abs=0.01)
+    assert result["hydraulic"]["start"]["depth_m"] == pytest.approx(2.1, abs=0.01)
+    assert result["profile"]["available"] is False
+    assert result["profile"]["status"] == "unsupported_start_branch"
     assert start_control
     assert start_control.get("depth_m") == pytest.approx(2.1, abs=0.01)
     assert _has_text(start_control, "人工", "控制水深")
 
 
 def test_two_depth_mode_uses_explicit_start_depth_even_when_above_critical():
-    """已知两端水深模式应使用用户输入的起点水深，而不是强制改成临界水深。"""
+    """保留人工起点，但拒绝把跨临界两端连成连续急流水面线。"""
     core = _core_module()
 
     result = core.quick_calculate_spillway_steep_chute(
@@ -230,14 +231,14 @@ def test_two_depth_mode_uses_explicit_start_depth_even_when_above_critical():
         )
     )
 
-    first_point = _first_profile_point(result)
     assert result["success"] is True
-    assert first_point["depth_m"] == pytest.approx(2.1, abs=0.01)
-    assert first_point["depth_m"] != pytest.approx(result["hydraulic"]["critical_depth_m"], abs=0.01)
+    assert result["start_control"]["depth_m"] == pytest.approx(2.1, abs=0.01)
+    assert result["profile"]["available"] is False
+    assert result["profile"]["status"] == "unsupported_start_branch"
 
 
-def test_reverse_depth_profile_does_not_fake_success():
-    """终点水深高于起点水深时，不应返回长度为 0 的假成功水面线。"""
+def test_reverse_depth_profile_calculates_valid_c2_curve():
+    """同一c2分支的升水应得到正长度，不能把所有升水一概拒算。"""
     core = _core_module()
 
     result = core.quick_calculate_spillway_steep_chute(
@@ -251,9 +252,11 @@ def test_reverse_depth_profile_does_not_fake_success():
 
     profile = result.get("profile") or {}
     assert result["success"] is True
-    assert profile.get("available") is False
-    assert profile.get("points") == []
-    assert _has_text(result, "起点水深", "目标水深", "不能")
+    assert profile.get("available") is True
+    assert profile["length_m"] > 0
+    assert profile["points"][0]["depth_m"] == pytest.approx(0.5)
+    assert profile["points"][-1]["depth_m"] == pytest.approx(1.0)
+    assert profile["water_profile_type"] == "c_2"
 
 
 def test_subcritical_or_failed_profile_does_not_report_hydraulic_jump_design():
@@ -518,14 +521,16 @@ def test_lightweight_table3_export_marks_unavailable_profile_without_zero_levels
     assert export["points"] == []
 
 
-def test_lightweight_table3_export_rejects_partial_failed_profile_points():
+def test_lightweight_table3_export_rejects_partial_failed_profile_points(monkeypatch):
     """水面线失败但保留起点时，表3轻量接口仍应标记不可用。"""
     core = _core_module()
+    # 构造中途能量求解失败，继续保护“部分点不等于完整成果”的接口约定。
+    monkeypatch.setattr(core, "_segment_length", lambda *_args: (0.0, "invalid_energy_slope"))
 
     result = core.quick_calculate_spillway_steep_chute(
         _base_rectangular_case(
             control_depth_mode="manual",
-            manual_start_depth=2.1,
+            manual_start_depth=1.3,
         )
     )
     export = result.get("water_profile_export")

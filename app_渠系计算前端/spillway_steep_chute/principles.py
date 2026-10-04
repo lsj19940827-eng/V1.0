@@ -99,6 +99,9 @@ def _display_profile_type(value: Any) -> str:
         "b1": "b_1 型壅水曲线",
         "b_2": "b_2 型降水曲线",
         "b2": "b_2 型降水曲线",
+        "c_2": "c_2 型壅水曲线",
+        "c2": "c_2 型壅水曲线",
+        "uniform": "均匀流水面线",
         "steep_b2": "陡坡降水曲线",
         "mild_b1": "缓坡壅水曲线",
         "END_DEPTH_BY_LENGTH": "按已知长度推算",
@@ -136,6 +139,9 @@ def _formula_text(formula: str) -> str:
         r"h_b=\left(1+\frac{\zeta v}{100}\right)h,\quad H_{\text{侧墙}}=h_b+\Delta h_{\text{壅水}}+F_b": "h_b=(1+ζv/100)h，H_侧墙=h_b+Δh_壅水+F_b",
         r"h_c''=\frac{h_c'}{2}\left(\sqrt{1+8Fr_1^2}-1\right),\quad L_d=4.5h_c'',\quad d_d\geq \lambda h_c''-h_{\text{下游}}": "h_c''=(h_c'/2)(√(1+8Fr_1²)-1)，L_d=4.5h_c''，d_d≥λh_c''-h_下游",
         r"L_r\geq L_{\Delta b},\quad L_r\geq \eta h_c'',\quad L_r\geq L_{\text{最小}}": "L_r≥L_Δb，L_r≥ηh_c''，L_r≥L_最小",
+        r"L_r\geq L_{\Delta b},\quad L_r\geq \eta h_c'',\quad L_{\text{整流}}>3h_s": "L_r≥L_Δb，L_r≥ηh_c''，L_整流>3h_s",
+        r"h_2=\frac{h_1}{2}\left(\sqrt{1+8Fr_1^2}-1\right),\quad L_d=4.5h_2,\quad d_d\geq\lambda h_2-h_s": "h_2=(h_1/2)(√(1+8Fr_1²)-1)，L_d=4.5h_2，d_d≥λh_2-h_s",
+        r"M(h_1)=M(h_2),\quad M(h)=\frac{Q^2}{gA}+\frac{bh^2}{2}+\frac{mh^3}{3}": "M(h_1)=M(h_2)，M(h)=Q²/(gA)+bh²/2+mh³/3",
         r"\text{结论}=\text{逐项校核结果}+\text{风险提示}": "结论=逐项校核结果+风险提示",
     }
     return formula_map.get(formula, formula)
@@ -229,6 +235,12 @@ def build_calculation_principles(result: Any) -> list[dict[str, str]]:
     freeboard = _fmt(_value(aeration.get("freeboard_m"), params.get("sidewall_freeboard_m"), default=0.4), " 米")
     pool_factor = _fmt(_value(jump.get("pool_depth_factor"), params.get("pool_depth_factor"), default=1.10), precision=3)
     rectification_factor = _fmt(_value(rectification.get("length_factor"), params.get("outlet_rectification_factor"), default=10.0), precision=3)
+    is_trapezoidal = float(params.get("m") or 0.0) > 0
+    jump_formula = (
+        r"M(h_1)=M(h_2),\quad M(h)=\frac{Q^2}{gA}+\frac{bh^2}{2}+\frac{mh^3}{3}"
+        if is_trapezoidal else
+        r"h_2=\frac{h_1}{2}\left(\sqrt{1+8Fr_1^2}-1\right),\quad L_d=4.5h_2,\quad d_d\geq\lambda h_2-h_s"
+    )
 
     principles = [
         _principle(
@@ -314,17 +326,17 @@ def build_calculation_principles(result: Any) -> list[dict[str, str]]:
         _principle(
             "水跃与消力池",
             "用陡槽末端跃前水深和流速估算跃后水深，再与下游控制水深比较，判断消力池需求。",
-            r"h_c''=\frac{h_c'}{2}\left(\sqrt{1+8Fr_1^2}-1\right),\quad L_d=4.5h_c'',\quad d_d\geq \lambda h_c''-h_{\text{下游}}",
-            "h_c' 为跃前水深，h_c'' 为跃后共轭水深，Fr_1 为跃前弗劳德数，L_d 为池长，d_d 为池深，h_下游 为下游控制水深。",
+            jump_formula,
+            "h_1、h_2 为同断面水平水跃的跃前、跃后共轭水深；梯形用动量函数。池长、池深简式仅用于同宽矩形池，h_s 为实际池后水深，λ 取1.10～1.15。",
             f"跃前水深={_fmt(jump.get('pre_jump_depth_m'), ' 米')}，跃前弗劳德数={_fmt(jump.get('pre_jump_froude'), precision=3)}，控制水深={_fmt(jump.get('control_depth_m'), ' 米')}，池深系数={pool_factor}",
             f"跃后共轭水深={_summary_value(summary, '跃后共轭水深')}，建议池长={_summary_value(summary, '建议消力池长度')}，建议池深={_summary_value(summary, '建议消力池深度')}",
             str(jump.get("message") or "若尾水不足，自由水跃可能向下游移动，需要通过消力池或出口防冲措施稳定水跃位置。"),
-            sources.get("矩形断面共轭水深") or sources.get("消力池初拟尺寸", "水跃理论"),
+            "《水力学》第五版水跃动量方程；GB 50288-2018 N.2.5 同宽矩形池初拟",
         ),
         _principle(
             "出口整流段",
             "按出口扩散、跃后水深倍数和最小防冲长度共同确定出口连接段建议长度。",
-            r"L_r\geq L_{\Delta b},\quad L_r\geq \eta h_c'',\quad L_r\geq L_{\text{最小}}",
+            r"L_r\geq L_{\Delta b},\quad L_r\geq \eta h_c'',\quad L_{\text{整流}}>3h_s",
             "L_r 为出口整流段长度，L_Δb 为宽度渐变所需长度，η 为跃后水深倍数控制系数，L_最小 为最小长度。",
             f"宽度渐变长度={_fmt(rectification.get('width_transition_length_m'), ' 米')}，能量控制长度={_fmt(rectification.get('energy_length_m'), ' 米')}，最小长度={_fmt(rectification.get('minimum_length_m'), ' 米')}，整流长度系数={rectification_factor}",
             f"建议出口整流段={_summary_value(summary, '建议出口整流段')}",
@@ -337,7 +349,7 @@ def build_calculation_principles(result: Any) -> list[dict[str, str]]:
             r"\text{结论}=\text{逐项校核结果}+\text{风险提示}",
             "校核项目来自纵坡、流速、湿周、入口能力、尾水条件等结果；风险提示不阻止计算，但需要设计人员复核。",
             f"校核项数量={len(checks)}，风险提示数量={len(risks)}",
-            "通过" if not risks else "需复核",
+            "需复核" if risks else "计算完成，存在待核条件" if any(item.get("passed") is None for item in checks) else "计算完成",
             "计算原理只说明水力计算过程；最终采用前仍应结合规范条文、工程重要性、地形地质和下游防冲条件进行人工复核。",
             "GB 50288-2018 与工程复核口径",
         ),
@@ -452,17 +464,17 @@ def build_precalculation_principles(params: dict[str, Any]) -> list[dict[str, st
         _principle(
             "水跃与消力池",
             "估算跃后共轭水深，并判断消力池长度和池深。",
-            r"h_c''=\frac{h_c'}{2}\left(\sqrt{1+8Fr_1^2}-1\right),\quad L_d=4.5h_c'',\quad d_d\geq \lambda h_c''-h_{\text{下游}}",
-            "h_c' 为跃前水深，h_c'' 为跃后共轭水深，Fr_1 为跃前弗劳德数，L_d 为池长，d_d 为池深。",
+            r"M(h_1)=M(h_2),\quad M(h)=\frac{Q^2}{gA}+\frac{bh^2}{2}+\frac{mh^3}{3}",
+            "h_1、h_2 为同断面水平水跃的跃前、跃后共轭水深，M 为动量函数；矩形可用显式共轭公式。",
             f"池深安全系数={pool_factor}",
             pending,
-            "计算后会结合尾水条件判断水跃是否稳定，并给出消力池建议尺寸。",
-            "水跃理论",
+            "填写实际下游尾水后才判断衔接；同宽矩形池按规范初拟池长与池深，梯形及变宽入池不套用矩形尺寸。未填尾水仅输出理论共轭水深。",
+            "《水力学》第五版水跃理论；GB 50288-2018 N.2.5",
         ),
         _principle(
             "出口整流段",
             "按出口扩散、跃后水深倍数和最小长度确定连接段。",
-            r"L_r\geq L_{\Delta b},\quad L_r\geq \eta h_c'',\quad L_r\geq L_{\text{最小}}",
+            r"L_r\geq L_{\Delta b},\quad L_r\geq \eta h_c'',\quad L_{\text{整流}}>3h_s",
             "L_r 为出口整流段长度，L_Δb 为宽度渐变所需长度，η 为跃后水深倍数控制系数。",
             f"整流长度系数={rectification_factor}",
             pending,

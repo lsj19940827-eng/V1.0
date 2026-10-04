@@ -31,8 +31,10 @@ if __package__ and __package__.startswith("推求水面线."):
         calc_friction_loss as calc_pressure_pipe_friction_loss,
     )
     from .spillway_steep_chute_adapter import (
+        SPILLWAY_STEEP_CHUTE_PARAM_KEY,
         SPILLWAY_STEEP_CHUTE_TEXT,
         calculate_and_apply_spillway_steep_chute_group,
+        compute_spillway_inlet_state,
         is_spillway_steep_chute_inlet,
         is_spillway_steep_chute_node,
     )
@@ -53,8 +55,10 @@ else:
         calc_friction_loss as calc_pressure_pipe_friction_loss,
     )
     from core.spillway_steep_chute_adapter import (
+        SPILLWAY_STEEP_CHUTE_PARAM_KEY,
         SPILLWAY_STEEP_CHUTE_TEXT,
         calculate_and_apply_spillway_steep_chute_group,
+        compute_spillway_inlet_state,
         is_spillway_steep_chute_inlet,
         is_spillway_steep_chute_node,
     )
@@ -1873,12 +1877,146 @@ class HydraulicCalculator:
                     loss = nodes[j].transition_calc_details.get('total', 0.0) or 0.0
                 transition_loss += loss
         return transition_loss
+
+    def _apply_spillway_with_upstream_energy(
+        self,
+        nodes: List[ChannelNode],
+        upstream_index: int,
+        inlet_index: int,
+        *,
+        use_actual_transition_losses: bool,
+    ) -> int:
+        """按上游总水头、入口实际流速和接口损失衔接专项水面线。"""
+        upstream = nodes[upstream_index]
+        inlet = nodes[inlet_index]
+        if is_spillway_steep_chute_node(upstream):
+            raise ValueError(
+                "相邻泄水渠专项链之间尚未建立真实控制断面，不能重新设定临界水深。"
+                "连续渠道请保持同一流量段并删除链内渐变段行；存在变断面或分流时须先完成专门衔接计算。"
+            )
+        if (
+            upstream.structure_type == StructureType.INVERTED_SIPHON
+            or StructureType.is_pressure_pipe_like(upstream.structure_type)
+            or getattr(upstream, "is_pressure_pipe", False)
+        ):
+            raise ValueError(
+                "倒虹吸或有压管道不能直接作为泄水渠的自由水面控制断面，"
+                "请先明确管道出口的压力水头、出流消能及下游自由水面衔接断面。"
+            )
+        upstream_flow = float(upstream.flow or 0.0)
+        inlet_flow = float(inlet.flow or 0.0)
+        if upstream_flow > 0 and inlet_flow > 0 and not math.isclose(upstream_flow, inlet_flow, rel_tol=1e-6, abs_tol=1e-9):
+            raise ValueError("泄水渠入口与上游断面流量不同，须先明确分流或汇流控制断面，不能直接套用同流量能量衔接。")
+        state = compute_spillway_inlet_state(nodes, inlet_index)
+
+        # 先确定入口控制断面，渐变段和入口弯道不能沿用表中尚未更新的水深、流速。
+        inlet_preview = copy.copy(inlet)
+        inlet_preview.section_params = copy.deepcopy(inlet.section_params)
+        inlet_preview.water_depth = state["depth_m"]
+        inlet_preview.velocity = state["velocity_ms"]
+        width = float(inlet_preview.section_params.get("B", 0.0) or 0.0)
+        side_slope = float(inlet_preview.section_params.get("m", 0.0) or 0.0)
+        area = state["depth_m"] * (width + side_slope * state["depth_m"])
+        wetted = width + 2.0 * state["depth_m"] * math.sqrt(1.0 + side_slope * side_slope)
+        inlet_preview.section_params.update({"A": area, "X": wetted, "R": area / wetted})
+
+        transition_length = sum(
+            float(nodes[index].transition_length or 0.0)
+            for index in range(upstream_index + 1, inlet_index)
+            if nodes[index].is_transition
+        )
+        if use_actual_transition_losses:
+            transition_loss = self._actual_transition_loss_between(nodes, upstream_index, inlet_index)
+        else:
+            transition_loss, _ = self._estimate_transition_loss_between(
+                nodes, upstream_index, inlet_index, upstream, inlet_preview
+            )
+
+        # 上游MC至入口MC的普通渠道仍按上游断面计沿程摩阻，不能误用入口后的陡坡。
+        approach_end = copy.copy(inlet_preview)
+        approach_end.section_params = copy.deepcopy(upstream.section_params)
+        approach_end.structure_type = upstream.structure_type
+        approach_end.slope_i = upstream.slope_i
+        approach_end.water_depth = upstream.water_depth
+        approach_end.velocity = upstream.velocity
+        approach_end.roughness = upstream.roughness
+        approach_end.flow = upstream.flow
+        friction_loss = self.calculate_friction_loss(upstream, approach_end, transition_length)
+        bend_loss = self.calculate_open_channel_interval_bend_loss(upstream, inlet_preview)
+        local_loss = self.calculate_local_loss(inlet_preview)
+        reserve_loss = float(getattr(inlet, "head_loss_reserve", 0.0) or 0.0)
+        gate_loss = float(getattr(inlet, "head_loss_gate", 0.0) or 0.0)
+        row_loss = friction_loss + bend_loss + local_loss + reserve_loss + gate_loss
+        interface_loss = row_loss + transition_loss
+
+        upstream_alpha = float(upstream.section_params.get("alpha_profile", 1.0) or 1.0)
+        inlet_alpha = state["alpha_profile"]
+        if not math.isfinite(upstream_alpha) or upstream_alpha <= 0:
+            raise ValueError("泄水渠上游断面的动能修正系数必须为正有限数。")
+        if not math.isfinite(interface_loss) or interface_loss < 0:
+            raise ValueError("泄水渠入口接口损失必须为非负有限数。")
+        upstream_velocity_head = upstream_alpha * upstream.velocity ** 2 / (2.0 * GRAVITY)
+        inlet_velocity_head = inlet_alpha * state["velocity_ms"] ** 2 / (2.0 * GRAVITY)
+        inlet_level = upstream.water_level + upstream_velocity_head - inlet_velocity_head - interface_loss
+
+        last_index = calculate_and_apply_spillway_steep_chute_group(nodes, inlet_index, inlet_level)
+        inlet.head_loss_friction = friction_loss
+        inlet.head_loss_bend = bend_loss
+        inlet.head_loss_local = local_loss
+        inlet.head_loss_total = row_loss
+        inlet.friction_calc_details = copy.deepcopy(approach_end.friction_calc_details)
+        inlet.bend_calc_details = copy.deepcopy(inlet_preview.bend_calc_details)
+        payload = inlet.section_params[SPILLWAY_STEEP_CHUTE_PARAM_KEY]
+        # 渐变段损失已在独立行累计，入口行总损失只记其余接口分项。
+        payload["head_loss_total"] = row_loss
+        payload["inlet_interface"] = {
+            "method": "total_energy_continuity",
+            "upstream_water_level_m": upstream.water_level,
+            "inlet_water_level_m": inlet_level,
+            "upstream_alpha": upstream_alpha,
+            "inlet_alpha": inlet_alpha,
+            "upstream_velocity_head_m": upstream_velocity_head,
+            "inlet_velocity_head_m": inlet_velocity_head,
+            "friction_loss_m": friction_loss,
+            "bend_loss_m": bend_loss,
+            "local_loss_m": local_loss,
+            "reserve_loss_m": reserve_loss,
+            "gate_loss_m": gate_loss,
+            "transition_loss_m": transition_loss,
+            "row_head_loss_m": row_loss,
+            "total_head_loss_m": interface_loss,
+            "transition_length_m": transition_length,
+            "water_level_drop_m": upstream.water_level - inlet_level,
+            "energy_residual_m": (
+                upstream.water_level + upstream_velocity_head
+                - inlet_level - inlet_velocity_head - interface_loss
+            ),
+        }
+        return last_index
+
+    def _validate_spillway_downstream_boundary(self, upstream: ChannelNode, downstream: ChannelNode) -> None:
+        """急流出口须由专项延续或消能控制断面衔接，不能直接套普通水位递推。"""
+        if not is_spillway_steep_chute_node(upstream) or is_spillway_steep_chute_node(downstream):
+            return
+        payload = upstream.section_params.get(SPILLWAY_STEEP_CHUTE_PARAM_KEY, {}) or {}
+        alpha = float((payload.get("input") or {}).get("alpha_profile", 1.1))
+        area = float(upstream.section_params.get("A", 0.0) or 0.0)
+        surface_width = self.get_water_surface_width(upstream)
+        if area <= 0 or surface_width <= 0:
+            raise ValueError("泄水渠出口缺少有效断面参数，无法确认下游衔接边界。")
+        energy_froude = upstream.velocity * math.sqrt(alpha * surface_width / (GRAVITY * area))
+        if energy_froude > 1.0 + 1e-6:
+            raise ValueError(
+                "泄水渠出口仍为急流，尚未建立消能或控制断面，不能直接接普通明渠、闸或有压管道。"
+                "继续急流计算时请将后续渠道设为泄水渠与陡坡；转为缓流时须先完成水跃、尾水及渠底衔接校核。"
+            )
     
     def _calculate_forward(self, nodes: List[ChannelNode]) -> None:
         """
         顺推法：从上游向下游计算
         
-        Z_下 = Z_上 - hf - hj - hw - h_transition
+        普通段：Z_下 = Z_上 - hf - hj - hw - h_transition
+        泄水渠接口另按前后总水头平衡衔接。
         
         渐变段行处理规则（方案B）：
         - 渐变段行不显示水位和渠底高程
@@ -1977,18 +2115,8 @@ class HydraulicCalculator:
                 continue
 
             if is_spillway_steep_chute_inlet(curr_node):
-                accumulated_transition_loss, _ = self._estimate_transition_loss_between(
-                    nodes,
-                    prev_regular_node_idx,
-                    i,
-                    prev_regular_node,
-                    curr_node,
-                )
-                inlet_water_level = prev_regular_node.water_level - accumulated_transition_loss
-                last_idx = calculate_and_apply_spillway_steep_chute_group(
-                    nodes,
-                    i,
-                    inlet_water_level,
+                last_idx = self._apply_spillway_with_upstream_energy(
+                    nodes, prev_regular_node_idx, i, use_actual_transition_losses=False,
                 )
                 prev_regular_node = nodes[last_idx]
                 prev_regular_node_idx = last_idx
@@ -1996,6 +2124,8 @@ class HydraulicCalculator:
                 continue
             if is_spillway_steep_chute_node(curr_node):
                 continue
+
+            self._validate_spillway_downstream_boundary(prev_regular_node, curr_node)
             
             # ===== 闸类型特殊处理（分水闸/分水口/泄水闸/节制闸等） =====
             # 闸是点状结构，仅产生过闸水头损失，不计算沿程/弯道/局部损失
@@ -2207,12 +2337,8 @@ class HydraulicCalculator:
                 continue
 
             if is_spillway_steep_chute_inlet(curr_node):
-                transition_loss = self._actual_transition_loss_between(nodes, prev_regular_idx, i)
-                inlet_water_level = prev_regular_node.water_level - transition_loss
-                last_idx = calculate_and_apply_spillway_steep_chute_group(
-                    nodes,
-                    i,
-                    inlet_water_level,
+                last_idx = self._apply_spillway_with_upstream_energy(
+                    nodes, prev_regular_idx, i, use_actual_transition_losses=True,
                 )
                 prev_regular_node = nodes[last_idx]
                 prev_regular_idx = last_idx
@@ -2220,6 +2346,8 @@ class HydraulicCalculator:
                 continue
             if is_spillway_steep_chute_node(curr_node):
                 continue
+
+            self._validate_spillway_downstream_boundary(prev_regular_node, curr_node)
 
             # 分水闸/分水口：仅考虑过闸损失
             if getattr(curr_node, 'is_diversion_gate', False):
@@ -3169,15 +3297,24 @@ class HydraulicCalculator:
 
         preserved_length = self._normalize_length_value(actual_length)
         if preserve_existing_length and preserved_length is not None:
-            # 只保留“更短的现有采用值”，用于物理压缩、合并渐变段或旧结果回填。
-            # 当旧值反而大于当前公式/规则值时，说明它多半来自旧口径或过期缓存，应回到当前规则结果。
+            # 合并行代表两侧渐变段覆盖的整个缺口，不能用单侧公式截短后留下空隙。
+            merged_gap = self._normalize_length_value(
+                (getattr(transition_node, 'connection_source_details', {}) or {}).get('merged_gap_length')
+            )
+            is_merged_gap = (merged_gap is not None and merged_gap > ZERO_TOLERANCE
+                             and abs(preserved_length - merged_gap) <= ZERO_TOLERANCE)
+            # 普通行只保留更短的采用值；合并行保留真实缺口长度，单条人工覆盖保留原语义。
+            # 普通旧值大于当前公式/规则值时仍回到当前规则，避免沿用过期缓存。
             should_preserve_length = (
                 override_length is not None
+                or is_merged_gap
                 or preserved_length <= selected_length + ZERO_TOLERANCE
             )
             if should_preserve_length:
                 effective_length = preserved_length
                 uses_existing_length = True
+                if is_merged_gap:
+                    self._append_transition_warning(warnings, "两侧渐变段合并，采用连接位置的实际里程差。")
                 if preserved_length + ZERO_TOLERANCE < selected_length:
                     distance_clamped = True
                     self._append_transition_warning(

@@ -37,6 +37,10 @@ if _calc_dir not in sys.path:
     sys.path.insert(0, _calc_dir)
 
 import 推求水面线.utils  # noqa: F401  # 建立顶层 utils 兼容别名，避免打包环境同名包冲突
+from 推求水面线.utils.numeric_precision import format_display_number, format_input_number, station_millimetres
+from 推求水面线.core.length_statistics import (
+    displayed_length, summarize_length_records, validate_length_records,
+)
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
@@ -480,17 +484,28 @@ def parse_flow_values_text(flow_text: str) -> list:
 
 
 def format_flow_value(value) -> str:
-    """统一格式化单个流量值。"""
+    """流量展示固定两位小数，避免浮点运算尾数撑宽界面。"""
     try:
-        number = float(value)
+        return format_display_number(value)
     except (TypeError, ValueError):
         return ""
-    return f"{number:.3f}".rstrip("0").rstrip(".")
 
 
 def format_flow_values_text(values) -> str:
-    """把流量列表格式化为兼容旧链路的逗号文本。"""
-    return ", ".join(format_flow_value(value) for value in list(values or []) if format_flow_value(value))
+    """为计算和工程保存生成逗号文本，保留原始精度，不用于展示。"""
+    parts = []
+    for value in list(values or []):
+        try:
+            text = format_input_number(value, 3)
+        except (TypeError, ValueError):
+            continue
+        parts.append(text.rstrip('0').rstrip('.') if '.' in text and 'e' not in text.lower() else text)
+    return ", ".join(parts)
+
+
+def format_flow_display_text(values) -> str:
+    """统一流量列表在报告和导出文件中的显示。"""
+    return ", ".join(text for value in list(values or []) if (text := format_flow_value(value)))
 
 
 def format_flow_segment_label(index: int) -> str:
@@ -551,7 +566,7 @@ def calculate_final_max_flow_values(design_flows, preferred_max_flows=None) -> l
         except (TypeError, ValueError):
             preferred_number = 0.0
         if preferred_number > 0:
-            final_max_flows.append(round(preferred_number, 3))
+            final_max_flows.append(preferred_number)
             continue
         final_max_flows.append(auto_value)
     return final_max_flows
@@ -1385,6 +1400,7 @@ class WaterProfilePanel(QWidget):
         self._last_building_lengths = []
         self._last_channel_total_length = 0.0
         self._last_type_summary = []
+        self._last_building_stats_error = ''
         self._transition_length_rules = {}
         self._length_rule_nudge_seen = False
         self._length_rule_nudge_bar = None
@@ -4789,6 +4805,23 @@ class WaterProfilePanel(QWidget):
         next_node = ctx.get("next_node")
         prev_idx = int(ctx.get("prev_idx", -1))
         next_idx = int(ctx.get("next_idx", -1))
+        # 连续修改两侧渐变段时，物理上限必须由当前真实区间扣除另一侧采用长度。
+        # 自动连接段的历史 stat_length 不能反复借用，否则第二次修改会超出总间距。
+        left = row_idx - 1
+        while left >= 0 and (getattr(nodes[left], 'is_transition', False)
+                             or getattr(nodes[left], 'is_auto_inserted_channel', False)):
+            left -= 1
+        right = row_idx + 1
+        while right < len(nodes) and (getattr(nodes[right], 'is_transition', False)
+                                      or getattr(nodes[right], 'is_auto_inserted_channel', False)):
+            right += 1
+        if left >= 0 and right < len(nodes):
+            span = self._get_node_station_mc_value(nodes[right]) - self._get_node_station_mc_value(nodes[left])
+            if span > 0:
+                occupied = math.fsum(float(getattr(nodes[i], 'transition_length', 0.0) or 0.0)
+                                     for i in range(left + 1, right)
+                                     if i != row_idx and getattr(nodes[i], 'is_transition', False))
+                return max(0.0, span - occupied)
         base_length = 0.0
         try:
             base_length = float(getattr(node, "transition_length", 0.0) or 0.0)
@@ -5066,22 +5099,53 @@ class WaterProfilePanel(QWidget):
             )
         return rule_objects
 
+    def _refresh_building_length_state(self, nodes, calculator=None):
+        """从当前节点统一重建长度明细和汇总，失败时清空旧工程缓存。"""
+        self._last_building_lengths = []
+        self._last_type_summary = []
+        self._last_channel_total_length = 0.0
+        self._last_building_stats_error = ''
+        if not nodes or not CALCULATOR_AVAILABLE:
+            return
+        try:
+            if calculator is None:
+                calculator = WaterProfileCalculator(getattr(self, '_settings', None) or ProjectSettings())
+            records = calculator.calculate_building_lengths(nodes)
+            type_summary = summarize_length_records(records)
+            validation = validate_length_records(nodes, records, type_summary)
+            if not validation['ok']:
+                raise ValueError('；'.join(validation['errors']))
+            # 与长度统计共用当前剩余连接长度，后续编辑和保存不再携带插入时的旧值。
+            table = getattr(self, 'node_table', None)
+            for record in records:
+                if record.get('kind') != 'connection':
+                    continue
+                index = record['source_node_index']
+                nodes[index].stat_length = record['length']
+                if table and table.rowCount() == len(nodes):
+                    first = table.item(index, 0)
+                    payload = first.data(Qt.UserRole) if first else None
+                    if isinstance(payload, dict) and payload.get('_auto_channel'):
+                        payload['_stat_length'] = record['length']
+                        first.setData(Qt.UserRole, payload)
+            self._last_building_lengths = records
+            self._last_type_summary = type_summary
+            self._last_channel_total_length = validation['channel_total']
+        except (ValueError, TypeError, AttributeError) as exc:
+            self._last_building_stats_error = str(exc)
+
     def _rebuild_calculation_summary_state(self, nodes):
         """在不重新执行总计算的情况下刷新摘要面板。"""
+        self._refresh_building_length_state(nodes)
         if not nodes:
             self._update_summary_panel([])
             return
 
-        total_len = float(getattr(self, "_last_channel_total_length", 0.0) or 0.0)
-        if total_len <= 0:
-            regular_nodes = [node for node in nodes if not getattr(node, "is_transition", False)]
-            if len(regular_nodes) >= 2:
-                start_mc = float(getattr(regular_nodes[0], "station_MC", 0.0) or 0.0)
-                end_mc = float(getattr(regular_nodes[-1], "station_MC", 0.0) or 0.0)
-                total_len = max(0.0, end_mc - start_mc)
+        total_len = self._last_channel_total_length
 
         summary = None
-        regular_nodes = [node for node in nodes if not getattr(node, "is_transition", False)]
+        regular_nodes = [node for node in nodes if not getattr(node, "is_transition", False)
+                         and not getattr(node, 'is_auto_inserted_channel', False)]
         if regular_nodes:
             first_node = regular_nodes[0]
             last_node = regular_nodes[-1]
@@ -5149,6 +5213,22 @@ class WaterProfilePanel(QWidget):
         )
         payload["_transition_loss_calc_details"] = copy.deepcopy(
             getattr(node_obj, "transition_calc_details", {}) or {}
+        )
+        # 单独修改长度或损失时，也同步原始值，避免相同显示文本沿用旧精度缓存。
+        shown = {}
+        for col, attr, digits in ((32, 'transition_length', 3), (33, 'head_loss_transition', 4)):
+            item = table.item(row_idx, col)
+            if item is None:
+                continue
+            raw_value = float(getattr(node_obj, attr, 0.0) or 0.0)
+            try:
+                text_value = float(item.text()) if item.text().strip() not in ('', '-') else 0.0
+            except (TypeError, ValueError):
+                continue
+            if text_value == float(f'{raw_value:.{digits}f}'):
+                shown[col] = item.text()
+        payload.setdefault('_numeric_display_values', {}).update(
+            self._node_numeric_display_payload(node_obj, shown)
         )
         first_item.setData(Qt.UserRole, payload)
 
@@ -5384,24 +5464,12 @@ class WaterProfilePanel(QWidget):
         item = table.item(row_idx, 2)
         return bool(item and is_spillway_steep_chute_value(item.text()))
 
-    def _spillway_steep_chute_group_rows(self, row_idx: int):
-        """获取当前泄水渠与陡坡同名组在表3中的行号。"""
-        table = getattr(self, "node_table", None)
-        if not table or row_idx < 0 or row_idx >= table.rowCount():
-            return []
-        name_item = table.item(row_idx, 1)
-        target_name = str(name_item.text() if name_item else "").strip()
-        if not target_name:
-            return [row_idx]
-        rows = []
-        for row in range(table.rowCount()):
-            type_item = table.item(row, 2)
-            row_name_item = table.item(row, 1)
-            if not type_item or not is_spillway_steep_chute_value(type_item.text()):
-                continue
-            if str(row_name_item.text() if row_name_item else "").strip() == target_name:
-                rows.append(row)
-        return rows or [row_idx]
+    def _spillway_steep_chute_group_rows(self, row_idx: int, nodes=None):
+        """复用内核连续链规则，不按名称跨段复制参数。"""
+        from 推求水面线.core.spillway_steep_chute_adapter import get_spillway_steep_chute_chain_indexes
+
+        source_nodes = nodes if nodes is not None else self._build_nodes_from_table()
+        return get_spillway_steep_chute_chain_indexes(source_nodes, row_idx)
 
     def _get_spillway_steep_chute_payload_for_row(self, row_idx: int) -> dict:
         """读取表3某行保存的泄水渠与陡坡隐藏参数。"""
@@ -5419,16 +5487,12 @@ class WaterProfilePanel(QWidget):
         return {}
 
     def _resolve_spillway_steep_chute_advanced_params(self, row_idx: int) -> dict:
-        """合并默认值、Excel 预填值和最近一次计算输入，供详情入口显示。"""
-        payload = self._get_spillway_steep_chute_payload_for_row(row_idx)
-        params = dict(SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS)
-        for container_key in ("input", "inputs", "advanced_params"):
-            container = payload.get(container_key)
-            if isinstance(container, dict):
-                for key in SPILLWAY_STEEP_CHUTE_ADVANCED_FIELD_ORDER:
-                    if key in container and container.get(key) not in (None, ""):
-                        params[key] = container.get(key)
-        return params
+        """按内核相同优先级读取整条链参数，显式空值不回退到旧输入。"""
+        from 推求水面线.core.spillway_steep_chute_adapter import resolve_spillway_steep_chute_chain_advanced_params
+
+        nodes = self._build_nodes_from_table()
+        explicit = resolve_spillway_steep_chute_chain_advanced_params(nodes, row_idx)
+        return {**SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS, **explicit}
 
     def _write_spillway_steep_chute_payload_to_row(self, row_idx: int, payload: dict):
         """把泄水渠与陡坡隐藏参数写回表格行。"""
@@ -5440,25 +5504,52 @@ class WaterProfilePanel(QWidget):
             first_item = QTableWidgetItem("")
             first_item.setTextAlignment(Qt.AlignCenter)
             table.setItem(row_idx, 0, first_item)
-        row_payload = first_item.data(Qt.UserRole)
+        row_payload = copy.deepcopy(first_item.data(Qt.UserRole))
         if not isinstance(row_payload, dict):
             row_payload = {}
         row_payload[SPILLWAY_STEEP_CHUTE_ROLE_KEY] = copy.deepcopy(payload)
         first_item.setData(Qt.UserRole, row_payload)
 
     def _apply_spillway_steep_chute_advanced_params(self, row_idx: int, advanced_params: dict, *, mark_dirty: bool = True):
-        """保存详情入口修改的泄水渠与陡坡专项参数。"""
-        rows = self._spillway_steep_chute_group_rows(row_idx)
-        for row in rows:
-            payload = self._get_spillway_steep_chute_payload_for_row(row)
-            payload["advanced_params"] = copy.deepcopy(advanced_params)
-            payload["params_dirty"] = True
-            self._write_spillway_steep_chute_payload_to_row(row, payload)
-            for nodes_attr in ("calculated_nodes", "nodes"):
-                nodes = getattr(self, nodes_attr, None)
-                if isinstance(nodes, list) and 0 <= row < len(nodes):
-                    node = nodes[row]
-                    node.section_params[SPILLWAY_STEEP_CHUTE_PARAM_KEY] = copy.deepcopy(payload)
+        """仅更新用户修改项，保留未编辑字段，并使受影响的旧水位成果失效。"""
+        from 推求水面线.core.spillway_steep_chute_adapter import invalidate_spillway_steep_chute_payload
+
+        if not advanced_params:
+            return
+        nodes = self._build_nodes_from_table()
+        rows = self._spillway_steep_chute_group_rows(row_idx, nodes)
+        if not rows:
+            return
+        table = self.node_table
+        old_updating = self._updating_cells
+        self._updating_cells = True
+        blocker = QSignalBlocker(table)
+        try:
+            for row in range(rows[0], table.rowCount()):
+                payload = self._get_spillway_steep_chute_payload_for_row(row)
+                if row in rows or (payload and self._is_spillway_steep_chute_row(row)):
+                    # 迁移和失效由内核统一处理，避免把生成的子段起深当成用户输入。
+                    payload = invalidate_spillway_steep_chute_payload(payload)
+                    existing = payload.get("advanced_params")
+                    merged = copy.deepcopy(existing) if isinstance(existing, dict) else {}
+                    if row in rows:
+                        merged.update(copy.deepcopy(advanced_params))
+                    payload["advanced_params"] = merged
+                if payload and self._is_spillway_steep_chute_row(row):
+                    self._write_spillway_steep_chute_payload_to_row(row, payload)
+                # 只清自动计算的总损失、累计损失和水位，不碰用户预留或闸损。
+                for col in (39, 40, 41):
+                    item = table.item(row, col)
+                    if item is not None:
+                        item.setText("")
+                        item.setToolTip("专项参数已修改，请重新推求水面线。")
+            self.nodes = self._build_nodes_from_table()
+            self.calculated_nodes = []
+            if hasattr(self, "lbl_summary_info"):
+                self.lbl_summary_info.setText("泄水渠与陡坡参数已修改，水位及损失成果待重新计算；已保留表3断面输入。")
+        finally:
+            del blocker
+            self._updating_cells = old_updating
         if mark_dirty and not getattr(self, "_loading_project", False):
             self.data_changed.emit()
 
@@ -5472,30 +5563,35 @@ class WaterProfilePanel(QWidget):
         return str(value)
 
     def _collect_spillway_steep_chute_form_values(self, editors: dict):
-        """从详情表单读取并校验专项参数。"""
+        """读取实际存在的表单；可选空值用于明确清除旧设置。"""
         values = {}
-        for key in SPILLWAY_STEEP_CHUTE_ADVANCED_FIELD_ORDER:
-            editor = editors.get(key)
-            raw_text = str(editor.text() if editor else "").strip()
+        for key, editor in editors.items():
+            raw_text = str(editor.currentText() if hasattr(editor, "currentText") else editor.text()).strip()
             if not raw_text:
-                if key in SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS:
-                    values[key] = SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS[key]
+                values[key] = None
                 continue
             if key in SPILLWAY_STEEP_CHUTE_ADVANCED_NUMERIC_KEYS:
                 try:
                     values[key] = float(raw_text)
+                    if not math.isfinite(values[key]) or values[key] < 0:
+                        raise ValueError("参数必须为有限非负数")
                 except (TypeError, ValueError):
                     label = SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS.get(key, key)
-                    fluent_info(self, "参数格式错误", f"{label} 需要填写数字。")
+                    fluent_info(self, "参数格式错误", f"{label} 需要填写有效的非负数字。")
                     return None
             else:
                 values[key] = raw_text
+        if (values.get("inlet_weir_width") is None) != (values.get("inlet_head") is None):
+            fluent_info(self, "入口资料不完整", "入口能力校核需要同时填写入口宽度和堰上总水头；不校核时两项均留空。")
+            return None
         return values
 
-    def _build_spillway_steep_chute_result_lines(self, row_idx: int, node, payload: dict):
-        """生成泄水渠与陡坡详情里的结果摘要。"""
+    def _build_spillway_steep_chute_result_lines(self, row_idx: int, node, payload: dict, terminal_payload=None):
+        """区分本子段水面线、侧墙结果和整条链末端的消能状态。"""
+        if isinstance(payload, dict) and payload.get("params_dirty"):
+            return ["参数已修改，请重新执行表3水面线计算。旧水位、侧墙和消能成果已失效。"]
         if not isinstance(payload, dict) or not payload or not payload.get("result"):
-            return ["尚未计算。"]
+            return ["尚未计算。无需重复填写流量、断面或长度，直接使用表3数据推求水面线。", "入口能力、侧墙及消能结论将在计算后显示；未给尾水不作消力池设计结论。"]
 
         input_payload = payload.get("input", {}) if isinstance(payload.get("input"), dict) else {}
         result = payload.get("result", {}) if isinstance(payload.get("result"), dict) else {}
@@ -5504,73 +5600,202 @@ class WaterProfilePanel(QWidget):
         display_point = payload.get("display_point", {}) if isinstance(payload.get("display_point"), dict) else {}
         risks = payload.get("risks", []) if isinstance(payload.get("risks"), list) else []
         profile_points = payload.get("profile_points", []) if isinstance(payload.get("profile_points"), list) else []
+        aeration = result.get("aeration_and_sidewall") or {}
+        terminal_payload = terminal_payload if isinstance(terminal_payload, dict) else payload
+        terminal_result = terminal_payload.get("result") or {}
+        jump = terminal_result.get("hydraulic_jump") or {}
 
-        lines = []
-        if payload.get("params_dirty"):
-            lines.append("参数已修改，请重新执行表3水面线计算后查看最新结果。")
-            lines.append("")
-        lines.extend([
+        def display(value, digits=3, unit=""):
+            """缺资料与有效零值分开显示。"""
+            if value is None or value == "":
+                return "未计算"
+            try:
+                return f"{float(value):.{digits}f}{unit}"
+            except (TypeError, ValueError):
+                return str(value)
+
+        roles = {"inlet": "连续链首行", "middle": "链内中间行", "outlet": "连续链末行"}
+        lines = [
             f"建筑物：{getattr(node, 'name', '') or SPILLWAY_STEEP_CHUTE_TEXT}",
-            f"当前行角色：{payload.get('role', '-')}",
-            f"计算长度：{float(payload.get('group_length_m', 0.0) or 0.0):.3f} m",
-            f"入口水位：{float(payload.get('inlet_water_level_m', 0.0) or 0.0):.3f} m",
-            f"出口水位：{float(payload.get('outlet_water_level_m', 0.0) or 0.0):.3f} m",
-            f"总水位降：{float(payload.get('head_loss_total', 0.0) or 0.0):.4f} m",
-            f"设计流量：{float(input_payload.get('Q', 0.0) or 0.0):.3f} m³/s",
-            f"底宽：{float(input_payload.get('b', input_payload.get('B', 0.0)) or 0.0):.3f} m",
-            f"边坡系数：{float(input_payload.get('m', 0.0) or 0.0):.3f}",
-            f"糙率：{float(input_payload.get('n', 0.0) or 0.0):.4f}",
-            f"底坡倒数：{float(input_payload.get('slope_inv', 0.0) or 0.0):.3f}",
+            f"当前行：表3第 {row_idx + 1} 行，{roles.get(payload.get('role'), '待确定')}",
+            f"全链长度：{display(payload.get('chain_length_m', payload.get('group_length_m')), unit=' m')}",
+            f"本子段长度：{display(payload.get('segment_length_m'), unit=' m')}",
+            f"全链入口水位：{display(payload.get('chain_inlet_water_level_m', payload.get('inlet_water_level_m')), unit=' m')}",
+            f"全链出口水位：{display(payload.get('chain_outlet_water_level_m', terminal_payload.get('outlet_water_level_m')), unit=' m')}",
+            f"全链水位降：{display(payload.get('chain_water_level_drop_m'), 4, ' m')}",
+            f"全链能量损失：{display(payload.get('chain_head_loss_total'), 4, ' m')}",
+            f"设计流量：{display(input_payload.get('Q'), unit=' m³/s')}",
             f"水面线型：{hydraulic.get('water_profile_name') or hydraulic.get('water_profile_type') or profile.get('type') or '-'}",
-            f"末端水深：{float(profile.get('end_depth_m', display_point.get('depth_m', getattr(node, 'water_depth', 0.0))) or 0.0):.3f} m",
-            f"当前行流速：{float(display_point.get('velocity_ms', getattr(node, 'velocity', 0.0)) or 0.0):.3f} m/s",
+            f"本子段末端水深：{display(profile.get('end_depth_m'), unit=' m')}",
+            f"当前行流速：{display(display_point.get('velocity_ms'), unit=' m/s')}",
             f"沿程采样点：{len(profile_points)} 个",
-        ])
+            "",
+            "侧墙计算：",
+            f"本子段建议侧墙高度：{display(aeration.get('recommended_sidewall_height_m'), unit=' m')}",
+            str(aeration.get("message") or "侧墙尚未计算。"),
+            "",
+            "连续链末端消能：",
+        ]
+        if terminal_payload.get("params_dirty"):
+            lines.append("末端参数已修改，待重新计算。")
+        elif jump:
+            state = {"missing_tailwater": "待补尾水", "unsupported_pool_geometry": "池型不适用，需专项设计", "not_applicable": "不适用"}.get(jump.get("status"))
+            lines.extend([
+                f"消能状态：{state or jump.get('tailwater_judgement') or '待复核'}",
+                f"理论共轭水深：{display(jump.get('conjugate_depth_m'), unit=' m')}",
+                f"消力池长度：{display(jump.get('recommended_pool_length_m'), unit=' m')}",
+                f"消力池深度：{display(jump.get('recommended_pool_depth_m'), unit=' m')}",
+                str(jump.get("message") or ""),
+            ])
+        else:
+            lines.append("尚未取得链末端消能结果。")
         if risks:
             lines.append("")
             lines.append("风险提示：")
             lines.extend(f"- {item}" for item in risks)
         return lines
 
-    def _show_spillway_steep_chute_details(self, row_idx: int):
-        """编辑泄水渠与陡坡表3专项参数，并显示最近一次计算结果。"""
-        nodes = getattr(self, "calculated_nodes", None) or self._build_nodes_from_table()
-        if not nodes or row_idx < 0 or row_idx >= len(nodes):
-            fluent_info(self, "提示", "该行暂未形成可编辑的泄水渠与陡坡数据")
-            return
-        node = nodes[row_idx]
-        payload = (getattr(node, "section_params", {}) or {}).get(SPILLWAY_STEEP_CHUTE_PARAM_KEY, {}) or {}
-        if not isinstance(payload, dict):
-            payload = {}
-        table_payload = self._get_spillway_steep_chute_payload_for_row(row_idx)
-        if table_payload:
-            payload.update(table_payload)
-        advanced_params = self._resolve_spillway_steep_chute_advanced_params(row_idx)
+    def _create_spillway_steep_chute_details_dialog(self, row_idx: int):
+        """构造渐进式专项详情，基本参数直接采用当前表3，不重复要求输入。"""
+        from PySide6.QtWidgets import QScrollArea
+        from 推求水面线.core.spillway_steep_chute_adapter import resolve_spillway_steep_chute_chain_advanced_params
 
+        nodes = self._build_nodes_from_table()
+        rows = self._spillway_steep_chute_group_rows(row_idx, nodes)
+        if not rows:
+            return None
+        node = nodes[row_idx]
+        payload = self._get_spillway_steep_chute_payload_for_row(row_idx)
+        conflict_message = ""
+        try:
+            explicit_params = resolve_spillway_steep_chute_chain_advanced_params(nodes, row_idx)
+        except ValueError as exc:
+            # 冲突时展示当前行资料，用户可明确修改对应项来统一整条链。
+            conflict_message = f"同链参数需统一：{exc}。当前显示所选行资料；请修改冲突项后保存。"
+            raw_params = payload.get("advanced_params", payload.get("input", {}))
+            explicit_params = copy.deepcopy(raw_params) if isinstance(raw_params, dict) else {}
+        advanced_params = {**SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS, **explicit_params}
         dialog = QDialog(self)
         dialog.setWindowTitle("泄水渠与陡坡参数/结果")
-        dialog.resize(720, 560)
+        dialog.resize(800, 680)
         layout = QVBoxLayout(dialog)
+        scope_label = QLabel(f"当前连续链：表3第 {rows[0] + 1} 至 {rows[-1] + 1} 行，共 {len(rows)} 个节点。", dialog)
+        scope_label.setObjectName("spillwayChainScopeLabel")
+        scope_label.setWordWrap(True)
+        scope_label.setStyleSheet("font-weight:bold;color:#1976D2;")
+        layout.addWidget(scope_label)
 
         tabs = QTabWidget(dialog)
         param_page = QWidget(tabs)
-        param_layout = QFormLayout(param_page)
+        param_layout = QVBoxLayout(param_page)
+        overview = QLabel("流量、断面、糙率、底坡和长度直接采用表3，无需重复填写。入口水位自动衔接上游，连续变坡按各子段顺序计算。修改基础资料请返回表3。", param_page)
+        overview.setWordWrap(True)
+        param_layout.addWidget(overview)
+        base_table = QTableWidget(len(rows), 6, param_page)
+        base_table.setObjectName("spillwayBasicInputsTable")
+        base_table.setHorizontalHeaderLabels(["表3行号", "流量(m³/s)", "底宽(m)", "边坡", "糙率", "底坡倒数"])
+        base_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        base_table.verticalHeader().setVisible(False)
+        base_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        base_table.setMaximumHeight(min(190, 34 + len(rows) * 31))
+        for table_row, source_row in enumerate(rows):
+            # 采用表3当前值，仅收敛显示精度，不把格式化文本写回原表。
+            values = [str(source_row + 1)] + [self.node_table.item(source_row, col).text() if self.node_table.item(source_row, col) else "" for col in (26, 20, 23, 24, 25)]
+            if values[3].strip() in ("", "-"):
+                values[3] = str((nodes[source_row].section_params or {}).get("m", 0.0))
+            for col, value in enumerate(values):
+                shown = value or "待填"
+                if col > 0 and value:
+                    try:
+                        shown = self._format_spillway_param_value(float(value))
+                    except (TypeError, ValueError):
+                        pass
+                item = QTableWidgetItem(shown)
+                item.setTextAlignment(Qt.AlignCenter)
+                if value and shown != value:
+                    item.setToolTip(f"表3原值：{value}")
+                base_table.setItem(table_row, col, item)
+        param_layout.addWidget(base_table)
+        if conflict_message:
+            warning = QLabel(conflict_message, param_page)
+            warning.setWordWrap(True)
+            warning.setStyleSheet("color:#B45309;")
+            param_layout.addWidget(warning)
+
+        scroll = QScrollArea(param_page)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget(scroll)
+        optional_layout = QVBoxLayout(content)
+        optional_layout.setContentsMargins(0, 3, 0, 3)
         editors = {}
-        for key in SPILLWAY_STEEP_CHUTE_ADVANCED_FIELD_ORDER:
-            label = SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS.get(key, key)
-            editor = LineEdit(param_page)
-            editor.setText(self._format_spillway_param_value(advanced_params.get(key, "")))
-            if key == "weir_coefficient":
-                editor.setPlaceholderText("仅入口连接形式为“手动输入流量系数”时填写")
-            editors[key] = editor
-            param_layout.addRow(label, editor)
+        groups = {}
+        group_fields = {
+            "inlet": ("入口与起点（选填）", ["manual_start_depth", "inlet_weir_width", "inlet_head", "inlet_connection_type_label", "weir_coefficient", "contraction_coefficient"]),
+            "tailwater": ("链末端尾水与消能（选填）", ["downstream_tailwater_depth", "downstream_channel_width", "outlet_transition_angle_deg", "pool_depth_factor", "outlet_rectification_factor"]),
+            "advanced": ("高级参数与加大流量", []),
+        }
+        assigned = {key for _, keys in group_fields.values() for key in keys}
+        group_fields["advanced"][1].extend(key for key in SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS if key not in assigned)
+        hints = {
+            "inlet": "默认由上游水位衔接并采用临界水深起算；已有入口控制水深时可填写。入口过流能力需要实际宽度和总水头，两项留空即不校核。",
+            "tailwater": "这里只填写整条连续链最末端的下游尾水，内部变坡处不重复设置消力池。尾水未知可留空，水面线仍可计算，消力池设计显示待补尾水。",
+            "advanced": "通常无需修改。加大流量优先采用已导入值；其他系数保留现有设置。展开或折叠不会更改参数。",
+        }
+        for group_key, (title, keys) in group_fields.items():
+            keys = [key for key in keys if key in SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS]
+            customized = any(explicit_params.get(key) not in (None, "", SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS.get(key)) for key in keys)
+            group = CollapsibleGroupBox(title, content, collapsed=not customized)
+            group.setObjectName(f"spillway_{group_key}_group")
+            group_layout = QVBoxLayout(group.content_widget())
+            hint = QLabel(hints[group_key], group.content_widget())
+            hint.setWordWrap(True)
+            group_layout.addWidget(hint)
+            form = QFormLayout()
+            group_layout.addLayout(form)
+            for key in keys:
+                label = SPILLWAY_STEEP_CHUTE_ADVANCED_LABELS.get(key, key).removeprefix("泄水渠")
+                if key == "inlet_connection_type_label":
+                    editor = ComboBox(group.content_widget())
+                    editor.addItems(["扭曲面连接", "八字墙连接", "横隔墙连接", "手动输入流量系数"])
+                    value = str(advanced_params.get(key) or "扭曲面连接")
+                    if editor.findText(value) < 0:
+                        editor.addItem(value)
+                    editor.setCurrentText(value)
+                else:
+                    editor = LineEdit(group.content_widget())
+                    editor.setText(self._format_spillway_param_value(advanced_params.get(key)))
+                    if key not in SPILLWAY_STEEP_CHUTE_ADVANCED_DEFAULTS:
+                        editor.setPlaceholderText("未知或不需要时留空")
+                editor.setObjectName(f"spillway_{key}")
+                editors[key] = editor
+                form.addRow(label, editor)
+            if group_key == "inlet" and "weir_coefficient" in editors:
+                coefficient_editor = editors["weir_coefficient"]
+                coefficient_label = form.labelForField(coefficient_editor)
+                connection_editor = editors["inlet_connection_type_label"]
+
+                def update_manual_coefficient(text, edit=coefficient_editor, label_widget=coefficient_label):
+                    visible = text == "手动输入流量系数"
+                    edit.setVisible(visible)
+                    label_widget.setVisible(visible)
+
+                connection_editor.currentTextChanged.connect(update_manual_coefficient)
+                update_manual_coefficient(connection_editor.currentText())
+            groups[group_key] = group
+            optional_layout.addWidget(group)
+        optional_layout.addStretch(1)
+        scroll.setWidget(content)
+        param_layout.addWidget(scroll, 1)
         tabs.addTab(param_page, "参数")
 
         result_page = QWidget(tabs)
         result_layout = QVBoxLayout(result_page)
         view = QTextEdit(result_page)
         view.setReadOnly(True)
-        view.setPlainText("\n".join(self._build_spillway_steep_chute_result_lines(row_idx, node, payload)))
+        terminal_payload = self._get_spillway_steep_chute_payload_for_row(rows[-1])
+        view.setObjectName("spillwayChainResultText")
+        view.setPlainText("\n".join(self._build_spillway_steep_chute_result_lines(row_idx, node, payload, terminal_payload)))
         result_layout.addWidget(view)
         tabs.addTab(result_page, "结果")
         layout.addWidget(tabs)
@@ -5580,15 +5805,34 @@ class WaterProfilePanel(QWidget):
             buttons.button(QDialogButtonBox.Ok).setText("保存参数")
         if buttons.button(QDialogButtonBox.Cancel):
             buttons.button(QDialogButtonBox.Cancel).setText("关闭")
-        buttons.accepted.connect(dialog.accept)
+        initial_values = {key: advanced_params.get(key) for key in editors}
+        dialog._spillway_editors = editors
+        dialog._spillway_groups = groups
+        dialog._spillway_changed = False
+
+        def save_parameters():
+            values = self._collect_spillway_steep_chute_form_values(editors)
+            if values is None:
+                return
+            patch = {key: value for key, value in values.items() if value != initial_values.get(key)}
+            if patch:
+                self._apply_spillway_steep_chute_advanced_params(row_idx, patch, mark_dirty=True)
+                dialog._spillway_changed = True
+            dialog.accept()
+
+        buttons.accepted.connect(save_parameters)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
-        if dialog.exec() == QDialog.Accepted:
-            new_params = self._collect_spillway_steep_chute_form_values(editors)
-            if new_params is None:
-                return
-            self._apply_spillway_steep_chute_advanced_params(row_idx, new_params, mark_dirty=True)
-            fluent_info(self, "已保存", "泄水渠与陡坡参数已写回同名组，重新计算表3后生效。")
+        return dialog
+
+    def _show_spillway_steep_chute_details(self, row_idx: int):
+        """打开连续专项链的参数与结果详情。"""
+        dialog = self._create_spillway_steep_chute_details_dialog(row_idx)
+        if dialog is None:
+            fluent_info(self, "提示", "该行暂未形成可编辑的泄水渠与陡坡数据")
+            return
+        if dialog.exec() == QDialog.Accepted and dialog._spillway_changed:
+            fluent_info(self, "已保存", "修改项已写回当前连续链。请重新推求表3水面线，更新侧墙、消能和下游水位结果。")
 
     @staticmethod
     def _get_transition_length_update_signature(node):
@@ -6037,7 +6281,8 @@ class WaterProfilePanel(QWidget):
                 nodes[row_idx].transition_length = 0.0
                 continue
             try:
-                length_val = float(raw_text)
+                float(raw_text)
+                length_val = self._read_table_numeric_value(row_idx, 32)
             except (TypeError, ValueError):
                 continue
             if length_val >= 0:
@@ -6054,7 +6299,8 @@ class WaterProfilePanel(QWidget):
         if raw_text in ("", "-"):
             return False, 0.0
         try:
-            return True, float(raw_text)
+            float(raw_text)
+            return True, self._read_table_numeric_value(row_idx, 32)
         except (TypeError, ValueError):
             return False, None
 
@@ -6193,6 +6439,15 @@ class WaterProfilePanel(QWidget):
         if prev_node is None or next_node is None:
             return details
 
+        # 旧项目详情补建只补充推导；已存采用值继续用于递推，不因打开详情而改值。
+        adopted_loss = None
+        table = getattr(self, 'node_table', None)
+        loss_item = table.item(row_idx, 33) if table else None
+        if loss_item and loss_item.text().strip() not in ('', '-'):
+            adopted_loss = self._read_table_numeric_value(row_idx, 33)
+        elif float(getattr(node, 'head_loss_transition', 0.0) or 0.0) > 0:
+            adopted_loss = float(node.head_loss_transition)
+
         try:
             settings = self._build_settings()
         except Exception:
@@ -6211,6 +6466,11 @@ class WaterProfilePanel(QWidget):
             )
             if has_explicit_length and cell_length is not None and cell_length >= 0:
                 node.transition_length = cell_length
+            if adopted_loss is not None:
+                node.head_loss_transition = adopted_loss
+                if abs(adopted_loss - repaired.get('total', 0.0)) > 1e-9:
+                    repaired['actual_total'] = adopted_loss
+                    repaired['actual_total_source'] = 'saved_result'
             return repaired
         except Exception:
             return details
@@ -6878,6 +7138,24 @@ class WaterProfilePanel(QWidget):
     # ================================================================
     # 节点表操作
     # ================================================================
+    def _read_table_numeric_value(self, row, column):
+        """读取仍与显示文本匹配的原始值；编辑后的单元格按新文本读取。"""
+        table = self.node_table
+        item = table.item(row, column)
+        if item is None:
+            return 0.0
+        first = table.item(row, 0)
+        payload = first.data(Qt.UserRole) if first else None
+        stored = payload.get('_numeric_display_values', {}).get(str(column)) if isinstance(payload, dict) else None
+        if isinstance(stored, dict) and stored.get('text') == item.text():
+            value = stored.get('value')
+            if isinstance(value, (int, float)) and math.isfinite(value):
+                return float(value)
+        try:
+            return float(item.text().strip())
+        except (TypeError, ValueError):
+            return 0.0
+
     def _sync_losses_from_table(self):
         """从表格读取最新的水头损失/水位/高程值，同步到 calculated_nodes。
         确保双击弹窗始终显示用户手动编辑后的最新数据。"""
@@ -6887,23 +7165,13 @@ class WaterProfilePanel(QWidget):
         row_count = table.rowCount()
         channel_level = self._get_current_channel_level_text()
 
-        def _rf(r, c):
-            item = table.item(r, c)
-            if not item:
-                return 0.0
-            txt = item.text().strip()
-            if not txt or txt == '-':
-                return 0.0
-            try:
-                return float(txt)
-            except ValueError:
-                return 0.0
+        _rf = self._read_table_numeric_value
 
         for r in range(min(row_count, len(self.calculated_nodes))):
             node = self.calculated_nodes[r]
             if node.is_transition:
-                node.head_loss_transition = _rf(r, 33) or node.head_loss_transition
-                node.head_loss_cumulative = _rf(r, 40) or node.head_loss_cumulative
+                node.head_loss_transition = _rf(r, 33)
+                node.head_loss_cumulative = _rf(r, 40)
             else:
                 # 可编辑损失列（用户可能手动修改）
                 node.head_loss_reserve = _rf(r, 36)
@@ -6911,8 +7179,8 @@ class WaterProfilePanel(QWidget):
                 self._set_gate_loss_user_set(node, self._is_gate_loss_user_set_for_row(r, node))
                 self._apply_pressure_pipe_loss_cell_to_node(node, _rf(r, 38), channel_level=channel_level)
                 # 联动计算列
-                node.head_loss_total = _rf(r, 39) or node.head_loss_total
-                node.head_loss_cumulative = _rf(r, 40) or node.head_loss_cumulative
+                node.head_loss_total = _rf(r, 39)
+                node.head_loss_cumulative = _rf(r, 40)
                 wl = _rf(r, 41)
                 if wl:
                     node.water_level = wl
@@ -6939,6 +7207,8 @@ class WaterProfilePanel(QWidget):
         """保存所有可编辑列的快照（用于撤销）"""
         snapshot = {}
         for r in range(self.node_table.rowCount()):
+            first = self.node_table.item(r, 0)
+            snapshot[(r, -1)] = copy.deepcopy(first.data(Qt.UserRole)) if first else None
             for c in EDITABLE_COLS:
                 item = self.node_table.item(r, c)
                 snapshot[(r, c)] = item.text() if item else ""
@@ -6980,6 +7250,13 @@ class WaterProfilePanel(QWidget):
                 self._append_loss_undo_snapshot(self._pre_edit_snapshot)
                 self._pre_edit_snapshot = None
 
+            if col in (36, 37):
+                # 输入已修改后不再恢复旧的显示精度缓存；撤销快照仍保留原值。
+                first = self.node_table.item(row, 0)
+                payload = first.data(Qt.UserRole) if first else None
+                if isinstance(payload, dict):
+                    payload.get('_numeric_display_values', {}).pop(str(col), None)
+                    first.setData(Qt.UserRole, payload)
             if col == 2:
                 item = self.node_table.item(row, col)
                 struct_text = str(item.text() if item else "").strip()
@@ -7092,6 +7369,10 @@ class WaterProfilePanel(QWidget):
         self._pre_edit_cell_value = (row, col, item.text() if item else "")
         if col in TRANSITION_PREPARATION_RELEVANT_COLS:
             self._transition_topology_prepared = False
+        if col in (0, 1, 2, 3, 5, 6, 7):
+            # 结构归属或几何输入变化后，不再展示上一版长度统计。
+            self._refresh_building_length_state([])
+            self._update_summary_panel([])
 
         self._refresh_pressure_pipe_controls()
         if col in (2, 24):
@@ -7135,13 +7416,18 @@ class WaterProfilePanel(QWidget):
             # 保存当前状态到重做栈
             current = {}
             for (r, c) in snapshot.keys():
-                item = self.node_table.item(r, c)
-                current[(r, c)] = item.text() if item else ""
+                item = self.node_table.item(r, 0 if c == -1 else c)
+                current[(r, c)] = (copy.deepcopy(item.data(Qt.UserRole)) if item else None) if c == -1 else (item.text() if item else "")
             self._loss_redo_stack.append(current)
             if len(self._loss_redo_stack) > 20:
                 self._loss_redo_stack.pop(0)
             table = self.node_table
             for (r, c), text in snapshot.items():
+                if c == -1:
+                    first = table.item(r, 0)
+                    if first is not None:
+                        first.setData(Qt.UserRole, copy.deepcopy(text))
+                    continue
                 item = table.item(r, c)
                 if item is None:
                     item = QTableWidgetItem("")
@@ -7152,24 +7438,22 @@ class WaterProfilePanel(QWidget):
                 item.setText(text)
 
             # 同步 calculated_nodes
-            def _rf(r, c):
-                item = table.item(r, c)
-                if not item:
-                    return 0.0
-                txt = item.text().strip()
-                if not txt or txt == '-':
-                    return 0.0
-                try:
-                    return float(txt)
-                except ValueError:
-                    return 0.0
+            _rf = self._read_table_numeric_value
 
             if hasattr(self, 'calculated_nodes') and self.calculated_nodes:
                 channel_level = self._get_current_channel_level_text()
                 for r in range(min(table.rowCount(), len(self.calculated_nodes))):
                     node = self.calculated_nodes[r]
                     if node.is_transition:
+                        node.transition_length = _rf(r, 32)
+                        node.head_loss_transition = _rf(r, 33)
                         node.head_loss_cumulative = _rf(r, 40)
+                        first = table.item(r, 0)
+                        payload = first.data(Qt.UserRole) if first else None
+                        if isinstance(payload, dict):
+                            node.transition_length_override_m = payload.get('_transition_length_override_m')
+                            node.transition_length_calc_details = copy.deepcopy(payload.get('_transition_length_calc_details', {}))
+                            node.transition_calc_details = copy.deepcopy(payload.get('_transition_loss_calc_details', {}))
                     else:
                         node.head_loss_reserve = _rf(r, 36)
                         node.head_loss_gate = _rf(r, 37)
@@ -7184,6 +7468,8 @@ class WaterProfilePanel(QWidget):
                         te = _rf(r, 43)
                         if te:
                             node.top_elevation = te
+
+            self._rebuild_calculation_summary_state(self._build_nodes_from_table())
 
             InfoBar.success("已撤销", "已恢复上一步操作",
                            parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
@@ -7205,13 +7491,18 @@ class WaterProfilePanel(QWidget):
             # 保存当前状态到撤销栈
             current = {}
             for (r, c) in snapshot.keys():
-                item = self.node_table.item(r, c)
-                current[(r, c)] = item.text() if item else ""
+                item = self.node_table.item(r, 0 if c == -1 else c)
+                current[(r, c)] = (copy.deepcopy(item.data(Qt.UserRole)) if item else None) if c == -1 else (item.text() if item else "")
             self._loss_undo_stack.append(current)
             if len(self._loss_undo_stack) > 20:
                 self._loss_undo_stack.pop(0)
             table = self.node_table
             for (r, c), text in snapshot.items():
+                if c == -1:
+                    first = table.item(r, 0)
+                    if first is not None:
+                        first.setData(Qt.UserRole, copy.deepcopy(text))
+                    continue
                 item = table.item(r, c)
                 if item is None:
                     item = QTableWidgetItem("")
@@ -7222,24 +7513,22 @@ class WaterProfilePanel(QWidget):
                 item.setText(text)
 
             # 同步 calculated_nodes
-            def _rf(r, c):
-                item = table.item(r, c)
-                if not item:
-                    return 0.0
-                txt = item.text().strip()
-                if not txt or txt == '-':
-                    return 0.0
-                try:
-                    return float(txt)
-                except ValueError:
-                    return 0.0
+            _rf = self._read_table_numeric_value
 
             if hasattr(self, 'calculated_nodes') and self.calculated_nodes:
                 channel_level = self._get_current_channel_level_text()
                 for r in range(min(table.rowCount(), len(self.calculated_nodes))):
                     node = self.calculated_nodes[r]
                     if node.is_transition:
+                        node.transition_length = _rf(r, 32)
+                        node.head_loss_transition = _rf(r, 33)
                         node.head_loss_cumulative = _rf(r, 40)
+                        first = table.item(r, 0)
+                        payload = first.data(Qt.UserRole) if first else None
+                        if isinstance(payload, dict):
+                            node.transition_length_override_m = payload.get('_transition_length_override_m')
+                            node.transition_length_calc_details = copy.deepcopy(payload.get('_transition_length_calc_details', {}))
+                            node.transition_calc_details = copy.deepcopy(payload.get('_transition_loss_calc_details', {}))
                     else:
                         node.head_loss_reserve = _rf(r, 36)
                         node.head_loss_gate = _rf(r, 37)
@@ -7254,6 +7543,8 @@ class WaterProfilePanel(QWidget):
                         te = _rf(r, 43)
                         if te:
                             node.top_elevation = te
+
+            self._rebuild_calculation_summary_state(self._build_nodes_from_table())
 
             InfoBar.success("已重做", "已恢复上一步撤销的操作",
                            parent=self._info_parent(), duration=2000, position=InfoBarPosition.TOP)
@@ -7452,18 +7743,7 @@ class WaterProfilePanel(QWidget):
         if row_count == 0:
             return
 
-        def _rf(r, c):
-            """读取单元格浮点值，'-' 或空视为 0"""
-            item = table.item(r, c)
-            if not item:
-                return 0.0
-            txt = item.text().strip()
-            if not txt or txt == '-':
-                return 0.0
-            try:
-                return float(txt)
-            except ValueError:
-                return 0.0
+        _rf = self._read_table_numeric_value
 
         def _set(r, c, val, fmt=".4f"):
             """写入单元格（保持居中对齐和只读标记）"""
@@ -7475,6 +7755,14 @@ class WaterProfilePanel(QWidget):
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 table.setItem(r, c, item)
             item.setText(f"{val:{fmt}}" if val is not None else "-")
+            first = table.item(r, 0)
+            if first is not None and isinstance(val, (int, float)):
+                payload = first.data(Qt.UserRole)
+                payload = payload if isinstance(payload, dict) else {}
+                payload.setdefault('_numeric_display_values', {})[str(c)] = {
+                    'text': item.text(), 'value': float(val),
+                }
+                first.setData(Qt.UserRole, payload)
 
         def _is_transition_row(r):
             item = table.item(r, 2)
@@ -7647,6 +7935,8 @@ class WaterProfilePanel(QWidget):
         self._node_velocity_increased.clear()
         self.calculated_nodes = []
         self.nodes = []
+        self._refresh_building_length_state([])
+        self._update_summary_panel([])
         if hasattr(self, 'siphon_roughness_chips'):
             self.siphon_roughness_chips.clear()
         if hasattr(self, 'pressure_pipe_roughness_chips'):
@@ -7838,7 +8128,7 @@ class WaterProfilePanel(QWidget):
         if uniform_positive is None:
             edit.setText("")
             return
-        edit.setText(f"{uniform_positive:.1f}")
+        edit.setText(format_input_number(uniform_positive, 1))
 
     def _node_has_explicit_turn_radius(self, node) -> bool:
         """判断节点是否带有用户显式填写的转弯半径。"""
@@ -7880,9 +8170,9 @@ class WaterProfilePanel(QWidget):
         if self._node_has_explicit_turn_radius(node):
             if abs(turn_radius) <= 1e-12:
                 return "0"
-            return f"{turn_radius:.1f}"
+            return format_input_number(turn_radius, 1)
         if turn_radius > 0:
-            return f"{turn_radius:.1f}"
+            return format_input_number(turn_radius, 1)
         if self._node_is_source_row(node):
             return "0"
         return ""
@@ -8060,7 +8350,7 @@ class WaterProfilePanel(QWidget):
         ) = self._prepare_batch_import_results(results)
         chosen_n = self._choose_roughness_value(general_roughness_vals, "渠道糙率")
         if chosen_n is not None:
-            self.roughness_edit.setText(f"{chosen_n:.4f}".rstrip('0').rstrip('.'))
+            self.roughness_edit.setText(str(float(chosen_n)))
 
         self._updating_cells = True
         table_signal_blocker = QSignalBlocker(self.node_table)
@@ -8130,7 +8420,7 @@ class WaterProfilePanel(QWidget):
 
             def fmt(v):
                 if v is None or v == "" or v == 0: return ""
-                if isinstance(v, float): return f"{v:.4f}" if v < 1 else f"{v:.3f}"
+                if isinstance(v, float): return format_input_number(v, 4 if v < 1 else 3)
                 return str(v)
 
             # 提取水力计算结果（与原版Tkinter _do_import_from_calc_result对齐）
@@ -8158,7 +8448,7 @@ class WaterProfilePanel(QWidget):
             row_data[23] = fmt(m_val) if m_val else ""
             row_data[24] = fmt(n_val)
             row_data[25] = fmt(slope_inv)
-            row_data[26] = fmt(Q)
+            row_data[26] = format_flow_value(Q) if Q else ""
             self._add_node_row(
                 row_data,
                 _skip_undo=True,
@@ -8274,6 +8564,16 @@ class WaterProfilePanel(QWidget):
                 _item.setTextAlignment(Qt.AlignCenter)
                 _item.setFlags(_item.flags() & ~Qt.ItemIsEditable)
                 self.node_table.setItem(cur_row, 31, _item)  # 流速v
+            # 表1计算结果首次进入主表时即保留原值，后续重算不能读回显示舍入值。
+            if first_item:
+                payload = first_item.data(Qt.UserRole)
+                payload = payload if isinstance(payload, dict) else {}
+                precise = payload.setdefault('_numeric_display_values', {})
+                for col, raw in ((26, Q), (27, h_val), (28, A_val), (29, X_val), (30, R_hyd_val), (31, V_val)):
+                    item = self.node_table.item(cur_row, col)
+                    if raw and item and float(raw) > 0:
+                        precise[str(col)] = {'text': item.text(), 'value': float(raw)}
+                first_item.setData(Qt.UserRole, payload)
             # 缓存结构高度（与Tkinter版 data_table._node_structure_heights 对齐）
             if H_total and float(H_total) > 0:
                 self._node_structure_heights[cur_row] = float(H_total)
@@ -8459,7 +8759,15 @@ class WaterProfilePanel(QWidget):
                 self._apply_curve_check_item_style(item, c)
                 self.node_table.setItem(r, c, item)
 
+            first_item = self.node_table.item(r, 0)
+            if first_item:
+                payload = first_item.data(Qt.UserRole)
+                payload = payload if isinstance(payload, dict) else {}
+                payload.setdefault('_numeric_display_values', {}).update(self._node_numeric_display_payload(node, geo_data))
+                first_item.setData(Qt.UserRole, payload)
+
         auto_resize_table(self.node_table)
+        self._rebuild_calculation_summary_state(nodes)
 
     def fill_turn_radius_for_geometry(self, nodes, n):
         """
@@ -8605,6 +8913,8 @@ class WaterProfilePanel(QWidget):
         if not CALCULATOR_AVAILABLE:
             return None
         settings = ProjectSettings()
+        for key in ("connection_channel_templates", "connection_channel_overrides"):
+            setattr(settings, key, copy.deepcopy(getattr(getattr(self, '_settings', None), key, {}) or {}))
         settings.channel_name = self.channel_name_edit.text().strip() or "未命名渠道"
         settings.channel_level = self.channel_level_combo.currentText()
         settings.start_water_level = self._fval(self.start_wl_edit, 100.0)
@@ -8647,7 +8957,21 @@ class WaterProfilePanel(QWidget):
         # 辅助函数提到循环外避免每行重复定义（#16）
         table = self.node_table
 
+        def _precise_value(row, col):
+            first = table.item(row, 0)
+            item = table.item(row, col)
+            payload = first.data(Qt.UserRole) if first else None
+            stored = payload.get('_numeric_display_values', {}).get(str(col)) if isinstance(payload, dict) else None
+            if isinstance(stored, dict) and item and item.text() == stored.get('text'):
+                value = stored.get('value')
+                if isinstance(value, (int, float)) and math.isfinite(value):
+                    return value
+            return None
+
         def _read_float(row, col):
+            precise = _precise_value(row, col)
+            if precise is not None:
+                return precise
             item = table.item(row, col)
             if item:
                 try:
@@ -8823,6 +9147,7 @@ class WaterProfilePanel(QWidget):
                         node.structure_type = StructureType.TRANSITION
                         node.is_transition = True
                 if isinstance(_ur, dict):
+                    node.connection_source_details = copy.deepcopy(_ur.get("_connection_source_details", {}) or {})
                     if _ur.get('_aux_coords') or _ur.get('_auto_channel'):
                         try:
                             node.x = float(_ur.get('_x', 0.0) or 0.0)
@@ -9048,13 +9373,13 @@ class WaterProfilePanel(QWidget):
             if _sd > 0:
                 node.straight_distance = _sd
             # IP桩号 (col 13)
-            node.station_ip = _parse_station(_read_text(r, 13))
+            node.station_ip = _precise_value(r, 13) if _precise_value(r, 13) is not None else _parse_station(_read_text(r, 13))
             # 弯前BC (col 14)
-            node.station_BC = _parse_station(_read_text(r, 14))
+            node.station_BC = _precise_value(r, 14) if _precise_value(r, 14) is not None else _parse_station(_read_text(r, 14))
             # 里程MC (col 15)
-            node.station_MC = _parse_station(_read_text(r, 15))
+            node.station_MC = _precise_value(r, 15) if _precise_value(r, 15) is not None else _parse_station(_read_text(r, 15))
             # 弯末EC (col 16)
-            node.station_EC = _parse_station(_read_text(r, 16))
+            node.station_EC = _precise_value(r, 16) if _precise_value(r, 16) is not None else _parse_station(_read_text(r, 16))
             # 复核弯前 (col 17)
             _cpre = _read_float(r, 17)
             if _cpre != 0:
@@ -9079,7 +9404,8 @@ class WaterProfilePanel(QWidget):
                           else self._fval(self.roughness_edit, DEFAULT_ROUGHNESS))
             n_val = self._sf(data[24], _default_n)
             slope_inv = self._sf(data[25])
-            Q = self._sf(data[26], _default_q)
+            raw_flow = _precise_value(r, 26)
+            Q = raw_flow if raw_flow is not None else self._sf(data[26], _default_q)
 
             # 与原版Tkinter get_nodes一致：始终写入B/D/R_circle/m（即使为0）
             # 原因：_estimate_transition_length中 section_params.get("D", 3.0)
@@ -9350,9 +9676,7 @@ class WaterProfilePanel(QWidget):
             wl_drop = summary.get('水位落差', 0.0)
 
             # 更新建筑物长度统计缓存
-            self._last_building_lengths = calculator.calculate_building_lengths(calculated)
-            self._last_channel_total_length = total_len
-            self._last_type_summary = calculator.calculate_comprehensive_type_summary(calculated)
+            self._refresh_building_length_state(calculated, calculator)
 
             # 更新持久摘要面板
             self._update_summary_panel(calculated, total_len, wl_drop, summary)
@@ -9361,7 +9685,7 @@ class WaterProfilePanel(QWidget):
             # 承压类节点已有独立导出与展示口径，这里只提示真正依赖结构总高的普通渠道/隧洞节点。
             missing_height_names = self._collect_missing_structure_height_names(calculated)
 
-            msg = f"共{len(calculated)}个节点，总长{total_len:.1f}m，水位落差{wl_drop:.3f}m"
+            msg = f"共{len(calculated)}个节点，总长{total_len:.3f}m，水位落差{wl_drop:.3f}m"
             gate_backfill_notice_lines = self._build_terminal_gate_backfill_notice_lines(calculated)
             if gate_backfill_notice_lines:
                 msg += "\n" + "\n".join(gate_backfill_notice_lines)
@@ -9411,9 +9735,7 @@ class WaterProfilePanel(QWidget):
             summary = calculator.get_calculation_summary(calculated)
             total_len = summary.get('总长度', 0.0)
             wl_drop = summary.get('水位落差', 0.0)
-            self._last_building_lengths = calculator.calculate_building_lengths(calculated)
-            self._last_channel_total_length = total_len
-            self._last_type_summary = calculator.calculate_comprehensive_type_summary(calculated)
+            self._refresh_building_length_state(calculated, calculator)
             self._update_summary_panel(calculated, total_len, wl_drop, summary)
         except Exception:
             import traceback
@@ -9459,6 +9781,34 @@ class WaterProfilePanel(QWidget):
             self._collect_pressure_pipe_roughness_pairs_from_nodes(nodes)
         )
         self._refresh_pressure_pipe_controls()
+
+    @staticmethod
+    def _node_numeric_display_payload(node, values):
+        """显示文本未改动时保留计算精度；用户修改文本后以新输入为准。"""
+        attributes = {
+            8: 'turn_angle', 9: 'tangent_length', 10: 'arc_length', 11: 'curve_length',
+            12: 'straight_distance', 13: 'station_ip', 14: 'station_BC', 15: 'station_MC',
+            16: 'station_EC', 17: 'check_pre_curve', 18: 'check_post_curve',
+            19: 'check_total_length', 26: 'flow', 27: 'water_depth', 31: 'velocity', 32: 'transition_length',
+            33: 'head_loss_transition', 34: 'head_loss_bend', 35: 'head_loss_friction',
+            36: 'head_loss_reserve', 37: 'head_loss_gate', 39: 'head_loss_total',
+            40: 'head_loss_cumulative', 41: 'water_level', 42: 'bottom_elevation', 43: 'top_elevation',
+        }
+        result = {}
+        for column, attribute in attributes.items():
+            if isinstance(values, dict) and column not in values:
+                continue
+            value = getattr(node, attribute, None)
+            if isinstance(value, (int, float)) and math.isfinite(value):
+                result[str(column)] = {'text': str(values[column]), 'value': float(value)}
+        if not isinstance(values, dict):
+            for column, key in ((28, 'A'), (29, 'X'), (30, 'R')):
+                value = (getattr(node, 'section_params', {}) or {}).get(key)
+                if isinstance(value, (int, float)) and math.isfinite(value):
+                    result[str(column)] = {'text': str(values[column]), 'value': float(value)}
+            if getattr(node, 'is_transition', False):
+                result['39'] = {'text': str(values[39]), 'value': float(getattr(node, 'head_loss_transition', 0.0) or 0.0)}
+        return result
 
     def _update_table_from_nodes_full_impl(self, nodes, prefix=""):
         current_channel_level = self._get_current_channel_level_text()
@@ -9535,13 +9885,13 @@ class WaterProfilePanel(QWidget):
                 _D = node.section_params.get('D', 0)
                 _Rc = node.section_params.get('R_circle', 0)
                 _m = node.section_params.get('m', 0)
-                vals[20] = f"{_B:.3f}" if _B else ""
-                vals[21] = f"{_D:.3f}" if _D else ""
-                vals[22] = f"{_Rc:.3f}" if _Rc else ""
-                vals[23] = f"{_m:.2f}" if _m else ""
-                vals[24] = f"{node.roughness:.4f}" if node.roughness else ""
+                vals[20] = format_input_number(_B) if _B else ""
+                vals[21] = format_input_number(_D) if _D else ""
+                vals[22] = format_input_number(_Rc) if _Rc else ""
+                vals[23] = format_input_number(_m, 2) if _m else ""
+                vals[24] = format_input_number(node.roughness, 4) if node.roughness else ""
                 vals[25] = str(1.0 / node.slope_i) if node.slope_i and node.slope_i > 0 else ""
-                vals[26] = f"{node.flow:.3f}" if node.flow else ""
+                vals[26] = format_flow_value(node.flow) if node.flow else ""
 
                 # 水力结果列 (27-31)
                 _area = node.section_params.get('A', 0) if node.section_params else 0
@@ -9577,9 +9927,9 @@ class WaterProfilePanel(QWidget):
             # 渐变段行特有数据
             if _is_trans:
                 # 写入糙率/底坡/流量，确保通过表格读写循环不丢失
-                vals[24] = f"{node.roughness:.4f}" if node.roughness else ""
+                vals[24] = format_input_number(node.roughness, 4) if node.roughness else ""
                 vals[25] = str(1.0 / node.slope_i) if node.slope_i and node.slope_i > 0 else ""
-                vals[26] = f"{node.flow:.3f}" if node.flow else ""
+                vals[26] = format_flow_value(node.flow) if node.flow else ""
                 vals[32] = f"{getattr(node, 'transition_length', 0):.3f}" if getattr(node, 'transition_length', None) else "-"
                 vals[33] = f"{node.head_loss_transition:.4f}" if node.head_loss_transition else "-"
                 vals[39] = f"{node.head_loss_transition:.4f}" if node.head_loss_transition else "-"
@@ -9636,6 +9986,7 @@ class WaterProfilePanel(QWidget):
                 payload = first_item.data(Qt.UserRole)
                 if not isinstance(payload, dict):
                     payload = {}
+                payload['_numeric_display_values'] = self._node_numeric_display_payload(node, vals)
                 if _is_auto_ch:
                     payload.update({
                         "_auto_channel": True,
@@ -9644,6 +9995,7 @@ class WaterProfilePanel(QWidget):
                         "_y": node.y,
                         "_stat_length": float(getattr(node, "stat_length", 0.0) or 0.0),
                         "_aux_coords": True,
+                        "_connection_source_details": copy.deepcopy(getattr(node, "connection_source_details", {}) or {}),
                     })
                 elif _is_trans and (node.transition_type or node.transition_form):
                     # 渐变段详细参数保存到UserRole（#10）
@@ -9667,6 +10019,7 @@ class WaterProfilePanel(QWidget):
                         "_y": node.y,
                         "_aux_coords": True,
                     })
+                    payload['_connection_source_details'] = copy.deepcopy(getattr(node, 'connection_source_details', {}) or {})
                 if getattr(node, 'external_head_loss', None) is not None:
                     payload['_external_head_loss'] = getattr(node, 'external_head_loss')
                 elif '_external_head_loss' in payload:
@@ -9763,19 +10116,19 @@ class WaterProfilePanel(QWidget):
         lines.append(f"  计算时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append(f"  渠道名称: {settings.channel_name if settings else '-'}")
         lines.append(f"  渠道级别: {settings.channel_level if settings else '-'}")
-        lines.append(f"  起始水位: {settings.start_water_level if settings else '-'} m")
+        lines.append(f"  起始水位: {format_display_number(settings.start_water_level) if settings else '-'} m")
         lines.append(f"  起始桩号: {ProjectSettings.format_station(settings.start_station, prefix) if settings else '-'}")
         # 多流量段显示
         if settings and getattr(settings, 'design_flows', None):
-            flows_str = ", ".join(f"{q:.3f}" for q in settings.design_flows)
+            flows_str = format_flow_display_text(settings.design_flows)
             lines.append(f"  设计流量: {flows_str} m³/s")
         else:
-            lines.append(f"  设计流量: {settings.design_flow if settings else '-'} m³/s")
+            lines.append(f"  设计流量: {format_flow_value(settings.design_flow) if settings else '-'} m³/s")
         if settings and getattr(settings, 'max_flows', None):
-            flows_str = ", ".join(f"{q:.3f}" for q in settings.max_flows)
+            flows_str = format_flow_display_text(settings.max_flows)
             lines.append(f"  加大流量: {flows_str} m³/s")
         else:
-            lines.append(f"  加大流量: {settings.max_flow if settings else '-'} m³/s")
+            lines.append(f"  加大流量: {format_flow_value(settings.max_flow) if settings else '-'} m³/s")
         lines.append(f"  糙率: {settings.roughness if settings else '-'}")
         if settings and getattr(settings, 'siphon_roughness', None) is not None:
             lines.append(f"  倒虹吸糙率: {settings.siphon_roughness}")
@@ -9814,7 +10167,7 @@ class WaterProfilePanel(QWidget):
                 lines.append(f"  方位角: {node.azimuth:.6f}°")
             if node.turn_angle:
                 lines.append(f"  转角: {node.turn_angle:.6f}°")
-            lines.append(f"  流量 Q = {node.flow:.3f} m³/s")
+            lines.append(f"  流量 Q = {format_flow_value(node.flow)} m³/s")
             lines.append(f"  糙率 n = {node.roughness}")
             if node.slope_i:
                 lines.append(f"  底坡 i = {node.slope_i:.6f}")
@@ -9882,7 +10235,8 @@ class WaterProfilePanel(QWidget):
                 s_end = summary.get('终点桩号', 0.0)
                 lines.append(f"  起点桩号: {ProjectSettings.format_station(s_start, prefix)}")
                 lines.append(f"  终点桩号: {ProjectSettings.format_station(s_end, prefix)}")
-                lines.append(f"  总长度: {summary.get('总长度', 0.0):.3f} m")
+                shown_length = (station_millimetres(s_end) - station_millimetres(s_start)) / 1000
+                lines.append(f"  总长度: {shown_length:.3f} m")
                 wl_s = summary.get('起点水位', 0.0)
                 wl_e = summary.get('终点水位', 0.0)
                 if wl_s and wl_e:
@@ -9903,7 +10257,7 @@ class WaterProfilePanel(QWidget):
                     for i, bl in enumerate(building_lengths, 1):
                         name = bl.get('name', '-')
                         stype = bl.get('structure_type', '-')
-                        length = bl.get('length', 0.0)
+                        length = displayed_length(bl)
                         s_s = bl.get('start_station', 0.0)
                         s_e = bl.get('end_station', 0.0)
                         lines.append(
@@ -9911,12 +10265,12 @@ class WaterProfilePanel(QWidget):
                             f"{ProjectSettings.format_station(s_s, prefix):<16}  "
                             f"{ProjectSettings.format_station(s_e, prefix):<16}"
                         )
-                    total_length = sum(bl.get('length', 0.0) for bl in building_lengths)
+                    total_length = math.fsum(displayed_length(bl) for bl in building_lengths)
                     lines.append("  " + "-" * 76)
                     lines.append(f"  {'合计':<22}  {'':<12}  {total_length:<10.3f}")
                     lines.append("")
-            except Exception:
-                pass
+            except (ValueError, TypeError) as exc:
+                lines.append(f"  建筑物长度统计待复核：{exc}")
 
         gate_backfill_lines = self._build_terminal_gate_backfill_report_lines(nodes)
         if gate_backfill_lines:
@@ -10642,7 +10996,8 @@ class WaterProfilePanel(QWidget):
 
         parts = [f"节点数: {len(nodes)}"]
         if total_len > 0:
-            parts.append(f"总长度: {total_len:.1f}m")
+            shown_total = math.fsum(displayed_length(item) for item in self._last_building_lengths)
+            parts.append(f"总长度: {shown_total if self._last_building_lengths else total_len:.3f}m")
         if wl_drop is not None:
             parts.append(f"水位落差: {wl_drop:.3f}m")
 
@@ -10653,7 +11008,7 @@ class WaterProfilePanel(QWidget):
             start_wl = summary.get('起点水位', None)
             end_wl = summary.get('终点水位', None)
             if start_st is not None:
-                parts.append(f"桩号: {start_st:.3f}~{end_st:.3f}")
+                parts.append(f"桩号: {station_millimetres(start_st) / 1000:.3f}~{station_millimetres(end_st) / 1000:.3f}")
             if start_wl is not None:
                 parts.append(f"水位: {start_wl:.3f}~{end_wl:.3f}")
 
@@ -10661,12 +11016,19 @@ class WaterProfilePanel(QWidget):
         building_count = len(self._last_building_lengths)
         if building_count > 0:
             parts.append(f"建筑物: {building_count}段")
+        if getattr(self, '_last_building_stats_error', ''):
+            parts.append(f"长度统计待复核: {self._last_building_stats_error}")
 
         self.lbl_summary_info.setText("    ".join(parts))
         self.btn_building_stats.setEnabled(len(self._last_building_lengths) > 0)
 
     def _show_building_length_dialog(self):
         """打开建筑物长度统计对话框"""
+        self._refresh_building_length_state(self._build_nodes_from_table())
+        if self._last_building_stats_error:
+            InfoBar.warning("长度统计待复核", self._last_building_stats_error,
+                            parent=self._info_parent(), duration=6000, position=InfoBarPosition.TOP)
+            return
         if not self._last_building_lengths:
             InfoBar.info("提示", "暂无建筑物长度数据，请先执行计算",
                         parent=self._info_parent(), duration=3000, position=InfoBarPosition.TOP)
@@ -10746,6 +11108,8 @@ class WaterProfilePanel(QWidget):
                         "是否清除已有渐变段并重新插入？\n"
                         "（选「否」则保留现有渐变段不做任何操作）"):
                     return
+                # 清除前保留用户在表中改过的连接断面，自动生成的水深不作为输入锁定。
+                WaterProfileCalculator(settings).remember_connection_edits(nodes)
                 # 同时清除渐变段行和自动插入的补段行，避免重复插入
                 nodes = [n for n in nodes
                          if not getattr(n, 'is_transition', False)
@@ -10777,6 +11141,17 @@ class WaterProfilePanel(QWidget):
             from app_渠系计算前端.water_profile.water_profile_dialogs import (
                 BatchChannelConfirmDialog, OpenChannelDialog, OpenChannelParams
             )
+            from 推求水面线.core.connection_channel import OPEN_CHANNEL_TYPES, params_to_reference, flow_section_key
+
+            def remember_params(key, params):
+                reference = params_to_reference(params)
+                reference['gap_key'] = key
+                params.reference_details = reference
+                if reference.get('user_modified') or reference.get('source_kind') == 'user_override':
+                    settings.connection_channel_overrides[key] = reference
+                elif reference.get('source_kind') == 'user_template':
+                    settings.connection_channel_overrides.pop(key, None)
+
             if len(gaps) >= 2:
                 batch_dlg = BatchChannelConfirmDialog(self, len(gaps), gaps)
                 batch_dlg.exec()
@@ -10786,15 +11161,24 @@ class WaterProfilePanel(QWidget):
                     return
                 elif batch_result['mode'] == BatchChannelConfirmDialog.RESULT_TABLE_EDIT:
                     batch_state['mode'] = 'table_edit'
-                    batch_state['preset_params'] = batch_result['params']
+                    # 以原始端点关联参数；新断面可能使前面的缺口合并，不能按回调序号取值。
+                    batch_state['preset_params'] = {
+                        gaps[idx]['gap_key']: params for idx, params in batch_result['params'].items()
+                    }
+                    for key, params in batch_state['preset_params'].items():
+                        remember_params(key, params)
+                    settings.connection_channel_templates.update(copy.deepcopy(batch_result.get('templates', {})))
+                    calculator._connection_prepared_params = batch_state['preset_params']
 
             # 创建补段参数获取回调
             def open_channel_callback(reference_segment, available_length,
                                        prev_struct, next_struct, flow_section, flow):
                 idx = batch_state['current_index']
                 batch_state['current_index'] += 1
+                key = calculator._active_connection_gap_key
 
                 def _track(params, source):
+                    remember_params(key, params)
                     batch_state['inserted_channels'].append({
                         'gap_index': idx,
                         'prev_struct': prev_struct,
@@ -10805,8 +11189,8 @@ class WaterProfilePanel(QWidget):
                     })
 
                 # ① 表格编辑模式
-                if batch_state['mode'] == 'table_edit' and idx in batch_state.get('preset_params', {}):
-                    p = batch_state['preset_params'][idx]
+                if batch_state['mode'] == 'table_edit' and key in batch_state.get('preset_params', {}):
+                    p = batch_state['preset_params'][key]
                     _track(p, '表格编辑')
                     return p
 
@@ -10836,6 +11220,12 @@ class WaterProfilePanel(QWidget):
                     result = dlg.get_result()
                     if result:
                         _track(result, '手动')
+                        template_cb = getattr(dlg, 'save_template_cb', None)
+                        if template_cb and template_cb.isChecked() and result.structure_type in OPEN_CHANNEL_TYPES:
+                            template = params_to_reference(result)
+                            template.update(source_kind='user_template', user_modified=False)
+                            template.pop('gap_key', None)
+                            settings.connection_channel_templates[flow_section_key(flow_section)] = template
                     if dlg.apply_all_remaining:
                         batch_state['mode'] = 'auto_recommend'
                     return result
@@ -10843,6 +11233,7 @@ class WaterProfilePanel(QWidget):
 
             # ===== 执行：预处理 + 插入渐变段 + 几何计算 =====
             prepared_nodes = calculator.prepare_transitions(nodes, open_channel_callback)
+            self._settings = settings
 
             # 更新表格显示（使用完整刷新，显示几何计算结果）
             prefix = settings.get_station_prefix() if settings else ""
@@ -10854,21 +11245,12 @@ class WaterProfilePanel(QWidget):
 
             # 统计
             transition_count = sum(1 for n in prepared_nodes if getattr(n, 'is_transition', False))
-            open_channel_count = len(batch_state.get('inserted_channels', []))
+            open_channel_count = sum(1 for n in prepared_nodes if getattr(n, 'is_auto_inserted_channel', False))
             original_count = len(prepared_nodes) - transition_count - open_channel_count
 
-            # 统计建筑物长度（几何计算完成后即可统计）
-            try:
-                if len(prepared_nodes) >= 2 and getattr(prepared_nodes[-1], 'station_MC', 0):
-                    building_lengths = calculator.calculate_building_lengths(prepared_nodes)
-                    channel_total_length = prepared_nodes[-1].station_MC - prepared_nodes[0].station_MC
-                    type_summary = calculator.calculate_comprehensive_type_summary(prepared_nodes)
-                    self._last_building_lengths = building_lengths
-                    self._last_channel_total_length = channel_total_length
-                    self._last_type_summary = type_summary
-                    self._update_summary_panel(prepared_nodes, channel_total_length)
-            except Exception:
-                pass  # 渐变段插入阶段统计失败不影响主流程
+            # 明细、汇总、保存恢复共用同一统计入口，异常不能保留旧数据。
+            self._refresh_building_length_state(prepared_nodes, calculator)
+            self._update_summary_panel(prepared_nodes, self._last_channel_total_length)
 
             # 检查是否有倒虹吸
             has_siphon = any(
@@ -10937,7 +11319,7 @@ class WaterProfilePanel(QWidget):
                 vals[23] = f"{node.section_params.get('m', '')}" if node.section_params.get('m') else ""
                 vals[24] = f"{node.roughness}" if node.roughness else ""
                 vals[25] = str(1.0 / node.slope_i) if node.slope_i and node.slope_i > 0 else ""
-                vals[26] = f"{node.flow}" if node.flow else ""
+                vals[26] = format_flow_value(node.flow) if node.flow else ""
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(str(v))
                 item.setTextAlignment(Qt.AlignCenter)
@@ -10959,7 +11341,18 @@ class WaterProfilePanel(QWidget):
                 payload = first_item.data(Qt.UserRole)
                 if not isinstance(payload, dict):
                     payload = {}
+                payload['_numeric_display_values'] = self._node_numeric_display_payload(node, vals)
                 compound_trapezoid_params = {}
+                if getattr(node, 'connection_source_details', None):
+                    payload['_connection_source_details'] = copy.deepcopy(node.connection_source_details)
+                if _is_auto_ch:
+                    payload.update({
+                        '_auto_channel': True,
+                        '_auto_channel_structure_type': _st_str,
+                        '_connection_source_details': copy.deepcopy(getattr(node, 'connection_source_details', {}) or {}),
+                        '_x': node.x, '_y': node.y, '_aux_coords': True,
+                        '_stat_length': float(getattr(node, 'stat_length', 0.0) or 0.0),
+                    })
                 if _st_str == "明渠-复式梯形":
                     compound_trapezoid_params = normalize_compound_trapezoid_params(
                         getattr(node, 'section_params', {}) or {}
@@ -16147,8 +16540,8 @@ class WaterProfilePanel(QWidget):
             ws['C2'] = "渠道级别"; ws['C2'].font = Font(bold=True); ws['D2'] = ch_level
             ws['E2'] = "起始水位(m)"; ws['E2'].font = Font(bold=True); ws['F2'] = self.start_wl_edit.text()
             ws['G2'] = "起始桩号"; ws['G2'].font = Font(bold=True); ws['H2'] = self.start_station_edit.text()
-            ws['I2'] = "设计流量"; ws['I2'].font = Font(bold=True); ws['J2'] = self.design_flow_edit.text()
-            ws['K2'] = "加大流量"; ws['K2'].font = Font(bold=True); ws['L2'] = self.max_flow_edit.text()
+            ws['I2'] = "设计流量"; ws['I2'].font = Font(bold=True); ws['J2'] = format_flow_display_text(self._get_flow_values_from_widget(self.design_flow_edit))
+            ws['K2'] = "加大流量"; ws['K2'].font = Font(bold=True); ws['L2'] = format_flow_display_text(self._get_flow_values_from_widget(self.max_flow_edit))
             # 第3行：表头
             hdr_fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
             for c, h in enumerate(NODE_EXPORT_HEADERS, 1):
@@ -16231,6 +16624,9 @@ class WaterProfilePanel(QWidget):
         """构建水面线计算Word报告（工程产品运行卡格式）"""
         settings = self._settings
         nodes = self.calculated_nodes
+        self._refresh_building_length_state(nodes)
+        if self._last_building_stats_error:
+            raise ValueError(f'建筑物长度统计未通过：{self._last_building_stats_error}')
         ch_name = settings.channel_name if settings else ""
         ch_level = settings.channel_level if settings else ""
         prefix = settings.get_station_prefix() if settings else ""
@@ -16254,16 +16650,16 @@ class WaterProfilePanel(QWidget):
         params.append(("渠道名称", ch_name or "-"))
         params.append(("渠道级别", ch_level or "-"))
         if settings:
-            params.append(("起始水位", f"{settings.start_water_level} m"))
+            params.append(("起始水位", f"{format_display_number(settings.start_water_level)} m"))
             params.append(("起始桩号", ProjectSettings.format_station(settings.start_station, prefix) if settings.start_station else "-"))
             if getattr(settings, 'design_flows', None):
-                params.append(("设计流量", ", ".join(f"{q:.3f}" for q in settings.design_flows) + " m³/s"))
+                params.append(("设计流量", format_flow_display_text(settings.design_flows) + " m³/s"))
             else:
-                params.append(("设计流量", f"{settings.design_flow} m³/s"))
+                params.append(("设计流量", f"{format_flow_value(settings.design_flow)} m³/s"))
             if getattr(settings, 'max_flows', None):
-                params.append(("加大流量", ", ".join(f"{q:.3f}" for q in settings.max_flows) + " m³/s"))
+                params.append(("加大流量", format_flow_display_text(settings.max_flows) + " m³/s"))
             else:
-                params.append(("加大流量", f"{settings.max_flow} m³/s"))
+                params.append(("加大流量", f"{format_flow_value(settings.max_flow)} m³/s"))
             params.append(("糙率", str(settings.roughness)))
             if getattr(settings, 'siphon_roughness', None) is not None:
                 params.append(("倒虹吸糙率", str(settings.siphon_roughness)))
@@ -16300,11 +16696,11 @@ class WaterProfilePanel(QWidget):
                     str(i),
                     bl.get('name', '-'),
                     bl.get('structure_type', '-'),
-                    f"{bl.get('length', 0.0):.3f}",
+                    f"{displayed_length(bl):.3f}",
                     ProjectSettings.format_station(s_s, prefix),
                     ProjectSettings.format_station(s_e, prefix),
                 ])
-            total_length = sum(bl.get('length', 0.0) for bl in self._last_building_lengths)
+            total_length = math.fsum(displayed_length(bl) for bl in self._last_building_lengths)
             data.append(['合计', '', '', f"{total_length:.3f}", '', ''])
             doc_add_table_caption(doc, '表 1  建筑物长度汇总表')
             doc_add_styled_table(doc, headers, data, with_full_border=True)
@@ -16501,6 +16897,7 @@ class WaterProfilePanel(QWidget):
         
         # 表3原始快照（用于重开后逐单元格一致恢复）
         table3_rows = []
+        table3_numeric = []
         if self.node_table:
             for row in range(self.node_table.rowCount()):
                 row_data = []
@@ -16508,6 +16905,14 @@ class WaterProfilePanel(QWidget):
                     item = self.node_table.item(row, col)
                     row_data.append(item.text() if item else "")
                 table3_rows.append(row_data)
+                first_item = self.node_table.item(row, 0)
+                payload = first_item.data(Qt.UserRole) if first_item else None
+                saved_values = payload.get('_numeric_display_values', {}) if isinstance(payload, dict) else {}
+                table3_numeric.append({
+                    str(col): copy.deepcopy(value) for col, value in saved_values.items()
+                    if isinstance(value, dict) and str(col).isdigit() and int(col) < len(row_data)
+                    and value.get('text') == row_data[int(col)]
+                })
 
         return {
             "version": "1.0",
@@ -16516,6 +16921,7 @@ class WaterProfilePanel(QWidget):
             "nodes": nodes_data,
             "calculated_nodes": calculated_nodes_data,
             "node_table_rows": table3_rows,
+            "node_numeric_display_values": table3_numeric,
             "extra_caches": extra_caches,
             "siphon_roughness_data": siphon_roughness_data,
             "pressure_pipe_roughness_data": pressure_pipe_roughness_data,
@@ -16790,6 +17196,37 @@ class WaterProfilePanel(QWidget):
             table3_rows = d.get("node_table_rows", [])
             if isinstance(table3_rows, list) and table3_rows:
                 self._apply_node_table_text_snapshot(table3_rows)
+            # 原始数值与其保存时的显示文本成对恢复，桩号前缀/显示格式变化不截断精度。
+            numeric_rows = d.get('node_numeric_display_values', [])
+            if isinstance(numeric_rows, list):
+                for row, saved_values in enumerate(numeric_rows[:self.node_table.rowCount()]):
+                    first_item = self.node_table.item(row, 0)
+                    if first_item is None or not isinstance(saved_values, dict):
+                        continue
+                    payload = first_item.data(Qt.UserRole)
+                    payload = payload if isinstance(payload, dict) else {}
+                    payload['_numeric_display_values'] = copy.deepcopy(saved_values)
+                    first_item.setData(Qt.UserRole, payload)
+            # 旧快照也采用两位流量显示，并将原值与新文本重新配对。
+            with self._table_batch_update(self.node_table):
+                for row in range(self.node_table.rowCount()):
+                    item = self.node_table.item(row, 26)
+                    first_item = self.node_table.item(row, 0)
+                    if item is None or first_item is None:
+                        continue
+                    try:
+                        float(item.text())
+                    except (TypeError, ValueError):
+                        continue
+                    raw_flow = self._read_table_numeric_value(row, 26)
+                    if not math.isfinite(raw_flow):
+                        continue
+                    text = format_flow_value(raw_flow)
+                    item.setText(text)
+                    payload = first_item.data(Qt.UserRole)
+                    payload = payload if isinstance(payload, dict) else {}
+                    payload.setdefault('_numeric_display_values', {})['26'] = {'text': text, 'value': raw_flow}
+                    first_item.setData(Qt.UserRole, payload)
             if self.calculated_nodes:
                 self._repair_missing_transition_length_details(self.calculated_nodes)
                 self._repair_missing_transition_loss_details(self.calculated_nodes)
@@ -16826,7 +17263,7 @@ class WaterProfilePanel(QWidget):
                 )
             self._refresh_pressure_pipe_controls()
             self._switch_workspace_tab(self._tab_section_input)
-            self._rebuild_calculation_summary_state(self.calculated_nodes or self.nodes)
+            self._rebuild_calculation_summary_state(self._build_nodes_from_table())
             QTimer.singleShot(0, self._adjust_splitter_for_settings)
             
         finally:

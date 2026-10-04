@@ -255,8 +255,8 @@ def test_qxproj_roundtrip_supports_immediate_export_details_and_table_edit(monke
             assert restored.calculated_nodes[1].transition_length_override_m == 5.0
             assert restored._length_rule_nudge_seen is True
             assert restored._flow_segment_current_index == 0
-            assert restored.design_flow_edit.summary_text() == "第一流量段 · 4.8"
-            assert restored.max_flow_edit.summary_text() == "第一流量段 · 5"
+            assert restored.design_flow_edit.summary_text() == "第一流量段 · 4.80"
+            assert restored.max_flow_edit.summary_text() == "第一流量段 · 5.00"
             assert not restored.design_flow_edit._inline_hint_label.isVisible()
             assert not restored.max_flow_edit._inline_hint_label.isVisible()
             assert len(restored._settings.transition_length_rules) == 1
@@ -287,6 +287,8 @@ def test_qxproj_roundtrip_supports_immediate_export_details_and_table_edit(monke
             assert "单条覆盖长度小于公式/规范值" in (length_details["warning"] or "")
             assert loss_details["length"] == 5.0
             assert loss_details["length_details"]["source"] == "override"
+            assert restored.calculated_nodes[1].head_loss_transition == 0.1
+            assert loss_details['actual_total'] == 0.1
 
             export_path = tmp_path / "water_profile_roundtrip.xlsx"
             info_calls = {"success": [], "warning": [], "error": [], "open": []}
@@ -405,9 +407,32 @@ def test_qxproj_load_uses_project_settings_flow_lists_when_ui_text_missing():
         assert restored.design_flow_edit.text() == "4.8, 3.2, 1.1"
         assert restored.max_flow_edit.text() == "5, 4, 1.43"
         assert restored._flow_segment_current_index == 0
-        assert restored.design_flow_edit.summary_text() == "第一流量段 · 4.8"
-        assert restored.max_flow_edit.summary_text() == "第一流量段 · 5"
+        assert restored.design_flow_edit.summary_text() == "第一流量段 · 4.80"
+        assert restored.max_flow_edit.summary_text() == "第一流量段 · 5.00"
         assert not restored.design_flow_edit._inline_hint_label.isVisible()
         assert not restored.max_flow_edit._inline_hint_label.isVisible()
     finally:
         restored.deleteLater()
+
+
+def test_old_project_flow_snapshot_is_reformatted_without_losing_value():
+    """旧工程仅保存长小数文本时，重开规范显示并补建原值缓存。"""
+    module = _load_panel_module()
+    panel = _build_panel(module)
+    raw_flow = 2.87654321
+    try:
+        panel._settings = _make_settings()
+        nodes = _make_nodes()
+        nodes[0].flow = raw_flow
+        panel.calculated_nodes = nodes
+        panel._update_table_from_nodes_full(nodes)
+        state = panel.to_project_dict()
+        state['node_table_rows'][0][26] = str(raw_flow)
+        state['node_numeric_display_values'][0].pop('26', None)
+        panel.from_project_dict(state, skip_dirty_signal=True)
+        assert panel.node_table.item(0, 26).text() == '2.88'
+        assert panel._build_nodes_from_table()[0].flow == raw_flow
+        saved = panel.to_project_dict()
+        assert saved['node_numeric_display_values'][0]['26'] == {'text': '2.88', 'value': raw_flow}
+    finally:
+        panel.deleteLater()

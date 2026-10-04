@@ -170,13 +170,23 @@ def _energy_rows(data: dict[str, Any]) -> list[list[Any]]:
     aeration = _mapping(data.get("aeration_and_sidewall"))
     rows = [
         ["最大掺气水深（米）", _value(aeration.get("max_aerated_depth_m"))],
-        ["建议侧墙高度（米）", _value(aeration.get("recommended_sidewall_height_m"))],
+        ["建议侧墙高度（米）", _value(aeration.get("recommended_sidewall_height_m")) if aeration.get("enabled", True) else "未完成校核"],
         ["建议消力池长度（米）", _value(jump.get("recommended_pool_length_m"))],
         ["建议消力池深度（米）", _value(jump.get("recommended_pool_depth_m"))],
         ["出口整流段长度（米）", _value(jump.get("recommended_transition_length_m"), jump.get("outlet_rectification_length_m"))],
         ["消能说明", _value(jump.get("message"))],
         ["掺气侧墙说明", _value(aeration.get("message"))],
     ]
+    multi = _mapping(data.get("multi_flow_control"))
+    rows.extend([
+        ["侧墙控制流量（立方米/秒）", _value(aeration.get("control_flow_m3s"))],
+        ["消力池计算方法", _value(jump.get("design_method"))],
+        ["分级流量说明", _value(multi.get("message"))],
+        ["分级流量最大池深（米）", _value(multi.get("max_pool_depth_m"))],
+        ["池深控制流量（立方米/秒）", _value(_mapping(multi.get("pool_depth_control_case")).get("Q"))],
+        ["分级流量最大池长（米）", _value(multi.get("max_pool_length_m"))],
+        ["池长控制流量（立方米/秒）", _value(_mapping(multi.get("pool_length_control_case")).get("Q"))],
+    ])
     return rows
 
 

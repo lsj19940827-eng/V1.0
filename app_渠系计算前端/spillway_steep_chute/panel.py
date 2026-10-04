@@ -2,6 +2,7 @@
 """泄水渠与陡坡正式前端面板，负责多工况输入、计算、展示和导出。"""
 
 import html
+import math
 import os
 import re
 import sys
@@ -67,7 +68,7 @@ from app_渠系计算前端.section_plot_layout import (
     connect_section_tab_refresh,
     create_section_plot_scroll_area,
 )
-from app_渠系计算前端.styles import BD, INPUT_HINT_STYLE, INPUT_LABEL_STYLE, INPUT_SECTION_STYLE
+from app_渠系计算前端.styles import BD, INPUT_HINT_STYLE, INPUT_LABEL_STYLE, INPUT_SECTION_STYLE, CollapsibleGroupBox
 from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
 from app_渠系计算前端.increase_input_helper import (
     INCREASE_MODE_PERCENT,
@@ -276,8 +277,8 @@ class SpillwaySteepChutePanel(QWidget):
             "alpha_profile": 1.1,
             "control_depth_mode_label": "取临界水深",
             "manual_start_depth": "",
-            "inlet_weir_width": 1.0,
-            "inlet_head": 2.2,
+            "inlet_weir_width": "",
+            "inlet_head": "",
             "inlet_connection_type_label": DEFAULT_INLET_CONNECTION_TYPE,
             "weir_coefficient": "",
             "contraction_coefficient": 1.0,
@@ -347,6 +348,23 @@ class SpillwaySteepChutePanel(QWidget):
     def _normalize_case_fields(cls, case: dict[str, Any]) -> dict[str, Any]:
         """统一兼容旧工程字段，避免旧隐藏默认值继续影响计算。"""
         cls._normalize_case_increase_fields(case)
+        case["section_type"] = {"rectangular": "矩形", "trapezoidal": "梯形"}.get(case.get("section_type"), case.get("section_type", "梯形"))
+        if "profile_mode_label" not in case and case.get("profile_mode"):
+            case["profile_mode_label"] = {
+                "END_DEPTH_BY_LENGTH": "已知长度求末端水深",
+                "LENGTH_BY_TWO_DEPTHS": "已知两端水深求长度",
+                "FULL_CURVE_TO_NORMAL": "推至正常水深附近",
+            }.get(case["profile_mode"], "已知长度求末端水深")
+        if "control_depth_mode_label" not in case:
+            raw_control = case.get("control_depth_mode")
+            case["control_depth_mode_label"] = {
+                "critical_depth": "取临界水深", "manual": "人工指定",
+                "inlet_control": "进口控制", "model_test": "模型试验",
+            }.get(raw_control, "人工指定" if case.get("start_depth") not in (None, "") else "取临界水深")
+        if case.get("manual_start_depth") in (None, ""):
+            depth_key = {"进口控制": "inlet_control_depth", "模型试验": "model_test_start_depth"}.get(case["control_depth_mode_label"], "start_depth")
+            if case.get(depth_key) not in (None, ""):
+                case["manual_start_depth"] = case[depth_key]
         alpha_candidates = ("alpha_profile", "profile_energy_alpha", "alpha_e")
         alpha_value = next((case.get(key) for key in alpha_candidates if case.get(key) not in (None, "")), "")
         if alpha_value in (None, ""):
@@ -369,7 +387,8 @@ class SpillwaySteepChutePanel(QWidget):
         if not has_connection and not has_manual_coefficient:
             case["legacy_inlet_coefficient_migrated"] = True
             case["weir_coefficient"] = ""
-        case.setdefault("contraction_coefficient", 1.0)
+        if "contraction_coefficient" not in case:
+            case["contraction_coefficient"] = case.get("inlet_contraction_coefficient", case.get("epsilon", 1.0))
         return case
 
     def _build_ui(self) -> None:
@@ -387,12 +406,18 @@ class SpillwaySteepChutePanel(QWidget):
         input_container = QWidget()
         self._build_inputs(input_container)
         input_scroll.setWidget(input_container)
-        splitter.addWidget(input_scroll)
+        input_sidebar = QWidget()
+        sidebar_layout = QVBoxLayout(input_sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(4)
+        sidebar_layout.addWidget(input_scroll, 1)
+        sidebar_layout.addWidget(self._action_bar)
+        splitter.addWidget(input_sidebar)
 
         output_container = QWidget()
         self._build_outputs(output_container)
         splitter.addWidget(output_container)
-        apply_design_input_sidebar_policy(input_scroll, splitter)
+        apply_design_input_sidebar_policy(input_sidebar, splitter)
 
     def _build_inputs(self, container: QWidget) -> None:
         """构建输入区。"""
@@ -419,13 +444,53 @@ class SpillwaySteepChutePanel(QWidget):
         form = QVBoxLayout(group)
         form.setSpacing(5)
 
-        form.addWidget(self._slbl("【基础信息】"))
+        self.quick_start_hint = self._hint("先填流量、断面尺寸、长度和底坡，即可计算水深、流速及侧墙初估。初始数字为演示值，请改为本工程值。")
+        form.addWidget(self.quick_start_hint)
         self._combo(form, "ui_mode_label", "界面模式", ["新手模式", "专业模式"])
-        self._field(form, "project_name", "工程名称", "未命名工程")
+        form.addWidget(self._slbl("【基本参数】"))
         self._combo(form, "section_type", "断面形式", ["梯形", "矩形"])
         self._field(form, "design_flow", "设计流量（立方米每秒）", "20.0")
         self._input_fields["design_flow"].textChanged.connect(self._refresh_increase_hint)
-        self.use_increase_cb = self._check(form, "use_increase", "考虑加大流量")
+        self._field(form, "channel_width", "渠底宽（米）", "1.0")
+        self._field(form, "side_slope", "边坡系数（水平/垂直）", "1.5")
+        self._field(form, "chute_length", "陡槽长度（米）", "80.0")
+        self._field(form, "bed_slope", "底坡", "0.02").setPlaceholderText("例如 0.02、1:50 或 2%")
+        self._field(form, "roughness", "糙率", "0.014")
+        self.roughness_hint = self._hint("混凝土衬砌糙率暂取 0.014，可按实际表面情况修改。起点默认取临界水深；其他控制条件在“更多参数”中设置。")
+        form.addWidget(self.roughness_hint)
+
+        self.inlet_group = CollapsibleGroupBox("入口过流校核（选填）", collapsed=True)
+        inlet_form = QVBoxLayout(self.inlet_group.content_widget())
+        inlet_form.setContentsMargins(5, 7, 5, 7)
+        self.inlet_hint = self._hint("需要校核入口时，填写实测或设计的入口宽度和堰上总水头；留空不作入口能力判断。折叠后已填参数仍参与计算。")
+        inlet_form.addWidget(self.inlet_hint)
+        self._field(inlet_form, "inlet_weir_width", "入口宽度（米）", "").setPlaceholderText("填写实际入口宽度")
+        self._field(inlet_form, "inlet_head", "堰上总水头（米）", "").setPlaceholderText("校核入口时填写")
+        self._combo(inlet_form, "inlet_connection_type_label", "入口连接形式", INLET_CONNECTION_TYPES)
+        self._field(inlet_form, "weir_coefficient", "流量系数", "")
+        self._field(inlet_form, "contraction_coefficient", "侧收缩系数", "1.0")
+        self.inlet_coeff_hint = self._hint("侧收缩系数默认 1.0，适用于无明显边界收缩；有收缩时按入口布置复核。")
+        inlet_form.addWidget(self.inlet_coeff_hint)
+        form.addWidget(self.inlet_group)
+
+        self.tailwater_group = CollapsibleGroupBox("尾水与消能（选填）", collapsed=True)
+        tailwater_form = QVBoxLayout(self.tailwater_group.content_widget())
+        tailwater_form.setContentsMargins(5, 7, 5, 7)
+        self.tailwater_hint = self._hint("未填尾水时只计算理论共轭水深，消力池设计待补尾水。请填写与当前流量相应的下游水深；其他流量的尾水仍需另行复核。折叠后已填参数仍参与计算。")
+        tailwater_form.addWidget(self.tailwater_hint)
+        self._field(tailwater_form, "downstream_tailwater_depth", "下游尾水深（米）", "").setPlaceholderText("未知可留空")
+        self._field(tailwater_form, "downstream_channel_width", "下游渠宽（米）", "")
+        self._field(tailwater_form, "pool_depth_factor", "池深安全系数", "1.10")
+        self._field(tailwater_form, "outlet_transition_angle_deg", "出口渐变角（度）", "12.0")
+        self._field(tailwater_form, "outlet_rectification_factor", "整流长度系数", "10.0")
+        form.addWidget(self.tailwater_group)
+
+        self.advanced_group = CollapsibleGroupBox("更多参数（高程、起点、加大流量等）", collapsed=True)
+        advanced_form = QVBoxLayout(self.advanced_group.content_widget())
+        advanced_form.setContentsMargins(5, 7, 5, 7)
+        advanced_form.addWidget(self._hint("仅在需要时调整。展开、折叠及切换模式都保留已填值；折叠后参数仍参与计算。"))
+        self._field(advanced_form, "project_name", "工程名称", "未命名工程")
+        self.use_increase_cb = self._check(advanced_form, "use_increase", "考虑加大流量（默认自动取值）")
         self.inc_cb = self.use_increase_cb
         self.use_increase_cb.stateChanged.connect(self._on_inc_toggle)
         self.inc_mode_row = QWidget()
@@ -444,61 +509,44 @@ class SpillwaySteepChutePanel(QWidget):
         self.inc_mode_row_lay.addWidget(self.inc_mode_percent_rb)
         self.inc_mode_row_lay.addWidget(self.inc_mode_q_rb)
         self.inc_mode_row_lay.addStretch()
-        form.addWidget(self.inc_mode_row)
-        self._field(form, "increase_percent", "流量加大比例（百分比）", "")
-        self._field(form, "increase_flow", "加大流量 Q加大（立方米每秒）", "")
+        advanced_form.addWidget(self.inc_mode_row)
+        self._field(advanced_form, "increase_percent", "流量加大比例（百分比）", "")
+        self._field(advanced_form, "increase_flow", "加大流量 Q加大（立方米每秒）", "")
         self.inc_lbl, self.inc_edit = self._input_rows["increase_percent"]
         self.inc_q_lbl, self.inc_q_edit = self._input_rows["increase_flow"]
         self.inc_edit.textChanged.connect(self._refresh_increase_hint)
         self.inc_q_edit.textChanged.connect(self._refresh_increase_hint)
         self.inc_hint = self._hint("")
         self.inc_derived_hint = self.inc_hint
-        form.addWidget(self.inc_hint)
+        advanced_form.addWidget(self.inc_hint)
         self.auto_flow_hint = self._hint("依据规范，程序会对下泄流量自动分级进行水跃计算；先按设计流量的 10% 到 100% 初筛，再对控制区间按 1% 自动加密，加大流量会自动参与比较。")
-        form.addWidget(self.auto_flow_hint)
-        self._field(form, "flow_cases_text", "分级流量列表", "")
+        advanced_form.addWidget(self.auto_flow_hint)
+        self._field(advanced_form, "flow_cases_text", "分级流量列表", "")
+        self._combo(advanced_form, "slope_input_mode_label", "底坡输入方式", ["直接输入底坡", "按落差和长度计算"])
+        self._field(advanced_form, "bed_drop", "渠底落差（米）", "")
+        self._field(advanced_form, "start_bed_elevation", "起点渠底高程（米）", "100.0")
+        self._field(advanced_form, "start_station", "起点桩号（米）", "0.0")
+        self._combo(advanced_form, "profile_mode_label", "水面线模式", ["已知长度求末端水深", "已知两端水深求长度", "推至正常水深附近"])
+        self._field(advanced_form, "end_depth", "目标末端水深（米）", "")
+        self._field(advanced_form, "alpha_profile", "水面线动能修正系数", "1.1")
+        self._combo(advanced_form, "control_depth_mode_label", "起点控制水深", ["取临界水深", "人工指定", "进口控制", "模型试验"])
+        self._field(advanced_form, "manual_start_depth", "控制水深（米）", "")
+        self._field(advanced_form, "upstream_normal_depth", "上游正常水深（米）", "")
+        self._field(advanced_form, "material_allow_velocity", "材料允许流速（米每秒）", "")
+        self._field(advanced_form, "aeration_coefficient", "掺气系数", "1.2")
+        self._field(advanced_form, "sidewall_freeboard_m", "侧墙安全超高（米）", "0.4")
+        self.detail_cb = self._check(advanced_form, "detail_enabled", "输出详细计算过程")
+        form.addWidget(self.advanced_group)
+        for optional_group in (self.inlet_group, self.tailwater_group, self.advanced_group):
+            optional_group.toggled.connect(lambda _collapsed: self._apply_mode_visibility())
+        self.defaults_hint = self._hint("")
+        form.addWidget(self.defaults_hint)
 
-        form.addWidget(self._sep())
-        form.addWidget(self._slbl("【陡槽几何】"))
-        self._field(form, "channel_width", "渠底宽（米）", "1.0")
-        self._field(form, "side_slope", "边坡系数", "1.5")
-        self._field(form, "chute_length", "陡槽长度（米）", "80.0")
-        self._combo(form, "slope_input_mode_label", "底坡输入方式", ["直接输入底坡", "按落差和长度计算"])
-        self._field(form, "bed_drop", "渠底落差（米）", "")
-        self._field(form, "bed_slope", "底坡", "0.02")
-        self._field(form, "roughness", "糙率", "0.014")
-        self._field(form, "start_bed_elevation", "起点渠底高程（米）", "100.0")
-        self._field(form, "start_station", "起点桩号（米）", "0.0")
-        self._combo(form, "profile_mode_label", "水面线模式", ["已知长度求末端水深", "已知两端水深求长度", "推至正常水深附近"])
-        self._field(form, "end_depth", "目标末端水深（米）", "")
-        self._field(form, "alpha_profile", "水面线动能修正系数", "1.1")
-
-        form.addWidget(self._sep())
-        form.addWidget(self._slbl("【上下游衔接】"))
-        self._combo(form, "control_depth_mode_label", "起点控制水深", ["取临界水深", "人工指定", "进口控制", "模型试验"])
-        self._field(form, "manual_start_depth", "控制水深（米）", "")
-        self._field(form, "upstream_normal_depth", "上游正常水深（米）", "")
-        self._field(form, "downstream_tailwater_depth", "下游尾水深（米）", "")
-        self._field(form, "material_allow_velocity", "材料允许流速（米每秒）", "")
-
-        form.addWidget(self._sep())
-        form.addWidget(self._slbl("【进口、掺气与消能】"))
-        self._field(form, "inlet_weir_width", "入口宽度（米）", "1.0")
-        self._field(form, "inlet_head", "堰上总水头（米）", "2.2")
-        self._combo(form, "inlet_connection_type_label", "入口连接形式", INLET_CONNECTION_TYPES)
-        self._field(form, "weir_coefficient", "流量系数", "")
-        self.inlet_coeff_hint = self._hint("侧收缩系数 ε 默认按 1.0 取值，表示无明显边界收缩或未另行折减。")
-        form.addWidget(self.inlet_coeff_hint)
-        self._field(form, "aeration_coefficient", "掺气系数", "1.2")
-        self._field(form, "sidewall_freeboard_m", "侧墙安全超高（米）", "0.4")
-        self._field(form, "pool_depth_factor", "池深安全系数", "1.10")
-        self._field(form, "downstream_channel_width", "下游渠宽（米）", "")
-        self._field(form, "outlet_transition_angle_deg", "出口渐变角（度）", "12.0")
-        self._field(form, "outlet_rectification_factor", "整流长度系数", "10.0")
-
-        form.addWidget(self._sep())
-        self.detail_cb = self._check(form, "detail_enabled", "输出详细计算过程")
-
+        # 操作区固定在滚动区外，展开参数或高缩放时也能直接计算。
+        self._action_bar = QWidget()
+        action_layout = QVBoxLayout(self._action_bar)
+        action_layout.setContentsMargins(7, 5, 7, 5)
+        action_layout.setSpacing(5)
         button_row = QHBoxLayout()
         self.load_example_btn = PushButton("载入教学算例")
         self.clear_btn = PushButton("清空")
@@ -509,7 +557,7 @@ class SpillwaySteepChutePanel(QWidget):
         button_row.addWidget(self.load_example_btn)
         button_row.addWidget(self.clear_btn)
         button_row.addWidget(self.calculate_btn)
-        form.addLayout(button_row)
+        action_layout.addLayout(button_row)
 
         export_row = QHBoxLayout()
         self.export_word_btn = PushButton("导出计算书")
@@ -518,7 +566,7 @@ class SpillwaySteepChutePanel(QWidget):
         self.export_excel_btn.clicked.connect(self.export_excel)
         export_row.addWidget(self.export_word_btn)
         export_row.addWidget(self.export_excel_btn)
-        form.addLayout(export_row)
+        action_layout.addLayout(export_row)
 
         layout.addWidget(group)
         layout.addStretch(1)
@@ -597,6 +645,7 @@ class SpillwaySteepChutePanel(QWidget):
         comparison_layout.addWidget(self.comparison_layout_table)
         self.comparison_table = self.comparison_hydraulic_table
         self.notebook.addTab(comparison_page, "工况对比")
+        self.notebook.setCurrentIndex(1)
 
         self.summary_text = QTextEdit()
         self.summary_text.setReadOnly(True)
@@ -611,6 +660,7 @@ class SpillwaySteepChutePanel(QWidget):
         text_label.setStyleSheet(INPUT_LABEL_STYLE)
         row.addWidget(text_label)
         edit = LineEdit()
+        edit.setAccessibleName(label)
         edit.setText(default)
         edit.textChanged.connect(self._on_input_changed)
         row.addWidget(edit, 1)
@@ -628,8 +678,11 @@ class SpillwaySteepChutePanel(QWidget):
         row.addWidget(text_label)
         combo = ComboBox()
         combo.addItems(items)
-        combo.currentTextChanged.connect(lambda _text: self._on_input_changed())
-        if key in {"ui_mode_label", "inlet_connection_type_label"}:
+        if key == "ui_mode_label":
+            combo.currentTextChanged.connect(self._on_ui_mode_changed)
+        else:
+            combo.currentTextChanged.connect(lambda _text: self._on_input_changed())
+        if key in {"section_type", "inlet_connection_type_label", "profile_mode_label", "control_depth_mode_label", "slope_input_mode_label"}:
             combo.currentTextChanged.connect(lambda _text: self._apply_mode_visibility())
         row.addWidget(combo, 1)
         layout.addLayout(row)
@@ -681,7 +734,8 @@ class SpillwaySteepChutePanel(QWidget):
 
     def _on_inc_toggle(self, _state: Any) -> None:
         """根据加大流量开关和输入方式显示对应控件。"""
-        enabled = self.use_increase_cb.isChecked()
+        expanded = not hasattr(self, "advanced_group") or not self.advanced_group.is_collapsed()
+        enabled = self.use_increase_cb.isChecked() and expanded
         is_percent_mode = self._current_increase_mode() == INCREASE_MODE_PERCENT
         self.inc_mode_row.setVisible(enabled)
         self.inc_lbl.setVisible(enabled and is_percent_mode)
@@ -726,15 +780,17 @@ class SpillwaySteepChutePanel(QWidget):
             widget.setVisible(visible)
 
     def _apply_mode_visibility(self) -> None:
-        """根据新手/专业模式调整高级参数显隐。"""
+        """只调整参数显隐，不重置用户已填写的专业参数。"""
         mode_widget = self._combo_fields.get("ui_mode_label")
-        if mode_widget is None:
+        if mode_widget is None or not hasattr(self, "advanced_group"):
             return
-        professional = mode_widget.currentText() == "专业模式"
+        advanced = not self.advanced_group.is_collapsed()
         advanced_keys = {
+            "project_name",
             "flow_cases_text",
             "slope_input_mode_label",
             "bed_drop",
+            "start_bed_elevation",
             "start_station",
             "profile_mode_label",
             "end_depth",
@@ -743,28 +799,71 @@ class SpillwaySteepChutePanel(QWidget):
             "alpha_profile",
             "upstream_normal_depth",
             "material_allow_velocity",
-            "downstream_channel_width",
-            "outlet_transition_angle_deg",
-            "outlet_rectification_factor",
-            "pool_depth_factor",
+            "aeration_coefficient",
+            "sidewall_freeboard_m",
+            "use_increase",
+            "detail_enabled",
         }
         for key in advanced_keys:
-            self._set_row_visible(key, professional)
+            self._set_row_visible(key, advanced)
+        by_drop = self._combo_fields["slope_input_mode_label"].currentText() == "按落差和长度计算"
+        self._set_row_visible("bed_slope", not by_drop)
+        self._set_row_visible("bed_drop", advanced and by_drop)
+        self._set_row_visible("side_slope", self._combo_fields["section_type"].currentText() == "梯形")
+        self._set_row_visible("manual_start_depth", advanced and self._combo_fields["control_depth_mode_label"].currentText() != "取临界水深")
+        self._set_row_visible("end_depth", advanced and self._combo_fields["profile_mode_label"].currentText() == "已知两端水深求长度")
         self._set_row_visible("flow_cases_text", False)
+        inlet_expanded = not self.inlet_group.is_collapsed()
+        for key in ("inlet_weir_width", "inlet_head", "inlet_connection_type_label", "contraction_coefficient"):
+            self._set_row_visible(key, inlet_expanded)
         inlet_connection = self._combo_fields.get("inlet_connection_type_label")
         manual_coeff = (
-            professional
+            inlet_expanded
             and inlet_connection is not None
             and inlet_connection.currentText() == MANUAL_INLET_COEFFICIENT_LABEL
         )
         self._set_row_visible("weir_coefficient", manual_coeff)
+        tailwater_expanded = not self.tailwater_group.is_collapsed()
+        for key in ("downstream_tailwater_depth", "downstream_channel_width", "pool_depth_factor", "outlet_transition_angle_deg", "outlet_rectification_factor"):
+            self._set_row_visible(key, tailwater_expanded)
         self._on_inc_toggle(None)
+        if hasattr(self, "defaults_hint"):
+            control = self._combo_fields["control_depth_mode_label"].currentText()
+            has_custom_increase = bool(self.inc_edit.text().strip() or self.inc_q_edit.text().strip())
+            increase = ("按指定值考虑加大流量" if has_custom_increase else "自动考虑加大流量") if self.use_increase_cb.isChecked() else "不考虑加大流量"
+            self.defaults_hint.setText(f"当前设置：{control}；{increase}。未填写尾水时，消力池结果显示“待补尾水”。")
+
+    def _on_ui_mode_changed(self, _text: str) -> None:
+        """切换界面模式时保留输入和现有结果。"""
+        if self._suppress_case_save or not hasattr(self, "advanced_group"):
+            return
+        self._sync_optional_groups()
+        self._save_current_case()
+        self.data_changed.emit()
+
+    def _sync_optional_groups(self) -> None:
+        """打开已有资料和非默认控制条件，避免旧工程的重要参数被隐藏。"""
+        professional = self._combo_fields["ui_mode_label"].currentText() == "专业模式"
+        has_inlet = any(self._input_fields[key].text().strip() for key in ("inlet_weir_width", "inlet_head", "weir_coefficient"))
+        has_tailwater = any(self._input_fields[key].text().strip() for key in ("downstream_tailwater_depth", "downstream_channel_width"))
+        defaults = self._default_case()
+        advanced_keys = ("slope_input_mode_label", "profile_mode_label", "control_depth_mode_label")
+        custom_control = any(self._combo_fields[key].currentText() != defaults[key] for key in advanced_keys)
+        custom_values = any(
+            self._input_fields[key].text().strip() not in ("", str(defaults.get(key, "")))
+            for key in ("alpha_profile", "start_bed_elevation", "start_station", "upstream_normal_depth", "material_allow_velocity", "aeration_coefficient", "sidewall_freeboard_m", "increase_percent", "increase_flow")
+        )
+        self.inlet_group.set_collapsed(not (professional or has_inlet))
+        self.tailwater_group.set_collapsed(not (professional or has_tailwater))
+        self.advanced_group.set_collapsed(not (professional or custom_control or custom_values))
+        self._apply_mode_visibility()
 
     def _on_input_changed(self, *_args) -> None:
         """输入变化后更新工况缓存。"""
         if self._suppress_case_save:
             return
         self._save_current_case()
+        self._apply_mode_visibility()
         self._clear_results_after_input_change()
         self.data_changed.emit()
 
@@ -792,6 +891,24 @@ class SpillwaySteepChutePanel(QWidget):
             return ""
         return float(text)
 
+    @staticmethod
+    def _parse_bed_slope(text: str) -> float:
+        """兼容小数、百分数及一比若干的常见底坡写法。"""
+        normalized = text.strip().replace("：", ":").replace("％", "%")
+        if normalized.endswith("%"):
+            value = float(normalized[:-1]) / 100.0
+        elif ":" in normalized:
+            numerator, denominator = normalized.split(":", 1)
+            denominator_value = float(denominator)
+            if denominator_value <= 0:
+                raise ValueError("坡比的分母必须大于 0")
+            value = float(numerator) / denominator_value
+        else:
+            value = float(normalized)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("底坡必须为正数")
+        return value
+
     def _collect_inputs(self) -> dict[str, Any]:
         """读取并校验当前输入。"""
         params: dict[str, Any] = {}
@@ -805,9 +922,12 @@ class SpillwaySteepChutePanel(QWidget):
                 params[key] = ""
             else:
                 try:
-                    params[key] = float(text)
+                    params[key] = self._parse_bed_slope(text) if key == "bed_slope" else float(text)
+                    if not math.isfinite(params[key]):
+                        raise ValueError("请输入有限数值")
                 except ValueError as exc:
-                    raise ValueError(f"{field.objectName() or key} 输入无效") from exc
+                    label = field.accessibleName() or key
+                    raise ValueError(f"{label}输入无效，请填写有效数字") from exc
         for key, combo in self._combo_fields.items():
             params[key] = combo.currentText()
         for key, check in self._check_fields.items():
@@ -831,11 +951,20 @@ class SpillwaySteepChutePanel(QWidget):
         design_flow = float(params.get("design_flow") or 0.0)
         chute_length = float(params.get("chute_length") or 0.0)
         bed_slope = float(params.get("bed_slope") or 0.0)
+        for key in ("design_flow", "channel_width", "roughness"):
+            if params[key] == "" or float(params[key]) <= 0:
+                raise ValueError(f"请填写大于 0 的{self._input_fields[key].accessibleName()}")
+        if params.get("profile_mode_label") == "已知长度求末端水深" and chute_length <= 0:
+            raise ValueError("请填写大于 0 的陡槽长度")
+        if section_type == "trapezoidal" and (params["side_slope"] == "" or float(params["side_slope"]) < 0):
+            raise ValueError("请填写不小于 0 的边坡系数")
         if params.get("slope_input_mode_label") == "按落差和长度计算":
             bed_drop = float(params.get("bed_drop") or 0.0)
             if chute_length <= 0 or bed_drop <= 0:
                 raise ValueError("按落差和长度计算底坡时，陡槽长度和渠底落差必须大于 0")
             bed_slope = bed_drop / chute_length
+        elif bed_slope <= 0:
+            raise ValueError("请填写底坡，例如 0.02、1:50 或 2%")
         use_increase = bool(params.get("use_increase"))
         increase_resolution = resolve_increase_input(
             use_increase=use_increase,
@@ -850,6 +979,8 @@ class SpillwaySteepChutePanel(QWidget):
 
         control_label = params.get("control_depth_mode_label")
         control_depth_value = params.get("manual_start_depth")
+        if control_label != "取临界水深" and (control_depth_value in ("", None) or float(control_depth_value) <= 0):
+            raise ValueError("已选择指定起点控制条件，请填写大于 0 的控制水深")
         start_depth_value: float | str = ""
         manual_start_depth: float | str = ""
         inlet_control_depth: float | str = ""
@@ -864,6 +995,10 @@ class SpillwaySteepChutePanel(QWidget):
                 manual_start_depth = start_depth_value
 
         inlet_connection = self._normalize_inlet_connection_label(params.get("inlet_connection_type_label"))
+        inlet_width_set = params.get("inlet_weir_width") not in ("", None)
+        inlet_head_set = params.get("inlet_head") not in ("", None)
+        if inlet_width_set != inlet_head_set:
+            raise ValueError("入口校核需要同时填写入口宽度和堰上总水头；暂不校核时将两项均留空")
         manual_weir_coefficient: float | str = ""
         if inlet_connection == MANUAL_INLET_COEFFICIENT_LABEL:
             manual_weir_coefficient = params.get("weir_coefficient", "")
@@ -885,8 +1020,8 @@ class SpillwaySteepChutePanel(QWidget):
                 "control_depth_mode": control_mode_map.get(params.get("control_depth_mode_label"), "critical_depth"),
                 "inlet_connection_type": inlet_connection,
                 "weir_coefficient": manual_weir_coefficient,
-                "contraction_coefficient": float(params.get("contraction_coefficient") or 1.0),
-                "alpha_profile": float(params.get("alpha_profile") or 1.1),
+                "contraction_coefficient": float(params["contraction_coefficient"]) if params.get("contraction_coefficient") not in (None, "") else 1.0,
+                "alpha_profile": float(params["alpha_profile"]) if params.get("alpha_profile") not in (None, "") else 1.1,
                 "legacy_inlet_coefficient_migrated": bool(
                     self._cases[self._current_case_idx].get("legacy_inlet_coefficient_migrated")
                 ),
@@ -940,7 +1075,7 @@ class SpillwaySteepChutePanel(QWidget):
 
     def _apply_inputs(self, params: dict[str, Any]) -> None:
         """把项目、算例或工况输入写回界面。"""
-        params = self._normalize_case_fields(dict(params))
+        params = {**self._default_case(), **self._normalize_case_fields(dict(params))}
         params["flow_cases_text"] = ""
         self._suppress_case_save = True
         try:
@@ -961,7 +1096,7 @@ class SpillwaySteepChutePanel(QWidget):
             self._set_increase_mode(params.get("inc_mode", INCREASE_MODE_PERCENT))
         finally:
             self._suppress_case_save = False
-        self._apply_mode_visibility()
+        self._sync_optional_groups()
 
     def _save_current_case(self) -> None:
         """保存当前工况输入。"""
@@ -1078,7 +1213,7 @@ class SpillwaySteepChutePanel(QWidget):
 
     def load_teaching_example(self) -> None:
         """载入内置教学算例。"""
-        params = teaching_example()
+        params = self._normalize_case_fields(teaching_example())
         params.setdefault("custom_label", "熊启钧教学算例")
         params.setdefault("section_type", "梯形")
         self._apply_inputs(params)
@@ -1106,6 +1241,7 @@ class SpillwaySteepChutePanel(QWidget):
         self._load_case(active_idx)
         self._set_current_result_for_case(active_idx)
         self._display_all_results()
+        self.notebook.setCurrentIndex(1)
         self.data_changed.emit()
 
     def _result_for_case(self, index: int) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -1182,9 +1318,13 @@ class SpillwaySteepChutePanel(QWidget):
         """生成单工况 HTML。"""
         view = normalize_result(result)
         label = html.escape(str(params.get("custom_label") or params.get("project_name") or f"工况{idx + 1}"))
+        jump = result.get("hydraulic_jump") or {}
+        awaiting_tailwater = jump.get("status") == "missing_tailwater"
+        unsupported_pool = jump.get("status") == "unsupported_pool_geometry"
         success_class = "ok" if result.get("success", True) else "bad"
+        status = "水面线已算，消能设计待补尾水" if awaiting_tailwater else ("水面线已算，消力池布置需专项设计" if unsupported_pool else "计算完成")
         parts = [f'<section class="case-card" id="case-{idx + 1}">', f'<div class="case-title">{label}</div>']
-        parts.append(f'<div class="status {success_class}">{"计算完成" if result.get("success", True) else "计算失败"}</div>')
+        parts.append(f'<div class="status {success_class}">{status if result.get("success", True) else "计算失败"}</div>')
         parts.append(self._summary_grid_html(view.summary))
         parts.append(self._connection_html(result))
         parts.append(self._jump_html(result))
@@ -1198,7 +1338,7 @@ class SpillwaySteepChutePanel(QWidget):
         if not summary:
             return ""
         rows = "".join(
-            f'<div class="metric"><span>{html.escape(str(key))}</span><strong>{html.escape(str(value))}</strong></div>'
+            f'<div class="metric"><span>{html.escape(str(key))}</span><strong>{html.escape("未计算" if value is None else str(value))}</strong></div>'
             for key, value in summary.items()
         )
         return f"<h3>重点结果</h3><div class='metric-grid'>{rows}</div>"
@@ -1224,7 +1364,13 @@ class SpillwaySteepChutePanel(QWidget):
         if aeration:
             cards.append(("掺气与侧墙", r"h_b=\left(1+\frac{\zeta v}{100}\right)h", aeration.get("message", "")))
         if jump:
-            cards.append(("水跃与消力池", r"h_c''=\frac{h_c'}{2}\left(\sqrt{1+8Fr_1^2}-1\right)", jump.get("message", "")))
+            section = (result.get("hydraulic") or {}).get("section_type") or (result.get("input_params") or {}).get("section_type")
+            jump_formula = (
+                r"M(h_1)=M(h_2),\quad M(h)=\frac{Q^2}{gA}+\frac{bh^2}{2}+\frac{mh^3}{3}"
+                if section in {"trapezoidal", "梯形"}
+                else r"h_c''=\frac{h_c'}{2}\left(\sqrt{1+8Fr_1^2}-1\right)"
+            )
+            cards.append(("水跃与消力池", jump_formula, jump.get("message", "")))
         if not cards:
             return ""
         html_parts = ["<h3>公式说明</h3>"]
@@ -1247,7 +1393,11 @@ class SpillwaySteepChutePanel(QWidget):
             label = params.get("custom_label") or params.get("project_name") or "当前工况"
             lines.append(str(label))
             for key, value in normalize_result(result).summary.items():
-                lines.append(f"{key}：{value}")
+                lines.append(f"{key}：{'未计算' if value is None else value}")
+            for key, label in (("aeration_and_sidewall", "侧墙说明"), ("hydraulic_jump", "消能说明")):
+                message = (result.get(key) or {}).get("message")
+                if message:
+                    lines.append(f"{label}：{message}")
             for risk in normalize_result(result).risks:
                 lines.append(f"风险提示：{risk}")
             lines.append("")
@@ -1368,10 +1518,10 @@ class SpillwaySteepChutePanel(QWidget):
                 {
                     "case": label,
                     "sidewall_height": aeration.get("recommended_sidewall_height_m"),
-                    "pool_length": jump.get("recommended_pool_length_m"),
-                    "pool_depth": jump.get("recommended_pool_depth_m"),
+                    "pool_length": "未计算" if jump.get("recommended_pool_length_m") is None else jump["recommended_pool_length_m"],
+                    "pool_depth": "未计算" if jump.get("recommended_pool_depth_m") is None else jump["recommended_pool_depth_m"],
                     "tailwater": jump.get("tailwater_judgement"),
-                    "status": "需复核" if normalize_result(result).risks else "通过",
+                    "status": "待补尾水" if jump.get("status") == "missing_tailwater" else ("需专项设计" if jump.get("design_available") is False else ("需复核" if normalize_result(result).risks else "通过")),
                 }
             )
         return hydraulic_rows, layout_rows
@@ -1381,7 +1531,7 @@ class SpillwaySteepChutePanel(QWidget):
         hydraulic_rows, layout_rows = self._comparison_rows()
         fill_comparison_table(self.comparison_hydraulic_table, _HYDRAULIC_COLUMNS, hydraulic_rows)
         fill_comparison_table(self.comparison_layout_table, _LAYOUT_COLUMNS, layout_rows)
-        self.comparison_hint.setText("已汇总成功计算的工况；消力池控制以第二版水跃和尾水判断为准。" if hydraulic_rows else "请先完成计算。")
+        self.comparison_hint.setText("已汇总成功计算的工况；未填写尾水时不作消力池设计结论，仍需核对各流量对应的尾水条件。" if hydraulic_rows else "请先完成计算。")
 
     def _fill_table(self, table: QTableWidget, rows: list[list[Any]]) -> None:
         """把二维数据写入表格。"""
@@ -1399,12 +1549,15 @@ class SpillwaySteepChutePanel(QWidget):
 
     def _initial_body(self) -> str:
         """生成初始页面。"""
-        profile_formula = self._latex_html(r"h_0<h<h_k,\quad \text{采用 }b_2\text{ 型降水曲线}")
         return (
             "<section class='case-card'>"
             "<div class='case-title'>泄水渠与陡坡计算</div>"
-            "<p>请填写左侧参数，或载入教学算例后点击“计算”。结果会给出水面线、上下游衔接、掺气侧墙、水跃消能和表3轻量接口。</p>"
-            f"<div class='formula-card'><div class='formula-title'>标准陡坡水面线</div>{profile_formula}</div>"
+            "<p>填写设计流量、断面尺寸、陡槽长度和底坡，确认糙率后点击“计算”，即可查看水深、流速、水面线及侧墙初估。也可先载入教学算例。</p>"
+            "<p>需要入口能力校核时，再展开“入口过流校核”填写资料；需要消能设计时，再展开“尾水与消能”。未填尾水时只给理论共轭水深，不作消力池设计结论。</p>"
+            "<h3>计算后查看</h3>"
+            "<p><strong>结果汇总：</strong>先看末端水深、最大流速、建议侧墙高度和未完成事项。</p>"
+            "<p><strong>沿程水面线、纵断面图：</strong>查看沿程变化及各位置水位。</p>"
+            "<p><strong>计算原理、规范校核：</strong>需要复核时查看公式、代入值和适用条件。</p>"
             "</section>"
         )
 
@@ -1500,6 +1653,7 @@ class SpillwaySteepChutePanel(QWidget):
         self._refresh_plot()
         self._refresh_comparison_tables()
         self._show_initial_help()
+        self.notebook.setCurrentIndex(1)
 
     def _clear(self) -> None:
         """清空当前计算结果，保留用户输入和多工况。"""
@@ -1690,16 +1844,10 @@ class SpillwaySteepChutePanel(QWidget):
         if cases:
             self._cases = [self._normalize_case_fields(dict(case)) for case in cases]
         else:
-            self._cases = [dict(self._default_case())]
             legacy_input = dict(payload.get("input_params") or {})
             if "inc_mode" not in legacy_input and legacy_input.get("increase_flow") not in (None, ""):
                 legacy_input["inc_mode"] = INCREASE_MODE_Q_INCREASED
-            if "inlet_connection_type_label" not in legacy_input and "inlet_connection_type" not in legacy_input:
-                self._cases[0]["inlet_connection_type_label"] = ""
-            if "alpha_profile" not in legacy_input:
-                self._cases[0]["alpha_profile"] = ""
-            self._cases[0].update(legacy_input)
-            self._normalize_case_fields(self._cases[0])
+            self._cases = [{**self._default_case(), **self._normalize_case_fields(legacy_input)}]
         self._current_case_idx = int(payload.get("current_case_idx") or 0)
         self._current_case_idx = max(0, min(self._current_case_idx, len(self._cases) - 1))
         self._load_case(self._current_case_idx)
@@ -1714,7 +1862,7 @@ class SpillwaySteepChutePanel(QWidget):
         if self._all_results:
             self._set_current_result_for_case(self._current_case_idx)
             self._display_all_results()
-        index = int(payload.get("notebook_idx") or 0)
+        index = int(payload.get("notebook_idx", 1) if payload.get("notebook_idx") is not None else 1)
         if 0 <= index < self.notebook.count():
             self.notebook.setCurrentIndex(index)
         self.data_changed.emit()

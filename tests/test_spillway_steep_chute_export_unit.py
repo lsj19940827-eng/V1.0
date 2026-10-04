@@ -333,7 +333,7 @@ def test_export_word_sanitizes_internal_prd_principle_sources(tmp_path):
         for cell in row.cells
     )
     assert "PRD" not in combined
-    assert "GB 50288-2018 附录 N 与消力池初拟经验口径" in combined
+    assert "GB 50288-2018 N.2.5 同宽矩形池初拟" in combined
 
 
 def test_export_word_writes_report_meta_purpose_and_references(tmp_path):

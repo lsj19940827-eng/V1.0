@@ -28,6 +28,20 @@ def _get_qapp():
     return QApplication.instance() or QApplication([])
 
 
+def test_legacy_saved_loss_is_shown_separately_from_current_formula_check(monkeypatch):
+    module = _load_formula_dialog_module()
+    captured = {}
+    monkeypatch.setattr(module, 'FormulaDialog', lambda parent, title, sections: captured.update(sections=sections))
+    module.show_transition_loss_dialog(None, '旧项目渐变段', {
+        'R1': 1.0, 'R2': 1.0, 'n': 0.014, 'hydraulic_slope_i': 0.001,
+        'length_details': {}, 'h_j1': 0.0100, 'h_f': 0.0067,
+        'total': 0.0167, 'actual_total': 0.1,
+    })
+    assert '0.0100 + 0.0067 = 0.0167' in captured['sections'][8]['values']
+    assert captured['sections'][9]['title'] == '10. 当前采用值'
+    assert '0.1000' in captured['sections'][9]['values']
+
+
 def test_show_transition_loss_dialog_renders_complete_derivation_sections(monkeypatch):
     module = _load_formula_dialog_module()
     captured = {}

@@ -52,8 +52,9 @@ class HydraulicCore:
         # 向上取整（用 round 消除浮点误差，避免 1.0/0.05=20.000...004 导致 ceil 多进一位）
         ratio = d_theory / step
         if abs(ratio - round(ratio)) < 1e-9:
-            return round(ratio) * step
-        return math.ceil(ratio) * step
+            return round(round(ratio) * step, 2)
+        # 取整档位最多两位小数，消除乘法尾数，避免回填成 1.4000000000000001。
+        return round(math.ceil(ratio) * step, 2)
 
     @staticmethod
     def _build_manual_turn_segment_lookups(

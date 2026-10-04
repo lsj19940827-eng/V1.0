@@ -190,7 +190,8 @@ def _make_transition_edit_nodes():
     downstream.name = "暗涵进口"
     downstream.structure_type = StructureType.from_string("矩形暗涵")
     downstream.in_out = InOutType.INLET
-    downstream.station_MC = 18.0
+    # 两侧渐变段5m、4m与连接段3m应与真实区间闭合。
+    downstream.station_MC = 12.0
     downstream.section_params = {"B": 2.0, "H_total": 2.2, "A": 3.0, "X": 5.1, "R": 0.588}
     downstream.water_depth = 1.5
     downstream.velocity = 1.9
@@ -727,15 +728,17 @@ def test_open_transition_length_rules_clamps_requested_length_to_physical_limit(
         panel._open_transition_length_rules()
 
         details = panel.calculated_nodes[3].transition_length_calc_details
-        assert panel.node_table.item(3, 32).text() == "7.000"
+        # 出口规则先采用8m后，只剩4m，不能再把原3m连接段重复借给进口。
+        assert panel.calculated_nodes[1].transition_length == 8.0
+        assert panel.node_table.item(3, 32).text() == "4.000"
         assert details["requested_length"] == 10.0
-        assert details["physical_limit"] == 7.0
-        assert details["actual_length"] == 7.0
+        assert details["physical_limit"] == 4.0
+        assert details["actual_length"] == 4.0
         assert details["distance_clamped"] is True
         tooltip = panel._build_transition_length_tooltip(details)
         assert "规则目标长度：10.000 m" in tooltip
-        assert "物理上限：7.000 m" in tooltip
-        assert "最终采用长度：7.000 m" in tooltip
+        assert "物理上限：4.000 m" in tooltip
+        assert "最终采用长度：4.000 m" in tooltip
         assert success_calls, "应用规则后应给出更新摘要"
         success_text = " ".join(str(part) for part in success_calls[0][0])
         assert "已更新 " in success_text

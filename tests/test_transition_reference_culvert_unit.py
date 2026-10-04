@@ -141,6 +141,8 @@ def test_adjacent_culvert_precedes_remote_steep_open_channel(culvert_on_left):
         B=1.6, water_depth=0.114, slope_i=1 / 3.5,
     )
     nodes = ([culvert, tunnel] if culvert_on_left else [tunnel, culvert]) + [remote]
+    for node in nodes:
+        node.flow = 1.5  # 与该暗涵尺寸及试算水深对应的蒋家沟设计流量一致。
     ref = calc._find_reference_segment_same_section_v2(nodes, 0, 0, 1)
     assert ref["source_name"] == "相邻暗涵"
     assert ref["structure_type"] in {"暗涵-矩形", "矩形暗涵"}
@@ -200,13 +202,16 @@ def test_froude_boundary_excludes_critical_and_supercritical_sources(froude):
     assert ref['slope_borrowed_from_tunnel'] == (froude >= 1.0)
 
 
-def test_no_valid_slope_or_no_open_geometry_requires_manual_input():
+def test_steep_sources_stay_manual_but_missing_open_geometry_uses_tunnel_width():
     calc = WaterProfileCalculator(ProjectSettings())
     nodes = _make_tunnel_and_steep_channels()
     nodes[0].slope_i = 1/3.5
     assert calc._find_reference_segment_same_section_v2(nodes, 0, 0, 1) is None
     nodes[0].slope_i = 1/2000
-    assert calc._find_reference_segment_same_section_v2(nodes[:2], 0, 0, 1) is None
+    ref = calc._find_reference_segment_same_section_v2(nodes[:2], 0, 0, 1)
+    assert ref['source_kind'] == 'inferred_rectangular'
+    assert ref['bottom_width'] == 1.8
+    assert ref['reference_froude'] < 1
 
 
 def test_short_gap_merged_transition_also_uses_tunnel_fallback_slope():

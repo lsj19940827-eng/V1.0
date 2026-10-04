@@ -29,7 +29,6 @@ from PySide6.QtGui import QFont, QShortcut, QKeySequence, QDrag, QColor
 
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, SearchLineEdit,
-    PopupTeachingTip, TeachingTipTailPosition, InfoBarIcon,
     ElevatedCardWidget, HeaderCardWidget, ListWidget, SegmentedWidget,
     ToolButton, FluentIcon, BodyLabel, CaptionLabel, InfoBar, InfoBarPosition, CheckBox,
 )
@@ -12183,27 +12182,17 @@ def _draw_section_summary_on_msp(
                 if key in _st_rv:
                     seg[key] = _st_rv[key]
 
-    _tu = getattr(panel, "_custom_tunnel_unified", {})
-    _tu_arch = _tu.get("tunnel_arch", False)
-    _tu_circ = _tu.get("tunnel_circular", False)
-    _tu_flat = _tu.get("tunnel_flat_bottom_circular", False)
-    _tu_horse = _tu.get("tunnel_horseshoe", False)
-    if has_source:
-        _tu_arch = False
-        _tu_circ = False
-        _tu_flat = False
-        _tu_horse = False
-
+    # 隧洞导出固定按各流量段处理，不采用旧版统一断面缓存。
     d_rc = compute_rect_channel(rc) if rc else []
     d_tr = compute_trapezoid_channel(tr) if tr else []
     d_uc = compute_u_channel(uc) if uc else []
-    d_ta, _ = compute_tunnel(ta, _rock_lining, unified=_tu_arch) if ta else ([], {})
-    d_tc, _ = compute_tunnel_circular(tc, _rock_lining, unified=_tu_circ) if tc else ([], {})
-    d_tf, _ = compute_tunnel_flat_bottom_circular(tf, _rock_lining, unified=_tu_flat) if tf else ([], {})
+    d_ta, _ = compute_tunnel(ta, _rock_lining, unified=False) if ta else ([], {})
+    d_tc, _ = compute_tunnel_circular(tc, _rock_lining, unified=False) if tc else ([], {})
+    d_tf, _ = compute_tunnel_flat_bottom_circular(tf, _rock_lining, unified=False) if tf else ([], {})
     horseshoe_entries = _build_horseshoe_export_entries(
         th,
         rock_lining=_rock_lining,
-        unified=_tu_horse,
+        unified=False,
     ) if th else []
     d_au = compute_aqueduct_u(au) if au else []
     d_ar = compute_aqueduct_rect(ar) if ar else []
@@ -13558,67 +13547,10 @@ class SectionSummaryDialog(QDialog):
 
         tt_lay.addLayout(tt_grid)
 
-        # ---- 隧洞断面设计方式 ----
-        from PySide6.QtWidgets import QRadioButton, QButtonGroup, QHBoxLayout as _QHBox
-        _tt_mode_row = QWidget()
-        _tt_mode_hlay = _QHBox(_tt_mode_row)
-        _tt_mode_hlay.setContentsMargins(0, 0, 0, 0)
-        _tt_mode_hlay.setSpacing(4)
-        tt_mode_lbl = QLabel("断面设计方式:")
-        tt_mode_lbl.setStyleSheet("font-size:11px; color:#555; font-weight:bold; margin-top:6px;")
-        _tt_mode_hlay.addWidget(tt_mode_lbl)
-        _info_icon = QLabel("ⓘ")
-        _info_icon.setStyleSheet(
-            "font-size:13px; color:#1a73e8; font-weight:bold; margin-top:6px; cursor:pointer;"
-        )
-        _info_icon.setCursor(Qt.PointingHandCursor)
-        _dialog_self = self
-        _info_icon.mousePressEvent = lambda e: PopupTeachingTip.create(
-            target=_info_icon,
-            icon=InfoBarIcon.INFORMATION,
-            title='断面设计方式',
-            content='统一断面：按最大流量段设计统一断面尺寸，其余各流量段仅推求水深；\n'
-                    '独立断面：每个流量段独立计算各自的断面尺寸。',
-            isClosable=False,
-            tailPosition=TeachingTipTailPosition.BOTTOM,
-            duration=-1,
-            parent=_dialog_self,
-        )
-        _tt_mode_hlay.addWidget(_info_icon)
-        _tt_mode_hlay.addStretch()
-        tt_lay.addWidget(_tt_mode_row)
-
-        self._tunnel_mode_groups = {}  # {key: QButtonGroup}
-        _tunnel_types = [
-            ("tunnel_arch",      "圆拱直墙型"),
-            ("tunnel_circular",  "圆形"),
-            ("tunnel_flat_bottom_circular", "平底圆形"),
-            ("tunnel_horseshoe", "马蹄形（Ⅰ/Ⅱ型）"),
-        ]
-        tm_grid = QGridLayout()
-        tm_grid.setSpacing(2)
-        for ri, (tkey, tname) in enumerate(_tunnel_types):
-            name_lbl = QLabel(tname)
-            name_lbl.setStyleSheet("font-size:11px;")
-            name_lbl.setFixedWidth(110)
-            tm_grid.addWidget(name_lbl, ri, 0)
-            rb_unified = QRadioButton("统一断面")
-            rb_indep  = QRadioButton("独立断面")
-            rb_unified.setStyleSheet("font-size:11px;")
-            rb_indep.setStyleSheet("font-size:11px;")
-            rb_indep.setChecked(True)
-            bg = QButtonGroup(self)
-            bg.addButton(rb_unified, 0)
-            bg.addButton(rb_indep, 1)
-            tm_grid.addWidget(rb_unified, ri, 1)
-            tm_grid.addWidget(rb_indep, ri, 2)
-            self._tunnel_mode_groups[tkey] = bg
-        tt_lay.addLayout(tm_grid)
-
         tt_lay.addStretch()
         struct_tabs.addTab(tab_tunnel, "隧洞")
 
-        struct_tabs.setFixedHeight(260)
+        struct_tabs.setFixedHeight(struct_tabs.sizeHint().height())
         struct_lay.addWidget(struct_tabs)
 
         struct_note = QLabel('（不输入则使用默认值，修改后同时影响"生成断面汇总表"和"导出全部DXF"）')
@@ -13632,7 +13564,6 @@ class SectionSummaryDialog(QDialog):
         note_lay = QVBoxLayout(note_group)
         note_lbl = QLabel(
             "• 各类构造参数可在上方按类型自定义\n"
-            '• 隧洞断面设计方式可在"隧洞"选项卡中按类型分别设置\n'
             "• 圆管涵、倒虹吸无需设置壁厚")
         note_lbl.setWordWrap(True)
         note_lbl.setStyleSheet("font-size:11px; color:#555;")
@@ -13920,13 +13851,10 @@ class SectionSummaryDialog(QDialog):
         if self._config_only:
             struct_t = self._read_struct_thickness()
             rock_lining = struct_t['rock_lining']
-            tunnel_unified = {}
-            for tkey, bg in self._tunnel_mode_groups.items():
-                tunnel_unified[tkey] = (bg.checkedId() == 0)
             if self._panel is not None:
                 self._panel._custom_rock_lining = rock_lining
                 self._panel._custom_struct_thickness = struct_t
-                self._panel._custom_tunnel_unified = tunnel_unified
+                self._panel._custom_tunnel_unified = {}
                 self._panel._custom_pressurized_pipe_params = {
                     "siphon": _serialize_pressurized_cache_rows(siphon_params, "siphon"),
                     "pressure_pipe": _serialize_pressurized_cache_rows(pressure_pipe_params, "pressure_pipe"),
@@ -14080,16 +14008,11 @@ class SectionSummaryDialog(QDialog):
             seg['t0'] = struct_t['rect_culvert_arch']['t0']
             seg['t'] = struct_t['rect_culvert_arch']['t']
 
-        # 读取隧洞断面设计方式
-        tunnel_unified = {}
-        for tkey, bg in self._tunnel_mode_groups.items():
-            tunnel_unified[tkey] = (bg.checkedId() == 0)  # 0=统一, 1=独立
-
         # 存储到 panel，供"导出全部DXF"复用
         if self._panel is not None:
             self._panel._custom_rock_lining = rock_lining
             self._panel._custom_struct_thickness = struct_t
-            self._panel._custom_tunnel_unified = tunnel_unified
+            self._panel._custom_tunnel_unified = {}
             self._panel._custom_pressurized_pipe_params = {
                 "siphon": _serialize_pressurized_cache_rows(siphon_params, "siphon"),
                 "pressure_pipe": _serialize_pressurized_cache_rows(pressure_pipe_params, "pressure_pipe"),
@@ -14128,10 +14051,10 @@ class SectionSummaryDialog(QDialog):
             pressure_pipe_material=pressure_pipe_params[0]["pipe_material"] if pressure_pipe_params else "球墨铸铁管",
             rock_lining=rock_lining,
             table_order=_table_order,
-            tunnel_unified_arch=False if has_source_data else tunnel_unified.get("tunnel_arch", False),
-            tunnel_unified_circular=False if has_source_data else tunnel_unified.get("tunnel_circular", False),
-            tunnel_unified_flat_bottom_circular=False if has_source_data else tunnel_unified.get("tunnel_flat_bottom_circular", False),
-            tunnel_unified_horseshoe=False if has_source_data else tunnel_unified.get("tunnel_horseshoe", False),
+            tunnel_unified_arch=False,
+            tunnel_unified_circular=False,
+            tunnel_unified_flat_bottom_circular=False,
+            tunnel_unified_horseshoe=False,
         )
 
         try:

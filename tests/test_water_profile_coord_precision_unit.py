@@ -320,6 +320,8 @@ def _make_basic_panel(module):
     panel.channel_level_combo = SimpleNamespace(currentText=lambda: "支管")
     panel.turn_radius_edit = _FakeLineEdit("")
     panel.roughness_edit = _FakeLineEdit("")
+    panel.lbl_summary_info = _FakeLineEdit("")
+    panel.btn_building_stats = SimpleNamespace(setEnabled=lambda _enabled: None)
     panel.isVisible = lambda: False
     return panel
 
@@ -2813,3 +2815,86 @@ def test_import_from_batch_roundtrips_directional_drill_as_pressure_pipe_like():
     assert len(nodes) == 1
     assert nodes[0].structure_type.value == "定向钻"
     assert nodes[0].is_pressure_pipe is True
+
+
+def test_hydraulic_inputs_and_geometry_keep_precision_through_table_roundtrip():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.CALCULATOR_AVAILABLE = True
+    module.ChannelNode = RealChannelNode
+    module.StructureType = RealStructureType
+    module.InOutType = RealInOutType
+    module.ProjectSettings = RealProjectSettings
+    node = RealChannelNode(
+        flow_section='1', structure_type=RealStructureType.RECTANGULAR,
+        flow=2.87654321, roughness=0.01456789, slope_i=1 / 285.7142857142857,
+        station_MC=1000.123456789, station_ip=1000.23456789,
+        station_BC=999.9996, station_EC=1000.45678901,
+        turn_radius=12.3456789, tangent_length=1.234567891, arc_length=2.345678912,
+        straight_distance=123.456789123, water_depth=1.23456789,
+    )
+    node.section_params = {'B': 2.1234567, 'D': 1.2345678, 'R_circle': 0.6789123, 'm': 0.1234567}
+    module.WaterProfilePanel._update_table_from_nodes_full_impl(panel, [node])
+    assert panel.node_table.item(0, 26).text() == '2.88'
+    restored = module.WaterProfilePanel._build_nodes_from_table(panel)[0]
+    for field in ('flow', 'roughness', 'station_MC', 'station_ip', 'station_BC', 'station_EC',
+                  'turn_radius', 'tangent_length', 'arc_length', 'straight_distance', 'water_depth'):
+        assert getattr(restored, field) == getattr(node, field), field
+    for key in ('B', 'D', 'R_circle', 'm'):
+        assert restored.section_params[key] == node.section_params[key]
+    assert panel.node_table.item(0, 14).text() == '1+000.000'
+
+
+def test_precise_table_snapshot_does_not_override_a_changed_cell():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    module.CALCULATOR_AVAILABLE = True
+    module.ChannelNode = RealChannelNode
+    module.StructureType = RealStructureType
+    module.InOutType = RealInOutType
+    module.ProjectSettings = RealProjectSettings
+    node = RealChannelNode(flow_section='1', structure_type=RealStructureType.RECTANGULAR,
+                           station_MC=123.456789, water_depth=1.234567, flow=2.88)
+    module.WaterProfilePanel._update_table_from_nodes_full_impl(panel, [node])
+    panel.node_table.item(0, 15).setText('0+130.001')
+    panel.node_table.item(0, 27).setText('1.500')
+    panel.node_table.item(0, 26).setText('3.0123')
+    restored = module.WaterProfilePanel._build_nodes_from_table(panel)[0]
+    assert restored.station_MC == 130.001
+    assert restored.water_depth == 1.5
+    assert restored.flow == 3.0123
+
+
+def test_shared_station_formatter_carries_rounding_across_kilometres():
+    assert RealProjectSettings.format_station(999.9996, '茶支') == '茶支1+000.000'
+    assert RealProjectSettings.format_station(1234.5674, '茶支') == '茶支1+234.567'
+
+
+def test_initial_batch_import_preserves_calculated_values_before_first_recalculation():
+    module = _load_panel_module()
+    panel = _make_basic_panel(module)
+    result = _make_batch_result(B=1.87654321, Q=2.87654321, n=0.01456789, h=1.23456789, V=0.987654321,
+                                A=2.3456789, X=4.5678912, R_hydraulic=0.5135346)
+    _prepare_panel_for_batch_import(module, panel, [result])
+    module.WaterProfilePanel._import_from_batch(panel)
+    module.CALCULATOR_AVAILABLE = True
+    module.ChannelNode = RealChannelNode
+    module.StructureType = RealStructureType
+    module.InOutType = RealInOutType
+    node = module.WaterProfilePanel._build_nodes_from_table(panel)[0]
+    assert panel.node_table.item(0, 26).text() == '2.88'
+    assert node.section_params['B'] == result.B
+    assert node.flow == result.Q
+    assert node.roughness == result.n
+    assert node.water_depth == result.h
+    assert node.velocity == result.V
+    assert node.section_params['A'] == result.A
+    assert node.section_params['X'] == result.X
+    assert node.section_params['R'] == result.R_hydraulic
+
+
+def test_flow_selector_and_restored_max_flow_do_not_truncate_user_values():
+    module = _load_panel_module()
+    flows = [2.87654321, 0.00000001, 3.0]
+    assert module.parse_flow_values_text(module.format_flow_values_text(flows)) == flows
+    assert module.calculate_final_max_flow_values([2.88], [3.61234567]) == [3.61234567]

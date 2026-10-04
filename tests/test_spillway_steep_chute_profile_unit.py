@@ -56,7 +56,7 @@ def test_full_curve_to_normal_stops_near_normal_depth():
 
     assert result["profile"]["available"] is True
     assert result["profile"]["length_m"] > 0
-    assert result["profile"]["end_reason"] == "reached_normal_depth"
+    assert result["profile"]["end_reason"] == "approached_normal_depth"
     assert result["profile"]["end_depth_m"] == pytest.approx(
         result["hydraulic"]["normal_depth_m"],
         abs=max(0.05, result["hydraulic"]["normal_depth_m"] * 0.08),

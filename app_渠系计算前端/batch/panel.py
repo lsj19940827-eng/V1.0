@@ -41,7 +41,9 @@ from app_渠系计算前端.export_utils import (
 )
 from app_渠系计算前端.increase_input_helper import (
     calculate_increase_percent_from_q,
+    calculate_q_increased,
     format_increase_percent,
+    get_auto_increase_percent,
 )
 
 
@@ -2418,9 +2420,27 @@ class BatchPanel(QWidget):
 
                 # 泄水渠与陡坡占位行：表1/表2只透传参数，表3按同名进出口成组正式计算
                 if is_spillway_steep_chute_section_type(section_type):
+                    design_q = self._sf(values[COL_Q])
+                    if not math.isfinite(design_q) or design_q <= 0:
+                        raise ValueError("流量Q必须为大于0的有限数值")
+                    use_inc = self.inc_cb.isChecked()
+                    increase_percent = 0.0
+                    manual_qmax = None
+                    if use_inc:
+                        increase_percent, manual_qmax = self._resolve_manual_increase_percent_for_segment(segment, design_q)
+                        if increase_percent is None:
+                            increase_percent = get_auto_increase_percent(design_q)
+                    increased_q = (
+                        manual_qmax if manual_qmax is not None
+                        else calculate_q_increased(design_q, increase_percent)
+                    )
+                    if not math.isfinite(increased_q):
+                        raise ValueError("加大流量必须为有限数值")
                     row_out = ["-"] * len(RESULT_HEADERS)
                     row_out[0] = seq; row_out[1] = segment; row_out[2] = building_name
                     row_out[3] = "泄水渠与陡坡"; row_out[-1] = "⏭ 表3专项计算"
+                    if use_inc:
+                        row_out[12] = f"{increased_q:.3f}"
                     result_rows.append(row_out)
                     display_structure_type = resolve_spillway_steep_chute_display_type(
                         raw_section_type,
@@ -2434,6 +2454,9 @@ class BatchPanel(QWidget):
                     )
                     if spillway_advanced_params:
                         spillway_payload["advanced_params"] = spillway_advanced_params
+                    # 运行工况独立于高级参数，表3清空高级输入时仍须保留。
+                    spillway_payload["use_increase"] = use_inc
+                    spillway_payload["Q_increased"] = increased_q
                     spillway_result = {
                         'success': True,
                         'section_type': '泄水渠与陡坡',
@@ -2443,7 +2466,13 @@ class BatchPanel(QWidget):
                         'building_name': building_name,
                         'coord_X': self._sf(values[COL_X], 0.0),
                         'coord_Y': self._sf(values[COL_Y], 0.0),
-                        'Q': self._sf(values[COL_Q]),
+                        'Q': design_q,
+                        'use_increase': use_inc,
+                        '_use_increase': use_inc,
+                        'Q_increased': increased_q,
+                        'Q_inc': increased_q,
+                        'Q_max': increased_q,
+                        'increase_percent': increase_percent,
                         'n': self._sf(values[COL_N], 0.014),
                         'slope_inv': self._sf(values[COL_SLOPE], 0.0),
                         'm': self._sf(values[COL_M], 0.0),
@@ -2452,6 +2481,8 @@ class BatchPanel(QWidget):
                         'turn_radius': self._sf(values[COL_TURN_RADIUS], 0.0) if len(values) > COL_TURN_RADIUS else 0.0,
                         SPILLWAY_STEEP_CHUTE_PARAM_KEY: spillway_payload,
                     }
+                    if manual_qmax is not None:
+                        spillway_result['manual_qmax_from_excel'] = manual_qmax
                     self.batch_results.append({'input': values, 'result': spillway_result})
                     skip_count += 1
                     if self.detail_cb.isChecked():

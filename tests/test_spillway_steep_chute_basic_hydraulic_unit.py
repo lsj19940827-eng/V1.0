@@ -32,9 +32,10 @@ def test_quick_calculate_returns_core_hydraulic_fields_for_rectangular_section()
     assert result["hydraulic"]["normal_depth_m"] < result["hydraulic"]["critical_depth_m"]
     assert result["hydraulic"]["slope_type"] == "steep"
     assert result["hydraulic"]["critical_slope"] < 0.01
-    expected_hk = ((10.0 / 2.0) ** 2 / 9.81) ** (1.0 / 3.0)
+    expected_hk = (1.1 * (10.0 / 2.0) ** 2 / 9.81) ** (1.0 / 3.0)
     assert result["hydraulic"]["critical_depth_m"] == pytest_approx(expected_hk, rel=1e-3)
-    assert result["hydraulic"]["froude_at_start"] == pytest_approx(1.0, abs=0.01)
+    assert result["hydraulic"]["start"]["energy_froude"] == pytest_approx(1.0, abs=1e-6)
+    assert result["hydraulic"]["froude_at_start"] == pytest_approx(1.0 / math.sqrt(1.1), abs=1e-6)
     assert result["hydraulic"]["specific_energy_start_m"] > result["hydraulic"]["critical_depth_m"]
     assert result["hydraulic"]["hydraulic_slope_at_normal"] == pytest_approx(0.01, rel=0.01)
     assert result["profile"]["available"] is True

@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
@@ -163,10 +163,25 @@ def test_cad_section_summary_chain_draws_flat_bottom_tunnel_as_independent_table
     assert "平底圆形隧洞断面尺寸及水力要素表" in captured_titles
 
 
-def test_section_summary_dialog_exposes_flat_bottom_tunnel_mode_group():
-    """断面汇总配置对话框应单独暴露平底圆形隧洞模式。"""
+def test_section_summary_dialog_confirms_lining_without_tunnel_mode_controls():
+    """移除断面模式选择后，确认参数仍应保存衬砌厚度并清空旧模式缓存。"""
     _get_qapp()
+    panel = SimpleNamespace(
+        _custom_tunnel_unified={"tunnel_flat_bottom_circular": True},
+    )
+    dialog = cad_tools.SectionSummaryDialog(
+        None, [_make_flat_bottom_tunnel_node()], None, panel=panel, config_only=True,
+    )
 
-    dialog = cad_tools.SectionSummaryDialog(None, [], None, config_only=True)
+    try:
+        t0_edit, t_edit = dialog._lining_edits["III类"]
+        t0_edit.setText("0.42")
+        t_edit.setText("0.32")
+        dialog._on_generate()
 
-    assert "tunnel_flat_bottom_circular" in dialog._tunnel_mode_groups
+        assert dialog.result() == QDialog.Accepted
+        assert panel._custom_rock_lining["III类"] == {"t0": 0.42, "t": 0.32}
+        assert panel._custom_struct_thickness["rock_lining"] == panel._custom_rock_lining
+        assert panel._custom_tunnel_unified == {}
+    finally:
+        dialog.deleteLater()

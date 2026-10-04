@@ -64,8 +64,8 @@ def test_flow_selector_defaults_to_first_segment_and_shows_summary():
         _flush_events()
 
         assert panel._flow_segment_current_index == 0
-        assert panel.design_flow_edit.summary_text() == "第一流量段 · 120.8"
-        assert panel.max_flow_edit.summary_text() == "第一流量段 · 150.9"
+        assert panel.design_flow_edit.summary_text() == "第一流量段 · 120.80"
+        assert panel.max_flow_edit.summary_text() == "第一流量段 · 150.90"
         assert panel.design_flow_edit.count_text() == ""
         assert panel.max_flow_edit.count_text() == ""
         assert not panel.design_flow_edit._inline_hint_label.isVisible()
@@ -87,8 +87,8 @@ def test_flow_selector_switch_keeps_design_and_max_on_same_segment():
         _flush_events()
 
         assert panel._flow_segment_current_index == 1
-        assert panel.design_flow_edit.summary_text() == "第二流量段 · 78.8"
-        assert panel.max_flow_edit.summary_text() == "第二流量段 · 98.5"
+        assert panel.design_flow_edit.summary_text() == "第二流量段 · 78.80"
+        assert panel.max_flow_edit.summary_text() == "第二流量段 · 98.50"
     finally:
         panel.close()
         panel.deleteLater()
@@ -129,7 +129,7 @@ def test_programmatic_flow_values_refresh_main_view():
 
         assert panel.design_flow_edit.text() == "110.5, 66.6"
         assert panel.max_flow_edit.text() == "132.6, 83.25"
-        assert panel.design_flow_edit.summary_text() == "第二流量段 · 66.6"
+        assert panel.design_flow_edit.summary_text() == "第二流量段 · 66.60"
         assert panel.max_flow_edit.summary_text() == "第二流量段 · 83.25"
     finally:
         panel.close()
@@ -182,3 +182,33 @@ def test_main_view_no_longer_exposes_flow_segment_editor_entry():
     finally:
         panel.close()
         panel.deleteLater()
+
+
+def test_flow_display_hides_float_tail_and_preserves_values_after_restore():
+    """摘要、菜单和提示只显示两位，保存恢复仍使用未经舍入的原值。"""
+    panel = _build_panel()
+    restored = _build_panel()
+    flows = [2.88 * 1.25, 3.61234567, 0.00000001, 120.0]
+    try:
+        panel.design_flow_edit.setText("2.88, 2.87654321, 0.000000001, 100")
+        panel.max_flow_edit.setText(", ".join(str(value) for value in flows))
+        panel._sync_flow_segment_widgets(reset_index=True)
+
+        assert panel.max_flow_edit.summary_text() == "第一流量段 · 3.60"
+        assert panel.max_flow_edit._summary_btn.toolTip() == "第一流量段：3.60 m³/s"
+        assert [action.text() for action in panel.max_flow_edit._summary_btn.menu().menuActions()] == [
+            "第一流量段：3.60", "第二流量段：3.61", "第三流量段：0.00", "第四流量段：120.00",
+        ]
+        assert panel.max_flow_edit.values() == flows
+
+        restored.from_project_dict(panel.to_project_dict(), skip_dirty_signal=True)
+        restored._set_flow_segment_current_index(1)
+        assert restored.max_flow_edit.summary_text() == "第二流量段 · 3.61"
+        assert restored.max_flow_edit.values() == flows
+        assert restored._build_settings().max_flows == flows
+        assert restored._build_settings().design_flows[1] == 2.87654321
+    finally:
+        panel.close()
+        panel.deleteLater()
+        restored.close()
+        restored.deleteLater()

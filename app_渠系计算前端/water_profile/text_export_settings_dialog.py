@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QSettings, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QDrag, QFont, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QModelIndex, QPoint, QSettings, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -47,12 +47,11 @@ def _api_get(api, name):
 class AutoHeightListWidget(QListWidget):
     """List widget that reports content height and avoids inner scrolling."""
 
-    enabledRowDropped = Signal(str, int)
     toggleRequested = Signal(str)
 
-    def __init__(self, allow_reorder=False, auto_height=True, parent=None):
+    def __init__(self, allow_remove=False, auto_height=True, parent=None):
         super().__init__(parent)
-        self._allow_reorder = bool(allow_reorder)
+        self._allow_remove = bool(allow_remove)
         self._auto_height = bool(auto_height)
         self._suspend_scroll_to_current = False
         self._height_cache = None
@@ -70,19 +69,11 @@ class AutoHeightListWidget(QListWidget):
             self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             self.setSizeAdjustPolicy(QAbstractScrollArea.AdjustIgnored)
             self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        if self._allow_reorder:
-            self.setDragEnabled(True)
-            self.viewport().setAcceptDrops(True)
-            self.setAcceptDrops(True)
-            self.setDropIndicatorShown(True)
-            self.setDefaultDropAction(Qt.MoveAction)
-            self.setDragDropMode(QAbstractItemView.DragDrop)
-        else:
-            self.setDragEnabled(False)
-            self.setAcceptDrops(False)
-            self.setDropIndicatorShown(False)
-            self.setDragDropMode(QAbstractItemView.NoDragDrop)
-        self._set_drag_feedback(False)
+        self.setDragEnabled(False)
+        self.setAcceptDrops(False)
+        self.viewport().setAcceptDrops(False)
+        self.setDropIndicatorShown(False)
+        self.setDragDropMode(QAbstractItemView.NoDragDrop)
         self._bind_model_signals()
 
     def _bind_model_signals(self):
@@ -214,88 +205,9 @@ class AutoHeightListWidget(QListWidget):
         if self._auto_height:
             self.recalculate_height()
 
-    def _set_drag_feedback(self, active):
-        if active and self._allow_reorder:
-            self.setStyleSheet(
-                "QListView { border: 1px solid rgba(0, 120, 212, 0.45); "
-                "background: rgba(0, 120, 212, 0.05); border-radius: 12px; }"
-            )
-        else:
-            self.setStyleSheet("")
-
-    def start_drag_for_row_id(self, rid):
-        if not self._allow_reorder:
-            return
-        rid = str(rid or "").strip()
-        if not rid:
-            return
-        for row in range(self.count()):
-            item = self.item(row)
-            if item is not None and str(item.data(Qt.UserRole) or "").strip() == rid:
-                self.setCurrentRow(row)
-                self.startDrag(Qt.MoveAction)
-                return
-
-    def startDrag(self, supportedActions):
-        if not self._allow_reorder:
-            return
-        rid = self.current_row_id()
-        if not rid:
-            return
-        mime = QMimeData()
-        mime.setData("application/x-profile-enabled-row-id", rid.encode("utf-8"))
-        drag = QDrag(self)
-        drag.setMimeData(mime)
-        self._set_drag_feedback(True)
-        try:
-            drag.exec(Qt.MoveAction)
-        finally:
-            self._set_drag_feedback(False)
-
-    def dragEnterEvent(self, event):
-        if self._allow_reorder and event.mimeData().hasFormat("application/x-profile-enabled-row-id"):
-            self._set_drag_feedback(True)
-            event.acceptProposedAction()
-            return
-        super().dragEnterEvent(event)
-
-    def dragLeaveEvent(self, event):
-        self._set_drag_feedback(False)
-        super().dragLeaveEvent(event)
-
-    def dragMoveEvent(self, event):
-        if self._allow_reorder and event.mimeData().hasFormat("application/x-profile-enabled-row-id"):
-            event.acceptProposedAction()
-            return
-        super().dragMoveEvent(event)
-
-    def dropEvent(self, event):
-        if not self._allow_reorder:
-            super().dropEvent(event)
-            return
-        data = event.mimeData()
-        if not data.hasFormat("application/x-profile-enabled-row-id"):
-            super().dropEvent(event)
-            return
-        self._set_drag_feedback(False)
-        try:
-            rid = bytes(data.data("application/x-profile-enabled-row-id")).decode("utf-8").strip()
-            if not rid:
-                event.ignore()
-                return
-            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-            row = self.indexAt(pos).row()
-            if row < 0:
-                row = self.count()
-            row = max(0, min(self.count(), row))
-            self.enabledRowDropped.emit(rid, row)
-            event.acceptProposedAction()
-        except Exception:
-            event.ignore()
-
     def keyPressEvent(self, event):
         rid = self.current_row_id()
-        if rid and self._allow_reorder and event.key() == Qt.Key_Delete:
+        if rid and self._allow_remove and event.key() == Qt.Key_Delete:
             self.toggleRequested.emit(rid)
             event.accept()
             return
@@ -356,47 +268,9 @@ class WrapCaptionLabel(CaptionLabel):
         return hint
 
 
-class FluentProfileDragHandle(QLabel):
-    dragRequested = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(":::")
-        self._press_pos = None
-        self.setAlignment(Qt.AlignCenter)
-        self.setCursor(Qt.OpenHandCursor)
-        self.setFixedWidth(18)
-        self.setStyleSheet("color:#7F8B99; font-size:16px; font-weight:600; letter-spacing:1px;")
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._press_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-            self.setCursor(Qt.ClosedHandCursor)
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if not (event.buttons() & Qt.LeftButton) or self._press_pos is None:
-            super().mouseMoveEvent(event)
-            return
-        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        if (pos - self._press_pos).manhattanLength() >= QApplication.startDragDistance():
-            self.dragRequested.emit()
-            self._press_pos = None
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._press_pos = None
-        self.setCursor(Qt.OpenHandCursor)
-        super().mouseReleaseEvent(event)
-
-
 class FluentProfileRowItemWidget(QWidget):
     clicked = Signal()
     doubleClicked = Signal()
-    dragRequested = Signal()
 
     def __init__(self, title, subtitle, enabled, recommended=False, *, display_variant="standard", parent=None):
         super().__init__(parent)
@@ -404,6 +278,7 @@ class FluentProfileRowItemWidget(QWidget):
         self._enabled = bool(enabled)
         self._recommended = bool(recommended)
         self._display_variant = str(display_variant or "standard")
+        self._visual_state_key = None
         self.setObjectName("profileRowItemFluent")
         self.setAttribute(Qt.WA_StyledBackground, True)
 
@@ -415,10 +290,9 @@ class FluentProfileRowItemWidget(QWidget):
             layout.setContentsMargins(8, 3, 8, 3)
             layout.setSpacing(6)
 
-        self.checkbox = CheckBox("")
+        self.checkbox = CheckBox("", self)
         self.checkbox.setFixedWidth(36)
         # 保留勾选状态接口，实际操作使用带文字的大按钮。
-        self.checkbox.setParent(self)
         self.checkbox.hide()
 
         text_col = QVBoxLayout()
@@ -429,17 +303,17 @@ class FluentProfileRowItemWidget(QWidget):
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.setSpacing(4)
 
-        self.title_label = QLabel()
+        self.title_label = QLabel(self)
         self.title_label.setTextInteractionFlags(Qt.NoTextInteraction)
         title_row.addWidget(self.title_label, 1)
 
-        self.badge_label = QLabel("推荐")
+        self.badge_label = QLabel("推荐", self)
         self.badge_label.setTextInteractionFlags(Qt.NoTextInteraction)
         self.badge_label.setVisible(False)
         title_row.addWidget(self.badge_label, 0, Qt.AlignVCenter)
         title_row.addStretch(0)
 
-        self.subtitle_label = QLabel()
+        self.subtitle_label = QLabel(self)
         self.subtitle_label.setTextInteractionFlags(Qt.NoTextInteraction)
         self.subtitle_label.setWordWrap(False)
 
@@ -447,30 +321,27 @@ class FluentProfileRowItemWidget(QWidget):
         text_col.addWidget(self.subtitle_label)
         layout.addLayout(text_col, 1)
 
-        self.position_label = QLabel()
+        self.position_label = QLabel(self)
         self.position_label.setFixedWidth(68)
         self.position_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.position_label.setStyleSheet("color:#536779; font-size:13px;")
         self.position_label.hide()
         layout.addWidget(self.position_label)
 
-        self.up_button = PushButton("↑")
-        self.down_button = PushButton("↓")
+        # 必须先归属行控件，再设置可见性，避免被 Qt 短暂显示为独立窗口。
+        self.up_button = PushButton("↑", self)
+        self.down_button = PushButton("↓", self)
         for button, tip in ((self.up_button, "上移一行"), (self.down_button, "下移一行")):
             button.setFixedSize(34, 34)
             button.setToolTip(tip)
             button.setAccessibleName(tip)
             button.setVisible(bool(enabled))
             layout.addWidget(button)
-        self.action_button = PushButton("移除" if enabled else "添加")
+        self.action_button = PushButton("移除" if enabled else "添加", self)
         self.action_button.setFixedSize(64, 34)
         self.action_button.setAccessibleName(f"{'移除' if enabled else '添加'}{title}")
         self.action_button.clicked.connect(self.checkbox.toggle)
         layout.addWidget(self.action_button)
-
-        self.drag_handle = FluentProfileDragHandle(self)
-        self.drag_handle.dragRequested.connect(self.dragRequested)
-        layout.addWidget(self.drag_handle, 0, Qt.AlignVCenter)
 
         for child in (self.title_label, self.subtitle_label, self.badge_label):
             child.installEventFilter(self)
@@ -484,8 +355,13 @@ class FluentProfileRowItemWidget(QWidget):
         self._recommended = bool(recommended)
         self.title_label.setText(title)
         self.subtitle_label.setText(subtitle)
-        self.checkbox.setChecked(bool(enabled))
-        self.drag_handle.setVisible(bool(enabled))
+        blocked = self.checkbox.blockSignals(True)
+        try:
+            self.checkbox.setChecked(bool(enabled))
+        finally:
+            self.checkbox.blockSignals(blocked)
+        self.action_button.setText("移除" if enabled else "添加")
+        self.action_button.setAccessibleName(f"{'移除' if enabled else '添加'}{title}")
         self.badge_label.hide()
         self._apply_visual_state()
 
@@ -494,6 +370,10 @@ class FluentProfileRowItemWidget(QWidget):
         self._apply_visual_state()
 
     def _apply_visual_state(self):
+        visual_state_key = (self._selected, self._enabled, self._display_variant)
+        if self._visual_state_key == visual_state_key:
+            return
+        self._visual_state_key = visual_state_key
         border_radius = "12px" if self._display_variant == "quick_add" else "10px"
         if self._selected:
             self.setStyleSheet(
@@ -948,10 +828,13 @@ def create_text_export_settings_dialog(api_module):
             if rid not in enabled:
                 return False
             old_row = enabled.index(rid)
-            enabled.pop(old_row)
+            # 目标为移除前的插入缝隙，末尾缝隙等于原列表长度。
             target_row = max(0, min(len(enabled), int(target_row)))
             if target_row > old_row:
                 target_row -= 1
+            if target_row == old_row:
+                return False
+            enabled.pop(old_row)
             enabled.insert(target_row, rid)
             self.enabled_row_ids = enabled
             self.normalize_row_model()
@@ -1442,6 +1325,13 @@ def create_text_export_settings_dialog(api_module):
             self._runtime_rows_layout.setColumnStretch(0, 3)
             self._runtime_rows_layout.setColumnStretch(1, 0)
             self._runtime_rows_layout.setColumnStretch(2, 2)
+            self._runtime_empty_label = self._make_wrap_caption(self._mode_spec["empty_runtime_hint"])
+            self._runtime_empty_label.setParent(self._runtime_rows_widget)
+            self._runtime_empty_label.hide()
+            self._runtime_divider = QFrame(self._runtime_rows_widget)
+            self._runtime_divider.setFrameShape(QFrame.HLine)
+            self._runtime_divider.setFrameShadow(QFrame.Sunken)
+            self._runtime_divider.setStyleSheet("color: rgba(210,218,229,0.95);")
             lay.addWidget(self._runtime_rows_widget)
 
             self._runtime_summary_label = self._make_wrap_caption("")
@@ -1481,7 +1371,7 @@ def create_text_export_settings_dialog(api_module):
                 action_row.addWidget(btn_more)
                 action_row.addStretch(1)
                 lay.addLayout(action_row)
-                lay.addWidget(self._make_wrap_caption("逐行添加或移除；用行内箭头或拖动右侧手柄调整顺序。"))
+                lay.addWidget(self._make_wrap_caption("逐行添加或移除；用行内上下箭头调整顺序。"))
             return card
 
         def _build_enabled_section(self):
@@ -1508,7 +1398,7 @@ def create_text_export_settings_dialog(api_module):
                 lay.addWidget(self._make_wrap_caption(self._mode_spec["enabled_hint"]))
 
             self._enabled_list = AutoHeightListWidget(
-                allow_reorder=not self._mode_spec["read_only_rows"],
+                allow_remove=not self._mode_spec["read_only_rows"],
                 auto_height=False,
                 parent=self,
             )
@@ -1517,7 +1407,6 @@ def create_text_export_settings_dialog(api_module):
                 self._enabled_list.setSelectionMode(QAbstractItemView.NoSelection)
                 self._enabled_list.setFocusPolicy(Qt.NoFocus)
             self._enabled_list.setMinimumHeight(0)
-            self._enabled_list.enabledRowDropped.connect(self._on_enabled_row_dropped)
             self._enabled_list.toggleRequested.connect(
                 lambda rid: self._toggle_current_row(rid, show_feedback=True)
             )
@@ -1559,7 +1448,7 @@ def create_text_export_settings_dialog(api_module):
             candidate_body_lay.setContentsMargins(0, 0, 0, 0)
             candidate_body_lay.setSpacing(6)
 
-            self._candidate_list = AutoHeightListWidget(allow_reorder=False, auto_height=False, parent=self)
+            self._candidate_list = AutoHeightListWidget(auto_height=False, parent=self)
             self._candidate_list.setSpacing(6)
             self._candidate_list.setMinimumHeight(0)
             self._candidate_list.toggleRequested.connect(
@@ -1631,18 +1520,6 @@ def create_text_export_settings_dialog(api_module):
             )
             return label
 
-        def _clear_layout_widgets(self, layout):
-            if layout is None:
-                return
-            while layout.count():
-                item = layout.takeAt(0)
-                child_layout = item.layout()
-                child_widget = item.widget()
-                if child_layout is not None:
-                    self._clear_layout_widgets(child_layout)
-                if child_widget is not None:
-                    child_widget.deleteLater()
-
         def _row_display(self, rid, enabled, order_index=None):
             row_def = self._mode_spec["row_def_map"][rid]
             title = row_def["label"]
@@ -1663,6 +1540,7 @@ def create_text_export_settings_dialog(api_module):
                 enabled,
                 recommended,
                 display_variant=display_variant,
+                parent=(self._enabled_list if enabled else self._candidate_list).viewport(),
             )
             widget.checkbox.stateChanged.connect(
                 lambda _state, row_id=rid: self._on_row_widget_checkbox_changed(row_id), Qt.QueuedConnection
@@ -1675,15 +1553,16 @@ def create_text_export_settings_dialog(api_module):
             )
             widget.up_button.clicked.connect(lambda _checked=False, row_id=rid: self._move_row_directly(row_id, -1), Qt.QueuedConnection)
             widget.down_button.clicked.connect(lambda _checked=False, row_id=rid: self._move_row_directly(row_id, 1), Qt.QueuedConnection)
+            self._update_row_widget(widget, rid, enabled, order_index)
+            return widget
+
+        def _update_row_widget(self, widget, rid, enabled, order_index=None):
+            title, subtitle, recommended = self._row_display(rid, enabled, order_index)
+            widget.set_content(title, subtitle, enabled, recommended)
             widget.up_button.setEnabled(enabled and order_index is not None and order_index > 0)
             widget.down_button.setEnabled(enabled and order_index is not None and order_index < len(self._state.enabled_row_ids) - 1)
-            if enabled:
-                widget.drag_handle.dragRequested.connect(
-                    lambda row_id=rid: self._enabled_list.start_drag_for_row_id(row_id)
-                )
             if self._mode_spec["read_only_rows"]:
                 widget.checkbox.setEnabled(False)
-                widget.drag_handle.hide()
                 widget.action_button.hide()
                 widget.up_button.hide()
                 widget.down_button.hide()
@@ -1695,7 +1574,6 @@ def create_text_export_settings_dialog(api_module):
                 widget.setToolTip(subtitle)
                 widget.subtitle_label.hide()
                 widget.setMinimumHeight(44)
-            return widget
 
         def _move_row_directly(self, rid, delta):
             self._set_current_row_id(rid, "enabled", scroll_to_current=False)
@@ -1767,9 +1645,6 @@ def create_text_export_settings_dialog(api_module):
                     f"共 {len(enabled_rows)} 行 · 内容总高 {format_number(runtime['total_height'])}"
                     f" · 竖线高度 {format_number(runtime['line_height'])}"
                 )
-            self._runtime_row_labels = {}
-            self._clear_layout_widgets(self._runtime_rows_layout)
-
             metric_values = {
                 "enabled_count": str(len(runtime.get("enabled_row_ids") or [])),
                 "total_height": format_number(runtime["total_height"]),
@@ -1780,44 +1655,48 @@ def create_text_export_settings_dialog(api_module):
                 if chip is not None:
                     chip.setText(metric_values.get(key, "--"))
 
-            if not enabled_rows:
-                empty_label = self._make_wrap_caption(self._mode_spec["empty_runtime_hint"])
-                self._runtime_rows_layout.addWidget(empty_label, 0, 0, 1, 3)
-            else:
-                for row_index, row in enumerate(enabled_rows):
-                    title = QLabel(f"{row['order']:02d}. {row['label']}")
+            row_ids = [row["id"] for row in enabled_rows] + ["y_line_height"]
+            layout_changed = list(self._runtime_row_labels) != row_ids
+            if layout_changed:
+                # 重排布局时保留标签，输入和排序不再反复销毁、创建整张明细表。
+                while self._runtime_rows_layout.count():
+                    self._runtime_rows_layout.takeAt(0)
+                for rid in set(self._runtime_row_labels) - set(row_ids):
+                    for label in self._runtime_row_labels.pop(rid).values():
+                        label.hide()
+                        label.deleteLater()
+                for rid in row_ids:
+                    if rid in self._runtime_row_labels:
+                        continue
+                    title = QLabel(self._runtime_rows_widget)
                     title.setStyleSheet("color:#24384D; font-size:13px; font-weight:600;")
-                    value = self._make_runtime_value_chip(format_number(row["text_y"]))
-                    source = self._make_wrap_caption(row.get("source_label", ""))
-                    self._runtime_rows_layout.addWidget(title, row_index, 0)
-                    self._runtime_rows_layout.addWidget(value, row_index, 1)
-                    self._runtime_rows_layout.addWidget(source, row_index, 2)
-                    self._runtime_row_labels[row["id"]] = {
-                        "title": title,
-                        "value": value,
-                        "source": source,
-                    }
+                    value = self._make_runtime_value_chip("")
+                    value.setParent(self._runtime_rows_widget)
+                    source = self._make_wrap_caption("")
+                    source.setParent(self._runtime_rows_widget)
+                    self._runtime_row_labels[rid] = {"title": title, "value": value, "source": source}
+                self._runtime_row_labels = {rid: self._runtime_row_labels[rid] for rid in row_ids}
+                self._runtime_empty_label.setVisible(not enabled_rows)
+                if not enabled_rows:
+                    self._runtime_rows_layout.addWidget(self._runtime_empty_label, 0, 0, 1, 3)
+                divider_row = max(1, len(enabled_rows))
+                self._runtime_rows_layout.addWidget(self._runtime_divider, divider_row, 0, 1, 3)
+                for row_index, rid in enumerate(row_ids):
+                    grid_row = divider_row + 1 if rid == "y_line_height" else row_index
+                    for column, key in enumerate(("title", "value", "source")):
+                        label = self._runtime_row_labels[rid][key]
+                        self._runtime_rows_layout.addWidget(label, grid_row, column)
+                        label.show()
 
-            divider_row = len(enabled_rows)
-            divider = QFrame(self)
-            divider.setFrameShape(QFrame.HLine)
-            divider.setFrameShadow(QFrame.Sunken)
-            divider.setStyleSheet("color: rgba(210,218,229,0.95);")
-            self._runtime_rows_layout.addWidget(divider, divider_row, 0, 1, 3)
-
-            line_row = divider_row + 1
-            line_title = QLabel("生效竖线高度")
-            line_title.setStyleSheet("color:#24384D; font-size:13px; font-weight:600;")
-            line_value = self._make_runtime_value_chip(format_number(runtime["line_height"]))
-            line_source = self._make_wrap_caption("max(内容总高, 最小竖线参数)")
-            self._runtime_rows_layout.addWidget(line_title, line_row, 0)
-            self._runtime_rows_layout.addWidget(line_value, line_row, 1)
-            self._runtime_rows_layout.addWidget(line_source, line_row, 2)
-            self._runtime_row_labels["y_line_height"] = {
-                "title": line_title,
-                "value": line_value,
-                "source": line_source,
-            }
+            for row in enabled_rows:
+                labels = self._runtime_row_labels[row["id"]]
+                labels["title"].setText(f"{row['order']:02d}. {row['label']}")
+                labels["value"].setText(format_number(row["text_y"]))
+                labels["source"].setText(row.get("source_label", ""))
+            line_labels = self._runtime_row_labels["y_line_height"]
+            line_labels["title"].setText("生效竖线高度")
+            line_labels["value"].setText(format_number(runtime["line_height"]))
+            line_labels["source"].setText("max(内容总高, 最小竖线参数)")
 
             if self._runtime_summary_label is not None:
                 self._runtime_summary_label.setText(
@@ -1830,6 +1709,37 @@ def create_text_export_settings_dialog(api_module):
         def _candidate_body_is_forced_visible(self):
             return not bool(self._state.enabled_row_ids) and bool(self._candidate_all_row_ids())
 
+        def _remove_inactive_list_rows(self, list_widget, row_ids):
+            wanted = set(row_ids)
+            for row in range(list_widget.count() - 1, -1, -1):
+                item = list_widget.item(row)
+                rid = str(item.data(Qt.UserRole))
+                if rid in wanted:
+                    continue
+                widget = self._row_widgets.pop(rid, None)
+                if widget is not None:
+                    widget.hide()
+                # QListWidget 负责释放被移除条目所拥有的行控件。
+                list_widget.takeItem(row)
+
+        def _sync_row_list(self, list_widget, row_ids, enabled):
+            for target_row, rid in enumerate(row_ids):
+                item, current_row = self._find_item_in_list(list_widget, rid)
+                if item is None:
+                    item = QListWidgetItem()
+                    item.setData(Qt.UserRole, rid)
+                    widget = self._create_row_widget(rid, enabled)
+                    list_widget.insertItem(target_row, item)
+                    list_widget.setItemWidget(item, widget)
+                    self._row_widgets[rid] = widget
+                else:
+                    if current_row != target_row:
+                        # 从前往后同步，只把后方条目向前移；保留索引关联的控件和焦点。
+                        list_widget.model().moveRows(QModelIndex(), current_row, 1, QModelIndex(), target_row)
+                    self._update_row_widget(
+                        self._row_widgets[rid], rid, enabled, target_row if enabled else None
+                    )
+
         def _refresh_all_row_lists(self, *, scroll_to_current=True):
             if not self._enabled_list or not self._candidate_list:
                 return
@@ -1837,27 +1747,24 @@ def create_text_export_settings_dialog(api_module):
             candidate_all_ids = self._candidate_all_row_ids()
             candidate_ids = list(candidate_all_ids)
             self._state.ensure_selection()
+            list_states = [
+                (list_widget, list_widget.blockSignals(True), list_widget.updatesEnabled())
+                for list_widget in (self._enabled_list, self._candidate_list)
+            ]
             self._row_updating = True
             try:
-                self._enabled_list.clear()
-                self._candidate_list.clear()
-                self._row_widgets = {}
-                for rid in self._state.enabled_row_ids:
-                    item = QListWidgetItem()
-                    item.setData(Qt.UserRole, rid)
-                    widget = self._create_row_widget(rid, True)
-                    self._enabled_list.addItem(item)
-                    self._enabled_list.setItemWidget(item, widget)
-                    self._row_widgets[rid] = widget
-                for rid in candidate_ids:
-                    item = QListWidgetItem()
-                    item.setData(Qt.UserRole, rid)
-                    widget = self._create_row_widget(rid, False)
-                    self._candidate_list.addItem(item)
-                    self._candidate_list.setItemWidget(item, widget)
-                    self._row_widgets[rid] = widget
+                for list_widget, _, _ in list_states:
+                    list_widget.setUpdatesEnabled(False)
+                # 先从两组移除离开的行，再添加新行，防止跨组操作覆盖控件映射。
+                self._remove_inactive_list_rows(self._enabled_list, self._state.enabled_row_ids)
+                self._remove_inactive_list_rows(self._candidate_list, candidate_ids)
+                self._sync_row_list(self._enabled_list, self._state.enabled_row_ids, True)
+                self._sync_row_list(self._candidate_list, candidate_ids, False)
             finally:
                 self._row_updating = False
+                for list_widget, signals_blocked, updates_enabled in list_states:
+                    list_widget.blockSignals(signals_blocked)
+                    list_widget.setUpdatesEnabled(updates_enabled)
 
             candidate_visible = (self._state.candidate_expanded and bool(candidate_all_ids)) or self._candidate_body_is_forced_visible()
             if self._candidate_section is not None:
@@ -2115,11 +2022,6 @@ def create_text_export_settings_dialog(api_module):
             if self._state.reorder_enabled_row(rid, target_row):
                 self._render()
 
-        def _on_enabled_row_dropped(self, rid, target_row):
-            if self._row_updating:
-                return
-            self._reorder_enabled_row(rid, target_row)
-
         def _enable_all_rows(self):
             if self._mode_spec["read_only_rows"]:
                 return
@@ -2199,7 +2101,7 @@ def create_text_export_settings_dialog(api_module):
             rid = self._selected_row_id()
             if not rid or rid not in self._state.enabled_row_ids:
                 return
-            target = 0 if to_top else len(self._state.enabled_row_ids) - 1
+            target = 0 if to_top else len(self._state.enabled_row_ids)
             self._reorder_enabled_row(rid, target)
 
         def _disable_selected_row(self):

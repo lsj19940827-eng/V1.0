@@ -28,7 +28,15 @@ from PySide6.QtGui import QFont, QColor, QShortcut, QKeySequence
 
 from app_渠系计算前端.styles import auto_resize_table, fluent_info, fluent_error, fluent_question
 from 推求水面线.models.data_models import OpenChannelParams
+from 推求水面线.core.connection_channel import (
+    OPEN_CHANNEL_TYPES, describe_connection_reference, flow_section_key,
+    recalculate_open_channel, reference_to_params, params_to_reference,
+)
 from 推求水面线.utils.pressure_pipe_common import coerce_row_index
+from 推求水面线.utils.numeric_precision import format_display_number, format_input_number, station_millimetres
+from 推求水面线.core.length_statistics import (
+    displayed_length, format_length_station, is_point_type, summarize_length_records,
+)
 
 WATER_HAMMER_DEFAULT_WALL_THICKNESS_M = 0.06
 WATER_HAMMER_DEFAULT_CLOSING_TIME_S = 300.0
@@ -157,13 +165,46 @@ def describe_transition_gap_source(gap: Dict[str, Any]) -> str:
     reference = gap.get("reference_segment") or gap.get("upstream_channel")
     if not reference:
         return "需手动填写"
+    source_labels = {
+        "inferred_rectangular": "自动拟定-矩形明渠",
+        "economic_rectangular": "自动拟定-经济矩形",
+        "user_template": "采用-本段明渠模板",
+        "user_override": "采用-本处已存参数",
+    }
+    if reference.get("source_kind") in source_labels:
+        return source_labels[reference["source_kind"]]
     if reference.get("slope_borrowed_from_tunnel"):
         return "明渠，坡降取附近隧洞"
     structure_type = normalize_transition_structure_type(reference.get("structure_type", ""))
     family_label = "暗渠" if is_transition_culvert_type(structure_type) else "明渠"
     source_section = reference.get("reference_source_flow_section", reference.get("flow_section"))
-    scope_label = "同段" if source_section == gap.get("flow_section") else "跨段"
+    scope_label = "同段" if flow_section_key(source_section) == flow_section_key(gap.get("flow_section")) else "跨段"
     return f"自动推荐-{scope_label}{family_label}"
+
+
+def _connection_dimension_text(value):
+    """常规尺寸显示两位小数，用户指定的更高精度原样保留。"""
+    return format_input_number(value or 0, 2)
+
+
+def _mark_connection_edit(params, reference):
+    """只把用户改过的输入保存为单处覆盖，水深随流量重新计算。"""
+    reference = reference or {}
+    changed = normalize_transition_structure_type(reference.get("structure_type", "")) != params.structure_type
+    keys = ["bottom_width", "side_slope", "roughness", "slope_inv", "arc_radius"]
+    if is_transition_culvert_type(params.structure_type):
+        keys.append("structure_height")
+    for key in keys:
+        previous = float(reference.get(key, 0) or 0)
+        if key == 'bottom_width' and params.structure_type == '明渠-U形':
+            previous = 0.0
+        if not math.isclose(float(getattr(params, key)), previous, rel_tol=1e-12, abs_tol=1e-12):
+            changed = True
+    if changed:
+        params.reference_details.update(source_kind="user_override", user_modified=True)
+        for key in ("slope_source_name", "slope_source_type", "slope_borrowed_from_tunnel", "roughness_source"):
+            params.reference_details.pop(key, None)
+    return params
 
 
 def build_transition_fill_params(
@@ -193,11 +234,12 @@ def build_transition_fill_params(
         else:
             theta_value = 0.0
             h, ok = solve_water_depth_rectangular(B, H, n, slope_i, Q)
-        if (not ok or h <= 0) and upstream_channel:
-            h = upstream_channel.get("water_depth", 0.0)
-        if h <= 0:
+        if not ok or h <= 0:
             return None
-        return OpenChannelParams(
+        details = copy.deepcopy(upstream_channel or {})
+        details.update(auto_calculated=False, water_depth=h, structure_height=H)
+        details.pop('recalculation_error', None)
+        return _mark_connection_edit(OpenChannelParams(
             name="-",
             structure_type=structure_type,
             bottom_width=B,
@@ -209,7 +251,8 @@ def build_transition_fill_params(
             flow_section=flow_section,
             structure_height=H,
             theta_deg=theta_value,
-        )
+            reference_details=details,
+        ), upstream_channel)
 
     if B <= 0 and not is_transition_circular_channel_type(structure_type) and not is_transition_u_channel_type(structure_type):
         return None
@@ -217,51 +260,20 @@ def build_transition_fill_params(
     if is_transition_u_channel_type(structure_type) and B <= 0:
         return None
 
-    D_param = B if is_transition_circular_channel_type(structure_type) else 0.0
-    B_param = 0.0 if is_transition_circular_channel_type(structure_type) or is_transition_u_channel_type(structure_type) else B
     side_slope = m if structure_type in ("明渠-梯形", "明渠-U形") else 0.0
-    if is_transition_u_channel_type(structure_type) and (upstream_channel or {}).get('slope_borrowed_from_tunnel'):
-        from 明渠设计 import calculate_u_depth_for_flow
-        h = calculate_u_depth_for_flow(
-            Q, B, math.degrees(math.atan(side_slope)),
-            upstream_channel.get('theta_deg', 0), n, slope_i,
-        )
-    else:
-        h = calculate_normal_depth(Q, B_param, side_slope, n, slope_i, D=D_param)
-    if h <= 0 and upstream_channel:
-        h = upstream_channel.get("water_depth", 0.0)
-    if h <= 0:
-        return None
-
-    structure_height = upstream_channel.get("structure_height", 0.0) if upstream_channel else 0.0
-    if is_transition_u_channel_type(structure_type):
-        return OpenChannelParams(
-            name="-",
-            structure_type=structure_type,
-            bottom_width=0.0,
-            water_depth=h,
-            side_slope=side_slope,
-            roughness=n,
-            slope_inv=slope_inv,
-            flow=Q,
-            flow_section=flow_section,
-            structure_height=structure_height,
-            arc_radius=B,
-            theta_deg=(upstream_channel or {}).get("theta_deg", 0.0),
-        )
-
-    return OpenChannelParams(
-        name="-",
-        structure_type=structure_type,
-        bottom_width=B,
-        water_depth=h,
-        side_slope=side_slope,
-        roughness=n,
-        slope_inv=slope_inv,
-        flow=Q,
-        flow_section=flow_section,
-        structure_height=structure_height,
+    reference = copy.deepcopy(upstream_channel or {})
+    reference.update(
+        structure_type=structure_type, bottom_width=0.0 if is_transition_u_channel_type(structure_type) else B,
+        side_slope=side_slope, roughness=n, slope_inv=slope_inv,
+        arc_radius=B if is_transition_u_channel_type(structure_type) else 0.0,
+        theta_deg=(upstream_channel or {}).get("theta_deg", 0.0),
     )
+    calculated = recalculate_open_channel(
+        reference, Q, flow_section, reference.get("max_flow", Q), require_subcritical=False,
+    )
+    if not calculated:
+        return None
+    return _mark_connection_edit(reference_to_params(calculated), upstream_channel)
 
 
 from 矩形暗涵设计 import solve_water_depth_rectangular
@@ -6337,8 +6349,7 @@ class BuildingLengthDialog(QDialog):
     """
     建筑物长度统计对话框（PySide6版）
 
-    以表格形式展示各建筑物的长度详情和按结构类型汇总，
-    支持复制到剪贴板和复制排版格式。
+    默认展示可直接复制到 Excel 的排版表，并提供按结构类型汇总页签。
     """
 
     # 统一样式常量
@@ -6380,7 +6391,8 @@ class BuildingLengthDialog(QDialog):
         super().__init__(parent)
         self.building_lengths = building_lengths or []
         self.channel_total_length = channel_total_length
-        self._type_summary = type_summary
+        # 类型汇总以当前明细为准，旧缓存不能覆盖当前区段划分。
+        self._type_summary = summarize_length_records(self.building_lengths)
         self._station_prefix = station_prefix
 
         self.setWindowTitle("建筑物长度统计")
@@ -6402,7 +6414,7 @@ class BuildingLengthDialog(QDialog):
         table.horizontalHeader().setStyleSheet(self._HEADER_STYLE)
         table.horizontalHeader().setMinimumHeight(36)
         table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
-        table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         table.horizontalHeader().setStretchLastSection(False)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
 
@@ -6411,7 +6423,7 @@ class BuildingLengthDialog(QDialog):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(8)
 
-        # ---- QTabWidget：明细 / 汇总 两个Tab页 ----
+        # ---- QTabWidget：排版表 / 汇总 两个页签 ----
         self.tab_widget = QTabWidget()
         self.tab_widget.setFont(QFont(self._TABLE_FONT, 10))
         self.tab_widget.setStyleSheet(
@@ -6425,27 +6437,34 @@ class BuildingLengthDialog(QDialog):
             "QTabBar::tab:hover:!selected { background: #E8ECF1; }"
         )
 
-        # ---- Tab1：建筑物长度明细 ----
+        # ---- Tab1：直接展示 Excel 排版表 ----
         tab_detail = QWidget()
         detail_lay = QVBoxLayout(tab_detail)
         detail_lay.setContentsMargins(6, 8, 6, 6)
         detail_lay.setSpacing(6)
-        self.detail_table = QTableWidget()
-        detail_headers = ["序号", "建筑物名称", "结构形式", "长度(m)", "起始桩号(m)", "终止桩号(m)", "备注"]
-        self.detail_table.setColumnCount(len(detail_headers))
-        self.detail_table.setHorizontalHeaderLabels(detail_headers)
+        self.formatted_view = FormattedLayoutWidget(
+            tab_detail, self.building_lengths, station_prefix=self._station_prefix
+        )
+        self.detail_table = self.formatted_view.table
         self._setup_table(self.detail_table)
-        detail_lay.addWidget(self.detail_table, stretch=1)
+        self.detail_table.verticalHeader().setVisible(True)
+        self.detail_table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.detail_table.setAlternatingRowColors(False)
+        self.detail_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        detail_lay.addWidget(self.formatted_view, stretch=1)
 
         self.lbl_total = QLabel()
+        self.lbl_total.setWordWrap(True)
         self.lbl_total.setStyleSheet(
             "font-size: 10pt; color: #1E3A5F; font-weight: bold; padding: 4px 2px;"
         )
         detail_lay.addWidget(self.lbl_total)
-        lbl_basis = QLabel("统计口径：按桩号差统计；渐变段单列；自动插入明渠计入对应类型")
+        lbl_basis = QLabel("统计口径：显示长度为三位小数起止桩号之差；原始计算精度保留，悬停长度可查看。\n"
+                           "渐变段单列；同一建筑物分成多个明细区间时，分类汇总数量只计一次。")
+        lbl_basis.setWordWrap(True)
         lbl_basis.setStyleSheet("color: #4A5568; font-size: 9pt; padding-left: 2px;")
         detail_lay.addWidget(lbl_basis)
-        self.tab_widget.addTab(tab_detail, "建筑物长度明细")
+        self.tab_widget.addTab(tab_detail, "排版表预览(Excel)")
 
         # ---- Tab2：按结构类型汇总 ----
         tab_summary = QWidget()
@@ -6466,18 +6485,11 @@ class BuildingLengthDialog(QDialog):
         btn_lay = QHBoxLayout()
         btn_lay.setContentsMargins(0, 4, 0, 0)
         btn_copy = PushButton("复制到剪贴板")
+        btn_copy.setToolTip("复制当前页签的完整表格，可直接粘贴到 Excel。")
         btn_copy.clicked.connect(self._copy_to_clipboard)
-        btn_format = PushButton("排版表预览(Excel)")
-        btn_format.setToolTip(
-            "将建筑物明细重新排版为左右对照表格（左侧为各建筑物进出口桩号及长度，\n"
-            "右侧为各结构类型汇总长度），可直接复制粘贴到 Excel 中，\n"
-            "用于填写渠道特性统计表和分段土石方汇总表。"
-        )
-        btn_format.clicked.connect(self._copy_formatted)
         btn_close = PushButton("关闭")
         btn_close.clicked.connect(self.accept)
         btn_lay.addWidget(btn_copy)
-        btn_lay.addWidget(btn_format)
         btn_lay.addStretch()
         btn_lay.addWidget(btn_close)
         lay.addLayout(btn_lay)
@@ -6488,31 +6500,8 @@ class BuildingLengthDialog(QDialog):
         return any(kw in structure_type for kw in ('渡槽', '隧洞', '暗涵', '倒虹吸'))
 
     def _load_data(self):
-        """加载明细和汇总数据到表格"""
-        total_length = 0.0
-
-        # 明细表
-        self.detail_table.setRowCount(len(self.building_lengths))
-        for i, item in enumerate(self.building_lengths):
-            length = item.get('length', 0.0)
-            total_length += length
-            # 非建筑物类型（渡槽/隧洞/倒虹吸以外）名称显示为"-"
-            name = item.get('name', '')
-            st = item.get('structure_type', '')
-            display_name = name if self._is_building_type(st) else '-'
-            vals = [
-                str(i + 1),
-                display_name,
-                st,
-                f"{length:.3f}",
-                f"{item.get('start_station', 0.0):.3f}",
-                f"{item.get('end_station', 0.0):.3f}",
-                item.get('note', ''),
-            ]
-            for c, v in enumerate(vals):
-                cell = QTableWidgetItem(v)
-                cell.setTextAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
-                self.detail_table.setItem(i, c, cell)
+        """加载合计校验及分类汇总，排版表由内嵌组件加载。"""
+        total_length = math.fsum(displayed_length(item) for item in self.building_lengths)
 
         # 合计 + 校验
         count = len(self.building_lengths)
@@ -6535,7 +6524,7 @@ class BuildingLengthDialog(QDialog):
         total_len_sum = 0.0
         for i, item in enumerate(self._type_summary):
             cnt = item['count']
-            tl = item['total_length']
+            tl = item.get('display_total_length', item['total_length'])
             total_count += cnt
             total_len_sum += tl
             vals = [
@@ -6577,7 +6566,7 @@ class BuildingLengthDialog(QDialog):
         detail_w = sum(
             self.detail_table.columnWidth(c)
             for c in range(self.detail_table.columnCount())
-        ) + extra
+        ) + self.detail_table.verticalHeader().width() + extra
 
         # 计算汇总表所需宽度
         summary_w = sum(
@@ -6593,7 +6582,7 @@ class BuildingLengthDialog(QDialog):
         summary_rows = self.summary_table.rowCount()
         max_rows = max(detail_rows, summary_rows)
         table_h = 36 + max_rows * self._ROW_HEIGHT + 4  # 表头 + 数据行
-        fixed_h = 130  # Tab栏 + 合计标签 + 按钮 + 边距
+        fixed_h = 220  # 页签、排版说明、合计、统计口径、按钮及边距
         content_h = table_h + fixed_h
 
         # 限制最大尺寸为屏幕的 85%/70%
@@ -6614,38 +6603,17 @@ class BuildingLengthDialog(QDialog):
         self.summary_table.horizontalHeader().setStretchLastSection(True)
 
     def _calc_type_summary(self):
-        """按结构类型汇总累计长度（用唯一名称计数，被分水闸拆分的同名隧洞只算1个）"""
-        type_map = {}
-        for item in self.building_lengths:
-            st = item.get('structure_type', '')
-            name = item.get('name', '')
-            if not st or '连接' in name:
-                continue
-            length = item.get('length', 0.0)
-            if st not in type_map:
-                type_map[st] = {'names': set(), 'total_length': 0.0}
-            type_map[st]['names'].add(name)
-            type_map[st]['total_length'] += length
-        return [
-            {'structure_type': k, 'count': len(v['names']), 'total_length': v['total_length']}
-            for k, v in sorted(type_map.items())
-        ]
+        """按当前完整明细汇总，连接段和渐变段均参与。"""
+        return summarize_length_records(self.building_lengths)
 
     def _copy_to_clipboard(self):
-        """复制到剪贴板（制表符分隔，含明细和汇总）"""
-        lines = ["【建筑物长度明细】"]
-        lines.append("序号\t建筑物名称\t结构形式\t长度(m)\t起始桩号(m)\t终止桩号(m)\t备注")
-        for i in range(self.detail_table.rowCount()):
-            row = []
-            for c in range(self.detail_table.columnCount()):
-                item = self.detail_table.item(i, c)
-                row.append(item.text() if item else "")
-            lines.append("\t".join(row))
-        total_length = sum(item.get('length', 0.0) for item in self.building_lengths)
-        lines.append(f"合计\t{len(self.building_lengths)} 个段落\t\t{total_length:.3f}\t\t\t")
-        lines.append("")
-        lines.append("【按结构类型汇总】")
-        lines.append("序号\t结构类型\t数量\t累计长度(m)")
+        """复制当前页签的完整表格，直接粘贴到 Excel。"""
+        if self.tab_widget.currentIndex() == 0:
+            QApplication.clipboard().setText(self.formatted_view._generate_tsv_text())
+            fluent_info(self, "提示", "排版表已复制到剪贴板，可直接粘贴到 Excel")
+            return
+
+        lines = ["序号\t结构类型\t数量\t累计长度(m)"]
         for i in range(self.summary_table.rowCount()):
             row = []
             for c in range(self.summary_table.columnCount()):
@@ -6655,38 +6623,20 @@ class BuildingLengthDialog(QDialog):
 
         clipboard = QApplication.clipboard()
         clipboard.setText("\n".join(lines))
-        fluent_info(self, "提示", "已复制到剪贴板（含明细和汇总）")
-
-    def _copy_formatted(self):
-        """打开排版格式预览对话框"""
-        type_summary = self._type_summary if self._type_summary is not None else self._calc_type_summary()
-        try:
-            dlg = FormattedLayoutDialog(
-                self, self.building_lengths, type_summary,
-                station_prefix=self._station_prefix
-            )
-            dlg.exec()
-        except Exception as e:
-            import traceback
-            tb_str = traceback.format_exc()
-            traceback.print_exc()
-            fluent_error(self, "错误", f"打开排版格式预览失败：\n{tb_str}")
+        fluent_info(self, "提示", "结构类型汇总已复制到剪贴板，可直接粘贴到 Excel")
 
     @staticmethod
     def _format_station(value, prefix=""):
         """格式化桩号显示"""
-        km = int(value // 1000)
-        remainder = value - km * 1000
-        s = f"{km}+{remainder:07.3f}"
-        return f"{prefix}{s}" if prefix else s
+        return format_length_station(value, prefix)
 
 
 # ============================================================
-# 排版格式预览对话框
+# 排版表预览组件
 # ============================================================
-class FormattedLayoutDialog(QDialog):
+class FormattedLayoutWidget(QWidget):
     """
-    排版格式预览对话框（PySide6版）
+    建筑物长度统计中直接展示的排版表（PySide6版）
 
     以表格形式展示可直接复制粘贴到 Excel 的工程排版格式，
     左侧为建筑物明细（名称、进出口桩号、长度），
@@ -6694,49 +6644,45 @@ class FormattedLayoutDialog(QDialog):
     """
 
     def __init__(self, parent, building_lengths: List[Dict[str, Any]],
-                 type_summary: List[Dict[str, Any]],
                  station_prefix: str = ""):
         super().__init__(parent)
         self._building_lengths = building_lengths or []
-        self._type_summary = type_summary or []
+        self._type_summary = summarize_length_records(self._building_lengths)
         self._station_prefix = station_prefix
-
-        self.setWindowTitle("排版格式预览")
-        self.setMinimumSize(700, 400)
+        # 点状闸在分类汇总中计数，排版表排除不占长度的点状闸。
+        self._detail_items = [
+            item for item in self._building_lengths
+            if not is_point_type(item.get('structure_type', ''))
+        ]
 
         # 预先生成数据（供 UI 和复制共用）
         self._headers, self._table_data = self._build_table_data()
 
         self._create_ui()
-        self._auto_resize()
 
     def _build_table_data(self):
         """
         构建表格数据（表头 + 二维数据）
 
         布局：左侧4列为建筑物明细，右侧2列为结构类型汇总。
-        分水闸/分水口不参与统计，从明细和汇总中均排除。
+        点状闸不占长度；渐变段保留在两侧，保证明细和汇总总长一致。
         """
         prefix = self._station_prefix
 
-        # 过滤明细数据：排除分水闸/分水口和渐变段
-        detail_items = [
-            item for item in self._building_lengths
-            if '分水' not in item.get('structure_type', '')
-            and item.get('structure_type', '') != '渐变段'
-        ]
+        # 仅排除零长度点状建筑物，渐变段必须保留以闭合渠道总长。
+        detail_items = self._detail_items
 
         # 构建右侧汇总行：排除分水闸/分水口，含末行"总长度"
         summary_rows = []
         for item in self._type_summary:
-            if '分水' in item.get('structure_type', ''):
+            if is_point_type(item.get('structure_type', '')):
                 continue
             summary_rows.append({
                 'label': item['structure_type'],
-                'length': item['total_length'],
+                'length': item.get('display_total_length', item['total_length']),
             })
         # 添加"总长度"汇总行
-        total_all = sum(item.get('total_length', 0.0) for item in self._type_summary)
+        total_all = math.fsum(item['length'] for item in summary_rows)
         summary_rows.append({
             'label': '总长度',
             'length': total_all,
@@ -6756,7 +6702,7 @@ class FormattedLayoutDialog(QDialog):
                 item = detail_items[i]
                 raw_name = item.get('name', '')
                 struct_type = item.get('structure_type', '')
-                if '连接' in raw_name:
+                if item.get('kind') in ('connection', 'transition', 'unassigned'):
                     name = struct_type or raw_name
                 else:
                     name = f"{raw_name}{struct_type}" if struct_type else raw_name
@@ -6764,7 +6710,7 @@ class FormattedLayoutDialog(QDialog):
                     item.get('start_station', 0.0), prefix)
                 end_station = self._format_station(
                     item.get('end_station', 0.0), prefix)
-                length = f"{item.get('length', 0.0):.3f}"
+                length = f"{displayed_length(item):.3f}"
             else:
                 name = ""
                 start_station = ""
@@ -6787,12 +6733,13 @@ class FormattedLayoutDialog(QDialog):
     def _create_ui(self):
         """创建预览界面"""
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
         # 说明标签
         hint_label = QLabel(
-            "以下内容为制表符分隔格式，可直接复制粘贴到 Excel 中使用。\n"
-            "用于渠道特性统计表和分段土石方汇总表。"
+            "左侧为建筑物进出口桩号和长度，右侧为各结构类型累计长度。\n"
+            "可直接复制到 Excel，用于渠道特性统计表和分段土石方汇总表。"
         )
         hint_label.setWordWrap(True)
         hint_label.setStyleSheet("color: black; font-size: 13px;")
@@ -6817,8 +6764,8 @@ class FormattedLayoutDialog(QDialog):
         # 计算"总长度"行索引
         summary_count = len([
             item for item in self._type_summary
-            if '分水' not in item.get('structure_type', '')
-        ]) + 1  # +1 for "总长度" row
+            if not is_point_type(item.get('structure_type', ''))
+        ]) + 1  # 加上“总长度”行
         total_row_idx = summary_count - 1
 
         for r, row_data in enumerate(self._table_data):
@@ -6832,6 +6779,14 @@ class FormattedLayoutDialog(QDialog):
                 else:
                     cell.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
 
+                if r < len(self._detail_items):
+                    record = self._detail_items[r]
+                    if c == 3:
+                        cell.setToolTip(f"原始计算长度：{record.get('length', 0.0):.12g} m\n"
+                                        "本表显示长度按毫米桩号相减，可能与单列独立四舍五入相差 0.001 m。")
+                    elif c == 0 and record.get('note'):
+                        cell.setToolTip(str(record['note']))
+
                 # 右侧汇总列设置背景色
                 if c >= 4:
                     if r == total_row_idx:
@@ -6843,49 +6798,6 @@ class FormattedLayoutDialog(QDialog):
 
         lay.addWidget(self.table, stretch=1)
 
-        # 按钮区
-        btn_lay = QHBoxLayout()
-        btn_copy = PushButton("复制到剪贴板")
-        btn_copy.clicked.connect(self._copy_to_clipboard)
-        btn_close = PushButton("关闭")
-        btn_close.clicked.connect(self.accept)
-        btn_lay.addWidget(btn_copy)
-        btn_lay.addStretch()
-        btn_lay.addWidget(btn_close)
-        lay.addLayout(btn_lay)
-
-    def _auto_resize(self):
-        """根据内容自动调整列宽和窗口大小"""
-        auto_resize_table(self.table)
-
-        # 计算所需宽度
-        total_w = 0
-        for c in range(self.table.columnCount()):
-            total_w += self.table.columnWidth(c)
-        # 加上行号列、滚动条和边距
-        total_w += self.table.verticalHeader().width() + 50
-
-        # 计算所需高度
-        row_count = self.table.rowCount()
-        row_h = self.table.verticalHeader().defaultSectionSize()
-        header_h = self.table.horizontalHeader().height()
-        table_h = header_h + row_count * row_h + 4
-        fixed_h = 120  # 说明标签 + 按钮 + 边距
-        total_h = table_h + fixed_h
-
-        # 限制最大尺寸为屏幕的 85%
-        screen = self.screen()
-        if screen:
-            sg = screen.availableGeometry()
-            max_w = int(sg.width() * 0.85)
-            max_h = int(sg.height() * 0.65)
-        else:
-            max_w, max_h = 1400, 700
-
-        win_w = min(max(total_w, 700), max_w)
-        win_h = min(max(total_h, 400), max_h)
-        self.resize(win_w, win_h)
-
     def _generate_tsv_text(self) -> str:
         """从表头和数据生成制表符分隔文本"""
         lines = ["\t".join(self._headers)]
@@ -6893,20 +6805,10 @@ class FormattedLayoutDialog(QDialog):
             lines.append("\t".join(str(cell) for cell in row))
         return "\n".join(lines)
 
-    def _copy_to_clipboard(self):
-        """将排版文本复制到剪贴板（制表符分隔格式）"""
-        text = self._generate_tsv_text()
-        clipboard = QApplication.clipboard()
-        clipboard.setText(text)
-        fluent_info(self, "提示", "排版格式已复制到剪贴板，可直接粘贴到 Excel")
-
     @staticmethod
     def _format_station(value, prefix=""):
         """格式化桩号显示"""
-        km = int(value // 1000)
-        remainder = value - km * 1000
-        s = f"{km}+{remainder:07.3f}"
-        return f"{prefix}{s}" if prefix else s
+        return format_length_station(value, prefix)
 
 
 # ============================================================
@@ -6959,6 +6861,7 @@ class BatchChannelConfirmDialog(QDialog):
         self.total_count = total_count
         self.gaps_info = gaps_info
         self.result = {'mode': self.RESULT_MANUAL_EACH, 'params': {}}
+        self._template_updates = {}
         self._row_widgets = []
         self._param_undo_stack = []
         self._param_redo_stack = []
@@ -6997,7 +6900,8 @@ class BatchChannelConfirmDialog(QDialog):
             "渠系中各建筑物之间往往存在无建筑物覆盖的空余渠段。"
             "系统通过比较相邻建筑物间的里程差与渐变段长度之和，自动检测出这些空隙位置。\n"
             "为保证水面线推算的连续性，需要在空隙处补充补段。"
-            "推荐直接复制系统找到的参考补段断面参数，也可手动修改。"
+            "没有明渠参考时，系统可利用附近无压建筑物底宽拟定矩形明渠，重新计算水深。"
+            "修改参数后会重新核定渐变段与连接段长度，实际补段数量可能变化。"
         )
         lbl_tip = QLabel(tip_text)
         lbl_tip.setWordWrap(True)
@@ -7025,8 +6929,12 @@ class BatchChannelConfirmDialog(QDialog):
         self._fill_btn.clicked.connect(self._fill_all_recommended)
         self._clear_btn = PushButton("全部清空")
         self._clear_btn.clicked.connect(self._clear_all)
+        self._template_btn = PushButton("当前行应用为本段明渠模板")
+        self._template_btn.setToolTip("应用于同流量段未单独修改的明渠连接位置，并随工程保存；相邻暗涵保持原形式。")
+        self._template_btn.clicked.connect(self._apply_section_template)
         tb.addWidget(self._fill_btn)
         tb.addWidget(self._clear_btn)
+        tb.addWidget(self._template_btn)
         tb.addStretch()
         lay.addLayout(tb)
 
@@ -7039,6 +6947,7 @@ class BatchChannelConfirmDialog(QDialog):
         self.param_table.setFont(QFont("Microsoft YaHei", 10))
         self.param_table.verticalHeader().setVisible(False)
         self.param_table.setAlternatingRowColors(True)
+        self.param_table.setWordWrap(False)
 
         self._row_widgets = []
         for idx, gap in enumerate(self.gaps_info):
@@ -7067,7 +6976,7 @@ class BatchChannelConfirmDialog(QDialog):
             self.param_table.setItem(idx, 2, item_next)
 
             # 可用长度列
-            item_len = QTableWidgetItem(f"{gap['available_length']:.1f}")
+            item_len = QTableWidgetItem(f"{gap['available_length']:.3f}")
             item_len.setFlags(item_len.flags() & ~Qt.ItemIsEditable)
             item_len.setTextAlignment(Qt.AlignCenter)
             self.param_table.setItem(idx, 3, item_len)
@@ -7093,7 +7002,7 @@ class BatchChannelConfirmDialog(QDialog):
                 elif key == 'slope':
                     default_val = "3000"
                 elif key == 'Q':
-                    default_val = f"{gap['flow']:.3f}"
+                    default_val = format_display_number(gap['flow'])
                 item = QTableWidgetItem(default_val)
                 item.setTextAlignment(Qt.AlignCenter)
                 self.param_table.setItem(idx, c, item)
@@ -7105,6 +7014,9 @@ class BatchChannelConfirmDialog(QDialog):
             item_status.setTextAlignment(Qt.AlignCenter)
             item_status.setToolTip(status_text)
             reference = gap.get("reference_segment") or gap.get("upstream_channel") or {}
+            details = describe_connection_reference(reference)
+            if details:
+                item_status.setToolTip(details)
             if reference.get("slope_borrowed_from_tunnel"):
                 item_status.setToolTip(
                     f"明渠坡降无可用缓流参考，采用附近隧洞“{reference.get('slope_source_name', '')}”的"
@@ -7183,13 +7095,21 @@ class BatchChannelConfirmDialog(QDialog):
                     item = self.param_table.item(r, c)
                     row.append(item.text() if item else "")
             rows.append(row)
-        return rows
+        return {
+            "rows": rows,
+            "gaps": [copy.deepcopy(row['gap']) for row in self._row_widgets],
+            "templates": copy.deepcopy(self._template_updates),
+        }
 
     def _restore_param_table(self, snapshot):
         self.param_table.blockSignals(True)
         self._param_undo_group += 1
         try:
-            for r, row_data in enumerate(snapshot):
+            self._template_updates = copy.deepcopy(snapshot["templates"])
+            for row, gap in zip(self._row_widgets, snapshot["gaps"]):
+                row['gap'].clear()
+                row['gap'].update(copy.deepcopy(gap))
+            for r, row_data in enumerate(snapshot["rows"]):
                 for c, val in enumerate(row_data):
                     if c == 4:
                         combo = self.param_table.cellWidget(r, 4)
@@ -7207,6 +7127,10 @@ class BatchChannelConfirmDialog(QDialog):
                             new_item = QTableWidgetItem(val)
                             new_item.setTextAlignment(Qt.AlignCenter)
                             self.param_table.setItem(r, c, new_item)
+                self._apply_row_type_mode(r)
+                reference = self._row_widgets[r]['gap'].get('reference_segment')
+                status = self.param_table.item(r, 11)
+                status.setToolTip(describe_connection_reference(reference) or status.text())
         finally:
             self._param_undo_group -= 1
             self.param_table.blockSignals(False)
@@ -7231,6 +7155,38 @@ class BatchChannelConfirmDialog(QDialog):
                 self._param_undo_stack.pop(0)
             self._param_redo_stack.clear()
             self._param_pre_edit_snapshot = None
+        if self._param_undo_group == 0 and col in (5, 6, 7, 8, 9, 10):
+            self._refresh_row_calculation(row)
+
+    def _refresh_row_calculation(self, index):
+        """编辑尺寸后刷新只读渠高和来源说明；原始参考保留用于判断人工覆盖。"""
+        row = self._row_widgets[index]
+        entries = row['entries']
+        reference = row['gap'].get('reference_segment') or row['gap'].get('upstream_channel')
+        structure = normalize_transition_structure_type(row['type_combo'].currentText())
+        try:
+            params = build_transition_fill_params(
+                structure, self._get_cell_val(*entries['B']), self._get_cell_val(*entries['m']),
+                self._get_cell_val(*entries['H']), self._get_cell_val(*entries['n']),
+                self._get_cell_val(*entries['slope']), self._get_cell_val(*entries['Q']),
+                row['gap'].get('flow_section', ''), reference,
+            )
+        except (ValueError, TypeError):
+            params = None
+        blocked = self.param_table.blockSignals(True)
+        try:
+            if not is_transition_culvert_type(structure):
+                self._set_cell(*entries['H'], _connection_dimension_text(params.structure_height) if params else '')
+            status = self.param_table.item(index, 11)
+            if params:
+                details = params.reference_details
+                status.setText('已修改-本处参数' if details.get('user_modified') else describe_transition_gap_source(row['gap']))
+                status.setToolTip(describe_connection_reference(details))
+            else:
+                status.setText('参数待完善')
+                status.setToolTip('当前参数不能计算有效水深，请检查尺寸、糙率和底坡。')
+        finally:
+            self.param_table.blockSignals(blocked)
 
     def _undo_param_table(self):
         if not self._param_undo_stack:
@@ -7270,8 +7226,7 @@ class BatchChannelConfirmDialog(QDialog):
                 h_item.setFlags(h_item.flags() | Qt.ItemIsEditable)
             else:
                 h_item.setFlags(h_item.flags() & ~Qt.ItemIsEditable)
-                if h_item.text().strip():
-                    h_item.setText("")
+                h_item.setToolTip("明渠渠高按当前流量及超高规则自动计算，确认参数后重新复算。")
         if m_item:
             if is_culvert:
                 m_item.setFlags(m_item.flags() & ~Qt.ItemIsEditable)
@@ -7300,12 +7255,15 @@ class BatchChannelConfirmDialog(QDialog):
             b_val = up.get('arc_radius', 0)
         else:
             b_val = up.get('bottom_width', 0)
-        self._set_cell(entries['B'][0], entries['B'][1], f"{b_val:.2f}")
-        self._set_cell(entries['H'][0], entries['H'][1], f"{up.get('structure_height', 0):.2f}" if is_transition_culvert_type(st) and up.get('structure_height', 0) > 0 else "")
+        self._set_cell(entries['B'][0], entries['B'][1], _connection_dimension_text(b_val))
+        self._set_cell(entries['H'][0], entries['H'][1], _connection_dimension_text(up.get('structure_height', 0)) if up.get('structure_height', 0) > 0 else "")
         self._set_cell(entries['m'][0], entries['m'][1], "" if is_transition_culvert_type(st) else f"{up.get('side_slope', 0)}")
         self._set_cell(entries['n'][0], entries['n'][1], f"{up.get('roughness', 0.014)}")
         self._set_cell(entries['slope'][0], entries['slope'][1], str(up.get('slope_inv', 3000)))
-        self._set_cell(entries['Q'][0], entries['Q'][1], f"{row['gap']['flow']:.3f}")
+        self._set_cell(entries['Q'][0], entries['Q'][1], format_display_number(row['gap']['flow']))
+        status = self.param_table.item(row_idx, 11)
+        status.setText(describe_transition_gap_source(row['gap']))
+        status.setToolTip(describe_connection_reference(up) or status.text())
 
     def _fill_all_recommended(self):
         self._push_param_undo()
@@ -7314,6 +7272,73 @@ class BatchChannelConfirmDialog(QDialog):
             for i, row in enumerate(self._row_widgets):
                 if row['gap'].get('reference_segment') or row['gap'].get('upstream_channel'):
                     self._fill_recommended(i)
+        finally:
+            self._param_undo_group -= 1
+
+    def _apply_section_template(self):
+        """当前行建立流量段模板，保留其他位置已单独指定的参数。"""
+        index = self.param_table.currentRow()
+        if index < 0:
+            fluent_info(self, "选择连接段", "请先选中一行已填写的明渠参数。")
+            return
+        collected = self._validate_and_collect_v2([index])
+        if not collected:
+            return
+        params = collected[index]
+        if params.structure_type not in OPEN_CHANNEL_TYPES:
+            fluent_info(self, "明渠模板", "请从明渠连接行建立模板，暗涵继续采用相邻暗涵参数。")
+            return
+        template = params_to_reference(params)
+        template.update(source_kind="user_template", user_modified=False)
+        template.pop("gap_key", None)
+        section = flow_section_key(params.flow_section)
+        updates = {}
+        for idx, row in enumerate(self._row_widgets):
+            gap = row['gap']
+            previous = gap.get('reference_segment') or gap.get('upstream_channel') or {}
+            if flow_section_key(gap.get('flow_section')) != section:
+                continue
+            if idx != index:
+                if is_transition_culvert_type(row['type_combo'].currentText()) or previous.get('source_kind') == 'user_override':
+                    continue
+                entries = row['entries']
+                expected = {
+                    'B': previous.get('arc_radius', 0) if previous.get('structure_type') == '明渠-U形' else previous.get('bottom_width', 0),
+                    'm': previous.get('side_slope', 0), 'n': previous.get('roughness', 0.014),
+                    'slope': previous.get('slope_inv', 3000),
+                    'Q': gap['flow'],
+                }
+                try:
+                    manual = (row['type_combo'].currentText() != normalize_transition_structure_type(previous.get('structure_type', '明渠-梯形'))
+                              or any(not math.isclose(self._get_cell_val(*entries[key]), value, abs_tol=1e-10)
+                                     for key, value in expected.items()))
+                except (ValueError, TypeError):
+                    manual = True
+                if manual:
+                    continue
+            reference = recalculate_open_channel(
+                template, gap['flow'], section, gap.get('max_flow', previous.get('max_flow', gap['flow'])),
+                require_subcritical=False,
+            )
+            if not reference:
+                fluent_info(self, "模板参数不适用", f"第 {idx + 1} 处无法按当前流量计算有效水深，请调整断面参数。")
+                return
+            reference['gap_key'] = gap.get('gap_key', previous.get('gap_key', ''))
+            updates[idx] = reference
+        self._push_param_undo()
+        self._param_undo_group += 1
+        try:
+            self._template_updates[section] = template
+            for idx, reference in updates.items():
+                gap = self._row_widgets[idx]['gap']
+                gap['reference_segment'] = reference
+                gap['has_reference'] = True
+                self._fill_recommended(idx)
+                status = self.param_table.item(idx, 11)
+                status.setText(describe_transition_gap_source(gap))
+                status.setToolTip(describe_connection_reference(reference))
+                status.setForeground(QColor("#2E7D32"))
+            self._apply_param_table_column_widths()
         finally:
             self._param_undo_group -= 1
 
@@ -7330,7 +7355,7 @@ class BatchChannelConfirmDialog(QDialog):
             self._set_cell(entries['m'][0], entries['m'][1], "")
             self._set_cell(entries['n'][0], entries['n'][1], "0.014")
             self._set_cell(entries['slope'][0], entries['slope'][1], "3000")
-            self._set_cell(entries['Q'][0], entries['Q'][1], f"{row['gap']['flow']:.3f}")
+            self._set_cell(entries['Q'][0], entries['Q'][1], format_display_number(row['gap']['flow']))
             self._apply_row_type_mode(self._row_widgets.index(row))
         self._param_undo_group -= 1
 
@@ -7338,6 +7363,7 @@ class BatchChannelConfirmDialog(QDialog):
         enabled = self.rb_table.isChecked()
         self._fill_btn.setEnabled(enabled)
         self._clear_btn.setEnabled(enabled)
+        self._template_btn.setEnabled(enabled)
         # 禁用/启用表格编辑
         for r in range(self.param_table.rowCount()):
             for c in range(5, 11):
@@ -7355,6 +7381,11 @@ class BatchChannelConfirmDialog(QDialog):
         text = item.text().strip()
         if not text:
             return default
+        # 预填流量仅在显示时舍入；用户改过文本后按新输入读取。
+        if col == 10:
+            raw_flow = self._row_widgets[row]['gap']['flow']
+            if text == format_display_number(raw_flow):
+                return float(raw_flow)
         try:
             return float(text)
         except ValueError:
@@ -7429,9 +7460,11 @@ class BatchChannelConfirmDialog(QDialog):
                 return None
         return params
 
-    def _validate_and_collect_v2(self):
+    def _validate_and_collect_v2(self, row_indices=None):
         params = {}
         for idx, row in enumerate(self._row_widgets):
+            if row_indices is not None and idx not in row_indices:
+                continue
             entries = row['entries']
             try:
                 st = normalize_transition_structure_type(row['type_combo'].currentText())
@@ -7483,7 +7516,7 @@ class BatchChannelConfirmDialog(QDialog):
             params = self._validate_and_collect_v2()
             if params is None:
                 return
-            self.result = {'mode': self.RESULT_TABLE_EDIT, 'params': params}
+            self.result = {'mode': self.RESULT_TABLE_EDIT, 'params': params, 'templates': copy.deepcopy(self._template_updates)}
         else:
             self.result = {'mode': self.RESULT_MANUAL_EACH, 'params': {}}
         self.accept()
@@ -7553,8 +7586,8 @@ class OpenChannelDialog(QDialog):
             self.setWindowTitle(f"插入补段 ({current_index}/{total_count})")
         else:
             self.setWindowTitle("插入补段")
-        self.resize(520, 560)
-        self.setMinimumSize(420, 440)
+        self.resize(620, 760)
+        self.setMinimumSize(520, 680)
         self._create_ui()
 
     def _refresh_structure_type_choices(self, current_text=""):
@@ -7580,7 +7613,7 @@ class OpenChannelDialog(QDialog):
         loc_lay = QVBoxLayout(loc_grp)
         loc_lay.addWidget(QLabel(f"前方建筑物: {self.prev_structure}"))
         loc_lay.addWidget(QLabel(f"后方建筑物: {self.next_structure}"))
-        loc_lay.addWidget(QLabel(f"可用长度: {self.available_length:.1f} m    流量段: {self.flow_section}    流量: {self.flow:.3f} m³/s"))
+        loc_lay.addWidget(QLabel(f"可用长度: {self.available_length:.3f} m    流量段: {self.flow_section}    流量: {format_display_number(self.flow)} m³/s"))
         lay.addWidget(loc_grp)
 
         # 参数来源
@@ -7599,17 +7632,22 @@ class OpenChannelDialog(QDialog):
             # U形明渠显示半径R，其他显示底宽B
             st_type = up.get('structure_type', '')
             if st_type == "明渠-U形":
-                b_label = f"R={up.get('arc_radius', 0):.2f}m"
+                b_label = f"R={_connection_dimension_text(up.get('arc_radius', 0))}m"
             else:
-                b_label = f"B={up.get('bottom_width', 0):.2f}m"
+                b_label = f"B={_connection_dimension_text(up.get('bottom_width', 0))}m"
             if is_transition_culvert_type(st_type):
-                extra_label = f"H={up.get('structure_height', 0):.2f}m"
+                extra_label = f"H={_connection_dimension_text(up.get('structure_height', 0))}m"
             else:
                 extra_label = f"m={up.get('side_slope', 0)}"
             info = f"  → {st_type}  {b_label}  {extra_label}  n={up.get('roughness', 0.014)}  底坡1/{up.get('slope_inv', 3000)}"
             if up.get('slope_borrowed_from_tunnel'):
                 info += f"\n  坡降取附近隧洞：{up.get('slope_source_name', '')}，保持明渠形式"
+            source_detail = describe_connection_reference(up)
+            if source_detail:
+                info += "\n" + source_detail
             lbl_info = QLabel(info)
+            lbl_info.setWordWrap(True)
+            lbl_info.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
             lbl_info.setStyleSheet("color: green; margin-left: 20px;")
             src_lay.addWidget(lbl_info)
         else:
@@ -7668,10 +7706,13 @@ class OpenChannelDialog(QDialog):
         pg.addWidget(QLabel("流量 Q(m³/s):"), 5, 0)
         self.edit_Q = QLineEdit()
         self.edit_Q.setMinimumHeight(_row_h)
-        self.edit_Q.setText(f"{self.flow:.3f}")
+        self.edit_Q.setText(format_display_number(self.flow))
         pg.addWidget(self.edit_Q, 5, 1)
 
         lay.addWidget(param_grp)
+        self.save_template_cb = QCheckBox("将本次明渠参数用于本流量段后续连接位置，并随工程保存")
+        self.save_template_cb.setToolTip("相邻暗涵和已单独指定参数的位置保持原设置。")
+        lay.addWidget(self.save_template_cb)
 
         # 按钮区
         btn_lay = QHBoxLayout()
@@ -7708,6 +7749,9 @@ class OpenChannelDialog(QDialog):
         self._sync_secondary_input_height()
         self.edit_H.setEnabled(self.rb_manual.isChecked() and is_culvert)
         self.edit_m.setEnabled(self.rb_manual.isChecked() and not is_culvert)
+        self.save_template_cb.setEnabled(not is_culvert)
+        if is_culvert:
+            self.save_template_cb.setChecked(False)
         if is_culvert:
             self.edit_m.clear()
         else:
@@ -7744,8 +7788,8 @@ class OpenChannelDialog(QDialog):
             b_val = up.get('arc_radius', 0)
         else:
             b_val = up.get('bottom_width', 0)
-        self.edit_B.setText(f"{b_val:.2f}")
-        self.edit_H.setText(f"{up.get('structure_height', 0):.2f}" if is_transition_culvert_type(st) and up.get('structure_height', 0) > 0 else "")
+        self.edit_B.setText(_connection_dimension_text(b_val))
+        self.edit_H.setText(_connection_dimension_text(up.get('structure_height', 0)) if is_transition_culvert_type(st) and up.get('structure_height', 0) > 0 else "")
         self.edit_m.setText("" if is_transition_culvert_type(st) else f"{up.get('side_slope', 0)}")
         self.edit_n.setText(f"{up.get('roughness', 0.014)}")
         self.edit_slope.setText(str(up.get('slope_inv', 3000)))
@@ -7764,7 +7808,7 @@ class OpenChannelDialog(QDialog):
     def _on_apply_all(self):
         """剩余全部用推荐"""
         self.apply_all_remaining = True
-        if self.upstream_channel:
+        if self.upstream_channel and not self.save_template_cb.isChecked():
             self._fill_from_upstream()
         self._on_ok()
 
@@ -7776,7 +7820,8 @@ class OpenChannelDialog(QDialog):
             m = float(self.edit_m.text() or 0) if st in ("明渠-梯形", "明渠-U形") else 0.0
             n = float(self.edit_n.text() or 0.014)
             si = float(self.edit_slope.text() or 3000)
-            Q = float(self.edit_Q.text() or 0)
+            flow_text = self.edit_Q.text().strip()
+            Q = self.flow if flow_text == format_display_number(self.flow) else float(flow_text or 0)
 
             if Q <= 0:
                 fluent_info(self, "输入错误", "流量 Q 必须大于 0")

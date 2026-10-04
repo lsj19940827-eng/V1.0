@@ -87,6 +87,7 @@ class ChannelNode:
     pressure_pipe_loss_override_m: Optional[float] = None  # 表3 第38列人工采用值（m）
     is_diversion_gate: bool = False             # 是否为闸类结构（分水闸/分水口/节制闸/泄水闸等，仅过闸水头损失）
     is_auto_inserted_channel: bool = False      # 是否为自动插入的明渠段（渐变段间连接段，不分配IP编号）
+    connection_source_details: Dict[str, Any] = field(default_factory=dict)  # 连接断面来源及两工况复算结果
     stat_length: float = 0.0                    # 统计用长度（结构类型汇总用，不参与导出）
     
     # ========== 渐变段相关字段 ==========
@@ -293,6 +294,7 @@ class ChannelNode:
             "pressure_pipe_loss_override_m": self.pressure_pipe_loss_override_m,
             "is_diversion_gate": self.is_diversion_gate,
             "is_auto_inserted_channel": self.is_auto_inserted_channel,
+            "connection_source_details": self.connection_source_details,
             "stat_length": self.stat_length,
             
             # ========== 渐变段相关字段 ==========
@@ -420,6 +422,7 @@ class ChannelNode:
                 node.pressure_pipe_loss_override_m = None
         node.is_diversion_gate = d.get("is_diversion_gate", False)
         node.is_auto_inserted_channel = d.get("is_auto_inserted_channel", False)
+        node.connection_source_details = d.get("connection_source_details", {}) or {}
         node.stat_length = d.get("stat_length", 0.0)
         
         # ========== 渐变段相关字段 ==========
@@ -540,6 +543,8 @@ class ProjectSettings:
     # ========== 倒虹吸平面转弯半径设置 ==========
     siphon_turn_radius_n: float = 3.0                  # 倒虹吸转弯半径倍数n（R = n × D，D为管径）
     transition_length_rules: List[TransitionLengthRule] = field(default_factory=list)  # 渐变段长度组合规则
+    connection_channel_templates: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # 用户指定的分流量段明渠模板
+    connection_channel_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # 用户修改的单处连接断面
     
     def get_station_prefix(self) -> str:
         """
@@ -580,15 +585,12 @@ class ProjectSettings:
         if station_value < 0:
             station_value = 0.0
         
-        # 计算公里数和米数
-        km = int(station_value / 1000)
-        meters = station_value % 1000
-        
-        # 格式化米数：整数部分3位，小数部分3位
-        # 例如：20.073 -> "020.073"
-        meters_str = f"{meters:07.3f}"  # 总宽度7位，包括小数点，3位小数
-        
-        return f"{prefix}{km}+{meters_str}"
+        # 延迟导入，避免工具包加载提取器时与数据模型形成循环依赖。
+        if __package__ and __package__.startswith('推求水面线.'):
+            from ..utils.numeric_precision import format_length_station
+        else:
+            from utils.numeric_precision import format_length_station
+        return format_length_station(station_value, prefix)
     
     def validate(self) -> tuple:
         """
@@ -681,6 +683,8 @@ class ProjectSettings:
             "倒虹吸出口渐变段局部损失系数": self.siphon_transition_outlet_zeta,
             "倒虹吸转弯半径倍数n": self.siphon_turn_radius_n,
             "渐变段长度规则": [rule.to_dict() for rule in self.transition_length_rules],
+            "连接明渠模板": self.connection_channel_templates,
+            "连接段参数覆盖": self.connection_channel_overrides,
         }
     
     @staticmethod
@@ -754,6 +758,12 @@ class ProjectSettings:
                     settings.transition_length_rules.append(item)
                 elif isinstance(item, dict):
                     settings.transition_length_rules.append(TransitionLengthRule.from_dict(item))
+
+        for attr, label in (("connection_channel_templates", "连接明渠模板"),
+                            ("connection_channel_overrides", "连接段参数覆盖")):
+            raw = d.get(label, d.get(attr, {}))
+            if isinstance(raw, dict):
+                setattr(settings, attr, {str(key): dict(value) for key, value in raw.items() if isinstance(value, dict)})
         
         return settings
 
@@ -773,3 +783,4 @@ class OpenChannelParams:
     structure_height: float = 0.0
     arc_radius: float = 0.0    # 圆弧半径（明渠-U形用）
     theta_deg: float = 0.0     # 圆弧圆心角（明渠-U形用）
+    reference_details: Dict[str, Any] = field(default_factory=dict)  # 推荐来源和复算信息

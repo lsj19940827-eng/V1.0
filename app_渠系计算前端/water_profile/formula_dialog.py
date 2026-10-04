@@ -1218,6 +1218,13 @@ def show_transition_loss_dialog(parent, node_name: str, details: Dict[str, Any])
          "formula": r"$h_{tr} = h_{j1} + h_f$",
          "values": f"$h_{{tr}} = {h_j1:.4f} + {h_f:.4f} = {total:.4f}$ m"},
     ]
+    adopted_total = details.get('actual_total')
+    if adopted_total is not None and abs(float(adopted_total) - float(total)) > 1e-9:
+        sections.append({
+            'title': '10. 当前采用值',
+            'values': f"表格及水位递推采用已存结果  $h_{{tr,adopt}} = {float(adopted_total):.4f}$ m\n"
+                      '以上公式为按当前参数补建的复核过程。重新执行计算后更新采用值。',
+        })
     FormulaDialog(parent, f"{node_name} - 渐变段水头损失计算详情", sections)
 
 

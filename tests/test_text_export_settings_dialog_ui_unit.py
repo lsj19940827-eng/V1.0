@@ -4,15 +4,16 @@
 import importlib.util
 import os
 import sys
+import tempfile
 import pytest
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-from PySide6.QtCore import QEvent, QRect, Qt
+from PySide6.QtCore import QEvent, QObject, QRect, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QPushButton, QAbstractItemView
+from PySide6.QtWidgets import QApplication, QPushButton, QAbstractItemView, QWidget
 
 
 def _get_qapp():
@@ -41,7 +42,24 @@ cad_tools = _load_cad_tools()
 
 
 @pytest.fixture(autouse=True)
-def _dispose_dialogs():
+def _isolated_ui_settings(monkeypatch):
+    # 用临时配置验证尺寸记忆，避免测试清空用户实际保存的窗口尺寸。
+    settings_cls = cad_tools.QSettings
+
+    base_dir = Path(__file__).resolve().parents[1] / ".pytest_tmp"
+    base_dir.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="profile_dialog_ui_", dir=base_dir) as temp_dir:
+        def create_test_settings(*_args):
+            return settings_cls(str(Path(temp_dir) / "text_export_ui.ini"), settings_cls.IniFormat)
+
+        dialog_module = sys.modules[cad_tools.TextExportSettingsDialog.__module__]
+        monkeypatch.setattr(dialog_module, "QSettings", create_test_settings)
+        monkeypatch.setattr(cad_tools, "QSettings", create_test_settings)
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _dispose_dialogs(_isolated_ui_settings):
     yield
     # 显式释放延迟删除的窗口，避免跨用例的快捷键和焦点相互干扰。
     app = _get_qapp()
@@ -316,7 +334,7 @@ def test_xxpipe_mode_shows_fixed_read_only_five_rows_and_runtime_view():
     assert widget.badge_label.isHidden()
     assert widget.position_label.text() == "120"
     assert not dlg._enabled_list.selectedItems()
-    assert widget.drag_handle.isHidden()
+    assert not hasattr(widget, "drag_handle")
 
     dlg.deleteLater()
 
@@ -338,6 +356,110 @@ def test_inline_move_buttons_target_their_own_row_and_respect_edges():
     assert _enabled_ids(dlg) == before
     assert _runtime_row_ids(dlg) == before
     dlg.deleteLater()
+
+
+@pytest.mark.parametrize("mode", ["standard", "xxpipe"])
+def test_row_actions_never_show_child_controls_as_top_level_windows(mode):
+    app = _get_qapp()
+    shown_windows = []
+
+    class WindowShowRecorder(QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow():
+                # 显示瞬间取证，避免控件随后挂入布局后漏掉短暂的小窗口。
+                shown_windows.append(type(obj).__name__)
+            return False
+
+    recorder = WindowShowRecorder()
+    app.installEventFilter(recorder)
+    try:
+        dlg = cad_tools.TextExportSettingsDialog(mode=mode)
+        dlg.show()
+        _flush_events()
+        if mode == "standard":
+            actions = [
+                lambda: _find_button(dlg, "亭子口模板").click(),
+                lambda: _find_button(dlg, "恢复推荐").click(),
+                lambda: _find_row_widget(dlg, _enabled_ids(dlg)[0]).down_button.click(),
+                lambda: dlg._candidate_toggle_btn.click(),
+                lambda: _find_row_widget(dlg, "bd_ip_before").action_button.click(),
+                lambda: _find_row_widget(dlg, "bd_ip_before").action_button.click(),
+                dlg._disable_all_rows,
+                dlg._enable_all_rows,
+            ]
+            for action in actions:
+                action()
+                _flush_events()
+        dlg._btn_reset.click()
+        _flush_events()
+        assert shown_windows == ["TextExportSettingsDialog"]
+    finally:
+        app.removeEventFilter(recorder)
+
+
+def test_sorting_expanding_and_reapplying_template_reuse_existing_controls():
+    _get_qapp()
+    dlg = cad_tools.TextExportSettingsDialog()
+    dlg.show()
+    _flush_events()
+    row_widgets = dict(dlg._row_widgets)
+    runtime_labels = dict(dlg._runtime_row_labels)
+    actions = [
+        lambda: row_widgets["building_name"].down_button.click(),
+        lambda: dlg._candidate_toggle_btn.click(),
+        lambda: dlg._candidate_toggle_btn.click(),
+        lambda: _find_button(dlg, "亭子口模板").click(),
+        lambda: dlg._entries["scale_x"].setText("2500"),
+    ]
+    for action in actions:
+        action()
+        _flush_events()
+        assert dlg._row_widgets == row_widgets
+        assert dlg._runtime_row_labels == runtime_labels
+        assert _runtime_row_ids(dlg) == _enabled_ids(dlg)
+        for row, rid in enumerate(_enabled_ids(dlg)):
+            item = dlg._enabled_list.item(row)
+            assert dlg._enabled_list.itemWidget(item) is row_widgets[rid]
+            assert row_widgets[rid].title_label.text().startswith(f"{row + 1:02d}.")
+            for column, key in enumerate(("title", "value", "source")):
+                index = dlg._runtime_rows_layout.indexOf(runtime_labels[rid][key])
+                assert dlg._runtime_rows_layout.getItemPosition(index) == (row, column, 1, 1)
+
+
+def test_adding_and_removing_one_row_preserves_other_controls():
+    _get_qapp()
+    dlg = cad_tools.TextExportSettingsDialog()
+    dlg.show()
+    dlg._toggle_candidate_section()
+    _flush_events()
+    unchanged = {rid: widget for rid, widget in dlg._row_widgets.items() if rid != "bd_ip_before"}
+    for enabled in (True, False, True, False):
+        _find_row_widget(dlg, "bd_ip_before").action_button.click()
+        _flush_events()
+        assert ("bd_ip_before" in _enabled_ids(dlg)) is enabled
+        assert _runtime_row_ids(dlg) == _enabled_ids(dlg)
+        assert all(dlg._row_widgets[rid] is widget for rid, widget in unchanged.items())
+
+
+@pytest.mark.parametrize("operation", ["down", "to_bottom"])
+def test_sorting_can_reach_the_last_position(operation):
+    _get_qapp()
+    dlg = cad_tools.TextExportSettingsDialog()
+    dlg.show()
+    _flush_events()
+    before = _enabled_ids(dlg)
+    rid = before[-2] if operation == "down" else before[0]
+    if operation == "down":
+        _find_row_widget(dlg, rid).down_button.click()
+    else:
+        dlg._set_current_row_id(rid, "enabled")
+        dlg._move_selected_row_to_edge(False)
+    _flush_events()
+    expected = [item for item in before if item != rid] + [rid]
+    assert _enabled_ids(dlg) == expected
+    assert _enabled_list_ids(dlg) == expected
+    assert _runtime_row_ids(dlg) == expected
+    assert not _find_row_widget(dlg, rid).down_button.isEnabled()
 
 
 def test_layout_details_expand_without_changing_export_settings():
@@ -680,7 +802,7 @@ def test_enabled_and_candidate_lists_are_independently_scrollable(monkeypatch):
     dlg.deleteLater()
 
 
-def test_drag_handle_only_exists_for_enabled_rows():
+def test_row_lists_use_buttons_without_drag_handles():
     _get_qapp()
     dlg = cad_tools.TextExportSettingsDialog()
     dlg._disable_all_rows()
@@ -688,8 +810,14 @@ def test_drag_handle_only_exists_for_enabled_rows():
 
     enabled_widget = _find_row_widget(dlg, "station")
     candidate_widget = _find_row_widget(dlg, "bd_ip_before")
-    assert not enabled_widget.drag_handle.isHidden()
-    assert candidate_widget.drag_handle.isHidden()
+    assert not hasattr(enabled_widget, "drag_handle")
+    assert not hasattr(candidate_widget, "drag_handle")
+    assert enabled_widget.layout().itemAt(enabled_widget.layout().count() - 1).widget() is enabled_widget.action_button
+    for list_widget in (dlg._enabled_list, dlg._candidate_list):
+        assert list_widget.dragDropMode() == QAbstractItemView.NoDragDrop
+        assert not list_widget.dragEnabled()
+        assert not list_widget.acceptDrops()
+        assert not list_widget.viewport().acceptDrops()
 
     dlg.deleteLater()
 

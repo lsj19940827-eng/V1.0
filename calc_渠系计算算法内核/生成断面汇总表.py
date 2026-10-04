@@ -58,6 +58,7 @@ from 有压管道设计 import (
     get_flow_increase_percent as _pressure_pipe_inc_pct,
 )
 from 推求水面线.utils.pressure_pipe_common import normalize_pressure_pipe_material_key as _normalize_shared_pressure_pipe_material_key
+from 推求水面线.utils.numeric_precision import format_display_number
 
 try:
     from 推求水面线.core.pressure_pipe_calc import calc_total_head_loss as _calc_pressure_pipe_total_head_loss
@@ -3553,6 +3554,32 @@ def _dxf_text_width(text, text_height):
     return w
 
 
+def _dxf_table_value_text(value, header):
+    """按列格式化图纸文字，不改变用于计算、合并分组和保存的原值。"""
+    if value is None:
+        return ""
+    name, unit = header
+    if isinstance(value, bool) or (unit is None and any(
+        label in name for label in ("流量段", "名称", "围岩", "管材", "材质")
+    )):
+        return str(value)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not math.isfinite(number):
+        return str(value)
+    if "糙率" in name:
+        return _fmt_compact(number, 4)
+    if unit in ("mm", "个", "座", "处", "根") or "数量" in name or "座数" in name:
+        return _fmt_compact(number, 2)
+    if unit == "km" or "（km）" in name or "水位" in name or "高程" in name:
+        return format_display_number(number, 3)
+    if "水头损失" in name:
+        return format_display_number(number, 4)
+    return format_display_number(number)
+
+
 def _dxf_auto_col_widths(headers, data_rows):
     """根据表头和数据内容自动计算每列宽度(mm)。"""
     ncols = len(headers)
@@ -3565,7 +3592,7 @@ def _dxf_auto_col_widths(headers, data_rows):
         for ci, val in enumerate(row):
             if ci >= ncols:
                 break
-            w = _dxf_text_width(val, _DXF_TEXT_H)
+            w = _dxf_text_width(_dxf_table_value_text(val, headers[ci]), _DXF_TEXT_H)
             if w > widths[ci]:
                 widths[ci] = w
     return [w + _DXF_COL_PAD for w in widths]
@@ -3829,10 +3856,10 @@ def _dxf_draw_table(msp, origin_x, origin_y, title, headers, col_widths_mm,
                 merge_val = data_rows[r_start][ci]
                 if merge_val is None or merge_val == "":
                     continue
-                _add_cell_text(str(merge_val), cx, cy, _DXF_TEXT_H)
+                _add_cell_text(_dxf_table_value_text(merge_val, headers[ci]), cx, cy, _DXF_TEXT_H)
             else:
                 cy = (row_y[ri] + row_y[ri + 1]) / 2
-                _add_cell_text(str(val), cx, cy, _DXF_TEXT_H)
+                _add_cell_text(_dxf_table_value_text(val, headers[ci]), cx, cy, _DXF_TEXT_H)
 
     return total_h
 
