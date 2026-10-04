@@ -123,6 +123,7 @@ def _make_multi_case_dummy(panel_cls, scripted_html=True):
         pass
 
     dummy = _Dummy()
+    dummy._get_increase_summary_lines = MethodType(panel_cls._get_increase_summary_lines, dummy)
     dummy.detail_cb = _FakeCheckBox(False)
     dummy.result_text = _FakeResultView(scripted_html)
     dummy._appendix_e_export_text = ""

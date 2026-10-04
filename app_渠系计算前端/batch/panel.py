@@ -31,6 +31,7 @@ from qfluentwidgets import (
     LineEdit, ComboBox, RoundMenu, Action,
 )
 
+from app_渠系计算前端.velocity_validation import velocity_checks
 from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, auto_resize_table, DIALOG_STYLE, fluent_info, fluent_error, fluent_question, fluent_batch_result
 from app_渠系计算前端.frozen_table import FrozenColumnTableWidget
 from app_渠系计算前端.export_utils import (
@@ -332,7 +333,8 @@ except ImportError:
 
 try:
     from 圆拱直墙型暗涵设计 import (
-        quick_calculate_arch_culvert as arch_culvert_calculate
+        quick_calculate_arch_culvert as arch_culvert_calculate,
+        get_required_freeboard_height_arch,
     )
     ARCH_CULVERT_AVAILABLE = True
 except ImportError:
@@ -3278,7 +3280,7 @@ class BatchPanel(QWidget):
             o.append("")
             o.append("【五、验证】")
             velocity_ok = v_min <= V_d <= v_max
-            o.append(f"  1. 流速验证: {v_min} ≤ V ≤ {v_max} m/s → V = {V_d:.3f} → {'通过 ✓' if velocity_ok else '未通过 ✗'}")
+            o.append(f"  1. 流速验证: {v_min} < V < {v_max} m/s → V = {V_d:.3f} → {'通过 ✓' if velocity_ok else '未通过 ✗'}")
             fb_ok = FB_i >= 0.4
             o.append(f"  2. 净空高度验证: Fb加大 = {FB_i:.3f}m ≥ 0.4m → {'通过 ✓' if fb_ok else '未通过 ✗'}")
             pa_ok = PA_i >= 15
@@ -3341,11 +3343,17 @@ class BatchPanel(QWidget):
             o.append(f"  5. 渠道高度 H = h加大 + Fb = {H:.3f} m")
             o.append("")
             o.append("【五、验证】")
-            velocity_ok = v_min <= V <= v_max
-            o.append(f"  1. 流速验证: {v_min} ≤ V ≤ {v_max} → V = {V:.3f} → {'通过 ✓' if velocity_ok else '未通过 ✗'}")
+            velocity_ok, inc_velocity_ok, velocity_lines = velocity_checks(
+                {'v_min': v_min, 'v_max': v_max, 'use_increase': result.get('_use_increase', True)},
+                result, strict_design=True,
+            )
+            o.extend(velocity_lines)
+            o.append(f"  1. 流速验证: {v_min} < V < {v_max} → V = {V:.3f} → {'通过 ✓' if velocity_ok else '未通过 ✗'}")
             fb_req = 0.25 * h_inc + 0.2
             fb_ok = Fb >= (fb_req - 0.001)
             o.append(f"  2. 超高复核（规范 6.4.8-2）: Fb = {Fb:.3f}m ≥ {fb_req:.3f}m → {'通过 ✓' if fb_ok else '未通过 ✗'}")
+            all_pass = velocity_ok and inc_velocity_ok and fb_ok
+            o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
         return "\n".join(o)
 
     def _fmt_ducao_report(self, input_vals, result):
@@ -3457,6 +3465,10 @@ class BatchPanel(QWidget):
 
         o.append("")
         o.append("【五、验证】")
+        limit_design_ok, limit_inc_ok, velocity_lines = velocity_checks(
+            {'v_min': v_min, 'v_max': v_max, 'use_increase': use_increase}, result,
+        )
+        o.extend(velocity_lines)
         v_rec_min, v_rec_max = 1.0, 2.5
         velocity_ok = v_rec_min <= V_design <= v_rec_max
         o.append(f"  1. 流速验证（规范 9.4.1-1）: 宜为 {v_rec_min}～{v_rec_max} m/s")
@@ -3484,6 +3496,9 @@ class BatchPanel(QWidget):
             if use_increase:
                 Fb_inc_min = 0.10
                 o.append(f"     加大有效超高: Fb_加大 = {Fb:.3f}m ≥ {Fb_inc_min:.2f}m → {'通过 ✓' if Fb >= Fb_inc_min else '未通过 ✗'}")
+        all_pass = (limit_design_ok and limit_inc_ok and Fb_design >= Fb_design_min
+                    and design_tie_ok and (not use_increase or Fb >= 0.10))
+        o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
         return "\n".join(o)
 
     def _fmt_suidong_report(self, input_vals, result):
@@ -3636,6 +3651,10 @@ class BatchPanel(QWidget):
         o.append(f"  1. 流速验证: {v_min} ≤ {V_design:.3f} ≤ {v_max} → {'通过 ✓' if velocity_ok else '未通过 ✗'}")
         min_fb_hgt = 0.4
         is_culvert = "暗涵" in section_type
+        if is_culvert:
+            min_fb_hgt = result.get('fb_min_required', 0.4)
+            if "圆拱直墙" in section_type:
+                min_fb_hgt = get_required_freeboard_height_arch(H_total_val)
         min_fb_pct = 10.0 if is_culvert else 15.0
         max_fb_pct = 30.0 if is_culvert else None
         fb_hgt_ok = fb_hgt_check >= min_fb_hgt

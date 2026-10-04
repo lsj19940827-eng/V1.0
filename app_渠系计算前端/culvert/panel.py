@@ -64,7 +64,10 @@ from 矩形暗涵设计 import (
     MIN_FREEBOARD_PCT_RECT, MAX_FREEBOARD_PCT_RECT, MIN_FREEBOARD_HGT_RECT,
     HB_RATIO_LIMIT,
 )
-from 圆拱直墙型暗涵设计 import quick_calculate_arch_culvert
+from 圆拱直墙型暗涵设计 import (
+    quick_calculate_arch_culvert, get_required_freeboard_height_arch,
+    _format_fb_details as format_arch_freeboard_details,
+)
 
 from app_渠系计算前端.styles import P, S, W, E, BG, CARD, BD, T1, T2, INPUT_LABEL_STYLE, INPUT_SECTION_STYLE, INPUT_HINT_STYLE
 from app_渠系计算前端.export_utils import (
@@ -598,7 +601,7 @@ class CulvertPanel(QWidget):
         h.bullet_list([
             "高宽比H/B、宽高比B/H 建议不超过1.2（GB 50288-2018 第11.2.5条，超出时计算仍执行，仅给出提醒）",
             "最小净空面积 10%，最大 30%",
-            "最小净空高度 0.4m",
+            "净空高度按 GB 50288-2018 表11.2.5，分别采用矩形涵、拱涵规则",
         ])
         h.section("计算模式总览")
         h.table(
@@ -626,15 +629,15 @@ class CulvertPanel(QWidget):
             ("校核涵高上下限", "涵高上限由净空面积 ≤30% 决定；无可行涵高时自动跳过该 β"),
             ("两阶段搜索最优解", "先粗扫定位最优区间，再细扫精确求解，全程取总面积最小的方案"),
         ])
-        h.hint("涵高下限由两个条件取最大值：净空面积不低于 10%、净空高度不小于 0.4m 或涵高的 1/6")
+        h.hint("矩形涵的涵高下限由净空面积与净空高度共同控制；圆拱直墙型采用表11.2.5的拱涵列，不套用矩形涵规则")
         h.hint("涵高上限由净空面积不超过 30% 决定；H/B≤1.2 为建议值，超出时结果中给出 ⚠ 提醒")
         h.section("净空约束条件")
         h.text("参考《灌溉与排水工程设计标准》 GB 50288-2018：")
         h.bullet_list([
             "净空面积应为涵洞断面总面积的 10%~30%",
             "净空高度在任何情况下均不得小于 0.4m",
-            "当 H ≤ 3m 时，净空高度应 ≥ H/6",
-            "当 H > 3m 时，净空高度应 ≥ 0.5m",
+            "矩形涵：H ≤ 3m 时净空高度应 ≥ max(0.4m, H/6)；H > 3m 时应 ≥ 0.5m",
+            "圆拱直墙型暗涵：H ≤ 3m 时净空高度应 ≥ max(0.4m, H/4)；H > 3m 时应 ≥ 0.75m",
         ])
         h.section("宽深比说明")
         h.bullet_list([
@@ -1663,7 +1666,7 @@ class CulvertPanel(QWidget):
         fb_pct_inc = result.get('freeboard_pct_inc', 0.0)
         fb_hgt_inc = result.get('freeboard_hgt_inc', 0.0)
 
-        fb_min_req = result.get('fb_min_required', 0.0)
+        fb_min_req = get_required_freeboard_height_arch(H_total)
         fb_area_val = fb_pct_inc if use_increase else fb_pct_d
         fb_hgt_val = fb_hgt_inc if use_increase else fb_hgt_d
         fb_area_ok = MIN_FREEBOARD_PCT_RECT * 100.0 - 0.1 <= fb_area_val <= MAX_FREEBOARD_PCT_RECT * 100.0 + 0.1
@@ -1822,7 +1825,7 @@ class CulvertPanel(QWidget):
         o.append(f"【{section_num_fb}、净空校核】")
         o.append("")
         o.append("  按暗涵净空要求校核：")
-        for line in str(result.get('fb_check_details', '')).splitlines():
+        for line in format_arch_freeboard_details(H_total, fb_min_req).splitlines():
             o.append(f"  {line}")
         o.append("")
         o.append("  本断面校核结果:")

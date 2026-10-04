@@ -132,7 +132,7 @@ def make_appendix_e_payload(schemes, sel_b, sel_h, v_min, v_max):
         h_val = float(scheme["h"])
         velocity = float(scheme["V"])
         is_selected = abs(b_val - sel_b) < 0.01 and abs(h_val - sel_h) < 0.01
-        velocity_ok = v_min < velocity < v_max
+        velocity_ok = bool(scheme.get("velocity_check_passed", v_min < velocity < v_max))
 
         if is_selected:
             status_code = "selected"
@@ -141,7 +141,7 @@ def make_appendix_e_payload(schemes, sel_b, sel_h, v_min, v_max):
             selected_row = idx
         elif not velocity_ok:
             status_code = "warning"
-            status_label = "流速不满足"
+            status_label = "加大流速不符" if scheme.get("velocity_increased_check_passed") is False else "流速不满足"
             row_class = "is-warning"
         else:
             status_code = "normal"

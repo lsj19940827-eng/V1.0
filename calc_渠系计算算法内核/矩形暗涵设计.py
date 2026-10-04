@@ -228,6 +228,18 @@ def solve_water_depth_rectangular(B: float, H: float, n: float, slope: float, Q_
     
     h_low = 0.00001
     h_high = H
+    inverse_n = 1 / n
+    sqrt_slope = slope ** 0.5
+
+    def flow_at_depth(h: float) -> float:
+        """迭代只需流量，省去反复构造完整水力结果及净空数据。"""
+        if h <= 0:
+            return 0.0
+        depth = min(h, H)
+        A = B * depth
+        P = B + 2 * depth
+        R_hyd = A / P if P > 0 else 0
+        return inverse_n * A * (R_hyd ** (2 / 3)) * sqrt_slope if R_hyd > 0 else 0.0
     
     h_mid = 0
     for _ in range(MAX_ITERATIONS):
@@ -235,8 +247,7 @@ def solve_water_depth_rectangular(B: float, H: float, n: float, slope: float, Q_
         if h_mid <= h_low or h_mid >= h_high:
             break
         
-        outputs = calculate_rectangular_outputs(B, H, h_mid, n, slope)
-        Q_mid = outputs['Q']
+        Q_mid = flow_at_depth(h_mid)
         
         if Q_mid > 0 and abs(Q_mid - Q_target) / Q_target < SOLVER_TOLERANCE:
             return (h_mid, True)
@@ -246,8 +257,8 @@ def solve_water_depth_rectangular(B: float, H: float, n: float, slope: float, Q_
         else:
             h_high = h_mid
     
-    outputs = calculate_rectangular_outputs(B, H, h_mid, n, slope)
-    if outputs['Q'] > 0 and abs(outputs['Q'] - Q_target) / Q_target < SOLVER_TOLERANCE * 1.5:
+    Q_mid = flow_at_depth(h_mid)
+    if Q_mid > 0 and abs(Q_mid - Q_target) / Q_target < SOLVER_TOLERANCE * 1.5:
         return (h_mid, True)
     
     return (h_mid, False)
@@ -723,6 +734,8 @@ def quick_calculate_rectangular_culvert(Q: float, n: float, slope_inv: float,
                     best_B = B
                     best_H = H_trial
                     best_found = True
+                    # 固定正高宽比时，B 递增且四位舍入后的 H 不减，首个合格断面面积最小。
+                    break
 
                 B += DIM_INCREMENT
         else:

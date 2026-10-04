@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent
 from PySide6.QtGui import QFont
+from app_渠系计算前端.velocity_validation import velocity_checks
 from app_渠系计算前端.webview_compat import (
     create_web_view,
     get_web_engine_import_error,
@@ -2215,13 +2216,14 @@ class OpenChannelPanel(QWidget):
                 o2.append(f"  渠道高度 H = h + Fb = {h:.3f} + {Fb_d:.3f} = {H_d:.3f} m")
             o2.append("")
             o2.append("【验证结果】")
-            vel_ok = v_min < V < v_max
+            vel_ok, inc_vel_ok, velocity_lines = velocity_checks(p, result, strict_design=True)
+            o2.extend(velocity_lines)
             if use_increase:
                 fb_req = 0.25 * h_inc + 0.2 if h_inc > 0 else 0
                 fb_ok = Fb >= (fb_req - 0.001) if h_inc > 0 else False
                 o2.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
                 o2.append(f"  超高复核: {'✓ 通过' if fb_ok else '✗ 未通过'} (Fb={Fb:.3f}m, 规范要求≥{fb_req:.3f}m)")
-                all_pass = vel_ok and fb_ok
+                all_pass = vel_ok and inc_vel_ok and fb_ok
             else:
                 o2.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
                 all_pass = vel_ok
@@ -2253,13 +2255,14 @@ class OpenChannelPanel(QWidget):
             o.append(f"  渠道高度 H = h + Fb = {h:.3f} + {Fb_d:.3f} = {H_d:.3f} m")
         o.append("")
         o.append("【验证结果】")
-        vel_ok = v_min < V < v_max
+        vel_ok, inc_vel_ok, velocity_lines = velocity_checks(p, result, strict_design=True)
+        o.extend(velocity_lines)
         if use_increase:
             fb_req = 0.25 * h_inc + 0.2 if h_inc > 0 else 0
             fb_ok = Fb >= (fb_req - 0.001) if h_inc > 0 else False
             o.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
             o.append(f"  超高复核: {'✓ 通过' if fb_ok else '✗ 未通过'} (Fb={Fb:.3f}m, 规范要求≥{fb_req:.3f}m)")
-            all_pass = vel_ok and fb_ok
+            all_pass = vel_ok and inc_vel_ok and fb_ok
         else:
             o.append(f"  流速验证: {'✓ 通过' if vel_ok else '✗ 未通过'}")
             all_pass = vel_ok
@@ -2499,7 +2502,8 @@ class OpenChannelPanel(QWidget):
 
         o.append("【五、设计验证】")
         o.append("")
-        vel_ok = v_min < V < v_max
+        vel_ok, inc_vel_ok, velocity_lines = velocity_checks(p, result, strict_design=True)
+        o.extend(velocity_lines)
         o.append(f"  1. 流速验证:")
         o.append(f"      范围要求: {v_min} < V < {v_max} m/s")
         o.append(f"      设计流速: V = {V:.3f} m/s")
@@ -2513,7 +2517,7 @@ class OpenChannelPanel(QWidget):
             o.append(f"      计算结果: Fb = {Fb:.3f} m")
             o.append(f"      结果: {'通过 ✓' if fb_ok else '未通过 ✗'}")
             o.append("")
-            all_pass = vel_ok and fb_ok
+            all_pass = vel_ok and inc_vel_ok and fb_ok
         else:
             all_pass = vel_ok
         o.append("=" * 70)
@@ -3233,7 +3237,7 @@ class OpenChannelPanel(QWidget):
             sb, sh, sbeta, sV = s['b'], s['h'], s['beta'], s['V']
             area_inc = s['area_increase']
             is_sel = abs(sb - sel_b) < 0.01 and abs(sh - sel_h) < 0.01
-            v_ok = v_min < sV < v_max
+            v_ok = s.get('velocity_check_passed', v_min < sV < v_max)
             if is_sel: cls = "sel"; status = "★ 选中"
             elif not v_ok: cls = "err"; status = "流速不符"
             else: cls = "even" if idx % 2 == 0 else "odd"; status = ""
@@ -3256,7 +3260,7 @@ class OpenChannelPanel(QWidget):
             sb, sh, sbeta, sV = s['b'], s['h'], s['beta'], s['V']
             area_inc = s['area_increase']
             is_sel = abs(sb - sel_b) < 0.01 and abs(sh - sel_h) < 0.01
-            v_ok = v_min < sV < v_max
+            v_ok = s.get('velocity_check_passed', v_min < sV < v_max)
             status = "★选中" if is_sel else ("流速不符" if not v_ok else "")
             lines.append(f"  {alpha:.2f}   {stype:<12}  {sb:8.3f}  {sh:8.3f}  {sbeta:8.3f}  {sV:10.3f}  +{area_inc:.0f}%   {status}")
         lines.append("")
@@ -3760,7 +3764,7 @@ class OpenChannelPanel(QWidget):
                 data = []
                 for s in schemes:
                     is_sel = abs(s['b'] - b_sel) < 0.01 and abs(s['h'] - h_sel) < 0.01
-                    v_ok = v_min < s['V'] < v_max
+                    v_ok = s.get('velocity_check_passed', v_min < s['V'] < v_max)
                     status = '★选中' if is_sel else ('流速不符' if not v_ok else '')
                     data.append([
                         f"{s['alpha']:.2f}", s['scheme_type'],

@@ -15,15 +15,14 @@ from typing import Any, Dict, Optional, Tuple
 from 矩形暗涵设计 import (
     DIM_INCREMENT,
     MAX_FREEBOARD_PCT_RECT,
-    MIN_FREEBOARD_HGT_RECT,
     MIN_FREEBOARD_PCT_RECT,
     MIN_HEIGHT_RECT,
     MIN_WIDTH_RECT,
     SOLVER_TOLERANCE,
     get_flow_increase_percent_rect,
-    get_required_freeboard_height_rect,
 )
 from 隧洞设计 import (
+    _horseshoe_area_cannot_improve,
     calculate_horseshoe_arch_geometry,
     calculate_horseshoe_outputs,
     solve_water_depth_horseshoe,
@@ -37,6 +36,11 @@ MAX_SEARCH_HEIGHT = 20.0
 COARSE_HEIGHT_STEP = 0.05
 FINE_HEIGHT_STEP = 0.01
 COARSE_WIDTH_STEP = 0.1
+
+
+def get_required_freeboard_height_arch(H_total: float) -> float:
+    """按 GB 50288—2018 表11.2.5的拱涵列确定最小净空高度。"""
+    return max(0.4, H_total / 4.0) if H_total <= 3.0 else 0.75
 
 
 def _build_result(theta_deg: float) -> Dict[str, Any]:
@@ -118,7 +122,7 @@ def _check_candidate(
     if outputs_design["V"] < v_min or outputs_design["V"] > v_max:
         return None
 
-    required_fb = get_required_freeboard_height_rect(H_total)
+    required_fb = get_required_freeboard_height_arch(H_total)
     if outputs_design["freeboard_hgt"] < required_fb:
         return None
     if outputs_design["freeboard_pct"] < MIN_FREEBOARD_PCT_RECT * 100.0:
@@ -163,6 +167,7 @@ def _search_min_height_for_width(
     v_min: float,
     v_max: float,
     use_increase: bool,
+    area_limit: float = float("inf"),
 ) -> Optional[Tuple[float, Dict[str, Any]]]:
     """对固定底宽搜索满足约束的最小总高。"""
     arch_height = _calc_arch_height(B, theta_rad)
@@ -172,6 +177,9 @@ def _search_min_height_for_width(
     coarse_result: Optional[Dict[str, Any]] = None
     prev_height = height_min
     while coarse_height <= MAX_SEARCH_HEIGHT + 1e-9:
+        # 后续细扫可回退到前一粗扫高度，必须用该下限，不能用当前粗扫高度截断。
+        if _horseshoe_area_cannot_improve(B, prev_height, theta_rad, area_limit):
+            return None
         coarse_result = _check_candidate(
             B, coarse_height, theta_rad, Q, Q_increased, n, slope, v_min, v_max, use_increase
         )
@@ -205,9 +213,9 @@ def _format_fb_details(H_total: float, required_fb: float) -> str:
     """生成净空校核说明。"""
     details = [f"涵洞总高 H = {H_total:.2f}m"]
     if H_total <= 3.0:
-        details.append(f"H≤3m，净空高度应≥H/6 = {H_total / 6.0:.3f}m，且≥{MIN_FREEBOARD_HGT_RECT:.1f}m")
+        details.append(f"拱涵H≤3m，净空高度应≥H/4 = {H_total / 4.0:.3f}m，且≥0.4m")
     else:
-        details.append("H>3m，净空高度应≥0.5m")
+        details.append("拱涵H>3m，净空高度应≥0.75m")
     details.append(f"要求净空高度≥{required_fb:.3f}m")
     details.append("净空面积应为总面积的10%~30%")
     return "\n".join(details)
@@ -371,7 +379,7 @@ def quick_calculate_arch_culvert(
     B = B_start
     while B <= B_end + 1e-9:
         search_result = _search_min_height_for_width(
-            B, theta_rad, Q, Q_increased, n, slope, v_min, v_max, use_increase
+            B, theta_rad, Q, Q_increased, n, slope, v_min, v_max, use_increase, best_area
         )
         if search_result is not None:
             H_total, candidate = search_result
@@ -389,7 +397,7 @@ def quick_calculate_arch_culvert(
         B = fine_start
         while B <= fine_end + 1e-9:
             search_result = _search_min_height_for_width(
-                B, theta_rad, Q, Q_increased, n, slope, v_min, v_max, use_increase
+                B, theta_rad, Q, Q_increased, n, slope, v_min, v_max, use_increase, best_area
             )
             if search_result is not None:
                 H_total, candidate = search_result

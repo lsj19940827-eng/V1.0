@@ -1,0 +1,45 @@
+{
+  "common_parameters": {
+    "Q": 5,
+    "n": 0.014,
+    "slope_inv": 2000,
+    "v_min": 0.1,
+    "v_max": 1.3,
+    "manual_increase_percent": 30
+  },
+  "channel_extra": {
+    "m": 1.5
+  },
+  "results": {
+    "channel_auto": {
+      "success": true,
+      "b_design": 3.013,
+      "h_design": 0.942,
+      "V_design_check": 1.199244380100986,
+      "V_increased_check": 1.2914808269374873,
+      "design_method": "依据《灌溉与排水工程设计标准-2018》附录E，按水力最佳断面（α=1.00）及实用经济断面（α=1.01～1.05）进行比选"
+    },
+    "u": {
+      "success": true,
+      "R": 4.749999999999943,
+      "B": 9.499999999999886,
+      "H_total": 6.65,
+      "h_design": 1.0314530238494874,
+      "V_design": 1.2013595428739652,
+      "h_increased": 1.1693520204467776,
+      "V_increased": 1.2999317779223454,
+      "Fb": 5.480647979553223
+    },
+    "rect": {
+      "success": true,
+      "R": null,
+      "B": 4.67,
+      "H_total": 1.18,
+      "h_design": 0.8956918731842042,
+      "V_design": 1.1953483598739554,
+      "h_increased": 1.0708627628631593,
+      "V_increased": 1.299758478211255,
+      "Fb": 0.10913723713684065
+    }
+  }
+}

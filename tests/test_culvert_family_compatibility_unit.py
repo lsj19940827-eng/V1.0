@@ -75,6 +75,9 @@ class _DetailText:
     def clear(self):
         self.cleared = True
 
+    def toPlainText(self):
+        return ""
+
 
 class _TableItem:
     """模拟表格单元格。"""
@@ -82,12 +85,19 @@ class _TableItem:
     def __init__(self, value=""):
         self._value = value
         self._alignment = None
+        self._data = {}
 
     def text(self):
         return self._value
 
     def setTextAlignment(self, alignment):
         self._alignment = alignment
+
+    def data(self, role):
+        return self._data.get(role)
+
+    def setData(self, role, value):
+        self._data[role] = value
 
 
 class _Table:
@@ -132,6 +142,8 @@ def _make_batch_panel():
     panel.result_table = _Table(1)
     panel.detail_text = _DetailText()
     panel._set_excel_import_session_active = lambda *_args, **_kwargs: None
+    # 本组只检验项目名称兼容，按钮锁定行为由独立界面测试覆盖。
+    panel._update_lock_state = lambda *_args: None
     panel.batch_results = []
     panel._detail_text_cache = ""
     panel._is_sample_data = False

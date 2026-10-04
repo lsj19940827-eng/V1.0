@@ -296,7 +296,8 @@ def calculate_all_appendix_e_schemes(Q: float, n: float, i: float, m: float) -> 
 
 
 def calculate_economic_section_appendix_e(Q: float, n: float, i: float, m: float, 
-                                           v_min: float, v_max: float) -> Tuple[bool, float, float, float, float, str, List[Dict]]:
+                                           v_min: float, v_max: float,
+                                           Q_increased: float = None) -> Tuple[bool, float, float, float, float, str, List[Dict]]:
     """
     使用附录E算法计算经济实用断面
     
@@ -312,6 +313,7 @@ def calculate_economic_section_appendix_e(Q: float, n: float, i: float, m: float
         m: 边坡系数
         v_min: 最小允许流速 (m/s)
         v_max: 最大允许流速 (m/s)
+        Q_increased: 加大流量；提供时在同一底宽下校核加大不冲流速
     
     返回:
         (success, h, b, beta, alpha_used, design_method, all_schemes)
@@ -327,9 +329,20 @@ def calculate_economic_section_appendix_e(Q: float, n: float, i: float, m: float
     selected_scheme = None
     for scheme in all_schemes:
         V = scheme['V']
-        if V > v_min and V < v_max:
+        velocity_ok = v_min < V < v_max
+        if Q_increased is not None:
+            # 按最终采用的毫米级尺寸筛选，流速校核保留未舍入值。
+            b_check, h_check = round(scheme['b'], 3), round(scheme['h'], 3)
+            V_check = calculate_velocity(Q, calculate_area(b_check, h_check, m))
+            h_inc = calculate_depth_for_flow(Q_increased, b_check, i, n, m, h_check)
+            V_inc = calculate_velocity(Q_increased, calculate_area(b_check, h_inc, m)) if h_inc > 0 else float('inf')
+            velocity_ok = v_min < V_check < v_max and V_inc <= v_max
+            scheme['V_increased'] = V_inc if h_inc > 0 else None
+            scheme['velocity_increased_check_passed'] = V_inc <= v_max
+            scheme['velocity_check_passed'] = velocity_ok
+        if velocity_ok and selected_scheme is None:
             selected_scheme = scheme
-            break  # 优先选择α最小的满足约束的方案
+            # 仍检查其余方案，使对比表的“可选”状态也包含加大流速约束。
     
     if selected_scheme:
         alpha = selected_scheme['alpha']
@@ -348,8 +361,8 @@ def calculate_economic_section_appendix_e(Q: float, n: float, i: float, m: float
         return (False, first_scheme['h'], first_scheme['b'], 
                 first_scheme['beta'], 1.00, "附录E计算(流速过高)", all_schemes)
     else:
-        return (True, first_scheme['h'], first_scheme['b'], 
-                first_scheme['beta'], 1.00, "附录E水力最佳断面", all_schemes)
+        return (False, first_scheme['h'], first_scheme['b'],
+                first_scheme['beta'], 1.00, "附录E备选方案均不满足设计或加大流速约束", all_schemes)
 
 
 # ============================================================
@@ -922,6 +935,12 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
         result['error_message'] = '不淤流速必须小于不冲流速'
         return result
 
+    # 设计流量确定过水断面，加大流量在同一底宽下验算不冲流速。
+    increase_percent = (manual_increase_percent
+                        if manual_increase_percent is not None and manual_increase_percent >= 0
+                        else get_flow_increase_percent(Q))
+    Q_increased = Q * (1 + increase_percent / 100)
+
     # 设计变量
     b_designed = 0
     h_designed = 0
@@ -1002,8 +1021,11 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
     if not design_successful:
         # 使用附录E梯形渠道实用经济断面算法
         success_e, h_e, b_e, beta_e, alpha_e, method_e, all_schemes = calculate_economic_section_appendix_e(
-            Q, n, i, m, v_min, v_max
+            Q, n, i, m, v_min, v_max, Q_increased
         )
+        result['appendix_e_schemes'] = all_schemes
+        if not success_e:
+            design_method = method_e
         
         if success_e and h_e > 0 and b_e > 0:
             b_designed = b_e
@@ -1053,21 +1075,21 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
         result['Q_calc'] = Q_calc
         result['design_method'] = design_method
 
+        V_design_check = calculate_velocity(Q, calculate_area(b_designed, h_designed, m))
+        result['V_design_check'] = V_design_check
+        result['velocity_design_check_passed'] = v_min < V_design_check < v_max
+
         # ========== 计算加大流量工况 ==========
-        if manual_increase_percent is not None and manual_increase_percent >= 0:
-            increase_percent = manual_increase_percent
-        else:
-            increase_percent = get_flow_increase_percent(Q)
-
-        # 加大流量全程保留高精度参与后续计算，结果展示时再统一格式化
-        Q_increased = Q * (1 + increase_percent / 100)
-
+        # 沿用筛选阶段的完整精度流量，结果展示时再统一格式化。
         h_increased = calculate_depth_for_flow(Q_increased, b_designed, i, n, m, h_designed)
 
         result['increase_percent'] = increase_percent
         result['Q_increased'] = Q_increased
 
         if h_increased > 0:
+            V_increased_check = calculate_velocity(Q_increased, calculate_area(b_designed, h_increased, m))
+            result['V_increased_check'] = V_increased_check
+            result['velocity_increased_check_passed'] = V_increased_check <= v_max
             h_increased = round(h_increased, 3)  # 加大水深保留3位小数
             result['h_increased'] = h_increased
             
@@ -1099,6 +1121,7 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
             result['Fb'] = Fb
             result['h_prime'] = h_prime
         else:
+            result['velocity_increased_check_passed'] = False
             result['h_increased'] = -1
             result['V_increased'] = -1
             result['A_increased'] = -1
@@ -1106,6 +1129,22 @@ def quick_calculate_trapezoidal(Q: float, m: float, n: float, slope_inv: float,
             result['R_increased'] = -1
             result['Fb'] = -1
             result['h_prime'] = -1
+
+        velocity_errors = []
+        if not result['velocity_design_check_passed']:
+            velocity_errors.append(f"设计流速 V={V_design_check:.6f} m/s 不满足输入范围 ({v_min:.3f}, {v_max:.3f}) m/s")
+        if not result['velocity_increased_check_passed']:
+            if h_increased > 0:
+                velocity_errors.append(f"加大流速 V加大={V_increased_check:.6f} m/s 超过不冲流速 {v_max:.3f} m/s")
+            else:
+                velocity_errors.append("加大水深求解失败，无法完成加大流速验算")
+        result['validation_passed'] = not velocity_errors and not result.get('constraint_warnings')
+        if velocity_errors:
+            if result.get('preserved_manual_b'):
+                result['constraint_warnings'].extend(velocity_errors)
+            else:
+                result['success'] = False
+                result['error_message'] = '；'.join(velocity_errors)
     else:
         result['error_message'] = design_method if design_method else '无法找到满足约束条件的设计方案'
         result['design_method'] = design_method

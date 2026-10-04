@@ -14,7 +14,7 @@
 """
 
 import math
-from typing import Dict, Any, Tuple
+from typing import Callable, Dict, Any, Tuple
 
 # ============================================================
 # 常量定义
@@ -526,6 +526,62 @@ def calculate_horseshoe_outputs(B: float, H_total: float, theta_rad: float,
     }
 
 
+def _make_horseshoe_flow_evaluator(B: float, H_total: float, theta_rad: float,
+                                    n: float, slope: float) -> Callable[[float], float]:
+    """固定断面只构造一次几何常量，迭代中仅计算流量，保持原公式运算顺序。"""
+    sin_half = math.sin(theta_rad / 2)
+    if abs(sin_half) < 0.000000001:
+        return lambda h: 0.0
+
+    R_arch = (B / 2) / sin_half
+    H_arch = R_arch * (1 - math.cos(theta_rad / 2))
+    H_straight = max(0, H_total - H_arch)
+    area_rect = B * H_straight
+    area_arch = (R_arch**2 / 2) * (theta_rad - math.sin(theta_rad))
+    perimeter_base = B + 2 * H_straight
+    arc_length = R_arch * theta_rad
+    inverse_n = 1 / n
+    sqrt_slope = slope ** 0.5
+
+    def flow_at_depth(h: float) -> float:
+        calc_depth = min(h, H_total)
+        if calc_depth <= 0.000000001:
+            return 0.0
+        if calc_depth <= H_straight:
+            A = B * calc_depth
+            P = B + 2 * calc_depth
+        else:
+            h_in_arch = calc_depth - H_straight
+            if h_in_arch <= 0.000000001:
+                A = area_rect
+                P = perimeter_base
+            elif h_in_arch >= H_arch - 0.000000001:
+                A = area_rect + area_arch
+                P = perimeter_base + arc_length
+            else:
+                h_dry = H_arch - h_in_arch
+                d_temp = R_arch - h_dry
+                alpha_temp = math.acos(max(-1, min(1, d_temp / R_arch)))
+                area_dry = R_arch**2 * alpha_temp - d_temp * math.sqrt(max(0, R_arch**2 - d_temp**2))
+                A = area_rect + area_arch - area_dry
+                P = perimeter_base + arc_length - 2 * R_arch * alpha_temp
+        R_hyd = A / P if P > 0.000000001 else 0
+        if R_hyd > 0:
+            try:
+                return inverse_n * A * (R_hyd ** (2 / 3)) * sqrt_slope
+            except Exception:
+                return 0.0
+        return 0.0
+
+    return flow_at_depth
+
+
+def _horseshoe_area_cannot_improve(B: float, H_total: float, theta_rad: float,
+                                   area_limit: float) -> bool:
+    """按完整断面面积排除不可能更优的候选，微小浮点边界仍交给原校核。"""
+    return calculate_horseshoe_total_area(B, H_total, theta_rad) > area_limit + 1e-9
+
+
 def solve_water_depth_horseshoe(B: float, H_total: float, theta_rad: float,
                                  n: float, slope: float, Q_target: float) -> Tuple[float, bool]:
     """求解圆拱直墙型水深"""
@@ -536,15 +592,16 @@ def solve_water_depth_horseshoe(B: float, H_total: float, theta_rad: float,
     
     h_low = 0.00001
     h_high = H_total
+    flow_at_depth = _make_horseshoe_flow_evaluator(B, H_total, theta_rad, n, slope)
     
     # 检查边界
-    outputs_low = calculate_horseshoe_outputs(B, H_total, theta_rad, h_low, n, slope)
-    outputs_high = calculate_horseshoe_outputs(B, H_total, theta_rad, h_high * 0.99999, n, slope)
+    Q_low = flow_at_depth(h_low)
+    Q_high = flow_at_depth(h_high * 0.99999)
     
-    if Q_target <= outputs_low['Q'] * 1.001:
+    if Q_target <= Q_low * 1.001:
         return (h_low, True)
-    if Q_target >= outputs_high['Q'] * 0.999:
-        return (h_high * 0.99999, Q_target <= outputs_high['Q'] * 1.001)
+    if Q_target >= Q_high * 0.999:
+        return (h_high * 0.99999, Q_target <= Q_high * 1.001)
     
     # 二分法
     h_mid = 0
@@ -553,8 +610,7 @@ def solve_water_depth_horseshoe(B: float, H_total: float, theta_rad: float,
         if h_mid <= h_low or h_mid >= h_high:
             break
         
-        outputs = calculate_horseshoe_outputs(B, H_total, theta_rad, h_mid, n, slope)
-        Q_mid = outputs['Q']
+        Q_mid = flow_at_depth(h_mid)
         
         if Q_mid > 0 and abs(Q_mid - Q_target) / Q_target < SOLVER_TOLERANCE:
             return (h_mid, True)
@@ -564,8 +620,8 @@ def solve_water_depth_horseshoe(B: float, H_total: float, theta_rad: float,
         else:
             h_high = h_mid
     
-    outputs = calculate_horseshoe_outputs(B, H_total, theta_rad, h_mid, n, slope)
-    if outputs['Q'] > 0 and abs(outputs['Q'] - Q_target) / Q_target < SOLVER_TOLERANCE * 1.5:
+    Q_mid = flow_at_depth(h_mid)
+    if Q_mid > 0 and abs(Q_mid - Q_target) / Q_target < SOLVER_TOLERANCE * 1.5:
         return (h_mid, True)
     
     return (h_mid, False)
@@ -1666,6 +1722,10 @@ def quick_calculate_horseshoe(Q: float, n: float, slope_inv: float,
         for HB_int in range(HB_start, HB_end, HB_increment):
             HB_ratio = HB_int / 100.0
             H_trial = max(MIN_HEIGHT_HS, B * HB_ratio)
+
+            # 面积与水深无关；已大于当前最优面积时无需再求两种流量的水深。
+            if best_found and _horseshoe_area_cannot_improve(B, H_trial, theta_rad, best_A_total):
+                continue
             
             if abs(math.sin(theta_rad / 2)) < 0.000000001:
                 continue
@@ -1736,6 +1796,9 @@ def quick_calculate_horseshoe(Q: float, n: float, slope_inv: float,
             for HB_int in range(HB_start, HB_end, HB_increment):
                 HB_ratio = HB_int / 100.0
                 H_trial = max(MIN_HEIGHT_HS, B * HB_ratio)
+
+                if _horseshoe_area_cannot_improve(B, H_trial, theta_rad, best_A_total):
+                    continue
                 
                 if abs(math.sin(theta_rad / 2)) < 0.000000001:
                     continue

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtGui import QFont
+from app_渠系计算前端.velocity_validation import velocity_checks
 from app_渠系计算前端.webview_compat import create_web_view, scroll_view_to_anchor
 
 from qfluentwidgets import (
@@ -1758,6 +1759,8 @@ class AqueductPanel(QWidget):
 
         o.append("【验证结果】")
         V_d = result['V_design']
+        limit_design_ok, limit_inc_ok, velocity_lines = velocity_checks(p, result)
+        o.extend(velocity_lines)
         vel_ok = 1.0 <= V_d <= 2.5
         o.append(f"  流速验证: V={V_d:.3f}m/s (推荐1.0~2.5) → {'✓ 通过' if vel_ok else '⚠ 超出推荐范围'}")
         R_val = result['R']
@@ -1773,12 +1776,12 @@ class AqueductPanel(QWidget):
             o.append(f"  槽顶超高验证(设计): Fb={Fb_design:.3f}m ≥ R/5={R_val/5:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
             if tie_rod_height > 0:
                 o.append(f"  拉杆底净距验证(设计): {design_tie_clearance:.3f}m ≥ 0.10m → {'✓ 通过' if design_tie_ok else '✗ 未通过'}")
-            all_pass = Fb_ok and Fb_design_ok and design_tie_ok
+            all_pass = limit_design_ok and limit_inc_ok and Fb_ok and Fb_design_ok and design_tie_ok
         else:
             o.append(f"  槽顶超高验证(设计): Fb={Fb_design:.3f}m ≥ R/5={R_val/5:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
             if tie_rod_height > 0:
                 o.append(f"  拉杆底净距验证(设计): {design_tie_clearance:.3f}m ≥ 0.10m → {'✓ 通过' if design_tie_ok else '✗ 未通过'}")
-            all_pass = vel_ok and Fb_design_ok and design_tie_ok
+            all_pass = limit_design_ok and limit_inc_ok and Fb_design_ok and design_tie_ok
         o.append("")
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
@@ -2043,9 +2046,11 @@ class AqueductPanel(QWidget):
 
         v_recommended_min = 1.0
         v_recommended_max = 2.5
+        limit_design_ok, limit_inc_ok, velocity_lines = velocity_checks(p, result)
+        o.extend(velocity_lines)
         vel_ok = v_recommended_min <= V_d <= v_recommended_max
         o.append(f"  1. 流速验证（规范 9.4.1-1）")
-        o.append(f"     规范要求: 1.0 ≤ V ≤ 2.5 m/s")
+        o.append(f"     规范推荐: 1.0 ≤ V ≤ 2.5 m/s")
         o.append(f"     计算结果: V = {V_d:.3f} m/s")
         if vel_ok:
             o.append(f"     结果: 通过 ✓")
@@ -2085,7 +2090,7 @@ class AqueductPanel(QWidget):
             if tie_rod_height > 0:
                 o.append(f"       - 设计拉杆底净距: {design_tie_clearance:.3f} {'≥' if design_tie_ok else '<'} 0.10 → {'通过 ✓' if design_tie_ok else '未通过 ✗'}")
             o.append(f"       - 加大流量: {Fb:.3f} {'≥' if fb_inc_ok else '<'} {Fb_inc_min:.2f} → {'通过 ✓' if fb_inc_ok else '未通过 ✗'}")
-            all_pass = fb_inc_ok and fb_design_ok and design_tie_ok
+            all_pass = limit_design_ok and limit_inc_ok and fb_inc_ok and fb_design_ok and design_tie_ok
         else:
             fb_inc_ok = True
             o.append(f"")
@@ -2093,7 +2098,7 @@ class AqueductPanel(QWidget):
             o.append(f"       - 设计流量: {Fb_design:.3f} {'≥' if fb_design_ok else '<'} {Fb_design_min:.3f} → {'通过 ✓' if fb_design_ok else '未通过 ✗'}")
             if tie_rod_height > 0:
                 o.append(f"       - 设计拉杆底净距: {design_tie_clearance:.3f} {'≥' if design_tie_ok else '<'} 0.10 → {'通过 ✓' if design_tie_ok else '未通过 ✗'}")
-            all_pass = fb_design_ok and design_tie_ok
+            all_pass = limit_design_ok and limit_inc_ok and fb_design_ok and design_tie_ok
         o.append("")
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
@@ -2178,6 +2183,8 @@ class AqueductPanel(QWidget):
 
         o.append("【验证结果】")
         V_d = result['V_design']
+        limit_design_ok, limit_inc_ok, velocity_lines = velocity_checks(p, result)
+        o.extend(velocity_lines)
         vel_ok = 1.0 <= V_d <= 2.5
         o.append(f"  流速验证: V={V_d:.3f}m/s (推荐1.0~2.5) → {'✓ 通过' if vel_ok else '⚠ 超出推荐范围'}")
         Fb = result['Fb']
@@ -2193,12 +2200,12 @@ class AqueductPanel(QWidget):
             o.append(f"  槽顶超高验证(设计): Fb={Fb_design:.3f}m ≥ h/12+0.05={Fb_design_min:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
             if tie_rod_height > 0:
                 o.append(f"  拉杆底净距验证(设计): {design_tie_clearance:.3f}m ≥ 0.10m → {'✓ 通过' if design_tie_ok else '✗ 未通过'}")
-            all_pass = Fb_inc_ok and Fb_design_ok and design_tie_ok
+            all_pass = limit_design_ok and limit_inc_ok and Fb_inc_ok and Fb_design_ok and design_tie_ok
         else:
             o.append(f"  槽顶超高验证(设计): Fb={Fb_design:.3f}m ≥ h/12+0.05={Fb_design_min:.3f}m → {'✓ 通过' if Fb_design_ok else '✗ 未通过'}")
             if tie_rod_height > 0:
                 o.append(f"  拉杆底净距验证(设计): {design_tie_clearance:.3f}m ≥ 0.10m → {'✓ 通过' if design_tie_ok else '✗ 未通过'}")
-            all_pass = Fb_design_ok and design_tie_ok
+            all_pass = limit_design_ok and limit_inc_ok and Fb_design_ok and design_tie_ok
         o.append("")
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
@@ -2529,9 +2536,11 @@ class AqueductPanel(QWidget):
 
         v_recommended_min = 1.0
         v_recommended_max = 2.5
+        limit_design_ok, limit_inc_ok, velocity_lines = velocity_checks(p, result)
+        o.extend(velocity_lines)
         vel_ok = v_recommended_min <= V_d <= v_recommended_max
         o.append(f"  1. 流速验证（规范 9.4.1-1）")
-        o.append(f"     规范要求: 1.0 ≤ V ≤ 2.5 m/s")
+        o.append(f"     规范推荐: 1.0 ≤ V ≤ 2.5 m/s")
         o.append(f"     计算结果: V = {V_d:.3f} m/s")
         if vel_ok:
             o.append(f"     结果: 通过 ✓")
@@ -2576,9 +2585,9 @@ class AqueductPanel(QWidget):
         o.append("")
 
         if use_increase:
-            all_pass = fb_inc_ok and fb_design_ok and design_tie_ok
+            all_pass = limit_design_ok and limit_inc_ok and fb_inc_ok and fb_design_ok and design_tie_ok
         else:
-            all_pass = fb_design_ok and design_tie_ok
+            all_pass = limit_design_ok and limit_inc_ok and fb_design_ok and design_tie_ok
         o.append("=" * 70)
         o.append(f"  综合验证结果: {'全部通过 ✓' if all_pass else '未通过 ✗'}")
         o.append("=" * 70)

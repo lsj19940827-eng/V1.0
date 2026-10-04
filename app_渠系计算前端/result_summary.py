@@ -9,6 +9,7 @@ import math
 import re
 from typing import Iterable, List, Sequence
 
+from app_渠系计算前端.velocity_validation import velocity_checks
 from app_渠系计算前端.tunnel.comparison import compute_tunnel_total_geometry_metrics
 
 
@@ -373,12 +374,25 @@ def _status_group(panel_key: str, params: dict, result: dict) -> SummaryGroup:
     v_max = _num(params.get("v_max"))
     v_design = _num(result.get("V_design"))
     if v_min is not None and v_max is not None and v_design is not None:
-        status = "通过" if v_min <= v_design <= v_max else "需注意"
+        design_ok, increased_ok, _ = velocity_checks(params, result, strict_design=panel_key == "open_channel")
+        status = "通过" if design_ok else "需注意"
         _append(items, "设计流速校核", f"{_fmt_velocity(v_design)}（{status}）", status)
+        if panel_key in {"open_channel", "aqueduct"} and _use_increase(params):
+            status = "通过" if increased_ok else "需注意"
+            _append(items, "加大流速不冲校核", status, status)
     if panel_key in {"tunnel", "culvert"}:
         pct_key = "freeboard_pct_inc" if _use_increase(params) and _has_increase_result(result) else "freeboard_pct_design"
         hgt_key = "freeboard_hgt_inc" if _use_increase(params) and _has_increase_result(result) else "freeboard_hgt_design"
         kernel_check = _bool_or_none(result.get("fb_check_passed"))
+        # 旧项目可能保存了矩形净空限值，拱涵摘要仍须核对当前断面类型规则。
+        stype = str(params.get("section_type", "") or result.get("section_type", ""))
+        arch_height = _num(result.get("H_total"))
+        arch_min_hgt = None
+        if panel_key == "culvert" and "圆拱直墙" in stype and arch_height is not None:
+            arch_min_hgt = max(0.4, arch_height / 4) if arch_height <= 3 else 0.75
+            actual_hgt = _num(result.get(hgt_key))
+            if actual_hgt is not None and actual_hgt < arch_min_hgt - _FREEBOARD_HEIGHT_TOL:
+                kernel_check = False
         if kernel_check is not None:
             status = "通过" if kernel_check else "需注意"
             _append(items, "净空校核", status, status)
@@ -392,7 +406,7 @@ def _status_group(panel_key: str, params: dict, result: dict) -> SummaryGroup:
                     pct >= min_pct - _FREEBOARD_PCT_TOL
                     and (max_pct is None or pct <= max_pct + _FREEBOARD_PCT_TOL)
                 )
-                min_hgt = _num(result.get("fb_min_required")) or 0.4
+                min_hgt = arch_min_hgt or _num(result.get("fb_min_required")) or 0.4
                 hgt_ok = hgt is None or hgt >= min_hgt - _FREEBOARD_HEIGHT_TOL
                 status = "通过" if pct_ok and hgt_ok else "需注意"
                 _append(items, "净空校核", status, status)
